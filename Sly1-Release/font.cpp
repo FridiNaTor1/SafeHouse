@@ -1,0 +1,1574 @@
+#include "font.h"
+#include "prompt_glyphs.h"
+
+#include <algorithm>
+#include <cstdio>
+#include <cstdlib>
+#include <string>
+#include <vector>
+
+namespace
+{
+// Font 1 is the original controller ("joy") font. LoadFontsFromBrx sets
+// m_grffont = 1 << index, and CopyTo/PfontClone keep it, so the identity
+// survives rich-text font switches. Font 4 also has '_' and 'a' glyphs,
+// which is why the check is on the font, not on the character.
+constexpr uint32_t kgrffontJoy = 1U << 1;
+
+// Start and Select glyphs carry the words "Start"/"Select"; a controller
+// icon replacing them is drawn square instead.
+bool FWidePromptGlyph(char ch)
+{
+	return ch == '!' || ch == '_';
+}
+}
+
+namespace
+{
+	using GlyphVertices = std::vector<BLOTLINEVERTEX>;
+
+	std::string GameFontTextFromUtf8(const char* text)
+	{
+		return text != nullptr ? std::string(text) : std::string();
+	}
+
+	uint32_t DecodeUtf8(const char*& cursor)
+	{
+		const auto* bytes = reinterpret_cast<const unsigned char*>(cursor);
+		if (bytes[0] < 0x80) { ++cursor; return bytes[0]; }
+
+		const auto isContinuation = [](unsigned char value) {
+			return (value & 0xc0) == 0x80;
+		};
+
+		// PAL text uses the retail single-byte Western glyph IDs, while newer
+		// ProjectCane-authored strings may be UTF-8. Only consume a multibyte
+		// sequence when every continuation byte is valid. Without this check a
+		// PAL byte such as 0xe4 ('ä') consumed the following two ASCII letters,
+		// and 0xdf ('ß') consumed the following letter.
+		if ((bytes[0] & 0xe0) == 0xc0 && isContinuation(bytes[1])) {
+			cursor += 2; return ((bytes[0] & 0x1f) << 6) | (bytes[1] & 0x3f);
+		}
+		if ((bytes[0] & 0xf0) == 0xe0 && isContinuation(bytes[1]) &&
+			isContinuation(bytes[2])) {
+			cursor += 3; return ((bytes[0] & 0x0f) << 12) |
+				((bytes[1] & 0x3f) << 6) | (bytes[2] & 0x3f);
+		}
+
+		// Invalid UTF-8 lead bytes are intentional one-byte font codes in the
+		// original PAL data. Preserve their unsigned value for atlas lookup.
+		++cursor;
+		return bytes[0];
+	}
+
+	// The PS2 GUI draws every game font atlas with point sampling.  This is
+	// important because HUD portraits, counters and text can be mixed from
+	// several atlases in one rich-text draw.  Modern GUI keeps the previous
+	// policy: sprite-oriented fonts use nearest while text fonts remain linear.
+	constexpr uint32_t kGuiSpriteFontMask =
+		(1U << 1) |
+		(1U << 3) |
+		(1U << 4);
+
+	bool FGuiSpriteFont(const CFontBrx* font)
+	{
+		if (font == nullptr)
+			return false;
+
+		if (g_guiStyle == GuiStyle_PS2)
+			return true;
+
+		return (static_cast<uint32_t>(font->m_grffont) & kGuiSpriteFontMask) != 0;
+	}
+
+	GLuint GuiNearestSampler()
+	{
+		static GLuint sampler = 0;
+		if (sampler == 0)
+		{
+			glGenSamplers(1, &sampler);
+			glSamplerParameteri(sampler, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+			glSamplerParameteri(sampler, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+			// Preserve the atlas texture's existing addressing behavior; this
+			// sampler overrides filtering only.
+			glSamplerParameteri(sampler, GL_TEXTURE_WRAP_S, GL_REPEAT);
+			glSamplerParameteri(sampler, GL_TEXTURE_WRAP_T, GL_REPEAT);
+		}
+		return sampler;
+	}
+
+	void BindGlyphTexture(GLuint texture, bool nearest)
+	{
+		BindBlotTexture(texture);
+		glBindSampler(0, nearest ? GuiNearestSampler() : 0);
+	}
+
+	// Hangul syllable -> conjoining jamo (leading, vowel, optional trailing).
+	// (SCKA-200.04 0x16a6f0)
+	int CHangulJamo(uint32_t codepoint, uint32_t ajamo[3])
+	{
+		if (codepoint < 0xAC00 || codepoint > 0xD7A3)
+			return 0;
+		const uint32_t s = codepoint - 0xAC00;
+		ajamo[0] = 0x1100 + s / 588;
+		ajamo[1] = 0x1161 + (s % 588) / 28;
+		ajamo[2] = s % 28 != 0 ? 0x11A7 + s % 28 : 0;
+		return ajamo[2] != 0 ? 3 : 2;
+	}
+
+	// The vowel is drawn under the leading consonant (o, yo, u, yu, eu: SCKA-200.04 0x16a780; the compound vowels
+	// built on them count as side vowels there).
+	bool FHangulHorizontalVowel(uint32_t vowel)
+	{
+		return vowel == 0x1169 || vowel == 0x116D || vowel == 0x116E || vowel == 0x1172 || vowel == 0x1173;
+	}
+	void AppendQuad(GlyphVertices& vertices, float left, float top,
+		float right, float bottom, float u0, float v0, float u1, float v1,
+		const glm::vec4& color)
+	{
+		auto add = [&](float px, float py, float u, float v)
+		{
+			vertices.push_back({ glm::vec3(px, py, 0.0f), glm::vec2(u, v), color });
+		};
+
+		add(left,  top,    u0, v0);
+		add(right, top,    u1, v0);
+		add(right, bottom, u1, v1);
+		add(left,  top,    u0, v0);
+		add(right, bottom, u1, v1);
+		add(left,  bottom, u0, v1);
+	}
+
+	void AppendGlyph(GlyphVertices& vertices, CFontBrx* font, uint32_t codepoint,
+		float x, float y, const glm::vec4& color)
+	{
+		GLYFF* glyph = font->PglyffFromCodepoint(codepoint);
+		if (glyph == nullptr && font->m_pbmp != nullptr)
+		{
+			// The Korean release (SCKA-200.04) has no syllable glyphs: its fonts hold the conjoining jamo
+			// (U+1100..11C2), each drawn over a whole cell. The game (0x15cf7c, 0x16a948 / 0x16a838) lays a
+			// syllable out in a cell as wide as the leading consonant ㄱ's glyph: the leading consonant and the
+			// vowel fill the cell, the final consonant is squeezed into the bottom of it and moved left
+			// (size x 1.0 / 0.7, centre - 0.3 / + 0.14 of the cell under a horizontal vowel; 1.0 / 0.8,
+			// - 0.14 / + 0.14 beside a side vowel: tables 0x262f88 / 0x262f98).
+			uint32_t ajamo[3]{};
+			const int cjamo = CHangulJamo(codepoint, ajamo);
+			const GLYFF* cell = font->PglyffFromCodepoint(0x1100);
+			if (cjamo == 0 || cell == nullptr)
+				return;
+			const float w = static_cast<float>(cell->dx) * font->m_rxScale;
+			const float h = static_cast<float>(font->m_dyUnscaled) * font->m_ryScale;
+			for (int i = 0; i < cjamo; ++i)
+			{
+				const GLYFF* jamo = font->PglyffFromCodepoint(ajamo[i]);
+				if (jamo == nullptr)
+					continue;
+				float sx = 1.0f, sy = 1.0f, ox = 0.0f, oy = 0.0f;
+				if (i == 2)
+				{
+					const bool fHorizontal = FHangulHorizontalVowel(ajamo[1]);
+					sy = fHorizontal ? 0.7f : 0.8f;
+					ox = fHorizontal ? -0.3f : -0.14f;
+					oy = 0.14f;
+				}
+				const float cx = x + w * 0.5f + ox * w;
+				const float cy = y + h * 0.5f + oy * h;
+				const float u0 = jamo->x / static_cast<float>(font->m_pbmp->bmpWidth);
+				const float v0 = jamo->y / static_cast<float>(font->m_pbmp->bmpHeight);
+				const float u1 = (jamo->x + jamo->dx) / static_cast<float>(font->m_pbmp->bmpWidth);
+				const float v1 = (jamo->y + font->m_dyUnscaled) / static_cast<float>(font->m_pbmp->bmpHeight);
+				AppendQuad(vertices, cx - sx * w * 0.5f, cy - sy * h * 0.5f, cx + sx * w * 0.5f, cy + sy * h * 0.5f,
+					u0, v0, u1, v1, color);
+			}
+			return;
+		}
+		if (glyph == nullptr || font->m_pbmp == nullptr)
+			return;
+
+		// Retail draws the glyph's authored pixel width, then advances by one
+		// additional scaled pixel. Keeping that extra pixel out of the quad is
+		// what produces the PS2 font's visible inter-character spacing.
+		const float width = static_cast<float>(glyph->dx) * font->m_rxScale;
+		const float height = static_cast<float>(font->m_dyUnscaled) * font->m_ryScale;
+		const float left = x;
+		const float top = y;
+		const float right = x + width;
+		const float bottom = y + height;
+		const float u0 = glyph->x / static_cast<float>(font->m_pbmp->bmpWidth);
+		const float v0 = glyph->y / static_cast<float>(font->m_pbmp->bmpHeight);
+		const float u1 = (glyph->x + glyph->dx) / static_cast<float>(font->m_pbmp->bmpWidth);
+		const float v1 = (glyph->y + font->m_dyUnscaled) / static_cast<float>(font->m_pbmp->bmpHeight);
+
+		AppendQuad(vertices, left, top, right, bottom, u0, v0, u1, v1, color);
+	}
+
+	void FlushGlyphs(GlyphVertices& vertices, GLuint texture, bool nearest)
+	{
+		if (vertices.empty())
+			return;
+
+		const GLsizeiptr byteCount = static_cast<GLsizeiptr>(vertices.size() * sizeof(BLOTLINEVERTEX));
+		glBlotShader.Use();
+		glUniformMatrix4fv(u_projectionLoc, 1, GL_FALSE, glm::value_ptr(g_gl.blotProjection));
+		const glm::mat4 identity(1.0f);
+		glUniformMatrix4fv(u_modelLoc, 1, GL_FALSE, glm::value_ptr(identity));
+		glUniform4f(uvRectLoc, 0.0f, 0.0f, 1.0f, 1.0f);
+		glUniform4f(blotColorLoc, 1.0f, 1.0f, 1.0f, 1.0f);
+		glUniform1i(u_useVertexColorLoc, 1);
+		BindGlyphTexture(texture, nearest);
+
+		glBindVertexArray(g_gl.fontVao);
+		glBindBuffer(GL_ARRAY_BUFFER, g_gl.fontVbo);
+		if (byteCount > g_gl.fontVboCapacity)
+		{
+			g_gl.fontVboCapacity = byteCount;
+			glBufferData(GL_ARRAY_BUFFER, g_gl.fontVboCapacity, vertices.data(), GL_STREAM_DRAW);
+		}
+		else
+		{
+			// Orphaning avoids waiting when a previous text batch is still in flight.
+			glBufferData(GL_ARRAY_BUFFER, g_gl.fontVboCapacity, nullptr, GL_STREAM_DRAW);
+			glBufferSubData(GL_ARRAY_BUFFER, 0, byteCount, vertices.data());
+		}
+		glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(vertices.size()));
+		vertices.clear();
+	}
+
+	void BeginGlyphDraw()
+	{
+		glEnable(GL_BLEND);
+		glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+		glDisable(GL_DEPTH_TEST);
+	}
+
+	void EndGlyphDraw()
+	{
+		glBindSampler(0, 0);
+		glUniform1i(u_useVertexColorLoc, 0);
+		glDisable(GL_BLEND);
+		glEnable(GL_DEPTH_TEST);
+		glBindVertexArray(0);
+	}
+}
+
+void CTextBox::SetPos(float x, float y)
+{
+	this->m_y = y;
+	this->m_x = x;
+}
+
+void CTextBox::SetSize(float dx, float dy)
+{
+	this->m_dy = dy;
+	this->m_dx = dx;
+}
+
+void CTextBox::SetTextColor(glm::vec4* rgba)
+{
+	m_rgba = *rgba;
+}
+
+void CTextBox::SetHorizontalJust(JH jh)
+{
+	this->m_jh = jh;
+}
+
+void CTextBox::SetVerticalJust(JV jv)
+{
+	this->m_jv = jv;
+}
+
+void CTextEdge::SetPos(float x, float y)
+{
+
+}
+
+void CTextEdge::SetSize(float dx, float dy)
+{
+
+}
+
+void CTextEdge::SetTextColor(glm::vec4* rgba)
+{
+
+}
+
+void CTextEdge::SetHorizontalJust(JH jh)
+{
+
+}
+
+void CTextEdge::SetVerticalJust(JV jv)
+{
+
+}
+
+CRichText::CRichText(const char* achz, CFontBrx* pfont)
+{
+	// Rich-text wrapping and trimming are destructive. Keep a writable copy so
+	// callers may safely pass string literals and other read-only text.
+	m_text = GameFontTextFromUtf8(achz);
+	MatchStickGlyphsToWords(m_text);
+	m_achz = m_text.data();
+	m_pfontBase = pfont;
+	m_pfontCur = pfont;
+
+	// Default grayscale text color (RGBA = 128,128,128,255)
+	glm::vec4 defaultColor(1.0f);
+
+	m_rgbaBase  = defaultColor;
+	m_rgbaCur   = defaultColor;
+	m_rgbaSet   = defaultColor;
+	m_rgbaOther = defaultColor;
+
+	Reset();
+}
+
+void CRichText::GetExtents(float* pdx, float* pdy, float dxMax)
+{
+	int nLines = ClineWrap((int)dxMax);
+	float maxLineWidth = DxMaxLine();
+
+	if (pdx) *pdx = maxLineWidth;
+	if (pdy && m_pfontBase) {
+		*pdy = static_cast<float>(nLines) * static_cast<float>(m_pfontBase->m_dyUnscaled) * m_pfontBase->m_ryScale;
+	}
+}
+
+int CRichText::ClineWrap(float dx)
+{
+	Reset();  // Reset text state
+	int numLines = 1;
+	float currentLineWidth = 0.0f;
+
+	while (true) {
+		uint32_t ch = ChNext();  // Advance and get next character
+		if (ch == '\0') {
+			return numLines;  // End of text
+		}
+
+		if (ch == '\n') {
+			currentLineWidth = 0.0f;
+			++numLines;
+			continue;
+		}
+
+		// Measure width of current character with current font
+		float charWidth = m_pfontCur->DxFromCodepoint(ch);
+		currentLineWidth += charWidth;
+
+		// Line wrapping
+		if (dx > 0.0f && currentLineWidth > dx) {
+			// Search backward for a word boundary (space/tab)
+			char* wrapPos = m_pchCur - 1;
+			while (wrapPos >= m_achz && *wrapPos != '\n') {
+				if (*wrapPos == ' ' || *wrapPos == '\t') {
+					*wrapPos = '\n';        // Insert line break
+					m_pchCur = wrapPos + 1; // Update current char pointer
+					currentLineWidth = 0.0f;
+					++numLines;
+					goto continue_loop;
+				}
+				--wrapPos;
+			}
+
+			// No word boundary exists. Count a hard wrap without writing at
+			// m_pchCur, which points at the next character (or the terminator).
+			++numLines;
+			currentLineWidth = charWidth;
+		}
+
+	continue_loop:
+		continue;
+	}
+}
+
+float CRichText::DyWrap(float dxWrap)
+{
+	const float dyLine = static_cast<float>(m_pfontBase->m_dyUnscaled) * m_pfontBase->m_ryScale;
+	return dyLine * static_cast<float>(ClineWrap(dxWrap));
+}
+
+float CRichText::DxMaxLine()
+{
+	float maxLineWidth = 0.0f;
+	float currentLineWidth = 0.0f;
+
+	Reset();
+
+	while (uint32_t ch = ChNext()) {
+		if (ch == '\n') {
+			// Commit current line width and reset
+			maxLineWidth = std::max(maxLineWidth, currentLineWidth);
+			currentLineWidth = 0.0f;
+		}
+		else if (m_pfontCur) {
+			float charWidth = m_pfontCur->DxFromCodepoint(ch);
+			currentLineWidth += charWidth;
+		}
+	}
+
+	// Final check in case the last line didn’t end with newline
+	return std::max(maxLineWidth, currentLineWidth);
+}
+
+uint32_t CRichText::ChNext()
+{
+	while (m_pchCur != nullptr && *m_pchCur != '\0')
+	{
+		const char ch = *m_pchCur;
+
+		// ------------------------------------------------------------
+		// Scaling: ^10, ^15, ^., ^^
+		// ------------------------------------------------------------
+
+		if (ch == '^')
+		{
+			const char next = m_pchCur[1];
+
+			if (next == '^')
+			{
+				m_pchCur += 2;
+				return '^';
+			}
+
+			if (next == '.')
+			{
+				if (m_pfontCur != nullptr)
+					m_pfontCur->PopScaling();
+
+				m_pchCur += 2;
+				continue;
+			}
+
+			const char decimal = m_pchCur[2];
+
+			if (next >= '0' && next <= '9' && decimal >= '0' && decimal <= '9')
+			{
+				const float scale = static_cast<float>(next - '0') + static_cast<float>(decimal - '0') * 0.1f;
+
+				if (m_pfontCur != nullptr)
+				{
+					m_pfontCur->PushScaling(
+						scale * m_pfontCur->m_rxScale,
+						scale * m_pfontCur->m_ryScale);
+				}
+
+				m_pchCur += 3;
+				continue;
+			}
+
+			// Malformed scaling sequence: render '^' normally.
+			++m_pchCur;
+			return '^';
+		}
+
+		// ------------------------------------------------------------
+		// Font selection: &1, &2, &3, &4, &., &&
+		// ------------------------------------------------------------
+
+		if (ch == '&')
+		{
+			const char next = m_pchCur[1];
+
+			if (next == '&')
+			{
+				m_pchCur += 2;
+				return '&';
+			}
+
+			if (next == '.')
+			{
+				m_pfontCur = m_pfontBase;
+				m_rgbaCur = m_rgbaSet;
+				m_fFontChanged = true;
+				m_pchCur += 2;
+				continue;
+			}
+
+			// Rich-text digits are selector codes, not direct font indices.
+			// The release table maps "&1" to font 2 and "&2" to font 1.
+			CFontBrx* pfontSource = PfontFromRichTextCode(next);
+
+			if (pfontSource == nullptr)
+			{
+				// Release resets formatting and returns the '&' literally.
+				m_pfontCur = m_pfontBase;
+				m_rgbaCur = m_rgbaBase;
+				m_fFontChanged = true;
+
+				++m_pchCur;
+				return '&';
+			}
+
+			pfontSource->CopyTo(&m_fontOther);
+			m_pchCur += 2;
+
+			const float baseHeight = static_cast<float>(m_pfontBase->m_dyUnscaled) * m_pfontBase->m_ryScale;
+			const float otherHeight = static_cast<float>(m_fontOther.m_dyUnscaled) * m_fontOther.m_ryScale;
+
+			if (otherHeight != 0.0f)
+			{
+				const float scale = baseHeight / otherHeight;
+				m_fontOther.m_rxScale *= scale;
+				m_fontOther.m_ryScale *= scale;
+			}
+
+			m_pfontCur = &m_fontOther;
+			m_fFontChanged = true;
+
+			const float alpha = m_rgbaCur.a;
+			m_rgbaCur = m_rgbaOther;
+			m_rgbaCur.a = alpha;
+
+			continue;
+		}
+
+		// ------------------------------------------------------------
+		// Color selection: ~RRGGBB, ~., ~~
+		// ------------------------------------------------------------
+
+		if (ch == '~')
+		{
+			const char next = m_pchCur[1];
+
+			if (next == '~')
+			{
+				m_pchCur += 2;
+				return '~';
+			}
+
+			if (next == '.')
+			{
+				m_rgbaSet = m_rgbaBase;
+				m_rgbaCur = m_rgbaSet;
+				m_pchCur += 2;
+				continue;
+			}
+
+			uint32_t rgb = 0;
+			bool valid = true;
+
+			for (int i = 0; i < 6; ++i)
+			{
+				const unsigned char hexCharacter = static_cast<unsigned char>(m_pchCur[i + 1]);
+
+				if (hexCharacter == '\0')
+				{
+					valid = false;
+					break;
+				}
+
+				uint32_t hexValue = 0;
+
+				if (hexCharacter >= '0' && hexCharacter <= '9')
+					hexValue = hexCharacter - '0';
+				else if (hexCharacter >= 'A' && hexCharacter <= 'F')
+					hexValue = hexCharacter - 'A' + 10;
+				else if (hexCharacter >= 'a' && hexCharacter <= 'f')
+					hexValue = hexCharacter - 'a' + 10;
+				else
+				{
+					valid = false;
+					break;
+				}
+
+				rgb = rgb * 16 + hexValue;
+			}
+
+			if (!valid)
+			{
+				// Release restores the base state and returns '~'.
+				m_pfontCur = m_pfontBase;
+				m_rgbaCur = m_rgbaBase;
+
+				++m_pchCur;
+				return '~';
+			}
+
+			const uint32_t red = ((rgb >> 16) & 0xFFU);
+			const uint32_t green = ((rgb >> 8) & 0xFFU);
+			const uint32_t blue = (rgb & 0xFFU);
+
+			// The PS2 color range is halved with rounding.
+            // Retail halves 8-bit rich-text RGB into the GS 0..128 color
+            // range, where 128 is full intensity rather than 255.
+            const float redScaled = static_cast<float>((red + 1U) >> 1) / 128.0f;
+            const float greenScaled = static_cast<float>((green + 1U) >> 1) / 128.0f;
+            const float blueScaled = static_cast<float>((blue + 1U) >> 1) / 128.0f;
+			const float alpha = m_rgbaCur.a;
+
+			m_rgbaSet = glm::vec4(redScaled, greenScaled, blueScaled, alpha);
+			m_rgbaCur = m_rgbaSet;
+
+			m_pchCur += 7;
+			continue;
+		}
+
+		// ------------------------------------------------------------
+		// Ordinary printable character
+		// ------------------------------------------------------------
+
+		const char* utf8 = m_pchCur;
+		const uint32_t codepoint = DecodeUtf8(utf8);
+		m_pchCur = const_cast<char*>(utf8);
+		return codepoint;
+	}
+
+	return '\0';
+}
+void CRichText::SetBaseColor(glm::vec4* rgba)
+{
+	m_rgbaBase = *rgba;
+}
+
+int CRichText::Cch()
+{
+	int count = 0;
+	Reset();
+
+	uint32_t ch;
+	while ((ch = ChNext()) != '\0') {
+		++count;
+	}
+
+	return count;
+}
+
+void CRichText::Trim(int cch)
+{
+	Reset();
+
+	uint32_t ch = '\0';
+	while (cch-- > 0) {
+		ch = ChNext();
+		if (ch == '\0') {
+			break;
+		}
+	}
+
+	// Null-terminate at current parse location
+	*m_pchCur = '\0';
+}
+
+float CRichText::Dx()
+{
+	float dx = 0.0f;
+
+	Reset();
+
+	while (true)
+	{
+		const uint32_t ch = ChNext();
+
+		if (ch == '\0')
+			break;
+
+		dx += m_pfontCur->DxFromCodepoint(ch);
+	}
+
+	return dx;
+}
+
+void CRichText::Reset()
+{
+	m_pchCur = m_achz;
+	m_pfontCur = m_pfontBase;
+	m_fFontChanged = false;
+
+	// Reset colors: start with base color, and apply it to current and set
+	m_rgbaSet = m_rgbaBase;
+	m_rgbaCur = m_rgbaBase;
+}
+
+void CRichText::Draw(CTextBox* ptbx, CTextBox* ptbxClip,
+	float outputScaleX, float outputScaleY)
+{
+	if (ptbx == nullptr || m_pfontBase == nullptr)
+		return;
+
+	float lineWidths[64]{};
+	int lineCount = 0;
+
+	Reset();
+
+	while (true)
+	{
+		const uint32_t ch = ChNext();
+
+		if (ch == '\0')
+			break;
+
+		if (ch == '\n')
+		{
+			if (lineCount < 63)
+				++lineCount;
+
+			continue;
+		}
+
+		if (m_pfontCur != nullptr)
+			lineWidths[lineCount] += m_pfontCur->DxFromCodepoint(ch) * outputScaleX;
+	}
+
+	const float lineHeight = static_cast<float>(m_pfontBase->m_dyUnscaled) *
+		m_pfontBase->m_ryScale * outputScaleY;
+	const float totalHeight = static_cast<float>(lineCount + 1) * lineHeight;
+
+	float yCursor = ptbx->m_y;
+
+	if (ptbx->m_jv == JV_Bottom)
+		yCursor = ptbx->m_y + ptbx->m_dy - totalHeight;
+	else if (ptbx->m_jv != JV_Top)
+		yCursor = ptbx->m_y + (ptbx->m_dy - totalHeight) * 0.5f;
+
+	SetBaseColor(&ptbx->m_rgba);
+	Reset();
+
+	GLboolean scissorWasEnabled = GL_FALSE;
+	GLint previousScissorBox[4]{};
+	bool appliedClip = false;
+
+	if (ptbxClip != nullptr)
+	{
+		scissorWasEnabled = glIsEnabled(GL_SCISSOR_TEST);
+		glGetIntegerv(GL_SCISSOR_BOX, previousScissorBox);
+
+		const float clipLeft = ptbxClip->m_x;
+		const float clipTop = ptbxClip->m_y;
+		const float clipRight = ptbxClip->m_x + ptbxClip->m_dx;
+		const float clipBottom = ptbxClip->m_y + ptbxClip->m_dy;
+
+		const GLint targetWidth = g_gl.renderWidth;
+		const GLint targetHeight = g_gl.renderHeight;
+		const float rasterScaleX = static_cast<float>(targetWidth) / g_gl.width;
+		const float rasterScaleY = static_cast<float>(targetHeight) / g_gl.height;
+
+		GLint scissorLeft = static_cast<GLint>(std::floor(clipLeft * rasterScaleX));
+		GLint scissorBottom = static_cast<GLint>(std::floor((g_gl.height - clipBottom) * rasterScaleY));
+		GLint scissorRight = static_cast<GLint>(std::ceil(clipRight * rasterScaleX));
+		GLint scissorTop = static_cast<GLint>(std::ceil((g_gl.height - clipTop) * rasterScaleY));
+
+		scissorLeft = std::clamp(scissorLeft, 0, targetWidth);
+		scissorRight = std::clamp(scissorRight, 0, targetWidth);
+		scissorBottom = std::clamp(scissorBottom, 0, targetHeight);
+		scissorTop = std::clamp(scissorTop, 0, targetHeight);
+
+		if (scissorWasEnabled)
+		{
+			const GLint previousLeft = previousScissorBox[0];
+			const GLint previousBottom = previousScissorBox[1];
+			const GLint previousRight = previousLeft + previousScissorBox[2];
+			const GLint previousTop = previousBottom + previousScissorBox[3];
+
+			scissorLeft = std::max(scissorLeft, previousLeft);
+			scissorBottom = std::max(scissorBottom, previousBottom);
+			scissorRight = std::min(scissorRight, previousRight);
+			scissorTop = std::min(scissorTop, previousTop);
+		}
+
+		const GLsizei scissorWidth = static_cast<GLsizei>(std::max(scissorRight - scissorLeft, 0));
+		const GLsizei scissorHeight = static_cast<GLsizei>(std::max(scissorTop - scissorBottom, 0));
+
+		glEnable(GL_SCISSOR_TEST);
+		glScissor(scissorLeft, scissorBottom, scissorWidth, scissorHeight);
+		appliedClip = true;
+	}
+
+	int currentLine = 0;
+	bool newLineStart = true;
+	float xCursor = 0.0f;
+	GLuint batchTexture = 0;
+	bool batchNearest = false;
+	bool batchActive = false;
+	GlyphVertices glyphs;
+	glyphs.reserve(m_text.size() * 6);
+	BeginGlyphDraw();
+
+	while (true)
+	{
+		const uint32_t ch = ChNext();
+
+		if (ch == '\0')
+			break;
+
+		if (ch == '\n')
+		{
+			if (currentLine < 63)
+				++currentLine;
+
+			yCursor += lineHeight;
+			newLineStart = true;
+			continue;
+		}
+
+		CFontBrx* currentFont = m_pfontCur;
+
+		if (currentFont == nullptr || currentFont->m_pbmp == nullptr)
+			continue;
+
+		if (newLineStart)
+		{
+			if (ptbx->m_jh == JH_Left)
+				xCursor = ptbx->m_x;
+			else if (ptbx->m_jh == JH_Right)
+				xCursor = ptbx->m_x + ptbx->m_dx - lineWidths[currentLine];
+			else
+				xCursor = ptbx->m_x + (ptbx->m_dx - lineWidths[currentLine]) * 0.5f;
+
+			newLineStart = false;
+		}
+
+		const GLuint currentTexture = currentFont->m_pbmp->glDiffuseMap;
+		const bool currentNearest = FGuiSpriteFont(currentFont);
+		if (batchActive &&
+			(m_fFontChanged || currentTexture != batchTexture || currentNearest != batchNearest))
+		{
+			FlushGlyphs(glyphs, batchTexture, batchNearest);
+		}
+		batchTexture = currentTexture;
+		batchNearest = currentNearest;
+		batchActive = true;
+		m_fFontChanged = false;
+
+		const float rxScale = currentFont->m_rxScale;
+		const float ryScale = currentFont->m_ryScale;
+		currentFont->m_rxScale *= outputScaleX;
+		currentFont->m_ryScale *= outputScaleY;
+		AppendGlyph(glyphs, currentFont, ch, xCursor, yCursor, m_rgbaCur);
+		xCursor += currentFont->DxFromCodepoint(ch);
+		currentFont->m_rxScale = rxScale;
+		currentFont->m_ryScale = ryScale;
+	}
+
+	FlushGlyphs(glyphs, batchTexture, batchNearest);
+	EndGlyphDraw();
+
+	if (appliedClip)
+	{
+		if (scissorWasEnabled)
+		{
+			glEnable(GL_SCISSOR_TEST);
+			glScissor(previousScissorBox[0], previousScissorBox[1], previousScissorBox[2], previousScissorBox[3]);
+		}
+		else
+		{
+			glDisable(GL_SCISSOR_TEST);
+		}
+	}
+}
+
+void CFontBrx::LoadFromBrx(CBinaryInputStream* pbis)
+{
+	const int32_t imageIndex = pbis->S32Read();
+
+	m_dxCharUnscaled = pbis->U8Read();
+	m_dxSpaceUnscaled = pbis->U8Read();
+	m_dyUnscaled = pbis->U8Read();
+
+	const uint8_t fontk = pbis->U8Read();
+	m_grffont = fontk;
+
+	m_rxScale = pbis->F32Read();
+	m_ryScale = m_rxScale;
+
+	m_cglyff = static_cast<uint16_t>(pbis->U32Read());
+
+	m_pbmp = imageIndex >= 0 && static_cast<std::size_t>(imageIndex) < g_abmp.size()
+		? &g_abmp[static_cast<std::size_t>(imageIndex)] : nullptr;
+
+	m_aglyff.clear();
+	m_aglyff.reserve(m_cglyff);
+
+	for (int i = 0; i < m_cglyff; ++i)
+	{
+		GLYFF glyph{};
+
+		glyph.wch = pbis->S16Read();
+		glyph.x = pbis->S16Read();
+		glyph.y = pbis->S16Read();
+		glyph.dx = pbis->S16Read();
+
+		m_aglyff[static_cast<uint16_t>(glyph.wch)] = glyph;
+	}
+
+	// CANE_FONTLIST=1: print the font's characters (tools/sly1porttextcheck.py checks the port's own text
+	// against them: the Japanese and Korean fonts hold only some characters).
+	static const bool s_fFontList = std::getenv("CANE_FONTLIST") != nullptr;
+	if (s_fFontList)
+	{
+		std::vector<uint16_t> awch;
+		for (const auto& entry : m_aglyff)
+			awch.push_back(entry.first);
+		std::sort(awch.begin(), awch.end());
+		std::string line = "font glyphs " + std::to_string(awch.size()) + " char " + std::to_string(m_dxCharUnscaled) +
+			" space " + std::to_string(m_dxSpaceUnscaled) +
+			" height " + std::to_string(m_dyUnscaled) + ":";
+		for (const uint16_t wch : awch)
+		{
+			const uint32_t c = wch;
+			line += ' ';
+			if (c < 0x80) line += static_cast<char>(c);
+			else if (c < 0x800) { line += static_cast<char>(0xC0 | (c >> 6)); line += static_cast<char>(0x80 | (c & 0x3F)); }
+			else { line += static_cast<char>(0xE0 | (c >> 12)); line += static_cast<char>(0x80 | ((c >> 6) & 0x3F)); line += static_cast<char>(0x80 | (c & 0x3F)); }
+			line += '(' + std::to_string(m_aglyff[wch].dx) + ')';
+		}
+		std::printf("%s\n", line.c_str());
+	}
+}
+
+void CFontBrx::PostLoad()
+{
+
+}
+
+GLYFF* CFontBrx::PglyffFromCh(char ch)
+{
+	// char is signed on MSVC. Convert through unsigned char so PAL glyph IDs
+	// such as 0xfc (u-umlaut) are looked up as 252 instead of 65532.
+	auto it = m_aglyff.find(static_cast<uint16_t>(static_cast<unsigned char>(ch)));
+
+	if (it != m_aglyff.end())
+		return &it->second;
+
+	return nullptr;
+}
+
+GLYFF* CFontBrx::PglyffFromCodepoint(uint32_t codepoint)
+{
+	if (codepoint > 0xffff)
+		return nullptr;
+	auto it = m_aglyff.find(static_cast<uint16_t>(codepoint));
+	return it != m_aglyff.end() ? &it->second : nullptr;
+}
+
+float CFontBrx::DxFromPchz(char* pchz)
+{
+	if (pchz == nullptr) {
+		return 0.0f;
+	}
+
+	float totalWidth = 0.0f;
+
+	const char* cursor = pchz;
+	while (*cursor != '\0')
+		totalWidth += DxFromCodepoint(DecodeUtf8(cursor));
+
+	return totalWidth;
+}
+
+float CFontBrx::DxFromCh(char ch)
+{
+	// Controller glyphs measure as the glyph of the button actually bound,
+	// whatever the device, so a device switch never relayouts the text.
+	if ((m_grffont & kgrffontJoy) != 0)
+	{
+		const PROMPTGLYPH prompt = PromptGlyphFor(ch);
+		if (prompt.kind == PROMPTGLYPH::Icon && FWidePromptGlyph(prompt.ch))
+			return static_cast<float>(m_dyUnscaled) * m_ryScale;
+		ch = prompt.ch;
+	}
+
+	// Get the glyph information for the character.
+	GLYFF* pGlyph = PglyffFromCh(ch);
+
+	// If the glyph is not found, return the space width (scaled).
+	if (pGlyph == nullptr) {
+		return static_cast<float>(m_dxSpaceUnscaled) * m_rxScale;
+	}
+
+	// If the glyph is found, return its width, scaled.
+	return static_cast<float>(pGlyph->dx + 1) * m_rxScale;
+}
+
+float CFontBrx::DxFromCodepoint(uint32_t codepoint)
+{
+	GLYFF* glyph = PglyffFromCodepoint(codepoint);
+	uint32_t ajamo[3]{};
+	if (glyph == nullptr && CHangulJamo(codepoint, ajamo) != 0)
+	{
+		// Korean (SCKA-200.04 0x15cbe8): a syllable whose vowel sits under the consonant advances by the font's
+		// character width, any other by the cell (the glyph of ㄱ) plus the usual pixel.
+		if (FHangulHorizontalVowel(ajamo[1]))
+			return static_cast<float>(m_dxCharUnscaled) * m_rxScale;
+		if (GLYFF* cell = PglyffFromCodepoint(0x1100))
+			return static_cast<float>(cell->dx + 1) * m_rxScale;
+	}
+	return glyph != nullptr
+		? static_cast<float>(glyph->dx + 1) * m_rxScale
+		: static_cast<float>(m_dxSpaceUnscaled) * m_rxScale;
+}
+
+std::shared_ptr<CFontBrx> CFontBrx::PfontClone(float rx, float ry)
+{
+	auto fontclone = std::make_shared<CFontBrx>();
+
+	fontclone->m_dxCharUnscaled = this->m_dxCharUnscaled;
+	fontclone->m_dxSpaceUnscaled = this->m_dxSpaceUnscaled;
+	fontclone->m_dyUnscaled = this->m_dyUnscaled;
+	fontclone->m_rxScale = this->m_rxScale * rx;
+	fontclone->m_ryScale = this->m_ryScale * ry;
+	fontclone->m_csfr = this->m_csfr;
+	std::memcpy(fontclone->m_asfr, this->m_asfr, sizeof(this->m_asfr));
+	fontclone->m_fGstest = this->m_fGstest;
+	fontclone->m_gstest = this->m_gstest;
+	fontclone->m_z = this->m_z;
+
+	fontclone->m_pbmp = this->m_pbmp;
+	fontclone->m_cglyff = this->m_cglyff;
+	fontclone->m_aglyff = this->m_aglyff;
+	fontclone->m_grffont = this->m_grffont;
+
+	return fontclone;
+}
+
+bool CFontBrx::FValid(char ch)
+{
+	return PglyffFromCh(ch) != nullptr;
+}
+
+void CFontBrx::SetupDraw()
+{
+	glUniformMatrix4fv(u_projectionLoc, 1, GL_FALSE, glm::value_ptr(g_gl.blotProjection));
+
+	BindGlyphTexture(m_pbmp != nullptr ? m_pbmp->glDiffuseMap : 0,
+		FGuiSpriteFont(this));
+	// The shared blot VAO has no per-vertex color attribute.  Other UI paths
+	// may leave this enabled, which multiplies font/preview RGB by the generic
+	// attribute's default zero value and turns colored FMV glyphs black.
+	glUniform1i(u_useVertexColorLoc, 0);
+
+	glBindVertexArray(g_gl.gao);
+
+	glEnable(GL_BLEND);
+	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+	glDisable(GL_DEPTH_TEST);
+}
+
+float CFontBrx::DxDrawCh(char ch, float xChar, float yChar, glm::vec4& rgba)
+{
+	if ((m_grffont & kgrffontJoy) != 0)
+	{
+		const PROMPTGLYPH prompt = PromptGlyphFor(ch);
+		if (prompt.kind == PROMPTGLYPH::Icon)
+			return DxDrawPromptIcon(prompt, xChar, yChar, rgba);
+		ch = prompt.ch;
+	}
+
+	GLYFF* glyph = PglyffFromCh(ch);
+
+	if (!glyph)
+		return static_cast<float>(m_dxSpaceUnscaled) * m_rxScale;
+
+	const float glyphW = glyph->dx * m_rxScale;
+	const float glyphAdvance = (glyph->dx + 1) * m_rxScale;
+	float glyphH = m_dyUnscaled * m_ryScale;
+
+
+	float s0 = glyph->x / static_cast<float>(m_pbmp->bmpWidth);
+	float t0 = (glyph->y + m_dyUnscaled) / static_cast<float>(m_pbmp->bmpHeight);
+	float s1 = (glyph->x + glyph->dx) / static_cast<float>(m_pbmp->bmpWidth);
+	float t1 = glyph->y / static_cast<float>(m_pbmp->bmpHeight);
+
+	glm::mat4 model = glm::translate(glm::mat4(1.0f), glm::vec3(xChar, yChar + glyphH, 0.0f)) * glm::scale(glm::mat4(1.0f), glm::vec3(glyphW, -glyphH, 1.0f));  // flips vertically
+
+	glUniformMatrix4fv(u_modelLoc, 1, GL_FALSE, glm::value_ptr(model));
+	glUniform4f(uvRectLoc, s0, t0, s1, t1);
+	glUniform4fv(blotColorLoc, 1, glm::value_ptr(rgba));
+
+	glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, 0);
+
+	return glyphAdvance;
+}
+
+float CFontBrx::DxDrawPromptIcon(const PROMPTGLYPH& prompt, float xChar, float yChar, glm::vec4& rgba)
+{
+	// The cell keeps the width DxFromCh reported; the square icon is centred
+	// in it at the font's line height. Narrow cells (the d-pad arrows) get a
+	// smaller icon that may only reach a little into the glyph spacing.
+	const float dy = static_cast<float>(m_dyUnscaled) * m_ryScale;
+	float dx = dy;
+	if (!FWidePromptGlyph(prompt.ch))
+	{
+		GLYFF* glyph = PglyffFromCh(prompt.ch);
+		dx = glyph != nullptr
+			? static_cast<float>(glyph->dx + 1) * m_rxScale
+			: static_cast<float>(m_dxSpaceUnscaled) * m_rxScale;
+	}
+	const float side = (std::min)(dy, dx * 1.2f);
+
+	// The game tints controller glyphs with GS colours, where 0x80 is full
+	// intensity (binoc.cpp passes 128/255). The icons are authored at full
+	// intensity, so undo that halving and keep the alpha.
+	const glm::vec4 tint(
+		(std::min)(1.0f, rgba.r * 2.0f),
+		(std::min)(1.0f, rgba.g * 2.0f),
+		(std::min)(1.0f, rgba.b * 2.0f),
+		rgba.a);
+
+	BindBlotTexture(prompt.texture);
+	RenderGlyphQuad(xChar + (dx - side) * 0.5f, yChar + (dy - side) * 0.5f, side, side,
+		prompt.u0, prompt.v0, prompt.u1, prompt.v1, tint);
+	BindBlotTexture(m_pbmp != nullptr ? m_pbmp->glDiffuseMap : 0);
+
+	return dx;
+}
+
+float CFontBrx::DxDrawChRotated90(char ch, float xChar, float yChar, glm::vec4& rgba)
+{
+	GLYFF* glyph = PglyffFromCh(ch);
+
+	if (!glyph)
+		return static_cast<float>(m_dxSpaceUnscaled) * m_rxScale;
+
+	const float glyphW = glyph->dx * m_rxScale;
+	const float glyphAdvance = (glyph->dx + 1) * m_rxScale;
+	const float glyphH = m_dyUnscaled * m_ryScale;
+	const float s0 = glyph->x / static_cast<float>(m_pbmp->bmpWidth);
+	const float t0 = (glyph->y + m_dyUnscaled) / static_cast<float>(m_pbmp->bmpHeight);
+	const float s1 = (glyph->x + glyph->dx) / static_cast<float>(m_pbmp->bmpWidth);
+	const float t1 = glyph->y / static_cast<float>(m_pbmp->bmpHeight);
+
+	// The retail boss-meter frame is stored as a horizontal font glyph and the
+	// PS2 path turns it clockwise to surround the vertical health fill.
+	const glm::mat4 model =
+		glm::translate(glm::mat4(1.0f), glm::vec3(xChar + glyphH, yChar, 0.0f)) *
+		glm::rotate(glm::mat4(1.0f), glm::half_pi<float>(), glm::vec3(0.0f, 0.0f, 1.0f)) *
+		glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, glyphH, 0.0f)) *
+		glm::scale(glm::mat4(1.0f), glm::vec3(glyphW, -glyphH, 1.0f));
+
+	glUniformMatrix4fv(u_modelLoc, 1, GL_FALSE, glm::value_ptr(model));
+	glUniform4f(uvRectLoc, s0, t0, s1, t1);
+	glUniform4fv(blotColorLoc, 1, glm::value_ptr(rgba));
+	glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, nullptr);
+
+	return glyphAdvance;
+}
+
+void CFontBrx::EdgeRect(CTextEdge* pte, CTextBox* ptbx)
+{
+	GLYFF* glyph = PglyffFromCh(pte->m_ch);
+
+	if (!glyph) return;
+
+	pte->m_pfont->PushScaling(pte->m_rxScaling, pte->m_ryScaling);
+
+	float scaleX = m_rxScale;
+	float scaleY = m_ryScale;
+
+	float dxExtra = pte->m_dxExtra * scaleX;
+	float dyExtra = pte->m_dyExtra * scaleY;
+	float dyUnscaled = static_cast<float>(m_dyUnscaled);
+
+	float glyphW = glyph->dx * scaleX;
+	float glyphH = dyUnscaled * scaleY;
+
+	float x = ptbx->m_x;
+	float y = ptbx->m_y;
+	float w = ptbx->m_dx;
+	float h = ptbx->m_dy;
+
+	float x0 = x - dxExtra;
+	float y0 = y - dyExtra;
+	float x1 = x + w + dxExtra;
+	float y1 = y + h + dyExtra;
+
+	float outerX0 = x0 - glyphW;
+	float outerY0 = y0 - glyphH;
+	float outerX1 = x1 + glyphW;
+	float outerY1 = y1 + glyphH;
+
+	// Retail DrawPart submits integer GS texel coordinates (UV 12.4 fixed
+	// point), and EdgeRect truncates both midpoint calculations to an integer.
+	// OpenGL's normalized coordinates address texel boundaries, so translate
+	// those retail coordinates to texel centers to keep linear filtering from
+	// pulling neighboring atlas pixels into the stretched strips.
+	const int texWidth = m_pbmp->bmpWidth;
+	const int texHeight = m_pbmp->bmpHeight;
+	const int texelLeft = glyph->x;
+	const int texelRight = glyph->x + glyph->dx;
+	const int texelMidX = (texelLeft + texelRight) / 2;
+	const int texelTop = glyph->y;
+	const int texelBottom = glyph->y + m_dyUnscaled;
+	// The GS calculation averages vertically flipped coordinates, which maps
+	// back to a ceiling midpoint in the top-down atlas used by OpenGL.
+	const int texelMidY = (texelTop + texelBottom + 1) / 2;
+	const auto normalizedS = [texWidth](int texel)
+	{
+		return (static_cast<float>(texel) + 0.5f) / static_cast<float>(texWidth);
+	};
+	const auto normalizedT = [texHeight](int texel)
+	{
+		return (static_cast<float>(texel) + 0.5f) / static_cast<float>(texHeight);
+	};
+
+	const float s0 = normalizedS(texelLeft);
+	const float sMid = normalizedS(texelMidX);
+	const float s1 = normalizedS(texelRight);
+	const float t0 = normalizedT(texelBottom);
+	const float tMid = normalizedT(texelMidY);
+	const float t1 = normalizedT(texelTop);
+
+	glm::vec4 color = pte->m_rgba;
+
+	GlyphVertices vertices;
+	vertices.reserve(9 * 6);
+	AppendQuad(vertices, outerX0, outerY0, x0, y0, s0, t0, sMid, tMid, color);
+	AppendQuad(vertices, x0, outerY0, x1, y0, sMid, t0, sMid, tMid, color);
+	AppendQuad(vertices, x1, outerY0, outerX1, y0, sMid, t0, s1, tMid, color);
+	AppendQuad(vertices, outerX0, y0, x0, y1, s0, tMid, sMid, tMid, color);
+	AppendQuad(vertices, x0, y0, x1, y1, sMid, tMid, sMid, tMid, color);
+	AppendQuad(vertices, x1, y0, outerX1, y1, sMid, tMid, s1, tMid, color);
+	AppendQuad(vertices, outerX0, y1, x0, outerY1, s0, tMid, sMid, t1, color);
+	AppendQuad(vertices, x0, y1, x1, outerY1, sMid, tMid, sMid, t1, color);
+	AppendQuad(vertices, x1, y1, outerX1, outerY1, sMid, tMid, s1, t1, color);
+
+	BeginGlyphDraw();
+	// EdgeRect is a nine-slice GUI frame even when its cells live beside font
+	// glyphs in an atlas, so it should always use crisp sprite sampling.
+	FlushGlyphs(vertices, m_pbmp != nullptr ? m_pbmp->glDiffuseMap : 0, true);
+	EndGlyphDraw();
+
+	pte->m_pfont->PopScaling();
+}
+
+void CFontBrx::PushScaling(float rx, float ry)
+{
+	if (m_csfr >= static_cast<int>(sizeof(m_asfr) / sizeof(m_asfr[0])))
+		return;
+
+	// Release stores the effective scale for restoration, then evaluates every
+	// pushed value against the scale that was active at the outermost push.
+	// The prototype instead stored the requested values and applied ratios;
+	// that is not the behavior used by the retail executable.
+	SFR& savedScale = m_asfr[m_csfr++];
+	savedScale.rx = m_rxScale;
+	savedScale.ry = m_ryScale;
+	m_rxScale = m_asfr[0].rx * rx;
+	m_ryScale = m_asfr[0].ry * ry;
+}
+
+void CFontBrx::CopyTo(CFontBrx* pfontDst)
+{
+	pfontDst->m_dxCharUnscaled = this->m_dxCharUnscaled;
+	pfontDst->m_dxSpaceUnscaled = this->m_dxSpaceUnscaled;
+	pfontDst->m_dyUnscaled = this->m_dyUnscaled;
+	pfontDst->m_rxScale = this->m_rxScale;
+	pfontDst->m_ryScale = this->m_ryScale;
+	pfontDst->m_csfr = this->m_csfr;
+	pfontDst->m_asfr[0] = m_asfr[0];
+	pfontDst->m_asfr[1] = m_asfr[1];
+	pfontDst->m_asfr[2] = m_asfr[2];
+	pfontDst->m_asfr[3] = m_asfr[3];
+	pfontDst->m_fGstest = this->m_fGstest;
+	pfontDst->m_gstest = this->m_gstest;
+	pfontDst->m_z = this->m_z;
+
+	pfontDst->m_pbmp = this->m_pbmp;
+	pfontDst->m_cglyff = this->m_cglyff;
+	pfontDst->m_aglyff = this->m_aglyff;
+	pfontDst->m_grffont = this->m_grffont;
+}
+
+void CFontBrx::GetExtents(char* pchz, float* pdx, float* pdy, float dxMax)
+{
+	// Wraps the string in-place and returns the number of lines after wrapping
+	int numLines = ClineWrapPchz(pchz, dxMax);
+
+	// Finds the width of the longest line in the (possibly modified) string
+	float maxLineWidth = DxMaxLine(pchz);
+
+	// Get scaled line height = (unscaled line height) * (vertical scale)
+	float scaledLineHeight = static_cast<float>(this->m_dyUnscaled) * this->m_ryScale;
+
+	// Return width if requested
+	if (pdx != nullptr) {
+		*pdx = maxLineWidth;
+	}
+
+	// Return total height if requested (numLines * scaledLineHeight)
+	if (pdy != nullptr) {
+		*pdy = static_cast<float>(numLines) * scaledLineHeight;
+	}
+}
+
+void CFontBrx::PopScaling()
+{
+	if (m_csfr <= 0)
+		return;
+
+	const SFR& savedScale = m_asfr[--m_csfr];
+	m_rxScale = savedScale.rx;
+	m_ryScale = savedScale.ry;
+}
+
+int CFontBrx::ClineWrapPchz(char* pchz, float dx)
+{
+	if (pchz == nullptr)
+		return 0;
+
+	int lineCount = 1;
+	float lineWidth = 0.0f;
+
+	char* cursor = pchz;
+
+	while (*cursor != '\0')
+	{
+		if (*cursor == '\n')
+		{
+			lineWidth = 0.0f;
+			++lineCount;
+			++cursor;
+			continue;
+		}
+
+		lineWidth += DxFromCh(*cursor);
+
+		if (dx == 0.0f)
+		{
+			++cursor;
+			continue;
+		}
+
+		if (lineWidth > dx)
+		{
+			char* breakPosition = cursor;
+
+			while (true)
+			{
+				if (breakPosition < pchz || *breakPosition == '\n')
+					break;
+
+				if (*breakPosition == ' ' || *breakPosition == '\t')
+				{
+					*breakPosition = '\n';
+					lineWidth = 0.0f;
+					++lineCount;
+					cursor = breakPosition;
+					break;
+				}
+
+				--breakPosition;
+			}
+
+			// No whitespace was found before the current character.
+			if (lineWidth != 0.0f)
+			{
+				*cursor = '\n';
+				lineWidth = 0.0f;
+				++lineCount;
+			}
+		}
+
+		++cursor;
+	}
+
+	return lineCount;
+}
+
+float CFontBrx::DxMaxLine(char* pchz)
+{
+	float currentLineWidth = 0.0f;
+	float maxLineWidth = 0.0f;
+
+	while (*pchz != '\0') {
+		if (*pchz == '\n') {
+			if (currentLineWidth > maxLineWidth)
+				maxLineWidth = currentLineWidth;
+			currentLineWidth = 0.0f;
+		}
+		else {
+			currentLineWidth += DxFromCh(*pchz);
+		}
+		++pchz;
+	}
+
+	// Final line (in case it doesn't end in '\n')
+	if (currentLineWidth > maxLineWidth)
+		maxLineWidth = currentLineWidth;
+
+	return maxLineWidth;
+}
+
+float CFontBrx::DyWrapPchz(char* pchz, float dx)
+{
+	int numLines = ClineWrapPchz(pchz, dx);
+	return static_cast<float>(m_dyUnscaled) * m_ryScale * static_cast<float>(numLines);
+}
+
+void CFontBrx::DrawPart(float x0, float y0, float x1, float y1, float s0, float t0, float s1, float t1, glm::vec4& color)
+{
+	glm::mat4 model = glm::translate(glm::mat4(1.0f), glm::vec3(x0, y0, 0.0f)) * glm::scale(glm::mat4(1.0f), glm::vec3(x1 - x0, y1 - y0, 1.0f));
+
+	glm::vec4 uvRect = glm::vec4(s0, t0, s1, t1);
+
+	glUniformMatrix4fv(u_modelLoc, 1, GL_FALSE, glm::value_ptr(model));
+	glUniform4fv(uvRectLoc, 1, glm::value_ptr(uvRect));
+	glUniform4fv(blotColorLoc, 1, glm::value_ptr(color));
+
+	glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, 0);
+}
+
+void CFontBrx::DrawPchz(char* pchz, CTextBox* ptbx)
+{
+	if (!pchz || !ptbx) return;
+
+	BeginGlyphDraw();
+	GlyphVertices glyphs;
+	glyphs.reserve(std::strlen(pchz) * 6);
+
+	float y = ptbx->m_y;
+
+	if (ptbx->m_jv != JV_Top) {
+		// Calculate total text height
+		float totalHeight = m_dyUnscaled * m_ryScale;
+		for (char* p = pchz; *p != '\0'; ++p) {
+			if (*p == '\n') totalHeight += m_dyUnscaled * m_ryScale;
+		}
+
+		if (ptbx->m_jv == JV_Bottom) {
+			y = ptbx->m_y + ptbx->m_dy - totalHeight;
+		}
+		else { // JV_Center
+			y = ptbx->m_y + (ptbx->m_dy - totalHeight) * 0.5f;
+		}
+	}
+
+	float x = ptbx->m_x;
+	bool newLine = true;
+
+	while (*pchz != '\0') {
+		if (*pchz == '\n') {
+			newLine = true;
+			y += m_dyUnscaled * m_ryScale;
+			++pchz;
+			continue;
+		}
+
+		if (newLine) {
+			if (ptbx->m_jh == JH_Left) {
+				x = ptbx->m_x;
+			}
+			else {
+				float lineWidth = 0.0f;
+				const char* p = pchz;
+				while (*p != '\0' && *p != '\n') {
+					lineWidth += DxFromCodepoint(DecodeUtf8(p));
+				}
+
+				if (ptbx->m_jh == JH_Right) {
+					x = ptbx->m_x + ptbx->m_dx - lineWidth;
+				}
+				else { // JH_Center
+					x = ptbx->m_x + (ptbx->m_dx - lineWidth) * 0.5f;
+				}
+			}
+			newLine = false;
+		}
+
+		const char* next = pchz;
+		const uint32_t codepoint = DecodeUtf8(next);
+		AppendGlyph(glyphs, this, codepoint, x, y, ptbx->m_rgba);
+		float charWidth = DxFromCodepoint(codepoint);
+		x += charWidth;
+		pchz = const_cast<char*>(next);
+	}
+
+	FlushGlyphs(glyphs, m_pbmp != nullptr ? m_pbmp->glDiffuseMap : 0,
+		FGuiSpriteFont(this));
+	EndGlyphDraw();
+}
+
+void CFontBrx::DrawGlyphRun(const char* text, const float* xPositions,
+	std::size_t count, float y, const glm::vec4& color)
+{
+	if (text == nullptr || xPositions == nullptr || count == 0 || m_pbmp == nullptr)
+		return;
+
+	GlyphVertices glyphs;
+	glyphs.reserve(count * 6);
+	for (std::size_t i = 0; i < count; ++i)
+		AppendGlyph(glyphs, this, text[i], xPositions[i], y, color);
+
+	BeginGlyphDraw();
+	FlushGlyphs(glyphs, m_pbmp->glDiffuseMap, FGuiSpriteFont(this));
+	EndGlyphDraw();
+}
+
+void CFontBrx::CleanUpDraw()
+{
+	glBindSampler(0, 0);
+	glDisable(GL_BLEND);
+	glEnable(GL_DEPTH_TEST);
+	glBindVertexArray(0);
+}
+
+CFontBrx* PfontFromFont(int fontk)
+{
+	if (fontk < 0 || fontk >= static_cast<int>(g_afontBrx.size()))
+		return g_pfont;
+
+	return &g_afontBrx[fontk];
+}
+
+bool FFontLoaded(int fontk)
+{
+	return fontk >= 0 && fontk < static_cast<int>(g_afontBrx.size());
+}
+
+CFontBrx* PfontFromRichTextCode(char code)
+{
+	for (int fontk = 0;
+		fontk < static_cast<int>(g_achFontSelector.size());
+		++fontk)
+	{
+		if (code == g_achFontSelector[fontk])
+			return PfontFromFont(fontk);
+	}
+
+	return nullptr;
+}
+
+void RenderGlyphQuad(float x, float y, float w, float h, float u0, float v0, float u1, float v1, const glm::vec4& color)
+{
+	glm::mat4 model = glm::translate(glm::mat4(1.0f), glm::vec3(x, y + h, 0.0f)) * glm::scale(glm::mat4(1.0f), glm::vec3(w, -h, 1.0f));  // flips vertically
+
+	glUniformMatrix4fv(u_modelLoc, 1, GL_FALSE, glm::value_ptr(model));
+	glUniform4f(uvRectLoc, u0, v0, u1, v1);
+	glUniform4fv(blotColorLoc, 1, glm::value_ptr(color));
+
+	glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_SHORT, 0);
+}
+
+int g_cfontBrx;
+std::vector <CFontBrx> g_afontBrx;
+
+CFontBrx* g_pfont = nullptr;
+CFontBrx* g_pfontScreenCounters = nullptr;
+CFontBrx* g_pfontJoy = nullptr;
+
+std::vector <CFontBrx*> g_testFontBrx;
+
+SFR g_sfrOne = { 1.0, 1.0 };
+
+GLuint u_projectionLoc = 0;
+GLuint u_modelLoc = 0;
+GLuint uvRectLoc = 0;
+GLuint u_useVertexColorLoc = 0;
+GLuint blotColorLoc = 0;
+GLuint whiteTex = 0;
+
+void BindBlotTexture(GLuint texture)
+{
+	glActiveTexture(GL_TEXTURE0);
+	glBindTexture(GL_TEXTURE_2D, texture != 0 ? texture : whiteTex);
+}
+
+std::array<char, 5> g_achFontSelector =
+{
+	'0',
+	'2',
+	'1',
+	'3',
+	'4'
+};

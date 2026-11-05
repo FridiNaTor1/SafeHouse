@@ -1,0 +1,5 @@
+IDI_SAFEHOUSE ICON "@CMAKE_CURRENT_SOURCE_DIR@/launcher/assets/safehouse.ico"
+// Desktop shortcut icons, the game logos (scripts/make-shortcut-icons.py; launcher/desktop_shortcut.h iconResource: 101 + the game's index; the .lnk names
+// "safehouse.exe,-<id>"). Numeric ids sort after the named SafeHouse icon, which stays the program's icon.
+101 ICON "@CMAKE_CURRENT_SOURCE_DIR@/launcher/assets/shortcut/sly1-logo.ico"
+102 ICON "@CMAKE_CURRENT_SOURCE_DIR@/launcher/assets/shortcut/sly2-logo.ico"

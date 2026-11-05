@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=SafeHouse
+Comment=Native PC ports of the Sly Cooper games
+Exec=safehouse
+Icon=safehouse
+Categories=Game;
+Terminal=false
+StartupWMClass=SafeHouse

@@ -1,0 +1,306 @@
+# Builds, tests and packages SafeHouse for Linux, Windows and macOS, and publishes every push to main as a release.
+#
+#   push to main         build + tests + packages, then a GitHub release (marked latest) with every package,
+#                        SHA256SUMS and SafeHouse-update.json (the launcher's update check reads it)
+#   workflow_dispatch    the same, by hand (a release only when run on main)
+#   pull request         build + tests + packages as workflow artifacts; never a release
+#
+# Releases are published only from FridiNaTor1/SafeHouse (any other repository, a fork or the development
+# repository, builds and tests only). Versions are <major>.<minor>.<run number>: <major>.<minor> from the CMake
+# project version, the run number of this workflow (monotonic). The tag is v<version>. Each package embeds its
+# version, commit and UTC build date (CMakeLists.txt SAFEHOUSE_VERSION / SAFEHOUSE_BUILD_DATE / CANE_GIT_HASH;
+# safehouse --version). Pull requests build development packages (no version: they never check for updates).
+#
+# The packages are built the way the local packaging builds them: Linux on
+# Ubuntu 22.04 (glibc baseline), Release, LTO off, X11 and Wayland in GLFW, the pinned AppImage runtime and
+# appimagetool; Windows cross-built with LLVM/MinGW 20260616 (UCRT) and NSIS, then installed and started on a real
+# Windows (scripts/windows/smoke.ps1, including an update from a local fake release); macOS from macos.yml.
+# Downloads are pinned by version and SHA-256; actions by commit. No secrets beyond GITHUB_TOKEN.
+name: Build and release
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # One release at a time, in push order; pull requests cancel their own older runs.
+  group: ${{ github.event_name == 'pull_request' && format('pr-{0}', github.ref) || 'main' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  version:
+    name: Version
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      tag: ${{ steps.v.outputs.tag }}
+      date: ${{ steps.v.outputs.date }}
+      commit: ${{ steps.v.outputs.commit }}
+      publish: ${{ steps.v.outputs.publish }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          sparse-checkout: CMakeLists.txt
+          sparse-checkout-cone-mode: false
+      - id: v
+        env:
+          RUN_NUMBER: ${{ github.run_number }}
+          EVENT: ${{ github.event_name }}
+          REF: ${{ github.ref }}
+          REPOSITORY: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          base=$(sed -nE 's/^project\(ProjectCane VERSION ([0-9]+\.[0-9]+)\.[0-9]+.*/\1/p' CMakeLists.txt)
+          [ -n "$base" ] || { echo "no project version in CMakeLists.txt"; exit 1; }
+          version="$base.$RUN_NUMBER"
+          [ "$EVENT" != pull_request ] || version=""
+          publish=false
+          if [ "$REPOSITORY" = FridiNaTor1/SafeHouse ] && [ "$REF" = refs/heads/main ] && [ "$EVENT" != pull_request ]; then
+            publish=true
+          fi
+          {
+            echo "version=$version"
+            echo "tag=${version:+v$version}"
+            echo "date=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "commit=${SHA:0:8}"
+            echo "publish=$publish"
+          } | tee -a "$GITHUB_OUTPUT"
+
+  linux:
+    name: Linux (Ubuntu 22.04)
+    needs: version
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    env:
+      SAFEHOUSE_VERSION: ${{ needs.version.outputs.version }}
+      SAFEHOUSE_BUILD_DATE: ${{ needs.version.outputs.date }}
+      CANE_GIT_HASH: ${{ needs.version.outputs.commit }}
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 2G
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build ccache file desktop-file-utils libgl1-mesa-dev libxrandr-dev libxinerama-dev \
+            libxcursor-dev libxi-dev libwayland-dev libxkbcommon-dev wayland-protocols libavformat-dev libavcodec-dev \
+            libavutil-dev libswscale-dev
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: .ccache
+          key: ccache-linux-${{ github.sha }}
+          restore-keys: ccache-linux-
+      - name: Configure (as the local Ubuntu 22.04 packaging build, plus the tests)
+        run: >-
+          cmake -S . -B build/linux -G Ninja -DCMAKE_BUILD_TYPE=Release -DCANE_LTO=OFF -DCANE_BUILD_SLY2=ON -DCANE_BUILD_SLY3=ON
+          -DBUILD_TESTING=ON -DGLFW_BUILD_WAYLAND=ON -DGLFW_BUILD_X11=ON
+          -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+          -DSAFEHOUSE_VERSION="$SAFEHOUSE_VERSION" -DSAFEHOUSE_BUILD_DATE="$SAFEHOUSE_BUILD_DATE" -DCANE_GIT_HASH="$CANE_GIT_HASH"
+      - name: Build
+        run: cmake --build build/linux --parallel 4
+      - name: Tests
+        run: ctest --test-dir build/linux --output-on-failure --timeout 600
+      - name: Package (AppImage and tar.gz)
+        run: |
+          set -euo pipefail
+          curl -fsSL https://github.com/AppImage/appimagetool/releases/download/1.9.0/appimagetool-x86_64.AppImage -o "$RUNNER_TEMP/appimagetool"
+          echo "46fdd785094c7f6e545b61afcfb0f3d98d8eab243f644b4b17698c01d06083d1  $RUNNER_TEMP/appimagetool" | sha256sum -c -
+          chmod +x "$RUNNER_TEMP/appimagetool"
+          python3 scripts/package.py --build build/linux --output dist --appimagetool "$RUNNER_TEMP/appimagetool"
+          dist/SafeHouse-Launcher-Linux-x86_64/bin/safehouse --version
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: linux-release
+          path: |
+            dist/SafeHouse-Launcher-Linux-x86_64.tar.gz
+            dist/SafeHouse-Launcher-Linux-x86_64.AppImage
+          if-no-files-found: error
+
+  # Cross-built with LLVM/MinGW, the toolchain of the published Windows packages; the games do not build with MSVC.
+  windows:
+    name: Windows (LLVM/MinGW cross build)
+    needs: version
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    env:
+      SAFEHOUSE_VERSION: ${{ needs.version.outputs.version }}
+      SAFEHOUSE_BUILD_DATE: ${{ needs.version.outputs.date }}
+      CANE_GIT_HASH: ${{ needs.version.outputs.commit }}
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_MAXSIZE: 2G
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Build tools (Ninja, NSIS, ccache)
+        run: sudo apt-get update && sudo apt-get install -y ninja-build nsis ccache
+      - name: LLVM/MinGW cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ runner.temp }}/llvm-mingw.tar.xz
+          key: llvm-mingw-20260616-ucrt-ubuntu-22.04-x86_64
+      - name: LLVM/MinGW 20260616 (UCRT)
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/llvm-mingw.tar.xz"
+          [ -f "$archive" ] || curl -fsSL https://github.com/mstorsjo/llvm-mingw/releases/download/20260616/llvm-mingw-20260616-ucrt-ubuntu-22.04-x86_64.tar.xz -o "$archive"
+          echo "534b92e067b22a6b4441f48ae9240a3341b17825d04d577eab0cf85c44b4deda  $archive" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/llvm-mingw"
+          tar -xf "$archive" -C "$RUNNER_TEMP/llvm-mingw" --strip-components=1
+          echo "CANE_MINGW_ROOT=$RUNNER_TEMP/llvm-mingw" >> "$GITHUB_ENV"
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: .ccache
+          key: ccache-windows-${{ github.sha }}
+          restore-keys: ccache-windows-
+      - name: Configure
+        run: >-
+          cmake -S . -B build/windows-cross -G Ninja -DCMAKE_TOOLCHAIN_FILE=cmake/mingw-toolchain.cmake -DCMAKE_BUILD_TYPE=Release
+          -DCANE_LTO=OFF -DBUILD_TESTING=OFF -DCANE_BUILD_SLY2=ON -DCANE_BUILD_SLY3=ON
+          -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+          -DSAFEHOUSE_VERSION="$SAFEHOUSE_VERSION" -DSAFEHOUSE_BUILD_DATE="$SAFEHOUSE_BUILD_DATE" -DCANE_GIT_HASH="$CANE_GIT_HASH"
+      - name: Build
+        run: cmake --build build/windows-cross --parallel 4
+      - name: Package (portable zip and offline setup)
+        run: python3 scripts/package.py --build build/windows-cross --output dist --windows
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: windows-release
+          path: |
+            dist/SafeHouse-Launcher-Windows-x86_64-Portable.zip
+            dist/SafeHouse-Launcher-Windows-x86_64-Setup.exe
+          if-no-files-found: error
+
+  # The packages built above, installed and started on a real Windows (scripts/windows/smoke.ps1), and updated in
+  # place from a local fake release. The runner has no GPU: Mesa's software OpenGL is put beside the launcher for
+  # the test only.
+  windows-smoke:
+    name: Windows (the packages start and update)
+    needs: windows
+    runs-on: windows-2022
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          sparse-checkout: |
+            scripts/windows
+            scripts/release-manifest.py
+            scripts/test-launcher-update.py
+          sparse-checkout-cone-mode: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: windows-release
+          path: dist
+      - name: Mesa (llvmpipe), for the test only
+        shell: pwsh
+        run: |
+          curl.exe -fsSL -o "$env:RUNNER_TEMP\mesa.7z" https://github.com/pal1000/mesa-dist-win/releases/download/26.2.4/mesa3d-26.2.4-release-msvc.7z
+          if ((Get-FileHash "$env:RUNNER_TEMP\mesa.7z" -Algorithm SHA256).Hash -ne '351FC8C8B695878FFB3EAA044B3EAD08672A48B1A045E3C3E3975811DF0F6695') { throw 'Mesa checksum mismatch' }
+          7z x "$env:RUNNER_TEMP\mesa.7z" "-o$env:RUNNER_TEMP\mesa" 'x64\*' -y | Out-Null
+      - name: Install, start, update, uninstall
+        shell: pwsh
+        run: scripts/windows/smoke.ps1 -Dist dist -Mesa "$env:RUNNER_TEMP\mesa\x64" -Shots "$env:RUNNER_TEMP\smoke" -UpdateTest
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: ${{ !cancelled() }}
+        with:
+          name: windows-smoke-screenshots
+          path: ${{ runner.temp }}/smoke/*.png
+
+  macos:
+    name: macOS
+    needs: version
+    uses: ./.github/workflows/macos.yml
+    with:
+      version: ${{ needs.version.outputs.version }}
+      build-date: ${{ needs.version.outputs.date }}
+      commit: ${{ needs.version.outputs.commit }}
+
+  release:
+    name: Publish the release
+    needs: [version, linux, windows, windows-smoke, macos]
+    # Only from the public repository's main branch, and only when every package built and the Windows ones started.
+    if: ${{ github.repository == 'FridiNaTor1/SafeHouse' && needs.version.outputs.publish == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: '*-release'
+          path: release
+          merge-multiple: true
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: SafeHouse-Launcher-macOS-*
+          path: release
+          merge-multiple: true
+      - name: SHA256SUMS, SafeHouse-update.json and the notes
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          TAG: ${{ needs.version.outputs.tag }}
+          DATE: ${{ needs.version.outputs.date }}
+          COMMIT: ${{ needs.version.outputs.commit }}
+        run: |
+          set -euo pipefail
+          rm -f release/*.sha256
+          python3 scripts/release-manifest.py release --version "$VERSION" --tag "$TAG" --commit "$COMMIT" --date "$DATE" \
+            --require linux-appimage --require linux-tar --require windows-portable --require windows-setup \
+            --require macos-arm64 --require macos-x86_64
+          # (the previous release: the newest tag of this scheme, vX.Y.Z)
+          previous=$(git tag --list 'v*' --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sed -n 1p || true)
+          {
+            printf 'SafeHouse %s, built %s from %s.\n\n## Changes\n\n' "$VERSION" "${DATE%%T*}" "$COMMIT"
+            if [ -n "$previous" ]; then
+              git log --no-merges --format='- %s' -n 40 "$previous..HEAD"
+            else
+              git log --no-merges --format='- %s' -n 20
+            fi
+            cat <<'EOF'
+
+          ## Downloads
+
+          | For | File |
+          |---|---|
+          | Windows, installer | `SafeHouse-Launcher-Windows-x86_64-Setup.exe` |
+          | Windows, portable (unzip and open `SafeHouse.exe`) | `SafeHouse-Launcher-Windows-x86_64-Portable.zip` |
+          | Linux and Steam Deck, AppImage | `SafeHouse-Launcher-Linux-x86_64.AppImage` |
+          | Linux, archive | `SafeHouse-Launcher-Linux-x86_64.tar.gz` |
+          | macOS, Apple silicon | `SafeHouse-Launcher-macOS-arm64.dmg` |
+          | macOS, Intel | `SafeHouse-Launcher-macOS-x86_64.dmg` |
+
+          The launcher updates itself (Settings > Launcher > Check for updates). SHA-256 checksums are in `SHA256SUMS`.
+          On macOS, open the app with right-click > Open the first time. The packages contain no game data.
+          EOF
+          } > NOTES.md
+          cat NOTES.md
+          ls -la release
+      - name: Publish ${{ needs.version.outputs.tag }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.version.outputs.tag }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          # A tag of this name on another commit (an older tag scheme) would attach the release to the wrong code.
+          if git rev-parse -q --verify "refs/tags/$TAG" > /dev/null && [ "$(git rev-list -n 1 "$TAG")" != "$GITHUB_SHA" ]; then
+            echo "::error::The tag $TAG already exists on another commit"
+            exit 1
+          fi
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            # A re-run of the same workflow run: replace the assets and the notes.
+            gh release upload "$TAG" --clobber release/*
+            gh release edit "$TAG" --notes-file NOTES.md --draft=false --latest
+          else
+            gh release create "$TAG" release/* --target "$GITHUB_SHA" --title "SafeHouse $VERSION" --notes-file NOTES.md --latest
+          fi
+          gh release view "$TAG" --json tagName,isDraft,isPrerelease,assets --jq '"\(.tagName): draft \(.isDraft), prerelease \(.isPrerelease), assets: \([.assets[].name] | join(", "))"'

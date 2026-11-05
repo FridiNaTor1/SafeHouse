@@ -1,0 +1,317 @@
+#include "totals.h"
+#include "content.h"
+#include "gui_layout.h"
+#include "binoc.h"
+#include "wm.h"
+#include "render.h"
+
+void StartupTotals(TOTALS* ptotals)
+{
+    ptotals->pvttotals = &g_vttotals;
+}
+
+void PostTotalsLoad(TOTALS* ptotals)
+{
+    PostBlotLoad(ptotals);
+
+    CFontBrx* pfontBase = PfontFromFont(0);
+    ptotals->pfontOwned = pfontBase->PfontClone(1.0f, 1.0f);
+    ptotals->pfont = ptotals->pfontOwned.get();
+
+    ptotals->rFontScale = 0.8f;
+    ptotals->dtDisappear = 0.5f;
+
+    if (FFontLoaded(2))
+    {
+        ptotals->pte = &g_teTotals;
+        ptotals->pte->m_pfont = PfontFromFont(2);
+    }
+}
+
+void SetTotalsAchzDraw(TOTALS* ptotals, char* pchz)
+{
+    if (ptotals->blots == BLOTS_Hidden)
+    {
+        SetBlotAchzDraw(ptotals, pchz);
+        return;
+    }
+
+    if (ptotals->blots > BLOTS_Nil && ptotals->blots < BLOTS_Max &&
+        (ptotals->fReshow || pchz == nullptr || std::strcmp(ptotals->achzDraw, pchz) != 0))
+    {
+        ptotals->fReshow = 1;
+
+        if (pchz != nullptr)
+            std::strcpy(ptotals->achzTotals, pchz);
+        else
+            ptotals->achzTotals[0] = '\0';
+
+        ptotals->pvtblot->pfnSetBlotBlots(ptotals, BLOTS_Disappearing);
+    }
+}
+
+void FormatTotalsTasks(char* pchzText, LS* pls, uint32_t grfTasks)
+{
+    char* pchzWrite = pchzText;
+    pchzText[0] = '\0';
+
+    if ((grfTasks & FLS_KeyCollected) != 0)
+    {
+        const char* pchzStatus = (pls->grfls & FLS_KeyCollected) != 0
+            ? "k"
+            : "l";
+
+        pchzWrite += std::sprintf(pchzWrite, "&3%s&.", pchzStatus);
+    }
+
+    if ((grfTasks & FLS_Secondary) != 0)
+    {
+        if ((grfTasks & FLS_KeyCollected) != 0)
+            *pchzWrite++ = ' ';
+
+        const char* pchzStatus = (pls->grfls & FLS_Secondary) != 0
+            ? "v"
+            : "w";
+
+        pchzWrite += std::sprintf(pchzWrite, "&3%s&.", pchzStatus);
+    }
+
+    if ((grfTasks & FLS_Tertiary) != 0)
+    {
+        if ((grfTasks & (FLS_KeyCollected | FLS_Secondary)) != 0)
+            *pchzWrite++ = ' ';
+
+        const bool fComplete = (pls->grfls & FLS_Tertiary) != 0;
+        const char* pchzStatus = fComplete
+            ? "h"
+            : "i";
+
+        pchzWrite += std::sprintf(pchzWrite, "&1%s", pchzStatus);
+
+        if (fComplete)
+        {
+            const float dtBest = pls->dtTimedBest;
+
+            if (dtBest >= 1.0f)
+                std::sprintf(pchzWrite, "^05~b2a83d%d:%02d~.^.", static_cast<int>(dtBest) / 60, static_cast<int>(dtBest) % 60);
+            else
+                std::sprintf(pchzWrite, "^05~b2a83d0.%d~.^.", static_cast<int>(dtBest * 10.0f));
+        }
+
+        std::strcat(pchzWrite, "&.");
+    }
+}
+
+void SetTotalsDestinationText(TOTALS* ptotals, int levelId)
+{
+    if (levelId == -1)
+        ptotals->pvtblot->pfnSetBlotAchzDraw(ptotals, const_cast<char*>(ContentUiText(
+            "< unknown > ", "< inconnu > ", "< unbekannt > ", "< desconocido > ", "< sconosciuto > ")));
+    else
+        SetTotalsLevelText(ptotals, levelId >> 8, levelId & 0xFF);
+}
+
+void SetTotalsLevelText(TOTALS* ptotals, int worldId, int levelIndex)
+{
+    const int levelId = (worldId << 8) | levelIndex;
+    const int tasks = TasksFromLevelID(levelId);
+    LS* pls = &g_pgsCur->aws[worldId].als[levelIndex];
+
+    char achzTasks[64] = {};
+    char achzText[64] = {};
+
+    FormatTotalsTasks(achzTasks, pls, tasks);
+
+    const LEVELINFO* levelInfo = PlevelInfoFromId(levelId);
+    const char* pchzLevelName = PchzFriendlyFromLevelId(levelId);
+    if (levelInfo != nullptr)
+    {
+        const std::ptrdiff_t levelIndexInTable = levelInfo - g_levelTable;
+        const char* localized = levelIndexInTable >= 0 && levelIndexInTable < 46
+            ? ContentLocalizedText(25 + static_cast<std::size_t>(levelIndexInTable)) : nullptr;
+        if (localized != nullptr)
+            pchzLevelName = localized;
+    }
+
+    if (achzTasks[0] == '\0')
+        std::strcpy(achzText, pchzLevelName);
+    else
+        std::snprintf(achzText, sizeof(achzText), "%s%s%s", pchzLevelName, " ", achzTasks);
+
+    ptotals->pvtblot->pfnSetBlotAchzDraw(ptotals, achzText);
+}
+
+void SetTotalsWorldText(TOTALS* ptotals, int worldId)
+{
+    int ckeyTotal = 0;
+    int cvaultTotal = 0;
+    int ctimedTotal = 0;
+
+    TallyWorldTaskTotals(static_cast<GAMEWORLD>(worldId), &ckeyTotal, &cvaultTotal, &ctimedTotal);
+
+    char achzText[512]{};
+
+    static constexpr std::size_t s_aiWorldLocalization[] = { 0, 177, 179, 181, 183, 185 };
+    const char* worldName = s_apchzWorldNames[worldId];
+    if (worldId > GAMEWORLD_Intro && worldId < GAMEWORLD_Max)
+    {
+        if (const char* localized = ContentLocalizedText(s_aiWorldLocalization[worldId]))
+            worldName = localized;
+    }
+    std::snprintf(achzText, sizeof(achzText), "%s", worldName);
+
+    char* pchzWrite = achzText + std::strlen(achzText);
+    const WS& ws = g_pgsCur->aws[worldId];
+
+    if (ckeyTotal != 0)
+        pchzWrite += std::sprintf(pchzWrite, s_pchzTotalsKeysFormat, ws.ckey, ckeyTotal);
+
+    if (cvaultTotal != 0)
+    {
+        const char* separator = ckeyTotal == 0 ? "" : " ";
+        pchzWrite += std::sprintf(pchzWrite, s_pchzTotalsVaultsFormat, separator, ws.cvault, cvaultTotal);
+    }
+
+    if (ctimedTotal != 0)
+    {
+        const char* separator = ckeyTotal == 0 && cvaultTotal == 0 ? "" : " ";
+        std::sprintf(pchzWrite, s_pchzTotalsTimedFormat, separator, ws.ctimed, ctimedTotal);
+    }
+
+    //std::printf("TOTALS TEXT: \"%s\"\n", achzText);
+    ptotals->pvtblot->pfnSetBlotAchzDraw(ptotals, achzText);
+}
+
+void SetTotalsBlots(TOTALS* ptotals, BLOTS blots)
+{
+    if (ptotals->fReshow && blots == BLOTS_Hidden)
+    {
+        ptotals->fReshow = 0;
+        SetBlotAchzDraw(ptotals, ptotals->achzTotals);
+        blots = BLOTS_Appearing;
+    }
+
+    if (blots == BLOTS_Hidden)
+        ptotals->fDrawOverLetterbox = 0;
+
+    SetBlotBlots(ptotals, blots);
+}
+
+void ShowTotals(TOTALS* ptotals)
+{
+    if ((ptotals->blots != BLOTS_Disappearing) || (ptotals->fReshow == 0))
+        ShowBlot(ptotals);
+}
+
+void HideTotals(TOTALS* ptotals)
+{
+    if ((ptotals->blots == BLOTS_Disappearing) && (ptotals->fReshow != 0))
+        ptotals->fReshow = 0;
+    else
+        HideBlot(ptotals);
+}
+
+void DrawTotals(TOTALS* ptotals)
+{
+    if (ptotals->achzDraw[0] == '\0')
+        return;
+
+    if (g_binoc.blots != BLOTS_Hidden)
+    {
+        const int binocs = static_cast<int>(g_binoc.binocs);
+        const int binocsNil = static_cast<int>(BINOCS_Nil);
+
+        if (static_cast<uint32_t>(binocs + binocsNil) < 2)
+            return;
+    }
+
+    float opacity;
+    float yOffset;
+
+    if (ptotals->fDrawOverLetterbox)
+    {
+        opacity = 1.0f;
+        yOffset = (1.0f - g_letterbox.uOn) * 66.40001f;
+    }
+    else
+    {
+        opacity = ptotals->uOn;
+        yOffset = 0.0f;
+    }
+
+    glm::vec4 textColor = ptotals->rgba;
+    textColor.a *= opacity;
+
+    const bool fPs2Gui = !FModernGui();
+    // TOTALS is one rich-text row containing both text and inline icons.
+    // Preserve its authored proportions and let the blot's right-edge peg
+    // anchor the complete row, as on PS2.
+    const float totalsScale = fPs2Gui ? GetGuiScale().y : 1.0f;
+    float xTotals = ptotals->xOn;
+    float yTotals = ptotals->yOn + yOffset;
+    float dxTotals = ptotals->dx;
+    float dyTotals = ptotals->dy;
+
+    ptotals->pfont->PushScaling(
+        ptotals->rFontScale * totalsScale,
+        ptotals->rFontScale * totalsScale);
+
+    CRichText rt(ptotals->achzDraw, ptotals->pfont);
+
+    if (fPs2Gui)
+    {
+        // Rich text changes fonts for the task counts and icons. Measure the
+        // final scaled row instead of assuming its width is the unscaled blot
+        // extent multiplied by one factor.
+        rt.GetExtents(&dxTotals, &dyTotals, 0.0f);
+
+        if (ptotals->pbloti != nullptr)
+        {
+            if (ptotals->pbloti->x < 0.0f)
+                xTotals = g_gl.width + ptotals->pbloti->x * totalsScale - dxTotals;
+            else if (ptotals->pbloti->x == 0.0f)
+                xTotals = (g_gl.width - dxTotals) * 0.5f;
+            else
+                xTotals = ptotals->pbloti->x * totalsScale;
+
+            if (ptotals->pbloti->y < 0.0f) yTotals -= dyTotals - ptotals->dy;
+            else if (ptotals->pbloti->y == 0.0f) yTotals -= (dyTotals - ptotals->dy) * 0.5f;
+            yTotals += ptotals->pbloti->y * (totalsScale - 1.0f);
+        }
+    }
+
+    CTextBox tbx;
+    tbx.SetPos(xTotals, yTotals);
+    tbx.SetSize(dxTotals, dyTotals);
+    tbx.SetTextColor(&textColor);
+    tbx.SetHorizontalJust(JH_Left);
+    tbx.SetVerticalJust(JV_Top);
+
+    glDisable(GL_DEPTH_TEST);
+    if (!ptotals->fDrawOverLetterbox)
+    {
+        float backgroundOpacity = opacity;
+
+        if (g_wmc.fActive && g_wmc.pwmCurrent != nullptr && g_wmc.pwmCurrent->wms == WMS_Manual)
+            backgroundOpacity = 1.0f;
+
+        const float yTopLogical = ((yOffset + 492.80002f) - 66.40001f) * 0.45454547f;
+        const float yTopPixels = (yTopLogical / 224.0f) * static_cast<float>(g_gl.height);
+        const int alpha = static_cast<int>(backgroundOpacity * 64.0f);
+
+        FillScreenRect(0, 0, 0, alpha, 0.0f, yTopPixels, static_cast<float>(g_gl.width), static_cast<float>(g_gl.height));
+    }
+
+    // Retail submits TOTALS glyphs in the PS2's 640 x 492.8 UI canvas and
+    // relies on the final GS projection to scale them to the output.  The PC
+    // renderer draws in framebuffer pixels, so reproduce that projection for
+    // the PS2 presentation.  Keep Modern's established compact sizing intact.
+    rt.Draw(&tbx, nullptr);
+
+    ptotals->pfont->PopScaling();
+    glEnable(GL_DEPTH_TEST);
+}
+
+TOTALS g_totals;
+CTextEdge g_teTotals;
+int g_fTotalsAvailable = 0;

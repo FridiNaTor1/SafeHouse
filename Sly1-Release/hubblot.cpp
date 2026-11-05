@@ -1,0 +1,245 @@
+#include "hubblot.h"
+#include "gui_layout.h"
+#include "hubsel.h"
+#include "sm.h"
+#include "binoc.h"
+#include "wm.h"
+#include "fmv.h"
+#include "totals.h"
+#include "gl.h"
+#include "content.h"
+
+void StartupHubBlot(HUBBLOT* phublot)
+{
+	g_teHubBlot = {};
+	// Retail stores this as GS RGBA (0, 75, 125, 255). PS2 GS RGB reaches
+	// full intensity at 0x80, so normalize the color channels by 128 rather
+	// than treating them as conventional 0..255 color values.
+	g_teHubBlot.m_rgba = glm::vec4(0.0f, 75.0f / 128.0f, 125.0f / 128.0f, 1.0f);
+	g_teHubBlot.m_ch = '-';
+	g_teHubBlot.m_dxExtra = 2.0f;
+	g_teHubBlot.m_dyExtra = 1.0f;
+	g_teHubBlot.m_rxScaling = 0.3f;
+	g_teHubBlot.m_ryScaling = 0.3f;
+
+	phublot->pvthubblot = &g_vthubblot;
+}
+
+void PostHubBlotLoad(HUBBLOT* phubblot)
+{
+	PostBlotLoad(phubblot);
+
+	if (FFontLoaded(2))
+	{
+		phubblot->pte = &g_teHubBlot;
+		phubblot->pte->m_pfont = PfontFromFont(2);
+	}
+
+	SetBlotDtVisible(phubblot, 0.0f);
+
+	phubblot->phubsel = nullptr;
+
+	// Retail stores PS2 GS colors, where 0x80 is full RGB intensity.
+	phubblot->rgba = glm::vec4(127.0f / 128.0f, 127.0f / 128.0f,
+		127.0f / 128.0f, 223.0f / 255.0f);
+
+	phubblot->fWaitVag = 0;
+	phubblot->tHintLast = -g_dtHubHint;
+}
+
+void EnableHubCamera(HUBBLOT* phubblot)
+{
+	if (!phubblot->fActive)
+		return;
+
+	CAMERA* pcamera = (CAMERA*)PloFindSwNearest(g_psw, (OID)1277, nullptr);
+
+	if (pcamera != nullptr)
+		EnableCamera(pcamera);
+}
+
+void UpdateHubBlotActive(HUBBLOT* phubblot, JOY* pjoy)
+{
+    if (phubblot->phubsel == nullptr || phubblot->phubsel->psmaWorld == nullptr)
+        return;
+
+    if (phubblot->fWaitVag != 0)
+    {
+        FPauseForVag();
+        phubblot->fWaitVag = FVagPlaying();
+    }
+
+    if (g_letterbox.blots != BLOTS_Hidden || g_binoc.pdialogPlaying != nullptr)
+        return;
+
+    HUBSEL* phubsel = phubblot->phubsel;
+    SMA* psmaWorld = phubsel->psmaWorld;
+
+    if (phubsel->pdialogPending != nullptr)
+    {
+        if (phubsel->pdialogPending == phubsel->apdialogProgress[0])
+            AutosaveCurrentGame(&g_saveData);
+
+        TriggerDialog(phubsel->pdialogPending);
+        phubsel->pdialogPending = nullptr;
+    }
+
+    UpdateHubselUi(phubsel);
+
+    if (phubsel->fSelectionAccepted == 1)
+    {
+        const bool fSelectionSettled = psmaWorld->ismsCur == psmaWorld->ismsGoal;
+        const bool fSelectionTimedOut = g_clock.t - phubsel->tSelectionChange >= 0.3f;
+
+        if (fSelectionSettled || fSelectionTimedOut)
+        {
+            if (phubsel->gameWorldSelected != GAMEWORLD_Intro)
+            {
+                if (g_wmc.blots != BLOTS_Hidden)
+                    return;
+
+                const GAMEWORLD gameWorld = phubsel->gameWorldSelected;
+                if (gameWorld < GAMEWORLD_Underwater || gameWorld >= GAMEWORLD_Max)
+                    return;
+
+                g_wmc.pwmCurrent = g_wmc.apwm[gameWorld];
+                if (g_wmc.pwmCurrent == nullptr)
+                    return;
+
+                PushUiActiveBlot(&g_ui, &g_wmc);
+                return;
+            }
+
+            if (g_fmvmenu.blots != BLOTS_Hidden)
+                return;
+
+            PushUiActiveBlot(&g_ui, &g_fmvmenu);
+            return;
+        }
+    }
+
+    if (psmaWorld->ismsCur != psmaWorld->ismsGoal)
+        return;
+
+    const bool fOptionsPressed = pjoy->IsPressed(BTN_START) || pjoy->IsPressed(BTN_SELECT);
+    if (fOptionsPressed || (pjoy->joys == JOYS_Searching && g_clock.t >= 5.0f))
+    {
+        if (fOptionsPressed)
+        {
+            pjoy->SetHandled(BTN_START);
+            pjoy->SetHandled(BTN_SELECT);
+        }
+        SetPrompt(&g_prompt, PRP_Basic, PRK_OptionsMenu);
+    }
+    else
+    {
+        const JOY_BUTTON confirmButton = FCircleConfirms() ? BTN_CIRCLE : BTN_CROSS;
+        if (pjoy->IsPressed(confirmButton))
+        {
+            pjoy->SetHandled(confirmButton);
+            ConfirmHubselSelection(phubsel);
+        }
+        else
+        {
+            UpdateHubselSelection(phubsel, pjoy);
+        }
+    }
+}
+
+void OnHubBlotActive(HUBBLOT* phubblot, int fActive)
+{
+    const bool fEnable = fActive != 0;
+    const bool fCurrentlyActive = phubblot->fActive != 0;
+
+    if (fEnable == fCurrentlyActive)
+        return;
+
+    if (!fEnable)
+    {
+        /*if (phubblot->fWaitVag != 0)
+        {
+            StopVag();
+            phubblot->fWaitVag = 0;
+        }*/
+
+        RemoveGrfusr(1);
+        phubblot->pvtblot->pfnHideBlot(phubblot);
+        g_totals.pvtblot->pfnHideBlot(&g_totals);
+        phubblot->fActive = 0;
+    }
+    else
+    {
+        //UnlockAllHubWorlds();
+        SetHubselSelection(phubblot->phubsel, phubblot->phubsel->gameWorldSelected, 0);
+        AddGrfusr(1);
+        g_joy.StartJoySelection();
+        phubblot->fActive = 1;
+    }
+}
+
+void DrawHubBlot(HUBBLOT* phubblot)
+{
+	if (phubblot->phubsel == nullptr || phubblot->achzDraw[0] == '\0')
+		return;
+
+	glm::vec4 color = phubblot->rgba;
+	color.a *= phubblot->uOn;
+
+	const GuiScale guiScale = GetGuiScale();
+	const float scaleX = guiScale.x;
+	const float scaleY = guiScale.y;
+	const float dx = phubblot->dx * scaleX;
+	const float dy = phubblot->dy * scaleY;
+	float x = phubblot->x;
+	float y = phubblot->y;
+
+	if (phubblot->pbloti != nullptr)
+	{
+		if (phubblot->pbloti->x < 0.0f) x -= dx - phubblot->dx;
+		else if (phubblot->pbloti->x == 0.0f) x -= (dx - phubblot->dx) * 0.5f;
+		if (phubblot->pbloti->y < 0.0f) y -= dy - phubblot->dy;
+		else if (phubblot->pbloti->y == 0.0f) y -= (dy - phubblot->dy) * 0.5f;
+		x += phubblot->pbloti->x * (scaleX - 1.0f);
+		y += phubblot->pbloti->y * (scaleY - 1.0f);
+	}
+
+	CTextBox textBox;
+	textBox.SetPos(x, y);
+	textBox.SetSize(dx, dy);
+	textBox.SetTextColor(&color);
+	textBox.SetHorizontalJust(JH_Center);
+	textBox.SetVerticalJust(JV_Center);
+
+	if (phubblot->pte != nullptr)
+	{
+		const glm::vec4 edgeColor = phubblot->pte->m_rgba;
+		const float edgeScaleX = phubblot->pte->m_rxScaling;
+		const float edgeScaleY = phubblot->pte->m_ryScaling;
+		phubblot->pte->m_rgba.a *= phubblot->uOn;
+		// Retail applies the final 640 x 492.8 GS projection to the complete
+		// edge glyph. The textbox is already converted to output pixels here,
+		// so apply that projection scale to the edge thickness explicitly.
+		phubblot->pte->m_rxScaling *= scaleX;
+		phubblot->pte->m_ryScaling *= scaleY;
+
+		if (phubblot->pte->m_pfont != nullptr)
+			phubblot->pte->m_pfont->EdgeRect(phubblot->pte, &textBox);
+
+		phubblot->pte->m_rxScaling = edgeScaleX;
+		phubblot->pte->m_ryScaling = edgeScaleY;
+		phubblot->pte->m_rgba = edgeColor;
+	}
+
+	const float pulse = std::sin(g_clock.tReal * 10.0f) * 0.5f + 0.5f;
+	const float pulseScale = phubblot->rFontScale * (0.9f + pulse * 0.1f);
+
+	phubblot->pfont->PushScaling(pulseScale * scaleX, pulseScale * scaleY);
+	CRichText richText(phubblot->achzDraw, phubblot->pfont);
+	richText.Draw(&textBox, nullptr);
+	phubblot->pfont->PopScaling();
+}
+
+VTHUBBLOT g_vthubblot;
+CTextEdge g_teHubBlot;
+HUBBLOT g_hubblot;
+float g_dtHubHint = 20.0f;

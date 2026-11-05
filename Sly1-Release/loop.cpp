@@ -1,0 +1,89 @@
+#include "loop.h"
+
+std::shared_ptr<LOOP> NewLoop()
+{
+    return std::make_shared<LOOP>();
+}
+
+void LoadLoopFromBrx(LOOP* ploop, CBinaryInputStream* pbis)
+{
+    ploop->dtLoopMin  = pbis->F32Read();
+    ploop->dtLoopMax  = pbis->F32Read();
+    ploop->dtPauseMin = pbis->F32Read();
+    ploop->dtPauseMax = pbis->F32Read();
+
+	// Retail SAAF::loopf stores the initial frame as a signed 16-bit value,
+	// followed by two bytes and one word of padding.  Reading it as F32 keeps
+	// the stream aligned but corrupts the initial animation frame.
+	ploop->gframe = static_cast<float>(pbis->S16Read());
+	pbis->U16Read();
+	pbis->U32Read();
+}
+
+void InitLoop(LOOP* ploop, SAAF* psaaf)
+{
+    InitSaa(ploop, psaaf);
+}
+
+void PostLoopLoad(LOOP* ploop)
+{
+    PostSaaLoad(ploop);
+
+    // Only proceed if the loop has a shadow/animation descriptor
+    if (ploop->sai.pshd != nullptr)
+    {
+        // Randomized loop playback speed
+        const float loopDuration = GRandInRange(ploop->dtLoopMin, ploop->dtLoopMax);
+
+        ploop->sviframe = static_cast<float>(ploop->sai.pshd->cframe) / loopDuration;
+
+        // Randomized pause duration
+        const float pauseDuration = GRandInRange(ploop->dtPauseMin, ploop->dtPauseMax);
+
+        ploop->dtPause = pauseDuration;
+        ploop->dtPauseRequested = pauseDuration;
+    }
+}
+
+void UpdateLoop(LOOP* ploop, float dt)
+{
+    SHD* pshd = ploop->sai.pshd;
+
+    if (!pshd || pshd->cframe <= 1)
+        return;
+
+    // If we're currently pausing, count it down and do nothing else.
+    if (ploop->dtPause > 0.0f)
+    {
+        ploop->dtPause -= dt;
+        return;
+    }
+
+    // Advance fractional frame time.
+    ploop->gframe += ploop->sviframe * dt;
+
+    // If we reached/passed the end of the loop, pick new loop speed + pause time.
+    if (ploop->gframe >= static_cast<float>(pshd->cframe))
+    {
+        const float loopDuration = GRandInRange(ploop->dtLoopMin, ploop->dtLoopMax);
+        ploop->sviframe = static_cast<float>(pshd->cframe) / loopDuration;
+
+        const float pauseDuration = GRandInRange(ploop->dtPauseMin, ploop->dtPauseMax);
+        ploop->dtPause = pauseDuration;
+        ploop->dtPauseRequested = pauseDuration;
+    }
+
+    // Wrap into [0, cframe) and apply to the SAI iframe.
+    ploop->gframe = GModPositive(ploop->gframe, static_cast<float>(pshd->cframe));
+    SetSaiIframe(&ploop->sai, static_cast<int>(ploop->gframe));
+}
+
+float UCompleteLoop(LOOP* ploop)
+{
+    return (ploop->gframe / ploop->sviframe) / ((float)((ploop->sai).pshd)->cframe / ploop->sviframe + ploop->dtPauseRequested);
+}
+
+void DeleteLoop(LOOP* ploop)
+{
+    DeleteSaa(reinterpret_cast<SAA*>(ploop));
+}

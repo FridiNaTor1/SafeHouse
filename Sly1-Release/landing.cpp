@@ -1,0 +1,42 @@
+#include "landing.h"
+
+LANDING* NewLanding()
+{
+	return NewWorldObject<LANDING>();
+}
+
+void InitSwLandingDl(SW* psw)
+{
+	InitDl(&psw->dlLanding, offsetof(LANDING, dleLanding));
+}
+
+int GetLandingSize()
+{
+	return sizeof(LANDING);
+}
+
+void OnLandingAdd(LANDING* planding)
+{
+	OnLoAdd(planding);
+	AppendDlEntry(&planding->psw->dlLanding, planding);
+}
+
+void OnLandingRemove(LANDING* planding)
+{
+	OnLoRemove(planding);
+	RemoveDlEntry(&planding->psw->dlLanding, planding);
+}
+
+void CloneLanding(LANDING* planding, LANDING* plandingBase)
+{
+	DLE dleLanding = planding->dleLanding;
+
+	CloneShape(planding, plandingBase);
+
+	planding->dleLanding = dleLanding;
+}
+
+void DeleteLanding(LANDING* planding)
+{
+	ReleaseWorldObject(planding);
+}

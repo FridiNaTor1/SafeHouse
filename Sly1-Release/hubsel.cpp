@@ -1,0 +1,402 @@
+#include "hubsel.h"
+#include "hubblot.h"
+#include "dialog.h"
+#include "sm.h"
+#include "totals.h"
+#include "content.h"
+
+namespace
+{
+constexpr const char* s_avagHubHint[GAMEWORLD_Max] =
+{
+	nullptr,
+	"VAG_0289_010F05.vag",
+	"VAG_028B_0481B8.vag",
+	"VAG_0288_004F0E.vag",
+	"VAG_028A_14E0E2.vag",
+	"VAG_028C_082F40.vag",
+};
+
+constexpr const char* s_vagHubUnlocked = "VAG_027B_03544A.vag";
+}
+
+HUBSEL* NewHubSel()
+{
+    return NewWorldObject<HUBSEL>();
+}
+
+void CloneHubSel(HUBSEL* phubsel, HUBSEL* phubselBase)
+{
+    CloneAlo(phubsel, phubselBase);
+}
+
+void PostHubSelLoad(HUBSEL* phubsel)
+{
+    PostAloLoad(phubsel);
+    phubsel->fNoFreeze = true;
+    g_ui.uisPlaying = UIS_Hub;
+    g_hubblot.phubsel = phubsel;
+    SetUiUis(&g_ui, UIS_Hub);
+    SnipAloObjects(phubsel, 18, s_asnipHubsel);
+    phubsel->gameWorldSelected = GAMEWORLD_Nil;
+    PostSwCallback(phubsel->psw, (PFNMQ)SetupHubsel, phubsel, MSGID_callback, 0);
+}
+
+void UpdateHubselUi(HUBSEL* phubsel)
+{
+    bool fShowUnavailableHint = false;
+    const char* achzTotals = nullptr;
+
+    if (phubsel->psmaWorld->ismsCur == phubsel->psmaWorld->ismsGoal)
+    {
+        const GAMEWORLD gameWorld = phubsel->gameWorldSelected;
+
+        if (gameWorld == GAMEWORLD_Intro)
+            achzTotals = ContentLocalizedText(22) != nullptr
+                ? ContentLocalizedText(22) : "Bentley";
+        else if ((g_pgsCur->aws[gameWorld].fws & FWS_Visited) != 0)
+            SetTotalsWorldText(&g_totals, gameWorld);
+        else if (gameWorld != phubsel->gameWorldDisplay)
+        {
+            fShowUnavailableHint = true;
+            achzTotals = "";
+        }
+        else
+            achzTotals = ContentLocalizedText(24) != nullptr
+                ? ContentLocalizedText(24) : "Murray";
+    }
+    else
+        achzTotals = "";
+
+    if (achzTotals != nullptr)
+        g_totals.pvtblot->pfnSetBlotAchzDraw(&g_totals, (char*)achzTotals);
+
+    SetBlotDtVisible(&g_totals, 0.0);
+    g_totals.fDrawOverLetterbox = 0;
+    g_totals.pvtblot->pfnShowBlot(&g_totals);
+
+    if (fShowUnavailableHint)
+    {
+        const char* missionText = ContentLocalizedText(23);
+        g_hubblot.pvtblot->pfnSetBlotAchzDraw(&g_hubblot,
+            const_cast<char*>(missionText != nullptr ? missionText : "Press &2X&. to Start Mission!"));
+        g_hubblot.pvtblot->pfnShowBlot(&g_hubblot);
+    }
+    else
+        g_hubblot.pvtblot->pfnHideBlot(&g_hubblot);
+}
+
+void UpdateHubselSelection(HUBSEL* phubsel, JOY* pjoy)
+{
+    GAMEWORLD gameWorld = phubsel->gameWorldSelected;
+    const GAMEWORLD gameWorldMax = phubsel->gameWorldMax;
+
+    const int dxSelection = pjoy->DxSelectionJoy(g_clock.tReal);
+    const int dySelection = pjoy->DySelectionJoy(g_clock.tReal);
+
+    const int selection =
+        dxSelection != 0
+        ? dxSelection
+        : dySelection;
+
+    if (selection < 0)
+    {
+        if (gameWorld >= GAMEWORLD_Underwater)
+            gameWorld = static_cast<GAMEWORLD>(gameWorld - 1);
+        else if (gameWorldMax == GAMEWORLD_Clockwerk)
+            gameWorld = GAMEWORLD_Clockwerk;
+    }
+    else if (selection > 0)
+    {
+        if (gameWorld < gameWorldMax)
+            gameWorld = static_cast<GAMEWORLD>(gameWorld + 1);
+        else if (gameWorldMax == GAMEWORLD_Clockwerk)
+            gameWorld = GAMEWORLD_Intro;
+    }
+
+    SetHubselSelection(phubsel, gameWorld, 0);
+}
+
+void ConfirmHubselSelection(HUBSEL* phubsel)
+{
+    if (phubsel == nullptr || g_pgsCur == nullptr)
+        return;
+
+    const GAMEWORLD gameWorld = phubsel->gameWorldSelected;
+
+	if (gameWorld == GAMEWORLD_Intro || (g_pgsCur->aws[gameWorld].fws & FWS_Visited) != 0)
+    {
+        SetHubselSelection(phubsel, gameWorld, 1);
+        return;
+    }
+
+    if (gameWorld == phubsel->gameWorldDisplay)
+    {
+        if (phubsel->psmaDisplay1 != nullptr)
+            SetSmaGoal(phubsel->psmaDisplay1, (OID)g_aoidHubselState[gameWorld][1]);
+
+        return;
+    }
+
+    UnlockWorldCutscene(gameWorld);
+
+    bool fCloseHub = true;
+    ASEG* pasegWorld = phubsel->apasegWorld[gameWorld];
+
+    if (pasegWorld != nullptr)
+    {
+        ApplyAseg(pasegWorld, phubsel, 0.0f, 1.0f, 0, nullptr);
+
+        if (FWipingAseg(pasegWorld) != 0)
+        {
+            PopUiActiveBlot(&g_ui);
+            // Retail still advances the hub selector to its accepted state
+            // after the world ASEG starts. That state drives the first-visit
+            // camera/map zoom while the cutscene or wipe takes over.
+            SetHubselSelection(phubsel, gameWorld, 1);
+            return;
+        }
+    }
+
+    LEVELINFO* plevel = GetLevelInfo(static_cast<int>(gameWorld) << 8);
+
+    if (plevel != nullptr)
+        WipeToWorldWarp(plevel, OID_Nil, WIPEK_Fade);
+    else
+        fCloseHub = false;
+
+    if (fCloseHub)
+        PopUiActiveBlot(&g_ui);
+
+    // First-time world selections also enter the accepted hub state. Without
+    // this, psmaWorld remains on the wide selection pose and the introductory
+    // zoom is skipped.
+    SetHubselSelection(phubsel, gameWorld, 1);
+}
+bool FHubselWorldAvailable(GAMEWORLD gameWorld)
+{
+    if (gameWorld == GAMEWORLD_Intro)
+        return true;
+
+    if (gameWorld < GAMEWORLD_Underwater || gameWorld > GAMEWORLD_Clockwerk)
+        return false;
+
+    return g_fUnlockAllHubWorlds || (g_pgsCur->aws[gameWorld].fws & FWS_Visited) != 0;
+}
+
+void SetupHubsel(HUBSEL* phubsel)
+{
+    if (phubsel == nullptr || g_pgsCur == nullptr)
+        return;
+
+    if (phubsel->psmWorld != nullptr)
+        phubsel->psmaWorld = PsmaApplySm(phubsel->psmWorld, nullptr, (OID)-1, 0);
+
+    if (phubsel->psmSecondary != nullptr)
+        phubsel->psmaSecondary = PsmaApplySm(phubsel->psmSecondary, nullptr, (OID)-1, 0);
+
+    if (phubsel->psmDisplay0 != nullptr)
+        phubsel->psmaDisplay0 = PsmaApplySm(phubsel->psmDisplay0, nullptr, (OID)-1, 0);
+
+    if (phubsel->psmDisplay1 != nullptr)
+        phubsel->psmaDisplay1 = PsmaApplySm(phubsel->psmDisplay1, nullptr, (OID)-1, 1);
+
+    phubsel->gameWorldMax = GAMEWORLD_Clockwerk;
+
+    // Preserve the original progression calculation when the override is off.
+    if (!g_fUnlockAllHubWorlds)
+    {
+        const GAMEWORLD gameWorldMinimum = FPalContent()
+            ? GAMEWORLD_Underwater
+            : GAMEWORLD_Muggshot;
+
+        while (phubsel->gameWorldMax > gameWorldMinimum)
+        {
+            const GAMEWORLD previousWorld = static_cast<GAMEWORLD>(phubsel->gameWorldMax - 1);
+            const GAMEWORLD worldBeforePrevious = static_cast<GAMEWORLD>(phubsel->gameWorldMax - 2);
+            const uint32_t previousWorldFlags = g_pgsCur->aws[previousWorld].fws;
+            const uint32_t worldBeforePreviousFlags = g_pgsCur->aws[worldBeforePrevious].fws;
+
+            if ((worldBeforePreviousFlags & FWS_Complete) != 0 ||
+                (previousWorldFlags & FWS_Visited) != 0)
+                break;
+
+            phubsel->gameWorldMax = previousWorld;
+        }
+    }
+
+    for (GAMEWORLD gameWorld = GAMEWORLD_Underwater; gameWorld <= phubsel->gameWorldMax; gameWorld = static_cast<GAMEWORLD>(gameWorld + 1))
+    {
+        const int worldIndex = static_cast<int>(gameWorld) - static_cast<int>(GAMEWORLD_Underwater);
+        ALO* paloWorld = phubsel->apaloWorld[worldIndex];
+
+        if (paloWorld != nullptr && FHubselWorldAvailable(gameWorld))
+            paloWorld->pvtlo->pfnAddLo((LO*)paloWorld);
+    }
+
+    phubsel->pdialogPending = nullptr;
+
+    const uint32_t gameProgress = GetGameProgress();
+
+    for (int i = 0; i < 4; ++i)
+    {
+        DIALOG* pdialog = phubsel->apdialogProgress[i];
+
+        if (pdialog == nullptr || pdialog->pfPlayed == nullptr || *pdialog->pfPlayed != 0)
+            continue;
+
+        if (i == 0 || (gameProgress & (1U << i)) != 0)
+        {
+            phubsel->pdialogPending = pdialog;
+            break;
+        }
+    }
+
+    GAMEWORLD gameWorldSelected = GAMEWORLD_Intro;
+
+    if (phubsel->pdialogPending == nullptr)
+    {
+        if (g_gameWorldPrev != GAMEWORLD_Nil && FHubselWorldAvailable(g_gameWorldPrev))
+            gameWorldSelected = g_gameWorldPrev;
+        else
+        {
+            gameWorldSelected = phubsel->gameWorldMax;
+
+            if (!g_fUnlockAllHubWorlds)
+            {
+                const GAMEWORLD previousWorld = static_cast<GAMEWORLD>(gameWorldSelected - 1);
+
+                if (!FHubselWorldAvailable(previousWorld))
+                    gameWorldSelected = static_cast<GAMEWORLD>(gameWorldSelected - 2);
+                else if (!FHubselWorldAvailable(gameWorldSelected))
+                    gameWorldSelected = previousWorld;
+            }
+        }
+    }
+
+    SetHubselSelection(phubsel, gameWorldSelected, 0);
+
+    if (phubsel->psmaDisplay0 != nullptr || phubsel->psmaDisplay1 != nullptr)
+    {
+        if (FPalContent())
+        {
+            // Retail PAL always initializes both hub display state machines to
+            // the Intro state (OID 0x4ff), independently of gameWorldMax.
+            phubsel->gameWorldDisplay = GAMEWORLD_Intro;
+        }
+        else
+        {
+            phubsel->gameWorldDisplay = phubsel->gameWorldMax;
+
+            if (phubsel->gameWorldMax == GAMEWORLD_Clockwerk)
+            {
+                const bool clockwerkPrerequisiteComplete = (g_pgsCur->aws[GAMEWORLD_Snow].fws & 32U) != 0;
+                const bool clockwerkStarted = (g_pgsCur->aws[GAMEWORLD_Clockwerk].fws & 1U) != 0;
+
+                if (g_fUnlockAllHubWorlds || clockwerkPrerequisiteComplete || clockwerkStarted)
+                    phubsel->gameWorldDisplay = GAMEWORLD_Intro;
+            }
+        }
+
+        if (phubsel->psmaDisplay0 != nullptr)
+            SeekSma(phubsel->psmaDisplay0, (OID)g_aoidHubselState[phubsel->gameWorldDisplay][0]);
+
+        if (phubsel->psmaDisplay1 != nullptr)
+            SeekSma(phubsel->psmaDisplay1, (OID)g_aoidHubselState[phubsel->gameWorldDisplay][0]);
+    }
+
+    PushUiActiveBlot(&g_ui, (BLOT*)&g_hubblot);
+}
+
+void SetHubselSelection(HUBSEL* phubsel, GAMEWORLD gameworld, int fAccepted)
+{
+    if (gameworld == phubsel->gameWorldSelected && fAccepted == phubsel->fSelectionAccepted)
+        return;
+
+    const char* pvag = nullptr;
+
+    if (gameworld != phubsel->gameWorldDisplay && gameworld >= GAMEWORLD_Underwater)
+    {
+        const bool fWorldAvailable = (g_pgsCur->aws[gameworld].fws & FWS_Visited) != 0;
+
+        if (!fWorldAvailable)
+        {
+            if (g_clock.t - g_hubblot.tHintLast >= g_dtHubHint)
+            {
+                g_hubblot.tHintLast = g_clock.t;
+                pvag = s_avagHubHint[gameworld];
+            }
+        }
+        else if ((g_pgsCur->grfgs & 2U) == 0)
+        {
+            g_pgsCur->grfgs |= 2U;
+            pvag = s_vagHubUnlocked;
+        }
+
+        if (pvag != nullptr)
+        {
+            PreloadVagFileName(pvag);
+            g_hubblot.fWaitVag = FVagPlaying();
+        }
+    }
+
+    SMA* psma = phubsel->psmaWorld;
+
+    if (psma != nullptr)
+    {
+        if (phubsel->gameWorldSelected == GAMEWORLD_Nil)
+        {
+            if (gameworld != GAMEWORLD_Intro)
+            {
+                SeekSma(psma, (OID)g_aoidHubselState[gameworld][1]);
+                SetSmaGoal(psma, (OID)g_aoidHubselState[gameworld][0]);
+            }
+        }
+        else
+        {
+            const OID oidGoal = static_cast<OID>(g_aoidHubselState[gameworld][fAccepted]);
+            SetSmaGoal(psma, oidGoal);
+        }
+    }
+
+    phubsel->gameWorldSelected = gameworld;
+    phubsel->fSelectionAccepted = fAccepted;
+    phubsel->tSelectionChange = g_clock.t;
+}
+
+void UnlockAllHubWorlds()
+{
+    g_fUnlockAllHubWorlds = true;
+
+    // If the cheat is enabled while the hideout selector is already open,
+    // expose its remaining world models immediately.  Do not modify FWS_Visited:
+    // this is a session-only availability override, not saved progression.
+    HUBSEL* phubsel = g_ui.uisPlaying == UIS_Hub ? g_hubblot.phubsel : nullptr;
+    if (phubsel == nullptr)
+        return;
+
+    phubsel->gameWorldMax = GAMEWORLD_Clockwerk;
+
+    for (GAMEWORLD gameWorld = GAMEWORLD_Underwater;
+         gameWorld <= GAMEWORLD_Clockwerk;
+         gameWorld = static_cast<GAMEWORLD>(gameWorld + 1))
+    {
+        const int worldIndex = static_cast<int>(gameWorld) - static_cast<int>(GAMEWORLD_Underwater);
+        ALO* paloWorld = phubsel->apaloWorld[worldIndex];
+        if (paloWorld != nullptr)
+            paloWorld->pvtlo->pfnAddLo(paloWorld);
+    }
+
+    phubsel->gameWorldDisplay = GAMEWORLD_Intro;
+    if (phubsel->psmaDisplay0 != nullptr)
+        SeekSma(phubsel->psmaDisplay0, (OID)g_aoidHubselState[GAMEWORLD_Intro][0]);
+    if (phubsel->psmaDisplay1 != nullptr)
+        SeekSma(phubsel->psmaDisplay1, (OID)g_aoidHubselState[GAMEWORLD_Intro][0]);
+}
+
+bool g_fUnlockAllHubWorlds = false;
+
+void DeleteHubSel(HUBSEL* phubsel)
+{
+    ReleaseWorldObject(phubsel);
+}

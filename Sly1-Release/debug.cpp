@@ -1,0 +1,3844 @@
+#include "debug.h"
+#define  STB_IMAGE_WRITE_IMPLEMENTATION 
+#include <stb/stb_image_write.h>
+#include "render.h"
+#include "clock.h"
+#include "timer.h"
+#include "steppower.h"
+#include "game.h"
+#include "zap.h"
+#include "hubsel.h"
+#include "sound.h"
+#include "jt.h"
+#include "actseg.h"
+#include "aseg.h"
+#include "acp.h"
+#include "acr.h"
+#include "acs.h"
+#include "acg.h"
+#include "save.h"
+#include "imgui/imgui_internal.h"
+#include "fmv.h"
+#include "pzo.h"
+#include "cm.h"
+#include "cptn.h"
+#include "runtime_error.h"
+#include <algorithm>
+#include <array>
+#include <cfloat>
+#include <cmath>
+#include <cstdio>
+#include <fstream>
+#include <limits>
+#include <string_view>
+
+static bool s_fInfiniteTimer = false;
+static float s_svtTimerBeforeCheat = -1.0f;
+static bool s_fDisableAllSound = false;
+static float s_masterVolumeBeforeMute = 1.0f;
+static AMB* s_pambSfxAudition = nullptr;
+static bool s_fFovOverride = false;
+static float s_degFovOverride = glm::degrees(1.0f);
+static float s_radFovBeforeOverride = 1.0f;
+static glm::vec3 s_posTeleport(0.0f);
+static JT* s_pjtTeleportSource = nullptr;
+
+struct DEBUG_TELEPORT_SLOT
+{
+    glm::vec3 pos{ 0.0f };
+    bool fValid = false;
+};
+
+static std::array<DEBUG_TELEPORT_SLOT, 5> s_aTeleportSlot{};
+static bool s_fTeleportSlotsLoaded = false;
+
+static std::filesystem::path DebugTeleportDirectory()
+{
+    return std::filesystem::current_path() / L"Saves";
+}
+
+static std::filesystem::path DebugTeleportSlotsPath()
+{
+    return DebugTeleportDirectory() / L"debug_teleports.json";
+}
+
+static void LoadDebugTeleportSlots()
+{
+    if (s_fTeleportSlotsLoaded)
+        return;
+
+    s_fTeleportSlotsLoaded = true;
+    std::ifstream input(DebugTeleportSlotsPath());
+    if (!input)
+        return;
+
+    try
+    {
+        const json root = json::parse(input);
+        const json& slots = root.at("slots");
+        for (size_t i = 0; i < s_aTeleportSlot.size() && i < slots.size(); ++i)
+        {
+            const json& slot = slots.at(i);
+            s_aTeleportSlot[i].fValid = slot.value("valid", false);
+            s_aTeleportSlot[i].pos.x = slot.value("x", 0.0f);
+            s_aTeleportSlot[i].pos.y = slot.value("y", 0.0f);
+            s_aTeleportSlot[i].pos.z = slot.value("z", 0.0f);
+        }
+    }
+    catch (const json::exception&)
+    {
+        s_aTeleportSlot = {};
+    }
+}
+
+static void SaveDebugTeleportSlots()
+{
+    std::error_code ec;
+    std::filesystem::create_directories(DebugTeleportDirectory(), ec);
+    if (ec)
+        return;
+
+    json root;
+    root["slots"] = json::array();
+    for (const DEBUG_TELEPORT_SLOT& slot : s_aTeleportSlot)
+    {
+        root["slots"].push_back({
+            { "valid", slot.fValid },
+            { "x", slot.pos.x },
+            { "y", slot.pos.y },
+            { "z", slot.pos.z }
+        });
+    }
+
+    std::ofstream output(DebugTeleportSlotsPath(), std::ios::trunc);
+    if (output)
+        output << root.dump(2);
+}
+
+static void TeleportSlyTo(const glm::vec3& pos)
+{
+    if (g_pjt == nullptr || g_pjt->pvtalo == nullptr ||
+        g_pjt->pvtalo->pfnTranslateAloToPos == nullptr)
+    {
+        return;
+    }
+
+    glm::vec3 posTarget = pos;
+    g_pjt->xf.v = glm::vec3(0.0f);
+    g_pjt->xf.w = glm::vec3(0.0f);
+    g_pjt->pvtalo->pfnTranslateAloToPos(g_pjt, &posTarget);
+    g_pjt->posWorldPrev = g_pjt->xf.posWorld;
+    g_pjt->xf.v = glm::vec3(0.0f);
+    g_pjt->xf.w = glm::vec3(0.0f);
+}
+bool g_fSkipBinocDialogs = false;
+bool g_fShowAutosaveIcon = false;
+bool g_fDebugGuiOpen = false;
+bool g_fImGuiFrameActive = false;
+bool g_fDebugObjectInspector = false;
+ALO* g_paloDebugSelected = nullptr;
+
+static void PickDebugObject()
+{
+    if (g_gl.window == nullptr || g_pcm == nullptr)
+        return;
+
+    double mouseX = 0.0;
+    double mouseY = 0.0;
+    glfwGetCursorPos(g_gl.window, &mouseX, &mouseY);
+
+    int windowWidth = 0;
+    int windowHeight = 0;
+    int framebufferWidth = 0;
+    int framebufferHeight = 0;
+    glfwGetWindowSize(g_gl.window, &windowWidth, &windowHeight);
+    glfwGetFramebufferSize(g_gl.window, &framebufferWidth, &framebufferHeight);
+    if (windowWidth <= 0 || windowHeight <= 0 || framebufferWidth <= 0 || framebufferHeight <= 0)
+        return;
+
+    const float framebufferX = static_cast<float>(mouseX) * framebufferWidth / windowWidth;
+    const float framebufferY = static_cast<float>(mouseY) * framebufferHeight / windowHeight;
+    const float presentLeft = static_cast<float>(g_gl.presentX);
+    const float presentTop = static_cast<float>(framebufferHeight - g_gl.presentY - g_gl.presentHeight);
+
+    if (framebufferX < presentLeft || framebufferX >= presentLeft + g_gl.presentWidth ||
+        framebufferY < presentTop || framebufferY >= presentTop + g_gl.presentHeight)
+        return;
+
+    const float u = (framebufferX - presentLeft) / static_cast<float>(g_gl.presentWidth);
+    const float v = (framebufferY - presentTop) / static_cast<float>(g_gl.presentHeight);
+    const float ndcX = u * 2.0f - 1.0f;
+    const float ndcY = 1.0f - v * 2.0f;
+    const glm::vec2 pointNdc(ndcX, ndcY);
+
+    ALO* paloBest = nullptr;
+    float depthBest = FLT_MAX;
+    for (ALO* palo : allSWAloObjs)
+    {
+        if (palo == nullptr || palo->fHidden != 0 || palo->globset.aglob.empty())
+            continue;
+
+        glm::mat4 model(1.0f);
+        LoadMatrixFromPosRot(&palo->xf.posWorld, &palo->xf.matWorld, &model);
+
+        for (GLOB& glob : palo->globset.aglob)
+        {
+            glm::mat4 globModel = model;
+            if (glob.pdmat != nullptr)
+                globModel *= *glob.pdmat;
+
+            for (SUBGLOB& sub : glob.asubglob)
+            {
+                if (sub.vertices.empty() || sub.indices.empty())
+                    continue;
+
+                std::vector<glm::vec3> projected(sub.vertices.size());
+                std::vector<uint8_t> projectable(sub.vertices.size(), 0);
+
+                for (size_t ivtx = 0; ivtx < sub.vertices.size(); ++ivtx)
+                {
+                    const VERTICE& vertex = sub.vertices[ivtx];
+                    glm::vec4 positionLocal(vertex.pos, 1.0f);
+
+                    if (glob.poseCount > 0 && !glob.poseDpos.empty() &&
+                        !palo->globset.agPoses.empty())
+                    {
+                        const size_t vertexGlobal = static_cast<size_t>(sub.baseVertex) + ivtx;
+                        const size_t poseBase = vertexGlobal * static_cast<size_t>(glob.poseCount);
+                        const int poseCount = glm::min(glob.poseCount,
+                            static_cast<int>(palo->globset.agPoses.size()));
+                        for (int ipose = 0; ipose < poseCount; ++ipose)
+                        {
+                            const size_t poseIndex = poseBase + static_cast<size_t>(ipose);
+                            if (poseIndex < glob.poseDpos.size())
+                                positionLocal += glob.poseDpos[poseIndex] *
+                                    palo->globset.agPoses[ipose];
+                        }
+                    }
+
+                    if (sub.cibnd > 0 && !palo->globset.boneMatrices.empty())
+                    {
+                        glm::mat4 skin(0.0f);
+                        float totalWeight = 0.0f;
+                        for (int iweight = 0; iweight < 4; ++iweight)
+                        {
+                            const float weight = vertex.boneWeights[iweight];
+                            const unsigned int bone = vertex.boneIndices[iweight];
+                            if (weight != 0.0f && bone < palo->globset.boneMatrices.size())
+                            {
+                                skin += palo->globset.boneMatrices[bone] * weight;
+                                totalWeight += weight;
+                            }
+                        }
+                        if (totalWeight > 0.0f)
+                            positionLocal = skin * positionLocal;
+                    }
+
+                    const glm::vec4 clip = g_pcm->matWorldToClip * globModel * positionLocal;
+                    if (clip.w > 0.0001f)
+                    {
+                        projected[ivtx] = glm::vec3(clip) / clip.w;
+                        projectable[ivtx] = 1;
+                    }
+                }
+
+                for (const INDICE& triangle : sub.indices)
+                {
+                    if (triangle.v1 >= projected.size() || triangle.v2 >= projected.size() ||
+                        triangle.v3 >= projected.size() || !projectable[triangle.v1] ||
+                        !projectable[triangle.v2] || !projectable[triangle.v3])
+                        continue;
+
+                    const glm::vec3& p0 = projected[triangle.v1];
+                    const glm::vec3& p1 = projected[triangle.v2];
+                    const glm::vec3& p2 = projected[triangle.v3];
+                    float w0 = 0.0f;
+                    float w1 = 0.0f;
+                    float w2 = 0.0f;
+                    if (!ComputeBarycentric(pointNdc, glm::vec2(p0), glm::vec2(p1),
+                        glm::vec2(p2), w0, w1, w2))
+                        continue;
+
+                    const float depth = p0.z * w0 + p1.z * w1 + p2.z * w2;
+                    if (depth >= -1.0f && depth <= 1.0f && depth < depthBest)
+                    {
+                        paloBest = palo;
+                        depthBest = depth;
+                    }
+                }
+            }
+        }
+    }
+
+    g_paloDebugSelected = paloBest;
+}
+void RenderMenuGui(SW* psw)
+{
+    g_fDisableInput = false;
+
+    // Sound initialization and world transitions can restore the mastering
+    // voice volume. Keep the menu mute authoritative while it is enabled.
+    if (s_fDisableAllSound && s_masterVolume != 0.0f)
+        SetMasterVolume(0.0f);
+
+    // Camera policies are free to animate the retail target FOV. A debug
+    // override must therefore reapply through the normal camera setter each
+    // frame, including while the menu itself is closed.
+    if (s_fFovOverride && g_pcm != nullptr)
+        SetCmFov(g_pcm, glm::radians(s_degFovOverride));
+
+    // Keep the ImGui frame lifecycle active for the renderer, but do not
+    // create any debug windows or menu bars in normal gameplay mode.
+    // ImGui frames run only while the debug UI is open. The first frame always
+    // runs so fonts and the menu-bar height used by FrameBufferSizeCallBack
+    // are ready before F3 first opens the UI.
+    static bool s_fImGuiStarted = false;
+    static bool s_fImGuiWasOpen = true;
+    if (g_fDebugGuiOpen != s_fImGuiWasOpen)
+    {
+        // The GLFW callbacks stay installed. Drop their events while closed,
+        // and on reopening forget keys released meanwhile. Events queued after
+        // the last frame before closing (at least the closing F3 press) are
+        // stale too.
+        ImGuiIO& io = ImGui::GetIO();
+        io.SetAppAcceptingEvents(g_fDebugGuiOpen);
+        if (g_fDebugGuiOpen)
+        {
+            ImGui::GetCurrentContext()->InputEventsQueue.resize(0);
+            io.ClearInputKeys();
+            double cursorX = 0.0;
+            double cursorY = 0.0;
+            glfwGetCursorPos(g_gl.window, &cursorX, &cursorY);
+            io.AddMousePosEvent(static_cast<float>(cursorX), static_cast<float>(cursorY));
+        }
+        else if (s_fImGuiStarted)
+        {
+            // ImGui sets the cursor shape each frame; do not leave a widget's
+            // shape behind once it stops running.
+            glfwSetCursor(g_gl.window, nullptr);
+        }
+        s_fImGuiWasOpen = g_fDebugGuiOpen;
+    }
+
+    if (!g_fDebugGuiOpen && s_fImGuiStarted)
+        return;
+
+    ImGui_ImplOpenGL3_NewFrame();
+    ImGui_ImplGlfw_NewFrame();
+    ImGui::NewFrame();
+    s_fImGuiStarted = true;
+    g_fImGuiFrameActive = true;
+
+    if (!g_fDebugGuiOpen)
+        return;
+
+    // SetTimer may configure a new countdown while the cheat is already on.
+    // Capture that direction and freeze it again every frame.
+    if (s_fInfiniteTimer && g_timer.svt != 0.0f)
+    {
+        s_svtTimerBeforeCheat = g_timer.svt;
+        g_timer.svt = 0.0f;
+    }
+
+    // Main menu bar
+    if (ImGui::BeginMainMenuBar())
+    {
+        if (ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByPopup))
+            g_fDisableInput = true;
+
+        if (ImGui::BeginMenu("File"))
+        {
+            if (ImGui::MenuItem("Open World"))
+                instance_a.Instance()->OpenDialog("ChooseFileDlgKey", "Choose File", ".brx", "Worlds");
+            else if (ImGui::IsItemHovered())
+                g_fDisableInput = true;
+
+            if (ImGui::MenuItem("Close World"))
+            {
+                if (g_psw != nullptr)
+                {
+                    DeleteWorld(g_psw);
+                    g_psw = nullptr;
+
+                    file.clear();
+                    filePath.clear();
+                    levelName.clear();
+
+                    g_transition.m_plevelCurrent = nullptr;
+                    g_transition.m_plevelPending = nullptr;
+                    g_transition.m_worldCurrent.clear();
+                    g_transition.m_worldPending.clear();
+                    g_transition.m_fPending = 0;
+                }
+            }
+            else if (ImGui::IsItemHovered())
+                g_fDisableInput = true;
+
+            ImGui::EndMenu();
+        }
+
+        if (ImGui::BeginMenu("Render"))
+        {
+            if (ImGui::IsItemHovered()) g_fDisableInput = true;
+            if (ImGui::MenuItem("Map", "", &g_fRenderModels));
+
+            if (ImGui::MenuItem("Collision", "", &g_fRenderCollision));
+            if (ImGui::IsItemHovered()) g_fDisableInput = true;
+
+            if (ImGui::MenuItem("Dialogue Triggers", "", &g_fRenderDialogTriggers));
+            if (ImGui::IsItemHovered()) g_fDisableInput = true;
+
+            if (ImGui::MenuItem("Object Inspector", "", &g_fDebugObjectInspector))
+            {
+                if (!g_fDebugObjectInspector)
+                    g_paloDebugSelected = nullptr;
+            }
+            if (ImGui::IsItemHovered()) g_fDisableInput = true;
+
+            ImGui::Separator();
+            bool fFovOverride = s_fFovOverride;
+            if (ImGui::MenuItem("FOV Override", nullptr, &fFovOverride,
+                g_pcm != nullptr))
+            {
+                if (fFovOverride)
+                {
+                    s_radFovBeforeOverride = g_pcm->radFOVTarget;
+                    s_degFovOverride = glm::degrees(g_pcm->radFOV);
+                    s_fFovOverride = true;
+                    SetCmFov(g_pcm, glm::radians(s_degFovOverride));
+                }
+                else
+                {
+                    s_fFovOverride = false;
+                    SetCmFov(g_pcm, s_radFovBeforeOverride);
+                }
+            }
+            if (ImGui::IsItemHovered()) g_fDisableInput = true;
+
+            if (s_fFovOverride)
+            {
+                ImGui::SetNextItemWidth(180.0f);
+                if (ImGui::SliderFloat("FOV (degrees)", &s_degFovOverride,
+                    20.0f, 120.0f, "%.1f deg"))
+                {
+                    SetCmFov(g_pcm, glm::radians(s_degFovOverride));
+                }
+                if (ImGui::IsItemHovered()) g_fDisableInput = true;
+
+                if (ImGui::MenuItem("Reset FOV"))
+                {
+                    s_fFovOverride = false;
+                    SetCmFov(g_pcm, s_radFovBeforeOverride);
+                }
+                if (ImGui::IsItemHovered()) g_fDisableInput = true;
+            }
+
+            if (ImGui::MenuItem("Cel Borders", "", &g_fRenderCelBorders));
+            if (ImGui::IsItemHovered()) g_fDisableInput = true;
+
+            if (ImGui::MenuItem("BSP (Binary Space Partition", "", &g_fBsp));
+            if (ImGui::IsItemHovered()) g_fDisableInput = true;
+
+            if (ImGui::BeginMenu("Fog"))
+            {
+                if (ImGui::MenuItem("Off", nullptr, g_fogType == 0))
+                {
+                    glGlobShader.Use();
+                    g_fogType = 0;
+                    glUniform1i(glslFogType, g_fogType);
+                }
+
+                if (ImGui::IsItemHovered()) g_fDisableInput = true;
+
+                if (ImGui::MenuItem("PS2 Style", nullptr, g_fogType == 1))
+                {
+                    glGlobShader.Use();
+                    g_fogType = 1;
+                    glUniform1i(glslFogType, g_fogType);
+                }
+
+                if (ImGui::IsItemHovered()) g_fDisableInput = true;
+
+                if (ImGui::MenuItem("PS3 Style", nullptr, g_fogType == 2))
+                {
+                    glGlobShader.Use();
+                    g_fogType = 2;
+                    glUniform1i(glslFogType, g_fogType);
+                }
+
+                if (ImGui::IsItemHovered()) g_fDisableInput = true;
+
+                ImGui::EndMenu();
+
+                if (ImGui::IsItemHovered()) g_fDisableInput = true;
+            }
+
+            if (ImGui::BeginMenu("MSAA"))
+            {
+                if (ImGui::IsItemHovered()) g_fDisableInput = true;
+
+                // We'll rebuild only if something changes
+                bool changed = false;
+
+                // Enable/disable
+                bool enabled = g_fMsaa;
+                if (ImGui::MenuItem("Off", nullptr, !enabled))
+                {
+                    g_fMsaa = false;
+                    changed = true;
+                }
+                if (ImGui::IsItemHovered()) g_fDisableInput = true;
+
+                // Sample options (only meaningful when enabled)
+                if (ImGui::MenuItem("2x", nullptr, enabled && g_msaaSamples == 2))
+                {
+                    g_fMsaa = true;
+                    g_msaaSamples = 2;
+                    changed = true;
+                }
+                if (ImGui::IsItemHovered()) g_fDisableInput = true;
+
+                if (ImGui::MenuItem("4x", nullptr, enabled && g_msaaSamples == 4))
+                {
+                    g_fMsaa = true;
+                    g_msaaSamples = 4;
+                    changed = true;
+                }
+                if (ImGui::IsItemHovered()) g_fDisableInput = true;
+
+                if (ImGui::MenuItem("8x", nullptr, enabled && g_msaaSamples == 8))
+                {
+                    g_fMsaa = true;
+                    g_msaaSamples = 8;
+                    changed = true;
+                }
+                if (ImGui::IsItemHovered()) g_fDisableInput = true;
+
+                if (ImGui::MenuItem("16x", nullptr, enabled && g_msaaSamples == 16))
+                {
+                    g_fMsaa = true;
+                    g_msaaSamples = 16;
+                    changed = true;
+                }
+                if (ImGui::IsItemHovered()) g_fDisableInput = true;
+
+                // Apply + rebuild FBOs
+                if (changed)
+                    ApplyMsaaSettings();
+
+                ImGui::EndMenu();
+            }
+
+            if (ImGui::MenuItem("V Sync", nullptr, g_fVsync))
+            {
+                g_fVsync = !g_fVsync;
+                ApplySwapInterval();
+            }
+
+            if (ImGui::BeginMenu("Frame Rate"))
+            {
+                const int previousFrameRate = g_targetFrameRate;
+
+                if (ImGui::MenuItem("30 FPS", nullptr, g_targetFrameRate == 30))
+                    g_targetFrameRate = 30;
+
+                if (ImGui::MenuItem("60 FPS", nullptr, g_targetFrameRate == 60))
+                    g_targetFrameRate = 60;
+
+                if (ImGui::MenuItem("120 FPS", nullptr, g_targetFrameRate == 120))
+                    g_targetFrameRate = 120;
+
+                if (g_targetFrameRate != previousFrameRate)
+                    ApplySwapInterval();
+
+                if (ImGui::IsItemHovered()) g_fDisableInput = true;
+                ImGui::EndMenu();
+            }
+
+            if (ImGui::IsItemHovered()) g_fDisableInput = true;
+
+            if (g_pcm != nullptr)
+            {
+                float drawDistance = g_pcm->rMRD;
+                ImGui::SetNextItemWidth(180.0f);
+                if (ImGui::SliderFloat("Draw Distance", &drawDistance, 0.25f, 4.0f, "%.2fx"))
+                {
+                    SetCmMrdRatio(g_pcm, drawDistance);
+                    g_drawDistanceMultiplier = drawDistance;
+                }
+
+                // Keep camera/game controls from responding while the slider
+                // is hovered or dragged.
+                if (ImGui::IsItemActive() || ImGui::IsItemHovered())
+                    g_fDisableInput = true;
+
+                if (ImGui::MenuItem("Reset Draw Distance", nullptr, false,
+                    g_pcm->rMRD != 1.0f))
+                {
+                    SetCmMrdRatio(g_pcm, 1.0f);
+                    g_drawDistanceMultiplier = 1.0f;
+                }
+
+                if (ImGui::IsItemHovered())
+                    g_fDisableInput = true;
+            }
+
+            if (ImGui::IsItemClicked) g_fDisableInput = true;
+
+            ImGui::EndMenu();
+        }
+
+        if (ImGui::BeginMenu("Audio"))
+        {
+            if (ImGui::MenuItem("Disable All Sound", nullptr, &s_fDisableAllSound))
+            {
+                if (s_fDisableAllSound)
+                {
+                    s_masterVolumeBeforeMute = s_masterVolume;
+                    SetMasterVolume(0.0f);
+                }
+                else
+                {
+                    SetMasterVolume(s_masterVolumeBeforeMute);
+                }
+            }
+
+            if (ImGui::IsItemHovered())
+                g_fDisableInput = true;
+
+			bool traceMusicDropout = FMusicDropoutTraceEnabled();
+			if (ImGui::MenuItem("Trace Random Music Dropout", nullptr,
+				&traceMusicDropout))
+			{
+				SetMusicDropoutTraceEnabled(traceMusicDropout);
+			}
+			if (ImGui::IsItemHovered())
+			{
+				ImGui::SetTooltip("Writes MusicDiagnostics/music_dropout_trace.log beside the executable");
+				g_fDisableInput = true;
+			}
+
+            ImGui::Separator();
+            if (ImGui::BeginMenu("Audition Loaded SFX"))
+            {
+                if (ImGui::Button("Stop Current Preview"))
+                {
+                    if (s_pambSfxAudition != nullptr)
+                        StopSound(s_pambSfxAudition, 0);
+                    s_pambSfxAudition = nullptr;
+                }
+
+                if (ImGui::IsItemHovered())
+                    g_fDisableInput = true;
+
+                ImGui::Separator();
+                bool foundLoadedBank = false;
+                for (int ibnk = 0; ibnk < static_cast<int>(kEffectBankCount); ++ibnk)
+                {
+                    const EFFECTBANK* bank = s_effectBanks[ibnk].get();
+                    if (bank == nullptr)
+                        continue;
+
+                    foundLoadedBank = true;
+                    const std::string bankName =
+                        std::filesystem::path(kEffectBankNames[ibnk]).filename().string();
+                    char bankLabel[64];
+                    std::snprintf(bankLabel, sizeof(bankLabel), "%s - Bank %d (%zu sounds)",
+                        bankName.c_str(), ibnk, bank->sounds.size());
+                    if (ImGui::BeginMenu(bankLabel))
+                    {
+                        const int firstSfxid = static_cast<int>(kEffectBankStarts[ibnk]);
+                        for (int isnd = 0; isnd < static_cast<int>(bank->sounds.size()); ++isnd)
+                        {
+                            const int sfxid = firstSfxid + isnd;
+                            char soundLabel[48];
+                            std::snprintf(soundLabel, sizeof(soundLabel),
+                                "SFX %d (sound %d)", sfxid, isnd);
+                            if (ImGui::Selectable(soundLabel, false,
+                                ImGuiSelectableFlags_DontClosePopups))
+                            {
+                                if (s_pambSfxAudition != nullptr)
+                                    StopSound(s_pambSfxAudition, 0);
+
+                                StartSound(static_cast<SFXID>(sfxid), &s_pambSfxAudition,
+                                    nullptr, nullptr,
+                                    0.0f, 0.0f, 1.0f, 0.0f, 0.0f, nullptr, nullptr);
+                                std::printf("[SFX AUDITION] bank=%d sound=%d sfx=%d\n",
+                                    ibnk, isnd, sfxid);
+                            }
+
+                            if (ImGui::IsItemHovered())
+                                g_fDisableInput = true;
+                        }
+
+                        ImGui::EndMenu();
+                    }
+                }
+
+                if (!foundLoadedBank)
+                    ImGui::MenuItem("No sound banks loaded", nullptr, false, false);
+
+                ImGui::EndMenu();
+            }
+
+            ImGui::EndMenu();
+        }
+
+        if (ImGui::BeginMenu("Misc."))
+        {
+            if (ImGui::IsItemHovered()) g_fDisableInput = true;
+
+            bool traceCameraBlackScreen = FCameraBlackScreenTraceEnabled();
+            if (ImGui::MenuItem("Trace Camera Black Screen Bug", nullptr,
+                &traceCameraBlackScreen))
+            {
+                SetCameraBlackScreenTraceEnabled(traceCameraBlackScreen);
+            }
+
+            if (ImGui::IsItemHovered())
+            {
+                ImGui::SetTooltip("Writes CameraDiagnostics/camera_black_screen_trace.log beside the executable");
+                g_fDisableInput = true;
+            }
+
+            ImGui::Separator();
+
+            if (psw != nullptr)
+            {
+                if (ImGui::MenuItem("Export Map"))
+                {
+                    std::cout << "Exporting Map..." << "\n";
+                    std::cout << (ExportSw() ? "Export Complete\n" : "Export Failed\n");
+                }
+
+                if (ImGui::MenuItem("Export Map (Bake Lights)"))
+                {
+                    std::cout << "Exporting Map..." << "\n";
+                    std::cout << (ExportSwLightsBaked() ? "Export Complete\n" : "Export Failed\n");
+                }
+
+                if (ImGui::MenuItem("Export Textures"))
+                {
+                    std::cout << "Exporting Textures..." << "\n";
+                    ExportTextures();
+                    std::cout << "Export Complete" << "\n";
+                }
+                if (ImGui::IsItemHovered()) g_fDisableInput = true;
+            }
+
+            ImGui::EndMenu();
+        }
+
+        if (ImGui::BeginMenu("Cheats"))
+        {
+            const bool fCanReloadCurrentWorld =
+                g_pgsCur != nullptr &&
+                GetLevelInfo((static_cast<int>(g_pgsCur->gameWorldCur) << 8) |
+                    static_cast<int>(g_pgsCur->worldLevelCur)) != nullptr;
+
+            if (ImGui::MenuItem("Reload Current World", nullptr, false,
+                fCanReloadCurrentWorld))
+            {
+                ReloadCurrentLevel();
+            }
+
+            ImGui::Separator();
+
+            bool fManualFreeCamera = false;
+
+            if (g_pcm != nullptr)
+            {
+                for (int icpr = 0; icpr < g_pcm->ccpr; ++icpr)
+                {
+                    const CPR& cpr = g_pcm->acpr[icpr];
+                    if (cpr.cpp == CPP_ManualOverride && cpr.pcplcy == &g_pcm->cpman)
+                    {
+                        fManualFreeCamera = true;
+                        break;
+                    }
+                }
+            }
+
+            if (ImGui::MenuItem("Manual Free Camera", nullptr, &fManualFreeCamera,
+                g_pcm != nullptr))
+            {
+                if (fManualFreeCamera)
+                {
+                    // Seed the mouse-look angles from the current camera so
+                    // the first click does not snap to CPMAN's old angles.
+                    const glm::mat3 glBasis = ConvertGameCameraBasisToGl(g_pcm->mat);
+                    const glm::vec3 forward = -glBasis[2];
+                    g_pcm->yaw = glm::degrees(std::atan2(-forward.x, forward.y));
+                    g_pcm->pitch = glm::degrees(std::asin(glm::clamp(forward.z, -1.0f, 1.0f)));
+
+                    SetCpmanCpmt(&g_pcm->cpman, CPMT_Truck);
+                    SetCmPolicy(g_pcm, CPP_ManualOverride, &g_pcm->cpman, nullptr, nullptr);
+                }
+                else
+                {
+                    // Match both the priority and policy so the permanent
+                    // CPP_Base CPMAN entry remains installed.
+                    RevokeCmPolicy(g_pcm, static_cast<GRFRCP>(3),
+                        CPP_ManualOverride, &g_pcm->cpman, nullptr, nullptr);
+
+                    if (g_gl.window != nullptr)
+                        glfwSetInputMode(g_gl.window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
+                }
+            }
+
+            if (ImGui::IsItemHovered())
+                g_fDisableInput = true;
+
+            ImGui::Separator();
+
+            const bool fCanSetCharms = g_pgsCur != nullptr;
+
+            if (ImGui::MenuItem("Give 1 Charm", nullptr, false, fCanSetCharms))
+                SetCcharm(1);
+
+            if (ImGui::MenuItem("Give 2 Charms", nullptr, false, fCanSetCharms))
+                SetCcharm(2);
+
+            bool fUnlimitedCharms = g_fInfiniteCharms != 0;
+            if (ImGui::MenuItem("Unlimited Charms", nullptr, &fUnlimitedCharms))
+                g_fInfiniteCharms = fUnlimitedCharms ? 1 : 0;
+
+            if (ImGui::MenuItem("Set Coins to 98", nullptr, false, g_pgsCur != nullptr))
+            {
+                g_pgsCur->ccoin = 98;
+                g_coinctr.pvtblot->pfnShowBlot(&g_coinctr);
+            }
+
+            const bool fCanCollectAllClues =
+                psw != nullptr &&
+                g_plsCur != nullptr &&
+                psw->cclueAll > 0 &&
+                g_plsCur->abitClue.m_cbitSet < psw->cclueAll;
+
+            if (ImGui::MenuItem("Collect All Clue Bottles (Current Level)", nullptr,
+                false, fCanCollectAllClues))
+            {
+                // Use the same retail path as the controller cheat. It marks
+                // each bottle's level bit, runs its collection splice, removes
+                // the bottle/container hierarchy, and refreshes the clue HUD.
+                CollectAllClues();
+            }
+
+            const bool fCanUnlockPowerUps = g_pgsCur != nullptr && psw != nullptr;
+
+            if (ImGui::MenuItem("Unlock All Power-Ups", nullptr, false, fCanUnlockPowerUps))
+            {
+                GRFVAULT grfvaultPowerUps = 0;
+
+                for (int ifsp = 0; ifsp < FSP_Max; ++ifsp)
+                    grfvaultPowerUps |= s_agrfvaultFsp[ifsp];
+
+                // The first 17 retail instruction flags include every
+                // selectable and passive power-up.  Several passives are not
+                // represented in s_agrfvaultFsp, including water safety
+                // (0x0100), rail/rope protection (0x2000), and anti-gravity
+                // pit protection (0x4000).
+                for (int iPowerUp = 0; iPowerUp < 17; ++iPowerUp)
+                    grfvaultPowerUps |= s_agrfvaultInstruct[iPowerUp];
+
+                // Passive Binocucom scan upgrade. Unlike the seven
+                // selectable FSP abilities, this is consumed directly by
+                // OnBinocActive/DrawBinocFilter to display CID_SCAN guard
+                // dossiers while peeking.
+                grfvaultPowerUps |= 0x0800U;
+
+                // Binocucom nearby-object finder. Each world blueprint owns
+                // one of the high four vault bits; UpdateBinocActiveFilter
+                // requires the current world's bit before it highlights clue
+                // bottles and breakable objects.
+                grfvaultPowerUps |= 0xF0000000U;
+
+                // Electric Roll is a passive upgrade to the base Roll, not a
+                // separate selectable FSP. JT state 55 checks this bit before
+                // attaching psoBallEffect and applying electric roll damage.
+                grfvaultPowerUps |= 0x0400U;
+
+                // Passive invisibility upgrades. Holding Circle (L on the
+                // keyboard) enters JTS_Hide/JTHK_Nonchalant; these flags let
+                // that state hide Sly from sensors and allow shadow-sneak
+                // movement while it remains held.
+                grfvaultPowerUps |= 0x12000U;
+
+                // Availability is the intersection of the persistent save
+                // flags and the current world's mask, so a runtime unlock
+                // must enable the power-up flags on both sides.
+                g_pgsCur->grfvault |= grfvaultPowerUps;
+                psw->grfvault |= grfvaultPowerUps;
+
+                // Allow SetFsp to display the selected power-up notification
+                // the next time the player cycles to one of the new abilities.
+                g_pgsCur->nPowerupLast = FSP_Nil;
+            }
+
+            bool fInvulnerable = (g_grfcht & 1U) != 0;
+            if (ImGui::MenuItem("Invulnerable", nullptr, &fInvulnerable))
+            {
+                if (fInvulnerable)
+                    g_grfcht |= 1U;
+                else
+                    g_grfcht &= ~1U;
+            }
+
+            if (ImGui::MenuItem("Infinite Timer", nullptr, &s_fInfiniteTimer))
+            {
+                if (s_fInfiniteTimer)
+                {
+                    if (g_timer.svt != 0.0f)
+                        s_svtTimerBeforeCheat = g_timer.svt;
+                    g_timer.svt = 0.0f;
+                }
+                else if (g_timer.svt == 0.0f)
+                {
+                    g_timer.svt = s_svtTimerBeforeCheat;
+                }
+            }
+
+            ImGui::MenuItem("Disable Death Barriers", nullptr, &g_fDisableDeathBarriers);
+
+            ImGui::MenuItem("Binocucom Skip: L1 Line / R1 Scene", nullptr,
+                &g_fSkipBinocDialogs);
+
+            if (ImGui::MenuItem("Show Autosave Icon and Percent", nullptr,
+                &g_fShowAutosaveIcon, g_pgsCur != nullptr))
+            {
+                if (g_fShowAutosaveIcon)
+                {
+                    g_autosave.fSaveComplete = 0;
+                    ShowBlot(&g_autosave);
+                }
+                else
+                {
+                    HideBlot(&g_autosave);
+                }
+            }
+
+            ImGui::Separator();
+
+            const bool fCanVisitLevels = g_pgsCur != nullptr;
+
+            if (ImGui::MenuItem("Mark All Worlds Visited", nullptr, false, fCanVisitLevels))
+            {
+                // Match normal world/level entry without granting keys, vaults,
+                // sprints, or completion. Visited worlds are selectable from
+                // the hideout hub selector.
+                for (int gameWorld = GAMEWORLD_Intro; gameWorld < GAMEWORLD_Max; ++gameWorld)
+                    g_pgsCur->aws[gameWorld].fws |= FWS_Visited;
+
+                for (const LEVELINFO& levelInfo : g_levelTable)
+                {
+                    const int gameWorld = levelInfo.levelID >> 8;
+                    if (gameWorld < GAMEWORLD_Intro || gameWorld >= GAMEWORLD_Max)
+                        continue;
+
+                    const int worldLevel = levelInfo.levelID & 0xff;
+                    if (worldLevel < 0 || worldLevel >= WORLDLEVEL_Max)
+                        continue;
+
+                    g_pgsCur->aws[gameWorld].als[worldLevel].grfls |= FLS_Visited;
+                }
+
+                // Also refresh an already-open hideout selector instead of
+                // requiring the player to leave and re-enter it.
+                UnlockAllHubWorlds();
+            }
+
+            if (ImGui::MenuItem("Unlock All Hideout FMVs", nullptr, false,
+                g_pgsCur != nullptr))
+            {
+                // The hideout FMV grid contains the first 16 cutscenes. The
+                // remaining table entries are internal additional/startup
+                // movies and are not part of the viewer.
+                g_pgsCur->unlockedCutscenes |= 0xFFFFU;
+            }
+
+            const bool fCanUnlockKeys =
+                g_pgsCur != nullptr &&
+                g_pgsCur->gameWorldCur >= GAMEWORLD_Intro &&
+                g_pgsCur->gameWorldCur < GAMEWORLD_Max;
+
+            if (ImGui::MenuItem("Unlock All Keys (Current World)", nullptr, false, fCanUnlockKeys))
+            {
+                const GAMEWORLD gameWorld = g_pgsCur->gameWorldCur;
+                WS& worldState = g_pgsCur->aws[gameWorld];
+                int ckey = 0;
+
+                // A key belongs to its mission-level LS.  Match normal key
+                // collection by setting FLS_KeyCollected there, then rebuild
+                // the world's cached key count from the level table.
+                for (const LEVELINFO& levelInfo : g_levelTable)
+                {
+                    if ((levelInfo.levelID >> 8) != gameWorld ||
+                        (static_cast<uint32_t>(levelInfo.task) & FLS_KeyCollected) == 0)
+                    {
+                        continue;
+                    }
+
+                    const int worldLevel = levelInfo.levelID & 0xff;
+                    if (worldLevel < 0 || worldLevel >= WORLDLEVEL_Max)
+                        continue;
+
+                    worldState.als[worldLevel].grfls |= FLS_KeyCollected;
+                    ++ckey;
+                }
+
+                worldState.ckey = ckey;
+            }
+
+            const bool fCanUnlockVaults =
+                g_pgsCur != nullptr &&
+                g_pgsCur->gameWorldCur >= GAMEWORLD_Underwater &&
+                g_pgsCur->gameWorldCur <= GAMEWORLD_Snow;
+
+            if (ImGui::MenuItem("Unlock All Vaults (Current World)", nullptr, false, fCanUnlockVaults))
+            {
+                const GAMEWORLD gameWorld = g_pgsCur->gameWorldCur;
+                WS& worldState = g_pgsCur->aws[gameWorld];
+                int cvault = 0;
+
+                // Vault completion is stored on each mission as the secondary
+                // objective flag. Rebuild the cached world total at the same
+                // time, just like normal vault collection does.
+                for (const LEVELINFO& levelInfo : g_levelTable)
+                {
+                    if ((levelInfo.levelID >> 8) != gameWorld ||
+                        (static_cast<uint32_t>(levelInfo.task) & FLS_Secondary) == 0)
+                    {
+                        continue;
+                    }
+
+                    const int worldLevel = levelInfo.levelID & 0xff;
+                    if (worldLevel < 0 || worldLevel >= WORLDLEVEL_Max)
+                        continue;
+
+                    worldState.als[worldLevel].grfls |= FLS_Secondary;
+                    ++cvault;
+                }
+
+                worldState.cvault = cvault;
+
+                // Bit zero belongs to the Paris vault. The remaining ordinary
+                // vault rewards occupy the low bits in world order; each main
+                // world also owns one blueprint bit in the high nibble.
+                int ordinaryBit = 1;
+                for (int precedingWorld = GAMEWORLD_Underwater;
+                     precedingWorld < gameWorld;
+                     ++precedingWorld)
+                {
+                    int ckeyUnused = 0;
+                    int cvaultPreceding = 0;
+                    int ctimedUnused = 0;
+                    TallyWorldTaskTotals(static_cast<GAMEWORLD>(precedingWorld),
+                        &ckeyUnused, &cvaultPreceding, &ctimedUnused);
+                    ordinaryBit += std::max(0, cvaultPreceding - 1);
+                }
+
+                const int cOrdinaryVaults = std::max(0, cvault - 1);
+                for (int i = 0; i < cOrdinaryVaults && ordinaryBit + i < 16; ++i)
+                    g_pgsCur->grfvault |= 1U << (ordinaryBit + i);
+
+                static constexpr uint32_t s_agrfvaultBlueprint[] =
+                {
+                    0,
+                    0x20000000U,
+                    0x40000000U,
+                    0x80000000U,
+                    0x10000000U
+                };
+                g_pgsCur->grfvault |= s_agrfvaultBlueprint[gameWorld];
+            }
+
+            int ckeyMtsUnused = 0;
+            int cvaultMtsUnused = 0;
+            int ctimedAvailable = 0;
+            if (g_pgsCur != nullptr &&
+                g_pgsCur->gameWorldCur >= GAMEWORLD_Intro &&
+                g_pgsCur->gameWorldCur < GAMEWORLD_Max)
+            {
+                TallyWorldTaskTotals(g_pgsCur->gameWorldCur,
+                    &ckeyMtsUnused, &cvaultMtsUnused, &ctimedAvailable);
+            }
+
+            const bool fCanCompleteMts = g_pgsCur != nullptr && ctimedAvailable > 0;
+            if (ImGui::MenuItem("Complete All Master Thief Sprints (Current World)",
+                nullptr, false, fCanCompleteMts))
+            {
+                const GAMEWORLD gameWorld = g_pgsCur->gameWorldCur;
+                WS& worldState = g_pgsCur->aws[gameWorld];
+                int ctimed = 0;
+
+                for (const LEVELINFO& levelInfo : g_levelTable)
+                {
+                    if ((levelInfo.levelID >> 8) != gameWorld ||
+                        (static_cast<uint32_t>(levelInfo.task) & FLS_Tertiary) == 0)
+                    {
+                        continue;
+                    }
+
+                    const int worldLevel = levelInfo.levelID & 0xff;
+                    if (worldLevel < 0 || worldLevel >= WORLDLEVEL_Max)
+                        continue;
+
+                    LS& levelState = worldState.als[worldLevel];
+                    levelState.grfls |= FLS_Tertiary;
+
+                    // Completed sprints always have a positive best time. Give
+                    // newly cheated entries a valid placeholder while preserving
+                    // real times already earned by the player.
+                    if (levelState.dtTimedBest <= 0.0f)
+                        levelState.dtTimedBest = 1.0f;
+
+                    ++ctimed;
+                }
+
+                worldState.ctimed = ctimed;
+
+                // Match the normal final-sprint path when this action completes
+                // the tertiary objective across every world.
+                if ((GetGameProgress() & FLS_Tertiary) != 0)
+                    UnlockProgressRewards(FLS_Tertiary);
+            }
+
+            if (ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByPopup))
+                g_fDisableInput = true;
+
+            ImGui::EndMenu();
+        }
+
+
+        if (ImGui::BeginMenu("Teleport"))
+        {
+            LoadDebugTeleportSlots();
+
+            const bool fCanTeleport = g_pjt != nullptr && g_pjt->pvtalo != nullptr &&
+                g_pjt->pvtalo->pfnTranslateAloToPos != nullptr;
+
+            // Seed each newly-created Sly instance from its current position,
+            // but leave edited coordinates intact while this instance lives.
+            if (g_pjt != s_pjtTeleportSource)
+            {
+                s_pjtTeleportSource = g_pjt;
+                s_posTeleport = g_pjt ? g_pjt->xf.posWorld : glm::vec3(0.0f);
+            }
+
+            if (g_pjt)
+            {
+                ImGui::Text("Sly: X %.3f  Y %.3f  Z %.3f",
+                    g_pjt->xf.posWorld.x, g_pjt->xf.posWorld.y, g_pjt->xf.posWorld.z);
+                ImGui::Separator();
+            }
+            else
+            {
+                ImGui::TextDisabled("Sly is not loaded");
+            }
+
+            ImGui::SetNextItemWidth(240.0f);
+            ImGui::InputFloat3("XYZ", &s_posTeleport.x, "%.3f");
+
+            if (ImGui::Button("Use Sly's Current Position") && g_pjt)
+                s_posTeleport = g_pjt->xf.posWorld;
+
+            ImGui::SameLine();
+
+            if (ImGui::Button("Teleport Sly") && fCanTeleport)
+                TeleportSlyTo(s_posTeleport);
+
+            ImGui::SeparatorText("Saved Coordinates");
+            for (size_t i = 0; i < s_aTeleportSlot.size(); ++i)
+            {
+                DEBUG_TELEPORT_SLOT& slot = s_aTeleportSlot[i];
+                ImGui::PushID(static_cast<int>(i));
+
+                if (slot.fValid)
+                {
+                    ImGui::Text("Slot %d: %.3f, %.3f, %.3f", static_cast<int>(i + 1),
+                        slot.pos.x, slot.pos.y, slot.pos.z);
+                }
+                else
+                {
+                    ImGui::TextDisabled("Slot %d: Empty", static_cast<int>(i + 1));
+                }
+
+                if (ImGui::Button("Save Current") && g_pjt != nullptr)
+                {
+                    slot.pos = g_pjt->xf.posWorld;
+                    slot.fValid = true;
+                    SaveDebugTeleportSlots();
+                }
+
+                ImGui::SameLine();
+                if (ImGui::Button("Use") && slot.fValid)
+                    s_posTeleport = slot.pos;
+
+                ImGui::SameLine();
+                if (ImGui::Button("Teleport") && slot.fValid && fCanTeleport)
+                {
+                    s_posTeleport = slot.pos;
+                    TeleportSlyTo(slot.pos);
+                }
+
+                ImGui::SameLine();
+                if (ImGui::Button("Clear") && slot.fValid)
+                {
+                    slot = {};
+                    SaveDebugTeleportSlots();
+                }
+
+                ImGui::PopID();
+            }
+
+            if (ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByPopup) ||
+                ImGui::IsAnyItemActive())
+            {
+                g_fDisableInput = true;
+            }
+
+            ImGui::EndMenu();
+        }
+
+        ImGui::EndMainMenuBar();
+    }
+
+    if (g_paloDebugSelected != nullptr &&
+        std::find(allSWAloObjs.begin(), allSWAloObjs.end(), g_paloDebugSelected) == allSWAloObjs.end())
+    {
+        g_paloDebugSelected = nullptr;
+    }
+
+    const ImGuiIO& io = ImGui::GetIO();
+    if (g_fDebugObjectInspector)
+    {
+        ImGui::SetNextWindowBgAlpha(0.75f);
+        ImGui::SetNextWindowPos(ImVec2(10.0f, 115.0f), ImGuiCond_FirstUseEver);
+        ImGui::Begin("Object Inspector", &g_fDebugObjectInspector,
+            ImGuiWindowFlags_AlwaysAutoResize |
+            ImGuiWindowFlags_NoSavedSettings);
+        ImGui::TextUnformatted("Click a rendered object to inspect it.");
+        ImGui::Separator();
+
+        if (g_paloDebugSelected != nullptr)
+        {
+            const int cid = static_cast<int>(g_paloDebugSelected->pvtalo->cid);
+            const int oid = static_cast<int>(g_paloDebugSelected->oid);
+            ImGui::Text("CID: %d (0x%X)", cid, static_cast<unsigned int>(cid));
+            ImGui::Text("OID: %d (0x%X)", oid, static_cast<unsigned int>(oid));
+            ImGui::Text("Position: %.2f, %.2f, %.2f",
+                g_paloDebugSelected->xf.posWorld.x,
+                g_paloDebugSelected->xf.posWorld.y,
+                g_paloDebugSelected->xf.posWorld.z);
+
+            if (ImGui::Button("Clear Selection"))
+                g_paloDebugSelected = nullptr;
+        }
+        else
+        {
+            ImGui::TextDisabled("No object selected");
+        }
+
+        if (ImGui::IsWindowHovered(ImGuiHoveredFlags_AllowWhenBlockedByPopup) ||
+            ImGui::IsAnyItemActive())
+            g_fDisableInput = true;
+        ImGui::End();
+    }
+
+    // F3 owns the debug overlay as a whole, so keep the frame-rate readout
+    // visible for exactly the same lifetime as the menu bar.
+    ImGui::SetNextWindowBgAlpha(0.55f);
+    ImGui::SetNextWindowPos(
+        ImVec2(io.DisplaySize.x - 10.0f, 30.0f),
+        ImGuiCond_Always,
+        ImVec2(1.0f, 0.0f));
+    ImGui::Begin("Frame Rate", nullptr,
+        ImGuiWindowFlags_AlwaysAutoResize |
+        ImGuiWindowFlags_NoDecoration |
+        ImGuiWindowFlags_NoInputs |
+        ImGuiWindowFlags_NoNav |
+        ImGuiWindowFlags_NoSavedSettings |
+        ImGuiWindowFlags_NoFocusOnAppearing);
+    ImGui::Text("FPS: %.1f", io.Framerate);
+    ImGui::End();
+
+    // Keep Sly's live world position visible without opening the Teleport menu.
+    if (g_pjt)
+    {
+        ImGui::SetNextWindowBgAlpha(0.55f);
+        ImGui::SetNextWindowPos(ImVec2(10.0f, 30.0f), ImGuiCond_FirstUseEver);
+        ImGui::Begin("Sly Coordinates", nullptr,
+            ImGuiWindowFlags_AlwaysAutoResize |
+            ImGuiWindowFlags_NoSavedSettings |
+            ImGuiWindowFlags_NoFocusOnAppearing);
+        ImGui::Text("X: %.3f", g_pjt->xf.posWorld.x);
+        ImGui::Text("Y: %.3f", g_pjt->xf.posWorld.y);
+        ImGui::Text("Z: %.3f", g_pjt->xf.posWorld.z);
+        ImGui::End();
+    }
+
+    // Draw the file dialog
+    if (instance_a.Instance()->Display("ChooseFileDlgKey"))
+    {
+        if (instance_a.Instance()->IsOk())
+        {
+            file = ImGuiFileDialog::Instance()->GetFilePathName();
+
+            filePath = ImGuiFileDialog::Instance()->GetCurrentPath();
+
+            const std::string selectedFileName = ImGuiFileDialog::Instance()->GetCurrentFileName();
+
+            const std::size_t extensionPosition = selectedFileName.find_last_of('.');
+
+            levelName =
+                extensionPosition == std::string::npos
+                ? selectedFileName
+                : selectedFileName.substr(0, extensionPosition);
+
+            // Rebuilt test files live beside the retail BRX. Use the base
+            // level name for g_levelTable lookup while preserving `file` as
+            // the exact path selected by the user.
+            constexpr std::string_view rebuiltSuffix = "_Rebuilt";
+            if (levelName.size() >= rebuiltSuffix.size() &&
+                levelName.compare(levelName.size() - rebuiltSuffix.size(),
+                    rebuiltSuffix.size(), rebuiltSuffix) == 0)
+            {
+                levelName.erase(levelName.size() - rebuiltSuffix.size());
+            }
+
+            LEVELINFO* plevel = PlevelinfoFromLevelName(levelName);
+
+            if (plevel != nullptr)
+            {
+                // The debug file picker can be used before any world exists.
+                // In that state UpdateUi/UpdateWipe are not running, so a wipe
+                // request can never advance far enough to schedule the load.
+                if (g_psw == nullptr)
+					g_transition.Set(plevel, OID_Nil, OID_Nil, static_cast<GRFTRANS>(0));
+                else
+					WipeToWorldWarp(plevel, OID_Nil, WIPEK_Fade);
+            }
+            else
+                std::printf("MENU WORLD ERROR: '%s' is not in g_levelTable\n", levelName.c_str());
+        }
+
+        instance_a.Instance()->Close();
+    }
+
+    if (ImGuiFileDialog::Instance()->IsOpened("ChooseFileDlgKey"))
+        g_fDisableInput = true;
+
+    // Test after every debug window has been submitted. WantCaptureMouse can
+    // remain set for a frame after closing a menu, while this directly rejects
+    // only clicks that are actually over an ImGui window.
+    if (g_fDebugObjectInspector && psw != nullptr &&
+        ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
+        !ImGui::IsWindowHovered(ImGuiHoveredFlags_AnyWindow))
+    {
+        PickDebugObject();
+    }
+}
+
+void AppendFloat(std::vector<uint8_t>& buf, float v)
+{
+    uint8_t bytes[4];
+    std::memcpy(bytes, &v, 4);
+    buf.insert(buf.end(), bytes, bytes + 4);
+}
+
+void AppendUInt32(std::vector<uint8_t>& buf, uint32_t v)
+{
+    uint8_t bytes[4];
+    std::memcpy(bytes, &v, 4);
+    buf.insert(buf.end(), bytes, bytes + 4);
+}
+
+void AlignTo4(std::vector<uint8_t>& buf)
+{
+    while (buf.size() % 4 != 0)
+        buf.push_back(0);
+}
+
+void PngWriteCallback(void* context, void* data, int size)
+{
+    PngBuffer* png = reinterpret_cast<PngBuffer*>(context);
+    uint8_t* bytes = reinterpret_cast<uint8_t*>(data);
+    png->data.insert(png->data.end(), bytes, bytes + size);
+}
+
+// Return a validated RGBA8 base level for tools which need CPU pixels. Rebuilt
+// BRX files may store BC1/BC3 payloads, and release builds discard their CPU
+// copies after upload, so diffuseTexture cannot be passed directly to stb.
+static bool GetBmpBaseRgba8(const BMP* bmp, std::vector<byte>& readback, const byte*& pixels)
+{
+    pixels = nullptr;
+    if (bmp == nullptr || bmp->bmpWidth == 0 || bmp->bmpHeight == 0)
+        return false;
+
+    const uint64_t byteCount64 =
+        static_cast<uint64_t>(bmp->bmpWidth) * static_cast<uint64_t>(bmp->bmpHeight) * 4u;
+    if (byteCount64 > static_cast<uint64_t>((std::numeric_limits<size_t>::max)()) ||
+        bmp->bmpWidth > static_cast<uint32_t>((std::numeric_limits<int>::max)() / 4))
+        return false;
+
+    const size_t byteCount = static_cast<size_t>(byteCount64);
+    if (bmp->textureFormat == 0 && bmp->diffuseTexture.size() >= byteCount)
+    {
+        pixels = bmp->diffuseTexture.data();
+        return true;
+    }
+
+    if (bmp->glDiffuseMap == 0)
+        return false;
+
+    readback.resize(byteCount);
+    GLint previousTexture = 0;
+    GLint previousPackAlignment = 4;
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &previousTexture);
+    glGetIntegerv(GL_PACK_ALIGNMENT, &previousPackAlignment);
+    glBindTexture(GL_TEXTURE_2D, bmp->glDiffuseMap);
+    glPixelStorei(GL_PACK_ALIGNMENT, 1);
+    glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, readback.data());
+    glPixelStorei(GL_PACK_ALIGNMENT, previousPackAlignment);
+    glBindTexture(GL_TEXTURE_2D, static_cast<GLuint>(previousTexture));
+
+    pixels = readback.data();
+    return true;
+}
+
+struct ExportRgbaImage
+{
+    uint32_t width = 0;
+    uint32_t height = 0;
+    std::vector<byte> pixels;
+};
+
+struct BakedTextureSet
+{
+    ExportRgbaImage ambient;
+    ExportRgbaImage diffuse;
+    ExportRgbaImage saturate;
+    bool hasAmbient = false;
+    bool hasDiffuse = false;
+    bool hasSaturate = false;
+};
+
+static BMP* BmpFromImageIndex(int32_t imageIndex)
+{
+    return imageIndex >= 0 && static_cast<size_t>(imageIndex) < g_abmp.size()
+        ? &g_abmp[static_cast<size_t>(imageIndex)] : nullptr;
+}
+
+static bool LoadExportRgbaImage(BMP* bmp, ExportRgbaImage& image)
+{
+    image = {};
+    std::vector<byte> readback;
+    const byte* pixels = nullptr;
+    if (!GetBmpBaseRgba8(bmp, readback, pixels))
+        return false;
+
+    const size_t byteCount = static_cast<size_t>(bmp->bmpWidth) * bmp->bmpHeight * 4u;
+    image.width = bmp->bmpWidth;
+    image.height = bmp->bmpHeight;
+    image.pixels.assign(pixels, pixels + byteCount);
+    return true;
+}
+
+static int ExportTextureFrame(const SUBGLOB& sub, const SHD& shd)
+{
+    if (shd.atex.empty() || shd.atex[0].abmp.empty())
+        return 0;
+
+    int frame = sub.uvSai != nullptr ? sub.uvSai->iframe : 0;
+    return std::clamp(frame, 0, static_cast<int>(shd.atex[0].abmp.size()) - 1);
+}
+
+static uint64_t ExportMaterialKey(int shdID, int frame)
+{
+    return (static_cast<uint64_t>(static_cast<uint32_t>(shdID)) << 32) |
+        static_cast<uint32_t>(frame);
+}
+
+static BakedTextureSet LoadBakedTextureSet(const SHD& shd, int frame)
+{
+    BakedTextureSet result{};
+    if (shd.atex.empty())
+        return result;
+
+    const TEX& tex = shd.atex[0];
+    if (tex.ambientImageIndex.empty() || tex.diffuseImageIndex.empty() ||
+        tex.saturateImageIndex.empty())
+        return result;
+
+    const size_t availableFrames = std::min({tex.ambientImageIndex.size(),
+        tex.diffuseImageIndex.size(), tex.saturateImageIndex.size()});
+    if (availableFrames == 0)
+        return result;
+    const size_t frameIndex = std::min(static_cast<size_t>(std::max(frame, 0)),
+        availableFrames - 1);
+
+    BMP* ambient = BmpFromImageIndex(tex.ambientImageIndex[frameIndex]);
+    BMP* diffuse = BmpFromImageIndex(tex.diffuseImageIndex[frameIndex]);
+    BMP* saturate = BmpFromImageIndex(tex.saturateImageIndex[frameIndex]);
+    result.hasAmbient = LoadExportRgbaImage(ambient, result.ambient);
+    result.hasDiffuse = LoadExportRgbaImage(diffuse != nullptr ? diffuse : ambient,
+        result.diffuse);
+    result.hasSaturate = LoadExportRgbaImage(saturate, result.saturate);
+    return result;
+}
+
+static bool FValidExportIndices(const SUBGLOB& sub)
+{
+    const size_t vertexCount = sub.vertices.size();
+    return std::all_of(sub.indices.begin(), sub.indices.end(),
+        [vertexCount](const INDICE& tri)
+        {
+            return static_cast<size_t>(tri.v1) < vertexCount &&
+                static_cast<size_t>(tri.v2) < vertexCount &&
+                static_cast<size_t>(tri.v3) < vertexCount;
+        });
+}
+
+static bool FValidExportVertices(const SUBGLOB& sub)
+{
+    return std::all_of(sub.vertices.begin(), sub.vertices.end(),
+        [](const VERTICE& vertex)
+        {
+            const auto finite3 = [](const glm::vec3& value)
+            {
+                return std::isfinite(value.x) && std::isfinite(value.y) &&
+                    std::isfinite(value.z);
+            };
+            const auto finite4 = [](const glm::vec4& value)
+            {
+                return std::isfinite(value.x) && std::isfinite(value.y) &&
+                    std::isfinite(value.z) && std::isfinite(value.w);
+            };
+            return finite3(vertex.pos) && finite3(vertex.normal) &&
+                finite4(vertex.color) && finite4(vertex.boneWeights) &&
+                std::isfinite(vertex.uv.x) && std::isfinite(vertex.uv.y);
+        });
+}
+
+static bool FFiniteExportMatrix(const glm::mat4& matrix)
+{
+    const float* values = glm::value_ptr(matrix);
+    for (int i = 0; i < 16; ++i)
+        if (!std::isfinite(values[i]))
+            return false;
+    return true;
+}
+
+static glm::vec3 TransformExportNormal(const glm::mat3& normalMatrix,
+                                       const glm::vec3& normal)
+{
+    const glm::vec3 transformed = normalMatrix * normal;
+    const float lengthSquared = glm::dot(transformed, transformed);
+    return lengthSquared > 1.0e-12f
+        ? transformed * glm::inversesqrt(lengthSquared)
+        : glm::vec3(0.0f, 1.0f, 0.0f);
+}
+
+glm::quat RotationBetweenVectors(const glm::vec3& from, const glm::vec3& to)
+{
+    glm::vec3 f = glm::normalize(from);
+    glm::vec3 t = glm::normalize(to);
+
+    float cosTheta = glm::dot(f, t);
+
+    if (cosTheta > 0.9999f)
+        return glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
+
+    if (cosTheta < -0.9999f)
+    {
+        glm::vec3 axis = glm::cross(glm::vec3(0, 1, 0), f);
+        if (glm::length2(axis) < 1e-6f)
+            axis = glm::cross(glm::vec3(1, 0, 0), f);
+
+        axis = glm::normalize(axis);
+        return glm::angleAxis(glm::pi<float>(), axis);
+    }
+
+    glm::vec3 axis = glm::normalize(glm::cross(f, t));
+    float s = glm::sqrt((1.0f + cosTheta) * 2.0f);
+    float invS = 1.0f / s;
+
+    glm::quat q;
+    q.w = s * 0.5f;
+    q.x = axis.x * invS;
+    q.y = axis.y * invS;
+    q.z = axis.z * invS;
+    return glm::normalize(q);
+}
+
+static json ExportMatrix(const glm::mat4& matrix)
+{
+    json result = json::array();
+    const float* values = glm::value_ptr(matrix);
+    for (int i = 0; i < 16; ++i)
+        result.push_back(values[i]);
+    return result;
+}
+
+static bool SetExportNodeTrs(json& node, const glm::mat4& matrix)
+{
+    if (!FFiniteExportMatrix(matrix))
+        return false;
+
+    const glm::vec3 translation(matrix[3]);
+    glm::vec3 scale(glm::length(glm::vec3(matrix[0])),
+        glm::length(glm::vec3(matrix[1])), glm::length(glm::vec3(matrix[2])));
+    if (scale.x <= 1.0e-8f || scale.y <= 1.0e-8f || scale.z <= 1.0e-8f)
+        return false;
+
+    glm::mat3 rotation;
+    rotation[0] = glm::vec3(matrix[0]) / scale.x;
+    rotation[1] = glm::vec3(matrix[1]) / scale.y;
+    rotation[2] = glm::vec3(matrix[2]) / scale.z;
+    if (glm::determinant(rotation) < 0.0f)
+    {
+        scale.x = -scale.x;
+        rotation[0] = -rotation[0];
+    }
+
+    const glm::quat quaternion = glm::normalize(glm::quat_cast(rotation));
+    if (!std::isfinite(quaternion.x) || !std::isfinite(quaternion.y) ||
+        !std::isfinite(quaternion.z) || !std::isfinite(quaternion.w))
+        return false;
+
+    node["translation"] = {translation.x, translation.y, translation.z};
+    node["rotation"] = {quaternion.x, quaternion.y, quaternion.z, quaternion.w};
+    node["scale"] = {scale.x, scale.y, scale.z};
+    return true;
+}
+
+static glm::mat4 OriginalAloWorldMatrix(const ALO* alo)
+{
+    if (alo == nullptr)
+        return glm::mat4(1.0f);
+
+    glm::mat4 local(alo->matOrig);
+    local[3] = glm::vec4(alo->posOrig, 1.0f);
+    return OriginalAloWorldMatrix(alo->paloParent) * local;
+}
+
+static json BuildCelBorderPrimitive(const GLOB& glob, const glm::mat4& transform,
+    bool skinned, int boneCount, int materialIndex,
+    std::vector<uint8_t>& binaryBuffer, std::vector<json>& bufferViews,
+    std::vector<json>& accessors)
+{
+    if (glob.edgeCount <= 0 ||
+        glob.edgePoints.size() < static_cast<size_t>(glob.edgeCount) * 4 ||
+        !FFiniteExportMatrix(transform))
+        return json();
+
+    std::vector<CELPOINT> endpoints;
+    endpoints.reserve(static_cast<size_t>(glob.edgeCount) * 2);
+    for (int edge = 0; edge < glob.edgeCount; ++edge)
+    {
+        endpoints.push_back(glob.edgePoints[static_cast<size_t>(edge) * 4]);
+        endpoints.push_back(glob.edgePoints[static_cast<size_t>(edge) * 4 + 1]);
+    }
+
+    glm::vec3 positionMin((std::numeric_limits<float>::max)());
+    glm::vec3 positionMax((std::numeric_limits<float>::lowest)());
+    AlignTo4(binaryBuffer);
+    const size_t positionOffset = binaryBuffer.size();
+    for (const CELPOINT& point : endpoints)
+    {
+        const glm::vec3 position = glm::vec3(transform * glm::vec4(glm::vec3(point.position), 1.0f));
+        if (!std::isfinite(position.x) || !std::isfinite(position.y) ||
+            !std::isfinite(position.z))
+            return json();
+        positionMin = glm::min(positionMin, position);
+        positionMax = glm::max(positionMax, position);
+        AppendFloat(binaryBuffer, position.x);
+        AppendFloat(binaryBuffer, position.y);
+        AppendFloat(binaryBuffer, position.z);
+    }
+    const int positionView = static_cast<int>(bufferViews.size());
+    bufferViews.push_back({{"buffer", 0}, {"byteOffset", positionOffset},
+        {"byteLength", binaryBuffer.size() - positionOffset}, {"target", 34962}});
+    const int positionAccessor = static_cast<int>(accessors.size());
+    accessors.push_back({{"bufferView", positionView}, {"componentType", 5126},
+        {"count", endpoints.size()}, {"type", "VEC3"},
+        {"min", {positionMin.x, positionMin.y, positionMin.z}},
+        {"max", {positionMax.x, positionMax.y, positionMax.z}}});
+
+    json attributes = {{"POSITION", positionAccessor}};
+    if (skinned)
+    {
+        AlignTo4(binaryBuffer);
+        const size_t jointOffset = binaryBuffer.size();
+        for (const CELPOINT& point : endpoints)
+            for (int influence = 0; influence < 4; ++influence)
+            {
+                const uint16_t joint = point.boneIndices[influence] <
+                    static_cast<uint32_t>(boneCount)
+                    ? static_cast<uint16_t>(point.boneIndices[influence]) : 0;
+                binaryBuffer.push_back(static_cast<uint8_t>(joint & 0xff));
+                binaryBuffer.push_back(static_cast<uint8_t>(joint >> 8));
+            }
+        const int jointView = static_cast<int>(bufferViews.size());
+        bufferViews.push_back({{"buffer", 0}, {"byteOffset", jointOffset},
+            {"byteLength", binaryBuffer.size() - jointOffset}, {"target", 34962}});
+        const int jointAccessor = static_cast<int>(accessors.size());
+        accessors.push_back({{"bufferView", jointView}, {"componentType", 5123},
+            {"count", endpoints.size()}, {"type", "VEC4"}});
+
+        AlignTo4(binaryBuffer);
+        const size_t weightOffset = binaryBuffer.size();
+        for (const CELPOINT& point : endpoints)
+        {
+            glm::vec4 weights = point.boneWeights;
+            const float total = weights.x + weights.y + weights.z + weights.w;
+            if (total > 0.000001f)
+                weights /= total;
+            for (int influence = 0; influence < 4; ++influence)
+                AppendFloat(binaryBuffer, weights[influence]);
+        }
+        const int weightView = static_cast<int>(bufferViews.size());
+        bufferViews.push_back({{"buffer", 0}, {"byteOffset", weightOffset},
+            {"byteLength", binaryBuffer.size() - weightOffset}, {"target", 34962}});
+        const int weightAccessor = static_cast<int>(accessors.size());
+        accessors.push_back({{"bufferView", weightView}, {"componentType", 5126},
+            {"count", endpoints.size()}, {"type", "VEC4"}});
+        attributes["JOINTS_0"] = jointAccessor;
+        attributes["WEIGHTS_0"] = weightAccessor;
+    }
+
+    return {{"attributes", attributes}, {"material", materialIndex}, {"mode", 1}};
+}
+
+static int AppendStaticCelBorders(std::vector<uint8_t>& binaryBuffer,
+    std::vector<json>& bufferViews, std::vector<json>& accessors,
+    std::vector<json>& meshes, std::vector<json>& nodes,
+    std::vector<int>& sceneNodes, int materialIndex)
+{
+    const glm::mat4 zUpToYUp = glm::rotate(glm::mat4(1.0f),
+        glm::radians(-90.0f), glm::vec3(1.0f, 0.0f, 0.0f));
+    int count = 0;
+    for (size_t aloIndex = 0; aloIndex < allSWAloObjs.size(); ++aloIndex)
+    {
+        ALO* alo = allSWAloObjs[aloIndex];
+        if (alo == nullptr || alo->globset.cbnd > 0)
+            continue;
+        for (size_t globIndex = 0; globIndex < alo->globset.aglob.size(); ++globIndex)
+        {
+            const GLOB& glob = alo->globset.aglob[globIndex];
+            glm::mat4 model = alo->xf.matWorld;
+            model[3] = glm::vec4(alo->xf.posWorld, 1.0f);
+            if (glob.pdmat != nullptr)
+                model *= *glob.pdmat;
+            json primitive = BuildCelBorderPrimitive(glob, zUpToYUp * model, false,
+                0, materialIndex, binaryBuffer, bufferViews, accessors);
+            if (primitive.is_null())
+                continue;
+            const int mesh = static_cast<int>(meshes.size());
+            meshes.push_back({{"name", "CelBorder_" + std::to_string(aloIndex) + "_" +
+                std::to_string(globIndex)}, {"primitives", json::array({primitive})}});
+            const int node = static_cast<int>(nodes.size());
+            nodes.push_back({{"name", "CelBorder_" + std::to_string(aloIndex) + "_" +
+                std::to_string(globIndex)}, {"mesh", mesh}});
+            sceneNodes.push_back(node);
+            ++count;
+        }
+    }
+    return count;
+}
+
+static bool EnsureExportLevelName()
+{
+    if (!levelName.empty())
+        return true;
+
+    if (g_pgsCur != nullptr)
+    {
+        const int levelId = (static_cast<int>(g_pgsCur->gameWorldCur) << 8) |
+            static_cast<int>(g_pgsCur->worldLevelCur);
+        const LEVELINFO* levelInfo = GetLevelInfo(levelId);
+        if (levelInfo != nullptr && !levelInfo->levelName.empty())
+            levelName = std::filesystem::path(levelInfo->levelName).stem().string();
+
+        if (levelName.empty())
+            levelName = "World_" + std::to_string(static_cast<int>(g_pgsCur->gameWorldCur)) +
+                "_" + std::to_string(static_cast<int>(g_pgsCur->worldLevelCur));
+    }
+
+    if (levelName.empty() && g_psw != nullptr && g_psw->pchzName != nullptr &&
+        g_psw->pchzName[0] != '\0')
+        levelName = std::filesystem::path(g_psw->pchzName).stem().string();
+
+    if (levelName.empty())
+    {
+        ReportRuntimeError("Export", "Could not determine a name for the loaded world");
+        return false;
+    }
+    return true;
+}
+
+static int AppendSkeletalMeshes(std::vector<uint8_t>& binaryBuffer,
+    std::vector<json>& bufferViews, std::vector<json>& accessors,
+    std::vector<json>& meshes, std::vector<json>& nodes,
+    std::vector<json>& skins, std::vector<json>& animations,
+    std::vector<int>& sceneNodes,
+    const std::unordered_map<uint64_t, int>& materialIndices, int celBorderMaterialIndex)
+{
+    if (g_psw == nullptr)
+        return 0;
+
+        const glm::mat4 zUpToYUp = glm::rotate(glm::mat4(1.0f),
+            glm::radians(-90.0f), glm::vec3(1.0f, 0.0f, 0.0f));
+        const int basisNode = static_cast<int>(nodes.size());
+        nodes.push_back({{"name", "ProjectCane_Z_Up"}, {"matrix", ExportMatrix(zUpToYUp)},
+            {"children", json::array()}});
+        sceneNodes.push_back(basisNode);
+
+        int exportedModels = 0;
+        for (size_t aloIndex = 0; aloIndex < allSWAloObjs.size(); ++aloIndex)
+        {
+            ALO* alo = allSWAloObjs[aloIndex];
+            GLOBSET& globset = alo->globset;
+            if (globset.cbnd <= 0 || globset.abnd.size() < static_cast<size_t>(globset.cbnd))
+                continue;
+
+            bool hasSkinnedGeometry = false;
+            for (const GLOB& glob : globset.aglob)
+                for (const SUBGLOB& sub : glob.asubglob)
+                    hasSkinnedGeometry |= sub.cibnd > 0 && !sub.vertices.empty() && !sub.indices.empty();
+            if (!hasSkinnedGeometry)
+                continue;
+
+            const glm::mat4 meshBind = OriginalAloWorldMatrix(alo);
+            if (!FFiniteExportMatrix(meshBind))
+            {
+                ReportRuntimeError("Export",
+                    "Skipping skeletal model %zu because its bind transform is non-finite",
+                    aloIndex);
+                continue;
+            }
+
+            std::vector<glm::mat4> jointWorld(globset.cbnd, glm::mat4(1.0f));
+            std::unordered_map<ALO*, int> boneLookup;
+            for (int bone = 0; bone < globset.cbnd; ++bone)
+            {
+                const BND& binding = globset.abnd[bone];
+                jointWorld[bone] = meshBind * glm::inverse(binding.dmatOrig);
+                if (!FFiniteExportMatrix(binding.dmatOrig) ||
+                    !FFiniteExportMatrix(jointWorld[bone]))
+                {
+                    boneLookup.clear();
+                    break;
+                }
+                if (binding.palo != nullptr)
+                    boneLookup[binding.palo] = bone;
+            }
+            if (boneLookup.empty())
+            {
+                ReportRuntimeError("Export",
+                    "Skipping skeletal model %zu because its bind matrices are non-finite",
+                    aloIndex);
+                continue;
+            }
+
+            std::vector<int> jointNodes(globset.cbnd, -1);
+            for (int bone = 0; bone < globset.cbnd; ++bone)
+            {
+                ALO* boneAlo = globset.abnd[bone].palo;
+                glm::mat4 local = jointWorld[bone];
+                if (boneAlo != nullptr && boneAlo->paloParent != nullptr)
+                {
+                    auto parent = boneLookup.find(boneAlo->paloParent);
+                    if (parent != boneLookup.end())
+                        local = glm::inverse(jointWorld[parent->second]) * jointWorld[bone];
+                }
+
+                const std::string boneName = boneAlo != nullptr && boneAlo->pchzName != nullptr
+                    ? boneAlo->pchzName : "Bone_" + std::to_string(bone);
+                jointNodes[bone] = static_cast<int>(nodes.size());
+                json jointNode = {{"name", boneName}, {"children", json::array()}};
+                if (!SetExportNodeTrs(jointNode, local))
+                {
+                    ReportRuntimeError("Export",
+                        "Skipping skeletal model %zu because joint %d cannot be decomposed",
+                        aloIndex, bone);
+                    jointNodes.clear();
+                    break;
+                }
+                nodes.push_back(std::move(jointNode));
+            }
+            if (jointNodes.empty())
+                continue;
+
+            const int rigRootNode = static_cast<int>(nodes.size());
+            nodes.push_back({{"name", "Rig_" + std::to_string(aloIndex)},
+                {"children", json::array()}});
+            nodes[basisNode]["children"].push_back(rigRootNode);
+
+            for (int bone = 0; bone < globset.cbnd; ++bone)
+            {
+                ALO* boneAlo = globset.abnd[bone].palo;
+                auto parent = boneAlo != nullptr ? boneLookup.find(boneAlo->paloParent) : boneLookup.end();
+                if (parent != boneLookup.end())
+                    nodes[jointNodes[parent->second]]["children"].push_back(jointNodes[bone]);
+                else
+                    nodes[rigRootNode]["children"].push_back(jointNodes[bone]);
+            }
+
+            AlignTo4(binaryBuffer);
+            const size_t inverseBindOffset = binaryBuffer.size();
+            for (int bone = 0; bone < globset.cbnd; ++bone)
+            {
+                const BND& binding = globset.abnd[bone];
+                const float* matrix = glm::value_ptr(binding.dmatOrig);
+                for (int component = 0; component < 16; ++component)
+                    AppendFloat(binaryBuffer, matrix[component]);
+            }
+            const int inverseBindView = static_cast<int>(bufferViews.size());
+            bufferViews.push_back({{"buffer", 0}, {"byteOffset", inverseBindOffset},
+                {"byteLength", globset.cbnd * sizeof(glm::mat4)}});
+            const int inverseBindAccessor = static_cast<int>(accessors.size());
+            accessors.push_back({{"bufferView", inverseBindView}, {"componentType", 5126},
+                {"count", globset.cbnd}, {"type", "MAT4"}});
+
+            json primitives = json::array();
+            for (const GLOB& glob : globset.aglob)
+            {
+                for (const SUBGLOB& sub : glob.asubglob)
+                {
+                    if (sub.cibnd <= 0 || sub.vertices.empty() || sub.indices.empty() ||
+                        !FValidExportIndices(sub) || !FValidExportVertices(sub))
+                        continue;
+
+                    bool validSkin = true;
+                    for (const VERTICE& vertex : sub.vertices)
+                        for (int influence = 0; influence < 4; ++influence)
+                            if (vertex.boneWeights[influence] != 0.0f &&
+                                vertex.boneIndices[influence] >= static_cast<uint32_t>(globset.cbnd))
+                                validSkin = false;
+                    if (!validSkin)
+                    {
+                        ReportRuntimeError("Export",
+                            "Skipping skeletal submesh because a weighted bone index is out of range");
+                        continue;
+                    }
+
+                    auto AddFloatAttribute = [&](const char* type,
+                        auto writeVertex) -> int
+                    {
+                        AlignTo4(binaryBuffer);
+                        const size_t offset = binaryBuffer.size();
+                        for (const VERTICE& vertex : sub.vertices)
+                            writeVertex(vertex);
+                        const int view = static_cast<int>(bufferViews.size());
+                        bufferViews.push_back({{"buffer", 0}, {"byteOffset", offset},
+                            {"byteLength", binaryBuffer.size() - offset}, {"target", 34962}});
+                        const int accessor = static_cast<int>(accessors.size());
+                        accessors.push_back({{"bufferView", view}, {"componentType", 5126},
+                            {"count", sub.vertices.size()}, {"type", type}});
+                        return accessor;
+                    };
+
+                    glm::vec3 minPosition((std::numeric_limits<float>::max)());
+                    glm::vec3 maxPosition((std::numeric_limits<float>::lowest)());
+                    const int positionAccessor = AddFloatAttribute("VEC3", [&](const VERTICE& v)
+                    {
+                        minPosition = glm::min(minPosition, v.pos);
+                        maxPosition = glm::max(maxPosition, v.pos);
+                        AppendFloat(binaryBuffer, v.pos.x); AppendFloat(binaryBuffer, v.pos.y);
+                        AppendFloat(binaryBuffer, v.pos.z);
+                    });
+                    accessors[positionAccessor]["min"] = {minPosition.x, minPosition.y, minPosition.z};
+                    accessors[positionAccessor]["max"] = {maxPosition.x, maxPosition.y, maxPosition.z};
+
+                    const int normalAccessor = AddFloatAttribute("VEC3", [&](const VERTICE& v)
+                    {
+                        AppendFloat(binaryBuffer, v.normal.x); AppendFloat(binaryBuffer, v.normal.y);
+                        AppendFloat(binaryBuffer, v.normal.z);
+                    });
+                    const int uvAccessor = AddFloatAttribute("VEC2", [&](const VERTICE& v)
+                    {
+                        AppendFloat(binaryBuffer, v.uv.x); AppendFloat(binaryBuffer, v.uv.y);
+                    });
+                    const int weightAccessor = AddFloatAttribute("VEC4", [&](const VERTICE& v)
+                    {
+                        glm::vec4 weights = v.boneWeights;
+                        const float total = weights.x + weights.y + weights.z + weights.w;
+                        if (total > 0.000001f)
+                            weights /= total;
+                        AppendFloat(binaryBuffer, weights.x); AppendFloat(binaryBuffer, weights.y);
+                        AppendFloat(binaryBuffer, weights.z); AppendFloat(binaryBuffer, weights.w);
+                    });
+
+                    AlignTo4(binaryBuffer);
+                    const size_t jointOffset = binaryBuffer.size();
+                    for (const VERTICE& vertex : sub.vertices)
+                        for (int influence = 0; influence < 4; ++influence)
+                        {
+                            const uint16_t joint = vertex.boneIndices[influence] <
+                                static_cast<uint32_t>(globset.cbnd)
+                                ? static_cast<uint16_t>(vertex.boneIndices[influence]) : 0;
+                            binaryBuffer.push_back(static_cast<uint8_t>(joint & 0xff));
+                            binaryBuffer.push_back(static_cast<uint8_t>(joint >> 8));
+                        }
+                    const int jointView = static_cast<int>(bufferViews.size());
+                    bufferViews.push_back({{"buffer", 0}, {"byteOffset", jointOffset},
+                        {"byteLength", binaryBuffer.size() - jointOffset}, {"target", 34962}});
+                    const int jointAccessor = static_cast<int>(accessors.size());
+                    accessors.push_back({{"bufferView", jointView}, {"componentType", 5123},
+                        {"count", sub.vertices.size()}, {"type", "VEC4"}});
+
+                    AlignTo4(binaryBuffer);
+                    const size_t indexOffset = binaryBuffer.size();
+                    for (const INDICE& triangle : sub.indices)
+                    {
+                        AppendUInt32(binaryBuffer, triangle.v1);
+                        AppendUInt32(binaryBuffer, triangle.v2);
+                        AppendUInt32(binaryBuffer, triangle.v3);
+                    }
+                    const int indexView = static_cast<int>(bufferViews.size());
+                    bufferViews.push_back({{"buffer", 0}, {"byteOffset", indexOffset},
+                        {"byteLength", binaryBuffer.size() - indexOffset}, {"target", 34963}});
+                    const int indexAccessor = static_cast<int>(accessors.size());
+                    accessors.push_back({{"bufferView", indexView}, {"componentType", 5125},
+                        {"count", sub.indices.size() * 3}, {"type", "SCALAR"}});
+
+                    int materialIndex = 0;
+                    if (sub.shdID >= 0 && sub.shdID < static_cast<int>(g_ashd.size()))
+                    {
+                        SHD& shd = g_ashd[sub.shdID];
+                        const uint64_t materialKey = ExportMaterialKey(
+                            sub.shdID, ExportTextureFrame(sub, shd));
+                        const auto material = materialIndices.find(materialKey);
+                        if (material != materialIndices.end())
+                            materialIndex = material->second;
+                    }
+
+                    primitives.push_back({{"attributes", {{"POSITION", positionAccessor},
+                        {"NORMAL", normalAccessor}, {"TEXCOORD_0", uvAccessor},
+                        {"JOINTS_0", jointAccessor}, {"WEIGHTS_0", weightAccessor}}},
+                        {"indices", indexAccessor}, {"material", materialIndex}, {"mode", 4}});
+                }
+            }
+
+            for (const GLOB& glob : globset.aglob)
+            {
+                json celPrimitive = BuildCelBorderPrimitive(glob, glm::mat4(1.0f), true,
+                    globset.cbnd, celBorderMaterialIndex, binaryBuffer, bufferViews, accessors);
+                if (!celPrimitive.is_null())
+                    primitives.push_back(std::move(celPrimitive));
+            }
+
+            if (primitives.empty())
+                continue;
+
+            const int skinIndex = static_cast<int>(skins.size());
+            skins.push_back({{"name", "Skin_" + std::to_string(aloIndex)},
+                {"joints", jointNodes}, {"skeleton", rigRootNode},
+                {"inverseBindMatrices", inverseBindAccessor}});
+            const int meshIndex = static_cast<int>(meshes.size());
+            meshes.push_back({{"name", alo->pchzName != nullptr ? alo->pchzName :
+                "SkeletalMesh_" + std::to_string(aloIndex)}, {"primitives", primitives}});
+
+            const int meshNode = static_cast<int>(nodes.size());
+            nodes.push_back({{"name", "Skinned_" + std::to_string(aloIndex)},
+                {"mesh", meshIndex}, {"skin", skinIndex}, {"matrix", ExportMatrix(meshBind)}});
+            nodes[rigRootNode]["children"].push_back(meshNode);
+
+            struct AnimatedBoneTarget
+            {
+                ALO* alo = nullptr;
+                int node = -1;
+            };
+            std::unordered_map<int, AnimatedBoneTarget> animatedBones;
+            for (int bone = 0; bone < globset.cbnd; ++bone)
+            {
+                ALO* boneAlo = globset.abnd[bone].palo;
+                if (boneAlo != nullptr)
+                    animatedBones[static_cast<int>(boneAlo->oid)] =
+                        AnimatedBoneTarget{boneAlo, jointNodes[bone]};
+            }
+
+            for (const std::shared_ptr<LO>& object : allWorldObjs)
+            {
+                if (!object || object->pvtlo == nullptr || object->pvtlo->cid != CID_ASEG)
+                    continue;
+
+                ASEG* aseg = static_cast<ASEG*>(object.get());
+                if (!(aseg->tMax > 0.0f) || !std::isfinite(aseg->tMax))
+                    continue;
+
+                bool hasMatchingChannel = false;
+                for (const CHN& channel : aseg->achn)
+                    if (animatedBones.find(static_cast<int>(channel.oid)) != animatedBones.end() &&
+                        (channel.pacp || channel.pacr || channel.pacs))
+                        hasMatchingChannel = true;
+                if (!hasMatchingChannel)
+                    continue;
+
+                const int frameCount = std::max(2,
+                    static_cast<int>(std::ceil(aseg->tMax * 60.0f)) + 1);
+                std::vector<float> times(frameCount);
+                for (int frame = 0; frame < frameCount; ++frame)
+                    times[frame] = std::min(frame / 60.0f, aseg->tMax);
+
+                AlignTo4(binaryBuffer);
+                const size_t timeOffset = binaryBuffer.size();
+                for (float time : times)
+                    AppendFloat(binaryBuffer, time);
+                const int timeView = static_cast<int>(bufferViews.size());
+                bufferViews.push_back({{"buffer", 0}, {"byteOffset", timeOffset},
+                    {"byteLength", binaryBuffer.size() - timeOffset}});
+                const int timeAccessor = static_cast<int>(accessors.size());
+                accessors.push_back({{"bufferView", timeView}, {"componentType", 5126},
+                    {"count", times.size()}, {"type", "SCALAR"},
+                    {"min", {0.0f}}, {"max", {aseg->tMax}}});
+
+                json samplers = json::array();
+                json channels = json::array();
+                auto AddAnimationOutput = [&](const char* path, int node,
+                    int components, const char* type, const std::vector<float>& values)
+                {
+                    AlignTo4(binaryBuffer);
+                    const size_t valueOffset = binaryBuffer.size();
+                    for (float value : values)
+                        AppendFloat(binaryBuffer, value);
+                    const int valueView = static_cast<int>(bufferViews.size());
+                    bufferViews.push_back({{"buffer", 0}, {"byteOffset", valueOffset},
+                        {"byteLength", binaryBuffer.size() - valueOffset}});
+                    const int valueAccessor = static_cast<int>(accessors.size());
+                    accessors.push_back({{"bufferView", valueView}, {"componentType", 5126},
+                        {"count", values.size() / components}, {"type", type}});
+                    const int sampler = static_cast<int>(samplers.size());
+                    samplers.push_back({{"input", timeAccessor}, {"output", valueAccessor},
+                        {"interpolation", "LINEAR"}});
+                    channels.push_back({{"sampler", sampler},
+                        {"target", {{"node", node}, {"path", path}}}});
+                };
+
+                for (const CHN& channel : aseg->achn)
+                {
+                    const auto target = animatedBones.find(static_cast<int>(channel.oid));
+                    if (target == animatedBones.end())
+                        continue;
+                    ALO* targetAlo = target->second.alo;
+                    const int targetNode = target->second.node;
+
+                    if (channel.pacp && channel.pacp->pvtacp != nullptr &&
+                        channel.pacp->pvtacp->pfnEvaluateAcp != nullptr)
+                    {
+                        std::vector<float> values;
+                        values.reserve(times.size() * 3);
+                        bool valid = true;
+                        for (float time : times)
+                        {
+                            glm::vec3 position(0.0f);
+                            channel.pacp->pvtacp->pfnEvaluateAcp(channel.pacp.get(),
+                                targetAlo, time, 1.0f, static_cast<GRFEVAL>(0), &position, nullptr);
+                            valid &= std::isfinite(position.x) && std::isfinite(position.y) &&
+                                std::isfinite(position.z);
+                            values.insert(values.end(), {position.x, position.y, position.z});
+                        }
+                        if (valid)
+                            AddAnimationOutput("translation", targetNode, 3, "VEC3", values);
+                    }
+
+                    if (channel.pacr && channel.pacr->pvtacr != nullptr &&
+                        channel.pacr->pvtacr->pfnEvaluateAcr != nullptr)
+                    {
+                        std::vector<float> values;
+                        values.reserve(times.size() * 4);
+                        bool valid = true;
+                        glm::quat previous(1.0f, 0.0f, 0.0f, 0.0f);
+                        for (size_t frame = 0; frame < times.size(); ++frame)
+                        {
+                            glm::mat3 rotation(1.0f);
+                            channel.pacr->pvtacr->pfnEvaluateAcr(channel.pacr.get(),
+                                targetAlo, times[frame], 1.0f, static_cast<GRFEVAL>(0),
+                                &rotation, nullptr);
+                            glm::quat value = glm::normalize(glm::quat_cast(rotation));
+                            if (frame != 0 && glm::dot(previous, value) < 0.0f)
+                                value = -value;
+                            previous = value;
+                            valid &= std::isfinite(value.x) && std::isfinite(value.y) &&
+                                std::isfinite(value.z) && std::isfinite(value.w);
+                            values.insert(values.end(), {value.x, value.y, value.z, value.w});
+                        }
+                        if (valid)
+                            AddAnimationOutput("rotation", targetNode, 4, "VEC4", values);
+                    }
+
+                    if (channel.pacs && channel.pacs->pvtacs != nullptr &&
+                        channel.pacs->pvtacs->pfnEvaluateAcs != nullptr)
+                    {
+                        std::vector<float> values;
+                        values.reserve(times.size() * 3);
+                        bool valid = true;
+                        for (float time : times)
+                        {
+                            glm::mat3 scaleMatrix(1.0f);
+                            channel.pacs->pvtacs->pfnEvaluateAcs(channel.pacs.get(),
+                                targetAlo, time, static_cast<GRFEVAL>(0), &scaleMatrix);
+                            const glm::vec3 scale(scaleMatrix[0][0], scaleMatrix[1][1],
+                                scaleMatrix[2][2]);
+                            valid &= std::isfinite(scale.x) && std::isfinite(scale.y) &&
+                                std::isfinite(scale.z);
+                            values.insert(values.end(), {scale.x, scale.y, scale.z});
+                        }
+                        if (valid)
+                            AddAnimationOutput("scale", targetNode, 3, "VEC3", values);
+                    }
+                }
+
+                if (!channels.empty())
+                {
+                    std::string animationName = aseg->pchzName != nullptr
+                        ? aseg->pchzName : "Animation_" + std::to_string(aseg->oid);
+                    animationName += "_Rig_" + std::to_string(aloIndex);
+                    animations.push_back({{"name", animationName}, {"samplers", samplers},
+                        {"channels", channels},
+                        {"extras", {{"repeatMode", static_cast<int>(aseg->segrpt)}}}});
+                }
+            }
+            ++exportedModels;
+        }
+
+        return exportedModels;
+}
+
+bool ExportSw()
+{
+    if (g_psw == nullptr)
+    {
+        ReportRuntimeError("Export", "Cannot export a map without a loaded world");
+        return false;
+    }
+    if (!EnsureExportLevelName())
+        return false;
+    try
+    {
+    std::error_code directoryError;
+    std::filesystem::create_directories(levelName, directoryError);
+    if (directoryError)
+    {
+        ReportRuntimeError("Export", "Could not create map export directory '%s': %s",
+            levelName.c_str(), directoryError.message().c_str());
+        return false;
+    }
+
+    // One buffer for everything (geo + textures)
+    std::vector<uint8_t> binaryBuffer;
+
+    // glTF JSON pieces
+    json gltf;
+    std::vector<json> bufferViews;
+    std::vector<json> accessors;
+    std::vector<json> materials;
+    std::vector<json> images;
+    std::vector<json> textures;
+    std::vector<json> meshes;
+    std::vector<json> nodes;
+    std::vector<json> skins;
+    std::vector<json> animations;
+    std::vector<int>  sceneNodes;
+
+    // Asset header
+    gltf["asset"] = {
+        {"version", "2.0"},
+        {"generator", "ExportSwGLB"}
+    };
+
+    // Default material (no texture)
+    int defaultMaterialIndex = 0;
+    materials.push_back({
+        {"name", "DefaultMaterial"},
+        {"pbrMetallicRoughness", {
+            {"baseColorFactor", {1.0, 1.0, 1.0, 1.0}},
+            {"metallicFactor", 0.0},
+            {"roughnessFactor", 1.0}
+        }}
+        });
+
+    // Cache: shdID material index (so we reuse images/textures)
+    std::unordered_map<uint64_t, int> shdToMaterialIndex;
+    // 0 = opaque, 1 = alpha-tested cutout, 2 = blended transparency.
+    std::unordered_map<int, int> shdAlphaMode;
+    for (ALO* alo : allSWAloObjs)
+    {
+        if (alo == nullptr)
+            continue;
+        for (const GLOB& glob : alo->globset.aglob)
+        {
+            for (const SUBGLOB& sub : glob.asubglob)
+            {
+                if (sub.shdID < 0 || sub.shdID >= static_cast<int>(g_ashd.size()))
+                    continue;
+                int mode = 0;
+                if (glob.rp == RP_Cutout || glob.rp == RP_CutoutAfterProjVolume)
+                    mode = 1;
+                if (glob.rp == RP_Translucent ||
+                    (glob.rp == RP_Background && g_ashd[sub.shdID].grfshd == 2))
+                    mode = 2;
+                shdAlphaMode[sub.shdID] = std::max(shdAlphaMode[sub.shdID], mode);
+            }
+        }
+    }
+
+    uint32_t modelNum = 0;
+    glm::mat4 model(1.0f);
+
+    // change to y up
+    glm::mat4 zUpToYUp = glm::rotate(glm::mat4(1.0f), glm::radians(-90.0f), glm::vec3(1, 0, 0));
+
+    // ===================== GEOMETRY & TEXTURES -> binaryBuffer =====================
+    for (int i = 0; i < (int)allSWAloObjs.size(); ++i)
+    {
+        auto* alo = allSWAloObjs[i];
+        if (!alo) continue;
+
+        // One GLOBSET per ALO
+        int globsetNodeIndex = (int)nodes.size();
+        {
+            json globsetNode = {
+                {"name", "GLOBSET_" + std::to_string(i)},
+                {"children", json::array()}
+            };
+            nodes.push_back(globsetNode);
+            sceneNodes.push_back(globsetNodeIndex);
+        }
+
+        for (int a = 0; a < (int)alo->globset.aglob.size(); ++a)
+        {
+            auto& glob = alo->globset.aglob[a];
+
+            // Game world matrix (same as OBJ)
+            if (glob.pdmat == nullptr)
+            {
+                model = alo->xf.matWorld;
+                model[3][0] = alo->xf.posWorld.x;
+                model[3][1] = alo->xf.posWorld.y;
+                model[3][2] = alo->xf.posWorld.z;
+            }
+            else
+            {
+                model = alo->xf.matWorld;
+                model[3][0] = alo->xf.posWorld.x;
+                model[3][1] = alo->xf.posWorld.y;
+                model[3][2] = alo->xf.posWorld.z;
+                model = model * *glob.pdmat;
+            }
+
+            glm::mat4 finalModel = zUpToYUp * model;
+            if (!FFiniteExportMatrix(finalModel))
+            {
+                ReportRuntimeError("Export",
+                    "Skipping map glob %d/%d because its transform is non-finite", i, a);
+                continue;
+            }
+            const glm::mat3 linearModel(finalModel);
+            const float modelDeterminant = glm::determinant(linearModel);
+            const glm::mat3 normalMat = std::fabs(modelDeterminant) > 1.0e-12f
+                ? glm::transpose(glm::inverse(linearModel)) : linearModel;
+
+            // GLOB node under this ALO's GLOBSET
+            int globNodeIndex = (int)nodes.size();
+            {
+                json globNode = {
+                    {"name", "GLOB_" + std::to_string(i) + "_" + std::to_string(a)},
+                    {"children", json::array()}
+                };
+                nodes.push_back(globNode);
+                nodes[globsetNodeIndex]["children"].push_back(globNodeIndex);
+            }
+
+            for (int b = 0; b < (int)glob.asubglob.size(); ++b)
+            {
+                auto& sub = glob.asubglob[b];
+                if (sub.cibnd > 0)
+                    continue;
+                const size_t vertCount = sub.vertices.size();
+                const size_t triCount = sub.indices.size();
+
+                if (vertCount == 0 || triCount == 0)
+                {
+                    ++modelNum;
+                    continue;
+                }
+                if (!FValidExportIndices(sub))
+                {
+                    ReportRuntimeError("Export",
+                        "Skipping map mesh %d/%d/%d because an index exceeds its %zu vertices",
+                        i, a, b, vertCount);
+                    ++modelNum;
+                    continue;
+                }
+                if (!FValidExportVertices(sub))
+                {
+                    ReportRuntimeError("Export",
+                        "Skipping map mesh %d/%d/%d because it contains non-finite vertex data",
+                        i, a, b);
+                    ++modelNum;
+                    continue;
+                }
+
+                std::string baseName =
+                    "SUBGLOB_" + std::to_string(i) + "_" +
+                    std::to_string(a) + "_" +
+                    std::to_string(b);
+
+                // ========= MATERIAL / EMBEDDED TEXTURE for this subglob =========
+                int materialIndex = defaultMaterialIndex;
+
+                int shdID = sub.shdID;
+                if (shdID >= 0 && shdID < (int)g_ashd.size())
+                {
+                    SHD& shd = g_ashd[shdID];
+                    const int textureFrame = ExportTextureFrame(sub, shd);
+                    const uint64_t materialKey = ExportMaterialKey(shdID, textureFrame);
+                    auto it = shdToMaterialIndex.find(materialKey);
+                    if (it == shdToMaterialIndex.end())
+                    {
+                        const int alphaMode = shdAlphaMode[shdID];
+
+                        BMP* bmp = nullptr;
+                        if (!shd.atex.empty() &&
+                            textureFrame < static_cast<int>(shd.atex[0].abmp.size()))
+                            bmp = shd.atex[0].abmp[textureFrame];
+
+                        std::vector<byte> rgbaReadback;
+                        const byte* rgbaPixels = nullptr;
+                        if (GetBmpBaseRgba8(bmp, rgbaReadback, rgbaPixels))
+                        {
+                            // ---- Encode BMP as PNG into memory ----
+                            PngBuffer png;
+
+                            stbi_write_png_to_func(
+                                PngWriteCallback,
+                                &png,
+                                bmp->bmpWidth,
+                                bmp->bmpHeight,
+                                4,
+                                rgbaPixels,
+                                bmp->bmpWidth * 4
+                            );
+
+                            if (png.data.empty())
+                            {
+                                materialIndex = defaultMaterialIndex;
+                                shdToMaterialIndex[materialKey] = materialIndex;
+                            }
+                            else
+                            {
+                            // ---- Append PNG bytes to binaryBuffer ----
+                            AlignTo4(binaryBuffer);
+                            size_t pngByteOffset = binaryBuffer.size();
+                            binaryBuffer.insert(binaryBuffer.end(),
+                                png.data.begin(), png.data.end());
+                            size_t pngByteLength = png.data.size();
+
+                            int pngBVIndex = (int)bufferViews.size();
+                            bufferViews.push_back({
+                                {"buffer", 0},
+                                {"byteOffset", pngByteOffset},
+                                {"byteLength", pngByteLength}
+                                });
+
+                            int imageIndex = (int)images.size();
+                            images.push_back({
+                                {"bufferView", pngBVIndex},
+                                {"mimeType", "image/png"}
+                                });
+
+                            int textureIndex = (int)textures.size();
+                            textures.push_back({
+                                {"source", imageIndex}
+                                });
+
+                            json mat = {
+                                {"name", "Material_Shader_" + std::to_string(shdID) +
+                                         "_Frame_" + std::to_string(textureFrame) +
+                                         (alphaMode == 2 ? "_Alpha" :
+                                          alphaMode == 1 ? "_Cutout" : "_Opaque")},
+                                {"pbrMetallicRoughness", {
+                                    {"baseColorTexture", { {"index", textureIndex} }},
+                                    {"metallicFactor", 0.0},
+                                    {"roughnessFactor", 1.0}
+                                }}
+                            };
+
+                            // Alpha mode selection
+                            if (alphaMode == 2)
+                            {
+                                mat["alphaMode"] = "BLEND";
+                                mat["doubleSided"] = true;
+                            }
+                            else if (alphaMode == 1)
+                            {
+                                mat["alphaMode"] = "MASK";
+                                mat["alphaCutoff"] = 0.5;
+                                mat["doubleSided"] = true;
+                            }
+                            else
+                            {
+                                mat["alphaMode"] = "OPAQUE";
+                            }
+
+                            materialIndex = (int)materials.size();
+                            materials.push_back(mat);
+                            shdToMaterialIndex[materialKey] = materialIndex;
+                            }
+                        }
+                        else
+                        {
+                            materialIndex = defaultMaterialIndex;
+                            shdToMaterialIndex[materialKey] = materialIndex;
+                        }
+                    }
+                    else
+                    {
+                        materialIndex = it->second;
+                    }
+                }
+                else
+                {
+                    materialIndex = defaultMaterialIndex;
+                }
+
+                // ========= POSITIONS =========
+                AlignTo4(binaryBuffer);
+                size_t posByteOffset = binaryBuffer.size();
+                glm::vec3 positionMin((std::numeric_limits<float>::max)());
+                glm::vec3 positionMax((std::numeric_limits<float>::lowest)());
+
+                for (auto& v : sub.vertices)
+                {
+                    glm::vec4 vt = finalModel * glm::vec4(v.pos, 1.0f);
+                    glm::vec3 p = glm::vec3(vt);
+                    positionMin = glm::min(positionMin, p);
+                    positionMax = glm::max(positionMax, p);
+
+                    AppendFloat(binaryBuffer, p.x);
+                    AppendFloat(binaryBuffer, p.y);
+                    AppendFloat(binaryBuffer, p.z);
+                }
+                size_t posByteLength = binaryBuffer.size() - posByteOffset;
+
+                int posBVIndex = (int)bufferViews.size();
+                bufferViews.push_back({
+                    {"buffer", 0},
+                    {"byteOffset", posByteOffset},
+                    {"byteLength", posByteLength},
+                    {"target", 34962} // ARRAY_BUFFER
+                    });
+
+                int posAccessorIndex = (int)accessors.size();
+                accessors.push_back({
+                    {"bufferView", posBVIndex},
+                    {"byteOffset", 0},
+                    {"componentType", 5126}, // FLOAT
+                    {"count", vertCount},
+                    {"type", "VEC3"},
+                    {"min", {positionMin.x, positionMin.y, positionMin.z}},
+                    {"max", {positionMax.x, positionMax.y, positionMax.z}}
+                    });
+
+                // ========= NORMALS =========
+                AlignTo4(binaryBuffer);
+                size_t nrmByteOffset = binaryBuffer.size();
+
+                for (auto& v : sub.vertices)
+                {
+                    const glm::vec3 normal = TransformExportNormal(normalMat, v.normal);
+                    AppendFloat(binaryBuffer, normal.x);
+                    AppendFloat(binaryBuffer, normal.y);
+                    AppendFloat(binaryBuffer, normal.z);
+                }
+                size_t nrmByteLength = binaryBuffer.size() - nrmByteOffset;
+
+                int nrmBVIndex = (int)bufferViews.size();
+                bufferViews.push_back({
+                    {"buffer", 0},
+                    {"byteOffset", nrmByteOffset},
+                    {"byteLength", nrmByteLength},
+                    {"target", 34962}
+                    });
+
+                int nrmAccessorIndex = (int)accessors.size();
+                accessors.push_back({
+                    {"bufferView", nrmBVIndex},
+                    {"byteOffset", 0},
+                    {"componentType", 5126}, // FLOAT
+                    {"count", vertCount},
+                    {"type", "VEC3"}
+                    });
+
+                // ========= COLORS (COLOR_0) =========
+                AlignTo4(binaryBuffer);
+                size_t colByteOffset = binaryBuffer.size();
+
+                for (auto& v : sub.vertices)
+                {
+                    AppendFloat(binaryBuffer, v.color.r);
+                    AppendFloat(binaryBuffer, v.color.g);
+                    AppendFloat(binaryBuffer, v.color.b);
+                    AppendFloat(binaryBuffer, v.color.a);
+                }
+                size_t colByteLength = binaryBuffer.size() - colByteOffset;
+
+                int colBVIndex = (int)bufferViews.size();
+                bufferViews.push_back({
+                    {"buffer", 0},
+                    {"byteOffset", colByteOffset},
+                    {"byteLength", colByteLength},
+                    {"target", 34962}
+                    });
+
+                int colAccessorIndex = (int)accessors.size();
+                accessors.push_back({
+                    {"bufferView", colBVIndex},
+                    {"byteOffset", 0},
+                    {"componentType", 5126}, // FLOAT
+                    {"count", vertCount},
+                    {"type", "VEC4"}
+                    });
+
+                // ========= UVs (TEXCOORD_0) =========
+                AlignTo4(binaryBuffer);
+                size_t uvByteOffset = binaryBuffer.size();
+
+                for (auto& v : sub.vertices)
+                {
+                    AppendFloat(binaryBuffer, v.uv.x);
+                    AppendFloat(binaryBuffer, v.uv.y);
+                }
+                size_t uvByteLength = binaryBuffer.size() - uvByteOffset;
+
+                int uvBVIndex = (int)bufferViews.size();
+                bufferViews.push_back({
+                    {"buffer", 0},
+                    {"byteOffset", uvByteOffset},
+                    {"byteLength", uvByteLength},
+                    {"target", 34962}
+                    });
+
+                int uvAccessorIndex = (int)accessors.size();
+                accessors.push_back({
+                    {"bufferView", uvBVIndex},
+                    {"byteOffset", 0},
+                    {"componentType", 5126}, // FLOAT
+                    {"count", vertCount},
+                    {"type", "VEC2"}
+                    });
+
+                // ========= INDICES =========
+                AlignTo4(binaryBuffer);
+                size_t idxByteOffset = binaryBuffer.size();
+                uint32_t indexCount = (uint32_t)(triCount * 3);
+
+                for (auto& tri : sub.indices)
+                {
+                    AppendUInt32(binaryBuffer, (uint32_t)tri.v1);
+                    AppendUInt32(binaryBuffer, (uint32_t)tri.v2);
+                    AppendUInt32(binaryBuffer, (uint32_t)tri.v3);
+                }
+                size_t idxByteLength = binaryBuffer.size() - idxByteOffset;
+
+                int idxBVIndex = (int)bufferViews.size();
+                bufferViews.push_back({
+                    {"buffer", 0},
+                    {"byteOffset", idxByteOffset},
+                    {"byteLength", idxByteLength},
+                    {"target", 34963} // ELEMENT_ARRAY_BUFFER
+                    });
+
+                int idxAccessorIndex = (int)accessors.size();
+                accessors.push_back({
+                    {"bufferView", idxBVIndex},
+                    {"byteOffset", 0},
+                    {"componentType", 5125}, // UNSIGNED_INT
+                    {"count", indexCount},
+                    {"type", "SCALAR"}
+                    });
+
+                // ========= Mesh primitive & mesh =========
+                json attributes;
+                attributes["POSITION"] = posAccessorIndex;
+                attributes["NORMAL"] = nrmAccessorIndex;
+                attributes["COLOR_0"] = colAccessorIndex;
+                attributes["TEXCOORD_0"] = uvAccessorIndex;
+
+                json primitive = {
+                    {"attributes", attributes},
+                    {"indices", idxAccessorIndex},
+                    {"material", materialIndex},
+                    {"mode", 4} // TRIANGLES
+                };
+
+                json mesh = {
+                    {"name", baseName},
+                    {"primitives", json::array({ primitive })}
+                };
+
+                int meshIndex = (int)meshes.size();
+                meshes.push_back(mesh);
+
+                // Node for this mesh (SUBGLOB) under this GLOB
+                json node = {
+                    {"mesh", meshIndex},
+                    {"name", baseName}
+                };
+                int nodeIndex = (int)nodes.size();
+                nodes.push_back(node);
+                nodes[globNodeIndex]["children"].push_back(nodeIndex);
+
+                ++modelNum;
+            }
+        }
+    }
+
+    const int celBorderMaterialIndex = static_cast<int>(materials.size());
+    materials.push_back({{"name", "ProjectCane_CelBorder"},
+        {"pbrMetallicRoughness", {{"baseColorFactor", {0.0, 0.0, 0.0, 1.0}},
+            {"metallicFactor", 0.0}, {"roughnessFactor", 1.0}}}});
+    const int staticCelBorderCount = AppendStaticCelBorders(binaryBuffer, bufferViews,
+        accessors, meshes, nodes, sceneNodes, celBorderMaterialIndex);
+    const int skeletalModelCount = AppendSkeletalMeshes(binaryBuffer, bufferViews,
+        accessors, meshes, nodes, skins, animations, sceneNodes, shdToMaterialIndex,
+        celBorderMaterialIndex);
+    if (skeletalModelCount > 0)
+        std::cout << "Included " << skeletalModelCount << " skeletal model(s) in the map GLB\n";
+    if (staticCelBorderCount > 0)
+        std::cout << "Included " << staticCelBorderCount << " static cel-border set(s)\n";
+
+    // ===================== Build BIN chunk (padded) =====================
+    std::vector<uint8_t> binChunk = binaryBuffer;
+    while (binChunk.size() % 4 != 0)
+        binChunk.push_back(0x00);
+    if (binChunk.size() > (std::numeric_limits<uint32_t>::max)())
+    {
+        ReportRuntimeError("Export", "Map export exceeds the GLB 4 GiB size limit");
+        return false;
+    }
+    uint32_t binChunkLength = static_cast<uint32_t>(binChunk.size());
+
+    // ===================== Hook into glTF JSON =====================
+    gltf["buffers"] = json::array({
+        json{
+            {"byteLength", binChunkLength}   // must match BIN chunk length
+        }
+        });
+    gltf["bufferViews"] = bufferViews;
+    gltf["accessors"] = accessors;
+    gltf["materials"] = materials;
+    if (!images.empty())   gltf["images"] = images;
+    if (!textures.empty()) gltf["textures"] = textures;
+    gltf["meshes"] = meshes;
+    if (!skins.empty()) gltf["skins"] = skins;
+    if (!animations.empty()) gltf["animations"] = animations;
+
+    // Add lights (may modify nodes + sceneNodes + gltf.extensions)
+    ExportLights(gltf, nodes, sceneNodes, zUpToYUp);
+
+    // Finalize nodes & scene
+    gltf["nodes"] = nodes;
+
+    json scene = { {"nodes", sceneNodes}, {"name", "Scene"} };
+    gltf["scenes"] = json::array({ scene });
+    gltf["scene"] = 0;
+
+    // ===================== Build JSON chunk (padded) =====================
+    std::string jsonStr = gltf.dump(); // compact
+    std::vector<uint8_t> jsonChunk(jsonStr.begin(), jsonStr.end());
+    while (jsonChunk.size() % 4 != 0)
+        jsonChunk.push_back(0x20); // spaces
+    if (jsonChunk.size() > (std::numeric_limits<uint32_t>::max)())
+    {
+        ReportRuntimeError("Export", "Map JSON exceeds the GLB 4 GiB size limit");
+        return false;
+    }
+    uint32_t jsonChunkLength = static_cast<uint32_t>(jsonChunk.size());
+
+    // ===================== GLB header & chunks =====================
+    uint32_t magic = 0x46546C67; // "glTF"
+    uint32_t version = 2;
+    const uint64_t totalLength64 = 12ull + 8ull + jsonChunkLength + 8ull + binChunkLength;
+    if (totalLength64 > (std::numeric_limits<uint32_t>::max)())
+    {
+        ReportRuntimeError("Export", "Map export exceeds the GLB 4 GiB size limit");
+        return false;
+    }
+    uint32_t totalLength = static_cast<uint32_t>(totalLength64);
+
+    std::string glbPath = levelName + "/" + levelName + ".glb";
+    std::ofstream out(glbPath, std::ios::binary | std::ios::trunc);
+    if (!out)
+    {
+        ReportRuntimeError("Export", "Could not open map export '%s'", glbPath.c_str());
+        return false;
+    }
+
+    auto WriteU32 = [&](uint32_t v) {
+        out.write(reinterpret_cast<const char*>(&v), 4);
+        };
+
+    // GLB header
+    WriteU32(magic);
+    WriteU32(version);
+    WriteU32(totalLength);
+
+    // JSON chunk header + data
+    WriteU32(jsonChunkLength);
+    WriteU32(0x4E4F534A); // "JSON"
+    out.write(reinterpret_cast<const char*>(jsonChunk.data()), jsonChunk.size());
+
+    // BIN chunk header + data
+    WriteU32(binChunkLength);
+    WriteU32(0x004E4942); // "BIN\0"
+    out.write(reinterpret_cast<const char*>(binChunk.data()), binChunk.size());
+
+    out.close();
+    if (!out)
+    {
+        ReportRuntimeError("Export", "Failed while writing map export '%s'", glbPath.c_str());
+        return false;
+    }
+    return true;
+    }
+    catch (const std::exception& error)
+    {
+        ReportRuntimeError("Export", "Map export failed: %s", error.what());
+        return false;
+    }
+}
+
+inline bool ComputeBarycentric(const glm::vec2& p, const glm::vec2& a, const glm::vec2& b, const glm::vec2& c, float& w0, float& w1, float& w2)
+{
+    glm::vec2 v0 = b - a;
+    glm::vec2 v1 = c - a;
+    glm::vec2 v2 = p - a;
+
+    float d00 = glm::dot(v0, v0);
+    float d01 = glm::dot(v0, v1);
+    float d11 = glm::dot(v1, v1);
+    float d20 = glm::dot(v2, v0);
+    float d21 = glm::dot(v2, v1);
+
+    float denom = d00 * d11 - d01 * d01;
+    if (std::fabs(denom) < 1e-8f)
+        return false;
+
+    float v = (d11 * d20 - d01 * d21) / denom;
+    float w = (d00 * d21 - d01 * d20) / denom;
+    float u = 1.0f - v - w;
+
+    w0 = u; w1 = v; w2 = w;
+    const float eps = -1e-4f;
+    return (u >= eps && v >= eps && w >= eps);
+}
+
+inline glm::vec4 SampleRGBA8(const std::vector<byte>& data, int w, int h, float u, float v, const glm::vec4& defaultColor)
+{
+    if (data.empty() || w <= 0 || h <= 0)
+        return defaultColor;
+
+    u = glm::clamp(u, 0.0f, 1.0f);
+    v = glm::clamp(v, 0.0f, 1.0f);
+
+    int x = (int)(u * (w - 1));
+    int y = (int)(v * (h - 1));   // NO flip here
+
+    int idx = (y * w + x) * 4;
+    if (idx < 0 || idx + 3 >= (int)data.size())
+        return defaultColor;
+
+    float r = data[idx + 0] / 255.0f;
+    float g = data[idx + 1] / 255.0f;
+    float b = data[idx + 2] / 255.0f;
+    float a = data[idx + 3] / 255.0f;
+    return glm::vec4(r, g, b, a);
+}
+
+static glm::vec4 SampleExportImage(const ExportRgbaImage& image, float u, float v,
+                                   const glm::vec4& defaultColor)
+{
+    return SampleRGBA8(image.pixels, static_cast<int>(image.width),
+        static_cast<int>(image.height), u, v, defaultColor);
+}
+
+MaterialCPU ProcessGlobLightingCPU(const glm::vec3& vertexColorRGB, float objectShadow, float objectMidtone, const glm::vec3& lightAccum)
+{
+    float dominantLight = std::max({ lightAccum.r, lightAccum.g, lightAccum.b });
+    float shadowModifier = 1.0f - dominantLight;
+    float clampedMidtone = glm::clamp(objectMidtone, 0.0f, shadowModifier);
+    float shadowContribution =
+        std::max(std::min(shadowModifier - clampedMidtone, objectShadow), 0.0f);
+    float baseIntensity = glm::dot(vertexColorRGB, glm::vec3(0.3333333f));
+
+    MaterialCPU m{};
+    m.ambient = shadowContribution * baseIntensity;
+    m.midtone = clampedMidtone * vertexColorRGB;
+    m.light = glm::min(lightAccum, glm::vec3(1.0f)) * baseIntensity;
+    return m;
+}
+
+// Evaluate ThreeWay lighting at a single point in world space
+MaterialCPU EvaluateLightingAtPointCPU(const glm::vec3& worldPos, const glm::vec3& normalWorld, const glm::vec3& vertexColorRGB, float unSelfIllum)
+{
+    // ==== InitGlobLighting() ====
+    float objectShadow = g_psw->lsmDefault.uShadow;
+    float objectMidtone = g_psw->lsmDefault.uMidtone + unSelfIllum * 0.000031f;
+    glm::vec3 lightAccum(0.0f);
+
+    // Lights in original game space (Z-up). Do NOT rotate here.
+    LIGHT* plight = g_psw->dlLight.plightFirst;
+    while (plight)
+    {
+        if (plight->lightk == LIGHTK_Direction)
+        {
+            // Match GLSL AddDirectionLight:
+            //    float NdotL = max(dot(normalWorld, dirlight.dir.xyz), 0.0);
+            //    diffuse = NdotL + NdotL^3;
+            glm::vec3 Ldir = glm::normalize(glm::vec3(plight->xf.matWorld[2]));
+            float NdotL = glm::max(glm::dot(normalWorld, Ldir), 0.0f);
+
+            float diffuse = NdotL + NdotL * NdotL * NdotL;
+
+            float shadow = glm::max(diffuse * plight->ltfn.ruShadow + plight->ltfn.duShadow, 0.0f);
+            float midtone = glm::max(diffuse * plight->ltfn.ruMidtone + plight->ltfn.duMidtone, 0.0f);
+            float highlight = glm::max(diffuse * plight->ltfn.ruHighlight + plight->ltfn.duHighlight, 0.0f);
+
+            objectShadow += shadow;
+            objectMidtone += midtone;
+            lightAccum += glm::vec3(plight->rgbaColor) * highlight;
+        }
+        else if (plight->lightk == LIGHTK_Position)
+        {
+            // Match GLSL AddPositionLight:
+            //  ndotl is *not* clamped before n + n^3
+            glm::vec3 toLight = glm::vec3(plight->xf.posWorld) - worldPos;
+            float d2 = glm::dot(toLight, toLight);
+            if (d2 > 1e-12f)
+            {
+                float invLen = glm::inversesqrt(d2);
+                glm::vec3 Lvec = toLight * invLen;
+
+                float ndotl = glm::dot(normalWorld, Lvec);
+                float diffuse = ndotl + ndotl * ndotl * ndotl;
+
+                float att = glm::clamp(plight->agFallOff.x + plight->agFallOff.y * invLen, 0.0f, 1.0f);
+
+                float shadow = glm::max(diffuse * plight->ltfn.ruShadow + plight->ltfn.duShadow, 0.0f) * att;
+                float midtone = glm::max(diffuse * plight->ltfn.ruMidtone + plight->ltfn.duMidtone, 0.0f) * att;
+                float highlight = glm::max(diffuse * plight->ltfn.ruHighlight + plight->ltfn.duHighlight, 0.0f) * att;
+
+                objectShadow += shadow;
+                objectMidtone += midtone;
+                lightAccum += glm::vec3(plight->rgbaColor) * highlight;
+            }
+        }
+        plight = plight->dleLight.plightNext;
+    }
+
+    // Same post-process as GLSL ProcessGlobLighting()
+    return ProcessGlobLightingCPU(vertexColorRGB, objectShadow, objectMidtone, lightAccum);
+}
+
+glm::vec4 ComputeBakedVertexColorThreeWay(const SUBGLOB& sub, const glm::mat4& model,
+    const glm::mat3& normalMat, const BakedTextureSet& textures, const VERTICE& v)
+{
+    if (!textures.hasDiffuse)
+        return v.color; // fallback
+
+    // World space
+    glm::vec3 worldPos = glm::vec3(model * glm::vec4(v.pos, 1.0f));
+    glm::vec3 normalWorld = TransformExportNormal(normalMat, v.normal);
+
+    // Game per-vertex color used in lighting
+    glm::vec3 vertexBaseColor = glm::vec3(v.color);
+
+    // Game lighting in Z-up
+    MaterialCPU m = EvaluateLightingAtPointCPU(worldPos, normalWorld, vertexBaseColor, sub.unSelfIllum);
+
+    // Sample original textures at this vertex UV
+    glm::vec2 uv = glm::fract(v.uv); // handle tiling
+    float u = glm::clamp(uv.x, 0.0f, 1.0f);
+    float vv = glm::clamp(uv.y, 0.0f, 1.0f);
+
+    glm::vec4 shCol = textures.hasAmbient
+        ? SampleExportImage(textures.ambient, u, vv, glm::vec4(0.0f)) : glm::vec4(0.0f);
+    glm::vec4 difCol = SampleExportImage(textures.diffuse, u, vv,
+        glm::vec4(1.0f, 1.0f, 1.0f, 1.0f));
+    glm::vec4 satCol = textures.hasSaturate
+        ? SampleExportImage(textures.saturate, u, vv, glm::vec4(0.0f)) : glm::vec4(0.0f);
+
+    glm::vec3 shRGB = glm::vec3(shCol);
+    glm::vec3 difRGB = glm::vec3(difCol);
+    glm::vec3 satRGB = glm::vec3(satCol);
+
+    // Same mix as the pixel baker
+    glm::vec3 finalRGB(0.0f);
+    finalRGB += shRGB * m.ambient;
+    finalRGB += difRGB * m.midtone;
+    finalRGB += satRGB * m.light;
+    finalRGB = glm::clamp(finalRGB, 0.0f, 1.0f);
+
+    glm::vec3 factor(1.0f);
+    const float eps = 1.0f / 255.0f;
+
+    for (int c = 0; c < 3; ++c)
+    {
+        float base = difRGB[c];
+        float f = finalRGB[c];
+
+        if (base > eps)
+            factor[c] = f / base;
+        else
+            factor[c] = f;
+    }
+
+    factor = glm::clamp(factor, glm::vec3(0.0f), glm::vec3(4.0f));
+
+    float alpha = glm::clamp(v.color.a, 0.0f, 1.0f);
+
+    return glm::vec4(factor, alpha);
+}
+
+void ExportLights(json& gltf, std::vector<json>& nodes, std::vector<int>& sceneNodes, const glm::mat4& zUpToYUp)
+{
+    if (g_psw == nullptr)
+        return;
+    // --- 1) Mark extension as used/required ---
+    if (!gltf.contains("extensionsUsed") || !gltf["extensionsUsed"].is_array())
+        gltf["extensionsUsed"] = json::array();
+    auto& extUsed = gltf["extensionsUsed"];
+    if (std::find(extUsed.begin(), extUsed.end(), "KHR_lights_punctual") == extUsed.end())
+        extUsed.push_back("KHR_lights_punctual");
+
+    if (!gltf.contains("extensionsRequired") || !gltf["extensionsRequired"].is_array())
+        gltf["extensionsRequired"] = json::array();
+    auto& extReq = gltf["extensionsRequired"];
+    if (std::find(extReq.begin(), extReq.end(), "KHR_lights_punctual") == extReq.end())
+        extReq.push_back("KHR_lights_punctual");
+
+    if (!gltf.contains("extensions") || !gltf["extensions"].is_object())
+        gltf["extensions"] = json::object();
+
+    json& rootExt = gltf["extensions"];
+    if (!rootExt.contains("KHR_lights_punctual") ||
+        !rootExt["KHR_lights_punctual"].is_object())
+    {
+        rootExt["KHR_lights_punctual"] = json::object();
+    }
+
+    json& lightsExt = rootExt["KHR_lights_punctual"];
+    if (!lightsExt.contains("lights") || !lightsExt["lights"].is_array())
+        lightsExt["lights"] = json::array();
+
+    json& lightsArray = lightsExt["lights"];
+
+    // --- 2) DIRECTIONAL LIGHT (your existing code) ---
+    {
+        LIGHT* plight = g_psw->dlLight.plightFirst;
+        LIGHT* pDir = nullptr;
+
+        while (plight != nullptr) {
+            if (plight->lightk == LIGHTK_Direction) {
+                pDir = plight;
+                break;
+            }
+            plight = plight->dleLight.plightNext;
+        }
+
+        if (pDir) {
+            glm::vec3 dirZup = glm::vec3(pDir->xf.matWorld[2]);
+            glm::vec3 dirYup = glm::mat3(zUpToYUp) * dirZup;
+            dirYup = glm::normalize(dirYup);
+
+            glm::vec3 col = glm::vec3(pDir->rgbaColor);
+
+            json lightDef = {
+                {"name", "DirectionalLight_0"},
+                {"type", "directional"},
+                {"color", { col.r, col.g, col.b }},
+                {"intensity", 5.0f}
+            };
+
+            int lightIndex = (int)lightsArray.size();
+            lightsArray.push_back(lightDef);
+
+            glm::vec3 fromDir(0.0f, 0.0f, -1.0f);
+            glm::quat q = RotationBetweenVectors(fromDir, dirYup);
+
+            json lightNode;
+            lightNode["name"] = "DirectionalLightNode_0";
+            lightNode["rotation"] = { q.x, q.y, q.z, q.w };
+            lightNode["extensions"] = {
+                { "KHR_lights_punctual", { { "light", lightIndex } } }
+            };
+
+            int nodeIndex = (int)nodes.size();
+            nodes.push_back(lightNode);
+            sceneNodes.push_back(nodeIndex);
+        }
+    }
+
+    // --- 3) POINT LIGHTS WITH ATTENUATION ---
+    {
+        LIGHT* plight = g_psw->dlLight.plightFirst;
+        int pointIdx = 0;
+
+        while (plight != nullptr)
+        {
+            if (plight->lightk == LIGHTK_Position)
+            {
+                // Color
+                glm::vec3 col = glm::vec3(plight->rgbaColor);
+
+                // Position: Z-up -> Y-up
+                glm::vec3 posZ = plight->xf.posWorld;
+                glm::vec3 posY = glm::vec3(zUpToYUp * glm::vec4(posZ, 1.0f));
+
+                // Range for attenuation
+                float range = plight->lmFallOffS.gMax;        // your max influence distance
+                if (range <= 0.0f)
+                    range = 10.0f;                // fallback
+
+                // Base intensity (tune if too bright/dim in Blender)
+                float baseIntensity = 50.0f;
+
+                json pointLight = {
+                    {"name", "PointLight_" + std::to_string(pointIdx)},
+                    {"type", "point"},
+                    {"color", { col.r, col.g, col.b }},
+                    {"intensity", baseIntensity},
+                    {"range", range}
+                };
+
+                int lightIndex = (int)lightsArray.size();
+                lightsArray.push_back(pointLight);
+
+                // Node for this point light
+                json node;
+                node["name"] = "PointLightNode_" + std::to_string(pointIdx);
+                node["translation"] = { posY.x, posY.y, posY.z };
+                node["extensions"] = {
+                    { "KHR_lights_punctual", { { "light", lightIndex } } }
+                };
+
+                int nodeIndex = (int)nodes.size();
+                nodes.push_back(node);
+                sceneNodes.push_back(nodeIndex);
+
+                ++pointIdx;
+            }
+
+            plight = plight->dleLight.plightNext;
+        }
+    }
+}
+
+bool ExportSwLightsBaked()
+{
+    if (g_psw == nullptr)
+    {
+        ReportRuntimeError("Export", "Cannot export a baked map without a loaded world");
+        return false;
+    }
+    if (!EnsureExportLevelName())
+        return false;
+    try
+    {
+    std::error_code directoryError;
+    std::filesystem::create_directories(levelName, directoryError);
+    if (directoryError)
+    {
+        ReportRuntimeError("Export", "Could not create baked-map export directory '%s': %s",
+            levelName.c_str(), directoryError.message().c_str());
+        return false;
+    }
+
+    std::vector<uint8_t> binaryBuffer;
+
+    json gltf;
+    std::vector<json> bufferViews;
+    std::vector<json> accessors;
+    std::vector<json> materials;
+    std::vector<json> images;
+    std::vector<json> textures;
+    std::vector<json> meshes;
+    std::vector<json> nodes;
+    std::vector<json> skins;
+    std::vector<json> animations;
+    std::vector<int>  sceneNodes;
+
+    gltf["asset"] = {
+        {"version", "2.0"},
+        {"generator", "ExportSwGLB"}
+    };
+
+    auto EnsureUnlitExtension = [&](json& mat)
+        {
+            if (!gltf.contains("extensionsUsed") || !gltf["extensionsUsed"].is_array())
+                gltf["extensionsUsed"] = json::array();
+
+            auto& extUsed = gltf["extensionsUsed"];
+            if (std::find(extUsed.begin(), extUsed.end(), "KHR_materials_unlit") == extUsed.end())
+                extUsed.push_back("KHR_materials_unlit");
+
+            mat["extensions"] = {
+                {"KHR_materials_unlit", json::object()}
+            };
+        };
+
+    // Add Z-up -> Y-up rotation
+    glm::mat4 zUpToYUp = glm::rotate(
+        glm::mat4(1.0f),
+        glm::radians(-90.0f),
+        glm::vec3(1.0f, 0.0f, 0.0f)
+    );
+
+    // Default material
+    int defaultMaterialIndex = 0;
+    {
+        json mat = {
+            {"name", "DefaultMaterial"},
+            {"pbrMetallicRoughness", {
+                {"baseColorFactor", {1.0,1.0,1.0,1.0}},
+                {"metallicFactor", 0.0},
+                {"roughnessFactor", 1.0}
+            }},
+            {"alphaMode", "OPAQUE"}
+        };
+        EnsureUnlitExtension(mat);
+        materials.push_back(mat);
+    }
+
+    std::unordered_map<uint64_t, int> shdToMaterialIndex;
+    std::unordered_map<uint64_t, BakedTextureSet> bakedTextures;
+
+    // PASS 0: Determine which shader/frame pairs are visible and how they blend.
+    struct ShdUsageInfo { int shdID = -1; int frame = 0; int alphaMode = 0; };
+    std::unordered_map<uint64_t, ShdUsageInfo> shdUsage;
+
+    for (auto* alo : allSWAloObjs)
+    {
+        if (!alo) continue;
+
+        for (auto& glob : alo->globset.aglob)
+        {
+            for (auto& sub : glob.asubglob)
+            {
+                int shdID = sub.shdID;
+                if (shdID < 0 || shdID >= (int)g_ashd.size()) continue;
+
+                SHD& shd = g_ashd[shdID];
+                const int frame = ExportTextureFrame(sub, shd);
+                const uint64_t materialKey = ExportMaterialKey(shdID, frame);
+                ShdUsageInfo& usage = shdUsage[materialKey];
+                usage.shdID = shdID;
+                usage.frame = frame;
+                if (glob.rp == RP_Cutout || glob.rp == RP_CutoutAfterProjVolume || glob.rp == RP_Translucent)
+                {
+                    usage.alphaMode = std::max(usage.alphaMode,
+                        glob.rp == RP_Translucent ? 2 : 1);
+                }
+
+                if (glob.rp == RP_Background && shd.grfshd == 2)
+                    usage.alphaMode = 2;
+            }
+        }
+    }
+
+    // PASS 1: Build materials
+    for (const auto& [materialKey, usage] : shdUsage)
+    {
+        const int shdID = usage.shdID;
+        SHD& shd = g_ashd[shdID];
+        BakedTextureSet textureSet = LoadBakedTextureSet(shd, usage.frame);
+        if (!textureSet.hasDiffuse)
+        {
+            shdToMaterialIndex[materialKey] = defaultMaterialIndex;
+            continue;
+        }
+        bakedTextures.emplace(materialKey, std::move(textureSet));
+        const BakedTextureSet& storedTextures = bakedTextures.at(materialKey);
+
+        PngBuffer png;
+        stbi_write_png_to_func(
+            PngWriteCallback,
+            &png,
+            static_cast<int>(storedTextures.diffuse.width),
+            static_cast<int>(storedTextures.diffuse.height),
+            4,
+            storedTextures.diffuse.pixels.data(),
+            static_cast<int>(storedTextures.diffuse.width * 4)
+        );
+
+        if (png.data.empty())
+        {
+            shdToMaterialIndex[materialKey] = defaultMaterialIndex;
+            continue;
+        }
+
+        AlignTo4(binaryBuffer);
+        size_t pngOffset = binaryBuffer.size();
+        binaryBuffer.insert(binaryBuffer.end(), png.data.begin(), png.data.end());
+
+        int viewIdx = (int)bufferViews.size();
+        bufferViews.push_back({
+            {"buffer",0},
+            {"byteOffset",pngOffset},
+            {"byteLength",png.data.size()}
+            });
+
+        int imgIdx = (int)images.size();
+        images.push_back({
+            {"bufferView",viewIdx},
+            {"mimeType","image/png"}
+            });
+
+        int texIdx = (int)textures.size();
+        textures.push_back({ {"source",imgIdx} });
+
+        const int alphaMode = usage.alphaMode;
+
+        json mat = {
+            {"name","Material_Shader_" + std::to_string(shdID) +
+                "_Frame_" + std::to_string(usage.frame)},
+            {"pbrMetallicRoughness",{
+                {"baseColorTexture",{{"index",texIdx}}},
+                {"metallicFactor",0.0},
+                {"roughnessFactor",1.0}
+            }}
+        };
+
+        EnsureUnlitExtension(mat);
+        mat["alphaMode"] = alphaMode == 2 ? "BLEND" : alphaMode == 1 ? "MASK" : "OPAQUE";
+        if (alphaMode == 1)
+            mat["alphaCutoff"] = 0.5;
+        if (alphaMode != 0)
+            mat["doubleSided"] = true;
+
+        int matIndex = (int)materials.size();
+        materials.push_back(mat);
+        shdToMaterialIndex[materialKey] = matIndex;
+    }
+
+    // PASS 2: GEOMETRY
+    uint32_t aloIndex = 0;
+
+    for (auto* alo : allSWAloObjs)
+    {
+        if (!alo)
+        {
+            aloIndex++;
+            continue;
+        }
+
+        // One GLOBSET per ALO
+        int globsetNodeIndex = (int)nodes.size();
+        {
+            json globsetNode = {
+                {"name", "GLOBSET_" + std::to_string(aloIndex)},
+                {"children", json::array()}
+            };
+            nodes.push_back(globsetNode);
+            sceneNodes.push_back(globsetNodeIndex);
+        }
+
+        uint32_t globIndex = 0;
+
+        for (auto& glob : alo->globset.aglob)
+        {
+            glm::mat4 modelZ(1.0f);
+            modelZ = alo->xf.matWorld;
+            modelZ[3][0] = alo->xf.posWorld.x;
+            modelZ[3][1] = alo->xf.posWorld.y;
+            modelZ[3][2] = alo->xf.posWorld.z;
+
+            if (glob.pdmat)
+                modelZ = modelZ * *glob.pdmat;
+
+            glm::mat4 modelY = zUpToYUp * modelZ;
+            if (!FFiniteExportMatrix(modelZ) || !FFiniteExportMatrix(modelY))
+            {
+                ReportRuntimeError("Export",
+                    "Skipping baked map glob %u/%u because its transform is non-finite",
+                    aloIndex, globIndex);
+                globIndex++;
+                continue;
+            }
+
+            const glm::mat3 linearModelZ(modelZ);
+            const glm::mat3 linearModelY(modelY);
+            const glm::mat3 normalMatZ = std::fabs(glm::determinant(linearModelZ)) > 1.0e-12f
+                ? glm::transpose(glm::inverse(linearModelZ)) : linearModelZ;
+            const glm::mat3 normalMatY = std::fabs(glm::determinant(linearModelY)) > 1.0e-12f
+                ? glm::transpose(glm::inverse(linearModelY)) : linearModelY;
+
+            // GLOB node under this ALO's GLOBSET
+            int globNodeIndex = (int)nodes.size();
+            {
+                json globNode = {
+                    {"name", "GLOB_" + std::to_string(aloIndex) + "_" + std::to_string(globIndex)},
+                    {"children", json::array()}
+                };
+                nodes.push_back(globNode);
+                nodes[globsetNodeIndex]["children"].push_back(globNodeIndex);
+            }
+
+            uint32_t subIndex = 0;
+
+            for (auto& sub : glob.asubglob)
+            {
+                if (sub.cibnd > 0)
+                {
+                    subIndex++;
+                    continue;
+                }
+                size_t vc = sub.vertices.size();
+                size_t tc = sub.indices.size();
+                if (vc == 0 || tc == 0)
+                {
+                    subIndex++;
+                    continue;
+                }
+                if (!FValidExportIndices(sub))
+                {
+                    ReportRuntimeError("Export",
+                        "Skipping baked-map mesh %u/%u/%u because an index exceeds its %zu vertices",
+                        aloIndex, globIndex, subIndex, vc);
+                    subIndex++;
+                    continue;
+                }
+                if (!FValidExportVertices(sub))
+                {
+                    ReportRuntimeError("Export",
+                        "Skipping baked map mesh %u/%u/%u because it contains non-finite vertex data",
+                        aloIndex, globIndex, subIndex);
+                    subIndex++;
+                    continue;
+                }
+
+                int matIndex = defaultMaterialIndex;
+                uint64_t materialKey = 0;
+                if (sub.shdID >= 0 && sub.shdID < (int)g_ashd.size())
+                {
+                    const SHD& shd = g_ashd[sub.shdID];
+                    materialKey = ExportMaterialKey(sub.shdID, ExportTextureFrame(sub, shd));
+                    auto it = shdToMaterialIndex.find(materialKey);
+                    if (it != shdToMaterialIndex.end())
+                        matIndex = it->second;
+                }
+
+                const auto bakedTexture = bakedTextures.find(materialKey);
+                const bool isThreeWay = sub.shdID >= 0 &&
+                    sub.shdID < static_cast<int>(g_ashd.size()) &&
+                    g_ashd[sub.shdID].shdk == SHDK_ThreeWay &&
+                    bakedTexture != bakedTextures.end();
+
+                // POSITIONS (Y-up)
+                AlignTo4(binaryBuffer);
+                size_t posOffset = binaryBuffer.size();
+                glm::vec3 positionMin((std::numeric_limits<float>::max)());
+                glm::vec3 positionMax((std::numeric_limits<float>::lowest)());
+                for (auto& v : sub.vertices)
+                {
+                    glm::vec3 p = glm::vec3(modelY * glm::vec4(v.pos, 1.0f));
+                    positionMin = glm::min(positionMin, p);
+                    positionMax = glm::max(positionMax, p);
+                    AppendFloat(binaryBuffer, p.x);
+                    AppendFloat(binaryBuffer, p.y);
+                    AppendFloat(binaryBuffer, p.z);
+                }
+                size_t posLen = binaryBuffer.size() - posOffset;
+
+                int posView = (int)bufferViews.size();
+                bufferViews.push_back({
+                    {"buffer",0},
+                    {"byteOffset",posOffset},
+                    {"byteLength",posLen},
+                    {"target",34962}
+                    });
+
+                int posAccessor = (int)accessors.size();
+                accessors.push_back({
+                    {"bufferView",posView},
+                    {"byteOffset",0},
+                    {"componentType",5126},
+                    {"count",vc},
+                    {"type","VEC3"},
+                    {"min", {positionMin.x, positionMin.y, positionMin.z}},
+                    {"max", {positionMax.x, positionMax.y, positionMax.z}}
+                    });
+
+                // NORMALS (Y-up)
+                AlignTo4(binaryBuffer);
+                size_t nrmOffset = binaryBuffer.size();
+                for (auto& v : sub.vertices)
+                {
+                    glm::vec3 n = TransformExportNormal(normalMatY, v.normal);
+                    AppendFloat(binaryBuffer, n.x);
+                    AppendFloat(binaryBuffer, n.y);
+                    AppendFloat(binaryBuffer, n.z);
+                }
+                size_t nrmLen = binaryBuffer.size() - nrmOffset;
+
+                int nrmView = (int)bufferViews.size();
+                bufferViews.push_back({
+                    {"buffer",0},
+                    {"byteOffset",nrmOffset},
+                    {"byteLength",nrmLen},
+                    {"target",34962}
+                    });
+
+                int nrmAccessor = (int)accessors.size();
+                accessors.push_back({
+                    {"bufferView",nrmView},
+                    {"byteOffset",0},
+                    {"componentType",5126},
+                    {"count",vc},
+                    {"type","VEC3"}
+                    });
+
+                // COLORS (baked in Z-up)
+                AlignTo4(binaryBuffer);
+                size_t colOffset = binaryBuffer.size();
+
+                for (auto& v : sub.vertices)
+                {
+                    glm::vec4 col = v.color;
+
+                    if (isThreeWay)
+                    {
+                        col = ComputeBakedVertexColorThreeWay(
+                            sub,
+                            modelZ,
+                            normalMatZ,
+                            bakedTexture->second,
+                            v
+                        );
+                    }
+
+                    AppendFloat(binaryBuffer, col.r);
+                    AppendFloat(binaryBuffer, col.g);
+                    AppendFloat(binaryBuffer, col.b);
+                    AppendFloat(binaryBuffer, col.a);
+                }
+
+                size_t colLen = binaryBuffer.size() - colOffset;
+
+                int colView = (int)bufferViews.size();
+                bufferViews.push_back({
+                    {"buffer",0},
+                    {"byteOffset",colOffset},
+                    {"byteLength",colLen},
+                    {"target",34962}
+                    });
+
+                int colAccessor = (int)accessors.size();
+                accessors.push_back({
+                    {"bufferView",colView},
+                    {"byteOffset",0},
+                    {"componentType",5126},
+                    {"count",vc},
+                    {"type","VEC4"}
+                    });
+
+                // UVs
+                AlignTo4(binaryBuffer);
+                size_t uvOffset = binaryBuffer.size();
+                for (auto& v : sub.vertices)
+                {
+                    AppendFloat(binaryBuffer, v.uv.x);
+                    AppendFloat(binaryBuffer, v.uv.y);
+                }
+                size_t uvLen = binaryBuffer.size() - uvOffset;
+
+                int uvView = (int)bufferViews.size();
+                bufferViews.push_back({
+                    {"buffer",0},
+                    {"byteOffset",uvOffset},
+                    {"byteLength",uvLen},
+                    {"target",34962}
+                    });
+
+                int uvAccessor = (int)accessors.size();
+                accessors.push_back({
+                    {"bufferView",uvView},
+                    {"byteOffset",0},
+                    {"componentType",5126},
+                    {"count",vc},
+                    {"type","VEC2"}
+                    });
+
+                // INDICES
+                AlignTo4(binaryBuffer);
+                size_t idxOffset = binaryBuffer.size();
+                uint32_t idxCount = (uint32_t)(tc * 3);
+                for (auto& tri : sub.indices)
+                {
+                    AppendUInt32(binaryBuffer, tri.v1);
+                    AppendUInt32(binaryBuffer, tri.v2);
+                    AppendUInt32(binaryBuffer, tri.v3);
+                }
+                size_t idxLen = binaryBuffer.size() - idxOffset;
+
+                int idxView = (int)bufferViews.size();
+                bufferViews.push_back({
+                    {"buffer",0},
+                    {"byteOffset",idxOffset},
+                    {"byteLength",idxLen},
+                    {"target",34963}
+                    });
+
+                int idxAccessor = (int)accessors.size();
+                accessors.push_back({
+                    {"bufferView",idxView},
+                    {"byteOffset",0},
+                    {"componentType",5125},
+                    {"count",idxCount},
+                    {"type","SCALAR"}
+                    });
+
+                // Build mesh & SUBGLOB node
+                json attributes;
+                attributes["POSITION"] = posAccessor;
+                attributes["NORMAL"] = nrmAccessor;
+                attributes["TEXCOORD_0"] = uvAccessor;
+                attributes["COLOR_0"] = colAccessor;
+
+                json primitive = {
+                    {"attributes",attributes},
+                    {"indices",idxAccessor},
+                    {"material",matIndex},
+                    {"mode",4}
+                };
+
+                std::string baseName =
+                    "SUBGLOB_" + std::to_string(aloIndex) + "_" +
+                    std::to_string(globIndex) + "_" +
+                    std::to_string(subIndex);
+
+                json mesh = {
+                    {"name",baseName},
+                    {"primitives", json::array({primitive})}
+                };
+
+                int meshIndex = (int)meshes.size();
+                meshes.push_back(mesh);
+
+                json node = {
+                    {"mesh",meshIndex},
+                    {"name",baseName}
+                };
+
+                int nodeIndex = (int)nodes.size();
+                nodes.push_back(node);
+
+                // Attach SUBGLOB node under this GLOB node
+                nodes[globNodeIndex]["children"].push_back(nodeIndex);
+
+                subIndex++;
+            }
+
+            globIndex++;
+        }
+
+        aloIndex++;
+    }
+
+    json celBorderMaterial = {{"name", "ProjectCane_CelBorder"},
+        {"pbrMetallicRoughness", {{"baseColorFactor", {0.0, 0.0, 0.0, 1.0}},
+            {"metallicFactor", 0.0}, {"roughnessFactor", 1.0}}}};
+    EnsureUnlitExtension(celBorderMaterial);
+    const int celBorderMaterialIndex = static_cast<int>(materials.size());
+    materials.push_back(std::move(celBorderMaterial));
+    const int staticCelBorderCount = AppendStaticCelBorders(binaryBuffer, bufferViews,
+        accessors, meshes, nodes, sceneNodes, celBorderMaterialIndex);
+    const int skeletalModelCount = AppendSkeletalMeshes(binaryBuffer, bufferViews,
+        accessors, meshes, nodes, skins, animations, sceneNodes, shdToMaterialIndex,
+        celBorderMaterialIndex);
+    if (skeletalModelCount > 0)
+        std::cout << "Included " << skeletalModelCount << " skeletal model(s) in the baked map GLB\n";
+    if (staticCelBorderCount > 0)
+        std::cout << "Included " << staticCelBorderCount << " static cel-border set(s)\n";
+
+    // Build GLB
+    std::vector<uint8_t> binChunk = binaryBuffer;
+    while (binChunk.size() % 4 != 0) binChunk.push_back(0);
+
+    if (binChunk.size() > (std::numeric_limits<uint32_t>::max)())
+    {
+        ReportRuntimeError("Export", "Baked-map export exceeds the GLB 4 GiB size limit");
+        return false;
+    }
+    gltf["buffers"] = json::array({
+        json{{"byteLength",static_cast<uint32_t>(binChunk.size())}}
+        });
+
+    gltf["bufferViews"] = bufferViews;
+    gltf["accessors"] = accessors;
+    gltf["materials"] = materials;
+    if (!images.empty()) gltf["images"] = images;
+    if (!textures.empty()) gltf["textures"] = textures;
+    gltf["meshes"] = meshes;
+    if (!skins.empty()) gltf["skins"] = skins;
+    if (!animations.empty()) gltf["animations"] = animations;
+    gltf["nodes"] = nodes;
+
+    gltf["scenes"] = json::array({
+        json{{"name","Scene"},{"nodes",sceneNodes}}
+        });
+    gltf["scene"] = 0;
+
+    std::string jsonStr = gltf.dump();
+    std::vector<uint8_t> jsonChunk(jsonStr.begin(), jsonStr.end());
+    while (jsonChunk.size() % 4 != 0) jsonChunk.push_back(0x20);
+
+    const uint64_t totalLength64 = 12ull + 8ull + jsonChunk.size() + 8ull + binChunk.size();
+    if (jsonChunk.size() > (std::numeric_limits<uint32_t>::max)() ||
+        totalLength64 > (std::numeric_limits<uint32_t>::max)())
+    {
+        ReportRuntimeError("Export", "Baked-map export exceeds the GLB 4 GiB size limit");
+        return false;
+    }
+    uint32_t totalLength = static_cast<uint32_t>(totalLength64);
+
+    std::string outPath = levelName + "/" + levelName + "_Baked.glb";
+    std::ofstream out(outPath, std::ios::binary | std::ios::trunc);
+    if (!out)
+    {
+        ReportRuntimeError("Export", "Could not open baked-map export '%s'", outPath.c_str());
+        return false;
+    }
+
+    auto WriteU32 = [&](uint32_t v)
+        {
+            out.write((const char*)&v, 4);
+        };
+
+    WriteU32(0x46546C67);
+    WriteU32(2);
+    WriteU32(totalLength);
+
+    WriteU32((uint32_t)jsonChunk.size());
+    WriteU32(0x4E4F534A);
+    out.write((const char*)jsonChunk.data(), jsonChunk.size());
+
+    WriteU32((uint32_t)binChunk.size());
+    WriteU32(0x004E4942);
+    out.write((const char*)binChunk.data(), binChunk.size());
+    out.close();
+    if (!out)
+    {
+        ReportRuntimeError("Export", "Failed while writing baked-map export '%s'", outPath.c_str());
+        return false;
+    }
+    return true;
+    }
+    catch (const std::exception& error)
+    {
+        ReportRuntimeError("Export", "Baked-map export failed: %s", error.what());
+        return false;
+    }
+}
+
+void ExportTextures()
+{
+    const std::filesystem::path textureDir =
+        std::filesystem::path(levelName) / "Textures";
+    std::error_code directoryError;
+    std::filesystem::create_directories(textureDir, directoryError);
+    if (directoryError)
+    {
+        ReportRuntimeError("Export", "Could not create texture export directory '%s': %s",
+            textureDir.string().c_str(), directoryError.message().c_str());
+        return;
+    }
+
+    auto ImageFromIndex = [](int32_t imageIndex) -> BMP*
+    {
+        return imageIndex >= 0 && static_cast<size_t>(imageIndex) < g_abmp.size()
+            ? &g_abmp[static_cast<size_t>(imageIndex)] : nullptr;
+    };
+
+    auto WriteImage = [&](const std::filesystem::path& outputPath, BMP* bmp,
+                          bool flipVertically) -> bool
+    {
+        std::vector<byte> rgbaReadback;
+        const byte* rgbaPixels = nullptr;
+        if (!GetBmpBaseRgba8(bmp, rgbaReadback, rgbaPixels))
+            return false;
+
+        const std::string outputName = outputPath.string();
+        stbi_flip_vertically_on_write(flipVertically ? 1 : 0);
+        const int written = stbi_write_png(outputName.c_str(),
+            static_cast<int>(bmp->bmpWidth), static_cast<int>(bmp->bmpHeight), 4,
+            rgbaPixels, static_cast<int>(bmp->bmpWidth * 4));
+        stbi_flip_vertically_on_write(0);
+        if (written == 0)
+        {
+            ReportRuntimeError("Export", "Could not write texture PNG '%s'",
+                outputName.c_str());
+            return false;
+        }
+        return true;
+    };
+
+    for (size_t i = 0; i < g_ashd.size(); ++i)
+    {
+        SHD& shd = g_ashd[i];
+
+        for (size_t t = 0; t < shd.atex.size(); ++t)
+        {
+            TEX& tex = shd.atex[t];
+
+            const size_t frameCount = std::min({
+                tex.ambientImageIndex.size(),
+                tex.diffuseImageIndex.size(),
+                tex.saturateImageIndex.size()
+            });
+            for (size_t f = 0; f < frameCount; ++f)
+            {
+                char prefixBuffer[128]{};
+                std::snprintf(prefixBuffer, sizeof(prefixBuffer),
+                    "shader_%03zu_tex_%02zu_frame_%02zu", i, t, f);
+                const std::string prefix(prefixBuffer);
+
+                BMP* ambient = ImageFromIndex(tex.ambientImageIndex[f]);
+                BMP* diffuse = ImageFromIndex(tex.diffuseImageIndex[f]);
+                BMP* saturate = ImageFromIndex(tex.saturateImageIndex[f]);
+
+                if (ambient != nullptr)
+                    WriteImage(textureDir / (prefix + "_shadow.png"), ambient, true);
+
+                // Rendering falls back to ambient when a texture has no distinct
+                // diffuse image, so export the same effective diffuse source.
+                if (diffuse == nullptr)
+                    diffuse = ambient;
+                if (diffuse != nullptr)
+                    WriteImage(textureDir / (prefix + "_diffuse.png"), diffuse, true);
+
+                if (saturate != nullptr)
+                    WriteImage(textureDir / (prefix + "_saturate.png"), saturate, true);
+            }
+        }
+    }
+
+    for (size_t i = 0; i < g_afontBrx.size(); ++i)
+    {
+        BMP* bmp = g_afontBrx[i].m_pbmp;
+
+        char fontName[64]{};
+        std::snprintf(fontName, sizeof(fontName), "font_%03zu.png", i);
+        WriteImage(textureDir / fontName, bmp, false);
+    }
+
+}
+
+bool g_fDisableInput = false;
+std::string file = "";
+std::string filePath = "";
+std::string levelName = "";
+float baseRenderDistance = 0.0;

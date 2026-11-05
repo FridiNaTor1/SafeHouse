@@ -1,0 +1,106 @@
+# Visual Studio
+.vs/
+**/x64/
+**/Debug/
+**/Release/
+**/bin/
+!Libraries/bin/
+!Libraries/bin/SDL2.dll
+**/obj/
+!Libraries/lib/Debug/
+!Libraries/lib/Debug/**
+!Libraries/lib/Release/
+!Libraries/lib/Release/**
+*.vcxproj.user
+*.aps
+*.obj
+*.pdb
+*.ilk
+*.iobj
+*.ipdb
+*.tlog
+*.exe
+*.suo
+*.VC.db
+*.VC.VC.opendb
+
+# Runtime/generated
+imgui.ini
+Saves/
+*.log
+*.bak
+build-output.txt
+build/
+dist/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+compile_commands.json
+.tools/
+Sly1-Release/*.csv
+Sly1-Release/*.dll
+
+# Extracted game data
+Sly1-Release/Worlds/
+Sly1-Release/Cutscenes/
+*.iso
+
+# Portable builds and packages
+/build/
+/dist/
+*.AppImage
+
+__pycache__/
+*.py[cod]
+
+# Local tests, fixtures and validation reports
+/test/
+/tests/
+/VALIDATION.md
+
+# Local configuration and development artifacts
+CMakeUserPresets.json
+/cmake-build-*/
+/compile_commands.json
+/.cache/
+/tmp/
+.env
+.env.*
+!.env.example
+.idea/
+*.swp
+*.swo
+*~
+*.dmp
+*.core
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Local-only material, never committed
+# Local comparison material (a separate tree, not part of the repository)
+/reference/*
+!/reference/README.md
+# Build trees anywhere (CMake build dirs, tool build output)
+build/
+/build-*/
+out/
+# Packaging output
+/dist/
+*.AppImage
+# Scratch output from test runs and tools at the repo root
+/*.out
+/*.t
+/pid
+*.ram
+*.p2s
+# Game data never belongs in git (extracted discs, saves, memory cards)
+*.iso
+*.ISO
+*.wad
+*.WAD
+*.brx
+*.pss
+*.ps2
+memcard*/
+/installations/
