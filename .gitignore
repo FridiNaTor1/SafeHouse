@@ -6,6 +6,7 @@
 **/bin/
 !Libraries/bin/
 !Libraries/bin/SDL2.dll
+!Libraries/ffmpeg/*/bin/
 **/obj/
 !Libraries/lib/Debug/
 !Libraries/lib/Debug/**
