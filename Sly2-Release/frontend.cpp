@@ -818,7 +818,7 @@ void ShowTitle()
     EnableVibration();   // 0x1D5498
     s_tTitleShown = g_clock.t;
     // orig (Europe) 0x1DDBD0: the language menu when the title needs one (0x1DDB68)
-    if (FTitleNeedsLanguage(s_fTitleInputTaken, g_islotCur >= 0)) OpenLanguageMenu(g_psw);
+    if (FTitleNeedsLanguage(s_fTitleInputTaken, g_islotCur >= 0)) OpenLanguageMenu(g_psw, false);
 }
 
 // orig: 0x00165E38 func_00165E38
