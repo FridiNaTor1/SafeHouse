@@ -92,6 +92,12 @@ jobs:
           sudo apt-get install -y ninja-build ccache file desktop-file-utils libgl1-mesa-dev libxrandr-dev libxinerama-dev \
             libxcursor-dev libxi-dev libwayland-dev libxkbcommon-dev wayland-protocols libavformat-dev libavcodec-dev \
             libavutil-dev libswscale-dev
+          # SDL2 is built from source (Ubuntu 22.04's is too old for FAudio). Without these headers it builds with no
+          # audio drivers (only dummy / disk: "SDL audio failed to initialize") and no udev / HIDAPI controller support.
+          # SDL loads each of these libraries at run time, so they add no hard dependency. Same set as the local
+          # Ubuntu 22.04 packaging container.
+          sudo apt-get install -y libasound2-dev libpulse-dev libsndio-dev libudev-dev libdbus-1-dev libdecor-0-dev \
+            libdrm-dev libgbm-dev libegl-dev libibus-1.0-dev libx11-dev libxext-dev libxfixes-dev libxss-dev
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: .ccache
@@ -105,6 +111,14 @@ jobs:
           -DSAFEHOUSE_VERSION="$SAFEHOUSE_VERSION" -DSAFEHOUSE_BUILD_DATE="$SAFEHOUSE_BUILD_DATE" -DCANE_GIT_HASH="$CANE_GIT_HASH"
       - name: Build
         run: cmake --build build/linux --parallel 4
+      - name: Check SDL's audio and controller drivers
+        run: |
+          set -euo pipefail
+          cfg=$(find build/linux/_deps -path '*sdl2-build*' -path '*SDL2/SDL_config.h' -print -quit)
+          test -n "$cfg" || { echo "::error::SDL_config.h not found"; exit 1; }
+          for d in SDL_AUDIO_DRIVER_ALSA SDL_AUDIO_DRIVER_PULSEAUDIO SDL_JOYSTICK_HIDAPI HAVE_LIBUDEV_H; do
+            grep -Eq "^#define $d 1" "$cfg" || { echo "::error::SDL was built without $d ($cfg)"; exit 1; }
+          done
       - name: Tests
         run: ctest --test-dir build/linux --output-on-failure --timeout 600
       - name: Package (AppImage and tar.gz)
