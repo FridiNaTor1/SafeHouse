@@ -751,7 +751,10 @@ void CPFOLLOW::Update(CPDEFI* pcpdefi, const CMJOY* pjoy)
             fDispatch = true;
         }
     }
-    if (!fDispatch && cpmode == 4)
+    // Hold the player's chosen angle when automatic rotation is off. Zones that disallow camera control,
+    // explicit look targets, camera cuts, and the other scripted camera policies keep their original behavior.
+    const bool fAutoRotate = g_pcinput.fAutoCameraRotation || !(grf & 4) || (pz && pz->ploLook);
+    if (!fDispatch && cpmode == 4 && fAutoRotate)
     {
         // Passive: the pan follows the focus's motion across the view, the tilt its limits.
         glm::vec3 dirStick(pjoy->x, pjoy->y, 0.0f);

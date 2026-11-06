@@ -5,6 +5,7 @@
 #include "jt.h"
 #include "wm.h"
 #include "mark.h"
+#include "save.h"
 
 void ActivateCptn(CPTN* pcptn, TN *ptn)
 {
@@ -278,7 +279,10 @@ void UpdateCptn(CPTN* pcptn, CPDEFI* pcpdefi, JOY* pjoy, float dt)
 		pcptn->tLastOrbit = g_clock.t;
 	}
 
-	if (pcptn->ftnd == FTND_Manual &&
+	// Disable only passive steering in player-controlled camera zones. Authored camera directions,
+	// explicit look targets, cuts, and the player's R3 recenter continue through their original paths.
+	const bool fAutoRotate = g_fAutoCameraRotation || !(grftnd & FTND_Manual) || (ptn && ptn->paloTarget);
+	if (fAutoRotate && pcptn->ftnd == FTND_Manual &&
 		!(pjoy->IsPressed(BTN_R3) && (grftnd & FTND_Manual) != 0) &&
 		!((grftnd & FTND_Manual) != 0 &&
 		  (pjoy->uDeflect2 > 0.0f || radMouse != 0.0f || pcptn->swOrbit != 0.0f || pcptn->fHome != 0)))

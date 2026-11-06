@@ -73,7 +73,7 @@ enum NATIVEID : int
     // the controller's camera, the mouse in the binocucom / turrets (NID_InvertX / NID_InvertY: the mouse's camera)
     NID_Pc2 = NID_Base + 0x100,
     NID_LongShadows = NID_Pc2, NID_InvertPage, NID_PadInvertX, NID_PadInvertY, NID_BinocInvertX, NID_BinocInvertY,
-    NID_TurretInvertX, NID_TurretInvertY,
+    NID_TurretInvertX, NID_TurretInvertY, NID_AutoCameraRotation,
 };
 constexpr uint32_t PFN_NativeDisplay = 0xFFFF0001;   // (a native select function)
 constexpr uint32_t PFN_NativeExit = 0xFFFF0002;
@@ -412,6 +412,7 @@ std::string StrNative(int id)
     case NID_AlwaysPs: return onOff(PTX_OriginalPsIcons, g_pcinput.fAlwaysOriginalPs);
     case NID_InstantSkip: return onOff(PTX_InstantSkip, g_pcinput.fInstantSkipCutscenes);
     case NID_MouseCamera: return onOff(PTX_MouseCamera, g_pcinput.fMouseCamera);
+    case NID_AutoCameraRotation: return onOff(PTX_AutoCameraRotation, g_pcinput.fAutoCameraRotation);
     case NID_MouseSens: std::snprintf(ach, sizeof(ach), "%d%%", g_pcinput.mouseSensitivity); return StrPortValue(PTX_MouseSensitivity, ach);
     case NID_AimSens: std::snprintf(ach, sizeof(ach), "%d%%", g_pcinput.mouseAimSensitivity); return StrPortValue(PTX_MouseAimSensitivity, ach);
     case NID_InvertPage: return StrPort(PTX_InvertControlsPage);
@@ -471,6 +472,7 @@ void CycleControls(MENUENT& e)
     case NID_AlwaysPs: o.fAlwaysOriginalPs = !o.fAlwaysOriginalPs; break;
     case NID_InstantSkip: o.fInstantSkipCutscenes = !o.fInstantSkipCutscenes; break;
     case NID_MouseCamera: o.fMouseCamera = !o.fMouseCamera; break;
+    case NID_AutoCameraRotation: o.fAutoCameraRotation = !o.fAutoCameraRotation; break;
     case NID_MouseSens: o.mouseSensitivity = nextOf(o.mouseSensitivity, {25, 50, 75, 100, 150, 200, 300, 400, 500}); break;
     case NID_AimSens: o.mouseAimSensitivity = nextOf(o.mouseAimSensitivity, {25, 50, 75, 100, 150, 200, 300, 400, 500}); break;
     case NID_InvertX: o.fMouseInvertX = !o.fMouseInvertX; break;
@@ -768,6 +770,13 @@ std::vector<MENUENT> AentControls()
         e.id = id == NID_InvertX ? NID_InvertPage : id;   // (the mouse's inversion: on Invert Controls..., with the rest)
         e.pfnSelect = id == NID_KeyboardPage ? PFN_NativeKeyboardPage : id == NID_InvertX ? PFN_NativeInvertPage : PFN_NativeControls;
         a.push_back(e);
+        if (id == NID_InstantSkip)
+        {
+            MENUENT cameraRotation;
+            cameraRotation.id = NID_AutoCameraRotation;
+            cameraRotation.pfnSelect = PFN_NativeControls;
+            a.push_back(cameraRotation);
+        }
     }
     return a;
 }

@@ -49,6 +49,7 @@ static_assert(static_cast<int>(cane::settings::Gui_Modern) == static_cast<int>(G
 
 bool g_fAlwaysOriginalPsLayout = false;
 int g_promptStyle = cane::settings::Prompt_Auto;
+bool g_fAutoCameraRotation = true;
 bool g_fInstantSkipCutscenes = false;
 bool g_fDebugKeys = false;
 bool g_fControllerVibration = true;
@@ -100,6 +101,7 @@ VIDEOSAVESETTINGS CaptureVideoSettings()
 	settings.alwaysOriginalPsPrompts = g_fAlwaysOriginalPsLayout ? 1 : 0;
 	settings.promptStyle = g_promptStyle;
 	settings.mouseCamera = g_mouseopt.fCamera ? 1 : 0;
+	settings.autoCameraRotation = g_fAutoCameraRotation ? 1 : 0;
 	settings.mouseSensitivity = g_mouseopt.sensitivity;
 	settings.mouseAimSensitivity = g_mouseopt.aimSensitivity;
 	settings.mouseInvertX = g_mouseopt.fInvertX ? 1 : 0;
@@ -169,6 +171,7 @@ void ApplySavedVideoSettings(VIDEOSAVESETTINGS settings)
 	g_fAlwaysOriginalPsLayout = settings.alwaysOriginalPsPrompts != 0;
 	g_promptStyle = settings.promptStyle;
 	g_mouseopt.fCamera = settings.mouseCamera != 0;
+	g_fAutoCameraRotation = settings.autoCameraRotation != 0;
 	g_mouseopt.sensitivity = settings.mouseSensitivity;
 	g_mouseopt.aimSensitivity = settings.mouseAimSensitivity;
 	g_mouseopt.fInvertX = settings.mouseInvertX != 0;
@@ -653,7 +656,7 @@ void TestSaveCompatibility(const std::filesystem::path& fixtures)
     static_assert(sizeof(GS)==6656 && alignof(GS)==4 && sizeof(WS)==1100 && sizeof(LS)==120);
     static_assert(offsetof(GS,aws)==16 && offsetof(GS,gameWorldCur)==6616);
     static_assert(sizeof(SaveFileHeader)==20 && sizeof(cane::settings::Header)==20);
-    static_assert(sizeof(cane::settings::legacy::V8)==196 && sizeof(VIDEOSAVESETTINGS)==328);
+    static_assert(sizeof(cane::settings::legacy::V8)==196 && sizeof(VIDEOSAVESETTINGS)==332);
     static_assert(offsetof(VIDEOSAVESETTINGS,hackMouseAim)==288 && offsetof(VIDEOSAVESETTINGS,debugKeys)==292 && offsetof(VIDEOSAVESETTINGS,controllerVibration)==296 && offsetof(VIDEOSAVESETTINGS,longShadows)==300);
     static_assert(offsetof(VIDEOSAVESETTINGS,padInvertCameraX)==304 && offsetof(VIDEOSAVESETTINGS,mouseInvertTurretY)==324);
     static_assert(offsetof(VIDEOSAVESETTINGS,alwaysOriginalPsPrompts)==200 && offsetof(VIDEOSAVESETTINGS,instantSkipCutscenes)==284);
@@ -708,18 +711,26 @@ void TestSaveCompatibility(const std::filesystem::path& fixtures)
                  loaded.longShadows==0 && loaded.mouseInvertX==1 && loaded.mouseInvertY==1 && loaded.padInvertCameraX==0 &&
                  loaded.padInvertCameraY==0 && loaded.mouseInvertBinocX==0 && loaded.mouseInvertBinocY==0 &&
                  loaded.mouseInvertTurretX==0 && loaded.mouseInvertTurretY==0,"v16 settings upgrade failed");}
-        // Round-trip the current writer (v17), with the fields Sly 1 does not use kept as loaded.
+        // Older settings retain the original automatic camera behavior.
+        {VIDEOSAVESETTINGS file=cane::settings::defaults();file.autoCameraRotation=0;file.mouseSensitivity=170;
+         require(cane::settings::save(SystemSettingsPath(),file,17),"v17 settings writer failed");
+         VIDEOSAVESETTINGS loaded{};uint32_t version=0;
+         require(cane::settings::load(SystemSettingsPath(),loaded,&version)==cane::settings::LoadResult::Upgraded && version==17 &&
+                 loaded.autoCameraRotation==1 && loaded.mouseSensitivity==170,"v17 camera settings upgrade failed");}
+        // Round-trip the current writer (v18), with the fields Sly 1 does not use kept as loaded.
         {VIDEOSAVESETTINGS file=cane::settings::defaults();file.fovPercent=35;file.showFps=1;file.streamerMode=1;file.hackMouseAim=0;file.debugKeys=1;file.controllerVibration=0;file.longShadows=0;
          file.padInvertCameraX=1;file.padInvertCameraY=1;file.mouseInvertBinocX=1;file.mouseInvertBinocY=1;file.mouseInvertTurretX=1;file.mouseInvertTurretY=1;
          require(cane::settings::save(SystemSettingsPath(),file),"Settings writer failed");
          VIDEOSAVESETTINGS loaded{};require(LoadSystemSettings(&loaded),"Current settings rejected");
          s_settingsFile=loaded;}
-        const bool originalPs=g_fAlwaysOriginalPsLayout,instant=g_fInstantSkipCutscenes;const int promptStyle=g_promptStyle;
+        const bool originalPs=g_fAlwaysOriginalPsLayout,instant=g_fInstantSkipCutscenes,autoCamera=g_fAutoCameraRotation;const int promptStyle=g_promptStyle;
         const MOUSEOPTIONS mouse=g_mouseopt;const auto cameraKeys=g_cameraKeyBindings;
         g_fAlwaysOriginalPsLayout=true;g_promptStyle=cane::settings::Prompt_SteamController;g_fInstantSkipCutscenes=true;
+        g_fAutoCameraRotation=false;
         g_mouseopt.aimSensitivity=320;g_mouseopt.fInvertY=true;g_cameraKeyBindings[3]=GLFW_KEY_KP_2;
         const bool written=SaveSystemSettings();
         g_fAlwaysOriginalPsLayout=originalPs;g_promptStyle=promptStyle;g_fInstantSkipCutscenes=instant;
+        g_fAutoCameraRotation=autoCamera;
         g_mouseopt=mouse;g_cameraKeyBindings=cameraKeys;
         VIDEOSAVESETTINGS current{};uint32_t version=0;
         require(written && cane::settings::load(SystemSettingsPath(),current,&version)==cane::settings::LoadResult::Ok &&
@@ -727,6 +738,7 @@ void TestSaveCompatibility(const std::filesystem::path& fixtures)
         require(current.alwaysOriginalPsPrompts==1 && current.promptStyle==cane::settings::Prompt_SteamController &&
                 current.instantSkipCutscenes==1,"Prompt settings lost");
         require(current.mouseAimSensitivity==320 && current.mouseInvertY==1 && current.cameraKeyBindings[3]==GLFW_KEY_KP_2,"Mouse settings lost");
+        require(current.autoCameraRotation==0,"Camera rotation setting lost");
         require(current.fovPercent==35 && current.showFps==1 && current.streamerMode==1 && current.hackMouseAim==0 && current.debugKeys==1 && current.controllerVibration==0 && current.longShadows==0 &&
                 current.padInvertCameraX==1 && current.padInvertCameraY==1 && current.mouseInvertBinocX==1 && current.mouseInvertBinocY==1 &&
                 current.mouseInvertTurretX==1 && current.mouseInvertTurretY==1,"Other builds' settings not kept");
