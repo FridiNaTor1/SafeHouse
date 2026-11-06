@@ -49,6 +49,7 @@ enum PTX : int
     // mouse in each view (the controller's binocucom / turret rows are the game's own options 0x51 / 0x53)
     PTX_InvertControlsPage, PTX_PadInvertCameraX, PTX_PadInvertCameraY, PTX_MouseInvertCameraX, PTX_MouseInvertCameraY,
     PTX_MouseInvertBinocX, PTX_MouseInvertBinocY, PTX_MouseInvertTurretX, PTX_MouseInvertTurretY,
+    PTX_AutoCameraRotation,
     PTX_Max
 };
 

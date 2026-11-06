@@ -98,6 +98,7 @@ void PcInputFromSettings(const st::SystemSettings& s)
     o.fMouseInvertTurretY = s.mouseInvertTurretY != 0;
     o.fPadInvertCameraX = s.padInvertCameraX != 0;
     o.fPadInvertCameraY = s.padInvertCameraY != 0;
+    o.fAutoCameraRotation = s.autoCameraRotation != 0;
     o.fMouseRaw = s.mouseRawInput != 0;
     o.fMouseWheelZoom = s.mouseWheelZoom != 0;
     o.fMouseMenus = s.mouseMenus != 0;
@@ -128,6 +129,7 @@ void PcInputToSettings(st::SystemSettings& s)
     s.mouseInvertTurretY = o.fMouseInvertTurretY;
     s.padInvertCameraX = o.fPadInvertCameraX;
     s.padInvertCameraY = o.fPadInvertCameraY;
+    s.autoCameraRotation = o.fAutoCameraRotation;
     s.mouseRawInput = o.fMouseRaw;
     s.mouseWheelZoom = o.fMouseWheelZoom;
     s.mouseMenus = o.fMouseMenus;

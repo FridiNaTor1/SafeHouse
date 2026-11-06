@@ -52,6 +52,7 @@ enum PTX : int
     PTX_HelpRawInput, PTX_HelpWheelZoom, PTX_HelpMouseMenus, PTX_HelpCameraKeys,
     // the cutscene skip hint
     PTX_HoldToSkip, PTX_HoldToSkipNoIcons,
+    PTX_AutoCameraRotation, PTX_HelpAutoCameraRotation,
     PTX_Max
 };
 

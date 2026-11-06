@@ -39,6 +39,7 @@ struct PCINPUTOPT
     bool fMouseInvertBinocX = false, fMouseInvertBinocY = false;
     bool fMouseInvertTurretX = false, fMouseInvertTurretY = false;
     bool fPadInvertCameraX = false, fPadInvertCameraY = false;
+    bool fAutoCameraRotation = true;           // passive follow-camera steering; scripted cameras still apply
     bool fMouseRaw = true;
     bool fMouseWheelZoom = true;
     bool fMouseMenus = true;

@@ -361,7 +361,7 @@ int StepRange(int value, int minimum, int maximum, int step, int dir, bool wrap)
 
 bool FPcOption(RESPK respk)
 {
-	return respk >= RESPK_PromptStyle && respk < RESPK_CamKeyLeft && respk != RESPK_Mouse;
+	return (respk >= RESPK_PromptStyle && respk < RESPK_CamKeyLeft && respk != RESPK_Mouse) || respk == RESPK_AutoCameraRotation;
 }
 
 // Changes one option by dir (+1/-1) and saves. False for other rows.
@@ -376,6 +376,7 @@ bool AdjustPcOption(RESPK respk, int dir, bool wrap)
 	case RESPK_AlwaysOriginalPsLayout: toggle(g_fAlwaysOriginalPsLayout); break;
 	case RESPK_InstantSkipCutscenes: toggle(g_fInstantSkipCutscenes); break;
 	case RESPK_MouseCamera: toggle(g_mouseopt.fCamera); break;
+	case RESPK_AutoCameraRotation: toggle(g_fAutoCameraRotation); break;
 	case RESPK_MouseSensitivity: g_mouseopt.sensitivity = StepRange(g_mouseopt.sensitivity, 10, 500, 10, dir, wrap); break;
 	case RESPK_MouseAimSensitivity: g_mouseopt.aimSensitivity = StepRange(g_mouseopt.aimSensitivity, 10, 500, 10, dir, wrap); break;
 	case RESPK_MouseInvertX: toggle(g_mouseopt.fInvertX); break;
@@ -415,6 +416,7 @@ void BuildPcLabel(RESPK respk)
 		std::snprintf(out, size, "%s", StrPortOnOff(PTX_InstantSkip, g_fInstantSkipCutscenes).c_str());
 		break;
 	case RESPK_MouseCamera: std::snprintf(out, size, "%s", StrPortOnOff(PTX_MouseCamera, g_mouseopt.fCamera).c_str()); break;
+	case RESPK_AutoCameraRotation: std::snprintf(out, size, "%s", StrPortOnOff(PTX_AutoCameraRotation, g_fAutoCameraRotation).c_str()); break;
 	case RESPK_MouseSensitivity:
 		std::snprintf(out, size, "%s", StrPortValue(PTX_CameraSensitivity, std::to_string(g_mouseopt.sensitivity) + "%").c_str());
 		break;
@@ -453,6 +455,7 @@ const char* PchzPcHelp(RESPK respk)
 	case RESPK_InstantSkipCutscenes: return PchzPort(PTX_HelpInstantSkip);
 	case RESPK_Mouse: return PchzPort(PTX_HelpMouse);
 	case RESPK_MouseCamera: return PchzPort(PTX_HelpMouseCamera);
+	case RESPK_AutoCameraRotation: return PchzPort(PTX_HelpAutoCameraRotation);
 	case RESPK_MouseSensitivity: return PchzPort(PTX_HelpMouseSensitivity);
 	case RESPK_MouseAimSensitivity: return PchzPort(PTX_HelpAimSensitivity);
 	case RESPK_MouseInvertX: return PchzPort(PTX_HelpInvertHorizontal);
@@ -1937,6 +1940,7 @@ void ExecutePrompt(PROMPT* pprompt)
 			case RESPK_PromptStyle:
 			case RESPK_AlwaysOriginalPsLayout:
 			case RESPK_InstantSkipCutscenes:
+			case RESPK_AutoCameraRotation:
 			AdjustPcOption(response, 1, true);
 			break;
 
@@ -2077,7 +2081,7 @@ const char* AchzFromRespk(RESPK respk)
 	case RESPK_Mouse: return PchzPort(PTX_MouseEntry);
 	default: break;
 	}
-	if (respk >= RESPK_PromptStyle && respk < RESPK_LanguageEnglish && respk != RESPK_Mouse)
+	if ((respk >= RESPK_PromptStyle && respk < RESPK_LanguageEnglish && respk != RESPK_Mouse) || respk == RESPK_AutoCameraRotation)
 		BuildPcLabel(respk);
     return s_mprespkachz[respk];
 }

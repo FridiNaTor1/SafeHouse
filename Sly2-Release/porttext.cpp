@@ -278,6 +278,10 @@ constexpr ROW s_arow[] = {
         "Maus-Y umkehren (Geschütz)", "Invertir Y ratón (torretas)", "Y-as muis omkeren (geschut)",
         "Inverter Y do rato (Torre)", "Spejl musens Y (skydetårn)", "Käänteinen hiiren Y (tykki)",
         "Vend musens Y (tårn)", "Invertera musens Y (stridstorn)", "マウス上下反転(砲台)"}},
+    {PTX_AutoCameraRotation, {"Automatic Camera Rotation", "Rotation auto caméra", "Rotazione auto telecamera",
+        "Automatische Kameradrehung", "Giro automático de cámara", "Automatische camerarotatie",
+        "Rotação automática da câmara", "Automatisk kamerarotation", "Kameran automaattikääntö",
+        "Automatisk kamerarotasjon", "Automatisk kamerarotation", "カメラ自動回転"}},
 };
 // clang-format on
 static_assert(std::size(s_arow) == PTX_Max, "one row per PTX");

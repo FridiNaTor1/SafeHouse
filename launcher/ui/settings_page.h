@@ -577,6 +577,7 @@ private:
             s.mouseCamera = d.mouseCamera, s.mouseSensitivity = d.mouseSensitivity, s.mouseAimSensitivity = d.mouseAimSensitivity;
             s.mouseInvertX = d.mouseInvertX, s.mouseInvertY = d.mouseInvertY, s.mouseRawInput = d.mouseRawInput;
             s.padInvertCameraX = d.padInvertCameraX, s.padInvertCameraY = d.padInvertCameraY;
+            s.autoCameraRotation = d.autoCameraRotation;
             s.mouseInvertBinocX = d.mouseInvertBinocX, s.mouseInvertBinocY = d.mouseInvertBinocY;
             s.mouseInvertTurretX = d.mouseInvertTurretX, s.mouseInvertTurretY = d.mouseInvertTurretY;
             s.mouseWheelZoom = d.mouseWheelZoom, s.mouseMenus = d.mouseMenus, s.hackMouseAim = d.hackMouseAim;
@@ -861,6 +862,13 @@ private:
                "Every device shows the game's original PlayStation 2 button icons. Off: PS4 / PS5 pads show their own icons, other devices theirs.");
         toggle("Instant skip cutscenes", m_settings.instantSkipCutscenes,
                "One press of Circle skips a cutscene. Off: hold Circle for 3 seconds.");
+        if (m_game == GameId::Sly1 || m_game == GameId::Sly2) {
+            static const std::vector<std::string> cameraRotationLabels{ "Off", "On" };
+            int cameraRotation = m_settings.autoCameraRotation != 0 ? 1 : 0;
+            if (stepperRow("Automatic camera rotation", &cameraRotation, cameraRotationLabels))
+                m_settings.autoCameraRotation = cameraRotation, commit();
+            describe("Rotate the follow camera as you move.");
+        }
         const auto family = input::promptFamily(promptStyle(), 0);
         section("Controller");
         // (settings v17: Sly 2's controller camera inversion; off = the original's orbit camera)

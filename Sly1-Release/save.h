@@ -56,6 +56,8 @@ extern int g_promptStyle;
 // Persisted with the system settings (v12). One press of Circle skips a
 // cutscene (else it is held for 3 s). Off by default.
 extern bool g_fInstantSkipCutscenes;
+// System settings v18: passive follow-camera steering; manual and scripted cameras remain active.
+extern bool g_fAutoCameraRotation;
 // Debug mode (the launcher's Settings > Advanced > Debug mode, Debug Mode.ini; main.cpp LoadDebugModeSetting, off by
 // default): only then does F3 (the debug window) do anything. The system settings' v14 debugKeys is ignored.
 extern bool g_fDebugKeys;

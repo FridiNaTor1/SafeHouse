@@ -6,7 +6,7 @@
 //
 // File: 20-byte header {char magic[8]="PCANESYS"; u32 version; u32 payloadSize;
 // u32 fnv1a32(payload)} followed by the raw little-endian payload. Every
-// historic version (1-17) still loads; a write produces kVersion. A
+// historic version (1-18) still loads; a write produces kVersion. A
 // file with a higher version (for example from a newer or forked build) is
 // reported as Newer and never overwritten.
 #include <algorithm>
@@ -21,7 +21,7 @@
 namespace cane::settings {
 namespace fs = std::filesystem;
 inline constexpr char kMagic[8] = { 'P', 'C', 'A', 'N', 'E', 'S', 'Y', 'S' };
-inline constexpr uint32_t kVersion = 17;
+inline constexpr uint32_t kVersion = 18;
 // Action order: Up, Down, Left, Right, Square, Circle, Cross, Triangle, Start,
 // Select, L1, R1, L2, R2, L3, R3 (Input.h JOY_BUTTON).
 inline constexpr int kBindingCount = 16;
@@ -169,9 +169,16 @@ struct V16 {
     V15 base;
     int longShadows;
 };
+// v17: + Sly 2 camera / aim inversion.
+struct V17 {
+    V16 base;
+    int padInvertCameraX, padInvertCameraY;
+    int mouseInvertBinocX, mouseInvertBinocY;
+    int mouseInvertTurretX, mouseInvertTurretY;
+};
 } // namespace legacy
 
-// Current (v17) payload (Sly1-Release's VIDEOSAVESETTINGS); its first 196 bytes are the v8 layout, v9..v11 == ThiefRush's.
+// Current (v18) payload (Sly1-Release's VIDEOSAVESETTINGS); its first 196 bytes are the v8 layout, v9..v11 == ThiefRush's.
 // Append new fields only at the end, bump kVersion and add a legacy::V<n> snapshot plus a load branch.
 struct SystemSettings {
     int fogType;                  // 0 off, 1 PS2 (default), 2 PS3
@@ -239,6 +246,8 @@ struct SystemSettings {
     int mouseInvertBinocY;        // 0/1, default 0
     int mouseInvertTurretX;       // 0/1, default 0
     int mouseInvertTurretY;       // 0/1, default 0
+    // v18, offset 328 (Sly 1 / Sly 2): passive follow-camera steering while moving. Forced camera policies remain active.
+    int autoCameraRotation;       // 0/1, default 1
 };
 static_assert(sizeof(Header) == 20);
 static_assert(sizeof(legacy::V1) == 36 && sizeof(legacy::V2) == 40 && sizeof(legacy::V3) == 104);
@@ -246,7 +255,7 @@ static_assert(sizeof(legacy::V4) == 168 && sizeof(legacy::V5) == 172 && sizeof(l
 static_assert(sizeof(legacy::V7) == 180 && sizeof(legacy::V8) == 196 && sizeof(legacy::V9) == 200);
 static_assert(sizeof(legacy::V10) == 208 && sizeof(legacy::V11) == 284 && sizeof(legacy::V12) == 288);
 static_assert(sizeof(legacy::V13) == 292 && sizeof(legacy::V14) == 296 && sizeof(legacy::V15) == 300);
-static_assert(sizeof(legacy::V16) == 304 && sizeof(SystemSettings) == 328);
+static_assert(sizeof(legacy::V16) == 304 && sizeof(legacy::V17) == 328 && sizeof(SystemSettings) == 332);
 static_assert(offsetof(SystemSettings, guiStyle) == 40 && offsetof(SystemSettings, keyboardBindings) == 44);
 static_assert(offsetof(SystemSettings, gamepadBindings) == 108);
 static_assert(offsetof(SystemSettings, disableControllerInputWhenUnfocused) == 172);
@@ -258,6 +267,7 @@ static_assert(offsetof(SystemSettings, instantSkipCutscenes) == 284 && offsetof(
 static_assert(offsetof(SystemSettings, debugKeys) == 292 && offsetof(SystemSettings, controllerVibration) == 296);
 static_assert(offsetof(SystemSettings, longShadows) == 300 && offsetof(SystemSettings, padInvertCameraX) == 304);
 static_assert(offsetof(SystemSettings, mouseInvertTurretY) == 324);
+static_assert(offsetof(SystemSettings, autoCameraRotation) == 328);
 
 inline uint32_t checksum(const void* data, size_t size) {
     const auto* bytes = static_cast<const uint8_t*>(data);
@@ -334,6 +344,7 @@ inline SystemSettings defaults() {
     s.debugKeys = 0;
     s.controllerVibration = 1;
     s.longShadows = 1;
+    s.autoCameraRotation = 1;
     return s;
 }
 // Sly 2's defaults: defaults() with Sly 2's keyboard / mouse layout. (A file that lacks the bindings still takes
@@ -380,6 +391,7 @@ inline SystemSettings upgrade(const legacy::V13& old) { return detail::fromPrefi
 inline SystemSettings upgrade(const legacy::V14& old) { return detail::fromPrefix(old); }
 inline SystemSettings upgrade(const legacy::V15& old) { return detail::fromPrefix(old); }
 inline SystemSettings upgrade(const legacy::V16& old) { return detail::fromPrefix(old); }
+inline SystemSettings upgrade(const legacy::V17& old) { return detail::fromPrefix(old); }
 
 // Ok: current version. Upgraded: an older version, converted in memory (the
 // file is untouched until save()). Missing: no file. Corrupt: unreadable,
@@ -435,6 +447,7 @@ inline LoadResult load(const fs::path& file, SystemSettings& out, uint32_t* vers
     case 14: result = detail::loadLegacy<legacy::V14>(stream, header, out); break;
     case 15: result = detail::loadLegacy<legacy::V15>(stream, header, out); break;
     case 16: result = detail::loadLegacy<legacy::V16>(stream, header, out); break;
+    case 17: result = detail::loadLegacy<legacy::V17>(stream, header, out); break;
     case kVersion: {
         SystemSettings current{};
         if (detail::readPayload(stream, header, current)) {
@@ -460,6 +473,7 @@ inline uint32_t payloadSize(uint32_t version) {
     case 14: return sizeof(legacy::V14);
     case 15: return sizeof(legacy::V15);
     case 16: return sizeof(legacy::V16);
+    case 17: return sizeof(legacy::V17);
     case kVersion: return sizeof(SystemSettings);
     default: return 0;
     }
@@ -560,6 +574,7 @@ inline void sanitizeStatic(SystemSettings& s, int monitorHeight, int maxSamples,
     s.debugKeys = s.debugKeys != 0;
     s.controllerVibration = s.controllerVibration != 0;
     s.longShadows = s.longShadows != 0;
+    s.autoCameraRotation = s.autoCameraRotation != 0;
     for (int i = 0; i < kCameraKeyCount; ++i)
         if (!validCameraKey(s.cameraKeyBindings[i])) s.cameraKeyBindings[i] = kDefaultCameraKeys[i];
     for (int button = 0; button < kBindingCount; ++button) {

@@ -286,6 +286,15 @@ constexpr ROW s_arow[] = {
     {PTX_HoldToSkipNoIcons, {"Hold Circle to skip", "Maintiens Rond pour passer", "Kreis halten zum Überspringen",
         "Mantén Círculo para saltar", "Tieni premuto Cerchio per saltare", "まるボタンを押し続けるとスキップ",
         "동그라미 버튼을 누르고 있으면 건너뛰기"}},
+    {PTX_AutoCameraRotation, {"Automatic Camera Rotation", "Rotation auto caméra", "Automatische Kameradrehung",
+        "Giro automático de cámara", "Rotazione auto telecamera", "カメラ自動回転", "카메라 자동 회전"}},
+    {PTX_HelpAutoCameraRotation, {"Rotate the follow camera as you move. Off: keep your chosen angle. Scripted cameras still apply.",
+        "La caméra tourne quand tu bouges. Non : garde ton angle. Les caméras imposées restent actives.",
+        "Dreht die Kamera beim Bewegen. Aus: Blickwinkel beibehalten. Vorgegebene Kameras bleiben aktiv.",
+        "Gira la cámara al moverte. No: mantiene tu ángulo. Las cámaras de escenas siguen activas.",
+        "Ruota la telecamera mentre ti muovi. Off: mantiene la tua angolazione. Le visuali imposte restano attive.",
+        "移動時にカメラを自動回転。オフ：選んだ角度を維持。固定カメラはそのまま。",
+        "이동할 때 카메라를 자동으로 회전합니다. 끄면 선택한 각도를 유지합니다. 지정된 카메라는 유지됩니다."}},
 };
 // clang-format on
 static_assert(std::size(s_arow) == PTX_Max, "one row per PTX");

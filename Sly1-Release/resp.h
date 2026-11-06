@@ -114,7 +114,8 @@ enum RESPK : int
 	RESPK_LanguageSpanish,
 	RESPK_LanguageItalian,
 
-	RESPK_Max = 87
+	RESPK_AutoCameraRotation = 87,
+	RESPK_Max = 88
 };
 
 // -----------------------------------------------------------------------------
@@ -311,7 +312,7 @@ inline RESPK s_arespkSlots[7] =
     RESPK_Back
 };
 
-inline const RESPK s_arespkControlsMenuAll[12] =
+inline const RESPK s_arespkControlsMenuAll[13] =
 {
 	RESPK_CameraInvert,
     RESPK_BinocInvert,
@@ -321,13 +322,14 @@ inline const RESPK s_arespkControlsMenuAll[12] =
 	RESPK_PromptStyle,
 	RESPK_AlwaysOriginalPsLayout,
 	RESPK_InstantSkipCutscenes,
+	RESPK_AutoCameraRotation,
 	RESPK_Mouse,
 	RESPK_KeyboardMapping,
 	RESPK_ControllerMapping,
     RESPK_Back
 };
 
-inline RESPK s_arespkControlsMenu[12]{};
+inline RESPK s_arespkControlsMenu[13]{};
 
 inline RESPK s_arespkKeyboardMapping[17] =
 {
@@ -441,7 +443,7 @@ inline char g_achzRespk63[64]{};
 inline char g_achzRespk64[64]{};
 inline char g_achzRespk65[64]{};
 inline char g_aachzKeyboardBindings[BTN_MAX][64]{};
-// Labels of RESPK_PromptStyle .. RESPK_CamKeyDown (prompt.cpp BuildPcLabel).
+// Labels of the PC options (prompt.cpp BuildPcLabel), indexed from RESPK_PromptStyle.
 inline char g_aachzRespkPc[RESPK_Max - RESPK_PromptStyle][64]{};
 
 // -----------------------------------------------------------------------------
@@ -584,7 +586,8 @@ inline const char* s_mprespkachz[RESPK_Max] =
 	"Fran\xC3\xA7""ais",    // 83 RESPK_LanguageFrench
 	"Deutsch",              // 84 RESPK_LanguageGerman
 	"Espa\xC3\xB1""ol",    // 85 RESPK_LanguageSpanish
-	"Italiano"              // 86 RESPK_LanguageItalian
+	"Italiano",             // 86 RESPK_LanguageItalian
+	g_aachzRespkPc[RESPK_AutoCameraRotation - RESPK_PromptStyle]
 };
 
 // -----------------------------------------------------------------------------
@@ -648,7 +651,8 @@ inline RESPD s_arespd[RESPK_Max] =
 	{ 0, nullptr }, { 0, nullptr }, { 0, nullptr }, { 0, nullptr },
 	{ 0, nullptr }, { 0, nullptr }, { 0, nullptr }, { 0, nullptr },
 	{ 0, nullptr }, { 0, nullptr }, { 0, nullptr }, { 0, nullptr }, // 70-81
-	{ 0, nullptr }, { 0, nullptr }, { 0, nullptr }, { 0, nullptr }, { 0, nullptr } // 82-86 languages
+	{ 0, nullptr }, { 0, nullptr }, { 0, nullptr }, { 0, nullptr }, { 0, nullptr }, // 82-86 languages
+	{ 0, nullptr } // 87 RESPK_AutoCameraRotation
 };
 
 // -----------------------------------------------------------------------------
