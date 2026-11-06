@@ -198,10 +198,20 @@ void ApplyDisplaySettings(GLFWwindow* window)
             }
             else if (mode == DISPWINDOW_Borderless)
             {
-                int x = 0, y = 0, dx = 0, dy = 0;
-                glfwGetMonitorWorkarea(monitor, &x, &y, &dx, &dy);
+                const GLFWvidmode* vm = glfwGetVideoMode(monitor);
+                if (!vm) return;
+                int x = 0, y = 0;
+                glfwGetMonitorPos(monitor, &x, &y);
+                int dx = vm->width;
+#if defined(_WIN32)
+                // Some Windows OpenGL drivers promote monitor-sized windows to fullscreen. An extra
+                // column is a workaround for the resulting focus-change blackout, while covering the taskbar.
+                // GLFW discussion, replies 2-3 (fullscreen promotion and the reported size workaround):
+                // https://discourse.glfw.org/t/cannot-view-window-via-screenshot-or-remote-screen-access/2986
+                ++dx;
+#endif
                 glfwSetWindowAttrib(window, GLFW_DECORATED, GLFW_FALSE);
-                glfwSetWindowMonitor(window, nullptr, x, y, dx, dy, GLFW_DONT_CARE);
+                glfwSetWindowMonitor(window, nullptr, x, y, dx, vm->height, GLFW_DONT_CARE);
             }
             else if (const GLFWvidmode* vm = glfwGetVideoMode(monitor))
             {

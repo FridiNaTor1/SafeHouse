@@ -234,8 +234,19 @@ int s_wheel = 0;                                // this step's notches, + = up
 int s_cwheelMenu = 0;                           // menu steps still to give (one press every other step)
 bool s_afButton[MOUSE_BUTTONS] = {};
 bool s_afButtonPrev[MOUSE_BUTTONS] = {};
+bool s_afButtonBlocked[MOUSE_BUTTONS] = {};
 float s_travel = 0.0f;
 GLFWscrollfun s_pfnScrollPrev = nullptr;
+GLFWwindowfocusfun s_pfnFocusPrev = nullptr;
+
+void FocusCallback(GLFWwindow* window, int focused)
+{
+    // Ignore mouse buttons held across a focus change until they are released.
+    std::fill(std::begin(s_afButtonBlocked), std::end(s_afButtonBlocked), true);
+    s_dyScroll = 0.0;
+    s_fHaveLast = false;
+    if (s_pfnFocusPrev) s_pfnFocusPrev(window, focused);
+}
 
 void ScrollCallback(GLFWwindow* window, double dx, double dy)
 {
@@ -332,6 +343,7 @@ void UpdateMouse(GLFWwindow* window)
     if (s_pwindowHooked != window)
     {
         s_pfnScrollPrev = glfwSetScrollCallback(window, ScrollCallback);
+        s_pfnFocusPrev = glfwSetWindowFocusCallback(window, FocusCallback);
         s_pwindowHooked = window;
     }
     s_dxCounts = s_dyCounts = 0.0f;
@@ -343,7 +355,9 @@ void UpdateMouse(GLFWwindow* window)
     for (int b = 0; b < MOUSE_BUTTONS; ++b)
     {
         s_afButtonPrev[b] = s_afButton[b];
-        s_afButton[b] = (fFocused && glfwGetMouseButton(window, b) == GLFW_PRESS) || FTestKeyHeld(st::kMouseBindingBase + b);
+        const bool fHeld = glfwGetMouseButton(window, b) == GLFW_PRESS || FTestKeyHeld(st::kMouseBindingBase + b);
+        if (!fHeld) s_afButtonBlocked[b] = false;
+        s_afButton[b] = fFocused && fHeld && !s_afButtonBlocked[b];
         fClicked |= s_afButton[b] && !s_afButtonPrev[b];
     }
     if (fClicked || (s_wheel != 0 && fFocused)) cane::input::tracker().noteMouse();
@@ -789,7 +803,7 @@ int KeyBindingPressed(GLFWwindow* window)
     }
     for (int b = 0; b < MOUSE_BUTTONS; ++b)
     {
-        const bool f = glfwGetMouseButton(window, b) == GLFW_PRESS;
+        const bool f = FMouseBindingHeld(st::kMouseBindingBase + b);
         if (f && !s_afMousePrev[b] && found < 0) found = st::kMouseBindingBase + b;
         s_afMousePrev[b] = f;
     }

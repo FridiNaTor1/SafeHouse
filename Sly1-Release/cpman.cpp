@@ -1,6 +1,8 @@
 #include "cpman.h"
 #include "cm.h"
 #include "clock.h"
+#include "mouseinput.h"
+#include "../platform/system_settings.h"
 
 namespace
 {
@@ -32,7 +34,7 @@ void UpdateCpman(CPMAN* pcpman, CPDEFI* pcpdefi, JOY* pjoy, float dt)
         : (1.0f / 60.0f);
     const float dtCamera = (std::isfinite(dt) && dt > 0.0f) ? dt : dtReal;
 
-    if (!g_fDisableInput && glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS)
+    if (!g_fDisableInput && FMouseBindingHeld(cane::settings::kMouseBindingBase + GLFW_MOUSE_BUTTON_LEFT))
     {
         const bool captureStarted = !s_fManualMouseCaptured ||
             glfwGetInputMode(window, GLFW_CURSOR) != GLFW_CURSOR_DISABLED;
