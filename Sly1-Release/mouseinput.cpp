@@ -44,6 +44,7 @@ float s_dxCounts = 0.0f, s_dyCounts = 0.0f; // + = right / down
 int s_wheel = 0;                            // + = up
 bool s_afButton[kMouseButtonCount] = {};
 bool s_afButtonPrev[kMouseButtonCount] = {};
+bool s_afButtonBlocked[kMouseButtonCount] = {};
 bool s_fImGuiMouse = false;
 bool s_fMenuCursorValid = false;
 float s_xMenu = 0.0f, s_yMenu = 0.0f;
@@ -103,6 +104,17 @@ void NoteMouse()
 	cane::input::tracker().noteMouse();
 }
 } // namespace
+
+void MouseFocusChanged()
+{
+	// A click used to activate the window must not reach gameplay, menus, or binding capture.
+	std::fill_n(s_afButtonBlocked, kMouseButtonCount, true);
+	s_fHaveLast = false;
+	s_dxCounts = s_dyCounts = 0.0f;
+	s_wheel = 0;
+	(void)MOUSE::GetScrollDX();
+	(void)MOUSE::GetScrollDY();
+}
 
 void SetTestMouse(bool active, float dx, float dy, int wheel, unsigned buttons, float x, float y)
 {
@@ -164,7 +176,9 @@ void UpdateMouseInput(GLFWwindow* window)
 	for (int button = 0; button < kMouseButtonCount; ++button)
 	{
 		s_afButtonPrev[button] = s_afButton[button];
-		s_afButton[button] = fFocused && !s_fImGuiMouse && glfwGetMouseButton(window, button) == GLFW_PRESS;
+		const bool fHeld = glfwGetMouseButton(window, button) == GLFW_PRESS;
+		if (!fHeld) s_afButtonBlocked[button] = false;
+		s_afButton[button] = fFocused && !s_fImGuiMouse && fHeld && !s_afButtonBlocked[button];
 		fClicked |= s_afButton[button] && !s_afButtonPrev[button];
 	}
 	if (fClicked || (s_wheel != 0 && fFocused))
@@ -243,7 +257,7 @@ int MouseBindingPressed(GLFWwindow* window)
 	if (window == nullptr || glfwGetWindowAttrib(window, GLFW_FOCUSED) != GLFW_TRUE)
 		return -1;
 	for (int button = 0; button < kMouseButtonCount; ++button)
-		if (glfwGetMouseButton(window, button) == GLFW_PRESS)
+		if (FMouseBindingHeld(kMouseBindingBase + button))
 			return kMouseBindingBase + button;
 	if (s_wheel > 0)
 		return cane::settings::kMouseWheelUp;

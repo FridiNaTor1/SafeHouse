@@ -8,6 +8,7 @@
 #include "glfw_platform.h"
 #include "prompt_glyphs.h"
 #include "runtime_error.h"
+#include "mouseinput.h"
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -54,6 +55,7 @@ void GlfwErrorCallback(int error, const char* description)
 
 void WindowFocusCallback(GLFWwindow* window, int focused)
 {
+	MouseFocusChanged();
 	if (focused == GLFW_FALSE && g_fAutoIconify &&
 		glfwGetTime() >= s_autoIconifySuppressedUntil &&
 		glfwGetWindowAttrib(window, GLFW_ICONIFIED) == GLFW_FALSE)
@@ -1227,9 +1229,17 @@ bool ApplyWindowModeSettings(WindowMode mode)
 		// Borderless is a fullscreen-sized window, not a work-area-sized window.
 		// The work area excludes the taskbar and left a visible strip along the
 		// bottom of the selected monitor.
+		int width = videoMode->width;
+#if defined(_WIN32)
+		// Some Windows OpenGL drivers promote monitor-sized windows to fullscreen. An extra
+		// column is a workaround for the resulting focus-change blackout, while covering the taskbar.
+		// GLFW discussion, replies 2-3 (fullscreen promotion and the reported size workaround):
+		// https://discourse.glfw.org/t/cannot-view-window-via-screenshot-or-remote-screen-access/2986
+		++width;
+#endif
 		glfwSetWindowAttrib(g_gl.window, GLFW_DECORATED, GLFW_FALSE);
 		glfwSetWindowMonitor(g_gl.window, nullptr, x, y,
-			videoMode->width, videoMode->height, GLFW_DONT_CARE);
+			width, videoMode->height, GLFW_DONT_CARE);
 	}
 	else
 	{
