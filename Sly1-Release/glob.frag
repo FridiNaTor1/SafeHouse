@@ -82,12 +82,12 @@ layout(location = 1) in vec3 worldNormal;
 layout(location = 2) in vec4 vertexColor;
 layout(location = 3) in vec2 texcoord;
 
-in MATERIAL material;
-flat in vec4  vProjectedVolumeColor;
-flat in vec2  vDarkenAlpha;
-flat in ivec4 vDrawFlags;
-flat in uvec3 vShadowList;
-in float fogIntensity;
+layout(location = 4)  in MATERIAL material; // locations 4-6, one per member
+layout(location = 7)  flat in vec4  vProjectedVolumeColor;
+layout(location = 8)  flat in vec2  vDarkenAlpha;
+layout(location = 9)  flat in ivec4 vDrawFlags;
+layout(location = 10) flat in uvec3 vShadowList;
+layout(location = 11) in float fogIntensity;
 
 layout(location = 0) out vec4 FragColor;
 

@@ -244,15 +244,15 @@ layout(location = 1) out vec3 worldNormal;
 layout(location = 2) out vec4 vertexColor;
 layout(location = 3) out vec2 texcoord;
 
-out MATERIAL material;
+layout(location = 4)  out MATERIAL material; // locations 4-6, one per member
 // Fragment-shader inputs that are constant for a draw: projectedVolumeColor,
 // (op.darken, op.uAlpha), (rko, fAlphaTest, projectedVolumeFinalPass, shadow
 // count) and up to MAX_OBJECT_SHADOWS shadow indices, one per byte.
-flat out vec4  vProjectedVolumeColor;
-flat out vec2  vDarkenAlpha;
-flat out ivec4 vDrawFlags;
-flat out uvec3 vShadowList;
-out float fogIntensity;
+layout(location = 7)  flat out vec4  vProjectedVolumeColor;
+layout(location = 8)  flat out vec2  vDarkenAlpha;
+layout(location = 9)  flat out ivec4 vDrawFlags;
+layout(location = 10) flat out uvec3 vShadowList;
+layout(location = 11) out float fogIntensity;
 
 void ApplyWarp(inout vec4 vLocal, inout vec2 uvLocal);
 void ApplyPoses(inout vec4 positionLocal, inout vec3 normalLocal);
