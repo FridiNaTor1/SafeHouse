@@ -38,7 +38,8 @@ void HudAutoSaveFrontEnd();
 extern int g_ncardMode;
 
 // orig (Europe) 0x001DDFB8: the title's language menu (a disc with two or more languages)
-void OpenLanguageMenu(SW* psw);
+// The first-launch picker cannot be dismissed before a language is selected.
+void OpenLanguageMenu(SW* psw, bool fCanCancel = true);
 // the card's status known (the European title's first Start turns the card on: frontend.cpp)
 bool FCardSettled();
 

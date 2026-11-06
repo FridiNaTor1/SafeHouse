@@ -136,6 +136,7 @@ struct PAGE
     int fReplaced = 0;           // +0x0C (a yes / no page: Triangle goes back through state 3)
     int isel = 0;                // +0x14
     uint32_t vaAnim = 0;         // +0x18 the animations (8 ids)
+    bool fCanCancel = true;      // the initial language choice must be confirmed
 };
 struct MENU
 {
@@ -1234,7 +1235,7 @@ void HudAutoSaveFrontEnd() { HudAutoSave(true); }
 // This is where the language is chosen. A future QoL could let users add their own dubs, subtitles or whole new
 // languages (text tables, dialog and movie sound beside the disc) and offer this menu on the USA disc too; the
 // rest of the port only reads g_nLang (region.h).
-void OpenLanguageMenu(SW* psw)
+void OpenLanguageMenu(SW* psw, bool fCanCancel)
 {
     s_psw = psw;
     LO* plo = psw ? PloFindSwObjectByOid(psw, 0x5D6) : nullptr;
@@ -1254,6 +1255,7 @@ void OpenLanguageMenu(SW* psw)
         aent.push_back(e);
     }
     PushPage(std::move(aent), 0, plo, 0x2C35F0);
+    if (PAGE* pg = PpageCur()) pg->fCanCancel = fCanCancel;
 }
 
 bool FCardSettled()
@@ -1348,8 +1350,8 @@ void UpdateMenu(SW* psw)
     {
         // (the Japanese build: Circle selects, Cross goes back, Square erases: region.h)
         const uint32_t grf = GrfbtnTakePressed(0x800 | BtnMenuBack() | BtnMenuConfirm() | BtnMenuErase() | (FDataAccess() ? 0xC : 0));
-        if (grf & 0x800) { CloseMenu(); return; }
-        if (grf & BtnMenuBack()) { confirm(); return; }
+        if (grf & 0x800) { if (pe->fCanCancel) CloseMenu(); return; }
+        if (grf & BtnMenuBack()) { if (pe->fCanCancel) confirm(); return; }
         if (pe->aent.empty() && grf != 0) { confirm(); return; }
         if (s_menu.depth > 0 && (grf & BtnMenuConfirm()) && !pe->aent.empty())
         {
