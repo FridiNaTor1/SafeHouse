@@ -64,7 +64,7 @@ On macOS the games' OpenGL runs on Metal (`platform/metal`). The macOS build has
 | `CANE_BUILD_LAUNCHER` | ON | The launcher |
 | `CANE_LTO` | auto | Link-time optimization (on when supported and the machine has at least 6 GB of RAM) |
 | `CANE_X86_64_V2` | OFF | Build for x86-64-v2 CPUs (SSE4.2, POPCNT; GCC / Clang) |
-| `CANE_FFMPEG_ROOT` | | Another FFmpeg build (Windows / macOS) |
+| `CANE_FFMPEG_ROOT` | | Another FFmpeg build. The release packages use `scripts/ffmpeg-minimal.sh linux PREFIX` (or `windows`) (the games' codecs only, much smaller than a system FFmpeg); macOS uses `scripts/macos/ffmpeg.sh` |
 | `CANE_LAUNCHER_SOURCE_BUILD` | OFF | Development builds: the launcher's **Settings > Advanced > Custom runtime** builds and uses the games from a source checkout |
 
 CMake's `FETCHCONTENT_SOURCE_DIR_GLFW`, `FETCHCONTENT_SOURCE_DIR_FAUDIO` and `FETCHCONTENT_SOURCE_DIR_SDL2` use local

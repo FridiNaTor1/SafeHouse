@@ -445,7 +445,16 @@ if(MSVC)
   endif()
  endforeach()
 endif()
-install(FILES Libraries/ffmpeg/ffmpeg-master-latest-win64-lgpl-shared/LICENSE.txt DESTINATION licenses/ffmpeg)
+# An FFmpeg built by scripts/ffmpeg-minimal.sh (the release packages) carries its own licence and its exact
+# configuration (RECIPE: version and configure arguments, for the LGPL's "how it was built").
+if(CANE_FFMPEG_ROOT AND EXISTS "${CANE_FFMPEG_ROOT}/COPYING.LGPLv2.1")
+ install(FILES "${CANE_FFMPEG_ROOT}/COPYING.LGPLv2.1" DESTINATION licenses/ffmpeg)
+ if(EXISTS "${CANE_FFMPEG_ROOT}/RECIPE")
+  install(FILES "${CANE_FFMPEG_ROOT}/RECIPE" DESTINATION licenses/ffmpeg RENAME BUILD-CONFIGURATION.txt)
+ endif()
+else()
+ install(FILES Libraries/ffmpeg/ffmpeg-master-latest-win64-lgpl-shared/LICENSE.txt DESTINATION licenses/ffmpeg)
+endif()
 install(FILES Libraries/include/stb/LICENSE DESTINATION licenses/stb)
 
 if(BUILD_TESTING AND CANE_BUILD_GAME AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/save_layout.cpp")
