@@ -198,10 +198,15 @@ void ApplyDisplaySettings(GLFWwindow* window)
             }
             else if (mode == DISPWINDOW_Borderless)
             {
-                int x = 0, y = 0, dx = 0, dy = 0;
-                glfwGetMonitorWorkarea(monitor, &x, &y, &dx, &dy);
-                glfwSetWindowAttrib(window, GLFW_DECORATED, GLFW_FALSE);
-                glfwSetWindowMonitor(window, nullptr, x, y, dx, dy, GLFW_DONT_CARE);
+                // the whole monitor, taskbar included (as Sly1-Release ApplyWindowModeSettings; on Windows the frames
+                // go through a DXGI swap chain, platform/gl_context.h, so focus changes do not blank the screen)
+                if (const GLFWvidmode* vm = glfwGetVideoMode(monitor))
+                {
+                    int x = 0, y = 0;
+                    glfwGetMonitorPos(monitor, &x, &y);
+                    glfwSetWindowAttrib(window, GLFW_DECORATED, GLFW_FALSE);
+                    glfwSetWindowMonitor(window, nullptr, x, y, vm->width, vm->height, GLFW_DONT_CARE);
+                }
             }
             else if (const GLFWvidmode* vm = glfwGetVideoMode(monitor))
             {

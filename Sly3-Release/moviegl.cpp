@@ -106,7 +106,7 @@ bool PresentMovieGl(const uint8_t* prgba, int cx, int cy, void* pv)
     if (m.fWindowed)
     {
         g_gl.Present();
-        glfwSwapBuffers(g_gl.window);
+        cane::gl::SwapBuffers(g_gl.window);
     }
     return true;
 }
@@ -119,7 +119,7 @@ int ViewMovieCommand(const std::string& arg, const std::string& screenshot, doub
     g_gl.msaa = 0;
     g_display.msaaSamples = 0;
     if (!g_gl.FInit(width, height, screenshot.empty(), "Sly3-Release movie", error)) { std::fprintf(stderr, "%s\n", error.c_str()); return 1; }
-    glfwSwapInterval(0);   // the movie's sound is the clock
+    cane::gl::SwapInterval(0);   // the movie's sound is the clock
     MOVIEGL m;
     m.screenshot = screenshot;
     m.tScreenshot = t;

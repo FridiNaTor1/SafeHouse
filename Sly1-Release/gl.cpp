@@ -8,6 +8,7 @@
 #include "glfw_platform.h"
 #include "prompt_glyphs.h"
 #include "runtime_error.h"
+#include "mouseinput.h"
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -54,6 +55,7 @@ void GlfwErrorCallback(int error, const char* description)
 
 void WindowFocusCallback(GLFWwindow* window, int focused)
 {
+	MouseFocusChanged();
 	if (focused == GLFW_FALSE && g_fAutoIconify &&
 		glfwGetTime() >= s_autoIconifySuppressedUntil &&
 		glfwGetWindowAttrib(window, GLFW_ICONIFIED) == GLFW_FALSE)
@@ -159,14 +161,14 @@ void GL::InitGL()
 			"The game window could not be created. Update the graphics driver and verify OpenGL 4.3 support.");
 	}
 
-	glfwMakeContextCurrent(window);
+	cane::gl::CreateContext(window, nullptr);
 	glfwSetFramebufferSizeCallback(window, FrameBufferSizeCallBack);
 	glfwSetWindowFocusCallback(window, WindowFocusCallback);
 	glfwSetCursorPosCallback(window, MOUSE::CursorPosCallback);
 	glfwSetMouseButtonCallback(window, MOUSE::MouseButtonCallback);
 	glfwSetScrollCallback(window, MOUSE::MouseWheelCallback);
 
-	if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress))
+	if (!gladLoadGLLoader((GLADloadproc)cane::gl::ProcAddress))
 	{
 		ReportRuntimeError("Graphics",
 			"GLAD could not load the required OpenGL functions. Update the graphics driver and verify OpenGL 4.3 support.");
@@ -800,6 +802,7 @@ void GL::TerminateGL()
 	ImGui_ImplOpenGL3_Shutdown();
 	ImGui_ImplGlfw_Shutdown();
 	ImGui::DestroyContext();
+	cane::gl::DestroyContext(window);
 	glfwDestroyWindow(window);
 	glfwTerminate();
 }
@@ -1226,7 +1229,8 @@ bool ApplyWindowModeSettings(WindowMode mode)
 
 		// Borderless is a fullscreen-sized window, not a work-area-sized window.
 		// The work area excludes the taskbar and left a visible strip along the
-		// bottom of the selected monitor.
+		// bottom of the selected monitor. On Windows the frames go through a DXGI
+		// swap chain (platform/gl_context.h), so focus changes do not blank it.
 		glfwSetWindowAttrib(g_gl.window, GLFW_DECORATED, GLFW_FALSE);
 		glfwSetWindowMonitor(g_gl.window, nullptr, x, y,
 			videoMode->width, videoMode->height, GLFW_DONT_CARE);

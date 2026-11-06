@@ -30,6 +30,8 @@ extern MOUSEOPTIONS g_mouseopt;
 // Once per gameplay JOY::Update: button states, the motion since the previous
 // call and the cursor capture.
 void UpdateMouseInput(GLFWwindow* window);
+// Called on focus loss and gain: ignore the activation click until its release.
+void MouseFocusChanged();
 // Re-applies raw motion after the option changes.
 void ApplyMouseOptions();
 

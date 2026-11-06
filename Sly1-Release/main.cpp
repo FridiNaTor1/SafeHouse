@@ -453,7 +453,7 @@ void RunGameFrame()
         stbi_flip_vertically_on_write(true);
         stbi_write_png(s_smokeWindowShot.c_str(), w, h, 4, pixels.data(), w * 4);
     }
-    glfwSwapBuffers(g_gl.window);
+    cane::gl::SwapBuffers(g_gl.window);
 
     ++g_cframe;
     s_runningFrame = false;

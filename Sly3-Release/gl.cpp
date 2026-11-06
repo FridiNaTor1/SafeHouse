@@ -103,11 +103,11 @@ bool GL::FInit(int w, int h, bool fVisible, const char* title, std::string& erro
         error = "OpenGL 4.5 is required: could not create a graphics context";
         return false;
     }
-    glfwMakeContextCurrent(window);
-    if (!gladLoadGLLoader(reinterpret_cast<GLADloadproc>(glfwGetProcAddress))) { error = "glad failed"; return false; }
+    if (!cane::gl::CreateContext(window, &error)) return false;
+    if (!gladLoadGLLoader(reinterpret_cast<GLADloadproc>(cane::gl::ProcAddress))) { error = "glad failed"; return false; }
     std::printf("OpenGL: %s / %s\n", glGetString(GL_RENDERER), glGetString(GL_VERSION));
     StartupPcInput();   // (the prompt icons' atlases: pcinput.h / promptglyph.h)
-    glfwSwapInterval(1);
+    cane::gl::SwapInterval(1);
     // Reversed Z in [0, 1]: the GS's depth tests (GREATER / GEQUAL, larger = nearer) map one to one.
     // (glad here is the GL 4.3 loader: fetch glClipControl, GL 4.5 / ARB_clip_control, directly.)
     using PFNCLIPCONTROL = void (*)(GLenum, GLenum);
@@ -296,7 +296,11 @@ void GL::Terminate()
         ResetAnimatedOverlayGraphics();
         glOverlayShader.Delete();
     }
-    if (window) glfwDestroyWindow(window);
+    if (window)
+    {
+        cane::gl::DestroyContext(window);
+        glfwDestroyWindow(window);
+    }
     window = nullptr;
     glfwTerminate();
 }

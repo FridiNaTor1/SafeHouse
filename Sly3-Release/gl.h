@@ -8,6 +8,8 @@
 
 #include <string>
 
+#include "gl_context.h"
+
 class GLSHADER
 {
 public:

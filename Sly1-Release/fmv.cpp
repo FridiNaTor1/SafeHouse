@@ -409,7 +409,7 @@ namespace
         // The skip hint / indicator (skipcut.h), in the game's UI space.
         glViewport(g_gl.presentX, g_gl.presentY, g_gl.presentWidth, g_gl.presentHeight);
         DrawMovieSkip();
-        glfwSwapBuffers(g_gl.window);
+        cane::gl::SwapBuffers(g_gl.window);
         return true;
     }
 
