@@ -189,20 +189,15 @@ void ApplyDisplaySettings(GLFWwindow* window)
             }
             else if (mode == DISPWINDOW_Borderless)
             {
-                const GLFWvidmode* vm = glfwGetVideoMode(monitor);
-                if (!vm) return;
-                int x = 0, y = 0;
-                glfwGetMonitorPos(monitor, &x, &y);
-                int dx = vm->width;
-#if defined(_WIN32)
-                // Some Windows OpenGL drivers promote monitor-sized windows to fullscreen. An extra
-                // column is a workaround for the resulting focus-change blackout, while covering the taskbar.
-                // GLFW discussion, replies 2-3 (fullscreen promotion and the reported size workaround):
-                // https://discourse.glfw.org/t/cannot-view-window-via-screenshot-or-remote-screen-access/2986
-                ++dx;
-#endif
-                glfwSetWindowAttrib(window, GLFW_DECORATED, GLFW_FALSE);
-                glfwSetWindowMonitor(window, nullptr, x, y, dx, vm->height, GLFW_DONT_CARE);
+                // the whole monitor, taskbar included (as Sly1-Release ApplyWindowModeSettings; on Windows the frames
+                // go through a DXGI swap chain, platform/gl_context.h, so focus changes do not blank the screen)
+                if (const GLFWvidmode* vm = glfwGetVideoMode(monitor))
+                {
+                    int x = 0, y = 0;
+                    glfwGetMonitorPos(monitor, &x, &y);
+                    glfwSetWindowAttrib(window, GLFW_DECORATED, GLFW_FALSE);
+                    glfwSetWindowMonitor(window, nullptr, x, y, vm->width, vm->height, GLFW_DONT_CARE);
+                }
             }
             else if (const GLFWvidmode* vm = glfwGetVideoMode(monitor))
             {
@@ -212,7 +207,7 @@ void ApplyDisplaySettings(GLFWwindow* window)
             s_windowApplied = mode;
         }
     }
-    glfwSwapInterval(g_display.fVsync ? 1 : 0);
+    cane::gl::SwapInterval(g_display.fVsync ? 1 : 0);
     int fbw = 0, fbh = 0;
     glfwGetFramebufferSize(window, &fbw, &fbh);
     LayoutDisplay(fbw, fbh);

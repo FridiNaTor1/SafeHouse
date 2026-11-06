@@ -679,7 +679,7 @@ void ApplySwapInterval()
         }
     }
 
-    glfwSwapInterval(interval);
+    cane::gl::SwapInterval(interval);
     g_fSwapPacesFrames = fSwapPacesFrames;
 
     // FramePacer keeps its verdict on whether the swap really paces until this

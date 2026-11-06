@@ -884,7 +884,7 @@ int RunWorldLoop3(const GAME3OPTS& o)
                         g_clock3.t, g_renderstats.cdraw);
         }
         g_gl.Present();
-        if (!o.fHeadless) glfwSwapBuffers(g_gl.window);
+        if (!o.fHeadless) cane::gl::SwapBuffers(g_gl.window);
     }
     if (std::getenv("SLY3_TASKPRINT")) PrintTasks3(stdout);
     const CM3& cm = *g_game3.pcmMain;

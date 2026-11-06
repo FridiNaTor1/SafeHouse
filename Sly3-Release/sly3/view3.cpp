@@ -330,7 +330,7 @@ int ViewWorld3(const VIEW3OPTS& vo)
         if (fF12 && !fF12Last) g_gl.FWriteScreenshot("view3.png");
         fF12Last = fF12;
         g_gl.Present();
-        glfwSwapBuffers(w);
+        cane::gl::SwapBuffers(w);
     }
     g_gl.Terminate();
     return 0;

@@ -485,7 +485,7 @@ int ViewWorld(const VIEWOPTS& vo)
 
     if (vo.cframeBench > 0)
     {
-        glfwSwapInterval(0);
+        cane::gl::SwapInterval(0);
         RenderScene(scene, cam, opts);   // warm-up (textures)
         glFinish();
         double tCpu = 0;
@@ -497,7 +497,7 @@ int ViewWorld(const VIEWOPTS& vo)
             RenderScene(scene, cam, opts);
             tCpu += glfwGetTime() - t1;
             g_gl.Present();
-            glfwSwapBuffers(g_gl.window);
+            cane::gl::SwapBuffers(g_gl.window);
         }
         glFinish();
         const double t = glfwGetTime() - t0;
@@ -595,7 +595,7 @@ int ViewWorld(const VIEWOPTS& vo)
         if (fF12 && !fF12Last) g_gl.FWriteScreenshot("view.png");
         fF12Last = fF12;
         g_gl.Present();
-        glfwSwapBuffers(w);
+        cane::gl::SwapBuffers(w);
     }
     g_gl.Terminate();
     return 0;

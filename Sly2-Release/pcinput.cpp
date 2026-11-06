@@ -244,6 +244,7 @@ void FocusCallback(GLFWwindow* window, int focused)
     // Ignore mouse buttons held across a focus change until they are released.
     std::fill(std::begin(s_afButtonBlocked), std::end(s_afButtonBlocked), true);
     s_dyScroll = 0.0;
+    s_cwheelMenu = 0;
     s_fHaveLast = false;
     if (s_pfnFocusPrev) s_pfnFocusPrev(window, focused);
 }
@@ -355,9 +356,10 @@ void UpdateMouse(GLFWwindow* window)
     for (int b = 0; b < MOUSE_BUTTONS; ++b)
     {
         s_afButtonPrev[b] = s_afButton[b];
-        const bool fHeld = glfwGetMouseButton(window, b) == GLFW_PRESS || FTestKeyHeld(st::kMouseBindingBase + b);
+        // (the test keys' buttons, SLY2N_TESTKEYS, need no focus: as the keyboard's)
+        const bool fHeld = glfwGetMouseButton(window, b) == GLFW_PRESS;
         if (!fHeld) s_afButtonBlocked[b] = false;
-        s_afButton[b] = fFocused && fHeld && !s_afButtonBlocked[b];
+        s_afButton[b] = (fFocused && fHeld && !s_afButtonBlocked[b]) || FTestKeyHeld(st::kMouseBindingBase + b);
         fClicked |= s_afButton[b] && !s_afButtonPrev[b];
     }
     if (fClicked || (s_wheel != 0 && fFocused)) cane::input::tracker().noteMouse();

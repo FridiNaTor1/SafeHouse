@@ -1650,7 +1650,7 @@ int RunGame(const GAMEOPTS& go)
             if (fWindow)
             {
                 g_gl.Present();
-                glfwSwapBuffers(g_gl.window);
+                cane::gl::SwapBuffers(g_gl.window);
             }
         }
         else PrepareAnimatedOverlayFrame();  // same logical boundary for frames without a GL target

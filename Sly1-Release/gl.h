@@ -12,6 +12,7 @@
 #include "imgui/imgui_impl_glfw.h"
 #include "imgui/imgui_impl_opengl3.h"
 #include "imgui/ImGuiFileDialog.h"
+#include "gl_context.h"
 #include "mouse.h"
 #include <vector>
 
