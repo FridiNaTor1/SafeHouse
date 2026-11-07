@@ -130,6 +130,15 @@ struct INITNOISE
             result.SetBasic(PnoiseNew(PtmplNoise(plo), a[0].GetVector(), owner));
             return result;
         });
+        // NOISE option 959 is the investigation destination, separate from where the sound is heard.
+        RegisterObjectGetter(1098, [](LO* plo) {
+            CRef result;
+            result.SetVector(static_cast<NOISE*>(plo)->pos30);
+            return result;
+        });
+        RegisterObjectSetter(1098, [](LO* plo, const CRef& value) {
+            static_cast<NOISE*>(plo)->pos30 = value.GetVector();
+        });
     }
 } s_initnoise;
 }  // namespace
@@ -198,6 +207,7 @@ NOISE* PnoiseNew(NOISETMPL* ptmpl, const glm::vec3& pos, LO* ploOwner)
         AnoiseOwned().push_back(std::make_unique<NOISE>());
         p = AnoiseOwned().back().get();
     }
+    p->pcls = PclsFromCid(0x93);
     p->ptmpl = ptmpl;
     p->pos20 = pos;
     p->pos30 = pos;
@@ -310,12 +320,21 @@ float SRadiusNoise(const NOISE* pn)
 }
 
 // orig: 0x00156918
-bool FNoiseReaches(const NOISE* pn, const glm::vec3& pos)
+static bool FNoiseReachesScaled(const NOISE* pn, const glm::vec3& pos, float scale)
 {
     const glm::vec3 d = pos - pn->pos20;
-    if (!(pn->ptmpl->rz.x <= d.z && d.z <= pn->ptmpl->rz.y)) return false;
-    return !(SRadiusNoise(pn) < std::sqrt(d.x * d.x + d.y * d.y));
+    glm::vec2 height = pn->ptmpl->rz;
+    if (scale != 1.0f)
+    {
+        const float half = (height.y - height.x) * 0.5f;
+        const float center = height.x + half;
+        height = glm::vec2(center - half * scale, center + half * scale);
+    }
+    if (!(height.x <= d.z && d.z <= height.y)) return false;
+    return !(scale * SRadiusNoise(pn) < std::sqrt(d.x * d.x + d.y * d.y));
 }
+
+bool FNoiseReaches(const NOISE* pn, const glm::vec3& pos) { return FNoiseReachesScaled(pn, pos, 1.0f); }
 
 // orig: 0x00156FE8 (a listener (cid 0x2F) hears a noise: it is in the world (+0x28 bit 60), the noise's template
 // is heard by radius (+0x50 0), the height difference is in its range (+0x58, 0x11D910) and it is horizontally closer
@@ -404,11 +423,16 @@ static bool FGuardFreeN(const GUARD* pg)
 // orig: 0x00208BE0 (vt slot 89)
 bool FGuardAcceptsNoise(GUARD* pg, NOISE* pn)
 {
+    // Rajan's slot 89 (0x001CBEE0) doubles the sonic dart's hearing range for his check only.
+    const bool sonicDart = pn->ptmpl->nType == 0 && pn->ploOwner40 && pn->ploOwner40->oid == 0x246;
+    const bool rajan = sonicDart && pg->palo->pcls && pg->palo->pcls->PfnOrig(89) == 0x1CBEE0;
+    const float rangeScale = rajan ? 2.0f : 1.0f;
     static const bool s_fDebug = std::getenv("SLY2N_NOISEDEBUG") != nullptr;
     if (s_fDebug)
         std::fprintf(stderr, "noise? guard %d noise kind %d type %d owner %d free %d e68 %d reach %d (r %.0f d %.0f dz %.0f)\n",
                      pg->palo->oid, pn->nKind, pn->ptmpl->nType, pn->ploOwner40 ? pn->ploOwner40->oid : -1, FGuardFreeN(pg), pg->nE68,
-                     FNoiseReaches(pn, PosAi(pg->palo)), SRadiusNoise(pn), glm::length(glm::vec2(PosAi(pg->palo) - pn->pos20)),
+                     FNoiseReachesScaled(pn, PosAi(pg->palo), rangeScale), rangeScale * SRadiusNoise(pn),
+                     glm::length(glm::vec2(PosAi(pg->palo) - pn->pos20)),
                      PosAi(pg->palo).z - pn->pos20.z);
     if (!FGuardFreeN(pg)) return false;
     if (pn->nKind < pg->nE68) return false;
@@ -420,7 +444,7 @@ bool FGuardAcceptsNoise(GUARD* pg, NOISE* pn)
         if (px != pg->palo && !pe) return false;
     }
     const glm::vec3 pos = PosAi(pg->palo);
-    if (pn->ptmpl->nType == 0) return FNoiseReaches(pn, pos);
+    if (pn->ptmpl->nType == 0) return FNoiseReachesScaled(pn, pos, rangeScale);
     if (pn->ptmpl->nType != 1) return false;
     // seen: within the live view volume, nothing solid on the line (0x20FAA0 with 0x20FA10, 0x14CC58)
     if (!pg->pdet) return false;
