@@ -1,5 +1,6 @@
 // Matrix-history meshes: original 0x21BB88..0x21C5F8 and 0x21FB70.
 #include "trail.h"
+#include "game/sly3.h"
 #include "activate.h"
 #include "alo.h"
 #include "animfind.h"
@@ -20,7 +21,7 @@
 
 namespace
 {
-TRAIL* Trail(LO* p) { return p && p->Cid() == 0x69 ? static_cast<TRAIL*>(p) : nullptr; }
+TRAIL* Trail(LO* p) { return p && p->Cid() == S3CID(0x69) ? static_cast<TRAIL*>(p) : nullptr; }
 float Field(const LO* p, uint32_t off, float def = 0.0f)
 {
     return std::bit_cast<float>(p->U32Field(0, off, std::bit_cast<uint32_t>(def)));
@@ -158,7 +159,7 @@ void PostLoadTrail(LO* lo)
             g.fHistoryWorld = true;
         }
     }
-    for (const OPT& opt : p->aopt) if (opt.eopid == 1309 && !opt.aval.empty())
+    for (const OPT& opt : p->aopt) if (opt.eopid == S3EOPID(1309) && !opt.aval.empty())
     {
         const OPTVAL& v = opt.aval[0];
         p->follow = v.pbasic ? dynamic_cast<LO*>(v.pbasic) : PloFindSwChild(p, v.n);
@@ -177,7 +178,7 @@ void OnAddTrail(LO* lo) { if (TRAIL* p = Trail(lo)) Reset(p); }
 
 void CloneTrail(const ALO* from, ALO* to)
 {
-    if (from->Cid() != 0x69 || to->Cid() != 0x69) return;
+    if (from->Cid() != S3CID(0x69) || to->Cid() != S3CID(0x69)) return;
     const TRAIL* source = static_cast<const TRAIL*>(from);
     TRAIL* target = static_cast<TRAIL*>(to);
     target->source = source->source ? source->source : source->pglobset;
@@ -227,7 +228,7 @@ void PlaceTrailScene(ALO* palo, SCENEGLOBSET& sgs)
     {
         sgs.amatGlob[i] = glm::mat4(1.0f);
         sgs.aamatBone[i].clear();
-        UpdateGlobColorsGpu(p->pglobset->aglob[i]);
+        UpdateGlobVerticesGpu(p->pglobset->aglob[i]);
     }
     sgs.gAlpha = sgs.gAlpha2 = 1.0f;
 }

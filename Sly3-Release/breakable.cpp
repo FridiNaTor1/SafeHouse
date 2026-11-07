@@ -6,6 +6,10 @@
 // of a trigger class (slot 58) runs the current event's items (0x1BB400, deferred): objects added / removed (the
 // broken pieces), mesh groups shown / hidden, collision entries on / off, explosions (class 0x1E: ExplodeLo), the
 // script events; after n hits the next event.
+#include "rumble.h"
+#include "game/sly3.h"
+#include <algorithm>
+#include "worldglobals.h"
 #include "breakable.h"
 #include "pickup.h"
 #include "xf.h"
@@ -75,14 +79,16 @@ struct BRK
     int grfHit = 0;                          // +0x170 its contact filter
 };
 std::unordered_map<const LO*, BRK> s_mpbrk;
+WORLD_TABLE(s_mpbrk);   // (PC: moved aside while a kept world loads, worldglobals.h)
 
-bool FBreakable(const LO* plo) { return plo && FCidDerivedFrom(plo->Cid(), 0x62); }
+bool FBreakable(const LO* plo) { return plo && FCidDerivedFrom(plo->Cid(), S3CID(0x62)); }
 
-// The object's data; a clone (a proxy's instance) gets its template's on first use
+// The object's data (a clone's copied from its source when it is made: CloneBreakableData)
 BRK& Brk(LO* plo)
 {
     auto it = s_mpbrk.find(plo);
     if (it != s_mpbrk.end()) return it->second;
+    // (a copy made before its source's events were loaded: the source's data on first use)
     for (const LO* p = plo->ploCloneOf; p; p = p->ploCloneOf)
     {
         auto itSrc = s_mpbrk.find(p);
@@ -147,6 +153,8 @@ void GotoEvent(LO* plo, int id)
     else if (id != -1)
         for (size_t j = 0; j < b.aev.size(); ++j)
             if (b.aev[j].id == id) { iTarget = static_cast<int>(j); break; }
+    if (std::getenv("SLY2N_BRKDEBUG"))
+        std::fprintf(stderr, "breakable-goto: t %.4f oid %d %p id 0x%X: %d -> %d\n", g_clock.t, plo->oid, static_cast<void*>(plo), id, b.icur, iTarget);
     if (b.icur == iTarget) return;
     auto apply = [&](const BRKITEM& it, bool fForward) {
         LO* ps = nullptr;
@@ -155,7 +163,7 @@ void GotoEvent(LO* plo, int id)
             ps = PloFindAround(plo, it.v);
             if (!ps) return;
         }
-        ALO* palo = FCidDerivedFrom(plo->Cid(), 0x30) ? static_cast<ALO*>(plo) : nullptr;
+        ALO* palo = FCidDerivedFrom(plo->Cid(), S3CID(0x30)) ? static_cast<ALO*>(plo) : nullptr;
         switch (it.k)
         {
         case 0: if (fForward) AddLo(g_psw, ps); else RemoveLo(g_psw, ps); break;
@@ -188,7 +196,7 @@ void GotoEvent(LO* plo, int id)
 void RunItems(LO* plo, BRK& b, const BRKEV& ev)
 {
     LO* psPrev = nullptr;
-    ALO* palo = FCidDerivedFrom(plo->Cid(), 0x30) ? static_cast<ALO*>(plo) : nullptr;
+    ALO* palo = FCidDerivedFrom(plo->Cid(), S3CID(0x30)) ? static_cast<ALO*>(plo) : nullptr;
     for (const BRKITEM& it : ev.aitem)
     {
         if ((b.n158 > 0 || ev.n <= 0) && ((0x3F >> it.k) & 1)) continue;
@@ -209,7 +217,7 @@ void RunItems(LO* plo, BRK& b, const BRKEV& ev)
         case 5: SetAloSoesByTag(palo, it.v, false); break; // 0x1F6B48
         case 7:
             // the explosion object (class 0x1E): its slot 51 with {1, the source (the kind 6 object, else itself)}
-            if (FCidDerivedFrom(ps->Cid(), 0x1E))
+            if (FCidDerivedFrom(ps->Cid(), S3CID(0x1E)))
             {
                 BURSTPARAMS bp;
                 bp.grf = 1;
@@ -218,13 +226,13 @@ void RunItems(LO* plo, BRK& b, const BRKEV& ev)
             }
             break;
         case 8: if (b.grf168 & 2) WarnOnce("the camera's shake 0x14F750 (item 8)"); break;
-        case 9: if (b.grf168 & 4) WarnOnce("the pad's rumble 0x187E28 (item 9)"); break;
+        case 9: if (b.grf168 & 4) TriggerJoyRumbleRumk(it.v, 0.3f, "breakable item 9"); break;   // 0x187E28
         case 10:
             // the drops (pickup.cpp, the actors code's 0x154E10) at the kind 6 object's centre, else the breakable's
             if (b.grf168 & 8)
             {
                 LO* pc = psPrev ? psPrev : plo;
-                const glm::vec3 pos = FCidDerivedFrom(pc->Cid(), 0x30) ? PosAloCenter(static_cast<ALO*>(pc)) : PosLoWorld(pc);  // 0x1A62E8
+                const glm::vec3 pos = FCidDerivedFrom(pc->Cid(), S3CID(0x30)) ? PosAloCenter(static_cast<ALO*>(pc)) : PosLoWorld(pc);  // 0x1A62E8
                 if (std::getenv("SLY2N_BRKDEBUG"))
                     std::printf("breakable %d: drops from %d (cid 0x%X) at (%.0f %.0f %.0f), the breakable at (%.0f %.0f %.0f) world (%.0f %.0f %.0f)\n", plo->oid,
                                 pc->oid, pc->Cid(), pos.x, pos.y, pos.z, palo ? PosAloCenter(palo).x : 0.f, palo ? PosAloCenter(palo).y : 0.f,
@@ -259,7 +267,7 @@ void RunHit(LO* plo)
     else
     {
         const int v = b.grfHit;
-        b.grf168 = (v == 0x100 || v == 0x10000 || v == 0x20000 || (b.ploHit && FIsLoDerivedFrom(b.ploHit, 0x3B))) ? 8 : 0;
+        b.grf168 = (v == 0x100 || v == 0x10000 || v == 0x20000 || (b.ploHit && FIsLoDerivedFrom(b.ploHit, S3CID(0x3B)))) ? 8 : 0;
     }
     Event(plo, 0x10);  // vt slot 3
     if (b.grf168 & 1) return;
@@ -268,7 +276,7 @@ void RunHit(LO* plo)
     RunItems(plo, b, b.aev[static_cast<size_t>(b.icur)]);
     // 0x156B98(G, 0, 0x1A62E8(the breakable), the hitter): the fixed noise 706 (SW +0x4020) the guards hear, unless a
     // guard (0x38, not 0x3C) hit it. 17:2716's RC tank nudging breakable 9330 alerts the guards 59433 this way.
-    if (!b.ploHit || !FIsLoDerivedFrom(b.ploHit, 0x38) || FIsLoDerivedFrom(b.ploHit, 0x3C))
+    if (!b.ploHit || !FIsLoDerivedFrom(b.ploHit, S3CID(0x38)) || FIsLoDerivedFrom(b.ploHit, S3CID(0x3C)))
         if (NOISETMPL* pt = PtmplNoiseFixed(0)) PnoiseNew(pt, PosLoWorld(plo), b.ploHit);
     const BRKEV& ev = b.aev[static_cast<size_t>(b.icur)];
     if (ev.n > 0 && ++b.n158 >= ev.n)
@@ -285,8 +293,8 @@ void RunHit(LO* plo)
         if (BRKEV* pev = PevCurrent(b); pev && pev->n <= 0)
             for (auto& t : b.atrig) t.second = 0;
     if (std::getenv("SLY2N_BRKDEBUG"))
-        std::fprintf(stderr,"breakable-run: t %.9g oid %d current %d hits %d hitter %d filter 0x%X flags 0x%X\n",
-                     g_clock.t,plo->oid,b.icur,b.n158,b.ploHit?b.ploHit->oid:-1,b.grfHit,b.grf168);
+        std::fprintf(stderr,"breakable-run: t %.9g oid %d %p current %d of %zu (n %d) hits %d hitter %d filter 0x%X flags 0x%X\n",
+                     g_clock.t,plo->oid,static_cast<void*>(plo),b.icur,b.aev.size(),FValidEvent(b)&&b.icur>=0&&b.icur<int(b.aev.size())?b.aev[size_t(b.icur)].n:-9,b.n158,b.ploHit?b.ploHit->oid:-1,b.grfHit,b.grf168);
 }
 
 // orig: 0x001BAED8 (the hit by a, filter n: posted to the world's deferred calls (0x149AB8))
@@ -302,6 +310,9 @@ void PostHit(LO* plo, LO* ploHit, int grf)
 bool FAcceptBreakableContact(ALO* p, CTMSG* pctm)
 {
     BRK& b = Brk(p);
+    if (std::getenv("SLY2N_BRKDEBUG") && std::getenv("SLY2N_BRKDEBUG")[0] == '2')
+        std::printf("breakable %d %p contact from %d: valid %d event %d bytes 0x%llX filter 0x%X\n", p->oid, static_cast<void*>(p),
+                    pctm->ploSender ? pctm->ploSender->oid : -1, int(FValidEvent(b)), b.icur, (unsigned long long)pctm->grfAccepted, pctm->grfFilter);
     if (!FValidEvent(b)) return false;
     if (!pctm->grfAccepted) return false;
     if ((pctm->grfAccepted & 0xC) != 0x8) return true;
@@ -389,6 +400,8 @@ struct INITBREAKABLE
         // EOPID 1028 (option 929, +0x16C): who hit it last; 1046 (option 935, +0x168): the hit's flags (0xE the
         // player's), a script's bit 1 stops the items (e.g. world 9's tuxedo pieces: 111248's event 16 checks both)
         RegisterObjectGetter(1028, [](LO* plo) { CRef r; r.SetBasic(FBreakable(plo) ? Brk(plo).ploHit : nullptr); return r; });
+        // orig 0x1BAED8: option 930 / EOPID 1029 reads the last contact filter at +0x170.
+        RegisterObjectGetter(1029, [](LO* plo) { CRef r; r.SetS32(FBreakable(plo) ? Brk(plo).grfHit : 0); return r; });
         RegisterObjectGetter(1046, [](LO* plo) { CRef r; r.SetS32(FBreakable(plo) ? Brk(plo).grf168 : 0); return r; });
         RegisterObjectSetter(1046, [](LO* plo, const CRef& r) {
             if (FBreakable(plo)) Brk(plo).grf168 = r.m_tagk == TAGK_Bool ? r.m_bool : r.m_n;
@@ -404,7 +417,7 @@ struct INITBREAKABLE
         auto itemOr = [](LO* plo, int k, int v) {
             if (!FValidEvent(Brk(plo)))
             {
-                ALO* palo = FCidDerivedFrom(plo->Cid(), 0x30) ? static_cast<ALO*>(plo) : nullptr;
+                ALO* palo = FCidDerivedFrom(plo->Cid(), S3CID(0x30)) ? static_cast<ALO*>(plo) : nullptr;
                 if (k == 2 || k == 3) ShowAloGlobs(palo, v, k == 2);
                 else SetAloSoesByTag(palo, v, k == 4);
                 return;
@@ -418,19 +431,19 @@ struct INITBREAKABLE
         RegisterObjectMethod(0x10CFA0, [](LO* plo, const std::vector<CRef>& a) { s_itemOr(plo, 5, NArg(a, 0)); return CRef(TAGK_Void); });
         // the scripts' versions (EOPID +0x10): at once on the object
         RegisterObjectMethod(0x10CC70, [](LO* plo, const std::vector<CRef>& a) {
-            if (FCidDerivedFrom(plo->Cid(), 0x30)) ShowAloGlobs(static_cast<ALO*>(plo), NArg(a, 0), true);
+            if (FCidDerivedFrom(plo->Cid(), S3CID(0x30))) ShowAloGlobs(static_cast<ALO*>(plo), NArg(a, 0), true);
             return CRef(TAGK_Void);
         });
         RegisterObjectMethod(0x10CF18, [](LO* plo, const std::vector<CRef>& a) {
-            if (FCidDerivedFrom(plo->Cid(), 0x30)) ShowAloGlobs(static_cast<ALO*>(plo), NArg(a, 0), false);
+            if (FCidDerivedFrom(plo->Cid(), S3CID(0x30))) ShowAloGlobs(static_cast<ALO*>(plo), NArg(a, 0), false);
             return CRef(TAGK_Void);
         });
         RegisterObjectMethod(0x10CD80, [](LO* plo, const std::vector<CRef>& a) {
-            if (FCidDerivedFrom(plo->Cid(), 0x30)) SetAloSoesByTag(static_cast<ALO*>(plo), NArg(a, 0), true);
+            if (FCidDerivedFrom(plo->Cid(), S3CID(0x30))) SetAloSoesByTag(static_cast<ALO*>(plo), NArg(a, 0), true);
             return CRef(TAGK_Void);
         });
         RegisterObjectMethod(0x10D028, [](LO* plo, const std::vector<CRef>& a) {
-            if (FCidDerivedFrom(plo->Cid(), 0x30)) SetAloSoesByTag(static_cast<ALO*>(plo), NArg(a, 0), false);
+            if (FCidDerivedFrom(plo->Cid(), S3CID(0x30))) SetAloSoesByTag(static_cast<ALO*>(plo), NArg(a, 0), false);
             return CRef(TAGK_Void);
         });
         RegisterObjectMethod(0x10CE08, [](LO* plo, const std::vector<CRef>& a) {  // 0x1BBC60: item 1 (-1: itself)
@@ -465,6 +478,22 @@ void InitBreakableBytes(ALO* palo)
     SetAloXpBytes(palo, 0x03FFFFFF, 8);  // 0x1F7918
     SetAloXpBytes(palo, 0x80001, 0);
 }
+void PrintBreakablesNear(const glm::vec3& pos, float sMax)
+{
+    std::vector<std::pair<float, const LO*>> a;
+    for (const auto& [plo, b] : s_mpbrk)
+        if (plo->fInWorld && FCidDerivedFrom(plo->Cid(), S3CID(0x30)) && FValidEvent(b))
+        {
+            const float s = glm::length(PosAloCenter(const_cast<ALO*>(static_cast<const ALO*>(plo))) - pos);
+            if (s < sMax) a.emplace_back(s, plo);
+        }
+    std::sort(a.begin(), a.end());
+    for (const auto& [s, plo] : a)
+    {
+        const glm::vec3 c = PosAloCenter(const_cast<ALO*>(static_cast<const ALO*>(plo)));
+        std::printf("breakable near: %d at (%.0f %.0f %.0f), %.0f away\n", plo->oid, c.x, c.y, c.z, s);
+    }
+}
 void PostLoadBreakable(LO* plo)
 {
     Brk(plo).icur = 0;
@@ -473,8 +502,8 @@ void PostLoadBreakable(LO* plo)
         int c10 = 0;
         for (const BRKEV& ev : Brk(plo).aev)
             for (const BRKITEM& it : ev.aitem) c10 += it.k == 10;
-        if (FCidDerivedFrom(plo->Cid(), 0x30)) UpdateAloXfWorlds(static_cast<ALO*>(plo));
-        const glm::vec3 c = FCidDerivedFrom(plo->Cid(), 0x30) ? PosAloCenter(static_cast<ALO*>(plo)) : glm::vec3(0.0f);
+        if (FCidDerivedFrom(plo->Cid(), S3CID(0x30))) UpdateAloXfWorlds(static_cast<ALO*>(plo));
+        const glm::vec3 c = FCidDerivedFrom(plo->Cid(), S3CID(0x30)) ? PosAloCenter(static_cast<ALO*>(plo)) : glm::vec3(0.0f);
         std::printf("breakable %d: %zu triggers, %zu events, first with %zu items, %d drops, at (%.0f %.0f %.0f) inworld %d\n", plo->oid,
                     Brk(plo).atrig.size(), Brk(plo).aev.size(), Brk(plo).aev[0].aitem.size(), c10, c.x, c.y, c.z, plo->fInWorld);
         auto pr = [](const BRKEV& ev) {
@@ -493,7 +522,14 @@ void ResetBreakable(LO* plo)
 {
     if (!FBreakable(plo)) return;
     GotoEvent(plo, 0x609);
-    // TODO(physics): +0xE8: 0x1F5720 / 0x1F57C0 (1)
+    // 0x1BBEA8 restores both constraints after a pool row is reused.
+    // Murray frees the linear constraint while picking up a breakable.
+    ALO* palo = static_cast<ALO*>(plo);
+    if (Psost(palo))
+    {
+        SetAloCnstrLin(palo, 1);  // 0x1F5720
+        SetAloCnstrAng(palo, 1);  // 0x1F57C0
+    }
 }
 
 void ResetBreakables()
@@ -506,3 +542,20 @@ NATIVEFN(0x1BB250, UpdateBreakableContacts);
 
 // orig: 0x001BBE18 (for the chase job's aim, aichase.cpp: a breakable not yet broken)
 bool FBreakableIntact(LO* plo) { return FBreakable(plo) && FValidEvent(Brk(plo)); }
+
+// orig: the breakable's fields (+0x150..+0x170) are part of the object the clone (0x13E510 / 0x1A6730) copies, so a
+// copy starts in its source's state at the moment it is made. The copy here was made on the copy's first use, from
+// its source's state then: Ep8's bulb lamps (20699, copies of one another) all took the state of the first lamp
+// broken, so every later dart passed through them (the Sly/Bentley Conspire softlock).
+void CloneBreakableData(LO* ploSrc, LO* ploDst)
+{
+    if (!FBreakable(ploSrc) || !FBreakable(ploDst)) return;
+    auto it = s_mpbrk.find(ploSrc);
+    if (it == s_mpbrk.end())
+        for (const LO* p = ploSrc->ploCloneOf; p && it == s_mpbrk.end(); p = p->ploCloneOf) it = s_mpbrk.find(p);
+    if (it == s_mpbrk.end() || it->second.aev.empty()) return;   // (not loaded yet: Brk's first use)
+    if (std::getenv("SLY2N_BRKDEBUG")) std::fprintf(stderr, "breakable-clone: %d %p from %p (event %d)\n", ploDst->oid, static_cast<void*>(ploDst), static_cast<const void*>(it->first), it->second.icur);
+    BRK b = it->second;
+    b.ploHit = nullptr;
+    s_mpbrk[ploDst] = std::move(b);
+}

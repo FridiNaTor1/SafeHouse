@@ -1,6 +1,9 @@
 // See lightsw.h. Ported from Sly2-Reference game/m_1A3260.cpp (0x1A3260..0x1A3B38), util.cpp (ConvertHsvToRgb
 // 0x11DD90, ConvertUserHsvToUserRgb 0x11DFA0) and m_20D9D0_p3.cpp (0x20F1C8), in plain IEEE float.
 
+#include "jt.h"
+#include "game/sly3.h"
+#include "game/cond3.h"
 #include "lightsw.h"
 
 #include "disc.h"
@@ -22,7 +25,7 @@
 
 namespace
 {
-constexpr uint32_t VA_AEOPID = 0x2AC880;   // the option descriptors (brx.cpp)
+constexpr uint32_t VA_AEOPID = S3VA(0x2AC880);   // the option descriptors (brx.cpp)
 
 // The field an option of this object writes: the EOPID's field offset (grf 0x80: +0x18) or the setter's (grf
 // 0x100: the field it sets, +0x08).
@@ -119,7 +122,7 @@ void ComputeLight(const LIGHTPARAMS& lp, const glm::mat4& matWorld, LIGHTREC& re
 glm::mat4 MatWorldOfLight(const LO* plo)
 {
     if (const LOX* px = dynamic_cast<const LOX*>(plo)) return (px->pxf ? px->pxf->matWorld : glm::mat4(1.0f)) * px->mat;
-    if (FCidDerivedFrom(plo->Cid(), 0x30)) return MatWorldOfAlo(static_cast<const ALO*>(plo));
+    if (FCidDerivedFrom(plo->Cid(), S3CID(0x30))) return MatJtLo(const_cast<LO*>(plo));  // vt slot 31
     return glm::mat4(1.0f);
 }
 
@@ -136,17 +139,21 @@ LIGHTPARAMS LightParamsOfLo(const LO* plo)
         const OPTVAL& v = opt.aval[0];
         switch (FieldOfOption(opt))
         {
-        case 0xE0: lp.kind = v.n; break;
-        case 0xF0: for (int i = 0; i < 3; ++i) lp.hsv[i] = v.ag[size_t(i)]; break;
-        case 0x150: lp.strength = v.ag[0]; break;
-        case 0x154: lp.angle = v.ag[0]; break;
-        case 0x158: lp.n158 = v.n; break;
-        case 0x15C: lp.fNoContext = v.n; break;
-        case 0x160: lp.fNoBake = v.n; break;
-        case 0x164: lp.sNear = v.ag[0]; lp.sFar = v.ag[1]; break;
+        // orig3: 0x1C5868's fields, Sly 2's 0x1A3968 every one 0x10 lower (the descriptors of EOPIDs 159..165:
+        // kind 0xD0 (setter 0x1C54B0), HSV 0xE0, strength 0x140, angle 0x144, not a context 0x14C, not baked 0x150,
+        // near / far 0x154; the shadow weight +0x148 is a float in Sly 3 (0 none), Sly 2's int +0x158)
+        case 0xD0: lp.kind = v.n; break;
+        case 0xE0: for (int i = 0; i < 3; ++i) lp.hsv[i] = v.ag[size_t(i)]; break;
+        case 0x140: lp.strength = v.ag[0]; break;
+        case 0x144: lp.angle = v.ag[0]; break;
+        case 0x148: lp.n158 = v.ag[0] != 0.0f; break;
+        case 0x14C: lp.fNoContext = v.n; break;
+        case 0x150: lp.fNoBake = v.n; break;
+        case 0x154: lp.sNear = v.ag[0]; lp.sFar = v.ag[1]; break;
         default: break;
         }
     }
+    if (plo->fLightOwned) lp.fNoContext = lp.fNoBake = 1;   // (0x1BEAD0, game.cpp BuildRtgtOwners)
     return lp;
 }
 
@@ -208,23 +215,11 @@ int UpdateWorldLightsFromSw(const SW* psw)
         SetWorldLight(&s_lightDefault, rec, sel, true, true);
         ++c;
     }
-    // orig: 0x0020F1C8 (the world shader colour: +0x3E10 HSV, x +0x3E20 / 255; alpha +0x3E24 / 255)
-    float hsv[3] = {180.0f, 255.0f, 255.0f}, gScale = 90.0f, gAlpha = 0.0f;
-    for (const OPT& opt : psw->aoptSw)
-    {
-        if (opt.aval.empty()) continue;
-        const OPTVAL& v = opt.aval[0];
-        switch (FieldOfOption(opt))
-        {
-        case 0x3E10: for (int i = 0; i < 3; ++i) hsv[i] = v.ag[size_t(i)]; break;
-        case 0x3E20: gScale = v.ag[0]; break;
-        case 0x3E24: gAlpha = v.ag[0]; break;
-        default: break;
-        }
-    }
-    const float k = 1.0f / 255.0f;
-    const glm::vec3 rgb = RgbFromHsv(hsv[0], hsv[1] * k, hsv[2] * k) * (gScale * k);
-    SetWorldShader(glm::vec4(rgb, gAlpha * k));   // (+0x3E38: alpha + 0.3 limited to 0..1; not set by the worlds seen)
+    // orig3: 0x169398 the world shader colour: the static camera's (+0x78 rgb, +0x84 w; its HSV / scale / ambient from
+    // the world's option block, game/cond3.h), uploaded by DrawRpl 0x175268 at VU 0xB (Sly 2: SW +0x3E10 options, 0x20F1C8)
+    float rgbw[4];
+    WorldShader3(rgbw);
+    SetWorldShader(glm::vec4(rgbw[0], rgbw[1], rgbw[2], rgbw[3]));
     return c;
 }
 
@@ -235,10 +230,14 @@ int CheckLightsAgainstRam(const SW* psw, const char* ramPath, bool fVerbose)
     if (ram.size() < 0x2000000) { std::fprintf(stderr, "%s: not an EE RAM dump\n", ramPath); return -1; }
     auto u32 = [&](uint32_t va) { uint32_t v; std::memcpy(&v, ram.data() + (va & 0x1FFFFFF), 4); return v; };
     auto f32 = [&](uint32_t va) { float v; std::memcpy(&v, ram.data() + (va & 0x1FFFFFF), 4); return v; };
-    // the reference's lights by oid (the class lists SW+0x3038 + cid x 0xC, linked by +0x20)
+    // the reference's lights by oid (Sly 3: the class lists SW 0x475480 +0x3020 + cid x 0xC = {first, last, link offset})
     std::multimap<int32_t, uint32_t> mp;
-    for (uint32_t cid = 4; cid < 5; ++cid)
-        for (uint32_t p = u32(0x3DD490 + 0x3038 + cid * 0xC); p; p = u32(p + 0x20)) mp.emplace(int32_t(u32(p + 0x18)), p);
+    {
+        const uint32_t pl = sly3::VA_SW + 0x3020 + 4 * 0xC;
+        const uint32_t ibLink = u32(pl + 8);
+        int c = 0;
+        for (uint32_t p = u32(pl); p && c < 100000; p = u32(p + ibLink), ++c) mp.emplace(int32_t(u32(p + 0x18)), p);
+    }
     std::map<int32_t, int> mpiseen;
     int cdiff = 0, ccheck = 0;
     for (const LO* plo : AploLights(psw))
@@ -248,13 +247,13 @@ int CheckLightsAgainstRam(const SW* psw, const char* ramPath, bool fVerbose)
         auto it = range.first;
         for (; it != range.second && i > 0; ++it, --i) {}
         if (it == range.second) { if (fVerbose) std::printf("light %d: not in the RAM\n", plo->oid); continue; }
-        const uint32_t p = it->second, q = p + 0x120;
+        const uint32_t p = it->second, q = p + 0x110;   // (Sly 3: the record +0x110, the selection +0xF0 / +0x100 / +0x104)
         LIGHTREC rec;
         LIGHTSEL sel;
         ComputeLight(LightParamsOfLo(plo), MatWorldOfLight(plo), rec, sel);
         const float aRef[16] = {float(u32(q)), f32(q + 4), f32(q + 8), f32(q + 0xC), f32(q + 0x10), f32(q + 0x14), f32(q + 0x18),
                                 f32(q + 0x1C), f32(q + 0x20), f32(q + 0x24), f32(q + 0x28), f32(q + 0x2C),
-                                f32(p + 0x110), f32(p + 0x114), f32(p + 0x100), f32(p + 0x104)};
+                                f32(p + 0x100), f32(p + 0x104), f32(p + 0xF0), f32(p + 0xF4)};
         const float aMine[16] = {float(rec.kind), rec.angularOffset, rec.angularScale, rec.distanceOffset, rec.rgba.r, rec.rgba.g,
                                  rec.rgba.b, rec.rgba.a, rec.dirOrPos.x, rec.dirOrPos.y, rec.dirOrPos.z, rec.distanceScale,
                                  sel.gConst, sel.gSlope, sel.pos.x, sel.pos.y};

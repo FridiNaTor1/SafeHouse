@@ -5,7 +5,13 @@
 // func_0015DA88.c (the episode menu), func_00228358.c / func_002283D0.c / func_00228538.c (the exits),
 // func_001880D8.c / func_00187E88.c (the pad's steps).
 
+#include "rumble.h"
+#include "game/sly3.h"
 #include "frontend.h"
+#include "epmenu3.h"
+#include "jobend3.h"
+#include "card3.h"
+#include "screen3.h"
 #include "replay.h"
 #include "game.h"
 
@@ -21,8 +27,10 @@
 #include "gl.h"
 #include "hudwidget.h"
 #include "menu.h"
+#include "region.h"
 #include "joy.h"
 #include "moviegl.h"
+#include "pcinput.h"
 #include "ref.h"
 #include "screenrt.h"
 #include "sound.h"
@@ -98,7 +106,7 @@ int NRef(const CRef& r) { return r.m_tagk == TAGK_S32 ? r.m_n : r.m_tagk == TAGK
 const char* const s_aszEpisode[9] = {"intro", "nightclub", "palace", "temple", "prison", "castle", "train", "sawmill", "blimp"};
 
 // orig 0x2BE080.. (the episode menu's tables in the executable)
-int32_t NElf(uint32_t va) { int32_t n = 0; if (const uint8_t* pb = g_disc.PbElf(va, 4)) std::memcpy(&n, pb, 4); return n; }
+int32_t NElf(uint32_t va) { return int32_t(g_disc.U32Elf(va)); }  // (an address comes back as the USA one: disc.h)
 
 GAMESAVE s_gsPending;   // orig taskmgr +0x1C (0x2DEB4C): the save the next load starts from
 bool s_fPending = false;
@@ -109,6 +117,9 @@ std::vector<std::array<uint8_t, 64>> s_aabMovie;
 // ------------------------------------------------------------ the title (orig 0x3DA530: the widget, +0x24 0x5D2)
 LO* s_ploTitle = nullptr;
 bool s_fTitle = false;
+bool s_fTitleInputTaken = false;   // orig (Europe) 0x3E1D84: the title has taken input once (no language menu by itself after)
+bool s_fTitleCardWait = false;    // (Europe: the first Start waits for the card it turned on)
+float s_tTitleShown = 0.0f;
 
 // ------------------------------------------------------------ the episode menu (class 0x83, orig +0x110..)
 struct EPMENU
@@ -137,7 +148,7 @@ int IdPartCur(const EPMENU& p)
         const int32_t pa = NElf(0x2BE1B8 + 4 * uint32_t(p.imovie));
         return pa ? NElf(uint32_t(pa) + 4 * uint32_t(p.sub)) : -1;
     }
-    const int32_t pa = NElf(0x2BE080 + 4 * uint32_t(p.cur));
+    const int32_t pa = NElf(S3VA(0x2BE080) + 4 * uint32_t(p.cur));
     return pa ? NElf(uint32_t(pa) + 4 * uint32_t(p.mode)) : -1;
 }
 
@@ -219,7 +230,7 @@ void StartEpMenu(EPMENU& p, LO* plo)
     ClearJoySteps();
 }
 
-void RequestReload(SW* psw) { RequestTransition(psw, nullptr, 0x189, -1, 0, -1); }
+void RequestReload(SW* psw) { RequestTransition(psw, nullptr, sly3::POINT_DEFAULT, -1, 0, -1); }
 
 // orig 0x0015CF30 (vt slot 16, after the screen object's own update)
 void UpdateEpMenu(EPMENU& p, SW* psw)
@@ -231,7 +242,19 @@ void UpdateEpMenu(EPMENU& p, SW* psw)
     case -1: return;
     case 2:
     {
-        const int n = NStepUpDown();
+        // (PC menus) the mouse: the green up / down arrows (the menu's parts at canvas x ~485, y ~96 / ~343; shown
+        // while there is an episode that way) are buttons; the wheel steps as the d-pad (pcinput.cpp)
+        int nMouse = 0;
+        if (float xc = 0, yc = 0; FMenuCursor(&xc, &yc) && xc >= 440.0f && xc < 532.0f)
+        {
+            const int nOver = yc >= 74.0f && yc < 120.0f && p.cur > 0 ? -1 : yc >= 320.0f && yc < 368.0f && p.cur < p.max ? 1 : 0;
+            if (nOver != 0)
+            {
+                SetMenuMouseTarget();
+                if (FMenuClick()) nMouse = nOver;
+            }
+        }
+        const int n = nMouse != 0 ? nMouse : NStepUpDown();
         if (n < 0 && p.cur <= 0) { PlayUiSound(0x36); return; }
         if (n > 0 && p.cur >= p.max) { PlayUiSound(0x36); return; }
         if (n != 0)
@@ -240,8 +263,8 @@ void UpdateEpMenu(EPMENU& p, SW* psw)
             SetEpMode(p, n > 0 ? 4 : 6, -1);   // (0x15D08C: down 4, up 6)
             return;
         }
-        if (GrfbtnTakePressed(0x40)) { SetEpMode(p, 7, -1); return; }
-        if (p.cur != 0 && GrfbtnTakePressed(0x10))
+        if (GrfbtnTakePressed(BtnMenuConfirm())) { SetEpMode(p, 7, -1); return; }
+        if (p.cur != 0 && GrfbtnTakePressed(BtnMenuBack()))
         {
             p.next = 0;
             SetEpMode(p, 6, -1);
@@ -270,7 +293,7 @@ void UpdateEpMenu(EPMENU& p, SW* psw)
     case 8:
         if (p.sub == 0)
         {
-            if (GrfbtnTakePressed(0x40))
+            if (GrfbtnTakePressed(BtnMenuConfirm()))
             {
                 s_imovieReturn = p.imovie;
                 QueueMovie(g_disc.PbElf(uint32_t(NElf(0x2BE200 + 4 * uint32_t(p.imovie))), 64));
@@ -278,7 +301,7 @@ void UpdateEpMenu(EPMENU& p, SW* psw)
                 PlayUiSound(0x34);
                 return;
             }
-            if (GrfbtnTakePressed(0x10)) { SetEpMode(p, 9, -1); return; }
+            if (GrfbtnTakePressed(BtnMenuBack())) { SetEpMode(p, 9, -1); return; }
             const int n = NStepLeftRight();
             if (n < 0 && p.imovie <= 0) { PlayUiSound(0x36); return; }
             if (n > 0 && !(p.imovie < CmovieOpen(p))) { PlayUiSound(0x36); return; }
@@ -304,8 +327,8 @@ void UpdateEpMenu(EPMENU& p, SW* psw)
                 case 3: SetEpMode(p, 10, -1); return;
                 default: break;
                 }
-            if (GrfbtnTakePressed(0x40)) { SetEpMode(p, 10, -1); return; }
-            if (GrfbtnTakePressed(0x10)) SetEpMode(p, 9, -1);
+            if (GrfbtnTakePressed(BtnMenuConfirm())) { SetEpMode(p, 10, -1); return; }
+            if (GrfbtnTakePressed(BtnMenuBack())) SetEpMode(p, 9, -1);
         }
         return;
     case 10:
@@ -330,7 +353,7 @@ void UpdateEpMenu(EPMENU& p, SW* psw)
             else fExit = false;
         }
         if (!fExit)
-            if (const WREC* pw = PwrecEpisodeMain(p.cur)) RequestTransition(psw, pw->abRecord, 0x189, -1, 0, 0x30A);
+            if (const WREC* pw = PwrecEpisodeMain(p.cur)) RequestTransition(psw, pw->abRecord, sly3::POINT_DEFAULT, -1, 0, 0x30A);
         SetEpMode(p, -1, -1);
         return;
     }
@@ -355,34 +378,52 @@ std::unordered_map<const LO*, float> s_mptLoad;   // +0x158 (the state +0x13C / 
 }  // namespace
 
 // (QoL Replay Jobs, replay.cpp) the episode on the "Start Episode" screen (mode 8 sub -1), else -1
+int IepEpMenuShown();
+uint32_t BtnEpisodeScreenBack()
+{
+    const int iep = IepEpMenuShown();
+    if (iep < 1 || FReplayListShown()) return 0;
+    return FReplayOffered(iep) ? BtnReplayBackButton() : BtnMenuBack();
+}
+
 int IepEpMenuShown() { return s_epm.plo && s_epm.mode == 8 && s_epm.sub == -1 && s_epm.cur >= 1 ? s_epm.cur : -1; }
 
-// orig: 0x00228358 SetExitState
+// orig3: 0x0027FC08 SetExitState (Sly 2 0x228358; the state at +0x128, its time +0x12C). Sly 3 has a state 5 (the
+// transition requested): entering 4 / 5 from below keeps the exit updating (0x1C9118(1)) and pauses the game
+// (PauseGame(SW, -1, 3), SW +0x4424 = the exit); leaving 4 / 5 for below undoes both (ResumeGame).
 void SetExitState(LO* plo, int n)
 {
     if (n == plo->nState) return;
     if (std::getenv("SLY2N_EXITPRINT")) std::printf("exit %d: state %d -> %d t %.3f\n", plo->oid, plo->nState, n, g_clock.t);
-    if (n == 4)
+    const bool fWas = plo->nState >= 4 && plo->nState < 6, fIs = n >= 4 && n < 6;
+    if (fIs && !fWas)
     {
-        SetLoSt(g_psw, plo, 1);  // 0x1A6CA8: keep updating through the exit's delay.
-        PauseGame(3);           // 0x20EFC0: lock the pad and pause AI / subtitles until the load.
+        SetLoSt(g_psw, plo, 1);  // 0x1C9118: keep updating through the exit's delay.
+        PauseGame(3);           // 0x1A93C8: lock the pad and pause AI / subtitles until the load.
         if (g_psw) g_psw->ploExitPending = plo;
+    }
+    else if (fWas && !fIs)
+    {
+        SetLoSt(g_psw, plo, 0);
+        ResumeGame(3);          // 0x1A9420
+        if (g_psw && g_psw->ploExitPending == plo) g_psw->ploExitPending = nullptr;
     }
     plo->nState = n;
     plo->tState = g_clock.t;
 }
 
-// orig: 0x002283D0 TriggerExit: an armed exit (state 3) fires: its checkpoint's tasks (0x161F48), the camera's
-// cuts (0x14E4C8), state 4 and its time (after the +0x160 delay), vt slot 3 (5).
+// orig3: 0x0027FCC8 TriggerExit (Sly 2 0x2283D0): an armed exit (state 3) fires: its tasks (0x185908, the pairs at
+// +0x18C / +0x190), state 4 and its load time (after the +0x188 delay), vt slot 3 (5). (Sly 3 revokes no camera
+// policies here; its fields: the chain flag +0x124, the delay +0x188, natively at OFF_EXIT_*.)
 void TriggerExit(LO* plo)
 {
     if (plo->nState != 3) return;
-    if (plo->U32Field(0, 0x134, 0))
+    if (plo->U32Field(0, OFF_EXIT_CHAIN, 0))
     {
         SetExitState(plo, 0);
         // orig 0x002280D0: the last exit with +0x130 set, among the first 32 found by class.
         LO* ploNext = nullptr;
-        const auto aploExit = AploOfClass(g_psw, 0x1A);
+        const auto aploExit = AploOfClass(g_psw, S3CID(0x1A));
         for (size_t i = 0; i < aploExit.size() && i < 32; ++i)
             if (aploExit[i]->U32Field(0, 0x130, 0)) ploNext = aploExit[i];
         if (ploNext) TriggerExit(ploNext);
@@ -391,15 +432,13 @@ void TriggerExit(LO* plo)
     // 0x161F48 (+0x164 / +0x168: EOPID 788's (task, state) pairs)
     std::vector<std::pair<OID, int>> atask;
     for (const OPT& o : plo->aopt)
-        if (o.eopid == 788 && o.aval.size() >= 2) atask.emplace_back(o.aval[0].n, o.aval[1].n);
+        if (o.eopid == S3EOPID(788) && o.aval.size() >= 2) atask.emplace_back(o.aval[0].n, o.aval[1].n);
     if (!atask.empty() && g_psw) ApplyCheckpointTasks(g_psw, plo, atask);
-    RevokeCmPolicy(&g_cm, 2, -1, &g_cmpolicies.cprecon, nullptr, nullptr);
-    RevokeCmPolicy(&g_cm, 2, -1, &g_cmpolicies.cpfree, nullptr, nullptr);
     SetExitState(plo, 4);
-    s_mptLoad[plo] = g_clock.t + GFieldLo(plo, 0x160, 0.0f);
+    s_mptLoad[plo] = g_clock.t + GFieldLo(plo, OFF_EXIT_DELAY, 0.0f);
     if (std::getenv("SLY2N_EXITPRINT"))
-        std::printf("exit %d: fired t %.3f delay %.3f point %d wipe %d\n", plo->oid, g_clock.t, GFieldLo(plo, 0x160, 0.0f),
-                    int(plo->U32Field(0, 0x150, 0x189)), int(plo->U32Field(0, 0x154, uint32_t(-1))));
+        std::printf("exit %d: fired t %.3f delay %.3f point %d wipe %d\n", plo->oid, g_clock.t, GFieldLo(plo, OFF_EXIT_DELAY, 0.0f),
+                    int(plo->U32Field(0, OFF_EXIT_POINT, sly3::POINT_DEFAULT)), int(plo->U32Field(0, OFF_EXIT_WIPE, uint32_t(-1))));
     HandleLoSpliceEvent(plo, 5, false, 0, nullptr);
 }
 
@@ -418,14 +457,16 @@ struct INITEXITMETHODS
         // EOPID 779 (property 761): the live checkpoint oid at +0x150, also read by 0x228538.
         RegisterObjectGetter(779, [](LO* plo) {
             CRef r;
-            r.SetS32(static_cast<int32_t>(plo->U32Field(0, 0x150, 0x189)));
+            r.SetS32(static_cast<int32_t>(plo->U32Field(0, 0x150, sly3::POINT_DEFAULT)));
             return r;
         });
         RegisterObjectSetter(779, [](LO* plo, const CRef& r) { plo->SetField(0, 0x150, uint32_t(NRef(r))); });
     }
 } s_initexitmethods;
 
-// orig 0x00228538 (vt slot 16): state 4 at its time: its movies queued, the transition
+// orig3 0x0027FDE8 (Sly 2 0x228538, vt slot 16): state 4 at its time (+0x180): its movies queued (+0x170 / +0x174),
+// the transition 0x289070(SW, the key +0x130, point +0x178, flags 0, wipe +0x17C), state 5; states 0 / 1 / 3: the
+// player against the exit's volume (IbspFindPoint on +0xDC), armed after +0x184 s outside
 void UpdateExit(LO* plo, SW* psw)
 {
     if (plo->nState == 0 || plo->nState == 1 || plo->nState == 3)
@@ -433,14 +474,14 @@ void UpdateExit(LO* plo, SW* psw)
         // the player in the volume (0x118FB0 in its frame): 0 (inside since the start) -> 1 outside; 1 -> 0 inside,
         // or armed (3) after +0x15C s outside; 3: entered, fired (0x2283D0)
         LO* pj = PloPoCurrent(psw);  // 0x1C4840
-        if (!pj || !FCidDerivedFrom(pj->Cid(), 0x30)) return;
+        if (!pj || !FCidDerivedFrom(pj->Cid(), S3CID(0x30))) return;
         const bool f = FPointInVolume(plo, PosAloCenter(static_cast<ALO*>(pj)));  // 0x1A62E8
         switch (plo->nState)
         {
         case 3: if (f) TriggerExit(plo); break;
         case 1:
             if (f) SetExitState(plo, 0);
-            else if (GFieldLo(plo, 0x15C, 0.0f) < g_clock.t - plo->tState) SetExitState(plo, 3);
+            else if (GFieldLo(plo, OFF_EXIT_ARM, 0.0f) < g_clock.t - plo->tState) SetExitState(plo, 3);
             break;
         case 0: if (!f) SetExitState(plo, 1); break;
         default: break;
@@ -461,10 +502,10 @@ void UpdateExit(LO* plo, SW* psw)
             std::printf("exit %d: movie %u queued (%u bytes)\n", plo->oid, fk.id, fk.cb);
         }
     }
-    const int flags = plo->U32Field(0, 0x138, 0) ? 0x20 : 0;
-    RequestTransition(psw, px->aabKey[0].data(), OID(plo->U32Field(0, 0x150, 0x189)), -1, flags,
-                      OID(plo->U32Field(0, 0x154, uint32_t(-1))));
+    RequestTransition(psw, px->aabKey[0].data(), OID(plo->U32Field(0, OFF_EXIT_POINT, sly3::POINT_DEFAULT)), -1, 0,
+                      OID(plo->U32Field(0, OFF_EXIT_WIPE, uint32_t(-1))));
     tLoad = 0.0f;
+    SetExitState(plo, 5);
 }
 }  // namespace
 
@@ -542,7 +583,7 @@ void ClearJoySteps()
 }
 
 // ------------------------------------------------------------ the slots
-SAVESLOT g_aslot[3];
+SAVESLOT g_aslot[kSlotMax];
 int g_islotCur = -1;
 int g_islotChosen = -1;
 static bool s_fSlotsChosen = true;
@@ -554,7 +595,7 @@ void ReadSaveSlots(const std::string& dirDev)
     bool fUser = false;
     for (int i = 0; i < 3; ++i)
         fUser = fUser || std::filesystem::exists(dirUser / ("save" + std::to_string(i + 1)));
-    for (int i = 0; i < 3; ++i)
+    for (int i = 0; i < kSlotMax; ++i)
     {
         SAVESLOT& s = g_aslot[i];
         s = SAVESLOT{};
@@ -562,7 +603,7 @@ void ReadSaveSlots(const std::string& dirDev)
         s.path = cane::utf8(dirUser / name);
         std::string pathRead = s.path;
         static const bool s_fNoCard = std::getenv("SLY2N_NOCARD") != nullptr;   // (debug: no card: a new game, no card messages)
-        if (!fUser && !dirDev.empty() && !s_fNoCard) pathRead = dirDev + "/" + name;   // (the development card until the user has one)
+        if (!fUser && !dirDev.empty() && !s_fNoCard && i < kSlotsCard) pathRead = dirDev + "/" + name;   // (the development card until the user has one)
         std::ifstream in(pathRead, std::ios::binary);
         if (!in) continue;
         in.read(reinterpret_cast<char*>(s.save.ab), CB_GAMESAVE);
@@ -597,7 +638,7 @@ void ChooseNewestSlot()
     // the folder (the card's state is not 6)
     if (!g_aslot[0].fFile && !g_aslot[1].fFile && !g_aslot[2].fFile) return;
     g_islotCur = 0;
-    for (int i = 0; i < 3; ++i)
+    for (int i = 0; i < kSlotMax; ++i)   // (QoL: the extra slots too: the title resumes the newest game of all)
     {
         if (!g_aslot[i].fFile) continue;
         if (GRef(RefProgressOfSave(g_aslot[i].save, {"dt"})) == 0.0f) continue;
@@ -613,18 +654,20 @@ void RechooseSaveSlots()
 
 CRef RefProgressOfSlot(int islot, const std::vector<std::string>& apath)
 {
-    if (islot < 0 || islot > 2 || !g_aslot[islot].fFile) return CRef{};
+    if (islot < 0 || islot >= kSlotMax || !g_aslot[islot].fFile) return CRef{};
     return RefProgressOfSave(g_aslot[islot].save, apath);
 }
 
 bool FWriteSaveSlot(int islot)
 {
-    if (islot < 0 || islot > 2) return false;
+    if (islot < 0 || islot >= kSlotMax) return false;
     SAVESLOT& s = g_aslot[islot];
     if (s.path.empty()) s.path = cane::utf8(cane::userDirectory() / "Saves" / ("save" + std::to_string(islot + 1)));   // (a run without the boot)
     std::error_code ec;
     std::filesystem::create_directories(std::filesystem::path(cane::path(s.path)).parent_path(), ec);
-    // orig 0x1ABCE8 / 0x1ABD40: 0x1D84B0 (the record into the slot), then the card thread writes it
+    // orig 0x1ABCE8 / 0x1ABD40: 0x1D54B8 (the vibration choice into the record), 0x1D84B0 (the record into the slot),
+    // then the card thread writes it
+    ApplyVibrationSetting();
     GAMESAVE gs;
     CopyGameSaveForSlot(gs);
     MergeReplaySave(gs);   // (QoL Replay Jobs: a replay keeps the save's progress)
@@ -642,13 +685,20 @@ bool FWriteSaveSlot(int islot)
 // ------------------------------------------------------------ the boot sequence and the movies
 void StartBootSequence(bool fMovie)
 {
-    // orig 0x001A4E08: kind 0 (the logo movie 0x2A3868, and the world at 0x2BFCA0: none yet), kind 5 (the card
-    // status: the slots read), kind 2 (the boot world 0x2A38A8 at 0x189 with the flags 1)
-    if (fMovie) QueueMovie(g_disc.PbElf(0x2A3868, 64));
-    // (kind 5: 0x1ACC38(0x2E6550, 1): the card's messages on; debug SLY2N_NOCARD: no card at all, no messages)
-    if (g_ncardMode == 0) g_ncardMode = std::getenv("SLY2N_NOCARD") ? 2 : 1;
-    ReadSaveSlots(g_fDevCard ? SLY2N_DEV_ROOT "/build/saves/round4-user-card/memcard0/BASCUS-97316YAOTWTD!" : "");
-    RequestTransition(nullptr, g_disc.PbElf(VA_FK_BOOT_WORLD, 64), 0x189, -1, 1, -1);
+    // orig3 0x1C6EA8 (Sly 2 0x1A4E08): kind 0 the logo movies 338 (key 0x317EB8) and 339 (0x317EF8), kind 5 the card
+    // check (0x11C330() < 2: always in the release: the card's messages on), kind 2 the world 35 (m_ext, key 0x25E070(35))
+    // at point 0x1A8. TODO(sly3): the card state machine 0x1D0D30 (its prompts) with the Sly 3 save (0x6808).
+    if (fMovie)
+        for (const auto& [va, fk] : g_disc.ElfKeys())
+            if (fk.id == uint32_t(sly3::MOVIE_LOGO_A)) QueueMovie(g_disc.PbElf(va, 64));
+    if (fMovie)
+        for (const auto& [va, fk] : g_disc.ElfKeys())
+            if (fk.id == uint32_t(sly3::MOVIE_LOGO_B)) QueueMovie(g_disc.PbElf(va, 64));
+    ReadSaveSlots("");
+    // kind 5: the card check (card3.h: Sly 3's dialog on the PC's save files; SLY2N_NOCARD: none)
+    if (std::getenv("SLY2N_NOCARD")) g_ncardMode = 2;
+    else StartCardCheck3();
+    RequestTransition(nullptr, g_disc.PbElf(VA_FK_BOOT_WORLD, 64), sly3::WORLD_BOOT_ARRIVAL, -1, 1, -1);
 }
 
 // orig: 0x001B3A48 (the queue 0x2F66B0: at most 4; a key whose +0x04 equals its +0x3C is no movie)
@@ -666,24 +716,36 @@ void QueueMovie(const uint8_t* pbKey)
 
 bool FMoviesQueued() { return !s_aabMovie.empty(); }
 
+bool g_fMoviePlaying = false;
+extern int g_iframeMain;   // (game.cpp: the flow log's frame)
+
 void PlayQueuedMovies(bool fWindow)
 {
     const auto aab = std::move(s_aabMovie);
     s_aabMovie.clear();
+    // (test: SLY2N_MOVIESHEADLESS: played headless too, into the hidden window)
+    if (!fWindow && std::getenv("SLY2N_MOVIESHEADLESS")) fWindow = true;
     if (!fWindow)   // (headless: skipped; SLY2N_TRANSLOG names them)
     {
+        for (const auto& ab : aab)   // (the flow log: tools/progression3.py's movie milestones)
+            std::printf("flow: movie %u skipped (headless, frame %d)\n", FkFromRecord(ab.data()).id, g_iframeMain);
         if (std::getenv("SLY2N_TRANSLOG"))
             for (const auto& ab : aab) std::printf("movie %u (headless: skipped)\n", FkFromRecord(ab.data()).id);
         return;
     }
     for (const auto& ab : aab)
     {
-        const FK fk = FkFromRecord(ab.data());
+        FK fk = FkFromRecord(ab.data());
+        fk.cb &= ~sly3::CB_MOVIE_FLAGS;   // (Sly 3's movie keys: the low 14 bits of cb are flags)
         if (!fk.cb) continue;
         MOVIEGL m;
         m.fWindowed = true;
+        BeginMoviePresentation(m);
         std::printf("movie %u\n", fk.id);
-        FPlayMovie(fk, PresentMovieGl, &m);
+        g_fMoviePlaying = true;   // (pcinput.cpp: no menu cursor over a movie)
+        const bool fPlayed = FPlayMovie(fk, PresentMovieGl, &m);
+        g_fMoviePlaying = false;
+        std::printf("flow: movie %u %s (frame %d)\n", fk.id, fPlayed ? "played" : "stopped (skipped or unreadable)", g_iframeMain);
     }
 }
 
@@ -704,6 +766,7 @@ void OnGameRecordEvent(int grfReq)
         // settings applied (0x1D8FF8)
         g_gamesave = s_gsPending;
         ValidateGameSave();
+        ApplyVibrationSetting();
         ApplyGameSettings(g_gamesave);
     }
     s_fPending = false;
@@ -724,7 +787,10 @@ void StartFrontEnd(SW* psw, int grfReq)
     s_epm = EPMENU{};
     // the title's screen object (0x3DA530 +0x24) in the boot world started by the boot sequence; shown by its
     // runner's command 0x44 (ShowTitle) once the intro (or its skip) is over
-    if (grfReq & 1) s_ploTitle = PloFindSwObjectByOid(psw, 0x5D2);
+    // (Sly 3: the title widget 0x46FC30's screen object +0x34 is m_ext's 1699; ShowTitle 0x221AC8 is a SCPT command of
+    // the title script 4268)
+    (void)grfReq;
+    s_ploTitle = PloScreen3(psw, 1699);
     // the episode menu (class 0x83) and the exits (class 0x1A, armed: state 3 when their option says so)
     if (std::getenv("SLY2_DUMPOPTS"))
         for (LO* plo : AploOfClass(psw, CID(std::strtol(std::getenv("SLY2_DUMPOPTS"), nullptr, 0))))
@@ -742,11 +808,9 @@ void StartFrontEnd(SW* psw, int grfReq)
             }
             std::printf("\n");
         }
-    for (LO* plo : AploOfClass(psw, 0x83))
-    {
-        StartEpMenu(s_epm, plo);
-        break;
-    }
+    // (Sly 3: the EPMENU 0xA2 is its own: epmenu3.h, dvd_menu's episode chooser; Sly 2's StartEpMenu is not run)
+    StartEpMenu3(psw);
+    ResetJobEnd3();
 }
 
 namespace
@@ -768,7 +832,7 @@ bool FTitleShown() { return s_fTitle; }
 bool FTitleWorld() { return s_ploTitle != nullptr; }
 
 // orig 0x001DD820 (on 0x3DA530: SCPT command 0x44): the title's screen object shown (its vt slot 49 with -1).
-// TODO: the vt slot 10 call before it and RumbleUnknown1 0x1D5498 after it.
+// TODO: the vt slot 10 call before it. RumbleUnknown1 0x1D5498 after it: the vibration option from boot's 0 (none) to 1.
 void ShowTitle()
 {
     if (!s_ploTitle) return;
@@ -776,6 +840,10 @@ void ShowTitle()
     std::printf("title: shown at t %.2f (newest slot %d: %s)\n", g_clock.t, g_islotCur + 1,
                 g_islotCur >= 0 && GRef(RefProgressOfSlot(g_islotCur, {"dt"})) != 0.0f ? "Resume Game" : "New Game");
     ShowScreenObj(s_ploTitle, -1);
+    EnableVibration();   // 0x1D5498
+    s_tTitleShown = g_clock.t;
+    // orig (Europe) 0x1DDBD0: the language menu when the title needs one (0x1DDB68)
+    if (FTitleNeedsLanguage(s_fTitleInputTaken, g_islotCur >= 0)) OpenLanguageMenu(g_psw);
 }
 
 // orig: 0x00165E38 func_00165E38
@@ -786,6 +854,7 @@ void StartGameFromSave(SW* psw, const GAMESAVE* pgs)
     if (s_fTitle && dt == 0.0f)
     {
         // a new game in the title's world: the title goes (0x1D54B8: the vibration setting; 0x1DD888)
+        ApplyVibrationSetting();
         HideScreenObj(s_ploTitle);
         s_fTitle = false;
         return;
@@ -798,7 +867,7 @@ void StartGameFromSave(SW* psw, const GAMESAVE* pgs)
     {
         // a new game: the first episode at its first task (0x62F)
         g_taskmgr.oidQueued = 0x62F;
-        if (const WREC* pw = PwrecEpisodeMain(0)) RequestTransition(psw, pw->abRecord, 0x189, -1, 0x48, -1);
+        if (const WREC* pw = PwrecEpisodeMain(0)) RequestTransition(psw, pw->abRecord, sly3::POINT_DEFAULT, -1, 0x48, -1);
         return;
     }
     g_taskmgr.oidQueued = -1;
@@ -806,7 +875,28 @@ void StartGameFromSave(SW* psw, const GAMESAVE* pgs)
     const WREC* pw = iep >= 0 && iep < 9 ? PwrecEpisodeMain(iep) : nullptr;
     const int pct = iep >= 0 && iep < 9 ? NRef(RefProgressOfSave(*pgs, {"episode", s_aszEpisode[iep], "percent_complete"})) : 100;
     const uint8_t* pb = pw && pct < 100 ? pw->abRecord : g_disc.PbElf(0x2A3828, 64);   // (else the front end)
-    RequestTransition(psw, pb, 0x189, -1, 0x40, -1);
+    RequestTransition(psw, pb, sly3::POINT_DEFAULT, -1, 0x40, -1);
+}
+
+// orig3: 0x00221C08 (the title widget's update): nothing while the card's dialog is up; START: the chosen slot's game
+// (with a save: SetCardState(1) then StartGameFromSave 0x18AB08), else StartNewGameFromTitle 0x221EC0 (a new game in
+// the title's world: the title goes, its script goes on); SELECT: the menu's options page 0x1D4BF8 (menu.h).
+// (The European build's TRIANGLE language menu: one language on the USA disc.)
+void UpdateTitle3(SW* psw)
+{
+    if (!s_ploTitle || FCardMessageShown3() || FMenuShown()) return;
+    if (GrfbtnTakePressed(0x800))
+    {
+        g_islotChosen = g_islotCur;
+        if (g_islotCur >= 0 && GRef(RefProgressOfSlot(g_islotCur, {"dt"})) != 0.0f) StartGameFromSave(psw, &g_aslot[g_islotCur].save);
+        else StartNewGameFromTitle(psw);
+        return;
+    }
+    if (GrfbtnPressed(0x100) && (GrfbtnHeld() & 0x108) == 0x100)
+    {
+        GrfbtnTakePressed(0x100);
+        OpenDataAccessMenu(psw);   // orig3 0x001D4BF8 (menu.h: the options page)
+    }
 }
 
 // orig 0x001DDB08: a new game (dt 0) from the current record. TODO: 0x1440D0(po, 1) on Sly / Bentley / Murray
@@ -821,14 +911,49 @@ void StartNewGameFromTitle(SW* psw)
 void UpdateFrontEnd(SW* psw)
 {
     s_pswText = psw;
-    // orig 0x001DD920: the title's input
-    if (s_fTitle && !FMenuShown())
+    // Sly 3's front end: no front-end world; the title is m_ext's widget 0x46FC30 on screen object 1699 (shown by the
+    // title script 4268's ShowTitle), the card dialog card3.h, the menus the menu widget 0x46F550 (menu.h: SELECT on
+    // the title, START in the game). Sly 2's episode menu / exits (below the title's input) are not
+    // Sly 3's and are not run.
+    UpdateCard3(psw);
+    if (s_fTitle) UpdateTitle3(psw);
+    UpdateExits3(psw);   // (the exits are Sly 3's too: class 0x18, their keys / movies / points; the world flow code)
+    UpdateEpMenu3(psw);  // (dvd_menu's episode chooser, epmenu3.h)
+    UpdateJobEnd3(psw);  // (the job's end screens 1066 / 1067, jobend3.h)
+    return;
+    // orig 0x001DD920 (the European build's 0x1DDCF0): the title's input
+    auto startFromTitle = [psw]
     {
-        if (GrfbtnTakePressed(0x800))
+        g_islotChosen = g_islotCur;   // (0x7D50 = 0x7D54)
+        if (g_islotCur >= 0) StartGameFromSave(psw, &g_aslot[g_islotCur].save);   // (0x1ACC38(1) first)
+        else StartNewGameFromTitle(psw);
+    };
+    if (s_fTitle && !FMenuShown() && s_fTitleCardWait)
+    {
+        // (the European title's first Start turned the card on: once its messages are answered, that Start's game)
+        if (FCardSettled())
         {
-            g_islotChosen = g_islotCur;   // (0x7D50 = 0x7D54)
-            if (g_islotCur >= 0) StartGameFromSave(psw, &g_aslot[g_islotCur].save);   // (0x1ACC38(1) first)
-            else StartNewGameFromTitle(psw);
+            s_fTitleCardWait = false;
+            startFromTitle();
+        }
+    }
+    else if (s_fTitle && !FMenuShown())
+    {
+        // (Europe: Triangle opens the language menu; the title waits while a language is needed)
+        const bool fLanguages = CLanguages() >= 2;
+        if (fLanguages && GrfbtnTakePressed(0x10)) OpenLanguageMenu(psw);
+        else if (FTitleNeedsLanguage(s_fTitleInputTaken, g_islotCur >= 0)) {}
+        else if ((s_fTitleInputTaken = true, GrfbtnTakePressed(0x800)))
+        {
+            if (fLanguages && g_ncardMode == 0)
+            {
+                // orig (Europe) 0x1DDDE8: the first Start turns the card on (0x1ACD20(0x2ED950, 1)): its slots are read
+                g_ncardMode = std::getenv("SLY2N_NOCARD") ? 2 : 1;
+                ReadSaveSlots(g_fDevCard ? SLY2N_DEV_ROOT "/build/saves/sly3-dev/memcard0/" SLY3_CARD_DIRECTORY "" : "");
+                ChooseNewestSlot();
+                s_fTitleCardWait = true;
+            }
+            else startFromTitle();
         }
         else if (GrfbtnPressed(0x100) && (GrfbtnHeld() & 0x108) == 0x100)
         {
@@ -840,16 +965,38 @@ void UpdateFrontEnd(SW* psw)
     if (static SW* s_pswListed = nullptr; std::getenv("SLY2N_EXITPRINT") && psw && psw != s_pswListed)
     {
         s_pswListed = psw;
-        for (LO* plo : AploOfClass(psw, 0x1A))
+        for (LO* plo : AploOfClass(psw, S3CID(0x1A)))
         {
             const glm::vec3 pos = PosLoWorld(plo);
             const LOXSHAPE* px = dynamic_cast<const LOXSHAPE*>(plo);
             std::printf("exit %d: at (%.0f %.0f %.0f) state %d inworld %d delay %.3f point %d wipe %d keys %zu\n", plo->oid, pos.x, pos.y, pos.z,
-                        plo->nState, plo->fInWorld, GFieldLo(plo, 0x160, 0.0f), int(plo->U32Field(0, 0x150, 0x189)),
+                        plo->nState, plo->fInWorld, GFieldLo(plo, 0x160, 0.0f), int(plo->U32Field(0, 0x150, sly3::POINT_DEFAULT)),
                         int(plo->U32Field(0, 0x154, uint32_t(-1))), px ? px->aabKey.size() : 0);
         }
     }
-    for (LO* plo : AploOfClass(psw, 0x1A))
+    UpdateExits3(psw);
+}
+
+// the exits' update (vt slot 16 of class 0x18; natively run from the front end's update, as Sly 2's port did)
+void UpdateExits3(SW* psw)
+{
+    if (!psw) return;
+    if (static SW* s_pswListed = nullptr; std::getenv("SLY2N_EXITPRINT") && psw != s_pswListed)
+    {
+        s_pswListed = psw;
+        for (LO* plo : AploOfClass(psw, S3CID(0x1A)))
+        {
+            const glm::vec3 pos = PosLoWorld(plo);
+            const LOXSHAPE* px = dynamic_cast<const LOXSHAPE*>(plo);
+            std::printf("exit %d: at (%.0f %.0f %.0f) state %d inworld %d delay %.3f arm %.3f point %d wipe %d; shape %zu points"
+                        " %zu bsp nodes, clone of %d, parent %d\n", plo->oid,
+                        pos.x, pos.y, pos.z, plo->nState, plo->fInWorld, GFieldLo(plo, OFF_EXIT_DELAY, 0.0f), GFieldLo(plo, OFF_EXIT_ARM, 0.0f),
+                        int(plo->U32Field(0, OFF_EXIT_POINT, sly3::POINT_DEFAULT)), int(plo->U32Field(0, OFF_EXIT_WIPE, uint32_t(-1))),
+                        px ? px->geom.apos.size() : 0, px ? px->bsp.abspn.size() : 0, plo->ploCloneOf ? plo->ploCloneOf->oid : -1,
+                        plo->paloParent ? plo->paloParent->oid : -1);
+        }
+    }
+    for (LO* plo : AploOfClass(psw, S3CID(0x1A)))
         if (plo->nState == 4 || (plo->fInWorld && (plo->nState == 0 || plo->nState == 1 || plo->nState == 3))) UpdateExit(plo, psw);
 }
 
@@ -861,9 +1008,18 @@ std::string StrFrontEndScript(int id)
     case 0x5D3:
     {
         // orig 0x001DDBF0: the title's help line
-        if (!g_joy.fConnected && false) return StrLocalized(s_pswText, 9);
+        if (!g_joy.fConnected && false) return StrLocalized(s_pswText, IdText(9));
+        // (Europe 0x1DE1F8: nothing while the language menu is needed; then the "Triangle: Language" labels, cycling)
+        if (FTitleNeedsLanguage(s_fTitleInputTaken, g_islotCur >= 0)) return "";
         const float dt = g_islotCur >= 0 ? GRef(RefProgressOfSlot(g_islotCur, {"dt"})) : 0.0f;
-        return StrLocalized(s_pswText, dt == 0.0f ? 5 : 6) + "\n" + StrLocalized(s_pswText, 8);
+        std::string str = StrLocalized(s_pswText, IdText(dt == 0.0f ? 5 : 6)) + "\n" + StrLocalized(s_pswText, IdText(8));
+        if (CLanguages() >= 2)
+        {
+            // (the USA build's 0x1DDBF0 has the text 0x56 here; the European build its own labels)
+            const std::string label = g_disc.VaLanguageLabels() ? StrLanguageHelpLabel(g_clock.t - s_tTitleShown) : StrLocalized(s_pswText, IdText(0x56));
+            if (!label.empty()) str += "\n" + label;
+        }
+        return str;
     }
     case 0x52F:
     {
@@ -891,7 +1047,7 @@ std::string StrFrontEndScript(int id)
         // orig 0x0015DA88: the movie's name (the setup / the getaway)
         if (!s_epm.plo) return "";
         const int k = id == 0x5BF ? s_epm.imovie - 1 : s_epm.imovie;
-        if (k >= 1 && k <= 16) return StrLocalized(s_pswText, (k & 1) ? 0x77 : 0x78);
+        if (k >= 1 && k <= 16) return StrLocalized(s_pswText, IdText((k & 1) ? 0x77 : 0x78));
         return "";
     }
     default: return "";

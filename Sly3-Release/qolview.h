@@ -7,6 +7,10 @@ struct LO;
 // The episode menu (class 0x83) on a picture wider than 4:3: its pictures are cut at the 4:3 canvas's border
 // (hud.h fClipCanvasObj). SLY2N_EPMENUCLIP=0 turns it off.
 bool FClipEpisodeMenuToCanvas(const LO* plo);
+// (PC menus) the gadget grid (screen objects 0x375 / 0x376 / 0x377: Sly's, Bentley's, Murray's) and Job
+// Help (0x4E0) at 4:3 on a wider picture, as the episode menu: cut at the canvas (their bands and portraits reach
+// past it) and pillarboxed black. SLY2N_MENU43=0 turns it off (the bands widened as before).
+bool FFourThreeMenuObj(const LO* plo);
 
 // The front end's Sly 2 logo (shader 0x657's 256 x 128 texture, on the title and the episode menu) replaced by the
 // launcher's high-quality one (launcher/assets/games/sly2-logo.png, embedded): a PC-side texture override, the disc

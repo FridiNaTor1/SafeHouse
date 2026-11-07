@@ -1,5 +1,7 @@
 #pragma once
 
+#include "game/sly3.h"
+
 // CRef: the splice (Scheme) runtime's tagged value (Sly1-Release ref.h, Sly 2's numbering).
 //
 // The original's CRef is 8 bytes {tagk, payload}; vectors, matrices, CLQ/LM/SMP live in refcounted pool nodes,
@@ -30,7 +32,7 @@ using f32 = float;
 // A native method bound to an object (tag 0x22): pfn(pbasic, argc, argv).
 using PFNTHUNK = CRef (*)(BASIC* pbasic, int argc, CRef* argv);
 
-// Sly 3's tag kinds (renumbered from Sly 2's: DefineMacroLambda (Sly 2 4) and Import (Sly 2 17) are gone, so the forms
+// Sly 3's tag kinds, each by its Sly 2 number through game/gen/tagmap.inc (S3TAG; renumbered from Sly 2's: DefineMacroLambda (Sly 2 4) and Import (Sly 2 17) are gone, so the forms
 // 4..15 are Sly 2's 5..16, quote / pipe / dot are 16..18 and the payload kinds 19..31 are Sly 2's 21..33).
 // Evidence (orig3): RefEval 0x1296F0 (symbol 22, list 29; the forms' jump table 0x31F4E0 for tags 1..16: 1 set!
 // 0x128428 (RefSetBinding), 2 define 0x1284D8 (RefAddBinding), 3 / 10 / >= 17 apply, 4 assert 0x128588 (evaluates,
@@ -41,42 +43,42 @@ using PFNTHUNK = CRef (*)(BASIC* pbasic, int argc, CRef* argv);
 enum TAGK
 {
     TAGK_Nil = -1,              // uninitialised / no value (the default CRef)
-    TAGK_None = 0,              // the empty list ()
-    TAGK_Set = 1,               // (set! sym expr)
-    TAGK_Define = 2,            // (define sym expr)
-    TAGK_DefineMacro = 3,       // invalid in the deserializer; applied by RefEval
-    TAGK_Assert = 4,            // (assert expr): orig3 0x128588 evaluates it, returns void (no message: Sly 2's printed)
-    TAGK_Debug = 5,             // (form expr) evaluates its argument if any, else void (0x128610)
-    TAGK_If = 6,
-    TAGK_Or = 7,
-    TAGK_And = 8,
-    TAGK_Cond = 9,
-    TAGK_Else = 10,
-    TAGK_Case = 11,
-    TAGK_Let = 12,
-    TAGK_While = 13,
-    TAGK_Lambda = 14,
-    TAGK_Begin = 15,
-    TAGK_Quote = 16,
-    TAGK_Pipe = 17,             // (invalid in the deserializer; name from Sly 1's order, unconfirmed)
-    TAGK_Dot = 18,              // the rest-parameter marker in a lambda's formals
-    TAGK_S32 = 19,
-    TAGK_F32 = 20,
-    TAGK_Bool = 21,
-    TAGK_Symid = 22,
-    TAGK_Bifk = 23,
-    TAGK_Vector = 24,
-    TAGK_Matrix = 25,
-    TAGK_Clq = 26,
-    TAGK_Lm = 27,
-    TAGK_Smp = 28,
-    TAGK_Pair = 29,             // a list (the original's NODE)
-    TAGK_Proc = 30,             // a lambda closure (the original's "O")
-    TAGK_Basic = 31,            // a game object
-    TAGK_Method = 32,           // a native method bound to an object
-    TAGK_Err = 33,              // (unconfirmed)
-    TAGK_Void = 34,
-    TAGK_Max = 35
+    TAGK_None = S3TAG(0),              // the empty list ()
+    TAGK_Set = S3TAG(1),               // (set! sym expr)
+    TAGK_Define = S3TAG(2),            // (define sym expr)
+    TAGK_DefineMacro = S3TAG(3),       // invalid in the deserializer; applied by RefEval
+    TAGK_Assert = S3TAG(5),            // (assert expr): orig3 0x128588 evaluates it, returns void (no message: Sly 2's printed)
+    TAGK_Debug = S3TAG(6),             // (form expr) evaluates its argument if any, else void (0x128610)
+    TAGK_If = S3TAG(7),
+    TAGK_Or = S3TAG(8),
+    TAGK_And = S3TAG(9),
+    TAGK_Cond = S3TAG(10),
+    TAGK_Else = S3TAG(11),
+    TAGK_Case = S3TAG(12),
+    TAGK_Let = S3TAG(13),
+    TAGK_While = S3TAG(14),
+    TAGK_Lambda = S3TAG(15),
+    TAGK_Begin = S3TAG(16),
+    TAGK_Quote = S3TAG(18),
+    TAGK_Pipe = S3TAG(19),             // (invalid in the deserializer; name from Sly 1's order, unconfirmed)
+    TAGK_Dot = S3TAG(20),              // the rest-parameter marker in a lambda's formals
+    TAGK_S32 = S3TAG(21),
+    TAGK_F32 = S3TAG(22),
+    TAGK_Bool = S3TAG(23),
+    TAGK_Symid = S3TAG(24),
+    TAGK_Bifk = S3TAG(25),
+    TAGK_Vector = S3TAG(26),
+    TAGK_Matrix = S3TAG(27),
+    TAGK_Clq = S3TAG(28),
+    TAGK_Lm = S3TAG(29),
+    TAGK_Smp = S3TAG(30),
+    TAGK_Pair = S3TAG(31),             // a list (the original's NODE)
+    TAGK_Proc = S3TAG(32),             // a lambda closure (the original's "O")
+    TAGK_Basic = S3TAG(33),            // a game object
+    TAGK_Method = S3TAG(34),           // a native method bound to an object
+    TAGK_Err = S3TAG(35),              // (unconfirmed)
+    TAGK_Void = S3TAG(36),
+    TAGK_Max = S3TAG(37)
 };
 
 // Sly 3's built-in functions: the table 0x342030 {pfn, crefReq, fVarArg} x 178 (Sly 2: 0x2BBB90 x 169). 0..45 are

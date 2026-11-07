@@ -1,4 +1,6 @@
 #include <execinfo.h>
+#include "game/sly3.h"
+#include "simdmat.h"
 #include "clock.h"
 // ALO loading: transforms (0x22D7A0 and the blocks it reads), collision entries, children (0x1F31E0).
 
@@ -198,6 +200,9 @@ void LoadAloXfsFromBrx(ALO* palo, CBinaryInputStream* pbis)
             xf.mat = pbis->ReadMatrix4();
             break;
         }
+        xf.matLoad = xf.mat;
+        static uint32_t s_nXfLoad = 0;
+        xf.nLoad = ++s_nXfLoad;
     }
     LoadAloPairsFromBrx(palo, pbis);
     LoadAloLinksFromBrx(palo, pbis);
@@ -206,9 +211,11 @@ void LoadAloXfsFromBrx(ALO* palo, CBinaryInputStream* pbis)
 }
 
 // orig 0x001F31E0 LoadAloFromBrx
+// orig3 0x23C0B8 (Sly 2 0x1F31E0): Sly 3's collision entries add two S8 flags (after the radius, after the state);
+// the rest reads as Sly 2's (the old port: every object of the 39 worlds read exactly its size)
 void LoadAloFromBrx(LO* plo, CBinaryInputStream* pbis)
 {
-    LOADFN(0x1F31E0);
+    LOADFN(0x23C0B8);
     ALO* palo = static_cast<ALO*>(plo);
     InitAloPhys(palo);  // (the physics port) the physics part of InitLo 0x1F2108
     LoadAloXfsFromBrx(palo, pbis);
@@ -226,13 +233,15 @@ void LoadAloFromBrx(LO* plo, CBinaryInputStream* pbis)
         e.f48 = pbis->S8Read() & 1;
         e.f49 = pbis->S8Read() & 1;
         e.sRadius = pbis->F32Read();
+        e.fBit18 = pbis->S8Read() & 1;  // orig3 0x23C0B8: new in Sly 3
         pbis->ReadGeom(&e.geomLocal);
         // orig: a null record gets the identity (0x2C44F0) and the world GEOM is the local one; else 0x166270
         // transforms it into place (TODO(M3): with the record's matrix)
         e.geomWorld = e.geomLocal;
         pbis->ReadBsp(&e.geomWorld, &e.bsp);
         e.id = pbis->U32Read();
-        e.state = pbis->S16Read();
+        e.state = static_cast<int16_t>(pbis->U16Read());  // (orig3: U16)
+        e.fBit21 = pbis->S8Read() & 1;  // orig3: new in Sly 3
         e.pinned = pbis->S16Read();
         e.f50 = pbis->S8Read() & 1;
     }
@@ -267,7 +276,7 @@ void UpdateXfWorld(ALO* palo, XF* pxf, uint64_t gen)
     pxf->genWorld = 2 * gen;
     XF* pxfRef = pxf->pxfRef;
     if (pxfRef && pxfRef->palo == palo) UpdateXfWorld(palo, pxfRef, gen);
-    pxf->matWorld = pxfRef ? pxfRef->matWorld * pxf->mat : pxf->mat;
+    pxf->matWorld = pxfRef ? MulMat4(pxfRef->matWorld, pxf->mat) : pxf->mat;   // (simdmat.h: glm's product exactly)
     pxf->genWorld = 2 * gen + 1;
 }
 }  // namespace
@@ -284,7 +293,7 @@ void UpdateAloHierarchyWorlds(ALO* palo)
 {
     UpdateXfWorlds(palo);
     for (LO* pc : palo->aploChild)
-        if (FCidDerivedFrom(pc->Cid(), 0x30)) UpdateAloHierarchyWorlds(static_cast<ALO*>(pc));
+        if (FCidDerivedFrom(pc->Cid(), S3CID(0x30))) UpdateAloHierarchyWorlds(static_cast<ALO*>(pc));
 }
 
 // orig 0x001F4010 (ALO vt slot 37 SetMatrix): the first record's local = m * local (the original's 0x11C168(m,
@@ -422,7 +431,7 @@ struct INITALOSETTERS
         // orig: 0x00100958 -> 0x001A58D0 (option 33: parent, preservation flags; original slot 10)
         RegisterObjectMethod(0x100958, [](LO* plo, const std::vector<CRef>& a) {
             LO* ploNew = PloArg(a, 0);
-            ALO* paloNew = ploNew && FCidDerivedFrom(ploNew->Cid(), 0x30) ? static_cast<ALO*>(ploNew) : nullptr;
+            ALO* paloNew = ploNew && FCidDerivedFrom(ploNew->Cid(), S3CID(0x30)) ? static_cast<ALO*>(ploNew) : nullptr;
             using PFN = void (*)(LO*, ALO*, XF*, int);
             if (std::getenv("SLY2N_PARENTPRINT"))
             {
@@ -434,14 +443,14 @@ struct INITALOSETTERS
             return CRef(TAGK_Void);
         });
         RegisterObjectSetter(29, [](LO* plo, const CRef& r) {
-            if (FCidDerivedFrom(plo->Cid(), 0x30)) SetAloVelocityTo(static_cast<ALO*>(plo), r.GetVector());
+            if (FCidDerivedFrom(plo->Cid(), S3CID(0x30))) SetAloVelocityTo(static_cast<ALO*>(plo), r.GetVector());
         });
         // EOPID 29's getter (option 63): vt slot 33, the position record's world velocity (0x1F4440); e.g. the RC
         // chopper's bombs inherit 0.6 x its velocity (its script's option 1535)
         RegisterObjectGetter(29, [](LO* plo) {
             CRef r;
             using PFN = glm::vec3 (*)(ALO*);
-            if (FCidDerivedFrom(plo->Cid(), 0x30))
+            if (FCidDerivedFrom(plo->Cid(), S3CID(0x30)))
             {
                 ALO* palo = static_cast<ALO*>(plo);
                 PFN pfn = reinterpret_cast<PFN>(PvNativeVt(palo, 33));
@@ -453,11 +462,18 @@ struct INITALOSETTERS
         RegisterObjectSetter(30, [](LO* plo, const CRef& r) {
             if (std::getenv("SLY2N_SETTERPRINT"))
                 std::printf("setter 30 %d: %.3f %.3f %.3f rot %p\n", plo->oid, r.GetVector().x, r.GetVector().y, r.GetVector().z,
-                            FCidDerivedFrom(plo->Cid(), 0x30) ? (void*)PxfRot(static_cast<ALO*>(plo)) : nullptr);
-            if (FCidDerivedFrom(plo->Cid(), 0x30)) SetAloAngVelocityTo(static_cast<ALO*>(plo), r.GetVector());
-            if (std::getenv("SLY2N_SETTERPRINT") && FCidDerivedFrom(plo->Cid(), 0x30) && PxfRot(static_cast<ALO*>(plo)))
+                            FCidDerivedFrom(plo->Cid(), S3CID(0x30)) ? (void*)PxfRot(static_cast<ALO*>(plo)) : nullptr);
+            if (FCidDerivedFrom(plo->Cid(), S3CID(0x30))) SetAloAngVelocityTo(static_cast<ALO*>(plo), r.GetVector());
+            if (std::getenv("SLY2N_SETTERPRINT") && FCidDerivedFrom(plo->Cid(), S3CID(0x30)) && PxfRot(static_cast<ALO*>(plo)))
                 std::printf("  after: kind %d mode %d\n", PxfRot(static_cast<ALO*>(plo))->kind, PxfRot(static_cast<ALO*>(plo))->mode);
         });
     }
 } s_initalosetters;
 }  // namespace
+
+// orig 0x001A6AF8
+bool FLoInParentChain(const LO* plo, const LO* ploAncestor)
+{
+    while (plo && plo != ploAncestor) plo = plo->paloParent;
+    return plo != nullptr;
+}

@@ -43,7 +43,18 @@ struct NOISE : LO
     int nSerial = 0;               // +0x48
     float t = 0.0f;                // +0x4C
     int nKind = 0;                 // +0x54
+    int cRef = 0;                  // +0x0 the references (0x1566B8 / 0x1566C8): the list's, the holders'
+    float tFree = -1.0f;           // (native) when its last reference went (pooled for reuse)
 };
+// orig: 0x001566B8 / 0x001566C8 (vt slots 1 / 2: the last release gives it back to the pool SW +0x4008, reused by
+// the next PnoiseNew; native: reused only from a later frame, so a pointer still in use within the frame stays valid)
+void AddRefNoise(NOISE* pn);
+void ReleaseNoise(NOISE* pn);
+// orig: 0x00156BE0 (a held noise: the old one removed and released, a new one of ptmpl made and held; null: none)
+void SetHeldNoise(NOISE** ppn, NOISETMPL* ptmpl, const glm::vec3& pos, LO* ploOwner);
+// (debug / tests) the noises allocated (live, held or pooled) and the pooled ones
+size_t CNoiseAllocated();
+size_t CNoisePooled();
 // orig: 0x00156548 / 0x00156698
 NOISE* PnoiseNew(NOISETMPL* ptmpl, const glm::vec3& pos, LO* ploOwner);
 // orig: 0x00156780
@@ -53,6 +64,8 @@ int RemoveActorAlarms(LO* actor);
 bool FNoiseLive(const NOISE* pn);  // orig 0x156870 (inverted)
 const std::vector<NOISE*>& ApnoiseAll();
 void ResetNoises();
+// orig: 0x00156D58 / 0x00156DE0(true), after the base removal notification.
+void OnRemoveNoiseListener(LO* plo);
 // orig: 0x00156728 (the world pass: the old ones removed)
 void ExpireNoises();
 // orig: 0x00156898 (the radius, growing over the life)

@@ -4,6 +4,7 @@
 // Native: the spawn point without the ground ray (0x173610, TODO(physics)).
 
 #include "activate.h"
+#include "game/sly3.h"
 #include "ai.h"
 #include "aipursuit.h"
 #include "detect.h"
@@ -185,7 +186,7 @@ void CollectOccluders()
 {
     s_apsoeOcclude.clear();
     if (!g_psw) return;
-    for (LO* plo : g_psw->mpcidaplo[0x31])
+    for (LO* plo : g_psw->mpcidaplo[S3CID(0x31)])
         for (SOE& soe : static_cast<ALO*>(plo)->asoe)
             if (!soe.f48) s_apsoeOcclude.push_back(&soe);
 }
@@ -252,7 +253,7 @@ void ReleaseSlot(SPAWNER& sp, SLOT& slot, int k, bool fKeep)
 // at the previous frame's time.
 float TGuardLastDrawn(LO* plo, float tWas)
 {
-    if (!FCidDerivedFrom(plo->Cid(), 0x30) || !FLoActive(plo)) return tWas;
+    if (!FCidDerivedFrom(plo->Cid(), S3CID(0x30)) || !FLoActive(plo)) return tWas;
     ALO* palo = static_cast<ALO*>(plo);
     if (!palo->pglobset) return tWas;
     const glm::mat4 mat = palo->apxfRef[2] ? palo->apxfRef[2]->matWorld : glm::mat4(1.0f);  // (ALO +0x60)
@@ -316,6 +317,8 @@ SOURCE* PsrcChoose(SPAWNER& sp, const glm::vec3& pos, glm::vec3* ppos, glm::mat3
     CollectOccluders();  // (0x1B44D8)
     float sSmallest = 3.4028235e38f;
     for (LO* p : sp.aproxy) sSmallest = std::min(sSmallest, p->sRadius);
+    if (static const bool s_f = std::getenv("SLY2N_SPAWNDEBUG") && std::atoi(std::getenv("SLY2N_SPAWNDEBUG")) >= 3; s_f)
+        for (LO* p : sp.aproxy) std::fprintf(stderr, "   proxy %d (cid 0x%X) radius %.0f\n", p->oid, p->Cid(), p->sRadius);
     float sBest = 3.4028235e38f;
     SOURCE* psrcBest = nullptr;
     for (SOURCE& src : sp.asrc)
@@ -385,7 +388,7 @@ SOURCE* PsrcChoose(SPAWNER& sp, const glm::vec3& pos, glm::vec3* ppos, glm::mat3
         if (src.kind != 0 && src.kind != 2) continue;
         const float sRadius = src.kind == 0 ? src.plo->sRadius : sSmallest;
         const glm::vec3 posCand = PosLoWorld(src.plo);
-        const glm::mat3 mat = glm::mat3(src.plo->Cid() >= 0 && FCidDerivedFrom(src.plo->Cid(), 3) ? static_cast<LOX*>(src.plo)->mat : glm::mat4(1.0f));
+        const glm::mat3 mat = glm::mat3(src.plo->Cid() >= 0 && FCidDerivedFrom(src.plo->Cid(), S3CID(3)) ? static_cast<LOX*>(src.plo)->mat : glm::mat4(1.0f));
         const float s = DistXY(pos, posCand);
         if (s < 1500.0f || sBest < s) continue;
         bool f = true;
@@ -515,7 +518,7 @@ void UpdateSpawner(LO* p)
     if (pslot->plo) ReleaseSlot(sp, *pslot, 0, true);  // (an occupied slot taken over: its guard removed)
     LO* plo = PloSpawn(sp, psrc, posSpawn, matSpawn, fFlip);
     if (!plo) return;
-    if (FCidDerivedFrom(plo->Cid(), 0x30))
+    if (FCidDerivedFrom(plo->Cid(), S3CID(0x30)))
     {
         ALO* palo = static_cast<ALO*>(plo);
         palo->gFade = 0.01f;   // 0x1F7D10
@@ -556,6 +559,17 @@ struct INITSPAWNER
 } s_initspawner;
 }
 
+// orig: 0x001746B8 (slot 12): after the base OnRemove, remove every occupied
+// guard slot and release its source. Keep the slots and sources for a later add.
+void OnRemoveSpawner(LO* plo)
+{
+    const auto it = s_mpspawner.find(plo);
+    if (it == s_mpspawner.end()) return;  // the original's slot array can still be null
+    SPAWNER& sp = it->second;
+    for (SLOT& slot : sp.aslot)
+        if (slot.plo) ReleaseSlot(sp, slot, 0, false);
+}
+
 // orig 0x001733F8 (vt slot 15, after the base): the sources' objects (kind 1: a 0x71 list moving along the path,
 // 0x170C50), the slots
 void StartSpawner(SW* psw, LO* plo)
@@ -575,7 +589,7 @@ void StartSpawner(SW* psw, LO* plo)
         if (src.kind != 1) continue;
         // a path source: a command list (0x13E3C8(0x71, 0, 0x2CB, -1), in the world) of one move along the path
         // {n8 1, nC -1} (0x170C50: op 6)
-        if (auto* pl = static_cast<CMDLIST*>(PloNew(0x71, psw, nullptr, 0x2CB, -1)))
+        if (auto* pl = static_cast<CMDLIST*>(PloNew(S3CID(0x71), psw, nullptr, 0x2CB, -1)))
         {
             if (CMD* pc = PcmdAppend(pl, 6, src.oid))
             {
@@ -590,7 +604,8 @@ void StartSpawner(SW* psw, LO* plo)
                      sp.aoidProxy.size(), sp.apos.size(), sp.aslot.size());
     sp.aproxy.clear();
     for (OID oid : sp.aoidProxy)
-        if (LO* p = PloFindSwObjectByOid(psw, oid))
+        if (std::getenv("SLY2N_SPAWNDEBUG") && !PloFindSwObjectByOid(psw, oid)) std::fprintf(stderr, "spawner %d: proxy %d not found\n", plo->oid, oid);
+        else if (LO* p = PloFindSwObjectByOid(psw, oid))
         {
             sp.aproxy.push_back(p);
             if (std::getenv("SLY2N_SPAWNDEBUG")) std::fprintf(stderr, "spawner %d: proxy %d (cid 0x%X)\n", plo->oid, oid, p->Cid());

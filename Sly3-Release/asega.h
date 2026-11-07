@@ -64,6 +64,10 @@ void GetAsegChannelTarget(ASEG* paseg, ALO* palo, const ASEGCHN& chn, ALO** ppal
 // The ASEGA's splice events (orig vt slot 3, 0x1331F8: 2 applied, 3 retracted, 4 the event kind 12 with its word),
 // set by update.cpp: the ASEG's module frame binds them
 extern void (*g_pfnAsegaScript)(ASEGA* pasega, int symid, int n);
+// (PC addition, debug menu only: true while pccharacter.cpp applies / retracts a guest puppet's animation in its kept
+// world: the clip's events and scripts are not fired there (the puppet fires the ones it wants itself); a start
+// event's explosion run then re-initialised the running world's emitters as the kept world's, R36)
+extern bool g_fAsegaEventsMuted;
 // orig: 0x0012F9B8 ApplyAseg: a new ASEGA playing paseg on palo (null: the ASEG's own objects) from time t
 void ApplyAseg(ASEG* paseg, ALO* palo, float t, float svt, int grfapl, ASEGA** ppasega);
 // orig: 0x00130488
@@ -129,8 +133,10 @@ void CollectAsegas();
 void ResetAsegas();
 
 // Hooks for the systems events reach (null: the event is counted in g_cAsegaEventDropped and dropped). Plain function
-// pointers, not std::function: other files' static initializers set them, and a pointer is constant-initialized, so
-// the order of the files' constructors (reversed by MinGW on Windows) does not matter (Sly2-Release/asega.h).
+// pointers, not std::function: other files' static initializers set them (asegevent.cpp, cmworld.cpp, update.cpp), and a
+// pointer is constant-initialized, so the order of the files' constructors does not matter. (A std::function here was
+// constructed after those assignments on Windows, where MinGW runs the files' constructors in reverse link order, and
+// emptied them: no ASEG events, no camera parameters, so the intro's cutscene camera never took over.)
 extern void (*g_pfnAsegaEventOther)(ASEGA*, ASEGEV*);  // kinds 0-3, 7, 8, 13-20, 22-24
 extern void (*g_pfnLoMessage)(LO*, int msgk, void* pv); // an object's vt slot 5 (messages 2, 3, 9)
 // Message 9's argument (orig {the ASEGA, the event's time, its value an[0]}: the objects' slot 5 read +0 / +8)

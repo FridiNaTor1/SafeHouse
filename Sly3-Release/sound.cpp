@@ -4,8 +4,10 @@
 // The 989snd / spiop commands are direct calls (snd989.h, spiop.h); their asynchronous callbacks run at once.
 
 #include "sound.h"
-
-#include <map>
+#include "game/sly3.h"
+#include "region.h"
+#include <execinfo.h>
+extern int g_iframeMain;  // (game.cpp: debug prints)
 
 #include "audio.h"
 #include "bis.h"
@@ -14,8 +16,6 @@
 #include "snd989.h"
 #include "spiop.h"
 #include "splicetypes.h"
-#include "disc.h"
-#include "sly3/brx3.h"
 
 #include <unordered_set>
 #include <algorithm>
@@ -31,6 +31,7 @@
 constinit SNDHOOKS g_sndhooks;
 DIALOGSUB g_dialogsub;
 SOUNDMGR g_sound;
+SOUNDMGR* g_psoundKeptLoad = nullptr;   // (PC addition, pcloader.h: a kept world's music block goes here)
 
 namespace
 {
@@ -291,6 +292,16 @@ void CSnd::SetDirty(uint32_t m, uint32_t v)
     }
 }
 
+// orig: 0x1FB710 (off the active list, its bits kept)
+void CSnd::RemoveActive()
+{
+    auto& a = g_sound.apsndActive;
+    const auto it = std::find(a.begin(), a.end(), this);
+    if (it == a.end()) return;
+    *it = nullptr;  // (compacted after the frame's walk)
+    Release();
+}
+
 // orig: 0x1FB528 (the 3D update of a sound attached to a source or at a position)
 void CSnd::Update3D()
 {
@@ -304,6 +315,16 @@ void CSnd::Update3D()
     int pan = 0;
     Attenuate(v, m_sStart, m_sEnd, &g, &pan);
     const float r = m_gVol * g;
+    if (const char* selected = std::getenv("SLY2N_SNDSCRIPT"); selected && (m_grfDirty & 1))
+        if (auto* plain = dynamic_cast<CSndPlain*>(this); plain && plain->m_sfxid == std::atoi(selected))
+        {
+            glm::vec3 listener(0.0f);
+            glm::mat3 camera(1.0f);
+            if (g_sndhooks.pfnListener) g_sndhooks.pfnListener(&listener, &camera);
+            std::printf("sndscript attenuate id %d sound %p source %.2f %.2f %.2f listener %.2f %.2f %.2f "
+                        "range %.1f %.1f gain %.6f pan %d\n", plain->m_sfxid, static_cast<void*>(this),
+                        v.x, v.y, v.z, listener.x, listener.y, listener.z, m_sStart, m_sEnd, r, pan);
+        }
     if (CvtW(r * 1024.0f) != CvtW(m_gVolCur * 1024.0f))
     {
         if (m_gVolCur == 0.0f) OnAudible(0);
@@ -367,8 +388,47 @@ void CSnd::UpdateFrame()
 CSndPlain::CSndPlain(int sfxid) : m_sfxid(sfxid) { SetDirty(1, 1); }
 
 // orig: 0x1FBC20 (the sound's bank entry: 2 a looper)
+constinit bool (*g_pfnPcSndBank)(const void* psrc, int sfxid, uint32_t* phbank, int* pisound, int* pkind) = nullptr;
+
+// (PC addition, pcloader.h: a kept world's sound plays from its own bank; the running world's otherwise)
+bool CSndPlain::FResolve(uint32_t* phbank, int* pisound, int* pkind) const
+{
+    if (m_hbankPc)
+    {
+        *phbank = m_hbankPc;
+        *pisound = m_isoundPc;
+        *pkind = m_kindPc;
+        return true;
+    }
+    return g_pfnPcSndBank && m_psrc && g_pfnPcSndBank(m_psrc, m_sfxid, phbank, pisound, pkind);
+}
+
+CSndPlain* PsndNewPlainBank(int sfxid, uint32_t hbank, int isound, int kind)
+{
+    CSndPlain* p = PsndNewPlain(sfxid);
+    p->m_hbankPc = hbank;
+    p->m_isoundPc = isound;
+    p->m_kindPc = kind;
+    return p;
+}
+
+void UsePcCopyBank(CSnd* psnd, const void* pcopy)
+{
+    CSndPlain* p = dynamic_cast<CSndPlain*>(psnd);
+    if (!p || !pcopy || !g_pfnPcSndBank) return;
+    uint32_t hbank = 0;
+    int isound = -1, kind = 0;
+    if (!g_pfnPcSndBank(pcopy, p->m_sfxid, &hbank, &isound, &kind)) return;
+    p->m_hbankPc = hbank;
+    p->m_isoundPc = isound;
+    p->m_kindPc = kind;
+}
+
 int CSndPlain::Kind()
 {
+    uint32_t hbank = 0;
+    int isound = -1, kind = 0;
+    if (FResolve(&hbank, &isound, &kind)) return isound < 0 ? -1 : kind;
     const int i = IsoundFromSfxid(m_sfxid);
     return i < 0 ? -1 : g_sound.aflagsSound[i];
 }
@@ -377,20 +437,29 @@ int CSndPlain::Kind()
 // a one-shot is fire and forget; then the mood check of sounds 0x6F / 0x73 / 0x15)
 void CSndPlain::StartIop()
 {
-    const int isound = IsoundFromSfxid(m_sfxid);
-    if (isound < 0 || !g_sound.hbank)
+    uint32_t hbankPc = 0;
+    int isoundPc = -1, kindPc = 0;
+    const bool fPc = FResolve(&hbankPc, &isoundPc, &kindPc);   // (PC addition: a kept world's bank)
+    const int isound = fPc ? isoundPc : IsoundFromSfxid(m_sfxid);
+    const uint32_t hbank = fPc ? hbankPc : g_sound.hbank;
+    if (static const char* s_sz = std::getenv("SLY2N_SNDSTART"); s_sz && std::atoi(s_sz) == m_sfxid)   // (debug: why a sound starts or not)
+        std::printf("sndstart: sfx %d isound %d bank %u dirty 0x%X vol %.3f kind %d frame %d\n", m_sfxid, isound, hbank, m_grfDirty, m_gVolCur,
+                    fPc ? kindPc : isound >= 0 && isound < int(g_sound.aflagsSound.size()) ? g_sound.aflagsSound[isound] : -1, g_iframeMain);
+    if (static const bool s_fSrc = std::getenv("SLY2N_SNDSRC") != nullptr; s_fSrc)   // (debug: the bank each start resolves to)
+        std::printf("sndsrc: sfx %d -> %s bank sound %d src %p frame %d\n", m_sfxid, fPc ? "kept" : "running", isound, m_psrc, g_iframeMain);
+    if (isound < 0 || !hbank)
     {
         SetDirty(0x1FFF, 0);
         return;
     }
-    if (m_grfDirty & 2)  // (started paused: dropped)
-    {
-        SetDirty(0x1FFF, 0);  // (the original takes it off the active list, keeping its bits)
+    if (m_grfDirty & 2)  // started paused: 0x1FB710, off the active list with its bits kept (a later Resume's
+    {                    // SetDirty(6, 4) puts it back and it starts then; natively it was dropped: audit 2026-11 S1)
+        RemoveActive();
         return;
     }
     SNDPLAYPARAMS m;
     m.mask = 3;
-    m.hbank = g_sound.hbank;
+    m.hbank = hbank;
     m.isound = isound;
     if (m_grfDirty & 0x10)
     {
@@ -407,7 +476,7 @@ void CSndPlain::StartIop()
         m.mask |= SNDPPM_PitchMod;
         m.pm = static_cast<int16_t>(CvtW(m_pitch * 1524.0f));
     }
-    if (g_sound.aflagsSound[isound] == 2)
+    if ((fPc ? kindPc : g_sound.aflagsSound[isound]) == 2)
     {
         m_cbusy = 1;
         CSndRef keep(this);
@@ -420,7 +489,10 @@ void CSndPlain::StartIop()
     }
     snd_PlaySoundEx(m);
     SetDirty(0x1FFF, 0);
-    // (0x6F / 0x73 / 0x15 of the player character: the mood sound, 0x1FEED0; needs the character objects)
+    // a footstep of the player character (0x6F Sly / 0x73 Bentley / 0x15 Murray): the mood sound (0x1FEED0: the
+    // sneak stem's "bing" on each step, R32)
+    if ((m_sfxid == 0x6F || m_sfxid == 0x73 || m_sfxid == 0x15) && g_sndhooks.pfnFMoodStep && g_sndhooks.pfnFMoodStep(m_sfxid))
+        StepSoundMood();
 }
 
 // orig: 0x1FBE80 (a fade over +0x48 s with AutoVol -4 in 240ths, or at once)
@@ -662,10 +734,21 @@ void CSndVoice::Update3D()
 // The manager
 
 // orig: 0x1FBB90
+
 CSndPlain* PsndNewPlain(int sfxid)
 {
     static const bool s_fLog = std::getenv("SLY2N_SNDLOG") != nullptr;
-    if (s_fLog) std::printf("sound: sfx %d (bank sound %d)\n", sfxid, IsoundFromSfxid(sfxid));
+    if (s_fLog) std::printf("sound: sfx %d (bank sound %d) frame %d\n", sfxid, IsoundFromSfxid(sfxid), g_iframeMain);
+    if (static const char* s_sz = std::getenv("SLY2N_SNDBT"); s_sz && std::atoi(s_sz) == sfxid)   // (debug: who makes the sound)
+    {
+        static int s_c = 0;
+        if (s_c++ < 3)
+        {
+            void* a[10];
+            std::fflush(stdout);
+            backtrace_symbols_fd(a, backtrace(a, 10), 1);
+        }
+    }
     return new CSndPlain(sfxid);
 }
 
@@ -722,7 +805,7 @@ void StartupSound()
 {
     std::lock_guard<std::recursive_mutex> lock(g_mtxSound);
     snd_StartSoundSystem();
-    // ('SUKR' 0: spiop's entry)
+    SpiopInit();  // ('SUKR' 0: spiop's entry)
     g_sound.gMaster = 1.0f;
     for (int ichan = 0; ichan < 4; ++ichan)
     {
@@ -756,12 +839,16 @@ CSnd::CSnd() { std::lock_guard<std::recursive_mutex> lock(g_mtxSound); SetSndLiv
 CSnd::~CSnd() { std::lock_guard<std::recursive_mutex> lock(g_mtxSound); SetSndLive().erase(this); }
 
 // A movie that leads to a world change plays after the old world's sounds are gone (the original plays it inside
-// the transition, after 0x1FD700); native plays queued movies before the transition, so they are stopped here.
+// the transition, after 0x1FD700); native plays queued movies before the transition, so they are stopped here, and
+// the volumes reset as 0x1FD700 ends (0x1FEDF0: every factor 1, kind 1 excepted). The movie's voices play through
+// group 2, the dialog channel: a job's end stops the clock, and UpdateSound's pause factor (kind 2, 0 while the
+// clock is stopped) had left that channel at 0, so the movies after a job were silent (R25).
 void StopSoundsForMovie()
 {
     std::lock_guard<std::recursive_mutex> lock(g_mtxSound);
     snd_StopAllSounds();
     SpiopStopAll();
+    ResetSoundVolumes();
 }
 
 // orig: 0x1FD700 (before a world loads)
@@ -817,9 +904,12 @@ void LoadMusicFromBrx(CBinaryInputStream* pbis)
 {
     LOAD_SCOPE(0x1FD0E8, pbis);
     std::lock_guard<std::recursive_mutex> lock(g_mtxSound);
-    SOUNDMGR& s = g_sound;
+    // (PC addition: a kept world's load, pcloader.h, reads its block into its own record: the running world's bank,
+    // streams and sound table are not touched)
+    const bool fKept = g_psoundKeptLoad != nullptr;
+    SOUNDMGR& s = fKept ? *g_psoundKeptLoad : g_sound;
     uint8_t key[0x40];
-    pbis->ReadRecord64(key);  // 0x118458
+    pbis->ReadRecord64(key, KEYK_Bank);  // 0x118458
     uint32_t a8, a38, b8, b38;
     std::memcpy(&a8, key + 8, 4);
     std::memcpy(&a38, key + 0x38, 4);
@@ -828,7 +918,7 @@ void LoadMusicFromBrx(CBinaryInputStream* pbis)
     if ((a8 ^ a38) != (b8 ^ b38))  // another bank (by id): the old one goes
     {
         std::memcpy(s.keyBank, key, sizeof(key));
-        if (s.hbank)
+        if (s.hbank && !fKept)
         {
             snd_UnloadBank(s.hbank);
             s.hbank = 0;
@@ -849,9 +939,9 @@ void LoadMusicFromBrx(CBinaryInputStream* pbis)
     {
         if (s.president) s_apresidentOld.push_back(std::move(s.president));
         s.president = std::make_unique<SNDSTREAM>();
-        pbis->ReadRecord64(s.president->key);  // 0x118458
+        pbis->ReadRecord64(s.president->key, KEYK_Ambience);  // 0x118458
         s.president->fk = FkFromRecord(s.president->key);
-        s.sndResident = CSndRef(PsndNewVoice(s.president.get(), 4));
+        if (!fKept) s.sndResident = CSndRef(PsndNewVoice(s.president.get(), 4));
     }
     s.aidTarget.clear();
     for (int i = 0; i < nt; ++i) s.aidTarget.push_back(pbis->S16Read());
@@ -861,7 +951,7 @@ void LoadMusicFromBrx(CBinaryInputStream* pbis)
     for (int i = 0; i < nl; ++i)
     {
         s.alanguage.push_back(pbis->U8Read());
-        if (s.alanguage.back() == s.language) sel = i;
+        if (s.alanguage.back() == g_nLang) sel = i;
     }
     s.ilanguage = sel;
     const int ne = pbis->S32Read();
@@ -873,7 +963,7 @@ void LoadMusicFromBrx(CBinaryInputStream* pbis)
         for (int j = 0; j < nl; ++j)
         {
             uint8_t k[0x40];
-            pbis->ReadRecord64(k);  // 0x118458
+            pbis->ReadRecord64(k, KEYK_Dialog, e.id, s.alanguage[j]);  // 0x118458
             const int g = pbis->S8Read();
             const float f = pbis->F32Read();
             if (j != sel) continue;
@@ -892,7 +982,7 @@ void LoadMusicFromBrx(CBinaryInputStream* pbis)
     {
         SNDSTREAM o;
         o.id = pbis->S16Read();
-        pbis->ReadRecord64(o.key);  // 0x118458
+        pbis->ReadRecord64(o.key, KEYK_Music, o.id);  // 0x118458
         o.fk = FkFromRecord(o.key);
         s.amusic.push_back(std::move(o));
     }
@@ -974,6 +1064,17 @@ float TMusicTop()
 {
     std::lock_guard<std::recursive_mutex> lock(g_mtxSound);
     const CSndVoice* p = PvoiceTop();
+    if (static const bool s_fLat = std::getenv("SLY2N_MUSICLAT") != nullptr; s_fLat && p && g_iframeMain % 60 == 0)   // (debug: the clock against the device)
+    {
+        static int s_iframe = -1;
+        if (s_iframe != g_iframeMain)
+        {
+            s_iframe = g_iframeMain;
+            const double tDev = SpiopTConsumed(p->m_h);
+            std::printf("musiclat: frame %d music %d clock %.3f consumed %.3f lead %.3f\n", g_iframeMain, p->m_pstream ? p->m_pstream->id : -1, p->m_tPlay, tDev,
+                        p->m_tPlay - tDev);
+        }
+    }
     return p ? static_cast<float>(p->m_tPlay) : 0.0f;
 }
 
@@ -1184,8 +1285,8 @@ void SetSoundChannelVolume(int ichan, int kind, float g)
 namespace
 {
 // PC: the launcher's Music / Sound effects / Dialogue sliders (the shared settings, as Sly1-Release applies them: a
-// linear factor on the output level), one factor per channel. 989snd squares the group's master with the volume
-// (AdjustVolToGroup), so the channel's product carries the slider's square root; at 100% the factor is exactly 1.
+// linear factor on the output level), one factor per channel. 989snd squares a group's master (AdjustVolToGroup),
+// so the channel's product carries the slider's square root; at 100% the factor is exactly 1 and the mix unchanged.
 std::array<float, 4> s_agUser = {1.0f, 1.0f, 1.0f, 1.0f};  // channel 0 ambience, 1 music, 2 dialog, 3 effects
 }  // namespace
 
@@ -1201,6 +1302,10 @@ void SendSoundChannelVolume(int ichan)
     const int n = CvtW(gChan * 1024.0f);
     if (CvtW(s.agChannel[ichan] * 1024.0f) == n) return;
     s.agChannel[ichan] = gChan;
+    if (static const bool s_f = std::getenv("SLY2N_CHANVOLLOG") != nullptr; s_f)   // (debug: a channel's volume and its factors)
+        std::printf("chanvol %d: %.3f = %.2f %.2f %.2f %.2f %.2f %.2f %.2f %.2f x user %.2f (frame %d)\n", ichan, gChan, s.agVol[0][ichan],
+                    s.agVol[1][ichan], s.agVol[2][ichan], s.agVol[3][ichan], s.agVol[4][ichan], s.agVol[5][ichan], s.agVol[6][ichan],
+                    s.agVol[7][ichan], s_agUser[size_t(ichan)], g_iframeMain);
     snd_SetMasterVolume(ichan, n);
 }
 
@@ -1226,22 +1331,23 @@ void ResetSoundVolumes()
     }
 }
 
-// orig: 0x1FEED0 (the mood: a random step from the tables at 0x2A82A8 / 0x2A8350; sound 0x28 with it as the
-// pitch modifier... the original's field +0x20 of the play block)
+// orig: 0x1FEED0 (the mood, only in the sneak stem (+0x64 = 0): a random step (0x11D3F8(0, 5), the game's
+// generator) from the tables at 0x2A82A8 (7 x 6) by the row 0x2A8350[mood + 12]; sound 0x28 with mood x 127 as
+// its pitch modifier)
 void StepSoundMood()
 {
     std::lock_guard<std::recursive_mutex> lock(g_mtxSound);
     SOUNDMGR& s = g_sound;
     if (s.istem) return;
     int32_t asteps[42], arows[25];
-    std::memcpy(asteps, g_disc.PbElf(0x2A82A8, sizeof(asteps)), sizeof(asteps));
-    std::memcpy(arows, g_disc.PbElf(0x2A8350, sizeof(arows)), sizeof(arows));
-    static uint32_t s_seed = 1;
-    s_seed = s_seed * 1103515245u + 12345u;
-    const int r = static_cast<int>((s_seed >> 16) % 6);  // (0x11D3F8: 0..5)
-    const int irow = std::clamp(s.mood + 12, 0, 24);
+    std::memcpy(asteps, g_disc.PbElf(S3VA(0x2A82A8), sizeof(asteps)), sizeof(asteps));
+    std::memcpy(arows, g_disc.PbElf(S3VA(0x2A8350), sizeof(arows)), sizeof(arows));
+    const int r = g_sndhooks.pfnRandInRange ? g_sndhooks.pfnRandInRange(0, 5) : 0;
+    const int irow = std::clamp(s.mood + 12, 0, 24);  // (the original indexes unchecked; the steps keep it in -12..12)
     s.mood += asteps[std::clamp(r + arows[irow] * 6, 0, 41)];
     const int isound = IsoundFromSfxid(0x28);
+    static const bool s_fLog = std::getenv("SLY2N_SNDLOG") != nullptr;
+    if (s_fLog) std::printf("sound: mood step %d -> sfx 40 (bank sound %d) pitch %d frame %d\n", r, isound, s.mood * 127, g_iframeMain);
     if (isound < 0 || !s.hbank) return;
     SNDPLAYPARAMS m;
     m.mask = 0x13;
@@ -1262,6 +1368,14 @@ static void UpdateStemWeights(float dtFrame)
     {
         const int k = g_sndhooks.pfnMusicStem();
         if (k >= 0 && k <= 2) s.istem = k;
+    }
+    // (test: SLY2N_STEMCYCLE=N: the stem goes normal, alert, sneak, normal, ... every N updates, so a run switches
+    // the music's stems on a fixed schedule: the audio identity check)
+    if (static const int s_c = std::getenv("SLY2N_STEMCYCLE") ? std::atoi(std::getenv("SLY2N_STEMCYCLE")) : 0; s_c > 0)
+    {
+        static int s_cupdate = 0;
+        static const int s_aistem[3] = {1, 2, 0};
+        s.istem = s_aistem[(s_cupdate++ / s_c) % 3];
     }
     CSndVoice* ref = PvoiceTop();
     float* w = s.agStem.data();
@@ -1391,6 +1505,29 @@ void UpdateSoundMgr(float dt, float dtFrame)
     }
     float g = 1.0f;
     UpdateStemWeights(dtFrame);
+    // (debug: SLY2N_SNDCOUNT=N prints the live 989snd sounds / voices, the game's active sounds and the duck every N frames)
+    if (static const int s_cCount = std::getenv("SLY2N_SNDCOUNT") ? std::atoi(std::getenv("SLY2N_SNDCOUNT")) : 0; s_cCount > 0)
+    {
+        static int s_cFrame = 0;
+        if (++s_cFrame % s_cCount == 0)
+        {
+            // (orphan loopers: a looping sound without a STOP grain still playing with no sound object holding its
+            // handle: nothing can stop it any more (R45's class); k: from another bank (pcloader's kept worlds))
+            std::unordered_set<uint32_t> seth;
+            for (CSnd* p : SetSndLive())
+                if (p->m_h) seth.insert(p->m_h);
+            std::string strOrphan;
+            int cOrphan = 0;
+            for (const SNDENDLESS& e : snd_EndlessLoopers())
+                if (!seth.count(e.h))
+                {
+                    ++cOrphan;
+                    strOrphan += " " + std::string(e.fFirstBank ? "" : "k") + std::to_string(e.isound);
+                }
+            std::printf("sndcount: frame %d: %s; %zu active, %zu live; orphan loopers %d%s\n", s_cFrame, snd_Describe().c_str(),
+                        s.apsndActive.size(), SetSndLive().size(), cOrphan, strOrphan.c_str());
+        }
+    }
     UpdateDialogEvents(dtFrame);
     if (s.grfState == 3 && dt == 0.0f) g = 0.0f;
     static const SMP s_smpLevel{2.0f, 0.0f, 0.2f};  // 0x2A8288
@@ -1414,7 +1551,7 @@ struct WORLDBYTES
     std::string name;
     FK fk;
     std::vector<uint8_t> ab;
-    std::size_t ibMusic = 0, ibMusicEnd = 0;  // the 0x246F58 block, as the world walk found it
+    std::size_t ibMusic = 0;  // the 0x1FD0E8 block: after the S16 group count and the 0x54-byte groups
 };
 
 bool FLoadMapRun(const std::string& path, uint32_t addr, std::size_t* pibStart, std::size_t* pibEnd)
@@ -1436,52 +1573,78 @@ bool FLoadMapRun(const std::string& path, uint32_t addr, std::size_t* pibStart, 
     return false;
 }
 
-// The world: a Sly 3 world index (0..39), its name (m_ext), or SECTOR:CB; the sound block's offset is where the world
-// walk (sly3/brx3.cpp, orig3 0x14F440) finds it (after the prefix, the 0x58-byte groups and the progress block), and
-// its end there is pmap's check (the walk's own reader of orig3 0x246F58).
-bool FLoadWorldBytes(const std::string& arg, const std::string&, WORLDBYTES* pw, std::string* pmap)
+// The world: "boot" / "0", "frontend" / "1", a world record index N (the boot world's 44 records, 0x20F318, at
+// the offset its parse map gives), or SECTOR:CB.
+bool FLoadWorldBytes(const std::string& arg, const std::string& dirMaps, WORLDBYTES* pw, std::string* pmap)
 {
-    pmap->clear();
-    if (const auto colon = arg.find(':'); colon != std::string::npos)
+    const FK fkBoot = FkFromRecord(g_disc.PbElf(VA_FK_BOOT_WORLD, 0x40));
+    if (arg == "boot" || arg == "0")
+    {
+        pw->name = "boot";
+        pw->fk = fkBoot;
+        *pmap = dirMaps + "/w0/map/file-0.map";
+    }
+    else if (arg == "frontend" || arg == "1")
+    {
+        pw->name = "frontend";
+        pw->fk = FkFromRecord(g_disc.PbElf(VA_FK_FRONTEND, 0x40));
+        *pmap = dirMaps + "/w1/map/file-2.map";
+    }
+    else if (const auto colon = arg.find(':'); colon != std::string::npos)
     {
         pw->name = arg;
         pw->fk.isector = static_cast<uint32_t>(std::strtoul(arg.c_str(), nullptr, 0));
         pw->fk.cb = static_cast<uint32_t>(std::strtoul(arg.c_str() + colon + 1, nullptr, 0));
+        pmap->clear();
     }
     else
     {
-        char* pchEnd = nullptr;
-        const unsigned long n = std::strtoul(arg.c_str(), &pchEnd, 0);
-        const bool fIndex = pchEnd != arg.c_str() && !*pchEnd;
-        bool fFound = false;
-        for (const WORLD3& w : g_disc.Worlds())
-            if (w.name == arg || (fIndex && static_cast<unsigned long>(w.iworld) == n))
-            {
-                pw->name = w.name;
-                pw->fk = w.fk;
-                fFound = true;
-            }
-        if (!fFound)
+        const int irec = std::atoi(arg.c_str());
+        std::size_t ib = 0;
+        if (!FLoadMapRun(dirMaps + "/w0/map/file-0.map", 0x20F318, &ib, nullptr))
         {
-            std::fprintf(stderr, "no world %s (--list-files)\n", arg.c_str());
+            std::fprintf(stderr, "no boot world map %s/w0/map/file-0.map (for the world records)\n", dirMaps.c_str());
             return false;
         }
+        CBinaryInputStream bis;
+        bis.OpenBuffer(g_disc.ReadWorld(fkBoot));
+        bis.m_ib = ib;
+        const int c = static_cast<int>(bis.U32Read());
+        bis.U32Read();
+        bool fFound = false;
+        for (int i = 0; i < c; i++)
+        {
+            uint8_t rec[0x40];
+            bis.ReadBytes(rec, sizeof(rec));
+            bis.U8Read();
+            bis.U8Read();
+            bis.U8Read();
+            const int cw = bis.U8Read();
+            for (int j = 0; j < cw; j++) bis.U16Read();
+            if (i == irec)
+            {
+                pw->fk = FkFromRecord(rec);
+                fFound = true;
+            }
+        }
+        if (!fFound)
+        {
+            std::fprintf(stderr, "no world record %d\n", irec);
+            return false;
+        }
+        pw->name = "w" + std::to_string(irec);
+        *pmap = dirMaps + "/w" + std::to_string(irec) + "/map/file-3.map";
     }
     if (pw->fk.cb == 0)
     {
-        std::fprintf(stderr, "%s: the world has no file\n", pw->name.c_str());
+        std::fprintf(stderr, "%s: the world record has no file\n", pw->name.c_str());
         return false;
     }
     pw->ab = g_disc.ReadWorld(pw->fk);
-    WORLDWALK3 walk;
-    std::string error;
-    if (!FWalkWorld3(pw->ab, walk, error) && walk.ibMusicEnd == 0)
-    {
-        std::fprintf(stderr, "%s: %s\n", pw->name.c_str(), error.c_str());
-        return false;
-    }
-    pw->ibMusic = walk.ibMusic;
-    pw->ibMusicEnd = walk.ibMusicEnd;
+    if (pw->ab.size() < 2) return false;
+    int16_t cgroup = 0;
+    std::memcpy(&cgroup, pw->ab.data(), 2);
+    pw->ibMusic = 2 + static_cast<std::size_t>(cgroup) * 0x54;
     return true;
 }
 
@@ -1499,8 +1662,12 @@ bool FLoadWorldSound(const std::string& arg, const std::string& dirMaps, WORLDBY
     LoadMusicFromBrx(&bis);
     g_ploadtrace = nullptr;
     const std::size_t ibEnd = bis.m_ib;
-    std::printf("%s: sound block %zu..%zu, the world walk's %zu..%zu: %s\n", pw->name.c_str(), pw->ibMusic, ibEnd,
-                pw->ibMusic, pw->ibMusicEnd, ibEnd == pw->ibMusicEnd ? "match" : "MISMATCH");
+    std::size_t a = 0, b = 0;
+    if (!pathMap.empty() && FLoadMapRun(pathMap, 0x1FD0E8, &a, &b))
+        std::printf("%s: sound block %zu..%zu, the parse map's 0x1FD0E8 run %zu..%zu: %s\n", pw->name.c_str(),
+                    pw->ibMusic, ibEnd, a, b, (a == pw->ibMusic && b == ibEnd) ? "match" : "MISMATCH");
+    else
+        std::printf("%s: sound block %zu..%zu (no parse map)\n", pw->name.c_str(), pw->ibMusic, ibEnd);
     return true;
 }
 
@@ -1621,17 +1788,6 @@ int PlaySfxCommand(const std::string& world, const std::string& dirMaps, int sfx
     return 0;
 }
 
-// The world's dialog lines' lengths (id -> seconds), from its sound block (no playback; Sly 3: scptrun3.cpp's test
-// host times the dialog waits with them).
-bool FDialogLengthsOfWorld(const std::string& world, std::map<int, float>* pmp)
-{
-    WORLDBYTES w;
-    if (!FLoadWorldSound(world, "", &w)) return false;
-    for (const SNDSTREAM& st : g_sound.adialog) (*pmp)[st.id] = st.tLength;
-    ResetSoundMgr();
-    return true;
-}
-
 int PlayDialogCommand(const std::string& world, const std::string& dirMaps, int idDialog, double tSeconds)
 {
     StartupSound();
@@ -1648,3 +1804,13 @@ int PlayDialogCommand(const std::string& world, const std::string& dirMaps, int 
     ShutdownSound();
     return 0;
 }
+
+// (the skip's end-state check, skipcut.h: the music playing on top and the stack's depth)
+int IdMusicTop(int* pcStack)
+{
+    std::lock_guard<std::recursive_mutex> lock(g_mtxSound);
+    if (pcStack) *pcStack = static_cast<int>(g_sound.asndMusic.size());
+    const CSndVoice* p = g_sound.asndMusic.empty() ? nullptr : static_cast<CSndVoice*>(g_sound.asndMusic.back().get());
+    return p && p->m_pstream ? p->m_pstream->id : -1;
+}
+

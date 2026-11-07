@@ -5,7 +5,9 @@
 // IEEE float.
 
 #include "emitter.h"
-#include "sly3/addr.h"
+#include "game/sly3.h"
+#include "worldglobals.h"
+#include "texmod.h"
 #include "animfind.h"
 #include "jt.h"
 #include "cm.h"
@@ -26,6 +28,12 @@
 #include "worldaccess.h"
 #include "xfmath.h"
 #include "crv.h"
+#include "bsp.h"
+#include "mat.h"
+#include "so.h"
+#include "xfphys.h"
+
+glm::vec3 VelWaterAtPoint(ALO* pw, const glm::vec3& pos);  // water.cpp (0x228C18)
 
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
@@ -39,15 +47,20 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <string>
 #include <vector>
 
 PARTICLESTATS g_particlestats;
+
+// (PC addition, debug menu only, pcloader.h: a guest's copies of a kept world's emitters use that world's shaders)
+constinit const SHD* (*g_pfnPcShdOfLo)(const LO* plo, int32_t id) = nullptr;
+constinit LO* (*g_pfnPcFindOid)(const LO* ploNear, int32_t oid) = nullptr;
 
 namespace
 {
 constexpr float PI = 3.14159265f;
 constexpr float FLT_BIG = 3.4028235e38f;
-constexpr uint32_t VA_AEOPID = 0x2AC880;
+constexpr uint32_t VA_AEOPID = S3VA(0x2AC880);
 
 // ------------------------------------------------------------ helpers of util.c / vec.c
 // (NRandom / GRandInRange: xfmath.h, the game's shared C library rand)
@@ -83,7 +96,7 @@ glm::vec3 NormalizeOr(const glm::vec3& v, const glm::vec3& vZero)
 void BuildOrthonormalVectors(const glm::vec3& dir, const glm::vec3& up, const glm::vec3& upAlt, glm::vec3& a0, glm::vec3& a1)
 {
     glm::vec3 across = glm::cross(up, dir);
-    if (glm::dot(across, across) < 1e-12f) across = glm::cross(upAlt, dir);
+    if (glm::dot(across, across) < 1.0e-4f) across = glm::cross(upAlt, dir);  // (the original's bound on the square)
     a0 = NormalizeOr(across, glm::vec3(0.0f));
     a1 = NormalizeOr(glm::cross(dir, a0), glm::vec3(0.0f));
 }
@@ -132,6 +145,7 @@ struct PSYS;
 struct EMITTERN
 {
     LO* plo = nullptr;              // the world's emitter (null: a group made by PostEmitterLoad)
+    const LO* ploMember = nullptr;  // (PC: a group's first member, for g_pfnPcShdOfLo)
     IMG e{0x160};                   // EMITTER +0x00..+0x160 (the fields from +0xE0 on)
     IMG b{0x100};                   // its EMITB (+0xE4)
     EMITS s;                        // EMITB +8
@@ -151,6 +165,7 @@ struct EMITTERN
     IMG snd{0};                     // an explosion's +0xF0 sound record (0x15C650: sfx, falloff start / end, volume,
                                     // pitch; empty: none)
     glm::mat4 matPrev{0.0f};        // the source's last world transform (its velocity for 0x22D348)
+    glm::mat4 matPrevPrivate{0.0f}; // (drawdist-2: matPrev of the runs the update table leaves out, which keep matPrev)
     const glm::mat4* pmatFrame = nullptr;   // EMITB +0x1C: a burst's frame (0x15B7E8: pos = R pos + t, vel = R vel)
     EMITTERN* pgroup = nullptr;     // the group (+0x118's object) holding it in its +0x11C list
     std::vector<EMITTERN*> amember; // +0x11C
@@ -190,13 +205,24 @@ struct PSYS
     glm::vec3 posCenter{0.0f};      // +0xF0
     float sRadius = 0;              // +0x100
     bool fDead = false;
+    // (Sly 3's particle effects, pe.cpp: a PE stream (orig3 0x200868) is this particle system; drawn once per matrix of
+    // amatPe (0x201390's instances: a kind-2 effect's clones), none: untransformed; fPeHidden: not drawn)
+    bool fPe = false, fPeHidden = false;
+    std::vector<glm::mat4> amatPe;
+    bool fPeRandTex = false, fPeSpinFixed = false, fPeRoll = false;
+    float peSpinLo = 0, peSpinHi = 0;
 };
 
 std::vector<std::unique_ptr<EMITTERN>> s_aemitter;
+WORLD_TABLE(s_aemitter);   // (PC: moved aside while a kept world loads, worldglobals.h)
 std::map<const LO*, EMITTERN*> s_mpemitter;
+WORLD_TABLE(s_mpemitter);   // (PC: moved aside while a kept world loads, worldglobals.h)
 std::vector<std::unique_ptr<PSYS>> s_apsys;
+WORLD_TABLE(s_apsys);   // (PC: moved aside while a kept world loads, worldglobals.h)
 const SW* s_psw = nullptr;
+WORLD_VALUE(s_psw);   // (PC: moved aside while a kept world loads, worldglobals.h)
 uint32_t s_serialSw = 0;   // the world s_psw was (a new world may reuse its address)
+WORLD_VALUE(s_serialSw);   // (PC: moved aside while a kept world loads, worldglobals.h)
 // Native scene lookups are acceleration only. Original 0x1CF338 -> 0x1A5EE8 draws the live model;
 // 0x1CDE80 removes RIP groups with their world. A recreated scene must not reuse old placements.
 uint64_t s_sceneLookupGeneration = 0;
@@ -215,13 +241,17 @@ bool FActive(const LO* plo) { return plo && (s_fAllActive || FLoActive(plo)); }
 const SHD* PshdOfId(int32_t id)
 {
     const SHD* pFirst = nullptr;
+    const SHD* pAny = nullptr;
     for (const auto& p : g_shds.ashd)
     {
+        if (p->id == id && !pAny) pAny = p.get();
         if (!(p->grfshd & 0x40)) continue;
         if (!pFirst) pFirst = p.get();
         if (p->id == id) return p.get();
     }
-    return pFirst;
+    // (Sly 3: orig3 0x235EC8's draw records (the list 0x479D98) are not limited to Sly 2's flag 0x40 shaders: the PE
+    // effects' (pe.cpp) are found by id)
+    return pAny ? pAny : pFirst;
 }
 
 // The emitter's world transform (vt slot 31 / 32: LOX +0x50 record x +0x60).
@@ -235,7 +265,7 @@ glm::mat4 MatWorldOfLo(const LO* plo)
         if (plo->paloParent) return MatWorldOfAlo(plo->paloParent) * px->mat;
         return px->mat;
     }
-    if (FCidDerivedFrom(plo->Cid(), 0x2F)) return MatWorldOfAlo(static_cast<const ALO*>(plo));   // (Sly 3's ALO)
+    if (FCidDerivedFrom(plo->Cid(), S3CID(0x30))) return MatJtLo(const_cast<LO*>(plo));  // vt slot 31 (the object record +0x60)
     return glm::mat4(1.0f);
 }
 glm::mat4 MatWorldOfEmitter(const EMITTERN* pe) { return pe->plo ? MatWorldOfLo(pe->plo) : pe->matGroup; }
@@ -243,6 +273,8 @@ glm::mat4 MatWorldOfEmitter(const EMITTERN* pe) { return pe->plo ? MatWorldOfLo(
 LO* PloFindOid(int32_t oid, const LO* ploNear)
 {
     if (oid == -1 || !s_psw) return nullptr;
+    if (g_pfnPcFindOid && ploNear)   // (PC addition, debug menu only: a guest's copy finds its own world's objects)
+        if (LO* plo = g_pfnPcFindOid(ploNear, oid)) return plo;
     // orig 0x15E938 (kind 4: the nearest by the object's namespace, with 0x15E3E8's channel test): e.g. the blowing
     // paper's model 21059 is its group's clone (channel 0x117 as the emitter), not the template (0x11). Natively the
     // channel is the load group; the full test (k, the namespace lists) is not modelled, so: the emitter's channel
@@ -265,7 +297,7 @@ uint32_t OffKind0(EMITTERN* pe, bool fModify)
     if (fModify && pe->b.I(4) == -1)
     {
         pe->b.Wr<int32_t>(4, 0);
-        pe->b.CopyFromElf(0xC0, 0x321320, 0x40);   // (Sly 3's copy of Sly 2's 0x2BDE10, the same bytes)
+        pe->b.CopyFromElf(0xC0, S3VA(0x2BDE10), 0x40);
     }
     return pe->b.I(4) == 0 ? 0xC0 : 0xFFFFFFFF;
 }
@@ -276,7 +308,7 @@ uint32_t OffKind1(EMITTERN* pe, bool fModify)
     if (fModify && pe->b.I(4) == -1)
     {
         pe->b.Wr<int32_t>(4, 1);
-        pe->b.CopyFromElf(0xC0, 0x321380, 0x40);   // (Sly 3's kind-1 block: its layout differs; TODO(sly3) kind 1)
+        pe->b.CopyFromElf(0xC0, S3VA(0x2BDE70), 0x40);
     }
     return pe->b.I(4) == 1 ? 0xC0 : 0xFFFFFFFF;
 }
@@ -286,8 +318,8 @@ void SetKind0Payload(EMITTERN* pe, int n)
     const uint32_t off = OffKind0(pe, true);
     if (off == 0xFFFFFFFF || pe->b.I(off) == n || pe->b.I(0xC0) != 0) return;
     pe->b.Wr<int32_t>(off, n);
-    if (n == 2) pe->b.CopyFromElf(off + 0x30, 0x321300, 8);
-    else if (n == 1) pe->b.CopyFromElf(off + 0x30, 0x321310, 4);
+    if (n == 2) pe->b.CopyFromElf(off + 0x30, S3VA(0x2BDDF0), 8);
+    else if (n == 1) pe->b.CopyFromElf(off + 0x30, S3VA(0x2BDE00), 4);
 }
 // orig: 0x00258B70 (the kind-1 block's payload tag: 2 (0x2BDE50, 8), 3 (0x2BDE58, 4), 8 (0x2BDE60, 12))
 void SetKind1Payload(EMITTERN* pe, int n)
@@ -295,9 +327,9 @@ void SetKind1Payload(EMITTERN* pe, int n)
     const uint32_t off = OffKind1(pe, true);
     if (off == 0xFFFFFFFF || pe->b.I(off) == n || pe->b.I(off) != -1) return;
     pe->b.Wr<int32_t>(off, n);
-    if (n == 2) pe->b.CopyFromElf(off + 0x30, 0x321360, 8);
-    else if (n == 3) pe->b.CopyFromElf(off + 0x30, 0x321368, 4);
-    else if (n == 8) pe->b.CopyFromElf(off + 0x30, 0x321370, 12);
+    if (n == 2) pe->b.CopyFromElf(off + 0x30, S3VA(0x2BDE50), 8);
+    else if (n == 3) pe->b.CopyFromElf(off + 0x30, S3VA(0x2BDE58), 4);
+    else if (n == 8) pe->b.CopyFromElf(off + 0x30, S3VA(0x2BDE60), 12);
 }
 // orig: 0x00258A00 (the position kind, once from 0: 1 a box, 3 a mesh (loaded by 0x258598))
 void SetPositionKind(EMITTERN* pe, int n)
@@ -351,11 +383,14 @@ FIELDREF FieldOfGetter(EMITTERN* pe, uint32_t pfnGet, uint32_t c18)
     case 0x258658: r.pimg = PimgEmitb(pe, true); break;
     case 0x258898: base = OffKind0(pe, true); r.pimg = &pe->b; break;
     case 0x258920: base = OffKind1(pe, true); r.pimg = &pe->b; break;
-    case 0x15C650:   // the explosion's sound record +0xF0 (made on first use: 0x14 bytes, sfx -1)
+    case 0x15C650:   // the explosion's sound record +0xF0 (made on first use: 0x1FAF70)
         if (pe->snd.ab.empty())
         {
             pe->snd = IMG(0x14);
             pe->snd.Wr<int32_t>(0, -1);
+            pe->snd.Wr<float>(4, 300.0f);
+            pe->snd.Wr<float>(8, 3000.0f);
+            pe->snd.Wr<float>(0xC, 1.0f);
         }
         r.pimg = &pe->snd;
         break;
@@ -409,78 +444,102 @@ void WriteOptionValue(EMITTERN* pe, const FIELDREF& r, int k, const OPTVAL& v)
     }
 }
 
-// Sly 3: an emitter option's Sly 2 descriptor (Sly 3's EOPID table 0x32CA80 against Sly 2's 0x2AC880: the EMITB and its
-// kind-0 block keep Sly 2's layout (the getters 0x2BCAD8 / 0x2BCCF0 / 0x2BD2B8 / 0x2BD320 / 0x2BCF20 / 0x2BCF58 /
-// 0x2BCF90 / 0x2BD0B8.. write the same offsets as 0x258658 / 0x258898 / 0x258E60 / 0x258EC8 / 0x258AC8 / 0x258B00 /
-// 0x258B38 / 0x258C60..), the emitter's own fields moved (+0xE0 kind = Sly 2 +0xF0, +0xE8 rates = +0xF8, +0xF8 group =
-// +0x118, count setter 0x178200 = 0x15A240): so each Sly 3 option is applied as its Sly 2 twin. Sly 3's kind-1 block
-// (0x2BCD78, the RIPs) differs: not mapped. {k, grf, c18, setter (+0x1C or +0x14), getter}
-struct EOPID2DESC { int k; uint32_t grf, c18, pfnSet, pfnGet; };
-bool FEopid2DescOfSly3(int eopid3, EOPID2DESC& d)
+// (Sly 3) an option's descriptor as the Sly 2 code reads it: the Sly 2 twin's (game/emitopt2.inc, by the EOPID
+// map) when there is one, else Sly 3's own with its emitter getters / setters named by their Sly 2 twins (the EMITB and
+// its blocks keep Sly 2's layout; orig3 0x2BCAD8 = 0x258658, ..., the explosions' 0x2BD548.. = 0x2590F0..)
+struct EOPDESC { int k = 0; uint32_t grf = 0, c18 = 0, pfnGet = 0, pfn14 = 0, pfn1C = 0; };
+uint32_t PfnSly2OfSly3Emit(uint32_t pfn3)
 {
-    static const std::map<int, EOPID2DESC> s_mp = {
-        {13, {1, 0x0122, 0x2B0000, 0x00000C, 0}},
-        {607, {5, 0x0122, 0xFFFF0000, 0x15A240, 0}},          // 469 the particle count
-        {608, {4133, 0x2092, 0xF0, 0, 0x159A08}},             // 471 the kind
-        {609, {10, 0x2092, 0xF8, 0, 0x159A08}},               // 472 the rates
-        {611, {6, 0x0082, 0x118, 0, 0}},                      // 477 the group's oid
-        {616, {4129, 0x0104, 0xFFFF0000, 0x2589A8, 0}},       // 482 the particle kind
-        {617, {4130, 0x0104, 0xFFFF0000, 0x258A00, 0}},       // 483 the position kind
-        {618, {2, 0x2082, 0x20, 0, 0x258AC8}},
-        {619, {2, 0x2082, 0x00, 0, 0x258B00}},
-        {620, {2, 0x2082, 0x10, 0, 0x258B00}},
-        {621, {6, 0x2082, 0x20, 0, 0x258B38}},
-        {622, {6, 0x2082, 0x20, 0, 0x258658}},
-        {624, {4131, 0x2082, 0x14, 0, 0x258658}},
-        {643, {4124, 0x0104, 0xFFFF0000, 0x258B70, 0}},
-        {651, {6, 0x2082, 0x00, 0, 0x258C60}},
-        {652, {1, 0x2092, 0x04, 0, 0x258C60}},
-        {653, {0, 0x2092, 0x00, 0, 0x258CC8}},
-        {654, {1, 0x2092, 0x00, 0, 0x258D30}},
-        {655, {1, 0x2092, 0x04, 0, 0x258D30}},
-        {656, {1, 0x2092, 0x08, 0, 0x258D30}},
-        {657, {4127, 0x0124, 0xFFFF0000, 0x258D98, 0}},
-        {664, {4128, 0x2092, 0x00, 0, 0x258E60}},
-        {665, {0, 0x2092, 0x04, 0, 0x258E60}},
-        {666, {10, 0x2092, 0x08, 0, 0x258E60}},
-        {667, {1, 0x2092, 0x00, 0, 0x258EC8}},
-    };
-    if (auto it = s_mp.find(eopid3); it != s_mp.end()) { d = it->second; return true; }
-    // 625..642: the EMITB (0x2BCAD8 = 0x258658), the same offsets; 658..663: the kind-0 block (0x2BCCF0 = 0x258898)
-    if ((eopid3 >= 625 && eopid3 <= 642) || (eopid3 >= 658 && eopid3 <= 663))
+    switch (pfn3)
     {
-        const uint32_t va = orig3::VA_AEOPID + uint32_t(eopid3) * 0x28;
-        d.k = int(g_disc.U32Elf(va));
-        d.grf = g_disc.U32Elf(va + 4);
-        d.c18 = g_disc.U32Elf(va + 0x18);
-        d.pfnSet = 0;
-        d.pfnGet = eopid3 <= 642 ? 0x258658 : 0x258898;
-        return true;
+    case 0x2BCAD8: return 0x258658; case 0x2BCCF0: return 0x258898; case 0x2BCD78: return 0x258920;
+    case 0x2BCF20: return 0x258AC8; case 0x2BCF58: return 0x258B00; case 0x2BCF90: return 0x258B38;
+    case 0x2BD2B8: return 0x258E60; case 0x2BD320: return 0x258EC8;
+    case 0x2BD0B8: return 0x258C60; case 0x2BD120: return 0x258CC8; case 0x2BD188: return 0x258D30;
+    case 0x2BCE00: return 0x2589A8; case 0x2BCE58: return 0x258A00; case 0x2BCFC8: return 0x258B70; case 0x2BD1F0: return 0x258D98;
+    case 0x178200: return 0x15A240; case 0x17A308: return 0x15C650;
+    case 0x2BD548: return 0x2590F0; case 0x2BD760: return 0x259330; case 0x2BD7E8: return 0x2593B8; case 0x2BD990: return 0x259560;
+    case 0x2BD9C8: return 0x259598; case 0x2BDA00: return 0x2595D0; case 0x2BDD28: return 0x2598F8; case 0x2BDD90: return 0x259960;
+    case 0x2BDB90: return 0x2596F8; case 0x2BDB28: return 0x259760; case 0x2BDBF8: return 0x2597C8; case 0x2BD870: return 0x259440;
+    case 0x2BD8C8: return 0x259498; case 0x2BDA38: return 0x259608; case 0x2BDC60: return 0x259830;
+    default: return pfn3;
     }
-    return false;
+}
+EOPDESC EopdescOf(int eopid3)
+{
+    static const uint32_t s_aemit2[][7] = {
+#include "game/emitopt2.inc"
+    };
+    EOPDESC d;
+    if (const int e2 = sly3::Eopid2FromEopid3(eopid3); e2 >= 0)
+        for (const auto& r : s_aemit2)
+            if (int(r[0]) == e2)
+            {
+                d.k = int(r[1]); d.grf = r[2]; d.c18 = r[3]; d.pfnGet = r[4]; d.pfn14 = r[5]; d.pfn1C = r[6];
+                return d;
+            }
+    const uint32_t va = VA_AEOPID + uint32_t(eopid3) * 0x28;
+    d.k = int(g_disc.U32Elf(va));
+    d.grf = g_disc.U32Elf(va + 4);
+    d.c18 = g_disc.U32Elf(va + 0x18);
+    d.pfnGet = PfnSly2OfSly3Emit(g_disc.U32Elf(va + 0x24));
+    d.pfn14 = PfnSly2OfSly3Emit(g_disc.U32Elf(va + 0x14));
+    d.pfn1C = PfnSly2OfSly3Emit(g_disc.U32Elf(va + 0x1C));
+    // (an EMITTER field of its own, getter 0x177BD8 = 0x159A08: Sly 3's layout is not Sly 2's; its only option without
+    // a Sly 2 twin, 610, is translated by ApplyEmitterOptions)
+    if (d.pfnGet == 0x177BD8) d.grf = 0;
+    return d;
 }
 
 void ApplyEmitterOptions(EMITTERN* pe)
 {
+    // orig3: 0x177520 InitEmitter's kind is 1 (Sly 2's 0x1591B0: -1, derived at the post-load from fields Sly 3 does not
+    // have). Sly 3's kinds (UpdateEmitter 0x177E78, PostEmitterLoad 0x177860) on the native's Sly 2 ones: 1, a rate
+    // (+0x110 per second: Sly 2's kind 0); 0, a burst of +0x110 particles then a pause in +0xF0..+0xF4 (Sly 2's kind 2
+    // with the pause's chance 1, its range +0x108 / +0x10C). (The goal path's worlds: all 134 emitters are kind 1.)
+    if (!pe->fExpl && pe->e.I(0xF0) == -1) pe->e.Wr<int32_t>(0xF0, 0);
     for (const OPT& opt : pe->plo->aopt)
     {
         if (opt.aval.empty()) continue;
-        EOPID2DESC d;
-        if (!FEopid2DescOfSly3(opt.eopid, d)) continue;
-        const int k = d.k;
-        const uint32_t grf = d.grf;
-        const uint32_t c18 = d.c18;
+        if (const char* psz = std::getenv("SLY3_EMITOPTS"); psz && pe->plo->oid == std::atoi(psz))   // (debug: an emitter's options)
+        {
+            const EOPDESC d = EopdescOf(opt.eopid);
+            std::printf("emitopt %d: eopid %d (sly2 %d) k %d grf 0x%X c18 0x%X get 0x%X set 0x%X/0x%X n %d g %g %g\n", pe->plo->oid, opt.eopid,
+                        sly3::Eopid2FromEopid3(opt.eopid), d.k, d.grf, d.c18, d.pfnGet, d.pfn14, d.pfn1C, opt.aval[0].n, opt.aval[0].ag[0], opt.aval[0].ag[1]);
+        }
+        if (opt.eopid == 608)   // (Sly 3's kind, +0xE0)
+        {
+            const int k3 = opt.aval[0].n;
+            pe->e.Wr<int32_t>(0xF0, k3 == 0 ? 2 : k3 == 1 ? 0 : -1);
+            if (k3 == 0) pe->e.Wr<float>(0x104, 1.0f);
+            continue;
+        }
+        if (opt.eopid == 611)   // (Sly 3's group oid, a field +0xF8 (PostEmitterLoad 0x177860's PloFindSwNearest): Sly 2's +0x118;
+        {                       // through Sly 3's descriptor it landed on Sly 2's +0xF8, the rate range's low end)
+            pe->e.Wr<int32_t>(0x118, opt.aval[0].n);
+            continue;
+        }
+        if (opt.eopid == 610)   // (Sly 3's pause range after a kind-0 burst, +0xF0 / +0xF4; getter 0x177BD8)
+        {
+            pe->e.Wr<float>(0x108, opt.aval[0].ag[0]);
+            pe->e.Wr<float>(0x10C, opt.aval[0].ag[1]);
+            continue;
+        }
+        const EOPDESC dsc = EopdescOf(opt.eopid);
+        const int k = dsc.k;
+        const uint32_t grf = dsc.grf;
+        const uint32_t c18 = dsc.c18;
         const OPTVAL& v = opt.aval[0];
         if (grf & 0x401) continue;   // CRef functions (26: the post-load list; 478..480 / 489)
         if (grf & 0x90)
         {
-            const uint32_t pfnGet = (grf & 0x2000) ? d.pfnGet : 0;
+            const uint32_t pfnGet = (grf & 0x2000) ? dsc.pfnGet : 0;
             const FIELDREF r = FieldOfGetter(pe, pfnGet, c18);
             WriteOptionValue(pe, r, k, v);
             continue;
         }
         // a setter (grf 0x100: the PMF at +0x18, its function +0x1C)
-        const uint32_t pfnSet = d.pfnSet;
+        const uint32_t pfnSet = PfnEmitterOfExpl((grf & 0x100) ? dsc.pfn1C : dsc.pfn14);
         switch (pfnSet)
         {
         case 0x15A240:   // SetEmitterParticleCount (kind still -1 at load: the count)
@@ -501,8 +560,9 @@ void ApplyEmitterOptions(EMITTERN* pe)
         case 0x258A00: SetPositionKind(pe, v.n); break;
         case 0x258B70: SetKind1Payload(pe, v.n); break;
         case 0x258D98: SetKind0Payload(pe, v.n); break;
-        case 0xC:        // option 13 (vt slot 42: the cull radius +0x38)
+        case 0xC:        // option 13 (vt slot 42: the cull radius +0x38, the LO's sRadius)
             pe->e.Wr<float>(0x38, v.ag[0]);
+            pe->plo->sRadius = v.ag[0];
             break;
         default:
             break;
@@ -566,7 +626,9 @@ void SetPsysFromEmitb(PSYS* pp, const EMITTERN* pe)
             for (int j = 0; j < 4; ++j) pp->argba[n - i - 1][size_t(j)] = uint8_t((((pe->argbaColor[i] >> (8 * j)) & 0xFF) + 1) >> 1);
     }
     pp->fColorPairs = b.U(0xCC) != 0;
-    pp->pshd = PshdOfId(b.I(0xD0));
+    pp->pshd = nullptr;
+    if (g_pfnPcShdOfLo && (pe->plo || pe->ploMember)) pp->pshd = g_pfnPcShdOfLo(pe->plo ? pe->plo : pe->ploMember, b.I(0xD0));
+    if (!pp->pshd) pp->pshd = PshdOfId(b.I(0xD0));
     // 0x139370: the draw table by the record's flag, its colour once, the textures (a power of 2 below 32)
     pp->fAdditive = pp->pshd && (pp->pshd->grfshd & 1);
     if (pp->argba.empty())
@@ -664,7 +726,9 @@ glm::vec3 ChooseEmitVelocity(const EMITVX& vx, float uRandom, float rSvz, float 
     glm::vec3 v = SetVectorSphere(radPan, radTilt, GRandInRange(svLo, svHi));
     v.z *= rSvz;
     glm::vec3 a0, a1;
-    BuildOrthonormalVectors(normal, glm::vec3(0.0f), glm::vec3(0, 1, 0), a0, a1);
+    // (a zero first vector left every particle of an emitter whose normal is the y axis without a velocity: Ep6's
+    // train-barrier bolts 41381 all lay along x; N25)
+    BuildOrthonormalVectors(normal, glm::vec3(1, 0, 0), glm::vec3(0, 1, 0), a0, a1);  // D_002A2DA0 / D_002A2DB0 (audit E6)
     return a0 * v.x + a1 * v.y + normal * v.z;
 }
 
@@ -738,11 +802,18 @@ void ChooseEmitPosition(EMITTERN* pe, int i, int c, glm::vec3& pos, glm::vec3& n
         fNormalize = true;
         if (kVel == 1) normal = pos - b.V(0x40);
         else if (kVel == 0) normal = b.V(0x40);
-        else if (kVel == 4) normal = MatParticleCamera() * b.V(0x40);   // (relative to the camera)
-        else normal = glm::vec3(0.0f);
+        else if (kVel == 4)
+        {
+            // relative to the camera, in the source's frame (MulTMat(source matrix, ...)): ChooseEmitParticles turns it
+            // by the source's matrix after (natively it was turned twice; audit E10)
+            const LO* ploSrc = pe->s.aplo[0];
+            const glm::mat4 m = ploSrc ? MatWorldOfLo(ploSrc) : pe->s.aplo[1] ? glm::mat4(1.0f) : MatWorldOfEmitter(pe);
+            normal = glm::transpose(glm::mat3(m)) * (MatParticleCamera() * b.V(0x40));
+        }
+        else normal = glm::vec3(1.0f, 0.0f, 0.0f);  // D_002A2DA0 (was 0: frozen particles; audit E6)
     }
     if (!fNormalize) return;
-    normal = NormalizeOr(normal, glm::vec3(0.0f));
+    normal = NormalizeOr(normal, glm::vec3(1.0f, 0.0f, 0.0f));  // (below 1e-4: D_002A2DA0)
     pos += normal * GRandInRange(b.F(0x24), b.F(0x28));
 }
 
@@ -784,15 +855,27 @@ struct RIPN
     glm::vec3 axisSpin9{0, 0, 1};   // the definition's +0x40
     std::function<void()> pfnArrive;   // the definition's +0x60 (a member function) on +0xF4 with +0xF8
     const LO* ploFollow = nullptr;  // kind 4: +0xF0 the object it stays at (0x1D0158)
+    LO* ploTrail = nullptr;         // kind 2: +0xF0 the explosion it leaves behind (0x1D1108)
+    float gTrailRate = 0, gTrail = 0;   // kind 2: +0xF4 its rate per second, +0xF8 the fraction carried
+    const LO* plo2 = nullptr;       // kind 3: +0xF0, kind 1: +0xF4: the EMITS's +0xC (the decal / ripple model)
+    float agShrapnel[3] = {};       // kind 8: +0xF0 radius (also the draw lift), +0xF4 elasticity, +0xF8 friction
+    XF* pxfSpace = nullptr;         // kind 10: +0xF0 the record of the entry it sticks to (null: the world)
+    bool fRemoved = false;          // (RemoveRip 0x1CE980 during a walk: taken out after it)
 };
 struct RIPG
 {
-    int mode = 0;                   // +0x150 (0: the shared group SW +0x406C)
+    int mode = 0;                   // +0x150 (0: the shared group SW +0x406C; 1: it collides, 0x1CE2E8)
     float g158 = 0;                 // +0x158 (EMITB +0xD4)
     std::vector<RIPN> arip;         // +0x15C
+    // mode 1: its attachment's box (0x1CDF88 -> slot 49 0x1CE170: +0x170 lo, +0x180 hi, +0x190 center, +0x1A0 radius)
+    bool fBox = false;
+    glm::vec3 posMin{0.0f}, posMax{0.0f}, posCenter{0.0f};
+    float sRadius = 0.0f;
 };
 std::vector<std::unique_ptr<RIPG>> s_aripg;
+WORLD_TABLE(s_aripg);   // (PC: moved aside while a kept world loads, worldglobals.h)
 RIPG* s_pripgShared = nullptr;
+WORLD_VALUE(s_pripgShared);   // (PC: moved aside while a kept world loads, worldglobals.h)
 
 // orig: 0x001CDCD0 (a new ripple group; mode 0: the shared one)
 RIPG* PripgNew(int mode)
@@ -850,9 +933,11 @@ void EmitParticleObjects(EMITTERN* pe, int c, const glm::vec3* apos, const glm::
         // slot 2 (the kind's parameters from the EMITB)
         if (kind == 3)
         {
-            r.uF0 = 0;   // (EMITS +0xC: its second object)
+            // 0x1CF5D0: +0xF0 the EMITS's +0xC (its decal, 0x1CF968), +0xF4 the EMITB's +0xF0
+            r.plo2 = pe->s.aplo[3];
             r.fFaceCamera = b.U(0xF0);
         }
+        else if (kind == 1) r.plo2 = pe->s.aplo[3];   // 0x1D0CE8: +0xF4 the EMITS's +0xC (its ripple, 0x1D0D28)
         else if (kind == 8)
         {
             // 0x1CFAB8 PostShrapnelEmit: a life of 0.75..1.25 times, a spin from the speed (0x2C1F80, limited, x 10)
@@ -861,6 +946,14 @@ void EmitParticleObjects(EMITTERN* pe, int c, const glm::vec3* apos, const glm::
             const float f = std::clamp(0.0f + v * (0.001f + v * 0.0f), 0.0f, 1.0f) * 10.0f;
             for (int k = 0; k < 3; ++k) r.w[k] = GRandInRange(-f, f);
             r.gF0 = b.F(0xF0);
+            for (int k = 0; k < 3; ++k) r.agShrapnel[k] = b.F(0xF0 + 4 * k);   // (the EMITB's +0xF0 vector)
+        }
+        else if (kind == 2)
+        {
+            // 0x1D1108: an explosion trail: the object of the EMITB's +0xF0 found near the emitter's (kind 4), its
+            // rate +0xF4 (natively these RIPs only flew; audit 2026-11 E7)
+            r.ploTrail = PloFindOid(b.I(0xF0), pe->plo);
+            r.gTrailRate = b.F(0xF4);
         }
         else if (kind == 5)
         {
@@ -868,12 +961,14 @@ void EmitParticleObjects(EMITTERN* pe, int c, const glm::vec3* apos, const glm::
             const glm::vec3 vt(GRandInRange(-1.0f, 1.0f), GRandInRange(-1.0f, 1.0f), GRandInRange(0.1f, 0.9f) + 0.1f);
             r.ori = LookAt(vt, glm::vec3(0, 0, 1));  // 0x11B7E0(vt): x along the tilt, z up (not x fixed)
         }
+        if (std::getenv("SLY2N_RIPPRINT") && i == 0)
+            std::fprintf(stderr, "RIP group mode %d g158 %.1f accel %.1f %.1f %.1f drag %.3f\n", b.I(0xC4), b.F(0xD4), r.accel.x, r.accel.y, r.accel.z, r.gDrag);
         if (std::getenv("SLY2N_RIPPRINT"))
             std::fprintf(stderr, "RIP e %d t %.3f at %.0f %.0f %.0f kind %d size %.3f %.3f %.3f (D8 %.3f DC %.3f E4 %.3f E8 %.3f) model %d src %d face %u vel %.1f %.1f %.1f spin %.2f axis %.2f %.2f %.2f ori x %.2f %.2f %.2f z %.2f %.2f %.2f\n", pe->plo ? pe->plo->oid : -1, g_clock.t, r.pos.x, r.pos.y, r.pos.z, r.kind,
                          r.size[0], r.size[1], r.size[2], b.F(0xD8), b.F(0xDC), b.F(0xE4), b.F(0xE8),
                          r.pmodel ? r.pmodel->oid : -1, psrc ? psrc->oid : -1, r.fFaceCamera, r.vel.x, r.vel.y, r.vel.z, r.gSpin,
                          r.axisSpin.x, r.axisSpin.y, r.axisSpin.z, r.ori[0].x, r.ori[0].y, r.ori[0].z, r.ori[2].x, r.ori[2].y, r.ori[2].z);
-        if (std::getenv("SLY2N_RIPPRINT") && r.pmodel && FCidDerivedFrom(r.pmodel->Cid(), 0x30))
+        if (std::getenv("SLY2N_RIPPRINT") && r.pmodel && FCidDerivedFrom(r.pmodel->Cid(), S3CID(0x30)))
         {
             const ALO* pm = static_cast<const ALO*>(r.pmodel);
             const XF* po = pm->apxfRef[2];
@@ -990,6 +1085,323 @@ void MoveRipFlutter(RIPN& r, float dt)
     r.gDrag = drag;
 }
 
+// ------------------------------------------------------------ RIP hits (0x1CE1C8 / 0x1CE2E8 / slot 8 / 0x1CF268)
+// (audit 2026-11 "Open" item 1: natively RIPs never collided, never stuck as decals and never died in their touch
+// object)
+namespace
+{
+std::vector<RIPN> s_aripPending;   // RIPs made during the hit walk (kept apart from the vectors being walked)
+bool FRipDebug()
+{
+    static const bool s_f = std::getenv("SLY2N_RIPHIT") != nullptr;
+    return s_f;
+}
+
+float GRipPoly(const float* ag, float u) { return ag[0] + u * (ag[1] + u * ag[2]); }
+
+// orig: 0x001CEAA8 ForceRipFade (the rest of its life cut to dt, keeping the fraction of it lived)
+void ForceRipFade(RIPN& r, float dt)
+{
+    const float t = r.life - (g_clock.t - r.tBirth);
+    if (dt < t)
+    {
+        const float u = t / r.life;
+        r.life = dt / u;
+        r.tBirth = g_clock.t - (1.0f - u) * r.life;
+    }
+}
+
+// orig: 0x0011EE08's fraction (the point of the segment a-b nearest p; a zero-length segment: 1, as the EE's 0 / 0)
+float TNearestSegment(const glm::vec3& p, const glm::vec3& a, const glm::vec3& b)
+{
+    const glm::vec3 d = b - a;
+    const float dd = glm::dot(d, d);
+    if (dd == 0.0f) return 1.0f;
+    return std::clamp(glm::dot(p - a, d) / dd, 0.0f, 1.0f);
+}
+
+// orig: 0x001CEB08 (RIP vt slot 8, the default: a bounce off the entry at pos with the normal). Kind 8 uses its own
+// radius / elasticity / friction (+0xF0..+0xF8), the others 100 / 0.7 / 0.8; the radius scales with the size
+// polynomial. In water (its owner of class 0x59) the velocity goes halfway to the water's (0x228C18), the rest as an
+// acceleration over 0.5 s, and it fades in 0.5 s (D_002C1F60 / D_002C1F64). Else an impulse at the sphere's point
+// -r n: the normal impulse (elasticity), the friction one along n - mu t, mixed by the point of the segment between the
+// two tangential velocities nearest zero (0x11EE08), spin with inertia 2.5 / max(r, 10)^2; an upward speed below 200
+// is raised to 200 with a 0.25 s fade (D_002C1F68 / D_002C1F6C); it is pushed out of the surface by 1.
+bool FBounceRip(RIPN& r, const SOE* psoe, const glm::vec3& pos, const glm::vec3& normal)
+{
+    float radius = 100.0f, elas = 0.7f, mu = 0.8f;
+    if (r.kind == 8)
+    {
+        radius = r.agShrapnel[0];
+        elas = r.agShrapnel[1];
+        mu = r.agShrapnel[2];
+    }
+    radius *= GRipPoly(r.size, (g_clock.t - r.tBirth) / r.life);
+    ALO* powner = psoe->palo;
+    if (powner && FCidDerivedFrom(powner->Cid(), S3CID(0x59)))
+    {
+        const glm::vec3 vWater = VelWaterAtPoint(powner, pos);
+        const glm::vec3 v = r.vel + (vWater - r.vel) * 0.5f;
+        r.vel = v;
+        r.accel = (vWater - v) * (1.0f / 0.5f);
+        ForceRipFade(r, 0.5f);
+        if (FRipDebug()) std::fprintf(stderr, "RIPHIT water kind %d t %.3f at %.0f %.0f %.0f owner %d\n", r.kind, g_clock.t, pos.x, pos.y, pos.z, powner->oid);
+        return true;
+    }
+    const glm::vec3 offset = normal * -radius;
+    const glm::vec3 torque1 = glm::cross(offset, normal);
+    const glm::vec3 vOther = VelXfPoint(psoe->pxf, nullptr, pos);
+    radius = std::max(radius, 10.0f);
+    const float invI = 2.5f / (radius * radius);
+    const glm::vec3 rel = r.vel + glm::cross(r.w, offset) - vOther;
+    const float vn = glm::dot(rel, normal);
+    // the normal impulse
+    const glm::vec3 resp1 = normal + glm::cross(torque1, offset) * invI;
+    const float impulse1 = vn * (-1.0f - elas) / glm::dot(resp1, normal);
+    const glm::vec3 vAfter1 = rel + resp1 * impulse1;
+    const glm::vec3 tan1 = vAfter1 - normal * glm::dot(vAfter1, normal);
+    const float lenTan = std::sqrt(glm::dot(tan1, tan1));
+    const glm::vec3 dirTan = lenTan < 1e-4f ? glm::vec3(1, 0, 0) : tan1 * (1.0f / lenTan);
+    // the friction impulse
+    const glm::vec3 axis = normal + dirTan * -mu;
+    const glm::vec3 torque2 = glm::cross(offset, axis);
+    const glm::vec3 resp2 = axis + glm::cross(torque2, offset) * invI;
+    const float impulse2 = vn * (-1.0f - elas) / glm::dot(resp2, normal);
+    const glm::vec3 vAfter2 = rel + resp2 * impulse2;
+    const glm::vec3 tan2 = vAfter2 - normal * glm::dot(vAfter2, normal);
+    const float u = TNearestSegment(glm::vec3(0.0f), tan1, tan2);
+    const float g1 = (1.0f - u) * impulse1, g2 = u * impulse2;
+    r.vel += normal * g1 + axis * g2;
+    r.w += (torque1 * g1 + torque2 * g2) * invI;
+    if (r.vel.z < 200.0f)
+    {
+        r.vel.z = 200.0f;
+        ForceRipFade(r, 0.25f);
+    }
+    const float d = glm::dot(pos - r.pos, normal);
+    r.pos += normal * (std::max(d, 0.0f) + 1.0f);
+    if (FRipDebug())
+        std::fprintf(stderr, "RIPHIT bounce kind %d t %.3f at %.0f %.0f %.0f n %.2f %.2f %.2f owner %d vel %.0f %.0f %.0f\n", r.kind, g_clock.t, pos.x, pos.y,
+                     pos.z, normal.x, normal.y, normal.z, powner ? powner->oid : -1, r.vel.x, r.vel.y, r.vel.z);
+    return true;
+}
+
+// orig: 0x001CF6B0 (a decal: a kind-10 RIP of the shared group with the model pvisual stuck to the entry's record at
+// pos, facing dir, turned randomly about it; its size the hitting RIP's times 0.8..1.4, shrinking to 0 over 5 s; on a
+// wall (|dir . z| < 0.7) it slides down at 50 / s; raised by the hitting group's +0x158). Its orientation is the world
+// one, its position the record's local one, as in the original.
+RIPN* PripDecal(const RIPN& r, const RIPG* pg, const LO* pvisual, XF* pxfSpace, const glm::vec3& pos, const glm::vec3& dir)
+{
+    if (!pvisual) return nullptr;
+    RIPN d;
+    d.kind = 10;
+    const glm::vec3 local = PosConvertXfs(nullptr, pxfSpace, pos);
+    float size = GRipPoly(r.size, (g_clock.t - r.tBirth) / r.life);
+    size *= GRandInRange(0.8f, 1.4f);
+    // slot 1 0x1CE920 (local, 0, size)
+    d.tBirth = g_clock.t;
+    d.pos = d.posPrev = local;
+    d.size[0] = size;
+    d.pmodel = pvisual;
+    d.life = 5.0f;
+    d.size[2] = -size;
+    d.pxfSpace = pxfSpace;
+    // 0x11E2D8(dir, x, y): row 0 x cross dir (y cross dir when short), row 1 dir cross that; row 2 dir
+    glm::vec3 x = glm::cross(glm::vec3(1, 0, 0), dir);
+    if (glm::dot(x, x) < 1e-4f) x = glm::cross(glm::vec3(0, 1, 0), dir);
+    const glm::vec3 y = glm::cross(dir, x);
+    const glm::mat3 frame(x / std::sqrt(glm::dot(x, x)), y / std::sqrt(glm::dot(y, y)), dir);
+    const float rad = GRandInRange(0.0f, 6.28318548f);
+    d.ori = frame * BuildEulerMatrix(glm::vec3(0.0f, 0.0f, rad));
+    if (std::fabs(dir.z) < 0.7f)
+    {
+        const glm::vec3 flat(dir.x, dir.y, 0.0f);
+        d.vel = BuildRotateVectorsMatrix(flat, dir) * glm::vec3(0.0f, 0.0f, -50.0f);
+    }
+    d.pos.z += pg ? pg->g158 : 0.0f;
+    if (FRipDebug())
+        std::fprintf(stderr, "RIPHIT decal from kind %d t %.3f at %.0f %.0f %.0f dir %.2f %.2f %.2f model %d size %.1f\n", r.kind, g_clock.t, pos.x, pos.y, pos.z,
+                     dir.x, dir.y, dir.z, pvisual->oid, size);
+    s_aripPending.push_back(std::move(d));
+    return &s_aripPending.back();
+}
+
+// RIP vt slot 8: the hit of its segment with an entry at pos (the entry's normal there); true stops its other hits
+bool FRipHit(RIPG* pg, RIPN& r, const SOE* psoe, const glm::vec3& pos, const glm::vec3& normal)
+{
+    ALO* powner = psoe->palo;
+    if (FRipDebug())
+        std::fprintf(stderr, "RIPHIT hit kind %d t %.3f at %.0f %.0f %.0f owner %d cid 0x%x sensor %d model %d second %d\n", r.kind, g_clock.t, pos.x, pos.y, pos.z,
+                     powner ? powner->oid : -1, powner ? unsigned(powner->Cid()) : 0u, int(psoe->f48), r.pmodel ? r.pmodel->oid : -1, r.plo2 ? r.plo2->oid : -1);
+    switch (r.kind)
+    {
+    case 3:
+        // 0x1CF968: not into actors (D_002C1F70 {0x32}); a decal of its +0xF0 unless water; removed
+        if (powner && FCidDerivedFrom(powner->Cid(), S3CID(0x32))) return false;
+        if (!powner || !FCidDerivedFrom(powner->Cid(), S3CID(0x59))) PripDecal(r, pg, r.plo2, psoe->pxf, pos, normal);
+        r.fRemoved = true;
+        return true;
+    case 5:
+    {
+        // 0x1D0BF8: not into class 0x33; a decal of its own model, its orientation into the owner's frame (0x1A7050);
+        // removed
+        if (powner && FCidDerivedFrom(powner->Cid(), S3CID(0x33))) return false;
+        if (RIPN* pd = PripDecal(r, pg, r.pmodel, psoe->pxf, pos, normal); pd && powner)
+            pd->ori = InverseMatrix3(glm::mat3(MatWorldOfAlo(powner))) * pd->ori;
+        r.fRemoved = true;
+        return true;
+    }
+    case 8:
+    {
+        // 0x1CFBE0: through actors (the entry's attachment's root of class 0x32); removed in water; else the bounce
+        const OXA* poxa = powner ? Poxa(powner) : nullptr;
+        const ALO* proot = poxa ? poxa->pso : powner;
+        if (proot && FCidDerivedFrom(proot->Cid(), S3CID(0x32))) return false;
+        if (proot && FCidDerivedFrom(proot->Cid(), S3CID(0x59)))
+        {
+            r.fRemoved = true;
+            return true;
+        }
+        return FBounceRip(r, psoe, pos, normal);
+    }
+    default: return FBounceRip(r, psoe, pos, normal);
+    }
+}
+
+// orig: 0x001CDF88's box (the RIPs' two points, lowered by the group's +0x158 (both corners, as the original), its
+// center and radius)
+void UpdateRipgBox(RIPG* pg)
+{
+    glm::vec3 lo(FLT_BIG), hi(-FLT_BIG);
+    for (const RIPN& r : pg->arip)
+    {
+        if (r.fRemoved) continue;
+        lo = glm::min(lo, glm::min(r.pos, r.posPrev));
+        hi = glm::max(hi, glm::max(r.pos, r.posPrev));
+    }
+    if (pg->g158 != 0.0f)
+    {
+        lo -= glm::vec3(pg->g158);
+        hi -= glm::vec3(pg->g158);
+    }
+    pg->posMin = lo;
+    pg->posMax = hi;
+    pg->posCenter = lo * 0.5f + hi * 0.5f;
+    const glm::vec3 d = pg->posCenter - hi;
+    pg->sRadius = std::sqrt(glm::dot(d, d));
+    pg->fBox = !pg->arip.empty();
+}
+
+// orig: 0x001CE2E8 (a mode-1 group's RIPs against the entries of the attachments its box overlaps (the sweep's pairs,
+// 0x133D08: both overlap kinds 0, since the group is never still): not those marked 4; sensors only of water (cid 0x59);
+// a tree pruned by the group's sphere (0x118A88, at most min(0x1555, +0x6C) nodes; skipped unless mixed), else a
+// sphere entry; each born RIP's segment +0x80 -> +0x70 clipped to it (0x14C6D8, at most 4 pieces), the pieces not
+// starting inside given to its slot 8 until one takes it)
+void CollideRipg(RIPG* pg)
+{
+    if (pg->mode != 1 || !pg->fBox) return;
+    const float t = g_clock.t;
+    if (FRipDebug())
+    {
+        static float s_tLast = -10.0f;
+        if (t - s_tLast >= 1.0f || t < s_tLast)
+        {
+            s_tLast = t;
+            int cover = 0;
+            for (OXA* poxa : g_physw.apoxa)
+                if (poxa && poxa->pso && poxa->posMax.x > pg->posMin.x && pg->posMax.x > poxa->posMin.x && poxa->posMax.y > pg->posMin.y &&
+                    pg->posMax.y > poxa->posMin.y && poxa->posMax.z > pg->posMin.z && pg->posMax.z > poxa->posMin.z)
+                    ++cover;
+            std::fprintf(stderr, "RIPHIT group t %.2f rips %zu kind %d box (%.0f %.0f %.0f)..(%.0f %.0f %.0f) overlaps %d of %zu\n", t, pg->arip.size(),
+                         pg->arip.empty() ? -1 : pg->arip[0].kind, pg->posMin.x, pg->posMin.y, pg->posMin.z, pg->posMax.x, pg->posMax.y, pg->posMax.z,
+                         cover, g_physw.apoxa.size());
+        }
+    }
+    for (OXA* poxa : g_physw.apoxa)
+    {
+        if (!poxa || !poxa->pso) continue;
+        bool fOverlap = true;
+        for (int i = 0; i < 3 && fOverlap; i++)
+            if (poxa->posMax[i] <= pg->posMin[i] || pg->posMax[i] <= poxa->posMin[i]) fOverlap = false;
+        if (!fOverlap || (poxa->grf & 4)) continue;
+        const bool fWater = FCidDerivedFrom(poxa->pso->Cid(), S3CID(0x59));
+        const std::vector<SOE*> apsoe = poxa->apsoe;
+        for (SOE* psoe : apsoe)
+        {
+            if (!psoe || (psoe->f48 && !fWater)) continue;
+            std::vector<BSPN> absp;
+            int iroot = -1;
+            if (!psoe->f49)
+            {
+                if (psoe->bsp.abspn.empty()) continue;
+                int cnodeLeft = std::min(0x1555, int(psoe->bsp.x4));
+                if (ClipBspPlane(BSPREF(psoe->bsp, psoe->geomWorld), 0, INT32_MAX, pg->posCenter, pg->sRadius, &cnodeLeft, &absp) != 2) continue;
+                iroot = int(absp.size()) - 1;
+            }
+            for (size_t i = 0; i < pg->arip.size(); ++i)
+            {
+                RIPN& r = pg->arip[i];
+                if (r.fRemoved || t <= r.tBirth) continue;
+                LSG alsg[4];
+                const int c = iroot >= 0 ? ClipSegmentBsp(BSPREF(absp, psoe->geomWorld), iroot, INT32_MAX, r.posPrev, r.pos, 4, alsg)
+                                         : ClipSegmentToSphere(PosOf(psoe->pxf ? psoe->pxf->matWorld : glm::mat4(1.0f)), r.posPrev, r.pos, 4, alsg, psoe->sRadius);
+                for (int k = 0; k < c; ++k)
+                    if (alsg[k].t0 != 0.0f && FRipHit(pg, r, psoe, alsg[k].pos0, glm::vec3(alsg[k].plane0))) break;
+            }
+        }
+    }
+}
+
+// orig: 0x001D0D28 (kind 1's slot 7: touched, and with a ripple model (+0xF4): a kind-7 RIP of it where its segment
+// enters the touch object's first entry it crosses (0x14C6A0, else at its position): size 40 growing by 30, 0.75 s);
+// then TouchRip
+void TouchRipKind1(RIPN& r, bool fTouch)
+{
+    if (fTouch && r.plo2)
+    {
+        glm::vec3 pos = r.pos;
+        if (r.ploTouch && FCidDerivedFrom(r.ploTouch->Cid(), S3CID(0x30)))
+            for (const SOE& e : static_cast<const ALO*>(r.ploTouch)->asoe)
+            {
+                LSG lsg;
+                if (ClipSegmentEntry(&e, r.posPrev, r.pos, 1, &lsg))
+                {
+                    pos = lsg.pos0;
+                    break;
+                }
+            }
+        RIPN d;
+        d.kind = 7;
+        d.tBirth = g_clock.t;
+        d.pos = d.posPrev = pos;
+        d.life = 0.75f;
+        d.size[0] = 40.0f;
+        d.size[1] = 30.0f;
+        d.pmodel = r.plo2;
+        if (FRipDebug()) std::fprintf(stderr, "RIPHIT drip ripple t %.3f at %.0f %.0f %.0f model %d\n", g_clock.t, pos.x, pos.y, pos.z, r.plo2->oid);
+        s_aripPending.push_back(std::move(d));
+    }
+    if (fTouch) r.fRemoved = true;   // 0x1CEA88 TouchRip
+}
+
+// orig: 0x001CF268 (RIP vt slot 5: expired, removed; in a group that does not collide, its touch object (+0xE0, with a
+// mass state, in the world) containing its position (vt slot 73) touches it (slot 7: TouchRip removes it))
+void UpdateRipLife(const RIPG* pg, RIPN& r)
+{
+    if (g_clock.t - r.tBirth > r.life)
+    {
+        r.fRemoved = true;
+        return;
+    }
+    if (pg->mode == 1 || !r.ploTouch || !FCidDerivedFrom(r.ploTouch->Cid(), S3CID(0x30))) return;
+    ALO* palo = static_cast<ALO*>(const_cast<LO*>(r.ploTouch));
+    if (!Psost(palo)) return;
+    const bool f = palo->fInWorld && FAloContainsPoint(palo, r.pos);
+    if (r.kind == 1) TouchRipKind1(r, f);
+    else if (r.kind != 0 && f) r.fRemoved = true;   // 0x1CEA88 (kind 0's 0x1D10E8: no world uses it)
+}
+}  // namespace
+
 // Opt-in scene lookup observer: IDs, generations and current-entry membership only.
 static void TraceSceneLookup(const char* cache, const SCENE& scene, const ALO* palo,
                              const SCENEGLOBSET* psgs, uint64_t generation, int ripKind)
@@ -1062,7 +1474,7 @@ void CollectRipDraws(const SCENE& scene, std::vector<EXTRADRAW>& aextra)
     for (const auto& pg : s_aripg)
         for (const RIPN& r : pg->arip)
         {
-            if (t < r.tBirth || !r.pmodel || r.life <= 0.0f || !FCidDerivedFrom(r.pmodel->Cid(), 0x30)) continue;
+            if (t < r.tBirth || !r.pmodel || r.life <= 0.0f || !FCidDerivedFrom(r.pmodel->Cid(), S3CID(0x30))) continue;
             const ALO* pmodel = static_cast<const ALO*>(r.pmodel);
             if (!pmodel->pglobset) continue;
             auto it = s_mpgs.find(pmodel->pglobset.get());
@@ -1104,6 +1516,12 @@ void CollectRipDraws(const SCENE& scene, std::vector<EXTRADRAW>& aextra)
                 ori = MatRotateAxis(rad * u, axis) * MatRotateAxis((u + u) * 3.14159274f, r.axisSpin9) * r.ori;
             }
             else if (r.kind == 3) ori = LookAt(r.vel, r.fFaceCamera ? -MatParticleCamera()[0] : glm::vec3(0, 0, 1));  // 0x1CF618: -CM +0x60's view row
+            else if (r.kind == 10)
+            {
+                // 0x1CFA40: from its record's space (0x22FC48 / 0x22FD38)
+                pos = PosConvertXfs(r.pxfSpace, nullptr, r.pos);
+                ori = MatConvertXfs(r.pxfSpace, nullptr, r.ori);
+            }
             else if (r.kind == 8) pos += glm::vec3(0, 0, 1) * r.gF0;
             // 0x11C288: the position, the rows times the size
             glm::mat4 m(ori * size);
@@ -1151,16 +1569,69 @@ void CollectRipDraws(const SCENE& scene, std::vector<EXTRADRAW>& aextra)
 void UpdateRipgs()
 {
     const float t = g_clock.t, dt = g_clock.dt;
-    for (auto& pg : s_aripg)
+    if (static const bool s_f = std::getenv("SLY3_RIPCOUNT") != nullptr; s_f)  // (debug: the groups / RIPs alive)
     {
-        // slot 5 0x1CF268 (expired ones removed; kind 9's 0x1D0800: its callback first) and the bounds pass's slot 4
-        // (0x1CDF88: the motion; kind 9's 0x1D05A0)
+        static int s_c = 0;
+        if (++s_c % 200 == 0)
+        {
+            size_t c = 0;
+            int ackind[16]{};
+            for (const auto& pg : s_aripg)
+                for (const RIPN& r : pg->arip) { ++c; ++ackind[r.kind & 15]; }
+            std::printf("rips: %zu groups, %zu rips; by kind:", s_aripg.size(), c);
+            for (int k = 0; k < 16; ++k) if (ackind[k]) std::printf(" %d:%d", k, ackind[k]);
+            std::printf("\n");
+        }
+    }
+    // the groups' slot 16 (0x1CE1C8): each born RIP's slot 5 (0x1CF268 and the kinds' own: kind 2's bursts 0x1D1160,
+    // kind 9's arrival 0x1D0800), then a mode-1 group's hits (0x1CE2E8)
+    std::vector<std::pair<LO*, glm::vec3>> atrail;  // (kind 2's bursts, after the walk: they may add RIPs / groups)
+    for (size_t ig = 0; ig < s_aripg.size(); ++ig)
+    {
+        RIPG* pg = s_aripg[ig].get();
         auto& a = pg->arip;
         std::vector<std::function<void()>> apfn;
         for (RIPN& r : a)
-            if (r.kind == 9 && r.life < t - r.tBirth && r.pfnArrive) apfn.push_back(std::move(r.pfnArrive));
-        a.erase(std::remove_if(a.begin(), a.end(), [&](const RIPN& r) { return r.life < t - r.tBirth; }), a.end());
-        for (RIPN& r : a)
+        {
+            if (r.fRemoved || t <= r.tBirth) continue;
+            if (r.kind == 9)
+            {
+                // 0x1D0800: arrived: its callback first, then removed
+                if (r.life < t - r.tBirth)
+                {
+                    if (r.pfnArrive) apfn.push_back(std::move(r.pfnArrive));
+                    r.fRemoved = true;
+                }
+                continue;
+            }
+            UpdateRipLife(pg, r);
+            if (r.kind == 2 && r.ploTrail)
+            {
+                // 0x1D1160: after 0x1CF268 (even when it removed it), one burst (vt slot 51, message kind 4 at the RIP's
+                // position) per whole unit of rate x time
+                r.gTrail += dt * r.gTrailRate;
+                while (r.gTrail >= 1.0f)
+                {
+                    atrail.emplace_back(r.ploTrail, r.pos);
+                    r.gTrail -= 1.0f;
+                }
+            }
+        }
+        CollideRipg(pg);
+        a.erase(std::remove_if(a.begin(), a.end(), [&](const RIPN& r) { return r.fRemoved; }), a.end());
+        for (auto& pfn : apfn) pfn();
+    }
+    if (!s_aripPending.empty())
+    {
+        RIPG* pg = PripgNew(0);   // (the decals and drip ripples: 0x1CE888(G, k, 0), the shared group)
+        for (RIPN& r : s_aripPending) pg->arip.push_back(std::move(r));
+        s_aripPending.clear();
+    }
+    // the groups' slot 17 (0x1CDF88): the motion of the born ones (slot 4), then a mode-1 group's box
+    for (size_t ig = 0; ig < s_aripg.size(); ++ig)
+    {
+        RIPG* pg = s_aripg[ig].get();
+        for (RIPN& r : pg->arip)
         {
             if (t < r.tBirth) continue;
             if (r.kind == 9) MoveRipHud(r, t, dt);
@@ -1173,7 +1644,16 @@ void UpdateRipgs()
             else if (r.kind == 5) MoveRipFlutter(r, dt);
             else MoveRip(r, dt);
         }
-        for (auto& pfn : apfn) pfn();
+        if (pg->mode == 1) UpdateRipgBox(pg);
+    }
+    for (const auto& [ploT, pos] : atrail)
+    {
+        if (static bool s_f = std::getenv("SLY2N_RIPPRINT") != nullptr; s_f)
+            std::fprintf(stderr, "RIP trail burst %d t %.3f at %.0f %.0f %.0f\n", ploT ? ploT->oid : -1, g_clock.t, pos.x, pos.y, pos.z);
+        BURSTPARAMS bp;
+        bp.grf = 4;
+        bp.pos = pos;
+        ExplodeLo(ploT, &bp);
     }
 }
 
@@ -1318,6 +1798,10 @@ void InsertPsysParticles(EMITTERN* pe, int c, const glm::vec3* apos, const glm::
     }
 }
 
+// (drawdist-2: an emitter object of an inactive tree the draw distance option draws (activate.cpp
+// FDrawDistanceVisualTree): run by the emitter pass on its private stream, as the emitters near only by the option)
+bool s_fDdForcePrivate = false;
+
 // orig: 0x00159C80 UpdateEmitter
 void UpdateEmitter(EMITTERN* pe)
 {
@@ -1341,7 +1825,7 @@ void UpdateEmitter(EMITTERN* pe)
             if (pm->plo)
             {
                 const glm::vec3 p(MatWorldOfEmitter(pm)[3]);
-                std::printf("  member %d active %d parent %d inworld %d dist %.0f\n", pm->plo->oid, FActive(pm->plo), pm->plo->paloParent ? pm->plo->paloParent->oid : -1,
+                std::printf("  member %d r %.0f active %d parent %d inworld %d dist %.0f\n", pm->plo->oid, pm->e.F(0x38), FActive(pm->plo), pm->plo->paloParent ? pm->plo->paloParent->oid : -1,
                             pm->plo->fInWorld, glm::length(p - g_cm.pos));
             }
         const glm::vec3 pos(MatWorldOfEmitter(pe)[3]);
@@ -1360,7 +1844,8 @@ void UpdateEmitter(EMITTERN* pe)
     // (the game's camera CM +0x90 in the game loop, which updates every frame drawn or not; the viewer's otherwise)
     const glm::vec3 posCam = s_fGameCamera ? g_cm.pos : s_posCamera;
     auto fNearAt = [&](const EMITTERN* p, float rMul) {
-        const float r = p->e.F(0x38) * rMul;
+        // (0x159C80: the radius times CM +0x1C, max(1, rMRD / FOV): farther while the view is zoomed)
+        const float r = p->e.F(0x38) * (s_fGameCamera ? g_cm.rMRDAdjust : 1.0f) * rMul;
         const glm::vec3 pos(MatWorldOfEmitter(p)[3]);
         return glm::dot(pos - posCam, pos - posCam) < r * r;
     };
@@ -1376,10 +1861,10 @@ void UpdateEmitter(EMITTERN* pe)
         return true;
     };
     bool fPrivate = false;
-    if (!fNearScaled(1.0f))
+    if (s_fDdForcePrivate || !fNearScaled(1.0f))
     {
         static const bool s_fOff = [] { const char* sz = std::getenv("SLY2N_DDEMIT"); return sz && sz[0] == '0'; }();   // (debug)
-        if (s_fOff || !(rScale > 1.0f && fNearScaled(rScale))) return;
+        if (s_fOff || !(rScale > 1.0f && (s_fDdForcePrivate || fNearScaled(rScale)))) return;
         // (not the emitters of RIPs, b +4 == 1: their pools are shared world objects)
         if (pe->b.I(4) == 1) return;
         fPrivate = true;
@@ -1444,11 +1929,13 @@ void UpdateEmitter(EMITTERN* pe)
         }
         return n;
     };
-    bool fRate = true;
     if (k == 1)
     {
         const int n = int(pe->e.F(0x110) * pe->e.F(0x13C));
-        const int cur = pe->ppsys ? pe->ppsys->cparticle : 0;
+        // (the EMITB's +4: a RIP emitter counts its group's RIPs (0x11A3C0), else the particle system's; natively the
+        // RIP emitters counted 0 and emitted n every frame: audit 2026-11 E3)
+        const int cur = pe->b.I(4) ? (pe->pripg ? static_cast<int>(pe->pripg->arip.size()) : 0)
+                                   : (pe->ppsys ? pe->ppsys->cparticle : 0);
         c = std::max(n - cur, 0);
     }
     else if (k == 0)
@@ -1456,8 +1943,7 @@ void UpdateEmitter(EMITTERN* pe)
         float f = pe->e.F(0x144) + pe->e.F(0x130) * pe->e.F(0x13C) * g_clock.dt;
         c = int(f);
         pe->e.Wr<float>(0x144, f - float(c));
-        if (c == 0) fRate = false;
-        else c = take(c);
+        if (c != 0) c = take(c);  // (the rate refresh below runs either way: audit E1)
     }
     else if (k == 2)
     {
@@ -1480,10 +1966,10 @@ void UpdateEmitter(EMITTERN* pe)
             else fNewRate = false;
             if (fNewRate) pe->e.Wr<float>(0x130, GRandInRange(pe->e.F(0xF8), pe->e.F(0xFC)) * 60.0f);
         }
-        else c = 0;
+        // (c 0 or 1 here: one particle is emitted, with no count taken and no pause roll, as the original; audit E2)
     }
     if (c != 0) EmitParticles(pe, c);
-    if (fRate && pe->e.F(0x138) <= g_clock.t)
+    if (pe->e.F(0x138) <= g_clock.t)
     {
         pe->e.Wr<float>(0x130, GRandInRange(pe->e.F(0xF8), pe->e.F(0xFC)));
         pe->e.Wr<float>(0x138, g_clock.t + pe->e.F(0x134));
@@ -1603,6 +2089,21 @@ struct INITEMIT
             if (std::getenv("SLY2_EMITDBG")) { static int s_c = 0; if (s_c++ < 2) { int cg = 0; for (auto& pe : s_aemitter) cg += !pe->plo; std::printf("emitter pass: %zu emitters, %d groups\n", s_aemitter.size(), cg); } }
             for (auto& pe : s_aemitter)
                 if (!pe->plo) UpdateEmitter(pe.get());   // (the groups: their own objects' updates)
+            // (QoL draw distance above 1x, drawdist-2: the emitter objects of the inactive trees the option draws, which
+            // the update table leaves out, run privately: their particles show as far as the trees do; the shared
+            // random stream, the emitter's fields and its source's last matrix are as the original leaves them)
+            if (g_display.drawDistance > 1.0f)
+                for (auto& pe : s_aemitter)
+                {
+                    if (!pe->plo || !pe->amember.empty() || pe->b.I(4) == 1 || pe->e.I(0xE0) != 0 || FLoActive(pe->plo) || !FDrawDistanceVisualTree(pe->plo)) continue;
+                    const glm::mat4 matPrev = pe->matPrev;
+                    pe->matPrev = pe->matPrevPrivate;
+                    s_fDdForcePrivate = true;
+                    UpdateEmitter(pe.get());
+                    s_fDdForcePrivate = false;
+                    pe->matPrevPrivate = pe->matPrev;
+                    pe->matPrev = matPrev;
+                }
             for (auto& pp : s_apsys) UpdatePsys(pp.get());
             UpdateRipgs();
             // debug: SLY2_BURSTAT=frame:oid explodes an explosion object in the game loop at that frame
@@ -1625,6 +2126,7 @@ struct PVTX
 GLSHADER s_shParticle;
 GLuint s_vao = 0, s_vbo = 0;
 std::map<const SHD*, std::pair<GLuint, int>> s_mptexarray;   // a shader's frames as a texture array
+WORLD_TABLE(s_mptexarray);   // (PC: moved aside while a kept world loads, worldglobals.h)
 std::vector<GLuint> s_atexarrayFreed;   // (the old world's arrays: deleted at the next draw, where GL is current)
 
 std::pair<GLuint, int> TexArrayOf(const SHD* pshd)
@@ -1642,29 +2144,69 @@ std::pair<GLuint, int> TexArrayOf(const SHD* pshd)
         const TEX& tex = pshd->atex[0];
         const int c = int(tex.apbmp.size());
         const BMP* p0 = tex.apbmp[0];
-        const int dx = p0 ? p0->dx : 1, dy = p0 ? p0->dy : 1;
-        glGenTextures(1, &r.first);
-        glBindTexture(GL_TEXTURE_2D_ARRAY, r.first);
-        glTexImage3D(GL_TEXTURE_2D_ARRAY, 0, GL_RGBA8, dx, dy, c, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+        int dx = p0 ? p0->dx : 1, dy = p0 ? p0->dy : 1;
+        // the frames' texels, and their texture mods (texmod.h: a frame's PNG at its own size; when any frame has one,
+        // the array takes the first one's size, the other frames scaled to it, and gets a mip chain)
+        std::vector<std::vector<uint8_t>> argba(c);
+        std::vector<std::vector<uint8_t>> amod(c);
+        std::vector<std::pair<int, int>> asizeMod(c, {0, 0});
+        int dxMod = 0, dyMod = 0;
         for (int i = 0; i < c; ++i)
         {
             const TEXSEL sel = TexselFromShd(pshd, i, 0);
-            std::vector<uint8_t> rgba;
             std::string err;
-            if (sel.pbmp && sel.pbmp->dx == dx && sel.pbmp->dy == dy && FDecodeTexture(sel.pbmp, sel.pclut, rgba, err))
+            if (!(sel.pbmp && sel.pbmp->dx == dx && sel.pbmp->dy == dy && FDecodeTexture(sel.pbmp, sel.pclut, argba[i], err)))
             {
-                glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0, i, dx, dy, 1, GL_RGBA, GL_UNSIGNED_BYTE, rgba.data());
-                if (const char* sz = std::getenv("SLY2N_PARTTEXDUMP"); sz && std::strtol(sz, nullptr, 0) == pshd->id)  // (debug: the frames as PAM files, row 0 first)
-                    if (FILE* pf = std::fopen((std::string("parttex_") + std::to_string(pshd->id) + "_" + std::to_string(i) + ".pam").c_str(), "wb"))
-                    {
-                        std::fprintf(pf, "P7\nWIDTH %d\nHEIGHT %d\nDEPTH 4\nMAXVAL 255\nTUPLTYPE RGB_ALPHA\nENDHDR\n", dx, dy);
-                        std::fwrite(rgba.data(), 1, rgba.size(), pf);
-                        std::fclose(pf);
-                    }
+                argba[i].clear();
+                continue;
             }
+            if (FLoadTextureMod(argba[i], dx, dy, amod[i], &asizeMod[i].first, &asizeMod[i].second) && !dxMod)
+            {
+                dxMod = asizeMod[i].first;
+                dyMod = asizeMod[i].second;
+            }
+            if (const char* sz = std::getenv("SLY2N_PARTTEXDUMP"); sz && std::strtol(sz, nullptr, 0) == pshd->id)  // (debug: the frames as PAM files, row 0 first)
+                if (FILE* pf = std::fopen((std::string("parttex_") + std::to_string(pshd->id) + "_" + std::to_string(i) + ".pam").c_str(), "wb"))
+                {
+                    std::fprintf(pf, "P7\nWIDTH %d\nHEIGHT %d\nDEPTH 4\nMAXVAL 255\nTUPLTYPE RGB_ALPHA\nENDHDR\n", dx, dy);
+                    std::fwrite(argba[i].data(), 1, argba[i].size(), pf);
+                    std::fclose(pf);
+                }
         }
-        // TEX1 0x60 (bilinear), CLAMP of the record
-        glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        const bool fMod = dxMod > 0;
+        if (fMod && std::getenv("SLY2N_MODSTATS"))
+            std::printf("mods: particle shader %d: %d frames at %dx%d for %dx%d\n", pshd->id, c, dxMod, dyMod, dx, dy);
+        const int dxSrc = dx, dySrc = dy;
+        if (fMod) { dx = dxMod; dy = dyMod; }
+        int clevel = 1;
+        if (fMod)
+            for (int d = std::max(dx, dy); d > 1; d >>= 1) ++clevel;
+        glGenTextures(1, &r.first);
+        glBindTexture(GL_TEXTURE_2D_ARRAY, r.first);
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+        glTexStorage3D(GL_TEXTURE_2D_ARRAY, clevel, GL_RGBA8, dx, dy, c);
+        for (int i = 0; i < c; ++i)
+        {
+            const std::vector<uint8_t>* p = nullptr;
+            int dxFrame = dxSrc, dyFrame = dySrc;
+            if (fMod && !amod[i].empty()) { p = &amod[i]; dxFrame = asizeMod[i].first; dyFrame = asizeMod[i].second; }
+            else if (!argba[i].empty()) p = &argba[i];
+            if (!p) continue;
+            if (dxFrame == dx && dyFrame == dy)
+            {
+                glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0, i, dx, dy, 1, GL_RGBA, GL_UNSIGNED_BYTE, p->data());
+                continue;
+            }
+            // (a frame of another size: scaled to the array's, nearest texel)
+            std::vector<uint8_t> ab(size_t(dx) * dy * 4);
+            for (int y = 0; y < dy; ++y)
+                for (int x = 0; x < dx; ++x)
+                    std::memcpy(&ab[(size_t(y) * dx + x) * 4], &(*p)[(size_t(y * dyFrame / dy) * dxFrame + size_t(x * dxFrame / dx)) * 4], 4);
+            glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0, i, dx, dy, 1, GL_RGBA, GL_UNSIGNED_BYTE, ab.data());
+        }
+        if (clevel > 1) glGenerateMipmap(GL_TEXTURE_2D_ARRAY);
+        // TEX1 0x60 (bilinear; a texture mod's mip chain trilinear), CLAMP of the record
+        glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, clevel > 1 ? GL_LINEAR_MIPMAP_LINEAR : GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
         glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
@@ -1780,6 +2322,194 @@ void ExpandParticles(const PSYS* pp, const glm::mat4& matModel, const glm::mat4&
 }
 }  // namespace
 
+// ------------------------------------------------------------ Sly 3's particle effects (pe.cpp)
+namespace
+{
+uint64_t s_genPe = 1;   // bumped when the particle systems are dropped (a new world): pe.cpp's handles are then stale
+}
+uint64_t GenPeParticles() { return s_genPe; }
+
+PEPSYS* PpepsysNew(const PEPSYSDESC& d)
+{
+    auto pp = std::make_unique<PSYS>();
+    pp->fPe = true;
+    SetPepsys(reinterpret_cast<PEPSYS*>(pp.get()), d);
+    s_apsys.push_back(std::move(pp));
+    return reinterpret_cast<PEPSYS*>(s_apsys.back().get());
+}
+
+// orig3: 0x2008C0 (a stream's set-up from its records) and 0x201C18 (the draw's header): as SetPsysFromEmitb with the
+// PE records' fields (pe.cpp PEPSYSDESC)
+void SetPepsys(PEPSYS* ph, const PEPSYSDESC& d)
+{
+    PSYS* pp = reinterpret_cast<PSYS*>(ph);
+    pp->kDraw = d.kDraw;
+    pp->gFlying = d.kDraw == 1 ? d.gFlying : 1.0f;
+    pp->pshd = PshdOfId(d.shd);
+    pp->fAdditive = pp->pshd && (pp->pshd->grfshd & 1);
+    pp->argba.clear();
+    if (!d.argba.empty())
+    {
+        const size_t n = d.argba.size();
+        pp->argba.resize(n);
+        for (size_t i = 0; i < n; ++i)
+            for (int j = 0; j < 4; ++j) pp->argba[n - i - 1][size_t(j)] = uint8_t((((d.argba[i] >> (8 * j)) & 0xFF) + 1) >> 1);
+    }
+    else
+    {
+        std::array<uint8_t, 4> c{};
+        const uint32_t u = pp->pshd ? pp->pshd->argba[0] : 0x80808080u;
+        for (int j = 0; j < 4; ++j) c[size_t(j)] = uint8_t((((u >> (8 * j)) & 0xFF) + 1) >> 1);
+        pp->argba.push_back(c);
+    }
+    pp->fColorPairs = d.fColorPairs;
+    // the frames (render record +4: the shader's frame count); the stream's +0xA0 clq: {0, n / (shared +0x1C or the life), 0}
+    // orig3 0x1FD7E8: the frame table, as 0x139370 (a power of 2 below 32; the first n - c frames twice)
+    int c = 1;
+    if (pp->pshd && !pp->pshd->atex.empty()) c = std::max<int>(1, int(pp->pshd->atex[0].apbmp.size()));
+    int n = 1;
+    for (int v = c >> 1; v; v >>= 1) n <<= 1;
+    if (n < c) n <<= 1;
+    while (!(n < 0x20)) n >>= 1;
+    const int cExtra = c < n ? n - c : 0;
+    pp->aitex.clear();
+    for (int i = 0; i < c && int(pp->aitex.size()) < n; ++i)
+    {
+        pp->aitex.push_back(i);
+        if (i < cExtra) pp->aitex.push_back(i);
+    }
+    pp->aitex.resize(size_t(n), 0);
+    const float life = d.life != 0.0f ? d.life : 1.0f;
+    std::fill(std::begin(pp->clqTex), std::end(pp->clqTex), 0.0f);
+    if (n >= 2) pp->clqTex[1] = float(n) / (d.dTex == 0.0f ? life : d.dTex);
+    static const float s_clqOne[3] = {1.0f, 0.0f, 0.0f};   // 0x341FE0: shared +0x18's subs (0xC / 0xD) draw at alpha 1
+    PrescaleClq(d.fAlphaOne ? s_clqOne : d.clqAlpha, pp->clqAlpha, d.fAlphaOne ? 1.0f : 1.0f / life, 0.0f);
+    PrescaleClq(d.clqScale, pp->clqScale, 1.0f / life, 0.0f);
+    {
+        auto at = [&](float t) { return pp->clqScale[0] + t * (pp->clqScale[1] + t * pp->clqScale[2]); };
+        float sMax = std::max(std::fabs(pp->clqScale[0]), std::fabs(at(life)));
+        if (pp->clqScale[2] != 0.0f)
+        {
+            const float tv = -pp->clqScale[1] / (pp->clqScale[2] + pp->clqScale[2]);
+            if (0.0f < tv && tv < life) sMax = std::max(sMax, std::fabs(at(tv)));
+        }
+        pp->sSize = sMax;
+    }
+    pp->clqColor[0] = 0.0f;
+    pp->clqColor[1] = 1.0f / life;
+    pp->clqColor[2] = 0.0f;
+    pp->kUpdate = d.kUpdate;
+    pp->accel = d.accel;
+    pp->axisSpin = NormalizeOr(d.axisSpin, glm::vec3(0, 0, 1));
+    pp->gSpin = d.gSpin;
+    pp->gDrag = d.gDrag;
+    pp->fPeRandTex = d.fRandTex;
+    pp->fPeSpinFixed = d.fSpinFixed;
+    pp->fPeRoll = d.fRoll;
+    pp->peSpinLo = d.spinLo;
+    pp->peSpinHi = d.spinHi;
+}
+
+// orig3: 0x200C10 (c particles into the stream's blocks: as 0x15B428, the colour index (render +0x218, pairs +0x214),
+// the frame (shared +0x14), kind 2's spin (shared +8..+0xC, against the camera unless shared +0) and roll (shared +4))
+void EmitPepsys(PEPSYS* ph, int c, const glm::vec3* apos, const glm::vec3* avel, const float* at0, const float* at1)
+{
+    PSYS* pp = reinterpret_cast<PSYS*>(ph);
+    if (!pp) return;
+    PBLOCK* pblk = nullptr;
+    size_t iblk = 0;
+    for (int i = 0; i < c; ++i)
+    {
+        while (!pblk || pblk->c >= 0x2B)
+        {
+            if (iblk < pp->ablk.size()) pblk = pp->ablk[iblk++].get();
+            else
+            {
+                pp->ablk.push_back(std::make_unique<PBLOCK>());
+                pblk = pp->ablk.back().get();
+                iblk = pp->ablk.size();
+            }
+        }
+        const int j = pblk->c++;
+        pblk->apos[j] = glm::vec4(apos[size_t(i)], at0[size_t(i)]);
+        pblk->avel[j] = glm::vec4(avel[size_t(i)], at1[size_t(i)]);
+        glm::vec4 x(0.0f);
+        int nColor = NRandInRange(0, int(pp->argba.size()) - 1);
+        if (pp->fColorPairs) nColor &= ~1;
+        const int nTex = pp->fPeRandTex ? NRandInRange(0, int(pp->aitex.size()) - 1) : 0;
+        float spin = 0, roll = 0;
+        if (pp->kDraw == 2)
+        {
+            spin = GRandInRange(pp->peSpinLo, pp->peSpinHi);
+            if (!pp->fPeSpinFixed && glm::dot(MatParticleCamera()[1], avel[size_t(i)]) > 0.0f) spin = -spin;
+            if (pp->fPeRoll) roll = GRandInRange(-PI, PI);
+        }
+        uint32_t u;
+        u = uint32_t(nColor); std::memcpy(&x.x, &u, 4);
+        u = uint32_t(nTex); std::memcpy(&x.y, &u, 4);
+        x.z = spin;
+        x.w = roll;
+        pblk->aextra[j] = x;
+        ++pp->cparticle;
+    }
+}
+
+int CParticlesPepsys(const PEPSYS* ph) { return ph ? reinterpret_cast<const PSYS*>(ph)->cparticle : 0; }
+
+void SetPepsysDraw(PEPSYS* ph, bool fHidden, const std::vector<glm::mat4>& amat)
+{
+    PSYS* pp = reinterpret_cast<PSYS*>(ph);
+    if (!pp) return;
+    pp->fPeHidden = fHidden;
+    pp->amatPe = amat;
+}
+
+// orig3: 0x201E18 (a kind-3 effect's box: each particle brought back into the box [lo, hi] of the frame mat, by the
+// box's size per axis)
+void WrapPepsysInBox(PEPSYS* ph, const glm::mat4& mat, const glm::vec3& lo, const glm::vec3& hi)
+{
+    PSYS* pp = reinterpret_cast<PSYS*>(ph);
+    if (!pp) return;
+    const glm::mat4 inv = glm::inverse(mat);
+    const glm::vec3 d = hi - lo;
+    for (auto& pb : pp->ablk)
+        for (int i = 0; i < pb->c; ++i)
+        {
+            glm::vec3 v = glm::vec3(inv * glm::vec4(glm::vec3(pb->apos[i]), 1.0f));
+            bool f = false;
+            for (int k = 0; k < 3; ++k)
+            {
+                if (v[k] < lo[k]) { v[k] += d[k]; f = true; }
+                else if (hi[k] < v[k]) { v[k] -= d[k]; f = true; }
+            }
+            if (f) pb->apos[i] = glm::vec4(glm::vec3(mat * glm::vec4(v, 1.0f)), pb->apos[i].w);
+        }
+}
+
+// orig3: 0x202330 (a PE RIP stream's particle: a RIP of the shared group (0x20B9C0, kind from the component's record
+// +0x1C), its model, size, alpha, motion and orientation; pe.cpp fills the descriptor)
+void LaunchPeRip(const PERIPDESC& d)
+{
+    if (!d.pmodel) return;
+    if (FOtherSw(g_psw)) InitEmittersOfSw(g_psw);
+    RIPG* pg = PripgNew(0);
+    RIPN r;
+    r.kind = d.kind;
+    r.tBirth = d.tBirth;
+    r.life = d.life > 0.0f ? d.life : 1.0f;
+    r.pmodel = d.pmodel;
+    for (int i = 0; i < 3; ++i) { r.size[i] = d.size[i]; r.alpha[i] = d.alpha[i]; }
+    r.ori = d.ori;
+    r.pos = r.posPrev = d.pos;
+    r.vel = d.vel;
+    r.accel = d.accel;
+    r.axisSpin = NormalizeOr(d.axisSpin, glm::vec3(0, 0, 1));
+    r.gSpin = d.gSpin;
+    r.gDrag = d.gDrag;
+    r.plo2 = d.plo2;
+    pg->arip.push_back(std::move(r));
+}
+
 // (for the actors: 0x195368's particles of the player's emitter part at the interaction targets)
 bool EmitLoParticlesAt(LO* plo, int c, const glm::vec3* apos, const glm::vec3* avel, const float* at0, const float* at1)
 {
@@ -1823,8 +2553,12 @@ void ResolveEmits(EMITTERN* pe)
                             (void*)pe->s.aplo[i], pe->s.aplo[i]->ichannel);
 }
 
+// (PC addition: the scene rebuilt within a world, game.cpp: the caches of its glob sets' addresses dropped)
+void InvalidateSceneLookups() { ++s_sceneLookupGeneration; }
+
 void ResetParticles()
 {
+    ++s_genPe;
     ++s_sceneLookupGeneration;
     if (std::getenv("SLY2N_SCENECACHE"))
         std::fprintf(stderr, "SCENECACHE reset generation %llu previous_world %u\n",
@@ -1871,7 +2605,7 @@ void EmitBurst(EMITTERN* pe, const BURSTPARAMS& bp)
         c = int(g < 1.0f ? fc * g : fc / g);
         const int cMax = int(pe->e.F(0xF8)) / 2;
         if (!(cMax < c)) c = cMax;
-        const float sv = std::clamp(g, 0.0f, 1.0f);   // (GLimitLm 0x2BDEC0)
+        const float sv = std::clamp(g, 0.5f, 2.0f);   // GLimitLm(D_002BDEC0 {0.5, 2}) (was [0, 1]: audit E4)
         b.Wr<float>(0x50, b.F(0x50) * sv);
         b.Wr<float>(0x54, b.F(0x54) * sv);
         const float gs = std::max(g, 0.5f);
@@ -1905,6 +2639,7 @@ void EmitBurst(EMITTERN* pe, const BURSTPARAMS& bp)
         if (LO* psrc = const_cast<LO*>(tmp.s.aplo[0])) pos = PosJtConvert(psrc, nullptr, pos);
         if (CSnd* psnd = PsndStartSound(pe->snd.I(0), 1.0f, 0, nullptr, &pos))  // 0x1FBB90 / 0x1FB2F8(0) / 0x1FB3F0
         {
+            UsePcCopyBank(psnd, pe->plo);   // (PC: a kept world's copy's explosion: its sound id is its world's, R44)
             psnd->SetFalloff(pe->snd.F(4), pe->snd.F(8));  // 0x1FB4F0
             psnd->SetVolume(pe->snd.F(0xC));               // 0x1FB1F8
             psnd->SetPitch(pe->snd.F(0x10));               // 0x1FB2C0
@@ -1916,15 +2651,13 @@ void EmitBurst(EMITTERN* pe, const BURSTPARAMS& bp)
     }
 }
 
-void InitEmittersOfSw(SW* psw)
+namespace
 {
-    ResetParticles();
-    s_psw = psw;
-    s_serialSw = psw ? psw->serial : 0;
-    if (!psw) return;
-    g_particlestats = PARTICLESTATS{};
+// the emitters (class 0x1D) and explosions (class 0x20) given, as the world's init builds them
+void AddEmitters(SW* psw, const std::vector<LO*>& aploEmit, const std::vector<LO*>& aploExpl)
+{
     std::vector<EMITTERN*> aemitterNew;
-    for (LO* plo : AploOfClass(psw, 0x1B))   // (Sly 3's EMITTER 0x1B)
+    for (LO* plo : aploEmit)
     {
         auto pe = std::make_unique<EMITTERN>();
         pe->plo = plo;
@@ -1940,6 +2673,10 @@ void InitEmittersOfSw(SW* psw)
                 pe->b.Wr<int32_t>(0xCC, px->nColors);
             }
         }
+        // +0x38 is the LO's own radius (InitLo: 1e10, e.g. 0x1C3458 tests for it; option 13 sets it): the near test
+        // below. It was 0 here unless option 13 was authored, so a parented emitter without it never emitted (Ep4
+        // Lightning Action's bolt 88322: emitters 88324 / 88326 and 88328 / 88330, nothing drawn in the strikes)
+        pe->e.Wr<float>(0x38, plo->sRadius);
         ApplyEmitterOptions(pe.get());
         if ([] { static const bool f = std::getenv("SLY2_PARTDBG") != nullptr; return f; }())
             if (const LOXEMIT* px = dynamic_cast<const LOXEMIT*>(plo))
@@ -1961,7 +2698,7 @@ void InitEmittersOfSw(SW* psw)
         s_aemitter.push_back(std::move(pe));
     }
     // the explosions (0x259030: an EMITB with the same options; bursts only)
-    for (LO* plo : std::vector<LO*>{})   // (Sly 3's explosions 0x1F: their options are not mapped yet)
+    for (LO* plo : aploExpl)
     {
         auto pe = std::make_unique<EMITTERN>();
         pe->plo = plo;
@@ -2048,6 +2785,7 @@ void InitEmittersOfSw(SW* psw)
             pg = png.get();
             InitEmitterImage(pg->e);
             pg->b = pe->b;
+            pg->ploMember = pe->plo;
             pg->b.Wr<int32_t>(0, 1);
             pg->s = pe->s;
             pg->s.aplo[0] = nullptr;
@@ -2089,7 +2827,31 @@ void InitEmittersOfSw(SW* psw)
             else pe->plo->grfUpd &= ~GRFUPD_Update;
         }
     }
-    g_particlestats.cemitter = int(aemitterNew.size());
+    g_particlestats.cemitter += int(aemitterNew.size());
+}
+}  // namespace
+
+void InitEmittersOfSw(SW* psw)
+{
+    ResetParticles();
+    s_psw = psw;
+    s_serialSw = psw ? psw->serial : 0;
+    if (!psw) return;
+    g_particlestats = PARTICLESTATS{};
+    AddEmitters(psw, AploOfClass(psw, S3CID(0x1D)), AploOfClass(psw, S3CID(0x20)));
+}
+
+void AddEmittersOfNewLos(SW* psw, const std::vector<LO*>& aplo)
+{
+    if (!psw || FOtherSw(psw)) return;   // (not built yet: the world's init takes them with the rest)
+    std::vector<LO*> aploEmit, aploExpl;
+    for (LO* plo : aplo)
+    {
+        if (!plo || s_mpemitter.count(plo)) continue;
+        if (FCidDerivedFrom(plo->Cid(), S3CID(0x1D))) aploEmit.push_back(plo);
+        if (FCidDerivedFrom(plo->Cid(), S3CID(0x20))) aploExpl.push_back(plo);   // (as the init: both lists when both)
+    }
+    if (!aploEmit.empty() || !aploExpl.empty()) AddEmitters(psw, aploEmit, aploExpl);
 }
 
 void SetParticleCamera(const glm::vec3& pos, const glm::vec3& dirView, const glm::vec3& dirLeft)
@@ -2193,14 +2955,33 @@ void DrawParticles(const glm::mat4& matWorldToClip, const glm::vec3& posCamera, 
             const float r = p->e.F(0x38) * rScale;
             return glm::dot(pos - posCamera, pos - posCamera) >= r * r;
         };
-        if (par && !par->amember.empty())
+        if (pp->fPe)
+        {
+            if (pp->fPeHidden) continue;
+            if (pp->amatPe.empty()) { if (fVisible(pp->posCenter, pp->sRadius)) amat.push_back(glm::mat4(1.0f)); }
+            else
+                for (const glm::mat4& m : pp->amatPe)
+                    if (fVisible(glm::vec3(m * glm::vec4(pp->posCenter, 1.0f)), pp->sRadius)) amat.push_back(m);
+        }
+        else if (par && !par->amember.empty())
         {
             for (const EMITTERN* pm : par->amember)
             {
                 if (!pm->plo || !FActive(pm->plo)) continue;
                 if (fHiddenDd(pm)) continue;
+                // (the source's position and rotation (0x1A62E8 / 0x1A6318); without one the member's position with
+                // its parent's rotation (+0x10), else none: not the member's own rotation. The group already emits in
+                // the first member's rotation (slot 30 at load), so drawing through the member's whole matrix turned
+                // the particles by it twice: R28, Ep4's chimney smoke 68571 (tilted 112 degrees about y under the
+                // spinning 68569) left its chimney sideways and swept round with the spin)
                 const LO* ps = pm->s.aplo[0];
-                glm::mat4 m = ps ? MatWorldOfLo(ps) : MatWorldOfEmitter(pm);
+                glm::mat4 m(1.0f);
+                if (ps) m = MatWorldOfLo(ps);
+                else
+                {
+                    if (pm->plo->paloParent) m = glm::mat4(glm::mat3(MatWorldOfLo(pm->plo->paloParent)));
+                    m[3] = glm::vec4(PosLoWorld(pm->plo), 1.0f);
+                }
                 const glm::vec3 c = glm::vec3(m * glm::vec4(pp->posCenter, 1.0f));
                 if (!fVisible(c, pp->sRadius)) continue;
                 amat.push_back(m);
@@ -2289,7 +3070,7 @@ void ExplodeLo(LO* plo, const BURSTPARAMS* pparams)
 void ExplodeOid(SW* psw, int32_t oid, const BURSTPARAMS* pparams)
 {
     if (!psw) return;
-    for (LO* plo : AploOfClass(psw, 0x20))
+    for (LO* plo : AploOfClass(psw, S3CID(0x20)))
         if (plo->oid == oid) ExplodeLo(plo, pparams);
 }
 
@@ -2393,7 +3174,71 @@ void AppendAloExtraDraws(const SCENE& scene, const ALO* palo, const glm::mat4& m
     }
 }
 
+// orig: 0x0015BE28 from WakeSoWater 0x15A2C0 (the spray of an object moving faster than 500 through the water: a
+// one-off EMITB (0x159118's defaults D_002DE5B0 / D_002DE5F0) of c kind-1 RIPs of the water's +0x178 model, their
+// ripple model (EMITS +0xC) the water's +0x17C and their touch object the water: at pos raised 30, upward within
+// 0.39..1.05 rad at 0.5..0.75 d, the object's gravity, life 5, size 8..12, alpha 1 - u^2. They fall back into the
+// water, where 0x1D0D28 makes their ripples.
+void LaunchWaterSpray(const LO* ploSpray, const LO* ploRipple, LO* ploWater, const glm::vec3& pos, float d, const glm::vec3& accel, int c)
+{
+    if (!ploSpray) return;
+    if (FOtherSw(g_psw)) InitEmittersOfSw(g_psw);
+    EMITTERN tmp;
+    IMG& b = tmp.b;
+    b.Wr<int32_t>(0x00, 1);
+    b.Wr<int32_t>(0x04, 1);              // (a RIP emitter)
+    b.Wr<int32_t>(0x20, -1);
+    b.WrV(0x30, pos + glm::vec3(0.0f, 0.0f, 30.0f));
+    b.WrV(0x40, glm::vec3(0.0f, 0.0f, 1.0f));
+    // EMITV (+0x50)
+    b.Wr<float>(0x50, d * 0.5f);
+    b.Wr<float>(0x54, d * 0.75f);
+    b.Wr<float>(0x58, 0.0f);
+    b.Wr<float>(0x5C, 1.0f);
+    b.WrV(0x60, accel);
+    b.WrV(0x70, glm::vec3(0.0f, 0.0f, 1.0f));
+    b.Wr<float>(0x88, 1.0f);
+    b.Wr<float>(0x8C, 5.0f);
+    b.Wr<float>(0x90, 0.39269909f);
+    b.Wr<float>(0x94, 1.0471976f);
+    b.Wr<float>(0xB0, 1.0f);
+    b.Wr<float>(0xB8, -1.0f);
+    // EMITP (+0xC0)
+    b.Wr<int32_t>(0xC0, 1);              // RIP kind 1
+    b.Wr<int32_t>(0xC4, 0);              // the shared group
+    b.Wr<int32_t>(0xC8, ploSpray->oid);
+    b.Wr<int32_t>(0xCC, ploRipple ? ploRipple->oid : 0);
+    b.Wr<int32_t>(0xD0, ploWater ? ploWater->oid : 0);
+    b.Wr<float>(0xD8, 8.0f);
+    b.Wr<float>(0xDC, 12.0f);
+    b.Wr<float>(0xE0, 1.0f);
+    tmp.s.aplo[2] = const_cast<LO*>(ploSpray);
+    tmp.s.aplo[3] = const_cast<LO*>(ploRipple);
+    tmp.s.aplo[4] = ploWater;
+    if (std::getenv("SLY2N_RIPHIT"))
+        std::fprintf(stderr, "RIPHIT spray t %.3f at %.0f %.0f %.0f d %.0f c %d\n", g_clock.t, pos.x, pos.y, pos.z, d, c);
+    EmitParticles(&tmp, c);
+}
+
 // orig: 0x001CE888(G, 4, 0) + 0x1D0108 (a pickup's glint: the model at an object's point, life dt)
+bool FLaunchWaterRipple(const LO* pmodel, const glm::vec3& pos, float gScale)
+{
+    if (!pmodel) return false;
+    if (FOtherSw(g_psw)) InitEmittersOfSw(g_psw);
+    RIPG* pg = PripgNew(0);
+    RIPN r;
+    r.kind = 7;
+    r.tBirth = g_clock.t;   // 0x1CE920 (slot 1): the start, life 1, the default alpha, identity, at pos
+    r.life = 1.0f;
+    r.pos = r.posPrev = pos;
+    r.size[0] = gScale;     // +0x20 / +0x24 (set by the caller), +0x28 0
+    r.size[1] = gScale * 0.6f;
+    r.size[2] = 0.0f;
+    r.pmodel = pmodel;      // +0x1C
+    pg->arip.push_back(std::move(r));
+    return true;
+}
+
 bool FLaunchGlintRip(const LO* pmodel, const LO* ploAt, float dt)
 {
     if (FOtherSw(g_psw)) InitEmittersOfSw(g_psw);

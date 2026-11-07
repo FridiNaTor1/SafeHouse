@@ -9,6 +9,7 @@
 // visibility from object state (render list SW+0x3F20, zone mask, alpha, distance fades), run-time producers.
 
 #include "alo.h"
+#include "game/sly3.h"
 #include "cls.h"
 #include "sw.h"
 
@@ -25,7 +26,7 @@ inline std::vector<LO*> AploOfClass(const SW* psw, CID cidBase)
 }
 
 // The lights (class 4 and its subclasses) with their loaded options (LO::aopt: eopid + values).
-inline std::vector<LO*> AploLights(const SW* psw) { return AploOfClass(psw, 4); }
+inline std::vector<LO*> AploLights(const SW* psw) { return AploOfClass(psw, S3CID(4)); }
 
 // An ALO's placement: its first transform record's world matrix (orig ALO's records +0x40).
 inline glm::mat4 MatWorldOfAlo(const ALO* palo)
@@ -41,7 +42,7 @@ inline XF* PxfOfGlobRef(ALO* palo, int ref) { return palo ? PxfFindAlo(palo, ref
 inline std::vector<ALO*> ApaloSharingGlobset(const SW* psw, const GLOBSET* pglobset)
 {
     std::vector<ALO*> a;
-    for (LO* plo : AploOfClass(psw, 0x30))
+    for (LO* plo : AploOfClass(psw, S3CID(0x30)))
         if (static_cast<ALO*>(plo)->pglobset.get() == pglobset) a.push_back(static_cast<ALO*>(plo));
     return a;
 }

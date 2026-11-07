@@ -5,6 +5,7 @@
 // ALO's records (local matrices, modes) after the frames.
 
 #include "anim.h"
+#include "game/sly3.h"
 #include "animtest.h"
 #include "asega.h"
 #include "bone.h"
@@ -28,7 +29,7 @@ void DumpAnimated(SW* psw, FILE* pf)
     std::map<std::pair<int, int>, int> mpord;
     for (const auto& plo : psw->aploAll)
     {
-        if (!FCidDerivedFrom(plo->Cid(), 0x30)) continue;
+        if (!FCidDerivedFrom(plo->Cid(), S3CID(0x30))) continue;
         ALO* palo = static_cast<ALO*>(plo.get());
         const int ord = mpord[{plo->Cid(), plo->oid}]++;
         bool fAnim = false;
@@ -76,13 +77,13 @@ int AnimTestCommand(const char* pszWorld, int argc, char** argv)
     int acctrlKind[10] = {};
     for (const auto& plo : psw->aploAll)
     {
-        if (FCidDerivedFrom(plo->Cid(), 0x6D) && static_cast<ASEG*>(plo.get())->fApplyParams) ++casegApply;
-        if (plo->Cid() == 0x6F)
+        if (FCidDerivedFrom(plo->Cid(), S3CID(0x6D)) && static_cast<ASEG*>(plo.get())->fApplyParams) ++casegApply;
+        if (plo->Cid() == S3CID(0x6F))
         {
             ++csm;
             csmInitial += static_cast<SM*>(plo.get())->fInitial;
         }
-        if (FCidDerivedFrom(plo->Cid(), 0x30))
+        if (FCidDerivedFrom(plo->Cid(), S3CID(0x30)))
         {
             ALO* palo = static_cast<ALO*>(plo.get());
             for (const auto& pxf : palo->axf)

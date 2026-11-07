@@ -1,13 +1,14 @@
 // See qolview.h.
 
 #include "qolview.h"
+#include "game/sly3.h"
 
 #include "display.h"
 #include "lo.h"
 #include "render.h"
 #include "shd.h"
 
-#include "sly3n_logo.h"
+#include "sly2n_logo.h"
 
 #include <glad/glad.h>
 
@@ -26,7 +27,16 @@
 bool FClipEpisodeMenuToCanvas(const LO* plo)
 {
     static const bool s_fOff = [] { const char* sz = std::getenv("SLY2N_EPMENUCLIP"); return sz && sz[0] == '0'; }();
-    return !s_fOff && plo && plo->Cid() == 0x83 && g_display.uiScale.x < 1.0f;
+    return !s_fOff && plo && plo->Cid() == S3CID(0x83) && g_display.uiScale.x < 1.0f;
+}
+
+bool FFourThreeMenuObj(const LO* plo)
+{
+    static const bool s_fOff = [] { const char* sz = std::getenv("SLY2N_MENU43"); return sz && sz[0] == '0'; }();
+    // (Sly 3: the menu pages, full-screen 4:3 art whose backdrop layers run raggedly past the canvas: the menu's wheel
+    // 1056 and 1057, the pause pages 1062..1065 (Gadget Grid, Buy Gadgets, ...) and 1389 (Jobs / Goals))
+    return !s_fOff && plo && ((plo->oid >= 1062 && plo->oid <= 1065) || plo->oid == 1056 || plo->oid == 1057 || plo->oid == 1389) &&
+           g_display.uiScale.x < 1.0f;
 }
 
 namespace
@@ -50,7 +60,7 @@ GLuint TexLogo()
     if (s_fTried) return s_tex;
     s_fTried = true;
     int dx = 0, dy = 0;
-    stbi_uc* pb = stbi_load_from_memory(sly3n_logo_png, int(sizeof(sly3n_logo_png)), &dx, &dy, nullptr, 4);
+    stbi_uc* pb = stbi_load_from_memory(sly2n_logo_png, int(sizeof(sly2n_logo_png)), &dx, &dy, nullptr, 4);
     if (!pb) return 0;
     // rows bottom-up (the quads put t = 1 at the top, as the original's textures); the colours in the original's
     // units: RGB halved as the old logo's texels (their 0..128 is the menu's own brightness), alpha 0..128 = opaque

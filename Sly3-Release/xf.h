@@ -124,6 +124,7 @@ struct CTRLTARGET : CTRL
     glm::vec4 pos{0.0f};        // +0x20
     glm::vec4 vel{0.0f};        // +0x30
     void Fetch() override;      // orig 0x12E010
+    void SetGoal(const glm::vec4& newPos, const glm::vec4& newVel);  // orig 0x12E0F0
 };
 
 // kind 5 (0x2CA760): forwards to a source controller (+0x10) and adds an offset (+0x20) to its segment
@@ -195,6 +196,8 @@ glm::vec4 VecXfTargetSlope(const XF* pxf);
 void UpdateAloXfs(ALO* palo, float t, float dt);
 // orig: 0x0022FAA0: the records' world matrices (parent's world x local)
 void UpdateAloXfWorlds(ALO* palo);
+// (QoL draw distance above 1x, drawdist-2) the record's local matrix dt seconds on, for drawing only (xf.cpp)
+bool FXfVisualPose(const XF* pxf, float dt, glm::mat4* pmat);
 
 // The records' state after the load (the parts of 0x22D7A0 after each record is read: the value into the segment,
 // 0x22C818, the jobs' controllers) and the bone binding of the object's meshes (PostLoad 0x1F36A8: 0x22FAA0,

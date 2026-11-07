@@ -18,6 +18,8 @@
 // grf} x 3: good, bad, missed), +0x408 its ASEGA, +0x40C busy (messages 0x27 / 0x28).
 
 #include "dance.h"
+#include "game/sly3.h"
+#include "worldglobals.h"
 
 #include "activate.h"
 #include "alo.h"
@@ -113,8 +115,11 @@ struct DANCER
 };
 
 std::unordered_map<const LO*, DANCE> s_mpdance;
+WORLD_TABLE(s_mpdance);   // (PC: moved aside while a kept world loads, worldglobals.h)
 std::unordered_map<const LO*, DANCER> s_mpdancer;
+WORLD_TABLE(s_mpdancer);   // (PC: moved aside while a kept world loads, worldglobals.h)
 LO* s_ploDance = nullptr;  // D_002DE570
+WORLD_VALUE(s_ploDance);   // (PC: moved aside while a kept world loads, worldglobals.h)
 
 DANCE* Pdance(LO* plo)
 {
@@ -143,6 +148,9 @@ DANCE& Dance(LO* plo)
     d.g2A0 = FloatField(pfrom, 0x2A0, -0.2f);
     d.g298 = FloatField(pfrom, 0x298, -1.5f);
     d.g2A4 = FloatField(pfrom, 0x2A4, -1.5f);
+    if (FPrint())
+        std::printf("dance: director %d windows %.2f / %.2f range %.2f..%.2f mean of %d, early %.2f wrong %.2f double %.2f missed %.2f\n", plo->oid,
+                    d.g58, d.g5C, d.lm.gMin, d.lm.gMax, d.c280, d.g298, d.g29C, d.g2A0, d.g2A4);
     return d;
 }
 
@@ -510,7 +518,7 @@ void PostLoadDancer(LO* plo)
     InitDancer(plo, Dancer(plo));
     if (g_psw) EnablePo(g_psw, plo, 0);
 }
-bool FDancer(const LO* plo) { return plo && FCidDerivedFrom(plo->Cid(), 0x44); }
+bool FDancer(const LO* plo) { return plo && FCidDerivedFrom(plo->Cid(), S3CID(0x44)); }
 
 // orig: 0x001E3510.. (command 0x4B: PlayJtAsegDefault 0x1524A0 with grf 0)
 void PlayDancerDefault(LO* ploDancer, LO* ploAseg) { PlayDancerAseg(ploDancer, ploAseg, 0); }
@@ -592,6 +600,14 @@ struct INITDANCE
     {
         RegisterLoUpdate(0x152970, UpdateDance);
         RegisterLoUpdate(0x152148, UpdateDancer);
+        // EOPID 1354 (setter 0x153128, +0x50): a script sets the tango's state (pausing / resuming the game on 1);
+        // natively the value only reached a raw field (audit 2026-11 P8; items 37 / 38)
+        RegisterObjectSetter(1354, [](LO* plo, const CRef& r) { SetDanceState(Dance(plo), r.RefCoerceS32().m_n); });
+        RegisterObjectGetter(1354, [](LO* plo) {
+            CRef r;
+            r.SetS32(Dance(plo).state);
+            return r;
+        });
         // optid 0x10F918 -> 0x153810 (a crowd entry: its object, its first state; 0x80 at most)
         RegisterObjectMethod(0x10F918, [](LO* plo, const std::vector<CRef>& a) {
             DANCE& d = Dance(plo);

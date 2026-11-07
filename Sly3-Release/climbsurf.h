@@ -48,3 +48,8 @@ void LeaveSlyHang(SLY* p);           // 0x18C250 (leaving 3)
 void UpdateSlyHangInput(SLY* p);     // 0x190520
 void UpdateSlyHangMotion(SLY* p);    // 0x1903B8
 bool FSlyHangRelease(SLY* p);        // 0x18A8C8 (state 3)
+glm::vec3 PosSlyHangPoint(SLY* p);   // 0x190C58 (the point the cane holds: past the hook, away from the arm)
+void UpdateSlyHangPlace(SLY* p);     // 0x190E18 (state 3's update: the hand's actuator turned to the hook)
+void DrawSlyHangPlace(SLY* p);       // 0x190D10 (state 3's draw, 0x18A238: the cane put on the hook, the arm solved)
+struct SW;
+void DrawSlys(SW* psw);              // 0x18A238 (Sly's draw) for each drawn Sly: its state 3 part, before the scene

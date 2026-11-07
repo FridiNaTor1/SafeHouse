@@ -4,6 +4,7 @@
 // camera's field of view through the attach camera policy, CM +0x5F0), any button fires a row of its pool through its
 // launcher and sends its splice event 5.
 #include "turret.h"
+#include "game/sly3.h"
 
 #include "activate.h"
 #include "savedata.h"
@@ -15,6 +16,7 @@
 #include "lo.h"
 glm::mat3 BuildLookAtMatrixZ(const glm::vec3& vec);  // mat.h (0x11B7E0)
 #include "objmethod.h"
+#include "pcinput.h"
 #include "po.h"
 #include "ref.h"
 #include "so.h"
@@ -138,6 +140,15 @@ void UpdateTurretAim(ALO* palo, TURRET& t)
         t.dradTilt = cmm::GLimitAbs(t.dradTilt + ay * dt, gLimit * 0.8f);
         t.radPan += t.dradPan * dt;
         t.radTilt += t.dradTilt * dt;
+        // (PC, N14) the mouse aims straight onto the angles at the aim sensitivity: right turns right, up looks up (a
+        // higher tilt; only the mouse's own turret inversion flips it (settings v17 mouseInvertTurretX / Y), the game's
+        // "Invert Turret Controls" is the stick's). Checked by the camera's forward: mouse up raises it.
+        float dxRight = 0.0f, dyUp = 0.0f;
+        MouseAimDelta(MOUSEAIM_Turret, &dxRight, &dyUp);
+        t.radPan -= dxRight;
+        t.radTilt += dyUp;
+        if (static const bool s_f = std::getenv("SLY2N_TURRETPRINT") != nullptr; s_f)
+            std::printf("turret: t %.3f pan %.4f tilt %.4f stick %.2f %.2f mouse %.4f %.4f cam x %.3f %.3f %.3f\n", g_clock.t, t.radPan, t.radTilt, x, y, dxRight, dyUp, g_cm.mat[0].x, g_cm.mat[0].y, g_cm.mat[0].z);
     }
     t.radPan = cmm::GLimitLm(&t.lm1A4, t.radPan);
     t.radTilt = cmm::GLimitLm(&t.lm19C, t.radTilt);
@@ -161,7 +172,7 @@ void UpdateTurretZoom(ALO* palo, TURRET& t)
         rad = rad + rad;
         if (rad < t.lmFov.gMin) rad = t.lmFov.gMin;
         glm::mat4 mPredict(1.0f);
-        if (FCidDerivedFrom(t.ptarget->Cid(), 0x30) && PxfObj(static_cast<ALO*>(t.ptarget)))
+        if (FCidDerivedFrom(t.ptarget->Cid(), S3CID(0x30)) && PxfObj(static_cast<ALO*>(t.ptarget)))
             PredictXfChain(PxfObj(static_cast<ALO*>(t.ptarget)), nullptr, dt, &mPredict, nullptr);  // 0x2309E8
         else mPredict[3] = glm::vec4(posTarget, 1.0f);
         const glm::vec3 posFuture(mPredict[3]);
@@ -341,7 +352,7 @@ bool FTurretAttach(LO* plo, CMATTACH* patt)
     if (!pt) return false;
     LO* pm = pt->pmount ? pt->pmount : plo;
     glm::mat4 m(1.0f);
-    if (FCidDerivedFrom(pm->Cid(), 0x30))
+    if (FCidDerivedFrom(pm->Cid(), S3CID(0x30)))
     {
         ALO* pa = static_cast<ALO*>(pm);
         if (PxfObj(pa)) m = PxfObj(pa)->matWorld;

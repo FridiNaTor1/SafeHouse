@@ -3,6 +3,9 @@
 // 0x13C4E0, 0x13CEB8, 0x13CEF8, 0x13CF38, 0x13CFD8, 0x13D020, 0x13D1A8, 0x13D248, 0x1432E0, 0x143380, 0x1433C8,
 // 0x143BD8).
 #include "booty.h"
+#include "game/sly3.h"
+#include "worldglobals.h"
+#include "region.h"
 #include "screenrt.h"
 #include "emitter.h"
 #include "animfind.h"
@@ -23,6 +26,8 @@
 #include "ref.h"
 #include "savedata.h"
 #include "so.h"
+
+#include <glm/gtc/matrix_transform.hpp>
 #include "sound.h"
 #include "sw.h"
 #include "task.h"
@@ -84,6 +89,7 @@ struct RECS
     SW* psw = nullptr;
     std::unordered_map<OID, std::vector<BOOTYREC>> mp;
 } s_recs;
+WORLD_TABLE(s_recs);   // (PC: moved aside while a kept world loads, worldglobals.h)
 std::vector<BOOTYREC>& Arec(const LO* plo)
 {
     if (s_recs.psw != g_psw)
@@ -107,13 +113,17 @@ struct BOOTY
     float t = 0.0f;             // +0x188 the state's start
     // +0x18C: the original's flight (a RIP of kind 6, 0x1CE888(G, 6, 0): the model from posFrom to the target object
     // +0x1C in +0x18 = max(250, d) x 0.002 s, accelerated by +0xA0 (0, 0, -3000); its end is message 8 to the booty).
-    // Natively the booty itself flies (a parabola reaching the target's position at the end).
+    // The booty itself is already at its destination (0x13C560 places it there when the flight starts: the holder, or
+    // the stand); natively only its drawing flies (posDraw, FBootyDrawDelta: a parabola reaching the target's position
+    // at the end).
     bool fFlight = false;
     glm::vec3 posFrom{0.0f};
+    glm::vec3 posDraw{0.0f};
     LO* ploTo = nullptr;
     float tFlight = 0.0f, dtFlight = 0.0f;
 };
 std::unordered_map<const LO*, BOOTY> s_mpbooty;
+WORLD_TABLE(s_mpbooty);   // (PC: moved aside while a kept world loads, worldglobals.h)
 
 struct STAND
 {
@@ -122,12 +132,15 @@ struct STAND
     NOISE* pnoise = nullptr;  // +0x198 the noise of a theft (0x156C80(G, 1, ...))
 };
 std::unordered_map<const LO*, STAND> s_mpstand;
+WORLD_TABLE(s_mpstand);   // (PC: moved aside while a kept world loads, worldglobals.h)
 std::unordered_map<const SW*, int> s_mpcstand;     // SW +0x463C
+WORLD_TABLE(s_mpcstand);   // (PC: moved aside while a kept world loads, worldglobals.h)
 std::unordered_map<const ACTOR*, LO*> s_mpcarried;  // ACTOR +0x11A8
+WORLD_TABLE(s_mpcarried);   // (PC: moved aside while a kept world loads, worldglobals.h)
 
 BOOTY* Pbooty(const LO* plo)
 {
-    if (!plo || !FIsLoDerivedFrom(plo, 0x67)) return nullptr;
+    if (!plo || !FIsLoDerivedFrom(plo, S3CID(0x67))) return nullptr;
     auto it = s_mpbooty.find(plo);
     if (it != s_mpbooty.end()) return &it->second;
     BOOTY& b = s_mpbooty[plo];
@@ -143,7 +156,7 @@ BOOTY* Pbooty(const LO* plo)
 }
 STAND* Pstand(const LO* plo)
 {
-    if (!plo || !FIsLoDerivedFrom(plo, 0x25)) return nullptr;
+    if (!plo || !FIsLoDerivedFrom(plo, S3CID(0x25))) return nullptr;
     return &s_mpstand[plo];
 }
 // cid 0x25's fields (0x13CEB8 init: +0x184 0x2BC, +0x188 -1, +0x18C 15; the load's options)
@@ -192,15 +205,10 @@ void SelectBootyRecord(LO* plo, int id)
 // SW +0x4638 (0x210940: 0x15E938(G, 5, 0x620, 0), the booty's streaming proxy)
 LO* PloBootyProxy()
 {
-    if (!g_psw) return nullptr;
-    static SW* s_psw = nullptr;
-    static LO* s_p = nullptr;
-    if (s_psw != g_psw)
-    {
-        s_psw = g_psw;
-        s_p = PloFindSwObjectByOid(g_psw, 0x620);
-    }
-    return s_p;
+    // The native transition reuses the SW object. Its address therefore does
+    // not identify a loaded world's proxy (orig SW +0x4638 is rebuilt by
+    // 0x210940). Resolve from the current world after every transition.
+    return g_psw ? PloFindSwObjectByOid(g_psw, 0x620) : nullptr;
 }
 
 // ACTOR +0x11A4: the part the booty is held at
@@ -208,7 +216,7 @@ ALO* PaloHolder(const ACTOR* pa)
 {
     if (!pa || !pa->palo) return nullptr;
     for (const auto& [ib, plo] : pa->palo->apart)
-        if (ib == 0x11A4 && plo && FIsLoDerivedFrom(plo, 0x30)) return static_cast<ALO*>(plo);
+        if (ib == 0x11A4 && plo && FIsLoDerivedFrom(plo, S3CID(0x30))) return static_cast<ALO*>(plo);
     return nullptr;
 }
 
@@ -216,8 +224,8 @@ ALO* PaloHolder(const ACTOR* pa)
 const char* SzPlayer(const ACTOR* pa)
 {
     if (!pa || !pa->palo) return nullptr;
-    return FIsLoDerivedFrom(pa->palo, 0x35) ? "sly" : FIsLoDerivedFrom(pa->palo, 0x37) ? "bentley"
-         : FIsLoDerivedFrom(pa->palo, 0x36) ? "murray" : nullptr;
+    return FIsLoDerivedFrom(pa->palo, S3CID(0x35)) ? "sly" : FIsLoDerivedFrom(pa->palo, S3CID(0x37)) ? "bentley"
+         : FIsLoDerivedFrom(pa->palo, S3CID(0x36)) ? "murray" : nullptr;
 }
 
 CRef RefS32(int n)
@@ -328,7 +336,7 @@ void SaveBootyMove(ACTOR* pa, int k, LO* pstand)
         bool fSame = true;
         for (size_t j = 0; j < 4; ++j) fSame = fSame && static_cast<uint16_t>(akey[j]) == an[j];
         if (!fSame) break;
-        for (LO* p : AploOfClass(g_psw, 0x25))  // 0x15E9C8(G, 5, 0x25, 0, 15)
+        for (LO* p : AploOfClass(g_psw, S3CID(0x25)))  // 0x15E9C8(G, 5, 0x25, 0, 15)
             if (Pstand(p)->id == akey[6])
             {
                 if (BOOTY* pb = Pbooty(pcarried)) pb->pstand = p;
@@ -413,7 +421,10 @@ void ReparentBooty(ALO* palo, ALO* paloNew)
         for (auto& p2 : palo->axf) fOwn = fOwn || p2.get() == pxf->pxfRef;
         if (!fOwn) pxf->pxfRef = pv;
     }
-    SetLoParentActivation(g_psw, palo, paloNew);
+    // (the runtime vt slot 10's physics move, the original slot 13 (as SetAloParent's base move): attached to the
+    // holder, the booty is part of the carrier's physics root, so its flight to the holder (state 2) does not push the
+    // carrier; the loader's path left it a root of its own that collided with the player, N42)
+    SetLoParentActivation(g_psw, palo, paloNew, true);
     UpdateAloHierarchyWorlds(palo);
     PlaceAloAt(palo, w);
     UpdateAloHierarchyWorlds(palo);
@@ -423,6 +434,7 @@ void StartFlight(BOOTY& b, const glm::vec3& posFrom, LO* ploTo)
 {
     b.fFlight = true;
     b.posFrom = posFrom;
+    b.posDraw = posFrom;
     b.ploTo = ploTo;
     b.tFlight = g_clock.t;
     const glm::vec3 to = PosLoWorld(ploTo);
@@ -485,10 +497,9 @@ void SetBootyState(LO* plo, int n)
             StartHudTimer(GStand18C(pstand) + 0.99f);  // 0x1618F8 (the stand's +0x18C + 0.99)
         }
         // 0x156C80(G, 1, its position, the stand, +0x198): a noise at the stand (the guards hear the theft)
-        if (ps && pstand && FIsLoDerivedFrom(pstand, 0x30))
+        if (ps && pstand && FIsLoDerivedFrom(pstand, S3CID(0x30)))
         {
-            if (ps->pnoise && FNoiseLive(ps->pnoise)) RemoveNoise(ps->pnoise);
-            ps->pnoise = PnoiseNew(PtmplNoiseFixed(1), PosAloCenter(static_cast<ALO*>(pstand)), pstand);
+            SetHeldNoise(&ps->pnoise, PtmplNoiseFixed(1), PosAloCenter(static_cast<ALO*>(pstand)), pstand);  // 0x156BE0
         }
         if (n == 2) BroadcastTaskEvent(g_psw, 0x2F, plo);  // 0x1619A0(0x2DEB30, 0x2F, p)
         if (ps) ps->pbooty = nullptr;
@@ -547,10 +558,7 @@ void SetBootyState(LO* plo, int n)
         LO* pstand = b.pstand;
         STAND* ps = Pstand(pstand);
         if (ps && ps->pnoise)  // 0x156C80(G, -1, ..., +0x198)
-        {
-            if (FNoiseLive(ps->pnoise)) RemoveNoise(ps->pnoise);
-            ps->pnoise = nullptr;
-        }
+            SetHeldNoise(&ps->pnoise, nullptr, glm::vec3(0.0f), nullptr);  // 0x156BE0
         if (pstand)
         {
             PlaceAloAt(palo, MatJtLo(pstand));             // 0x1A6BE8(p, the stand's vt slot 31)
@@ -670,9 +678,10 @@ void UpdateBootyFlight(LO* plo, BOOTY& b)
     }
     const float u = b.dtFlight > 0.0f ? tau / b.dtFlight : 1.0f;
     const glm::vec3 acc(0.0f, 0.0f, -3000.0f);  // the RIP's +0xA0
-    const glm::vec3 q = b.posFrom + (to - b.posFrom) * u + 0.5f * acc * tau * (tau - b.dtFlight);
-    SetAloPos(palo, q);
-    UpdateAloHierarchyWorlds(palo);
+    // (drawn there only: the booty stays where 0x13C560 put it (the holder / the stand). Moving the object itself
+    // swept its collision entries, part of the carrier's physics root once it is the holder's child, through the stand
+    // and the walls, and the contacts threw the carrier (R14: Sly thrown 500 units by the bugged painting))
+    b.posDraw = b.posFrom + (to - b.posFrom) * u + 0.5f * acc * tau * (tau - b.dtFlight);
 }
 
 // orig: 0x0013BF50 (vt slot 16; carried scale belongs to the draw's 0x13C000, below)
@@ -715,7 +724,7 @@ void OnBootyXpNew(ALO* palo, XP* pxp, int i)
     BOOTY* pb = Pbooty(palo);
     if (!pb || pb->state != 5 || !pxp) return;
     ALO* pother = pxp->axpd[1 - i].paloRoot;
-    if (!FIsLoDerivedFrom(pother, 0x34))
+    if (!FIsLoDerivedFrom(pother, S3CID(0x34)))
         PostDeferredCall(palo, 0x13C4E0, [](void* object, int) { ReturnThrownBooty(static_cast<LO*>(object)); });
 }
 
@@ -723,7 +732,7 @@ void OnBootyXpNew(ALO* palo, XP* pxp, int i)
 int OverlapKindBooty(ALO* pa, ALO* pb)
 {
     BOOTY* p = Pbooty(pa);
-    if (p && p->state == 5 && FIsLoDerivedFrom(pb, 0x34)) return 3;
+    if (p && p->state == 5 && FIsLoDerivedFrom(pb, S3CID(0x34))) return 3;
     using PFN = int (*)(ALO*, ALO*);
     PFN pfnBase = reinterpret_cast<PFN>(PvNativeFn(0x1F4FC8));
     return pfnBase ? pfnBase(pa, pb) : 0;
@@ -776,6 +785,13 @@ struct INITBOOTY
         RegisterObjectMethod(0x10E138, [](LO* plo, const std::vector<CRef>& a) {
             if (BOOTYREC* pr = PrecMut(plo); pr && pr->c < 3) pr->a[pr->c++] = NArg(a, 0);
             return CRef(TAGK_Void);
+        });
+        // orig: 0x001FFD98's BASIC field getter: EOPID 752 / option 735 reads ACTOR +0x11A8.
+        // The missile scripts use the carried booty itself as their moving target.
+        RegisterObjectGetter(752, [](LO* plo) {
+            CRef r;
+            r.SetBasic(PlootCarriedBy(PactorFromLo(plo)));
+            return r;
         });
         // EOPID 1158 (option 831): the current record id (0x13C478), or select by id (0x13C490).
         RegisterObjectGetter(1158, [](LO* plo) { return RefS32(IdBooty(plo)); });
@@ -866,8 +882,17 @@ struct INITBOOTY
 bool FBootyDrawDelta(const ALO* palo, glm::mat4* pdmat)
 {
     const auto it = s_mpbooty.find(palo);
-    if (it == s_mpbooty.end() || it->second.state != 4 || !palo->apxfRef[2]) return false;
+    if (it == s_mpbooty.end()) return false;
     const BOOTY& b = it->second;
+    // in flight (states 2 / 3): the model drawn at the flight's point (the RIP of kind 6, 0x1CFE88), the object stays
+    if (b.fFlight)
+    {
+        const XF* pobj = PxfObj(const_cast<ALO*>(palo));
+        if (!pobj) return false;
+        *pdmat = glm::translate(glm::mat4(1.0f), b.posDraw - glm::vec3(pobj->matWorld[3]));
+        return true;
+    }
+    if (b.state != 4 || !palo->apxfRef[2]) return false;
     const float dt = g_clock.t - b.t;
     glm::vec3 v = b.v170;
     if (dt < b.g180)
@@ -945,7 +970,7 @@ bool FUseBootyStand(LO* pstand, ACTOR* pa)
 {
     STAND* ps = Pstand(pstand);
     if (!ps) return false;
-    if (!pa || !FIsLoDerivedFrom(pa->palo, 0x34)) return true;  // 0x132B10(q, 0x34)
+    if (!pa || !FIsLoDerivedFrom(pa->palo, S3CID(0x34))) return true;  // 0x132B10(q, 0x34)
     LO* pqa = PlootCarriedBy(pa);
     LO* ppa = ps->pbooty;
     if (FPrint())
@@ -959,7 +984,7 @@ bool FUseBootyStand(LO* pstand, ACTOR* pa)
                     pqa && Prec(pqa) ? Prec(pqa)->n14 : -1, NStand188(pstand), prp ? prp->c : 0, prp ? prp->n18 : -1);
     if (ppa && g_psw->tasks.pjobCur && !(prp && prp->f10))  // SW +0x3B0C: during a job
     {
-        HudPrompt(0x124, 15.0f);  // 0x1DA4B8(0x3DA0C0, 0x124, 15)
+        HudPrompt(IdText(0x124), 15.0f);  // 0x1DA4B8(0x3DA0C0, 0x124, 15)
         PsndStartSound(0x36);     // 0x1FBB90(0x36) / 0x1FB2F8
         return true;
     }
@@ -1036,8 +1061,25 @@ void QueuePostLoadActorBooty(LO* plo)
 
 void ResetBooties()
 {
+    // Records are loaded again with the next world's booty template. SW may
+    // retain the same address, so Arec's address check is insufficient here.
+    s_recs.mp.clear();
+    s_recs.psw = nullptr;
     s_mpbooty.clear();
     s_mpstand.clear();
     s_mpcstand.clear();
     s_mpcarried.clear();
+}
+
+// orig: 0x0013BF30 (the booty's vt slot 27, a pooled holder detached: back to state 0 (0x13C560)); natively it was
+// never called (audit 2026-11 L1)
+void DetachBooty27(LO* plo, LO*) { SetBootyState(plo, 0); }
+NATIVEFN(0x13BF30, DetachBooty27);
+
+// orig: 0x1A6730 (CloneLo copies the object, its current record +0x158 included): natively the booty's state lives in
+// s_mpbooty, so a copy had no current record (its records are shared by oid)
+void CloneBootyData(const LO* source, LO* target)
+{
+    const auto it = s_mpbooty.find(source);
+    if (it != s_mpbooty.end()) s_mpbooty[target] = it->second;
 }

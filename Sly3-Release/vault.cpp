@@ -16,6 +16,8 @@
 // ASEGs per key (1607..1615), +0x208 the actor's pose at the dial (1606), +0x210..+0x220 the scripts of states 1..5
 // (1616..1620; +0x20C state 0: none); +0x204 the dial's record (tag 0x645, kind 1).
 
+#include "jt.h"
+#include "game/sly3.h"
 #include "interact.h"
 #include "actor.h"
 #include "asega.h"
@@ -185,21 +187,24 @@ void SetVaultSub(LO* plo, VAULT& v, int n)
     {
         // the dial's record moves (a spline, 0.25 s) to the key's pose, leaving along the actor's x axis
         SetActorPose(v.ploActor, v.ploPoseDial);
+        // (R34: the key poses 1596..1604 are LOXs (class 3), so the goal is the pose's position by its vt slot
+        // (0x1A62E8), any LO; natively it was taken only from an ALO, so the goal stayed where the dial was and Sly's
+        // hand did not travel to the key, then jumped to it at the sub-state 0)
         XF* pxf = v.pxfDial;
         ALO* paloActor = dynamic_cast<ALO*>(v.ploActor);
-        ALO* paloPose = v.ikey >= 0 ? dynamic_cast<ALO*>(v.aploPose[v.ikey]) : nullptr;
+        LO* ploPose = v.ikey >= 0 ? v.aploPose[v.ikey] : nullptr;
         if (!pxf) break;
         pxf->tTarget = g_clock.t + 0.25f;
-        const glm::mat3 matActor = paloActor ? glm::mat3(MatWorldOfAlo(paloActor)) : glm::mat3(1.0f);
+        const glm::mat3 matActor = paloActor ? glm::mat3(MatJtLo(paloActor)) : glm::mat3(1.0f);  // 0x1A6FC0(actor, 0, v)
         pxf->vel = glm::vec4(VecConvertXfs(nullptr, pxf->pxfRef, matActor * glm::vec3(0.0f)), 0.0f);  // 0x2C1080
-        if (paloPose) pxf->aseg[0] = glm::vec4(PosConvertXfs(nullptr, pxf->pxfRef, PosAloCenter(paloPose)), 1.0f);
+        if (ploPose) pxf->aseg[0] = glm::vec4(PosConvertXfs(nullptr, pxf->pxfRef, PosJtLo(ploPose)), 1.0f);  // 0x1A62E8
         pxf->aseg[1] = glm::vec4(VecConvertXfs(nullptr, pxf->pxfRef, matActor * glm::vec3(100.0f, 0.0f, 0.0f)), 0.0f);  // 0x2C1090
         if (ALO* palo = dynamic_cast<ALO*>(plo)) SetXfMode(palo, pxf, XFM_Spline);
         break;
     }
     case 2:
         SetActorPose(v.ploActor, v.ikey >= 0 ? v.aploPose[v.ikey] : nullptr);
-        if (v.ikey >= 0 && v.aploAseg[v.ikey] && FCidDerivedFrom(v.aploAseg[v.ikey]->Cid(), 0x6D))
+        if (v.ikey >= 0 && v.aploAseg[v.ikey] && FCidDerivedFrom(v.aploAseg[v.ikey]->Cid(), S3CID(0x6D)))
             ApplyAsegCur(static_cast<ASEG*>(v.aploAseg[v.ikey]), dynamic_cast<ALO*>(plo), 0.0f, 1.0f, 0, &v.pasega);
         break;
     default:
@@ -341,7 +346,7 @@ void InitVault(SW* psw, LO* plo)
     ALO* palo = dynamic_cast<ALO*>(plo);
     if (palo)
     {
-        BindLoPartsTable(palo, 0x18, 0x2C0EC8);  // 0x1A64E8
+        BindLoPartsTable(palo, 0x18, S3VA(0x2C0EC8));  // 0x1A64E8
         for (const auto& [ib, p] : palo->apart)
         {
             if (ib >= 0x1A8 && ib < 0x1CC) v.aploPose[(ib - 0x1A8) / 4] = p;

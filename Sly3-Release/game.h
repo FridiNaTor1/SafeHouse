@@ -15,7 +15,7 @@ struct SW;
 extern bool g_fDevCard;   // the development memory card as the fallback save (off when started by the launcher)
 struct GAMEOPTS
 {
-    std::string world = "2";        // a world record index (Paris hub: 2), "boot" or "frontend"
+    std::string world = "boot";     // a world record index (Sly 3: 0..39), "boot" (the default: the disc's boot) or "frontend"
     int task = -1;                  // a task (job) start: its oid (the reference's --warp W:TASK)
     int cframe = -1;                // stop after this many frames (-1: until the window closes)
     bool fHeadless = false;         // no window (the differential harness)

@@ -27,13 +27,17 @@ struct REACH
     float aw[2]{1.0f, 0.0f};        // +0x8 / +0x1C the blend's weights
     ASEG* apaseg[2]{};              // +0xC / +0x20 the clips
     std::vector<glm::vec3> aposEnd[2];   // +0x14 / +0x28 the end's paths (the actor's frame; uniform in u)
+    std::vector<glm::vec3> aposChain[2]; // +0x18 / +0x2C the chain-top record's paths (pxfChain's origin; the mode 2)
     ASEGBL* pbl = nullptr;          // +0x30
     LO* ploEnd = nullptr;           // +0x34 the end object
+    XF* pxfChain = nullptr;         // +0x38 the first rotation record (kind 6) up the end's chain
+    glm::mat4 matChain{1.0f};       // +0x40 the end's frame in pxfChain's (the records below it composed)
+    CTRL* pctrl80 = nullptr;        // +0x80 the mode 2's rotation controller on pxfChain (0x12DC18: prio 5, mode 7, state 3)
     LO* ploTarget = nullptr;        // +0x84 the target
     float sTarget = 0.0f;           // +0x88 its distance (a curve target)
     LO* plo8C = nullptr;            // +0x8C
-    int nMode = -1;                 // +0x90 0 a curve's nearest point, 1 an object, 2 an object's frame
-    float t94 = 0.0f;               // +0x94 the grab's timed move (0x12DE58 by 0x1CD308): its end time (+0x1C)
+    int nMode = -1;                 // +0x90 0 a curve's nearest point, 1 an object, 2 an object's frame (a grip, 0x1CCA40)
+    float t94 = 0.0f;               // +0x94's end time (+0x1C): the grab's move (0x1CCC88) or the placement's (0x1CD308)
     CTRL* pctrl94 = nullptr;         // +0x94 / +0x98 / +0x9C: grab flight and held local pose
     CTRL* pctrl98 = nullptr;
     CTRL* pctrl9C = nullptr;
@@ -52,3 +56,4 @@ void UpdateReach(REACH* preach);
 void StartReachGrab(REACH* preach, LO* plo);  // orig 0x1CCC88
 void AttachReachObject(REACH* preach, LO* plo);  // orig 0x1CD098
 void ReleaseReachObject(REACH* preach);  // orig 0x1CD2C0
+void PlaceReachObject(REACH* preach, LO* plo);  // orig 0x1CD308 (the held object put at plo)

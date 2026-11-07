@@ -79,6 +79,10 @@ public:
     bool FGroupBusy(int idPart) const;
     // orig: 0x00212E40 (every group having part id k: its last playing entry held at the fraction g of its part)
     void SetPartFraction(int idPart, float g);
+    void SetPartTime(int idPart, float t);  // orig 0x00212F80's player half (0x218038 / 0x218060)
+    // orig3: 0x002617F0 (the group having part id k: its last entry playing something, the time left of that entry's
+    // part: dt - t; 0 when none)
+    float DtPartLeft(int idPart) const;
     // orig: 0x00213B00 (the group having part id k plays it: its playing nested entry restarted on it, else selected
     // for its next start); fReset: 0x00213928 (restarted on its part 0, else nothing selected)
     void SelectPart(int idPart, bool fReset = false);
@@ -88,8 +92,6 @@ public:
     void ResetPartAt(int idPart, int match);
     // orig: 0x00213CD8: the group having part k is drawn through m (a 2x3)
     void SetPartMatrix(int idPart, const std::array<float, 6>& m);
-    // (Sly 3's RAM checks, sly3/hud3.cpp) entry ientry of group igroup started on part ipart and placed at time t
-    void SeedEntry(int igroup, int ientry, int ipart, float t);
     // the root plays something
     bool FActive() const { return !agroup.empty() && !agroup[0].aentry.empty() && agroup[0].aentry[0].ipart >= 0; }
 
@@ -116,13 +118,6 @@ private:
 // a script string id falls back to the localized string of the same id.
 extern std::string (*g_pfnScriptString)(int id);
 
-// (Sly 3) the localized string of an id when set (the world's UTF-16 text as the font's 8-bit codes), in place of
-// the SW's strings
-extern std::string (*g_pfnLocalizedString)(int id);
-// The script string ids drawn specially: the dialog subtitle (Sly 2 0x2EF; Sly 3 0x34C = 844, orig3 0x25F598) and the
-// ticker prompt (Sly 2 0x2F1; Sly 3: none known, -1)
-extern int g_idScreenSubtitle, g_idScreenTicker;
-
 // (QoL overlays, not the original: replay.cpp's Replay Jobs) a text element about to be drawn with its draw state; the
 // hook may draw more in the same style and returns true when the element itself is not to be drawn. Null: none.
 struct FONTBRX;
@@ -136,6 +131,7 @@ struct TEXTDRAW
     int halign = 0;
     glm::vec4 off{0.0f}, sc{1.0f}, offIcon{0.0f};
     float depth = 0;
+    const std::string* ptext = nullptr;   // the element's text (as drawn, before the word wrap)
 };
 extern bool (*g_pfnTextDrawHook)(const TEXTDRAW& td);
 

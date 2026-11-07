@@ -5,6 +5,7 @@
 // func_0020C080.c, func_00196928.c).
 
 #include "guard.h"
+#include "game/sly3.h"
 
 #include "actanim.h"
 #include "asega.h"
@@ -100,7 +101,7 @@ glm::vec3 PosRecord(ALO* palo)
 KIND2* Pk2Resolve(GUARD* pg, LO* po) { return Pk2ResolveAlo(pg->palo, po); }
 KIND2* Pk2ResolveAlo(ALO* palo, LO* po)
 {
-    if (!po || po->Cid() != 0x6D) return nullptr;
+    if (!po || po->Cid() != S3CID(0x6D)) return nullptr;
     ASEG* paseg = static_cast<ASEG*>(po);
     KIND2 k;
     k.n0 = po->oid;
@@ -180,9 +181,19 @@ void SetK2State(K2PLAY* pk, int st)
         break;
     case 1:
     {
-        // a guard (0x38): 0x20B210 (the move's object let go); TODO(ai): 0x20D178 (its kind's mover and the +0x498 helper)
-        if (FCidDerivedFrom(palo->Cid(), 0x38))
-            if (GUARD* pg = PguardFromLo(palo)) DetachGuardMove(pg);
+        // orig: 0x20B210 releases the attachment; 0x20D178 disables and
+        // resets the falling watcher while this authored flight is in progress.
+        if (FCidDerivedFrom(palo->Cid(), S3CID(0x38)))
+            if (GUARD* pg = PguardFromLo(palo))
+            {
+                DetachGuardMove(pg);
+                pg->watchA.fOn = 0;
+                if (pg->watchA.st != 0)
+                {
+                    pg->watchA.st = 0;
+                    pg->watchA.t = g_clock.t;
+                }
+            }
         const float rate = pk->pasega ? pk->pasega->svt : 1.0f;
         const glm::vec3 accel = glm::vec3(0.0f, 0.0f, pt->g28) * (rate * rate);
         const glm::vec3 delta = pk->posTarget - PosRecord(palo);
@@ -190,7 +201,7 @@ void SetK2State(K2PLAY* pk, int st)
         if (pk->fBallistic)
         {
             float gLow = 1250.0f, gSlope0 = 1.1f, gHigh = -1250.0f, gSlope1 = -1.1f;
-            if (pk->ploRelated && (FCidDerivedFrom(pk->ploRelated->Cid(), 0x13) || FCidDerivedFrom(pk->ploRelated->Cid(), 0xB)))
+            if (pk->ploRelated && (FCidDerivedFrom(pk->ploRelated->Cid(), S3CID(0x13)) || FCidDerivedFrom(pk->ploRelated->Cid(), S3CID(0xB))))
             {
                 gHigh = 0.0f;
                 gSlope1 = 50.0f;
@@ -236,21 +247,25 @@ void SetK2State(K2PLAY* pk, int st)
     case 3:
         if (pk->pasega) SetAsegaTime(pk->pasega, 0, pt->t24, 1.0f);
         // (the ballistic flight's controller holds the record at the target until state 4)
-        // TODO(ai): 0x20B2A8(the guard, the related object, the kind) = AttachGuardMove (guard.cpp, ported) is not
-        // called yet: without the attached mover 0x20D178 (kMove 0..3) a guard paired with its ladder hangs at the
-        // ladder's foot (UQ4); wire both together
+        // orig: 0x20B2A8, the landing on the related object: a rail (chair), a ladder / pipe (the climb job 0xB9 and
+        // slot 59's case 1, R50) or a bar (the hold job 0xBB and slot 59's case 2). 0x27 (slot 59 case 3) remains
+        // unported: not attached.
+        if (pk->ploRelated && (FCidDerivedFrom(pk->ploRelated->Cid(), S3CID(0xD)) || FCidDerivedFrom(pk->ploRelated->Cid(), S3CID(0xB)) ||
+                               FCidDerivedFrom(pk->ploRelated->Cid(), S3CID(0x13))))
+            if (GUARD* pg = PguardFromLo(palo)) AttachGuardMove(pg, pk->ploRelated, pk->kind);
         break;
     case 4:
         ReleaseK2Ballistic(pk);  // 0x20C760
         SetAloGravity(palo, pk->dvGravityPrev);
-        // TODO(ai): the ballistic constraint released (0x20C760), a guard's 0x20D1A0
+        // orig: 0x20D1A0, resume ordinary falling detection after the flight.
+        if (GUARD* pg = PguardFromLo(palo)) pg->watchA.fOn = 1;
         break;
     default: break;
     }
 }
 
 // orig: 0x0020C0E8: 1 lands (on a floor after 0.15 s: 3) or reaches its end (2); 2 lands, or its arrival is 5 s gone
-// (3), or at its arrival (ballistic: 3; TODO(ai): a guard's 0x20D1A0); 3 at the animation's end (4)
+// (3), or at its arrival (ballistic: 3; otherwise resume the falling watcher); 3 at the animation's end (4)
 void UpdateK2(K2PLAY* pk)
 {
     int st;
@@ -267,8 +282,11 @@ void UpdateK2(K2PLAY* pk)
         case 2:
             if (fFloor || g_clock.t - pk->tArrive > 5.0f)  // (D_002C3DE0)
                 SetK2State(pk, 3);
-            else if (pk->tArrive <= g_clock.t && pk->fBallistic)
-                SetK2State(pk, 3);
+            else if (pk->tArrive <= g_clock.t)
+            {
+                if (pk->fBallistic) SetK2State(pk, 3);
+                else if (GUARD* pg = PguardFromLo(pk->palo)) pg->watchA.fOn = 1;  // orig: 0x20D1A0
+            }
             break;
         case 3:
             if (!pk->pasega || FAsegaRetracted(pk->pasega)) SetK2State(pk, 4);  // 0x131968

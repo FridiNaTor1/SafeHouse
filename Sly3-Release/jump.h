@@ -22,6 +22,8 @@ struct ACTOR;
 void NotifyActorJumpKind(ACTOR* pa, int n);
 // the owner's vt slot 89 (Sly 0x18D620, Bentley 0x135D08, Murray 0x1B7F90: the jump kind of its state, -1 none)
 int ActorJumpKind(ACTOR* pa);
+// orig: 0x00197370
+void SelectDirectionalJumpAnimation(JUMP* pj);
 // orig: 0x00195FB8
 void SetJumpAnimState(JUMP* pj, int n, LO* plo);
 // orig: 0x00143D20 (the actor's base below the floor within dt: the floor probe 0x173610 under it)
@@ -47,9 +49,9 @@ void ChooseJumpTarget(JUMP* pj, LO* ploPrev);
 // (0x3E1420, cid 0x28) the jump fits best (0x19A4A0, under 1500) passing near them (0x11EE08): the jump's record
 // aimed at it, its state 6 (A) or 8 (B)
 void FindJumpHideTarget(JUMP* pj);
-// orig: 0x00197F98's path (states 6 / 8: the record's end where the object will be) and its speed test (states 6,
-// 8..16, 18: given up (state 4) above 10000)
-void UpdateJumpTargetPath(JUMP* pj);
+// orig: 0x00197F98's path (states 6 / 8..13 / 18: predicted object or description point), sampled facing,
+// and speed test (states 6, 8..16, 18: given up (state 4) above 10000).
+float UpdateJumpTargetPath(JUMP* pj);
 // orig: 0x0019C688 (the flight to the target is over: the target's action / the owner's state)
 void ArriveJumpTarget(JUMP* pj);
 

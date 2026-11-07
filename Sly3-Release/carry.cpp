@@ -1,5 +1,8 @@
 // carry.cpp: the carryable objects (cid 0x64 and its 0x65 / 0x66; carry.h). Ported from the decomp's src/hand
 // 0x224EC8 (vt slot 76), 0x224258 / 0x224590 / 0x224610 / 0x224638 / 0x224688 and the reference's m_224258.
+#include "jt.h"
+#include "game/sly3.h"
+#include "worldglobals.h"
 #include "carry.h"
 
 #include "ainoise.h"
@@ -68,6 +71,7 @@ struct CARRYRT : CARRY
 {
     SMA* psma = nullptr;       // +0x168 (0x224028: the SM +0x164's handle)
     bool fSma = false;
+    bool fKindLoaded = false;  // +0x15C taken from the loaded field (Pcarry)
     CTRL* pctrlPos = nullptr;  // +0x180 / +0x17C: the records held while carried (0x12DC18)
     CTRL* pctrlRot = nullptr;
     glm::vec3 dirLand{0.0f};   // +0x190 the landing contact's normal, away from what it touched (0x224380)
@@ -77,11 +81,25 @@ struct CARRYRT : CARRY
     LO* ploActor = nullptr;    // +0x1B4 the guard pulled in (0x225660)
 };
 std::unordered_map<const LO*, CARRYRT> s_mpcarry;
+WORLD_TABLE(s_mpcarry);   // (PC: moved aside while a kept world loads, worldglobals.h)
 
 CARRYRT* Pcarry(LO* plo)
 {
-    if (!plo || !FIsLoDerivedFrom(plo, 0x64)) return nullptr;
-    return &s_mpcarry[plo];
+    if (!plo || !FIsLoDerivedFrom(plo, S3CID(0x64))) return nullptr;
+    CARRYRT& c = s_mpcarry[plo];
+    // +0x15C (EOPID 1104, field 0x15C) is loaded with the object: a world-placed carryable (e.g. Ep7 Old Grizzle
+    // Face's grenade 33839, kind 5) carries its kind from the data; the gadgets' own objects set it when taken
+    // (gang.cpp). Without it 0x224638 (EOPID 1106) reads false and the grenade's SM 532 skips its flight (N31).
+    if (!c.fKindLoaded)
+    {
+        const uint32_t u = plo->U32Field(0, 0x15C, 0xFFFFFFFFu);
+        if (u != 0xFFFFFFFFu)
+        {
+            if (c.kind == 0) c.kind = static_cast<int>(u);
+            c.fKindLoaded = true;
+        }
+    }
+    return &c;
 }
 
 // The object's world placement kept while it leaves its carrier's record (the proxy's channel)
@@ -240,7 +258,7 @@ LO* PloExtractorSource(LO* plo, CARRYRT* pc)
         {
             if (i && a[i]->oid == oid) q = a[i];
             for (LO* r : a[i]->aploOwned) a.push_back(r);
-            if (FCidDerivedFrom(a[i]->Cid(), 0x30))
+            if (FCidDerivedFrom(a[i]->Cid(), S3CID(0x30)))
                 for (LO* r : static_cast<ALO*>(a[i])->aploChild) a.push_back(r);
             if (a.size() > 4096) break;
         }
@@ -334,7 +352,7 @@ void UpdateExtractor(LO* plo)
             if (!pg->move.fHeadingLocked)  // 0x209840: the basis rows into the guard's heading
             {
                 // 0x1A6318 (vt slot 32: the world matrix; a LOX's record x its own)
-                const glm::mat4 m = FCidDerivedFrom(psrc->Cid(), 0x30) ? MatWorldOfAlo(static_cast<ALO*>(psrc)) : MatWorldLox(psrc);
+                const glm::mat4 m = MatJtLo(psrc);
                 SetStepPhysHeading(pg->palo, std::atan2(m[0][1], m[0][0]));
             }
             JOBB0* pb = static_cast<JOBB0*>(pj);
@@ -389,7 +407,7 @@ void LandCarry(LO* plo, LO* q)
     if (!pc) return;
     if (pc->kind == 0x1A || pc->kind == 0x29) { SetCarryState(plo, 3); return; }
     SetAloParent(static_cast<ALO*>(plo),
-                 (q && q->oid != 1 && FCidDerivedFrom(q->Cid(), 0x30)) ? static_cast<ALO*>(q) : nullptr,
+                 (q && q->oid != 1 && FCidDerivedFrom(q->Cid(), S3CID(0x30))) ? static_cast<ALO*>(q) : nullptr,
                  nullptr, 3);  // 0x1A58D0(p, q, 3): preserve world position and rotation.
     SetCarryState(plo, 2);
 }
@@ -610,7 +628,7 @@ struct INITCARRY
         g_pfnHealthExtractorHook = ApplyExtractorHook;
         // EOPID 53 (any ALO; thunk 0x100FE0): 0x1F7918, the contact bytes of the filter bits a set to b
         RegisterObjectMethod(0x100FE0, [](LO* plo, const std::vector<CRef>& a) {
-            if (FCidDerivedFrom(plo->Cid(), 0x30))
+            if (FCidDerivedFrom(plo->Cid(), S3CID(0x30)))
                 SetAloXpBytes(static_cast<ALO*>(plo), static_cast<uint32_t>(NArg(a, 0)), static_cast<uint8_t>(NArg(a, 1)));
             return CRef(TAGK_Void);
         });
@@ -641,7 +659,7 @@ struct INITCARRY
                 // landed on an object (LandCarry: parented, sharing its attachment) its own attachment again before the
                 // blast, so the blast's 'not its own' test (0x20FA10) keeps that object (U61; the reference's bomb
                 // +0xEC leaves box 2's attachment at the blast)
-                if (FCidDerivedFrom(plo->Cid(), 0x30)) SetAloParent(static_cast<ALO*>(plo), nullptr, nullptr, 1);
+                if (FCidDerivedFrom(plo->Cid(), S3CID(0x30))) SetAloParent(static_cast<ALO*>(plo), nullptr, nullptr, 1);
                 else SetLoParentActivation(g_psw, plo, nullptr);
                 BlastCarry(plo, GArg(a, 0));
             }

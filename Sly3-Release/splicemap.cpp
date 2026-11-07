@@ -1,3 +1,4 @@
+#include "brx.h"
 #include <cstring>
 #include <cstdlib>
 #include <cstdio>
@@ -127,6 +128,14 @@ void LoadSwSpliceFromBrx(SW* psw, int a, CBinaryInputStream* pbis)
     pswsplice->psplctCur = psplct.get();
     pswsplice->apsplct.push_back(std::move(psplct));
     // (0x128148: the GC's heap heads saved; nothing natively)
+}
+
+// orig3 0x2499F0's reads without the evaluation (--dump-world's walk): the modules parsed, their cells counted
+void WalkSpliceFromBrx(SW* psw, int a, CBinaryInputStream* pbis)
+{
+    (void)psw;
+    std::unique_ptr<SPLCT> psplct = PsplctLoadFromBrx(a, pbis);
+    if (psplct) g_walk.cmodule += int(psplct->asplc.size());
 }
 
 // orig: 0x001FFA40

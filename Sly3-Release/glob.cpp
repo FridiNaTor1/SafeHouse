@@ -5,9 +5,10 @@
 // m_16E1A8.cpp.
 
 #include "glob.h"
+#include "worldglobals.h"
 
 #include "loadtrace.h"
-#include "sly3/condset3.h"
+#include "game/cond3.h"
 
 #include <algorithm>
 #include <cmath>
@@ -18,6 +19,7 @@
 #include <stdexcept>
 
 GLOBSTATS g_globstats;
+WORLD_VALUE(g_globstats);   // (PC: kept across a kept world's load, worldglobals.h)
 
 namespace
 {
@@ -490,6 +492,17 @@ void LoadGlobSpheresFromBrx(GLOBSET* pglobset, const std::vector<int>& mpiglob, 
             else if (sphere.kind == 1) sphere.iset = pbis->S16Read();
         }
     }
+    for (const auto& set : pglobset->asphereset)
+        for (const GLOBSPHERE& sphere : set)
+        {
+            if (sphere.kind == -1) break;
+            if (sphere.kind != 0 || sphere.iglob < 0 || size_t(sphere.iglob) >= pglobset->aglob.size()) continue;
+            GLOB& glob = pglobset->aglob[size_t(sphere.iglob)];
+            if (glob.fSphere) continue;
+            glob.fSphere = true;
+            glob.posSphere = sphere.pos;
+            glob.sRadiusSphere = sphere.sRadius;
+        }
 }
 
 // orig3: 0x18FD10 (new in Sly 3: the mesh dispatcher; F32 uFog and S8 rtck (Sly 2 read them in LoadGlob's header),

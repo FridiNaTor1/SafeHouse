@@ -1,13 +1,15 @@
-// Sly3-Release: Sly 3: Honor Among Thieves as a native PC port, forked from Sly2-Release.
-// Working on Sly 3's disc: --list-keys, --list-files, --dump-world, the movie commands and the boot (the two logo
-// movies; sly3/main3.cpp). Every other command is Sly 2's copied code and is refused until it is ported
-// (FSly3Unported below).
+// Sly2-Release: Sly 2: Band of Thieves as a native PC port (see PLAN.md).
+// Development commands for now; the game loop comes with milestone M2/M3.
 
+#include "rumble.h"
 #include "bis.h"
 #include "display.h"
 #include "brx.h"
 #include "cls.h"
 #include "disc.h"
+#include "convert.h"
+#include "texmod.h"
+#include "region.h"
 #include "readtrace.h"
 #include "sw.h"
 #include "game.h"
@@ -18,16 +20,8 @@
 #include "sound.h"
 #include "splicecheck.h"
 #include "animtest.h"
-#include "sly3/main3.h"
-#include "sly3/game3.h"
-#include "sly3/scene3.h"
-#include "sly3/screen3.h"
-#include "sly3/hud3.h"
-#include "sly3/splice3.h"
-#include "sly3/text3.h"
-#include "sly3/scpt3.h"
-#include "sly3/scptrun3.h"
-#include "sly3/card3.h"
+#include "game/sly3.h"
+#include "game/cond3.h"
 #include "../platform/platform.h"
 
 #include <chrono>
@@ -46,33 +40,31 @@ int CmCheck(const std::string& pathTrace, const std::string& pathRam, const std:
 
 namespace
 {
+// The game's data (disc.h): --disc PATH (a disc image, or a folder holding disc.iso), else the data directory (the
+// launcher's --data-dir: installations/sly3, which holds disc.iso and the system files; platform/install.h).
 std::string DiscPath(const std::string& explicitDisc)
 {
-    if (!explicitDisc.empty()) return explicitDisc;
-    return cane::utf8(cane::dataDirectory() / "disc.iso");
+    const std::filesystem::path dir = explicitDisc.empty() ? cane::dataDirectory() : cane::path(explicitDisc);
+    if (std::filesystem::is_directory(dir) && std::filesystem::is_regular_file(dir / "disc.iso")) return cane::utf8(dir / "disc.iso");
+    return explicitDisc.empty() ? cane::utf8(dir) : explicitDisc;
+}
+
+int ListKeys()
+{
+    // the worlds (orig3: names 0x2EDE48, episodes 0x2EDF10, keys 0x2EDFD8) and the executable's other keys (movies)
+    for (int i = 0; i < sly3::CWORLD; ++i)
+    {
+        const FK fk = g_disc.FkWorld(i);
+        std::printf("world %2d %-16s %-11s sector 0x%06X cb 0x%08X id %u%s\n", i, g_disc.SzWorldElf(i).c_str(),
+                    sly3::SzEpisode(g_disc.IepisodeOfWorld(i)), fk.isector, fk.cb, fk.id, fk.cb ? "" : " (no file)");
+    }
+    for (const auto& [va, fk] : g_disc.ElfKeys())
+        if (va >= sly3::VA_MOVIE_KEYS)
+            std::printf("movie 0x%06X id %5u sector 0x%06X cb 0x%08X\n", va, fk.id, fk.isector, fk.cb);
+    return 0;
 }
 
 std::string g_ramPath;
-DUMPWORLD3OPTS g_dumpWorld3;
-std::string g_ram3;   // --ram3 (--view-world3)
-bool g_fRam3Pools = false;   // --ram3-pools (--view-world3)
-bool g_fRam3Pose = false;    // --ram3-pose (--view-world3)
-int g_nRam3Hud = 0;          // --ram3-hud slots|native (--view-world3)
-bool s_fSkipLogos3 = false;  // --skip-logos (the game: no logo movies)
-int s_iworld3 = -1;          // --world3 W (the game: the world the boot queues; default 35)
-
-// The commands of Sly 2's copied code that read Sly 2's formats or addresses: refused until ported to Sly 3
-// (TODO(sly3): each moves out of this list as its part is ported).
-bool FSly3Unported(const char* command)
-{
-    static const char* const s_asz[] = {"vt-dump", "phys-check", "actor-check", "crv-check", "cm-check", "view-world",
-                                        "anim-test", "anim-pose", "ai-free", "anim-run", "anim-ref", "parse-splice",
-                                        "eval-splice",
-                                        "test-load"};
-    for (const char* sz : s_asz)
-        if (!std::strcmp(sz, command)) return true;
-    return false;
-}
 
 int TestLoad(const std::string& worldPath, const std::string& mapPath, bool fVerbose)
 {
@@ -161,26 +153,82 @@ int TestLoad(const std::string& worldPath, const std::string& mapPath, bool fVer
     return 0;
 }
 
-int DumpWorld(const FK& fk, const std::string& out)
+// --dump-world W|all: the world loader (orig3 0x14F440) in its walk mode (brx.h WALK): every block read as the original
+// reads it, the objects' bodies skipped by their sizes; each group must end exactly at the size its record carries.
+int DumpWorldOne(int iworld, FILE* pf, bool fObjects, bool fGroups, const std::string& out)
 {
+    FK fk = g_disc.FkWorld(iworld);
+    if (!fk.cb) return 0;
     std::vector<uint8_t> ab = g_disc.ReadWorld(fk);
-    std::printf("world id %u: %zu bytes decompressed\n", fk.id, ab.size());
     if (!out.empty())
-    {
         std::ofstream(cane::path(out), std::ios::binary).write(reinterpret_cast<const char*>(ab.data()), std::streamsize(ab.size()));
-        std::printf("written to %s\n", out.c_str());
-    }
+    const std::size_t cbFile = ab.size();
+    auto psw = std::make_unique<SW>();
+    psw->filter = iworld;
+    g_walk = WALK{};
+    g_walk.fOn = true;
     CBinaryInputStream bis;
     bis.OpenBuffer(std::move(ab));
-    const int cgroup = bis.S16Read();
-    for (int i = 0; i < cgroup; ++i)
+    std::string error;
+    try { LoadSwFromBrx(psw.get(), &bis); }
+    catch (const std::exception& e) { error = e.what(); }
+    g_walk.fOn = false;
+    int cskipped = 0;
+    for (const WE& we : psw->awe) cskipped += we.cinst == 0;
+    int cunnamed = 0;
+    for (auto [cid, c] : g_walk.mpcidc) cunnamed += !sly3::SzClassName(cid);
+    std::fprintf(pf, "world %2d %-14s %9zu bytes: %s at %zu (%zu after); %zu groups (%d without instances), %zu objects of %zu "
+                     "classes (%d unnamed), %d splice modules, %zu texts, option set %d of %zu (condition %d)\n",
+                 iworld, g_disc.SzWorldElf(iworld).c_str(), cbFile, error.empty() ? "ok" : "FAILED", bis.m_ib, cbFile - bis.m_ib,
+                 psw->awe.size(), cskipped, g_walk.aobj.size(), g_walk.mpcidc.size(), cunnamed, g_walk.cmodule,
+                 psw->atext.size(), psw->ioptsetChosen, psw->aidOptset.size(), g_condset3.cond);
+    if (!error.empty()) std::fprintf(pf, "  error: %s\n", error.c_str());
+    if (fGroups)
+        for (std::size_t i = 0; i < psw->awe.size(); ++i)
+        {
+            const WE& we = psw->awe[i];
+            std::fprintf(pf, "  group %3zu %-40s shared %d x60 %d x10 %d x14 %d instances %d cb %u objects %d\n", i,
+                         we.StrName().c_str(), we.x5C, we.x60, we.x10, we.x14, we.cinst, we.cb, we.cloLoaded);
+        }
+    if (fGroups || fObjects)
     {
-        char name[64];
-        bis.ReadBytes(name, sizeof(name));
-        const int32_t a = bis.S32Read(), b = bis.S32Read(), c = bis.S32Read(), d = bis.S32Read(), cinst = bis.S32Read();
-        std::printf("group %3d %-40.64s %d %d %d %d instances %d\n", i, name, a, b, c, d, cinst);
+        std::fprintf(pf, "  classes (top-level objects; Sly 3 cid, count, name):\n");
+        for (auto [cid, c] : g_walk.mpcidc)
+            std::fprintf(pf, "    0x%02X %5d %s\n", cid, c, g_acls[cid].name);
     }
-    return 0;
+    if (fObjects)
+        for (const WALKOBJ& o : g_walk.aobj)
+        {
+            std::fprintf(pf, "  obj at %9zu group %3d mode %d %-16s oid %7d module %4d cb %8d", o.ib, o.igrp, o.mode,
+                         StrClassName(o.cid).c_str(), int(o.oid), o.n, o.cb);
+            if (!o.afilter.empty() || !o.acond.empty())
+            {
+                std::fprintf(pf, " filters");
+                for (int16_t f : o.afilter) std::fprintf(pf, " %d", f);
+                std::fprintf(pf, " conditions");
+                for (int32_t c : o.acond) std::fprintf(pf, " %d", c);
+            }
+            std::fprintf(pf, "\n");
+        }
+    return error.empty() ? 0 : 1;
+}
+
+int DumpWorld(const std::string& w, const std::string& out, bool fObjects, bool fGroups)
+{
+    InitClasses();
+    int cfail = 0, cworld = 0;
+    if (w == "all")
+    {
+        for (int i = 0; i < sly3::CWORLD; ++i)
+            if (g_disc.FkWorld(i).cb) { ++cworld; cfail += DumpWorldOne(i, stdout, fObjects, fGroups, ""); }
+        std::printf("%d worlds, %d failed\n", cworld, cfail);
+        return cfail ? 1 : 0;
+    }
+    FK fk;
+    int iworld = -1;
+    std::string error;
+    if (!FResolveWorld(w, fk, iworld, error)) { std::fprintf(stderr, "%s\n", error.c_str()); return 2; }
+    return DumpWorldOne(iworld, stdout, fObjects, fGroups, out);
 }
 
 // Per ALO: oid and each transform record's world translation (to compare with the reference's records +0x70)
@@ -249,7 +297,9 @@ void DumpObjects(const SW* psw, FILE* pf)
 
 int PhysCheckMain(const std::vector<std::string>& args);  // physcheck.cpp
 
-#if defined(__linux__)
+#include "pcguard.h"
+
+#if defined(__linux__) || defined(__APPLE__)
 #include <csignal>
 #include <execinfo.h>
 #include <unistd.h>
@@ -271,34 +321,44 @@ void OnCrashSignal(int sig)
 
 int main(int argc, char** argv)
 {
-#if defined(__linux__)
+#if defined(__linux__) || defined(__APPLE__)
     std::signal(SIGSEGV, OnCrashSignal);
     std::signal(SIGABRT, OnCrashSignal);
 #endif
+    // the mods' audio tools (audiomod.cpp: --make-music, --make-vpk, --make-vag, --export-wav): no game data needed
+    {
+        int AudioToolMain(int, char**);
+        if (const int rc = AudioToolMain(argc, argv); rc >= 0) return rc;
+    }
     std::string dumpXf;
     GAMEOPTS go;
     bool fGame = false;
+    bool fExportTextures = false;   // (--export-textures: without --convert, the export command)
     bool fWorldGiven = false;   // (no --world with the launcher's --data-dir: the game as released, from the boot)
     std::string disc, out, trace, dumpObjects, dirMaps = "build/loadmaps";
     bool fVerbose = false;
     int idSong = -1, istem = 1;
     double tSeconds = -1.0;  // (unset: 30 s for the sound commands, the whole movie)
+    std::string modsDir, texturePack;
+    bool fModsGiven = false;
     const char* command = nullptr;
     const char* arg = nullptr;
     int filter = -2;
     bool fDumpObjects = false;
+    bool fDumpGroups = false;
     const char* arg2 = nullptr;
-    const char* arg3 = nullptr;
     int animRefB = 0;
     VIEWOPTS vo;
     std::string cmRanges = "2DDED0+6A0,2DFBC0+2240,FB1580+1100,FB37E0+80,140C9F0+600,1486000+3400";
     bool fCmFree = false;
-    struct { bool fAspect = false; DISPASPECT aspect = DISPASPECT_Fit; int internalHeight = -1, frameRate = -1, vsync = -1, window = -1, wideBackgrounds = -1, hqLogo = -1; float drawDistance = -1; } dispo;
+    struct { bool fAspect = false; DISPASPECT aspect = DISPASPECT_Fit; int internalHeight = -1, frameRate = -1, vsync = -1, window = -1, wideBackgrounds = -1, hqLogo = -1, longShadows = -1; float drawDistance = -1; } dispo;
     std::vector<std::string> rest, physArgs;
     for (int i = 1; i < argc; ++i)
     {
         if (!std::strcmp(argv[i], "--disc") && i + 1 < argc) disc = argv[++i];
-        // the launcher's runtime contract: --data-dir <installations/sly3> --user-dir <profile>/sly3
+        else if (!std::strcmp(argv[i], "--mods") && i + 1 < argc) { modsDir = argv[++i]; fModsGiven = true; }
+        else if (!std::strcmp(argv[i], "--texture-pack") && i + 1 < argc) texturePack = argv[++i];
+        // the launcher's runtime contract: --data-dir <installations/sly2> --user-dir <profile>/sly2
         else if (!std::strcmp(argv[i], "--data-dir") && i + 1 < argc) cane::dataOverride = std::filesystem::absolute(cane::path(argv[++i]));
         else if (!std::strcmp(argv[i], "--user-dir") && i + 1 < argc) cane::userOverride = std::filesystem::absolute(cane::path(argv[++i]));
         // display options for this run (over system_settings.dat; display.h)
@@ -313,44 +373,20 @@ int main(int argc, char** argv)
         else if (!std::strcmp(argv[i], "--vsync") && i + 1 < argc) dispo.vsync = std::atoi(argv[++i]);
         else if (!std::strcmp(argv[i], "--wide-backgrounds") && i + 1 < argc) dispo.wideBackgrounds = std::atoi(argv[++i]);   // (the launcher's option)
         else if (!std::strcmp(argv[i], "--hq-logo") && i + 1 < argc) dispo.hqLogo = std::atoi(argv[++i]);   // (QoL: the launcher's logo in the front end)
+        else if (!std::strcmp(argv[i], "--long-shadows") && i + 1 < argc) dispo.longShadows = std::atoi(argv[++i]);   // (QoL: display.h fLongShadows)
         else if (!std::strcmp(argv[i], "--window-mode") && i + 1 < argc) dispo.window = std::atoi(argv[++i]);
         else if (!std::strcmp(argv[i], "--out") && i + 1 < argc) out = argv[++i];
-        else if (!std::strcmp(argv[i], "--list-keys")) command = "list-keys";
-        else if (!std::strcmp(argv[i], "--list-files")) command = "list-files";
-        else if (!std::strcmp(argv[i], "--groups")) g_dumpWorld3.fGroups = true;    // (--dump-world)
-        else if (!std::strcmp(argv[i], "--objects")) g_dumpWorld3.fObjects = true;  // (--dump-world)
-        else if (!std::strcmp(argv[i], "--census")) g_dumpWorld3.fCensus = true;
-        else if (!std::strcmp(argv[i], "--aseg-check3") && i + 1 < argc) g_dumpWorld3.asegCheck = argv[++i];  // (--load-world: sly3/anim3.h)
-        else if (!std::strcmp(argv[i], "--fields") && i + 1 < argc) g_dumpWorld3.fields = argv[++i];   // (--load-world: one line per object)
-        else if (!std::strcmp(argv[i], "--arrival") && i + 1 < argc)               // (--load-world: GAME +0x1498:+0x14A0)
-            std::sscanf(argv[++i], "%d:%d", &g_dumpWorld3.keyA, &g_dumpWorld3.keyB);
+        else if (!std::strcmp(argv[i], "--list-keys") || !std::strcmp(argv[i], "--list-files")) command = "list-keys";
         else if (!std::strcmp(argv[i], "--vt-dump") && i + 1 < argc) { command = "vt-dump"; arg = argv[++i]; }  // (vtaudit.cpp)
         else if (!std::strcmp(argv[i], "--maps") && i + 1 < argc) dirMaps = argv[++i];
         else if (!std::strcmp(argv[i], "-v")) fVerbose = true;
         else if (!std::strcmp(argv[i], "--blends") || !std::strcmp(argv[i], "--ai") || !std::strcmp(argv[i], "--ai-carry")) {}  // (anim-ref)
         else if (!std::strcmp(argv[i], "--splice-selftest")) command = "splice-selftest";
+        else if (!std::strcmp(argv[i], "--rumble-selftest")) command = "rumble-selftest";
         else if (!std::strcmp(argv[i], "--parse-splice") && i + 1 < argc) { command = "parse-splice"; arg = argv[++i]; }
         else if (!std::strcmp(argv[i], "--eval-splice") && i + 1 < argc) { command = "eval-splice"; arg = argv[++i]; }
         else if (!std::strcmp(argv[i], "--dump-world") && i + 1 < argc) { command = "dump-world"; arg = argv[++i]; }
-        else if (!std::strcmp(argv[i], "--skip-logos")) s_fSkipLogos3 = true;                      // (sly3/game3.cpp)
-        else if (!std::strcmp(argv[i], "--world3") && i + 1 < argc) s_iworld3 = std::atoi(argv[++i]);  // (the boot's world)
-        else if (!std::strcmp(argv[i], "--view-world3") && i + 1 < argc) { command = "view-world3"; arg = argv[++i]; }  // (sly3/view3.cpp)
-        else if (!std::strcmp(argv[i], "--ram3") && i + 1 < argc) g_ram3 = argv[++i];  // (--view-world3)
-        else if (!std::strcmp(argv[i], "--ram3-pools")) g_fRam3Pools = true;  // (--view-world3)
-        else if (!std::strcmp(argv[i], "--ram3-pose")) g_fRam3Pose = true;  // (--view-world3)
-        else if (!std::strcmp(argv[i], "--ram3-hud") && i + 1 < argc) { ++i; g_nRam3Hud = !std::strcmp(argv[i], "native") ? 2 : 1; }  // (--view-world3)
-        else if (!std::strcmp(argv[i], "--hud-dump3") && i + 1 < argc) { command = "hud-dump3"; arg = argv[++i]; }
-        else if (!std::strcmp(argv[i], "--splice-world") && i + 1 < argc) { command = "splice-world"; arg = argv[++i]; }
-        else if (!std::strcmp(argv[i], "--scpt-world") && i + 1 < argc) { command = "scpt-world"; arg = argv[++i]; }
-        else if (!std::strcmp(argv[i], "--screen-world3") && i + 1 < argc) { command = "screen-world3"; arg = argv[++i]; }
-        else if (!std::strcmp(argv[i], "--text-test3") && i + 3 < argc) { command = "text-test3"; arg = argv[++i]; arg2 = argv[++i]; arg3 = argv[++i]; }
-        else if (!std::strcmp(argv[i], "--scpt-run") && i + 2 < argc) { command = "scpt-run"; arg = argv[++i]; arg2 = argv[++i]; }
-        else if (!std::strcmp(argv[i], "--scpt-dump") && i + 1 < argc) { command = "scpt-dump"; arg = argv[++i]; }
-        else if (!std::strcmp(argv[i], "--card-test3")) { command = "card-test3"; if (!arg) arg = ""; }
-        else if (!std::strcmp(argv[i], "--card-press") && i + 1 < argc) arg = argv[++i];  // (--card-test3: SQUARE@F,...)
-        else if (!std::strcmp(argv[i], "--oid") && i + 1 < argc) arg2 = argv[++i];  // (--scpt-dump)
-        else if (!std::strcmp(argv[i], "--list-text") && i + 1 < argc) { command = "list-text"; arg = argv[++i]; }
-        else if (!std::strcmp(argv[i], "--grep") && i + 1 < argc) arg2 = argv[++i];  // (--list-text)
+        else if (!std::strcmp(argv[i], "--groups")) fDumpGroups = true;
         else if (!std::strcmp(argv[i], "--load-world") && i + 1 < argc) { command = "load-world"; arg = argv[++i]; }
         else if (!std::strcmp(argv[i], "--load-trace") && i + 1 < argc) trace = argv[++i];
         else if (!std::strcmp(argv[i], "--dump-xf") && i + 1 < argc) dumpXf = argv[++i];
@@ -428,6 +464,16 @@ int main(int argc, char** argv)
         else if (!std::strcmp(argv[i], "--play-dialog") && i + 1 < argc) { command = "play-dialog"; arg = argv[++i]; }
         else if (!std::strcmp(argv[i], "--play-movie") && i + 1 < argc) { command = "play-movie"; arg = argv[++i]; }
         else if (!std::strcmp(argv[i], "--list-movies")) command = "list-movies";
+        else if (!std::strcmp(argv[i], "--convert") && i + 1 < argc) { command = "convert"; arg = argv[++i]; }
+        else if (!std::strcmp(argv[i], "--convert-list")) command = "convert-list";
+        else if (!std::strcmp(argv[i], "--ps2-formats")) g_fConvertPs2 = true;
+        else if (!std::strcmp(argv[i], "--flac")) g_nConvertFlac = 1;
+        else if (!std::strcmp(argv[i], "--no-flac")) g_nConvertFlac = 0;
+        else if (!std::strcmp(argv[i], "--export-textures")) { g_fConvertTextures = true; fExportTextures = true; }
+        else if (!std::strcmp(argv[i], "--no-export-textures")) g_fConvertTextures = false;
+        else if (!std::strcmp(argv[i], "--dump-text") && i + 1 < argc) { command = "dump-text"; arg = argv[++i]; }
+        else if (!std::strcmp(argv[i], "--dump-textures") && i + 2 < argc) { command = "dump-textures"; arg = argv[++i]; arg2 = argv[++i]; }
+        else if (!std::strcmp(argv[i], "--ps3-hd-textures") && i + 2 < argc) { command = "ps3-hd-textures"; arg = argv[++i]; arg2 = argv[++i]; }
         else if (!std::strcmp(argv[i], "--phys-check"))  // physcheck.cpp: FUNC PREFIX [COUNT] (the rest of the line)
         {
             command = "phys-check";
@@ -441,23 +487,47 @@ int main(int argc, char** argv)
     }
     if (filter != -2) g_nFilterCur = filter;  // (--test-load)
     cane::configureRuntime(rest);
-    if (command && FSly3Unported(command))
-    {
-        std::fprintf(stderr, "Sly3-Release: --%s is Sly 2's and is not ported to Sly 3 yet\n", command);
-        return 2;
-    }
-    if (!command && (fWorldGiven || !go.slyStart.empty() || !go.gangStart.empty()))
-    {
-        std::fprintf(stderr, "Sly3-Release: the game loop (--world, --sly-start, ...) is not ported to Sly 3 yet\n");
-        return 2;
-    }
     if (command && !std::strcmp(command, "test-load")) return TestLoad(arg, arg2, fVerbose);
     if (command && !std::strcmp(command, "splice-selftest")) return SpliceSelfTestCommand();
+    if (command && !std::strcmp(command, "rumble-selftest")) return RumbleSelfTestCommand();
     std::string error;
+    // the mods folder: --mods DIR, SLY2_MODS, else <user dir>/Mods; empty: none
+    if (!fModsGiven)
+    {
+        if (const char* sz = std::getenv("SLY2_MODS")) modsDir = sz;
+        else modsDir = cane::utf8(cane::userDirectory() / "Mods");
+    }
+    g_disc.SetModsDirectory(modsDir);
+    SetTexturePackDirectory(texturePack);
     if (!g_disc.FOpen(DiscPath(disc), error)) { std::fprintf(stderr, "%s\n", error.c_str()); return 1; }
+    InitLanguage();   // (region.h: the disc's languages, the PC's language)
+    if (std::getenv("SLY2_PS3WORLD")) g_fPs3World = true;  // (exploration: a PS3 world through --load-world)
 
-    if (command && !std::strcmp(command, "list-keys")) return ListKeys3();
-    if (command && !std::strcmp(command, "list-files")) return ListFiles3();
+    if (command && !std::strcmp(command, "list-keys")) return ListKeys();
+    if (command && !std::strcmp(command, "convert")) return ConvertCommand(arg);
+    // --export-textures without --convert: into the installation (or --out DIR); texmod.h
+    if (!command && fExportTextures)
+    {
+        std::string dir = out;
+        if (dir.empty())
+        {
+            const std::filesystem::path data = cane::path(DiscPath(disc));
+            if (!std::filesystem::is_directory(data))
+            {
+                std::fprintf(stderr, "--export-textures: a disc image has no installation folder: give --out DIR\n");
+                return 2;
+            }
+            dir = cane::utf8(data / "Textures");
+        }
+        return ExportTexturesCommand(dir);
+    }
+    if (command && !std::strcmp(command, "convert-list")) return ConvertListCommand();
+    int DumpTextCommand(const std::string&);  // textmod.cpp
+    if (command && !std::strcmp(command, "dump-text")) return DumpTextCommand(arg);
+    int DumpTexturesCommand(const std::string&, const std::string&);  // texmod.cpp
+    if (command && !std::strcmp(command, "dump-textures")) return DumpTexturesCommand(arg, arg2);
+    int Ps3HdTexturesCommand(const std::string&, const std::string&);  // ps3hd.cpp
+    if (command && !std::strcmp(command, "ps3-hd-textures")) return Ps3HdTexturesCommand(arg, arg2);
     int VtDumpCommand(const char*);  // vtaudit.cpp
     if (command && !std::strcmp(command, "vt-dump")) return VtDumpCommand(arg);
     if (command && !std::strcmp(command, "phys-check")) return PhysCheckMain(physArgs);
@@ -480,6 +550,7 @@ int main(int argc, char** argv)
         if (dispo.vsync >= 0) g_display.fVsync = dispo.vsync != 0;
         if (dispo.wideBackgrounds >= 0) g_display.fWideBackgrounds = dispo.wideBackgrounds != 0;
         if (dispo.hqLogo >= 0) g_display.fHqLogo = dispo.hqLogo != 0;
+        if (dispo.longShadows >= 0) g_display.fLongShadows = dispo.longShadows != 0;
         if (dispo.window >= 0 && dispo.window <= 2) g_display.window = DISPWINDOW(dispo.window);
     };
     applyDisplayOverrides();
@@ -499,60 +570,7 @@ int main(int argc, char** argv)
     if (command && !std::strcmp(command, "play-movie")) return PlayMovieCommand(arg, out, tSeconds < 0 ? 1e9 : tSeconds);
     if (command && !std::strcmp(command, "list-movies")) return ListMoviesCommand();
     if (command && !std::strcmp(command, "view-movie")) return ViewMovieCommand(arg, vo.screenshot, vo.tAnim, vo.width, vo.height);
-    if (command && !std::strcmp(command, "view-world3"))
-    {
-        VIEW3OPTS v3;
-        v3.world = arg;
-        v3.ram = g_ram3;
-        v3.screenshot = vo.screenshot;
-        v3.camera = vo.camera;
-        v3.width = vo.width;
-        v3.height = vo.height;
-        v3.fNoCel = vo.fNoCel;
-        v3.fNoFog = vo.fNoFog;
-        v3.fRamPools = g_fRam3Pools;
-        v3.fRamPose = g_fRam3Pose;
-        v3.nRamHud = g_nRam3Hud;
-        return ViewWorld3(v3);
-    }
-    if (command && !std::strcmp(command, "splice-world")) return SpliceWorld3Command(arg, fVerbose);
-    if (command && !std::strcmp(command, "scpt-world")) return ScptWorld3Command(arg, fVerbose);
-    if (command && !std::strcmp(command, "screen-world3")) return ScreenWorld3Command(arg, fVerbose);
-    if (command && !std::strcmp(command, "hud-dump3")) return HudDump3Command(arg);
-    if (command && !std::strcmp(command, "text-test3")) return TextTest3Command(arg, arg2, arg3);
-    if (command && !std::strcmp(command, "scpt-run")) return ScptRun3Command(arg, arg2, go.cframe > 0 ? go.cframe : 6000, fVerbose);
-    if (command && !std::strcmp(command, "card-test3")) return CardTest3Command(arg ? arg : "", go.cframe > 0 ? go.cframe : 600);
-    if (command && !std::strcmp(command, "scpt-dump")) return ScptDump3Command(arg, arg2 ? arg2 : "");
-    if (command && !std::strcmp(command, "list-text")) return ListText3Command(arg, arg2 ? arg2 : "");
-    if (command && !std::strcmp(command, "dump-world"))
-    {
-        g_dumpWorld3.out = out;
-        return DumpWorld3Command(arg, g_dumpWorld3);  // sly3/main3.cpp
-    }
-    if (command && !std::strcmp(command, "load-world"))
-    {
-        g_dumpWorld3.out = out;
-        return LoadWorld3Command(arg, g_dumpWorld3);  // sly3/main3.cpp
-    }
-    if (command && !std::strcmp(command, "dump-world-sly2"))  // (Sly 2's, kept for the port: TODO(sly3) remove)
-    {
-        // VA of a key in the executable (0x2A37E8), or SECTOR:CB
-        FK fk;
-        if (arg[0] == 'w')  // ("wN": the world record N, as --load-world N)
-        {
-            InitClasses();
-            int filterDefault = 0;
-            std::string err;
-            if (!FResolveWorld(arg + 1, fk, filterDefault, err)) { std::fprintf(stderr, "%s\n", err.c_str()); return 2; }
-        }
-        else if (const char* colon = std::strchr(arg, ':'))
-        {
-            fk.isector = static_cast<uint32_t>(std::strtoul(arg, nullptr, 0));
-            fk.cb = static_cast<uint32_t>(std::strtoul(colon + 1, nullptr, 0));
-        }
-        else fk = FkFromRecord(g_disc.PbElf(static_cast<uint32_t>(std::strtoul(arg, nullptr, 0)), 0x40));
-        return DumpWorld(fk, out);
-    }
+    if (command && !std::strcmp(command, "dump-world")) return DumpWorld(arg, out, fDumpObjects, std::getenv("SLY3_DUMP_GROUPS") != nullptr || fDumpGroups);
     if (command && !std::strcmp(command, "load-world"))
     {
         InitClasses();
@@ -581,6 +599,25 @@ int main(int argc, char** argv)
                      g_brxstats.cshared1, g_brxstats.cshared2, g_brxstats.cskipShared, g_brxstats.cproxy,
                      g_brxstats.ccbMismatch, psw->awe.size(), ms);
         {
+            // (Sly 3 development: the classes read without a checked loader, brx.cpp)
+            auto print = [](const char* sz, const std::map<int, int>& mp) {
+                if (mp.empty()) return;
+                std::fprintf(stderr, "%s:", sz);
+                for (auto [cid, c] : mp) std::fprintf(stderr, " %s x%d", StrClassName(cid).c_str(), c);
+                std::fprintf(stderr, "\n");
+            };
+            print("no loader (made, body skipped)", g_brxstats.mpcidcNoLoader);
+            print("ALO part only", g_brxstats.mpcidcAloOnly);
+            print("rest of the body skipped / misread", g_brxstats.mpcidcSkipped);
+            print("read failed", g_brxstats.mpcidcError);
+        }
+        if (std::getenv("SLY3_CENSUS"))   // (debug: objects made per class, as the reference's tools/sly3/census.py lists a RAM)
+        {
+            std::map<int, int> mpcidc;
+            for (const auto& plo : psw->aploAll) ++mpcidc[plo->Cid()];
+            for (auto [cid, c] : mpcidc) std::printf("census 0x%02X %-20s %d\n", cid, StrClassName(cid).c_str(), c);
+        }
+        {
             std::size_t cframe = 0;
             for (const auto& plo : psw->aploAll) cframe += plo->pframe != nullptr;
             std::fprintf(stderr, "%zu objects with a splice frame\n", cframe);
@@ -605,26 +642,11 @@ int main(int argc, char** argv)
                 if (pf != stdout) std::fclose(pf);
             }
         }
+        if (std::getenv("SLY2N_GUARDSURVEY")) SurveyGuards(psw.get(), stdout);   // (PC debug: pcguard.h)
         return fOk ? 0 : 1;
     }
     if (!command)
     {
-        // Sly 3: the boot as far as it is ported (orig3 0x1C6EA8: the logo movies; then world 35, m_ext: TODO(sly3))
-        // TODO(sly3): the game loop; Sly 2's start below stays for the port.
-        GAME3OPTS g3;   // sly3/game3.cpp: the boot, the transition to world 35 (m_ext), the main loop
-        g3.fHeadless = go.fHeadless;
-        g3.fSkipLogos = s_fSkipLogos3;
-        g3.cframe = go.cframe;
-        g3.screenshot = vo.screenshot;
-        g3.frameDump = go.frameDump;
-        g3.width = vo.width;
-        g3.height = vo.height;
-        g3.iworld = s_iworld3;
-        g3.fFixedDt = go.fFixedDt;
-        if (g_dumpWorld3.fCensus) g3.census = out;
-        g3.apress = go.apress;
-        for (JOYPRESS& press : g3.apress) press.frame -= go.vbBase;  // (--press-vblank-base: the reference's vblanks)
-        return RunGame3(g3);
         // the launcher's start (--data-dir, no --world and no harness): the disc's boot sequence (logo, title,
         // menus) with the user's own cards only
         if (!fWorldGiven && !cane::dataOverride.empty() && go.slyStart.empty() && go.gangStart.empty() && go.frameDump.empty())
@@ -659,17 +681,11 @@ int main(int argc, char** argv)
         return RunGame(go);
     }
     std::fprintf(stderr,
-                 "usage: Sly3-Release [--disc disc.iso | --data-dir dir] [--headless] [--skip-logos] [--frames N] [--screenshot f.png] [--frame-dump DIR:N] [--size WxH] [--world3 W]   (the game: the logos, then m_ext)\n"
-                 "       | --list-keys | --list-files\n"
-                 "       | --dump-world W|all [--groups] [--objects] [--out file]   (W: 0..39, a name (m_ext), a key address, SECTOR:CB)\n"
-                 "       | --load-world W|all [--census] [--fields OIDS|all] [--arrival A:B] [--out file]   (the objects created)\n"
-                 "       | --splice-world W|all [-v]   (the splice runtime's deserialize-and-evaluate test)\n"
-                 "       | --splice-selftest | --list-text W [--grep text] | --scpt-world W|all [-v]\n"
-                 "       | --screen-world3 W|all [-v] | --text-test3 W TEXT|#ID OUT.png | --hud-dump3 W\n"
-                 "       | --scpt-dump W [--oid N]     (the scripts' command trees)\n"
-                 "       | --scpt-run W OID[,OID] [--frames N] [-v]  (the executor with a test host; scptrun3.h)\n"
-                 "       | --card-test3 [--card-press SQUARE@F,TRIANGLE@F] [--frames N]  (the boot's card check on --user-dir; card3.h)\n"
-                 "       | --list-sounds W | --play-music W [--song ID] | --play-sfx W [--song ID] | --play-dialog W [--song ID]\n"
-                 "       | --list-movies | --play-movie ID [--out frames-dir] [--seconds T] | --view-movie ID [--screenshot file --time T]\n");
+                 "usage: Sly2-Release [--disc disc.iso | --data-dir dir] --list-keys | --dump-world VA|SECTOR:CB [--out file]\n"
+                 "       | --load-world W|boot|frontend [--filter N] [--load-trace map.txt] [--dump-objects [file]]\n"
+                 "       | --parse-splice W | --eval-splice W [--maps dir] [-v] | --splice-selftest | --rumble-selftest\n"
+                 "       | --list-sounds W | --play-music W [--song ID] [--stem 0|1|2] | --play-sfx W [--song SOUNDID] | --play-dialog W [--song ID]\n"
+                 "       | --list-movies | --play-movie ID [--out frames-dir] [--seconds T]   (W: boot, frontend, a world record 2..43, SECTOR:CB)\n"
+                 "       | --convert DIR [--no-export-textures] | --export-textures [--out DIR] | --dump-textures DIR W\n");
     return 2;
 }

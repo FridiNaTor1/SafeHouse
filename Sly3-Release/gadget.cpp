@@ -3,6 +3,9 @@
 // Sly2-Reference's m_13FF70.cpp (ActorUpdateAbilities), m_188488.cpp (0x18D760).
 
 #include "gadget.h"
+#include "game/sly3.h"
+#include "worldglobals.h"
+#include "pccharacter.h"   // (PC addition, debug menu only: Carmelita's moveset)
 #include "damage.h"
 #include "objmethod.h"
 
@@ -57,10 +60,10 @@ PADCTL* PpadctlOfActor(ACTOR* p)
     PODATA* ppd = PpodataFromLo(p->palo);
     return ppd ? ppd->ppadctl : nullptr;
 }
-int32_t NElf(uint32_t va) { int32_t n = 0; if (const uint8_t* pb = g_disc.PbElf(va, 4)) std::memcpy(&n, pb, 4); return n; }
+int32_t NElf(uint32_t va) { return int32_t(g_disc.U32Elf(va)); }  // (an address comes back as the USA one: disc.h)
 float GElf(uint32_t va) { int32_t n = NElf(va); float g; std::memcpy(&g, &n, 4); return g; }
-int ItemUse(int id) { return id >= 0 && id < 0x2B ? NElf(0x2BCD00 + 0x20 * uint32_t(id)) : -1; }
-int ItemPower(int id) { return id >= 0 && id < 0x2B ? NElf(0x2BCD00 + 0x20 * uint32_t(id) + 0xC) : 0; }
+int ItemUse(int id) { return id >= 0 && id < 0x2B ? NElf(S3VA(0x2BCD00) + 0x20 * uint32_t(id)) : -1; }
+int ItemPower(int id) { return id >= 0 && id < 0x2B ? NElf(S3VA(0x2BCD00) + 0x20 * uint32_t(id) + 0xC) : 0; }
 
 constexpr uint32_t s_agrfSlot[3] = {4, 1, 2};   // D_002C3258: L1, L2, R2 (the pad's layout)
 
@@ -78,6 +81,7 @@ struct ABILITIES
     CSndRef snd2044;  // Sly's +0x2044 (the time gadgets' loop)
 };
 std::unordered_map<ACTOR*, ABILITIES> s_mpab;
+WORLD_TABLE(s_mpab);   // (PC: moved aside while a kept world loads, worldglobals.h)
 }  // namespace
 // (at a world's load: the old world's objects are freed, and a new object at a freed one's address must not
 // inherit its record; the SW check below misses a new SW at the old one's address)
@@ -88,8 +92,8 @@ namespace
 const char* SzPlayer(ACTOR* pa)
 {
     if (!pa || !pa->palo) return nullptr;
-    return FIsLoDerivedFrom(pa->palo, 0x35) ? "sly" : FIsLoDerivedFrom(pa->palo, 0x37) ? "bentley"
-         : FIsLoDerivedFrom(pa->palo, 0x36) ? "murray" : nullptr;
+    return FIsLoDerivedFrom(pa->palo, S3CID(0x35)) ? "sly" : FIsLoDerivedFrom(pa->palo, S3CID(0x37)) ? "bentley"
+         : FIsLoDerivedFrom(pa->palo, S3CID(0x36)) ? "murray" : nullptr;
 }
 
 // orig 0x00141EF8 (from the post-load 0x1400B8): the slots' ids from the progress "<player> apukCur <i>" (slot 103's
@@ -119,7 +123,7 @@ ABILITIES& AbOf(ACTOR* pa)
 // current player (slot 78 0x144480)
 void UpdateAbilityDisplay(ACTOR* pa)
 {
-    if (!pa || !pa->palo || !FIsLoDerivedFrom(pa->palo, 0x37)) return;
+    if (!pa || !pa->palo || !FIsLoDerivedFrom(pa->palo, S3CID(0x37))) return;
     const bool fShow = g_psw && PloPoCurrent(g_psw) == pa->palo && GrfAbilityButton(pa, 12) != 0;
     ShowAloGlobs(pa->palo, 0x24D, fShow);  // 0x1F6978 / 0x1F69F8
 }
@@ -151,7 +155,7 @@ bool FSlyCanDo(SLY* p, int n)
         if (st == 4) return false;
         const float g = g_clock.af[1];   // (the clock's factor 1, +0x1C)
         if (g == 1.0f) return true;
-        return g == GElf(n == 0x1D ? 0x2BF3EC : 0x2BF3F0);
+        return g == GElf(n == 0x1D ? S3VA(0x2BF3EC) : S3VA(0x2BF3F0));
     }
     if (static_cast<unsigned>(st) >= 0x18) return false;
     switch (st)
@@ -207,7 +211,7 @@ bool FSlyCanDo(SLY* p, int n)
 bool FCanDo(ACTOR* pa, int n)
 {
     if (SLY* p = dynamic_cast<SLY*>(pa)) return FSlyCanDo(p, n);
-    if (FIsLoDerivedFrom(pa->palo, 0x37)) return FBentleyAbilityOk(pa, n);
+    if (FIsLoDerivedFrom(pa->palo, S3CID(0x37))) return FBentleyAbilityOk(pa, n);
     return FMurrayAbilityOk(pa, n);  // 0x1B98A0
 }
 
@@ -279,7 +283,7 @@ void StartAbility(ACTOR* pa, int n)
         case 0x2A:   // Time Rush: 1.35, sound 0x66
         {
             SpendActorPower(p, n);
-            SetClockFactor(&g_clock, 1, GElf(n == 0x1D ? 0x2BF3EC : 0x2BF3F0));
+            SetClockFactor(&g_clock, 1, GElf(n == 0x1D ? S3VA(0x2BF3EC) : S3VA(0x2BF3F0)));
             // TODO: D_003E1BEC = -1 / 0.7 (read elsewhere: the screen's effect, not found yet)
             AbOf(p).snd2044 = CSndRef(PsndStartSound(n == 0x1D ? 0x67 : 0x66));
             return;
@@ -302,7 +306,7 @@ void StartAbility(ACTOR* pa, int n)
             return;
         }
     }
-    if (FIsLoDerivedFrom(pa->palo, 0x37)) { StartBentleyAbility(pa, n); return; }
+    if (FIsLoDerivedFrom(pa->palo, S3CID(0x37))) { StartBentleyAbility(pa, n); return; }
     if (!StartMurrayAbility(pa, n) && FPrint()) std::printf("gadget: Murray's %d does nothing (0x141D38)\n", n);
 }
 
@@ -383,7 +387,7 @@ void SetGuardsFrozen(bool f)
     for (const auto& up : g_psw->aploAll)
     {
         LO* plo = up.get();
-        if (!plo->fInWorld || !FCidDerivedFrom(plo->Cid(), 0x38)) continue;
+        if (!plo->fInWorld || !FCidDerivedFrom(plo->Cid(), S3CID(0x38))) continue;
         GUARD* pg = PguardFromLo(plo);
         if (!pg) continue;
         if (f) SetGuardMode(pg, 0xE);  // 0x207030
@@ -428,7 +432,7 @@ bool ReleaseRoar(ACTOR* pa)
     SpendActorPower(pa, pa->n9BC);
     if (g_psw)
         for (const auto& up : g_psw->aploAll)
-            if (LO* plo = up.get(); plo->fInWorld && FCidDerivedFrom(plo->Cid(), 0x38))
+            if (LO* plo = up.get(); plo->fInWorld && FCidDerivedFrom(plo->Cid(), S3CID(0x38)))
                 if (GUARD* pg = PguardFromLo(plo)) SetGuardMode(pg, 0x15);
     pa->pasegAbility = nullptr;
     pa->n9BC = -1;
@@ -502,6 +506,7 @@ void UpdateActorAbilities(ACTOR* pa)
 {
     PADCTL* pc = PpadctlOfActor(pa);
     if (!pc) return;   // (+0x150)
+    if (FPcCarm(pa->palo)) return;   // (PC addition, debug menu only: Carmelita's moveset has no gadgets)
     ABILITIES& ab = AbOf(pa);
     for (int i = 0; i < 3; ++i)
     {
@@ -648,3 +653,38 @@ void UpdateAbilityDisplayLo(LO* plo)
 {
     if (ACTOR* pa = plo ? PactorFromLo(plo) : nullptr) UpdateAbilityDisplay(pa);
 }
+
+// Script bindings of the abilities' slots that authored scripts reach (SLY2N_UNBOUND sweep; audit 2026-11 P10):
+// 0x10B490 (EOPID 768 -> 0x141E78: the slot holding the ability id, -1 none) and 0x10B3E8 (EOPID 767 -> 0x141FC8: a
+// slot set to an ability). Natively stubs: the scripts asking which slot holds a gadget got void.
+#include "objmethod.h"
+namespace
+{
+struct INITGADGETMETHODS
+{
+    INITGADGETMETHODS()
+    {
+        RegisterObjectMethod(0x10B490, [](LO* plo, const std::vector<CRef>& a) {
+            CRef r;
+            int i = -1;
+            if (ACTOR* pa = PactorFromLo(plo))
+            {
+                const int id = NArg(a, 0, -1);
+                const ABILITIES& ab = AbOf(pa);
+                for (int k = 0; k < 3; ++k)
+                    if (ab.a[k].id == id)
+                    {
+                        i = k;
+                        break;
+                    }
+            }
+            r.SetS32(i);
+            return r;
+        });
+        RegisterObjectMethod(0x10B3E8, [](LO* plo, const std::vector<CRef>& a) {
+            if (ACTOR* pa = PactorFromLo(plo)) SetActorAbilitySlot(pa, NArg(a, 0, 0), NArg(a, 1, -1));
+            return CRef(TAGK_Void);
+        });
+    }
+} s_initgadgetmethods;
+}  // namespace

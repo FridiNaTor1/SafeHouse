@@ -1,4 +1,5 @@
 #include "savedata.h"
+#include "worldglobals.h"
 
 #include "sw.h"
 #include "transition.h"
@@ -11,6 +12,7 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <unordered_map>
 
 GAMESAVE g_gamesave;
 
@@ -31,22 +33,16 @@ struct LAYOUT
     std::vector<std::pair<int, std::string>> aname;
     std::vector<PENT> aent;
     std::vector<uint8_t> abRecords;
+    std::unordered_map<std::string, int> mpnamesym;   // (each name's first symbol in aname: SymFromName's answer)
 } s_layout;
+WORLD_VALUE(s_layout);   // (PC: moved aside while a kept world loads, worldglobals.h)
 
-// orig 0x1D8640 (h * 33 + toupper)
-uint32_t HashName(const std::string& s)
-{
-    uint32_t h = 0;
-    for (unsigned char c : s) h = h * 33 + static_cast<uint32_t>(std::toupper(c));
-    return h;
-}
-
-// orig 0x1D8720 / 0x233800: a path element's symbol (a name, else a number)
+// orig 0x1D8720 / 0x233800: a path element's symbol (a name, else a number; the original scans the names for the
+// first of the same hash (0x1D8640: h * 33 + toupper) and spelling)
 int SymFromName(const std::string& s)
 {
-    const uint32_t h = HashName(s);
-    for (const auto& [n, name] : s_layout.aname)
-        if (HashName(name) == h && name == s) return n;
+    // (the original's scan for the first name of the same hash and spelling, as a lookup: the scripts ask every frame)
+    if (const auto it = s_layout.mpnamesym.find(s); it != s_layout.mpnamesym.end()) return it->second;
     return static_cast<int16_t>(std::atoi(s.c_str()));
 }
 
@@ -104,6 +100,8 @@ template <typename T> void Wr(std::size_t ib, const T& v)
 void SetProgressLayout(const PROGRESS& progress)
 {
     s_layout.aname = progress.aname;
+    s_layout.mpnamesym.clear();
+    for (const auto& [n, name] : s_layout.aname) s_layout.mpnamesym.emplace(name, n);   // (the first one wins)
     if (std::getenv("SLY2N_SYMNAMES"))  // debug: the progress symbols (a task's is its oid)
         for (const auto& [n, name] : progress.aname) std::printf("sym %d %s\n", n, name.c_str());
     s_layout.abRecords = progress.abRecords;
@@ -251,6 +249,7 @@ bool FLoadGameSave(const std::string& path, std::string& error)
     in.read(reinterpret_cast<char*>(save.ab), CB_GAMESAVE);
     if (in.gcount() != CB_GAMESAVE) { error = path + " is not a Sly 3 save slot (0x6808 bytes)"; return false; }
     g_gamesave = save;
+    std::printf("flow: save loaded %s\n", path.c_str());   // (tools/progression3.py)
     return true;
 }
 
@@ -261,6 +260,7 @@ bool FWriteGameSave(const std::string& path, std::string& error)
     std::ofstream out(path, std::ios::binary);
     if (!out) { error = "cannot write " + path; return false; }
     out.write(reinterpret_cast<const char*>(g_gamesave.ab), CB_GAMESAVE);
+    std::printf("flow: save written %s%s\n", path.c_str(), out ? "" : " (failed)");   // (tools/progression3.py)
     return static_cast<bool>(out);
 }
 
@@ -345,6 +345,7 @@ bool FWriteGameSaveBlock(const std::string& path, const GAMESAVE& gs, std::strin
     std::ofstream out(path, std::ios::binary);
     if (!out) { error = "cannot write " + path; return false; }
     out.write(reinterpret_cast<const char*>(gs.ab), CB_GAMESAVE);
+    std::printf("flow: save written %s%s\n", path.c_str(), out ? "" : " (failed)");   // (tools/progression3.py)
     return static_cast<bool>(out);
 }
 
@@ -397,4 +398,10 @@ void MergeProgressKeepDone(GAMESAVE& gs, const GAMESAVE& gsKeep)
         else if (str == "episodeBest") maxInt(e);
         else if (str == "widCurrent" || str == "episodeCurrent" || str == "oidPoCurrent") keepInt(e);
     }
+}
+
+bool FSettingFlag(const char* name)
+{
+    const CRef r = RefGetProgress({"flags", name});
+    return r.m_tagk == TAGK_Bool ? r.m_bool != 0 : r.m_tagk == TAGK_S32 ? r.m_n != 0 : false;
 }

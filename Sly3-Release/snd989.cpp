@@ -8,9 +8,11 @@
 #include "audio.h"
 #include "disc.h"
 #include "spiop.h"
+#include "wavfile.h"
 
 // FAudio on every platform (on Windows too, over SDL2), so the mixer behaves the same everywhere.
 #include "../platform/audio_linux.h"
+#include "../platform/game_sched.h"
 
 #include <algorithm>
 #include <atomic>
@@ -136,6 +138,7 @@ struct EFFECTBANK
     uint32_t version = 0;
     uint32_t bankId = 0;
     std::vector<SOUND> sounds;
+    bool fWavSamples = false;  // (PC) the samples from the installation's WAVs (CDisc parts "sample<offset>")
     // Decoded tones by sample offset, filled on first play (Sly1-Release).
     mutable std::unordered_map<uint32_t, std::shared_ptr<const DecodedEffectSample>> decodedSamples;
 };
@@ -308,35 +311,154 @@ void DecodeSpuAdpcm(const std::vector<uint8_t>& data, std::size_t begin, std::si
     }
 }
 
+// orig: (IOP) 989snd (0x19C98 at the voice's start, 0x6A48 at a pitch change): a noise tone sets no pitch; the core's
+// noise clock (sceSdSetCoreAttr SD_CORE_NOISE_CLK) = the tone's center note + pb * 32 / 0x7FFF, kept to 0..63
+int NoiseClock(const TONE& tone, int pb) { return std::clamp(tone.centerNote + (pb << 5) / 0x7FFF, 0, 63); }
+
+// The SPU2's noise: one generator per core, heard by every voice of the core with noise on, at the core's clock (PCSX2
+// SPU2 GetNoiseValues: the LFSR steps when the counter passes 0x8000 >> (clock >> 2), the counter advancing by
+// 1 + {0, 84, 140, 180} / 210 (clock & 3) a 48 kHz sample; the output holds between steps). Generated in chunks of one
+// 989snd tick (200 samples) that the core's noise voices queue in turn (so they play the same signal).
+constexpr int kcNoiseChunk = 200;
+constexpr int kcNoiseHistory = 64;
+using NOISECHUNK = std::array<int16_t, kcNoiseChunk>;
+struct NOISECORE
+{
+    // orig: (IOP) 989snd's noise owners (0x1F3FC priority, 0x1F404 voice, 0x1F40C lock; core 1 at +4): set by the noise
+    // allocation 0x19564, cleared when the voice is freed (0x1AEC0)
+    int priority = -1;
+    uint64_t idOwner = 0;
+    bool fLock = false;
+    int clock = 0x3F;
+    uint16_t lfsr = 1;
+    uint32_t cnt = 0;
+    uint64_t serialNext = 0;   // the next chunk to generate
+    std::array<std::shared_ptr<NOISECHUNK>, kcNoiseHistory> achunk{};
+};
+constexpr uint8_t kanoiseAdd[64] = {1, 0, 0, 1, 0, 1, 1, 0, 1, 0, 0, 1, 0, 1, 1, 0, 1, 0, 0, 1, 0, 1,
+                                     1, 0, 1, 0, 0, 1, 0, 1, 1, 0, 0, 1, 1, 0, 1, 0, 0, 1, 0, 1, 1, 0,
+                                     1, 0, 0, 1, 0, 1, 1, 0, 1, 0, 0, 1, 0, 1, 1, 0, 1, 0, 0, 1};
+uint16_t LfsrNext(uint16_t lfsr) { return static_cast<uint16_t>((lfsr << 1) | kanoiseAdd[(lfsr >> 10) & 63]); }
+std::array<NOISECORE, 2> s_anoisecore = [] {
+    std::array<NOISECORE, 2> a{};
+    // (the hardware's LFSR has run since power-on: not from its first values)
+    for (NOISECORE& nc : a)
+        for (int i = 0; i < 4096; ++i) nc.lfsr = LfsrNext(nc.lfsr);
+    return a;
+}();
+uint64_t s_idVoiceNext = 1;
+
+// the core's chunk of that serial (generated up to it on demand; an old serial gives the oldest kept)
+std::shared_ptr<NOISECHUNK> PchunkNoise(int core, uint64_t serial)
+{
+    static constexpr uint32_t freqAdd[5] = {0, 84, 140, 180, 210};
+    NOISECORE& nc = s_anoisecore[size_t(core)];
+    while (nc.serialNext <= serial)
+    {
+        auto pchunk = std::make_shared<NOISECHUNK>();
+        const uint32_t level = (0x8000u >> (nc.clock >> 2)) << 16;
+        for (int16_t& smp : *pchunk)
+        {
+            nc.cnt += 0x10000 + freqAdd[nc.clock & 3];
+            if ((nc.cnt & 0xFFFF) >= freqAdd[4]) nc.cnt += 0x10000 - freqAdd[4];
+            if (nc.cnt >= level)
+            {
+                while (nc.cnt >= level) nc.cnt -= level;
+                nc.lfsr = LfsrNext(nc.lfsr);
+            }
+            smp = static_cast<int16_t>(nc.lfsr);
+        }
+        nc.achunk[nc.serialNext % kcNoiseHistory] = std::move(pchunk);
+        ++nc.serialNext;
+    }
+    if (serial + kcNoiseHistory <= nc.serialNext) serial = nc.serialNext - kcNoiseHistory + 1;
+    return nc.achunk[serial % kcNoiseHistory];
+}
+
+// (test: SLY2N_PCMTAP=dir: every effect sample as it is first played, dir/sfx-<bank id>-<offset>-<loop begin>-<loop
+// length>.raw, s16 mono 48 kHz; the audio identity check)
+void TapEffectSample(const EFFECTBANK& bank, uint32_t offset, const DecodedEffectSample& d)
+{
+    static const char* s_szTap = std::getenv("SLY2N_PCMTAP");
+    if (!s_szTap) return;
+    char sz[512];
+    std::snprintf(sz, sizeof(sz), "%s/sfx-%u-%06X-%d-%u-%u.raw", s_szTap, bank.bankId, offset, int(d.loop), d.loopBegin,
+                  d.loopLength);
+    if (std::FILE* pf = std::fopen(sz, "wb"))
+    {
+        std::fwrite(d.pcm.data(), sizeof(int16_t), d.pcm.size(), pf);
+        std::fclose(pf);
+    }
+}
+
+// (PC) A sample from a WAV (the converted installation's, or a mod's): mono (more channels mixed), at the SPU2's
+// 48 kHz (another rate resampled, linear), the loop from its smpl chunk. The installation's WAVs hold what
+// DecodeSpuAdpcm decodes (the converter writes them with it): the same samples, loop begin and length.
+bool FLoadEffectWav(const std::string& path, DecodedEffectSample& d)
+{
+    WAVINFO wi;
+    std::vector<int16_t> a;
+    std::string error;
+    if (!FLoadWav(path, wi, a, &error) || wi.cframe == 0)
+    {
+        std::fprintf(stderr, "snd: %s: %s\n", path.c_str(), error.empty() ? "empty" : error.c_str());
+        return false;
+    }
+    std::vector<int16_t> mono(std::size_t(wi.cframe));
+    for (std::size_t i = 0; i < mono.size(); ++i)
+    {
+        int sum = 0;
+        for (int k = 0; k < wi.cch; ++k) sum += a[i * std::size_t(wi.cch) + std::size_t(k)];
+        mono[i] = int16_t(sum / wi.cch);
+    }
+    uint64_t iloop = wi.iframeLoop, iloopEnd = wi.CframeLooped();
+    if (wi.rate != 48000)
+    {
+        const double r = double(wi.rate) / 48000.0;
+        std::vector<int16_t> out(std::size_t(double(mono.size()) / r));
+        for (std::size_t i = 0; i < out.size(); ++i)
+        {
+            const double x = double(i) * r;
+            const std::size_t i0 = std::min(std::size_t(x), mono.size() - 1), i1 = std::min(i0 + 1, mono.size() - 1);
+            out[i] = int16_t(std::lround(mono[i0] + (mono[i1] - mono[i0]) * (x - double(i0))));
+        }
+        iloop = uint64_t(double(iloop) / r);
+        iloopEnd = std::min<uint64_t>(uint64_t(double(iloopEnd) / r), out.size());
+        mono = std::move(out);
+    }
+    if (mono.empty()) return false;
+    d.pcm = std::move(mono);
+    d.loop = wi.fLoop && iloop < iloopEnd;
+    if (d.loop)
+    {
+        d.loopBegin = uint32_t(iloop);
+        d.loopLength = uint32_t(iloopEnd - iloop);
+    }
+    return true;
+}
+
 std::shared_ptr<const DecodedEffectSample> EffectToneSample(const EFFECTBANK& bank, const TONE& tone)
 {
-    if (tone.flags & 8)  // SPU2 noise (Sly1-Release: one LFSR period, looped)
-    {
-        static const std::shared_ptr<const DecodedEffectSample> s_noise = [] {
-            static constexpr uint8_t noiseAdd[64] = {1, 0, 0, 1, 0, 1, 1, 0, 1, 0, 0, 1, 0, 1, 1, 0, 1, 0, 0, 1, 0, 1,
-                                                     1, 0, 1, 0, 0, 1, 0, 1, 1, 0, 0, 1, 1, 0, 1, 0, 0, 1, 0, 1, 1, 0,
-                                                     1, 0, 0, 1, 0, 1, 1, 0, 1, 0, 0, 1, 0, 1, 1, 0, 1, 0, 0, 1};
-            DecodedEffectSample d;
-            uint16_t noise = 1;
-            d.pcm.resize(32767);
-            for (int16_t& s : d.pcm)
-            {
-                noise = static_cast<uint16_t>((noise << 1) | noiseAdd[(noise >> 10) & 63]);
-                s = static_cast<int16_t>(noise);
-            }
-            d.loop = true;
-            d.loopLength = static_cast<uint32_t>(d.pcm.size());
-            return std::make_shared<const DecodedEffectSample>(std::move(d));
-        }();
-        return s_noise;
-    }
     const auto it = bank.decodedSamples.find(tone.sampleOffset);
     if (it != bank.decodedSamples.end()) return it->second;
+    if (bank.fWavSamples)
+        if (const std::string path = g_disc.PathPart(bank.isector, "sample" + std::to_string(tone.sampleOffset)); !path.empty())
+        {
+            DecodedEffectSample d;
+            if (FLoadEffectWav(path, d))
+            {
+                TapEffectSample(bank, tone.sampleOffset, d);
+                auto sample = std::make_shared<const DecodedEffectSample>(std::move(d));
+                bank.decodedSamples.emplace(tone.sampleOffset, sample);
+                return sample;
+            }
+        }
     if (tone.sampleOffset >= bank.sampleSize) return nullptr;
     DecodedEffectSample d;
     DecodeSpuAdpcm(bank.bytes, std::size_t(bank.sampleOffset) + tone.sampleOffset,
                    std::size_t(bank.sampleOffset) + bank.sampleSize, d.pcm, d.loop, d.loopBegin, d.loopLength);
     if (d.pcm.empty()) return nullptr;
+    TapEffectSample(bank, tone.sampleOffset, d);
     auto sample = std::make_shared<const DecodedEffectSample>(std::move(d));
     bank.decodedSamples.emplace(tone.sampleOffset, sample);
     return sample;
@@ -366,12 +488,23 @@ VOLPAIR PanTable(int i)
     return {static_cast<int>(16383.0 * std::cos(a) + 1e-9), static_cast<int>(16383.0 * std::sin(a) + 1e-9)};
 }
 
-// orig: (IOP) 989snd MakeVolume (Sly2-Reference third_party vagvoice.cpp)
+// The groups' duck factors (16.16, 0x10000 none), set by the duckers (989snd 0x1F498).
+std::array<uint32_t, 15> s_agroupduck = [] {
+    std::array<uint32_t, 15> a{};
+    a.fill(0x10000);
+    return a;
+}();
+
+// orig: (IOP) 989snd MakeVolume (Sly 2's 989snd.irx 0x1B628): Sly 2's StartSoundSystem sets the "square the
+// volumes" flag (0x1E918), so each volume factor is squared (x * x / 127) before the product; the pan law after it
+// is not (OpenGOAL's 989snd, which the reference ports, squares the whole product in AdjustVolToGroup instead, which
+// squares the pan law too: a centred voice at 0.5 instead of the PS2's 0.707, PCSX2-measured on the dialog).
 VOLPAIR MakeVolume(int vol1, int pan1, int vol2, int pan2, int vol3, int pan3)
 {
-    int vol = vol1 * 258;
-    vol = (vol * vol2) / 0x7F;
-    vol = (vol * vol3) / 0x7F;
+    auto sq = [](int v) { return v * v / 0x7F; };
+    int vol = sq(vol1) * 258;
+    vol = (vol * sq(vol2)) / 0x7F;
+    vol = (vol * sq(vol3)) / 0x7F;
     if (vol == 0) return {};
     int pan = (pan1 + pan2 + pan3) % 360;
     if (pan < 0) pan += 360;
@@ -385,14 +518,21 @@ VOLPAIR MakeVolume(int vol1, int pan1, int vol2, int pan2, int vol3, int pan3)
     return {t.right * vol / 0x3FFF, t.left * vol / 0x3FFF};
 }
 
-// orig: (IOP) 989snd AdjustVolToGroup: the group's master, then squared (v3 squares the product)
+// orig: (IOP) 989snd AdjustVolToGroup (989snd.irx 0x1BD08): the group's master squared (m * m / 0x400) times its
+// duck factor squared (when not 0 or unity), applied to the volume (not squared itself: MakeVolume squared its factors)
 int AdjustVolToGroup(int volume, int group)
 {
     if (group >= 15) return volume;
     if (volume >= 0x7FFF) volume = 0x7FFE;
-    volume = volume * s_amastervol[group] / 0x400;
-    const int sign = volume < 0 ? -1 : 1;
-    return volume * volume / 0x7FFE * sign;
+    uint32_t duck = s_agroupduck[size_t(group)];
+    if (duck - 1u <= 0xFFFEu) duck = (duck * duck) >> 16;
+    int m2 = s_amastervol[size_t(group)] * s_amastervol[size_t(group)];
+    if (m2 < 0) m2 += 0x3FF;
+    m2 >>= 10;
+    const int f = static_cast<int>((static_cast<uint32_t>(m2) * duck) >> 16);
+    int x = volume * f;
+    if (x < 0) x += 0x3FF;
+    return static_cast<int16_t>(static_cast<uint32_t>(x) << 6 >> 16);
 }
 
 // 989snd's note table and sceSdNote2Pitch (libsd), as OpenGOAL's 989snd has them (Sly2-Reference third_party
@@ -512,6 +652,11 @@ struct EFFECTVOICE
     uint32_t envelopeBits = 0;
     uint32_t envelopeCounter = 0;
     int envelopePhase = EffectEnvelope_Stopped;
+    uint64_t id = 0;
+    int spu = -1;          // its SPU2 voice (s_aspuvoice), -1 none
+    int noiseCore = -1;    // a noise tone: its core (0 / 1), its next chunk and the chunks it has queued
+    uint64_t serialNoise = 0;
+    std::vector<std::shared_ptr<NOISECHUNK>> achunkQueued;
     int envelopeShift = 0;
     int envelopeStep = 0;
     int envelopeLevel = 0;
@@ -552,6 +697,9 @@ struct BLOCKSOUND
     int countdown = 0;
     bool done = false;
     bool paused = false;
+    bool stopping = false;    // +0x16 flag 4: stopped once (a second stop kills, 0xEDA0)
+    bool lfoStopped = false;  // 0x2440: its LFOs taken off the LFO list at a stop
+    uint64_t tickStop = 0;    // (debug: when its voices were keyed off; snd_SpuStats' stale count)
     bool skipGrains = false;
     int grainsToPlay = 0, grainsToSkip = 0;
     uint64_t startTick = 0;
@@ -561,6 +709,7 @@ struct BLOCKSOUND
     std::vector<std::unique_ptr<BLOCKSOUND>> children;
 
     SOUND& Sound() const { return pbank->sounds[isound]; }
+    ~BLOCKSOUND();  // (its voices destroyed: an SPU voice never outlives its owner)
 };
 
 std::map<uint32_t, std::unique_ptr<EFFECTBANK>> s_mpbank;
@@ -693,17 +842,175 @@ void AdvanceEffectEnvelope(EFFECTVOICE& v, int samples)
     }
 }
 
+// orig: (IOP) 989snd 0x1AEC0: a freed voice that owns its core's noise gives it up (priority -1, unlocked)
+void ReleaseNoiseCore(const EFFECTVOICE& v)
+{
+    if (v.noiseCore < 0) return;
+    NOISECORE& nc = s_anoisecore[size_t(v.noiseCore)];
+    if (nc.idOwner != v.id) return;
+    nc.idOwner = 0;
+    nc.priority = -1;
+    nc.fLock = false;
+}
+
+// a noise voice's queue kept 3 chunks deep (15 ms) with its core's next chunks
+void FeedNoiseVoice(EFFECTVOICE& v)
+{
+    if (!v.voice || v.noiseCore < 0) return;
+    XAUDIO2_VOICE_STATE state{};
+    v.voice->GetState(&state);
+    // (the chunks played are let go: the queue holds the last BuffersQueued submitted)
+    while (v.achunkQueued.size() > state.BuffersQueued) v.achunkQueued.erase(v.achunkQueued.begin());
+    for (UINT32 c = state.BuffersQueued; c < 3; ++c)
+    {
+        std::shared_ptr<NOISECHUNK> pchunk = PchunkNoise(v.noiseCore, v.serialNoise++);
+        XAUDIO2_BUFFER buffer{};
+        buffer.AudioBytes = static_cast<UINT32>(sizeof(NOISECHUNK));
+        buffer.pAudioData = reinterpret_cast<const BYTE*>(pchunk->data());
+        if (FAILED(v.voice->SubmitSourceBuffer(&buffer))) break;
+        v.achunkQueued.push_back(std::move(pchunk));
+    }
+}
+
+// orig: (IOP) 989snd's voice table (0x263A8: 48 records of 0x38 bytes; +0x08 status, +0x0C / +0x10 the owner and its
+// callback, +0x1A priority, +0x1B group, +0x1C start time, +0x28 lock): the SPU2's 48 voices, 24 a core. Every tone
+// and every stream channel takes one (0x19750); a voice is free again once its envelope reads 0 (0x10464 -> 0x1A184).
+constexpr int kcSpuVoice = 48;
+enum SPUVS { SPUVS_Free = 0, SPUVS_Effect = 2, SPUVS_Reserved = 3, SPUVS_Stream = 4 };
+struct SPUVOICE
+{
+    int status = SPUVS_Free;
+    uint8_t priority = 0;  // (a byte, compared unsigned)
+    bool fLock = false;
+    uint64_t tickStart = 0;
+    BLOCKSOUND* pbs = nullptr;  // an effect voice's owner and its EFFECTVOICE id
+    uint64_t idVoice = 0;
+};
+std::array<SPUVOICE, kcSpuVoice> s_aspuvoice{};
+struct SPUSTATS
+{
+    uint64_t cAlloc = 0, cSteal = 0, cFail = 0;
+    int cPeak = 0;
+};
+SPUSTATS s_spustats{};
+// (debug: SLY2N_NOVOICELIMIT=1 plays every tone, as before the allocator: for comparisons only)
+bool FVoiceLimit()
+{
+    static const bool s_f = std::getenv("SLY2N_NOVOICELIMIT") == nullptr;
+    return s_f;
+}
+
+void FreeSpuVoice(int iv)
+{
+    if (iv < 0 || iv >= kcSpuVoice) return;
+    s_aspuvoice[size_t(iv)] = SPUVOICE{};
+}
+
+int CSpuVoicesUsed()
+{
+    int c = 0;
+    for (const SPUVOICE& sv : s_aspuvoice) c += sv.status != SPUVS_Free;
+    return c;
+}
+
+uint64_t s_cHostVoiceCreated = 0, s_cHostVoiceDestroyed = 0;
+double s_msTickLateMax = 0.0, s_msTickLockMax = 0.0;   // (debug: SNDCOUNT's tick timing, reset at each print)
+uint64_t s_cTickLate = 0;   // (debug: SNDCOUNT's host voice balance)
+
 void DestroyEffectVoice(EFFECTVOICE& v)
 {
+    if (v.spu >= 0 && s_aspuvoice[size_t(v.spu)].idVoice == v.id) FreeSpuVoice(v.spu);
+    v.spu = -1;
     if (!v.voice) return;
     v.voice->Stop();
     v.voice->DestroyVoice();
+    ++s_cHostVoiceDestroyed;
     v.voice = nullptr;
     v.sample.reset();
+    v.achunkQueued.clear();
+    ReleaseNoiseCore(v);
     v.envelopePhase = EffectEnvelope_Stopped;
 }
 
 bool FGroupPaused(int group) { return group >= 0 && group < 32 && (s_grouppausemask & (1u << group)) != 0; }
+
+// (its voices still playing: a stolen one stays in the list until the sound's next tick)
+int CLiveVoices(const BLOCKSOUND& bs)
+{
+    int c = 0;
+    for (const EFFECTVOICE& v : bs.voices) c += v.voice != nullptr;
+    return c;
+}
+
+BLOCKSOUND::~BLOCKSOUND()
+{
+    for (EFFECTVOICE& v : voices) DestroyEffectVoice(v);
+}
+
+// A stolen voice: its owner told (the callback +0x10 with 1: the voice off the owner's mask, 0x6B44), its noise given
+// up (0x1AEC0); the SPU2 voice is silenced at once (0x19458: volume 0) for the new tone's key on.
+void StealSpuVoice(int iv)
+{
+    SPUVOICE& sv = s_aspuvoice[size_t(iv)];
+    if (sv.pbs)
+        for (EFFECTVOICE& v : sv.pbs->voices)
+            if (v.id == sv.idVoice)
+            {
+                DestroyEffectVoice(v);  // (the record is erased at the owner's next tick: CleanEffectVoices)
+                break;
+            }
+    FreeSpuVoice(iv);
+    ++s_spustats.cSteal;
+}
+
+// orig: (IOP) 989snd.irx 0x19750 (group, priority, lock): the first free voice of the group's range (0x1F3B8: every
+// group 0..47, Sly 2 never narrows them: RPC 0x0D / 0x4E unused), else the range's lowest priority voice (the oldest
+// of equals) that is not locked or reserved is stolen, when the new tone's priority is at least its and it is below
+// 0x7E; else none (-1: the tone is not played)
+int AllocSpuVoice(int first, int last, int priority, bool fLock, int status)
+{
+    auto claim = [&](int iv) {
+        SPUVOICE& sv = s_aspuvoice[size_t(iv)];
+        sv = SPUVOICE{};
+        sv.status = status;
+        sv.priority = static_cast<uint8_t>(priority);
+        sv.fLock = fLock;
+        sv.tickStart = s_tick;  // 0x10638
+        ++s_spustats.cAlloc;
+        s_spustats.cPeak = std::max(s_spustats.cPeak, CSpuVoicesUsed());
+        return iv;
+    };
+    for (int iv = first; iv <= last; ++iv)
+        if (s_aspuvoice[size_t(iv)].status == SPUVS_Free) return claim(iv);
+    int ivLow = first;
+    for (int iv = first + 1; iv <= last; ++iv)
+    {
+        const SPUVOICE& sv = s_aspuvoice[size_t(iv)];
+        if (sv.status == SPUVS_Reserved || sv.fLock) continue;
+        const SPUVOICE& low = s_aspuvoice[size_t(ivLow)];
+        if (sv.priority < low.priority || (sv.priority == low.priority && sv.tickStart < low.tickStart)) ivLow = iv;
+    }
+    const SPUVOICE& low = s_aspuvoice[size_t(ivLow)];
+    if (low.fLock || priority < low.priority || low.priority >= 0x7E || low.status == SPUVS_Reserved)
+    {
+        ++s_spustats.cFail;
+        return -1;
+    }
+    StealSpuVoice(ivLow);
+    return claim(ivLow);
+}
+
+// orig: (IOP) 989snd.irx 0x6D2C: the tone's priority (its byte 0); flags 2 / 4 make it fall with the sound's volume
+// (+0x3A, 1024ths): mode 1 by up to a fifth, 2 a half, 3 all of it, below 951
+int TonePriority(const BLOCKSOUND& bs, const TONE& tone)
+{
+    const int pri = tone.priority;
+    if (!(tone.flags & 6)) return pri;
+    const int mode = (tone.flags >> 1) & 3;
+    const int range = mode == 1 ? pri / 5 : mode == 2 ? pri / 2 : pri;
+    if (range == 0 || bs.appVolume >= 0x3B7) return pri;
+    return static_cast<int8_t>(pri - (range - range * bs.appVolume / 950));
+}
 
 // The voice's levels: 989snd's register volume (MakeVolume -> AdjustVolToGroup -> >> 1) times the envelope.
 void ApplyVoiceVolume(const BLOCKSOUND& bs, EFFECTVOICE& v)
@@ -717,6 +1024,19 @@ void ApplyVoiceVolume(const BLOCKSOUND& bs, EFFECTVOICE& v)
         const float env = static_cast<float>(v.envelopeLevel) / 32767.0f;
         gl = static_cast<float>(l) / 16383.0f * env;
         gr = static_cast<float>(r) / 16383.0f * env;
+        // (debug: SLY2N_SNDSOLO=a,b,.. keeps only those sounds audible, SLY2N_SNDMUTE=a,b,.. silences them)
+        static const char* s_szSolo = std::getenv("SLY2N_SNDSOLO");
+        static const char* s_szMute = std::getenv("SLY2N_SNDMUTE");
+        auto fIn = [&](const char* sz) {
+            for (const char* pch = sz; pch && *pch;)
+            {
+                if (std::atoi(pch) == bs.isoundOrig) return true;
+                pch = std::strchr(pch, ',');
+                if (pch) ++pch;
+            }
+            return false;
+        };
+        if ((s_szSolo && !fIn(s_szSolo)) || (s_szMute && fIn(s_szMute))) gl = gr = 0.0f;
     }
     SetVoiceLevels(v.voice, 1, gl, gr);
 }
@@ -724,6 +1044,13 @@ void ApplyVoiceVolume(const BLOCKSOUND& bs, EFFECTVOICE& v)
 void ApplyVoicePitch(const BLOCKSOUND& bs, EFFECTVOICE& v)
 {
     if (!v.voice) return;
+    if (v.noiseCore >= 0)
+    {
+        // a noise voice has no pitch: the pitch bend moves its core's noise clock (989snd 0x6A48)
+        v.voice->SetFrequencyRatio(1.0f);
+        s_anoisecore[size_t(v.noiseCore)].clock = NoiseClock(v.tone, bs.curPb);
+        return;
+    }
     int note = 0, fine = 0;
     PitchBend(v.tone, bs.curPb, bs.curPm, v.startNote, v.startFine, &note, &fine);
     const float ratio = static_cast<float>(PitchRatio(v.tone.centerNote, v.tone.centerFine, note, fine));
@@ -780,19 +1107,50 @@ int ResolveRegister(const BLOCKSOUND& bs, int value)
 }
 
 // orig: (IOP) 989snd snd_SFX_GRAIN_TYPE_TONE; Sly1-Release PlayEffectTone (the XAudio2 voice)
+// (debug: noise tones not played since the last SLY2N_SNDCOUNT line, by bank sound (k: another bank, -1 - isound))
+std::map<int, int> s_mpnoisedenied;
+const EFFECTBANK* PbankFirstLoaded() { return s_mpbank.empty() ? nullptr : s_mpbank.begin()->second.get(); }
+
 void PlayEffectTone(BLOCKSOUND& bs, const TONE& tone)
 {
     bs.curVolume = std::clamp(((bs.appVolume * bs.origVolume) >> 10) + bs.lfoVolume, 0, 127);
     int p = (bs.appPan + bs.lfoPan) % 360;
     bs.curPan = p < 0 ? p + 360 : p;
     if (!FEnsureAudio()) return;
-    const std::shared_ptr<const DecodedEffectSample> decoded = EffectToneSample(*bs.pbank, tone);
-    if (!decoded) return;
+    const bool fNoise = (tone.flags & 8) != 0;
+    const std::shared_ptr<const DecodedEffectSample> decoded = fNoise ? nullptr : EffectToneSample(*bs.pbank, tone);
+    if (!fNoise && !decoded) return;
+    // orig: (IOP) 989snd 0x4B44..0x4B98: the tone's priority (0x6D2C), then a voice of the sound's group (0x19750); a
+    // noise tone (0x19564) needs a core's noise too: core 0 (a voice of 0..23), else core 1 (24..47), when the core's
+    // noise owner is not locked (tone flag 0x20) and has a lower priority. No voice: the tone is not played.
+    const int priority = TonePriority(bs, tone);
+    const bool fLock = (tone.flags & 0x20) != 0;
+    int core = -1, spu = -1;
+    for (int c = 0; fNoise && c < 2 && core < 0; ++c)
+    {
+        const NOISECORE& nc = s_anoisecore[size_t(c)];
+        if (nc.fLock || !(nc.priority < priority)) continue;
+        if (FVoiceLimit()) spu = c == 0 ? AllocSpuVoice(0, 23, priority, fLock, SPUVS_Effect) : AllocSpuVoice(24, 47, priority, fLock, SPUVS_Effect);
+        if (spu >= 0 || !FVoiceLimit()) core = c;
+    }
+    if (fNoise && core < 0)
+    {
+        ++s_mpnoisedenied[bs.pbank == PbankFirstLoaded() ? bs.isoundOrig : -1 - bs.isoundOrig];   // (debug: SLY2N_SNDCOUNT's noise denied)
+        return;
+    }
+    if (!fNoise && FVoiceLimit() && (spu = AllocSpuVoice(0, kcSpuVoice - 1, priority, fLock, SPUVS_Effect)) < 0) return;
 
     EFFECTVOICE v;
+    v.id = s_idVoiceNext++;
+    if (spu >= 0)
+    {
+        v.spu = spu;
+        s_aspuvoice[size_t(spu)].pbs = &bs;
+        s_aspuvoice[size_t(spu)].idVoice = v.id;
+    }
     v.sample = decoded;
     v.tone = tone;
-    v.loop = decoded->loop;
+    v.loop = fNoise || decoded->loop;
     int vol = tone.volume;
     if (vol < 0) vol = ResolveRegister(bs, vol);
     v.gVol = std::max(vol, 0);
@@ -807,6 +1165,10 @@ void PlayEffectTone(BLOCKSOUND& bs, const TONE& tone)
     v.gPan = pan < 0 ? pan + 360 : pan;
     v.startNote = bs.note;
     v.startFine = bs.fine;
+    if (static const char* s_sz = std::getenv("SLY2N_SNDPARAMS"); s_sz && (std::atoi(s_sz) == bs.isoundOrig || std::atoi(s_sz) == -1))
+        std::printf("sndtone: sound %d tone flags 0x%X center %d/%d note %d/%d pb %d pm %d vol %d adsr %04X %04X sample 0x%X\n", bs.isoundOrig,
+                    tone.flags, tone.centerNote, tone.centerFine, bs.note, bs.fine, bs.curPb, bs.curPm, v.gVol, tone.adsr1, tone.adsr2,
+                    tone.sampleOffset);
 
     WAVEFORMATEX format{};
     format.wFormatTag = WAVE_FORMAT_PCM;
@@ -815,9 +1177,32 @@ void PlayEffectTone(BLOCKSOUND& bs, const TONE& tone)
     format.wBitsPerSample = 16;
     format.nBlockAlign = 2;
     format.nAvgBytesPerSec = format.nSamplesPerSec * format.nBlockAlign;
-    if (FAILED(g_pxaudio2->CreateSourceVoice(&v.voice, &format, 0, kSpuMaximumFrequencyRatio)) || !v.voice)
+    if (SUCCEEDED(g_pxaudio2->CreateSourceVoice(&v.voice, &format, 0, kSpuMaximumFrequencyRatio)) && v.voice) ++s_cHostVoiceCreated;
+    else
     {
         v.voice = nullptr;
+        DestroyEffectVoice(v);
+        return;
+    }
+    if (fNoise)
+    {
+        // the core's noise taken (0x19564: its priority, the voice, the lock), its clock set (0x19C98)
+        NOISECORE& nc = s_anoisecore[size_t(core)];
+        nc.priority = tone.priority;
+        nc.idOwner = v.id;
+        nc.fLock = (tone.flags & 0x20) != 0;
+        v.noiseCore = core;
+        v.serialNoise = nc.serialNext;
+        StartEffectEnvelope(v, tone.adsr1, tone.adsr2);
+        ApplyVoiceVolume(bs, v);
+        ApplyVoicePitch(bs, v);
+        FeedNoiseVoice(v);
+        if (FAILED(v.voice->Start()))
+        {
+            DestroyEffectVoice(v);
+            return;
+        }
+        bs.voices.push_back(std::move(v));
         return;
     }
     XAUDIO2_BUFFER buffer{};
@@ -835,7 +1220,7 @@ void PlayEffectTone(BLOCKSOUND& bs, const TONE& tone)
     ApplyVoicePitch(bs, v);
     if (FAILED(v.voice->SubmitSourceBuffer(&buffer)) || FAILED(v.voice->Start()))
     {
-        v.voice->DestroyVoice();
+        DestroyEffectVoice(v);
         return;
     }
     bs.voices.push_back(std::move(v));
@@ -878,6 +1263,7 @@ int EffectLfoValue(EFFECTLFO& lfo)
 // orig: (IOP) 989snd LFOTracker::Tick (every other 240 Hz tick)
 void TickEffectLfos(BLOCKSOUND& bs)
 {
+    if (bs.lfoStopped) return;
     for (EFFECTLFO& lfo : bs.lfos)
     {
         if (lfo.target == 0 || (++lfo.tick & 1) == 0) continue;
@@ -992,6 +1378,7 @@ void StartEffectChild(BLOCKSOUND& parent, const PLAYSOUNDPARAMS& psp)
 }
 
 void ExecuteEffectGrain(BLOCKSOUND& bs);
+void StopBlockSound(BLOCKSOUND& bs);
 
 // One grain (989snd's grain functions; Sly1-Release ExecuteEffectGrain), then the next one's countdown.
 void ExecuteEffectGrain(BLOCKSOUND& bs)
@@ -1012,12 +1399,11 @@ void ExecuteEffectGrain(BLOCKSOUND& bs)
     case GRAINK_LfoSettings: ConfigureEffectLfo(bs, grain.lfo); break;
     case GRAINK_StartChildSound: StartEffectChild(bs, grain.psp); break;
     case GRAINK_StopChildSound:
+        // orig: (IOP) 989snd.irx 0x6118 -> 0xF00C -> 0xEDA0: each child of that sound stopped (its voices keyed off;
+        // it is freed once they end), not dropped with its voices still playing
         if (grain.psp.soundId >= 0)
-            bs.children.erase(std::remove_if(bs.children.begin(), bs.children.end(),
-                                             [&](const std::unique_ptr<BLOCKSOUND>& c) {
-                                                 return c->isound == grain.psp.soundId;
-                                             }),
-                              bs.children.end());
+            for (auto& c : bs.children)
+                if (c->isound == grain.psp.soundId) StopBlockSound(*c);
         break;
     case GRAINK_PluginMessage: break;  // (Sly 2's spiop is driven from the EE; no bank sends it messages)
     case GRAINK_Branch:
@@ -1059,7 +1445,12 @@ void ExecuteEffectGrain(BLOCKSOUND& bs)
                 break;
             }
         break;
-    case GRAINK_Stop: bs.done = true; break;
+    case GRAINK_Stop:
+        // orig: (IOP) 989snd.irx 0x51D0 returns -1: the grain step (0x626C) returns 1, the sound's tick (0x47A4) too,
+        // and 0xF1F4 stops the sound (0xEDA0): its voices keyed off (a looping tone was held forever), its children
+        // stopped, its LFOs stopped; or its on-stop grains run
+        StopBlockSound(bs);
+        return;
     case GRAINK_RandPlay:
     {
         const int options = grain.param[0], count = grain.param[1];
@@ -1207,7 +1598,7 @@ void CleanEffectVoices(BLOCKSOUND& bs)
         if (!v.voice) continue;
         XAUDIO2_VOICE_STATE state{};
         v.voice->GetState(&state);
-        if (state.BuffersQueued == 0 || v.envelopePhase == EffectEnvelope_Stopped) DestroyEffectVoice(v);
+        if ((state.BuffersQueued == 0 && v.noiseCore < 0) || v.envelopePhase == EffectEnvelope_Stopped) DestroyEffectVoice(v);
     }
     bs.voices.erase(std::remove_if(bs.voices.begin(), bs.voices.end(), [](const EFFECTVOICE& v) { return !v.voice; }),
                     bs.voices.end());
@@ -1222,6 +1613,7 @@ bool FTickSound(BLOCKSOUND& bs)
         if (!v.voice) continue;
         if (!bs.paused && !FGroupPaused(bs.group)) AdvanceEffectEnvelope(v, 200);
         ApplyVoiceVolume(bs, v);
+        FeedNoiseVoice(v);
     }
     CleanEffectVoices(bs);
     TickEffectLfos(bs);
@@ -1248,11 +1640,32 @@ bool FTickSound(BLOCKSOUND& bs)
     return false;
 }
 
-// orig: (IOP) 989snd BlockSoundHandler::Stop
+// orig: (IOP) 989snd.irx 0xEDA0 (a sound stopped: by the EE, an instance limit, its STOP grain, its parent): its
+// children stopped; the first time, a sound with an on-stop marker (grain 0x2B, not the last: 0x49CC) runs the grains
+// after it at once (0x4870) and lives on while they play; else its LFOs stop (0x2440) and its voices are keyed off
+// (0x1A438), the sound freed once they end
 void StopBlockSound(BLOCKSOUND& bs)
 {
-    bs.done = true;
     for (auto& child : bs.children) StopBlockSound(*child);
+    if (!bs.stopping)
+    {
+        bs.stopping = true;
+        const std::vector<GRAIN>& ag = bs.Sound().grains;
+        int iMark = -1;
+        for (int i = 0; i + 1 < static_cast<int>(ag.size()) && iMark < 0; ++i)
+            if (ag[size_t(i)].type == GRAINK_OnStopMarker) iMark = i;
+        if (iMark >= 0)
+        {
+            bs.done = false;
+            bs.skipGrains = false;
+            bs.nextGrain = iMark + 1;
+            for (int c = 0; !bs.done && c < 1024; ++c) ExecuteEffectGrain(bs);
+            if (!bs.voices.empty() || !bs.children.empty()) return;
+        }
+    }
+    bs.done = true;
+    bs.lfoStopped = true;
+    bs.tickStop = s_tick;
     for (EFFECTVOICE& v : bs.voices) ReleaseEffectEnvelope(v);
 }
 
@@ -1308,9 +1721,71 @@ EFFECTBANK* PbankFind(uint32_t h)
     return it == s_mpbank.end() ? nullptr : it->second.get();
 }
 
+// 989snd's master volume duckers (4; orig: (IOP) 989snd.irx 0x1C224 snd_SetMasterVolumeDucker, export 119): while a
+// voice of the source group plays, the target groups' duck factor falls to the full duck in attack steps, then
+// rises back in release steps.
+struct DUCKER
+{
+    int srcGroup = -1;            // +0x00 (-1 unused)
+    uint32_t grfTarget = 0;       // +0x04 the target groups' mask
+    int fullDuck = 0x10000;       // +0x08 16.16
+    int stepAttack = 1;           // +0x0C (set from the attack time: (0x10000 - full) / (t * 30 >> 16))
+    int stepRelease = 1;          // +0x10
+    int cur = 0x10000;            // +0x14
+};
+std::array<DUCKER, 4> s_aducker{};
+
+void UpdateAllVoiceVolumes()
+{
+    for (auto& [h, pbs] : s_mpsound)
+        for (EFFECTVOICE& v : pbs->voices) ApplyVoiceVolume(*pbs, v);
+    SpiopMasterChanged();
+}
+
+// orig: (IOP) 989snd.irx 0x1BFB4 (every 4th tick): the groups with a playing voice (not paused), each ducker
+// stepped, each target group's factor the lowest of its duckers', the voices updated when one changed
+void UpdateDuckers()
+{
+    uint32_t grfActive = SpiopActiveGroups();
+    for (const auto& [h, pbs] : s_mpsound)
+    {
+        if (pbs->paused || FGroupPaused(pbs->group) || pbs->group < 0 || pbs->group >= 32) continue;
+        for (const EFFECTVOICE& v : pbs->voices)
+            if (v.voice && v.envelopePhase != EffectEnvelope_Stopped) grfActive |= 1u << pbs->group;
+    }
+    std::array<uint32_t, 15> agDuck{};
+    agDuck.fill(0x10000);
+    for (DUCKER& d : s_aducker)
+    {
+        if (d.srcGroup == -1) continue;
+        if (grfActive & (1u << d.srcGroup))
+        {
+            if (d.cur != d.fullDuck)
+            {
+                d.cur -= d.stepAttack;
+                if (d.cur < d.fullDuck) d.cur = d.fullDuck;
+            }
+        }
+        else
+        {
+            if (d.cur == 0x10000) continue;
+            d.cur += d.stepRelease;
+            if (static_cast<uint32_t>(d.cur) > 0x10000u) d.cur = 0x10000;
+        }
+        for (int g = 0; g < 15; ++g)
+            if ((d.grfTarget & (1u << g)) && static_cast<uint32_t>(d.cur) < agDuck[size_t(g)]) agDuck[size_t(g)] = static_cast<uint32_t>(d.cur);
+    }
+    if (agDuck != s_agroupduck)
+    {
+        s_agroupduck = agDuck;
+        UpdateAllVoiceVolumes();
+    }
+}
+
 void TickAll()
 {
     ++s_tick;
+    if ((s_tick & 3) == 0) UpdateDuckers();
     for (auto it = s_mpsound.begin(); it != s_mpsound.end();)
     {
         if (FTickSound(*it->second))
@@ -1326,13 +1801,22 @@ void TickAll()
 
 void ThreadMain()
 {
+    cane::sched::RegisterAudioThread();   // (Windows: MMCSS "Audio"; the 1 ms timer is the process's: platform/game_sched.h)
     using clock = std::chrono::steady_clock;
     const auto period = std::chrono::duration_cast<clock::duration>(std::chrono::duration<double>(1.0 / kTickHz));
     auto next = clock::now();
     while (s_fThread.load(std::memory_order_acquire))
     {
         {
+            const auto tWake = clock::now();
             std::lock_guard<std::recursive_mutex> lock(g_mtxSound);
+            // (debug, SNDCOUNT: how late the ticks run: the wake after the due time plus the wait for the lock; a noise
+            // voice queues 15 ms, a lag beyond that starves it)
+            const double msLate = std::chrono::duration<double, std::milli>(clock::now() - next).count();
+            const double msLock = std::chrono::duration<double, std::milli>(clock::now() - tWake).count();
+            s_msTickLateMax = std::max(s_msTickLateMax, msLate);
+            s_msTickLockMax = std::max(s_msTickLockMax, msLock);
+            if (msLate > 12.0) ++s_cTickLate;
             // Ticks counted from elapsed time (a late wake runs the missed ones, at most 8).
             for (int i = 0; i < 8 && clock::now() >= next; ++i)
             {
@@ -1370,15 +1854,14 @@ void snd_StopSoundSystem()
 uint32_t snd_BankLoadByLoc(uint32_t isector, uint32_t ib)
 {
     auto bank = std::make_unique<EFFECTBANK>();
-    const uint64_t at = uint64_t(isector) * 2048 + ib;
     uint8_t head[24];
-    if (!g_disc.FReadBytes(at, head, sizeof(head))) return 0;
+    if (!g_disc.FReadFileBytes(isector, ib, head, sizeof(head))) return 0;
     uint32_t type = 0, cchunk = 0;
     std::memcpy(&type, head, 4);
     std::memcpy(&cchunk, head + 4, 4);
     if ((type != 1 && type != 3) || cchunk < 2 || cchunk > 8) return 0;
     std::vector<uint8_t> attr(8 + 8 * cchunk);
-    if (!g_disc.FReadBytes(at, attr.data(), attr.size())) return 0;
+    if (!g_disc.FReadFileBytes(isector, ib, attr.data(), attr.size())) return 0;
     uint32_t cb = 0;
     for (uint32_t i = 0; i < cchunk; ++i)
     {
@@ -1389,7 +1872,7 @@ uint32_t snd_BankLoadByLoc(uint32_t isector, uint32_t ib)
     }
     if (cb == 0 || cb > 64u << 20) return 0;
     bank->bytes.resize(cb);
-    if (!g_disc.FReadBytes(at, bank->bytes.data(), cb)) return 0;
+    if (!g_disc.FReadFileBytes(isector, ib, bank->bytes.data(), cb)) return 0;
     if (!Parse989SfxBank(*bank))
     {
         std::fprintf(stderr, "snd: bad bank at sector 0x%X\n", isector);
@@ -1397,6 +1880,8 @@ uint32_t snd_BankLoadByLoc(uint32_t isector, uint32_t ib)
     }
     std::lock_guard<std::recursive_mutex> lock(g_mtxSound);
     bank->isector = isector;
+    // (PC) the installed bank's samples are WAVs beside it; a bank from the mods folder plays its own samples
+    bank->fWavSamples = ib == 0 && g_disc.FConverted() && !g_disc.FModded(isector);
     bank->hbank = 0x00010000u | (s_hbankNext++ & 0xFFu) << 8;
     const uint32_t h = bank->hbank;
     if (std::getenv("SLY2N_SNDLOG"))
@@ -1441,6 +1926,33 @@ void snd_SetMasterVolume(int group, int vol)
     SpiopMasterChanged();
 }
 
+// orig: (IOP) 989snd.irx 0x1C224 (export 119): ducker which (0..3) from {source group, target mask, full duck,
+// attack, release} (16.16; times in seconds), or unused (nullptr)
+void snd_SetMasterVolumeDucker(int which, const SNDDUCKER* pdef)
+{
+    std::lock_guard<std::recursive_mutex> lock(g_mtxSound);
+    if (which < 0 || which >= 4) return;
+    DUCKER& d = s_aducker[size_t(which)];
+    if (!pdef)
+    {
+        d.srcGroup = -1;
+        return;
+    }
+    d.srcGroup = pdef->srcGroup;
+    d.grfTarget = pdef->grfTarget;
+    d.fullDuck = pdef->fullDuck;
+    const int span = 0x10000 - d.fullDuck;
+    auto step = [&](int t) {
+        int n = (t * 30) >> 16;
+        if (n == 0) n = 1;
+        const int s = span / n;
+        return s == 0 ? 1 : s;
+    };
+    d.stepAttack = step(pdef->tAttack);
+    d.stepRelease = step(pdef->tRelease);
+    d.cur = 0x10000;
+}
+
 int snd_GetMasterVolume(int group)
 {
     std::lock_guard<std::recursive_mutex> lock(g_mtxSound);
@@ -1463,6 +1975,23 @@ uint32_t snd_PlaySoundEx(const SNDPLAYPARAMS& params)
     if (!pbank || params.isound < 0 || params.isound >= static_cast<int>(pbank->sounds.size())) return 0;
     SOUND& sfx = pbank->sounds[params.isound];
     const int vol = (params.mask & SNDPPM_Vol) ? params.vol : 0x400;
+    if (static const char* s_sz = std::getenv("SLY2N_SNDPARAMS"); s_sz && (std::atoi(s_sz) == params.isound || std::atoi(s_sz) == -1))   // (debug: one sound's plays)
+    {
+        int c = 0;
+        for (auto& [h, pbs] : s_mpsound) c += pbs->pbank == pbank && pbs->isound == params.isound;
+        std::printf("sndparams: sound %d mask 0x%X vol %d pan %d pm %d pb %d (sound vol %d group %d limit %d flags 0x%X grains %zu) playing %d\n",
+                    params.isound, params.mask, params.vol, params.pan, params.pm, params.pb, sfx.volume, sfx.volumeGroup,
+                    sfx.instanceLimit, sfx.flags, sfx.grains.size(), c);
+        static bool s_afDumped[1024];
+        if (std::getenv("SLY2N_NOISEDBG") && params.isound < 1024 && !s_afDumped[params.isound])
+        {
+            s_afDumped[params.isound] = true;
+            for (const GRAIN& g : sfx.grains)
+                std::printf("  grain type %u delay %d param %d %d %d %d tone flags 0x%X center %d adsr %04X %04X lfo type %d target %d depth %d\n", g.type, g.delay,
+                            g.param[0], g.param[1], g.param[2], g.param[3], g.tone.flags, g.tone.centerNote, g.tone.adsr1, g.tone.adsr2,
+                            int(g.lfo.shape), int(g.lfo.target), int(g.lfo.depth));
+        }
+    }
     // CheckInstanceLimit: flags 8 limit, 0x10 the quietest goes, 0x20 the oldest goes.
     if (sfx.instanceLimit && (sfx.flags & 8))
     {
@@ -1592,19 +2121,143 @@ int snd_CVoicesActive()
     {
         const BLOCKSOUND* p = stack.back();
         stack.pop_back();
-        c += static_cast<int>(p->voices.size());
+        c += CLiveVoices(*p);
         for (auto& child : p->children) stack.push_back(child.get());
     }
     return c;
 }
 
+// orig: (IOP) 989snd.irx 0x10DE0 / 0x10E50: a VAG stream channel's voice (the stream's group, priority 0x7F, locked)
+int snd_AllocStreamVoice(int group)
+{
+    std::lock_guard<std::recursive_mutex> lock(g_mtxSound);
+    (void)group;  // (every group's range is 0..47)
+    return FVoiceLimit() ? AllocSpuVoice(0, kcSpuVoice - 1, 0x7F, true, SPUVS_Stream) : -1;
+}
+
+// orig: (IOP) 989snd.irx 0x1AEC0 (the stream's voices freed with it)
+void snd_FreeStreamVoice(int iv)
+{
+    std::lock_guard<std::recursive_mutex> lock(g_mtxSound);
+    if (iv >= 0 && iv < kcSpuVoice && s_aspuvoice[size_t(iv)].status == SPUVS_Stream) FreeSpuVoice(iv);
+}
+
+SNDSPUSTATS snd_SpuStats()
+{
+    std::lock_guard<std::recursive_mutex> lock(g_mtxSound);
+    SNDSPUSTATS st;
+    for (const SPUVOICE& sv : s_aspuvoice)
+    {
+        st.cUsed += sv.status != SPUVS_Free;
+        st.cStream += sv.status == SPUVS_Stream;
+    }
+    st.cPeak = s_spustats.cPeak;
+    st.cAlloc = s_spustats.cAlloc;
+    st.cSteal = s_spustats.cSteal;
+    st.cFail = s_spustats.cFail;
+    // voices of a stopped sound still playing 4 s after the stop (a release is at most ~1 s at 989snd's rates)
+    std::vector<const BLOCKSOUND*> stack;
+    for (auto& [h, pbs] : s_mpsound) stack.push_back(pbs.get());
+    while (!stack.empty())
+    {
+        const BLOCKSOUND* p = stack.back();
+        stack.pop_back();
+        st.cVoiceHost += CLiveVoices(*p);
+        if (p->done && p->lfoStopped && s_tick > p->tickStop + 4 * kTickHz) st.cStale += CLiveVoices(*p);
+        for (auto& c : p->children) stack.push_back(c.get());
+    }
+    return st;
+}
+
+std::vector<SNDENDLESS> snd_EndlessLoopers()
+{
+    std::lock_guard<std::recursive_mutex> lock(g_mtxSound);
+    std::vector<SNDENDLESS> a;
+    const EFFECTBANK* pbankFirst = s_mpbank.empty() ? nullptr : s_mpbank.begin()->second.get();
+    for (auto& [h, pbs] : s_mpsound)
+    {
+        if (pbs->done || pbs->stopping) continue;
+        const SOUND& snd = pbs->pbank->sounds[size_t(pbs->isoundOrig)];
+        if (!snd.IsLooper()) continue;
+        if (std::any_of(snd.grains.begin(), snd.grains.end(), [](const GRAIN& g) { return g.type == GRAINK_Stop; })) continue;
+        a.push_back({h, pbs->isoundOrig, pbs->pbank == pbankFirst, s_tick - pbs->startTick});
+    }
+    return a;
+}
+
 std::string snd_Describe()
 {
     std::lock_guard<std::recursive_mutex> lock(g_mtxSound);
-    char ach[96];
-    std::snprintf(ach, sizeof(ach), "%zu banks, %zu sounds, %d voices, %s", s_mpbank.size(), s_mpsound.size(),
-                  snd_CVoicesActive(), SpiopDescribe().c_str());
-    return ach;
+    char ach[200];
+    const SNDSPUSTATS st = snd_SpuStats();
+    std::snprintf(ach, sizeof(ach), "%zu banks, %zu sounds, %d voices (spu %d/48: %d streams, peak %d, stolen %llu, "
+                  "dropped %llu, stale %d), %s", s_mpbank.size(), s_mpsound.size(), snd_CVoicesActive(), st.cUsed, st.cStream,
+                  st.cPeak, static_cast<unsigned long long>(st.cSteal), static_cast<unsigned long long>(st.cFail), st.cStale,
+                  SpiopDescribe().c_str());
+    std::string str = ach;
+    // (the host's effect voices made and destroyed: made - destroyed beyond the voices above would be leaked FAudio voices)
+    str += ", host voices made " + std::to_string(s_cHostVoiceCreated) + " destroyed " + std::to_string(s_cHostVoiceDestroyed);
+    char achTick[96];
+    std::snprintf(achTick, sizeof(achTick), ", ticks late max %.1f ms (lock %.1f), %llu over 12 ms", s_msTickLateMax, s_msTickLockMax,
+                  static_cast<unsigned long long>(s_cTickLate));
+    str += achTick;
+    s_msTickLateMax = s_msTickLockMax = 0.0;
+    if (!s_mpnoisedenied.empty())
+    {
+        str += ", noise denied";
+        for (const auto& [i, c] : s_mpnoisedenied) str += " " + (i < 0 ? "k" + std::to_string(-1 - i) : std::to_string(i)) + "x" + std::to_string(c);
+        s_mpnoisedenied.clear();
+    }
+    // (debug: SLY2N_SNDLIST: the live sounds by bank sound: count x voices)
+    if (static const bool s_fList = std::getenv("SLY2N_SNDLIST") != nullptr; s_fList)
+    {
+        std::map<int, std::pair<int, int>> mp, mpKept;   // (kept: a bank other than the first loaded: pcloader's kept worlds)
+        const EFFECTBANK* pbankFirst = s_mpbank.empty() ? nullptr : s_mpbank.begin()->second.get();
+        for (auto& [h, pbs] : s_mpsound)
+        {
+            int cv = 0;
+            std::vector<const BLOCKSOUND*> stack{pbs.get()};
+            while (!stack.empty())
+            {
+                const BLOCKSOUND* p = stack.back();
+                stack.pop_back();
+                cv += CLiveVoices(*p);
+                for (auto& c : p->children) stack.push_back(c.get());
+            }
+            auto& e = (pbs->pbank == pbankFirst ? mp : mpKept)[pbs->isoundOrig];
+            ++e.first, e.second += cv;
+        }
+        str += "\n  sounds:";
+        for (auto& [is, e] : mp) str += " " + std::to_string(is) + ":" + std::to_string(e.first) + "x" + std::to_string(e.second);
+        if (!mpKept.empty())
+        {
+            str += "; other banks:";
+            for (auto& [is, e] : mpKept) str += " " + std::to_string(is) + ":" + std::to_string(e.first) + "x" + std::to_string(e.second);
+        }
+        // (SLY2N_SNDINST=isound: that bank sound's instances: age in ticks, next grain, countdown, done / paused / stopping)
+        if (static const char* s_szInst = std::getenv("SLY2N_SNDINST"); s_szInst)
+            for (auto& [h, pbs] : s_mpsound)
+                if (pbs->isoundOrig == std::atoi(s_szInst))
+                    str += "\n  inst " + std::to_string(h) + ": age " + std::to_string(s_tick - pbs->startTick) + " grain " +
+                           std::to_string(pbs->nextGrain) + "/" + std::to_string(pbs->Sound().grains.size()) + " countdown " +
+                           std::to_string(pbs->countdown) + " done " + std::to_string(pbs->done) + " paused " + std::to_string(pbs->paused) +
+                           " stopping " + std::to_string(pbs->stopping) + " group " + std::to_string(pbs->group) + " voices " +
+                           std::to_string(CLiveVoices(*pbs));
+        // (SLY2N_SNDLIST=2: the SPU voice table, each voice's owner (k: another bank) and priority)
+        if (static const bool s_fVoices = std::atoi(std::getenv("SLY2N_SNDLIST")) >= 2; s_fVoices)
+        {
+            str += "\n  noise cores: " + std::to_string(s_anoisecore[0].priority) + (s_anoisecore[0].fLock ? "L" : "") + " " +
+                   std::to_string(s_anoisecore[1].priority) + (s_anoisecore[1].fLock ? "L" : "") + "; spu:";
+            for (const SPUVOICE& sv : s_aspuvoice)
+            {
+                if (sv.status == SPUVS_Free) { str += " -"; continue; }
+                if (!sv.pbs) { str += " s" + std::to_string(sv.priority); continue; }
+                str += " " + std::string(sv.pbs->pbank == pbankFirst ? "" : "k") + std::to_string(sv.pbs->isoundOrig) +
+                       (sv.pbs->pbank->sounds[size_t(sv.pbs->isoundOrig)].IsLooper() ? "L" : "") + "@" + std::to_string(sv.priority);
+            }
+        }
+    }
+    return str;
 }
 
 void snd_StreamLevels(int vol, int pan, int chanPan, int group, float* pgLeft, float* pgRight)
@@ -1613,6 +2266,10 @@ void snd_StreamLevels(int vol, int pan, int chanPan, int group, float* pgLeft, f
     const VOLPAIR p = MakeVolume(127, chanPan, vol, pan, 127, 0);
     *pgLeft = static_cast<float>(AdjustVolToGroup(p.left, group) >> 1) / 16383.0f;
     *pgRight = static_cast<float>(AdjustVolToGroup(p.right, group) >> 1) / 16383.0f;
+    if (static const bool s_f = std::getenv("SLY2N_MOVIEAUDIT") != nullptr; s_f)   // (debug: the stream's group levels)
+        std::printf("streamlevels: group %d master %d duck 0x%X master(16) %d -> %.3f %.3f\n", group,
+                    group >= 0 && group < 32 ? s_amastervol[size_t(group)] : -1, group >= 0 && group < 15 ? s_agroupduck[size_t(group)] : 0u,
+                    s_amastervol[SND_GROUP_MASTER], *pgLeft, *pgRight);
 }
 
 bool snd_FGroupPaused(int group)
@@ -1625,4 +2282,37 @@ void snd_Tick()
 {
     std::lock_guard<std::recursive_mutex> lock(g_mtxSound);
     TickAll();
+}
+
+// (the converter) Every sample a bank's tones play, decoded as EffectToneSample does.
+bool snd_DecodeBankSamples(const std::vector<uint8_t>& bytes, std::vector<SNDBANKSAMPLE>& asample)
+{
+    EFFECTBANK bank;
+    bank.bytes = bytes;
+    if (!Parse989SfxBank(bank)) return false;
+    std::map<uint32_t, std::vector<int>> mpoffsetasound;
+    for (std::size_t isound = 0; isound < bank.sounds.size(); ++isound)
+        for (const GRAIN& g : bank.sounds[isound].grains)
+        {
+            if (g.type != GRAINK_Tone && g.type != GRAINK_Tone2) continue;
+            if ((g.tone.flags & 8) || g.tone.sampleOffset >= bank.sampleSize) continue;  // (noise: no sample)
+            auto& a = mpoffsetasound[g.tone.sampleOffset];
+            if (a.empty() || a.back() != int(isound)) a.push_back(int(isound));
+        }
+    for (const auto& [offset, asound] : mpoffsetasound)
+    {
+        SNDBANKSAMPLE s;
+        DecodedEffectSample d;
+        DecodeSpuAdpcm(bank.bytes, std::size_t(bank.sampleOffset) + offset, std::size_t(bank.sampleOffset) + bank.sampleSize,
+                       d.pcm, d.loop, d.loopBegin, d.loopLength);
+        if (d.pcm.empty()) continue;
+        s.offset = offset;
+        s.pcm = std::move(d.pcm);
+        s.loop = d.loop;
+        s.loopBegin = d.loopBegin;
+        s.loopLength = d.loopLength;
+        s.asound = asound;
+        asample.push_back(std::move(s));
+    }
+    return true;
 }

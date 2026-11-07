@@ -3,6 +3,7 @@
 #include "actor.h"
 #include "clock.h"
 #include "interact.h"
+#include "reach.h"
 #include "jump.h"
 #include "jt.h"
 #include "objmethod.h"
@@ -14,6 +15,8 @@ void UseObjectBy(LO* puse, ACTOR* pa);  // interact.cpp: the use's vt slot 51 (0
 #include <cstdio>
 #include <map>
 #include <string>
+
+void SetMurrayRage(ACTOR* pa, bool f);  // actorai.cpp (0x1B9CA0)
 
 namespace
 {
@@ -35,6 +38,13 @@ struct INITINTERACTMETHODS
 {
     INITINTERACTMETHODS()
     {
+        // orig: 0x001FFD98, EOPID 751 (option 342): the actor's vt slot 89
+        // returns its current jump kind (Sly 0x0018D620), including 1 in flight.
+        RegisterObjectGetter(751, [](LO* plo) {
+            CRef ref;
+            if (ACTOR* pa = PactorFromLo(plo)) ref.SetS32(ActorJumpKind(pa));
+            return ref;
+        });
         // 0x10C2E8 (the world's, one object: 0x195608, the world's aura on that tracked target: jt.cpp)
         RegisterObjectMethod(0x10C2E8, [](LO*, const std::vector<CRef>& a) {
             ShowJtAura(g_psw, PloArg(a, 0));
@@ -52,11 +62,33 @@ struct INITINTERACTMETHODS
             BroadcastTaskEvent(g_psw, 0x1A, plo);            // 0x1619A0
             return CRef(TAGK_Void);
         });
+        // option 940 of Murray (EOPID 1052, thunk 0x10D3E8 -> 0x1B9CA0, one bool): the rage on / off (world 15's
+        // hypno-boxes, block 77135's modules 139 / 141 / 143; R26). Unbound, he never stormed at Sly
+        RegisterObjectMethod(0x10D3E8, [](LO* plo, const std::vector<CRef>& a) {
+            const bool f = !a.empty() && (a[0].m_tagk == TAGK_Bool ? a[0].m_bool != 0 : a[0].RefCoerceS32().m_n != 0);
+            SetMurrayRage(PactorFromLo(plo), f);
+            return CRef(TAGK_Void);
+        });
+        // 0x100860 (option 13, EOPID 12, no arguments: 0x133380, the object's vt slot 3 (6)): e.g. Ep4's prison
+        // elevator, whose ride script 80619 ends with it: the proxy 77357's event 6 sets t4_heist3_elevator (2546)
+        // (R02; unbound, the task never came and "Get down to the ground floor" stayed)
+        RegisterObjectMethod(0x100860, [](LO* plo, const std::vector<CRef>&) {
+            HandleLoSpliceEvent(plo, 6, false, 0, nullptr);  // 0x1A61E0 (the base's slot 3)
+            BroadcastTaskEvent(g_psw, 0x1B, plo);            // 0x1619A0
+            return CRef(TAGK_Void);
+        });
         // 0x10D5D0 (an object: the use's vt slot 51 with it as the user, 0x184130 / cid 0x24's 0x184330): e.g. the
         // intro's SCPT 1674 has Sly use 80398 through its event 4
         RegisterObjectMethod(0x10D5D0, [](LO* plo, const std::vector<CRef>& a) {
             if (ACTOR* pa = PactorFromLo(PloArg(a, 0))) UseObjectBy(plo, pa);
             return CRef(TAGK_Void);
+        });
+        // 0x10D660 (EOPID 1072, an object: 0x1841F0, may that player take the use: its players +0xFC AND the
+        // actor's +0x1000)
+        RegisterObjectMethod(0x10D660, [](LO* plo, const std::vector<CRef>& a) {
+            CRef ref;
+            ref.SetBool(FUseAllows(plo, PactorFromLo(PloArg(a, 0))));
+            return ref;
         });
         // 0x10D6E0 (three oids: 0x1840B8, FAddRsmg (trigger) on the use's list +0x118 / +0x11C: the root, its state
         // machine, the state; 4 entries less one at most)
@@ -82,7 +114,7 @@ struct INITINTERACTMETHODS
             {
                 LO* pt = PloArg(a, 0);
                 SetActorInteractObject(pa, 5, pt);
-                if (pt) WarnOnce("0x1421F8's reach +0x900 (0x1CD308)");
+                if (pt) PlaceReachObject(&pa->inter.reach, pt);  // 0x1CD308 (reach.cpp)
             }
             return CRef();
         });

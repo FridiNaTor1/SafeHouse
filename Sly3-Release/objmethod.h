@@ -28,6 +28,15 @@ using PFNOBJSETTER = void (*)(LO* plo, const CRef& ref);
 void RegisterObjectSetter(int eopid, PFNOBJSETTER pfn);
 PFNOBJSETTER PfnObjectSetter(int eopid);
 
+// Sly 3: the forms above take the copied Sly 2 code's numbers (a Sly 2 thunk / EOPID) and register the body under the
+// Sly 3 counterparts (game/thunkmap3.inc, game/gen/eopidmap.inc, fnmap.inc; unmapped: dropped); the lookups take Sly 3
+// numbers (the world's options, the EOPID table 0x32CA80). The *3 forms register a Sly 3 number as it is (and win).
+void RegisterObjectMethod3(uint32_t pfnThunk3, PFNOBJMETHOD pfn);
+void RegisterObjectGetter3(int eopid3, PFNOBJGETTER pfn);
+void RegisterObjectSetter3(int eopid3, PFNOBJSETTER pfn);
+// (debug) the registrations translated / dropped
+void RegistryStats3(int* pcmethod, int* pcmethodDropped, int* pceopid, int* pceopidDropped);
+
 // a splice function (TAGK_Method) calling the body registered for pfnThunk on plo (null when none is registered)
 bool FMakeObjectMethod(uint32_t pfnThunk, BASIC* pbasic, int crefReq, CRef* pref);
 

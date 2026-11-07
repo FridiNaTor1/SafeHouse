@@ -70,6 +70,17 @@ bool FTestKeyHeld(int binding)
 
 PCINPUTOPT g_pcinput = PcInputDefaults();
 
+namespace
+{
+int s_frameStickY = -100, s_frameStickY2 = -100;   // (NoteScriptStickRead: the frames a script last read stick Y / Y2)
+}
+void NoteScriptStickRead(int optid)
+{
+    if (optid == 901) s_frameStickY = g_frameJoy;
+    if (optid == 905) s_frameStickY2 = g_frameJoy;
+}
+bool FTankSticks() { return g_frameJoy - s_frameStickY <= 3 && g_frameJoy - s_frameStickY2 <= 3; }
+
 PCINPUTOPT PcInputDefaults()
 {
     PCINPUTOPT o;
@@ -77,6 +88,7 @@ PCINPUTOPT PcInputDefaults()
     std::copy(std::begin(st::kSly2DefaultKeyboardBindings), std::end(st::kSly2DefaultKeyboardBindings), o.keyboard.begin());
     std::copy(std::begin(st::kDefaultGamepadBindings), std::end(st::kDefaultGamepadBindings), o.gamepad.begin());
     std::copy(std::begin(st::kDefaultCameraKeys), std::end(st::kDefaultCameraKeys), o.cameraKeys.begin());
+    std::copy(std::begin(st::kDefaultTankKeys), std::end(st::kDefaultTankKeys), o.tankKeys.begin());
     return o;
 }
 
@@ -86,6 +98,7 @@ void PcInputFromSettings(const st::SystemSettings& s)
     std::copy(std::begin(s.keyboardBindings), std::end(s.keyboardBindings), o.keyboard.begin());
     std::copy(std::begin(s.gamepadBindings), std::end(s.gamepadBindings), o.gamepad.begin());
     std::copy(std::begin(s.cameraKeyBindings), std::end(s.cameraKeyBindings), o.cameraKeys.begin());
+    std::copy(std::begin(s.tankKeyBindings), std::end(s.tankKeyBindings), o.tankKeys.begin());
     o.fDisableUnfocusedPad = s.disableControllerInputWhenUnfocused != 0;
     o.fMouseCamera = s.mouseCamera != 0;
     o.mouseSensitivity = s.mouseSensitivity;
@@ -117,6 +130,7 @@ void PcInputToSettings(st::SystemSettings& s)
     std::copy(o.keyboard.begin(), o.keyboard.end(), s.keyboardBindings);
     std::copy(o.gamepad.begin(), o.gamepad.end(), s.gamepadBindings);
     std::copy(o.cameraKeys.begin(), o.cameraKeys.end(), s.cameraKeyBindings);
+    std::copy(o.tankKeys.begin(), o.tankKeys.end(), s.tankKeyBindings);
     s.disableControllerInputWhenUnfocused = o.fDisableUnfocusedPad;
     s.mouseCamera = o.fMouseCamera;
     s.mouseSensitivity = o.mouseSensitivity;
@@ -466,6 +480,8 @@ uint64_t GrfKeyboardHeld(GLFWwindow* window)
         if (FKeyHeld(window, g_pcinput.keyboard[size_t(a)])) grf |= 1ull << a;
     for (int i = 0; i < 4; ++i)
         if (FKeyHeld(window, g_pcinput.cameraKeys[size_t(i)])) grf |= 1ull << (PCA_Max + i);
+    for (int i = 0; i < 2; ++i)
+        if (FKeyHeld(window, g_pcinput.tankKeys[size_t(i)])) grf |= 1ull << (PCA_Max + 6 + i);
     if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS) grf |= 1ull << (PCA_Max + 4);
     if (glfwGetKey(window, GLFW_KEY_ENTER) == GLFW_PRESS) grf |= 1ull << (PCA_Max + 5);
     return grf;
@@ -543,6 +559,20 @@ void ReadPcInput(GLFWwindow* window, uint16_t* pgrf, float* pxl, float* pyl, flo
     if (afKey[PCA_Right] && !afKey[PCA_Left]) xl = 1.0f;
     if (afKey[PCA_Up] && !afKey[PCA_Down]) yl = 1.0f;
     if (afKey[PCA_Down] && !afKey[PCA_Up]) yl = -1.0f;
+    // (PC) the tank (FTankSticks: a script drives one track by each stick's Y): with the keyboard, the left / right track
+    // keys (A / D) drive their track forward, both together; forward alone drives both, back reverses the held tracks
+    // (or both). The controller keeps its sticks.
+    if (FTankSticks() && !fMenu && !cane::input::tracker().lastWasGamepad())
+    {
+        const bool fL = FKeyHeld(window, g_pcinput.tankKeys[0]), fR = FKeyHeld(window, g_pcinput.tankKeys[1]);
+        const bool fFwd = afKey[PCA_Up], fBack = afKey[PCA_Down];
+        float gL = 0.0f, gR = 0.0f;
+        if (fBack) { gL = (fL || !fR) ? -1.0f : 0.0f; gR = (fR || !fL) ? -1.0f : 0.0f; }
+        else { gL = (fL || fFwd) ? 1.0f : 0.0f; gR = (fR || fFwd) ? 1.0f : 0.0f; }
+        xl = xr = 0.0f;
+        yl = gL;
+        yr = gR;
+    }
     for (int a = PCA_Square; a < PCA_Max; ++a)
         if (afKey[a]) grf |= s_abtnAction[a];
     // Escape: a fixed second Start (it pauses, and leaves the menus that Start closes)

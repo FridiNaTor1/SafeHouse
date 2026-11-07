@@ -2,7 +2,7 @@
 // placement (actor.h). Ported from the reference's m_13FF70.cpp (0x141588, 0x141640), m_188488.cpp (0x18A350,
 // 0x18A428), so_p3.cpp (0x1F58F0), m_2040F8.cpp (0x2052E0), mat.cpp (0x11B938 / 0x11BA08).
 #include "actor.h"
-#include "sly3/ids3.h"
+#include "game/sly3.h"
 #include "activate.h"
 #include "vtnative.h"
 #include "jt.h"
@@ -76,7 +76,7 @@ glm::vec3 RotateVectors(const glm::vec3& a, const glm::vec3& b, const glm::vec3&
 
 ACTOR* PactorFromLo(LO* plo)
 {
-    if (!plo || !FIsLoDerivedFrom(plo, Icid(CID3::PLAYER))) return nullptr;
+    if (!plo || !FIsLoDerivedFrom(plo, S3CID(0x34))) return nullptr;
     if (STEP* p = PstepFromLo(plo)) return dynamic_cast<ACTOR*>(p);
     // (made on first use when the world's start has not: the camera's checks)
     ACTOR* pa = static_cast<ACTOR*>(PstepNew(static_cast<ALO*>(plo)));
@@ -104,9 +104,8 @@ SLY* PslyFromLo(LO* plo) { return dynamic_cast<SLY*>(PactorFromLo(plo)); }
 void InitActorBase(ACTOR* pa)
 {
     ALO* palo = pa->palo;
-    const glm::mat4 matParent = palo->paloParent ? MatWorldOfAlo(palo->paloParent) : glm::mat4(1.0f);
-    const glm::mat4 mat = MatWorldOfAlo(palo);
-    pa->vecBase = glm::vec4(glm::vec3(glm::inverse(mat) * (matParent * glm::vec4(0, 0, 0, 1))), 0.0f);
+    // 0x1A6F00(+0x10, p, 0): through the objects' vt slot 31 (their object records +0x60), not their first records
+    pa->vecBase = glm::vec4(PosJtConvert(palo->paloParent, palo, glm::vec3(0.0f)), 0.0f);
     if (palo->pcls && palo->pcls->PfnOrig(VTSLOT_Load) == 0x1885B8) pa->vecBase = glm::vec4(0.0f, 0.0f, -75.0f, 0.0f);
 }
 
@@ -121,7 +120,7 @@ ACTORPOSE PoseFromLo(LO* plo)
 {
     ACTORPOSE pose;
     glm::mat4 m(1.0f);
-    if (plo && FIsLoDerivedFrom(plo, Icid(CID3::ALO)))
+    if (plo && FIsLoDerivedFrom(plo, S3CID(0x30)))
     {
         // vt slot 31 (0x1A62E8's matrix): the object record's (an actor's moves with its position record, not the root)
         const XF* pxf = PxfObj(static_cast<ALO*>(plo));
@@ -139,7 +138,7 @@ ACTORPOSE PoseFromLo(LO* plo)
         h.tLast = g_clock.t;
     }
     pose.vPoint = h.v;
-    if (plo && FIsLoDerivedFrom(plo, Icid(CID3::ALO)) && Psost(static_cast<ALO*>(plo)))
+    if (plo && FIsLoDerivedFrom(plo, S3CID(0x30)) && Psost(static_cast<ALO*>(plo)))
     {
         // 0x22D348 on the object's point: its mass state's velocity (slot 33 0x1F4440), and slot 34's angular one
         ALO* palo = static_cast<ALO*>(plo);
@@ -204,7 +203,7 @@ void GetInteractCpdefi(ACTOR& a, const ACTORPOSE& pose, CPDEFI* pc)
     if (a.plo1024 != i.ploZone || !i.ploZone) return;
     pc->sAdjust = 0.0f;
     LO* pt = i.ploTarget;
-    const bool fLedge = pt && FIsLoDerivedFrom(pt, 0x0C);
+    const bool fLedge = pt && FIsLoDerivedFrom(pt, S3CID(0x0C));
     const CRV* pcrv = fLedge ? PcrvFromLo(pt) : nullptr;
     auto sFirst = [](const CRV* p) { return p && !p->as.empty() ? p->as.front() : 0.0f; };  // 0x1E6620
     auto sLast = [](const CRV* p) { return p && !p->as.empty() ? p->as.back() : 0.0f; };    // 0x1E6648
@@ -221,7 +220,7 @@ void GetInteractCpdefi(ACTOR& a, const ACTORPOSE& pose, CPDEFI* pc)
                 if (pt->U32Field(0, 0xE4, 0) == 0)
                 {
                     float e = sLast(pcrv);
-                    if (pt->U32Field(0, 0x1BC, 0) & 2) e += 100.0f;
+                    if (pt->U32Field(0, 0x1CC, 0) & 2) e += 100.0f;
                     g = std::min(g, e);
                 }
             }
@@ -231,7 +230,7 @@ void GetInteractCpdefi(ACTOR& a, const ACTORPOSE& pose, CPDEFI* pc)
                 if (pt->U32Field(0, 0xE4, 0) == 0)
                 {
                     float e = sFirst(pcrv);
-                    if (pt->U32Field(0, 0x1BC, 0) & 1) e -= 100.0f;
+                    if (pt->U32Field(0, 0x1CC, 0) & 1) e -= 100.0f;
                     g = std::max(g, e);
                 }
             }
@@ -384,14 +383,14 @@ void GetLoCpdefi(LO* plo, CPDEFI* pc)
 // orig: 0x002052E0 (slot 38)
 void TeleportActor(LO* plo, LO* plodest)
 {
-    if (!plo || !plodest || !FIsLoDerivedFrom(plo, Icid(CID3::ALO))) return;
-    if (!FIsLoDerivedFrom(plodest, 3) && !FIsLoDerivedFrom(plodest, Icid(CID3::ALO)))  // (slot 31: ALO 0x1F3FA0, LOX 0x231440)
+    if (!plo || !plodest || !FIsLoDerivedFrom(plo, S3CID(0x30))) return;
+    if (!FIsLoDerivedFrom(plodest, S3CID(3)) && !FIsLoDerivedFrom(plodest, S3CID(0x30)))  // (slot 31: ALO 0x1F3FA0, LOX 0x231440)
     {
         WarnOnce("0x1F49C8 (slot 38 to a non-located object)");
         return;
     }
     glm::mat4 m(1.0f);
-    if (FIsLoDerivedFrom(plodest, Icid(CID3::ALO)))
+    if (FIsLoDerivedFrom(plodest, S3CID(0x30)))
     {
         // the destination's vt slot 31 (ALO 0x1F3FA0): its object record's (+0x60) world matrix
         ALO* paloTo = static_cast<ALO*>(plodest);
@@ -445,7 +444,7 @@ void TeleportActor(LO* plo, LO* plodest)
         // LOX's are zero): e.g. the Ep1 heist harpoon put on the sign's point 142374 stops there
         if (Psost(palo))
         {
-            ALO* paloTo = FIsLoDerivedFrom(plodest, Icid(CID3::ALO)) ? static_cast<ALO*>(plodest) : nullptr;
+            ALO* paloTo = FIsLoDerivedFrom(plodest, S3CID(0x30)) ? static_cast<ALO*>(plodest) : nullptr;
             SetAloVelocityTo(palo, paloTo ? VelAloPos(paloTo) : glm::vec3(0.0f));
             SetAloAngVelocityTo(palo, paloTo ? AngVelAlo(paloTo) : glm::vec3(0.0f));
         }

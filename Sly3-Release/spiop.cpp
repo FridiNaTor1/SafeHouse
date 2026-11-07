@@ -9,12 +9,18 @@
 #include "audio.h"
 #include "disc.h"
 #include "snd989.h"
+#include "flacfile.h"
+#include "wavfile.h"
+
+#include "../platform/platform.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <memory>
 #include <vector>
 
@@ -23,6 +29,7 @@ namespace
 constexpr uint32_t kSector = 2048;
 constexpr int kTracks = 3;
 constexpr uint32_t kChunk = 0x1000;  // a VPK's interleave per channel; also what one refill decodes
+constexpr uint32_t kChunkFrames = kChunk / 16 * 28;  // (a WAV: the same frames per refill, at the same boundaries)
 
 uint32_t Be32(const uint8_t* p) { return (uint32_t(p[0]) << 24) | (uint32_t(p[1]) << 16) | (uint32_t(p[2]) << 8) | p[3]; }
 uint32_t Le32(const uint8_t* p) { uint32_t v; std::memcpy(&v, p, 4); return v; }
@@ -36,6 +43,11 @@ struct TRACKFILE
     uint32_t loopStart = 0;  // per channel
     uint32_t rate = 0;
     bool vag = false;
+    // A WAV (the converted installation's, or a mod's; wavfile.h): size, loopStart and sizeLoop are frames
+    bool wav = false;
+    WAVINFO wi;
+    uint32_t sizeLoop = 0;   // where a looping track's data ends (the smpl loop's end)
+    std::shared_ptr<const std::vector<int16_t>> pmem;  // a FLAC's frames, decoded whole at the start (flacfile.h)
 };
 
 struct CHANNEL
@@ -71,20 +83,108 @@ struct TRACK
     uint32_t pos = 0;  // per channel byte position of the next refill
     std::vector<uint8_t> abChunk;
     std::vector<int16_t> aPcm;
+    std::vector<int> aspu;  // its channels' SPU2 voices in 989snd's table (one a channel, 0x10DE0)
 };
 
 TRACK s_atrack[kTracks];
 uint32_t s_idCounter = 0;
 
-// The track's file header (0x20c4): false when the sector holds neither a VAGp nor a VPK.
+// The channel ids of a file at lsn whose own table is not known: the installed file's (CDisc::PathInstalled), when it
+// has cch channels; else every channel the installed file's single id (a dialog line: 0), else 5 (a plain stem).
+std::vector<int> AidFallback(uint32_t lsn, int cch)
+{
+    std::vector<int> aid;
+    const std::string path = g_disc.PathInstalled(lsn);
+    if (!path.empty())
+    {
+        const PFNWAVREAD pfn = PfnReadFile(path);
+        uint8_t h[0x40] = {};
+        if (pfn(0, h, sizeof(h)))
+        {
+            std::error_code ec;
+            WAVINFO wi;
+            if (FIsWav(h, sizeof(h)) && FParseWav(pfn, std::filesystem::file_size(cane::path(path), ec), wi))
+            {
+                for (const WAVSTEM& st : wi.astem) aid.push_back(st.id);
+                if (wi.astem.empty() && wi.cch == 1) aid.push_back(0);  // (a dialog line)
+            }
+            else if (!std::memcmp(h, "VAGp", 4) || FIsFlac(h, sizeof(h))) aid.push_back(0);
+            else if (!std::memcmp(h, " KPV", 4))
+                for (uint32_t i = 0; i < Le32(h + 0x14) && i < 6; ++i) aid.push_back(static_cast<int8_t>(h[0x18 + i * 4 + 1]));
+        }
+    }
+    if (int(aid.size()) == cch) return aid;
+    return std::vector<int>(std::size_t(cch), aid.size() == 1 ? aid[0] : 5);
+}
+
+// The track's file header (0x20c4): false when the sector holds neither a VAGp nor a VPK (nor a WAV or a FLAC).
 bool FOpenFile(TRACK& t, uint32_t lsn)
 {
     uint8_t h[kSector];
-    if (!g_disc.FReadBytes(uint64_t(lsn) * kSector, h, sizeof(h))) return false;
+    if (!g_disc.FReadFileBytes(lsn, 0, h, sizeof(h))) return false;
     TRACKFILE f;
     f.lsn = lsn;
     t.ch.clear();
-    if (std::memcmp(h, "VAGp", 4) == 0)
+    if (FIsFlac(h, sizeof(h)))
+    {
+        // (PC) a FLAC (the European dialog lines): decoded whole, then played as a WAV without a smpl chunk
+        const auto t0 = std::chrono::steady_clock::now();
+        std::vector<uint8_t> ab(std::size_t(g_disc.CbFile(lsn, 0)));
+        auto pmem = std::make_shared<std::vector<int16_t>>();
+        int rate = 0, cch = 0;
+        std::string error;
+        if (!g_disc.FReadFileBytes(lsn, 0, ab.data(), ab.size()) || !FDecodeFlac(ab, rate, cch, *pmem, &error) ||
+            pmem->size() / std::size_t(cch) >= 0xFFFFFFFFu)
+        {
+            std::fprintf(stderr, "spiop: %s: %s\n", g_disc.PathOf(lsn).c_str(), error.c_str());
+            return false;
+        }
+        if (std::getenv("SLY2N_SNDLOG"))
+            std::printf("spiop: %s: FLAC decoded in %.1f ms\n", g_disc.PathOf(lsn).c_str(),
+                        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count());
+        f.wav = true;
+        f.wi.rate = rate;
+        f.wi.cch = cch;
+        f.wi.cframe = pmem->size() / std::size_t(cch);
+        f.pmem = std::move(pmem);
+        f.nch = uint32_t(cch);
+        f.rate = uint32_t(rate);
+        f.size = f.sizeLoop = uint32_t(f.wi.cframe);
+        f.loopStart = 0;
+        for (int id : AidFallback(lsn, cch))
+        {
+            CHANNEL c;
+            c.id = id;
+            t.ch.push_back(c);
+        }
+    }
+    else if (FIsWav(h, sizeof(h)))
+    {
+        // (PC) a WAV: the same frames the ADPCM decodes to, with the VPK's loop and channel table (wavfile.h)
+        const PFNWAVREAD pfn = [lsn](uint64_t ib, void* pv, std::size_t cb) { return g_disc.FReadFileBytes(lsn, ib, pv, cb); };
+        std::string error;
+        if (!FParseWav(pfn, g_disc.CbFile(lsn, 0), f.wi, &error) || f.wi.cframe >= 0xFFFFFFFFull)
+        {
+            std::fprintf(stderr, "spiop: %s: %s\n", g_disc.PathOf(lsn).c_str(), error.c_str());
+            return false;
+        }
+        f.wav = true;
+        f.nch = uint32_t(f.wi.cch);
+        f.rate = uint32_t(f.wi.rate);
+        f.size = uint32_t(f.wi.cframe);
+        f.sizeLoop = uint32_t(f.wi.CframeLooped());
+        f.loopStart = uint32_t(f.wi.IframeLoopStart());
+        std::vector<int> aid;
+        for (const WAVSTEM& st : f.wi.astem) aid.push_back(st.id);
+        if (aid.empty()) aid = AidFallback(lsn, f.wi.cch);
+        for (int id : aid)
+        {
+            CHANNEL c;
+            c.id = id;
+            t.ch.push_back(c);
+        }
+    }
+    else if (std::memcmp(h, "VAGp", 4) == 0)
     {
         f.vag = true;
         f.nch = 1;
@@ -146,6 +246,13 @@ void ApplyStream(const TRACK& t, int itrack, STREAM& s)
         }
     }
     for (float& g : m) g *= kStreamGain;
+    // (debug: SLY2N_STREAMMUTE=mask silences tracks (1 ambience, 2 music, 4 dialog); SLY2N_STREAMLOG prints the levels)
+    static const int s_grfMute = std::getenv("SLY2N_STREAMMUTE") ? std::atoi(std::getenv("SLY2N_STREAMMUTE")) : 0;
+    if (s_grfMute & (1 << itrack))
+        for (float& g : m) g = 0.0f;
+    if (static const bool s_fLog = std::getenv("SLY2N_STREAMLOG") != nullptr; s_fLog)
+        std::printf("spiop: track %d id %u ch %d vol %d pan %d -> %.4f %.4f %.4f %.4f\n", itrack, t.id, s.ich0, s.vol, s.pan,
+                    m[0], m[1], m[2], m[3]);
     s.pcm->SetMatrix(m);
     s.pcm->SetFrequencyRatio(static_cast<float>(std::exp2(s.pm / 1536.0)));
 }
@@ -158,9 +265,12 @@ void ApplyTrack(TRACK& t, int itrack)
 // Decodes the next stretch (to the next 0x1000 boundary of the channels' data) into every stream; at the end
 // a looping track goes back to its loop start (the ADPCM history carries on, as the SPU2's does), else the
 // streams get their end. orig: (IOP) spiop 0x2794 (the interleaved read) + the SPU2 decoding
+bool FRefillWav(TRACK& t);
+
 bool FRefill(TRACK& t)
 {
     const TRACKFILE& f = t.file;
+    if (f.wav) return FRefillWav(t);
     if (t.pos >= f.size)
     {
         if ((t.flags & SPIOPF_Loop) && f.loopStart < f.size) t.pos = f.loopStart;
@@ -174,9 +284,9 @@ bool FRefill(TRACK& t)
     const uint32_t chunkStart = t.pos & ~(kChunk - 1);
     const uint32_t cbChunk = std::min(kChunk, f.size - chunkStart);
     const uint32_t cbRead = f.vag ? cbChunk : kChunk * f.nch;  // (a VPK's last chunk is padded to the interleave)
-    const uint64_t at = uint64_t(f.lsn) * kSector + f.data + uint64_t(chunkStart) * f.nch;
+    const uint64_t ib = f.data + uint64_t(chunkStart) * f.nch;
     t.abChunk.assign(cbRead, 0);
-    if (!g_disc.FReadBytes(at, t.abChunk.data(), cbRead))
+    if (!g_disc.FReadFileBytes(f.lsn, ib, t.abChunk.data(), cbRead))
     {
         for (STREAM& s : t.streams) s.pcm->FPush(nullptr, 0, true);
         t.state = 4;
@@ -203,8 +313,56 @@ bool FRefill(TRACK& t)
     return true;
 }
 
+// (PC) FRefill of a WAV: the same stretches in frames (to the next 7168-frame boundary, which is the ADPCM's 0x1000
+// bytes), so every stream is pushed the same frames in the same pieces as from the VPK / VAG it was converted from.
+bool FRefillWav(TRACK& t)
+{
+    const TRACKFILE& f = t.file;
+    const bool fLoop = (t.flags & SPIOPF_Loop) != 0;
+    const uint32_t end = fLoop ? f.sizeLoop : f.size;
+    if (t.pos >= end)
+    {
+        if (fLoop && f.loopStart < end) t.pos = f.loopStart;
+        else
+        {
+            for (STREAM& s : t.streams) s.pcm->FPush(nullptr, 0, true);
+            t.state = 4;
+            return false;
+        }
+    }
+    const uint32_t chunkStart = t.pos / kChunkFrames * kChunkFrames;
+    const uint32_t chunkEnd = std::min(chunkStart + kChunkFrames, end);
+    const uint32_t cframe = chunkEnd - t.pos;
+    const PFNWAVREAD pfn = [lsn = f.lsn](uint64_t ib, void* pv, std::size_t cb) { return g_disc.FReadFileBytes(lsn, ib, pv, cb); };
+    std::vector<int16_t> aframe(std::size_t(cframe) * f.nch);
+    if (f.pmem && cframe)
+        std::copy_n(f.pmem->data() + std::size_t(t.pos) * f.nch, std::size_t(cframe) * f.nch, aframe.data());
+    else if (cframe && !FReadWavFrames(pfn, f.wi, t.pos, cframe, aframe.data()))
+    {
+        for (STREAM& s : t.streams) s.pcm->FPush(nullptr, 0, true);
+        t.state = 4;
+        return false;
+    }
+    t.pos = chunkEnd;
+    if (cframe == 0) return true;
+    for (STREAM& s : t.streams)
+    {
+        const int cch = s.ich1 < 0 ? 1 : 2;
+        t.aPcm.assign(std::size_t(cframe) * cch, 0);
+        for (int k = 0; k < cch; ++k)
+        {
+            const int ich = k == 0 ? s.ich0 : s.ich1;
+            for (uint32_t i = 0; i < cframe; ++i) t.aPcm[std::size_t(i) * cch + k] = aframe[std::size_t(i) * f.nch + ich];
+        }
+        s.pcm->FPush(t.aPcm.data(), cframe);
+    }
+    return true;
+}
+
 void FreeTrack(TRACK& t)
 {
+    for (int iv : t.aspu) snd_FreeStreamVoice(iv);
+    t.aspu.clear();
     for (STREAM& s : t.streams)
         if (s.pcm) s.pcm->Close();
     t.streams.clear();
@@ -218,6 +376,7 @@ void FreeTrack(TRACK& t)
 bool FStartStreams(TRACK& t, int itrack)
 {
     const int n = static_cast<int>(t.ch.size());
+    for (int i = 0; i < n; ++i) t.aspu.push_back(snd_AllocStreamVoice(itrack));
     for (int i = 0; i < n; ++i)
     {
         STREAM s;
@@ -257,6 +416,28 @@ void SetRunning(TRACK& t, int itrack)
     ApplyTrack(t, itrack);
 }
 }  // namespace
+
+// orig: (IOP) spiop 0x400 (its start, 'SUKR' 0): 989snd's VAG streaming (10 streams), the voice ranges of groups
+// 0..2 (0..3, 4..8, 9; not modelled) and ducker 0: while a group 2 (dialog) voice plays, every other group's master
+// falls to 0.75 (0.5625 once squared) over 7 updates (989snd ducks at 60 Hz: 0.12 s) and comes back over 30 (0.5 s)
+void SpiopInit()
+{
+    const SNDDUCKER d{2, ~4u, 0xC000, 0x4000, 0x10000};
+    snd_SetMasterVolumeDucker(0, &d);
+}
+
+// The groups (tracks) with a stream playing, for 989snd's duckers (its voices are the stream voices of the track's
+// group, not paused).
+uint32_t SpiopActiveGroups()
+{
+    uint32_t grf = 0;
+    for (int i = 0; i < kTracks; ++i)
+    {
+        const TRACK& t = s_atrack[i];
+        if ((t.state == 3 || t.state == 4) && !t.paused && !t.groupPaused) grf |= 1u << i;
+    }
+    return grf;
+}
 
 // orig: (IOP) spiop fn 1 (0x7f4 / 0x1738); the EE side is 0x1FC510
 uint32_t SpiopStart(uint32_t isector, int vol, int pan, int itrack, uint32_t flags, bool fHeadset)
@@ -373,6 +554,15 @@ int SpiopFActive(uint32_t id)
     return PtrackFind(id) != nullptr;
 }
 
+// (debug: SLY2N_MUSICLAT) the seconds of a track the device has consumed (its first stream's frames played / rate), -1 none
+double SpiopTConsumed(uint32_t id)
+{
+    std::lock_guard<std::recursive_mutex> lock(g_mtxSound);
+    const TRACK* pt = PtrackFind(id);
+    if (!pt || pt->streams.empty() || !pt->streams[0].pcm || !pt->streams[0].pcm->m_rate) return -1.0;
+    return static_cast<double>(pt->streams[0].pcm->CFramePlayed()) / pt->streams[0].pcm->m_rate;
+}
+
 int CSpiopLiveTracks()
 {
     std::lock_guard<std::recursive_mutex> lock(g_mtxSound);
@@ -467,8 +657,8 @@ std::string SpiopDescribeFile(uint32_t isector)
     TRACK t;
     if (!FOpenFile(t, isector)) return "?";
     char ach[64];
-    std::snprintf(ach, sizeof(ach), "%s %u Hz %.1f s ids", t.file.vag ? "VAGp" : "VPK", t.file.rate,
-                  t.file.size / 16.0 * 28.0 / t.file.rate);
+    std::snprintf(ach, sizeof(ach), "%s %u Hz %.1f s ids", t.file.wav ? "WAV" : t.file.vag ? "VAGp" : "VPK", t.file.rate,
+                  t.file.wav ? double(t.file.size) / t.file.rate : t.file.size / 16.0 * 28.0 / t.file.rate);
     std::string out = ach;
     for (const CHANNEL& c : t.ch) out += " " + std::to_string(c.id);
     if (!t.file.vag) out += " loop " + std::to_string(t.file.loopStart);

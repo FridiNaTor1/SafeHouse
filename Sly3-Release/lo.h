@@ -66,6 +66,11 @@ struct LO : BASIC
     OID oidInstance = -1;     // the first object of a shared group's instance: the instance's (PROXY record's) oid
     LO* ploNs = nullptr;      // orig +0x3C's namespace node (0x1C99D8) when not the world's (D_003E139C): the instance
                               // that placed it (the first object of a placed proxy's instance), children inherit it (InitLo 0x1A5270)
+    LO* ploNsRow = nullptr;   // orig +0x3C's node (i << 16 | j) of a pool row (a group's spare instance j, 0x1CA500's
+                              // SetIdProxy 0x1CA118 (vt slot 25) on each row object and, by its fChildren, its whole tree):
+                              // the row's first object stands for the node. Unlike ploNs it is the object's own (kept when
+                              // the object leaves its parent, e.g. the Ep8 TNT barrel's charge 18407), and only a new
+                              // object inherits it from its parent (InitLo 0x1A5270).
     bool fSpareNs = false;    // orig +0x3C node's +0x24 (0x1CA500): an object of a group's spare instance (proxies attach it
                               // later), e.g. the guards' start (0x2061D8) is not queued for it
     uint32_t grfUpd = 0x21;   // orig +0x40 while not in the update table (InitLo 0x1A5270: 0x21)
@@ -96,6 +101,8 @@ struct LO : BASIC
     void SetField(uint32_t pfnGetter, uint32_t ib, uint32_t u);
 
     CID Cid() const { return pcls ? pcls->cid : -1; }
+    bool fLightOwned = false;               // a light's +0x15C / +0x160 both set by 0x1BEAD0 (option 1065 of a render-target
+                                            // owner: the binocucom speaker's own light, out of the world's lights)
 };
 
 // cid 3 family (orig size 0xE0): LO + a transform reference (0x231768): the "located" objects.
@@ -122,6 +129,8 @@ struct XF
 {
     glm::mat4 mat{1.0f};      // orig +0: local (glm columns = the original's rows)
     glm::mat4 matWorld{1.0f}; // orig +0x40: world = the reference's world x local (UpdateXfWorlds)
+    glm::mat4 matLoad{1.0f};  // (native) the local matrix as 0x22D7A0 read it (the loader's velocity options, so.cpp)
+    uint32_t nLoad = 0;       // (native) the load's serial of the record (0x22D7A0: records read later did not exist yet)
     ALO* palo = nullptr;      // the ALO owning the record
     uint64_t genWorld = 0;    // (native) UpdateXfWorlds' pass stamp: 2g started, 2g + 1 done in pass g
     XF* pxfRef = nullptr;     // orig +0xA0 (the S16 reference)
@@ -157,6 +166,7 @@ struct SOE
     XF* pxf = nullptr;        // the record of the S16 (null: the identity)
     int32_t tag = 0;
     bool f48 = false, f49 = false, f50 = false;
+    bool fBit18 = false, fBit21 = false;  // orig3: the two S8 flags Sly 3 adds (bits 18 and 21 of the entry's flags)
     float sRadius = 0.0f;
     GEOM geomLocal;
     GEOM geomWorld;
@@ -250,6 +260,7 @@ struct ALO : LO
 // store into these; the struct of a class is that of its nearest ancestor with one.
 struct LOXPATH : LOX   // 0x1E5DF8 (cid 0x0A family)
 {
+    ~LOXPATH() override;
     int fE0 = 0, nE4 = 0;
     std::vector<int32_t> an;
     std::vector<glm::vec3> avecF4, avec140, avec144;
@@ -265,6 +276,8 @@ struct LOXSHAPE : LOX  // 0x227BB8 family (cid 0x16..)
 {
     GEOM geom;
     BSP bsp;
+    glm::vec3 posBound{0.0f};  // orig +0x110: midpoint of the geometry's minimum/maximum points
+    float radiusBoundSquared = -3.402823466e38f;  // orig +0x120 (empty geometry sentinel)
     uint32_t uX = 0;
     std::vector<uint32_t> au;  // 0x2282B0's records (non-null 64-byte keys)
     std::vector<std::array<uint8_t, 64>> aabKey;   // cid 0x1A (0x2282B0): the world's key (+0x144), then the movies' (+0x14C)
@@ -310,3 +323,5 @@ struct CHKPNT : LOX    // cid 0x2A (0x228720): a checkpoint, its data from its m
 
 // The native object for a class (cls.cpp binds one per struct).
 LO* PloNewNative(CID cid);
+// orig 0x001A6AF8: plo, or one of its parents (the +0x10 chain), is ploAncestor
+bool FLoInParentChain(const LO* plo, const LO* ploAncestor);

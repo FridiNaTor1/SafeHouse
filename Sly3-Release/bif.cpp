@@ -1,8 +1,9 @@
 #include "bif.h"
+#include "game/sly3.h"
 #include "clock.h"
 #include "sw.h"
-#include "sly3/condset3.h"
-#include "sly3/load3.h"
+#include "game/cond3.h"
+#include "sw.h"
 #include "update.h"
 
 #include <cstring>
@@ -1131,7 +1132,13 @@ CRef RefOpObjectOption(int, CRef* a, CFrame*)
 {
     if (!g_splicegame.pfnRefOption)
         return RefStub(I3);
-    return g_splicegame.pfnRefOption(BIFKI, a[0].m_pbasic, a[1].m_n, BIFKI == 111 ? nullptr : &a[2]);
+    CRef ref = g_splicegame.pfnRefOption(BIFKI, a[0].m_pbasic, a[1].m_n, BIFKI == 111 ? nullptr : &a[2]);
+    // A bound method keeps a temporary script object's reference (the original's
+    // method CRef owns its BASIC). In particular, ((geto (new-sound ...) 262) ...)
+    // must retain the sound until the method has been called or discarded.
+    if (ref.m_tagk == TAGK_Method && ref.m_pmethod && ref.m_pmethod->m_pbasic == a[0].m_pbasic)
+        ref.m_pbasicOwner = a[0].m_pbasicOwner;
+    return ref;
 }
 
 // The scope of a lookup: the rest list's first object when given, else the relative object.
@@ -1222,7 +1229,7 @@ CRef RefOpCancelCallback3(int, CRef* a, CFrame*)
 // cameras StartSw makes, in their order)
 CRef RefOpFirstCm3(int, CRef*, CFrame*)
 {
-    if (g_psw3 && !g_psw3->mpcidaplo[0x05].empty()) return RefBasic(g_psw3->mpcidaplo[0x05].front());
+    if (g_psw && !g_psw->mpcidaplo[S3CID(0x05)].empty()) return RefBasic(g_psw->mpcidaplo[S3CID(0x05)].front());
     return CRef();
 }
 // orig3: 0x127458 symbol-value (symbol): its binding in the calling frames (0x129B58(env, symbol, 1)), else the

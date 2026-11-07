@@ -1,7 +1,8 @@
 // The binocucom (orig ACTOR +0xF00, module 0x19CBF8..0x19DE10; the reference's m_19D330_p3.cpp): binoc.h.
 
 #include "binoc.h"
-#include "sly3/ids3.h"
+#include "game/sly3.h"
+#include "worldglobals.h"
 #include "photo.h"
 
 #include "actor.h"
@@ -26,6 +27,7 @@
 #include "stepphys.h"
 #include "sw.h"
 #include "task.h"
+#include "skipcut.h"
 
 #include <algorithm>
 #include <array>
@@ -66,6 +68,7 @@ namespace
 std::map<const LO*, std::array<int, 7>>& MpcHold()
 {
     static std::map<const LO*, std::array<int, 7>> s_mpc;
+    WORLD_TABLE_LOCAL(s_mpc);   // (PC: moved aside while a kept world loads, worldglobals.h)
     return s_mpc;
 }
 }  // namespace
@@ -73,9 +76,16 @@ std::map<const LO*, std::array<int, 7>>& MpcHold()
 // inherit its record)
 void ResetActorEffectHolds() { MpcHold().clear(); }
 
+// the actor's talk hold count (+0x12F4)
+int CActorTalkHold(const LO* plo)
+{
+    auto it = MpcHold().find(plo);
+    return it == MpcHold().end() ? 0 : it->second[6];
+}
+
 void HoldActorEffects(LO* plo, bool fHold, bool f, uint32_t grf)
 {
-    if (!plo || !FCidDerivedFrom(plo->Cid(), Icid(CID3::ALO))) return;
+    if (!plo || !FCidDerivedFrom(plo->Cid(), S3CID(0x30))) return;
     ALO* palo = static_cast<ALO*>(plo);
     auto& ac = MpcHold()[plo];  // (+0x2A0 x 6, the actor's +0x12F4)
     static const int s_aidEffect[6] = {1548, 1549, 1550, -1, 1551, 1552};  // D_002C3C40 (0x1FD0C0)
@@ -104,7 +114,7 @@ void HoldActorEffects(LO* plo, bool fHold, bool f, uint32_t grf)
         else if (psma)
             RetractSma(psma);  // 0x1F0598
     }
-    if (!f || !FCidDerivedFrom(plo->Cid(), Icid(CID3::PLAYER))) return;  // (the PO's 0x205478 / 0x205588 have no f)
+    if (!f || !FCidDerivedFrom(plo->Cid(), S3CID(0x34))) return;  // (the PO's 0x205478 / 0x205588 have no f)
     if (fHold)
     {
         if (++ac[6] == 1)
@@ -124,7 +134,7 @@ namespace
 // recon view; Bentley 0x205D10, Murray 0x1B81B8)
 void ShowActorParts(ACTOR* pa, bool fHidden)
 {
-    if (FIsLoDerivedFrom(pa->palo, Icid(CID3::JT)))
+    if (FIsLoDerivedFrom(pa->palo, S3CID(0x35)))
     {
         // Sly 0x189530: the base's (0x205D10: nothing), then his three parts' slot 21 (0x1F3B28: shown unless hidden)
         for (uint32_t ib : {0x19A0u, 0x19A4u, 0x19A8u})
@@ -132,7 +142,7 @@ void ShowActorParts(ACTOR* pa, bool fHidden)
                 if (ibPart == ib && plo) SetLoVisible(g_psw, plo, !fHidden);
         return;
     }
-    if (FIsLoDerivedFrom(pa->palo, Icid(CID3::MURRAY))) WarnOnce("vt slot 87 of Murray (0x1B81B8)");
+    if (FIsLoDerivedFrom(pa->palo, S3CID(0x36))) WarnOnce("vt slot 87 of Murray (0x1B81B8)");
     // (Bentley's 0x205D10: nothing)
 }
 
@@ -173,9 +183,9 @@ void PostLoadBinoc(ACTOR* pa)
 {
     BINOCWIN& w = pa->binoc.win;
     int oidFrame = -1, oidWindow = -1;
-    if (FIsLoDerivedFrom(pa->palo, Icid(CID3::JT))) { oidFrame = 0x35F; oidWindow = 0x368; }
-    else if (FIsLoDerivedFrom(pa->palo, Icid(CID3::BENTLEY))) { oidFrame = 0x360; oidWindow = 0x369; }
-    else if (FIsLoDerivedFrom(pa->palo, Icid(CID3::MURRAY))) { oidFrame = 0x361; oidWindow = 0x36A; }
+    if (FIsLoDerivedFrom(pa->palo, S3CID(0x35))) { oidFrame = 0x35F; oidWindow = 0x368; }
+    else if (FIsLoDerivedFrom(pa->palo, S3CID(0x37))) { oidFrame = 0x360; oidWindow = 0x369; }
+    else if (FIsLoDerivedFrom(pa->palo, S3CID(0x36))) { oidFrame = 0x361; oidWindow = 0x36A; }
     if (oidFrame != -1 && g_psw)
     {
         w.ploFrame = PloFindSwObjectByOid(g_psw, oidFrame);    // 0x15E938(kind 0x405)
@@ -225,6 +235,7 @@ void SetBinocState(ACTOR* pa, int n)
         // a talk pauses the game (0x20F198 / 0x20F0C0); the actor's animation is held
         if (pa->nF20 == 1)
         {
+            b.idSkipScene = NewSkipCutScene();
             ++g_gamepause.c84;  // 0x20F198
             PauseTalk();        // 0x20F0C0 (the pad locked: 0x187078(4))
         }
@@ -257,6 +268,7 @@ void SetBinocState(ACTOR* pa, int n)
         if (pa->nF20 != 2) ShowActorParts(pa, false);  // slot 87 (0)
     }
     pa->nF04 = n;
+    if (n == -1) b.idSkipScene = 0;
     static const bool s_fPrint = std::getenv("SLY2N_BINOCPRINT") != nullptr;
     if (s_fPrint)
         std::printf("binoc %d: t %.2f state %d -> %d view %d (free pan %.3f tilt %.3f, recon pan %.3f) speaker %d screen %d window %d frame %d\n", palo->oid, g_clock.t, cur, n,
@@ -279,7 +291,7 @@ void SetBinocState(ACTOR* pa, int n)
         case 1:
             SetCmPolicy(&g_cm, 8, &g_cmpolicies.cpfree, palo, nullptr);
             SetStepPhysHeading(palo, g_cmpolicies.cpfree.radPan);         // (CM +0x5C4)
-            if (b.ploSpeaker && FIsLoDerivedFrom(b.ploSpeaker, Icid(CID3::ALO)))
+            if (b.ploSpeaker && FIsLoDerivedFrom(b.ploSpeaker, S3CID(0x30)))
             {
                 ALO* ps = static_cast<ALO*>(b.ploSpeaker);
                 HoldActorEffects(ps, true, true);  // slot 83 (0x3F, 1)

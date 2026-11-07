@@ -912,8 +912,9 @@ void MarkOwnContacts(OXA* o, OXA* l, SOE* k, XP** ppxp)
 {
     ALO* vo = o->pso;
     XP* res = nullptr;
-    using PFN = void (*)(ALO*, SOE*, XP**);
-    if (PFN pfn = reinterpret_cast<PFN>(PvNativeVt(vo, 60))) pfn(vo, k, k->id ? &res : ppxp);
+    const BSPREF tree(k->bsp, k->geomWorld);
+    if (PFNOWNCONTACT pfn = reinterpret_cast<PFNOWNCONTACT>(PvNativeVt(vo, 60)))
+        pfn(vo, k, INODE_MAX, tree, k->bsp.abspn.empty() ? IBSP_NONE : 0, k->id ? &res : ppxp);
     if (!res) return;
     for (XP* e = res; e; e = e->pxpNext)
     {
@@ -928,7 +929,7 @@ void MarkOwnContacts(OXA* o, OXA* l, SOE* k, XP** ppxp)
     }
     PrependXpList(res, ppxp);
 }
-void OwnContactsNothing(ALO*, SOE*, XP**) {}
+void OwnContactsNothing(ALO*, SOE*, int, const BSPREF&, int, XP**) {}
 NATIVEFN(0x1F5990, OwnContactsNothing);
 }
 

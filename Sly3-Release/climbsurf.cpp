@@ -2,6 +2,7 @@
 // 0x185110..0x1865F8 (0x185310 / 0x1856B8 / 0x1856C0 / 0x185A80 / 0x185BF8 / 0x185CE0 / 0x185D18 / 0x185E30 /
 // 0x185E40) and the state 21 parts of 0x18C250.
 #include "climbsurf.h"
+#include "game/sly3.h"
 #include "activate.h"
 #include "brx.h"
 #include "crv.h"
@@ -472,7 +473,7 @@ bool FSlyHangFollowJump(SLY* p)
     if (!phook) return false;
     LO* ptarget = phook->U32Field(0, 0x138, 0) ? PloFindSwNearest(phook, static_cast<OID>(phook->U32Field(0, 0x138, 0))) : nullptr;
     glm::vec3 vTarget(0.0f);
-    if (ptarget && FIsLoDerivedFrom(ptarget, 10))
+    if (ptarget && FIsLoDerivedFrom(ptarget, S3CID(10)))
     {
         if (const CRV* pcrv = PcrvFromLo(ptarget)) EvalCrvS(pcrv, SLengthCrv(pcrv) * (0.5f - p->gHangAmount * 0.5f), &vTarget, nullptr);
     }
@@ -494,8 +495,8 @@ bool FSlyHangFollowJump(SLY* p)
             std::printf("hangfollow: hook pos %.1f %.1f %.1f x %.3f %.3f %.3f y %.3f %.3f %.3f z %.3f %.3f %.3f target pos %.1f %.1f %.1f base %.1f %.1f %.1f\n",
                         mh[3].x, mh[3].y, mh[3].z, mh[0].x, mh[0].y, mh[0].z, mh[1].x, mh[1].y, mh[1].z, mh[2].x, mh[2].y, mh[2].z, pt.x, pt.y, pt.z,
                         p->vecBase.x, p->vecBase.y, p->vecBase.z); }
-        std::printf("hangfollow: target obj %d curve %d len %.2f\n", ptarget ? ptarget->oid : -1, ptarget && FIsLoDerivedFrom(ptarget, 10) ? 1 : 0,
-                    ptarget && FIsLoDerivedFrom(ptarget, 10) && PcrvFromLo(ptarget) ? SLengthCrv(PcrvFromLo(ptarget)) : 0.0f),
+        std::printf("hangfollow: target obj %d curve %d len %.2f\n", ptarget ? ptarget->oid : -1, ptarget && FIsLoDerivedFrom(ptarget, S3CID(10)) ? 1 : 0,
+                    ptarget && FIsLoDerivedFrom(ptarget, S3CID(10)) && PcrvFromLo(ptarget) ? SLengthCrv(PcrvFromLo(ptarget)) : 0.0f),
         std::printf("hangfollow: jump t %.3f hook %d amount %.4f weight %.4f target %.1f %.1f %.1f from %.1f %.1f %.1f v %.1f %.1f %.1f\n", g_clock.t, phook->oid,
                     p->gHangAmount, p->gHangWeight, vTarget.x, vTarget.y, vTarget.z, from.x, from.y, from.z, v.x, v.y, v.z);
     SetAloVelocityTo(p->palo, v * p->gHangWeight);

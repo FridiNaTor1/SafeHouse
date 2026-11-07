@@ -3,8 +3,14 @@
 // func_001DA4B8.c / func_001DA578.c.
 
 #include "hudwidget.h"
-#include "sly3/ids3.h"
+#include "gauge3.h"
+#include "binoc3.h"
+#include "game/scptgame3.h"
+#include "screen3.h"
+#include "screen3.h"
+#include "game/sly3.h"
 #include "skipcut.h"
+#include "debugmenu.h"
 #include "joy.h"
 #include <map>
 #include <bit>
@@ -74,7 +80,7 @@ constexpr float s_gNear = 1e-4f;                // 0x38D1B717
 LO* PloScreen(SW* psw, OID oid)
 {
     LO* plo = PloFindSwObjectByOid(psw, oid);
-    return plo && FCidDerivedFrom(plo->Cid(), 0x7E) ? plo : nullptr;
+    return plo && FCidDerivedFrom(plo->Cid(), S3CID(0x7E)) ? plo : nullptr;
 }
 
 SW* s_psw = nullptr;
@@ -85,16 +91,16 @@ LO* PloPlayerPo()
     // (no gauge under the title: the reference's title frames show none, though the boot world's Sly is current)
     if (FTitleShown()) return nullptr;
     LO* plo = s_psw ? PloPoCurrent(s_psw) : nullptr;
-    return plo && FCidDerivedFrom(plo->Cid(), Icid(CID3::PLAYER)) ? plo : nullptr;
+    return plo && FCidDerivedFrom(plo->Cid(), S3CID(0x34)) ? plo : nullptr;
 }
 // orig: 0x001D9B60's owned-gadget table walk (ownership, irrespective of the three assigned buttons).
 bool FPlayerPowerGadget(LO* player)
 {
     uint32_t table = 0;
     int count = 0;
-    if (FCidDerivedFrom(player->Cid(), Icid(CID3::JT))) { table = 0x2C2DE8; count = 18; }
-    else if (FCidDerivedFrom(player->Cid(), Icid(CID3::BENTLEY))) { table = 0x2C3028; count = 9; }
-    else if (FCidDerivedFrom(player->Cid(), Icid(CID3::MURRAY))) { table = 0x2C3148; count = 8; }
+    if (FCidDerivedFrom(player->Cid(), S3CID(0x35))) { table = S3VA(0x2C2DE8); count = 18; }
+    else if (FCidDerivedFrom(player->Cid(), S3CID(0x37))) { table = S3VA(0x2C3028); count = 9; }
+    else if (FCidDerivedFrom(player->Cid(), S3CID(0x36))) { table = S3VA(0x2C3148); count = 8; }
     for (int i = 0; i < count; ++i)
     {
         int32_t id = -1, cost = 0;
@@ -102,7 +108,7 @@ bool FPlayerPowerGadget(LO* player)
         if (!entry) continue;
         std::memcpy(&id, entry, 4);
         if (!FPowerupOwned(id)) continue;
-        const uint8_t* itemCost = g_disc.PbElf(0x2BCD00 + 0x20 * id + 0xC, 4);
+        const uint8_t* itemCost = g_disc.PbElf(S3VA(0x2BCD00) + 0x20 * id + 0xC, 4);
         if (itemCost) std::memcpy(&cost, itemCost, 4);
         if (cost > 0) return true;
     }
@@ -130,7 +136,7 @@ bool FDead() { return g_hudplayer.cHitMax > 0 && g_hudplayer.cHit <= 0; }
 void SetGaugeIds(GAUGE& p)
 {
     const CID cid = p.ploPlayer->Cid();
-    const int a0 = FCidDerivedFrom(cid, Icid(CID3::BENTLEY)) ? 0x347 : FCidDerivedFrom(cid, Icid(CID3::MURRAY)) ? 0x342 : 0x33D;
+    const int a0 = FCidDerivedFrom(cid, S3CID(0x37)) ? 0x347 : FCidDerivedFrom(cid, S3CID(0x36)) ? 0x342 : 0x33D;
     for (int i = 0; i < 5; ++i) p.aid[i] = a0 + i;
 }
 
@@ -167,7 +173,10 @@ void SetGaugeState(GAUGE& p, int s)
 void InitGauge(GAUGE& p, SW* psw)
 {
     p = GAUGE{};
-    p.plo = PloScreen(psw, 0x36B);
+    // (Sly 3: Sly 2's gauge 0x36B is oid 875 there, another screen object (a global one with parts 880..885): no Sly 2
+    // gauge; Sly 3's HUD is the player's 7465 (cid 0xA3), TODO(sly3) its widget)
+    p.plo = nullptr;
+    (void)psw;
     p.ploPlayer = PloPlayerPo();
     if (!ReadHudPlayer(p.ploPlayer)) p.ploPlayer = nullptr;
     if (!p.ploPlayer) return;
@@ -280,10 +289,10 @@ void SetPromptState(PROMPT& p, int n)
     if (n == 0) p.id = -1;
     if (p.plo)
     {
-        if (p.state == 4 && n == 2) StartScreenObjPart(p.plo, 0x310);
+        if (p.state == 4 && n == 2) StartScreenObjPart(p.plo, sly3ui::PART_IDLE);   // (orig3 0x377)
         switch (n)
         {
-        case 4: StartScreenObjPart(p.plo, 0x312); break;
+        case 4: StartScreenObjPart(p.plo, 0x379); break;   // (orig3 0x379)
         case 3: HideScreenObj(p.plo); break;
         case 1: ShowScreenObjArgs(p.plo, 1, &p.id); break;
         default: break;
@@ -291,6 +300,7 @@ void SetPromptState(PROMPT& p, int n)
     }
     p.state = n;
     p.t = g_clock.t;
+    SetPromptText3(n == 0 ? -1 : p.id);   // (orig3 the widget +0x18 = 0x46F788: script string 846)
 }
 
 // orig: 0x001DA350
@@ -311,7 +321,7 @@ void UpdatePrompt(PROMPT& p)
         if (NScreenObjState(p.plo) < 2) SetPromptState(p, 0);
         break;
     case 4:
-        if (FScreenObjBusy(p.plo, 0x312)) break;
+        if (FScreenObjBusy(p.plo, 0x379)) break;
         SetPromptState(p, p.idNext == -1 ? 0 : 2);
         break;
     default: break;
@@ -406,6 +416,7 @@ static LO* s_ploSaveIcon = nullptr;  // (D_002E65A0 +0x24: the save icon's scree
 void ResetHudWidgets()
 {
     s_ploSaveIcon = nullptr;
+    ResetGauges3();
     ResetScreenObjPauseCount();  // orig 0x1D9408: also releases a pending failure restart's count
     SetGaugeState(s_gauge, 0);
     s_gauge = GAUGE{};
@@ -433,14 +444,18 @@ void InitHudWidgets(SW* psw)
     StartFrontEnd(psw, g_transition.req.flags);
     InitGauge(s_gauge, psw);
     // orig: 0x001DA320 (the reset) / 0x001DA2E0
+    InitGauges3(psw);   // (Sly 3's character gauge, class 0xA3: gauge3.h)
+    InitBinocPanels3(psw);   // (the binocucom's panel: binoc3.h)
+    // orig3: 0x0021E6B8 (the reset) / 0x0021E678: Sly 3's prompt is the global screen object 1058 (0x422)
     s_prompt = PROMPT{};
-    s_prompt.plo = PloScreen(psw, 0x371);
+    s_prompt.plo = PloScreen3(psw, 1058);
     // orig: 0x001ADDF0 / 0x001DA7D0 (the save icon D_002E65A0: screen object 0x5D4, the Thievius Raccoonus book with
     // the game's completion)
     s_ploSaveIcon = PloScreen(psw, 0x5D4);
     if (s_promptPending.serial == psw->serial && s_promptPending.id != -1) HudPrompt(s_promptPending.id, s_promptPending.g);
     s_promptPending = {};
     // debug: SLY2_HUDPROMPT=id shows a prompt; SLY2_HUDSHOW=oid[,oid...] shows screen objects (their 0x30F / 0x310)
+    InitScreens3(psw);   // (screen3.h: SLY3_HUDSHOW / SLY3_HUD_LIST)
     if (std::getenv("SLY2_HUDSHOP")) SetShopPage(0);
     if (const char* sz = std::getenv("SLY2_HUDPROMPT")) HudPrompt(int(std::strtol(sz, nullptr, 0)), -1.0f);
     if (const char* sz = std::getenv("SLY2_HUDSHOW"))
@@ -454,7 +469,7 @@ void InitHudWidgets(SW* psw)
         }
     if (std::getenv("SLY2_HUDDBG"))
     {
-        for (LO* plo : psw->mpcidaplo[Icid(CID3::TASK)])
+        for (LO* plo : psw->mpcidaplo[S3CID(0x85)])
         {
             const TASK* pt = static_cast<const TASK*>(plo);
             if (pt->idDialog5C != -1) std::printf("hud: task 0x%X prompt 0x%X f60 %d state %d \"%s\"\n", pt->oid, pt->idDialog5C, pt->f60, pt->nState, StrLocalized(psw, pt->idDialog5C).c_str());
@@ -479,12 +494,18 @@ void UpdateHud(SW* psw)
     }
     // orig 0x1D9648 reads the gameplay pad (JoyFor(2)); a failure screen's
     // PauseGame(0) leaves confirmation available but prevents opening this menu.
-    if ((g_grfjoyt & 2) && !FTitleShown() && !FMenuShown() && !FShopShown() && !FGadgetMenuShown() && !FJobHelpShown() && GrfbtnPressed(0x800) && FOpenPauseMenu(psw)) GrfbtnTakePressed(0x800);
+    // (Sly 3, orig3 0x21D9E0: only a pad that has a player (0x1A9568) opens it: the attract's START skips the attract)
+    if ((g_grfjoyt & 2) && !FTitleShown() && !FMenuShown() && !FShopShown() && !FGadgetMenuShown() && !FJobHelpShown() && FPadHasPlayer3(psw) &&
+        GrfbtnPressed(0x800) && FOpenPauseMenu(psw))
+        GrfbtnTakePressed(0x800);
     UpdateMenu(psw);
     UpdateShop(psw);
     UpdateJobHelp(psw);
     UpdateGadgetMenu(psw, PloPlayerPo());
     UpdateGauge(s_gauge);
+    UpdateGauges3(psw, FPadHasPlayer3(psw) ? PloPlayerPo() : nullptr);   // (orig3 0x1F4548: the pad's player's gauge)
+    UpdateBinocPanels3(psw);   // (the binocucom's window: binoc3.h)
+    UpdateCoins3(psw);         // (the coin counter: gauge3.h)
     // Development-only semantic trace for comparisons with the original gauge.
     static const bool s_fMeter = std::getenv("SLY2N_HUDMETER") != nullptr;
     if (s_fMeter)
@@ -602,7 +623,8 @@ void DrawHud(SW* psw, int width, int height)
 {
     g_hud.Begin();
     if (psw) DrawFades(psw);
-    DrawScreenObjs(psw);
+    // (debugmenu.h: F11 hides the HUD for clean pictures; the game's own menus stay)
+    if (!FDebugHudHidden() || FMenuShown()) DrawScreenObjs(psw);
     DrawHackCursor();   // (hackmouse.h: the hacking minigame's mouse cursor)
     DrawSkipCut();   // (skipcut.h: the hint / the indicator over everything)
     g_hud.Flush(width, height);
@@ -614,18 +636,33 @@ void HudAutoSave(bool fForce)
 {
     if (std::getenv("SLY2N_SAVEPRINT"))
         std::printf("autosave? force %d slot %d pending %d episode %d\n", (int)fForce, g_islotChosen, (int)g_transition.fPending, IepisodeCur());
-    if (g_islotChosen < 0) return;                 // (g_save +0xFD50: no slot chosen, nothing to save to)
-    if (g_transition.fPending) return;             // (0x20E040)
-    if (IepisodeCur() == 0 && !fForce) return;     // (0x210AE0)
+    // orig3 0x001CFE08 (Sly 2 0x1ABD98): no slot chosen (card +0x13950), nothing to save to; no save while a world
+    // change is under way (FTransitionBusy 0x25AE28: a request pending, an exit fired (SW +0x4424), the wipe going
+    // out); none in the prologue (the episode 0x4798A0 Intro in m_ext, world 0x47989C 35). (The card's own busy flag
+    // +0x1395C and 0x36DBA8: TODO(sly3).) fForce (the copied front end's) skips only the prologue rule.
+    if (g_islotChosen < 0) return;
+    if (g_transition.fPending || g_transition.wipes == WIPES_Out || (g_psw && g_psw->ploExitPending)) return;
+    if (IepisodeCur() == sly3::EP_Intro && g_transition.iwrecCur == sly3::WORLD_PROLOGUE && !fForce) return;
     const CRef ref = RefGetProgress({"flags", "fAutosaveWarned"});
     const bool fWarned = (ref.m_tagk == TAGK_Bool && ref.m_bool) || (ref.m_tagk == TAGK_S32 && ref.m_n != 0);
     if (!fWarned)
     {
-        ShowCardMessage(0x22, 3);   // (0x2E6550 +0x4C = 3: the save follows the warning)
+        ShowCardMessage(0x2F, 3);   // (orig3 0x3751D0 +0x60 = 3: the save follows the warning 0x2F)
         return;
     }
     // orig 0x001ABCE8 (the record into the slot, written) and 0x001ADE38 (the card icon 0x5D4 for a second)
     const bool f = FWriteSaveSlot(g_islotChosen);
     std::printf("auto-save: slot %d %s\n", g_islotChosen + 1, f ? "written" : "not written");
     if (s_ploSaveIcon) ShowScreenObj(s_ploSaveIcon, -1);  // 0x1ADE38 (vt slot 49)
+}
+
+// (Sly 3) orig3 0x001A9568 (the pad's player record +0x110C, 0x1F4B30, and no lock on the pad +0x1184, 0x1A9538):
+// the current player has the pad (EnablePo). Interim (TODO(sly3) the player code: the pad's player record): the copied
+// start enables the boot world's player at once, where the original gives m_ext's Sly the pad only at the prologue's
+// gameplay start (4273); so not while a script drives the camera (the attract 4262, the title 4268: their START is
+// theirs)
+bool FPadHasPlayer3(SW* psw)
+{
+    LO* plo = psw ? PloPoCurrent(psw) : nullptr;
+    return plo && NPoEnabled(plo) > 0 && !FScriptCameraActive3();
 }

@@ -979,6 +979,18 @@ void CTRLTARGET::Fetch()
     ResetXfParams(pxf);
 }
 
+// orig: 0x0012E0F0 (refresh the live segment only when this controller is at the head)
+void CTRLTARGET::SetGoal(const glm::vec4& newPos, const glm::vec4& newVel)
+{
+    pos = newPos;
+    vel = newVel;
+    if (pxf->pctrlFirst == this)
+    {
+        pxf->aseg[0] = pos;
+        pxf->aseg[1] = vel;
+    }
+}
+
 // orig: 0x0012D858
 void CTRLSOURCE::Start()
 {
@@ -1115,4 +1127,37 @@ void DeleteCtrl(CTRL** ppctrl)
     EnsureCtrlRemoved(*ppctrl);
     delete *ppctrl;
     *ppctrl = nullptr;
+}
+
+// (QoL draw distance above 1x, drawdist-2: drawdist.cpp) the record's local matrix as its motion would have made it
+// dt seconds on, for drawing an inactive tree that the update table leaves out; nothing of the record changes (the
+// caller puts the matrix in place for the scene's placement and restores the record). Only the motions that need
+// nothing but the record: a constant angular velocity (modes 1 / 2 of kind 6), the spin (mode 20) and a snap to the
+// segment's spline value (modes 5 / 6, state 1) while the parameter is inside the segment (the animation's time:
+// leaving it would fetch the next segment from the controller). false: none of these.
+bool FXfVisualPose(const XF* pxf, float dt, glm::mat4* pmat)
+{
+    const int mode = pxf->mode, kind = pxf->kind;
+    if ((mode == XFM_Moving || mode == XFM_MovingHold) && kind == 6)
+    {
+        if (FNear3(glm::vec4(0.0f), pxf->vel)) return false;
+        *pmat = pxf->mat;
+        SetRows3(*pmat, NormalizeRotateMatrix3(MatRotateVector(glm::vec3(pxf->vel) * dt) * Rows3(pxf->mat)));
+        return true;
+    }
+    if (mode == XFM_Spin && kind == 6)
+    {
+        if (pxf->aseg[1].x == 0.0f) return false;
+        *pmat = pxf->mat;
+        SetRows3(*pmat, MatRotateAxis(RadNormalize(pxf->aseg[2].x + dt * pxf->aseg[1].x), glm::vec3(pxf->aseg[0])));
+        return true;
+    }
+    if ((mode == XFM_Snap || mode == XFM_SnapHold) && pxf->state == 1)
+    {
+        const float g = pxf->G();
+        if (g < pxf->g0 || pxf->g1 < g) return false;
+        *pmat = MatXfWithValue(pxf, VecXfTarget(pxf));
+        return true;
+    }
+    return false;
 }

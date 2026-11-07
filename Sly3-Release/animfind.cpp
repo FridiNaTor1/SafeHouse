@@ -49,9 +49,9 @@ int CploFindSwNearest(LO* ploCtx, OID oid, LO** pplo, bool fSameChannel)
     int ipsBest = INT_MAX;
     LO* ploBest = nullptr;
     int c = 0;
-    for (const auto& up : g_psw->aploAll)
+    for (LO* const up : AploOfOid(g_psw, oid))
     {
-        LO* plo = up.get();
+        LO* plo = up;
         if (!FOidMatches(plo, oid)) continue;
         if (fSameChannel && ploCtx && ploCtx->ichannel >= 0 && plo->ichannel != ploCtx->ichannel) continue;
         const LO* p = plo;
@@ -79,9 +79,9 @@ LO* PloFindSwChild(LO* ploCtx, OID oid)
 {
     if (!g_psw || oid == -1 || !ploCtx) return nullptr;
     const MARKS marks(ploCtx);
-    for (const auto& up : g_psw->aploAll)
+    for (LO* const up : AploOfOid(g_psw, oid))
     {
-        LO* plo = up.get();
+        LO* plo = up;
         if (!FOidMatches(plo, oid)) continue;
         for (const LO* p = plo; p; p = p->paloParent)
         {
@@ -100,11 +100,11 @@ LO* PloFindSwAny(OID oid)
     if (!g_psw || oid == -1) return nullptr;
     // (the world's namespace first, as PloFindSwObjectByOid: sw.cpp FLoInWorldNs)
     LO* ploFirst = nullptr;
-    for (const auto& up : g_psw->aploAll)
-        if (FOidMatches(up.get(), oid))
+    for (LO* const up : AploOfOid(g_psw, oid))
+        if (FOidMatches(up, oid))
         {
-            if (up->oidInstance == oid || FLoInWorldNs(up.get())) return up.get();
-            if (!ploFirst) ploFirst = up.get();
+            if (up->oidInstance == oid || FLoInWorldNs(up)) return up;
+            if (!ploFirst) ploFirst = up;
         }
     return ploFirst;
 }

@@ -16,6 +16,22 @@
 struct GEOM;
 struct BSP;
 
+// What a 64-byte file key record names (the converter's crawl, convert.cpp).
+enum KEYK
+{
+    KEYK_Other,     // (any other key: a task list's)
+    KEYK_World,     // a world record (the boot world's world table)
+    KEYK_Screen,    // an external screen object's file
+    KEYK_Exit,      // an exit's keys: the world it loads, then the movies it plays
+    KEYK_Bank,      // the world's SFX bank
+    KEYK_Ambience,  // the world's resident ambience stream
+    KEYK_Dialog,    // a dialog line in one language (id = the line, lang = the game's language id)
+    KEYK_Music,     // a music track (id = the world's music id)
+};
+// The converter's key collector (convert.cpp): called with every 64-byte file key record a loader reads; null in
+// the game.
+extern void (*g_pfnNoteKeyRecord)(const void* record64, KEYK keyk, int id, int lang);
+
 using byte = std::uint8_t;
 
 enum BISK
@@ -90,7 +106,12 @@ public:
     void ReadCb12(void* pv) { Trace("117f90"); RawRead(pv, 12); }
     void ReadCb8(void* pv) { Trace("117fb0"); RawRead(pv, 8); }
     // orig 0x118458: a 64-byte file key record
-    void ReadRecord64(void* pv) { Trace("rec64"); RawRead(pv, 64); }
+    void ReadRecord64(void* pv, KEYK keyk = KEYK_Other, int id = -1, int lang = -1)
+    {
+        Trace("rec64");
+        RawRead(pv, 64);
+        if (g_pfnNoteKeyRecord) g_pfnNoteKeyRecord(pv, keyk, id, lang);
+    }
 
     glm::vec2 ReadVector2();
     glm::vec3 ReadVector();   // orig 0x117EB0 (12 bytes)
@@ -107,6 +128,10 @@ public:
     std::string ReadStringSw();
     // orig 0x118420: skips a string
     void SkipStringSw();
+    // The Japanese build's text strings (orig JP 0x1184C8 / 0x118570): U16 count + 16-bit characters, kept as the
+    // port's text (region.h AppendCh16)
+    std::string ReadWideStringSw();
+    void SkipWideStringSw();
     // The same read as SkipStringSw (traced as 0x118420), keeping the characters (the debug strings)
     std::string ReadSkippedStringSw();
 

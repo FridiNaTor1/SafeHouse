@@ -32,3 +32,6 @@ struct GLOBBONEBIND
 };
 const std::vector<std::vector<GLOBBONEBIND>>* PaabindOfAlo(const ALO* palo);
 void ResetBoneBindings();
+// (PC addition, pccharacter.h: the debug menu's guest characters / outfits) bindings made elsewhere: an object of a
+// character world kept loaded beside the current one, or a model put on the current Sly with its own world's binds
+void SetAloBoneBindings(const ALO* palo, const std::vector<std::vector<GLOBBONEBIND>>& aabind);

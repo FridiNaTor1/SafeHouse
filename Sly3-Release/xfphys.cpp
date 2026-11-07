@@ -1,7 +1,7 @@
 // The physics side of the transform records (see xfphys.h).
 
 #include "xfphys.h"
-#include "sly3/ids3.h"
+#include "game/sly3.h"
 
 #include "anim.h"
 #include "mat.h"
@@ -47,7 +47,7 @@ void OrLoUpdateFlags(LO* plo, uint32_t grf)
     if (!plo) return;
     using PFN = void (*)(LO*, uint32_t);
     if (PFN pfn = reinterpret_cast<PFN>(PvNativeVt(plo, 47))) pfn(plo, grf);
-    else if (FCidDerivedFrom(plo->Cid(), Icid(CID3::ALO))) MarkAloXfs(static_cast<ALO*>(plo), grf);
+    else if (FCidDerivedFrom(plo->Cid(), S3CID(0x30))) MarkAloXfs(static_cast<ALO*>(plo), grf);
     else SetGrfUpdOfLo(plo, GrfUpdOfLo(plo) | grf);
 }
 

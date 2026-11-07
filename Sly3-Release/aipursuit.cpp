@@ -4,6 +4,8 @@
 // records (0x1F8278 / 0x20A5F8: one per pursued object, the guards on it, its timer). See aipursuit.h.
 
 #include "aipursuit.h"
+#include "game/sly3.h"
+#include "worldglobals.h"
 #include "actor.h"
 #include "vecmat.h"
 #include "asega.h"
@@ -27,6 +29,9 @@
 #include "activate.h"
 #include "step.h"
 #include "stepphys.h"
+#include "xf.h"
+#include "xfphys.h"
+#include "mat.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -48,11 +53,13 @@ constexpr float S_SURROUND_REPLAN = 200.0f;  // D_002BE748 (0x17C3E8): distance 
 std::unordered_map<const LO*, std::unique_ptr<TARGETREC>>& MpTarget()
 {
     static std::unordered_map<const LO*, std::unique_ptr<TARGETREC>> s_map;
+    WORLD_TABLE_LOCAL(s_map);   // (PC: moved aside while a kept world loads, worldglobals.h)
     return s_map;
 }
 std::unordered_map<const LO*, std::unique_ptr<ACTIONOBJ>>& MpAction()
 {
     static std::unordered_map<const LO*, std::unique_ptr<ACTIONOBJ>> s_map;
+    WORLD_TABLE_LOCAL(s_map);   // (PC: moved aside while a kept world loads, worldglobals.h)
     return s_map;
 }
 
@@ -73,7 +80,7 @@ std::unordered_map<const LO*, int>& MpStatus77()
 }  // namespace
 int NPlayerStatus77(LO* plo)
 {
-    if (!plo || !FCidDerivedFrom(plo->Cid(), 0x32)) return 0;
+    if (!plo || !FCidDerivedFrom(plo->Cid(), S3CID(0x32))) return 0;
     // (a harness's imported value first: its players are the reference's, not run natively)
     auto it = MpStatus77().find(plo);
     if (it != MpStatus77().end()) return it->second;
@@ -141,7 +148,7 @@ float RadTargetrec(const TARGETREC* pt)
     if (pt->nMode == 1 && pt->plo)
     {
         // (vt slot 31 twice: the target's object matrix's first row)
-        const glm::mat4 m = FCidDerivedFrom(pt->plo->Cid(), 0x30) && static_cast<ALO*>(pt->plo)->apxfRef[2]
+        const glm::mat4 m = FCidDerivedFrom(pt->plo->Cid(), S3CID(0x30)) && static_cast<ALO*>(pt->plo)->apxfRef[2]
                                 ? static_cast<ALO*>(pt->plo)->apxfRef[2]->matWorld
                                 : glm::mat4(1.0f);
         return std::atan2(m[0][1], m[0][0]);
@@ -207,6 +214,20 @@ void RefreshGuardTargetrec(GUARD* pg)
 
 // ---- the action objects (cid 0x78) ----
 
+// orig: 0x0020AE18. Actions can be selected by scripts after loading, so
+// resolve every child action before animations alter its reference pose.
+void PostLoadGuardAction(LO* plo)
+{
+    for (LO* owner = plo->paloParent; owner; owner = owner->paloParent)
+        if (FCidDerivedFrom(owner->Cid(), S3CID(0x38)))
+        {
+            GUARD* guard = PguardFromLo(owner);
+            if (!guard) guard = PguardNew(static_cast<ALO*>(owner));
+            PactionOf(plo, guard);
+            break;
+        }
+}
+
 ACTIONOBJ* PactionOf(LO* plo, GUARD* pg)
 {
     auto& p = MpAction()[plo];
@@ -214,7 +235,7 @@ ACTIONOBJ* PactionOf(LO* plo, GUARD* pg)
     {
         // +0xA8 (option 363) as a script sets it later (seto! of optid 368: Paris' guards' looks enable theirs)
         for (const OPT& o : plo->aopt)
-            if (o.eopid == 363 && !o.aval.empty()) p->fA8 = o.aval[0].n;
+            if (o.eopid == S3EOPID(363) && !o.aval.empty()) p->fA8 = o.aval[0].n;
         static const char* s_szEnable = std::getenv("SLY2N_ENABLEACTION");  // debug: this action oid always enabled
         if (s_szEnable && plo->oid == std::atoi(s_szEnable)) p->fA8 = 1;
         return p.get();
@@ -225,7 +246,7 @@ ACTIONOBJ* PactionOf(LO* plo, GUARD* pg)
     {
         if (o.aval.empty()) continue;
         const OPTVAL& v = o.aval[0];
-        switch (o.eopid)
+        switch (sly3::Eopid2FromEopid3(o.eopid))  // (Sly 2 EOPIDs)
         {
         case 353: p->r50 = glm::vec2(v.ag[0], v.ag[1]); break;
         case 354: p->r58 = glm::vec2(v.ag[0], v.ag[1]); break;
@@ -237,6 +258,11 @@ ACTIONOBJ* PactionOf(LO* plo, GUARD* pg)
         case 361: p->f74 = v.n; break;
         case 358: p->f78 = v.n; break;
         case 363: p->fA8 = v.n; break;
+        case 362:
+            p->aimRef = v.n;
+            if (o.aval.size() > 1) p->aimEndRef = o.aval[1].n;
+            if (o.aval.size() > 2) p->aimMarker = o.aval[2].n;
+            break;
         case 364:
             p->kinde.oid = v.n;
             p->kinde.grf = o.aval.size() > 1 ? o.aval[1].n : 0;
@@ -245,7 +271,83 @@ ACTIONOBJ* PactionOf(LO* plo, GUARD* pg)
         }
     }
     if (pg && p->kinde.oid != -1) ResolveKinde(&p->kinde, pg);
+    // orig: 0x0020AE18. Resolve the two kind-6 records and sample the
+    // action's authored aiming direction at its marker event.
+    if (pg && p->aimRef != -1 && p->kinde.k == 0 && p->kinde.plo)
+    {
+        XF* end = nullptr;
+        for (const auto& xf : pg->palo->axf)
+            if (xf->kind == 6)
+            {
+                if (!p->pxfAim && xf->tag == p->aimRef) p->pxfAim = xf.get();
+                if (!end && xf->tag == p->aimEndRef) end = xf.get();
+            }
+        auto* aseg = static_cast<ASEG*>(p->kinde.plo);
+        if (p->pxfAim && end)
+            for (const ASEGEV& event : PasegdOf(aseg)->aaev[1])
+                if (event.kind == 11 && event.an[0] == p->aimMarker)
+                {
+                    glm::mat4 mat;
+                    CalculateAsegMatrices(aseg, pg->palo, end, p->pxfAim->pxfRef, event.t, 1.0f, &mat, nullptr);
+                    p->vecAim = glm::vec3(mat[3]);
+                    if (std::getenv("SLY2N_RESPONSEPRINT"))
+                        std::fprintf(stderr, "response-aim: guard %d action %d marker %d t %.6f vector %.6f %.6f %.6f\n",
+                            pg->palo->oid, plo->oid, p->aimMarker, event.t, p->vecAim.x, p->vecAim.y, p->vecAim.z);
+                    break;
+                }
+    }
     return p.get();
+}
+
+// orig: 0x0020AC28. The action's aim controller runs alongside its clip.
+void SetGuardActionAim(GUARD* pg, ACTIONOBJ* action, XF* targetFrame, const glm::vec3& targetPos)
+{
+    if (pg->pactionF08)
+    {
+        DeleteCtrl(&pg->pctrlF0C);
+        pg->pactionF08 = nullptr;
+    }
+    pg->pactionF08 = action;
+    if (action && action->pxfAim)
+    {
+        pg->pctrlF0C = PctrlNewPos(pg->palo, action->pxfAim, 5, 8, 3, glm::vec4(0.0f));
+        pg->pxfF10 = targetFrame;
+        pg->posF20 = targetPos;
+    }
+}
+
+// orig: 0x0020AB68. A response action does not replace the movement job.
+void SetGuardResponse(GUARD* pg, ACTIONOBJ* action, XF* targetFrame, const glm::vec3& targetPos)
+{
+    if (pg->ploF00)
+    {
+        ACTIONOBJ* previous = PactionOf(pg->ploF00, pg);
+        StopKinde(&previous->kinde);
+        pg->ploF00 = nullptr;
+        pg->tF04 = g_clock.t + GRandInRange(previous->r60.x, previous->r60.y);
+    }
+    pg->ploF00 = action ? action->plo : nullptr;
+    if (action)
+    {
+        PlayKinde(&action->kinde, pg, action->kinde.grf | 1, 0.0f);
+        pg->tF04 = FLT_MAX;
+        if (std::getenv("SLY2N_RESPONSEPRINT"))
+            std::fprintf(stderr, "response: t %.6f guard %d action %d clip %d aim %d vector %.6f %.6f %.6f\n",
+                g_clock.t, pg->palo->oid, action->plo->oid, action->kinde.oid, action->pxfAim ? action->pxfAim->tag : -1,
+                action->vecAim.x, action->vecAim.y, action->vecAim.z);
+    }
+    SetGuardActionAim(pg, action, targetFrame, targetPos);
+}
+
+// orig: 0x0020ACC0. Convert the target into the aimed record's parent frame.
+void UpdateGuardActionAim(GUARD* pg)
+{
+    ACTIONOBJ* action = pg->pactionF08;
+    if (!action || !action->pxfAim || !pg->pctrlF0C) return;
+    const glm::vec3 target = PosConvertXfs(pg->pxfF10, action->pxfAim->pxfRef, pg->posF20);
+    const glm::vec3 direction = target - glm::vec3(action->pxfAim->mat[3]);
+    const glm::mat3 rotation = BuildRotateVectorsMatrix(action->vecAim, direction);
+    static_cast<CTRLPOS*>(pg->pctrlF0C)->pos = glm::vec4(EulerFromMat(rotation), 0.0f);
 }
 
 // orig: 0x001758A0: the first of the guard's actions (+0xEDC) it can take on the target now (0: none)
@@ -306,8 +408,8 @@ ACTIONOBJ* PactionSelect(GUARD* pg, LO* ptarget, TARGETREC* pgate)
                 for (SOE* psoe : poxa->apsoe)
                 {
                     if (psoe->f48 || !psoe->palo) continue;
-                    if (pa->f74 && FCidDerivedFrom(psoe->palo->Cid(), 0x62)) continue;
-                    if (FCidDerivedFrom(psoe->palo->Cid(), 0x33)) continue;
+                    if (pa->f74 && FCidDerivedFrom(psoe->palo->Cid(), S3CID(0x62))) continue;
+                    if (FCidDerivedFrom(psoe->palo->Cid(), S3CID(0x33))) continue;
                     if (apsoe.size() < 0x100) apsoe.push_back(psoe);
                 }
             }
@@ -333,7 +435,15 @@ ACTIONOBJ* PactionSelect(GUARD* pg, LO* ptarget, TARGETREC* pgate)
         }
         if (pa->f78)
         {
-            // TODO(ai): the held object (0x20AB68 with the target's slot 32)
+            XF* targetFrame = nullptr;
+            glm::vec3 targetPos(0.0f);
+            if (auto* actor = dynamic_cast<ALO*>(ptarget)) targetFrame = PxfObj(actor);
+            else if (auto* point = dynamic_cast<LOX*>(ptarget))
+            {
+                targetFrame = point->pxf;
+                targetPos = glm::vec3(point->mat[3]);
+            }
+            SetGuardResponse(pg, pa, targetFrame, targetPos);
             if (pgate) SetTargetrecTimer(pgate, 3);
             return nullptr;
         }
@@ -384,16 +494,16 @@ bool JOBPURSUE::FCanShoot()
     if (!(pg->grfFE8 & 8) || pg->ploF00 || paction) return false;
     if (!ptarget || !ptarget->fInWorld) return false;
     // a player busy (hit, held: vt slot 77 == 2) is not shot
-    if (FCidDerivedFrom(ptarget->Cid(), 0x32) && NPlayerStatus77(ptarget) == 2) return false;
+    if (FCidDerivedFrom(ptarget->Cid(), S3CID(0x32)) && NPlayerStatus77(ptarget) == 2) return false;
     // k: the target is in a state the guard shoots at at once (climbing, hanging, on a pipe, Sly's 3 / 21 / 22)
     bool k = false;
-    if (FCidDerivedFrom(ptarget->Cid(), 0x34))
+    if (FCidDerivedFrom(ptarget->Cid(), S3CID(0x34)))
         if (ACTOR* pt = PactorFromLo(ptarget))
         {
             if (pt->nSub4CC != -1 && pt->n4C8 < 5) k = pt->n4C8 >= 3;
             if (pt->jump.state != -1 && pt->jump.state == 0x11) k = true;
             if (pt->nSubF54 != -1) k = true;
-            if (FCidDerivedFrom(ptarget->Cid(), 0x35))
+            if (FCidDerivedFrom(ptarget->Cid(), S3CID(0x35)))
                 if (SLY* psly = PslyFromLo(ptarget))
                     if (psly->state == 3 || psly->state == 0x15 || psly->state == 0x16) k = true;
         }
@@ -641,7 +751,9 @@ void JOBACT::SetActState(int n)
         // (0x1333C0: the guard listens to the target (its message 0xB: the hit landed, Message))
         auto* o = static_cast<JOBMOVE*>(PjobPush(pg, 0x9F));
         o->ploFace = ptarget;
-        o->pkinde = paction ? &paction->kinde : nullptr;
+        // orig 0x20AE18 leaves the generated default action's +0xC0 null;
+        // 0x175488 then lets JOBMOVE choose the guard's normal attack kind.
+        o->pkinde = paction && paction->plo && paction->plo->oid != 0x2CC ? &paction->kinde : nullptr;
         if (static const bool s_fSel = std::getenv("SLY2N_SELDEBUG") != nullptr; s_fSel && paction)
             std::fprintf(stderr, "act guard %d t %.3f action %d kinde k %d oid %d (%s)\n", pg->palo->oid, g_clock.t, paction->plo ? paction->plo->oid : -1,
                          paction->kinde.k, paction->kinde.plo ? paction->kinde.plo->oid : paction->kinde.oid,
@@ -990,6 +1102,18 @@ void JOBB4::Enter()
     AIJOB::Enter();
     SetGuardPursued(pguard, ptarget);
     if (pguard->n1018 - pguard->n33C >= 90) prec = PrecFarthest(pguard, ptarget);
+    if (std::getenv("SLY2N_BOSSPRINT"))
+    {
+        const glm::vec3 pt = ptarget ? PosLoWorld(ptarget) : glm::vec3(0.0f);
+        std::printf("boss b4: t %.2f enter hp %d (1018 %d) rec %d target (%.0f %.0f %.0f)\n", g_clock.t, pguard->n33C, pguard->n1018,
+                    prec ? int(static_cast<BOSSREC*>(prec) - pguard->abossrec.data()) : -1, pt.x, pt.y, pt.z);
+        for (size_t i = 0; i < pguard->abossrec.size(); ++i)
+        {
+            const BOSSREC& r = pguard->abossrec[i];
+            const glm::vec3 a = r.aplo[0] ? PosLoWorld(r.aplo[0]) : glm::vec3(0.0f), c = r.aplo[2] ? PosLoWorld(r.aplo[2]) : glm::vec3(0.0f);
+            std::printf("boss rec %zu: A %d (%.0f %.0f %.0f) C %d (%.0f %.0f %.0f) used %d\n", i, r.aoid[0], a.x, a.y, a.z, r.aoid[2], c.x, c.y, c.z, r.fUsed);
+        }
+    }
     SetB4State(prec ? 0 : 1);
 }
 // orig: 0x00155598
@@ -1005,6 +1129,7 @@ void JOBB4::SetB4State(int k)
 {
     if (k == st) return;
     if (st == 0 && prec) static_cast<BOSSREC*>(prec)->fUsed = 1;
+    if (std::getenv("SLY2N_BOSSPRINT")) std::printf("boss b4: t %.2f state %d -> %d\n", g_clock.t, st, k);
     EndChildJob(&pchild);
     st = k;
     tSt = g_clock.t;
@@ -1124,7 +1249,7 @@ void JOBB2::Choose()
     {
         LO* pc = pg->aploF98[i];
         if (!pc || !pc->fInWorld) continue;
-        const glm::vec3 cand = FCidDerivedFrom(pc->Cid(), 0x30) ? PosAloCenter(static_cast<ALO*>(pc)) : PosLoWorld(pc);
+        const glm::vec3 cand = FCidDerivedFrom(pc->Cid(), S3CID(0x30)) ? PosAloCenter(static_cast<ALO*>(pc)) : PosLoWorld(pc);
         float cost = glm::length(origin - cand);
         if (pc == ploPreferred) cost = -300.0f + cost * (0.9f + cost * 0.0f);  // D_002BE720
         for (int j = 0; j < pg->fFA8 && j < 4; ++j)
@@ -1132,7 +1257,7 @@ void JOBB2::Choose()
             LO* pn = pg->aploFAC[j];
             if (!pn) continue;
             float t, d;
-            ParamSegPoint(FCidDerivedFrom(pn->Cid(), 0x30) ? PosAloCenter(static_cast<ALO*>(pn)) : PosLoWorld(pn), origin, cand, &t, &d);
+            ParamSegPoint(FCidDerivedFrom(pn->Cid(), S3CID(0x30)) ? PosAloCenter(static_cast<ALO*>(pn)) : PosLoWorld(pn), origin, cand, &t, &d);
             if (t < 0.0f || t > 1.0f) continue;
             float pen = 600.0f + d * (-2.0f + d * 0.0f);  // D_002BE730
             pen = std::clamp(pen, 0.0f, 600.0f);           // D_002BE740
@@ -1152,7 +1277,7 @@ void JOBB2::Choose()
     {
         LO* pc = pg->aploFAC[k];
         if (!pc) continue;
-        const glm::vec3 pos = FCidDerivedFrom(pc->Cid(), 0x30) ? PosAloCenter(static_cast<ALO*>(pc)) : PosLoWorld(pc);
+        const glm::vec3 pos = FCidDerivedFrom(pc->Cid(), S3CID(0x30)) ? PosAloCenter(static_cast<ALO*>(pc)) : PosLoWorld(pc);
         const float f = glm::length(pos - origin);
         if (f > dist) continue;
         if (pbest)
@@ -1234,6 +1359,9 @@ LO* JOBB5::PloEnd()
     const BOSSREC* r = static_cast<const BOSSREC*>(prec);
     if (!r) return nullptr;
     const glm::vec3 pos = ptarget ? PosLoWorld(ptarget) : glm::vec3(0.0f);
+    if (std::getenv("SLY2N_BOSSPRINT"))
+        std::printf("boss end: t %.2f target (%.0f %.0f %.0f) zone B %d (%d) D %d (%d)\n", g_clock.t, pos.x, pos.y, pos.z,
+                    r->aplo[1] ? int(FPointInShape(r->aplo[1], pos)) : -1, r->aoid[1], r->aplo[3] ? int(FPointInShape(r->aplo[3], pos)) : -1, r->aoid[3]);
     if (r->aplo[1] && FPointInShape(r->aplo[1], pos)) return r->aplo[0];
     if (r->aplo[3] && FPointInShape(r->aplo[3], pos)) return r->aplo[2];
     return r->aplo[0];
@@ -1253,6 +1381,11 @@ void JOBB5::SetB5State(int k)
     default: break;
     }
     EndChildJob(&pchild);
+    if (std::getenv("SLY2N_BOSSPRINT"))
+    {
+        const glm::vec3 pp = PosLoWorld(pg->palo);
+        std::printf("boss b5: t %.2f state %d -> %d at (%.0f %.0f %.0f)\n", g_clock.t, st, k, pp.x, pp.y, pp.z);
+    }
     st = k;
     tSt = g_clock.t;
     switch (k)
@@ -1333,6 +1466,13 @@ void JOBB5::Update()
             if (pchild && static_cast<JOBFOLLOW*>(pchild)->FArrived()) SetB5State(1);  // 0x178D00
             break;
         case 1:
+            if (std::getenv("SLY2N_BOSSPRINT"))
+            {
+                static int s_c = 0;
+                if (s_c++ % 60 == 0)
+                    std::printf("boss b5 face: t %.2f heading %.3f goal %.3f locked %d child %p\n", g_clock.t, RadGuardHeading(pg),
+                                StepPhysOf(pg->palo).radHeading, pg->move.fHeadingLocked, (void*)pchild);
+            }
             if (2.5f < g_clock.t - t48 && 0.1f < g_clock.t - tSt)
                 if ((paction = PactionSelect(pg, ptarget, nullptr)) != nullptr) SetB5State(3);  // 0x1758A0
             break;

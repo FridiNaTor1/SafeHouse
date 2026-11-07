@@ -1,6 +1,8 @@
 // The splice game built-ins the world side has (bif.h SetBifGameHook): the table 0x2BBB90's 97..168. The others
 // stay counted stubs; 140..168 return Nil in the original too (0x1258F0..0x125FF0).
 
+#include "rumble.h"
+#include "game/sly3.h"
 #include "activate.h"
 #include "bif.h"
 #include "clock.h"
@@ -47,16 +49,17 @@ const WREC* PwrecCur()
     return i >= 0 && i < static_cast<int>(a.size()) ? &a[i] : nullptr;
 }
 
-// an object's world matrix (vt slot 31): an ALO's first record, a LOX's reference x its matrix, else the identity
+// an object's world matrix (vt slot 31): an ALO's object record (+0x60), a LOX's reference x its matrix, else the identity
 glm::mat4 MatWorld(const LO* plo)
 {
     if (!plo) return glm::mat4(1.0f);
-    if (FCidDerivedFrom(plo->Cid(), 0x30))
+    if (FCidDerivedFrom(plo->Cid(), S3CID(0x30)))
     {
         const ALO* palo = static_cast<const ALO*>(plo);
+        if (palo->apxfRef[2]) return palo->apxfRef[2]->matWorld;
         return palo->axf.empty() ? glm::mat4(1.0f) : palo->axf[0]->matWorld;
     }
-    if (FCidDerivedFrom(plo->Cid(), 3))
+    if (FCidDerivedFrom(plo->Cid(), S3CID(3)))
     {
         const LOX* plox = static_cast<const LOX*>(plo);
         return plox->pxf ? plox->pxf->matWorld * plox->mat : plox->mat;
@@ -151,6 +154,11 @@ struct INITGAMEBIFS
             return r;
         });
         // 131 / 132: a progress value by a path of symbols (0x125398 / 0x125450)
+        // Sly 2 130 (0x125248): the pad's rumble (kind, seconds: 0x187E28), void
+        SetBifGameHook(Bifk3FromSly2(130), [](int, CRef* argv, CFrame*) {
+            TriggerJoyRumbleRumk(argv[0].m_n, argv[1].GAsFloat(), "bif 130");
+            return RefVoid();
+        });
         SetBifGameHook(Bifk3FromSly2(131), [](int, CRef* argv, CFrame*) { return RefGetProgressKey(AkeyFromList(argv[0])); });
         SetBifGameHook(Bifk3FromSly2(132), [](int, CRef* argv, CFrame*) {
             FSetProgressKey(AkeyFromList(argv[0]), argv[1]);

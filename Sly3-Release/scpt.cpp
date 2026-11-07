@@ -2,6 +2,12 @@
 // 0x1DFAD8..0x1E5D80, the wrappers 0x106A80..0x10A438) and the reference's m_1DFB10_p3.cpp (0x1E3890) and
 // m_1E1E30_p3.cpp (0x1E1E30).
 #include "scpt.h"
+#include "game/sly3.h"
+#include "worldglobals.h"
+#include "transition.h"
+#include "rumble.h"
+#include "region.h"
+#include "reach.h"
 #include "joy.h"
 #include "skipcut.h"
 #include "jtthrow.h"
@@ -18,6 +24,7 @@ int IdDialogCur();  // sound.cpp (debug)
 #include "crv.h"
 #include "nav.h"
 #include "damage.h"
+#include "emitter.h"
 #include "screenrt.h"
 #include "sound.h"
 #include "frontend.h"
@@ -25,10 +32,12 @@ int IdDialogCur();  // sound.cpp (debug)
 
 #include "activate.h"
 #include "actor.h"
+#include "actorai.h"
 #include "alo.h"
 #include "aseg.h"
 #include "asega.h"
 #include "clock.h"
+#include "climb.h"
 #include "cls.h"
 #include "cm.h"
 #include "cplcy.h"
@@ -45,6 +54,8 @@ int IdDialogCur();  // sound.cpp (debug)
 #include "ref.h"
 #include "so.h"
 #include "spliceobj.h"
+bool FFloatsNear(float g1, float g2, float gEpsilon);  // xfmath.h (0x11D4D0; its SMP clashes with vecmat.h's)
+
 #include "step.h"
 #include "stepphys.h"
 #include "screenrt.h"
@@ -66,6 +77,8 @@ int IdDialogCur();  // sound.cpp (debug)
 #include <unordered_map>
 #include <utility>
 #include <vector>
+
+std::unordered_map<int, int> g_mpoidcScptStart;   // (debug, route.cpp waitscpt: each script's starts)
 
 
 void PrintRef(const CRef& ref, std::string* ps);  // bif.cpp (debug)
@@ -95,7 +108,7 @@ union SLOT
     int32_t n;
     float g;
 };
-struct CMD
+struct SCPTCMD
 {
     int kind = 0;
     int b = 0;
@@ -111,6 +124,7 @@ std::unordered_map<const void*, bool>& MpRunLive();
 }  // namespace
 bool FDropPointOnGround(glm::vec3* ppos, float gHigh, float gLow);  // aijobs.cpp: 0x173610
 void TellGuardCommands(LO* pguard, LO* pcmds, bool fRun);  // scptai.cpp: orig 0x171CF8 / 0x171D58
+float GSoundPitchOffset(LO* pso);                           // asegevent.cpp: 0x210740's pitch terms
 bool FGuardRunsCommands(LO* pguard, LO* pcmds);             // scptai.cpp: orig 0x171DA8
 void LaunchActorTo(ACTOR* pa, const glm::vec3& posT, float g, float h);  // pad.cpp: orig 0x141968
 void PauseGame(int grf);   // ai.cpp: orig 0x20EFC0
@@ -146,12 +160,14 @@ static void OrphanCmTrans(CMTRANS* ptrans)
 
 namespace
 {
-struct RUN
+struct RUN : SMALISTENER
 {
     RUN() { MpRunLive()[this] = true; }
-    ~RUN() { MpRunLive().erase(this); OrphanCmTrans(&trans); }
+    ~RUN() override { ReleaseSmaWatch(); MpRunLive().erase(this); OrphanCmTrans(&trans); }
     RUN(const RUN&) = delete;
     RUN& operator=(const RUN&) = delete;
+    void OnSmaState(const SMAMSG10& msg) override;
+    void ReleaseSmaWatch();
     LO* pscptLo = nullptr;   // +0x14 the script
     LO* ploCtx = nullptr;    // +0x18 where its ids are looked up from (its parent's, else the script)
     LO* plo1C = nullptr;     // +0x1C the block's object (the opening command's +0x10)
@@ -165,23 +181,16 @@ struct RUN
     int grfPause = 0;        // +0x3C its pause kinds
     int icPending = -1;      // +0x40 the command the actor works on
     LO* ploWatch = nullptr;  // +0x44 that actor
+    int fBlocked = 0;        // +0x48 (commands 0x50 / 0x51: the actor's drive holds TRIANGLE, 0x1E46A0)
     LO* ploGuardD8 = nullptr, *ploCmdsDC = nullptr;  // +0xD8 / +0xDC (command 0x55 without its wait)
     ASEGA* pasega = nullptr; // +0x4C (command 0xA)
     LO* pscptSub = nullptr;  // +0x50 (command 0xB)
     LO* ploAnim = nullptr;   // +0x54 the actor animated by command 0xA
     LO* ploScreen = nullptr; // +0x64 the screen object shown by command 0xE
     CSndRef psnd;            // (the relay's sound of command 0x36, a looping one kept: pjsg->psnd)
-    CMD* pcDialog = nullptr; // +0x68 the last dialog command (0x45), for 0x52
+    SCPTCMD* pcDialog = nullptr; // +0x68 the last dialog command (0x45), for 0x52
     LO* ploFade = nullptr;   // +0x60 the object faded in / out by command 0x2C / 0x2D, waited on
-    // command 0x27: the actor's path follower (the original pushes the AI job 0xA8 on the actor's +0x26C stack;
-    // natively the runner's drive steers along the path, see DriveScptActor)
     float s7C = 0.0f;        // +0x7C (command 0x1A: the distance on the climbed pipe to reach)
-    const CRV* pcrv27 = nullptr;
-    int fReverse27 = 0, fOpen27 = 0;
-    float s27 = 0.0f, uSpeed27 = 1.0f;
-    glm::vec3 posEnd27{0.0f};
-    CRV crv28;               // (command 0x28: the walk's path, the job 0xC1's 0x144F48; followed as 0x27's)
-    float sArrive28 = -1.0f; // (command 0x28: the job 0xA8's +0x64 arrival distance, its +0x14; -1: a 0x27 path)
     SMA* psma = nullptr;     // +0x58 (command 0xD)
     int fSmaGoal = 0;        // +0x5C (its goal reached: the SMA's message 10, 0x1E1BC8)
     float f80 = 0.0f;        // +0x80 when the camera block ends (FLT_MAX: not timed)
@@ -205,7 +214,7 @@ std::unordered_map<const void*, bool>& MpRunLive()
 
 struct SCPT
 {
-    std::vector<CMD> acmd;   // +0x50 / +0x54
+    std::vector<SCPTCMD> acmd;   // +0x50 / +0x54
     int cMax = -1;           // +0x58
     std::vector<PRUN> arun;  // +0x5C its runners
     LO* prun68Lo = nullptr;  // (unused)
@@ -218,11 +227,14 @@ struct SCPT
     int f80 = 0;             // +0x80
     std::vector<int> analarm;  // +0x84 / +0x88 (at most 8)
     bool fRealTime = false;  // (the flags' 0x100: the real clock, command 0x10)
+    uint64_t idSkipScene = 0;  // native QoL: this particular start of a skippable scene (skipcut.h)
+    int nSkipKind = -1;        // native QoL: SceneSkipKind's class, computed at the first start
 };
 
 std::unordered_map<LO*, SCPT>& MpScpt()
 {
     static std::unordered_map<LO*, SCPT> s_mp;
+    WORLD_TABLE_LOCAL(s_mp);   // (PC: moved aside while a kept world loads, worldglobals.h)
     return s_mp;
 }
 SCPT* PscptOf(LO* plo)
@@ -230,6 +242,29 @@ SCPT* PscptOf(LO* plo)
     if (!plo) return nullptr;
     auto it = MpScpt().find(plo);
     return it == MpScpt().end() ? nullptr : &it->second;
+}
+
+// orig: 0x001E1BC8: latch the commanded state even when the SMA immediately leaves it again.
+void RUN::OnSmaState(const SMAMSG10& msg)
+{
+    SCPT* ps = PscptOf(pscptLo);
+    if (msg.psma == psma && ps && icCur >= 0 && icCur < static_cast<int>(ps->acmd.size()) &&
+        msg.oidNew == ps->acmd[static_cast<size_t>(icCur)].N(0x18))
+    {
+        fSmaGoal = 1;
+        if (FPrint()) std::fprintf(stderr, "scpt %d: sma goal %d reached t %.3f\n", pscptLo->oid, msg.oidNew, g_clock.t);
+    }
+}
+
+// orig: 0x001E5410: remove the runner from the SMA's listeners, release its reference, clear the latch.
+void RUN::ReleaseSmaWatch()
+{
+    if (!psma) return;
+    auto& a = psma->aplistener;
+    a.erase(std::remove(a.begin(), a.end(), this), a.end());  // 0x133448
+    --psma->cref;
+    psma = nullptr;
+    fSmaGoal = 0;
 }
 
 // the open iterators of the runner lists (0x2DD2FC): a removal before an iterator's next moves it back
@@ -249,13 +284,13 @@ bool IsA(const LO* plo, CID cid) { return plo && FCidDerivedFrom(plo->Cid(), cid
 float TScpt(const SCPT* ps) { return ps && ps->fRealTime ? g_clock.t3C : g_clock.t; }
 
 // orig: 0x001E01F8 (a command appended; past the capacity a scratch one, 0x3DA740)
-CMD* PcmdNew(SCPT* ps, int kind, int b)
+SCPTCMD* PcmdNew(SCPT* ps, int kind, int b)
 {
-    static CMD s_cmdScratch;
+    static SCPTCMD s_cmdScratch;
     const int cMax = ps->cMax <= -1 ? 0x200 : ps->cMax;
     if (static_cast<int>(ps->acmd.size()) >= cMax) return &s_cmdScratch;
     ps->acmd.emplace_back();
-    CMD* p = &ps->acmd.back();
+    SCPTCMD* p = &ps->acmd.back();
     p->kind = kind;
     p->b = b;
     return p;
@@ -266,8 +301,7 @@ void StopScptImpl(LO* pscpt);
 void RunRun(const PRUN& prun);
 void RetireRun(const PRUN& prun);
 void EndActorScriptAnim(ACTOR* pa);
-bool FCmdDone(RUN* p, CMD* pc);
-const glm::vec3 s_axisZ27{0.0f, 0.0f, 1.0f};
+bool FCmdDone(RUN* p, SCPTCMD* pc);
 // // (the AI's D_003DD020: the nearest point in the horizontal plane)
 void EndRunCamera(RUN* p, int fCut);
 
@@ -278,7 +312,7 @@ LO* PloFind(RUN* p, int id)
     LO* q = dynamic_cast<LO*>(g_splicegame.pfnFindObject(4, static_cast<SYMID>(id), p->ploCtx, nullptr));
     if (q && IsA(q, 6))
     {
-        if (PFNOBJGETTER pfn = PfnObjectGetter(1176)) q = dynamic_cast<LO*>(pfn(q).m_pbasic);  // 0x1CB2E0
+        if (PFNOBJGETTER pfn = PfnObjectGetter(sly3::Eopid3FromEopid2(1176))) q = dynamic_cast<LO*>(pfn(q).m_pbasic);  // 0x1CB2E0
         else q = nullptr;
     }
     return q;
@@ -287,6 +321,14 @@ LO* PloFindKind(int kind, int id)
 {
     if (id == -1 || !g_splicegame.pfnFindObject) return nullptr;
     return dynamic_cast<LO*>(g_splicegame.pfnFindObject(kind, static_cast<SYMID>(id), nullptr, nullptr));
+}
+
+// orig: 0x210408 / 0x2104A0 / 0x210538: event lookups use the context
+// directly, without the runner lookup's extra proxy-instance conversion.
+LO* PloFindRunEvent(RUN* p, int id)
+{
+    if (id == -1 || !g_splicegame.pfnFindObject) return nullptr;
+    return dynamic_cast<LO*>(g_splicegame.pfnFindObject(4, static_cast<SYMID>(id), p->ploCtx, nullptr));
 }
 
 // orig: 0x001E0180 (the first runner other than pSkip whose block's opening command has id n)
@@ -334,7 +376,10 @@ void SetRunPending(RUN* p, int ic, LO* plo)
     if (plo == p->ploWatch) return;
     if (ACTOR* pa = PactorFromLo(p->ploWatch); pa && pa->prunScript == p)
     {
-        pa->prunScript = nullptr;  // TODO(actors): 0x143DE8's slot 88 (0) in the +0x4C8 states 5 / 6
+        // orig: 0x143DE8 releases scripted reaches before changing the runner.
+        // A short switch script can retire while its parallel reach is active.
+        if (pa->n4C8 == 5 || pa->n4C8 == 6) NotifyActorJumpKind(pa, 0);
+        pa->prunScript = nullptr;
     }
     p->ploWatch = plo;
     if (ACTOR* pa = PactorFromLo(plo))
@@ -390,7 +435,14 @@ PRUN PrunNew(LO* pscptLo, int ic, RUN* pParent)
             break;
         }
     }
-    ps->arun.push_back(p);  // 0x11A250 (the list's reference)
+    // 0x11A250 puts the runner at the list's head: the newest runner runs first in the next pass (e.g. Ep7 Canada
+    // Games' SCPT 3208: its prompt runner (block 33585) resumes in the frame the swing runner (block 33589) sets
+    // alarm 33584, after Murray's update, so Murray never stands a frame between the clips; appended, it resumed a
+    // frame later and the stick walked him off his spot after a failed round). An open iterator (0x2DD2FC) keeps
+    // its next object: one at the list's start (nothing visited yet) sees the new head, the others move on with it.
+    ps->arun.insert(ps->arun.begin(), p);
+    for (DLI* pdli : Adli())
+        if (pdli->pscpt == ps && pdli->i > 0) ++pdli->i;
     return p;
 }
 
@@ -431,12 +483,19 @@ void RetireRun(const PRUN& prun)
         StopScptImpl(p->pscptSub);
         p->pscptSub = nullptr;
     }
-    p->psma = nullptr;  // 0x1E5410 (TODO: the SMA's listener 0x133448)
-    p->fSmaGoal = 0;
+    p->ReleaseSmaWatch();
     if (p->ploScreen)  // 0x1E5468: the screen object of a command 0xE (vt slot 50)
     {
         HideScreenObj(p->ploScreen);
         p->ploScreen = nullptr;
+    }
+    // 0x1E54B0: the binocucom a command 0x3B opened (+0xA0) closed (0x19CCE8), as command 0x3C does. Scripts
+    // that open one and end without 0x3C rely on it: Close to Contessa's opening talk SCPT 2518 (R01: the binocucom
+    // stayed up after t4_pickpocket_intro was done, a softlock)
+    if (p->paBinoc)
+    {
+        CloseBinoc(p->paBinoc);
+        p->paBinoc = nullptr;
     }
     // 0x1E54E8: the held effects released, the last first
     while (!p->ahold.empty())
@@ -444,7 +503,14 @@ void RetireRun(const PRUN& prun)
         const RUN::HOLD h = p->ahold.back();
         ReleaseRunEffects(p, h.plo, h.grf, h.f);
     }
-    // TODO(actors): 0x1E54B0 (+0xA0's +0xF00, before 0x1E54E8), 0x1E5570 (an actor's +0x26C), 0x1E4F20 (the controlled object), 0x1E5000 (the look target), 0x1E50E0
+    // orig: 0x001E5570: a retired path/walk command releases the actor's AI stack.
+    if (ps && p->icFirst < p->icCur && p->icCur < p->icLast)
+    {
+        const int kind = ps->acmd[static_cast<size_t>(p->icCur)].kind;
+        if (kind == 0x27 || kind == 0x28)
+            if (ACTOR* pa = PactorFromLo(p->plo24)) ClearJobs(pa);
+    }
+    // TODO(actors): 0x1E4F20 (the controlled object), 0x1E5000 (the look target), 0x1E50E0
     // (the music), +0xEC's sound, 0x1E5A98 (the camera's +0x9C)
     SetClockFactor(&g_clock, 6, 1.0f);  // 0x14D1D0
     SetRunPending(p, -1, nullptr);
@@ -465,7 +531,7 @@ void RetireRun(const PRUN& prun)
 void FinishRunPending(RUN* p, SCPT* ps)
 {
     if (p->icPending < 0) return;
-    CMD* pc = &ps->acmd[static_cast<size_t>(p->icPending)];
+    SCPTCMD* pc = &ps->acmd[static_cast<size_t>(p->icPending)];
     if (!FCmdDone(p, pc)) return;
     bool f = true;
     if (pc->kind == 0x1D) f = pc->N(0x10) == -1;
@@ -484,7 +550,7 @@ void EndRunCamera(RUN* p, int fCut)
 
 // orig: 0x001E57A0 (the camera's timed move from the block's opening command pa (0x38) to its end pb (0x39) over
 // dt: a state left at zero is the camera's current one)
-void StartRunCamera(RUN* p, CMD* pa, CMD* pb, float dt)
+void StartRunCamera(RUN* p, SCPTCMD* pa, SCPTCMD* pb, float dt)
 {
     if (pa->G(0x40) == 0.0f) p->f80 = FLT_MAX;  // (0x2A8124)
     else
@@ -492,7 +558,7 @@ void StartRunCamera(RUN* p, CMD* pa, CMD* pb, float dt)
         pb->b = 0;
         p->f80 = g_clock.t + dt;
     }
-    CMD* apc[2] = {pa, pb};
+    SCPTCMD* apc[2] = {pa, pb};
     for (int i = 0; i < 2; ++i)
     {
         CMSTATE& st = p->acmstate[i];
@@ -524,7 +590,7 @@ void StartRunCamera(RUN* p, CMD* pa, CMD* pb, float dt)
 }
 
 // orig: 0x001E4530 (a command's own duration, for a camera block without one)
-float GCmdDuration(RUN* p, CMD* pc)
+float GCmdDuration(RUN* p, SCPTCMD* pc)
 {
     if (pc->b) return 0.0f;
     switch (pc->kind)
@@ -556,7 +622,7 @@ void RunRun(const PRUN& prun)
     // frame after 100,000 commands, with a note; the original waits in one of them)
     for (long c = 0; p->icCur <= p->icLast; ++c)
     {
-        CMD* pc = &ps->acmd[static_cast<size_t>(p->icCur)];
+        SCPTCMD* pc = &ps->acmd[static_cast<size_t>(p->icCur)];
         if (c == 100000)
         {
             static int s_cNote = 0;
@@ -583,7 +649,7 @@ void GetRunAim(RUN* p, LO* po, glm::vec3* ppos, float* prad)
     float rad = 0.0f;
     auto matOf = [](LO* plo) {
         // vt slot 31: an ALO's object record, a LOX's matrix in its record's frame
-        if (IsA(plo, 0x30)) return MatWorldOfAlo(static_cast<ALO*>(plo));
+        if (IsA(plo, 0x30)) return MatJtLo(plo);
         const LOX* plox = static_cast<const LOX*>(plo);
         return plox->pxf ? plox->pxf->matWorld * plox->mat : plox->mat;
     };
@@ -696,7 +762,7 @@ void ExecuteRun(const PRUN& prun)
     const int ic = ++p->icCur;
     if (p->icLast < ic) return;
     PRUN lock = prun;
-    CMD* pc = &ps->acmd[static_cast<size_t>(ic)];
+    SCPTCMD* pc = &ps->acmd[static_cast<size_t>(ic)];
     const int kind = pc->kind;
     int id = -1;
     switch (kind)
@@ -779,7 +845,8 @@ void ExecuteRun(const PRUN& prun)
     case 0x08: p->plo20 = PloFind(p, pc->N(0x10)); break;
     case 0x09:
     {
-        // the script's event 4 with the command's argument (its +0x18 the handler's result: EOPID 624)
+        // The script's event 4 with the command's argument. EOPID 624 can
+        // change this runner's object lookup context while the event runs.
         ps->prun68 = p;
         if (FPrint())
             if (CRef* pref = p->pscptLo->pframe ? p->pscptLo->pframe->PrefFindBinding(4, 1) : nullptr; pref && pref->m_tagk == TAGK_Proc)
@@ -803,7 +870,9 @@ void ExecuteRun(const PRUN& prun)
         {
             if (IsA(s1, 0x34))
             {
-                PlayActorScriptAnim(s1, PloFind(p, pc->N(0x10)), pc->N(0x10), pc->N(0x18) | 1, 5);  // 0x143EE0 (kind 5)
+                // 0x143EE0 (kind 5) finds the clip below the actor (0x15E938 kind 1), not around the script: Rajan's
+                // ASEG 423 was found for Sly's knocked-down clip 423, so Sly stood in the bind pose on the lily pad
+                PlayActorScriptAnim(s1, PloFindSwChild(s1, pc->N(0x10)), pc->N(0x10), pc->N(0x18) | 1, 5);
                 if (pc->b == 0) p->ploAnim = s1;
                 break;
             }
@@ -850,7 +919,7 @@ void ExecuteRun(const PRUN& prun)
     case 0x0D:
     {
         // 0x20FFF0: the state machine +0x14 on the object +0x10 to the state +0x18 (+0x1C: at once), watched
-        p->psma = nullptr;
+        p->ReleaseSmaWatch();
         LO* o = PloFind(p, pc->N(0x10));
         if (!o)
         {
@@ -879,14 +948,15 @@ void ExecuteRun(const PRUN& prun)
             if (y && oid != -1)
             {
                 p->psma = y;
+                ++y->cref;
+                y->aplistener.push_back(p);  // 0x20FFF0 / 0x1333C0: listen before changing the goal
                 if (pc->N(0x1C)) SnapSmaGoal(y, oid);  // 0x1F0948
                 else SetSmaGoal(y, oid);               // 0x1F0660
             }
         }
         if (pc->b != 0)
         {
-            p->psma = nullptr;  // 0x1E5410
-            p->fSmaGoal = 0;
+            p->ReleaseSmaWatch();
             break;
         }
         if (!p->psma || p->fSmaGoal || FSmaRetracted(p->psma)) break;  // 0x1F0638
@@ -927,27 +997,21 @@ void ExecuteRun(const PRUN& prun)
         if (!s4) e.pos = PosLoWorld(pa->palo) + glm::vec3(pa->vecBase);
         else
         {
-            e.id = static_cast<int>(s4->oid);
-            // 0x184670: the object's interaction part (pipes 0xB / 0xD, rails, hooks ...): the entry is the object and
-            // its part (the jump takes it at the end); its slot 2 gives the point. Natively for the pipes the curve's
-            // point nearest the actor (as 0x1A and the jump's pipe target), the others warn and use the aim.
-            static const CID s_acidPart[] = {0x58, 0x1B, 0x22, 0xC, 0x23, 0x13, 0xB, 0xD, 0x27};
-            bool fPart = false;
-            for (CID c : s_acidPart) fPart = fPart || IsA(s4, c);
-            if (fPart)
+            const JTL jtl = JtlDescFromLo(s4);  // 0x184670
+            if (jtl != JTL_Max)
             {
-                const CRV* pcrvPipe = (IsA(s4, 0xB) || IsA(s4, 0xD)) ? PcrvJtPipe(s4) : nullptr;
-                if (pa->nSubF54 != -1 && pcrvPipe && pa->pcrvF50 == pcrvPipe) break;  // (already on it: nothing)
-                e.ploTarget = s4;
-                e.fTargetSub = true;
-                if (pcrvPipe)
+                if (pa->nSubF54 != -1 && pa->ploF5C == s4) break;
+                // The recovery history's supported descriptions share this exact parameter representation.
+                // Hook / hiding-spot scripted aim stays on its existing fallback until those point methods land.
+                if (jtl != JTL_Hook && jtl != JTL_Jump)
                 {
-                    float sNear = 0.0f;
-                    NearestCrvAll(pcrvPipe, PosAloCenter(pa->palo), &e.pos, nullptr, nullptr, &sNear);  // 0x1E6F60
+                    e.ploOwner = s4;
+                    e.jtl = jtl;
+                    e.pos.x = GJtDescInit(s4, jtl, pa);
                 }
                 else
                 {
-                    WarnOnce("command 0x2A to an interaction part other than a pipe (0x184670's slot 2)");
+                    WarnOnce("command 0x2A hook / hiding-spot description point (0x184670)");
                     GetRunAim(p, s4, &e.pos, nullptr);
                 }
             }
@@ -969,60 +1033,41 @@ void ExecuteRun(const PRUN& prun)
     }
     case 0x27:
     {
-        // the actor follows the path +0x10 (+0x14 0: backward) to its end (0x178D90 on the job 0xA8; +0x18 / +0x1C
-        // the job's +0xCC / +0xD0, here the drive's speed when in (0, 1]; +0x24 an animation)
-        LO* s1 = actorOf(0x34);
-        if (!s1) break;
-        LO* ppath = PloFind(p, pc->N(0x10));
-        if (!IsA(ppath, 0xA)) break;
-        if (pc->N(0x24) != -1)  // 0x143EE0(actor, +0x24, 9, 6): the walk's own animation (the actor's kind 6 state)
-            PlayActorScriptAnim(s1, PloFindSwChild(s1, pc->N(0x24)), pc->N(0x24), 9, 6);
-        const CRV* pcrv = PcrvFromLo(ppath);
-        if (!pcrv) break;
-        p->pcrv27 = pcrv;
-        p->sArrive28 = -1.0f;
-        p->fReverse27 = pc->N(0x14) == 0 ? 1 : 0;
-        const glm::vec3 q = PosAloCenter(static_cast<ALO*>(s1));
-        float sNear = 0.0f;
-        NearestCrvAll(pcrv, q, nullptr, nullptr, nullptr, &sNear, &s_axisZ27);
-        p->s27 = sNear;
-        p->fOpen27 = pcrv->fClosed ? 0 : 1;
-        if (p->fOpen27)
-            EvalCrvS(pcrv, p->fReverse27 ? (pcrv->as.empty() ? 0.0f : pcrv->as.front()) : SLengthCrv(pcrv), &p->posEnd27, nullptr);
-        const float u = pc->G(0x1C);
-        p->uSpeed27 = 0.0f < u && u <= 1.0f ? u : 1.0f;
-        SetRunPending(p, ic, s1);
+        // orig: 0x001E1E30: FollowPath pushes the original A8 controller; it does
+        // not bind the actor to the runner's direct-input commands.
+        ACTOR* actor = PactorFromLo(actorOf(0x34));
+        if (!actor) break;
+        LO* path = PloFind(p, pc->N(0x10));
+        if (!IsA(path, 0xA)) break;
+        const CRV* curve = PcrvFromLo(path);
+        if (!curve) break;
+        if (pc->N(0x24) != -1)
+            PlayActorScriptAnim(actor->palo, PloFindSwChild(actor->palo, pc->N(0x24)), pc->N(0x24), 9, 6);
+        auto* follow = static_cast<JOBACTORFOLLOW*>(PjobPush(actor, 0xA8));
+        follow->fNoAvoid = p->fE0;
+        follow->fWalk = pc->N(0x18);
+        follow->uSpeedActor = pc->G(0x1C);
+        follow->Follow(curve, pc->N(0x14) == 0);
+        follow->Enter();
         break;
     }
     case 0x28:
     {
-        // the actor walks to the object +0x10's place: the job 0xC1 (0x144E68) pushes the path follower 0xA8 (+0x40
-        // the run flag 0x25 / 0x26, +0x64 the arrival distance +0x14, +0xCC +0x18, +0xD0 +0x1C) on the path 0x144F48
-        // makes: the nav path 0x1C02D0 from the actor to the place, or a straight two-point curve (0x1E6180) when the
-        // actor has no nav region or runs; natively the runner's drive steers along it as 0x27's (DriveScptActor)
-        LO* s1 = actorOf(0x34);
-        if (!s1) break;
+        // orig: 0x001E1E30 / 0x00144E68: C1 owns the goal and creates an A8
+        // follower with the authored arrival, walk/run and speed settings.
+        ACTOR* actor = PactorFromLo(actorOf(0x34));
+        if (!actor) break;
         glm::vec3 pos;
-        GetRunAim(p, PloFind(p, pc->N(0x10)), &pos, nullptr);  // 0x1E4D40
-        if (pc->N(0x24) != -1)  // 0x143EE0(actor, +0x24, 9, 6)
-            PlayActorScriptAnim(s1, PloFindSwChild(s1, pc->N(0x24)), pc->N(0x24), 9, 6);
-        const glm::vec3 q = PosLoWorld(s1);  // 0x1A62E8
-        const NAVREGION* preg = p->fE0 ? nullptr : PregionAt(q, false);
-        if (!preg || !FNavPathCrv(preg, q, pos, &p->crv28))
-        {
-            p->crv28.apos = {q, pos};
-            p->crv28.ag = {0.0f, 1.0f};
-            RecalcCrv(&p->crv28, glm::mat4(1.0f));  // 0x1E6180
-        }
-        p->pcrv27 = &p->crv28;
-        p->fReverse27 = 0;
-        p->s27 = 0.0f;
-        p->fOpen27 = 1;
-        EvalCrvS(&p->crv28, SLengthCrv(&p->crv28), &p->posEnd27, nullptr);
-        const float u = pc->G(0x1C);
-        p->uSpeed27 = 0.0f < u && u <= 1.0f ? u : 1.0f;
-        p->sArrive28 = pc->G(0x14);
-        SetRunPending(p, ic, s1);
+        GetRunAim(p, PloFind(p, pc->N(0x10)), &pos, nullptr);
+        if (pc->N(0x24) != -1)
+            PlayActorScriptAnim(actor->palo, PloFindSwChild(actor->palo, pc->N(0x24)), pc->N(0x24), 9, 6);
+        auto* walk = static_cast<JOBACTORWALK*>(PjobPush(actor, 0xC1));
+        walk->fRun = p->fE0;
+        walk->sArrive = pc->G(0x14);
+        walk->fWalk = pc->N(0x18);
+        walk->uSpeed = pc->G(0x1C);
+        walk->SetGoal(pos);
+        walk->Enter();
         break;
     }
     case 0x24:
@@ -1033,8 +1078,11 @@ void ExecuteRun(const PRUN& prun)
         if (pc->N(0x20) != -1)  // 0x143EE0(actor, +0x20, 9, 6): the walk's own animation (the actor's kind 6 state)
             PlayActorScriptAnim(s1, PloFindSwChild(s1, pc->N(0x20)), pc->N(0x20), 9, 6);
         LO* pt = PloFind(p, pc->N(0x10));
+        // to an interaction's object: 0x1938C0 on the actor's +0x4C0 (its mask / target arguments unused there: the
+        // first tracked target within 250 starts its interaction); natively only a warning (audit 2026-11 P9). (The
+        // state-3 projection into +0x3C (sGoTo) has no reader.)
         if (pt && (IsA(pt, 0x22) || IsA(pt, 0xC) || IsA(pt, 0x26) || IsA(pt, 0x58) || IsA(pt, 0xB) || IsA(pt, 0x13)))
-            WarnOnce("command 0x24 to an interaction (0x1938C0)");
+            if (ACTOR* pa = PactorFromLo(s1)) FInteractCircle(pa);
         SetRunPending(p, ic, s1);
         break;
     }
@@ -1056,7 +1104,7 @@ void ExecuteRun(const PRUN& prun)
         int depth = 0, icFound = -1;
         for (int i = p->icFirst + 1; i < p->icLast; ++i)
         {
-            const CMD& e = ps->acmd[static_cast<size_t>(i)];
+            const SCPTCMD& e = ps->acmd[static_cast<size_t>(i)];
             if (e.kind == 1) --depth;
             else if (e.kind == 0) ++depth;
             else if (e.kind == 0x13 && depth == 0 && e.a[0].n == pc->N(0x10))
@@ -1074,7 +1122,7 @@ void ExecuteRun(const PRUN& prun)
         LO* s1 = PloFind(p, pc->N(0x10));
         if (s1 && IsA(s1, 0x29))
         {
-            WarnOnce("command 0x16 to a checkpoint (0x228170)");
+            TriggerWarp(s1);  // 0x228170: the player put at the warp point
             break;
         }
         LO* po = p->plo24;
@@ -1111,7 +1159,8 @@ void ExecuteRun(const PRUN& prun)
         if (ACTOR* pa = PactorFromLo(po))
         {
             pa->posCmTarget = glm::vec4(pos + glm::vec3(0, 0, 1) * pa->sHeight, 1.0f);
-            if (pc->N(0x14) == 0)
+            // (0x1E26A8: only when not held for a talk (+0x12F4 0): a held actor stays in its 0x60B pose; audit P3)
+            if (pc->N(0x14) == 0 && CActorTalkHold(po) == 0)
             {
                 SetJumpKind(&pa->jump, 0xB, 0, 0);  // 0x195A00
                 DetachAloContactsAll(pa->palo);     // 0x1F4E28
@@ -1223,12 +1272,16 @@ void ExecuteRun(const PRUN& prun)
         case 0x1D: SetActorInteractObject(pa, 5, pt); break;
         case 0x1F: SetActorInteractObject(pa, 9, pt); break;
         case 0x20:
+            // orig 0x1421A0: the reach ended (0x142140(0)), then the object held by the interaction's reach (+0x900:
+            // 0x1CD098) or the held one let go (0x1CD2C0); natively only the first part ran (audit 2026-11 P2)
             SetActorInteractObject(pa, 5, nullptr);
-            WarnOnce("command 0x20's grab (+0x900: 0x1CD098 / 0x1CD2C0)");
+            if (pt) AttachReachObject(&pa->inter.reach, pt);
+            else ReleaseReachObject(&pa->inter.reach);
             break;
         case 0x21:
+            // orig 0x1421F8: kind 5 with the object, then the held object put there (+0x900: 0x1CD308)
             SetActorInteractObject(pa, 5, pt);
-            if (pt) WarnOnce("command 0x21's reach +0x900 (0x1CD308)");
+            if (pt) PlaceReachObject(&pa->inter.reach, pt);
             break;
         default: break;
         }
@@ -1247,7 +1300,38 @@ void ExecuteRun(const PRUN& prun)
         if (plo && pc->b == 0 && IsA(plo, 0x30)) p->ploFade = plo;
         break;
     }
+    case 0x2E: case 0x2F: case 0x30: case 0x31:
+    {
+        // orig: 0x1E1E30 -> 0x210408 / 0x2104A0: mesh-group visibility
+        // and collision flags, resolved from the runner's context (no default object).
+        LO* plo = PloFindRunEvent(p, pc->N(0x10));
+        if (!plo || !IsA(plo, 0x30)) break;
+        const bool fOn = kind == 0x2E || kind == 0x30;
+        if (kind <= 0x2F) ShowAloGlobs(static_cast<ALO*>(plo), pc->N(0x14), fOn);
+        else SetAloSoesByTag(static_cast<ALO*>(plo), pc->N(0x14), fOn);
+        break;
+    }
+    case 0x34:
+    {
+        // orig: 0x1E1E30 -> 0x210538: the authored burst, optional source/contact and scale.
+        LO* plo = PloFindRunEvent(p, pc->N(0x10));
+        if (!plo) break;
+        BURSTPARAMS bp;
+        bp.grf = 1;
+        bp.plo = PloFindRunEvent(p, pc->N(0x14));
+        if (!bp.plo) bp.plo = plo;
+        bp.ploTouch = PloFindRunEvent(p, pc->N(0x18));
+        if (bp.ploTouch) bp.grf |= 0x20;
+        if (pc->G(0x1C) != 1.0f)
+        {
+            bp.g8 = pc->G(0x1C);
+            bp.grf |= 0x18;
+        }
+        ExplodeLo(plo, &bp);
+        break;
+    }
     case 0x32: JoltCm(&g_cm, pc->N(0x10)); break;  // 0x14F750
+    case 0x33: TriggerJoyRumbleRumk(pc->N(0x14), pc->G(0x10), "scpt 0x33"); break;  // 0x187E28 (rumk +0x14, dt +0x10)
     case 0x38:
     {
         // a timed camera block: its duration (+0x40; 0: the sum of its commands') to its end (0x39)
@@ -1256,7 +1340,7 @@ void ExecuteRun(const PRUN& prun)
         int icEnd = -1, depth = 0;
         for (int i = ic + 1; i < p->icLast && icEnd < 0; ++i)
         {
-            CMD* pe = &ps->acmd[static_cast<size_t>(i)];
+            SCPTCMD* pe = &ps->acmd[static_cast<size_t>(i)];
             if (pe->kind == 1) --depth;
             else if (pe->kind == 0) ++depth;
             else if (pe->kind == 0x39) { if (depth == 0) icEnd = i; }
@@ -1311,7 +1395,7 @@ void ExecuteRun(const PRUN& prun)
         LO* ploSpeaker = PloFind(p, pc->N(0x14));
         LO* ploScreen = pc->N(0x18) != -1 && g_psw ? PloFindSwObjectByOid(g_psw, pc->N(0x18)) : nullptr;  // 0x15E938
         LO* po = PloFind(p, pc->N(0x10));
-        ACTOR* pa = po && FCidDerivedFrom(po->Cid(), 0x34) ? PactorFromLo(po) : nullptr;
+        ACTOR* pa = po && FCidDerivedFrom(po->Cid(), S3CID(0x34)) ? PactorFromLo(po) : nullptr;
         if (!pa) break;
         p->paBinoc = pa;
         OpenBinoc(pa, 1, ploSpeaker, ploScreen);
@@ -1341,6 +1425,53 @@ void ExecuteRun(const PRUN& prun)
     }
     case 0x53: HudPrompt(pc->N(0x10), pc->G(0x14)); break;  // HintBox: 0x1DA4B8 (SetHintBoxText) on the HUD prompt 0x3DA0C0
     case 0x54: HudPromptEnd(pc->N(0x10)); break;            // ClearHintBox: 0x1DA578 (ClearIfSlotId)
+    case 0x50: case 0x51:
+        // Bentley (cid 0x37) watched until his state is (0x50) / is not (0x51) 6 (0x1E3890)
+        if (LO* pb = actorOf(0x37)) SetRunPending(p, ic, pb);
+        break;
+    case 0x57:
+        // Murray (cid 0x36): the Bentley toss (0x1B9880: his state 15)
+        if (LO* pm = actorOf(0x36))
+            if (MURRAY* pmur = PmurrayFromLo(pm)) SetMurrayState(pmur, 15);
+        break;
+    case 0x58:
+    {
+        // orig 0x1E1E30 case 0x58: Bentley (cid 0x37, +0x14) jumps (kind 3 from his state 0x11, else 1) and is driven
+        // (0x1E46A0) until Murray (+0x10) holds him: the partner jump into Murray's hands (w32's 2343 at the battery)
+        BENTLEY* pb = PbentleyFromLo(actorOf(0x37));
+        LO* plo = PloFind(p, pc->N(0x10));
+        if (pb && plo && IsA(plo, 0x36))
+        {
+            SetJumpKind(&pb->jump, pb->jump.state == 0x11 ? 3 : 1, 0, nullptr);  // 0x195A00
+            SetRunPending(p, ic, pb->palo);                                      // SetJsgJt
+        }
+        break;
+    }
+    case 0x59:
+    {
+        // orig case 0x59: Murray (+0x14) aiming the toss (+0x1910 in its states 4..6) turns toward the object +0x10
+        // (0x220508); the wait (0x1E3890) is on the runner's actor
+        MURRAY* pm = PmurrayFromLo(actorOf(0x36));
+        if (pm && pm->jtthrow1910.state < 7 && pm->jtthrow1910.state >= 4)
+            if (LO* plo = PloFind(p, pc->N(0x10))) SetJtThrowTarget(pm->jtthrow1910, plo);
+        break;
+    }
+    case 0x5A:
+    {
+        // orig case 0x5A: as 0x59, then Murray is driven (0x1E46A0: the throw pressed once his aim has arrived); the
+        // controller's +0 kept for the wait (+0x18 here: armed)
+        MURRAY* pm = PmurrayFromLo(actorOf(0x36));
+        if (pm && pm->jtthrow1910.state < 7 && pm->jtthrow1910.state >= 4)
+        {
+            pc->N(0x18) = 1;
+            if (LO* plo = PloFind(p, pc->N(0x10)))
+            {
+                SetJtThrowTarget(pm->jtthrow1910, plo);
+                SetRunPending(p, ic, pm->palo);  // SetJsgJt
+            }
+        }
+        break;
+    }
     case 0x49:
     {
         // orig: 0x001E3400.. (the dance's state with the prompts of the block's beats: the 0x4A commands after it at
@@ -1350,7 +1481,7 @@ void ExecuteRun(const PRUN& prun)
         int cBlock = 0;
         for (int i = ic + 1; i < p->icLast; ++i)
         {
-            CMD& c = ps->acmd[static_cast<size_t>(i)];
+            SCPTCMD& c = ps->acmd[static_cast<size_t>(i)];
             if (c.kind == 0) ++cBlock;
             else if (c.kind == 1) --cBlock;
             else if (c.kind == 0x4A && cBlock == 0 && aent.size() < 6) aent.emplace_back(c.G(0x10), c.N(0x14));
@@ -1373,8 +1504,7 @@ void ExecuteRun(const PRUN& prun)
     {
         // orig: 0x00210740 (PlayAsegSoundEvent, as the ASEG event kind 0): the sound +0x10 at the object +0x14 (-1:
         // none, found from the context: 0x15E938 kind 4), falloff +0x18 .. +0x1C, pitch +0x20, volume +0x28 (+0x24
-        // the fade: 0x1FB520 is empty); a looping one (kind 2) kept by the relay. TODO: a guard source's (cid 0x38)
-        // distance curve +0xFC4 and the game's +0x475C added to the pitch, as asegevent.cpp's
+        // the fade: 0x1FB520 is empty); a looping one (kind 2) kept by the relay
         const int idSnd = pc->N(0x10);
         if (idSnd == -1) break;
         LO* pso = pc->N(0x14) != -1 ? PloFind(p, pc->N(0x14)) : nullptr;
@@ -1383,7 +1513,7 @@ void ExecuteRun(const PRUN& prun)
         psnd->SetSource(pso);
         psnd->SetFalloff(static_cast<float>(pc->N(0x18)), static_cast<float>(pc->N(0x1C)));
         psnd->SetVolume(pc->G(0x28));
-        psnd->SetPitch(pc->G(0x20));
+        psnd->SetPitch(pc->G(0x20) + GSoundPitchOffset(pso));  // (asegevent.cpp: the guard scale term; audit S2)
         if (psnd->Kind() == 2) p->psnd = CSndRef(psnd);
         break;
     }
@@ -1413,7 +1543,7 @@ void ExecuteRun(const PRUN& prun)
 }
 
 // orig: 0x001E3890 (the command is done, or needs no waiting)
-bool FCmdDone(RUN* p, CMD* pc)
+bool FCmdDone(RUN* p, SCPTCMD* pc)
 {
     SCPT* ps = PscptOf(p->pscptLo);
     const float dt = TScpt(ps) - p->t34;
@@ -1439,6 +1569,11 @@ bool FCmdDone(RUN* p, CMD* pc)
             return !pa || ActorJumpKind(pa) == pc->N(0x10);
         }
         return true;
+    case 0x50: case 0x51:
+    {
+        BENTLEY* pb = PbentleyFromLo(p->ploWatch);
+        return !pb || ((pb->state == 6) == (pc->kind == 0x50));
+    }
     case 0x55:
         // a command 0x55 without its wait: until the guard's reactions no longer run the list (0x171DA8)
         if (p->ploCmdsDC && !FGuardRunsCommands(p->ploGuardD8, p->ploCmdsDC))
@@ -1470,23 +1605,17 @@ bool FCmdDone(RUN* p, CMD* pc)
         if (!FScptRunning(p->pscptSub)) p->pscptSub = nullptr;
         return p->pscptSub == nullptr;
     case 0x0D:
-        if (p->psma && (FSmaRetracted(p->psma) || p->fSmaGoal || OidSmaCur(p->psma) == pc->N(0x18)))
-        {
-            p->psma = nullptr;  // 0x1E5410
-            p->fSmaGoal = 0;
-        }
+        if (p->psma && (FSmaRetracted(p->psma) || p->fSmaGoal)) p->ReleaseSmaWatch();
         return p->psma == nullptr;
     case 0x1A:
     {
         // within +0x14 of the point (limited to the pipe's range, 0x19E110 / 0x11D948)
         ACTOR* pa = PactorFromLo(p->ploWatch);
         if (!pa || !pa->pcrvF50) return true;
-        float g = p->s7C;
-        if (!pa->pcrvF50->fClosed)
-        {
-            const float s0 = pa->pcrvF50->as.empty() ? 0.0f : pa->pcrvF50->as.front();
-            g = std::clamp(g, s0, SLengthCrv(pa->pcrvF50));
-        }
+        // orig: 0x001E3890 calls 0x0019E110 before limiting the goal.
+        // Climbing itself stops short of an open pipe's geometric endpoints.
+        const cmm::LM lm = LmClimb(pa);
+        const float g = p->s7C < lm.gMin ? lm.gMin : (lm.gMax < p->s7C ? lm.gMax : p->s7C);
         return std::fabs(pa->sCrvF50 - g) < pc->G(0x14);
     }
     case 0x2A:
@@ -1509,17 +1638,24 @@ bool FCmdDone(RUN* p, CMD* pc)
     case 0x27:
     case 0x28:
     {
-        // 0x178D00: arrived when within +0x64 (0x27: 100; 0x28: its +0x14, 40 by default 0x144E20) of the open path's
-        // end in x, y (a closed path: never)
-        LO* po = p->ploWatch;
-        if (!po || !p->pcrv27) return true;
-        if (!p->fOpen27) return false;
-        const glm::vec3 q = PosAloCenter(static_cast<ALO*>(po));
-        const float dx = q.x - p->posEnd27.x, dy = q.y - p->posEnd27.y;
-        if ((p->sArrive28 < 0.0f ? 100.0f : p->sArrive28) < std::sqrt(dx * dx + dy * dy)) return false;
-        p->pcrv27 = nullptr;  // (0x1EECD0: the job popped)
-        if (pc->N(0x24) != -1)
-            if (ACTOR* pa = PactorFromLo(po)) EndActorScriptAnim(pa);  // 0x143FF8
+        // orig: 0x001E3890 / 0x00144EE8: WalkTo also accepts a stopped A8
+        // follower. Both commands clear the actor's stack when they finish.
+        ACTOR* actor = PactorFromLo(p->plo24);
+        if (!actor) return true;
+        bool done;
+        if (pc->kind == 0x27)
+        {
+            const auto* follow = static_cast<const JOBACTORFOLLOW*>(PjobFind(actor, 0xA8));
+            done = !follow || follow->FArrived();
+        }
+        else
+        {
+            const auto* walk = static_cast<const JOBACTORWALK*>(PjobFind(actor, 0xC1));
+            done = !walk || walk->FAtGoal();
+        }
+        if (!done) return false;
+        ClearJobs(actor);
+        if (pc->N(0x24) != -1) EndActorScriptAnim(actor);
         return true;
     }
     case 0x24:
@@ -1543,6 +1679,37 @@ bool FCmdDone(RUN* p, CMD* pc)
         if (pc->N(0x20) != -1)
             if (ACTOR* pa = PactorFromLo(po)) EndActorScriptAnim(pa);  // 0x143FF8 (the walk's animation over)
         return true;
+    }
+    case 0x58:
+    {
+        // Bentley's partner jump: done once Murray's toss (+0x1910) holds him (its states 4..6), or after 7 s
+        if (!p->ploWatch) return true;
+        MURRAY* pm = PmurrayFromLo(PloFind(p, pc->N(0x10)));
+        if (dt > 7.0f) return true;  // 0x2C3620
+        return !pm || (pm->jtthrow1910.state < 7 && pm->jtthrow1910.state >= 4);
+    }
+    case 0x59:
+    {
+        // Murray's aim: done when its point has reached the transition's end (0.1 on each axis), or after 10 s
+        MURRAY* pm = PmurrayFromLo(p->ploWatch);
+        if (!pm) return true;
+        if (dt > 10.0f) return true;  // 0x2C3624
+        const JTTHROW& t = pm->jtthrow1910;
+        return FFloatsNear(t.transitionEnd.x, t.targetWorld.x, 0.1f) && FFloatsNear(t.transitionEnd.y, t.targetWorld.y, 0.1f) &&
+               FFloatsNear(t.transitionEnd.z, t.targetWorld.z, 0.1f);  // 0x2C3628
+    }
+    case 0x5A:
+    {
+        // Murray's throw: done when his toss is over (-1, or back at 0: his slot 88 (0) then ends it) and the
+        // controller's owner has landed (its jump's state -1), or after 10 s
+        MURRAY* pm = PmurrayFromLo(p->ploWatch);
+        if (!pm) return true;
+        if (dt > 10.0f) return true;  // 0x2C362C
+        const int st = pm->jtthrow1910.state;
+        if (st != -1 && st != 0) return false;
+        if (st == 0) NotifyActorJumpKind(pm, 0);  // slot 88 (0)
+        const ACTOR* po = pc->N(0x18) ? pm->jtthrow1910.owner : nullptr;
+        return po && po->jump.state == -1;
     }
     case 0x1D: case 0x21:
     {
@@ -1635,6 +1802,54 @@ bool FCmdDone(RUN* p, CMD* pc)
     }
 }
 
+// (native QoL, skipcut.h) The scene a script plays when it pauses the game (0x12): its own commands
+// and the scripts it starts (0x0B, transitively, found by oid in this world). A dialogue line (0x45) or a binocucom
+// talk (0x3B) anywhere in it: a story scene; camera blocks (0x38) only, three or more: a cinematic of several shots;
+// fewer: a gate / door / pickup shown for a moment, a pad lock only (doors, the safehouse, banners): not scenes.
+}  // namespace
+int SceneSkipKind(LO* pscpt)
+{
+    std::vector<LO*> aplo{pscpt}, aploSeen{pscpt};
+    int cDialog = 0, cCamera = 0, cBinoc = 0;
+    while (!aplo.empty())
+    {
+        LO* plo = aplo.back();
+        aplo.pop_back();
+        SCPT* ps = PscptOf(plo);
+        if (!ps) continue;
+        // (the starting script: only its paused part, from its first pause on to its last pause off after that;
+        // what it does after it has given the pad back, e.g. 2:1770's talk started after its animation, is not this
+        // scene: the talk is its own)
+        size_t icFirst = 0, icLast = ps->acmd.size();
+        if (plo == pscpt)
+        {
+            while (icFirst < ps->acmd.size() && !(ps->acmd[icFirst].kind == 0x12 && ps->acmd[icFirst].a[0].n)) ++icFirst;
+            for (size_t i = ps->acmd.size(); i-- > icFirst;)
+                if (ps->acmd[i].kind == 0x12 && !ps->acmd[i].a[0].n) { icLast = i; break; }
+        }
+        for (size_t ic = icFirst; ic < icLast; ++ic)
+        {
+            const SCPTCMD& c = ps->acmd[ic];
+            cDialog += c.kind == 0x45;
+            cCamera += c.kind == 0x38;
+            cBinoc += c.kind == 0x3B;
+            if (c.kind != 0x0B) continue;
+            const int oid = c.a[0].n;
+            for (auto& [ploSub, sSub] : MpScpt())
+                if (ploSub->oid == oid && std::find(aploSeen.begin(), aploSeen.end(), ploSub) == aploSeen.end())
+                {
+                    aploSeen.push_back(ploSub);
+                    aplo.push_back(ploSub);
+                    break;
+                }
+        }
+    }
+    if (cDialog || cBinoc) return SKIPK_Dialog;
+    return cCamera >= 3 ? SKIPK_Cinematic : SKIPK_None;
+}
+namespace
+{
+
 // orig: 0x001DFD58
 void StartScptImpl(LO* pscpt, LO* ploStarter)
 {
@@ -1645,16 +1860,21 @@ void StartScptImpl(LO* pscpt, LO* ploStarter)
     if (std::getenv("SLY2N_SCPTDIALOG"))  // (debug: the scripts with dialog lines as they start)
     {
         int c = 0, idFirst = -1;
-        for (CMD& cmd : ps->acmd)
+        for (SCPTCMD& cmd : ps->acmd)
             if (cmd.kind == 0x45 && c++ == 0) idFirst = cmd.N(0x10);
         if (c) std::printf("scpt %d started (by %d): %d dialog lines, the first %d\n", pscpt->oid, ploStarter ? ploStarter->oid : -1, c, idFirst);
     }
     ps->ploStarter = ploStarter;
     ps->fRunning = 1;
+    if (ps->nSkipKind < 0) ps->nSkipKind = SceneSkipKind(pscpt);
+    ps->idSkipScene = ps->nSkipKind == SKIPK_Dialog || ps->nSkipKind == SKIPK_Cinematic ? NewSkipCutScene() : 0;
     ps->f78 = 0;
+    ++g_mpoidcScptStart[pscpt->oid];   // (debug: the route's waitscpt)
     if (FPrint())
     {
         std::fprintf(stderr, "scpt %d: start (%zu commands) t %.3f\n", pscpt->oid, ps->acmd.size(), g_clock.t);
+        for (size_t i = 0; i < ps->acmd.size(); ++i)
+            std::fprintf(stderr, "  cmd %zu kind 0x%X b %d [%d %d %d]\n", i, ps->acmd[i].kind, ps->acmd[i].b, ps->acmd[i].N(0x10), ps->acmd[i].N(0x14), ps->acmd[i].N(0x18));
         for (SYMID k : {2u, 3u, 4u, 5u, 6u})
             if (CRef* pref = pscpt->pframe ? pscpt->pframe->PrefFindBinding(k, 0) : nullptr; pref && pref->m_tagk == TAGK_Proc)
             {
@@ -1773,7 +1993,7 @@ glm::vec4 Q(const ARGS& a, size_t i) { return i < a.aq.size() ? a.aq[i] : glm::v
 
 void B1(SCPT* ps, int kind, int b, std::initializer_list<std::pair<uint32_t, int>> an)
 {
-    CMD* p = PcmdNew(ps, kind, b);
+    SCPTCMD* p = PcmdNew(ps, kind, b);
     for (const auto& [ib, n] : an) p->N(ib) = n;
     static const bool s_fRefs = std::getenv("SLY2N_TASKREFS") != nullptr;  // (debug: who sets which task's state)
     if (s_fRefs && kind == 0x11)
@@ -1788,14 +2008,14 @@ template <int K> void BIb(SCPT* ps, const ARGS& a) { B1(ps, K, I(a, 1), {{0x10, 
 template <int K, int Bv> void BNone(SCPT* ps, const ARGS&) { B1(ps, K, Bv, {}); }
 template <int K> void BIFb(SCPT* ps, const ARGS& a)  // 0x1E0ED8 / 0x1E0F18 / 0x1E1970
 {
-    CMD* p = PcmdNew(ps, K, I(a, 1));
+    SCPTCMD* p = PcmdNew(ps, K, I(a, 1));
     p->N(0x10) = I(a, 0);
     p->G(0x14) = F(a, 0);
 }
 template <int K> void BIII1(SCPT* ps, const ARGS& a) { B1(ps, K, 1, {{0x10, I(a, 0)}, {0x14, I(a, 1)}, {0x18, I(a, 2)}}); }
-void BVecCmd(SCPT* ps, int kind, const ARGS& a, CMD** pp)
+void BVecCmd(SCPT* ps, int kind, const ARGS& a, SCPTCMD** pp)
 {
-    CMD* p = PcmdNew(ps, kind, 1);
+    SCPTCMD* p = PcmdNew(ps, kind, 1);
     const glm::vec4 q0 = Q(a, 0), q1 = Q(a, 1);
     for (int i = 0; i < 4; ++i) p->G(0x10 + 4 * i) = q0[i];
     p->G(0x20) = q1.x * c_degToRad;
@@ -1811,7 +2031,7 @@ const std::vector<THUNK>& Athunk()
         {0x106B08, BNone<1, 1>, {}, {}},                                // 0x1E02C0
         {0x106B80, BI1<2>, {6}, {0}},                                    // 0x1E02E0
         {0x106C08, [](SCPT* ps, const ARGS& a) {                         // 0x1E0310
-             CMD* p = PcmdNew(ps, 3, 0);
+             SCPTCMD* p = PcmdNew(ps, 3, 0);
              const int c = std::min<int>(4, static_cast<int>(a.an.size()));
              p->N(0x10) = c;
              for (int i = 0; i < c; ++i) p->a[1 + i].n = a.an[static_cast<size_t>(i)];
@@ -1827,7 +2047,7 @@ const std::vector<THUNK>& Athunk()
         {0x1070E0, BIIb<0xB>, {6, 6, 0}, {0, 1, 2}},                     // 0x1E0530
         {0x107198, BI1<0xC>, {6}, {0}},
         {0x107220, [](SCPT* ps, const ARGS& a) {                         // 0x1E05A0
-             CMD* p = PcmdNew(ps, 0xD, I(a, 3));
+             SCPTCMD* p = PcmdNew(ps, 0xD, I(a, 3));
              p->N(0x10) = I(a, 0);
              p->N(0x14) = I(a, 1);
              p->N(0x18) = I(a, 2);
@@ -1847,7 +2067,7 @@ const std::vector<THUNK>& Athunk()
         {0x107900, BII1<0x18>, {6, 6}, {0, 1}},
         {0x1079A8, BII1<0x19>, {6, 6}, {0, 1}},
         {0x107A50, [](SCPT* ps, const ARGS& a) {                         // 0x1E08C0
-             CMD* p = PcmdNew(ps, 0x1A, I(a, 1));
+             SCPTCMD* p = PcmdNew(ps, 0x1A, I(a, 1));
              p->N(0x10) = I(a, 0);
              p->G(0x14) = F(a, 0);
              p->N(0x18) = I(a, 2);
@@ -1865,13 +2085,13 @@ const std::vector<THUNK>& Athunk()
              B1(ps, 0x22, 0, {{0x10, I(a, 0)}, {0x14, I(a, 1)}, {0x18, I(a, 2)}, {0x1C, I(a, 3)}});
          }, {6, 6, 16, 6}, {0, 1, 2, 3}},
         {0x108088, [](SCPT* ps, const ARGS& a) {                         // 0x1E0B40
-             CMD* p = PcmdNew(ps, 0x23, 0);
+             SCPTCMD* p = PcmdNew(ps, 0x23, 0);
              p->G(0x10) = F(a, 0);
              p->N(0x14) = I(a, 0);
              p->N(0x18) = I(a, 1);
          }, {1, 6, 6}, {1, 2, 0}},
         {0x108140, [](SCPT* ps, const ARGS& a) {                         // 0x1E0B90
-             CMD* p = PcmdNew(ps, 0x24, I(a, 1));
+             SCPTCMD* p = PcmdNew(ps, 0x24, I(a, 1));
              p->N(0x10) = I(a, 0);
              p->G(0x14) = F(a, 0);
              p->G(0x18) = F(a, 1);
@@ -1880,7 +2100,7 @@ const std::vector<THUNK>& Athunk()
              p->N(0x24) = 1;
          }, {6, 1, 1, 0, 6, 6}, {0, 3, 4, 1, 2, 5}},
         {0x108230, [](SCPT* ps, const ARGS& a) {                         // 0x1E0C08
-             CMD* p = PcmdNew(ps, 0x24, I(a, 1));
+             SCPTCMD* p = PcmdNew(ps, 0x24, I(a, 1));
              p->N(0x10) = I(a, 0);
              p->G(0x14) = F(a, 0);
              p->G(0x18) = F(a, 1);
@@ -1891,7 +2111,7 @@ const std::vector<THUNK>& Athunk()
         {0x108320, BNone<0x25, 1>, {}, {}},
         {0x108398, BNone<0x26, 1>, {}, {}},
         {0x108410, [](SCPT* ps, const ARGS& a) {                         // 0x1E0CB8
-             CMD* p = PcmdNew(ps, 0x27, 0);
+             SCPTCMD* p = PcmdNew(ps, 0x27, 0);
              p->N(0x10) = I(a, 0);
              p->N(0x14) = I(a, 1);
              p->N(0x18) = I(a, 2);
@@ -1900,7 +2120,7 @@ const std::vector<THUNK>& Athunk()
              p->N(0x24) = I(a, 4);
          }, {6, 0, 0, 1, 6, 6}, {0, 1, 2, 3, 4, 5}},
         {0x108500, [](SCPT* ps, const ARGS& a) {                         // 0x1E0D38
-             CMD* p = PcmdNew(ps, 0x28, 0);
+             SCPTCMD* p = PcmdNew(ps, 0x28, 0);
              p->N(0x10) = I(a, 0);
              p->G(0x14) = F(a, 0);
              p->N(0x18) = I(a, 1);
@@ -1909,7 +2129,7 @@ const std::vector<THUNK>& Athunk()
              p->N(0x24) = I(a, 3);
          }, {6, 1, 0, 1, 6, 6}, {0, 2, 4, 1, 3, 5}},
         {0x1085F0, [](SCPT* ps, const ARGS& a) {                         // 0x1E0DB8
-             CMD* p = PcmdNew(ps, 0x29, I(a, 1));
+             SCPTCMD* p = PcmdNew(ps, 0x29, I(a, 1));
              p->N(0x10) = I(a, 0);
              p->G(0x14) = F(a, 0);
              p->G(0x18) = F(a, 1);
@@ -1919,7 +2139,7 @@ const std::vector<THUNK>& Athunk()
              B1(ps, 0x2A, I(a, 3), {{0x10, I(a, 0)}, {0x14, I(a, 1)}, {0x18, I(a, 2)}, {0x1C, I(a, 4)}});
          }, {6, 0x102E, 0x102F, 0, 6}, {0, 1, 2, 3, 4}},
         {0x1087B0, [](SCPT* ps, const ARGS& a) {                         // 0x1E0E78
-             CMD* p = PcmdNew(ps, 0x2B, I(a, 1));
+             SCPTCMD* p = PcmdNew(ps, 0x2B, I(a, 1));
              p->N(0x10) = I(a, 0);
              p->G(0x14) = F(a, 0);
              p->G(0x18) = F(a, 1);
@@ -1933,38 +2153,38 @@ const std::vector<THUNK>& Athunk()
         {0x108BF8, BII1<0x31>, {6, 6}, {0, 1}},
         {0x108CA0, BIb<0x32>, {0x1004, 0}, {0, 1}},                      // 0x1E1058
         {0x108D48, [](SCPT* ps, const ARGS& a) {                         // 0x1E1088
-             CMD* p = PcmdNew(ps, 0x33, I(a, 1));
+             SCPTCMD* p = PcmdNew(ps, 0x33, I(a, 1));
              p->G(0x10) = F(a, 0);
              p->N(0x14) = I(a, 0);
          }, {1, 0x1003, 0}, {1, 2, 0}},
         {0x108E00, [](SCPT* ps, const ARGS& a) {                         // 0x1E10C8
-             CMD* p = PcmdNew(ps, 0x34, 1);
+             SCPTCMD* p = PcmdNew(ps, 0x34, 1);
              p->N(0x10) = I(a, 0);
              p->N(0x14) = I(a, 1);
              p->N(0x18) = I(a, 2);
              p->G(0x1C) = F(a, 0);
          }, {6, 6, 6, 1}, {0, 1, 2, 3}},
         {0x108EC8, [](SCPT* ps, const ARGS& a) {                         // 0x1E1128
-             CMD* p = PcmdNew(ps, 0x35, 1);
+             SCPTCMD* p = PcmdNew(ps, 0x35, 1);
              p->N(0x10) = I(a, 0);
              p->N(0x14) = I(a, 1);
              p->G(0x18) = F(a, 0);
          }, {6, 6, 1}, {0, 1, 2}},
         {0x108F80, [](SCPT* ps, const ARGS& a) {                         // 0x1E1178
-             CMD* p = PcmdNew(ps, 0x36, 1);
+             SCPTCMD* p = PcmdNew(ps, 0x36, 1);
              for (int i = 0; i < 4; ++i) p->N(0x10 + 4 * static_cast<uint32_t>(i)) = I(a, static_cast<size_t>(i));
              for (int i = 0; i < 3; ++i) p->G(0x20 + 4 * static_cast<uint32_t>(i)) = F(a, static_cast<size_t>(i));
          }, {0xE, 6, 5, 5, 1, 1, 1}, {0, 1, 2, 3, 4, 5, 6}},
         {0x109088, BI1<0x37>, {0}, {0}},
         {0x109110, [](SCPT* ps, const ARGS& a) {                         // 0x1E1238
-             CMD* p;
+             SCPTCMD* p;
              BVecCmd(ps, 0x38, a, &p);
              p->G(0x30) = F(a, 0);
              p->G(0x40) = F(a, 1);
              p->N(0x44) = I(a, 2);
          }, {2, 2, 1, 1, 0x106D}, {0, 1, 2, 3, 4}},
         {0x1091F0, [](SCPT* ps, const ARGS& a) {                         // 0x1E12E0
-             CMD* p;
+             SCPTCMD* p;
              BVecCmd(ps, 0x39, a, &p);
              p->G(0x30) = F(a, 0);
              p->N(0x40) = I(a, 2);
@@ -1977,7 +2197,7 @@ const std::vector<THUNK>& Athunk()
         {0x109498, BIb<0x3D>, {6, 0}, {0, 1}},
         {0x109540, BIb<0x3E>, {6, 0}, {0, 1}},
         {0x1095E8, [](SCPT* ps, const ARGS& a) {                         // 0x1E1488
-             CMD* p;
+             SCPTCMD* p;
              BVecCmd(ps, 0x3F, a, &p);
              p->G(0x30) = F(a, 0);
          }, {2, 2, 1}, {0, 1, 2}},
@@ -1985,7 +2205,7 @@ const std::vector<THUNK>& Athunk()
         {0x109748, BNone<0x41, 1>, {}, {}},
         {0x1097C0, [](SCPT* ps, const ARGS& a) {                         // 0x1E1560
              const int n = I(a, 0);
-             B1(ps, 0x42, 0, {{0x10, n == -1 ? 0x40 : n}, {0x14, I(a, 1)}});
+             B1(ps, 0x42, 0, {{0x10, n == -1 ? int(BtnMenuConfirm()) : n}, {0x14, I(a, 1)}});   // (Japan: Circle)
          }, {0x103C, 6}, {0, 1}},
         {0x109868, BII0<0x43>, {0x1057, 6}, {0, 1}},
         {0x109910, BNone<0x44, 0>, {}, {}},
@@ -1995,7 +2215,7 @@ const std::vector<THUNK>& Athunk()
         {0x109B70, BIII1<0x48>, {6, 0x1066, 0}, {0, 1, 2}},
         {0x109C28, BI1<0x49>, {0x1059}, {0}},                            // 0x1E1710 (the dance's state)
         {0x109CB0, [](SCPT* ps, const ARGS& a) {                         // 0x1E1740 (a dance beat: time, button, move, dancer)
-             CMD* p = PcmdNew(ps, 0x4A, 0);
+             SCPTCMD* p = PcmdNew(ps, 0x4A, 0);
              p->G(0x10) = F(a, 0);
              p->N(0x14) = I(a, 0);
              p->N(0x18) = I(a, 1);
@@ -2006,22 +2226,32 @@ const std::vector<THUNK>& Athunk()
         {0x109EA8, BI1<0x4D>, {0x13}, {0}},                              // 0x1E1810 (StopMusic)
         {0x109F30, [](SCPT* ps, const ARGS& a) { PcmdNew(ps, 0x4E, 0)->G(0x10) = F(a, 0); }, {1}, {0}},  // 0x1E1840 (WaitTimer)
         {0x109FB8, [](SCPT* ps, const ARGS& a) {                         // 0x1E1870
-             CMD* p = PcmdNew(ps, 0x4F, I(a, 5));
+             SCPTCMD* p = PcmdNew(ps, 0x4F, I(a, 5));
              p->N(0x14) = I(a, 0);
              p->N(0x1C) = I(a, 1);
              p->N(0x18) = I(a, 2);
              p->N(0x20) = I(a, 3);
              p->N(0x10) = I(a, 4);
          }, {6, 6, 0x1061, 0, 6, 0}, {0, 1, 2, 3, 4, 5}},
+        // (audit 2026-11 P1: the builders 0x1E18E0 / 0x1E1910 / 0x1E19B0 / 0x1E1A60 were missing, so these commands
+        // were dropped from the authored scripts: w12's 2151 / 97639 (0x50), 2244 / 2250 / 2256 (0x54), w32's 2343 (0x57))
+        {0x10A0A8, [](SCPT* ps, const ARGS& a) { B1(ps, 0x50, 0, {{0x10, I(a, 0)}}); }, {6}, {0}},  // 0x1E18E0
+        {0x10A130, [](SCPT* ps, const ARGS& a) { B1(ps, 0x51, 0, {{0x10, I(a, 0)}}); }, {6}, {0}},  // 0x1E1910
         {0x10A1B8, [](SCPT* ps, const ARGS& a) { PcmdNew(ps, 0x52, 0)->G(0x10) = F(a, 0); }, {1}, {0}},  // 0x1E1940
         {0x10A240, BIFb<0x53>, {16, 1, 0}, {0, 2, 1}},                   // 0x1E1970
+        {0x10A2F8, [](SCPT* ps, const ARGS& a) { B1(ps, 0x54, 1, {{0x10, I(a, 0)}}); }, {0x10}, {0}},  // 0x1E19B0
         {0x10A380, BIIb<0x55>, {6, 6, 0}, {0, 1, 2}},                    // 0x1E19E0
         {0x10A438, BII1<0x56>, {6, 6}, {0, 1}},                          // 0x1E1A20
+        {0x10A4E0, [](SCPT* ps, const ARGS& a) { B1(ps, 0x57, 1, {{0x10, I(a, 0)}}); }, {6}, {0}},  // 0x1E1A60
+        // (w32's 2343 only, at the battery: Bentley's partner jump onto Murray, Murray's aim and throw (R54))
+        {0x10A568, BIIb<0x58>, {6, 6, 0}, {0, 1, 2}},                    // 0x1E1A90
+        {0x10A620, BIIb<0x59>, {6, 6, 0}, {0, 1, 2}},                    // 0x1E1AD0
+        {0x10A6D8, BIIb<0x5A>, {6, 6, 0}, {0, 1, 2}},                    // 0x1E1B10 (+0x18 0)
     };
     return s_a;
 }
 
-constexpr size_t c_cthunk = 85;
+constexpr size_t c_cthunk = 92;
 
 // The wrapper of a builder: the arguments converted by OTYP, passed in the call's order.
 CRef RefThunk(const THUNK& t, LO* plo, const std::vector<CRef>& aref)
@@ -2128,18 +2358,19 @@ struct INITSCPT
                 ps->f80 = 1;
             }
         });
-        RegisterObjectGetter(624, [](LO* plo) {  // 0x1E0128 (the running event 4's result)
+        RegisterObjectGetter(624, [](LO* plo) {  // 0x1E0128: the event runner's lookup context (+0x18)
             CRef r;
             SCPT* ps = PscptOf(plo);
             RUN* p = ps ? ps->prun68 : nullptr;
-            r.SetS32(p && p->icCur >= 0 && ps->acmd[static_cast<size_t>(p->icCur)].kind == 9 ? ps->acmd[static_cast<size_t>(p->icCur)].N(0x18) : 0);
+            if (p && p->icCur >= 0 && ps->acmd[static_cast<size_t>(p->icCur)].kind == 9 && p->ploCtx)
+                r.SetBasic(p->ploCtx);
             return r;
         });
         RegisterObjectSetter(624, [](LO* plo, const CRef& ref) {  // 0x1E0158
             SCPT* ps = PscptOf(plo);
             RUN* p = ps ? ps->prun68 : nullptr;
             if (p && p->icCur >= 0 && ps->acmd[static_cast<size_t>(p->icCur)].kind == 9)
-                ps->acmd[static_cast<size_t>(p->icCur)].N(0x18) = ref.m_tagk == TAGK_S32 ? ref.m_n : static_cast<int>(ref.m_g);
+                p->ploCtx = dynamic_cast<LO*>(ref.m_pbasic);
         });
     }
 } s_initscpt;
@@ -2176,12 +2407,20 @@ void EndScptLoad(LO* plo)
     if (std::getenv("SLY2N_SCPTDIALOG"))
     {
         int c = 0, idFirst = -1;
-        for (CMD& cmd : ps->acmd)
+        for (SCPTCMD& cmd : ps->acmd)
             if (cmd.kind == 0x45 && c++ == 0) idFirst = cmd.N(0x10);
         if (c) std::printf("scpt %d: %d dialog lines, the first %d\n", plo->oid, c, idFirst);
-        for (CMD& cmd : ps->acmd)
+        for (SCPTCMD& cmd : ps->acmd)
             if (cmd.kind == 0x0B) std::printf("scpt %d: starts script %d\n", plo->oid, cmd.N(0x10));
     }
+    // (debug: SLY2N_SCPTAUDIT=1 prints every script's commands at load)
+    if (std::getenv("SLY2N_SCPTAUDIT"))
+        for (size_t i = 0; i < ps->acmd.size(); ++i)
+        {
+            std::printf("scptaudit %d %zu %X %d", plo->oid, i, ps->acmd[i].kind, ps->acmd[i].b);
+            for (const SLOT& a : ps->acmd[i].a) std::printf(" %d", a.n);
+            std::printf("\n");
+        }
     // debug: SLY2N_SCPTFIND=n prints the scripts whose commands carry the word n
     // (debug: SLY2N_SCPTKIND=K lists the scripts carrying commands of kind K)
     if (const char* sz = std::getenv("SLY2N_SCPTKIND"))
@@ -2226,6 +2465,16 @@ bool FScptRunning(LO* pscpt)
 
 void ResetScpts() { MpScpt().clear(); }
 
+uint64_t IdScptCutscene()
+{
+    uint64_t id = 0;
+    for (const auto& [plo, s] : MpScpt())
+        if (s.fRunning && s.idSkipScene && (!id || s.idSkipScene < id) &&
+            std::any_of(s.arun.begin(), s.arun.end(), [](const PRUN& r) { return !r->fRetired && r->fPause; }))
+            id = s.idSkipScene;
+    return id;
+}
+
 // orig: 0x001E46A0
 void DriveScptActor(void* pv, PADCTL* out)
 {
@@ -2235,7 +2484,7 @@ void DriveScptActor(void* pv, PADCTL* out)
     if (std::getenv("SLY2N_DRIVEWHY"))
         std::printf("drive run: ps %p retired %d pending %d watch %d\n", (void*)ps, ps ? p->fRetired : -1, p->icPending, p->ploWatch ? p->ploWatch->oid : -1);
     if (!ps || !out || p->fRetired || p->icPending < 0) return;
-    CMD* pc = &ps->acmd[static_cast<size_t>(p->icPending)];
+    SCPTCMD* pc = &ps->acmd[static_cast<size_t>(p->icPending)];
     ACTOR* po = PactorFromLo(p->ploWatch);
     if (!po) return;
     switch (pc->kind)
@@ -2284,29 +2533,6 @@ void DriveScptActor(void* pv, PADCTL* out)
             out->uJoy = 1.0f;
         }
         break;
-    case 0x27:
-    case 0x28:
-        // (natively: steered toward a point ahead on the path, 150 along it from the nearest)
-        if (const CRV* pcrv = p->pcrv27)
-        {
-            const glm::vec3 q = PosAloCenter(po->palo);
-            float sNear = p->s27;
-            NearestCrvS(pcrv, q, p->s27, nullptr, nullptr, nullptr, &sNear, &s_axisZ27);
-            p->s27 = sNear;
-            const float sLen = SLengthCrv(pcrv), s0 = pcrv->as.empty() ? 0.0f : pcrv->as.front();
-            float sAim = p->fReverse27 ? sNear - 150.0f : sNear + 150.0f;
-            if (p->fOpen27) sAim = std::clamp(sAim, s0, sLen);
-            glm::vec3 aim;
-            EvalCrvS(pcrv, sAim, &aim, nullptr);
-            if (p->fOpen27)
-            {
-                const float ex = p->posEnd27.x - q.x, ey = p->posEnd27.y - q.y;
-                if (ex * ex + ey * ey < 150.0f * 150.0f) aim = p->posEnd27;
-            }
-            out->radJoy = std::atan2(aim.y - q.y, aim.x - q.x);
-            out->uJoy = p->uSpeed27;
-        }
-        break;
     case 0x24:
     {
         po->palo->tScptRtz = g_clock.t;  // (native, UE6: its position integrates rounding toward zero, xf.cpp)
@@ -2332,7 +2558,31 @@ void DriveScptActor(void* pv, PADCTL* out)
         if (po->nSub4CC != -1 && (po->n4C8 == 0 || po->n4C8 == 0xD)) out->grfbtn |= 0x20;
         break;
     }
+    case 0x58:
+        // Bentley's partner jump: the stick at rest, 0x20 pressed now (0x1C45A8)
+        out->uJoy = 0.0f;
+        out->grfbtn |= 0x20;
+        StampPadctl(out);
+        break;
+    case 0x5A:
+    {
+        // Murray's throw: 0x40 pressed once his aim point (+0x19F0) is at its end (+0x1A20), 0.1 on each axis
+        if (MURRAY* pm = PmurrayFromLo(po->palo))
+        {
+            const JTTHROW& t = pm->jtthrow1910;
+            if (FFloatsNear(t.transitionEnd.x, t.targetWorld.x, 0.1f) && FFloatsNear(t.transitionEnd.y, t.targetWorld.y, 0.1f) &&
+                FFloatsNear(t.transitionEnd.z, t.targetWorld.z, 0.1f))
+                out->grfbtn |= 0x40;
+        }
+        out->uJoy = 0.0f;
+        StampPadctl(out);
+        break;
+    }
     case 0x2A: out->uJoy = 0.0f; break;
+    // Bentley's bomb (e.g. w12's 97639 at the Rip-off the Ruby gate, cmd 7): TRIANGLE held from here, so his ability
+    // starts (state 6, the bomb's summon and hold) and the command's wait (0x1E3890: his state 6) completes; 0x51 lets go
+    case 0x50: p->fBlocked = 1; break;
+    case 0x51: p->fBlocked = 0; break;
     case 0x29:
     {
         // the speed +0x14; while in kind 8, toward the target in the actor's own frame (0x1A6FC0 from
@@ -2359,6 +2609,11 @@ void DriveScptActor(void* pv, PADCTL* out)
         WarnOnce(sz);
         break;
     }
+    }
+    if (p->fBlocked)
+    {
+        out->grfbtn |= 0x10;  // TRIANGLE
+        if (pc->kind == 0x50) StampPadctl(out);  // 0x1C45A8: its press time
     }
 }
 

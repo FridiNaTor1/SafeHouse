@@ -28,6 +28,8 @@ struct WE
     int32_t x10 = 0;          // orig +0x10: the script table's id (0x1FF858)
     int32_t x14 = 0;          // orig +0x14
     int32_t cinst = 0;        // orig +0x08: instances
+    uint32_t cb = 0;          // orig3: the record's new U32 (0x14F440): the byte size of the group's data (skipped
+                              // by it when the group has no instances)
     int32_t cUsed = 0;        // orig +0x0C
     std::vector<LO*> aplo;    // orig +0x04: the loaded objects (c0 = orig +0x00), then their copies
     int cloLoaded = 0;
@@ -136,27 +138,62 @@ struct SW
     uint32_t cwrec = 0, x3E1C3C = 0;
     std::vector<WREC> awrec;
     std::vector<std::pair<int, std::string>> atext;  // orig +0x4640: (id, string of the chosen language)
+    std::vector<int> aidTextModded;                   // (native) the ids the mods folder's text replaced (textmod.h)
+    std::string strTextChars;  // (the Japanese build, JP +0x4848: the characters the text uses; region.h)
     std::vector<NODE> anode;                     // orig +0x4558
     int cnodeLeaf = 0;
-    std::vector<OPT> aoptSw, aoptCm;             // the options loaded for the SW and the camera (0x2DDF40)
+    std::vector<OPT> aoptSw, aoptCm;             // the options loaded for the SW and the camera (0x2DDF40; Sly 3: the
+                                                 // chosen option set's, orig3 0x1500F0)
+    // orig3 0x14FA38: the two entry tables before the group count ({key, value, list}; 0x196228 gets the value)
+    struct PREFIX3 { int32_t key = 0; int value = 0; std::vector<int32_t> alist; };
+    std::vector<PREFIX3> aprefixA, aprefixB;
+    // orig3 0x1500F0: the option sets' keys and blocks; the block chosen (its id: the static camera's +0x10)
+    struct OPTSETKEY3 { std::vector<uint16_t> aprogress; uint32_t key = 0, value = 0; };
+    std::vector<OPTSETKEY3> aoptsetA, aoptsetB;
+    std::vector<uint32_t> aidOptset;
+    int ioptsetChosen = -1;
+    // orig3 0x36C700 +0x1498 / +0x14A0: the task system's current job and task when the world loads (-1 at the boot);
+    // they choose the option set and the entry point
+    int32_t keyJob = -1, keyTask = -1;
     std::vector<std::unique_ptr<CMESH>> acmesh;  // one per group that has one (the last is current)
     int32_t fScriptDebug = 0;                    // orig 0x3E1C34: scripts carry debug records
     int cmeshes = 0;                             // orig 0x3DD490 +0x3D70 (0x1C03C0's counter)
     LO* ploMesh2CA = nullptr;                    // orig +0x45C8 (the 0x1C03C0 object with oid 0x2CA)
     int filter = -1;                             // orig 0x3E1110: the world record index objects filter on
-    int language = 0;                            // orig 0x2E1E54
     float tGuardAlarmResume = 0.0f;               // orig +0x4758; cleared by the world reset 0x20E890
+    // (native, perf-2) the objects by name (AploOfOid): kept up to date lazily from aploAll (only appended) and by
+    // NoteOidInstanceChanged
+    struct OIDINDEX
+    {
+        std::unordered_map<OID, std::vector<LO*>> mp;   // oid -> the objects with that oid or oidInstance, in aploAll order
+        std::unordered_map<const LO*, uint32_t> mpipos; // an indexed object's place in aploAll
+        std::vector<LO*> aploAll;                        // every object (the scans' answer for oid -1: every oidInstance -1 matches)
+        size_t cDone = 0;                                // aploAll's objects indexed
+    };
+    mutable OIDINDEX oidindex;
 };
 
 extern SW* g_psw;
+
+// The current world's side tables pointing at its objects released (~SW's first part, with g_psw that world).
+void ReleaseSwRuntimeTables();
 
 // orig 0x13DA18: loads a decompressed world file into psw.
 void LoadSwFromBrx(SW* psw, CBinaryInputStream* pbis);
 
 LO* PloFindSwObjectByOid(SW* psw, OID oid);
+
+// (native, perf-2) the world's objects whose oid or oidInstance is oid, in aploAll order: the name finds' scans of every
+// object, each filtering on the name, go through these instead (the same objects in the same order). Valid until the
+// next object is made. (oid -1: every object, as the scans testing oidInstance == oid matched them all.)
+const std::vector<LO*>& AploOfOid(const SW* psw, OID oid);
+// An object's oidInstance changed from oidOld (its writers call it after the write).
+void NoteOidInstanceChanged(const SW* psw, LO* plo, OID oidOld);
 bool FLoInWorldNs(const LO* plo);  // (the object in the world's namespace node: not a group's / an instance's)
 
 // Loads the world file fk into psw (trace: a parse map of the load, or ""); false on a load error.
 bool FLoadWorldFile(SW* psw, const FK& fk, const std::string& trace, std::size_t* pcbRead, std::size_t* pcbFile);
+bool FLoadWorldBytes(SW* psw, const FK& fk, std::vector<uint8_t> ab, const std::string& trace, std::size_t* pcbRead, std::size_t* pcbFile);
+void ResetWorldLoadTables();   // (FLoadWorldFile's resets of the old world's side tables)
 // "boot", "frontend" or a world record index (the records come from the boot world): its file and filter.
 bool FResolveWorld(const std::string& w, FK& fk, int& filter, std::string& error);

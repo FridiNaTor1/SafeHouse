@@ -93,7 +93,3 @@ bool FParseJoyPresses(const std::string& s, std::vector<JOYPRESS>& apress);
 
 // orig 0x1871C0 UpdateJoy: pwindow null (headless): only the scripted presses
 void UpdateJoy(JOY* pjoy, GLFWwindow* pwindow, int frame, const std::vector<JOYPRESS>& apress);
-// The clock the pad's read uses (FReadJoy's g_clock +0x3C / +0x40: the stick's moved latch, the idle time, the
-// stick's speed): Sly 2's g_clock by default; Sly 3's game loop points it at its own clock (game3.cpp g_clock3).
-struct CLOCK;
-extern CLOCK* g_pclockJoy;

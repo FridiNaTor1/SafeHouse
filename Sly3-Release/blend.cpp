@@ -3,6 +3,7 @@
 // round4_satellite_low.cpp (0x138970); the Sly 2 decomp's FillBlAmrsg / CalculateBlendAmrsg / ImrsgLookUp.
 
 #include "blend.h"
+#include "game/sly3.h"
 
 #include "activate.h"
 #include "alo.h"
@@ -352,9 +353,8 @@ ASEGBL* NewBlend(ALO* palo, std::vector<BLENDBL> abl, const std::vector<int>& ac
     }
     if (!pasegFirst) return nullptr;
 
-    // orig PloNew(0x6E, palo, -1, -1), then vt slot 9 (RemoveLo): the blend is no world object of its own
-    // (Sly 3: the blend class is 0x83 (Sly 2's 0x6E); its table struct is the ASEG loader's, so the ASEGBL is made here)
-    auto* pbl = static_cast<ASEGBL*>(PloNewNative(0x83, g_psw, palo, -1, -1, [] { return static_cast<LO*>(new ASEGBL()); }));
+    // orig PloNew(S3CID(0x6E), palo, -1, -1), then vt slot 9 (RemoveLo): the blend is no world object of its own
+    auto* pbl = static_cast<ASEGBL*>(PloNew(S3CID(0x6E), g_psw, palo, -1, -1));
     RemoveLo(g_psw, pbl);
     pbl->aamrsg.resize(actable.size());
     for (size_t i = 0; i < actable.size(); ++i) pbl->aamrsg[i].assign(actable[i], MRSG{});

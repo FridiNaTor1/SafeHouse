@@ -1,6 +1,6 @@
 #pragma once
 
-// The stepping objects' physics (class 0x33, STEP: the base of the actors 0x34 / Sly 0x35 / Bentley 0x36 / Murray 0x37
+// The stepping objects' physics (class 0x33, STEP: the base of the actors 0x34 / Sly 0x35 / Murray 0x36 / Bentley 0x37
 // and the guards 0x38..; Sly 2's module 0x203948-0x205E70): the custom entry (+0x258) whose appended points probe the
 // floor, the floor contacts (kind 14: the own test, vt slot 60 0x204AC8), their height spring (slot 57 0x2044B0), the
 // lowest one kept as the floor (+0x208 / +0x20C / +0x230, slot 58 0x204768), the push-apart contacts (slot 55
@@ -20,6 +20,7 @@ struct ALO;
 struct LO;
 struct SOE;
 struct XP;
+struct BSPREF;
 
 using STEPPHYS = STEP;  // (step.h)
 
@@ -51,7 +52,7 @@ void SetStepOverlap(ALO* palo, ALO* paloOther);              // 54: 0x204C60
 void OnStepXpNew(ALO* palo, XP* pxp, int i);                 // 55: 0x204250
 void OnStepXpUpdate(ALO* palo, XP* pxp, int i);              // 57: 0x2044B0
 void FindStepFloor(ALO* palo);                               // 58: 0x204768
-void AddStepFloorXps(ALO* palo, SOE* psoeOther, XP** ppxp);  // 60: 0x204AC8
+void AddStepFloorXps(ALO* palo, SOE* psoeOther, int inodeLimit, const BSPREF& tree, int root, XP** ppxp);  // 60: 0x204AC8
 void UpdateStepPhysMotion(ALO* palo);                            // 70: 0x204108
 uint32_t GrfStepXp(ALO* palo);                               // 85: 0x2040F8 (1 floor probes, 2 the long probe, 4
                                                              // the floor contacts solved, 8 the normal kept)
@@ -61,3 +62,6 @@ bool FStepFloorNear(ALO* palo, const glm::vec3& pos, const SOE* psoe, int isurf)
 
 // Sly's (0x35) overrides that are physics alone (the others read the player state: the actors port)
 void OnSlyXpUpdate(ALO* palo, XP* pxp, int i);                // 57: 0x188E78
+
+// orig: 0x00205910: fit the heading frame to the floor below three local probe points.
+void FitStepToFloor(ALO* palo, float gMin, float gMax, int cpos, const glm::vec3* apos);

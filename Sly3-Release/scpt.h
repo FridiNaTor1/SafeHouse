@@ -28,6 +28,11 @@ void StartScpt(LO* pscpt, LO* ploStarter);
 void StopScpt(LO* pscpt);
 // orig: 0x001DFFD8 (running)
 bool FScptRunning(LO* pscpt);
+// Native skip QoL: the oldest running, paused script whose scene is skippable (SceneSkipKind), or zero.
+uint64_t IdScptCutscene();
+// (native QoL, skipcut.h) a pausing script's scene class: SKIPK_*
+enum { SKIPK_None = 0, SKIPK_Dialog = 1, SKIPK_Cinematic = 2 };
+int SceneSkipKind(LO* pscpt);
 // the scripts' native data forgotten (a new world)
 void ResetScpts();
 

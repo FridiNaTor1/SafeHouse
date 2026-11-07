@@ -6,7 +6,8 @@
 // jumptgt.cpp / jumpledge.cpp implement the targeted-jump and ledge sub-objects. Remaining incomplete paths
 // retain focused warnings at their call sites (including the long-fall recovery test 0x19A098).
 #include "jump.h"
-#include "sly3/ids3.h"
+#include "game/sly3.h"
+#include "pccharacter.h"   // (PC addition, debug menu only: Carmelita's moveset)
 #include "activate.h"
 #include "gang.h"
 #include "jtthrow.h"
@@ -59,7 +60,6 @@ using cmm::F32;
 
 void AccelAloPos(ALO* p, const glm::vec3& v);  // solve.cpp: orig 0x1FAC30
 
-glm::vec3 PosSafeGround(ACTOR* pa, const SAFEGROUND::ENTRY& e);  // damage.cpp (0x19F3F8)
 float TJumpBallistic(const glm::vec3& d, const glm::vec3& g, float vzMax, float vzMin, float sMax, float sMin);  // 0x196928
 
 
@@ -364,6 +364,37 @@ void PostLoadJump(JUMP* pj)
     pj->pbl = apaseg.size() == 5 ? PblNewPlain(palo, apaseg) : nullptr;
 }
 
+// orig: 0x00197370. The input direction is relative to the current object matrix,
+// not the STEP heading goal. Replace the clip once per initial/double-jump phase.
+void SelectDirectionalJumpAnimation(JUMP* pj)
+{
+    ACTOR* pa = pj->pactor;
+    pj->f30 = 1;
+    const XF* object = PxfObj(pa->palo);
+    const float heading = object ? std::atan2(object->matWorld[0].y, object->matWorld[0].x) : pa->radHeading;
+    const float relative = cmm::RadNormalize(RadJoy(pa) - heading);
+    const float absolute = std::fabs(relative);
+    if (absolute < F32(0x3F8CBE4C)) pj->n8 = 3;
+    else if (absolute > F32(0x4002B0B4)) pj->n8 = 4;
+    else pj->n8 = relative > 0.0f ? 2 : 1;
+    ASEGA* current = pa->pasega;
+    ASEG** clips = pj->state == 2 ? pj->apasegFall : pj->apasegJump;
+    ASEG* clip = clips[pj->n8];
+    if (!clip) clip = clips[0];
+    if (!clip) clip = pj->apasegJump[0];
+    if (!current) return;  // no running animation in a partially loaded native actor
+    ClearSmaHandle(&pa->psma);
+    const float time = current->t, speed = current->svt;
+    const OID previous = current->paseg ? current->paseg->oid : -1;
+    ApplyAsegCur(clip, pa->palo, time, speed, 1, &pa->pasega);
+    if (std::getenv("SLY2N_JUMPDIRTRACE"))
+        std::printf("jump direction: t %.9g actor %d state %d kind %d direction %d joy %.9g heading %.9g relative %.9g oldclip %d clip %d time %.9g speed %.9g resulttime %.9g resultspeed %.9g bound %d sma %d\n",
+            g_clock.t, pa->palo->oid, pj->state, pj->kind, pj->n8, RadJoy(pa), heading, relative,
+            previous, clip ? clip->oid : -1, time, speed, pa->pasega ? pa->pasega->t : -1,
+            pa->pasega ? pa->pasega->svt : -1, pa->pasega && pa->pasega->palo == pa->palo,
+            pa->psma != nullptr);
+}
+
 // orig: 0x00195FB8 (the animation state n with its object; the old state left, the segment applied)
 void SetJumpAnimState(JUMP* pj, int n, LO* plo)
 {
@@ -391,7 +422,7 @@ void SetJumpAnimState(JUMP* pj, int n, LO* plo)
         // the jump out of a hiding spot: its overlaps with the actor retested (0x134320)
         LO* pold = pj->ploC;
         pj->ploC = nullptr;
-        if (pold && FIsLoDerivedFrom(pold, Icid(CID3::ALO))) RecalcSwOxfFilterForObject(static_cast<ALO*>(pold));
+        if (pold && FIsLoDerivedFrom(pold, S3CID(0x30))) RecalcSwOxfFilterForObject(static_cast<ALO*>(pold));
         break;
     }
     case 6:
@@ -402,7 +433,7 @@ void SetJumpAnimState(JUMP* pj, int n, LO* plo)
         pj->ploC = nullptr;
         if (pa->n4C8 != 1 && pold)
         {
-            if (FIsLoDerivedFrom(pold, Icid(CID3::ALO))) RecalcSwOxfFilterForObject(static_cast<ALO*>(pold));
+            if (FIsLoDerivedFrom(pold, S3CID(0x30))) RecalcSwOxfFilterForObject(static_cast<ALO*>(pold));
             if (NHideState(pold) == 1) SetHideState(pold, 0);
         }
         if (XF* pxf = PxfPos(palo)) SetXfMode(palo, pxf, 2);
@@ -476,7 +507,7 @@ void SetJumpAnimState(JUMP* pj, int n, LO* plo)
         // the jump into a hiding spot (0x197F98 aimed the record): the record driven (mode 17), the spot's overlaps
         // with the actor retested (0x134320: none now, 0x183A50) and reserved (0x183B80(1)); the clip kept
         if (XF* pxf = PxfPos(palo)) SetXfMode(palo, pxf, 0x11);
-        if (plo && FIsLoDerivedFrom(plo, Icid(CID3::ALO))) RecalcSwOxfFilterForObject(static_cast<ALO*>(plo));
+        if (plo && FIsLoDerivedFrom(plo, S3CID(0x30))) RecalcSwOxfFilterForObject(static_cast<ALO*>(plo));
         SetHideState(plo, 1);
         pa->vecVel = glm::vec3(0.0f);
         paseg = pasegaCur ? pasegaCur->paseg : nullptr;
@@ -502,10 +533,13 @@ void SetJumpAnimState(JUMP* pj, int n, LO* plo)
         // d / t - g t / 2 (natively by the physics: the original drives the record along it, 0x12DE58 kind 5, and
         // turns the collisions off 0x1F6860), its end tEnd21, facing it
         const glm::vec3 posNow = PxfPos(palo) ? glm::vec3(PxfPos(palo)->matWorld[3]) : PosActor(pa);
-        const glm::vec3 d = PosSafeGround(pa, pa->entryJump) - posNow;
+        const glm::vec3 d = PosSafeGround(pa, pa->entryJump, 0.7f) - posNow;
         const SOST* ps = Psost(palo);
         const glm::vec3 grav = ps ? ps->dvGravity : glm::vec3(0.0f, 0.0f, -1750.0f);
-        const float tj = std::max(F32(0x3F333333), TJumpBallistic(d, grav, 1000.0f, -1000.0f, 1.0f, -1.0f));
+        LO* target = pa->entryJump.ploOwner;
+        const bool upward = target && (FIsLoDerivedFrom(target, S3CID(0x13)) || FIsLoDerivedFrom(target, S3CID(0xB)));
+        const float tj = std::max(F32(0x3F333333), TJumpBallistic(d, grav, 1000.0f, upward ? 0.0f : -1000.0f,
+                                                              1.0f, upward ? 500.0f : -1.0f));
         const glm::vec3 vel = d * (1.0f / tj) - grav * (tj * 0.5f);
         SetAloVelocityTo(palo, vel);  // vt slot 35
         pj->tEnd21 = g_clock.t + tj;
@@ -738,7 +772,8 @@ void UpdateJumpTransitions(JUMP* pj)
     {
         const int s5 = pj->state;
         if (pj->ploC && !pj->ploC->fInWorld) WarnOnce("0x19C828 (the jump's object left)");
-        if (!(pj->state < 23 && pj->state >= 9))
+        // (PC addition, debug menu only: Carmelita's moveset has no air targets or paraglider; her double jump below)
+        if (!(pj->state < 23 && pj->state >= 9) && !FPcCarm(pa->palo))
         {
             if (pj->f28 && FBtnWithin(pa, BTN_CROSS, 0.0f) && !FActorBelowFloorSoon(pa, F32(0x3D99999A)))
             {
@@ -761,6 +796,16 @@ void UpdateJumpTransitions(JUMP* pj)
                 StartActorAbility(pa, 0x1B);  // the current player's vt slot 100 (Sly: 0x18DA48 -> state 19)
             }
         }
+        // (PC addition, debug menu only: Carmelita's own double jump at her height, pccharacter.h; not the guards')
+        else if (!(pj->state < 23 && pj->state >= 9) && pj->f28 && FPcCarmDoubleJump(pa->palo) && FBtnWithin(pa, BTN_CROSS, 0.0f) &&
+                 !FActorBelowFloorSoon(pa, F32(0x3D99999A)))
+        {
+            ForgetBtn(pa, BTN_CROSS);
+            // (on Bentley / Murray: no kind 6, their jumps have no double jump's animation state; once only)
+            if (dynamic_cast<SLY*>(pa)) SetJumpKind(pj, 6, pj->n8, 0);
+            else pj->f28 = 0;
+            PcCarmJumped(pa->palo, false, true);
+        }
         bool fSlot88 = false;
         switch (pj->state)
         {
@@ -771,16 +816,26 @@ void UpdateJumpTransitions(JUMP* pj)
                 // a script's leap to an object with an interaction part (SCPT 0x2A on a pipe, a rail ...): within
                 // 0.25 s of the end the jump takes it as its target (0x19B110 forced on it: e.g. Sly grabs the pipe)
                 const SAFEGROUND::ENTRY& e = pa->entryJump;
-                if (e.ploTarget && e.fTargetSub && pj->tEnd21 < g_clock.t + 0.25f)
+                if (e.jtl != JTL_Max && pj->tEnd21 < g_clock.t + 0.25f && FSafeTargetReattach(e.ploOwner))
                 {
-                    const CID c = e.ploTarget->Cid();
-                    if (FCidDerivedFrom(c, 0x13) || FCidDerivedFrom(c, 0xB) || FCidDerivedFrom(c, 0xD) ||
-                        FCidDerivedFrom(c, 0x27) || FCidDerivedFrom(c, 0xC) || FCidDerivedFrom(c, 0x22) ||
-                        FCidDerivedFrom(c, 0x26))
-                    {
-                        SetJumpKind(pj, 0xB, 0, 0);            // 0x195A00
-                        ChooseJumpTarget(pj, e.ploTarget);     // 0x19B110
-                    }
+                    SetJumpKind(pj, 0xB, 0, 0);            // 0x195A00
+                    ChooseJumpTarget(pj, e.ploOwner);       // 0x19B110
+                    break;
+                }
+                // 0x197500: SCPT may allow a second launch once the return flight is descending.
+                XF* pxf = PxfPos(pa->palo);
+                if (pj->f28 && pxf && pxf->vel.z < 0.0f)
+                {
+                    ApplyAsegCur(pj->apasegFall[0], pa->palo, 0.0f, 1.0f, 1, &pa->pasega);
+                    pj->f28 = 0;
+                    SetAloVelocityTo(pa->palo, VelJumpLaunch(pj, 6));
+                    break;
+                }
+                if ((e.jtl != JTL_Max || e.psoe) && pxf && pj->pctrl21)
+                {
+                    const glm::vec3 goal = PosSafeGround(pa, e, std::min(0.7f, pj->tEnd21 - g_clock.t));
+                    auto* ctrl = static_cast<CTRLTARGET*>(pj->pctrl21);
+                    ctrl->SetGoal(glm::vec4(PosConvertXfs(nullptr, pxf->pxfRef, goal), 1.0f), ctrl->vel);
                 }
             }
             else
@@ -802,7 +857,7 @@ void UpdateJumpTransitions(JUMP* pj)
                 break;
             }
             if (pj->f30) break;
-            if (0.5f < UJoy(pa)) WarnOnce("0x197370 (the directional jump animation)");
+            if (0.5f < UJoy(pa)) SelectDirectionalJumpAnimation(pj);
             break;
         case 2:
             if (c_dtJump1 < g_clock.t - pj->t20)
@@ -811,7 +866,7 @@ void UpdateJumpTransitions(JUMP* pj)
                 break;
             }
             if (pj->f30) break;
-            if (0.5f < UJoy(pa)) WarnOnce("0x197370 (the directional jump animation)");
+            if (0.5f < UJoy(pa)) SelectDirectionalJumpAnimation(pj);
             break;
         case 1: case 7:
             if (v.z < 0.0f) SetJumpAnimState(pj, 4, pj->ploC);
@@ -827,7 +882,7 @@ void UpdateJumpTransitions(JUMP* pj)
                 else StartInteract(pa, 10, nullptr, JTL_Max);  // 0x1928F8 (the kind 14 landing: +0x4C0's kind 10)
                 break;
             }
-            if (FJumpGrabLedge(pj)) break;  // 0x199D48: a ledge (state 17)
+            if (!FPcCarm(pa->palo) && FJumpGrabLedge(pj)) break;  // 0x199D48: a ledge (state 17) (PC: not Carmelita)
             if (FActorStuckOnContacts(pa, pj->t20, &pa->t131C)) RecoverActor(pa);  // 0x19A098 -> 0x19F590(pa, 0)
             break;
         case 17:
@@ -907,7 +962,7 @@ void UpdateJumpTransitions(JUMP* pj)
     }
 }
 
-// orig: 0x00197F98 (the jump's input: the deflection gate, the facing, the move +0xA0; TODO(actors): the targets)
+// orig: 0x00197F98 (the deflection gate, target path, facing and move +0xA0)
 void UpdateJumpInput(JUMP* pj)
 {
     ACTOR* pa = pj->pactor;
@@ -938,11 +993,8 @@ void UpdateJumpInput(JUMP* pj)
     const glm::vec3 pos = PosActor(pa);
     const glm::vec3 v = VelActor(pa);
     const unsigned st = static_cast<unsigned>(pj->state);
-    if (st >= 23 || st == 1 || st == 3 || st == 4 || st == 5 || st == 17) FindJumpHideTarget(pj);  // (jumptgt.cpp)
-    // the path to the state's object (states 6 / 8; 9..13 / 18 their descriptions': TODO(actors)) and its speed test
-    if (pj->state == 9 || pj->state == 11 || pj->state == 12 || pj->state == 13 || pj->state == 18)
-        WarnOnce("the jump's path to its object (its description's vt slot 3)");
-    UpdateJumpTargetPath(pj);
+    if ((st >= 23 || st == 1 || st == 3 || st == 4 || st == 5 || st == 17) && !FPcCarm(pa->palo)) FindJumpHideTarget(pj);  // (jumptgt.cpp; PC: not Carmelita)
+    const float headingSample = UpdateJumpTargetPath(pj);
     // the facing
     const float f21 = c_agTurnByDir[pj->n8 >= 0 && pj->n8 < 5 ? pj->n8 : 0];
     float f20 = pa->radHeading;
@@ -951,12 +1003,13 @@ void UpdateJumpInput(JUMP* pj)
     case 0:
         if (F32(0x3E4CCCCD) < u) f20 = RadJoy(pa) + f21;
         break;
-    case 11: case 12: case 13: case 17: case 19: break;
+    case 11: case 12: case 13: f20 = headingSample; break;
+    case 17: case 19: break;
     case 14: case 15:
     {
         // toward the target: the pipe's point at +0x10 (state 15), else the object's position; then the heading kept
         glm::vec3 posT(0.0f);
-        if (pj->state == 15 && pj->ploC && FIsLoDerivedFrom(pj->ploC, Icid(CID3::PATH))) EvalCrv(PcrvFromLo(pj->ploC), pj->g10, &posT, nullptr);
+        if (pj->state == 15 && pj->ploC && FIsLoDerivedFrom(pj->ploC, S3CID(0x0A))) EvalCrv(PcrvFromLo(pj->ploC), pj->g10, &posT, nullptr);
         else if (pj->ploC) posT = PosLoWorld(pj->ploC);  // 0x1A62E8 (any object: a hook too, not only an ALO)
         if (!dynamic_cast<SLY*>(pa)) WarnOnce("the jump's facing in state 14 / 15: the reach controller +0x900 (0x1CC2E8)");
         SetStepPhysHeadingToward(pa->palo, posT - pos);  // 0x2046B0

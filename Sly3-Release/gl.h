@@ -15,6 +15,11 @@ class GLSHADER
 public:
     GLuint ID = 0;
     void Init(const char* vertexFile, const char* fragmentFile);
+    // With szPrefix inserted after both sources' #version line (extensions, defines); false (and no program) when either
+    // fails to compile or the program to link.
+    bool FInit(const char* vertexFile, const char* fragmentFile, const char* szPrefix);
+    // The same with a geometry stage (between the two; the prefix goes into all three).
+    bool FInit(const char* vertexFile, const char* geometryFile, const char* fragmentFile, const char* szPrefix);
     void Use() const { glUseProgram(ID); }
     void Delete() { glDeleteProgram(ID); ID = 0; }
     GLint Loc(const char* name) const { return glGetUniformLocation(ID, name); }
@@ -59,6 +64,8 @@ private:
 
 extern GL g_gl;
 extern GLSHADER glGlobShader;
+// (perf-3) glGlobShader built with ARB_bindless_texture (the pass draws' textures per draw: render.cpp)
+extern bool g_fGlobBindless;
 extern GLSHADER glCelBorderShader;
 extern GLSHADER glHudShader;
 extern GLSHADER glOverlayShader;

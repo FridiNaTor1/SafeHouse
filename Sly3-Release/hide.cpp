@@ -1,6 +1,9 @@
 // hide.cpp: the hiding spots (cid 0x58; hide.h). Ported from the decomp's matching C: 0x183900, 0x183970, 0x183A50,
 // 0x183B00, 0x183B80, 0x183E08.
 #include "hide.h"
+#include "game/sly3.h"
+#include "worldglobals.h"
+#include "damage.h"
 
 #include "activate.h"
 #include "actor.h"
@@ -62,6 +65,7 @@ struct HIDES
     SW* psw = nullptr;
     std::unordered_map<const LO*, HIDE> mp;
 } s_hides;
+WORLD_TABLE(s_hides);   // (PC: moved aside while a kept world loads, worldglobals.h)
 
 HIDE& Hide(const LO* plo)
 {
@@ -121,7 +125,7 @@ void ResetHides()
 // orig: 0x00183B80
 void SetHideState(LO* plo, int n)
 {
-    if (!plo || !FIsLoDerivedFrom(plo, 0x58)) return;
+    if (!plo || !FIsLoDerivedFrom(plo, S3CID(0x58))) return;
     HIDE& h = Hide(plo);
     ALO* palo = static_cast<ALO*>(plo);
     if (h.state == n) return;
@@ -194,7 +198,7 @@ namespace
 // orig: 0x00183970 (vt slot 26: the proxy instance's mask (0x1CB518: AttachProxy does it), free)
 void ResetHideInstance(LO* plo, LO*)
 {
-    if (plo && FIsLoDerivedFrom(plo, 0x58)) Hide(plo).state = 0;
+    if (plo && FIsLoDerivedFrom(plo, S3CID(0x58))) Hide(plo).state = 0;
 }
 
 // orig: 0x00183A50 (vt slot 61: the ALO's overlap kind; no contacts (at least 1) with the player hiding in it
@@ -202,7 +206,7 @@ void ResetHideInstance(LO* plo, LO*)
 int OverlapKindHide(ALO* p, ALO* pOther)
 {
     int k = OverlapKindAlo(p, pOther);
-    if (!pOther || !FIsLoDerivedFrom(pOther, 0x34)) return k;
+    if (!pOther || !FIsLoDerivedFrom(pOther, S3CID(0x34))) return k;
     ACTOR* pa = PactorFromLo(pOther);
     if (!pa) return k;
     if (pa->n4C8 == 1 && pa->inter.ploTarget == p) k = std::max(k, 1);  // 0x134310
@@ -252,10 +256,33 @@ NATIVEFN(0x183E08, FAcceptHideContact);
 // (debug: SLY2N_HIDEHIT=t, sly.cpp: a hit (contact bytes 8) on the spot the player hides in after game time t)
 void DebugHitHide(LO* plo)
 {
-    if (!plo || !FIsLoDerivedFrom(plo, 0x58)) return;
+    if (!plo || !FIsLoDerivedFrom(plo, S3CID(0x58))) return;
     CTMSG ctm;
     ctm.ploReceiver = plo;
     ctm.grfFilter = 8;
     ctm.grfAccepted = 8;
     FAcceptHideContact(static_cast<ALO*>(plo), &ctm);
+}
+
+// (debug: SLY2N_HIDEHITHOLDER=t: once after game time t, a hit of contact byte 8 on the actor hiding in a spot, through
+// its damage 0x1A19A0, which hands it to the spot's slot 75; called each step by the game loop)
+void DebugHitHideHolders(SW* psw)
+{
+    static const char* s_sz = std::getenv("SLY2N_HIDEHITHOLDER");
+    static bool s_fDone = false;
+    if (!s_sz || s_fDone || !(std::atof(s_sz) < g_clock.t)) return;
+    for (LO* plo : psw->mpcidaplo[S3CID(0x58)])
+    {
+        if (NHideState(plo) != 2 || !PactorHideHolder(plo)) continue;
+        s_fDone = true;
+        ACTOR* pa = PactorHideHolder(plo);
+        CTMSG ctm;
+        ctm.ploReceiver = pa->palo;
+        ctm.grfFilter = 8;
+        ctm.grfAccepted = 8;
+        ctm.nState = -1;
+        const bool f = FAcceptDamage(pa, &ctm);
+        std::printf("hide %d: hit on the holder %d: accepted %d, state now %d\n", plo->oid, pa->palo->oid, int(f), NHideState(plo));
+        return;
+    }
 }

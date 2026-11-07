@@ -37,7 +37,6 @@ struct LIGHTSEL
     glm::vec3 pos{0.0f};
     float gConst = 0, gSlope = 0;
     int32_t fShadow = 1;    // +0x158: counts for the shadow direction (0x1A4478)
-    float gShadowScale = 1.0f;  // Sly 3 (0x1C6418): +0x148 w: 0 no shadow, < 0 the strength, else x w / max(V, strength)
 };
 
 // The world's lights and the world shader colour (SW+0x3E28: rgb the shadow colour, w the ambient amount).
@@ -73,14 +72,20 @@ const LIGHTSET& WorldLights();      // the active lights in the order they were 
 uint64_t BakeKey(const glm::mat4& matWorld, const glm::vec3& posSphere, float sRadius, const LIGHTSET& lights);
 void BakeGlobLighting(GLOB& glob, const glm::mat4& matWorld, const glm::vec3& posSphere, float sRadius,
                       const LIGHTSET& lights);
+// Whether BakeKey at this sphere would see the same lights as it saw at world-lights version v (perf-2: the change log
+// of the world's lights instead of hashing every light for every static group each time any light changes). True only
+// when that is certain (lights is WorldLights(), the changes since v are logged, none of them touches a light the key
+// takes there, then or now); false means: compute the key.
+bool FBakeLightsUnchangedSince(uint32_t v, const glm::vec3& posSphere, float sRadius, const LIGHTSET& lights);
 
 // P_G forward lighting for a lit-flag group with the four lights the light context would hold for it.
 // pamatBone (a skinned group's bone matrices, the renderer's): the lights in world space and each vertex's normal
 // skinned by its bones, as RenderGlob uploads the identity for skinned groups and P_G 808 skins the normals before
 // lighting them (522); without, the lights in the group's space and the loaded normals.
 #include <vector>
+// palSel: the four SelectLights(lights, posCenter) chose, when the caller has them (else chosen here).
 void ForwardGlobLighting(GLOB& glob, const glm::mat4& matWorld, const glm::vec3& posCenter, const LIGHTSET& lights,
-                         const std::vector<glm::mat4>* pamatBone = nullptr);
+                         const std::vector<glm::mat4>* pamatBone = nullptr, const LIGHTREC* palSel = nullptr);
 
 // The four lights 0x1A4478 / 0x1A3F78 would choose at a point (strongest contribution first).
 void SelectLights(const LIGHTSET& lights, const glm::vec3& pos, LIGHTREC alight[4]);

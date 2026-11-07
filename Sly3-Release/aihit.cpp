@@ -4,6 +4,8 @@
 // by the hit's kind), and the reaction after one (0x177BA0). See aihit.h.
 
 #include "aihit.h"
+#include "game/sly3.h"
+#include "rumble.h"
 #include "step.h"
 
 #include "aipursuit.h"
@@ -69,7 +71,7 @@ glm::vec3 PosOfLo(LO* plo) { return PosAi(plo); }
 bool FGuardSurprised(GUARD* pg, LO* psource, uint64_t mask)
 {
     if (pg->n3D0) return false;
-    if (FCidDerivedFrom(psource->Cid(), 0x36) && !FCidDerivedFrom(pg->palo->Cid(), 0x3A))
+    if (FCidDerivedFrom(psource->Cid(), S3CID(0x36)) && !FCidDerivedFrom(pg->palo->Cid(), S3CID(0x3A)))
     {
         if (!(pg->grfState & GrfStateBit(6))) return true;
     }
@@ -82,8 +84,8 @@ bool FGuardSurprised(GUARD* pg, LO* psource, uint64_t mask)
 // orig: 0x0020A378
 bool FGuardLaunchAllowed(GUARD* pg, LO* psource, uint64_t mask)
 {
-    if (psource && FCidDerivedFrom(psource->Cid(), 0x36) &&
-        !FCidDerivedFrom(pg->palo->Cid(), 0x3A) && !FCidDerivedFrom(pg->palo->Cid(), 0x3D) && pg != g_pguard3F)
+    if (psource && FCidDerivedFrom(psource->Cid(), S3CID(0x36)) &&
+        !FCidDerivedFrom(pg->palo->Cid(), S3CID(0x3A)) && !FCidDerivedFrom(pg->palo->Cid(), S3CID(0x3D)) && pg != g_pguard3F)
         return true;
     return FGuardSurprised(pg, psource, mask);
 }
@@ -134,7 +136,7 @@ int JOBREACT::Message(int nmsg, void* pv)
     if (pg->f29C) h.n = 0;
     if (pg->f4A4 && msg.k != 0xB && msg.k != 5 && (h.kind == 0x4000 || h.kind == 0x2000))
     {
-        // (0x1F7A68(guard, 0): its contact bytes off)
+        SetAloEntryMode(pg->palo, 0);  // orig: 0x001F7A68, restore the contact-entry mode for recovery
         send(0x13, nullptr);
         return 1;
     }
@@ -196,7 +198,9 @@ int JOBREACT::Message(int nmsg, void* pv)
         {
             const int hp = pg->n33C + h.n;
             pg->n33C = hp > 4 ? hp : 5;
-            if (NOISETMPL* pt = PtmplNoiseFixed(0)) PnoiseNew(pt, PosOfLo(pg->palo), pg->palo);
+            // 0x156698(SW +0x4028: the fixed template 708 (radius 750), the guard's place, the guard): the launch is
+            // the quiet one; the loud 706 comes only from the finishing hit / the landing
+            if (NOISETMPL* pt = PtmplNoiseFixed(2)) PnoiseNew(pt, PosOfLo(pg->palo), pg->palo);
             m.k = 7;
             m.plo = h.psource;
             React(m);
@@ -214,7 +218,7 @@ int JOBREACT::Message(int nmsg, void* pv)
     // the hit's noise at the guard (0x156698: the fixed template 709 for a dart (0x40000), else 706)
     if (NOISETMPL* pt = PtmplNoiseFixed(h.kind == 0x40000 ? 3 : 0)) PnoiseNew(pt, PosOfLo(pg->palo), pg->palo);
     uint32_t s1 = s0;
-    if (msg.k >= 8 && msg.k < 11 && FCidDerivedFrom(h.psource->Cid(), 0x65)) s1 = (s0 & 0xB0) ? (s0 | 0x40) : s0;
+    if (msg.k >= 8 && msg.k < 11 && FCidDerivedFrom(h.psource->Cid(), S3CID(0x65))) s1 = (s0 & 0xB0) ? (s0 | 0x40) : s0;
     if (FGuardSurprised(pg, h.psource, GrfStateBit(0x17))) s1 |= 0x80;
     if (s1 & 0x40) s1 &= ~0xB0u;
     if (s1 & 0xA0) s1 &= ~0x10u;
@@ -242,7 +246,8 @@ int JOBREACT::Message(int nmsg, void* pv)
             if (pg->n344 <= 0) s1 |= 0x20;
             else
             {
-                // TODO(ai): the block's clip (+0x348 into +0x34C, ApplyAsegCur)
+                // the block's clip (+0x348 into +0x34C: 0x1305B8)
+                ApplyAsegCur(pg->paseg348, pg->palo, 0.0f, 1.0f, 1, &pg->pasega34C);
                 pg->g360 = g_clock.t;
             }
         }
@@ -265,7 +270,7 @@ int JOBREACT::Message(int nmsg, void* pv)
     }
     if (s1 & 0x40) kOut = 0xB;
     if (!(s1 & 0xE0)) return 1;
-    if (FCidDerivedFrom(h.psource->Cid(), 0x34))
+    if (FCidDerivedFrom(h.psource->Cid(), S3CID(0x34)))
     {
         // the push: away from a point 150 behind the source (its facing), 500 long
         const glm::vec3 posG = PosOfLo(pg->palo);
@@ -277,7 +282,7 @@ int JOBREACT::Message(int nmsg, void* pv)
         const float l = std::sqrt(glm::dot(v3, v3));
         if (l > 0.0f) hOut.vec = v3 / l * 500.0f;
     }
-    else if (pg->nMode == -1 && FCidDerivedFrom(h.psource->Cid(), 0x38))
+    else if (pg->nMode == -1 && FCidDerivedFrom(h.psource->Cid(), S3CID(0x38)))
     {
         if (GUARD* source = PguardFromLo(h.psource); source && source->nMode == 0x22) SetGuardMode(pg, 0x22);
     }
@@ -293,7 +298,7 @@ void JOBREACT::NextReaction()
     GUARD* pg = pguard;
     AIMSG m;
     LO* pme = g_psw ? PloPoCurrent(g_psw) : nullptr;
-    if (FCidDerivedFrom(pg->palo->Cid(), 0x3B) && pg->c1010 > 0)
+    if (FCidDerivedFrom(pg->palo->Cid(), S3CID(0x3B)) && pg->c1010 > 0)
     {
         m.k = 13;
         m.plo = pme;
@@ -306,7 +311,7 @@ void JOBREACT::NextReaction()
     }
     else if (pg->fFA8 != 0 || pg->fF94 != 0)  // 0x177D20
         m.k = 0xC;
-    else if (FCidDerivedFrom(pg->palo->Cid(), 0x3C) && pg->n108C > 0)  // 0x177D70
+    else if (FCidDerivedFrom(pg->palo->Cid(), S3CID(0x3C)) && pg->n108C > 0)  // 0x177D70
         m.k = 15;
     else if (LO* ptarget = PloGuardTarget(pg))
     {
@@ -339,7 +344,7 @@ void JOBHIT::Enter()
     GUARD* pg = pguard;
     float rad;
     const glm::vec3 v = hit.vec;
-    if (std::sqrt(v.x * v.x + v.y * v.y) > 1e-4f && hit.kind != 0x40000)
+    if (std::sqrt(v.x * v.x + v.y * v.y + v.z * v.z) > 1e-4f && hit.kind != 0x40000)  // (the 3D length, as 0x179328's vmul.xyz)
         rad = std::atan2(-v.y, -v.x);
     else
     {
@@ -347,6 +352,13 @@ void JOBHIT::Enter()
         rad = std::atan2(m[0][1], m[0][0]);  // (0x1A6318 twice: the facing)
     }
     SetMoveHeading(&pg->move, rad);
+    if (std::getenv("SLY2N_HITDIR"))
+    {
+        const glm::vec3 pp = PosAi(pg->palo), ps = hit.psource ? PosAi(hit.psource) : pp;
+        std::printf("hitdir: t %.3f guard %d %p kind 0x%X k %d vec %.1f %.1f rad %.3f locked %d heading %.3f src %d dir %.3f pos %.0f %.0f\n",
+                    g_clock.t, pg->palo->oid, (void*)pg, hit.kind, pkinde ? pkinde->k : -9, v.x, v.y, rad, pg->move.fHeadingLocked,
+                    St(pg).radHeading, hit.psource ? hit.psource->oid : -1, std::atan2(pp.y - ps.y, pp.x - ps.x), pp.x, pp.y);
+    }
     // orig 0x1793F0..0x179460: a kind-2 hit lands its authored root distance behind the guard's
     // heading (+0x1A8); set the player target before its take-off event 0x22 can launch it.
     if (pkinde && pkinde->k == 2 && pkinde->pk2 && pkinde->pvState)
@@ -355,8 +367,7 @@ void JOBHIT::Enter()
         const glm::vec3 offset = cmm::SetVectorCylind(radBack, pkinde->pk2->s1C, 0.0f);  // 0x11E1A0
         SetK2Target(static_cast<K2PLAY*>(pkinde->pvState), PosOfLo(pg->palo) + offset);  // 0x20C6F8
     }
-    // (0x20AB68(guard, 0, 0, 0): the held object let go)
-    pg->ploF00 = nullptr;
+    SetGuardResponse(pg, nullptr, nullptr, glm::vec3(0.0f)); // orig: 0x20AB68
     if (st == 0) LockJob(this);
     // TODO(ai): 0x156C80 (the hit's marker object +0x35C)
     tB0 = FLT_MAX;
@@ -364,7 +375,19 @@ void JOBHIT::Enter()
     pg->tF04 = 0.0f;
     if (pg->n334)
     {
-        // (TODO(media): 0x187E28 the pad's rumble when the current player struck it)
+        // struck by the current player (the hit's source or one of its parents: 0x1A6AF8) when that is Murray
+        // (D_002F7900) or the hit is of kind 0x40000: the pad's rumble (0x187E28 kind 3, 0.15 s) and the camera's
+        // shake 0.05 s later (tB0)
+        LO* pcur = g_psw ? PloPoCurrent(g_psw) : nullptr;
+        if (pcur && FLoInParentChain(hit.psource, pcur))
+        {
+            MURRAY* pm = PmurrayGlobal();
+            if ((pm && pm->palo == pcur) || (hit.kind & 0x40000))
+            {
+                TriggerJoyRumbleRumk(3, 0.150000006f, "guard struck");
+                tB0 = g_clock.t + 0.0500000045f;
+            }
+        }
         tB4 = g_clock.t + 0.13333334f;
     }
     PrintStepDebug(&St(pg));
@@ -374,6 +397,12 @@ void JOBHIT::Enter()
 void JOBHIT::Exit()
 {
     JOBMOVE::Exit();
+    if (std::getenv("SLY2N_HITDIR"))
+    {
+        const glm::vec3 pp = PosAi(pguard->palo);
+        std::printf("hitdir exit: t %.3f guard %d %p pos %.0f %.0f heading %.3f locked %d\n", g_clock.t, pguard->palo->oid, (void*)pguard,
+                    pp.x, pp.y, St(pguard).radHeading, pguard->move.fHeadingLocked);
+    }
     // (0x156C80(-1): the marker object off)
 }
 
@@ -499,7 +528,7 @@ void LaunchOwnerTarget(LO* plo, float dt, LAUNCHTARGET* pt)
 {
     if (SLY* ps = dynamic_cast<SLY*>(PactorFromLo(plo)))
         GetSlyLaunchTarget(ps, dt, pt);  // orig 0x18DE80 (owner vt slot96)
-    else if (plo && FCidDerivedFrom(plo->Cid(), 0x34))
+    else if (plo && FCidDerivedFrom(plo->Cid(), S3CID(0x34)))
     {
         // orig 0x143220, the actor's base slot96
         pt->fActive = 0;
@@ -546,8 +575,7 @@ void JOBB1::Init()
 void JOBB1::Enter()
 {
     JOBMOVE::Enter();
-    // 0x20AB68: drop any held object (its full throw/restore path remains TODO with guard-held objects).
-    pguard->ploF00 = nullptr;
+    SetGuardResponse(pguard, nullptr, nullptr, glm::vec3(0.0f)); // orig: 0x20AB68
     // 0x20B210: terminate a navigation-link move. Those movement kinds are not yet implemented natively.
     DetachGuardMove(pguard);  // 0x20B210
     SetState(0);
@@ -622,7 +650,7 @@ void JOBB1::Update()
             const glm::vec3 currentVel = VelAloPos(pguard->palo);
             ACTOR* pa = PactorFromLo(ploOwner);
             SLY* ps = dynamic_cast<SLY*>(pa);
-            ALO* ppart = ps && ps->plo19A4 && FCidDerivedFrom(ps->plo19A4->Cid(), 0x30) ? static_cast<ALO*>(ps->plo19A4) : nullptr;
+            ALO* ppart = ps && ps->plo19A4 && FCidDerivedFrom(ps->plo19A4->Cid(), S3CID(0x30)) ? static_cast<ALO*>(ps->plo19A4) : nullptr;
             XF* pxf = ppart ? PxfObj(ppart) : nullptr;
             if (!pxf) break;
             glm::mat4 predicted(1.0f);
@@ -685,7 +713,8 @@ int JOBB1::Message(int msg, void* pm)
     // TODO(media): 0x15E938/slot51 sound object 0x3E+index, message5 at the guard's position.
     const int hp = pguard->n33C + hit->nState;
     pguard->n33C = hp > 4 ? hp : 5;
-    if (NOISETMPL* pt = PtmplNoiseFixed(0)) PnoiseNew(pt, PosAi(pguard->palo), pguard->palo);
+    // 0x156698(SW +0x4028: the fixed template 708, the guard's place, the guard)
+    if (NOISETMPL* pt = PtmplNoiseFixed(2)) PnoiseNew(pt, PosAi(pguard->palo), pguard->palo);
     return 1;
 }
 
@@ -760,7 +789,8 @@ void JOBB1::SetState(int n)
         }
         ACTOR* pa = PactorFromLo(ploOwner);
         fTrack = target.fActive && pa && pa->plo10DC == palo;
-        // TODO(media): rumble0x187E28(3,0.15) when +334 and the owner is the current player.
+        // the guard thrown by the current player (its +0x334 set): the pad's rumble (0x187E28 kind 3, 0.15 s)
+        if (pguard->n334 && g_psw && ploOwner && ploOwner == PloPoCurrent(g_psw)) TriggerJoyRumbleRumk(3, 0.15f, "guard launched");
         break;
     }
     case 3: SeekLaunchMarker(this, 0x3C); break;
@@ -788,7 +818,7 @@ void JOBB0::Enter()
     AIJOB::Enter();
     SetState(0);
     DetachGuardMove(pguard);     // 0x20B210: its kind's mover reset
-    pguard->ploF00 = nullptr;    // 0x20AB68(guard, 0, 0, 0): the held object let go
+    SetGuardResponse(pguard, nullptr, nullptr, glm::vec3(0.0f)); // orig: 0x20AB68
     DetachAloContactsAll(pguard->palo);  // 0x1F4E28
     LockJob(this);
     // 0x153FF8: the detector forgets (every entry back to state 0 at now)

@@ -10,6 +10,9 @@
 
 #include <GLFW/glfw3.h>
 
+#include <cctype>
+#include <cstdint>
+
 namespace
 {
 using cane::input::Button;
@@ -44,7 +47,60 @@ Button ButtonForGlyph(char ch)
     if (a < 0) return Button::Count;
     return cane::input::fromGlfwBinding(g_pcinput.gamepad[size_t(a)]);
 }
+
+// PROMPTKEYGLYPH's override: this icon glyph is drawn as this key while the keyboard is in use
+char s_chKeyOverride = '\0';
+int s_keyOverride = 0;
 }  // namespace
+
+PROMPTKEYGLYPH::PROMPTKEYGLYPH(char ch, int glfwKey) : chPrev(s_chKeyOverride), keyPrev(s_keyOverride)
+{
+    s_chKeyOverride = ch;
+    s_keyOverride = glfwKey;
+}
+
+PROMPTKEYGLYPH::~PROMPTKEYGLYPH()
+{
+    s_chKeyOverride = chPrev;
+    s_keyOverride = keyPrev;
+}
+
+std::string StrPromptButtonWords(const std::string& text)
+{
+    if (g_pcinput.fAlwaysOriginalPs) return text;
+    if (text.find("START") == std::string::npos && text.find("SELECT") == std::string::npos) return text;
+    struct WORD { const char* sz; size_t cch; const char* szIcon; };
+    static const WORD s_aword[] = {{"START", 5, "&2!&."}, {"SELECT", 6, "&2_&."}};
+    auto fLetter = [](unsigned char ch) { return std::isalnum(ch) || ch >= 0x80; };
+    std::string out;
+    out.reserve(text.size());
+    bool fIconFont = false;   // (inside an "&2 ... &." run the words are glyph letters, not text)
+    for (size_t i = 0; i < text.size();)
+    {
+        if (text[i] == '&' && i + 1 < text.size())
+        {
+            if (text[i + 1] != '&') fIconFont = text[i + 1] != '.';
+            out.append(text, i, 2);
+            i += 2;
+            continue;
+        }
+        bool fDone = false;
+        if (!fIconFont && (i == 0 || !fLetter(uint8_t(text[i - 1]))))
+            for (const WORD& w : s_aword)
+                // (after the word: not another capital or digit; a lower-case letter is a compound's next part, as the
+                // Swedish "STARTknappen")
+                if (text.compare(i, w.cch, w.sz) == 0 &&
+                    (i + w.cch == text.size() || !(std::isupper(uint8_t(text[i + w.cch])) || std::isdigit(uint8_t(text[i + w.cch])))))
+                {
+                    out += w.szIcon;
+                    i += w.cch;
+                    fDone = true;
+                    break;
+                }
+        if (!fDone) out += text[i++];
+    }
+    return out;
+}
 
 Family PromptFamily()
 {
@@ -66,7 +122,7 @@ PROMPTGLYPH PromptGlyphFor(char ch)
     {
         const int a = ActionFromGlyph(ch);
         if (a < 0) return glyph;
-        int key = g_pcinput.keyboard[size_t(a)];
+        int key = ch == s_chKeyOverride && s_chKeyOverride ? s_keyOverride : g_pcinput.keyboard[size_t(a)];
         if (a == PCA_Start && key == cane::settings::kKeyUnknown) key = GLFW_KEY_ESCAPE;
         const cane::input::IconUV uv = atlas.keyUV(cane::input::promptKeyForBinding(key));
         if (!uv.valid || !atlas.keyboardTexture()) return glyph;

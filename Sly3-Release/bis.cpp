@@ -1,4 +1,5 @@
 #include "bis.h"
+#include "region.h"
 #include "geom.h"
 #include <algorithm>
 #include "../platform/platform.h"
@@ -288,6 +289,23 @@ std::string CBinaryInputStream::ReadStringSw()
     std::string text(static_cast<std::size_t>(cch), '\0');
     RawRead(text.data(), cch);
     return text;
+}
+
+std::string CBinaryInputStream::ReadWideStringSw()
+{
+    Trace("wstr");
+    const uint16_t cch = Raw<uint16_t>();
+    std::string text;
+    text.reserve(cch);
+    for (uint16_t i = 0; i < cch; ++i) AppendCh16(text, Raw<uint16_t>());
+    return text;
+}
+
+void CBinaryInputStream::SkipWideStringSw()
+{
+    Trace("118570");
+    const uint16_t cch = Raw<uint16_t>();
+    RawRead(nullptr, std::size_t(cch) * 2);
 }
 
 std::string CBinaryInputStream::ReadSkippedStringSw()

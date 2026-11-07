@@ -20,6 +20,7 @@
 // 0x2000: read by the players' 0x1A28B0). The mass states' buoyancy +0xD4 / drag +0xD8 are options 59 / 60 (getter
 // 0x1F7BF0); the water's own are 1 (0x228BB0).
 #include "so.h"
+#include "game/sly3.h"
 
 #include "alo.h"
 #include "animfind.h"
@@ -231,12 +232,10 @@ void ReleaseWake(ALO* po)  // (the 0x32 family's +0x174: stopped, released)
 // the wake sound by the relative speed (the 0x32 family: one of 0x4B..0x4E kept at +0x174) and the ripples' cadence)
 void WakeAloWater(ALO* po, ALO* pw, const glm::vec3& vFlow, const glm::vec3& pos, float dt, float gMin, float sRadius)
 {
-    (void)pos;
-    (void)sRadius;
     const glm::vec3 d = vFlow - VtVelPos(po);
     const float s = std::sqrt(std::fabs((d.x * d.x + d.y * d.y) + d.z * d.z));
     bool fRipple = GRandInRange(0.0f, 3.0f) < dt;  // 0x11D448
-    ALO* pso = FCidDerivedFrom(po->Cid(), 0x32) ? po : nullptr;
+    ALO* pso = FCidDerivedFrom(po->Cid(), S3CID(0x32)) ? po : nullptr;
     if (!(10.0f < s) && !fRipple)
     {
         if (pso) ReleaseWake(pso);
@@ -268,11 +267,18 @@ void WakeAloWater(ALO* po, ALO* pw, const glm::vec3& vFlow, const glm::vec3& pos
             fRipple = int(g_clock.t / tStep) != int((g_clock.t + dt) / tStep);
         if (!fRipple) return;
     }
-    if (!pw->U32Field(0, 0x17C, 0)) return;
-    // the ripple (0x1CE888(G, 7, 0): a class 7 object placed at pos, radius sRadius / 0.6 sRadius, the water's
-    // +0x17C model) and, faster than 500, the emitter +0x178's spray (0x15BE28): drawing (not ported)
-    WarnOnce("the wake's ripples and spray (0x1CE888 / 0x15BE28)");
+    LO* ploRipple = PloField(pw, 0x17C);
+    if (!ploRipple) return;
+    // the ripple (0x1CE888(G, 7, 0): a plain RIP at pos, size sRadius growing by 0.6 sRadius, the water's +0x17C model)
+    if (!FLaunchWaterRipple(ploRipple, pos, sRadius)) return;
     if (pso) s_mpwake[pso].tRipple = g_clock.t;
+    // faster than 500: the spray of the water's +0x178 (0x15BE28: 4..6 kind-1 RIPs from 30 above pos)
+    if (500.0f < s)
+        if (LO* ploSpray = PloField(pw, 0x178))
+        {
+            const SOST* ps = Psost(po);
+            LaunchWaterSpray(ploSpray, ploRipple, pw, pos, s, ps ? ps->dvGravity : glm::vec3(0.0f), NRandInRange(4, 6));
+        }
 }
 
 // orig: 0x002297F8 func_002297F8 (ALO vt slot 72: the object in the water pw for a physics frame)
@@ -357,7 +363,7 @@ void ApplyWaterToAlo(ALO* po, ALO* pw)
         WakeAloWater(po, pw, vFlow, pos, g_clock.dt, F32(0x3DCCCCCD), sRadius);
         return;
     }
-    if (FCidDerivedFrom(po->Cid(), 0x32)) ReleaseWake(po);
+    if (FCidDerivedFrom(po->Cid(), S3CID(0x32))) ReleaseWake(po);
 }
 NATIVEFN(0x2297F8, ApplyWaterToAlo);
 
@@ -602,3 +608,6 @@ void ResetWater()
 
 // (public, for the actors' 0x1A28B0: orig 0x00228C18)
 glm::vec3 VelWaterAtPoint(ALO* pw, const glm::vec3& pos) { return VelWaterAt(pw, pos); }
+
+// (public, for the actors' splash points 0x1A2460: the water's object options by their oids, e.g. its effect +0x174)
+LO* PloWaterField(ALO* pw, uint32_t ib) { return PloField(pw, ib); }

@@ -8,6 +8,7 @@
 #include "anim.h"
 #include "clock.h"
 #include "xfphys.h"
+#include "xf.h"
 
 #include <cmath>
 
@@ -19,9 +20,31 @@ inline float Dot3(const glm::vec3& a, const glm::vec3& b) { return (a.x * b.x + 
 inline float Len3(const glm::vec3& a) { return std::sqrt(std::fabs(Dot3(a, a))); }
 }
 
+namespace
+{
+// The chain's controller of each segment's record (orig 0x21C888: 0x12E1F0(0x20) with the vtable D_002DB338, kind 3,
+// priority -1, mode 16, +0x1C the segment; added by 0x230018). Its start 0x21C858 puts the record in mode 16 (0x12CE98)
+// and the segment back in the record's +0xA8 (the other modes use +0xA8 for themselves). It stays under the record's
+// other controllers: when an animation's channel (kind 0, priority 0) lets go of the record, the chain takes it again.
+// (Natively the mode was set once at the load; a record an animation had driven stayed in its seek / snap mode, so
+// Sly's tail and ears stopped following him (R10).)
+struct CTRLCHAIN : CTRL
+{
+    ALOCHAINE* pe = nullptr;  // +0x1C
+    void Start() override     // orig 0x21C858
+    {
+        CTRL::Start();
+        pxf->pvA8 = pe;
+        // (natively the parameter can still point at the time of an animation that is gone; mode 16 reads none of
+        // them (0x22DD00 only fetches from this controller, which does nothing): dropped)
+        ResetXfParams(pxf);
+    }
+};
+}  // namespace
+
 // The part of 0x21C888 after each chain is read: each segment's rest rows, the controller that holds its record in
-// mode 16 (0x21C858 / 0x12CE98: the mode, then the parameters dropped), then the offsets to the next segment (in the
-// record's frame; the last one: the previous offset, or the chain's rest offset) and the world positions.
+// mode 16 (CTRLCHAIN above), then the offsets to the next segment (in the record's frame; the last one: the previous
+// offset, or the chain's rest offset) and the world positions.
 void InitAloChains(ALO* palo)
 {
     for (ALOCHAIN& c : palo->achain)
@@ -32,9 +55,20 @@ void InitAloChains(ALO* palo)
             e.pchain = &c;
             if (!e.pxf) continue;
             e.matRest = Mat3Of(e.pxf->mat);
-            e.pxf->pvA8 = &e;
-            SetXfMode(palo, e.pxf, 16);
-            InvalidateXfParams(palo, e.pxf);
+            bool fHas = false;
+            for (CTRL* q = e.pxf->pctrlFirst; q; q = q->pnext)
+                if (auto* pc = dynamic_cast<CTRLCHAIN*>(q); pc && pc->pe == &e) fHas = true;
+            if (!fHas)
+            {
+                auto* pctrl = new CTRLCHAIN();  // (the controllers live as long as the world, as xf.cpp's)
+                pctrl->kind = 3;
+                pctrl->palo = palo;
+                pctrl->pxf = e.pxf;
+                pctrl->prio = -1;
+                pctrl->mode = 16;
+                pctrl->pe = &e;
+                AddXfCtrl(palo, e.pxf, pctrl);  // 0x230018 (the head: started, mode 16)
+            }
         }
         for (int j = 0; j < n; j++)
         {

@@ -3,7 +3,7 @@
 // The world module (activate.cpp, update.cpp) and the animation module (anim.cpp's 0x1F8DD8 pass) call these.
 
 #include "physworld.h"
-#include "sly3/ids3.h"
+#include "game/sly3.h"
 #include "laser.h"
 
 #include "cls.h"
@@ -38,7 +38,7 @@ extern const glm::vec3 g_vecZero;
 
 namespace
 {
-bool FAlo(const LO* plo) { return plo && FCidDerivedFrom(plo->Cid(), Icid(CID3::ALO)); }
+bool FAlo(const LO* plo) { return plo && FCidDerivedFrom(plo->Cid(), S3CID(0x30)); }
 
 SW* s_pswPhys = nullptr;
 
@@ -389,12 +389,12 @@ void PostLoadSwPhys(SW* psw)
         // the player actors (0x34..): their state code (0x18BCE0 / 0x134DA8 / 0x1B50B0, the actors code) holds them;
         // until it runs natively (g_pfnFActorDrivesPhys) they keep the load's fixed constraints (with the options'
         // free ones and no state code they slide off at the world's start)
-        if (FCidDerivedFrom(palo->Cid(), Icid(CID3::PLAYER)) && !(g_pfnFActorDrivesPhys && g_pfnFActorDrivesPhys(palo)))
+        if (FCidDerivedFrom(palo->Cid(), S3CID(0x34)) && !(g_pfnFActorDrivesPhys && g_pfnFActorDrivesPhys(palo)))
         {
             SetAloCnstrLin(palo, 3);
             SetAloCnstrAng(palo, 3);
         }
-        if (FCidDerivedFrom(palo->Cid(), Icid(CID3::GUARD)))
+        if (FCidDerivedFrom(palo->Cid(), S3CID(0x38)))
         {
             // the guards' post-load 0x2061D8 after 0x203A38: the size again (0x204DA8 with +0x260), the records in mode 2
             SetStepPhysSize(palo, StepPhysOf(palo).sSize);
@@ -433,19 +433,19 @@ struct PHYSPROPS
         // EOPID 47's load method (thunk 0x100EB0 -> 0x1F6B48): the object's geometry entries with that tag turned off
         // (0x1F2AD0; e.g. Bentley's / the guards' body entries, so that their custom probe entry is the one colliding)
         RegisterObjectMethod(0x100EB0, [](LO* plo, const std::vector<CRef>& a) {
-            if (plo && FCidDerivedFrom(plo->Cid(), Icid(CID3::ALO))) SetAloSoesByTag(static_cast<ALO*>(plo), NArg(a, 0, -1), false);
+            if (plo && FCidDerivedFrom(plo->Cid(), S3CID(0x30))) SetAloSoesByTag(static_cast<ALO*>(plo), NArg(a, 0, -1), false);
             return CRef();
         });
         // thunk 0x100E28 -> 0x1F6AC8: the entries with that tag turned on (0x1F2A60; e.g. the Music Box's 0x80000 sphere
         // 3924, pulsed on / off by its script so that the guards in reach get drowsy and fall asleep)
         RegisterObjectMethod(0x100E28, [](LO* plo, const std::vector<CRef>& a) {
-            if (plo && FCidDerivedFrom(plo->Cid(), Icid(CID3::ALO))) SetAloSoesByTag(static_cast<ALO*>(plo), NArg(a, 0, -1), true);
+            if (plo && FCidDerivedFrom(plo->Cid(), S3CID(0x30))) SetAloSoesByTag(static_cast<ALO*>(plo), NArg(a, 0, -1), true);
             return CRef();
         });
         // thunk 0x100F38 -> 0x1F6BC8: the contact kind (+0x18, the filter its contacts carry) of the object's entries
         // with tag arg 0 set to arg 1 (e.g. Lightning Spin's clip 348: Sly's cane entry 337 0x10 -> 0x800 and back)
         RegisterObjectMethod(0x100F38, [](LO* plo, const std::vector<CRef>& a) {
-            if (plo && FCidDerivedFrom(plo->Cid(), Icid(CID3::ALO)))
+            if (plo && FCidDerivedFrom(plo->Cid(), S3CID(0x30)))
                 for (SOE& e : static_cast<ALO*>(plo)->asoe)  // orig: 0x001F6BC8
                     if (e.tag == NArg(a, 0)) e.id = static_cast<uint32_t>(NArg(a, 1));
             return CRef(TAGK_Void);
@@ -504,7 +504,7 @@ struct PHYSPROPS
         RegisterObjectGetter(23, [](LO* plo) {
             CRef r;
             glm::mat3 m(1.0f);
-            if (FCidDerivedFrom(plo->Cid(), Icid(CID3::ALO)))
+            if (FCidDerivedFrom(plo->Cid(), S3CID(0x30)))
             {
                 if (XF* pxf = PxfObj(static_cast<ALO*>(plo))) m = glm::mat3(pxf->matWorld);
             }
@@ -518,7 +518,7 @@ struct PHYSPROPS
             if (r.m_tagk != TAGK_Vector) return;
             const glm::vec3 v = r.GetVector();
             const glm::mat3 m = MatEuler(glm::vec3(v.x * 0.017453294f, v.y * 0.017453294f, v.z * 0.017453294f));
-            if (FCidDerivedFrom(plo->Cid(), Icid(CID3::ALO)))  // vt slot 30 (as EOPID 22's setter)
+            if (FCidDerivedFrom(plo->Cid(), S3CID(0x30)))  // vt slot 30 (as EOPID 22's setter)
             {
                 ALO* palo = static_cast<ALO*>(plo);
                 if (STEP* pstep = PstepFromLo(palo)) SetStepRotation(pstep, m);
@@ -535,7 +535,7 @@ struct PHYSPROPS
             const float g = GOf(r);
             if (g <= 0.0f)
             {
-                if (!FCidDerivedFrom(p->Cid(), 0x69)) RemoveLo(g_psw, p);
+                if (!FCidDerivedFrom(p->Cid(), S3CID(0x69))) RemoveLo(g_psw, p);
             }
             else AddLo(g_psw, p);
             p->gFade = g;

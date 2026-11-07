@@ -1,7 +1,11 @@
+#include "game/cond3.h"
 // The camera in the native game (see cmworld.h).
 #include "turret.h"
-#include "sly3/ids3.h"
+#include "game/sly3.h"
+#include "vehiclehooks.h"
 #include "cmworld.h"
+bool FSettingFlag(const char* name);   // (savedata.h; its header clashes with this file's LM)
+#include "animfind.h"
 #include "pcinput.h"
 
 #include "actor.h"
@@ -23,6 +27,7 @@
 #include "lo.h"
 #include "sw.h"
 #include "update.h"
+#include "task.h"
 #include "worldaccess.h"
 
 #include <algorithm>
@@ -48,13 +53,13 @@ float DtRealNative() { return g_clock.dtReal; }
 glm::mat4 Mat4Lo(LO* plo)
 {
     if (!plo) return glm::mat4(1.0f);
-    if (FIsLoDerivedFrom(plo, Icid(CID3::ALO)))
+    if (FIsLoDerivedFrom(plo, S3CID(0x30)))
     {
         // (an SO's slot 31 is 0x1F3FA0: its object record's (+0x60), which moves with it; the root's does not)
         if (const XF* pxf = PxfObj(static_cast<ALO*>(plo))) return pxf->matWorld;
         return MatWorldOfAlo(static_cast<ALO*>(plo));
     }
-    if (FIsLoDerivedFrom(plo, 3))
+    if (FIsLoDerivedFrom(plo, S3CID(3)))
     {
         const LOX* plox = static_cast<const LOX*>(plo);
         return plox->pxf ? plox->pxf->matWorld * plox->mat : plox->mat;
@@ -88,7 +93,7 @@ const CMJOY* PjoyNative()
     if (fPad)
     {
         MouseOrbitDelta(&s_joy.dradMousePan, &s_joy.dradMouseTilt);
-        MouseAimDelta(&s_joy.dradAimRight, &s_joy.dradAimUp);
+        MouseAimDelta(MOUSEAIM_Binocucom, &s_joy.dradAimRight, &s_joy.dradAimUp);
         s_joy.cwheelZoom = MouseWheelZoom();
     }
     return &s_joy;
@@ -114,12 +119,21 @@ struct ZONESTATE
     int fAlways = 0;        // +0x124
     LO* ploFocus = nullptr; // +0xE0 (the player it follows)
     bool fInWorld = true;   // (the zone's in-world state at the last pass: its removal 0x220F88 turns the camera off)
+    LO* plo = nullptr;      // (the zone itself)
 };
+// an object's vt slot 3 (the base 0x1A61E0: its splice event n, then the game's event 0x1A (5) / 0x1B (6)); 0x221178
+// calls it deferred (its third argument 1: the splice event queued, 0x133040), the task event at once. (Run at once, a
+// zone's event 6 that removes its own tree re-entered the removal through the zone's slot 22: 12:2319 overflowed.)
+void ZoneLoEvent(LO* plo, int n)
+{
+    HandleLoSpliceEvent(plo, static_cast<uint32_t>(n), true, 0, nullptr);
+    BroadcastTaskEvent(g_psw, n == 5 ? 0x1A : 0x1B, plo);
+}
 std::map<LO*, ZONESTATE> s_mpzone;
 
 bool FocusNative(LO* plo, CMFOCUS* pf)
 {
-    pf->fJt = FIsLoDerivedFrom(plo, Icid(CID3::PLAYER));
+    pf->fJt = FIsLoDerivedFrom(plo, S3CID(0x34));
     pf->mat = MatLoNative(plo);
     // the player's interaction sub-object (+0x4C0): +0x4F4 jtfock, +0x500 its focus point, +0x4C8 / +0x4CC its kind and
     // state, +0x528 its own camera zone; +0x10E4
@@ -144,7 +158,7 @@ bool FocusNative(LO* plo, CMFOCUS* pf)
 // The zone's camera options (EOPID descriptors at 0x2AC880: +0x18 the field offset, +0x24 the getter of the
 // current entry (0x221958) for the entry's fields, +0x1C the setter): the loader 0x220FD0's order: the first entry
 // 0x221818(p, 0x30), the options, 0x221940; the init 0x220ED0's defaults first.
-constexpr uint32_t VA_AEOPID = 0x2AC880;
+constexpr uint32_t VA_AEOPID = S3VA(0x2AC880);
 ZONECME* PcmeSelect(ZONECM* pz, int id)  // orig 0x00221818
 {
     for (ZONECME& e : pz->acme)
@@ -186,6 +200,29 @@ LO* PloFindOid(OID oid)
     return nullptr;
 }
 
+// (Sly 3) a zone field option's offset in Sly 3's ZONE (orig3 0x273BB0's layout) as the copied Sly 2 field: the
+// option descriptors of the twin EOPIDs (Sly 3 0x32CA80 / Sly 2 0x2AC880, +0x18) pair them: EOPIDs 223..226 and
+// 240..245 (Sly 2 196..212). 0: none.
+uint32_t Ib2OfZoneField3(uint32_t ib3)
+{
+    switch (ib3)
+    {
+    case 0x11C: return 0x120; case 0x124: return 0x128; case 0x120: return 0x168; case 0x12C: return 0x164;
+    case 0x138: return 0x184; case 0x13C: return 0x188; case 0x140: return 0x18C; case 0x144: return 0x190;
+    case 0x150: return 0x1A0; case 0x160: return 0x1B0;
+    default: return 0;
+    }
+}
+// ... and the return record's (the options read through 0x2746B0: EOPIDs 228..233; Sly 2's zone fields 0x170..0x17C)
+uint32_t Ib2OfZoneReturn3(uint32_t ib3)
+{
+    switch (ib3)
+    {
+    case 0x4: return 0x170; case 0x8: return 0x174; case 0x10: return 0x178; case 0x14: return 0x17C;
+    default: return 0;   // (0x0, 0xC: new in Sly 3)
+    }
+}
+
 void SetZoneField(ZONESTATE& zs, uint32_t ib, const OPTVAL& v)
 {
     ZONECM* pz = zs.pzcm.get();
@@ -207,7 +244,10 @@ void SetZoneField(ZONESTATE& zs, uint32_t ib, const OPTVAL& v)
     case 0x184: pz->fCutOnActivate = v.n; break;
     case 0x188: pz->radFOV = GOpt(v); break;
     case 0x18C: pz->fNoAvoid = v.n; break;
-    case 0x190: pz->ploLook = PloFindOid(v.n); break;
+    // (the loader's object lookup 0x13E590 from the zone: an instance's alias counts, e.g. Ep7 Brains Over Brawn's
+    // zone 32246 looks at 32248, Jean Bison's instance (guard 32250); by its own oid only it found nothing, so the
+    // fight's camera followed Bentley without keeping Bison ahead (R53a))
+    case 0x190: pz->ploLook = v.n == -1 ? nullptr : PloFindSwNearest(pz->pzone, v.n); break;
     case 0x1A0: for (int i = 0; i < 3; ++i) pz->alead[i] = GOpt(v, i); break;
     case 0x1B0: pz->lmLead = LM{GOpt(v, 0), GOpt(v, 1)}; break;
     default: break;
@@ -229,7 +269,7 @@ void BuildZonecm(LO* pzone, ZONESTATE& zs, bool fPrint)
     zs.nForced = -1;
     pz->grf = 7;
     pz->acme.clear();
-    ZONECME* pcme = PcmeSelect(pz, 0x30);
+    ZONECME* pcme = PcmeSelect(pz, S3CID(0x30));  // (orig3 0x273CF8: 0x2F, the ALO class)
     for (const OPT& opt : pzone->aopt)
     {
         if (opt.aval.empty()) continue;
@@ -242,20 +282,21 @@ void BuildZonecm(LO* pzone, ZONESTATE& zs, bool fPrint)
                         pfnGet, pfnSet, v.n, v.ag[0], v.ag[1], v.ag[2]);
         if (grf & 0x100)
         {
-            if (pfnSet == 0x221818) pcme = PcmeSelect(pz, v.n);                       // option 176
-            else if (pfnSet == 0x221960 && pcme) pcme->vecCoefY = glm::vec3(GOpt(v), GOpt(v), 1.0f);  // option 190
+            if (pfnSet == S3FN(0x221818)) pcme = PcmeSelect(pz, v.n);                     // option 176
+            else if (pfnSet == S3FN(0x221960) && pcme) pcme->vecCoefY = glm::vec3(GOpt(v), GOpt(v), 1.0f);  // option 190
             continue;
         }
         if (!(grf & 0x80)) continue;
-        if (pfnGet == 0x221958)
+        if (pfnGet == S3FN(0x221958))
         {
             if (pcme) SetCmeField(pcme, ib, v);
         }
-        else if (pfnGet == 0) SetZoneField(zs, ib, v);
+        else if (pfnGet == 0) SetZoneField(zs, Ib2OfZoneField3(ib), v);
+        else if (pfnGet == 0x2746B0) SetZoneField(zs, Ib2OfZoneReturn3(ib), v);
     }
     // the path: a PATH child (0x2317E0's message); without one the grf's bit 2 is cleared
     pz->pcrv = nullptr;
-    if (FIsLoDerivedFrom(pzone, Icid(CID3::ZONE)))
+    if (FIsLoDerivedFrom(pzone, S3CID(0x0F)))
         for (LO* pc : static_cast<LOXGEOM*>(pzone)->aploChild)
             if (const CRV* pcrv = PcrvFromLo(pc))
             {
@@ -282,9 +323,17 @@ void BuildZonecm(LO* pzone, ZONESTATE& zs, bool fPrint)
 void UpdateZoneCamera(ZONESTATE& zs, int k)  // orig 0x00221178
 {
     if (k == zs.k) return;
-    if (k == 1) SetCmPolicy(&g_cm, zs.cppBase + 2, &g_cmpolicies.cpfollow, zs.ploFocus, zs.pzcm.get());
-    else if (k == 0) RevokeCmPolicy(&g_cm, 8, -1, nullptr, nullptr, zs.pzcm.get());
-    // (the zone's splice events 5 / 6 (vt slot 3): TODO(world))
+    // (then the zone's vt slot 3 with 5 (on) / 6 (off): its splice event and the game's 0x1A / 0x1B; audit C5)
+    if (k == 1)
+    {
+        SetCmPolicy(&g_cm, zs.cppBase + 2, &g_cmpolicies.cpfollow, zs.ploFocus, zs.pzcm.get());
+        if (zs.plo) ZoneLoEvent(zs.plo, 5);
+    }
+    else if (k == 0)
+    {
+        RevokeCmPolicy(&g_cm, 8, -1, nullptr, nullptr, zs.pzcm.get());
+        if (zs.plo) ZoneLoEvent(zs.plo, 6);
+    }
     zs.k = k;
     zs.t = g_clock.t;
     if (zs.pzcm) zs.pzcm->tArc = zs.t;  // (+0x138 is the zone's own field: the follow camera's return 1 ramps from it)
@@ -295,7 +344,7 @@ void UpdateZoneCamera(ZONESTATE& zs, int k)  // orig 0x00221178
 bool FPointInBsp(const LOXGEOM* p, const glm::vec3& posLocal);
 bool FPointInZone(LO* pzone, const glm::vec3& posLocal)
 {
-    if (!FIsLoDerivedFrom(pzone, Icid(CID3::ZONE))) return false;
+    if (!FIsLoDerivedFrom(pzone, S3CID(0x0F))) return false;
     return FPointInBsp(static_cast<const LOXGEOM*>(pzone), posLocal);
 }
 
@@ -336,7 +385,7 @@ LO* PloCameraVolume(const glm::vec3& pos)
     if (!s_psw) return nullptr;
     struct E { LO* plo; VOLSTATE* ps; uint32_t n; };
     std::vector<E> a;
-    for (LO* plo : AploOfClass(s_psw, 5))
+    for (LO* plo : AploOfClass(s_psw, S3CID(5)))
     {
         if (!plo->fInWorld) continue;  // (0x15E9C8's grf 0x100: the flag bit 60, natively fInWorld)
         if (a.size() >= 32) break;
@@ -372,7 +421,12 @@ void EvaluateZone(LO* pzone, ZONESTATE& zs)
         UpdateZoneCamera(zs, 0);
         zs.ploFocus = po;
     }
-    const int f = zs.nForced == -1 ? FPointInZone(pzone, PosLoInFrame(pzone, PosLoNative(po))) : zs.nForced;
+    // (Sly 3, interim: its zones have no update of their own (vt slot 18 is the LO's): the camera picks them. An
+    // actor's own zones (its parts, e.g. Sly's 1725 / 1726, the jump's +0x454 / +0x458) are only its actor zone
+    // (SetActorZone), never by position: they move with him)
+    const bool fActorPart = pzone->paloParent && FIsLoDerivedFrom(PloRoot(pzone), S3CID(0x34));
+    const int f = fActorPart && zs.nForced == -1 ? 0
+                : zs.nForced == -1 ? FPointInZone(pzone, PosLoInFrame(pzone, PosLoNative(po))) : zs.nForced;
     static const bool s_fDbg = std::getenv("SLY2_CMZONEEVAL") != nullptr;
     if (s_fDbg && f != zs.k)
     {
@@ -382,7 +436,7 @@ void EvaluateZone(LO* pzone, ZONESTATE& zs)
     }
     // (+0x124 0: a JT in the air (+0x2DC != -1) keeps the zone's state while it decides by position, unless the
     // camera cuts this frame (CM +0x300, 0x2DE240))
-    if (zs.fAlways == 0 && zs.nForced == -1 && FIsLoDerivedFrom(po, Icid(CID3::PLAYER)) && !g_cm.fCut)
+    if (zs.fAlways == 0 && zs.nForced == -1 && FIsLoDerivedFrom(po, S3CID(0x34)) && !g_cm.fCut)
         if (ACTOR* pa = PactorFromLo(po); pa && pa->jump.state != -1) return;
     UpdateZoneCamera(zs, f);
 }
@@ -413,6 +467,13 @@ void BuildCmobj(LO* plo, CMOBJSTATE& cs)
     }
 }
 
+// the zone is called by the world's update pass (in the update table, its entry's flag 2: update.cpp's loop)
+bool FZoneUpdated(const LO* plo)
+{
+    return s_psw && plo->iupd >= 0 && plo->iupd < static_cast<int>(s_psw->aupd.size()) &&
+           (s_psw->aupd[static_cast<size_t>(plo->iupd)].grf & GRFUPD_Update) && s_psw->aupd[static_cast<size_t>(plo->iupd)].plo == plo;
+}
+
 // orig 0x00221388 (ZONE vt slot 16): the LO update, then (+0x13C set) the camera's re-evaluation, deferred to the
 // next 0x149C80. Natively the zones are re-evaluated at the camera's pass, before UpdateCm (the zones' update table
 // entries are the world's; their splice update stays the default LO one).
@@ -436,7 +497,12 @@ void EvaluateZones()
             if (fWas) UpdateZoneCamera(zs, 0);
             continue;
         }
-        if (zs.nForced) EvaluateZone(plo, zs);
+        // 0x221388 is the zone's update (vt slot 16): only a zone in the update table with an update (its entry's
+        // flag 2) is re-evaluated. A zone in the world but not updated keeps its camera as it is: Team Up's hack-level
+        // zone 27965 (forced on by its options, under the level group 17351) enters the world with the station's
+        // scene, ~4 s before the hack starts; evaluated then, its top view (tilt 1.107, distance 1677) took the
+        // camera over Bentley on the deck (N33), while the original keeps the player's camera until the hack.
+        if (zs.nForced && FZoneUpdated(plo)) EvaluateZone(plo, zs);
     }
 }
 
@@ -447,8 +513,8 @@ ZONECME* PcmeInteractShared()
 {
     static ZONECME s_cme = [] {
         ZONECME e;
-        auto f = [](uint32_t ib) { return std::bit_cast<float>(g_disc.U32Elf(0x2BF670 + ib)); };
-        e.cid = static_cast<int>(g_disc.U32Elf(0x2BF670));
+        auto f = [](uint32_t ib) { return std::bit_cast<float>(g_disc.U32Elf(S3VA(0x2BF670) + ib)); };
+        e.cid = static_cast<int>(g_disc.U32Elf(S3VA(0x2BF670)));
         e.dtPath = f(0x04);
         for (int k = 0; k < 3; ++k) e.acoef[k] = glm::vec4(f(0x10 + 0x10 * k), f(0x14 + 0x10 * k), f(0x18 + 0x10 * k), f(0x1C + 0x10 * k));
         for (int k = 0; k < 3; ++k) e.alm[k] = LM{f(0x40 + 8 * k), f(0x44 + 8 * k)};
@@ -476,6 +542,7 @@ void InitZoneCamera(LO* pzone)
     zs = ZONESTATE{};
     zs.pzcm = std::make_unique<ZONECM>();
     zs.fInWorld = pzone->fInWorld;
+    zs.plo = pzone;
     BuildZonecm(pzone, zs, false);
 }
 
@@ -500,8 +567,53 @@ void SetZoneForced(LO* pzone, int n)
     if (it == s_mpzone.end()) return;
     ZONESTATE& zs = it->second;
     if (n == zs.nForced) return;
+    if (std::getenv("SLY2N_ZONEPRINT"))
+        std::printf("zone forced t %.3f: %d %d -> %d\n", g_clock.t, pzone->oid, zs.nForced, n);
     zs.nForced = n;
     EvaluateZone(pzone, zs);
+}
+
+// orig: 0x002213D8 (ZONE vt slot 22): out of the update table (0x1A6150, activate.cpp's caller), then the zone's camera
+// off (0x221178(0)). Without it a forced zone that stopped being updated kept its camera on: after Team Up's first hack
+// the hack level's zone 27965 (deactivated with the level, still in the world) left the camera in its top view over
+// Bentley for good (N33)
+void OnZoneUnregistered(LO* pzone)
+{
+    auto it = pzone ? s_mpzone.find(pzone) : s_mpzone.end();
+    if (it == s_mpzone.end()) return;
+    if (std::getenv("SLY2N_ZONEPRINT")) std::printf("zone unregistered t %.3f: %d (camera %d -> 0)\n", g_clock.t, pzone->oid, it->second.k);
+    UpdateZoneCamera(it->second, 0);
+}
+
+// orig: 0x001CBF90 (vt slot 90 of class 0x3D (Rajan), script method 1438 via 0x110998): the two-actor camera on
+// Murray (D_002F7900) and this object at priority 6, or revoked (flags 1, priority 6); the state kept at +0x1010.
+// Natively the method was a stub, so the scripted framing in 12:2332 never appeared (audit 2026-11 C6)
+void SetPairCamera(LO* plo, int n)
+{
+    static std::map<LO*, int> s_mpn;  // (+0x1010)
+    int& cur = s_mpn[plo];
+    if (cur == n) return;
+    cur = n;
+    if (n)
+    {
+        LO* ploMurray = nullptr;  // (gang.cpp PmurrayGlobal: the world's first Murray actor)
+        if (g_psw)
+            for (LO* p : g_psw->mpcidaplo[S3CID(0x36)])
+                if (ACTOR* pa = PactorFromLo(p))
+                {
+                    ploMurray = pa->palo;
+                    break;
+                }
+        SetCmPolicy(&g_cm, 6, &g_cmpolicies.cppair, ploMurray, plo);
+    }
+    else RevokeCmPolicy(&g_cm, 1, 6, nullptr, nullptr, nullptr);
+}
+
+// the zone's forced state (EOPID 214's getter; spliceglue.cpp registers it with the setter 0x221268)
+int NZoneForced(LO* pzone)
+{
+    auto it = pzone ? s_mpzone.find(pzone) : s_mpzone.end();
+    return it == s_mpzone.end() ? -1 : it->second.nForced;
 }
 
 // orig: 0x00194118 (the interaction sub-object's zone +0x68 back to its defaults)
@@ -547,7 +659,7 @@ namespace
 // its lens +0x128 (any kind), counted in +0x12C while in use (the intro's title card: ASEG 150285 on 150283)
 CMOBJ* PcmobjOf(LO* plo)
 {
-    if (!plo || plo->Cid() != 0x2C) return nullptr;
+    if (!plo || plo->Cid() != S3CID(0x2C)) return nullptr;
     auto it = s_mpcmobj.find(plo);
     return it == s_mpcmobj.end() ? nullptr : it->second.pcmobj.get();
 }
@@ -606,13 +718,17 @@ static void TraceCmFrame()
         for (const auto& plo : s_psw->aploAll)
         {
             if (std::find(s_aoid.begin(), s_aoid.end(), plo->oid) == s_aoid.end() && std::find(s_aoid.begin(), s_aoid.end(), plo->oidInstance) == s_aoid.end()) continue;
-            if (!FIsLoDerivedFrom(plo.get(), Icid(CID3::ALO))) continue;
+            if (!FIsLoDerivedFrom(plo.get(), S3CID(0x30))) continue;
             const glm::vec3 p = PosLoNative(plo.get());
             const ACTOR* pa = PactorFromLo(plo.get());
             const XF* pxf = PxfPos(static_cast<ALO*>(plo.get()));
             const glm::vec3 q = pxf ? glm::vec3(pxf->matWorld[3]) : glm::vec3(0.0f);
-            std::fprintf(s_pfObj, "%d,%.4f,%d,%d,%d,%.2f,%.2f,%.2f,%d,%.2f,%.2f,%.2f\n", g_frameJoy, g_clock.t, plo->oid, plo->oidInstance,
-                         plo->fInWorld ? 1 : 0, p.x, p.y, p.z, pa ? pa->jump.state : -99, q.x, q.y, q.z);
+            // (then the object record's world x and z rows: its facing and its up)
+            const XF* pxo = PxfObj(static_cast<ALO*>(plo.get()));
+            const glm::mat4 mo = pxo ? pxo->matWorld : glm::mat4(1.0f);
+            std::fprintf(s_pfObj, "%d,%.4f,%d,%d,%d,%.2f,%.2f,%.2f,%d,%.2f,%.2f,%.2f,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f\n", g_frameJoy, g_clock.t, plo->oid,
+                         plo->oidInstance, plo->fInWorld ? 1 : 0, p.x, p.y, p.z, pa ? pa->jump.state : -99, q.x, q.y, q.z, mo[0].x, mo[0].y,
+                         mo[0].z, mo[2].x, mo[2].y, mo[2].z);
         }
         std::fflush(s_pfObj);
     }
@@ -685,14 +801,17 @@ void CmOnWorldLoad(SW* psw)
     g_cmworld.pfnCameraVolume = PloCameraVolume;
     g_cmworld.pfnFieldLo = [](LO* plo, uint32_t ib, uint32_t* pu) {
         // (the camera volume's +0xE0: its loader's U32; other fields from field options)
-        if (ib == 0xE0 && FIsLoDerivedFrom(plo, 5)) *pu = static_cast<LOXGEOM*>(plo)->u;
-        else if (ib == 0x4CC && FIsLoDerivedFrom(plo, Icid(CID3::PLAYER))) *pu = PactorFromLo(plo)->nSub4CC;
+        if (ib == 0xE0 && FIsLoDerivedFrom(plo, S3CID(5))) *pu = static_cast<LOXGEOM*>(plo)->u;
+        else if (ib == 0x4CC && FIsLoDerivedFrom(plo, S3CID(0x34))) *pu = PactorFromLo(plo)->nSub4CC;
         else *pu = plo->U32Field(0, ib, 0xFF);
         return true;
     };
     g_cmfollowworld = CMFOLLOWWORLD{};
     g_cmfollowworld.pfnFocus = FocusNative;
     g_cmfollowworld.pfnAttach = FTurretAttach;  // (the attach policy's mount: cid 0x45, turret.cpp)
+    // the binocucom's "Invert Binocucom Controls" (0x150160: 0x2581C0 of the SVPATH at G_GAME +0x3B4C, the save's
+    // flags.fReverseLookAround, the options' entries 0x51 / 0x52)
+    g_cmfollowworld.pfnFInvertLook = [] { return FSettingFlag("fReverseLookAround"); };
     // the zones' paths (crv.h)
     g_cmfollowworld.pfnCrvPos = [](LO* plo, float s, glm::vec3* ppos, glm::vec3* pdir) {
         if (const CRV* p = PcrvFromLo(plo)) EvalCrvS(p, s, ppos, pdir);
@@ -713,26 +832,33 @@ void CmOnWorldLoad(SW* psw)
     ResetCm(&g_cm);
     InitCm(&g_cm);
     ApplyCmOptions(&g_cm, psw->aoptCm);
+    // (Sly 3: the fog is the static camera's 0x36BC10 +0x14 / +0x18 / +0x1C / +0x20 (BuildCmFogRecip 0x1692E8, FOGCOL),
+    // set by the chosen option block: game/cond3.h; Sly 2's CM fog options 166..169 are not Sly 3's)
+    g_cm.sNearFog = g_condset3.fogNear;
+    g_cm.sFarFog = g_condset3.fogFar;
+    g_cm.uFogMax = g_condset3.fogMax;
+    g_cm.rgbaFog = g_condset3.rgbaFog;
     const bool fPrint = std::getenv("SLY2_CMZONES") != nullptr;
-    for (LO* plo : AploOfClass(psw, 0x0F))
+    for (LO* plo : AploOfClass(psw, S3CID(0x0F)))
     {
         ZONESTATE& zs = s_mpzone[plo];
         zs.pzcm = std::make_unique<ZONECM>();
         zs.fInWorld = plo->fInWorld;
+        zs.plo = plo;
         BuildZonecm(plo, zs, fPrint);
     }
     s_mpcmobj.clear();
-    for (LO* plo : AploOfClass(psw, 0x2C))
+    for (LO* plo : AploOfClass(psw, S3CID(0x2C)))
     {
         CMOBJSTATE& cs = s_mpcmobj[plo];
         cs.pcmobj = std::make_unique<CMOBJ>();
         BuildCmobj(plo, cs);
-        // orig 0x0012E648 (its start, vt slot 15): +0x124 = 1, in the world (flag bit 60: LO::fInWorld) the camera pushed
+        // Sly 2 0x0012E648 (its start, vt slot 15): +0x124 = 1, in the world the camera pushed. orig3: class 0x2A keeps the
+        // LO's start (vt slot 17 0x1C7DC8): nothing is pushed at the start (a script enables it)
         cs.fEnabled = 1;
-        if (plo->fInWorld) SetCmPolicy(&g_cm, 10, &g_cmpolicies.cplookat, nullptr, cs.pcmobj.get());
     }
     if (fPrint)
-        for (LO* plo : AploOfClass(psw, 0x2C))
+        for (LO* plo : AploOfClass(psw, S3CID(0x2C)))
             for (const OPT& opt : plo->aopt)
             {
                 if (opt.aval.empty()) continue;
@@ -765,6 +891,7 @@ void SetCmFocusObject(LO* plo, bool fOn)
     void UpdateAbilityDisplayLo(LO* plo);
     UpdateAbilityDisplayLo(plo);
     SetTurretFocus(plo, fOn);  // (cid 0x45's slot 78: 0x225AE8)
+    SetVehicleFocus(plo, fOn); // class0x4D, orig0x1D1940
     // (the hack ship's slot 78 0x17F8C8: its state 1 / 0, hack.cpp)
     void SetHackShipFocus(LO* plo, bool fOn);
     if (plo && plo->pcls && plo->pcls->PfnOrig(78) == 0x17F8C8) SetHackShipFocus(plo, fOn);
@@ -807,6 +934,7 @@ CAMERA CameraFromCm(const CM& cm)
     cam.sNear = cm.sNearClip;
     cam.sFar = cm.sFarClip;
     cam.rMRDAdjust = cm.rMRDAdjust;
+    cam.grfChannels = static_cast<uint32_t>(cm.nCur);
     return cam;
 }
 
@@ -815,6 +943,8 @@ void ApplyCmFog(const CM& cm, RENDEROPTS* popts)
     popts->sFogNear = cm.sNearFog;
     popts->sFogFar = cm.sFarFog;
     popts->uFogMax = cm.uFogMax;
+    // FOGCOL (0x2DE18C, the world shaders' 0x3D register: 0x1EB960) is the camera's colour (+0x24C, SetCmRgbaFog 0x14F6F0)
+    popts->rgbaFog = cm.rgbaFog;
     popts->fFog = popts->sFogNear > 0 && popts->sFogFar > popts->sFogNear;
 }
 

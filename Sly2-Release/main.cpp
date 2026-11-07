@@ -24,6 +24,7 @@
 
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -443,7 +444,16 @@ int main(int argc, char** argv)
     if (std::getenv("SLY2_PS3WORLD")) g_fPs3World = true;  // (exploration: a PS3 world through --load-world)
 
     if (command && !std::strcmp(command, "list-keys")) return ListKeys();
-    if (command && !std::strcmp(command, "convert")) return ConvertCommand(arg);
+    if (command && !std::strcmp(command, "convert"))
+    {
+        // (the installer's converter: every file is written and closed by now; leave without running the static
+        // destructors of the 44 worlds the texture export loaded, a Windows player's install failed there after
+        // "converted ..." with std::bad_alloc)
+        const int rc = ConvertCommand(arg);
+        std::fflush(stdout);
+        std::fflush(stderr);
+        std::_Exit(rc);
+    }
     // --export-textures without --convert: into the installation (or --out DIR); texmod.h
     if (!command && fExportTextures)
     {

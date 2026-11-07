@@ -1,4 +1,5 @@
 #include "jtthrow.h"
+#include "game/sly3.h"
 // Murray's carried-object state machine and authored attachment poses.
 #include "murraycarry.h"
 #include "gang.h"
@@ -150,7 +151,7 @@ void Detach(MURRAY* p) {
 // orig: 0x001842B0: resolve the three authored reference oids after the world load.
 // Native object fields retain oids; PloInteractOidField resolves the corresponding instance.
 void PostLoadCarryUse(LO* use) {
-    if (!FIsLoDerivedFrom(use,0x24)) return;
+    if (!FIsLoDerivedFrom(use,S3CID(0x24))) return;
     for (uint32_t ib:{0x184u,0x18Cu,0x194u}) {
         LO* goal=PloFindSwNearest(use,static_cast<OID>(use->U32Field(0,ib,uint32_t(-1))));
         use->SetField(0,ib+4,goal?static_cast<uint32_t>(goal->oid):0);
@@ -188,7 +189,7 @@ void SetMurrayCarry(MURRAY* p,int phase) {
             predicted=MulMatrix4(MatJtLo(p->palo),predicted); // 0x1A71B0(p,world,predicted)
             glm::vec4 rot(0),pos(0),start(0),end(0);
             const bool fPose=Pose(p,nullptr,predicted,&rot,&pos);
-            if (FIsLoDerivedFrom(owner,0x38)) ReactGuardHeld(owner,p->palo);  // 0x209E28: reaction 6, job 0xB0
+            if (FIsLoDerivedFrom(owner,S3CID(0x38))) ReactGuardHeld(owner,p->palo);  // 0x209E28: reaction 6, job 0xB0
             if (!fPose) return;
             PickupVelocities(p,pos,ev->t,&duration,&start,&end);
             p->actrlCarry[2]=PctrlNewTarget(owner,PxfPos(owner),5,g_clock.t+duration,pos,end);
@@ -204,7 +205,7 @@ void SetMurrayCarry(MURRAY* p,int phase) {
             p->actrlCarry[0]=PctrlNewPos(owner,PxfPos(owner),5,7,2,pos);
             // Optional hand goals (+190/+198) also require kind6 frame controllers and
             // the actor's pair bindings. They remain outside this scripted-object slice.
-            if (FIsLoDerivedFrom(owner,0x38)) CarryGuardHeld(owner);  // 0x209E88: job 0xB0 state 1
+            if (FIsLoDerivedFrom(owner,S3CID(0x38))) CarryGuardHeld(owner);  // 0x209E88: job 0xB0 state 1
             p->vecVel=glm::vec3(0.0f);
         }
     }
@@ -270,8 +271,21 @@ void UpdateMurrayCarryHeld(MURRAY* p) {
 // orig: 0x001B5E98: authored target selection; no scene-specific object ids.
 void ChooseMurrayThrowTarget(MURRAY* p) {
     float max=p->g1410*1.3f; LO* best=nullptr;
+    const bool printCandidates=std::getenv("SLY2N_THROWCANDIDATES")!=nullptr;
+    if(printCandidates) {
+        const glm::vec3 pos=PosAloCenter(p->palo);
+        std::fprintf(stderr,"throw-origin: frame %d pos %.3f %.3f %.3f heading %.6f type %d\n",g_iframeHarness,
+            pos.x,pos.y,pos.z,RadStepHeading(p),p->plo13F0?int(p->plo13F0->U32Field(0,0x19C,uint32_t(-1))):-1);
+    }
     if(g_psw) for(LO* point:AploJtList(g_psw,JTL_Point)) {
         if(!(point->U32Field(0,0xE8)&0x10000))continue;
+        if(printCandidates) {
+            const glm::vec3 pos=PosJtLo(point),d=pos-PosAloCenter(p->palo);
+            std::fprintf(stderr,"throw-candidate: frame %d oid %d parent %d active %d flags %X type %d pos %.3f %.3f %.3f distance %.3f dz %.3f angle %.6f\n",
+                g_iframeHarness,point->oid,point->paloParent?point->paloParent->oid:-1,point->iupd>=0,point->U32Field(0,0xE8),
+                int(point->U32Field(0,0xF4,uint32_t(-1))),pos.x,pos.y,pos.z,glm::length(glm::vec2(d)),d.z,
+                RadNormalize(std::atan2(d.y,d.x)-RadStepHeading(p)));
+        }
         // orig0x184380: matching carried-use kind and outside the carried owner's hierarchy (nothing carried, e.g.
         // a script's throw (method 938) after a skipped pick-up: the original reads the PS2's low RAM at 0x19C; natively
         // no point matches)
@@ -299,7 +313,7 @@ void ReleaseMurrayThrow(MURRAY* p) {
     if(!p->plo13F0)return;
     Detach(p); ALO* a=Owner(p);p->plo13F0=nullptr;
     if(!a||!a->fInWorld)return;
-    if(FIsLoDerivedFrom(a,0x38))ThrowGuardHeld(a);  // 0x209FB8: job 0xB0 state 3
+    if(FIsLoDerivedFrom(a,S3CID(0x38)))ThrowGuardHeld(a);  // 0x209FB8: job 0xB0 state 3
     const glm::vec3 pos=PosAloCenter(a),d=p->pos1420-pos;
     const float t=glm::length(glm::vec2(d))/p->g1414;
     if(!(0<t))return;
@@ -314,7 +328,7 @@ void PutDownMurrayCarry(MURRAY* p) {
     if(!p->plo13F0)return;
     Detach(p); ALO* a=Owner(p);p->plo13F0=nullptr;
     if(!a||!a->fInWorld)return;
-    if(FIsLoDerivedFrom(a,0x38))ThrowGuardHeld(a);  // 0x209FB8
+    if(FIsLoDerivedFrom(a,S3CID(0x38)))ThrowGuardHeld(a);  // 0x209FB8
     SetAloVelocityTo(a,VecJtConvert(p->palo,nullptr,glm::vec3(300.0f,0.0f,-1000.0f)));  // 0x1A6FC0(D_002C09D0), vt slot 35
     SetAloAngVelocityTo(a,glm::vec3(0.0f));  // vt slot 36
     SetAloEntryMode(a,3);  // 0x1F7A68
@@ -327,7 +341,7 @@ void CancelMurrayCarry(MURRAY* p) {
     BroadcastTaskEvent(g_psw,0x1B,p->plo13F0);p->plo13F0=nullptr;return;}
     Detach(p);
     if(ALO* a=Owner(p)) {
-        if(FIsLoDerivedFrom(a,0x38))ReleaseGuardHeld(a);
+        if(FIsLoDerivedFrom(a,S3CID(0x38)))ReleaseGuardHeld(a);
         else SetAloEntryMode(a,1);
         if(p->state==5)SetAloVelocityTo(a,VecJtConvert(p->palo,nullptr,glm::vec3(-400,0,600)));
         else if(p->state==2||p->state==4||p->state==7||p->state==8)SetAloVelocityTo(a,glm::vec3(0));

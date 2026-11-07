@@ -1,5 +1,6 @@
 int IspliceBlockCur(struct SW* psw);
 #include <execinfo.h>
+#include "game/sly3.h"
 #include "wr.h"
 #include "clock.h"
 #include "breakable.h"
@@ -25,6 +26,7 @@ int IspliceBlockCur(struct SW* psw);
 #include "splicemap.h"
 
 #include <algorithm>
+#include <cfloat>
 #include <cstring>
 #include <functional>
 #include <stdexcept>
@@ -33,12 +35,12 @@ int IspliceBlockCur(struct SW* psw);
 // vt slot 37 (SetMatrix: ALO 0x1F4010, LOX 0x231598): the object placed by m (m * its own matrix)
 void SetLoMatrix(LO* plo, const glm::mat4& m)
 {
-    if (FIsLoDerivedFrom(plo, 0x30))
+    if (FIsLoDerivedFrom(plo, S3CID(0x30)))
     {
         SetAloMatrix(static_cast<ALO*>(plo), m);
         UpdateAloHierarchyWorlds(static_cast<ALO*>(plo));  // (its world now: the activation measures it at once)
     }
-    else if (FIsLoDerivedFrom(plo, 3)) static_cast<LOX*>(plo)->mat = m * static_cast<LOX*>(plo)->mat;  // (0x231598: 0x11C168(t, m, local))
+    else if (FIsLoDerivedFrom(plo, S3CID(3))) static_cast<LOX*>(plo)->mat = m * static_cast<LOX*>(plo)->mat;  // (0x231598: 0x11C168(t, m, local))
 }
 
 // vt slot 10 (part): the object's placement relative to a record of its new parent (the proxy's channel)
@@ -51,12 +53,12 @@ void SetLoChannel(LO* plo, XF* pxf)
         backtrace_symbols_fd(apv, backtrace(apv, 16), 2);
     }
     if (!pxf) return;
-    if (FIsLoDerivedFrom(plo, 0x30))
+    if (FIsLoDerivedFrom(plo, S3CID(0x30)))
     {
         ALO* palo = static_cast<ALO*>(plo);
         if (!palo->axf.empty() && !palo->axf[0]->pxfRef) palo->axf[0]->pxfRef = pxf;
     }
-    else if (FIsLoDerivedFrom(plo, 3) && !static_cast<LOX*>(plo)->pxf) static_cast<LOX*>(plo)->pxf = pxf;
+    else if (FIsLoDerivedFrom(plo, S3CID(3)) && !static_cast<LOX*>(plo)->pxf) static_cast<LOX*>(plo)->pxf = pxf;
 }
 
 namespace
@@ -123,7 +125,17 @@ void LoadShapeFromBrx(LO* plo, CBinaryInputStream* pbis)
     LoadLoxFromBrx(p, pbis);
     pbis->ReadGeom(&p->geom);
     pbis->ReadBsp(&p->geom, &p->bsp);
-    // TODO(M3): the bounding sphere of the positions (0x11F288/0x11F2B8)
+    // orig: 0x00227BB8, component minima/maxima 0x11F288 / 0x11F2B8.
+    if (!p->geom.apos.empty())
+    {
+        glm::vec3 lo(FLT_MAX), hi(-FLT_MAX);
+        for (const glm::vec3& pos : p->geom.apos) lo = glm::min(lo, pos);
+        for (const glm::vec3& pos : p->geom.apos) hi = glm::max(hi, pos);
+        p->posBound = lo * 0.5f + hi * 0.5f;
+        const glm::vec3 d = p->posBound - lo;
+        p->radiusBoundSquared = (d.x * d.x + d.y * d.y) + d.z * d.z;
+    }
+    else p->radiusBoundSquared = -FLT_MAX;
 }
 
 // orig 0x00149358
@@ -140,6 +152,7 @@ uint32_t LoadKeyRecordFromBrx(CBinaryInputStream* pbis, uint8_t* pbOut = nullptr
     LOADFN(0x228250);
     uint32_t aw[16];
     pbis->Read(64, aw);
+    if (g_pfnNoteKeyRecord) g_pfnNoteKeyRecord(aw, KEYK_Exit, -1, -1);
     if (pbOut) std::memcpy(pbOut, aw, 64);
     return aw[1] != aw[15] ? 1u : 0u;
 }
@@ -295,7 +308,7 @@ void LoadGrouperFromBrx(LO* plo, CBinaryInputStream* pbis)
                     p->aploChild.size(), !p->aploChild.empty() && p->aploChild[0]->paloParent ? p->aploChild[0]->paloParent->oid : -1);
     // flag bit 57 on each; PostLoad (slot 9) of those not derived from 0x1E (TODO(M3): its body)
     for (LO* pc : p->aploChild)
-        if (!FIsLoDerivedFrom(pc, 0x1E)) RemoveLo(g_psw, pc);
+        if (!FIsLoDerivedFrom(pc, S3CID(0x1E))) RemoveLo(g_psw, pc);
 }
 
 // orig 0x00159240 LoadEmitmeshFromBrx
@@ -365,6 +378,34 @@ void LoadExplFromBrx(LO* plo, CBinaryInputStream* pbis)
     LoadEmitColorsFromBrx(0x258F40, p, pbis);
 }
 
+// orig3 0x2BCA18 (EMITTER 0x1B; Sly 2 0x258598) / 0x2BD488 (EXPLO 0x1F; Sly 2 0x259030): the LOX, the emission mesh
+// when the position kind (the EMITB's +0x10: getter 0x2BCAD8, setter option 617; explosions 670) is 3 (0x1775B8, Sly 2's
+// format), the colours (0x2BC928 / 0x2BD398). (the effects code; the old port's loaders3.cpp read all 39 worlds exactly)
+void LoadEmitter3FromBrx(LO* plo, CBinaryInputStream* pbis)
+{
+    LOADFN(0x2BCA18);
+    LOXEMIT* p = static_cast<LOXEMIT*>(plo);
+    LoadLoxFromBrx(p, pbis);
+    if (EmitterKind(p, 617, 0x2BCAD8) == 3)
+    {
+        p->pemitmesh = std::make_unique<LOXEMIT::EMITMESH>();
+        LoadEmitmeshFromBrx(p->pemitmesh.get(), pbis);
+    }
+    LoadEmitColorsFromBrx(0x2BC928, p, pbis);
+}
+void LoadExpl3FromBrx(LO* plo, CBinaryInputStream* pbis)
+{
+    LOADFN(0x2BD488);
+    LOXEMIT* p = static_cast<LOXEMIT*>(plo);
+    LoadLoxFromBrx(p, pbis);
+    if (EmitterKind(p, 670, 1) == 3)
+    {
+        p->pemitmesh = std::make_unique<LOXEMIT::EMITMESH>();
+        LoadEmitmeshFromBrx(p->pemitmesh.get(), pbis);
+    }
+    LoadEmitColorsFromBrx(0x2BD398, p, pbis);
+}
+
 // orig 0x001624A8 (cid 0x84)
 void LoadMissionFromBrx(LO* plo, CBinaryInputStream* pbis)
 {
@@ -429,13 +470,51 @@ void LoadPoFromBrx(LO* plo, CBinaryInputStream* pbis)
 // orig 0x001A64E8: the class's named parts (a table {grf, id, ib} in the executable): records by tag (0x10),
 // parts by id (0x20 / 0x40, TODO(anim)), else an object found by oid (grf 2: kind 4, 1: global, else among the
 // object's own); 0x200 posts it (PostLoad, vt slot 9: it leaves the clonable children). Kept by offset.
+// (Sly 3) the actors' part tables paired with Sly 2's (game/gen/parts.inc, tools/s3maps/gen_parts.py): the copied Sly 2
+// code reads a part at its Sly 2 offset; an entry is stored there, and under FN3_TAG | its Sly 3 offset for code ported
+// from the Sly 3 asm (PloPart3). A table not listed stores at its own (Sly 3) offsets.
+namespace
+{
+struct PARTROW { uint32_t va3; int i; uint32_t ib3; int ib2; };
+constexpr PARTROW c_apartrow[] = {
+#define PARTMAP(va, i, ib3, ib2) {va, i, ib3, ib2},
+#include "game/gen/parts.inc"
+#undef PARTMAP
+};
+// the Sly 2 offset of entry i of a listed table (-1: none; -2: the table is not listed)
+int Ib2OfPart(uint32_t vaTable, int i)
+{
+    bool fListed = false;
+    for (const PARTROW& r : c_apartrow)
+        if (r.va3 == vaTable)
+        {
+            fListed = true;
+            if (r.i == i) return r.ib2;
+        }
+    return fListed ? -1 : -2;
+}
+}  // namespace
+
 void BindLoParts(ALO* palo, int c, uint32_t vaTable)
 {
     for (int i = 0; i < c; ++i)
     {
         const uint32_t grf = g_disc.U32Elf(vaTable + 12u * i);
         const OID id = static_cast<OID>(g_disc.U32Elf(vaTable + 12u * i + 4));
-        const uint32_t ib = g_disc.U32Elf(vaTable + 12u * i + 8);
+        const uint32_t ib3 = g_disc.U32Elf(vaTable + 12u * i + 8);
+        const int ib2 = Ib2OfPart(vaTable, i);
+        // the offsets this entry is stored at
+        uint32_t aib[2] = {ib3, 0};
+        int cib = 1;
+        if (ib2 != -2)
+        {
+            aib[0] = FN3_TAG | ib3;
+            if (ib2 >= 0) aib[cib++] = uint32_t(ib2);
+        }
+        for (int k = 0; k < cib; ++k)
+        {
+        const uint32_t ib = aib[k];
+        const bool fFirst = k == 0;
         // orig: 0x1A6540..0x1A657C: transform tags are searched from the last record backward.
         if (grf & 0x10)
         {
@@ -453,7 +532,7 @@ void BindLoParts(ALO* palo, int c, uint32_t vaTable)
         // 0x20: a geometry entry by its tag (0x1F6030); with 0x200 it is turned off (0x1F2AD0: e.g. the players' body
         // entries, so that only their custom (probe) entry collides); 0x40 (the local entries):
         // TODO(world)
-        if ((grf & 0x20) && (grf & 0x200))
+        if (fFirst && (grf & 0x20) && (grf & 0x200))
         {
             for (SOE& e : palo->asoe)
                 if (e.tag == static_cast<int>(id))
@@ -478,7 +557,7 @@ void BindLoParts(ALO* palo, int c, uint32_t vaTable)
             plo = find(palo);
         }
         if (!plo) continue;
-        if (grf & 0x200) RemoveLo(g_psw, plo);  // vt slot 9 (TODO: the classes' overrides)
+        if (fFirst && (grf & 0x200)) RemoveLo(g_psw, plo);  // vt slot 9 (TODO: the classes' overrides)
         // (the entry stores the object at the actor's offset ib: a later entry for the same offset overwrites it, e.g.
         // Murray's damage reaction 0 +0xE90: 422 then 649, the original keeps 649)
         auto itPart = std::find_if(palo->apart.begin(), palo->apart.end(), [ib](const auto& e) { return e.first == ib; });
@@ -486,6 +565,7 @@ void BindLoParts(ALO* palo, int c, uint32_t vaTable)
         else palo->apart.emplace_back(ib, plo);
         if (static const char* s_sz = std::getenv("SLY2N_PARTPRINT"); s_sz && std::atoi(s_sz) == palo->oid)  // (debug: an object's parts)
             std::printf("part: %d +0x%X -> %d (cid 0x%X) grf 0x%X\n", palo->oid, ib, plo->oid, plo->Cid(), grf);
+        }
     }
 }
 
@@ -497,14 +577,14 @@ void BindLoParts(ALO* palo, int c, uint32_t vaTable)
         base(plo, pbis);                                            \
     }
 // Bentley (0x134770), Sly (0x1885B8), Murray (0x1B4888): the PO, then their parts (0x1A64E8)
-void Load_134770(LO* plo, CBinaryInputStream* pbis) { LOADFN(0x134770); LoadPoFromBrx(plo, pbis); BindLoParts(static_cast<ALO*>(plo), 0x76, 0x2BC390); }
-void Load_1885B8(LO* plo, CBinaryInputStream* pbis) { LOADFN(0x1885B8); LoadPoFromBrx(plo, pbis); BindLoParts(static_cast<ALO*>(plo), 0xAD, 0x2BE990); }
-void Load_1B4888(LO* plo, CBinaryInputStream* pbis) { LOADFN(0x1B4888); LoadPoFromBrx(plo, pbis); BindLoParts(static_cast<ALO*>(plo), 0x89, 0x2C0270); }
+void Load_134770(LO* plo, CBinaryInputStream* pbis) { LOADFN(0x134770); LoadPoFromBrx(plo, pbis); BindLoParts(static_cast<ALO*>(plo), 0x76, S3VA(0x2BC390)); }
+void Load_1885B8(LO* plo, CBinaryInputStream* pbis) { LOADFN(0x1885B8); LoadPoFromBrx(plo, pbis); BindLoParts(static_cast<ALO*>(plo), 0xAD, S3VA(0x2BE990)); }
+void Load_1B4888(LO* plo, CBinaryInputStream* pbis) { LOADFN(0x1B4888); LoadPoFromBrx(plo, pbis); BindLoParts(static_cast<ALO*>(plo), 0x89, S3VA(0x2C0270)); }
 LOADER_WRAP(1553F0, LoadPoFromBrx)
 LOADER_WRAP(13BE58, LoadAloFromBrx)
 LOADER_WRAP(148C08, LoadAloFromBrx)
 LOADER_WRAP(1B0CA8, LoadAloFromBrx)
-void Load_1B1E00(LO* plo, CBinaryInputStream* pbis) { LOADFN(0x1B1E00); LoadAloFromBrx(plo, pbis); BindLoParts(static_cast<ALO*>(plo), 1, 0x2C0258); }
+void Load_1B1E00(LO* plo, CBinaryInputStream* pbis) { LOADFN(0x1B1E00); LoadAloFromBrx(plo, pbis); BindLoParts(static_cast<ALO*>(plo), 1, S3VA(0x2C0258)); }
 // Breakables (cid 0x62, 0x1BABA0): the init's contact bytes, the ALO, the first event current (breakable.cpp)
 void Load_1BABA0(LO* plo, CBinaryInputStream* pbis)
 {
@@ -523,7 +603,7 @@ void Load_1C4EF8(LO* plo, CBinaryInputStream* pbis)
     LOADFN(0x1C4EF8);
     LoadAloFromBrx(plo, pbis);
     PloEnsureChild391(static_cast<ALO*>(plo));
-    BindLoParts(static_cast<ALO*>(plo), 1, 0x2C0D40);
+    BindLoParts(static_cast<ALO*>(plo), 1, S3VA(0x2C0D40));
 }
 void Load_1C76D0(LO* plo, CBinaryInputStream* pbis)
 {
@@ -534,19 +614,40 @@ void Load_1C76D0(LO* plo, CBinaryInputStream* pbis)
 template <class T> LO* PloNewT() { return new T(); }
 }
 
+// (pe.cpp) the LOX's loader and the emitters' mesh loader for the particle-effect loader
+void LoadLoxFromBrxPub(LO* plo, CBinaryInputStream* pbis) { LoadLoxFromBrx(plo, pbis); }
+void LoadEmitmeshFromBrxPub(LOXEMIT::EMITMESH* pem, CBinaryInputStream* pbis) { LoadEmitmeshFromBrx(pem, pbis); }
+
 // orig 0x001F7B98: the object's child of class 0x12 with oid 391 (0x187), made when it has none
+// (orig3 0x241268, sbs.py: Sly 3's class 0x11 with oid 422 (0x1A6); Sly 2's class 0x12 PNT has no Sly 3 twin, so
+// S3CID(0x12) was -1 and PloNew threw: every guard / Carmelita with a sub-object option failed to load (v_interpol's
+// police 36093, v_ext's 19900, Carmelita 28))
 LO* PloEnsureChild391(ALO* palo)
 {
+    constexpr CID cid3Point = 0x11;
+    constexpr OID oidPoint = 0x1A6;
     for (LO* pc : palo->aploChild)
-        if (pc->oid == 0x187) return pc;
-    return PloNew(0x12, g_psw, palo, 0x187, -1);
+        if (pc->oid == oidPoint) return pc;
+    auto* point = static_cast<LOX*>(PloNew(cid3Point, g_psw, palo, oidPoint, -1));
+    // orig: 0x231100 (LOX InitLo) inherits its parent's object transform;
+    // 0x21D278 supplies the point defaults before the caller's field options.
+    point->pxf = PxfObj(palo);
+    point->SetField(0, 0xE8, 0x17E);
+    float radius = 25.0f;
+    uint32_t bits;
+    std::memcpy(&bits, &radius, sizeof(bits));
+    point->SetField(0, 0xEC, bits);
+    point->SetField(0, 0xF4, 0xFFFFFFFFu);
+    return point;
 }
 
 // orig 0x001C9B08: an instance of a shared group (classes derived from PROXY, cid 6): either a new object of
 // the class (the instance's own) or the group's objects cloned for it, with the instance's options and objects.
+// orig3 0x1FA778 (Sly 2 0x1C9B08): Sly 2's reads; the binds' kinds for the proxy itself / the instance's first object
+// are 7 / 8 (Sly 2: 5 / 6)
 void LoadProxyFromBrx(SW* psw, ALO* paloParent, CID cid, OID oid, int iframe, CBinaryInputStream* pbis, LOSINK* psink)
 {
-    LOADFN(0x1C9B08);
+    LOADFN(0x1FA778);
     (void)iframe;
     const int32_t idGroup = pbis->S32Read();
     const int mode = pbis->S8Read();
@@ -557,7 +658,15 @@ void LoadProxyFromBrx(SW* psw, ALO* paloParent, CID cid, OID oid, int iframe, CB
     for (int i = 0; i < static_cast<int>(psw->awe.size()); ++i)
         if (psw->awe[i].x10 == idGroup) { iwe = i; break; }
     // orig 0x1CB770 searches the groups' +0x10 id
-    const bool fNew = mode == 1 || (mode == -1 && iwe >= 0 && psw->awe[iwe].x60 != 0);
+    // (orig3 0x1FA778: any mode > 0 makes the proxy object (Sly 2: mode 1 only; Sly 3's mode 2, e.g. the spawners'
+    // guard proxies of v_ext, keeps the mode at the new proxy's +0xD4); -1 follows the group's streaming flag)
+    const bool fNew = mode > 0 || (mode == -1 && iwe >= 0 && psw->awe[iwe].x60 != 0);
+    if (std::getenv("SLY3_PROXYMODE"))
+    {
+        const glm::vec3 q((pxf ? pxf->matWorld * mat : mat)[3]);
+        std::fprintf(stderr, "proxy %d: group id %d (we %d x60 %d) mode %d -> %s at %.0f %.0f %.0f\n", oid, idGroup, iwe, iwe >= 0 ? int(psw->awe[iwe].x60) : -1, mode,
+                     fNew ? "streaming" : "placed", q.x, q.y, q.z);
+    }
     if (fNew)
     {
         LO* plo = PloNew(cid, psw, paloParent, oid, -1);
@@ -565,6 +674,10 @@ void LoadProxyFromBrx(SW* psw, ALO* paloParent, CID cid, OID oid, int iframe, CB
         plox->pxf = pxf;
         plox->mat = mat;
         plox->grfLoad = grfLoad;
+        // (orig3: +0xD4 = the mode (1 for a -1 of a streaming group): 1 streams (0x1FB528 / 0x1FB580 attach /
+        // cancel at the register), 2 is attached by others (the spawners). Sly 2's +0xE4 (option 1178, the copied
+        // code's field) is the opposite flag: 0 streams)
+        plo->SetField(0, 0xE4, (mode > 0 ? mode : 1) == 1 ? 0u : 1u);
         SetLoMask(psw, plox, grfLoad);  // orig 0x1A6D28
         // a streaming proxy (activate.cpp AttachProxy): its group's instances are attached while it is active;
         // its radius is the group's last object's
@@ -585,7 +698,7 @@ void LoadProxyFromBrx(SW* psw, ALO* paloParent, CID cid, OID oid, int iframe, CB
             const auto pframe = iframeBind != -1 ? PframeFromIsplice(iframeBind, psw) : nullptr;  // orig: 0x001FFA40 (bind +0x08)
             if (std::getenv("SLY2N_BINDPRINT"))
                 std::printf("bind %d kind %d type 0x%X frame %d (block %d)\n", plo->oid, kind, type, iframeBind, IspliceBlockCur(psw));
-            if (kind == 5)
+            if (kind == sly3::PROXYBIND_OWN)   // (Sly 2: 5)
             {
                 plo->pframe = pframe;  // orig: 0x001C9B08 / 0x00256EE0: assign even a null frame before options
                 const int cb = pbis->U16Read();
@@ -632,13 +745,18 @@ void LoadProxyFromBrx(SW* psw, ALO* paloParent, CID cid, OID oid, int iframe, CB
             // in the original, leaving the root identity before checkpoint placement. Their matrix
             // is kept: with no checkpoint for the point (worlds 20 / 26 by `--world`) the reference leaves them at
             // their instances' places ((-15342, 470) / (-25208, -5526)): the transition applies it then.
-            if (!FIsLoDerivedFrom(plo, 0x34)) SetLoMatrix(plo, mat);
+            if (!FIsLoDerivedFrom(plo, S3CID(0x34))) SetLoMatrix(plo, mat);
             else psw->mpmatPlayerInstance[plo] = mat;
             aploFirst.push_back(plo);
             if (LO* ploOwner = PloLoading()) ploOwner->aploOwned.push_back(plo);  // in the loading object's namespace
         }
         ++we.cUsed;
-        if (!aploFirst.empty()) aploFirst[0]->oidInstance = oid;
+        if (!aploFirst.empty())
+        {
+            const OID oidOld = aploFirst[0]->oidInstance;
+            aploFirst[0]->oidInstance = oid;
+            NoteOidInstanceChanged(psw, aploFirst[0], oidOld);
+        }
         if (std::getenv("SLY2N_PROXYLOAD"))
             for (LO* p : aploFirst)
                 std::printf("proxy %d: instance object %d (cid 0x%X) mask 0x%X, the record's 0x%X; mat t (%.1f %.1f %.1f) x (%.3f %.3f %.3f) pxf %p parent %d\n",
@@ -648,7 +766,7 @@ void LoadProxyFromBrx(SW* psw, ALO* paloParent, CID cid, OID oid, int iframe, CB
         // 0xFF; the guards' (0x38..) is the record's, as the reference's: the intro's 8438 0x10, 12712 0xFF, the
         // seven 11539s 0x60 / 0x30 / 0x30 / 0x60 / 0xE0 / 0xC0 / 0xC0)
         for (LO* p : aploFirst)
-            if (!FIsLoDerivedFrom(p, 0x34)) SetLoMask(psw, p, grfLoad);  // orig 0x1A6D28 (TODO: not those with bit 58)  // orig: the instance's namespace node (0x1C99D8)
+            if (!FIsLoDerivedFrom(p, S3CID(0x34))) SetLoMask(psw, p, grfLoad);  // orig 0x1A6D28 (TODO: not those with bit 58)  // orig: the instance's namespace node (0x1C99D8)
     }
     const int c = pbis->U8Read();
     for (int i = 0; i < c; ++i)
@@ -656,7 +774,7 @@ void LoadProxyFromBrx(SW* psw, ALO* paloParent, CID cid, OID oid, int iframe, CB
         const int32_t kind = pbis->S32Read();
         const int type = pbis->S16Read();
         LO* ploFound = nullptr;
-        if (kind == 5 || kind == 6)
+        if (kind == sly3::PROXYBIND_OWN || kind == sly3::PROXYBIND_FIRST)   // (Sly 2: 5 / 6)
         {
             if (!aploFirst.empty()) ploFound = aploFirst[0];
         }
@@ -715,64 +833,69 @@ void LoadProxyFromBrx(SW* psw, ALO* paloParent, CID cid, OID oid, int iframe, CB
     }
 }
 
+// The native loaders, by the Sly 3 class's vtable slot-14 function (orig3). Only loaders checked against the Sly 3
+// asm are here (the old port's census: every object of the 39 worlds reads exactly its record's size with these reads);
+// a class without one is made and its body skipped by its size (an ALO-derived one gets its ALO part read first:
+// brx.cpp). The Sly 2 twin each one was ported from is in its comment.
+void LoadPlayer3FromBrx(LO* plo, CBinaryInputStream* pbis);
+void LoadJt3FromBrx(LO* plo, CBinaryInputStream* pbis);
+void LoadBentley3FromBrx(LO* plo, CBinaryInputStream* pbis);
+void Load1D6C003FromBrx(LO* plo, CBinaryInputStream* pbis);
+void RegisterPeLoaders(std::unordered_map<uint32_t, PFNLOAD>& m);   // pe.cpp
+#include "game/loaders3.h"
+void LoadScreenObj3FromBrx(LO* plo, CBinaryInputStream* pbis);   // sm.cpp
 void RegisterLoaders(std::unordered_map<uint32_t, PFNLOAD>& m)
 {
-    m[0x1A5C28] = LoadLoFromBrx;
-    m[0x231170] = LoadLoxFromBrx;
-    m[0x227380] = LoadVolumeFromBrx;
-    m[0x227BB8] = LoadShapeFromBrx;
-    m[0x149358] = LoadShape149358FromBrx;
-    m[0x2282B0] = LoadShapeKeysFromBrx;
-    m[0x228140] = LoadLoxName228140FromBrx;
-    m[0x228720] = LoadLoxName228720FromBrx;
-    m[0x12EB78] = LoadLox12EB78FromBrx;
-    m[0x1BEA88] = LoadLox1BEA88FromBrx;
-    m[0x2035A8] = LoadLox2035A8FromBrx;
-    m[0x1E5DF8] = LoadPathFromBrx;
-    m[0x1BC088] = LoadPath1BC088FromBrx;
-    m[0x1C03C0] = LoadMeshZoneFromBrx;
-    m[0x185150] = LoadPntsFromBrx;
-    m[0x220FD0] = LoadZoneFromBrx;
-    m[0x15C1E8] = LoadGrouperFromBrx;
-    m[0x258598] = LoadEmitterFromBrx;
-    m[0x259030] = LoadExplFromBrx;
-    m[0x1624A8] = LoadMissionFromBrx;
-    m[0x1635F8] = LoadTaskFromBrx;
-    m[0x1731B8] = LoadLo1731B8FromBrx;
-    m[0x1DFB10] = LoadLo1DFB10FromBrx;
-    m[0x14A008] = LoadLo14A008FromBrx;
-    m[0x153B08] = LoadLo153B08FromBrx;
-    m[0x1F31E0] = LoadAloFromBrx;
-    m[0x1C3DC8] = LoadSoFromBrx;
-    m[0x2039C0] = LoadPoFromBrx;
-    m[0x134770] = Load_134770;
-    m[0x1885B8] = Load_1885B8;
-    m[0x1B4888] = Load_1B4888;
-    m[0x1553F0] = Load_1553F0;
-    m[0x13BE58] = Load_13BE58;
-    m[0x148C08] = Load_148C08;
-    m[0x1B0CA8] = Load_1B0CA8;
-    m[0x1B1E00] = Load_1B1E00;
-    m[0x1BABA0] = Load_1BABA0;
-    m[0x1DE478] = LoadLaserFromBrx;
-    m[0x223FE0] = Load_223FE0;
-    m[0x1C4EF8] = Load_1C4EF8;
-    m[0x1C76D0] = Load_1C76D0;
-    RegisterAsegLoaders(m);
+    m[0x1C7D98] = LoadLoFromBrx;              // LO (Sly 2 0x1A5C28)
+    m[0x28FDE0] = LoadLoxFromBrx;             // LOX (0x231170)
+    m[0x1C5300] = LoadLoxFromBrx;             // 0x04: LoadLoxFromBrx, ComputeLight
+    m[0x131050] = LoadLoxFromBrx;             // 0x29 (0x12EB78)
+    m[0x27E918] = LoadVolumeFromBrx;          // VOLUME 0x07 (0x227380)
+    m[0x27F158] = LoadShapeFromBrx;           // SHAPE 0x13 (0x227BB8)
+    m[0x15CCB0] = LoadShapeFromBrx;           // 0x15, 0x17
+    m[0x27FB30] = LoadShapeKeysFromBrx;       // 0x18 (0x2282B0)
+    m[0x27FA00] = LoadLoxName228140FromBrx;   // 0x27 (0x228140): the LOX + a skipped string
+    m[0x27FFE0] = LoadLoxName228720FromBrx;   // 0x28 (0x228720)
+    m[0x22D780] = LoadPathFromBrx;            // PATH 0x09..0x0C (0x1E5DF8)
+    m[0x1E6238] = LoadPath1BC088FromBrx;      // 0x0D (0x1BC088)
+    m[0x1ECC58] = LoadMeshZoneFromBrx;        // MESHZONE 0x10 (0x1C03C0)
+    m[0x23C0B8] = LoadAloFromBrx;             // ALO (0x1F31E0; Sly 3's collision entries)
+    m[0x1F3BC8] = LoadSoFromBrx;              // SO 0x31, 0x50, 0x56 (0x1C3DC8)
+    m[0x24D920] = LoadPoFromBrx;              // PO 0x32, guards 0x3A / 0x3B / 0x43 (0x2039C0)
+    m[0x152448] = LoadPlayer3FromBrx;         // the players' common part
+    m[0x1AA250] = LoadJt3FromBrx;             // Sly 0x34 (0x1885B8)
+    m[0x13D400] = LoadBentley3FromBrx;        // Bentley 0x36
+    for (uint32_t a : {0x14D3F0u, 0x1DC6F8u, 0x276E80u, 0x223918u, 0x1E4CB8u, 0x281888u, 0x1D5AB8u, 0x1F6668u, 0x1F8D58u})
+        m[a] = LoadAloFromBrx;                // ALO loaders whose own setup does not read (TODO(sly3): their setup)
+    m[0x1D6C00] = Load1D6C003FromBrx;         // 0x5A..0x5C (0x1B1E00)
+    m[0x198810] = LoadLo1731B8FromBrx;        // SPAWNER 0x8D (0x1731B8: its source records grew 0x1C -> 0x24; reads the LO only)
+    // (the effects code) the world effects: ZONE 0x0E (0x220FD0), GROUPER 0x1D (0x15C1E8), EMITTER 0x1B, EXPLO 0x1F, PE 0x2D (pe.cpp)
+    m[0x273CF8] = LoadZoneFromBrx;
+    m[0x179EA8] = LoadGrouperFromBrx;
+    m[0x2BCA18] = LoadEmitter3FromBrx;
+    m[0x2BD488] = LoadExpl3FromBrx;
+    RegisterPeLoaders(m);
+    m[0x185EB8] = LoadMissionFromBrx;         // MISSION 0xA8 (0x1624A8: the same reads)
+    m[0x187F08] = LoadTaskFromBrx;            // TASK 0xA9 (0x1635F8: the same reads)
+    RegisterScriptLoaders3(m);                // SCPT, SM, ASEG, 0x8F, 0x96, 0x97, 0xAA (game/loaders3.cpp; after LO's)
+    m[0x260810] = LoadScreenObj3FromBrx;      // the screen objects 0x9E..0xA7 (0x212298; screenobj.cpp)
 }
 
 // The native struct of each class: that of its nearest ancestor with one.
 LO* PloNewCmdlist();  // ai.cpp (the command lists, cid 0x71)
+PFNNEW PfnNewPe();    // pe.cpp (the effects code: class 0x2D)
 LO* PloNewChasegraph();  // aichase.cpp (Carmelita's chase graphs, cid 0x7B)
 PFNNEW PfnNewNativeForCid(CID cid)
 {
     static const std::unordered_map<int, PFNNEW> s_map = {
-        {0x02, PloNewT<LO>},       {0x03, PloNewT<LOX>},      {0x05, PloNewT<LOXGEOM>}, {0x0F, PloNewT<LOXGEOM>},
-        {0x0A, PloNewT<LOXPATH>},  {0x16, PloNewT<LOXSHAPE>}, {0x11, PloNewT<LOXMESH>}, {0x08, PloNewT<LOXPTS>},
-        {0x1D, PloNewT<LOXEMIT>},  {0x20, PloNewT<LOXEMIT>},  {0x1F, PloNewT<LOXCHILD>}, {0x30, PloNewT<ALO>},
-        {0x85, PloNewT<TASK>},     {0x7A, PloNewT<LOLIST>},   {0x84, PloNewT<JOB>},     {0x2A, PloNewT<CHKPNT>},
-        {0x71, PloNewCmdlist},     {0x69, PloNewT<TRAIL>},    {0x7B, PloNewChasegraph}, {0x73, PloNewT<WR>},
+        {S3CID(0x02), PloNewT<LO>},       {S3CID(0x03), PloNewT<LOX>},      {S3CID(0x05), PloNewT<LOXGEOM>}, {S3CID(0x0F), PloNewT<LOXGEOM>},
+        {S3CID(0x0A), PloNewT<LOXPATH>},  {S3CID(0x16), PloNewT<LOXSHAPE>}, {S3CID(0x11), PloNewT<LOXMESH>}, {S3CID(0x08), PloNewT<LOXPTS>},
+        {S3CID(0x1D), PloNewT<LOXEMIT>},  {S3CID(0x20), PloNewT<LOXEMIT>},  {S3CID(0x1F), PloNewT<LOXCHILD>}, {S3CID(0x30), PloNewT<ALO>},
+        {S3CID(0x85), PloNewT<TASK>},     {S3CID(0x7A), PloNewT<LOLIST>},   {S3CID(0x84), PloNewT<JOB>},     {S3CID(0x2A), PloNewT<CHKPNT>},
+        {0x2D, PfnNewPe()},               /* (the effects code: Sly 3's PE, pe.cpp) */
+        {S3CID(0x71), PloNewCmdlist},     {S3CID(0x69), PloNewT<TRAIL>},    {S3CID(0x7B), PloNewChasegraph}, {S3CID(0x73), PloNewT<WR>},
     };
+    if (PFNNEW pfn = PfnNewScript3(cid)) return pfn;   // (game/loaders3.cpp)
     for (CID c = cid; c >= 0; c = g_acls[c].cidBase)
     {
         auto it = s_map.find(c);
@@ -781,6 +904,15 @@ PFNNEW PfnNewNativeForCid(CID cid)
     }
     return nullptr;
 }
+
+// orig3 0x152448 (the players' common part): the PO, BindLoParts(1, 0x342DC0)
+void LoadPlayer3FromBrx(LO* plo, CBinaryInputStream* pbis) { LOADFN(0x152448); LoadPoFromBrx(plo, pbis); BindLoParts(static_cast<ALO*>(plo), 1, 0x342DC0); }
+// orig3 0x1AA250 (Sly; Sly 2 0x1885B8): 0x152448, then BindLoParts(0x6A, 0x345140)
+void LoadJt3FromBrx(LO* plo, CBinaryInputStream* pbis) { LOADFN(0x1AA250); LoadPlayer3FromBrx(plo, pbis); BindLoParts(static_cast<ALO*>(plo), 0x6A, 0x345140); }
+// orig3 0x13D400 (Bentley): 0x152448, BindLoParts(0x54, 0x342890)
+void LoadBentley3FromBrx(LO* plo, CBinaryInputStream* pbis) { LOADFN(0x13D400); LoadPlayer3FromBrx(plo, pbis); BindLoParts(static_cast<ALO*>(plo), 0x54, 0x342890); }
+// orig3 0x1D6C00 (Sly 2 0x1B1E00): the ALO, BindLoParts(1, 0x345FB0)
+void Load1D6C003FromBrx(LO* plo, CBinaryInputStream* pbis) { LOADFN(0x1D6C00); LoadAloFromBrx(plo, pbis); BindLoParts(static_cast<ALO*>(plo), 1, 0x345FB0); }
 
 // orig 0x001A64E8 for the classes' post-loads (the actors' 0x1400B8 / 0x188608: sly.cpp)
 void BindLoPartsTable(ALO* palo, int c, uint32_t vaTable) { BindLoParts(palo, c, vaTable); }

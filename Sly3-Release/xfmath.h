@@ -7,12 +7,30 @@
 
 #include <glm/glm.hpp>
 
+#include <cmath>
 #include <cstdint>
 
 // The EE FPU's rounding (toward zero) for the few sums where it decides game logic (an ASEGA's time against an
 // event exactly at a frame boundary): the exact result rounded toward zero.
 float MulRz(float a, float b);
 float AddRz(float a, float b);
+
+// The EE FPU's division (div.s): a zero divisor gives +-FLT_MAX (the signs' exclusive or; 0 / 0 too) instead of an
+// IEEE infinity or NaN, and a result never passes FLT_MAX. For the divisions whose divisor can be zero in game data
+// (a speed scale of 0, a braking rate of 0), so that they come out as on the PS2 instead of poisoning a record with NaN.
+inline float DivEe(float a, float b)
+{
+    const bool fNeg = std::signbit(a) != std::signbit(b);
+    if (b == 0.0f || std::isinf(a)) return fNeg ? -3.40282347e38f : 3.40282347e38f;
+    const float q = a / b;
+    if (std::isnan(q)) return 0.0f;   // (inf / inf: no infinities on the EE; not reached)
+    return std::isinf(q) ? (fNeg ? -3.40282347e38f : 3.40282347e38f) : q;
+}
+
+// The EE FPU's mul.s / add.s: a result past FLT_MAX saturates to +-FLT_MAX (no infinities)
+inline float SatEe(float g) { return std::isinf(g) ? (g < 0.0f ? -3.40282347e38f : 3.40282347e38f) : g; }
+inline float MulEe(float a, float b) { return SatEe(a * b); }
+inline float AddEe(float a, float b) { return SatEe(a + b); }
 
 // orig: 0x0011D608 CalculateSinCos (the game's polynomial sine, cosine from it)
 void CalculateSinCos(float rad, float* pgSin, float* pgCos);

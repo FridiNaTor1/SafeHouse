@@ -10,6 +10,7 @@
 // (0x520, 0x150938..0x150EF0), and the actuated under-table view (0x4C0, 0x151240..0x151340).
 
 #include "cm.h"
+#include "game/sly3.h"
 #include "sound.h"
 
 #include <array>
@@ -24,7 +25,7 @@ struct CPLCY
     float sNearClipSave = 100.0f;  // +0x8
     // +0xC the vtable
     virtual ~CPLCY() = default;
-    virtual uint32_t VtOrig() const { return 0x2CD570; }
+    virtual uint32_t VtOrig() const { return S3VA(0x2CD570); }
     // slot 1 (0x14FCC0: nothing)
     virtual void Init() {}
     // slot 2 0x14FCC8 (saves the camera's field of view target and near clip)
@@ -46,7 +47,7 @@ bool FActiveCplcy(const CPLCY* pcplcy);
 // The default policy (CM +0x3A0, vtable 0x2CD528): does nothing (the camera stays where it is).
 struct CPDEFAULT : CPLCY
 {
-    uint32_t VtOrig() const override { return 0x2CD528; }
+    uint32_t VtOrig() const override { return S3VA(0x2CD528); }
 };
 
 // A zone's camera entry (0x90 bytes; the zone's +0x114 array, chosen by the focus's class: +0x0).
@@ -178,6 +179,13 @@ struct CPFOLLOW : CPLCY
     void Update(CPDEFI* pcpdefi, const CMJOY* pjoy) override;  // 0x221DD8
 };
 
+// PC addition (debug menu only: a guest character's camera, pccharacter.cpp): the follow camera's distance times
+// g_uPcCmDist while its focus is g_ploPcCmDist (null: off, normal play)
+extern LO* g_ploPcCmDist;
+extern float g_uPcCmDist;
+// (and its aim mode: the follow camera's pan held, only the player turns it)
+extern bool g_fPcCmHoldPan;
+
 // The camera objects' view (CM +0x4A8, vtable 0x2CAB90): the camera at a camera object (cid 0x2C), looking at its
 // target or along its matrix, with its field of view.
 struct CMOBJ  // what the policy reads of the camera object
@@ -192,7 +200,7 @@ struct CMOBJ  // what the policy reads of the camera object
 struct CPLOOKAT : CPLCY
 {
     CMOBJ* pcmobj = nullptr;   // +0x10
-    uint32_t VtOrig() const override { return 0x2CAB90; }
+    uint32_t VtOrig() const override { return S3VA(0x2CAB90); }
     void Activate(LO* psoFocus, void* pv) override;       // 0x12E798
     void Deactivate(LO* psoFocus, void* pv) override;     // 0x12E7F0
     void Update(CPDEFI* pcpdefi, const CMJOY* pjoy) override;  // 0x12E858
@@ -218,7 +226,7 @@ struct CPFREE : CPLCY
     float sZoom = 7.0f;               // +0xB4
     float radFOVNear = 0, radFOVFar = 0;  // +0xB8 / +0xBC
     CSndRef sndZoom, sndExtra;        // +0xC0 / +0xC4 (sounds 0x26 / 0x25)
-    uint32_t VtOrig() const override { return 0x2CD498; }
+    uint32_t VtOrig() const override { return S3VA(0x2CD498); }
     void Activate(LO* psoFocus, void* pv) override;       // 0x150938
     void Deactivate(LO* psoFocus, void* pv) override;     // 0x151130
     void Update(CPDEFI* pcpdefi, const CMJOY* pjoy) override;  // 0x150A28
@@ -245,7 +253,7 @@ struct CPRECON : CPLCY
     float radPanStart = 0, radTiltStart = 0;  // +0x4C / +0x50
     int cStart = 0;                   // +0x54
     CSndRef sndZoom, sndExtra;        // +0x34 / +0x38 (sounds 0x26 / 0x25)
-    uint32_t VtOrig() const override { return 0x2CD4E0; }
+    uint32_t VtOrig() const override { return S3VA(0x2CD4E0); }
     void Activate(LO* psoFocus, void* pv) override;       // 0x14FF38
     void Deactivate(LO* psoFocus, void* pv) override;     // 0x150610
     void Update(CPDEFI* pcpdefi, const CMJOY* pjoy) override;  // 0x150160
@@ -278,7 +286,7 @@ struct CMTRANS  // the policy's argument (the original's +0x0 / +0x4 states, +0x
 struct CPTIMED : CPLCY
 {
     CMTRANS* ptrans = nullptr;  // +0x10
-    uint32_t VtOrig() const override { return 0x2CD408; }
+    uint32_t VtOrig() const override { return S3VA(0x2CD408); }
     void Activate(LO* psoFocus, void* pv) override;       // 0x151648
     void Deactivate(LO* psoFocus, void* pv) override;     // 0x151698
     void Update(CPDEFI* pcpdefi, const CMJOY* pjoy) override;  // 0x151700
@@ -320,7 +328,8 @@ struct CPACTUATED : CPLCY
     float tIdle = -1.0f;          // +0x18
     glm::vec3 eulIdle{0.0f};      // +0x20
     glm::vec3 wIdle{0.0f};        // +0x30
-    uint32_t VtOrig() const override { return 0x2CD450; }
+    glm::vec3 eulMouse{0.0f};     // (PC, N14) the mouse's look under the table, within the stick's reach
+    uint32_t VtOrig() const override { return S3VA(0x2CD450); }
     void Activate(LO* psoFocus, void* pv) override;       // 0x151240
     void Deactivate(LO* psoFocus, void* pv) override;     // 0x1512E0
     void Update(CPDEFI* pcpdefi, const CMJOY* pjoy) override;  // 0x151340

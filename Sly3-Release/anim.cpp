@@ -1,8 +1,9 @@
 // The animation runtime's world-level passes (see anim.h).
 
-#include "sly3/ids3.h"
 #include "wr.h"
+#include "game/sly3.h"
 #include "anim.h"
+#include "so.h"
 #include "objmethod.h"
 #include <cstdlib>
 #include <algorithm>
@@ -45,8 +46,8 @@ void InitAseg(ASEG* paseg)
     paseg->gSuckMax = FloatField(psrc, 0x94, 1.0f);
     for (const OPT& opt : psrc->aopt)
     {
-        if (opt.eopid != 113 || opt.aval.size() < 3) continue;  // (sly3 113 = sly2 107)
-        auto g = [](const OPTVAL& v) { return v.tagk == 0x15 || v.k == 0x15 ? static_cast<float>(v.n) : v.ag[0]; };
+        if (opt.eopid != S3EOPID(107) || opt.aval.size() < 3) continue;
+        auto g = [](const OPTVAL& v) { return v.tagk == S3TAG(0x15) || v.k == 0x15 ? static_cast<float>(v.n) : v.ag[0]; };
         paseg->fApplyParams = true;
         paseg->tApply = g(opt.aval[0]);
         paseg->svtApply = g(opt.aval[1]);
@@ -60,39 +61,65 @@ void InitWorldAnimationRecords(SW* psw)
     ResetAsegas();
     ResetBoneBindings();
     g_apsma.clear();
+    std::vector<LO*> aplo;
+    aplo.reserve(psw->aploAll.size());
+    for (const auto& plo : psw->aploAll) aplo.push_back(plo.get());
+    InitAnimationRecordsOf(aplo);
+}
+
+// (PC: the passes of InitWorldAnimationRecords over a list of objects: the world's, or copies made while it runs,
+// pcloader.h)
+void InitAnimationRecordsOf(const std::vector<LO*>& aploList)
+{
     // the records (0x22D7A0's run-time parts) and the bone bindings (PostLoad 0x1F36A8), parents first
-    for (const auto& plo : psw->aploAll)
-        if (FCidDerivedFrom(plo->Cid(), Icid(CID3::ALO))) InitAloXfs(static_cast<ALO*>(plo.get()));
+    for (LO* plo : aploList)
+        if (FCidDerivedFrom(plo->Cid(), S3CID(0x30))) InitAloXfs(static_cast<ALO*>(plo));
     // the loader's velocity options (EOPIDs 29 / 30: vt slots 35 / 36; 75 / 76: 0x1F4898 / 0x1F4930, e.g. world 41's
     // spinning rings 20684 ..) set the records' modes after 0x22D7A0 read
     // them; natively the records' init runs here, after the options, so they are applied again (and so for every
     // copy, whose options are its template's), e.g. the rooftop vents' turbines 139218
-    for (const auto& plo : psw->aploAll)
-        if (FCidDerivedFrom(plo->Cid(), Icid(CID3::ALO)))
+    for (LO* plo : aploList)
+        if (FCidDerivedFrom(plo->Cid(), S3CID(0x30)))
             for (const OPT& opt : plo->aopt)
-            {
-                // Sly 3's EOPIDs 30 / 31 / 77 / 78 are Sly 2's 29 / 30 / 75 / 76 (eopid3map.inc), whose setters these are
-                const int eopid2 = opt.eopid == 30 ? 29 : opt.eopid == 31 ? 30 : opt.eopid == 77 ? 75 : opt.eopid == 78 ? 76 : -1;
-                if (eopid2 >= 0 && !opt.aval.empty())
-                    if (PFNOBJSETTER pfn = PfnObjectSetter(eopid2)) pfn(plo.get(), RefFromOptionValue(opt.aval[0]));
-            }
-    for (const auto& plo : psw->aploAll)
-        if (FCidDerivedFrom(plo->Cid(), Icid(CID3::ALO)))
+                // Vehicle/pickup constraints and gravity also select velocity modes
+                // (0x1F5720/0x1F57C0/0x1F5880), after the original record initialization.
+                if ((opt.eopid == S3EOPID(29) || opt.eopid == S3EOPID(30) || opt.eopid == S3EOPID(75) || opt.eopid == S3EOPID(76) ||
+                    ((plo->Cid() == S3CID(0x4D) || plo->Cid() == S3CID(0x6C)) && opt.eopid >= 33 && opt.eopid <= 35)) && !opt.aval.empty())
+                {
+                    // (29 / 30 / 75 / 76 as the loader applies them: no conversion through the not yet placed records, so.h)
+                    if (opt.eopid == S3EOPID(29)) SetAloVelocityToLoad(static_cast<ALO*>(plo), RefFromOptionValue(opt.aval[0]).GetVector(), true);
+                    else if (opt.eopid == S3EOPID(30)) SetAloAngVelocityToLoad(static_cast<ALO*>(plo), RefFromOptionValue(opt.aval[0]).GetVector(), true);
+                    else if (opt.eopid == S3EOPID(75)) SetAloVelocity(static_cast<ALO*>(plo), RefFromOptionValue(opt.aval[0]).GetVector(), true);
+                    else if (opt.eopid == S3EOPID(76)) SetAloAngVelocity(static_cast<ALO*>(plo), RefFromOptionValue(opt.aval[0]).GetVector(), true);
+                    else if (PFNOBJSETTER pfn = PfnObjectSetter(opt.eopid)) pfn(plo, RefFromOptionValue(opt.aval[0]));
+                    // (debug: SLY2N_VELOPTPRINT: each option, the vector and the record velocity it gave)
+                    if (std::getenv("SLY2N_VELOPTPRINT"))
+                    {
+                        const glm::vec3 v = RefFromOptionValue(opt.aval[0]).GetVector();
+                        const glm::vec3 c = PosAloCenter(static_cast<ALO*>(plo));
+                        const XF* pxf = (opt.eopid == S3EOPID(29) || opt.eopid == S3EOPID(75)) ? PxfPos(static_cast<ALO*>(plo)) : PxfRot(static_cast<ALO*>(plo));
+                        const glm::vec4 r = pxf ? pxf->vel : glm::vec4(0.0f);
+                        std::printf("velopt %d cid 0x%X eopid %d v %.3f %.3f %.3f -> %.3f %.3f %.3f parent %d pos %.0f %.0f %.0f\n", plo->oid,
+                                    plo->Cid(), opt.eopid, v.x, v.y, v.z, r.x, r.y, r.z, plo->paloParent ? plo->paloParent->oid : -1, c.x, c.y, c.z);
+                    }
+                }
+    for (LO* plo : aploList)
+        if (FCidDerivedFrom(plo->Cid(), S3CID(0x30)))
         {
-            BindAloBones(static_cast<ALO*>(plo.get()));
-            BindAloWarps(static_cast<ALO*>(plo.get()));  // (0x167B68's end: wr.cpp)
+            BindAloBones(static_cast<ALO*>(plo));
+            BindAloWarps(static_cast<ALO*>(plo));  // (0x167B68's end: wr.cpp)
         }
-    for (const auto& plo : psw->aploAll)
+    for (LO* plo : aploList)
     {
-        if (FCidDerivedFrom(plo->Cid(), Icid(CID3::ASEG))) InitAseg(static_cast<ASEG*>(plo.get()));
-        else if (plo->Cid() == Icid(CID3::SM)) InitSm(static_cast<SM*>(plo.get()));
+        if (FCidDerivedFrom(plo->Cid(), S3CID(0x6D))) InitAseg(static_cast<ASEG*>(plo));
+        else if (plo->Cid() == S3CID(0x6F)) InitSm(static_cast<SM*>(plo));
     }
 }
 
 void PostLoadAnimLo(LO* plo)
 {
-    if (FCidDerivedFrom(plo->Cid(), Icid(CID3::ASEG))) PostAsegLoad(static_cast<ASEG*>(plo));
-    else if (plo->Cid() == Icid(CID3::SM)) PostSmLoad(static_cast<SM*>(plo));
+    if (FCidDerivedFrom(plo->Cid(), S3CID(0x6D))) PostAsegLoad(static_cast<ASEG*>(plo));
+    else if (plo->Cid() == S3CID(0x6F)) PostSmLoad(static_cast<SM*>(plo));
 }
 
 void InitWorldAnimation(SW* psw)
@@ -106,7 +133,7 @@ void UpdateWorldXfs(SW* psw)
 {
     for (const auto& plo : psw->aploAll)
     {
-        if (!FCidDerivedFrom(plo->Cid(), Icid(CID3::ALO))) continue;
+        if (!FCidDerivedFrom(plo->Cid(), S3CID(0x30))) continue;
         ALO* palo = static_cast<ALO*>(plo.get());
         if (!palo->axf.empty()) UpdateAloXfs(palo, g_clock.t, g_clock.dt);
     }
@@ -115,7 +142,7 @@ void UpdateWorldXfs(SW* psw)
 void UpdateWorldXfWorlds(SW* psw)
 {
     for (const auto& plo : psw->aploAll)
-        if (FCidDerivedFrom(plo->Cid(), Icid(CID3::ALO))) UpdateAloXfWorlds(static_cast<ALO*>(plo.get()));
+        if (FCidDerivedFrom(plo->Cid(), S3CID(0x30))) UpdateAloXfWorlds(static_cast<ALO*>(plo.get()));
 }
 
 void StepWorldAnimation(SW* psw, float dt)
@@ -145,7 +172,7 @@ void MarkAloXfs(ALO* palo, uint32_t grf)
 {
     SetGrfUpdOfLo(palo, GrfUpdOfLo(palo) | grf);
     for (LO* pc : palo->aploChild)
-        if (FCidDerivedFrom(pc->Cid(), Icid(CID3::ALO))) MarkAloXfs(static_cast<ALO*>(pc), grf);
+        if (FCidDerivedFrom(pc->Cid(), S3CID(0x30))) MarkAloXfs(static_cast<ALO*>(pc), grf);
 }
 
 namespace
@@ -157,7 +184,7 @@ void UpdateMovingXfs(SW* psw, uint32_t grfMask, uint32_t grfWant)
     {
         const UPDENT& e = psw->aupd[psw->iupdCur];
         if (!e.plo || (e.grf & grfMask) != grfWant) continue;
-        if (FCidDerivedFrom(e.plo->Cid(), Icid(CID3::ALO))) UpdateAloXfs(static_cast<ALO*>(e.plo), g_clock.t, g_clock.dt);
+        if (FCidDerivedFrom(e.plo->Cid(), S3CID(0x30))) UpdateAloXfs(static_cast<ALO*>(e.plo), g_clock.t, g_clock.dt);
     }
     psw->iupdCur = -1;
 }

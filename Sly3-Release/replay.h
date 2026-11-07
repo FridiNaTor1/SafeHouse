@@ -10,7 +10,10 @@
 // episode menu on the replayed episode with that progress.
 //
 // With the list available, CIRCLE goes back from the episode screen (the original's TRIANGLE back still works in
-// an episode that has no job to replay). SLY2N_NOREPLAYJOBS turns the feature off (the original's menu exactly).
+// an episode that has no job to replay). A multi-part operation (the jobs the game chains directly: Operation: Thunder
+// Beak -> Printing Press Duel, Hippo Drop's three parts, Operation: Wet Tiger -> Showdown with Rajan, Operation: Canada
+// Games -> Brains over Brawn; replay.cpp s_aop) is listed before its parts once all are open and replays them in
+// sequence; its parts stay listed under it, indented and numbered. SLY2N_NOREPLAYJOBS turns the feature off (the original's menu exactly).
 
 #include "lo.h"
 
@@ -31,6 +34,11 @@ void OnReplayWorldLoaded(int iwrec, int grfReq);
 // StartReplay)
 int NUpdateReplayMenu(int iep);
 bool FReplayChosen();
+// (PC menus) the episode screen offers Replay Jobs (a job of episode iep opened); the list is up; the screen's back
+// button while it is offered (Sly 2's bit order: Circle, Japan's Cross)
+bool FReplayOffered(int iep);
+bool FReplayListShown();
+uint32_t BtnReplayBackButton();
 void StartReplay(SW* psw);              // frontend.cpp mode 10: the chosen job's world requested
 void CloseReplayMenu();
 int IepReplayReturn();                  // the episode a replay just ended in (StartEpMenu shows it), else -1
@@ -38,4 +46,6 @@ int IepReplayReturn();                  // the episode a replay just ended in (S
 // the replay
 bool FReplayActive();
 void MergeReplaySave(GAMESAVE& gs);     // frontend.cpp FWriteSaveSlot: what a save writes during a replay
-bool FReplayJobEnd(SW* psw, JOB* pjob); // task.cpp JobCompleteNext / JobEnd: true: the replay returns to the menu
+// task.cpp JobCompleteNext (fComplete) / JobEnd: true: the replay returns to the menu (an operation's part complete:
+// false, the game's chain goes on to its next part)
+bool FReplayJobEnd(SW* psw, JOB* pjob, bool fComplete);

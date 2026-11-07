@@ -34,4 +34,6 @@ void InitJobHelp(SW* psw);
 void SetJobHelpPage(int s);          // orig 0x001DD300: -1 closed
 void UpdateJobHelp(SW* psw);         // orig 0x001DCD30
 bool FJobHelpShown();
+// (PC menus) splayer.cpp's text elements as drawn (HUD units): Job Help's rows (script ids 0x51E..) for the mouse
+void NoteJobHelpText(int kind, int id, float x, float y, float size);
 std::string StrJobHelpScript(int id);   // 0x51B..0x52B

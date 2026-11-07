@@ -3,6 +3,8 @@
 // for 0x1BC688 / 0x1BC9F0 / 0x1BD400 / 0x1BD560 / 0x1BCAC0 / 0x1BCCE0 / 0x1BCF18 (round4_paris_high*.cpp).
 
 #include "nav.h"
+#include "game/sly3.h"
+#include "worldglobals.h"
 #include "objmethod.h"
 #include "guard.h"
 #include "so.h"
@@ -55,6 +57,7 @@ struct NAVWORLD
     std::vector<LO*> aploMerged, aploFree;
 };
 NAVWORLD s_nav;
+WORLD_TABLE(s_nav);   // (PC: moved aside while a kept world loads, worldglobals.h)
 int s_nGenNav = 1;
 
 void EnsureWorld()
@@ -125,7 +128,7 @@ void BuildLeaves()
         for (size_t i = 0; i < cm.an.size(); ++i)
         {
             LOXMESH* pmesh = nullptr;
-            for (LO* plo : g_psw->mpcidaplo[0x11])
+            for (LO* plo : g_psw->mpcidaplo[S3CID(0x11)])
                 if (plo->oid == cm.an[i]) { pmesh = static_cast<LOXMESH*>(plo); break; }
             NAVREGION* preg = pmesh ? PregionOfMesh(pmesh) : nullptr;
             if (preg) preg->ileaf = static_cast<int>(i);
@@ -161,6 +164,9 @@ void BuildPoly(NAVPOLY* pp)
     }
     if (pp->kind == 4)
     {
+        // 0x1BC570: the path object's own points and parameters reversed (its curve recalculated, 0x1E6180), so the
+        // way around (the follower on pcrv) and the sides tested on the outline (0x1BCAC0) run the same direction
+        ReverseLoxPath(pp->plo);
         std::reverse(pp->aposWorld.begin(), pp->aposWorld.end());
         pp->kind = 3;
     }
@@ -174,7 +180,7 @@ void BuildPoly(NAVPOLY* pp)
         if (l > 0.0f) n /= l;
         pp->aplane[i - 1] = glm::vec4(n, glm::dot(n, a));
     }
-    pp->pcrv = PcrvFromLo(pp->plo);  // TODO(ai): the reversed curve of a clockwise polygon (0x1BC570)
+    pp->pcrv = PcrvFromLo(pp->plo);
 }
 
 // orig: 0x002338C0 qsort (the original's library sort, src/lib/qsort.c: the BSD one; its order of equal elements
@@ -292,7 +298,7 @@ LOXPATH* PpathNewMerged()
     if (s_nav.aploFree.empty() && g_psw)
         for (int i = 0; i < 16; ++i)
         {
-            auto* q = static_cast<LOXPATH*>(PloNew(0x0E, g_psw, nullptr, 0x2CD, -1));
+            auto* q = static_cast<LOXPATH*>(PloNew(S3CID(0x0E), g_psw, nullptr, 0x2CD, -1));
             q->fE0 = 0;
             q->nE4 = 1;
             q->mat = glm::mat4(1.0f);
@@ -519,7 +525,7 @@ struct INITREGIONGETTER
 void InitSwNav(SW* psw)
 {
     if (!psw->acmesh.empty()) return;
-    auto* pmesh = static_cast<LOXMESH*>(PloNew(0x11, psw, nullptr, 0x2CA, -1));
+    auto* pmesh = static_cast<LOXMESH*>(PloNew(S3CID(0x11), psw, nullptr, 0x2CA, -1));
     pmesh->avtx = {
         {{-100000.0f, -100000.0f, 0.0f}, {1, 2, 3}},
         {{100000.0f, -100000.0f, 0.0f}, {0, 2}},
@@ -1208,11 +1214,17 @@ int NPolyWay(NAVPOLY* pp, const NAVREGION* preg, float* ps2, int mode, float s1)
     float d = sB - sA;
     if (d < 0.0f) d += len;
     float g = 1.0f;
-    if (mode == 1) g = 1.0f + S_TURN;
-    else if (mode == 2) g = 1.0f - S_TURN;
+    if (mode == 2) g = 1.0f + S_TURN;       // (0x1BCCE0: mode 2 the longer way allowed, 1 the shorter)
+    else if (mode == 1) g = 1.0f - S_TURN;
     const bool fShort = d < len * g * 0.5f;
     const int n1 = NPolyClearSide(pp, preg, true, sA, sB);
     const int n0 = NPolyClearSide(pp, preg, false, sA, sB);
+    if (static const bool s_f = std::getenv("SLY2N_NAVWAYPRINT") != nullptr; s_f)
+    {
+        std::printf("navway: poly %d region %d sA %.1f sB %.1f len %.1f n1 %d n0 %d short %d mode %d\n", pp->plo ? pp->plo->oid : -1,
+                    preg && preg->pmesh ? preg->pmesh->oid : -1, sA, sB, len, n1, n0, fShort ? 1 : 0, mode);
+        for (const auto& v : pp->aposWorld) std::printf("  v %.0f %.0f %.0f\n", v.x, v.y, v.z);
+    }
     if (n0 < n1) return 1;
     if (n1 < n0) return 2;
     if (n1 == 2) return 4;

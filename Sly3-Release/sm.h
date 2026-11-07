@@ -31,6 +31,7 @@ struct ASEG : LO
     bool fApplyParams = false;     // orig +0xB0 (EOPID 107, 0x12FDE8): applied by PostAsegLoad
     float tApply = 0.0f, svtApply = 1.0f;
     int grfApply = 0;
+    std::shared_ptr<const struct ASEGD3> pasegd3;  // Sly 3: the loaded data its tracks point into (game/aseg3.h)
 };
 
 // SM (cid 0x6F, 0x1EFAC0): states (the loaded objects' oids with the next state), transitions (an ASEG between two
@@ -71,3 +72,5 @@ struct SPRITESET : LO
 
 void RegisterAsegLoaders(std::unordered_map<uint32_t, PFNLOAD>& m);
 PFNNEW PfnNewAseg(CID cid);
+// orig 0x001EFAC0 LoadSmFromBrx (Sly 3 0x238FF8 reads the same)
+void LoadSmFromBrx(LO* plo, CBinaryInputStream* pbis);

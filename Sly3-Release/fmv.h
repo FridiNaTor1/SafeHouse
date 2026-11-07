@@ -3,15 +3,18 @@
 // The game's movies: Sony PSS files on the disc (MPEG-2 program streams: MPEG-2 video in 0xE0, the sound in
 // private stream 1 as an "SShd"/"SSbd" ADS stream of SPU2 ADPCM, stereo, interleaved by channel). The original
 // plays them with libmpeg on the IPU (0x1B2820..0x1B4728) and feeds the sound to 989snd's movie voices; here the
-// PSS is demuxed straight from the disc image while it plays (no extraction), the video decoded by FFmpeg
-// (Sly1-Release fmv.cpp's decoder setup), the sound decoded into an XAudio2 stream (audio.h) that is the clock.
+// PSS is demuxed while it plays, the video decoded by FFmpeg (Sly1-Release fmv.cpp's decoder setup), the sound decoded
+// into an XAudio2 stream (audio.h) that is the clock. A converted installation (format 2) has the
+// PSS split: the video stream (.m2v) and each sound track as the frames the ADS decodes to (.wav, Europe .flac), which
+// play the same way.
 //
-// Movie keys: the 64-byte file records in the executable (Sly 3: orig3 0x3179F8, 23 records, the size's low 14 bits
-// masked; disc.h CDisc::Movies), those whose file starts with an MPEG pack header.
+// Movie keys: the 64-byte file records in the executable (0x2A3268..0x2A39E8; disc.h CDisc::ElfKeys), those
+// whose file starts with an MPEG pack header.
 
 #include "disc.h"
 
 #include <cstdint>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -21,9 +24,19 @@ struct MOVIEINFO
     FK fk;
 };
 
+// (the converter) A PSS split as FPlayMovie demuxes it: the video packets' bytes in
+// order (the MPEG-2 video stream, an .m2v), and each sound track (by its tag: 0 the only one, else the language + 1) as
+// the stereo frames the player decodes and queues. False when the file is not a PSS.
+struct MOVIEAUDIOTRACK
+{
+    int rate = 0;
+    std::vector<int16_t> asample;  // stereo, interleaved
+};
+bool FDemuxMovie(const FK& fk, std::vector<uint8_t>& abVideo, std::map<int, MOVIEAUDIOTRACK>& mpaudio);
+
 // The movies on the disc, from the executable's keys.
 std::vector<MOVIEINFO> MovieList();
-// A movie by its file id (FK::id, e.g. 338), the key's address (0x3179F8...), or its index in MovieList.
+// A movie by its file id (FK::id, e.g. 2054), the key's address (0x2A3268...), or its index in MovieList.
 bool FFindMovie(const std::string& arg, MOVIEINFO* pinfo);
 
 // What shows the pictures: called with each RGBA picture (cx * cy * 4 bytes, top row first) when it is due;

@@ -6,3 +6,7 @@
 struct SW;
 
 void InstallSpliceHooks(SW* psw);
+
+struct LO;
+// orig: 0x0015E938: kind 4 resolves in the instance namespace; kind 1 searches below context.
+LO* PloFindRelative(LO* context, int oid, int kind = 4);

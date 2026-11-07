@@ -2,12 +2,15 @@
 // the camera keys, the device tracker) and mouseinput.cpp (capture, motion, bindings, menu buttons).
 
 #include "pcinput.h"
+#include "rumble.h"
 
 #include "display.h"
 #include "frontend.h"
 #include "hackmouse.h"
 #include "joy.h"
 #include "menu.h"
+#include "shop.h"
+#include "debugmenu.h"
 
 #include <GLFW/glfw3.h>
 
@@ -89,6 +92,12 @@ void PcInputFromSettings(const st::SystemSettings& s)
     o.mouseAimSensitivity = s.mouseAimSensitivity;
     o.fMouseInvertX = s.mouseInvertX != 0;
     o.fMouseInvertY = s.mouseInvertY != 0;
+    o.fMouseInvertBinocX = s.mouseInvertBinocX != 0;
+    o.fMouseInvertBinocY = s.mouseInvertBinocY != 0;
+    o.fMouseInvertTurretX = s.mouseInvertTurretX != 0;
+    o.fMouseInvertTurretY = s.mouseInvertTurretY != 0;
+    o.fPadInvertCameraX = s.padInvertCameraX != 0;
+    o.fPadInvertCameraY = s.padInvertCameraY != 0;
     o.fMouseRaw = s.mouseRawInput != 0;
     o.fMouseWheelZoom = s.mouseWheelZoom != 0;
     o.fMouseMenus = s.mouseMenus != 0;
@@ -98,6 +107,7 @@ void PcInputFromSettings(const st::SystemSettings& s)
     o.fHackMouseAim = s.hackMouseAim != 0;
     // (fDebugKeys: not from the settings' v14 debugKeys, which is ignored and kept as is since 2026-11-04; the
     //  launcher's Settings > Advanced > Debug mode turns them on, read in main.cpp from Debug Mode.ini)
+    g_fControllerVibration = s.controllerVibration != 0;   // (rumble.h; v15)
 }
 
 void PcInputToSettings(st::SystemSettings& s)
@@ -112,6 +122,12 @@ void PcInputToSettings(st::SystemSettings& s)
     s.mouseAimSensitivity = o.mouseAimSensitivity;
     s.mouseInvertX = o.fMouseInvertX;
     s.mouseInvertY = o.fMouseInvertY;
+    s.mouseInvertBinocX = o.fMouseInvertBinocX;
+    s.mouseInvertBinocY = o.fMouseInvertBinocY;
+    s.mouseInvertTurretX = o.fMouseInvertTurretX;
+    s.mouseInvertTurretY = o.fMouseInvertTurretY;
+    s.padInvertCameraX = o.fPadInvertCameraX;
+    s.padInvertCameraY = o.fPadInvertCameraY;
     s.mouseRawInput = o.fMouseRaw;
     s.mouseWheelZoom = o.fMouseWheelZoom;
     s.mouseMenus = o.fMouseMenus;
@@ -119,6 +135,7 @@ void PcInputToSettings(st::SystemSettings& s)
     s.alwaysOriginalPsPrompts = o.fAlwaysOriginalPs;
     s.instantSkipCutscenes = o.fInstantSkipCutscenes;
     s.hackMouseAim = o.fHackMouseAim;
+    s.controllerVibration = g_fControllerVibration;
 }
 
 void ApplyPcDebugMode()
@@ -154,6 +171,14 @@ void ApplyPcInputEnv()
             else if (k == "mousecamera") g_pcinput.fMouseCamera = n != 0;
             else if (k == "hackmouse") g_pcinput.fHackMouseAim = n != 0;
             else if (k == "debugkeys") g_pcinput.fDebugKeys = n != 0;
+            else if (k == "invcx") g_pcinput.fMouseInvertX = n != 0;
+            else if (k == "invcy") g_pcinput.fMouseInvertY = n != 0;
+            else if (k == "invbx") g_pcinput.fMouseInvertBinocX = n != 0;
+            else if (k == "invby") g_pcinput.fMouseInvertBinocY = n != 0;
+            else if (k == "invtx") g_pcinput.fMouseInvertTurretX = n != 0;
+            else if (k == "invty") g_pcinput.fMouseInvertTurretY = n != 0;
+            else if (k == "cinvx") g_pcinput.fPadInvertCameraX = n != 0;
+            else if (k == "cinvy") g_pcinput.fPadInvertCameraY = n != 0;
         }
         i = j + 1;
     }
@@ -170,7 +195,22 @@ bool FPcMenuMode()
     // (the menus' own pad: the pause / options / card pages, the title, the episode menu; a world's load or a
     // talk also takes the players' pad (lock bits 4 / 8): no camera there either)
     bool FEpisodeMenuActive();   // frontend.cpp
-    return FMenuShown() || FTitleShown() || FEpisodeMenuActive() || (g_grfjoyt & 2) == 0;
+    return FMouseMenuUp() || (g_grfjoyt & 2) == 0;
+}
+
+// (PC menus) the right button in menus: Triangle, the menus' back; on the episode screen with Replay Jobs offered,
+// where Triangle opens the list, that screen's back (Circle; Japan: Cross)
+uint16_t BtnMouseBack()
+{
+    const uint32_t btn = BtnEpisodeScreenBack();   // (frontend.h: Sly 2's bit order, 0 elsewhere)
+    return btn ? uint16_t(((btn & 0xFF) << 8) | (btn >> 8)) : uint16_t(BTN_Triangle);
+}
+
+bool FMouseMenuUp()
+{
+    bool FEpisodeMenuActive();   // frontend.cpp
+    if (g_fMoviePlaying) return false;   // (a movie over the episode menu, the title: no cursor)
+    return FMenuShown() || FTitleShown() || FEpisodeMenuActive() || FDebugMenuOpen() || FGadgetMenuShown() || FJobHelpShown();
 }
 
 // ------------------------------------------------------------ the mouse
@@ -204,7 +244,6 @@ void FocusCallback(GLFWwindow* window, int focused)
     // Ignore mouse buttons held across a focus change until they are released.
     std::fill(std::begin(s_afButtonBlocked), std::end(s_afButtonBlocked), true);
     s_dyScroll = 0.0;
-    s_cwheelMenu = 0;
     s_fHaveLast = false;
     if (s_pfnFocusPrev) s_pfnFocusPrev(window, focused);
 }
@@ -236,7 +275,16 @@ bool FWantFreeHidden(GLFWwindow* window)
            FHackMouseMode();
 }
 
-void SetCapture(GLFWwindow* window, bool fCapture, bool fFreeHidden)
+// (PC menus) the OS cursor while it is free: shown only in a menu the mouse can use (FMouseMenuUp), and there not
+// after a controller's input until the mouse moves again; hidden over cutscenes, talks, loads and movies
+bool s_fCursorShown = true;
+bool s_fMenuCursor = false;                     // FMenuCursor: free, shown, in a menu, Mouse in Menus on
+double s_xFree = 0.0, s_yFree = 0.0;            // the free cursor in framebuffer pixels (last step's)
+bool s_fHaveFree = false;
+bool s_fFreeMoved = false;
+bool s_fMenuTarget = false, s_fMenuTargetUsed = false, s_fMenuClick = false;
+
+void SetCapture(GLFWwindow* window, bool fCapture, bool fFreeHidden, bool fShown)
 {
     if (fCapture)
     {
@@ -246,11 +294,47 @@ void SetCapture(GLFWwindow* window, bool fCapture, bool fFreeHidden)
     else
     {
         if (glfwRawMouseMotionSupported()) glfwSetInputMode(window, GLFW_RAW_MOUSE_MOTION, GLFW_FALSE);
-        glfwSetInputMode(window, GLFW_CURSOR, fFreeHidden ? GLFW_CURSOR_HIDDEN : GLFW_CURSOR_NORMAL);
+        glfwSetInputMode(window, GLFW_CURSOR, fFreeHidden || !fShown ? GLFW_CURSOR_HIDDEN : GLFW_CURSOR_NORMAL);
     }
+    if (fCapture != s_fCaptured || (!fCapture && s_fFreeHidden != fFreeHidden)) s_fHaveLast = false;
     s_fCaptured = fCapture;
     s_fFreeHidden = !fCapture && fFreeHidden;
-    s_fHaveLast = false;
+    s_fCursorShown = fShown;
+    if (std::getenv("SLY2N_CURSORPRINT"))
+        std::printf("cursor: frame %d %s\n", g_frameJoy, fCapture ? "captured" : fFreeHidden ? "free hidden (hack)" : fShown ? "shown" : "hidden");
+}
+
+// (tests) SLY2N_TESTCURSOR=x:y@frame+count,...: the menu cursor at canvas (x, y) for those steps
+struct TESTCURSOR { float x, y; int frame0, frame1; };
+const std::vector<TESTCURSOR>& TestCursors()
+{
+    static std::vector<TESTCURSOR> s_a;
+    static bool s_fParsed = false;
+    if (!s_fParsed)
+    {
+        s_fParsed = true;
+        if (const char* psz = std::getenv("SLY2N_TESTCURSOR"))
+        {
+            std::string s(psz);
+            for (size_t i = 0; i < s.size();)
+            {
+                size_t j = s.find(',', i);
+                if (j == std::string::npos) j = s.size();
+                float x = 0, y = 0;
+                int frame = 0, count = 1;
+                if (std::sscanf(s.substr(i, j - i).c_str(), "%f:%f@%d+%d", &x, &y, &frame, &count) >= 3)
+                    s_a.push_back({x, y, frame, frame + count});
+                i = j + 1;
+            }
+        }
+    }
+    return s_a;
+}
+const TESTCURSOR* PtestCursor()
+{
+    for (const TESTCURSOR& c : TestCursors())
+        if (g_frameJoy >= c.frame0 && g_frameJoy < c.frame1) return &c;
+    return nullptr;
 }
 
 void UpdateMouse(GLFWwindow* window)
@@ -271,16 +355,48 @@ void UpdateMouse(GLFWwindow* window)
     for (int b = 0; b < MOUSE_BUTTONS; ++b)
     {
         s_afButtonPrev[b] = s_afButton[b];
-        // (the test keys' buttons, SLY2N_TESTKEYS, need no focus: as the keyboard's)
-        const bool fHeld = glfwGetMouseButton(window, b) == GLFW_PRESS;
+        const bool fHeld = glfwGetMouseButton(window, b) == GLFW_PRESS || FTestKeyHeld(st::kMouseBindingBase + b);
         if (!fHeld) s_afButtonBlocked[b] = false;
-        s_afButton[b] = (fFocused && fHeld && !s_afButtonBlocked[b]) || FTestKeyHeld(st::kMouseBindingBase + b);
+        s_afButton[b] = fFocused && fHeld && !s_afButtonBlocked[b];
         fClicked |= s_afButton[b] && !s_afButtonPrev[b];
     }
     if (fClicked || (s_wheel != 0 && fFocused)) cane::input::tracker().noteMouse();
+    // the free cursor's motion (a deliberate move shows it again after a controller's input)
+    s_fFreeMoved = false;
+    {
+        double xw = 0.0, yw = 0.0;
+        glfwGetCursorPos(window, &xw, &yw);
+        int wx = 0, wy = 0, fbw = 0, fbh = 0;
+        glfwGetWindowSize(window, &wx, &wy);
+        glfwGetFramebufferSize(window, &fbw, &fbh);
+        if (wx > 0 && wy > 0)
+        {
+            const double xf = xw * double(fbw) / double(wx), yf = yw * double(fbh) / double(wy);
+            if (!s_fCaptured && s_fHaveFree && fFocused && (std::fabs(xf - s_xFree) > 0.5 || std::fabs(yf - s_yFree) > 0.5))
+            {
+                s_fFreeMoved = true;
+                if (std::fabs(xf - s_xFree) + std::fabs(yf - s_yFree) > 3.0) cane::input::tracker().noteMouse();
+            }
+            s_xFree = xf;
+            s_yFree = yf;
+            s_fHaveFree = !s_fCaptured;
+        }
+    }
     const bool fWant = FWantCapture(window);
     const bool fWantFree = !fWant && FWantFreeHidden(window);
-    if (fWant != s_fCaptured || fWantFree != s_fFreeHidden) SetCapture(window, fWant, fWantFree);
+    // (shown: a mouse menu, the mouse or keyboard used last (a controller hides it until the mouse moves); never
+    // over a cutscene, a talk, a load or a movie; unfocused: the OS's)
+    const bool fShown = !fFocused || (FMouseMenuUp() && !cane::input::tracker().lastWasGamepad());
+    if (fWant != s_fCaptured || fWantFree != s_fFreeHidden || fShown != s_fCursorShown) SetCapture(window, fWant, fWantFree, fShown);
+    s_fMenuCursor = !s_fCaptured && !s_fFreeHidden && fShown && fFocused && g_pcinput.fMouseMenus && FMouseMenuUp();
+    if (const TESTCURSOR* pc = PtestCursor())
+    {
+        static float s_xT = -1.0f, s_yT = -1.0f;
+        s_fFreeMoved = pc->x != s_xT || pc->y != s_yT;
+        s_xT = pc->x;
+        s_yT = pc->y;
+        s_fMenuCursor = g_pcinput.fMouseMenus && FMouseMenuUp();
+    }
     s_fCursor = false;
     if (!s_fCaptured && !s_fFreeHidden) return;
     double x = 0.0, y = 0.0;
@@ -367,6 +483,9 @@ void ReadPcInput(GLFWwindow* window, uint16_t* pgrf, float* pxl, float* pyl, flo
     float xl = 0, yl = 0, xr = 0, yr = 0;
     *pfPad = false;
     s_fLive = true;
+    s_fMenuTargetUsed = s_fMenuTarget;   // (the last step's menus: SetMenuMouseTarget)
+    s_fMenuTarget = false;
+    s_fMenuClick = false;
     UpdateMouse(window);
     const bool fFocused = glfwGetWindowAttrib(window, GLFW_FOCUSED) == GLFW_TRUE;
     const bool fMenu = FPcMenuMode();
@@ -397,6 +516,7 @@ void ReadPcInput(GLFWwindow* window, uint16_t* pgrf, float* pxl, float* pyl, flo
         }
     }
     else s_jidPad = -1;
+    SetRumblePad(s_jidPad, true);   // (rumble.h: the pad the motors are driven on; -1 none)
 
     // the keyboard (and mouse bindings): the movement actions move the left stick, the others are buttons
     // (in a menu with "Mouse in Menus" on, the left / right buttons only confirm / go back: an action bound to
@@ -432,16 +552,29 @@ void ReadPcInput(GLFWwindow* window, uint16_t* pgrf, float* pxl, float* pyl, flo
     // Enter in a menu confirms (Cross), as PC menus do: an Enter still held from opening the menu (Enter is Start
     // by default) waits for its release, and one that confirmed stays a confirm until released (closing a menu
     // with it must not open the pause menu again)
-    static bool s_fEnterLatched = false, s_fEnterConfirms = false;
+    // (the card dialog (0x1ACCC8: the overwrite / erase questions, the notices) takes Square (0x80) for Yes / OK, not
+    // Cross: the PC confirms there send that (N14: a click or Enter did not answer it))
+    const uint16_t btnConfirm = fMenu && FCardMessageActive() ? BTN_Square : BTN_Cross;
+    // (R40: the bare title, "Press Start", reads only Start (0x1DD920 takes 0x800): Enter stays Start there; with a
+    // menu over the title (the data access menu, the language menu, the card's messages) it confirms again)
+    const bool fEnterMenu = fMenu && !(FTitleShown() && !FMenuShown() && !FDebugMenuOpen());
+    // (K/M could not skip the intro) with no menu up, only the pad locked (the opening's intro
+    // in the title world, cutscenes, talks, loads), an Enter pressed there stays the Start it is bound to as well:
+    // the intro reads Start (a controller's skips it), and Cross still answers a scene waiting for a button
+    static bool s_fEnterLatched = false, s_fEnterConfirms = false, s_fEnterKeepsStart = false;
     const bool fEnter = FKeyHeld(window, GLFW_KEY_ENTER) || FKeyHeld(window, GLFW_KEY_KP_ENTER);
-    if (!fEnter) s_fEnterLatched = s_fEnterConfirms = false;
-    else if (fMenu && !s_fEnterLatched) s_fEnterConfirms = true;
-    else if (!fMenu && !s_fEnterConfirms) s_fEnterLatched = true;
+    if (!fEnter) s_fEnterLatched = s_fEnterConfirms = s_fEnterKeepsStart = false;
+    else if (fEnterMenu && !s_fEnterLatched && !s_fEnterConfirms)
+    {
+        s_fEnterConfirms = true;
+        s_fEnterKeepsStart = !FMouseMenuUp();
+    }
+    else if (!fEnterMenu && !s_fEnterConfirms) s_fEnterLatched = true;
     if (s_fEnterConfirms)
     {
-        if (fMenu) grf |= BTN_Cross;
+        if (fMenu) grf |= btnConfirm;
         const int kStart = g_pcinput.keyboard[PCA_Start];
-        if ((kStart == GLFW_KEY_ENTER || kStart == GLFW_KEY_KP_ENTER) && !fEscape && !(grfPad & BTN_Start))
+        if ((kStart == GLFW_KEY_ENTER || kStart == GLFW_KEY_KP_ENTER) && !fEscape && !(grfPad & BTN_Start) && !s_fEnterKeepsStart)
             grf &= uint16_t(~BTN_Start);
     }
 
@@ -474,8 +607,14 @@ void ReadPcInput(GLFWwindow* window, uint16_t* pgrf, float* pxl, float* pyl, flo
             s_cwheelMenu += s_cwheelMenu < 0 ? 1 : -1;
             s_fWheelPulse = true;
         }
-        if (s_afButton[GLFW_MOUSE_BUTTON_LEFT]) grf |= BTN_Cross;
-        if (s_afButton[GLFW_MOUSE_BUTTON_RIGHT]) grf |= BTN_Triangle;
+        // (PC menus) a press over a menu's own target (SetMenuMouseTarget, the last step's) goes to that menu
+        // (FMenuClick), not to the confirm button, until released
+        static bool s_fClickTaken = false;
+        const bool fLeft = s_afButton[GLFW_MOUSE_BUTTON_LEFT];
+        if (!fLeft) s_fClickTaken = false;
+        else if (!s_afButtonPrev[GLFW_MOUSE_BUTTON_LEFT] && s_fMenuTargetUsed && s_fMenuCursor) s_fClickTaken = s_fMenuClick = true;
+        if (fLeft && !s_fClickTaken) grf |= btnConfirm;
+        if (s_afButton[GLFW_MOUSE_BUTTON_RIGHT]) grf |= BtnMouseBack();
     }
     else s_cwheelMenu = 0, s_fWheelPulse = false;
 
@@ -497,6 +636,26 @@ void ReadPcInput(GLFWwindow* window, uint16_t* pgrf, float* pxl, float* pyl, flo
 
 bool FMouseCaptured() { return s_fCaptured; }
 bool FPcInputLive() { return s_fLive; }
+
+bool FMenuCursor(float* pxCanvas, float* pyCanvas)
+{
+    if (!s_fMenuCursor) return false;
+    if (const TESTCURSOR* pc = PtestCursor())
+    {
+        *pxCanvas = pc->x;
+        *pyCanvas = pc->y;
+        return true;
+    }
+    const DISPLAY& d = g_display;
+    const float xn = float((s_xFree - double(d.presentX)) / double(std::max(1, d.presentWidth))) * 2.0f - 1.0f;
+    const float yn = 1.0f - float((s_yFree - double(d.presentY)) / double(std::max(1, d.presentHeight))) * 2.0f;
+    *pxCanvas = ((xn - d.uiOffset.x) / d.uiScale.x + 1.0f) * 320.0f;
+    *pyCanvas = (1.0f - (yn - d.uiOffset.y) / d.uiScale.y) * 224.0f;
+    return true;
+}
+bool FMenuCursorMoved() { return s_fMenuCursor && s_fFreeMoved; }
+void SetMenuMouseTarget() { s_fMenuTarget = true; }
+bool FMenuClick() { return s_fMenuClick; }
 
 bool FCursorPicture(float* pxNdc, float* pyNdc, bool* pfLeft)
 {
@@ -527,36 +686,37 @@ bool FTestMouse(float* pdx, float* pdy)
     return true;
 }
 
+// (the test mouse's counts go through the same inversion as the real mouse's, at 100% sensitivity)
 void MouseOrbitDelta(float* pdradPan, float* pdradTilt)
 {
     *pdradPan = *pdradTilt = 0.0f;
-    float dxT, dyT;
-    if (FTestMouse(&dxT, &dyT))
+    float dx = 0.0f, dy = 0.0f, k = RAD_PER_COUNT_ORBIT;
+    if (!FTestMouse(&dx, &dy))
     {
-        *pdradPan = dxT * RAD_PER_COUNT_ORBIT;
-        *pdradTilt = -dyT * RAD_PER_COUNT_ORBIT;
-        return;
+        if (!s_fCaptured) return;
+        dx = s_dxCounts;
+        dy = s_dyCounts;
+        k *= float(g_pcinput.mouseSensitivity) / 100.0f;
     }
-    if (!s_fCaptured) return;
-    const float k = RAD_PER_COUNT_ORBIT * float(g_pcinput.mouseSensitivity) / 100.0f;
-    *pdradPan = s_dxCounts * k * (g_pcinput.fMouseInvertX ? -1.0f : 1.0f);
-    *pdradTilt = -s_dyCounts * k * (g_pcinput.fMouseInvertY ? -1.0f : 1.0f);
+    *pdradPan = dx * k * (g_pcinput.fMouseInvertX ? -1.0f : 1.0f);
+    *pdradTilt = -dy * k * (g_pcinput.fMouseInvertY ? -1.0f : 1.0f);
 }
 
-void MouseAimDelta(float* pdxRight, float* pdyUp)
+void MouseAimDelta(MOUSEAIM aim, float* pdxRight, float* pdyUp)
 {
     *pdxRight = *pdyUp = 0.0f;
-    float dxT, dyT;
-    if (FTestMouse(&dxT, &dyT))
+    float dx = 0.0f, dy = 0.0f, k = RAD_PER_COUNT_AIM;
+    if (!FTestMouse(&dx, &dy))
     {
-        *pdxRight = dxT * RAD_PER_COUNT_AIM;
-        *pdyUp = -dyT * RAD_PER_COUNT_AIM;
-        return;
+        if (!s_fCaptured) return;
+        dx = s_dxCounts;
+        dy = s_dyCounts;
+        k *= float(g_pcinput.mouseAimSensitivity) / 100.0f;
     }
-    if (!s_fCaptured) return;
-    const float k = RAD_PER_COUNT_AIM * float(g_pcinput.mouseAimSensitivity) / 100.0f;
-    *pdxRight = s_dxCounts * k * (g_pcinput.fMouseInvertX ? -1.0f : 1.0f);
-    *pdyUp = -s_dyCounts * k * (g_pcinput.fMouseInvertY ? -1.0f : 1.0f);
+    const bool fInvertX = aim == MOUSEAIM_Turret ? g_pcinput.fMouseInvertTurretX : g_pcinput.fMouseInvertBinocX;
+    const bool fInvertY = aim == MOUSEAIM_Turret ? g_pcinput.fMouseInvertTurretY : g_pcinput.fMouseInvertBinocY;
+    *pdxRight = dx * k * (fInvertX ? -1.0f : 1.0f);
+    *pdyUp = -dy * k * (fInvertY ? -1.0f : 1.0f);
 }
 
 float MouseWheelZoom()

@@ -3,6 +3,7 @@
 // the warped globs (0x22B7D8). The renderer adds sum(matrix x state) to each warped vertex (glob.vert).
 
 #include "wr.h"
+#include "game/sly3.h"
 
 #include "alo.h"
 #include "animfind.h"
@@ -509,7 +510,7 @@ bool FLoadWrOption(LO* plo, int eopid, const float* ag, int n)
 {
     WR* pwr = PwrOf(plo);
     if (!pwr) return false;
-    if (eopid == 964)
+    if (eopid == S3EOPID(964))
     {
         pwr->iwreCur = n;
         return true;

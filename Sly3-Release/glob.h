@@ -175,6 +175,15 @@ struct GLOB
     float sRadius = 0;
     uint32_t u14 = 0;
     float sMRD = 0;
+    // A group without a draw record (the level's static geometry) is culled and sorted by its sphere in the glob set's
+    // sphere sets (0x167870 kind 0; the volume tree 0x1D5808 keys its render record by the camera-to-sphere distance)
+    bool fSphere = false;
+    glm::vec3 posSphere{0.0f};
+    float sRadiusSphere = 0;
+    // (the lighting's sphere of a group without a draw record (Sly 3's sphere-culled glob sets: the static world): its
+    // vertices' bounds, made once by scene.cpp LightSphereOfGlob; sRadiusLight < 0 not made yet)
+    glm::vec3 posLight{0.0f};
+    float sRadiusLight = -1.0f;
     SAA* psaa = nullptr;            // group+0x20 (type 0: S16 index into the glob's SAAs)
     std::vector<GLOBBONE> abone;
     int8_t nAlphaCtl = 0;           // type 0: the S8 per batch (last)

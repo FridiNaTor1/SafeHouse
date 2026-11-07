@@ -3,6 +3,7 @@
 #include <sanitizer/asan_interface.h>
 #endif
 #include "proc.h"
+#include "pcinput.h"
 #include "actor.h"
 #include "cls.h"
 #include "spliceglue.h"
@@ -939,6 +940,7 @@ CRef RefOptionImpl(int bifk, BASIC* pbasic, int optid, const CRef* pref)
         if (bifk != 111) return r;
         const float* ag[] = {&ppc->x, &ppc->y, &ppc->radJoy, &ppc->uJoy, &ppc->x2, &ppc->y2, &ppc->radJoy2, &ppc->uJoy2};
         if (optid >= 900 && optid <= 907) r.SetF32(*ag[optid - 900]);
+        if (optid == 901 || optid == 905) NoteScriptStickRead(optid);   // (pcinput.h: the tank's keys)
         if (optid >= 900 && optid <= 907 && std::getenv("SLY2N_OPTPRINT")) std::printf("  -> %g\n", *ag[optid - 900]);
         else if (optid == 908 || optid == 909)
         {

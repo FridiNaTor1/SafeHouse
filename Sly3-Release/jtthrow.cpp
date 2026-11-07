@@ -1,5 +1,5 @@
 #include "jtthrow.h"
-#include "sly3/ids3.h"
+#include "game/sly3.h"
 
 #include "actmesh.h"
 #include "actor.h"
@@ -82,7 +82,7 @@ struct RegisterThrowParameters
     RegisterThrowParameters()
     {
         RegisterObjectMethod(0x10B230, [](LO* object, const std::vector<CRef>& args) {
-            if (!FIsLoDerivedFrom(object, Icid(CID3::PLAYER)) || args.size() < 7) return CRef(TAGK_Void);
+            if (!FIsLoDerivedFrom(object, S3CID(0x34)) || args.size() < 7) return CRef(TAGK_Void);
             auto store = [&](uint32_t offset, float value) {
                 object->SetField(0, IB + offset, std::bit_cast<uint32_t>(value));
             };
@@ -152,7 +152,7 @@ glm::vec3 ArcPoint(const glm::vec3& start, const glm::vec3& acceleration,
 // orig: 0x0021FB18: water always participates, otherwise the ordinary trajectory pair filter.
 bool ArcEntry(OXA* own, SOE* entry)
 {
-    if (entry->palo && FIsLoDerivedFrom(entry->palo, 0x59)) return true;
+    if (entry->palo && FIsLoDerivedFrom(entry->palo, S3CID(0x59))) return true;
     return FJumpPathEntry(own, entry);
 }
 
@@ -430,10 +430,18 @@ void UpdateJtThrow(JTTHROW& t)
             delta += cmm::SetVectorCylind(pad ? pad->radJoy : 0.0f, advance, 0.0f);
             const float radius = std::clamp(std::sqrt(delta.x * delta.x + delta.y * delta.y), t.sAimMin, maximum);
             t.targetWorld = ownerPosition + cmm::SetVectorCylind(std::atan2(delta.y, delta.x), radius, 0.0f);
-            // (test only: SLY2N_THROWTARGET="X Y" holds the aim arrow at that ground point, at the owner's height)
+            // (test only: SLY2N_THROWTARGET="X Y[@T][;X Y@T..]" holds the aim arrow at that ground point, at the owner's
+            // height; an entry with @T applies from game clock T on)
             static const char* s_szTarget = std::getenv("SLY2N_THROWTARGET");
+            bool fTarget = false;
             float x = 0.0f, y = 0.0f;
-            if (s_szTarget && std::sscanf(s_szTarget, "%f %f", &x, &y) == 2) t.targetWorld = glm::vec3(x, y, ownerPosition.z);
+            for (const char* q = s_szTarget; q && *q; q = std::strchr(q, ';') ? std::strchr(q, ';') + 1 : nullptr)
+            {
+                float x0, y0, tFrom = 0.0f;
+                const int c = std::sscanf(q, "%f %f@%f", &x0, &y0, &tFrom);
+                if (c >= 2 && (c < 3 || g_clock.t >= tFrom)) x = x0, y = y0, fTarget = true;
+            }
+            if (fTarget) t.targetWorld = glm::vec3(x, y, ownerPosition.z);
         }
         UpdateJtThrowArc(t, true);
     }
@@ -527,6 +535,20 @@ void UpdateJtThrow(JTTHROW& t)
     }
 }
 
+// orig: 0x00220508 (while aiming, states 4..6: the aim point moved to the object's position over |aim - it| / +0x28
+// seconds; SCPT 0x59 / 0x5A aim Murray's Bentley toss, e.g. w32's 2343 at the battery)
+void SetJtThrowTarget(JTTHROW& t, LO* plo)
+{
+    if (t.state >= 7 || t.state < 4 || !plo) return;
+    const glm::vec3 pos = PosJtLo(plo);  // 0x1A62E8
+    const glm::vec3 d = t.targetWorld - pos;
+    t.transitionEnd = pos;
+    t.transitionBegin = t.targetWorld;
+    t.transitioning = true;
+    t.transitionStart = g_clock.t;
+    t.transitionDuration = std::sqrt(d.x * d.x + d.y * d.y + d.z * d.z) / t.inputScale;
+}
+
 // orig: 0x002205A8, only after the owner animation's event 0x27B.
 void ReleaseJtThrow(JTTHROW& t)
 {
@@ -585,7 +607,7 @@ int OverlapKindActor(ALO* palo, ALO* pOther)
     if (r.state == 1 && r.ploTarget)
     {
         LO* pt = r.ploTarget;  // 0x1A5BF0: itself when an ALO, else its parent
-        ALO* palot = FCidDerivedFrom(pt->Cid(), Icid(CID3::ALO)) ? static_cast<ALO*>(pt) : pt->paloParent;
+        ALO* palot = FCidDerivedFrom(pt->Cid(), S3CID(0x30)) ? static_cast<ALO*>(pt) : pt->paloParent;
         if (palot && Poxa(palot) && Poxa(palot) == Poxa(pOther)) kind = std::max(kind, 3);
     }
     return kind;

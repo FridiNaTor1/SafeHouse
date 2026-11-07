@@ -4,10 +4,14 @@
 // volume triggers (class 0x18 family, the state at +0x130, update 0x149440): an object entering the volume sets
 // state 1 (0x1487A0: the owner's splice event 5, the sound 2, the enter list: ASEGs, state machine goals, the script
 // started, task states; then state 2 unless +0xA4), leaving sets 0 (0x148860: event 6 and the leave list).
-// TODO: the class 0x53 objects' kind +0x1E0 update (0x148C98), the deferred-call queue (0x149A50..0x149C80).
+// The class 0x53 pad update is in pad.cpp; update.cpp owns the deferred-call queue.
 
+#include "activate.h"
+#include "game/sly3.h"
+#include "worldglobals.h"
 #include "animfind.h"
 #include "aseg.h"
+#include "asega.h"
 #include "bsp.h"
 #include "clock.h"
 #include "cls.h"
@@ -19,26 +23,49 @@
 #include "scpt.h"
 #include "smrun.h"
 #include "spliceobj.h"
+#include "spliceglue.h"
 #include "so.h"
 #include "sound.h"
 #include "sw.h"
 #include "task.h"
+#include "trigger.h"
 #include "update.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <unordered_map>
 #include <vector>
 
+// orig: 0x00148668 / 0x001488D8: resolve each authored ASEG around its owner, then ensure it on the
+// corresponding root. Pads embed the state at +0x150 (EOPIDs 415/416); volumes use +0x130 (430/431).
+void RunTriggerAsegList(LO* plo, int i)
+{
+    const bool fPad = FCidDerivedFrom(plo->Cid(), S3CID(0x53));
+    const uint32_t ibState = fPad ? 0x150u : 0x130u;
+    const int eopid = (fPad ? 415 : 430) + i;
+    const uint32_t uSpeed = plo->U32Field(0, ibState + 0x8C, 0x3F800000u);  // 0x148718: speed 1
+    float svt;
+    std::memcpy(&svt, &uSpeed, sizeof(svt));
+    const int seek = plo->U32Field(0, ibState + 0xA0, 0) ? (svt < 0.0f ? 2 : 0) : 1;
+    int c = 0;
+    for (const OPT& opt : plo->aopt)
+    {
+        if (opt.eopid != eopid || opt.aval.size() < 2) continue;
+        if (c++ >= 8) break;  // 0x148620: at most eight entries in each list
+        auto* paseg = dynamic_cast<ASEG*>(PloFindSwNearest(plo, opt.aval[0].n));
+        if (!paseg) continue;
+        const OID oidRoot = PloRoot(paseg)->oid;  // original ASEG +0x14's root object
+        LO* po = plo->oid == oidRoot ? plo : oidRoot != -1 ? PloFindSwNearest(plo, oidRoot) : nullptr;
+        PasegaEnsureAseg(paseg, dynamic_cast<ALO*>(po), seek, 0.0f, svt, opt.aval[1].n);
+    }
+}
 
 namespace
 {
-struct TRIGSTATE
+struct TRIGSTATE : TRIGGERSTATE
 {
-    int state = -1;           // +0x90
-    float tState = 0.0f;      // +0x94
-    LO* ploFound = nullptr;   // +0xA8 (the volume's +0x1D8)
     std::vector<std::array<OID, 4>> arsmg;  // +0xB0 / +0xB4: {root, sm, trigger state, no-trigger state}
     std::vector<std::pair<OID, int>> atask; // +0x134 / +0x138
     std::vector<int> aidObj;  // +0x288 (EOPID 432)
@@ -48,6 +75,7 @@ struct TRIGSTATE
     bool fInit = false;
 };
 std::unordered_map<LO*, TRIGSTATE> s_mptrig;
+WORLD_TABLE(s_mptrig);   // (PC: moved aside while a kept world loads, worldglobals.h)
 SW* s_psw = nullptr;
 
 const OPT* PoptFind(const LO* plo, int eopid)
@@ -66,12 +94,18 @@ int NOpt(const LO* plo, int eopid, int nDefault)
 // 443 +0x2C8, 439 / 440 the methods 0x105440 / 0x105508 (registered below))
 void InitTrigger(LO* plo, TRIGSTATE& t)
 {
+    t.owner = plo;
     t.fInit = true;
     for (const OPT& o : plo->aopt)
     {
         if (o.aval.empty()) continue;
-        if (o.eopid == 432) t.aidObj.push_back(o.aval[0].n);   // 0x1497B8
-        if (o.eopid == 433) t.acid.push_back(o.aval[0].n);     // 0x1497E0
+        // 0x1497B8: the loaded ids. A script's set of option 519 before the first update (Ep7 32:3234's module 139
+        // pointing each of Bison's three triggers at its own gun's harpoon) is in aploObj already: the option it left
+        // here would add the id again, resolved to the nearest copy (the same harpoon for all three triggers, so one
+        // shot fired all three: R43); the original's list holds only the object (+0x288 count 1)
+        if (o.eopid == S3EOPID(432) && std::none_of(t.aploObj.begin(), t.aploObj.end(), [&](const LO* p) { return p && p->oid == o.aval[0].n; }))
+            t.aidObj.push_back(o.aval[0].n);
+        if (o.eopid == S3EOPID(433)) t.acid.push_back(o.aval[0].n);     // 0x1497E0
     }
     // orig: 0x00149358: a tracked volume remains held while members are inside.
     if (plo->U32Field(0, 0x2C8, 0)) plo->SetField(0, 0x1D4, 1);
@@ -97,7 +131,7 @@ void ApplyRsmg(LO* plo, const TRIGSTATE& t, bool fTrigger)
             std::printf(")\n");
         }
         if (c != 1) continue;
-        if (!FCidDerivedFrom(po->Cid(), 0x30)) continue;
+        if (!FCidDerivedFrom(po->Cid(), S3CID(0x30))) continue;
         const OID oid = fTrigger ? e[2] : e[3];
         if (oid == -1) continue;
         for (SMA* psma : g_apsma)
@@ -112,17 +146,20 @@ void ApplyRsmg(LO* plo, const TRIGSTATE& t, bool fTrigger)
 // orig 0x001488D8 (list i: 0 enter, 1 leave)
 void RunTriggerList(LO* plo, TRIGSTATE& t, int i)
 {
-    // (the ASEG list +4 / +0x48 (0x149778 / 0x149798): TODO)
+    RunTriggerAsegList(plo, i);  // +4 / +0x48, before state machines, script and tasks
     ApplyRsmg(plo, t, i == 0);
     if (i != 0) return;
-    const OID oidScpt = static_cast<OID>(plo->U32Field(0, 0x1DC, uint32_t(-1)));
+    const uint32_t ibScript = FCidDerivedFrom(plo->Cid(), S3CID(0x53)) ? 0x1FCu : 0x1DCu;
+    const OID oidScpt = static_cast<OID>(plo->U32Field(0, ibScript, uint32_t(-1)));
     if (oidScpt != -1)
-        if (LO* pscpt = PloFindSwObjectByOid(s_psw, oidScpt); pscpt && FCidDerivedFrom(pscpt->Cid(), 0x72))
+        // Original 0x13E818 object fields resolve through PostLoadOidField
+        // with kind 4 and this owner, preserving each instance's script.
+        if (LO* pscpt = PloFindRelative(plo, oidScpt); pscpt && FCidDerivedFrom(pscpt->Cid(), S3CID(0x72)))
         {
             if (std::getenv("SLY2N_TASKDEBUG")) std::printf("trigger %d: script %d started\n", plo->oid, oidScpt);
             StartScpt(pscpt, t.ploFound);
         }
-    if (!t.atask.empty()) ApplyCheckpointTasks(s_psw, plo, t.atask);
+    if (!t.atask.empty()) ApplyCheckpointTasks(g_psw, plo, t.atask);
 }
 
 // orig 0x00148A78 (+ 0x1487A0 / 0x148860)
@@ -140,6 +177,7 @@ void SetTriggerState(LO* plo, TRIGSTATE& t, int n)
     if (f1)
     {
         HandleLoSpliceEvent(plo, 5, false, 0, nullptr);
+        BroadcastTaskEvent(g_psw, 0x1A, plo);  // orig 0x1A61E0: owner event before the enter list
         if (!plo->U32Field(0, 0x1CC, 1))
         {
             CSnd* p = PsndNewPlain(2);
@@ -147,12 +185,14 @@ void SetTriggerState(LO* plo, TRIGSTATE& t, int n)
         }
         RunTriggerList(plo, t, 0);
         if (!plo->U32Field(0, 0x1D4, 0)) SetTriggerState(plo, t, 2);
-        // (vt slot 4: the message 6)
+        NotifyLo(plo, 6, static_cast<TRIGGERSTATE*>(&t));
     }
     if (f0)
     {
         HandleLoSpliceEvent(plo, 6, false, 0, nullptr);
+        BroadcastTaskEvent(g_psw, 0x1B, plo);  // orig 0x1A61E0: owner event before the leave list
         RunTriggerList(plo, t, 1);
+        NotifyLo(plo, 7, static_cast<TRIGGERSTATE*>(&t));
     }
 }
 
@@ -254,13 +294,13 @@ void UpdateVolumeTrigger(LO* plo)
         if (std::getenv("SLY2N_TRIGDBG") && plo->oid == std::atoi(std::getenv("SLY2N_TRIGDBG")))
         {
             const LOXSHAPE* px = dynamic_cast<const LOXSHAPE*>(plo);
-            const glm::vec3 pos = FCidDerivedFrom(po->Cid(), 0x30) ? PosAloCenter(static_cast<ALO*>(po)) : glm::vec3(0.0f);
+            const glm::vec3 pos = FCidDerivedFrom(po->Cid(), S3CID(0x30)) ? PosAloCenter(static_cast<ALO*>(po)) : glm::vec3(0.0f);
             const glm::vec3 c = glm::vec3(MatWorldLox(plo)[3]);
             std::printf("trigdbg %d: candidate %d removed %d at (%.0f %.0f %.0f), volume at (%.0f %.0f %.0f) bsp %zu inside %d\n",
                         plo->oid, po->oid, po->fRemoved, pos.x, pos.y, pos.z, c.x, c.y, c.z, px ? px->bsp.abspn.size() : 0,
                         FInsideVolume(plo, pos));
         }
-        if (!po || !po->fInWorld || po->fRemoved || !FCidDerivedFrom(po->Cid(), 0x30)) continue;  // (0x1A61A0: in the world)
+        if (!po || !po->fInWorld || po->fRemoved || !FCidDerivedFrom(po->Cid(), S3CID(0x30))) continue;  // (0x1A61A0: in the world)
         if (!FInsideVolume(plo, PosAloCenter(static_cast<ALO*>(po)))) continue;
         fFound = true;
         if (!t.ploFound) t.ploFound = po;
@@ -386,8 +426,9 @@ struct INITTRIGGERS
             r.SetBool(!a.empty() && FPointInShape(plo, a[0].GetVector()));
             return r;
         });
-        // orig 0x105440 -> 0x149808 -> 0x148B38 (FAddRsmg on +0x130 +0xB4, 8 at most)
-        RegisterObjectMethod(0x105440, [](LO* plo, const std::vector<CRef>& a) {
+        // orig 0x105090 -> 0x149270 (pad +0x150), 0x105440 -> 0x149808 (volume +0x130):
+        // both call 0x148B38 / 0x20FEC0 on the embedded state's RSMG list.
+        auto addRsmg = [](LO* plo, const std::vector<CRef>& a) {
             TRIGSTATE& t = s_mptrig[plo];
             const int fTrigger = NArg(a, 0);
             const OID oidRoot = NArg(a, 1, -1), oidSm = NArg(a, 2, -1), oid = NArg(a, 3, -1);
@@ -400,20 +441,71 @@ struct INITTRIGGERS
             if (t.arsmg.size() + 1 < 8)
                 t.arsmg.push_back(fTrigger ? std::array<OID, 4>{oidRoot, oidSm, oid, -1} : std::array<OID, 4>{oidRoot, oidSm, -1, oid});
             return CRef(TAGK_Void);
-        });
-        // orig 0x105508 -> 0x149828 -> 0x148B78 (0x161F10 on +0x130 +0x138: a task state, 4 at most)
-        RegisterObjectMethod(0x105508, [](LO* plo, const std::vector<CRef>& a) {
+        };
+        RegisterObjectMethod(0x105090, addRsmg);
+        RegisterObjectMethod(0x105440, addRsmg);
+        // orig 0x105508 -> 0x149828 (volume) / 0x105158 -> 0x149290 (pad),
+        // both 0x148B78 / 0x161F10: append at most four task states.
+        auto addTask = [](LO* plo, const std::vector<CRef>& a) {
             TRIGSTATE& t = s_mptrig[plo];
             if (t.atask.size() < 4) t.atask.emplace_back(NArg(a, 0, -1), NArg(a, 1, -1));
             if (std::getenv("SLY2N_TASKREFS"))
                 std::fprintf(stderr, "taskref trigger %d (cid 0x%X): task %d state %d\n", plo->oid, plo->Cid(), NArg(a, 0, -1), NArg(a, 1, -1));
             return CRef(TAGK_Void);
-        });
+        };
+        RegisterObjectMethod(0x105508, addTask);
+        RegisterObjectMethod(0x105158, addTask);
     }
 } s_inittriggers;
 }  // namespace
 
 void ResetTriggers() { s_mptrig.clear(); }
+
+// orig 0x00149880 (the volume trigger's removal, after the base 0x1A5848): a trigger with something inside (state 1 / 2)
+// leaves it (0x149718 -> 0x148A78 state 0: its event 6, the owner's 0x1B, the leave list); a tracking one (+0x2C8)
+// empties its set (+0x2C0) and runs event 9. E.g. Ep7 Thermal Ride: task 3180 done removes the start volume 33905
+// with Sly inside, and the volume's leave handler ends the job as the original does.
+void OnRemoveTrigger(LO* plo)
+{
+    auto it = s_mptrig.find(plo);
+    if (it == s_mptrig.end()) return;
+    TRIGSTATE& t = it->second;
+    if (static_cast<unsigned>(t.state - 1) >= 2) return;
+    SetTriggerState(plo, t, 0);
+    if (plo->U32Field(0, 0x2C8, 0))
+    {
+        t.aploInside.clear();
+        HandleLoSpliceEvent(plo, 9, false, 0, nullptr);
+    }
+}
+
+void CloneEmbeddedTriggerActions(const LO* source, LO* target)
+{
+    // orig: 0x001A6730 copies the class data after +0x50. The native action
+    // arrays live outside LO, so cloning aopt alone loses these loaded methods.
+    const auto it = s_mptrig.find(const_cast<LO*>(source));
+    if (it == s_mptrig.end()) return;
+    const auto actions = it->second.arsmg;
+    const auto tasks = it->second.atask;
+    TRIGSTATE& copy = s_mptrig[target];
+    copy.owner = target;
+    copy.arsmg = actions;
+    copy.atask = tasks;
+}
+
+void RunTriggerRsmgList(LO* plo, int i)
+{
+    const auto it = s_mptrig.find(plo);
+    if (it != s_mptrig.end()) ApplyRsmg(plo, it->second, i == 0);
+}
+
+void RunEmbeddedTriggerList(LO* plo, int i, LO* found)
+{
+    TRIGSTATE& t = s_mptrig[plo];
+    t.owner = plo;
+    t.ploFound = found;
+    RunTriggerList(plo, t, i);
+}
 
 // (exported: a point in a volume's BSP, the exits' 0x118FB0 test)
 bool FPointInVolume(LO* plo, const glm::vec3& pos) { return FInsideVolume(plo, pos); }

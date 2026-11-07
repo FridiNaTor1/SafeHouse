@@ -3,8 +3,8 @@
 // Specification: the original's code (0x12D220, no matched decomp), Sly2-Reference/Sly2-Release/game/m_12B3B0_p3.cpp (0x12D508,
 // oracle-verified), mat.cpp (0x11B830), m_11E1A0_p3.cpp (0x11E958), m_22C818_p3.cpp (0x22FCC8 / 0x22FD38).
 
-#include "sly3/ids3.h"
 #include "xf.h"
+#include "game/sly3.h"
 
 #include "animfind.h"
 #include "clock.h"
@@ -27,13 +27,13 @@ constexpr float kEpsilon = 1e-4f;
 // of its third reference (+0x60))
 glm::vec3 PosOfLo(const LO* plo)
 {
-    if (FCidDerivedFrom(plo->Cid(), Icid(CID3::ALO)))
+    if (FCidDerivedFrom(plo->Cid(), S3CID(0x30)))
     {
         const ALO* palo = static_cast<const ALO*>(plo);
         if (palo->apxfRef[2]) return glm::vec3(palo->apxfRef[2]->matWorld[3]);
         if (!palo->axf.empty()) return glm::vec3(palo->axf[0]->matWorld[3]);
     }
-    if (FCidDerivedFrom(plo->Cid(), 3))
+    if (FCidDerivedFrom(plo->Cid(), S3CID(3)))
     {
         // orig 0x231440 / 0x231368: the reference record's world times the LOX's matrix
         const LOX* plox = static_cast<const LOX*>(plo);

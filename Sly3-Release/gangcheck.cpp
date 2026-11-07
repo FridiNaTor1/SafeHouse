@@ -10,6 +10,7 @@
 // the class's update the position, state, jump state and heading are compared with the reference's frame of the
 // same vblank (B + frame).
 #include "actor.h"
+#include "game/sly3.h"
 #include "actorai.h"
 #include "jump.h"
 #include "joy.h"
@@ -264,7 +265,7 @@ void ImportRegionMembers(SW* psw)
     int cmember = 0;
     for (const auto& [a, plo] : map.mpaplo)
     {
-        if (plo->Cid() != 0x11) continue;
+        if (plo->Cid() != S3CID(0x11)) continue;
         NAVREGION* preg = PregionOfMesh(static_cast<LOXMESH*>(plo));
         preg->amember.clear();
         for (uint32_t am = r.U32(a + 0x118), n = 0; r.FValid(am) && n < 256; am = r.U32(am + 0x60), ++n)
@@ -336,7 +337,7 @@ bool FImportGangStart(SW* psw, const std::string& pathRam, const std::string& pa
     }
     const uint32_t A = s_h.aActor;
     ALO* palo = p->palo;
-    g_clock.t = r.G(0x2DDED0);
+    g_clock.t = r.G(S3VA(0x2DDED0));
     const uint32_t axf = r.U32(A + 0x54);
     for (size_t i = 0; i < 3 && i < palo->axf.size(); ++i) ImportXf(palo->axf[i].get(), axf + 0x100 * static_cast<uint32_t>(i));
     {
@@ -428,15 +429,15 @@ bool FImportGangStart(SW* psw, const std::string& pathRam, const std::string& pa
         for (int i = 0; i < 16; i++) pc.atPressed[i] = r.G(a + 0x88 + 4 * i);
     }
     ImportJoyPs2FromRam(&g_joyps2, r.ab);  // the pad (its sticks' last read)
-    g_cm.pos = glm::vec3(r.V4(0x2DDF40 + 0x90));
-    g_cm.mat = glm::mat3(glm::vec3(r.V4(0x2DDF40 + 0x60)), glm::vec3(r.V4(0x2DDF40 + 0x70)), glm::vec3(r.V4(0x2DDF40 + 0x80)));
+    g_cm.pos = glm::vec3(r.V4(S3VA(0x2DDF40) + 0x90));
+    g_cm.mat = glm::mat3(glm::vec3(r.V4(S3VA(0x2DDF40) + 0x60)), glm::vec3(r.V4(S3VA(0x2DDF40) + 0x70)), glm::vec3(r.V4(S3VA(0x2DDF40) + 0x80)));
     if (const char* sz = std::getenv("SLY2N_GANGOBJ"))
         for (const char* q = sz; *q;)
         {
             const int oid = std::atoi(q);
             for (CID cid = 0; cid < 0xC7; ++cid)
                 for (LO* plo : psw->mpcidaplo[cid])
-                    if (plo->oid == oid && FCidDerivedFrom(plo->Cid(), 0x30))
+                    if (plo->oid == oid && FCidDerivedFrom(plo->Cid(), S3CID(0x30)))
                     {
                         ALO* pa = static_cast<ALO*>(plo);
                         OXA* po = Poxa(pa);
@@ -467,7 +468,7 @@ bool FImportGangStart(SW* psw, const std::string& pathRam, const std::string& pa
             if (!pq) continue;
             uint32_t aq = 0;
             for (uint32_t x = 0x100000; x + 0x300 < (32u << 20) && !aq; x += 0x10)
-                if (r.S32(x + 0x18) == q->oid && (r.U32(x + 0xC) == 0x2D2E98 || r.U32(x + 0xC) == 0x2CB230 || r.U32(x + 0xC) == 0x2D44C8))
+                if (r.S32(x + 0x18) == q->oid && (r.U32(x + 0xC) == S3VA(0x2D2E98) || r.U32(x + 0xC) == 0x2CB230 || r.U32(x + 0xC) == S3VA(0x2D44C8)))
                     aq = x;
             if (!aq) continue;
             const bool fIn = (r.U32(aq + 0x2C) >> 28) & 1;  // (+0x28 bit 60)
@@ -492,7 +493,7 @@ bool FImportGangStart(SW* psw, const std::string& pathRam, const std::string& pa
         for (size_t i = 0; i < 3 && i < palo->axf.size(); ++i) ImportXf(palo->axf[i].get(), axfRe + 0x100 * static_cast<uint32_t>(i));
     }
     std::printf("gang-start: player %d (actor 0x%X), t %.3f state %d pos %.2f %.2f %.2f heading %.4f, %zu reference frames\n",
-                s_h.oid, A, r.G(0x2DDED0), state, PosAloCenter(palo).x, PosAloCenter(palo).y, PosAloCenter(palo).z,
+                s_h.oid, A, r.G(S3VA(0x2DDED0)), state, PosAloCenter(palo).x, PosAloCenter(palo).y, PosAloCenter(palo).z,
                 p->radHeading, s_h.aref.size());
     return true;
 }

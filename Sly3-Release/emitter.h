@@ -35,6 +35,9 @@ extern PARTICLESTATS g_particlestats;
 
 // Builds the emitters of the world (options, 0x2586D8 + PostEmitterLoad 0x159500); called by the first update.
 void InitEmittersOfSw(SW* psw);
+// (PC, pcloader.h: objects made while the world runs, e.g. a kept world's copies) their emitters and explosions built as
+// the world's init builds them; nothing when the world's emitters are not built yet (its init takes them then)
+void AddEmittersOfNewLos(SW* psw, const std::vector<LO*>& aplo);
 // Drops every emitter and particle system (a new world).
 void ResetParticles();
 // Runs n frames of emitters and particle systems at dt (the viewer: every emitter counts as active).
@@ -67,6 +70,11 @@ struct BURSTPARAMS
 // For the splice / world code: explodes an explosion object (class 0x20 family: its burst; a group: each of
 // its explosion children), or every explosion with the oid.
 void ExplodeLo(LO* plo, const BURSTPARAMS* pparams = nullptr);
+// (PC addition, debug menu only: pcloader.cpp sets them) a copy of a kept world's emitter: its shader from that world's
+// shaders, the objects it names (its source, models) from that world (null: the running world's as before)
+struct SHD;
+extern const SHD* (*g_pfnPcShdOfLo)(const LO* plo, int32_t id);
+extern LO* (*g_pfnPcFindOid)(const LO* ploNear, int32_t oid);
 void ExplodeOid(SW* psw, int32_t oid, const BURSTPARAMS* pparams = nullptr);
 
 // A kind-9 RIP's definition (the original's +0xF0 record, e.g. the coin's D_002C0DA0): the goal in the camera's screen
@@ -96,3 +104,56 @@ void AppendAloExtraDraws(const SCENE& scene, const ALO* palo, const glm::mat4& m
 // orig: 0x001CE888(G, 4, 0) + 0x1D0108 / 0x1D0158 / 0x1D0190 (a pickup's glint, 0x1C6308: pmodel drawn at ploAt's point
 // facing the camera for dt seconds, growing and fading)
 bool FLaunchGlintRip(const LO* pmodel, const LO* ploAt, float dt);
+// A water ripple (WakeSoWater 0x15A2C0's 0x1CE888(G, 7, 0)): a plain RIP (kind 7, vtable 0x2D7788, the base slots:
+// 0x1CE920's start, the default alpha 0x2C1F50, 1 s) of the water's ripple model at pos, its size gScale growing by
+// 0.6 gScale over its life.
+bool FLaunchWaterRipple(const LO* pmodel, const glm::vec3& pos, float gScale);
+// orig: 0x0015BE28 from WakeSoWater (the wake's spray: c kind-1 RIPs of ploSpray falling back into the water ploWater
+// with ripples of ploRipple; d the relative speed, accel the object's gravity)
+void LaunchWaterSpray(const LO* ploSpray, const LO* ploRipple, LO* ploWater, const glm::vec3& pos, float d, const glm::vec3& accel, int c);
+
+// Sly 3's particle effects (class 0x2D, pe.cpp): a stream (orig3 0x200868, vt 0x3615B8) is a particle system of this
+// module (the same blocks, update 0x179CC0 = 0x139DC0 and VU1 draw) set up from the PE component's records.
+struct PEPSYS;
+struct PEPSYSDESC
+{
+    int kDraw = 0;                  // shared +0x24 (0 billboard, 1 flying, 2 rolling)
+    float gFlying = 1.0f;           // shared +0 (kind 1)
+    std::vector<uint32_t> argba;    // render +0x21C (count +0x218)
+    bool fColorPairs = false;       // render +0x214
+    int32_t shd = 0;                // render +0 (EOPID 584)
+    float life = 1.0f;              // velocity +0x78 (577)
+    float clqAlpha[3] = {1, 0, -1}; // velocity +0x30 (580)
+    float clqScale[3] = {25, 0, 0}; // velocity +0x20 (581)
+    float dTex = 0.0f;              // shared +0x1C (586)
+    bool fAlphaOne = false;         // shared +0x18 (588)
+    int kUpdate = 0;                // shared +0x28 (583)
+    glm::vec3 accel{0, 0, -1500};   // velocity +0 (572)
+    glm::vec3 axisSpin{0, 0, 1};    // velocity +0x10 (574)
+    float gSpin = 0.0f;             // velocity +0x70 (573)
+    float gDrag = -1.0f;            // velocity +0x68 (571)
+    bool fRandTex = false;          // shared +0x14 (585)
+    bool fSpinFixed = false;        // shared +0 (kind 2, 590)
+    bool fRoll = false;             // shared +4 (591)
+    float spinLo = 0, spinHi = 0;   // shared +8 (592)
+};
+uint64_t GenPeParticles();          // changes when the particle systems are dropped (the handles below are then stale)
+PEPSYS* PpepsysNew(const PEPSYSDESC& d);
+void SetPepsys(PEPSYS* pp, const PEPSYSDESC& d);
+void EmitPepsys(PEPSYS* pp, int c, const glm::vec3* apos, const glm::vec3* avel, const float* at0, const float* at1);
+int CParticlesPepsys(const PEPSYS* pp);
+void SetPepsysDraw(PEPSYS* pp, bool fHidden, const std::vector<glm::mat4>& amat);
+void WrapPepsysInBox(PEPSYS* pp, const glm::mat4& mat, const glm::vec3& lo, const glm::vec3& hi);
+// A PE RIP stream's particle (orig3 0x202330, pe.cpp): a RIP of the model at pos (kind: the component's record +0x1C)
+struct PERIPDESC
+{
+    int kind = 3;
+    const LO* pmodel = nullptr;     // +0x1C (the record's +0xC object)
+    const LO* plo2 = nullptr;       // the record's +0x10 object (the kinds' second object)
+    glm::vec3 pos{0.0f}, vel{0.0f}, accel{0.0f}, axisSpin{0, 0, 1};
+    float tBirth = 0, life = 1;
+    float size[3] = {1, 0, 0}, alpha[3] = {1, 0, 0};
+    float gSpin = 0, gDrag = 0;
+    glm::mat3 ori{1.0f};
+};
+void LaunchPeRip(const PERIPDESC& d);

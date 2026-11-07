@@ -10,7 +10,7 @@
 // the jump's state 11 -> the interaction kind 0) are ported
 // when one of their objects is a candidate and are skipped.
 #include "jump.h"
-#include "sly3/ids3.h"
+#include "game/sly3.h"
 
 #include "actor.h"
 #include "alo.h"
@@ -204,8 +204,8 @@ bool FJumpPathBlocked(ACTOR* pa, float t, const glm::vec3& pos0, const glm::vec3
 XF* PxfSlot32(LO* plo)
 {
     if (!plo) return nullptr;
-    if (FIsLoDerivedFrom(plo, Icid(CID3::ALO))) return PxfObj(static_cast<ALO*>(plo));
-    if (FIsLoDerivedFrom(plo, 3)) return static_cast<LOX*>(plo)->pxf;
+    if (FIsLoDerivedFrom(plo, S3CID(0x30))) return PxfObj(static_cast<ALO*>(plo));
+    if (FIsLoDerivedFrom(plo, S3CID(3))) return static_cast<LOX*>(plo)->pxf;
     return nullptr;
 }
 
@@ -334,21 +334,12 @@ void ChooseJumpTarget(JUMP* pj, LO* ploPrev)
     int stBest = -1;      // s5
     LO* ploBest = nullptr;  // s4
     glm::vec3 posEnd(0.0f), velEnd(0.0f);  // sp+0x40 (with +0x240) / sp+0x60
-    auto warnList = [&](JTL jtl, const char* what) {
-        for (LO* plo : AploJtList(psw, jtl))
-            if (JtDescOf(plo, jtl).mask & grfMask)
-                if (Len(PosJtLo(plo) - pos) < 2500.0f)
-                {
-                    WarnOnce(std::string("0x19B110's ") + what);
-                    return;
-                }
-    };
     if (FPrint())
         for (CID cid = 0; cid < CID_Max; ++cid)
             for (LO* plo : psw->mpcidaplo[cid])
-                if (cid == 0x0B && plo->oid == 123964)
+                if (cid == S3CID(0x0B) && plo->oid == 123964)
                     std::printf("jumptgt: pipe %d in world %d removed %d iupd %d st %d\n", plo->oid, plo->fInWorld, plo->fRemoved, plo->iupd, plo->st);
-    if (FIsLoDerivedFrom(pa->palo, Icid(CID3::JT)))
+    if (FIsLoDerivedFrom(pa->palo, S3CID(0x35)))
     {
         // the spires (0x3E13D8): the description's vt slot 3 (0x1FF4F0: the spire's position less +0x240); not more
         // than +0xE8 below the actor; the jump's time / score / end (0x19A4A0, the end at rest), the end's z velocity
@@ -398,6 +389,7 @@ void ChooseJumpTarget(JUMP* pj, LO* ploPrev)
             {
                 glm::vec3 posNear(0.0f);
                 NearestCrvAll(pcrv, PosActorProbe0(pa), &posNear, nullptr, nullptr, nullptr);  // 0x1E6F60
+                if (FPrint()) std::printf("jumptgt: rail %d near %.1f %.1f %.1f height %.1f dz %.1f\n", prail->oid, posNear.x, posNear.y, posNear.z, d.height, pos.z - posNear.z);
                 if (d.height < pos.z - posNear.z) continue;
             }
             auto score = [&](float g) {  // 0x19AA58
@@ -416,6 +408,9 @@ void ChooseJumpTarget(JUMP* pj, LO* ploPrev)
             const float dg = (pcrv->ag.empty() ? 0.0f : (pcrv->ag.back() - pcrv->ag.front()) / (static_cast<float>(pcrv->ag.size()) * 10.0f));  // 0x1E77E8
             float gBestRail = 0.0f, gScore = 0.0f;
             MinimizeRange(score, gStart, dg, GFromCrvS(pcrv, 50.0f), GFromCrvS(pcrv, SLengthCrv(pcrv) - 50.0f), &gBestRail, &gScore);
+            if (FPrint())
+                std::printf("jumptgt: rail %d candidate g %.3f score %.2f range %.3f..%.3f knots %zu length %.1f\n", prail->oid, gBestRail, gScore,
+                            GFromCrvS(pcrv, 50.0f), GFromCrvS(pcrv, SLengthCrv(pcrv) - 50.0f), pcrv->ag.size(), SLengthCrv(pcrv));
             if (prail != ploPrev)
             {
                 if (!(gScore < 2500.0f)) continue;
@@ -453,7 +448,7 @@ void ChooseJumpTarget(JUMP* pj, LO* ploPrev)
             {
                 if (ploPrev) continue;
                 if (!(phook->U32Field(0, 0xE8, 0) & 1)) continue;
-                if (!FIsLoDerivedFrom(phook, 0x13)) continue;
+                if (!FIsLoDerivedFrom(phook, S3CID(0x13))) continue;
             }
             const JTDESC d = JtDescOf(phook, JTL_Point);
             if (!(d.mask & grfMask)) continue;
@@ -536,7 +531,7 @@ void ChooseJumpTarget(JUMP* pj, LO* ploPrev)
     // the partner (Bentley only): Murray in his state 15 with his +0x1910 controller holding (state 0): its holding
     // frame +0x191C's point (0x19A4A0, at rest), the end's z velocity the launch's plus g t; under 2500, Murray's score
     // with the bias -500 (0x2BF904), its path clear of all but the two of them (0x19AE00 with 0x19B0A8): the state 18
-    if (FIsLoDerivedFrom(pa->palo, Icid(CID3::BENTLEY)))
+    if (FIsLoDerivedFrom(pa->palo, S3CID(0x37)))
         if (MURRAY* pm = PmurrayGlobal(); pm && pm->state == 15 && pm->jtthrow1910.state == 0 && pm->jtthrow1910.peer)
         {
             LO* peer = pm->jtthrow1910.peer;
@@ -601,6 +596,10 @@ void ChooseJumpTarget(JUMP* pj, LO* ploPrev)
         MinimizeRange([&](float tt) { return GFitJump(pa, ppipe, local, tt, nullptr, nullptr); }, 0.5f, 0.25f, 0.25f, 3.0f, &t, nullptr);
         glm::vec3 posT(0.0f), velT(0.0f);
         GFitJump(pa, ppipe, local, t, &posT, &velT);
+        if (FPrint())
+            std::printf("jumptgt: pipe %d point %.1f %.1f %.1f (local %.1f %.1f %.1f) actor %.1f %.1f %.1f vel %.1f %.1f %.1f\n", ppipe->oid, posPipe.x,
+                        posPipe.y, posPipe.z, local.x, local.y, local.z, PosActorJ(pa).x, PosActorJ(pa).y, PosActorJ(pa).z, VelActorJ(pa).x,
+                        VelActorJ(pa).y, VelActorJ(pa).z);
         if (ppipe != ploPrev && FJumpPathBlocked(pa, t, pos, VelActorJ(pa), posT, velT, &posPipe)) continue;
         stBest = 15;
         ploBest = ppipe;
@@ -613,7 +612,46 @@ void ChooseJumpTarget(JUMP* pj, LO* ploPrev)
             std::printf("jumptgt: pipe %d s %.1f (near %.1f) score %.2f t %.3f end %.1f %.1f %.1f\n", ppipe->oid, sBest, sNear, gScore, t,
                         posT.x, posT.y, posT.z);
     }
-    warnList(JTL_Wall, "walls (0x3E13FC)");
+    // orig: 0x0019B110 / 0x0019AAB8 (walls: closest arc parameter, then the same fitted landing as ledges)
+    for (LO* wall : AploJtList(psw, JTL_Wall))
+    {
+        const JTDESC desc = JtDescOf(wall, JTL_Wall);
+        if (!(desc.mask & grfMask)) continue;
+        const glm::vec3 center = PosJtLo(wall);
+        if (desc.height < pos.z - center.z) continue;
+        const uint32_t uRadius = wall->U32Field(0, 0x11C, 0);
+        float radius;
+        std::memcpy(&radius, &uRadius, sizeof(radius));
+        const glm::vec3 d = pos - center;
+        auto score = [&](float s) {
+            float value = 0.0f;
+            FitJumpToPoint(pj, vel, wall, PosJtDesc(wall, JTL_Wall, pa, s, nullptr), glm::vec3(0.0f), nullptr,
+                           &value, nullptr, nullptr);
+            return value;
+        };
+        float s = 0.0f, value = 0.0f;
+        MinimizeRange(score, std::atan2(d.y, d.x) * radius, 100.0f, -FLT_MAX, FLT_MAX, &s, &value);
+        value *= 1.25f;
+        if (wall != ploPrev)
+        {
+            if (!(value < 2500.0f)) continue;
+            value = GTargetScore(pj, wall, value, 500.0f);
+            if (gBest <= value) continue;
+        }
+        float time = 0.0f;
+        glm::vec3 target(0.0f), velocity(0.0f);
+        FitJumpToPoint(pj, vel, wall, PosJtDesc(wall, JTL_Wall, pa, s, nullptr), glm::vec3(0.0f), &time,
+                       nullptr, &target, &velocity);
+        velocity.z = vel.z + time * GravActor(pa).z;
+        if (wall != ploPrev && FJumpPathBlocked(pa, time, pos, vel, target, velocity, nullptr)) continue;
+        stBest = 12;
+        ploBest = wall;
+        posEnd = target;  // 0x19B110 stores the fitted point; the common tail subtracts the actor offset.
+        velEnd = velocity;
+        gBest = std::min(gBest, value);
+        tBest = time;
+        g26 = s;
+    }
     // the ledges (0x3E13F0, cid 0x0C): the nearest point (0x1E6F60 from the actor's position), not more than the
     // description's height below; the best place on the edge (0x19AB38: the jump's score to the description's point,
     // method 3 0x1830D8) over [30, length - 30] from it in steps of 100 (D_002BF918), the score times 1.25 (D_002BF90C)
@@ -660,14 +698,41 @@ void ChooseJumpTarget(JUMP* pj, LO* ploPrev)
             std::printf("jumptgt: ledge %d s %.1f (near %.1f) score %.2f t %.3f end %.1f %.1f %.1f\n", pledge->oid, u, sNear, gScore, t, posT.x,
                         posT.y, posT.z);
     }
-    warnList(JTL_Swing, "swings (0x3E1408, the jump's state 13)");
+    // orig: 0x0019B110 (swing surfaces: their description point and authored interaction kind)
+    for (LO* swing : AploJtList(psw, JTL_Swing))
+    {
+        const JTDESC desc = JtDescOf(swing, JTL_Swing);
+        if (!(desc.mask & grfMask)) continue;
+        const glm::vec3 point = PosJtDesc(swing, JTL_Swing, pa, 0.0f, nullptr);
+        if (swing != ploPrev && desc.height < pos.z - point.z) continue;
+        float time = 0.0f, value = 0.0f;
+        glm::vec3 target(0.0f), velocity(0.0f);
+        FitJumpToPoint(pj, vel, swing, point, glm::vec3(0.0f), &time, &value, &target, &velocity);
+        velocity.z = vel.z + time * GravActor(pa).z;
+        if (swing != ploPrev)
+        {
+            if (!(value < 2500.0f)) continue;
+            value = GTargetScore(pj, swing, value, -250.0f);
+            if (gBest <= value) continue;
+            if (FJumpPathBlocked(pa, time, pos, vel, target, velocity, nullptr)) continue;
+        }
+        stBest = 13;
+        ploBest = swing;
+        posEnd = target;  // 0x19B110 stores the fitted point; the common tail subtracts the actor offset.
+        velEnd = velocity;
+        gBest = std::min(gBest, value);
+        tBest = time;
+    }
     if (stBest == -1) return;
     // the record (+0x58) driven to the end by the time: +0xA8, +0xC0 (less +0x240), +0xD0; then the jump's state
     if (XF* pxf = PxfPos(pa->palo))
     {
         pxf->tTarget = g_clock.t + tBest;
-        pxf->aseg[0] = glm::vec4(posEnd - glm::vec3(pa->vecBase), 0.0f);
-        pxf->aseg[1] = glm::vec4(velEnd, 0.0f);
+        // (in the record's frame, as UpdateJumpTargetPath's goals: Sly 3's position record refers to his base record
+        // (+0x48's +0xA0), at the origin in the reference (v.2800 / 5600 RAM) but natively at the world file's placement,
+        // so the world goal must be converted; with no reference / an identity one this is the original's world goal)
+        pxf->aseg[0] = glm::vec4(PosConvertXfs(nullptr, pxf->pxfRef, posEnd - glm::vec3(pa->vecBase)), 0.0f);
+        pxf->aseg[1] = glm::vec4(VecConvertXfs(nullptr, pxf->pxfRef, velEnd), 0.0f);
     }
     pj->g10 = g27;
     pj->s14 = g26;
@@ -679,6 +744,9 @@ void ChooseJumpTarget(JUMP* pj, LO* ploPrev)
 void ArriveJumpTarget(JUMP* pj)
 {
     ACTOR* pa = pj->pactor;
+    if (std::getenv("SLY2N_SAFEDEBUG"))
+        std::fprintf(stderr, "JUMP_ATTACH hero=%u owner=%u state=%d t=%.6f\n",
+                     pa->palo->oid, pj->ploC ? pj->ploC->oid : 0, pj->state, g_clock.t);
     switch (pj->state)
     {
     case 15:
@@ -712,10 +780,8 @@ void ArriveJumpTarget(JUMP* pj)
         SetBentleyState(PbentleyGlobal(), 8);  // 0x135248(D_002DD5BC, 8): held by Murray (0x136530)
         break;
     case 11: StartInteract(pa, 0, pj->ploC, JTL_Ledge); break;  // the ledge: kind 0 (its description +0x190)
-    case 12: case 13:
-        WarnOnce("0x19C688's arrival in the jump's state " + std::to_string(pj->state));
-        SetJumpAnimState(pj, 4, nullptr);
-        break;
+    case 12: StartInteract(pa, 0, pj->ploC, JTL_Wall); break;
+    case 13: StartInteract(pa, static_cast<int>(pj->ploC->U32Field(0, 0x11C, 0)), pj->ploC, JTL_Swing); break;
     default:
         SetJumpAnimState(pj, 4, nullptr);  // 0x195FB8(4, 0)
         break;
@@ -784,7 +850,7 @@ void FindJumpHideTarget(JUMP* pj)
         FitJumpToPoint(pj, vel, plo, t - base, glm::vec3(0.0f), &tt, &sc, &pv, &pw);  // 0x19A4A0
         if (FPrint()) std::printf("jumptgt: hide %d fit score %.2f t %.3f (state %d, pos %.1f %.1f %.1f vel %.1f %.1f %.1f)\n", plo->oid, sc, tt, pj->state, pos.x, pos.y, pos.z, vel.x, vel.y, vel.z);
         if (gBest < sc) continue;
-        const glm::vec3 vT = FIsLoDerivedFrom(plo, Icid(CID3::ALO)) ? VelAloPos(static_cast<ALO*>(plo)) : glm::vec3(0.0f);  // vt slot 33
+        const glm::vec3 vT = FIsLoDerivedFrom(plo, S3CID(0x30)) ? VelAloPos(static_cast<ALO*>(plo)) : glm::vec3(0.0f);  // vt slot 33
         if (!fSide(t, vT, tt, F32(0x42C80000))) continue;  // 100 (0x2BF83C)
         ploA = plo;
         ploB = nullptr;
@@ -834,18 +900,29 @@ void FindJumpHideTarget(JUMP* pj)
 }
 
 // orig: 0x00197F98's path to the state's object and its speed test (see jump.h)
-void UpdateJumpTargetPath(JUMP* pj)
+float UpdateJumpTargetPath(JUMP* pj)
 {
     ACTOR* pa = pj->pactor;
+    float heading = pa->radHeading;
     XF* pxf = PxfPos(pa->palo);
-    if (!pxf) return;
+    if (!pxf) return heading;
     const int k = pj->state;
-    if ((k == 6 || k == 8) && pj->ploC)
+    if ((k == 6 || (k >= 8 && k <= 13) || k == 18) && pj->ploC)
     {
-        // the object's point (less +0x240) where the object's record will be when the jump ends (0x2309E8 over the
-        // time left), and its velocity there; the end velocity's z the actor's now plus g t
+        // The state's sampled point where the owner's record will be when the jump ends
+        // (0x2309E8); end velocity Z is the actor's current Z velocity plus gravity times dt.
         const glm::vec3 vel = VelActorJ(pa);
-        const glm::vec3 rel = PosJtLo(pj->ploC) - glm::vec3(pa->vecBase);  // sp+0x30
+        glm::vec3 rel;
+        switch (k)
+        {
+        case 9: rel = PosJtDesc(pj->ploC, JTL_Spire, pa, pj->s14, nullptr); break;
+        case 10: rel = PosJtDesc(pj->ploC, JTL_Rail, pa, pj->s14, nullptr); break;
+        case 11: rel = PosJtDesc(pj->ploC, JTL_Ledge, pa, pj->s14, &heading); break;
+        case 12: rel = PosJtDesc(pj->ploC, JTL_Wall, pa, pj->s14, &heading); break;
+        case 13: rel = PosJtDesc(pj->ploC, JTL_Swing, pa, pj->s14, &heading); break;
+        case 18: rel = PosJtLo(pj->ploC); break;
+        default: rel = PosJtLo(pj->ploC) - glm::vec3(pa->vecBase); break;  // states 6 / 8
+        }
         const float f20 = pxf->tTarget - g_clock.t;
         XF* ps = PxfSlot32(pj->ploC);
         glm::mat4 mP(1.0f), mV(0.0f);
@@ -853,9 +930,12 @@ void UpdateJumpTargetPath(JUMP* pj)
         const glm::vec3 v150 = PosConvertXfs(nullptr, ps, rel);  // 0x22FC48
         const glm::vec3 r = glm::vec3(mP * glm::vec4(v150, 1.0f));
         pxf->aseg[0] = glm::vec4(PosConvertXfs(nullptr, pxf->pxfRef, r), pxf->aseg[0].w);
-        glm::vec3 r2 = glm::vec3(mV * glm::vec4(v150, 1.0f));
-        r2.z = vel.z + f20 * GravActor(pa).z;
-        pxf->aseg[1] = glm::vec4(VecConvertXfs(nullptr, pxf->pxfRef, r2), pxf->aseg[1].w);
+        if (k != 10)  // rail landings retain the selected velocity goal
+        {
+            glm::vec3 r2 = glm::vec3(mV * glm::vec4(v150, 1.0f));
+            r2.z = vel.z + f20 * GravActor(pa).z;
+            pxf->aseg[1] = glm::vec4(VecConvertXfs(nullptr, pxf->pxfRef, r2), pxf->aseg[1].w);
+        }
     }
     if (k == 6 || (k >= 8 && k < 17) || k == 18)
     {
@@ -869,8 +949,11 @@ void UpdateJumpTargetPath(JUMP* pj)
         const float lb = 0.0f + std::sqrt((a1.x * a1.x + a1.y * a1.y) + a1.z * a1.z);
         if (F32(0x461C4000) < (la + lb) * (f * 0.5f))  // 10000 (0x2BF844)
         {
-            if (FPrint()) std::printf("jumptgt: the path in state %d too fast (%.1f): given up\n", k, (la + lb) * (f * 0.5f));
+            if (FPrint())
+                std::printf("jumptgt: the path in state %d too fast (%.1f): given up (p0 %.1f %.1f %.1f v0 %.1f %.1f %.1f p1 %.1f %.1f %.1f v1 %.1f %.1f %.1f f %.3f)\n", k,
+                            (la + lb) * (f * 0.5f), p0.x, p0.y, p0.z, v0.x, v0.y, v0.z, p1.x, p1.y, p1.z, v1.x, v1.y, v1.z, f);
             SetJumpAnimState(pj, 4, nullptr);
         }
     }
+    return heading;
 }

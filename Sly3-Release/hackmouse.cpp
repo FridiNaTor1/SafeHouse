@@ -1,6 +1,7 @@
 // See hackmouse.h. Native QoL (Phase 3): no original code.
 
 #include "hackmouse.h"
+#include "game/sly3.h"
 
 #include "cm.h"
 #include "cmworld.h"
@@ -160,7 +161,7 @@ bool FHackMouseAim(LO* plo, float* pradAim, bool* pfFire)
                     ndc.x, ndc.y, pos.x, pos.y, pos.z, s.x / s.w, s.y / s.w, *pradAim, int(fLeft));
         // (every 10th frame: the shots in the world (cid 0x4A), their heading and distance from the ship)
         if (g_frameJoy % 10 == 0)
-            for (LO* p : g_psw->mpcidaplo[0x4A])
+            for (LO* p : g_psw->mpcidaplo[S3CID(0x4A)])
                 if (p->fInWorld)
                 {
                     const glm::vec3 v = PosAloCenter(static_cast<ALO*>(p)) - pos;

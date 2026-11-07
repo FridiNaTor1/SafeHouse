@@ -8,6 +8,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <mutex>
 #include <vector>
 
@@ -76,6 +77,7 @@ public:
 
 private:
     IXAudio2SourceVoice* m_pvoice = nullptr;
+    std::FILE* m_pfTap = nullptr;  // (test: SLY2N_PCMTAP=dir: every frame pushed, one raw file per stream)
     std::vector<int16_t> m_aab[kcBuffer];
     int m_iab = 0;
 };

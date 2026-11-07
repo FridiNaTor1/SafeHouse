@@ -5,17 +5,23 @@
 // point through the camera's view direction (CM +0x60's x row, the reference's 0x2DDFA0), run = R1 beyond 170.
 // Feedback on another object (a guard's patrol pauses at random): waitobj CID OID X Y R N (neutral pad until an in-world
 // object of that class / oid is within R of X,Y; fails after N frames), chase CID OID NEAR BUDGET ZMIN ZMAX run|walk
-// [strength=G] [jump=N] [within=R] [follow] (move toward the nearest such object until within NEAR; jump=N: a double jump
+// [strength=G] [jump=N] [within=R] [follow] [press=CSV: those presses every 60 frames, e.g. a vehicle's drive and fire] (move toward the nearest such object until within NEAR; jump=N: a double jump
 // every N frames; within=R: only objects within R of the player, none: the step is over; follow: stay within NEAR of it,
 // neutral while there, for the whole budget N frames, which then ends the step instead of failing it).
-// point N X Y Z CSV [obj=CID:OID:DZ]: N frames of the left stick turning the camera (e.g. the binocucom's view) toward the
-// world point (or the nearest in-world object CID / OID to X,Y, DZ above it; lo=OID[:DZ]: that object's world position), the CSV's presses on top (RY zoom, R1).
+// point N X Y Z CSV [obj=CID:OID:DZ] [until=SCPT] [every=F]: N frames of the left stick turning the camera (e.g. the binocucom's view) toward the
+// world point (or the nearest in-world object CID / OID to X,Y, DZ above it; lo=OID[:DZ]: that object's world position), the CSV's presses on top (RY zoom, R1);
+// until=SCPT: the step ends once that script starts (N: the budget); every=F: the presses repeat every F frames (a gun fired until a hit).
+// waitscpt OID N [CSV]: until script OID starts again (N frames, then on), the CSV's presses meanwhile.
+// setposlo OID[,OID..] X Y R ZMIN ZMAX [DZ [OFF]]: as setpos, DZ above (OFF toward X,Y from) the nearest in-world copy of those oids to X,Y (within R,
+// its height in ZMIN..ZMAX; e.g. a carryable that respawns elsewhere).
 // setpos X Y Z: the current player placed there by its position setter (vt slot 29), velocities zeroed (both engines:
 // the reference's route setpos = SLY2_SETPOS on 3DD490+3EFC@); one frame.
 // teleport X Y Z [H]: the current player put there (as SLY2N_TELEPORT: Z is the object's, H the heading, camera cut) at the
 // step's start (one frame); waittask OID STATE N [CSV]: until the task's state is >= STATE (after N frames it goes on), the CSV's
-// presses meanwhile (e.g. CROSS taps through a dialog); taskreq OID STATE: a poke (as SLY2N_TASKREQ); intovol OID [DZ]: the player at a volume's center (its floor + DZ); tail CID OID DIST N [DZ] [CSV]: N frames (the CSV's presses every 60 frames), the player put DIST/2 behind the nearest such object whenever farther than DIST; onlo OID [DZ] [N]: the player onto the N-th in-world copy of OID, DZ above, with its velocity (a moving train); giver OID [D]: as SLY2N_TELEGIVER (-1: the first guard with a prize); waitclock DT N: until the game clock ran DT (popups pause it); all independent of the game clock (pauses, scenes).
+// presses meanwhile (e.g. CROSS taps through a dialog); skipif OID STATE N: the next N steps skipped when the task's state is
+// >= STATE (native only: e.g. a fight's remaining rounds once it is won); taskreq OID STATE: a poke (as SLY2N_TASKREQ); intovol OID [DZ]: the player at a volume's center (its floor + DZ); tail CID OID DIST N [DZ] [CSV]: N frames (the CSV's presses every 60 frames), the player put DIST/2 behind the nearest such object whenever farther than DIST; onlo OID [DZ] [N] [DX DY [H]]: the player onto the N-th in-world copy of OID, DZ above, with its velocity (a moving train); giver OID [D]: as SLY2N_TELEGIVER (-1: the first guard with a prize, -N: the N-th); waitclock DT N: until the game clock ran DT (popups pause it); hackdock X Y: the hack ship put there once driven; warpworld N: world record N loaded in this process (the debug menu's warp); nojt OID[,OID..] N [CSV]: N frames (the CSV's presses meanwhile), failing once one of those objects is a tracked interaction target (a prompt); all independent of the game clock (pauses, scenes).
 #include "activate.h"
+#include "game/sly3.h"
 #include "crv.h"
 #include "actor.h"
 #include "alo.h"
@@ -25,11 +31,14 @@
 #include "cls.h"
 #include "cm.h"
 #include "joy.h"
+#include "jt.h"
 #include "lo.h"
 #include "po.h"
 #include "so.h"
 #include "sw.h"
 #include "task.h"
+#include "game/scptgame3.h"
+#include "transition.h"
 #include "routetele.h"
 #include "vtnative.h"
 
@@ -45,13 +54,14 @@
 #include <vector>
 
 ROUTETELE g_routetele;
+ROUTEHACKDOCK g_routehackdock;
 
 namespace
 {
 struct PRESSR { int at = 1, c = 1, axis = -1; uint16_t grf = 0; uint8_t b = 0x80; };
 struct STEPR
 {
-    enum { Move, Wait, Input, Aim, WaitObj, Chase, Point, Teleport, WaitTask, TaskReq, WaitClock, Giver, IntoVol, SetPos, OnLo, Tail } kind = Wait;
+    enum { Move, Wait, Input, Aim, WaitObj, Chase, Point, Teleport, WaitTask, TaskReq, WaitClock, Giver, IntoVol, SetPos, OnLo, Tail, SkipIf, SetPosLo, WaitScpt, HackDock, NoJt, WarpWorld, StartScpt } kind = Wait;
     float h = 0; bool fH = false;
     int cid = 0, oid = 0;
     int frames = 0;
@@ -60,6 +70,9 @@ struct STEPR
     int jump = 0;  // (chase jump=N: Cross at the step's frames N*k+1..+6 and +13..+18, as the reference's)
     bool follow = false;  // (chase follow: within NEAR the pad is neutral and the step goes on until its budget)
     bool run = false;
+    int oidUntil = -1;  // (point until=OID: the step ends once script OID starts; its frames are then the budget)
+    int every = 0;      // (point every=N: the CSV's presses repeat every N frames)
+    std::vector<int> aoid;  // (setposlo: the oids, any of them)
     std::vector<PRESSR> apress;
 };
 struct ROUTE
@@ -146,10 +159,19 @@ void Load()
                 if (f[i].rfind("jump=", 0) == 0) s.jump = std::atoi(f[i].c_str() + 5);
                 else if (f[i].rfind("within=", 0) == 0) s.within = std::strtof(f[i].c_str() + 7, nullptr);
                 else if (f[i] == "follow") s.follow = true;
+                else if (f[i].rfind("press=", 0) == 0) FParsePresses(f[i].substr(6), s.apress);  // (every 60 frames)
                 else strength(i);
             }
         }
         else if (f[0] == "wait" && f.size() >= 2) { s.kind = STEPR::Wait; s.frames = std::atoi(f[1].c_str()); }
+        else if (f[0] == "nojt" && f.size() >= 3)
+        {
+            // nojt OID[,OID..] N [CSV]: N frames (the CSV's presses meanwhile), failing once any of those objects is a
+            // tracked interaction target (its prompt shown / CIRCLE able to take it: g_jttrack)
+            s.kind = STEPR::NoJt; s.frames = std::atoi(f[2].c_str());
+            for (const char* q = f[1].c_str(); q && *q; q = std::strchr(q, ',') ? std::strchr(q, ',') + 1 : nullptr) s.aoid.push_back(std::atoi(q));
+            if (f.size() >= 4) FParsePresses(f[3], s.apress);
+        }
         else if (f[0] == "input" && f.size() >= 3) { s.kind = STEPR::Input; s.frames = std::atoi(f[1].c_str()); FParsePresses(f[2], s.apress); }
         else if (f[0] == "aim" && f.size() >= 6)
         {
@@ -174,6 +196,11 @@ void Load()
                 s.cid = -2;
                 std::sscanf(f[6].c_str() + 3, "%d:%f", &s.oid, &s.dz);
             }
+            for (size_t i = 7; i < f.size(); ++i)  // (until=OID: until that script starts; every=N: the presses repeat)
+            {
+                if (f[i].rfind("until=", 0) == 0) s.oidUntil = std::atoi(f[i].c_str() + 6);
+                else if (f[i].rfind("every=", 0) == 0) s.every = std::atoi(f[i].c_str() + 6);
+            }
         }
         else if (f[0] == "teleport" && f.size() >= 4)
         {
@@ -181,10 +208,34 @@ void Load()
             s.x = std::strtof(f[1].c_str(), nullptr); s.y = std::strtof(f[2].c_str(), nullptr); s.z = std::strtof(f[3].c_str(), nullptr);
             if (f.size() >= 5) { s.fH = true; s.h = std::strtof(f[4].c_str(), nullptr); }
         }
+        else if (f[0] == "hackdock" && f.size() == 3)
+        {
+            // hackdock X Y: the hack ship put at (X, Y) (local hack coordinates, as SLY2N_HACKTELE) once it is driven
+            s.kind = STEPR::HackDock; s.frames = 1;
+            s.x = std::strtof(f[1].c_str(), nullptr); s.y = std::strtof(f[2].c_str(), nullptr);
+        }
         else if (f[0] == "setpos" && f.size() == 4)
         {
             s.kind = STEPR::SetPos; s.frames = 1;
             s.x = std::strtof(f[1].c_str(), nullptr); s.y = std::strtof(f[2].c_str(), nullptr); s.z = std::strtof(f[3].c_str(), nullptr);
+        }
+        else if (f[0] == "setposlo" && f.size() >= 7)
+        {
+            // setposlo OID[,OID..] X Y R ZMIN ZMAX [DZ [OFF]]: the player set (as setpos) DZ above the in-world copy of any of
+            // those oids nearest X,Y (within R, its center in ZMIN..ZMAX): a carryable that respawns elsewhere
+            s.kind = STEPR::SetPosLo; s.frames = 1;
+            for (const char* q = f[1].c_str(); q && *q; q = std::strchr(q, ',') ? std::strchr(q, ',') + 1 : nullptr) s.aoid.push_back(std::atoi(q));
+            s.x = std::strtof(f[2].c_str(), nullptr); s.y = std::strtof(f[3].c_str(), nullptr); s.near = std::strtof(f[4].c_str(), nullptr);
+            s.zmin = std::strtof(f[5].c_str(), nullptr); s.zmax = std::strtof(f[6].c_str(), nullptr);
+            s.dz = f.size() >= 8 ? std::strtof(f[7].c_str(), nullptr) : 100.0f;
+            s.h = f.size() >= 9 ? std::strtof(f[8].c_str(), nullptr) : 0.0f;  // (OFF: that far from it toward X,Y)
+        }
+        else if (f[0] == "waitscpt" && f.size() >= 3)
+        {
+            // waitscpt OID N: until script OID starts again (a start after the step's own start; N frames, then on)
+            s.kind = STEPR::WaitScpt;
+            s.oid = std::atoi(f[1].c_str()); s.frames = std::atoi(f[2].c_str());
+            if (f.size() >= 4) FParsePresses(f[3], s.apress);  // (the CSV's presses meanwhile, e.g. shots until a hit's scene)
         }
         else if (f[0] == "intovol" && f.size() >= 2)
         {
@@ -203,10 +254,14 @@ void Load()
         }
         else if (f[0] == "onlo" && f.size() >= 2)
         {
-            // tail CID OID DIST N [DZ] [CSV]: N frames (the CSV's presses every 60 frames), the player put DIST/2 behind the nearest such object whenever farther than DIST; onlo OID [DZ] [N]: the player onto the N-th in-world copy of OID (DZ above its position), with its velocity
+            // tail CID OID DIST N [DZ] [CSV]: N frames (the CSV's presses every 60 frames), the player put DIST/2 behind the nearest such object whenever farther than DIST; onlo OID [DZ] [N] [DX DY [H]]: the player onto the N-th in-world copy of OID (DZ above its position), with its velocity
             s.kind = STEPR::OnLo; s.frames = 2;
             s.oid = std::atoi(f[1].c_str()); s.dz = f.size() >= 3 ? std::strtof(f[2].c_str(), nullptr) : 0.0f;
             s.cid = f.size() >= 4 ? std::atoi(f[3].c_str()) : 0;
+            // Optional world-space offset and heading retain the platform's velocity
+            // while placing the player on a particular part of a moving object.
+            if (f.size() >= 6) { s.x = std::strtof(f[4].c_str(), nullptr); s.y = std::strtof(f[5].c_str(), nullptr); }
+            if (f.size() >= 7) { s.h = std::strtof(f[6].c_str(), nullptr); s.fH = true; }
         }
         else if (f[0] == "giver" && f.size() >= 2)
         {
@@ -222,6 +277,25 @@ void Load()
         {
             s.kind = STEPR::TaskReq; s.frames = 1;
             s.oid = std::atoi(f[1].c_str()); s.cid = std::atoi(f[2].c_str());
+        }
+        else if (f[0] == "warpworld" && f.size() >= 2)
+        {
+            // warpworld N: the world record N loaded in this process (the debug menu's warp, RequestWorldWarp), its default
+            // point; the route goes on through the load (e.g. tools/spintripregress.py's trip)
+            s.kind = STEPR::WarpWorld; s.frames = 1;
+            s.oid = std::atoi(f[1].c_str());
+        }
+        else if (f[0] == "startscpt" && f.size() >= 2)
+        {
+            // startscpt OID (Sly 3, native only): the script started as its owner's use would start it (the player as
+            // the starter), e.g. i_trainer's door script 163581 (exit 4570 to the episode chooser)
+            s.kind = STEPR::StartScpt; s.frames = 1;
+            s.oid = std::atoi(f[1].c_str());
+        }
+        else if (f[0] == "skipif" && f.size() >= 4)
+        {
+            s.kind = STEPR::SkipIf; s.frames = 1;
+            s.oid = std::atoi(f[1].c_str()); s.cid = std::atoi(f[2].c_str()); s.jump = std::atoi(f[3].c_str());
         }
         else if (f[0] == "waittask" && f.size() >= 4)
         {
@@ -262,8 +336,8 @@ bool FNearestObj(int cid, int oid, float x, float y, glm::vec3* ppos, const floa
         if (s_fDbg && plo->oid == oid)
             std::printf("chase: oid %d cid 0x%X (want 0x%X) in world %d hp %d z %.0f window %.0f..%.0f\n", oid, plo->Cid(), cid,
                         plo->fInWorld, PguardFromLo(plo) ? PguardFromLo(plo)->n33C : -999,
-                        FCidDerivedFrom(plo->Cid(), 0x30) ? PosAloCenter(static_cast<ALO*>(plo)).z : 0.0f, pzr ? pzr[0] : 0.0f, pzr ? pzr[1] : 0.0f);
-        if (plo->oid != oid || !plo->fInWorld || plo->Cid() != cid || !FCidDerivedFrom(plo->Cid(), 0x30)) continue;
+                        FCidDerivedFrom(plo->Cid(), S3CID(0x30)) ? PosAloCenter(static_cast<ALO*>(plo)).z : 0.0f, pzr ? pzr[0] : 0.0f, pzr ? pzr[1] : 0.0f);
+        if ((plo->oid != oid && plo->oidInstance != oid) || !plo->fInWorld || plo->Cid() != cid || !FCidDerivedFrom(plo->Cid(), S3CID(0x30))) continue;  // (an instance by its alias too)
         if (pzr && cid >= 0x38 && cid < 0x44)
             if (const GUARD* pg = PguardFromLo(plo); pg && pg->n33C <= 0) continue;
         const glm::vec3 p = PosAloCenter(static_cast<ALO*>(plo));
@@ -281,6 +355,12 @@ bool FRouteSample(int frame, uint16_t* pgrf, uint8_t abAxis[4])
     ROUTE& r = Route();
     if (!r.fLoaded) Load();
     static const bool s_fHp = std::getenv("SLY2N_HPTRACE") != nullptr;  // (debug: the player's health changes)
+    // (test only: SLY2N_HOLDHP=N: the current player's health held at least N each frame, a long job route's hits
+    // survived; as the reference's SLY2_POKE on the actor's counter)
+    if (static const char* s_szHold = std::getenv("SLY2N_HOLDHP"); s_szHold && g_psw)
+        if (LO* ploH = PloPoCurrent(g_psw))
+            if (ACTOR* pa = PactorFromLo(ploH))
+                if (int* pn = const_cast<int*>(DmgCounterOf(pa)); pn && *pn > 0 && *pn < std::atoi(s_szHold)) *pn = std::atoi(s_szHold);
     if (s_fHp)
     {
         static int s_hp = -1000;
@@ -289,7 +369,7 @@ bool FRouteSample(int frame, uint16_t* pgrf, uint8_t abAxis[4])
         const int* pn = pa ? DmgCounterOf(pa) : nullptr;
         if (pn && *pn != s_hp)
         {
-            const glm::vec3 p = FCidDerivedFrom(ploH->Cid(), 0x30) ? PosAloCenter(static_cast<ALO*>(ploH)) : glm::vec3(0.0f);
+            const glm::vec3 p = FCidDerivedFrom(ploH->Cid(), S3CID(0x30)) ? PosAloCenter(static_cast<ALO*>(ploH)) : glm::vec3(0.0f);
             std::printf("hp: frame %d t %.3f %d -> %d at (%.0f %.0f %.0f)\n", frame, g_clock.t, s_hp, *pn, p.x, p.y, p.z);
             s_hp = *pn;
         }
@@ -315,7 +395,7 @@ bool FRouteSample(int frame, uint16_t* pgrf, uint8_t abAxis[4])
     // (test only: SLY2N_GUARDHPMAX=N: every guard's health +0x33C held at most N, a route's fights shortened)
     if (static const char* s_szMax = std::getenv("SLY2N_GUARDHPMAX"); s_szMax && g_psw)
         for (const auto& up : g_psw->aploAll)
-            if (GUARD* pg = FCidDerivedFrom(up->Cid(), 0x38) ? PguardFromLo(up.get()) : nullptr)
+            if (GUARD* pg = FCidDerivedFrom(up->Cid(), S3CID(0x38)) ? PguardFromLo(up.get()) : nullptr)
                 pg->n33C = std::min(pg->n33C, std::atoi(s_szMax));
     if (r.astep.empty() || r.fDone || r.fFailed) return false;
     if (r.frameStart < 0)
@@ -330,7 +410,8 @@ bool FRouteSample(int frame, uint16_t* pgrf, uint8_t abAxis[4])
     uint8_t a[4] = {0x80, 0x80, 0x80, 0x80};
     if (!r.fStarted) { r.fStarted = true; r.frameStep = frame; std::printf("route: step 1 at frame %d (t %.3f)\n", frame, g_clock.t); }
     const STEPR* s = &r.astep[r.istep];
-    const auto fOpen = [](const STEPR* p) { return p->kind == STEPR::Move || p->kind == STEPR::Chase || p->kind == STEPR::WaitObj || p->kind == STEPR::WaitTask || p->kind == STEPR::WaitClock; };
+    const auto fOpen = [](const STEPR* p) { return p->kind == STEPR::Move || p->kind == STEPR::Chase || p->kind == STEPR::WaitObj || p->kind == STEPR::WaitTask || p->kind == STEPR::WaitClock || p->kind == STEPR::WaitScpt ||
+                                           (p->kind == STEPR::Point && p->oidUntil >= 0); };
     if (r.fAdvance || (!fOpen(s) && frame - r.frameStep >= s->frames))
     {
         ++r.istep;
@@ -348,7 +429,7 @@ bool FRouteSample(int frame, uint16_t* pgrf, uint8_t abAxis[4])
     const int rel = frame - r.frameStep + 1;
     LO* plo = g_psw ? PloPoCurrent(g_psw) : nullptr;
     glm::vec3 pos(0.0f);
-    if (plo && FCidDerivedFrom(plo->Cid(), 0x30)) pos = PosAloCenter(static_cast<ALO*>(plo));
+    if (plo && FCidDerivedFrom(plo->Cid(), S3CID(0x30))) pos = PosAloCenter(static_cast<ALO*>(plo));
     const float camx = g_cm.mat[0].x, camy = g_cm.mat[0].y;
     if (s->kind == STEPR::WaitObj)
     {
@@ -371,7 +452,12 @@ bool FRouteSample(int frame, uint16_t* pgrf, uint8_t abAxis[4])
         g_routetele = {true, s->x, s->y, s->z, s->h, s->fH};
         std::printf("route: step %d teleport %.0f %.0f %.0f (frame %d)\n", r.istep + 1, s->x, s->y, s->z, frame);
     }
-    if (s->kind == STEPR::SetPos && rel == 1 && plo && FCidDerivedFrom(plo->Cid(), 0x30))
+    if (s->kind == STEPR::HackDock && rel == 1)
+    {
+        g_routehackdock = {true, s->x, s->y};
+        std::printf("route: step %d hackdock %.0f %.0f (frame %d)\n", r.istep + 1, s->x, s->y, frame);
+    }
+    if (s->kind == STEPR::SetPos && rel == 1 && plo && FCidDerivedFrom(plo->Cid(), S3CID(0x30)))
     {
         // as SLY2N_SETPOS / the reference's route setpos (SLY2_SETPOS): the class's slot 29, velocities zeroed
         ALO* palo = static_cast<ALO*>(plo);
@@ -380,6 +466,61 @@ bool FRouteSample(int frame, uint16_t* pgrf, uint8_t abAxis[4])
         SetAloVelocityTo(palo, glm::vec3(0.0f));
         SetAloAngVelocityTo(palo, glm::vec3(0.0f));
         std::printf("route: step %d setpos %.1f %.1f %.1f (frame %d)\n", r.istep + 1, s->x, s->y, s->z, frame);
+    }
+    if (s->kind == STEPR::SetPosLo && rel == 1 && plo && FCidDerivedFrom(plo->Cid(), S3CID(0x30)) && g_psw)
+    {
+        float dBest = s->near;
+        glm::vec3 pBest(0.0f);
+        int oidBest = -1;
+        for (const auto& up : g_psw->aploAll)
+        {
+            LO* pl = up.get();
+            if (!pl->fInWorld || !FCidDerivedFrom(pl->Cid(), S3CID(0x30)) || std::find(s->aoid.begin(), s->aoid.end(), pl->oid) == s->aoid.end()) continue;
+            if (pl->paloParent) continue;  // (loose ones only: not the one carried (parented to its holder))
+            const glm::vec3 p = PosAloCenter(static_cast<ALO*>(pl));
+            if (p.z < s->zmin || p.z > s->zmax) continue;
+            const float d = std::hypot(p.x - s->x, p.y - s->y);
+            if (d < dBest) { dBest = d; pBest = p; oidBest = pl->oid; }
+        }
+        if (oidBest >= 0)
+        {
+            ALO* palo = static_cast<ALO*>(plo);
+            glm::vec3 q = pBest + glm::vec3(0.0f, 0.0f, s->dz);
+            if (const float d = std::hypot(s->x - pBest.x, s->y - pBest.y); s->h > 0.0f && d > 1.0f)
+                q += glm::vec3((s->x - pBest.x) / d * s->h, (s->y - pBest.y) / d * s->h, 0.0f);
+            if (auto pfn = reinterpret_cast<void (*)(ALO*, const glm::vec3&)>(PvNativeVt(plo, 29))) pfn(palo, q);
+            else SetAloPos(palo, q);
+            SetAloVelocityTo(palo, glm::vec3(0.0f));
+            SetAloAngVelocityTo(palo, glm::vec3(0.0f));
+            std::printf("route: step %d setposlo %d at %.0f %.0f %.0f (frame %d)\n", r.istep + 1, oidBest, pBest.x, pBest.y, pBest.z, frame);
+        }
+        else std::printf("route: step %d setposlo: none within %.0f of %.0f %.0f (frame %d)\n", r.istep + 1, s->near, s->x, s->y, frame);
+    }
+    if (s->kind == STEPR::Point && s->oidUntil >= 0)
+    {
+        extern std::unordered_map<int, int> g_mpoidcScptStart;  // scpt.cpp
+        static int s_c0 = 0;
+        const int c = g_mpoidcScptStart[s->oidUntil];
+        if (rel == 1) s_c0 = c;
+        else if (c > s_c0 || frame - r.frameStep >= s->frames)
+        {
+            std::printf("route: step %d's script %d %s (frame %d t %.3f)\n", r.istep + 1, s->oidUntil, c > s_c0 ? "started" : "timeout", frame, g_clock.t);
+            if (r.istep + 1 == static_cast<int>(r.astep.size())) { r.fDone = true; return false; }
+            r.fAdvance = true;
+        }
+    }
+    if (s->kind == STEPR::WaitScpt)
+    {
+        extern std::unordered_map<int, int> g_mpoidcScptStart;  // scpt.cpp
+        static int s_c0 = 0;
+        const int c = g_mpoidcScptStart[s->oid];
+        if (rel == 1) s_c0 = c;
+        else if (c > s_c0 || frame - r.frameStep >= s->frames)
+        {
+            std::printf("route: step %d's script %d %s (frame %d t %.3f)\n", r.istep + 1, s->oid, c > s_c0 ? "started" : "timeout", frame, g_clock.t);
+            if (r.istep + 1 == static_cast<int>(r.astep.size())) { r.fDone = true; return false; }
+            r.fAdvance = true;
+        }
     }
     if (s->kind == STEPR::WaitClock)
     {
@@ -395,11 +536,17 @@ bool FRouteSample(int frame, uint16_t* pgrf, uint8_t abAxis[4])
     if (s->kind == STEPR::IntoVol && rel == 1 && g_psw)
     {
         // (the center of a volume's shape (a trigger or an exit) in the world, DZ added: the player teleported there)
-        if (const LOXSHAPE* px = dynamic_cast<const LOXSHAPE*>(PloFindSwObjectByOid(g_psw, s->oid)); px && !px->geom.apos.empty())
+        // (a clone's shape is its original's: the geometry from the clone chain, the matrix the clone's own, as
+        // trigger.cpp FInsideVolume reads it; Sly 3's shared exits are such clones)
+        const LOXSHAPE* px = dynamic_cast<const LOXSHAPE*>(PloFindSwObjectByOid(g_psw, s->oid));
+        const LOXSHAPE* pgeom = px;
+        for (const LO* p = px; pgeom && pgeom->geom.apos.empty() && p && p->ploCloneOf; p = p->ploCloneOf)
+            if (const LOXSHAPE* q = dynamic_cast<const LOXSHAPE*>(p->ploCloneOf)) pgeom = q;
+        if (px && pgeom && !pgeom->geom.apos.empty())
         {
             const glm::mat4 m = MatWorldLox(px);
             glm::vec3 mn(1e30f), mx(-1e30f);
-            for (const glm::vec3& v : px->geom.apos) { const glm::vec3 w = glm::vec3(m * glm::vec4(v, 1.0f)); mn = glm::min(mn, w); mx = glm::max(mx, w); }
+            for (const glm::vec3& v : pgeom->geom.apos) { const glm::vec3 w = glm::vec3(m * glm::vec4(v, 1.0f)); mn = glm::min(mn, w); mx = glm::max(mx, w); }
             const glm::vec3 c = (mn + mx) * 0.5f;
             g_routetele = {true, c.x, c.y, mn.z + s->dz, 0.0f, false};
             std::printf("route: step %d into volume %d at %.0f %.0f %.0f (box %.0f..%.0f %.0f..%.0f %.0f..%.0f)\n", r.istep + 1, s->oid, c.x, c.y,
@@ -434,19 +581,31 @@ bool FRouteSample(int frame, uint16_t* pgrf, uint8_t abAxis[4])
         for (const auto& up : g_psw->aploAll)
         {
             LO* pl = up.get();
-            if (pl->oid != s->oid || !pl->fInWorld || !FCidDerivedFrom(pl->Cid(), 0x30) || i++ != s->cid) continue;
+            if (pl->oid != s->oid || !pl->fInWorld || !FCidDerivedFrom(pl->Cid(), S3CID(0x30)) || i++ != s->cid) continue;
             const glm::vec3 p = PosAloCenter(static_cast<ALO*>(pl));
             if (rel == 1) s_pos0 = p;
             else if (rel == 2)
             {
                 const glm::vec3 v = g_clock.dt > 0.0f ? (p - s_pos0) / g_clock.dt : glm::vec3(0.0f);
-                g_routetele = {true, p.x + v.x * g_clock.dt, p.y + v.y * g_clock.dt, p.z + v.z * g_clock.dt + s->dz, 0.0f, false};
+                g_routetele = {true, p.x + v.x * g_clock.dt + s->x, p.y + v.y * g_clock.dt + s->y,
+                              p.z + v.z * g_clock.dt + s->dz, s->h, s->fH};
                 g_routetele.fVel = true; g_routetele.vel = v;
                 std::printf("route: step %d onto %d#%d at %.0f %.0f %.0f vel %.0f %.0f %.0f (frame %d)\n", r.istep + 1, s->oid, s->cid, p.x, p.y,
                             p.z + s->dz, v.x, v.y, v.z, frame);
             }
             break;
         }
+    }
+    if (s->kind == STEPR::NoJt)
+    {
+        for (int k = 0; k < g_jttrack.c; ++k)
+            if (const LO* pt = g_jttrack.ae[k].plo; pt && std::find(s->aoid.begin(), s->aoid.end(), pt->oid) != s->aoid.end())
+            {
+                std::printf("route: failed at frame %d: step %d's %d is an interaction target (%.0f away)\n", frame, r.istep + 1, pt->oid,
+                            g_jttrack.ae[k].dist);
+                r.fFailed = true;
+                return false;
+            }
     }
     if (s->kind == STEPR::Giver && rel == 1)
     {
@@ -459,19 +618,44 @@ bool FRouteSample(int frame, uint16_t* pgrf, uint8_t abAxis[4])
         std::printf("route: step %d taskreq %d = %d (frame %d)\n", r.istep + 1, s->oid, s->cid, frame);
         std::printf("route: taskreq %d: %d\n", s->oid, FRequestTaskStateOid(s->oid, s->cid) ? 1 : 0);
     }
+    if (s->kind == STEPR::WarpWorld && rel == 1 && g_psw)
+    {
+        std::printf("route: step %d warpworld %d (frame %d)\n", r.istep + 1, s->oid, frame);
+        RequestWorldWarp(g_psw, s->oid);  // (transition.h: as the debug menu)
+    }
+    // (the task's state through NTaskStateOid (task.h): Sly 3's tasks (game/task3) when the scripts run, else the
+    // copied TASK objects; -2: no such task)
+    if (s->kind == STEPR::StartScpt && rel == 1 && g_psw)
+    {
+        LO* pscpt = PloFindSwObjectByOid(g_psw, s->oid);
+        std::printf("route: step %d startscpt %d%s (frame %d)\n", r.istep + 1, s->oid, pscpt ? "" : ": no such object", frame);
+        if (pscpt) StartScptOfLo3(pscpt, PloPoCurrent(g_psw));
+        r.fAdvance = true;
+    }
+    if (s->kind == STEPR::SkipIf && rel == 1)
+    {
+        const int nTask = g_psw ? NTaskStateOid(s->oid, nullptr) : -2;
+        if (nTask != -2 && nTask >= s->cid)
+        {
+            const int c = std::min(s->jump, static_cast<int>(r.astep.size()) - 1 - r.istep);
+            std::printf("route: step %d's task %d state %d: %d steps skipped (frame %d)\n", r.istep + 1, s->oid, nTask, c, frame);
+            r.istep += c;
+        }
+        r.fAdvance = true;
+    }
     if (s->kind == STEPR::WaitTask)
     {
-        const TASK* pt = g_psw ? dynamic_cast<const TASK*>(PloFindSwObjectByOid(g_psw, s->oid)) : nullptr;
-        if (pt && pt->nState >= s->cid)
+        const int nTask = g_psw ? NTaskStateOid(s->oid, nullptr) : -2;
+        if (nTask != -2 && nTask >= s->cid)
         {
-            std::printf("route: step %d's task %d state %d (frame %d t %.3f)\n", r.istep + 1, s->oid, pt->nState, frame, g_clock.t);
+            std::printf("route: step %d's task %d state %d (frame %d t %.3f)\n", r.istep + 1, s->oid, nTask, frame, g_clock.t);
             if (r.istep + 1 == static_cast<int>(r.astep.size())) { r.fDone = true; std::printf("route: completed at frame %d\n", frame); }
             else r.fAdvance = true;
         }
         else if (frame - r.frameStep >= s->frames)
         {
             // (a timeout goes on: the next steps may retry, e.g. a moving photo target from another place)
-            std::printf("route: timeout at frame %d: step %d's task %d at state %d\n", frame, r.istep + 1, s->oid, pt ? pt->nState : -9);
+            std::printf("route: timeout at frame %d: step %d's task %d at state %d\n", frame, r.istep + 1, s->oid, nTask == -2 ? -9 : nTask);
             if (r.istep + 1 == static_cast<int>(r.astep.size())) { r.fDone = true; return false; }
             r.fAdvance = true;
         }
@@ -489,6 +673,8 @@ bool FRouteSample(int frame, uint16_t* pgrf, uint8_t abAxis[4])
             else r.fAdvance = true;
             return false;
         }
+        if (static const bool s_fPrint = std::getenv("SLY2N_CHASEPRINT") != nullptr; s_fPrint && frame % 60 == 0)  // (debug: the chased object's distance)
+            std::printf("route: chase %d at %.0f %.0f %.0f, Sly %.0f %.0f %.0f: %.0f (frame %d)\n", s->oid, po.x, po.y, po.z, pos.x, pos.y, pos.z, std::hypot(po.x - pos.x, po.y - pos.y), frame);
         if (s->follow)
         {
             // (follow: the budget's end is the step's end; within NEAR the pad stays neutral)
@@ -555,7 +741,8 @@ bool FRouteSample(int frame, uint16_t* pgrf, uint8_t abAxis[4])
         static const bool s_fPrint = std::getenv("SLY2N_POINTPRINT") != nullptr;
         if (s_fPrint) std::printf("point frame %d yaw %.5f pitch %.5f stick %u %u target %.0f %.0f %.0f\n", frame, eYaw, ePitch, a[0], a[1], tgt.x, tgt.y, tgt.z);
     }
-    const int relp = s->kind == STEPR::Tail ? (rel - 1) % 60 + 1 : rel;
+    const int relp = s->kind == STEPR::Point && s->every > 0 ? (rel - 1) % s->every + 1
+                   : s->kind == STEPR::Tail || (s->kind == STEPR::Move && !s->apress.empty() && &r.astep[r.istep] != s) ? (rel - 1) % 60 + 1 : rel;
     for (const PRESSR& p : s->apress)
         if (relp >= p.at && relp - p.at < p.c)
         {

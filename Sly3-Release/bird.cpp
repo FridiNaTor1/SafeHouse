@@ -1,5 +1,5 @@
-// bird.cpp: class 0x60 (module 0x1B0B78..0x1B1C50; the name is unknown, the boot world's seagulls 66949 are its only
-// instances seen so far): an ALO that rests, walks along a path (+0x16C), turns at the path's ends, faces the
+// bird.cpp: class 0x60 (module 0x1B0B78..0x1B1C50; the name is unknown: the boot world's seagulls 66949 and Elephant
+// Rampage's crawl-space rats 118626 (world 8) use it): an ALO that rests, walks along a path (+0x16C), turns at the path's ends, faces the
 // player who comes near and flies off along a second path (+0x170), fading out. Hit (a contact with bytes 8) it
 // bursts (+0x1C8), drops its coins and is removed. Each state plays its own segment (actanim.h STEPSEGS: +0x17C
 // {id, ASEG, grf} x 6, the playing ASEGA +0x1C4).
@@ -8,6 +8,9 @@
 // 968 +0x1C8 (the burst), 969 / 970 +0x150 / +0x154 (the radii), 971 +0x158 (the rest's time range), 972 +0x160
 // (the walk's), 973 +0x168 (the fade's time), 974 setter 0x1B17B8 (the turn rate's ratio), 975 setter 0x1B1328 (the
 // state), 976 +0x230 (the coins), 977 +0x240 (their place).
+#include "jt.h"
+#include "game/sly3.h"
+#include "worldglobals.h"
 #include "actanim.h"
 #include "activate.h"
 #include "alo.h"
@@ -82,11 +85,14 @@ struct BIRD
     int ccoin = -1;          // +0x230
     glm::vec3 posCoin{0.0f}; // +0x240 (the object's frame)
     bool fStarted = false;
+    bool fPaths = false;     // (the paths' oids below found once)
+    uint32_t oidWalk = 0xFFFFFFFFu, oidFly = 0xFFFFFFFFu;
     int cPhys = 0;  // (debug: the physics updates)
 };
 std::unordered_map<const LO*, BIRD> s_mpbird;
+WORLD_TABLE(s_mpbird);   // (PC: moved aside while a kept world loads, worldglobals.h)
 
-bool FBird(const LO* plo) { return plo && plo->Cid() == 0x60; }
+bool FBird(const LO* plo) { return plo && plo->Cid() == S3CID(0x60); }
 
 // orig: 0x001B0B78 (InitLo's defaults; the per-copy data on first use: a copy takes its template's options)
 BIRD& Bird(LO* plo)
@@ -113,7 +119,7 @@ ALO* Palo(LO* plo) { return static_cast<ALO*>(plo); }
 
 float RadHeadingOf(ALO* palo)  // atan2 of the world matrix's x row (0x1B1868)
 {
-    const glm::mat4 m = MatWorldOfAlo(palo);
+    const glm::mat4 m = MatJtLo(palo);  // vt slot 31
     return std::atan2(m[0].y, m[0].x);
 }
 
@@ -146,7 +152,7 @@ LO* PloNearestPlayer(const glm::vec3& pos)
 {
     LO* pbest = nullptr;
     float s2Best = FLT_MAX;
-    for (LO* plo : AploOfClass(g_psw, 0x34))
+    for (LO* plo : AploOfClass(g_psw, S3CID(0x34)))
     {
         if (!plo->fInWorld) continue;
         const glm::vec3 d = PosAloCenter(Palo(plo)) - pos;
@@ -157,6 +163,7 @@ LO* PloNearestPlayer(const glm::vec3& pos)
 }
 
 void SetBirdState(LO* plo, int st);
+void ReadBirdFields(LO* plo, BIRD& b);
 
 // orig: 0x001B1900 (a player within +0x154 and either within +0x150 or moving at 150 or more: faced, state 3)
 int StBirdSees(LO* plo, BIRD& b)
@@ -212,6 +219,7 @@ void SetBirdState(LO* plo, int st)
     BIRD& b = Bird(plo);
     ALO* palo = Palo(plo);
     if (b.state == st) return;
+    if (b.fStarted) ReadBirdFields(plo, b);
     if (b.state == 2 || b.state == 3)
         if (XF* pxf = PxfRot(palo)) SetXfMode(palo, pxf, b.modeRot);  // 0x2303A0 / 0x22C840 (+0x5C, +0x1D4)
     switch (st)
@@ -228,7 +236,7 @@ void SetBirdState(LO* plo, int st)
     {
         // the way back: the step reversed, the heading turned round (the x row negated), still
         b.dgPath = -b.dgPath;
-        const glm::mat4 m = MatWorldOfAlo(palo);
+        const glm::mat4 m = MatJtLo(palo);  // vt slot 31
         SetBirdHeading(b, std::atan2(-m[0].y, -m[0].x));  // 0x11EFB0
         SetAloVelocityTo(palo, glm::vec3(0.0f));
         if (XF* pxf = PxfRot(palo)) SetXfMode(palo, pxf, 1);
@@ -269,7 +277,7 @@ void SetBirdState(LO* plo, int st)
         // hit: the sound 0x14, the coins at +0x240, removed
         const glm::vec3 pos = PosAloCenter(palo);
         PsndStartSound(0x14, 1.0f, 0, nullptr, &pos);  // 0x1FBB90 / 0x1FB2F8 / 0x1FB3F0
-        const glm::vec3 posCoin = glm::vec3(MatWorldOfAlo(palo) * glm::vec4(b.posCoin, 1.0f));  // 0x1A6F00
+        const glm::vec3 posCoin = PosJtConvert(palo, nullptr, b.posCoin);  // 0x1A6F00
         DropPickups(posCoin, b.ccoin, -100, plo);  // 0x154E10
         RemoveLo(g_psw, plo);                      // vt slot 9
         break;
@@ -280,7 +288,7 @@ void SetBirdState(LO* plo, int st)
     b.tState = g_clock.t;
     if (st != 2) PlayStepState(&b.segs, palo, st);  // 0x1305B8 (grf | 1)
     if (std::getenv("SLY2N_BIRDPRINT"))
-        std::printf("bird %d %p: state %d t %.2f next %.2f\n", plo->oid, (void*)plo, st, g_clock.t, b.tNext);
+        std::printf("bird %d %p: state %d t %.2f next %.2f radii %g %g\n", plo->oid, (void*)plo, st, g_clock.t, b.tNext, b.sNear, b.sFar);
 }
 
 // orig: 0x001B0D90 (on its walk path's start, walking; else resting)
@@ -307,6 +315,30 @@ LO* PloOption(LO* plo, uint32_t ib)
     return PloFindSwObjectByOid(g_psw, oid);
 }
 
+// The option fields (0x1B0CA8's load and the options). The original reads them from the object each time it uses
+// them, so a script's option write at run time takes effect at once: Elephant Rampage's crawl trigger 106963 sets
+// the rats' (118626) radii 886 / 887 to 1500 / 1000 so they see Sly and run into their holes (R60; natively the
+// values were read once at the start and the rats never fled). Read again before each update and state change.
+void ReadBirdFields(LO* plo, BIRD& b)
+{
+    b.sNear = FloatField(plo, 0x150, 400.0f);
+    b.sFar = FloatField(plo, 0x154, 800.0f);
+    b.dtRestMin = FloatField(plo, 0x158, 2.0f);
+    b.dtRestMax = FloatField(plo, 0x15C, 6.0f);
+    b.dtWalkMin = FloatField(plo, 0x160, 6.0f);
+    b.dtWalkMax = FloatField(plo, 0x164, 10.0f);
+    b.dtFade = FloatField(plo, 0x168, 1.0f);
+    b.ccoin = static_cast<int>(plo->U32Field(0, 0x230, 0xFFFFFFFFu));
+    b.posCoin = glm::vec3(FloatField(plo, 0x240, 0.0f), FloatField(plo, 0x244, 0.0f), FloatField(plo, 0x248, 0.0f));
+    // (the paths: object fields; found again only when a write changed their oid)
+    const uint32_t oidWalk = plo->U32Field(0, 0x16C, 0xFFFFFFFFu), oidFly = plo->U32Field(0, 0x170, 0xFFFFFFFFu);
+    if (!b.fPaths || oidWalk != b.oidWalk) b.ppathWalk = PloOption(plo, 0x16C);
+    if (!b.fPaths || oidFly != b.oidFly) b.ppathFly = PloOption(plo, 0x170);
+    b.oidWalk = oidWalk;
+    b.oidFly = oidFly;
+    b.fPaths = true;
+}
+
 // orig: 0x001B0D08 (vt slot 15: the segments found, the walk / fly speeds from their root motion, placed)
 void StartBird(LO* plo)
 {
@@ -314,18 +346,7 @@ void StartBird(LO* plo)
     if (b.fStarted) return;
     b.fStarted = true;
     ALO* palo = Palo(plo);
-    // the fields (0x1B0CA8's load and the options)
-    b.sNear = FloatField(plo, 0x150, b.sNear);
-    b.sFar = FloatField(plo, 0x154, b.sFar);
-    b.dtRestMin = FloatField(plo, 0x158, b.dtRestMin);
-    b.dtRestMax = FloatField(plo, 0x15C, b.dtRestMax);
-    b.dtWalkMin = FloatField(plo, 0x160, b.dtWalkMin);
-    b.dtWalkMax = FloatField(plo, 0x164, b.dtWalkMax);
-    b.dtFade = FloatField(plo, 0x168, b.dtFade);
-    b.ccoin = static_cast<int>(plo->U32Field(0, 0x230, 0xFFFFFFFFu));
-    b.posCoin = glm::vec3(FloatField(plo, 0x240, 0.0f), FloatField(plo, 0x244, 0.0f), FloatField(plo, 0x248, 0.0f));
-    b.ppathWalk = PloOption(plo, 0x16C);
-    b.ppathFly = PloOption(plo, 0x170);
+    ReadBirdFields(plo, b);
     b.pexpl = PloOption(plo, 0x1C8);
     if (XF* pxf = PxfRot(palo)) b.modeRot = pxf->mode;
     BindStepSegs(&b.segs, palo);                     // 0x1B1BF0
@@ -341,6 +362,7 @@ void UpdateBird(LO* plo)
     if (PFNUPDATE pfn = PfnUpdateOrig(0x1F36E0)) pfn(plo);  // the ALO's
     BIRD& b = Bird(plo);
     if (!b.fStarted) StartBird(plo);
+    else ReadBirdFields(plo, b);
     int st = b.state;
     switch (st)
     {
@@ -374,6 +396,12 @@ void UpdateBird(LO* plo)
     }
     SetBirdState(plo, st);
     MoveBirdAlongPath(plo, b);
+    if (std::getenv("SLY2N_BIRDPRINT") && static_cast<int>(g_clock.t * 2) != static_cast<int>((g_clock.t - g_clock.dt) * 2))
+    {
+        const glm::vec3 pos = PosAloCenter(Palo(plo));
+        std::printf("bird %d %p: at %.0f %.0f %.0f state %d in world %d paths %d %d\n", plo->oid, (void*)plo, pos.x, pos.y, pos.z, b.state,
+                    int(plo->fInWorld), b.ppathWalk ? b.ppathWalk->oid : -1, b.ppathFly ? b.ppathFly->oid : -1);
+    }
 }
 
 // orig: 0x001B10B0 (vt slot 70: turned toward the heading (0x1F59A0) instead of the gravity)
@@ -437,6 +465,14 @@ struct INITBIRD
             if (FBird(plo)) SetStepSeg(&Bird(plo).segs, NArg(a, 0), NArg(a, 1, -1), NArg(a, 2, -1));
             return CRef(TAGK_Void);
         });
+        // EOPID 974 (setter 0x1B17B8: the turn rate's ratio; type 1, RefSetPeopid 0x200598 coerces to a float) and 975
+        // (setter 0x1B1328: the state; type 0x1036, the reference's word passed as is); natively unregistered until R60
+        RegisterObjectSetter(974, [](LO* plo, const CRef& r) {
+            if (FBird(plo)) SetBirdTurnRatio(Bird(plo), GArg({r}, 0));
+        });
+        RegisterObjectSetter(975, [](LO* plo, const CRef& r) {
+            if (FBird(plo)) SetBirdState(plo, r.m_n);
+        });
     }
 } s_initbird;
 }  // namespace
@@ -450,3 +486,16 @@ void ResetBirds() { s_mpbird.clear(); }
 NATIVEFN(0x1B10B0, TurnBird);
 NATIVEFN(0x1B0F88, FAcceptBirdContact);
 NATIVEFN(0x1B1030, UpdateBirdPhys);
+
+namespace
+{
+// orig: 0x001B0D60 (class 0x60's vt slot 26, a pool row taken again, after the base 0x1CB518): placed again (0x1B0D90:
+// the turn rate's ratio 1, at its walk path's start in state 1, else state 0). Natively a reused bird kept its old
+// state and place (audit 2026-11 "Open" item 8)
+void ResetBirdSlot26(LO* plo, LO*)
+{
+    StartBird(plo);  // (natively the start's fields are read once)
+    PlaceBird(plo, Bird(plo));
+}
+}  // namespace
+NATIVEFN(0x1B0D60, ResetBirdSlot26);

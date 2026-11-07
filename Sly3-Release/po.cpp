@@ -1,11 +1,12 @@
 #include <execinfo.h>
-#include "sly3/ids3.h"
+#include "game/sly3.h"
 // po.cpp: the player objects (po.h): the controller states (ported from the reference's m_1C3D70.cpp, oracle-checked
 // ports of the original's 0x1C3D70..0x1C4B00), the enable / current player (the world code) and the safe house's
 // slot 79 (0x1D7418 / 0x1D7480).
 #include "po.h"
 #include "rope.h"
 #include "turret.h"
+#include "vehiclehooks.h"
 #include "actor.h"
 #include "aipursuit.h"
 #include "ai.h"
@@ -25,6 +26,7 @@ void PrintRef(const CRef& ref, std::string* ps);  // bif.cpp (debug)
 #include "cm.h"
 #include "cmworld.h"
 #include "joy.h"
+#include "jt.h"
 #include "lo.h"
 #include "objmethod.h"
 #include "ref.h"
@@ -68,7 +70,7 @@ constexpr float HALF_PI = F32(0x3FC90FDB);
 const float G_NEG_FLT_MAX = -FLT_MAX;          // 0x2A76F0
 
 // orig: 0x001C4330 (a stick (x, y) to the camera-relative heading and deflection; the deflection held decays by 0.2 a
-// frame, the old heading kept while the stick is inside it)
+// frame, the old heading kept while the stick is inside it; Sly 3: the deflection not held, see below)
 void TurnPadctlStick(float radCam, float* px, float* py, float* prad, float* pr, float* prHeld)
 {
     const float x = *px, y = *py;
@@ -77,10 +79,11 @@ void TurnPadctlStick(float radCam, float* px, float* py, float* prad, float* pr,
     *prHeld = r2 > 0.0f ? r2 : 0.0f;
     if (*pr < *prHeld || *pr == 0.0f)
     {
+        // (Sly 3, orig3 0x1A8930 GetJoyXYDeflection's end: the held deflection only keeps the old direction; the
+        // deflection is the stick's own, so a released stick is 0 at once (the run stops on that frame))
         float s, c;
         cmm::CalculateSinCos(*prad - radCam + HALF_PI, &s, &c);
-        *pr = *prHeld;
-        *px = *prHeld * c;
+        *px = *pr * c;
         *py = *pr * s;
     }
     else
@@ -165,7 +168,7 @@ std::vector<OID> AoidOptionStates(const LO* plo)
 {
     std::vector<OID> a;
     for (const OPT& o : plo->aopt)
-        if (o.eopid == 1339)
+        if (o.eopid == S3EOPID(1339))
             for (const OPTVAL& v : o.aval)
                 for (const OPTVAL& w : v.alist) a.push_back(OID(w.n));
     return a;
@@ -242,7 +245,7 @@ void SetSafeHouseState(SW* psw, LO* plo, int n)
     // the players (0x15E9C8(G, 5, 0x34, 0, 3): the first three of class 0x34): a carried booty put back (0x1433C8:
     // the save's slot, the booty out, the HUD timer stopped), their health / power refilled (0x1440D0(p, 1))
     {
-        std::vector<LO*> aplo = AploOfClass(psw, 0x34);
+        std::vector<LO*> aplo = AploOfClass(psw, S3CID(0x34));
         if (aplo.size() > 3) aplo.resize(3);
         for (LO* p : aplo)
             if (ACTOR* pa = PactorFromLo(p))
@@ -252,7 +255,7 @@ void SetSafeHouseState(SW* psw, LO* plo, int n)
             }
     }
     // the cid 0x64 objects: vt slot 76 (4) (TODO); the cid 0x4F objects removed
-    for (CID cid = 0x4F; cid < g_acls[0x4F].cidLast; ++cid)
+    for (CID cid = S3CID(0x4F); cid >= 0 && cid < g_acls[S3CID(0x4F)].cidLast; ++cid)
         for (LO* p : std::vector<LO*>(psw->mpcidaplo[cid])) RemoveLo(psw, p);
     // its state machine at the state of the progress "oidPoCurrent" (else its first)
     OID oidSm = static_cast<OID>(plo->U32Field(0, 0x184, static_cast<uint32_t>(-1)));
@@ -267,7 +270,7 @@ void SetSafeHouseState(SW* psw, LO* plo, int n)
     }
     if (std::getenv("SLY2N_POPRINT"))
         std::printf("safe house %d: sm %d (%s) state %d\n", plo->oid, oidSm, psm ? "found" : "none", oidState);
-    if (FCidDerivedFrom(plo->Cid(), Icid(CID3::ALO))) ReplaceSmaHandle(psm, static_cast<ALO*>(plo), oidState, 0, &sh.psma);
+    if (FCidDerivedFrom(plo->Cid(), S3CID(0x30))) ReplaceSmaHandle(psm, static_cast<ALO*>(plo), oidState, 0, &sh.psma);
     StepSafeHouse(plo, sh, 0);   // orig 0x1D77D0(p, 0)
     ClearJoySteps();             // orig 0x187E78
     Event(plo, 5);
@@ -276,7 +279,7 @@ void SetSafeHouseState(SW* psw, LO* plo, int n)
 
 PODATA* PpodataFromLo(LO* plo)
 {
-    if (!plo || !FIsLoDerivedFrom(plo, Icid(CID3::SO))) return nullptr;
+    if (!plo || !FIsLoDerivedFrom(plo, S3CID(0x32))) return nullptr;
     auto [it, fNew] = s_mppodata.try_emplace(plo);
     if (fNew) it->second.grfbtnForced = plo->U32Field(0, 0x154, 0);
     return &it->second;
@@ -318,7 +321,7 @@ void UpdatePadctl(PADCTL* ppc)
     // (debug: SLY2N_AUTOSTEER="X Y@tA-tB[,U];...": between the game times A and B the controlled player's left stick
     // points at the world point (X, Y) with deflection U (default 1): a player's stick in any camera)
     if (static const char* s_sz = std::getenv("SLY2N_AUTOSTEER"); s_sz && ppc->nControl == 1 && ppc->plo &&
-        FCidDerivedFrom(ppc->plo->Cid(), Icid(CID3::ALO)))
+        FCidDerivedFrom(ppc->plo->Cid(), S3CID(0x30)))
         for (const char* q = s_sz; q && *q; q = std::strchr(q, ';') ? std::strchr(q, ';') + 1 : nullptr)
         {
             float x = 0, y = 0, a = 0, b = 0, u = 1.0f;
@@ -400,13 +403,17 @@ void SetPoCurrent(SW* psw, LO* plo)
     s_ploCur = plo;
     g_transition.ploPlayer = plo;
     if (pcur != pnew && pnew) SetCmFocusObject(pnew, true);   // vt slot 78 (1)
-    if (plo && FCidDerivedFrom(plo->Cid(), Icid(CID3::PLAYER)))
+    if (plo && FCidDerivedFrom(plo->Cid(), S3CID(0x34)))
     {
         CRef ref;
         ref.SetS32(plo->oid);
         FSetProgress({"oidPoCurrent"}, ref);  // 0x1D8B20
     }
-    // TODO(M4): 0x194F70, 0x1C48C0 (the objects following the current player)
+    // 0x194F70(psw, 0, 0, 0): the tracked interaction targets dropped (R58: the safe house's door kept the previous
+    // player's aura, e.g. Murray's emblem with Bentley at the door, because it stayed tracked across the switch)
+    DropJtTrack();
+    // TODO: 0x1C48C0 (SW +0x4778's followers, put on the new player: registered by the splice method 0x105AF0 ->
+    // 0x1594D8 -> 0x1C4848, not bound; no script was seen calling it)
 }
 
 // orig: 0x001C4A60 (the forced player object SW +0x3F00: the world's EOPID 928 (id 0x22), its getter 0x1C4A48
@@ -516,7 +523,7 @@ void UpdateSafeHouse(LO* plo)
     }
     for (const OPT& o : plo->aopt)
     {
-        if (o.eopid != 1338 || o.aval.size() < 3) continue;
+        if (o.eopid != S3EOPID(1338) || o.aval.size() < 3) continue;
         if (o.aval[0].n != oidCur) continue;
         if (!GrfbtnTakePressed(uint32_t(o.aval[1].n))) continue;
         const OID oidTarget = o.aval[2].n;
@@ -539,7 +546,7 @@ void UpdateSafeHouse(LO* plo)
     {
         LO* pscpt = PloFindSwObjectByOid(g_psw, 27254);
         LO* plo9 = PloFindSwObjectByOid(g_psw, 9);
-        if (pscpt && plo9 && FCidDerivedFrom(pscpt->Cid(), 0x72)) StartScpt(pscpt, plo9);
+        if (pscpt && plo9 && FCidDerivedFrom(pscpt->Cid(), S3CID(0x72))) StartScpt(pscpt, plo9);
     }
 }
 struct INITSAFEHOUSE
@@ -561,6 +568,7 @@ void ResetPos(SW*)
     s_ploOverride = nullptr;
     s_mpsh.clear();
     ResetTurrets();
+    ResetVehicles();
     ResetRopes();
 }
 
@@ -620,7 +628,7 @@ int UnlockSafeHouseCharacters(SW* psw)
     s_fAllCharacters = true;
     int c = 0;
     if (!psw) return 0;
-    for (LO* plo : AploOfClass(psw, 0x46))
+    for (LO* plo : AploOfClass(psw, S3CID(0x46)))
     {
         SAFEHOUSE& sh = s_mpsh[plo];
         if (!sh.fAllowedSet) continue;   // (still the option's full list)

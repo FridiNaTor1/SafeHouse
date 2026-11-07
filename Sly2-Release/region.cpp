@@ -41,7 +41,13 @@ std::string SzSystemLanguage()
         if (const char* sz = std::getenv(var); sz && *sz && std::strcmp(sz, "C") != 0 && std::strcmp(sz, "POSIX") != 0)
             return std::string(sz, std::strcspn(sz, "_.@:-"));
 #ifdef _WIN32
-    if (const char* sz = std::setlocale(LC_ALL, ""); sz && *sz) return std::string(sz, std::strcspn(sz, "_.@:-"));
+    // (setlocale(LC_ALL, "") only to read the user's locale name: the process stays in the "C" locale, or every
+    // later printf / strtod / sscanf of a number uses the user's decimal comma, e.g. Swedish or German Windows)
+    const std::string old = std::setlocale(LC_ALL, nullptr) ? std::setlocale(LC_ALL, nullptr) : "C";
+    const char* sz = std::setlocale(LC_ALL, "");
+    const std::string name = sz ? std::string(sz, std::strcspn(sz, "_.@:-")) : std::string();
+    std::setlocale(LC_ALL, old.c_str());
+    if (!name.empty()) return name;
 #endif
     return "";
 }

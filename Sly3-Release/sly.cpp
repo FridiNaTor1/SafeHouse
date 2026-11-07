@@ -2,7 +2,7 @@
 // round4low_animation.cpp (0x18E540): oracle-checked or register-level ports of the original's 0x188488..0x191090
 // and the actor's 0x13FF70..0x144E20.
 #include "sly.h"
-#include "sly3/ids3.h"
+#include "game/sly3.h"
 #include "routetele.h"
 #include "climbsurf.h"
 #include "slyfeet.h"
@@ -62,6 +62,8 @@ void BroadcastTaskEvent(SW* psw, int n, LO* plo);  // orig 0x001619A0 (task.h)
 #include "mat.h"
 #include "xfphys.h"
 #include "animfind.h"
+#include "pccharacter.h"   // (PC addition, debug menu only: Carmelita's moveset)
+#include "pcguard.h"       // (PC addition, debug menu only: the playable guards)
 
 #include <cstring>
 #include <cmath>
@@ -69,12 +71,14 @@ void BroadcastTaskEvent(SW* psw, int n, LO* plo);  // orig 0x001619A0 (task.h)
 #include <cstdio>
 #include <cstdlib>
 #include <map>
+#include "combo3.h"
 #include <string>
 
 using cmm::F32;
 
 void BindLoPartsTable(ALO* palo, int c, uint32_t vaTable);  // loaders.cpp: orig 0x1A64E8
 void StartPlayerCounters(ACTOR* pa, bool fReset);  // orig 0x1440D0
+extern int g_iframeMain;  // (game.cpp: debug prints)
 
 bool FSlyHarnessOn();                       // slycheck.cpp
 void CompareSlyFrame(SW* psw, int frame);
@@ -248,7 +252,7 @@ void UpdateActorLook(ACTOR* pa)
         float gBest = F32(0x7F7FFFFF), g1 = 0.0f, g2 = 0.0f;  // 0x2A4D68
         if (psBest) LookScore(pa, psBest, &pa->ploLook, &gBest, &g2);
         if (g_psw)
-            for (LO* ps : g_psw->mpcidaplo[0x15])
+            for (LO* ps : CIDLIST(g_psw->mpcidaplo, S3CID(0x15)))
             {
                 if (!ps || !FLoActive(ps)) continue;
                 const int nPrio = static_cast<int>(ps->U32Field(0, 0xF4, 1));
@@ -344,7 +348,7 @@ float GDuration(const ASEG* paseg) { return paseg ? PasegdOf(const_cast<ASEG*>(p
 bool FActorTargetInReach(ACTOR* pa, bool fWide)
 {
     if (pa->n10EC != 4 || pa->n10E4 == 3 || !pa->plo10E8) return false;
-    float gDist = FIsLoDerivedFrom(pa->plo10E8, 0x3A) ? 1700.0f : 1000.0f;
+    float gDist = FIsLoDerivedFrom(pa->plo10E8, S3CID(0x3A)) ? 1700.0f : 1000.0f;
     float gMin = -750.0f, gMax = 750.0f;
     if (fWide)
     {
@@ -352,7 +356,7 @@ bool FActorTargetInReach(ACTOR* pa, bool fWide)
         gMin -= 500.0f;
         gMax += 500.0f;
     }
-    if (!FIsLoDerivedFrom(pa->plo10E8, Icid(CID3::ALO))) return false;
+    if (!FIsLoDerivedFrom(pa->plo10E8, S3CID(0x30))) return false;
     const glm::vec3 d = PosAloCenter(static_cast<ALO*>(pa->plo10E8)) - PosAloCenter(pa->palo);
     return std::sqrt(d.x * d.x + d.y * d.y) < gDist && gMin < d.z && d.z < gMax;
 }
@@ -392,7 +396,7 @@ void InitActorFields(ACTOR* pa)
 void BindActorPartTable(ACTOR* pa)
 {
     if (pa->fPartTableBound) return;
-    BindLoPartsTable(pa->palo, Icid(CID3::JT), 0x2BC9F0);
+    BindLoPartsTable(pa->palo, 0x3B, 0x342DD0);  // (orig3 0x152488: Sly 3's actor table, 59 entries; Sly 2 0x2BC9F0, 53)
     pa->fPartTableBound = true;
 }
 
@@ -400,6 +404,9 @@ void BindActorPartTable(ACTOR* pa)
 // 0x1910F8 / 0x19F3F0 / 0x1A1098 / 0x19CC30 / 0x21F388 / 0x19DE58, the linked objects, 0x141EF8, 0x1F8278)
 void PostLoadActorParts(ACTOR* pa)
 {
+    // EOPID 719 (0x13E818) overrides the constructor's outward interaction offset before post-load.
+    // Native constructors run after BRX loading; Bentley/Murray must retain the authored value here.
+    pa->g103C = GFieldLo(pa->palo, 0x103C, pa->g103C);
     BindActorPartTable(pa);
     pa->psm102C = PPart<SM>(pa->palo, 0x102C);
     PostLoadBinoc(pa);  // 0x19CC30 (+0xF00's window part; the clips +0xF0C / +0xF10)
@@ -605,7 +612,7 @@ void PostLoadSly(SLY* p)
 {
     ALO* palo = p->palo;
     PostLoadActorParts(p);                   // 0x1400B8
-    BindLoPartsTable(palo, 0x12, 0x2BF1B0);  // 0x188608's
+    BindLoPartsTable(palo, 0xB, 0x345638);   // (orig3 0x1AA2B0's; Sly 2 0x188608's 0x2BF1B0, 18 entries)
     p->psmIdle = PPart<SM>(palo, 0x1028);
     p->plo19A0 = PloPart(palo, 0x19A0);
     p->plo19A4 = PloPart(palo, 0x19A4);
@@ -635,7 +642,7 @@ void PostLoadSly(SLY* p)
         XF* record = nullptr;
         if (i == 5)
         {
-            if (p->plo19A0 && FCidDerivedFrom(p->plo19A0->Cid(), Icid(CID3::ALO)))
+            if (p->plo19A0 && FCidDerivedFrom(p->plo19A0->Cid(), S3CID(0x30)))
             {
                 owner = static_cast<ALO*>(p->plo19A0);
                 record = PxfPos(owner);
@@ -649,6 +656,19 @@ void PostLoadSly(SLY* p)
             p->slide.ahandleOwned[i].reset(PctrlNewSource(owner, record, i == 3 || i == 4 ? 7 : 5));
             p->slide.aphandle[i] = p->slide.ahandleOwned[i].get();
         }
+    }
+    // orig: 0x00188608: +0x19C0 / +0x19C4 / +0x19CC (0x1F4C58 by tag and kind), the hand's actuator +0x1A00
+    // (0x12DC18(p, +0x19C0, 5, 5, 2, 0)) made and taken out again (0x230100): state 3 adds it (slyhang.cpp)
+    for (const auto& xf : palo->axf)
+    {
+        if (xf->tag == 0xC && xf->kind == 6 && !p->pxfHandRot) p->pxfHandRot = xf.get();
+        if (xf->tag == 0xC && xf->kind == 1 && !p->pxfHandPos) p->pxfHandPos = xf.get();
+        if (xf->tag == 0x1D && xf->kind == 6 && !p->pxfArm) p->pxfArm = xf.get();
+    }
+    if (p->pxfHandRot)
+    {
+        p->pctrlHand.reset(PctrlNewPos(palo, p->pxfHandRot, 5, 5, 2, glm::vec4(0.0f)));
+        RemoveXfCtrl(palo, p->pxfHandRot, p->pctrlHand.get());
     }
     std::vector<BLENDBL> slideParts(3);
     for (int i = 0; i < 3; ++i)
@@ -680,7 +700,7 @@ void PostLoadSly(SLY* p)
     SetLoSt(s_psw, palo, 1);  // 0x1A6CA8 (always active)
     // the paraglider's SM: 0x1F0380(+0x1D24, +0x1D20, -1, 1)
     if (SM* psm = PPart<SM>(palo, 0x1D24))
-        if (LO* plo = PloPart(palo, 0x1D20); plo && FIsLoDerivedFrom(plo, Icid(CID3::ALO)))
+        if (LO* plo = PloPart(palo, 0x1D20); plo && FIsLoDerivedFrom(plo, S3CID(0x30)))
             p->psma1D28 = PsmaApplySm(psm, static_cast<ALO*>(plo), -1, 1);
 }
 
@@ -690,7 +710,7 @@ void InitWorldActors(SW* psw)
 {
     s_psw = psw;
     s_psly = nullptr;
-    for (CID cid = Icid(CID3::JT); cid < g_acls[Icid(CID3::JT)].cidLast; ++cid)
+    for (CID cid = S3CID(0x35); cid >= 0 && cid < g_acls[S3CID(0x35)].cidLast; ++cid)
         for (LO* plo : psw->mpcidaplo[cid])
         {
             ALO* palo = static_cast<ALO*>(plo);
@@ -708,8 +728,8 @@ void InitWorldActors(SW* psw)
 // min(n, +0xDFC)) and the power to its maximum (0x1441C0: min(n, +0x1300 = 100)), +0x1308 = 0)
 void StartPlayerCounters(ACTOR* pa, bool fReset)
 {
-    const char* psz = FIsLoDerivedFrom(pa->palo, Icid(CID3::JT)) ? "sly" : FIsLoDerivedFrom(pa->palo, Icid(CID3::BENTLEY)) ? "bentley"
-                    : FIsLoDerivedFrom(pa->palo, Icid(CID3::MURRAY)) ? "murray" : nullptr;
+    const char* psz = FIsLoDerivedFrom(pa->palo, S3CID(0x35)) ? "sly" : FIsLoDerivedFrom(pa->palo, S3CID(0x37)) ? "bentley"
+                    : FIsLoDerivedFrom(pa->palo, S3CID(0x36)) ? "murray" : nullptr;
     if (!psz) return;
     if (int32_t* pn = PnProgressSlot({psz, "hpCur"})) SetDmgCounter(pa, pn);
     int32_t* pnMp = PnProgressSlot({psz, "mpCur"});
@@ -730,8 +750,8 @@ void CheatRefillPlayers(SW* psw)
     {
         ACTOR* pa = PactorFromLo(plo.get());
         if (!pa || !pa->palo) continue;
-        const char* psz = FIsLoDerivedFrom(pa->palo, Icid(CID3::JT)) ? "sly" : FIsLoDerivedFrom(pa->palo, Icid(CID3::BENTLEY)) ? "bentley"
-                        : FIsLoDerivedFrom(pa->palo, Icid(CID3::MURRAY)) ? "murray" : nullptr;
+        const char* psz = FIsLoDerivedFrom(pa->palo, S3CID(0x35)) ? "sly" : FIsLoDerivedFrom(pa->palo, S3CID(0x37)) ? "bentley"
+                        : FIsLoDerivedFrom(pa->palo, S3CID(0x36)) ? "murray" : nullptr;
         if (!psz) continue;
         if (int* pc = DmgCounterOf(pa)) *pc = DmgCapacityOf(pa);
         if (int32_t* pnMp = PnProgressSlot({psz, "mpCur"})) *pnMp = 100;
@@ -752,8 +772,8 @@ float GEventAseg11(ASEG* paseg, int n)
 // orig: 0x0018E540 (the attack mode n, -1 none): the cane's entry off unless the new mode continues the old one
 // (0x2BF448), the mode's clip played on +0x18E0 from t / at svt (a continuation from where the old one is), its end
 // time +0x19B0. Ported: -1, the cane swings 12..21 (+0x1CE0..), 22 / 23 (+0x1D14 / +0x1D18); TODO(actors): 0 (the
-// +0x17D0 controller), 1 / 2 / 10 / 11 (the gadgets: the parts' swap 2 / 11), 3..7 (the +0x1A04 blends), 8 / 9, the
-// effects (0x1FBB90: 15 / 11), the exit effect of mode 1
+// +0x17D0 controller), 1 / 2 / 10 / 11 (the gadgets: the parts' swap 2 / 11), 3..7 (the +0x1A04 blends), 8 / 9. The
+// sounds are ported: 0's 15, 4..7's 11, leaving 1 the hook's +0x130
 void SetSlyMode(SLY* p, int n)
 {
     const int old = p->mode;
@@ -766,7 +786,15 @@ void SetSlyMode(SLY* p, int n)
             if (e.tag == 332) { SetSoeOff(palo, &e); break; }  // 0x1F2AD0(+0x1A88: the cane's entry)
     if (old == 1 || old == 2) MarkAloDirty(palo);  // 0x1F4BF8
     if (old == 0) SetReachState(&p->reach, -1);    // 0x1CCAC0
-    // (leaving 0: the reach controller off, 0x1CCAC0(+0x17D0, -1); the effect 0x1FBB90(old's) at the actor)
+    // (leaving 0: the reach controller off, 0x1CCAC0(+0x17D0, -1)); leaving 1 (the hook's hang): the hook's release
+    // sound (+0x18C4's +0x130, its constructor's default 9: 0x184F50) at the actor (R31)
+    auto emit = [&](int sfx) {  // 0x1FBB90 / 0x1FB2F8(0) / 0x1FB3F0(the actor's center 0x1A62E8); -1 none
+        if (sfx == -1) return;
+        const glm::vec3 pos = PosAloCenter(palo);
+        PsndStartSound(sfx, 1.0f, 0, nullptr, &pos);
+    };
+    if (old == 1 && p->ploOther) emit(static_cast<int>(p->ploOther->U32Field(0, 0x130, 9)));
+    int sfxEnter = -1;  // the new mode's sound: 0 (the cane's reach) 15, 4..7 (the hang blends) 11; none when compatible
     {
         const bool fBack = old == 2 || old == 11, fBackNew = n == 2 || n == 11;
         // the cane's two parts: +0x19A0 in the hand, +0x19A8 the climbs' (mode 11) and 2's: the new one added (vt
@@ -789,6 +817,7 @@ void SetSlyMode(SLY* p, int n)
         // the cane reaching for the jump's target (+0x1854): the reach controller +0x17D0 (0x1CCAC0(0); TODO(actors):
         // its aim of the cane by the clip's blend, 0x1CC2E8), the clip +0x1800 held at its middle
         SetReachState(&p->reach, 0);  // 0x1CCAC0
+        sfxEnter = 15;
         paseg = p->reach.pbl;          // (+0x1800)
         tStart = GDuration(paseg) * 0.5f;
         svt = 0.0f;
@@ -796,6 +825,11 @@ void SetSlyMode(SLY* p, int n)
         MarkAloDirty(palo);                       // 0x1F4BF8
         break;
     case 1: case 2: MarkAloDirty(palo); break;
+    case 4: case 5: case 6: case 7:
+        // TODO(actors): the +0x1A04 blends' clips (0x18F560) and stop times; their sound is ported
+        sfxEnter = 11;
+        WarnOnce("SetSlyMode: mode " + std::to_string(n));
+        break;
     case 10: MarkAloDirty(palo); paseg = PPart<ASEG>(palo, 0x14D4); break;
     case 11: MarkAloDirty(palo); paseg = PPart<ASEG>(palo, 0x14D8); break;
     case 12: case 13: case 14: case 15: case 16: case 17: case 18: case 19: case 20: case 21:
@@ -804,6 +838,15 @@ void SetSlyMode(SLY* p, int n)
         p->t19B0 = g_clock.t + F32(0x3E088889);           // 0x2BF440
         p->f18EC = n < 22 ? 1 : 0;
         paseg = PPart<ASEG>(palo, n < 22 ? 0x1CE0 + 4 * static_cast<uint32_t>(n - 12) : (n == 22 ? 0x1D14 : 0x1D18));
+        // (Sly 3, interim until its cane (a new combo system, orig3 0x1E24.. / 0x1EC8..: 12-byte records) is ported:
+        // Sly 2's ten swing clips +0x1CE0.. are not in Sly 3's tables; its combo swings 339..342 (1.5 s) and the
+        // 290..292 (1 s) stand in)
+        if (!paseg && n < 22)
+        {
+            const int k = n - 12;
+            const uint32_t ib3 = k < 4 ? 0x1E24 + 0xC * uint32_t(k) : k < 7 ? 0x1EC8 + 0xC * uint32_t(k - 4) : 0x1E24 + 0xC * uint32_t((k - 7) % 4);
+            paseg = PPart<ASEG>(palo, FN3_TAG | ib3);
+        }
         if ((n < 14 || n >= 22) && p->state == 0 && p->psmIdle && IsmsFindSm(p->psmIdle, 0x17B) >= 0 && p->psma)
             SetSmaState(p->psma, 0x17B);  // 0x1F0400 / 0x1F09D8
         break;
@@ -811,6 +854,7 @@ void SetSlyMode(SLY* p, int n)
         WarnOnce("SetSlyMode: mode " + std::to_string(n));
         break;
     }
+    if (fCompatible) sfxEnter = -1;
     if (fCompatible && p->pasegaMode && paseg)
     {
         tStart = std::min(p->pasegaMode->t, GDuration(paseg));
@@ -825,6 +869,7 @@ void SetSlyMode(SLY* p, int n)
         std::printf("sly mode %d -> %d: clip %d (%.3f s) t %.3f svt %.3f compatible %d\n", old, n, paseg ? paseg->oid : -1, GDuration(paseg),
                     tStart, svt, fCompatible ? 1 : 0);
     if (dtSeek != 0.0f && p->pasegaMode) SetAsegaSeekTime(p->pasegaMode, g_clock.t + dtSeek);  // 0x131A90
+    emit(sfxEnter);
 }
 
 namespace
@@ -877,6 +922,8 @@ void SetSlyState(SLY* p, int n, int m)
     float tStart = 0.0f, svt = 1.0f;  // f22 / f23
     uint32_t grfHandles = 0;          // s6
     bool fKeepAnim = false;           // sp+0x60
+    if (static const bool s_fPrint = std::getenv("SLY2N_SLYSTATE") != nullptr; s_fPrint && n != p->state)  // (debug: Sly's state changes)
+        std::printf("slystate: %d -> %d (%d) frame %d t %.3f\n", p->state, n, m, g_iframeMain, g_clock.t);
     if (std::getenv("SLY2N_XFDBG"))
         for (XF* x : {PxfPos(palo), PxfRot(palo)})
             if (x) std::printf("set state %d -> %d: xf kind %d mode %d local t %.1f %.1f %.1f world z %.1f\n", p->state, n, x->kind, x->mode, x->mat[3].x, x->mat[3].y, x->mat[3].z, x->matWorld[3].z);
@@ -984,12 +1031,15 @@ void SetSlyState(SLY* p, int n, int m)
                 if (p->n18F0 != -1) fHi = (p->n18F0 ^ 1) != 0;
                 else
                 {
-                    const float d = p->jump.z3C - glm::vec3(MatWorldOfAlo(palo)[3]).z;  // (+0x2FC: the jump's start height)
+                    const float d = p->jump.z3C - PosLoWorld(palo).z;  // (+0x2FC: the jump's start height)
                     fHi = !(F32(0x43C80000) < d);
                 }
                 oidState = fHi ? 0x178 : 0x179;
             }
             else oidState = 0x175;
+            // (orig3 0x1AE344: Sly 3's idle SM 172 has the states 0x192..0x196 for Sly 2's 0x175..0x179 (and 0x197 after
+            // Sly 3's state 23): the same order, +0x1D)
+            if (oidState != -1) oidState += 0x1D;
             if (!psm || IsmsFindSm(psm, oidState) < 0) oidState = -1;  // (0x1F0400)
             grfMask = GrfActorLookMask(p);
             p->vecVel = glm::vec3(0.0f);
@@ -1234,6 +1284,8 @@ void SetSlyState(SLY* p, int n, int m)
 // states here, the others' parts warn)
 void UpdateSlyTransitions(SLY* p)
 {
+    // (Sly 3) the attack (Sly 3's state 23, combo3.h) leaves only when its combo ends
+    if (sly3::FCombo3Attacking(p)) return;
     int s2 = p->state;
     if (std::getenv("SLY2N_PPDEBUG") && (GrfbtnHeld(p) & BTN_CIRCLE))
         std::printf("ppdebug0: t %.3f state %d sub %d\n", g_clock.t, p->state, p->substate);
@@ -1264,9 +1316,27 @@ void UpdateSlyTransitions(SLY* p)
                                 p->plo10DC ? int(p->plo10DC->oid) : -1, int(FActorTargetInReach(p, false)));
                 if (p->f1D30) { n = 0x11; fSet = true; break; }
                 if (static_cast<unsigned>(p->mode - 8) < 2 && !p->f18E4) break;
-                if (FBtnTake(p, BTN_CROSS, 0.1f)) { n = 1; fSub = true; break; }
+                // (PC addition, debug menu only: Carmelita's moveset, pccharacter.h: her shot stands still; Cross her
+                // jump; no fighting stance, no pickpocketing; Circle the interaction in reach, else her high jump)
+                const bool fCarm = FPcCarm(p->palo);
+                if (fCarm && FPcCarmShooting() && !FPcCarmAiming())   // (in her aim mode she strafes on while shooting)
+                {
+                    if (p->state != 0) { n = 0; fSet = true; }
+                    break;
+                }
+                if (FBtnTake(p, BTN_CROSS, 0.1f))
+                {
+                    if (fCarm) { if (FPcCarmCanJump()) { SetJumpKind(&p->jump, 1, 0, 0); PcCarmJumped(p->palo, false); } break; }
+                    n = 1; fSub = true; break;
+                }
+                if (fCarm && FBtnTake(p, BTN_CIRCLE, F32(0x3E4CCCCD)))
+                {
+                    // (a guard's Circle: its special, pcguard.h)
+                    if (!FInteractCircle(p) && FPcCarmCircle(p->palo)) { SetJumpKind(&p->jump, 1, 0, 0); PcCarmJumped(p->palo, true); }
+                    break;
+                }
                 // a guard in reach (0x140AF8): state 5 (its substate 4)
-                if (!(GrfbtnHeld(p) & BTN_R1) && FActorTargetInReach(p, false)) { SetSlyState(p, 5, 4); break; }
+                if (!fCarm && !(GrfbtnHeld(p) & BTN_R1) && FActorTargetInReach(p, false)) { SetSlyState(p, 5, 4); break; }
                 // R3 held: the binocucom's recon view (0x19CC50; slot 99 (3) 0x18D760: TODO its other checks)
                 if (FBtnWithin(p, BTN_R3, 0.15f))
                 {
@@ -1281,8 +1351,10 @@ void UpdateSlyTransitions(SLY* p)
                 if (std::getenv("SLY2N_TRANS")) std::printf("  transitions: state %d u %.3f t %.3f\n", p->state, v, g_clock.t);
                 if (p->state != 0) { if (!(0.0f < v)) { n = 0; fSet = true; break; } }
                 else if (!(0.1f < v)) { n = 0; fSet = true; break; }
-                if (GrfbtnHeld(p) & BTN_R1) { n = 1; fSet = true; break; }
-                n = p->n10E4 != 3 ? 0xC : 0xA;
+                // (PC addition: Carmelita and the guards walk by default and run with R1 held, both in the run state 12: no
+                // sneak state, nor state 10 near a guard)
+                if (!fCarm && (GrfbtnHeld(p) & BTN_R1)) { n = 1; fSet = true; break; }
+                n = p->n10E4 != 3 || fCarm ? 0xC : 0xA;
                 fSet = true;
                 break;
             }
@@ -1290,8 +1362,8 @@ void UpdateSlyTransitions(SLY* p)
                 UpdateJumpTransitions(&p->jump);  // 0x197500
                 if (p->f1D30) { n = 0x11; fSet = true; break; }
                 // (slot 99 (2): 0x18D760) square / triangle in the air: the attack states 13 / 14
-                if (FBtnTake(p, BTN_SQUARE, 0.0f)) { n = 0xD; fSet = true; break; }
-                if (FBtnTake(p, BTN_TRIANGLE, 0.0f)) { n = 0xE; fSet = true; break; }
+                if (FPcCarm(p->palo)) break;   // (PC addition: Carmelita's Square is her shot, UpdateSlyButtons)
+                // (Sly 3: the air's square / triangle are the combos' (combo3.cpp: 7565 / 7563), not Sly 2's 13 / 14)
                 break;
             case 4: UpdateDamageTransitions(p); break;  // 0x1A12F0 (+0xDF0)
             case 6: UpdateSlyDodgeTransitions(p); break;  // 0x1371C8
@@ -1377,7 +1449,7 @@ bool FSlyAnchorsAhead(SLY* p)
     const XF* pxfC0 = nullptr;
     for (const auto& pxf : p->palo->axf)
         if (pxf->tag == 0xC && pxf->kind == 6) { pxfC0 = pxf.get(); break; }
-    if (!p->plo19A4 || !FCidDerivedFrom(p->plo19A4->Cid(), Icid(CID3::ALO)) || !pxfC0)
+    if (!p->plo19A4 || !FCidDerivedFrom(p->plo19A4->Cid(), S3CID(0x30)) || !pxfC0)
     {
         WarnOnce("0x18ED98 without its objects");
         return false;
@@ -1409,7 +1481,7 @@ int NSlyNextSwing(SLY* p)
     int n;
     if (p->substate == 5)
     {
-        const glm::mat4 mat = MatWorldOfAlo(p->palo);  // vt slot 31
+        const glm::mat4 mat = MatJtLo(p->palo);  // vt slot 31
         const float d = cmm::RadNormalize(RadJoy(p) - std::atan2(mat[0].y, mat[0].x));
         const float ad = std::fabs(d);
         if (ad < F32(0x3F490FDB)) n = 0xE;
@@ -1439,6 +1511,16 @@ int NSlyNextTriangle(SLY* p)
 // window is open (+0x18E4); square in the states 3 / 21 / 22 lets go (the jump 0); state 5's substates 6 / 7)
 void UpdateSlyButtons(SLY* p)
 {
+    // (PC addition, debug menu only: Carmelita's moveset: no cane moves; Square on the ground or in the air her shot)
+    if (FPcCarm(p->palo))
+    {
+        const bool fFree = p->state == 0 || p->state == 1 || p->state == 10 || p->state == 12 || p->state == 2;
+        if (fFree && FBtnTake(p, BTN_SQUARE, 0.2f)) PcCarmFire(p->palo);
+        // (a guard's Circle in the air: its special too; on the ground UpdateSlyTransitions takes it)
+        if (p->state == 2 && FPcGuardMoves() && FBtnTake(p, BTN_CIRCLE, 0.2f)) FPcCarmCircle(p->palo);
+        if (p->mode != -1) SetSlyMode(p, -1);
+        return;
+    }
     if (p->mode < 0x16 && p->mode >= 0xC && !(GrfbtnHeld(p) & BTN_SQUARE)) p->f18EC = 0;
     bool fGo = false;
     switch (p->state)
@@ -1460,6 +1542,8 @@ void UpdateSlyButtons(SLY* p)
     default: break;
     }
     if (!fGo) return;
+    // (Sly 3: square / triangle are the combos' (combo3.cpp, orig3 0x13A178); Sly 2's swing modes 12..23 are not used)
+    return;
     if (p->mode != -1)
     {
         if (p->mode < -1 || p->mode >= 0x18 || p->mode < 0xC) return;
@@ -1490,7 +1574,7 @@ void MoveAroundTarget(SLY* p, ROOTBLEND* prb, bool fOn, float rad, float u)
         GUARD* pg = PguardFromLo(plo);
         plo = pg ? pg->plo494 : nullptr;
     }
-    if (plo && FIsLoDerivedFrom(plo, Icid(CID3::ALO)))
+    if (plo && FIsLoDerivedFrom(plo, S3CID(0x30)))
         SetStepPhysHeadingToward(p->palo, PosAloCenter(static_cast<ALO*>(plo)) - PosAloCenter(p->palo));  // 0x2046F0
     const float d = cmm::RadNormalize(rad - p->radHeading);
     float x = std::cos(d) * u, y = std::sin(d) * u;  // 0x11E1A0
@@ -1525,7 +1609,10 @@ void MoveAroundTarget(SLY* p, ROOTBLEND* prb, bool fOn, float rad, float u)
 // orig: 0x0018B7E8 (the controller's input: the buttons' effects, the transitions, the state's own input)
 void UpdateSlyInput(SLY* p)
 {
-    UpdateJtCandidates(p, 0xFFFF);  // 0x194A40
+    // (PC addition: Carmelita's moveset rates only the objects to use (0x80): no ledges, hooks, spires, ropes, poles;
+    // Triangle held: her aim mode, pccharacter.h)
+    const bool fCarmAim = FPcCarm(p->palo) && PcCarmAimInput(p->palo, (GrfbtnHeld(p) & BTN_TRIANGLE) != 0, p->state);
+    UpdateJtCandidates(p, FPcCarm(p->palo) ? 0x80 : 0xFFFF);  // 0x194A40
     UpdateActorBinoc(p, 0x4F0);  // 0x18B2C0 (+0xF00; 0x410 with the talk prompt's state 7: TODO)
     UpdateSlyTransitions(p);
     UpdateSlyButtons(p);
@@ -1533,10 +1620,25 @@ void UpdateSlyInput(SLY* p)
     {
     case 12:
         p->vecVel = glm::vec3(SetGaitMix(&p->gaitRun, UJoy(p)));  // 0x20BB58 (its result written to +0x190)
+        if (FPcCarm(p->palo)) p->vecVel *= PcCarmMoveScale(glm::length(p->vecVel), UJoy(p), (GrfbtnHeld(p) & BTN_R1) != 0);  // (PC addition: Carmelita's walk / run (R1))
+        if (fCarmAim)   // (PC addition: her aim mode, facing the camera's way, strafing by the stick)
+        {
+            const float radJoyDbg = RadJoy(p);
+            p->vecVel = PcCarmStrafeVel(UJoy(p), RadJoy(p), (GrfbtnHeld(p) & BTN_R1) != 0);
+            PcCarmFaceAim(p->palo);
+            if (std::getenv("SLY2N_STRAFEDBG"))
+                std::printf("strafe: rad joy %.1f (before %.1f) aim %.1f vel %.0f %.0f actual %.0f %.0f heading %.1f\n", glm::degrees(RadJoy(p)), glm::degrees(radJoyDbg), glm::degrees(PcCarmAimHeading()),
+                            p->vecVel.x, p->vecVel.y, VelAloPos(p->palo).x, VelAloPos(p->palo).y, glm::degrees(p->radHeading));
+            break;
+        }
         SetStepPhysHeading(p->palo, RadJoy(p));                     // 0x204660
         break;
     case 2: UpdateJumpInput(&p->jump); break;  // 0x197F98
-    case 0: case 1: case 8: case 13: case 14: case 18: case 23:
+    case 0:
+        if (FPcCarm(p->palo) && FPcCarmShooting()) p->vecVel = PcGuardAttackVel();  // (PC addition: a guard's attack's root motion)
+        if (fCarmAim) PcCarmFaceAim(p->palo);   // (PC addition: her aim mode)
+        break;
+    case 1: case 8: case 13: case 14: case 18: case 23:
         break;
     case 19: case 20:
     {
@@ -1614,7 +1716,7 @@ void UpdateSlyInput(SLY* p)
         if (p->substate == 4)
         {
             // facing the object +0x10DC (0x2046F0)
-            if (p->plo10DC && FIsLoDerivedFrom(p->plo10DC, Icid(CID3::ALO)))
+            if (p->plo10DC && FIsLoDerivedFrom(p->plo10DC, S3CID(0x30)))
                 SetStepPhysHeadingToward(p->palo, PosAloCenter(static_cast<ALO*>(p->plo10DC)) - PosAloCenter(p->palo));
         }
         else if (p->substate == 5) MoveAroundTarget(p, &p->rb13D0, true, RadJoy(p), UJoy(p));  // 0x1A0720
@@ -1676,6 +1778,37 @@ void UpdateSlyStanding(SLY* p)
     }
 }
 
+// Optional observer for the authored mode-animation hand-off. Controller identities
+// are reported as clip IDs and record indices, including events with no matching lane.
+void TraceSlyModeEvent(const SLY* p, const ASEGMSG9* pm, const char* phase)
+{
+    static const bool enabled = std::getenv("SLY2N_SLYMODEEVENT") != nullptr;
+    if (!enabled) return;
+    const auto clip = [](const ASEGA* a) { return a && a->paseg ? a->paseg->oid : -1; };
+    const XF* hand = p->slide.aphandle[0] ? p->slide.aphandle[0]->pxf : nullptr;
+    for (size_t i = 0; i < p->palo->axf.size(); ++i)
+    {
+        const XF* xf = p->palo->axf[i].get();
+        const bool selected = pm->n == 0x16E ? xf == hand : pm->n == 0x16F ?
+            (xf->tag == 24 || xf->tag == 19 || xf->tag == 21) :
+            (xf->tag == 25 || xf->tag == 18 || xf->tag == 20);
+        if (!selected) continue;
+        const CTRL* matching = nullptr;
+        for (const CTRL* c = xf->pctrlFirst; c; c = c->pnext)
+            if (c->kind == 0 && static_cast<const CTRLASEG*>(c)->pasega == p->pasegaMode)
+            {
+                matching = c;
+                break;
+            }
+        const CTRL* head = xf->pctrlFirst;
+        const int headClip = head && head->kind == 0 ? clip(static_cast<const CTRLASEG*>(head)->pasega) : -1;
+        std::fprintf(stderr, "SLYMODEEV,%s,%.9g,%d,%d,%d,%zu,%d,%d,%d,%d,%d,%d\n",
+                     phase, g_clock.t, pm->n, clip(pm->pasega), clip(p->pasegaMode), i,
+                     xf->tag, xf->kind, matching ? 1 : 0, matching ? matching->prio : -999,
+                     head ? head->kind : -1, headClip);
+    }
+}
+
 // orig: 0x001403D0 (the actor's update; TODO(actors): the abilities 0x141A50, 0x140338, +0xFD0's 0x144640, the
 // targets 0x140558, 0x1A2460, the pickups 0x140750, 0x142AF8, the camera's 0x14FD50 part, the +0x26C list)
 }  // namespace
@@ -1722,7 +1855,7 @@ void HandleActorMessage(ACTOR* pa, int msg, void* pv)
             // orig: 0x140F90 event 0x27C: the interaction's object (+0x4D4) a thrown gadget out there (cid 100,
             // 0x224590: state 1 / 2) is triggered (0x2245B8: slot 76 with 5 for kind 11, else 3)
             LO* ploT = pa->inter.ploTarget;
-            if (ploT && FIsLoDerivedFrom(ploT, 100))
+            if (ploT && FIsLoDerivedFrom(ploT, S3CID(100)))
                 if (const CARRY* pc = PcarryFromLo(ploT); pc && (pc->state == 1 || pc->state == 2))
                     SetCarryState(ploT, pc->kind == 11 ? 5 : 3);
         }
@@ -1735,6 +1868,7 @@ void HandleActorMessage(ACTOR* pa, int msg, void* pv)
             if (pa->jtthrow.state != -1) ReleaseJtThrow(pa);
             break;
         }
+        if (psly) sly3::HandleCombo3Event(psly, pmsg);  // (Sly 3: orig3 0x153738 passes every message to 0x13A770)
         const bool fOwn = pmsg->pasega == pa->pasega || (pa->psma && pa->psma->pasega == pmsg->pasega) ||
                           (psly && pmsg->pasega == psly->pasegaMode);
         if (!fOwn) break;
@@ -1802,9 +1936,27 @@ void HandleActorMessage(ACTOR* pa, int msg, void* pv)
             // orig: 0x00188F20: the slam's landing broadcasts fixed noise 0 through 0x00156B98.
             if (psly) PnoiseNew(PtmplNoiseFixed(0), PosAloCenter(psly->palo), psly->palo);
             break;
-        case 0x16E: case 0x16F: case 0x170:  // Sly's (the
-        case 0x27C:  // partner, the attacks); the actor's (+0x11B0,
-                                                          // +0x4C0's)
+        case 0x16E: case 0x16F: case 0x170:
+            // orig: 0x00188F20: release the mode animation's hand/body lanes,
+            // even when the message came from the main or SMA animation.
+            if (psly)
+            {
+                TraceSlyModeEvent(psly, pmsg, "before");
+                if (pmsg->n == 0x16E)
+                {
+                    // 0x188608: +0x10B8 is tag 0x138/kind 1, also the
+                    // record of the source controller retained in handle 0.
+                    if (psly->slide.aphandle[0])
+                        DemoteAsegaOnXf(psly->pasegaMode, psly->palo, psly->slide.aphandle[0]->pxf);
+                }
+                else if (pmsg->n == 0x16F)
+                    DemoteAsegaOnAlo(psly->pasegaMode, psly->palo, {{24, -1}, {19, -1}, {21, -1}});  // D_002BF2A0
+                else
+                    DemoteAsegaOnAlo(psly->pasegaMode, psly->palo, {{25, -1}, {18, -1}, {20, -1}});  // D_002BF2B8
+                TraceSlyModeEvent(psly, pmsg, "after");
+            }
+            break;
+        case 0x27C:
             WarnOnce("ActorHandleMessage 9's event " + std::to_string(pmsg->n));
             break;
         default: break;  // (the others are not the actors': footsteps and sounds go by the events' own kinds)
@@ -1826,6 +1978,7 @@ void HandleActorMessage(ACTOR* pa, int msg, void* pv)
     {
         struct HITMSG { LO* receiver; LO* sender; };
         const auto* hit = static_cast<const HITMSG*>(pv);
+        if (hit && hit->sender == pa->palo && psly) sly3::HandleCombo3Contact(psly);  // (Sly 3: 0x13A770 message 12)
         if (hit && hit->sender == pa->palo)
         {
             RetractAsegaPp(&pa->pasegaAbility);
@@ -1863,7 +2016,7 @@ void UpdateActorDrawAlpha(ACTOR* pa)
     pa->g10D8 = cmm::GSmooth(pa->g10D8, g1, g_clock.dt, &s_smp, nullptr);
     if (SLY* psly = dynamic_cast<SLY*>(pa); psly && psly == PslyGlobal())
         for (LO* plo : {psly->plo19A0, psly->plo19A4})
-            if (plo && FCidDerivedFrom(plo->Cid(), Icid(CID3::ALO))) static_cast<ALO*>(plo)->gFade = pa->g10D4;
+            if (plo && FCidDerivedFrom(plo->Cid(), S3CID(0x30))) static_cast<ALO*>(plo)->gFade = pa->g10D4;
 }
 
 namespace
@@ -1876,7 +2029,7 @@ NOISETMPL* PtmplActorNoise(ACTOR* pa)
     {
         pa->fNoiseResolved = true;
         LO* plo = PloFindSwChild(pa->palo, 684);
-        pa->ploNoise = plo && plo->Cid() == 0x75 ? plo : nullptr;
+        pa->ploNoise = plo && plo->Cid() == S3CID(0x75) ? plo : nullptr;
     }
     return pa->ploNoise ? PtmplNoise(pa->ploNoise) : nullptr;
 }
@@ -1920,21 +2073,16 @@ int NActorPerceived(ACTOR* pa, NOISETMPL* ptmpl)
     NOISE* pn = ptmpl ? PnoiseNew(ptmpl, PosLoWorld(pa->palo), pa->palo) : nullptr;
     if (!pn) return 2;
     int r = 0;
-    // the SOs of the list 0x3E1444 (the guards in the world; natively by class, in creation order, as target.cpp)
-    for (CID cid = 0; cid < CID_Max && r == 0; ++cid)
+    // orig: the registered guards in the live-list order.
+    for (GUARD* pg : ApguardActive())
     {
-        if (!g_psw || !FCidDerivedFrom(cid, Icid(CID3::GUARD))) continue;
-        for (LO* plo : g_psw->mpcidaplo[cid])
+        LO* plo = pg->palo;
+        if (FGuardState(pg, 0x1D) || FGuardState(pg, 0xB)) { r = 2; break; }
+        if (FGuardAcceptsNoise(pg, pn))
         {
-            GUARD* pg = plo && plo->fInWorld ? PguardFromLo(plo) : nullptr;
-            if (!pg) continue;
-            if (FGuardState(pg, 0x1D) || FGuardState(pg, 0xB)) { r = 2; break; }
-            if (FGuardAcceptsNoise(pg, pn))
-            {
-                r = 1;
-                if (std::getenv("SLY2N_ACTORNOISE")) std::printf("actornoise: guard %d (cid 0x%X) takes it\n", plo->oid, plo->Cid());
-                break;
-            }
+            r = 1;
+            if (std::getenv("SLY2N_ACTORNOISE")) std::printf("actornoise: guard %d (cid 0x%X) takes it\n", plo->oid, plo->Cid());
+            break;
         }
     }
     if (r == 0 && FNoiseListenersReach(pn)) r = 1;
@@ -2017,6 +2165,8 @@ void UpdateActor(ACTOR* pa)
     UpdateActorNoise(pa);  // 0x140750
     UpdateActorLook(pa);   // 0x142AF8
     if (!pa->watch.fActive) UpdateJobs(pa);  // 0x1EED10 (also during damage, as in 0x1403D0)
+    // (Sly 3) orig3 0x152A48: the actor's combos (vt +0x314; Sly's 0x139FE0) before the damage
+    if (SLY* psly = dynamic_cast<SLY*>(pa); psly && !FPcCarm(psly->palo)) sly3::UpdateCombo3(psly);
 }
 
 namespace
@@ -2053,16 +2203,17 @@ float DistSegments(const glm::vec3& p0, const glm::vec3& p1, const glm::vec3& q0
 // within +0x19AC: a pipe -> state 8 at that distance; a point (0x13) -> state 3 (22 by its +0x124)
 void UpdateSlyHook(SLY* p)
 {
+    if (FPcCarm(p->palo)) return;  // (PC addition: Carmelita has no cane to catch pipes / hooks with)
     if (p->mode == 0) UpdateReach(&p->reach);  // 0x18ED70 (0x1CC2E8)
     if (p->mode != 0 || !p->reach.ploTarget) return;
     LO* plo = p->reach.ploTarget;
-    const CRV* pcrv = FIsLoDerivedFrom(plo, 0x0B) ? PcrvJtPipe(plo) : nullptr;
+    const CRV* pcrv = FIsLoDerivedFrom(plo, S3CID(0x0B)) ? PcrvJtPipe(plo) : nullptr;
     glm::vec3 anp[3];
     if (pcrv)
     {
         for (int i = 0; i < 3; ++i) NearestCrvS(pcrv, glm::vec3(p->aq[i]), p->reach.sTarget, &anp[i], nullptr, nullptr, nullptr);  // 0x1E7380
     }
-    else if (FIsLoDerivedFrom(plo, 0x13))
+    else if (FIsLoDerivedFrom(plo, S3CID(0x13)))
     {
         for (glm::vec3& v : anp) v = PosJtLo(plo);
     }
@@ -2197,14 +2348,14 @@ void UpdateSlyLean(SLY* p)
             {
                 glm::vec3 dir(0.0f);
                 EvalCrv(pcrv, i.g1C, &pos, &dir);  // GetShapePosDirAtU
-                if (plo->U32Field(0, 0x1BC, 0)) UpdateSlyRailBlend(p, pcrv, dir);
+                if (plo->U32Field(0, 0x1CC, 0)) UpdateSlyRailBlend(p, pcrv, dir);
             }
         }
     }
     if (!plo) return;
     XF* pxf = nullptr;  // (vt slot 32: an ALO's object record, a LOX's record)
-    if (FIsLoDerivedFrom(plo, Icid(CID3::ALO))) pxf = PxfObj(static_cast<ALO*>(plo));
-    else if (FIsLoDerivedFrom(plo, 3)) pxf = static_cast<LOX*>(plo)->pxf;
+    if (FIsLoDerivedFrom(plo, S3CID(0x30))) pxf = PxfObj(static_cast<ALO*>(plo));
+    else if (FIsLoDerivedFrom(plo, S3CID(3))) pxf = static_cast<LOX*>(plo)->pxf;
     const glm::vec3 v = pxf ? VelXfPoint(pxf, nullptr, pos) : glm::vec3(0.0f);  // 0x22D348
     const glm::vec3 local = glm::transpose(p->matHeading) * v;  // (the rows +0x1B0)
     const float gLen = std::sqrt(local.x * local.x + local.y * local.y);
@@ -2300,7 +2451,7 @@ void UpdateSly(LO* plo)
     // the current player, e.g. Ep1 Heist 1904 after 1902 hands control to Bentley)
     LO* pcurTele = g_routetele.fPending && g_psw ? PloPoCurrent(g_psw) : nullptr;
     if (g_routetele.fPending && !(pcurTele && pcurTele != static_cast<LO*>(p->palo) &&
-                                  (FIsLoDerivedFrom(pcurTele, Icid(CID3::MURRAY)) || FIsLoDerivedFrom(pcurTele, Icid(CID3::BENTLEY)))))
+                                  (FIsLoDerivedFrom(pcurTele, S3CID(0x36)) || FIsLoDerivedFrom(pcurTele, S3CID(0x37)))))
     {
         g_routetele.fPending = false;
         SetStepPos(p, glm::vec3(g_routetele.x, g_routetele.y, g_routetele.z) - glm::vec3(p->vecBase));
@@ -2339,7 +2490,7 @@ void UpdateSly(LO* plo)
     {
         static int s_c = 0;
         if (s_c++ == std::atoi(s_szBrk))
-            for (LO* plo : s_psw->mpcidaplo[0x62])
+            for (LO* plo : s_psw->mpcidaplo[S3CID(0x62)])
             {
                 ALO* palo = static_cast<ALO*>(plo);
                 const glm::vec3 c = PosAloCenter(palo);
@@ -2349,17 +2500,24 @@ void UpdateSly(LO* plo)
             }
     }
     // (debug: SLY2N_TELEGIVER="OID@N[,D]" puts Sly D (default 150) behind the first guard OID in the world at his N-th
-    // update, facing it: a pickpocket in the real game; OID -1: the first guard with a prize)
+    // update, facing it: a pickpocket in the real game; OID -1: the first guard with a prize, -N the N-th (wrapping))
     static const char* s_szGiver = std::getenv("SLY2N_TELEGIVER");
     // (the giver teleport: OID's guard / object; OID -1: the first guard with a prize; D behind it)
     const auto giver = [&](int oid, float d) {
+        int cSkip = oid < 0 ? -oid - 1 : 0;  // (OID -N: the N-th such guard, wrapping)
+        int cPrize = 0;
+        if (oid < 0)
+            for (const auto& up : s_psw->aploAll)
+                cPrize += FCidDerivedFrom(up->Cid(), S3CID(0x38)) && PocketOf(up.get()).nMode == 2 && up->fInWorld;
+        if (cPrize) cSkip %= cPrize;
         for (const auto& up : s_psw->aploAll)
         {
             LO* pg = up.get();
             // (OID -1: the first guard with a prize in its pocket, mode 2: the sparkle)
-            if ((oid >= 0 ? pg->oid != oid : (!FCidDerivedFrom(pg->Cid(), Icid(CID3::GUARD)) || PocketOf(pg).nMode != 2)) || !pg->fInWorld)
+            if ((oid >= 0 ? pg->oid != oid : (!FCidDerivedFrom(pg->Cid(), S3CID(0x38)) || PocketOf(pg).nMode != 2)) || !pg->fInWorld)
                 continue;
-            if (!FCidDerivedFrom(pg->Cid(), Icid(CID3::ALO)))
+            if (cSkip > 0) { --cSkip; continue; }
+            if (!FCidDerivedFrom(pg->Cid(), S3CID(0x30)))
             {
                 // (any other object: Sly at its place, D below it, e.g. a switch's use point)
                 const glm::vec3 pos = PosLoWorld(pg) - glm::vec3(0.0f, 0.0f, d);
@@ -2372,17 +2530,21 @@ void UpdateSly(LO* plo)
             ALO* pag = static_cast<ALO*>(pg);
             const glm::mat4 m = MatWorldOfAlo(pag);
             glm::vec3 fwd = glm::normalize(glm::vec3(m[0].x, m[0].y, 0.0f));
-            glm::vec3 pos = PosAloCenter(pag) - fwd * d;
+            glm::vec3 pos = PosAloCenter(pag) - fwd * std::fabs(d);
             // (a guard with a pickpocket volume (+0x3F4, option 304): Sly at its center (the guard's height), facing
             // the guard: the matrix row is not the walk's heading for every guard, e.g. Ep1's repairman 11539)
             if (GUARD* pgd = PguardFromLo(pg); pgd && pgd->plo3F4)
             {
                 LO* pv = pgd->plo3F4;
-                const glm::vec3 c = FIsLoDerivedFrom(pv, Icid(CID3::ALO)) ? PosAloCenter(static_cast<ALO*>(pv)) : PosLoWorld(pv), g = PosAloCenter(pag);
+                const glm::vec3 c = FIsLoDerivedFrom(pv, S3CID(0x30)) ? PosAloCenter(static_cast<ALO*>(pv)) : PosLoWorld(pv), g = PosAloCenter(pag);
                 if (glm::length(glm::vec2(g - c)) > 1.0f)
                 {
                     pos = glm::vec3(c.x, c.y, g.z);
                     fwd = glm::normalize(glm::vec3(g.x - c.x, g.y - c.y, 0.0f));
+                    // (from the volume's center toward the guard: -D for D < 0, else min(80, half the way), so the
+                    // pickpocket's arm reaches a guard walking away at the take: 0x18B460's test, R12)
+                    pos += fwd * (d < 0.0f ? -d : std::min(80.0f, 0.5f * glm::length(glm::vec2(g - c))));
+                    if (std::getenv("SLY2N_POCKETPRINT")) std::printf("telegiver: volume center %.0f from the guard\n", glm::length(glm::vec2(g - c)));
                 }
             }
             SetStepPos(p, pos - glm::vec3(p->vecBase));
@@ -2449,6 +2611,7 @@ void UpdateSly(LO* plo)
         }
         break;
     case 10: SteerActorRootBlend(p, &p->rb1AC0); break;  // 0x1A0450
+    case 3: UpdateSlyHangPlace(p); break;  // 0x190E18
     case 0x15: UpdateSlyClimbSurf(p); break;  // 0x185E40
     case 0x16: UpdateSlyHangFollow(p); break;  // 0x18DF60
     case 24: UpdateSlySlideFeet(p); break;  // 0x189C40 / 0x189EC8
@@ -2481,7 +2644,7 @@ void UpdateSly(LO* plo)
     {
         const glm::vec3 pos = PosAloCenter(p->palo);
         LO* pt = p->n4C8 == 1 ? p->inter.ploTarget : p->jump.ploC;
-        const glm::vec3 posT = pt && FCidDerivedFrom(pt->Cid(), Icid(CID3::ALO)) ? PosAloCenter(static_cast<ALO*>(pt)) : glm::vec3(0.0f);
+        const glm::vec3 posT = pt && FCidDerivedFrom(pt->Cid(), S3CID(0x30)) ? PosAloCenter(static_cast<ALO*>(pt)) : glm::vec3(0.0f);
         std::printf("hidetrace t %.4f jump %d kind %d sub %d state %d pos %.2f %.2f %.2f obj %.2f %.2f %.2f\n", g_clock.t, p->jump.state, p->n4C8,
                     p->nSub4CC, p->state, pos.x, pos.y, pos.z, posT.x, posT.y, posT.z);
     }
@@ -2621,7 +2784,7 @@ void OnSlyXpNew(ALO* palo, XP* pxp, int i)
     case 8: AdjustClimbXp(pxp); break;       // 0x19E9C8
     case 7:
         // a sliding rail's floor contact: no bounce, and no friction while sliding (state 0), else by the slope
-        if (pxp->xpk == 0xE && p->n4C8 == 3 && p->inter.ploTarget && p->inter.ploTarget->U32Field(0, 0x1BC, 0))
+        if (pxp->xpk == 0xE && p->n4C8 == 3 && p->inter.ploTarget && p->inter.ploTarget->U32Field(0, 0x1CC, 0))
         {
             pxp->elas = 0.0f;  // +0x98
             if (p->nSub4CC == 0) pxp->mu = 0.0f;
@@ -2641,12 +2804,42 @@ void OnSlyXpNew(ALO* palo, XP* pxp, int i)
     }
 }
 
-// orig: 0x00140D70 (vt slot 58 of the actors: the step's floor 0x204768, then the jump's 0x199298)
+// orig3: 0x0024E9E0's first part (Sly 3's FindStepFloor, the actors' vt slot 61; Sly 2's PruneJumpLedgeXps 0x199298
+// generalised): the actor's contacts with its pair (PairActorWith's +0x2E8) dropped, but the internal ones (kind 11):
+// a still pair (vt slot 66 FAloStill): every contact with a still object; a moving one: the contacts with it
+void PruneActorPairXps3(ACTOR* pa)
+{
+    ALO* pso = pa->psoPair3;
+    OXA* poxa = Poxa(pa->palo);
+    if (!pso || !poxa) return;
+    const bool fStill = FAloStill(pso);
+    XP* pxpFreed = nullptr;
+    for (OX* ox = poxa->pox; ox; ox = ox->poxNext)
+    {
+        XP** link = &ox->pxp;
+        while (XP* x = *link)
+        {
+            const int side = x->axpd[0].paloRoot != pa->palo ? 1 : 0;
+            ALO* pOther = x->axpd[1 - side].paloRoot;
+            const bool fDrop = x->xpk != 11 && pOther && (fStill ? FAloStill(pOther) : pOther == pso);
+            if (!fDrop) { link = &x->pxpNext; continue; }
+            if (pa->pxpFloor == x) pa->pxpFloor = nullptr;
+            *link = x->pxpNext;
+            x->pxpNext = pxpFreed;
+            pxpFreed = x;
+        }
+        if (ox->poxOther) ox->poxOther->pxp = ox->pxp;
+    }
+    FreeSwXpList(pxpFreed);  // 0x1CBAA0
+}
+
+// orig: 0x00140D70 (vt slot 58 of the actors: the step's floor 0x204768, then the jump's 0x199298). Sly 3 (orig3
+// 0x24E9E0, slot 61): the pair's contacts dropped first (PruneActorPairXps3: the ledge hang's 0x199298 is part of it)
 void FindActorFloor(ALO* palo)
 {
-    FindStepFloor(palo);
     ACTOR* pa = PactorFromLo(palo);
-    if (pa) PruneJumpLedgeXps(pa);  // 0x199298 (the ledge hang, the jump's state 17)
+    if (pa) PruneActorPairXps3(pa);
+    FindStepFloor(palo);
 }
 
 // orig: 0x00140D00 (vt slot 59 of the actors: the ALO's (nothing), the sub-objects' 0x1991A0 / 0x193DE8 / 0x19E950)
@@ -2668,7 +2861,7 @@ void FillActorDzResponse(ALO* palo, DZ* pdz, DZENT* pent, int grf, int k)
     if (pa && pent->pxp)
     {
         ALO* paloOther = pent->pxp->axpd[1 - k].paloRoot;
-        const bool fPlayer = paloOther && FIsLoDerivedFrom(paloOther, Icid(CID3::PLAYER));  // (0x2E1E40 / 0x2DD5BC / 0x2F7900)
+        const bool fPlayer = paloOther && FIsLoDerivedFrom(paloOther, S3CID(0x34));  // (0x2E1E40 / 0x2DD5BC / 0x2F7900)
         if (fPlayer && (NPoEnabled(palo) != 1 /* || 0x144068: TODO(actors) the carrier */))
             pent->normal = normalSaved * F32(0x3C23D70A);
     }
@@ -2718,7 +2911,7 @@ struct INITSLY
         });
         g_pfnFActorDrivesPhys = [](ALO* palo) {
             const CID cid = palo->Cid();
-            return cid == 0x35 || cid == 0x36 || cid == 0x37;
+            return cid == S3CID(0x35) || cid == S3CID(0x36) || cid == S3CID(0x37);
         };
         RegisterSwPass(0x1C4468, [](SW*) { UpdateAllPadctls(); });  // (0x226550: each controller state)
     }
@@ -2731,7 +2924,14 @@ NATIVEFN(0x18DEE0, GrfSlyXp);
 NATIVEFN(0x1406E8, SetActorControl);
 NATIVEFN(0x188CC8, OnSlyXpNew);
 NATIVEFN(0x140D70, FindActorFloor);
+// orig3: 0x0024E9E0 (Sly 3's FindStepFloor, every step's vt slot 61: the pair's contacts pruned first, PruneActorPairXps3)
+NATIVEFN3(0x24E9E0, FindActorFloor);
 NATIVEFN(0x140D00, RegisterActorContacts);
+// orig3: 0x001B0178 (Sly's vt slot 62, Sly 3 only): the actors' 0x153498 (RegisterActorContacts), then in Sly 3's
+// state 17 (+0x19E0 == 0x11) a line contact of his custom entry (+0x2E8 slot) along 0x1AFE60's direction.
+// TODO(player): the state-17 line contact (Sly 3's state 17 is not mapped from a Sly 2 state yet).
+void RegisterSlyContacts3(ALO* palo) { RegisterActorContacts(palo); }
+NATIVEFN3(0x1B0178, RegisterSlyContacts3);
 NATIVEFN(0x140DB0, FillActorDzResponse);
 NATIVEFN(0x18A2E0, UpdateSlyBounds);
 
@@ -2763,3 +2963,4 @@ void ApplyRouteTeleportActor(ACTOR* p)
     g_routetele.fVel = false;
     CutCm(&g_cm);
 }
+

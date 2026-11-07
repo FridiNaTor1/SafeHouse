@@ -4,6 +4,8 @@
 // 0x1B4728, 0x1B50B0, 0x1B6078, checked against the disassembly) and the reference's m_134648_p3.cpp /
 // m_1B4438_p3.cpp.
 #include "gang.h"
+#include "game/sly3.h"
+#include "climb.h"
 #include "routetele.h"
 #include "transition.h"
 #include "target.h"
@@ -57,6 +59,8 @@ void UpdateMurrayBerserkTransitions(MURRAY* p);  // (below, 0x1B8EC0)
 #include "worldaccess.h"
 #include "xf.h"
 #include "projectile.h"
+#include "pccharacter.h"
+#include "pcguard.h"
 void LaunchFrom(LO* plaunch, LO* po);                                  // launcher.cpp (0x1D6B00)
 void SetLauncherAim(LO* plaunch, LO* ptarget, const glm::vec3& offset);  // launcher.cpp
 #include "bsp.h"
@@ -205,33 +209,33 @@ void UpdateActorSupport(ACTOR* p)
 BENTLEY* PbentleyGlobal()
 {
     if (!s_psw) return nullptr;
-    for (LO* plo : s_psw->mpcidaplo[0x37])
+    for (LO* plo : s_psw->mpcidaplo[S3CID(0x37)])
         if (BENTLEY* p = PbentleyFromLo(plo)) return p;
     return nullptr;
 }
 MURRAY* PmurrayGlobal()
 {
     if (!s_psw) return nullptr;
-    for (LO* plo : s_psw->mpcidaplo[0x36])
+    for (LO* plo : s_psw->mpcidaplo[S3CID(0x36)])
         if (MURRAY* p = PmurrayFromLo(plo)) return p;
     return nullptr;
 }
 
 BENTLEY* PbentleyFromLo(LO* plo)
 {
-    if (!plo || !FIsLoDerivedFrom(plo, 0x37)) return nullptr;
+    if (!plo || !FIsLoDerivedFrom(plo, S3CID(0x37))) return nullptr;
     return dynamic_cast<BENTLEY*>(PactorFromLo(plo));
 }
 MURRAY* PmurrayFromLo(LO* plo)
 {
-    if (!plo || !FIsLoDerivedFrom(plo, 0x36)) return nullptr;
+    if (!plo || !FIsLoDerivedFrom(plo, S3CID(0x36))) return nullptr;
     return dynamic_cast<MURRAY*>(PactorFromLo(plo));
 }
 
 STEP* PstepNewGang(ALO* palo)
 {
-    if (FIsLoDerivedFrom(palo, 0x37)) return new BENTLEY();
-    if (FIsLoDerivedFrom(palo, 0x36)) return new MURRAY();
+    if (FIsLoDerivedFrom(palo, S3CID(0x37))) return new BENTLEY();
+    if (FIsLoDerivedFrom(palo, S3CID(0x36))) return new MURRAY();
     return nullptr;
 }
 
@@ -290,6 +294,7 @@ void PostLoadBentley(BENTLEY* p)
     // Ep7's boss world 37: there TRIANGLE / SQUARE / CIRCLE are the trap radio's (SCPT 3281) only; natively his TRIANGLE
     // summoned a bomb with every trap (which also counted as hits on Bison) and turned him toward Bison
     p->f1818 = static_cast<int>(palo->U32Field(0, 0x1818, static_cast<uint32_t>(p->f1818)));
+    p->f181C = static_cast<int>(palo->U32Field(0, 0x181C, static_cast<uint32_t>(p->f181C)));  // EOPID 776 (the log idle)
     p->paseg1820 = PPart<ASEG>(palo, 0x1820);
     p->paseg1878 = PPart<ASEG>(palo, 0x1878);
     BindJumpParts(p);
@@ -339,8 +344,9 @@ void SetBentleySubMode(BENTLEY* p, int n)
         glm::vec3 v(0.0f);
         LO* ploTarget = ChooseAttackTarget(p, p->radHeading, 2, glm::vec3(s.v20), 0.15f, n == 0 ? 3.15f : 1.5f, &v);
         s.g1C = ploTarget ? std::clamp((v.z - s.g30) / (s.g34 - s.g30), 0.0f, 1.0f) : 0.5f;
-        glm::vec3 r(0.0f);
-        if (s.ploE4) r = glm::vec3(glm::inverse(MatWorldOfAlo(p->palo)) * glm::vec4(PosLoWorld(s.ploE4), 1.0f));  // 0x1A6F00
+        // orig: 0x00136F48 -> 0x001A6F00: use both objects' slot-31
+        // frames, including Bentley's animated object frame.
+        const glm::vec3 r = PosJtConvert(s.ploE4, p->palo, glm::vec3(0.0f));
         s.n8 = 0.0f < r.y ? 1 : 0;
         if (n == 0 && ploTarget)
         {
@@ -374,7 +380,7 @@ void UpdateBentleySub(BENTLEY* p, int n)
     if (s.pasega && FAsegaRetracted(s.pasega)) SetBentleySubMode(p, -1);  // 0x131968
     if (n != s.state && s.state != -1) SetBentleySubMode(p, n);
     if (n != -1 && (s.state == -1 || s.nC))
-        if (FBtnWithin(p, BTN_SQUARE, 0.1f) && FBentleyCanDo(p, 2))  // 0x1C4660, slot 99
+        if (!FPcCarm(p->palo) && FBtnWithin(p, BTN_SQUARE, 0.1f) && FBentleyCanDo(p, 2))  // 0x1C4660, slot 99 (PC: not as Carmelita)
         {
             ForgetBtn(p, BTN_SQUARE);  // 0x1C4738
             SetBentleySubMode(p, -1);
@@ -398,11 +404,9 @@ bool FBentleyCanDo(BENTLEY* p, int n)
     {
     case 0: case 1: case 5: case 7: break;
     case 2:
-        if (n != 12) { WarnOnce("0x19C8D0 (the jump's slot 99)"); return false; }
-        // orig: 0x0019C8D0 (Hover Pack): the saved jump permission is
-        // consumed by kind 17, and targeted/held air states reject it.
-        if (!p->jump.f2C) return false;
-        if (p->jump.state == 6 || (p->jump.state >= 9 && p->jump.state <= 22)) return false;
+        // orig: 0x00136870 -> 0x0019C8D0: all airborne actions use the
+        // jump controller's permission, including the Square swing (2).
+        if (!FJumpCanDo(&p->jump, n)) return false;
         break;
     case 3:
         if (n == 10 || n == 12) {
@@ -470,15 +474,93 @@ void FireBentleyDart(BENTLEY* p, uint32_t grf)
     LSG lsg;
     glm::vec3 posAim = PsoeHitTestLineObjects(1, a, b, apsoe, &lsg) ? lsg.pos0 : b;
     // (debug: SLY2N_DARTAT=oid aims at that object's centre instead of the screen's)
-    if (static const char* s_sz = std::getenv("SLY2N_DARTAT"); s_sz)
-        if (LO* pt = PloFindSwObjectByOid(g_psw, std::atoi(s_sz)); pt && FCidDerivedFrom(pt->Cid(), 0x30))
+    // ("OID#K": the K-th in-world copy, led around the world's z axis by the turn seen since the previous shot at it,
+    // for the turning Ep8 bulbs; SLY2N_DARTAT can also be changed by a route's "env" step)
+    if (const char* s_sz = std::getenv("SLY2N_DARTAT"); s_sz && *s_sz)
+    {
+        // ("A#K,B#K,...": one entry per shot, the last one kept)
+        static int s_cShot = 0;
+        const char* q = s_sz;
+        for (int i = 0; i < s_cShot && std::strchr(q, ','); ++i) q = std::strchr(q, ',') + 1;
+        ++s_cShot;
+        // ("@X:Y:Z": a world point, e.g. a wall for a noise dart)
+        glm::vec3 posAt(0.0f);
+        if (*q == '@' && std::sscanf(q + 1, "%f:%f:%f", &posAt.x, &posAt.y, &posAt.z) == 3)
+        {
+            posAim = posAt;
+            std::printf("dartat @ %.0f %.0f %.0f t %.3f\n", posAt.x, posAt.y, posAt.z, g_clock.t);
+        }
+        // ("^OID:X:Y:D:DZ": D toward X,Y from that object's (e.g. a guard being led) current place, DZ above it)
+        if (int oidLed = 0; *q == '^')
+        {
+            float gx = 0, gy = 0, d = 0, dz = 0;
+            if (std::sscanf(q + 1, "%d:%f:%f:%f:%f", &oidLed, &gx, &gy, &d, &dz) == 5)
+                for (const auto& up : g_psw->aploAll)
+                    if (up->oid == oidLed && up->fInWorld && FCidDerivedFrom(up->Cid(), S3CID(0x30)))
+                    {
+                        const glm::vec3 p0 = PosAloCenter(static_cast<ALO*>(up.get()));
+                        glm::vec2 v(gx - p0.x, gy - p0.y);
+                        const float l = glm::length(v);
+                        if (l > d) v *= d / l;
+                        posAim = glm::vec3(p0.x + v.x, p0.y + v.y, p0.z + dz);
+                        std::printf("dartat ^%d at %.0f %.0f %.0f t %.3f\n", oidLed, posAim.x, posAim.y, posAim.z, g_clock.t);
+                        break;
+                    }
+        }
+        const int oid = (*q == '@' || *q == '^') ? 0 : std::atoi(q);
+        const char* pk = std::strchr(q, '#');
+        if (pk && std::strchr(q, ',') && pk > std::strchr(q, ',')) pk = nullptr;
+        int k = pk ? std::atoi(pk + 1) : 0;
+        LO* pt = nullptr;
+        for (const auto& up : g_psw->aploAll)
+            if (up->oid == oid && up->fInWorld && FCidDerivedFrom(up->Cid(), S3CID(0x30)) && k-- == 0) { pt = up.get(); break; }
+        if (pt)
+        {
             posAim = PosAloCenter(static_cast<ALO*>(pt));
+            // (a piece whose record sits elsewhere, e.g. the Ep8 bulbs at their bar's origin: its first collision entry's
+            // world bounds' centre, carried along by the object's matrix since that geometry was made; only for the
+            // "OID#K" form: for a whole character, e.g. ep4_eavesdrop's Contessa 60283, that entry's centre misses her)
+            if (pk)
+            for (const SOE& e : static_cast<ALO*>(pt)->asoe)
+                if (!e.geomWorld.apos.empty())
+                {
+                    glm::vec3 lo(3.4e38f), hi(-3.4e38f);
+                    for (const glm::vec3& v : e.geomWorld.apos) { lo = glm::min(lo, v); hi = glm::max(hi, v); }
+                    posAim = glm::vec3(MatWorldOfAlo(static_cast<ALO*>(pt)) * glm::inverse(e.mat) * glm::vec4(0.5f * (lo + hi), 1.0f));
+                    break;
+                }
+            if (pk)
+            {
+                struct LAST { float th = 0, t = -1, w = 0; };
+                static std::map<LO*, LAST> s_mp;
+                static float s_wLast = 0.0f;
+                LAST& l = s_mp[pt];
+                if (l.t < 0) l.w = s_wLast;
+                const float th = std::atan2(posAim.y, posAim.x);
+                if (l.t >= 0 && g_clock.t > l.t)
+                {
+                    float d = th - l.th;
+                    while (d > 3.14159265f) d -= 6.2831853f;
+                    while (d < -3.14159265f) d += 6.2831853f;
+                    l.w = d / (g_clock.t - l.t);
+                    s_wLast = l.w;
+                }
+                l.th = th;
+                l.t = g_clock.t;
+                const float r = glm::length(glm::vec2(posAim)), tFly = glm::length(posAim - a) / 6000.0f;
+                const float th2 = th + l.w * tFly;
+                const float dz = posAim.z > 0.0f && std::getenv("SLY2N_DARTDZ") ? float(std::atof(std::getenv("SLY2N_DARTDZ"))) : 0.0f;
+                posAim = glm::vec3(r * std::cos(th2), r * std::sin(th2), posAim.z + dz);
+                std::printf("dartat %d#%d at %.0f %.0f %.0f (w %.3f)\n", oid, std::atoi(pk + 1), posAim.x, posAim.y, posAim.z, l.w);
+            }
+        }
+    }
     // +0x16D8 the dart kind: EOPID 774 (a field, grf 0x92) that the jobs' scripts set, e.g. 1 for Ep3's red noise darts
     const int nDart = static_cast<int>(palo->U32Field(0, 0x16D8, static_cast<uint32_t>(p->n16D8)));
     LO* pproxy = nDart == 0 ? PPart<LO>(palo, 0x16DC) : nDart == 1 ? PPart<LO>(palo, 0x16E0) : nullptr;
     if (!pproxy) return;
     LO* po = PloAcquireProxyObject(g_psw, pproxy, false);  // 0x1CB250(p, 0): a free row (score >= 2) only
-    if (!po || !FCidDerivedFrom(po->Cid(), 0x30)) return;
+    if (!po || !FCidDerivedFrom(po->Cid(), S3CID(0x30))) return;
     SetProjectileFilter(static_cast<ALO*>(po), grf);
     LO* plaunch = PPart<LO>(palo, 0x16E4);
     if (!plaunch) return;
@@ -509,7 +591,7 @@ void UpdateBentleyState2(BENTLEY* p)
             case 0:
                 UpdateBentleySub(p, 0);
                 if (p->f181C && p->sub.state != -1 && p->psma && p->psmIdle && IsmsFindSm(p->psmIdle, 0x17B) >= 0)
-                    WarnOnce("0x1F09D8 (Bentley's idle 0x17B)");
+                    SetSmaState(p->psma, 0x17B);  // 0x1F09D8
                 break;
             case 1: case 2: case 3: case 7: UpdateBentleySub(p, 1); break;
             case 5: UpdateBentleySub(p, 2); break;
@@ -523,7 +605,7 @@ void UpdateBentleyState2(BENTLEY* p)
             {
                 if (2.0f < g_clock.t - p->t1700) SetBentleyState2(p, 0);
             }
-            else if (FBtnTake(p, BTN_R1, 0.25f))
+            else if (!FPcCarm(p->palo) && FBtnTake(p, BTN_R1, 0.25f))   // (PC: R1 is Carmelita's run)
                 FireBentleyDart(p, 0x80000);  // 0x1357C0
         }
         const int s2 = p->n16BC;
@@ -571,6 +653,70 @@ void UpdateBentleyHold(BENTLEY* p)
     }
 }
 
+// (PC addition, debug menu only: Carmelita's moveset (or a guest guard's) on Bentley / Murray, pccharacter.h;
+// as on Sly, sly.cpp: none of their own moves (no gadgets, darts, punches, grabs or flops); Cross her jump, Circle the
+// interaction in reach else her high jump, R3 the binocucom, the stick her walk / run (R1: the speeds are
+// PcCarmMoveScale's, below). true: the ground state's transitions were hers (stStand standing, stMove moving).
+template <class T, class FSET>
+bool FPcCarmGangGround(T* p, FSET setState, int stStand, int stMove, bool fBinoc)
+{
+    if (!FPcCarm(p->palo)) return false;
+    if (FPcCarmShooting() && !FPcCarmAiming()) { setState(stStand); return true; }   // (her shot stands still)
+    if (FBtnTake(p, BTN_CROSS, 0.1f))
+    {
+        if (FPcCarmCanJump()) { SetJumpKind(&p->jump, 1, 0, 0); PcCarmJumped(p->palo, false); }
+        return true;
+    }
+    if (FBtnTake(p, BTN_CIRCLE, F32(0x3E4CCCCD)))
+    {
+        // (a guard's Circle: its special, pcguard.h)
+        if (!FInteractCircle(p) && FPcCarmCircle(p->palo)) { SetJumpKind(&p->jump, 1, 0, 0); PcCarmJumped(p->palo, true); }
+        return true;
+    }
+    if (fBinoc && FBtnWithin(p, BTN_R3, F32(0x3E19999A)))
+    {
+        ForgetBtn(p, BTN_R3);
+        OpenBinoc(p, 0, nullptr, nullptr);
+        return true;
+    }
+    const float u = UJoy(p);
+    const bool fMove = p->state == stStand ? 0.1f < u : 0.0f < u;
+    setState(fMove ? stMove : stStand);
+    return true;
+}
+
+// (the same, each update before the transitions: her aim mode (Triangle, its state as Sly's: 0 standing, 12 moving,
+// 2 in the air) and Square her shot; true: aiming)
+template <class T>
+bool FPcCarmGangInput(T* p, int stStand, int stMove, int stMove2)
+{
+    if (!FPcCarm(p->palo)) return false;
+    const int st = p->state == stStand ? 0 : (p->state == stMove || p->state == stMove2) ? 12 : p->state == 2 ? 2 : -1;
+    const bool fAim = PcCarmAimInput(p->palo, (GrfbtnHeld(p) & BTN_TRIANGLE) != 0, st);
+    if (st != -1 && FBtnTake(p, BTN_SQUARE, 0.2f)) PcCarmFire(p->palo);
+    if (st == 2 && FPcGuardMoves() && FBtnTake(p, BTN_CIRCLE, 0.2f)) FPcCarmCircle(p->palo);
+    return fAim;
+}
+
+// (the same, in the update's motion: her walk / run speed, her aim mode's strafe and facing)
+template <class T>
+void PcCarmGangMotion(T* p, bool fAim, bool fMoving)
+{
+    if (!FPcCarm(p->palo)) return;
+    if (fMoving)
+    {
+        p->vecVel *= PcCarmMoveScale(glm::length(p->vecVel), UJoy(p), (GrfbtnHeld(p) & BTN_R1) != 0);
+        if (fAim)
+        {
+            p->vecVel = PcCarmStrafeVel(UJoy(p), RadJoy(p), (GrfbtnHeld(p) & BTN_R1) != 0);
+            PcCarmFaceAim(p->palo);
+        }
+        return;
+    }
+    if (FPcCarmShooting()) p->vecVel = PcGuardAttackVel();   // (a guard's attack's root motion)
+    if (fAim) PcCarmFaceAim(p->palo);
+}
+
 // orig: 0x00134850 (the state machine, run until the state stays)
 void UpdateBentleyTransitions(BENTLEY* p)
 {
@@ -609,6 +755,7 @@ void UpdateBentleyTransitions(BENTLEY* p)
         switch (p->state)
         {
         case 0: case 1: case 7:
+            if (FPcCarmGangGround(p, [p](int n) { SetBentleyState(p, n); }, 0, 7, FBentleyCanDo(p, 3))) break;   // (PC addition)
             if (!(GrfbtnHeld(p) & BTN_R1) && FActorObjectAhead(p, 0)) SetBentleyState(p, 5);
             else if (FBtnTake(p, BTN_CROSS, 0.1f)) SetJumpKind(&p->jump, 1, 0, 0);
             else if (FBtnWithin(p, BTN_R3, F32(0x3E19999A)) && FBentleyCanDo(p, 3))
@@ -628,7 +775,7 @@ void UpdateBentleyTransitions(BENTLEY* p)
             break;
         case 2:
             UpdateJumpTransitions(&p->jump);  // 0x197500
-            tryInteract();
+            if (!FPcCarm(p->palo)) tryInteract();   // (PC addition: no gadget as Carmelita)
             break;
         case 5:
             // orig: 0x00134850 case 5: R1 or nothing ahead (wide) stands; else cross jumps, R3 the binocucom, circle
@@ -855,6 +1002,8 @@ void SetBentleyState(BENTLEY* p, int n)
         SetBentleyCarried(p, -1);       // 0x136530
         EnablePo(g_psw, p->palo, 1);    // vt slot 79 (1): the player again
         break;
+    case 13: SetClimbState(p, -1); break;  // 0x19EAB0 (+0xF50; audit 2026-11 G1)
+    case 5: case 14: break;  // (0x135248 has no leave actions for these: the old warning was spurious)
     default: WarnOnce("Bentley's SetState: leaving state " + std::to_string(cur)); break;
     }
     const int old = p->state;
@@ -1122,7 +1271,7 @@ void UpdateBentley(LO* plo)
             for (const auto& up : g_psw->aploAll)
             {
                 LO* pg = up.get();
-                if (pg->oid != oid || !pg->fInWorld || !FCidDerivedFrom(pg->Cid(), 0x30)) continue;
+                if (pg->oid != oid || !pg->fInWorld || !FCidDerivedFrom(pg->Cid(), S3CID(0x30))) continue;
                 ALO* pag = static_cast<ALO*>(pg);
                 const glm::mat4 m = MatWorldOfAlo(pag);
                 const glm::vec3 fwd = glm::normalize(glm::vec3(m[0].x, m[0].y, 0.0f));
@@ -1212,12 +1361,15 @@ void UpdateBentley(LO* plo)
         static int s_cJtB = 0;
         if (++s_cJtB == std::atoi(s_szJtB)) PrintJtLists(g_psw);
     }
-    UpdateJtCandidates(p, 0xF8FE);  // 0x194A40 (the interaction targets, jt.cpp)
+    // (PC addition, debug menu only: Carmelita's moveset, her aim mode and shot; only the objects to use rated)
+    const bool fCarmAim = PpadctlOf(p) && FPcCarmGangInput(p, 0, 7, 1);
+    UpdateJtCandidates(p, FPcCarm(p->palo) ? 0x80 : 0xF8FE);  // 0x194A40 (the interaction targets, jt.cpp)
     UpdateBentleyF00(p);
     if (PpadctlOf(p)) UpdateBentleyTransitions(p);
     switch (p->state)
     {
     case 0:
+        PcCarmGangMotion(p, fCarmAim, false);   // (PC addition)
         if (p->f181C) SetStepPhysHeading(p->palo, 0.5f);  // (D_002BC934)
         else if (p->psma) SetSmaMask(p->psma, GrfActorLookMask(p));  // 0x1F1350
         break;
@@ -1225,11 +1377,13 @@ void UpdateBentley(LO* plo)
         SetStepPhysHeading(p->palo, RadJoy(p));                     // 0x204660
         p->vecVel = glm::vec3(SetGaitMix(&p->gaitWalk, 1.0f));     // 0x20BB58
         UpdateGaitFeet(&p->gaitWalk);                               // 0x20BC08
+        PcCarmGangMotion(p, fCarmAim, true);   // (PC addition)
         break;
     case 7:
         SetStepPhysHeading(p->palo, RadJoy(p));
         p->vecVel = glm::vec3(SetGaitMix(&p->gaitRun, UJoy(p)));
         UpdateGaitFeet(&p->gaitRun);
+        PcCarmGangMotion(p, fCarmAim, true);   // (PC addition)
         break;
     case 2: UpdateJumpInput(&p->jump); break;  // 0x197F98
     case 6: if (p->n16B0 == 1) UpdateBentleyHoldMotion(p); break;
@@ -1260,7 +1414,8 @@ void UpdateBentley(LO* plo)
     switch (p->state)
     {
     case 0: case 1: case 5: case 6: case 7: case 11: case 12: case 14: UpdateActorSupport(p); break;
-    case 3: case 13: WarnOnce("0x135EB0's sub-objects (states 3 / 13)"); break;
+    case 3: UpdateSafeInteract(p); break;
+    case 13: UpdateSafePipe(p); break;
     default: break;
     }
     UpdateDamage(p);  // 0x1A1358 (+0xDF0)
@@ -1449,9 +1604,16 @@ void PostLoadMurray(MURRAY* p)
     BindGaitParts(&p->gaitRun, palo, 0x1540);
     BindRootBlendParts(&p->rb16F0, palo, 0x16F0);  // 0x1A0300
     p->psm16E0 = PPart<SM>(palo, 0x16E0);
-    // TODO(actors): 0x20BD88 (+0x1850), the light +0x1ACC (0x12DC18)
+    // TODO(actors): 0x20BD88 (+0x1850)
     PostLoadJtThrow(p->jtthrow1910);  // 0x21F388 (+0x1910)
     AttachActorLook(p, 0x16);  // 0x1426E8
+    // orig: 0x1B49E0 -> 0x1F4C58 / 0x12DC18: optional scale, not a light.
+    for (const auto& xf : palo->axf)
+        if (xf->kind == 12 && xf->tag == palo->oid)
+        {
+            p->pscale1ACC = PctrlNewPos(palo, xf.get(), 0, 7, 2, glm::vec4(1, 1, 1, 0));
+            break;
+        }
     SetMurrayState(p, 0);
 }
 
@@ -1471,7 +1633,7 @@ bool FMurrayCanDo(MURRAY* p, int n)
     case 5:
         if (n == 3) return true;
         // (19: the carried object's owner (+0x13F0 +0x180) derived from 0x38)
-        if (n == 19) { LO* po = p->plo13F0 ? PloInteractOidField(p->plo13F0, 0x180) : nullptr; return po && FIsLoDerivedFrom(po, 0x38); }
+        if (n == 19) { LO* po = p->plo13F0 ? PloInteractOidField(p->plo13F0, 0x180) : nullptr; return po && FIsLoDerivedFrom(po, S3CID(0x38)); }
         return false;
     default: return false;
     }
@@ -1648,11 +1810,16 @@ void UpdateMurrayPunch(MURRAY* p)
             const glm::vec4& v1700 = p->rb16F0.avel[0];  // (+0x1700)
             const float l = std::sqrt(v1700.x * v1700.x + v1700.y * v1700.y);
             const glm::vec3 wWorld = cmm::SetVectorCylind(RadJoy(p), UJoy(p) * l, 0.0f);  // 0x11E1A0
-            const glm::vec3 w = glm::transpose(glm::mat3(MatWorldOfAlo(p->palo))) * wWorld;  // 0x1A6FC0 (0, p)
+            // 0x1A6FC0 (0, p): into Murray's own frame (his object record, as VecJtConvert); his first transform
+            // record is not that frame, which turned the steering backwards (N04)
+            const glm::vec3 w = VecJtConvert(nullptr, p->palo, wWorld);
             p->vecVel = p->vecVel * (1.0f - g) + (-w) * g;
         }
     }
     if (p->plo10DC && p->n10E4 == 4) FaceActorToward(p, p->plo10DC);  // orig 0x1B8B70 -> 0x2046F0
+    if (std::getenv("SLY2N_PUNCHPRINT"))
+        std::printf("punch: t %.3f head %.3f vel %.2f %.2f %.2f k %d blend %d dir %.2f %.2f joy %.3f %.3f\n", g_clock.t, p->radHeading,
+                    p->vecVel.x, p->vecVel.y, p->vecVel.z, p->n1810, p->f1818, p->rb16F0.avel[0].x, p->rb16F0.avel[0].y, RadJoy(p), UJoy(p));
 }
 
 // orig: 0x001B5D30 (state9's 0 still, 1 gait, 2 strafe toward the pinned guard)
@@ -1873,6 +2040,7 @@ void UpdateMurrayTransitions(MURRAY* p)
         {
         case 0: case 1: case 10:
         {
+            if (FPcCarmGangGround(p, [p](int n) { SetMurrayState(p, n); }, 0, 10, FMurrayCanDo(p, 3))) break;   // (PC addition)
             if (!(GrfbtnHeld(p) & BTN_R1) && FActorObjectAhead(p, 0)) { SetMurrayState(p, 9); break; }
             if (FBtnTake(p, BTN_CROSS, 0.1f)) { SetJumpKind(&p->jump, 1, 0, 0); break; }
             if (FBtnWithin(p, BTN_R3, F32(0x3E19999A)) && FMurrayCanDo(p, 3))
@@ -1900,6 +2068,7 @@ void UpdateMurrayTransitions(MURRAY* p)
         case 2:
         {
             UpdateJumpTransitions(&p->jump);  // 0x197500
+            if (FPcCarm(p->palo)) break;   // (PC addition: no Thunder Flop as Carmelita)
             const int h = p->jump.kind;
             if (h == 0 || h == 11 || h == 15 || h == 16) break;
             // the Thunder Flop from the air (state 3: wind-up first, +0x13E8 0: the plain clip)
@@ -2281,23 +2450,28 @@ void UpdateMurray(LO* plo)
     UpdateActor(p);  // 0x1403D0
     if (!plo->fInWorld) return;
     if (p->pasega190C && FAsegaRetracted(p->pasega190C)) RetractAsegaPp(&p->pasega190C);  // 0x1306A8
-    UpdateJtCandidates(p, 0xF8FA);  // 0x194A40 (the interaction targets, jt.cpp)
+    // (PC addition, debug menu only: Carmelita's moveset, her aim mode and shot; only the objects to use rated)
+    const bool fCarmAim = PpadctlOf(p) && FPcCarmGangInput(p, 0, 10, 1);
+    UpdateJtCandidates(p, FPcCarm(p->palo) ? 0x80 : 0xF8FA);  // 0x194A40 (the interaction targets, jt.cpp)
     UpdateMurrayF00(p);
     if (PpadctlOf(p)) UpdateMurrayTransitions(p);
     switch (p->state)
     {
     case 0:
+        PcCarmGangMotion(p, fCarmAim, false);   // (PC addition)
         if (p->psma) SetSmaMask(p->psma, GrfActorLookMask(p));  // 0x1F1350
         break;
     case 1:
         SetStepPhysHeading(p->palo, RadJoy(p));                  // 0x204660
         p->vecVel = glm::vec3(SetGaitMix(&p->gaitWalk, 1.0f));  // 0x20BB58
         UpdateGaitFeet(&p->gaitWalk);                            // 0x20BC08
+        PcCarmGangMotion(p, fCarmAim, true);   // (PC addition)
         break;
     case 10:
         SetStepPhysHeading(p->palo, RadJoy(p));
         p->vecVel = glm::vec3(SetGaitMix(&p->gaitRun, UJoy(p)));
         UpdateGaitFeet(&p->gaitRun);
+        PcCarmGangMotion(p, fCarmAim, true);   // (PC addition)
         break;
     case 2: UpdateJumpInput(&p->jump); break;  // 0x197F98
     case 3: case 6: case 7: case 8: case 9: case 15: break;  // state3 / state9's transitions also steer their motion
@@ -2314,13 +2488,19 @@ void UpdateMurray(LO* plo)
     switch (p->state)
     {
     case 0: case 1: case 4: case 5: case 7: case 8: case 9: case 10: case 18: case 21: UpdateActorSupport(p); break;
-    case 13: case 20: WarnOnce("0x1B82A0's sub-objects (states 13 / 20)"); break;
+    case 13: UpdateSafeInteract(p); break;
+    case 20: UpdateSafePipe(p); break;
     default: break;
     }
     UpdateDamage(p);  // 0x1A1358 (+0xDF0)
     UpdateMurrayReleased(p);
     PrintMurrayCarry(p);
-    // TODO(actors): the light +0x1ACC
+    // orig: 0x1B50B0 -> 0x12D108; D_002C08E4 / D_002C08F0 / D_002A2DE0.
+    if (p->pscale1ACC)
+    {
+        const float scale = g_clock.t - p->t1AC8 < 5.0f ? 1.25f : 1.0f;
+        SetCtrlPos(p->pscale1ACC, glm::vec4(scale, scale, scale, 0));
+    }
     // Debug observer: optional game-time range ("205-220"); poses also include all local record matrices.
     const char* szMurrayPrint = std::getenv("SLY2N_MURRAYPRINT");
     float tPrintFrom = -1.0f, tPrintTo = 1.0e30f;
@@ -2552,6 +2732,18 @@ void InitWorldGang(SW* psw)
         }
 }
 
+void ReleaseMurrayScaleControllers(SW* psw)
+{
+    if (!psw) return;
+    for (const auto& object : psw->aploAll)
+        if (MURRAY* p = PmurrayFromLo(object.get()); p && p->pscale1ACC)
+        {
+            CTRL* controller = p->pscale1ACC;
+            p->pscale1ACC = nullptr;
+            DeleteCtrl(&controller);
+        }
+}
+
 namespace
 {
 struct INITGANG
@@ -2567,6 +2759,18 @@ struct INITGANG
         });
         RegisterObjectSetter(775, [](LO* plo, const CRef& ref) {
             if (BENTLEY* p = PbentleyFromLo(plo)) p->f1818 = ref.m_tagk == TAGK_F32 ? static_cast<int>(ref.m_g) : ref.m_tagk == TAGK_Bool ? ref.m_bool : ref.m_n;
+        });
+        // EOPID 776 (Bentley's option 759, a field (0x92) at +0x181C): the log idle. Ep7's log rolling (task 3251's
+        // module 150: s19 sets it, s20 clears it): standing, his idle machine held in state 0x17B (0x136338), his
+        // state 0 clip +0x1820 and the heading 0.5 (0x134DA8). Natively the field never reached the actor (R43b)
+        RegisterObjectSetter(776, [](LO* plo, const CRef& ref) {
+            if (BENTLEY* p = PbentleyFromLo(plo)) p->f181C = ref.m_tagk == TAGK_F32 ? static_cast<int>(ref.m_g) : ref.m_tagk == TAGK_Bool ? ref.m_bool : ref.m_n;
+        });
+        RegisterObjectGetter(776, [](LO* plo) {
+            CRef r;
+            const BENTLEY* p = PbentleyFromLo(plo);
+            r.SetS32(p ? p->f181C : 0);
+            return r;
         });
         RegisterObjectGetter(775, [](LO* plo) {
             CRef r;

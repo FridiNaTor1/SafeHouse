@@ -1,8 +1,9 @@
 // State machines at run time (Sly 2 0x1EFAC0's tables, 0x1F00C8-0x1F14F8). Specification: Sly2-Reference/Sly2-Release/game/
 // sm_p3.cpp, m_1F0FA0_p3.cpp (oracle-verified) and the decomp's func_001F0850/08D0/0948/09D8/1350/13A8.
 
-#include "sly3/ids3.h"
 #include "smrun.h"
+#include "game/sly3.h"
+#include "worldglobals.h"
 #include "animfind.h"
 #include "clock.h"
 
@@ -14,6 +15,7 @@
 #include <cstring>
 
 std::vector<SMA*> g_apsma;
+WORLD_TABLE(g_apsma);   // (PC: moved aside while a kept world loads, worldglobals.h)
 constinit void (*g_pfnSmaScript)(SMA* psma, int symid, int nA, int nB) = nullptr;
 
 namespace
@@ -22,15 +24,13 @@ namespace
 // slot 3: the script handler 8)
 void NotifySmaState(SMA* psma, int isA, int isB)
 {
-    (void)isA;
-    (void)isB;
+    SMAMSG10 msg{psma, OidFromSmIsms(psma->psm, isA), OidFromSmIsms(psma->psm, isB)};
     if (psma->palo && g_pfnLoMessage)
-    {
-        SMAMSG10 msg{psma, OidFromSmIsms(psma->psm, isA), OidFromSmIsms(psma->psm, isB)};
         g_pfnLoMessage(psma->palo, 10, &msg);
-    }
+    const std::vector<SMALISTENER*> a = psma->aplistener;
+    for (SMALISTENER* pl : a) pl->OnSmaState(msg);
     if (g_pfnSmaScript)
-        g_pfnSmaScript(psma, 8, OidFromSmIsms(psma->psm, isA), OidFromSmIsms(psma->psm, isB));  // vt slot 3 (8)
+        g_pfnSmaScript(psma, 8, msg.oidOld, msg.oidNew);  // vt slot 3 (8)
 }
 
 // orig 0x001F0458
@@ -180,7 +180,7 @@ void InitSm(SM* psm)
     for (const SM::EDGE& e : psrc->aedge)
     {
         SM::SMT t;
-        t.paseg = e.plo && FCidDerivedFrom(e.plo->Cid(), Icid(CID3::ASEG)) ? static_cast<ASEG*>(e.plo) : nullptr;
+        t.paseg = e.plo && FCidDerivedFrom(e.plo->Cid(), S3CID(0x6D)) ? static_cast<ASEG*>(e.plo) : nullptr;
         t.isFrom = IsmsFindSm(psm, e.from);
         t.isTo = IsmsFindSm(psm, e.to);
         t.grf = static_cast<uint32_t>(e.grf);
@@ -244,7 +244,7 @@ void InitSm(SM* psm)
     // the initial SMA (EOPID 370: 0x1F0128 {oid, state, grfapl})
     for (const OPT& opt : psrc->aopt)
     {
-        if (opt.eopid != 414 || opt.aval.size() < 3) continue;  // (sly3 414 = sly2 370)
+        if (opt.eopid != S3EOPID(370) || opt.aval.size() < 3) continue;
         psm->fInitial = true;
         psm->oidInitial = opt.aval[0].n;
         psm->oidStateInitial = opt.aval[1].n;
@@ -275,7 +275,7 @@ void PostSmLoad(SM* psm)
     // orig 0x15E938(G, 4, oid, psm): the object of that oid nearest the SM (e.g. world 14's second SM 72795, with no
     // parent, on 77184 of its own instance; native searched only the SM's parents' owned objects and found none)
     LO* plo = PloFindSwNearest(psm, psm->oidInitial);
-    ALO* palo = plo && FCidDerivedFrom(plo->Cid(), Icid(CID3::ALO)) ? static_cast<ALO*>(plo) : nullptr;
+    ALO* palo = plo && FCidDerivedFrom(plo->Cid(), S3CID(0x30)) ? static_cast<ALO*>(plo) : nullptr;
     PsmaApplySm(psm, palo, psm->oidStateInitial, psm->grfaplInitial);
 }
 
@@ -360,8 +360,9 @@ void SetSmaGoal(SMA* psma, OID oid)
     if (FSmaRetracted(psma)) return;
     const int isms = oid != -1 ? IsmsFindSm(psma->psm, oid) : -1;
     if (std::getenv("SLY2N_SMADEBUG"))
-        std::printf("sma %d goal %d (isms %d, was %d, cur %d, playing %d) t %.3f object %d\n", psma->psm ? psma->psm->oid : -1, oid, isms,
-                    psma->ismsGoal, psma->ismsCur, psma->pasega ? 1 : 0, g_clock.t, psma->palo ? psma->palo->oid : -1);
+        std::printf("sma %d goal %d (isms %d, was %d, cur %d, playing %d) t %.3f object %d instance %d\n", psma->psm ? psma->psm->oid : -1, oid, isms,
+                    psma->ismsGoal, psma->ismsCur, psma->pasega ? 1 : 0, g_clock.t, psma->palo ? psma->palo->oid : -1,
+                    psma->palo ? psma->palo->oidInstance : -1);
     if (isms == psma->ismsGoal) return;
     psma->ismsGoal = isms;
     if (psma->pasega)
@@ -493,6 +494,10 @@ void ChooseSmaTransition(SMA* psma, bool fReverse)
             s3 = false;
         }
         psma->psmt = psmt;
+        if (static const bool s_fDbg = std::getenv("SLY2N_SMADEBUG") != nullptr; s_fDbg)  // (debug: the transition chosen)
+            std::printf("sma %d choose cur %d goal %d -> %d..%d aseg %d t %.3f object %d instance %d\n", psm->oid, psma->ismsCur,
+                        psma->ismsGoal, psmt ? psmt->isFrom : -1, psmt ? psmt->isTo : -1, psmt && psmt->paseg ? psmt->paseg->oid : -1,
+                        g_clock.t, psma->palo ? psma->palo->oid : -1, psma->palo ? psma->palo->oidInstance : -1);
         if (!psmt) return;
         bool s1 = false;
         if (ASEG* paseg = psmt->paseg)

@@ -7,3 +7,8 @@ extern ROUTETELE g_routetele;
 
 struct ACTOR;
 void ApplyRouteTeleportActor(ACTOR* p);  // (sly.cpp: the route steps for Bentley / Murray as the current player)
+
+// (debug, route.cpp: a route's "hackdock X Y" step: the hacking minigame's ship put at (X, Y) at its next driven update,
+// as SLY2N_HACKTELE, e.g. at a station's end dock; hack.cpp)
+struct ROUTEHACKDOCK { bool fPending = false; float x = 0, y = 0; };
+extern ROUTEHACKDOCK g_routehackdock;

@@ -180,6 +180,7 @@ struct GUARD
     int f32C = 0;                 // +0x32C (busy: 0x207598)
     int f330 = 0;                 // +0x330 the one-time knockout notification (0x179898)
     int n334 = 0, n338 = 0, n33C = 0, n340 = 0, n344 = 0;  // +0x334.. (options 332 / 254; +0x338 the hits' depth)
+    struct ASEG* paseg348 = nullptr;  // +0x348 the block's clip (a field option; Rajan's 13177)
     ASEGA* pasega34C = nullptr;   // +0x34C
     uint32_t grf350 = 0x20F800, grf354 = 0x29FF7E, grf358 = 0xF800;  // +0x350 .. (the hits that matter by state)
     float g360 = -10.0f;          // +0x360
@@ -211,6 +212,19 @@ struct GUARD
     float g1070 = 1.35f, g1074 = -0.0003f, g1078 = 0.0f;  // +0x1070 (option 972: the follow speed by distance)
     float g1080 = 0.9f, g1084 = 1.2f;  // +0x1080 (973: its clamp)
     float g1088 = 7.0f;           // +0x1088 (974: how long it waits for Sly before the alarm)
+    // class 0x3C's strike (0x1BA128 / 0x1BA408; Neyla's): +0x1018 state (0 looking, 1 striking), +0x101C its time, the
+    // ASEG part 0x5D8 (+0x1020) and its play (+0x1024), the target (+0x1028), the turn controller (+0x102C) on the
+    // transform tagged 0x5DA (+0x1034), the strike's axis (+0x1040: from 0x5DA to the transform tagged 0x5D9 (+0x1030)
+    // at the ASEG's marker 0x5DB, in 0x5DA's reference)
+    int stStrike = 0;
+    float tStrike = 0.0f;
+    struct ASEG* pasegStrike = nullptr;
+    struct ASEGA* pasegaStrike = nullptr;
+    LO* ploStrike = nullptr;
+    struct CTRLPOS* pctrlStrike = nullptr;
+    struct XF* pxfStrikeHand = nullptr;
+    struct XF* pxfStrikeTurn = nullptr;
+    glm::vec3 vecStrikeAxis{0.0f};
     int n3D8 = -1, n3F0 = -200, n3FC = -1;
     LO* plo3F4 = nullptr, * plo3F8 = nullptr;  // +0x3F4 / +0x3F8 (options 304 / 305)
     int f48C = 0;                 // +0x48C
@@ -230,10 +244,13 @@ struct GUARD
     ASEGA* pasegaE90 = nullptr;   // +0xE90
     std::vector<OID> aoidEB8;     // +0xEB8 (up to 8; option 233)
     std::vector<LO*> aploEDC;     // +0xEDC
-    LO* ploF00 = nullptr;         // +0xF00 held object
+    LO* ploF00 = nullptr;         // +0xF00 concurrently playing response action
     float tF04 = 0.0f;            // +0xF04 the next action's time (the selector's cooldown)
     int fF3C = 0;                 // +0xF3C striking (0x9F)
-    int fF0C = 0;                 // +0xF0C
+    struct ACTIONOBJ* pactionF08 = nullptr; // +0xF08 aimed action
+    CTRL* pctrlF0C = nullptr;     // +0xF0C aim controller
+    XF* pxfF10 = nullptr;        // +0xF10 target's frame
+    glm::vec3 posF20{0.0f};      // +0xF20 target point in that frame
     float gF30 = 0, gF34 = 0;     // +0xF30 / +0xF34 (options 320 / 321)
     int nF40 = 1;
     float gF48 = 300.0f, gF4C = 1200.0f;  // +0xF48 (option 298)
@@ -246,6 +263,7 @@ struct GUARD
     LO* ploMove = nullptr;        // +0xF84 what it moves on (0x20B2A8: a ladder (1), a chair (0), a bar (2), 0x27 (3))
     float sMove = 0;              // +0xF88 its place along that object's curve
     int nMoveKind = 0;            // +0xF8C the kind given with it
+    LO* ploF90 = nullptr;         // +0xF90 (EOPID 325, kind 0x2003): its hands' point (a LOX under the guard: Bison 32306)
     int fF94 = 0, fFA8 = 0;       // +0xF94 / +0xFA8 (busy): the counts of the two object lists below
     LO* aploF98[4]{};             // +0xF98 (option 426's first list: the objects it attacks, job 0xB2's choices)
     LO* aploFAC[4]{};             // +0xFAC (option 426's second list: the ones it turns to when near, e.g. Sly)
@@ -259,7 +277,7 @@ struct GUARD
     LO* ploFEC = nullptr;         // +0xFEC (option 331)
     float uGaitFF0 = 0, tGaitFF4 = -3.4028235e38f;  // +0xFF0 / +0xFF4
     float tFF8 = 0;               // +0xFF8
-    uint32_t u1000 = 0;           // +0x1000
+    int cActivationLocks = 0;     // +0xFFC: job locks keep the guard active
 };
 
 // orig: 0x00209098: the guard held still (+0xFC8, or the game paused for the guards)
@@ -282,8 +300,23 @@ GUARD* PguardNew(ALO* palo);
 void ResetGuards();
 void ResetGuardDetectors();  // world-owned detector data and guard-to-LO bindings
 std::vector<GUARD*> ApguardAll();
+// orig: 0x2079E0 / 0x2079A0: live list and inactive cleanup timestamp, after the ALO base.
+void OnGuardRegistered(LO* plo);
+void OnGuardUnregistered(LO* plo);
+const std::vector<GUARD*>& ApguardActive();
+// Differential fixtures restore the original live list without activation callbacks.
+void ImportGuardActiveList(const std::vector<GUARD*>& guards);
+// orig: 0x20B438 / 0x20B478: first and last AI job lock change activation kind.
+void LockGuardActivation(GUARD* pg);
+void UnlockGuardActivation(GUARD* pg);
+void PostLoadGuardManager(LO* plo);  // orig: 0x20B500
 
 // orig: 0x00207A20 / 0x00207A40: the mask bit of an index (-1: none)
+// (Sly 3, guard3.cpp) the state indices of the data (Sly 3's) <-> the AI code's (Sly 2's); -1: no counterpart
+int IstateGuard2FromIstate3(int n3);
+int IstateGuard3FromIstate2(int n2);
+// (Sly 3, guard3.cpp) a guard option's Sly 2 EOPID (gen/eopidmap.inc with the kind options' corrections)
+int Eopid2GuardFromEopid3(int e3);
 inline uint64_t GrfStateBit(int n) { return n == -1 ? 0 : (1ull << (static_cast<unsigned>(n) & 63)); }
 // orig: 0x00209A68: index n in the guard's mask
 inline bool FGuardState(const GUARD* pg, int n) { return (pg->grfState & GrfStateBit(n)) != 0; }

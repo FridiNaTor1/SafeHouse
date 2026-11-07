@@ -26,6 +26,7 @@ struct SCENEGLOBSET
     bool fBounds = false;
     glm::vec3 posBounds{0.0f};
     float sBoundsRadius = 0.0f, sMRD = 1e10f;
+    bool fMrdOriginal = false;              // (QoL draw distance above 1x: a character's tree, its whole fade the original's)
     uint32_t vaGlob = 0;                    // where the reference keeps this glob (ALO+0x80)
     std::vector<glm::mat4> amatGlob;        // per GLOB: its world matrix
     std::vector<uint8_t> afVisible;         // per GLOB: not hidden in the reference's RAM
@@ -44,6 +45,10 @@ struct SCENEGLOBSET
     // model matrix; the forward-lit ones take their own light context); null: the glob's own arena
     std::vector<struct GLGLOB*> apglInst;
     std::vector<uint64_t> akeyBake;         // per GLOB: what its bake was made from (matrix, lights, world shader)
+    // per GLOB: BakeKey's value (without the instance) and the lights' version it was taken at: at the same matrix it
+    // stays when the lights changed since did not touch the group (light.h FBakeLightsUnchangedSince)
+    std::vector<uint64_t> akeyBakeLights;
+    std::vector<uint32_t> aversionKey;
     // The light context's position (0x1F2500: the root object's model position, XF +0x70, shared by its children;
     // 0x1A4478 chooses the lights there). Unset: the group's own centre.
     bool fPosLight = false;
@@ -53,6 +58,9 @@ struct SCENEGLOBSET
     // fade +0x12C twice, an actor's 0x1425B0 the fade times its +0x10D4 / +0x10D8): the meshes' vertex alpha (qw8.x)
     // and the cel borders' (qw8.y).
     float gAlpha = 1.0f, gAlpha2 = 1.0f;
+    // The damage flash (ALO +0xD0 = RenderGlob's MODEL +0x50, sent as qw8.z; the actors' UpdateDamage 0x1A1358 pulses it
+    // while hurt): P_A draws the cel border toward red by it (N06; measured on the reference).
+    float gFlash = 0.0f;
     // Drawn over the HUD (RenderGlob 0x168638: the glob set's flag bit 34, ALO +0xD0, option 69 SetSoIgnoreLocked,
     // while no screen object of priority >= 16 is shown, G_GAME +0x3BEC == 0): its kinds 3 / 4 -> 22 (23 faded),
     // 5 / 6 -> 23, 9 -> 24, 10 -> 25, drawn after kind 21 (the screen objects) over a cleared Z (group 10's

@@ -8,7 +8,10 @@
 // the path (a rail Sly slides on, the camera) follows. A class 0x6A object (0x1E9858 / 0x1E9AC0) draws its model bent
 // along a path: each vertex kept as its offset from the path's nearest point at load and that point's parameter.
 // E.g. the Ep1 heist harpoon's rope (world 2: path 42820, the mesh 42818, block 123952) and Ep7's boat grapples.
+#include "jt.h"
+#include "game/sly3.h"
 #include "rope.h"
+#include "spliceobj.h"
 
 #include "alo.h"
 #include "brx.h"
@@ -142,7 +145,7 @@ void MarkRopeUpdate(LO* ppath)
 // update flag 4 again)
 ROPE* PropeEnsure(LO* ppath, int f)
 {
-    if (!ppath || !FIsLoDerivedFrom(ppath, 0x0A)) return nullptr;
+    if (!ppath || !FIsLoDerivedFrom(ppath, S3CID(0x0A))) return nullptr;
     CRV* pc = PcrvMutable(ppath);
     if (!pc) return nullptr;
     auto& up = s_mprope[ppath];
@@ -166,13 +169,13 @@ void SetRopeEnd(ROPE& r, int i, LO* po)
     r.apo[i] = po;
     if (po)
     {
-        if (FIsLoDerivedFrom(po, 0x30))
+        if (FIsLoDerivedFrom(po, S3CID(0x30)))
         {
             ALO* palo = static_cast<ALO*>(po);
             r.apxf[i] = PxfObj(palo);
             r.apos[i] = glm::vec3(0.0f);
         }
-        else if (FIsLoDerivedFrom(po, 3))
+        else if (FIsLoDerivedFrom(po, S3CID(3)))
         {
             const LOX* plox = static_cast<const LOX*>(po);
             r.apxf[i] = plox->pxf;
@@ -513,14 +516,23 @@ void PostLoadRopeMesh(LO* plo)
     if (rm.fReady) return;
     rm.fReady = true;
     for (const OPT& o : plo->aopt)
-        if (o.eopid == 1311 && !o.aval.empty())
-            rm.ppath = o.aval[0].pbasic ? dynamic_cast<LO*>(o.aval[0].pbasic) : PloFindSwNearest(plo, o.aval[0].n, false);
+        if (o.eopid == S3EOPID(1311) && !o.aval.empty())
+        {
+            // (0x13E590: the loaded oid resolved in the object's namespace (0x15E958 kind 4), so the copy in a placed
+            // instance finds its own instance's path: Ep7 32:3234's three guns each have a rope 42820 and its mesh
+            // 42818 with no parent, and a plain nearest search sent all three meshes to the template's path, so the
+            // fired line was never drawn (R43))
+            LO* p = o.aval[0].pbasic ? dynamic_cast<LO*>(o.aval[0].pbasic) : nullptr;
+            if (!p && g_splicegame.pfnFindObject)
+                p = dynamic_cast<LO*>(g_splicegame.pfnFindObject(4, o.aval[0].n, plo, plo));
+            rm.ppath = p ? p : PloFindSwNearest(plo, o.aval[0].n, false);
+        }
     const CRV* pc = rm.ppath ? PcrvFromLo(rm.ppath) : nullptr;
     if (!pc || !palo->pglobset) return;
     rm.source = palo->pglobset;
     palo->pglobset = std::make_shared<GLOBSET>(*rm.source);
     palo->pglobset->palo = palo;
-    const glm::mat4 mObj = MatWorldOfAlo(palo);
+    const glm::mat4 mObj = MatJtLo(palo);  // vt slot 31
     const glm::vec3 axis = glm::vec3(glm::mat3(mObj)[2]);  // 0x1A6318's third row
     rm.asample.resize(palo->pglobset->aglob.size());
     for (size_t i = 0; i < palo->pglobset->aglob.size(); ++i)
@@ -559,7 +571,7 @@ void PlaceRopeMeshScene(ALO* palo, SCENEGLOBSET& sgs)
     const CRV* pc = PcrvFromLo(rm.ppath);
     if (!pc || pc->ag.empty()) return;
     const float gEnd = pc->ag.back();  // 0x1E6630
-    const glm::vec3 axis = glm::vec3(glm::mat3(MatWorldOfAlo(palo))[2]);
+    const glm::vec3 axis = glm::vec3(glm::mat3(MatJtLo(palo))[2]);  // 0x1A6318
     glm::vec3 mnAll(1e30f), mxAll(-1e30f);
     for (size_t i = 0; i < rm.asample.size() && i < palo->pglobset->aglob.size(); ++i)
     {
@@ -593,7 +605,7 @@ void PlaceRopeMeshScene(ALO* palo, SCENEGLOBSET& sgs)
         }
         if (i < sgs.amatGlob.size()) sgs.amatGlob[i] = glm::mat4(1.0f);
         if (i < sgs.aamatBone.size()) sgs.aamatBone[i].clear();
-        UpdateGlobColorsGpu(g);
+        UpdateGlobVerticesGpu(g);
     }
     if (mnAll.x <= mxAll.x)
     {
@@ -697,13 +709,13 @@ FIELDREG<1222> s_f1222;
 // which makes the simulation as the original's load does
 void PostLoadPathRope(LO* plo)
 {
-    if (!plo || !FIsLoDerivedFrom(plo, 0x0A)) return;
+    if (!plo || !FIsLoDerivedFrom(plo, S3CID(0x0A))) return;
     for (const OPT& o : plo->aopt)
     {
-        if (o.aval.empty() || o.eopid < 1211 || o.eopid > 1222 || o.eopid == 1212) continue;
+        if (o.aval.empty() || o.eopid < 1211 || o.eopid > 1222 || o.eopid == S3EOPID(1212)) continue;
         ROPE* p = PropeEnsure(plo, 1);
         if (!p) return;
-        if (o.eopid == 1211) p->force = glm::vec3(o.aval[0].ag[0], o.aval[0].ag[1], o.aval[0].ag[2]);
+        if (o.eopid == S3EOPID(1211)) p->force = glm::vec3(o.aval[0].ag[0], o.aval[0].ag[1], o.aval[0].ag[2]);
         else if (float* pg = PgField(*p, o.eopid)) *pg = o.aval[0].ag[0];
         if (FPrint()) std::printf("rope %d: loaded option eopid %d = %g\n", plo->oid, o.eopid, o.aval[0].ag[0]);
     }

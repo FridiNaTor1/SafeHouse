@@ -2,6 +2,7 @@
 // 0x22A060, the placement 0x22A220, Draw 0x22A908) and what shows them: L3 (0x140338, from the players' update
 // 0x1403D0) and the binocucom's view (0x150160). See marker.h.
 #include "marker.h"
+#include "game/sly3.h"
 
 #include "activate.h"
 #include "alo.h"
@@ -119,7 +120,7 @@ LO* PloField(LO* plo, uint32_t ib)
 ALO* PaloField(LO* plo, uint32_t ib)
 {
     LO* p = PloField(plo, ib);
-    return p && FCidDerivedFrom(p->Cid(), 0x30) ? static_cast<ALO*>(p) : nullptr;
+    return p && FCidDerivedFrom(p->Cid(), S3CID(0x30)) ? static_cast<ALO*>(p) : nullptr;
 }
 
 void SetDrawn(LO* plo, bool f)
@@ -147,7 +148,7 @@ void PlaceMarker(LO* plo, MARKER& m)
     m.cL3 = g_cm.cFreeStarts;
     m.h = 0.0f;
     glm::vec3 c = g_cm.pos;
-    if (const char* sz = std::getenv("SLY2N_MARKERCAM")) std::sscanf(sz, "%f %f %f", &c.x, &c.y, &c.z);  // (debug: the reference's camera)
+    if (static const char* const sz = std::getenv("SLY2N_MARKERCAM"); sz) std::sscanf(sz, "%f %f %f", &c.x, &c.y, &c.z);  // (debug: the reference's camera)
     const glm::vec3 a = PosWorld(m.ploAnchor ? m.ploAnchor : plo);
     const float dxy = glm::length(glm::vec2(a - c));
     if (dxy < 1.0f) return;
@@ -213,6 +214,12 @@ void MarkerAlphas(LO* plo, const MARKER& m, float* pgMarker, float* pgLabel)
     const float t = g_clock.t;
     float g = GCurveUnit(t - std::max(s_tL3 + 10.0f, s_tBinoc + 10.0f), 1.0f, -0.5f, 0.0f);  // D_002C4494.., D_002C44A0
     float gLabel = GCurveUnit(t - (s_tBinoc + 0.1f), 1.0f, -1.0f, 0.0f);                    // D_002C449C, D_002C44B0
+    if (g == 0.0f && gLabel == 0.0f)
+    {
+        // (both faded out: hidden or not, the same; the progress lookups below are skipped, they cost a frame's draw)
+        *pgMarker = *pgLabel = 0.0f;
+        return;
+    }
     const bool fJob = g_psw && g_psw->tasks.pjobCur;                                       // SW +0x3B0C
     bool fHide = false;
     switch (m.kind)
@@ -304,10 +311,10 @@ void CollectMarkerDraws(const SCENE& scene, std::vector<EXTRADRAW>& aextra)
         const float dist = glm::length(g_cm.pos - (c0 + seg * u));
         const float scale = std::clamp(0.5f + dist * 0.000285714f, 1.0f, 5.0f);  // D_002C44C0 / D_002C44D0
         glm::vec3 e0 = d0 + up * (scale * 300.0f);                          // D_002C44D8
-        if (std::getenv("SLY2N_MARKERTEST")) e0 = g_cm.pos + g_cm.mat[0] * 800.0f - glm::vec3(0.0f, 0.0f, 250.0f);
+        if (static const bool s_fTest = std::getenv("SLY2N_MARKERTEST") != nullptr; s_fTest) e0 = g_cm.pos + g_cm.mat[0] * 800.0f - glm::vec3(0.0f, 0.0f, 250.0f);
         auto draw = [&](ALO* palo, const glm::mat4& mat) {
             if (!palo) return;
-            if (const char* sz = std::getenv("SLY2N_MARKERPART"); sz && std::atoi(sz) != palo->oid) return;
+            if (static const char* const sz = std::getenv("SLY2N_MARKERPART"); sz && std::atoi(sz) != palo->oid) return;
             const size_t c = aextra.size();
             AppendAloExtraDraws(scene, palo, mat, g, aextra);
             static int s_cprint = 0;
@@ -352,7 +359,7 @@ void CollectMarkerDraws(const SCENE& scene, std::vector<EXTRADRAW>& aextra)
         if (!m.ptask && !m.fTaskSought)
         {
             m.fTaskSought = true;
-            for (LO* pt : g_psw->mpcidaplo[0x85])
+            for (LO* pt : g_psw->mpcidaplo[S3CID(0x85)])
                 if (static_cast<TASK*>(pt)->ploShown == pm) { m.ptask = pt; break; }
         }
         if (FPrint() && 0.0f < gLabel)
@@ -360,10 +367,10 @@ void CollectMarkerDraws(const SCENE& scene, std::vector<EXTRADRAW>& aextra)
             static int s_c = 0;
             if (s_c++ < 6)
                 std::printf("marker %d: label alpha %.2f task %d cid 0x%X job %d n6c %d\n", pm->oid, gLabel, m.ptask ? m.ptask->oid : -1, m.ptask ? m.ptask->Cid() : 0,
-                            m.ptask && m.ptask->Cid() == 0x85 && static_cast<const TASK*>(m.ptask)->pjob ? static_cast<const TASK*>(m.ptask)->pjob->oid : -1,
-                            m.ptask && m.ptask->Cid() == 0x85 && static_cast<const TASK*>(m.ptask)->pjob ? static_cast<const TASK*>(m.ptask)->pjob->n6c : -9);
+                            m.ptask && m.ptask->Cid() == S3CID(0x85) && static_cast<const TASK*>(m.ptask)->pjob ? static_cast<const TASK*>(m.ptask)->pjob->oid : -1,
+                            m.ptask && m.ptask->Cid() == S3CID(0x85) && static_cast<const TASK*>(m.ptask)->pjob ? static_cast<const TASK*>(m.ptask)->pjob->n6c : -9);
         }
-        if (0.0f < gLabel && m.ptask && m.ptask->Cid() == 0x85)
+        if (0.0f < gLabel && m.ptask && m.ptask->Cid() == S3CID(0x85))
             if (const JOB* pjob = static_cast<const TASK*>(m.ptask)->pjob; pjob && pjob->n6c != -1)
             {
                 LABEL l;
@@ -427,7 +434,7 @@ void PostLoadMarker(SW* psw, LO* plo)
     m.paloBase = PaloField(plo, 0x174);
     m.ptask = PloField(plo, 0x160);
     m.nPowerup = static_cast<int>(plo->U32Field(0, 0x184, static_cast<uint32_t>(-1)));
-    if (LO* pj = PloField(plo, 0x188); pj && pj->Cid() == 0x84) m.pjob = static_cast<JOB*>(pj);
+    if (LO* pj = PloField(plo, 0x188); pj && pj->Cid() == S3CID(0x84)) m.pjob = static_cast<JOB*>(pj);
     SetGrfUpdOfLo(plo, GrfUpdOfLo(plo) | 0xAu);
     for (ALO* p : {m.paloIcon, m.paloLine, m.paloBase}) SetDrawn(p, false);
     if (g_pfnExtraDraws != CollectMarkerDraws)
@@ -463,7 +470,7 @@ void ShowWorldStats()
     EnsureWorld(g_psw);
     if (IepisodeCur() == 0) return;  // 0x210AE0
     ShowCoinCounter();
-    if (g_psw && !g_psw->mpcidaplo[0x5F].empty()) ShowClueCounter();
+    if (g_psw && !g_psw->mpcidaplo[S3CID(0x5F)].empty()) ShowClueCounter();
     if (CSnd* ps = PsndNewPlain(0x32)) ps->SetSource(nullptr);  // 0x1FBB90 / 0x1FB2F8
     s_tL3 = g_clock.t;
     g_cm.cFreeStarts++;  // CM +0x4A4

@@ -50,6 +50,13 @@ void* PvNativeFn(uint32_t addrOrig)
     return it == Map().end() ? nullptr : it->second.pfn;
 }
 
+void* PvNativeFn3(const CLS* pcls, int slot2)
+{
+    const int slot3 = pcls ? Slot3FromSlot2(pcls->cid, slot2) : -1;
+    const uint32_t fn3 = slot3 >= 0 ? pcls->PfnOrig3(slot3) : 0;
+    return fn3 ? PvNativeFn(FN3_TAG | fn3) : nullptr;
+}
+
 void* PvNativeVt(const LO* plo, int slot)
 {
     if (!plo || !plo->pcls || slot < 0 || slot >= SLOT_Max) return nullptr;
@@ -60,10 +67,12 @@ void* PvNativeVt(const LO* plo, int slot)
     {
         // the class's function; an override not ported natively falls back to the nearest base class's that is
         // (noted once: the override's own work is missing)
-        c.apv[slot] = PvNativeFn(plo->pcls->PfnOrig(slot));
+        // (Sly 3: a native ported from the Sly 3 asm (NATIVEFN3) first, then the Sly 2 twin's: vtmap3.cpp)
+        c.apv[slot] = PvNativeFn3(plo->pcls, slot);
+        if (!c.apv[slot]) c.apv[slot] = PvNativeFn(plo->pcls->PfnOrig(slot));
         if (!c.apv[slot])
             for (const CLS* pb = plo->pcls->pclsBase; pb && !c.apv[slot]; pb = pb->pclsBase)
-                if (void* pv = PvNativeFn(pb->PfnOrig(slot)))
+                if (void* pv = PvNativeFn3(pb, slot) ? PvNativeFn3(pb, slot) : PvNativeFn(pb->PfnOrig(slot)))
                 {
                     NoteMissingVt(plo, slot);
                     c.apv[slot] = pv;
@@ -79,5 +88,6 @@ void NoteMissingVt(const LO* plo, int slot)
     if (!plo || !plo->pcls) return;
     const uint32_t addr = plo->pcls->PfnOrig(slot);
     if (s_seen.insert((uint64_t(addr) << 8) | uint64_t(slot)).second)
-        std::fprintf(stderr, "[vt] no native function for slot %d of cid 0x%X (orig 0x%06X)\n", slot, plo->pcls->cid, addr);
+        std::fprintf(stderr, "[vt] no native function for Sly 2 slot %d (Sly 3 slot %d, orig3 0x%06X) of cid 0x%X (Sly 2 twin 0x%06X)\n", slot,
+                     Slot3FromSlot2(plo->pcls->cid, slot), plo->pcls->PfnOrig3(Slot3FromSlot2(plo->pcls->cid, slot)), plo->pcls->cid, addr);
 }

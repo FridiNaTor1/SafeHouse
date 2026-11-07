@@ -2,6 +2,7 @@
 // guard.h / aijobs.h.
 
 #include "aiimport.h"
+#include "game/sly3.h"
 #include <unordered_set>
 #include "aipursuit.h"
 #include "aihit.h"
@@ -311,10 +312,12 @@ std::unique_ptr<AIJOB> PjobImport(const RAM& ram, AIREF* pref, GUARD* pg, uint32
         j->tSearch = ram.F32(a + 0x3C);
         j->t40 = ram.F32(a + 0x40);
         j->fNew = ram.S32(a + 0x48);
+        ReleaseNoise(j->pnoise);
         j->pnoise = nullptr;  // (the noise by its serial in the imported list)
         if (const uint32_t an = ram.U32(a + 0x44); ram.FValid(an))
             for (NOISE* pn : ApnoiseAll())
                 if (pn->nSerial == ram.S32(an + 0x48)) j->pnoise = pn;
+        AddRefNoise(j->pnoise);
         break;
     }
     case 0xA1: case 0xA2: case 0xA3:
@@ -575,6 +578,8 @@ void ImportGuard(const RAM& ram, AIREF* pref, uint32_t a, GUARD* pg)
     pg->uGaitFF0 = ram.F32(a + 0xFF0);
     pg->tGaitFF4 = ram.F32(a + 0xFF4);
     pg->tFF8 = ram.F32(a + 0xFF8);
+    pg->cActivationLocks = ram.S32(a + 0xFFC);
+    pg->n1000 = ram.S32(a + 0x1000);
     // the detector
     if (const uint32_t ad = ram.U32(a + 0xF64))
     {
@@ -672,7 +677,7 @@ void ImportPlayers(const RAM& ram, AIREF* pref)
         for (uint32_t p = ram.U32(REF_SW_ADDR + 0x3038 + cid * 12), c = 0; ram.FValid(p) && c < 1000; p = ram.U32(p + 0x20), ++c)
         {
             LO* plo = Plo(pref, p);
-            if (!plo || !FCidDerivedFrom(plo->Cid(), 0x30)) continue;
+            if (!plo || !FCidDerivedFrom(plo->Cid(), S3CID(0x30))) continue;
             ALO* palo = static_cast<ALO*>(plo);
             palo->fInWorld = ((ram.U32(p + 0x2C) >> 28) & 1) != 0;
             for (int i = 0; i < 3; ++i)
@@ -692,7 +697,7 @@ void ImportPlayers(const RAM& ram, AIREF* pref)
                 else n = ram.S32(ac + 0x90) == 1;
                 SetPlayerStatus77(plo, n);
             }
-            if (FCidDerivedFrom(plo->Cid(), 0x33)) StepPhysOf(palo).vecBase = ram.Vec4(p + 0x240);  // (the detectors aim there)
+            if (FCidDerivedFrom(plo->Cid(), S3CID(0x33))) StepPhysOf(palo).vecBase = ram.Vec4(p + 0x240);  // (the detectors aim there)
             if (ACTOR* pa = PactorFromLo(plo))
             {
                 pa->n4C8 = ram.S32(p + 0x4C8);
@@ -722,7 +727,7 @@ void AiImport(const RAM& ram, AIREF* pref)
             LO* powner = Plo(pref, ram.U32(o + 0x40));
             if (std::getenv("SLY2N_NOISEDEBUG"))
                 std::fprintf(stderr, "free-run noise 0x%X owner %d tmpl %p\n", o, powner ? powner->oid : -1, (void*)PtmplNoise(Plo(pref, ram.U32(o + 0x14))));
-            if (!powner || !FCidDerivedFrom(powner->Cid(), 0x34) || s_seta.count(o + ram.U32(o + 0x48) * 0x1000u)) continue;
+            if (!powner || !FCidDerivedFrom(powner->Cid(), S3CID(0x34)) || s_seta.count(o + ram.U32(o + 0x48) * 0x1000u)) continue;
             s_seta.insert(o + ram.U32(o + 0x48) * 0x1000u);
             ImportNoise(PtmplNoise(Plo(pref, ram.U32(o + 0x14))), glm::vec3(ram.Vec4(o + 0x20)), glm::vec3(ram.Vec4(o + 0x30)), powner,
                         Plo(pref, ram.U32(o + 0x44)), ram.S32(o + 0x48), ram.F32(o + 0x4C), ram.S32(o + 0x54));
@@ -753,13 +758,19 @@ void AiImport(const RAM& ram, AIREF* pref)
         for (uint32_t p = ram.U32(REF_SW_ADDR + 0x3038 + cid * 12), c = 0; ram.FValid(p) && c < 100000; p = ram.U32(p + 0x20), ++c)
         {
             LO* plo = Plo(pref, p);
-            if (!plo || !FCidDerivedFrom(plo->Cid(), 0x30)) continue;
+            if (!plo || !FCidDerivedFrom(plo->Cid(), S3CID(0x30))) continue;
             if (ram.S32(p + 0x26C + 4) <= 0) continue;  // (no jobs: not started)
             GUARD* pg = PguardFromLo(plo);
             if (!pg) pg = PguardNew(static_cast<ALO*>(plo));
             ImportGuard(ram, pref, p, pg);
             pref->aguard.emplace_back(p, pg);
         }
+    // Original D_003E1444 is the registration-ordered live list, not the class lists.
+    // Importing it directly preserves saved timestamps and does not enqueue activation changes.
+    std::vector<GUARD*> active;
+    for (uint32_t p : ram.Dl(0x3E1444))
+        if (GUARD* guard = PguardFromLo(Plo(pref, p))) active.push_back(guard);
+    ImportGuardActiveList(active);
 }
 
 void AiStep(AIREF* pref)
@@ -924,7 +935,7 @@ CID CidOfJobVt(uint32_t vt) { return CidOfVt(vt); }
 // contact rebuilt from the copy (its amount and push as the handler left them).
 void AiDeliverHits(const RAM& ramA, const RAM& ramB, AIREF* pref)
 {
-    const float tB = ramB.F32(0x2DDED0);
+    const float tB = ramB.F32(S3VA(0x2DDED0));
     for (auto& [a, pg] : pref->aguard)
     {
         const uint32_t jA = ramA.U32(a + 0x26C + 8), jB = ramB.U32(a + 0x26C + 8);

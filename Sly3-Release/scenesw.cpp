@@ -1,4 +1,9 @@
 #include "scenesw.h"
+#include "game/sly3.h"
+#include "simdmat.h"
+#include "drawdist.h"
+#include "display.h"
+#include "pccharacter.h"
 #include "rope.h"
 
 #include "activate.h"
@@ -14,6 +19,7 @@
 #include "worldaccess.h"
 #include "sw.h"
 #include "trail.h"
+#include "vehiclehooks.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -38,6 +44,13 @@ void PlaceGlobset(ALO* palo, SCENEGLOBSET& sgs)
     sgs.posBounds = glm::vec3(matBounds * glm::vec4(gs.posCenter, 1.0f));
     sgs.sBoundsRadius = gs.sRadius;
     sgs.sMRD = palo->sRadius;
+    // (QoL draw distance above 1x: a tree with a character appears at the original's activation radius (activate.cpp
+    // NDrawDistanceRoot), so it fades in there as the original's, not at the radius x the option)
+    sgs.fMrdOriginal = g_display.drawDistance > 1.0f && [&] {
+        const LO* proot = palo;
+        while (proot->paloParent) proot = proot->paloParent;
+        return FDrawDistanceActorTree(proot);
+    }();
     // the groups' owner records (the S16 through vt slot 51; the object's records do not change in a world)
     if (!sgs.fOwners)
     {
@@ -55,7 +68,7 @@ void PlaceGlobset(ALO* palo, SCENEGLOBSET& sgs)
         // the group's owner record, else the object's own placement
         const XF* pxf = sgs.apxfOwner[i];
         glm::mat4 m = pxf ? pxf->matWorld : matAlo;
-        if (glob.fMatrix) m = m * glob.dmat;  // an instance's own matrix
+        if (glob.fMatrix) m = MulMat4(m, glob.dmat);  // an instance's own matrix (simdmat.h: glm's product exactly)
         sgs.amatGlob[i] = m;
     }
     // skinned groups: their bone matrices (animation code, bone.cpp; empty before InitWorldAnimation binds them)
@@ -77,18 +90,21 @@ void PlaceGlobset(ALO* palo, SCENEGLOBSET& sgs)
         sgs.sBoundsRadius *= std::sqrt(std::max({glm::dot(glm::vec3(dmat[0]), glm::vec3(dmat[0])),
                                                 glm::dot(glm::vec3(dmat[1]), glm::vec3(dmat[1])),
                                                 glm::dot(glm::vec3(dmat[2]), glm::vec3(dmat[2]))}));
-        for (glm::mat4& mat : sgs.amatGlob) mat = dmat * mat;
+        for (glm::mat4& mat : sgs.amatGlob) mat = MulMat4(dmat, mat);
         if (!s_fNoSkin)
             for (auto& amat : sgs.aamatBone)
-                for (glm::mat4& mat : amat) mat = dmat * mat;
+                for (glm::mat4& mat : amat) mat = MulMat4(dmat, mat);
     }
     // the draw alphas (0x1F3C10: gFade, gFade; 0x1425B0: gFade x +0x10D4, gFade x +0x10D8)
     sgs.gAlpha = sgs.gAlpha2 = palo->gFade;
-    if (FIsLoDerivedFrom(palo, 0x34))   // (PactorFromLo would make a missing actor: only an existing one)
+    if (FIsLoDerivedFrom(palo, S3CID(0x34)))   // (PactorFromLo would make a missing actor: only an existing one)
         if (const ACTOR* pa = dynamic_cast<const ACTOR*>(PstepFromLo(palo)))
         {
             sgs.gAlpha *= pa->g10D4;
             sgs.gAlpha2 *= pa->g10D8;
+            sgs.gFlash = pa->dmg.gFlash;
+            static const char* s_szFlash = std::getenv("SLY2N_FLASHTEST");   // debugging: every actor's damage flash
+            if (s_szFlash) sgs.gFlash = float(std::atof(s_szFlash));
             static const char* s_test = std::getenv("SLY2_FADETEST");   // debugging: every actor drawn at this alpha
             if (s_test) sgs.gAlpha = sgs.gAlpha2 = float(std::atof(s_test));
         }
@@ -114,7 +130,7 @@ void PlaceGlobset(ALO* palo, SCENEGLOBSET& sgs)
     if (s_szOid && palo->oid == std::atoi(s_szOid))
     {
         const glm::vec3 pos = matAlo[3];
-        std::printf("sceneoid %d %p clone %d in %d at %.0f %.0f %.0f:", palo->oid, (void*)palo, palo->ploCloneOf != nullptr, palo->fInWorld, pos.x, pos.y, pos.z);
+        std::printf("sceneoid %d %p clone %d in %d at %.0f %.0f %.0f fade %.6f rate %.6f:", palo->oid, (void*)palo, palo->ploCloneOf != nullptr, palo->fInWorld, pos.x, pos.y, pos.z, palo->gFade, palo->dgFade);
         for (size_t i = 0; i < gs.aglob.size() && i < 6; ++i)
         {
             const glm::vec3 p = sgs.amatGlob[i][3];
@@ -147,6 +163,10 @@ void PlaceSceneEntry(ALO* palo, SCENEGLOBSET& sgs) { PlaceGlobset(palo, sgs); }
 
 void UpdateSceneFromSw(SCENE& scene, const std::vector<ALO*>& apalo, const SW* pswDrawn)
 {
+    // (QoL draw distance above 1x: the inactive trees the option draws placed with their spinning / animated parts
+    // posed, the records restored after the placement; drawdist.h)
+    struct POSES { bool f; ~POSES() { if (f) EndDrawDistancePoses(); } } poses{pswDrawn != nullptr};
+    if (pswDrawn) BeginDrawDistancePoses(pswDrawn, apalo);
     for (size_t i = 0; i < scene.aglobset.size() && i < apalo.size(); ++i)
     {
         SCENEGLOBSET& sgs = scene.aglobset[i];
@@ -154,11 +174,13 @@ void UpdateSceneFromSw(SCENE& scene, const std::vector<ALO*>& apalo, const SW* p
         // done first; the original places only what it draws)
         static const char* s_szForce = std::getenv("SLY2_FORCEDRAW");
         const bool fForce = s_szForce && std::strstr(s_szForce, (std::string(",") + std::to_string(apalo[i]->oid) + ",").c_str());
-        if (pswDrawn && sgs.fTransform && !fForce && !FAloDrawn(pswDrawn, apalo[i]))
+        const int nPc = NPcCharDrawOverride(apalo[i]);   // (PC addition, debug menu only: pccharacter.h)
+        if (nPc == 0 || (nPc < 0 && pswDrawn && sgs.fTransform && !fForce && !FAloDrawn(pswDrawn, apalo[i])))
         {
             std::fill(sgs.afVisible.begin(), sgs.afVisible.end(), 0);
             continue;
         }
+        DrawVehiclePose(apalo[i]); // orig0x1D41F8, wheel transforms before base placement
         PlaceGlobset(apalo[i], sgs);
     }
 }
@@ -169,7 +191,9 @@ void ApplyDrawPass(const SW* psw, SCENE& scene, const std::vector<ALO*>& apalo)
     for (size_t i = 0; i < scene.aglobset.size() && i < apalo.size(); ++i)
     {
         if (s_szForce && std::strstr(s_szForce, (std::string(",") + std::to_string(apalo[i]->oid) + ",").c_str())) continue;
-        if (!FAloDrawn(psw, apalo[i]))
+        const int nPc = NPcCharDrawOverride(apalo[i]);   // (PC addition, debug menu only: pccharacter.h)
+        if (nPc == 1) continue;
+        if (nPc == 0 || !FAloDrawn(psw, apalo[i]))
         {
             std::fill(scene.aglobset[i].afVisible.begin(), scene.aglobset[i].afVisible.end(), 0);
             static const bool s_fDbg = std::getenv("SLY2_DRAWDBG") != nullptr;   // debugging: the objects not drawn
@@ -187,15 +211,30 @@ void ApplyDrawPass(const SW* psw, SCENE& scene, const std::vector<ALO*>& apalo)
     }
 }
 
+// Sly 3's ALO-derived classes are 0x2F..0x81 (game/gen/classes.inc; Sly 2's 0x30..0x6C): SKY 0x6E, ... were left out
+constexpr int kCidAloFirst3 = 0x2F, kCidAloEnd3 = 0x82;
+
 int CBuildSceneFromSw(SW* psw, SCENE& scene, std::vector<ALO*>* papalo, const std::unordered_set<const ALO*>* psetHave)
 {
     int c = 0;
-    for (int cid = 0x30; cid < 0x6D; ++cid)
-        for (LO* plo : psw->mpcidaplo[cid])
+    std::vector<ALO*> apaloPc;   // (PC addition, debug menu only: a guest character's objects last, pccharacter.h)
+    AppendPcCharSceneAlos(apaloPc);
+    const std::vector<LO*> aploPc(apaloPc.begin(), apaloPc.end());
+    for (int cid = kCidAloFirst3; cid <= kCidAloEnd3; ++cid)
+        for (LO* plo : *(cid < kCidAloEnd3 ? &psw->mpcidaplo[cid] : &aploPc))
         {
             ALO* palo = static_cast<ALO*>(plo);
-            PostLoadTrail(palo);  // runtime clones own their output mesh before scene construction
-            PostLoadRopeMesh(palo);
+            try
+            {
+                PostLoadTrail(palo);  // runtime clones own their output mesh before scene construction
+                PostLoadRopeMesh(palo);
+            }
+            catch (const std::exception& e)   // (Sly 3: a copied Sly 2 subsystem that rejects the object's data; noted once per class)
+            {
+                static std::unordered_set<int> s_setCid;
+                if (s_setCid.insert(palo->Cid()).second) std::fprintf(stderr, "sly3: scene: oid %d (cid 0x%X): %s\n", palo->oid, palo->Cid(), e.what());
+                continue;
+            }
             if (!palo->pglobset || palo->pglobset->aglob.empty()) continue;
             if (psetHave && psetHave->count(palo)) continue;
             SCENEGLOBSET sgs;
@@ -204,7 +243,7 @@ int CBuildSceneFromSw(SW* psw, SCENE& scene, std::vector<ALO*>* papalo, const st
             bool fLit = false;
             for (const GLOB& g : palo->pglobset->aglob)
                 fLit = fLit || (g.grfMesh & 1) || std::any_of(g.avtx.begin(), g.avtx.end(), [](const VTXGLOB& v) { return v.fUnbaked != 0; });
-            sgs.pglobset = fLit && palo->Cid() != 0x69 && palo->pglobset.use_count() > 1 ? std::make_shared<GLOBSET>(*palo->pglobset) : palo->pglobset;
+            sgs.pglobset = fLit && palo->Cid() != S3CID(0x69) && palo->pglobset.use_count() > 1 ? std::make_shared<GLOBSET>(*palo->pglobset) : palo->pglobset;
             PlaceGlobset(palo, sgs);
             scene.aglobset.push_back(std::move(sgs));
             if (papalo) papalo->push_back(palo);
@@ -221,7 +260,7 @@ int CAddNewAlosToScene(SW* psw, SCENE& scene, std::vector<ALO*>* papalo)
     static const SW* s_psw = nullptr;
     static size_t s_c = 0;
     size_t c = 0;
-    for (int cid = 0x30; cid < 0x6D; ++cid) c += psw->mpcidaplo[cid].size();
+    for (int cid = kCidAloFirst3; cid < kCidAloEnd3; ++cid) c += psw->mpcidaplo[cid].size();
     if (s_psw == psw && s_c == c) return 0;
     s_psw = psw;
     s_c = c;

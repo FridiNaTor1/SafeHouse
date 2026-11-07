@@ -105,6 +105,12 @@ void UnlockJob(AIJOB* p);
 // orig 0x1EF0D8: the child job ended (its Exit, then popped off the stack)
 void EndChildJob(AIJOB** ppchild);
 
+// Sly 3: the AI jobs keep Sly 2's class ids inside the AI code (JOB 0x9B .. 0xC6: their Sly 3 twins
+// are 0xC7 .. 0xF8, maps/classes_sly2.tsv); a job's derivation is tested on Sly 2's job hierarchy (FJobCidDerivedFrom2),
+// not the class table (Sly 3's). Ids that come from Sly 3 data (scripts, options) are converted at that boundary:
+// Cid2FromCid3Job.
+bool FJobCidDerivedFrom2(CID cid2, CID cidBase2);
+CID Cid2FromCid3Job(CID cid3);   // a Sly 3 job class (0xC7..) as the AI code's Sly 2 id (-1: none)
 // orig 0x1EEE00 (0x205438): a new job of the class pushed on the stack (the child of the top), Init'ed
 AIJOB* PjobPush(GUARD* pguard, CID cid);
 AIJOB* PjobPush(ACTOR* pactor, CID cid);
