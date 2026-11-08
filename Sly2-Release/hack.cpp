@@ -1,3 +1,4 @@
+#include "actioninput.h"
 // hack.cpp: Bentley's hacking minigame (module 0x17F090..0x182CC0): the hack objects, classes 0x47..0x4C, all
 // derived from PO (cid 0x32). 0x47 is their base (hit points +0x180 / +0x184, the knock-back of a hit +0x1A0.., the
 // death 0x17F5F8 / reset 0x17F6B0, vt slots 82 / 83 of its own); 0x48 is the ship Bentley drives (one per hack
@@ -529,7 +530,7 @@ void UpdateShip(LO* plo)
         // the guns: the right stick's heading, firing while it is deflected (QoL, hackmouse.h: with the keyboard /
         // mouse the cursor's heading, firing while left click is held; the stick (camera keys) still fires unclicked)
         float radAim = ppc->radJoy2;
-        bool fFire = 0.0f < ppc->uJoy2;
+        bool fFire = sly2actions::Applies(ppc) ? sly2actions::Held(sly2actions::Action::HackFire) : 0.0f < ppc->uJoy2;
         float radMouse = 0.0f;
         bool fMouse = false;
         if (FHackMouseAim(plo, &radMouse, &fMouse) && (fMouse || !fFire))

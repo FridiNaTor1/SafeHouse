@@ -1,3 +1,4 @@
+#include "actioninput.h"
 // The authored photo targets (cid 0x2E) and the binocucom's photo helper.
 #include "photo.h"
 #include "overlay.h"
@@ -457,6 +458,6 @@ void UpdatePhotoPrompt(void* pv) {
     if (p.owner->nF20 == 1 || p.state < 2 || p.state > 7) return;
     const uint32_t buttons = p.state == 7 ? 0xFA : 0xA;
     if (FActiveCplcy(&g_cmpolicies.cpdefault)) return;  // orig0x14FD50
-    if (PODATA* pd = PpodataFromLo(p.owner->palo); pd && pd->ppadctl && GrfPadctlTakePressed(pd->ppadctl, buttons, 0.0f))
+    if (PODATA* pd = PpodataFromLo(p.owner->palo); pd && sly2actions::Take(pd->ppadctl, sly2actions::Action::Photo, buttons, 0.0f))
         SetPhotoPromptState(&p, 8);
 }

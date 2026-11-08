@@ -158,6 +158,7 @@ void StartMurrayHold(MURRAY* p, SMA* psmaObj, int oid, int k, int fSnap);
 // orig 0x001B7000: Murray takes the used object (a cid 0x24 use, 0x184330): when he can carry (+0x13EC), it at +0x13F0,
 // the pickup kind 0, his state 4, facing the object's owner (+0x180)
 void MurrayTakeObject(ACTOR* pa, LO* puse);
+bool FStartMurrayCarrySlam(MURRAY* p);
 
 // orig: 0x00136530 (Bentley's carried controller +0x1800: -1 none, 0 held by Murray's +0x1910, 1 thrown)
 void SetBentleyCarried(BENTLEY* p, int k);

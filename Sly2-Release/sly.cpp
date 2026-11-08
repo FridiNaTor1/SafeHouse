@@ -2,6 +2,7 @@
 // round4low_animation.cpp (0x18E540): oracle-checked or register-level ports of the original's 0x188488..0x191090
 // and the actor's 0x13FF70..0x144E20.
 #include "sly.h"
+#include "actioninput.h"
 #include "routetele.h"
 #include "climbsurf.h"
 #include "slyfeet.h"
@@ -1329,7 +1330,7 @@ void UpdateSlyTransitions(SLY* p)
                     break;
                 }
                 // circle: the pickpocket (state 11) with a guard of rank 3, else the interaction (0x1938C0)
-                if (p->n10E4 == 3 && FBtnTake(p, BTN_CIRCLE, F32(0x3E19999A))) { n = 0xB; fSet = true; break; }
+                if (p->n10E4 == 3 && sly2actions::Take(PpadctlOf(p), sly2actions::Action::SlyPickpocket, BTN_CIRCLE, F32(0x3E19999A))) { n = 0xB; fSet = true; break; }
                 if (FBtnTake(p, BTN_CIRCLE, F32(0x3E4CCCCD))) { FInteractCircle(p); break; }
                 const float v = UJoy(p);
                 if (std::getenv("SLY2N_TRANS")) std::printf("  transitions: state %d u %.3f t %.3f\n", p->state, v, g_clock.t);

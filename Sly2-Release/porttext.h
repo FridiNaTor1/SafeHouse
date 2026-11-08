@@ -12,6 +12,9 @@
 // only the Japanese font's 1028 glyphs (kana, ASCII and its kanji).
 
 #include <string>
+#include <string_view>
+
+namespace cane::sly2input { enum class Action; }
 
 enum PTX : int
 {
@@ -27,7 +30,7 @@ enum PTX : int
     PTX_ExitToDesktop, PTX_DisplayOptions, PTX_ControlsAndPrompts,
     // the controls options
     PTX_ButtonIcons, PTX_Auto, PTX_OriginalPsIcons, PTX_InstantSkip, PTX_MouseCamera, PTX_MouseSensitivity,
-    PTX_MouseAimSensitivity, PTX_WheelZoomsBinocucom, PTX_MouseInMenus,
+    PTX_MouseAimSensitivity, PTX_MouseWheelZoom, PTX_MouseInMenus,
     PTX_MouseAimInHacking, PTX_KeyboardMapping, PTX_ResetKeyboardMapping,
     // the keyboard mapping's rows
     PTX_MoveForward, PTX_MoveBack, PTX_MoveLeft, PTX_MoveRight, PTX_Square, PTX_Circle, PTX_Cross, PTX_Triangle,
@@ -50,6 +53,8 @@ enum PTX : int
     PTX_InvertControlsPage, PTX_PadInvertCameraX, PTX_PadInvertCameraY, PTX_MouseInvertCameraX, PTX_MouseInvertCameraY,
     PTX_MouseInvertBinocX, PTX_MouseInvertBinocY, PTX_MouseInvertTurretX, PTX_MouseInvertTurretY,
     PTX_AutoCameraRotation,
+    PTX_AdvancedBindings, PTX_ActionBindings, PTX_ActionKeyboard, PTX_ActionController,
+    PTX_ResetAdvancedBindings, PTX_CaptureAction,
     PTX_Max
 };
 
@@ -64,6 +69,8 @@ std::string StrPortDecimal(float g, int cdigits);
 std::string StrToGameText(const std::string& utf8);
 // The key's or mouse button's name (pcinput.h PchzKeyName) in the current language where the table has it.
 std::string StrPortKeyName(int key);
+std::string StrPortActionName(cane::sly2input::Action action);
+std::string StrPortActionGroup(std::string_view group);
 // The language is the USA disc's English (the strings are the port's original ones).
 bool FPortEnglish();
 

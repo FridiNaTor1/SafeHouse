@@ -10,6 +10,7 @@
 #include "rumble.h"
 #include "menu.h"
 #include "pcinput.h"
+#include "actioninput.h"
 #include "porttext.h"
 #include "region.h"
 #include "porttext.h"
@@ -74,6 +75,9 @@ enum NATIVEID : int
     NID_Pc2 = NID_Base + 0x100,
     NID_LongShadows = NID_Pc2, NID_InvertPage, NID_PadInvertX, NID_PadInvertY, NID_BinocInvertX, NID_BinocInvertY,
     NID_TurretInvertX, NID_TurretInvertY, NID_AutoCameraRotation,
+    NID_AdvancedControls = NID_Base + 0x1000, NID_ActionDevices, NID_ActionKeyboard, NID_ActionController, NID_ResetActions,
+    NID_ActionGroupFirst = NID_Base + 0x2000,
+    NID_ActionBindingFirst = NID_Base + 0x3000,
 };
 constexpr uint32_t PFN_NativeDisplay = 0xFFFF0001;   // (a native select function)
 constexpr uint32_t PFN_NativeExit = 0xFFFF0002;
@@ -86,6 +90,19 @@ constexpr uint32_t PFN_NativeLanguage = 0xFFFF0008;      // (the title's languag
 constexpr uint32_t PFN_NativeInvertPage = 0xFFFF0009;    // (Invert Controls...)
 // the native pages' tables (their identity: the invert page's rows show the controller's icons)
 constexpr uint32_t VA_NativeInvertPage = 0xFFFF0109;
+constexpr uint32_t PFN_ActionDevices = 0xFFFF0010, PFN_ActionGroups = 0xFFFF0011,
+                   PFN_ActionRows = 0xFFFF0012, PFN_ActionCapture = 0xFFFF0013;
+std::vector<std::string> ActionGroups()
+{
+    std::vector<std::string> groups;
+    namespace input = cane::sly2input;
+    for (size_t i = 0; i < input::kActionCount; ++i) {
+        if (!g_pcinput.fDebugKeys && input::isNoclipAction(input::Action(i))) continue;
+        const auto& action = input::kActions[i];
+        if (std::find(groups.begin(), groups.end(), action.group) == groups.end()) groups.emplace_back(action.group);
+    }
+    return groups;
+}
 
 struct MENUENT
 {
@@ -150,6 +167,9 @@ struct MENU
 MENU s_menu;
 SW* s_psw = nullptr;
 int s_ikeyCapture = -1;   // (the keyboard mapping's row waiting for a key)
+int s_iActionCapture = -1;
+bool s_fActionController = false;
+float s_tActionCapture = 0;
 
 PAGE* PpageCur() { return s_menu.depth > 0 ? &s_menu.apage[size_t(s_menu.depth)] : nullptr; }
 int IdAnim(const PAGE& pg, uint32_t ib) { return pg.vaAnim ? NElf(pg.vaAnim + ib) : -1; }
@@ -425,12 +445,34 @@ std::string StrNative(int id)
     case NID_BinocInvertY: return onOff(PTX_MouseInvertBinocY, g_pcinput.fMouseInvertBinocY);
     case NID_TurretInvertX: return onOff(PTX_MouseInvertTurretX, g_pcinput.fMouseInvertTurretX);
     case NID_TurretInvertY: return onOff(PTX_MouseInvertTurretY, g_pcinput.fMouseInvertTurretY);
-    case NID_WheelZoom: return onOff(PTX_WheelZoomsBinocucom, g_pcinput.fMouseWheelZoom);
+    case NID_WheelZoom: return onOff(PTX_MouseWheelZoom, g_pcinput.fMouseWheelZoom);
     case NID_MouseMenus: return onOff(PTX_MouseInMenus, g_pcinput.fMouseMenus);
     case NID_HackMouse: return onOff(PTX_MouseAimInHacking, g_pcinput.fHackMouseAim);
     case NID_KeyboardPage: return StrPort(PTX_KeyboardMapping);
     case NID_ResetKeys: return StrPort(PTX_ResetKeyboardMapping);
+    case NID_AdvancedControls: return onOff(PTX_AdvancedBindings, sly2actions::profile.enabled);
+    case NID_ActionDevices: return StrPort(PTX_ActionBindings);
+    case NID_ActionKeyboard: return StrPort(PTX_ActionKeyboard);
+    case NID_ActionController: return StrPort(PTX_ActionController);
+    case NID_ResetActions: return StrPort(PTX_ResetAdvancedBindings);
     default:
+        if (id >= NID_ActionGroupFirst && id < NID_ActionBindingFirst) {
+            const auto groups = ActionGroups();
+            const size_t index = size_t(id - NID_ActionGroupFirst);
+            if (index < groups.size()) return StrPortActionGroup(groups[index]) + "...";
+        }
+        if (id >= NID_ActionBindingFirst && id < NID_ActionBindingFirst + int(cane::sly2input::kActionCount) * 2)
+        {
+            const size_t encoded = size_t(id - NID_ActionBindingFirst), count = cane::sly2input::kActionCount;
+            const bool controller = encoded >= count;
+            const size_t index = encoded % count;
+            const int binding = controller ? sly2actions::profile.gamepad[index] : sly2actions::profile.keyboard[index];
+            std::string value = binding < 0 ? StrPort(PTX_KeyUnbound) : controller
+                ? StrToGameText(cane::input::buttonLabel(cane::input::fromGlfwBinding(binding), cane::input::promptFamily(g_pcinput.promptStyle, 0)))
+                : StrPortKeyName(binding);
+            if (s_iActionCapture == int(index) && s_fActionController == controller) return StrPort(PTX_CaptureAction);
+            return StrPortActionName(sly2actions::Action(index)) + StrPort(PTX_Sep) + value;
+        }
         if (id >= NID_KeyFirst && id < NID_KeyFirst + PCA_Max + 6)
         {
             static const PTX aptx[] = {PTX_MoveForward, PTX_MoveBack, PTX_MoveLeft, PTX_MoveRight, PTX_Square, PTX_Circle,
@@ -470,6 +512,25 @@ void CycleControls(MENUENT& e)
     };
     switch (e.id)
     {
+    case NID_AdvancedControls:
+        if (!sly2actions::profile.readOnly) {
+            sly2actions::profile.enabled = !sly2actions::profile.enabled;
+            sly2actions::Save(cane::userDirectory());
+            if (PAGE* pg = PpageCur()) for (MENUENT& row : pg->aent)
+                if (row.id == NID_KeyboardPage || row.id == NID_ActionDevices) {
+                    row.id = sly2actions::profile.enabled ? NID_ActionDevices : NID_KeyboardPage;
+                    row.pfnSelect = sly2actions::profile.enabled ? PFN_ActionDevices : PFN_NativeKeyboardPage;
+                }
+        }
+        return;
+    case NID_ResetActions:
+        if (!sly2actions::profile.readOnly) {
+            const bool enabled = sly2actions::profile.enabled;
+            sly2actions::profile = cane::sly2input::defaults();
+            sly2actions::profile.enabled = enabled;
+            sly2actions::Save(cane::userDirectory());
+        }
+        return;
     case NID_PromptStyle: o.promptStyle = (o.promptStyle + 1) % (cane::input::kPromptStyleLast + 1); break;
     case NID_AlwaysPs: o.fAlwaysOriginalPs = !o.fAlwaysOriginalPs; break;
     case NID_InstantSkip: o.fInstantSkipCutscenes = !o.fInstantSkipCutscenes; break;
@@ -774,12 +835,17 @@ std::vector<MENUENT> AentOptions()
 std::vector<MENUENT> AentControls()
 {
     std::vector<MENUENT> a;
+    MENUENT advanced;
+    advanced.id = NID_AdvancedControls;
+    advanced.pfnSelect = PFN_NativeControls;
+    a.push_back(advanced);
     for (int id = NID_PromptStyle; id <= NID_KeyboardPage; ++id)
     {
         if (id == NID_InvertY) continue;
         MENUENT e;
         e.id = id == NID_InvertX ? NID_InvertPage : id;   // (the mouse's inversion: on Invert Controls..., with the rest)
         e.pfnSelect = id == NID_KeyboardPage ? PFN_NativeKeyboardPage : id == NID_InvertX ? PFN_NativeInvertPage : PFN_NativeControls;
+        if (id == NID_KeyboardPage && sly2actions::profile.enabled) { e.id = NID_ActionDevices; e.pfnSelect = PFN_ActionDevices; }
         a.push_back(e);
         if (id == NID_InstantSkip)
         {
@@ -793,6 +859,51 @@ std::vector<MENUENT> AentControls()
 }
 // (native, settings v17) Invert Controls...: the controller's camera, the game's own binocucom / turret options (the
 // save's, as on the options page), then the mouse in each view (off: mouse up looks up, mouse right turns right)
+std::vector<MENUENT> AentActionDevices()
+{
+    std::vector<MENUENT> rows;
+    for (bool controller : {false, true}) {
+        MENUENT e;
+        e.id = controller ? NID_ActionController : NID_ActionKeyboard;
+        e.n = controller ? 1 : 0;
+        e.pfnSelect = PFN_ActionGroups;
+        rows.push_back(e);
+    }
+    MENUENT reset;
+    reset.id = NID_ResetActions;
+    reset.pfnSelect = PFN_NativeControls;
+    rows.push_back(reset);
+    return rows;
+}
+std::vector<MENUENT> AentActionGroups(bool controller)
+{
+    std::vector<MENUENT> rows;
+    const auto groups = ActionGroups();
+    for (size_t i = 0; i < groups.size(); ++i) {
+        MENUENT e;
+        e.id = NID_ActionGroupFirst + int(i);
+        e.n = int(i) + (controller ? 1000 : 0);
+        e.pfnSelect = PFN_ActionRows;
+        rows.push_back(e);
+    }
+    return rows;
+}
+std::vector<MENUENT> AentActionRows(int encodedGroup)
+{
+    std::vector<MENUENT> rows;
+    const bool controller = encodedGroup >= 1000;
+    const auto groups = ActionGroups();
+    const std::string& group = groups[size_t(encodedGroup % 1000)];
+    for (size_t i = 0; i < cane::sly2input::kActionCount; ++i) {
+        if (group != cane::sly2input::kActions[i].group) continue;
+        MENUENT e;
+        e.n = int(i) + (controller ? int(cane::sly2input::kActionCount) : 0);
+        e.id = NID_ActionBindingFirst + e.n;
+        e.pfnSelect = PFN_ActionCapture;
+        rows.push_back(e);
+    }
+    return rows;
+}
 std::vector<MENUENT> AentInvert()
 {
     std::vector<MENUENT> a;
@@ -972,6 +1083,28 @@ void SelectEntry(MENUENT& e)
         break;
     case PFN_NativeDisplay: CycleNative(e); e.grf |= 2; break;
     case PFN_NativeControls: CycleControls(e); e.grf |= 2; break;
+    case PFN_ActionDevices:
+        ReplacePage(AentActionDevices(), 0);
+        e.grf |= 2;
+        break;
+    case PFN_ActionGroups:
+        ReplacePage(AentActionGroups(e.n != 0), 0);
+        e.grf |= 2;
+        break;
+    case PFN_ActionRows:
+        ReplacePage(AentActionRows(e.n), 0);
+        e.grf |= 2;
+        break;
+    case PFN_ActionCapture:
+        if (!sly2actions::profile.readOnly && g_gl.window) {
+            s_iActionCapture = e.n % int(cane::sly2input::kActionCount);
+            s_fActionController = e.n >= int(cane::sly2input::kActionCount);
+            s_tActionCapture = g_clock.tReal;
+            KeyBindingPressed(g_gl.window);
+            sly2actions::CaptureController(g_gl.window);
+        }
+        e.grf |= 2;
+        break;
     // (PC menus) the native pages swap in place of the current one, as the pause menu's Options... does
     // (0x1B04E0: ReplacePage, the entries' swap 0x14 / 0xC, back the same way); pushed, they replayed the whole pause
     // menu's opening (0x0) and closed it on the way back
@@ -1289,9 +1422,25 @@ void UpdateMenu(SW* psw)
     s_psw = psw;
     UpdateCardStatus();
     UpdateCard();
-    if (!s_menu.fShown || s_card.fShown) { s_ikeyCapture = -1; return; }
+    if (!s_menu.fShown || s_card.fShown) { s_ikeyCapture = s_iActionCapture = -1; return; }
     PAGE* pe = PpageCur();
     if (!pe) return;
+    if (s_iActionCapture >= 0) {
+        GrfbtnTakePressed(0xFFFF);
+        const int key = g_gl.window ? KeyBindingPressed(g_gl.window) : GLFW_KEY_ESCAPE;
+        if (key == GLFW_KEY_ESCAPE || (s_fActionController && g_clock.tReal - s_tActionCapture > 6)) s_iActionCapture = -1;
+        else {
+            const bool clear = key == GLFW_KEY_DELETE;
+            const int binding = clear ? -1 : s_fActionController ? sly2actions::CaptureController(g_gl.window) : key;
+            if (clear || binding >= 0) {
+                auto& bindings = s_fActionController ? sly2actions::profile.gamepad : sly2actions::profile.keyboard;
+                bindings[size_t(s_iActionCapture)] = binding;
+                sly2actions::Save(cane::userDirectory());
+                s_iActionCapture = -1;
+            }
+        }
+        return;
+    }
     // (the keyboard mapping) a row waits for a key: the menu takes no input meanwhile
     if (s_ikeyCapture >= 0)
     {
@@ -1430,6 +1579,29 @@ void UpdateMenu(SW* psw)
     }
 }
 
+static const MENUENT* PmenuWheelEntry(int id)
+{
+    const PAGE* page = PpageCur();
+    if (id < 0x2D2 || id > 0x2DB || !page || page->aent.empty()) return nullptr;
+    const int count = int(page->aent.size());
+    const int index = id - 0x2D2 + page->isel - 3;
+    return &page->aent[size_t((index % count + count) % count)];
+}
+
+bool FMenuActionPrompt(int textId, int& binding, bool& controller)
+{
+    const MENUENT* entry = PmenuWheelEntry(textId);
+    const int count = int(cane::sly2input::kActionCount);
+    if (!FMenuShown() || !entry || entry->id < NID_ActionBindingFirst || entry->id >= NID_ActionBindingFirst + 2 * count)
+        return false;
+    const int encoded = entry->id - NID_ActionBindingFirst;
+    const int index = encoded % count;
+    controller = encoded >= count;
+    if (s_iActionCapture == index && s_fActionController == controller) return false;
+    binding = (controller ? sly2actions::profile.gamepad : sly2actions::profile.keyboard)[size_t(index)];
+    return binding >= 0;
+}
+
 std::string StrMenuScript(int id)
 {
     char ach[128];
@@ -1442,14 +1614,7 @@ std::string StrMenuScript(int id)
     };
     // orig 0x00211298 (0x2D2..0x2DB): the wheel's entry k around the selection (3: the selected one)
     if (id >= 0x2D2 && id <= 0x2DB)
-    {
-        const PAGE* pe = PpageCur();
-        if (!pe || pe->aent.empty()) return "";
-        const int c = int(pe->aent.size());
-        int j = (id - 0x2D2) + pe->isel - 3;
-        while (j < 0) j += c;
-        return strText(pe->aent[size_t(j % c)].id);
-    }
+        if (const MENUENT* entry = PmenuWheelEntry(id)) return strText(entry->id);
     switch (id)
     {
     case 0x5CB: { const int k = KindDataAccess(); return k < 0 ? "" : StrLocalized(s_psw, IdText(k)); }   // orig 0x001AD928

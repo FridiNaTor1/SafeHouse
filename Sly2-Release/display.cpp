@@ -5,6 +5,7 @@
 
 #include "gl.h"
 #include "pcinput.h"
+#include "actioninput.h"
 #include "sound.h"
 
 #include "../platform/system_settings.h"
@@ -90,6 +91,7 @@ bool FLoadDisplaySettings(const std::filesystem::path& userDir, std::string* pme
     if (!st::loaded(result)) s = st::sly2Defaults();   // (Sly 2's own keyboard / mouse layout)
     st::sanitizeStatic(s, 0, 0, st::kSly2DefaultKeyboardBindings);
     FromSettings(s);
+    sly2actions::Load(userDir);
     const char* psz = "";
     switch (result)
     {

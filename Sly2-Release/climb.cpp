@@ -1,3 +1,4 @@
+#include "actioninput.h"
 // climb.cpp: the climb (climb.h, actor.h CLIMB; orig ACTOR +0xF50, module 0x19DE10..0x19EF50). From the original's
 // code and the Sly 2 decomp's matching C (0x19DE10, 0x19DE58, 0x19E110, 0x19E950, 0x19E9C8, 0x19EAB0); 0x19DF70,
 // 0x19E1E0, 0x117308, 0x205008 from the asm (the reference's are register-level: native_old_climb_state.cpp,
@@ -264,7 +265,7 @@ void UpdateClimbTransitions(ACTOR* pa)
         SetJumpKind(&pa->jump, 0, 0, 0);
         return;
     }
-    if (pa->nSubF54 != 0 && ppc && GrfPadctlTakePressed(ppc, BTN_CROSS, 0.25f))
+    if (pa->nSubF54 != 0 && sly2actions::Take(ppc, sly2actions::Action::ClimbJump, BTN_CROSS, 0.25f))
     {
         SetJumpKind(&pa->jump, 2, 0, 0);
         return;

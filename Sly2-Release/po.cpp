@@ -3,6 +3,7 @@
 // ports of the original's 0x1C3D70..0x1C4B00), the enable / current player (the world code) and the safe house's
 // slot 79 (0x1D7418 / 0x1D7480).
 #include "po.h"
+#include "actioninput.h"
 #include "rope.h"
 #include "turret.h"
 #include "vehiclehooks.h"
@@ -311,6 +312,7 @@ void UpdatePadctl(PADCTL* ppc)
         // sets the option, e.g. Bentley's R1 (8) in Ep7's boss world 37, which keeps him from the target stance)
         if (ppd) const_cast<PODATA*>(ppd)->grfbtnForced = ppc->plo->U32Field(0, 0x154, ppd->grfbtnForced);
         ppc->grfbtn = (j.grfbtn & ~j.grfbtnHandled) | (ppd ? ppd->grfbtnForced : 0);
+        ppc->grfbtn = sly2actions::HeldButtons(ppc, ppc->grfbtn, ppd ? ppd->grfbtnForced : 0);
         cmm::DecomposeRotateMatrixPanTilt(g_cm.mat, &radPan, &radTilt);
     }
     ppc->matCam = cmm::BuildPanTiltMatrix(radPan, radTilt);
@@ -343,6 +345,7 @@ void SetPadctlControl(PADCTL* ppc, int n)
 // orig: 0x001C4660 (the buttons of grf pressed within dt)
 uint32_t GrfPadctlPressedWithin(const PADCTL* ppc, uint32_t grf, float dt)
 {
+    if (sly2actions::Applies(ppc)) return sly2actions::PressedButtons(ppc, grf, dt);
     uint32_t grfRet = 0;
     const float t = g_clock.t;
     for (int i = 0; grf; ++i, grf >>= 1)
@@ -361,6 +364,7 @@ uint32_t GrfPadctlTakePressed(PADCTL* ppc, uint32_t grf, float dt)
 // orig: 0x001C4738
 void ForgetPadctlPresses(PADCTL* ppc, uint32_t grf)
 {
+    if (sly2actions::Applies(ppc)) sly2actions::ForgetButtons(ppc, grf);
     for (int i = 0; grf; ++i, grf >>= 1)
         if (grf & 1) ppc->atPressed[i] = G_NEG_FLT_MAX;
 }

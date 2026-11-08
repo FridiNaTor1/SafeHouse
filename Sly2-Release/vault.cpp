@@ -1,3 +1,4 @@
+#include "actioninput.h"
 // The vault (cid 0x4E, one per episode hub; module 0x1C7D00..0x1C8B68): the safe the clue bottles open. Sly uses it
 // (the splice method 235, thunk 0x110A28 -> 0x1C8AF0) once the world's 30 bottles are his: the vault takes the pad
 // (vt slot 79), its state scripts run (options 1616..1620), and while the dial's script runs the left stick picks
@@ -219,7 +220,7 @@ void UpdateVaultDial(LO* plo, VAULT& v)
     const int nSubStart = v.nSub;
     for (int i = 0; i < 8; ++i)
     {
-        if (ppc && GrfPadctlTakePressed(ppc, 0x30, 0.0f))
+        if (sly2actions::Take(ppc, sly2actions::Action::VaultCancel, 0x30, 0.0f))
         {
             if (v.pscpt) EnsureScptAlarm(v.pscpt, 0x655);
             SetVaultSub(plo, v, 3);
@@ -227,7 +228,7 @@ void UpdateVaultDial(LO* plo, VAULT& v)
         switch (v.nSub)
         {
         case 0:
-            if (ppc && GrfPadctlTakePressed(ppc, 0xC0, 0.0f)) SetVaultSub(plo, v, 2);
+            if (sly2actions::Take(ppc, sly2actions::Action::VaultConfirm, 0xC0, 0.0f)) SetVaultSub(plo, v, 2);
             else if (ppc)
             {
                 // the nearest of the nine stick positions (the current one's distance x 0.7)

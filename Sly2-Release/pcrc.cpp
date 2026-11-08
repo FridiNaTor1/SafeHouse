@@ -1,3 +1,4 @@
+#include "actioninput.h"
 // PC addition, not in the original game: the debug menu's playable RC chopper (pcrc.h). Nothing here runs unless the
 // debug menu (Debug keys) asks for it.
 #include "pcrc.h"
@@ -41,8 +42,6 @@ extern int g_iframeMain;   // game.cpp
 namespace
 {
 // ------------------------------------------------------------ the retail chopper (world 8's file; also in 14 / 29 / 30)
-constexpr int c_oidChopper = 50723;   // PO (cid 0x32), its parts: health meter 50724 (cid 0x7E), proxies 50733 /
-                                      // 50739 / 50744 (bomb) / 50747 (gun), ASEGs 50692 / 50761, emitters 50783 / 50785
 constexpr int c_sfxRotor = 370;      // the chopper's ambient sound object 6390 (a looper; its record: one sound)
 // 6390's sound record (EOPID 99, world 8: SLY2N_SNDLOG's "ambient sound 370"): full volume within 200, silent beyond
 // 3000, volume 0.7 (R44: the hum had 600..4000 at 1.0, 7 dB over the authored level at the chase camera's 380 and 13 dB
@@ -387,7 +386,7 @@ bool FEnsureCopies(SW* psw)
     const PCKWS k = PckwsKeptWorld(c_iwrecChopper);
     if (k == PCKWS_Failed) { s_fFailed = true; return false; }
     if (k != PCKWS_Ready) { RequestPcKeptWorld(c_iwrecChopper); return false; }
-    LO* ptmpl = PloKeptFind(c_iwrecChopper, c_oidChopper, 0x32);
+    LO* ptmpl = PloKeptFind(c_iwrecChopper, kRcChopperOid, 0x32);
     LO* ptmplShot = PloKeptFind(c_iwrecChopper, c_oidShot, 0x4F);
     LO* ptmplBomb = PloKeptFind(c_iwrecChopper, c_oidBomb, 0x4F);
     if (!ptmpl) { s_fFailed = true; return false; }
@@ -422,7 +421,7 @@ bool FBegin(SW* psw)
     else if (s_fFailed)
     {
         // (no copy: the world's own chopper where it has one, its script detached meanwhile)
-        pc = static_cast<ALO*>(PloFindIn(psw, c_oidChopper, 0x32));
+        pc = static_cast<ALO*>(PloFindIn(psw, kRcChopperOid, 0x32));
         if (!pc) return false;
         if (pc->fInWorld && !pc->fRemoved) return false;   // (its job flies it now)
         s_rc.fOwnChopper = true;
@@ -507,12 +506,21 @@ void Step(SW* psw)
     const JOYPS2& j = JoyFor(2);
     const float dt = g_clock.dt > 0.0f ? g_clock.dt : 0.0f;
     if (dt <= 0.0f) return;
-    auto held = [&](uint32_t grfLibpad) { return (j.grfbtn & GrfbtnPs2FromLibpad(grfLibpad)) != 0; };
+    auto held = [&](uint32_t grfLibpad) {
+        using sly2actions::Action;
+        if (sly2actions::Active()) {
+            if (grfLibpad == BTN_R2) return sly2actions::Held(Action::RcUp);
+            if (grfLibpad == BTN_L2) return sly2actions::Held(Action::RcDown);
+            if (grfLibpad == BTN_Square) return sly2actions::Held(Action::RcFire);
+            if (grfLibpad == BTN_Cross) return sly2actions::Held(Action::RcBomb);
+        }
+        return (j.grfbtn & GrfbtnPs2FromLibpad(grfLibpad)) != 0;
+    };
     // the left stick: up / down fly forward / back along the heading, left / right turn it (the chase camera turns
     // with it); R2 / L2 climb / sink
     float xStick = std::fabs(j.x) > 0.12f ? j.x : 0.0f, yStick = std::fabs(j.y) > 0.12f ? j.y : 0.0f;
     // R3 (the key bound to it): the chase camera / the RC jobs' top-down camera
-    if (j.grfbtnPressed & GrfbtnPs2FromLibpad(BTN_R3))
+    if (sly2actions::Active() ? sly2actions::Pressed(sly2actions::Action::RcCamera) : (j.grfbtnPressed & GrfbtnPs2FromLibpad(BTN_R3)) != 0)
     {
         s_rc.fTop = !s_rc.fTop;
         if (s_rc.fTop && s_rc.uTop <= 0.0f) s_rc.radTopPan = s_rc.rad + s_rc.radCamYaw;   // (up the screen: where the chase camera looked)

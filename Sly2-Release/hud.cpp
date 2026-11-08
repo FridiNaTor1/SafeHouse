@@ -771,7 +771,8 @@ void CHud::DrawTextBox(const FONTBRX& fontBase, const FONTBRX* pfontOther, const
     const float k88 = size / 51.2f;     // 0x3CA00000
     if (pfontOther && std::getenv("SLY2N_ICONTEXT") && textIn.find('&') != std::string::npos)
         std::fprintf(stderr, "icontext frame %d t %.3f ", g_iframeHarness, g_clock.t), std::fprintf(stderr, "'%s' off %.0f %.0f %.0f other %.0f %.0f %.0f\n", textIn.c_str(), offset.r, offset.g, offset.b, offsetOther.r, offsetOther.g, offsetOther.b);
-    const std::string text = fWrap ? StrWrapped(fontBase, pfontOther, textIn, k88, wBox) : textIn;
+    std::string text = pfontOther ? StrPromptFallbackText(textIn) : textIn;
+    if (fWrap) text = StrWrapped(fontBase, pfontOther, text, k88, wBox);
     HUDSTATE st;
     st.scale = scale;
     st.depth = depth;

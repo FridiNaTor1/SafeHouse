@@ -1,3 +1,4 @@
+#include "actioninput.h"
 // The binocucom (orig ACTOR +0xF00, module 0x19CBF8..0x19DE10; the reference's m_19D330_p3.cpp): binoc.h.
 
 #include "binoc.h"
@@ -209,6 +210,8 @@ void OpenBinoc(ACTOR* pa, int nView, LO* ploSpeaker, LO* ploScreen)
     pa->binoc.ploSpeaker = ploSpeaker;
     pa->binoc.ploScreen = ploScreen;
     SetBinocState(pa, 0);
+    if (nView == 0)
+        if (PODATA* data = PpodataFromLo(pa->palo)) sly2actions::BeginRecon(data->ppadctl);
 }
 
 // orig: 0x0019CCE8 (the opening, shutter, acceptance and closing keep the viewer).
@@ -508,7 +511,8 @@ void UpdateActorBinoc(ACTOR* pa, uint32_t grfMask)
 {
     if (!(static_cast<unsigned>(pa->nF04) < 3)) return;  // 0x1443D8
     if (pa->nF04 == 1 && pa->nF20 == 0)
-        if (PODATA* ppd = PpodataFromLo(pa->palo); ppd && ppd->ppadctl && GrfPadctlTakePressed(ppd->ppadctl, NPhotoPromptState(pa->binoc.win.pprompt) == 7 ? 0x410 : grfMask, 0.25f))
+        if (PODATA* ppd = PpodataFromLo(pa->palo); ppd && sly2actions::Take(ppd->ppadctl, sly2actions::Action::ReconClose,
+            NPhotoPromptState(pa->binoc.win.pprompt) == 7 ? 0x410 : grfMask, 0.25f))
             CloseBinoc(pa);
     UpdateBinoc(pa);
 }

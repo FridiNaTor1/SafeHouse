@@ -1,4 +1,5 @@
 #include "jtthrow.h"
+#include "actioninput.h"
 
 #include "actmesh.h"
 #include "actor.h"
@@ -112,11 +113,6 @@ PADCTL* Pad(ACTOR* actor)
 {
     PODATA* data = PpodataFromLo(actor->palo);
     return data ? data->ppadctl : nullptr;
-}
-
-bool Take(PADCTL* pad, uint32_t buttons)
-{
-    return pad && GrfPadctlTakePressed(pad, buttons, 0.1f);
 }
 
 // The global Bentley is represented natively by the one initialized Bentley object.
@@ -480,12 +476,12 @@ void UpdateJtThrow(JTTHROW& t)
                 NotifyActorJumpKind(actor, 0);
                 break;
             }
-            if (Take(pad, 0xC0))
+            if (sly2actions::Take(pad, sly2actions::Action::ThrowRelease, 0xC0, 0.1f))
             {
                 SetJtThrowState(t, 7);
                 break;
             }
-            if (Take(pad, 0x30))
+            if (sly2actions::Take(pad, sly2actions::Action::ThrowCancel, 0x30, 0.1f))
             {
                 if (t.holdBlend) SetJtThrowState(t, 0);
                 else NotifyActorJumpKind(actor, 0);

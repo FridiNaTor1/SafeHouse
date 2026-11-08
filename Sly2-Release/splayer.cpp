@@ -7,6 +7,8 @@
 #include "porttext.h"
 
 #include "promptglyph.h"
+#include "hudwidget.h"
+#include "menu.h"
 #include "controlspage.h"
 #include "transition.h"
 
@@ -830,7 +832,30 @@ void CScreenPlayer::Draw(const FONTBRX* pfont, const FONTBRX* pfontIcons, const 
             {
                 text = el.ab3[1] == 1 && g_pfnScriptString ? g_pfnScriptString(el.n3) : StrLocalized(psw, el.n3);
                 // (QoL N39: the words START / SELECT as the device's icons, promptglyph.h)
-                if (pfontIcons) text = StrPromptButtonWords(text);
+                if (pfontIcons) {
+                    const int subtitle = el.ab3[1] == 1 && el.n3 == 0x2EF ? IdTextUsa(g_dialogsub.id) : -1;
+                    text = StrPromptButtonWords(text, subtitle);
+                }
+            }
+            const bool scriptText = el.ab3[1] == 1;
+            int promptId = el.n3;
+            if (scriptText) {
+                if (el.n3 == 0x2F1) promptId = IdDisplayedHudPrompt();
+                else if (el.n3 == 0x2EF) promptId = g_dialogsub.id;
+                else promptId = -1;
+            }
+            const PROMPTTEXTGLYPHS promptContext(IdTextUsa(promptId));
+            std::optional<PROMPTKEYGLYPH> menuBinding;
+            int binding;
+            bool controller;
+            if (pfontIcons && scriptText && FMenuActionPrompt(el.n3, binding, controller)) {
+                using cane::input::Family;
+                Family family = controller ? PromptFamily() : Family::Keyboard;
+                if (controller && family == Family::Keyboard) family = Family::PlayStation;
+                if (PromptGlyphForBinding(binding, family).kind != PROMPTGLYPH::Original) {
+                    text += "  &2T&.";
+                    menuBinding.emplace('T', binding, binding, family);
+                }
             }
             if (std::getenv("SLY2N_TEXTPRINT"))
                 std::fprintf(stderr, "textelem kind %d id 0x%X: '%s'\n", int(el.ab3[1]), unsigned(el.n3), text.c_str());

@@ -1,6 +1,7 @@
 // See controlspage.h.
 
 #include "controlspage.h"
+#include "actioninput.h"
 #include "region.h"
 #include "porttext.h"
 
@@ -87,13 +88,32 @@ int ActionOfPsButton(Button b)
     }
 }
 
+int s_controlsCharacter = -1;
+
+sly2actions::Action ControlsAction(int button)
+{
+    using sly2actions::Action;
+    if (button == PCA_Triangle) {
+        if (s_controlsCharacter == 0) return Action::SlyUppercut;
+        if (s_controlsCharacter == 1) return Action::BentleySpecial;
+        if (s_controlsCharacter == 2) return Action::MurrayUppercut;
+    }
+    if (button == PCA_Square && s_controlsCharacter == 1) return Action::BentleySwing;
+    return cane::sly2input::legacyButtonAction(button);
+}
+
+int ControlBinding(int button, bool controller)
+{
+    return sly2actions::Binding(ControlsAction(button), button, controller);
+}
+
 // The pad button an action is bound to now
 Button BoundButton(int action)
 {
     if (action == ACT_MOVE) return Button::LS;
     if (action == ACT_CAMERA) return Button::RS;
     if (action < 0 || action >= PCA_Max) return Button::Count;
-    return cane::input::fromGlfwBinding(g_pcinput.gamepad[size_t(action)]);
+    return cane::input::fromGlfwBinding(ControlBinding(action, true));
 }
 Button DefaultButton(int action)
 {
@@ -265,7 +285,7 @@ std::string StrWithBoundNamesOther(std::string text, MODE mode, Family family, i
                 continue;
             }
         }
-        const std::string name = mode == MODE_Keyboard ? StrBindingName(g_pcinput.keyboard[size_t(c.action)])
+        const std::string name = mode == MODE_Keyboard ? StrBindingName(ControlBinding(c.action, false))
                                                        : StrToGameText(cane::input::buttonLabel(BoundButton(c.action), family));
         text.replace(at, 2, name);
     }
@@ -274,6 +294,13 @@ std::string StrWithBoundNamesOther(std::string text, MODE mode, Family family, i
 
 std::string StrWithBoundNames(std::string text, MODE mode, Family family, int actionLabel)
 {
+    // Advanced bindings keep one row per button, so a label that lists several actions shows only the main one.
+    if (sly2actions::profile.enabled && (actionLabel == PCA_Cross || actionLabel == PCA_Triangle ||
+        actionLabel == PCA_R1 || (actionLabel == PCA_Circle && s_controlsCharacter == 0) ||
+        (actionLabel == PCA_Square && s_controlsCharacter == 2))) {
+        const auto action = ControlsAction(actionLabel);
+        if (action != sly2actions::Action::Count) return StrPortActionName(action);
+    }
     if (!FPortEnglish()) return StrWithBoundNamesOther(std::move(text), mode, family, actionLabel);
     struct TOKEN { const char* sz; int action; };
     static const TOKEN s_atoken[] = {{"R1 button", PCA_R1}, {"L3 button", PCA_L3}, {"R3 button", PCA_R3}};
@@ -287,7 +314,7 @@ std::string StrWithBoundNames(std::string text, MODE mode, Family family, int ac
             // (the row's own keycaps show it: "R1 button: Run Fast" is just "Run Fast")
             const size_t cch = std::strlen(t.sz);
             if (t.action == actionLabel && at == 0 && text.compare(cch, 2, ": ") == 0) { text.erase(0, cch + 2); continue; }
-            name = StrBindingName(g_pcinput.keyboard[size_t(t.action)]);
+            name = StrBindingName(ControlBinding(t.action, false));
         }
         else
         {
@@ -727,11 +754,19 @@ bool FControlsPageBegin(const SCREENOBJ* pso, const std::vector<CTLPIECE>& apiec
         if (p.igroup >= IGROUP_PICTURE_FIRST && p.igroup <= IGROUP_PICTURE_LAST) { fPicture = true; break; }
     if (!fPicture) return false;
     if (g_pcinput.fAlwaysOriginalPs) return false;
+    s_controlsCharacter = -1;
+    for (const CTLPIECE& piece : apiece) {
+        if (!piece.pelem || piece.pelem->kind != SELEMK_Sound || piece.pelem->ab3[1] != 0) continue;
+        const int id = IdTextUsa(piece.pelem->n3);
+        for (size_t i = 0; i < std::size(s_aidTitle); ++i)
+            if (id == s_aidTitle[i]) s_controlsCharacter = int(i);
+    }
     const Family family = PromptFamily();
     MODE mode = MODE_Off;
     if (family == Family::Keyboard) mode = MODE_Keyboard;
     else if (family == Family::PlayStation)
     {
+        if (sly2actions::profile.enabled) mode = MODE_PsRemap;
         for (int a : {PCA_Cross, PCA_Circle, PCA_Square, PCA_Triangle, PCA_R1, PCA_Select, PCA_Start})
             if (BoundButton(a) != DefaultButton(a)) mode = MODE_PsRemap;
     }
@@ -983,8 +1018,8 @@ void ControlsPageEnd(const FONTBRX* pfont, const FONTBRX* pfontIcons)
         std::vector<std::vector<int>> aakey;
         if (k.action == ACT_MOVE)
         {
-            aakey.push_back({g_pcinput.keyboard[PCA_Up]});
-            aakey.push_back({g_pcinput.keyboard[PCA_Left], g_pcinput.keyboard[PCA_Down], g_pcinput.keyboard[PCA_Right]});
+            aakey.push_back({ControlBinding(PCA_Up, false)});
+            aakey.push_back({ControlBinding(PCA_Left, false), ControlBinding(PCA_Down, false), ControlBinding(PCA_Right, false)});
         }
         else if (k.action == ACT_CAMERA)
         {
@@ -1000,7 +1035,7 @@ void ControlsPageEnd(const FONTBRX* pfont, const FONTBRX* pfontIcons)
         else
         {
             std::vector<int> akey;
-            const int key = g_pcinput.keyboard[size_t(k.action)];
+            const int key = ControlBinding(k.action, false);
             if (k.action == PCA_Start && key != GLFW_KEY_ESCAPE) akey.push_back(GLFW_KEY_ESCAPE);   // (Escape is always Start)
             if (key != st::kKeyUnknown) akey.push_back(key);
             aakey.push_back(akey);

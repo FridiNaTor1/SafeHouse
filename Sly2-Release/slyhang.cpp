@@ -1,3 +1,4 @@
+#include "actioninput.h"
 // Sly's state 3: the swing on a hook (cid 0x13) of kind 0 / 1 / 2 (+0x124; kind 3 is state 22, climbsurf.cpp).
 // Ported from the decomp: the entry / exit parts of 0x18C250 (JTS_Hang), the input 0x190520 (the substates 0..3: 0 the
 // push forward, 2 the push back, 1 the free swing, 3 hanging still: its SM +0x1950), the pendulum 0x18FC60 (the
@@ -325,7 +326,7 @@ void UpdateSlyHangMotion(SLY* p)
 bool FSlyHangRelease(SLY* p)
 {
     if (!(g_clock.t - p->tState > 0.25f)) return false;
-    if (!FBtnTake(p, BTN_CROSS, 0.25f)) return false;
+    if (!sly2actions::Take(PpadctlOf(p), sly2actions::Action::HangJump, BTN_CROSS, 0.25f)) return false;
     if (FHangPrint()) std::printf("hang: release t %.3f\n", g_clock.t);
     SetJumpKind(&p->jump, 2, 0, nullptr);
     return true;

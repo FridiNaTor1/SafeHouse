@@ -14,6 +14,8 @@
 struct SW;
 struct LO;
 
+inline constexpr int kRcChopperOid = 50723;
+
 bool FPcRcActive();                       // flying (or waiting for the chopper's file)
 bool FPcRcPending();                      // waiting for the chopper's file
 const char* PchzPcRcStatus();             // the menu row's value: "Off", "Loading", "Flying", "Not available"
