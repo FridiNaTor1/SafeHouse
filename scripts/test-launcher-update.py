@@ -19,6 +19,7 @@ import http.server
 import json
 import os
 import pathlib
+import platform
 import shutil
 import socketserver
 import stat
@@ -62,6 +63,11 @@ class Release:
                 'assets': [{'name': f, 'browser_download_url': (base + '/files/' if f == manifest_module.MANIFEST else prefix) + f}
                            for f in files]}
 
+
+# The package names and update keys of the architecture running this test (scripts/release-manifest.py).
+LINUX_ARCH = {'arm64': 'aarch64'}.get(platform.machine(), platform.machine())
+LINUX_NAME = 'SafeHouse-Launcher-Linux-' + LINUX_ARCH
+LINUX_KEY = 'linux-aarch64-' if LINUX_ARCH == 'aarch64' else 'linux-'
 
 def serve(release):
     class Handler(http.server.BaseHTTPRequestHandler):
@@ -143,19 +149,19 @@ def make_folder(root, launcher, marker):
 
 
 def folder_tests(launcher, work):
-    old = make_folder(work / 'installed' / 'SafeHouse-Launcher-Linux-x86_64', launcher, 'old')
+    old = make_folder(work / 'installed' / LINUX_NAME, launcher, 'old')
     (old / 'data').mkdir()
     (old / 'data' / 'save.bin').write_bytes(b'my save')
     (old / 'portable.txt').write_text('portable\n')
     (old / 'share' / 'only-old.txt').write_text('kept\n')
-    new = make_folder(work / 'pack' / 'SafeHouse-Launcher-Linux-x86_64', launcher, 'new')
+    new = make_folder(work / 'pack' / LINUX_NAME, launcher, 'new')
     (new / 'share' / 'added.txt').write_text('new file\n')
     (new / 'portable.txt').write_text('from the package\n')
     (new / 'data').mkdir()
     (new / 'data' / 'save.bin').write_bytes(b'package data')
     releases = work / 'release'
     releases.mkdir()
-    with tarfile.open(releases / 'SafeHouse-Launcher-Linux-x86_64.tar.gz', 'w:gz') as archive:
+    with tarfile.open(releases / (LINUX_NAME + '.tar.gz'), 'w:gz') as archive:
         archive.add(new, arcname=new.name)
     release = Release(releases, '0.1.57', '2026-11-17T09:12:44Z')
     server = serve(release)
@@ -169,8 +175,8 @@ def folder_tests(launcher, work):
               and (old / 'data' / 'save.bin').read_bytes() == b'my save', what)
 
     code, out = run(binary, ['--check-update'], env)
-    check(code == 0 and 'install linux-tar' in out and 'newer, 12 days' in out and 'latest 0.1.57' in out, 'check: 0.1.57 is newer, 12 days')
-    check('package SafeHouse-Launcher-Linux-x86_64.tar.gz' in out, 'check: the tar.gz updates this folder')
+    check(code == 0 and 'install ' + LINUX_KEY + 'tar' in out and 'newer, 12 days' in out and 'latest 0.1.57' in out, 'check: 0.1.57 is newer, 12 days')
+    check('package ' + LINUX_NAME + '.tar.gz' in out, 'check: the tar.gz updates this folder')
 
     code, out = run(binary, ['--check-update'], {**env, 'SAFEHOUSE_UPDATE_TEST_VERSION': '0.1.57'})
     check(code == 0 and 'up to date' in out, 'check: the same version is up to date')
@@ -232,12 +238,12 @@ def folder_tests(launcher, work):
 def appimage_tests(launcher, work):
     folder = work / 'apps'
     folder.mkdir()
-    target = folder / 'SafeHouse-Launcher-Linux-x86_64.AppImage'
+    target = folder / (LINUX_NAME + '.AppImage')
     target.write_bytes(b'old appimage')
     target.chmod(0o750)
     releases = work / 'release-appimage'
     releases.mkdir()
-    (releases / 'SafeHouse-Launcher-Linux-x86_64.AppImage').write_bytes(b'new appimage ' * 1000)
+    (releases / (LINUX_NAME + '.AppImage')).write_bytes(b'new appimage ' * 1000)
     release = Release(releases, '0.1.57', '2026-11-17T09:12:44Z')
     server = serve(release)
     env = private_env(work / 'profile-appimage')
@@ -245,7 +251,7 @@ def appimage_tests(launcher, work):
                SAFEHOUSE_UPDATE_TEST_VERSION='0.1.45', SAFEHOUSE_UPDATE_TEST_DATE='2026-11-05T19:11:09Z', APPIMAGE=str(target))
     inode = target.stat().st_ino
     code, out = run(launcher, ['--update'], env)
-    check(code == 0 and 'install linux-appimage' in out, 'AppImage: updated')
+    check(code == 0 and 'install ' + LINUX_KEY + 'appimage' in out, 'AppImage: updated')
     check(target.read_bytes() == b'new appimage ' * 1000, 'AppImage: the new file at $APPIMAGE')
     check(stat.S_IMODE(target.stat().st_mode) == 0o750 and target.stat().st_ino != inode, 'AppImage: replaced by a rename, permissions kept')
     check(not any(p.name.endswith('.part') for p in folder.rglob('*')), 'AppImage: no partial download left')
