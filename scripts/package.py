@@ -84,7 +84,7 @@ else:
  os.symlink('bin/safehouse',stage/'SafeHouse')
  with tarfile.open(output/(name+'.tar.gz'),'w:gz') as archive:archive.add(stage,arcname=name)
  if a.appimagetool:
-  runtime=(a.appimage_runtime or (a.build.resolve()/'packaging-runtime-'+arch)).resolve()
+  runtime=(a.appimage_runtime or (a.build.resolve()/('packaging-runtime-'+arch))).resolve()
   runtime_hash={'x86_64':'2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d','aarch64':'00cbdfcf917cc6c0ff6d3347d59e0ca1f7f45a6df1a428a0d6d8a78664d87444'}[arch]
   if not runtime.exists() or hashlib.sha256(runtime.read_bytes()).hexdigest()!=runtime_hash:
    if a.appimage_runtime:raise RuntimeError('The supplied AppImage runtime does not match pinned release 20251108')

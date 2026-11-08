@@ -19,7 +19,6 @@ import http.server
 import json
 import os
 import pathlib
-import platform
 import shutil
 import socketserver
 import stat
@@ -65,7 +64,9 @@ class Release:
 
 
 # The package names and update keys of the architecture running this test (scripts/release-manifest.py).
-LINUX_ARCH = {'arm64': 'aarch64'}.get(platform.machine(), platform.machine())
+# (os.uname, not platform.machine: that one queries WMI on Windows, which held up the serve mode by several seconds.)
+MACHINE = os.uname().machine if hasattr(os, 'uname') else 'x86_64'
+LINUX_ARCH = {'arm64': 'aarch64'}.get(MACHINE, MACHINE)
 LINUX_NAME = 'SafeHouse-Launcher-Linux-' + LINUX_ARCH
 LINUX_KEY = 'linux-aarch64-' if LINUX_ARCH == 'aarch64' else 'linux-'
 

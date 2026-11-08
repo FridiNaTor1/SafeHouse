@@ -153,7 +153,13 @@ if ($UpdateTest) {
     $serverLog = Join-Path $Shots 'update-server.log'
     $server = Start-Process python -ArgumentList (Join-Path $PSScriptRoot '..\test-launcher-update.py'), 'serve', $Dist, '--version', '99.0.0', '--port', '8765' `
         -PassThru -NoNewWindow -RedirectStandardOutput $serverLog -RedirectStandardError "$serverLog.err"
-    Start-Sleep -Seconds 3
+    # Wait until it accepts connections (a fixed wait was too short on a slow runner).
+    $listening = $false
+    for ($i = 0; $i -lt 120 -and -not $listening -and -not $server.HasExited; $i++) {
+        $probe = [Net.Sockets.TcpClient]::new()
+        try { $probe.Connect('127.0.0.1', 8765); $listening = $true } catch { Start-Sleep -Milliseconds 500 } finally { $probe.Dispose() }
+    }
+    Check $listening 'the fake update server is listening'
     $env:SAFEHOUSE_UPDATE_URL = 'http://127.0.0.1:8765/releases/latest'
     $env:SAFEHOUSE_UPDATE_TEST_VERSION = '0.0.1'
     $env:SAFEHOUSE_UPDATE_TEST_DATE = '2026-01-01T00:00:00Z'
