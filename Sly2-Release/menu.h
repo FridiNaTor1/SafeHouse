@@ -30,6 +30,7 @@ void ShowCardMessage(int idMsg, int nAfter = -1);   // nAfter: +0x4C (1 boot aga
 
 // the menu's script strings (0x2D2..0x2DB its wheel, 0x5CB..0x5D1 the slots, 0x2F2 / 0x2F3 the card dialog)
 std::string StrMenuScript(int id);
+bool FMenuActionPrompt(int textId, int& binding, bool& controller);
 // the auto-save the episode menu runs when it starts (orig 0x1ABD98(g_save, 1))
 void HudAutoSaveFrontEnd();
 

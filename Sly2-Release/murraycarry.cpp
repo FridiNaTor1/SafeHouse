@@ -1,3 +1,4 @@
+#include "actioninput.h"
 #include "jtthrow.h"
 // Murray's carried-object state machine and authored attachment poses.
 #include "murraycarry.h"
@@ -248,7 +249,7 @@ void UpdateMurrayCarryHeld(MURRAY* p) {
         SetJumpKind(&p->jump,15,0,0);
         return;
     }
-    if (GrfPadctlTakePressed(pc,0xA0,0.0f)) { SetMurrayState(p,7);return; }
+    if (sly2actions::Take(pc,sly2actions::Action::CarryThrow,0xA0,0.0f)) { SetMurrayState(p,7);return; }
     const float u=pc->uJoy;
     const bool moving=p->n1458==0?0.1f<u:0<u;
     // orig: 0x001B54FC..0x001B5594: the acquired passive selects the authored

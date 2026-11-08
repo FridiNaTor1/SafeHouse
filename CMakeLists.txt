@@ -316,6 +316,7 @@ if(CANE_BUILD_SLY2)
  if(BUILD_TESTING)
   # the rumble scheduler's timing against the retail patterns and the PS2 -> SDL motor mapping (platform/pad_rumble.h)
   add_test(NAME sly2-rumble COMMAND Sly2-Release --rumble-selftest)
+  add_test(NAME sly2-action-input COMMAND Sly2-Release --action-input-selftest)
  endif()
 endif()
 # Sly 3's native port (Sly3-Release/CMakeLists.txt), the same way.

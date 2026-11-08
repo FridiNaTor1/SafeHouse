@@ -4,6 +4,7 @@
 // camera's field of view through the attach camera policy, CM +0x5F0), any button fires a row of its pool through its
 // launcher and sends its splice event 5.
 #include "turret.h"
+#include "actioninput.h"
 
 #include "activate.h"
 #include "savedata.h"
@@ -12,6 +13,7 @@
 #include "clock.h"
 #include "cm.h"
 #include "cplcy.h"
+#include "joy.h"
 #include "lo.h"
 glm::mat3 BuildLookAtMatrixZ(const glm::vec3& vec);  // mat.h (0x11B7E0)
 #include "objmethod.h"
@@ -161,6 +163,8 @@ void UpdateTurretZoom(ALO* palo, TURRET& t)
     const float dt = g_clock.dt;
     const PODATA* ppd = PpodataFromLo(palo);
     const PADCTL* ppc = ppd ? ppd->ppadctl : nullptr;
+    const bool player = ppc && ppc->nControl == 1 && PloPoCurrent(g_psw) == palo;
+    float radFovMin = t.lmFov.gMin;
     if (t.ptarget && t.fFollow)
     {
         // TODO: the target's shape radius (+0xEC +0x30); natively 0 (no turret of the game's sets 910 / 911)
@@ -203,12 +207,17 @@ void UpdateTurretZoom(ALO* palo, TURRET& t)
     }
     else if (ppc)
     {
-        const float u = t.uZoom, g = ppc->y2;
+        const bool canZoom = player && (g_grfjoyt & 2);
+        const int direction = canZoom ? sly2actions::ZoomDirection() : 0;
+        const float wheel = canZoom ? MouseWheelZoom() : 0.0f;
+        const float u = t.uZoom, g = direction ? float(direction) : ppc->y2;
         t.duZoom = (2.0f + u * (0.0f + u * -1.0f)) * g * std::fabs(g);  // D_002C4420
-        t.uZoom = cmm::GLimitLm(&s_lmUnit, u + t.duZoom * dt);
+        t.uZoom = cmm::GLimitLm(&s_lmUnit, u + t.duZoom * dt + wheel * 0.08f);
+        // Battle the Chopper sets identical near and far FOVs. Keep its starting view and allow manual zoom in.
+        if (player && radFovMin == t.lmFov.gMax) radFovMin = 0.5f * t.lmFov.gMax;
     }
     const float uBlend = 1.0f - t.uZoom;
-    t.radFov = (1.0f - uBlend) * t.lmFov.gMin + uBlend * t.lmFov.gMax;
+    t.radFov = (1.0f - uBlend) * radFovMin + uBlend * t.lmFov.gMax;
 }
 
 // orig: 0x00226250 (fire: any of the eight buttons pressed this frame (0x1C4700, taken): a free row of the pool
@@ -217,7 +226,7 @@ void UpdateTurretFire(ALO* palo, TURRET& t)
 {
     const PODATA* ppd = PpodataFromLo(palo);
     PADCTL* ppc = ppd ? ppd->ppadctl : nullptr;
-    if (!ppc || !GrfPadctlTakePressed(ppc, 0xFF, 0.0f)) return;
+    if (!sly2actions::Take(ppc, sly2actions::Action::TurretFire, 0xFF, 0.0f)) return;
     if (t.ppool)
     {
         LO* po = PloAcquireProxyObject(g_psw, t.ppool, false);

@@ -5,6 +5,7 @@
 bool FSettingFlag(const char* name);   // (savedata.h; its header clashes with this file's LM)
 #include "animfind.h"
 #include "pcinput.h"
+#include "actioninput.h"
 
 #include "actor.h"
 #include "activate.h"
@@ -92,6 +93,7 @@ const CMJOY* PjoyNative()
     {
         MouseOrbitDelta(&s_joy.dradMousePan, &s_joy.dradMouseTilt);
         MouseAimDelta(MOUSEAIM_Binocucom, &s_joy.dradAimRight, &s_joy.dradAimUp);
+        if (const int zoom = sly2actions::ZoomDirection()) s_joy.y2 = float(zoom);
         s_joy.cwheelZoom = MouseWheelZoom();
     }
     return &s_joy;

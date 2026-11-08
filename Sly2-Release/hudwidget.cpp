@@ -3,6 +3,7 @@
 // func_001DA4B8.c / func_001DA578.c.
 
 #include "hudwidget.h"
+#include "actioninput.h"
 #include "skipcut.h"
 #include "debugmenu.h"
 #include "joy.h"
@@ -386,6 +387,7 @@ bool FHudPromptTicker(float* pt, float* pgEnd)
 void EndHudPromptTicker() { SetPromptState(s_prompt, 3); }
 
 // orig: 0x001DA5B0 (the prompt asked for next, else the one shown)
+int IdDisplayedHudPrompt() { return s_prompt.id; }
 int IdHudPrompt() { return s_prompt.idNext != -1 ? s_prompt.idNext : s_prompt.id; }
 
 void HudPromptEnd(int id)
@@ -470,11 +472,13 @@ void UpdateHud(SW* psw)
     ++g_cframeScreen;
     // orig 0x001D9648: Start opens the pause menu (0x1B0290; else the press is left for the title), then the
     // widgets: the menu 0x3D9ED0, the gauge, the prompt, the card dialog, the title
-    // the player's Select (0x1403D0: the pad's Select without R1): the gadget assignment of its character
-    if ((g_grfjoyt & 2) && !FTitleShown() && !FMenuShown() && !FShopShown() && !FGadgetMenuShown() && !FJobHelpShown() && GrfbtnPressed(0x100) &&
-        (GrfbtnHeld() & 0x108) == 0x100 && PloPlayerPo())
+    // The original Select shortcut requires R1 released. Advanced mode gives this menu its own action.
+    const bool advanced = sly2actions::Active();
+    if ((g_grfjoyt & 2) && !FTitleShown() && !FMenuShown() && !FShopShown() && !FGadgetMenuShown() && !FJobHelpShown() && PloPlayerPo() &&
+        (advanced ? sly2actions::Pressed(sly2actions::Action::GadgetMenu)
+                  : GrfbtnPressed(0x100) && (GrfbtnHeld() & 0x108) == 0x100))
     {
-        GrfbtnTakePressed(0x100);
+        GrfbtnTakePressed(advanced ? 0x107 : 0x100);
         OpenGadgetMenu(psw, PloPlayerPo());
     }
     // orig 0x1D9648 reads the gameplay pad (JoyFor(2)); a failure screen's

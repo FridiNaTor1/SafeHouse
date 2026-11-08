@@ -4,6 +4,7 @@
 #include "region.h"
 
 #include "pcinput.h"
+#include "../platform/sly2_action_bindings.h"
 #include "../platform/system_settings.h"
 
 #include <GLFW/glfw3.h>
@@ -106,10 +107,10 @@ constexpr ROW s_arow[] = {
         "Zielempfindlichkeit (Maus)", "Sensibilidad de mira (ratón)", "Muisgevoeligheid bij richten",
         "Sensibilidade de mira (rato)", "Musens følsomhed ved sigte", "Hiiren herkkyys tähdätessä",
         "Musefølsomhet ved sikting", "Muskänslighet vid sikte", "ねらう時のマウス感度"}},
-    {PTX_WheelZoomsBinocucom, {"Wheel Zooms Binocucom", "Zoom Binocom à la molette", "Zoom Binocom con la rotellina",
-        "Mausrad zoomt S.-Kom.", "Zoom del bino-com con la rueda", "Scrollwiel zoomt Contactkijker",
-        "Zoom do Binocucom com a roda", "Rullehjul zoomer binocucom", "Rulla zoomaa radiokiikaria",
-        "Musehjul zoomer kikkertwalkie", "Mushjul zoomar binokucom", "ホイールでゴーグルをズーム"}},
+    {PTX_MouseWheelZoom, {"Mouse Wheel Zoom", "Zoom à la molette", "Zoom con la rotellina",
+        "Zoom mit Mausrad", "Zoom con la rueda", "Zoomen met scrollwiel",
+        "Zoom com a roda do rato", "Zoom med rullehjul", "Zoomaus hiiren rullalla",
+        "Zoom med musehjul", "Zooma med mushjulet", "ホイールでズーム"}},
     {PTX_MouseInMenus, {"Mouse in Menus", "Souris dans les menus", "Mouse nei menu", "Maus in Menüs",
         "Ratón en los menús", "Muis in menu's", "Rato nos menus", "Mus i menuer", "Hiiri valikoissa", "Mus i menyer",
         "Mus i menyer", "メニューでマウスを使う"}},
@@ -288,6 +289,27 @@ constexpr ROW s_arow[] = {
         "Automatische Kameradrehung", "Giro automático de cámara", "Automatische camerarotatie",
         "Rotação automática da câmara", "Automatisk kamerarotation", "Kameran automaattikääntö",
         "Automatisk kamerarotasjon", "Automatisk kamerarotation", "カメラ自動回転"}},
+    {PTX_AdvancedBindings, {"Advanced Input Mapping", "Attribution avancée des commandes", "Assegnazione avanzata comandi",
+        "Erweiterte Tastenbelegung", "Asignación avanzada de controles", "Geavanceerde knoptoewijzing",
+        "Mapeamento avançado de controlos", "Avanceret knaptildeling", "Laajennettu näppäinkartoitus",
+        "Avansert knappetilordning", "Avancerad knapptilldelning", "くわしい操作のわりあて"}},
+    {PTX_ActionBindings, {"Action Bindings...", "Attribuer les commandes...", "Assegna comandi...",
+        "Aktionen belegen...", "Asignar acciones...", "Acties toewijzen...", "Atribuir ações...",
+        "Tildel handlinger...", "Määritä toiminnot...", "Tilordne handlinger...", "Tilldela åtgärder...", "操作をわりあてる"}},
+    {PTX_ActionKeyboard, {"Keyboard and Mouse...", "Clavier et souris...", "Tastiera e mouse...",
+        "Tastatur und Maus...", "Teclado y ratón...", "Toetsenbord en muis...", "Teclado e rato...",
+        "Tastatur og mus...", "Näppäimistö ja hiiri...", "Tastatur og mus...", "Tangentbord och mus...", "キーボードとマウス"}},
+    {PTX_ActionController, {"Controller...", "Manette...", "Controller...", "Controller...", "Mando...", "Controller...",
+        "Comando...", "Controller...", "Peliohjain...", "Kontroller...", "Handkontroll...", "コントローラ"}},
+    {PTX_ResetAdvancedBindings, {"Reset Advanced Input Mapping", "Réinitialiser les commandes", "Ripristina comandi avanzati",
+        "Belegung zurücksetzen", "Restablecer controles avanzados", "Standaardbesturing herstellen",
+        "Repor controlos avançados", "Nulstil avanceret styring", "Palauta toimintojen oletukset",
+        "Tilbakestill avanserte kontroller", "Återställ avancerade kontroller", "わりあてをもどす"}},
+    {PTX_CaptureAction, {"Press input (Esc: cancel, Del: clear)", "Appuie (Échap : annuler, Suppr : effacer)",
+        "Premi un comando (Esc: annulla, Canc: cancella)", "Eingabe (Esc: Abbruch, Entf: löschen)",
+        "Pulsa (Esc: cancelar, Supr: borrar)", "Druk (Esc: annuleren, Del: wissen)",
+        "Prime (Esc: cancelar, Del: limpar)", "Tryk (Esc: annuller, Del: ryd)", "Paina (Esc: peruuta, Del: poista)",
+        "Trykk (Esc: avbryt, Del: fjern)", "Tryck (Esc: avbryt, Del: rensa)", "ボタンをおす (Esc:やめる、Del:けす)"}},
 };
 // clang-format on
 static_assert(std::size(s_arow) == PTX_Max, "one row per PTX");
@@ -306,6 +328,8 @@ int IlangTable()
 }
 
 const char* SzRow(PTX ptx) { return s_arow[ptx].asz[IlangTable()]; }
+
+#include "porttext_actions.inc"
 
 // the language writes decimals with a comma
 bool FDecimalComma()
@@ -343,6 +367,23 @@ std::string StrPort(PTX ptx)
 {
     if (ptx < 0 || ptx >= PTX_Max) return "";
     return StrToGameText(SzRow(ptx));
+}
+
+std::string StrPortActionName(cane::sly2input::Action action)
+{
+    const size_t index = size_t(action);
+    if (index >= cane::sly2input::kActionCount) return {};
+    const int lang = IlangTable();
+    return StrToGameText(lang == LANG_English ? cane::sly2input::kActions[index].label : s_actionNames[index].text[lang - 1]);
+}
+
+std::string StrPortActionGroup(std::string_view group)
+{
+    const int lang = IlangTable();
+    if (lang != LANG_English)
+        for (const auto& row : s_actionGroups)
+            if (row.group == group) return StrToGameText(row.text[lang - 1]);
+    return StrToGameText(std::string(group));
 }
 
 std::string StrPortValue(PTX ptxLabel, const std::string& value) { return StrPort(ptxLabel) + StrPort(PTX_Sep) + value; }

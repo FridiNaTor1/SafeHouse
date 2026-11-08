@@ -2,6 +2,7 @@
 // the camera keys, the device tracker) and mouseinput.cpp (capture, motion, bindings, menu buttons).
 
 #include "pcinput.h"
+#include "actioninput.h"
 #include "rumble.h"
 
 #include "display.h"
@@ -245,8 +246,9 @@ double s_xCursor = 0.0, s_yCursor = 0.0;
 bool s_fHaveLast = false;
 double s_xLast = 0.0, s_yLast = 0.0;
 float s_dxCounts = 0.0f, s_dyCounts = 0.0f;   // + = right / down
-double s_dyScroll = 0.0;                        // the scroll callback's sum
-int s_wheel = 0;                                // this step's notches, + = up
+double s_dyScrollUp = 0.0, s_dyScrollDown = 0.0;
+int s_wheelUp = 0, s_wheelDown = 0;              // notches in each direction this step
+int s_wheel = 0;                                // signed net scroll for the basic controls
 int s_cwheelMenu = 0;                           // menu steps still to give (one press every other step)
 bool s_afButton[MOUSE_BUTTONS] = {};
 bool s_afButtonPrev[MOUSE_BUTTONS] = {};
@@ -259,7 +261,7 @@ void FocusCallback(GLFWwindow* window, int focused)
 {
     // Ignore mouse buttons held across a focus change until they are released.
     std::fill(std::begin(s_afButtonBlocked), std::end(s_afButtonBlocked), true);
-    s_dyScroll = 0.0;
+    s_dyScrollUp = s_dyScrollDown = 0.0;
     s_cwheelMenu = 0;
     s_fHaveLast = false;
     if (s_pfnFocusPrev) s_pfnFocusPrev(window, focused);
@@ -267,11 +269,12 @@ void FocusCallback(GLFWwindow* window, int focused)
 
 void ScrollCallback(GLFWwindow* window, double dx, double dy)
 {
-    s_dyScroll += dy;
+    if (dy > 0.0) s_dyScrollUp += dy;
+    else s_dyScrollDown -= dy;
     if (s_pfnScrollPrev) s_pfnScrollPrev(window, dx, dy);
 }
 
-bool FWheelBound()
+bool FBasicWheelBound()
 {
     return std::any_of(g_pcinput.keyboard.begin(), g_pcinput.keyboard.end(),
                        [](int key) { return key == st::kMouseWheelUp || key == st::kMouseWheelDown; });
@@ -364,10 +367,15 @@ void UpdateMouse(GLFWwindow* window)
         s_pwindowHooked = window;
     }
     s_dxCounts = s_dyCounts = 0.0f;
-    s_wheel = int(std::lround(s_dyScroll));
-    if (s_wheel == 0 && s_dyScroll != 0.0) s_wheel = s_dyScroll > 0.0 ? 1 : -1;
-    s_dyScroll = 0.0;
     const bool fFocused = glfwGetWindowAttrib(window, GLFW_FOCUSED) == GLFW_TRUE;
+    const auto notches = [](double dy) {
+        const int rounded = int(std::lround(dy));
+        return rounded == 0 && dy != 0.0 ? (dy > 0.0 ? 1 : -1) : rounded;
+    };
+    s_wheelUp = fFocused ? notches(s_dyScrollUp) : 0;
+    s_wheelDown = fFocused ? notches(s_dyScrollDown) : 0;
+    s_wheel = fFocused ? notches(s_dyScrollUp - s_dyScrollDown) : 0;
+    s_dyScrollUp = s_dyScrollDown = 0.0;
     bool fClicked = false;
     for (int b = 0; b < MOUSE_BUTTONS; ++b)
     {
@@ -378,7 +386,7 @@ void UpdateMouse(GLFWwindow* window)
         s_afButton[b] = (fFocused && fHeld && !s_afButtonBlocked[b]) || FTestKeyHeld(st::kMouseBindingBase + b);
         fClicked |= s_afButton[b] && !s_afButtonPrev[b];
     }
-    if (fClicked || (s_wheel != 0 && fFocused)) cane::input::tracker().noteMouse();
+    if (fClicked || s_wheelUp || s_wheelDown) cane::input::tracker().noteMouse();
     // the free cursor's motion (a deliberate move shows it again after a controller's input)
     s_fFreeMoved = false;
     {
@@ -456,8 +464,8 @@ void UpdateMouse(GLFWwindow* window)
 
 bool FMouseBindingHeld(int binding)
 {
-    if (binding == st::kMouseWheelUp) return s_wheel > 0;
-    if (binding == st::kMouseWheelDown) return s_wheel < 0;
+    if (binding == st::kMouseWheelUp) return sly2actions::profile.enabled ? s_wheelUp != 0 : s_wheel > 0;
+    if (binding == st::kMouseWheelDown) return sly2actions::profile.enabled ? s_wheelDown != 0 : s_wheel < 0;
     const int b = binding - st::kMouseBindingBase;
     return b >= 0 && b < MOUSE_BUTTONS && s_afButton[b];
 }
@@ -509,11 +517,29 @@ void ReadPcInput(GLFWwindow* window, uint16_t* pgrf, float* pxl, float* pyl, flo
     UpdateMouse(window);
     const bool fFocused = glfwGetWindowAttrib(window, GLFW_FOCUSED) == GLFW_TRUE;
     const bool fMenu = FPcMenuMode();
+    const bool fGadgetMenuBindings = sly2actions::profile.enabled && FGadgetMenuShown();
+    auto isMenuGadgetSlot = [&](int button) {
+        return fGadgetMenuBindings && cane::sly2input::isGadgetSlot(cane::sly2input::legacyButtonAction(button));
+    };
+    auto gadgetWheelBound = [&](int binding) {
+        if (!fGadgetMenuBindings || (binding != st::kMouseWheelUp && binding != st::kMouseWheelDown)) return false;
+        for (auto slot : cane::sly2input::kGadgetSlots)
+            if (sly2actions::profile.keyboard[size_t(slot)] == binding) return true;
+        return false;
+    };
+    auto bindingFor = [&](int action, bool controller) {
+        if (isMenuGadgetSlot(action))
+            return sly2actions::Binding(cane::sly2input::legacyButtonAction(action), action, controller);
+        if (!fMenu) return sly2actions::Binding(action, controller);
+        if (controller) return g_pcinput.gamepad[size_t(action)];
+        const int binding = g_pcinput.keyboard[size_t(action)];
+        return gadgetWheelBound(binding) ? st::kKeyUnknown : binding;
+    };
+    GLFWgamepadstate gp{};
 
     // the gamepad: the most active mapped pad (Steam can park an idle virtual pad below the one in use)
     if (!g_pcinput.fDisableUnfocusedPad || fFocused)
     {
-        GLFWgamepadstate gp{};
         s_jidPad = cane::input::selectActivePad(s_jidPad, &gp);
         cane::input::tracker().pollGamepads();
         if (s_jidPad >= 0)
@@ -521,7 +547,7 @@ void ReadPcInput(GLFWwindow* window, uint16_t* pgrf, float* pxl, float* pyl, flo
             *pfPad = true;
             for (int a = 0; a < PCA_Max; ++a)
             {
-                const int b = g_pcinput.gamepad[size_t(a)];
+                const int b = bindingFor(a, true);
                 bool fHeld = false;
                 if (b >= 0 && b <= GLFW_GAMEPAD_BUTTON_LAST) fHeld = gp.buttons[b] == GLFW_PRESS;
                 else if (b == st::kGamepadLeftTrigger) fHeld = gp.axes[GLFW_GAMEPAD_AXIS_LEFT_TRIGGER] > 0.5f;
@@ -537,6 +563,17 @@ void ReadPcInput(GLFWwindow* window, uint16_t* pgrf, float* pxl, float* pyl, flo
     }
     else s_jidPad = -1;
     SetRumblePad(s_jidPad, true);   // (rumble.h: the pad the motors are driven on; -1 none)
+    {
+        std::array<bool, cane::sly2input::kActionCount> keys{}, pad{};
+        for (size_t i = 0; i < keys.size(); ++i) {
+            keys[i] = fFocused && FBindingHeld(window, sly2actions::profile.keyboard[i]);
+            const int b = sly2actions::profile.gamepad[i];
+            pad[i] = *pfPad && ((b >= 0 && b <= GLFW_GAMEPAD_BUTTON_LAST && gp.buttons[b] == GLFW_PRESS) ||
+                (b == st::kGamepadLeftTrigger && gp.axes[GLFW_GAMEPAD_AXIS_LEFT_TRIGGER] > 0.5f) ||
+                (b == st::kGamepadRightTrigger && gp.axes[GLFW_GAMEPAD_AXIS_RIGHT_TRIGGER] > 0.5f));
+        }
+        sly2actions::Sample(keys, pad, !fMenu && !FDebugMenuOpen(), fGadgetMenuBindings);
+    }
 
     // the keyboard (and mouse bindings): the movement actions move the left stick, the others are buttons
     // (in a menu with "Mouse in Menus" on, the left / right buttons only confirm / go back: an action bound to
@@ -545,8 +582,8 @@ void ReadPcInput(GLFWwindow* window, uint16_t* pgrf, float* pxl, float* pyl, flo
     bool afKey[PCA_Max] = {};
     for (int a = 0; a < PCA_Max; ++a)
     {
-        const int binding = g_pcinput.keyboard[size_t(a)];
-        if (fMenuMouse && (binding == st::kMouseBindingBase + GLFW_MOUSE_BUTTON_LEFT ||
+        const int binding = bindingFor(a, false);
+        if (fMenuMouse && !isMenuGadgetSlot(a) && (binding == st::kMouseBindingBase + GLFW_MOUSE_BUTTON_LEFT ||
                            binding == st::kMouseBindingBase + GLFW_MOUSE_BUTTON_RIGHT))
             continue;
         afKey[a] = FBindingHeld(window, binding);
@@ -557,12 +594,16 @@ void ReadPcInput(GLFWwindow* window, uint16_t* pgrf, float* pxl, float* pyl, flo
             if (g_pcinput.keyboard[size_t(a)] == st::kMouseBindingBase + GLFW_MOUSE_BUTTON_LEFT) afKey[a] = false;
     if (afKey[PCA_Left] && !afKey[PCA_Right]) xl = -1.0f;
     if (afKey[PCA_Right] && !afKey[PCA_Left]) xl = 1.0f;
-    if (afKey[PCA_Up] && !afKey[PCA_Down]) yl = 1.0f;
-    if (afKey[PCA_Down] && !afKey[PCA_Up]) yl = -1.0f;
+    const bool fTankTracks = sly2actions::TankTrackAxes(yl, yr);
+    if (!fTankTracks)
+    {
+        if (afKey[PCA_Up] && !afKey[PCA_Down]) yl = 1.0f;
+        if (afKey[PCA_Down] && !afKey[PCA_Up]) yl = -1.0f;
+    }
     // (PC) the tank (FTankSticks: a script drives one track by each stick's Y): with the keyboard, the left / right track
     // keys (A / D) drive their track forward, both together; forward alone drives both, back reverses the held tracks
     // (or both). The controller keeps its sticks.
-    if (FTankSticks() && !fMenu && !cane::input::tracker().lastWasGamepad())
+    if (!sly2actions::profile.enabled && FTankSticks() && !fMenu && !cane::input::tracker().lastWasGamepad())
     {
         const bool fL = FKeyHeld(window, g_pcinput.tankKeys[0]), fR = FKeyHeld(window, g_pcinput.tankKeys[1]);
         const bool fFwd = afKey[PCA_Up], fBack = afKey[PCA_Down];
@@ -625,15 +666,29 @@ void ReadPcInput(GLFWwindow* window, uint16_t* pgrf, float* pxl, float* pyl, flo
     }
     if (fCamL && !fCamR) xr = -1.0f;
     if (fCamR && !fCamL) xr = 1.0f;
-    if (fCamU && !fCamD) yr = 1.0f;
-    if (fCamD && !fCamU) yr = -1.0f;
+    if (!fTankTracks)
+    {
+        if (fCamU && !fCamD) yr = 1.0f;
+        if (fCamD && !fCamU) yr = -1.0f;
+    }
 
     // the mouse in menus: the wheel steps (one press every other step, so each notch is an edge), left confirms,
     // right goes back
     static bool s_fWheelPulse = false;
-    if (fMenu && g_pcinput.fMouseMenus && !FWheelBound())
+    if (fMenuMouse)
     {
-        if (s_wheel) s_cwheelMenu = std::clamp(s_cwheelMenu - s_wheel, -4, 4);   // (up: negative steps)
+        int menuWheel = 0;
+        if (sly2actions::profile.enabled) {
+            const auto unbound = [&](int binding) {
+                for (int a = 0; a < PCA_Max; ++a)
+                    if (bindingFor(a, false) == binding) return false;
+                return true;
+            };
+            menuWheel = (unbound(st::kMouseWheelUp) ? s_wheelUp : 0) -
+                        (unbound(st::kMouseWheelDown) ? s_wheelDown : 0);
+        }
+        else if (!FBasicWheelBound()) menuWheel = s_wheel;
+        if (menuWheel) s_cwheelMenu = std::clamp(s_cwheelMenu - menuWheel, -4, 4);   // (up: negative steps)
         if (s_fWheelPulse) s_fWheelPulse = false;
         else if (s_cwheelMenu)
         {
@@ -755,8 +810,13 @@ void MouseAimDelta(MOUSEAIM aim, float* pdxRight, float* pdyUp)
 
 float MouseWheelZoom()
 {
-    if (!s_fCaptured || !g_pcinput.fMouseWheelZoom || FWheelBound()) return 0.0f;
-    return float(s_wheel);
+    if (!sly2actions::profile.enabled)
+        return s_fCaptured && g_pcinput.fMouseWheelZoom && !FBasicWheelBound() ? float(s_wheel) : 0.0f;
+    if (FPcMenuMode()) return 0.0f;
+
+    const bool automaticZoom = s_fCaptured && g_pcinput.fMouseWheelZoom;
+    return float(sly2actions::WheelZoom(st::kMouseWheelUp, s_wheelUp, automaticZoom) +
+                 sly2actions::WheelZoom(st::kMouseWheelDown, s_wheelDown, automaticZoom));
 }
 
 const char* PchzMouseBindingName(int binding)
@@ -841,8 +901,8 @@ int KeyBindingPressed(GLFWwindow* window)
         if (f && !s_afMousePrev[b] && found < 0) found = st::kMouseBindingBase + b;
         s_afMousePrev[b] = f;
     }
-    if (found < 0 && s_wheel > 0) found = st::kMouseWheelUp;
-    if (found < 0 && s_wheel < 0) found = st::kMouseWheelDown;
+    if (found < 0 && FMouseBindingHeld(st::kMouseWheelUp)) found = st::kMouseWheelUp;
+    if (found < 0 && FMouseBindingHeld(st::kMouseWheelDown)) found = st::kMouseWheelDown;
     return found;
 }
 

@@ -8,6 +8,7 @@
 #include "hud.h"
 #include "lo.h"
 #include "pcinput.h"
+#include "actioninput.h"
 #include "po.h"
 #include "render.h"
 #include "so.h"
@@ -152,7 +153,7 @@ bool FHackMouseAim(LO* plo, float* pradAim, bool* pfFire)
     // (right on the ship: the last heading)
     if (glm::length(d) > 0.5f) s_radAimLast = std::atan2(d.y, d.x);
     *pradAim = s_radAimLast;
-    *pfFire = fLeft;
+    *pfFire = sly2actions::Active() ? sly2actions::Held(sly2actions::Action::HackFire) : fLeft;
     if (static const bool s_fPrint = std::getenv("SLY2N_HACKMOUSEPRINT") != nullptr; s_fPrint)
     {
         const glm::vec4 s = m * glm::vec4(pos, 1.0f);

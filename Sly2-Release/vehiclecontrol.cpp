@@ -1,3 +1,4 @@
+#include "actioninput.h"
 // Vehicle steering, weapon aiming and state transitions. Matched 0x1D19A8..0x1D4C88.
 #include "vehicle.h"
 #include "activate.h"
@@ -211,8 +212,9 @@ void UpdateVehiclePlayer(VEHICLE& v) {
     if (pad->grfbtn&0x40) { v.drive=v.maxSpeed; v.wheelAngle=v.heading; }
     else { v.wheelAngle=pad->radJoy; v.drive=0; }
     for (const auto& a:v.attachments) if (FVehicleAttachmentReady(*a)) {
-        if (pad->grfbtn&a->heldButtons) SetSmaGoal(a->binding,0x67);
-        else if (GrfPadctlTakePressed(pad,a->pressedButtons,0)) SetSmaGoal(a->binding,0x68);
+        const auto action = sly2actions::VehicleWeaponAction(a->heldButtons | a->pressedButtons);
+        if (a->heldButtons && sly2actions::Held(pad, action, a->heldButtons)) SetSmaGoal(a->binding,0x67);
+        else if (a->pressedButtons && sly2actions::Take(pad, action, a->pressedButtons,0)) SetSmaGoal(a->binding,0x68);
     }
 }
 }

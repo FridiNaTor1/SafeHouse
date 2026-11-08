@@ -2,6 +2,7 @@
 // functions (the world transition 0x210990, the task start 0x1651D8, the players' enable vt slot 79, the actors'
 // teleport slot 38, F9's job end, F6 / F7) and never write the save themselves except where marked "[save]".
 #include "debugmenu.h"
+#include "actioninput.h"
 #include "region.h"
 
 #include "activate.h"
@@ -342,10 +343,14 @@ void StepNoclip(SW* psw)
     const JOYPS2& j = JoyFor(2);
     const float dt = g_clock.dt40 > 0.0f ? g_clock.dt40 : 1.0f / 60.0f;
     // (JOYPS2's buttons are in the game's layout: the libpad bits byte-swapped)
-    auto held = [&](uint32_t grfLibpad) { return (j.grfbtn & GrfbtnPs2FromLibpad(grfLibpad)) != 0; };
+    using sly2actions::Action;
+    const bool advanced = sly2actions::Active();
+    auto held = [&](Action action, uint32_t grfLibpad) {
+        return advanced ? sly2actions::Held(action) : (j.grfbtn & GrfbtnPs2FromLibpad(grfLibpad)) != 0;
+    };
     float speed = 1100.0f;
-    if (held(BTN_R1)) speed *= 4.0f;    // (Shift)
-    if (held(BTN_L1)) speed *= 0.25f;   // (1: slow, for framing)
+    if (held(Action::NoclipFast, BTN_R1)) speed *= 4.0f;
+    if (held(Action::NoclipSlow, BTN_L1)) speed *= 0.25f;
     // the stick moves level, relative to the camera's heading; the buttons up and down
     glm::vec3 fwd(g_cm.mat[0].x, g_cm.mat[0].y, 0.0f);
     if (glm::length(fwd) < 1e-3f) fwd = glm::vec3(g_cm.mat[2].x, g_cm.mat[2].y, 0.0f);   // (looking straight down)
@@ -353,8 +358,8 @@ void StepNoclip(SW* psw)
     const glm::vec3 left(-fwd.y, fwd.x, 0.0f);
     glm::vec3 v = fwd * j.y - left * j.x;
     float dz = 0.0f;
-    if (held(BTN_Cross) || held(BTN_R2)) dz += 1.0f;     // up: Cross (Space), R2 (3)
-    if (held(BTN_Circle) || held(BTN_L2)) dz -= 1.0f;    // down: Circle (E), L2 (2)
+    if (held(Action::NoclipAscend, BTN_Cross | BTN_R2)) dz += 1.0f;
+    if (held(Action::NoclipDescend, BTN_Circle | BTN_L2)) dz -= 1.0f;
     v.z += dz;
     if (glm::length(v) > 1.0f) v = glm::normalize(v);
     s_posNoclip += v * speed * dt;

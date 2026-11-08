@@ -1,3 +1,4 @@
+#include "actioninput.h"
 // jump.cpp: the actors' jump (the sub-object at +0x2C0, actor.h JUMP; module 0x195950..0x19CBF8). Ported from the
 // reference's m_195950_p3.cpp (0x195950, 0x195A00, 0x195FB8, 0x196AA8, 0x196DF8, 0x197500), m_197F98_p3.cpp
 // (0x197F98), m_1991A0_p3.cpp (0x19A750) and round4low_extra.cpp (0x197370, 0x143D20).
@@ -774,9 +775,9 @@ void UpdateJumpTransitions(JUMP* pj)
         // (PC addition, debug menu only: Carmelita's moveset has no air targets or paraglider; her double jump below)
         if (!(pj->state < 23 && pj->state >= 9) && !FPcCarm(pa->palo))
         {
-            if (pj->f28 && FBtnWithin(pa, BTN_CROSS, 0.0f) && !FActorBelowFloorSoon(pa, F32(0x3D99999A)))
+            if (pj->f28 && sly2actions::Within(PpadctlOf(pa), sly2actions::Action::DoubleJump, BTN_CROSS, 0.0f) && !FActorBelowFloorSoon(pa, F32(0x3D99999A)))
             {
-                ForgetBtn(pa, BTN_CROSS);
+                sly2actions::Take(PpadctlOf(pa), sly2actions::Action::DoubleJump, BTN_CROSS, 0.0f);
                 SetJumpKind(pj, 6, pj->n8, 0);  // the double jump
             }
             if (FBtnWithin(pa, BTN_CIRCLE, 0.0f))
@@ -787,19 +788,19 @@ void UpdateJumpTransitions(JUMP* pj)
                 if (pj->state != st) ForgetBtn(pa, BTN_CIRCLE);
             }
             // R1 in the air: the paraglider (27) when owned, not about to land (0.3 s), for the current player
-            if (FBtnWithin(pa, BTN_R1, 0.0f) && pa->palo == PloPoCurrent(g_psw) && FPowerupOwned(0x1B) &&
+            if (sly2actions::Within(PpadctlOf(pa), sly2actions::Action::Paraglider, BTN_R1, 0.0f) && pa->palo == PloPoCurrent(g_psw) && FPowerupOwned(0x1B) &&
                 !FActorBelowFloorSoon(pa, F32(0x3E99999A)))
             {
                 SpendActorPower(pa, 0x1B);  // 0x141CD0 (costs 0)
-                ForgetBtn(pa, BTN_R1);      // 0x1C4738
+                sly2actions::Take(PpadctlOf(pa), sly2actions::Action::Paraglider, BTN_R1, 0.0f);
                 StartActorAbility(pa, 0x1B);  // the current player's vt slot 100 (Sly: 0x18DA48 -> state 19)
             }
         }
         // (PC addition, debug menu only: Carmelita's own double jump at her height, pccharacter.h; not the guards')
-        else if (!(pj->state < 23 && pj->state >= 9) && pj->f28 && FPcCarmDoubleJump(pa->palo) && FBtnWithin(pa, BTN_CROSS, 0.0f) &&
+        else if (!(pj->state < 23 && pj->state >= 9) && pj->f28 && FPcCarmDoubleJump(pa->palo) && sly2actions::Within(PpadctlOf(pa), sly2actions::Action::DoubleJump, BTN_CROSS, 0.0f) &&
                  !FActorBelowFloorSoon(pa, F32(0x3D99999A)))
         {
-            ForgetBtn(pa, BTN_CROSS);
+            sly2actions::Take(PpadctlOf(pa), sly2actions::Action::DoubleJump, BTN_CROSS, 0.0f);
             // (on Bentley / Murray: no kind 6, their jumps have no double jump's animation state; once only)
             if (dynamic_cast<SLY*>(pa)) SetJumpKind(pj, 6, pj->n8, 0);
             else pj->f28 = 0;
@@ -923,7 +924,7 @@ void UpdateJumpTransitions(JUMP* pj)
             const OXA* poxa = Poxa(pa->palo);
             bool fContact = false;
             for (const OX* pox = poxa ? poxa->pox : nullptr; pox && !fContact; pox = pox->poxNext) fContact = pox->pxp != nullptr;
-            if (fContact || !(GrfbtnHeld(pa) & (GrfAbilityButton(pa, 0x1B) | BTN_R1)))
+            if (fContact || !(sly2actions::Held(PpadctlOf(pa), sly2actions::Action::Paraglider, BTN_R1) || (GrfbtnHeld(pa) & GrfAbilityButton(pa, 0x1B))))
             {
                 SetJumpAnimState(pj, 4, nullptr);
                 break;

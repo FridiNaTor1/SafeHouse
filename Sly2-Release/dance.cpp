@@ -1,3 +1,5 @@
+#include "actioninput.h"
+#include "promptglyph.h"
 // The dance minigame (Ep2's audition 11:2059 and the heist dance 11:1593): the director (cid 0x79, module
 // 0x1526D8..0x153800, D_002DE570) and its dancers (cid 0x44, a STEP: 0x152100..0x152390, 0x1524A0..0x152680), driven
 // by the dance script's commands 0x49 (the director's state and the beats' button prompts), 0x4A (a beat: the button
@@ -184,6 +186,18 @@ LO* PloDanceAseg(LO* plo, OID oid)
     return po;
 }
 
+uint32_t DanceButtons(PADCTL* pad, uint32_t mask, bool take) {
+    if (!pad) return 0;
+    using sly2actions::Action;
+    const Action actions[] = {Action::DanceTriangle, Action::DanceCircle, Action::DanceCross, Action::DanceSquare};
+    uint32_t result = 0;
+    for (int i = 0; i < 4; ++i) {
+        const uint32_t bit = 0x10u << i;
+        if ((mask & bit) && (take ? sly2actions::Take(pad, actions[i], bit, 0) : sly2actions::Within(pad, actions[i], bit, 0))) result |= bit;
+    }
+    return result;
+}
+
 // orig: 0x00152390 (the dancer's move for the button id (-1: any pressed this frame, 0x1C4700), kind j (0 good,
 // 1 bad, 2 missed); idNew: the good move replaced first; the records to mode 2)
 void PlayDancerMove(LO* plo, int id, int idNew, int j)
@@ -192,7 +206,7 @@ void PlayDancerMove(LO* plo, int id, int idNew, int j)
     PADCTL* ppc = Ppadctl(plo);
     for (MOVE& m : r.amove)
     {
-        if (!((id == -1 && ppc && GrfPadctlTakePressed(ppc, static_cast<uint32_t>(m.k), 0.0f)) || m.k == id)) continue;
+        if (!((id == -1 && ppc && DanceButtons(ppc, static_cast<uint32_t>(m.k), true)) || m.k == id)) continue;
         if (idNew != -1)
             if (LO* po = PloDanceAseg(plo, idNew)) m.apaseg[0] = po;
         ALO* palo = static_cast<ALO*>(plo);
@@ -356,7 +370,7 @@ void UpdateDance(LO* plo)
 void CheckDancerBeat(LO* ploDance, DANCE& d, LO* po)
 {
     PADCTL* ppc = Ppadctl(po);
-    d.n230 = ppc ? static_cast<int>(GrfPadctlPressedWithin(ppc, 0xF0, 0.0f)) : 0;
+    d.n230 = ppc ? static_cast<int>(DanceButtons(ppc, 0xF0, false)) : 0;
     if (!d.n230) return;
     for (BEAT& b : d.abeat)
     {
@@ -376,7 +390,7 @@ void CheckDancerBeat(LO* ploDance, DANCE& d, LO* po)
             return;
         }
         b.n1C = 1;
-        if (ppc && GrfPadctlTakePressed(ppc, static_cast<uint32_t>(b.n4), 0.0f))
+        if (ppc && DanceButtons(ppc, static_cast<uint32_t>(b.n4), true))
         {
             if (FPrint()) std::printf("dance: beat 0x%X at %.3f hit (t %.3f)\n", b.n4, b.gC, TMusicTop());
             PlayDancerMove(po, b.n4, b.n8, 0);
@@ -554,7 +568,13 @@ void DrawDancePrompts(const FONTBRX* pfont, const FONTBRX* picons)
                     ch = k.ch;
                     scale = sBig;
                 }
-                DrawIcon(*pfont, picons, std::string("&2") + ch + "&.", scale, x, y);
+                if (sly2actions::profile.enabled) {
+                    using sly2actions::Action;
+                    const Action action = k.id == 0x80 ? Action::DanceSquare : k.id == 0x20 ? Action::DanceCircle :
+                                          k.id == 0x40 ? Action::DanceCross : Action::DanceTriangle;
+                    PROMPTKEYGLYPH binding(ch, sly2actions::profile.keyboard[size_t(action)], sly2actions::profile.gamepad[size_t(action)]);
+                    DrawIcon(*pfont, picons, std::string("&2") + ch + "&.", scale, x, y);
+                } else DrawIcon(*pfont, picons, std::string("&2") + ch + "&.", scale, x, y);
             }
         else DrawIcon(*pfont, picons, "&2?&.", sA, pr.pos.x - dxA * 0.5f, pr.pos.y - dyA);
     }

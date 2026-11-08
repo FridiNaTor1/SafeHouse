@@ -38,6 +38,8 @@ can be turned off where it changes how the game looks or plays.
 ## Controls
 
 - **Remappable keyboard, mouse and controller** bindings, in the launcher's settings and in Sly 2's own Controls page.
+- **Advanced Input Mapping (Sly 2)** is an optional mode for binding keyboard, mouse and controller inputs to
+  individual actions, including character moves, gadgets, vehicles and minigames.
 - **Mouse camera and aim** with their own sensitivities.
 - **Per-view invert options (Sly 2):** invert the camera, the binocucom and the turrets separately, for the controller
   and for the mouse.

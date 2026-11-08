@@ -4,6 +4,7 @@
 // 0x1B4728, 0x1B50B0, 0x1B6078, checked against the disassembly) and the reference's m_134648_p3.cpp /
 // m_1B4438_p3.cpp.
 #include "gang.h"
+#include "actioninput.h"
 #include "climb.h"
 #include "routetele.h"
 #include "transition.h"
@@ -604,7 +605,7 @@ void UpdateBentleyState2(BENTLEY* p)
             {
                 if (2.0f < g_clock.t - p->t1700) SetBentleyState2(p, 0);
             }
-            else if (!FPcCarm(p->palo) && FBtnTake(p, BTN_R1, 0.25f))   // (PC: R1 is Carmelita's run)
+            else if (!FPcCarm(p->palo) && sly2actions::Take(PpadctlOf(p), sly2actions::Action::BentleyDart, BTN_R1, 0.25f))   // (PC: R1 is Carmelita's run)
                 FireBentleyDart(p, 0x80000);  // 0x1357C0
         }
         const int s2 = p->n16BC;

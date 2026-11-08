@@ -4,6 +4,7 @@
 // func_001617E0.cpp, m_1DAC58_p3.cpp's 0x1DB870 / 0x1DAF38, m_1D93D8.cpp's 0x1DA950 / 0x1DA7D0 (Sly2-Reference).
 
 #include "shop.h"
+#include "actioninput.h"
 #include "region.h"
 #include "sound.h"
 #include "ai.h"
@@ -623,11 +624,13 @@ void UpdateGadgetMenu(SW* psw, LO* ploPlayer)
     p.psw = psw;
     if (p.tMsg <= g_clock.tReal) SetGmMsg(-1, -1);
     if (!p.plo || p.ichar == -1) return;
-    if (p.msg != 0 && GrfbtnTakePressed(BtnMenuBack())) { SetGadgetMenu(-1); return; }
+    // If a mapped slot shares a navigation button, equip the selected gadget.
+    const bool fAssign = sly2actions::profile.enabled && GrfbtnPressed(0x7);
+    if (!fAssign && p.msg != 0 && GrfbtnTakePressed(BtnMenuBack())) { SetGadgetMenu(-1); return; }
     if (!ploPlayer || !FCidDerivedFrom(ploPlayer->Cid(), 0x34)) { SetGadgetMenu(-1); return; }
     UpdateGadgetFlags();
     // orig 0x001DA858 with the d-pad as the stick
-    {
+    if (!fAssign) {
         float x = g_joy.xLeft, y = g_joy.yLeft;
         const uint32_t grf = GrfbtnHeld();
         if (grf & 0x1000) y = 1;
@@ -641,7 +644,7 @@ void UpdateGadgetMenu(SW* psw, LO* ploPlayer)
     // (PC menus) the mouse: an owned gadget under the cursor is selected when the cursor moves onto it or it is
     // clicked (a click on the selected one confirms, as Cross) (its cell: 80 x 80 grid units around (x + 26.5, y - 8), the grid's y in the HUD's 1.1 scale); the wheel
     // steps as the d-pad (pcinput.cpp)
-    if (float xc = 0, yc = 0; FMenuCursor(&xc, &yc))
+    if (float xc = 0, yc = 0; !fAssign && FMenuCursor(&xc, &yc))
         for (const GADGETENT& e : p.aent)
         {
             if (!(e.grf & 4) || std::fabs(xc - (e.x + 26.5f)) >= 40.0f || std::fabs(yc - (e.y - 8.0f) / 1.1f) >= 40.0f / 1.1f) continue;
@@ -654,7 +657,7 @@ void UpdateGadgetMenu(SW* psw, LO* ploPlayer)
             }
             break;
         }
-    if (GrfbtnTakePressed(0x7E8))
+    if (!fAssign && GrfbtnTakePressed(0x7E8))
     {
         const GADGETENT* r = PgeFind(p.key);
         SetGmMsg(1, r && (r->grf & 1) ? 0x31 : 0xE2);

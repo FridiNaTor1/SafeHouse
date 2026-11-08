@@ -1,9 +1,11 @@
+#include "actioninput.h"
 // See promptglyph.h. After ThiefRush-Dev's Sly1-Release prompt_glyphs.cpp (PromptGlyphFor, PromptLabel); the
 // keyboard keycaps are new (ThiefRush keeps the PlayStation glyphs for keyboard players).
 
 #include "promptglyph.h"
 
 #include "pcinput.h"
+#include "shop.h"
 
 #include "../platform/button_prompts.h"
 #include "../platform/system_settings.h"
@@ -32,10 +34,52 @@ int ActionFromGlyph(char ch)
     return -1;
 }
 
+int s_textId = -1;
+char s_chKeyOverride = '\0';
+int s_keyOverride = 0, s_padOverride = -2;
+std::optional<Family> s_familyOverride;
+constexpr int s_idTurretBriefing = 1594;
+constexpr int s_idTankBriefing = 2268;
+
+int PromptBinding(char ch, int button, bool controller)
+{
+    if (!sly2actions::profile.enabled)
+        return controller ? g_pcinput.gamepad[size_t(button)] : g_pcinput.keyboard[size_t(button)];
+
+    // USA string IDs for prompts that describe a specific action even outside its live context.
+    using sly2actions::Action;
+    struct Cue { int textId; char glyph; Action action; };
+    static constexpr Cue cues[] = {
+        {211, 'R', Action::Paraglider}, {3237, 'R', Action::Paraglider},
+        {647, 'R', Action::Photo},
+        {754, 'O', Action::SlyPickpocket}, {1430, 'O', Action::SlyPickpocket},
+        {753, 'R', Action::BentleyDart}, {807, 'R', Action::BentleyDart}, {1465, 'R', Action::BentleyDart},
+        {340, 'S', Action::CarryThrow}, {344, 'S', Action::CarryThrow}, {804, 'S', Action::CarryThrow},
+        {1398, 'S', Action::CarryThrow}, {1399, 'S', Action::CarryThrow},
+        {3220, 'X', Action::VehicleDrive}, {3220, 'S', Action::VehiclePrimary},
+        {s_idTurretBriefing, 'R', Action::TurretFire},
+        {s_idTankBriefing, 'R', Action::VehiclePrimary},
+        {900, 'X', Action::RcBomb}, {1091, 'X', Action::RcBomb}, {1091, 'S', Action::RcFire},
+        {1676, 'X', Action::RcBomb}, {2563, 'X', Action::RcBomb}, {2563, 'S', Action::RcFire},
+        {3248, 'X', Action::RcBomb}, {3249, 'X', Action::RcBomb}, {3249, 'S', Action::RcFire},
+    };
+    Action action = Action::Count;
+    for (const Cue& cue : cues)
+        if (cue.textId == s_textId && cue.glyph == ch) { action = cue.action; break; }
+    const Action slot = cane::sly2input::legacyButtonAction(button);
+    if (FGadgetMenuShown() && cane::sly2input::isGadgetSlot(slot)) action = slot;
+    if (action == Action::Count) {
+        if (FMouseMenuUp()) return controller ? g_pcinput.gamepad[size_t(button)] : g_pcinput.keyboard[size_t(button)];
+        action = sly2actions::ForPromptButton(button);
+    }
+    return sly2actions::Binding(action, button, controller);
+}
+
 // The positional button an icon glyph means now (through the gamepad bindings), Button::Count when it is not a
 // button glyph or the action is unbound. (The sticks and the d-pad are not remappable.)
 Button ButtonForGlyph(char ch)
 {
+    if (ch == s_chKeyOverride && s_chKeyOverride && s_padOverride != -2) return cane::input::fromGlfwBinding(s_padOverride);
     switch (ch)
     {
     case '(': return Button::LS;
@@ -45,32 +89,41 @@ Button ButtonForGlyph(char ch)
     }
     const int a = ActionFromGlyph(ch);
     if (a < 0) return Button::Count;
-    return cane::input::fromGlfwBinding(g_pcinput.gamepad[size_t(a)]);
+    return cane::input::fromGlfwBinding(PromptBinding(ch, a, true));
 }
 
-// PROMPTKEYGLYPH's override: this icon glyph is drawn as this key while the keyboard is in use
-char s_chKeyOverride = '\0';
-int s_keyOverride = 0;
+
 }  // namespace
 
-PROMPTKEYGLYPH::PROMPTKEYGLYPH(char ch, int glfwKey) : chPrev(s_chKeyOverride), keyPrev(s_keyOverride)
+PROMPTTEXTGLYPHS::PROMPTTEXTGLYPHS(int textId) : previous(s_textId) { s_textId = textId; }
+PROMPTTEXTGLYPHS::~PROMPTTEXTGLYPHS() { s_textId = previous; }
+
+PROMPTKEYGLYPH::PROMPTKEYGLYPH(char ch, int glfwKey, int controllerBinding, std::optional<Family> family)
+    : chPrev(s_chKeyOverride), keyPrev(s_keyOverride), padPrev(s_padOverride), familyPrev(s_familyOverride)
 {
     s_chKeyOverride = ch;
     s_keyOverride = glfwKey;
+    s_padOverride = controllerBinding;
+    s_familyOverride = family;
 }
 
 PROMPTKEYGLYPH::~PROMPTKEYGLYPH()
 {
     s_chKeyOverride = chPrev;
     s_keyOverride = keyPrev;
+    s_padOverride = padPrev;
+    s_familyOverride = familyPrev;
 }
 
-std::string StrPromptButtonWords(const std::string& text)
+std::string StrPromptButtonWords(const std::string& text, int textId)
 {
     if (g_pcinput.fAlwaysOriginalPs) return text;
-    if (text.find("START") == std::string::npos && text.find("SELECT") == std::string::npos) return text;
-    struct WORD { const char* sz; size_t cch; const char* szIcon; };
-    static const WORD s_aword[] = {{"START", 5, "&2!&."}, {"SELECT", 6, "&2_&."}};
+    const bool fireBriefing = sly2actions::profile.enabled &&
+        (textId == s_idTurretBriefing || textId == s_idTankBriefing);
+    if (text.find("START") == std::string::npos && text.find("SELECT") == std::string::npos &&
+        !(fireBriefing && text.find("R1") != std::string::npos)) return text;
+    struct WORD { const char* sz; size_t cch; const char* szIcon; bool briefingOnly = false; };
+    static constexpr WORD s_aword[] = {{"START", 5, "&2!&."}, {"SELECT", 6, "&2_&."}, {"R1", 2, "&2R&.", true}};
     auto fLetter = [](unsigned char ch) { return std::isalnum(ch) || ch >= 0x80; };
     std::string out;
     out.reserve(text.size());
@@ -89,7 +142,7 @@ std::string StrPromptButtonWords(const std::string& text)
             for (const WORD& w : s_aword)
                 // (after the word: not another capital or digit; a lower-case letter is a compound's next part, as the
                 // Swedish "STARTknappen")
-                if (text.compare(i, w.cch, w.sz) == 0 &&
+                if ((!w.briefingOnly || fireBriefing) && text.compare(i, w.cch, w.sz) == 0 &&
                     (i + w.cch == text.size() || !(std::isupper(uint8_t(text[i + w.cch])) || std::isdigit(uint8_t(text[i + w.cch])))))
                 {
                     out += w.szIcon;
@@ -109,58 +162,100 @@ Family PromptFamily()
 
 bool PromptKeyboardActive() { return cane::input::tracker().family() == Family::Keyboard; }
 
-PROMPTGLYPH PromptGlyphFor(char ch)
+static PROMPTGLYPH PromptGlyphForButton(Button button, Family family)
 {
     PROMPTGLYPH glyph;
-    glyph.ch = ch;
-    if (g_pcinput.fAlwaysOriginalPs) return glyph;
-    const Family family = PromptFamily();
     const auto& atlas = cane::input::promptAtlas();
+    const auto uv = atlas.uv(family, button);
+    const auto texture = atlas.texture(family);
+    if (family != Family::PlayStation && texture && uv.valid) {
+        glyph.kind = PROMPTGLYPH::Icon;
+        glyph.tex = texture;
+        glyph.u0 = uv.u0; glyph.v0 = uv.v0; glyph.u1 = uv.u1; glyph.v1 = uv.v1;
+    } else {
+        glyph.ch = cane::input::psGlyphFor(button);
+        if (glyph.ch) glyph.kind = PROMPTGLYPH::Glyph;
+    }
+    return glyph;
+}
 
-    // the keyboard: the bound key's keycap (keys the atlas has; else the game's icon)
-    if (family == Family::Keyboard)
-    {
-        const int a = ActionFromGlyph(ch);
-        if (a < 0) return glyph;
-        int key = ch == s_chKeyOverride && s_chKeyOverride ? s_keyOverride : g_pcinput.keyboard[size_t(a)];
-        if (a == PCA_Start && key == cane::settings::kKeyUnknown) key = GLFW_KEY_ESCAPE;
-        const cane::input::IconUV uv = atlas.keyUV(cane::input::promptKeyForBinding(key));
-        if (!uv.valid || !atlas.keyboardTexture()) return glyph;
+PROMPTGLYPH PromptGlyphForBinding(int binding, Family family)
+{
+    if (family != Family::Keyboard) return PromptGlyphForButton(cane::input::fromGlfwBinding(binding), family);
+    PROMPTGLYPH glyph;
+    const auto& atlas = cane::input::promptAtlas();
+    const auto uv = atlas.keyUV(cane::input::promptKeyForBinding(binding));
+    if (atlas.keyboardTexture() && uv.valid) {
         glyph.kind = PROMPTGLYPH::Icon;
         glyph.tex = atlas.keyboardTexture();
         glyph.u0 = uv.u0; glyph.v0 = uv.v0; glyph.u1 = uv.u1; glyph.v1 = uv.v1;
-        return glyph;
     }
-
-    const Button button = ButtonForGlyph(ch);
-    if (button == Button::Count) return glyph;
-    // the game's icon of the button actually bound (remapped controls shown honestly)
-    const char chBound = cane::input::psGlyphFor(button);
-    if (chBound != '\0')
-    {
-        glyph.kind = chBound == ch ? PROMPTGLYPH::Original : PROMPTGLYPH::Glyph;
-        glyph.ch = chBound;
-    }
-    if (family == Family::PlayStation) return glyph;
-    const unsigned tex = atlas.texture(family);
-    const cane::input::IconUV uv = atlas.uv(family, button);
-    if (!tex || !uv.valid) return glyph;
-    glyph.kind = PROMPTGLYPH::Icon;
-    glyph.tex = tex;
-    glyph.u0 = uv.u0; glyph.v0 = uv.v0; glyph.u1 = uv.u1; glyph.v1 = uv.v1;
     return glyph;
+}
+
+PROMPTGLYPH PromptGlyphFor(char ch)
+{
+    PROMPTGLYPH original;
+    original.ch = ch;
+    const bool override = ch == s_chKeyOverride && s_chKeyOverride;
+    if (override && s_familyOverride)
+        return PromptGlyphForBinding(*s_familyOverride == Family::Keyboard ? s_keyOverride : s_padOverride, *s_familyOverride);
+    if (g_pcinput.fAlwaysOriginalPs) return original;
+
+    const Family family = PromptFamily();
+    PROMPTGLYPH glyph;
+    if (family == Family::Keyboard) {
+        const int action = ActionFromGlyph(ch);
+        if (action < 0) return original;
+        int key = override ? s_keyOverride : PromptBinding(ch, action, false);
+        if (action == PCA_Start && key == cane::settings::kKeyUnknown) key = GLFW_KEY_ESCAPE;
+        glyph = PromptGlyphForBinding(key, family);
+    } else {
+        glyph = PromptGlyphForButton(ButtonForGlyph(ch), family);
+    }
+    return glyph.kind == PROMPTGLYPH::Original ? original : glyph;
 }
 
 std::string PromptLabelFor(char ch)
 {
     const int a = ActionFromGlyph(ch);
     if (a < 0) return "";
-    if (PromptKeyboardActive() && !g_pcinput.fAlwaysOriginalPs) return PchzKeyName(g_pcinput.keyboard[size_t(a)]);
+    if (PromptFamily() == Family::Keyboard && !g_pcinput.fAlwaysOriginalPs) {
+        int key = ch == s_chKeyOverride && s_chKeyOverride ? s_keyOverride : PromptBinding(ch, a, false);
+        if (a == PCA_Start && key == cane::settings::kKeyUnknown) key = GLFW_KEY_ESCAPE;
+        return PchzKeyName(key);
+    }
     if (g_pcinput.fAlwaysOriginalPs)
     {
         static const char* const s_apsz[PCA_Max] = {"Up", "Down", "Left", "Right", "Square", "Circle", "Cross", "Triangle",
                                                     "Start", "Select", "L1", "R1", "L2", "R2", "L3", "R3"};
         return s_apsz[a];
     }
-    return cane::input::buttonLabel(cane::input::fromGlfwBinding(g_pcinput.gamepad[size_t(a)]), PromptFamily());
+    return cane::input::buttonLabel(ButtonForGlyph(ch), PromptFamily());
+}
+
+std::string StrPromptFallbackText(const std::string& text)
+{
+    if (!sly2actions::profile.enabled || g_pcinput.fAlwaysOriginalPs || text.find('&') == std::string::npos)
+        return text;
+    std::string result;
+    result.reserve(text.size());
+    char iconFont = 0;
+    for (size_t i = 0; i < text.size(); ++i) {
+        const char ch = text[i];
+        if (ch == '&' && i + 1 < text.size()) {
+            const char code = text[++i];
+            if (code != '&') iconFont = code == '.' ? 0 : code;
+            result += '&';
+            result += code;
+        } else if (iconFont && ActionFromGlyph(ch) >= 0 && PromptGlyphFor(ch).kind == PROMPTGLYPH::Original) {
+            result += "&.[";
+            result += PromptLabelFor(ch);
+            result += "]&";
+            result += iconFont;
+        } else {
+            result += ch;
+        }
+    }
+    return result;
 }

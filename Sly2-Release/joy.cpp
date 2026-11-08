@@ -2,6 +2,7 @@
 #include "rumble.h"
 
 #include "pcinput.h"
+#include "actioninput.h"
 #include "skipcut.h"
 #include "debugmenu.h"
 
@@ -151,6 +152,7 @@ void UpdateJoy(JOY* pjoy, GLFWwindow* pwindow, int frame, const std::vector<JOYP
         g_grfJoyWindow = grfPc;
         pjoy->fConnected = fPad;
     }
+    sly2actions::ScriptedFrame(fScripted);
     grf &= uint16_t(~GrfSkipCutMask());   // (skipcut.h: the Circle that skipped a cutscene, until released)
     // (debugmenu.h, Debug keys on only: the debug menu's keys, and the whole pad while it is open, are not the game's)
     if (const uint16_t grfGame = GrfDebugMenuFilter(grf, &xl, &yl, &xr, &yr, abAxis); grfGame != grf)

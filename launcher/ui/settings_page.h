@@ -23,6 +23,7 @@
 #include "../native_dialog.h"
 #include "brand.h"
 #include "controller_family.h"
+#include "sly2_action_bindings.h"
 #include "job.h"
 #include "prompt_bar.h"
 #include "shell.h"
@@ -76,6 +77,7 @@ inline std::string keyName(int key) {
 }
 
 class SettingsPage {
+    static constexpr int kAdvancedCapture = 1000;
 public:
     enum Category { Display, Graphics, Audio, Controls, Interface, Launcher, Games, Advanced, CategoryCount };
     static constexpr std::array<const char*, CategoryCount> names{ "Display", "Graphics", "Audio", "Controls",
@@ -251,9 +253,14 @@ private:
     void load() {
         m_result = settings::load(file(), m_settings, &m_version);
         if (!settings::loaded(m_result)) m_settings = gameDefaults();
+        if (m_game == GameId::Sly2) m_actions = sly2input::load(m_backend.userDir(m_game));
         std::error_code ec;
         m_mtime = fs::last_write_time(file(), ec);
         if (ec) m_mtime = {};
+        if (m_game == GameId::Sly2) {
+            m_actionMtime = fs::last_write_time(sly2input::profilePath(m_backend.userDir(m_game)), ec);
+            if (ec) m_actionMtime = {};
+        }
         m_nextPoll = ImGui::GetCurrentContext() ? ImGui::GetTime() + 0.5 : 0.0;
         m_debug = readDebugMode();
     }
@@ -263,6 +270,18 @@ private:
         std::error_code ec;
         const auto now = fs::last_write_time(file(), ec);
         if ((ec ? fs::file_time_type{} : now) != m_mtime) load();
+        if (m_game == GameId::Sly2) {
+            const auto actionsNow = fs::last_write_time(sly2input::profilePath(m_backend.userDir(m_game)), ec);
+            if ((ec ? fs::file_time_type{} : actionsNow) != m_actionMtime) load();
+        }
+    }
+    void commitActions() {
+        if (!writable() || m_actions.readOnly) return;
+        m_saveOk = sly2input::save(m_backend.userDir(m_game), m_actions);
+        m_savedAt = ImGui::GetTime();
+        std::error_code ec;
+        m_actionMtime = fs::last_write_time(sly2input::profilePath(m_backend.userDir(m_game)), ec);
+        if (ec) m_actionMtime = {};
     }
     bool writable() const { return m_result != settings::LoadResult::Newer && !m_fixture; }
     void commit() {
@@ -342,7 +361,7 @@ private:
         SettingsPage* page = active();
         // Presses go to the capture and never reach the UI. Releases still do,
         // so the Enter that started the capture is not left held down.
-        if (page && page->m_captureAction >= 0 && !page->m_captureController && action != GLFW_RELEASE) {
+        if (page && page->m_captureAction >= 0 && (!page->m_captureController || (page->m_captureAction >= kAdvancedCapture && (key == GLFW_KEY_DELETE || key == GLFW_KEY_ESCAPE))) && action != GLFW_RELEASE) {
             if (action == GLFW_PRESS) page->keyCaptured(key);
             return;
         }
@@ -351,6 +370,13 @@ private:
     void keyCaptured(int key) {
         if (key == GLFW_KEY_ESCAPE) {
             cancelCapture();
+            return;
+        }
+        if (m_captureAction >= kAdvancedCapture) {
+            if (key != GLFW_KEY_DELETE && !settings::validKeyboardBinding(key)) { m_captureNote = "That key cannot be bound."; return; }
+            (m_captureController ? m_actions.gamepad : m_actions.keyboard)[size_t(m_captureAction - kAdvancedCapture)] = key == GLFW_KEY_DELETE ? -1 : key;
+            m_captureAction = -1;
+            commitActions();
             return;
         }
         const bool camera = m_captureAction >= settings::kBindingCount;
@@ -364,6 +390,7 @@ private:
         commit();
     }
     const char* captureName() const {
+        if (m_captureAction >= kAdvancedCapture) return sly2input::kActions[size_t(m_captureAction - kAdvancedCapture)].label;
         return m_captureAction >= settings::kBindingCount ? cameraNames[static_cast<size_t>(m_captureAction - settings::kBindingCount)]
                                                           : actionNames[static_cast<size_t>(m_captureAction)];
     }
@@ -371,14 +398,27 @@ private:
     // mouse buttons and the wheel (the left button selects rows here; bind it
     // in-game). Camera keys stay on the keyboard.
     void pollMouseCapture() {
-        if (!capturing() || m_captureController || m_captureAction >= settings::kBindingCount) return;
+        if (!capturing() || m_captureController || (m_captureAction >= settings::kBindingCount && m_captureAction < kAdvancedCapture)) return;
         const auto& io = ImGui::GetIO();
+        if (m_captureAction >= kAdvancedCapture && !m_captureArmed) {
+            bool held = false;
+            for (int b = 0; b < 5; ++b) held |= ImGui::IsMouseDown(b);
+            if (!held) m_captureArmed = true;
+            return;
+        }
         int binding = -1;
-        for (int button = 1; button < 5 && binding < 0; ++button)
+        for (int button = m_captureAction >= kAdvancedCapture ? 0 : 1; button < 5 && binding < 0; ++button)
             if (ImGui::IsMouseClicked(button)) binding = settings::kMouseBindingBase + button;
         if (binding < 0 && io.MouseWheel > 0) binding = settings::kMouseWheelUp;
         if (binding < 0 && io.MouseWheel < 0) binding = settings::kMouseWheelDown;
         if (binding < 0) return;
+        if (m_captureAction >= kAdvancedCapture) {
+            m_actions.keyboard[size_t(m_captureAction - kAdvancedCapture)] = binding;
+            m_captureAction = -1;
+            m_captureCooldown = ImGui::GetTime() + 0.3;
+            commitActions();
+            return;
+        }
         m_settings.keyboardBindings[m_captureAction] = binding;
         m_captureAction = -1;
         m_captureCooldown = ImGui::GetTime() + 0.3;
@@ -417,10 +457,12 @@ private:
             return;
         }
         if (pressed < 0) return;
-        m_settings.gamepadBindings[m_captureAction] = pressed;
+        const bool advanced = m_captureAction >= kAdvancedCapture;
+        if (advanced) m_actions.gamepad[size_t(m_captureAction - kAdvancedCapture)] = pressed;
+        else m_settings.gamepadBindings[m_captureAction] = pressed;
         m_captureAction = -1;
         m_captureCooldown = ImGui::GetTime() + 0.3;
-        commit();
+        if (advanced) commitActions(); else commit();
     }
 
     // ------------------------------------------------------------ chrome
@@ -569,6 +611,12 @@ private:
             break;
         case Audio: settings::defaultAudio(s); break;
         case Controls:
+            if (m_game == GameId::Sly2 && m_actions.enabled) {
+                m_actions = sly2input::defaults();
+                m_actions.enabled = true;
+                commitActions();
+                return;
+            }
             std::copy(std::begin(d.keyboardBindings), std::end(d.keyboardBindings), s.keyboardBindings);
             std::copy(std::begin(d.gamepadBindings), std::end(d.gamepadBindings), s.gamepadBindings);
             s.disableControllerInputWhenUnfocused = d.disableControllerInputWhenUnfocused;
@@ -748,20 +796,24 @@ private:
     // One binding row: the action (with its PlayStation glyph) and its key or button.
     void bindingRow(int action, bool controller, input::Family family) {
         ImGui::PushID(action + (controller ? 100 : 0));
-        const Row r = rowBehavior(actionNames[static_cast<size_t>(action)], px(52), false, 0.45f);
+        const bool advanced = action >= kAdvancedCapture;
+        const int index = advanced ? action - kAdvancedCapture : action;
+        const char* label = advanced ? sly2input::kActions[size_t(index)].label : actionNames[size_t(index)];
+        const Row r = rowBehavior(label, px(52), false, 0.45f);
         if (r.visible) {
             const bool capturingThis = m_captureAction == action && m_captureController == controller;
             if (r.activated && !r.disabled && !capturingThis && ImGui::GetTime() > m_captureCooldown) startCapture(action, controller);
             auto* dl = ImGui::GetWindowDrawList();
             const float cy = r.bb.GetCenter().y;
-            drawPadButton(dl, { r.bb.Min.x + px(30), cy }, px(28), input::Family::PlayStation, actionButtons[static_cast<size_t>(action)]);
-            dl->AddText(fonts().body, fonts().body->FontSize, { r.bb.Min.x + px(56), std::round(cy - fonts().body->FontSize * 0.5f) },
-                        ink(color::text), actionNames[static_cast<size_t>(action)]);
-            recordLayout(actionNames[static_cast<size_t>(action)], r.bb);
-            const int* bindings = controller ? m_settings.gamepadBindings : m_settings.keyboardBindings;
-            const int value = bindings[action];
+            if (!advanced) drawPadButton(dl, { r.bb.Min.x + px(30), cy }, px(28), input::Family::PlayStation, actionButtons[size_t(index)]);
+            dl->AddText(fonts().body, fonts().body->FontSize, { r.bb.Min.x + px(advanced ? 16 : 56), std::round(cy - fonts().body->FontSize * 0.5f) },
+                        ink(color::text), label);
+            recordLayout(label, r.bb);
+            const int* bindings = advanced ? (controller ? m_actions.gamepad.data() : m_actions.keyboard.data())
+                                          : controller ? m_settings.gamepadBindings : m_settings.keyboardBindings;
+            const int value = bindings[index];
             int duplicate = -1;
-            for (int other = 0; other < settings::kBindingCount; ++other)
+            for (int other = 0; !advanced && other < settings::kBindingCount; ++other)
                 if (other != action && value != settings::kKeyUnknown && bindings[other] == value) duplicate = other;
             const float right = r.control.Max.x;
             if (capturingThis) {
@@ -847,6 +899,39 @@ private:
         ImGui::PopID();
     }
     void controlsRows() {
+        const bool advanced = m_game == GameId::Sly2 && m_actions.enabled;
+        const auto family = input::promptFamily(promptStyle(), 0);
+        if (m_game == GameId::Sly2) {
+            ImGui::BeginDisabled(m_actions.readOnly);
+            bool enabled = m_actions.enabled;
+            if (toggleRow("Advanced Input Mapping", &enabled)) {
+                m_actions.enabled = enabled;
+                cancelCapture();
+                commitActions();
+            }
+            describe("Bind gameplay actions independently. Off restores your original button mapping without changing it.");
+            ImGui::EndDisabled();
+            if (m_actions.readOnly) caption("The advanced controls file cannot be edited by this version.");
+        }
+        if (advanced) {
+            section("Action bindings");
+            static const std::vector<std::string> devices{"Keyboard and mouse", "Controller"};
+            stepperRow("Input device", &m_actionDevice, devices);
+            std::vector<std::string> groups;
+            for (size_t i = 0; i < sly2input::kActionCount; ++i) {
+                if (!m_debug && sly2input::isNoclipAction(sly2input::Action(i))) continue;
+                const auto& action = sly2input::kActions[i];
+                if (std::find(groups.begin(), groups.end(), action.group) == groups.end()) groups.emplace_back(action.group);
+            }
+            m_actionGroup = std::clamp(m_actionGroup, 0, int(groups.size()) - 1);
+            stepperRow("Action group", &m_actionGroup, groups);
+            ImGui::BeginDisabled(m_actions.readOnly);
+            for (size_t i = 0; i < sly2input::kActionCount; ++i)
+                if (groups[size_t(m_actionGroup)] == sly2input::kActions[i].group)
+                    bindingRow(kAdvancedCapture + int(i), m_actionDevice == 1, family);
+            ImGui::EndDisabled();
+            caption("Bindings may be shared. Actions apply only in their gameplay context. Escape cancels capture. Delete clears a binding.");
+        }
         toggle("Disable controller input when unfocused", m_settings.disableControllerInputWhenUnfocused,
                "Ignore the controller while another window has focus.");
         // (settings v15 controllerVibration: platform/pad_rumble.h; Sly 1 and Sly 2 drive the motors)
@@ -869,7 +954,6 @@ private:
                 m_settings.autoCameraRotation = cameraRotation, commit();
             describe("Rotate the follow camera as you move.");
         }
-        const auto family = input::promptFamily(promptStyle(), 0);
         section("Controller");
         // (settings v17: Sly 2's controller camera inversion; off = the original's orbit camera)
         if (m_game == GameId::Sly2) {
@@ -878,9 +962,9 @@ private:
             toggle("Invert camera vertical", m_settings.padInvertCameraY,
                    "Off: as on the PS2, pushing the right stick up raises the camera to look down. On: up looks up.");
         }
-        for (int i = 0; i < settings::kBindingCount; ++i) bindingRow(i, true, family);
+        if (!advanced) for (int i = 0; i < settings::kBindingCount; ++i) bindingRow(i, true, family);
         section("Keyboard");
-        for (int i = 0; i < settings::kBindingCount; ++i) bindingRow(i, false, family);
+        if (!advanced) for (int i = 0; i < settings::kBindingCount; ++i) bindingRow(i, false, family);
         for (int i = 0; i < settings::kCameraKeyCount; ++i) cameraKeyRow(i);
         ImGui::Indent(px(16));
         caption("Escape also pauses and goes back, and Enter confirms in menus.");
@@ -903,7 +987,10 @@ private:
             toggle("Invert aim vertical", m_settings.mouseInvertY, "Moving the mouse up aims down in the binocucom.");
         }
         toggle("Raw input", m_settings.mouseRawInput, "Uses unaccelerated mouse motion where the system supports it.");
-        toggle("Wheel zooms binocucom", m_settings.mouseWheelZoom, "When no action is bound to the wheel.");
+        if (m_game == GameId::Sly2)
+            toggle("Mouse wheel zoom", m_settings.mouseWheelZoom, "Zoom the Binocucom and turrets with unassigned wheel inputs.");
+        else
+            toggle("Wheel zooms binocucom", m_settings.mouseWheelZoom, "When no action is bound to the wheel.");
         toggle("Mouse in menus", m_settings.mouseMenus, "Point at menu items, left click to choose and right click to go back.");
         if (m_game == GameId::Sly2)
             toggle("Mouse aim in hacking", m_settings.hackMouseAim,
@@ -1215,6 +1302,9 @@ private:
     Job& m_job;
     GLFWwindow* m_window;
     settings::SystemSettings m_settings = settings::defaults();
+    sly2input::Profile m_actions = sly2input::defaults();
+    fs::file_time_type m_actionMtime{};
+    int m_actionDevice = 0, m_actionGroup = 0;
     settings::LoadResult m_result = settings::LoadResult::Missing;
     uint32_t m_version = 0;
     fs::file_time_type m_mtime{};

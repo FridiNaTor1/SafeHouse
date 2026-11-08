@@ -2,6 +2,7 @@
 // Development commands for now; the game loop comes with milestone M2/M3.
 
 #include "rumble.h"
+#include "actioninput.h"
 #include "bis.h"
 #include "display.h"
 #include "brx.h"
@@ -323,6 +324,7 @@ int main(int argc, char** argv)
         else if (!std::strcmp(argv[i], "-v")) fVerbose = true;
         else if (!std::strcmp(argv[i], "--blends") || !std::strcmp(argv[i], "--ai") || !std::strcmp(argv[i], "--ai-carry")) {}  // (anim-ref)
         else if (!std::strcmp(argv[i], "--splice-selftest")) command = "splice-selftest";
+        else if (!std::strcmp(argv[i], "--action-input-selftest")) command = "action-input-selftest";
         else if (!std::strcmp(argv[i], "--rumble-selftest")) command = "rumble-selftest";
         else if (!std::strcmp(argv[i], "--parse-splice") && i + 1 < argc) { command = "parse-splice"; arg = argv[++i]; }
         else if (!std::strcmp(argv[i], "--eval-splice") && i + 1 < argc) { command = "eval-splice"; arg = argv[++i]; }
@@ -429,6 +431,7 @@ int main(int argc, char** argv)
     cane::configureRuntime(rest);
     if (command && !std::strcmp(command, "test-load")) return TestLoad(arg, arg2, fVerbose);
     if (command && !std::strcmp(command, "splice-selftest")) return SpliceSelfTestCommand();
+    if (command && !std::strcmp(command, "action-input-selftest")) return sly2actions::SelfTest();
     if (command && !std::strcmp(command, "rumble-selftest")) return RumbleSelfTestCommand();
     std::string error;
     // the mods folder: --mods DIR, SLY2_MODS, else <user dir>/Mods; empty: none
@@ -631,7 +634,7 @@ int main(int argc, char** argv)
     std::fprintf(stderr,
                  "usage: Sly2-Release [--disc disc.iso | --data-dir dir] --list-keys | --dump-world VA|SECTOR:CB [--out file]\n"
                  "       | --load-world W|boot|frontend [--filter N] [--load-trace map.txt] [--dump-objects [file]]\n"
-                 "       | --parse-splice W | --eval-splice W [--maps dir] [-v] | --splice-selftest | --rumble-selftest\n"
+                 "       | --parse-splice W | --eval-splice W [--maps dir] [-v] | --splice-selftest | --rumble-selftest | --action-input-selftest\n"
                  "       | --list-sounds W | --play-music W [--song ID] [--stem 0|1|2] | --play-sfx W [--song SOUNDID] | --play-dialog W [--song ID]\n"
                  "       | --list-movies | --play-movie ID [--out frames-dir] [--seconds T]   (W: boot, frontend, a world record 2..43, SECTOR:CB)\n"
                  "       | --convert DIR [--no-export-textures] | --export-textures [--out DIR] | --dump-textures DIR W\n");
