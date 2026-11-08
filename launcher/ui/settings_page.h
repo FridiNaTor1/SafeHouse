@@ -394,20 +394,19 @@ private:
         return m_captureAction >= settings::kBindingCount ? cameraNames[static_cast<size_t>(m_captureAction - settings::kBindingCount)]
                                                           : actionNames[static_cast<size_t>(m_captureAction)];
     }
-    // Keyboard capture of an action also takes the right, middle and side
-    // mouse buttons and the wheel (the left button selects rows here; bind it
-    // in-game). Camera keys stay on the keyboard.
+    // Action capture accepts mouse buttons and the wheel after the click that
+    // selected the row has been released. Camera bindings use keyboard keys.
     void pollMouseCapture() {
         if (!capturing() || m_captureController || (m_captureAction >= settings::kBindingCount && m_captureAction < kAdvancedCapture)) return;
         const auto& io = ImGui::GetIO();
-        if (m_captureAction >= kAdvancedCapture && !m_captureArmed) {
+        if (!m_captureArmed) {
             bool held = false;
             for (int b = 0; b < 5; ++b) held |= ImGui::IsMouseDown(b);
             if (!held) m_captureArmed = true;
             return;
         }
         int binding = -1;
-        for (int button = m_captureAction >= kAdvancedCapture ? 0 : 1; button < 5 && binding < 0; ++button)
+        for (int button = 0; button < 5 && binding < 0; ++button)
             if (ImGui::IsMouseClicked(button)) binding = settings::kMouseBindingBase + button;
         if (binding < 0 && io.MouseWheel > 0) binding = settings::kMouseWheelUp;
         if (binding < 0 && io.MouseWheel < 0) binding = settings::kMouseWheelDown;
@@ -818,7 +817,7 @@ private:
             const float right = r.control.Max.x;
             if (capturingThis) {
                 const float pulse = 0.55f + 0.45f * std::sin(static_cast<float>(ImGui::GetTime()) * 6.0f);
-                const char* prompt = controller ? "Press a button…" : "Press a key…";
+                const char* prompt = controller ? "Press a button…" : "Press a key or mouse button…";
                 const auto t = measure(fonts().tab, prompt);
                 dl->AddRect({ r.control.Min.x, r.bb.Min.y + px(8) }, { right, r.bb.Max.y - px(8) }, ink(color::cta, pulse), px(6), 0, px(2));
                 dl->AddText(fonts().tab, fonts().tab->FontSize, { std::round(r.control.GetCenter().x - t.x * 0.5f), std::round(cy - t.y * 0.5f) },
@@ -826,8 +825,8 @@ private:
                 m_help = m_captureNote.empty() ? (controller ? std::string("Press the controller button for this action. Any button can be "
                                                                            "bound, so wait 6 seconds or press Escape to cancel.")
                                                              : family == input::Family::Keyboard
-                                                                   ? std::string("Press the key for this action. Escape cancels.")
-                                                                   : "Press the key for this action on a keyboard. Escape or " +
+                                                                   ? std::string("Press a key, mouse button, or scroll the wheel. Escape cancels.")
+                                                                   : "Press a key, mouse button, or scroll the wheel. Escape or " +
                                                                          std::string(backButtonLabel()) + " cancels.")
                                                : m_captureNote;
             } else if (controller) {
