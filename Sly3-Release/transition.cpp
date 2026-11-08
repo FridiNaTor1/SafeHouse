@@ -1,4 +1,8 @@
 #include "transition.h"
+#include "game/sly3.h"
+#include "pcloader.h"
+#include "rumble.h"
+#include "region.h"
 #include "replay.h"
 #include "crv.h"
 #include "lox.h"
@@ -11,6 +15,9 @@ void ResetTriggers();
 #include "physworld.h"
 
 #include "screenrt.h"
+#include "screen3.h"
+#include "frontend.h"
+int NRandInRange(int nLow, int nHigh);  // (util.h: 0x11D3F8)
 #include "hudwidget.h"
 
 #include "actor.h"
@@ -31,6 +38,10 @@ void ResetTriggers();
 #include <functional>
 #include "alo.h"
 #include "task.h"
+#include "game/task3.h"
+#include "game/scpt3.h"
+#include "game/scptrun3.h"
+#include "game/scptgame3.h"
 #include "objmethod.h"
 #include "cm.h"
 #include "clock.h"
@@ -42,6 +53,7 @@ void ResetTriggers();
 #include "sw.h"
 #include "update.h"
 #include "savedata.h"
+#include "worldaccess.h"
 
 #include <cstdio>
 #include <string>
@@ -70,6 +82,42 @@ bool FSameChk(const uint8_t* a, const uint8_t* b)
     return (a2 ^ a14) == (b2 ^ b14);
 }
 
+}  // namespace
+
+// (Sly 3 flow log, tools/progression3.py: the world index of a key record, -1 when it is no world's. A key's words are
+// masked (each copy differently: the executable's and the worlds' exits differ in bytes), so keys compare by their
+// file id, words 2 ^ 14, as FSameChk does)
+int IworldOfChk(const uint8_t* pchk)
+{
+    if (!pchk) return -1;
+    const FK fk = FkFromRecord(pchk);
+    if (!fk.cb) return -1;
+    for (int i = 0; i < sly3::CWORLD; ++i)
+        if (const FK fkw = g_disc.FkWorld(i); fkw.cb && fkw.id == fk.id) return i;
+    return -1;
+}
+
+// (debug, the flow map: a key record named: "world N name" or "movie ID" or "none")
+std::string StrKeyRecord(const uint8_t* pchk)
+{
+    const int iworld = IworldOfChk(pchk);
+    if (iworld >= 0) return "world " + std::to_string(iworld) + " " + g_disc.SzWorldElf(iworld);
+    const FK fk = FkFromRecord(pchk);
+    if (!(fk.cb & ~sly3::CB_MOVIE_FLAGS)) return "none";
+    // (a movie: the executable's movie table, or a key whose size carries the movie flag bits (the episodes' chalk
+    // talks, keyed only by the exits); its sector and size for `--play-movie @SECTOR:CB`)
+    bool fMovie = (fk.cb & sly3::CB_MOVIE_FLAGS) != 0;
+    for (const auto& [va, fkm] : g_disc.ElfKeys())
+        fMovie = fMovie || (va >= sly3::VA_MOVIE_KEYS && fkm.id == fk.id);
+    char sz[96];
+    std::snprintf(sz, sizeof(sz), "%s %u (@0x%X:0x%X)", fMovie ? "movie" : "file", fk.id, fk.isector,
+                  fk.cb & ~sly3::CB_MOVIE_FLAGS);
+    return sz;
+}
+
+namespace
+{
+
 // orig 0x20DF80 RestoreChkmgrFromCheckpoint: the request becomes pending (the next 0x20E890 loads it)
 void SetPending(const TRANSREQ& req)
 {
@@ -77,42 +125,49 @@ void SetPending(const TRANSREQ& req)
     g_transition.req = req;
 }
 
-// vt slot 49 of a sprite set: play animation id (its frames: screenrt.h)
-void PlaySpriteAnim(LO* plo, int32_t id)
+// orig3: 0x00260758 (with 0x37B, the held part: some part of the wipe still plays)
+bool FWipePlaying(LO* plo)
 {
-    SPRITESET* p = dynamic_cast<SPRITESET*>(plo);
-    if (!p) return;
-    p->idAnimPlaying = id;
-    float duration = 0.0f;
-    for (const auto& [idAnim, g] : p->aanim)
-        if (idAnim == id) duration = g;
-    p->tAnimEnd = g_clock.tReal + duration;
-    ShowScreenObj(plo, id);   // the frames (screenrt.h)
+    return plo && FScreenObjBusy(plo, sly3ui::PART_HELD);
 }
 
-// orig 0x2121E8(o, 0x314): an animation still plays
-bool FSpriteAnimPlaying(LO* plo)
+// orig3: 0x002C0060 (the bag 0x2BFED8 made of 0x3297A0's three pairs): wipe 875's next out / in parts, the pairs
+// shuffled again once all are drawn (no pair twice in a row across the shuffles)
+void DrawWipePair(TRANSITION& t)
 {
-    return FScreenObjBusy(plo, 0x314);
+    static const int s_aid[3][2] = {{0x370, 0x371}, {0x372, 0x373}, {0x374, 0x375}};
+    int* a = t.aipairWipeBag;
+    if (t.cpairWipeDrawn >= 3)
+    {
+        const int last = a[2];
+        for (int i = 0; i < 3; ++i) std::swap(a[i], a[NRandInRange(0, 2)]);
+        if (a[0] == last) std::swap(a[0], a[NRandInRange(1, 2)]);
+        t.cpairWipeDrawn = 0;
+    }
+    const int ipair = a[t.cpairWipeDrawn++];
+    t.idWipeOut = s_aid[ipair][0];
+    t.idWipeIn = s_aid[ipair][1];
 }
 
-// orig 0x22B090: the wipe's state change
+// orig3: 0x00288C58 SetWipeState (Sly 2 0x22B090): 0 idle (the request dropped, the wipe hidden: vt slot 54), 1 out
+// / 2 in (the wipe's part +0x58 / +0x5C shown: vt slot 53, 0x260EC8), 3 loading (the held request pending)
 void SetWipeState(WIPES wipes)
 {
     TRANSITION& t = g_transition;
     if (t.wipes == wipes) return;
     if (static const bool s_fLog = std::getenv("SLY2N_TRANSLOG") != nullptr; s_fLog)   // (debug: the wipe's states)
-        std::printf("transition: wipe state %d -> %d (t %.3f)\n", int(t.wipes), int(wipes), g_clock.t);
+        std::printf("transition: wipe state %d -> %d (t %.3f, wipe %d, parts 0x%X / 0x%X)\n", int(t.wipes), int(wipes),
+                    g_clock.t, t.oidWipe, t.idWipeOut, t.idWipeIn);
     t.wipes = wipes;
     switch (wipes)
     {
     case WIPES_Idle:
         t.fWipeReq = false;
         t.reqWipe = TRANSREQ{};
-        if (t.ploWipe) HideScreenObj(t.ploWipe);   // vt slot 50: the wipe's end
+        if (t.ploWipe) HideScreenObj(t.ploWipe);
         break;
-    case WIPES_Out: PlaySpriteAnim(t.ploWipe, 0x311); break;
-    case WIPES_In: PlaySpriteAnim(t.ploWipe, 0x30F); break;
+    case WIPES_Out: if (t.ploWipe) ShowScreenObj(t.ploWipe, t.idWipeOut); break;
+    case WIPES_In: if (t.ploWipe) ShowScreenObj(t.ploWipe, t.idWipeIn); break;
     case WIPES_Loading:
         SetPending(t.reqWipe);
         t.fWipeReq = false;
@@ -136,7 +191,7 @@ LO* PloFindCheckpoint(SW* psw, OID oidPoint, OID oidKey)
         return find(ploKey);
     };
     LO* plo = nullptr;
-    for (CID cid = 0x2A; cid < g_acls[0x2A].cidLast; ++cid)
+    for (CID cid = S3CID(0x2A); cid >= 0 && cid < g_acls[S3CID(0x2A)].cidLast; ++cid)
         for (LO* p : psw->mpcidaplo[cid])
         {
             const CHKPNT* pchk = dynamic_cast<const CHKPNT*>(p);
@@ -156,22 +211,22 @@ LO* PloFindCheckpoint(SW* psw, OID oidPoint, OID oidKey)
 // 0x231440) -> 0x1A6BE8: the object's slot 29 (the position), then slot 30 (the rotation)
 void TeleportLo(LO* plo, LO* ploTo)
 {
-    if (FIsLoDerivedFrom(plo, 0x30))
+    if (FIsLoDerivedFrom(plo, S3CID(0x30)))
     {
         TeleportActor(plo, ploTo);  // (actor.cpp: the ALOs' slot 38, 0x1F49C8 / 0x2052E0)
         return;
     }
     glm::mat4 matTo(1.0f);
-    if (FIsLoDerivedFrom(ploTo, 0x30))
+    if (FIsLoDerivedFrom(ploTo, S3CID(0x30)))
     {
         ALO* palo = static_cast<ALO*>(ploTo);
         if (XF* pxf = PxfObj(palo)) matTo = pxf->matWorld;
         else if (!palo->axf.empty()) matTo = palo->axf[0]->matWorld;
     }
-    else if (FIsLoDerivedFrom(ploTo, 3))
+    else if (FIsLoDerivedFrom(ploTo, S3CID(3)))
         matTo = MatWorldLox(ploTo);
     else return;
-    if (FIsLoDerivedFrom(plo, 3))
+    if (FIsLoDerivedFrom(plo, S3CID(3)))
     {
         LOX* plox = static_cast<LOX*>(plo);
         SetLoxPos(plox, glm::vec3(matTo[3]));     // slot 29 (0x2312A0)
@@ -200,7 +255,7 @@ void ApplyCheckpoint(SW* psw, LO* plo)
         for (const auto& e : pchk->arsmg)
         {
             LO* po = PloFindSwObjectByOid(psw, e[0]);
-            if (!po || !FIsLoDerivedFrom(po, 0x30) || e[2] == -1) continue;
+            if (!po || !FIsLoDerivedFrom(po, S3CID(0x30)) || e[2] == -1) continue;
             for (SMA* psma : g_apsma)
                 if (psma->palo == po && (e[1] == -1 || (psma->psm && psma->psm->oid == e[1])))
                 {
@@ -210,7 +265,7 @@ void ApplyCheckpoint(SW* psw, LO* plo)
         }
     if (pchk) ApplyCheckpointTasks(psw, pchk, pchk->atask);
     std::vector<LO*> a;
-    for (CID cid = 0x1A; cid < g_acls[0x1A].cidLast; ++cid)
+    for (CID cid = S3CID(0x1A); cid >= 0 && cid < g_acls[S3CID(0x1A)].cidLast; ++cid)
         for (LO* p : psw->mpcidaplo[cid]) a.push_back(p);
     for (size_t i = a.size(); i-- > 0;)
         if (a[i]->nState != 2 && a[i]->nState != 0) { a[i]->nState = 0; a[i]->tState = g_clock.t; }
@@ -224,12 +279,18 @@ struct INITCHKMETHODS
 {
     INITCHKMETHODS()
     {
+        // option 235 of a warp point (class 0x29, EOPID 778): 0x228170. E.g. Ep4's prison elevator (world 15, the ride
+        // script 80619's event 82107): the player is moved to the lower car's warp 80623, then walks out (R02)
+        RegisterObjectMethod(0x10B760, [](LO* plo, const std::vector<CRef>&) {
+            if (plo) TriggerWarp(plo);
+            return RefVoidMethod();
+        });
         auto addId = [](LO* plo, int id) {
             if (CHKPNT* p = dynamic_cast<CHKPNT*>(plo); p && p->aid.size() < 4) p->aid.push_back(id);
         };
         static decltype(addId) s_addId = addId;
-        RegisterObjectMethod(0x10B8F8, [](LO* plo, const std::vector<CRef>&) { s_addId(plo, 0x189); return RefVoidMethod(); });
-        RegisterObjectMethod(0x10B970, [](LO* plo, const std::vector<CRef>&) { s_addId(plo, 0x18A); return RefVoidMethod(); });
+        RegisterObjectMethod(0x10B8F8, [](LO* plo, const std::vector<CRef>&) { s_addId(plo, sly3::POINT_DEFAULT); return RefVoidMethod(); });
+        RegisterObjectMethod(0x10B970, [](LO* plo, const std::vector<CRef>&) { s_addId(plo, sly3::POINT_SECOND); return RefVoidMethod(); });
         RegisterObjectMethod(0x10B9E8, [](LO* plo, const std::vector<CRef>& a) { s_addId(plo, NArg(a, 0)); return RefVoidMethod(); });
         RegisterObjectMethod(0x10BA70, [](LO* plo, const std::vector<CRef>& a) {  // 793: 0x2288D8 -> 0x20FEC0
             CHKPNT* p = dynamic_cast<CHKPNT*>(plo);
@@ -257,6 +318,16 @@ struct INITCHKMETHODS
 } s_initchkmethods;
 }
 
+// orig 0x00228170
+void TriggerWarp(LO* pwarp)
+{
+    LO* ppo = g_psw ? PloPoCurrent(g_psw) : nullptr;  // 0x1C4840
+    if (!ppo || !pwarp) return;
+    TeleportLo(ppo, pwarp);                            // the player's vt slot 38
+    HandleLoSpliceEvent(pwarp, 5, false, 0, nullptr);  // the warp's vt slot 3 (0x1A61E0) with 5
+    BroadcastTaskEvent(g_psw, 0x1A, pwarp);
+}
+
 // orig 0x0022B490
 void RequestTransition(SW* psw, const uint8_t* pchk, OID oidPoint, OID oidKey, int flags, OID oidWipe)
 {
@@ -269,12 +340,16 @@ void RequestTransition(SW* psw, const uint8_t* pchk, OID oidPoint, OID oidKey, i
     if (t.fHaveCur && FSameChk(req.abChk, t.abChkCur)) req.flags |= 2;
     static const bool s_fLog = std::getenv("SLY2N_TRANSLOG") != nullptr;
     if (s_fLog) std::printf("transition: requested (point %d, key %d, flags 0x%X, wipe %d)\n", oidPoint, oidKey, req.flags, oidWipe);
+    // (the flow log: one line per world change, tools/progression3.py's milestones; notes/PLAN.md the world flow code)
+    std::printf("flow: transition to world %d requested (point %d, key %d, flags 0x%X, wipe %d, frame %d)\n",
+                IworldOfChk(req.abChk), oidPoint, oidKey, req.flags, oidWipe, g_iframeMain);
     if (oidWipe == -1 || !psw)
     {
         SetPending(req);
         return;
     }
-    // orig 0x22B220
+    // orig3 0x288DE8 (Sly 2 0x22B220): nothing while the wipe covers or loads; one coming in is dropped; no such wipe
+    // object: pending at once; else held, the wipe's parts chosen (875: the bag's next pair, else 886 / 888) and out
     if (t.wipes == WIPES_Out || t.wipes == WIPES_Loading) return;
     if (t.wipes == WIPES_In) SetWipeState(WIPES_Idle);
     t.ploWipe = PloFindSwObjectByOid(psw, oidWipe);
@@ -286,6 +361,12 @@ void RequestTransition(SW* psw, const uint8_t* pchk, OID oidPoint, OID oidKey, i
     t.fWipeReq = true;
     t.reqWipe = req;
     t.oidWipe = oidWipe;
+    if (oidWipe == 0x36B) DrawWipePair(t);
+    else
+    {
+        t.idWipeOut = sly3ui::PART_SHOW;
+        t.idWipeIn = sly3ui::PART_HIDE;
+    }
     SetWipeState(WIPES_Out);
 }
 
@@ -305,13 +386,21 @@ const WREC* PwrecEpisodeMain(int iepisode)
     return nullptr;
 }
 
+// orig3: Sly 3's world records are the executable's tables (game/sly3.h: the keys 0x2EDFD8, the episodes 0x2EDF10,
+// each episode's first world 0x2EDFB0; Sly 2 loaded them from its boot world, LoadWorldRecordsFromBrx 0x20F318). A
+// record's index is the world's index, the objects' world filter (orig3 0x47989C).
 void EnsureWorldRecords()
 {
     if (!s_awrec.empty()) return;
-    auto pswBoot = std::make_unique<SW>();
-    std::size_t cbRead = 0, cbFile = 0;
-    if (FLoadWorldFile(pswBoot.get(), FkFromRecord(g_disc.PbElf(VA_FK_BOOT_WORLD, 0x40)), "", &cbRead, &cbFile))
-        s_awrec = pswBoot->awrec;
+    for (int i = 0; i < sly3::CWORLD; ++i)
+    {
+        WREC w;
+        std::memcpy(w.abRecord, g_disc.PbElf(sly3::VA_WORLD_KEYS + sly3::CB_KEY * uint32_t(i), sly3::CB_KEY), sizeof(w.abRecord));
+        w.fk = g_disc.FkWorld(i);
+        w.slot = g_disc.IepisodeOfWorld(i);
+        w.fMain = w.slot >= 0 && w.slot < sly3::EP_Max && int(g_disc.U32Elf(sly3::VA_EPISODE_WORLDS + 4u * uint32_t(w.slot))) == i;
+        s_awrec.push_back(std::move(w));
+    }
 }
 
 void RequestWorldWarp(SW* psw, int iwrec, OID oidPoint, OID oidWipe)
@@ -339,7 +428,7 @@ void RequestTaskStartThere(SW* psw, int iwrec, OID oidTask)
     g_taskmgr.oidJob = -1;
     g_taskmgr.oidTask = -1;
     g_taskmgr.oidQueued = oidTask;
-    RequestTransition(psw, s_awrec[iwrec].abRecord, 0x189, -1, 8, -1);
+    RequestTransition(psw, s_awrec[iwrec].abRecord, sly3::POINT_DEFAULT, -1, 8, -1);
 }
 
 // debug: a splice value printed (the forms of a handler)
@@ -385,6 +474,7 @@ void UnloadWorld(std::unique_ptr<SW>& psw, bool fEndTasks)
     ResetLoListeners();
     ResetSpawners();
     g_grfjoyLock = 0;  // (0x20E068: the pad's lock bits cleared with the old world, without 0x1870D0)
+    StopJoyRumble();   // (0x20E068: SetRumbleRums(0x2E0CCC, Stop))
     g_transition.ploPlayer = nullptr;  // (the old world's player: freed with it; 0x1C4840 reads it while the new world loads)
     psw.reset();
 }
@@ -401,9 +491,12 @@ std::unique_ptr<SW> PswUpdateTransition(std::unique_ptr<SW> psw)
     EnsureWorldRecords();
     // orig 0x20E068: the old world's end (the broadcast 1, a job that ended restarted; TODO(M4): remaining HUD, sound,
     // music side), ResetClock 0x14D068, the SW cleared
-    // orig 0x20E890: the HUD timer's seconds left, kept unless the request has a flag of 0xCD
-    const float dtTimerResume = DtHudTimerResume(req.flags);
+    // orig 0x20E890: the HUD timer's seconds left, kept unless the request has a flag of 0xCD (Sly 2's flags: the native
+    // requests still pass Sly 2's bits; Sly 3's 0x25C2A8 masks 0xD5 of its own bits, notes/FLOW.md)
+    // (orig3 0x25C2A8: none either when the request goes to world 0, the episode chooser dvd_menu)
+    const float dtTimerResume = IworldOfChk(req.abChk) == 0 ? 0.0f : DtHudTimerResume(req.flags);
     UnloadWorld(psw, true);
+    PumpPcKeptWorlds(nullptr);   // (PC addition, debug menu only: a kept world still being read loaded now, no world running: pcloader.h)
     ResetClock(&g_clock);
     LockJoy(8);                 // 0x187078(8): the pad locked while the world loads (0x1D9648 unlocks it)
     g_gamepause = GAMEPAUSE{};  // (the SW's pause counts +0x3D78.. cleared with it)
@@ -428,13 +521,15 @@ std::unique_ptr<SW> PswUpdateTransition(std::unique_ptr<SW> psw)
     LoadSoundBank();  // orig 0x1FD5E8 (the end of 0x13DA18)
     if (!psw->awrec.empty()) s_awrec = psw->awrec;
     ++g_cTransitionLoads;
+    std::printf("flow: world %d %s loaded (frame %d, load %d, point %d, flags 0x%X, %zu objects)\n", iwrec,
+                g_disc.SzWorldElf(iwrec).c_str(), g_iframeMain, g_cTransitionLoads, req.oidPoint, req.flags, psw->aploAll.size());
     if (std::getenv("SLY2N_TRANSLOG")) std::printf("transition: world record %d loaded (%zu objects, flags 0x%X, frame %d, load %d)\n", iwrec, psw->aploAll.size(), req.flags, g_iframeMain, g_cTransitionLoads);
     CmOnWorldLoad(psw.get());  // the camera: InitCm 0x14D6D8, the world's camera options, the player's (cmworld.h)
-    // orig 0x20E3C0's end: the record's language (0x2E1E54: 0, the USA disc's one), world record (0x210A88),
+    // orig 0x20E3C0's end: the record's language (0x2E1E54, region.h), world record (0x210A88),
     // episode (0x210AE0) and best episode (0x210B28 < the episode: 0x1D8B20 "episodeBest")
     {
         auto setN = [](std::vector<std::string> apath, int n) { CRef r; r.SetS32(n); FSetProgress(apath, r); };
-        setN({"flags", "lang"}, 0);
+        setN({"flags", "lang"}, g_nLang);
         setN({"widCurrent"}, psw->filter);
         const int iep = IepisodeCur();
         setN({"episodeCurrent"}, iep);
@@ -444,6 +539,7 @@ std::unique_ptr<SW> PswUpdateTransition(std::unique_ptr<SW> psw)
     // orig 0x20E3C0's broadcast 3 (the game record: reset for the title, the pending save; frontend.h)
     BroadcastTaskEvent(psw.get(), 3, nullptr);
     // orig 0x20E740 (with the broadcast 4: a queued task changes the request's point)
+    OnPcWorldLoaded(psw.get());    // (PC addition, debug menu only: the guests' copies made before the start, pcloader.h)
     StartSw(psw.get(), true, [](SW* psw) {
         // orig: 0x001400B8 starts with 0x00203A38, then initializes the
         // player's parts/counters before the world's deferred start calls.
@@ -451,6 +547,48 @@ std::unique_ptr<SW> PswUpdateTransition(std::unique_ptr<SW> psw)
         InitWorldActors(psw);
         InitWorldGang(psw);
     });
+    OnPcWorldStarted(psw.get());   // (PC addition, debug menu only: pcloader.h)
+    // (Sly 3, the pending task start (the request's flag 8 natively; Sly 3's 0x4 with GAME +0x14A0): 0x184AA0 runs
+    // StartTask 0x18A0D0 (its predecessors restored, the task made available, then current). Interim until game/task3
+    // ports 0x18A0D0: the task forced available (mode 3) and activated, as the reference's --warp W:TASK shows it
+    // (35:1798: the binocucom). the world flow code)
+    if (FScripts3Active() && (req.flags & 8) && g_taskmgr.oidQueued != -1)
+        if (TASK3* p3 = PtaskFind3(g_taskmgr.oidQueued))
+        {
+            if (std::getenv("SLY2N_TASKDEBUG")) std::printf("transition: task %d started (interim 0x18A0D0)\n", p3->oid);
+            if (p3->nState < 1) QueueTaskRequest3(1, p3, 1, 3, nullptr);
+            QueueTaskRequest3(0, p3, 4, 0, nullptr);
+        }
+    // (debug, the flow map: SLY3_EXITLIST=1: the world's exits (EXIT, class 0x18): their keys (the world, the movies
+    // queued before it), point, wipe, state)
+    if (std::getenv("SLY3_EXITLIST"))
+        for (LO* plo : AploOfClass(psw.get(), S3CID(0x1A)))
+            if (const LOXSHAPE* px = dynamic_cast<const LOXSHAPE*>(plo))
+            {
+                std::string str;
+                for (size_t i = 0; i < px->aabKey.size(); ++i) str += (i ? ", " : "") + StrKeyRecord(px->aabKey[i].data());
+                std::printf("exit %d (cid 0x%X): %s; point %d wipe %d state %d\n", plo->oid, plo->Cid(), str.c_str(),
+                            int(plo->U32Field(0, OFF_EXIT_POINT, sly3::POINT_DEFAULT)), int(plo->U32Field(0, OFF_EXIT_WIPE, uint32_t(-1))), plo->nState);
+            }
+    // (debug: SLY3_SCPTDUMP=OID: a script's command list)
+    if (const char* sz = std::getenv("SLY3_SCPTDUMP"))
+        for (const auto& plo : psw->aploAll)
+            if (const LOSCPT3* ps = dynamic_cast<const LOSCPT3*>(plo.get()); ps && ps->oid == std::atoi(sz))
+                for (size_t i = 0; i < ps->acmd.size(); ++i)
+                {
+                    std::string str;
+                    for (int32_t n : ps->acmd[i].an) str += " " + std::to_string(n);
+                    std::printf("scpt %d [%zu] %02X %s oid %d child %d sib %d:%s\n", ps->oid, i, ps->acmd[i].id,
+                                SzScptCmd3(ps->acmd[i].id), ps->acmd[i].oid, ps->acmd[i].ichild, ps->acmd[i].isib, str.c_str());
+                }
+    // (and the scripts' commands 0x68 that fire an exit: the script, the exit, the point)
+    if (std::getenv("SLY3_EXITLIST"))
+        for (const auto& plo : psw->aploAll)
+            if (const LOSCPT3* ps = dynamic_cast<const LOSCPT3*>(plo.get()))
+                for (size_t i = 0; i < ps->acmd.size(); ++i)
+                    if (ps->acmd[i].id == 0x68)
+                        std::printf("exit by script %d [%zu]: exit %d point %d\n", ps->oid, i,
+                                    ps->acmd[i].an.size() > 0 ? ps->acmd[i].an[0] : -1, ps->acmd[i].an.size() > 1 ? ps->acmd[i].an[1] : -1);
     if (dtTimerResume > 0.0f) StartHudTimer(dtTimerResume, psw.get());  // 0x1618F8 after 0x20E740
     if (psw->tasks.oidPointNext != -1) req.oidPoint = psw->tasks.oidPointNext;
     req.flags = psw->tasks.grfReq;
@@ -567,7 +705,7 @@ std::unique_ptr<SW> PswUpdateTransition(std::unique_ptr<SW> psw)
                         std::fprintf(stderr, "  %d start: %s\n", oid, strStart.substr(0, 1500).c_str());
                     }
                     std::fprintf(stderr, "  %d cid 0x%X state %d sidebag%s frame %d start-binding %d\n", oid, p->Cid(),
-                                 p->Cid() == 0x85 ? static_cast<TASK*>(p)->nState : -9, strSb.c_str(), p->pframe ? 1 : 0,
+                                 p->Cid() == S3CID(0x85) ? static_cast<TASK*>(p)->nState : -9, strSb.c_str(), p->pframe ? 1 : 0,
                                  p->pframe && p->pframe->PrefFindBinding(0, 1) ? 1 : 0);
                 }
         }
@@ -589,7 +727,7 @@ std::unique_ptr<SW> PswUpdateTransition(std::unique_ptr<SW> psw)
         LO* pselected = nullptr;
         const CRef ref = RefGetProgress({"oidPoCurrent"});
         if (ref.m_tagk == TAGK_S32 && ref.m_n != -1) pselected = PloFindSwObjectByOid(psw.get(), ref.m_n);
-        for (CID cid : {0x35, 0x37, 0x36})
+        for (CID cid : {S3CID(0x35), S3CID(0x37), S3CID(0x36)})   // (Sly, Bentley, Murray: Sly 3's 0x34 / 0x36 / 0x35)
             if (!pselected && !psw->mpcidaplo[cid].empty()) pselected = psw->mpcidaplo[cid][0];
         if (pselected)
         {
@@ -600,21 +738,25 @@ std::unique_ptr<SW> PswUpdateTransition(std::unique_ptr<SW> psw)
             if (pc)
                 for (const auto& [oidA, oidB] : pc->apair) fPaired = fPaired || oidA == pselected->oid;
             if (pchk && !fPaired) TeleportLo(pselected, pchk);
-            for (CID cid = 0x34; cid < g_acls[0x34].cidLast; ++cid)
+            for (CID cid = S3CID(0x34); cid >= 0 && cid < g_acls[S3CID(0x34)].cidLast; ++cid)
                 for (LO* p : std::vector<LO*>(psw->mpcidaplo[cid]))
                     if (p != pselected && NPoEnabled(p) == 0) RemoveLo(psw.get(), p);
         }
     }
     // (native job starts: a job started at its world's load (0x1651D8's queued branch, used natively by the
-    // --world W:TASK harness and Replay Jobs) comes in at point 0x189, the safe house's checkpoint, whose handler 5
+    // --world W:TASK harness and Replay Jobs) comes in at point sly3::POINT_DEFAULT, the safe house's checkpoint, whose handler 5
     // makes the safe house (cid 0x46) the current player once the episode's first jobs are done. The job's opening
     // binocucom talk then finds no speakers (0x1BEED8: 0x2AE / 0x2AF below the current player) and shows empty head
     // windows. In the game a job is reached by a player (the satellite job by play: Sly; the reference's warp: Sly
-    // too), so such a start hands the pad to Sly. SLY2N_JOBSTARTSH=1 keeps the safe house.)
+    // too), so such a start hands the pad to Sly. SLY2N_JOBSTARTSH=1 keeps the safe house. Only for that start
+    // (request flags 8): the checkpoint task stays queued (SetTaskChk) after a job, and a story transition into the hub
+    // (e.g. Ep8's briefing 3378's exit 3377 after the first job) must leave the safe house current, as the original
+    // does.)
     if (LO* pcur = PloPoCurrent(psw.get());
-        pcur && pcur->Cid() == 0x46 && g_taskmgr.oidQueued != -1 && !psw->mpcidaplo[0x35].empty() && !std::getenv("SLY2N_JOBSTARTSH"))
+        pcur && pcur->Cid() == S3CID(0x46) && (req.flags & 8) && g_taskmgr.oidQueued != -1 && !psw->mpcidaplo[S3CID(0x35)].empty() &&
+        !std::getenv("SLY2N_JOBSTARTSH"))
     {
-        LO* psly = psw->mpcidaplo[0x35][0];
+        LO* psly = psw->mpcidaplo[S3CID(0x35)][0];
         if (!psly->fInWorld) AddLo(psw.get(), psly);
         EnablePo(psw.get(), psly, 1);
     }
@@ -633,12 +775,13 @@ std::unique_ptr<SW> PswUpdateTransition(std::unique_ptr<SW> psw)
     CmOnWorldStart();
     BroadcastTaskEvent(psw.get(), 5, nullptr);
     t.oidTaskQueued = -1;
-    // orig 0x22B420: the wipe uncovers the new world
+    // orig3 0x288FB0 (Sly 2 0x22B420): the wipe object found again in the new world; one that covered the load
+    // uncovers it (in), else idle
     if (t.wipes == WIPES_Loading || t.oidWipe != -1)
     {
         t.ploWipe = t.oidWipe != -1 ? PloFindSwObjectByOid(psw.get(), t.oidWipe) : nullptr;
-        if (t.ploWipe) SetWipeState(WIPES_In);
-        else t.wipes = WIPES_Idle;
+        if (t.wipes == WIPES_Loading && t.ploWipe) SetWipeState(WIPES_In);
+        else SetWipeState(WIPES_Idle);
     }
     return psw;
 }
@@ -650,11 +793,12 @@ void UpdateWipe(SW* psw)
     TRANSITION& t = g_transition;
     switch (t.wipes)
     {
+    // orig3 0x288D60 (Sly 2 0x22B198): out until no part plays, then loading; in until none plays, then idle
     case WIPES_Out:
-        if (!FSpriteAnimPlaying(t.ploWipe)) SetWipeState(WIPES_Loading);
+        if (!FWipePlaying(t.ploWipe)) SetWipeState(WIPES_Loading);
         break;
     case WIPES_In:
-        if (!FSpriteAnimPlaying(t.ploWipe)) SetWipeState(WIPES_Idle);
+        if (!FWipePlaying(t.ploWipe)) SetWipeState(WIPES_Idle);
         break;
     default: break;
     }

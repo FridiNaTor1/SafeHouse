@@ -14,7 +14,9 @@
 
 void RegisterNativeFn(uint32_t addrOrig, void* pfn, const char* name);
 void* PvNativeFn(uint32_t addrOrig);
-const char* NameNativeFn(uint32_t addrOrig);  // (the registered name; null: none)
+const char* NameNativeFn(uint32_t addrOrig);
+// (Sly 3) the native registered by NATIVEFN3 for the Sly 3 function in the slot paired with Sly 2 slot `slot2`
+void* PvNativeFn3(const CLS* pcls, int slot2);  // (the registered name; null: none)
 // The native function for vtable slot `slot` of the object's class (null: the original's function has no port).
 void* PvNativeVt(const LO* plo, int slot);
 // Logs (once per original function) a vtable call that has no native implementation.
@@ -37,3 +39,7 @@ struct NATIVEFNREG
 // NATIVEFN(0x1F3980, UpdateAloPhys): fn implements the original function at that address.
 #define NATIVEFN(addr, fn) \
     static NATIVEFNREG NATIVEFN_CAT(s_nativefnreg_, __LINE__)(addr, reinterpret_cast<void*>(&fn), #fn)
+// NATIVEFN3(0x1AD7F0, UpdateSly3): fn implements the Sly 3 function at that address (orig3; found before the Sly 2
+// twin's native, vtmap3.cpp). Its signature is the copied code's for that slot.
+#define NATIVEFN3(addr3, fn) \
+    static NATIVEFNREG NATIVEFN_CAT(s_nativefnreg_, __LINE__)(FN3_TAG | uint32_t(addr3), reinterpret_cast<void*>(&fn), #fn)

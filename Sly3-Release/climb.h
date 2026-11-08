@@ -9,7 +9,13 @@
 #include <glm/glm.hpp>
 
 struct ACTOR;
+struct STEP;
+struct LO;
 struct XP;
+namespace cmm { struct LM; }
+
+// orig: 0x0019E110: reachable pipe distances, including the climber's end margins.
+cmm::LM LmClimb(ACTOR* pa);
 
 // orig: 0x0019DE10
 void InitClimb(ACTOR* pa);
@@ -28,3 +34,4 @@ void AdjustClimbXp(XP* pxp);
 // orig: 0x00205008 (the line contacts of the point posA (minus +0x1010) along the frame of dir: grf 1 / 2 / 4 its
 // three axes (kind 0xB), 8 / 0x10 / 0x20 an axis only where already met (kind 0xA / 0xE))
 void AddActorLineXps(ACTOR* pa, int grf, const glm::vec3& posA, const glm::vec3& dir, const glm::vec3& posHand);
+void AddStepLineXps(STEP* step, int grf, const glm::vec3& posA, const glm::vec3& dir, const glm::vec3& posPoint, LO* related = nullptr);

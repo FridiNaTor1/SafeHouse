@@ -1,6 +1,11 @@
 // The interest objects (noises). See ainoise.h. Reference: Sly2-Reference/Sly2-Release/game/m_1564E8_p3.cpp, m_205E70_p3.cpp.
 
 #include "ainoise.h"
+#include "game/sly3.h"
+#include "worldglobals.h"
+
+#include <deque>
+#include <new>
 #include "activate.h"
 #include "sw.h"
 
@@ -37,19 +42,47 @@ constexpr float T_AWARE_WAIT = 2.0f;                        // D_002C3DB0
 std::unordered_map<const LO*, std::unique_ptr<NOISETMPL>>& MpTmpl()
 {
     static std::unordered_map<const LO*, std::unique_ptr<NOISETMPL>> s_map;
+    WORLD_TABLE_LOCAL(s_map);   // (PC: moved aside while a kept world loads, worldglobals.h)
     return s_map;
 }
 std::vector<std::unique_ptr<NOISE>>& AnoiseOwned()
 {
     static std::vector<std::unique_ptr<NOISE>> s_a;
+    WORLD_TABLE_LOCAL(s_a);   // (PC: moved aside while a kept world loads, worldglobals.h)
+    return s_a;
+}
+std::deque<NOISE*>& ApnoiseFree()  // (the pool: released noises, oldest first)
+{
+    static std::deque<NOISE*> s_a;
+    WORLD_TABLE_LOCAL(s_a);   // (PC: moved aside while a kept world loads, worldglobals.h)
     return s_a;
 }
 std::vector<NOISE*>& Anoise()
 {
     static std::vector<NOISE*> s_a;
+    WORLD_TABLE_LOCAL(s_a);   // (PC: moved aside while a kept world loads, worldglobals.h)
     return s_a;
 }
+// Original listener +0xE0/+0xE4 retains up to eight noises. Native noise
+// storage already survives removal until ResetNoises, including for AI jobs.
+// Keep these pointers until original pruning/removal would release them.
+std::unordered_map<LO*, std::vector<NOISE*>>& MpListenerNoises()
+{
+    static std::unordered_map<LO*, std::vector<NOISE*>> s_map;
+    WORLD_TABLE_LOCAL(s_map);   // (PC: moved aside while a kept world loads, worldglobals.h)
+    return s_map;
+}
+void UpdateNoiseListener(LO* plo);
+void TraceNoiseListener(LO* plo, const char* action, const NOISE* pn, size_t count, int duplicates = 0)
+{
+    static const char* selected = std::getenv("SLY2N_NOISELISTENERTRACE");
+    if (!selected || (std::strcmp(selected, "all") && std::atoi(selected) != plo->oid)) return;
+    std::printf("noise listener: t %.9g oid %d clone %d %s noise %d template %d retained %zu duplicates %d\n",
+                g_clock.t, plo->oid, plo->iclone, action, pn ? pn->nSerial : -1,
+                pn && pn->ptmpl && pn->ptmpl->plo ? pn->ptmpl->plo->oid : -1, count, duplicates);
+}
 int s_nSerial = 0;  // SW +0x3D68
+WORLD_VALUE(s_nSerial);   // (PC: moved aside while a kept world loads, worldglobals.h)
 
 float FieldF(const LO* plo, uint32_t ib, float g)
 {
@@ -87,6 +120,7 @@ struct INITNOISE
     INITNOISE()
     {
         RegisterSwPass(0x156728, [](SW*) { ExpireNoises(); });
+        RegisterLoUpdate(0x156EB8, UpdateNoiseListener);
         // orig: 0x0010D840 (NOISETMPL option 214): vector and LO arguments,
         // then 0x00156698 creates and returns the noise. The owner may be null;
         // the object argument is used directly, without an OID lookup.
@@ -104,6 +138,14 @@ struct INITNOISE
 // orig: 0x00156728 for each object of the list
 void ExpireNoises()
 {
+    // (debug: SLY2N_NOISECOUNT=1 prints the allocated / live / pooled noises every 10 s of game time)
+    if (static const bool s_f = std::getenv("SLY2N_NOISECOUNT") != nullptr; s_f)
+        if (static float s_t = 0.0f; g_clock.t >= s_t + 10.0f || g_clock.t < s_t)
+        {
+            s_t = g_clock.t;
+            std::printf("noisecount t %.1f allocated %zu live %zu pooled %zu serial %d\n", g_clock.t, AnoiseOwned().size(), Anoise().size(),
+                        ApnoiseFree().size(), s_nSerial);
+        }
     for (NOISE* pn : std::vector<NOISE*>(Anoise()))
         if (pn->ptmpl && 0.0f <= pn->ptmpl->tLife && pn->t + pn->ptmpl->tLife < g_clock.t) RemoveNoise(pn);
 }
@@ -121,7 +163,7 @@ NOISETMPL* PtmplNoise(LO* plo)
     p->tLife = FieldF(plo, 0x60, p->tLife);
     p->nKind = static_cast<int>(plo->U32Field(0, 0x64, static_cast<uint32_t>(p->nKind)));
     for (const OPT& o : plo->aopt)
-        if (o.eopid == 1092 && !o.aval.empty()) p->rz = glm::vec2(o.aval[0].ag[0], o.aval[0].ag[1]);
+        if (o.eopid == S3EOPID(1092) && !o.aval.empty()) p->rz = glm::vec2(o.aval[0].ag[0], o.aval[0].ag[1]);
     return p.get();
 }
 
@@ -130,7 +172,7 @@ NOISETMPL* PtmplNoiseFixed(int i)
     static const OID s_aoid[7] = {0x2C2, 0x2C3, 0x2C4, 0x2C5, 0x2C6, 0x2C7, 0x2C8};
     if (i < 0 || i >= 7 || !g_psw) return nullptr;
     for (const auto& plo : g_psw->aploAll)
-        if (plo->oid == s_aoid[i] && plo->Cid() == 0x75) return PtmplNoise(plo.get());
+        if (plo->oid == s_aoid[i] && plo->Cid() == S3CID(0x75)) return PtmplNoise(plo.get());
     return nullptr;
 }
 
@@ -139,9 +181,24 @@ NOISE* PnoiseNew(NOISETMPL* ptmpl, const glm::vec3& pos, LO* ploOwner)
 {
     if (!ptmpl) return nullptr;
     if (std::getenv("SLY2N_NOISEDEBUG"))
-        std::fprintf(stderr, "noise new: t %.3f type %d at (%.0f %.0f %.0f) owner %d\n", g_clock.t, ptmpl->nType, pos.x, pos.y, pos.z,
-                     ploOwner ? ploOwner->oid : -1);
-    auto p = std::make_unique<NOISE>();
+        std::fprintf(stderr, "noise new: t %.3f type %d tmpl %d r %.0f at (%.0f %.0f %.0f) owner %d from %p\n", g_clock.t, ptmpl->nType,
+                     ptmpl->plo ? ptmpl->plo->oid : -1, ptmpl->sRadius, pos.x, pos.y, pos.z, ploOwner ? ploOwner->oid : -1,
+                     __builtin_return_address(0));
+    // orig 0x11CCC0: a slot of the pool (SW +0x4008); native: the oldest released before this frame, else a new one
+    NOISE* p = nullptr;
+    if (auto& af = ApnoiseFree(); !af.empty() && af.front()->tFree < g_clock.t)
+    {
+        p = af.front();
+        af.pop_front();
+        ForgetLoListeners(p);  // (the original's slot is cleared: 0x2333B4(p, 0, 0x60))
+        p->~NOISE();
+        new (p) NOISE();
+    }
+    else
+    {
+        AnoiseOwned().push_back(std::make_unique<NOISE>());
+        p = AnoiseOwned().back().get();
+    }
     p->ptmpl = ptmpl;
     p->pos20 = pos;
     p->pos30 = pos;
@@ -149,13 +206,15 @@ NOISE* PnoiseNew(NOISETMPL* ptmpl, const glm::vec3& pos, LO* ploOwner)
     p->nSerial = ++s_nSerial;
     p->t = g_clock.t;
     p->nKind = ptmpl->nKind;
-    NOISE* pn = p.get();
-    AnoiseOwned().push_back(std::move(p));
+    NOISE* pn = p;
     Anoise().push_back(pn);
+    AddRefNoise(pn);  // (the list's)
     // orig: 0x256EE0 followed by slot 3, event 2. The new noise is already
     // listed when its template's synchronous start handler runs.
+    AddRefNoise(pn);  // (the start's own hold)
     pn->pframe = ptmpl->plo ? ptmpl->plo->pframe : nullptr;
     HandleLoSpliceEvent(pn, 2, false, 0, nullptr);
+    ReleaseNoise(pn);
     return pn;
 }
 
@@ -163,14 +222,51 @@ NOISE* PnoiseNew(NOISETMPL* ptmpl, const glm::vec3& pos, LO* ploOwner)
 void RemoveNoise(NOISE* pn)
 {
     if (!FNoiseLive(pn)) return;
+    AddRefNoise(pn);  // (the guard of the call)
     NotifyLo(pn, 15, pn);
     // A listener may already have removed it. The original checks again before
     // unlinking and running the synchronous end event.
-    if (!FNoiseLive(pn)) return;
-    auto& a = Anoise();
-    a.erase(std::remove(a.begin(), a.end(), pn), a.end());
-    HandleLoSpliceEvent(pn, 3, false, 0, nullptr);
+    if (FNoiseLive(pn))
+    {
+        auto& a = Anoise();
+        a.erase(std::remove(a.begin(), a.end(), pn), a.end());
+        HandleLoSpliceEvent(pn, 3, false, 0, nullptr);
+        ReleaseNoise(pn);  // (the list's)
+    }
+    ReleaseNoise(pn);
 }
+
+// orig: 0x001566B8
+void AddRefNoise(NOISE* pn)
+{
+    if (pn) ++pn->cRef;
+}
+
+// orig: 0x001566C8 (0x11CD18: back to the pool at 0)
+void ReleaseNoise(NOISE* pn)
+{
+    if (!pn || pn->cRef <= 0) return;
+    if (--pn->cRef > 0) return;
+    pn->tFree = g_clock.t;
+    ApnoiseFree().push_back(pn);
+}
+
+// orig: 0x00156BE0
+void SetHeldNoise(NOISE** ppn, NOISETMPL* ptmpl, const glm::vec3& pos, LO* ploOwner)
+{
+    if (NOISE* pold = *ppn)
+    {
+        RemoveNoise(pold);   // 0x156780
+        *ppn = nullptr;
+        ReleaseNoise(pold);  // vt slot 2
+    }
+    if (!ptmpl) return;
+    *ppn = PnoiseNew(ptmpl, pos, ploOwner);
+    AddRefNoise(*ppn);  // vt slot 1
+}
+
+size_t CNoiseAllocated() { return AnoiseOwned().size(); }
+size_t CNoisePooled() { return ApnoiseFree().size(); }
 // orig: 0x00140F90 event 0x27C walks the live DLI, including appended rows and
 // skipping rows removed by callbacks. New noises append; storage remains owned
 // until world teardown, so an already-visited object cannot be reused here.
@@ -196,7 +292,9 @@ bool FNoiseLive(const NOISE* pn) { return std::find(Anoise().begin(), Anoise().e
 const std::vector<NOISE*>& ApnoiseAll() { return Anoise(); }
 void ResetNoises()
 {
+    MpListenerNoises().clear();
     Anoise().clear();
+    ApnoiseFree().clear();
     AnoiseOwned().clear();
     MpTmpl().clear();
     s_nSerial = 0;
@@ -233,11 +331,64 @@ bool FListenerHearsNoise(const LO* plo, const NOISE* pn)
     return std::sqrt(d.x * d.x + d.y * d.y) < pt->sRadius;
 }
 
+namespace
+{
+// orig: 0x00156EB8, with 0x00156DE0(false) first. The base splice update may
+// change the active noises or remove this listener, so read its state after it.
+void UpdateNoiseListener(LO* plo)
+{
+    if (PFNUPDATE base = PfnUpdateOrig(0x1A5E28)) base(plo);
+    auto& heard = MpListenerNoises()[plo];
+    for (auto it = heard.begin(); it != heard.end();)
+    {
+        if (FNoiseLive(*it)) { ++it; continue; }
+        NOISE* expired = *it;
+        it = heard.erase(it);
+        TraceNoiseListener(plo, "prune", expired, heard.size());
+        ReleaseNoise(expired);  // vt slot 2
+    }
+    int duplicates = 0;
+    for (NOISE* pn : Anoise())
+    {
+        if (std::find(heard.begin(), heard.end(), pn) != heard.end()) { ++duplicates; continue; }
+        if (!FListenerHearsNoise(plo, pn)) continue;
+        if (heard.size() < 8)
+        {
+            AddRefNoise(pn);  // vt slot 1
+            heard.push_back(pn);
+            TraceNoiseListener(plo, "notify", pn, heard.size(), duplicates);
+            HandleLoSpliceEvent(plo, 5, false, 0, nullptr);
+            // The synchronous handler may remove its listener or its noises.
+            // Do not access the retained list or the noise iterator again.
+        }
+        else TraceNoiseListener(plo, "full", pn, heard.size(), duplicates);
+        return;  // original stops at the first new eligible noise even when full
+    }
+    if (duplicates) TraceNoiseListener(plo, "repeat", nullptr, heard.size(), duplicates);
+}
+}  // namespace
+
+// orig: 0x00156D58, after base 0x1A5848: 0x156DE0(true) releases all retained
+// noises, then the listener leaves the live list. FNoiseListenersReach below
+// uses the class list plus the same in-world flag instead of a separate DLI.
+void OnRemoveNoiseListener(LO* plo)
+{
+    auto& listeners = MpListenerNoises();
+    auto it = listeners.find(plo);
+    TraceNoiseListener(plo, "remove", nullptr, it == listeners.end() ? 0 : it->second.size());
+    if (it != listeners.end())
+    {
+        const std::vector<NOISE*> an = std::move(it->second);
+        listeners.erase(it);
+        for (NOISE* pn : an) ReleaseNoise(pn);  // 0x156DE0(true): vt slot 2 each
+    }
+}
+
 // the listeners of the list 0x3E1468 (cid 0x2F, added by their slot 11 0x156D20)
 bool FNoiseListenersReach(const NOISE* pn)
 {
     if (!g_psw || !pn || !pn->ptmpl) return false;
-    for (LO* plo : g_psw->mpcidaplo[0x2F])
+    for (LO* plo : g_psw->mpcidaplo[S3CID(0x2F)])
         if (plo && FListenerHearsNoise(plo, pn)) return true;
     return false;
 }
@@ -273,9 +424,8 @@ bool FGuardAcceptsNoise(GUARD* pg, NOISE* pn)
     if (pn->ptmpl->nType == 0) return FNoiseReaches(pn, pos);
     if (pn->ptmpl->nType != 1) return false;
     // seen: within the live view volume, nothing solid on the line (0x20FAA0 with 0x20FA10, 0x14CC58)
-    if (!pg->pdet || !pg->pdet->ploVolume || !pg->pdet->ploVolume->fInWorld) return false;
-    // TODO(ai): the volume test (FInsideShape) and the line: natively the seen kind is not reached in Paris
-    return false;
+    if (!pg->pdet) return false;
+    return FGuardSeesPoint(pg->palo, pg->pdet->ploVolume, pos, pn->pos20);  // (detect.cpp)
 }
 
 // orig: 0x0020A168 (by the template's perception, the kind, the age, the distance, the order)
@@ -391,7 +541,9 @@ void JOBINVESTIGATE::Exit()
 void JOBINVESTIGATE::SetNoise(NOISE* pn)
 {
     if (pn == pnoise) return;
+    ReleaseNoise(pnoise);  // vt slot 2
     pnoise = pn;
+    AddRefNoise(pn);       // vt slot 1
     fNew = 1;
 }
 // orig: 0x00172760 (an alarm about the guard itself: where it was raised, else the place it points at)
@@ -486,7 +638,7 @@ void JOBINVESTIGATE::FindSearchPlaces()
     objects(0xB, true, any);      // 0x3E13C0
     objects(0x27, false, any);    // 0x3E13D8
     objects(0xD, true, any);      // 0x3E13CC
-    objects(0x12, false, [](LO* plo) { return FCidDerivedFrom(plo->Cid(), 0x13); });  // 0x3E13B4 (TODO(ai): its +0xE8 bit 0)
+    objects(0x12, false, [](LO* plo) { return FCidDerivedFrom(plo->Cid(), S3CID(0x13)); });  // 0x3E13B4 (TODO(ai): its +0xE8 bit 0)
     objects(0x23, false, any);    // 0x15E9C8 (0x505, cid 0x23)
     objects(0x67, false, any);
     objects(0x1B, false, any);
@@ -692,6 +844,6 @@ void JOBINVESTIGATE::Update()
 
 std::unique_ptr<AIJOB> PjobNewNoise(CID cid)
 {
-    if (cid == 0xAB) return std::make_unique<JOBINVESTIGATE>();
+    if (cid == 0xAB) return std::make_unique<JOBINVESTIGATE>();  // (the AI code's Sly 2 job ids: ai.h)
     return nullptr;
 }

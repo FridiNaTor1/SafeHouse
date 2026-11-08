@@ -242,10 +242,16 @@ void SetAloIced(ALO* palo, bool f);              // 0x1F8668
 glm::vec3 PosAloCenter(ALO* palo);               // 0x1A62E8 (the object record's world position)
 glm::vec3 VelAloPos(ALO* palo);                  // 0x1F4440 (vt slot 33)
 void SetAloVelocityTo(ALO* palo, const glm::vec3& pos);   // 0x1F4488 (vt slot 35)
+void SetAloVelocityToLoad(ALO* palo, const glm::vec3& pos, bool fLoad);   // (fLoad below)
 glm::vec3 AngVelAlo(ALO* palo);                  // 0x1F4558 (vt slot 34)
 void SetAloAngVelocityTo(ALO* palo, const glm::vec3& pos);  // 0x1F46D8 (vt slot 36)
-void SetAloVelocity(ALO* palo, const glm::vec3& v);      // 0x1F4898
-void SetAloAngVelocity(ALO* palo, const glm::vec3& w);   // 0x1F4930
+void SetAloAngVelocityToLoad(ALO* palo, const glm::vec3& pos, bool fLoad);  // (fLoad below)
+// fLoad: the world loader's options (EOPIDs 29 / 30 / 75 / 76, anim.cpp): converted through the matrices as the original
+// had them while the object loaded (each record's loaded local, records loaded later left out, a copy through its template:
+// so.cpp VecConvertXfsLoad). R16: the Spice Room's cogs 91231 (option 30) turn about their local x; R55: world 32's
+// watermills (option 76 about local z) about their axles; tools/veloptregress.py checks every world against the RAM
+void SetAloVelocity(ALO* palo, const glm::vec3& v, bool fLoad = false);      // 0x1F4898
+void SetAloAngVelocity(ALO* palo, const glm::vec3& w, bool fLoad = false);   // 0x1F4930
 void SetAloPos(ALO* palo, const glm::vec3& pos);         // 0x1F40A0 (vt slot 29)
 void SetAloRotation(ALO* palo, const glm::mat3& mat);    // 0x1F42E0 (vt slot 30)
 
@@ -312,6 +318,9 @@ void ApplyAloGravity(ALO* palo);                 // 0x1F9B20 (vt slot 70)
 void AccelAloPos(ALO* palo, const glm::vec3& v);  // 0x1FAC30
 
 // mark.cpp
+// orig0x1AA0B0, slot60: preserve the other entry's BSP range/root for custom
+// producers (vehicle wheel support and projectile retained sweeps).
+using PFNOWNCONTACT = void (*)(ALO*, SOE*, int inodeLimit, const BSPREF&, int root, XP**);
 void FreeSwXpList(XP* pxp);                      // 0x1A7E10
 XP* PxpAddSw(SOE* a, SOE* b, const glm::vec3& pos, const glm::vec3& dir, int xpk, const void* pv0, const void* pv1,
              XP** ppxp, float g);                // 0x1A7C18

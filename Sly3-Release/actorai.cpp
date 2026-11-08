@@ -1,5 +1,6 @@
 // The player actors' AI (0x144B28..0x1461C8), using the same stack and path follower as the guards.
 #include "actorai.h"
+#include "game/sly3.h"
 #include "actor.h"
 #include "activate.h"
 #include "aipursuit.h"
@@ -14,6 +15,9 @@
 #include "step.h"
 #include "target.h"
 #include "xfmath.h"
+#include "jt.h"
+#include "stepphys.h"
+#include "sw.h"
 
 #include <algorithm>
 #include <cfloat>
@@ -34,7 +38,7 @@ void RecoverTo(ACTOR* pa, const glm::vec3& pos)
     RecoverActorTo(pa, e);
 }
 // Native equivalent of SOST +0xDC's region, which native navigation queries from the same actual position.
-NAVREGION* Region(LO* p) { return PregionAt(Pos(p), !FCidDerivedFrom(p->Cid(), 0x30)); }
+NAVREGION* Region(LO* p) { return PregionAt(Pos(p), !FCidDerivedFrom(p->Cid(), S3CID(0x30))); }
 void Straight(CRV* c, const glm::vec3& a, const glm::vec3& b)
 {
     c->crvk = 0;
@@ -120,6 +124,51 @@ void JOBACTORFOLLOW::Drive(PADCTL* pc)
     StampPadctl(pc);
 }
 
+// orig: 0x00144E20
+void JOBACTORWALK::Init()
+{
+    AIJOB::Init();
+    sArrive = 40.0f;
+    fWalk = 1;
+    uSpeed = 1.0f;
+}
+
+// orig: 0x00144E68
+void JOBACTORWALK::Enter()
+{
+    AIJOB::Enter();
+    auto* follow = static_cast<JOBACTORFOLLOW*>(PjobPush(pactor, 0xA8));
+    follow->fNoAvoid = fRun;
+    follow->sArrive = sArrive;
+    follow->fWalk = fWalk;
+    follow->uSpeedActor = uSpeed;
+    SetGoal(posGoal);
+    follow->Enter();
+}
+
+// orig: 0x00144EE8
+bool JOBACTORWALK::FAtGoal() const
+{
+    const auto* follow = static_cast<const JOBACTORFOLLOW*>(pchild);
+    return !follow || follow->FArrived() || follow->st == 2;
+}
+
+// orig: 0x00144F48
+void JOBACTORWALK::SetGoal(const glm::vec3& pos)
+{
+    posGoal = pos;
+    if (!pchild) return;
+    CRV* curve = &pactor->crv294;
+    const REGENT* entry = Pregent(pactor->palo);
+    const NAVREGION* region = entry && entry->nGenNav == NGenNav() ? entry->preg : nullptr;
+    const glm::vec3 self = Pos(pactor->palo);
+    if (!region || fRun)
+        Straight(curve, self, posGoal);
+    else
+        FNavPathCrv(region, self, posGoal, curve);  // a failed search preserves the existing curve
+    static_cast<JOBACTORFOLLOW*>(pchild)->Follow(curve, 0);
+}
+
 // orig: 0x00145010 (D_002BD330/338 ranges are 0..600 and 0..1200)
 void JOBCOMPANION::Init()
 {
@@ -170,7 +219,7 @@ void JOBCOMPANION::PlanFollow()
         basis[0] = glm::vec3(c, s, 0); basis[1] = glm::vec3(-s, c, 0); basis[2] = glm::vec3(0, 0, 1);
         pos -= basis * ps->vecVel * dtPredict;
     }
-    else if (FCidDerivedFrom(ploFollow->Cid(), 0x30))
+    else if (FCidDerivedFrom(ploFollow->Cid(), S3CID(0x30)))
     {
         ALO* palo = static_cast<ALO*>(ploFollow);
         basis = palo->apxfRef[2] ? glm::mat3(palo->apxfRef[2]->matWorld) : glm::mat3(1.0f);
@@ -228,12 +277,12 @@ void JOBCOMPANION::SetState(int n)
     else if (n == 2)
     {
         const CID cid = pactor->palo->Cid();
-        const CID kind = cid == 0x36 ? 0xC3 : cid == 0x37 ? 0xC4 : cid == 0x35 ? 0xC5 : 0;
+        const CID kind = cid == S3CID(0x36) ? 0xC3 : cid == S3CID(0x37) ? 0xC4 : cid == S3CID(0x35) ? 0xC5 : 0;
         if (kind)
         {
             auto* p = PjobPush(pactor, kind);
-            if (auto* pm = dynamic_cast<JOBMURRAYATTACK*>(p)) pm->ploEnemy = ploEnemy;
-            if (p) p->Enter();  // C4 / C5 retain the factory's explicit unported-job warning
+            if (auto* pm = dynamic_cast<JOBCOMPANIONATTACK*>(p)) pm->ploEnemy = ploEnemy;
+            if (p) p->Enter();
         }
     }
 }
@@ -259,7 +308,7 @@ void JOBCOMPANION::Update()
         case 2:
             if (FNeedRecover()) SetState(1);
             else if (!(0.0f <= d && d <= 1200.0f)) SetState(0);
-            else if (auto* p = dynamic_cast<JOBMURRAYATTACK*>(pchild); p && p->st == -1) SetState(0);
+            else if (auto* p = dynamic_cast<JOBCOMPANIONATTACK*>(pchild); p && p->st == -1) SetState(0);
             break;
         }
         if (st == old) break;
@@ -277,18 +326,18 @@ void JOBCOMPANION::Update()
     }
 }
 
-// orig: 0x00145CD0
-void JOBMURRAYATTACK::Init() { AIJOB::Init(); st = -1; }
-// orig: 0x00145D00
-void JOBMURRAYATTACK::Enter()
+// orig: 0x00145CD0 / 0x001461C8 / 0x001466C0
+void JOBCOMPANIONATTACK::Init() { AIJOB::Init(); st = -1; }
+// orig: 0x00145D00 / 0x001461F8 / 0x001466F0
+void JOBCOMPANIONATTACK::Enter()
 {
     AIJOB::Enter();
     SetState(0);
     SetActorTargets(pactor, 4, ploEnemy, 4, ploEnemy);
     pactor->grf10E0 |= 1;
 }
-// orig: 0x00145D68
-void JOBMURRAYATTACK::Exit() { AIJOB::Exit(); pactor->grf10E0 &= ~1u; }
+// orig: 0x00145D68 / 0x00146260 / 0x00146758
+void JOBCOMPANIONATTACK::Exit() { AIJOB::Exit(); pactor->grf10E0 &= ~1u; }
 // orig: 0x00146158
 void JOBMURRAYATTACK::SetState(int n)
 {
@@ -346,14 +395,215 @@ void JOBMURRAYATTACK::Drive(PADCTL* pc)
                              g_clock.t, pactor->palo->oid, st, pc->uJoy, pc->radJoy, pc->grfbtn, ploEnemy->oidInstance);
 }
 
+namespace
+{
+// The enemy's direction in xy (D_002A2DA0 when degenerate) and its length.
+float DirToEnemy(ACTOR* pa, LO* ploEnemy, glm::vec3* pdir)
+{
+    glm::vec3 d = Pos(ploEnemy) - Pos(pa->palo);
+    d.z = 0.0f;
+    const float len = glm::length(d);
+    *pdir = len < 1e-4f ? glm::vec3(1, 0, 0) : d * (1.0f / len);
+    return len;
+}
+bool FFacing(ACTOR* pa, const glm::vec3& dir)
+{
+    const ALO* palo = pa->palo;
+    const glm::vec3 facing = palo->apxfRef[2] ? glm::vec3(palo->apxfRef[2]->matWorld[0]) : glm::vec3(1, 0, 0);
+    return 0.8f < glm::dot(facing, dir);
+}
+bool FAttackEnds(ACTOR* pa, LO* ploEnemy)
+{
+    GUARD* pg = PguardFromLo(ploEnemy);
+    return pa->nSubDF4 != -1 || !ploEnemy || !FLoActive(ploEnemy) || (pg && pg->f330);
+}
+}  // namespace
+
+// orig: 0x00146650
+void JOBBENTLEYATTACK::SetState(int n)
+{
+    if (st == n) return;
+    if (st == 2) UnlockJob(this);
+    st = n;
+    tSt = g_clock.t;
+    if (st == 2) LockJob(this);
+}
+// orig: 0x001462A8 (D_002BD350 350, D_002BD358 {250, 350})
+void JOBBENTLEYATTACK::Update()
+{
+    AIJOB::Update();
+    if (st == -1) return;
+    if (FAttackEnds(pactor, ploEnemy)) { SetState(-1); return; }
+    glm::vec3 dir;
+    const float len = DirToEnemy(pactor, ploEnemy, &dir);
+    int old;
+    do
+    {
+        old = st;
+        switch (st)
+        {
+        case 0:
+            if (len < 350.0f) { if (FFacing(pactor, dir)) SetState(2); }
+            else if (350.0f < len) SetState(1);
+            break;
+        case 1: if (len < 250.0f) SetState(0); break;
+        case 2:
+            if (BENTLEY* pb = PbentleyFromLo(pactor->palo); pb && pb->sub.state == -1 && 0.1f < g_clock.t - tSt)
+                SetState(-1);
+            break;
+        }
+    } while (old != st);
+}
+// orig: 0x00146560
+void JOBBENTLEYATTACK::Drive(PADCTL* pc)
+{
+    AIJOB::Drive(pc);
+    if (st < 0 || st >= 3) return;
+    const glm::vec3 d = Pos(ploEnemy) - Pos(pactor->palo);
+    pc->uJoy = st == 0 ? 0.1f : 1.0f;
+    pc->radJoy = std::atan2(d.y, d.x);
+    if (st == 2 && g_clock.t - tSt < 0.1f) { pc->grfbtn |= 0x80; StampPadctl(pc); }
+}
+
+// orig: 0x00146E18 (the strikes 2..4 hold the actor)
+void JOBSLYATTACK::SetState(int n)
+{
+    if (st == n) return;
+    if (st >= 2 && st <= 4) UnlockJob(this);
+    st = n;
+    tSt = g_clock.t;
+    if (st >= 2 && st <= 4) LockJob(this);
+    if (Debug()) std::printf("companion sly attack: t %.3f actor %d state %d enemy %d\n", g_clock.t, pactor->palo->oid, n,
+                             ploEnemy ? ploEnemy->oidInstance : -1);
+}
+// orig: 0x001467A0 (D_002BD360 450, D_002BD368 400, D_002BD36C 550, D_002BD370 0.2)
+void JOBSLYATTACK::Update()
+{
+    AIJOB::Update();
+    if (st == -1) return;
+    if (FAttackEnds(pactor, ploEnemy)) { SetState(-1); return; }
+    glm::vec3 dir;
+    const float len = DirToEnemy(pactor, ploEnemy, &dir);
+    SLY* ps = PslyFromLo(pactor->palo);
+    int old;
+    do
+    {
+        old = st;
+        switch (st)
+        {
+        case 0:
+            if (len < 450.0f)
+            {
+                if (FFacing(pactor, dir)) SetState(GRandInRange(0.0f, 1.0f) < 0.3f ? 3 : 2);
+            }
+            else if (550.0f < len) SetState(1);
+            break;
+        case 1: if (len < 400.0f) SetState(0); break;
+        case 2: if (ps && ps->mode == -1 && 0.1f < g_clock.t - tSt) SetState(-1); break;
+        case 3:
+            if (0.1f < g_clock.t - tSt)
+            {
+                if (pactor->jump.state == -1) SetState(-1);
+                else if (pactor->jump.state == 1 && 0.2f < g_clock.t - pactor->jump.t20) SetState(4);
+            }
+            break;
+        case 4: if (0.1f < g_clock.t - tSt && ps && ps->state != 13) SetState(-1); break;
+        }
+    } while (old != st);
+}
+// orig: 0x00146B18: 0 leaves the stick; 3 jumps toward him (speed 0.1..1 by the distance: -0.25 + d / 640)
+void JOBSLYATTACK::Drive(PADCTL* pc)
+{
+    AIJOB::Drive(pc);
+    if (st < 1 || st > 4) return;
+    const glm::vec3 d = Pos(ploEnemy) - Pos(pactor->palo);
+    pc->radJoy = std::atan2(d.y, d.x);
+    pc->uJoy = 1.0f;
+    const bool fNew = g_clock.t - tSt < 0.1f;
+    if (st == 3)
+    {
+        pc->uJoy = std::clamp(-0.25f + glm::length(glm::vec2(d)) * 0.0015625f, 0.1f, 1.0f);
+        if (fNew && pactor->jump.state == -1) { pc->grfbtn |= 0x40; StampPadctl(pc); }
+    }
+    else if ((st == 2 || st == 4) && fNew) { pc->grfbtn |= 0x80; StampPadctl(pc); }
+    if (Debug()) std::printf("companion sly pad: t %.3f actor %d state %d u %.3f heading %.3f buttons %X enemy %d\n",
+                             g_clock.t, pactor->palo->oid, st, pc->uJoy, pc->radJoy, pc->grfbtn, ploEnemy->oidInstance);
+}
+
+// orig: 0x00146E98: Murray's +0x1AC0 on (the charge goes on: 0x1B8EC0), his state 12 (0x1B6078), its wind-up (0x1B8D30)
+void JOBMURRAYRAGE::Enter()
+{
+    AIJOB::Enter();
+    MURRAY* pm = PmurrayFromLo(pactor->palo);
+    if (!pm) return;
+    pm->palo->SetField(0, 0x1AC0, 1);
+    SetMurrayState(pm, 12);
+    SetMurrayBerserk(pm, 0);
+}
+// orig: 0x00146EE0
+void JOBMURRAYRAGE::Exit()
+{
+    AIJOB::Exit();
+    MURRAY* pm = PmurrayFromLo(pactor->palo);
+    if (!pm) return;
+    pm->palo->SetField(0, 0x1AC0, 0);
+    SetMurrayState(pm, 0);
+}
+// orig: 0x00146F18: the wind-up faces Sly (0x2046B0) and keeps the heading; the charge turns toward him at 15 rad/s
+// at most (0x11CFE0) while he is within 0.5 rad of that heading (D_002BD374 / D_002BD378)
+void JOBMURRAYRAGE::Update()
+{
+    AIJOB::Update();
+    MURRAY* pm = PmurrayFromLo(pactor->palo);
+    LO* ploSly = nullptr;
+    if (g_psw)
+        for (LO* p : g_psw->mpcidaplo[S3CID(0x35)])
+            if (!p->ploCloneOf) { ploSly = p; break; }  // 0x2E1E40
+    if (!pm) return;
+    switch (pm->n1840)
+    {
+    case 0:
+        if (ploSly) SetStepPhysHeadingToward(pm->palo, PosLoWorld(ploSly) - PosLoWorld(pm->palo));
+        radCharge = pm->radHeading;
+        break;
+    case 1:
+        if (ploSly)
+        {
+            const glm::vec3 d = PosLoWorld(ploSly) - PosLoWorld(pm->palo);
+            const float rad = std::atan2(d.y, d.x);
+            if (std::fabs(RadNormalize(rad - radCharge)) < 0.5f)
+            {
+                const glm::vec3 x(MatJtLo(pm->palo)[0]);
+                const float radCur = std::atan2(x.y, x.x);  // 0x204740
+                SetStepPhysHeading(pm->palo, radCur + GLimitAbs(RadNormalize(rad - radCur), 15.0f * g_clock.dt));
+            }
+        }
+        break;
+    default: break;
+    }
+}
+
+void SetMurrayRage(ACTOR* pa, bool f)
+{
+    if (!pa) return;
+    ClearJobs(pa);  // 0x1EECD0 (+0x26C)
+    if (!f) return;
+    AIJOB* pj = PjobPush(pa, 0xC6);  // 0x205438
+    pj->Enter();                     // vt slot 8
+}
+
 // orig: 0x001EF138 (the actor-job cases)
 std::unique_ptr<AIJOB> PjobNewActor(CID cid)
 {
     switch (cid)
     {
     case 0xA8: return std::make_unique<JOBACTORFOLLOW>();
+    case 0xC1: return std::make_unique<JOBACTORWALK>();
     case 0xC2: return std::make_unique<JOBCOMPANION>();
     case 0xC3: return std::make_unique<JOBMURRAYATTACK>();
+    case 0xC4: return std::make_unique<JOBBENTLEYATTACK>();
+    case 0xC5: return std::make_unique<JOBSLYATTACK>();
+    case 0xC6: return std::make_unique<JOBMURRAYRAGE>();
     default: return nullptr;
     }
 }
@@ -367,4 +617,5 @@ void SetActorFollow(ACTOR* pa, LO* target, const glm::vec3& offset)
     p->offset = offset;
     p->Enter();
 }
+
 

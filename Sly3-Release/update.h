@@ -42,6 +42,7 @@ bool FLoHasListeners(const LO* plo);
 void NotifyLoListeners(LO* plo, int msgk, void* pv);
 void NotifyLo(LO* plo, int msgk, void* pv);
 void ResetLoListeners();  // a new world
+void ForgetLoListeners(const LO* plo);  // an object's storage reused (a pooled noise: ainoise.cpp)
 void RegisterLoUpdate(uint32_t pfnOrig, PFNUPDATE pfn);
 PFNUPDATE PfnUpdateForClass(const CLS* pcls);  // vt slot 16 bound (null: no native update)
 bool FHasSwPass(uint32_t pfnOrig);              // (vtaudit.cpp) a pass is registered for the original function
@@ -52,6 +53,10 @@ void RegisterSwPass(uint32_t pfnOrig, PFNSWPASS pfn, const char* pszFile = __bui
 // an identical object/member/argument still on the pending list, including across callback families.
 using PFNDEFERREDCALL = void (*)(void* object, int arg);
 void PostDeferredCall(void* object, uint32_t pfnOrig, PFNDEFERREDCALL pfn, int arg = 0);
+void CancelDeferredCalls(void* object);  // 0x149B58 (grf 1)
+// orig 0x149A50: append a pointer-argument member without the 0x149AB8 duplicate check.
+using PFNDEFERREDPOINTERCALL = void (*)(void* object, void* arg);
+void PostDeferredPointerCall(void* object, uint32_t pfnOrig, PFNDEFERREDPOINTERCALL pfn, void* arg);
 
 void AddLoToUpdateTable(SW* psw, LO* plo);       // orig 0x210140 (vt slot 23 0x1A6178)
 void RemoveLoFromUpdateTable(SW* psw, LO* plo);  // orig 0x210268 (vt slot 22 0x1A6150)
@@ -62,6 +67,7 @@ void RemoveLoFromUpdateTable(SW* psw, LO* plo);  // orig 0x210268 (vt slot 22 0x
 extern LO* g_ploFadeRecover;   // g_game +0x3E60 (0x20E338)
 void StartFadeLo(LO* plo);     // orig 0x15E1D8 (hudwidget.cpp)
 void StartSw(SW* psw, bool fInitHud = false, PFNSWPASS pfnPostLoadPlayers = nullptr);
+void StartLoadedLo(SW* psw, LO* plo);  // (StartSw's slot-15 part for one object; PC: also copies made at run time)
 
 // orig 0x1A61E0 / 0x1331F8 (vt slot 3): splice event symid of plo with its arguments; deferred: queued with the
 // time and run at the next 0x149C80.

@@ -676,7 +676,14 @@ void StartBootSequence(bool fMovie)
     // (kind 5: 0x1ACC38(0x2E6550, 1): the card's messages on; debug SLY2N_NOCARD: no card at all, no messages)
     // The European build (0x1A50C0) queues kind 5 only for a disc with one language: with more, the card waits for the
     // title's language and its first Start (UpdateFrontEnd), so that its messages are in that language.
-    if (g_ncardMode == 0 && CLanguages() >= 2) return (void)RequestTransition(nullptr, g_disc.PbElf(VA_FK_BOOT_WORLD, 64), 0x189, -1, 1, -1);
+    // (PC: the save files are read at once all the same, with the card's messages still off, so the title shows "Resume
+    // Game" and the title's Load Game lists the saves before that first Start, as the USA build does; the PS2 couldn't
+    // know about the card's contents yet)
+    if (g_ncardMode == 0 && CLanguages() >= 2)
+    {
+        ReadSaveSlots(g_fDevCard ? SLY2N_DEV_ROOT "/build/saves/round4-user-card/memcard0/BASCUS-97316YAOTWTD!" : "");
+        return (void)RequestTransition(nullptr, g_disc.PbElf(VA_FK_BOOT_WORLD, 64), 0x189, -1, 1, -1);
+    }
     if (g_ncardMode == 0) g_ncardMode = std::getenv("SLY2N_NOCARD") ? 2 : 1;
     ReadSaveSlots(g_fDevCard ? SLY2N_DEV_ROOT "/build/saves/round4-user-card/memcard0/BASCUS-97316YAOTWTD!" : "");
     RequestTransition(nullptr, g_disc.PbElf(VA_FK_BOOT_WORLD, 64), 0x189, -1, 1, -1);

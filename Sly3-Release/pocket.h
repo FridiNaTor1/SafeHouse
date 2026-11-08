@@ -41,6 +41,7 @@ LO* PloTakePocket(LO* plo);              // orig 0x001F1E20
 
 // The pocket object's reward (+0x150 the launch point record, +0x154 the proxy, +0x158 the instance)
 void ClearReward(LO* ppocket);                                      // orig 0x001C2DB8
+struct XF* PxfRewardPoint(LO* ppocket);                            // the pocket object's +0x150 (null: none readied)
 int NReadyReward(LO* ppocket, LO* plo, int id, int oidPoint);       // orig 0x001C2DC8
 LO* PloLaunchReward(LO* ppocket, int c);                            // orig 0x001C2EF0
 

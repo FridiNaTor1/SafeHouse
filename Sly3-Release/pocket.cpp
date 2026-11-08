@@ -2,6 +2,8 @@
 // (sly2-decomp/src/hand func_001F17B0 / 001F1768 / 001F17F8 / 001F1900 / 001F1CF8 / 001F1E20 / 0018B348) and the
 // asm (0x18B460, 0x188F20's event 0x167).
 #include "pocket.h"
+#include "game/sly3.h"
+#include "worldglobals.h"
 
 #include "actor.h"
 #include "animfind.h"
@@ -20,9 +22,13 @@
 #include "render.h"
 #include "so.h"
 #include "vecmat.h"
+#include "xfphys.h"
 #include <cfloat>
 int NRandInRange(int nLow, int nHigh);  // util.h (0x11D3F8)
 float GRandInRange(float gLow, float gHigh);  // xfmath.h (0x11D448)
+glm::mat3 MatEuler(const glm::vec3& e);         // xfmath.h (0x11B628)
+glm::vec3 EulerFromMat(const glm::mat3& m);     // xfmath.h (0x11BFF0)
+glm::mat4 InverseAffineMatrix4(const glm::mat4& m);  // xfmath.h (0x11C318)
 glm::mat3 BuildLookAtMatrix(const glm::vec3& vecX, const glm::vec3& vecY);  // mat.h (0x11B830)
 #include "po.h"
 #include "sly.h"
@@ -34,6 +40,7 @@ glm::mat3 BuildLookAtMatrix(const glm::vec3& vecX, const glm::vec3& vecY);  // m
 #include "transition.h"
 #include "update.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <map>
@@ -52,6 +59,7 @@ void WarnOnce(const std::string& what)
     }
 }
 std::unordered_map<LO*, POCKET> s_mppocket;
+WORLD_TABLE(s_mppocket);   // (PC: moved aside while a kept world loads, worldglobals.h)
 // The pocket object's reward (+0x150 the launch point (a record of kind 0xD), +0x154 the proxy, +0x158 the instance)
 struct REWARD
 {
@@ -60,8 +68,10 @@ struct REWARD
     LO* plo = nullptr;
 };
 std::unordered_map<LO*, REWARD> s_mpreward;
+WORLD_TABLE(s_mpreward);   // (PC: moved aside while a kept world loads, worldglobals.h)
 // The pocket object's state machine +0x16C (the glow: its SM part 0x2B2 at +0x168, made by its post-load)
 std::unordered_map<LO*, SMA*> s_mppsma;
+WORLD_TABLE(s_mppsma);   // (PC: moved aside while a kept world loads, worldglobals.h)
 bool FPrint() { static const bool s_f = std::getenv("SLY2N_POCKETPRINT") != nullptr; return s_f; }
 }  // namespace
 
@@ -97,6 +107,12 @@ void AddPocketPrize(LO* plo, int oid)
     e.n4 = 0;
     e.n8 = -1;
     e.c = 1;
+    if (FPrint())
+    {
+        std::printf("pocket contents %d:", plo->oid);
+        for (int i = 0; i < p.c; ++i) std::printf(" %d", p.ae[i].oid);
+        std::printf("\n");
+    }
 }
 
 // orig: 0x001F1768 (c coins, the prize 0x2B3, when +0x490 allows)
@@ -117,7 +133,7 @@ void AddPocketCoins(LO* plo, int c)
 // the SM is the object's own part 0x2B2 (the template's for a copy).
 SMA** PpsmaPocket(LO* ppocket)
 {
-    if (!ppocket || !FIsLoDerivedFrom(ppocket, 0x30)) return nullptr;
+    if (!ppocket || !FIsLoDerivedFrom(ppocket, S3CID(0x30))) return nullptr;
     auto it = s_mppsma.find(ppocket);
     if (it != s_mppsma.end()) return &it->second;
     SMA*& psma = s_mppsma[ppocket];
@@ -214,7 +230,7 @@ void UpdatePocketMode(LO* plo)
     if (k != 0)
     {
         LO* pcur = g_psw ? PloPoCurrent(g_psw) : nullptr;  // 0x1C4840
-        const bool fSly = pcur && FIsLoDerivedFrom(pcur, 0x35);  // (D_002E1E40: Sly)
+        const bool fSly = pcur && FIsLoDerivedFrom(pcur, S3CID(0x35));  // (D_002E1E40: Sly)
         k = (!p.c || p.ae[p.c - 1].oid == 0x2B3 || !pcur || !fSly) ? 1 : 2;
     }
     SetPocketMode(plo, k);
@@ -268,13 +284,13 @@ void FillPocket(LO* plo)
     int iep = IepisodeCur();  // 0x210AE0
     if (iep == -1) iep = 1;
     if (iep < 0 || iep > 8) iep = 1;
-    const POCKETTBL& tbl = FIsLoDerivedFrom(plo, 0x3A) ? s_atblPocket3A[iep] : s_atblPocket[iep];
+    const POCKETTBL& tbl = FIsLoDerivedFrom(plo, S3CID(0x3A)) ? s_atblPocket3A[iep] : s_atblPocket[iep];
     POCKETENT e{0, 0, 0, 0};  // (the memset)
     if (p.c > 0)
     {
         LO* po = ppocket ? PloFindSwNearest(ppocket, p.ae[0].oid) : PloFindSwAny(p.ae[0].oid);  // 0x15E938 (4)
         // a carryable prize (0x5C) whose task (+0x230) is done is dropped
-        if (po && FIsLoDerivedFrom(po, 0x5C))
+        if (po && FIsLoDerivedFrom(po, S3CID(0x5C)))
         {
             const OID oidTask = static_cast<OID>(po->U32Field(0, 0x230, static_cast<uint32_t>(-1)));
             bool fDone = false;
@@ -326,7 +342,7 @@ void FillPocket(LO* plo)
     if (e.c > 0 && p.c < 8) p.ae[p.c++] = e;
     if (FPrint())
     {
-        const glm::vec3 pos = FCidDerivedFrom(plo->Cid(), 0x30) ? PosAloCenter(static_cast<ALO*>(plo)) : glm::vec3(0.0f);
+        const glm::vec3 pos = FCidDerivedFrom(plo->Cid(), S3CID(0x30)) ? PosAloCenter(static_cast<ALO*>(plo)) : glm::vec3(0.0f);
         std::printf("pocket %d (%p, copy of %p): filled (episode %d) at (%.0f %.0f %.0f) t %.3f", plo->oid, static_cast<void*>(plo), static_cast<void*>(plo->ploCloneOf), iep, pos.x, pos.y, pos.z, g_clock.t);
         for (int i = 0; i < p.c; i++) std::printf(" {%d %d %d x%d}", p.ae[i].oid, p.ae[i].n4, p.ae[i].n8, p.ae[i].c);
         std::printf("\n");
@@ -348,7 +364,7 @@ void NextPocketPrize(LO* plo)
         if (FPrint()) std::printf("pocket %d: next %d prize %d -> oid %d cid 0x%X (%s)\n", plo->oid, p.i, e.oid, po->oid, po->Cid(),
                                   g_acls[po->Cid()].name);
         int oidPoint = 0x2B0;
-        if (FIsLoDerivedFrom(po, 0x5C))
+        if (FIsLoDerivedFrom(po, S3CID(0x5C)))
         {
             // (+0x230's task +0x54: -1 / 0 ready at once, 1 the point 0x2B1, else the next entry)
             const OID oidTask = static_cast<OID>(po->U32Field(0, 0x230, static_cast<uint32_t>(-1)));
@@ -373,6 +389,12 @@ void NextPocketPrize(LO* plo)
 
 // orig: 0x001C2DB8
 void ClearReward(LO* ppocket) { s_mpreward[ppocket] = REWARD{}; }
+// the pocket object's launch point record (+0x150; null: none readied)
+XF* PxfRewardPoint(LO* ppocket)
+{
+    auto it = s_mpreward.find(ppocket);
+    return it == s_mpreward.end() ? nullptr : it->second.pxf;
+}
 
 // orig: 0x001C2D70: after the pocket's ordinary ALO draw, draw its readied
 // reward through 0x1A5EE8 at +0x150's world matrix, with both alphas 1.
@@ -414,7 +436,7 @@ int NReadyReward(LO* ppocket, LO* plo, int id, int oidPoint)
     REWARD& r = s_mpreward[ppocket];
     if (r.plo) return 0;
     r.pproxy = nullptr;
-    if (FIsLoDerivedFrom(plo, 6))
+    if (FIsLoDerivedFrom(plo, S3CID(6)))
     {
         r.pproxy = plo;
         r.plo = PloAttachProxy(g_psw, plo, 0);  // 0x1CB250
@@ -424,15 +446,15 @@ int NReadyReward(LO* ppocket, LO* plo, int id, int oidPoint)
             return 1;
         }
     }
-    else if (FIsLoDerivedFrom(plo, 0x30))
+    else if (FIsLoDerivedFrom(plo, S3CID(0x30)))
         r.plo = plo;
     else
         return 2;
-    if (FIsLoDerivedFrom(r.plo, 0x5E)) SetPickupLootKind(r.plo, id);  // 0x1C7A58
-    if (FIsLoDerivedFrom(r.plo, 0x5A)) SetPickupState(r.plo, 2);  // vt slot 76
+    if (FIsLoDerivedFrom(r.plo, S3CID(0x5E))) SetPickupLootKind(r.plo, id);  // 0x1C7A58
+    if (FIsLoDerivedFrom(r.plo, S3CID(0x5A))) SetPickupState(r.plo, 2);  // vt slot 76
     else RemoveLo(g_psw, r.plo);  // vt slot 9
     r.pxf = nullptr;
-    if (FCidDerivedFrom(ppocket->Cid(), 0x30))
+    if (FCidDerivedFrom(ppocket->Cid(), S3CID(0x30)))
         for (const auto& pxf : static_cast<ALO*>(ppocket)->axf)  // 0x1F4C58
             if (pxf && pxf->tag == oidPoint && pxf->kind == 0xD) { r.pxf = pxf.get(); break; }
     if (FPrint()) std::printf("reward %d: readied %d (cid 0x%X) proxy %d point %s\n", ppocket->oid, r.plo->oid, r.plo->Cid(),
@@ -458,13 +480,13 @@ LO* PloLaunchReward(LO* ppocket, int c)
         else
         {
             plo = r.pproxy ? PloAttachProxy(g_psw, r.pproxy, 0) : nullptr;
-            if (plo && FIsLoDerivedFrom(plo, 0x5A)) SetPickupState(plo, 2);
+            if (plo && FIsLoDerivedFrom(plo, S3CID(0x5A))) SetPickupState(plo, 2);
         }
         if (!plo) break;
         if (!ploFirst) ploFirst = plo;
         const glm::vec3 pos0 = r.pxf ? glm::vec3(r.pxf->matWorld[3]) : PosAloCenter(static_cast<ALO*>(ppocket));
         LO* pcur = PloPoCurrent(g_psw);  // 0x1C4840
-        const glm::vec3 posCur = pcur && FCidDerivedFrom(pcur->Cid(), 0x30) ? PosAloCenter(static_cast<ALO*>(pcur)) : pos0;
+        const glm::vec3 posCur = pcur && FCidDerivedFrom(pcur->Cid(), S3CID(0x30)) ? PosAloCenter(static_cast<ALO*>(pcur)) : pos0;
         const float rad = GRandInRange(-1.5f, 1.5f);   // D_002C0CF0
         const float s = GRandInRange(100.0f, 150.0f);  // D_002C0CF8
         const glm::vec3 off = cmm::SetVectorCylind(rad, s, -75.0f);  // 0x11E1A0
@@ -481,9 +503,9 @@ LO* PloLaunchReward(LO* ppocket, int c)
         const float z = delta.z - (dt * (dt * 0.5f)) * g.z;
         const glm::vec3 flat = delta - glm::vec3(0.0f, 0.0f, 1.0f) * delta.z;
         const glm::vec3 vel = flat * (1.0f / dt) + glm::vec3(0.0f, 0.0f, 1.0f) * (z / dt);
-        if (FIsLoDerivedFrom(plo, 0x5A))
+        if (FIsLoDerivedFrom(plo, S3CID(0x5A)))
         {
-            const bool fCoin = FIsLoDerivedFrom(plo, 0x5B) || FIsLoDerivedFrom(plo, 0x5D);
+            const bool fCoin = FIsLoDerivedFrom(plo, S3CID(0x5B)) || FIsLoDerivedFrom(plo, S3CID(0x5D));
             const float fi = static_cast<float>(i);
             LaunchPickup(plo, pos0, vel, fi * 0.05f, fCoin ? fi * 0.15f : FLT_MAX, r.pproxy);  // 0x1C6BD0
         }
@@ -513,19 +535,35 @@ LO* PloTakePocket(LO* plo)
     return r;
 }
 
-// orig: 0x0018B348 (Sly's load: the clip +0x1BC8's event 0x167 time +0x1BD8; the hand's points in the clip at it
-// (+0x1BE0 the cane's, +0x1BF0 / +0x1C00 the arm joints', +0x1C10 the hand's rotation, +0x1C20 the cane in the hand's
-// frame) for the pose's joint controllers: TODO)
+// orig: 0x0018B348 (Sly's load: the clip +0x1BC8's event 0x167 time +0x1BD8; at it, in Sly's object space (+0x60), the
+// cane's point (+0x19A4's object record: +0x1BE0), the arm's joint (+0x19CC: +0x1BF0), the hand's (+0x19C0: +0x1C00,
+// its rotation +0x1C10) and the cane's point in the hand's frame (+0x1C20), for the reach test 0x18B460)
 void LoadPickpocket(SLY* p, ASEG* paseg)
 {
     if (!paseg) return;
     p->g1BD8 = GEventAseg11(paseg, 0x167);  // 0x12F990
+    ALO* palo = p->palo;
+    XF* pxfTo = palo ? PxfObj(palo) : nullptr;
+    ALO* pcane = p->plo19A4 && FIsLoDerivedFrom(p->plo19A4, S3CID(0x30)) ? static_cast<ALO*>(p->plo19A4) : nullptr;
+    if (!palo || !pxfTo || !pcane || !PxfObj(pcane) || !p->pxfArm || !p->pxfHandRot) return;
+    glm::mat4 m0(1.0f), m1(1.0f), m2(1.0f);
+    CalculateAsegMatrices(paseg, palo, PxfObj(pcane), pxfTo, p->g1BD8, 0.0f, &m0, nullptr);  // 0x1300B8
+    CalculateAsegMatrices(paseg, palo, p->pxfArm, pxfTo, p->g1BD8, 0.0f, &m1, nullptr);
+    CalculateAsegMatrices(paseg, palo, p->pxfHandRot, pxfTo, p->g1BD8, 0.0f, &m2, nullptr);
+    p->posCane1BE0 = glm::vec3(m0[3]);
+    p->posArm1BF0 = glm::vec3(m1[3]);
+    p->posHand1C00 = glm::vec3(m2[3]);
+    p->eulHand1C10 = EulerFromMat(glm::mat3(m2));                                           // 0x11BFF0
+    p->posCaneHand1C20 = glm::vec3(InverseAffineMatrix4(m2) * glm::vec4(p->posCane1BE0, 1.0f));  // 0x11C318
 }
 
 // orig: 0x0018B460 (state 11: before the take (the clip's time short of +0x1BD8) Sly faces the target's pocket
-// (0x2046F0) and the arm's joint controllers +0x19F8 / +0x19EC / +0x19FC reach for its predicted place (0x2309E8,
-// 0x22FC48, the limits 0x11D948, 0x12DA30): +0x1BD4 = 1, +0x1BDC the time; after it they relax over the time
-// (0x2C0C44), +0x1BD4 = 0)
+// (0x2046F0) and the arm reaches for the pocket's point (0, 0, 25) in its launch record (+0x150) where it will be in
+// min(the time left, 0.15 s) (0x2309E8), in Sly's space: the hand turned about its y by atan2(-z, 0.75 x) (within
+// +-1), then slid along the x of the hand's parent space (+0x19A0's position record's reference) by up to -50..35; what
+// is left over moves the hand, and only while that hand stays within 120 of the arm's joint does it reach (+0x1BD4 = 1,
+// its joint controllers +0x19F8 / +0x19EC / +0x19FC set, +0x1BDC the time). Out of reach, or after the take's time, it
+// does not (+0x1BD4 = 0; the controllers relax over 0.25 s): the take at the event 0x167 then gets nothing (R12).
 void UpdatePickpocketPose(SLY* p)
 {
     ASEGA* pasega = p->pasega;
@@ -533,13 +571,42 @@ void UpdatePickpocketPose(SLY* p)
     const float svt = pasega ? pasega->svt : 1.0f;
     const float dtLeft = (p->g1BD8 - t) / svt;
     LO* ppocket = p->plo10DC ? PloPocket(p->plo10DC) : nullptr;
-    if (ppocket && 0.0f < dtLeft)
+    ALO* palo = p->palo;
+    XF* pxfSpace = palo ? PxfObj(palo) : nullptr;
+    if (ppocket && 0.0f < dtLeft && pxfSpace)
     {
         FaceActorToward(p, ppocket);  // 0x2046F0
-        WarnOnce("0x18B460's arm joint controllers (0x2309E8 / 0x12DA30)");
-        p->f1BD4 = 1;
-        p->t1BDC = g_clock.t;
-        return;
+        XF* pxfPoint = PxfRewardPoint(ppocket);  // the pocket's +0x150
+        if (!pxfPoint && FIsLoDerivedFrom(ppocket, S3CID(0x30))) pxfPoint = PxfObj(static_cast<ALO*>(ppocket));
+        glm::mat4 mPred(1.0f);
+        if (pxfPoint) PredictXfChain(pxfPoint, nullptr, std::min(dtLeft, 0.15f), &mPred, nullptr);  // 0x2309E8 (D_002BF380)
+        const glm::vec3 posWorld = glm::vec3(mPred * glm::vec4(0.0f, 0.0f, 25.0f, 1.0f));             // D_002BF390
+        const glm::vec3 posMapped = PosConvertXfs(nullptr, pxfSpace, posWorld);                     // 0x22FC48
+        const float radYaw = std::clamp(std::atan2(-posMapped.z, 0.75f * posMapped.x), -1.0f, 1.0f);  // D_002BF3A0 / 3A8
+        glm::mat4 m(MatEuler(p->eulHand1C10 + glm::vec3(0.0f, radYaw, 0.0f)));                     // 0x11B628
+        m[3] = glm::vec4(p->posHand1C00, 1.0f);
+        const glm::vec3 vecRel = posMapped - glm::vec3(m * glm::vec4(p->posCaneHand1C20, 1.0f));
+        ALO* pfocus = p->plo19A0 && FIsLoDerivedFrom(p->plo19A0, S3CID(0x30)) ? static_cast<ALO*>(p->plo19A0) : nullptr;
+        XF* pxfFocus = pfocus && PxfPos(pfocus) ? PxfPos(pfocus)->pxfRef : nullptr;  // +0x19A0's +0x58's +0xA0
+        const float dx = std::clamp(VecConvertXfs(pxfSpace, pxfFocus, vecRel).x, -50.0f, 35.0f);  // 0x22FCC8, D_002BF3B0
+        const glm::vec3 vecResidual = vecRel - VecConvertXfs(pxfFocus, pxfSpace, glm::vec3(dx, 0.0f, 0.0f));
+        const float d = glm::length(p->posHand1C00 + vecResidual - p->posArm1BF0);
+        if (FPrint())
+        {
+            const glm::vec3 o = glm::vec3(m * glm::vec4(p->posCaneHand1C20, 1.0f)), w = glm::vec3(pxfSpace->matWorld[3]);
+            std::printf("pickpocket: t %.3f left %.3f reach %.1f (limit 120) yaw %.3f dx %.1f mapped %.0f %.0f %.0f origin %.0f %.0f %.0f "
+                        "sly %.0f %.0f %.0f pocket %.0f %.0f %.0f point %d hand %.0f %.0f %.0f arm %.0f %.0f %.0f cane %.0f %.0f %.0f\n",
+                        g_clock.t, dtLeft, d, radYaw, dx, posMapped.x, posMapped.y, posMapped.z, o.x, o.y, o.z, w.x, w.y, w.z, posWorld.x,
+                        posWorld.y, posWorld.z, PxfRewardPoint(ppocket) != nullptr, p->posHand1C00.x, p->posHand1C00.y, p->posHand1C00.z,
+                        p->posArm1BF0.x, p->posArm1BF0.y, p->posArm1BF0.z, p->posCane1BE0.x, p->posCane1BE0.y, p->posCane1BE0.z);
+        }
+        if (d < 120.0f)  // D_002BF3B8
+        {
+            WarnOnce("0x18B460's arm joint controllers (0x12DA30)");
+            p->f1BD4 = 1;
+            p->t1BDC = g_clock.t;
+            return;
+        }
     }
     p->f1BD4 = 0;
 }
@@ -550,7 +617,7 @@ void PickpocketTake(SLY* p)
 {
     if (!p->plo10DC || !p->f1BD4) return;
     LO* r = PloTakePocket(p->plo10DC);
-    if (!r || FIsLoDerivedFrom(r, 0x5B) || FIsLoDerivedFrom(r, 0x5D)) return;
+    if (!r || FIsLoDerivedFrom(r, S3CID(0x5B)) || FIsLoDerivedFrom(r, S3CID(0x5D))) return;
     ASEG* paseg = dynamic_cast<ASEG*>(PloFindSwChild(p->palo, 0x282));  // 0x15E938(G, 1, 0x282, Sly)
     p->plo1BCC = r;
     StartPrizeInteract(p, paseg, r, -1);  // 0x1424E0
@@ -575,6 +642,15 @@ struct INITPOCKETMETHODS
         RegisterObjectGetter(773, [](LO* plo) {  // Sly option 756, +0x1BCC
             CRef r;
             if (SLY* p = PslyFromLo(plo)) r.SetBasic(p->plo1BCC);
+            return r;
+        });
+        // EOPID 740 (an actor's option 726, field +0x9A0 = the interaction's reach +0x440 +0xA0): the object held in
+        // the hand (0x1CD098). The prize title card's script (Sly's module: events 5332 / 5334) turns option 178
+        // (SetSoIgnoreLocked, EOPID 69) on and off for Sly, his parts 316 / 317 and this object, so the held prize
+        // draws over the card with him (R15: natively it read nothing and the prize stayed behind the card).
+        RegisterObjectGetter(740, [](LO* plo) {
+            CRef r;
+            if (ACTOR* pa = FCidDerivedFrom(plo->Cid(), S3CID(0x34)) ? PactorFromLo(plo) : nullptr) r.SetBasic(pa->inter.reach.ploHeld);
             return r;
         });
         RegisterObjectMethod(0x103C18, [](LO* plo, const std::vector<CRef>& a) {
@@ -608,3 +684,11 @@ struct INITPOCKETMETHODS
     }
 } s_initpocketmethods;
 }  // namespace
+
+// orig: 0x1A6730 (CloneLo copies the object): a copy keeps the pocket the load's methods filled (0x103C18 coins,
+// 0x103CA0 / 0x103D28 prizes); natively they live in s_mppocket, so a copied guard's pocket was empty
+void ClonePocketData(LO* source, LO* target)
+{
+    const auto it = s_mppocket.find(source);
+    if (it != s_mppocket.end()) s_mppocket[target] = it->second;
+}

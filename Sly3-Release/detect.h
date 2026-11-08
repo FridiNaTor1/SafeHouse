@@ -57,5 +57,6 @@ void AddDetectorTarget(DETECTOR* pdet, LO* plo);
 
 // orig 0x227C90: the point inside the shape (a cid-0x16 object)
 bool FPointInShape(LO* plo, const glm::vec3& pos);
+bool FGuardSeesPoint(LO* ploGuard, LO* ploVolume, const glm::vec3& pos, const glm::vec3& posT);  // 0x208BE0 kind 1
 
 void PostLoadDetector(LO* object); // loaded object references before world-start events

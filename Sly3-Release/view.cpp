@@ -3,6 +3,7 @@
 // Until the world loader lands, the scene comes from the parse maps and reference RAM (scene.h).
 
 #include "view.h"
+#include "game/sly3.h"
 
 #include "disc.h"
 #include "display.h"
@@ -145,7 +146,7 @@ int ViewWorld(const VIEWOPTS& vo)
         {
             for (const OPT& o : psw->aoptSw)
             {
-                const uint32_t va = 0x2AC880 + uint32_t(o.eopid) * 0x28;
+                const uint32_t va = S3VA(0x2AC880) + uint32_t(o.eopid) * 0x28;
                 std::printf("  sw opt %d grf 0x%X k %u w8 0x%X w14 0x%X w18 0x%X:", o.eopid, o.grf, g_disc.U32Elf(va), g_disc.U32Elf(va + 8),
                             g_disc.U32Elf(va + 0x14), g_disc.U32Elf(va + 0x18));
                 for (const OPTVAL& v : o.aval) std::printf(" [n %d g %g %g %g %g]", v.n, v.ag[0], v.ag[1], v.ag[2], v.ag[3]);
@@ -162,7 +163,7 @@ int ViewWorld(const VIEWOPTS& vo)
                     }
                     for (const OPT& o : plo->aopt)
                     {
-                        const uint32_t va = 0x2AC880 + uint32_t(o.eopid) * 0x28;
+                        const uint32_t va = S3VA(0x2AC880) + uint32_t(o.eopid) * 0x28;
                         std::printf("  opt %d grf 0x%X k %u w8 0x%X w14 0x%X w18 0x%X w24 0x%X:", o.eopid, o.grf, g_disc.U32Elf(va),
                                     g_disc.U32Elf(va + 8), g_disc.U32Elf(va + 0x14), g_disc.U32Elf(va + 0x18), g_disc.U32Elf(va + 0x24));
                         for (const OPTVAL& v : o.aval) std::printf(" [k %d n %d g %g %g %g %g c%zu]", v.k, v.n, v.ag[0], v.ag[1], v.ag[2], v.ag[3], v.alist.size());
@@ -172,14 +173,14 @@ int ViewWorld(const VIEWOPTS& vo)
             for (LO* plo : AploLights(psw.get()))
             {
                 std::printf("light oid %d cid %d (%s) alo %d xf %zu\n", plo->oid, plo->Cid(), g_acls[plo->Cid()].name,
-                            int(FCidDerivedFrom(plo->Cid(), 0x30)), FCidDerivedFrom(plo->Cid(), 0x30) ? static_cast<ALO*>(plo)->axf.size() : 0);
+                            int(FCidDerivedFrom(plo->Cid(), S3CID(0x30))), FCidDerivedFrom(plo->Cid(), S3CID(0x30)) ? static_cast<ALO*>(plo)->axf.size() : 0);
                 if (const LOX* px = dynamic_cast<const LOX*>(plo))
                 {
                     const glm::mat4 w = px->pxf ? px->pxf->matWorld : glm::mat4(1.0f), m = px->mat, wm = w * m;
                     std::printf("  lox ixf %d pxf %d mat pos %g %g %g r0 %g %g %g | xf pos %g %g %g | w*m pos %g %g %g r0 %g %g %g\n", px->ixfRef, px->pxf != nullptr,
                                 m[3][0], m[3][1], m[3][2], m[0][0], m[0][1], m[0][2], w[3][0], w[3][1], w[3][2], wm[3][0], wm[3][1], wm[3][2], wm[0][0], wm[0][1], wm[0][2]);
                 }
-                if (FCidDerivedFrom(plo->Cid(), 0x30) && !static_cast<ALO*>(plo)->axf.empty())
+                if (FCidDerivedFrom(plo->Cid(), S3CID(0x30)) && !static_cast<ALO*>(plo)->axf.empty())
                 {
                     const glm::mat4 m = MatWorldOfAlo(static_cast<ALO*>(plo));
                     std::printf("  world r0 %g %g %g pos %g %g %g\n", m[0][0], m[0][1], m[0][2], m[3][0], m[3][1], m[3][2]);
@@ -191,7 +192,7 @@ int ViewWorld(const VIEWOPTS& vo)
                 }
                 for (const OPT& o : plo->aopt)
                 {
-                    const uint32_t va = 0x2AC880 + uint32_t(o.eopid) * 0x28;
+                    const uint32_t va = S3VA(0x2AC880) + uint32_t(o.eopid) * 0x28;
                     std::printf("  opt %d grf 0x%X k %u w8 0x%X wC 0x%X w10 0x%X w14 0x%X w18 0x%X:", o.eopid, o.grf, g_disc.U32Elf(va),
                                 g_disc.U32Elf(va + 8), g_disc.U32Elf(va + 0xC), g_disc.U32Elf(va + 0x10), g_disc.U32Elf(va + 0x14), g_disc.U32Elf(va + 0x18));
                     for (const OPTVAL& v : o.aval) std::printf(" [n %d g %g %g %g %g]", v.n, v.ag[0], v.ag[1], v.ag[2], v.ag[3]);
@@ -235,7 +236,7 @@ int ViewWorld(const VIEWOPTS& vo)
                     }
         }
         // the screen objects (sprite sets, cid 0x7E family) for the 2D
-        for (LO* plo : AploOfClass(psw.get(), 0x7E))
+        for (LO* plo : AploOfClass(psw.get(), S3CID(0x7E)))
             if (auto pso = static_cast<SPRITESET*>(plo)->pso)
             {
                 if (pso->fExternal && pso->aelem.empty())
@@ -353,23 +354,24 @@ int ViewWorld(const VIEWOPTS& vo)
     const std::vector<uint8_t> ramCam = vo.cameraRam.empty() ? ram : ReadAll(vo.cameraRam);
     if (ram.size() >= 0x2000000 && ramCam.size() >= 0x2000000)
     {
-        opts.rgbaCel = U32Ram(ram, 0x2DEB50);
-        opts.rgbaFog = U32Ram(ram, 0x2DE18C);
+        opts.rgbaCel = U32Ram(ram, S3VA(0x2DEB50));
+        opts.rgbaFog = U32Ram(ram, S3VA(0x2DE18C));
         // The reference's camera (CM 0x2DDF40: +0x40/+0x44 frustum tangents, +0x4C near, +0x60 the camera matrix,
         // row 0 the view direction, row 3 the position).
-        const uint32_t cm = 0x2DDF40;
+        const uint32_t cm = S3VA(0x2DDF40);
         float m[16], tx, ty, sNear;
         std::memcpy(m, ramCam.data() + cm + 0x60, 64);
         std::memcpy(&tx, ramCam.data() + cm + 0x40, 4);
         std::memcpy(&ty, ramCam.data() + cm + 0x44, 4);
         std::memcpy(&sNear, ramCam.data() + cm + 0x4C, 4);
         std::memcpy(&cam.rMRDAdjust, ramCam.data() + cm + 0x1C, 4);
+        std::memcpy(&cam.grfChannels, ramCam.data() + cm + 0x14, 4);
         cam.pos = glm::vec3(m[12], m[13], m[14]);
         // Fog (CM +0x240 near, +0x244 far, +0x248 max) and FOGCOL 0x2DE18C, from the same RAM as the camera.
         std::memcpy(&opts.sFogNear, ramCam.data() + cm + 0x240, 4);
         std::memcpy(&opts.sFogFar, ramCam.data() + cm + 0x244, 4);
         std::memcpy(&opts.uFogMax, ramCam.data() + cm + 0x248, 4);
-        opts.rgbaFog = U32Ram(ramCam, 0x2DE18C);
+        opts.rgbaFog = U32Ram(ramCam, S3VA(0x2DE18C));
         opts.fFog = !vo.fNoFog && opts.sFogNear > 0 && opts.sFogFar > opts.sFogNear;
         cam.yaw = glm::degrees(std::atan2(m[1], m[0]));
         cam.pitch = glm::degrees(std::asin(std::clamp(m[2], -1.0f, 1.0f)));
@@ -386,7 +388,7 @@ int ViewWorld(const VIEWOPTS& vo)
     const bool fShot = !vo.screenshot.empty();
     g_gl.msaa = vo.msaa;
     g_display.msaaSamples = vo.msaa;
-    if (!g_gl.FInit(vo.width, vo.height, !fShot, "Sly3-Release", error)) { std::fprintf(stderr, "%s\n", error.c_str()); return 1; }
+    if (!g_gl.FInit(vo.width, vo.height, !fShot, "Sly2-Release", error)) { std::fprintf(stderr, "%s\n", error.c_str()); return 1; }
     BuildSceneGpu(scene);
 
     // --screens: native playback of screen objects

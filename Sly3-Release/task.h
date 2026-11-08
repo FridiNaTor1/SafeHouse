@@ -128,6 +128,7 @@ void RestartJobAtCheckpoint(SW* psw, JOB* pjob);  // orig 0x00162DF8
 void StartTask(SW* psw, TASK* ptask);        // orig 0x001638F8 (vt slot 15)
 void BroadcastTaskEvent(SW* psw, int n, LO* plo);  // orig 0x001619A0
 bool FRequestTaskStateOid(int oid, int n);  // (debug: SLY2N_TASKREQ)
+bool FDebugCompleteJob();  // (debug key F9: the current job completed through the task manager; false: no job)
 float GSuck();  // orig 0x00154C90: the dynamic difficulty (0 .. 1), task.cpp
 void ApplyCheckpointTasks(SW* psw, LO* pchk, const std::vector<std::pair<OID, int>>& aent);  // orig 0x00161F48
 int NTaskStateOid(OID oid, bool* pfDone);  // a task's state +0x54 (-2: none) and done (0x164030)
@@ -146,8 +147,13 @@ struct JOBINFO
     int idName = -1, idDesc = -1;
     std::string strName, strDesc;
     OID oidTaskFirst = -1, oidTaskLast = -1;
+    OID oidTaskNext = -1;           // the last task's next task of another job (the story's next job, chained)
     int iwrecFirst = -1;            // the first task's world (+0xBC, or its filtered-out copy's first world)
     std::vector<int16_t> akeyFirst, akeyLast;   // the progress paths of the first / last task's state
     std::vector<OID> aoidTask;
+    // (the replay's fresh start: the job's and its tasks' played / done counts (0) and closed flags (false), as a
+    // first play has them; the tasks' intro scripts read them, e.g. Choo-Choo's train intro 2954 is skipped on a
+    // task already played)
+    std::vector<PROGREF> aprCount, aprFlag;
 };
 std::vector<JOBINFO> AjobinfoOfLoadedWorld(SW* psw);

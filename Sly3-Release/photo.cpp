@@ -1,5 +1,6 @@
 // The authored photo targets (cid 0x2E) and the binocucom's photo helper.
 #include "photo.h"
+#include "game/sly3.h"
 #include "overlay.h"
 #include "disc.h"
 #include "actor.h"
@@ -125,7 +126,7 @@ void List(PHOTOPROMPT& p) {
 // orig: 0x2021F8 (five authored root matches, D_002C3588).
 void ListMarks(PHOTOPROMPT& p) {
     for (size_t i = 0; i < p.listed.size(); ++i) {
-        const int m = int(g_disc.U32Elf(0x2C3588 + uint32_t(i * 4)));
+        const int m = int(g_disc.U32Elf(S3VA(0x2C3588) + uint32_t(i * 4)));
         SelectScreenObjPartAt(p.primary, Done(*p.listed[i]) ? 0x33A : 0x33B, m);
     }
 }
@@ -133,7 +134,7 @@ void ListMarks(PHOTOPROMPT& p) {
 void Volume(PHOTOPROMPT& p) {
     p.volume = false;
     int count = 0;
-    for (LO* o : AploOfClass(g_psw, 0x19))
+    for (LO* o : AploOfClass(g_psw, S3CID(0x19)))
         if (FLoActive(o)) {
             if (++count > 16) break;
             if (FPointInShape(o, p.eye)) { p.volume = true; break; }
@@ -200,7 +201,7 @@ void Pick(PHOTOPROMPT& p) {
     p.eye.z += 20.0f;
     PHOTOTARGET* best = nullptr;
     float minimum;
-    const uint32_t minimumBits = g_disc.U32Elf(0x2A8550); std::memcpy(&minimum, &minimumBits, 4);
+    const uint32_t minimumBits = g_disc.U32Elf(S3VA(0x2A8550)); std::memcpy(&minimum, &minimumBits, 4);
     static const bool s_fWhy = std::getenv("SLY2N_PHOTOWHY") != nullptr;  // (debug: why each target is not picked)
     for (auto& t : p.targets) {
         if (!Eligible(t)) { if (s_fWhy) std::printf("photowhy %d: not eligible (in %d, linked %d in %d radius %.0f, cam distance %.0f)\n", t.plo->oid, t.plo->fInWorld, t.linked ? t.linked->oid : -1, t.linked ? t.linked->fInWorld : -1, t.linkedRadius, glm::length(glm::vec2(PosLoWorld(t.plo) - g_cm.pos))); continue; }
@@ -246,12 +247,12 @@ struct INIT {
 
 // orig: 0x201D78 / 0x201DC8.
 void* PostLoadPhotoPrompt(ACTOR* pa) {
-    if (!pa || !FCidDerivedFrom(pa->palo->Cid(), 0x35)) return nullptr;
+    if (!pa || !FCidDerivedFrom(pa->palo->Cid(), S3CID(0x35))) return nullptr;
     if (s_serial != g_psw->serial) { s_prompts.clear(); s_serial = g_psw->serial; }
     auto p = std::make_unique<PHOTOPROMPT>(); p->owner = pa;
     p->primary = PloFindSwAny(0x362); p->secondary = PloFindSwAny(0x365); p->overlay = PloFindSwAny(0x602);
     for (const auto& o : g_psw->aploAll)
-        if (FCidDerivedFrom(o->Cid(), 0x2E) && p->targets.size() < 16) p->targets.push_back(Target(o.get()));
+        if (FCidDerivedFrom(o->Cid(), S3CID(0x2E)) && p->targets.size() < 16) p->targets.push_back(Target(o.get()));
     Linked(*p, false);
     PHOTOPROMPT* out = p.get(); s_prompts[pa] = std::move(p); return out;
 }

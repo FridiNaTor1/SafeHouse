@@ -2,6 +2,14 @@
 // Sly 2 glob program (type-0 meshes), adapted from Sly1-Release glob.vert: what the VU1 program P_G computes for
 // a vertex (transform, the pass's vertex colour) done the GL way. Colours stay in GS units (0..255, 0x80 = 1.0).
 
+// (with glob.geom, the near-plane clip: the outputs go to it under these names, and it passes them on as v*)
+#ifdef GEOM
+#define vColor gsColor
+#define vUv gsUv
+#define vFog gsFog
+#define vTexh gsTexh
+#endif
+
 layout (location = 0) in vec3 aPos;
 layout (location = 1) in vec2 aUv;
 layout (location = 2) in vec4 aRgbaA;   // unnormalized bytes
@@ -31,6 +39,11 @@ layout (std430, binding = 2) readonly buffer BONES { mat4 abone[]; };
 layout (std430, binding = 3) readonly buffer WARPS { vec4 awarp[]; };
 layout (std430, binding = 4) readonly buffer WARPMATS { mat4 amatWarp[]; };
 layout (std430, binding = 1) readonly buffer DRAWS { vec4 adraw[]; };   // SAA du, dv (P_G 421 adds it to every ST), object alpha (qw8.x), record
+#ifdef BINDLESS
+// (perf-3, ARB_bindless_texture) each pass draw's texture + sampler handle (render.cpp: 0 = the bound tex)
+layout (std430, binding = 5) readonly buffer TEXHANDLES { uvec2 atexh[]; };
+flat out uvec2 vTexh;
+#endif
 
 uniform mat4 matWorldToClip;
 uniform int  icolor;         // 0: colour A, 1: colour B, 2: rgbaConst, 3: rgbaConst x vertex alpha
@@ -38,13 +51,16 @@ uniform vec4 rgbaConst;      // GS units
 uniform vec3 posCamera;
 uniform vec3 dirCamera;     // the camera's view direction (VU const 6)
 
-out vec4 vColor;
+noperspective out vec4 vColor;   // (the GS interpolates RGBA and F affinely in screen space; only STQ is perspective)
 out vec2 vUv;
-out float vFog;
+noperspective out float vFog;
 
 void main()
 {
     vec4 d = adraw[aDraw];
+#ifdef BINDLESS
+    vTexh = atexh[aDraw];
+#endif
     REC rec = arec[floatBitsToUint(d.w)];
     vec4 fogParams = rec.fog;
     vec4 posWorld;

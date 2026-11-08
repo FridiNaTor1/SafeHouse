@@ -4,6 +4,7 @@
 // m_1F8DD8_p3.cpp (oracle-verified ports of the original's code).
 
 #include "dzg.h"
+#include "game/sly3.h"
 #include "mat.h"
 #include "so.h"
 #include "util.h"
@@ -755,7 +756,7 @@ void ApplyCarryGravity(ALO* p)
     ApplyAloGravity(p);
     if (!pc || (pc->kind != 0x1A && pc->kind != 0x29)) return;
     glm::mat3 m(1.0f);
-    if (pc->plo160 && FCidDerivedFrom(pc->plo160->Cid(), 0x30))
+    if (pc->plo160 && FCidDerivedFrom(pc->plo160->Cid(), S3CID(0x30)))
     {
         glm::vec3 d = PosAloCenter(static_cast<ALO*>(pc->plo160)) - PosAloCenter(p);
         const glm::vec3 up(0.0f, 0.0f, 1.0f);  // D_2A2DC0
@@ -783,7 +784,7 @@ int OverlapKindCarry(ALO* p, ALO* pOther)
     int v = OverlapKindAlo(p, pOther);
     const CARRY* pc = PcarryFromLo(p);
     const int st = pc ? pc->state : -1;
-    if ((st == 0 || st == 4) && pOther && FCidDerivedFrom(pOther->Cid(), 0x34)) v = std::max(v, 1);
+    if ((st == 0 || st == 4) && pOther && FCidDerivedFrom(pOther->Cid(), S3CID(0x34))) v = std::max(v, 1);
     return v;
 }
 NATIVEFN(0x2242E0, OverlapKindCarry);

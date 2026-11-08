@@ -30,6 +30,8 @@ struct CRV
 glm::mat4 MatWorldLox(const LO* plo);
 // The curve of a PATH object (built on first use and when its world matrix changed: 0x1E6180).
 const CRV* PcrvFromLo(LO* plo);
+// orig: 0x001BC570 (the reversal part): a path object's points and parameters end for end, its curve rebuilt
+void ReverseLoxPath(LO* plo);
 // (the cached curve of a PATH object dropped: its points changed, e.g. a merged nav polygon reused, nav.cpp)
 void InvalidateCrvOfLo(const LO* plo);
 // orig 0x1E6180 (recomputes the distances for the matrix)

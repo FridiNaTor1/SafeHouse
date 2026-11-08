@@ -1,10 +1,12 @@
 #include "serialize.h"
+#include "worldglobals.h"
 
 #include "bis.h"
 #include "loadtrace.h"
 
 int g_fLoadDebugInfo = 0;
 SERIALIZESTATS g_serializestats;
+WORLD_VALUE(g_serializestats);   // (PC: kept across a kept world's load, worldglobals.h)
 
 // orig3: 0x12C108 PpairSerializeIn (Sly 2 0x12A3D8; the tag dispatch 0x31F610: a cell per value: the tag byte, the
 // debug header, the payload (tags 0-2, 4-16, 18: the tag alone; 19 int; 20 float; 21 bool; 22 symbol; 23 builtin (a

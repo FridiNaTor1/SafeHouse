@@ -27,8 +27,7 @@ int NStepUpDown();      // orig 0x001880D8: -1 up, 1 down, with repeat
 int NStepLeftRight();   // orig 0x00187E88: -1 left, 1 right
 void ClearJoySteps();   // orig 0x00187E78
 
-// ---- the save slots (orig g_save +0x24: three slots (Sly 3: 0x6864 bytes, the 0x6808-byte save block and the
-// card's 0x5C-byte entry, orig3 0x1D0588; Sly 2 0x5464), here host files)
+// ---- the save slots (orig g_save +0x24: three slots of 0x5464 bytes, the save block and the card's header)
 struct SAVESLOT
 {
     std::string path;       // <user-dir>/Saves/save<i+1>
@@ -36,11 +35,18 @@ struct SAVESLOT
     GAMESAVE save;
     int64_t tWrite = 0;     // its time (orig the header +0x5408: 0x1D8DB8 compares)
 };
-extern SAVESLOT g_aslot[3];
+// QoL (Q4, not in the original): more slots than the card's three, paged three at a time on the data access pages
+// (menu.cpp, L1 / R1). Slots 0..2 are the original save1..3 (same files, same format); slot i >= 3 is the extra file
+// <user-dir>/Saves/save<i+1>, made only when a game is saved there. 10 pages of 3 = 30 slots.
+constexpr int kSlotsPerPage = 3;
+constexpr int kSlotPages = 10;
+constexpr int kSlotMax = kSlotsPerPage * kSlotPages;
+constexpr int kSlotsCard = 3;   // (the original's: the save folder's files, the card's checks)
+extern SAVESLOT g_aslot[kSlotMax];
 extern int g_islotCur;      // orig g_save +0xFD54: the newest slot (-1: none)
 extern int g_islotChosen;   // orig g_save +0xFD50: the slot the game is played from (its saves go there)
 // orig 0x001AB630 / 0x001AB418 state 6: the slots read, the newest chosen. dirDev: a fallback directory
-// with save1..3 (the development card) when the user has none.
+// with save1..3 (the development card) when the user has none. (QoL: save4..save30 too, from <user-dir>/Saves.)
 void ReadSaveSlots(const std::string& dirDev);
 // orig 0x001AB630 after the card changed (the folder made): the slots validated, the newest chosen again
 void RechooseSaveSlots();
@@ -53,8 +59,14 @@ bool FWriteSaveSlot(int islot);
 // Starts it: the logo movie (2056), the card check, then the boot world as the title (request flags 1).
 void StartBootSequence(bool fMovie);
 // Movies queued for the next world change (orig 0x1B3A48 on 0x2F66B0): played before it by the presenter.
+// (Sly 3) the exit's option fields (EXIT 0x18: EOPIDs 834 point, 835 wipe, 836 arming delay, 838 chain flag, 839 delay;
+// Sly 3's own offsets +0x178 / +0x17C / +0x184 / +0x124 / +0x188) are stored at their Sly 2 twins' offsets (brx.cpp's
+// field options, the AI code 2026-11-06: EOPIDs 779 / 780 / 781 / 783 / 785)
+inline constexpr uint32_t OFF_EXIT_POINT = 0x150, OFF_EXIT_WIPE = 0x154, OFF_EXIT_ARM = 0x15C, OFF_EXIT_CHAIN = 0x134,
+                          OFF_EXIT_DELAY = 0x160;
 void QueueMovie(const uint8_t* pbKey);
 void PlayQueuedMovies(bool fWindow);
+extern bool g_fMoviePlaying;   // (a queued movie is on: PlayQueuedMovies)
 bool FMoviesQueued();
 
 // ---- the title and the game start
@@ -66,6 +78,11 @@ void UpdateFrontEnd(SW* psw);
 // orig 0x00165E38: start the game of save block pgs (a slot's, or the current progress)
 void StartGameFromSave(SW* psw, const GAMESAVE* pgs);
 bool FTitleShown();
+// (Sly 3) orig3 0x00221C08: the title widget's input (UpdateFrontEnd)
+void UpdateTitle3(SW* psw);
+// (PC menus) on the episode menu's "Start Episode" screen (mode 8, list closed): its back button in Sly 2's bit
+// order (Triangle, or Circle / Japan's Cross while Replay Jobs is offered: replay.h); 0 elsewhere
+uint32_t BtnEpisodeScreenBack();
 // orig 0x001DDB08: a new game from the title (no slot)
 void StartNewGameFromTitle(SW* psw);
 // the world was started for the title (the boot world with request flags 1)
@@ -77,6 +94,8 @@ void OnGameRecordEvent(int grfReq);
 // the exits (class 0x1A): orig 0x00228358 / 0x002283D0
 void SetExitState(LO* plo, int n);
 void TriggerExit(LO* plo);
+// (Sly 3) the exits' update (class 0x18, vt slot 16: arming, the delay, the movies and the transition): frontend.cpp
+void UpdateExits3(SW* psw);
 
 // the front end's script strings (0x5D3 the title's help, 0x52F / 0x530 / 0x5BF / 0x5C0 the episode menu's)
 std::string StrFrontEndScript(int id);

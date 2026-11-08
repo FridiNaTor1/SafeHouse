@@ -37,12 +37,16 @@ struct TRANSITION
     OID oidPointCur = -1, oidKeyCur = -1;  // orig SW +0x3C88 / +0x3C8C
     int iwrecCur = -1;          // the world record index (the filter)
     OID oidTaskQueued = -1;     // orig 0x2DEB30 +0x18 (0x1651D8: started after the load)
-    // the wipe (orig 0x443740)
+    // the wipe (orig3 0x4C4090: +0 the state, +4 a request held, +8 it, +0x50 the wipe screen object, +0x54 its oid,
+    // +0x58 / +0x5C the parts it plays out / in, +0x60 wipe 875's bag of part pairs)
     WIPES wipes = WIPES_Idle;
     bool fWipeReq = false;
     TRANSREQ reqWipe;
     LO* ploWipe = nullptr;
     OID oidWipe = -1;
+    int idWipeOut = -1, idWipeIn = -1;
+    int aipairWipeBag[3]{0, 1, 2};  // (0x2BFED8 / 0x2C0060: the pairs' order, drawn from the front)
+    int cpairWipeDrawn = 3;         // (all drawn: shuffled again at the next draw)
     LO* ploPlayer = nullptr;    // the player chosen at the load
 };
 
@@ -60,6 +64,9 @@ void EnsureWorldRecords();
 // orig 0x3E1C40.. (the loaded world's records), 0x210AE0 (the current world's episode), 0x210B98 (an episode's
 // main world record, null when none)
 const std::vector<WREC>& AwrecWorlds();
+// (Sly 3, the flow log / map: the world index of a key record (-1: none), and a key named "world N name" / "movie ID")
+int IworldOfChk(const uint8_t* pchk);
+std::string StrKeyRecord(const uint8_t* pchk);
 int IepisodeCur();
 const WREC* PwrecEpisodeMain(int iepisode);
 
@@ -71,3 +78,6 @@ std::unique_ptr<SW> PswUpdateTransition(std::unique_ptr<SW> psw);
 void UpdateWipe(SW* psw);
 // the wipe's current cover 0..1 for the renderer (0: none)
 float UWipeCover();
+// orig 0x228170 (class 0x29, the warp point: its method 235, thunk 0x10B760; SCPT command 0x16 onto one): the
+// current player placed at it (its vt slot 38), then the point's slot 3 with 5 (its splice event 5)
+void TriggerWarp(LO* pwarp);

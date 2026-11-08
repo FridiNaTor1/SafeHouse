@@ -17,6 +17,7 @@ struct CAMERA
     float sNear = 10.0f;
     float sFar = 1e6f;
     float rMRDAdjust = 1.0f;  // CM +0x1C, before the PC draw-distance multiplier
+    uint32_t grfChannels = 0xFF;  // CM +0x14: the camera volume's channels (the volume tree's record masks, 0x1D5808)
     // The game's camera (cm.h): its rows (x view, y left, z up; roll included) instead of yaw / pitch.
     bool fMat = false;
     glm::mat3 mat{1.0f};
@@ -33,15 +34,17 @@ struct RENDEROPTS
     bool fShadows = true;           // mesh type 3 shadow hulls (rp 7 / 8)
     bool fCull = false;
     bool fFog = false;
-    uint32_t rgbaCel = 0x80000000;  // 0x2DEB50 (GS units)
+    uint32_t rgbaCel = 0x80101010;  // 0x2DEB50 (GS units; its only value, the static initializer 0x16EFE0)
     uint32_t rgbaFog = 0;           // 0x2DE18C FOGCOL
     uint32_t rgbaClear = 0;
     float sFogNear = 3000, sFogFar = 30000, uFogMax = 0.3f;   // CM +0x240 / +0x244 / +0x248
 };
 
 void BuildSceneGpu(SCENE& scene);
-// A glob's vertex colours changed (run-time lighting): its vertices again into its arena.
+// A glob's vertex colours changed (run-time lighting): its colours again into its arena (the colour buffer only).
 void UpdateGlobColorsGpu(const GLOB& glob);
+// A glob's vertices moved (trails, ropes): its whole vertices (and colours) again into its arena.
+void UpdateGlobVerticesGpu(const GLOB& glob);
 // The same into an entry's own copy of the glob's vertices (an instance of a shared GLOBSET lit at its own place).
 void UpdateGlobColorsGpu(const GLOB& glob, const struct GLGLOB* pgl);
 // A copy of a strip glob's vertices and indices for one instance (its own lit colours); not drawable until
@@ -52,6 +55,9 @@ void SetGlobBoundsGpu(const GLOB& glob, const glm::vec3& posCenter, float sRadiu
 void FlushInstanceGlobsGpu();
 // The GL texture of a shader's state frame (texture pass 0), for the 2D (kind-7 quads).
 unsigned GlTextureOfShd(const SHD* pshd, int iframe);
+// World start (shd.cpp ResetShaders): forgets the texture cache, keyed by the old world's records; the GL textures are
+// deleted at the next lookup.
+void ResetTextureCache();
 void RenderScene(const SCENE& scene, const CAMERA& cam, const RENDEROPTS& opts);
 // The foreground kinds 22..25 (SCENEGLOBSET::fForeground) after the HUD, over a cleared depth.
 void RenderSceneForeground(const SCENE& scene, const CAMERA& cam, const RENDEROPTS& opts);

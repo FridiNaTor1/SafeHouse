@@ -2,6 +2,9 @@
 // m_153FF8_p3.cpp (0x154080, 0x154180, 0x1541D8), m_227BB8.cpp (0x227C90) and the original's code for 0x153E60.
 
 #include "detect.h"
+#include "game/sly3.h"
+#include "worldglobals.h"
+#include "worldaccess.h"
 #include "guard.h"
 
 #include "activate.h"
@@ -31,6 +34,7 @@ namespace
 std::unordered_map<const LO*, std::unique_ptr<DETECTOR>>& Map()
 {
     static std::unordered_map<const LO*, std::unique_ptr<DETECTOR>> s_map;
+    WORLD_TABLE_LOCAL(s_map);   // (PC: moved aside while a kept world loads, worldglobals.h)
     return s_map;
 }
 
@@ -40,10 +44,10 @@ std::unordered_map<const LO*, std::unique_ptr<DETECTOR>>& Map()
 // its own)
 const LOXSHAPE* PshapeTree(LO* plo)
 {
-    if (!plo || !FCidDerivedFrom(plo->Cid(), 0x16)) return nullptr;
+    if (!plo || !FCidDerivedFrom(plo->Cid(), S3CID(0x16))) return nullptr;
     const LOXSHAPE* pshape = static_cast<const LOXSHAPE*>(plo);
     for (const LO* p = plo; pshape->bsp.abspn.empty() && p->ploCloneOf; p = p->ploCloneOf)
-        if (FCidDerivedFrom(p->ploCloneOf->Cid(), 0x16)) pshape = static_cast<const LOXSHAPE*>(p->ploCloneOf);
+        if (FCidDerivedFrom(p->ploCloneOf->Cid(), S3CID(0x16))) pshape = static_cast<const LOXSHAPE*>(p->ploCloneOf);
     return pshape->bsp.abspn.empty() ? nullptr : pshape;
 }
 
@@ -96,7 +100,7 @@ glm::vec3 PosDetectorEye(const DETECTOR* pdet)
 {
     if (!pdet->ploOwner) return PosAi(pdet->plo);
     const glm::vec3 pos = PosAi(pdet->ploOwner);
-    if (!FCidDerivedFrom(pdet->ploOwner->Cid(), 0x38)) return pos;
+    if (!FCidDerivedFrom(pdet->ploOwner->Cid(), S3CID(0x38))) return pos;
     return pos + glm::vec3(0.0f, 0.0f, 80.0f);  // (D_2A2DC0 x 80)
 }
 
@@ -112,12 +116,12 @@ bool FBlocks(const DETECTOR* pdet, const SOE* psoe)
     // the object's attachment (+0xEC) marked 4 never blocks (0x154568 / 0x20FA10)
     if (const OXA* poxa = Poxa(palo); poxa && (poxa->grf & 4)) return false;
     // flag 4 (0x154528): only the class-0x31 objects
-    if (pdet->grf & 4) return palo->Cid() == 0x31;
+    if (pdet->grf & 4) return palo->Cid() == S3CID(0x31);
     // nor an object under the same root (+0x14, the root's activation node) as the detector: e.g. a searchlight's
     // own lamp does not hide what its detector looks at
     if (pdet->plo && PloRoot(palo) == PloRoot(pdet->plo)) return false;
     for (const LO* p = palo; p; p = p->paloParent)
-        if (FCidDerivedFrom(p->Cid(), 0x33)) return false;
+        if (FCidDerivedFrom(p->Cid(), S3CID(0x33))) return false;
     return true;
 }
 
@@ -141,18 +145,71 @@ bool FSightBlocked(const DETECTOR* pdet, LO* pso)
     return PsoeHitTestLineObjects(0, eye, pt, apsoe, &lsg) != nullptr;
 }
 
+}  // namespace
+
+// orig: 0x00208BE0's perception 1 ("seen" noises): the point inside the view volume (0x227C90; the volume in the
+// world, its +0x28 bit 60), and nothing between the guard's place and it (0x20FAA0 with the filter 0x20FA10: not a
+// sensor (bit 48), not an attachment marked 4, not the guard's own attachment +0xEC; then 0x14CC58). Natively the
+// seen kind was never accepted (audit 2026-11 A9)
+bool FGuardSeesPoint(LO* ploGuard, LO* ploVolume, const glm::vec3& pos, const glm::vec3& posT)
+{
+    if (!ploVolume || !ploVolume->fInWorld || !FInsideShape(ploVolume, posT)) return false;
+    const OXA* poxaSelf = ploGuard && FCidDerivedFrom(ploGuard->Cid(), S3CID(0x30)) ? Poxa(static_cast<ALO*>(ploGuard)) : nullptr;
+    const glm::vec3 mn = glm::min(pos, posT), mx = glm::max(pos, posT);
+    std::vector<SOE*> apsoe;
+    for (OXA* poxa : g_physw.apoxaActive)
+    {
+        if (mx.x < poxa->posMin.x || poxa->posMax.x < mn.x || mx.y < poxa->posMin.y || poxa->posMax.y < mn.y ||
+            mx.z < poxa->posMin.z || poxa->posMax.z < mn.z)
+            continue;
+        for (SOE* psoe : poxa->apsoe)
+        {
+            if (psoe->f48 || !psoe->palo) continue;
+            const OXA* po = Poxa(psoe->palo);
+            if (!po || (po->grf & 4) || po == poxaSelf) continue;
+            if (apsoe.size() < 0x100) apsoe.push_back(psoe);
+        }
+    }
+    if (apsoe.empty()) return true;
+    LSG lsg;
+    return PsoeHitTestLineObjects(0, pos, posT, apsoe, &lsg) == nullptr;
+}
+
+namespace
+{
 // orig: 0x00154770: a player hiding by its sub-object's kind (+0x4C8; the reference's +0x4CC / +0x4D4)
 bool FTargetHidden(const DETECTOR* pdet, LO* pso)
 {
-    (void)pdet;
-    ACTOR* pa = FCidDerivedFrom(pso->Cid(), 0x34) ? PactorFromLo(pso) : nullptr;
+    ACTOR* pa = FCidDerivedFrom(pso->Cid(), S3CID(0x34)) ? PactorFromLo(pso) : nullptr;
     if (!pa || pa->nSub4CC == -1) return false;
     switch (pa->n4C8)
     {
     case 1: return pa->nSub4CC == 0;
     case 2: return true;
     case 8: return static_cast<unsigned>(pa->nSub4CC - 9) < 2;
-    case 0: case 13: return false;  // TODO(ai): the wall / ledge kinds (+0x4D4's class 0xC / 0x22, the facing test)
+    case 0: case 13:
+    {
+        // the interaction's object (+0x4D4): a path (class 0xC) with +0x194 or a class-0x22 surface with +0xE4 set
+        // never hides; another class hides unless its +0xE4; else hidden when the target faces away from the
+        // detector (its x axis . (target - detector) <= 0), flipped for kind 0 by the side +0x1040. Natively these
+        // kinds never hid (audit 2026-11 A8)
+        LO* pt = pa->inter.ploTarget;
+        if (!pt) return false;
+        if (FCidDerivedFrom(pt->Cid(), S3CID(0xC)))
+        {
+            if (pt->U32Field(0, 0x194, 0)) return false;
+        }
+        else if (FCidDerivedFrom(pt->Cid(), S3CID(0x22)))
+        {
+            if (pt->U32Field(0, 0xE4, 0)) return false;
+        }
+        else return !pt->U32Field(0, 0xE4, 0);
+        const glm::vec3 d = PosAi(pso) - PosAi(pdet->plo ? pdet->plo : pdet->ploOwner);
+        const glm::vec3 ax = glm::vec3(MatWorldOfAlo(pa->palo)[0]);  // (0x1A6318: the matrix's first row)
+        const bool f = glm::dot(d, ax) <= 0.0f;
+        const bool g = pa->n4C8 == 0 ? !pa->n1040 : false;
+        return f != g;
+    }
     default: return false;
     }
 }
@@ -167,9 +224,9 @@ bool FSightShapeBlocked(const DETECTOR* pdet, const glm::vec3& pos)
 {
     if (!g_psw) return false;
     const glm::vec3 eye = PosDetectorEye(pdet);
-    for (LO* plo : g_psw->mpcidaplo[0x17])
+    for (LO* plo : g_psw->mpcidaplo[S3CID(0x17)])
     {
-        if (!plo || plo->Cid() != 0x17 || !plo->fInWorld) continue;
+        if (!plo || plo->Cid() != S3CID(0x17) || !plo->fInWorld) continue;
         const LOXSHAPE* pshape = PshapeTree(plo);
         if (!pshape) continue;
         const glm::mat4 inv = glm::inverse(MatWorldLox(plo));
@@ -195,17 +252,22 @@ int NDetectState(DETECTOR* pdet, LO* pso, int k)
     LO* pme = g_psw ? PloPoCurrent(g_psw) : nullptr;
     if (!pso) return 0;
     if (!pso->fInWorld) return 0;  // orig 0x1A61A0 (in the world's update list)
-    if (FCidDerivedFrom(pso->Cid(), 0x32) && NPlayerStatus77(pso) == 2) return 0;  // (vt slot 77: knocked out)
-    if (FCidDerivedFrom(pso->Cid(), 0x34) && pme && FCidDerivedFrom(pme->Cid(), 0x46)) return 0;
+    if (FCidDerivedFrom(pso->Cid(), S3CID(0x32)) && NPlayerStatus77(pso) == 2) return 0;  // (vt slot 77: knocked out)
+    if (FCidDerivedFrom(pso->Cid(), S3CID(0x34)) && pme && FCidDerivedFrom(pme->Cid(), S3CID(0x46))) return 0;
     if (FGamePausedForAi()) return 0;  // (0x20F1B8)
     if (pdet->fNever) return 0;
-    // (the players' +0x11AC: unseen while non-zero; the original has no writer of it. Debug: SLY2N_UNSEEN=1 sets it,
+    // the actors' +0x11AC: unseen while non-zero. No code writes it; the scripts do through option 741 (EOPID 758):
+    // Ep3's water buckets (95679, Spice Room Recon) set it while a player rides one (their events 5 / 6), so the
+    // flashlight guard there does not see him (R16: natively the option had no setter and he was seen)
+    if (FCidDerivedFrom(pso->Cid(), S3CID(0x34)))
+        if (const ACTOR* pa = PactorFromLo(pso); pa && pa->n11AC) return 0;
+    // (debug: SLY2N_UNSEEN=1 sets it for every player, another value only for the player with that oid, e.g. 7 Sly,
     // as the reference's SLY2_POKE of 2E1E40@+11AC=1 does, for tests near guards without a job failure)
-    static const bool s_fUnseen = std::getenv("SLY2N_UNSEEN") != nullptr;
-    if (s_fUnseen && FCidDerivedFrom(pso->Cid(), 0x34)) return 0;
+    static const int s_nUnseen = std::getenv("SLY2N_UNSEEN") ? std::atoi(std::getenv("SLY2N_UNSEEN")) : 0;
+    if (s_nUnseen && FCidDerivedFrom(pso->Cid(), S3CID(0x34)) && (s_nUnseen == 1 || pso->oid == s_nUnseen)) return 0;
     if (pdet->fAlways) return 1;
     glm::vec3 pos = PosAi(pso);
-    if (FCidDerivedFrom(pso->Cid(), 0x33) && FCidDerivedFrom(pso->Cid(), 0x30))
+    if (FCidDerivedFrom(pso->Cid(), S3CID(0x33)) && FCidDerivedFrom(pso->Cid(), S3CID(0x30)))
         pos += glm::vec3(StepPhysOf(static_cast<ALO*>(pso)).vecBase);  // (+0x240)
     if (FSightShapeBlocked(pdet, pos)) return 0;
     static const bool s_fDebug = std::getenv("SLY2N_DETDEBUG") != nullptr;
@@ -242,11 +304,15 @@ int NDetectState(DETECTOR* pdet, LO* pso, int k)
                     break;
                 }
         }
-        else if (pdet->ploOwner && FCidDerivedFrom(pdet->ploOwner->Cid(), 0x30))
+        else if (pdet->ploOwner && FCidDerivedFrom(pdet->ploOwner->Cid(), S3CID(0x30)))
             if (OXA* poxa = Poxa(static_cast<ALO*>(pdet->ploOwner)))
                 for (OX* ox = poxa->pox; ox; ox = ox->poxNext)
                     if (ox->psoOther == pso)
                     {
+                        if (s_fDebug && ox->pxp)  // (debug: the touch's contacts, the entries' owners)
+                            for (XP* x = ox->pxp; x; x = x->pxpNext)
+                                std::fprintf(stderr, "det touch %d t %.3f: %d / %d xpk %d dist %.1f\n", pdet->ploOwner->oid, g_clock.t,
+                                             x->axpd[0].palo ? x->axpd[0].palo->oid : -1, x->axpd[1].palo ? x->axpd[1].palo->oid : -1, x->xpk, x->gDist);
                         if (ox->pxp) return 1;
                         break;
                     }
@@ -298,7 +364,7 @@ void SetDetentryState(DETECTOR* pdet, DETENTRY* pe, int n)
         pe->t8 = g_clock.t;
     }
     // at 1 the tasks hear of the detector's guard (its parent, 0x1A58D0 at the reset) seeing it (0x13)
-    if (n == 1 && pdet->ploOwner && FCidDerivedFrom(pdet->ploOwner->Cid(), 0x33) && g_psw)
+    if (n == 1 && pdet->ploOwner && FCidDerivedFrom(pdet->ploOwner->Cid(), S3CID(0x33)) && g_psw)
         BroadcastTaskEvent(g_psw, 0x13, pdet->ploOwner);
 }
 
@@ -333,7 +399,7 @@ void BindDetectorFields(DETECTOR* detector)
         const CRef value = opt.aval[0].pbasic ? [&] {
             CRef ref; ref.SetBasic(opt.aval[0].pbasic); return ref;
         }() : RefFromOptionValue(opt.aval[0]);
-        switch (opt.eopid)
+        switch (sly3::Eopid2FromEopid3(opt.eopid))  // (Sly 2 EOPIDs)
         {
         case 342: detector->grf = uint32_t(opt.aval[0].n); break;
         case 343: detector->fAlways = opt.aval[0].n; break;
@@ -437,6 +503,17 @@ struct INITDETECTOR
             DETECTOR* detector = PdetectorEnsure(object);
             if (detector->fOptionsBound) RemoveDetectorTarget(detector, PloDetectorOption(object, value));
         });
+        // EOPID 758 (an actor's option 741, the field +0x11AC both ways): unseen by the detectors (NDetectState)
+        RegisterObjectSetter(758, [](LO* object, const CRef& value) {
+            if (ACTOR* pa = FCidDerivedFrom(object->Cid(), S3CID(0x34)) ? PactorFromLo(object) : nullptr)
+                pa->n11AC = value.m_tagk == TAGK_Bool ? int(value.m_bool) : value.RefCoerceS32().m_n;
+        });
+        RegisterObjectGetter(758, [](LO* object) {
+            CRef r;
+            const ACTOR* pa = FCidDerivedFrom(object->Cid(), S3CID(0x34)) ? PactorFromLo(object) : nullptr;
+            r.SetS32(pa ? pa->n11AC : 0);
+            return r;
+        });
     }
 } s_initdetector;
 }
@@ -445,17 +522,17 @@ struct INITDETECTOR
 // The original loader's deferred 0x0013E590 fixups precede StartSw's script events.
 void PostLoadDetector(LO* object)
 {
-    if (!object || !FCidDerivedFrom(object->Cid(), 0x10)) return;
+    if (!object || !FCidDerivedFrom(object->Cid(), S3CID(0x10))) return;
     DETECTOR* detector = PdetectorEnsure(object);
     if (detector->fOptionsBound) return;
     detector->fOptionsBound = true;
     BindDetectorFields(detector);
     for (const OPT& opt : object->aopt)
-        if ((opt.eopid == 349 || opt.eopid == 350) && !opt.aval.empty()) {
+        if ((opt.eopid == S3EOPID(349) || opt.eopid == S3EOPID(350)) && !opt.aval.empty()) {
             CRef value = RefFromOptionValue(opt.aval[0]);
             if (opt.aval[0].pbasic) value.SetBasic(opt.aval[0].pbasic);
             LO* target = PloDetectorOption(object, value);
-            if (opt.eopid == 349) AddDetectorTarget(detector, target);
+            if (opt.eopid == S3EOPID(349)) AddDetectorTarget(detector, target);
             else RemoveDetectorTarget(detector, target);
         }
 }

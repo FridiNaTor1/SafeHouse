@@ -3,6 +3,8 @@
 // m_174B28_p3.cpp, m_17D360_p3.cpp, m_171228_p3.cpp, m_1709A8.cpp and the Sly 2 decomp.
 
 #include "ai.h"
+#include "game/sly3.h"
+#include "worldglobals.h"
 
 #include "aijobs.h"
 #include "guard.h"
@@ -61,7 +63,7 @@ void LockJob(AIJOB* p)
 {
     if (p->fLocked) return;
     p->fLocked = 1;
-    // TODO(ai): 0x20B438 (a guard holding: its +0x... count)
+    if (p->pguard) LockGuardActivation(p->pguard);  // 0x20B438
     for (AIJOB* q = p->pparent; q; q = q->pparent) ++q->cLock;
 }
 
@@ -70,7 +72,7 @@ void UnlockJob(AIJOB* p)
 {
     if (!p->fLocked) return;
     p->fLocked = 0;
-    // TODO(ai): 0x20B478 (the guard told)
+    if (p->pguard) UnlockGuardActivation(p->pguard);  // 0x20B478
     for (AIJOB* q = p->pparent; q; q = q->pparent) --q->cLock;
 }
 
@@ -79,6 +81,7 @@ void UnlockJob(AIJOB* p)
 // Ep6's 49591 s4: (seto! ((self) 1171) 399 ...)) may still read its options; natively its delete left a dangling
 // BASIC and crashed (Ep6 Carmelita job, 27:2896))
 static std::vector<std::unique_ptr<AIJOB>> s_ajobEnded;
+WORLD_TABLE(s_ajobEnded);   // (PC: moved aside while a kept world loads, worldglobals.h)
 void ResetEndedJobs() { s_ajobEnded.clear(); }
 static void BuryJob(std::vector<std::unique_ptr<AIJOB>>& a)
 {
@@ -140,11 +143,32 @@ AIJOB* PjobPush(GUARD* pg, CID cid)
     return p;
 }
 
+// Sly 2's job classes 0x9B..0xC6 and their bases (SCUS_973.16's class table 0x2BAAE8; maps/classes_sly2.tsv)
+bool FJobCidDerivedFrom2(CID cid2, CID cidBase2)
+{
+    auto base = [](CID c) -> CID {
+        if (c == 0x9E || c == 0x9F || c == 0xA0) return 0x9D;
+        if (c >= 0xA1 && c <= 0xA3) return 0xA0;
+        if (c == 0xA7 || c == 0xA8) return 0xA6;
+        if (c > 0x9B && c <= 0xC6) return 0x9B;
+        return -1;
+    };
+    for (CID c = cid2; c >= 0; c = base(c))
+        if (c == cidBase2) return true;
+    return false;
+}
+
+CID Cid2FromCid3Job(CID cid3)
+{
+    const int cid2 = sly3::Cid2FromCid3(cid3);
+    return cid2 >= 0x9B && cid2 <= 0xC6 ? CID(cid2) : CID(-1);
+}
+
 // orig: 0x001EEEE0
 AIJOB* PjobFind(GUARD* pg, CID cid)
 {
     for (const auto& p : pg->stack.ajob)
-        if (FCidDerivedFrom(p->cid, cid)) return p.get();
+        if (FJobCidDerivedFrom2(p->cid, cid)) return p.get();
     return nullptr;
 }
 
@@ -166,7 +190,7 @@ AIJOB* PjobPush(ACTOR* pa, CID cid)
 AIJOB* PjobFind(ACTOR* pa, CID cid)
 {
     for (const auto& p : pa->stack.ajob)
-        if (FCidDerivedFrom(p->cid, cid)) return p.get();
+        if (FJobCidDerivedFrom2(p->cid, cid)) return p.get();
     return nullptr;
 }
 

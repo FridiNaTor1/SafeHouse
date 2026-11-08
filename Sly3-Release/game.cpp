@@ -6,12 +6,18 @@
 //               [--frame-dump file] [--screenshot file]
 
 #include <malloc.h>
+#include "game/sly3.h"
+#include "player3.h"
 #include "so.h"
 #include "crv.h"
 #include "vtnative.h"
 #include "game.h"
+#include "pe.h"
+#include "breakable.h"
 #include "nav.h"
 #include "skipcut.h"
+#include "debugmenu.h"
+#include "pccharacter.h"
 #include "glob.h"
 #include "pickup.h"
 #include "spiop.h"
@@ -45,6 +51,8 @@ extern uint32_t g_uRandState;  // xfmath.cpp
 #include "cplcy.h"
 #include "sound.h"
 #include "sly.h"
+#include "climbsurf.h"
+#include "hide.h"
 #include "worldaccess.h"
 
 #include "anim.h"
@@ -75,6 +83,8 @@ extern uint32_t g_uRandState;  // xfmath.cpp
 #include "update.h"
 #include "savedata.h"
 #include "../platform/platform.h"
+#include "../platform/frame_pacer.h"
+#include "../platform/game_sched.h"
 #include "transition.h"
 #include "po.h"
 #include "shop.h"
@@ -91,6 +101,7 @@ extern uint32_t g_uRandState;  // xfmath.cpp
 #include <algorithm>
 #include <chrono>
 #include <cfenv>
+#include <ctime>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -99,32 +110,10 @@ extern uint32_t g_uRandState;  // xfmath.cpp
 #include <memory>
 #include <thread>
 
+double g_msGpuFpsLog = 0, g_msHudFpsLog = 0;   // (SLY2N_FPSLOG)
+
 namespace
 {
-// Sly1-Release's FramePacer, reduced: sleep to the frame deadline, no catch-up after a stall.
-class FramePacer
-{
-public:
-    using Clock = std::chrono::steady_clock;
-    void Wait(int frameRate)
-    {
-        const auto frame = std::chrono::duration_cast<Clock::duration>(std::chrono::duration<double>(1.0 / frameRate));
-        m_deadline += frame;
-        const auto now = Clock::now();
-        if (now >= m_deadline)
-        {
-            m_deadline = now;
-            return;
-        }
-        if (m_deadline - now > std::chrono::milliseconds(2))
-            std::this_thread::sleep_for(m_deadline - now - std::chrono::milliseconds(1));
-        while (Clock::now() < m_deadline) std::this_thread::yield();
-    }
-
-private:
-    Clock::time_point m_deadline = Clock::now();
-};
-
 std::vector<uint8_t> ReadAll(const std::string& path)
 {
     std::ifstream in(path, std::ios::binary);
@@ -134,6 +123,9 @@ std::vector<uint8_t> ReadAll(const std::string& path)
 // The renderer's options from a reference RAM dump (the cel border colour, FOGCOL) and its camera (CM 0x2DDF40, (its +0x60 matrix, row 0 the
 // view direction, row 3 the position; +0x44 the frustum tangent, +0x4C near), else above the world's origin.
 
+// The camera of an EE RAM dump (a PCSX2 savestate's eeMemory.bin; development: --camera-ram). orig3: the world's
+// camera (class 0x05, SW +0x463C): its rows +0x50 (view, left, up; 16 bytes apart), position +0x80, tan(fov y / 2)
+// +0x13C; the fog: the static camera's (0x36BC10 +0x14 / +0x18 / +0x1C, colour +0x20; game/cond3.h).
 CAMERA CameraFromRam(const std::string& ramPath, RENDEROPTS& opts)
 {
     CAMERA cam;
@@ -142,42 +134,56 @@ CAMERA CameraFromRam(const std::string& ramPath, RENDEROPTS& opts)
     cam.pitch = -30;
     const std::vector<uint8_t> ram = ReadAll(ramPath);
     if (ram.size() < 0x2000000) return cam;
-    const uint32_t cm = 0x2DDF40;
-    float m[16], ty, sNear;
-    std::memcpy(m, ram.data() + cm + 0x60, 64);
-    std::memcpy(&ty, ram.data() + cm + 0x44, 4);
-    std::memcpy(&sNear, ram.data() + cm + 0x4C, 4);
-    std::memcpy(&cam.rMRDAdjust, ram.data() + cm + 0x1C, 4);
-    cam.pos = glm::vec3(m[12], m[13], m[14]);
-    cam.yaw = glm::degrees(std::atan2(m[1], m[0]));
-    cam.pitch = glm::degrees(std::asin(std::clamp(m[2], -1.0f, 1.0f)));
+    auto u32 = [&](uint32_t va) { uint32_t u; std::memcpy(&u, ram.data() + (va & 0x1FFFFFF), 4); return u; };
+    auto f32 = [&](uint32_t va) { float g; std::memcpy(&g, ram.data() + (va & 0x1FFFFFF), 4); return g; };
+    const uint32_t pcm = u32(sly3::VA_SW + sly3::OFF_SW_CAMERA);
+    if (!pcm) return cam;
+    cam.fMat = true;
+    for (int r = 0; r < 3; ++r) cam.mat[r] = glm::vec3(f32(pcm + 0x50 + 16 * r), f32(pcm + 0x54 + 16 * r), f32(pcm + 0x58 + 16 * r));
+    cam.pos = glm::vec3(f32(pcm + 0x80), f32(pcm + 0x84), f32(pcm + 0x88));
+    cam.yaw = glm::degrees(std::atan2(cam.mat[0].y, cam.mat[0].x));
+    cam.pitch = glm::degrees(std::asin(std::clamp(cam.mat[0].z, -1.0f, 1.0f)));
+    const float ty = f32(pcm + 0x13C);
     if (ty > 0.01f && ty < 10.0f) cam.fovY = glm::degrees(2.0f * std::atan(ty));
-    if (sNear > 0.1f && sNear < 1000.0f) cam.sNear = sNear;
-    std::memcpy(&opts.rgbaCel, ram.data() + 0x2DEB50, 4);
-    std::memcpy(&opts.sFogNear, ram.data() + cm + 0x240, 4);
-    std::memcpy(&opts.sFogFar, ram.data() + cm + 0x244, 4);
-    std::memcpy(&opts.uFogMax, ram.data() + cm + 0x248, 4);
-    std::memcpy(&opts.rgbaFog, ram.data() + 0x2DE18C, 4);
+    opts.sFogNear = f32(sly3::VA_CM_STATIC + 0x14);
+    opts.sFogFar = f32(sly3::VA_CM_STATIC + 0x18);
+    opts.uFogMax = f32(sly3::VA_CM_STATIC + 0x1C);
+    opts.rgbaFog = u32(sly3::VA_CM_STATIC + 0x20);
     opts.fFog = opts.sFogNear > 0 && opts.sFogFar > opts.sFogNear;
     return cam;
+}
+
+// (pe.cpp) the camera the effects' emission tests and the rain's box use
+void SetPeCameraOf(const CAMERA& cam)
+{
+    glm::mat3 matRows = cam.mat;
+    if (!cam.fMat)
+    {
+        const glm::vec3 dir = cam.Dir();
+        const glm::vec3 left = glm::length(glm::cross(glm::vec3(0, 0, 1), dir)) > 1e-4f ? glm::normalize(glm::cross(glm::vec3(0, 0, 1), dir)) : glm::vec3(0, 1, 0);
+        matRows = glm::mat3(dir, left, glm::cross(dir, left));
+    }
+    const float aspect = g_gl.renderHeight > 0 ? float(g_gl.renderWidth) / float(g_gl.renderHeight) : 4.0f / 3.0f;
+    SetPeCamera(cam.pos, matRows, cam.MatWorldToClip(aspect));
 }
 }
 
 // One frame of objects' state, in the reference's SLY2_FRAMEDUMP format (Sly2-Reference runtime/interp.cpp).
+extern uint32_t g_uRandState;   // (xfmath.cpp)
+extern uint64_t g_cRandLibc;
 void WriteFrameDump(FILE* pf, const SW* psw, int frame)
 {
     std::fprintf(pf, "F %d %.6f %.6f\n", frame, g_clock.t, g_clock.dt);
+    if (static const bool s_fRand = std::getenv("SLY2N_DUMPRAND") != nullptr; s_fRand)   // (debug: the shared random stream)
+        std::fprintf(pf, "R %08x %llu\n", g_uRandState, static_cast<unsigned long long>(g_cRandLibc));
     std::fprintf(pf, "C %.3f %.3f %.3f %.5f %.5f %.5f %.5f\n", g_cm.pos.x, g_cm.pos.y, g_cm.pos.z, g_cm.mat[0].x, g_cm.mat[0].y,
                  g_cm.mat[0].z, g_cm.radFOV);  // the camera (cm.h)
     for (int cid = 0; cid < CID_Max; ++cid)
         for (const LO* plo : psw->mpcidaplo[cid])
         {
             glm::vec3 pos(0.0f);
-            if (FCidDerivedFrom(cid, 0x30))
-            {
-                const ALO* palo = static_cast<const ALO*>(plo);
-                if (!palo->axf.empty()) pos = glm::vec3(palo->axf[0]->matWorld[3]);
-            }
+            // (the object record's position, as the reference's +0x50 record: axf[0] can be another record)
+            if (FCidDerivedFrom(cid, S3CID(0x30))) pos = PosLoWorld(plo);
             std::fprintf(pf, "%d %d %08x %.3f %.3f %.3f\n", cid, plo->oid, plo->iupd >= 0 ? 0u : plo->grfUpd, pos.x, pos.y,
                          pos.z);
         }
@@ -258,7 +264,7 @@ RTOWNER* PrtownerOf(const void* powner)
 void BuildRtgtOwners(SW* psw)
 {
     s_mprtowner.clear();
-    for (LO* plo : psw->mpcidaplo[0x2D])
+    for (LO* plo : CIDLIST(psw->mpcidaplo, S3CID(0x2D)))
     {
         RTOWNER& r = s_mprtowner[plo];
         for (const OPT& o : plo->aopt)
@@ -269,7 +275,17 @@ void BuildRtgtOwners(SW* psw)
                 case 1061: r.sNear = v.ag[0]; break;
                 case 1064: if (LO* p = PloFindSwObjectByOid(psw, v.n)) r.aplo.push_back(p); break;
                 case 1063: r.ploCamera = PloFindSwObjectByOid(psw, v.n); break;   // (field +0x118)
-                case 1065: if (LO* p = PloFindSwObjectByOid(psw, v.n)) r.aploLight.push_back(p); break;
+                case 1065:
+                    // orig: 0x1BEAD0: the light into the owner's list, its +0x160 and +0x15C set (not baked, not a
+                    // light-context candidate) and removed from the world (vt slot 9). Else the characters' own
+                    // lights (Sly 3797, Bentley 7430, Murray 7031) lit everything near them (N08: the flop's dome 6958)
+                    if (LO* p = PloFindSwObjectByOid(psw, v.n))
+                    {
+                        r.aploLight.push_back(p);
+                        p->fLightOwned = true;
+                        RemoveLo(psw, p);
+                    }
+                    break;
                 default: break;
                 }
         r.agrf.assign(r.aplo.size(), 0);
@@ -372,7 +388,7 @@ const void* PvRtgtOwnerOfId(int id)
     if (id == 0x2AE)
     {
         LO* pspk = pp;
-        if (pp && FIsLoDerivedFrom(pp, 0x34))
+        if (pp && FIsLoDerivedFrom(pp, S3CID(0x34)))
             if (ACTOR* pa = PactorFromLo(pp)) pspk = pa->binoc.ploSpeaker;
         return below(pspk, 0x2AE);
     }
@@ -412,10 +428,12 @@ void ApplyRtgtOwners(SCENE& scene, const std::vector<ALO*>& apalo)
         if (!pr) continue;
         std::function<void(LO*, bool)> add = [&](LO* plo, bool fTop) {
             ALO* palo = dynamic_cast<ALO*>(plo);
-            if (!palo || plo->Cid() == 0x2D) return;
+            if (!palo || plo->Cid() == S3CID(0x2D)) return;
             const uint32_t pfnDraw = palo->pcls ? palo->pcls->PfnOrig(19) : 0;
             const bool fDraws = pfnDraw != 0 && pfnDraw != 0x1A5ED8 && palo->gFade != 0.0f;
-            if (!fTop && !(GrfUpdLo(s_pswRtgt, plo) & 8)) return;
+            // orig: 0x1A5448 / 0x1F2C30: only children before the first removed
+            // child belong to the active tree. Removed attachments can retain draw flags.
+            if (!fTop && (plo->fRemoved || !(GrfUpdLo(s_pswRtgt, plo) & 8))) return;
             if (fDraws) mpirtgt[palo] = i;
             for (LO* pc : palo->aploChild) add(pc, false);
         };
@@ -485,7 +503,7 @@ extern int g_iframeHarness;
 // selectable at the safe house however far the episode is (po.cpp UnlockSafeHouseCharacters: the hub's script
 // otherwise allows a character once his first job's task is 1+, e.g. Paris: Bentley task 1586, Murray 1878), and
 // the players told as after a purchase (0x19F0A8). The gadgets read the progress when used: no reload needed.
-static void DebugUnlockAll(SW* psw)
+void DebugUnlockAll(SW* psw)   // (also the debug menu's Player page, debugmenu.cpp)
 {
     int c = 0;
     CRef refTrue;
@@ -505,7 +523,9 @@ bool FImportGangStart(SW* psw, const std::string& pathRam, const std::string& pa
 void PrepareGangFrame(int frame);
 void ReportGangHarness();
 
-bool g_fDevCard = true;
+// (Sly 3: no development card by default: the Sly 2 one (round4-user-card) is not a Sly 3 save. A developer's Sly 3
+// card goes to build/saves/sly3-dev/memcard0/BASCUS-97464YAOTWTD! (SLY3_DEVCARD=1 uses it))
+bool g_fDevCard = std::getenv("SLY3_DEVCARD") != nullptr;
 
 int RunGame(const GAMEOPTS& go)
 {
@@ -526,7 +546,7 @@ int RunGame(const GAMEOPTS& go)
         if (path.empty())
         {
             const std::string user = cane::utf8(cane::userDirectory() / "Saves" / "save1");
-            const std::string dev = SLY2N_DEV_ROOT "/build/saves/round4-user-card/memcard0/BASCUS-97316YAOTWTD!/save1";
+            const std::string dev = SLY2N_DEV_ROOT "/build/saves/sly3-dev/memcard0/" SLY3_CARD_DIRECTORY "/save1";
             path = std::filesystem::exists(cane::path(user)) || !g_fDevCard ? user : dev;
         }
         if (FLoadGameSave(path, error)) std::printf("save: %s\n", path.c_str());
@@ -537,14 +557,26 @@ int RunGame(const GAMEOPTS& go)
     // warp does (0x210990 + 0x22B490 at point 393)
     std::unique_ptr<SW> psw;
     // boot: the disc's boot sequence (0x1A4E08: the logo movie, the slots, the title); frontend: the front end world
-    if (go.world == "boot") StartBootSequence(!go.fHeadless && !std::getenv("SLY2_NOMOVIE"));
+    // (test: SLY2N_READSLOTS=1: a world run reads <user-dir>/Saves's slots too, so the data access pages show them)
+    if (go.world != "boot" && go.world != "frontend" && std::getenv("SLY2N_READSLOTS")) ReadSaveSlots("");
+    // (Sly 3: the logos are queued headless too: PlayQueuedMovies skips them there and logs "flow: movie N skipped",
+    // the boot's movie milestones of tools/progression3.py; SLY2_NOMOVIE leaves them out)
+    if (go.world == "boot") StartBootSequence(!std::getenv("SLY2_NOMOVIE"));
     else if (go.world == "frontend")
     {
-        ReadSaveSlots(SLY2N_DEV_ROOT "/build/saves/round4-user-card/memcard0/BASCUS-97316YAOTWTD!");
-        RequestTransition(nullptr, g_disc.PbElf(VA_FK_FRONTEND, 0x40), 0x189, -1, 0, -1);
+        ReadSaveSlots(SLY2N_DEV_ROOT "/build/saves/sly3-dev/memcard0/" SLY3_CARD_DIRECTORY "");
+        RequestTransition(nullptr, g_disc.PbElf(VA_FK_FRONTEND, 0x40), sly3::POINT_DEFAULT, -1, 0, -1);
     }
     else if (go.task >= 0) RequestTaskStart(nullptr, std::atoi(go.world.c_str()), go.task);
-    else RequestWorldWarp(nullptr, std::atoi(go.world.c_str()), 0x189, -1);
+    else RequestWorldWarp(nullptr, std::atoi(go.world.c_str()), sly3::POINT_DEFAULT, -1);
+    // Sly 3 (notes/STATUS.md): the boot's logos play; the world after them (m_ext and its title) does not run natively
+    // yet unless SLY3_WORLD=1 (development)
+    if (go.world == "boot" && !std::getenv("SLY3_WORLD"))
+    {
+        PlayQueuedMovies(!go.fHeadless);
+        std::printf("Sly 3: the logos played; the world after them (m_ext, the title) is not ported yet\n");
+        return 0;
+    }
     // (the window comes later: the boot's movie plays when the loop starts)
     // debug: SLY2N_SETPROGRESS=a.b.c=value[,...] sets progress values once the first world is loaded (its layout) (an int, or a float
     // with a '.'; e.g. a fresh episode: episode.nightclub.dt=0.0,episode.nightclub.percent_complete=0)
@@ -621,8 +653,10 @@ int RunGame(const GAMEOPTS& go)
         CBuildSceneFromSw(psw.get(), scene, &apalo);
         // the world's lights natively (lightsw.h: the lights' records from their options and transforms)
         if (UpdateWorldLightsFromSw(psw.get()) > 0) ApplyLighting(scene, WorldLights());
+        // (debug: SLY3_LIGHTCHECK=ram: the world's light records against a reference RAM dump's, lightsw.h)
+        if (const char* sz = std::getenv("SLY3_LIGHTCHECK"); sz) CheckLightsAgainstRam(psw.get(), sz, std::getenv("SLY3_LIGHTCHECKV") != nullptr);
         else ApproximateBakeLighting(scene);
-        if (!g_gl.FInit(go.width, go.height, fWindow, "Sly3-Release", error))
+        if (!g_gl.FInit(go.width, go.height, fWindow, "Sly2-Release", error))
         {
             std::fprintf(stderr, "%s\n", error.c_str());
             return 1;
@@ -643,9 +677,19 @@ int RunGame(const GAMEOPTS& go)
     // (fixed-dt runs are not paced by the host clock: the music's clock follows the frames; SLY2N_SNDHOSTCLOCK keeps the host's)
     g_fSndFrameClock = go.fFixedDt && !std::getenv("SLY2N_SNDHOSTCLOCK");
     if (const char* sz = std::getenv("SLY2N_FIXEDDT"); sz && go.fFixedDt) g_dtFixedStep = std::strtof(sz, nullptr);
-    FramePacer pacer;
+    cane::FramePacer pacer;   // (the frame-rate cap: platform/frame_pacer.h)
+    if (fWindow)
+    {
+        // (Windows: the 1 ms timer, no power throttling, MMCSS "Games", the thread above normal as Sly1-Release's:
+        // platform/game_sched.h)
+        cane::sched::StartupGameScheduling();
+#ifdef _WIN32
+        SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
+#endif
+    }
     g_clock.tick = TickNow();
-    bool fFreeCam = false, fF1Last = false;
+    bool& fFreeCam = g_fDebugFreeCam;   // (F1; also the debug menu's Display page)
+    bool fF1Last = false;
     double msUpdate = 0, msRender = 0, msSwap = 0, msScene = 0;
     int cframeTimed = 0;
     auto now = [] { return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count(); };
@@ -684,12 +728,26 @@ int RunGame(const GAMEOPTS& go)
             scene = SCENE{};
             apalo.clear();
             ResetStepSnapshots();
+            (void)FPcCharTakeSceneRebuild();
             if (fDraws)
             {
                 CBuildSceneFromSw(psw.get(), scene, &apalo);
                 ApproximateBakeLighting(scene);
                 BuildSceneGpu(scene);
             }
+        }
+        else if (FPcCharTakeSceneRebuild() && fDraws)
+        {
+            // (PC addition, debug menu only: a guest character / outfit changed the meshes drawn, pccharacter.h; the
+            // lookups into the old scene's glob sets dropped, as a world's unload does)
+            void InvalidateSceneLookups();   // emitter.cpp
+            InvalidateSceneLookups();
+            scene = SCENE{};
+            apalo.clear();
+            ResetStepSnapshots();
+            CBuildSceneFromSw(psw.get(), scene, &apalo);
+            ApproximateBakeLighting(scene);
+            BuildSceneGpu(scene);
         }
         // debug: SLY2N_RANDCOUNT=1: the rand draws and state at each frame's start
         if (static const bool s_fRc = std::getenv("SLY2N_RANDCOUNT") != nullptr; s_fRc)
@@ -707,11 +765,13 @@ int RunGame(const GAMEOPTS& go)
             if (const char* sz = std::getenv("SLY2N_RANDRAM"))
             {
                 RAM ram;
-                if (ram.FLoad(sz)) g_uRandState = ram.U32(ram.U32(0x2C49D4) + 0x58);
+                if (ram.FLoad(sz)) g_uRandState = ram.U32(ram.U32(S3VA(0x2C49D4)) + 0x58);
             }
         if (frame == 0 && !go.slyStart.empty() && std::getenv("SLY2N_AI_START")) FImportAiStart(psw.get(), go.slyStart);
         if (frame == 0 && !go.slyStart.empty()) FImportSlyStart(psw.get(), go.slyStart, go.slyRef, go.vbBase);
         if (frame == 0 && !go.gangStart.empty()) FImportGangStart(psw.get(), go.gangStart, go.gangRef, go.vbBase);
+        if (frame == 0) sly3::FStartPlayer3(psw.get());   // (player3.h: SLY3_START, the development start in gameplay)
+        sly3::SetPosPlayer3(psw.get(), frame);              // (player3.h: SLY3_SETPOS, the reference's SLY2_SETPOS)
         // debug: SLY2N_SAVEAT=frame:slot (1..3): the save into that slot at that frame, as the menu's Save Game
         // writes it (FWriteSaveSlot)
         if (static const char* s_sz = std::getenv("SLY2N_SAVEAT"); s_sz && std::atoi(s_sz) == frame && std::strchr(s_sz, ':'))
@@ -722,10 +782,42 @@ int RunGame(const GAMEOPTS& go)
         // (a cutscene's skip runs the game alone: skipcut.h)
         UpdateJoy(&g_joy, fWindow && !fFreeCam && !FSkipCutFastForward() ? g_gl.window : nullptr, frame, go.apress);
         JoyBeginFrame();   // (the presses taken this frame: the scripts' (SCPT 0x42) before the HUD's and the menus')
+        // (debugmenu.h, Debug keys only) the debug menu open: the game frozen, the step is the menu's
+        if (FDebugMenuOpen())
+        {
+            UpdateDebugMenu(psw.get());
+            g_clock.tick = TickNow();   // (the frozen time is no step for the clock)
+            return;
+        }
         // TODO(M3): 0x14BA38, 0x14D470 (camera)
         UpdateClock(&g_clock, false);
         if (pfDump) WriteFrameDump(pfDump, psw.get(), frame);
         WriteMembDump(psw.get(), frame);
+        // debug: SLY2N_FRAMETICK=N: every N frames "tick f F t T po OID pos X Y Z" (tools/progression.sh: the
+        // timeline its stall / softlock checks put the task lines on)
+        if (static const int s_cTick = std::getenv("SLY2N_FRAMETICK") ? std::atoi(std::getenv("SLY2N_FRAMETICK")) : 0;
+            s_cTick > 0 && frame % s_cTick == 0)
+        {
+            LO* ppo = PloPoCurrent(psw.get());
+            const glm::vec3 p = ppo ? PosLoWorld(ppo) : glm::vec3(0.0f);
+            std::printf("tick f %d t %.3f po %d pos %.0f %.0f %.0f\n", frame, g_clock.t, ppo ? ppo->oid : -1, p.x, p.y, p.z);
+            // (SLY2N_CHAINTICK=1: the current player's chain segments (his tail, ears, ...): how many, how many their
+            // chain drives (mode 16), how many hold a NaN)
+            if (static const bool s_fChain = std::getenv("SLY2N_CHAINTICK") != nullptr; s_fChain && ppo && FCidDerivedFrom(ppo->Cid(), S3CID(0x30)))
+            {
+                int cSeg = 0, c16 = 0, cNan = 0;
+                for (const ALOCHAIN& c : static_cast<ALO*>(ppo)->achain)
+                    for (const ALOCHAINE& e : c.ae)
+                    {
+                        if (!e.pxf) continue;
+                        cSeg++;
+                        c16 += e.pxf->mode == 16 ? 1 : 0;
+                        cNan += (std::isnan(e.pos.x + e.pos.y + e.pos.z + e.v.x + e.v.y + e.v.z) ||
+                                 std::isnan(e.pxf->mat[0].x + e.pxf->mat[1].y + e.pxf->mat[2].z)) ? 1 : 0;
+                    }
+                std::printf("chains po %d: segments %d chain-driven %d nan %d\n", ppo->oid, cSeg, c16, cNan);
+            }
+        }
         // debug: SLY2N_TASKDUMP=file:frame (each task's state and each job's, by oid, at the frame's start)
         if (const char* sz = std::getenv("SLY2N_TASKDUMP"))
         {
@@ -751,7 +843,7 @@ int RunGame(const GAMEOPTS& go)
                     }
                     for (CID cid : {0x84, 0x85})
                         for (LO* plo : psw->mpcidaplo[cid])
-                            if (cid == 0x85)
+                            if (cid == S3CID(0x85))
                             {
                                 std::fprintf(pf, "task %d %d", plo->oid, static_cast<TASK*>(plo)->nState);
                                 for (int16_t k : static_cast<TASK*>(plo)->prE0.akey) std::fprintf(pf, " %d", k);
@@ -784,10 +876,19 @@ int RunGame(const GAMEOPTS& go)
             static const bool s_fRam = s_ramCam.FLoad(go.cameraRam);
             if (s_fRam)
             {
-                g_actview.posCm = glm::vec3(s_ramCam.F32(0x2DDF40 + 0x90), s_ramCam.F32(0x2DDF40 + 0x94), s_ramCam.F32(0x2DDF40 + 0x98));
-                g_actview.grfCm = static_cast<uint32_t>(s_ramCam.S32(0x2DDF40 + 0x14));
+                // orig3: the world camera (SW +0x463C) +0x80 (its channels: TODO(sly3); the native camera's are kept)
+                const uint32_t pcm = s_ramCam.U32(sly3::VA_SW + sly3::OFF_SW_CAMERA);
+                if (pcm) g_actview.posCm = glm::vec3(s_ramCam.F32(pcm + 0x80), s_ramCam.F32(pcm + 0x84), s_ramCam.F32(pcm + 0x88));
             }
         }
+        // (pe.cpp) the effects' camera before the world's update: --camera-ram's, else the game's
+        if (!go.cameraRam.empty())
+        {
+            static RENDEROPTS s_optsPe;
+            static const CAMERA s_camPe = CameraFromRam(go.cameraRam, s_optsPe);
+            SetPeCameraOf(s_camPe);
+        }
+        else SetPeCameraOf(CameraFromCm(g_cm));
         // debug (the harness without the camera's differences): SLY2N_ACTVIEW=x,y,z,grf
         static const char* s_szActview = std::getenv("SLY2N_ACTVIEW");
         if (s_szActview)
@@ -800,19 +901,23 @@ int RunGame(const GAMEOPTS& go)
                 g_actview.grfCm = grf;
             }
         }
-        // (debug: SLY2N_DROPCOINS="X Y Z@tT,N" drops N coins there at game time T, as a breakable's item 10 0x154E10)
+        // (debug: SLY2N_DROPCOINS="X Y Z@tT,N[,P]" drops N coins there at game time T (again every P s when given), as a
+        // breakable's item 10 0x154E10)
         if (static const char* s_szDrop = std::getenv("SLY2N_DROPCOINS"); s_szDrop)
         {
             static bool s_fDone = false;
-            float x = 0, y = 0, z = 0, t = 0;
+            static float s_tNext = -1.0f;
+            float x = 0, y = 0, z = 0, t = 0, dtRepeat = 0;
             int n = 1;
             const bool fPlayer = s_szDrop[0] == 'P';  // "P@tT,N": above the current player
-            const bool fParsed = fPlayer ? std::sscanf(s_szDrop, "P@t%f,%d", &t, &n) >= 1
-                                         : std::sscanf(s_szDrop, "%f %f %f@t%f,%d", &x, &y, &z, &t, &n) >= 4;
-            if (!s_fDone && fParsed && t <= g_clock.t)
+            const bool fParsed = fPlayer ? std::sscanf(s_szDrop, "P@t%f,%d,%f", &t, &n, &dtRepeat) >= 1
+                                         : std::sscanf(s_szDrop, "%f %f %f@t%f,%d,%f", &x, &y, &z, &t, &n, &dtRepeat) >= 4;
+            if (s_tNext < 0.0f) s_tNext = t;
+            if (!s_fDone && fParsed && s_tNext <= g_clock.t)
             {
-                s_fDone = true;
-                if (LO* plo = fPlayer ? PloPoCurrent(psw.get()) : nullptr; plo && FCidDerivedFrom(plo->Cid(), 0x30))
+                if (dtRepeat > 0.0f) s_tNext = g_clock.t + dtRepeat;
+                else s_fDone = true;
+                if (LO* plo = fPlayer ? PloPoCurrent(psw.get()) : nullptr; plo && FCidDerivedFrom(plo->Cid(), S3CID(0x30)))
                 {
                     const glm::vec3 q = PosAloCenter(static_cast<ALO*>(plo));
                     x = q.x + 150.0f; y = q.y; z = q.z + 50.0f;
@@ -877,7 +982,7 @@ int RunGame(const GAMEOPTS& go)
             if (fAt)
                 for (const auto& up : psw->aploAll)
                 {
-                    if (!FCidDerivedFrom(up->Cid(), 0x30)) continue;
+                    if (!FCidDerivedFrom(up->Cid(), S3CID(0x30))) continue;
                     const std::string so = std::to_string(up->oid);
                     const char* pAt = std::strchr(s_sz, '@');
                     bool f = false;
@@ -885,7 +990,7 @@ int RunGame(const GAMEOPTS& go)
                         f = f || std::atoi(q) == up->oid;
                     if (!f || !up->fInWorld) continue;
                     const ALO* pa = static_cast<const ALO*>(up.get());
-                    for (size_t i = 0; i < pa->axf.size() && i < 3; ++i)
+                    for (size_t i = 0; i < pa->axf.size(); ++i)
                     {
                         const glm::mat4& m = pa->axf[i]->matWorld;
                         std::printf("xfdump %d %d %p xf %zu: x %.3f %.3f %.3f pos %.1f %.1f %.1f mode %d\n", frame, up->oid, (const void*)pa, i, m[0].x, m[0].y,
@@ -914,12 +1019,16 @@ int RunGame(const GAMEOPTS& go)
             for (const SMA* ps : g_apsma)
                 std::printf("smadump sm %d alo %d\n", ps->psm ? ps->psm->oid : -1, ps->palo ? ps->palo->oid : -1);
         // (debug: SLY2N_BIGGLOBS="radius@frame": the globs of a radius above that, by object)
+        if (static const char* s_szEm = std::getenv("SLY3_DUMPEMITTERS"); s_szEm && frame == std::atoi(s_szEm))   // (debug: the emitters at that frame)
+            DumpEmitters();
+        if (static const char* s_szFog = std::getenv("SLY2N_FOGPRINT"); s_szFog && frame % std::max(1, std::atoi(s_szFog)) == 0)   // (debug: the camera's fog every N frames)
+            std::printf("fog frame %d t %.2f near %g far %g max %g rgba %08X\n", frame, g_clock.t, g_cm.sNearFog, g_cm.sFarFog, g_cm.uFogMax, g_cm.rgbaFog);
         if (static const char* s_szBig = std::getenv("SLY2N_BIGGLOBS"); s_szBig && std::strchr(s_szBig, '@') &&
             frame == std::atoi(std::strchr(s_szBig, '@') + 1))
             for (const auto& up : psw->aploAll)
             {
                 LO* plo = up.get();
-                if (!FCidDerivedFrom(plo->Cid(), 0x30)) continue;
+                if (!FCidDerivedFrom(plo->Cid(), S3CID(0x30))) continue;
                 ALO* palo = static_cast<ALO*>(plo);
                 if (!palo->pglobset) continue;
                 for (size_t i = 0; i < palo->pglobset->aglob.size(); ++i)
@@ -959,7 +1068,7 @@ int RunGame(const GAMEOPTS& go)
                 ALO* palo = nullptr;
                 float dBest = 3.4e38f;
                 for (const auto& up : psw->aploAll)
-                    if (up->oid == oid && FCidDerivedFrom(up->Cid(), 0x30) && (up->fInWorld || !palo))
+                    if (up->oid == oid && FCidDerivedFrom(up->Cid(), S3CID(0x30)) && (up->fInWorld || !palo))
                     {
                         const float d = glm::length(PosAloCenter(static_cast<ALO*>(up.get())) - glm::vec3(x, y, z));
                         if (up->fInWorld && d < dBest) { dBest = d; palo = static_cast<ALO*>(up.get()); }
@@ -1012,7 +1121,7 @@ int RunGame(const GAMEOPTS& go)
         if (static const char* s_szAll = std::getenv("SLY2N_TRACKALL"); s_szAll && std::strchr(s_szAll, ':') &&
             frame % std::max(1, std::atoi(std::strchr(s_szAll, ':') + 1)) == 0)
             for (const auto& up : psw->aploAll)
-                if (up->oid == std::atoi(s_szAll) && up->fInWorld && FCidDerivedFrom(up->Cid(), 0x30))
+                if (up->oid == std::atoi(s_szAll) && up->fInWorld && FCidDerivedFrom(up->Cid(), S3CID(0x30)))
                 {
                     const glm::vec3 pos = PosAloCenter(static_cast<ALO*>(up.get()));
                     const ALO* pa = static_cast<ALO*>(up.get());
@@ -1020,6 +1129,54 @@ int RunGame(const GAMEOPTS& go)
                     std::printf("trackall %d %p t %.3f pos %.1f %.1f %.1f parent %d xf1 local %.1f %.1f %.1f mode %d\n", up->oid, (void*)up.get(), g_clock.t, pos.x, pos.y, pos.z,
                                 up->paloParent ? up->paloParent->oid : -1, l1.x, l1.y, l1.z, pa->axf.size() > 1 ? int(pa->axf[1]->mode) : -1);
                 }
+        // debug: SLY2N_CIDTRACE=cid:N: every in-world object derived from that class (hex) every N frames (oid, instance, centre)
+        if (static const char* s_szCid = std::getenv("SLY2N_CIDTRACE"); s_szCid && std::strchr(s_szCid, ':') &&
+            frame % std::max(1, std::atoi(std::strchr(s_szCid, ':') + 1)) == 0)
+            for (const auto& up : psw->aploAll)
+                if (up->fInWorld && FCidDerivedFrom(up->Cid(), int(std::strtol(s_szCid, nullptr, 16))) && FCidDerivedFrom(up->Cid(), S3CID(0x30)))
+                {
+                    const glm::vec3 pos = PosAloCenter(static_cast<ALO*>(up.get()));
+                    std::printf("cidtrace %d %p cid 0x%X t %.3f pos %.1f %.1f %.1f\n", up->oid, (void*)up.get(), unsigned(up->Cid()), g_clock.t, pos.x, pos.y, pos.z);
+                    if (std::getenv("SLY2N_CIDTRACEXF"))
+                        if (const XF* pxf = PxfPos(static_cast<ALO*>(up.get())))
+                        {
+                            const glm::mat4& m = pxf->matWorld;
+                            std::printf("   xf %.3f %.3f %.3f | %.3f %.3f %.3f | %.3f %.3f %.3f | %.1f %.1f %.1f\n", m[0][0], m[0][1], m[0][2], m[1][0],
+                                        m[1][1], m[1][2], m[2][0], m[2][1], m[2][2], m[3][0], m[3][1], m[3][2]);
+                        }
+                }
+                // (a class that is no ALO, e.g. the uses 0x23: its world position, in world or not)
+                else if (FCidDerivedFrom(up->Cid(), int(std::strtol(s_szCid, nullptr, 16))) && !FCidDerivedFrom(up->Cid(), S3CID(0x30)))
+                {
+                    const glm::vec3 pos = PosLoWorld(up.get());
+                    std::printf("cidtrace %d %p cid 0x%X t %.3f pos %.1f %.1f %.1f inworld %d\n", up->oid, (void*)up.get(), unsigned(up->Cid()), g_clock.t,
+                                pos.x, pos.y, pos.z, int(up->fInWorld));
+                }
+        // debug: SLY2N_NANOID=oid: the first frame an XF under that object (its own or its parts') has a NaN local or
+        // world matrix: each such record (owner, index, kind, mode, state, local translation)
+        if (static const char* s_szNan = std::getenv("SLY2N_NANOID"); s_szNan)
+        {
+            static int s_cPrinted = 0;
+            const int oidNan = std::atoi(s_szNan);
+            for (const auto& up : psw->aploAll)
+            {
+                if (s_cPrinted > 40) break;
+                bool fUnder = false;
+                for (const LO* plo = up.get(); plo && !fUnder; plo = plo->paloParent) fUnder = plo->oid == oidNan;
+                if (!fUnder || !FCidDerivedFrom(up->Cid(), S3CID(0x30))) continue;
+                const ALO* palo = static_cast<const ALO*>(up.get());
+                for (size_t i = 0; i < palo->axf.size(); ++i)
+                {
+                    const XF* pxf = palo->axf[i].get();
+                    auto fNan = [](const glm::mat4& m) { for (int c = 0; c < 4; ++c) for (int r = 0; r < 4; ++r) if (std::isnan(m[c][r])) return true; return false; };
+                    if (!pxf || (!fNan(pxf->mat) && !fNan(pxf->matWorld))) continue;
+                    ++s_cPrinted;
+                    std::printf("nanoid frame %d t %.3f: oid %d cid 0x%X xf %zu kind %d mode %d state %d local nan %d world nan %d ref %d t %.1f %.1f %.1f g %.3f vel %.1f %.1f %.1f aseg0 %.2f %.2f %.2f %.2f\n", frame, g_clock.t, palo->oid, unsigned(palo->Cid()), i, pxf->kind, pxf->mode,
+                                pxf->state, fNan(pxf->mat), fNan(pxf->matWorld), pxf->pxfRef && pxf->pxfRef->palo ? pxf->pxfRef->palo->oid : -1, pxf->mat[3][0], pxf->mat[3][1], pxf->mat[3][2], pxf->G(),
+                                pxf->vel.x, pxf->vel.y, pxf->vel.z, pxf->aseg[0].x, pxf->aseg[0].y, pxf->aseg[0].z, pxf->aseg[0].w);
+                }
+            }
+        }
         // debug: SLY2N_SLYTRACE=file: Sly's interaction (+0x4C8 kind, +0x4CC state), camera zone +0x1024, position record,
         // +0x190 (vecVel) every frame
         if (static std::FILE* s_pfSt = std::getenv("SLY2N_SLYTRACE") ? std::fopen(std::getenv("SLY2N_SLYTRACE"), "w") : nullptr; s_pfSt)
@@ -1056,7 +1213,7 @@ int RunGame(const GAMEOPTS& go)
             {
                 LO* pa = PloFindSwObjectByOid(psw.get(), oidA);
                 LO* pb = PloFindSwObjectByOid(psw.get(), oidB);
-                if (pa && pb && FCidDerivedFrom(pa->Cid(), 0x30) && FCidDerivedFrom(pb->Cid(), 0x30))
+                if (pa && pb && FCidDerivedFrom(pa->Cid(), S3CID(0x30)) && FCidDerivedFrom(pb->Cid(), S3CID(0x30)))
                 {
                     SetAloPos(static_cast<ALO*>(pa), PosAloCenter(static_cast<ALO*>(pb)) + glm::vec3(dx, dy, dz));
                     UpdateAloXfWorlds(static_cast<ALO*>(pa));
@@ -1076,7 +1233,7 @@ int RunGame(const GAMEOPTS& go)
                 if (f != frame) continue;
                 int i = 0;
                 for (const auto& up : psw->aploAll)
-                    if (LO* plo = up.get(); plo->oid == oid && plo->fInWorld && FCidDerivedFrom(plo->Cid(), 0x30) && i++ == k)
+                    if (LO* plo = up.get(); plo->oid == oid && plo->fInWorld && FCidDerivedFrom(plo->Cid(), S3CID(0x30)) && i++ == k)
                     {
                         ALO* palo = static_cast<ALO*>(plo);
                         // (the class's own slot 29 when it has a port, e.g. the actors' 0x143CF8 clears the safe
@@ -1095,13 +1252,13 @@ int RunGame(const GAMEOPTS& go)
             frame % std::max(1, std::atoi(std::strchr(s_szTrack, ':') + 1)) == 0)
             for (const char* q = s_szTrack; q && *q && *q != ':'; q = std::strchr(q, ',') ? std::strchr(q, ',') + 1 : nullptr)
                 for (const auto& upTrack : psw->aploAll)
-                    if (LO* plo = upTrack.get(); plo->oid == std::atoi(q) && FCidDerivedFrom(plo->Cid(), 0x03) && !FCidDerivedFrom(plo->Cid(), 0x30))
+                    if (LO* plo = upTrack.get(); plo->oid == std::atoi(q) && FCidDerivedFrom(plo->Cid(), S3CID(0x03)) && !FCidDerivedFrom(plo->Cid(), S3CID(0x30)))
                     {
                         // (a located object (LOX): its world position, e.g. the RC tank's aim point 72932)
                         const glm::vec3 pos = glm::vec3(MatWorldLox(plo)[3]);
                         std::printf("tracklox %d f %d t %.3f pos %.2f %.2f %.2f\n", plo->oid, frame, g_clock.t, pos.x, pos.y, pos.z);
                     }
-                    else if (plo->oid == std::atoi(q) && plo->fInWorld && FCidDerivedFrom(plo->Cid(), 0x30))
+                    else if (plo->oid == std::atoi(q) && plo->fInWorld && FCidDerivedFrom(plo->Cid(), S3CID(0x30)))
                     {
                         const glm::vec3 pos = PosAloCenter(static_cast<ALO*>(plo));
                         XF* pxf = static_cast<ALO*>(plo)->apxfRef[0];  // (+0x58)
@@ -1114,9 +1271,9 @@ int RunGame(const GAMEOPTS& go)
                                         m[0][0], m[0][1], m[0][2], m[1][0], m[1][1], m[1][2], m[2][0], m[2][1], m[2][2], m[3][0], m[3][1], m[3][2]);
                         }
                         const GUARD* pgTrack = PguardFromLo(plo);
-                        std::printf("track %d f %d t %.3f st %d pos %.1f %.1f %.1f local %.2f %.2f %.2f head %.2f grf %llx 32c %d mode %d\n", plo->oid, frame, g_clock.t, plo->nState,
+                        std::printf("track %d f %d t %.3f st %d pos %.1f %.1f %.1f local %.2f %.2f %.2f head %.2f grf %llx 32c %d mode %d inst %d\n", plo->oid, frame, g_clock.t, plo->nState,
                                     pos.x, pos.y, pos.z, posL.x, posL.y, posL.z, pst ? pst->radHeading : 0.0f,
-                                    pgTrack ? static_cast<unsigned long long>(pgTrack->grfState) : 0ull, pgTrack ? pgTrack->f32C : 0, pgTrack ? pgTrack->nMode : -9);
+                                    pgTrack ? static_cast<unsigned long long>(pgTrack->grfState) : 0ull, pgTrack ? pgTrack->f32C : 0, pgTrack ? pgTrack->nMode : -9, plo->oidInstance);
                         if (pgTrack && std::getenv("SLY2N_TRACKJOBS"))   // (the job stack, each with its child chain)
                         {
                             std::printf("  jobs %d:", plo->oid);
@@ -1155,6 +1312,56 @@ int RunGame(const GAMEOPTS& go)
                             m.k = 8;
                             pr->React(m);
                         }
+        // debug: SLY2N_SPINTRACE=N: N frames after each world load (and every N after that, SLY2N_SPINEVERY=M), every
+        // in-world non-actor object whose object record (+0x60) turned since the last frame: its world angular velocity
+        // (the axis of R(t) R(t-1)^T over dt, rad/s), oid / instance / class / place (tools/spintripregress.py, R55)
+        if (static const char* s_szSpin = std::getenv("SLY2N_SPINTRACE"); s_szSpin && psw)
+        {
+            static std::unordered_map<const ALO*, glm::mat3> s_mpmat;
+            static int s_cLoads = -1, s_frameLoad = 0;
+            extern int g_cTransitionLoads;
+            if (s_cLoads != g_cTransitionLoads)
+            {
+                s_cLoads = g_cTransitionLoads;
+                s_frameLoad = frame;
+                s_mpmat.clear();
+            }
+            const int rel = frame - s_frameLoad, n = std::max(1, std::atoi(s_szSpin));
+            static const int s_every = std::getenv("SLY2N_SPINEVERY") ? std::atoi(std::getenv("SLY2N_SPINEVERY")) : 0;
+            const bool fPrint = rel == n || (s_every > 0 && rel > n && (rel - n) % s_every == 0);
+            const float dt = g_clock.dt > 0.0f ? g_clock.dt : 1.0f / 60.0f;
+            for (const auto& up : psw->aploAll)
+            {
+                LO* plo = up.get();
+                if (!plo->fInWorld || !FCidDerivedFrom(plo->Cid(), S3CID(0x30))) continue;
+                bool fActorPart = false;  // (an actor or a part of one: guards' bodies turn with their AI)
+                for (LO* q = plo; q && !fActorPart; q = q->paloParent) fActorPart = PactorFromLo(q) || FCidDerivedFrom(q->Cid(), S3CID(0x38));
+                if (fActorPart) continue;
+                const XF* pxo = PxfObj(static_cast<ALO*>(plo));
+                if (!pxo) continue;
+                glm::mat3 m(glm::vec3(pxo->matWorld[0]), glm::vec3(pxo->matWorld[1]), glm::vec3(pxo->matWorld[2]));
+                for (int i = 0; i < 3; ++i)
+                    if (const float l = glm::length(m[i]); l > 1e-6f) m[i] /= l;
+                const ALO* palo = static_cast<const ALO*>(plo);
+                auto it = s_mpmat.find(palo);
+                if (fPrint && it != s_mpmat.end())
+                {
+                    const glm::mat3 d = m * glm::transpose(it->second);
+                    const float c = std::clamp((d[0][0] + d[1][1] + d[2][2] - 1.0f) * 0.5f, -1.0f, 1.0f);
+                    const float ang = std::acos(c);
+                    glm::vec3 ax(d[1][2] - d[2][1], d[2][0] - d[0][2], d[0][1] - d[1][0]);
+                    if (const float l = glm::length(ax); l > 1e-7f) ax /= l;
+                    const float w = ang / dt;
+                    if (w > 0.05f && w < 60.0f && glm::length(ax) > 0.5f)
+                    {
+                        const glm::vec3 p = glm::vec3(pxo->matWorld[3]);
+                        std::printf("spin w %d rel %d oid %d inst %d cid 0x%X pos %.0f %.0f %.0f w %.3f axis %.3f %.3f %.3f\n",
+                                    g_transition.iwrecCur, rel, plo->oid, plo->oidInstance, plo->Cid(), p.x, p.y, p.z, w, ax.x, ax.y, ax.z);
+                    }
+                }
+                s_mpmat[palo] = m;
+            }
+        }
         // debug: SLY2N_CIDLIST=lo-hi@frame: every object whose class is in [lo, hi] (oid, class, in world, parent)
         if (static const char* s_szCid = std::getenv("SLY2N_CIDLIST"); s_szCid && std::strchr(s_szCid, '@') &&
             frame == std::atoi(std::strchr(s_szCid, '@') + 1))
@@ -1166,17 +1373,18 @@ int RunGame(const GAMEOPTS& go)
             for (const auto& up : psw->aploAll)
                 if (LO* plo = up.get(); oidOnly >= 0 ? (plo->oid == oidOnly || plo->oidInstance == oidOnly) : (plo->Cid() >= lo && plo->Cid() <= hi))
                 {
-                    const glm::vec3 v = FCidDerivedFrom(plo->Cid(), 0x30) ? PosAloCenter(static_cast<ALO*>(plo))
-                                        : FCidDerivedFrom(plo->Cid(), 3) ? PosJtLo(plo) : glm::vec3(0.0f);  // (a LOX: its record's)
-                    std::printf("cidlist %d cid 0x%X inworld %d parent %d pos %.1f %.1f %.1f\n", plo->oid, plo->Cid(), plo->fInWorld,
-                                plo->paloParent ? plo->paloParent->oid : -1, v.x, v.y, v.z);
+                    const glm::vec3 v = FCidDerivedFrom(plo->Cid(), S3CID(0x30)) ? PosAloCenter(static_cast<ALO*>(plo))
+                                        : FCidDerivedFrom(plo->Cid(), S3CID(3)) ? PosJtLo(plo) : glm::vec3(0.0f);  // (a LOX: its record's)
+                    std::printf("cidlist %d cid 0x%X inworld %d parent %d pos %.1f %.1f %.1f%s\n", plo->oid, plo->Cid(), plo->fInWorld,
+                                plo->paloParent ? plo->paloParent->oid : -1, v.x, v.y, v.z,
+                                FCidDerivedFrom(plo->Cid(), S3CID(0x62)) ? (FBreakableIntact(plo) ? " intact" : " broken") : "");
                 }
         }
         // debug: SLY2N_PARTLIST=oid@frame: the object's parts (offset -> oid)
         if (static const char* s_szPart = std::getenv("SLY2N_PARTLIST"); s_szPart && std::strchr(s_szPart, '@') &&
             frame == std::atoi(std::strchr(s_szPart, '@') + 1))
             for (const auto& up : psw->aploAll)
-                if (LO* plo = up.get(); plo->oid == std::atoi(s_szPart) && FCidDerivedFrom(plo->Cid(), 0x30))
+                if (LO* plo = up.get(); plo->oid == std::atoi(s_szPart) && FCidDerivedFrom(plo->Cid(), S3CID(0x30)))
                 {
                     std::printf("partlist %d:", plo->oid);
                     for (const auto& [ib, pp] : static_cast<ALO*>(plo)->apart) std::printf(" [+0x%X %d]", ib, pp ? pp->oid : -1);
@@ -1186,7 +1394,7 @@ int RunGame(const GAMEOPTS& go)
         if (static const char* s_szSoe = std::getenv("SLY2N_SOELIST"); s_szSoe && std::strchr(s_szSoe, '@') &&
             frame == std::atoi(std::strchr(s_szSoe, '@') + 1))
             for (const auto& up : psw->aploAll)
-                if (LO* plo = up.get(); FCidDerivedFrom(plo->Cid(), 0x30) &&
+                if (LO* plo = up.get(); FCidDerivedFrom(plo->Cid(), S3CID(0x30)) &&
                     (s_szSoe[0] == 'k' ? [&] {  // (kKIND@frame: every object with an entry of that contact kind)
                         for (const SOE& e : static_cast<ALO*>(plo)->asoe)
                             if (e.id == static_cast<uint32_t>(std::strtoul(s_szSoe + 1, nullptr, 0))) return true;
@@ -1232,6 +1440,22 @@ int RunGame(const GAMEOPTS& go)
                 }
             }
         }
+        bool FPointInVolume(LO* plo, const glm::vec3& pos);  // (trigger.cpp)
+        // debug: SLY2N_VOLPROBE="OID X0 Y0 X1 Y1 STEP Z@F": at frame F, which grid points are inside that volume ("vprobe")
+        if (const char* sz = std::getenv("SLY2N_VOLPROBE"); sz && std::strchr(sz, '@') && frame == std::atoi(std::strchr(sz, '@') + 1))
+        {
+            int oid = 0;
+            float x0, y0, x1, y1, st, z;
+            if (std::sscanf(sz, "%d %f %f %f %f %f %f", &oid, &x0, &y0, &x1, &y1, &st, &z) == 7 && st > 0.0f)
+                for (const auto& up : psw->aploAll)
+                    if (up->oid == oid)
+                        for (float y = y1; y >= y0; y -= st)
+                        {
+                            std::printf("vprobe %6.0f ", y);
+                            for (float x = x0; x <= x1; x += st) std::printf("%c", FPointInVolume(up.get(), glm::vec3(x, y, z)) ? '#' : '.');
+                            std::printf("\n");
+                        }
+        }
         // debug: SLY2N_HEIGHTMAP="X0 Y0 X1 Y1 STEP@F": at frame F the top surface under each grid point (a line from
         // z 6000 to -3000 through every attachment's solid entries): "hmap x y z cid oid" (no hit: z -99999)
         if (const char* sz = std::getenv("SLY2N_HEIGHTMAP"); sz && std::strchr(sz, '@') && frame == std::atoi(std::strchr(sz, '@') + 1))
@@ -1256,7 +1480,7 @@ int RunGame(const GAMEOPTS& go)
                         {
                             if (x < poxa->posMin.x || poxa->posMax.x < x || y < poxa->posMin.y || poxa->posMax.y < y) continue;
                             for (SOE* psoe : poxa->apsoe)
-                                if (psoe->palo && FCidDerivedFrom(psoe->palo->Cid(), 0x59) && apsoeW.size() < 0x100) apsoeW.push_back(psoe);
+                                if (psoe->palo && FCidDerivedFrom(psoe->palo->Cid(), S3CID(0x59)) && apsoeW.size() < 0x100) apsoeW.push_back(psoe);
                         }
                         LSG lsgW;
                         SOE* phW = apsoeW.empty() ? nullptr : PsoeHitTestLineObjects(0, a, b, apsoeW, &lsgW);
@@ -1267,7 +1491,7 @@ int RunGame(const GAMEOPTS& go)
         // debug: SLY2N_SOETRACK=oid: that object's collision entries every frame (tag, bits 48 / 50, state, matrix position)
         if (const char* s_szSoeTrack = std::getenv("SLY2N_SOETRACK"))
             for (const auto& up : psw->aploAll)
-                if (LO* plo = up.get(); plo->oid == std::atoi(s_szSoeTrack) && FCidDerivedFrom(plo->Cid(), 0x30))
+                if (LO* plo = up.get(); plo->oid == std::atoi(s_szSoeTrack) && FCidDerivedFrom(plo->Cid(), S3CID(0x30)))
                 {
                     std::printf("soetrack %d f %d:", plo->oid, frame);
                     for (const SOE& e : static_cast<ALO*>(plo)->asoe)
@@ -1294,7 +1518,7 @@ int RunGame(const GAMEOPTS& go)
         // damage states, the sensors), with its class, place and the entries
         if (static const char* s_szIds = std::getenv("SLY2N_SOEIDS"); s_szIds && frame == std::atoi(s_szIds))
             for (const auto& up : psw->aploAll)
-                if (LO* plo = up.get(); FCidDerivedFrom(plo->Cid(), 0x30))
+                if (LO* plo = up.get(); FCidDerivedFrom(plo->Cid(), S3CID(0x30)))
                 {
                     ALO* palo = static_cast<ALO*>(plo);
                     bool f = false;
@@ -1326,6 +1550,26 @@ int RunGame(const GAMEOPTS& go)
                         }
                     std::printf("\n");
                 }
+        // (debug: SLY2N_HOOKLIST=frame: the jump targets' point list (the hooks) with their classes and places)
+        if (static const char* s_szHooks = std::getenv("SLY2N_HOOKLIST"); s_szHooks && frame == std::atoi(s_szHooks))
+            for (LO* plo : AploJtList(psw.get(), JTL_Point))
+                std::printf("hooklist %d cid 0x%X e8 %X at %.0f %.0f %.0f\n", plo->oid, int(plo->Cid()), plo->U32Field(0, 0xE8, 0),
+                            MatJtLo(plo)[3].x, MatJtLo(plo)[3].y, MatJtLo(plo)[3].z);
+        // (debug: SLY2N_JTLIST=kind@frame: that jump-target list (JTL: 3 spire, 5 ledge, 6 wall, ...) with their places)
+        if (static const char* s_szJt = std::getenv("SLY2N_JTLIST"); s_szJt && std::strchr(s_szJt, '@') &&
+                                                                       frame == std::atoi(std::strchr(s_szJt, '@') + 1))
+            for (LO* plo : AploJtList(psw.get(), static_cast<JTL>(std::atoi(s_szJt))))
+            {
+                std::printf("jtlist %d cid 0x%X at %.0f %.0f %.0f", plo->oid, int(plo->Cid()), MatJtLo(plo)[3].x, MatJtLo(plo)[3].y,
+                            MatJtLo(plo)[3].z);
+                if (const CRV* pcrv = PcrvFromLo(plo); pcrv && !pcrv->apos.empty())  // (a curve's ends in the world)
+                {
+                    const glm::vec3 a = glm::vec3(MatJtLo(plo) * glm::vec4(pcrv->apos.front(), 1.0f));
+                    const glm::vec3 b = glm::vec3(MatJtLo(plo) * glm::vec4(pcrv->apos.back(), 1.0f));
+                    std::printf(" curve %zu points %.0f %.0f %.0f .. %.0f %.0f %.0f", pcrv->apos.size(), a.x, a.y, a.z, b.x, b.y, b.z);
+                }
+                std::printf("\n");
+            }
         if (static const char* s_szCidPos = std::getenv("SLY2N_CIDPOS"); s_szCidPos && std::strchr(s_szCidPos, '@') &&
             frame == std::atoi(std::strchr(s_szCidPos, '@') + 1))
             for (const auto& up : psw->aploAll)
@@ -1336,15 +1580,25 @@ int RunGame(const GAMEOPTS& go)
                     if (FCidDerivedFrom(plo->Cid(), static_cast<CID>(std::strtol(q, nullptr, 0)))) f = true;
                 if (!f) continue;
                 glm::vec3 pos(0.0f);
-                if (FCidDerivedFrom(plo->Cid(), 0x30)) pos = PosAloCenter(static_cast<ALO*>(plo));
+                if (FCidDerivedFrom(plo->Cid(), S3CID(0x30))) pos = PosAloCenter(static_cast<ALO*>(plo));
                 else if (const LOX* px = dynamic_cast<const LOX*>(plo)) pos = glm::vec3((px->pxf ? px->pxf->matWorld * px->mat : px->mat)[3]);
                 std::printf("cidpos 0x%X %d (alias %d) parent %d inworld %d state %d at %.0f %.0f %.0f r %.1f", plo->Cid(), plo->oid, plo->oidInstance,
                             plo->paloParent ? plo->paloParent->oid : -1, plo->fInWorld ? 1 : 0, plo->nState, pos.x, pos.y, pos.z, plo->sRadius);
+                if (FCidDerivedFrom(plo->Cid(), S3CID(0x30)))   // (its world x axis: which way the object faces)
+                    std::printf(" xaxis %.3f %.3f", MatWorldOfAlo(static_cast<ALO*>(plo))[0].x, MatWorldOfAlo(static_cast<ALO*>(plo))[0].y);
+                if (FCidDerivedFrom(plo->Cid(), S3CID(0x30)))   // (its collision entries' world bounds: where a piece really is,
+                    for (const SOE& e : static_cast<ALO*>(plo)->asoe)  // e.g. a bridge's cleats, all at the root)
+                        if (!e.geomWorld.apos.empty())
+                        {
+                            glm::vec3 lo(3.4e38f), hi(-3.4e38f);
+                            for (const glm::vec3& v : e.geomWorld.apos) { lo = glm::min(lo, v); hi = glm::max(hi, v); }
+                            std::printf(" soe (%.0f %.0f %.0f)..(%.0f %.0f %.0f)", lo.x, lo.y, lo.z, hi.x, hi.y, hi.z);
+                        }
                 if (const CMDLIST* pl = dynamic_cast<const CMDLIST*>(plo))
                     for (const auto& c : pl->acmd) std::printf(" [op %d oid %d n8 %d]", c->op, c->oid, c->n8);
-                if (FCidDerivedFrom(plo->Cid(), 0x2E))  // (a recon subject: its task +0xEC, linked +0x100)
+                if (FCidDerivedFrom(plo->Cid(), S3CID(0x2E)))  // (a recon subject: its task +0xEC, linked +0x100)
                     std::printf(" task %d linked %d", static_cast<int>(plo->U32Field(0, 0xEC, uint32_t(-1))), static_cast<int>(plo->U32Field(0, 0x100, uint32_t(-1))));
-                if (FIsLoDerivedFrom(plo, 0x0A))   // (a path (rails, pipes ..): its points in the world)
+                if (FIsLoDerivedFrom(plo, S3CID(0x0A)))   // (a path (rails, pipes ..): its points in the world)
                     if (const CRV* pcrv = PcrvFromLo(plo))
                         for (size_t i = 0; i < pcrv->ag.size(); ++i)
                         {
@@ -1358,6 +1612,7 @@ int RunGame(const GAMEOPTS& go)
         PrepareGangFrame(frame);
         g_iframeHarness = frame;
         UpdateSw(psw.get());
+        sly3::TracePlayer3(psw.get(), frame);   // (SLY3_PLAYERTRACE)
         // orig 0x1D9648 (the HUD's update, hudwidget.h; its wipe 0x22B198 here first)
         // (its start: the load's pad lock 8 lifted once the new world's clock passes 0.1 s at its rate)
         if ((g_grfjoyLock & 8) && g_clock.rDt != 0.0f && 0.1f < g_clock.t / g_clock.rDt) UnlockJoy(8);
@@ -1368,9 +1623,11 @@ int RunGame(const GAMEOPTS& go)
         if (frame == s_iframeF6) DebugUnlockAll(psw.get());
         // debug: SLY2N_F7=1 is F7 (infinite health and power) headless
         if (static const bool s_fF7Env = std::getenv("SLY2N_F7") != nullptr; s_fF7Env) CheatRefillPlayers(psw.get());
-        // debug keys (only with the launcher's Settings > Advanced > Debug mode on, Debug Mode.ini; Sly 2's copied loop: Sly 3's own
-        // loop, sly3/game3.cpp RunGame3, has no debug keys yet). TODO(sly3): F9, complete the current job (Sly 2's
-        // FDebugCompleteJob) once sly3/task3.cpp has the job's end (JobComplete / the closing sequence).
+        // debug: SLY2N_COMPLETEJOBAT=frame[,frame...] does F9 (complete the current job) headless
+        if (static const char* s_szF9 = std::getenv("SLY2N_COMPLETEJOBAT"); s_szF9)
+            for (const char* q = s_szF9; q && *q; q = std::strchr(q, ',') ? std::strchr(q, ',') + 1 : nullptr)
+                if (std::atoi(q) == frame) FDebugCompleteJob();
+        // debug keys (only with the launcher's Settings > Advanced > Debug mode on, Debug Mode.ini; README.md):
         // F2 the Paris hub, F3 the next world record (with the wipe)
         if (g_pcinput.fDebugKeys && !g_transition.fPending && g_transition.wipes == WIPES_Idle)
         {
@@ -1403,18 +1660,40 @@ int RunGame(const GAMEOPTS& go)
             if (fF6 && !s_fF6) DebugUnlockAll(psw.get());
             s_fF6 = fF6;
             // F7 (debug, temporary): toggles infinite health and gadget power
-            static bool s_fF7 = false, s_fInfinite = false;
+            static bool s_fF7 = false;
             const bool fF7 = FDebugKeyHeld(g_gl.window, GLFW_KEY_F7);
             if (fF7 && !s_fF7)
             {
-                s_fInfinite = !s_fInfinite;
-                std::printf("F7: infinite health and power %s\n", s_fInfinite ? "on" : "off");
+                g_fDebugInfinite = !g_fDebugInfinite;   // (the debug menu's Player page too; applied by UpdateDebugTools)
+                std::printf("F7: infinite health and power %s\n", g_fDebugInfinite ? "on" : "off");
             }
             s_fF7 = fF7;
-            if (s_fInfinite) CheatRefillPlayers(psw.get());
+            // F9 (debug): complete the current job (task.h FDebugCompleteJob: the job's own end, its log line names it)
+            static bool s_fF9 = false;
+            const bool fF9 = FDebugKeyHeld(g_gl.window, GLFW_KEY_F9);
+            if (fF9 && !s_fF9) FDebugCompleteJob();
+            s_fF9 = fF9;
         }
-        for (const auto& plo : psw->aploAll)
-            if (!plo->paloParent && FCidDerivedFrom(plo->Cid(), 0x30)) UpdateAloHierarchyWorlds(static_cast<ALO*>(plo.get()));
+        // the debug menu's actions, noclip, the time scale, F7's refill, F11 (debugmenu.h; Debug keys only)
+        UpdateDebugTools(psw.get());
+        {
+            // (the root ALOs in aploAll order, kept while no object is made and no parent changes: the scan of every
+            // object was a tenth of the step; SLY2N_ROOTSCAN scans every step as before)
+            static std::vector<ALO*> s_apaloRoot;
+            static uint32_t s_serialRoot = 0, s_cParentRoot = 0;
+            static size_t s_cploRoot = size_t(-1);
+            static const bool s_fScan = std::getenv("SLY2N_ROOTSCAN") != nullptr;
+            if (s_fScan || s_serialRoot != psw->serial || s_cploRoot != psw->aploAll.size() || s_cParentRoot != g_cLoParentChanges)
+            {
+                s_apaloRoot.clear();
+                for (const auto& plo : psw->aploAll)
+                    if (!plo->paloParent && FCidDerivedFrom(plo->Cid(), S3CID(0x30))) s_apaloRoot.push_back(static_cast<ALO*>(plo.get()));
+                s_serialRoot = psw->serial, s_cploRoot = psw->aploAll.size(), s_cParentRoot = g_cLoParentChanges;
+            }
+            for (ALO* palo : s_apaloRoot) UpdateAloHierarchyWorlds(palo);
+        }
+        DrawSlys(psw.get());
+        DebugHitHideHolders(psw.get());   // (debug: hide.h)   // orig 0x18A238: the draw's own placement (state 3's cane on the hook), each step as drawn
         };
         {
             const bool fWant = s_szFrameInterp ? true : fWindow && !go.fFixedDt && g_display.frameRate > 60;
@@ -1461,21 +1740,33 @@ int RunGame(const GAMEOPTS& go)
             const uint16_t grfSkip = s_fSkipPress ? g_joy.grfbtn : g_grfJoyWindow;
             UpdateSkipCut(dtSkip, grfSkip, uint16_t(grfSkip & ~s_grfSkipPrev));
             s_grfSkipPrev = grfSkip;
-            const double tEnd = tNowSkip + 25.0;
+            // (the whole skip within this frame, up to 5 s of real time (a minute's scene takes about 1 s): the last
+            // frame shown stays up meanwhile and the next one is the scene's end, with no blackout; the window's
+            // events are polled meanwhile. Only a longer one (a stuck scene) goes on over more frames, behind
+            // skipcut.cpp's fade. The drawn scene is brought up to date once, after it.)
+            const double tEnd = tNowSkip + 5000.0;
+            double tPoll = tNowSkip;
+            bool fSkipped = false;
             while (FSkipCutFastForward() && (go.cframe < 0 || frame + 1 < go.cframe) && (!fWindow || now() < tEnd))
             {
                 ++frame;
+                fSkipped = true;
                 const float dtFixedSave = g_dtFixedStep;
                 g_dtFixedStep = DT_FRAME_NTSC;
                 stepSim(frame);
                 g_dtFixedStep = dtFixedSave;
-                if (accum.fActive && fDraws)
-                {
-                    if (CAddNewAlosToScene(psw.get(), scene, &apalo) > 0) BuildSceneGpu(scene);
-                    UpdateSceneFromSw(scene, apalo, psw.get());
-                    SnapshotStep(scene, CameraFromCm(g_cm));
-                }
+                if (fWindow && now() - tPoll > 50.0) { glfwPollEvents(); tPoll = now(); }
                 if (!FSkipCutStep()) break;
+            }
+            if (fSkipped && std::getenv("SLY2N_SKIPPRINT")) std::printf("skipcut: %.1f ms of fast-forward this frame\n", now() - tNowSkip);
+            if (fSkipped && accum.fActive && !accum.fpsVirtual)
+                accum.tLast = now() / 1000.0;   // (the skip's real time is no gameplay time to catch up)
+            if (fSkipped && accum.fActive && fDraws)
+            {
+                ResetStepSnapshots();
+                if (CAddNewAlosToScene(psw.get(), scene, &apalo) > 0) BuildSceneGpu(scene);
+                UpdateSceneFromSw(scene, apalo, psw.get());
+                SnapshotStep(scene, CameraFromCm(g_cm));
             }
         }
         if (fWindow)
@@ -1520,6 +1811,9 @@ int RunGame(const GAMEOPTS& go)
             glfwGetFramebufferSize(w, &fbw, &fbh);
             if (fbw > 0 && fbh > 0 && (fbw != g_display.outputWidth || fbh != g_display.outputHeight)) LayoutDisplay(fbw, fbh);
         }
+        // (debugmenu.h) the free camera's pad controls (and SLY2N_FREECAMAT's test switch)
+        if (fFreeCam && cam.fMat) cam.fMat = false;
+        FUpdateDebugFreeCamPad(cam, frame);
         const double t1 = now();
         double t2 = t1;
         // (debug: SLY2N_SHOTEVERY=dir:N also writes every N-th frame to dir/frame_NNNNNN_tT.png, T the game clock)
@@ -1536,12 +1830,47 @@ int RunGame(const GAMEOPTS& go)
             static const bool s_fDrawAll0 = std::getenv("SLY2N_DRAWALL") != nullptr;
             // the spawners' run-time clones (and their parts) into the scene (scenesw.h; AI code)
             CAMERA camStep = CameraFromCm(g_cm);
+            // (debug: SLY2N_RAMXF=ram.bin[:,oid,oid,]: before each drawn frame the mapped objects' transform records (mat, world)
+            // from a reference / PCSX2 RAM snapshot, all objects or only those oids: the same moment's moving parts, e.g. R51's
+            // swinging searchlights, for a picture comparison at the snapshot's camera (--camera-ram))
+            if (static const char* s_szRamXf = std::getenv("SLY2N_RAMXF"); s_szRamXf)
+            {
+                static RAM s_ram;
+                static MAPPING s_map;
+                static std::string s_strOids;
+                static const bool s_fRam = [&] {
+                    std::string path = s_szRamXf;
+                    if (size_t i = path.find(":,"); i != std::string::npos) { s_strOids = path.substr(i + 1); path.resize(i); }
+                    return s_ram.FLoad(path);
+                }();
+                static bool s_fMapped = false;
+                if (s_fRam && !s_fMapped) { MapObjects(psw.get(), s_ram, s_map); s_fMapped = true; }
+                for (const auto& [a, plo] : s_map.mpaplo)
+                {
+                    if (!FCidDerivedFrom(plo->Cid(), S3CID(0x30)) || !plo->fInWorld) continue;
+                    if (!s_strOids.empty() && s_strOids.find("," + std::to_string(plo->oid) + ",") == std::string::npos) continue;
+                    ALO* palo = static_cast<ALO*>(plo);
+                    const uint32_t c = s_ram.U32(a + 0x50), ar = s_ram.U32(a + 0x54);
+                    if (c != palo->axf.size() || !s_ram.FValid(ar)) continue;
+                    for (uint32_t i = 0; i < c; ++i)
+                    {
+                        palo->axf[i]->mat = s_ram.Mat4(ar + 0x100 * i);
+                        palo->axf[i]->matWorld = s_ram.Mat4(ar + 0x100 * i + 0x40);
+                    }
+                }
+            }
             if (!accum.fActive)
             {
                 if (CAddNewAlosToScene(psw.get(), scene, &apalo) > 0) BuildSceneGpu(scene);
                 UpdateSceneFromSw(scene, apalo, s_fDrawAll0 ? nullptr : psw.get());
             }
             else InterpolateSteps(scene, camStep, accum.U());   // (placed at the steps)
+            // The display rates above 60 Hz relight (the lights, the CPU vertex lighting) on the frames that ran a step only:
+            // the lights are the step's, and the colours of the frames drawn between two steps (a fraction of a 60 Hz
+            // step's movement) are not told apart, while relighting every moving object at every drawn frame was a
+            // third of an uncapped frame's time. (60 Hz and below: every frame is a step.)
+            static const bool s_fRelightAll = std::getenv("SLY2N_RELIGHTALL") != nullptr;   // (debug: every drawn frame, as before)
+            const bool fRelight = !accum.fActive || cstep > 0 || s_fRelightAll;
             // the light contexts' positions: each entry's root object (0x1F2500: the top without a parent)
             for (size_t k = 0; k < scene.aglobset.size() && k < apalo.size(); ++k)
             {
@@ -1554,17 +1883,19 @@ int RunGame(const GAMEOPTS& go)
                 const glm::vec3 pos = pxfObj ? glm::vec3(pxfObj->matWorld[3])
                                              : proot->axf.empty() ? glm::vec3(0.0f) : glm::vec3(proot->axf[0]->matWorld[3]);
                 SCENEGLOBSET& sgs = scene.aglobset[k];
-                if (std::getenv("SLY2N_POSLIGHTDBG") && apalo[k]->oid == std::atoi(std::getenv("SLY2N_POSLIGHTDBG")))
+                static const int s_oidPosLightDbg = std::getenv("SLY2N_POSLIGHTDBG") ? std::atoi(std::getenv("SLY2N_POSLIGHTDBG")) : -1;
+                if (s_oidPosLightDbg >= 0 && apalo[k]->oid == s_oidPosLightDbg)
                     std::printf("poslight %d frame %d: obj %d %.0f %.0f %.0f root %.0f %.0f %.0f\n", apalo[k]->oid, frame, pxfObj != nullptr, pos.x, pos.y, pos.z,
                                 proot->axf.empty() ? 0.f : proot->axf[0]->matWorld[3][0], proot->axf.empty() ? 0.f : proot->axf[0]->matWorld[3][1],
                                 proot->axf.empty() ? 0.f : proot->axf[0]->matWorld[3][2]);
-                if (std::getenv("SLY2N_POSLIGHTDBG") && apalo[k]->oid == std::atoi(std::getenv("SLY2N_POSLIGHTDBG")))
+                if (s_oidPosLightDbg >= 0 && apalo[k]->oid == s_oidPosLightDbg)
                     for (int j = 0; j < 3; ++j)
                         if (const XF* p = proot->apxfRef[j]) std::printf("   ref %d %p %.0f %.0f %.0f\n", j, (const void*)p, p->matWorld[3][0], p->matWorld[3][1], p->matWorld[3][2]);
-                if (std::getenv("SLY2N_POSLIGHTDBG") && apalo[k]->oid == std::atoi(std::getenv("SLY2N_POSLIGHTDBG")))
+                if (s_oidPosLightDbg >= 0 && apalo[k]->oid == s_oidPosLightDbg)
                     for (size_t j = 0; j < proot->axf.size() && j < 8; ++j)
                         std::printf("   xf %zu %p %.0f %.0f %.0f\n", j, (const void*)proot->axf[j].get(), proot->axf[j]->matWorld[3][0], proot->axf[j]->matWorld[3][1], proot->axf[j]->matWorld[3][2]);
-                sgs.fPosLightMoved = !sgs.fPosLight || pos != sgs.posLight;
+                // (a frame without a relight (below) keeps the flag for the next one that relights)
+                sgs.fPosLightMoved = (!fRelight && sgs.fPosLightMoved) || !sgs.fPosLight || pos != sgs.posLight;
                 sgs.fPosLight = true;
                 sgs.posLight = pos;
             }
@@ -1581,8 +1912,9 @@ int RunGame(const GAMEOPTS& go)
                     scene.aglobset[k].fForeground = fNoBig && !s_mpploForeground.empty() && s_mpploForeground.count(apalo[k]);
             }
             // the lights move with their objects; the forward-lit groups take their light context again (0x1A4478)
-            UpdateWorldLightsFromSw(psw.get());
-            if (const char* e = std::getenv("SLY2_RAMLIGHTS"))   // debugging: the lights of a RAM dump (a savestate's)
+            if (fRelight) UpdateWorldLightsFromSw(psw.get());
+            if (!fRelight) {}
+            else if (static const char* const e = std::getenv("SLY2_RAMLIGHTS"); e)   // debugging: the lights of a RAM dump (a savestate's)
             {
                 static LIGHTSET s_lights;
                 static const bool s_f = FLightsFromRam(e, s_lights);
@@ -1603,6 +1935,12 @@ int RunGame(const GAMEOPTS& go)
                 static RENDEROPTS s_optsRam;
                 static const CAMERA s_camRam = CameraFromRam(go.cameraRam, s_optsRam);
                 cam = s_camRam;
+                // (Sly 3: the fog of that RAM's static camera too)
+                opts.fFog = s_optsRam.fFog;
+                opts.sFogNear = s_optsRam.sFogNear;
+                opts.sFogFar = s_optsRam.sFogFar;
+                opts.uFogMax = s_optsRam.uFogMax;
+                opts.rgbaFog = s_optsRam.rgbaFog;
             }
             if (!go.camera.empty())
             {
@@ -1615,6 +1953,11 @@ int RunGame(const GAMEOPTS& go)
                     cam.pitch = a[4];
                 }
             }
+            {
+                void PlaceSkiesAtCamera(SCENE& scene, const std::vector<ALO*>& apalo, const glm::vec3& posCam);   // sky.cpp
+                PlaceSkiesAtCamera(scene, apalo, cam.pos);
+                SetPeCameraOf(cam);   // (pe.cpp: the drawn camera)
+            }
             if (std::getenv("SLY2N_CAMPRINT"))   // (debug: each drawn frame's camera and the player's drawn root)
             {
                 const glm::vec3 posSly = !apalo.empty() && PloPoCurrent(psw.get()) ? [&] {
@@ -1626,10 +1969,28 @@ int RunGame(const GAMEOPTS& go)
                             posSly.x, posSly.y, posSly.z);
             }
             // orig: 0x1A7518/0x1477B0: query before the overlay's state1 capture/transition.
+            // (SLY2N_FPSLOG: the GPU's time per frame, a timer query read back a few frames later)
+            static const bool s_fFpsLog = std::getenv("SLY2N_FPSLOG") != nullptr;
+            static GLuint s_aqGpu[4] = {};
+            static int s_iqGpu = 0;
+            if (s_fFpsLog && fWindow)
+            {
+                if (!s_aqGpu[0]) glGenQueries(4, s_aqGpu);
+                else if (s_iqGpu >= 4)
+                {
+                    GLuint64 ns = 0;
+                    glGetQueryObjectui64v(s_aqGpu[s_iqGpu % 4], GL_QUERY_RESULT, &ns);
+                    g_msGpuFpsLog += double(ns) / 1e6;
+                }
+                glBeginQuery(GL_TIME_ELAPSED, s_aqGpu[s_iqGpu % 4]);
+            }
             if (FAnimatedOverlayDrawNormal()) {
                 RenderScene(scene, cam, opts);
+                const double tHud = s_fFpsLog ? now() : 0.0;
                 DrawHud(psw.get(), g_gl.renderWidth, g_gl.renderHeight);
+                if (s_fFpsLog) g_msHudFpsLog += now() - tHud;
                 RenderSceneForeground(scene, cam, opts);   // kinds 22..25 over the HUD (group 10, 0x157CF0)
+                DrawDebugOverlay(g_gl.renderWidth, g_gl.renderHeight);   // (debugmenu.h: the debug menu over all; Debug keys only)
                 g_gl.RememberOverlaySourceFrame();
             }
             DrawAnimatedOverlayFrame();  // orig: 0x1477D8, capture then clear/draw the exclusive surfaces
@@ -1650,19 +2011,66 @@ int RunGame(const GAMEOPTS& go)
             if (fWindow)
             {
                 g_gl.Present();
+                if (s_fFpsLog && s_aqGpu[0]) glEndQuery(GL_TIME_ELAPSED), ++s_iqGpu;
                 cane::gl::SwapBuffers(g_gl.window);
             }
         }
         else PrepareAnimatedOverlayFrame();  // same logical boundary for frames without a GL target
+        const double tSwapped = now();
         // (SLY2N_REALTIME: a headless run paced at 60 Hz too, so the audio thread's streams (dialog lines the
         // scripts wait on) keep up with the frames)
         static const bool s_fRealtime = std::getenv("SLY2N_REALTIME") != nullptr;
-        if (fWindow && g_display.frameRate < DISP_FRAMERATE_UNCAPPED) pacer.Wait(g_display.frameRate);   // the frame-rate cap (with or without VSync)
+        if (fWindow && g_display.frameRate < DISP_FRAMERATE_UNCAPPED)   // the frame-rate cap (with or without VSync)
+            pacer.Wait(g_display.frameRate, g_display.fSwapPacesFrames, g_display.swapGeneration);
         else if (s_fRealtime) pacer.Wait(60);
         msUpdate += t1 - t0;
         msRender += t2 - t1;
         msSwap += now() - t2;
         ++cframeTimed;
+        // (SLY2N_FRAMETIMES=file: one CSV line a frame, for a tester's machine: where each frame's time went. update: the
+        // steps (game logic); draw: the scene's CPU side and its GL calls; swap: the present and the swap; wait: the
+        // frame-rate cap's pacer; frame: from this frame's start to the next's)
+        if (static FILE* s_pfTimes = [] {
+                const char* psz = std::getenv("SLY2N_FRAMETIMES");
+                FILE* pf = psz && *psz ? std::fopen(psz, "w") : nullptr;
+                if (pf) std::fprintf(pf, "frame,step,steps,update_ms,draw_ms,swap_ms,wait_ms,frame_ms,cap,vsync\n");
+                return pf;
+            }();
+            s_pfTimes)
+        {
+            static double s_t0Prev = -1.0, s_aPrev[4] = {};
+            static int s_iframe = 0, s_stepPrev = 0, s_cstepPrev = 0;
+            if (s_t0Prev >= 0.0)
+                std::fprintf(s_pfTimes, "%d,%d,%d,%.3f,%.3f,%.3f,%.3f,%.3f,%d,%d\n", s_iframe - 1, s_stepPrev, s_cstepPrev, s_aPrev[0], s_aPrev[1],
+                             s_aPrev[2], s_aPrev[3], t0 - s_t0Prev, g_display.frameRate, int(g_display.fVsync));
+            const double tEnd = now();
+            s_t0Prev = t0, s_aPrev[0] = t1 - t0, s_aPrev[1] = t2 - t1, s_aPrev[2] = tSwapped - t2, s_aPrev[3] = tEnd - tSwapped;
+            s_stepPrev = frame, s_cstepPrev = cstep;
+            if (++s_iframe % 600 == 0) std::fflush(s_pfTimes);
+        }
+        // (debug: SLY2N_FPSLOG=S: every S seconds of wall time the display frames' rate and where their time went)
+        if (static const double s_sFpsLog = std::getenv("SLY2N_FPSLOG") ? std::atof(std::getenv("SLY2N_FPSLOG")) : 0.0; s_sFpsLog > 0)
+        {
+            static double s_t0 = now(), s_aMs[4] = {};
+            static int s_c = 0;
+            const double tEnd = now();
+            s_aMs[0] += t1 - t0, s_aMs[1] += t2 - t1, s_aMs[2] += msScene - s_aMs[3], s_aMs[3] = msScene;
+            static double s_msGpu0 = 0, s_msHud0 = 0;
+            auto msCpu = [] { timespec ts{}; clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts); return ts.tv_sec * 1e3 + ts.tv_nsec / 1e6; };
+            static double s_msCpu0 = msCpu();
+            ++s_c;
+            if (tEnd - s_t0 >= s_sFpsLog * 1000.0)
+            {
+                const double msFrame = (tEnd - s_t0) / s_c;
+                std::printf("fps %.1f step %d t %.2f: %.3f ms/frame: update %.3f, draw %.3f (scene %.3f, hud %.3f), present+wait %.3f; gpu %.3f; main thread cpu %.3f\n",
+                            1000.0 / msFrame, frame, g_clock.t, msFrame, s_aMs[0] / s_c, s_aMs[1] / s_c, s_aMs[2] / s_c,
+                            (g_msHudFpsLog - s_msHud0) / s_c, msFrame - (s_aMs[0] + s_aMs[1]) / s_c, (g_msGpuFpsLog - s_msGpu0) / s_c,
+                            (msCpu() - s_msCpu0) / s_c);
+                s_msCpu0 = msCpu();
+                s_msGpu0 = g_msGpuFpsLog, s_msHud0 = g_msHudFpsLog;
+                s_t0 = tEnd, s_c = 0, s_aMs[0] = s_aMs[1] = s_aMs[2] = 0;
+            }
+        }
         if (cstep > 0) ++frame;
     }
     if (pfDump) std::fclose(pfDump);

@@ -4,6 +4,8 @@
 // and the reference's ports (0x2236E8 / 0x223A70 m_220D40_p3.cpp; 0x221DD8 round4_camera.cpp, a register-level
 // transcription: the structure below is re-derived from the asm).
 #include "cplcy.h"
+#include "game/sly3.h"
+#include "pcinput.h"
 #include "marker.h"
 
 #include "cls.h"
@@ -64,7 +66,10 @@ void StopZoomSounds(CSndRef* pzoom, CSndRef* pextra)
 }
 
 constexpr float EPS_1E4 = F32(0x38D1B717);
-constexpr float MOUSE_PAN_SIGN = 1.0f;   // (PC: the mouse to the right turns as the right stick to the right)
+// (PC) the mouse to the right turns the view to the right (a lower pan: the right stick to the
+// right orbits the other way, the original's), unless the camera's mouse inversion (mouseInvertX) is on
+constexpr float MOUSE_PAN_SIGN = -1.0f;
+constexpr float MOUSE_TABLE_TILT_SIGN = -1.0f;  // (PC: mouse up looks up under a table: -y pitch, checked by frames)
 constexpr float FLT_MAXF = F32(0x7F7FFFFF);
 constexpr float TWO_PI = F32(0x40C90FDB);
 
@@ -178,7 +183,7 @@ const ZONECME* PcmeDefault() { return &CmeDefault(); }
 ZONECME ZonecmeDefault()
 {
     ZONECME e;
-    e.cid = 0x30;
+    e.cid = S3CID(0x30);  // (the ALO class: Sly 3 0x2F)
     e.dtPath = -450.0f;
     e.acoef = {glm::vec4(0, 1, 0, 0), glm::vec4(0, 1, 0, 0), glm::vec4(125, 1, 0, 0)};
     e.alm = {LM{-FLT_MAXF, FLT_MAXF}, LM{-FLT_MAXF, FLT_MAXF}, LM{-FLT_MAXF, FLT_MAXF}};
@@ -581,6 +586,10 @@ void CPFOLLOW::Deactivate(LO* psoFocusOld, void* pv)
 
 // orig: 0x00221DD8 (the update: the samples of the zone, the player's turns, the passive pan toward the focus's
 // motion, the blend toward a sample, the eye's distance / screen offset springs, the world avoidance, the look-at)
+LO* g_ploPcCmDist = nullptr;
+float g_uPcCmDist = 1.0f;
+constinit bool g_fPcCmHoldPan = false;
+
 void CPFOLLOW::Update(CPDEFI* pcpdefi, const CMJOY* pjoy)
 {
     LO* pso = psoFocus;
@@ -717,7 +726,9 @@ void CPFOLLOW::Update(CPDEFI* pcpdefi, const CMJOY* pjoy)
             {
                 // The right stick turns the camera (accelerating at 15 / s^2).
                 const float ddrad = DSW_STICK * dtReal;
-                const float x2 = pjoy->x2, y2 = pjoy->y2;
+                // (PC, settings v17) the controller's camera inversion: off is the original's orbit
+                const float x2 = g_pcinput.fPadInvertCameraX ? -pjoy->x2 : pjoy->x2;
+                const float y2 = g_pcinput.fPadInvertCameraY ? -pjoy->y2 : pjoy->y2;
                 const float dradPanTarget = x2 * std::fabs(x2) * SW_PAN_STICK;
                 const float dradTiltTarget = y2 * std::fabs(y2) * SW_TILT_STICK;
                 dradPan = std::clamp(dradPanTarget, dradPan - ddrad, dradPan + ddrad);
@@ -890,6 +901,9 @@ void CPFOLLOW::Update(CPDEFI* pcpdefi, const CMJOY* pjoy)
             }
         }
     }
+    // (PC addition, debug menu only: a guest's aim mode holds the camera's pan unless the player turns it, so a strafe
+    // does not swing the view and her aim with it; pccharacter.cpp, false in normal play)
+    if (g_fPcCmHoldPan && !fDispatch && g_ploPcCmDist && psoFocus == g_ploPcCmDist) pan = radPan;
 
     // The eye's target (pan, tilt, distance) and screen offsets (f31: x, f30: y) by the mode.
     float aeye[3] = {0, 0, 0};  // sp+0x108
@@ -947,6 +961,9 @@ void CPFOLLOW::Update(CPDEFI* pcpdefi, const CMJOY* pjoy)
         }
     }
     // (modes 0 / 3: the original reads its stack as left by earlier frames; zeros here)
+    // PC addition (debug menu only, pccharacter.cpp): a bigger / smaller guest character on the player, the zone's
+    // distance scaled by the guest's size (g_ploPcCmDist null in normal play: nothing changes)
+    if (g_ploPcCmDist && psoFocus == g_ploPcCmDist) aeye[2] *= g_uPcCmDist;
 
     if (g_cm.fCut)
     {
@@ -1171,6 +1188,7 @@ void CPACTUATED::Activate(LO* psoFocusNew, void* pv)
     SetCmFov(&g_cm, F32(0x3F933333));  // 1.15
     if (pxf) pctrl = PctrlNewPos(pxf->palo, pxf, 1, 8, 3, glm::vec4(0.0f));
     tIdle = -1.0f;
+    eulMouse = glm::vec3(0.0f);
 }
 
 // orig: 0x001512E0
@@ -1188,14 +1206,25 @@ void CPACTUATED::Update(CPDEFI* pcpdefi, const CMJOY* pjoy)
     if (!pctrl || !pxf) return;
     auto* pc = static_cast<CTRLPOS*>(pctrl);
     glm::vec3 eul(0.0f), w(0.0f);
+    // (PC, N14) the mouse looks around as the right stick does: its turn accumulates within the stick's reach (yaw
+    // 0.5, pitch 0.4), mouse right turns right, mouse up looks up (-y); the stick takes over
+    if (pjoy && (pjoy->dradMousePan != 0.0f || pjoy->dradMouseTilt != 0.0f))
+    {
+        eulMouse.z = std::clamp(eulMouse.z - pjoy->dradMousePan, -0.5f, 0.5f);
+        eulMouse.y = std::clamp(eulMouse.y + MOUSE_TABLE_TILT_SIGN * pjoy->dradMouseTilt, F32(0xBECCCCCD), F32(0x3ECCCCCD));
+    }
+    if (pjoy && 0.0f < pjoy->uDeflect2) eulMouse = glm::vec3(0.0f);
     if (pjoy && 0.0f < pjoy->uDeflect2)
     {
         // D_002BDA10/30: clamped quadratics, the original's sign choices for yaw / pitch.
-        const float x = std::fabs(pjoy->x2), y = std::fabs(pjoy->y2);
+        // (PC, settings v17) the controller's camera inversion: off is the original's
+        const float x2 = g_pcinput.fPadInvertCameraX ? -pjoy->x2 : pjoy->x2;
+        const float y2 = g_pcinput.fPadInvertCameraY ? -pjoy->y2 : pjoy->y2;
+        const float x = std::fabs(x2), y = std::fabs(y2);
         const float z = std::clamp(0.0f + x * (F32(0x3F8CCCCD) + x * F32(0xBE99999A)), 0.0f, 0.5f);
         const float q = std::clamp(0.0f + y * (0.5f + y * F32(0xBDCCCCCD)), 0.0f, F32(0x3ECCCCCD));
-        eul.z = (0.0f < pjoy->x2 ? -1.0f : 1.0f) * z;
-        eul.y = (0.0f < pjoy->y2 ? 1.0f : -1.0f) * q;
+        eul.z = (0.0f < x2 ? -1.0f : 1.0f) * z;
+        eul.y = (0.0f < y2 ? 1.0f : -1.0f) * q;
     }
     else
     {
@@ -1210,12 +1239,16 @@ void CPACTUATED::Update(CPDEFI* pcpdefi, const CMJOY* pjoy)
                 eulIdle = glm::vec3(0.0f, y, z);
                 tIdle = TCm() + GRandInRange(1.5f, 2.0f);
             }
-            const glm::vec3 d = eulIdle - glm::vec3(pc->pos);
+            const glm::vec3 d = eulIdle + eulMouse - glm::vec3(pc->pos);
             w = wIdle + (d * 5.0f + wIdle * -1.0f) * DtCm();
             const float halfDt = DtCm() * 0.5f;
             eul = (glm::vec3(pc->pos) + wIdle * halfDt) + w * halfDt;
         }
+        else eul = eulMouse;  // (PC) moving under it: the mouse's look held
     }
+    if (static const bool s_f = std::getenv("SLY2N_TABLELOOK") != nullptr; s_f)
+        std::printf("tablelook: t %.3f eul %.3f %.3f mouse %.4f %.4f fwd z %.3f\n", g_clock.t, eul.y, eul.z, pjoy ? pjoy->dradMousePan : 0.0f,
+                    pjoy ? pjoy->dradMouseTilt : 0.0f, glm::mat3(pxf->matWorld)[0].z);
     SetCtrlPos(pc, glm::vec4(eul, 0.0f));
     wIdle = w;
     SetCmPosMat(&g_cm, glm::vec3(pxf->matWorld[3]), glm::mat3(pxf->matWorld));
@@ -1390,10 +1423,14 @@ void CPRECON::Update(CPDEFI* pcpdefi, const CMJOY* pjoy)
         radPan = radPan - pjoy->dradAimRight * k;
         if (TWO_PI <= lmPan.gMax - lmPan.gMin) radPan = RadNormalize(radPan);
         else radPan = std::clamp(radPan, lmPan.gMin, lmPan.gMax);
-        const bool fInvert = g_cmfollowworld.pfnFInvertLook && g_cmfollowworld.pfnFInvertLook();
-        radTilt = std::clamp(radTilt + (fInvert ? -1.0f : 1.0f) * pjoy->dradAimUp * k, lmTilt.gMin, lmTilt.gMax);
+        // (a higher radTilt looks up (the original's left stick up looks down, flight style,
+        // unless "Invert Binocucom Controls" is on): mouse up looks up; only the mouse's own binocucom inversion
+        // (mouseInvertBinocY, in MouseAimDelta) flips it, the game's option is the stick's)
+        radTilt = std::clamp(radTilt + pjoy->dradAimUp * k, lmTilt.gMin, lmTilt.gMax);
     }
     if (TWO_PI <= lmPan.gMax - lmPan.gMin) radPan = RadNormalize(radPan);
+    if (static const bool s_f = std::getenv("SLY2N_RECONTILT") != nullptr; s_f)
+        std::printf("recon: t %.3f pan %.4f tilt %.4f joy %.2f %.2f mouse %.4f %.4f\n", g_clock.t, radPan, radTilt, pjoy->x, pjoy->y, pjoy->dradAimRight, pjoy->dradAimUp);
     // (debug, a test aid: SLY2N_RECONAIM="oid|oid..,zoom@t;..." turns the view every frame from game time t on (the
     // last entry started wins) at the first of those objects in the world (a recon subject (cid 0x2E) only while its
     // task +0xEC is not done), ignoring the limits, with that zoom)
@@ -1415,14 +1452,16 @@ void CPRECON::Update(CPDEFI* pcpdefi, const CMJOY* pjoy)
             const size_t j = std::min(strOids.find('|', i), strOids.size());
             const int oid = std::atoi(strOids.substr(i, j - i).c_str());
             i = j + 1;
+            // (of several in-world copies, the nearest to the view: e.g. Ep4's four spycam code targets 77142)
+            float dBest = 3.4e38f;
             for (const auto& up : g_psw->aploAll)
                 if (up->oid == oid && up->fInWorld)
                 {
-                    if (FCidDerivedFrom(up->Cid(), 0x2E))
+                    if (FCidDerivedFrom(up->Cid(), S3CID(0x2E)))
                         if (const TASK* ptask = dynamic_cast<const TASK*>(PloFindSwObjectByOid(g_psw, static_cast<int>(up->U32Field(0, 0xEC, uint32_t(-1))))))
                             if (ptask->nState >= 2) continue;
-                    ploAim = up.get();
-                    break;
+                    const float d = glm::length(PosLoWorld(up.get()) - PosFocus());
+                    if (d < dBest) { dBest = d; ploAim = up.get(); }
                 }
         }
         if (ploAim)

@@ -3,11 +3,12 @@
 // push forward, 2 the push back, 1 the free swing, 3 hanging still: its SM +0x1950), the pendulum 0x18FC60 (the
 // acceleration +0x1910), the motion 0x1903B8 (+0x1910 applied, turned to hang below the hook), the frame 0x190BE0 and
 // the release (0x18A8C8: CROSS after 0.25 s, the jump kind 2).
-// TODO(anim): the hand's actuator (+0x1A00 on the record +0x19C0: inserted on entry, 0x190E18 turns it to the hook,
-// the draw's 0x190D10 (via 0x18A238) puts the hand on the hook by +0x1960); the hook on a moving object (+0x1900, an XA:
-// 0x18F958 / 0x1F5078).
+// The hand: its actuator (+0x1A00 on the record +0x19C0) is added on entry and 0x190E18 turns it to the hook each
+// update; the draw (0x18A238 -> 0x190D10) moves the record +0x19C4 so the cane +0x19A4 sits on the hook point
+// (0x190C58, plus +0x1960 easing to 0), then solves the arm's joint and the world matrices.
+// TODO: the hook on a moving object (+0x1900, an XA: 0x18F958 / 0x1F5078).
 #include "climbsurf.h"
-#include "sly3/ids3.h"
+#include "game/sly3.h"
 #include "activate.h"
 #include "actor.h"
 #include "alo.h"
@@ -34,6 +35,9 @@
 #include "lox.h"
 #include "brx.h"
 #include "actanim.h"
+#include "ik.h"
+#include "sw.h"
+#include "refram.h"
 
 #include <algorithm>
 #include <cmath>
@@ -53,8 +57,8 @@ float GDuration(const ASEG* paseg) { return paseg ? PasegdOf(const_cast<ASEG*>(p
 XF* PxfSlot32(LO* plo)
 {
     if (!plo) return nullptr;
-    if (FIsLoDerivedFrom(plo, Icid(CID3::ALO))) return PxfObj(static_cast<ALO*>(plo));
-    if (FIsLoDerivedFrom(plo, 3)) return static_cast<LOX*>(plo)->pxf;
+    if (FIsLoDerivedFrom(plo, S3CID(0x30))) return PxfObj(static_cast<ALO*>(plo));
+    if (FIsLoDerivedFrom(plo, S3CID(3))) return static_cast<LOX*>(plo)->pxf;
     return nullptr;
 }
 }  // namespace
@@ -164,9 +168,14 @@ void EnterSlyHang(SLY* p)
     p->gSwingSpeed = 1.0f;
     p->gSwingActive = 1.0f;
     p->tHang = g_clock.t;
-    // TODO(anim): 0x230018 (the hand's actuator +0x1A00 on +0x19C0, its rest cleared), +0x1960 = the hand +0x19A4 less
-    // the hook's point (0x190C58), 0x190E18
     if (!phook) return;
+    if (p->pctrlHand)
+    {
+        p->pctrlHand->pos = glm::vec4(0.0f, 0.0f, 0.0f, p->pctrlHand->pos.w);  // (its rest +0x20 cleared)
+        if (!FXfHasCtrl(p->pxfHandRot, p->pctrlHand.get())) AddXfCtrl(p->palo, p->pxfHandRot, p->pctrlHand.get());  // 0x230018
+    }
+    if (p->plo19A4) p->dposHang = PosLoWorld(p->plo19A4) - PosSlyHangPoint(p);  // 0x1A62E8 / 0x190C58
+    UpdateSlyHangPlace(p);  // 0x190E18
     HandleLoSpliceEvent(phook, 5, false, 0, nullptr);
     const float radFrame = RadHangFrame(p);
     const float radBack = RadNormalize(radFrame + kPi);
@@ -204,6 +213,8 @@ void LeaveSlyHang(SLY* p)
 {
     if (p->ploOther) HandleLoSpliceEvent(p->ploOther, 6, false, 0, nullptr);
     SetSlyMode(p, -1);
+    if (p->pctrlHand && FXfHasCtrl(p->pxfHandRot, p->pctrlHand.get()))
+        RemoveXfCtrl(p->palo, p->pxfHandRot, p->pctrlHand.get());  // 0x230100
     p->ploOther = nullptr;
     SetActorZone(p, nullptr);
     if (FHangPrint()) std::printf("hang: leave t %.3f\n", g_clock.t);
@@ -319,4 +330,112 @@ bool FSlyHangRelease(SLY* p)
     if (FHangPrint()) std::printf("hang: release t %.3f\n", g_clock.t);
     SetJumpKind(&p->jump, 2, 0, nullptr);
     return true;
+}
+
+// orig: 0x00190C58 (the hook's point less... past it: the hook's position plus its +0x134 along the direction from the
+// arm's record +0x19CC to the hook; up when they meet)
+glm::vec3 PosSlyHangPoint(SLY* p)
+{
+    LO* phook = p->ploOther;
+    if (!phook) return glm::vec3(0.0f);
+    const glm::vec3 q = PosLoWorld(phook);  // 0x1A62E8
+    const glm::vec3 d = p->pxfArm ? q - glm::vec3(p->pxfArm->matWorld[3]) : glm::vec3(0.0f);
+    const float l = std::sqrt(d.x * d.x + d.y * d.y + d.z * d.z);
+    const glm::vec3 dir = l < 0.0001f ? glm::vec3(0.0f, 0.0f, 1.0f) : d * (1.0f / l);  // D_002A2DC0
+    return q + dir * GHookField(phook, 0x134);
+}
+
+namespace
+{
+// 0x190E18's rotation: the x axis turned onto q (in the record's parent's frame), then 1.5 radians about it
+glm::vec3 EulHandToward(const glm::vec3& q)
+{
+    const glm::vec3 x(1.0f, 0.0f, 0.0f);  // D_002A2DA0
+    // (the original's rows: rotate(x, 1.5) x vectors(x, q))
+    const glm::mat3 m = BuildRotateVectorsMatrix(x, q) * MatRotateAxis(1.5f, x);  // 0x11BA08 / 0x11B500 (D_002BF594)
+    return EulerFromMat(m);  // 0x11BFF0
+}
+}  // namespace
+
+// (debug: SLY2N_HANGRAM=ram,x,y,z: the reference's RAM inside 0x190D10 and the hook's position; prints the actuator's
+// angles the reference stored (+0x1A00 +0x20) and the ones EulHandToward gives from that RAM's records)
+void DebugCheckHangRam()
+{
+    const char* sz = std::getenv("SLY2N_HANGRAM");
+    if (!sz) return;
+    char path[512] = {};
+    float hx = 0, hy = 0, hz = 0;
+    if (std::sscanf(sz, "%511[^,],%f,%f,%f", path, &hx, &hy, &hz) != 4) return;
+    RAM ram;
+    if (!ram.FLoad(path)) { std::printf("hangram: no RAM %s\n", path); return; }
+    const uint32_t sly = ram.U32(0x3E138C);
+    const uint32_t r0 = ram.U32(sly + 0x19C0), rArm = ram.U32(sly + 0x19CC), ctrl = ram.U32(sly + 0x1A00), ref = ram.U32(r0 + 0xA0);
+    auto row = [&](uint32_t a) { return glm::vec3(ram.F32(a), ram.F32(a + 4), ram.F32(a + 8)); };
+    const glm::mat3 R(row(ref + 0x40), row(ref + 0x50), row(ref + 0x60));  // (glm columns = the original's rows)
+    const glm::vec3 d = glm::vec3(hx, hy, hz) - row(rArm + 0x70);
+    const glm::vec3 q = glm::transpose(R) * d;  // 0x22FCC8(0, ref, d)
+    const glm::vec3 e = EulHandToward(q), r = row(ctrl + 0x20);
+    if (SLY* ps = PslyGlobal())
+        for (ALOPAIR& q : ps->palo->apair)
+            std::printf("hangram: pair target %d/%d (%p) upper %d/%d lower %d/%d end %d/%d; hand pos %p rot %p arm %p; target ref %p\n", q.apxf[0] ? q.apxf[0]->tag : -1,
+                        q.apxf[0] ? q.apxf[0]->kind : -1, (void*)q.apxf[0], q.apxf[1] ? q.apxf[1]->tag : -1, q.apxf[1] ? q.apxf[1]->kind : -1,
+                        q.apxf[2] ? q.apxf[2]->tag : -1, q.apxf[2] ? q.apxf[2]->kind : -1, q.apxf[3] ? q.apxf[3]->tag : -1, q.apxf[3] ? q.apxf[3]->kind : -1,
+                        (void*)ps->pxfHandPos, (void*)ps->pxfHandRot, (void*)ps->pxfArm, q.apxf[0] ? (void*)q.apxf[0]->pxfRef : nullptr);
+    std::printf("hangram: sly %08X state %d ref %.4f %.4f %.4f native %.4f %.4f %.4f\n", sly, ram.S32(sly + 0x18C8), r.x, r.y, r.z, e.x, e.y, e.z);
+}
+
+// orig: 0x00190E18 (the hand's actuator: the record +0x19C0 turned so its x axis points from the arm to the hook, then
+// 1.5 radians about it; +0x1960 eased to 0)
+void UpdateSlyHangPlace(SLY* p)
+{
+    if (!p->ploOther || !p->pxfHandRot || !p->pxfArm || !p->pctrlHand) return;
+    const glm::vec3 d = PosLoWorld(p->ploOther) - glm::vec3(p->pxfArm->matWorld[3]);
+    const glm::vec3 q = VecConvertXfs(nullptr, p->pxfHandRot->pxfRef, d);  // 0x22FCC8
+    SetCtrlPos(p->pctrlHand.get(), glm::vec4(EulHandToward(q), 0.0f));  // 0x12D108
+    static const cmm::SMP s_smp{3000.0f, 1000.0f, 0.15f};  // D_002BF598
+    p->dposHang = cmm::PosSmooth(p->dposHang, glm::vec3(0.0f), g_clock.dt, &s_smp, nullptr);  // 0x11F088
+}
+
+// orig: 0x00190D10 (from Sly's draw 0x18A238 in state 3: the record +0x19C4 moved so the cane +0x19A4 is on the hook
+// point (+0x1960 still added), its world matrix, the arm's joint solved (0x186A50 with +0x19CC's +0xA8), vt slot 18)
+void DrawSlyHangPlace(SLY* p)
+{
+    XF* pxf = p->pxfHandPos;
+    if (!p->ploOther || !pxf || !p->plo19A4 || !p->pxfArm) return;
+    const glm::vec3 d = PosSlyHangPoint(p) + p->dposHang - PosLoWorld(p->plo19A4);
+    const glm::vec3 v = VecConvertXfs(nullptr, pxf->pxfRef, d);  // 0x22FCC8
+    pxf->mat[3] = glm::vec4(glm::vec3(pxf->mat[3]) + v, 1.0f);
+    pxf->nStamp = ++g_cXfStamp;
+    pxf->matWorld = pxf->pxfRef ? pxf->pxfRef->matWorld * pxf->mat : pxf->mat;  // 0x11C168
+    ALOPAIR* ppair = nullptr;  // (+0x19CC's +0xA8: the joint whose upper record it is)
+    for (ALOPAIR& q : p->palo->apair)
+        if (q.apxf[1] == p->pxfArm) { ppair = &q; break; }
+    if (ppair) SolveAloPair(p->palo, ppair);  // 0x186A50
+    else if (static bool s_f = false; !s_f) { s_f = true; std::fprintf(stderr, "sly: 0x190D10 without the arm's joint\n"); }
+    UpdateAloXfWorldsHierarchy(p->palo);  // vt slot 18 (0x22FBE0)
+    if (FHangPrint())
+    {
+        const glm::vec3 c = PosLoWorld(p->plo19A4), h = PosSlyHangPoint(p);
+        float gap = -1.0f;
+        if (ppair && ppair->apxf[0] && ppair->apxf[3])
+            gap = glm::length(glm::vec3(ppair->apxf[3]->matWorld * glm::vec4(ppair->vecB0, 1.0f)) -
+                              glm::vec3(ppair->apxf[0]->matWorld * glm::vec4(ppair->vecA0, 1.0f)));
+        std::printf("hang: draw t %.3f cane %.1f %.1f %.1f point %.1f %.1f %.1f ofs %.1f %.1f %.1f d %.2f arm gap %.2f mode %d\n", g_clock.t, c.x, c.y,
+                    c.z, h.x, h.y, h.z, p->dposHang.x, p->dposHang.y, p->dposHang.z, glm::length(d), gap, pxf->mode);
+    }
+}
+
+// orig: 0x0018A238 (Sly's draw: 0x190D10 in state 3, then the actors' draw 0x1425B0, which the scene does) for each
+// Sly the world draws
+void DrawSlys(SW* psw)
+{
+    static bool s_fRam = (DebugCheckHangRam(), true);
+    (void)s_fRam;
+    for (CID cid = S3CID(0x35); cid >= 0 && cid < g_acls[S3CID(0x35)].cidLast; ++cid)
+        for (LO* plo : psw->mpcidaplo[cid])
+        {
+            SLY* p = PslyFromLo(plo);
+            if (!p || p->state != 3 || !FAloDrawn(psw, p->palo)) continue;
+            DrawSlyHangPlace(p);
+        }
 }

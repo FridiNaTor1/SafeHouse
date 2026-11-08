@@ -5,6 +5,7 @@
 
 #include "lo.h"
 
+#include <map>
 #include <vector>
 
 class CBinaryInputStream;
@@ -27,9 +28,6 @@ LO* PloLoading();
 LO* PloEnsureChild391(ALO* palo);
 // orig 0x13E3C8 PloNew
 LO* PloNew(CID cid, SW* psw, ALO* paloParent, OID oid, int iframe);
-// (Sly 3) PloNew with the native struct given (pfnNew): objects the class table's struct does not fit (Sly 3's blends,
-// class 0x83 = Sly 2's 0x6E, share the ASEG loader's struct in the table but are ASEGBL natively)
-LO* PloNewNative(CID cid, SW* psw, ALO* paloParent, OID oid, int iframe, PFNNEW pfnNew);
 // orig 0x13E510 PloCloneLo
 LO* PloCloneLo(LO* plo, SW* psw, ALO* paloParent);
 // orig 0x13FB40 LoadSwObjsFromBrx: psw's objects (paloParent: the object loading its children, or null)
@@ -46,9 +44,35 @@ void SetLoMatrix(LO* plo, const glm::mat4& m);  // vt slot 37 (loaders.cpp)
 void SetLoChannel(LO* plo, XF* pxf);            // vt slot 10's channel part (loaders.cpp)
 bool FIsLoDerivedFrom(const LO* plo, CID cid);
 
+// The walk (--dump-world): the world loader reads every block as the original does, but makes no objects (their
+// bodies are skipped by the size their header carries, as the original does for filtered objects) and does not
+// evaluate the splice modules. What it saw, per world:
+struct WALKOBJ
+{
+    std::size_t ib = 0;
+    int igrp = -1, mode = 0, cid = 0, n = 0;
+    OID oid = 0;
+    int32_t cb = 0;
+    std::vector<int16_t> afilter;
+    std::vector<int32_t> acond;
+};
+struct WALK
+{
+    bool fOn = false;
+    std::vector<WALKOBJ> aobj;
+    std::map<int, int> mpcidc, mpmodec;
+    int cmodule = 0, cpairSplice = 0;
+    std::map<int, int> mptagc;
+};
+extern WALK g_walk;
+void WalkSpliceFromBrx(SW* psw, int a, CBinaryInputStream* pbis);   // splicemap.cpp (parse only)
+
 // Statistics of the last loads (for --load-world's report).
 struct BRXSTATS
 {
     int cobj = 0, cskipFilter = 0, cmission = 0, cskipShared = 0, cshared1 = 0, cshared2 = 0, cproxy = 0, ccbMismatch = 0;
+    // (Sly 3 development, per Sly 3 class: made with no loader, only the ALO part read, the rest of the body skipped,
+    // the read failed)
+    std::map<int, int> mpcidcNoLoader, mpcidcAloOnly, mpcidcSkipped, mpcidcError;
 };
 extern BRXSTATS g_brxstats;

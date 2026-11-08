@@ -3,7 +3,7 @@
 // 0x19E1E0, 0x117308, 0x205008 from the asm (the reference's are register-level: native_old_climb_state.cpp,
 // round4_satellite_mid.cpp).
 #include "climb.h"
-#include "sly3/ids3.h"
+#include "game/sly3.h"
 
 #include "actanim.h"
 #include "actor.h"
@@ -21,6 +21,7 @@
 #include "po.h"
 #include "sly.h"
 #include "smrun.h"
+#include "sound.h"
 #include "so.h"
 #include "sw.h"
 #include "task.h"
@@ -84,17 +85,6 @@ glm::vec3 DirPipeAround(const CRV* pcrv, float s, glm::vec3* pdiff)
     return NormalizeOr(a - b, glm::vec3(0.0f, 0.0f, 1.0f));
 }
 
-// orig: 0x0019E110 (the distances the climber keeps to: the whole closed curve; else the ends less 35 / 100 by the
-// facing)
-cmm::LM LmClimb(ACTOR* pa)
-{
-    const CRV* pcrv = pa->pcrvF50;
-    if (pcrv->fClosed) return cmm::LM{-FLT_MAX, FLT_MAX};
-    const float s0 = pcrv->as.front(), s1 = SLengthCrv(pcrv);
-    if (pa->climb.fDown) return cmm::LM{s0 + 35.0f, s1 - 100.0f};
-    return cmm::LM{s0 + 100.0f, s1 - 35.0f};
-}
-
 // orig: 0x00117308 (the rotation's Hermite step: from m0 (angular velocity w0) toward m1 (w1) arriving in t1, the
 // orientation dt on; dtScale unused by the matrix part. NB the original weights the middle term by (3 - t1), not 3.)
 glm::mat3 MatHermiteRotation(const glm::mat3& m0, const glm::vec3& w0, const glm::mat3& m1, const glm::vec3& w1, float t1, float dt)
@@ -122,13 +112,28 @@ void PipeEvent(LO* ppipe, int n)
 }
 }  // namespace
 
+// orig: 0x0019E110 (the distances the climber keeps to: the whole closed curve; else the ends less 35 / 100 by the
+// facing)
+cmm::LM LmClimb(ACTOR* pa)
+{
+    const CRV* pcrv = pa->pcrvF50;
+    if (pcrv->fClosed) return cmm::LM{-FLT_MAX, FLT_MAX};
+    const float s0 = pcrv->as.front(), s1 = SLengthCrv(pcrv);
+    if (pa->climb.fDown) return cmm::LM{s0 + 35.0f, s1 - 100.0f};
+    return cmm::LM{s0 + 100.0f, s1 - 35.0f};
+}
+
 // orig: 0x00204F78 (the pair of the actor and the nearest ancestor with an attachment of the object (0x1A5BF0: the
 // object when it is an ALO, else its parent): overlapping (f) or not, 0x133A38; the actor dirty)
 void PairActorWith(ACTOR* pa, LO* plo, bool f)
 {
     ALO* pso = nullptr;
-    if (plo) pso = FIsLoDerivedFrom(plo, Icid(CID3::ALO)) ? static_cast<ALO*>(plo) : plo->paloParent;
+    if (plo) pso = FIsLoDerivedFrom(plo, S3CID(0x30)) ? static_cast<ALO*>(plo) : plo->paloParent;
     while (pso && !Poxa(pso)) pso = pso->paloParent;
+    // orig3: 0x0024F3B8: Sly 3 also keeps the pair (STEP +0x2E4 the object, +0x2E8 the ancestor; both cleared when
+    // unpaired): its FindStepFloor 0x24E9E0 drops the actor's contacts with it each frame (FindActorFloor, sly.cpp)
+    pa->ploPair3 = f ? plo : nullptr;
+    pa->psoPair3 = f ? pso : nullptr;
     OXA* poxa = Poxa(pa->palo);
     if (poxa && pso && Poxa(pso)) UpdateSwPox(poxa, Poxa(pso), f ? 1 : 2);
     MarkAloDirty(pa->palo);
@@ -191,7 +196,8 @@ void SetClimbState(ACTOR* pa, int n)
         pa->vecOffset = glm::vec3(pa->posCmTarget) - point;  // (+0x1070 = +0x1060 - the point, flat)
         pa->vecOffset.z = 0.0f;
         SetActorZone(pa, PloJtDescZone(ppipe, JTL_Pipe));  // 0x140C88 (the pipe's camera zone: its description +0x190's +0)
-        if (NPipeEffect(ppipe, false)) WarnOnce("the pipe's attach effect (0x1FBB90 +0x1D0)");
+        if (const int sfx = NPipeEffect(ppipe, false))   // (the pipe's attach sound +0x1D0 at the grip point)
+            PsndStartSound(sfx, 1.0f, 0, nullptr, &point);    // 0x1FBB90 / 0x1FB2F8(0) / 0x1FB3F0
         break;
     }
     case 0:
@@ -216,7 +222,11 @@ void SetClimbState(ACTOR* pa, int n)
             pa->vecOffset = glm::vec3(pa->posCmTarget) - PosAloCenter(pa->palo);
             pa->vecOffset.z = 0.0f;
             SetActorZone(pa, nullptr);  // 0x140C88
-            if (NPipeEffect(ppipe, true)) WarnOnce("the pipe's release effect (0x1FBB90 +0x1D4)");
+            if (const int sfx = NPipeEffect(ppipe, true))  // (the pipe's release sound +0x1D4 at the actor)
+            {
+                const glm::vec3 pos = PosAloCenter(pa->palo);  // 0x1A62E8
+                PsndStartSound(sfx, 1.0f, 0, nullptr, &pos);  // 0x1FBB90 / 0x1FB2F8(0) / 0x1FB3F0
+            }
         }
         pa->ploF5C = nullptr;
         pa->pcrvF50 = nullptr;
@@ -432,11 +442,33 @@ void AdjustClimbXp(XP* pxp)
 // orig: 0x00205008 (for objects without an SO: the actor's own internal contacts)
 void AddActorLineXps(ACTOR* pa, int grf, const glm::vec3& posA, const glm::vec3& dir, const glm::vec3& posHand)
 {
+    AddStepLineXps(pa, grf, posA, dir, posHand);
+}
+
+// The same STEP slot82 used by guards on a rail (0x209C88).
+void AddStepLineXps(STEP* pa, int grf, const glm::vec3& posA, const glm::vec3& dir, const glm::vec3& posHand, LO* related)
+{
     ALO* palo = pa->palo;
     if (pa->isoeCustom < 0 || pa->isoeCustom >= static_cast<int>(palo->asoe.size())) return;
     SOE* psoe = &palo->asoe[pa->isoeCustom];  // +0x258
     OXA* poxa = Poxa(palo);
     if (!poxa) return;
+    // orig: 0x1A5BF0 / 0x205008: attached rails constrain relative to their
+    // nearest physical ancestor; static rails use the step's internal list.
+    ALO* target = related ? (FIsLoDerivedFrom(related, S3CID(0x30)) ? static_cast<ALO*>(related) : related->paloParent) : nullptr;
+    while (target && !Poxa(target)) target = target->paloParent;
+    SOE* otherEntry = nullptr;
+    XP** contacts = &poxa->pxpInternal;
+    OX* pair = nullptr;
+    if (target)
+    {
+        OXA* other = Poxa(target);
+        pair = poxa->pox;
+        while (pair && pair->psoOther != other->pso) pair = pair->poxNext;
+        if (!pair || other->apsoe.empty()) return;
+        contacts = &pair->pxp;
+        otherEntry = other->apsoe.front();
+    }
     const glm::mat3 m = BuildLookAtMatrix(dir, glm::vec3(0.0f, 0.0f, 1.0f));  // 0x11B830 (rows: glm columns)
     const glm::vec3 d = posHand - posA;
     float ac[3];
@@ -450,6 +482,7 @@ void AddActorLineXps(ACTOR* pa, int grf, const glm::vec3& posA, const glm::vec3&
         const bool fOn = grf & (1 << i);
         if (!fOn && !((grf & (8 << i)) && ac[i] < F32(0x38D1B717))) continue;  // (signed: a one-sided contact)
         const int xpk = fOn ? 0xB : (i == 2 ? 0xE : 0xA);
-        PxpAddSw(psoe, nullptr, posHand, m[i], xpk, nullptr, nullptr, &poxa->pxpInternal, ac[i]);  // 0x1A7C18 (at the actor's point: end 1 on the line)
+        PxpAddSw(psoe, otherEntry, posHand, m[i], xpk, nullptr, nullptr, contacts, ac[i]);  // 0x1A7C18 (at the actor's point: end 1 on the line)
     }
+    if (pair && pair->poxOther) pair->poxOther->pxp = *contacts;
 }

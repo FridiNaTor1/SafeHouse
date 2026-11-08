@@ -39,12 +39,16 @@ void InitLoActivation(SW* psw, LO* plo);       // orig 0x1A5270's fields, 0x13E3
 void AddLo(SW* psw, LO* plo);                  // orig 0x001A5478 (vt slot 8)
 void RemoveLo(SW* psw, LO* plo);               // orig 0x001A5630 (vt slot 9)
 void SetLoParentActivation(SW* psw, LO* plo, ALO* paloNew, bool fMovePhys = false);  // orig 0x001A5900
+// (perf-2) counts every change of an object's parent after its creation (LO::paloParent's only writer besides PloNew;
+// a new writer must count too): game.cpp keeps the world's root objects while it and aploAll's size stay
+extern uint32_t g_cLoParentChanges;
 void SetLoSt(SW* psw, LO* plo, int st);        // orig 0x001A6CA8 (option 14)
 void SetLoRadius(SW* psw, LO* plo, float s);   // orig 0x001A6C48 / ALO 0x001F3118 (option 13, vt slot 42)
 void SetLoMask(SW* psw, LO* plo, uint32_t b);  // orig 0x001A6D28
 void RegisterLoTree(SW* psw, LO* plo);         // vt slot 23 (0x1A6178, ALO 0x1F3EA8)
 void UnregisterLoTree(SW* psw, LO* plo);       // vt slot 22 (0x1A6150, ALO 0x1F3E00)
 void QueueLoRoot(SW* psw, LO* ploRoot);        // orig 0x00147E88
+void CheckLoRootNow(SW* psw, LO* plo);  // orig: 0x00148300
 void UpdateSwActivation(SW* psw);              // orig 0x00147F40 (the zone pass)
 glm::vec3 PosLoWorld(const LO* plo);           // orig 0x001A62E8 (vt slot 31's +0x30)
 uint32_t GrfUpdLo(const SW* psw, const LO* plo);  // the +0x40 flags (the update table entry's while registered)
@@ -55,6 +59,13 @@ void SetLoVisible(SW* psw, LO* plo, bool f);   // orig 0x001A6E80 (vt slot 21: +
 // volume tree 0x1D5808, which draws the registered static objects), its class draws (slot 19 is not LO's empty
 // 0x1A5ED8), its mask meets the camera's flags (CM +0x14) and its fade (+0x12C) is not 0.
 bool FAloDrawn(const SW* psw, const ALO* palo);
+// (QoL draw distance, display.h) 1: drawn regardless of the update table (above 1x: an inactive tree within its
+// activation radius x the option), -1: not drawn (below 1x), 0: the original's test. 1x: always 0.
+int NDrawDistanceRoot(const ALO* palo);
+// (drawdist-2) the tree under the root has a character (derived from PO 0x33): not drawn beyond the original's radius
+bool FDrawDistanceActorTree(const LO* proot);
+// (drawdist-2) plo's tree is an inactive one the option above 1x draws (emitters run privately, spinning parts posed)
+bool FDrawDistanceVisualTree(const LO* plo);
 // Native diagnostic observers at the world's deferred-call boundary.
 void PrintActivationDebug(SW* psw);
 // Low-level 0x001CAEC8 helper using the row score directly: 2 permits inactive,
@@ -69,8 +80,10 @@ LO* PloProxyFreeRow(SW* psw, LO* pproxy, int nMin);
 // orig 0x001CB488 / 0x001CB4B8: the row of the proxy's instance plo kept / given back
 void LockProxyRowOf(SW* psw, LO* pproxy, LO* plo, bool fLock = true);
 void UnlockProxyRowOf(SW* psw, LO* pproxy, LO* plo);
+void ReleaseProxyObject(SW* psw, LO* pproxy, LO* plo);   // (Sly 3 0x1FC0E0: the instance's row detached)
 // orig 0x001DFD58: a SCPT object (cid 0x72) started (from an ASEG event of kind 4, asegevent.cpp); the SCPT side
 // (the actors code) sets it
 extern void (*g_pfnStartScpt)(LO* plo, int n);
 // orig 0x00210338's part after the find: plo added / removed (an ALO faded over g seconds, 0x1F7C68 / 0x1F7BF8)
 void SwitchLoFaded(LO* plo, bool fOn, float g);
+void DetachAloBase27(LO* plo, LO* pproxy);  // orig 0x1CB5D0 (the ALO slot 27: the children told)

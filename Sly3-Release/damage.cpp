@@ -1,9 +1,13 @@
 // The actors' damage controller (orig ACTOR +0xDF0, module 0x1A0B18..0x1A245C): damage.h.
 
 #include "aipursuit.h"
+#include "game/sly3.h"
 #include "objmethod.h"
 #include "booty.h"
 #include "damage.h"
+#include "sound.h"
+#include "activate.h"
+#include "gang.h"
 #include "guard.h"
 #include "interact.h"
 #include "shd.h"
@@ -24,11 +28,12 @@
 #include "so.h"
 #include "ainoise.h"
 #include "bsp.h"
+#include "emitter.h"
+#include "lox.h"
 #include "physworld.h"
 #include "xfphys.h"
 #include "step.h"
 #include "stepphys.h"
-#include "interact.h"
 #include "sw.h"
 #include "task.h"
 #include "vecmat.h"
@@ -41,16 +46,35 @@
 #include <cfloat>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <set>
 #include <string>
 #include <vector>
 
 void AccelAloPos(ALO* p, const glm::vec3& v);  // solve.cpp: orig 0x1FAC30
+glm::vec3 PosActorProbe0(ACTOR* pa);  // jump.cpp (the actor's +0x218 point)
+bool FJumpPathEntry(OXA* poxaOwn, SOE* psoe);  // jumptgt.cpp (0x20F948)
 const glm::mat3* g_pmatDamageSender = nullptr;  // (damage.h's harness hook: the sender's world matrix)
 
 namespace
 {
+bool FSafeDebug()
+{
+    static const bool enabled = std::getenv("SLY2N_SAFEDEBUG") != nullptr;
+    return enabled;
+}
+
+void TraceSafePlace(const char* event, ACTOR* pa, const SAFEGROUND::ENTRY& e)
+{
+    if (!FSafeDebug()) return;
+    const glm::vec3 pos = PosSafeGround(pa, e);
+    std::fprintf(stderr, "SAFEPLACE event=%s t=%.6f hero=%u count=%d owner=%u kind=%d floor=%d parameter=%.6f "
+                         "point=(%.6f,%.6f,%.6f)\n", event, g_clock.t, pa->palo->oid, pa->safe.c,
+                 e.ploOwner ? e.ploOwner->oid : 0, static_cast<int>(e.jtl), e.psoe ? e.psoe->tag : -1,
+                 e.pos.x, pos.x, pos.y, pos.z);
+}
+
 void WarnOnce(const std::string& what)
 {
     static std::set<std::string> s_set;
@@ -79,7 +103,7 @@ ASEG* PasegReaction(ACTOR* pa, int n)
 glm::mat3 MatSender(LO* plo)
 {
     if (g_pmatDamageSender) return *g_pmatDamageSender;
-    ALO* palo = plo && FIsLoDerivedFrom(plo, 0x30) ? static_cast<ALO*>(plo) : nullptr;
+    ALO* palo = plo && FIsLoDerivedFrom(plo, S3CID(0x30)) ? static_cast<ALO*>(plo) : nullptr;
     if (!palo) return glm::mat3(1.0f);
     if (XF* pxf = PxfObj(palo)) return glm::mat3(pxf->matWorld);
     return glm::mat3(MatWorldOfAlo(palo));
@@ -105,11 +129,12 @@ bool FDamageFatal(ACTOR* pa, const CTMSG* pctm)
     }
 }
 
-// orig: 0x001A2230 (the controller's immunity to a kind: TODO(actors) +0x298; the kinds 0x2000 / 0x4000 by
-// reaction (0x2A6830) and, without one, by the +0x4C0 kind (0x2A6870) / the jump's state; the others while reacting
-// or flashing, or 0x2E1E00 & 1 or 0x20F0B0(g_game): TODO(world), natively not)
+// orig: 0x001A2230 (the controller's immunity to a kind: the actor's authored +0x298 (EOPID 231 / 1350) to every
+// kind; the kinds 0x2000 / 0x4000 by reaction (0x2A6830) and, without one, by the +0x4C0 kind (0x2A6870) / the
+// jump's state; the others while reacting or flashing, or 0x2E1E00 & 1 or 0x20F0B0(g_game): TODO(world), natively not)
 bool FDamageImmune(ACTOR* pa, int kind)
 {
+    if (pa->palo && pa->palo->U32Field(0, 0x298)) return true;
     if (kind == 0x2000 || kind == 0x4000)
     {
         switch (pa->nSubDF4)
@@ -145,7 +170,12 @@ bool FSlyImmune(ACTOR* pa, int kind)
         case 3: case 8: case 21: case 22:
             if (kind == 0x4000) return true;
             break;
-        case 7: WarnOnce("0x194640 (+0x4C0's immunity, Sly's state 7)"); break;
+        case 7:
+            // orig: 0x00194640: a prize pose, or the two protected phases
+            // of a carried-object interaction, rejects every damage kind.
+            if (p->n4C8 == 12 ||
+                (p->n4C8 == 8 && (p->nSub4CC == 9 || p->nSub4CC == 10))) return true;
+            break;
         default: break;
         }
     }
@@ -169,6 +199,7 @@ bool FImmuneVt(ACTOR* pa, int kind)
 void RecordSafeGround(ACTOR* pa, SOE* psoe, const glm::vec3& posLocal)
 {
     SAFEGROUND& sg = pa->safe;
+    const bool changed = sg.c == 0 || sg.ae[0].jtl != JTL_Max || sg.ae[0].psoe != psoe;
     int i = 1;
     for (; i < sg.c; ++i)
     {
@@ -193,16 +224,135 @@ void RecordSafeGround(ACTOR* pa, SOE* psoe, const glm::vec3& posLocal)
     e = SAFEGROUND::ENTRY{};
     if (psoe)
     {
-        e.id = 0;  // (the entry's owner +0x4: e.psoe->palo)
+        e.ploOwner = psoe->palo;
         e.psoe = psoe;
         psoe->f51 = true;  // (its +0x10 bit 51)
     }
     e.pos = posLocal;
     e.t = g_clock.t;
+    if (changed) TraceSafePlace("floor", pa, e);
 }
 
-// orig: 0x0019FC30 (Sly's: on a floor flatter than 0.7, not flagged (+0x148 bit 29), carrying nothing; the states 3 /
-// 22 (0x19FD30), 7 (+0x4C0's 0x1942F0), 8 (+0xF50's 0x19EA60): TODO(actors))
+// orig: 0x0019FD30 (same two most recent places policy as 0x19FEB0; deduplicate descriptions within 50 units)
+void RecordSafeTarget(ACTOR* pa, LO* plo, JTL jtl, float g)
+{
+    if (!plo || jtl == JTL_Max) return;
+    SAFEGROUND& sg = pa->safe;
+    const bool changed = sg.c == 0 || sg.ae[0].ploOwner != plo || sg.ae[0].jtl != jtl;
+    int i = 1;
+    for (; i < sg.c; ++i)
+    {
+        const SAFEGROUND::ENTRY& e = sg.ae[i];
+        if (e.ploOwner == plo && e.jtl == jtl && std::fabs(g - e.pos.x) < 50.0f)
+        {
+            if (i != 1)
+            {
+                const SAFEGROUND::ENTRY saved = e;
+                std::memmove(&sg.ae[2], &sg.ae[1], sizeof(SAFEGROUND::ENTRY) * static_cast<size_t>(i - 1));
+                sg.ae[1] = saved;
+            }
+            break;
+        }
+    }
+    if (i >= sg.c)
+    {
+        if (sg.c < 32) ++sg.c;
+        std::memmove(&sg.ae[1], &sg.ae[0], sizeof(SAFEGROUND::ENTRY) * static_cast<size_t>(sg.c - 1));
+    }
+    SAFEGROUND::ENTRY& e = sg.ae[0];
+    e = {};
+    e.ploOwner = plo;
+    e.jtl = jtl;
+    e.pos.x = g;
+    e.t = g_clock.t;
+    plo->grf |= 1ull << 59;
+    if (changed) TraceSafePlace("target", pa, e);
+}
+
+// orig: 0x001942F0 (the safe description of rails, spires and side-stepping surfaces; otherwise the floor)
+void UpdateSafeInteract(ACTOR* pa)
+{
+    const INTERACT& in = pa->inter;
+    LO* plo = in.ploTarget;
+    float g = 0.0f;
+    switch (pa->n4C8)
+    {
+    case 3:
+        if (!plo || plo->U32Field(0, 0x19C, 0)) return;
+        g = in.s20;
+        break;
+    case 4:
+        if (!plo || plo->U32Field(0, 0xEC, 0)) return;
+        break;
+    case 0: case 13:
+        if (!plo) return;
+        if (FIsLoDerivedFrom(plo, S3CID(0xC)))
+        {
+            if (plo->U32Field(0, 0x19C, 0)) return;
+            g = in.s20;
+        }
+        else if (FIsLoDerivedFrom(plo, S3CID(0x26)))
+        {
+            if (plo->U32Field(0, 0xEC, 0)) return;
+        }
+        else
+        {
+            const bool wall = FIsLoDerivedFrom(plo, S3CID(0x22));
+            if (wall && plo->U32Field(0, 0xEC, 0)) return;
+            const uint32_t u = plo->U32Field(0, wall ? 0x10C : 0x184, 0);
+            float radius;
+            std::memcpy(&radius, &u, sizeof(radius));
+            const glm::vec3 d = PosLoWorld(pa->palo) - PosLoWorld(plo);
+            g = std::atan2(d.y, d.x) * radius;
+        }
+        break;
+    default:
+    {
+        XP* xp = pa->pxpFloor;
+        if (!xp || xp->normal.z <= 0.7f || pa->ploWater) return;
+        ALO* floor = xp->axpd[1].palo;
+        if (floor && (Sort(floor).grf148 & 0x20000000ull)) return;
+        RecordSafeGround(pa, xp->axpd[1].psoe, xp->axpd[1].posLocal);
+        return;
+    }
+    }
+    RecordSafeTarget(pa, plo, in.jtl, g);
+}
+
+// orig: 0x0019EA60
+void UpdateSafePipe(ACTOR* pa)
+{
+    LO* pipe = pa->ploF5C;
+    if (pipe && !pipe->U32Field(0, 0x19C, 0)) RecordSafeTarget(pa, pipe, JTL_Pipe, pa->sCrvF50);
+}
+
+// orig: 0x001A0048 / 0x001A00D0. Only histories are pruned: the active return-jump entry remains a value copy.
+void RemoveSafeGroundReferences(LO* plo, SOE* psoe)
+{
+    ACTOR* heroes[] = {PslyGlobal(), PbentleyGlobal(), PmurrayGlobal()};
+    for (ACTOR* pa : heroes)
+    {
+        if (!pa) continue;
+        SAFEGROUND& sg = pa->safe;
+        int dst = 0;
+        for (int src = 0; src < sg.c; ++src)
+        {
+            const SAFEGROUND::ENTRY& e = sg.ae[src];
+            if ((plo && e.ploOwner == plo) || (psoe && e.psoe == psoe)) continue;
+            if (dst != src) sg.ae[dst] = e;
+            ++dst;
+        }
+        if (FSafeDebug() && sg.c != dst)
+            std::fprintf(stderr, "SAFEPLACE event=invalidate t=%.6f hero=%u owner=%u floor=%d before=%d after=%d\n",
+                         g_clock.t, pa->palo->oid, plo ? plo->oid : psoe && psoe->palo ? psoe->palo->oid : 0,
+                         psoe ? psoe->tag : -1, sg.c, dst);
+        sg.c = dst;
+    }
+    if (plo) plo->grf &= ~(1ull << 59);
+    if (psoe) psoe->f51 = false;
+}
+
+// orig: 0x0019FC30 (the Sly states that retain a floor or an interaction description)
 void UpdateSafeGround(ACTOR* pa, int state)
 {
     switch (state)
@@ -217,8 +367,12 @@ void UpdateSafeGround(ACTOR* pa, int state)
         RecordSafeGround(pa, pxp->axpd[1].psoe, pxp->axpd[1].posLocal);
         break;
     }
-    case 3: case 22: WarnOnce("0x19FD30 (the safe ground of states 3 / 22)"); break;
-    case 7: case 8: WarnOnce("the safe ground of states 7 / 8 (0x1942F0 / 0x19EA60)"); break;
+    case 3: case 22:
+        if (SLY* sly = dynamic_cast<SLY*>(pa); sly && sly->ploOther && !sly->ploOther->U32Field(0, 0x10C, 0))
+            RecordSafeTarget(pa, sly->ploOther, JTL_Point, 0.0f);
+        break;
+    case 7: UpdateSafeInteract(pa); break;
+    case 8: UpdateSafePipe(pa); break;
     default: break;
     }
 }
@@ -226,11 +380,32 @@ void UpdateSafeGround(ACTOR* pa, int state)
 namespace
 {
 // orig: 0x0019F3F8 (g 0: the entry's point in the world, less the actor's +0x240: where its record goes)
-glm::vec3 PosSafeEntry(ACTOR* pa, const SAFEGROUND::ENTRY& e)
+glm::vec3 PosSafeEntry(ACTOR* pa, const SAFEGROUND::ENTRY& e, float dt = 0.0f)
 {
-    if (e.plo) WarnOnce("0x19F3F8's objects (states 3 / 22)");
-    XF* pxf = e.psoe ? e.psoe->pxf : nullptr;
-    return PosConvertXfs(pxf, nullptr, e.pos) - glm::vec3(pa->vecBase);
+    XF* pxf = nullptr;
+    glm::vec3 local;
+    if (e.jtl != JTL_Max)
+    {
+        const glm::vec3 world = PosJtDesc(e.ploOwner, e.jtl, pa, e.pos.x, nullptr);
+        if (FIsLoDerivedFrom(e.ploOwner, S3CID(0x30))) pxf = PxfObj(static_cast<ALO*>(e.ploOwner));
+        else if (FIsLoDerivedFrom(e.ploOwner, S3CID(3))) pxf = static_cast<LOX*>(e.ploOwner)->pxf;
+        local = PosConvertXfs(nullptr, pxf, world);
+    }
+    else
+    {
+        pxf = e.psoe ? e.psoe->pxf : nullptr;
+        local = e.pos;
+    }
+    glm::vec3 pos;
+    if (pxf && dt > 0.0f)
+    {
+        glm::mat4 predicted(1.0f);
+        PredictXfChain(pxf, nullptr, dt, &predicted, nullptr);  // 0x2309E8 / 0x230A98
+        pos = glm::vec3(predicted * glm::vec4(local, 1.0f));
+    }
+    else pos = PosConvertXfs(pxf, nullptr, local);
+    if (e.jtl == JTL_Max) pos -= glm::vec3(pa->vecBase);
+    return pos;
 }
 
 // orig: 0x0019F7D0 (the entry's cost: 2000 without a flat floor under it or with no room above, 1500 at an edge (one of
@@ -241,8 +416,7 @@ float GCostSafeEntry(ACTOR* pa, const SAFEGROUND::ENTRY& e, const std::vector<AL
     glm::vec3 pos = PosSafeEntry(pa, e);
     if (e.psoe)
     {
-        // the entries within 500 (0x20FC60 with 0x20F948: not the actor's own, not the players'; TODO(physics) its
-        // exact filter)
+        // The entries within 500 (0x20FC60), using the original trajectory filter 0x20F948.
         std::vector<SOE*> apsoe;
         OXA* poxaOwn = Poxa(pa->palo);
         for (OXA* poxa : g_physw.apoxaActive)
@@ -251,7 +425,7 @@ float GCostSafeEntry(ACTOR* pa, const SAFEGROUND::ENTRY& e, const std::vector<AL
             if (glm::length(poxa->posCenter - pos) > 500.0f + poxa->sRadius) continue;
             for (SOE* psoe : poxa->apsoe)
             {
-                if (psoe->f48 || !psoe->palo || FCidDerivedFrom(psoe->palo->Cid(), 0x33)) continue;
+                if (!FJumpPathEntry(poxaOwn, psoe)) continue;
                 if (apsoe.size() < 0x100) apsoe.push_back(psoe);
             }
         }
@@ -276,9 +450,8 @@ float GCostSafeEntry(ACTOR* pa, const SAFEGROUND::ENTRY& e, const std::vector<AL
     for (ALO* palo : apaloPlayers)
     {
         if (palo == pa->palo) continue;
-        // (their +0x218: TODO(actors) the probe point; here the floor point)
-        const ACTOR* pq = PactorFromLo(palo);
-        const glm::vec3 posQ = pq ? PosAloCenter(palo) + glm::vec3(pq->vecBase) : PosAloCenter(palo);
+        ACTOR* pq = PactorFromLo(palo);
+        const glm::vec3 posQ = pq ? PosActorProbe0(pq) : PosAloCenter(palo);
         const float d = glm::length(posQ - pos);
         g = std::max(g, std::clamp(400.0f - d, 0.0f, 1000.0f));  // (0x2BF9D0 / 0x2BF9E0)
     }
@@ -291,7 +464,7 @@ SAFEGROUND::ENTRY EntryBestSafe(ACTOR* pa)
     std::vector<ALO*> apaloPlayers;  // (0x15E9C8(g_game, 0x505, 0x33, 0, 16): the players, at most 16)
     if (g_psw)
         for (CID cid = 0; cid < CID_Max; ++cid)
-            if (FCidDerivedFrom(cid, 0x33))
+            if (FCidDerivedFrom(cid, S3CID(0x33)))
                 for (LO* plo : g_psw->mpcidaplo[cid])
                     if (plo && plo->fInWorld && apaloPlayers.size() < 16) apaloPlayers.push_back(static_cast<ALO*>(plo));
     SAFEGROUND::ENTRY best{};
@@ -332,7 +505,7 @@ float TJumpTo(const glm::vec3& d, const glm::vec3& vGravity, float vzMax, float 
 }
 }  // namespace
 
-glm::vec3 PosSafeGround(ACTOR* pa, const SAFEGROUND::ENTRY& e) { return PosSafeEntry(pa, e); }
+glm::vec3 PosSafeGround(ACTOR* pa, const SAFEGROUND::ENTRY& e, float dt) { return PosSafeEntry(pa, e, dt); }
 float TJumpBallistic(const glm::vec3& d, const glm::vec3& vGravity, float vzMax, float vzMin, float sMax, float sMin)
 {
     return TJumpTo(d, vGravity, vzMax, vzMin, sMax, sMin);
@@ -345,12 +518,14 @@ float TJumpBallistic(const glm::vec3& d, const glm::vec3& vGravity, float vzMax,
 // the best safe ground (no entry) may take the current player there at once).
 void RecoverActorTo(ACTOR* pa, const SAFEGROUND::ENTRY& e)
 {
+    TraceSafePlace("jump", pa, e);
     pa->entryJump = e;  // (+0x490)
     SetJumpKind(&pa->jump, 0xA, 0, 0);
 }
 void RecoverActor(ACTOR* pa)
 {
     const SAFEGROUND::ENTRY e = EntryBestSafe(pa);  // 0x19FAF8 (+0x9E0)
+    TraceSafePlace("choose", pa, e);
     if (g_psw && pa->palo == PloPoCurrent(g_psw))
     {
         const glm::vec3 r = PosSafeEntry(pa, e);
@@ -360,6 +535,7 @@ void RecoverActor(ACTOR* pa)
         const float t = TJumpTo(r - posNow, ps ? ps->dvGravity : glm::vec3(0.0f, 0.0f, -1750.0f), 1000.0f, -1000.0f, 1.0f, -1.0f);
         if (F32(0x3FA00000) < t)
         {
+            TraceSafePlace("teleport", pa, e);
             const int c = pa->safe.c;
             SetStepPos(pa, r - glm::vec3(pa->vecBase));  // vt slot 29 (Sly 0x143CF8: 0x2041C0, +0x9E4 = 0; kept)
             pa->safe.c = c;
@@ -367,7 +543,11 @@ void RecoverActor(ACTOR* pa)
             SetStepRotation(pa, pa->matHeading);                // vt slot 30 (0x2041F8: +0x1B0)
             CutCm(&g_cm);                                        // 0x14D8C0
             SetJumpKind(&pa->jump, 0xB, 0, 0);
-            if (e.plo) WarnOnce("0x19F590's object entries (0x148300 / 0x19B110)");
+            if (e.jtl != JTL_Max && FSafeTargetReattach(e.ploOwner))
+            {
+                CheckLoRootNow(g_psw, e.ploOwner);  // 0x148300
+                ChooseJumpTarget(&pa->jump, e.ploOwner);  // 0x19B110
+            }
             StartFadeLo(g_ploFadeRecover);                      // 0x15E1D8(g_game +0x3E60)
             return;
         }
@@ -387,17 +567,21 @@ void NextStunned(ACTOR* pa)
     DAMAGE& d = Dmg(pa);
     if (*d.pcount > 0)
     {
-        ALO* ps = d.req.ploSender && FIsLoDerivedFrom(d.req.ploSender, 0x30) ? static_cast<ALO*>(d.req.ploSender) : nullptr;
+        ALO* ps = d.req.ploSender && FIsLoDerivedFrom(d.req.ploSender, S3CID(0x30)) ? static_cast<ALO*>(d.req.ploSender) : nullptr;
         if (ps && (Sort(ps).grf148 & 0x200000000ull)) NextRecover(pa);
         else SetJumpKind(&pa->jump, 11, 0, 0);
     }
     else SetDamageState(pa, 8);
 }
-// orig: 0x001A2028 (the effect 0x6A, then the reaction 6 and next 0x2A6790)
+// orig: 0x001A2080 (the PMF 0x2A6790: the same as 0x1A1FA8)
+void NextAfterSpecial(ACTOR* pa) { NextStunned(pa); }
+// orig: 0x001A2028 (the burn's end: the plain sound 0x6A started without a source (0x1FBB90 / 0x1FB2F8(0)), the
+// reaction 6 (0x1A0B40), then the next action 0x2A6790 (0x1A15B0))
 void NextSpecial(ACTOR* pa)
 {
-    WarnOnce("0x1A2028 (kind 0x8000's end: the effect 0x6A, reaction 6)");
+    if (CSnd* ps = PsndNewPlain(0x6A)) ps->SetSource(nullptr);
     SetDamageState(pa, 6);
+    Dmg(pa).pfnNext = NextAfterSpecial;
 }
 
 // orig: 0x001A16C8 (the velocity of the hit by kind (vt slot 35), then the reaction 7)
@@ -409,27 +593,36 @@ void ApplyDamageVelocity(ACTOR* pa)
     switch (d.req.grfFilter)
     {
     case 0x200: case 0x8000:
-        if (ps && FIsLoDerivedFrom(ps, 0x33))
+        if (ps && FIsLoDerivedFrom(ps, S3CID(0x33)))
         {
-            WarnOnce("0x1A16C8's kind 0x200 / 0x8000 from a player (0x11E9F8)");
-            v *= 1.25f;
+            v *= 1.25f;  // (D_002BFACC 0.25 + 1, then 0x11E9F8 at D_002BFAD4 1200, z at least D_002BFAD0 700)
             const float l = glm::length(v);
             if (1200.0f < l) v *= 1200.0f / l;
             v.z = std::max(v.z, 700.0f);
         }
         break;
     case 0x40:
-        if (ps && FIsLoDerivedFrom(ps, 0x36)) WarnOnce("0x1A16C8's kind 0x40 (0x1A6FC0)");
+        if (ps && FIsLoDerivedFrom(ps, S3CID(0x36)) && FIsLoDerivedFrom(ps, S3CID(0x30)))
+        {
+            // hit by Murray: knocked to his left or right by which side of the point 150 behind him (his x row) the
+            // actor is on (its local y: the decomp's prot3w reads word 1), in his frame (0x1A6FC0): (1000, +-900, 950) turned
+            // into the world (audit 2026-11 D3)
+            const glm::mat3 m(MatWorldOfAlo(static_cast<ALO*>(ps)));
+            const glm::vec3 posS = PosAloCenter(pa->palo), posT = PosAloCenter(static_cast<ALO*>(ps));
+            const glm::vec3 delta = posS - (posT + m[0] * -150.0f);
+            const glm::vec3 local = glm::transpose(m) * delta;
+            v = m * (local.y > 0.0f ? glm::vec3(1000.0f, 900.0f, 950.0f) : glm::vec3(1000.0f, -900.0f, 950.0f));  // 0x2BFAE0 / 0x2BFAF0
+        }
         break;
     case 0x100:
-        if (ps && FIsLoDerivedFrom(ps, 0x4F))
+        if (ps && FIsLoDerivedFrom(ps, S3CID(0x4F)))
         {
             glm::vec3 dir;
-            if (FIsLoDerivedFrom(ps, 0x51)) dir = MatSender(ps)[0];  // (glm column 0 = the original's first row)
+            if (FIsLoDerivedFrom(ps, S3CID(0x51))) dir = MatSender(ps)[0];  // (glm column 0 = the original's first row)
             else
             {
-                const glm::vec3 a = FIsLoDerivedFrom(pa->palo, 0x30) ? PosAloCenter(pa->palo) : glm::vec3(0.0f);
-                const glm::vec3 b = FIsLoDerivedFrom(ps, 0x30) ? PosAloCenter(static_cast<ALO*>(ps)) : glm::vec3(0.0f);
+                const glm::vec3 a = FIsLoDerivedFrom(pa->palo, S3CID(0x30)) ? PosAloCenter(pa->palo) : glm::vec3(0.0f);
+                const glm::vec3 b = FIsLoDerivedFrom(ps, S3CID(0x30)) ? PosAloCenter(static_cast<ALO*>(ps)) : glm::vec3(0.0f);
                 dir = a - b;
             }
             dir.z = 0.0f;
@@ -454,7 +647,7 @@ bool FActorImmune(ACTOR* pa, int kind)
     // reset 0x20E068); 0x1C40C0: it is the current player (0x1C4840): while the player is in the safe house no actor
     // takes damage (the heists start there)
     if (g_psw)
-        if (const std::vector<LO*>& a = g_psw->mpcidaplo[0x46]; !a.empty() && a.back() == PloPoCurrent(g_psw)) return true;
+        if (const std::vector<LO*>& a = g_psw->mpcidaplo[S3CID(0x46)]; !a.empty() && a.back() == PloPoCurrent(g_psw)) return true;
     return FDamageImmune(pa, kind);
 }
 
@@ -477,6 +670,23 @@ int DmgCapacityOf(ACTOR* pa) { return Dmg(pa).cCapacity; }
 void SetDmgCounter(ACTOR* pa, int* pn) { Dmg(pa).pcount = pn; }
 void SetDmgCapacity(ACTOR* pa, int c) { Dmg(pa).cCapacity = c; }
 
+namespace
+{
+// orig: 0x001A0B40's Sly parts: his records +0x19B8 / +0x19BC (the part table 0x2BE990's tags 241 / 250) are chain
+// segments (mode 16); the reactions set their chain's gravity (ALOCHAIN +0x20, via the record's +0xA8 segment and its
+// +0x60 chain): the hanging parts fall (-750), float up in the water (500) or stop (0)
+void SetSlyPartGravity(ALO* palo, uint32_t ib, const glm::vec3& v)
+{
+    // (the record's chain segment by the chains themselves: the original writes through +0xA8 whatever the record's
+    // mode, also while an animation holds the segment (R10))
+    for (auto& [o, pxf] : palo->apartxf)
+        if (o == ib && pxf)
+            for (ALOCHAIN& c : palo->achain)
+                for (const ALOCHAINE& e : c.ae)
+                    if (e.pxf == pxf) c.vec20 = v;
+}
+}  // namespace
+
 // orig: 0x001A0B40
 void SetDamageState(ACTOR* pa, int n)
 {
@@ -486,15 +696,20 @@ void SetDamageState(ACTOR* pa, int n)
     ALO* palo = pa->palo;
     const int old = pa->nSubDF4;
     if (n == old) return;
-    const bool fSly = FIsLoDerivedFrom(palo, 0x35);
+    const bool fSly = FIsLoDerivedFrom(palo, S3CID(0x35));
     // the old one's end
     if (old == 3 || old == 10)
     {
-        if (fSly) WarnOnce("0x1A0B40: the +0x19B8 object's velocity (reactions 3 / 10)");
+        if (fSly) SetSlyPartGravity(palo, 0x19B8, glm::vec3(0.0f));
     }
     else if (old == -1)
     {
-        // (Sly: his +0x19B8 / +0x19BC objects' records +0x20 to (0, 0, -750): TODO(actors) the hanging parts)
+        if (fSly)
+        {
+            // (Sly: his +0x19B8 / +0x19BC parts' chains' gravity to (0, 0, -750), D_002BFA00)
+            SetSlyPartGravity(palo, 0x19B8, glm::vec3(0.0f, 0.0f, -750.0f));
+            SetSlyPartGravity(palo, 0x19BC, glm::vec3(0.0f, 0.0f, -750.0f));
+        }
         if (SLY* psly = dynamic_cast<SLY*>(pa)) SetSlyMode(psly, -1);  // vt slot 91 (Sly 0x18D548; TODO(actors) the others')
         pa->vecVel = glm::vec3(0.0f);
         if (PODATA* ppd = PpodataFromLo(palo)) ppd->n15C = 0;
@@ -505,7 +720,12 @@ void SetDamageState(ACTOR* pa, int n)
     switch (n)
     {
     case -1:
-        // (Sly: the +0x19B8 / +0x19BC objects' records +0x20 zeroed)
+        // (Sly: the +0x19B8 / +0x19BC parts' chains' gravity zeroed)
+        if (fSly)
+        {
+            SetSlyPartGravity(palo, 0x19B8, glm::vec3(0.0f));
+            SetSlyPartGravity(palo, 0x19BC, glm::vec3(0.0f));
+        }
         if (PODATA* ppd = PpodataFromLo(palo)) ppd->n15C = 1;
         d.tFlashFade = g_clock.t;
         break;
@@ -539,8 +759,9 @@ void SetDamageState(ACTOR* pa, int n)
         grfapl = 0x21;
         [[fallthrough]];
     case 3:
-        // in the water (Sly: his +0x19B8 object's record +0x20 to (0, 0, 500): TODO(actors) the hanging parts)
+        // in the water (Sly: his +0x19B8 part's chain's gravity to (0, 0, 500), D_002BFA10)
         paseg = PasegReaction(pa, n);
+        if (fSly) SetSlyPartGravity(palo, 0x19B8, glm::vec3(0.0f, 0.0f, 500.0f));
         break;
     case 5: case 11:
         // facing the camera (0x2046B0 toward the CM's position)
@@ -595,6 +816,13 @@ bool FAcceptDamage(ACTOR* pa, CTMSG* pctm)
     if (std::getenv("SLY2N_HITDEBUG"))  // (the AI code's debug: who damaged whom)
         std::printf("damage: t %.3f %d from %d (filter 0x%X state %d) vec %.1f %.1f %.1f count %d\n", g_clock.t, pa->palo ? pa->palo->oid : -1, pctm->ploSender ? pctm->ploSender->oid : -1, pctm->grfFilter, pctm->nState,
                     pctm->vec.x, pctm->vec.y, pctm->vec.z, d.pcount ? *d.pcount : -1);
+    if (std::getenv("SLY2N_HITDEBUG") && pctm->ploSender)  // (where the sender is, and its instance)
+    {
+        const glm::vec3 posS = PosLoWorld(pctm->ploSender);
+        const glm::vec3 posR = pa->palo ? PosLoWorld(pa->palo) : glm::vec3(0.0f);
+        std::printf("  sender instance %d cid 0x%X at %.1f %.1f %.1f; receiver at %.1f %.1f %.1f\n", pctm->ploSender->oidInstance,
+                    pctm->ploSender->Cid(), posS.x, posS.y, posS.z, posR.x, posR.y, posR.z);
+    }
     CTMSG req = *pctm;
     int delta = 0;
     if (FDamageFatal(pa, pctm))  // vt slot 86 (0x1A2358)
@@ -607,11 +835,18 @@ bool FAcceptDamage(ACTOR* pa, CTMSG* pctm)
         if (FImmuneVt(pa, int(req.grfFilter))) return false;  // vt slot 76
         if (pa->n4C8 == 1)
         {
-            WarnOnce("0x1A19A0: the carried object's (+0x4D4) slot 75");
-            return false;
+            // the hiding spot it is in (+0x4D4) takes the hit: its slot 75 with the same message (the barrel's
+            // 0x183E08: a hit of contact byte 8 knocks it over, its noise 706)
+            LO* pt = pa->inter.ploTarget;
+            if (!pt || !FIsLoDerivedFrom(pt, S3CID(0x30))) return false;
+            using PFN = bool (*)(ALO*, CTMSG*);
+            PFN pfn = reinterpret_cast<PFN>(PvNativeVt(pt, 75));
+            return pfn ? pfn(static_cast<ALO*>(pt), pctm) : pctm->grfAccepted != 0;
         }
-        // (+0x29C: TODO(actors), natively 0) the change scaled unless flashing
-        if (d.nFlash != 1) delta = NScaleDamage(req.nState);
+        // the change: none with the actor's authored +0x29C (EOPID 232: e.g. Sly, the AI partner of Boardroom
+        // Brawl's battle 10:1591, option 358) or while flashing, else scaled
+        if (pa->palo && pa->palo->U32Field(0, 0x29C)) delta = 0;
+        else if (d.nFlash != 1) delta = NScaleDamage(req.nState);
         if (req.grfFilter == 0x100000)
         {
             // healing
@@ -623,7 +858,12 @@ bool FAcceptDamage(ACTOR* pa, CTMSG* pctm)
                     d.tFlash = d.tFlashFade = g_clock.t;
                 }
                 *d.pcount += delta;
-                WarnOnce("0x1A19A0's healing clip (+0x108) and sound");
+                // the healing clip (+0x108, ApplyAsegCur from 0 at speed 1, grf 1, kept at +0x10C), then the hit's
+                // noise as every accepted change (0x1A19A0's tail); natively both were skipped (audit 2026-11 D2)
+                for (const auto& [ib, ppart] : pa->palo->apart)
+                    if (ib == 0xEF8 && ppart && FIsLoDerivedFrom(ppart, S3CID(0x6D)))
+                        ApplyAsegCur(static_cast<ASEG*>(ppart), pa->palo, 0.0f, 1.0f, 1, &d.pasegaHeal);
+                if (NOISETMPL* pt = PtmplNoiseFixed(6)) PnoiseNew(pt, PosAloCenter(pa->palo), pa->palo);
                 return true;
             }
             req.grfFilter = 0x200;
@@ -632,7 +872,7 @@ bool FAcceptDamage(ACTOR* pa, CTMSG* pctm)
         }
         // a guard's (cid 0x38) hit while it is shrunk (+0xFBC modes 8 / 13: the size destabilizer) halves it
         // (toward zero)
-        if (req.ploSender && FIsLoDerivedFrom(req.ploSender, 0x38))
+        if (req.ploSender && FIsLoDerivedFrom(req.ploSender, S3CID(0x38)))
             if (const GUARD* pg = PguardFromLo(req.ploSender); pg && (pg->nMode == 8 || pg->nMode == 13)) delta /= 2;
     }
     // the actor's state machine (vt slot 88 (3): Sly's state 4)
@@ -654,7 +894,14 @@ bool FAcceptDamage(ACTOR* pa, CTMSG* pctm)
     {
     case 0x100: case 0x200:
         ApplyDamageVelocity(pa);
-        if (400.0f < VelAloPos(pa->palo).z) WarnOnce("0x1A19A0's launch effect (0x69 / 0x83 / 0x84 by class)");
+        if (400.0f < VelAloPos(pa->palo).z)
+        {
+            // launched upward: the class's cry (0x1FBB90 + SetSource: Sly 0x69, Murray 0x84, Bentley 0x83, else -1);
+            // natively only a warning, reached in 90 of 348 random-play starts (audit 2026-11 D1)
+            const int cid = pa->palo->Cid();
+            const int id = cid == S3CID(0x35) ? 0x69 : cid == S3CID(0x36) ? 0x84 : cid == S3CID(0x37) ? 0x83 : -1;
+            if (CSnd* ps = PsndNewPlain(id)) ps->SetSource(pa->palo);
+        }
         d.pfnNext = NextGetUp;  // (0x2A6770)
         break;
     case 0x40:
@@ -732,7 +979,7 @@ void UpdateDamage(ACTOR* pa)
         static const cmm::SMP s_smp{3.5f, 0.0f, 0.5f};  // (0x2BFAC0)
         SetStepPhysHeading(pa->palo, cmm::RadSmooth(pa->radHeading, rad, g_clock.dt, &s_smp, nullptr));
         if (0.25f < g_clock.t - d.tStart && pa->pxpFloor) EndDamageReaction(pa);
-        else if (1.0f <= g_clock.t - d.tStart) WarnOnce("0x19A098 (reaction 7 stuck off the floor)");
+        else if (FActorStuckOnContacts(pa, d.tStart, nullptr)) EndDamageReaction(pa);  // 0x19A098 (held off the floor by contacts)
     }
 }
 
@@ -753,7 +1000,7 @@ void EndDamageReaction(ACTOR* pa)
     }
     else
     {
-        ALO* ps = d.req.ploSender && FIsLoDerivedFrom(d.req.ploSender, 0x30) ? static_cast<ALO*>(d.req.ploSender) : nullptr;
+        ALO* ps = d.req.ploSender && FIsLoDerivedFrom(d.req.ploSender, S3CID(0x30)) ? static_cast<ALO*>(d.req.ploSender) : nullptr;
         if (ps && (Sort(ps).grf148 & 0x200000000ull)) NextRecover(pa);
         else SetJumpKind(&pa->jump, 11, 0, 0);  // 0x195A00
     }
@@ -860,12 +1107,41 @@ void ApplyWaterToAlo(ALO* po, ALO* pw)
 }
 }  // namespace
 
+LO* PloWaterField(ALO* pw, uint32_t ib);  // water.cpp (an object option of the water by its oid)
+namespace
+{
+// orig: 0x001A2788 (the water's surface at the actor: the first point where the segment from its position + (0, 0,
+// +0x109C) down to its position + (0, 0, +0x1098) (100 / -100 for every actor) enters one of the water's live entries,
+// 0x14CDB0 with the filter 0x229D60)
+bool FWaterSurfaceUnder(ACTOR* pa, ALO* pw, glm::vec3* ppos)
+{
+    const glm::vec3 p = PosAloCenter(pa->palo);
+    const glm::vec3 a = p + glm::vec3(0.0f, 0.0f, 100.0f), b = p + glm::vec3(0.0f, 0.0f, -100.0f);
+    bool f = false;
+    float tBest = 0.0f;
+    for (const SOE& e : pw->asoe)
+    {
+        if (e.f50) continue;
+        LSG alsg[16];
+        const int c = ClipSegmentEntry(&e, a, b, 16, alsg);
+        for (int i = 0; i < c; ++i)
+            if (!f || alsg[i].t0 < tBest)
+            {
+                f = true;
+                tBest = alsg[i].t0;
+                *ppos = alsg[i].pos0;
+            }
+    }
+    return f;
+}
+}  // namespace
+
 // orig: 0x001A2460 (the actor's update: its point (+0x10A0 above its center, 10 lower in the reactions 3 / 10) in the
 // water +0x108C: falling (or standing without a reaction 7) it takes the water's contact (filter +0x188, state +0x184:
-// 0x2000 / -10 -> the reaction 3); TODO(actors): the splash entries +0x1090 (the effect +0x174's slot 51 messages 4))
+// 0x2000 / -10 -> the reaction 3); the splash points +0x1090 make the effect +0x174's bursts (slot 51 messages 4))
 void UpdateActorWater(ACTOR* pa)
 {
-    ALO* pw = pa->ploWater && FIsLoDerivedFrom(pa->ploWater, 0x30) ? static_cast<ALO*>(pa->ploWater) : nullptr;
+    ALO* pw = pa->ploWater && FIsLoDerivedFrom(pa->ploWater, S3CID(0x30)) ? static_cast<ALO*>(pa->ploWater) : nullptr;
     if (!pw) return;
     glm::vec3 pos = PosAloCenter(pa->palo);
     pos.z += pa->sWaterHeight;
@@ -887,7 +1163,32 @@ void UpdateActorWater(ACTOR* pa)
             PaloAcceptContact(&ctm);  // 0x1F7598
         }
     }
-    if (pw->U32Field(0, 0x174, 0)) WarnOnce("0x1A2460's splash entries (+0x1090, the water's effect +0x174)");
+    // the splash points: with the water's effect +0x174 and its surface above or below (0x1A2788), each point not
+    // splashed in the last 0.05 s whose position and its position a frame on (0x2309E8: its record's motion) are on
+    // either side of the surface: the effect's burst (vt slot 51, message 4) there at the surface's height
+    LO* ploEffect = PloWaterField(pw, 0x174);
+    if (!ploEffect) return;
+    glm::vec3 posSurface;
+    if (!FWaterSurfaceUnder(pa, pw, &posSurface)) return;
+    for (auto& [plo, tLast] : pa->asplash)
+    {
+        if (g_clock.t - tLast < 0.05f) continue;
+        const glm::vec3 posP = PosLoWorld(plo);
+        // (vt slot 32's frame: an ALO's object record, a LOX's own record (0x231440: record x local))
+        XF* pxf = FIsLoDerivedFrom(plo, S3CID(0x30)) ? PxfObj(static_cast<ALO*>(plo))
+                  : FIsLoDerivedFrom(plo, S3CID(3))  ? static_cast<LOX*>(plo)->pxf
+                                              : nullptr;
+        const glm::vec3 posNext = posP + (pxf ? VelXfPoint(pxf, nullptr, posP) : glm::vec3(0.0f)) * g_clock.dt;
+        const bool fCross = posSurface.z <= posP.z ? posNext.z <= posSurface.z : posSurface.z <= posNext.z;
+        if (!fCross) continue;
+        BURSTPARAMS bp;
+        bp.grf = 4;
+        bp.pos = glm::vec3(posP.x, posP.y, posSurface.z);
+        if (std::getenv("SLY2N_RIPHIT"))
+            std::fprintf(stderr, "RIPHIT splash t %.3f point %d at %.0f %.0f %.0f effect %d\n", g_clock.t, plo->oid, bp.pos.x, bp.pos.y, bp.pos.z, ploEffect->oid);
+        ExplodeLo(ploEffect, &bp);
+        tLast = g_clock.t;
+    }
 }
 
 namespace

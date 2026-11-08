@@ -4,7 +4,10 @@
 // func_001617E0.cpp, m_1DAC58_p3.cpp's 0x1DB870 / 0x1DAF38, m_1D93D8.cpp's 0x1DA950 / 0x1DA7D0 (Sly2-Reference).
 
 #include "shop.h"
+#include "game/sly3.h"
+#include "region.h"
 #include "sound.h"
+#include "ai.h"
 
 #include "clock.h"
 #include "cls.h"
@@ -22,6 +25,7 @@
 #include "update.h"
 #include "actor.h"
 #include "gadget.h"
+#include "pcinput.h"
 #include "worldaccess.h"
 
 #include <algorithm>
@@ -36,19 +40,19 @@
 
 namespace
 {
-int32_t NElf(uint32_t va) { int32_t n = 0; if (const uint8_t* pb = g_disc.PbElf(va, 4)) std::memcpy(&n, pb, 4); return n; }
+int32_t NElf(uint32_t va) { return int32_t(g_disc.U32Elf(va)); }  // (an address comes back as the USA one: disc.h)
 int NRef(const CRef& r) { return r.m_tagk == TAGK_S32 ? r.m_n : r.m_tagk == TAGK_F32 ? int(r.m_g) : r.m_tagk == TAGK_Bool ? int(r.m_bool) : 0; }
 
 // the items (0x2BCD00: 0x2B of 0x20 bytes): +4 the kind (7 / 8 / 9: the character), +8 the cost, +0x10 the
 // episode it opens in, +0x14 its name, +0x18 its description
-int ItemKind(int i) { return NElf(0x2BCD00 + 0x20 * uint32_t(i) + 4); }
-int ItemCost(int i) { return NElf(0x2BCD00 + 0x20 * uint32_t(i) + 8); }
-int ItemEpisode(int i) { return NElf(0x2BCD00 + 0x20 * uint32_t(i) + 0x10); }
-int ItemName(int i) { return NElf(0x2BCD00 + 0x20 * uint32_t(i) + 0x14); }
-int ItemDesc(int i) { return NElf(0x2BCD00 + 0x20 * uint32_t(i) + 0x18); }
+int ItemKind(int i) { return NElf(S3VA(0x2BCD00) + 0x20 * uint32_t(i) + 4); }
+int ItemCost(int i) { return NElf(S3VA(0x2BCD00) + 0x20 * uint32_t(i) + 8); }
+int ItemEpisode(int i) { return NElf(S3VA(0x2BCD00) + 0x20 * uint32_t(i) + 0x10); }
+int ItemName(int i) { return NElf(S3VA(0x2BCD00) + 0x20 * uint32_t(i) + 0x14); }
+int ItemDesc(int i) { return NElf(S3VA(0x2BCD00) + 0x20 * uint32_t(i) + 0x18); }
 // the loot (0x2C3288: 0x40 of 0xC bytes): +0 its value, +4 its name
-int LootValue(int i) { return NElf(0x2C3288 + 0xC * uint32_t(i)); }
-int LootName(int i) { return NElf(0x2C3288 + 0xC * uint32_t(i) + 4); }
+int LootValue(int i) { return NElf(S3VA(0x2C3288) + 0xC * uint32_t(i)); }
+int LootName(int i) { return NElf(S3VA(0x2C3288) + 0xC * uint32_t(i) + 4); }
 
 constexpr int CROW = 6;                 // orig D_002C35B4
 constexpr float DY_ROW = 40.0f;         // orig D_002C35B0
@@ -148,7 +152,7 @@ void UpdateShopLook()
     for (int i = p.first; i < end && i < 0x40; ++i)
     {
         SHOP::ENT& e = p.aent[i];
-        const int k = NElf(0x2C3588 + 4 * uint32_t(i - p.first));
+        const int k = NElf(S3VA(0x2C3588) + 4 * uint32_t(i - p.first));
         if (p.page == 0)
         {
             if (e.id != -1)
@@ -240,7 +244,7 @@ void UpdateShopStick()
 void NotifyPlayersPowerups(SW* psw)
 {
     if (!psw) return;
-    std::vector<LO*> aplo = AploOfClass(psw, 0x34);
+    std::vector<LO*> aplo = AploOfClass(psw, S3CID(0x34));
     if (aplo.size() > 8) aplo.resize(8);
     for (LO* plo : aplo) HandleLoSpliceEvent(plo, 0x1A, false, 0, nullptr);
 }
@@ -253,7 +257,7 @@ void InitShop(SW* psw)
     if (psw && std::getenv("SLY2N_ITEMPRINT"))   // debug: the powerup table (0x2BCD00)
         for (int i = 0; i < 0x2B; ++i)
             std::printf("item %2d kind %d cost %4d power %2d episode %2d assign %2d %s: %s\n", i, ItemKind(i), ItemCost(i),
-                        NElf(0x2BCD00 + 0x20 * uint32_t(i) + 0xC), ItemEpisode(i), NElf(0x2BCD00 + 0x20 * uint32_t(i)),
+                        NElf(S3VA(0x2BCD00) + 0x20 * uint32_t(i) + 0xC), ItemEpisode(i), NElf(S3VA(0x2BCD00) + 0x20 * uint32_t(i)),
                         ItemName(i) > 0 ? StrLocalized(psw, ItemName(i)).c_str() : "-", ItemDesc(i) > 0 ? StrLocalized(psw, ItemDesc(i)).c_str() : "-");
 }
 
@@ -309,10 +313,10 @@ void UpdateShop(SW* psw)
     p.psw = psw;
     if (p.tMsg <= g_clock.tReal) SetShopMsg(-1, -1);   // (0x1DA808)
     if (p.page == -1) return;
-    if (p.msg != 0 && GrfbtnTakePressed(0x10)) { SetShopPage(-1); return; }
+    if (p.msg != 0 && GrfbtnTakePressed(BtnMenuBack())) { SetShopPage(-1); return; }
     if (p.page == 0)
     {
-        if (GrfbtnTakePressed(0x40))
+        if (GrfbtnTakePressed(BtnMenuConfirm()))
         {
             const int item = p.itemBuy;
             if (std::getenv("SLY2N_ITEMPRINT")) std::printf("shop: CROSS on item %d (msg %d, coins %d)\n", item, p.msg, CCoins());
@@ -341,7 +345,7 @@ void UpdateShop(SW* psw)
     }
     else if (p.page == 1)
     {
-        if (GrfbtnTakePressed(0x40))
+        if (GrfbtnTakePressed(BtnMenuConfirm()))
         {
             if (p.itemSell == -1) PsndStartSound(0x36);
             else if (const int n = CLoot(p.itemSell); n > 0)
@@ -355,7 +359,7 @@ void UpdateShop(SW* psw)
             }
         }
     }
-    if (p.msg == 0 && GrfbtnTakePressed(0x10)) SetShopMsg(-1, -1);
+    if (p.msg == 0 && GrfbtnTakePressed(BtnMenuBack())) SetShopMsg(-1, -1);
     if (GrfbtnTakePressed(0x80))
     {
         SetShopMsg(-1, -1);
@@ -406,26 +410,26 @@ std::string StrShopScript(int id)
         // orig 0x001DCA30
         switch (p.msg)
         {
-        case -1: return StrLocalized(psw, 0xDE);
-        case 0: return StrLocalized(psw, 0xDF);
-        case 1: return StrLocalized(psw, 0xE0);
+        case -1: return StrLocalized(psw, IdText(0xDE));
+        case 0: return StrLocalized(psw, IdText(0xDF));
+        case 1: return StrLocalized(psw, IdText(0xE0));
         default: return "";
         }
     }
     if (id == 0x435)
     {
         // orig 0x001DCAB0: the message, else the selected item's name, description and whether it is affordable
-        if (p.msg != -1) return StrLocalized(psw, p.idMsg);
+        if (p.msg != -1) return StrLocalized(psw, IdText(p.idMsg));   // (USA ids: 0x34 / 0x35)
         if (p.page == 0)
         {
             const int i = p.itemBuy;
             if (i >= 0 && i < 0x2B && ItemDesc(i) != p.msg)
             {
                 std::snprintf(ach, sizeof(ach), "%s: %s. %s", StrLocalized(psw, ItemName(i)).c_str(), StrLocalized(psw, ItemDesc(i)).c_str(),
-                              StrLocalized(psw, CCoins() < ItemCost(i) ? 0xD9 : 0xDA).c_str());
+                              StrLocalized(psw, IdText(CCoins() < ItemCost(i) ? 0xD9 : 0xDA)).c_str());
                 return ach;
             }
-            return StrLocalized(psw, 0xDC);
+            return StrLocalized(psw, IdText(0xDC));
         }
         if (p.page == 1)
         {
@@ -433,14 +437,14 @@ std::string StrShopScript(int id)
             if (i >= 0 && i < 0x40)
             {
                 // (0xDB: "... sell one for %d coins": its value, 0x2C3288 +0)
-                const std::string fmt = StrLocalized(psw, 0xDB);
+                const std::string fmt = StrLocalized(psw, IdText(0xDB));
                 const size_t ipct = fmt.find("%d");
                 std::string str = fmt;
                 if (ipct != std::string::npos) str = fmt.substr(0, ipct) + std::to_string(LootValue(i)) + fmt.substr(ipct + 2);
                 return str;
                 return ach;
             }
-            return StrLocalized(psw, 0xE3);
+            return StrLocalized(psw, IdText(0xE3));
         }
     }
     return "";
@@ -449,6 +453,7 @@ std::string StrShopScript(int id)
 // ------------------------------------------------------------ the gadget assignment (orig 0x3DA0F0, module
 // 0x1DAA08..0x1DB7A8: func_001DB520.c / func_001DB390.c / func_001DB010.c / func_001DAE20.c, the code of 0x1DAA90
 // (m_1D93D8_c.cpp) and 0x1DB0C8, func_001DC598.c, func_00141FC8.c)
+extern int g_frameJoy;   // (joy.cpp: the step)
 namespace
 {
 struct GADGETENT { int key, idOpen, idOwned, idSel, cur; float x, y; uint32_t grf; };
@@ -571,7 +576,7 @@ void SetGadgetMenu(int s)
     case 2: p.oid = 0x377; break;
     default: return;
     }
-    static const uint32_t s_ava[3] = {0x2C2DE8, 0x2C3028, 0x2C3148};
+    static const uint32_t s_ava[3] = {S3VA(0x2C2DE8), S3VA(0x2C3028), S3VA(0x2C3148)};
     static const int s_ac[3] = {0x12, 9, 8};
     p.aent.clear();
     for (int i = 0; i < s_ac[s]; ++i)
@@ -586,6 +591,8 @@ void SetGadgetMenu(int s)
         p.aent.push_back(e);
     }
     UpdateGadgetFlags();
+    if (std::getenv("SLY2N_GADGETPRINT"))
+        for (const GADGETENT& e : p.aent) std::printf("gadget: key %d at %.1f %.1f grf %u\n", e.key, e.x, e.y, e.grf);
     p.plo = p.psw ? PloFindSwObjectByOid(p.psw, p.oid) : nullptr;
     if (!p.plo) { SetGadgetMenu(-1); return; }
     ShowScreenObj(p.plo, 0x318);
@@ -605,9 +612,9 @@ void OpenGadgetMenu(SW* psw, LO* ploPlayer)
     s_gm.psw = psw;
     if (!ploPlayer) return;
     const CID cid = ploPlayer->Cid();
-    if (FCidDerivedFrom(cid, 0x35)) SetGadgetMenu(0);
-    else if (FCidDerivedFrom(cid, 0x37)) SetGadgetMenu(1);
-    else if (FCidDerivedFrom(cid, 0x36)) SetGadgetMenu(2);
+    if (FCidDerivedFrom(cid, S3CID(0x35))) SetGadgetMenu(0);
+    else if (FCidDerivedFrom(cid, S3CID(0x37))) SetGadgetMenu(1);
+    else if (FCidDerivedFrom(cid, S3CID(0x36))) SetGadgetMenu(2);
 }
 
 // orig 0x001DAA90
@@ -617,8 +624,8 @@ void UpdateGadgetMenu(SW* psw, LO* ploPlayer)
     p.psw = psw;
     if (p.tMsg <= g_clock.tReal) SetGmMsg(-1, -1);
     if (!p.plo || p.ichar == -1) return;
-    if (p.msg != 0 && GrfbtnTakePressed(0x10)) { SetGadgetMenu(-1); return; }
-    if (!ploPlayer || !FCidDerivedFrom(ploPlayer->Cid(), 0x34)) { SetGadgetMenu(-1); return; }
+    if (p.msg != 0 && GrfbtnTakePressed(BtnMenuBack())) { SetGadgetMenu(-1); return; }
+    if (!ploPlayer || !FCidDerivedFrom(ploPlayer->Cid(), S3CID(0x34))) { SetGadgetMenu(-1); return; }
     UpdateGadgetFlags();
     // orig 0x001DA858 with the d-pad as the stick
     {
@@ -632,6 +639,22 @@ void UpdateGadgetMenu(SW* psw, LO* ploPlayer)
         if (p.dir == -1) { if (g > 0.8f) StepGadget(int(std::atan2(y, x) * 1.2732395f + 8.5f) % 8, x, y); }
         else if (g < 0.5f) StepGadget(-1, x, y);
     }
+    // (PC menus) the mouse: an owned gadget under the cursor is selected when the cursor moves onto it or it is
+    // clicked (a click on the selected one confirms, as Cross) (its cell: 80 x 80 grid units around (x + 26.5, y - 8), the grid's y in the HUD's 1.1 scale); the wheel
+    // steps as the d-pad (pcinput.cpp)
+    if (float xc = 0, yc = 0; FMenuCursor(&xc, &yc))
+        for (const GADGETENT& e : p.aent)
+        {
+            if (!(e.grf & 4) || std::fabs(xc - (e.x + 26.5f)) >= 40.0f || std::fabs(yc - (e.y - 8.0f) / 1.1f) >= 40.0f / 1.1f) continue;
+            if (e.key == p.key) break;   // (a click on the selected one: the confirm button, as before)
+            SetMenuMouseTarget();
+            if (FMenuCursorMoved() || FMenuClick())
+            {
+                SelectGadget(e.key);
+                PsndStartSound(0x35);  // (as a step: 0x1DB0C8)
+            }
+            break;
+        }
     if (GrfbtnTakePressed(0x7E8))
     {
         const GADGETENT* r = PgeFind(p.key);
@@ -673,17 +696,17 @@ std::string StrGadgetScript(int id)
     // orig 0x001DC598 (0x37A / 0x37B): the message, else the selected gadget's name, description and its button
     if ((id != 0x37A && id != 0x37B) || s_gm.ichar == -1) return "";
     const SW* psw = s_gm.psw;
-    if (s_gm.msg != -1) return StrLocalized(psw, s_gm.idMsg);
-    if (s_gm.key == -1) return StrLocalized(psw, 0xDD);
+    if (s_gm.msg != -1) return StrLocalized(psw, IdText(s_gm.idMsg));   // (USA ids: 0x31..0x33, 0xE2)
+    if (s_gm.key == -1) return StrLocalized(psw, IdText(0xDD));
     const GADGETENT* po = PgeFind(s_gm.key);
     const int v = IslotAssigned(s_gm.key);
     static const char* const s_aszIcon[3] = {"&2L&.", "&2l&.", "&2r&."};
     std::string buf;
     std::string desc;
-    if (po && (po->grf & 1) && v < 0) buf = StrLocalized(psw, 0xE1);
+    if (po && (po->grf & 1) && v < 0) buf = StrLocalized(psw, IdText(0xE1));
     else
     {
-        const std::string fmt = StrLocalized(psw, NElf(0x2BCD00 + 0x20 * uint32_t(s_gm.key) + 0x1C));
+        const std::string fmt = StrLocalized(psw, NElf(S3VA(0x2BCD00) + 0x20 * uint32_t(s_gm.key) + 0x1C));
         const char* sz = v >= 0 ? s_aszIcon[v] : "";
         for (size_t i = 0; i < fmt.size(); ++i)
         {
@@ -735,6 +758,9 @@ struct JOBHELP
     int idA = -1, idB = -1, idC = -1;
 };
 JOBHELP s_jh;
+// (PC menus) the rows' text as last drawn (NoteJobHelpText: HUD units, x from the canvas centre, y x 1.1 from it)
+struct JHROW { float x = 0, y = 0, size = 0; int frame = -100; };
+JHROW s_ajhrow[10];
 
 // orig 0x00164030: a task done (or its progress "closed" value while it has no state)
 bool FTaskDoneJh(const TASK* p)
@@ -833,11 +859,13 @@ void SetJobHelpPage(int s)
     if (!p.plo) s = -1;
     if (s == p.page) return;
     const int old = p.page;
+    if (old == -1) PauseGame(0);  // orig: 0x001DD300, acquire the gameplay-input pause on entry.
     p.page = s;
     p.tPage = g_clock.tReal;
     switch (s)
     {
     case -1:
+        ResumeGame(0);  // orig: 0x001DD300, release only when the help closes.
         if (p.plo && NScreenObjState(p.plo) > 0) SetScreenObjTimers(p.plo, 1);
         if (p.plo) HideScreenObj(p.plo);
         p.idA = p.idB = p.idC = -1;
@@ -868,6 +896,12 @@ void InitJobHelp(SW* psw)
     s_jh = JOBHELP{};
     s_jh.psw = psw;
     s_jh.plo = psw ? PloFindSwObjectByOid(psw, 0x4E0) : nullptr;
+    // orig: 0x001DCCA0: Job Help's screen pauses the world while its panel is shown.
+    if (s_jh.plo)
+    {
+        s_jh.plo->SetField(0, 0xB0, 1);
+        SetScreenObjPauses(s_jh.plo, true);
+    }
 }
 bool FJobHelpShown() { return s_jh.page != -1; }
 
@@ -880,13 +914,44 @@ void UpdateJobHelp(SW* psw)
     if (GrfbtnTakePressed(0x800)) { SetJobHelpPage(-1); return; }
     if (p.page == 0)
     {
-        if (GrfbtnTakePressed(0x10)) { SetJobHelpPage(-1); return; }
+        if (GrfbtnTakePressed(BtnMenuBack())) { SetJobHelpPage(-1); return; }
         if (!p.aent.empty() && GrfbtnTakePressed(0xE0)) { SetJobHelpPage(1); return; }
     }
     else if (p.page == 1)
     {
-        if (!p.fFromJobs && GrfbtnTakePressed(0x10)) { SetJobHelpPage(-1); return; }
+        if (!p.fFromJobs && GrfbtnTakePressed(BtnMenuBack())) { SetJobHelpPage(-1); return; }
         if (GrfbtnTakePressed(0xF0)) { SetJobHelpPage(0); return; }
+    }
+    // (PC menus) the mouse: on the jobs page the row under the cursor is selected when the cursor moves onto it,
+    // and a click opens it (as Cross / right); on a job's page a click on "< more jobs" goes back to the jobs (as
+    // left). The wheel steps as the d-pad, the right button goes back (pcinput.cpp).
+    if (float xc = 0, yc = 0; FMenuCursor(&xc, &yc) && NScreenObjState(p.plo) == 2)
+    {
+        if (p.page == 0)
+        {
+            for (int i = 0; i < int(p.aent.size()) && i < 10; ++i)
+            {
+                const JHROW& r = s_ajhrow[i];
+                if (g_frameJoy - r.frame > 8) continue;   // (not drawn lately)
+                // (the row's band, as the selected row's bar: from 6 units above its text's top, the rows 35 / 1.1
+                // canvas units apart; from the check mark to the panel's end)
+                const float yTop = r.y / 1.1f + 224.0f - 6.0f, xLeft = r.x + 320.0f - 45.0f;
+                if (xc < xLeft || xc >= 600.0f || yc < yTop || yc >= yTop + 35.0f / 1.1f) continue;
+                SetMenuMouseTarget();
+                if ((FMenuCursorMoved() || FMenuClick()) && i != p.isel)
+                {
+                    p.isel = i;
+                    PsndStartSound(0x35);
+                }
+                if (FMenuClick()) { SetJobHelpPage(1); return; }
+                break;
+            }
+        }
+        else if (p.page == 1 && xc >= 60.0f && xc < 230.0f && yc >= 400.0f && yc < 440.0f)
+        {
+            SetMenuMouseTarget();
+            if (FMenuClick()) { SetJobHelpPage(0); return; }
+        }
     }
     // orig 0x001DA858 / 0x001DD558: the stick (the d-pad as it)
     float x = g_joy.xLeft, y = g_joy.yLeft;
@@ -914,12 +979,20 @@ void UpdateJobHelp(SW* psw)
     UpdateJobHelpLook();
 }
 
+void NoteJobHelpText(int kind, int id, float x, float y, float size)
+{
+    if (s_jh.page == -1 || kind != 1 || id < 0x51E || id > 0x527) return;
+    JHROW& r = s_ajhrow[id - 0x51E];
+    if (std::getenv("SLY2N_JHPRINT") && r.frame != g_frameJoy) std::printf("jobhelp: row %d at %.1f %.1f size %.1f\n", id - 0x51E, x, y, size);
+    r = JHROW{x, y, size, g_frameJoy};
+}
+
 std::string StrJobHelpScript(int id)
 {
     const JOBHELP& p = s_jh;
     const SW* psw = p.psw;
     if (p.page == -1) return "";
-    if (id == 0x51B) return StrLocalized(psw, 0x6D + std::clamp(IepisodeCur(), 0, 8));   // orig 0x001DDDB8
+    if (id == 0x51B) return StrLocalized(psw, IdText(0x6D + std::clamp(IepisodeCur(), 0, 8)));   // orig 0x001DDDB8
     if (id == 0x51C) return p.pjob ? StrLocalized(psw, p.pjob->n6c) : "";                 // orig 0x001DDE58
     if (id == 0x51D) return p.pjob ? StrLocalized(psw, p.pjob->n70) : "";                 // orig 0x001DDE10
     if (id >= 0x51E && id <= 0x527)

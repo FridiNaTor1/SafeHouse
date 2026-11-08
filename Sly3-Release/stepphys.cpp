@@ -3,8 +3,10 @@
 // reference's ps2_* operations round toward zero).
 
 #include "stepphys.h"
-#include "sly3/ids3.h"
+#include "game/sly3.h"
 #include "actmesh.h"
+#include "activate.h"
+#include "aijobs.h"
 #include "actor.h"
 
 #include "anim.h"
@@ -20,6 +22,8 @@
 
 #include <algorithm>
 #include <cfloat>
+#include <cstdio>
+#include <cstdlib>
 #include <cmath>
 #include <memory>
 #include <unordered_map>
@@ -60,7 +64,7 @@ uint32_t VtGrfXp(ALO* palo)  // slot 85
 void XpNotifyBase(ALO*, XP*, int) {}  // 0x1F4FB0 / 0x1F4FC0: nothing
 }  // namespace
 
-bool FAloStep(const LO* plo) { return plo && FCidDerivedFrom(plo->Cid(), Icid(CID3::PO)); }
+bool FAloStep(const LO* plo) { return plo && FCidDerivedFrom(plo->Cid(), S3CID(0x33)); }
 
 STEPPHYS* PstepPhysOf(ALO* palo)
 {
@@ -76,7 +80,7 @@ STEPPHYS& StepPhysOf(ALO* palo)
         // orig: 0x00203948 (init: no +0x264 oid, sizes 1, speed scale 1 (0x204D48), heading 0, +0x220 30, +0x214 -50)
         p = PstepNew(palo);
         p->oidMesh = -1;
-        p->sSize = palo && FCidDerivedFrom(palo->Cid(), Icid(CID3::GUARD)) ? 1.5f : 1.0f;  // (the guards' init 0x205EB8: 1.5)
+        p->sSize = palo && FCidDerivedFrom(palo->Cid(), S3CID(0x38)) ? 1.5f : 1.0f;  // (the guards' init 0x205EB8: 1.5)
         p->uBrake = 1.0f;
         STEPPHYS& s = *p;
         s.vBrake = SV_BRAKE;
@@ -86,7 +90,7 @@ STEPPHYS& StepPhysOf(ALO* palo)
         s.g220 = 30.0f;
         s.g214 = -50.0f;
         // the class inits' +0x264 (Sly's 0x188488: 0xC7), an option over it
-        const uint32_t oidDefault = palo && FCidDerivedFrom(palo->Cid(), Icid(CID3::JT)) ? 0xC7u : 0xFFFFFFFFu;
+        const uint32_t oidDefault = palo && FCidDerivedFrom(palo->Cid(), S3CID(0x35)) ? 0xFCu : 0xFFFFFFFFu;  // (orig3 0x1AA118: Sly 3's +0x294 = 0xFC; Sly 2 0xC7)
         if (palo) s.oidMesh = static_cast<int>(palo->U32Field(0, 0x264, oidDefault));
     }
     return *p;
@@ -109,7 +113,7 @@ void SetStepPhysScale(ALO* palo, float g)
     s.vBrake.x *= g;
     s.vBrake.y *= g;
     s.gScale = g;
-    s.vBrake.z *= 1.0f / std::sqrt(g);
+    s.vBrake.z *= DivEe(1.0f, std::sqrt(g));   // (a scale of 0: +FLT_MAX on the EE, not an infinity)
 }
 
 // orig: 0x00204660 (the heading +0x1A8 and its rotation +0x1B0: 0x11B500 about z)
@@ -154,7 +158,7 @@ void LoadStepPhysBase(ALO* palo)
     if (PxfObj(palo)) v = XformPos(InverseAffineMatrix4(PxfObj(palo)->matWorld), v);
     s.vecBase = glm::vec4(v, 1.0f);
     // Sly's load 0x1885B8 after 0x2039C0: the base (0, 0, -75)
-    if (FCidDerivedFrom(palo->Cid(), Icid(CID3::JT))) s.vecBase = glm::vec4(0.0f, 0.0f, -75.0f, s.vecBase.w);
+    if (FCidDerivedFrom(palo->Cid(), S3CID(0x35))) s.vecBase = glm::vec4(0.0f, 0.0f, -75.0f, s.vecBase.w);
 }
 
 // orig: 0x00203A38's part (after the ALO's post-load 0x1F36A8): the position / rotation records in mode 1, the
@@ -191,7 +195,7 @@ void MakeStepCustomEntry(ALO* palo, SOE* psoeSrc)
     s.isoeCustom = int(palo->asoe.size()) - 1;
     SOE* pe = &palo->asoe[s.isoeCustom];
     bool fl = false;
-    if (!FCidDerivedFrom(palo->Cid(), Icid(CID3::PLAYER))) fl = int(psoeSrc->pinned) == int(psoeSrc->geomLocal.apos.size());
+    if (!FCidDerivedFrom(palo->Cid(), S3CID(0x34))) fl = int(psoeSrc->pinned) == int(psoeSrc->geomLocal.apos.size());
     RebuildSoe(psoeSrc, PxfObj(palo), fl ? 3 : 2, pe);
     pe->palo = palo;
     EnsureSoeMesh(pe);
@@ -420,9 +424,11 @@ bool FStepFloorNear(ALO* palo, const glm::vec3& pos, const SOE* psoe, int isurf)
 // 85 allows it (1): the segment from the object's position to the probe (2: the long one) through k; a hit (t > 0)
 // adds a kind-14 contact at the base probe along the hit's normal (8: as it is; else up when it is a floor's, or when
 // a floor is near over the face's edges (0x2048C8)), separated by the base's height over the hit)
-void AddStepFloorXps(ALO* palo, SOE* k, XP** ppxp)
+void AddStepFloorXps(ALO* palo, SOE* k, int, const BSPREF&, int, XP** ppxp)
 {
     const uint32_t fl = VtGrfXp(palo);
+    static const bool s_fDbg = std::getenv("SLY3_FLOORDBG") != nullptr;
+    if (s_fDbg) std::fprintf(stderr, "floordbg: AddStepFloorXps oid %d grf 0x%x other oid %d\n", palo->oid, fl, k && k->palo ? k->palo->oid : -1);
     if (!(fl & 1)) return;
     ALO* pkRoot = k && k->palo && Poxa(k->palo) ? Poxa(k->palo)->pso : nullptr;
     if (FAloStep(pkRoot)) return;
@@ -430,7 +436,11 @@ void AddStepFloorXps(ALO* palo, SOE* k, XP** ppxp)
     const glm::vec3 pos = PosAloCenter(palo);
     const glm::vec3 v = PosProbe(palo, s, (fl & 2) ? s.iposProbe1 : s.iposProbe0);
     LSG lsg;
-    if (ClipSegmentEntry(k, pos, v, 1, &lsg) <= 0) return;
+    if (ClipSegmentEntry(k, pos, v, 1, &lsg) <= 0)
+    {
+        if (s_fDbg) std::fprintf(stderr, "floordbg:   no hit pos %.1f %.1f %.1f probe %.1f %.1f %.1f\n", pos.x, pos.y, pos.z, v.x, v.y, v.z);
+        return;
+    }
     if (!(0.0f < lsg.t0)) return;
     glm::vec3 nrm(lsg.plane0);
     if (!(fl & 8))
@@ -564,4 +574,43 @@ void UpdateStepMesh(ALO* palo)
 void SetPlayerStepMeshForState(ALO* palo, int)
 {
     if (ACTOR* pa = PactorFromLo(palo)) UpdateActorStepMesh(pa);
+}
+
+// orig: 0x00205910: the step's heading frame fitted to the floor under cpos probe points (local to the heading
+// frame at the object's position): each pass drops every point onto the floor between gMax above and gMin below
+// (0x173610; a point without floor is moved 24 down the frame's up row, D_002C3CE0), takes the plane through the
+// three, and turns the original frame's up row onto its normal by at most 0.6 (D_002C3CE8) (D_002C3CE4: 2 passes)
+void FitStepToFloor(ALO* palo, float gMin, float gMax, int cpos, const glm::vec3* apos)
+{
+    STEPPHYS& s = StepPhysOf(palo);
+    const glm::mat3 matOrig = cmm::BuildRotateMatrixAxis(s.radHeading, glm::vec3(0.0f, 0.0f, 1.0f));  // 0x11B500
+    const glm::vec3 pos = PosLoWorld(palo);
+    glm::mat3 matCur = matOrig;
+    // (the radius of 0x20FC60's nearby query: FDropOnGround makes its own query)
+    for (int pass = 0; pass < 2; pass++)
+    {
+        const glm::vec3 up = matCur[2];
+        glm::vec3 apt[3];
+        for (int i = 0; i < cpos && i < 3; i++)
+        {
+            glm::vec3 pt = matCur * apos[i] + pos;
+            if (FDropOnGround(&pt, gMax, gMin, false)) apt[i] = pt;
+            else apt[i] = pt + up * -24.0f;
+        }
+        const glm::vec3 c = glm::cross(apt[1] - apt[0], apt[2] - apt[0]);
+        const float l = glm::length(c);
+        const glm::vec3 normal = l < 0.0001f ? glm::vec3(0.0f, 0.0f, 1.0f) : c * (1.0f / l);
+        glm::mat3 adjust = ::BuildRotateVectorsMatrix(matOrig[2], normal);  // 0x11BA08
+        float rad;
+        glm::vec3 axis;
+        cmm::DecomposeRotateMatrixRad(adjust, &rad, &axis);  // 0x11BCF8
+        if (0.6f < rad) adjust = cmm::BuildRotateMatrixAxis(0.6f, axis);
+        // 0x205910 uses the inline column-vector product, unlike the reversed
+        // named MulMat3 wrapper: the terrain adjustment is in world space.
+        matCur = adjust * matOrig;
+    }
+    s.matHeading = matCur;
+    if (static const char* selected = std::getenv("SLY2N_FLOORFITTRACE"); selected && palo->oid == std::atoi(selected))
+        std::printf("floorfit %d %.6f %.6f %.6f %.6f %.6f %.6f %.6f %.6f\n", palo->oid,
+                    g_clock.t, pos.x, pos.y, pos.z, s.radHeading, matCur[2].x, matCur[2].y, matCur[2].z);
 }

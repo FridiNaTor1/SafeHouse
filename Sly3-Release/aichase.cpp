@@ -2,6 +2,7 @@
 // 0x14A1B0 / 0x14A200 / 0x14A2A0 / 0x14A478 / 0x14A4D0 / 0x14AA30 / 0x14AD70 / 0x14AE38 / 0x14B468, src/auto
 // 0x14A178 / 0x14A248 / 0x14AE18).
 #include "aichase.h"
+#include "game/sly3.h"
 
 #include "activate.h"
 #include "actor.h"
@@ -145,7 +146,7 @@ void JOBCHASE::Aim()
 {
     GUARD* pg = pguard;
     LO* ploPlayer = PloPoCurrent(g_psw);
-    if (!ploPlayer || !FIsLoDerivedFrom(ploPlayer, 0x30)) return;
+    if (!ploPlayer || !FIsLoDerivedFrom(ploPlayer, S3CID(0x30))) return;
     ALO* paloPlayer = static_cast<ALO*>(ploPlayer);
     const glm::vec3 posPlayer = PosAi(ploPlayer);
     const glm::vec3 posMe = PosAi(pg->palo);
@@ -157,7 +158,7 @@ void JOBCHASE::Aim()
     bool fPos = false;
     if (GRandInRange(T_STILL_LO, T_STILL_HI) < dt && !(0 < g_gamepause.c78))  // (0x20F0B0)
     {
-        ACTOR* pa = FIsLoDerivedFrom(ploPlayer, 0x34) ? PactorFromLo(ploPlayer) : nullptr;
+        ACTOR* pa = FIsLoDerivedFrom(ploPlayer, S3CID(0x34)) ? PactorFromLo(ploPlayer) : nullptr;
         if (pa && pa->jump.state == 0x11)
         {
             // hanging (the jump's state 17): the highest point of his custom entry
@@ -176,7 +177,7 @@ void JOBCHASE::Aim()
     }
     if (!fPos)
     {
-        for (LO* plo : AploOfClass(g_psw, 0x62))
+        for (LO* plo : AploOfClass(g_psw, S3CID(0x62)))
         {
             if (!plo->fInWorld || !FBreakableIntact(plo)) continue;  // (the list 0x3E1450, 0x1BBE48)
             ALO* palo = static_cast<ALO*>(plo);
@@ -340,7 +341,7 @@ void JOBCHASE::SetState(int n)
     switch (st)
     {
     case 0:
-        // (0x20AC28(guard, 0, 0, 0): the action's attachment +0xF08 released; natively not kept)
+        SetGuardActionAim(pg, nullptr, nullptr, glm::vec3(0.0f)); // orig: 0x20AC28
         break;
     case -1:
     case 1:

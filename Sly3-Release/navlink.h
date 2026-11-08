@@ -27,4 +27,5 @@ void ResolveNavLink(NAVLINK* pl);                         // orig 0x1C2170
 std::vector<NAVLINK*> AplinkWorld();
 bool FNavLinkAllowed(const NAVLINK* pl, GUARD* pg);       // orig 0x1C26E0
 int CNavLinkPath(GUARD* pg, const glm::vec3& posTarget, bool fExact, int cMax, std::vector<NAVLINK*>* papl);  // 0x1C21D8
-void DeleteSwNavLinks(const SW* psw);                   // discard native metadata with its owning objects
+void DeleteSwNavLinks(const SW* psw);
+void ClearGuardRegions(const LO* plo);                  // orig 0x206748's +0xE94 = 0 (a pooled guard put away)                   // discard native metadata with its owning objects

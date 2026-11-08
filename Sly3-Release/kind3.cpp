@@ -1,5 +1,6 @@
 // The guards' four-direction animation player (orig 0x20C7D8..0x20CCD0).
 #include "guard.h"
+#include "game/sly3.h"
 
 #include "actanim.h"
 #include "animfind.h"
@@ -63,7 +64,7 @@ void ResolveK3(KIND3* pk, ALO* palo)
     for (KIND3::E& e : pk->ae)
     {
         LO* plo = PloFindSwNearest(palo, e.oid);  // 0x15E938, kind 4
-        e.paseg = plo && FCidDerivedFrom(plo->Cid(), 0x6D) ? static_cast<ASEG*>(plo) : nullptr;
+        e.paseg = plo && FCidDerivedFrom(plo->Cid(), S3CID(0x6D)) ? static_cast<ASEG*>(plo) : nullptr;
         if (!e.paseg) continue;
         const ASEGCHN* pc = PchnFindAseg(e.paseg, palo, 1, true);
         if (!pc || !pc->ptrkp) continue;

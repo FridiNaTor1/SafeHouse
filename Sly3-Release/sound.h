@@ -12,6 +12,7 @@
 // the volume setters, and SNDHOOKS for what the sound module asks the object model.
 
 #include "disc.h"
+#include "basic.h"
 
 #include <array>
 #include <deque>
@@ -23,11 +24,12 @@
 #include <glm/glm.hpp>
 
 class CBinaryInputStream;
+class CRef;
 
 // What the sound module needs from the game; null hooks are treated as "nothing there".
 struct SNDHOOKS
 {
-    // The listener (the current camera, 0x1C4A48(g_game) / 0x1A62E8; without one the world camera at
+    // The listener (the current/forced player, 0x1C4A48(g_game) / 0x1A62E8; without one the world camera at
     // 0x2DDF40 + 0x90) and its rotation world -> camera (the matrix at 0x2DDFA0, as 0x1A7348(0, mat, d) uses
     // it). False: no listener (sounds are heard at full volume, centered).
     bool (*pfnListener)(glm::vec3* ppos, glm::mat3* pmatWorldToCamera) = nullptr;
@@ -39,6 +41,11 @@ struct SNDHOOKS
     // The music stem the player's state selects (0x1FDC08: 0 sneaking / hiding (state 3, a target, jobs 0..2
     // and 13), 2 alerted (state 4), 1 otherwise; -1: no player, use 1).
     int (*pfnMusicStem)() = nullptr;
+    // Whether a footstep sound's character is the current player (0x1FBC58: 0x6F Sly D_002E1E40, 0x73 Bentley
+    // D_002DD5BC, 0x15 Murray D_002F7900 against 0x1C4840(g_game)): its start then steps the mood (0x1FEED0).
+    bool (*pfnFMoodStep)(int sfxid) = nullptr;
+    // The game's random number in [lo, hi] (0x11D3F8), for the mood's step.
+    int (*pfnRandInRange)(int lo, int hi) = nullptr;
     // A dialog line started (0x227728: subtitles; idDialog, oidSpeaker) / its events (0x1FE0E8: target 0..5 of
     // the speaker (0x15ED78 + 0x1F67E0 with the ids at 0x2C3C40), value an int, a float for target 3).
     void (*pfnDialogStarted)(int idDialog, int oidSpeaker) = nullptr;
@@ -87,7 +94,7 @@ private:
 // 1 start, 2 pause, 4 resume, 8 stop, 0x10 volume, 0x20 pan, 0x40 pitch, 0x80 / 0x100 voice volumes / pans,
 // 0x200 3D (attached to a source or at a position), 0x400 poll "still playing", 0x800 the play clock runs,
 // 0x1000 poll "started".
-class CSnd
+class CSnd : public BASIC
 {
 public:
     CSnd();
@@ -117,6 +124,7 @@ public:
     void SetPosition(const glm::vec3& pos);        // 0x1FB3F0
     void SetFalloff(float sStart, float sEnd);     // 0x1FB4F0
     void SetDirty(uint32_t mask, uint32_t value);  // 0x1FB658
+    void RemoveActive();                          // 0x1FB710
     void UpdateFrame();                            // 0x1FB8E0
     [[nodiscard]] bool FPlaying() const;           // playing or about to (+0x40, +0x52, start pending)
 
@@ -136,6 +144,11 @@ public:
     uint16_t m_cbusy = 0;         // +0x52 (waiting for the IOP side)
 };
 
+// The sound BASIC's instance API (class 0x97, EOPIDs 127..136).
+CRef RefSoundObjectOption(CSnd* psnd, int bifk, int optid, const CRef* value = nullptr);
+// A returned script sound owns a reference independently of active playback.
+CRef RefRetainSound(CSnd* psnd);                 // 0x129A10 / 0x1294C0
+
 // A banked sound effect (0x70 bytes, vtable 0x2D9C70): the world's sound id (+0x60) through g_sound's tables.
 class CSndPlain : public CSnd
 {
@@ -150,6 +163,11 @@ public:
     void Requests() override;                      // 0x1FBFB0
     void OnAudible(int fInaudible) override;       // 0x1FC018
     int m_sfxid = 0;                               // +0x60
+    // (PC addition, pcloader.h: a kept world's sound, from its own bank: set by PsndNewPlainBank, or found by its
+    // source's world through g_pfnPcSndBank)
+    uint32_t m_hbankPc = 0;
+    int m_isoundPc = -1, m_kindPc = 0;
+    bool FResolve(uint32_t* phbank, int* pisound, int* pkind) const;
 };
 
 struct SNDSTREAM;
@@ -224,9 +242,8 @@ struct SOUNDMGR
     std::unique_ptr<SNDSTREAM> president;  // +0xF4
     CSndRef sndResident;              // +0x228
     std::vector<int> aidTarget;       // +0x1D4 / +0x1D0 (up to 6)
-    std::vector<uint8_t> alanguage;   // the file's languages; ilanguage the one matching 0x2E1E54
+    std::vector<uint8_t> alanguage;   // the file's languages; ilanguage the one matching g_nLang (region.h)
     int ilanguage = 0;
-    int language = 0;                 // 0x2E1E54 (0: English)
     // state
     int fEffect = 0;                  // +0x10
     int fMusicPaused = 0;             // +0x58
@@ -251,6 +268,14 @@ struct SOUNDMGR
     std::vector<CSnd*> apsndActive;   // +0x4C (DL)
 };
 extern SOUNDMGR g_sound;
+extern SOUNDMGR* g_psoundKeptLoad;
+// (PC addition, pcloader.h) a plain sound of another bank (a kept world's: its bank sound and kind, 2 a looper); and the
+// hook that finds a source's bank (a copy of a kept world's object: its world's), false for the running world's
+CSndPlain* PsndNewPlainBank(int sfxid, uint32_t hbank, int isound, int kind);
+// (PC addition, pcloader.h) a sound a kept world's copy makes without a source (its explosion's, R44) plays from that
+// world's bank as its sourced sounds do; nothing for the running world's own objects
+void UsePcCopyBank(CSnd* psnd, const void* pcopy);
+extern bool (*g_pfnPcSndBank)(const void* psrc, int sfxid, uint32_t* phbank, int* pisound, int* pkind);   // (PC addition, pcloader.h: non-null while a kept world loads: its music block's record)
 
 void StartupSound();                                    // 0x1FCEA0
 void StartupGameSound();
@@ -258,6 +283,8 @@ void StartupGameSound();
 struct LO;
 void OnAmbientRegistered(LO* plo);
 void OnAmbientUnregistered(LO* plo);
+// a clone's records: the original's CloneLo (0x1A6730) copies the object, its records (+0xE8 / +0xF4) included
+void CloneAmbientSoundRecords(const LO* source, LO* target);
 void ResetAmbientSounds();  // StartupSound + the object model's hooks + the gait's footsteps (soundglue.cpp)
 void ShutdownSound();
 void ResetSoundMgr();                                   // 0x1FD700
@@ -277,6 +304,7 @@ CSnd* PsndStartSound(int sfxid, float gVol = 1.0f, int pan = 0, void* psrc = nul
 CSndVoice* PsndPushMusic(int idMusic);                  // 0x1FE150
 void PopMusic(int idMusic);                             // 0x1FE310
 float TMusicTop();                                      // 0x1FE3F8
+int IdMusicTop(int* pcStack = nullptr);                 // (native: the top music's id, -1 none; skipcut.h's check)
 CSndVoice* PsndStartDialog(int idDialog, int fQuiet = 0);  // 0x1FE5F0
 void StopDialog();                                      // 0x1FE738
 // orig: 0x1A3078 / 0x1A30D0: the cut scenes' subtitle box shown (the subtitle reset first) / hidden (soundglue.cpp)

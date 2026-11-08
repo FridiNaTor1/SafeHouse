@@ -1,10 +1,20 @@
 #if defined(__SANITIZE_ADDRESS__)
+#include <set>
+#include "game/sly3.h"
 #include <sanitizer/asan_interface.h>
 #endif
+#include "game/sly3.h"
+#include "game/optid3.h"
+#include "pair.h"
+#include "game/scptgame3.h"
+#include <set>
 #include "proc.h"
 #include "actor.h"
 #include "cls.h"
 #include "spliceglue.h"
+#include "cmworld.h"
+#include "shd.h"
+#include "glob.h"
 #include "xfhandle.h"
 #include "cm.h"
 #include "so.h"
@@ -12,6 +22,7 @@
 #include "asega.h"
 #include "objmethod.h"
 #include "po.h"
+#include "vehicle.h"
 
 #include "activate.h"
 #include "animfind.h"
@@ -30,8 +41,11 @@
 #include "aijobs.h"
 
 #include <algorithm>
+#include <set>
 #include <cstring>
 #include "guard.h"
+#include "game/scptgame3.h"
+#include "game/task3.h"
 #include <functional>
 #include <map>
 
@@ -56,13 +70,44 @@ LO* PloFindIn(LO* plo, OID oid)
     return nullptr;
 }
 
+// orig: an object's namespace node (+0x3C) as 0x15E3E8 checks it (natively: the instance that placed it, inherited
+// down the parents (ploNs), or a pool row's own node (ploNsRow, the object's own: not inherited through a parent, as a
+// world object put under a pool object keeps the world's node); null: the world's node)
+const LO* PloNsOf(const LO* plo)
+{
+    if (plo && plo->ploNsRow) return plo->ploNsRow;
+    for (const LO* p = plo; p; p = p->paloParent)
+        if (p->ploNs) return p->ploNs;
+    return nullptr;
+}
+// orig: 0x15E3E8's check for an object of k -1 (InitLo's default): its node must be on the context's node chain (the
+// context's node, then the world's). Applied natively to the pool rows' nodes only (the placed instances' objects
+// keep the port's older fallbacks): a row's object is not found from another row (nor, first, from the world), so
+// each row's scripts find their own row's objects (the Ep8 TNT barrels' charges 18407, re-parented by name after their
+// slot 26 left the barrel)
+bool FNsRowVisible(const LO* plo, const LO* ploCtx)
+{
+    if (!plo->ploNsRow) return true;
+    return ploCtx && PloNsOf(ploCtx) == plo->ploNsRow;
+}
+
 // (the original's match 0x15E3E8 checks the object's channel against the context's list (G_PCH_DEFAULT without
 // one): the objects of a streamed group (a proxy's row, LO::igrp) are on their row's channel, not the default
 // list's. Natively the channels are not modelled (TODO(world)): an object of the context's group is taken first,
 // then one of the world's base group (-1), then any.)
+LO* PloFindGlobalNs(OID oid, const LO* ploCtx, bool fNsRow);
 LO* PloFindGlobal(OID oid, const LO* ploCtx = nullptr)
 {
     if (!s_psw) return nullptr;
+    // the pool rows' nodes first (FNsRowVisible); a context outside the rows keeps the older fallback (any match) when
+    // nothing else has the name, a row's context does not (another row's object is never its own)
+    if (LO* plo = PloFindGlobalNs(oid, ploCtx, true)) return plo;
+    if (ploCtx && ploCtx->ploNsRow) return nullptr;
+    return PloFindGlobalNs(oid, ploCtx, false);
+}
+LO* PloFindGlobalNs(OID oid, const LO* ploCtx, bool fNsRow)
+{
+    const auto fVisible = [&](const LO* plo) { return !fNsRow || FNsRowVisible(plo, ploCtx); };
     const int igrpCtx = ploCtx ? ploCtx->igrp : -1;
     // (a copy's tree: the context inside a cloned object (a spawner's guard) finds that copy's objects, not the
     // original's: e.g. a guard's class-0x70 child finding its owner 11539 at its set-up)
@@ -70,12 +115,12 @@ LO* PloFindGlobal(OID oid, const LO* ploCtx = nullptr)
     {
         const LO* ploRootCtx = ploCtx;
         while (ploRootCtx->paloParent) ploRootCtx = ploRootCtx->paloParent;
-        for (const auto& plo : s_psw->aploAll)
-            if (plo->oid == oid)
+        for (LO* const plo : AploOfOid(s_psw, oid))
+            if (plo->oid == oid && fVisible(plo))
             {
-                const LO* ploRoot = plo.get();
+                const LO* ploRoot = plo;
                 while (ploRoot->paloParent) ploRoot = ploRoot->paloParent;
-                if (ploRoot == ploRootCtx && ploRoot->ploCloneOf) return plo.get();
+                if (ploRoot == ploRootCtx && ploRoot->ploCloneOf) return plo;
             }
     }
     LO* ploBase = nullptr;
@@ -84,24 +129,24 @@ LO* PloFindGlobal(OID oid, const LO* ploCtx = nullptr)
     // group whose first object has that oid but another record's name: e.g. the intro's doors 147244 / 147246, two
     // instances of the group of ALO 147246)
     bool fAlias = false;
-    for (const auto& plo : s_psw->aploAll)
+    for (LO* const plo : AploOfOid(s_psw, oid))
         if (plo->oidInstance == oid) { fAlias = true; break; }
-    for (const auto& plo : s_psw->aploAll)
-        if (plo->oid == oid && !(fAlias && plo->oidInstance != -1 && plo->oidInstance != oid))
+    for (LO* const plo : AploOfOid(s_psw, oid))
+        if (plo->oid == oid && fVisible(plo) && !(fAlias && plo->oidInstance != -1 && plo->oidInstance != oid))
         {
-            if (plo->igrp == igrpCtx) return plo.get();
-            if (!ploBase && plo->igrp == -1) ploBase = plo.get();
-            if (!ploAny) ploAny = plo.get();
+            if (plo->igrp == igrpCtx) return plo;
+            if (!ploBase && plo->igrp == -1) ploBase = plo;
+            if (!ploAny) ploAny = plo;
         }
     if (ploBase || ploAny) return ploBase ? ploBase : ploAny;
     // (0x15E678's second hash 0x15E3C0, searched with 0x15E958's 0x200: the instances' aliases, the PROXY
     // records' oids naming their instances' first objects (0x1C99D8 at the attach): natively LO::oidInstance)
-    for (const auto& plo : s_psw->aploAll)
-        if (plo->oidInstance == oid)
+    for (LO* const plo : AploOfOid(s_psw, oid))
+        if (plo->oidInstance == oid)  // (an alias's node is its row node's parent: seen from every context)
         {
-            if (plo->igrp == igrpCtx) return plo.get();
-            if (!ploBase && plo->igrp == -1) ploBase = plo.get();
-            if (!ploAny) ploAny = plo.get();
+            if (plo->igrp == igrpCtx) return plo;
+            if (!ploBase && plo->igrp == -1) ploBase = plo;
+            if (!ploAny) ploAny = plo;
         }
     return ploBase ? ploBase : ploAny;
 }
@@ -125,42 +170,48 @@ BASIC* PbasicFindObject(int kind, SYMID symid, BASIC* pbasicRel, BASIC* pbasicSc
 BASIC* PbasicFindObjectImpl(int kind, SYMID symid, BASIC* pbasicRel, BASIC* pbasicScope)
 {
     const OID oid = static_cast<OID>(symid);
+    // orig: 0x0015E678 rejects the absent-name sentinel before either hash.
+    if (oid == -1) return nullptr;
     LO* ploRel = PloFromBasic(pbasicRel ? pbasicRel : pbasicScope);
     if ((kind & 0xFF) == 4 && ploRel)
     {
         // orig: 0x0015E3E8's node check (an object's k -1, InitLo's default): a candidate in an instance's namespace
         // node matches only a context in that node (the context's node chain up to the world's). Bounce pads 129699
         // find their own landing locator 16758 this way (U51), not the first one of the world.
-        const auto nsOf = [](const LO* p) { while (p->paloParent) p = p->paloParent; return p->ploNs; };
+        // orig: 0x0015E3E8 uses the candidate's namespace node. An instance
+        // locator can also have a scene parent; that parent must not erase the
+        // instance's own node (Episode 2 landing locators under object106834).
+        // (PloNsOf: also a pool row's own node, e.g. the TNT barrel's script finding its row's charge 18407)
+        const auto nsOf = PloNsOf;
         if (s_psw)
         {
             const LO* nsCtx = nsOf(ploRel);
             bool fNs = false;
-            for (const auto& up : s_psw->aploAll)
-                if ((up->oid == oid || up->oidInstance == oid) && nsOf(up.get())) { fNs = true; break; }
+            for (LO* const up : AploOfOid(s_psw, oid))
+                if ((up->oid == oid || up->oidInstance == oid) && nsOf(up)) { fNs = true; break; }
             if (fNs)
             {
                 LO* ploFirst = nullptr;
                 LO* ploBest = nullptr;
                 int ipsBest = INT_MAX;
-                for (const auto& up : s_psw->aploAll)
+                for (LO* const up : AploOfOid(s_psw, oid))
                 {
                     if (up->oid != oid && up->oidInstance != oid) continue;
-                    const LO* ns = nsOf(up.get());
+                    const LO* ns = nsOf(up);
                     if (ns && ns != nsCtx) continue;
                     // case 4: the nearest marked ancestor first (the context's chain index, 0x15E678's ips: 1 the
                     // context, 2 its parent, ..), else the first unmarked match. E.g. Ep4's lightning puzzles: each
                     // crank's SCPT 88365 grabs its own handle 88369, a sibling under the crank, not the first crank's
                     // (they share the puzzle instance 88296 further up)
                     int ips = INT_MAX;
-                    for (const LO* p = up.get(); p && ips == INT_MAX; p = p->paloParent)
+                    for (const LO* p = up; p && ips == INT_MAX; p = p->paloParent)
                     {
                         int i = 0;
                         for (const LO* r = ploRel; r; r = r->paloParent, ++i)
                             if (p == r) { ips = i; break; }
                     }
-                    if (ips < ipsBest) { ipsBest = ips; ploBest = up.get(); }
-                    if (!ploFirst) ploFirst = up.get();
+                    if (ips < ipsBest) { ipsBest = ips; ploBest = up; }
+                    if (!ploFirst) ploFirst = up;
                 }
                 if (ploBest) return ploBest;
                 if (ploFirst) return ploFirst;
@@ -184,10 +235,10 @@ BASIC* PbasicFindObjectImpl(int kind, SYMID symid, BASIC* pbasicRel, BASIC* pbas
         if (ploRel->oid == oid || ploRel->oidInstance == oid) return ploRel;
         if (LO* q = PloFindIn(ploRel, oid)) return q;
         if (s_psw)
-            for (const auto& up : s_psw->aploAll)
+            for (LO* const up : AploOfOid(s_psw, oid))
                 if (up->oid == oid || up->oidInstance == oid)
                     for (const LO* p = up->paloParent; p; p = p->paloParent)
-                        if (p == ploRel) return up.get();
+                        if (p == ploRel) return up;
         return nullptr;
     }
     return PloFindGlobal(oid, ploRel);
@@ -197,6 +248,8 @@ BASIC* PbasicFindObjectImpl(int kind, SYMID symid, BASIC* pbasicRel, BASIC* pbas
 int CFindObjects(int kind, SYMID symid, BASIC* pbasicRel, int cMax, BASIC** apbasic)
 {
     const OID oid = static_cast<OID>(symid);
+    // orig: 0x0015E678: no name cannot match default instance aliases.
+    if (oid == -1) return 0;
     int c = 0;
     auto add = [&](LO* p) { if (c < cMax) apbasic[c] = p; ++c; };
     LO* ploRel = PloFromBasic(pbasicRel);
@@ -212,8 +265,9 @@ int CFindObjects(int kind, SYMID symid, BASIC* pbasicRel, int cMax, BASIC** apba
         walk(ploRel);
     }
     else if (s_psw)
-        for (const auto& plo : s_psw->aploAll)
-            if (plo->oid == oid) add(plo.get());
+        for (LO* const plo : AploOfOid(s_psw, oid))
+            // (a pool row's context sees no other row's objects: FNsRowVisible; others keep every match)
+            if (plo->oid == oid && (!ploRel || !ploRel->ploNsRow || FNsRowVisible(plo, ploRel))) add(plo);
     return c < cMax ? c : cMax;
 }
 
@@ -274,23 +328,23 @@ OPTVAL OptvalFromRef(const CRef& ref)
     OPTVAL v;
     switch (ref.m_tagk)
     {
-    case TAGK_S32: v.tagk = 0x15; v.n = ref.m_n; break;
-    case TAGK_F32: v.tagk = 0x16; v.ag[0] = ref.m_g; break;
-    case TAGK_Bool: v.tagk = 0x17; v.n = ref.m_bool; break;
+    case TAGK_S32: v.tagk = S3TAG(0x15); v.n = ref.m_n; break;
+    case TAGK_F32: v.tagk = S3TAG(0x16); v.ag[0] = ref.m_g; break;
+    case TAGK_Bool: v.tagk = S3TAG(0x17); v.n = ref.m_bool; break;
     case TAGK_Vector:
     {
-        v.tagk = 0x1A;
+        v.tagk = S3TAG(0x1A);
         const glm::vec3 vec = ref.GetVector();
         v.ag = {vec.x, vec.y, vec.z, 0.0f};
         break;
     }
     case TAGK_Basic:
         // an object (e.g. the job markers' seto! of their task +0x160 at the start, read back at the player's entry)
-        v.tagk = 0x21;
+        v.tagk = S3TAG(0x21);
         v.pbasic = ref.m_pbasic;
         if (const LO* plo = dynamic_cast<const LO*>(ref.m_pbasic)) v.n = plo->oid;
         break;
-    default: v.tagk = 0x24; break;
+    default: v.tagk = S3TAG(0x24); break;
     }
     return v;
 }
@@ -300,14 +354,14 @@ OPTVAL OptvalFromRef(const CRef& ref)
 int EopidFromOptid(CID cid, int optid)
 {
     if (cid < 0) return -1;
-    const uint32_t c = g_disc.U32Elf(0x279AD0 + static_cast<uint32_t>(cid) * 8);
-    const uint32_t a = g_disc.U32Elf(0x279AD0 + static_cast<uint32_t>(cid) * 8 + 4);
+    const uint32_t c = g_disc.U32Elf(S3VA(0x279AD0) + static_cast<uint32_t>(cid) * 8);
+    const uint32_t a = g_disc.U32Elf(S3VA(0x279AD0) + static_cast<uint32_t>(cid) * 8 + 4);
     int lo = 0, hi = static_cast<int>(c) - 1;
     while (lo <= hi)
     {
         const int mid = (lo + hi) >> 1;
         const int k = static_cast<int>(g_disc.U32Elf(a + static_cast<uint32_t>(mid) * 8));
-        if (k == optid) return static_cast<int>((g_disc.U32Elf(a + static_cast<uint32_t>(mid) * 8 + 4) - 0x2AC880) / 0x28);
+        if (k == optid) return static_cast<int>((g_disc.U32Elf(a + static_cast<uint32_t>(mid) * 8 + 4) - S3VA(0x2AC880)) / 0x28);
         if (optid < k) hi = mid - 1;
         else lo = mid + 1;
     }
@@ -347,6 +401,18 @@ CRef RefMethodSlot38(BASIC* pbasic, int cref, CRef* aref)
     return CRef(TAGK_Void);
 }
 CRef RefMethodStub(BASIC*, int, CRef*) { return CRef(TAGK_Void); }  // TODO(M4): the other methods
+
+// (debug, audit: SLY2N_UNBOUND=1 prints once per kind / EOPID an option whose original function the port does not
+// bind, as authored scripts reach it: "unbound method|getter|setter eopid E option O cid 0xC pfn 0xF")
+void NoteUnbound(const char* szKind, int eopid, int optid, const LO* plo, uint32_t pfn)
+{
+    static const bool s_f = std::getenv("SLY2N_UNBOUND") != nullptr;
+    if (!s_f) return;
+    static std::set<std::pair<std::string, int>> s_seen;
+    if (!s_seen.insert({szKind, eopid}).second) return;
+    std::fprintf(stderr, "unbound %s eopid %d option %d cid 0x%X oid %d pfn 0x%X\n", szKind, eopid, optid,
+                 plo ? plo->Cid() : -1, plo ? plo->oid : -1, pfn);
+}
 
 // orig: 0x001F85E0, class 0x96: a script reference to one tagged SOE of an ALO.
 // Keep the selected entry's index when the native vector grows.
@@ -455,6 +521,9 @@ CRef RefSmaOption(int bifk, SMA* psma, int optid, const CRef* pref)
         case 0x1E2: r.SetS32(OidSmaNextOrCur(psma)); return r;
         case 0x1E3: r.SetF32(psma->svtLocal); return r;
         case 0x1E4: if (psma->psm) r.SetBasic(psma->psm); return r;
+        // 182 (EOPID 378, type 0x2086 at field +0x30): its ASEGA (e.g. Ep8 final's job method 1266 snaps Clock-La's
+        // SMA 7697 to her talk pose 16939, then its ASEGA's transforms with ASEGA option 248)
+        case 0xB6: if (psma->pasega) r.SetBasic(psma->pasega); return r;
         case 0x1E5: r.SetS32(static_cast<int>(psma->grfMask)); return r;
         case 0x1DF: return method(RefSmaSeek, 1);
         case 0x1E0: return method(RefSmaTime, 1);
@@ -487,27 +556,90 @@ struct SWBASIC : BASIC
 } s_swbasic;
 
 // The camera (g_cm 0x3DDF40 here 0x2DDF40, cid 0x87) as the splice sees it (find-camera-object, bif 119, 0x1246E0):
-// its method 292 (EOPID 160, thunk 0x102768) is the cut (0x14D8C0), e.g. the Ep1 heist harpoon trigger 124158's s5
-// (the camera goes to Sly at once); its other properties (34..36, 233, 293..303) are not ported (kept void)
+// Its script properties use class 0x87's original typed descriptors.
 struct CMBASIC : BASIC
 {
 } s_cmbasic;
+// orig: 0x001026E0 (EOPID 159): coerce the jolt kind to an integer, call
+// 0x14F750, and return void. The camera already applies the authored shake.
+CRef RefCmJolt(BASIC*, int c, CRef* a)
+{
+    if (c > 0) JoltCm(&g_cm, a[0].RefCoerceS32().m_n);
+    return CRef(TAGK_Void);
+}
 CRef RefCmCut(BASIC*, int, CRef*)
 {
     CutCm(&g_cm);  // 0x14D8C0
     return CRef(TAGK_Void);
 }
-CRef RefCameraOption(int bifk, int optid)
+CRef RefCameraOption(int bifk, int optid, const CRef* value)
 {
-    if (bifk == 111 && optid == 292)
+    if (bifk == 111 && (optid == 233 || optid == 292))
     {
         auto pm = std::make_shared<CMethod>();
         pm->m_pbasic = &s_cmbasic;
-        pm->m_pfnthunk = RefCmCut;
-        pm->m_crefReq = 0;
+        pm->m_pfnthunk = optid == 233 ? RefCmJolt : RefCmCut;
+        pm->m_crefReq = optid == 233 ? 1 : 0;
         CRef rm;
         rm.SetMethod(pm);
         return rm;
+    }
+    CRef result;
+    bool handled = true;
+    if (bifk == 111)
+    {
+        switch (optid)
+        {
+        case 34: result.SetVector(g_cm.pos); break;  // orig: 0x256298
+        case 35: result.SetMatrix(glm::mat4(g_cm.mat)); break;  // orig: 0x2562A0, OTYP4 (rotation only)
+        case 36: result.SetVector(cmm::DecomposeEulerMatrix(g_cm.mat) * cmm::F32(0x42652EE0)); break;  // orig: 0x14F478
+        case 293: result.SetF32(g_cm.radFOV); break;
+        case 294: result.SetF32(g_cm.radFOVTarget); break;
+        case 295: result.SetSmp({g_cm.smpaRadFOV.svFast, g_cm.smpaRadFOV.svSlow, g_cm.smpaRadFOV.dtFast}); break;
+        case 296: result.SetF32(g_cm.sNearClip); break;
+        case 297: result.SetF32(g_cm.sFarClip); break;
+        case 298: result.SetF32(g_cm.sNearFog); break;
+        case 299: result.SetF32(g_cm.sFarFog); break;
+        case 300: result.SetS32(static_cast<int32_t>(g_cm.rgbaFog)); break;
+        case 301: result.SetF32(g_cm.uFogMax); break;
+        case 302: result.SetF32(g_cm.rMRD); break;
+        case 303: result.SetF32(g_cm.sStereo); break;  // EOPID174: read current, write target
+        default: handled = false; break;
+        }
+    }
+    else if (bifk == 110 && value)
+    {
+        switch (optid)
+        {
+        case 34: SetCmPosMat(&g_cm, value->GetVector(), g_cm.mat); break;  // orig: 0x14F3C8
+        case 35: SetCmPosMat(&g_cm, g_cm.pos, glm::mat3(value->GetMatrix())); break;  // orig: 0x14F428
+        case 36: SetCmPosMat(&g_cm, g_cm.pos, cmm::BuildEulerMatrix(value->GetVector() * cmm::F32(0x3C8EFA36))); break;  // orig: 0x14F4E0
+        case 293: SetCmFov(&g_cm, value->RefCoerceF32().m_g); break;  // orig: 0x14F5A0
+        case 294: SetCmFovTarget(&g_cm, value->RefCoerceF32().m_g); break;  // orig: 0x14F5F8
+        case 295:
+        {
+            const SMP smp = value->GetSmp();  // EOPID163: copy three fields, preserving acceleration limit
+            g_cm.smpaRadFOV.svFast = smp.svFast; g_cm.smpaRadFOV.svSlow = smp.svSlow; g_cm.smpaRadFOV.dtFast = smp.dtFast;
+            break;
+        }
+        case 296: SetCmNearClipAll(&g_cm, value->RefCoerceF32().m_g); break;  // orig: 0x14F630
+        case 297: SetCmFarClip(&g_cm, value->RefCoerceF32().m_g); break;  // orig: 0x14F670
+        case 298: SetCmNearFog(&g_cm, value->RefCoerceF32().m_g); break;  // orig: 0x14F690
+        case 299: SetCmFarFog(&g_cm, value->RefCoerceF32().m_g); break;  // orig: 0x14F6B0
+        case 300: SetCmRgbaFog(&g_cm, static_cast<uint32_t>(value->RefCoerceS32().m_n)); break;  // orig: 0x14F6F0
+        case 301: SetCmUFogMax(&g_cm, value->RefCoerceF32().m_g); break;  // orig: 0x14F6D0
+        case 302: SetCmMrdRatio(&g_cm, value->RefCoerceF32().m_g); break;  // orig: 0x14F730
+        case 303: g_cm.sStereoTarget = value->RefCoerceF32().m_g; break;
+        default: handled = false; break;
+        }
+        result.SetTag(TAGK_Void);
+    }
+    else handled = false;
+    if (handled)
+    {
+        if (std::getenv("SLY2N_CAMERABRIDGE"))
+            std::printf("CAMERA_OPTION bif=%d option=%d tag=%d t=%.9g pos=%.9g,%.9g,%.9g mrd=%.9g\n", bifk, optid, int(result.m_tagk), g_clock.t, g_cm.pos.x, g_cm.pos.y, g_cm.pos.z, g_cm.rMRD);
+        return result;
     }
     static std::map<int, bool> s_mpWarned;
     if (!s_mpWarned[optid]) std::fprintf(stderr, "splice: the camera's option %d (bif %d) not ported\n", optid, bifk);
@@ -542,15 +674,15 @@ struct SNDBASIC : LO
 CRef RefSoundOption(int bifk, int optid, const CRef* pref)
 {
     CRef ref;
-    const int eopid = EopidFromOptid(0x98, optid);
-    if (bifk == 111 && eopid == 140)  // (a getter: 0x1FE888)
+    const int eopid = EopidFromOptid(S3CID(0x98), optid);
+    if (bifk == 111 && eopid == S3EOPID(140))  // (a getter: 0x1FE888)
     {
         ref.SetF32(TDialog());
         return ref;
     }
     if (bifk == 111 && eopid >= 0)
     {
-        const uint32_t vaEopid = 0x2AC880 + static_cast<uint32_t>(eopid) * 0x28;
+        const uint32_t vaEopid = S3VA(0x2AC880) + static_cast<uint32_t>(eopid) * 0x28;
         if ((g_disc.U32Elf(vaEopid + 4) & 1) &&
             FMakeObjectMethod(g_disc.U32Elf(vaEopid + 0x10), &s_sndbasic, static_cast<int>(g_disc.U32Elf(vaEopid + 0x18)), &ref))
             return ref;
@@ -593,7 +725,7 @@ struct SNDMETHODS
     SNDMETHODS()
     {
         using A = const std::vector<CRef>&;
-        RegisterObjectMethod(0x102038, [](LO*, A a) { PsndStartDialog(NArg(a, 0, -1), NArg(a, 1)); return CRef(TAGK_Void); });  // 0x1FE5F0
+        RegisterObjectMethod(0x102038, [](LO*, A a) { return RefRetainSound(PsndStartDialog(NArg(a, 0, -1), NArg(a, 1))); });  // 0x1FE5F0
         RegisterObjectMethod(0x1020D8, [](LO*, A) { StopDialog(); return CRef(TAGK_Void); });                          // 0x1FE738
         RegisterObjectMethod(0x102150, [](LO*, A a) { CRef r; r.SetBool(FDialogPlaying(NArg(a, 0, -1))); return r; });   // 0x1FE848
         RegisterObjectMethod(0x1021D0, [](LO*, A a) {  // 0x1FCFD0: the dialog line's length
@@ -606,7 +738,7 @@ struct SNDMETHODS
         RegisterObjectMethod(0x1022C8, [](LO*, A) { --g_sound.fModeAlert; return CRef(TAGK_Void); });  // 0x1FEEA0
         RegisterObjectMethod(0x102340, [](LO*, A) { ++g_sound.fModeSneak; return CRef(TAGK_Void); });  // 0x1FEEB0
         RegisterObjectMethod(0x1023B8, [](LO*, A) { --g_sound.fModeSneak; return CRef(TAGK_Void); });  // 0x1FEEC0
-        RegisterObjectMethod(0x102430, [](LO*, A a) { PsndPushMusic(NArg(a, 0, -1)); return CRef(TAGK_Void); });  // 0x1FE150
+        RegisterObjectMethod(0x102430, [](LO*, A a) { return RefRetainSound(PsndPushMusic(NArg(a, 0, -1))); });  // 0x1FE150
         RegisterObjectMethod(0x1024B0, [](LO*, A a) { PopMusic(NArg(a, 0, -1)); return CRef(TAGK_Void); });       // 0x1FE310
         RegisterObjectMethod(0x102538, [](LO*, A) { CRef r; r.SetF32(TMusicTop()); return r; });                   // 0x1FE3F8
         RegisterObjectMethod(0x1025A8, [](LO*, A a) { SetSoundMasterVolume(GArg(a, 0, 1.0f)); return CRef(TAGK_Void); });  // 0x1FE9F8
@@ -651,6 +783,27 @@ CRef RefWorldOption(int bifk, int optid, const CRef* pref)
         if (pref) s_mpWorldOption[optid] = *pref;
         return CRef(TAGK_Void);
     }
+    // (Sly 3) option 508 (Sly 2 id 454; EOPID 1007, thunk 0x10AEC0 -> 0x25ED20): a method (index, ids, ids) that
+    // fills the world's dialog table (game/scptgame3.h SetWorldDialogTable3)
+    if (optid == 454 && bifk == 111)
+    {
+        auto pm = std::make_shared<CMethod>();
+        pm->m_pbasic = &s_swbasic;
+        pm->m_pfnthunk = [](BASIC*, int c, CRef* a) -> CRef {
+            auto ids = [](const CRef& r) {
+                std::vector<int> v;
+                for (const CPair* pp = r.m_tagk == TAGK_Pair ? r.m_ppair.get() : nullptr; pp; pp = pp->m_ppairNext.get())
+                    v.push_back(pp->m_ref.m_tagk == TAGK_F32 ? int(pp->m_ref.m_g) : pp->m_ref.m_n);
+                return v;
+            };
+            if (c >= 3) SetWorldDialogTable3(a[0].m_tagk == TAGK_F32 ? int(a[0].m_g) : a[0].m_n, ids(a[1]), ids(a[2]));
+            return CRef(TAGK_Void);
+        };
+        pm->m_crefReq = 3;
+        CRef rm;
+        rm.SetMethod(pm);
+        return rm;
+    }
     switch (optid)
     {
     case 844: if (LO* p = PloPoCurrent(s_psw)) ref.SetBasic(p); break;
@@ -672,9 +825,9 @@ CRef RefWorldOption(int bifk, int optid, const CRef* pref)
         if (it != s_mpWorldOption.end()) return it->second;
         // the world's methods (0x200BA0: an EOPID with flag 1 gives a method object of its thunk), e.g. 861
         // (EOPID 942, thunk 0x10C2E8: 0x195608, the abandon icon on a tracked target: the safe house door in a job)
-        if (const int eopid = EopidFromOptid(0x01, optid); eopid >= 0)
+        if (const int eopid = EopidFromOptid(S3CID(0x01), optid); eopid >= 0)
         {
-            const uint32_t vaEopid = 0x2AC880 + static_cast<uint32_t>(eopid) * 0x28;
+            const uint32_t vaEopid = S3VA(0x2AC880) + static_cast<uint32_t>(eopid) * 0x28;
             if ((g_disc.U32Elf(vaEopid + 4) & 1) &&
                 FMakeObjectMethod(g_disc.U32Elf(vaEopid + 0x10), &s_swbasic, static_cast<int>(g_disc.U32Elf(vaEopid + 0x18)), &ref))
                 return ref;
@@ -710,6 +863,14 @@ CRef RefOption(int bifk, BASIC* pbasic, int optid, const CRef* pref)
             PrintRef(r, &str);
             LO* plo = dynamic_cast<LO*>(pbasic);
             std::printf("optwatch: bif %d option %d of %d: %s\n", bifk, optid, plo ? plo->oid : -1, str.c_str());
+            if (r.m_tagk == TAGK_Proc && r.m_pproc)
+            {
+                std::string body;
+                CRef b;
+                b.SetPair(r.m_pproc->m_ppairCodeExpr);
+                PrintRef(b, &body);
+                std::printf("optwatch:   body %s\n", body.substr(0, 3000).c_str());
+            }
         }
     }
     return r;
@@ -727,22 +888,33 @@ CRef RefOptionImpl(int bifk, BASIC* pbasic, int optid, const CRef* pref)
         s_fWarned = true;
         return CRef(TAGK_Void);
     }
-    if (SOEBASIC* handle = dynamic_cast<SOEBASIC*>(pbasic)) return RefSoeOption(bifk, handle, optid, pref);
-    if (XFBASIC* handle = dynamic_cast<XFBASIC*>(pbasic)) return RefXfHandleOption(bifk, handle, optid, pref);
-    if (pbasic == &s_swbasic) return RefWorldOption(bifk, optid, pref);
-    if (pbasic == &s_cmbasic) return RefCameraOption(bifk, optid);
+    // (Sly 3: the handlers below compare Sly 2 option ids: the Sly 3 id converted at their entry, game/optid3.h; an
+    // object's options (the LO path after them) are Sly 3's)
+    const int optid2 = sly3::Optid2FromOptid3(optid);
+    if (optid2 < 0 && pbasic && !dynamic_cast<LO*>(pbasic))
+    {
+        static std::set<int> s_aoptid;
+        if (s_aoptid.insert(optid).second)
+            std::fprintf(stderr, "splice: option %d (Sly 3, bif %d) of a non-object target has no Sly 2 id (maps/optids.tsv)\n", optid, bifk);
+    }
+    if (SOEBASIC* handle = dynamic_cast<SOEBASIC*>(pbasic)) return RefSoeOption(bifk, handle, optid2, pref);
+    if (XFBASIC* handle = dynamic_cast<XFBASIC*>(pbasic)) return RefXfHandleOption(bifk, handle, optid2, pref);
+    if (CSnd* psnd = dynamic_cast<CSnd*>(pbasic)) return RefSoundObjectOption(psnd, bifk, optid2, pref);
+    if (auto* attachment = dynamic_cast<VEHICLEATTACH*>(pbasic)) return RefVehicleAttachmentOption(attachment, bifk, optid2, pref);
+    if (pbasic == &s_swbasic) return RefWorldOption(bifk, optid2, pref);
+    if (pbasic == &s_cmbasic) return RefCameraOption(bifk, optid2, pref);
     if (pbasic == &s_promptbasic)
     {
-        if (bifk != 111 || (optid != 979 && optid != 980)) return CRef(TAGK_Void);
+        if (bifk != 111 || (optid2 != 979 && optid2 != 980)) return CRef(TAGK_Void);
         auto pm = std::make_shared<CMethod>();
         pm->m_pbasic = pbasic;
-        pm->m_pfnthunk = optid == 979 ? RefPromptShow : RefPromptEnd;
-        pm->m_crefReq = optid == 979 ? 2 : 1;
+        pm->m_pfnthunk = optid2 == 979 ? RefPromptShow : RefPromptEnd;
+        pm->m_crefReq = optid2 == 979 ? 2 : 1;
         CRef rm;
         rm.SetMethod(pm);
         return rm;
     }
-    if (pbasic == &s_sndbasic) return RefSoundOption(bifk, optid, pref);
+    if (pbasic == &s_sndbasic) return RefSoundOption(bifk, optid2, pref);
     if (AIJOB* pjob = dynamic_cast<AIJOB*>(pbasic))
     {
         // BASIC's private bindings use the same path on jobs as on LO objects (0x200BA0..0x200D10).
@@ -753,27 +925,27 @@ CRef RefOptionImpl(int bifk, BASIC* pbasic, int optid, const CRef* pref)
         if (bifk == 108 && pref)
         {
             CRef ref = *pref;
-            return sidebag().RefAddBinding(optid, &ref);
+            return sidebag().RefAddBinding(optid2, &ref);
         }
         if (bifk == 109 && pref)
         {
             CRef ref = *pref;
-            if (sidebag().FFindBinding(optid, nullptr)) return sidebag().RefSetBinding(optid, &ref);
-            return sidebag().RefAddBinding(optid, &ref);
+            if (sidebag().FFindBinding(optid2, nullptr)) return sidebag().RefSetBinding(optid2, &ref);
+            return sidebag().RefAddBinding(optid2, &ref);
         }
-        if (optid > 0x4D0)
+        if (optid2 > 0x4D0)
         {
             CRef ref;
-            if (bifk == 111 && pjob->psidebag) pjob->psidebag->FFindBinding(optid, &ref);
+            if (bifk == 111 && pjob->psidebag) pjob->psidebag->FFindBinding(optid2, &ref);
             else if (bifk == 110 && pref)
             {
                 ref = *pref;
-                return sidebag().RefSetBinding(optid, &ref);
+                return sidebag().RefSetBinding(optid2, &ref);
             }
             return ref;
         }
         CRef ref;
-        if (bifk == 111 && optid == 236 && dynamic_cast<JOBSCRIPT*>(pjob))
+        if (bifk == 111 && optid2 == 236 && dynamic_cast<JOBSCRIPT*>(pjob))
         {
             // orig: 0x0010FA38 (EOPID1359) -> 0x00171C98: seek without executing the marker.
             auto pm = std::make_shared<CMethod>();
@@ -786,32 +958,32 @@ CRef RefOptionImpl(int bifk, BASIC* pbasic, int optid, const CRef* pref)
             };
             ref.SetMethod(pm);
         }
-        else if (bifk == 111 && optid == 1171)  // EOPID1357, class9B field +10: the job's actor
+        else if (bifk == 111 && optid2 == 1171)  // EOPID1357, class9B field +10: the job's actor
             ref.SetBasic(pjob->pguard ? pjob->pguard->palo : pjob->pactor ? pjob->pactor->palo : nullptr);
-        else if (bifk == 111 && optid == 1172)  // EOPID1358, JOBSCRIPT field +30: its command list
+        else if (bifk == 111 && optid2 == 1172)  // EOPID1358, JOBSCRIPT field +30: its command list
         {
             if (auto* pscript = dynamic_cast<JOBSCRIPT*>(pjob)) ref.SetBasic(pscript->pcmdlist);
         }
         return ref;
     }
-    if (SMA* psma = dynamic_cast<SMA*>(pbasic)) return RefSmaOption(bifk, psma, optid, pref);
+    if (SMA* psma = dynamic_cast<SMA*>(pbasic)) return RefSmaOption(bifk, psma, optid2, pref);
     if (PADCTL* ppc = dynamic_cast<PADCTL*>(pbasic))
     {
         // the controller state (class 0x89): 900..907 its sticks (EOPIDs 987..994, fields +0x10..+0x2C), 908 / 909
         // methods (0x10C720 / 0x10C7A0): the buttons of the mask pressed this frame and taken (0x1C4700) / down
         // (0x1C4728: +0x30 & mask)
         CRef r;
-        if (std::getenv("SLY2N_OPTPRINT")) std::printf("padctl option %d (bif %d) of %d: control %d\n", optid, bifk, ppc->plo ? ppc->plo->oid : -1, ppc->nControl);
+        if (std::getenv("SLY2N_OPTPRINT")) std::printf("padctl option %d (bif %d) of %d: control %d\n", optid2, bifk, ppc->plo ? ppc->plo->oid : -1, ppc->nControl);
         if (bifk != 111) return r;
         const float* ag[] = {&ppc->x, &ppc->y, &ppc->radJoy, &ppc->uJoy, &ppc->x2, &ppc->y2, &ppc->radJoy2, &ppc->uJoy2};
-        if (optid >= 900 && optid <= 907) r.SetF32(*ag[optid - 900]);
-        if (optid >= 900 && optid <= 907 && std::getenv("SLY2N_OPTPRINT")) std::printf("  -> %g\n", *ag[optid - 900]);
-        else if (optid == 908 || optid == 909)
+        if (optid2 >= 900 && optid2 <= 907) r.SetF32(*ag[optid2 - 900]);
+        if (optid2 >= 900 && optid2 <= 907 && std::getenv("SLY2N_OPTPRINT")) std::printf("  -> %g\n", *ag[optid2 - 900]);
+        else if (optid2 == 908 || optid2 == 909)
         {
             auto pm = std::make_shared<CMethod>();
             pm->m_pbasic = pbasic;
             pm->m_crefReq = 1;
-            pm->m_pfnthunk = optid == 908 ? [](BASIC* pb, int c, CRef* a) {
+            pm->m_pfnthunk = optid2 == 908 ? [](BASIC* pb, int c, CRef* a) {
                 CRef rr;
                 rr.SetBool(c > 0 && GrfPadctlTakePressed(static_cast<PADCTL*>(pb), uint32_t(a[0].RefCoerceS32().m_n), 0.0f) != 0);
                 return rr;
@@ -832,33 +1004,33 @@ CRef RefOptionImpl(int bifk, BASIC* pbasic, int optid, const CRef* pref)
         CRef r;
         // 250 (EOPID 116, type 0x206D, field +0x14): its ASEG. Ep4's lightning-puzzle cranks find their crank 88360
         // relative to it in the turn clip's events (aseg 9216 / 88367 s4): nil found another puzzle's crank
-        if (bifk == 111 && optid == 250)
+        if (bifk == 111 && optid2 == 250)
         {
             if (pasega->paseg) r.SetBasic(pasega->paseg);
         }
-        else if (bifk == 111 && optid == 0xFB)
+        else if (bifk == 111 && optid2 == 0xFB)
         {
             if (pasega->palo) r.SetBasic(pasega->palo);
             else if (pasega->paseg) r.SetBasic(pasega->paseg);
         }
         // orig: 0x001FFD98 / 0x00200598, ASEGA option 253 (EOPID119): local speed at +0x44;
         // its float setter is 0x00131A00 SetAsegaSpeed. RefCoerceF32 matches 0x00129DA8.
-        else if (optid == 253 && (bifk == 111 || (bifk == 110 && pref)))
+        else if (optid2 == 253 && (bifk == 111 || (bifk == 110 && pref)))
         {
             if (bifk == 111) r.SetF32(pasega->svtLocal);
             else SetAsegaSpeed(pasega, pref->RefCoerceF32().m_g);
         }
         // orig: 0x001FFD98, EOPID126 -> 0x00131968 FAsegaRetracted.
-        else if (bifk == 111 && optid == 255) r.SetBool(FAsegaRetracted(pasega));
+        else if (bifk == 111 && optid2 == 255) r.SetBool(FAsegaRetracted(pasega));
         // EOPID 120 (option 217): the ASEG's speed +0x48, its setter 0x131A20 SetAsegaAsegSpeed (Ep6's paraglide trains)
-        else if (optid == 217 && (bifk == 111 || (bifk == 110 && pref)))
+        else if (optid2 == 217 && (bifk == 111 || (bifk == 110 && pref)))
         {
             if (bifk == 111) r.SetF32(pasega->svtAseg);
             else SetAsegaAsegSpeed(pasega, pref->RefCoerceF32().m_g);
         }
         // EOPID 118 (option 252): the time +0x1C (read only)
-        else if (bifk == 111 && optid == 252) r.SetF32(pasega->t);
-        else if (bifk == 111 && optid == 236)
+        else if (bifk == 111 && optid2 == 252) r.SetF32(pasega->t);
+        else if (bifk == 111 && optid2 == 236)
         {
             // 236 (class 0x86's EOPID 123, thunk 0x101C68): a method (k, g, svt) -> 0x130D30 SetAsegaTime (k 0 absolute,
             // 1 relative, 2 from the end; and the speed), e.g. Ep6's red train job seeking the train's loop
@@ -872,7 +1044,21 @@ CRef RefOptionImpl(int bifk, BASIC* pbasic, int optid, const CRef* pref)
             pm->m_crefReq = 3;
             r.SetMethod(pm);
         }
-        else if (bifk == 111 && optid == 237)
+        else if (bifk == 111 && optid2 == 248)
+        {
+            // 248 (class 0x86's EOPID 125, thunk 0x101D98): a method (f) -> 0x230CF0 SnapAsegaXfs: its transforms put
+            // at the clip's values now (f: the seeking modes too)
+            auto pm = std::make_shared<CMethod>();
+            pm->m_pbasic = pbasic;
+            pm->m_pfnthunk = [](BASIC* pb, int c, CRef* a) {
+                if (ASEGA* pa = dynamic_cast<ASEGA*>(pb); pa && c >= 1)
+                    SnapAsegaXfs(pa, a[0].m_tagk == TAGK_Bool ? a[0].m_bool != 0 : a[0].RefCoerceS32().m_n != 0);
+                return CRef(TAGK_Void);
+            };
+            pm->m_crefReq = 1;
+            r.SetMethod(pm);
+        }
+        else if (bifk == 111 && optid2 == 237)
         {
             // 237 (class 0x86's EOPID 124, 0x101D20): a method retracting it (RetractAsega 0x130B18: its end list's
             // events run, so the intro's skip turns its camera object off)
@@ -885,7 +1071,7 @@ CRef RefOptionImpl(int bifk, BASIC* pbasic, int optid, const CRef* pref)
             pm->m_crefReq = 0;
             r.SetMethod(pm);
         }
-        else if (std::getenv("SLY2N_OPTIONPRINT")) std::fprintf(stderr, "option bif %d id %d of an ASEGA: not ported\n", bifk, optid);
+        else if (std::getenv("SLY2N_OPTIONPRINT")) std::fprintf(stderr, "option bif %d id %d of an ASEGA: not ported\n", bifk, optid2);
         return r;
     }
     LO* plo = PloFromBasic(pbasic);
@@ -894,7 +1080,7 @@ CRef RefOptionImpl(int bifk, BASIC* pbasic, int optid, const CRef* pref)
     if (s_fPrint) std::fprintf(stderr, "option bif %d id %d object %d value tag %d n %d\n", bifk, optid, plo ? plo->oid : -1, pref ? int(pref->m_tagk) : -1, pref ? pref->m_n : 0);
     if (!plo) return refNil;
     // the object's sidebag (orig +0x4, 0x132B78 makes it): addo (0x200CA8) and ensureo (0x200D10) always bind
-    // there; seto! (0x200C28) and geto (0x200BA0) above 0x4D0
+    // there; seto! (0x200C28) and geto (0x200BA0) above 0x4D0 (Sly 3: 0x717, orig3 0x24AB90 / 0x24AC18)
     auto sidebag = [&]() -> CSidebag& {
         if (!plo->psidebag) plo->psidebag = PsidebagNew();
         return *plo->psidebag;
@@ -910,7 +1096,7 @@ CRef RefOptionImpl(int bifk, BASIC* pbasic, int optid, const CRef* pref)
         if (sidebag().FFindBinding(optid, nullptr)) return sidebag().RefSetBinding(optid, &ref);
         return sidebag().RefAddBinding(optid, &ref);
     }
-    if (optid > 0x4D0)
+    if (optid > sly3::OPTID_LAST)
     {
         if (bifk == 111)
         {
@@ -936,7 +1122,7 @@ CRef RefOptionImpl(int bifk, BASIC* pbasic, int optid, const CRef* pref)
     const int eopid = EopidFromOptid(plo->Cid(), optid);
     if (std::getenv("SLY2N_OPTPRINT")) std::printf("option %d (bif %d) of %d (cid 0x%X): eopid %d\n", optid, bifk, plo->oid, plo->Cid(), eopid);
     if (eopid < 0) return refNil;
-    const uint32_t vaEopid = 0x2AC880 + static_cast<uint32_t>(eopid) * 0x28;
+    const uint32_t vaEopid = S3VA(0x2AC880) + static_cast<uint32_t>(eopid) * 0x28;
     const uint32_t grf = g_disc.U32Elf(vaEopid + 4);
     if (bifk == 111 && (grf & 1))
     {
@@ -946,11 +1132,12 @@ CRef RefOptionImpl(int bifk, BASIC* pbasic, int optid, const CRef* pref)
         if (FMakeObjectMethod(pfn, pbasic, static_cast<int>(g_disc.U32Elf(vaEopid + 0x18)), &refMethod)) return refMethod;
         auto pmethod = std::make_shared<CMethod>();
         pmethod->m_pbasic = pbasic;
-        pmethod->m_pfnthunk = pfn == 0x100A90   ? RefMethodAdd
-                              : pfn == 0x100B88 ? RefMethodRemove
-                              : pfn == 0x100A00 ? RefMethodSlot38
+        pmethod->m_pfnthunk = pfn == S3FN(0x100A90)   ? RefMethodAdd
+                              : pfn == S3FN(0x100B88) ? RefMethodRemove
+                              : pfn == S3FN(0x100A00) ? RefMethodSlot38
                                                 : RefMethodStub;
         pmethod->m_crefReq = static_cast<int>(g_disc.U32Elf(vaEopid + 0x18));
+        if (pmethod->m_pfnthunk == RefMethodStub) NoteUnbound("method", eopid, optid, plo, pfn);
         CRef ref;
         ref.SetMethod(pmethod);
         return ref;
@@ -973,10 +1160,10 @@ CRef RefOptionImpl(int bifk, BASIC* pbasic, int optid, const CRef* pref)
     if (bifk == 111)
     {
         CRef ref;
-        if (eopid == 15) ref.SetS32(plo->oid);  // (field +0x18: the oid)
-        else if (eopid == 13) ref.SetF32(plo->sRadius);
-        else if (eopid == 14) ref.SetS32(plo->st);
-        else if (eopid == 255 && PguardFromLo(plo)) ref.SetS32(PguardFromLo(plo)->n33C);  // (field +0x33C: a guard's health)
+        if (eopid == S3EOPID(15)) ref.SetS32(plo->oid);  // (field +0x18: the oid)
+        else if (eopid == S3EOPID(13)) ref.SetF32(plo->sRadius);
+        else if (eopid == S3EOPID(14)) ref.SetS32(plo->st);
+        else if (eopid == S3EOPID(255) && PguardFromLo(plo)) ref.SetS32(PguardFromLo(plo)->n33C);  // (field +0x33C: a guard's health)
         else if (popt && !popt->aval.empty() && (grf & 0x80) && popt->aval[0].tagk == -1 && popt->aval[0].k >= 24 &&
                  ((popt->aval[0].k & ~0x8000) >> 12) == 2)
         {
@@ -996,6 +1183,11 @@ CRef RefOptionImpl(int bifk, BASIC* pbasic, int optid, const CRef* pref)
             const OID oid = static_cast<OID>(plo->U32Field(0, ib, 0xFFFFFFFFu));
             if (oid != -1) ref.SetBasic(PloFindSwNearest(plo, oid));
         }
+        else if (!popt && (grf & 0x80) && eopid != S3EOPID(15) && eopid != S3EOPID(13) && eopid != S3EOPID(14) && eopid != S3EOPID(255))
+            // (debug, audit 2026-11-b: a field getter of a field no loaded option set, which the native code may keep
+            // elsewhere (as N21's clip length, EOPID 114): its value is the field's stored word, or nothing)
+            NoteUnbound("field", eopid, optid, plo, g_disc.U32Elf(vaEopid + 0x18));
+        if (g_disc.U32Elf(vaEopid + 8) == 0xFFFF0000u) NoteUnbound("getter", eopid, optid, plo, g_disc.U32Elf(vaEopid + 0xC));
         if (std::getenv("SLY2N_OPTPRINT"))
         {
             std::string str;
@@ -1017,9 +1209,19 @@ CRef RefOptionImpl(int bifk, BASIC* pbasic, int optid, const CRef* pref)
     // (brx.cpp; e.g. Bentley's dart kind 774 at +0x16D8, which his 0x1357C0 reads)
     if (bifk == 110 && (grf & 0x90) && !(grf & 0x2000))
     {
-        const OPTVAL& v = popt->aval[0];
+        OPTVAL& v = popt->aval[0];
         const int k = static_cast<int>(g_disc.U32Elf(vaEopid));
         const uint32_t ib = g_disc.U32Elf(vaEopid + 0x18);
+        // the value converted to the field's type (0x201110: a float field takes RefCoerceF32 0x129DA8 of a
+        // non-float, an int field RefCoerceS32 0x129D58 (a truncation) of a non-int), e.g. Elephant Rampage's crawl
+        // trigger setting the rats' radii 886 / 887 to 1500 / 1000: integers into float fields, whose float word
+        // natively stayed 0, so the rats never saw Sly and never ran into their holes (R60)
+        if (k == 1 && v.tagk == S3TAG(0x15)) { v.ag[0] = static_cast<float>(v.n); v.tagk = S3TAG(0x16); }
+        else if (((k >= 5 && k <= 8) || (k >= 0xE && k <= 0x11) || (k >= 0x13 && k <= 0x15)) && v.tagk == S3TAG(0x16))
+        {
+            v.n = static_cast<int>(v.ag[0]);
+            v.tagk = S3TAG(0x15);
+        }
         const uint32_t cg = k == 1 ? 1 : k == 10 ? 2 : (k == 2 || k == 9 || k == 11) ? 3 : 0;
         if (cg)
             for (uint32_t i = 0; i < cg; ++i)
@@ -1030,7 +1232,7 @@ CRef RefOptionImpl(int bifk, BASIC* pbasic, int optid, const CRef* pref)
             }
         else plo->SetField(0, ib, static_cast<uint32_t>(v.n));
         // (a guard's health +0x33C is GUARD::n33C natively)
-        if (eopid == 255)
+        if (eopid == S3EOPID(255))
             if (GUARD* pg = PguardFromLo(plo)) pg->n33C = v.n;
     }
     if (bifk == 110 && std::getenv("SLY2N_OPTPRINT"))
@@ -1040,10 +1242,14 @@ CRef RefOptionImpl(int bifk, BASIC* pbasic, int optid, const CRef* pref)
         std::printf("  <- %s%s (setter 0x%X)\n", str.c_str(), PfnObjectSetter(eopid) ? "" : " (no setter)", g_disc.U32Elf(vaEopid + 0x14));
     }
     if (bifk == 110)
+    {
         if (PFNOBJSETTER pfnSet = PfnObjectSetter(eopid)) pfnSet(plo, *pref);
-    if (eopid == 13 && pref->m_tagk == TAGK_F32) SetLoRadius(s_psw, plo, pref->m_g);
-    else if (eopid == 13 && pref->m_tagk == TAGK_S32) SetLoRadius(s_psw, plo, static_cast<float>(pref->m_n));
-    else if (eopid == 14 && pref->m_tagk == TAGK_S32) SetLoSt(s_psw, plo, pref->m_n);
+        else if (g_disc.U32Elf(vaEopid + 0x18) == 0xFFFF0000u)
+            NoteUnbound("setter", eopid, optid, plo, g_disc.U32Elf(vaEopid + 0x1C));
+    }
+    if (eopid == S3EOPID(13) && pref->m_tagk == TAGK_F32) SetLoRadius(s_psw, plo, pref->m_g);
+    else if (eopid == S3EOPID(13) && pref->m_tagk == TAGK_S32) SetLoRadius(s_psw, plo, static_cast<float>(pref->m_n));
+    else if (eopid == S3EOPID(14) && pref->m_tagk == TAGK_S32) SetLoSt(s_psw, plo, pref->m_n);
     return CRef(TAGK_Void);
 }
 
@@ -1051,6 +1257,16 @@ CRef RefOptionImpl(int bifk, BASIC* pbasic, int optid, const CRef* pref)
 BASIC* PbasicGlobal(int bifk)
 {
     if (!s_psw) return nullptr;
+    // (Sly 3: with Sly 3's tasks running (task3.h), Sly 3's 104 / 105 / 106 = these 100 / 101 / 102 read SW
+    // +0x4044 / +0x4048 / +0x404C: the mission, the active task, the checkpoint task. E.g. the chase's script 2124
+    // calls its job 2085's option 2649 (a procedure the job's handler added: the chase's proxies acquired, Carmelita
+    // 139105 among them).)
+    if (FScripts3Active() && bifk >= 100 && bifk <= 102)
+    {
+        if (bifk == 100) return g_tasks3.pjobCur ? g_tasks3.pjobCur->plo : nullptr;
+        if (bifk == 101) return g_tasks3.ptaskActive ? g_tasks3.ptaskActive->plo : nullptr;
+        return g_tasks3.ptaskCur ? g_tasks3.ptaskCur->plo : nullptr;
+    }
     // 100..102: the current job, task and checkpoint task (SW +0x3B0C / +0x3B10 / +0x3B14)
     if (bifk == 100) return s_psw->tasks.pjobCur;
     if (bifk == 101) return s_psw->tasks.ptaskCur;
@@ -1106,6 +1322,37 @@ struct INITENSURE
             r.SetBool(!poxa || (poxa->grf & 4) ? 1 : 0);
             return r;
         });
+        // 0x101218 / 0x1012C0 (EOPIDs 64 / 65 -> 0x1F7FA0 / 0x1F8038): over the object's shader animations (its
+        // globset +0xA4 / +0xA8) of class 0x8F (the scrollers): the master speeds (0x1EE678) / the offsets (0x1EDAD8).
+        // Scripts of 86 job starts set them (e.g. class 0x62 breakables); natively stubs (audit 2026-11 R1)
+        for (uint32_t pfn : {0x101218u, 0x1012C0u})
+            RegisterObjectMethod(pfn, pfn == 0x101218u ? +[](LO* plo, const std::vector<CRef>& a) {
+                ALO* palo = dynamic_cast<ALO*>(plo);
+                if (palo && palo->pglobset)
+                    for (SAA* p : palo->pglobset->apsaa) SetScrollerMasterSpeeds(p, GArg(a, 0), GArg(a, 1));
+                return CRef(TAGK_Void);
+            } : +[](LO* plo, const std::vector<CRef>& a) {
+                ALO* palo = dynamic_cast<ALO*>(plo);
+                if (palo && palo->pglobset)
+                    for (SAA* p : palo->pglobset->apsaa)
+                        if (p && p->cid == S3CID(143)) SetSaaOffsets(p, GArg(a, 0), GArg(a, 1));
+                return CRef(TAGK_Void);
+            });
+        // 0x110998 (EOPID 1438): vt slot 90 with an integer; class 0x3D's is 0x1CBF90, the pair camera (cmworld.cpp)
+        RegisterObjectMethod(0x110998, [](LO* plo, const std::vector<CRef>& a) {
+            if (plo && plo->pcls && plo->pcls->PfnOrig(90) == 0x1CBF90) SetPairCamera(plo, NArg(a, 0));
+            return CRef(TAGK_Void);
+        });
+        // EOPID 214 (a zone's +0x13C, setter 0x221268): a script's force of a camera zone (-1 by position, 0 off,
+        // 1 on); natively the value only reached a raw field nobody reads (audit 2026-11 C1)
+        RegisterObjectSetter(214, [](LO* plo, const CRef& r) {
+            SetZoneForced(plo, r.m_tagk == TAGK_Bool ? (r.m_bool ? 1 : 0) : r.RefCoerceS32().m_n);
+        });
+        RegisterObjectGetter(214, [](LO* plo) {
+            CRef r;
+            r.SetS32(NZoneForced(plo));
+            return r;
+        });
         RegisterObjectSetter(38, [](LO* plo, const CRef& r) {
             if (ALO* palo = dynamic_cast<ALO*>(plo)) SetAloContactsOff(palo, r.m_tagk == TAGK_Bool ? r.m_bool != 0 : r.RefCoerceS32().m_n != 0);
         });
@@ -1134,7 +1381,7 @@ struct INITENSURE
             // (a nil object: the ASEG's own namespace's objects, as its apply params' 0x12F8C0; e.g. world 30's
             // train-side scenery 48945.. (s0 of block 47475))
             LO* palo = PloArg(a, 0);
-            if (!plo || !FIsLoDerivedFrom(plo, 0x6D) || (palo && !FIsLoDerivedFrom(palo, 0x30))) return r;
+            if (!plo || !FIsLoDerivedFrom(plo, S3CID(0x6D)) || (palo && !FIsLoDerivedFrom(palo, S3CID(0x30)))) return r;
             if (static const char* s_sz = std::getenv("SLY2N_APPLYOBJ"); s_sz && palo && palo->oid == std::atoi(s_sz))
             {
                 std::fprintf(stderr, "aseg method 214: aseg %d obj %d args %zu:", plo->oid, palo->oid, a.size());
@@ -1149,13 +1396,24 @@ struct INITENSURE
             if (ASEGA* pa = PasegaApplyAseg(static_cast<ASEG*>(plo), static_cast<ALO*>(palo), GArg(a, 1), GArg(a, 2), NArg(a, 3))) r.SetBasic(pa);
             return r;
         });
+        // orig: 0x00101A88 (EOPID 108, option 216 of an ASEG: ensured on an ALO (object, the time's kind, t, svt,
+        // grfapl: 0x130598 EnsureAseg: the existing ASEGA retimed, else applied), its ASEGA returned). Scripts of 32 job
+        // starts call it; natively a stub (audit 2026-11 P6)
+        RegisterObjectMethod(0x101A88, [](LO* plo, const std::vector<CRef>& a) {
+            CRef r;
+            LO* palo = PloArg(a, 0);
+            if (!plo || !FIsLoDerivedFrom(plo, S3CID(0x6D)) || (palo && !FIsLoDerivedFrom(palo, S3CID(0x30)))) return r;
+            if (ASEGA* pa = PasegaEnsureAseg(static_cast<ASEG*>(plo), static_cast<ALO*>(palo), NArg(a, 1), GArg(a, 2), GArg(a, 3), NArg(a, 4)))
+                r.SetBasic(pa);
+            return r;
+        });
         // orig: 0x00104840 (option 214 of an SM: run on an ALO from a state (object, state oid, grfapl: 0x1F0380), its
         // SMA returned), e.g. the boot world's 150730 / 118385 starting 150732 / 118427 at 5519
         RegisterObjectMethod(0x104840, [](LO* plo, const std::vector<CRef>& a) {
             CRef r;
             LO* palo = PloArg(a, 0);
             // (a nil object: an SMA of no object, e.g. world 14's job 2406 event 19 running SM 17348 (the hack's stations))
-            if (!plo || plo->Cid() != 0x6F || (palo && !FIsLoDerivedFrom(palo, 0x30))) return r;
+            if (!plo || plo->Cid() != S3CID(0x6F) || (palo && !FIsLoDerivedFrom(palo, S3CID(0x30)))) return r;
             if (SMA* ps = PsmaApplySm(static_cast<SM*>(plo), static_cast<ALO*>(palo), NArg(a, 1, -1), NArg(a, 2))) r.SetBasic(ps);
             return r;
         });
@@ -1198,4 +1456,10 @@ struct INITENSURE
         });
     }
 } s_initensure;
+}
+
+// orig: 0x0015E938, shared by loaded-reference consumers.
+LO* PloFindRelative(LO* context, int oid, int kind)
+{
+    return dynamic_cast<LO*>(PbasicFindObject(kind, oid, context, nullptr));
 }

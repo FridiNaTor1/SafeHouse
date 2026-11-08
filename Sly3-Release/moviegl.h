@@ -17,7 +17,13 @@ struct MOVIEGL
     double tScreenshot = 0;
     int cframe = 0;
     double fps = 30000.0 / 1001.0;
+    bool fAwaitShortcutRelease = true;
+    double tInput = 0;
 };
+
+// Start before decoding audio: the first presenter callback can already contain a picture.
+void BeginMoviePresentation(MOVIEGL& m);
+bool FMovieShortcutSkip(MOVIEGL& m, bool fHeld);
 
 // PFNMOVIEPRESENT: uploads and draws the picture (null: polls the window; Esc / Enter / Space / Start skip).
 bool PresentMovieGl(const uint8_t* prgba, int cx, int cy, void* pv);

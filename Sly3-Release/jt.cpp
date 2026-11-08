@@ -1,6 +1,7 @@
 // jt.cpp: the players' interaction objects (jt.h): the lists by kind, the description parts, the pipe's frame.
 #include "jt.h"
-#include "sly3/ids3.h"
+#include "game/sly3.h"
+#include "region.h"
 
 #include "alo.h"
 #include "activate.h"
@@ -11,6 +12,7 @@
 #include "mat.h"
 #include "so.h"
 #include "sw.h"
+#include "spliceglue.h"
 #include "worldaccess.h"
 #include "xf.h"
 #include "xfmath.h"
@@ -31,32 +33,45 @@ struct JTLDEF
     int slotAdd;       // the class's vt slot holding the list's add function (23: slot 23 / 22; 11: OnAdd / OnRemove)
     uint32_t pfnAdd;   // the add function (orig 0x11A220 into the list)
     uint32_t ibDesc;   // the description part's offset (0: not known)
+    // Sly 3 (orig3): every target's description part (0x28 bytes, ctor 0x1A0708) is followed by a list entry (desc
+    // +0x28) whose add (0x15CE68) puts it on the world's one target list (SW +0x3E50); the classes' slot 19 (Sly 2's
+    // 23) calls it. The kinds are told apart by the class's slot-19 add (cid3 when the class has no add of its own).
+    uint32_t pfnAdd3;  // Sly 3 slot 19's function (0: by cid3)
+    int cid3;          // (pfnAdd3 0) the Sly 3 class
+    uint32_t ibDesc3;  // the Sly 3 description part's offset (the class's description getter, the options' 0x2000 getter)
 };
 const JTLDEF c_ajtldef[JTL_Max] = {
-    {23, 0x21D358, 0x100},  // JTL_Point (0x13 objects)
-    {23, 0x1C33E8, 0x190},  // JTL_Pipe
-    {23, 0x1CB9B0, 0x190},  // JTL_Rail
-    {23, 0x1FF438, 0xE0},   // JTL_Spire
-    {23, 0x183998, 0},      // JTL_Jump (cid 0x58)
-    {23, 0x182EB8, 0x190},  // JTL_Ledge
-    {23, 0x183370, 0xE0},   // JTL_Wall
-    {23, 0x1836F8, 0xE0},   // JTL_Swing
-    {23, 0x183FB8, 0xE0},   // JTL_Use
-    {11, 0x19C9E8, 0},      // JTL_Jump2 (cid 0x28)
-    {11, 0x185C28, 0},      // JTL_Point2 (cid 0x09)
-    {23, 0x1844A0, 0x130},  // JTL_Hook
+    {23, 0x21D358, 0x100, 0, -1, 0},           // JTL_Point (0x13 objects; Sly 3 has no HOOK class)
+    {23, 0x1C33E8, 0x190, 0x1F32B8, 0, 0x180}, // JTL_Pipe (Sly 3 0x0A; getter 0x2BE8A0)
+    {23, 0x1CB9B0, 0x190, 0x203790, 0, 0x180}, // JTL_Rail (Sly 3 0x0C; getter 0x2BEBC8)
+    {23, 0x1FF438, 0xE0, 0x249558, 0, 0xD0},   // JTL_Spire (Sly 3 0x25; getter 0x2BF5A8)
+    {23, 0x183998, 0, 0, 0x64, 0x130},         // JTL_Jump (cid 0x58 HIDE; Sly 3 0x64, getter 0x2BE420, no add of its own)
+    {23, 0x182EB8, 0x190, 0x1A0BA0, 0, 0x180}, // JTL_Ledge (Sly 3 0x0B; getter 0x2BE3D8)
+    {23, 0x183370, 0xE0, 0x1A1160, 0, 0xD0},   // JTL_Wall (Sly 3 0x20; getter 0x2BE3F0)
+    {23, 0x1836F8, 0xE0, 0x1A1610, 0, 0xD0},   // JTL_Swing (Sly 3 0x24; getter 0x2BE408)
+    {23, 0x183FB8, 0xE0, 0x1A1FC0, 0, 0xD0},   // JTL_Use (Sly 3 0x21..0x23; getter 0x2BE438)
+    {11, 0x19C9E8, 0, 0x1A34D8, 0, 0xEC},      // JTL_Jump2 (cid 0x28 RESPONSE; Sly 3 0x26, getter 0x2BE498)
+    {11, 0x185C28, 0, 0, 0x7D, 0},             // JTL_Point2 (cid 0x09 CLIMBSURF; Sly 3 0x7D)
+    {23, 0x1844A0, 0x130, 0x1A25B0, 0, 0x120}, // JTL_Hook (cid 0x1B CRAWLHOOK; Sly 3 0x19, getter 0x2BE450)
 };
+constexpr int c_slotAdd3 = 19;  // (Sly 2's slot 23)
 
-// the description getters of the load's options (grf 0x2000): each returns the object plus its part's offset
+// the description getters of the load's options (grf 0x2000): each returns the object plus its part's offset. Sly 3's
+// are one-instruction getters `jr ra; addiu v0, a0, ib` (0x2BE3D8 ...): any such getter whose offset is a description
+// part's counts
 bool FDescGetter(uint32_t pfn)
 {
-    switch (pfn)
+    if (pfn >= 0x2BE000 && pfn < 0x2C0000 && g_disc.U32Elf(pfn) == 0x03E00008u)
     {
-    case 0x2599F8: case 0x259A08: case 0x259A18: case 0x259A28: case 0x259A38: case 0x259A48: case 0x259A78:
-    case 0x259B00: case 0x259B10: case 0x259C10:
-        return true;
-    default: return false;
+        const uint32_t w = g_disc.U32Elf(pfn + 4);
+        if ((w & 0xFFFF0000u) == 0x24820000u)  // addiu v0, a0, imm
+        {
+            const uint32_t ib = w & 0xFFFF;
+            for (const JTLDEF& d : c_ajtldef)
+                if (d.ibDesc3 && d.ibDesc3 == ib) return true;
+        }
     }
+    return false;
 }
 
 SW* s_pswLists = nullptr;
@@ -69,8 +84,8 @@ std::array<std::vector<LO*>, JTL_Max> s_aaplo;
 bool FJtListAdd(const CLS& c, JTL jtl)
 {
     const JTLDEF& d = c_ajtldef[jtl];
-    const uint32_t pfn = c.PfnOrig(d.slotAdd);
-    return pfn == d.pfnAdd || (jtl == JTL_Use && pfn == 0x13CFD8);
+    if (d.pfnAdd3) return c.PfnOrig3(c_slotAdd3) == d.pfnAdd3;  // orig3: (the subclasses inherit it: CARRYUSE / BOOTYSTAND)
+    return d.cid3 >= 0 && FCidDerivedFrom(c.cid, d.cid3);
 }
 
 bool FJtInList(LO* plo, JTL jtl)
@@ -83,7 +98,29 @@ bool FJtInList(LO* plo, JTL jtl)
     return true;
 }
 
-uint32_t IbJtDesc(JTL jtl) { return c_ajtldef[jtl].ibDesc; }
+uint32_t IbJtDesc(JTL jtl) { return c_ajtldef[jtl].ibDesc3; }
+
+// orig: 0x00184670 (the order also matters for subclasses)
+JTL JtlDescFromLo(LO* plo)
+{
+    if (!plo) return JTL_Max;
+    // (Sly 2 class ids through the map: HOOK 0x13 has no Sly 3 class)
+    const struct { CID cid; JTL jtl; } kinds[] = {
+        {S3CID(0x58), JTL_Jump}, {S3CID(0x1B), JTL_Hook}, {S3CID(0x22), JTL_Wall}, {S3CID(0xC), JTL_Ledge}, {S3CID(0x23), JTL_Use},
+        {S3CID(0x13), JTL_Point}, {S3CID(0xB), JTL_Pipe}, {S3CID(0xD), JTL_Rail}, {S3CID(0x27), JTL_Spire},
+    };
+    for (const auto& kind : kinds)
+        if (kind.cid >= 0 && FIsLoDerivedFrom(plo, kind.cid)) return kind.jtl;
+    return JTL_Max;
+}
+
+bool FSafeTargetReattach(LO* plo)
+{
+    if (!plo) return false;
+    for (CID cid : {S3CID(0x13), S3CID(0xB), S3CID(0xD), S3CID(0x27), S3CID(0xC), S3CID(0x22), S3CID(0x26)})
+        if (cid >= 0 && FIsLoDerivedFrom(plo, cid)) return true;
+    return false;
+}
 
 const std::vector<LO*>& AploJtList(SW* psw, JTL jtl)
 {
@@ -103,6 +140,49 @@ const std::vector<LO*>& AploJtList(SW* psw, JTL jtl)
     return a;
 }
 
+namespace
+{
+// a player's bit (ACTOR +0x1000: Sly 1, Bentley 2, Murray 4) by its class
+uint32_t GrfPlayerOfCid(CID cid) { return cid == S3CID(0x35) ? 1u : cid == S3CID(0x37) ? 2u : cid == S3CID(0x36) ? 4u : 0u; }
+
+// A use's players (+0xFC: its description's +0x1C), kept in that field once worked out:
+//   0x183F08 (the use's InitLo): 0; cid 0x24's 0x184268: 4 (Murray's);
+//   the loader's setter options, in their order: EOPID 1073 (0x184028, objects: each listed one's +0x1000 ORed in, after
+//   the load by 0x13E5E0) and EOPID 1074 (0x184040, a class: 0x34 all = 7, 0x35 Sly |= 1, 0x37 Bentley |= 2, 0x36
+//   Murray |= 4);
+//   0x183F50 (the use's PostLoad): 0 -> 7.
+// R49: 1074 was not applied, so the uses only Murray may take (Ep4 Trojan Tank's crank bars 80399 / 80401: 1074 = 0x36)
+// were everybody's; Sly took them and the use's script waited for Murray forever.
+uint32_t UseMaskInit(LO* plo, uint32_t ib)
+{
+    const uint32_t uCached = plo->U32Field(0, ib + 0x20, 0xFFFFFFFFu);  // (Sly 3: the mask is +0x20)
+    if (uCached != 0xFFFFFFFFu) return uCached;
+    if (!g_psw) return FIsLoDerivedFrom(plo, S3CID(0x24)) ? 4u : 7u;
+    uint32_t mask = FIsLoDerivedFrom(plo, S3CID(0x24)) ? 4u : 0u;
+    for (const OPT& o : plo->aopt)
+    {
+        if (o.eopid == S3EOPID(1073))
+        {
+            for (const OPTVAL& v : o.aval)
+                for (const auto& p : g_psw->aploAll)
+                    if (p->oid == v.n) mask |= GrfPlayerOfCid(p->Cid());
+        }
+        else if (o.eopid == S3EOPID(1074))
+        {
+            for (const OPTVAL& v : o.aval)
+            {
+                if (v.n == 0x34) mask = 7u;
+                else mask |= GrfPlayerOfCid(static_cast<CID>(v.n));
+            }
+        }
+    }
+    if (!mask) mask = 7u;
+    if (std::getenv("SLY2N_JTPRINT")) std::printf("jt use %d: players 0x%X\n", plo->oid, mask);
+    plo->SetField(0, ib + 0x20, mask);
+    return mask;
+}
+}  // namespace
+
 JTDESC JtDescOf(LO* plo, JTL jtl)
 {
     JTDESC d;
@@ -111,29 +191,11 @@ JTDESC JtDescOf(LO* plo, JTL jtl)
     // the class constructors' defaults (0x182C70: 7 / -1 / FLT_MAX; the subclasses' ctors)
     switch (jtl)
     {
-    case JTL_Pipe: d.mask = 1; break;  // (the reference's Paris pipes: 1; TODO(actors): the PIPE ctor 0x1C3??? itself)
+    case JTL_Pipe: d.mask = 1; break;  // the PIPE ctor (orig3 0x1F3060: +0x180 +0x20 = 1: Sly's only)
     case JTL_Use:
-        if (FIsLoDerivedFrom(plo, 0x24)) { d.mask = 4; d.prio = -1; }  // 0x184268
-        else if (FIsLoDerivedFrom(plo, 0x23))
-        {
-            // orig 0x183F08 (InitLo: prio 1, mask 0), EOPID 1073's setter 0x184028 (after the load, 0x13E5E0: the mask
-            // ORs each listed character's +0x1000: Sly 1, Bentley 2, Murray 4), 0x183F50 (PostLoad: mask 0 -> 7)
-            d.prio = 1;
-            if (g_psw && plo->U32Field(0, ib + 0x1C, 0xFFFFFFFFu) == 0xFFFFFFFFu)
-            {
-                uint32_t mask = 0;
-                for (const OPT& o : plo->aopt)
-                    if (o.eopid == 1073)
-                        for (const OPTVAL& v : o.aval)
-                            for (const auto& p : g_psw->aploAll)
-                                if (p->oid == v.n)
-                                {
-                                    const CID cid = p->Cid();
-                                    mask |= cid == 0x35 ? 1u : cid == 0x37 ? 2u : cid == 0x36 ? 4u : 0u;
-                                }
-                plo->SetField(0, ib + 0x1C, mask ? mask : 7u);
-            }
-        }
+        if (FIsLoDerivedFrom(plo, S3CID(0x24))) d.prio = -1;  // 0x184268
+        else if (FIsLoDerivedFrom(plo, S3CID(0x23))) d.prio = 1;  // 0x183F08
+        if (FIsLoDerivedFrom(plo, S3CID(0x23))) d.mask = UseMaskInit(plo, ib);
         break;
     default: break;
     }
@@ -141,8 +203,8 @@ JTDESC JtDescOf(LO* plo, JTL jtl)
     {
         const uint32_t pfn = static_cast<uint32_t>(key >> 32), off = static_cast<uint32_t>(key);
         uint32_t sub;
-        if (pfn == 0 && off >= ib && off < ib + 0x20) sub = off - ib;
-        else if (FDescGetter(pfn) && off < 0x20) sub = off;
+        if (pfn == 0 && off >= ib && off < ib + 0x28) sub = off - ib;
+        else if (FDescGetter(pfn) && off < 0x28) sub = off;
         else continue;
         float g;
         std::memcpy(&g, &u, 4);
@@ -153,7 +215,7 @@ JTDESC JtDescOf(LO* plo, JTL jtl)
         case 0x10: d.prio = static_cast<int>(u); break;
         case 0x14: d.id = static_cast<int>(u); break;
         case 0x18: d.kind = u; break;
-        case 0x1C: d.mask = u; break;
+        case 0x20: d.mask = u; break;  // orig3: the players' mask moved to +0x20 (EOPID 913; +0x1C is new, 1 by the ctor 0x1A0708)
         default: break;
         }
     }
@@ -164,12 +226,12 @@ JTDESC JtDescOf(LO* plo, JTL jtl)
 glm::mat4 MatJtLo(LO* plo)
 {
     if (!plo) return glm::mat4(1.0f);
-    if (FIsLoDerivedFrom(plo, Icid(CID3::ALO)))
+    if (FIsLoDerivedFrom(plo, S3CID(0x30)))
     {
         if (const XF* pxf = PxfObj(static_cast<ALO*>(plo))) return pxf->matWorld;
         return MatWorldOfAlo(static_cast<ALO*>(plo));
     }
-    if (FIsLoDerivedFrom(plo, 3))
+    if (FIsLoDerivedFrom(plo, S3CID(3)))
     {
         const LOX* plox = static_cast<const LOX*>(plo);
         return plox->pxf ? plox->pxf->matWorld * plox->mat : plox->mat;
@@ -194,7 +256,7 @@ glm::vec3 VecJtConvert(LO* a, LO* b, const glm::vec3& v)
     return r;
 }
 
-const CRV* PcrvJtPipe(LO* ppipe) { return ppipe && FIsLoDerivedFrom(ppipe, Icid(CID3::PATH)) ? PcrvFromLo(ppipe) : nullptr; }
+const CRV* PcrvJtPipe(LO* ppipe) { return ppipe && FIsLoDerivedFrom(ppipe, S3CID(0x0A)) ? PcrvFromLo(ppipe) : nullptr; }
 
 // orig: 0x001E6728
 float SClampCrv(const CRV* pcrv, float s)
@@ -214,12 +276,15 @@ glm::vec3 NormalizeOr(const glm::vec3& v, const glm::vec3& vDefault)
     if (l < F32(0x38D1B717)) return vDefault;
     return v * (1.0f / l);
 }
+// (the default is the pipe constructor's (1, 0, 0): orig3 0x1F3060 (the reference's m_ext vine pipe 29812, which sets
+// no vector, has +0x1D0 = (1, 0, 0)); with 0 the frame fell back to an arbitrary perpendicular and Sly held the pipe
+// from its side, ~65 units off the reference's place)
 glm::vec3 VecPipeField(LO* ppipe, uint32_t ib)
 {
     glm::vec3 v(0.0f);
     for (int i = 0; i < 3; ++i)
     {
-        const uint32_t u = ppipe->U32Field(0, ib + 4 * i, 0);
+        const uint32_t u = ppipe->U32Field(0, ib + 4 * i, i == 0 ? 0x3F800000u : 0u);
         std::memcpy(&v[i], &u, 4);
     }
     return v;
@@ -279,9 +344,11 @@ glm::mat3 MatPipeFrame(LO* ppipe, bool fUp, float s)
     return r;
 }
 
+// (the defaults are the pipe's constructor's, 0x1C3390: attach 8 (the hook's clink), release 9; a world's option
+// replaces them. Without them no pipe in the game made its sounds: R31)
 int NPipeEffect(LO* ppipe, bool fRelease)
 {
-    return ppipe ? static_cast<int>(ppipe->U32Field(0, fRelease ? 0x1D4 : 0x1D0, 0)) : 0;
+    return ppipe ? static_cast<int>(ppipe->U32Field(0, fRelease ? 0x1D4 : 0x1D0, fRelease ? 9 : 8)) : 0;
 }
 
 void PrintJtLists(SW* psw)
@@ -301,7 +368,7 @@ void PrintJtLists(SW* psw)
             for (const auto& [key, u] : plo->afield)
                 std::printf(" (%X,%X)=%X", static_cast<uint32_t>(key >> 32), static_cast<uint32_t>(key), u);
             std::printf("\n");
-            if (const CRV* pcrv = FIsLoDerivedFrom(plo, Icid(CID3::PATH)) ? PcrvFromLo(plo) : nullptr)
+            if (const CRV* pcrv = FIsLoDerivedFrom(plo, S3CID(0x0A)) ? PcrvFromLo(plo) : nullptr)
             {
                 const float len = SLengthCrv(pcrv);
                 std::printf("      curve len %.0f closed %d:", len, pcrv->fClosed ? 1 : 0);
@@ -315,6 +382,38 @@ void PrintJtLists(SW* psw)
             }
         }
     }
+}
+
+// orig: D_002DFB84 (0x184510's alternate linked-object XY branch).
+// No gameplay writer was found in the matched sources; retain the original mode for controlled comparisons.
+bool g_fHookLinkedPosition = false;
+
+namespace
+{
+// The hook's authored point, transformed through its own reference frame (0x184510 / 0x1845A0).
+glm::vec3 PosHookAnchor(LO* plo)
+{
+    const glm::vec3 local = static_cast<LOXSHAPE*>(plo)->posBound;
+    return PosJtConvert(plo, nullptr, local);
+}
+
+// orig: 0x00184510. A reference option is stored as an OID by the native loader.
+// Resolve it in the hook's namespace, just as the original's loaded object reference.
+glm::vec3 PosHookTarget(LO* plo)
+{
+    const OID oid = static_cast<OID>(plo->U32Field(0, 0x15C, 0));
+    LO* linked = oid ? PloFindRelative(plo, oid) : nullptr;
+    const glm::vec3 linkedPos = linked ? PosJtLo(linked) : PosJtLo(plo);
+    glm::vec3 point = g_fHookLinkedPosition ? linkedPos : PosHookAnchor(plo);
+    point.z = linkedPos.z + 50.0f;
+    if (static const bool s_fPrint = std::getenv("SLY2N_HOOKPOINT") != nullptr; s_fPrint)
+    {
+        const glm::vec3 center = PosJtLo(plo);
+        const glm::vec3 anchor = PosHookAnchor(plo);
+        std::printf("HOOK_TARGET {\"oid\":%u,\"center\":[%.9g,%.9g,%.9g],\"anchor\":[%.9g,%.9g,%.9g],\"point\":[%.9g,%.9g,%.9g]}\n", plo->oid, center.x, center.y, center.z, anchor.x, anchor.y, anchor.z, point.x, point.y, point.z);
+    }
+    return point;
+}
 }
 
 // ---- the candidates (0x194A40 / 0x194688 / 0x194F70) ----
@@ -396,7 +495,7 @@ float GCurveNearest(const CRV* pcrv, const glm::vec3& q, float sLo, float sHi)
 bool FJtRange(LO* plo, JTL jtl, float* pgMin, float* pgMax)
 {
     if (jtl != JTL_Pipe && jtl != JTL_Rail && jtl != JTL_Ledge) return false;
-    const CRV* pcrv = FIsLoDerivedFrom(plo, Icid(CID3::PATH)) ? PcrvFromLo(plo) : nullptr;
+    const CRV* pcrv = FIsLoDerivedFrom(plo, S3CID(0x0A)) ? PcrvFromLo(plo) : nullptr;
     if (!pcrv || !pcrv->fClosed) return false;
     *pgMin = pcrv->as.front();
     *pgMax = SLengthCrv(pcrv);
@@ -406,12 +505,21 @@ bool FJtRange(LO* plo, JTL jtl, float* pgMin, float* pgMax)
 // method 2: the point's parameter for the actor
 float GJtInit(LO* plo, JTL jtl, ACTOR* pa)
 {
-    const CRV* pcrv = FIsLoDerivedFrom(plo, Icid(CID3::PATH)) ? PcrvFromLo(plo) : nullptr;
+    const CRV* pcrv = FIsLoDerivedFrom(plo, S3CID(0x0A)) ? PcrvFromLo(plo) : nullptr;
     switch (jtl)
     {
     case JTL_Pipe: return pcrv ? GCurveNearest(pcrv, PosAloCenter(pa->palo), 100.0f, 35.0f) : 0.0f;  // 0x1C3958
     case JTL_Rail: return pcrv ? GCurveNearest(pcrv, PosActorProbe0(pa), 50.0f, 50.0f) : 0.0f;            // 0x1CBAC0
     case JTL_Ledge: return pcrv ? GCurveNearest(pcrv, PosActorProbe0(pa), 30.0f, 30.0f) : 0.0f;           // 0x183040
+    case JTL_Wall:
+    {
+        // orig: 0x001834D0
+        const glm::vec3 d = PosActorProbe0(pa) - PosJtLo(plo);
+        const uint32_t u = plo->U32Field(0, 0x11C, 0);
+        float radius;
+        std::memcpy(&radius, &u, sizeof(radius));
+        return std::atan2(d.y, d.x) * radius;
+    }
     default: return 0.0f;  // 0x182CC8
     }
 }
@@ -420,9 +528,10 @@ float GJtInit(LO* plo, JTL jtl, ACTOR* pa)
 glm::vec3 PosJt(LO* plo, JTL jtl, ACTOR* pa, float g)
 {
     const glm::vec3 base(pa->vecBase);
-    const CRV* pcrv = FIsLoDerivedFrom(plo, Icid(CID3::PATH)) ? PcrvFromLo(plo) : nullptr;
+    const CRV* pcrv = FIsLoDerivedFrom(plo, S3CID(0x0A)) ? PcrvFromLo(plo) : nullptr;
     switch (jtl)
     {
+    case JTL_Point: return PosJtLo(plo) + glm::vec3(0.0f, 0.0f, -150.0f);  // 0x184F98, D_002BE910
     case JTL_Pipe:
     {
         // 0x1C3A08: the pipe's point, 50 out of its frame's x row
@@ -448,8 +557,22 @@ glm::vec3 PosJt(LO* plo, JTL jtl, ACTOR* pa, float g)
         return (pos + n * pa->g103C) - base;
     }
     case JTL_Spire: return PosJtLo(plo) - base;  // 0x1FF4F0
+    case JTL_Wall:
+    {
+        // orig: 0x00183540 (the parameter is arc length around the wall)
+        const uint32_t u = plo->U32Field(0, 0x11C, 0);
+        float radius;
+        std::memcpy(&radius, &u, sizeof(radius));
+        return PosJtLo(plo) + cmm::SetVectorCylind(g / radius, radius + pa->g103C, 0.0f) - base;
+    }
+    case JTL_Swing:
+    {
+        // orig: 0x00183818 (kind 0 has the actor's outward offset)
+        const float offset = plo->U32Field(0, 0x11C, 0) == 0 ? pa->g103C : 0.0f;
+        return (PosJtLo(plo) - base) + glm::vec3(MatJtLo(plo)[0]) * offset;
+    }
     case JTL_Use: return PosJtLo(plo);            // 0x184208
-    case JTL_Hook: WarnOnceJt("the hook's point (0x184510)"); return PosJtLo(plo);
+    case JTL_Hook: return PosHookTarget(plo);  // 0x184510
     default: WarnOnceJt("the description methods of list " + std::to_string(jtl)); return PosJtLo(plo);
     }
 }
@@ -459,7 +582,7 @@ float DistJtAdjust(LO* plo, JTL jtl, float d)
 {
     if (jtl != JTL_Use) return d;
     float r = 200.0f;
-    const uint32_t u = plo->U32Field(0, 0x110, 0);
+    const uint32_t u = plo->U32Field(0, 0x120, 0);
     if (u) std::memcpy(&r, &u, 4);
     return d - (r - (250.0f - 150.0f));
 }
@@ -470,13 +593,16 @@ void RateJt(ACTOR* pa, const glm::vec3& pos, LO* plo, JTL jtl, JTENT* aent, int 
     if (plo->paloParent)
     {
         const glm::vec3 d = PosJtLo(plo) - pos;
+        if (jtl == JTL_Use && std::getenv("SLY2N_JTPRINT") && !std::strcmp(std::getenv("SLY2N_JTPRINT"), "4"))
+            std::printf("jt use %d: radius %.1f distance %.1f (at %.0f %.0f %.0f, actor %.0f %.0f %.0f)\n", plo->oid, plo->sRadius, glm::length(d),
+                        PosJtLo(plo).x, PosJtLo(plo).y, PosJtLo(plo).z, pos.x, pos.y, pos.z);
         if (plo->sRadius * plo->sRadius < (d.x * d.x + d.y * d.y) + d.z * d.z) return;
     }
     if (plo == pa->jump.ploC || plo == pa->jump.ploLeft || plo == pa->ploF5C) return;
     // TODO(actors): the carried +0x4D4 and its group (+0x4D8), Sly's +0x18C4 / +0x1F18, 0x2E1E4C's exclusions
     if (SLY* p = dynamic_cast<SLY*>(pa); p && plo == p->ploOther) return;
     const JTDESC desc = JtDescOf(plo, jtl);
-    if (jtl == JTL_Use && std::getenv("SLY2N_JTPRINT") && !std::strcmp(std::getenv("SLY2N_JTPRINT"), "3"))
+    if (jtl == JTL_Use && std::getenv("SLY2N_JTPRINT") && std::atoi(std::getenv("SLY2N_JTPRINT")) >= 3)
         std::printf("jt rate use %d: mask 0x%X allowed 0x%X\n", plo->oid, desc.mask, static_cast<uint32_t>(pa->n1000));
     if (!(static_cast<uint32_t>(pa->n1000) & desc.mask)) return;
     JTENT e;
@@ -533,7 +659,7 @@ LO* PloNewJtAura(LO* pproxy, const JTENT& e)
                                                  // player's part, so it kept the player's facing and the emblem faced away)
     RemoveLo(g_psw, plo);                        // vt slot 9
     SwitchLoFaded(plo, true, 0.25f);             // 0x1F7C68
-    if (FIsLoDerivedFrom(plo, Icid(CID3::ALO)))
+    if (FIsLoDerivedFrom(plo, S3CID(0x30)))
     {
         ALO* palo = static_cast<ALO*>(plo);
         SetAloPos(palo, e.pos);                    // vt slot 29
@@ -611,7 +737,7 @@ void TrackJt(ACTOR* pa, int n, JTENT* aent)
                 if (gMax < old.g) old.g -= gRange;
                 else if (old.g < gMin) old.g += gRange;
             }
-            if (FIsLoDerivedFrom(old.ploAura, Icid(CID3::ALO))) SetAloPos(static_cast<ALO*>(old.ploAura), PosJt(old.plo, old.jtl, pa, old.g));  // method 3, slot 29
+            if (FIsLoDerivedFrom(old.ploAura, S3CID(0x30))) SetAloPos(static_cast<ALO*>(old.ploAura), PosJt(old.plo, old.jtl, pa, old.g));  // method 3, slot 29
         }
         for (int k = j; k < n - 1; ++k) aent[k] = aent[k + 1];
         --n;
@@ -632,6 +758,8 @@ void TrackJt(ACTOR* pa, int n, JTENT* aent)
 }
 }  // namespace
 
+void DropJtTrack() { TrackJt(nullptr, 0, nullptr); }
+
 // the description's methods 2 / 3 (0x182CD8) for the interaction: the parameter, then the point and the facing angle
 // (the ledge's 0x1830D8: atan2 of its outward normal, flipped by the actor's +0x1040; the others: the actor's heading)
 float GJtDescInit(LO* plo, JTL jtl, ACTOR* pa) { return GJtInit(plo, jtl, pa); }
@@ -641,7 +769,7 @@ glm::vec3 PosJtDesc(LO* plo, JTL jtl, ACTOR* pa, float g, float* prad)
     if (prad)
     {
         *prad = pa->radHeading;
-        const CRV* pcrv = FIsLoDerivedFrom(plo, Icid(CID3::PATH)) ? PcrvFromLo(plo) : nullptr;
+        const CRV* pcrv = FIsLoDerivedFrom(plo, S3CID(0x0A)) ? PcrvFromLo(plo) : nullptr;
         if (jtl == JTL_Ledge && pcrv)
         {
             glm::vec3 p(0.0f), dir(0.0f);
@@ -651,6 +779,18 @@ glm::vec3 PosJtDesc(LO* plo, JTL jtl, ACTOR* pa, float g, float* prad)
             n = l < F32(0x38D1B717) ? glm::vec3(1.0f, 0.0f, 0.0f) : n * (1.0f / l);
             if (pa->n1040 == 1) n = -n;
             *prad = std::atan2(n.y, n.x);
+        }
+        else if (jtl == JTL_Wall)
+        {
+            const uint32_t u = plo->U32Field(0, 0x11C, 0);
+            float radius;
+            std::memcpy(&radius, &u, sizeof(radius));
+            *prad = g / radius + (pa->n1040 == 1 ? 3.1415927f : 0.0f);  // 0x183540
+        }
+        else if (jtl == JTL_Swing)
+        {
+            const glm::vec3 x = MatJtLo(plo)[0];
+            *prad = std::atan2(x.y, x.x) + (pa->n1040 == 1 ? 3.1415927f : 0.0f);  // 0x183818
         }
         else WarnOnceJt("the description's facing angle (method 3) of list " + std::to_string(jtl));
     }
@@ -706,7 +846,7 @@ glm::vec3 VecSideOf(const glm::vec3& dir)
 // the description's method 5: a random point near the target (the sparkles' place) and the direction they leave in
 void RandomJtPoint(LO* plo, JTL jtl, float g, glm::vec3* ppos, glm::vec3* pdir)
 {
-    const CRV* pcrv = FIsLoDerivedFrom(plo, Icid(CID3::PATH)) ? PcrvFromLo(plo) : nullptr;
+    const CRV* pcrv = FIsLoDerivedFrom(plo, S3CID(0x0A)) ? PcrvFromLo(plo) : nullptr;
     glm::vec3 pos(0.0f), dir(0.0f);
     switch (jtl)
     {
@@ -759,11 +899,13 @@ void RandomJtPoint(LO* plo, JTL jtl, float g, glm::vec3* ppos, glm::vec3* pdir)
         break;
     case JTL_Hook:
     {
-        // orig: 0x001845A0 (around the hook's point within 75; TODO: its +0x110 local point, natively the object's)
+        // orig: 0x001845A0 (a 75-unit disk around the transformed authored anchor)
         const float pan = GRandInRange(-F32(0x40490FDB), F32(0x40490FDB));
         const float r = GRandInRange(0.0f, 75.0f);  // D_002BE90C
-        *ppos = PosJtLo(plo) + VecCylind(pan, r, 0.0f);
+        *ppos = PosHookAnchor(plo) + VecCylind(pan, r, 0.0f);
         *pdir = glm::vec3(0.0f, 0.0f, 1.0f);
+        if (std::getenv("SLY2N_HOOKPOINT"))
+            std::printf("HOOK_SPARK {\"oid\":%u,\"pos\":[%.9g,%.9g,%.9g]}\n", plo->oid, ppos->x, ppos->y, ppos->z);
         return;
     }
     default: break;
@@ -773,7 +915,7 @@ void RandomJtPoint(LO* plo, JTL jtl, float g, glm::vec3* ppos, glm::vec3* pdir)
     const float t = GRandInRange(-1.0f, 1.0f);
     const float tilt = std::fabs(t) * t * 1.5707964f;
     const float r = GRandInRange(0.0f, 35.0f);  // D_002BE8B0
-    const glm::vec3 c = FIsLoDerivedFrom(plo, Icid(CID3::ALO)) ? PosAloCenter(static_cast<ALO*>(plo)) : PosJtLo(plo);  // 0x1A62E8
+    const glm::vec3 c = FIsLoDerivedFrom(plo, S3CID(0x30)) ? PosAloCenter(static_cast<ALO*>(plo)) : PosJtLo(plo);  // 0x1A62E8
     *ppos = c + VecSphere(pan, tilt, r);
     *pdir = glm::vec3(0.0f, 0.0f, 1.0f);
 }
@@ -839,7 +981,7 @@ void UpdateJtCandidates(ACTOR* pa, uint32_t grf)
     if (grf & 2) scan(JTL_Pipe);
     if (grf & 1)
         for (LO* plo : AploJtList(g_psw, JTL_Point))
-            if (FIsLoDerivedFrom(plo, 0x13) && (plo->U32Field(0, 0xE8, 0) & 1)) RateJt(pa, pos, plo, JTL_Point, aent, 4);
+            if (FIsLoDerivedFrom(plo, S3CID(0x13)) && (plo->U32Field(0, 0xE8, 0) & 1)) RateJt(pa, pos, plo, JTL_Point, aent, 4);
     if (grf & 0x20) scan(JTL_Swing);
     int n = 4;
     if (!aent[3].plo)
@@ -861,7 +1003,7 @@ void UpdateJtCandidates(ACTOR* pa, uint32_t grf)
         if (!(250.0f < 0.0f + std::sqrt((d.x * d.x + d.y * d.y) + d.z * d.z)))
         {
             LO* pproxy = g_jttrack.ae[0].ploAura ? PproxyOfInstance(g_jttrack.ae[0].ploAura) : nullptr;  // 0x1CB658
-            if (pproxy && pproxy->oid == 0x624 && 1.0f < g_jttrack.ae[0].t) id = 0x125;
+            if (pproxy && pproxy->oid == 0x624 && 1.0f < g_jttrack.ae[0].t) id = IdText(0x125);
             else id = JtDescOf(g_jttrack.ae[0].plo, g_jttrack.ae[0].jtl).id;
         }
     }
@@ -889,11 +1031,11 @@ int KindJtCircle(ACTOR* pa, LO** pplo)
         if (250.0f < e.dist) break;
         LO* plo = e.plo;
         int k = -1;
-        if (FIsLoDerivedFrom(plo, 0x13) || FIsLoDerivedFrom(plo, 0x0B)) k = dynamic_cast<SLY*>(pa) && pa->palo == PloPoCurrent(g_psw) ? 6 : 5;
-        else if (FIsLoDerivedFrom(plo, 0x1B)) k = 8;
-        else if (FIsLoDerivedFrom(plo, 0x0C) || FIsLoDerivedFrom(plo, 0x22)) k = 0;
-        else if (FIsLoDerivedFrom(plo, 0x26)) k = static_cast<int>(plo->U32Field(0, 0x10C, 0));
-        else if (FIsLoDerivedFrom(plo, 0x23)) k = 7;
+        if (FIsLoDerivedFrom(plo, S3CID(0x13)) || FIsLoDerivedFrom(plo, S3CID(0x0B))) k = dynamic_cast<SLY*>(pa) && pa->palo == PloPoCurrent(g_psw) ? 6 : 5;
+        else if (FIsLoDerivedFrom(plo, S3CID(0x1B))) k = 8;
+        else if (FIsLoDerivedFrom(plo, S3CID(0x0C)) || FIsLoDerivedFrom(plo, S3CID(0x22))) k = 0;
+        else if (FIsLoDerivedFrom(plo, S3CID(0x26))) k = static_cast<int>(plo->U32Field(0, 0x11C, 0));
+        else if (FIsLoDerivedFrom(plo, S3CID(0x23))) k = 7;
         if (k != -1)
         {
             if (pplo) *pplo = plo;
@@ -903,3 +1045,9 @@ int KindJtCircle(ACTOR* pa, LO** pplo)
     return -1;
 }
 
+bool FUseAllows(LO* puse, const ACTOR* pa)
+{
+    // orig 0x001841F0 (EOPID 1072's method 0x10D660): the use's players AND the actor's +0x1000
+    if (!puse || !pa || !FIsLoDerivedFrom(puse, S3CID(0x23))) return false;
+    return (JtDescOf(puse, JTL_Use).mask & static_cast<uint32_t>(pa->n1000)) != 0;
+}

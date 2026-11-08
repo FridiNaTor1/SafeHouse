@@ -1,12 +1,12 @@
 #pragma once
 
-// The paged menu (orig 0x3D9ED0, module 0x1AE928..0x1B0B78): a stack of pages of entries on a screen object
-// (the wheel of 0x370 by default), each page's model animated by the menu's state (+0x1E8). Its pages: the pause
-// menu (0x1B0290: Keep Playing / Quit Game / Exit to Episode Menu / Abandon Job / Options... / Controls... /
-// Job Help), the options (0x1B04E0: New / Load / Save Game..., the sound, the screen centre, the vibrations; plus
-// the PC display options, as Sly1-Release's prompt.cpp options menu), the save slots (the data access pages
-// 0x2BFDA8 / 0x2BFE08 / 0x2BFE68: 0x1AD250 / 0x1AD320 / 0x1AD480) and the yes / no pages. The card dialogs
-// (0x2E6550 on screen object 0x52C: 0x1ACB58 / 0x1ACCC8) do their messages over host files.
+// Sly 3's paged menu (orig3 0x46F550, module 0x1D2C20..0x1D57B8, Sly 2's 0x3D9ED0 with Sly 3's tables): a stack of
+// pages of entries on a screen object (the wheel of 1056 by default, an external screen file), each page's model
+// animated by the menu's state (+0x1FC). Its pages: the pause menu (0x1D48D0, table 0x345DA0: Keep Playing / Quit Game
+// (Save and Quit) / Exit to Game Menu / Abandon Job / Options... / Control Help / Job Help / the 3-D resets), the
+// options (0x1D4C48, 0x345B40: New / Load / Save Game..., Speakers, Music / Effects Volume, USB Headset, Camera
+// Options…, Center Screen..., Vibrations; plus the PC's Display Options... / Controls...), the save slots (0x345990 /
+// 0x3459F0 / 0x345A50) and the yes / no pages. The card dialog's messages are card3.h's (screen object 1466).
 
 #include "lo.h"
 #include "savedata.h"
@@ -21,14 +21,22 @@ void UpdateMenu(SW* psw);      // orig 0x001AEEE0 and the card dialog's 0x1ACCC8
 bool FMenuShown();             // orig 0x001D9880 on 0x3D9ED0 / 0x2E6550 / 0x3DA4F0 (the episode menu waits)
 bool FMenuActive();            // the menu is in the HUD's list (the game paused under it)
 bool FCardMessageActive();     // orig 0x001D9880 on the card widget 0x2E6550
-// orig 0x001B0290: the pause menu (false when it cannot open now)
+// orig3 0x001D48D0: the pause menu (false when it cannot open now)
 bool FOpenPauseMenu(SW* psw);
-// orig 0x001B04E0(0): the options page from the title (SELECT)
+// orig3 0x001D4BF8: the options page from the title (SELECT)
 void OpenDataAccessMenu(SW* psw);
-// orig 0x001ACB58 on 0x2E6550: a card message (0x1A saving, 0x1C overwrite?, 0x22 the auto-save warning, ...)
-void ShowCardMessage(int idMsg, int nAfter = -1);   // nAfter: +0x4C (1 boot again, 2 close the menu, 3 an auto-save)
+// orig3 0x001D0C08 on 0x3751D0 (card3.h): a card message (Sly 3's text ids: 0x26 saving, 0x28 overwrite?, 0x2F the
+// auto-save warning, ...); nAfter: +0x60 (1 boot again, 2 close the menu, 3 an auto-save)
+void ShowCardMessage(int idMsg, int nAfter = -1);
+// (card3.cpp) the menu's card messages answered (orig3 0x1D1370 yes / 0x1D1190 no): true when the message is the menu's
+bool FMenuCardAnswer3(int msg, bool fYes);
+// (screen3.cpp) the menu's script strings (815..824 the wheel, 917..929 Control Help, 1692..1698 the slots' pages)
+bool FStrMenuScript3(int id, std::string* pstr);
+// (the camera code) the options' Camera Options… page: a camera kind's (0 the camera, 1 the binocucom, 2 the grapple-cam,
+// 3 a turret, 4 strafing, 5 swimming, 6 the harpoon) Left/Right (fVertical false) or Up/Down reversed
+bool FCamReverse3(int kind, bool fVertical);
 
-// the menu's script strings (0x2D2..0x2DB its wheel, 0x5CB..0x5D1 the slots, 0x2F2 / 0x2F3 the card dialog)
+// (Sly 2's script string ids: none in Sly 3)
 std::string StrMenuScript(int id);
 // the auto-save the episode menu runs when it starts (orig 0x1ABD98(g_save, 1))
 void HudAutoSaveFrontEnd();
@@ -37,5 +45,10 @@ void HudAutoSaveFrontEnd();
 // this game: the "create a save file?" answered no)
 extern int g_ncardMode;
 
-// orig 0x001D8FF8: a record's settings take effect (the mixer mode, the music and effects volumes)
+// orig (Europe) 0x001DDFB8: the title's language menu (a disc with two or more languages)
+void OpenLanguageMenu(SW* psw);
+// the card's status known (the European title's first Start turns the card on: frontend.cpp)
+bool FCardSettled();
+
+// orig3 0x0021D360: a record's settings take effect (the mixer mode, the music and effects volumes)
 void ApplyGameSettings(const GAMESAVE& gs);

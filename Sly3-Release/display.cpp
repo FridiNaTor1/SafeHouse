@@ -30,6 +30,7 @@ void FromSettings(const st::SystemSettings& s)
     g_display.drawDistance = s.drawDistance;
     g_display.window = DISPWINDOW(std::clamp(s.windowMode, 0, 2));
     g_display.fVsync = s.vsyncEnabled != 0;
+    g_display.fLongShadows = s.longShadows != 0;   // (v16, QoL: render.cpp FBuildShadow2)
     PcInputFromSettings(s);   // (the controls and the prompts: pcinput.h)
     SetSoundUserVolumes(s.musicVolume, s.soundEffectsVolume, s.dialogueVolume);   // (the launcher's sliders: sound.h)
 }
@@ -44,6 +45,7 @@ void ToSettings(st::SystemSettings& s)
     s.drawDistance = g_display.drawDistance;
     s.windowMode = int(g_display.window);
     s.vsyncEnabled = g_display.fVsync ? 1 : 0;
+    s.longShadows = g_display.fLongShadows ? 1 : 0;
     PcInputToSettings(s);
 }
 
@@ -168,6 +170,13 @@ void LayoutDisplay(int outputWidth, int outputHeight)
     }
 }
 
+int DisplayRefreshRate(GLFWwindow* window)
+{
+    GLFWmonitor* monitor = window ? MonitorForWindow(window) : glfwGetPrimaryMonitor();
+    const GLFWvidmode* mode = monitor ? glfwGetVideoMode(monitor) : nullptr;
+    return mode ? mode->refreshRate : 0;
+}
+
 void ApplyDisplaySettings(GLFWwindow* window)
 {
     if (!window) return;
@@ -189,15 +198,20 @@ void ApplyDisplaySettings(GLFWwindow* window)
             }
             else if (mode == DISPWINDOW_Borderless)
             {
-                // the whole monitor, taskbar included (as Sly1-Release ApplyWindowModeSettings; on Windows the frames
-                // go through a DXGI swap chain, platform/gl_context.h, so focus changes do not blank the screen)
-                if (const GLFWvidmode* vm = glfwGetVideoMode(monitor))
-                {
-                    int x = 0, y = 0;
-                    glfwGetMonitorPos(monitor, &x, &y);
-                    glfwSetWindowAttrib(window, GLFW_DECORATED, GLFW_FALSE);
-                    glfwSetWindowMonitor(window, nullptr, x, y, vm->width, vm->height, GLFW_DONT_CARE);
-                }
+                const GLFWvidmode* vm = glfwGetVideoMode(monitor);
+                if (!vm) return;
+                int x = 0, y = 0;
+                glfwGetMonitorPos(monitor, &x, &y);
+                int dx = vm->width;
+#if defined(_WIN32)
+                // Some Windows OpenGL drivers promote monitor-sized windows to fullscreen. An extra
+                // column is a workaround for the resulting focus-change blackout, while covering the taskbar.
+                // GLFW discussion, replies 2-3 (fullscreen promotion and the reported size workaround):
+                // https://discourse.glfw.org/t/cannot-view-window-via-screenshot-or-remote-screen-access/2986
+                ++dx;
+#endif
+                glfwSetWindowAttrib(window, GLFW_DECORATED, GLFW_FALSE);
+                glfwSetWindowMonitor(window, nullptr, x, y, dx, vm->height, GLFW_DONT_CARE);
             }
             else if (const GLFWvidmode* vm = glfwGetVideoMode(monitor))
             {
@@ -207,7 +221,31 @@ void ApplyDisplaySettings(GLFWwindow* window)
             s_windowApplied = mode;
         }
     }
-    cane::gl::SwapInterval(g_display.fVsync ? 1 : 0);
+    // The swap interval (Sly1-Release ApplySwapInterval): with VSync, 1 when the cap reaches the refresh rate (the swap
+    // then paces), 2 for a cap of half of it; another cap is paced by the timer between the vblanks.
+    int interval = 0, refreshRate = 0;
+    bool fSwapPacesFrames = false;
+    if (g_display.fVsync)
+    {
+        interval = 1;
+        refreshRate = DisplayRefreshRate(window);
+        // (Windows reports 59.94 Hz modes as 59: the real vblank runs more than 1 % faster than a 59 cap, it never gates)
+        const bool fRefreshTruncated = refreshRate < 100 && refreshRate % 10 == 9;
+        if (refreshRate > 0 && g_display.frameRate >= refreshRate && !fRefreshTruncated) fSwapPacesFrames = true;
+        else if (refreshRate > 0 && g_display.frameRate * 2 == refreshRate)
+        {
+            interval = 2;   // (Mesa on Wayland clamps it to 1: the pacer notices the swap not pacing and holds the cap)
+            fSwapPacesFrames = true;
+        }
+    }
+    cane::gl::SwapInterval(interval);
+    g_display.fSwapPacesFrames = fSwapPacesFrames;
+    static int s_interval = -1, s_refreshRate = -1, s_frameRate = -1, s_window = -1;
+    if (interval != s_interval || refreshRate != s_refreshRate || g_display.frameRate != s_frameRate || int(mode) != s_window)
+    {
+        s_interval = interval, s_refreshRate = refreshRate, s_frameRate = g_display.frameRate, s_window = int(mode);
+        ++g_display.swapGeneration;
+    }
     int fbw = 0, fbh = 0;
     glfwGetFramebufferSize(window, &fbw, &fbh);
     LayoutDisplay(fbw, fbh);

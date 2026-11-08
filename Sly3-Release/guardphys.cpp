@@ -1,9 +1,10 @@
 // The guards' (class 0x38..) overrides of the physics' vtable slots, which read their AI state:
 // 85 0x20B090 (the floor probes / contacts), 61 0x206380 (the overlap kind), 75 0x207468 (a contact
-// accepted: the jobs get message 12) with 86 0x207530 / 76 0x207598. Slot 59 0x209C88's moves (+0xF80 0..3: the
-// climbs / jumps, 0x1E6F10) are not ported (its base 0x1F4FA8 does nothing; the walking guards' +0xF80 is -1).
+// accepted: the jobs get message12) with86 0x207530 /76 0x207598. Slot59 0x209C88
+// adds the rail contacts for attached movement mode 0, the ladder's (mode 1) and the bar's (mode 2); mode 3 remains unported.
 
 #include "guard.h"
+#include "game/sly3.h"
 #include "aihit.h"
 
 #include "ai.h"
@@ -13,12 +14,50 @@
 #include "clock.h"
 #include "vecmat.h"
 #include "cls.h"
+#include "climb.h"
+#include "jt.h"
+#include "activate.h"
 
 #include <cstdio>
 #include <cstdlib>
 
 namespace
 {
+// orig: 0x00209C88, slot59, rail case0. The base0x1F4FA8 is empty.
+void AddGuardRailContacts(ALO* palo)
+{
+    GUARD* guard = PguardFromLo(palo);
+    if (!guard) return;
+    if (guard->kMove == 2 && guard->ploMove)
+    {
+        // case 2, on a bar: the hands (+0xF90) held on the bar's line (its place, its x row), all three ways
+        const glm::vec3 hands = guard->ploF90 ? PosLoWorld(guard->ploF90) : PosAi(palo);
+        AddStepLineXps(&StepPhysOf(palo), 7, PosLoWorld(guard->ploMove), glm::vec3(MatJtLo(guard->ploMove)[0]), hands,
+                       guard->ploMove);
+        return;
+    }
+    if (guard->kMove == 1 && guard->ploMove)
+    {
+        // case 1, on a ladder / pipe: the hands (+0xF90) held on its point at the place and its direction there, all
+        // three ways (R50: the Ep4 Contessa's drain pipe)
+        if (const CRV* curve = PcrvFromLo(guard->ploMove))
+        {
+            glm::vec3 position, direction;
+            EvalCrvS(curve, guard->sMove, &position, &direction);
+            const glm::vec3 hands = guard->ploF90 ? PosLoWorld(guard->ploF90) : PosAi(palo);
+            AddStepLineXps(&StepPhysOf(palo), 7, position, direction, hands, guard->ploMove);
+        }
+        return;
+    }
+    if (guard->kMove != 0) return;
+    if (const CRV* curve = PcrvFromLo(guard->ploMove))
+    {
+        glm::vec3 position, direction;
+        EvalCrvS(curve, guard->sMove, &position, &direction);
+        AddStepLineXps(&StepPhysOf(palo), 0x22, position, direction, PosGuardProbe(guard), guard->ploMove);
+    }
+}
+
 // orig: 0x0020B090 (vt slot 85: 1 in state 0x14; 0 in 0x12 / 0x13 / 0x16; else the move job's slot 12, else STEP's
 // 0x2040F8)
 uint32_t GrfGuardXp(ALO* palo)
@@ -51,7 +90,7 @@ int OverlapKindGuard(ALO* pa, ALO* pb)
     {
         if (auto* pj = dynamic_cast<JOBB1*>(PjobFind(pg, 0xB1)); pj &&
             (pj->stLaunch == 0 || pj->stLaunch == 4 || pj->stLaunch == 5) && pj->ploOwner &&
-            FCidDerivedFrom(pj->ploOwner->Cid(), 0x30) && Poxa(static_cast<ALO*>(pj->ploOwner)) == Poxa(pb))
+            FCidDerivedFrom(pj->ploOwner->Cid(), S3CID(0x30)) && Poxa(static_cast<ALO*>(pj->ploOwner)) == Poxa(pb))
             r = std::max(r, 1);
     }
     return r;
@@ -153,6 +192,7 @@ void ThrowGuardHeld(LO* plo)
 NATIVEFN(0x20B090, GrfGuardXp);
 NATIVEFN(0x206380, OverlapKindGuard);
 NATIVEFN(0x207468, FAcceptContactGuard);
+NATIVEFN(0x209C88, AddGuardRailContacts);
 
 // orig: 0x00207598 (vt slot 76, for the watchers: guard.cpp)
 bool FGuardBusy76(GUARD* pg) { return FGuardBusy(pg); }

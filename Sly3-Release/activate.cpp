@@ -1,5 +1,7 @@
 #include "pickup.h"
+#include "game/sly3.h"
 #include "actor.h"
+#include "damage.h"
 #include "breakable.h"
 #include "step.h"
 #include "murraycarry.h"
@@ -11,6 +13,8 @@
 #include "carry.h"
 #include "booty.h"
 #include "guard.h"
+#include "ainoise.h"
+#include "projectile.h"
 #include "so.h"
 #include "sound.h"
 #include "vtnative.h"
@@ -34,6 +38,8 @@ void PrintRef(const CRef& ref, std::string* ps);  // bif.cpp (debug)
 
 #include <algorithm>
 #include <functional>
+#include <unordered_map>
+#include "drawdist.h"
 #include <cmath>
 #include "clock.h"
 
@@ -43,14 +49,16 @@ void PrintRef(const CRef& ref, std::string* ps);  // bif.cpp (debug)
 ACTVIEW g_actview;
 
 void OnRemoveGuard(LO* plo);  // guard.cpp (orig 0x2064D8)
+void OnRemoveSpawner(LO* plo);  // spawner.cpp (orig 0x1746B8, after the base notification)
 
-void OnRemoveHackSo(LO* plo);  // (hack.cpp: the hack objects' 0x17F110, the ship's 0x17F740)
+void OnRemoveHackSo(LO* plo);  // (hack.cpp: the hack objects' 0x17F110, the ship's 0x17F740, the enemies' 0x180598)
+void OnRemoveTrigger(LO* plo);  // trigger.cpp (orig 0x149880, after the base 0x1A5848)
 
 namespace
 {
 constexpr float S_STOP = 500.0f;  // orig D_002BD450: the distance the viewpoints move before every root is rechecked
 
-bool FAlo(const LO* plo) { return FCidDerivedFrom(plo->Cid(), 0x30); }
+bool FAlo(const LO* plo) { return FCidDerivedFrom(plo->Cid(), S3CID(0x30)); }
 
 // The parent's list keeps its added children first, its removed ones after (orig 0x1A5448: the list +0x64 and
 // the first removed +0x70)
@@ -89,6 +97,7 @@ void OnAdd(LO* plo)
 void OnRemove(LO* plo)
 {
     plo->fInWorld = false;
+    if (plo->grf & (1ull << 59)) RemoveSafeGroundReferences(plo, nullptr);  // 0x1A5848 -> 0x1A00D0
     OnLoRemovePhys(plo);  // the ALO's 0x1F2D48 physics part (physworld.cpp)
     if (plo->pcls && plo->pcls->PfnOrig(12) == 0x12E6E8) EnableCmObject(plo, false);  // 0x12E6E8
     if (FAlo(plo))
@@ -103,12 +112,18 @@ void OnRemove(LO* plo)
     // 0x1BC198: the polygon out of its region and the nav's queue (its merge owner's members requeued: not modelled)
     if (plo->pcls && plo->pcls->PfnOrig(12) == 0x1BC198) RemoveNavPoly(plo);
     if (plo->pcls && plo->pcls->PfnOrig(12) == 0x2064D8) OnRemoveGuard(plo);  // guard.cpp
-    if (plo->pcls && (plo->pcls->PfnOrig(12) == 0x17F110 || plo->pcls->PfnOrig(12) == 0x17F740))
+    if (plo->pcls && (plo->pcls->PfnOrig(12) == 0x17F110 || plo->pcls->PfnOrig(12) == 0x17F740 ||
+                      plo->pcls->PfnOrig(12) == 0x180598))
     {
         OnRemoveHackSo(plo);
     }
     // 0x1A5848's end: the notification slot 4 (0x133508) with message 1 (the object's own slot 5, then its listeners)
     if (FLoHasListeners(plo)) NotifyLoListeners(plo, 1, plo);
+    if (plo->pcls && plo->pcls->PfnOrig(12) == 0x1746B8) OnRemoveSpawner(plo);
+    if (plo->pcls && plo->pcls->PfnOrig(12) == 0x149880) OnRemoveTrigger(plo);
+    if (plo->pcls && plo->pcls->PfnOrig(12) == 0x156D58) OnRemoveNoiseListener(plo);
+    // 0x1B1E38 calls its ALO base first, then releases the flight clip/controller.
+    if (plo->pcls && plo->pcls->PfnOrig(12) == 0x1B1E38) OnRemoveMissile(plo);
 }
 
 // orig 0x00147E20
@@ -171,8 +186,13 @@ void CheckLoRoot(SW* psw, LO* plo)
 }
 
 // The classes' InitLo (vt slot 7) bodies' activation part: the kind they set (0x1A6CA8; InitLo 0x1A5270: 2)
-int StInit(CID cid)
+// (Sly 3: the switches below are Sly 2's class numbers: a Sly 3 class is looked up as its Sly 2 twin (game/sly3.h
+// Cid2FromCid3); a new Sly 3 class without one takes its base's rule (ALO 0x2F: 0 / 0x21). TODO(sly3): each class's
+// own InitLo from the Sly 3 asm)
+int StInit(CID cid3)
 {
+    const int cid = sly3::Cid2FromCid3(cid3);
+    if (cid < 0) return FCidDerivedFrom(cid3, S3CID(0x30)) ? 0 : 2;
     switch (cid)
     {
     case 0x04: case 0x0F: case 0x10: case 0x1C: case 0x57: case 0x68: case 0x73: case 0x74: case 0x79: case 0x7D:
@@ -189,8 +209,9 @@ int StInit(CID cid)
 }
 
 // ... and their +0x40 flags (0x40: never in the update table; 2: updated; TODO: the other bits)
-uint32_t GrfUpdInit(CID cid)
+uint32_t GrfUpdInit(CID cid3)
 {
+    const int cid = sly3::Cid2FromCid3(cid3);
     switch (cid)
     {
     case 0x6D: case 0x6E: case 0x6F: case 0x75: return 0x21 | 0x40;  // 0x12F248, 0x1EFA90, 0x1564E8
@@ -206,10 +227,16 @@ uint32_t GrfUpdInit(CID cid)
         return 0x21 | 2;  // 0x220ED0, 0x153D58, 0x1492F0, 0x2281E8, 0x1591B0, 0x156CC8, 0x228B48 (the water), 0x1B0B78, 0x1D4E68, ...
     default: break;
     }
-    if ((cid >= 0x32 && cid <= 0x46 && cid != 0x34) || cid == 0x4D || cid == 0x4E) return 0x21 | 2;  // 0x1C3D70
+    if ((cid >= 0x32 && cid <= 0x46 && cid != 0x34) || cid == 0x4D || cid == 0x4E) return 0x21 | 2;   // (Sly 2 numbers)  // 0x1C3D70
+    // the hack objects (0x47..0x4C): their base init 0x17F090 sets the update bit too (the pieces 0x4A have no native
+    // post-load that adds it: their time out / homing 0x1801B8 never ran; audit 2026-11 H1)
+    if (cid >= 0x47 && cid <= 0x4C) return 0x21 | 2;
     return 0x21;
 }
 }
+
+// orig: 0x00148300 (public entry for recovery; AddLo uses the same check internally)
+void CheckLoRootNow(SW* psw, LO* plo) { if (psw && plo) CheckLoRoot(psw, plo); }
 
 LO* PloRoot(LO* plo)
 {
@@ -234,7 +261,7 @@ glm::vec3 PosLoWorld(const LO* plo)
         if (const XF* pxf = PxfObj(palo)) return glm::vec3(pxf->matWorld[3]);
         return palo->axf.empty() ? glm::vec3(0.0f) : glm::vec3(palo->axf[0]->matWorld[3]);
     }
-    if (FCidDerivedFrom(plo->Cid(), 3))
+    if (FCidDerivedFrom(plo->Cid(), S3CID(3)))
     {
         // orig 0x231440 (0x231368: the reference's world x the local, +0xA0)
         const LOX* plox = static_cast<const LOX*>(plo);
@@ -261,6 +288,8 @@ void RegisterLoTree(SW* psw, LO* plo)
     AddLoToUpdateTable(psw, plo);
     OnLoRegisterPhys(plo);  // the ALO's 0x1F3EA8 physics part (physworld.cpp)
     // PROXY's slot 23 (0x1CA8E0): a streaming proxy (+0xE4 0) asks for an instance (0x149AB8: once, 0x1CA8C0)
+    if (std::getenv("SLY3_PROXYREG") && psw->mpproxy.count(plo))
+        std::fprintf(stderr, "register proxy %d: slot23 0x%X e4 %u\n", plo->oid, plo->pcls ? plo->pcls->PfnOrig(23) : 0, plo->U32Field(0, 0xE4));
     if (plo->pcls && plo->pcls->PfnOrig(23) == 0x1CA8E0 && psw->mpproxy.count(plo) && plo->U32Field(0, 0xE4) == 0)
         PostDeferredCall(plo, 0x1CA8C0, [](void* object, int) { PloAttachProxy(g_psw, static_cast<LO*>(object), 2); });
     if (plo->pcls && plo->pcls->PfnOrig(23) == 0x12ED20) OnAmbientRegistered(plo);  // (sound.h)
@@ -268,6 +297,7 @@ void RegisterLoTree(SW* psw, LO* plo)
     if (FAlo(plo))
         for (LO* pc : std::vector<LO*>(static_cast<ALO*>(plo)->aploChild))
             if (!pc->fRemoved) RegisterLoTree(psw, pc);
+    if (plo->pcls && plo->pcls->PfnOrig(23) == 0x2079E0) OnGuardRegistered(plo);
 }
 
 void UnregisterLoTree(SW* psw, LO* plo)
@@ -278,6 +308,8 @@ void UnregisterLoTree(SW* psw, LO* plo)
     if (FAlo(plo))
         for (LO* pc : std::vector<LO*>(static_cast<ALO*>(plo)->aploChild))
             if (!pc->fRemoved) UnregisterLoTree(psw, pc);
+    if (plo->pcls && plo->pcls->PfnOrig(22) == 0x2079A0) OnGuardUnregistered(plo);
+    if (plo->pcls && plo->pcls->PfnOrig(22) == 0x2213D8) OnZoneUnregistered(plo);  // (cmworld.h)
 }
 
 void QueueLoRoot(SW* psw, LO* plo)
@@ -292,7 +324,7 @@ void AddLo(SW* psw, LO* plo)
 {
     if (!plo->fRemoved) return;
     // (debug: SLY2N_ADDPRINT=oid prints the native call stack of that object's additions)
-    if (static const char* s_sz = std::getenv("SLY2N_ADDPRINT"); s_sz && std::atoi(s_sz) == plo->oid && g_clock.t > 0.0f)
+    if (static const char* s_sz = std::getenv("SLY2N_ADDPRINT"); s_sz && std::atoi(s_sz) == plo->oid && (g_clock.t > 0.0f || std::getenv("SLY2N_ADDPRINT0")))
     {
         void* apv[24];
         std::fprintf(stderr, "add %d (alias %d, clone %d) t %.3f:\n", plo->oid, plo->oidInstance, plo->iclone, g_clock.t);
@@ -311,7 +343,7 @@ void RemoveLo(SW* psw, LO* plo)
 {
     if (plo->fRemoved) return;
     // (debug: SLY2N_REMOVEPRINT=oid prints the native call stack of that object's removals)
-    if (static const char* s_sz = std::getenv("SLY2N_REMOVEPRINT"); s_sz && std::atoi(s_sz) == plo->oid && g_clock.t > 0.0f)
+    if (static const char* s_sz = std::getenv("SLY2N_REMOVEPRINT"); s_sz && std::atoi(s_sz) == plo->oid && (g_clock.t > 0.0f || std::getenv("SLY2N_ADDPRINT0")))
     {
         void* apv[24];
         std::fprintf(stderr, "remove %d (alias %d) t %.3f:\n", plo->oid, plo->oidInstance, g_clock.t);
@@ -330,6 +362,8 @@ void RemoveLo(SW* psw, LO* plo)
     if (fInWorld) OnRemove(plo);
 }
 
+uint32_t g_cLoParentChanges = 0;   // activate.h
+
 void SetLoParentActivation(SW* psw, LO* plo, ALO* paloNew, bool fMovePhys)
 {
     const bool fOld = plo->fInWorld;
@@ -342,6 +376,7 @@ void SetLoParentActivation(SW* psw, LO* plo, ALO* paloNew, bool fMovePhys)
     ALO* paloOld = plo->paloParent;
     UnlinkChild(plo);
     plo->paloParent = paloNew;
+    ++g_cLoParentChanges;
     LinkChild(plo);
     // orig vt slot 13 (0x1A5B80): a root that becomes a child gives up its node; a child that becomes a root
     // gets a new one
@@ -366,10 +401,10 @@ void SetLoParentActivation(SW* psw, LO* plo, ALO* paloNew, bool fMovePhys)
     if (FLoActive(plo)) RegisterLoTree(psw, plo);
     else if (!plo->paloParent && fNew) CheckLoRoot(psw, plo);
     // 0x1A5900's end: the objects vt slot 28 lists follow (the grouper's (cid 0x1F, 0x15C310) kept explosions)
-    if (FIsLoDerivedFrom(plo, 0x1F))
+    if (FIsLoDerivedFrom(plo, S3CID(0x1F)))
         if (LOXCHILD* pc = dynamic_cast<LOXCHILD*>(plo))
             for (LO* pch : std::vector<LO*>(pc->aploChild))
-                if (FIsLoDerivedFrom(pch, 0x1E) && pch->paloParent != paloNew) SetLoParentActivation(psw, pch, paloNew);
+                if (FIsLoDerivedFrom(pch, S3CID(0x1E)) && pch->paloParent != paloNew) SetLoParentActivation(psw, pch, paloNew);
 }
 
 void SetLoSt(SW* psw, LO* plo, int st)
@@ -482,11 +517,54 @@ int NDrawDistanceRoot(const ALO* palo)
     while (proot->paloParent) proot = proot->paloParent;
     if ((proot->st != 0 && proot->st != 3) || !(proot->sRadius < 1e9f) || !(g_actview.grfCm & proot->bMask)) return 0;
     if (rScale < 1.0f ? !proot->fNodeActive : (proot->fNodeActive || !palo->fInWorld || !proot->fInWorld)) return 0;
+    // (above 1x, drawdist-2: not the trees with a character (PO 0x33 and below: guards, NPCs, the gang), which would
+    // stand frozen; they appear at the original's radius, faded in as the original (render.cpp's whole fade). Nor the
+    // clue bottles of a streaming proxy: drawdist.cpp draws those animated, in place of the frozen instance.)
+    if (rScale > 1.0f && (FDrawDistanceActorTree(proot) || (proot->Cid() == S3CID(0x5F) && FDrawDistanceGhostedInstance(proot))))
+        return 0;
     const glm::vec3 pos = proot->st == 0 ? g_actview.posCm : PosPlayer(g_actview.posCm);
     const float d = glm::distance(PosLoWorld(const_cast<LO*>(proot)), pos);
     const float r = proot->sRadius * rScale;
     if (rScale < 1.0f) return d - r < 0.0f ? 0 : -1;
     return d - r < 0.0f ? 1 : 0;
+}
+
+// (drawdist-2) a tree with a character in it: the root or any object under it derived from PO (0x33). Cached per
+// root and game time (the trees change rarely; NDrawDistanceRoot asks for every drawn object).
+bool FDrawDistanceActorTree(const LO* proot)
+{
+    struct CACHE { float t = -1.0f; bool f = false; };
+    static std::unordered_map<const LO*, CACHE> s_mp;
+    static const SW* s_psw = nullptr;
+    if (s_psw != g_psw) { s_psw = g_psw; s_mp.clear(); }
+    CACHE& c = s_mp[proot];
+    if (c.t == g_clock.t) return c.f;
+    std::function<bool(const LO*)> any = [&](const LO* p) {
+        if (FCidDerivedFrom(p->Cid(), S3CID(0x33))) return true;
+        if (FAlo(p))
+            for (const LO* pc : static_cast<const ALO*>(p)->aploChild)
+                if (pc && any(pc)) return true;
+        return false;
+    };
+    c.t = g_clock.t;
+    c.f = any(proot);
+    return c.f;
+}
+
+// (drawdist-2) the tree of an inactive root that the draw distance option draws, emits and poses above 1x (never
+// updated: its logic stays the original's): within its activation radius x the option, in the world, in the
+// camera's mask, no character in it
+bool FDrawDistanceVisualTree(const LO* plo)
+{
+    const float rScale = g_display.drawDistance;
+    if (!(rScale > 1.0f) || !plo->fInWorld) return false;
+    const LO* proot = plo;
+    while (proot->paloParent) proot = proot->paloParent;
+    if (proot->fNodeActive || !proot->fInWorld || proot->fRemoved) return false;
+    if ((proot->st != 0 && proot->st != 3) || !(proot->sRadius < 1e9f) || !(g_actview.grfCm & proot->bMask)) return false;
+    if (FDrawDistanceActorTree(proot)) return false;
+    const glm::vec3 pos = proot->st == 0 ? g_actview.posCm : PosPlayer(g_actview.posCm);
+    return glm::distance(PosLoWorld(const_cast<LO*>(proot)), pos) < proot->sRadius * rScale;
 }
 
 bool FAloDrawn(const SW* psw, const ALO* palo)
@@ -504,7 +582,7 @@ bool FAloDrawn(const SW* psw, const ALO* palo)
     if (pfnDraw == 0x1425B0 || pfnDraw == 0x18A238)
         if (const ACTOR* pa = dynamic_cast<const ACTOR*>(PstepFromLo(const_cast<ALO*>(palo))))
             if (pa->nF04 == 1 && pa->nF20 != 2) return false;
-    return palo->Cid() == 0x69 || palo->gFade != 0.0f;  // 0x21C340 draws surviving history at whole alpha 1
+    return palo->Cid() == S3CID(0x69) || palo->gFade != 0.0f;  // 0x21C340 draws surviving history at whole alpha 1
 }
 
 namespace
@@ -573,6 +651,17 @@ void DetachProxy(SW* psw, LO* pproxy, int irow)
         // removing it and undoing its placement (clue bottles reset to -1).
         using PFN27 = void (*)(LO*, LO*);
         if (PFN27 pfn = reinterpret_cast<PFN27>(PvNativeVt(plo, 27))) pfn(plo, pproxy);
+        // then the splice event 0xF to the proxy with the object and to the object with the proxy (the release, the
+        // pair of the attach's 14 events); natively never sent, so scripts' release handlers did not run on pooled
+        // objects (audit 2026-11 L2)
+        {
+            CRef refObj;
+            refObj.SetBasic(plo);
+            HandleLoSpliceEvent(pproxy, 15, false, 1, &refObj);
+            CRef refProxy;
+            refProxy.SetBasic(pproxy);
+            HandleLoSpliceEvent(plo, 15, false, 1, &refProxy);
+        }
         RemoveLo(psw, plo);  // vt slot 9 (TODO: the physics pose 0x1CA930)
         SetLoMatrix(plo, matInv);
         SetLoParentActivation(psw, plo, nullptr);  // 0x1A58D0
@@ -593,7 +682,7 @@ void DetachProxy(SW* psw, LO* pproxy, int irow)
                 if (palo->axf[0]->pxfRef == pxfProxy || !fOwn) palo->axf[0]->pxfRef = nullptr;
             }
         }
-        else if (FCidDerivedFrom(plo->Cid(), 3) && static_cast<LOX*>(plo)->pxf == pxfProxy)
+        else if (FCidDerivedFrom(plo->Cid(), S3CID(3)) && static_cast<LOX*>(plo)->pxf == pxfProxy)
             static_cast<LOX*>(plo)->pxf = nullptr;
         // orig: 0x001CAA60's end: an SO goes back to its source's rest pose (PROXYSRC +0x64), still: its
         // position record (+0x58) to the rest position with no velocity, its rotation record (+0x5C) to the
@@ -667,6 +756,23 @@ LO* PloProxyFreeRowImpl(SW* psw, LO* pproxy, int nMin)
     return irow < 0 ? nullptr : PloRowFirst(psw, pproxy, irow);
 }
 
+// orig: 0x001CB5D0 (the ALO's vt slot 27, the pooled object's detach notification: the base's (0x1CB5C8: nothing),
+// the physics pose part (0x1F37C8: natively RemoveLo's), then every child's slot 27 (LO +0x64 / +0x24). Natively the
+// children were never told: e.g. a guard's carried booty kept its state across the pool (0x13BF30); audit 2026-11 L1)
+}  // namespace
+void DetachAloBase27(LO* plo, LO* pproxy)
+{
+    using PFN27 = void (*)(LO*, LO*);
+    if (!FAlo(plo)) return;
+    const std::vector<LO*> achild = static_cast<ALO*>(plo)->aploChild;  // (a child's notification may change it)
+    for (LO* pc : achild)
+        if (pc)
+            if (PFN27 pfn = reinterpret_cast<PFN27>(PvNativeVt(pc, 27))) pfn(pc, pproxy);
+}
+NATIVEFN(0x1CB5D0, DetachAloBase27);
+namespace
+{
+
 int AttachProxy(SW* psw, LO* pproxy, int nMin)
 {
     auto it = psw->mpproxy.find(pproxy);
@@ -705,8 +811,8 @@ int AttachProxy(SW* psw, LO* pproxy, int nMin)
     ps.airow.insert(ps.airow.begin(), irow);
     const LOX* pproxyx = static_cast<const LOX*>(pproxy);
     we.amatRow[irow] = pproxyx->mat;
-    // the binds: options for the instance's objects (the attach's grf mask 0x2031: 1 methods, 0x10 fields, 0x20
-    // setters, as the load's 0x400 / 0x80 / 0x100)
+    // the binds: options for the instance's objects (the attach's grf mask 0x2031: 1 methods (the scripts' thunk +0x10,
+    // brx.cpp), 0x10 fields, 0x20 setters, as the load's 0x80 / 0x100)
     for (PROXYBIND& bind : ps.abind)
     {
         LO* ploFound = bind.kind == 6 ? we.aplo[static_cast<std::size_t>(irow) * we.cloLoaded]
@@ -717,11 +823,11 @@ int AttachProxy(SW* psw, LO* pproxy, int nMin)
         bis.OpenBuffer(std::vector<uint8_t>(bind.ab));
         for (int n; bis.m_ib + 2 <= bind.ab.size() && (n = bis.S16Read()) >= 0;)
         {
-            const uint32_t g = g_disc.U32Elf(0x2AC880 + static_cast<uint32_t>(n) * 0x28 + 4) & 0x2031;
-            const int grf = ((g & 1) ? 0x400 : 0) | ((g & 0x10) ? 0x80 : 0) | ((g & 0x20) ? 0x100 : 0) | (g & 0x2000);
+            const uint32_t g = g_disc.U32Elf(S3VA(0x2AC880) + static_cast<uint32_t>(n) * 0x28 + 4) & 0x2031;
+            const int grf = (g & 1) | ((g & 0x10) ? 0x80 : 0) | ((g & 0x20) ? 0x100 : 0) | (g & 0x2000);
             OPT opt;
             LoadOptionFromBrx(opt, ploFound, n, grf, &bis);
-            if (GUARD* pg = PguardFromLo(ploFound)) SyncGuardOption(pg, ploFound, n);  // (guardstart.cpp)
+            if (GUARD* pg = PguardFromLo(ploFound)) SyncGuardOption(pg, ploFound, sly3::Eopid2FromEopid3(n));  // (guardstart.cpp; Sly 2 EOPIDs)
             ploFound->aopt.push_back(std::move(opt));
         }
         // orig: 0x001CAEC8 / 0x00127B40, 0x00256EE0: streaming binds install their retained frame after
@@ -746,11 +852,22 @@ int AttachProxy(SW* psw, LO* pproxy, int nMin)
         AddLo(psw, plo);                                // vt slot 8
         if (!plo->fMaskOwn) SetLoMask(psw, plo, pproxy->bMask);  // vt slot 26 (0x1CB4E0)
         {
-            // a class's own slot 26 after that base (the guards' reset 0x206518: guardstart.cpp)
+            // a class's own slot 26 after that base (the guards' reset 0x206518: guardstart.cpp). The ALO's base
+            // 0x1CB518 ends with every child's slot 26 (LO +0x64 / +0x24), so the children's own parts run first: e.g.
+            // the Ep6 heist's flak shells (50539, cid 0x4F, children of the barrier 50529) need the projectile's
+            // 0x13BB80 (out of the parent, in the world) or the script's detonation (method 390) at t 7.26 finds them
+            // out of the world and the chopper is never hit. A child that leaves its parent keeps its row's node
+            // (LO::ploNsRow), so its row's scripts still find it by name (the Ep8 TNT barrel's charge 18407). L3.
             using PFN26 = void (*)(LO*, LO*);
-            if (PFN26 pfn = reinterpret_cast<PFN26>(PvNativeVt(plo, 26))) pfn(plo, pproxy);
+            std::function<void(LO*)> slot26 = [&](LO* p) {
+                if (FAlo(p))
+                    for (LO* pc : std::vector<LO*>(static_cast<ALO*>(p)->aploChild))
+                        if (pc) slot26(pc);
+                if (PFN26 pfn = reinterpret_cast<PFN26>(PvNativeVt(p, 26))) pfn(p, pproxy);
+                ResetBreakable(p);  // (cid 0x62's slot 26 0x1BBEA8)
+            };
+            slot26(plo);
         }
-        ResetBreakable(plo);  // (cid 0x62's slot 26 0x1BBEA8)
         // CID24 references after the instance's binding options and placement, including owned child uses.
         std::function<void(LO*)> postCarryUse = [&](LO* p) {
             PostLoadCarryUse(p);
@@ -791,7 +908,8 @@ LO* PloRowFirst(SW* psw, LO* pproxy, int irow)
 
 // PROXY's methods and getters (1174..1181)
 SW* PswOf(LO*) { return g_psw; }
-CRef RefLoOrNil(LO* plo) { CRef r; if (plo) r.SetBasic(plo); return r; }
+// The splice wrappers use 0x129A10 even for a null result: null-obj? requires the BASIC tag.
+CRef RefLoOrNull(LO* plo) { CRef r; r.SetBasic(plo); return r; }
 // orig 0x001CB410: an instance row by its object (one object per instance)
 int IrowOfObject(SW* psw, LO* pproxy, const LO* plo)
 {
@@ -825,15 +943,15 @@ struct INITPROXYMETHODS
             SW* psw = PswOf(plo);
             LO* po = PloRowFirst(psw, plo, AttachProxy(psw, plo, 2));
             if (std::getenv("SLY2N_HITDEBUG"))  // (debug: the proxies attached by scripts, e.g. a guard's strike)
-                std::printf("proxy 1175: t %.3f proxy %d -> %d %p\n", g_clock.t, plo->oid, po ? po->oid : -1, (void*)po);
-            return RefLoOrNil(po);
+                std::printf("proxy 1175: t %.3f proxy %d -> %d (cid 0x%X) %p\n", g_clock.t, plo->oid, po ? po->oid : -1, po ? po->Cid() : 0, (void*)po);
+            return RefLoOrNull(po);
         });
         RegisterObjectMethod(0x10E328, [](LO* plo, const std::vector<CRef>&) {  // 1177: 0x1CB328
             SW* psw = PswOf(plo);
             auto it = psw->mpproxy.find(plo);
             if (it != psw->mpproxy.end() && !it->second.airow.empty())
-                return RefLoOrNil(PloRowFirst(psw, plo, it->second.airow.front()));
-            return RefLoOrNil(PloRowFirst(psw, plo, AttachProxy(psw, plo, 1)));
+                return RefLoOrNull(PloRowFirst(psw, plo, it->second.airow.front()));
+            return RefLoOrNull(PloRowFirst(psw, plo, AttachProxy(psw, plo, 1)));
         });
         RegisterObjectMethod(0x10E398, [](LO* plo, const std::vector<CRef>& a) {  // 1179: 0x1CB488 (the row kept)
             SW* psw = PswOf(plo);
@@ -853,13 +971,34 @@ struct INITPROXYMETHODS
         RegisterObjectGetter(18, [](LO* plo) {
             if (std::getenv("SLY2N_HITDEBUG"))
                 std::printf("proxy of %d %p: %d (t %.3f)\n", plo->oid, (void*)plo, PproxyOfInstance(plo) ? PproxyOfInstance(plo)->oid : -1, g_clock.t);
-            return RefLoOrNil(PproxyOfInstance(plo));
+            return RefLoOrNull(PproxyOfInstance(plo));
         });
         RegisterObjectGetter(1176, [](LO* plo) {  // 0x1CB2E0: the latest attached instance's object
             SW* psw = PswOf(plo);
             auto it = psw->mpproxy.find(plo);
-            if (it == psw->mpproxy.end() || it->second.airow.empty()) return CRef();
-            return RefLoOrNil(PloRowFirst(psw, plo, it->second.airow.front()));
+            if (it == psw->mpproxy.end() || it->second.airow.empty()) return RefLoOrNull(nullptr);
+            return RefLoOrNull(PloRowFirst(psw, plo, it->second.airow.front()));
+        });
+        // EOPID 1181 (getter 0x1CB360): every attached instance's object, latest first, at most 0x20, as a list;
+        // scripts of 5 job starts read it (natively unbound: nil; audit 2026-11 P11)
+        RegisterObjectGetter(1181, [](LO* plo) {
+            SW* psw = PswOf(plo);
+            CRef r(TAGK_None);
+            auto it = psw ? psw->mpproxy.find(plo) : decltype(psw->mpproxy.end()){};
+            if (!psw || it == psw->mpproxy.end()) return r;
+            std::shared_ptr<CPair> head, tail;
+            int c = 0;
+            for (int irow : it->second.airow)
+            {
+                if (c++ >= 0x20) break;
+                auto pp = PpairNew();
+                pp->m_ref = RefLoOrNull(PloRowFirst(psw, plo, irow));
+                if (tail) tail->m_ppairNext = pp;
+                else head = pp;
+                tail = pp;
+            }
+            if (head) r.SetPair(head);
+            return r;
         });
     }
 } s_initproxymethods;
@@ -999,8 +1138,8 @@ void PrintActivationDebug(SW* psw)
                         if (FAlo(plo.get()))
                             if (const XF* pxf = PxfObj(static_cast<ALO*>(plo.get())))
                                 ang = glm::degrees(std::atan2(pxf->matWorld[0][1], pxf->matWorld[0][0]));
-                        std::fprintf(stderr, "pos t %.3f %d cid 0x%X at %.0f %.0f %.0f ang %.1f", g_clock.t, oid, plo->Cid(), p.x, p.y, p.z, ang);
-                        if (FCidDerivedFrom(plo->Cid(), 3))
+                        std::fprintf(stderr, "pos t %.3f %d cid 0x%X at %.0f %.0f %.0f ang %.1f inworld %d", g_clock.t, oid, plo->Cid(), p.x, p.y, p.z, ang, int(plo->fInWorld));
+                        if (FCidDerivedFrom(plo->Cid(), S3CID(3)))
                         {
                             const LOX* plox = static_cast<const LOX*>(plo.get());
                             std::fprintf(stderr, " ref %d local %.0f %.0f %.0f", plox->pxf && plox->pxf->palo ? plox->pxf->palo->oid : -1,
@@ -1068,3 +1207,10 @@ void LockProxyRowOf(SW* psw, LO* pproxy, LO* plo, bool fLock)
     we.afRowLocked[i] = fLock ? 1 : 0;
 }
 void UnlockProxyRowOf(SW* psw, LO* pproxy, LO* plo) { LockProxyRowOf(psw, pproxy, plo, false); }
+// (Sly 3's script command 0x70, 0x1FC0E0) the proxy's instance plo given back: its row detached (0x1CAA60)
+void ReleaseProxyObject(SW* psw, LO* pproxy, LO* plo)
+{
+    if (!psw || !pproxy || !plo) return;
+    const int irow = IrowOfObject(psw, pproxy, plo);
+    if (irow >= 0) DetachProxy(psw, pproxy, irow);
+}

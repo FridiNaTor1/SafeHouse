@@ -1,4 +1,5 @@
 #include "activate.h"
+#include "game/sly3.h"
 #include "sm.h"
 #include "blend.h"
 
@@ -7,6 +8,8 @@
 #include "readtrace.h"
 #include "sw.h"
 
+#include <cstdio>
+#include <cstdlib>
 #include <stdexcept>
 
 namespace
@@ -15,6 +18,12 @@ namespace
 void LoadAsegLoFromBrx(LO* plo, CBinaryInputStream* pbis)
 {
     LoadAsegFromBrx(&static_cast<ASEG*>(plo)->asegd, plo, pbis);
+    // (debug: SLY2N_ASEGSNDFIND=id: the ASEGs with a sound event of that id, their parent)
+    if (static const char* s_sz = std::getenv("SLY2N_ASEGSNDFIND"); s_sz)
+        for (const auto& aev : static_cast<ASEG*>(plo)->asegd.aaev)
+            for (const ASEGEV& ev : aev)
+                if (ev.kind == 0 && ev.an[0] == std::atoi(s_sz))
+                    std::printf("asegsnd %d: aseg %d parent %d t %.3f source %d\n", ev.an[0], plo->oid, plo->paloParent ? plo->paloParent->oid : -1, ev.t, ev.an[1]);
 }
 
 void LoadOptionsOfLo(void* pv, CBinaryInputStream* pbis)
@@ -23,7 +32,10 @@ void LoadOptionsOfLo(void* pv, CBinaryInputStream* pbis)
     LoadOptionsFromBrx(plo->aopt, plo, pbis);
 }
 
+}  // namespace
+
 // orig 0x001EFAC0 LoadSmFromBrx: the states (children loaded into the SM's parent), the nodes, the edges
+// (Sly 3: the same reads, orig3 0x238FF8; game/loaders3.cpp registers it)
 void LoadSmFromBrx(LO* plo, CBinaryInputStream* pbis)
 {
     LOADFN(0x1EFAC0);
@@ -60,6 +72,9 @@ void LoadSmFromBrx(LO* plo, CBinaryInputStream* pbis)
     LoadOptionsFromBrx(p->aopt, p, pbis);
     // TODO(M3): the edge masks' distance tables
 }
+
+namespace
+{
 
 void LoadSpritesFromBrx(SPRITESET* p, CBinaryInputStream* pbis);
 
@@ -208,19 +223,21 @@ void LoadSpritesetFromBrx(LO* plo, CBinaryInputStream* pbis)
 template <class T> LO* PloNewT() { return new T(); }
 }
 
+void LoadScreenObj3FromBrx(LO* plo, CBinaryInputStream* pbis) { LoadSpritesetFromBrx(plo, pbis); }
+
 void RegisterAsegLoaders(std::unordered_map<uint32_t, PFNLOAD>& m)
 {
     m[0x12F2A8] = LoadAsegLoFromBrx;
     g_pfnLoadOptionsFromBrx = LoadOptionsOfLo;
     m[0x1EFAC0] = LoadSmFromBrx;
-    m[0x212298] = LoadSpritesetFromBrx;
+    m[0x260810] = LoadSpritesetFromBrx;   // (Sly 3: registered by loaders.cpp RegisterLoaders)
 }
 
 PFNNEW PfnNewAseg(CID cid)
 {
-    if (cid == 0x6D) return PloNewT<ASEG>;
-    if (cid == 0x6E) return PloNewAsegbl;  // blend.cpp (runtime only: NewBlend 0x137A30)
-    if (cid == 0x6F) return PloNewT<SM>;
-    if (cid == 0x7E) return PloNewT<SPRITESET>;
+    if (cid == S3CID(0x6D)) return PloNewT<ASEG>;
+    if (cid == S3CID(0x6E)) return PloNewAsegbl;  // blend.cpp (runtime only: NewBlend 0x137A30)
+    if (cid == S3CID(0x6F)) return PloNewT<SM>;
+    if (cid == S3CID(0x7E)) return PloNewT<SPRITESET>;
     return nullptr;
 }

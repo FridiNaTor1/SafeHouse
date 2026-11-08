@@ -1,6 +1,8 @@
 // See controlspage.h.
 
 #include "controlspage.h"
+#include "region.h"
+#include "porttext.h"
 
 #include "pcinput.h"
 #include "promptglyph.h"
@@ -13,6 +15,7 @@
 #include <GLFW/glfw3.h>
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -44,6 +47,7 @@ constexpr int s_aidTitle[] = {0x2C3, 0x2AF, 0x2B9};
 
 const LABEL* PlabelOf(int id)
 {
+    id = IdTextUsa(id);   // (the labels by their USA ids; the Japanese text's ids differ: region.h)
     for (const LABEL& l : s_alabel)
         if (l.id == id) return &l;
     return nullptr;
@@ -228,15 +232,49 @@ bool FLineSprite(const CTLPIECE& p)
            p.pelem->apoly.size() >= 6;
 }
 
-const char* PchzBindingName(int binding)
+std::string StrBindingName(int binding)
 {
-    return PchzKeyName(binding);
+    return StrPortKeyName(binding);   // (the game's language where the port's table has the key: porttext.h)
 }
 
 // "R1 button" / "L3 button" / "R3 button" in a label: the button bound to that action now (the pad's name, or the
 // key's)
+// The other languages' labels name the button in their own words around it ("Touche R1 : ...", "R1-Taste: ...",
+// "R1ボタン:..."): the button's code is replaced by the bound one's name, and a row's own button with its colon is left
+// out on the keyboard's list (its keycaps show it).
+std::string StrWithBoundNamesOther(std::string text, MODE mode, Family family, int actionLabel)
+{
+    struct CODE { const char* sz; int action; };
+    static const CODE s_acode[] = {{"R1", PCA_R1}, {"L3", PCA_L3}, {"R3", PCA_R3}};
+    auto fAlnum = [](char ch) { return std::isalnum(uint8_t(ch)) != 0; };
+    for (const CODE& c : s_acode)
+    {
+        size_t at = 0;
+        while ((at = text.find(c.sz, at)) != std::string::npos && ((at > 0 && fAlnum(text[at - 1])) || fAlnum(text[at + 2] ? text[at + 2] : ' ')))
+            ++at;
+        if (at == std::string::npos) continue;
+        if (mode == MODE_Keyboard && c.action == actionLabel)
+        {
+            // the label's first part names the button ("Touche R1 : Courir vite"): just its action
+            const size_t colon = text.find(':');
+            if (colon != std::string::npos && colon > at && colon < 24 && text.find('(') > colon)
+            {
+                size_t i = colon + 1;
+                while (i < text.size() && text[i] == ' ') ++i;
+                text.erase(0, i);
+                continue;
+            }
+        }
+        const std::string name = mode == MODE_Keyboard ? StrBindingName(g_pcinput.keyboard[size_t(c.action)])
+                                                       : StrToGameText(cane::input::buttonLabel(BoundButton(c.action), family));
+        text.replace(at, 2, name);
+    }
+    return text;
+}
+
 std::string StrWithBoundNames(std::string text, MODE mode, Family family, int actionLabel)
 {
+    if (!FPortEnglish()) return StrWithBoundNamesOther(std::move(text), mode, family, actionLabel);
     struct TOKEN { const char* sz; int action; };
     static const TOKEN s_atoken[] = {{"R1 button", PCA_R1}, {"L3 button", PCA_L3}, {"R3 button", PCA_R3}};
     for (const TOKEN& t : s_atoken)
@@ -249,7 +287,7 @@ std::string StrWithBoundNames(std::string text, MODE mode, Family family, int ac
             // (the row's own keycaps show it: "R1 button: Run Fast" is just "Run Fast")
             const size_t cch = std::strlen(t.sz);
             if (t.action == actionLabel && at == 0 && text.compare(cch, 2, ": ") == 0) { text.erase(0, cch + 2); continue; }
-            name = PchzBindingName(g_pcinput.keyboard[size_t(t.action)]);
+            name = StrBindingName(g_pcinput.keyboard[size_t(t.action)]);
         }
         else
         {
@@ -747,7 +785,7 @@ bool FControlsPageBegin(const SCREENOBJ* pso, const std::vector<CTLPIECE>& apiec
             if (const LABEL* pl = PlabelOf(p.pelem->n3))
             {
                 SLOT slot;
-                slot.id = pl->id;
+                slot.id = p.pelem->n3;   // (the disc's text id, as the text elements' td.id)
                 slot.action = pl->action;
                 slot.m4 = p.mx;
                 slot.m5 = p.my;
@@ -755,7 +793,7 @@ bool FControlsPageBegin(const SCREENOBJ* pso, const std::vector<CTLPIECE>& apiec
                 slot.w = p.pelem->ag3[1];
                 slot.h = p.pelem->ag3[2];
                 slot.align = p.pelem->ab3[0];
-                slot.text = StrWithBoundNames(StrLocalized(psw, pl->id), mode, family, pl->action);
+                slot.text = StrWithBoundNames(StrLocalized(psw, p.pelem->n3), mode, family, pl->action);
                 s_page.aslot.push_back(slot);
             }
     // each line: the end at a dot (a PS2 button) and the label's end
@@ -979,7 +1017,7 @@ void ControlsPageEnd(const FONTBRX* pfont, const FONTBRX* pfontIcons)
                 cane::input::IconUV uv;
                 const int id = cane::input::promptKeyForBinding(akey[j]);
                 if (FKeyIcon(id, &uv)) DrawIcon(tex, uv, glm::vec2(xRow + (float(j) + 0.5f) * dxCap, yRow), hCap, a, z);
-                else textMissing += std::string(textMissing.empty() ? "" : ", ") + PchzBindingName(akey[j]);
+                else textMissing += std::string(textMissing.empty() ? "" : ", ") + StrBindingName(akey[j]);
             }
         }
         // the label in its own font and colours, after the caps (a key without a cap is named first)

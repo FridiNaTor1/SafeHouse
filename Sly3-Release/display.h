@@ -37,7 +37,7 @@ struct DISPLAY
     int internalHeight = 0;     // 0: the picture's own size
     int msaaSamples = 0;        // 0 / 1: off
     int frameRate = 60;         // the frame-rate cap (>= 30; DISP_FRAMERATE_UNCAPPED and above: none)
-    float drawDistance = 1.0f;  // multiplies the distance limits (MRD), 0.75 .. 3
+    float drawDistance = 1.0f;  // multiplies the distance limits (MRD), 0.75 .. 3; above 1x also drawdist.h (visual only)
     DISPWINDOW window = DISPWINDOW_Windowed;
     bool fVsync = false;
     // Native QoL, always on (not in system_settings.dat; the launcher dropped its toggle 2026-11-05; --wide-backgrounds 0 or
@@ -48,6 +48,15 @@ struct DISPLAY
     // Native QoL (not in system_settings.dat; --hq-logo 0 / SLY2N_HQLOGO=0 turn it off): the front end's Sly 2 logo is
     // the launcher's high-quality one (qolview.h GlTexLogoOverride)
     bool fHqLogo = true;
+    // Native QoL (system_settings.dat v16 longShadows, default on; --long-shadows 0 / SLY2N_LONGSHADOWS=0 turn it off):
+    // the type-2 cast shadows (Sly's, the guards') reach the floor instead of ending at the original's fixed far cap
+    // (render.cpp FBuildShadow2, render.md "Long shadows", R39). Off: the original's prisms exactly.
+    bool fLongShadows = true;
+
+    // The swap (ApplyDisplaySettings): VSync gates the frames at the cap (the pacer then runs 1 % fast, so only the
+    // swap gates: platform/frame_pacer.h), and a generation that changes with the swap's configuration
+    bool fSwapPacesFrames = false;
+    unsigned swapGeneration = 0;
 
     // Layout (LayoutDisplay)
     int outputWidth = 1, outputHeight = 1;          // the window's framebuffer
@@ -58,6 +67,8 @@ struct DISPLAY
     glm::vec2 uiScale{1.0f}, uiOffset{0.0f};
 };
 extern DISPLAY g_display;
+// The refresh rate of the monitor holding most of the window (0: unknown)
+int DisplayRefreshRate(GLFWwindow* window);
 
 // Reads the options (a missing file is created with the defaults; a newer one is read-only). Returns false and
 // keeps the defaults when the file cannot be used.
@@ -76,9 +87,7 @@ void InstallDisplayCallbacks(GLFWwindow* window);
 // The projection the picture needs, from the original camera's vertical field of view and its aspect (CM +0x3C,
 // 512 / 394.24): Sly1-Release RecalcCm. (For the camera's RecalcCm / CMVIEW.)
 struct DISPPROJ { float radFovY; float rAspect; };
-// (rAspectCm: Sly 3's camera aspect, orig3 CM +0x130 = 640 / 448: the 3D is drawn for square 640 x 448 pixels and shown
-// at 4:3 on a TV, so the PS2 picture's 3D is 7% narrower than at 4:3 while its 2D is exact; Sly 2's was 512 / 394.24)
-DISPPROJ ProjectionForDisplay(float radFovY, float rAspectCm = 640.0f / 448.0f);
+DISPPROJ ProjectionForDisplay(float radFovY, float rAspectCm = 512.0f / 394.24f);
 
 // --aspect / --internal-res style overrides ("fit", "4:3", "16:9", "16:10", "ps2-4:3", "ps2-16:9" or 0..5).
 bool FParseAspect(const char* psz, DISPASPECT& aspect);

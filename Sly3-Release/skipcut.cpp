@@ -1,21 +1,36 @@
 // See skipcut.h.
 
 #include "skipcut.h"
+#include "game/sly3.h"
 
 #include "audio.h"
+#include "actor.h"
+#include "activate.h"
+#include "ai.h"
+#include "alo.h"
+#include "clock.h"
+#include "cm.h"
+#include "cls.h"
 #include "hud.h"
 #include "joy.h"
 #include "menu.h"
 #include "pcinput.h"
+#include "porttext.h"
+#include "region.h"
 #include "screenobj.h"
 #include "screenrt.h"
+#include "scpt.h"
+#include "sound.h"
 #include "sw.h"
 #include "task.h"
+#include "po.h"
 
 #include <algorithm>
+#include <map>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <string>
 
 bool g_fSkipCutFast = false;
@@ -25,7 +40,7 @@ namespace
 {
 constexpr float T_HOLD = 3.0f;          // seconds of Circle to skip
 constexpr float T_HINT = 4.0f;          // the hint stays this long after the last button
-constexpr int CSTEP_MAX = 60 * 240;     // a skip's fast-forward stops after 4 minutes of game time (a stuck scene)
+constexpr int CSTEP_MAX = 60 * 600;     // a skip's fast-forward stops after 10 minutes of game time (a stuck scene; Ep 8's Arpeggio / Clockwerk scene 3299 is 4 min)
 
 struct SKIPCUT
 {
@@ -36,16 +51,32 @@ struct SKIPCUT
     int cstep = 0;              // its steps
     bool fMaskCircle = false;   // Circle held from the skip: hidden from the game until released
     int frameWait = -100;       // the last step a script waited for a button
+    uint64_t idScene = 0;       // the scene whose hold / fast-forward this belongs to
+    bool fAwaitRelease = false; // a Circle held across a scene boundary cannot start another skip
+    int frameStop = -1;         // the step the last fast-forward ended at (the scene's end: the check's)
 };
 SKIPCUT s_skip;
 SKIPCUT s_skipMovie;
 
 bool FScptWaitsNow() { return g_frameJoy - s_skip.frameWait <= 2; }
 
+uint64_t IdCutscene()
+{
+    if (FMenuShown() || !g_psw) return 0;
+    uint64_t id = IdScptCutscene();
+    for (int cid : {0x35, 0x36, 0x37})
+        for (LO* plo : g_psw->mpcidaplo[cid])
+            if (ACTOR* pa = PactorFromLo(plo); pa && pa->nF04 != -1 && pa->nF20 == 1 &&
+                pa->binoc.idSkipScene && (!id || pa->binoc.idSkipScene < id))
+                id = pa->binoc.idSkipScene;
+    return id;
+}
+
 void StopFast()
 {
     if (!s_skip.fFast) return;
     s_skip.fFast = false;
+    s_skip.frameStop = g_frameJoy;
     g_fSkipCutFast = false;
     SetOutputMute(false);
     if (std::getenv("SLY2N_SKIPPRINT")) std::printf("skipcut: fast-forward over after %d steps\n", s_skip.cstep);
@@ -58,6 +89,7 @@ void StartFast()
     s_skip.fHint = false;
     s_skip.tHold = 0.0f;
     s_skip.fMaskCircle = true;
+    s_skip.fAwaitRelease = true;
     g_fSkipCutFast = true;
     SetOutputMute(true);
     if (std::getenv("SLY2N_SKIPPRINT")) std::printf("skipcut: skipping (fast-forward)\n");
@@ -66,6 +98,8 @@ void StartFast()
 // the state machine shared by the game and the movies: true when the skip starts now
 bool FUpdateHold(SKIPCUT& s, float dtReal, uint16_t grfHeld, uint16_t grfPressed, bool fSkippable)
 {
+    const bool fCircle = (grfHeld & BTN_Circle) != 0;
+    if (!fCircle) s.fAwaitRelease = false;
     if (!fSkippable)
     {
         s.fHint = false;
@@ -74,7 +108,11 @@ bool FUpdateHold(SKIPCUT& s, float dtReal, uint16_t grfHeld, uint16_t grfPressed
     }
     if (grfPressed) { s.fHint = true; s.tHint = 0.0f; }
     else s.tHint += dtReal;
-    const bool fCircle = (grfHeld & BTN_Circle) != 0;
+    if (s.fAwaitRelease)
+    {
+        s.tHold = 0.0f;
+        return false;
+    }
     if (fCircle && s.fHint)
     {
         s.tHint = 0.0f;
@@ -91,15 +129,17 @@ float DxText(const FONTBRX& font, const FONTBRX* picons, const std::string& text
 {
     float w = 0.0f;
     const FONTBRX* pf = &font;
-    for (size_t i = 0; i < text.size(); ++i)
+    for (size_t i = 0; i < text.size();)
     {
         if (text[i] == '&' && i + 1 < text.size() && text[i + 1] != '&')
         {
             pf = text[i + 1] == '.' || !picons ? &font : picons;
-            ++i;
+            i += 2;
             continue;
         }
-        w += pf->DxFromCh(uint8_t(text[i]));
+        size_t cb = 1;   // (a character: a byte, or the Japanese text's UTF-8 form: region.h)
+        w += pf->DxFromCh(ChDecode(text, i, &cb));
+        i += cb;
     }
     return w * size / 51.2f;
 }
@@ -111,7 +151,7 @@ void DrawHint(const SKIPCUT& s)
     const FONTBRX* pfont = PfontHud();
     const FONTBRX* picons = PfontHudIcons();
     if (!pfont) return;
-    const std::string text = picons ? "Hold &2O&. to skip" : "Hold Circle to skip";
+    const std::string text = StrPort(picons ? PTX_HoldToSkip : PTX_HoldToSkipNoIcons);   // (the game's language: porttext.h)
     const float size = 24.0f;
     const float xRight = 616.0f, yTop = 412.0f;   // (canvas pixels)
     const float w = DxText(*pfont, picons, text, size);
@@ -138,16 +178,99 @@ void DrawHint(const SKIPCUT& s)
         g_hud.DrawRing(cx, cy, r + 3.0f, r + 0.5f, s.tHold / T_HOLD, glm::vec4(250, 250, 250, 128), 0.995f);
     }
 }
+
+// (test: SLY2N_SKIPCHECK, skipcut.h) true: skip now
+void WriteSkipCheckState(const std::string& file)
+{
+    SW* psw = g_psw;
+    std::FILE* pf = psw ? std::fopen(file.c_str(), "w") : nullptr;
+    if (!pf) return;
+    for (LO* plo : psw->mpcidaplo[S3CID(0x85)])
+        std::fprintf(pf, "task %d %d\n", plo->oid, static_cast<TASK*>(plo)->nState);
+    if (LO* ppo = PloPoCurrent(psw))
+    {
+        const glm::vec3 p = PosLoWorld(ppo);
+        std::fprintf(pf, "player %d %.1f %.1f %.1f\n", ppo->oid, p.x, p.y, p.z);
+    }
+    std::fprintf(pf, "cm %d object %d\n", g_cm.nCur, g_cm.ploCur ? g_cm.ploCur->oid : -1);
+    std::fprintf(pf, "pause %d %d %d %d scene %d\n", g_gamepause.c78, g_gamepause.c7C, g_gamepause.c80, g_gamepause.c84,
+                 IdCutscene() ? 1 : 0);
+    int cStack = 0;
+    const int idMusic = IdMusicTop(&cStack);
+    std::fprintf(pf, "music %d stack %d\n", idMusic, cStack);
+    std::map<int, int> mpc;
+    for (const auto& up : psw->aploAll)
+    {
+        LO* plo = up.get();
+        if (!FCidDerivedFrom(plo->Cid(), S3CID(0x30)) || static_cast<ALO*>(plo)->paloParent) continue;
+        const glm::vec3 p = PosLoWorld(plo);
+        std::fprintf(pf, "obj %d#%d cid 0x%X in %d %.1f %.1f %.1f %s\n", plo->oid, mpc[plo->oid]++, plo->Cid(), plo->fInWorld ? 1 : 0,
+                     p.x, p.y, p.z, FCidDerivedFrom(plo->Cid(), S3CID(0x39)) ? "guard" : "-");
+    }
+    std::fclose(pf);
+}
+
+bool FUpdateSkipCheck(uint64_t id)
+{
+    static const char* s_sz = std::getenv("SLY2N_SKIPCHECK");
+    if (!s_sz) return false;
+    static int s_nScene = 0, s_off = 0, s_cAfter = 0, s_cSeen = 0, s_frameStart = -1, s_frameEnd = -1, s_cDump = 0;
+    static uint64_t s_idPrev = 0, s_idWatch = 0;
+    static bool s_fSkip = false, s_fInit = false;
+    static std::string s_file;
+    if (!s_fInit)
+    {
+        s_fInit = true;
+        char sz[512] = {}, szMode[16] = {};
+        std::sscanf(s_sz, "%d:%d:%d:%511[^:]:%15s", &s_nScene, &s_off, &s_cAfter, sz, szMode);
+        s_file = sz;
+        s_fSkip = !std::strcmp(szMode, "skip");
+    }
+    const int frame = g_frameJoy;
+    if (id != s_idPrev)
+    {
+        s_idPrev = id;
+        if (id && ++s_cSeen == s_nScene && !s_idWatch) s_frameStart = frame;
+    }
+    if (!s_idWatch)
+    {
+        if (s_frameStart < 0 || frame < s_frameStart + s_off) return false;
+        if (id == 0)
+        {
+            std::printf("skipcheck: scene %d over before frame %d\n", s_nScene, s_frameStart + s_off);
+            s_frameStart = -1;
+            return false;
+        }
+        s_idWatch = id;
+        std::printf("skipcheck: frame %d scene %llu (scene %d of the run, begun at frame %d)\n", frame,
+                    static_cast<unsigned long long>(id), s_nScene, s_frameStart);
+        return s_fSkip;
+    }
+    if (s_frameEnd < 0)
+    {
+        if (id == s_idWatch) return false;
+        // (a skip's fast-forward ended the scene at its last step, before this frame's)
+        s_frameEnd = s_fSkip && s_skip.frameStop > s_frameStart ? s_skip.frameStop : frame;
+        std::printf("skipcheck: scene over at frame %d t %.3f\n", s_frameEnd, g_clock.t);
+    }
+    if (s_cDump < 2 && frame >= s_frameEnd + s_cAfter + 30 * s_cDump)
+    {
+        WriteSkipCheckState(s_file + "." + std::to_string(++s_cDump));
+        std::printf("skipcheck: state %d written at frame %d\n", s_cDump, frame);
+    }
+    return false;
+}
 }  // namespace
 
 bool FCutsceneActive()
 {
-    if (FMenuShown()) return false;
-    if (g_grfjoyLock & 4) return true;   // a talk: a script's scene (its pause) or a binocucom talk
-    if (g_psw)
-        for (LO* plo : g_psw->mpcidaplo[0x84])
-            if (static_cast<JOB*>(plo)->nSeq != 0) return true;   // a job's closing sequence
-    return false;
+    return IdCutscene() != 0;
+}
+
+uint64_t NewSkipCutScene()
+{
+    static uint64_t s_id = 0;
+    return ++s_id;
 }
 
 void NoteScptWaitsForButton() { s_skip.frameWait = g_frameJoy; }
@@ -156,17 +279,30 @@ void UpdateSkipCut(float dtReal, uint16_t grfHeld, uint16_t grfPressed)
 {
     if (s_skip.fMaskCircle && !(grfHeld & BTN_Circle) && !s_skip.fFast) s_skip.fMaskCircle = false;
     if (s_skip.fFast) return;
-    const bool fSkippable = FCutsceneActive() && !FScptWaitsNow();
+    const uint64_t id = IdCutscene();
+    if (s_skip.idScene != id)
+    {
+        if (std::getenv("SLY2N_SKIPPRINT")) std::printf("skipcut: scene %llu at frame %d\n", static_cast<unsigned long long>(id), g_frameJoy);
+        s_skip.idScene = id;
+        s_skip.fHint = false;
+        s_skip.tHint = s_skip.tHold = 0.0f;
+        s_skip.fAwaitRelease = (grfHeld & BTN_Circle) && !(grfPressed & BTN_Circle);
+    }
+    const bool fSkippable = id && !FScptWaitsNow();
+    const bool fCheckSkip = FUpdateSkipCheck(id) && fSkippable;   // (test: SLY2N_SKIPCHECK)
     // (tests: SLY2N_SKIPAT=frame: the skip starts at that step, as after the hold)
     static const int s_frameSkipAt = std::getenv("SLY2N_SKIPAT") ? std::atoi(std::getenv("SLY2N_SKIPAT")) : -1;
     bool fStart = FUpdateHold(s_skip, dtReal, grfHeld, grfPressed, fSkippable);
     if (s_frameSkipAt >= 0 && g_frameJoy >= s_frameSkipAt && g_frameJoy < s_frameSkipAt + 1 && fSkippable) fStart = true;
+    // (tests: SLY2N_SKIPHINT=1 shows the hint while a cutscene can be skipped, as after a press: its screenshots)
+    static const bool s_fHintAlways = std::getenv("SLY2N_SKIPHINT") != nullptr;
+    if (s_fHintAlways && fSkippable) { s_skip.fHint = true; s_skip.tHint = 0.0f; }
     if (std::getenv("SLY2N_SKIPPRINT") && fSkippable && s_skip.fHint)
     {
         static int s_c = 0;
         if (s_c++ % 30 == 0) std::printf("skipcut: hint (hold %.2f)\n", s_skip.tHold);
     }
-    if (fStart) StartFast();
+    if (fStart || fCheckSkip) StartFast();
 }
 
 bool FSkipCutFastForward() { return s_skip.fFast; }
@@ -175,7 +311,7 @@ bool FSkipCutStep()
 {
     if (!s_skip.fFast) return false;
     ++s_skip.cstep;
-    if (!FCutsceneActive() || FScptWaitsNow() || s_skip.cstep >= CSTEP_MAX)
+    if (IdCutscene() != s_skip.idScene || FScptWaitsNow() || s_skip.cstep >= CSTEP_MAX)
     {
         StopFast();
         return false;
@@ -189,13 +325,18 @@ void DrawSkipCut()
 {
     if (s_skip.fFast)
     {
-        g_hud.Fade(glm::vec4(0, 0, 0, 128));   // (the fast-forward is not shown)
+        g_hud.Fade(glm::vec4(0, 0, 0, 128));   // (a fast-forward longer than game.cpp's 5 s frame: not shown)
         return;
     }
     DrawHint(s_skip);
 }
 
-void ResetMovieSkip() { s_skipMovie = SKIPCUT{}; }
+void ResetMovieSkip()
+{
+    StopFast();
+    s_skipMovie = SKIPCUT{};
+    s_skipMovie.fAwaitRelease = true;
+}
 
 bool FMovieSkip(GLFWwindow* window, float dtReal)
 {
@@ -215,3 +356,6 @@ bool FMovieSkip(GLFWwindow* window, float dtReal)
 }
 
 void DrawMovieSkip() { DrawHint(s_skipMovie); }
+
+void FMovieSkipTest() { s_skip.fMaskCircle = true; }   // (SLY2N_MOVIESKIPAT: what a hold's skip leaves behind)
+

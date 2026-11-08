@@ -1,8 +1,9 @@
 // Skinning bindings and bone matrices (Sly 2 0x167B68, 0x1684D0). Specification: Sly2-Reference/Sly2-Release/game/m_167310.cpp
 // (oracle-verified).
 
-#include "sly3/ids3.h"
 #include "bone.h"
+#include "game/sly3.h"
+#include "worldglobals.h"
 
 #include "animfind.h"
 #include "glob.h"
@@ -14,6 +15,7 @@
 namespace
 {
 std::unordered_map<const ALO*, std::vector<std::vector<GLOBBONEBIND>>> s_mpaloaabind;
+WORLD_TABLE(s_mpaloaabind);   // (PC: moved aside while a kept world loads, worldglobals.h)
 }  // namespace
 
 // orig: 0x00167B68
@@ -35,7 +37,7 @@ void BindAloBones(ALO* palo)
         {
             GLOBBONEBIND& b = abind[j];
             LO* plo = PloFindSwNearest(palo, glob.abone[j].oid);  // orig 0x15E938(G, 4, oid, owner)
-            if (plo && FCidDerivedFrom(plo->Cid(), Icid(CID3::ALO))) b.pxfBone = PxfFindAlo(static_cast<ALO*>(plo), glob.abone[j].ibone);
+            if (plo && FCidDerivedFrom(plo->Cid(), S3CID(0x30))) b.pxfBone = PxfFindAlo(static_cast<ALO*>(plo), glob.abone[j].ibone);
             if (b.pxfBone)
                 b.matBind = pxfGrp ? InverseAffineMatrix4(b.pxfBone->matWorld) * pxfGrp->matWorld
                                    : InverseAffineMatrix4(b.pxfBone->matWorld);
@@ -71,3 +73,5 @@ const std::vector<std::vector<GLOBBONEBIND>>* PaabindOfAlo(const ALO* palo)
 }
 
 void ResetBoneBindings() { s_mpaloaabind.clear(); }
+
+void SetAloBoneBindings(const ALO* palo, const std::vector<std::vector<GLOBBONEBIND>>& aabind) { s_mpaloaabind[palo] = aabind; }

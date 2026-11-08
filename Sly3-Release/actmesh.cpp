@@ -6,6 +6,7 @@
 // actor at the part's offset): natively they are looked up by the offset in the class's tables (the base 0x2BC9F0, Sly
 // 0x2BE990 / 0x2BF1B0, Bentley 0x2BC390, Murray 0x2C0270) and the entry with that tag.
 #include "actmesh.h"
+#include "game/sly3.h"
 
 #include "actor.h"
 #include "alo.h"
@@ -31,12 +32,12 @@ struct PARTTABLE
 int CtablesOf(const ALO* palo, PARTTABLE* at)
 {
     int c = 0;
-    at[c++] = {0x2BC9F0, 0x35};
+    at[c++] = {S3VA(0x2BC9F0), 0x35};
     switch (palo->Cid())
     {
-    case 0x35: at[c++] = {0x2BE990, 0xAD}; at[c++] = {0x2BF1B0, 0x12}; break;
-    case 0x37: at[c++] = {0x2BC390, 0x76}; break;
-    case 0x36: at[c++] = {0x2C0270, 0x89}; break;
+    case S3CID(0x35): at[c++] = {S3VA(0x2BE990), 0xAD}; at[c++] = {0x2BF1B0, 0x12}; break;
+    case S3CID(0x37): at[c++] = {S3VA(0x2BC390), 0x76}; break;
+    case S3CID(0x36): at[c++] = {S3VA(0x2C0270), 0x89}; break;
     default: break;
     }
     return c;
@@ -92,8 +93,10 @@ int IsoeDamageMesh(ACTOR* pa, bool* pfSnap)
     {
         const int isoe = IsoePart(pa->palo, 0xEC4u + 4u * static_cast<uint32_t>(r));
         if (isoe != -1) return isoe;
-        r = static_cast<int>(g_disc.U32Elf(0x2BFB28u + 4u * static_cast<uint32_t>(r)));
-        if (r == -1) return -1;
+        // (Sly 3, interim: Sly 2's fallback chain 0x2BFB28 is not in Sly 3's data; orig3 0x1C4088 walks another
+        // record (+0x3740 / +0x38): not ported, no fallback mesh)
+        (void)r;
+        return -1;
     }
     return -1;
 }

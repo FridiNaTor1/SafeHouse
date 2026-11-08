@@ -10,6 +10,7 @@
 // compared with B: each animated record's local matrix, mode and state, each ASEGA's time and event index.
 
 #include "refram.h"
+#include "game/sly3.h"
 #include "gang.h"
 #include "physworld.h"
 #include "update.h"
@@ -98,7 +99,7 @@ void RemapSms(SW* psw, const RAM& ram, MAPPING& map)
         return a;
     };
     std::map<std::vector<int>, std::vector<SM*>> mpkeyapsm;
-    for (LO* plo : psw->mpcidaplo[0x6F]) mpkeyapsm[keyNative(static_cast<SM*>(plo))].push_back(static_cast<SM*>(plo));
+    for (LO* plo : psw->mpcidaplo[S3CID(0x6F)]) mpkeyapsm[keyNative(static_cast<SM*>(plo))].push_back(static_cast<SM*>(plo));
     std::map<std::vector<int>, size_t> mpkeyi;
     int cremap = 0;
     for (uint32_t p = ram.U32(SW_ADDR + 0x3038 + 0x6F * 12), c = 0; ram.FValid(p) && c < 100000; p = ram.U32(p + 0x20), ++c)
@@ -124,7 +125,7 @@ namespace
 XF* PxfOfRam(const RAM& ram, const MAPPING& map, uint32_t aalo, uint32_t axf, ALO** ppalo)
 {
     auto it = map.mpaplo.find(aalo);
-    if (it == map.mpaplo.end() || !FCidDerivedFrom(it->second->Cid(), 0x30)) return nullptr;
+    if (it == map.mpaplo.end() || !FCidDerivedFrom(it->second->Cid(), S3CID(0x30))) return nullptr;
     ALO* palo = static_cast<ALO*>(it->second);
     const uint32_t base = ram.U32(aalo + 0x54);
     if (axf < base || (axf - base) % 0x100) return nullptr;
@@ -203,7 +204,7 @@ ASEGBL* PblImport(REFRUN& rr, const RAM& ram, uint32_t pab)
 {
     if (auto it = rr.mpablend.find(pab); it != rr.mpablend.end()) return it->second;
     auto itAlo = rr.map.mpaplo.find(ram.U32(pab + 0x10));
-    if (itAlo == rr.map.mpaplo.end() || !FCidDerivedFrom(itAlo->second->Cid(), 0x30)) return nullptr;
+    if (itAlo == rr.map.mpaplo.end() || !FCidDerivedFrom(itAlo->second->Cid(), S3CID(0x30))) return nullptr;
     const int cbl = ram.S32(pab + 0xC4), cb = ram.S32(pab + 0xC0), ctable = ram.S32(pab + 0xCC);
     const uint32_t ab = ram.U32(pab + 0xC8), atable = ram.U32(pab + 0xD0);
     if (cbl <= 0 || cbl > 64 || ctable < 0 || ctable > 8) return nullptr;
@@ -402,7 +403,7 @@ void ImportState(REFRUN& rr, const RAM& ramA)
     int crecImported = 0;
     for (const auto& [a, plo] : rr.map.mpaplo)
     {
-        if (!FCidDerivedFrom(plo->Cid(), 0x30)) continue;
+        if (!FCidDerivedFrom(plo->Cid(), S3CID(0x30))) continue;
         ALO* palo = static_cast<ALO*>(plo);
         const int c = ramA.S32(a + 0x50);
         const uint32_t base = ramA.U32(a + 0x54);
@@ -422,7 +423,7 @@ void ImportState(REFRUN& rr, const RAM& ramA)
     }
     for (const auto& [a, plo] : rr.map.mpaplo)
     {
-        if (!FCidDerivedFrom(plo->Cid(), 0x30)) continue;
+        if (!FCidDerivedFrom(plo->Cid(), S3CID(0x30))) continue;
         ALO* palo = static_cast<ALO*>(plo);
         const int c = ramA.S32(a + 0x50);
         const uint32_t base = ramA.U32(a + 0x54);
@@ -446,7 +447,7 @@ std::vector<ALO*> ApaloUpdated(REFRUN& rr, const RAM& ramA, const RAM& ramB)
     std::vector<ALO*> a;
     for (const auto& plo : rr.psw->aploAll)
     {
-        if (!FCidDerivedFrom(plo->Cid(), 0x30)) continue;
+        if (!FCidDerivedFrom(plo->Cid(), S3CID(0x30))) continue;
         auto it = rr.map.mpploa.find(plo.get());
         if (it == rr.map.mpploa.end()) continue;
         ALO* palo = static_cast<ALO*>(plo.get());
@@ -473,10 +474,10 @@ struct FRAMESTATS
 FRAMESTATS StepAndCompare(REFRUN& rr, const RAM& ramA, const RAM& ramB)
 {
     FRAMESTATS fs;
-    g_uRandState = ramA.U32(ramA.U32(0x2C49D4) + 0x58);  // (the C library's rand state at the frame's start)
-    g_clock.t = ramB.F32(0x2DDED0);
-    g_clock.dt = ramB.F32(0x2DDED4);
-    g_clock.dt40 = ramB.F32(0x2DDF10);
+    g_uRandState = ramA.U32(ramA.U32(S3VA(0x2C49D4)) + 0x58);  // (the C library's rand state at the frame's start)
+    g_clock.t = ramB.F32(S3VA(0x2DDED0));
+    g_clock.dt = ramB.F32(S3VA(0x2DDED4));
+    g_clock.dt40 = ramB.F32(S3VA(0x2DDF10));
     if (s_paiRef)
     {
         // the guards' AI from A, one frame of it (their vt slot 16 runs before the world's ASEGAs and physics)
@@ -512,7 +513,7 @@ FRAMESTATS StepAndCompare(REFRUN& rr, const RAM& ramA, const RAM& ramB)
     // from A at the frame's start, so the driven ones see the same parents and movers
     for (const auto& [a, plo] : rr.map.mpaplo)
     {
-        if (!FCidDerivedFrom(plo->Cid(), 0x30)) continue;
+        if (!FCidDerivedFrom(plo->Cid(), S3CID(0x30))) continue;
         ALO* palo = static_cast<ALO*>(plo);
         const int c = ramA.S32(a + 0x50);
         const uint32_t base = ramA.U32(a + 0x54);
@@ -541,7 +542,7 @@ FRAMESTATS StepAndCompare(REFRUN& rr, const RAM& ramA, const RAM& ramB)
     // the late set before the frame, native against the reference
     for (const auto& [a, plo] : rr.map.mpaplo)
     {
-        if (!FCidDerivedFrom(plo->Cid(), 0x30) || !fInTable(static_cast<ALO*>(plo))) continue;
+        if (!FCidDerivedFrom(plo->Cid(), S3CID(0x30)) || !fInTable(static_cast<ALO*>(plo))) continue;
         ++fs.cflag;
         if (fLate(static_cast<ALO*>(plo)) == fLateRef(static_cast<ALO*>(plo))) ++fs.cflagOk;
         else if (rr.fVerbose)
@@ -553,7 +554,7 @@ FRAMESTATS StepAndCompare(REFRUN& rr, const RAM& ramA, const RAM& ramB)
     UpdateAsegas();
     std::vector<ALO*> apaloLate;
     for (const auto& [a, plo] : rr.map.mpaplo)
-        if (FCidDerivedFrom(plo->Cid(), 0x30) && fLate(static_cast<ALO*>(plo))) apaloLate.push_back(static_cast<ALO*>(plo));
+        if (FCidDerivedFrom(plo->Cid(), S3CID(0x30)) && fLate(static_cast<ALO*>(plo))) apaloLate.push_back(static_cast<ALO*>(plo));
     std::sort(apaloLate.begin(), apaloLate.end(), [&](ALO* p, ALO* q) { return rr.map.mpploa[p] < rr.map.mpploa[q]; });
     for (ALO* palo : apaloLate) UpdateAloXfs(palo, g_clock.t, g_clock.dt);
 
@@ -590,7 +591,7 @@ FRAMESTATS StepAndCompare(REFRUN& rr, const RAM& ramA, const RAM& ramB)
         const int oid = std::atoi(pszIk);
         for (const auto& [aDbg, ploDbg] : rr.map.mpaplo)
         {
-            if (!FCidDerivedFrom(ploDbg->Cid(), 0x30)) continue;
+            if (!FCidDerivedFrom(ploDbg->Cid(), S3CID(0x30))) continue;
             ALO* palo = static_cast<ALO*>(ploDbg);
             for (const ALOPAIR& q : palo->apair)
             {
@@ -1057,7 +1058,7 @@ namespace
 CAMERA CameraFromRamPose(const RAM& ram, RENDEROPTS& opts)
 {
     CAMERA cam;
-    const uint32_t cm = 0x2DDF40;
+    const uint32_t cm = S3VA(0x2DDF40);
     float m[16];
     for (int i = 0; i < 16; ++i) m[i] = ram.F32(cm + 0x60 + 4 * i);
     const float ty = ram.F32(cm + 0x44), sNear = ram.F32(cm + 0x4C);
@@ -1067,11 +1068,11 @@ CAMERA CameraFromRamPose(const RAM& ram, RENDEROPTS& opts)
     cam.pitch = glm::degrees(std::asin(std::clamp(m[2], -1.0f, 1.0f)));
     if (ty > 0.01f && ty < 10.0f) cam.fovY = glm::degrees(2.0f * std::atan(ty));
     if (sNear > 0.1f && sNear < 1000.0f) cam.sNear = sNear;
-    opts.rgbaCel = ram.U32(0x2DEB50);
+    opts.rgbaCel = ram.U32(S3VA(0x2DEB50));
     opts.sFogNear = ram.F32(cm + 0x240);
     opts.sFogFar = ram.F32(cm + 0x244);
     opts.uFogMax = ram.F32(cm + 0x248);
-    opts.rgbaFog = ram.U32(0x2DE18C);
+    opts.rgbaFog = ram.U32(S3VA(0x2DE18C));
     opts.fFog = opts.sFogNear > 0 && opts.sFogFar > opts.sFogNear;
     return cam;
 }
@@ -1120,11 +1121,11 @@ int AnimPoseCommand(const char* pszWorld, const char* pszRam, int argc, char** a
             ++crec;
             if (std::find(apalo.begin(), apalo.end(), pl->palo) == apalo.end()) apalo.push_back(pl->palo);
         }
-    g_clock.t = ram.F32(0x2DDED0);
+    g_clock.t = ram.F32(S3VA(0x2DDED0));
     g_clock.dt = 1e-6f;  // (the seeking records stay where the snapshot has them)
     for (ALO* palo : apalo) UpdateAloXfs(palo, g_clock.t, g_clock.dt);
     for (const auto& plo : psw->aploAll)
-        if (!plo->paloParent && FCidDerivedFrom(plo->Cid(), 0x30)) UpdateAloHierarchyWorlds(static_cast<ALO*>(plo.get()));
+        if (!plo->paloParent && FCidDerivedFrom(plo->Cid(), S3CID(0x30))) UpdateAloHierarchyWorlds(static_cast<ALO*>(plo.get()));
     // compared with the snapshot's records
     int cOk = 0, cCmp = 0;
     float dMax = 0;
@@ -1192,7 +1193,7 @@ int AnimPoseCommand(const char* pszWorld, const char* pszRam, int argc, char** a
     else ApproximateBakeLighting(scene);
     RENDEROPTS opts;
     const CAMERA cam = CameraFromRamPose(ram, opts);
-    if (!g_gl.FInit(width, height, false, "Sly3-Release", err)) { std::fprintf(stderr, "%s\n", err.c_str()); return 1; }
+    if (!g_gl.FInit(width, height, false, "Sly2-Release", err)) { std::fprintf(stderr, "%s\n", err.c_str()); return 1; }
     BuildSceneGpu(scene);
     UpdateShaderAnimations(g_clock.t, 1.0f / 60.0f);
     RenderScene(scene, cam, opts);
@@ -1242,16 +1243,16 @@ int AnimRunCommand(const char* pszWorld, const char* pszA, const char* pszB, int
     for (size_t k = 1; k < aram.size(); ++k)
     {
         if (!ram1.FLoad(aram[k])) return 2;
-        g_uRandState = ram0.U32(ram0.U32(0x2C49D4) + 0x58);
-        g_clock.t = ram0.F32(0x2DDED0);
-        g_clock.dt = ram0.F32(0x2DDED4);
-        g_clock.dt40 = ram0.F32(0x2DDF10);
+        g_uRandState = ram0.U32(ram0.U32(S3VA(0x2C49D4)) + 0x58);
+        g_clock.t = ram0.F32(S3VA(0x2DDED0));
+        g_clock.dt = ram0.F32(S3VA(0x2DDED4));
+        g_clock.dt40 = ram0.F32(S3VA(0x2DDF10));
         // the activation's viewpoint (activate.h): the reference camera's CM +0x90 / +0x14 at the frame's start
-        g_actview.posCm = glm::vec3(ram0.F32(0x2DDF40 + 0x90), ram0.F32(0x2DDF40 + 0x94), ram0.F32(0x2DDF40 + 0x98));
-        g_actview.grfCm = ram0.U32(0x2DDF40 + 0x14);
+        g_actview.posCm = glm::vec3(ram0.F32(S3VA(0x2DDF40) + 0x90), ram0.F32(S3VA(0x2DDF40) + 0x94), ram0.F32(S3VA(0x2DDF40) + 0x98));
+        g_actview.grfCm = ram0.U32(S3VA(0x2DDF40) + 0x14);
         UpdateSw(psw.get());
         for (const auto& plo : psw->aploAll)
-            if (!plo->paloParent && FCidDerivedFrom(plo->Cid(), 0x30)) UpdateAloHierarchyWorlds(static_cast<ALO*>(plo.get()));
+            if (!plo->paloParent && FCidDerivedFrom(plo->Cid(), S3CID(0x30))) UpdateAloHierarchyWorlds(static_cast<ALO*>(plo.get()));
         // the ASEGAs: each of the reference's matched by ASEG and object among the native ones
         int ct = 0, ctOk = 0, cmiss = 0;
         std::vector<ASEGA*> apasegaUsed;
@@ -1312,7 +1313,7 @@ int AnimRunCommand(const char* pszWorld, const char* pszA, const char* pszB, int
         for (ALO* palo : apaloUpd)
         {
             // (the players' trees are the actors' code: their own harnesses)
-            if (FCidDerivedFrom(PloRoot(palo)->Cid(), 0x34)) continue;
+            if (FCidDerivedFrom(PloRoot(palo)->Cid(), S3CID(0x34))) continue;
             const uint32_t base = ram1.U32(rr.map.mpploa[palo] + 0x54);
             for (size_t i = 0; i < palo->axf.size(); ++i)
             {
@@ -1384,7 +1385,7 @@ void PoseCheck(SW* psw, const char* pszSpec)
     if (std::getenv("SLY2N_GUARDCHECK"))
         for (const auto& [a, plo] : map.mpaplo)
         {
-            GUARD* pg = FCidDerivedFrom(plo->Cid(), 0x38) ? PguardFromLo(plo) : nullptr;
+            GUARD* pg = FCidDerivedFrom(plo->Cid(), S3CID(0x38)) ? PguardFromLo(plo) : nullptr;
             if (!pg) continue;
             int cOk = 0, cDiff = 0;
             auto oidAt = [&](uint32_t p) { return ram.FValid(p) ? ram.S32(p + 0x18) : -1; };
@@ -1421,7 +1422,7 @@ void PoseCheck(SW* psw, const char* pszSpec)
     if (std::getenv("SLY2N_MODECHECK"))
         for (const auto& [a, plo] : map.mpaplo)
         {
-            if (!FCidDerivedFrom(plo->Cid(), 0x30)) continue;
+            if (!FCidDerivedFrom(plo->Cid(), S3CID(0x30))) continue;
             const ALO* pa = static_cast<const ALO*>(plo);
             const uint32_t c = ram.U32(a + 0x50), ar = ram.U32(a + 0x54);
             if (c != pa->axf.size() || !ram.FValid(ar)) continue;
@@ -1437,7 +1438,7 @@ void PoseCheck(SW* psw, const char* pszSpec)
     if (const char* pszEv = std::getenv("SLY2N_EVOIDS"))  // ",oid,": the ASEGs whose events name one of them
         for (const auto& plo : psw->aploAll)
         {
-            if (!FCidDerivedFrom(plo->Cid(), 0x6D)) continue;
+            if (!FCidDerivedFrom(plo->Cid(), S3CID(0x6D))) continue;
             ASEG* paseg = static_cast<ASEG*>(plo.get());
             for (int l = 0; l < 3; ++l)
                 for (const ASEGEV& e : PasegdOf(paseg)->aaev[l])
@@ -1453,7 +1454,7 @@ void PoseCheck(SW* psw, const char* pszSpec)
     for (const auto& [a, plo] : map.mpaplo)
     {
         const bool fInRef = ((ram.U32(a + 0x2C) >> 28) & 1) != 0;
-        const bool fAlo = FCidDerivedFrom(plo->Cid(), 0x30);
+        const bool fAlo = FCidDerivedFrom(plo->Cid(), S3CID(0x30));
         if (fInRef != plo->fInWorld)
         {
             ++cMember;
@@ -1639,15 +1640,15 @@ int AiFreeCommand(const char* pszWorld, const char* pszA, const char* pszB, int 
         if (!ram1.FLoad(aram[k])) { std::fprintf(stderr, "cannot read %s\n", aram[k].c_str()); return 2; }
         // (strided dumps, f.N.ram: N - N' native frames between two of them, the clock spread evenly)
         const int cstep = std::max(1, IFrameOfPath(aram[k]) - IFrameOfPath(aram[k - 1]));
-        const float t0 = ram0.F32(0x2DDED0), t1 = ram1.F32(0x2DDED0);
-        g_uRandState = ram0.U32(ram0.U32(0x2C49D4) + 0x58);
+        const float t0 = ram0.F32(S3VA(0x2DDED0)), t1 = ram1.F32(S3VA(0x2DDED0));
+        g_uRandState = ram0.U32(ram0.U32(S3VA(0x2C49D4)) + 0x58);
         for (int istep = 0; istep < cstep; ++istep)
         {
         if (cstep == 1)
         {
-            g_clock.t = ram1.F32(0x2DDED0);
-            g_clock.dt = ram1.F32(0x2DDED4);
-            g_clock.dt40 = ram1.F32(0x2DDF10);
+            g_clock.t = ram1.F32(S3VA(0x2DDED0));
+            g_clock.dt = ram1.F32(S3VA(0x2DDED4));
+            g_clock.dt40 = ram1.F32(S3VA(0x2DDF10));
         }
         else
         {
@@ -1655,12 +1656,12 @@ int AiFreeCommand(const char* pszWorld, const char* pszA, const char* pszB, int 
             g_clock.t = t0 + g_clock.dt * static_cast<float>(istep + 1);
             g_clock.dt40 = g_clock.dt;
         }
-        g_actview.posCm = glm::vec3(ram0.F32(0x2DDF40 + 0x90), ram0.F32(0x2DDF40 + 0x94), ram0.F32(0x2DDF40 + 0x98));
-        g_actview.grfCm = ram0.U32(0x2DDF40 + 0x14);
+        g_actview.posCm = glm::vec3(ram0.F32(S3VA(0x2DDF40) + 0x90), ram0.F32(S3VA(0x2DDF40) + 0x94), ram0.F32(S3VA(0x2DDF40) + 0x98));
+        g_actview.grfCm = ram0.U32(S3VA(0x2DDF40) + 0x14);
         // the other objects' records from the frame's start (the players / actors are not native)
         for (const auto& [a, plo] : rr.map.mpaplo)
         {
-            if (!FCidDerivedFrom(plo->Cid(), 0x30)) continue;
+            if (!FCidDerivedFrom(plo->Cid(), S3CID(0x30))) continue;
             auto it = mpfGuardTree.find(plo);
             if (it == mpfGuardTree.end()) it = mpfGuardTree.emplace(plo, fInGuardTree(plo)).first;
             if (it->second) continue;
@@ -1668,7 +1669,7 @@ int AiFreeCommand(const char* pszWorld, const char* pszA, const char* pszB, int 
             const int c = ram0.S32(a + 0x50);
             const uint32_t base = ram0.U32(a + 0x54);
             if (c != static_cast<int>(palo->axf.size())) continue;
-            if (!FCidDerivedFrom(plo->Cid(), 0x34) && !(plo->paloParent && FCidDerivedFrom(PloRoot(plo)->Cid(), 0x34))) continue;
+            if (!FCidDerivedFrom(plo->Cid(), S3CID(0x34)) && !(plo->paloParent && FCidDerivedFrom(PloRoot(plo)->Cid(), S3CID(0x34)))) continue;
             for (int i = 0; i < c; ++i)
             {
                 XF* pxf = palo->axf[i].get();
@@ -1706,7 +1707,7 @@ int AiFreeCommand(const char* pszWorld, const char* pszA, const char* pszB, int 
         UpdateSw(psw.get());
         dbg("after update");
         for (const auto& plo : psw->aploAll)
-            if (!plo->paloParent && FCidDerivedFrom(plo->Cid(), 0x30)) UpdateAloHierarchyWorlds(static_cast<ALO*>(plo.get()));
+            if (!plo->paloParent && FCidDerivedFrom(plo->Cid(), S3CID(0x30))) UpdateAloHierarchyWorlds(static_cast<ALO*>(plo.get()));
         dbg("after worlds");
         if (cstep == 1) AiDeliverHits(ram0, ram1, &airef);  // (the players' attacks are not native: their hits)
         }
@@ -1789,7 +1790,7 @@ bool FImportAiStart(SW* psw, const std::string& pathRam)
     RemapSms(psw, ram, s_rr.map);
     ImportState(s_rr, ram);
     for (const auto& plo : psw->aploAll)  // (the world matrices of the imported records)
-        if (!plo->paloParent && FCidDerivedFrom(plo->Cid(), 0x30)) UpdateAloHierarchyWorlds(static_cast<ALO*>(plo.get()));
+        if (!plo->paloParent && FCidDerivedFrom(plo->Cid(), S3CID(0x30))) UpdateAloHierarchyWorlds(static_cast<ALO*>(plo.get()));
     s_airef = AIREF{};
     s_airef.pmap = &s_rr.map;
     s_airef.pmpaasega = &s_rr.mpaasega;

@@ -32,10 +32,10 @@ emulator, no BIOS. **SafeHouse includes no game data.**
 | --- | --- |
 | **Sly Cooper and the Thievius Raccoonus** | Playable. Built on [ProjectCane](https://github.com/theclub654/ProjectCane) by **theclub654**, the native PC port of Sly 1 that made SafeHouse possible. |
 | **Sly 2: Band of Thieves** | A native port, fully playable from start to finish. |
-| **Sly 3: Honor Among Thieves** | **Early in development, not fully playable.** It installs, plays the opening movies and loads its worlds, but most of the game does not work yet. |
+| **Sly 3: Honor Among Thieves** | **Early in development, not fully playable.** Now rebuilt on the finished Sly 2 port's engine. It installs and plays its opening movies; the rest of the game is still being ported. |
 
 Supported discs: Sly 1 from the USA, Europe, Japan and Korea; Sly 2 from the USA, Europe (v1.00 and v2.01) and
-Japan. On macOS the packages carry the launcher and Sly 2.
+Japan. On macOS the packages carry the launcher, Sly 2 and Sly 3.
 
 ## Download and play
 

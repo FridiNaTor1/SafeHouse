@@ -63,9 +63,12 @@ public:
                      glm::vec4 scale, glm::vec4 offsetOther, float depth, bool fWrap = true);
     // A textured quad in PS2 frame pixels (x0, y0 top left), in the current 2D mode and draw order: the dynamic
     // button icons (promptglyph.h) and the skip indicator. uv: u0 v1 at the top left, u1 v0 at the bottom right
-    // (the atlases are uploaded unflipped); rgba in GS units (0x80 = 1), a straight-alpha texture.
+    // (the atlases are uploaded unflipped); rgba in GS units (0x80 = 1), a straight-alpha texture. fOnce: one icon
+    // per place this frame (a later fOnce quad of the same icon and size about where an earlier one is moves that
+    // one instead): a text's drop-shadow copy, the same text again a few pixels off, would otherwise show through
+    // the icon's cut-out label (R17).
     void DrawTexQuad(unsigned tex, float x0, float y0, float x1, float y1, float u0, float v0, float u1, float v1,
-                     glm::vec4 rgba, float z = 1.0f);
+                     glm::vec4 rgba, float z = 1.0f, bool fOnce = false);
     // A ring of the fraction u (0..1, clockwise from the top) around (cx, cy), radii in canvas pixels of height
     // (the width corrected for the canvas's 480 / 448 pixel aspect); rgba in GS units, z 0..1 (1 on top).
     void DrawRing(float cx, float cy, float rOuter, float rInner, float u, glm::vec4 rgba, float z = 1.0f);
@@ -89,6 +92,8 @@ public:
     void FillScreenLine(glm::vec2 a, glm::vec2 b, float w, glm::vec4 rgba, float z = 1.0f);
     // A fade: the whole screen in rgba (alpha 0..128).
     void Fade(glm::vec4 rgba);
+    // (PC menus) the picture left and right of the 4:3 canvas filled (a wide picture; nothing at 4:3), at depth z
+    void Pillarbox(glm::vec4 rgba, float z);
     // Letterbox bars covering u (0..1) of each band of hBar pixels at the top and bottom.
     void Letterbox(float u, float hBar = 56.0f, glm::vec4 rgba = glm::vec4(0, 0, 0, 128));
     // A horizontal wipe: the screen covered from the left up to u (0..1), soft edge of dxEdge pixels.
@@ -100,7 +105,7 @@ public:
 
 private:
     struct VTX { glm::vec2 pos; glm::vec4 rgba; float z; glm::vec2 uv{0.0f}; };
-    struct QUAD { unsigned tex = 0; int mode = 0; bool fReplace = false; bool fMip = false; size_t ibatch = 0; std::vector<VTX> av; };
+    struct QUAD { unsigned tex = 0; int mode = 0; bool fReplace = false; bool fMip = false; bool fAlphaTest = false; bool fOnce = false; size_t ibatch = 0; std::vector<VTX> av; };
     bool m_fBreakBatch = false;   // the next draw starts a new batch (after a quad)
     std::vector<QUAD> m_aquad;
     struct BATCH { int mode; size_t itri, ctri, iline, cline; };
@@ -115,21 +120,6 @@ private:
 };
 
 extern CHud g_hud;
-
-// The 2D canvas's vertical scale (UI units of a 480-line canvas to GS field lines): Sly 2's 0x3EE8BA2F (5 / 11);
-// Sly 3 computes it from the display (orig3 0x2666A0: 448 / 2 / 480 = 7 / 15, the origin 0x260930 then 2048 - 112).
-extern float g_uiKy;
-// The horizontal scale (UI units to GS pixels): Sly 2's 0.8 (640 -> 512). Sly 3: 0.8 x 15 / 14, fitted to PCSX2's
-// st2..st4 screenshots (the 2D is 7% wider there than 0.8 gives, while the 3D matches; the code 0x2666A0 reads
-// 512 / 640: the source of the factor is open).
-extern float g_uiKx;
-// The screen slots' colour offset per 127-biased unit (Sly 2's 0x213300: 1; Sly 3's 0x261C08: 2 x (c - 127)).
-extern float g_sScreenColorOffset;
-// A textured quad's shader is any of its id (Sly 3; Sly 2 takes only shaders with flag 0x40).
-extern bool g_fScreenShdAnyFlags;
-// The 2D depth test keeps the first of equal depths (Sly 3: a sprite's earlier polygons stay over its later ones, e.g.
-// the prompt's arrows (1058 element 2: the yellow fan over the orange border strips), as PCSX2 shows); Sly 2: GEQUAL.
-extern bool g_fScreenDepthGreater;
 
 // The kind-21 RPLs of a reference RAM (0x3B3980..: {21, z, packet A, chain B}) drawn natively: their matrices and
 // colours from the packets, their geometry from the loaded screen objects (matched by object id, element index

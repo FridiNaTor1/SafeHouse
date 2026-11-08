@@ -52,13 +52,21 @@ struct ACTIONOBJ
     glm::vec2 r60{0.2f, 0.5f};         // +0x60 the wait after it (355)
     float g68 = 0.17453295f;           // +0x68 the angle it reaches (356, degrees; 10)
     float g6C = 3.4028235e38f;    // +0x6C (360)
-    int f70 = 0, f74 = 0, f78 = 0;  // +0x70 a clear line needed (359), +0x74 (361), +0x78 a held object (358)
+    int f70 = 0, f74 = 0, f78 = 0;  // +0x70 clear line (359), +0x74 (361), +0x78 concurrent response (358)
     int fA8 = 1;                  // +0xA8 enabled (363)
+    int aimRef = -1, aimEndRef = -1, aimMarker = -1; // +0x7C/+0x80/+0x84 (362)
+    XF* pxfAim = nullptr;         // +0xA0: rotation record aimed while the action plays
+    glm::vec3 vecAim{0.0f};       // +0x90: authored direction at the marker
     KINDE kinde;                  // +0xC0 what it plays (364 {oid, grf})
 };
 ACTIONOBJ* PactionOf(LO* plo, GUARD* pg);
+void PostLoadGuardAction(LO* plo); // orig: 0x0020AE18
 // orig: 0x001758A0
 ACTIONOBJ* PactionSelect(GUARD* pg, LO* ptarget, TARGETREC* pgate);
+// orig: 0x0020AB68 / 0x0020AC28 / 0x0020ACC0
+void SetGuardResponse(GUARD* pg, ACTIONOBJ* action, XF* targetFrame, const glm::vec3& targetPos);
+void SetGuardActionAim(GUARD* pg, ACTIONOBJ* action, XF* targetFrame, const glm::vec3& targetPos);
+void UpdateGuardActionAim(GUARD* pg);
 
 // 0xA5 (0x60): the pursuit
 struct JOBPURSUE : AIJOB

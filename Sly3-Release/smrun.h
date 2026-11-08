@@ -5,6 +5,23 @@
 
 #include "asega.h"
 
+struct SMA;
+
+// The state-change message (0x1F13A8: {the SMA, the old state's oid, the new one's}).
+struct SMAMSG10
+{
+    SMA* psma;
+    OID oidOld;
+    OID oidNew;
+};
+
+// The original BASIC listener list (+0x8), used by SCPT command 0xD to latch its goal state.
+struct SMALISTENER
+{
+    virtual ~SMALISTENER() = default;
+    virtual void OnSmaState(const SMAMSG10& msg) = 0;  // the listener's vt slot 5, message 10
+};
+
 // orig 0x50 bytes (pool 0x3E1278, vtable 0x2D9768, list 0x3E126C)
 struct SMA : ASEGALISTENER, BASIC  // (a BASIC: the scripts get it as their object)
 {
@@ -19,19 +36,12 @@ struct SMA : ASEGALISTENER, BASIC  // (a BASIC: the scripts get it as their obje
     SM::SMT* psmt = nullptr;      // +0x40
     float svtLocal = 1.0f;        // +0x44
     uint32_t grfMask = 4;         // +0x48: the transitions allowed
+    std::vector<SMALISTENER*> aplistener;
     bool fRetracted = false;
     void OnAsegaMsg(ASEGA* pasega, int msgk) override;  // orig 0x1F1078
 };
 
 extern std::vector<SMA*> g_apsma;
-
-// The message 10 of a state change (0x1F13A8: {the SMA, the old state's oid, the new one's}) to the SMA's object
-struct SMAMSG10
-{
-    SMA* psma;
-    OID oidOld;
-    OID oidNew;
-};
 
 // vt slot 3 of an SMA (0x1331F8 in the SM's module frame, the SMA as the handler's object): 2 at its start
 // (0x1F01B8), 8 at a state change (0x1F13A8: the old and new states' oids); set by the world side (update.cpp)

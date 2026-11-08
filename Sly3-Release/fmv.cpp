@@ -1,10 +1,16 @@
 // Movies (see fmv.h). The PSS demux is Sly1-Release's "File Extractor/main.cpp" DemuxPss / DecodePssAudioToWav
 // made incremental (packets read from the disc as the movie plays); the decoder setup is Sly1-Release fmv.cpp's.
 
+#include "game/sly3.h"
 #include "fmv.h"
+#include "region.h"
 
 #include "audio.h"
 #include "snd989.h"
+#include "flacfile.h"
+#include "wavfile.h"
+
+#include "../platform/platform.h"
 
 extern "C"
 {
@@ -19,10 +25,12 @@ extern "C"
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <deque>
 #include <filesystem>
 #include <fstream>
+#include <memory>
 #include <thread>
 
 namespace
@@ -37,11 +45,28 @@ uint32_t Le32(const uint8_t* p) { uint32_t v; std::memcpy(&v, p, 4); return v; }
 class CPssReader
 {
 public:
-    explicit CPssReader(const FK& fk) : m_ibBase(uint64_t(fk.isector) * kSector), m_cbFile(fk.cb) {}
+    explicit CPssReader(const FK& fk) : m_isector(fk.isector), m_cbFile(std::size_t(g_disc.CbFile(fk.isector, fk.cb)))
+    {
+        // (PC) a converted installation's movie is its MPEG-2 video stream alone (.m2v, from a sequence header), the
+        // sound a WAV beside it: the stream is read in packet-sized pieces as video
+        uint8_t h[4] = {};
+        m_fElementary = g_disc.FReadFileBytes(m_isector, 0, h, 4) && Be32(h) == 0x000001B3;
+    }
+    [[nodiscard]] bool FElementary() const { return m_fElementary; }
 
     // The next PES packet of the video (0xE0) or private stream 1 (0xBD); false at the end.
     bool FNextPacket(uint32_t* pid, const uint8_t** ppb, std::size_t* pcb)
     {
+        if (m_fElementary)
+        {
+            const std::size_t cb = std::min<std::size_t>(kSector, m_cbFile - std::min(m_ib, m_cbFile));
+            if (cb == 0 || !FEnsure(cb)) return false;
+            *pid = 0xE0;
+            *ppb = Pb();
+            *pcb = cb;
+            m_ib += cb;
+            return true;
+        }
         for (;;)
         {
             if (!FEnsure(4)) return false;
@@ -98,13 +123,14 @@ private:
         const std::size_t cbHave = ab.size();
         const std::size_t cbRead = std::min<std::size_t>(cbWant, m_cbFile - (m_ibBuf + cbHave));
         ab.resize(cbHave + cbRead);
-        if (cbRead && !g_disc.FReadBytes(m_ibBase + m_ibBuf + cbHave, ab.data() + cbHave, cbRead)) return false;
+        if (cbRead && !g_disc.FReadFileBytes(m_isector, m_ibBuf + cbHave, ab.data() + cbHave, cbRead)) return false;
         m_ab = std::move(ab);
         return m_ib + cb <= m_ibBuf + m_ab.size();
     }
 
-    uint64_t m_ibBase;
+    uint32_t m_isector;  // (the file: its key's sector)
     std::size_t m_cbFile;
+    bool m_fElementary = false;
     std::vector<uint8_t> m_ab;
     std::size_t m_ibBuf = 0;  // file offset of m_ab[0]
     std::size_t m_ib = 0;     // file offset of the parse
@@ -124,10 +150,82 @@ public:
         if (m_fHeader) Decode();
     }
 
+    // (PC) the sound from a WAV (a converted installation's movie, a mod's): the frames as the ADS decodes them
+    bool FOpenWav(const std::string& path)
+    {
+        uint8_t h[4] = {};
+        if (PfnReadFile(path)(0, h, 4) && FIsFlac(h, 4))
+        {
+            // a FLAC (the European discs' tracks): decoded whole, read as a WAV in memory
+            int rate = 0, cch = 0;
+            std::string error;
+            auto pmem = std::make_shared<std::vector<int16_t>>();
+            if (!FLoadFlac(path, rate, cch, *pmem, &error))
+            {
+                std::fprintf(stderr, "movie: %s: %s\n", path.c_str(), error.c_str());
+                return false;
+            }
+            m_wi = WAVINFO{};
+            m_wi.rate = rate;
+            m_wi.cch = cch;
+            m_wi.bits = 16;
+            m_wi.cframe = pmem->size() / std::size_t(cch);
+            m_pfnWav = [pmem](uint64_t ib, void* pv, std::size_t cb) {
+                if (ib + cb > pmem->size() * 2) return false;
+                std::memcpy(pv, reinterpret_cast<const uint8_t*>(pmem->data()) + ib, cb);
+                return true;
+            };
+            m_fWav = true;
+            m_fHeader = true;
+            m_format = 1;
+            m_rate = uint32_t(rate);
+            m_cch = uint32_t(std::min(cch, 2));
+            return true;
+        }
+        m_pfnWav = PfnReadFile(path);
+        std::error_code ec;
+        const uint64_t cb = std::filesystem::file_size(cane::path(path), ec);
+        std::string error;
+        if (ec || !FParseWav(m_pfnWav, cb, m_wi, &error))
+        {
+            std::fprintf(stderr, "movie: %s: %s\n", path.c_str(), ec ? "cannot read" : error.c_str());
+            m_pfnWav = nullptr;
+            return false;
+        }
+        m_fWav = true;
+        m_fHeader = true;
+        m_format = 1;
+        m_rate = uint32_t(m_wi.rate);
+        m_cch = uint32_t(std::min(m_wi.cch, 2));
+        return true;
+    }
+    // Reads the WAV on until a second of sound waits (in 8192-frame pieces, the pieces queueAudio pushes).
+    void TopUpWav()
+    {
+        if (!m_fWav) return;
+        std::vector<int16_t> a;
+        while (m_iframeWav < m_wi.cframe && m_pcm.size() < m_rate * 2u)
+        {
+            const std::size_t c = std::size_t(std::min<uint64_t>(8192, m_wi.cframe - m_iframeWav));
+            a.resize(c * std::size_t(m_wi.cch));
+            if (!FReadWavFrames(m_pfnWav, m_wi, m_iframeWav, c, a.data())) { m_iframeWav = m_wi.cframe; break; }
+            for (std::size_t i = 0; i < c; ++i)
+            {
+                m_pcm.push_back(a[i * std::size_t(m_wi.cch)]);
+                m_pcm.push_back(a[i * std::size_t(m_wi.cch) + (m_wi.cch > 1 ? 1 : 0)]);
+            }
+            m_iframeWav += c;
+            m_cframeDecoded += c;
+        }
+    }
+    // All the sound is decoded (a WAV read to its end; a PSS's is when the file is).
+    [[nodiscard]] bool FWavDone() const { return !m_fWav || m_iframeWav >= m_wi.cframe; }
+
     bool m_fHeader = false;
     uint32_t m_format = 0, m_rate = 0, m_cch = 0, m_interleave = 0;
     std::deque<int16_t> m_pcm;  // interleaved stereo, not yet queued
     uint64_t m_cframeDecoded = 0;
+    bool m_fWav = false;
 
 private:
     void ParseHeader()
@@ -179,6 +277,9 @@ private:
 
     std::vector<uint8_t> m_ab;
     int m_h1[2] = {0, 0}, m_h2[2] = {0, 0};
+    PFNWAVREAD m_pfnWav;
+    WAVINFO m_wi;
+    uint64_t m_iframeWav = 0;
 };
 
 struct PICTURE
@@ -195,23 +296,56 @@ std::string AvError(int error)
 }
 }  // namespace
 
+bool FDemuxMovie(const FK& fk, std::vector<uint8_t>& abVideo, std::map<int, MOVIEAUDIOTRACK>& mpaudio)
+{
+    CPssReader reader(fk);
+    if (reader.FElementary()) return false;
+    std::map<int, CMovieAudio> mpdec;
+    uint32_t id = 0;
+    const uint8_t* pb = nullptr;
+    std::size_t cb = 0;
+    // (as FPlayMovie demuxes: the video packets' bytes in order; the sound packets by their track, each decoded alone)
+    while (reader.FNextPacket(&id, &pb, &cb))
+    {
+        if (id == 0xE0) abVideo.insert(abVideo.end(), pb, pb + cb);
+        else if (cb >= 4) mpdec[pb[3]].AddPacket(pb, cb);
+    }
+    for (auto& [track, dec] : mpdec)
+    {
+        if (!dec.m_fHeader) continue;
+        MOVIEAUDIOTRACK& t = mpaudio[track];
+        t.rate = int(dec.m_rate);
+        t.asample.assign(dec.m_pcm.begin(), dec.m_pcm.end());
+    }
+    return !abVideo.empty();
+}
+
 std::vector<MOVIEINFO> MovieList()
 {
     std::vector<MOVIEINFO> a;
     for (const auto& [va, fk] : g_disc.ElfKeys())
     {
         uint8_t h[4];
-        if (fk.cb < kSector || !g_disc.FReadBytes(uint64_t(fk.isector) * kSector, h, 4) || Be32(h) != 0x000001BA) continue;
-        // (Sly 3's table names 338 and 339 twice: orig3 0x317EB8 / 0x317F38, 0x317EF8 / 0x317F78)
-        bool fDup = false;
-        for (const MOVIEINFO& m : a) fDup |= m.fk.isector == fk.isector;
-        if (!fDup) a.push_back({va, fk});
+        if (fk.cb < kSector || !g_disc.FReadFileBytes(fk.isector, 0, h, 4) || (Be32(h) != 0x000001BA && Be32(h) != 0x000001B3)) continue;
+        a.push_back({va, fk});
     }
     return a;
 }
 
 bool FFindMovie(const std::string& arg, MOVIEINFO* pinfo)
 {
+    // (Sly 3: @SECTOR:CB: a movie keyed only by a world's exit, e.g. the episodes' chalk talks 305..329, which the
+    // executable's table does not list; SLY3_EXITLIST=1 prints their sectors and sizes)
+    if (!arg.empty() && arg[0] == '@')
+    {
+        const size_t colon = arg.find(':');
+        if (colon == std::string::npos) return false;
+        pinfo->va = 0;
+        pinfo->fk = FK{};
+        pinfo->fk.isector = uint32_t(std::strtoul(arg.c_str() + 1, nullptr, 0));
+        pinfo->fk.cb = uint32_t(std::strtoul(arg.c_str() + colon + 1, nullptr, 0)) & ~sly3::CB_MOVIE_FLAGS;
+        return pinfo->fk.cb != 0;
+    }
     const std::vector<MOVIEINFO> a = MovieList();
     const unsigned long n = std::strtoul(arg.c_str(), nullptr, 0);
     for (const MOVIEINFO& m : a)
@@ -251,6 +385,13 @@ bool FPlayMovie(const FK& fk, PFNMOVIEPRESENT pfnPresent, void* pv, MOVIESTATS* 
 
     CPssReader reader(fk);
     CMovieAudio audio;
+    // (PC) an M2V's sound: the WAV of track 0 (one sound track: the USA disc), else the language's (track + 1)
+    if (reader.FElementary())
+    {
+        std::string path = g_disc.PathPart(fk.isector, "audio0");
+        if (path.empty()) path = g_disc.PathPart(fk.isector, "audio" + std::to_string(g_nLang + 1));
+        if (!path.empty()) audio.FOpenWav(path);
+    }
     CPcmStream pcm;
     std::deque<PICTURE> apicture;
     bool fEof = false, fQuit = false, fAudioStarted = false;
@@ -315,12 +456,13 @@ bool FPlayMovie(const FK& fk, PFNMOVIEPRESENT pfnPresent, void* pv, MOVIESTATS* 
         }
     };
 
-    // Reads packets until enough is buffered: two pictures and a second of sound (or the end). Before the sound
-    // starts, also until its header is found (Sly 3's logo 339 has it after the third picture: without this the
-    // start below waited for it forever; up to 9 pictures, then the movie starts without sound).
+    // Reads packets until enough is buffered: two pictures and a second of sound (or the end).
     auto demux = [&] {
-        while (!fEof && (apicture.size() < 3 || (!fAudioStarted && !audio.m_fHeader) ||
-                         (audio.m_rate && audio.m_pcm.size() < audio.m_rate * 2u)))
+        audio.TopUpWav();
+        // The audio header can follow the first video pictures. Keep reading until
+        // it arrives (or the bounded video-only fallback below can start the clock).
+        // Otherwise three pictures with no header satisfy neither startup condition.
+        while (!fEof && (apicture.size() < 3 || !audio.m_fHeader || audio.m_pcm.size() < audio.m_rate * 2u))
         {
             uint32_t id = 0;
             const uint8_t* pb = nullptr;
@@ -334,7 +476,9 @@ bool FPlayMovie(const FK& fk, PFNMOVIEPRESENT pfnPresent, void* pv, MOVIESTATS* 
                 break;
             }
             if (id == 0xE0) feedVideo(pb, cb);
-            else audio.AddPacket(pb, cb);
+            // orig 0x1B3EC0: the sound streams with the id 0 (one sound track: the USA disc) or the language's + 1 (the
+            // European discs: one track per language, 1..11; region.h)
+            else if (cb >= 4 && (pb[3] == 0 || pb[3] == g_nLang + 1)) audio.AddPacket(pb, cb);
             if (apicture.size() > 8) break;  // (sound far behind the pictures: show some first)
         }
     };
@@ -361,6 +505,10 @@ bool FPlayMovie(const FK& fk, PFNMOVIEPRESENT pfnPresent, void* pv, MOVIESTATS* 
         demux();
         if (!fAudioStarted && (audio.m_fHeader || fEof || apicture.size() > 8))
         {
+            if (std::getenv("SLY2N_MOVIEAUDIT"))
+                std::printf("movie startup %u: pictures %zu, audio header %d, eof %d\n",
+                            fk.id, apicture.size(), int(audio.m_fHeader), int(fEof));
+            audio.TopUpWav();
             if (audio.m_fHeader && pcm.FOpen(2, static_cast<int>(audio.m_rate)))
             {
                 // 989snd's movie voices (InitMovieSound vol 0x400 pan 0 group 2, type 3): one voice per channel,
@@ -369,14 +517,15 @@ bool FPlayMovie(const FK& fk, PFNMOVIEPRESENT pfnPresent, void* pv, MOVIESTATS* 
                 snd_StreamLevels(127, 0, 0, 2, &gl, &gr);
                 const float m[4] = {gl * kStreamGain, 0.0f, 0.0f, gr * kStreamGain};
                 pcm.SetMatrix(m);
-                queueAudio(fEof);
+                queueAudio(fEof && audio.FWavDone());
                 pcm.Start();
             }
             fAudioStarted = true;
             tStart = clock::now();
         }
         if (!fAudioStarted) continue;
-        queueAudio(fEof);
+        audio.TopUpWav();
+        queueAudio(fEof && audio.FWavDone());
         // The clock: the sound played (when there is sound), else the wall clock.
         const double tWall = std::chrono::duration<double>(clock::now() - tStart).count();
         const double t = pcm.FIsOpen() && pcm.CFramePlayed() > 0 ? double(pcm.CFramePlayed()) / audio.m_rate : tWall;
@@ -386,6 +535,18 @@ bool FPlayMovie(const FK& fk, PFNMOVIEPRESENT pfnPresent, void* pv, MOVIESTATS* 
             PICTURE pic = std::move(apicture.front());
             apicture.pop_front();
             tNext += pic.tDuration;
+            // (test: SLY2N_PCMTAP=dir: each picture's FNV-1a hash and duration, dir/movie-<id>.txt)
+            if (static const char* s_szTap = std::getenv("SLY2N_PCMTAP"); s_szTap)
+            {
+                uint64_t h = 0xcbf29ce484222325ull;
+                for (uint8_t b : pic.rgba) h = (h ^ b) * 0x100000001b3ull;
+                const std::string path = std::string(s_szTap) + "/movie-" + std::to_string(fk.id) + ".txt";
+                if (std::FILE* pf = std::fopen(path.c_str(), stats.cframe == 0 ? "w" : "a"))
+                {
+                    std::fprintf(pf, "%d %016llx %.6f\n", stats.cframe, static_cast<unsigned long long>(h), pic.tDuration);
+                    std::fclose(pf);
+                }
+            }
             stats.cframe++;
             if (!pfnPresent(pic.rgba.data(), stats.cx, stats.cy, pv))
             {
@@ -397,7 +558,7 @@ bool FPlayMovie(const FK& fk, PFNMOVIEPRESENT pfnPresent, void* pv, MOVIESTATS* 
         if (apicture.empty() && fEof)
         {
             // The pictures are done: let the sound finish.
-            if (!pcm.FIsOpen() || (audio.m_pcm.empty() && pcm.CBufferQueued() == 0)) break;
+            if (!pcm.FIsOpen() || (audio.m_pcm.empty() && audio.FWavDone() && pcm.CBufferQueued() == 0)) break;
         }
         if (!pfnPresent(nullptr, 0, 0, pv))
         {
@@ -432,7 +593,7 @@ int ListMoviesCommand()
     for (const MOVIEINFO& m : MovieList())
     {
         uint8_t h[kSector];
-        g_disc.FReadBytes(uint64_t(m.fk.isector) * kSector, h, sizeof(h));
+        g_disc.FReadFileBytes(m.fk.isector, 0, h, sizeof(h));
         std::printf("%2d  key 0x%06X  id %5u  sector 0x%06X  %6.1f MB\n", i++, m.va, m.fk.id, m.fk.isector,
                     m.fk.cb / 1048576.0);
     }
@@ -526,7 +687,7 @@ int PlayMovieCommand(const std::string& arg, const std::string& dirOut, double t
     if (!dirOut.empty()) std::filesystem::create_directories(dirOut);
     if (SDL_InitSubSystem(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER) == 0)
     {
-        s.pwindow = SDL_CreateWindow("Sly 3 movie", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 960, 720,
+        s.pwindow = SDL_CreateWindow("Sly 2 movie", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 960, 720,
                                      SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
         if (s.pwindow) s.prenderer = SDL_CreateRenderer(s.pwindow, -1, SDL_RENDERER_PRESENTVSYNC);
         for (int i = 0; i < SDL_NumJoysticks(); ++i)

@@ -6,6 +6,8 @@
 // copied to $SLY2N_AUTOSAVEDIR. SLY2N_AUTOPLAY_JOBWAIT / _STEP (frames) tune the waits; SLY2N_AUTOPLAY_SKIP="oid,.."
 // jobs played by the harness only up to their start (the route / other tools then play them).
 #include "joy.h"
+#include "game/sly3.h"
+#include "worldglobals.h"
 #include "lo.h"
 #include "disc.h"
 #include "ai.h"
@@ -45,6 +47,7 @@ int ShopItemSelected(int* pmsg);   // shop.cpp
 static bool FItemOwnedAutoplay(int i) { CRef r = RefGetProgress({"powerUps", "mppukfAcquired", std::to_string(i)}); return r.m_tagk == TAGK_Bool && r.m_bool; }
 int g_frameAutoplayFree = 0;
 std::unordered_map<int, int> g_mpoidiwrecTask;   // a filtered-out task's first world (brx.cpp)
+WORLD_TABLE(g_mpoidiwrecTask);   // (PC: moved aside while a kept world loads, worldglobals.h)
 static int IwrecTask(const TASK* pt) { if (pt->iwrec >= 0) return pt->iwrec; auto it = g_mpoidiwrecTask.find(pt->oid); return it == g_mpoidiwrecTask.end() ? -1 : it->second; }   // joy.cpp ORs it into the pad
 
 namespace
@@ -155,7 +158,7 @@ void UpdateAutoplay(SW* psw, int frame)
         std::printf("autoplay: frame %d the shop: TRIANGLE\n", frame);
         return;
     }
-    if (LO* ppo = PloPoCurrent(psw); ppo && ppo->Cid() == 0x46)
+    if (LO* ppo = PloPoCurrent(psw); ppo && ppo->Cid() == S3CID(0x46))
     {
         std::vector<OID> aoid;
         const int oidCur = OidSafeHouseShown(ppo, &aoid);
@@ -192,7 +195,7 @@ void UpdateAutoplay(SW* psw, int frame)
         // the job's active tasks: one live one requested done; else one of another world started there
         TASK* ptLive = nullptr;
         TASK* ptOther = nullptr;
-        for (LO* plo : psw->mpcidaplo[0x85])
+        for (LO* plo : psw->mpcidaplo[S3CID(0x85)])
         {
             TASK* pt = static_cast<TASK*>(plo);
             if (pt->pjob != pjob || pt->nState != 1) continue;
@@ -233,7 +236,7 @@ void UpdateAutoplay(SW* psw, int frame)
         // exit / a scene the harness skipped)
         if (frame - s_frameSome < EnvInt("SLY2N_AUTOPLAY_NONE", 1800)) return;
         s_frameSome = frame;
-        for (LO* plo : psw->mpcidaplo[0x85])
+        for (LO* plo : psw->mpcidaplo[S3CID(0x85)])
         {
             TASK* pt = static_cast<TASK*>(plo);
             if (pt->pjob != pjob || pt->nState != 0) continue;
@@ -250,7 +253,7 @@ void UpdateAutoplay(SW* psw, int frame)
         // (a job whose tasks are all done stays current when its last task's own script was skipped, e.g. Ep8's
         // turret 3466 in world 43 with 3470 current: the reference keeps it so after the same requests): another
         // job's available task here asked to start
-        for (LO* plo : psw->mpcidaplo[0x85])
+        for (LO* plo : psw->mpcidaplo[S3CID(0x85)])
         {
             TASK* pt = static_cast<TASK*>(plo);
             if (pt->nState != 1 || !pt->pjob || pt->pjob == pjob || pt->fMission || s_mpcReq[pt->oid]++ >= 1) continue;
@@ -259,7 +262,7 @@ void UpdateAutoplay(SW* psw, int frame)
             return;
         }
         std::printf("autoplay: frame %d STUCK in job %d (no active or ready task):", frame, pjob->oid);
-        for (LO* plo : psw->mpcidaplo[0x85])
+        for (LO* plo : psw->mpcidaplo[S3CID(0x85)])
         {
             TASK* pt = static_cast<TASK*>(plo);
             if (pt->pjob != pjob) continue;
@@ -304,7 +307,7 @@ void UpdateAutoplay(SW* psw, int frame)
         // the character (the safe house's choice): the marker's task's player (+0xC0) when known, else tried in
         // turn: Sly, Murray, Bentley (the marker's script checks the player)
         LO* ppo = PloPoCurrent(psw);
-        const TASK* pt = ptaskMk && ptaskMk->Cid() == 0x85 ? static_cast<const TASK*>(ptaskMk) : nullptr;
+        const TASK* pt = ptaskMk && ptaskMk->Cid() == S3CID(0x85) ? static_cast<const TASK*>(ptaskMk) : nullptr;
         static const int s_aoid[3] = {7, 9, 8};
         // (the markers' own oids: 17472 Sly's, 28271 Murray's, 28072 Bentley's)
         const int oidMk = pmk->oid == 17472 ? 7 : pmk->oid == 28271 ? 9 : pmk->oid == 28072 ? 8 : -1;
@@ -329,7 +332,7 @@ void UpdateAutoplay(SW* psw, int frame)
     {
         static std::map<int, int> s_mpcExit;
         const WREC* pw = PwrecEpisodeMain(IepisodeCur());
-        for (LO* plo : AploOfClass(psw, 0x1A))
+        for (LO* plo : AploOfClass(psw, S3CID(0x1A)))
         {
             const LOXSHAPE* px = dynamic_cast<const LOXSHAPE*>(plo);
             if (!pw || !px || px->aabKey.empty() || FkFromRecord(px->aabKey[0].data()).id != pw->fk.id) continue;
@@ -347,7 +350,7 @@ void UpdateAutoplay(SW* psw, int frame)
     if (frame - s_frameIdle > EnvInt("SLY2N_AUTOPLAY_NONE", 1800))
     {
         static std::map<int, int> s_mpcStart;
-        for (LO* plo : psw->mpcidaplo[0x85])
+        for (LO* plo : psw->mpcidaplo[S3CID(0x85)])
         {
             TASK* pt = static_cast<TASK*>(plo);
             if (pt->nState == 1 && pt->pjob && !pt->fMission && s_mpcStart[pt->oid]++ < 1)
@@ -387,7 +390,7 @@ void UpdateAutoplay(SW* psw, int frame)
     {
         s_frameIdle = frame;
         std::printf("autoplay: frame %d t %.2f world %d IDLE: no job, no marker; active:", frame, g_clock.t, g_transition.iwrecCur);
-        for (LO* plo : psw->mpcidaplo[0x85])
+        for (LO* plo : psw->mpcidaplo[S3CID(0x85)])
         {
             TASK* pt = static_cast<TASK*>(plo);
             if (pt->nState == 1) std::printf(" %d(job %d%s)", pt->oid, pt->pjob ? pt->pjob->oid : -1, pt->fMission ? " other world" : "");

@@ -31,7 +31,7 @@ enum PTX : int
     PTX_MouseAimInHacking, PTX_KeyboardMapping, PTX_ResetKeyboardMapping,
     // the keyboard mapping's rows
     PTX_MoveForward, PTX_MoveBack, PTX_MoveLeft, PTX_MoveRight, PTX_Square, PTX_Circle, PTX_Cross, PTX_Triangle,
-    PTX_Start, PTX_Select, PTX_CameraLeft, PTX_CameraRight, PTX_CameraUp, PTX_CameraDown, PTX_PressAKey,
+    PTX_Start, PTX_Select, PTX_CameraLeft, PTX_CameraRight, PTX_CameraUp, PTX_CameraDown, PTX_TankLeftTrack, PTX_TankRightTrack, PTX_PressAKey,
     // key and mouse names
     PTX_KeyUnbound, PTX_KeySpace, PTX_KeyUp, PTX_KeyDown, PTX_KeyLeft, PTX_KeyRight, PTX_KeyLeftMod, PTX_KeyRightMod,
     PTX_MouseLeft, PTX_MouseRight, PTX_MouseMiddle, PTX_MouseN, PTX_WheelUp, PTX_WheelDown, PTX_Mouse,

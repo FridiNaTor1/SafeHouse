@@ -10,6 +10,50 @@
 
 struct KINDE;
 
+// 0xBB (0x30: 0x17D1C0 / 0x17D1F0 / 0x17D280): hanging on a bar (GUARD +0xF80 2), state 0x28; 0xBC (0x17D2B0 /
+// 0x17D2E0 / 0x17D330): on a 0x27 (+0xF80 3), state 0x29. Both stand (a 0x9D move, state index 2); 0xBB also turns the
+// heading's frame to the bar's x row
+struct JOBHOLD : AIJOB
+{
+    int nState = 0x28;
+    void Init() override;
+    void Enter() override;
+    void Exit() override;
+};
+
+// 0xB8: follow the rail attached at GUARD +0xF84 (0x17CAC8..0x17CE30).
+struct JOBRAIL : AIJOB
+{
+    int st = -1;
+    float tSt = 0;
+    float uSpeed = 1;
+    float sGoal = 0;
+    void Init() override;
+    void Enter() override;
+    void Exit() override;
+    void Update() override;
+    void SetRailState(int n);
+    void SetDirection(int forward);
+    bool FDone() const;
+};
+
+// 0xB9: climb the ladder / pipe attached at GUARD +0xF84 (kind 1, 0x17CE68..0x17D188): its place +0xF88 moved toward
+// the goal end at the move's speed (+0x198, eased), the heading's frame the pipe's there (0x1C3500)
+struct JOBLADDER : AIJOB
+{
+    int st = -1;                  // +0x30
+    float tSt = 0;                // +0x34
+    float sGoal = 0;              // +0x38
+    float gSpeed = 0;             // +0x3C
+    void Init() override;
+    void Enter() override;
+    void Exit() override;
+    void Update() override;
+    void SetLadderState(int n);   // orig 0x17D058
+    void SetDirection(int forward);  // orig 0x17D110
+    bool FDone() const;           // orig 0x17D188
+};
+
 // A goal (orig 0x2562A8: 0x20 bytes {path, object, , point}); 0x1C1EC0 gives its point seen from a position
 struct GOAL
 {
@@ -299,6 +343,24 @@ struct JOBGOTO : AIJOB
     int NArrived() const;         // orig 0x17DCB8
     bool FStuck() const;          // orig 0x17DCF8 (states 1 / 2 with the follower in its state 3)
     void SetGoal(const GOAL& g);  // orig 0x17DD38
+};
+
+// 0xB7 (0x70): the guard's station (reaction 16: a script's 0x103F40 sets the guard's +0xF68 object and +0xF70 point
+// in its frame; Init 0x17C638, Enter 0x17C6A0, Exit 0x17C670, Update 0x17C6D0, SetState 0x17C928): 0 going to the
+// point (0xBA with the object), its goal moved when the object moves more than 250; 1 hurrying after the object (0xBA
+// with the move 0x1C) while it is farther than 700 (from 1000); 2 facing it while the guard is held (0x209098)
+struct JOBSTATION : AIJOB
+{
+    LO* plo = nullptr;            // +0x30 the station object
+    glm::vec4 pos{0.0f};          // +0x40 the point in its frame
+    int st = -1;                  // +0x50
+    float tSt = 0;                // +0x54
+    glm::vec3 posLast{0.0f};      // +0x60 the object's position at the last goal
+    void Init() override;
+    void Enter() override;
+    void Exit() override;
+    void Update() override;
+    void SetState(int n) override;
 };
 
 // 0xBD (0x50): kept away from an object (reaction 0x12: Guttural Roar's mode 0x15 with the current player, or a

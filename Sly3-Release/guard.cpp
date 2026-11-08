@@ -3,6 +3,8 @@
 // m_203948_p3.cpp / m_2040F8.cpp (STEP's update and heading), m_14F030_p3.cpp / m_153FF8_p3.cpp (the detector).
 
 #include "guard.h"
+#include "game/sly3.h"
+#include "worldglobals.h"
 #include "pocket.h"
 #include "po.h"
 #include "aipursuit.h"
@@ -27,6 +29,7 @@
 #include "xf.h"
 #include "vecmat.h"
 #include "stepphys.h"
+#include "jt.h"
 
 #include "cls.h"
 
@@ -45,7 +48,29 @@ namespace
 std::unordered_map<const LO*, std::unique_ptr<GUARD>>& Map()
 {
     static std::unordered_map<const LO*, std::unique_ptr<GUARD>> s_map;
+    WORLD_TABLE_LOCAL(s_map);   // (PC: moved aside while a kept world loads, worldglobals.h)
     return s_map;
+}
+std::vector<GUARD*>& ActiveGuards()
+{
+    static std::vector<GUARD*> guards;
+    WORLD_TABLE_LOCAL(guards);   // (PC: moved aside while a kept world loads, worldglobals.h)
+    return guards;
+}
+std::unordered_map<LO*, std::vector<LO*>>& GuardManagers()
+{
+    static std::unordered_map<LO*, std::vector<LO*>> managers;
+    WORLD_TABLE_LOCAL(managers);   // (PC: moved aside while a kept world loads, worldglobals.h)
+    return managers;
+}
+void TraceGuardLife(const GUARD* guard, const char* action)
+{
+    static const char* selected = std::getenv("SLY2N_GUARDLIFETRACE");
+    if (!selected || (std::string(selected) != "all" && std::atoi(selected) != guard->palo->oid)) return;
+    std::printf("guard life: t %.9g oid %d clone %d %s inworld %d active %d kind %d mode %d locks %d since %.9g live %zu\n",
+                g_clock.t, guard->palo->oid, guard->palo->iclone, action, guard->palo->fInWorld,
+                FLoActive(guard->palo), guard->palo->st, guard->n1000, guard->cActivationLocks,
+                guard->tFF8, ActiveGuards().size());
 }
 constexpr float T_MODE_8 = 10.0f, T_MODE_34 = 30.0f, T_MODE_21 = 5.0f;  // D_002C3D40..48
 constexpr float S_TARGET_NEAR = 1500.0f;               // D_002C3D04
@@ -64,7 +89,7 @@ glm::mat3 MatOf(const GUARD* pg)
 
 glm::vec3 PosAi(const LO* plo)
 {
-    if (plo && FCidDerivedFrom(plo->Cid(), 0x30))
+    if (plo && FCidDerivedFrom(plo->Cid(), S3CID(0x30)))
     {
         const ALO* palo = static_cast<const ALO*>(plo);
         if (palo->apxfRef[2]) return glm::vec3(palo->apxfRef[2]->matWorld[3]);
@@ -77,7 +102,7 @@ GUARD* PguardFromLo(LO* plo)
     auto it = Map().find(plo);
     return it == Map().end() ? nullptr : it->second.get();
 }
-bool FLoGuard(const LO* plo) { return plo && FCidDerivedFrom(plo->Cid(), 0x38); }
+bool FLoGuard(const LO* plo) { return plo && FCidDerivedFrom(plo->Cid(), S3CID(0x38)); }
 GUARD* PguardNew(ALO* palo)
 {
     auto& p = Map()[palo];
@@ -92,7 +117,13 @@ GUARD* PguardNew(ALO* palo)
 void ResetEndedJobs();  // (aijob.cpp)
 void ResetGuards()
 {
+    g_pguard3F = nullptr;  // orig: 0x20E068 clears the world's Carmelita (D_002DD648).
     ResetEndedJobs();  // (the ended jobs before their guards)
+    ActiveGuards().clear();
+    GuardManagers().clear();
+    // Concurrent response controllers belong to their guards. Unlink them
+    // while the world's transform records still exist, before clearing jobs.
+    for (auto& [object, guard] : Map()) DeleteCtrl(&guard->pctrlF0C);
     Map().clear();  // release jobs/listeners before their detectors
     ResetGuardDetectors();
 }
@@ -101,6 +132,99 @@ std::vector<GUARD*> ApguardAll()
     std::vector<GUARD*> a;
     for (auto& [plo, pg] : Map()) a.push_back(pg.get());
     return a;
+}
+
+// orig: 0x002079E0, after 0x1F3EA8 including child registration.
+void OnGuardRegistered(LO* plo)
+{
+    GUARD* guard = PguardFromLo(plo);
+    if (!guard) guard = PguardNew(static_cast<ALO*>(plo));
+    auto& active = ActiveGuards();
+    if (std::find(active.begin(), active.end(), guard) == active.end()) active.push_back(guard);
+    guard->tFF8 = FLT_MAX;
+    TraceGuardLife(guard, "register");
+}
+
+// orig: 0x002079A0, after 0x1F3E00 including child unregistration.
+void OnGuardUnregistered(LO* plo)
+{
+    GUARD* guard = PguardFromLo(plo);
+    if (!guard) guard = PguardNew(static_cast<ALO*>(plo));
+    auto& active = ActiveGuards();
+    active.erase(std::remove(active.begin(), active.end(), guard), active.end());
+    guard->tFF8 = g_clock.t;
+    TraceGuardLife(guard, "unregister");
+}
+const std::vector<GUARD*>& ApguardActive() { return ActiveGuards(); }
+void ImportGuardActiveList(const std::vector<GUARD*>& guards) { ActiveGuards() = guards; }
+
+// orig: 0x0020B438 / 0x0020B478. SetLoSt queues the root; it does not change the guard's AI state.
+void LockGuardActivation(GUARD* guard)
+{
+    if (guard->cActivationLocks == 0) SetLoSt(g_psw, guard->palo, 1);
+    ++guard->cActivationLocks;
+    TraceGuardLife(guard, "lock");
+}
+// orig: 0x0020B478
+void UnlockGuardActivation(GUARD* guard)
+{
+    if (--guard->cActivationLocks == 0) SetLoSt(g_psw, guard->palo, 0);
+    TraceGuardLife(guard, "unlock");
+}
+
+// orig: 0x0020B500. The generic postload has already run 0x1A5C48. Capture the complete class list once.
+void PostLoadGuardManager(LO* plo)
+{
+    const auto find = g_splicegame.pfnFindObjectsByClass;
+    const int count = find ? find(0x605, 0x38, nullptr, 0, nullptr) : 0;
+    std::vector<BASIC*> found(count);
+    if (find) find(0x405, 0x38, nullptr, count, found.data());
+    auto& guards = GuardManagers()[plo];
+    guards.clear();
+    guards.reserve(count);
+    for (BASIC* object : found) guards.push_back(static_cast<LO*>(object));
+}
+namespace
+{
+// orig: 0x0020B590. Inactive mode-1 guards return to their pool; mode-2 guards restart patrol.
+void UpdateGuardManager(LO* plo)
+{
+    if (PFNUPDATE base = PfnUpdateOrig(0x1A5E28)) base(plo);
+    const auto it = GuardManagers().find(plo);
+    if (it == GuardManagers().end()) return;
+    for (LO* object : it->second)
+    {
+        GUARD* guard = PguardFromLo(object);
+        if (!guard || !object->fInWorld || !(g_clock.t - guard->tFF8 > 0.25f)) continue;
+        TraceGuardLife(guard, "cleanup");
+        switch (guard->n1000)
+        {
+        case 1: RemoveLo(g_psw, object); break;
+        case 2:
+            if (auto* job = static_cast<JOBREACT*>(PjobFind(guard, 0x9C)))
+            {
+                AIMSG message{};
+                message.k = 1;
+                job->React(message);
+            }
+            // orig: 0x00153FF8: reset state/time directly, without detector notifications.
+            if (guard->pdet)
+                for (DETENTRY& entry : guard->pdet->ae)
+                {
+                    entry.st = 0;
+                    entry.t8 = g_clock.t;
+                }
+            break;
+        default: break;
+        }
+        guard->tFF8 = FLT_MAX;
+        TraceGuardLife(guard, "cleaned");
+    }
+}
+struct INITGUARDMANAGER
+{
+    INITGUARDMANAGER() { RegisterLoUpdate(0x20B590, UpdateGuardManager); }
+} s_initGuardManager;
 }
 
 // ---- the heading (STEP's) ----
@@ -147,7 +271,7 @@ void SetGuardStateMask(GUARD* pg, uint64_t grf)
 static void PairGuardWith(GUARD* pg, LO* plo, bool f)
 {
     ALO* pso = nullptr;
-    if (plo) pso = FIsLoDerivedFrom(plo, 0x30) ? static_cast<ALO*>(plo) : plo->paloParent;
+    if (plo) pso = FIsLoDerivedFrom(plo, S3CID(0x30)) ? static_cast<ALO*>(plo) : plo->paloParent;
     while (pso && !Poxa(pso)) pso = pso->paloParent;
     OXA* poxa = Poxa(pg->palo);
     if (poxa && pso && Poxa(pso)) UpdateSwPox(poxa, Poxa(pso), f ? 1 : 2);
@@ -157,30 +281,37 @@ static void PairGuardWith(GUARD* pg, LO* plo, bool f)
 // orig: 0x0020B2A8 (the kind-2 player's landing on its related object, 0x20C2F8 state 3): the guard moves on it: a
 // ladder (cid 0xB) 1 with its place along the ladder, a chair (0xD) 0 likewise, a bar (0x13 in state 3) 2, a 0x27 3;
 // the guard and the object's attached ancestor overlap from then on (the arena's lip does not push a guard off its
-// ladder). TODO(ai): the ladder's place is the nearest to the guard's +0xF90 sub-object (its hands) in the original;
-// natively the guard's own place
+// ladder); a ladder's place is the nearest to the guard's hands (+0xF90)
 void AttachGuardMove(GUARD* pg, LO* plo, int n)
 {
     pg->ploMove = plo;
     pg->nMoveKind = n;
-    const bool fLadder = FIsLoDerivedFrom(plo, 0xB);
-    if (fLadder || FIsLoDerivedFrom(plo, 0xD))
+    const bool fLadder = FIsLoDerivedFrom(plo, S3CID(0xB));
+    if (fLadder || FIsLoDerivedFrom(plo, S3CID(0xD)))
     {
         pg->kMove = fLadder ? 1 : 0;
         if (const CRV* pcrv = PcrvFromLo(plo))
         {
             float s = 0.0f;
-            NearestCrvAll(pcrv, PosAi(pg->palo), nullptr, nullptr, nullptr, &s, nullptr);  // 0x1E6F60
+            // 0x1E6F60 from the hands (+0xF90) on a ladder, the guard on a chair
+            const glm::vec3 posFrom = fLadder && pg->ploF90 ? PosLoWorld(pg->ploF90) : PosAi(pg->palo);
+            NearestCrvAll(pcrv, posFrom, nullptr, nullptr, nullptr, &s, nullptr);
             pg->sMove = s;
         }
         PairGuardWith(pg, plo, true);
     }
-    else if (FIsLoDerivedFrom(plo, 0x13) && plo->nState == 3)
+    else if (FIsLoDerivedFrom(plo, S3CID(0x13)) && plo->U32Field(0, 0x124, 0) == 3)  // (+0x124: the bar's kind)
     {
         pg->kMove = 2;
+        if (std::getenv("SLY2N_JOBPRINT"))
+        {
+            const glm::vec3 h = pg->ploF90 ? PosLoWorld(pg->ploF90) : glm::vec3(0.0f), b = PosLoWorld(plo), a = PosAi(pg->palo);
+            std::fprintf(stderr, "guardbar: t %.3f guard %d on %d hands %d (%.1f %.1f %.1f) bar (%.1f %.1f %.1f) guard (%.1f %.1f %.1f)\n",
+                         g_clock.t, pg->palo->oid, plo->oid, pg->ploF90 ? pg->ploF90->oid : -1, h.x, h.y, h.z, b.x, b.y, b.z, a.x, a.y, a.z);
+        }
         PairGuardWith(pg, plo, true);
     }
-    else if (FIsLoDerivedFrom(plo, 0x27))
+    else if (FIsLoDerivedFrom(plo, S3CID(0x27)))
     {
         pg->kMove = 3;
         PairGuardWith(pg, plo, true);
@@ -319,7 +450,7 @@ void ResolveKinde(KINDE* pe, GUARD* pg)
         pe->k = -1;
         return;
     }
-    if (FCidDerivedFrom(po->Cid(), 0x6D) && po->Cid() == 0x6D)
+    if (FCidDerivedFrom(po->Cid(), S3CID(0x6D)) && po->Cid() == S3CID(0x6D))
     {
         bool f22 = false;
         for (const ASEGEV& ev : PasegdOf(static_cast<ASEG*>(po))->aaev[1])
@@ -337,7 +468,7 @@ void ResolveKinde(KINDE* pe, GUARD* pg)
             pe->k = 0;
         }
     }
-    else if (po->Cid() == 0x6F)
+    else if (po->Cid() == S3CID(0x6F))
     {
         pe->k = 1;
         pe->plo = po;
@@ -378,6 +509,17 @@ void SteerByKinde(KINDE* pe, GUARD* pg)
     else if (pe->k == 3 && pe->pvState)
         vel = static_cast<K3PLAY*>(pe->pvState)->vel;  // the original +0xE20 player's +0x10
     if (pg->pscaleFC4) vel *= pg->pscaleFC4->pxf->mat[0][0];
+    if (static const bool s_f = std::getenv("SLY2N_STEERDEBUG") != nullptr; s_f)
+    {
+        const ASEGA* pa = pe->k == 0 ? pe->pasega : nullptr;
+        // (the AI code: the heading (STEP's, the model's) and the position, to see the motion against the heading)
+        const glm::vec3 posAi = PosAi(pg->palo);
+        std::fprintf(stderr, "steer guard %d head %.2f/%.2f pos %.0f %.0f %.0f k %d aseg %d t %.3f chn1 %d chn6 %d vel %.1f %.1f %.1f\n",
+                     pg->palo->oid, St(pg).radHeading, RadGuardHeading(pg), posAi.x, posAi.y, posAi.z, pe->k,
+                     pa && pa->paseg ? pa->paseg->oid : -1, pa ? pa->t : -1.0f,
+                     pa ? PchnFindAseg(pa->paseg, pg->palo, 1, true) != nullptr : -1,
+                     pa ? PchnFindAseg(pa->paseg, pg->palo, 6, true) != nullptr : -1, vel.x, vel.y, vel.z);
+    }
     St(pg).posTarget = rot;
     St(pg).vecVel = glm::vec3(vel) * -1.0f;
 }
@@ -428,6 +570,9 @@ bool FGuardModeAllowed(GUARD* pg, int n)
 // starting the new one. Repeated requests do not extend the timer.
 void SetGuardMode(GUARD* pg, int n)
 {
+    if (static const bool s_fPrint = std::getenv("SLY2N_GUARDMODE") != nullptr; s_fPrint)  // (debug: every request)
+        std::printf("guardmode: %d (%p) %d -> %d allowed %d frame t %.3f\n", pg->palo ? pg->palo->oid : -1, static_cast<void*>(pg), pg->nMode, n,
+                    n == pg->nMode ? -1 : int(FGuardModeAllowed(pg, n)), g_clock.t);
     if (n == pg->nMode || !FGuardModeAllowed(pg, n)) return;
     const int old = pg->nMode;
     pg->nMode = n;
@@ -503,7 +648,7 @@ LO* PloGuardTarget3F(GUARD* pg)
     {
         LO* cand = e.plo;
         if (!e.st || !cand) continue;
-        const int rank = FCidDerivedFrom(cand->Cid(), 0x34) ? 0 : FCidDerivedFrom(cand->Cid(), 0x3A) ? 1 : 2;
+        const int rank = FCidDerivedFrom(cand->Cid(), S3CID(0x34)) ? 0 : FCidDerivedFrom(cand->Cid(), S3CID(0x3A)) ? 1 : 2;
         float d = glm::length(pos - PosOf(cand));
         if (cand == pg->plo38C) d = -400.0f + d * (0.8f + d * 0.0f);
         if (rank < rankBest || (rank == rankBest && d < sBest))
@@ -542,14 +687,14 @@ LO* PloGuardTargetBase(GUARD* pg)
         if (!e.st)
         {
             if (pg->nMode != 0x22 && pg->nMode != 0x25) continue;
-            if (!FCidDerivedFrom(cand->Cid(), 0x38)) continue;
+            if (!FCidDerivedFrom(cand->Cid(), S3CID(0x38))) continue;
         }
         if (FTargetClass(pg->acid3AC, cand)) continue;
         if (FTargetClass(pg->acid3C4, cand)) return cand;
         float distance = glm::length(pos - PosOf(cand));
         if (cand == pg->plo38C) distance = -400.0f + distance * 0.8f;  // 0x2C3D70
         if (pg->nMode == 0x22 || pg->nMode == 0x25)
-            if (FCidDerivedFrom(cand->Cid(), 0x38)) distance = -500.0f + distance * 0.8f;  // 0x2C3D80
+            if (FCidDerivedFrom(cand->Cid(), S3CID(0x38))) distance = -500.0f + distance * 0.8f;  // 0x2C3D80
         if (FTargetClass(pg->acid398, cand))
         {
             if (best && !FTargetClass(pg->acid398, best))
@@ -580,7 +725,15 @@ void SetWatchA(WATCHA* p, int n)
     if (p->st == n) return;
     p->st = n;
     p->t = g_clock.t;
-    // TODO(ai): state 2's message (0x1F7598 {po, 0, po, 0x4000}: a fall)
+    if (n == 2)
+    {
+        CTMSG contact;
+        contact.ploSender = p->pguard->palo;
+        contact.ploReceiver = p->pguard->palo;
+        contact.grfFilter = 0x4000;
+        contact.nState = 0;
+        PaloAcceptContact(&contact);  // orig: 0x001F7598
+    }
 }
 // orig 0x20D020: off the ground with nothing below any of the five probes
 bool FWatchA(WATCHA* p)
@@ -590,7 +743,32 @@ bool FWatchA(WATCHA* p)
     if (pg->kMove != -1) return false;
     if (!pg->f4A0) return false;
     if (FGuardState(pg, 0x13)) return false;
-    return false;  // TODO(ai): the five line probes 0x173610 (with the 0x20CFC0 filter) at 0x2C3E00
+    // orig: 0x002C3E00 / 0x002C3E50: five local probes, 100 above to 600 below.
+    static const glm::vec3 offsets[] = {{0, 0, 0}, {100, 0, 0}, {-100, 0, 0}, {0, 100, 0}, {0, -100, 0}};
+    for (const glm::vec3& offset : offsets)
+    {
+        const glm::vec3 pos = PosJtConvert(pg->palo, nullptr, offset);
+        const glm::vec3 a = pos + glm::vec3(0, 0, 100), b = pos - glm::vec3(0, 0, 600);
+        std::vector<SOE*> entries;
+        for (OXA* attachment : g_physw.apoxaActive)
+        {
+            if (pos.x < attachment->posMin.x || attachment->posMax.x < pos.x ||
+                pos.y < attachment->posMin.y || attachment->posMax.y < pos.y ||
+                a.z < attachment->posMin.z || attachment->posMax.z < b.z) continue;
+            for (SOE* entry : attachment->apsoe)
+            {
+                if (!entry->palo) continue;
+                // orig: 0x0020CFC0, then 0x0020FA50 / 0x0020FA10.
+                // Class59 surfaces participate even with their sensor flag.
+                const bool special = entry->f48 && FCidDerivedFrom(entry->palo->Cid(), S3CID(0x59));
+                if (!special && (entry->f48 || (attachment->grf & 4) || !FAloStill(entry->palo))) continue;
+                if (entries.size() < 0x100) entries.push_back(entry);
+            }
+        }
+        LSG hit;
+        if (PsoeHitTestLineObjects(1, a, b, entries, &hit) && hit.t0 != 0.0f) return false;
+    }
+    return true;
 }
 // orig 0x20CE70
 void UpdateWatchA(WATCHA* p)
@@ -605,7 +783,7 @@ void UpdateWatchA(WATCHA* p)
         else if (k == 1)
         {
             if (!f) SetWatchA(p, 0);
-            else if (0.1f < g_clock.t - p->t) SetWatchA(p, 2);  // TODO(ai): unless vt slot 76 (0x4000)
+            else if (0.1f < g_clock.t - p->t && !FGuardBusy76(p->pguard)) SetWatchA(p, 2);  // orig slot76(0x4000)
         }
         else if (k == 2) { if (!f) SetWatchA(p, 0); }
     } while (p->st != k);
@@ -642,7 +820,7 @@ void UpdateWatchB(WATCHB* p)
         switch (k)
         {
         case 0:
-            if (p->plo && FCidDerivedFrom(p->plo->Cid(), 0x30) && FAloContainsPoint(static_cast<ALO*>(p->plo), PosLoWorld(pg->palo)) &&
+            if (p->plo && FCidDerivedFrom(p->plo->Cid(), S3CID(0x30)) && FAloContainsPoint(static_cast<ALO*>(p->plo), PosLoWorld(pg->palo)) &&
                 VelAloPos(pg->palo).z < 0.0f)
                 SetWatchB(p, 1);
             break;
@@ -752,9 +930,24 @@ void UpdateGuard(GUARD* pg)
     UpdateStepPhysTurn(pg->palo);
     if (!pg->palo->fInWorld) return;
     if (pg->nMode == 0xE) return;
+    if (static const int s_oid = std::getenv("SLY2N_GUARDWATCH") ? std::atoi(std::getenv("SLY2N_GUARDWATCH")) : 0; s_oid && pg->palo->oid == s_oid)
+    {  // (debug: a guard's target, state mask and mode every 20 updates)
+        static std::unordered_map<const GUARD*, int> s_mpc;  // (per instance: proxies share an oid)
+        if (s_mpc[pg]++ % 20 == 0)
+        {
+            const glm::vec3 pos = PosOf(pg->palo);
+            const glm::vec3 posT = pg->plo38C ? PosOf(pg->plo38C) : glm::vec3(0.0f);
+            std::printf("guardwatch: %d %p t %.3f at %.0f %.0f %.0f target %d mask %llx mode %d splice %d at %.0f %.0f %.0f det %zu\n", s_oid, static_cast<const void*>(pg), g_clock.t, pos.x, pos.y, pos.z,
+                        pg->ploTarget ? pg->ploTarget->oid : -1, static_cast<unsigned long long>(pg->grfState), pg->nMode,
+                        pg->plo38C ? pg->plo38C->oid : -1, posT.x, posT.y, posT.z, pg->pdet ? pg->pdet->ae.size() : 0);
+        }
+    }
     UpdateGuardTimedMode(pg);
     RefreshGuardTargets(pg);
-    // TODO(ai): the held object +0xF00 (0x20AB68), the attachment +0xF0C (0x20ACC0)
+    // orig: 0x00207350: finish the concurrent response before updating jobs.
+    if (pg->ploF00 && FKindeDone(&PactionOf(pg->ploF00, pg)->kinde))
+        SetGuardResponse(pg, nullptr, nullptr, glm::vec3(0.0f));
+    if (pg->pctrlF0C) UpdateGuardActionAim(pg);
     // the giver: while its prize is ready (+0x48C), the next prize again (0x1F1CF8: a key whose task became available
     // gets its reward readied, e.g. Ep6's Carmelita once 2905 is available)
     if (pg->plo494 && PocketOf(pg->palo).fReady) NextPocketPrize(pg->palo);
@@ -808,40 +1001,6 @@ void UpdateGuardLo(LO* plo)
     if (GUARD* pg = PguardFromLo(plo)) UpdateGuard(pg);
     else if (PFNUPDATE pfn = PfnUpdateOrig(0x1F36E0)) pfn(plo);
 }
-// orig: 0x00205910: the step's heading frame fitted to the floor under cpos probe points (local to the heading
-// frame at the object's position): each pass drops every point onto the floor between gMax above and gMin below
-// (0x173610; a point without floor is moved 24 down the frame's up row, D_002C3CE0), takes the plane through the
-// three, and turns the original frame's up row onto its normal by at most 0.6 (D_002C3CE8) (D_002C3CE4: 2 passes)
-static void FitStepToFloor(ALO* palo, float gMin, float gMax, int cpos, const glm::vec3* apos)
-{
-    STEPPHYS& s = StepPhysOf(palo);
-    const glm::mat3 matOrig = cmm::BuildRotateMatrixAxis(s.radHeading, glm::vec3(0.0f, 0.0f, 1.0f));  // 0x11B500
-    const glm::vec3 pos = PosLoWorld(palo);
-    glm::mat3 matCur = matOrig;
-    // (the radius of 0x20FC60's nearby query: FDropOnGround makes its own query)
-    for (int pass = 0; pass < 2; pass++)
-    {
-        const glm::vec3 up = matCur[2];
-        glm::vec3 apt[3];
-        for (int i = 0; i < cpos && i < 3; i++)
-        {
-            glm::vec3 pt = matCur * apos[i] + pos;
-            if (FDropOnGround(&pt, gMax, gMin, false)) apt[i] = pt;
-            else apt[i] = pt + up * -24.0f;
-        }
-        const glm::vec3 c = glm::cross(apt[1] - apt[0], apt[2] - apt[0]);
-        const float l = glm::length(c);
-        const glm::vec3 normal = l < 0.0001f ? glm::vec3(0.0f, 0.0f, 1.0f) : c * (1.0f / l);
-        glm::mat3 adjust = ::BuildRotateVectorsMatrix(matOrig[2], normal);  // 0x11BA08
-        float rad;
-        glm::vec3 axis;
-        cmm::DecomposeRotateMatrixRad(adjust, &rad, &axis);  // 0x11BCF8
-        if (0.6f < rad) adjust = cmm::BuildRotateMatrixAxis(0.6f, axis);
-        matCur = cmm::MulMat3(adjust, matOrig);
-    }
-    s.matHeading = matCur;
-}
-
 // orig: 0x0014FAF8 (class 0x40's update, the Ep4 Contessa): the guards' update, then while walking (+0xF80 -1)
 // on a floor (+0x208) the heading frame fitted to it (0x205910 with D_002BD940 {-200, 200} and D_002BD910)
 static void UpdateGuard40(LO* plo)

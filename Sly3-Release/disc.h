@@ -1,11 +1,13 @@
 #pragma once
 
-// The user's Sly 3 disc image (installations/sly3/disc.iso): the executable (read for its data tables only) and
-// the game's files in SLY3.WAD (LBA 0xCA0), located through 64-byte file keys exactly as in Sly 2.
-// orig3 numbers: sly3/addr.h.
+// The game's data. Sly 3 (installations/sly3) is installed as its disc image (disc.iso; platform/install.h): the game
+// data is the ISO9660 file SLY3.WAD at sector 0xCA0, and the game names a file by its 64-byte key, whose start sector
+// is absolute (game/sly3.h). (The converted-files layout is Sly 2's, kept from the fork for a future Sly 3 converter.)
+// The executable is read for its data tables only.
 
 #include <cstddef>
 #include <cstdint>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -18,65 +20,142 @@ struct FK
     uint32_t id = 0;
 };
 
-// Decodes a 64-byte record as the original does (orig: (sly2) 0x20E890, 0x1B3BD0, 0x1FC510; orig3: 0x1DBE80, the
-// same instructions).
+// The disc's region (regions.md). The port's code is the same for every region: it reads the executable's data
+// tables at the USA executable's addresses and CDisc translates them to the disc's executable.
+enum class DISCREGION
+{
+    Usa,      // SCUS-97316 (the decomp's executable)
+    Europe,   // SCES-52529 v1.00 and v2.01: 11 languages, 50 Hz
+    Japan,    // SCPS-15090
+};
+
+struct REGIONRANGE
+{
+    uint32_t vaUsa;   // the first USA address of the range (each range runs to the next one's start)
+    int32_t dva;      // the region's address minus the USA address
+};
+
+// A word of another region's executable set back to the USA executable's value when the disc is opened (the Japanese
+// build's field offsets).
+struct REGIONPATCH
+{
+    uint32_t vaUsa;
+    uint32_t u;
+};
+
+// Decodes a 64-byte record as the original does (0x20E890, 0x1B3BD0, 0x1FC510).
 FK FkFromRecord(const void* record64);
-
-// A world of the executable's tables (orig3: names 0x2EDE48, episodes 0x2EDF10, keys 0x2EDFD8).
-struct WORLD3
-{
-    int iworld = -1;
-    std::string name;    // "m_ext"
-    int episode = -1;    // EPISODE3
-    uint32_t vaFk = 0;   // its key's address
-    FK fk;               // cb 0: no file (sampler_menu)
-};
-
-// A movie key of the executable (orig3: 0x3179F8, 23 records; the size without the flag bits).
-struct MOVIE3
-{
-    uint32_t vaFk = 0;
-    FK fk;               // fk.cb: the file's size (cb & ~0x3FFF)
-    uint32_t grf = 0;    // the low bits of the record's cb
-};
 
 class CDisc
 {
 public:
-    // Opens the image; checks it is the USA Sly 3 (SCUS_974.64 at its known place, its SHA-1).
+    // Opens the converted files (a folder with extraction_manifest.json, or that file) or a disc image; finds the
+    // boot executable and recognizes the disc (USA, Europe v1.00 / v2.01, Japan). With converted files, a file of
+    // the mods folder (SetModsDirectory) at the same relative path replaces the installed one.
     bool FOpen(const std::string& path, std::string& error);
+    // The mods folder (before FOpen; empty: none).
+    void SetModsDirectory(const std::string& dir) { m_dirMods = dir; }
+    // True: the converted files; false: a disc image (the developer option).
+    [[nodiscard]] bool FConverted() const { return m_fConverted; }
+    // The boot executable's name (SCUS_973.16, SCES_525.29, SCPS_150.90).
+    [[nodiscard]] const std::string& SzExecutable() const { return m_szExe; }
+    // A file of the image's ISO 9660 root (the converter: the executable, SYSTEM.CNF); false with converted files.
+    bool FReadRootFile(const std::string& name, std::vector<uint8_t>& ab) const;
+    [[nodiscard]] DISCREGION Region() const { return m_region; }
+    [[nodiscard]] const char* SzDisc() const { return m_szDisc; }
     [[nodiscard]] bool FIsOpen() const { return !m_path.empty(); }
 
-    // Raw bytes of a file on the disc.
+    // A file's bytes.
     std::vector<uint8_t> ReadFile(const FK& fk) const;
-    // A file's bytes, LZSS-decompressed (world files).
+    // A world-format file's bytes, decompressed (worlds, screen files: LZSS on the disc, stored decompressed).
     std::vector<uint8_t> ReadWorld(const FK& fk) const;
-    // cb bytes at byte offset ib of the image (streams: music, dialog, movies); false past the end.
-    bool FReadBytes(uint64_t ib, void* pv, std::size_t cb) const;
+    // cb bytes at offset ib of the file that starts at sector isector (streams: banks, music, dialog, movies).
+    // Converted files: the bytes past the file's end read as zeros; false when no file starts there. A disc image:
+    // the image's bytes (past the file, the next sectors'), false past the image's end.
+    bool FReadFileBytes(uint32_t isector, uint64_t ib, void* pv, std::size_t cb) const;
+    // The size of the file at isector: the installed (or modded) file's; on a disc image the key's cbKey.
+    [[nodiscard]] uint64_t CbFile(uint32_t isector, uint64_t cbKey) const;
+    // Converted files: the file at isector (the installed one or the mods folder's); "" on a disc image.
+    [[nodiscard]] std::string PathOf(uint32_t isector) const;
+    // A part of the file at isector (a movie's sound track "audio<track>", a bank's sample "sample<offset>"): its file,
+    // the mods folder's when it has one; "" when the file has no such part (or on a disc image).
+    [[nodiscard]] std::string PathPart(uint32_t isector, const std::string& key) const;
+    // The installed file at isector, never the mods folder's ("" on a disc image).
+    [[nodiscard]] std::string PathInstalled(uint32_t isector) const;
+    // The file at isector comes from the mods folder.
+    [[nodiscard]] bool FModded(uint32_t isector) const;
     [[nodiscard]] const std::string& Path() const { return m_path; }
+    [[nodiscard]] const std::string& DirMods() const { return m_dirMods; }
+    // The files the mods folder replaces.
+    [[nodiscard]] int CModFiles() const { return m_cmod; }
+    // The name of the world file at isector (the manifest's: "Paris", "Front End"); "" when unknown (a disc image).
+    [[nodiscard]] std::string SzWorldName(uint32_t isector) const;
 
     // The executable's loaded image (segment 0x100000..), for reading data tables at their original addresses.
+    // va is always a USA executable address: on another region's disc it is translated to that executable's.
     [[nodiscard]] const uint8_t* PbElf(uint32_t va, uint32_t cb) const;
+    // A word at va. A word that is an address in the executable (a pointer in a table: a function, a string, another
+    // table) is returned as the USA address, so the port compares and follows addresses the same on every disc.
     uint32_t U32Elf(uint32_t va) const;
     std::string StrElf(uint32_t va) const;
 
-    // The file keys of the executable: the 40 world keys, then the 23 movie keys (with their sizes).
+    // The file keys in the executable: the worlds' (0x2EDFD8) and the movies' (0x3179F8), each file once.
     std::vector<std::pair<uint32_t, FK>> ElfKeys() const;
-    // The executable's world and movie tables.
-    std::vector<WORLD3> Worlds() const;
-    std::vector<MOVIE3> Movies() const;
-    // The first world of an episode (orig3: 0x2EDFB0), -1: none.
-    int IworldFirstOfEpisode(int episode) const;
+    // orig3 0x25E070: world iworld's key (0..39; empty for world 1, sampler_menu), its name (0x2EDE48: "m_ext") and
+    // its episode (0x2EDF10: sly3::EPISODE); the world of a name, -1 when none.
+    [[nodiscard]] FK FkWorld(int iworld) const;
+    [[nodiscard]] std::string SzWorldElf(int iworld) const;
+    [[nodiscard]] int IepisodeOfWorld(int iworld) const;
+    [[nodiscard]] int IworldFromName(const std::string& name) const;
+
+    // The disc executable's own data at its own address (data the USA executable has not: the European build's
+    // language labels), and that table's address (0 when the disc has none).
+    [[nodiscard]] const uint8_t* PbElfOwn(uint32_t vaRegion, uint32_t cb) const;
+    [[nodiscard]] uint32_t VaLanguageLabels() const { return m_vaLanguageLabels; }
+    // the region's index in the executable's language table 0x2BFBD0 (orig 0x2E1E58, set at boot by 0x1613D0)
+    [[nodiscard]] int IregionLanguages() const { return m_iregionLanguages; }
+
+    // USA address <-> the disc executable's address (identity on the USA disc).
+    [[nodiscard]] uint32_t VaRegion(uint32_t vaUsa) const;
+    [[nodiscard]] uint32_t VaUsa(uint32_t vaRegion) const;
 
 private:
+    bool FOpenConverted(const std::string& dir, std::string& error);
+    bool FRecognize(const std::string& szBoot, std::vector<uint8_t>&& elf, const std::string& where, std::string& error);
+    struct FILEENT
+    {
+        std::string path;        // the installed file, or the mods folder's
+        std::string pathInstalled;
+        bool fDecompressed = false;  // a world-format file stored decompressed
+        bool fMod = false;           // the mods folder's
+        std::map<std::string, std::string> mppart;  // its parts' files (PathPart)
+    };
+    const FILEENT* PentFind(uint32_t isector) const;
+
     std::string m_path;
+    bool m_fConverted = false;
+    std::string m_szExe;
+    std::string m_dirMods;
+    int m_cmod = 0;
+    std::map<uint32_t, std::string> m_mpsectorWorldName;  // (the world files' names, every copy's sector)
+    std::vector<std::pair<uint32_t, FILEENT>> m_afile;  // sorted by sector
     std::vector<uint8_t> m_abElf;  // the ELF file
+    DISCREGION m_region = DISCREGION::Usa;
+    const char* m_szDisc = "";
+    uint32_t m_vaLanguageLabels = 0;
+    int m_iregionLanguages = 0;
+    struct SEG { uint32_t va, offset, cb; };
+    SEG m_aseg[2] = {};
+    uint32_t m_vaHi = 0;                         // the end of the executable's image (bss included)
+    const REGIONRANGE* m_amap = nullptr;         // USA -> region, sorted by vaUsa
+    size_t m_cmap = 0;
+    std::vector<REGIONRANGE> m_amapInverse;      // region -> USA ({vaRegion, -dva}), sorted
 };
 
 extern CDisc g_disc;
 
-// Sly 2's well-known keys (orig: (sly2) 0x2A37E8 / 0x2A38A8). Sly 3 has no boot world: its boot (orig3: 0x1C6EA8)
-// queues the logo movies and then world 35 (m_ext) from the world table. Kept for the copied Sly 2 code that still
-// names them; every use is a TODO(sly3) and warns at compile time.
-[[deprecated("Sly 2 address: Sly 3 keys are in disc.h Worlds() / sly3/addr.h (TODO(sly3))")]] constexpr uint32_t VA_FK_FRONTEND = 0x2A37E8;
-[[deprecated("Sly 2 address: Sly 3 keys are in disc.h Worlds() / sly3/addr.h (TODO(sly3))")]] constexpr uint32_t VA_FK_BOOT_WORLD = 0x2A38A8;
+// Well-known keys in the executable. Sly 2 had a boot world (93: the world records) and a front-end world (57);
+// Sly 3 boots straight into m_ext (world 35, orig3 0x1C6EA8) and its title and menus run over it, so both name m_ext's
+// key until the copied front end is re-derived.
+constexpr uint32_t VA_FK_BOOT_WORLD = 0x2EDFD8 + 0x40 * 35;  // orig3: sly3::VA_WORLD_KEYS + 64 * sly3::WORLD_PROLOGUE
+constexpr uint32_t VA_FK_FRONTEND = VA_FK_BOOT_WORLD;

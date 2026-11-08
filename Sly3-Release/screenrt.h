@@ -3,6 +3,8 @@ struct FONTBRX;
 // The HUD's fonts of the world drawn last (the text, the button icons), or null.
 const FONTBRX* PfontHud();
 const FONTBRX* PfontHudIcons();
+// (Sly 3) the font object's element ielem (a text box's +0x2C), or null
+const FONTBRX* PfontHudElem(int ielem);
 
 // The screen objects at run time (Sly 2 module 0x210E90..0x2155C0, the SCREENOBJ state at +0x58..+0xCC): each
 // world sprite set (cid 0x7E, sm.h SPRITESET) gets a state machine over its root group's parts - shown with the
@@ -37,7 +39,12 @@ bool FScreenObjBusy(LO* plo, int k);
 bool FScreenObjIdleLonger(LO* plo, float dt);
 // orig: 0x00212E40 / 0x00213B00 / 0x00213928 (see splayer.h)
 void SetScreenObjFraction(LO* plo, int k, float g);
+void SetScreenObjTime(LO* plo, int k, float t);  // orig 0x00212F80
 void SelectScreenObjPart(LO* plo, int k);
+// the part the object plays (orig3 +0x6C, Sly 2 +0x7C; -1 none)
+int IdScreenObjPartCur(LO* plo);
+// orig3: 0x002617F0: the time left of the part k the object's group plays (0 when none)
+float DtScreenObjPartLeft(LO* plo, int k);
 void ResetScreenObjPart(LO* plo, int k);
 // orig: 0x00213BD8 / 0x00213A08 / 0x00213CD8 / 0x00213DB0 (see splayer.h); the last one selects part k in place of
 // *pidHandle's (reset), keeping it in the handle

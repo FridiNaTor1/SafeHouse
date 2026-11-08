@@ -2,6 +2,8 @@
 // Source: original 0x1DE400..0x1DFAD8, matching decomp 0x1DEF98/0x1DF3D0/0x1DF260,
 // and the original assembly of 0x1DE5D8/0x1DF0A0. No mission-specific state is used.
 #include "laser.h"
+#include "game/sly3.h"
+#include "worldglobals.h"
 #include "alo.h"
 #include "activate.h"
 #include "animfind.h"
@@ -56,6 +58,7 @@ struct LASER
     bool bound = false;
 };
 std::unordered_map<const ALO*, LASER> s_lasers;
+WORLD_TABLE(s_lasers);   // (PC: moved aside while a kept world loads, worldglobals.h)
 LASER& Laser(ALO* p) { return s_lasers[p]; }
 float FloatField(const LO* p, uint32_t off, float def)
 {
@@ -100,7 +103,7 @@ void BindEnd(ALO* p, LASEREND& e)
     LO* po = e.oid != -1 ? PloFindSwChild(p, e.oid) : nullptr;  // 0x15E938(G,1,oid,p)
     if (po)
     {
-        if (FCidDerivedFrom(po->Cid(), 0x0A))
+        if (FCidDerivedFrom(po->Cid(), S3CID(0x0A)))
         {
             const CRV* path = PcrvFromLo(po);
             const float length = SLengthCrv(path);
@@ -164,7 +167,7 @@ void BindEnd(ALO* p, LASEREND& e)
                 else p->grfUpd |= GRFUPD_Update;
             }
         }
-        else if (FCidDerivedFrom(po->Cid(), 3) || FCidDerivedFrom(po->Cid(), 0x30))
+        else if (FCidDerivedFrom(po->Cid(), S3CID(3)) || FCidDerivedFrom(po->Cid(), S3CID(0x30)))
         {
             e.kind = 0;
             e.pos = PosLoWorld(po);
@@ -254,7 +257,7 @@ bool HitStepSupport(ALO* p, const glm::vec3& a, const glm::vec3& b, glm::vec3* h
 }
 
 // orig: 0x001DF0A0 (slot 60): retained contacts per beam, outside the ordinary rigid contact list.
-void AddLaserContacts(ALO* p, SOE* other, XP**)
+void AddLaserContacts(ALO* p, SOE* other, int, const BSPREF&, int, XP**)
 {
     LASER& laser = Laser(p);
     if (p->asoe.empty()) return;
@@ -369,7 +372,7 @@ void LoadLaserFromBrx(LO* plo, CBinaryInputStream* pbis)
 // orig: 0x001DE568/0x001DE5D8: build the endpoint bounds as the sole sensor entry, then initialize lengths.
 void PostLoadLaser(LO* plo)
 {
-    if (plo->Cid() != 0x55) return;
+    if (plo->Cid() != S3CID(0x55)) return;
     ALO* p = static_cast<ALO*>(plo);
     LASER& laser = Laser(p);
     if (laser.bound) return;

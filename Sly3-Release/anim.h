@@ -11,6 +11,7 @@
 // The clock is the world's (clock.h, orig 0x2DDED0).
 
 #include <cstdint>
+#include <vector>
 
 struct SW;
 struct ALO;
@@ -21,6 +22,8 @@ struct LO;
 // 0x1F00C8) in load order inside that loop (after the base 0x1A5C48), so the tasks started in the same loop find the
 // SMAs of the objects before them.
 void InitWorldAnimationRecords(SW* psw);
+// (PC addition: the same passes over a list of objects only, no table reset: copies made while the world runs)
+void InitAnimationRecordsOf(const std::vector<LO*>& aplo);
 void PostLoadAnimLo(LO* plo);
 void InitWorldAnimation(SW* psw);
 // One frame of animation alone (tests without the world's loop): the records of every animated ALO, the ASEGAs.

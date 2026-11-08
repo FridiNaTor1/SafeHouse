@@ -34,6 +34,15 @@ void UpdateDamageMotion(ACTOR* pa);
 struct SOE;
 // orig: 0x0019FEB0 (+0x9E0: a floor stood on, its entry and point in the entry's object's frame)
 void RecordSafeGround(ACTOR* pa, SOE* psoe, const glm::vec3& posLocal);
+// orig: 0x0019FD30 (a safe interaction description and its curve/angular parameter)
+void RecordSafeTarget(ACTOR* pa, LO* plo, JTL jtl, float g);
+// orig: 0x001942F0 / 0x0019EA60 (the interaction / pipe controller's safe place)
+void UpdateSafeInteract(ACTOR* pa);
+void UpdateSafePipe(ACTOR* pa);
+// orig: 0x001A0048 / 0x001A00D0 (compact each hero's history before an owner or floor is removed)
+void RemoveSafeGroundReferences(LO* plo, SOE* psoe);
+// orig: 0x0019F3F8 (the place in world space, with its transform predicted dt seconds ahead)
+glm::vec3 PosSafeGround(ACTOR* pa, const SAFEGROUND::ENTRY& e, float dt = 0.0f);
 // orig: 0x0019FC30 (Sly's: the floor of the states that stand)
 void UpdateSafeGround(ACTOR* pa, int state);
 // orig: 0x0019F590 (back to the best safe ground: at once, or by the jump's kind 0xA)

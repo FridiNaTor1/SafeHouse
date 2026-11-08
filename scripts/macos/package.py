@@ -19,7 +19,7 @@ from dylib_bundler import DylibBundler  # noqa: E402
 PRODUCT = "SafeHouse"
 BUNDLE_ID = "app.safehouse.launcher"
 LAUNCHER = "safehouse"
-EXECUTABLES = (LAUNCHER, "Sly2-Release", "cane-extractor", "Sly1BrxRebuilder", "Sly1PalExtractor")
+EXECUTABLES = (LAUNCHER, "Sly2-Release", "Sly3-Release", "cane-extractor", "Sly1BrxRebuilder", "Sly1PalExtractor")
 GPL_FLAGS = ("--enable-gpl", "--enable-nonfree", "--enable-version3")
 
 

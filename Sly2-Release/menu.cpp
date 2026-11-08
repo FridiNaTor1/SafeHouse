@@ -68,7 +68,7 @@ enum NATIVEID : int
     // (Phase 3, the input QoL) the controls page: pcinput.h / promptglyph.h / skipcut.h options
     NID_ControlsPage, NID_PromptStyle, NID_AlwaysPs, NID_InstantSkip, NID_MouseCamera, NID_MouseSens, NID_AimSens,
     NID_InvertX, NID_InvertY, NID_WheelZoom, NID_MouseMenus, NID_HackMouse, NID_KeyboardPage, NID_ResetKeys,
-    NID_KeyFirst,   // .. + PCA_Max + 4: the keyboard mapping's rows (the actions, then the camera keys)
+    NID_KeyFirst,   // .. + PCA_Max + 6: the keyboard mapping's rows (the actions, the camera keys, the tank's tracks)
     // (PC options) the display options' Long Shadows; Invert Controls... (settings v17): its page,
     // the controller's camera, the mouse in the binocucom / turrets (NID_InvertX / NID_InvertY: the mouse's camera)
     NID_Pc2 = NID_Base + 0x100,
@@ -431,14 +431,16 @@ std::string StrNative(int id)
     case NID_KeyboardPage: return StrPort(PTX_KeyboardMapping);
     case NID_ResetKeys: return StrPort(PTX_ResetKeyboardMapping);
     default:
-        if (id >= NID_KeyFirst && id < NID_KeyFirst + PCA_Max + 4)
+        if (id >= NID_KeyFirst && id < NID_KeyFirst + PCA_Max + 6)
         {
             static const PTX aptx[] = {PTX_MoveForward, PTX_MoveBack, PTX_MoveLeft, PTX_MoveRight, PTX_Square, PTX_Circle,
                                        PTX_Cross, PTX_Triangle, PTX_Start, PTX_Select, PTX_Max, PTX_Max, PTX_Max, PTX_Max,
-                                       PTX_Max, PTX_Max, PTX_CameraLeft, PTX_CameraRight, PTX_CameraUp, PTX_CameraDown};
+                                       PTX_Max, PTX_Max, PTX_CameraLeft, PTX_CameraRight, PTX_CameraUp, PTX_CameraDown,
+                                       PTX_TankLeftTrack, PTX_TankRightTrack};
             static const char* const aszButton[] = {"L1", "R1", "L2", "R2", "L3", "R3"};   // (PTX_Max: the button's own name)
             const int i = id - NID_KeyFirst;
-            const int key = i < PCA_Max ? g_pcinput.keyboard[size_t(i)] : g_pcinput.cameraKeys[size_t(i - PCA_Max)];
+            const int key = i < PCA_Max ? g_pcinput.keyboard[size_t(i)]
+                          : i < PCA_Max + 4 ? g_pcinput.cameraKeys[size_t(i - PCA_Max)] : g_pcinput.tankKeys[size_t(i - PCA_Max - 4)];
             const std::string label = aptx[i] == PTX_Max ? std::string(aszButton[i - 10]) : StrPort(aptx[i]);
             return label + StrPort(PTX_Sep) + (s_ikeyCapture == i ? StrPort(PTX_PressAKey) : StrPortKeyName(key));
         }
@@ -491,6 +493,7 @@ void CycleControls(MENUENT& e)
         const PCINPUTOPT d = PcInputDefaults();
         o.keyboard = d.keyboard;
         o.cameraKeys = d.cameraKeys;
+        o.tankKeys = d.tankKeys;
         break;
     }
     default: return;
@@ -503,6 +506,14 @@ void CycleControls(MENUENT& e)
 void BindKey(int i, int key)
 {
     PCINPUTOPT& o = g_pcinput;
+    if (i >= PCA_Max + 4)
+    {
+        // (the tank's tracks: keys of their own, only read while a tank is driven; the movement keys may share them)
+        if (cane::settings::mouseBinding(key)) return;
+        o.tankKeys[size_t(i - PCA_Max - 4)] = key;
+        FSaveDisplaySettings(cane::userDirectory());
+        return;
+    }
     int* pkey = i < PCA_Max ? &o.keyboard[size_t(i)] : &o.cameraKeys[size_t(i - PCA_Max)];
     if (i >= PCA_Max && cane::settings::mouseBinding(key)) return;   // (the camera keys are keys)
     const int old = *pkey;
@@ -803,7 +814,7 @@ std::vector<MENUENT> AentInvert()
 std::vector<MENUENT> AentKeyboard()
 {
     std::vector<MENUENT> a;
-    for (int i = 0; i < PCA_Max + 4; ++i)
+    for (int i = 0; i < PCA_Max + 6; ++i)
     {
         // (L3 / R3: the counters / the binocucom, sly.cpp ShowWorldStats, climb.cpp / gang.cpp OpenBinoc)
         MENUENT e;

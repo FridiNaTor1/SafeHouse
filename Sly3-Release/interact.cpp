@@ -1,6 +1,7 @@
 // interact.cpp: the players' interaction sub-object ACTOR +0x4C0 (interact.h). Ported from the original's code (see
 // interact.h); the parts each function warns about once ("interact: ... not ported") are left out.
 #include "booty.h"
+#include "game/sly3.h"
 
 #include <bit>
 #include "interact.h"
@@ -302,7 +303,7 @@ void UseObjectBase(LO* puse, ACTOR* pa)
         const OID oidRoot = static_cast<OID>(puse->U32Field(0, ib)), oidSm = static_cast<OID>(puse->U32Field(0, ib + 4));
         const OID oidState = static_cast<OID>(puse->U32Field(0, ib + 8));
         LO* proot = PloFindSwNearest(puse, oidRoot);  // (0x15E650 kind 0x204: one found)
-        if (!proot || !FIsLoDerivedFrom(proot, 0x30) || oidState == -1) continue;
+        if (!proot || !FIsLoDerivedFrom(proot, S3CID(0x30)) || oidState == -1) continue;
         for (SMA* psma : g_apsma)  // 0x1F67E0
             if (psma->palo == proot && (oidSm == -1 || (psma->psm && psma->psm->oid == oidSm)))
             {
@@ -323,7 +324,7 @@ void UseObjectBase(LO* puse, ACTOR* pa)
         std::printf("interact: the use %d's script +0x114 oid %d: %d (cid 0x%X), %d machines, %d tasks\n", puse->oid, static_cast<int>(puse->U32Field(0, 0x114, 0)),
                     pscpt ? pscpt->oid : -1, pscpt ? pscpt->Cid() : 0, cRsmg, cTask);
     if (pscpt) StartScpt(pscpt, pa->palo);  // 0x1DFD58
-    if (FIsLoDerivedFrom(puse, 0x24) && PmurrayFromLo(pa->palo)) MurrayTakeObject(pa, puse);  // 0x184330 -> 0x1B7000
+    if (FIsLoDerivedFrom(puse, S3CID(0x24)) && PmurrayFromLo(pa->palo)) MurrayTakeObject(pa, puse);  // 0x184330 -> 0x1B7000
 }
 // the use's vt slot 51: the booty's stands (cid 0x25: 0x13D020, booty.cpp, which ends with the base), else the base
 void UseObject(LO* puse, ACTOR* pa)
@@ -400,7 +401,7 @@ void PostLoadInteract(ACTOR* pa)
     INTERACT& i = pa->inter;
     ALO* palo = pa->palo;
     // +0x68 = 0x13E3C8(0xF, 0, 0x148, -1): a camera zone for the ledges / walls / swings, off (0x221268(0)); 0x194118
-    i.ploZone = PloNew(0x0F, g_psw, nullptr, 0x148, -1);
+    i.ploZone = PloNew(S3CID(0x0F), g_psw, nullptr, 0x148, -1);
     InitZoneCamera(i.ploZone);
     SetZoneForced(i.ploZone, 0);
     ResetInteractZone(pa);
@@ -500,7 +501,7 @@ void SetInteractState(ACTOR* pa, int n)
     {
         // the action's start: a curve target's point nearest the actor (0x1E6F60: +0x1C its parameter, +0x20 its
         // distance), then the kind's own (0x2A6180)
-        if (i.ploTarget && FIsLoDerivedFrom(i.ploTarget, 0x0A))
+        if (i.ploTarget && FIsLoDerivedFrom(i.ploTarget, S3CID(0x0A)))
             if (const CRV* pcrv = PcrvFromLo(i.ploTarget)) NearestCrvAll(pcrv, PosAloCenter(palo), nullptr, nullptr, &i.g1C, &i.s20);
         switch (pa->n4C8)
         {
@@ -678,7 +679,7 @@ void SetInteractState(ACTOR* pa, int n)
         case 1: psm = i.psm230; grfapl = 1; break;
         case 4: paseg = i.paseg234; grfapl = 9; grfHandles = 7; break;
         case 3:
-            if (i.ploTarget && i.ploTarget->U32Field(0, 0x1BC, 0))
+            if (i.ploTarget && i.ploTarget->U32Field(0, 0x1CC, 0))
             {
                 paseg = i.pbl314;
                 if (i.pbl314) { i.g318 = 0.0f; i.g31C = 0.0f; }
@@ -705,8 +706,8 @@ void SetInteractState(ACTOR* pa, int n)
         case 11:
             // Guttural Roar (+0x9BC 21): Murray's (the global 0x2F7900) part +0x1AF0, else +0x4F8
             paseg = i.paseg4F8;
-            if (pa->n9BC == 21 && g_psw && !g_psw->mpcidaplo[0x36].empty())
-                if (ASEG* pr = PPart<ASEG>(static_cast<ALO*>(g_psw->mpcidaplo[0x36].front()), 0x1AF0)) paseg = pr;
+            if (pa->n9BC == 21 && g_psw && !g_psw->mpcidaplo[S3CID(0x36)].empty())
+                if (ASEG* pr = PPart<ASEG>(static_cast<ALO*>(g_psw->mpcidaplo[S3CID(0x36)].front()), 0x1AF0)) paseg = pr;
             break;
         case 12: paseg = i.paseg50C; break;
         default: break;  // 8
@@ -724,7 +725,7 @@ void SetInteractState(ACTOR* pa, int n)
             LO* pt = i.ploTarget;
             // the target's own zone, else the sub-object's +0x68 set up for it (0x193438..0x193588)
             ZONECM* pzcm = nullptr;
-            if (pt && FIsLoDerivedFrom(pt, 0x0C))
+            if (pt && FIsLoDerivedFrom(pt, S3CID(0x0C)))
             {
                 if (LO* pz = PloJtDescZone(pt, JTL_Ledge)) SetActorZone(pa, pz);  // (its description +0x190's +0)
                 else
@@ -741,9 +742,9 @@ void SetInteractState(ACTOR* pa, int n)
                     SetActorZone(pa, i.ploZone);
                 }
             }
-            else if (pt && FIsLoDerivedFrom(pt, 0x22))
+            else if (pt && FIsLoDerivedFrom(pt, S3CID(0x22)))
             {
-                if (LO* pz = PloJtDescZone(pt, FIsLoDerivedFrom(pt, 0x22) ? JTL_Wall : JTL_Swing)) SetActorZone(pa, pz);  // (+0xE0's +0)
+                if (LO* pz = PloJtDescZone(pt, FIsLoDerivedFrom(pt, S3CID(0x22)) ? JTL_Wall : JTL_Swing)) SetActorZone(pa, pz);  // (+0xE0's +0)
                 else
                 {
                     // a wall: the camera on an arc about its position (+0x12C, +0x150) of its radius +0x10C (+0x160)
@@ -752,14 +753,14 @@ void SetInteractState(ACTOR* pa, int n)
                     {
                         pzcm->fArc = 1;
                         pzcm->posArc = PosJtLo(pt);  // 0x1A6F00(0, zone, 0x1A62E8(target)): the zone has no frame
-                        pzcm->sArcRadius = std::bit_cast<float>(pt->U32Field(0, 0x10C, 0));
+                        pzcm->sArcRadius = std::bit_cast<float>(pt->U32Field(0, 0x11C, 0));
                     }
                     SetActorZone(pa, i.ploZone);
                 }
             }
-            else if (pt && FIsLoDerivedFrom(pt, 0x26))
+            else if (pt && FIsLoDerivedFrom(pt, S3CID(0x26)))
             {
-                if (LO* pz = PloJtDescZone(pt, FIsLoDerivedFrom(pt, 0x22) ? JTL_Wall : JTL_Swing)) SetActorZone(pa, pz);  // (+0xE0's +0)
+                if (LO* pz = PloJtDescZone(pt, FIsLoDerivedFrom(pt, S3CID(0x22)) ? JTL_Wall : JTL_Swing)) SetActorZone(pa, pz);  // (+0xE0's +0)
                 else
                 {
                     // a swing: the entry's offsets (+0x10 / +0x20 / +0x30) = D_002BF650 (225, 0, 125) in its frame
@@ -835,7 +836,7 @@ play:
     ApplyAsegCur(paseg, palo, tStart, svt, grfapl, &pa->pasega);  // 0x1305B8
     ReplaceSmaHandle(psm, palo, -1, grfapl, &pa->psma);           // 0x1F1448
     UpdateActorStepMesh(pa);                                      // vt slot 90
-    if (psly && grfHandles) WarnOnce("Sly's handles 0x18C120");
+    if (psly) SetSlyHandles(psly, grfHandles);  // 0x18C120 (Sly, cid 0x35: the state's handles, none removes them)
     if (FPrint())
         std::printf("interact t %.3f: %d kind %d state %d -> %d (clip %d sm %d)\n", g_clock.t, palo->oid, pa->n4C8, old, n, paseg ? paseg->oid : -1,
                     psm ? psm->oid : -1);
@@ -922,7 +923,7 @@ void UpdateInteractTransitions(ACTOR* pa)
             break;
         case 5:
             // the reach near a pipe: climb it (state 8 at the distance +0x20) when 0x1423A0 allows
-            if (!i.ploTarget || !FIsLoDerivedFrom(i.ploTarget, 0x0B)) break;
+            if (!i.ploTarget || !FIsLoDerivedFrom(i.ploTarget, S3CID(0x0B))) break;
             WarnOnce("kind 5's climb test 0x1423A0");
             break;
         case 2:
@@ -974,7 +975,7 @@ void UpdateInteract(ACTOR* pa)
         cmm::PosSmooth(pos, posT, g_clock.dt, &smp, &v40);  // 0x11F088
         glm::vec3 v1(0.0f);
         float f21 = 0.0f;
-        if (!(i.ploTarget && FIsLoDerivedFrom(i.ploTarget, 0x26)))
+        if (!(i.ploTarget && FIsLoDerivedFrom(i.ploTarget, S3CID(0x26))))
         {
             const float radSide = pa->n1040 == 1 ? rad - F32(0x3FC90FDB) : rad + F32(0x3FC90FDB);
             const glm::vec3 a = cmm::SetVectorCylind(radSide, 1.0f, 0.0f);  // 0x11E1A0
@@ -991,7 +992,7 @@ void UpdateInteract(ACTOR* pa)
             f21 = std::min(std::sqrt(std::fabs(sv * sv - l2)), f21);
             float g = f21;
             LO* pt = i.ploTarget;
-            if (pt && FIsLoDerivedFrom(pt, 0x0C) && !pt->U32Field(0, 0xE4, 0))
+            if (pt && FIsLoDerivedFrom(pt, S3CID(0x0C)) && !pt->U32Field(0, 0xE4, 0))
             {
                 // an open ledge: not past its ends (30 in)
                 const CRV* pcrv = PcrvFromLo(pt);
@@ -1023,9 +1024,9 @@ void UpdateInteract(ACTOR* pa)
         else
         {
             LO* pt = i.ploTarget;
-            if (pt && FIsLoDerivedFrom(pt, 0x0C))
+            if (pt && FIsLoDerivedFrom(pt, S3CID(0x0C)))
             {
-                const uint32_t ends = pt->U32Field(0, 0x1BC, 0);
+                const uint32_t ends = pt->U32Field(0, 0x1CC, 0);
                 if (f21 < -25.0f && (ends & 1)) { if (pa->n4C8 == 0) s = pa->n1040 ? 2 : 3; else s = 2; }
                 else if (25.0f < f21 && (ends & 2)) { if (pa->n4C8 == 0) s = pa->n1040 ? 3 : 2; else s = 3; }
             }
@@ -1074,7 +1075,7 @@ void UpdateInteract(ACTOR* pa)
         if (!pcrv) break;
         glm::vec3 pos(0.0f), dir(0.0f);
         NearestCrv(pcrv, PosActorProbe0(pa), i.g1C, &pos, &dir, &i.g1C, &i.s20);
-        const bool fSlide = prail->U32Field(0, 0x1BC, 0) != 0;
+        const bool fSlide = prail->U32Field(0, 0x1CC, 0) != 0;
         if (fSlide && !pcrv->fClosed && !pcrv->ag.empty())
             if (i.g1C < pcrv->ag.front() + F32(0x3C23D70A) || pcrv->ag.back() - F32(0x3C23D70A) < i.g1C)
             {
@@ -1169,7 +1170,12 @@ void UpdateInteract(ACTOR* pa)
             SetStepPhysHeading(palo, h);  // 0x204660
         }
         else SetInteractState(pa, 9);
-        WarnOnce("kind 8's probe points 0x205910 (0x2BF630)");
+        // 0x191A10: crawling follows the plane through the original three probes.
+        // Sly's points (D_002BF5D0) sit lower than the other actors' (D_002BF600).
+        static const glm::vec3 slyProbes[3] = {{0.0f, 0.0f, -50.0f}, {45.0f, -40.0f, -50.0f}, {45.0f, 40.0f, -50.0f}};
+        static const glm::vec3 actorProbes[3] = {{0.0f, 0.0f, -15.0f}, {45.0f, -40.0f, -15.0f}, {45.0f, 40.0f, -15.0f}};
+        FitStepToFloor(palo, -50.0f, 0.0f, 3, FMainSly(pa) ? slyProbes : actorProbes);  // D_002BF630
+
         break;
     }
     case 10:
@@ -1215,64 +1221,74 @@ void ForgetGuardsInteract(ACTOR* pa)
     // the line between them (0x20FAA0 with the filter 0x154568, 0x14CC58)
     if (!g_psw || !pa) return;
     const glm::vec3 b = PosAloCenter(pa->palo);  // 0x1A62E8
-    for (CID cid = 0; cid < CID_Max; ++cid)
+    // 0x154080 sends script event28. It can unregister guards; locate the next
+    // member after the callback instead of retaining a vector iterator. Original
+    // 0x11A2E8 clears a removed current member's next link, ending this traversal.
+    const auto nextGuard = [](GUARD* current) -> GUARD* {
+        const auto& active = ApguardActive();
+        if (!current) return active.empty() ? nullptr : active.front();
+        auto it = std::find(active.begin(), active.end(), current);
+        return it == active.end() || ++it == active.end() ? nullptr : *it;
+    };
+    for (GUARD* pg = nextGuard(nullptr); pg; pg = nextGuard(pg))
     {
-        if (!FCidDerivedFrom(cid, 0x38)) continue;
-        for (LO* plo : g_psw->mpcidaplo[cid])
+        LO* plo = pg->palo;
+        DETECTOR* pdet = pg ? pg->pdet : nullptr;
+        if (!pdet) continue;
+        DETENTRY* pe = PdetentryFind(pdet, pa->palo);
+        if (!pe || !pe->st || (pdet->grf & 1)) continue;
+        const glm::vec3 a = PosAloCenter(static_cast<ALO*>(plo));
+        const glm::vec3 d = a - b;
+        const float dist = std::sqrt((d.x * d.x + d.y * d.y) + d.z * d.z);
+        if (F32(0x44BB8000) < dist)
         {
-            if (!plo || !plo->fInWorld) continue;
-            GUARD* pg = PguardFromLo(plo);
-            DETECTOR* pdet = pg ? pg->pdet : nullptr;
-            if (!pdet) continue;
-            DETENTRY* pe = PdetentryFind(pdet, pa->palo);
-            if (!pe || !pe->st || (pdet->grf & 1)) continue;
-            const glm::vec3 a = PosAloCenter(static_cast<ALO*>(plo));
-            const glm::vec3 d = a - b;
-            const float dist = std::sqrt((d.x * d.x + d.y * d.y) + d.z * d.z);
-            if (F32(0x44BB8000) < dist)
-            {
-                SetDetentryState(pdet, pe, 0);
-                continue;
-            }
-            // 0x154568: not a sensor (bit 48), not the guard's own (its +0x14 group: natively its hierarchy), not under
-            // a stepping object (0x33) (TODO(ai): the entry owner's +0xEC +0x70 bit 2)
-            const glm::vec3 mn = glm::min(a, b), mx = glm::max(a, b);
-            std::vector<SOE*> apsoe;
-            for (OXA* poxa : g_physw.apoxaActive)
-            {
-                if (mx.x < poxa->posMin.x || poxa->posMax.x < mn.x || mx.y < poxa->posMin.y || poxa->posMax.y < mn.y ||
-                    mx.z < poxa->posMin.z || poxa->posMax.z < mn.z)
-                    continue;
-                for (SOE* psoe : poxa->apsoe)
-                {
-                    if (psoe->f48 || !psoe->palo || PloRoot(psoe->palo) == PloRoot(plo)) continue;
-                    bool fStep = false;
-                    for (const LO* p = psoe->palo; p && !fStep; p = p->paloParent) fStep = FCidDerivedFrom(p->Cid(), 0x33);
-                    if (!fStep && apsoe.size() < 0x100) apsoe.push_back(psoe);
-                }
-            }
-            LSG lsg;
-            if (apsoe.empty() || !PsoeHitTestLineObjects(0, a, b, apsoe, &lsg)) continue;  // 0x14CC58
             SetDetentryState(pdet, pe, 0);
+            continue;
         }
+        // 0x154568: not a sensor (bit 48), not the guard's own (its +0x14 group: natively its hierarchy), not under
+        // a stepping object (0x33) (TODO(ai): the entry owner's +0xEC +0x70 bit 2)
+        const glm::vec3 mn = glm::min(a, b), mx = glm::max(a, b);
+        std::vector<SOE*> apsoe;
+        for (OXA* poxa : g_physw.apoxaActive)
+        {
+            if (mx.x < poxa->posMin.x || poxa->posMax.x < mn.x || mx.y < poxa->posMin.y || poxa->posMax.y < mn.y ||
+                mx.z < poxa->posMin.z || poxa->posMax.z < mn.z)
+                continue;
+            for (SOE* psoe : poxa->apsoe)
+            {
+                if (psoe->f48 || !psoe->palo || PloRoot(psoe->palo) == PloRoot(plo)) continue;
+                bool fStep = false;
+                for (const LO* p = psoe->palo; p && !fStep; p = p->paloParent) fStep = FCidDerivedFrom(p->Cid(), S3CID(0x33));
+                if (!fStep && apsoe.size() < 0x100) apsoe.push_back(psoe);
+            }
+        }
+        LSG lsg;
+        if (apsoe.empty() || !PsoeHitTestLineObjects(0, a, b, apsoe, &lsg)) continue;  // 0x14CC58
+        SetDetentryState(pdet, pe, 0);
     }
 }
 
 // orig: 0x001938C0
 bool FInteractCircle(ACTOR* pa)
 {
+    if (std::getenv("SLY2N_GANGDEBUG"))
+    {
+        std::printf("interact circle t %.3f: %d tracked:", g_clock.t, g_jttrack.c);
+        for (int k = 0; k < g_jttrack.c; ++k) std::printf(" %d (list %d, %.1f)", g_jttrack.ae[k].plo->oid, g_jttrack.ae[k].jtl, g_jttrack.ae[k].dist);
+        std::printf("\n");
+    }
     for (int k = 0; k < g_jttrack.c; ++k)
     {
         const JTENT& e = g_jttrack.ae[k];
         if (250.0f < e.dist) break;  // (0x2BF660)
         LO* plo = e.plo;
         int n = -1;
-        if (FIsLoDerivedFrom(plo, 0x13) || FIsLoDerivedFrom(plo, 0x0B)) n = FMainSly(pa) ? 6 : 5;
-        else if (FIsLoDerivedFrom(plo, 0x1B)) n = 8;
-        else if (FIsLoDerivedFrom(plo, 0x0C)) n = 0;
-        else if (FIsLoDerivedFrom(plo, 0x22)) n = 0;
-        else if (FIsLoDerivedFrom(plo, 0x26)) n = static_cast<int>(plo->U32Field(0, 0x10C, 0));
-        else if (FIsLoDerivedFrom(plo, 0x23)) n = 7;
+        if (FIsLoDerivedFrom(plo, S3CID(0x13)) || FIsLoDerivedFrom(plo, S3CID(0x0B))) n = FMainSly(pa) ? 6 : 5;
+        else if (FIsLoDerivedFrom(plo, S3CID(0x1B))) n = 8;
+        else if (FIsLoDerivedFrom(plo, S3CID(0x0C))) n = 0;
+        else if (FIsLoDerivedFrom(plo, S3CID(0x22))) n = 0;
+        else if (FIsLoDerivedFrom(plo, S3CID(0x26))) n = static_cast<int>(plo->U32Field(0, 0x11C, 0));
+        else if (FIsLoDerivedFrom(plo, S3CID(0x23))) n = 7;
         if (n != -1)
         {
             StartInteract(pa, n, plo, e.jtl);
@@ -1294,13 +1310,21 @@ void SetActorInteractObject(ACTOR* pa, int n, LO* plo)
 void AddInteractContacts(ACTOR* pa)
 {
     INTERACT& i = pa->inter;
+    if (pa->n4C8 != 3 && pa->n4C8 != 4) return;
+    // the players' vt slot 82 (0x140C30) first: a held object out of the world drops the actor (0x195A00 with 0), as
+    // AddClimbContacts / AddJumpLedgeContacts do. R41: Ep3's water buckets remove their spire 9332 (ASEG 98042, the
+    // bottom opening at the top of the loop), which in the original throws Sly out; natively he rode on for good.
+    if (i.ploTarget && !i.ploTarget->fInWorld)
+    {
+        SetJumpKind(&pa->jump, 0, 0, 0);
+        return;
+    }
     if (pa->n4C8 == 4)
     {
         // the spire: its point held by the line contacts 0x23 (vt slot 82 0x140C30 -> 0x205008)
-        if (i.ploTarget) AddActorLineXps(pa, 0x23, PosJtLo(i.ploTarget), glm::vec3(0.0f, 1.0f, 0.0f), PosActorProbe0(pa));
+        if (i.ploTarget) AddActorLineXps(pa, 0x23, PosJtLo(i.ploTarget) - pa->vecDrawOffset, glm::vec3(0.0f, 1.0f, 0.0f), PosActorProbe0(pa));
         return;
     }
-    if (pa->n4C8 != 3) return;
     // the rail: the nearest point from the last (+0x1C / +0x20), held along the rail's line (grf 0x22: the axes across
     // it; within 50 of the end it goes toward, an open walking rail pins it there, 0x2A)
     LO* prail = i.ploTarget;
@@ -1309,7 +1333,7 @@ void AddInteractContacts(ACTOR* pa)
     glm::vec3 pos(0.0f), dir(0.0f);
     NearestCrv(pcrv, PosActorProbe0(pa), i.g1C, &pos, &dir, &i.g1C, &i.s20);  // 0x1E6ED8
     int grf = 0x22;
-    if (!prail->U32Field(0, 0x1BC, 0) && !pcrv->fClosed)
+    if (!prail->U32Field(0, 0x1CC, 0) && !pcrv->fClosed)
     {
         const glm::vec3 v = VelAloPos(pa->palo);  // vt slot 33
         const float vAlong = (v.x * dir.x + v.y * dir.y) + v.z * dir.z;
@@ -1322,19 +1346,19 @@ void AddInteractContacts(ACTOR* pa)
         }
         else if (SLengthCrv(pcrv) - 50.0f < i.s20) { grf = 0x2A; EvalCrvS(pcrv, SLengthCrv(pcrv) - 50.0f, &pos, nullptr); }
     }
-    AddActorLineXps(pa, grf, pos, -dir, PosActorProbe0(pa));
+    AddActorLineXps(pa, grf, pos - pa->vecDrawOffset, -dir, PosActorProbe0(pa));
 }
 
 // orig: 0x00194170
 void AccelAloPos(ALO* p, const glm::vec3& v);  // solve.cpp: orig 0x1FAC30
 void UpdateInteractMotion(ACTOR* pa)
 {
-    // a sliding rail (+0x1BC): along its direction at the parameter +0x1C, the gravity's part along it scaled by the
+    // a sliding rail (+0x1BC; Sly 3 +0x1CC, its options +0x10 on: maps/eopids.tsv 912..915): along its direction at the parameter +0x1C, the gravity's part along it scaled by the
     // rail's +0x1C4, the result kept between the accelerations that smooth the speed along toward +-(+0x1C0) (SMP
     // D_002BF700 {2500, 0, 1}), less that gravity part (the gravity itself is applied elsewhere), as an acceleration
     if (pa->n4C8 != 3) return;
     LO* prail = pa->inter.ploTarget;
-    if (!prail || !prail->U32Field(0, 0x1BC, 0)) return;
+    if (!prail || !prail->U32Field(0, 0x1CC, 0)) return;
     const CRV* pcrv = PcrvFromLo(prail);
     if (!pcrv) return;
     ALO* palo = pa->palo;
@@ -1354,7 +1378,7 @@ void UpdateInteractMotion(ACTOR* pa)
         std::memcpy(&g, &u, 4);
         return g;
     };
-    const float sMax = field(0x1C0, 1000.0f), rGrav = field(0x1C4, 1.0f);
+    const float sMax = field(0x1D0, 1000.0f), rGrav = field(0x1D4, 1.0f);
     static const SMP s_smp{2500.0f, 0.0f, 1.0f};  // D_002BF700
     float a = 0.0f, b = 0.0f;
     GSmooth(d1, sMax, g_clock.dt, &s_smp, &a);   // 0x11D018
@@ -1378,8 +1402,8 @@ bool FActorPoseDone(ACTOR* pa)
         // 0x231550: +0x50 (else the identity record) and +0x60), the record's chain predicted at dt 0 (0x2309E8)
         XF* pxf = nullptr;
         glm::mat4 matLocal(1.0f);
-        if (FIsLoDerivedFrom(ploEnd, 0x30)) pxf = PxfObj(static_cast<ALO*>(ploEnd));
-        else if (FIsLoDerivedFrom(ploEnd, 3))
+        if (FIsLoDerivedFrom(ploEnd, S3CID(0x30))) pxf = PxfObj(static_cast<ALO*>(ploEnd));
+        else if (FIsLoDerivedFrom(ploEnd, S3CID(3)))
         {
             pxf = static_cast<LOX*>(ploEnd)->pxf;
             matLocal = static_cast<LOX*>(ploEnd)->mat;

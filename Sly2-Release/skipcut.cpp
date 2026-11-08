@@ -53,6 +53,9 @@ struct SKIPCUT
     uint64_t idScene = 0;       // the scene whose hold / fast-forward this belongs to
     bool fAwaitRelease = false; // a Circle held across a scene boundary cannot start another skip
     int frameStop = -1;         // the step the last fast-forward ended at (the scene's end: the check's)
+    uint16_t grfCarried = 0;    // buttons held into the scene (or that turn on in its first moments, e.g. a held movement
+                                // key becoming the d-pad once the scene takes the pad): no hint until released
+    float tScene = 0.0f;        // since the scene started
 };
 SKIPCUT s_skip;
 SKIPCUT s_skipMovie;
@@ -286,7 +289,14 @@ void UpdateSkipCut(float dtReal, uint16_t grfHeld, uint16_t grfPressed)
         s_skip.fHint = false;
         s_skip.tHint = s_skip.tHold = 0.0f;
         s_skip.fAwaitRelease = (grfHeld & BTN_Circle) && !(grfPressed & BTN_Circle);
+        s_skip.grfCarried = grfHeld;
+        s_skip.tScene = 0.0f;
     }
+    // (PC QoL) a button already held when the scene started shows no hint: only a fresh press does
+    s_skip.tScene += dtReal;
+    if (s_skip.tScene < 0.25f) s_skip.grfCarried |= grfHeld;
+    s_skip.grfCarried &= grfHeld;
+    grfPressed &= uint16_t(~s_skip.grfCarried);
     const bool fSkippable = id && !FScptWaitsNow();
     const bool fCheckSkip = FUpdateSkipCheck(id) && fSkippable;   // (test: SLY2N_SKIPCHECK)
     // (tests: SLY2N_SKIPAT=frame: the skip starts at that step, as after the hold)

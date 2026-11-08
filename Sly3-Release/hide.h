@@ -20,3 +20,5 @@ ACTOR* PactorHideHolder(LO* plo);    // +0x190
 void SetHideHolder(LO* plo, ACTOR* pa);
 void SetHideState(LO* plo, int n);   // orig 0x00183B80
 void ResetHides();                   // a new world
+struct SW;
+void DebugHitHideHolders(SW* psw);  // (debug: SLY2N_HIDEHITHOLDER)

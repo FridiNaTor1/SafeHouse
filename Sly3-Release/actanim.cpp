@@ -2,8 +2,8 @@
 // Reference: Sly2-Reference/Sly2-Release/game/aseg.cpp (0x12FF10), m_20B840_p3.cpp (0x20B840 .. 0x20BD68), m_1A0300.cpp,
 // m_19DE10.cpp, the Sly 2 decomp's func_00135248.c / func_001B6078 (the tails).
 
-#include "sly3/ids3.h"
 #include "actanim.h"
+#include "game/sly3.h"
 
 #include "activate.h"
 #include "alo.h"
@@ -73,10 +73,9 @@ void BindGait(GAIT* pgait)
     if (!pgait->apaseg[0]) return;
     std::vector<BLENDBL> abl(2);
     for (int i = 0; i < 2; ++i) abl[i].paseg = pgait->apaseg[i];
-    // (Sly 3: the feet's event values are Sly 2's + 30: 411 / 412, 413 / 414, the run's ASEGs 307 / 308 carry them;
-    // with them SetGaitMix gives the reference's lead: 274.4 / -13.8 at the deflection 0.359)
-    FillBlAmrsg(abl, 0, {411, 412});  // orig: (sly2) D_002C3DC0 {0x17D, 0x17E}
-    FillBlAmrsg(abl, 1, {413, 414});  // orig: (sly2) D_002C3DC8 {0x17F, 0x180}
+    // (orig3 0x258A10: the feet's events 0x19B / 0x19C and 0x19D / 0x19E (0x349928 / 0x349930); Sly 2 0x17D..0x180)
+    FillBlAmrsg(abl, 0, {0x19B, 0x19C});
+    FillBlAmrsg(abl, 1, {0x19D, 0x19E});
     for (int i = 0; i < 2; ++i)
         if (pgait->apaseg[i]) FAsegRootVelocity(pgait->apaseg[i], pgait->palo, &pgait->avel[i]);
     pgait->pbl = NewBlend(pgait->palo, std::move(abl), {2, 2});  // D_002C3DD8 {0x20, 0x30} / D_002C3DD0 {2, 2}
@@ -87,7 +86,7 @@ void BindGait(GAIT* pgait)
         XF* pxf = nullptr;
         GetAsegChannelTarget(pgait->pbl, pgait->palo, chn, &po, &pxf);
         if (!pxf) continue;  // (the original reads the missing record's tag from address 0x9C)
-        const unsigned k = static_cast<unsigned>(pxf->tag - 0x10);
+        const unsigned k = static_cast<unsigned>(pxf->tag - 0x28);  // (orig3 0x258A10: the root bones 0x28..0x2D; Sly 2 0x10..)
         if (k < 6)
         {
             if (!(k & 1)) SetBlendChannelTable(&chn, 1);
@@ -109,8 +108,7 @@ glm::vec4 VecGaitVelocity(const GAIT* pgait)
     {
         const BLENDBL& bl = pbl->abl[i];
         const float dt = bl.aamrsg.empty() || bl.aamrsg[0].empty() ? 0.0f : bl.aamrsg[0][0].dt;
-        // (a gait whose ASEGs have no feet's events: the weights alone)
-        const float f = r != 0.0f ? bl.weight * (dt / r) : bl.weight;
+        const float f = bl.weight * (dt / r);
         v += pgait->avel[i] * f;
         v.w += 1.0f;
     }
@@ -259,7 +257,7 @@ void BindStepSegs(STEPSEGS* pss, ALO* palo)
         if (pss->aoid[i] == -1) continue;
         // orig 0x1B1B98: 0x15E938(G, 1, id, palo), then the ASEG's vt slot 9 (RemoveLo)
         LO* plo = PloFindSwChild(palo, pss->aoid[i]);
-        ASEG* paseg = plo && (plo->Cid() == Icid(CID3::ASEG) || plo->Cid() == 0x83 /* sly2 0x6E */) ? static_cast<ASEG*>(plo) : nullptr;
+        ASEG* paseg = plo && (plo->Cid() == S3CID(0x6D) || plo->Cid() == S3CID(0x6E)) ? static_cast<ASEG*>(plo) : nullptr;
         if (paseg) RemoveLo(g_psw, paseg);
         pss->apaseg[i] = paseg;
         pss->aoid[i] = -1;

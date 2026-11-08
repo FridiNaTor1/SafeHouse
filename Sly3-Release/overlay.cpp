@@ -1,5 +1,7 @@
 // Exclusive animated overlays, original0x147220..0x147C20.
 #include "overlay.h"
+#include "game/sly3.h"
+#include "worldglobals.h"
 #include "activate.h"
 #include "alo.h"
 #include "display.h"
@@ -36,8 +38,11 @@ struct OVERLAY {
     int dialog = -1;                           // +170
 };
 std::map<LO*, OVERLAY> s_overlays;
+WORLD_TABLE(s_overlays);   // (PC: moved aside while a kept world loads, worldglobals.h)
 uint32_t s_serial = 0;
+WORLD_VALUE(s_serial);   // (PC: moved aside while a kept world loads, worldglobals.h)
 LO* s_owner = nullptr;  // orig D_002DD644
+WORLD_VALUE(s_owner);   // (PC: moved aside while a kept world loads, worldglobals.h)
 GLuint s_vao = 0, s_vbo = 0;
 struct OVERLAYVTX {
     glm::vec2 pos;
@@ -124,13 +129,13 @@ void PostLoadAnimatedOverlay(LO* plo) {
     if (!plo || !g_psw) return;
     if (s_serial != g_psw->serial) { ResetAnimatedOverlays(); s_serial = g_psw->serial; }
     OVERLAY& p = s_overlays[plo]; p.plo = plo; p.state = -1;
-    BindLoPartsTable(static_cast<ALO*>(plo), 2, 0x2BD380);
+    BindLoPartsTable(static_cast<ALO*>(plo), 2, S3VA(0x2BD380));
     RemoveLo(g_psw, plo);
 }
 
 // orig: 0x147C20.
 void StartAnimatedOverlay(LO* plo, int oidAseg, int dialog) {
-    if (!plo || !FCidDerivedFrom(plo->Cid(), 0x30)) return;
+    if (!plo || !FCidDerivedFrom(plo->Cid(), S3CID(0x30))) return;
     if (s_serial != g_psw->serial) { ResetAnimatedOverlays(); s_serial = g_psw->serial; }
     OVERLAY& p = s_overlays[plo]; p.plo = plo; p.dialog = dialog;
     p.canClose = p.canSkip = p.accepts = 1;
@@ -269,7 +274,7 @@ void ResetAnimatedOverlays() {
     s_overlays.clear();
     s_owner = nullptr;
     s_serial = 0;
-    g_gl.ReleaseOverlayFrame();
+    if (!g_fKeptWorldLoad) g_gl.ReleaseOverlayFrame();   // (PC: not for a kept world's load, pcloader.h: the running world's overlay)
 }
 
 void ResetAnimatedOverlayGraphics() {

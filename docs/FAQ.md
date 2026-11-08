@@ -20,7 +20,7 @@ unsupported region, an incomplete image or not enough free space.
 
 ## Is Sly 3 playable?
 
-Not yet. Sly 3 is early in development and not fully playable: it installs and plays its opening movies, but most of the game does not work yet.
+Not yet. Sly 3 is early in development and not fully playable. It has been rebuilt on the finished Sly 2 port's engine, which carries most of the work over; for now it installs and plays its opening movies, and the rest is still being ported.
 Follow progress on [Discord](https://discord.com/invite/SfvzvMg7Mk).
 
 ## Where are my files?

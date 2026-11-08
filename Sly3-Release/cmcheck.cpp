@@ -11,6 +11,7 @@
 // The world queries the camera makes (curves, collision avoidance, visibility) are not native yet: the reference's
 // results are replayed from the trace (the arguments are compared too).
 #include "actor.h"
+#include "game/sly3.h"
 #include "so.h"
 #include "cm.h"
 #include "cplcy.h"
@@ -31,7 +32,7 @@ using namespace cmm;
 
 namespace
 {
-constexpr uint32_t A_CLOCK = 0x2DDED0, A_CM = 0x2DDF40;
+constexpr uint32_t A_CLOCK = S3VA(0x2DDED0), A_CM = S3VA(0x2DDF40);
 constexpr uint32_t PC_UPDATECM = 0x14D478, PC_SETCMPOLICY = 0x14E328, PC_REVOKECMPOLICY = 0x14E4C8;
 
 struct REC
@@ -161,7 +162,7 @@ uint32_t AMatOf(uint32_t a, const RAMVIEW& rv)
 {
     const uint32_t vt = VtOf(a, rv);
     const int cid = CidOfVt(vt);
-    if (cid >= 0 && FCidDerivedFrom(cid, 0x30)) return rv.U32(a + 0x60) + 0x40;
+    if (cid >= 0 && FCidDerivedFrom(cid, S3CID(0x30))) return rv.U32(a + 0x60) + 0x40;
     return a + 0xA0;
 }
 
@@ -230,7 +231,7 @@ const CMJOY* PjoyChk()
 {
     static CMJOY s_joy;
     const RAMVIEW& rv = RvCur();
-    const uint32_t a = (rv.U32(0x2DFBC0) & 1) ? 0x2DFC00 : 0x2E0D00;
+    const uint32_t a = (rv.U32(S3VA(0x2DFBC0)) & 1) ? S3VA(0x2DFC00) : S3VA(0x2E0D00);
     s_joy.x = rv.F32(a + 0x103C);
     s_joy.y = rv.F32(a + 0x1040);
     s_joy.uDeflect = rv.F32(a + 0x1044);
@@ -960,7 +961,7 @@ const CRV* PcrvFromRam(uint32_t a, const std::vector<uint8_t>& ram)
     const CRV* pcrv = nullptr;
     float dBest = 1e30f;
     if (s_pswCrv)
-        for (CID cid = 0x0A; cid < g_acls[0x0A].cidLast; ++cid)
+        for (CID cid = S3CID(0x0A); cid >= 0 && cid < g_acls[S3CID(0x0A)].cidLast; ++cid)
         for (LO* plo : s_pswCrv->mpcidaplo[cid])
             if (plo->oid == oid)
                 if (const CRV* p = PcrvFromLo(plo))

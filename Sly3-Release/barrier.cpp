@@ -2,6 +2,8 @@
 // intro's walls Murray walks through, the guards' fences): its lists of objects (+0x150 count, +0x154 the oids: EOPID
 // 456) and classes (+0x164 / +0x168: EOPID 457), and the mode +0x178 (EOPID 458).
 #include "alo.h"
+#include "game/sly3.h"
+#include "worldglobals.h"
 #include "cls.h"
 #include "clock.h"
 #include "frame.h"
@@ -41,13 +43,13 @@ int OverlapKindBarrier(ALO* p, ALO* pOther)
     int coid = 0, ccid = 0;
     for (const OPT& o : p->aopt)
     {
-        if (o.eopid == 456)
+        if (o.eopid == S3EOPID(456))
             for (const OPTVAL& v : o.aval)
                 if (coid++ < 4 && FOidOrAlias(pOther, v.n)) f = true;
-        if (o.eopid == 457)
+        if (o.eopid == S3EOPID(457))
             for (const OPTVAL& v : o.aval)
                 if (ccid++ < 4 && v.n >= 0 && FCidDerivedFrom(pOther->Cid(), static_cast<CID>(v.n))) f = true;  // 0x132B10
-        if (o.eopid == 458 && !o.aval.empty()) fMode = o.aval.front().n != 0;
+        if (o.eopid == S3EOPID(458) && !o.aval.empty()) fMode = o.aval.front().n != 0;
     }
     static const bool s_fPrint = std::getenv("SLY2N_BARRIERPRINT") != nullptr;   // (debug: the barriers against the player)
     if (s_fPrint && (pOther->oid == 7 || std::getenv("SLY2N_BARRIERALL")))
@@ -66,6 +68,7 @@ int OverlapKindBarrier(ALO* p, ALO* pOther)
 std::unordered_map<const LO*, LO*>& MpploToucher()
 {
     static std::unordered_map<const LO*, LO*> s_mp;
+    WORLD_TABLE_LOCAL(s_mp);   // (PC: moved aside while a kept world loads, worldglobals.h)
     return s_mp;
 }
 

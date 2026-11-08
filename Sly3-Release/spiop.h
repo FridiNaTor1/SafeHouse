@@ -5,7 +5,8 @@
 // 989snd volume group). A track plays a "VAGp" file (dialog: mono, its rate in the header) or a " KPV" VPK
 // (music: 2..5 channels interleaved by 0x1000 bytes, header 0x800, {vol, id, pan} per channel at 0x18, loop
 // start at 0x7FC; two channels with the same id are one stereo stream). The game's sound object sets each
-// channel id's volume (the music's stems).
+// channel id's volume (the music's stems). (PC) A converted installation's tracks are WAV (FLAC for the European
+// dialog): the frames the ADPCM decodes to, the VPK's channel table and loop in the WAV's chunks (wavfile.h).
 //
 // The EE calls them through 'SUKR' plugin messages (0x233048 / 0x233088 / 0x2330D0 / 0x233130), function
 // numbers below. Here the streams are decoded from the disc on the sound thread into XAudio2 voices.
@@ -33,6 +34,8 @@ void SpiopStopAll();
 int CSpiopLiveTracks();  // (debug: tracks not free)                                  // fn 10
 
 // Host side.
+void SpiopInit();  // 'SUKR' 0 at boot: the dialog ducker
+uint32_t SpiopActiveGroups();
 void SpiopUpdate();  // the sound thread's refill (240 Hz)
 void SpiopMasterChanged();
 void SpiopPauseGroups(uint32_t mask, bool fPause);
@@ -41,3 +44,4 @@ double SpiopTrackSeconds(uint32_t id);  // the track's play time
 std::string SpiopDescribe();
 // The channel ids of a file (VAGp: one channel id 0), for tools.
 std::string SpiopDescribeFile(uint32_t isector);
+double SpiopTConsumed(uint32_t id);   // (debug: SLY2N_MUSICLAT) a track's seconds the device consumed, -1 none

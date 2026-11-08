@@ -4,6 +4,7 @@
 // build/hand_wip/func_001C21D8.cpp, func_001C26E0.c, src/hand/func_0017E458.c.
 
 #include "navlink.h"
+#include "game/sly3.h"
 
 #include "aijobs.h"
 #include "animfind.h"
@@ -50,7 +51,7 @@ void AddNavLinkRecord(NAVLINK* pl, LO* po)
 {
     if (pl->agoal.size() >= 6) return;
     GOAL g;
-    if (po && FCidDerivedFrom(po->Cid(), 0xA)) g.pcrv = PcrvFromLo(po);
+    if (po && FCidDerivedFrom(po->Cid(), S3CID(0xA))) g.pcrv = PcrvFromLo(po);
     else g.plo = po;
     pl->agoal.push_back(g);
 }
@@ -111,6 +112,10 @@ void DeleteSwNavLinks(const SW* psw)
         MpaoidRegion().erase(plo.get());
     }
 }
+
+// orig 0x00206748's +0xE94 = 0: a pooled guard put away forgets its region list (the next copy's option 301 binds
+// append to an empty list; kept, the list filled to 8 with earlier copies' regions and dropped the new ones)
+void ClearGuardRegions(const LO* plo) { MpaoidRegion().erase(plo); }
 
 // orig 0x001C2170 (the link's update after the load): its ends' points and regions
 void ResolveNavLink(NAVLINK* pl)

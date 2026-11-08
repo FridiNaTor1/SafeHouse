@@ -1,7 +1,10 @@
 // The GL layer, adapted from Sly1-Release gl.cpp (InitGL, CreateFramebuffers) and glshaders.cpp (embedded shader
 // sources, compile errors).
 
+#include "rumble.h"
 #include "gl.h"
+
+#include <cstdlib>
 #include "pcinput.h"
 
 #include "display.h"
@@ -21,6 +24,7 @@
 
 GL g_gl;
 GLSHADER glGlobShader;
+bool g_fGlobBindless = false;
 GLSHADER glCelBorderShader;
 GLSHADER glHudShader;
 GLSHADER glOverlayShader;
@@ -34,6 +38,90 @@ std::string ShaderSource(const char* file)
     if (source.size() >= 3 && static_cast<unsigned char>(source[0]) == 0xEF) source.erase(0, 3);
     return source;
 }
+}
+
+// ARB_bindless_texture usable: the extension reported, its entry points loaded, and a handle made resident and
+// released for a small texture and sampler without a GL error (a broken driver path falls back to bound textures).
+static bool FBindlessWorks()
+{
+    if (!GLAD_GL_ARB_bindless_texture) return false;
+    if (!glGetTextureSamplerHandleARB || !glMakeTextureHandleResidentARB || !glMakeTextureHandleNonResidentARB) return false;
+    while (glGetError() != GL_NO_ERROR) {}
+    GLuint tex = 0, sampler = 0;
+    glGenTextures(1, &tex);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    const uint32_t rgba = 0xFFFFFFFFu;
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, &rgba);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glGenSamplers(1, &sampler);
+    glSamplerParameteri(sampler, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glSamplerParameteri(sampler, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    const GLuint64 h = glGetTextureSamplerHandleARB(tex, sampler);
+    bool fOk = h != 0 && glGetError() == GL_NO_ERROR;
+    if (fOk)
+    {
+        glMakeTextureHandleResidentARB(h);
+        fOk = glGetError() == GL_NO_ERROR;
+        if (fOk) glMakeTextureHandleNonResidentARB(h);
+        fOk = fOk && glGetError() == GL_NO_ERROR;
+    }
+    glDeleteSamplers(1, &sampler);
+    glDeleteTextures(1, &tex);
+    while (glGetError() != GL_NO_ERROR) {}
+    if (!fOk) std::printf("OpenGL: ARB_bindless_texture reported but a handle failed: bound textures\n");
+    return fOk;
+}
+
+bool GLSHADER::FInit(const char* vertexFile, const char* fragmentFile, const char* szPrefix)
+{
+    return FInit(vertexFile, nullptr, fragmentFile, szPrefix);
+}
+
+bool GLSHADER::FInit(const char* vertexFile, const char* geometryFile, const char* fragmentFile, const char* szPrefix)
+{
+    auto withPrefix = [&](std::string src) {
+        const size_t i = src.find("#version");
+        const size_t j = i == std::string::npos ? 0 : src.find('\n', i) + 1;
+        src.insert(j, szPrefix);
+        return src;
+    };
+    const std::string vs = withPrefix(ShaderSource(vertexFile)), fs = withPrefix(ShaderSource(fragmentFile));
+    const char* pvs = vs.c_str();
+    const char* pfs = fs.c_str();
+    const GLuint v = glCreateShader(GL_VERTEX_SHADER);
+    glShaderSource(v, 1, &pvs, nullptr);
+    glCompileShader(v);
+    const GLuint f = glCreateShader(GL_FRAGMENT_SHADER);
+    glShaderSource(f, 1, &pfs, nullptr);
+    glCompileShader(f);
+    bool fOk = CompileErrors(v, "VERTEX", vertexFile) && CompileErrors(f, "FRAGMENT", fragmentFile);
+    GLuint g = 0;
+    if (geometryFile)
+    {
+        const std::string gs = withPrefix(ShaderSource(geometryFile));
+        const char* pgs = gs.c_str();
+        g = glCreateShader(GL_GEOMETRY_SHADER);
+        glShaderSource(g, 1, &pgs, nullptr);
+        glCompileShader(g);
+        fOk = fOk && CompileErrors(g, "GEOMETRY", geometryFile);
+    }
+    GLuint id = 0;
+    if (fOk)
+    {
+        id = glCreateProgram();
+        glAttachShader(id, v);
+        if (g) glAttachShader(id, g);
+        glAttachShader(id, f);
+        glLinkProgram(id);
+        fOk = CompileErrors(id, "PROGRAM", vertexFile);
+        if (!fOk) glDeleteProgram(id);
+    }
+    glDeleteShader(v);
+    if (g) glDeleteShader(g);
+    glDeleteShader(f);
+    if (fOk) ID = id;
+    return fOk;
 }
 
 bool GLSHADER::CompileErrors(GLuint shader, const char* type, const char* file)
@@ -88,9 +176,7 @@ bool GL::FInit(int w, int h, bool fVisible, const char* title, std::string& erro
     if (!cane::initGlfw()) { error = "glfwInit failed (no display?)"; return false; }
     cane::input::installJoystickCallback();
     cane::input::applyBundledMappings();  // Steam passes its virtual pads' mappings in SDL_GAMECONTROLLERCONFIG
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 4);
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 5);
-    glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+    cane::gl::ApplyWindowHints(4, 5);
     glfwWindowHint(GLFW_DEPTH_BITS, 0);
     glfwWindowHint(GLFW_STENCIL_BITS, 0);
     glfwWindowHint(GLFW_VISIBLE, fVisible ? GLFW_TRUE : GLFW_FALSE);
@@ -111,7 +197,7 @@ bool GL::FInit(int w, int h, bool fVisible, const char* title, std::string& erro
     // Reversed Z in [0, 1]: the GS's depth tests (GREATER / GEQUAL, larger = nearer) map one to one.
     // (glad here is the GL 4.3 loader: fetch glClipControl, GL 4.5 / ARB_clip_control, directly.)
     using PFNCLIPCONTROL = void (*)(GLenum, GLenum);
-    auto pfnClipControl = reinterpret_cast<PFNCLIPCONTROL>(glfwGetProcAddress("glClipControl"));
+    auto pfnClipControl = reinterpret_cast<PFNCLIPCONTROL>(cane::gl::ProcAddress("glClipControl"));
     if (!pfnClipControl) { error = "glClipControl (GL 4.5) is required"; return false; }
     constexpr GLenum GL_ZERO_TO_ONE_ = 0x935F;
     pfnClipControl(GL_LOWER_LEFT, GL_ZERO_TO_ONE_);
@@ -120,7 +206,28 @@ bool GL::FInit(int w, int h, bool fVisible, const char* title, std::string& erro
     int fbw = w, fbh = h;
     glfwGetFramebufferSize(window, &fbw, &fbh);
     LayoutDisplay(fbw > 0 ? fbw : w, fbh > 0 ? fbh : h);
-    glGlobShader.Init("glob.vert", "glob.frag");
+    // (perf-3) the pass draws' textures as bindless handles where the driver has them (fewer state changes per frame:
+    // the runs of draws are no longer split by texture); SLY2N_NOBINDLESS=1: bound textures as before.
+    // (release-4) On Windows only with SLY2N_BINDLESS=1: a multi-draw's sub-draws each sample their own handle (a flat
+    // varying: not dynamically uniform), which the Windows GL drivers (AMD's above all) are not known to get right, and
+    // the gain is small (at most 0.22 ms a frame in Paris). Everywhere the extension's
+    // entry points and one handle are tried first (FBindlessWorks); any failure: bound textures.
+#if defined(_WIN32)
+    const bool fBindlessWanted = std::getenv("SLY2N_BINDLESS") && std::atoi(std::getenv("SLY2N_BINDLESS")) != 0;
+#else
+    const bool fBindlessWanted = !std::getenv("SLY2N_NOBINDLESS");
+#endif
+    // (R51) glob.geom clips at the near plane as the original's VU1 program does, so the GS's screen-affine colours
+    // start from the clip-space values there; SLY2N_NEARCLIP=0: GL's own clipping (its noperspective rule extrapolates
+    // under a low camera). If the stage fails to build, the program without it.
+    static const bool s_fNearClip = !(std::getenv("SLY2N_NEARCLIP") && std::atoi(std::getenv("SLY2N_NEARCLIP")) == 0);
+    auto initGlob = [&](const char* szPrefix) {
+        if (s_fNearClip && glGlobShader.FInit("glob.vert", "glob.geom", "glob.frag", (std::string(szPrefix) + "#define GEOM 1\n").c_str())) return true;
+        return glGlobShader.FInit("glob.vert", "glob.frag", szPrefix);
+    };
+    g_fGlobBindless = fBindlessWanted && FBindlessWorks() && initGlob("#extension GL_ARB_bindless_texture : require\n#define BINDLESS 1\n");
+    if (!g_fGlobBindless && !initGlob("")) glGlobShader.Init("glob.vert", "glob.frag");
+    std::printf("OpenGL: textures %s\n", g_fGlobBindless ? "bindless (ARB_bindless_texture)" : "bound");
     glCelBorderShader.Init("celborder.vert", "celborder.frag");
     glHudShader.Init("hud.vert", "hud.frag");
     glOverlayShader.Init("overlay.vert", "overlay.frag");
@@ -291,16 +398,14 @@ bool GL::FWriteScreenshot(const std::string& path)
 
 void GL::Terminate()
 {
+    ShutdownPadRumble();   // (rumble.h: every motor off before the window goes)
     if (window) {
         ReleaseOverlayFrame();
         ResetAnimatedOverlayGraphics();
         glOverlayShader.Delete();
-    }
-    if (window)
-    {
         cane::gl::DestroyContext(window);
-        glfwDestroyWindow(window);
     }
+    if (window) glfwDestroyWindow(window);
     window = nullptr;
     glfwTerminate();
 }

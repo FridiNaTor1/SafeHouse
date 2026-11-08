@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 IXAudio2* g_pxaudio2 = nullptr;
@@ -99,12 +100,23 @@ bool CPcmStream::FOpen(int cch, int rate, float frqMax)
     m_cch = cch;
     m_rate = rate;
     m_iab = 0;
+    // (test: SLY2N_PCMTAP=dir: the frames every stream is fed, dir/stream-<n>-<ch>ch-<rate>.raw, s16 interleaved; the
+    // audio identity check compares these between builds)
+    if (static const char* s_szTap = std::getenv("SLY2N_PCMTAP"); s_szTap)
+    {
+        static int s_cstream = 0;
+        char sz[512];
+        std::snprintf(sz, sizeof(sz), "%s/stream-%04d-%dch-%d.raw", s_szTap, s_cstream++, cch, rate);
+        m_pfTap = std::fopen(sz, "wb");
+    }
     SetLevels(1.0f, 1.0f);
     return true;
 }
 
 void CPcmStream::Close()
 {
+    if (m_pfTap) std::fclose(m_pfTap);
+    m_pfTap = nullptr;
     if (!m_pvoice) return;
     m_pvoice->Stop();
     m_pvoice->FlushSourceBuffers();
@@ -118,6 +130,7 @@ bool CPcmStream::FPush(const int16_t* asample, std::size_t cframe, bool fEnd)
     std::vector<int16_t>& ab = m_aab[m_iab];
     m_iab = (m_iab + 1) % kcBuffer;
     ab.assign(asample, asample + cframe * static_cast<std::size_t>(m_cch));
+    if (m_pfTap && !ab.empty()) std::fwrite(ab.data(), sizeof(int16_t), ab.size(), m_pfTap);
     if (ab.empty()) ab.assign(static_cast<std::size_t>(m_cch), 0);  // an end marker needs a sample
     XAUDIO2_BUFFER buffer{};
     buffer.AudioBytes = static_cast<UINT32>(ab.size() * sizeof(int16_t));

@@ -1,7 +1,10 @@
 #include "po.h"
+#include "game/sly3.h"
 #include "actor.h"
 #include "booty.h"
 #include "task.h"
+#include "game/scptgame3.h"
+#include "game/task3.h"
 #include "replay.h"
 #include "guard.h"
 #include "animfind.h"
@@ -39,8 +42,8 @@ namespace
 {
 SW* s_psw = nullptr;
 
-TASK* PtaskFromLo(LO* plo) { return plo && plo->Cid() == 0x85 ? static_cast<TASK*>(plo) : nullptr; }
-JOB* PjobFromLo(LO* plo) { return plo && plo->Cid() == 0x84 ? static_cast<JOB*>(plo) : nullptr; }
+TASK* PtaskFromLo(LO* plo) { return plo && plo->Cid() == S3CID(0x85) ? static_cast<TASK*>(plo) : nullptr; }
+JOB* PjobFromLo(LO* plo) { return plo && plo->Cid() == S3CID(0x84) ? static_cast<JOB*>(plo) : nullptr; }
 
 // orig 0x15E938 (kinds 5 / 0x105 / 0x405: global; 4: under the owner): natively by oid
 LO* PloFind(OID oid, LO* ploOwner = nullptr)
@@ -60,8 +63,8 @@ LO* PloFind(OID oid, LO* ploOwner = nullptr)
     }
     if (LO* p = PloFindSwObjectByOid(s_psw, oid)) return p;
     // an instance's oid (a proxy's, 0x1C99D8's namespace node) names the instance's first object
-    for (const auto& p : s_psw->aploAll)
-        if (p->oidInstance == oid) return p.get();
+    for (LO* const p : AploOfOid(s_psw, oid))
+        if (p->oidInstance == oid) return p;
     return nullptr;
 }
 TASK* PtaskFind(OID oid) { return PtaskFromLo(PloFind(oid)); }
@@ -70,7 +73,7 @@ std::vector<TASK*> AptaskAll()
 {
     std::vector<TASK*> a;
     if (s_psw)
-        for (LO* plo : s_psw->mpcidaplo[0x85]) a.push_back(static_cast<TASK*>(plo));
+        for (LO* plo : s_psw->mpcidaplo[S3CID(0x85)]) a.push_back(static_cast<TASK*>(plo));
     return a;
 }
 
@@ -198,7 +201,7 @@ void ApplyTaskSms(int n, const std::vector<TASKSME>& ae, int nMode)
         if (e.fInstant && !nMode) continue;
         if (e.iwrec != -1 && e.iwrec != g_transition.iwrecCur) continue;
         LO* plo = PloFind(e.oid);
-        if (!plo || !FCidDerivedFrom(plo->Cid(), 0x30)) continue;
+        if (!plo || !FCidDerivedFrom(plo->Cid(), S3CID(0x30))) continue;
         SMA* psma = nullptr;  // orig 0x1F67E0: the object's SMA (of the SM oid, -1: any)
         for (SMA* p : g_apsma)
             if (p->palo == plo && (e.iSm == -1 || (p->psm && p->psm->oid == e.iSm))) { psma = p; break; }
@@ -553,7 +556,7 @@ void ForceTaskState(TASK* p, int n, LO* ploContext)
 void ChooseJob()
 {
     JOB* pjobFound = nullptr;
-    for (LO* plo : s_psw->mpcidaplo[0x84])
+    for (LO* plo : s_psw->mpcidaplo[S3CID(0x84)])
     {
         JOB* p = static_cast<JOB*>(plo);
         if (p->ptaskFirst && FTaskDone(p->ptaskFirst) && p->ptaskLast && !FTaskDone(p->ptaskLast)) pjobFound = p;
@@ -644,12 +647,12 @@ void DeactivateJob(JOB* p)
 {
     SetJobCur(nullptr);
     if (s_psw->tasks.ptaskChk && s_psw->tasks.ptaskChk->pjob == p) SetTaskChk(nullptr);
-    // in the episode's main world: restarts at its point 0x189 again (SW +0x3C88 / +0x3C8C)
+    // in the episode's main world: restarts at its point sly3::POINT_DEFAULT again (SW +0x3C88 / +0x3C8C)
     if (const WREC* pw = PwrecEpisodeMain(IepisodeCur()))
         if (g_transition.iwrecCur >= 0 && g_transition.iwrecCur < static_cast<int>(AwrecWorlds().size()) &&
             &AwrecWorlds()[g_transition.iwrecCur] == pw)
         {
-            g_transition.oidPointCur = 0x189;
+            g_transition.oidPointCur = sly3::POINT_DEFAULT;
             g_transition.oidKeyCur = -1;
         }
     if (FJobLive(p))
@@ -700,11 +703,11 @@ void JobRestartAtChk(JOB* p)
 void JobEnd(JOB* p)
 {
     s_psw->tasks.pjobEnded = p;
-    if (FReplayJobEnd(s_psw, p)) return;   // (QoL Replay Jobs: back to the episode menu)
-    // orig: back to the episode's main world at its point 0x189 (unless SW +0x3C84)
+    if (FReplayJobEnd(s_psw, p, false)) return;   // (QoL Replay Jobs: back to the episode menu)
+    // orig: back to the episode's main world at its point sly3::POINT_DEFAULT (unless SW +0x3C84)
     if (!FTransitionBusy() && !s_psw->ploExitPending)
         if (const WREC* pw = PwrecEpisodeMain(IepisodeCur()))
-            RequestTransition(s_psw, pw->abRecord, 0x189, -1, 0, -1);
+            RequestTransition(s_psw, pw->abRecord, sly3::POINT_DEFAULT, -1, 0, -1);
 }
 
 // orig 0x00162F60 / 0x00162FD0 / 0x00162F10: the job complete (the last task done)
@@ -717,7 +720,7 @@ void JobCompleteClose(JOB* p)
 }
 void JobCompleteNext(JOB* p)
 {
-    if (FReplayJobEnd(s_psw, p)) return;   // (QoL Replay Jobs: not the story's next task: back to the episode menu)
+    if (FReplayJobEnd(s_psw, p, true)) return;   // (QoL Replay Jobs: not the story's next task: back to the episode menu)
     // TODO(M4): 0x1A4E70 / 0x1A4E80 (the game's pending state)
     if (p->ptaskNext) RequestTaskState(p->ptaskNext, 4, p);
     else if (LO* pexit = p->ploCC)
@@ -836,7 +839,7 @@ void RestartTask(TASK* p)
     ChangeTaskState(p, 1);
     ActivateTask(p);
     SetProgressPoCurrent(p->oidPo);
-    const OID oidPoint = p->idChk == -1 ? 0x189 : p->idChk;
+    const OID oidPoint = p->idChk == -1 ? sly3::POINT_DEFAULT : p->idChk;
     const auto& awrec = AwrecWorlds();
     const uint8_t* pchk = p->iwrec >= 0 && p->iwrec < static_cast<int>(awrec.size()) ? awrec[p->iwrec].abRecord : nullptr;
     RequestTransition(s_psw, pchk, oidPoint, -1, 4, 0x30A);
@@ -1126,6 +1129,12 @@ void UpdateTask(LO* plo)
     }
     if (p->ploShown)
     {
+        if (std::getenv("SLY2N_TASKMARKERS") && p->nState == 1 && !p->ploShown->fInWorld)
+        {
+            const glm::vec3 pos = PosAi(p->ploShown);
+            std::printf("taskmarker %d object %d at %.3f %.3f %.3f checkpoint %d world %d hero %d\n",
+                        p->oid, p->ploShown->oid, pos.x, pos.y, pos.z, p->idChk, p->iwrec, p->oidPo);
+        }
         if (p->nState == 1 && !s_psw->tasks.pjobCur) AddLo(s_psw, p->ploShown);
         else RemoveLo(s_psw, p->ploShown);
     }
@@ -1175,7 +1184,7 @@ struct INITTASKUPDATES
             static int s_c = 0;
             const char* sz = std::getenv("SLY2N_JOBCOMPLETE");
             if (sz && !std::strcmp(sz, "list") && s_c++ == 2)
-                for (LO* plo : psw->mpcidaplo[0x84])
+                for (LO* plo : psw->mpcidaplo[S3CID(0x84)])
                     if (JOB* p = PjobFromLo(plo))
                         std::printf("job %d: last %d exit %d\n", p->oid, p->ptaskLast ? p->ptaskLast->oid : -1, p->ploCC ? p->ploCC->oid : -1);
             // (debug: SLY2N_TASKSET="task:state@frame[,task:state@frame...]" requests those task states at those updates,
@@ -1216,7 +1225,7 @@ void InitTasks(SW* psw)
     psw->tasks.grfReq = g_transition.req.flags;
     psw->tasks.oidPointNext = -1;
     // the fields of the options (grf 0x80/0x90 at the original offsets)
-    for (LO* plo : psw->mpcidaplo[0x85])
+    for (LO* plo : psw->mpcidaplo[S3CID(0x85)])
     {
         TASK* p = static_cast<TASK*>(plo);
         p->idDialog5C = NField(p, 0x5C, -1);
@@ -1230,6 +1239,12 @@ void InitTasks(SW* psw)
         p->idChk = NField(p, 0xB8, -1);
         p->iwrec = NField(p, 0xBC, -1);
         p->oidPo = NField(p, 0xC0, -1);
+        if (std::getenv("SLY2N_TASKMARKERS") && p->ploShown)
+        {
+            const glm::vec3 pos = PosAi(p->ploShown);
+            std::printf("taskentry %d object %d at %.3f %.3f %.3f checkpoint %d world %d hero %d\n",
+                        p->oid, p->ploShown->oid, pos.x, pos.y, pos.z, p->idChk, p->iwrec, p->oidPo);
+        }
         p->ploC4 = PloFind(NField(p, 0xC4, -1));
         p->nMode = NField(p, 0xF4, 0);
         p->ploContext = PloFind(NField(p, 0xF8, -1));
@@ -1239,7 +1254,7 @@ void InitTasks(SW* psw)
         p->prE0 = PrFromOption(p, 1298);
         p->prE8 = PrFromOption(p, 1299);
     }
-    for (LO* plo : psw->mpcidaplo[0x84])
+    for (LO* plo : psw->mpcidaplo[S3CID(0x84)])
     {
         JOB* p = static_cast<JOB*>(plo);
         p->f74 = NField(p, 0x74, 0);
@@ -1370,13 +1385,18 @@ void SuckOnEvent(int n, LO* plo)
 void BroadcastTaskEvent(SW* psw, int n, LO* plo)
 {
     if (!psw) return;
+    if (FScripts3Active())   // (Sly 3: game/task3.cpp's broadcast 0x1854C8, the code translated)
+    {
+        if (const int code3 = Code3FromCode2(n); code3 >= 0) Broadcast3(code3, plo);
+        return;
+    }
     s_psw = psw;
     TaskMgrOnEvent(n);
     SuckOnEvent(n, plo);  // 0x154A90 (D_002DE578's handler)
     JOB* pjob = psw->tasks.pjobCur;
-    if (std::getenv("SLY2N_TASKDEBUG") && n == 0x3B)
+    if ((std::getenv("SLY2N_TASKDEBUG") && n == 0x3B) || (std::getenv("SLY2N_TASKEVENTPRINT") && n == 0x1A))
     {
-        std::printf("task event 0x3B (bought): active");
+        std::printf("task event 0x%X (object %d, job %d): active", n, plo ? plo->oid : -1, pjob ? pjob->oid : -1);
         for (TASK* p : psw->tasks.aptaskActive) std::printf(" %d(job %d live %d)", p->oid, p->pjob ? p->pjob->oid : -1, int(FTaskLive(p)));
         std::printf("\n");
     }
@@ -1388,6 +1408,13 @@ void BroadcastTaskEvent(SW* psw, int n, LO* plo)
 // orig 0x00161F48: a checkpoint's task states (method 794's entries)
 void ApplyCheckpointTasks(SW* psw, LO* pchk, const std::vector<std::pair<OID, int>>& aent)
 {
+    if (FScripts3Active())   // (Sly 3: orig3 0x185908, game/task3.cpp)
+    {
+        std::vector<int> a;
+        for (const auto& [oid, n] : aent) { a.push_back(oid); a.push_back(n); }
+        ApplyCheckpointTasks3(a.data(), int(aent.size()), pchk);
+        return;
+    }
     s_psw = psw;
     for (const auto& [oid, n] : aent)
         if (TASK* p = PtaskFind(oid)) RequestTaskState(p, n, pchk);
@@ -1396,6 +1423,15 @@ void ApplyCheckpointTasks(SW* psw, LO* pchk, const std::vector<std::pair<OID, in
 // orig 0x001651D8
 void RequestTaskStartByOid(SW* psw, const uint8_t* pchk, OID oidTask)
 {
+    // (Sly 3: orig3 0x189E70: the task keys queue it for the world start, game/task3.cpp; the world (re)loads)
+    {
+        FRequestTaskStartByOid3(oidTask);
+        g_taskmgr.oidJob = -1;
+        g_taskmgr.oidTask = -1;
+        g_taskmgr.oidQueued = -1;
+        RequestTransition(psw, pchk, sly3::POINT_DEFAULT, -1, 8, -1);
+        return;
+    }
     s_psw = psw;
     if (TASK* p = psw ? PtaskFind(oidTask) : nullptr)
     {
@@ -1406,14 +1442,14 @@ void RequestTaskStartByOid(SW* psw, const uint8_t* pchk, OID oidTask)
     g_taskmgr.oidJob = -1;
     g_taskmgr.oidTask = -1;
     g_taskmgr.oidQueued = oidTask;
-    RequestTransition(psw, pchk, 0x189, -1, 8, -1);
+    RequestTransition(psw, pchk, sly3::POINT_DEFAULT, -1, 8, -1);
 }
 
 // orig 0x00161660
 int NTasksPercentDone(SW* psw)
 {
     int c = 0, cDone = 0;
-    for (LO* plo : psw->mpcidaplo[0x85])
+    for (LO* plo : psw->mpcidaplo[S3CID(0x85)])
     {
         const TASK* p = static_cast<const TASK*>(plo);
         if (!p->aptaskNext.empty())  // (orig +0xA0)
@@ -1482,6 +1518,12 @@ void UpdateJobTimer(float dt)
 // (for the task counters, screenrt.cpp 0x211F90) a task by oid: its state +0x54 (-2 none) and done (0x164030)
 int NTaskStateOid(OID oid, bool* pfDone)
 {
+    if (FScripts3Active())   // (Sly 3: game/task3.cpp)
+    {
+        const TASK3* p3 = PtaskFind3(oid);
+        if (pfDone) *pfDone = p3 && p3->nState >= 2;
+        return p3 ? p3->nState : -2;
+    }
     TASK* p = PtaskFind(oid);
     if (pfDone) *pfDone = p && FTaskDone(p);
     return p ? p->nState : -2;
@@ -1490,9 +1532,55 @@ int NTaskStateOid(OID oid, bool* pfDone)
 // (debug, SLY2N_TASKREQ in game.cpp: a task's state requested by its oid; false when there is no such task)
 bool FRequestTaskStateOid(int oid, int n)
 {
+    if (FScripts3Active())   // (Sly 3: game/task3.cpp)
+    {
+        if (!PtaskFind3(oid)) return false;
+        RequestTaskState3(oid, n);
+        return true;
+    }
     TASK* p = PtaskFind(oid);
     if (!p) return false;
     RequestTaskState(p, n, nullptr);
+    return true;
+}
+
+// (debug key F9 / SLY2N_COMPLETEJOBAT, game.cpp) the current job completed as if each of its remaining tasks were done:
+// its last task forced done through the task manager (method 1281, ForceTaskState: ChangeTaskState collects every
+// prerequisite not yet done, in order, so the job's earlier tasks are done first and its successors unlock), then the
+// job's own end runs (JobTaskReached: the "Job Completed!" sprite, the closing sequence, the autosave and the next
+// task / the exit). Nothing when no job is current, its end has begun or a world change is under way.
+std::string StrLocalized(const SW* psw, int id);   // splayer.cpp
+bool FDebugCompleteJob()
+{
+    JOB* pjob = s_psw ? s_psw->tasks.pjobCur : nullptr;
+    if (!pjob || !pjob->ptaskLast)
+    {
+        std::printf("F9 complete job: not in a job (world %d)\n", g_transition.iwrecCur);
+        return false;
+    }
+    if (FTransitionBusy() || pjob->nSeq != 0 || FTaskDone(pjob->ptaskLast))
+    {
+        std::printf("F9 complete job: job %d is already ending\n", pjob->oid);
+        return false;
+    }
+    int cLeft = 0;
+    for (TASK* pt : AptaskAll())
+        if (pt->pjob == pjob && pt->nState >= 0 && pt->nState < 2) ++cLeft;
+    const TASK* pcur = s_psw->tasks.ptaskCur;
+    std::printf("F9 complete job: skipped job %d \"%s\" (episode %d (0 the prologue), world %d, current task %d, last task %d, %d tasks left)\n",
+                pjob->oid, pjob->n6c != -1 ? StrLocalized(s_psw, pjob->n6c).c_str() : "?", IepisodeCur(), g_transition.iwrecCur,
+                pcur ? pcur->oid : -1, pjob->ptaskLast->oid, cLeft);
+    std::fflush(stdout);
+    TASK* plast = pjob->ptaskLast;
+    ForceTaskState(plast, 2, nullptr);
+    // (a last task of another world (filtered out here, +0x50: e.g. Aerial Assault's, played in its own level) is done
+    // without its job reacting (ChangeTaskState's JobTaskReached needs it live): the job's own end run here instead, as
+    // the task's world would (the sprite, the closing sequence, the autosave and the next task / the exit))
+    if (FTaskDone(plast) && !FTaskLive(plast) && pjob->nSeq == 0 && FJobCur(pjob) && FJobLive(pjob) && !FTransitionBusy())
+    {
+        std::printf("F9 complete job: last task %d is not in this world: job %d's end run here\n", plast->oid, pjob->oid);
+        JobComplete(pjob);
+    }
     return true;
 }
 
@@ -1541,6 +1629,9 @@ std::vector<JOBINFO> AjobinfoOfLoadedWorld(SW* psw)
             const TASK* pf = pj->ptaskFirst;
             j.oidTaskFirst = pf->oid;
             j.oidTaskLast = pj->ptaskLast ? pj->ptaskLast->oid : -1;
+            if (pj->ptaskLast)
+                for (TASK* px : pj->ptaskLast->aptaskNext)
+                    if (px->pjob && px->pjob != pj) { j.oidTaskNext = px->oid; break; }
             j.akeyFirst = pf->prE0.akey;
             if (pj->ptaskLast) j.akeyLast = pj->ptaskLast->prE0.akey;
             j.iwrecFirst = pf->iwrec;
@@ -1550,7 +1641,32 @@ std::vector<JOBINFO> AjobinfoOfLoadedWorld(SW* psw)
             it = ajob.end() - 1;
         }
         it->aoidTask.push_back(pt->oid);
+        for (const PROGREF* pr : {&pt->prC8, &pt->prD0})
+            if (pr->F()) it->aprCount.push_back(*pr);
+        if (pt->prD8.F()) it->aprFlag.push_back(pt->prD8);
+        if (it->aoidTask.size() == 1)
+        {
+            if (pj->prD0.F()) it->aprCount.push_back(pj->prD0);
+            if (pj->prD8.F()) it->aprFlag.push_back(pj->prD8);
+        }
     }
+    if (const char* szf = std::getenv("SLY2N_STRFIND"))   // (debug: the localized strings containing the text)
+        for (int id = 0; id < 4000; ++id)
+            if (const std::string str = StrLocalized(psw, id); str.find(szf) != std::string::npos)
+                std::printf("strfind: %d '%s'\n", id, str.substr(0, 120).c_str());
+    if (std::getenv("SLY2N_REPLAYPRINT"))   // (debug: every job object of the world, its first / last task, its tasks)
+        for (LO* plo : psw->mpcidaplo[S3CID(0x84)])
+            if (JOB* pj = PjobFromLo(plo))
+            {
+                int c = 0;
+                for (TASK* pt : AptaskAll()) c += pt->pjob == pj;
+                std::printf("replay-job: %d name %d '%s' first %d last %d tasks %d exit %d\n", pj->oid, pj->n6c,
+                            pj->n6c != -1 ? StrLocalized(psw, pj->n6c).c_str() : "", pj->ptaskFirst ? pj->ptaskFirst->oid : -1,
+                            pj->ptaskLast ? pj->ptaskLast->oid : -1, c, pj->ploCC ? pj->ploCC->oid : -1);
+                if (pj->ptaskLast)
+                    for (TASK* px : pj->ptaskLast->aptaskNext)
+                        std::printf("replay-job:   next %d (job %d) c4 %d\n", px->oid, px->pjob ? px->pjob->oid : -1, px->ploC4 ? px->ploC4->oid : -1);
+            }
     psw->tasks = tasksSaved;
     s_psw = pswSaved;
     return ajob;

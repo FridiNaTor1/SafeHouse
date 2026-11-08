@@ -4,6 +4,8 @@
 #include "guard.h"
 #include "lo.h"
 #include "brx.h"
+#include "activate.h"
+#include "animfind.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -22,7 +24,16 @@ void TellGuardCommands(LO* pguard, LO* pcmds, bool fRun)
         if (CMDLIST* pl = dynamic_cast<CMDLIST*>(pcmds))
         {
             std::fprintf(stderr, "scpt: the command list %d:", pcmds->oid);
-            for (auto& c : pl->acmd) std::fprintf(stderr, " op %d oid %d n8 %d;", c->op, c->oid, c->n8);
+            for (auto& c : pl->acmd)
+            {
+                std::fprintf(stderr, " op %d oid %d n8 %d", c->op, c->oid, c->n8);
+                if (LO* po = c->oid != -1 ? PloFindSwNearest(pcmds, c->oid) : nullptr)
+                {
+                    const glm::vec3 v = PosLoWorld(po);
+                    std::fprintf(stderr, " (cid 0x%X at %.0f %.0f %.0f)", po->Cid(), v.x, v.y, v.z);
+                }
+                std::fprintf(stderr, " g14 %g n10 %d;", c->g14, c->n10);
+            }
             std::fprintf(stderr, "\n");
         }
     if (!pj) return;
@@ -40,28 +51,6 @@ bool FGuardRunsCommands(LO* pguard, LO* pcmds)
     return pj && pj->msg.k == 5 && pj->msg.plo == pcmds;
 }
 
-// The guard class 0x3C (the one SCPT 1855 drives in job 1852): its update 0x1BA128 starts with the guards' base
-// 0x207350 (guard.cpp); TODO(ai): the rest (its +0x2C0 bits 0x209A68, the carried object, 0x227C90)
-#include "update.h"
-namespace
-{
-void UpdateGuard3C(LO* plo)
-{
-    static int s_c = 0;
-    if (std::getenv("SLY2N_SCPTPRINT") && s_c++ < 3)
-        if (GUARD* pg = PguardFromLo(plo))
-        {
-            std::fprintf(stderr, "ai: guard 0x3C %d update: mode %d inworld %d jobs", plo->oid, pg->nMode, plo->fInWorld);
-            for (auto& j : pg->stack.ajob) std::fprintf(stderr, " 0x%X", j->cid);
-            std::fprintf(stderr, "\n");
-        }
-    if (PFNUPDATE pfn = PfnUpdateOrig(0x207350)) pfn(plo);
-}
-struct INITGUARD3C
-{
-    INITGUARD3C() { RegisterLoUpdate(0x1BA128, UpdateGuard3C); }
-} s_initguard3c;
-}  // namespace
 
 // The command lists' loader methods (cid 0x71, EOPIDs 595..612: thunks 0x105D58..0x1065E0 -> 0x170B40..0x170DD0):
 // each appends a command (0x170E00) with its arguments.
@@ -117,12 +106,15 @@ struct INITCMDLOADERS
             }
             return Void();
         });
-        // 7: go to (+0x10 an object, +0x14 a float)
+        // 7: go to (+0x10 an object, +0x14 a float). The splice's arguments are (oid, float, oid) (OTYP 6 / 1 / 6) and
+        // 0x170C90 stores the float at +0x14 and the third argument at +0x10 (the object faced on the way: JOBGOTO's
+        // +0x40, move kind 8). R42: read the other way round, the Ep4 Contessa's chase legs (77370: (pt 50 9)) had no
+        // face object (Murray, 9), so she walked forward instead of running backwards facing him.
         RegisterObjectMethod(0x106150, [](LO* p, const std::vector<CRef>& a) {
             if (CMD* c = Append(p, 7, NArg(a, 0)))
             {
-                c->n10 = NArg(a, 1, -1);
-                c->g14 = GArg(a, 2);
+                c->g14 = GArg(a, 1);
+                c->n10 = NArg(a, 2, -1);
             }
             return Void();
         });
@@ -140,6 +132,44 @@ struct INITCMDLOADERS
         });
         RegisterObjectMethod(0x1065E0, [](LO* p, const std::vector<CRef>& a) {
             if (CMD* c = Append(p, 15, NArg(a, 0))) c->n8 = NArg(a, 1);
+            return Void();
+        });
+
+        // (the AI code) Sly 3's command builders where its arguments differ from Sly 2's (0x197338 / 0x197388 / 0x1973B8 /
+        // 0x197420 / 0x197528, by the Sly 3 thunks of EOPIDs 732 / 734 / 735 / 736 / 740): the copied commands keep
+        // Sly 2's fields; Sly 3's extra words are kept where Sly 2 has none (TODO(sly3 ai): their use in the jobs).
+        // op 3 (look at): (oid, n -> +0x8)
+        RegisterObjectMethod3(0x107FE0, [](LO* p, const std::vector<CRef>& a) {
+            if (CMD* c = Append(p, 3, NArg(a, 0))) c->n8 = NArg(a, 1);
+            return Void();
+        });
+        // op 5 (wait): (g -> +0x8, oid): Sly 3 names an object too
+        RegisterObjectMethod3(0x108110, [](LO* p, const std::vector<CRef>& a) {
+            if (CMD* c = Append(p, 5, NArg(a, 1, -1))) c->g8 = GArg(a, 0);
+            return Void();
+        });
+        // op 6 (along a path): (oid, +0x8, +0xC, +0x10, !arg4 -> +0x14): Sly 2's +0x8 / +0xC first
+        RegisterObjectMethod3(0x1081B8, [](LO* p, const std::vector<CRef>& a) {
+            if (CMD* c = Append(p, 6, NArg(a, 0)))
+            {
+                c->n8 = NArg(a, 1);
+                c->nC = NArg(a, 2);
+            }
+            return Void();
+        });
+        // op 7 (go to): (oid, g -> +0x10, n -> +0xC, n -> +0x14, !arg4 -> +0x18). Sly 2's (oid, g -> +0x14, the faced
+        // object -> +0x10): the float and the object are the first two after the goal
+        RegisterObjectMethod3(0x108298, [](LO* p, const std::vector<CRef>& a) {
+            if (CMD* c = Append(p, 7, NArg(a, 0)))
+            {
+                c->g14 = GArg(a, 1);
+                c->n10 = NArg(a, 2, -1);
+            }
+            return Void();
+        });
+        // op 13 (use an object): (oid, +0x8, +0xC)
+        RegisterObjectMethod3(0x108510, [](LO* p, const std::vector<CRef>& a) {
+            if (CMD* c = Append(p, 13, NArg(a, 0))) c->n8 = NArg(a, 1);
             return Void();
         });
     }

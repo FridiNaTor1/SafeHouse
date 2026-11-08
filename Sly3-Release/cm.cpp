@@ -2,7 +2,7 @@
 // m_14F030_p3.cpp (oracle-verified ports of 0x14D3D8..0x14FA88) and Sly1-Release cm.cpp (names, RecalcCm's aspect
 // handling); the order of operations is the original's.
 #include "cm.h"
-#include "sly3/ids3.h"
+#include "debugmenu.h"
 
 #include "cplcy.h"
 #include "display.h"
@@ -13,6 +13,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 CM g_cm;
@@ -215,6 +217,16 @@ void UpdateCmMat4(CM* pcm)
         const glm::mat3 matJolt = BuildRotateMatrixVector(s_rotJolt * s);
         const glm::mat3 mat = MulMat3(matJolt, pcm->mat);
         pcm->matWorldToClip = CombineEyeLookAtProj(MatCam(mat, pcm->pos), pcm->matProj);
+        if (static const bool trace = std::getenv("SLY2N_CMJOLTTRACE") != nullptr; trace && dt >= 0.0f && dt <= 0.2f)
+        {
+            std::printf("cmjolt frame t %.9g dt %.9g kind %d angle %.9g base", TCm(), dt, pcm->nJolt, s_rotJolt.x * s);
+            for (int i = 0; i < 3; ++i) for (int j = 0; j < 3; ++j) std::printf(" %.9g", pcm->mat[i][j]);
+            std::printf(" shaken");
+            for (int i = 0; i < 3; ++i) for (int j = 0; j < 3; ++j) std::printf(" %.9g", mat[i][j]);
+            std::printf(" clip");
+            for (int i = 0; i < 4; ++i) for (int j = 0; j < 4; ++j) std::printf(" %.9g", pcm->matWorldToClip.r[i][j]);
+            std::printf("\n");
+        }
     }
     if (!FInvertMatrix4(pcm->matWorldToClip, &pcm->matClipToWorld)) pcm->matClipToWorld = MATRIX4{};
     BuildFrustrum(pcm->mat, pcm->xScreenRange, pcm->yScreenRange, pcm->anormalFrustrum.data());
@@ -361,7 +373,7 @@ void SpringCm(CM* pcm, glm::vec4* ppos, glm::vec4* pv, const glm::vec4& posTarge
 void AdjustCmCpdefi(CM* pcm, LO* psoFocus, CPDEFI* pcpdefi)
 {
     const glm::vec4 dposAdjust = CalcCmAdjust(pcm, pcpdefi);
-    const bool fJt = g_cmworld.pfnFIsLoDerivedFrom && g_cmworld.pfnFIsLoDerivedFrom(psoFocus, Icid(CID3::PLAYER));
+    const bool fJt = g_cmworld.pfnFIsLoDerivedFrom && g_cmworld.pfnFIsLoDerivedFrom(psoFocus, 0x34);
     if (fJt)
     {
         const int jtfock = g_cmworld.pfnJtfock ? g_cmworld.pfnJtfock(psoFocus) : 0;
@@ -411,6 +423,7 @@ void GetCmCpdefi(CM* pcm, LO* psoFocus, CPDEFI* pcpdefi)
 CMSOLIDS AsolidCm(const glm::vec3& a, const glm::vec3& b)
 {
     CMSOLIDS asolid;
+    if (FDebugNoclipCamera()) return asolid;   // (PC addition, debug menu only: the noclip's camera ignores walls too)
     const glm::vec3 mn = glm::min(a, b), mx = glm::max(a, b);
     for (OXA* poxa : g_physw.apoxaActive)
     {
@@ -664,6 +677,8 @@ void JoltCm(CM* pcm, int n)
 {
     pcm->tJolt = TCm();
     pcm->nJolt = n;
+    if (static const bool trace = std::getenv("SLY2N_CMJOLTTRACE") != nullptr; trace)
+        std::printf("cmjolt start t %.9g kind %d\n", pcm->tJolt, n);
 }
 
 // orig: 0x0014F768

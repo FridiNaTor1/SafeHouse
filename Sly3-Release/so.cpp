@@ -1,9 +1,11 @@
 #include <execinfo.h>
-#include "sly3/ids3.h"
+#include "game/sly3.h"
+#include "worldglobals.h"
 // The ALO family's physics runtime (orig module 0x1F2108-0x1F8DD8; so.h). Ported from the reference's so_p3.cpp,
 // so_c.cpp (oracle-verified ports of the original's code) and the decomp; the order of operations is kept.
 
 #include "so.h"
+#include "damage.h"
 #include "stepphys.h"
 
 #include "mat.h"
@@ -21,6 +23,7 @@
 
 
 PHYSW g_physw;
+WORLD_TABLE(g_physw);   // (PC: moved aside while a kept world loads, worldglobals.h)
 bool (*g_pfnFAloActive)(ALO* palo) = nullptr;
 
 namespace
@@ -127,7 +130,7 @@ REGENT* PregentEnsure(ALO* palo)
     {
         auto pre = std::make_shared<REGENT>();
         pre->palo = palo;
-        pre->sRadius = FCidDerivedFrom(palo->Cid(), Icid(CID3::PLAYER)) ? 150.0f : 75.0f;
+        pre->sRadius = FCidDerivedFrom(palo->Cid(), S3CID(0x34)) ? 150.0f : 75.0f;
         pre->gMass = 1.0f;
         ps->pregent = pre;
     }
@@ -345,7 +348,7 @@ void RemoveSoeFromOxa(ALO* p, SOE* pe)
     if (!pe->fInOxa || !FContains(poxa->apsoe, pe)) return;
     RemoveFrom(poxa->apsoe, pe);
     pe->fInOxa = false;
-    // (bit 51: 0x1A00D0, the world's sensor list: not modelled)
+    if (pe->f51) RemoveSafeGroundReferences(nullptr, pe);  // 0x1A00D0 (safe-place histories)
     DetachAloContacts(p);
     if (poxa->apsoe.empty())
     {
@@ -722,7 +725,7 @@ void ReRootAlo(ALO* p)
             if (apo.size() >= 0x40) return;
             apo.push_back(pa);
             for (LO* pc : pa->aploChild)
-                if (FCidDerivedFrom(pc->Cid(), Icid(CID3::ALO))) self(self, static_cast<ALO*>(pc));
+                if (FCidDerivedFrom(pc->Cid(), S3CID(0x30))) self(self, static_cast<ALO*>(pc));
         };
         collect(collect, p);
         for (ALO* po : apo)
@@ -762,7 +765,7 @@ void SetAloIced(ALO* p, bool f)
     if (f == (((s.grf148 >> 35) & 1) != 0)) return;
     s.grf148 = (s.grf148 & ~FL148_ICED) | (uint64_t(f) << 35);
     for (LO* pc : p->aploChild)
-        if (FCidDerivedFrom(pc->Cid(), Icid(CID3::ALO))) SetAloIced(static_cast<ALO*>(pc), f);
+        if (FCidDerivedFrom(pc->Cid(), S3CID(0x30))) SetAloIced(static_cast<ALO*>(pc), f);
 }
 
 // orig: 0x001A62E8 func_001A62E8 (the object's position: its world matrix (vt slot 31: ALO 0x1F3FA0, the object
@@ -782,9 +785,54 @@ glm::vec3 VelAloPos(ALO* p)
 }
 NATIVEFN(0x1F4440, VelAloPos);
 
+// (fLoad: the world loader's velocity options, EOPIDs 29 / 30 / 75 / 76, anim.cpp.) The original applies them while the
+// object loads: its records' world matrices were just made (0x22FAA0) from the local matrices as read and from the
+// records loaded before it; a record loaded later (e.g. an ancestor loaded after the object, as world 14's 73074 above
+// 8845) did not exist yet, and a copy's options were converted once, in its template (CloneLo copies the velocity).
+// Natively the world matrices are not made here and placements / starts have changed some locals, so the load-time
+// matrices are composed from each record's loaded local (XF::matLoad), up to the object's own load (XF::nLoad).
+// R55: world 32's watermills (42546 / 42127 / 40859 / 41714, option 76 (0 0 w)) spin about their wheels' axles, the
+// local z: the reference's records hold w times their z rows ((-0.471 0.518 0) for 42546); natively (R16's raw
+// vector) world z. tools/veloptregress.py checks every world's options against the original's post-load RAM.
+static const XF* PxfLoadOf(const XF* pxf)
+{
+    for (int i = 0; pxf && pxf->palo && pxf->palo->ploCloneOf && i < 8; ++i)
+    {
+        const ALO* pt = static_cast<const ALO*>(pxf->palo->ploCloneOf);
+        const ALO* pa = pxf->palo;
+        const XF* pnext = nullptr;
+        for (std::size_t j = 0; j < pa->axf.size() && j < pt->axf.size(); ++j)
+            if (pa->axf[j].get() == pxf) { pnext = pt->axf[j].get(); break; }
+        if (!pnext) break;
+        pxf = pnext;
+    }
+    return pxf;
+}
+static uint32_t NLoadOfAlo(const ALO* palo)
+{
+    for (int i = 0; palo && palo->ploCloneOf && i < 8; ++i) palo = static_cast<const ALO*>(palo->ploCloneOf);
+    uint32_t n = 0;
+    if (palo)
+        for (const auto& up : palo->axf) n = std::max(n, up->nLoad);
+    return n;
+}
+static glm::mat3 Mat3LoadWorld(const XF* pxf, uint32_t nLoadMax)
+{
+    glm::mat3 m(1.0f);
+    for (int i = 0; (pxf = PxfLoadOf(pxf)) && pxf->nLoad <= nLoadMax && i < 64; pxf = pxf->pxfRef, ++i)
+        m = Mat3Of(pxf->matLoad) * m;
+    return m;
+}
+static glm::vec3 VecConvertXfsLoad(const ALO* palo, const XF* pxfFrom, const XF* pxfTo, const glm::vec3& v)
+{
+    const uint32_t n = NLoadOfAlo(palo);
+    glm::vec3 r = pxfFrom ? Mat3LoadWorld(pxfFrom, n) * v : v;
+    return pxfTo ? InverseMatrix3(Mat3LoadWorld(pxfTo, n)) * r : r;
+}
+
 // orig: 0x001F4488 func_001F4488 (ALO vt slot 35: the position record's velocity set so that it reaches q from
 // slot 33's position, in its parent's space; woken, dirty, 0x1F5078, not iced)
-void SetAloVelocityTo(ALO* p, const glm::vec3& q)
+void SetAloVelocityToLoad(ALO* p, const glm::vec3& q, bool fLoad)
 {
     XF* po = PxfPos(p);
     if (!po || po->kind != 1) return;
@@ -793,12 +841,13 @@ void SetAloVelocityTo(ALO* p, const glm::vec3& q)
     using PFN = glm::vec3 (*)(ALO*);
     PFN pfn = reinterpret_cast<PFN>(PvNativeVt(p, 33));
     const glm::vec3 cur = pfn ? pfn(p) : VelAloPos(p);
-    po->vel = glm::vec4(VecConvertXfs(nullptr, po->pxfRef, q - cur), po->vel.w);
+    po->vel = glm::vec4(fLoad ? VecConvertXfsLoad(p, nullptr, po->pxfRef, q - cur) : VecConvertXfs(nullptr, po->pxfRef, q - cur), po->vel.w);
     HoldXfMode(p, po);
     MarkAloDirty(p);
     WakeAlo(p);
     SetAloIced(p, false);
 }
+void SetAloVelocityTo(ALO* p, const glm::vec3& q) { SetAloVelocityToLoad(p, q, false); }
 NATIVEFN(0x1F4488, SetAloVelocityTo);
 
 // orig: 0x001F4558 func_001F4558 (ALO vt slot 34: the rotation record's angular velocity: its motion matrix
@@ -819,7 +868,7 @@ NATIVEFN(0x1F4558, AngVelAlo);
 
 // orig: 0x001F46D8 func_001F46D8 (ALO vt slot 36: the rotation record's angular velocity set so that it reaches
 // pos from slot 34's, in its parent's space)
-void SetAloAngVelocityTo(ALO* p, const glm::vec3& pos)
+void SetAloAngVelocityToLoad(ALO* p, const glm::vec3& pos, bool fLoad)
 {
     XF* obj = PxfRot(p);
     if (!obj || obj->kind != 6) return;
@@ -828,26 +877,28 @@ void SetAloAngVelocityTo(ALO* p, const glm::vec3& pos)
     using PFN = glm::vec3 (*)(ALO*);
     PFN pfn = reinterpret_cast<PFN>(PvNativeVt(p, 34));
     const glm::vec3 cur = pfn ? pfn(p) : AngVelAlo(p);
-    glm::mat3 n = Mat3Of(obj->matWorld);
+    const glm::mat3 w = fLoad ? Mat3LoadWorld(obj, NLoadOfAlo(p)) : Mat3Of(obj->matWorld);
+    glm::mat3 n = w;
     NormalizeRotateMatrix3(&n);
     const glm::mat3 inv = InverseMatrix3(n);
-    const glm::mat3 r = Mat3Of(obj->matWorld) * inv;
+    const glm::mat3 r = w * inv;
     const glm::vec3 v = r * (pos - cur);
-    obj->vel = glm::vec4(VecConvertXfs(nullptr, obj->pxfRef, v), obj->vel.w);
+    obj->vel = glm::vec4(fLoad ? VecConvertXfsLoad(p, nullptr, obj->pxfRef, v) : VecConvertXfs(nullptr, obj->pxfRef, v), obj->vel.w);
     HoldXfMode(p, obj);
     MarkAloDirty(p);
     WakeAlo(p);
     SetAloIced(p, false);
 }
+void SetAloAngVelocityTo(ALO* p, const glm::vec3& pos) { SetAloAngVelocityToLoad(p, pos, false); }
 NATIVEFN(0x1F46D8, SetAloAngVelocityTo);
 
 // orig: 0x001F4898 func_001F4898 (the position record's velocity v from the object's space; EOPID 75)
-void SetAloVelocity(ALO* p, const glm::vec3& v)
+void SetAloVelocity(ALO* p, const glm::vec3& v, bool fLoad)
 {
     XF* po = PxfPos(p);
     if (!po) return;
     if (!FXfModeMoving(po->mode)) SetXfMode(p, po, 1);
-    po->vel = glm::vec4(VecConvertXfs(PxfObj(p), po->pxfRef, v), po->vel.w);
+    po->vel = glm::vec4(fLoad ? VecConvertXfsLoad(p, PxfObj(p), po->pxfRef, v) : VecConvertXfs(PxfObj(p), po->pxfRef, v), po->vel.w);
     HoldXfMode(p, po);
     MarkAloDirty(p);
     WakeAlo(p);
@@ -855,12 +906,12 @@ void SetAloVelocity(ALO* p, const glm::vec3& v)
 }
 
 // orig: 0x001F4930 func_001F4930 (the rotation record's angular velocity w from the object's space)
-void SetAloAngVelocity(ALO* p, const glm::vec3& w)
+void SetAloAngVelocity(ALO* p, const glm::vec3& w, bool fLoad)
 {
     XF* po = PxfRot(p);
     if (!po) return;
     if (!FXfModeMoving(po->mode)) SetXfMode(p, po, 1);
-    po->vel = glm::vec4(VecConvertXfs(PxfObj(p), po->pxfRef, w), po->vel.w);
+    po->vel = glm::vec4(fLoad ? VecConvertXfsLoad(p, PxfObj(p), po->pxfRef, w) : VecConvertXfs(PxfObj(p), po->pxfRef, w), po->vel.w);
     HoldXfMode(p, po);
     MarkAloDirty(p);
     WakeAlo(p);
@@ -934,12 +985,14 @@ void BrakeAloRotation(ALO* p, const glm::mat3& mat, const float* ac)
     const float a2 = a * a;
     XF* o = PxfRot(p);
     if (!o) return;
-    const float acc = (a - b) / cc;
+    // (the EE's divisions (DivEe): a speed of 0 (a 0 scale, 0x204D48) gives 0 / 0 here, +FLT_MAX on the PS2, which leaves
+    // the record as it is; IEEE's NaN made the actor's whole pose NaN (N37: Carmelita not drawn in her helicopter))
+    const float acc = DivEe(a - b, cc);
     const float wl = std::sqrt(std::fabs(Dot3(glm::vec3(o->vel), glm::vec3(o->vel))));
-    const float stop = a2 / (acc + acc);
+    const float stop = DivEe(a2, acc + acc);
     if (a < wl)
     {
-        const float f = ((a - wl) * 2.5f) / wl;
+        const float f = DivEe((a - wl) * 2.5f, wl);
         o->aseg[3] = glm::vec4(glm::vec3(o->aseg[3]) + glm::vec3(o->vel) * f, o->aseg[3].w);
     }
     glm::mat3 m = MatConvertXfs(nullptr, o->pxfRef, mat);
@@ -947,18 +1000,18 @@ void BrakeAloRotation(ALO* p, const glm::mat3& mat, const float* ac)
     float ang;
     glm::vec3 axis;
     DecomposeRotateMatrixRad(MulMatrix3TransposeA(Mat3Of(o->mat), m), &ang, &axis);
-    float speed = GLimitAbs((ang / stop) * a, a);
+    float speed = GLimitAbs(DivEe(ang, stop) * a, a);
     const float wa = Dot3(glm::vec3(o->vel), axis);
     const float h = g_clock.dt * 0.5f;
     const float left = ang - (wa + speed) * h;
-    if (left < stop) speed = GLimitAbs((left / stop) * a, a);
+    if (left < stop) speed = GLimitAbs(DivEe(left, stop) * a, a);
     const glm::vec3 want = axis * speed;
     const float t = g_clock.dt;
     const glm::vec3 pred = glm::vec3(o->vel) + glm::vec3(o->aseg[3]) * t;
     const float lim = acc * t;
     const glm::vec3 ch = want - pred;
     const float cl = std::sqrt(std::fabs(Dot3(ch, ch)));
-    const float k = (cl < lim) ? 1.0f / t : acc / cl;
+    const float k = (cl < lim) ? 1.0f / t : DivEe(acc, cl);
     o->aseg[3] = glm::vec4(glm::vec3(o->aseg[3]) + ch * k, o->aseg[3].w);
 }
 
@@ -1118,7 +1171,7 @@ void ResetAloPhys(ALO* p)
 void MoveAloPhys(ALO* p, ALO* pNew, ALO* pOld)
 {
     for (LO* pc : std::vector<LO*>(p->aploChild))
-        if (FCidDerivedFrom(pc->Cid(), Icid(CID3::ALO))) MoveAloPhys(static_cast<ALO*>(pc), pNew, pOld);
+        if (FCidDerivedFrom(pc->Cid(), S3CID(0x30))) MoveAloPhys(static_cast<ALO*>(pc), pNew, pOld);
     if (p->asoe.empty() || !p->fInWorld) return;  // (native: an object out of the world has no entries added)
     for (ALO* po = p; po; po = po->paloParent)
     {
@@ -1151,7 +1204,7 @@ namespace
 inline ALO* PaloOrParent(LO* plo)  // orig 0x1A5BF0 (the object when it is an ALO, else its parent)
 {
     if (!plo) return nullptr;
-    if (FCidDerivedFrom(plo->Cid(), Icid(CID3::ALO))) return static_cast<ALO*>(plo);
+    if (FCidDerivedFrom(plo->Cid(), S3CID(0x30))) return static_cast<ALO*>(plo);
     return plo->paloParent;
 }
 bool VtFAcceptContact(ALO* p, CTMSG* pctm)  // slot 75 (ALO: 0x1F7588: the filter matched)
@@ -1242,6 +1295,13 @@ void DispatchAloSensorContacts(ALO* p)
             std::printf("sensor contact of %d %p: mine tag %d id 0x%X, other %d %p tag %d at %.0f %.0f %.0f\n", p->oid, (void*)p,
                         e.psoe ? e.psoe->tag : -1, e.psoe ? e.psoe->id : 0, eOther.palo ? eOther.palo->oid : -1,
                         eOther.paloRoot ? (void*)eOther.paloRoot : nullptr, eOther.psoe ? eOther.psoe->tag : -1, eOther.pos.x, eOther.pos.y, eOther.pos.z);
+        if (s_fDbg && e.psoe)  // (debug: the entry's shape: sphere flag and radius, the world geometry's box)
+        {
+            glm::vec3 lo(1e9f), hi(-1e9f);
+            for (const glm::vec3& v : e.psoe->geomWorld.apos) { lo = glm::min(lo, v); hi = glm::max(hi, v); }
+            std::printf("   entry f48 %d f49 %d f50 %d r %.1f npos %d box %.0f %.0f %.0f .. %.0f %.0f %.0f xf %p\n", e.psoe->f48, e.psoe->f49, e.psoe->f50,
+                        e.psoe->sRadius, int(e.psoe->geomWorld.apos.size()), lo.x, lo.y, lo.z, hi.x, hi.y, hi.z, (void*)e.psoe->pxf);
+        }
         if (s_fDbg && e.psoe && e.psoe->id)
             for (XF* q = e.pxf; q; q = q->pxfRef)  // (debug: the velocity chain of the sender's entry)
                 std::printf("   xf %p of %d kind %d mode %d state %d vel %.1f %.1f %.1f world %.0f %.0f %.0f -> vel %.1f %.1f %.1f\n", (void*)q,
@@ -1307,7 +1367,7 @@ void EmitAloContact(ALO* p, LO* ploPlayer)
     using PFN33 = glm::vec3 (*)(ALO*);
     PFN33 pfn33 = reinterpret_cast<PFN33>(PvNativeVt(p, 33));
     ctm.vec = pfn33 ? pfn33(p) : VelAloPos(p);
-    if (kind == 3 && FCidDerivedFrom(p->Cid(), Icid(CID3::GUARD)))
+    if (kind == 3 && FCidDerivedFrom(p->Cid(), S3CID(0x38)))
     {
         ctm.grfFilter = 0x40000;
         ctm.nState = -50;

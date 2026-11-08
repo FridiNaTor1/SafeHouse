@@ -1,9 +1,11 @@
 // Textures and shaders: Sly 2's module 0x1EA568-0x1ED7A8 (Sly 1 shd.c) as native loaders. See shd.h.
 
 #include "shd.h"
+#include "game/sly3.h"
+#include "worldglobals.h"
 
 #include "loadtrace.h"
-#include "sly3/condset3.h"
+#include "game/cond3.h"
 
 #include <algorithm>
 #include <cmath>
@@ -11,7 +13,9 @@
 #include <stdexcept>
 
 SHDS g_shds;
+WORLD_TABLE(g_shds);   // (PC: moved aside while a kept world loads, worldglobals.h)
 SHDSTATS g_shdstats;
+WORLD_VALUE(g_shdstats);   // (PC: kept across a kept world's load, worldglobals.h)
 bool g_fColorAdjust = false;
 
 namespace
@@ -42,8 +46,12 @@ void AdjustRgba16(uint16_t* prgba16)
     *prgba16 = static_cast<uint16_t>(((g << 2) & 0x3E0) | (r >> 3) | ((b >> 3) << 10) | ((a >> 7) << 15));
 }
 
+void ResetTextureCache();  // render.cpp
+
 void ResetShaders()
 {
+    // (PC addition: a kept world's load, pcloader.h, keeps the running world's GPU textures; its own records are new)
+    if (!g_fKeptWorldLoad) ResetTextureCache();
     g_shds = SHDS{};
     g_shdstats = SHDSTATS{};
 }
@@ -343,19 +351,20 @@ void BuildShdPasses(SHD* pshd)
         pshd->apass.push_back(pass);
         pass.itexPass = 0; pass.icolor = 1;
         pass.test = 0x51001; pass.alpha = 0x48;
+        pass.fFogBlack = true;   // (0x3D FOGCOL 0)
         pshd->apass.push_back(pass);
         break;
     case 7:
         if (!(fl & 0x10))
         {
             pass.itexPass = 2; pass.icolor = 1; pass.fNearest = true;
-            pass.test = 0x5000D; pass.alpha = 0x40;
+            pass.test = 0x5000D; pass.alpha = 0x40; pass.fFogBlack = true;   // (FOGCOL 0)
             pshd->apass.push_back(pass);
             pass.fNearest = false;
         }
-        pass.itexPass = 1; pass.icolor = 0; pass.test = 0x53001; pass.alpha = AlphaShd(pshd);
+        pass.itexPass = 1; pass.icolor = 0; pass.test = 0x53001; pass.alpha = AlphaShd(pshd); pass.fFogBlack = false;   // (FOGCOL: the world's)
         pshd->apass.push_back(pass);
-        pass.itexPass = 0; pass.icolor = 1; pass.test = 0x53001; pass.alpha = 0x48;
+        pass.itexPass = 0; pass.icolor = 1; pass.test = 0x53001; pass.alpha = 0x48; pass.fFogBlack = true;   // (FOGCOL 0)
         pshd->apass.push_back(pass);
         break;
     case 2:

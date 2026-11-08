@@ -31,7 +31,14 @@ struct PCINPUTOPT
     bool fMouseCamera = true;
     int mouseSensitivity = 100;                // % (the follow camera)
     int mouseAimSensitivity = 100;             // % (binocucom, aiming)
-    bool fMouseInvertX = false, fMouseInvertY = false;
+    bool fMouseInvertX = false, fMouseInvertY = false;   // the follow camera (and under a table)
+    // (settings v17) the mouse in the binocucom and the turrets; the controller's camera (the right stick on the follow
+    // camera and under a table: the original's orbit when off). Off: mouse up looks up and mouse right turns right in
+    // every view; the controller as the original. The controller's binocucom / turret inversion is the original's own
+    // option (the save's flags fReverseLookAround / fReverseAim).
+    bool fMouseInvertBinocX = false, fMouseInvertBinocY = false;
+    bool fMouseInvertTurretX = false, fMouseInvertTurretY = false;
+    bool fPadInvertCameraX = false, fPadInvertCameraY = false;
     bool fMouseRaw = true;
     bool fMouseWheelZoom = true;
     bool fMouseMenus = true;
@@ -53,7 +60,8 @@ void PcInputFromSettings(const cane::settings::SystemSettings& s);
 void PcInputToSettings(cane::settings::SystemSettings& s);
 
 // (tests) SLY2N_PCOPT="alwaysps=1,instantskip=1,promptstyle=2,mousecamera=0,pad6=1,key4=81": options over the
-// settings file (padN / keyN: action N's gamepad / keyboard binding)
+// settings file (padN / keyN: action N's gamepad / keyboard binding; the inversions: invcx / invcy (mouse, camera),
+// invbx / invby (mouse, binocucom), invtx / invty (mouse, turrets), cinvx / cinvy (controller, camera))
 void ApplyPcInputEnv();
 // fDebugKeys from Debug Mode.ini in the user folder (cane::debugMode(): the launcher's Settings > Advanced > Debug mode)
 void ApplyPcDebugMode();
@@ -70,8 +78,9 @@ bool FMouseCaptured();
 // This step's camera turn in radians from the mouse (0 while the cursor is free): pan + = mouse right, tilt + =
 // mouse up (look up).
 void MouseOrbitDelta(float* pdradPan, float* pdradTilt);
-// This step's aim turn (binocucom, turrets), radians: + = right / up.
-void MouseAimDelta(float* pdxRight, float* pdyUp);
+// This step's aim turn (binocucom, turrets), radians: + = right / up (each view's own inversion applied).
+enum MOUSEAIM { MOUSEAIM_Binocucom, MOUSEAIM_Turret };
+void MouseAimDelta(MOUSEAIM aim, float* pdxRight, float* pdyUp);
 // Wheel notches this step for the binocucom's zoom (0 when the wheel is bound or the option is off).
 float MouseWheelZoom();
 const char* PchzMouseBindingName(int binding);
@@ -86,6 +95,24 @@ const char* PchzKeyName(int key);
 // A menu, the title or the episode menu has the pad: the camera keys step the highlight (the d-pad), Enter
 // confirms (Cross), the mouse wheel / left / right buttons step / confirm / go back.
 bool FPcMenuMode();
+
+// ---- the free cursor in the menus (PC menus): hover and click on the 4:3 canvas
+// A menu the mouse can use is up (the pause / options / card pages, the title, the episode menu, the debug menu, the
+// gadget grid, Job Help): the OS cursor is shown there, unless a controller was used last and the mouse has not
+// moved since. Everywhere else with the cursor free (cutscenes, talks, loads, movies) it is hidden.
+bool FMouseMenuUp();
+// The cursor in canvas units (640 x 448, y down: the 4:3 frame, wherever it sits in a wider picture) while it is
+// free and shown in such a menu with "Mouse in Menus" on; false otherwise (always false headless).
+bool FMenuCursor(float* pxCanvas, float* pyCanvas);
+// The cursor moved this step (hover selects only then: a still cursor never fights the keys or the pad).
+bool FMenuCursorMoved();
+// A menu with its own mouse targets calls this from its update while the cursor is over one: the left button's
+// next press is then not sent as the confirm button but given to that menu (FMenuClick).
+void SetMenuMouseTarget();
+// The left button was pressed this step over a menu's own target (see SetMenuMouseTarget).
+bool FMenuClick();
+// (tests) SLY2N_TESTCURSOR=x:y@frame+count,...: the menu cursor at canvas (x, y) for those steps (window runs; the
+// left button through SLY2N_TESTKEYS=2000@frame).
 
 // A debug function key (GLFW_KEY_F1..) held: only with g_pcinput.fDebugKeys on (else always false); in the window, or
 // a SLY2N_TESTKEYS key (window may be null then). The SLY2N_* test switches do not go through this.

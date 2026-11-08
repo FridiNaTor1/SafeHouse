@@ -33,6 +33,7 @@ struct ASEG;
 struct ASEGA;
 struct ASEGBL;
 struct CTRLSOURCE;
+struct CTRLPOS;
 struct SM;
 struct SMA;
 
@@ -102,23 +103,20 @@ struct DAMAGE
     float tFlashFade = 0.0f;       // +0x98 its fade's start (FLT_MAX while reacting)
     float dtFlash = 2.0f;          // +0x9C its length
     float gFlash = 0.0f;           // (the object's +0xD0: the flash's strength; TODO(render))
+    struct ASEGA* pasegaHeal = nullptr;  // +0x10C the healing clip's ASEGA (the clip: the actor's part +0xEF8)
 };
 
-// The safe ground (orig ACTOR +0x9E0, 0x19F3E8 init): the last 32 floors stood on (0x19FEB0: the floor entry and the
-// point in its object's frame; 0x19FD30 the states 3 / 22's objects), the best one taken back to after a fall
-// (0x19F590): damage.h.
+// The safe places (orig ACTOR +0x9E0, 0x19F3E8 init): the last 32 floors or interaction descriptions. The world
+// owns the objects; owner bit 59 / SOE bit 51 arrange removal from all heroes' histories before they leave.
 struct SAFEGROUND
 {
     struct ENTRY
     {
-        int id = 0;                // +0x0 (the floor entry's +0x4)
-        LO* plo = nullptr;         // +0x4 (0x19FD30's object)
+        LO* ploOwner = nullptr;    // +0x0 owner of the description or floor SOE
+        JTL jtl = JTL_Max;         // +0x4 description, represented by its owner's kind; Max means no description
         SOE* psoe = nullptr;       // +0x8 the floor's entry
         float t = 0.0f;            // +0xC when
         glm::vec3 pos{0.0f};       // +0x10 the point in the entry's object's frame (0x19FD30: +0x10 its parameter)
-        // (SCPT 0x2A's entries: +0 the target object, +4 its interaction sub-object (0x184670): natively these two)
-        LO* ploTarget = nullptr;
-        bool fTargetSub = false;
     };
     int c = 0;                     // +0x4 (+0x9E4)
     ENTRY ae[32];                  // +0x10
@@ -145,6 +143,7 @@ struct BINOC
     float g3C = 0.0f;              // +0x3C the zoom (the camera's +0x470 / +0x5CC)
     LO* ploSpeaker = nullptr;      // +0x40 (view 1: the other speaker)
     LO* ploScreen = nullptr;       // +0x44 (view 1: the window to show)
+    uint64_t idSkipScene = 0;       // native QoL: one identity across opening, talk and closing
 };
 
 // The climb (orig ACTOR +0xF50, module 0x19DE10..0x19EF50: a pipe climbed along its path; Sly's state 8, Bentley's /
@@ -198,6 +197,10 @@ struct ACTOR : STEP
     float gCrvF50 = 0.0f;          // +0xF64 (its speed: ds / dt)
     CLIMB climb;                   // +0xF50's other fields (climb.h)
     glm::vec3 vecDrawOffset{0.0f}; // +0x1010 the body drawn this far from its physics position (TODO(render))
+    LO* ploPair3 = nullptr;        // (Sly 3 STEP +0x2E4) the object PairActorWith paired the actor with (orig3 0x24F3B8)
+    ALO* psoPair3 = nullptr;       // (Sly 3 STEP +0x2E8) its ancestor with the attachment: contacts with it are pruned
+    struct SLOT3 { int oid = -1; int tag = -1; };
+    SLOT3 aslot3E40[14];           // (Sly 3 +0xE40's +0x2C: 14 x {oid, object, tag, entry}; option 812, orig3 0x109BD0)
     int n1000 = 0;                 // +0x1000
     float g1020 = 100.0f;          // +0x1020
     SM* psmIdle = nullptr;         // +0x1028 the idle state machine (Sly: part 0x7C)
@@ -214,6 +217,8 @@ struct ACTOR : STEP
     glm::vec3 vecOffset{0.0f};     // +0x1070 (the target's offset, smoothed to zero)
     void* prunScript = nullptr;    // +0x1084 the script runner driving it (scpt.cpp, 0x143DE8)
     LO* ploWater = nullptr;        // +0x108C the water it is in (messages 4 / 5 of the water 0x59)
+    std::vector<std::pair<LO*, float>> asplash;  // +0x1090 / +0x1094: the players' splash points (their objects oid
+                                   // 0x2AB, 0x1400B8) and the time of each one's last splash
     float sWaterHeight = 50.0f;    // +0x10A0 the height of its point tested in the water (Sly 50)
     int n10C8 = -1, f10F0 = 1, n10EC = -1, n10E4 = -1;  // +0x10C8 / +0x10F0 / +0x10EC / +0x10E4 (0x13FF70)
     LO* ploNoise = nullptr;        // +0x10C4 its noise template (the child oid 684, cid 0x75; resolved on first use)
@@ -249,6 +254,8 @@ struct ACTOR : STEP
     int n1040 = 0;                 // +0x1040 the side the interaction faces (0x1830D8: 1 flips it)
     INTERACT inter;                // +0x4C0 the interaction sub-object (interact.h; its kind n4C8, state nSub4CC)
     float t131C = 0.0f;            // +0x131C (the jump's last velocity change)
+    int n11AC = 0;                 // +0x11AC unseen by every detector while non-zero (0x1541D8); written only by the
+                                   // scripts: option 741 / EOPID 758 (e.g. Ep3's water buckets 95679 on entry / exit)
     JTTHROW jtthrow;               // +0x11B0 (the shared aimed throw controller)
 };
 
@@ -261,6 +268,9 @@ struct SLY : ACTOR
     int f1BD4 = 0;                 // +0x1BD4 the pickpocket's hand set (0x18B460)
     float g1BD8 = 0.0f;            // +0x1BD8 the take's time in the clip +0x1BC8 (its event 0x167, 0x18B348)
     float t1BDC = 0.0f;            // +0x1BDC the hand's last set
+    // (0x18B348: in Sly's object space at the take's time) +0x1BE0 the cane's point, +0x1BF0 the arm's joint, +0x1C00
+    // the hand's, +0x1C10 the hand's rotation (Euler), +0x1C20 the cane's point in the hand's frame
+    glm::vec3 posCane1BE0{0.0f}, posArm1BF0{0.0f}, posHand1C00{0.0f}, eulHand1C10{0.0f}, posCaneHand1C20{0.0f};
     int f1514 = 0;                 // +0x1514 (a foot over a drop: 0x17C played)
     float g1A0 = 0.0f;             // +0x1A0 (STEP: the gait phase kept; ACTANIM uGait)
     int cq = 0;                    // +0x1880 the kept positions' count
@@ -306,6 +316,12 @@ struct SLY : ACTOR
     ASEGBL* pblSwing = nullptr;    // +0x1994 the swing's blend (0x18F908: clips +0x1974 / +0x1980 / +0x198C)
     float gSwingSpeed = 1.0f;      // +0x1998
     float gSwingActive = 1.0f;     // +0x199C
+    glm::vec3 dposHang{0.0f};      // +0x1960 the cane's offset from the hook point at the entry, smoothed to 0 (0x190E18)
+    XF* pxfHandRot = nullptr;      // +0x19C0 the record (tag 0xC, kind 6) the hand's actuator turns
+    XF* pxfHandPos = nullptr;      // +0x19C4 the record (tag 0xC, kind 1) the draw moves onto the hook (0x190D10)
+    XF* pxfArm = nullptr;          // +0x19CC the record (tag 0x1D, kind 6): the arm's joint (its +0xA8)
+    std::shared_ptr<CTRLPOS> pctrlHand;  // +0x1A00 the hand's actuator (0x12DC18: prio 5, mode 5, state 2), in the
+                                   // record's list only in state 3
     struct DODGE
     {
         int state = -1;             // +0x1FF4 (controller +4): -1 off, 0/1 left/right

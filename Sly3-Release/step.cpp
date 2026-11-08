@@ -1,7 +1,8 @@
 // step.cpp: the stepping objects' heading and motion (step.h). Ported from the reference's m_203948_p3.cpp and
 // m_2040F8.cpp (oracle-checked ports of the original's 0x203948..0x205E70).
 #include "step.h"
-#include "sly3/ids3.h"
+#include "game/sly3.h"
+#include "worldglobals.h"
 #include "activate.h"
 #include <cstdio>
 #include <cstdlib>
@@ -28,6 +29,7 @@ using cmm::F32;
 namespace
 {
 std::map<LO*, std::unique_ptr<STEP>> s_mpstep;
+WORLD_TABLE(s_mpstep);   // (PC: moved aside while a kept world loads, worldglobals.h)
 
 }  // namespace
 
@@ -43,9 +45,9 @@ STEP* PstepNew(ALO* palo)
     auto& p = s_mpstep[palo];
     if (!p)
     {
-        if (FIsLoDerivedFrom(palo, Icid(CID3::JT))) p = std::make_unique<SLY>();
+        if (FIsLoDerivedFrom(palo, S3CID(0x35))) p = std::make_unique<SLY>();
         else if (STEP* pg = PstepNewGang(palo)) p.reset(pg);  // (Bentley / Murray: gang.h)
-        else if (FIsLoDerivedFrom(palo, Icid(CID3::PLAYER))) p = std::make_unique<ACTOR>();
+        else if (FIsLoDerivedFrom(palo, S3CID(0x34))) p = std::make_unique<ACTOR>();
         else p = std::make_unique<STEP>();
         p->palo = palo;
     }

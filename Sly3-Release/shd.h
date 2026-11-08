@@ -98,6 +98,7 @@ struct SHDPASS
     uint64_t alpha = 0;          // GS ALPHA_1
     bool fBlend = true;          // PRIM ABE
     uint32_t rgbaConst = 0;      // RGBAQ for untextured passes
+    bool fFogBlack = false;      // FOGCOL 0 (the additive / pre-passes of kinds 1 and 7): fogged toward black, not the world's colour
 };
 
 // orig3 record: 0x2C bytes (*0x46FF3C, count 0x46FF38)
@@ -163,6 +164,8 @@ bool FSaaForShader(const SAA* psaa, const SHD* pshd);
 void InitSaa(SAA* psaa);
 // orig: 0x001EE3B0 (an EYES animation's closedness: 1 shut, 0 open; t the game clock)
 void SetSaaEyesClosed(SAA* psaa, float g, float t);
+void SetScrollerMasterSpeeds(SAA* psaa, float su, float sv);  // orig 0x1EE678
+void SetSaaOffsets(SAA* psaa, float du, float dv);             // orig 0x1EDAD8
 struct ALO;
 struct LO;
 // orig: 0x001F80D0 (the object's and its ALO children's EYES animations, soundglue.cpp)
@@ -201,7 +204,7 @@ struct SHDS
 
 extern SHDS g_shds;
 
-// The world filter and the conditions: Sly 3's are sly3/condset3.h (FFilterMatches3 / FConditionsMatch3), which these
+// The world filter and the conditions: Sly 3's are game/cond3.h (FFilterMatches3 / FConditionsMatch3), which these
 // loaders use. Sly 2's g_nFilterCur / FFilterMatches (brx.cpp, 0x13FAD0) stay for the copied Sly 2 code.
 extern int g_nFilterCur;
 bool FFilterMatches(int cfilter, const int16_t* afilter);

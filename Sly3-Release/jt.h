@@ -49,14 +49,20 @@ struct JTDESC
     int prio = 0;                   // +0x10
     int id = -1;                    // +0x14 the prompt's text id (-1 none)
     uint32_t kind = 0;              // +0x18 the group (one candidate per group: 0x194688)
-    uint32_t mask = 7;              // +0x1C the players it is for (AND the actor's +0x1000)
+    uint32_t mask = 0xFF;           // +0x1C (Sly 3: +0x20, default 0xFF: 0x1A0708) the players it is for (AND the actor's +0x1000)
 };
 
 // The list's objects (in the world) and the offset of their description part (orig 0x194A40's table).
 const std::vector<LO*>& AploJtList(SW* psw, JTL jtl);
 uint32_t IbJtDesc(JTL jtl);
 JTDESC JtDescOf(LO* plo, JTL jtl);
+// orig: 0x001841F0 (a use's players (+0xFC) AND the actor's +0x1000: EOPID 1072's method 0x10D660)
+bool FUseAllows(LO* puse, const ACTOR* pa);
 bool FJtInList(LO* plo, JTL jtl);
+// orig: 0x00184670 (a script target's description, or Max when it has none)
+JTL JtlDescFromLo(LO* plo);
+// The seven classes reattached by recovery (0x19F590 / jump state 21 of 0x197500).
+bool FSafeTargetReattach(LO* plo);
 
 // The world matrix of an object as the original's vt slot 31 (0x1A6318) gives it: an SO's object record, a LOX's
 // matrix in its reference record's frame.
@@ -106,6 +112,9 @@ extern JTTRACK g_jttrack;
 void ShowJtAura(SW* psw, LO* plo);
 void UpdateJtCandidates(ACTOR* pa, uint32_t grf);  // orig 0x194A40
 void ResetJtTrack();                               // a new world
+// orig: 0x00194F70(psw, 0, 0, 0) as 0x1C4940 (SetPoCurrent) calls it: no candidates, so every tracked target is
+// dropped (its aura faded out over 0.5 s); the new player's own aura is made when it finds them again
+void DropJtTrack();
 // orig: 0x001938C0's choice (circle: the first tracked target within 250 by its class: 0x13 / 0x0B -> 6 for the main
 // Sly, else 5; 0x1B -> 8; 0x0C / 0x22 -> 0; 0x26 -> its +0x10C; 0x23 -> 7; none -1). The action itself (0x1928F8 on the
 // +0x4C0 sub-object) is not ported yet: the callers get the kind and the object.
@@ -113,3 +122,7 @@ int KindJtCircle(ACTOR* pa, LO** pplo);
 // the description's methods 2 / 3 (0x182CD8: its parameter for the actor; its point and facing angle at g)
 float GJtDescInit(LO* plo, JTL jtl, ACTOR* pa);
 glm::vec3 PosJtDesc(LO* plo, JTL jtl, ACTOR* pa, float g, float* prad);
+
+extern bool g_fHookLinkedPosition;  // orig: D_002DFB84, alternate 0x184510 target mode
+
+void RandomJtPoint(LO* plo, JTL jtl, float g, glm::vec3* ppos, glm::vec3* pdir);  // descriptor slot 5

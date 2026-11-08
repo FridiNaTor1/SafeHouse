@@ -11,6 +11,7 @@
 // substate, the jump's state, the heading; the first frames and every change are printed, and the differences
 // summarised.
 #include "actor.h"
+#include "game/sly3.h"
 #include "damage.h"
 #include "target.h"
 #include "pocket.h"
@@ -207,7 +208,7 @@ LO* PloFromRef(SW* psw, uint32_t a)
         for (LO* plo : aplo)
         {
             if (!plo || plo->oid != oid) continue;
-            const float d = FIsLoDerivedFrom(plo, 0x30) ? glm::length(PosAloCenter(static_cast<ALO*>(plo)) - posRef) : 1e29f;
+            const float d = FIsLoDerivedFrom(plo, S3CID(0x30)) ? glm::length(PosAloCenter(static_cast<ALO*>(plo)) - posRef) : 1e29f;
             if (d < dBest) { dBest = d; pBest = plo; }
         }
     return pBest;
@@ -262,12 +263,12 @@ bool FImportSlyStart(SW* psw, const std::string& pathRam, const std::string& pat
     s_h.vbBase = vbBase;
     s_h.fOn = true;
     const RAM& r = s_h.ram;
-    LO* plo = psw->mpcidaplo[0x35].empty() ? nullptr : psw->mpcidaplo[0x35][0];
+    LO* plo = psw->mpcidaplo[S3CID(0x35)].empty() ? nullptr : psw->mpcidaplo[S3CID(0x35)][0];
     SLY* p = PslyFromLo(plo);
     if (!p) return false;
     ALO* palo = p->palo;
     // the clock: the frame's update will add its dt
-    g_clock.t = r.G(0x2DDED0) - (1.0f / 60.0f) * 0.0f;  // (the RAM is the frame's before its clock update)
+    g_clock.t = r.G(S3VA(0x2DDED0)) - (1.0f / 60.0f) * 0.0f;  // (the RAM is the frame's before its clock update)
     // the records (the position record +0x58, the rotation / object record +0x5C / +0x60)
     // (the first records in the load's order: the root, the position (kind 1), the rotation (kind 6, the object's))
     const uint32_t axf = r.U32(A_SLY + 0x54);
@@ -364,8 +365,8 @@ bool FImportSlyStart(SW* psw, const std::string& pathRam, const std::string& pat
         for (int i = 0; i < 16; i++) pc.atPressed[i] = r.G(a + 0x88 + 4 * i);
     }
     // the camera's view (its policies stay native)
-    g_cm.pos = glm::vec3(r.V4(0x2DDF40 + 0x90));
-    g_cm.mat = glm::mat3(glm::vec3(r.V4(0x2DDF40 + 0x60)), glm::vec3(r.V4(0x2DDF40 + 0x70)), glm::vec3(r.V4(0x2DDF40 + 0x80)));
+    g_cm.pos = glm::vec3(r.V4(S3VA(0x2DDF40) + 0x90));
+    g_cm.mat = glm::mat3(glm::vec3(r.V4(S3VA(0x2DDF40) + 0x60)), glm::vec3(r.V4(S3VA(0x2DDF40) + 0x70)), glm::vec3(r.V4(S3VA(0x2DDF40) + 0x80)));
     ImportJoyPs2FromRam(&g_joyps2, r.ab);  // the pad (its sticks' last read)
     ImportCmStateFromRam(r.ab);  // (cmcheck.cpp: the follow camera's state too, for SLY2N_HARNESS_NATIVECM)
     if (std::getenv("SLY2N_HARNESS_V"))
@@ -414,7 +415,7 @@ bool FImportSlyStart(SW* psw, const std::string& pathRam, const std::string& pat
     if (s_h.aref.empty() && (p->plo10DC || p->plo10E8)) g_fActorTargetsImported = true;
     // the target (a guard: placed where the reference has it, its AI being the AI code) and the attack mode
     if (const uint32_t at = r.U32(A_SLY + 0x10E8); at && at < 0x2000000)
-        if (LO* pt = PloFromRef(psw, at); pt && FIsLoDerivedFrom(pt, 0x30) && !pt->fInWorld)  // (in the world: SLY2N_AI_START placed it)
+        if (LO* pt = PloFromRef(psw, at); pt && FIsLoDerivedFrom(pt, S3CID(0x30)) && !pt->fInWorld)  // (in the world: SLY2N_AI_START placed it)
         {
             const uint32_t axfT = r.U32(at + 0x60);
             ALO* pat = static_cast<ALO*>(pt);
@@ -461,7 +462,7 @@ bool FImportSlyStart(SW* psw, const std::string& pathRam, const std::string& pat
         p->f18E4 = r.S32(A_SLY + 0x18E4);
         p->f18E8 = r.S32(A_SLY + 0x18E8);
     }
-    std::printf("sly-start: t %.3f state %d pos %.2f %.2f %.2f heading %.4f\n", r.G(0x2DDED0), state,
+    std::printf("sly-start: t %.3f state %d pos %.2f %.2f %.2f heading %.4f\n", r.G(S3VA(0x2DDED0)), state,
                 PosAloCenter(palo).x, PosAloCenter(palo).y, PosAloCenter(palo).z, p->radHeading);
     return true;
 }
@@ -485,16 +486,16 @@ void PrepareSlyFrame(int frame)
     // SLY2N_HARNESS_SNAP=F: at frame F, Sly moved by the previous frame's difference (the cause of a divergence
     // told from the earlier frames' drift)
     static const int s_frameSnap = std::getenv("SLY2N_HARNESS_SNAP") ? std::atoi(std::getenv("SLY2N_HARNESS_SNAP")) : -1;
-    if (frame == s_frameSnap && i > 0 && s_h.aref[i - 1].vb + 1 == vb && g_psw && !g_psw->mpcidaplo[0x35].empty())
-        if (SLY* p = PslyFromLo(g_psw->mpcidaplo[0x35][0]))
+    if (frame == s_frameSnap && i > 0 && s_h.aref[i - 1].vb + 1 == vb && g_psw && !g_psw->mpcidaplo[S3CID(0x35)].empty())
+        if (SLY* p = PslyFromLo(g_psw->mpcidaplo[S3CID(0x35)][0]))
         {
             const glm::vec3 d = s_h.aref[i - 1].pos - s_h.posLast;  // (both at the previous frame's compare point)
             SetStepPos(p, PosAloCenter(p->palo) + d);
             std::printf("sly harness: snapped by %.3f %.3f %.3f at frame %d\n", d.x, d.y, d.z, frame);
         }
     // the targets (0x194A40: not native yet) and the guards' hits (the AI's strikes: SLY2N_HARNESS_NOHIT leaves them)
-    if (g_psw && !g_psw->mpcidaplo[0x35].empty())
-        if (SLY* p = PslyFromLo(g_psw->mpcidaplo[0x35][0]))
+    if (g_psw && !g_psw->mpcidaplo[S3CID(0x35)].empty())
+        if (SLY* p = PslyFromLo(g_psw->mpcidaplo[S3CID(0x35)][0]))
         {
             const REFFRAME& r = s_h.aref[i];
             // (the reference's targets instead of the native pick 0x140558, whose guards (spawned, their AI state) the
@@ -544,7 +545,7 @@ void CompareSlyFrame(SW* psw, int frame)
     while (s_h.iref < s_h.aref.size() && s_h.aref[s_h.iref].vb < vb) ++s_h.iref;
     if (s_h.iref >= s_h.aref.size() || s_h.aref[s_h.iref].vb != vb) return;
     const REFFRAME& r = s_h.aref[s_h.iref];
-    LO* plo = psw->mpcidaplo[0x35].empty() ? nullptr : psw->mpcidaplo[0x35][0];
+    LO* plo = psw->mpcidaplo[S3CID(0x35)].empty() ? nullptr : psw->mpcidaplo[S3CID(0x35)][0];
     SLY* p = PslyFromLo(plo);
     if (!p) return;
     const glm::vec3 pos = PosAloCenter(p->palo);

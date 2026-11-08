@@ -1,5 +1,6 @@
 // The laser's authored models (CID 0x55, original slot 19 0x1DF5B0), drawn through the native 0x1A5EE8 path.
 #include "laserrender.h"
+#include "game/sly3.h"
 
 #include "activate.h"
 #include "alo.h"
@@ -25,7 +26,7 @@ ALO* PaloLaserModel(ALO* p, uint32_t ib)
     if (oid == -1) return nullptr;
     LO* model = PloFindSwChild(p, oid);
     if (!model) model = PloFindSwNearest(p, oid);
-    return model && FCidDerivedFrom(model->Cid(), 0x30) ? static_cast<ALO*>(model) : nullptr;
+    return model && FCidDerivedFrom(model->Cid(), S3CID(0x30)) ? static_cast<ALO*>(model) : nullptr;
 }
 
 // orig: 0x001A5FB8: x faces the camera, y spans the width, z follows the model's 100-unit line.
@@ -50,7 +51,7 @@ void AppendLaserLine(const SCENE& scene, ALO* model, const glm::vec3& a, const g
 void CollectLaserDraws(const SCENE& scene, const glm::vec3& posCamera, std::vector<EXTRADRAW>& aextra)
 {
     if (!g_psw) return;
-    for (LO* plo : g_psw->mpcidaplo[0x55])
+    for (LO* plo : g_psw->mpcidaplo[S3CID(0x55)])
     {
         ALO* p = static_cast<ALO*>(plo);
         if (!p->fInWorld || p->fRemoved || !FAloDrawn(g_psw, p)) continue;

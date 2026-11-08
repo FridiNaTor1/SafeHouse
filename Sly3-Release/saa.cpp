@@ -90,7 +90,11 @@ void InitSaa(SAA* p)
         SetEyes(p, 0, 0.0f);
         SetIframe(p, int(p->aflt[6]));
         break;
-    case SAAK2_Scroller:                                 // orig: 0x001EE480 InitScroller (speeds, wraps)
+    case SAAK2_Scroller:                                 // orig: 0x001EE480 InitScroller (speeds, wraps; +0x60 /
+        for (int i = 0; i < 4; ++i) p->aflt[i] = F(p, 0xC + 4 * i);  // +0x64 the master speeds 1: aflt[4] / [5])
+        p->aflt[4] = 1.0f;
+        p->aflt[5] = 1.0f;
+        break;
     case SAAK2_Circler:                                  // orig: 0x001EE688 InitCircler (speed, radius, centre)
         for (int i = 0; i < 4; ++i) p->aflt[i] = F(p, 0xC + 4 * i);
         break;
@@ -177,8 +181,8 @@ void UpdateSaa(SAA* p, float t, float dt)
     }
     case SAAK2_Scroller:  // orig: 0x001EE4E0 UpdateScroller
     {
-        const float u = float(p->du) / 4096.0f + p->aflt[0] * dt;
-        const float v = float(p->dv) / 4096.0f + p->aflt[1] * dt;
+        const float u = float(p->du) / 4096.0f + p->aflt[0] * p->aflt[4] * dt;  // (x the master speeds: audit R1)
+        const float v = float(p->dv) / 4096.0f + p->aflt[1] * p->aflt[5] * dt;
         SetDuDv(p, p->aflt[2] != 0 ? std::fmod(u, p->aflt[2]) : u, p->aflt[3] != 0 ? std::fmod(v, p->aflt[3]) : v);
         break;
     }
@@ -196,6 +200,20 @@ void UpdateSaa(SAA* p, float t, float dt)
 
 // orig: 0x001EE3B0 (the eyes' closedness g (+0x78): 1 or more shut (state 2), else reopened through state 0 (its
 // state reset first, so the frame follows g), the frame set)
+// orig: 0x001EE678 SetScrollerMasterSpeeds (a scroller's +0x60 / +0x64, the speeds' factors)
+void SetScrollerMasterSpeeds(SAA* p, float su, float sv)
+{
+    if (!p || p->cid != SAAK2_Scroller) return;
+    p->aflt[4] = su;
+    p->aflt[5] = sv;
+}
+
+// orig: 0x001EDAD8 (the offsets set at once, in 1/4096)
+void SetSaaOffsets(SAA* p, float du, float dv)
+{
+    if (p) SetDuDv(p, du, dv);
+}
+
 void SetSaaEyesClosed(SAA* p, float g, float t)
 {
     if (!p || p->cid != SAAK2_Eyes) return;

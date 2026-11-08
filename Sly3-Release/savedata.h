@@ -37,6 +37,8 @@ void ValidateGameSave();
 CRef RefGetProgress(const std::vector<std::string>& apath);
 // writes a value at a path (orig 0x1D80C8); false when the path does not resolve or the kind differs
 bool FSetProgress(const std::vector<std::string>& apath, const CRef& ref);
+// A boolean of the save's settings ("flags" <name>: fReverseLookAround, fReverseAim, ...), false when unset.
+bool FSettingFlag(const char* name);
 // orig 0x1D8C10: the address of a path's int / float value in the save (null: none); the actors' "hpCur" / "mpCur"
 int32_t* PnProgressSlot(const std::vector<std::string>& apath);
 // the same by the path's symbols (an option of kind 22: the original's progress references, 0x2581C0 / 0x258200)

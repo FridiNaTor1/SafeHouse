@@ -1,6 +1,8 @@
 // pickup.cpp: the pickups (pickup.h). Ported from the decomp's src/hand func_001C4E50 / 001C6508 / 001C60B8 /
 // 001C65F8 / 001C5E48 / 001C6588 / 001C5D18 / 001C6BD0 and the asm (0x1C5148, 0x1C55E0).
 #include "pickup.h"
+#include "game/sly3.h"
+#include "worldglobals.h"
 
 #include "activate.h"
 #include "alo.h"
@@ -22,6 +24,7 @@
 #include "vtnative.h"
 #include "anim.h"
 #include "xf.h"
+#include "xfphys.h"
 #include "sm.h"
 #include "smrun.h"
 #include "asega.h"
@@ -211,7 +214,9 @@ struct PICKUP
     glm::vec3 posLocal{0.0f};     // a placement from outside (a proxy's instance placed): +0x170 taken again)
 };
 std::unordered_map<const LO*, PICKUP> s_mppickup;
+WORLD_TABLE(s_mppickup);   // (PC: moved aside while a kept world loads, worldglobals.h)
 std::unordered_map<const LO*, int> s_mpclue;  // the clue bottles' proxies (cid 7): their +0x100
+WORLD_TABLE(s_mpclue);   // (PC: moved aside while a kept world loads, worldglobals.h)
 
 }  // namespace
 
@@ -264,18 +269,18 @@ PICKUP& InitPickup(LO* plo)
 {
     PICKUP& p = s_mppickup[plo];
     p = PICKUP{};
-    if (FIsLoDerivedFrom(plo, 0x5C))  // 0x1C6AB8
+    if (FIsLoDerivedFrom(plo, S3CID(0x5C)))  // 0x1C6AB8
     {
         p.sRadius = 35.0f; p.sCollect = 35.0f; p.g1D0 = 500.0f; p.g1D4 = 250.0f; p.g1E4 = 0.6f; p.g1E0 = 0.6f; p.g1A0 = 0.75f;
     }
-    else if (FIsLoDerivedFrom(plo, 0x5D))  // 0x1C67D8 (+0x23C / +0x240: the healing 10 / 20)
+    else if (FIsLoDerivedFrom(plo, S3CID(0x5D)))  // 0x1C67D8 (+0x23C / +0x240: the healing 10 / 20)
     {
         p.sRadius = 45.0f; p.sCollect = 75.0f; p.g1D0 = 250.0f; p.g1D4 = 50.0f; p.g1E4 = 0.2f; p.g1E0 = 0.65f; p.g1A0 = 0.25f;
         p.dtRestLow = 4.0f; p.dtRestHigh = 5.0f;
     }
-    else if (FIsLoDerivedFrom(plo, 0x5F))  // 0x1C7E38
+    else if (FIsLoDerivedFrom(plo, S3CID(0x5F)))  // 0x1C7E38
         p.sCollect = 50.0f;
-    else if (FIsLoDerivedFrom(plo, 0x5E))  // 0x1C7648
+    else if (FIsLoDerivedFrom(plo, S3CID(0x5E)))  // 0x1C7648
     {
         p.sRadius = 35.0f; p.sCollect = 40.0f; p.g1D0 = 250.0f; p.g1D4 = 50.0f; p.g1E4 = 0.6f; p.g1E0 = 0.75f;
         p.dtRestLow = 8.0f; p.dtRestHigh = 10.0f;
@@ -284,7 +289,7 @@ PICKUP& InitPickup(LO* plo)
     p.fCollectTimed = static_cast<int>(plo->U32Field(0, 0x1C8, 1));
     // orig: 0x001C65F8 / 0x001C68F0 / 0x001C77E8 draw the rest time
     // from the loaded fields, after the class's constructor defaults.
-    if (FIsLoDerivedFrom(plo, 0x5B) || FIsLoDerivedFrom(plo, 0x5D) || FIsLoDerivedFrom(plo, 0x5E))
+    if (FIsLoDerivedFrom(plo, S3CID(0x5B)) || FIsLoDerivedFrom(plo, S3CID(0x5D)) || FIsLoDerivedFrom(plo, S3CID(0x5E)))
     {
         p.dtRestLow = std::bit_cast<float>(plo->U32Field(0, 0x230, std::bit_cast<uint32_t>(p.dtRestLow)));
         p.dtRestHigh = std::bit_cast<float>(plo->U32Field(0, 0x234, std::bit_cast<uint32_t>(p.dtRestHigh)));
@@ -293,7 +298,7 @@ PICKUP& InitPickup(LO* plo)
     // (option 894: the three oids; 0x15E938 kind 4 from the pickup)
     OID aoid[3] = {-1, -1, -1};
     for (const OPT& o : plo->aopt)
-        if (o.eopid == 894)
+        if (o.eopid == S3EOPID(894))
             for (size_t i = 0; i < 3 && i < o.aval.size(); ++i) aoid[i] = o.aval[i].n;
     auto find = [plo](OID oid) -> LO* { return oid == -1 ? nullptr : PloFindSwNearest(plo, oid); };
     p.ploGlint = find(aoid[0]);
@@ -303,20 +308,20 @@ PICKUP& InitPickup(LO* plo)
     // instance's hierarchy, just as the glint parts above.
     p.ploCollect = find(static_cast<OID>(plo->U32Field(0, 0x20C, static_cast<uint32_t>(-1))));
     p.ploExpire = find(static_cast<OID>(plo->U32Field(0, 0x214, static_cast<uint32_t>(-1))));
-    if (FIsLoDerivedFrom(plo, 0x5E))
+    if (FIsLoDerivedFrom(plo, S3CID(0x5E)))
     {
         // orig: 0x1C7988 / 0x1C7A08 / 0x1C7A10: retain the authored
         // definition/group records, including the copies of a pooled model.
         int i = -1;
         for (const OPT& o : plo->aopt)
         {
-            if (o.eopid == 907 && o.aval.size() >= 2 && p.aloot.size() < 32)
+            if (o.eopid == S3EOPID(907) && o.aval.size() >= 2 && p.aloot.size() < 32)
             {
                 p.aloot.push_back({o.aval[0].n, o.aval[1].n, {}});
                 i = static_cast<int>(p.aloot.size()) - 1;
             }
-            else if (o.eopid == 908) i = -1;
-            else if (o.eopid == 909 && i >= 0 && !o.aval.empty() && p.aloot[i].aglob.size() < 3)
+            else if (o.eopid == S3EOPID(908)) i = -1;
+            else if (o.eopid == S3EOPID(909) && i >= 0 && !o.aval.empty() && p.aloot[i].aglob.size() < 3)
                 p.aloot[i].aglob.push_back(o.aval[0].n);
         }
     }
@@ -383,7 +388,7 @@ void SetPickupStateBase(LO* plo, PICKUP& p, int n)
     }
     // the child 0x12 +0x16C: shown in 0 / 4 / 5, hidden otherwise; the SM +0x168 (0x1F0380 / 0x1F0660): TODO
     for (LO* pc : plo->aploOwned)
-        if (FCidDerivedFrom(pc->Cid(), 0x12))
+        if (FCidDerivedFrom(pc->Cid(), S3CID(0x12)))
         {
             if (n == 0 || n == 4 || n == 5) AddLo(g_psw, pc);
             else RemoveLo(g_psw, pc);
@@ -426,8 +431,8 @@ void SetPickupStateBase(LO* plo, PICKUP& p, int n)
         p.psma = nullptr;
     }
     if (FPrint())
-        std::printf("pickup %d (cid 0x%X): state %d -> %d t %.3f pos (%.1f %.1f %.1f) sma %d\n", plo->oid, plo->Cid(), p.state, n, g_clock.t, p.pos.x,
-                    p.pos.y, p.pos.z, p.psma ? 1 : 0);
+        std::printf("pickup %d (cid 0x%X): state %d -> %d t %.3f pos (%.1f %.1f %.1f) sma %d at %p iupd %d active %d st %d queued %d r %.0f mask 0x%X cm 0x%X\n", plo->oid, plo->Cid(), p.state, n, g_clock.t, p.pos.x,
+                    p.pos.y, p.pos.z, p.psma ? 1 : 0, (void*)plo, plo->iupd, int(plo->fNodeActive), plo->st, int(plo->fQueued), plo->sRadius, plo->bMask, g_actview.grfCm);
     p.state = n;
     p.t = g_clock.t;
 }
@@ -511,7 +516,7 @@ void SetClueState(LO* plo, PICKUP& p, int n)
         PnoiseNew(PtmplNoiseFixed(0), PosLoWorld(plo), plo);  // 0x156B98(G, 0, position, pickup)
         HandleLoSpliceEvent(plo, 5, false, 0, nullptr);
         LO* pproxy = PproxyOfInstance(plo);
-        if (pproxy && FCidDerivedFrom(pproxy->Cid(), 7))
+        if (pproxy && FCidDerivedFrom(pproxy->Cid(), S3CID(7)))
         {
             auto it = s_mpclue.find(pproxy);
             const auto& awrec = AwrecWorlds();
@@ -544,7 +549,7 @@ void SetOtherPickupState(LO* plo, PICKUP& p, int n)
     {
     case 0: p.dtRest = GRandInRange(p.dtRestLow, p.dtRestHigh); break;
     case 1:
-        if (FIsLoDerivedFrom(plo, 0x5D))
+        if (FIsLoDerivedFrom(plo, S3CID(0x5D)))
         {
             // orig: 0x001C68F0 case 1: the current player (0x1C4840) takes it only when its slot 80 (0x144090) allows
             ACTOR* pa = PactorFromLo(PloPoCurrent(g_psw));
@@ -591,7 +596,7 @@ void SetOtherPickupState(LO* plo, PICKUP& p, int n)
 // against an entry's geometry (0x1A93C8); entries with bit 50 skipped)
 bool FPickupTouched(LO* plo, PICKUP& p, LO* pplayer)
 {
-    if (!pplayer || !FCidDerivedFrom(pplayer->Cid(), 0x30)) return false;
+    if (!pplayer || !FCidDerivedFrom(pplayer->Cid(), S3CID(0x30))) return false;
     ALO* pa = static_cast<ALO*>(pplayer);
     const glm::vec3 pos = PosAloCenter(static_cast<ALO*>(plo));
     const glm::vec3 d = pos - PosAloCenter(pa);
@@ -640,7 +645,7 @@ void UpdatePickupGround(LO* plo, PICKUP& p)
         for (SOE* pe : poxa->apsoe)
         {
             if (!pe || pe->f48 || pe->palo == plo) continue;
-            if (pe->palo && (FCidDerivedFrom(pe->palo->Cid(), 0x32) || FCidDerivedFrom(pe->palo->Cid(), 0x4F))) continue;
+            if (pe->palo && (FCidDerivedFrom(pe->palo->Cid(), S3CID(0x32)) || FCidDerivedFrom(pe->palo->Cid(), S3CID(0x4F)))) continue;
             if (pe->f49)
             {
                 const glm::vec3 cs = pe->pxf ? glm::vec3(pe->pxf->matWorld[3]) : glm::vec3(0.0f);
@@ -785,7 +790,7 @@ void UpdateCoin(LO* plo)
         if (PFNUPDATE pfn = PfnUpdateOrig(0x1F36E0)) pfn(plo);
         return;
     }
-    if (std::getenv("SLY2N_PICKUPMOVE")) std::printf("pickup %d: update state %d grf 0x%X t %.3f\n", plo->oid, p->state, plo->iupd >= 0 ? g_psw->aupd[plo->iupd].grf : plo->grfUpd, g_clock.t);
+    if (std::getenv("SLY2N_PICKUPMOVE")) std::printf("pickup %d: update state %d grf 0x%X t %.3f at %p\n", plo->oid, p->state, plo->iupd >= 0 ? g_psw->aupd[plo->iupd].grf : plo->grfUpd, g_clock.t, (void*)plo);
     UpdatePickupBase(plo, *p);
     if (p->state == 0)
     {
@@ -805,7 +810,7 @@ void UpdatePickupOther(LO* plo)
     }
     UpdatePickupBase(plo, *p);
     // (only 0x1C6880 / 0x1C7778 time the rest out: the prizes 0x5C and the clue bottles 0x5F run the base's 0x1C5E48)
-    if (p->state == 0 && (FIsLoDerivedFrom(plo, 0x5D) || FIsLoDerivedFrom(plo, 0x5E)))
+    if (p->state == 0 && (FIsLoDerivedFrom(plo, S3CID(0x5D)) || FIsLoDerivedFrom(plo, S3CID(0x5E))))
     {
         p->dtRest -= g_clock.dt;
         if (p->dtRest <= 0.0f) SetPickupState(plo, 5);
@@ -922,6 +927,12 @@ void UpdatePickupMotion(LO* plo)
         }
     }
     UpdateAloPhys(palo);
+    // (the placement check above compares against the record as the object's own update left it: a pool instance given
+    // back (0x1CAA60's slot 35) keeps its position record in velocity mode 1, so 0x1F3980 moves it on by its velocity
+    // after the write. The original overwrites the record from +0x170 every frame and never reads it back; taking that
+    // step for a placement from outside zeroed a reused coin's launch velocity: they dropped straight down in a heap
+    // (R11).)
+    if (XF* pxf = PxfPos(palo); pxf && p.fWritten) p.posLocal = glm::vec3(pxf->mat[3]);
     // (natively the records' update 0x22DE88 lets the flag 4 sleep since the position record is in no moving mode;
     // the pickup moves itself while flying / settling: kept awake. TODO: the reference's record mode of a coin)
     if (p.state == 0 || p.state == 3 || p.state == 4 || p.state == 5) SetGrfUpdOfLo(plo, GrfUpdOfLo(plo) | 4u);
@@ -953,9 +964,9 @@ void SetPickupState(LO* plo, int n)
 {
     PICKUP* p = Ppickup(plo);
     if (!p) p = &InitPickup(plo);
-    if (FIsLoDerivedFrom(plo, 0x5B)) SetCoinState(plo, *p, n);
-    else if (FIsLoDerivedFrom(plo, 0x5C)) SetPrizeState(plo, *p, n);
-    else if (FIsLoDerivedFrom(plo, 0x5F)) SetClueState(plo, *p, n);
+    if (FIsLoDerivedFrom(plo, S3CID(0x5B))) SetCoinState(plo, *p, n);
+    else if (FIsLoDerivedFrom(plo, S3CID(0x5C))) SetPrizeState(plo, *p, n);
+    else if (FIsLoDerivedFrom(plo, S3CID(0x5F))) SetClueState(plo, *p, n);
     else SetOtherPickupState(plo, *p, n);
 }
 
@@ -967,6 +978,10 @@ void LaunchPickup(LO* plo, const glm::vec3& pos, const glm::vec3& vel, float dtS
     if (pproxy) p->pproxy = pproxy;
     AddLo(g_psw, plo);                                  // vt slot 8
     SetLoParentNone(plo);                               // 0x1A58D0(p, 0, 0)
+    // (natively a reused pool instance's records can hold world matrices from its last life (its position record's
+    // local was reset while removed); slot 29 solves the new local against them, so a coin thrown again landed far away,
+    // never activated and stayed frozen (N10). The original's records are always current: refresh them first.)
+    UpdateAloXfWorldsHierarchy(palo);
     SetAloPos(palo, pos);                               // vt slot 29
     SetAloRotation(palo, glm::mat3(1.0f));              // vt slot 30 (D_002A2D00)
     if (XF* pxf = PxfPos(palo)) pxf->vel = glm::vec4(0.0f);
@@ -989,8 +1004,11 @@ void LaunchPickup(LO* plo, const glm::vec3& pos, const glm::vec3& vel, float dtS
             std::printf("pickup %d: ref xf of %d (cid 0x%X) kind %d scale %.3f local %.3f\n", plo->oid, pr->palo ? pr->palo->oid : -1, pr->palo ? pr->palo->Cid() : -1, pr->kind,
                         glm::length(glm::vec3(pr->matWorld[0])), glm::length(glm::vec3(pr->mat[0])));
     if (FPrint())
-        std::printf("pickup %d: launched from (%.1f %.1f %.1f) vel (%.1f %.1f %.1f) collect %.3f\n", plo->oid, pos.x, pos.y, pos.z, vel.x, vel.y,
-                    vel.z, p->tCollect);
+    {
+        const glm::vec3 w = PosLoWorld(plo);
+        std::printf("pickup %d: launched from (%.1f %.1f %.1f) vel (%.1f %.1f %.1f) collect %.3f world (%.0f %.0f %.0f) pos58 %d obj %d\n", plo->oid, pos.x, pos.y, pos.z, vel.x, vel.y,
+                    vel.z, p->tCollect, w.x, w.y, w.z, PxfPos(palo) ? 1 : 0, PxfObj(palo) ? 1 : 0);
+    }
 }
 
 // ---- The drops (the breakables' coins and charms)
@@ -1013,7 +1031,7 @@ std::vector<SOE*> AsoeSolidsIn(const glm::vec3& a, const glm::vec3& b)
         for (SOE* pe : poxa->apsoe)
         {
             if (!pe || pe->f48) continue;
-            if (pe->palo && (FCidDerivedFrom(pe->palo->Cid(), 0x32) || FCidDerivedFrom(pe->palo->Cid(), 0x4F))) continue;
+            if (pe->palo && (FCidDerivedFrom(pe->palo->Cid(), S3CID(0x32)) || FCidDerivedFrom(pe->palo->Cid(), S3CID(0x4F)))) continue;
             if (apsoe.size() < 0x100) apsoe.push_back(pe);
         }
     }
@@ -1063,7 +1081,7 @@ bool FFindPickupFloor(const glm::vec3& pos, std::vector<SOE*>* papsoe, float gDo
 // orig: 0x001C6CE8 (n instances of the kind's proxy (0x5B coins 0x2B3, 0x5D charms 0x2B4): attached, put away (2), kept)
 int CpickupInstances(int cid, int n, std::vector<LO*>* paplo)
 {
-    const OID oid = cid == 0x5B ? 0x2B3 : cid == 0x5D ? 0x2B4 : -1;
+    const OID oid = cid == S3CID(0x5B) ? 0x2B3 : cid == S3CID(0x5D) ? 0x2B4 : -1;
     if (!n || oid == -1) return 0;
     LO* pproxy = PloFindSwObjectByOid(g_psw, oid);  // 0x15E938 (5)
     if (!pproxy) return 0;
@@ -1102,7 +1120,7 @@ void SpawnPickups(int cid, const glm::vec3& pos, LO* psrc, int n)
     };
     if (!FFindPickupFloor(pos, nullptr, 0.0f, 300.0f, -FLT_MAX, &pos0)) return fail("no floor");
     LO* pcur = PloPoCurrent(g_psw);  // 0x1C4840
-    const glm::vec3 posCur = pcur && FCidDerivedFrom(pcur->Cid(), 0x30) ? PosAloCenter(static_cast<ALO*>(pcur)) : pos0;
+    const glm::vec3 posCur = pcur && FCidDerivedFrom(pcur->Cid(), S3CID(0x30)) ? PosAloCenter(static_cast<ALO*>(pcur)) : pos0;
     NAVREGION* preg = pcur ? PregionAt(posCur, false) : nullptr;  // (the player's area record's region)
     if (!preg) preg = PregionAt(pos0, true);                       // 0x1C0D70(pos, 1)
     glm::vec3 posNav;
@@ -1168,7 +1186,7 @@ void DropPickups(const glm::vec3& pos, int n, int dn, LO* psrc)
     const float g = GSuck();  // 0x154C90 (task.cpp)
     if (s_cCoin <= 0) s_cCoin = NRandInRangePk(nlerp(g, s_atbl[4], s_atbl[6]), nlerp(g, s_atbl[5], s_atbl[7]));
     if (s_cCharm <= 0) s_cCharm = NRandInRangePk(nlerp(g, s_atbl[8], s_atbl[10]), nlerp(g, s_atbl[9], s_atbl[11]));
-    s_cCoin += psrc && FIsLoDerivedFrom(psrc, 0x38) ? -2 : -1;
+    s_cCoin += psrc && FIsLoDerivedFrom(psrc, S3CID(0x38)) ? -2 : -1;
     s_cCharm += dn;
     if (n < 0) n = s_cCoin <= 0 ? NRandInRangePk(s_atbl[0], s_atbl[1]) : NRandInRangePk(s_atbl[2], s_atbl[3]);
     if (FPrint()) std::printf("drops: %d coins (counters %d / %d)\n", n, s_cCoin, s_cCharm);
@@ -1219,6 +1237,7 @@ void ResetCluePlacement(LO* plo, LO* pproxy)
 // physics unregistration follow in DetachProxy/RemoveLo.
 void DetachCluePlacement(LO* plo, LO*)
 {
+    DetachAloBase27(plo, nullptr);  // (0x1C7EA8 -> 0x1CB5D0 first; audit L1)
     SetPickupState(plo, -1);
 }
 
@@ -1277,7 +1296,7 @@ NATIVEFN(0x1C7EA8, DetachCluePlacement);
 void PostLoadPickup(LO* plo)
 {
     for (LO* pc : plo->aploOwned)
-        if (FCidDerivedFrom(pc->Cid(), 0x12)) { RemoveLo(g_psw, pc); break; }
+        if (FCidDerivedFrom(pc->Cid(), S3CID(0x12))) { RemoveLo(g_psw, pc); break; }
     const int n = static_cast<int>(plo->U32Field(0, 0x158, 0));
     if (plo->iupd >= 0) g_psw->aupd[static_cast<size_t>(plo->iupd)].grf |= GRFUPD_Update;
     else plo->grfUpd |= GRFUPD_Update;

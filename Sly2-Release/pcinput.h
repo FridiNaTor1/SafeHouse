@@ -26,6 +26,7 @@ struct PCINPUTOPT
     std::array<int, PCA_Max> keyboard{};       // GLFW keys (or settings::kMouseBindingBase.. mouse bindings)
     std::array<int, PCA_Max> gamepad{};        // GLFW gamepad buttons, 1000 LT, 1001 RT
     std::array<int, 4> cameraKeys{};           // Left Right Up Down (the right stick)
+    std::array<int, 2> tankKeys{};             // (settings v19) the tank's left / right track (FTankSticks)
     bool fDisableUnfocusedPad = false;
     // the mouse
     bool fMouseCamera = true;
@@ -55,6 +56,10 @@ struct PCINPUTOPT
     bool fDebugKeys = false;
 };
 extern PCINPUTOPT g_pcinput;
+// (PC) a script read a pad's left and right stick Y (spliceglue.cpp: the Ep5 RC tank drives each track by one stick):
+// with the keyboard, the tank keys then drive the tracks (ReadPcInput)
+void NoteScriptStickRead(int optid);
+bool FTankSticks();
 
 PCINPUTOPT PcInputDefaults();
 void PcInputFromSettings(const cane::settings::SystemSettings& s);

@@ -50,6 +50,7 @@ void UpdateJtThrow(JTTHROW& t);                       // 0x21F418
 void UpdateJtThrowArc(JTTHROW& t, bool updateBlends);  // 0x21FB70
 void SetJtThrowState(JTTHROW& t, int state);           // 0x2206C8
 void ReleaseJtThrow(JTTHROW& t);                      // 0x2205A8
+void SetJtThrowTarget(JTTHROW& t, LO* plo);           // 0x220508
 int OverlapKindJtThrow(const JTTHROW& t, ALO* pOther, int kind);  // 0x220498
 struct CPDEFI;
 void GetJtThrowCpdefi(JTTHROW& t, CPDEFI* pc);         // 0x220388

@@ -7,6 +7,8 @@
 // W: a world record 0..43 (w<W>/map/file-3.map; 0 = the boot world, 1 = the front end), "boot", "frontend".
 
 #include "splicecheck.h"
+#include "game/optid3.h"
+#include "game/sly3.h"
 
 #include <cmath>
 #include <cstdio>
@@ -540,16 +542,16 @@ int JobScriptSelfTest()
     frame->AddParent(parent.get());
     const auto S = C::Sym;
     const auto L = C::L;
-    const auto get = C::Bif(Bifk3FromSly2(111));
-    const auto ensure = C::Bif(Bifk3FromSly2(109));
-    const auto set = C::Bif(Bifk3FromSly2(110));
+    const auto get = C::Bif(static_cast<BIFK>(S3BIF(111)));
+    const auto ensure = C::Bif(static_cast<BIFK>(S3BIF(109)));
+    const auto set = C::Bif(static_cast<BIFK>(S3BIF(110)));
     CRef nil;
     parent->RefAddBinding(9010, &nil);
     parent->RefAddBinding(9011, &nil);
     const C start = L({TAGK_Lambda, L({S(9000)}),
-        L({TAGK_Set, S(9010), L({get, S(9000), 1171})}), L({ensure, S(9000), 2000, 11})});
+        L({TAGK_Set, S(9010), L({get, S(9000), sly3::Optid3FromOptid2(1171)})}), L({ensure, S(9000), 2000, 11})});
     const C stop = L({TAGK_Lambda, L({S(9000)}),
-        L({TAGK_Set, S(9011), L({get, S(9000), 1172})}), L({set, S(9000), 2000, 99})});
+        L({TAGK_Set, S(9011), L({get, S(9000), sly3::Optid3FromOptid2(1172)})}), L({set, S(9000), 2000, 99})});
     const C message = L({TAGK_Lambda, L({S(9000), S(9001)}), L({set, S(9000), 2000, S(9001)})});
     for (const auto& [sym, code] : std::vector<std::pair<SYMID, C>>{{2, start}, {3, stop}, {4, message}})
     {
@@ -579,7 +581,7 @@ int JobScriptSelfTest()
     parent->FFindBinding(9010, 0, &seen);
     check("parent start handler receives job and resolves its actor", seen.m_pbasic == &actor);
     check("job retains source frame and owns private bindings", job.pframe == frame && job.psidebag && !actor.psidebag);
-    check("command-list getter reads the active source", option(111, 1172).m_pbasic == &first);
+    check("command-list getter reads the active source", option(111, sly3::Optid3FromOptid2(1172)).m_pbasic == &first);
     CMD command;
     command.op = 4;
     command.oid = 152647;

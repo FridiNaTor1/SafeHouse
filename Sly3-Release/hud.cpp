@@ -1,6 +1,8 @@
 // See hud.h.
 
 #include "hud.h"
+#include "texmod.h"
+#include "region.h"
 
 #include "display.h"
 #include "promptglyph.h"
@@ -23,11 +25,6 @@ extern int g_iframeHarness;
 #include <map>
 
 CHud g_hud;
-float g_uiKy = 5.0f / 11.0f;
-float g_uiKx = 0.8f;
-float g_sScreenColorOffset = 1.0f;
-bool g_fScreenShdAnyFlags = false;
-bool g_fScreenDepthGreater = false;
 
 namespace
 {
@@ -35,8 +32,8 @@ constexpr float GS_BIAS = 524288.0f;            // 2^19: the float's low 16 bits
 constexpr float GS_ORIGIN = 786432.0f;          // 0x49400000, GS 0
 constexpr float FRAME_OFX = 2048.0f - 256.0f;   // the frame is 512 pixels wide (shown as 640)
 constexpr float FRAME_OFY = 2048.0f - 112.0f;   // the 2D draws in field lines (224): one line = two frame lines
-#define UI_KX g_uiKx                           // Sly 2: 0.8 (0x3F4CCCCD)
-#define UI_KY g_uiKy                           // Sly 2: 5 / 11 (0x3EE8BA2F); Sly 3: 224 / 480
+constexpr float UI_KX = 0.8f;                   // 0x3F4CCCCD
+constexpr float UI_KY = 7.0f / 15.0f;           // orig3 0x2666A0: 448 / 480 / 2 (Sly 2 5 / 11)
 
 glm::vec2 ScreenFromGs(float tx, float ty)
 {
@@ -122,6 +119,18 @@ void CHud::DrawSprite(const SELEM& elem, const HUDSTATE& st)
             const float ty = st.m[1] * x + st.m[5] * y + st.m[9];
             av.push_back({ScreenFromGs(tx, ty), c, z});
         }
+        // one polygon stays on one side of the GS's 4096-pixel wrap: a vertex wrapped away from the first one (a
+        // ticker glyph just at the wrap, e.g. Bentley's long lines scrolling in the HUD prompt 0x2F1) is taken back
+        // by the wrap (4096 GS pixels: 5120 canvas units across, 8192 down). Per vertex it made one glyph a polygon
+        // 4096 pixels wide that the ticker's mask cut into full-width bands over the text (R23)
+        for (size_t i = 1; i < av.size(); ++i)
+        {
+            const glm::vec2 d = av[i].pos - av[0].pos;
+            if (d.x > 2560.0f) av[i].pos.x -= 5120.0f;
+            else if (d.x < -2560.0f) av[i].pos.x += 5120.0f;
+            if (d.y > 4096.0f) av[i].pos.y -= 8192.0f;
+            else if (d.y < -4096.0f) av[i].pos.y += 8192.0f;
+        }
         // (display.h fWideBackgrounds) a polygon spanning the whole canvas's width or height is a full-screen
         // background (the pause backdrop, the cut scenes' bars, the binocucom's surround): its edge vertices go to
         // the window's edges; pictures that only touch an edge keep the 4:3 canvas
@@ -178,7 +187,7 @@ void CHud::DrawSprite(const SELEM& elem, const HUDSTATE& st)
                 std::printf("\n");
             }
         }
-        if (std::getenv("SLY2_HUDCENTERDBG") && fWideEdgesObj && !av.empty() && glm::distance(av[0].pos, glm::vec2(320.0f, 224.0f)) < 40.0f)
+        if (static const bool s_fCenterDbg = std::getenv("SLY2_HUDCENTERDBG") != nullptr; s_fCenterDbg && fWideEdgesObj && !av.empty() && glm::distance(av[0].pos, glm::vec2(320.0f, 224.0f)) < 40.0f)
         {
             std::printf("centre poly prim %d ctl %d vb %d cv %zu rgba %08X:", poly.primitive, poly.control, poly.fVertexBytes, av.size(), poly.rgba);
             for (size_t i = 0; i < av.size(); ++i) std::printf(" (%.1f %.1f b%02X)", av[i].pos.x, av[i].pos.y, poly.ab[i]);
@@ -358,7 +367,7 @@ void CHud::DrawQuad(const SELEM& elem, const HUDSTATE& st)
     if (elem.kind != SELEMK_Quad) return;
     const SHD* pshd = nullptr;
     for (const auto& p : g_shds.ashd)
-        if (p->id == elem.idTexture && ((p->grfshd & 0x40) || g_fScreenShdAnyFlags)) { pshd = p.get(); break; }
+        if (p->id == elem.idTexture && true /* (Sly 3: any shader of the id; Sly 2 only flag 0x40) */) { pshd = p.get(); break; }
     if (!pshd) return;
     if ([] { static const bool f = std::getenv("SLY2_QUADDBG") != nullptr; return f; }())
     {
@@ -421,7 +430,7 @@ void CHud::DrawQuad(const SELEM& elem, const HUDSTATE& st)
 }
 
 void CHud::DrawTexQuad(unsigned tex, float x0, float y0, float x1, float y1, float u0, float v0, float u1, float v1,
-                       glm::vec4 rgba, float z)
+                       glm::vec4 rgba, float z, bool fOnce)
 {
     if (!tex) return;
     QUAD q;
@@ -430,8 +439,24 @@ void CHud::DrawTexQuad(unsigned tex, float x0, float y0, float x1, float y1, flo
     const glm::vec4 c(rgba.r, rgba.g, rgba.b, rgba.a * 0.5f);
     const glm::vec2 p00(x0, y0), p10(x1, y0), p01(x0, y1), p11(x1, y1);
     q.av = {{p00, c, z, {u0, v1}}, {p10, c, z, {u1, v1}}, {p01, c, z, {u0, v0}}, {p01, c, z, {u0, v0}}, {p10, c, z, {u1, v1}}, {p11, c, z, {u1, v0}}};
+    if (fOnce)
+    {
+        // the same icon at the same size within a third of its width: the later copy (drawn on top) is the one kept
+        const float w = x1 - x0, h = y1 - y0;
+        for (QUAD& o : m_aquad)
+        {
+            if (!o.fOnce || o.tex != tex || o.av.size() != 6 || o.av[0].uv != q.av[0].uv || o.av[5].uv != q.av[5].uv) continue;
+            const glm::vec2 d = o.av[5].pos - o.av[0].pos;
+            if (std::abs(d.x - w) > 0.01f * std::abs(w) || std::abs(d.y - h) > 0.01f * std::abs(h)) continue;
+            if (glm::length(o.av[0].pos - p00) > std::abs(w) / 3.0f) continue;
+            o.av = q.av;
+            return;
+        }
+        q.fOnce = true;
+    }
     q.mode = m_mode;
     q.fMip = true;
+    q.fAlphaTest = true;  // Atlas padding must not write depth or stencil over adjacent artwork.
     CloseBatch();
     q.ibatch = m_abatch.size();
     m_fBreakBatch = true;
@@ -605,6 +630,14 @@ void PictureExtent(float& x0, float& x1, float& y0, float& y1)
 }
 }
 
+void CHud::Pillarbox(glm::vec4 rgba, float z)
+{
+    float x0, x1, y0, y1;
+    PictureExtent(x0, x1, y0, y1);
+    if (x0 < 0.0f) FillScreenRect(x0, y0, 0.0f, y1, rgba, z);
+    if (x1 > 640.0f) FillScreenRect(640.0f, y0, x1, y1, rgba, z);
+}
+
 void CHud::Fade(glm::vec4 rgba)
 {
     float x0, x1, y0, y1;
@@ -663,6 +696,11 @@ std::string StrWrapped(const FONTBRX& fontBase, const FONTBRX* pfontOther, const
     float w = 0.0f;
     size_t iSpace = std::string::npos;
     float wAtSpace = 0.0f;
+    // (the Japanese text: the line's characters so far: where each starts (its codes before it included), the
+    // character and its width)
+    struct LCH { size_t ib; uint32_t ch; float dx; };
+    std::vector<LCH> aline;
+    size_t ibNext = 0;   // where the next character starts (after the last one)
     for (size_t i = 0; i < out.size(); ++i)
     {
         if (out[i] == '&' && i + 1 < out.size())
@@ -675,10 +713,47 @@ std::string StrWrapped(const FONTBRX& fontBase, const FONTBRX* pfontOther, const
             }
             ++i;
         }
-        if (out[i] == '\n') { w = 0.0f; iSpace = std::string::npos; continue; }
-        // (Sly 3's layout 0x265000: the line's width counts its trailing spaces (+0x8C keeps it without them), so a
-        // space that takes the line past the box breaks it at the space before: the word before the space moves down)
-        const float dx = pfont->DxFromCh(uint8_t(out[i])) * k88;
+        if (out[i] == '\n') { w = 0.0f; iSpace = std::string::npos; aline.clear(); ibNext = i + 1; continue; }
+        std::size_t cb = 1;
+        const uint32_t ch = ChDecode(out, i, &cb);
+        const float dx = pfont->DxFromCh(ch) * k88;
+        // (Sly 3's text is UTF-16 but not laid out as the Japanese build's: the Western rule below)
+        if (constexpr bool fJapaneseLayout = false; fJapaneseLayout)
+        {
+            // orig JP 0x217538: the character that passes the box goes to the next line, with the characters before
+            // it back to the last place a line may break (JP 0x220840: not before a closing mark, not after an
+            // opening one); without one the line breaks before that character. Nothing hangs past the box.
+            const LCH lch{ibNext, ch, dx};
+            if (w + dx > wBox && w > 0.0f)
+            {
+                size_t j = aline.size();   // (break before aline[j], j == size: before this character)
+                while (j > 0 && (FJapaneseNoBreakBefore(j < aline.size() ? aline[j].ch : ch) || FJapaneseNoBreakAfter(aline[j - 1].ch)))
+                    --j;
+                if (j == 0) j = aline.size();
+                if (static const bool s_fLog = std::getenv("SLY2N_WRAPLOG") != nullptr; s_fLog && j < aline.size())
+                    std::printf("wrap: %zu moved down: %s\n", aline.size() - j, out.c_str());
+                const size_t ibBreak = j < aline.size() ? aline[j].ib : lch.ib;
+                out.insert(ibBreak, 1, '\n');
+                std::vector<LCH> anext;
+                w = 0.0f;
+                for (size_t k = j; k < aline.size(); ++k)
+                {
+                    anext.push_back({aline[k].ib + 1, aline[k].ch, aline[k].dx});
+                    w += aline[k].dx;
+                }
+                aline = std::move(anext);
+                iSpace = std::string::npos;
+                ++i;
+                aline.push_back({lch.ib + 1, ch, dx});
+            }
+            else aline.push_back(lch);
+            w += dx;
+            i += cb - 1;
+            ibNext = i + 1;
+            continue;
+        }
+        // orig3: 0x00265000 (the layout): the line's width counts its trailing spaces, so a space that takes the line
+        // past the box breaks it at the space before (the word before the space moves down)
         w += dx;
         if (w > wBox && iSpace != std::string::npos)
         {
@@ -687,6 +762,7 @@ std::string StrWrapped(const FONTBRX& fontBase, const FONTBRX* pfontOther, const
             iSpace = std::string::npos;
         }
         if (out[i] == ' ') { iSpace = i; wAtSpace = w - dx; }
+        i += cb - 1;
     }
     return out;
 }
@@ -721,7 +797,9 @@ void CHud::DrawTextBox(const FONTBRX& fontBase, const FONTBRX* pfontOther, const
         }
         if (text[i] == '&') ++i;
         if (text[i] == '\n') { awLine.push_back(0.0f); continue; }
-        awLine.back() += pfont->DxFromCh(uint8_t(text[i])) * k88;
+        std::size_t cb = 1;
+        awLine.back() += pfont->DxFromCh(ChDecode(text, i, &cb)) * k88;
+        i += cb - 1;
     }
     pfont = &fontBase;
     if (valign != 0)
@@ -735,7 +813,9 @@ void CHud::DrawTextBox(const FONTBRX& fontBase, const FONTBRX* pfontOther, const
     st.offset = offset;
     for (size_t i = 0; i < text.size(); ++i)
     {
-        char ch = text[i];
+        std::size_t cbCh = 1;
+        uint32_t ch = ChDecode(text, i, &cbCh);
+        i += cbCh - 1;
         if (ch == '&' && i + 1 < text.size())
         {
             if (text[i + 1] == '&') ++i;
@@ -747,7 +827,7 @@ void CHud::DrawTextBox(const FONTBRX& fontBase, const FONTBRX* pfontOther, const
                 ++i;
                 continue;
             }
-            ch = text[i];
+            ch = uint8_t(text[i]);
         }
         if (ch == '\n') { ++iline; fLineStart = true; ty += dyLine; continue; }
         if (fLineStart)
@@ -761,28 +841,38 @@ void CHud::DrawTextBox(const FONTBRX& fontBase, const FONTBRX* pfontOther, const
             }
             fLineStart = false;
         }
-        if (const SELEM* pglyph = pfont->PglyphFromCh(uint8_t(ch)))
+        if (const SELEM* pglyph = pfont->PglyphFromCh(ch))
         {
             st.m[8] = tx;
             st.m[9] = ty;
             // the button icons: the bound button for the device in use (promptglyph.h; widths unchanged)
-            const PROMPTGLYPH pg = pfont == pfontOther ? PromptGlyphFor(ch) : PROMPTGLYPH{};
+            const PROMPTGLYPH pg = pfont == pfontOther && (ch < 0x80 || !FWideText()) ? PromptGlyphFor(char(ch)) : PROMPTGLYPH{};
             glm::vec2 lo, hi;
             float z = 0.0f, a = 0.0f;
             if (pg.kind == PROMPTGLYPH::Icon && FGlyphBox(*pglyph, st, &lo, &hi, &z, &a))
             {
                 // a square of the glyph's height, centred on the game's icon
-                const float h = hi.y - lo.y, xc = 0.5f * (lo.x + hi.x), yc = 0.5f * (lo.y + hi.y);
+                float h = hi.y - lo.y;
+                const float xc = 0.5f * (lo.x + hi.x), yc = 0.5f * (lo.y + hi.y);
+                // (the Start / Select glyphs are flat pills: their icons as tall as the face buttons' (Triangle's), so a
+                // keycap or a pad's small button stays readable; N39)
+                if (ch == '!' || ch == '_')
+                    if (const SELEM* pglyphT = pfont->PglyphFromCh(uint8_t('T')))
+                    {
+                        glm::vec2 loT, hiT;
+                        float zT, aT;
+                        if (FGlyphBox(*pglyphT, st, &loT, &hiT, &zT, &aT)) h = std::max(h, hiT.y - loT.y);
+                    }
                 // (the canvas's pixels are 480 / 448 as wide as high: 640 x 448 shown at 4:3)
                 const float hx = 0.5f * h * (480.0f / 448.0f);
                 DrawTexQuad(pg.tex, xc - hx, yc - 0.5f * h, xc + hx, yc + 0.5f * h, pg.u0, pg.v0, pg.u1, pg.v1,
-                            glm::vec4(128.0f, 128.0f, 128.0f, a), z);
+                            glm::vec4(128.0f, 128.0f, 128.0f, a), z, true);
             }
             else if (pg.kind == PROMPTGLYPH::Glyph && pfont->PglyphFromCh(uint8_t(pg.ch)))
                 DrawSprite(*pfont->PglyphFromCh(uint8_t(pg.ch)), st);
             else DrawSprite(*pglyph, st);
         }
-        tx += pfont->DxFromCh(uint8_t(ch)) * k88 * sx * UI_KX;
+        tx += pfont->DxFromCh(ch) * k88 * sx * UI_KX;
     }
 }
 
@@ -808,11 +898,15 @@ void CHud::Flush(int width, int height)
     glBindFramebuffer(GL_FRAMEBUFFER, g_gl.FboScene());
     glViewport(0, 0, width, height);
     glClearDepth(0.0);
-    if (!std::getenv("SLY2N_HUDKEEPZ")) glClear(GL_DEPTH_BUFFER_BIT);
+    if (static const bool s_fKeepZ = std::getenv("SLY2N_HUDKEEPZ") != nullptr; !s_fKeepZ) glClear(GL_DEPTH_BUFFER_BIT);
     glDisable(GL_CULL_FACE);
     glDisable(GL_STENCIL_TEST);
     glEnable(GL_DEPTH_TEST);
-    glDepthFunc(g_fScreenDepthGreater ? GL_GREATER : GL_GEQUAL);
+    // (Sly 3: the 2D depth test keeps the first of equal depths: a sprite's earlier polygons stay over its later ones,
+    // e.g. the prompt 1058's arrows (the yellow fan over the orange border strips), as the reference / PCSX2 show; Sly 2:
+    // GEQUAL. SLY3_HUDGEQUAL=1: Sly 2's)
+    static const bool s_fGequal = std::getenv("SLY3_HUDGEQUAL") != nullptr;
+    glDepthFunc(s_fGequal ? GL_GEQUAL : GL_GREATER);
     glDepthMask(GL_TRUE);
     glEnable(GL_BLEND);
     glBlendEquation(GL_FUNC_ADD);
@@ -867,12 +961,12 @@ void CHud::Flush(int width, int height)
             glBindSampler(0, 0);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-            // TEX1 0x60: linear, no mips (the prompt atlases and the HQ logo keep their mipmaps)
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, q.fMip ? GL_LINEAR_MIPMAP_LINEAR : GL_LINEAR);
+            // TEX1 0x60: linear, no mips (the prompt atlases, the HQ logo and texture mods keep their mipmaps)
+            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, q.fMip || FTextureIsMod(q.tex) ? GL_LINEAR_MIPMAP_LINEAR : GL_LINEAR);
             glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
             glUniform1i(locTextured, 1);
             glUniform1i(locTex, 0);
-            glUniform1i(locNz, q.fReplace && !s_fNoTest ? 1 : 0);
+            glUniform1i(locNz, (q.fReplace || q.fAlphaTest) && !s_fNoTest ? 1 : 0);
             if (q.fReplace) glDisable(GL_BLEND);
             glDrawArrays(GL_TRIANGLES, GLint(aivtxQuad[iquad]), GLsizei(q.av.size()));
             if (q.fReplace) glEnable(GL_BLEND);
@@ -1045,7 +1139,7 @@ int CDrawHudFromRam(const std::string& ramPath, const std::vector<std::shared_pt
                 const SELEM* pelem = it != mpchain.end() ? PelemFromRam(r, it->second, aso) : nullptr;
                 if (pelem && [] { static const bool f = std::getenv("SLY2_HUDRAMDBG") != nullptr; return f; }())
                     std::printf("ram sprite elem %u z %.0f rpl %.0f m %.2f %.2f pos %.1f %.1f off %.0f %.0f %.0f %.0f scale %.2f %.2f %.2f %.2f\n", pelem->idx, st.depth, rec.z, st.m[0], st.m[5],
-                                (st.m[8] - 786432.0f - 1792.0f) / 0.8f, (st.m[9] - 786432.0f - 1936.0f) / (5.0f / 11.0f), st.offset.r, st.offset.g, st.offset.b, st.offset.a,
+                                (st.m[8] - 786432.0f - 1792.0f) / 0.8f, (st.m[9] - 786432.0f - 1936.0f) / UI_KY, st.offset.r, st.offset.g, st.offset.b, st.offset.a,
                                 st.scale.r, st.scale.g, st.scale.b, st.scale.a);
                 if (pelem) { g_hud.DrawSprite(*pelem, st); ++cdrawn; }
                 else if (auto iq = mpquad.find(addr); iq != mpquad.end())
@@ -1066,14 +1160,15 @@ int CDrawHudFromRam(const std::string& ramPath, const std::vector<std::shared_pt
             }
             break;   // ret / end
         }
-        if (chain && std::getenv("SLY2_HUDSKIP") && std::strtoul(std::getenv("SLY2_HUDSKIP"), nullptr, 16) == chain) chain = 0;
+        static const char* const s_szHudSkip = std::getenv("SLY2_HUDSKIP");
+        if (chain && s_szHudSkip && std::strtoul(s_szHudSkip, nullptr, 16) == chain) chain = 0;
         if (chain)
         {
             auto it = mpchain.find(chain);
             const SELEM* pelem = it != mpchain.end() ? PelemFromRam(r, it->second, aso) : nullptr;
             if (pelem && [] { static const bool f = std::getenv("SLY2_HUDRAMDBG") != nullptr; return f; }())
                 std::printf("ram chain elem %u z %.0f rpl %.0f m %.2f %.2f pos %.1f %.1f off %.0f %.0f %.0f %.0f scale %.2f %.2f %.2f %.2f\n", pelem->idx, st.depth, rec.z, st.m[0], st.m[5],
-                            (st.m[8] - 786432.0f - 1792.0f) / 0.8f, (st.m[9] - 786432.0f - 1936.0f) / (5.0f / 11.0f), st.offset.r, st.offset.g, st.offset.b, st.offset.a,
+                            (st.m[8] - 786432.0f - 1792.0f) / 0.8f, (st.m[9] - 786432.0f - 1936.0f) / UI_KY, st.offset.r, st.offset.g, st.offset.b, st.offset.a,
                             st.scale.r, st.scale.g, st.scale.b, st.scale.a);
             if (pelem) { g_hud.DrawSprite(*pelem, st); ++cdrawn; }
             else if (auto iq = mpquad.find(chain); iq != mpquad.end() && PquadFromRam(r, iq->second, aso))

@@ -40,6 +40,10 @@ void InitZoneCamera(LO* pzone);
 ZONECM* PzonecmFromLo(LO* pzone);  // (null: not a zone)
 // orig: 0x00221268 (the zone's forced state +0x13C (-1 by the player's position, 0 off, 1 on), then 0x221298)
 void SetZoneForced(LO* pzone, int n);
+int NZoneForced(LO* pzone);  // +0x13C
+// orig: 0x002213D8 (the zone's vt slot 22: out of the update table (0x1A6150), then its camera off (0x221178(0)))
+void OnZoneUnregistered(LO* pzone);
+void SetPairCamera(LO* plo, int n);  // 0x1CBF90
 // orig: 0x00194118 (the interaction zone's camera back to its defaults: cpp 3, grf 5, return 1, the shared entry)
 void ResetZoneInteract(LO* pzone);
 // a zone's first camera entry (+0x114: the loaded entries' first, or 0x194118's shared one); null: not a zone

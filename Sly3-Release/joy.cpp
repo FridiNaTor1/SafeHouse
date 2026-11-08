@@ -1,7 +1,10 @@
 #include "joy.h"
+#include "game/sly3.h"
+#include "rumble.h"
 
 #include "pcinput.h"
 #include "skipcut.h"
+#include "debugmenu.h"
 
 #include "clock.h"
 #include "po.h"
@@ -55,8 +58,6 @@ void ClearJoyBtns(JOYPS2* pjoy, uint32_t grf)
     pjoy->grfbtn &= ~grf;
     pjoy->grfbtnHandled &= ~grf;
 }
-
-CLOCK* g_pclockJoy = &g_clock;
 
 namespace
 {
@@ -152,6 +153,12 @@ void UpdateJoy(JOY* pjoy, GLFWwindow* pwindow, int frame, const std::vector<JOYP
         pjoy->fConnected = fPad;
     }
     grf &= uint16_t(~GrfSkipCutMask());   // (skipcut.h: the Circle that skipped a cutscene, until released)
+    // (debugmenu.h, Debug keys on only: the debug menu's keys, and the whole pad while it is open, are not the game's)
+    if (const uint16_t grfGame = GrfDebugMenuFilter(grf, &xl, &yl, &xr, &yr, abAxis); grfGame != grf)
+    {
+        grf = grfGame;
+        g_grfJoyWindow &= grfGame;
+    }
     // the raw read the game's pad gets (scePadRead: bytes 2 / 3 the buttons active low, 4..7 RX RY LX LY)
     {
         auto byteOf = [](float g, bool fInvert) {
@@ -193,6 +200,8 @@ void UpdateJoy(JOY* pjoy, GLFWwindow* pwindow, int frame, const std::vector<JOYP
     pjoy->yLeft = yl;
     pjoy->xRight = xr;
     pjoy->yRight = yr;
+    // (0x1871C0 state 3, after FReadJoy: the rumble's step, with JOY +0x10E8 fRumbleEnabled always on)
+    if (g_joyps2.joys == 3 && g_joyps2.joyk >= 3) UpdateRumble(&g_rumble);
 }
 
 namespace
@@ -286,24 +295,24 @@ void ReadJoyPs2(JOYPS2* pjoy, const uint8_t* abRaw)
         }
         pjoy->uDeflect = 1.0f;
     }
-    const float dt = g_pclockJoy->dt40;
+    const float dt = g_clock.dt40;
     pjoy->dx = (pjoy->x - x) / dt;
     pjoy->dy = (pjoy->y - y) / dt;
     pjoy->dx2 = (pjoy->x2 - x2) / dt;
     pjoy->dy2 = (pjoy->y2 - y2) / dt;
-    pjoy->tRead = g_pclockJoy->t3C;
+    pjoy->tRead = g_clock.t3C;
     if (pjoy->grfbtn != 0 || !(pjoy->uDeflect == 0.0f) || !(pjoy->uDeflect2 == 0.0f))
     {
-        pjoy->tActive = g_pclockJoy->t3C;
+        pjoy->tActive = g_clock.t3C;
         pjoy->dtIdle = 0;
         // after 15 s the task event 0xE with the current player (0x1C4840 / 0x1619A0 on 0x2DEB30)
-        if (pjoy == &g_joyps2 && 15.0f < g_pclockJoy->t3C - g_taskmgr.tIdleEvent)
+        if (pjoy == &g_joyps2 && 15.0f < g_clock.t3C - g_taskmgr.tIdleEvent)
         {
             if (g_psw) BroadcastTaskEvent(g_psw, 0xE, PloPoCurrent(g_psw));
-            g_taskmgr.tIdleEvent = g_pclockJoy->t3C;
+            g_taskmgr.tIdleEvent = g_clock.t3C;
         }
     }
-    else pjoy->dtIdle = static_cast<int>(g_pclockJoy->t3C - pjoy->tActive);
+    else pjoy->dtIdle = static_cast<int>(g_clock.t3C - pjoy->tActive);
 }
 
 // orig: 0x00187DE0 SetJoyBtnHandled
@@ -317,7 +326,7 @@ void SetJoyPs2BtnHandled(JOYPS2* pjoy, uint32_t grfbtn)
 // their moved flags and learned limits (else the first native reads see the sticks at rest: Sly's run ramps).
 void ImportJoyPs2FromRam(JOYPS2* pjoy, const std::vector<uint8_t>& ram)
 {
-    constexpr uint32_t A = 0x2DFC00;
+    constexpr uint32_t A = S3VA(0x2DFC00);
     auto rd = [&](uint32_t off, void* pv, size_t cb) { if (A + off + cb <= ram.size()) std::memcpy(pv, &ram[A + off], cb); };
     rd(0x1018, &pjoy->tRead, 4);
     rd(0x101C, &pjoy->tActive, 4);

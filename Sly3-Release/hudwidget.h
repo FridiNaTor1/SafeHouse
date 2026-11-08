@@ -40,3 +40,6 @@ int IdHudPrompt();  // 0x1DA5B0
 // set the slot is written (0x1ABCE8), else the warning dialog 0x22 first (menu.h).
 void HudAutoSave(bool fForce);
 extern bool (*g_pfnWriteSave)();
+
+// (Sly 3) orig3 0x001A9568: the current player has the pad (its pause menu, its gauge)
+bool FPadHasPlayer3(SW* psw);

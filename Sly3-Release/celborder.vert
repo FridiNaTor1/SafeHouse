@@ -10,7 +10,6 @@ uniform mat4 matWorldToClip;
 uniform mat4 matModel;
 uniform vec2 halfWidthNdc;   // half the border width in NDC units (x, y)
 uniform int edgeBase;
-uniform float depthBias;
 
 // Skinned borders (animation code): per edge vertex its weights and the group's bone indices, the frame's bone
 // matrices (P_A 60: the positions skinned with up to 4 bones).
@@ -64,8 +63,7 @@ void main()
     vec4 P = fB ? B : A;
     vec2 off = (fOut ? perp * 2.0 : vec2(0.0)) + (fB ? unit : -unit) * 0.5;
     P.xy += off * halfWidthNdc * P.w;
-    // Toward the camera by a fraction of the distance (reversed Z: depth = near / w), so the border is not lost in
-    // the surface it outlines.
-    P.z *= 1.0 + depthBias;
+    // At the edge's own depth, as the original (TEST 0x73001: ZTST GREATER, no offset): the quad lies outside the
+    // silhouette, and any bias toward the camera lets edges hidden behind thin parts (fingers, lips) show through.
     gl_Position = P;
 }

@@ -124,6 +124,7 @@ struct MURRAY : ACTOR
     int f1908 = 0;                 // +0x1908 the charge hit a wall (0x1B9130)
     int f143C = 0;                 // +0x143C Diablo Fire Slam: state 8's alternate clip +0x1AE4
     float t1AC8 = -60.0f;          // +0x1AC8
+    CTRLPOS* pscale1ACC = nullptr; // +0x1ACC, released before the world's transform records
     // the hold (state 6, 0x1B9C00: an object held up, e.g. a gate)
     SM* psm1520 = nullptr;         // +0x1520 the hold's state machine
     float t1524 = 0.0f;            // +0x1524 the time left in a hold state (0x1B68B8)
@@ -149,6 +150,7 @@ void InitWorldGang(SW* psw);
 void SetBentleyState(BENTLEY* p, int n);
 // orig: 0x001B6078 (Murray's)
 void SetMurrayState(MURRAY* p, int n);
+void SetMurrayBerserk(MURRAY* p, int st);  // orig 0x1B8D30 (state 12's phase)
 // orig: 0x001B9C00 (SCPT 0x4F): Murray holds the object of psmaObj (state 6, kind k); both state machines to oid
 // (fSnap: at once, 0x1F0948; else 0x1F0660)
 struct SMA;
@@ -170,3 +172,7 @@ struct ALO;
 struct ACTOR;
 void BindActorRootBlend(ROOTBLEND* prb, ALO* palo, uint32_t ib);
 void SteerActorRootBlend(ACTOR* p, ROOTBLEND* prb);
+
+// Native world lifetime: unlink and free Murray's optional scale controller
+// while its ALO and XF records still exist.
+void ReleaseMurrayScaleControllers(SW* psw);

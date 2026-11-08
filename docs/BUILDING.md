@@ -52,7 +52,7 @@ cmake --preset macos-release -DCANE_FFMPEG_ROOT="$PWD/build/ffmpeg"
 cmake --build --preset macos-release --parallel 4
 ```
 
-On macOS the games' OpenGL runs on Metal (`platform/metal`). The macOS build has the launcher and Sly 2.
+On macOS the games' OpenGL runs on Metal (`platform/metal`). The macOS build has the launcher, Sly 2 and Sly 3 (early in development).
 
 ## Options
 

@@ -2,7 +2,12 @@
 // Reference: Sly2-Reference/Sly2-Release/game/m_174898.cpp (0x9C, 0x9D, 0x9E, 0xAA), m_174B28_p3.cpp (0xA7, 0xAA),
 // m_171228_p3.cpp (0xA9), m_17D360_p3.cpp (0xBA, 0xC0).
 
+#include "jt.h"
+#include "game/sly3.h"
 #include "aijobs.h"
+#include "rumble.h"
+#include "gang.h"
+#include "po.h"
 #include "task.h"
 #include "aichase.h"
 #include "actor.h"
@@ -29,12 +34,14 @@
 #include "worldaccess.h"
 #include "xf.h"
 #include "xfmath.h"
+#include "mat.h"
 
 #include <glm/gtc/matrix_transform.hpp>
 
 #include <cfloat>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <cstdlib>
 
 void EnsureScptAlarm(LO* pscpt, int n);  // scpt.cpp: orig 0x1E0020
@@ -239,6 +246,23 @@ void JOBREACT::React(const AIMSG& m)
         o->Enter();
         break;
     }
+    case 19:
+    {
+        auto* o = static_cast<JOBNAVPOINT*>(job(0xBF));
+        o->goal.pos = pguard->pos4B0;  // orig: 0x00176750, saved supported position
+        o->Enter();
+        break;
+    }
+    case 16:
+    {
+        // orig 0x176750: the station (0xB7) with the guard's +0xF68 / +0xF70
+        fClear38C = true;
+        auto* o = static_cast<JOBSTATION*>(job(0xB7));
+        o->plo = pguard->ploF68;
+        o->pos = pguard->posF70;
+        o->Enter();
+        break;
+    }
     case 13:  // orig 0x176750: the boss's fight (0xB4) at the message's object
     {
         auto* o = static_cast<JOBB4*>(job(0xB4));
@@ -345,8 +369,10 @@ void JOBREACT::Update()
             if (pchild && static_cast<JOBMOVE*>(pchild)->st == 1)
             {
                 m.k = 2;
-                m.plo = PnoiseNew(PtmplNoiseFixed(0), PosAi(pg->palo), pg->palo);
+                NOISE* pn = PnoiseNew(PtmplNoiseFixed(0), PosAi(pg->palo), pg->palo);
+                m.plo = pn;
                 React(m);
+                if (pn) RemoveNoise(pn);  // 0x156780: the noise only for this guard (audit 2026-11 A5)
             }
             break;
         case 2:
@@ -358,7 +384,7 @@ void JOBREACT::Update()
                 React(m);
                 break;
             }
-            auto* pj = static_cast<JOBINVESTIGATE*>(pchild);
+            auto* pj = dynamic_cast<JOBINVESTIGATE*>(pchild);  // (Sly 3: the child may be another job while the AI data is Sly 2-numbered)
             LO* pcur = pj ? pj->pnoise : nullptr;
             LO* pnext = PloGuardInterest(pg, pcur);
             if (pnext != pcur)
@@ -375,7 +401,7 @@ void JOBREACT::Update()
         {
             if (busy()) { m.k = 0xC; React(m); break; }
             if (!pchild || static_cast<JOBMOVE*>(pchild)->st != 1) break;  // (0x174FB8: the alerted move done)
-            m.k = FCidDerivedFrom(pg->palo->Cid(), 0x3B) ? 0xD : 4;
+            m.k = FCidDerivedFrom(pg->palo->Cid(), S3CID(0x3B)) ? 0xD : 4;
             m.plo = msg.plo;
             React(m);
             break;
@@ -406,6 +432,11 @@ void JOBREACT::Update()
         case 5:
             if (pchild && static_cast<JOBSCRIPT*>(pchild)->FDone()) NextReaction();
             break;
+        case 6:
+            // orig: 0x177618 -> 0x17A9C0, then 0x177BA0. Landing
+            // finishes the carry/drop reaction and resumes normal behavior.
+            if (pchild && static_cast<JOBB0*>(pchild)->FDone()) NextReaction();
+            break;
         case 7:
             if (auto* pj = dynamic_cast<JOBB1*>(pchild); pj && pj->st == 1)
             {
@@ -423,8 +454,11 @@ void JOBREACT::Update()
         case 18:
             if (pchild && static_cast<JOBBD*>(pchild)->st == -1) NextReaction();  // (0x17DE40)
             break;
+        case 19:  // the recovery to the saved supported position (orig 0x177618: 0x17EAE8, then 0x177BA0)
+            if (pchild && static_cast<JOBNAVPOINT*>(pchild)->FDone()) NextReaction();
+            break;
         default:
-            break;  // TODO(ai): 2, 3, 4, 6..11, 18, 19 (with their jobs)
+            break;
         }
         if (FSameMsg(msg, saved)) return;
     }
@@ -445,11 +479,25 @@ void JOBMOVE::Init()
 void JOBMOVE::Enter()
 {
     AddGuardState(pguard, nAnim);
+    if (static const bool s_f = std::getenv("SLY2N_MOVEDEBUG") != nullptr; s_f)
+    {
+        std::fprintf(stderr, "move enter 0x%X guard %d states 0x%llx (anim %d); entries:", cid, pguard->palo->oid,
+                     (unsigned long long)pguard->grfState, nAnim);
+        for (const KINDE& e : pguard->akinde) std::fprintf(stderr, " [k %d oid %d mask 0x%llx]", e.k, e.oid, (unsigned long long)e.mask);
+        std::fprintf(stderr, "\n");
+    }
     if (!pkinde)
     {
         pkinde = PkindeBestOfGuard(pguard);
         if (!pkinde)
         {
+            if (static const bool s_f = std::getenv("SLY2N_MOVEDEBUG") != nullptr; s_f)
+            {
+                std::fprintf(stderr, "move job 0x%X guard %d: no kind entry for states 0x%llx (anim %d); entries:", cid,
+                             pguard->palo->oid, (unsigned long long)pguard->grfState, nAnim);
+                for (const KINDE& e : pguard->akinde) std::fprintf(stderr, " [k %d oid %d mask 0x%llx]", e.k, e.oid, (unsigned long long)e.mask);
+                std::fprintf(stderr, "\n");
+            }
             SetMoveState(1);
             return;
         }
@@ -485,9 +533,14 @@ void JOBMOVE::SetMoveState(int n)
             }
             StopKinde(pkinde);
             pkinde = nullptr;
-            // orig 0x209790: the move cleared, the actor's +0x190.. motion stopped (0x1F5078)
-            if (pg->move.pjob == this) pg->move.pjob = nullptr;
+            // orig 0x209790: the move cleared (its job +0x0 and the heading lock +0x4: a clip cut between its events
+            // 0x25 / 0x26, e.g. a strike interrupted by a hit, leaves no lock behind (R05: Dimitri unable to turn and
+            // shoot after his third teleport; R07: every later hit knocked the guard back along the stale heading)),
+            // the actor's +0x190.. motion stopped and the object woken (0x1F5078)
+            pg->move.pjob = nullptr;
+            pg->move.fHeadingLocked = 0;
             St(pg).vecVel = glm::vec3(0.0f);
+            WakeAlo(pg->palo);
         }
         St(pg).nMotion = 0;
     }
@@ -574,12 +627,35 @@ int JOBMOVE::Message(int msg, void* pm)
     {
     case 0x2A: St(pg).nMotion = 0; return 1;
     case 0x27: LockJob(this); return 1;
-    case 0x25: pg->move.fHeadingLocked = 1; return 1;  // (0x2097C8)
-    case 0x26: pg->move.fHeadingLocked = 0; return 1;  // (0x2097D8)
+    case 0x25: case 0x26:
+        if (std::getenv("SLY2N_BOSSPRINT") && pg->palo)
+            std::printf("heading lock: guard %d job 0x%X event 0x%X clip %d t %.3f (clip t %.3f)\n", pg->palo->oid, cid, pev->n,
+                        pev->pasega->paseg ? pev->pasega->paseg->oid : -1, g_clock.t, pev->t);
+        pg->move.fHeadingLocked = pev->n == 0x25 ? 1 : 0;  // (0x2097C8 / 0x2097D8)
+        if (std::getenv("SLY2N_HITDIR"))
+            std::printf("hitdir lock: t %.3f guard %d %p job 0x%X anim %d locked %d\n", g_clock.t, pg->palo->oid, (void*)pg, cid, nAnim,
+                        pg->move.fHeadingLocked);
+        return 1;
     case 0x28: UnlockJob(this); return 1;
     case 0x29: St(pg).nMotion = 1; return 1;
-    case 0x2F: return 0;  // (the pursuer's rumble 0x187E28(8, 1) of the current player: TODO(media))
-    case 0x34: case 0x35: return 0;  // (the hit job's rumble / the camera's shake when the player is hit: TODO)
+    case 0x2F:
+    {
+        // the pursuit's (0xA5) target is the current player: the pad's rumble (0x187E28 kind 8, 1 s)
+        const JOBPURSUE* pjp = static_cast<const JOBPURSUE*>(PjobFind(pg, 0xA5));
+        if (pjp && g_psw && pjp->ptarget && pjp->ptarget == PloPoCurrent(g_psw)) TriggerJoyRumbleRumk(8, 1.0f, "guard event 0x2F");
+        return 0;
+    }
+    case 0x34: case 0x35:
+    {
+        // the last hit (0xA0's) came from the current player (or one of its parents: 0x1A6AF8), and that is Murray
+        // (D_002F7900): 0x34 the pad's rumble (0x187E28 kind 3, 0.15 s), 0x35 the camera's shake (0x14F750: TODO)
+        LO* pcur = g_psw ? PloPoCurrent(g_psw) : nullptr;
+        const JOBHIT* pjh = static_cast<const JOBHIT*>(PjobFind(pg, 0xA0));
+        const MURRAY* pm = PmurrayGlobal();
+        if (pjh && pcur && FLoInParentChain(pjh->hit.psource, pcur) && pm && pm->palo == pcur && pev->n == 0x34)
+            TriggerJoyRumbleRumk(3, 0.150000006f, "guard event 0x34");
+        return 0;
+    }
     case 0x36: SetAloEntryMode(pg->palo, 2); return 0;  // (its body entries hit: the guard's own 0x20000 contact)
     case 0x15E:
     {
@@ -614,7 +690,8 @@ void JOBSTAND::Enter()
     GUARD* pg = pguard;
     if (FGuardState(pg, 1))
     {
-        // TODO(ai): 0x20AB68 (the held object dropped), 0x153FF8 (the detector)
+        SetGuardResponse(pg, nullptr, nullptr, glm::vec3(0.0f)); // orig: 0x20AB68
+        // TODO(ai): 0x153FF8 (the detector)
         if (pg->ploFCC) ploFace = pg->ploFCC;
     }
     if (pg->palo->apxfRef[0]) SetXfMode(pg->palo, pg->palo->apxfRef[0], 1);
@@ -870,7 +947,7 @@ void JOBFOLLOW::Steer177F78()
             glm::vec3 v7 = posSelf - q;
             if (DZ_AVOID < std::fabs(v7.z)) continue;
             glm::vec3 ov(0.0f);
-            if (FCidDerivedFrom(m.plo->Cid(), 0x30)) ov = VelAloPos(static_cast<ALO*>(m.plo));  // vt slot 33
+            if (FCidDerivedFrom(m.plo->Cid(), S3CID(0x30))) ov = VelAloPos(static_cast<ALO*>(m.plo));  // vt slot 33
             const glm::vec3 pred = q + ov * T_PREDICT;
             const glm::vec3 v4 = glm::vec3(pos) - pred;
             v7 = Horiz(v7);
@@ -929,6 +1006,10 @@ void JOBFOLLOW::Steer177F78()
             }
         }
     }
+    if (static const char* s_sz = std::getenv("SLY2N_STEERPRINT"); s_sz && (st == 1 || st == 4) && palo->oid == std::atoi(s_sz))
+        std::printf("steer %d t %.3f st %d way %d sOther %.1f/%.1f self %.0f %.0f path %.0f %.0f dir %.2f %.2f ahead %.1f goal %.0f %.0f pos %.0f %.0f -> %.0f %.0f\n",
+                    palo->oid, g_clock.t, st, nWay, sOther, pcrvOther ? SLengthCrv(pcrvOther) : 0.0f, posSelf.x, posSelf.y, posPath.x, posPath.y,
+                    dirPath.x, dirPath.y, gAhead, posGoal.x, posGoal.y, p0.x, p0.y, p1.x, p1.y);
     pos = glm::vec4(p1, 0.0f);
     vel = glm::vec4(v1, 0.0f);
 }
@@ -1015,7 +1096,7 @@ void JOBFOLLOW::Update()
     const glm::vec3 d = Horiz(glm::vec3(pos) - posSelf);
     const float dist = std::sqrt(d.x * d.x + d.y * d.y);
     const float sp20 = Clamp(Poly2(AG_SPEED, dist), G_CLAMP_LO, G_CLAMP_HI);
-    JOBMOVE* pmove = pchild && FCidDerivedFrom(pchild->cid, 0x9D) ? static_cast<JOBMOVE*>(pchild) : nullptr;
+    JOBMOVE* pmove = pchild && FJobCidDerivedFrom2(pchild->cid, 0x9D) ? static_cast<JOBMOVE*>(pchild) : nullptr;
     KINDE* pe = pmove ? pmove->pkinde : nullptr;
     if (pe && pe->k == 0)
     {
@@ -1156,7 +1237,14 @@ bool JOBSCRIPT::FRunning()
         {
             if (pchild && static_cast<JOBPATHSTEP*>(pchild)->FDone()) fRunning = 0;
         }
-        // TODO(ai): kinds 0 / 1 (0x17CE30 / 0x17D188)
+        else if (pguard->kMove == 0)
+        {
+            if (pchild && static_cast<JOBRAIL*>(pchild)->FDone()) fRunning = 0;  // orig: 0x17CE30
+        }
+        else if (pguard->kMove == 1)
+        {
+            if (pchild && static_cast<JOBLADDER*>(pchild)->FDone()) fRunning = 0;  // orig: 0x17D188
+        }
         break;
     case 7:
         if (pchild && static_cast<JOBGOTO*>(pchild)->NArrived())
@@ -1187,7 +1275,7 @@ void GetCmdAim(GUARD* pg, LO* po, glm::vec3* ppos, float* prad)
     const glm::vec3 posG = PosAi(pg->palo);
     glm::vec3 pos = posG;
     float rad = 0.0f;
-    if (po && FIsLoDerivedFrom(po, 0xA))
+    if (po && FIsLoDerivedFrom(po, S3CID(0xA)))
     {
         glm::vec3 dir(1.0f, 0.0f, 0.0f);
         if (const CRV* pcrv = PcrvFromLo(po)) NearestCrvAll(pcrv, posG, &pos, &dir, nullptr, nullptr);
@@ -1196,9 +1284,9 @@ void GetCmdAim(GUARD* pg, LO* po, glm::vec3* ppos, float* prad)
     else if (po)
     {
         pos = PosAi(po);
-        if (FIsLoDerivedFrom(po, 0x30))
+        if (FIsLoDerivedFrom(po, S3CID(0x30)))
         {
-            const glm::mat4 m = MatWorldOfAlo(static_cast<ALO*>(po));
+            const glm::mat4 m = MatJtLo(po);  // vt slot 31 (the object record +0x60)
             rad = std::atan2(m[0][1], m[0][0]);
         }
         else if (const LOX* plox = dynamic_cast<const LOX*>(po))
@@ -1216,7 +1304,8 @@ void GetCmdAim(GUARD* pg, LO* po, glm::vec3* ppos, float* prad)
 void PlaceGuard(GUARD* pg, const glm::vec3& pos, float rad)
 {
     ALO* palo = pg->palo;
-    if (STEP* pstep = PstepFromLo(palo)) SetStepPos(pstep, pos - glm::vec3(pstep->vecBase));
+    // The command gives the object position; SetStepPos derives the floor point from vecBase.
+    if (STEP* pstep = PstepFromLo(palo)) SetStepPos(pstep, pos);
     else SetAloPos(palo, pos);
     SetStepPhysHeading(palo, rad);  // 0x204660
     if (STEP* pstep = PstepFromLo(palo)) SetStepRotation(pstep, St(pg).matHeading);
@@ -1234,7 +1323,7 @@ namespace
 LO* PloSly()
 {
     if (!g_psw) return nullptr;
-    for (LO* p : g_psw->mpcidaplo[0x35])
+    for (LO* p : g_psw->mpcidaplo[S3CID(0x35)])
         if (!p->ploCloneOf) return p;
     return nullptr;
 }
@@ -1260,6 +1349,23 @@ void JOBPROX::Exit()
     AIJOB::Exit();
     RemoveGuardState(pguard, 0x25);
 }
+namespace
+{
+// class 0x3C's options 971..974 (+0x1070..+0x1088: the follow speed's polynomial and limits, the wait before the
+// alarm): the original reads the guard's words, which a script's option set (e.g. Moonlight Rendezvous's SCPT 1856,
+// 974 = 5 at the walk's start) changes at any time; natively the object's option field, the post-load copy as default
+float GGuardProx(GUARD* pg, uint32_t ib, float gDefault)
+{
+    if (!pg->palo) return gDefault;
+    uint32_t u;
+    std::memcpy(&u, &gDefault, 4);
+    u = pg->palo->U32Field(0, ib, u);
+    float g;
+    std::memcpy(&g, &u, 4);
+    return g;
+}
+}  // namespace
+
 // orig: 0x001BA828
 void JOBPROX::SetProxState(int n)
 {
@@ -1269,6 +1375,8 @@ void JOBPROX::SetProxState(int n)
     EndChildJob(&pchild);
     st = n;
     tSt = g_clock.t;
+    if (std::getenv("SLY2N_PROXPRINT"))  // (debug: the proximity job's states: 0 Sly near, 1 away, 2 the alarm)
+        std::fprintf(stderr, "prox %d: state %d t %.3f wait %.2f\n", pg->palo ? pg->palo->oid : -1, n, g_clock.t, GGuardProx(pg, 0x1088, pg->g1088));
     if (n == 0)
     {
         auto* o = static_cast<JOBSCRIPT*>(PjobPush(pg, 0xA9));
@@ -1302,7 +1410,7 @@ void JOBPROX::Update()
         if (st == 1)
         {
             if (pg->pdet && psly && FPointInShape(pg->pdet->ploVolume, PosAi(psly))) SetProxState(0);
-            else if (pg->g1088 < g_clock.t - tSt) SetProxState(2);
+            else if (GGuardProx(pg, 0x1088, pg->g1088) < g_clock.t - tSt) SetProxState(2);
         }
         else if (st == 0)
         {
@@ -1313,10 +1421,11 @@ void JOBPROX::Update()
     if (st == 0 && FGuardState(pg, 9) && psly)
     {
         const float d = glm::length(PosAi(pg->palo) - PosAi(psly));
-        float g = pg->g1070 + d * (pg->g1074 + d * pg->g1078);
-        g = g < pg->g1080 ? pg->g1080 : (pg->g1084 < g ? pg->g1084 : g);
+        float g = GGuardProx(pg, 0x1070, pg->g1070) + d * (GGuardProx(pg, 0x1074, pg->g1074) + d * GGuardProx(pg, 0x1078, pg->g1078));
+        const float gLo = GGuardProx(pg, 0x1080, pg->g1080), gHi = GGuardProx(pg, 0x1084, pg->g1084);
+        g = g < gLo ? gLo : (gHi < g ? gHi : g);
         if (auto* pf = static_cast<JOBFOLLOW*>(PjobFind(pg, 0xA7))) pf->uSpeed = g;
-        // TODO(ai): 0xB8's +0x38
+        if (auto* rail = static_cast<JOBRAIL*>(PjobFind(pg, 0xB8))) rail->uSpeed = g;
     }
 }
 
@@ -1328,7 +1437,7 @@ namespace
 // class 0x40)
 bool FNearRecord(const GOAL& g, GUARD* pg, float r)
 {
-    if (FIsLoDerivedFrom(pg->palo, 0x40)) return true;
+    if (FIsLoDerivedFrom(pg->palo, S3CID(0x40))) return true;
     const glm::vec3 a = PosGuardProbe(pg);
     const glm::vec3 b = PosGoal(g, a);
     return glm::length(glm::vec2(a - b)) <= r;
@@ -1340,7 +1449,7 @@ bool FSnapPosToSurfaceAbove(glm::vec3* ppos)
 {
     std::vector<SOE*> apsoe;
     if (g_psw)
-        for (LO* plo : g_psw->mpcidaplo[0x31])
+        for (LO* plo : g_psw->mpcidaplo[S3CID(0x31)])
             for (SOE& soe : static_cast<ALO*>(plo)->asoe)
                 if (!soe.f48) apsoe.push_back(&soe);
     LSG lsg;
@@ -1575,16 +1684,14 @@ void JOBSLEEP::Enter()
             e.st = 0;
             e.t8 = g_clock.t;
         }
-    if (pnoise && FNoiseLive(pnoise)) RemoveNoise(pnoise);
-    pnoise = PnoiseNew(PtmplNoiseFixed(1), PosAi(pg->palo), pg->palo);
+    SetHeldNoise(&pnoise, PtmplNoiseFixed(1), PosAi(pg->palo), pg->palo);  // 0x156BE0
 }
 // orig: 0x0017A558: the noise let go (0x156C80(SW, -1): 0x156780 and its vt slot 2)
 void JOBSLEEP::Exit()
 {
     JOBMOVE::Exit();
     SetSleepState(-1);
-    if (pnoise && FNoiseLive(pnoise)) RemoveNoise(pnoise);
-    pnoise = nullptr;
+    SetHeldNoise(&pnoise, nullptr, glm::vec3(0.0f), nullptr);  // 0x156BE0
 }
 // orig: 0x0017A5B0: 0 asleep (the entry's state machine to 0x44) for GRandInRange(+0xE7C, +0xE80); 1 waking (0x43)
 void JOBSLEEP::SetSleepState(int n)
@@ -1675,6 +1782,18 @@ bool FDropOnGround(glm::vec3* ppos, float gHigh, float gLow, bool fAny)
 // (for scpt.cpp: SCPT 0x2A's target point, 0x173610)
 bool FDropPointOnGround(glm::vec3* ppos, float gHigh, float gLow) { return FDropOnGround(ppos, gHigh, gLow, false); }
 
+// orig: 0x0017A468: the place less the guard's third record's local offset (+0x60 -> +0x30) and its hands' point
+// (+0xF90's LOX local place +0x90) turned by the use's frame: where the guard goes for its hands to be at the place
+static void OffsetUseByHands(JOBUSE* p)
+{
+    GUARD* pg = p->pguard;
+    XF* pxf = pg->palo->apxfRef[2];
+    LOX* plox = dynamic_cast<LOX*>(pg->ploF90);
+    if (!pxf && plox) pxf = plox->pxf;
+    if (pxf) p->pos -= glm::vec3(pxf->mat[3]);
+    if (plox) p->pos -= p->mat * glm::vec3(plox->mat[3]);
+}
+
 // orig: 0x00179FA0: the object's place and heading (a path: its point nearest the guard and its direction), by its
 // class the state bits for the move and its orientation; the move entered with those bits; the guard turned to the
 // place; the kind-2 driver told (TODO(ai): 0x20C6F8 with the kind-2 movers); the job locked
@@ -1691,22 +1810,23 @@ void JOBUSE::Enter()
     if (ploTarget)
     {
         float rad = 0.0f;
-        if (FIsLoDerivedFrom(ploTarget, 0xA))
+        float sCurve = 0.0f;  // (the place's distance along a path: a ladder's frame below)
+        if (FIsLoDerivedFrom(ploTarget, S3CID(0xA)))
         {
             glm::vec3 dir(1.0f, 0.0f, 0.0f);
-            if (const CRV* pcrv = PcrvFromLo(ploTarget)) NearestCrvAll(pcrv, PosAi(pg->palo), &pos, &dir, nullptr, nullptr);
+            if (const CRV* pcrv = PcrvFromLo(ploTarget)) NearestCrvAll(pcrv, PosAi(pg->palo), &pos, &dir, nullptr, &sCurve);
             rad = std::atan2(dir.y, dir.x);
         }
         else
         {
             pos = PosAi(ploTarget);
-            if (FIsLoDerivedFrom(ploTarget, 0x30))
+            if (FIsLoDerivedFrom(ploTarget, S3CID(0x30)))
             {
-                const glm::mat4 m = MatWorldOfAlo(static_cast<ALO*>(ploTarget));
+                const glm::mat4 m = MatJtLo(ploTarget);  // vt slot 31 (the object record +0x60)
                 rad = std::atan2(m[0][1], m[0][0]);
             }
         }
-        if (FIsLoDerivedFrom(ploTarget, 13))
+        if (FIsLoDerivedFrom(ploTarget, S3CID(13)))
         {
             // a chair: facing away from it unless reversed
             grfActive |= GrfStateBit(0x1B);
@@ -1714,16 +1834,25 @@ void JOBUSE::Enter()
             fBasis = 1;
             mat = glm::mat3(glm::rotate(glm::mat4(1.0f), rad, AXIS_Z));
         }
-        else if (FIsLoDerivedFrom(ploTarget, 0x27))
+        else if (FIsLoDerivedFrom(ploTarget, S3CID(0x27)))
             grfActive |= GrfStateBit(0x29);
-        else if (FIsLoDerivedFrom(ploTarget, 11) || (FIsLoDerivedFrom(ploTarget, 0x13) && ploTarget->nState == 3))
+        else if (FIsLoDerivedFrom(ploTarget, S3CID(11)))
         {
-            // TODO(ai): a ladder's place (0x1C3500) and a bar's orientation (0x11B830), then 0x17A468 (the guard's
-            // own offset)
-            grfActive |= FIsLoDerivedFrom(ploTarget, 11) ? GrfStateBit(0x27) : GrfStateBit(0x28);
-            static bool s_fWarned = false;
-            if (!s_fWarned) std::fprintf(stderr, "ai: job 0xAC on a ladder / bar (0x1C3500 / 0x17A468) not ported\n");
-            s_fWarned = true;
+            // a ladder / pipe (the Ep4 Contessa's drain pipe 77380, R50): its frame at the place (0x1C3500, up it
+            // unless reversed), the place moved so the guard's hands land on it (0x17A468)
+            grfActive |= GrfStateBit(0x27);
+            fBasis = 1;
+            mat = MatPipeFrame(ploTarget, fReverse != 0, sCurve);
+            OffsetUseByHands(this);
+        }
+        else if (FIsLoDerivedFrom(ploTarget, S3CID(0x13)) && ploTarget->U32Field(0, 0x124, 0) == 3)
+        {
+            // a bar of kind 3 (the hooks Bison climbs in Ep7's 32:3234): its x row and z (0x11B830), the place moved
+            // so the guard's hands land on it (0x17A468)
+            grfActive |= GrfStateBit(0x28);
+            fBasis = 1;
+            mat = BuildLookAtMatrix(glm::vec3(MatJtLo(ploTarget)[0]), AXIS_Z);
+            OffsetUseByHands(this);
         }
         else
         {
@@ -1742,7 +1871,14 @@ void JOBUSE::Enter()
             const glm::vec3 d = pos - PosAi(pg->palo);
             SetMoveHeading(&pg->move, std::atan2(d.y, d.x));  // 0x209818
         }
-        // TODO(ai): kind 2 (0x209840 with its linked object's x row)
+        else if (pg->kMove == 2 && pg->ploMove && !pg->move.fHeadingLocked)
+        {
+            // on a bar: the heading's frame (0x209840) along the bar's x row, its y toward the place: the place less the
+            // guard (0x179FA0's vsub home - current; R56: the reverse turned Bison's frame upside down for every jump up
+            // his Ep7 hooks, 32:3234)
+            const glm::vec3 d = pos - PosAi(pg->palo);
+            StepPhysOf(pg->palo).matHeading = BuildLookAtMatrix(glm::vec3(MatJtLo(pg->ploMove)[0]), d);
+        }
         if (pkinde->k == 2 && pkinde->pvState)
         {
             // the driver (the kind-2 player): its related object, kind, ballistic flag and target (0x20C6F8)
@@ -1763,11 +1899,16 @@ void JOBUSE::Exit()
     UnlockJob(this);
 }
 
-// orig: 0x0017A400: with its orientation and the driver's kind-2 step 2 or more: the heading's frame set to it
-// (0x209840: TODO(ai) with the kind-2 movers)
+// orig: 0x0017A400: with its orientation, still moving, and the driver's kind-2 step 2 or more (from the flight's
+// end): the heading's frame set to it unless the heading is locked (0x209840). Natively only for a ladder / pipe
+// (R50): with chairs (0xD) and bars it changed Neyla's chair hops in Ep3 (12:2214, progression ep3_neyla_secret
+// stalled at her list 60243's op 7 103040); those keep the native heading until compared with the reference
 void JOBUSE::Update()
 {
     JOBMOVE::Update();
+    if (fBasis && ploTarget && FIsLoDerivedFrom(ploTarget, S3CID(11)) && st == 0 && pkinde && pkinde->k == 2 && pkinde->pvState &&
+        static_cast<const K2PLAY*>(pkinde->pvState)->st >= 2 && !pguard->move.fHeadingLocked)
+        St(pguard).matHeading = mat;
 }
 
 // orig: 0x001715F0
@@ -1775,8 +1916,8 @@ void JOBSCRIPT::Execute(CMD* c)
 {
     GUARD* pg = pguard;
     if (std::getenv("SLY2N_SCPTPRINT"))
-        std::fprintf(stderr, "ai: guard %d command op %d oid %d list %d t %.9g\n",
-                     pg->palo ? pg->palo->oid : -1, c->op, c->oid, pcmdlist ? pcmdlist->oid : -1, g_clock.t);
+        std::fprintf(stderr, "ai: guard %d command op %d oid %d n8 %d n10 %d g14 %g list %d t %.9g\n",
+                     pg->palo ? pg->palo->oid : -1, c->op, c->oid, c->n8, c->n10, c->g14, pcmdlist ? pcmdlist->oid : -1, g_clock.t);
     switch (c->op)
     {
     case 0: ploNear = PloNear(c->oid); break;
@@ -1795,6 +1936,19 @@ void JOBSCRIPT::Execute(CMD* c)
         float rad;
         GetCmdAim(pg, PloNear(c->oid), &pos, &rad);
         PlaceGuard(pg, pos, rad);
+        if (std::getenv("SLY2N_CMDPLACE"))
+        {
+            const glm::vec3 base(St(pg).vecBase);
+            const glm::vec3 actual = PosAi(pg->palo);
+            const XF* px = PxfPos(pg->palo);
+            const glm::vec3 root = px ? glm::vec3(px->matWorld[3]) : actual;
+            std::fprintf(stderr,
+                         "cmdplace t %.6f oid %d alias %d list %d target %d kind %d base %.3f %.3f %.3f "
+                         "requested %.3f %.3f %.3f actual %.3f %.3f %.3f root %.3f %.3f %.3f heading %.6f\n",
+                         g_clock.t, pg->palo->oid, pg->palo->oidInstance, pcmdlist ? pcmdlist->oid : -1,
+                         c->oid, pg->kMove, base.x, base.y, base.z, pos.x, pos.y, pos.z,
+                         actual.x, actual.y, actual.z, root.x, root.y, root.z, rad);
+        }
         break;
     }
     case 4:
@@ -1804,7 +1958,7 @@ void JOBSCRIPT::Execute(CMD* c)
     {
         const int k = pg->kMove;
         if (k == -1) PjobPush(pg, 0x9E)->Enter();
-        // TODO(ai): kinds 2 / 3 (0xBB / 0xBC)
+        else if (k == 2 || k == 3) PjobPush(pg, k == 2 ? 0xBB : 0xBC)->Enter();  // held on a bar / a 0x27
         fRunning = 1;
         break;
     }
@@ -1824,7 +1978,19 @@ void JOBSCRIPT::Execute(CMD* c)
             if (c->nC != -1) o->plo50 = PloNear(c->nC);
             o->Enter();
         }
-        // TODO(ai): kinds 0 / 1 (0xB8 / 0xB9)
+        else if (pg->kMove == 0)
+        {
+            auto* rail = static_cast<JOBRAIL*>(PjobPush(pg, 0xB8));
+            rail->SetDirection(c->n8);  // orig: 0x1715F0 -> 0x17CDB8, before Enter
+            rail->Enter();
+        }
+        else if (pg->kMove == 1)
+        {
+            // a ladder / pipe (0x17D110 before Enter)
+            auto* ladder = static_cast<JOBLADDER*>(PjobPush(pg, 0xB9));
+            ladder->SetDirection(c->n8);
+            ladder->Enter();
+        }
         fRunning = 1;
         break;
     }
@@ -1839,7 +2005,7 @@ void JOBSCRIPT::Execute(CMD* c)
         else if (LO* po = PloNear(pcmd->oid))
         {
             GetCmdAim(pg, po, nullptr, &radFace);  // (0x171AF8: the object's facing into +0x48)
-            if (FIsLoDerivedFrom(po, 0xA)) goal.pcrv = PcrvFromLo(po);
+            if (FIsLoDerivedFrom(po, S3CID(0xA))) goal.pcrv = PcrvFromLo(po);
             else goal.plo = po;
         }
         if (pg->kMove == -1)
@@ -1901,6 +2067,12 @@ void JOBSCRIPT::Execute(CMD* c)
                          kinde50.grf, fRunning, pchild ? pchild->cid : 0, g_clock.t, pcmdlist ? pcmdlist->oid : -1);
         break;
     }
+    case 8:
+        // orig 0x1715F0 case 8: an ASEG (near c->oid) applied on its own objects from 0 at speed 1 (0x12F9B8); natively
+        // dropped with a warning before (audit 2026-11 A6)
+        if (LO* p = PloNear(c->oid); p && FCidDerivedFrom(p->Cid(), S3CID(0x6D)))
+            ApplyAseg(static_cast<ASEG*>(p), nullptr, 0.0f, 1.0f, 0, nullptr);
+        break;
     case 15:
         // an alarm of a script object (0x1E0020 on the near object c->oid with the alarm c->n8)
         if (LO* po = PloNear(c->oid)) EnsureScptAlarm(po, c->n8);
@@ -1909,7 +2081,7 @@ void JOBSCRIPT::Execute(CMD* c)
     {
         static bool s_afWarned[16] = {};
         if (c->op >= 0 && c->op < 16 && !s_afWarned[c->op])
-            std::fprintf(stderr, "ai: command %d not ported\n", c->op);  // TODO(ai): 8
+            std::fprintf(stderr, "ai: command %d not ported\n", c->op);
         if (c->op >= 0 && c->op < 16) s_afWarned[c->op] = true;
         break;
     }
@@ -1941,6 +2113,77 @@ void JOBWAIT::Init()
     AddGuardState(pguard, 0x1E);
 }
 
+// orig: 0x00170E90 (the saved place re-found: over the list's place (3 / 7) and path (6) commands, the one nearest
+// pos, the 11 / 12 markers skipping, the 0 commands switching the near object (from the list itself); a path searched
+// from the saved distance when it is the saved command; *psaved overwritten when one is found; audit 2026-11 A4)
+void RefindSavedScript(CMDLIST* plist, const glm::vec3& pos, SAVEDSCRIPT* psaved)
+{
+    if (!plist) return;
+    auto near = [](LO* pcur, OID oid) -> LO* { return pcur ? PloFindSwNearest(pcur, oid) : PloFindSwAny(oid); };
+    LO* pcur = plist;
+    bool fStopped = false;
+    float best = FLT_MAX;  // D_002A52B0
+    SAVEDSCRIPT choice;
+    bool fChosen = false;
+    glm::vec3 hit = pos;
+    for (const auto& up : plist->acmd)
+    {
+        CMD* c = up.get();
+        switch (c->op)
+        {
+        case 11: fStopped = true; break;
+        case 12: fStopped = false; break;
+        case 3: case 7:
+        {
+            if (fStopped) break;
+            if (c->oid != -1)
+            {
+                // 0x1710F8: a path's point nearest pos, else the object's position
+                LO* po = near(pcur, c->oid);
+                if (po && FIsLoDerivedFrom(po, S3CID(0xA)))
+                {
+                    if (const CRV* pcrv = PcrvFromLo(po)) NearestCrvAll(pcrv, pos, &hit, nullptr, nullptr, nullptr);
+                }
+                else hit = po ? PosAi(po) : pos;
+            }
+            else if (c->ppos8) hit = glm::vec3(*c->ppos8);
+            const float d = glm::length(pos - hit);
+            if (d < best)
+            {
+                best = d;
+                choice.pcmd = c;
+                choice.plo = pcur;
+                fChosen = true;
+            }
+            break;
+        }
+        case 6:
+        {
+            if (fStopped) break;
+            LO* po = near(pcur, c->oid);
+            const CRV* pcrv = po ? PcrvFromLo(po) : nullptr;
+            if (!pcrv) break;
+            float value = 0.0f;
+            if (psaved && psaved->pcmd == c) NearestCrvS(pcrv, pos, psaved->g, &hit, nullptr, nullptr, &value);  // 0x1E7380 (no filter)
+            else NearestCrvAll(pcrv, pos, &hit, nullptr, nullptr, &value);                                      // 0x1E6F60
+            const float d = glm::length(pos - hit);
+            if (d < best)
+            {
+                best = d;
+                choice.pcmd = c;
+                choice.g = value;
+                choice.plo = pcur;
+                fChosen = true;
+            }
+            break;
+        }
+        case 0: pcur = near(pcur, c->oid); break;
+        default: break;
+        }
+    }
+    if (psaved && fChosen) *psaved = choice;
+}
+
 // orig: 0x00179AA0
 void JOBWAIT::Enter()
 {
@@ -1953,10 +2196,7 @@ void JOBWAIT::Enter()
         SetWaitState(2);
         return;
     }
-    if (pg->saved2DC.pcmd)
-    {
-        // TODO(ai): 0x170E90 (the saved place re-found nearest the actor)
-    }
+    if (pg->saved2DC.pcmd) RefindSavedScript(pcmdlist, PosAi(pg->palo), &pg->saved2DC);  // 0x170E90
     SetWaitState(pg->fFC8 || FGamePausedForAi() ? 3 : 0);  // (0x209098)
 }
 
@@ -2380,7 +2620,7 @@ void JOBPATHSTEP::Update()
 // orig: 0x0017ECF0
 void JOBPATHSTEP::Step(bool fForce)
 {
-    float d = pguard->palo->Cid() == 0x3A || FCidDerivedFrom(pguard->palo->Cid(), 0x3A) ? S_STEP_3A : S_STEP;
+    float d = pguard->palo->Cid() == S3CID(0x3A) || FCidDerivedFrom(pguard->palo->Cid(), S3CID(0x3A)) ? S_STEP_3A : S_STEP;
     if (!fForward) d = -d;
     float t = s + d;
     if (!pcrv->fClosed) t = Clamp(t, SStart(pcrv), SLengthCrv(pcrv));
@@ -2609,6 +2849,154 @@ void JOBBD::Update()
     }
 }
 
+// orig: 0x0017CAC8
+void JOBRAIL::Init()
+{
+    AIJOB::Init();
+    st = -1;
+    uSpeed = 1.0f;
+    AddGuardState(pguard, 0x1B);
+}
+// orig: 0x0017CB10
+void JOBRAIL::Enter() { AIJOB::Enter(); SetRailState(0); }
+// orig: 0x0017CB40
+void JOBRAIL::Exit()
+{
+    AIJOB::Exit();
+    SetRailState(-1);
+    RemoveGuardState(pguard, 0x1B);
+}
+// orig: 0x0017CD00
+void JOBRAIL::SetRailState(int n)
+{
+    if (st == n) return;
+    EndChildJob(&pchild);
+    st = n;
+    tSt = g_clock.t;
+    if (n == 0 || n == 1)
+    {
+        auto* move = static_cast<JOBMOVE*>(PjobPush(pguard, 0x9D));
+        move->nAnim = n == 0 ? 9 : 2;
+        move->Enter();
+    }
+}
+// orig: 0x0017CDB8
+void JOBRAIL::SetDirection(int forward)
+{
+    const CRV* curve = PcrvFromLo(pguard->ploMove);
+    if (!curve || curve->as.empty()) return;
+    sGoal = forward ? SLengthCrv(curve) : curve->as.front();
+    pguard->nMoveKind = pguard->sMove < sGoal;
+    SetRailState(0);
+}
+// orig: 0x0017CE30
+bool JOBRAIL::FDone() const { return std::fabs(pguard->sMove - sGoal) < 50.0f; }
+// orig: 0x0017CB80
+void JOBRAIL::Update()
+{
+    AIJOB::Update();
+    int previous;
+    do
+    {
+        previous = st;
+        if (st == 0)
+        {
+            GUARD* guard = pguard;
+            const CRV* curve = PcrvFromLo(guard->ploMove);
+            if (!curve) return;
+            guard->nMoveKind = guard->sMove < sGoal;
+            glm::vec3 direction;
+            const float look = SWrapCrv(curve, guard->sMove + (guard->nMoveKind ? 150.0f : -150.0f));
+            NearestCrvS(curve, PosAi(guard->palo), look, nullptr, &direction, nullptr, &guard->sMove);
+            if (FDone()) SetRailState(1);
+            else
+            {
+                if (!guard->nMoveKind) direction = -direction;
+                SetMoveHeading(&guard->move, std::atan2(direction.y, direction.x));
+                if (auto* move = dynamic_cast<JOBMOVE*>(pchild))
+                    if (ASEGA* animation = PasegaOfKinde(move->pkinde)) SetAsegaSpeed(animation, uSpeed);
+            }
+        }
+    } while (st != previous);
+}
+
+// ---- 0xB9: climbing a ladder / pipe (kind 1) ----
+
+// orig: 0x0017CE68
+void JOBLADDER::Init()
+{
+    AIJOB::Init();
+    st = -1;
+    AddGuardState(pguard, 0x27);
+}
+// orig: 0x0017CEA0
+void JOBLADDER::Enter()
+{
+    AIJOB::Enter();
+    SetLadderState(0);
+}
+// orig: 0x0017CED0
+void JOBLADDER::Exit()
+{
+    AIJOB::Exit();
+    SetLadderState(-1);
+    RemoveGuardState(pguard, 0x27);
+}
+// orig: 0x0017D058: 0 climbing (the move in state 9), 1 at the goal (the move in state 2, the speed reset)
+void JOBLADDER::SetLadderState(int n)
+{
+    if (st == n) return;
+    EndChildJob(&pchild);
+    st = n;
+    tSt = g_clock.t;
+    if (n == 0 || n == 1)
+    {
+        auto* move = static_cast<JOBMOVE*>(PjobPush(pguard, 0x9D));
+        move->nAnim = n == 0 ? 9 : 2;
+        move->Enter();
+        if (n == 1) gSpeed = 0.0f;
+    }
+}
+// orig: 0x0017D110: the goal the curve's end (forward) or start
+void JOBLADDER::SetDirection(int forward)
+{
+    const CRV* curve = PcrvFromLo(pguard->ploMove);
+    if (curve) sGoal = forward ? SLengthCrv(curve) : SStart(curve);
+    pguard->nMoveKind = pguard->sMove < sGoal;
+    SetLadderState(0);
+}
+// orig: 0x0017D188
+bool JOBLADDER::FDone() const { return std::fabs(pguard->sMove - sGoal) < 50.0f; }
+// orig: 0x0017CF10: while climbing, the place moved toward the goal at the move's speed (the step's velocity's z,
+// +0x198, its sign by the direction: D_002DFB7C), eased (0x11D018 with {|speed|, 0, 0.1}); then the heading's frame
+// the pipe's at the place, up it when climbing forward (0x1C3500 into +0x1B0)
+void JOBLADDER::Update()
+{
+    AIJOB::Update();
+    GUARD* guard = pguard;
+    const CRV* curve = PcrvFromLo(guard->ploMove);
+    if (!curve) return;
+    int previous;
+    do
+    {
+        previous = st;
+        if (st == 0)
+        {
+            if (FDone()) SetLadderState(1);
+            else
+            {
+                guard->nMoveKind = guard->sMove < sGoal;
+                const float vz = St(guard).vecVel.z;
+                const float target = guard->nMoveKind ? -vz : vz;
+                const SMP smp{std::fabs(target), 0.0f, 0.1f};
+                gSpeed = GSmooth(gSpeed, target, g_clock.dt, &smp, nullptr);
+                guard->sMove = SWrapCrv(curve, guard->sMove + gSpeed * g_clock.dt);
+            }
+        }
+    } while (st != previous);
+    St(guard).matHeading = MatPipeFrame(guard->ploMove, guard->nMoveKind != 0, guard->sMove);
+}
+
 std::unique_ptr<AIJOB> PjobNewKind(CID cid)
 {
     switch (cid)
@@ -2628,8 +3016,164 @@ std::unique_ptr<AIJOB> PjobNewKind(CID cid)
     case 0xAC: return std::make_unique<JOBUSE>();
     case 0xAE: return std::make_unique<JOBPROX>();
     case 0xB6: return std::make_unique<JOBCHASE>();
+    case 0xB8: return std::make_unique<JOBRAIL>();
+    case 0xB9: return std::make_unique<JOBLADDER>();
+    case 0xBB: case 0xBC:
+    {
+        auto p = std::make_unique<JOBHOLD>();
+        p->nState = cid == 0xBB ? 0x28 : 0x29;
+        return p;
+    }
     case 0xBE: return std::make_unique<JOBLINK>();
     case 0xBF: return std::make_unique<JOBNAVPOINT>();
+    case 0xB7: return std::make_unique<JOBSTATION>();
     default: return PjobNewPursuit(cid);  // (aipursuit.cpp)
+    }
+}
+
+// ---- 0xBB / 0xBC: held on a bar / a 0x27 ----
+
+// orig: 0x0017D1C0 / 0x0017D2B0
+void JOBHOLD::Init()
+{
+    AIJOB::Init();
+    AddGuardState(pguard, nState);  // 0x209890
+}
+
+// orig: 0x0017D1F0 / 0x0017D2E0: a stand (0x9D, state index 2); 0xBB: the heading's frame (+0x1B0) along the bar's x
+// row (0x11B830 with z)
+void JOBHOLD::Enter()
+{
+    AIJOB::Enter();
+    auto* o = static_cast<JOBMOVE*>(PjobPush(pguard, 0x9D));
+    o->nAnim = 2;
+    o->Enter();
+    if (nState == 0x28 && pguard->ploMove)
+        StepPhysOf(pguard->palo).matHeading = BuildLookAtMatrix(glm::vec3(MatJtLo(pguard->ploMove)[0]), AXIS_Z);
+}
+
+// orig: 0x0017D280 / 0x0017D330
+void JOBHOLD::Exit()
+{
+    AIJOB::Exit();
+    RemoveGuardState(pguard, nState);  // 0x209970
+}
+
+// ---- 0xB7: the guard's station ----
+
+// orig: 0x0017C638
+void JOBSTATION::Init()
+{
+    AIJOB::Init();
+    st = -1;
+    AddGuardState(pguard, 0x26);  // 0x209890
+}
+
+// orig: 0x0017C6A0
+void JOBSTATION::Enter()
+{
+    AIJOB::Enter();
+    SetState(0);
+}
+
+// orig: 0x0017C670
+void JOBSTATION::Exit()
+{
+    AIJOB::Exit();
+    RemoveGuardState(pguard, 0x26);  // 0x209970
+}
+
+// orig: 0x0017C928
+void JOBSTATION::SetState(int n)
+{
+    if (n == st) return;
+    EndChildJob(&pchild);
+    st = n;
+    tSt = g_clock.t;
+    GUARD* pg = pguard;
+    if (std::getenv("SLY2N_GOTODEBUG"))
+        std::printf("jobstation: t %.3f guard %d station %d state %d\n", g_clock.t, pg->palo->oid, plo ? plo->oid : -1, n);
+    if (!plo) return;
+    switch (n)
+    {
+    case 0:
+    {
+        auto* o = static_cast<JOBGOTO*>(PjobPush(pg, 0xBA));
+        posLast = PosLoWorld(plo);
+        o->fC0 = 1;
+        GOAL g;
+        g.pos = glm::vec4(PosJtConvert(plo, nullptr, glm::vec3(pos)), 0.0f);  // 0x1A6F00
+        o->SetGoal(g);  // 0x17DD38
+        o->plo = plo;
+        o->Enter();
+        break;
+    }
+    case 1:
+    {
+        auto* o = static_cast<JOBGOTO*>(PjobPush(pg, 0xBA));
+        posLast = PosLoWorld(plo);
+        o->fC0 = 1;
+        o->plo = plo;
+        o->fAC = 1;
+        GOAL g;
+        g.pos = glm::vec4(posLast, 0.0f);
+        o->SetGoal(g);
+        o->nAnim = 0x1C;
+        o->Enter();
+        break;
+    }
+    case 2:
+    {
+        auto* o = static_cast<JOBMOVE*>(PjobPush(pg, 0x9E));
+        o->ploFace = plo;
+        o->nAnim = 1;
+        o->Enter();
+        break;
+    }
+    default: break;
+    }
+}
+
+// orig: 0x0017C6D0
+void JOBSTATION::Update()
+{
+    AIJOB::Update();
+    GUARD* pg = pguard;
+    if (!plo) return;
+    const glm::vec3 posObj = PosLoWorld(plo);
+    const float dist = glm::length(glm::vec2(posObj - PosLoWorld(pg->palo)));
+    while (!FJobDone(this))
+    {
+        const int prior = st;
+        switch (st)
+        {
+        case 0:
+            if (FGuardStill(pg)) SetState(2);
+            else if (1000.0f < dist) SetState(1);
+            else if (250.0f < glm::length(glm::vec2(posLast - posObj)))
+            {
+                posLast = posObj;
+                GOAL g;
+                g.pos = glm::vec4(PosJtConvert(plo, nullptr, glm::vec3(pos)), 0.0f);
+                if (pchild) static_cast<JOBGOTO*>(pchild)->SetGoal(g);
+            }
+            break;
+        case 1:
+            if (FGuardStill(pg)) SetState(2);
+            else if (dist < 700.0f) SetState(0);
+            else if (250.0f < glm::length(glm::vec2(posLast - posObj)))
+            {
+                posLast = posObj;
+                GOAL g;
+                g.pos = glm::vec4(posObj, 0.0f);
+                if (pchild) static_cast<JOBGOTO*>(pchild)->SetGoal(g);
+            }
+            break;
+        case 2:
+            if (!FGuardStill(pg)) SetState(0);
+            break;
+        default: break;
+        }
+        if (prior == st) return;
     }
 }

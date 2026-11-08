@@ -1,10 +1,12 @@
 // The path curves (see crv.h). Each function follows the reference's port named in its comment.
 #include "crv.h"
+#include "game/sly3.h"
 
 #include "cls.h"
 #include "brx.h"
 #include "lo.h"
 #include "vecmat.h"
+#include "xfmath.h"
 
 #include <cmath>
 #include <cstring>
@@ -152,9 +154,47 @@ glm::mat4 MatWorldLox(const LO* plo)
 
 void InvalidateCrvOfLo(const LO* plo) { s_mpcrv.erase(plo); }
 
+// orig: 0x001BC570's reversal (a clockwise blocking polygon at its post-load): the points swapped end for end, the
+// parameters mirrored on the last one (0x1E6630), the curve rebuilt
+void ReverseLoxPath(LO* plo)
+{
+    if (!plo || !FIsLoDerivedFrom(plo, S3CID(0x0A))) return;
+    LOXPATH* ppath = static_cast<LOXPATH*>(plo);
+    const int c = static_cast<int>(ppath->avecF4.size());
+    const bool fParams = static_cast<int>(ppath->an.size()) == c && c > 0;
+    float t = 0.0f;
+    if (fParams) std::memcpy(&t, &ppath->an[c - 1], 4);
+    for (int i = 0; i < c / 2; ++i)
+    {
+        const int j = c - i - 1;
+        std::swap(ppath->avecF4[i], ppath->avecF4[j]);
+        if (!fParams) continue;
+        float gi, gj;
+        std::memcpy(&gi, &ppath->an[i], 4);
+        std::memcpy(&gj, &ppath->an[j], 4);
+        const float ni = t - gj, nj = t - gi;
+        std::memcpy(&ppath->an[i], &ni, 4);
+        std::memcpy(&ppath->an[j], &nj, 4);
+    }
+    // (an existing curve rebuilt in place: its pointer may be held)
+    auto it = s_mpcrv.find(plo);
+    if (it == s_mpcrv.end() || !it->second) return;
+    CRV& crv = *it->second;
+    crv.ag.resize(ppath->an.size());
+    for (size_t i = 0; i < ppath->an.size(); ++i) std::memcpy(&crv.ag[i], &ppath->an[i], 4);
+    crv.apos = ppath->avecF4;
+    crv.iseg = 1;
+    crv.isegCached = -1;
+    RecalcCrv(&crv, MatWorldLox(plo));
+}
+
+// orig: 0x1E5D80 initializes the cache in each path object. The native side
+// cache must have that same lifetime, including when a later world reuses storage.
+LOXPATH::~LOXPATH() { InvalidateCrvOfLo(this); }
+
 const CRV* PcrvFromLo(LO* plo)
 {
-    if (!plo || !FIsLoDerivedFrom(plo, 0x0A)) return nullptr;
+    if (!plo || !FIsLoDerivedFrom(plo, S3CID(0x0A))) return nullptr;
     const LOXPATH* ppath = static_cast<const LOXPATH*>(plo);
     if (ppath->avecF4.size() < 2) return nullptr;
     auto& pcrv = s_mpcrv[plo];
@@ -186,8 +226,13 @@ float SFromCrvG(const CRV* p, float g)
     const int i = ISegCrvG(p, g, &dg, &dgSeg);
     if (p->crvk == 0)
     {
-        const float t = dg / dgSeg;
-        return (1.0f - t) * p->as[i] + t * p->as[i + 1];
+        // (the EE's rounding toward zero: on a mode-3 rope's flat segments (rope.cpp, the rest steps [0, 300, 300, ..])
+        // the lerp of two equal distances comes out a hair under them (300 -> 299.99997 for g 3.02), and that decides
+        // which segment the distance falls in again (0x1E7668 stops before the first 300): the jump onto the Thunder
+        // Beak line (R04) kept its target near Sly as in the reference (sTarget 299.99997), instead of the line's far
+        // end, which gave the jump up as too fast)
+        const float t = DivEe(dg, dgSeg);
+        return AddRz(MulRz(AddRz(1.0f, -t), p->as[i]), MulRz(t, p->as[i + 1]));
     }
     CacheSegCrv(p, i);
     const float u = (dg * 10.0f) / dgSeg;
@@ -205,8 +250,10 @@ float GFromCrvS(const CRV* p, float s)
     const int i = ISegCrvS(p, s, &ds, &dsSeg);
     if (p->crvk == 0)
     {
-        const float t = ds / dsSeg;
-        return (1.0f - t) * p->ag[i] + t * p->ag[i + 1];
+        // (the EE's div.s / mul.s: a zero-length segment (a mode-3 rope's rest steps, rope.cpp) gives 0 / 0 = FLT_MAX
+        // and the products saturate instead of IEEE's NaN: R04, the Thunder Beak line's NaN that blacked the screen)
+        const float t = DivEe(ds, dsSeg);
+        return AddEe(MulEe(1.0f - t, p->ag[i]), MulEe(t, p->ag[i + 1]));
     }
     CacheSegCrv(p, i);
     int j = 1;

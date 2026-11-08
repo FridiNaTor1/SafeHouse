@@ -141,8 +141,16 @@ void LoadAsegEventsFromBrx(std::vector<ASEGEV>* paev, int fTime, CBinaryInputStr
             ev.ag[1] = pbis->F32Read();
             break;
         case 3:
+            // the pad's rumble (asegevent.cpp, rumble.h): dt, rumk
             ev.ag[0] = static_cast<float>(pbis->S16Read()) * kRecip60;
             ev.an[0] = pbis->S16Read();
+            // (debug: SLY2N_RUMBLELOG also lists the rumble events as they load, with the object being loaded)
+            if (static const bool s_f = std::getenv("SLY2N_RUMBLELOG") != nullptr; s_f)
+            {
+                LO* plo = PloLoading();
+                std::fprintf(stderr, "rumble: aseg event at t %.3f rumk %d dt %.3f in the object loading %d\n", ev.t, ev.an[0],
+                             ev.ag[0], plo ? OidOfLo(plo) : -1);
+            }
             break;
         case 5:
             ev.ag[0] = static_cast<float>(pbis->S16Read()) * kRecip60;

@@ -1,12 +1,15 @@
 // See scene.h.
 
 #include "scene.h"
+#include "game/sly3.h"
 
 #include "render.h"
+#include "simdmat.h"
 
 #include <glm/gtc/type_ptr.hpp>
 
 #include <algorithm>
+#include <cfloat>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
@@ -283,7 +286,7 @@ bool FLightsFromRam(const std::string& ramPath, LIGHTSET& lights)
     if (ram.size() < 0x2000000) return false;
     auto u32 = [&](uint32_t va) { uint32_t v; std::memcpy(&v, ram.data() + (va & 0x1FFFFFF), 4); return v; };
     auto f32 = [&](uint32_t va) { float v; std::memcpy(&v, ram.data() + (va & 0x1FFFFFF), 4); return v; };
-    constexpr uint32_t SW = 0x3DD490, CLASSES = 0x2BAAE8;
+    constexpr uint32_t SW = 0x3DD490, CLASSES = S3VA(0x2BAAE8);
     auto fDerived = [&](uint32_t cid, uint32_t cidBase) {
         for (uint32_t r = CLASSES + cid * 0x14; r; r = u32(r))
             if (r == CLASSES + cidBase * 0x14) return true;
@@ -310,6 +313,30 @@ bool FLightsFromRam(const std::string& ramPath, LIGHTSET& lights)
         }
     lights.worldShader = glm::vec4(f32(SW + 0x3E28), f32(SW + 0x3E2C), f32(SW + 0x3E30), f32(SW + 0x3E34));
     return true;
+}
+
+// The sphere the lighting culls lights by and the light context's place (local): the draw record's (posCenter,
+// sRadius), or for a group without one (Sly 3's sphere-culled glob sets, the static world: posCenter / sRadius are
+// never read, so every point light was culled from the whole level's bake) its vertices' bounds.
+static void LightSphereOfGlob(GLOB& glob, glm::vec3& posCenter, float& sRadius)
+{
+    if (glob.fDraw || glob.avtx.empty())
+    {
+        posCenter = glob.posCenter;
+        sRadius = glob.sRadius;
+        return;
+    }
+    if (glob.sRadiusLight < 0.0f)
+    {
+        glm::vec3 lo(FLT_MAX), hi(-FLT_MAX);
+        for (const VTXGLOB& v : glob.avtx) { lo = glm::min(lo, v.pos); hi = glm::max(hi, v.pos); }
+        glob.posLight = 0.5f * (lo + hi);
+        float r2 = 0.0f;
+        for (const VTXGLOB& v : glob.avtx) r2 = std::max(r2, glm::dot(v.pos - glob.posLight, v.pos - glob.posLight));
+        glob.sRadiusLight = std::sqrt(r2);
+    }
+    posCenter = glob.posLight;
+    sRadius = glob.sRadiusLight;
 }
 
 int RelightForward(SCENE& scene, const LIGHTSET& lightsFrame, bool fUpload, const LIGHTSET* alightsRtgt)
@@ -379,13 +406,32 @@ int RelightForward(SCENE& scene, const LIGHTSET& lightsFrame, bool fUpload, cons
                 if (sgs.amatLit.size() != gs.aglob.size()) sgs.amatLit.assign(gs.aglob.size(), glm::mat4(0.0f));
                 if (sgs.amatLit[i] == m && sgs.versionLit == WorldLightsVersion() && !sgs.akeyBake.empty() && sgs.akeyBake[i] != 0)
                     continue;   // not moved, same lights
+                // (the same matrix bytes as at the last key: the key from then, unless a light it takes changed)
+                const bool fSameMat = std::memcmp(&sgs.amatLit[i], &m, sizeof(glm::mat4)) == 0;
                 sgs.amatLit[i] = m;
-                const glm::vec3 posSphere = glm::vec3(m * glm::vec4(glob.posCenter, 1.0f));
-                const float sRadius = glob.sRadius * std::sqrt(std::max({glm::dot(glm::vec3(m[0]), glm::vec3(m[0])),
+                glm::vec3 posLocal;
+                float sRadiusLocal;
+                LightSphereOfGlob(glob, posLocal, sRadiusLocal);
+                const glm::vec3 posSphere = glm::vec3(MulMat4Vec4(m, glm::vec4(posLocal, 1.0f)));
+                const float sRadius = sRadiusLocal * std::sqrt(std::max({glm::dot(glm::vec3(m[0]), glm::vec3(m[0])),
                                                                          glm::dot(glm::vec3(m[1]), glm::vec3(m[1])),
                                                                          glm::dot(glm::vec3(m[2]), glm::vec3(m[2]))}));
                 if (sgs.akeyBake.size() != gs.aglob.size()) sgs.akeyBake.assign(gs.aglob.size(), 0);
-                const uint64_t key = BakeKey(m, posSphere, sRadius, lights) ^ uint64_t(uintptr_t(pglInst));
+                if (sgs.aversionKey.size() != gs.aglob.size())
+                {
+                    sgs.aversionKey.assign(gs.aglob.size(), 0);
+                    sgs.akeyBakeLights.assign(gs.aglob.size(), 0);
+                }
+                static const bool s_fKeyAlways = std::getenv("SLY2N_BAKEKEYALWAYS") != nullptr;   // (debug: the old way, every key hashed)
+                const uint32_t version = WorldLightsVersion();
+                if (s_fKeyAlways || !fSameMat || sgs.aversionKey[i] == 0 ||
+                    !FBakeLightsUnchangedSince(sgs.aversionKey[i], posSphere, sRadius, lights))
+                    sgs.akeyBakeLights[i] = BakeKey(m, posSphere, sRadius, lights);
+                else if (static const bool s_fKeyCheck = std::getenv("SLY2N_BAKEKEYCHECK") != nullptr;   // (debug: the kept key checked)
+                         s_fKeyCheck && BakeKey(m, posSphere, sRadius, lights) != sgs.akeyBakeLights[i])
+                    std::printf("bakekey: kept key differs: oid %d glob %zu, kept at version %u, now %u\n", sgs.oid, i, sgs.aversionKey[i], version);
+                sgs.aversionKey[i] = version;
+                const uint64_t key = sgs.akeyBakeLights[i] ^ uint64_t(uintptr_t(pglInst));
                 if (key == sgs.akeyBake[i]) continue;
                 if (!std::any_of(glob.avtx.begin(), glob.avtx.end(), [](const VTXGLOB& v) { return v.fUnbaked != 0; }))
                 {
@@ -409,7 +455,7 @@ int RelightForward(SCENE& scene, const LIGHTSET& lightsFrame, bool fUpload, cons
                 if (s_fBakeDiff)
                 {
                     const glm::mat4 mId = glm::mat4(glm::mat3(m));
-                    BakeGlobLighting(glob, mId, glm::vec3(mId * glm::vec4(glob.posCenter, 1.0f)), sRadius, lights);
+                    BakeGlobLighting(glob, mId, glm::vec3(mId * glm::vec4(posLocal, 1.0f)), sRadius, lights);
                     gOrigin = bright();
                 }
                 BakeGlobLighting(glob, m, posSphere, sRadius, lights);
@@ -431,7 +477,10 @@ int RelightForward(SCENE& scene, const LIGHTSET& lightsFrame, bool fUpload, cons
             if (fSamePlace && sgs.versionLit == WorldLightsVersion() && irtgt < 0) continue;   // not moved, same lights
             sgs.amatLit[i] = m;
             if (!std::any_of(glob.avtx.begin(), glob.avtx.end(), [](const VTXGLOB& v) { return v.fUnbaked != 0; })) continue;
-            const glm::vec3 posCtx = sgs.fPosLight ? sgs.posLight : glm::vec3(m * glm::vec4(glob.posCenter, 1.0f));
+            glm::vec3 posLocal;
+            float sRadiusLocal;
+            LightSphereOfGlob(glob, posLocal, sRadiusLocal);
+            const glm::vec3 posCtx = sgs.fPosLight ? sgs.posLight : glm::vec3(MulMat4Vec4(m, glm::vec4(posLocal, 1.0f)));
             // the lighting depends only on the place and the four lights chosen there (and the world shader): when
             // another light changed, the same four chosen bit for bit give the same colours
             if (sgs.aalLit.size() != gs.aglob.size()) sgs.aalLit.assign(gs.aglob.size(), {});
@@ -448,14 +497,14 @@ int RelightForward(SCENE& scene, const LIGHTSET& lightsFrame, bool fUpload, cons
             if (fSamePlace && fSameLights) continue;
             sgs.aalLit[i] = al;
             if (pamatBone) sgs.aamatBoneLit[i] = *pamatBone;
-            ForwardGlobLighting(glob, m, posCtx, lights, pamatBone);
+            ForwardGlobLighting(glob, m, posCtx, lights, pamatBone, al.data());   // (the lights chosen above at posCtx)
             if (static const bool s_f = std::getenv("SLY2N_FWDDBG") != nullptr; s_f)   // debugging: the forward-lit groups lit
                 std::printf("fwd oid %d glob %zu ctx %.0f %.0f %.0f r %.0f A0 %08X B0 %08X\n", sgs.oid, i, posCtx.x, posCtx.y, posCtx.z, glob.sRadius,
                             glob.avtx[0].rgbaA, glob.avtx[0].rgbaB);
             static const bool s_fDbg = std::getenv("SLY2_LIGHTDBG") != nullptr;   // debugging: the skinned groups' lights
             if (s_fDbg && !glob.abone.empty())
             {
-                const glm::vec3 pos = sgs.fPosLight ? sgs.posLight : glm::vec3(m * glm::vec4(glob.posCenter, 1.0f));
+                const glm::vec3 pos = sgs.fPosLight ? sgs.posLight : glm::vec3(MulMat4Vec4(m, glm::vec4(glob.posCenter, 1.0f)));
                 LIGHTREC al[4];
                 SelectLights(lights, pos, al);
                 std::printf("relight oid %d ib %zu glob %zu pos %.0f %.0f %.0f A0 %08X B0 %08X\n", sgs.oid, sgs.ib, i, pos.x, pos.y, pos.z, glob.avtx[0].rgbaA, glob.avtx[0].rgbaB);
@@ -495,9 +544,12 @@ void ApplyLighting(SCENE& scene, const LIGHTSET& lights)
             }
             if (!std::any_of(glob.avtx.begin(), glob.avtx.end(), [](const VTXGLOB& v) { return v.fUnbaked != 0; })) continue;
             const glm::mat4& m = sgs.amatGlob[i];
-            const glm::vec3 pos = glm::vec3(m * glm::vec4(glob.posCenter, 1.0f));
+            glm::vec3 posLocal;
+            float sRadiusLocal;
+            LightSphereOfGlob(glob, posLocal, sRadiusLocal);
+            const glm::vec3 pos = glm::vec3(MulMat4Vec4(m, glm::vec4(posLocal, 1.0f)));
             if (glob.grfMesh & 1) ForwardGlobLighting(glob, m, sgs.fPosLight ? sgs.posLight : pos, lights);
-            else BakeGlobLighting(glob, m, pos, glob.sRadius, lights);
+            else BakeGlobLighting(glob, m, pos, sRadiusLocal, lights);
             static const int s_oidDbg = std::getenv("SLY2N_LIGHTOID") ? std::atoi(std::getenv("SLY2N_LIGHTOID")) : -2;   // debugging
             if (sgs.oid == s_oidDbg)
             {

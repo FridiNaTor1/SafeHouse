@@ -31,4 +31,5 @@ void UpdateActorBinoc(ACTOR* pa, uint32_t grfMask);
 // orig: 0x001442D0 / 0x00144338 (vt slots 83 / 84: the actors'; the other POs' 0x205478 / 0x205588 without f): the
 // effect SMs of the bits grf (0x3F: all six, the talk's mouth / face SMs D_002C3C40) held (applied at the first hold) /
 // released (retracted at the last); with f an actor also plays its talk animation 0x60B while held (0x143EE0 kind 5)
+int CActorTalkHold(const LO* plo);  // the actor's +0x12F4 (held for a talk)
 void HoldActorEffects(LO* plo, bool fHold, bool f, uint32_t grf = 0x3F);

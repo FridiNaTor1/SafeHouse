@@ -1,5 +1,6 @@
-#include "sly3/ids3.h"
 #include <execinfo.h>
+#include "game/sly3.h"
+#include "worldglobals.h"
 // ASEG evaluation and ASEGA (Sly 2 0x12B3B0-0x131E18 and 0x230CF0). Specification: Sly2-Reference/Sly2-Release/game/aseg.cpp,
 // asega.cpp, m_12B3B0_p3.cpp (oracle-verified) and the decomp's func_00130D30, 00131100, 00131A90, 00230CF0
 // (matching C). The tracks' Setup gives a transform record the segment of keys around its parameter; the record
@@ -20,8 +21,10 @@
 #include <cstdlib>
 
 std::vector<ASEGA*> g_apasega;
+WORLD_TABLE(g_apasega);   // (PC: moved aside while a kept world loads, worldglobals.h)
 constinit void (*g_pfnAsegaEventOther)(ASEGA*, ASEGEV*) = nullptr;
 constinit void (*g_pfnAsegaScript)(ASEGA* pasega, int symid, int n) = nullptr;
+constinit bool g_fAsegaEventsMuted = false;
 constinit void (*g_pfnLoMessage)(LO*, int, void*) = nullptr;
 constinit void (*g_pfnBasicScript)(BASIC*, int) = nullptr;
 constinit float* (*g_pfnPgAsegParam)(LO*, int) = nullptr;
@@ -88,7 +91,7 @@ ALO* PaloFind(ASEG* paseg, ALO* palo, OID oid)
 {
     // orig 0x15E938(G, 1, oid, palo) / (G, 4, oid, paseg)
     LO* plo = palo ? PloFindSwChild(palo, oid) : PloFindSwNearest(paseg, oid);
-    return plo && FCidDerivedFrom(plo->Cid(), Icid(CID3::ALO)) ? static_cast<ALO*>(plo) : nullptr;
+    return plo && FCidDerivedFrom(plo->Cid(), S3CID(0x30)) ? static_cast<ALO*>(plo) : nullptr;
 }
 
 
@@ -115,6 +118,7 @@ void SetAsegaEventSound(ASEGA* pasega, int f)
 void Script(ASEGA* pasega, int k, int n = 0)
 {
     // orig vt slot 3 (0x1331F8) of the ASEGA: its script handler k (2 start, 3 retract, 4 event 12 with its word)
+    if (g_fAsegaEventsMuted) return;   // (PC: a guest puppet's clip, asega.h)
     if (g_pfnAsegaScript) g_pfnAsegaScript(pasega, k, n);
 }
 
@@ -461,6 +465,7 @@ bool FWrapAsegaTime(ASEGA* pasega, float* pt, float* psvt)
 // orig: 0x00131290
 void FireAsegaEvent(ASEGA* pasega, ASEGEV* pev)
 {
+    if (g_fAsegaEventsMuted) { pasega->t = pev->t; return; }   // (PC: a guest puppet's clip, asega.h)
     if (static const char* s_sz = std::getenv("SLY2N_ASEGEVOWNER"); s_sz && pasega->palo && pasega->palo->oid == std::atoi(s_sz))  // (debug)
         std::printf("asegevfire t %.3f clip %d owner %d kind %d n %d %d %d %d\n", g_clock.t, pasega->paseg ? pasega->paseg->oid : -1, pasega->palo->oid,
                     pev->kind, pev->an[0], pev->an[1], pev->an[2], pev->an[3]);
@@ -485,8 +490,8 @@ void FireAsegaEvent(ASEGA* pasega, ASEGEV* pev)
     {
         // another object of the ASEG's namespace: an ASEG is applied, a cid 0x72 object started (0x1DFD58)
         LO* plo = PloFindSwNearest(pasega->palo ? static_cast<LO*>(pasega->palo) : static_cast<LO*>(paseg), pev->an[0]);
-        if (plo && plo->Cid() == Icid(CID3::ASEG)) ApplyAseg(static_cast<ASEG*>(plo), nullptr, 0.0f, 1.0f, 0, nullptr);
-        else if (plo && plo->Cid() == 0x87 /* sly2 0x72 SCPT */) DropEvent(pasega, pev);
+        if (plo && plo->Cid() == S3CID(0x6D)) ApplyAseg(static_cast<ASEG*>(plo), nullptr, 0.0f, 1.0f, 0, nullptr);
+        else if (plo && plo->Cid() == S3CID(0x72)) DropEvent(pasega, pev);
         break;
     }
     case 5: SetAsegaTime(pasega, 0, pev->ag[0], pev->ag[1]); break;
@@ -629,7 +634,7 @@ void SnapAsegaXfs(ASEGA* pasega, bool fSeek)
     auto worlds = [](auto&& self, ALO* palo) -> void {
         UpdateAloXfWorlds(palo);
         for (LO* pc : palo->aploChild)
-            if (FCidDerivedFrom(pc->Cid(), Icid(CID3::ALO))) self(self, static_cast<ALO*>(pc));
+            if (FCidDerivedFrom(pc->Cid(), S3CID(0x30))) self(self, static_cast<ALO*>(pc));
     };
     for (ALO* palo : apalo) worlds(worlds, palo);
     for (ASEGAL& l : pasega->alink)
@@ -961,6 +966,7 @@ void RetractAsega(ASEGA* pasega)
         for (ASEGAL& l : pasega->alink)
             if (l.plo) g_pfnAsegParamUse(l.plo, l.kind, false);
     pasega->alink.clear();
+    void ReleaseAsegaSound(const ASEGA*); ReleaseAsegaSound(pasega);   // (0x258040(+0x5C, 0): asegevent.cpp)
     Script(pasega, 3);
     NotifyAsega(pasega, 2);
     ReleaseAsega(pasega);  // (the lists' reference)
@@ -1034,6 +1040,15 @@ void PostAsegLoad(ASEG* paseg)
                 for (const ASEGEV& ev : pd->aaev[size_t(l)])
                     std::printf("asegev %d parent %d inworld %d list %d t %g kind %d n %d %d %d %d g %g %g %g\n", paseg->oid, paseg->paloParent ? paseg->paloParent->oid : -1, int(paseg->fInWorld), l, ev.t, ev.kind, ev.an[0], ev.an[1],
                                 ev.an[2], ev.an[3], ev.ag[0], ev.ag[1], ev.ag[2]);
+    if (const char* sz = std::getenv("SLY2N_ASEGEV"); sz && std::atoi(sz) == paseg->oid)   // (debug: its channels)
+        if (ASEGD* pd = PasegdOf(paseg))
+        {
+            for (const ASEGCHN& c : pd->achn)
+                std::printf("asegchn %d oid %d isub %d disabled %d scalar %d\n", paseg->oid, c.oid, c.isub, c.fDisabled, c.fScalar);
+            for (const ASEGCHG& c : pd->achg)
+                std::printf("asegchg %d kind %d n %d\n", paseg->oid, c.kind, c.n);
+            std::printf("asegd %d tMax %g\n", paseg->oid, pd->tMax);
+        }
     if (const char* sz = std::getenv("SLY2N_ASEGEVN"))   // (debug: every event with that argument)
         if (ASEGD* pd = PasegdOf(paseg))
             for (int l = 0; l < 3; ++l)
@@ -1047,6 +1062,27 @@ void PostAsegLoad(ASEG* paseg)
 
 void UpdateAsegas()
 {
+    // (debug: SLY2N_ASEGAOID=oid: once a second, the ASEGAs on that object or under it (aseg, time, speed, retracted))
+    if (static const char* s_sz = std::getenv("SLY2N_ASEGAOID"); s_sz)
+    {
+        static float s_tNext = 0.0f;
+        if (g_clock.t >= s_tNext)
+        {
+            s_tNext = g_clock.t + 1.0f;
+            const int oid = std::atoi(s_sz);
+            int c = 0;
+            for (ASEGA* p : g_apasega)
+            {
+                bool fUnder = false;
+                for (const LO* plo = p->palo; plo && !fUnder; plo = plo->paloParent) fUnder = plo->oid == oid;
+                if (!fUnder) continue;
+                ++c;
+                std::printf("asegaoid t %.2f: asega %p on %d aseg %d t %.3f svt %.3f retracted %d\n", g_clock.t, (void*)p, p->palo->oid,
+                            p->paseg ? p->paseg->oid : -1, p->t, p->svt, int(p->fRetracted));
+            }
+            if (!c) std::printf("asegaoid t %.2f: none\n", g_clock.t);
+        }
+    }
     size_t i = 0;
     s_apiAsega.push_back(&i);
     while (i < g_apasega.size())

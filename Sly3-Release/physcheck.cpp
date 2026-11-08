@@ -5,6 +5,7 @@
 // native objects, the native function runs on them, and its results are compared with the return RAM.
 
 #include "physram.h"
+#include "game/sly3.h"
 
 #include "cls.h"
 #include "lo.h"
@@ -37,7 +38,7 @@
 namespace
 {
 float g_gXfParamNil = 0.0f;  // the parameter of invalidated records (orig 0x2C44E0)
-constexpr uint32_t G_CLOCK = 0x002DDED0;   // {t, dt}
+constexpr uint32_t G_CLOCK = S3VA(0x002DDED0);   // {t, dt}
 constexpr uint32_t G_XFSTAMP = 0x003E11E8;  // D_003DD490 + 0x3D58
 
 // An actuator found in RAM: records that the update called it.
@@ -140,8 +141,8 @@ struct IMPORT
         p->g0 = ram.G(a + 0x80);
         p->g1 = ram.G(a + 0x84);
         const uint32_t pg = ram.U32(a + 0x88), ps = ram.U32(a + 0x8C);
-        p->pg = (pg == a + 0x80) ? nullptr : (pg == 0x2C44E0 ? &g_gXfParamNil : PgParamAt(pg));
-        p->pdgScale = (ps == a + 0x84) ? nullptr : (ps == 0x2C44E0 ? &g_gXfParamNil : PgParamAt(ps));
+        p->pg = (pg == a + 0x80) ? nullptr : (pg == S3VA(0x2C44E0) ? &g_gXfParamNil : PgParamAt(pg));
+        p->pdgScale = (ps == a + 0x84) ? nullptr : (ps == S3VA(0x2C44E0) ? &g_gXfParamNil : PgParamAt(ps));
         if (const uint32_t pact = ram.U32(a + 0x90))
         {
             aact.push_back(std::make_unique<RAMACT>());
@@ -203,7 +204,7 @@ struct IMPORT
                 auto is = mpsoe.find(psoe);
                 d.psoe = is != mpsoe.end() ? is->second : nullptr;
                 const uint32_t pxf = ram.U32(e + 4);
-                d.pxf = pxf == 0x2C44F0 ? nullptr : Xf(pxf);
+                d.pxf = pxf == S3VA(0x2C44F0) ? nullptr : Xf(pxf);
                 d.paloRoot = Alo(ram.U32(e + 8), true, false);
                 d.palo = Alo(ram.U32(e + 0xC), true, false);
             }
@@ -343,7 +344,7 @@ struct IMPORT
             const uint32_t n = anode + 12 * i;
             BSPN& b = pb->abspn[i];
             const uint32_t pv = ram.U32(n + 8);
-            b.isurf = pv == 0x2BBAF0 ? -1 : IdxOf(pv, aface, 0x20, cface);
+            b.isurf = pv == S3VA(0x2BBAF0) ? -1 : IdxOf(pv, aface, 0x20, cface);
             b.ibspNeg = IdxOf(ram.U32(n), anode, 12, c);
             b.ibspPos = IdxOf(ram.U32(n + 4), anode, 12, c);
         }
@@ -351,7 +352,7 @@ struct IMPORT
     void FillSoe(SOE* pe, uint32_t e, ALO* palo)
     {
         const uint32_t pxf = ram.U32(e);
-        pe->pxf = pxf == 0x2C44F0 ? nullptr : Xf(pxf);
+        pe->pxf = pxf == S3VA(0x2C44F0) ? nullptr : Xf(pxf);
         pe->palo = palo;
         pe->sRadius = ram.G(e + 8);
         pe->tag = ram.S32(e + 0xC);
@@ -491,7 +492,7 @@ struct IMPORT
         {
             // (not an ALO: e.g. a stale contact's end while the lists are being rebuilt)
             CLS* pcls = PclsFromVt(ram.U32(p + 0xC));
-            if (!pcls || !FCidDerivedFrom(pcls->cid, 0x30) || !ram.FValid(p, 0x150)) return nullptr;
+            if (!pcls || !FCidDerivedFrom(pcls->cid, S3CID(0x30)) || !ram.FValid(p, 0x150)) return nullptr;
             aaloOwned.push_back(std::make_unique<ALO>());
             palo = aaloOwned.back().get();
             mpalo[p] = palo;
@@ -975,7 +976,7 @@ int CheckUpdateSwXps(const std::string& prefix, int ccall)
         s_pimpShim = &imp;
         imp.PhysWorld();
         SetClock(in);
-        g_uRandState = in.U32(in.U32(0x2C49D4) + 0x58);
+        g_uRandState = in.U32(in.U32(S3VA(0x2C49D4)) + 0x58);
         std::printf("call %d: %zu attachments (%zu active, dirty %zu / %zu), %zu objects\n", k, g_physw.apoxa.size(),
                     g_physw.apoxaActive.size(), g_physw.apoxaDirty1.size(), g_physw.apoxaDirty2.size(), imp.mpalo.size());
         UpdateSwXps();
@@ -1079,15 +1080,15 @@ std::vector<BSPN> PrunedNodes(const RAMIMG& ram, uint32_t a, int c, uint32_t gWo
     const int cface = ram.S32(gWorld + 8);
     auto child = [&](uint32_t p) -> int {
         if (!p) return IBSP_NONE;
-        if (p == 0x2BBB10) return IBSP_EMPTY;
-        if (p == 0x2BBB20) return IBSP_SOLID;
+        if (p == S3VA(0x2BBB10)) return IBSP_EMPTY;
+        if (p == S3VA(0x2BBB20)) return IBSP_SOLID;
         return (p >= a && (p - a) % 12 == 0 && int((p - a) / 12) < c) ? int((p - a) / 12) : IBSP_NONE;
     };
     for (int i = 0; i < c; i++)
     {
         const uint32_t n = a + 12 * i;
         const uint32_t pv = ram.U32(n + 8);
-        v[i].isurf = pv == 0x2BBAF0 ? ISURF_BEHIND : (pv == 0x2BBAD0 ? ISURF_FRONT
+        v[i].isurf = pv == S3VA(0x2BBAF0) ? ISURF_BEHIND : (pv == S3VA(0x2BBAD0) ? ISURF_FRONT
                      : ((pv >= aface && int((pv - aface) / 32) < cface) ? int((pv - aface) / 32) : ISURF_BEHIND));
         v[i].ibspNeg = child(ram.U32(n));
         v[i].ibspPos = child(ram.U32(n + 4));
@@ -1137,7 +1138,7 @@ int CheckMarker(const std::string& fn, const std::string& prefix, int ccall)
             const uint32_t absp = in.Reg(8), pbsp = in.Reg(9);
             const std::vector<BSPN> v = PrunedNodes(in, absp, cbsp, ab + 0x90);
             int iroot = IBSP_NONE;
-            if (pbsp == 0x2BBB20) iroot = IBSP_SOLID;
+            if (pbsp == S3VA(0x2BBB20)) iroot = IBSP_SOLID;
             else if (pbsp && pbsp >= absp) iroot = int((pbsp - absp) / 12);
             std::vector<BSPN> vroot = v;
             if (iroot >= int(vroot.size()) && pbsp)
@@ -1226,7 +1227,7 @@ int CheckSolve(const std::string& fn, const std::string& prefix, int ccall)
         s_pimpShim = &imp;
         imp.PhysWorld();
         SetClock(in);
-        g_uRandState = in.U32(in.U32(0x2C49D4) + 0x58);
+        g_uRandState = in.U32(in.U32(S3VA(0x2C49D4)) + 0x58);
         if (fn == "1F9410")
         {
             const int flags = int(in.A1()), nobj = int(in.A2()), ncont = int(in.Reg(8));
@@ -1283,7 +1284,7 @@ int CheckSolve(const std::string& fn, const std::string& prefix, int ccall)
                 if (!po) continue;
                 if ((in.U32(ae + 8 * i) & 0x24) != 4) continue;
                 ALO* palo = imp.Alo(po, false, false);
-                if (!palo || !palo->pcls || !FCidDerivedFrom(palo->pcls->cid, 0x30))
+                if (!palo || !palo->pcls || !FCidDerivedFrom(palo->pcls->cid, S3CID(0x30)))
                 {
                     cskip++;
                     continue;
@@ -1513,7 +1514,7 @@ int CheckMisc(const std::string& fn, const std::string& prefix, int ccall)
             imp.PhysWorld();
             g_clock.dtReal = in.G(G_CLOCK + 0x10);
             g_cmworld.pfnDtReal = [] { return g_clock.dtReal; };
-            g_cm.sRadiusNearClip = in.G(0x2DDF40 + 0x48);
+            g_cm.sRadiusNearClip = in.G(S3VA(0x2DDF40) + 0x48);
             if (fn == "14F110")
             {
                 const glm::vec3 r = PosCmAvoid(&g_cm, glm::vec3(in.QReg(5)), glm::vec3(in.QReg(6)));
@@ -1578,7 +1579,7 @@ int CheckFrames(const std::string& prefix, int K)
         const uint32_t po = in.U32(ae + 8 * i + 4);
         if (!po) continue;  // (every entry: the update flags are tested each frame)
         ALO* palo = imp.Alo(po, false, false);
-        if (!palo || !palo->pcls || !FCidDerivedFrom(palo->pcls->cid, 0x30)) continue;
+        if (!palo || !palo->pcls || !FCidDerivedFrom(palo->pcls->cid, S3CID(0x30))) continue;
         palo = imp.Alo(po, true, false);
         SetGrfUpdOfLo(palo, in.U32(ae + 8 * i));
         aplo.push_back(palo);
@@ -1586,7 +1587,7 @@ int CheckFrames(const std::string& prefix, int K)
     imp.ResolveOxas();
     SetPhysSwObjects(aplo);
     g_pfnUpdateSwEntries17 = nullptr;
-    g_uRandState = in.U32(in.U32(0x2C49D4) + 0x58);
+    g_uRandState = in.U32(in.U32(S3VA(0x2C49D4)) + 0x58);
     // the dynamic objects
     std::vector<std::pair<uint32_t, ALO*>> adyn;
     for (auto& [a, palo] : imp.mpalo)
@@ -1761,7 +1762,8 @@ int CheckStep(const std::string& fn, const std::string& prefix, int ccall)
             SOE* pk = it != imp.mpsoe.end() ? it->second : nullptr;
             const uint32_t ppxp = in.Reg(9);  // (the sixth argument: $t1)
             XP* head = imp.Xp(in.U32(ppxp));
-            AddStepFloorXps(palo, pk, &head);
+            const BSPREF tree = pk ? BSPREF(pk->bsp, pk->geomWorld) : BSPREF{};
+            AddStepFloorXps(palo, pk, 0x7fffffff, tree, pk && !pk->bsp.abspn.empty() ? 0 : IBSP_NONE, &head);
             CompareXpList(chk, head, out, out.U32(ppxp), mpsoeAddr, mpelAddr, "xp", &cbadList);
         }
         else if (fn == "2044B0" || fn == "204250")
@@ -1825,7 +1827,7 @@ int PhysCheckMain(const std::vector<std::string>& args)
     RegisterNativeFn(0x1CE6C0, reinterpret_cast<void*>(&ShimStateNotOne), "shim 0x1CE6C0");
     if (args.size() < 2)
     {
-        std::fprintf(stderr, "usage: Sly3-Release --phys-check FUNC PREFIX [COUNT]  (FUNC: 22DE88)\n");
+        std::fprintf(stderr, "usage: Sly2-Release --phys-check FUNC PREFIX [COUNT]  (FUNC: 22DE88)\n");
         return 2;
     }
     InitClasses();

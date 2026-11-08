@@ -13,11 +13,30 @@
 #include <chrono>
 
 #include <cstdio>
+#include <cstdlib>
 
 namespace
 {
 GLuint s_vao = 0;
 GLSHADER s_shader;
+
+double MovieInputTime()
+{
+    return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+}
+
+void BeginMoviePresentation(MOVIEGL& m)
+{
+    ResetMovieSkip();
+    m.fAwaitShortcutRelease = true;
+    m.tInput = MovieInputTime();
+}
+
+bool FMovieShortcutSkip(MOVIEGL& m, bool fHeld)
+{
+    if (!fHeld) m.fAwaitShortcutRelease = false;
+    return fHeld && !m.fAwaitShortcutRelease;
 }
 
 void DrawMoviePicture(MOVIEGL& m, const uint8_t* prgba, int cx, int cy)
@@ -74,19 +93,31 @@ bool PresentMovieGl(const uint8_t* prgba, int cx, int cy, void* pv)
     {
         glfwPollEvents();
         GLFWwindow* w = g_gl.window;
-        if (glfwWindowShouldClose(w) || glfwGetKey(w, GLFW_KEY_ESCAPE) || glfwGetKey(w, GLFW_KEY_ENTER) ||
-            glfwGetKey(w, GLFW_KEY_SPACE))
-            return false;
-        GLFWgamepadstate pad;
-        if (glfwGetGamepadState(GLFW_JOYSTICK_1, &pad) && pad.buttons[GLFW_GAMEPAD_BUTTON_START]) return false;
+        if (glfwWindowShouldClose(w)) return false;
+        GLFWgamepadstate pad{};
+        const bool fShortcut = glfwGetKey(w, GLFW_KEY_ESCAPE) || glfwGetKey(w, GLFW_KEY_ENTER) ||
+                               glfwGetKey(w, GLFW_KEY_SPACE) ||
+                               (glfwGetGamepadState(GLFW_JOYSTICK_1, &pad) && pad.buttons[GLFW_GAMEPAD_BUTTON_START]);
+        if (FMovieShortcutSkip(m, fShortcut)) return false;
         // (skipcut.h) any button shows "Hold (O) to skip"; Circle held 3 s (or pressed, with Instant Skip) skips
-        using clock = std::chrono::steady_clock;
-        static clock::time_point s_tPrev = clock::now();
-        const clock::time_point tNow = clock::now();
-        const float dt = std::min(0.1f, std::chrono::duration<float>(tNow - s_tPrev).count());
-        s_tPrev = tNow;
-        if (m.cframe == 0 && !prgba) ResetMovieSkip();
-        if (FMovieSkip(w, dt)) return false;
+        const double tNow = MovieInputTime();
+        const float dt = float(std::clamp(tNow - m.tInput, 0.0, 0.1));
+        m.tInput = tNow;
+        // (tests: SLY2N_TESTKEYS during a movie: frame 1000000 + the movie's picture, the game's steps being stopped)
+        extern int g_frameJoy;
+        const int frameJoySaved = g_frameJoy;
+        static const bool s_fTestKeys = std::getenv("SLY2N_TESTKEYS") != nullptr;
+        if (s_fTestKeys) g_frameJoy = 1000000 + m.cframe;
+        const bool fSkip = FMovieSkip(w, dt);
+        g_frameJoy = frameJoySaved;
+        if (fSkip) return false;
+        // (test: SLY2N_MOVIESKIPAT=s: the hold-to-skip taken s seconds into each movie, as FMovieSkip does)
+        if (static const char* s_sz = std::getenv("SLY2N_MOVIESKIPAT"); s_sz && m.cframe / m.fps >= std::atof(s_sz))
+        {
+            std::printf("movie: skipped by SLY2N_MOVIESKIPAT at picture %d\n", m.cframe);
+            FMovieSkipTest();
+            return false;
+        }
     }
     if (!prgba) return true;
     DrawMoviePicture(m, prgba, cx, cy);
@@ -118,12 +149,13 @@ int ViewMovieCommand(const std::string& arg, const std::string& screenshot, doub
     std::string error;
     g_gl.msaa = 0;
     g_display.msaaSamples = 0;
-    if (!g_gl.FInit(width, height, screenshot.empty(), "Sly3-Release movie", error)) { std::fprintf(stderr, "%s\n", error.c_str()); return 1; }
+    if (!g_gl.FInit(width, height, screenshot.empty(), "Sly2-Release movie", error)) { std::fprintf(stderr, "%s\n", error.c_str()); return 1; }
     cane::gl::SwapInterval(0);   // the movie's sound is the clock
     MOVIEGL m;
     m.screenshot = screenshot;
     m.tScreenshot = t;
     m.fWindowed = screenshot.empty();
+    BeginMoviePresentation(m);
     MOVIESTATS stats;
     const bool fOk = FPlayMovie(info.fk, PresentMovieGl, &m, &stats, screenshot.empty() ? 1e9 : t + 2.0);
     std::printf("movie %u: %dx%d %.2f fps, %d pictures%s\n", info.fk.id, stats.cx, stats.cy, stats.fps, stats.cframe,

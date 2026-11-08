@@ -6,6 +6,8 @@
 // build/hand_wip/func_001D6B00.cpp (readable C).
 
 #include "objmethod.h"
+#include "game/sly3.h"
+#include "worldglobals.h"
 #include <string>
 void PrintRef(const CRef& ref, std::string* ps);  // bif.cpp (debug)
 #include "activate.h"
@@ -32,6 +34,7 @@ void PrintRef(const CRef& ref, std::string* ps);  // bif.cpp (debug)
 #include "po.h"
 #include "task.h"
 #include "vecmat.h"
+#include "vtnative.h"
 const std::vector<SOE*>& ApsoeOccluders();  // spawner.cpp (0x1B44D8)
 
 #include <algorithm>
@@ -55,14 +58,14 @@ namespace
 int EopidFromOptid(CID cid, int optid)
 {
     if (cid < 0) return -1;
-    const uint32_t c = g_disc.U32Elf(0x279AD0 + static_cast<uint32_t>(cid) * 8);
-    const uint32_t a = g_disc.U32Elf(0x279AD0 + static_cast<uint32_t>(cid) * 8 + 4);
+    const uint32_t c = g_disc.U32Elf(S3VA(0x279AD0) + static_cast<uint32_t>(cid) * 8);
+    const uint32_t a = g_disc.U32Elf(S3VA(0x279AD0) + static_cast<uint32_t>(cid) * 8 + 4);
     int lo = 0, hi = static_cast<int>(c) - 1;
     while (lo <= hi)
     {
         const int mid = (lo + hi) >> 1;
         const int k = static_cast<int>(g_disc.U32Elf(a + static_cast<uint32_t>(mid) * 8));
-        if (k == optid) return static_cast<int>((g_disc.U32Elf(a + static_cast<uint32_t>(mid) * 8 + 4) - 0x2AC880) / 0x28);
+        if (k == optid) return static_cast<int>((g_disc.U32Elf(a + static_cast<uint32_t>(mid) * 8 + 4) - S3VA(0x2AC880)) / 0x28);
         if (optid < k) hi = mid - 1;
         else lo = mid + 1;
     }
@@ -85,6 +88,7 @@ struct LAUNCHER
 std::unordered_map<const LO*, LAUNCHER>& MpLauncher()
 {
     static std::unordered_map<const LO*, LAUNCHER> s_mp;
+    WORLD_TABLE_LOCAL(s_mp);   // (PC: moved aside while a kept world loads, worldglobals.h)
     return s_mp;
 }
 
@@ -163,7 +167,7 @@ glm::vec3 VelBallistic(float gPitch, const glm::vec3& posStart, const glm::vec3&
 // speed (+0x260, option 509) facing its velocity, others ballistically; a random spin; class 0x50's slot 78
 void Launch(LO* plaunch, LO* po)
 {
-    if (!po || !FCidDerivedFrom(po->Cid(), 0x30)) return;
+    if (!po || !FCidDerivedFrom(po->Cid(), S3CID(0x30))) return;
     ALO* palo = static_cast<ALO*>(po);
     if (std::getenv("SLY2N_PROJEND"))  // (debug: every launch's time)
         std::printf("launch t %.3f %d by %d\n", g_clock.t, po->oid, plaunch ? plaunch->oid : -1);
@@ -177,30 +181,22 @@ void Launch(LO* plaunch, LO* po)
     const LAUNCHER l = Launcher(plaunch);  // (a copy: the scripts the add runs may add launchers)
     UpdateAloXfWorlds(palo);  // (its place as the script set it, option 34)
     const glm::vec3 posStart = PosAloCenter(palo);
-    glm::mat4 m(1.0f);  // (D_002C44F0 without a target)
-    glm::vec3 vel(0.0f);
-    if (l.ptarget && FCidDerivedFrom(l.ptarget->Cid(), 0x30))
+    glm::mat4 m(1.0f);
+    if (l.ptarget && FCidDerivedFrom(l.ptarget->Cid(), S3CID(0x30)))
     {
-        // (vt slot 32: its frame; natively its object record's rotation at its position)
-        m = MatWorldOfAlo(static_cast<ALO*>(l.ptarget));
-        const glm::vec3 posT = PosAloCenter(static_cast<ALO*>(l.ptarget));
-        m[3] = glm::vec4(posT, 1.0f);
-        vel = VelAloPos(static_cast<ALO*>(l.ptarget));
+        if (const XF* frame = PxfObj(static_cast<ALO*>(l.ptarget))) m = frame->matWorld;
     }
-    else if (const LOX* plox = dynamic_cast<const LOX*>(l.ptarget))
-    {
-        // (a point (class 3): its frame, the matrix in its parent's)
-        m = plox->pxf ? plox->pxf->matWorld * plox->mat : plox->mat;
-    }
+    else if (const LOX* located = dynamic_cast<const LOX*>(l.ptarget))
+        m = located->pxf ? located->pxf->matWorld * located->mat : located->mat;
     glm::vec3 d = glm::vec3(m * glm::vec4(l.offset, 1.0f)) - posStart;
     float s = std::sqrt(d.x * d.x + d.y * d.y + d.z * d.z);
     const float tLead = GClamp(GEval(l.polyPredict, s), l.rangePredict);
-    // 0x2309E8: the target's frame predicted tLead ahead (TODO(ai): its own; natively by the record's velocity)
-    if (tLead != 0.0f) d = glm::vec3(m * glm::vec4(l.offset, 1.0f)) + vel * tLead - posStart;
+    // 0x2309E8: predict the complete target transform chain, including its local aim point.
+    if (tLead != 0.0f) d = PredictProjectileAim(l.ptarget, l.offset, tLead) - posStart;
     s = std::sqrt(d.x * d.x + d.y * d.y + d.z * d.z);
     const float sDisplace = GClamp(GEval(l.polyDisplace, s), l.rangeDisplace);
     const glm::vec3 posDest = posStart + Normal(d) * sDisplace;
-    if (FCidDerivedFrom(po->Cid(), 0x4F)) SetProjectileLauncher(palo, plaunch);  // 0x13BC60 (0x134320)
+    if (FCidDerivedFrom(po->Cid(), S3CID(0x4F))) SetProjectileLauncher(palo, plaunch);  // 0x13BC60 (0x134320)
     AddLo(g_psw, po);  // (vt slot 8)
     SetAloCnstrLin(palo, 0);  // 0x1F5720
     SetAloCnstrAng(palo, 0);  // 0x1F57C0
@@ -214,20 +210,24 @@ void Launch(LO* plaunch, LO* po)
             if (o.eopid == eopid && !o.aval.empty())
             {
                 if (std::getenv("SLY2N_HITDEBUG")) std::printf("  speed option tagk %d n %d g %.1f\n", o.aval[0].tagk, o.aval[0].n, o.aval[0].ag[0]);
-                gSpeed = o.aval[0].tagk == 0x15 ? static_cast<float>(o.aval[0].n) : o.aval[0].ag[0];
+                gSpeed = o.aval[0].tagk == S3TAG(0x15) ? static_cast<float>(o.aval[0].n) : o.aval[0].ag[0];
                 fSet = true;
             }
         if (!fSet)
         {
-            const uint32_t u = po->U32Field(0, 0x260, 0);
+            // 0x1B1DB8 initializes the missile family's launch speed to 800.
+            const float fallback = FCidDerivedFrom(po->Cid(), S3CID(0x50)) ? 800.0f : 0.0f;
+            uint32_t bits;
+            std::memcpy(&bits, &fallback, 4);
+            const uint32_t u = po->U32Field(0, 0x260, bits);
             std::memcpy(&gSpeed, &u, 4);
         }
     }
-    if (FCidDerivedFrom(po->Cid(), 0x52))
+    if (FCidDerivedFrom(po->Cid(), S3CID(0x52)))
     {
         SetAloVelocity(palo, glm::vec3(gSpeed, 0.0f, 0.0f));  // 0x1F4898 (class 0x52: its speed along its own x)
     }
-    else if (FCidDerivedFrom(po->Cid(), 0x51))
+    else if (FCidDerivedFrom(po->Cid(), S3CID(0x51)))
     {
         const glm::vec3 v = Normal(posDest - posStart) * gSpeed;
         SetAloVelocityTo(palo, v);  // (vt slot 35)
@@ -245,7 +245,11 @@ void Launch(LO* plaunch, LO* po)
         const float x = GRandInRange(-1.0f, 1.0f), y = GRandInRange(-1.0f, 1.0f), z = GRandInRange(-1.0f, 1.0f);
         SetAloAngVelocityTo(palo, Normal(glm::vec3(x, y, z)) * g);  // (vt slot 36)
     }
-    // TODO(ai): class 0x50's vt slot 78 (the target and its aim point)
+    if (FCidDerivedFrom(po->Cid(), S3CID(0x50)))
+    {
+        using PFN = void (*)(ALO*, LO*, const glm::vec3&);
+        if (PFN pfn = PfnVt<PFN>(po, 78)) pfn(palo, l.ptarget, l.offset);
+    }
     g_paloLaunched = palo;
     g_cLaunchedFrames = 12;
     if (std::getenv("SLY2N_HITDEBUG"))
@@ -260,8 +264,10 @@ void Launch(LO* plaunch, LO* po)
                     l.ptarget && l.ptarget->paloParent ? l.ptarget->paloParent->oid : -1, l.ptarget ? (int)l.ptarget->fInWorld : -1, plaunch->oid,
                     plaunch->paloParent ? plaunch->paloParent->oid : -1);
     if (std::getenv("SLY2N_HITDEBUG"))
-        std::printf("  offset %.2f %.2f %.2f target pos %.1f %.1f %.1f predict %.4f %.4f %.4f\n", l.offset.x, l.offset.y, l.offset.z, m[3][0], m[3][1], m[3][2],
-                    l.polyPredict.x, l.polyPredict.y, l.polyPredict.z);
+    {
+        std::printf("  offset %.2f %.2f %.2f target pos %.1f %.1f %.1f predict %.4f %.4f %.4f\n", l.offset.x, l.offset.y, l.offset.z,
+                    m[3][0], m[3][1], m[3][2], l.polyPredict.x, l.polyPredict.y, l.polyPredict.z);
+    }
 }
 
 // orig: 0x0020AA40 / 0x0020AA78 (the guards' splice methods 0x102900 / 0x102988)
@@ -279,7 +285,7 @@ static CRef FnAddGuardAction(LO* plo, const std::vector<CRef>& a)
         // the loader's call (the option's value given by an expression): before the guard's post-load, which
         // reads its options 233: kept as one (unless the loader recorded it already)
         for (const OPT& o : plo->aopt)
-            if (o.eopid == 233 && !o.aval.empty() && o.aval[0].n == oid) return CRef(TAGK_Void);
+            if (o.eopid == S3EOPID(233) && !o.aval.empty() && o.aval[0].n == oid) return CRef(TAGK_Void);
         OPT o;
         o.eopid = 233;
         OPTVAL v;
@@ -370,7 +376,14 @@ void ListGuards(SW* psw)
     {
         const int k = std::max(1, std::atoi(sz + 1));
         if (s_c % k) return;
-        std::printf("guards %d t %.2f: game paused %d / %d / %d\n", s_c, g_clock.t, g_gamepause.c78, g_gamepause.c80, g_gamepause.c84);
+        std::printf("guards %d t %.2f: game paused %d / %d / %d", s_c, g_clock.t, g_gamepause.c78, g_gamepause.c80, g_gamepause.c84);
+        for (LO* plo : psw->mpcidaplo[S3CID(0x36)])  // (Murray, for the jobs that protect him)
+            if (plo->fInWorld && FCidDerivedFrom(plo->Cid(), S3CID(0x30)))
+            {
+                const glm::vec3 p = PosAloCenter(static_cast<ALO*>(plo));
+                std::printf(" murray %d at %.0f %.0f %.0f", plo->oid, p.x, p.y, p.z);
+            }
+        std::printf("\n");
         for (CID cid = 0x38; cid <= 0x43; ++cid)
             for (LO* plo : psw->mpcidaplo[cid])
             {
@@ -471,11 +484,11 @@ struct INITLAUNCHER
         // the ALOs' splice methods 0x100D18 / 0x100DA0 (EOPIDs 44 / 45 (options 110 / 111): 0x1F6978 / 0x1F69F8, the
         // mesh groups with an id shown / hidden; also the loader's calls of option 45 (the groups hidden at the load))
         RegisterObjectMethod(0x100D18, [](LO* plo, const std::vector<CRef>& a) {
-            if (FCidDerivedFrom(plo->Cid(), 0x30)) ShowAloGlobs(static_cast<ALO*>(plo), NArg(a, 0), true);
+            if (FCidDerivedFrom(plo->Cid(), S3CID(0x30))) ShowAloGlobs(static_cast<ALO*>(plo), NArg(a, 0), true);
             return CRef(TAGK_Void);
         });
         RegisterObjectMethod(0x100DA0, [](LO* plo, const std::vector<CRef>& a) {
-            if (FCidDerivedFrom(plo->Cid(), 0x30)) ShowAloGlobs(static_cast<ALO*>(plo), NArg(a, 0), false);
+            if (FCidDerivedFrom(plo->Cid(), S3CID(0x30))) ShowAloGlobs(static_cast<ALO*>(plo), NArg(a, 0), false);
             return CRef(TAGK_Void);
         });
         // the guards' method 454 (0x103FE8 -> 0x206820): the full reset (slot 27 (0): TODO(ai), message 0xF, slot 26,
@@ -518,7 +531,7 @@ struct INITLAUNCHER
         RegisterObjectMethod(0x10F7B0, [](LO*, const std::vector<CRef>& a) {
             const glm::vec3 pos = a.empty() ? glm::vec3(0.0f) : a[0].GetVector();
             LO* plo = PloPoCurrent(g_psw);  // 0x1C4840
-            ALO* palo = plo && FCidDerivedFrom(plo->Cid(), 0x30) ? static_cast<ALO*>(plo) : nullptr;
+            ALO* palo = plo && FCidDerivedFrom(plo->Cid(), S3CID(0x30)) ? static_cast<ALO*>(plo) : nullptr;
             CRef r;
             if (!palo) { r.SetVector(pos); return r; }
             const glm::vec3 posPlayer = PosLoWorld(palo);
@@ -578,7 +591,7 @@ struct INITLAUNCHER
         // rotation a script sets (the launcher's script places the thrown object at its launch point)
         RegisterObjectGetter(21, [](LO* plo) {  // 0x1A62E8: the position (an ALO's object record's, a LOX's matrix's)
             CRef r;
-            if (const LOX* plox = dynamic_cast<const LOX*>(plo); plox && !FCidDerivedFrom(plo->Cid(), 0x30))
+            if (const LOX* plox = dynamic_cast<const LOX*>(plo); plox && !FCidDerivedFrom(plo->Cid(), S3CID(0x30)))
             {
                 const glm::mat4 mw = plox->pxf ? plox->pxf->matWorld * plox->mat : plox->mat;
                 r.SetVector(glm::vec3(mw[3]));
@@ -589,7 +602,7 @@ struct INITLAUNCHER
         RegisterObjectGetter(22, [](LO* plo) {  // 0x1A6318: the rotation (an ALO's object record's, a LOX's)
             CRef r;
             glm::mat4 mw(1.0f);
-            if (FCidDerivedFrom(plo->Cid(), 0x30))
+            if (FCidDerivedFrom(plo->Cid(), S3CID(0x30)))
             {
                 const ALO* palo = static_cast<const ALO*>(plo);
                 if (palo->apxfRef[2]) mw = palo->apxfRef[2]->matWorld;
@@ -604,10 +617,13 @@ struct INITLAUNCHER
             if (std::getenv("SLY2N_HITDEBUG") && plo->oid == 19728) std::printf("set 34 of %d tag %d\n", plo->oid, int(r.m_tagk));
             if (r.m_tagk != TAGK_Vector) return;
             const glm::vec3 pos = r.GetVector();
-            if (FCidDerivedFrom(plo->Cid(), 0x30))
+            if (FCidDerivedFrom(plo->Cid(), S3CID(0x30)))
             {
                 ALO* palo = static_cast<ALO*>(plo);
-                if (STEP* pstep = PstepFromLo(palo)) SetStepPos(pstep, pos - glm::vec3(pstep->vecBase));
+                // (a step's vt slot 29 is 0x2041C0: SetAloPos (0x1F40A0) with the position as given, then its floor
+                // point +0x230; the getter's position is the object record's (0x1A62E8), so no +0x240 here: R29,
+                // Dimitri put at the barrel's position by event 123835 sat 137.7 above it)
+                if (STEP* pstep = PstepFromLo(palo)) SetStepPos(pstep, pos);
                 else SetAloPos(palo, pos);
                 UpdateAloXfWorlds(palo);
             }
@@ -616,7 +632,7 @@ struct INITLAUNCHER
         RegisterObjectSetter(22, [](LO* plo, const CRef& r) {
             if (r.m_tagk != TAGK_Matrix) return;
             const glm::mat3 m(r.GetMatrix());
-            if (FCidDerivedFrom(plo->Cid(), 0x30))
+            if (FCidDerivedFrom(plo->Cid(), S3CID(0x30)))
             {
                 ALO* palo = static_cast<ALO*>(plo);
                 if (STEP* pstep = PstepFromLo(palo)) SetStepRotation(pstep, m);

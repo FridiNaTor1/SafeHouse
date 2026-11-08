@@ -2,6 +2,7 @@
 // 0x208E70; the nearest and the best kept by vt slot 95 0x140678 at +0x10DC / +0x10E4 and +0x10E8 / +0x10EC): target.h.
 
 #include "clock.h"
+#include "game/sly3.h"
 #include "target.h"
 #include "activate.h"
 
@@ -44,7 +45,7 @@ void WarnOnce(const std::string& what)
 }
 
 // (0x1A62E8, vt slot 31: an ALO's center; another object's world position, e.g. an interest point cid 0x15)
-glm::vec3 PosOf(LO* plo) { return FIsLoDerivedFrom(plo, 0x30) ? PosAloCenter(static_cast<ALO*>(plo)) : PosLoWorld(plo); }
+glm::vec3 PosOf(LO* plo) { return FIsLoDerivedFrom(plo, S3CID(0x30)) ? PosAloCenter(static_cast<ALO*>(plo)) : PosLoWorld(plo); }
 
 
 // orig: 0x00208E70 (the guard's rank for the actor: 4 the actor is the object of its grab / carry, 3 inside its
@@ -84,7 +85,7 @@ int NRankGuard(GUARD* pg, ACTOR* pa, float* pgDist)
                     if (po == pa->palo) *pgDist += -500.0f;
                 }
             }
-            if (po && (po == pa->palo || FIsLoDerivedFrom(po, 0x34))) return 4;
+            if (po && (po == pa->palo || FIsLoDerivedFrom(po, S3CID(0x34)))) return 4;
         }
         LO* pl = (static_cast<LO*>(pg->palo) == pa->plo10DC && pa->n10E4 == 3) ? pg->plo3F8 : pg->plo3F4;
         if (pl && pl->fInWorld && FPointInsideShape(pl, PosOf(pa->palo))) return 3;
@@ -130,8 +131,8 @@ LO* ChooseAttackTarget(ACTOR* pa, float heading, uint32_t mask, const glm::vec3&
         const glm::vec3 current = PosJtLo(point);
         XF* frame = nullptr;
         glm::mat4 local(1.0f);
-        if (FIsLoDerivedFrom(point, 0x30)) frame = PxfObj(static_cast<ALO*>(point));
-        else if (FIsLoDerivedFrom(point, 3))
+        if (FIsLoDerivedFrom(point, S3CID(0x30))) frame = PxfObj(static_cast<ALO*>(point));
+        else if (FIsLoDerivedFrom(point, S3CID(3)))
         {
             const LOX* located = static_cast<LOX*>(point);
             frame = located->pxf;
@@ -143,9 +144,9 @@ LO* ChooseAttackTarget(ACTOR* pa, float heading, uint32_t mask, const glm::vec3&
         float distance = AttackTargetDistance(aim, current, endpoint);
         // 0x15ED78(3, 0x33, point): a parent in the player class family.
         for (LO* parent = point->paloParent; parent; parent = parent->paloParent)
-            if (FIsLoDerivedFrom(parent, 0x33))
+            if (FIsLoDerivedFrom(parent, S3CID(0x33)))
             {
-                distance += cmm::F32(g_disc.U32Elf(0x2BF4B8));
+                distance += cmm::F32(g_disc.U32Elf(S3VA(0x2BF4B8)));
                 break;
             }
         if (!(distance < nearest)) continue;
@@ -197,8 +198,8 @@ void ChooseSlyRushTarget(SLY* psly)
     const PODATA* data = PpodataFromLo(psly->palo);
     const PADCTL* pad = data ? data->ppadctl : nullptr;
     float heading = pad && 0.5f < pad->uJoy ? pad->radJoy : psly->radHeading;
-    const glm::vec3 offset(cmm::F32(g_disc.U32Elf(0x2BF4D0)), cmm::F32(g_disc.U32Elf(0x2BF4D4)),
-                           cmm::F32(g_disc.U32Elf(0x2BF4D8)));
+    const glm::vec3 offset(cmm::F32(g_disc.U32Elf(S3VA(0x2BF4D0))), cmm::F32(g_disc.U32Elf(S3VA(0x2BF4D4))),
+                           cmm::F32(g_disc.U32Elf(S3VA(0x2BF4D8))));
     glm::vec3 direction(0.0f);
     psly->plo18C0 = ChooseAttackTarget(psly, heading, 8, offset, 0.25f, 1.0f, &direction);
     if (psly->plo18C0) heading = std::atan2(direction.y, direction.x);
@@ -210,8 +211,8 @@ void ChooseSlyRushTarget(SLY* psly)
 // (cone 3.15) from the step's heading +0x1A8; found: the actor turns toward it at once)
 void ChooseSlyAirSwingTarget(SLY* psly)
 {
-    const glm::vec3 offset(cmm::F32(g_disc.U32Elf(0x2BF4E0)), cmm::F32(g_disc.U32Elf(0x2BF4E4)),
-                           cmm::F32(g_disc.U32Elf(0x2BF4E8)));
+    const glm::vec3 offset(cmm::F32(g_disc.U32Elf(S3VA(0x2BF4E0))), cmm::F32(g_disc.U32Elf(S3VA(0x2BF4E4))),
+                           cmm::F32(g_disc.U32Elf(S3VA(0x2BF4E8))));
     glm::vec3 direction(0.0f);
     psly->plo18C0 = ChooseAttackTarget(psly, psly->radHeading, 4, offset, 0.25f, 3.15f, &direction);
     if (psly->plo18C0)
@@ -249,37 +250,30 @@ void PickActorTargets(ACTOR* pa)
     float g0 = FLT_MAX, g1 = FLT_MAX;
     LO* p0 = nullptr, * p1 = nullptr;
     int n0 = -1, n1 = -1;
-    if (g_psw)
-        for (CID cid = 0; cid < CID_Max; ++cid)
+    for (GUARD* pg : ApguardActive())
+    {
+        LO* plo = pg->palo;
+        float g = 0.0f;
+        const int n = NRankGuard(pg, pa, &g);
+        static const bool s_fDbg = std::getenv("SLY2N_TARGETDEBUG") != nullptr;
+        if (s_fDbg)
+            std::printf("target: t %.4f guard %d %p rank %d dist %.1f pos %.1f %.1f %.1f state 0x%llX 38C %d 3F4 %d %p at %.0f %.0f %.0f in %d\n", g_clock.t, plo->oid, (void*)plo, n, g,
+                        PosOf(plo).x, PosOf(plo).y, PosOf(plo).z, static_cast<unsigned long long>(pg->grfState),
+                        pg->plo38C ? pg->plo38C->oid : -1, pg->plo3F4 ? pg->plo3F4->oid : -1, (void*)pg->plo3F4,
+                        pg->plo3F4 ? PosOf(pg->plo3F4).x : 0.0f, pg->plo3F4 ? PosOf(pg->plo3F4).y : 0.0f, pg->plo3F4 ? PosOf(pg->plo3F4).z : 0.0f,
+                        pg->plo3F4 ? pg->plo3F4->fInWorld : -1);
+        if (g < g0)
         {
-            if (!FCidDerivedFrom(cid, 0x38)) continue;
-            for (LO* plo : g_psw->mpcidaplo[cid])
-            {
-                if (!plo || !plo->fInWorld) continue;
-                GUARD* pg = PguardFromLo(plo);
-                if (!pg) continue;
-                float g = 0.0f;
-                const int n = NRankGuard(pg, pa, &g);
-                static const bool s_fDbg = std::getenv("SLY2N_TARGETDEBUG") != nullptr;
-                if (s_fDbg)
-                    std::printf("target: t %.4f guard %d %p rank %d dist %.1f pos %.1f %.1f %.1f state 0x%llX 38C %d 3F4 %d %p at %.0f %.0f %.0f in %d\n", g_clock.t, plo->oid, (void*)plo, n, g,
-                                PosOf(plo).x, PosOf(plo).y, PosOf(plo).z, static_cast<unsigned long long>(pg->grfState),
-                                pg->plo38C ? pg->plo38C->oid : -1, pg->plo3F4 ? pg->plo3F4->oid : -1, (void*)pg->plo3F4,
-                                pg->plo3F4 ? PosOf(pg->plo3F4).x : 0.0f, pg->plo3F4 ? PosOf(pg->plo3F4).y : 0.0f, pg->plo3F4 ? PosOf(pg->plo3F4).z : 0.0f,
-                                pg->plo3F4 ? pg->plo3F4->fInWorld : -1);
-                if (g < g0)
-                {
-                    g0 = g;
-                    n0 = n;
-                    p0 = plo;
-                }
-                if (n1 < n || (n == n1 && g < g1))
-                {
-                    g1 = g;
-                    n1 = n;
-                    p1 = plo;
-                }
-            }
+            g0 = g;
+            n0 = n;
+            p0 = plo;
         }
+        if (n1 < n || (n == n1 && g < g1))
+        {
+            g1 = g;
+            n1 = n;
+            p1 = plo;
+        }
+    }
     SetActorTargets(pa, n0, p0, n1, p1);
 }
