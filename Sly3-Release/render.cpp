@@ -598,6 +598,10 @@ struct STREAMRING
         {
             static const bool s_fOff = std::getenv("SLY2N_PERSIST") == nullptr;
             pfnBufferStorage = reinterpret_cast<PFNBUFFERSTORAGE>(cane::gl::ProcAddress("glBufferStorage"));
+#if defined(__linux__)
+            // (a 4.3 context, Zink on ARM GPUs: Mesa returns an entry point even when the driver lacks the feature)
+            if ((GLVersion.major < 4 || (GLVersion.major == 4 && GLVersion.minor < 4)) && !glfwExtensionSupported("GL_ARB_buffer_storage")) pfnBufferStorage = nullptr;
+#endif
             if (s_fOff || !pfnBufferStorage) { fDisabled = true; return; }
             GLint a = 0;
             glGetIntegerv(GL_SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT, &a);

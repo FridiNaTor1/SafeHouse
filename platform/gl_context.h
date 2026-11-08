@@ -45,6 +45,34 @@ inline void ApplyWindowHints(int major, int minor) {
 #endif
 }
 
+#if defined(__linux__)
+// After a context could not be created: GLFW's reason and what the system's OpenGL does offer, for the log.
+inline std::string DescribeContextFailure() {
+  const char* message = nullptr;
+  const int code = glfwGetError(&message);
+  std::string text = code != GLFW_NO_ERROR && message ? std::string("GLFW: ") + message : std::string("GLFW gave no reason");
+  glfwDefaultWindowHints();
+  ApplyNativeWindowHints(3, 3);
+  glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
+  if (GLFWwindow* probe = glfwCreateWindow(64, 64, "probe", nullptr, nullptr)) {
+    glfwMakeContextCurrent(probe);
+    using GetString = const unsigned char* (*)(unsigned int);
+    if (auto get = reinterpret_cast<GetString>(glfwGetProcAddress("glGetString"))) {
+      const unsigned char* renderer = get(0x1F01), * version = get(0x1F02);
+      text += "; offered: ";
+      text += renderer ? reinterpret_cast<const char*>(renderer) : "unknown renderer";
+      text += " / ";
+      text += version ? reinterpret_cast<const char*>(version) : "unknown version";
+    }
+    glfwMakeContextCurrent(nullptr);
+    glfwDestroyWindow(probe);
+  } else {
+    text += "; an OpenGL 3.3 context failed too";
+  }
+  return text;
+}
+#endif
+
 inline bool CreateContext(GLFWwindow* window, std::string* error) {
 #if defined(__APPLE__)
   return gl_metal::CreateContext(window, error);

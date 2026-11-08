@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Create an offline release bundle from a completed native or cross build."""
-import argparse, hashlib, json, os, pathlib, shutil, subprocess, tarfile, urllib.request, zipfile
+import argparse, hashlib, json, os, pathlib, platform, shutil, subprocess, tarfile, urllib.request, zipfile
 p=argparse.ArgumentParser()
 p.add_argument('--build',required=True,type=pathlib.Path)
 p.add_argument('--output',default='dist',type=pathlib.Path)
@@ -9,11 +9,14 @@ p.add_argument('--windows-package',choices=['both','portable','setup'],default='
 p.add_argument('--makensis',type=pathlib.Path)
 p.add_argument('--appimagetool',type=pathlib.Path)
 p.add_argument('--appimage-runtime',type=pathlib.Path)
+p.add_argument('--arch',choices=['x86_64','aarch64'],help='Linux target (default: this machine); set it for a cross build')
 a=p.parse_args()
 source=pathlib.Path(__file__).resolve().parent.parent
 output=a.output.resolve();output.mkdir(parents=True,exist_ok=True)
 # Product name SafeHouse since 2026-11-03 (ProjectCane before); the user data folders keep their old names.
-name='SafeHouse-Launcher-Windows-x86_64' if a.windows else 'SafeHouse-Launcher-Linux-x86_64'
+arch=a.arch or {'arm64':'aarch64'}.get(platform.machine(),platform.machine())
+if not a.windows and arch not in ['x86_64','aarch64']:raise RuntimeError('Unsupported Linux architecture: '+arch)
+name='SafeHouse-Launcher-Windows-x86_64' if a.windows else 'SafeHouse-Launcher-Linux-'+arch
 stage=output/name
 if stage.exists():shutil.rmtree(stage)
 subprocess.run(['cmake','--install',str(a.build.resolve()),'--config','Release','--prefix',str(stage)],check=True)
@@ -81,11 +84,11 @@ else:
  os.symlink('bin/safehouse',stage/'SafeHouse')
  with tarfile.open(output/(name+'.tar.gz'),'w:gz') as archive:archive.add(stage,arcname=name)
  if a.appimagetool:
-  runtime=(a.appimage_runtime or (a.build.resolve()/'packaging-runtime-x86_64')).resolve()
-  runtime_hash='2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d'
+  runtime=(a.appimage_runtime or (a.build.resolve()/'packaging-runtime-'+arch)).resolve()
+  runtime_hash={'x86_64':'2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d','aarch64':'00cbdfcf917cc6c0ff6d3347d59e0ca1f7f45a6df1a428a0d6d8a78664d87444'}[arch]
   if not runtime.exists() or hashlib.sha256(runtime.read_bytes()).hexdigest()!=runtime_hash:
    if a.appimage_runtime:raise RuntimeError('The supplied AppImage runtime does not match pinned release 20251108')
-   with urllib.request.urlopen('https://github.com/AppImage/type2-runtime/releases/download/20251108/runtime-x86_64') as response:payload=response.read()
+   with urllib.request.urlopen('https://github.com/AppImage/type2-runtime/releases/download/20251108/runtime-'+arch) as response:payload=response.read()
    if hashlib.sha256(payload).hexdigest()!=runtime_hash:raise RuntimeError('AppImage runtime checksum mismatch')
    runtime.write_bytes(payload)
   appdir=output/'SafeHouse.AppDir'
@@ -98,8 +101,8 @@ else:
   (appdir/'AppRun').chmod(0o755)
   shutil.copy2(stage/'share/applications/safehouse.desktop', appdir/'safehouse.desktop')
   shutil.copy2(stage/'share/icons/hicolor/256x256/apps/safehouse.png', appdir/'safehouse.png')
-  temporary=output/'SafeHouse-Launcher-Linux-x86_64.AppImage.building'
+  temporary=output/(name+'.AppImage.building')
   temporary.unlink(missing_ok=True)
-  subprocess.run([str(a.appimagetool.resolve()),'--runtime-file',str(runtime),str(appdir),str(temporary)],check=True,env={**os.environ,'ARCH':'x86_64','APPIMAGE_EXTRACT_AND_RUN':'1'})
-  temporary.replace(output/'SafeHouse-Launcher-Linux-x86_64.AppImage')
+  subprocess.run([str(a.appimagetool.resolve()),'--runtime-file',str(runtime),str(appdir),str(temporary)],check=True,env={**os.environ,'ARCH':arch,'APPIMAGE_EXTRACT_AND_RUN':'1'})
+  temporary.replace(output/(name+'.AppImage'))
 print(stage)

@@ -6,6 +6,10 @@
 #include <xmmintrin.h>
 #define CANE_PS2_FLOAT_X86 1
 #endif
+#if defined(__aarch64__)
+#include <cstdint>
+#define CANE_PS2_FLOAT_ARM64 1
+#endif
 
 // The EE and VU execute with chop-to-zero rounding and flush denormal inputs
 // and results to zero. Keep this state local to the translated PS2 operation
@@ -19,7 +23,18 @@ public:
 		, m_mxcsr(_mm_getcsr())
 #endif
 	{
+#if defined(CANE_PS2_FLOAT_ARM64)
+		__asm__ __volatile__("mrs %0, fpcr" : "=r"(m_fpcr));
+#endif
 		std::fesetround(FE_TOWARDZERO);
+
+#if defined(CANE_PS2_FLOAT_ARM64)
+		// FPCR.FZ flushes denormal inputs and results to zero, like DAZ and FTZ together.
+		std::uint64_t fpcr = 0;
+		__asm__ __volatile__("mrs %0, fpcr" : "=r"(fpcr));
+		fpcr |= std::uint64_t(1) << 24;
+		__asm__ __volatile__("msr fpcr, %0" : : "r"(fpcr));
+#endif
 
 #if defined(CANE_PS2_FLOAT_X86)
 		constexpr unsigned int kRoundingMask = 3u << 13;
@@ -38,6 +53,9 @@ public:
 #if defined(CANE_PS2_FLOAT_X86)
 		_mm_setcsr(m_mxcsr);
 #endif
+#if defined(CANE_PS2_FLOAT_ARM64)
+		__asm__ __volatile__("msr fpcr, %0" : : "r"(m_fpcr));
+#endif
 		std::fesetround(m_roundMode);
 	}
 
@@ -45,6 +63,9 @@ public:
 	ScopedPs2FloatMode& operator=(const ScopedPs2FloatMode&) = delete;
 
 private:
+#if defined(CANE_PS2_FLOAT_ARM64)
+	std::uint64_t m_fpcr = 0;
+#endif
 	int m_roundMode;
 #if defined(CANE_PS2_FLOAT_X86)
 	unsigned int m_mxcsr;

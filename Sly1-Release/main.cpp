@@ -199,7 +199,9 @@ public:
         {
 #ifdef _WIN32
             YieldProcessor();
-#else
+#elif defined(__aarch64__)
+            __asm__ __volatile__("yield");
+#elif defined(__x86_64__) || defined(__i386__)
             __builtin_ia32_pause();
 #endif
         }

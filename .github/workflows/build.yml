@@ -74,9 +74,15 @@ jobs:
           } | tee -a "$GITHUB_OUTPUT"
 
   linux:
-    name: Linux (Ubuntu 22.04)
+    name: Linux ${{ matrix.arch }} (Ubuntu 22.04)
     needs: version
-    runs-on: ubuntu-22.04
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: x86_64, runner: ubuntu-22.04, appimagetool: 46fdd785094c7f6e545b61afcfb0f3d98d8eab243f644b4b17698c01d06083d1 }
+          - { arch: aarch64, runner: ubuntu-22.04-arm, appimagetool: 04f45ea45b5aa07bb2b071aed9dbf7a5185d3953b11b47358c1311f11ea94a96 }
     timeout-minutes: 120
     env:
       SAFEHOUSE_VERSION: ${{ needs.version.outputs.version }}
@@ -104,14 +110,14 @@ jobs:
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ${{ runner.temp }}/ffmpeg
-          key: ffmpeg-minimal-linux-ubuntu-22.04-${{ hashFiles('scripts/ffmpeg-minimal.sh') }}
+          key: ffmpeg-minimal-linux-${{ matrix.arch }}-ubuntu-22.04-${{ hashFiles('scripts/ffmpeg-minimal.sh') }}
       - name: FFmpeg (scripts/ffmpeg-minimal.sh)
         run: scripts/ffmpeg-minimal.sh linux "$RUNNER_TEMP/ffmpeg"
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: .ccache
-          key: ccache-linux-${{ github.sha }}
-          restore-keys: ccache-linux-
+          key: ccache-linux-${{ matrix.arch }}-${{ github.sha }}
+          restore-keys: ccache-linux-${{ matrix.arch }}-
       - name: Configure (as the local Ubuntu 22.04 packaging build, plus the tests)
         run: >-
           cmake -S . -B build/linux -G Ninja -DCMAKE_BUILD_TYPE=Release -DCANE_LTO=OFF -DCANE_BUILD_SLY2=ON -DCANE_BUILD_SLY3=ON
@@ -133,17 +139,17 @@ jobs:
       - name: Package (AppImage and tar.gz)
         run: |
           set -euo pipefail
-          curl -fsSL https://github.com/AppImage/appimagetool/releases/download/1.9.0/appimagetool-x86_64.AppImage -o "$RUNNER_TEMP/appimagetool"
-          echo "46fdd785094c7f6e545b61afcfb0f3d98d8eab243f644b4b17698c01d06083d1  $RUNNER_TEMP/appimagetool" | sha256sum -c -
+          curl -fsSL https://github.com/AppImage/appimagetool/releases/download/1.9.0/appimagetool-${{ matrix.arch }}.AppImage -o "$RUNNER_TEMP/appimagetool"
+          echo "${{ matrix.appimagetool }}  $RUNNER_TEMP/appimagetool" | sha256sum -c -
           chmod +x "$RUNNER_TEMP/appimagetool"
           python3 scripts/package.py --build build/linux --output dist --appimagetool "$RUNNER_TEMP/appimagetool"
-          dist/SafeHouse-Launcher-Linux-x86_64/bin/safehouse --version
+          dist/SafeHouse-Launcher-Linux-${{ matrix.arch }}/bin/safehouse --version
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: linux-release
+          name: linux-${{ matrix.arch }}-release
           path: |
-            dist/SafeHouse-Launcher-Linux-x86_64.tar.gz
-            dist/SafeHouse-Launcher-Linux-x86_64.AppImage
+            dist/SafeHouse-Launcher-Linux-${{ matrix.arch }}.tar.gz
+            dist/SafeHouse-Launcher-Linux-${{ matrix.arch }}.AppImage
           if-no-files-found: error
 
   # Cross-built with LLVM/MinGW, the toolchain of the published Windows packages; the games do not build with MSVC.
@@ -284,7 +290,7 @@ jobs:
           set -euo pipefail
           rm -f release/*.sha256
           python3 scripts/release-manifest.py release --version "$VERSION" --tag "$TAG" --commit "$COMMIT" --date "$DATE" \
-            --require linux-appimage --require linux-tar --require windows-portable --require windows-setup \
+            --require linux-appimage --require linux-tar --require linux-aarch64-appimage --require linux-aarch64-tar --require windows-portable --require windows-setup \
             --require macos-arm64 --require macos-x86_64
           # (the previous release: the newest tag of this scheme, vX.Y.Z)
           previous=$(git tag --list 'v*' --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sed -n 1p || true)
@@ -305,6 +311,8 @@ jobs:
           | Windows, portable (unzip and open `SafeHouse.exe`) | `SafeHouse-Launcher-Windows-x86_64-Portable.zip` |
           | Linux and Steam Deck, AppImage | `SafeHouse-Launcher-Linux-x86_64.AppImage` |
           | Linux, archive | `SafeHouse-Launcher-Linux-x86_64.tar.gz` |
+          | Linux on ARM (Steam Frame), AppImage | `SafeHouse-Launcher-Linux-aarch64.AppImage` |
+          | Linux on ARM, archive | `SafeHouse-Launcher-Linux-aarch64.tar.gz` |
           | macOS, Apple silicon | `SafeHouse-Launcher-macOS-arm64.dmg` |
           | macOS, Intel | `SafeHouse-Launcher-macOS-x86_64.dmg` |
 

@@ -19,6 +19,8 @@ import sys
 PACKAGES = {
     'linux-appimage': 'SafeHouse-Launcher-Linux-x86_64.AppImage',
     'linux-tar': 'SafeHouse-Launcher-Linux-x86_64.tar.gz',
+    'linux-aarch64-appimage': 'SafeHouse-Launcher-Linux-aarch64.AppImage',
+    'linux-aarch64-tar': 'SafeHouse-Launcher-Linux-aarch64.tar.gz',
     'windows-portable': 'SafeHouse-Launcher-Windows-x86_64-Portable.zip',
     'windows-setup': 'SafeHouse-Launcher-Windows-x86_64-Setup.exe',
     'macos-arm64': 'SafeHouse-Launcher-macOS-arm64.zip',
@@ -30,6 +32,8 @@ PACKAGES = {
 UPDATER = {
     'linux-appimage': 'linux-appimage',
     'linux-tar': 'linux-tar',
+    'linux-aarch64-appimage': 'linux-aarch64-appimage',
+    'linux-aarch64-tar': 'linux-aarch64-tar',
     'windows-portable': 'windows-portable',
     'windows-installed': 'windows-portable',
     'macos-arm64': 'macos-arm64',

@@ -13,6 +13,11 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 if(NOT CMAKE_CONFIGURATION_TYPES AND NOT CMAKE_BUILD_TYPE)
  set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
 endif()
+# 64-bit ARM Linux: the games were written for a signed char and for separate multiply and add steps (the PS2's FPU
+# rounds each one), as on x86-64; GCC's aarch64 defaults are an unsigned char and fused multiply-add.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64)$")
+ add_compile_options(-fsigned-char -ffp-contract=off)
+endif()
 option(CANE_BUILD_GAME "Build the game runtime" ON)
 option(CANE_BUILD_LAUNCHER "Build the desktop launcher" ON)
 # Settings > Custom runtime ("Build and use" compiles the games from a source checkout) and --build-source. Off: the

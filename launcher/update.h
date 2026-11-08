@@ -442,8 +442,13 @@ inline Release fetchLatest(const std::atomic<bool>* cancel = nullptr) {
 enum class Kind { Unsupported, AppImage, LinuxFolder, WindowsPortable, WindowsInstalled, MacApp };
 inline const char* kindKey(Kind k) {
     switch (k) {
+#if defined(__aarch64__)
+    case Kind::AppImage: return "linux-aarch64-appimage";
+    case Kind::LinuxFolder: return "linux-aarch64-tar";
+#else
     case Kind::AppImage: return "linux-appimage";
     case Kind::LinuxFolder: return "linux-tar";
+#endif
     case Kind::WindowsPortable: return "windows-portable";
     case Kind::WindowsInstalled: return "windows-installed";
 #if defined(__aarch64__) || defined(__arm64__)

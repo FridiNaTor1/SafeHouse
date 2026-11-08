@@ -8,6 +8,7 @@
 # macOS builds its own copy with scripts/macos/ffmpeg.sh (no libavformat there: Sly 1 isn't built on macOS).
 #
 #   scripts/ffmpeg-minimal.sh linux   <prefix>   native build for Linux
+#   scripts/ffmpeg-minimal.sh linux-aarch64 <prefix>   cross build for 64-bit ARM Linux (aarch64-linux-gnu-gcc)
 #   scripts/ffmpeg-minimal.sh windows <prefix>   cross build with LLVM/MinGW (x86_64-w64-mingw32-clang on PATH, or
 #                                                CANE_MINGW_ROOT set to the toolchain)
 #   scripts/ffmpeg-minimal.sh --print-args       the configure arguments, one per line
@@ -39,6 +40,9 @@ PREFIX="${2:?usage: ffmpeg-minimal.sh linux|windows <prefix>}"
 PREFIX="$(mkdir -p "$PREFIX" && cd "$PREFIX" && pwd)"
 case "$TARGET" in
   linux) CHECK="$PREFIX/lib/libavcodec.so" ;;
+  linux-aarch64)
+    CONFIGURE_ARGS+=(--enable-cross-compile --target-os=linux --arch=aarch64 --cross-prefix=aarch64-linux-gnu-)
+    CHECK="$PREFIX/lib/libavcodec.so" ;;
   windows)
     if [ -n "${CANE_MINGW_ROOT:-}" ]; then export PATH="$CANE_MINGW_ROOT/bin:$PATH"; fi
     command -v x86_64-w64-mingw32-clang >/dev/null || { echo "ffmpeg: x86_64-w64-mingw32-clang not found (set CANE_MINGW_ROOT)" >&2; exit 1; }
@@ -46,7 +50,7 @@ case "$TARGET" in
       --cc=x86_64-w64-mingw32-clang --cxx=x86_64-w64-mingw32-clang++ --ar=llvm-ar --ranlib=llvm-ranlib --nm=llvm-nm
       --strip=llvm-strip)
     CHECK="$PREFIX/bin/avcodec-61.dll" ;;
-  *) echo "ffmpeg: unknown target $TARGET (linux or windows)" >&2; exit 2 ;;
+  *) echo "ffmpeg: unknown target $TARGET (linux, linux-aarch64 or windows)" >&2; exit 2 ;;
 esac
 command -v nasm >/dev/null 2>&1 || CONFIGURE_ARGS+=(--disable-x86asm)
 

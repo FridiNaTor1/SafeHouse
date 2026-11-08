@@ -125,15 +125,22 @@ inline uint64_t GearValue(uint8_t value) {
     return state ^ (state >> 31);
 }
 
+// Out of line: inlined into the static's initializer, GCC 11 for aarch64 addresses the table with a huge constant
+// offset that the linker can't encode ("relocation truncated to fit").
+#if defined(__GNUC__)
+__attribute__((noinline))
+#endif
+inline std::array<uint64_t, 256> MakeGearTable() {
+    std::array<uint64_t, 256> table{};
+    for (int i = 0; i < 256; ++i) table[i] = GearValue(static_cast<uint8_t>(i));
+    return table;
+}
+
 // Content-defined chunk boundaries (BrxRebuildService.SplitContentDefinedChunks): [begin, end) pairs.
 inline std::vector<std::pair<std::size_t, std::size_t>> SplitChunks(const std::vector<uint8_t>& payload) {
     constexpr std::size_t minimumSize = 16 * 1024, maximumSize = 256 * 1024;
     constexpr uint64_t boundaryMask = (1ull << 16) - 1;
-    static const auto gear = [] {
-        std::array<uint64_t, 256> table{};
-        for (int i = 0; i < 256; ++i) table[i] = GearValue(static_cast<uint8_t>(i));
-        return table;
-    }();
+    static const auto gear = MakeGearTable();
     std::vector<std::pair<std::size_t, std::size_t>> chunks;
     std::size_t start = 0;
     uint64_t hash = 0;

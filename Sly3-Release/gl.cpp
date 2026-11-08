@@ -176,17 +176,47 @@ bool GL::FInit(int w, int h, bool fVisible, const char* title, std::string& erro
     if (!cane::initGlfw()) { error = "glfwInit failed (no display?)"; return false; }
     cane::input::installJoystickCallback();
     cane::input::applyBundledMappings();  // Steam passes its virtual pads' mappings in SDL_GAMECONTROLLERCONFIG
-    cane::gl::ApplyWindowHints(4, 5);
-    glfwWindowHint(GLFW_DEPTH_BITS, 0);
-    glfwWindowHint(GLFW_STENCIL_BITS, 0);
-    glfwWindowHint(GLFW_VISIBLE, fVisible ? GLFW_TRUE : GLFW_FALSE);
+    const auto createWindow = [&](int minor) {
+        cane::gl::ApplyWindowHints(4, minor);
+        glfwWindowHint(GLFW_DEPTH_BITS, 0);
+        glfwWindowHint(GLFW_STENCIL_BITS, 0);
+        glfwWindowHint(GLFW_VISIBLE, fVisible ? GLFW_TRUE : GLFW_FALSE);
+        return glfwCreateWindow(w, h, title, nullptr, nullptr);
+    };
     width = w;
     height = h;
-    window = glfwCreateWindow(w, h, title, nullptr, nullptr);
+    window = createWindow(5);
+    std::string contextFailure;
+#if defined(__linux__)
+    // A GPU whose native Mesa driver stops short of OpenGL 4.5 (ARM devices) may reach it through Mesa's Zink, on Vulkan.
+    if (!window)
+    {
+        contextFailure = cane::gl::DescribeContextFailure();
+        std::fprintf(stderr, "OpenGL 4.5 context failed (%s)\n", contextFailure.c_str());
+        // Zink on some ARM GPUs stops at 4.3; the shaders are GLSL 430, and what they need from 4.4 and 4.5 is checked below.
+        window = createWindow(3);
+        if (window) std::printf("OpenGL: 4.5 is not offered, using 4.3 and extensions\n");
+        if (!window && !std::getenv("MESA_LOADER_DRIVER_OVERRIDE"))
+        {
+            glfwTerminate();
+            setenv("MESA_LOADER_DRIVER_OVERRIDE", "zink", 1);
+            if (cane::initGlfw())
+            {
+                cane::input::installJoystickCallback();
+                cane::input::applyBundledMappings();
+                window = createWindow(5);
+                if (!window) window = createWindow(3);
+                if (window) std::printf("OpenGL: using Mesa's Zink driver (the native driver has no OpenGL 4.5)\n");
+                else contextFailure += "; with Zink: " + cane::gl::DescribeContextFailure();
+            }
+        }
+    }
+#endif
     if (!window)
     {
         glfwTerminate();
         error = "OpenGL 4.5 is required: could not create a graphics context";
+        if (!contextFailure.empty()) error += " (" + contextFailure + ")";
         return false;
     }
     if (!cane::gl::CreateContext(window, &error)) return false;
@@ -199,6 +229,13 @@ bool GL::FInit(int w, int h, bool fVisible, const char* title, std::string& erro
     using PFNCLIPCONTROL = void (*)(GLenum, GLenum);
     auto pfnClipControl = reinterpret_cast<PFNCLIPCONTROL>(cane::gl::ProcAddress("glClipControl"));
     if (!pfnClipControl) { error = "glClipControl (GL 4.5) is required"; return false; }
+#if defined(__linux__)
+    if ((GLVersion.major < 4 || (GLVersion.major == 4 && GLVersion.minor < 5)) && !glfwExtensionSupported("GL_ARB_clip_control"))
+    {
+        error = "OpenGL 4.5 or GL_ARB_clip_control is required; this driver offers " + std::string(reinterpret_cast<const char*>(glGetString(GL_VERSION)));
+        return false;
+    }
+#endif
     constexpr GLenum GL_ZERO_TO_ONE_ = 0x935F;
     pfnClipControl(GL_LOWER_LEFT, GL_ZERO_TO_ONE_);
     CreateFramebuffers(w, h);
