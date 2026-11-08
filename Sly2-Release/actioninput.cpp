@@ -240,6 +240,7 @@ Action ForButton(const LO* owner, int button) {
             if (button == 7) return Action::BentleySpecial;
         } else if (FCidDerivedFrom(actor->palo->Cid(), 0x36)) {
             auto* murray = dynamic_cast<MURRAY*>(actor);
+            if (murray && murray->state == 5 && button == PCA_Triangle) return Action::CarrySlam;
             if (murray && murray->state == 2 && (button == 4 || button == 7)) return Action::MurrayFlop;
             if (button == 7) return Action::MurrayUppercut;
         }

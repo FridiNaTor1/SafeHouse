@@ -40,6 +40,7 @@ namespace cane::sly2input {
  X(MurrayUppercut, "murray_uppercut", "Uppercut / lift", "Murray", 2001, 3) \
  X(MurrayFlop, "murray_flop", "Thunder Flop", "Murray", 2000, 2) \
  X(CarryThrow, "carry_throw", "Throw a carried object", "Carrying and throwing", 2000, 2) \
+ X(CarrySlam, "carry_slam", "Slam a carried object", "Carrying and throwing", 2001, 3) \
  X(ThrowRelease, "throw_release", "Throw aimed item", "Carrying and throwing", 2000, 2) \
  X(ThrowCancel, "throw_cancel", "Cancel throw / put down", "Carrying and throwing", 69, 1) \
  X(ReconClose, "recon_close", "Close binocucom", "Binocucom", 67, 10) \

@@ -2149,6 +2149,14 @@ void MurrayTakeObject(ACTOR* pa, LO* puse)
     if (LO* po = PloInteractOidField(puse, 0x180)) FaceActorToward(p, po);  // 0x2046F0 (the object's owner)
 }
 
+bool FStartMurrayCarrySlam(MURRAY* p)
+{
+    if (!PPart<ASEG>(p->palo, 0x1438)) return false;
+    p->f143C = 0;
+    SetMurrayState(p, 8);
+    return true;
+}
+
 // orig: 0x001B8D30 (Berserker Charge's phase, state 12: 0 the wind-up +0x1848, 1 the charge +0x184C, 2 the bounce off a
 // wall (the kind-2 player +0x1890 with +0x1850's tuning, to the point its distance +0x186C behind), 3 the stop
 // +0x1904; -1 off)

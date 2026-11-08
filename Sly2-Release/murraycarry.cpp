@@ -235,7 +235,7 @@ void SetMurrayCarryMove(MURRAY* p,int k) {
 }
 
 // orig: 0x001B5380: held-object validity and movement, including Atlas Strength's
-// carried jump (kind15) and R1 run. Alternate put-down and R3 remain unported.
+// carried jump (kind15), throw, slam and R1 run. Alternate put-down and R3 remain unported.
 void UpdateMurrayCarryHeld(MURRAY* p) {
     ALO* a=Owner(p);
     if (!a || !a->fInWorld) { Detach(p);p->plo13F0=nullptr;SetMurrayState(p,0);return; }
@@ -250,6 +250,9 @@ void UpdateMurrayCarryHeld(MURRAY* p) {
         return;
     }
     if (sly2actions::Take(pc,sly2actions::Action::CarryThrow,0xA0,0.0f)) { SetMurrayState(p,7);return; }
+    // Triangle starts the regular slam when Murray has the authored animation.
+    if (sly2actions::Take(pc, sly2actions::Action::CarrySlam, 0x10, 0.0f) &&
+        FStartMurrayCarrySlam(p)) return;
     const float u=pc->uJoy;
     const bool moving=p->n1458==0?0.1f<u:0<u;
     // orig: 0x001B54FC..0x001B5594: the acquired passive selects the authored
