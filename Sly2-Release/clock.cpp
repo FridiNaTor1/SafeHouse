@@ -30,6 +30,7 @@ void UpdateClockRate(CLOCK* pclock)
 void ResetClock(CLOCK* pclock)
 {
     pclock->t = 0.0f;
+    pclock->fAfterReset = true;
     for (int i : {0, 1, 2, 5, 6, 8, 7, 4}) pclock->af[i] = 1.0f;
     UpdateClockRate(pclock);
 }
@@ -48,6 +49,11 @@ void UpdateClock(CLOCK* pclock, bool fPaused)
     float dt = static_cast<float>(tick - pclock->tick) * 3.3908420e-9f;
     if (g_dtFixedStep > 0.0f) dt = g_dtFixedStep;
     dt = std::clamp(dt, 1.0f / 60.0f, 1.0f / 30.0f);
+    // The original's load blocks between two updates, so the first frame of every world measures a long time and
+    // takes the clamp's 1/30 s. Timing depends on it: arriving in the lighthouse's crawl (world 35), Sly reaches the
+    // floor 0.09 s after the interaction starts, just inside the 0.1 s off-the-floor limit (0x18A8C8).
+    if (pclock->fAfterReset) dt = 1.0f / 30.0f;
+    pclock->fAfterReset = false;
     pclock->dtReal = dt * pclock->rDtReal;
     pclock->tReal += pclock->dtReal;
     const float dt2 = dt * pclock->af[3];

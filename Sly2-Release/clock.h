@@ -17,6 +17,7 @@ struct CLOCK
     float t3C = 0.0f;       // +0x3C
     float dt40 = 0.0f;      // +0x40 the frame step before the factors' product
     uint64_t tick = 0;      // +0x48 the host tick of the last update (294.912 MHz units)
+    bool fAfterReset = false;  // (port) the next update measures the world's load, however long it really took
 };
 
 extern CLOCK g_clock;
