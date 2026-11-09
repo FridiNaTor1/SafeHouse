@@ -344,7 +344,9 @@ std::unique_ptr<AIJOB> PjobImport(const RAM& ram, AIREF* pref, GUARD* pg, uint32
         j->sStart = ram.F32(a + 0x48);
         j->st = ram.S32(a + 0x4C);
         j->tSt = ram.F32(a + 0x50);
-        j->pcrvOther = PcrvOfPath(ram, pref, pg, gaddr, ram.U32(a + 0x54));
+        const uint32_t apoly = ram.U32(a + 0x54);
+        if (auto it = s_mpapoly.find(apoly); it != s_mpapoly.end()) j->ppolyOther = it->second;
+        j->pcrvOther = PcrvOfPath(ram, pref, pg, gaddr, apoly);
         j->nWay = ram.S32(a + 0x58);
         j->sOther = ram.F32(a + 0x5C);
         j->g60 = ram.F32(a + 0x60);
@@ -708,6 +710,8 @@ void ImportPlayers(const RAM& ram, AIREF* pref)
 
 void AiImport(const RAM& ram, AIREF* pref)
 {
+    const uint32_t bsp = ram.U32(REF_SW_ADDR + 0x45CC);
+    SetNavLinkSerial(ram.FValid(bsp) ? ram.S32(bsp + 0x28) : 0);
     {
         const auto aa = ram.Dl(0x3E1218);
         s_setaAsega = std::unordered_set<uint32_t>(aa.begin(), aa.end());
