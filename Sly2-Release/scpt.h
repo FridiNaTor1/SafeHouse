@@ -37,6 +37,7 @@ int SceneSkipKind(LO* pscpt);
 void ResetScpts();
 
 struct PADCTL;
+bool FScptActorGoingTo(const void* prun);
 // orig: 0x001E46A0 (the actor's controller filled by the runner driving it: actor +0x1084, from the actor's update
 // 0x1403D0)
 void DriveScptActor(void* prun, PADCTL* ppc);
