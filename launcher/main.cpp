@@ -416,7 +416,7 @@ int desktop(cane::LauncherBackend& backend, const ui::fixtures::Options* fixture
     ui::requestFocus();
 
     int frames = 0;
-    bool blockedLastFrame = false, wasBusy = false;
+    bool blockedLastFrame = false, wasBusy = false, windowHidden = false;
     std::string lastLabel;
     while (!glfwWindowShouldClose(window)) {
         // While a game runs the launcher redraws a few times a second instead
@@ -424,6 +424,19 @@ int desktop(cane::LauncherBackend& backend, const ui::fixtures::Options* fixture
         const bool gameRunning = job.busy && page.playingGame >= 0;
         if (!fixture && (gameRunning || glfwGetWindowAttrib(window, GLFW_ICONIFIED))) glfwWaitEventsTimeout(0.25);
         else glfwPollEvents();
+        // The window is away while a game runs and comes back when it quits.
+        if (!fixture && !windowHidden && job.busy && page.playingGame >= 0) {
+            glfwHideWindow(window);
+            windowHidden = true;
+        }
+        if (windowHidden) {
+            job.reap();
+            updates.poll(shell, true);
+            if (job.busy) continue;
+            glfwShowWindow(window);
+            glfwFocusWindow(window);
+            windowHidden = false;
+        }
         if (pendingScale > 0) userScale = pendingScale, pendingScale = 0;
         {
             int ww = width0, wh = height0;

@@ -43,11 +43,12 @@ public:
             fs::remove(file, ec);
         }
         if (available() && checkSetting()) start(false);
-        else cleanupLater();
+        cleanupLater();
     }
     void checkNow() { start(true); }
-    // Called every frame: picks up the worker's result.
-    void poll(Shell& shell) {
+    // Called every frame: picks up the worker's result. (gameRunning: the automatic check's offer is dropped, so the
+    // dialog does not greet the player when the game quits; the next start of the launcher offers it again.)
+    void poll(Shell& shell, bool gameRunning = false) {
         if (m_fixture) return;
         std::lock_guard lock(m_shared->mutex);
         const Phase phase = m_shared->phase;
@@ -60,7 +61,7 @@ public:
             m_release = m_shared->release;
             m_package = update::packageFor(m_release, m_install);
             const bool skipped = m_backend.config.value("skipped_update", std::string{}) == m_release.tag;
-            if (m_manual || !skipped) m_openDialog = true;
+            if (m_manual || (!skipped && !gameRunning)) m_openDialog = true;
         } else if (phase == Phase::UpToDate && m_manual) shell.toast("SafeHouse is up to date (" + update::describe(update::current()) + ").");
         else if (phase == Phase::CheckFailed && m_manual) shell.toast("Could not check for updates: " + m_shared->error, false);
         else if (phase == Phase::Ready) m_plan = m_shared->plan;
@@ -160,10 +161,9 @@ private:
         m_seen = Phase::Checking;
         // The worker owns a reference to the shared state: it may outlive the window (an offline check waits for its
         // timeout), and the launcher never waits for it on exit.
-        std::thread([shared = m_shared, install = m_install, first = !manual] {
-            // (the helper of the update that started this launcher may still be exiting)
-            if (first) std::this_thread::sleep_for(std::chrono::seconds(3));
-            {
+        std::thread([shared = m_shared, install = m_install, manual] {
+            // (the automatic check does not wait for the cleanup: cleanupLater)
+            if (manual) {
                 std::lock_guard lock(shared->mutex);
                 if (shared->phase == Phase::Checking) update::cleanup(install);
             }
@@ -183,9 +183,11 @@ private:
         }).detach();
     }
     void cleanupLater() {
-        std::thread([install = m_install] {
+        // (later: the helper of the update that started this launcher may still be exiting)
+        std::thread([shared = m_shared, install = m_install] {
             std::this_thread::sleep_for(std::chrono::seconds(3));
-            update::cleanup(install);
+            std::lock_guard lock(shared->mutex);
+            if (shared->phase != Phase::Downloading && shared->phase != Phase::Ready) update::cleanup(install);
         }).detach();
     }
     void download() {
