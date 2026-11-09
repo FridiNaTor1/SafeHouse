@@ -1436,6 +1436,7 @@ bool FNearRecord(const GOAL& g, GUARD* pg, float r)
     const glm::vec3 b = PosGoal(g, a);
     return glm::length(glm::vec2(a - b)) <= r;
 }
+}  // namespace
 
 // orig 0x0017D608: the point moved up to the first surface the line from it to 5000 above (D_002BE750 0 / D_002BE754
 // 5000) meets in the world's geometry (0x1B44D8)
@@ -1451,8 +1452,6 @@ bool FSnapPosToSurfaceAbove(glm::vec3* ppos)
     *ppos = lsg.pos1;
     return true;
 }
-}  // namespace
-
 // orig: 0x0017E3A0
 void JOBLINK::Init()
 {

@@ -10,6 +10,7 @@
 #include "jump.h"
 #include "nav.h"
 #include "po.h"
+#include "scpt.h"
 #include "so.h"
 #include "step.h"
 #include "target.h"
@@ -70,14 +71,20 @@ void UpdateActorWatch(ACTOR* pa)
     }
     if ((!pa->n270 && !pa->prunScript) || g_clock.t < w.t) return;
     w.t = g_clock.t + 1.0f;
-    // Script runners keep their existing watch behavior; a companion uses the original A8 states 0 / 1.
-    auto* p = dynamic_cast<JOBACTORFOLLOW*>(PjobFind(pa, 0xA8));
-    if (pa->prunScript || !p || p->st < 0 || p->st >= 2) return;
+    if (pa->prunScript)
+    {
+        if (!FScptActorGoingTo(pa->prunScript)) return;
+    }
+    else
+    {
+        const auto* p = static_cast<const JOBACTORFOLLOW*>(PjobFind(pa, 0xA8));
+        if (!p || p->st < 0 || p->st >= 2) return;
+    }
     const float d = glm::length(Pos(pa->palo) - w.pos);
     if (w.s - d < 30.0f)  // D_002BD2D4 * D_002BD2D0
     {
         glm::vec3 q = w.pos;
-        if (FDropOnGround(&q, 100.0f, -150.0f, false))
+        if (FDropOnGround(&q, 100.0f, -150.0f, false) || FSnapPosToSurfaceAbove(&q))
         {
             RecoverTo(pa, q);
             w.fActive = 1;

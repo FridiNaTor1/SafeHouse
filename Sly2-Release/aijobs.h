@@ -410,3 +410,4 @@ std::unique_ptr<AIJOB> PjobNewKind(CID cid);
 // orig 0x173610: pos dropped onto the still solid entries under it (the line +gHigh .. +gLow up; unless fAny, not
 // steeper than 0.7): false when nothing is hit
 bool FDropOnGround(glm::vec3* ppos, float gHigh, float gLow, bool fAny);
+bool FSnapPosToSurfaceAbove(glm::vec3* ppos);  // orig: 0x0017D608

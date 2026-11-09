@@ -1672,8 +1672,8 @@ bool FCmdDone(RUN* p, SCPTCMD* pc)
                 std::printf("drive 0x24 done? pos %.4f %.4f center %.4f %.4f aim %.4f %.4f d %.5f within %.2f v %.6g %.6g\n", q.x, q.y,
                             PosAloCenter(static_cast<ALO*>(po)).x, PosAloCenter(static_cast<ALO*>(po)).y, pos.x, pos.y,
                             std::sqrt(dx * dx + dy * dy), pc->G(0x18), VelAloPos(static_cast<ALO*>(po)).x, VelAloPos(static_cast<ALO*>(po)).y);
+            if (ACTOR* pa = PactorFromLo(po)) SetActorWatchTarget(pa, pos);  // 0x1448F0
             if (!(std::sqrt(dx * dx + dy * dy) < pc->G(0x18))) return false;
-            // TODO(actors): 0x1448F0 (+0xFD0's look at the target)
         }
         if (pc->N(0x20) != -1)
             if (ACTOR* pa = PactorFromLo(po)) EndActorScriptAnim(pa);  // 0x143FF8 (the walk's animation over)
@@ -2472,6 +2472,16 @@ uint64_t IdScptCutscene()
             std::any_of(s.arun.begin(), s.arun.end(), [](const PRUN& r) { return !r->fRetired && r->fPause; }))
             id = s.idSkipScene;
     return id;
+}
+
+bool FScptActorGoingTo(const void* pv)
+{
+    if (!pv || !MpRunLive().count(pv)) return false;
+    const auto* p = static_cast<const RUN*>(pv);
+    if (p->fRetired || p->icPending < 0) return false;
+    const SCPT* ps = PscptOf(p->pscptLo);
+    const auto i = static_cast<size_t>(p->icPending);
+    return ps && i < ps->acmd.size() && ps->acmd[i].kind == 0x24;
 }
 
 // orig: 0x001E46A0
