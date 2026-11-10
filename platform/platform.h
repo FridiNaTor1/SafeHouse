@@ -28,6 +28,7 @@
 #include "switch/file_io.h"
 #endif
 #endif
+#include "brand.h"
 namespace cane {
 namespace fs = std::filesystem;
 inline fs::path dataOverride, userOverride;
@@ -74,6 +75,40 @@ inline fs::path shareDirectory() {
 }
 inline fs::path dataDirectory() {return dataOverride.empty()?executableDirectory():dataOverride;}
 inline fs::path userDirectory() {return userOverride.empty()?executableDirectory():userOverride;}
+// Files that can be made again at any time (a game's texture cache, platform/texture_cache.h): --cache-dir, else the
+// system's cache folder for this user (Linux: $XDG_CACHE_HOME or ~/.cache; Windows: %LOCALAPPDATA%; macOS:
+// ~/Library/Caches; each with brand::userFolder), a portable copy's data/cache, and on the Switch and Android (no
+// per-user cache folder the game may list) the user folder's Cache. `game`: the game's key ("sly2"), its subfolder.
+inline fs::path cacheOverride;
+inline fs::path cacheDirectory(const std::string& game) {
+ if(!cacheOverride.empty()) return cacheOverride;
+#if defined(__SWITCH__) || defined(__ANDROID__)
+ return userDirectory()/"Cache";
+#else
+ const auto exe=executableDirectory();
+ for(const auto& root:{exe.parent_path(),exe}) {
+  std::error_code ec; if(fs::is_regular_file(root/"portable.txt",ec)) return root/"data"/"cache"/game;
+ }
+ auto env=[](const char* key) {
+#ifdef _WIN32
+  auto value=_wgetenv(path(key).wstring().c_str()); return value && *value?fs::path(value):fs::path();
+#else
+  auto value=std::getenv(key); return value && *value?path(value):fs::path();
+#endif
+ };
+#ifdef _WIN32
+ auto base=env("LOCALAPPDATA"); if(base.empty()) return userDirectory()/"Cache";
+ return base/brand::userFolder/"Cache"/game;
+#elif defined(__APPLE__)
+ auto home=env("HOME"); if(home.empty()) return userDirectory()/"Cache";
+ return home/"Library"/"Caches"/brand::userFolder/game;
+#else
+ auto base=env("XDG_CACHE_HOME");
+ if(base.empty()) { auto home=env("HOME"); if(home.empty()) return userDirectory()/"Cache"; base=home/".cache"; }
+ return base/brand::userFolder/game;
+#endif
+#endif
+}
 inline std::vector<std::string> arguments(int argc,char** argv) {
  std::vector<std::string> result;
 #ifdef _WIN32

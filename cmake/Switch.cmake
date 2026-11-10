@@ -153,9 +153,9 @@ endfunction()
 
 # ---- Sly 2
 file(GLOB sly2_sources CONFIGURE_DEPENDS "${root}/Sly2-Release/*.cpp" "${root}/Sly2-Release/*.c")
-add_library(sly2_game STATIC ${sly2_sources} "${root}/Libraries/miniz/miniz.c" "${root}/assets/prompts/prompt_data.cpp")
+add_library(sly2_game STATIC ${sly2_sources} "${root}/Libraries/miniz/miniz.c" "${root}/Libraries/lz4/lz4.c" "${root}/Libraries/lz4/lz4hc.c" "${root}/assets/prompts/prompt_data.cpp")
 cane_switch_game(sly2_game sly2)
-target_include_directories(sly2_game PRIVATE "${root}/Sly2-Release" "${root}/platform" "${root}/Libraries/miniz"
+target_include_directories(sly2_game PRIVATE "${root}/Sly2-Release" "${root}/platform" "${root}/Libraries/miniz" "${root}/Libraries/lz4"
   "${root}/assets/prompts" "${gen}/prompts" "${gen}/sly2")
 target_compile_definitions(sly2_game PRIVATE "SLY2N_DEV_ROOT=\"sdmc:/switch/SafeHouse\"" CANE_HAVE_PROMPT_ATLAS=1 CANE_HAVE_GAMECONTROLLERDB=1)
 set_source_files_properties("${root}/Libraries/miniz/miniz.c" PROPERTIES COMPILE_OPTIONS "-w")

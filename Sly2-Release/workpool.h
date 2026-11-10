@@ -19,11 +19,12 @@ class CWorkPool
 {
 public:
     // cthread 0: the machine's (SLY2N_CONVERT_THREADS overrides; 1 runs every job on the caller's thread at Push)
-    explicit CWorkPool(int cthread = 0, uint64_t cbBudget = uint64_t(1536) << 20) : m_cbBudget(cbBudget)
+    // fThreads: exactly cthread threads, also for 1 (the game's background work: texmod.cpp)
+    explicit CWorkPool(int cthread = 0, uint64_t cbBudget = uint64_t(1536) << 20, bool fThreads = false) : m_cbBudget(cbBudget)
     {
-        if (const char* sz = std::getenv("SLY2N_CONVERT_THREADS")) cthread = std::atoi(sz);
+        if (const char* sz = std::getenv("SLY2N_CONVERT_THREADS"); sz && !fThreads) cthread = std::atoi(sz);
         if (cthread <= 0) cthread = int(std::clamp<unsigned>(std::thread::hardware_concurrency(), 2u, 16u));
-        m_fInline = cthread == 1;
+        m_fInline = cthread == 1 && !fThreads;
         if (!m_fInline)
             for (int i = 0; i < cthread; ++i) m_athread.emplace_back([this] { Work(); });
     }

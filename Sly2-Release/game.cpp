@@ -5,6 +5,7 @@
 //   Sly2-Release [--world W] [--frames N] [--headless] [--fixed-dt] [--press BTN@frame+n,...]
 //               [--frame-dump file] [--screenshot file]
 
+#include "texmod.h"
 #include "renderer.h"
 #include "fastpaths.h"
 #include <malloc.h>
@@ -660,6 +661,8 @@ int RunGame(const GAMEOPTS& go)
     // (a headless run draws for --screenshot or SLY2N_SHOTEVERY's frames: the scene and GL then exist)
     const bool fDraws = fWindow || !go.screenshot.empty() || std::getenv("SLY2N_SHOTEVERY") != nullptr ||
                         std::getenv("SLY2N_RENDERALL") != nullptr;
+    // (texmod.h: a run in a window streams its texture mods; a headless run's frames stay those of a load at first draw)
+    AllowTextureModStreaming(fWindow);
     if (fDraws)
     {
         CBuildSceneFromSw(psw.get(), scene, &apalo);
@@ -2080,6 +2083,7 @@ int RunGame(const GAMEOPTS& go)
         }
         else PrepareAnimatedOverlayFrame();  // same logical boundary for frames without a GL target
         const double tSwapped = now();
+        TexStatsFrame(tSwapped - t0);   // (SLY2N_TEXSTATS: texmod.h)
         // (SLY2N_REALTIME: a headless run paced at 60 Hz too, so the audio thread's streams (dialog lines the
         // scripts wait on) keep up with the frames)
         static const bool s_fRealtime = std::getenv("SLY2N_REALTIME") != nullptr;

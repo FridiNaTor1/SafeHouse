@@ -111,7 +111,7 @@ def main():
         with zipfile.ZipFile(root / 'good.zip', 'w', zipfile.ZIP_DEFLATED) as z: z.write(root / 'good.iso', 'The Sly Collection.iso')
         for source in [root / 'good.iso', root / 'good.zip']:
             expect(source, 'No level of the disc matched')
-        assert not (root / 'out' / 'Textures').exists() or not any((root / 'out' / 'Textures').iterdir())
+        assert not (root / 'out' / 'Textures.pak').exists() and not (root / 'out' / 'Textures.pak.partial').exists()
     print('PS3 import source tests passed')
 
 

@@ -623,12 +623,14 @@ struct LauncherBackend {
     }
     // ---- The PS3 HD textures: The Sly Collection's (PS3) redrawn textures as a texture pack for
     // Sly 1 and Sly 2. The game program builds it (--ps3-hd-textures SOURCE OUT: the extracted disc, its .iso or a
-    // .zip of that, streamed) into <user dir>/PS3 HD/Textures, named after the installed textures they replace. The
-    // game loads it under the player's own Mods (--texture-pack) while it is turned on (launcher.json "ps3_hd").
+    // .zip of that, streamed) into <user dir>/PS3 HD/Textures.pak (or, to edit them, PS3 HD/Textures, the PNG files:
+    // --ps3-hd-png), named after the installed textures they replace. The game loads it under the player's own Mods
+    // (--texture-pack) while it is turned on (launcher.json "ps3_hd").
     static bool ps3HdGame(GameId game) { return game == GameId::Sly1 || game == GameId::Sly2; }
     fs::path ps3HdDir(GameId game) const { return userDir(game) / "PS3 HD"; }
     struct Ps3HdPack {
         bool installed = false, enabled = false;
+        bool png = false;   // (the PNG files in a Textures folder, not Textures.pak)
         int textures = 0;
         double megabytes = 0;
         std::string source, date;
@@ -637,7 +639,9 @@ struct LauncherBackend {
         Ps3HdPack pack;
         if (!ps3HdGame(game)) return pack;
         std::error_code ec;
-        if (!fs::is_directory(ps3HdDir(game) / "Textures", ec)) return pack;
+        // (a Textures folder: imported as PNG files, or before Textures.pak)
+        pack.png = !fs::is_regular_file(ps3HdDir(game) / "Textures.pak", ec);
+        if (pack.png && !fs::is_directory(ps3HdDir(game) / "Textures", ec)) return pack;
         pack.installed = true;
         try {
             const json m = readJson(ps3HdDir(game) / "pack.json");
@@ -657,6 +661,17 @@ struct LauncherBackend {
         else config["ps3_hd"][cane::game(game).key] = false;
         saveConfig();
     }
+    // The next import's form: the PNG files (launcher.json "ps3_hd_png"), else Textures.pak
+    bool ps3HdPng(GameId game) const {
+        const auto it = config.find("ps3_hd_png");
+        return it != config.end() && it->is_object() && it->value(cane::game(game).key, false);
+    }
+    void setPs3HdPng(GameId game, bool png) {
+        if (!config.contains("ps3_hd_png") || !config.at("ps3_hd_png").is_object()) config["ps3_hd_png"] = json::object();
+        if (png) config["ps3_hd_png"][cane::game(game).key] = true;
+        else config["ps3_hd_png"].erase(cane::game(game).key);
+        saveConfig();
+    }
     void removePs3Hd(GameId game) {
         std::error_code ec;
         for (const char* suffix : {"", ".staging", ".previous"}) {
@@ -665,9 +680,9 @@ struct LauncherBackend {
             fs::remove_all(p, ec);
         }
     }
-    // Imports the pack from a disc source; the old pack (if any) is replaced only when the new one is complete. The
-    // game program's "ps3hd: error: ..." line becomes the error shown.
-    void importPs3Hd(GameId game, const std::string& source, const std::atomic<bool>& cancel, const LogFunction& log) {
+    // Imports the pack from a disc source (png: as PNG files); the old pack (if any) is replaced only when the new one is
+    // complete. The game program's "ps3hd: error: ..." line becomes the error shown.
+    void importPs3Hd(GameId game, const std::string& source, bool png, const std::atomic<bool>& cancel, const LogFunction& log) {
         if (!ps3HdGame(game)) throw std::runtime_error(tr("The PS3 HD textures are for Sly 1 and Sly 2"));
         if (!assetsInstalled(game)) throw std::runtime_error(trf("Install %s first: the HD textures replace its installed ones", cane::game(game).shortName));
         if (!runtimeAvailable(game)) throw std::runtime_error(trf("%s is still in development", cane::game(game).title));
@@ -680,9 +695,10 @@ struct LauncherBackend {
         fs::remove_all(staging, ec);
         std::string error, summary, lastItem;
         auto run = [&] {
-            return runProcess({utf8(binary(cane::game(game).runtime)), "--data-dir", utf8(dataDir(game)), "--user-dir", utf8(userDir(game)),
-                               "--ps3-hd-textures", source, utf8(staging)},
-                              tools, cancel, [&](const std::string& line) {
+            std::vector<std::string> arguments{utf8(binary(cane::game(game).runtime)), "--data-dir", utf8(dataDir(game)), "--user-dir",
+                                               utf8(userDir(game)), "--ps3-hd-textures", source, utf8(staging)};
+            if (png) arguments.push_back("--ps3-hd-png");
+            return runProcess(arguments, tools, cancel, [&](const std::string& line) {
                                   char what[32] = {}, item[256] = {};
                                   unsigned long long done = 0, total = 0;
                                   if (std::sscanf(line.c_str(), "ps3hd-progress %31s %llu %llu %255[^\n]", what, &done, &total, item) >= 3) {
@@ -708,7 +724,7 @@ struct LauncherBackend {
             fs::remove_all(staging, ec);
             throw;
         }
-        if (code != 0 || !fs::is_directory(staging / "Textures", ec)) {
+        if (code != 0 || !(png ? fs::is_directory(staging / "Textures", ec) : fs::is_regular_file(staging / "Textures.pak", ec))) {
             fs::remove_all(staging, ec);
             if (!error.empty()) {
                 if (error.back() == '.') error.pop_back();

@@ -28,6 +28,7 @@
 #include "audio_devices.h"
 #include "settings_ini.h"
 #include "system_settings.h"
+#include "texture_options.h"
 
 namespace cane::settings {
 
@@ -52,6 +53,10 @@ struct Sly2GameOptions {
     // the headset's speaker (headsetOutputDevice; spiop.cpp, the IRX's lgaud path)
     int usbHeadset = 0;
     std::string headsetOutputDevice;  // "" the game's output (the lines play as without a headset)
+    // (texture mods and packs, Sly2-Release texmod.h) their decoded texels kept in the user's cache folder; their
+    // load on the other cores while the game goes on (the original texture drawn until a replacement is ready)
+    int textureCache = kTextureCacheDefault;
+    int textureStreaming = kTextureStreamingDefault;
 };
 
 // VR (Sly2-Release vr.h; only used with a headset): [VR] in the file.
@@ -329,6 +334,14 @@ inline const std::vector<Sly2Key>& sly2Schema() {
                             &SS::longShadows));
         k.push_back(boolKey("Graphics", "Fast Shadows", "On: character shadows with less GPU work (low-end devices; nearly the same picture). Off: as before",
                             &SS::fastShadows));
+        k.push_back(gameBoolKey("Graphics", "Texture Cache",
+                                "On: texture mods and texture packs load from a cache of their decoded pictures (made as they are\n"
+                                "first used; the same picture, faster loading). Off: always from the PNG files",
+                                &Sly2GameOptions::textureCache));
+        k.push_back(gameBoolKey("Graphics", "Texture Streaming",
+                                "On: texture mods and texture packs load in the background; a texture shows its original for a\n"
+                                "moment when it first appears. Off: each loads when it is first drawn (a pause on slow disks)",
+                                &Sly2GameOptions::textureStreaming));
         // (settings v21, Sly2-Release renderer.h: read when the game starts)
         k.push_back({ "Graphics", "Renderer", "Auto, Vulkan or OpenGL (Auto: OpenGL until Vulkan is the default; Vulkan falls back to OpenGL when it cannot start)",
                       [](const Sly2Settings& s) {

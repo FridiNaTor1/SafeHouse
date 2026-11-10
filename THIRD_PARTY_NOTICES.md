@@ -1,6 +1,6 @@
 # Third-party dependencies
 
-The source/build uses GLFW 3.4 (zlib/libpng), FAudio 25.02 (zlib), SDL2 (zlib), Dear ImGui and ImGuiFileDialog (MIT), GLAD (MIT/public domain components), GLM (MIT), stb (MIT/public domain), nlohmann/json (MIT), PicoSHA2 1.0.1 (MIT), miniz 3.1.2 (MIT; `Libraries/miniz`, the PS3 HD import reads zipped disc images with it, licence in `licenses/miniz.txt`), FFmpeg, and Atkinson Hyperlegible (SIL Open Font License).
+The source/build uses GLFW 3.4 (zlib/libpng), FAudio 25.02 (zlib), SDL2 (zlib), Dear ImGui and ImGuiFileDialog (MIT), GLAD (MIT/public domain components), GLM (MIT), stb (MIT/public domain), nlohmann/json (MIT), PicoSHA2 1.0.1 (MIT), miniz 3.1.2 (MIT; `Libraries/miniz`, the PS3 HD import reads zipped disc images with it, licence in `licenses/miniz.txt`), LZ4 1.10.0 (BSD 2-Clause; `Libraries/lz4`, the `lib/lz4*.c` / `lz4*.h` files of https://github.com/lz4/lz4 at v1.10.0, which compress Sly 2's texture cache; licence in `licenses/lz4.txt`), FFmpeg, and Atkinson Hyperlegible (SIL Open Font License).
 
 CHD disc images are read with libchdr (BSD-3-Clause; `Libraries/libchdr`, the sources of https://github.com/rtissera/libchdr at 47d7941 with its LZMA SDK (public domain), zstd (BSD), miniz (MIT) and dr_flac (public domain or MIT-0) decoders); its licence is shipped in `licenses/libchdr/`.
 

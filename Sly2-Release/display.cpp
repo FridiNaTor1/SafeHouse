@@ -1,6 +1,7 @@
 // See display.h. Adapted from Sly1-Release gl.cpp (ApplyAspectRatioSettings, ApplyWindowModeSettings,
 // FrameBufferSizeCallBack) and cm.cpp (RecalcCm's aspect modes).
 
+#include "texmod.h"
 #include "renderer.h"
 #include "display.h"
 #include "vr.h"
@@ -56,6 +57,10 @@ void FromGameOptions(const st::Sly2GameOptions& o)
     g_saveopts.inputDevice = o.inputDevice;
     g_saveopts.headsetOutputDevice = o.headsetOutputDevice;
     g_saveopts.fHeadset = o.usbHeadset != 0;
+    g_saveopts.fTextureCache = o.textureCache != 0;
+    SetTextureCacheEnabled(g_saveopts.fTextureCache);   // (texmod.h: read before the first texture)
+    g_saveopts.fTextureStreaming = o.textureStreaming != 0;
+    SetTextureModStreamingEnabled(g_saveopts.fTextureStreaming);
     ApplySoundOptions();
 }
 
@@ -69,6 +74,8 @@ void ToGameOptions(st::Sly2GameOptions& o)
     o.inputDevice = g_saveopts.inputDevice;
     o.headsetOutputDevice = g_saveopts.headsetOutputDevice;
     o.usbHeadset = g_saveopts.fHeadset ? 1 : 0;
+    o.textureCache = g_saveopts.fTextureCache ? 1 : 0;
+    o.textureStreaming = g_saveopts.fTextureStreaming ? 1 : 0;
 }
 
 // (vr.h) [VR]

@@ -129,6 +129,20 @@ animated (multi-frame) textures and in particles.
   ignored.
 - **Alpha:** 255 is fully opaque. The game's own range is half that, and SafeHouse converts it both ways, so a
   dumped PNG put back unchanged looks identical. Upscaled edges with in-between alpha are fine.
+- **Texture cache:** the first time a replacement is drawn, the game keeps its decoded picture in a cache file, so the
+  next load does not read and decode the PNG again. A PNG you add or change is picked up by itself (the cache goes by
+  the file's name, size and time; for a pack's `Textures.pak` by that file's size and time), and a removed one is
+  dropped. The picture is the same with and without the cache. It lives in your cache folder (Linux:
+  `~/.cache/SafeHouse/sly2/Textures`, Windows: `%LOCALAPPDATA%\SafeHouse\Cache\sly2\Textures`, macOS:
+  `~/Library/Caches/SafeHouse/sly2/Textures`, a portable copy: `data/cache/sly2/Textures`, Switch and Android:
+  `Cache/Textures` in the Sly 2 profile folder) and can be deleted at any time: `Sly2-Release --clear-texture-cache`
+  does it. `Sly2-Release --data-dir "<installation>" --build-texture-cache` (with `--texture-pack DIR` for a pack)
+  fills it ahead of time. `Texture Cache = Off` under `[Graphics]` in `Settings.ini` turns it off; on the Nintendo
+  Switch it is off unless you set it to `On` (it takes about two thirds of the pack's size on the SD card again).
+- **Texture streaming:** replacements load on the processor's other cores while the game goes on, so a texture can
+  show its original for a moment when it first appears instead of the game pausing; a level starts with its
+  replacements in place where the computer is fast enough. `Texture Streaming = Off` under `[Graphics]` in
+  `Settings.ini` loads each replacement the moment it is first drawn instead.
 - **Shared textures:** a texture used by several levels has the same name in each, so one PNG covers all of them.
 - **Animated textures and particles:** each frame is its own PNG. Give all the frames of one animation the same
   size (particle frames of another size are scaled to the first replaced frame's size).
@@ -142,15 +156,21 @@ animated (multi-frame) textures and in particles.
 If you own **The Sly Collection** for PS3, SafeHouse can take its redrawn textures (up to 4x sharper) and use them
 over Sly 2's: **Settings > Games > Sly 2: Band of Thieves > Import PS3 HD textures**. Choose the PS3 disc image
 (`.iso`), a `.zip` of it (read as it is, nothing is unpacked), or the extracted disc (the folder with `PS3_GAME`).
-It takes about 6 minutes and writes about 200 MB (5989 textures) to `PS3 HD/Textures` in your Sly 2 profile folder
-(`~/.config/SafeHouse/sly2/PS3 HD`, `%LOCALAPPDATA%\SafeHouse\user\sly2\PS3 HD`).
+It takes about 6 minutes and writes one file of about 200 MB (5989 textures), `PS3 HD/Textures.pak`, in your Sly 2
+profile folder (`~/.config/SafeHouse/sly2/PS3 HD`, `%LOCALAPPDATA%\SafeHouse\user\sly2\PS3 HD`).
 
-- The pack is a texture pack like any other: the same `<W>x<H>_<hash>.png` names. Your own `Mods/Textures` win over
-  it, so you can still change single textures.
+- `Textures.pak` holds the PNGs under the same `<W>x<H>_<hash>.png` names as any texture pack, in one file that loads
+  and copies much faster than thousands. Your own `Mods/Textures` win over it, so you can still change single
+  textures.
+- **Extract as PNG files** makes the next import write the PNG files in `PS3 HD/Textures` instead, to look through or
+  edit them. The game reads either.
 - **Use the PS3 HD textures** turns it on or off; **Remove** deletes it. The game itself never reads the PS3 disc:
   levels, scripts and gameplay stay the PS2's.
 - Without the launcher: `Sly2-Release --data-dir "<installation>" --ps3-hd-textures "<PS3 disc, .iso or .zip>" OUT`
-  builds the pack, and `--texture-pack OUT` uses it.
+  builds the pack (add `--ps3-hd-png` for the PNG files), and `--texture-pack OUT` uses it.
+- A pack imported before `Textures.pak` (a `PS3 HD/Textures` folder of PNGs) still works.
+- On the Nintendo Switch, copy the `PS3 HD` folder to `sdmc:/switch/SafeHouse/user/sly2/`. The game's cover in
+  SafeHouse shows an HD tag when it is found.
 - Only the textures are taken: the PS3's cutscenes, music and voices are the same quality as the PS2's.
 
 ### Music
@@ -512,14 +532,17 @@ The texture is then replaced wherever the game draws it, in every level and on t
 
 As for Sly 2, **Settings > Games > Sly Cooper and the Thievius Raccoonus > Import PS3 HD textures** takes the redrawn
 textures of **The Sly Collection** (PS3: the disc image, a `.zip` of it, or the extracted disc) and uses them over
-Sly 1's. It takes about 2 minutes and writes about 530 MB (9222 textures, 45 of the 46 levels; the start-up splash
-has none) to `PS3 HD/Textures` in your profile folder (`~/.config/SafeHouse/PS3 HD`,
+Sly 1's. It takes about 2 minutes and writes `PS3 HD/Textures.pak`, about 530 MB (9222 textures, 45 of the 46 levels;
+the start-up splash has none), in your profile folder (`~/.config/SafeHouse/PS3 HD`,
 `%LOCALAPPDATA%\SafeHouse\user\PS3 HD`).
 
-- The pack uses the names of `--dump-textures`, so your own `Mods/Textures` win over it.
+- `Textures.pak` holds the PNGs under the names of `--dump-textures`, so your own `Mods/Textures` win over it.
 - **Use the PS3 HD textures** turns it on or off; **Remove** deletes it. The levels stay the installation's.
 - Without the launcher: `Sly1-Release --data-dir "<installation>" --ps3-hd-textures "<PS3 disc, .iso or .zip>" OUT`,
   then `--texture-pack OUT`.
+- As for Sly 2: **Extract as PNG files** (or `--ps3-hd-png`) writes the PNG files in `PS3 HD/Textures` instead, an older
+  `PS3 HD/Textures` folder still works, and on the Nintendo Switch the `PS3 HD` folder goes to
+  `sdmc:/switch/SafeHouse/user/sly1/`.
 
 ### Text
 

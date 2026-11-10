@@ -344,6 +344,9 @@ if(CANE_BUILD_SLY2)
   add_test(NAME sly2-action-input COMMAND Sly2-Release --action-input-selftest)
   # Settings.ini (platform/sly2_settings.h): round trip, hand-edited files, the migration from system_settings.dat
   add_test(NAME sly2-settings COMMAND Sly2-Release --settings-selftest)
+  # the texture cache (platform/texture_cache.h, texmod.cpp): a new / changed / removed PNG, cut and damaged cache
+  # files, the mods folder over a texture pack, on made-up PNGs in the build folder
+  add_test(NAME sly2-texcache COMMAND Sly2-Release --texcache-selftest "${CMAKE_BINARY_DIR}/texcache-selftest")
   # the audio devices by name (fallback to the default when one is unplugged, taken again when back, the voices keep
   # playing), the USB headset's microphone level (spiop.irx's RMS) from SDL's disk capture; silent (disk driver)
   add_test(NAME sly2-audio COMMAND Sly2-Release --audio-selftest "${CMAKE_BINARY_DIR}/audio-selftest")

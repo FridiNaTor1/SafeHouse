@@ -404,6 +404,21 @@ void LoadTexturesFromBrx(CBinaryInputStream* pbis)
             "OpenGL error 0x%X was pending before PCBRX texture loading began.", error);
     }
 
+#ifdef __SWITCH__
+    // (the Switch: the images' texture mods read and decoded on the other cores while this loop uploads, texmod.h)
+    CTextureModPrefetch prefetch(g_abmp.size());
+    if (prefetch.FActive())
+        for (std::size_t imageIndex = 0; imageIndex < g_abmp.size(); ++imageIndex)
+        {
+            const BMP& image = g_abmp[imageIndex];
+            if (image.baseOffset > dataSize || image.cbPixels > dataSize - image.baseOffset) continue;   // (refused below)
+            std::vector<uint8_t> bytes(image.cbPixels);
+            pbis->Seek(dataStart + image.baseOffset);
+            pbis->ReadBytes(bytes.data(), bytes.size());
+            prefetch.Push(imageIndex, image, std::move(bytes));
+        }
+#endif
+
     for (std::size_t imageIndex = 0; imageIndex < g_abmp.size(); ++imageIndex)
     {
         BMP& image = g_abmp[imageIndex];
@@ -457,7 +472,11 @@ void LoadTexturesFromBrx(CBinaryInputStream* pbis)
         std::vector<uint8_t> replacement;
         uint32_t replacementWidth = 0;
         uint32_t replacementHeight = 0;
+#ifdef __SWITCH__
+        if (prefetch.Take(imageIndex, image, replacement, replacementWidth, replacementHeight))
+#else
         if (FTextureReplacement(image, replacement, replacementWidth, replacementHeight))
+#endif
         {
             uint32_t replacementMips = 1;
             if (generateMipmaps)

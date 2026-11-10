@@ -9,6 +9,7 @@
 // renders into an off-screen target of the picture's aspect (at the internal resolution when set); the 2D canvas
 // (the PS2 frame, 640 x 448 shown at 4:3) is centred in the picture, pillarboxed on wide pictures.
 
+#include "../platform/texture_options.h"
 #include <glm/glm.hpp>
 
 #include <filesystem>
@@ -95,6 +96,9 @@ struct SAVEOPTS
     // (flags "fUseHeadset": the sound manager's +0x10, sound.cpp UpdateMicNoise / spiop's headset tracks)
     std::string outputDevice, inputDevice, headsetOutputDevice;
     bool fHeadset = false;
+    // (texmod.h: Settings.ini [Graphics] Texture Cache / Texture Streaming)
+    bool fTextureCache = cane::settings::kTextureCacheDefault != 0;
+    bool fTextureStreaming = cane::settings::kTextureStreamingDefault != 0;
 };
 extern SAVEOPTS g_saveopts;
 

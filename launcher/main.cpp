@@ -1110,11 +1110,12 @@ int main(int argc, char** argv) {
                 if (!r.error.empty()) std::cout << "error " << r.error << "\n";
                 return r.status == fd::Status::Chosen ? 0 : 2;
             }
-            // --import-ps3-hd GAME SOURCE: Settings > Games > "Import PS3 HD textures" without the window (SOURCE: the
-            // extracted Sly Collection, its .iso or a .zip of it). --ps3-hd GAME [on|off|remove]: the pack's state.
-            if (args[0] == "--import-ps3-hd" && args.size() == 3)
+            // --import-ps3-hd GAME SOURCE [png]: Settings > Games > "Import PS3 HD textures" without the window (SOURCE: the
+            // extracted Sly Collection, its .iso or a .zip of it; png: as PNG files). --ps3-hd GAME [on|off|remove]: the
+            // pack's state.
+            if (args[0] == "--import-ps3-hd" && (args.size() == 3 || (args.size() == 4 && args[3] == "png")))
                 if (auto game = cane::gameFromKey(args[1])) {
-                    backend.importPs3Hd(*game, args[2], cancel, log);
+                    backend.importPs3Hd(*game, args[2], args.size() == 4, cancel, log);
                     const auto pack = backend.ps3HdPack(*game);
                     std::cout << "PS3 HD textures installed: " << pack.textures << " textures, " << pack.megabytes << " MB\n";
                     return 0;
@@ -1222,7 +1223,7 @@ int main(int argc, char** argv) {
                          "           --build-source CHECKOUT |\n"
 #endif
                          "           --pick-file [FOLDER] | --pick-folder [FOLDER] |\n"
-                         "           --import-ps3-hd GAME SOURCE | --ps3-hd GAME [on|off|remove] | --version | --check-update | --update |\n"
+                         "           --import-ps3-hd GAME SOURCE [png] | --ps3-hd GAME [on|off|remove] | --version | --check-update | --update |\n"
                          "           --collection | --collection-import SOURCE | --collection-remove]\n"
                          "GAME: sly1 (default), sly2 or sly3 (--add-to-steam / --add-desktop-shortcut: also collection). R: usa, europe, japan, korea (default: the region selected in the launcher)\n";
             return args[0] == "--help" ? 0 : 1;

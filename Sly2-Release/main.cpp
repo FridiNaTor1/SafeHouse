@@ -302,6 +302,7 @@ int main(int argc, char** argv)
     const char* arg = nullptr;
     int filter = -2;
     bool fDumpObjects = false;
+    bool fPs3HdPng = false;
     const char* arg2 = nullptr;
     int animRefB = 0;
     VIEWOPTS vo;
@@ -322,6 +323,11 @@ int main(int argc, char** argv)
         if (!std::strcmp(argv[i], "--disc") && i + 1 < argc) disc = argv[++i];
         else if (!std::strcmp(argv[i], "--mods") && i + 1 < argc) { modsDir = argv[++i]; fModsGiven = true; }
         else if (!std::strcmp(argv[i], "--texture-pack") && i + 1 < argc) texturePack = argv[++i];
+        // (texmod.h: the texture cache's folder, else the user's cache folder; its commands)
+        else if (!std::strcmp(argv[i], "--cache-dir") && i + 1 < argc) cane::cacheOverride = cane::absolutePath(cane::path(argv[++i]));
+        else if (!std::strcmp(argv[i], "--clear-texture-cache")) command = "clear-texture-cache";
+        else if (!std::strcmp(argv[i], "--build-texture-cache")) command = "build-texture-cache";
+        else if (!std::strcmp(argv[i], "--texcache-selftest") && i + 1 < argc) { command = "texcache-selftest"; arg = argv[++i]; }
         // the launcher's runtime contract: --data-dir <installations/sly2> --user-dir <profile>/sly2
         else if (!std::strcmp(argv[i], "--data-dir") && i + 1 < argc) cane::dataOverride = cane::absolutePath(cane::path(argv[++i]));
         else if (!std::strcmp(argv[i], "--user-dir") && i + 1 < argc) cane::userOverride = cane::absolutePath(cane::path(argv[++i]));
@@ -460,6 +466,7 @@ int main(int argc, char** argv)
         else if (!std::strcmp(argv[i], "--import-ps3-languages") && i + 2 < argc) { command = "import-ps3-languages"; arg = argv[++i]; arg2 = argv[++i]; }
         else if (!std::strcmp(argv[i], "--dump-textures") && i + 2 < argc) { command = "dump-textures"; arg = argv[++i]; arg2 = argv[++i]; }
         else if (!std::strcmp(argv[i], "--ps3-hd-textures") && i + 2 < argc) { command = "ps3-hd-textures"; arg = argv[++i]; arg2 = argv[++i]; }
+        else if (!std::strcmp(argv[i], "--ps3-hd-png")) fPs3HdPng = true;   // (--ps3-hd-textures: PNG files, not Textures.pak)
         else if (!std::strcmp(argv[i], "--phys-check"))  // physcheck.cpp: FUNC PREFIX [COUNT] (the rest of the line)
         {
             command = "phys-check";
@@ -498,6 +505,9 @@ int main(int argc, char** argv)
     }
     g_disc.SetModsDirectory(modsDir);
     SetTexturePackDirectory(texturePack);
+    if (command && !std::strcmp(command, "texcache-selftest")) return TextureCacheSelfTest(arg);
+    if (command && !std::strcmp(command, "clear-texture-cache")) return ClearTextureCacheCommand();
+    if (command && !std::strcmp(command, "build-texture-cache")) return BuildTextureCacheCommand();
     // the shared languages folder (langstore.h): --languages-dir DIR, SLY2_LANGUAGES, else sly2-languages beside a
     // converted installation (the launcher's installations/sly2, installations/sly2-europe, ...); none for a disc image
     if (!fLanguagesGiven)
@@ -587,8 +597,8 @@ int main(int argc, char** argv)
     if (command && !std::strcmp(command, "dump-text")) return DumpTextCommand(arg);
     int DumpTexturesCommand(const std::string&, const std::string&);  // texmod.cpp
     if (command && !std::strcmp(command, "dump-textures")) return DumpTexturesCommand(arg, arg2);
-    int Ps3HdTexturesCommand(const std::string&, const std::string&);  // ps3hd.cpp
-    if (command && !std::strcmp(command, "ps3-hd-textures")) return Ps3HdTexturesCommand(arg, arg2);
+    int Ps3HdTexturesCommand(const std::string&, const std::string&, bool);  // ps3hd.cpp
+    if (command && !std::strcmp(command, "ps3-hd-textures")) return Ps3HdTexturesCommand(arg, arg2, fPs3HdPng);
     int VtDumpCommand(const char*);  // vtaudit.cpp
     if (command && !std::strcmp(command, "vt-dump")) return VtDumpCommand(arg);
     if (command && !std::strcmp(command, "phys-check")) return PhysCheckMain(physArgs);
@@ -730,6 +740,7 @@ int main(int argc, char** argv)
             void ApplyPcDebugMode();   // pcinput.h
             ApplyPcDebugMode();
         }
+        StartTextureMods();   // (texmod.h: the replacement textures' folders listed beside the start)
         applyDisplayOverrides();
         {
             void ApplyPcInputEnv();   // pcinput.h (tests: SLY2N_PCOPT)
