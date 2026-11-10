@@ -237,11 +237,22 @@ if(CANE_BUILD_LAUNCHER)
   add_custom_command(OUTPUT "${image_header}" COMMAND ${CMAKE_COMMAND} -DSOURCE=${image_source} -DOUTPUT=${image_header} -DSYMBOL=cane_game_${game} -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed-image.cmake DEPENDS "${image_source}" cmake/embed-image.cmake VERBATIM)
   target_sources(cane-launcher PRIVATE "${image_header}")
  endforeach()
+ # The developers' pictures and their silhouettes for the Collection Style Launcher's developers page
+ # (launcher/assets/developers, made by tools/make-developer-pictures.py).
+ foreach(developer fridinator theclub654 menaman123 thematuu nagaa95)
+  foreach(kind "" "-silhouette")
+   string(REPLACE "-" "_" symbol "cane_developer_${developer}${kind}")
+   set(image_header "${CMAKE_BINARY_DIR}/generated/launcher_developer_${developer}${kind}.h")
+   set(image_source "${CMAKE_CURRENT_SOURCE_DIR}/launcher/assets/developers/${developer}${kind}.png")
+   add_custom_command(OUTPUT "${image_header}" COMMAND ${CMAKE_COMMAND} -DSOURCE=${image_source} -DOUTPUT=${image_header} -DSYMBOL=${symbol} -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed-image.cmake DEPENDS "${image_source}" cmake/embed-image.cmake VERBATIM)
+   target_sources(cane-launcher PRIVATE "${image_header}")
+  endforeach()
+ endforeach()
  # Desktop shortcut icons (the game logos on a transparent square, scripts/make-shortcut-icons.py): the PNGs are
  # embedded for Linux .desktop shortcuts (launcher/desktop_shortcut.h installIcon); Windows embeds the .ico files
  # (cmake/launcher.rc.in) instead.
  if(NOT WIN32)
-  foreach(game sly1 sly2)
+  foreach(game sly1 sly2 collection)
    set(image_header "${CMAKE_BINARY_DIR}/generated/launcher_shortcut_${game}.h")
    set(image_source "${CMAKE_CURRENT_SOURCE_DIR}/launcher/assets/shortcut/${game}-logo.png")
    add_custom_command(OUTPUT "${image_header}" COMMAND ${CMAKE_COMMAND} -DSOURCE=${image_source} -DOUTPUT=${image_header} -DSYMBOL=cane_shortcut_${game} -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed-image.cmake DEPENDS "${image_source}" cmake/embed-image.cmake VERBATIM)
@@ -281,8 +292,8 @@ if(CANE_BUILD_LAUNCHER)
   # The update check and download (launcher/update.h): WinHTTP.
   target_link_libraries(cane-launcher PRIVATE winhttp)
  endif()
- # miniz: the Windows update's portable zip, and the Collection Style Launcher's PS3 menu files (platform/ps3disc.h,
- # launcher/collection/assets.h: a .zip of the disc image, the menu's IMAGE.ZIP).
+ # miniz: the Windows update's portable zip, and the Collection Style Launcher's menu import (platform/ps3disc.h,
+ # launcher/collection/ps3menu.h: a .zip of the disc image, the menu's IMAGE.ZIP).
  target_sources(cane-launcher PRIVATE Libraries/miniz/miniz.c)
  set_source_files_properties(Libraries/miniz/miniz.c PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
  target_include_directories(cane-launcher PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Libraries/miniz")
@@ -474,7 +485,8 @@ if(BUILD_TESTING)
    add_test(NAME launcher-l10n COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/scripts/test-launcher-l10n.py" "$<TARGET_FILE:cane-launcher>")
    add_test(NAME launcher-games COMMAND
  "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/scripts/test-launcher-games.py" "$<TARGET_FILE:cane-launcher>" "$<TARGET_FILE:cane-extractor>")
-   # The Collection Style Launcher: its PS3 menu import, screenshots, the launch flag and return, its shortcuts.
+   # The Collection Style Launcher: no style without the imported menu, the import (a made-up menu in the disc's formats),
+   # its renders, its sound, the launch flag and return, its shortcuts.
    add_test(NAME collection-launcher COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/scripts/test-collection-launcher.py" "$<TARGET_FILE:cane-launcher>")
    # The profile folders' move from their old name (platform/user_folders.h) and installs in other folders
    # (launcher/backend.h installRoot / moveInstallation), in private HOMEs.

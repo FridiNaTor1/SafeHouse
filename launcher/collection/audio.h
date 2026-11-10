@@ -1,9 +1,9 @@
 #pragma once
-// The Collection Style Launcher's sound: menu music (crossfaded between tracks) and short interface sounds, mixed in
-// one SDL2 audio callback. SDL2 is loaded at run time (SDL2.dll beside the games on Windows, the system's
+// The Collection Style Launcher's sound: the menu's music and its short interface sounds, mixed in one SDL2 audio
+// callback. SDL2 is loaded at run time (SDL2.dll beside the games on Windows, the system's
 // libSDL2-2.0.so.0 on Linux): without it the collection runs silently, and the main launcher never needs it.
-// Decoders for the formats the menu reads: Xbox IMA ADPCM (The Sly Collection's FMOD banks, FSB4) and PCM WAV (Sly 2's
-// installed music, one channel per stem: the "normal" stem's stereo pair is played).
+// Decoders for the formats the menu reads: Xbox IMA ADPCM (The Sly Collection's FMOD banks, FSB4: at the import) and
+// PCM WAV (the converted menu's music and sounds).
 #include <algorithm>
 #include <atomic>
 #include <cmath>
@@ -179,24 +179,6 @@ inline Pcm decodeWav(const std::vector<uint8_t>& d) {
     return out;
 }
 
-// A short synthesized interface sound (when the collection's own sounds aren't available): a soft two-tone chime.
-inline Pcm chime(float f1, float f2, float seconds, float volume = 0.25f) {
-    Pcm p;
-    p.rate = 44100;
-    p.loops = false;
-    const size_t n = size_t(seconds * float(p.rate));
-    p.samples.resize(n * 2);
-    for (size_t i = 0; i < n; ++i) {
-        const float t = float(i) / float(p.rate);
-        const float f = t < seconds * 0.4f ? f1 : f2;
-        const float env = std::min(1.0f, t * 400.0f) * std::exp(-t * 9.0f / seconds);
-        const float v = volume * env * (std::sin(6.2831853f * f * t) + 0.3f * std::sin(6.2831853f * f * 2 * t));
-        p.samples[i * 2] = p.samples[i * 2 + 1] = int16_t(std::clamp(v, -1.0f, 1.0f) * 32767);
-    }
-    p.loopEnd = n;
-    return p;
-}
-
 // ---------------------------------------------------------------- output (SDL2, loaded at run time)
 class Audio {
 public:
@@ -204,8 +186,9 @@ public:
     Audio() = default;
     Audio(const Audio&) = delete;
     ~Audio() { close(); }
-    // Opens the output. False (and silent) without SDL2 or an audio device.
-    bool open() {
+    // Opens the output: the device of this name when it is there (the one chosen for the games), else the system's.
+    // False (and silent) without SDL2 or an audio device.
+    bool open(const std::string& deviceName = {}) {
         if (m_device) return true;
         if (!load()) return false;
         if (m_init(kInitAudio) != 0) return false;
@@ -217,7 +200,8 @@ public:
         want.callback = &Audio::callback;
         want.userdata = this;
         Spec have{};
-        m_device = m_openDevice(nullptr, 0, &want, &have, 0);
+        if (!deviceName.empty()) m_device = m_openDevice(deviceName.c_str(), 0, &want, &have, 0);
+        if (!m_device) m_device = m_openDevice(nullptr, 0, &want, &have, 0);
         if (!m_device) {
             m_quit(kInitAudio);
             return false;
@@ -240,6 +224,11 @@ public:
         m_music[1] = m_music[0];
         m_music[1].fade = -1.0f / std::max(0.05f, fadeSeconds);
         m_music[0] = Voice{track, 0.0, 0.0f, 1.0f / std::max(0.05f, fadeSeconds)};
+    }
+    // Moves the playing track to a place (seconds): the audio check listens across its loop point.
+    void seekMusic(double seconds) {
+        std::lock_guard lock(m_mutex);
+        if (m_music[0].pcm) m_music[0].pos = std::clamp(seconds * double(m_music[0].pcm->rate), 0.0, double(m_music[0].pcm->frames()) - 2.0);
     }
     PcmPtr music() const {
         std::lock_guard lock(m_mutex);

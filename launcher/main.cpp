@@ -39,6 +39,16 @@
 #include "launcher_game_sly3.h"
 #include "launcher_game_sly4.h"
 #include "launcher_game_hackpack.h"
+#include "launcher_developer_fridinator.h"
+#include "launcher_developer_fridinator-silhouette.h"
+#include "launcher_developer_theclub654.h"
+#include "launcher_developer_theclub654-silhouette.h"
+#include "launcher_developer_menaman123.h"
+#include "launcher_developer_menaman123-silhouette.h"
+#include "launcher_developer_thematuu.h"
+#include "launcher_developer_thematuu-silhouette.h"
+#include "launcher_developer_nagaa95.h"
+#include "launcher_developer_nagaa95-silhouette.h"
 #include "launcher_icon.h"
 #include "launcher_logo.h"
 #define STB_IMAGE_IMPLEMENTATION
@@ -60,6 +70,13 @@ const EmbeddedImage cane_game_logos[] = {{cane_game_sly1, sizeof(cane_game_sly1)
                                          {cane_game_sly4, sizeof(cane_game_sly4)},
                                          {cane_game_hackpack, sizeof(cane_game_hackpack)}};
 static_assert(std::size(cane_game_logos) == cane::kGameCount);
+// The Collection Style Launcher's developers page: each developer's picture, then its silhouette.
+const EmbeddedImage cane_developer_pictures[] = {
+    {cane_developer_fridinator, sizeof(cane_developer_fridinator)}, {cane_developer_fridinator_silhouette, sizeof(cane_developer_fridinator_silhouette)},
+    {cane_developer_theclub654, sizeof(cane_developer_theclub654)}, {cane_developer_theclub654_silhouette, sizeof(cane_developer_theclub654_silhouette)},
+    {cane_developer_menaman123, sizeof(cane_developer_menaman123)}, {cane_developer_menaman123_silhouette, sizeof(cane_developer_menaman123_silhouette)},
+    {cane_developer_thematuu, sizeof(cane_developer_thematuu)},     {cane_developer_thematuu_silhouette, sizeof(cane_developer_thematuu_silhouette)},
+    {cane_developer_nagaa95, sizeof(cane_developer_nagaa95)},       {cane_developer_nagaa95_silhouette, sizeof(cane_developer_nagaa95_silhouette)}};
 std::string fixtureIso(int index) { return cane::utf8(ui::fixtures::isos()[static_cast<size_t>(index)].path); }
 struct Texture {
     GLuint id = 0;
@@ -235,6 +252,9 @@ void finishUpdate(const cane::LauncherBackend& backend) {
     pending.plan.reset();
 }
 
+// `safehouse --collection` without the imported menu (there is no Collection style then): the SafeHouse launcher opens
+// instead, on the rows that import it.
+bool collectionMissing = false;
 int desktop(cane::LauncherBackend& backend, const ui::fixtures::Options* fixture, const cane::fs::path& screenshotPath) {
     glfwSetErrorCallback([](int code, const char* message) { std::cerr << "GLFW " << code << ": " << message << '\n'; });
     if (!cane::initGlfw()) throw std::runtime_error("Cannot initialize desktop display");
@@ -309,6 +329,7 @@ int desktop(cane::LauncherBackend& backend, const ui::fixtures::Options* fixture
     ui::UpdateUi updates(backend);
     settings.updates = &updates;
     // Settings > Launcher > Start the Collection Style Launcher: it opens, this window closes (games quit back to it).
+    settings.collectionProfile = fixture && !fixture->live ? cane::path(fixture->collectionPs3) : backend.locations.user;
     settings.startCollection = [&] {
         cane::collection::setEnv(cane::collection::kLauncherEnv, nullptr);
         if (cane::collection::spawnDetached(cane::steam::launcherProgram(), {"--collection"})) glfwSetWindowShouldClose(window, true);
@@ -426,6 +447,11 @@ int desktop(cane::LauncherBackend& backend, const ui::fixtures::Options* fixture
             if (const GLFWvidmode* mode = glfwGetVideoMode(monitor))
                 glfwSetWindowMonitor(window, monitor, 0, 0, mode->width, mode->height, mode->refreshRate);
     }
+    if (collectionMissing) {
+        shell.open(ui::View::Settings);
+        settings.selectCategory(std::string("launcher"));
+        shell.toast(cane::tr("The Collection style needs The Sly Collection's (PS3) own menu. Import it here from your disc."), false);
+    }
     if (fixture && fixture->screen.rfind("update", 0) == 0) updates.fixture(fixture->screen);
     else if (!fixture) updates.startup(shell);
     ui::requestFocus();
@@ -531,6 +557,8 @@ int desktop(cane::LauncherBackend& backend, const ui::fixtures::Options* fixture
                 shell.toast(cane::tr("Game files removed. Your saves are kept."));
             else if (message == "Completed" && lastLabel.rfind("PS3 HD import", 0) == 0)
                 shell.toast(cane::tr("PS3 HD textures installed. They show the next time the game starts."));
+            else if (message == "Completed" && lastLabel == ui::SettingsPage::kCollectionImportLabel)
+                shell.toast(cane::tr("The Collection menu is imported. The Collection Style Launcher can start now."));
             else if (message != "Completed" && message != "Cancelled" && !(shell.view == ui::View::Install && installed >= 0))
                 shell.toast(message, false);
             page.installingGame = page.playingGame = -1;
@@ -705,11 +733,48 @@ int desktop(cane::LauncherBackend& backend, const ui::fixtures::Options* fixture
     glfwTerminate();
     return 0;
 }
+// --pointer: a finger on the screen, replayed after the nav presses (fixtures.h).
+void replayPointer(const ui::fixtures::Options& options, int frame) {
+    const int step = frame - 8 - 4 * static_cast<int>(options.nav.size());
+    if (step < 0 || step % 2 != 0 || step / 2 >= static_cast<int>(options.pointer.size())) return;
+    const std::string& token = options.pointer[static_cast<size_t>(step / 2)];
+    auto& io = ImGui::GetIO();
+    io.AddMouseSourceEvent(ImGuiMouseSource_TouchScreen);
+    float x = 0, y = 0;
+    if ((token[0] == 'd' || token[0] == 'm') && std::sscanf(token.c_str() + 1, "%f,%f", &x, &y) == 2) {
+        io.AddMousePosEvent(x, y);
+        if (token[0] == 'd') io.AddMouseButtonEvent(0, true);
+    } else if (token[0] == 'u') {
+        io.AddMouseButtonEvent(0, false);
+    }
+}
 // The Collection Style Launcher's window (`safehouse --collection`, collection/collection.h). With a fixture: the hidden
 // screenshot hook (--screenshot PATH --collection [--collection-games sly1,sly2,...] [--collection-ps3 PROFILE]
-// [--collection-sly2 INSTALLATION] [--screen options|extras|credits|launch] [--size WxH] [--nav ...]).
+// [--screen options|extras|credits|launch|more|glide] [--size WxH] [--nav ...]). Without the menu imported from the
+// player's Sly Collection there is no Collection style: the SafeHouse launcher opens instead.
 int collectionDesktop(cane::LauncherBackend& backend, const ui::fixtures::Options* fixture, const cane::fs::path& screenshotPath) {
     namespace col = cane::collection;
+    col::Menu::Fixture data;
+    if (fixture) {
+        // (--live: the private profile as it is, games really start; only the frames and the nav are scripted)
+        data.active = !fixture->live;
+        data.scripted = true;
+        for (const auto& key : fixture->collectionGames)
+            if (auto g = cane::gameFromKey(key); g && static_cast<int>(*g) < 3) data.installed[static_cast<size_t>(*g)] = true;
+        data.profile = fixture->collectionPs3.empty() ? cane::fs::path{} : cane::path(fixture->collectionPs3);
+        data.screen = fixture->screen == "game" ? std::string{} : fixture->screen;
+    }
+    if (!col::ps3menu::imported(col::Menu::profileOf(backend, data))) {
+        collectionMissing = true;
+        if (fixture) {
+            ui::fixtures::Options plain = *fixture;
+            plain.collection = false;
+            plain.screen = "game";
+            plain.nav.clear();
+            return desktop(backend, &plain, screenshotPath);
+        }
+        return desktop(backend, nullptr, screenshotPath);
+    }
     glfwSetErrorCallback([](int code, const char* message) { std::cerr << "GLFW " << code << ": " << message << '\n'; });
     if (!cane::initGlfw()) throw std::runtime_error("Cannot initialize desktop display");
     cane::input::installJoystickCallback();
@@ -769,15 +834,10 @@ int collectionDesktop(cane::LauncherBackend& backend, const ui::fixtures::Option
     }
     // The games started from here say "Quit to Launcher" (and quitting comes back here).
     col::setEnv(col::kLauncherEnv, "collection");
-    col::Menu::Fixture data;
-    if (fixture) {
-        // (--live: the private profile as it is, games really start; only the frames and the nav are scripted)
-        data.active = !fixture->live;
-        for (const auto& key : fixture->collectionGames)
-            if (auto g = cane::gameFromKey(key); g && static_cast<int>(*g) < 3) data.installed[static_cast<size_t>(*g)] = true;
-        data.ps3Profile = fixture->collectionPs3.empty() ? cane::fs::path{} : cane::path(fixture->collectionPs3);
-        data.sly2Installation = fixture->collectionSly2.empty() ? cane::fs::path{} : cane::path(fixture->collectionSly2);
-        data.screen = fixture->screen == "game" ? std::string{} : fixture->screen;
+    std::vector<std::unique_ptr<Texture>> developerPictures;
+    for (size_t i = 0; i < std::size(cane_developer_pictures); ++i) {
+        developerPictures.push_back(std::make_unique<Texture>(cane_developer_pictures[i].data, cane_developer_pictures[i].size, "developer picture"));
+        (i % 2 ? data.developers[i / 2].silhouette : data.developers[i / 2].picture) = developerPictures.back()->imgui();
     }
     auto menu = std::make_unique<col::Menu>(backend, window, data);
     std::unique_ptr<Offscreen> offscreen;
@@ -826,6 +886,7 @@ int collectionDesktop(cane::LauncherBackend& backend, const ui::fixtures::Option
             io.DisplaySize = {static_cast<float>(fixture->width), static_cast<float>(fixture->height)};
             io.DisplayFramebufferScale = {1, 1};
             replayNav(*fixture, frames, pad);
+            replayPointer(*fixture, frames);
         }
         faceSwap.end();
         ImGui::NewFrame();
@@ -844,7 +905,8 @@ int collectionDesktop(cane::LauncherBackend& backend, const ui::fixtures::Option
         glClearColor(0, 0, 0, 1);
         glClear(GL_COLOR_BUFFER_BIT);
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
-        if (fixture && ++frames >= 40 + 4 * static_cast<int>(fixture->nav.size()) && glfwGetTime() >= fixture->delay && !menu->busy()) {
+        if (fixture && ++frames >= 40 + 4 * static_cast<int>(fixture->nav.size()) + 2 * static_cast<int>(fixture->pointer.size()) && glfwGetTime() >= fixture->delay &&
+            !menu->busy()) {
             screenshot(fw, fh, screenshotPath);
             glfwSetWindowShouldClose(window, true);
         }
@@ -857,6 +919,7 @@ int collectionDesktop(cane::LauncherBackend& backend, const ui::fixtures::Option
     menu.reset();
     offscreen.reset();
     gameLogos.clear();
+    developerPictures.clear();
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplGlfw_Shutdown();
     ImGui::DestroyContext();
@@ -890,7 +953,11 @@ bool screenshotOptions(const std::vector<std::string>& args, ui::fixtures::Optio
             for (std::string token; std::getline(list, token, ',');)
                 if (!token.empty() && token != "none") options.collectionGames.push_back(token);
         } else if (a == "--collection-ps3" && i + 1 < args.size()) options.collectionPs3 = args[++i];
-        else if (a == "--collection-sly2" && i + 1 < args.size()) options.collectionSly2 = args[++i];
+        else if (a == "--pointer" && i + 1 < args.size()) {
+            std::stringstream list(args[++i]);
+            std::string token;
+            while (list >> token) options.pointer.push_back(token);
+        }
         else if (a == "--iso" && i + 1 < args.size()) options.iso = args[++i];
         else if (a == "--language" && i + 1 < args.size()) options.language = args[++i];
         else if (a == "--delay" && i + 1 < args.size()) options.delay = std::atof(args[++i].c_str());
@@ -1188,33 +1255,81 @@ int main(int argc, char** argv) {
                                             ? backend.config.value("language", std::string("system")) : options.language);
                 return options.collection ? collectionDesktop(backend, &options, cane::path(args[1])) : desktop(backend, &options, cane::path(args[1]));
             }
-            // --collection-import SOURCE: the Collection Style Launcher's "Import the Sly Collection's menu art and music" (SOURCE:
-            // the extracted disc, its .iso or a .zip of it) into the profile. --collection-remove: removes them again.
+            // --collection-import SOURCE: Settings > Launcher > "Import the Collection menu from The Sly Collection (PS3)"
+            // without the window (SOURCE: the extracted disc, its .iso or a .zip of it). --collection-remove: removes the
+            // imported menu again. --collection-status: whether it is there.
             if (args[0] == "--collection-import" && args.size() == 2) {
-                cane::collection::importPs3Menu(cane::path(args[1]), backend.locations.user, cancel, {});
-                std::cout << "Collection menu files imported into " << cane::utf8(cane::collection::ps3CacheDir(backend.locations.user)) << "\n";
+                cane::collection::ps3menu::importMenu(cane::path(args[1]), backend.locations.user, cancel, {});
+                std::cout << "Collection menu imported into " << cane::utf8(cane::collection::ps3menu::menuDir(backend.locations.user)) << "\n";
                 return 0;
             }
-            // --collection-sounds: the imported menu banks' samples as the menu decodes them (name, frames, level).
+            if (args[0] == "--collection-status" && args.size() == 1) {
+                std::cout << "collection menu: " << (cane::collection::ps3menu::imported(backend.locations.user) ? "imported" : "not imported") << "\n";
+                return 0;
+            }
+            // --collection-sounds: the imported menu's music and sounds as the menu plays them (file, rate, frames, level).
             if (args[0] == "--collection-sounds" && args.size() == 1) {
                 namespace col = cane::collection;
-                for (const char* bank : {"SLYAUDIO_MUSIC.FSB", "SLYAUDIO_BANK.FSB"}) {
-                    const auto bytes = col::readBytes(col::ps3CacheDir(backend.locations.user) / bank);
-                    for (const auto& sample : col::readFsb(bytes)) {
-                        const col::Pcm p = col::decodeFsbSample(bytes, sample);
-                        double sum = 0;
-                        for (int16_t v : p.samples) sum += double(v) * v;
-                        std::cout << bank << " " << sample.name << " frames " << p.frames() << " rms "
-                                  << static_cast<int>(std::sqrt(p.samples.empty() ? 0.0 : sum / double(p.samples.size()))) << "\n";
-                    }
+                const cane::json menu = col::ps3menu::readMenu(backend.locations.user);
+                if (menu.is_null()) throw std::runtime_error("The Collection menu is not imported");
+                std::vector<std::string> files;
+                const auto& audio = menu.at("audio");
+                for (const auto& f : audio.at("music")) files.push_back(f.get<std::string>());
+                for (const char* key : {"move", "select", "cancel"})
+                    if (audio.contains(key)) files.push_back(audio.at(key).get<std::string>());
+                for (const auto& f : files) {
+                    const col::Pcm p = col::decodeWav(col::readBytes(col::ps3menu::menuDir(backend.locations.user) / cane::path(f)));
+                    double sum = 0;
+                    for (int16_t v : p.samples) sum += double(v) * v;
+                    std::cout << f << " rate " << p.rate << " frames " << p.frames() << " rms "
+                              << static_cast<int>(std::sqrt(p.samples.empty() ? 0.0 : sum / double(p.samples.size()))) << "\n";
                 }
                 return 0;
             }
-            if (args[0] == "--collection-remove" && args.size() == 1) {
-                cane::collection::removePs3Menu(backend.locations.user);
+            // --collection-audio-test SECONDS [FROM]: plays the imported menu's music (from FROM seconds in) and its three
+            // sounds through the menu's own mixer for SECONDS, without a window (the audio check: with SDL's disk
+            // driver the output lands in a file).
+            if (args[0] == "--collection-audio-test" && (args.size() == 2 || args.size() == 3)) {
+                namespace col = cane::collection;
+                const cane::json menu = col::ps3menu::readMenu(backend.locations.user);
+                if (menu.is_null()) throw std::runtime_error("The Collection menu is not imported");
+                const auto dir = col::ps3menu::menuDir(backend.locations.user);
+                auto load = [&](const std::string& rel, bool loops) -> col::PcmPtr {
+                    col::Pcm p = col::decodeWav(col::readBytes(dir / cane::path(rel)));
+                    if (p.samples.empty()) throw std::runtime_error("Cannot read " + rel);
+                    p.loops = loops, p.loopStart = 0, p.loopEnd = p.frames();
+                    return std::make_shared<const col::Pcm>(std::move(p));
+                };
+                const auto& audio = menu.at("audio");
+                const auto music = load(audio.at("music").at(0).get<std::string>(), true);
+                std::vector<col::PcmPtr> sounds;
+                for (const char* key : {"move", "select", "cancel"}) sounds.push_back(load(audio.at(key).get<std::string>(), false));
+                col::Audio out;
+                if (!out.open()) {
+                    std::cout << "no audio output\n";
+                    return 0;
+                }
+                out.setVolumes(1.0f, 1.0f);
+                out.playMusic(music, 0.05f);
+                if (args.size() == 3) out.seekMusic(std::stod(args[2]));
+                const double seconds = std::stod(args[1]);
+                const auto start = std::chrono::steady_clock::now();
+                size_t next = 0;
+                for (;;) {
+                    const double t = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+                    if (t >= seconds) break;
+                    if (next < sounds.size() && t >= 0.5 * double(next + 1)) out.playSound(sounds[next++]);
+                    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                }
+                std::cout << "played " << seconds << " s: music " << music->frames() << " frames at " << music->rate << " Hz, " << next << " sounds\n";
                 return 0;
             }
-            // --collection: the Collection Style Launcher (collection/collection.h).
+            if (args[0] == "--collection-remove" && args.size() == 1) {
+                cane::collection::ps3menu::removeMenu(backend.locations.user);
+                return 0;
+            }
+            // --collection: the Collection Style Launcher (collection/collection.h); the SafeHouse launcher when the menu
+            // is not imported.
             if (args[0] == "--collection" && args.size() == 1) return collectionDesktop(backend, nullptr, {});
             std::cout << "safehouse [--install ISO | --verify [GAME] [--region R] | --play [GAME] [--region R] | --installs | --add-to-steam GAME |\n"
                          "           --steam-status | --add-desktop-shortcut GAME [--menu] | --desktop-shortcut-status |\n"
@@ -1224,7 +1339,7 @@ int main(int argc, char** argv) {
 #endif
                          "           --pick-file [FOLDER] | --pick-folder [FOLDER] |\n"
                          "           --import-ps3-hd GAME SOURCE [png] | --ps3-hd GAME [on|off|remove] | --version | --check-update | --update |\n"
-                         "           --collection | --collection-import SOURCE | --collection-remove]\n"
+                         "           --collection | --collection-import SOURCE | --collection-remove | --collection-status]\n"
                          "GAME: sly1 (default), sly2 or sly3 (--add-to-steam / --add-desktop-shortcut: also collection). R: usa, europe, japan, korea (default: the region selected in the launcher)\n";
             return args[0] == "--help" ? 0 : 1;
         }

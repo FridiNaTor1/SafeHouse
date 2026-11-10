@@ -273,6 +273,7 @@ struct Shortcut {
     std::string startDir;      // quoted folder
     std::string launchOptions; // --play <game>
     uint32_t appId = 0;        // crc32(exe + name) | 0x80000000, as Steam computes it for non-Steam shortcuts
+    std::string formerName;    // an earlier AppName of this shortcut: that entry is renamed instead of a second one added
 };
 inline uint32_t shortcutAppId(const std::string& exe, const std::string& name) {
     return detail::crc32(exe + name) | 0x80000000u;
@@ -297,8 +298,10 @@ inline Shortcut shortcutFor(GameId game, const fs::path& program = launcherProgr
     s.appId = shortcutAppId(s.exe, s.name);
     return s;
 }
-// The Collection Style Launcher's shortcut (`safehouse --collection`, launcher/collection/collection.h).
-inline constexpr const char* kCollectionName = "SafeHouse Collection";
+// The Collection Style Launcher's shortcut (`safehouse --collection`, launcher/collection/collection.h). Its icon is the
+// SafeHouse logo (launcher/assets/steam/collection/icon.png, tools/make-collection-icons.py). "SafeHouse Collection"
+// before 2026-11-10: such an entry is renamed.
+inline constexpr const char* kCollectionName = "Sly Collection";
 inline Shortcut collectionShortcut(const fs::path& program = launcherProgram()) {
     Shortcut s;
     s.name = kCollectionName;
@@ -306,6 +309,7 @@ inline Shortcut collectionShortcut(const fs::path& program = launcherProgram()) 
     s.startDir = quoted(program.parent_path());
     s.launchOptions = "--collection";
     s.appId = shortcutAppId(s.exe, s.name);
+    s.formerName = "SafeHouse Collection";
     return s;
 }
 inline constexpr const char* kTag = "SafeHouse";
@@ -322,6 +326,9 @@ inline Node* findEntry(Node& shortcuts, const Shortcut& s) {
         if (e.type == 0 && e.u32("appid") == s.appId) return &e;
     for (auto& e : shortcuts.children)
         if (e.type == 0 && e.string("AppName") == s.name && e.string("LaunchOptions") == s.launchOptions && tagged(e)) return &e;
+    if (!s.formerName.empty())
+        for (auto& e : shortcuts.children)
+            if (e.type == 0 && e.string("AppName") == s.formerName && e.string("LaunchOptions") == s.launchOptions && tagged(e)) return &e;
     return nullptr;
 }
 inline std::vector<uint8_t> readFile(const fs::path& file) {
@@ -502,7 +509,7 @@ inline Result add(const Installation& s, const Shortcut& sc, const fs::path& art
 inline Result add(const Installation& s, GameId game, const fs::path& program = launcherProgram(), const fs::path& art = {}) {
     return add(s, shortcutFor(game, program), art.empty() ? artDirectory(game) : art);
 }
-// The Collection Style Launcher's shortcut (its artwork: share/safehouse/steam/collection, the SafeHouse icon).
+// The Collection Style Launcher's shortcut (its artwork: share/safehouse/steam/collection, the SafeHouse logo).
 inline Result addCollection(const Installation& s, const fs::path& program = launcherProgram()) {
     return add(s, collectionShortcut(program), artDirectory("collection"));
 }

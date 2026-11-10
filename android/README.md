@@ -45,7 +45,8 @@ The **SafeHouse** entry in the Files app's sidebar (and other document pickers) 
 
 There is no Steam on Android. A game's page has **Add shortcut**: Android asks to pin a home-screen shortcut with the
 game's logo that starts the game directly (the app runs the launcher's `--play GAME` without its window and closes
-when the game quits). Settings > Collection Style Launcher can pin one for that menu too. Home screens that do not
+when the game quits). Settings > Collection Style Launcher can pin one for that menu too (once the menu is imported
+from your Sly Collection disc, on the same page). Home screens that do not
 take pinned shortcuts (some VR / TV launchers) get a message instead.
 
 By default the app's copy of a picked disc image is deleted once the game is installed (Settings > Games

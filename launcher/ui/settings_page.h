@@ -31,6 +31,7 @@
 #include "system_settings.h"
 #include "sly2_settings.h"
 #include "audio_devices_sdl.h"
+#include "../collection/ps3menu.h"
 #include "update_dialog.h"
 #include "widgets.h"
 
@@ -112,6 +113,9 @@ public:
     UpdateUi* updates = nullptr;
     // Settings > Launcher > Collection Style Launcher > Start (main.cpp starts `safehouse --collection` and closes).
     std::function<void()> startCollection;
+    // The profile whose imported Collection menu (collection/ps3menu.h) the rows show: empty = none (screenshots).
+    fs::path collectionProfile;
+    static constexpr const char* kCollectionImportLabel = "Collection menu import";
     int category = Display;
 
     SettingsPage(LauncherBackend& backend, Job& job, GLFWwindow* window) : m_backend(backend), m_job(job), m_window(window) {
@@ -233,13 +237,18 @@ public:
             if (ImGuiFileDialog::Instance()->IsOk()) setInstallRoot(path(ImGuiFileDialog::Instance()->GetCurrentPath()));
             ImGuiFileDialog::Instance()->Close();
         }
-        if (auto r = m_ps3Dialog.poll()) {  // the PS3 HD import's source (native_dialog.h)
-            if (r->status == filedialog::Status::Chosen) startPs3Import(m_ps3Game, r->path);
+        // the PS3 HD import's source, or the Collection menu import's (native_dialog.h)
+        auto ps3Chosen = [this](const std::string& source) {
+            if (m_ps3ForCollection) startCollectionImport(source);
+            else startPs3Import(m_ps3Game, source);
+        };
+        if (auto r = m_ps3Dialog.poll()) {
+            if (r->status == filedialog::Status::Chosen) ps3Chosen(r->path);
             else if (r->status == filedialog::Status::Unavailable) openPs3Picker(m_ps3PickFolder);
         }
         if (ImGuiFileDialog::Instance()->Display("ps3src", ImGuiWindowFlags_NoCollapse, { px(650), px(400) }, { px(1100), px(760) })) {
             if (ImGuiFileDialog::Instance()->IsOk())
-                startPs3Import(m_ps3Game, m_ps3PickFolder ? ImGuiFileDialog::Instance()->GetCurrentPath() : ImGuiFileDialog::Instance()->GetFilePathName());
+                ps3Chosen(m_ps3PickFolder ? ImGuiFileDialog::Instance()->GetCurrentPath() : ImGuiFileDialog::Instance()->GetFilePathName());
             ImGuiFileDialog::Instance()->Close();
         }
         if (auto r = m_langDialog.poll()) {  // a language import's source (Sly 2: a disc image, The Sly Collection)
@@ -1290,18 +1299,102 @@ private:
         if (updates) updates->settingsRows([this](const char* help) { describe(help); }, m_fixture);
         collectionRows();
     }
-    // The Collection Style Launcher (launcher/collection/collection.h): start it, put it in Steam or on the desktop.
+    // The Collection Style Launcher (launcher/collection/collection.h): The Sly Collection's (PS3) own menu. It exists
+    // only with that menu imported from the player's disc (collection/ps3menu.h): until then the rows say so and lead
+    // to the import; afterwards: start it, put it in Steam or on the desktop, import again, remove.
+    void refreshCollection() {
+        if (ImGui::GetTime() < m_nextCollectionCheck) return;
+        m_nextCollectionCheck = ImGui::GetTime() + 1.0;
+        m_collectionImported = !collectionProfile.empty() && collection::ps3menu::imported(collectionProfile);
+        // a source another PS3 import used (the PS3 HD textures'), when it is still where it was
+        m_collectionSource.clear();
+        if (m_fixture) return;
+        std::error_code ec;
+        for (GameId g : {GameId::Sly2, GameId::Sly1}) {
+            const auto pack = m_backend.ps3HdPack(g);
+            if (m_collectionSource.empty() && !pack.source.empty() && fs::exists(path(pack.source), ec)) m_collectionSource = pack.source;
+        }
+    }
+    void startCollectionImport(const std::string& source) {
+        try {
+            m_backend.config["ps3_browse_dir"] = utf8(path(source).parent_path());
+            persistLauncher();
+        } catch (...) {
+        }
+        const fs::path profile = collectionProfile;
+        m_job.start(kCollectionImportLabel, [this, source, profile](const auto&) {
+            {
+                std::lock_guard lock(m_job.mutex);
+                m_job.stage = "collection-menu";
+            }
+            collection::ps3menu::importMenu(path(source), profile, m_job.cancel, [this](float p) {
+                std::lock_guard lock(m_job.mutex);
+                m_job.progress = p;
+            });
+        });
+    }
     void collectionRows() {
+        refreshCollection();
+        const bool importing = m_job.busy && m_job.label == kCollectionImportLabel;
+        section(tr("Collection Style Launcher"));
+        if (m_collectionImported) {
+            if (linkRow(tr("Start the Collection Style Launcher"), nullptr, nullptr, Icon::Play) && !m_fixture && startCollection) startCollection();
+#ifdef CANE_ANDROID
+            describe(tr("The Sly Collection's (PS3) own menu, imported from your disc: turn the pages to a game and start it; quitting a game "
+                        "brings you back to it."));
+#else
+            describe((std::string(tr("The Sly Collection's (PS3) own menu, imported from your disc: turn the pages to a game and start it; quitting a game "
+                                     "brings you back to it.")) + " " + tr("Also starts with: safehouse --collection")).c_str());
+#endif
+        } else {
+            ImGui::BeginDisabled(true);
+            linkRow(tr("Start the Collection Style Launcher"), tr("Needs the import below"), nullptr, Icon::Play);
+            ImGui::EndDisabled();
+            describe(tr("This style is The Sly Collection's (PS3) own menu: its scene, art, sounds and music. None of that comes with "
+                        "SafeHouse, so it has to be imported from your own Sly Collection disc first."));
+        }
+        // ---- the import (as the other imports from The Sly Collection)
+        ImGui::BeginDisabled(m_job.busy || m_fixture || collectionProfile.empty());
+        if (!m_collectionSource.empty() && !m_collectionImported) {
+            if (linkRow(tr("Import the Collection menu from the source used before"), nullptr, nullptr, Icon::Disc)) startCollectionImport(m_collectionSource);
+            describe(trf("From %s (your PS3 HD texture import's source).", m_collectionSource.c_str()).c_str());
+        }
+        if (linkRow(m_collectionImported ? tr("Import the Collection menu again…") : tr("Import the Collection menu from The Sly Collection (PS3)…"), tr(".iso / .zip"), nullptr,
+                    Icon::Disc))
+            startPs3Pick(GameId::Sly2, false, true);
+        describe(tr("Choose The Sly Collection (PS3): its disc image (.iso) or a .zip of it, read as it is, nothing is unpacked. "
+                    "The menu is converted into your profile (about 30 MB)."));
+        if (linkRow(tr("Import from the extracted disc…"), tr("folder"), nullptr, Icon::Folder)) startPs3Pick(GameId::Sly2, true, true);
+        describe(tr("Choose the extracted disc: the folder with PS3_GAME in it, PS3_GAME, or PS3_GAME/USRDIR."));
+        if (m_collectionImported) {
+            if (linkRow(tr("Remove the imported Collection menu"), nullptr, nullptr, Icon::Trash)) {
+                collection::ps3menu::removeMenu(collectionProfile);
+                m_nextCollectionCheck = 0;
+            }
+            describe(tr("Deletes the imported menu. The Collection Style Launcher needs it."));
+        }
+        ImGui::EndDisabled();
+        if (importing) {
+            float progress = 0;
+            {
+                std::lock_guard lock(m_job.mutex);
+                progress = m_job.progress;
+            }
+            ImGui::Indent(px(16));
+            char text[320];
+            std::snprintf(text, sizeof(text), "%s · %d %%", tr("Reading The Sly Collection's menu"), int(progress * 100));
+            caption(text, color::text2);
+            if (button(tr("Cancel import"), Tone::Secondary, { px(190), 0 }, Icon::Close)) m_job.cancel = true;
+            ImGui::Unindent(px(16));
+        }
+        // ---- shortcuts that open it (they open the SafeHouse launcher while the menu is not imported)
+        ImGui::BeginDisabled(!m_collectionImported);
 #ifdef CANE_ANDROID
         // Android: started as the app's direct activity (collection.h spawnDetached); a home-screen shortcut instead of
         // Steam / desktop shortcuts.
-        section(tr("Collection Style Launcher"));
-        if (linkRow(tr("Start the Collection Style Launcher"), nullptr, nullptr, Icon::Play) && !m_fixture && startCollection) startCollection();
-        describe(tr("An extra, playful menu after The Sly Collection (PS3): scroll through the games and start one; quitting a game "
-                    "brings you back to it. With your Sly Collection disc it can show that collection's own menu art and music."));
         if (linkRow(tr("Add a home screen shortcut for it"), nullptr, nullptr, Icon::Plus) && !m_fixture) {
             try {
-                m_collectionMessage = android::pinShortcut("collection", "SafeHouse Collection", {}, {"--collection"})
+                m_collectionMessage = android::pinShortcut("collection", shortcut::kCollectionTitle, shortcut::collectionAdaptiveIconImage(), {"--collection"})
                                           ? tr("Confirm the shortcut in the window that opens.")
                                           : tr("This device's home screen does not take shortcuts from apps.");
             } catch (const std::exception& e) {
@@ -1309,13 +1402,7 @@ private:
             }
         }
         describe(m_collectionMessage.empty() ? tr("Starts the Collection Style Launcher directly.") : m_collectionMessage.c_str());
-        return;
-#endif
-        section(tr("Collection Style Launcher"));
-        if (linkRow(tr("Start the Collection Style Launcher"), nullptr, nullptr, Icon::Play) && !m_fixture && startCollection) startCollection();
-        describe(tr("An extra, playful menu after The Sly Collection (PS3): scroll through the games and start one; quitting a game "
-                 "brings you back to it. With your Sly Collection disc it can show that collection's own menu art and music. "
-                 "Also starts with: safehouse --collection"));
+#else
         if (linkRow(tr("Add the Collection Style Launcher to Steam"), nullptr, nullptr, Icon::Plus) && !m_fixture) {
             try {
                 const auto steam = steam::find();
@@ -1327,7 +1414,7 @@ private:
                 m_collectionMessage = trf("Could not add the Steam shortcut: %s.", tr(std::string(e.what())).c_str());
             }
         }
-        describe(tr("A Steam shortcut named \"SafeHouse Collection\" that opens this menu (Steam's shortcut list is backed up first)."));
+        describe(tr("A Steam shortcut named \"Sly Collection\" that opens this menu (Steam's shortcut list is backed up first)."));
 #ifndef __APPLE__
         if (linkRow(tr("Add a desktop shortcut for it"), nullptr, nullptr, Icon::Plus) && !m_fixture) {
             try {
@@ -1340,6 +1427,8 @@ private:
         }
         describe(m_collectionMessage.empty() ? tr("On the desktop and in the applications / Start menu.") : m_collectionMessage.c_str());
 #endif
+#endif
+        ImGui::EndDisabled();
     }
     // Each installable game: its installed regions (choosing one makes it the one Play starts) and "Install another
     // region", with the regions it installs from and the space each needs.
@@ -1756,8 +1845,10 @@ private:
         else
             m_job.start("Languages (The Sly Collection)", [this, source](const auto& log) { m_backend.importPs3Languages(source, m_job.cancel, log); });
     }
-    void startPs3Pick(GameId g, bool folder) {
+    void startPs3Pick(GameId g, bool folder, bool forCollection = false) {
+        if (m_ps3Dialog.running()) return;
         m_ps3Game = g;
+        m_ps3ForCollection = forCollection;
         m_ps3PickFolder = folder;
         const char* title = folder ? tr("Choose the extracted Sly Collection (PS3)") : tr("Choose The Sly Collection (PS3) disc image");
         const fs::path start = filedialog::startFolder({ m_backend.config.value("ps3_browse_dir", std::string{}) });
@@ -1912,6 +2003,10 @@ private:
     filedialog::Async m_langDialog;
     LangPick m_langPick = LangPick::Disc;
     std::string m_collectionMessage;  // the Collection Style Launcher rows' last result
+    bool m_ps3ForCollection = false;  // the PS3 source being chosen is for the Collection menu import
+    bool m_collectionImported = false;
+    std::string m_collectionSource;   // an earlier PS3 import's source that is still there
+    double m_nextCollectionCheck = 0;
     filedialog::Async m_installDialog;
     fs::path m_installRoot;
     bool m_customRoot = false;

@@ -39,6 +39,10 @@
 #include <sys/stat.h>
 #include "launcher_shortcut_sly1.h"
 #include "launcher_shortcut_sly2.h"
+#include "launcher_shortcut_collection.h"
+#if defined(CANE_ANDROID)
+#include "launcher_shortcut_collection_adaptive.h"
+#endif
 #endif
 
 namespace cane::shortcut {
@@ -352,11 +356,32 @@ inline Result create(GameId game, Where where, const fs::path& program = steam::
 }
 
 // ---------------------------------------------------------------- the Collection Style Launcher's shortcut
-// `safehouse --collection` (launcher/collection/collection.h), with the SafeHouse icon.
-inline constexpr const char* kCollectionTitle = "SafeHouse Collection";
+// `safehouse --collection` (launcher/collection/collection.h): "Sly Collection", its icon the SafeHouse logo
+// (launcher/assets/shortcut/collection-logo.*, tools/make-collection-icons.py). "SafeHouse Collection" before
+// 2026-11-10 (a Windows shortcut of that name is replaced).
+inline constexpr const char* kCollectionTitle = "Sly Collection";
+inline constexpr const char* kFormerCollectionTitle = "SafeHouse Collection";
+inline constexpr int kCollectionIconResource = 110;  // (cmake/launcher.rc.in)
 #ifndef _WIN32
 inline fs::path collectionFile(Where where) { return folder(where) / "safehouse-collection.desktop"; }
-inline std::string collectionEntry(const fs::path& program) {
+inline fs::path collectionIcon() { return detail::dataHome() / "icons" / "hicolor" / "256x256" / "apps" / "safehouse-collection.png"; }
+// The icon PNG (also the Android pinned shortcut's).
+inline std::string collectionIconImage() { return std::string(reinterpret_cast<const char*>(cane_shortcut_collection), sizeof(cane_shortcut_collection)); }
+#if defined(CANE_ANDROID)
+// The Android pinned shortcut's icon: the logo inside an adaptive icon's safe zone (the launcher masks it).
+inline std::string collectionAdaptiveIconImage() {
+    return std::string(reinterpret_cast<const char*>(cane_shortcut_collection_adaptive), sizeof(cane_shortcut_collection_adaptive));
+}
+#endif
+inline std::string installCollectionIcon() {
+    const std::string image = collectionIconImage();
+    const fs::path to = collectionIcon();
+    std::error_code ec;
+    fs::create_directories(to.parent_path());
+    if (!fs::exists(to, ec) || detail::readText(to) != image) detail::writeAtomically(to, image);
+    return utf8(to);
+}
+inline std::string collectionEntry(const fs::path& program, const std::string& icon = brand::appId) {
     std::string t = "[Desktop Entry]\n";
     t += "Type=Application\n";
     t += "Version=1.0\n";
@@ -364,7 +389,7 @@ inline std::string collectionEntry(const fs::path& program) {
     t += "Comment=Choose and play your Sly Cooper games (SafeHouse)\n";
     t += "Exec=" + detail::execValue({utf8(program), "--collection"}) + "\n";
     t += "Path=" + detail::stringValue(utf8(program.parent_path())) + "\n";
-    t += std::string("Icon=") + brand::appId + "\n";
+    t += "Icon=" + detail::stringValue(icon) + "\n";
     t += "Terminal=false\n";
     t += "Categories=Game;\n";
     t += std::string("StartupWMClass=") + brand::wmClass + "\n";
@@ -393,7 +418,7 @@ inline Result createCollection(Where where, const fs::path& program = steam::lau
     r.existed = fs::exists(r.file, ec);
     fs::create_directories(r.file.parent_path());
 #ifndef _WIN32
-    const std::string text = collectionEntry(program);
+    const std::string text = collectionEntry(program, installCollectionIcon());
     if (!r.existed || detail::readText(r.file) != text) {
         detail::writeAtomically(r.file, text);
         r.changed = true;
@@ -420,7 +445,7 @@ inline Result createCollection(Where where, const fs::path& program = steam::lau
             const auto l = readLink(r.file);
             const auto same = [](const std::string& a, const fs::path& b) { return path(a).lexically_normal() == b.lexically_normal(); };
             if (same(l.target, program) && l.arguments == "--collection" && same(l.workingDirectory, program.parent_path()) &&
-                same(l.iconFile, program) && l.iconIndex == 0)
+                same(l.iconFile, program) && l.iconIndex == -kCollectionIconResource)
                 return r;
         } catch (...) {
         }
@@ -431,12 +456,15 @@ inline Result createCollection(Where where, const fs::path& program = steam::lau
         throw std::runtime_error(tr("Windows could not create the shortcut (IShellLink)"));
     if (FAILED(link->SetPath(program.c_str())) || FAILED(link->SetArguments(L"--collection")) ||
         FAILED(link->SetWorkingDirectory(program.parent_path().c_str())) || FAILED(link->SetDescription(description.c_str())) ||
-        FAILED(link->SetIconLocation(program.c_str(), 0)))
+        FAILED(link->SetIconLocation(program.c_str(), -kCollectionIconResource)))
         throw std::runtime_error(tr("Windows could not set up the shortcut"));
     if (FAILED(link->QueryInterface(IID_IPersistFile, reinterpret_cast<void**>(&persist.p))) || FAILED(persist->Save(r.file.c_str(), TRUE)))
         throw std::runtime_error(trf("Could not save %s", utf8(r.file).c_str()));
     r.changed = true;
     SHChangeNotify(r.existed ? SHCNE_UPDATEITEM : SHCNE_CREATE, SHCNF_PATHW, r.file.c_str(), nullptr);
+    // the shortcut of the earlier name, made by an older launcher
+    const fs::path former = folder(where) / (path(kFormerCollectionTitle).wstring() + L".lnk");
+    if (fs::remove(former, ec)) SHChangeNotify(SHCNE_DELETE, SHCNF_PATHW, former.c_str(), nullptr);
 #endif
     return r;
 #endif

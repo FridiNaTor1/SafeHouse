@@ -19,6 +19,10 @@ can be turned off where it changes how the game looks or plays.
 - **Add to Steam:** adds a shortcut that starts the game directly, with library artwork, to every Steam account on the
   computer (exit Steam first, or restart it afterwards). **Add desktop shortcut** does the same on the desktop.
 - **Settings for each game:** display, graphics, audio, controls and more, edited while the game is closed.
+- **Collection Style Launcher:** if you own *The Sly Collection* (PS3), import its own game-select menu from your
+  disc (Settings > Launcher: the disc image, a `.zip` of it, or the extracted disc) and start the games from it: its
+  scene, logos, sounds and music, with the games you installed. Quitting a game brings you back to it. Nothing of
+  that menu comes with SafeHouse, so the style is only there once you imported it.
 - **Automatic updates:** the launcher checks for new versions and updates itself.
 - **Your files stay put:** installed games, saves and settings live in your profile folder and survive updates and
   re-installs ([where](FAQ.md#where-are-my-files)).

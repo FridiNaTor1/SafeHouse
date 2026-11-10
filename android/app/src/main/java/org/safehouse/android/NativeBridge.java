@@ -460,7 +460,9 @@ public final class NativeBridge {
             .putExtra("arguments", arguments).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
         android.content.pm.ShortcutInfo.Builder info = new android.content.pm.ShortcutInfo.Builder(current, id)
             .setShortLabel(label).setLongLabel(label).setIntent(intent);
-        if (bitmap != null) info.setIcon(android.graphics.drawable.Icon.createWithBitmap(bitmap));
+        // (the Collection Style Launcher's icon is made for an adaptive icon's safe zone: tools/make-collection-icons.py)
+        if (bitmap != null) info.setIcon("collection".equals(id) ? android.graphics.drawable.Icon.createWithAdaptiveBitmap(bitmap)
+                                                                  : android.graphics.drawable.Icon.createWithBitmap(bitmap));
         try { return shortcuts.requestPinShortcut(info.build(), null); }
         catch (IllegalStateException error) { return false; }  // (the app is not in the foreground)
     }

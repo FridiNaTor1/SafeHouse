@@ -24,12 +24,15 @@ struct Options {
     // --nav up,down,left,right,a,b,x,y,lb,rb,lt,rt,start,select: pad presses
     // replayed one every 4 frames before the screenshot.
     std::vector<std::string> nav;
+    // --pointer "d640,300 m400,300 w u": a finger replayed after the nav, one step every 2 frames: d = down at x,y,
+    // m = move to, w = wait, u = up (the Collection Style Launcher's touch checks).
+    std::vector<std::string> pointer;
     // --collection: the Collection Style Launcher instead (collection/collection.h), with --collection-games (the games
-    // shown installed), --collection-ps3 (a profile holding Collection/PS3 menu) and --collection-sly2 (an installation
-    // for the music and skies).
+    // shown installed) and --collection-ps3 (a profile holding the imported menu, Collection/Menu; also what Settings >
+    // Launcher shows as imported).
     bool collection = false;
     std::vector<std::string> collectionGames;
-    std::string collectionPs3, collectionSly2;
+    std::string collectionPs3;
     // --language CODE: the launcher language of the shot (default English; "system" follows the environment).
     std::string language = "en";
 };

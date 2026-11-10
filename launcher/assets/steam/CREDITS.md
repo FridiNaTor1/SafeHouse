@@ -39,4 +39,4 @@ To swap an image, replace the file (keep the name; .png or .jpg both work) and u
 
 | File | Steam use | Size | Author | Source |
 |---|---|---|---|---|
-| collection/icon.png | icon (`<id>_icon`) | as launcher/assets/safehouse-icon.png | HoshiYumeHime (DeviantArt) | the SafeHouse app icon (launcher/assets/safehouse-icon.png), copied |
+| collection/icon.png | icon (`<id>_icon`) | 256 x 256 | HoshiYumeHime (DeviantArt) | the SafeHouse logo (launcher/assets/safehouse-logo.png) on a transparent square, by `tools/make-collection-icons.py` |
