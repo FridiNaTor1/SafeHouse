@@ -33,6 +33,20 @@ std::size_t Utf8CharacterCount(const char* text)
 }
 }
 
+#ifdef __SWITCH__
+// Starts loading the audio of the next two lines from `first` in the background (audio_prefetch.h).
+static void PrefetchDialogLines(DIALOG* pdialog, int first)
+{
+	int count = 0;
+	for (int i = first; i < pdialog->cde && count < 2; ++i)
+		if (pdialog->ade[i].dek == DEK_PreloadVag)
+		{
+			PrefetchVag(pdialog->ade[i].string.pchz.get());
+			++count;
+		}
+}
+#endif
+
 DIALOG* NewDialog()
 {
 	return NewWorldObject<DIALOG>();
@@ -252,6 +266,9 @@ void SetDialogDialogs(DIALOG* pdialog, DIALOGS dialogs)
 		*pdialog->pfPlayed = 1;
 
 		StopVag();
+#ifdef __SWITCH__
+		ClearVagPrefetch();
+#endif
 		EndDialogAudioDuck();
 		HandleLoSpliceEvent(pdialog, 21, 0, nullptr);
 
@@ -293,6 +310,9 @@ void SetDialogDialogs(DIALOG* pdialog, DIALOGS dialogs)
 	{
 		pdialog->ideCur = -1;
 		pdialog->dp.grfdp = 0;
+#ifdef __SWITCH__
+		PrefetchDialogLines(pdialog, 0);
+#endif
 		BeginDialogAudioDuck();
 
 		if (pdialog->dialogk == DIALOGK_Confront)
@@ -566,6 +586,12 @@ void HandleDialogEvents(DIALOG* pdialog)
 
 	while (!FPauseDialog(pdialog))
 	{
+#ifdef __SWITCH__
+		// The dialog waits until the next line's audio is loaded.
+		const int next = pdialog->ideCur + 1;
+		if (next < pdialog->cde && pdialog->ade[next].dek == DEK_PreloadVag &&
+			!FReadyVag(pdialog->ade[next].string.pchz.get())) return;
+#endif
 		if (pdialog->dp.pasegaLipsync != nullptr)
 		{
 			RetractAsega(pdialog->dp.pasegaLipsync);
@@ -586,6 +612,9 @@ void HandleDialogEvents(DIALOG* pdialog)
 
 void StartDialog(DIALOG* pdialog, PO* ppo)
 {
+#ifdef __SWITCH__
+	PrefetchDialogLines(pdialog, 0);
+#endif
 	if (ppo == nullptr)
 	{
 		g_binoc.pdialogPlaying = pdialog;
@@ -841,6 +870,9 @@ void HandleDialogEvent(DIALOG* pdialog, DE* pde)
 		case DEK_PreloadVag:
 		{
 			PreloadVagFileName(pde->string.pchz.get());
+#ifdef __SWITCH__
+			PrefetchDialogLines(pdialog, pdialog->ideCur + 1);
+#endif
 			dp.grfdp |= GRFDP_VagPreloaded;
 			break;
 		}

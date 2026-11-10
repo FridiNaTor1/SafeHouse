@@ -857,7 +857,7 @@ void CScreenPlayer::Draw(const FONTBRX* pfont, const FONTBRX* pfontIcons, const 
                     menuBinding.emplace('T', binding, binding, family);
                 }
             }
-            if (std::getenv("SLY2N_TEXTPRINT"))
+            if (static const bool s_fTextPrint = std::getenv("SLY2N_TEXTPRINT") != nullptr; s_fTextPrint)
                 std::fprintf(stderr, "textelem kind %d id 0x%X: '%s'\n", int(el.ab3[1]), unsigned(el.n3), text.c_str());
             if (text.empty()) break;
             // (the subtitle 0x2EF in its speaker's colour: font_brx's 0x4435F4)

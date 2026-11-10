@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <vector>
 
+namespace cane::pal {
 class CBinaryInputStream;
 
 enum class OptionKind : std::uint8_t {
@@ -18,3 +19,5 @@ struct OptionSchema {
 
 const std::vector<OptionSchema>& GetOptionSchema();
 void SkipOptionValue(CBinaryInputStream& stream, OptionKind kind);
+
+} // namespace cane::pal

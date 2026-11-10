@@ -13,6 +13,7 @@
 #include <string>
 #include <vector>
 
+#include "disc_image.h"
 #include "install.h"
 
 namespace cane {
@@ -179,12 +180,11 @@ inline std::string gbText(uint64_t bytes) {
 // The image's own checks, for a disc of `game` whose boot file is in `region`.
 inline void checkDiscContents(const fs::path& file, DiscCheck& c) {
     const GameId game = *c.game;
-    std::ifstream in(file, std::ios::binary);
-    std::error_code ec;
-    const uint64_t size = fs::file_size(file, ec);
-    const IsoVolume volume = readIsoVolume(in);
+    const std::unique_ptr<DiscImage> image = DiscImage::open(file);
+    const uint64_t size = image ? image->size() : 0;
+    const IsoVolume volume = image ? readIsoVolume(image->reader()) : IsoVolume{};
     const std::string title = cane::game(game).shortName;
-    if (!in || ec || !volume.valid) {
+    if (!image || !volume.valid) {
         c.status = DiscCheck::Status::Unreadable;
         c.message = "That disc image cannot be read.";
         return;
@@ -200,7 +200,7 @@ inline void checkDiscContents(const fs::path& file, DiscCheck& c) {
     std::vector<uint8_t> program;
     if (exe && exe->size && exe->size <= (64u << 20)) {
         program.resize(exe->size);
-        if (!readAt(in, uint64_t(exe->sector) * kIsoSector, program.data(), program.size())) program.clear();
+        if (!image->read(uint64_t(exe->sector) * kIsoSector, program.data(), program.size())) program.clear();
     }
     const std::string bad = "The game program on that disc image (" + c.identity.bootFile + ") does not match any known " + title + " " +
                             c.region->name + " disc: the image is damaged or modified (wrong checksum). Make a new copy of your disc and try again.";
@@ -232,7 +232,7 @@ inline void checkDiscContents(const fs::path& file, DiscCheck& c) {
 // `wanted`: the game the image is chosen for (nullopt: any installable game).
 inline DiscCheck checkDisc(const fs::path& file, std::optional<GameId> wanted = std::nullopt) {
     DiscCheck c;
-    c.identity = identifyDisc(file);
+    c.identity = identifyDiscImage(file);
     c.game = c.identity.game;
     const std::string want = wanted ? std::string(cane::game(*wanted).title) : std::string("a Sly Cooper game");
     switch (c.identity.kind) {
@@ -242,7 +242,7 @@ inline DiscCheck checkDisc(const fs::path& file, std::optional<GameId> wanted = 
         return c;
     case DiscIdentity::Kind::NotPs2:
         c.status = DiscCheck::Status::NotPs2;
-        c.message = "That file is not a PlayStation 2 disc image (or it is damaged). Choose the .iso of your " + want + " disc.";
+        c.message = "That file is not a PlayStation 2 disc image (or it is damaged). Choose the .iso or .chd of your " + want + " disc.";
         return c;
     case DiscIdentity::Kind::Unknown:
         c.status = DiscCheck::Status::NotSly;

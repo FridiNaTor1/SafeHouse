@@ -197,6 +197,7 @@ void GL::InitGL()
 	presentHeight = framebufferHeight;
 	aspectRatio = width / height;
 
+#ifndef CANE_DEKO3D
 	const char* glVendor = reinterpret_cast<const char*>(glGetString(GL_VENDOR));
 	const char* glRenderer = reinterpret_cast<const char*>(glGetString(GL_RENDERER));
 	const char* glVersion = reinterpret_cast<const char*>(glGetString(GL_VERSION));
@@ -219,6 +220,7 @@ void GL::InitGL()
 				<< cbindings << "/14); world geometry will not render." << std::endl;
 		}
 	}
+#endif
 
 	// ========== ImGui Setup ==========
 	IMGUI_CHECKVERSION();
@@ -426,6 +428,7 @@ void GL::InitGL()
 
 	glslAlphaCutOff = glGetUniformLocation(glGlobShader.ID, "alphaCutOff");
 	glslShadowHalfTexel = glGetUniformLocation(glGlobShader.ID, "shadowHalfTexel");
+	glslFarDepth = glGetUniformLocation(glGlobShader.ID, "farDepth");
 
 	glslAmbientMap  = glGetUniformLocation(glGlobShader.ID, "ambientMap");
 	glslDiffuseMap  = glGetUniformLocation(glGlobShader.ID, "diffuseMap");
@@ -1484,6 +1487,7 @@ GLuint glslFogMax = 0;
 GLuint glslFogColor = 0;
 GLuint glslAlphaCutOff = 0;
 GLint glslShadowHalfTexel = -1;
+GLint glslFarDepth = -1;
 GLuint glslDyshMatWorldClip = 0;
 GLuint glslDyshModel = 0;
 GLuint glslDyshfSkin = 0;
@@ -1504,7 +1508,11 @@ int g_monitorIndex = 0;
 int g_textureFiltering = 1;
 float g_outputGamma = 1.0f;
 float g_guiScale = 1.0f;
+#ifdef __SWITCH__
+GuiStyle g_guiStyle = GuiStyle_Modern;   // (the Switch's default: cane::settings::defaults)
+#else
 GuiStyle g_guiStyle = GuiStyle_PS2;
+#endif
 WindowMode g_windowMode = WindowMode_Windowed;
 bool g_fAutoIconify = false;
 float g_drawDistanceMultiplier = 1.0f;

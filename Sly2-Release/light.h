@@ -77,6 +77,9 @@ void BakeGlobLighting(GLOB& glob, const glm::mat4& matWorld, const glm::vec3& po
 // when that is certain (lights is WorldLights(), the changes since v are logged, none of them touches a light the key
 // takes there, then or now); false means: compute the key.
 bool FBakeLightsUnchangedSince(uint32_t v, const glm::vec3& posSphere, float sRadius, const LIGHTSET& lights);
+// The same for every sphere at once: true when no change since v is one any bake takes (then the function above is
+// true for every group checked at v; false: ask it per group).
+bool FBakeLightsUnchangedForAll(uint32_t v, const LIGHTSET& lights);
 
 // P_G forward lighting for a lit-flag group with the four lights the light context would hold for it.
 // pamatBone (a skinned group's bone matrices, the renderer's): the lights in world space and each vertex's normal

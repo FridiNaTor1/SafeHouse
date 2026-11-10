@@ -319,6 +319,12 @@ void OnCrashSignal(int sig)
 }
 #endif
 
+#ifdef __SWITCH__
+// (the Switch: SafeHouse.nro runs this one as the PC launcher would, cane_game_sly3 at the end of this file)
+#include "../platform/switch/runtime.h"
+#define main Sly3Main
+#endif
+
 int main(int argc, char** argv)
 {
 #if defined(__linux__) || defined(__APPLE__)
@@ -359,8 +365,8 @@ int main(int argc, char** argv)
         else if (!std::strcmp(argv[i], "--mods") && i + 1 < argc) { modsDir = argv[++i]; fModsGiven = true; }
         else if (!std::strcmp(argv[i], "--texture-pack") && i + 1 < argc) texturePack = argv[++i];
         // the launcher's runtime contract: --data-dir <installations/sly2> --user-dir <profile>/sly2
-        else if (!std::strcmp(argv[i], "--data-dir") && i + 1 < argc) cane::dataOverride = std::filesystem::absolute(cane::path(argv[++i]));
-        else if (!std::strcmp(argv[i], "--user-dir") && i + 1 < argc) cane::userOverride = std::filesystem::absolute(cane::path(argv[++i]));
+        else if (!std::strcmp(argv[i], "--data-dir") && i + 1 < argc) cane::dataOverride = cane::absolutePath(cane::path(argv[++i]));
+        else if (!std::strcmp(argv[i], "--user-dir") && i + 1 < argc) cane::userOverride = cane::absolutePath(cane::path(argv[++i]));
         // display options for this run (over system_settings.dat; display.h)
         else if (!std::strcmp(argv[i], "--aspect") && i + 1 < argc)
         {
@@ -689,3 +695,29 @@ int main(int argc, char** argv)
                  "       | --convert DIR [--no-export-textures] | --export-textures [--out DIR] | --dump-textures DIR W\n");
     return 2;
 }
+
+#ifdef __SWITCH__
+#undef main
+#include "../platform/switch/image_install.h"
+namespace
+{
+// The installer's job (platform/switch/installer.h): the disc image kept whole as the PC's extractor installs it
+// (platform/switch/image_install.h); the game starts in this process after it.
+const CaneSwitch::InstallJob s_install = {
+    int(cane::GameId::Sly3),
+    "Select a Sly 3: Honor Among Thieves ISO or CHD (USA).",
+    [](const std::string& iso, const std::string& out, const CaneSwitch::InstallProgress& progress) {
+        return CaneSwitch::InstallDiscImage(cane::GameId::Sly3, iso, out, progress);
+    },
+    nullptr, nullptr,
+    false,
+    true,   // (a CHD read as it is: the image is copied once)
+};
+bool FInstalled(const std::string& data) { return CaneSwitch::DiscImageInstalled(cane::GameId::Sly3, data); }
+}
+// Sly 3 in SafeHouse.nro (platform/switch/runtime.h): the launcher starts it with CaneSwitch::RunGame (the first-boot
+// installer, then Sly3Main with the installation and the user folder, as the PC launcher starts it). The only global
+// symbol of the game's object (cmake/Switch.cmake).
+extern "C" const CaneSwitch::Game cane_game_sly3;
+const CaneSwitch::Game cane_game_sly3 = {"sly3", "Sly 3: Honor Among Thieves", FInstalled, &s_install, Sly3Main};
+#endif

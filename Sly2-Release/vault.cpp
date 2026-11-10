@@ -130,6 +130,18 @@ int CClueCollected()
         if (w.an.size() != anCur.size() || !std::equal(anCur.begin(), anCur.end() - 1, w.an.begin())) continue;
         if (std::find(aanDone.begin(), aanDone.end(), w.an) != aanDone.end()) continue;
         aanDone.push_back(w.an);
+#ifdef __SWITCH__
+        // (the Switch: one key built per level, its last element set to each bit: the HUD's counter and the markers ask
+        // every frame)
+        std::vector<int16_t> akey(w.an.begin(), w.an.end());
+        akey.push_back(symClue);
+        akey.push_back(0);
+        for (int n = 0; n < 32; ++n)
+        {
+            akey.back() = static_cast<int16_t>(n);
+            if (FRef(RefGetProgressKey(akey))) ++c;
+        }
+#else
         for (int n = 0; n < 32; ++n)
         {
             std::vector<int16_t> akey(w.an.begin(), w.an.end());
@@ -137,6 +149,7 @@ int CClueCollected()
             akey.push_back(static_cast<int16_t>(n));
             if (FRef(RefGetProgressKey(akey))) ++c;
         }
+#endif
     }
     return c;
 }

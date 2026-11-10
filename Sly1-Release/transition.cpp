@@ -630,6 +630,11 @@ void CTransition::Execute(std::string& file)
 
     if (g_psw != nullptr)
         SetMvgkRvol(g_psw->uMusicVolume, 1, 1);
+#ifdef __SWITCH__
+    // A world that fails to load ends the game on the error screen.
+    if (!fLoadSucceeded || g_psw == nullptr)
+        throw std::runtime_error(std::string("World loading failed: ") + fileNew);
+#endif
 
     m_plevelPending = nullptr;
     m_worldPending.clear();

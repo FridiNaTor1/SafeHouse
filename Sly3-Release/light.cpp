@@ -11,6 +11,8 @@
 #include <cstdio>
 #if defined(__SSE2__) || defined(_M_X64)
 #include <emmintrin.h>
+#elif defined(__aarch64__) || defined(_M_ARM64)
+#include <arm_neon.h>
 #endif
 
 namespace
@@ -291,6 +293,88 @@ void BakeGlobLighting(GLOB& glob, const glm::mat4& matWorld, const glm::vec3& po
         const SHD* pshd = sub.pshd;
         const uint32_t m = pshd ? pshd->argba[0] : 0x80808080u;
         const float selfIllum = pshd ? pshd->unSelfIllum / 4096.0f : 0.0f;
+#if defined(__aarch64__) || defined(_M_ARM64)
+        // (AArch64: four vertices at a time through the lights, one per NEON lane, each lane the loop below's
+        // operations in its order (-ffp-contract=off: no fused multiply-adds): the same colours. The position, the
+        // normal and the decomposition stay the scalar code's.)
+        {
+            const float32x4_t zero = vdupq_n_f32(0.0f), one = vdupq_n_f32(1.0f);
+            // std::clamp(x, 0, 1): x < 0 ? 0 : 1 < x ? 1 : x
+            auto clamp01 = [&](float32x4_t x) { return vbslq_f32(vcltq_f32(x, zero), zero, vbslq_f32(vcltq_f32(one, x), one, x)); };
+            for (uint32_t k0 = 0; k0 < sub.cvtx; k0 += 4)
+            {
+                const uint32_t cl = std::min(4u, sub.cvtx - k0);
+                alignas(16) float apx[4] = {}, apy[4] = {}, apz[4] = {}, anx[4] = {}, any[4] = {}, anz[4] = {};
+                uint8_t abase[4][4] = {};
+                bool fAny = false;
+                for (uint32_t i = 0; i < cl; ++i)
+                {
+                    const VTXGLOB& v = glob.avtx[sub.ivtxFirst + k0 + i];
+                    if (!v.fUnbaked) continue;
+                    fAny = true;
+                    for (int c = 0; c < 3; ++c) abase[i][c] = static_cast<uint8_t>((Ch(v.rgbaSrc, c) * Ch(m, c) + 255) / 256);
+                    abase[i][3] = static_cast<uint8_t>((Ch(v.rgbaSrc, 3) * Ch(m, 3) + 255) / 510);
+                    const glm::vec3 pos = glm::vec3(matWorld * glm::vec4(v.pos, 1.0f));
+                    glm::vec3 n = matNormal * v.normal;
+                    const float len = glm::length(n);
+                    n = len > 0 ? n / len : glm::vec3(0, 0, 1);
+                    apx[i] = pos.x; apy[i] = pos.y; apz[i] = pos.z;
+                    anx[i] = n.x; any[i] = n.y; anz[i] = n.z;
+                }
+                if (!fAny) continue;
+                const float32x4_t px = vld1q_f32(apx), py = vld1q_f32(apy), pz = vld1q_f32(apz);
+                const float32x4_t nx = vld1q_f32(anx), ny = vld1q_f32(any), nz = vld1q_f32(anz);
+                float32x4_t accR = zero, accG = zero, accB = zero, accA = vdupq_n_f32(selfIllum + lights.worldShader.w);
+                for (const LIGHTREC* pl : apl)
+                {
+                    const LIGHTREC& l = *pl;
+                    float32x4_t dx, dy, dz, att = one;
+                    uint32x4_t lit = vdupq_n_u32(~0u);
+                    if (l.kind == 1)
+                    {
+                        dx = vsubq_f32(px, vdupq_n_f32(l.dirOrPos.x));
+                        dy = vsubq_f32(py, vdupq_n_f32(l.dirOrPos.y));
+                        dz = vsubq_f32(pz, vdupq_n_f32(l.dirOrPos.z));
+                        const float32x4_t d = vsqrtq_f32(vaddq_f32(vaddq_f32(vmulq_f32(dx, dx), vmulq_f32(dy, dy)), vmulq_f32(dz, dz)));
+                        lit = vmvnq_u32(vcleq_f32(d, zero));   // (the scalar loop's "if (d <= 0) continue")
+                        att = clamp01(vaddq_f32(vdupq_n_f32(l.distanceOffset), vmulq_f32(d, vdupq_n_f32(l.distanceScale))));
+                        dx = vdivq_f32(dx, d);
+                        dy = vdivq_f32(dy, d);
+                        dz = vdivq_f32(dz, d);
+                    }
+                    else
+                    {
+                        dx = vdupq_n_f32(l.dirOrPos.x);
+                        dy = vdupq_n_f32(l.dirOrPos.y);
+                        dz = vdupq_n_f32(l.dirOrPos.z);
+                    }
+                    // Angular: offset + (d d d + d) x scale, clamped; times the attenuation
+                    const float32x4_t dd = vaddq_f32(vaddq_f32(vmulq_f32(nx, dx), vmulq_f32(ny, dy)), vmulq_f32(nz, dz));
+                    const float32x4_t ang = clamp01(vaddq_f32(vdupq_n_f32(l.angularOffset),
+                                                              vmulq_f32(vaddq_f32(vmulq_f32(vmulq_f32(dd, dd), dd), dd), vdupq_n_f32(l.angularScale))));
+                    const float32x4_t f = vmulq_f32(ang, att);
+                    accR = vbslq_f32(lit, vaddq_f32(accR, vmulq_f32(vdupq_n_f32(l.rgba.r), f)), accR);
+                    accG = vbslq_f32(lit, vaddq_f32(accG, vmulq_f32(vdupq_n_f32(l.rgba.g), f)), accG);
+                    accB = vbslq_f32(lit, vaddq_f32(accB, vmulq_f32(vdupq_n_f32(l.rgba.b), f)), accB);
+                    accA = vbslq_f32(lit, vaddq_f32(accA, vmulq_f32(vdupq_n_f32(l.rgba.a), f)), accA);
+                }
+                alignas(16) float aR[4], aG[4], aB[4], aA[4];
+                vst1q_f32(aR, accR); vst1q_f32(aG, accG); vst1q_f32(aB, accB); vst1q_f32(aA, accA);
+                for (uint32_t i = 0; i < cl; ++i)
+                {
+                    VTXGLOB& v = glob.avtx[sub.ivtxFirst + k0 + i];
+                    if (!v.fUnbaked) continue;
+                    int32_t a[4], b[4];
+                    Decompose(glm::vec4(aR[i], aG[i], aB[i], aA[i]), 1.0f, alphaOne, alphaScale, lights.worldShader,
+                              float(Max3(abase[i][0], abase[i][1], abase[i][2])), abase[i], a, b);
+                    const uint32_t alphaA = v.rgbaA & 0xFF000000u;
+                    v.rgbaA = (Pack(a, true) & 0x00FFFFFF) | alphaA;
+                    v.rgbaB = Pack(b, true);
+                }
+            }
+            continue;
+        }
+#endif
         for (uint32_t k = 0; k < sub.cvtx; ++k)
         {
             VTXGLOB& v = glob.avtx[sub.ivtxFirst + k];
@@ -441,6 +525,132 @@ uint32_t ForwardLitSse(GLOB& glob, const SUBGLOB& sub, uint32_t m, float wAdd, c
     return c4;
 }
 }  // namespace
+#define FORWARD_LIT_4 ForwardLitSse
+#elif defined(__aarch64__) || defined(_M_ARM64)
+#define FWD_SSE 1
+namespace
+{
+// (as the SSE step's table)
+struct INTENSITY127
+{
+    float a[256];
+    INTENSITY127() { for (int i = 0; i < 256; ++i) a[i] = float(int(float(uint8_t(i)) / 255.0f * 127.0f)); }
+};
+const INTENSITY127 s_intensity127;
+
+// SSE's min / max as the step above uses them (x < y ? x : y, x > y ? x : y), so the lanes keep the scalar code's
+// results bit for bit (NEON's own fmin / fmax differ on signed zeros)
+inline float32x4_t MinSse(float32x4_t x, float32x4_t y) { return vbslq_f32(vcltq_f32(x, y), x, y); }
+inline float32x4_t MaxSse(float32x4_t x, float32x4_t y) { return vbslq_f32(vcgtq_f32(x, y), x, y); }
+
+// ForwardLitSse on NEON (AArch64): the same operations in the same order per lane (-ffp-contract=off: no fused
+// multiply-adds), float -> int truncating (fcvtzs, as the scalar casts compile on AArch64), the clamp to 0..255 by
+// saturating narrows. Returns the first vertex of the sub-group not done (the scalar tail).
+uint32_t ForwardLitNeon(GLOB& glob, const SUBGLOB& sub, uint32_t m, float wAdd, const glm::vec3 dirLocal[4], const glm::vec4 respColor[4],
+                        const glm::vec4& constant, const float upper[4], float alphaOne, float alphaScale, const glm::vec4& world,
+                        const std::vector<glm::mat4>* pamatBone)
+{
+    const uint32_t c4 = sub.cvtx & ~3u;
+    const size_t cbone = pamatBone ? pamatBone->size() : 0;
+    const float32x4_t k127 = vdupq_n_f32(127.0f), zero = vdupq_n_f32(0.0f), cap = vdupq_n_f32(2.0f);
+    const float32x4_t vAlphaOne = vdupq_n_f32(alphaOne), vAlphaScale = vdupq_n_f32(alphaScale), vWAdd = vdupq_n_f32(wAdd);
+    const float32x4_t cR = vdupq_n_f32(constant.r), cG = vdupq_n_f32(constant.g), cB = vdupq_n_f32(constant.b), cA = vdupq_n_f32(constant.a);
+    const float32x4_t wR = vdupq_n_f32(world.r), wG = vdupq_n_f32(world.g), wB = vdupq_n_f32(world.b);
+    const uint32_t m0 = Ch(m, 0), m1 = Ch(m, 1), m2 = Ch(m, 2), m3 = Ch(m, 3);
+    for (uint32_t k = 0; k < c4; k += 4)
+    {
+        VTXGLOB* apv[4] = {&glob.avtx[sub.ivtxFirst + k], &glob.avtx[sub.ivtxFirst + k + 1], &glob.avtx[sub.ivtxFirst + k + 2],
+                           &glob.avtx[sub.ivtxFirst + k + 3]};
+        if (!(apv[0]->fUnbaked | apv[1]->fUnbaked | apv[2]->fUnbaked | apv[3]->fUnbaked)) continue;
+        float32x4_t an[4];
+        alignas(16) float aIntensity[4], aBase[4][4];
+        for (int i = 0; i < 4; ++i)
+        {
+            const VTXGLOB& v = *apv[i];
+            // normal x 127, truncated (the 4th lane is uv.x: unused)
+            float32x4_t n = vcvtq_f32_s32(vcvtq_s32_f32(vmulq_f32(vld1q_f32(&v.normal.x), k127)));
+            if (pamatBone)
+            {
+                const float32x4_t nx = vdupq_laneq_f32(n, 0), ny = vdupq_laneq_f32(n, 1), nz = vdupq_laneq_f32(n, 2);
+                float32x4_t ns = zero;
+                for (int w = 0; w < 4; ++w)
+                    if (v.aw[w])
+                    {
+                        const glm::mat4& b = (*pamatBone)[std::min<size_t>(v.abone[w], cbone - 1)];
+                        float32x4_t t = vaddq_f32(vmulq_f32(vld1q_f32(&b[0][0]), nx), vmulq_f32(vld1q_f32(&b[1][0]), ny));
+                        t = vaddq_f32(t, vmulq_f32(vld1q_f32(&b[2][0]), nz));
+                        ns = vaddq_f32(ns, vmulq_f32(vdupq_n_f32(float(v.aw[w]) / 255.0f), t));
+                    }
+                n = ns;
+            }
+            an[i] = n;
+            const uint32_t s = v.rgbaSrc;
+            aIntensity[i] = s_intensity127.a[Max3(Ch(s, 0), Ch(s, 1), Ch(s, 2))];
+            aBase[0][i] = float(uint8_t((Ch(s, 0) * m0 + 255) >> 9));
+            aBase[1][i] = float(uint8_t((Ch(s, 1) * m1 + 255) >> 9));
+            aBase[2][i] = float(uint8_t((Ch(s, 2) * m2 + 255) >> 9));
+            aBase[3][i] = float(glob.fHistoryWorld ? uint8_t(v.rgbaA >> 24) : uint8_t((Ch(s, 3) * m3 + 255) / 510));
+        }
+        // the x's, the y's and the z's of the four normals
+        const float32x4x2_t t01 = vtrnq_f32(an[0], an[1]), t23 = vtrnq_f32(an[2], an[3]);
+        const float32x4_t nX = vcombine_f32(vget_low_f32(t01.val[0]), vget_low_f32(t23.val[0]));
+        const float32x4_t nY = vcombine_f32(vget_low_f32(t01.val[1]), vget_low_f32(t23.val[1]));
+        const float32x4_t nZ = vcombine_f32(vget_high_f32(t01.val[0]), vget_high_f32(t23.val[0]));
+        float32x4_t r = cR, g = cG, bl = cB, a = cA;
+        for (int j = 0; j < 4; ++j)
+        {
+            const float32x4_t d = vaddq_f32(vaddq_f32(vmulq_f32(vdupq_n_f32(dirLocal[j].x), nX), vmulq_f32(vdupq_n_f32(dirLocal[j].y), nY)),
+                                            vmulq_f32(vdupq_n_f32(dirLocal[j].z), nZ));
+            const float32x4_t resp = MinSse(vdupq_n_f32(upper[j]), vaddq_f32(d, vmulq_f32(vmulq_f32(d, d), d)));
+            r = vaddq_f32(r, vmulq_f32(vdupq_n_f32(respColor[j].r), resp));
+            g = vaddq_f32(g, vmulq_f32(vdupq_n_f32(respColor[j].g), resp));
+            bl = vaddq_f32(bl, vmulq_f32(vdupq_n_f32(respColor[j].b), resp));
+            a = vaddq_f32(a, vmulq_f32(vdupq_n_f32(respColor[j].a), resp));
+        }
+        a = vaddq_f32(a, vWAdd);
+        // Decompose (cap 2)
+        const float32x4_t maximum = MaxSse(bl, MaxSse(g, r));
+        const float32x4_t remaining = MaxSse(zero, vsubq_f32(cap, maximum));
+        r = MinSse(cap, r);
+        g = MinSse(cap, g);
+        bl = MinSse(cap, bl);
+        const float32x4_t midtone = MinSse(remaining, a);
+        const float32x4_t shadow = vsubq_f32(remaining, midtone);
+        const float32x4_t alphaB = vmulq_f32(vsubq_f32(vAlphaOne, shadow), vAlphaScale);
+        const float32x4_t base3 = vld1q_f32(aBase[3]);
+        const float32x4_t correction =
+            vreinterpretq_f32_u32(vandq_u32(vcgtq_f32(alphaB, zero), vreinterpretq_u32_f32(vdivq_f32(base3, alphaB))));
+        const float32x4_t intensity = vld1q_f32(aIntensity);
+        const int32x4_t aR = vcvtq_s32_f32(vmulq_f32(vaddq_f32(r, vmulq_f32(wR, shadow)), intensity));
+        const int32x4_t aG = vcvtq_s32_f32(vmulq_f32(vaddq_f32(g, vmulq_f32(wG, shadow)), intensity));
+        const int32x4_t aB = vcvtq_s32_f32(vmulq_f32(vaddq_f32(bl, vmulq_f32(wB, shadow)), intensity));
+        const int32x4_t bR = vcvtq_s32_f32(vmulq_f32(vmulq_f32(vld1q_f32(aBase[0]), midtone), correction));
+        const int32x4_t bG = vcvtq_s32_f32(vmulq_f32(vmulq_f32(vld1q_f32(aBase[1]), midtone), correction));
+        const int32x4_t bB = vcvtq_s32_f32(vmulq_f32(vmulq_f32(vld1q_f32(aBase[2]), midtone), correction));
+        const int32x4_t bA = vcvtq_s32_f32(alphaB);
+        // Pack: clamp(c, 0, 255) (int32 -> int16 -> uint8 saturating), the planes interleaved to RGBA per lane
+        auto pack = [](int32x4_t x, int32x4_t y, int32x4_t z, int32x4_t w, uint32_t out[4]) {
+            const uint8x8_t xy = vqmovun_s16(vcombine_s16(vqmovn_s32(x), vqmovn_s32(y)));   // r0..3 g0..3
+            const uint8x8_t zw = vqmovun_s16(vcombine_s16(vqmovn_s32(z), vqmovn_s32(w)));   // b0..3 a0..3
+            const uint8x8x2_t rb = vzip_u8(xy, zw);                                          // r0 b0 r1 b1 .., g0 a0 g1 a1 ..
+            const uint8x8x2_t rgba = vzip_u8(rb.val[0], rb.val[1]);                          // r0 g0 b0 a0 r1 ..
+            vst1q_u8(reinterpret_cast<uint8_t*>(out), vcombine_u8(rgba.val[0], rgba.val[1]));
+        };
+        alignas(16) uint32_t aA[4], aB4[4];
+        pack(aR, aG, aB, vdupq_n_s32(0), aA);
+        pack(bR, bG, bB, bA, aB4);
+        for (int i = 0; i < 4; ++i)
+        {
+            VTXGLOB& v = *apv[i];
+            if (!v.fUnbaked) continue;
+            v.rgbaA = (aA[i] & 0x00FFFFFF) | (v.rgbaA & 0xFF000000u);
+            v.rgbaB = aB4[i];
+        }
+    }
+    return c4;
+}
+}  // namespace
+#define FORWARD_LIT_4 ForwardLitNeon
 #else
 #define FWD_SSE 0
 #endif
@@ -532,7 +742,7 @@ void ForwardGlobLighting(GLOB& glob, const glm::mat4& matWorld, const glm::vec3&
         uint32_t k = 0;
 #if FWD_SSE
         if (!s_fScalar)
-            k = ForwardLitSse(glob, sub, m, shadow1212 + lights.worldShader.w, dirLocal, respColor, constant, upper, alphaOne, alphaScale,
+            k = FORWARD_LIT_4(glob, sub, m, shadow1212 + lights.worldShader.w, dirLocal, respColor, constant, upper, alphaOne, alphaScale,
                               lights.worldShader, fSkin ? pamatBone : nullptr);
 #endif
         for (; k < sub.cvtx; ++k)

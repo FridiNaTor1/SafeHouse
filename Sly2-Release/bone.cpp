@@ -6,6 +6,7 @@
 
 #include "animfind.h"
 #include "glob.h"
+#include "simdmat.h"
 #include "sw.h"
 #include "xfmath.h"
 
@@ -49,20 +50,23 @@ void BindAloBones(ALO* palo)
 }
 
 // orig: 0x001684D0 (each item's matrix times its bone's world)
-bool FGlobBoneMatrices(const ALO* palo, int iglob, std::vector<glm::mat4>* pamat)
+bool FGlobBoneMatricesOf(const std::vector<std::vector<GLOBBONEBIND>>* paabind, int iglob, std::vector<glm::mat4>* pamat)
 {
-    auto it = s_mpaloaabind.find(palo);
-    if (it == s_mpaloaabind.end() || iglob < 0 || iglob >= static_cast<int>(it->second.size())) return false;
-    const auto& abind = it->second[iglob];
+    if (!paabind || iglob < 0 || iglob >= static_cast<int>(paabind->size())) return false;
+    const auto& abind = (*paabind)[size_t(iglob)];
     if (abind.empty()) return false;
     pamat->resize(abind.size());
     for (size_t j = 0; j < abind.size(); ++j)
     {
         const GLOBBONEBIND& b = abind[j];
         // (a bone without a record: the original reads the null record's matrix; here the binding alone)
-        (*pamat)[j] = b.pxfBone ? b.pxfBone->matWorld * b.matBind : b.matBind;
+        (*pamat)[j] = b.pxfBone ? MulMat4(b.pxfBone->matWorld, b.matBind) : b.matBind;   // (simdmat.h: glm's product exactly)
     }
     return true;
+}
+bool FGlobBoneMatrices(const ALO* palo, int iglob, std::vector<glm::mat4>* pamat)
+{
+    return FGlobBoneMatricesOf(PaabindOfAlo(palo), iglob, pamat);
 }
 
 const std::vector<std::vector<GLOBBONEBIND>>* PaabindOfAlo(const ALO* palo)

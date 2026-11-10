@@ -9,6 +9,9 @@
 #include <string>
 
 #include "gl_context.h"
+#ifdef __SWITCH__
+#include "../platform/switch/deko/gl_deko.h"   // (Sly 2's OpenGL on SafeHouse's deko3d layer: the offline programs)
+#endif
 
 class GLSHADER
 {
@@ -64,8 +67,13 @@ private:
 
 extern GL g_gl;
 extern GLSHADER glGlobShader;
+// glGlobShader without its fragment discards (NOKILL), for the runs without alpha test and DATE; ID 0: none
+extern GLSHADER glGlobShaderNoKill;
 // (perf-3) glGlobShader built with ARB_bindless_texture (the pass draws' textures per draw: render.cpp)
 extern bool g_fGlobBindless;
+// The pass runs drawn one by one, not by glMultiDrawElementsIndirect (render.cpp): on Mesa's OpenGL on Direct3D 12
+// (Windows on ARM) each indirect draw costs a compute pass (glob.vert reads gl_VertexID)
+extern bool g_fDirectRuns;
 extern GLSHADER glCelBorderShader;
 extern GLSHADER glHudShader;
 extern GLSHADER glOverlayShader;

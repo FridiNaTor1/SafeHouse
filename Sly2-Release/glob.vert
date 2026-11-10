@@ -2,6 +2,13 @@
 // Sly 2 glob program (type-0 meshes), adapted from Sly1-Release glob.vert: what the VU1 program P_G computes for
 // a vertex (transform, the pass's vertex colour) done the GL way. Colours stay in GS units (0..255, 0x80 = 1.0).
 
+#ifdef DEKO3D
+// (the Switch: the position computed exactly as written, so celborder.vert's depth test (GEQUAL against this depth)
+// sees the same bits: the compiler would otherwise fuse multiply-adds differently in the two programs)
+invariant gl_Position;
+precise gl_Position;
+#endif
+
 // (with glob.geom, the near-plane clip: the outputs go to it under these names, and it passes them on as v*)
 #ifdef GEOM
 #define vColor gsColor
@@ -61,54 +68,60 @@ void main()
 #ifdef BINDLESS
     vTexh = atexh[aDraw];
 #endif
-    REC rec = arec[floatBitsToUint(d.w)];
-    vec4 fogParams = rec.fog;
+    // (the record's fields read where they are used, not the whole record per vertex: a skinned vertex never reads the
+    // model matrix, and only the view-angle groups read the spec fields)
+    const uint irec = floatBitsToUint(d.w);
+    vec4 fogParams = arec[irec].fog;
+    const uvec4 recBone = arec[irec].bone;
+    const uvec4 recWarp = arec[irec].warp;
     vec4 posWorld;
-    if (rec.bone.y != 0u)
+    if (recBone.y != 0u)
     {
         vec4 p = vec4(aPos, 1.0);
-        posWorld = aWeight.x * (abone[rec.bone.x + min(aBone.x, rec.bone.y - 1u)] * p)
-                 + aWeight.y * (abone[rec.bone.x + min(aBone.y, rec.bone.y - 1u)] * p)
-                 + aWeight.z * (abone[rec.bone.x + min(aBone.z, rec.bone.y - 1u)] * p)
-                 + aWeight.w * (abone[rec.bone.x + min(aBone.w, rec.bone.y - 1u)] * p);
+        posWorld = aWeight.x * (abone[recBone.x + min(aBone.x, recBone.y - 1u)] * p)
+                 + aWeight.y * (abone[recBone.x + min(aBone.y, recBone.y - 1u)] * p)
+                 + aWeight.z * (abone[recBone.x + min(aBone.z, recBone.y - 1u)] * p)
+                 + aWeight.w * (abone[recBone.x + min(aBone.w, recBone.y - 1u)] * p);
         posWorld.w = 1.0;
     }
     else
-        posWorld = rec.model * vec4(aPos, 1.0);
+        posWorld = arec[irec].model * vec4(aPos, 1.0);
     vec2 duv = vec2(0.0);
-    if (rec.warp.x != 0u)
+    if (recWarp.x != 0u)
     {
-        uint ivtx = uint(gl_VertexID) - rec.bone.z;
-        uint cmat = rec.warp.w & 0xFFu;
+        uint ivtx = uint(gl_VertexID) - recBone.z;
+        uint cmat = recWarp.w & 0xFFu;
         vec3 dpos = vec3(0.0);
         for (uint imat = 0u; imat < cmat; ++imat)
         {
-            vec4 st = awarp[rec.warp.x - 1u + imat * rec.warp.y + ivtx];
-            dpos += (amatWarp[rec.warp.z + imat] * st).xyz;
-            duv += (amatWarp[rec.warp.z + 4u + imat] * st).xy;
+            vec4 st = awarp[recWarp.x - 1u + imat * recWarp.y + ivtx];
+            dpos += (amatWarp[recWarp.z + imat] * st).xyz;
+            duv += (amatWarp[recWarp.z + 4u + imat] * st).xy;
         }
-        if ((rec.warp.w & 0x100u) != 0u) posWorld.xyz += dpos;
-        if ((rec.warp.w & 0x200u) == 0u) duv = vec2(0.0);
+        if ((recWarp.w & 0x100u) != 0u) posWorld.xyz += dpos;
+        if ((recWarp.w & 0x200u) == 0u) duv = vec2(0.0);
     }
     gl_Position = matWorldToClip * posWorld;
     vec4 c = icolor == 0 ? aRgbaA : (icolor == 1 ? aRgbaB : rgbaConst);
     float aA = aRgbaA.a;
-    if (rec.spec1.z != 0.0 && (icolor == 0 || icolor == 3))
+    if ((icolor == 0 || icolor == 3) && arec[irec].spec1.z != 0.0)
     {
         // P_G 638: the direction to the camera in the group's space (1909's matrix; 0: -view direction, 1: from the
         // point, 2: from the vertex), . the S8 normal (n x 127, truncated as 0x16A000 packs it), a quadratic gain
         // clamped, colour A's alpha x gain rounded (FTOI0 of a x g + 0.5)
-        mat3 mInv = inverse(mat3(rec.model));
+        const mat4 model = arec[irec].model;
+        const vec4 spec0 = arec[irec].spec0, spec1 = arec[irec].spec1;
+        mat3 mInv = inverse(mat3(model));
         vec3 v;
-        if (rec.spec0.w == 0.0) v = mInv * -dirCamera;
+        if (spec0.w == 0.0) v = mInv * -dirCamera;
         else
         {
-            vec3 cam = mInv * (posCamera - rec.model[3].xyz);
-            v = rec.spec0.w == 1.0 ? cam - rec.specPos.xyz : cam - aPos;
+            vec3 cam = mInv * (posCamera - model[3].xyz);
+            v = spec0.w == 1.0 ? cam - arec[irec].specPos.xyz : cam - aPos;
         }
         v = normalize(v);
         float x = dot(v, trunc(aNormal * 127.0));
-        float g = clamp(rec.spec0.x + rec.spec0.y * x + rec.spec0.z * x * x, rec.spec1.x, rec.spec1.y);
+        float g = clamp(spec0.x + spec0.y * x + spec0.z * x * x, spec1.x, spec1.y);
         aA = floor(aA * g + 0.5);
         if (icolor == 0) c.a = aA;
     }

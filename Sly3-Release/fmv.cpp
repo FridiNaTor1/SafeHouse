@@ -20,7 +20,9 @@ extern "C"
 #include <libswscale/swscale.h>
 }
 
-#include <SDL.h>
+#ifndef __SWITCH__
+#include <SDL.h>   // (the stand-alone movie window of --play-movie; the Switch build has no SDL)
+#endif
 
 #include <algorithm>
 #include <chrono>
@@ -600,6 +602,13 @@ int ListMoviesCommand()
     return 0;
 }
 
+#ifdef __SWITCH__
+int PlayMovieCommand(const std::string&, const std::string&, double)
+{
+    std::fprintf(stderr, "--play-movie is a desktop development command\n");
+    return 1;
+}
+#else
 namespace
 {
 struct SDLPRESENTER
@@ -708,3 +717,4 @@ int PlayMovieCommand(const std::string& arg, const std::string& dirOut, double t
     ShutdownAudio();
     return f ? 0 : 1;
 }
+#endif

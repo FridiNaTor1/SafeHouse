@@ -24,16 +24,29 @@
 #if defined(__APPLE__)
 #include <mach-o/dyld.h>
 #endif
+#if defined(__SWITCH__)
+#include "switch/file_io.h"
+#endif
 #endif
 namespace cane {
 namespace fs = std::filesystem;
 inline fs::path dataOverride, userOverride;
 inline std::string utf8(const fs::path& path) { auto s=path.u8string(); return {s.begin(),s.end()}; }
 inline fs::path path(const std::string& s) { return fs::path(std::u8string(s.begin(),s.end())); }
+// fs::absolute, except for Switch device paths ("sdmc:/..."), which newlib's std::filesystem does not see as absolute.
+inline fs::path absolutePath(const fs::path& p) {
+#if defined(__SWITCH__)
+ const std::string s=p.generic_string(); const auto colon=s.find(':');
+ if(colon!=std::string::npos && colon>0 && colon+1<s.size() && s[colon+1]=='/' && s.find('/')==colon+1) return p;
+#endif
+ return fs::absolute(p);
+}
 inline fs::path executableDirectory() {
 #ifdef _WIN32
  std::wstring p(32768,L'\0'); auto n=GetModuleFileNameW(nullptr,p.data(),static_cast<DWORD>(p.size()));
  if(n && n<p.size()) {p.resize(n);return fs::path(p).parent_path();}
+#elif defined(__SWITCH__)
+ return fs::path("sdmc:/switch/SafeHouse");
 #elif defined(__APPLE__)
  uint32_t size=0; _NSGetExecutablePath(nullptr,&size);
  std::string p(size,'\0');
@@ -73,13 +86,16 @@ inline void configureRuntime(const std::vector<std::string>& args) {
  for(size_t i=0;i<args.size();++i) {
   if(args[i]!="--data-dir" && args[i]!="--user-dir") throw std::runtime_error("Unknown argument: "+args[i]);
   auto option=args[i]; if(++i==args.size()) throw std::runtime_error("Missing path for "+option);
-  auto p=fs::absolute(path(args[i])); if(option=="--data-dir") dataOverride=p;else userOverride=p;
+  auto p=absolutePath(path(args[i])); if(option=="--data-dir") dataOverride=p;else userOverride=p;
  }
  fs::create_directories(userDirectory());
 }
 inline bool atomicReplace(const fs::path& temporary,const fs::path& destination) {
 #ifdef _WIN32
  return MoveFileExW(temporary.c_str(),destination.c_str(),MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH)!=0;
+#elif defined(__SWITCH__)
+ // The SD card's FAT cannot rename over a file: the old one is kept as <file>.previous until the new one is in place.
+ return CaneIo::AtomicReplace(temporary,destination);
 #else
  std::error_code ec;fs::rename(temporary,destination,ec);return !ec;
 #endif

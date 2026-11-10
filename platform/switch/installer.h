@@ -1,0 +1,30 @@
+#pragma once
+// The first-boot installer (installer.cpp): every game's, with ProjectCane's screens (platform/installer/view.h) over
+// the Switch UI host (switch_ui.h). It lists the SD card's folders and disc images (.iso, .chd: platform/disc_image.h),
+// checks the image chosen is the game's (platform/games.h), runs the game's own conversion on a worker thread into
+// <data>.partial and renames that to the game's data folder at the end, so an interrupted install never looks installed.
+#include <functional>
+#include <string>
+
+namespace CaneSwitch
+{
+// The conversion's progress: the fraction done, what it is doing; false when the player cancelled.
+using InstallProgress = std::function<bool(float fraction, const std::string& stage, const std::string& file)>;
+
+struct InstallJob
+{
+    int game = 0;                   // the cane::GameId the disc image must be (games.h)
+    std::string hint;               // the browse screen's line ("Select a Sly 2 ISO (USA, Europe or Japan).")
+    // Converts the disc image into `directory` (created, empty): "" when done, "cancelled", or what went wrong.
+    std::function<std::string(const std::string& iso, const std::string& directory, const InstallProgress& progress)> convert;
+    // (optional) an installation whose files need updating in place, and the update (ProjectCane's level rebuild)
+    std::function<bool(const std::string& directory)> needsUpdate;
+    std::function<std::string(const std::string& directory, const InstallProgress& progress)> update;
+    bool restart = true;            // start the program again after installing (a clean process for the game)
+    bool readsChd = false;          // convert reads a CHD itself (else the installer writes it out as an .iso first)
+};
+
+// The installer, for the game whose data folder is GetPaths().data. True: the game starts in this process; false: the
+// program ends (the player quit, it failed after showing why, or it restarts itself into the game).
+bool RunInstaller(const InstallJob& job);
+}  // namespace CaneSwitch

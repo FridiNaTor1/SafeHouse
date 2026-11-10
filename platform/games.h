@@ -9,6 +9,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -151,18 +152,23 @@ inline bool readAt(std::ifstream& in, uint64_t offset, void* data, size_t size) 
     in.read(static_cast<char*>(data), static_cast<std::streamsize>(size));
     return in.gcount() == static_cast<std::streamsize>(size);
 }
+// Reads `size` bytes at `offset` of a disc image (an .iso, or a CHD: platform/disc_image.h); false when it cannot.
+using DiscReader = std::function<bool(uint64_t offset, void* data, size_t size)>;
+inline DiscReader discReader(std::ifstream& in) {
+    return [&in](uint64_t offset, void* data, size_t size) { return readAt(in, offset, data, size); };
+}
 inline uint32_t le32(const uint8_t* p) { return uint32_t(p[0]) | uint32_t(p[1]) << 8 | uint32_t(p[2]) << 16 | uint32_t(p[3]) << 24; }
-inline IsoVolume readIsoVolume(std::ifstream& in) {
+inline IsoVolume readIsoVolume(const DiscReader& read) {
     IsoVolume volume;
     std::array<uint8_t, kIsoSector> pvd{};
-    if (!readAt(in, 16ull * kIsoSector, pvd.data(), pvd.size()) || std::memcmp(pvd.data(), "\x01" "CD001" "\x01", 7) != 0)
+    if (!read(16ull * kIsoSector, pvd.data(), pvd.size()) || std::memcmp(pvd.data(), "\x01" "CD001" "\x01", 7) != 0)
         return volume;
     volume.blocks = le32(pvd.data() + 80);
     const uint8_t* root = pvd.data() + 156;
     const uint32_t rootSector = le32(root + 2), rootSize = le32(root + 10);
     if (rootSize == 0 || rootSize > 64 * kIsoSector) return volume;
     std::vector<uint8_t> dir(rootSize);
-    if (!readAt(in, uint64_t(rootSector) * kIsoSector, dir.data(), dir.size())) return volume;
+    if (!read(uint64_t(rootSector) * kIsoSector, dir.data(), dir.size())) return volume;
     for (size_t i = 0; i < dir.size();) {
         const uint8_t length = dir[i];
         if (length == 0) {
@@ -183,6 +189,7 @@ inline IsoVolume readIsoVolume(std::ifstream& in) {
     volume.valid = true;
     return volume;
 }
+inline IsoVolume readIsoVolume(std::ifstream& in) { return readIsoVolume(discReader(in)); }
 
 // ---------------------------------------------------------------- identity
 struct DiscIdentity {
@@ -242,16 +249,14 @@ inline std::string bootFileFromSystemCnf(std::string_view text) {
     }
     return {};
 }
-inline DiscIdentity identifyDisc(const std::filesystem::path& file) {
+inline DiscIdentity identifyDisc(const DiscReader& read) {
     DiscIdentity id;
-    std::ifstream in(file, std::ios::binary);
-    if (!in) return id;
     id.kind = DiscIdentity::Kind::NotPs2;
-    const IsoVolume volume = readIsoVolume(in);
+    const IsoVolume volume = readIsoVolume(read);
     const IsoFile* cnf = volume.valid ? volume.find("SYSTEM.CNF") : nullptr;
     if (!cnf || cnf->size == 0 || cnf->size > 4096) return id;
     std::string text(cnf->size, '\0');
-    if (!readAt(in, uint64_t(cnf->sector) * kIsoSector, text.data(), text.size())) return id;
+    if (!read(uint64_t(cnf->sector) * kIsoSector, text.data(), text.size())) return id;
     id.bootFile = bootFileFromSystemCnf(text);
     if (id.bootFile.empty()) return id;
     id.kind = DiscIdentity::Kind::Unknown;
@@ -266,6 +271,11 @@ inline DiscIdentity identifyDisc(const std::filesystem::path& file) {
         else id.kind = DiscIdentity::Kind::OtherRegion;
     }
     return id;
+}
+inline DiscIdentity identifyDisc(const std::filesystem::path& file) {
+    std::ifstream in(file, std::ios::binary);
+    if (!in) return {};
+    return identifyDisc(discReader(in));
 }
 // Why a disc image cannot be installed as `wanted`, or "" when it can.
 inline std::string discMismatch(const DiscIdentity& id, GameId wanted) {

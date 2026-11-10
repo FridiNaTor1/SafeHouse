@@ -52,9 +52,21 @@ cane::rumble::SdlRumble s_sdl;
 bool s_fSdlTried = false;
 #endif
 
+#ifdef __SWITCH__
+}  // namespace
+void CaneSwitchRumble(float low, float high);   // platform/switch/glfw_switch.cpp (HD rumble)
+namespace
+{
+#endif
 void SendMotors(uint8_t bSmall, uint8_t bBig)
 {
-#ifdef CANE_SDL_RUMBLE
+#if defined(__SWITCH__)
+    // the DualShock's motors on the Joy-Cons / Pro Controller: the big one (0..255) as the low band's amplitude, the
+    // small one (on / off) as the high band at full
+    if (!s_fWindow || s_jid < 0) return;
+    if (!g_fControllerVibration) bSmall = bBig = 0;
+    CaneSwitchRumble(float(bBig) / 255.0f, bSmall ? 1.0f : 0.0f);
+#elif defined(CANE_SDL_RUMBLE)
     if (!s_fWindow || s_jid < 0) return;   // (headless, the keyboard and mouse: nothing to drive)
     if (!s_sdl.ready()) return;   // (started by SetRumblePad at the first windowed frame)
     if (!g_fControllerVibration) bSmall = bBig = 0;

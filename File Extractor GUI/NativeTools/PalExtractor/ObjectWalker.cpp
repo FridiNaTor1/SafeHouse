@@ -4,6 +4,7 @@
 #include <stdexcept>
 #include <string_view>
 
+namespace cane::pal {
 namespace {
 struct CidLoader { int cid; const char* cidName; const char* loader; };
 constexpr CidLoader kCidLoaders[] = {
@@ -496,3 +497,5 @@ std::uint8_t BrxWalker::LoadGlobset(CBinaryInputStream& s) {
     }
     return poseCount;
 }
+
+} // namespace cane::pal

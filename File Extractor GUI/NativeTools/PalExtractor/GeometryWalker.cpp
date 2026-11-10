@@ -2,6 +2,7 @@
 
 #include <stdexcept>
 
+namespace cane::pal {
 GeometrySummary BrxWalker::ReadGeom(CBinaryInputStream& stream) {
     const auto begin = stream.GetOffset();
     stream.F32Read();
@@ -70,3 +71,5 @@ void BrxWalker::ReadBspc(CBinaryInputStream& stream,
     stats_.bspNodes += count;
     Trace("ReadBspc", begin, stream.GetOffset());
 }
+
+} // namespace cane::pal

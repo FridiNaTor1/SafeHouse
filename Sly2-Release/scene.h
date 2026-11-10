@@ -30,6 +30,11 @@ struct SCENEGLOBSET
     uint32_t vaGlob = 0;                    // where the reference keeps this glob (ALO+0x80)
     std::vector<glm::mat4> amatGlob;        // per GLOB: its world matrix
     std::vector<uint8_t> afVisible;         // per GLOB: not hidden in the reference's RAM
+#ifdef __SWITCH__
+    // (the Switch: afVisible is all zeros since its last clear, so an entry not drawn frame after frame is not cleared
+    // again twice a frame (scenesw.cpp); whatever can show a group resets it)
+    bool fVisibleCleared = false;
+#endif
     std::vector<std::vector<glm::mat4>> aamatBone;  // per GLOB: skinned groups' bone matrices (bone.h; empty: none)
     int8_t irtgt = -1;                      // drawn into this render target instead of the frame (rtgt.h)
     int8_t irtgtLit = -1;                   // the target whose lights it was last forward-lit with (-1: the frame's)
@@ -49,6 +54,12 @@ struct SCENEGLOBSET
     // stays when the lights changed since did not touch the group (light.h FBakeLightsUnchangedSince)
     std::vector<uint64_t> akeyBakeLights;
     std::vector<uint32_t> aversionKey;
+    // the GLOBs RelightForward can relight (type 0 with run-time lit vertices, glob.h FGlobLit), found once for the
+    // glob array they were found in (ApplyLighting, which can give a group its vertices, forgets them): the others,
+    // most of a world, are not visited each frame
+    std::vector<uint32_t> aiglobLit;
+    const struct GLOB* pglobLitKey = nullptr;
+    size_t cglobLitKey = 0;
     // The light context's position (0x1F2500: the root object's model position, XF +0x70, shared by its children;
     // 0x1A4478 chooses the lights there). Unset: the group's own centre.
     bool fPosLight = false;

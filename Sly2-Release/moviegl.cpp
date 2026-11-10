@@ -99,7 +99,7 @@ bool PresentMovieGl(const uint8_t* prgba, int cx, int cy, void* pv)
                                glfwGetKey(w, GLFW_KEY_SPACE) ||
                                (glfwGetGamepadState(GLFW_JOYSTICK_1, &pad) && pad.buttons[GLFW_GAMEPAD_BUTTON_START]);
         if (FMovieShortcutSkip(m, fShortcut)) return false;
-        // (skipcut.h) any button shows "Hold (O) to skip"; Circle held 3 s (or pressed, with Instant Skip) skips
+        // (skipcut.h) any button shows "Hold (O) to skip"; Circle held 2 s (or pressed, with Instant Skip) skips
         const double tNow = MovieInputTime();
         const float dt = float(std::clamp(tNow - m.tInput, 0.0, 0.1));
         m.tInput = tNow;

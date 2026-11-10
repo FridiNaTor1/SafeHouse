@@ -167,6 +167,29 @@ int UpdateWorldLightsFromSw(const SW* psw)
     static const SW* s_psw = nullptr;
     static size_t s_clight = 0;
     const size_t clight = psw ? AploLights(psw).size() : 0;
+#ifdef __SWITCH__
+    // (the Switch: each light's parameters kept while its options are the same (they only grow, by a proxy's binds,
+    // activate.cpp: the light, its option count and their storage tell), its record and selection data computed again
+    // only when its world matrix changed. A light placed by a record (LOX, nearly all): the record and both matrices
+    // compared, not their product computed each frame.)
+    struct LIGHTKEPT
+    {
+        const LO* plo = nullptr;
+        const OPT* popt = nullptr;
+        size_t copt = 0;
+        bool fOwned = false, fRec = false;
+        LIGHTPARAMS lp;
+        const LOX* plox = nullptr;   // (dynamic_cast's answer for plo)
+        const XF* pxf = nullptr;     // its record when the matrix was computed, and the matrices then
+        glm::mat4 matXf{0.0f}, matLocal{0.0f};
+        glm::mat4 matWorld{0.0f};
+        LIGHTREC rec;
+        LIGHTSEL sel;
+    };
+    static std::vector<LIGHTKEPT> s_akept;
+    if (psw != s_psw || clight != s_clight) s_akept.clear();
+    size_t ilight = 0;
+#endif
     if (psw != s_psw || clight != s_clight) ResetWorldLights();
     s_psw = psw;
     s_clight = clight;
@@ -175,11 +198,66 @@ int UpdateWorldLightsFromSw(const SW* psw)
     bool fWorldLight = false;
     for (const LO* plo : AploLights(psw))
     {
+#ifdef __SWITCH__
+        // (the lights four ahead, as last frame had them, prefetched: their objects, records and matrices are
+        // scattered)
+        if (ilight + 4 < s_akept.size())
+        {
+            const LIGHTKEPT& kn = s_akept[ilight + 4];
+            if (kn.plo)
+            {
+                __builtin_prefetch(&kn.plo->aopt);
+                __builtin_prefetch(&kn.plo->fInWorld);
+                __builtin_prefetch(&kn.plo->fLightOwned);
+            }
+            if (kn.plox) __builtin_prefetch(&kn.plox->mat);
+            if (kn.pxf) __builtin_prefetch(&kn.pxf->matWorld);
+        }
+        if (ilight == s_akept.size()) s_akept.emplace_back();
+        LIGHTKEPT& k = s_akept[ilight++];
+        if (k.plo != plo || k.popt != plo->aopt.data() || k.copt != plo->aopt.size() || k.fOwned != plo->fLightOwned)
+        {
+            k = LIGHTKEPT{plo, plo->aopt.data(), plo->aopt.size(), plo->fLightOwned, false, LightParamsOfLo(plo)};
+            k.plox = dynamic_cast<const LOX*>(plo);
+        }
+        const LIGHTPARAMS& lp = k.lp;
+        if (lp.kind > 1) continue;
+        bool fSame = k.fRec;
+        if (fSame && k.plox)
+        {
+            const XF* pxf = k.plox->pxf;
+            fSame = pxf == k.pxf && std::memcmp(&k.plox->mat, &k.matLocal, sizeof(glm::mat4)) == 0 &&
+                    (!pxf || std::memcmp(&pxf->matWorld, &k.matXf, sizeof(glm::mat4)) == 0);
+        }
+        glm::mat4 matWorld = k.matWorld;
+        if (!k.plox || !fSame)
+        {
+            matWorld = MatWorldOfLight(plo);
+            if (k.plox)
+            {
+                k.pxf = k.plox->pxf;
+                k.matLocal = k.plox->mat;
+                if (k.pxf) k.matXf = k.pxf->matWorld;
+            }
+            else fSame = fSame && std::memcmp(&matWorld, &k.matWorld, sizeof(glm::mat4)) == 0;
+        }
+        if (!fSame)
+        {
+            k.rec = LIGHTREC{};
+            k.sel = LIGHTSEL{};
+            ComputeLight(lp, matWorld, k.rec, k.sel);
+            k.matWorld = matWorld;
+            k.fRec = true;
+        }
+        LIGHTREC rec = k.rec;
+        LIGHTSEL sel = k.sel;
+#else
         const LIGHTPARAMS lp = LightParamsOfLo(plo);
         LIGHTREC rec;
         LIGHTSEL sel;
         ComputeLight(lp, MatWorldOfLight(plo), rec, sel);
         if (lp.kind > 1) continue;
+#endif
         sel.fShadow = lp.n158;
         static const bool s_fDbg = std::getenv("SLY2_LIGHTDBG") != nullptr;
         static int s_cdbg = 0;

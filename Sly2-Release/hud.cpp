@@ -38,7 +38,15 @@ constexpr float UI_KY = 5.0f / 11.0f;           // 0x3EE8BA2F
 glm::vec2 ScreenFromGs(float tx, float ty)
 {
     // GS pixel = (t - 2^19) mod 4096 (the 12.4 register keeps 16 bits), then the frame offset.
+#ifdef __SWITCH__
+    // (the Switch: newlib's fmodf is a slow bit-by-bit loop. v - 4096 trunc(v / 4096) is the same value: the scalings
+    // by a power of two are exact, and so is the difference of two floats of the same sign within a factor of two of
+    // each other (Sterbenz); only an exact zero's sign may differ, which the offsets below do not see)
+    auto mod4096 = [](float v) { return v - 4096.0f * std::trunc(v * (1.0f / 4096.0f)); };
+    const float gx = mod4096(tx - GS_BIAS), gy = mod4096(ty - GS_BIAS);
+#else
     const float gx = std::fmod(tx - GS_BIAS, 4096.0f), gy = std::fmod(ty - GS_BIAS, 4096.0f);
+#endif
     return glm::vec2((gx - FRAME_OFX) * 1.25f, (gy - FRAME_OFY) * 2.0f);
 }
 
@@ -111,7 +119,10 @@ void CHud::DrawSprite(const SELEM& elem, const HUDSTATE& st)
         glm::vec4 c = glm::clamp(Rgba(poly.rgba) * st.scale + st.offset, glm::vec4(0.0f), glm::vec4(255.0f));
         c = glm::floor(c);
         const float z = (float(poly.control) * 100.0f + st.depth) / 16777216.0f;
-        std::vector<VTX> av;
+        // (one array for every polygon, kept, not one allocated per polygon; the HUD is drawn on the game thread only)
+        static std::vector<VTX> s_av;
+        std::vector<VTX>& av = s_av;
+        av.clear();
         for (size_t i = 0; i < poly.axy.size(); ++i)
         {
             const float x = poly.axy[i][0] / 16.0f, y = poly.axy[i][1] / 16.0f;
@@ -911,11 +922,27 @@ void CHud::Flush(int width, int height)
     glBindVertexArray(s_vao);
     glBindBuffer(GL_ARRAY_BUFFER, s_vbo);
     // one buffer: the triangles, the lines, the quads
+#ifdef __SWITCH__
+    // (the Switch: each part written into the buffer where it goes, not gathered into one array first and copied again)
+    std::vector<size_t> aivtxQuad;
+    size_t cvtx = m_atri.size() + m_aline.size();
+    for (const QUAD& q : m_aquad) { aivtxQuad.push_back(cvtx); cvtx += q.av.size(); }
+    glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(cvtx * sizeof(VTX)), nullptr, GL_STREAM_DRAW);
+    size_t ivtx = 0;
+    auto put = [&](const VTX* pv, size_t c) {
+        if (c) glBufferSubData(GL_ARRAY_BUFFER, GLintptr(ivtx * sizeof(VTX)), GLsizeiptr(c * sizeof(VTX)), pv);
+        ivtx += c;
+    };
+    put(m_atri.data(), m_atri.size());
+    put(m_aline.data(), m_aline.size());
+    for (const QUAD& q : m_aquad) put(q.av.data(), q.av.size());
+#else
     std::vector<VTX> av = m_atri;
     av.insert(av.end(), m_aline.begin(), m_aline.end());
     std::vector<size_t> aivtxQuad;
     for (const QUAD& q : m_aquad) { aivtxQuad.push_back(av.size()); av.insert(av.end(), q.av.begin(), q.av.end()); }
     glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(av.size() * sizeof(VTX)), av.data(), GL_STREAM_DRAW);
+#endif
     glLineWidth(std::max(1.0f, float(height) / 448.0f));
     glClearStencil(0);
     glStencilMask(0xFF);

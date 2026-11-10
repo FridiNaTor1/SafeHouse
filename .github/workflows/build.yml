@@ -154,9 +154,15 @@ jobs:
 
   # Cross-built with LLVM/MinGW, the toolchain of the published Windows packages; the games do not build with MSVC.
   windows:
-    name: Windows (LLVM/MinGW cross build)
+    name: Windows ${{ matrix.arch }} (LLVM/MinGW cross build)
     needs: version
     runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: x86_64, toolchain: cmake/mingw-toolchain.cmake, ffmpeg: windows }
+          - { arch: arm64, toolchain: cmake/mingw-toolchain-arm64.cmake, ffmpeg: windows-arm64 }
     timeout-minutes: 120
     env:
       SAFEHOUSE_VERSION: ${{ needs.version.outputs.version }}
@@ -187,30 +193,30 @@ jobs:
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ${{ runner.temp }}/ffmpeg
-          key: ffmpeg-minimal-windows-llvm-mingw-20260616-${{ hashFiles('scripts/ffmpeg-minimal.sh') }}
+          key: ffmpeg-minimal-${{ matrix.ffmpeg }}-llvm-mingw-20260616-${{ hashFiles('scripts/ffmpeg-minimal.sh') }}
       - name: FFmpeg (scripts/ffmpeg-minimal.sh, cross-built)
-        run: scripts/ffmpeg-minimal.sh windows "$RUNNER_TEMP/ffmpeg"
+        run: scripts/ffmpeg-minimal.sh ${{ matrix.ffmpeg }} "$RUNNER_TEMP/ffmpeg"
       - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: .ccache
-          key: ccache-windows-${{ github.sha }}
-          restore-keys: ccache-windows-
+          key: ccache-windows-${{ matrix.arch }}-${{ github.sha }}
+          restore-keys: ccache-windows-${{ matrix.arch }}-
       - name: Configure
         run: >-
-          cmake -S . -B build/windows-cross -G Ninja -DCMAKE_TOOLCHAIN_FILE=cmake/mingw-toolchain.cmake -DCMAKE_BUILD_TYPE=Release
+          cmake -S . -B build/windows-cross -G Ninja -DCMAKE_TOOLCHAIN_FILE=${{ matrix.toolchain }} -DCMAKE_BUILD_TYPE=Release
           -DCANE_LTO=OFF -DBUILD_TESTING=OFF -DCANE_BUILD_SLY2=ON -DCANE_BUILD_SLY3=ON -DCANE_FFMPEG_ROOT="$RUNNER_TEMP/ffmpeg"
           -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
           -DSAFEHOUSE_VERSION="$SAFEHOUSE_VERSION" -DSAFEHOUSE_BUILD_DATE="$SAFEHOUSE_BUILD_DATE" -DCANE_GIT_HASH="$CANE_GIT_HASH"
       - name: Build
         run: cmake --build build/windows-cross --parallel 4
       - name: Package (portable zip and offline setup)
-        run: python3 scripts/package.py --build build/windows-cross --output dist --windows
+        run: python3 scripts/package.py --build build/windows-cross --output dist --windows --arch ${{ matrix.arch }}
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: windows-release
+          name: windows-${{ matrix.arch }}-release
           path: |
-            dist/SafeHouse-Launcher-Windows-x86_64-Portable.zip
-            dist/SafeHouse-Launcher-Windows-x86_64-Setup.exe
+            dist/SafeHouse-Launcher-Windows-${{ matrix.arch }}-Portable.zip
+            dist/SafeHouse-Launcher-Windows-${{ matrix.arch }}-Setup.exe
           if-no-files-found: error
 
   # The packages built above, installed and started on a real Windows (scripts/windows/smoke.ps1), and updated in
@@ -231,7 +237,7 @@ jobs:
           sparse-checkout-cone-mode: false
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: windows-release
+          name: windows-x86_64-release
           path: dist
       - name: Mesa (llvmpipe), for the test only
         shell: pwsh
@@ -248,6 +254,36 @@ jobs:
           name: windows-smoke-screenshots
           path: ${{ runner.temp }}/smoke/*.png
 
+  # Nintendo Switch: SafeHouse.nro (launcher, Sly 1 and Sly 2) with devkitPro's devkitA64 + libnx + deko3d
+  # (cmake/devkitA64-libnx.cmake, cmake/Switch.cmake). The image already has switch-dev, switch-ffmpeg, deko3d and uam.
+  switch:
+    name: Nintendo Switch (devkitPro)
+    needs: version
+    runs-on: ubuntu-24.04
+    container: devkitpro/devkita64:20260219
+    timeout-minutes: 120
+    env:
+      SAFEHOUSE_VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Configure
+        run: cmake --preset switch-release -DSAFEHOUSE_VERSION="$SAFEHOUSE_VERSION"
+      - name: Build
+        run: cmake --build --preset switch-release --parallel 4
+      - name: Check the program
+        run: |
+          set -eu
+          nro=build/switch-release/nro/SafeHouse.nro
+          test -s "$nro"
+          head -c 20 "$nro" | tail -c 4 | grep -q NRO0
+          mkdir -p dist && cp "$nro" dist/SafeHouse.nro
+          ls -l dist
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: switch-release
+          path: dist/SafeHouse.nro
+          if-no-files-found: error
+
   macos:
     name: macOS
     needs: version
@@ -259,7 +295,7 @@ jobs:
 
   release:
     name: Publish the release
-    needs: [version, linux, windows, windows-smoke, macos]
+    needs: [version, linux, windows, windows-smoke, macos, switch]
     # Only from the public repository's main branch, and only when every package built and the Windows ones started.
     if: ${{ github.repository == 'FridiNaTor1/SafeHouse' && needs.version.outputs.publish == 'true' }}
     runs-on: ubuntu-24.04
@@ -291,7 +327,7 @@ jobs:
           rm -f release/*.sha256
           python3 scripts/release-manifest.py release --version "$VERSION" --tag "$TAG" --commit "$COMMIT" --date "$DATE" \
             --require linux-appimage --require linux-tar --require linux-aarch64-appimage --require linux-aarch64-tar --require windows-portable --require windows-setup \
-            --require macos-arm64 --require macos-x86_64
+            --require windows-arm64-portable --require windows-arm64-setup --require macos-arm64 --require macos-x86_64 --require switch-nro
           # (the previous release: the newest tag of this scheme, vX.Y.Z)
           previous=$(git tag --list 'v*' --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sed -n 1p || true)
           {
@@ -309,12 +345,15 @@ jobs:
           |---|---|
           | Windows, installer | `SafeHouse-Launcher-Windows-x86_64-Setup.exe` |
           | Windows, portable (unzip and open `SafeHouse.exe`) | `SafeHouse-Launcher-Windows-x86_64-Portable.zip` |
+          | Windows on ARM, installer | `SafeHouse-Launcher-Windows-arm64-Setup.exe` |
+          | Windows on ARM, portable | `SafeHouse-Launcher-Windows-arm64-Portable.zip` |
           | Linux and Steam Deck, AppImage | `SafeHouse-Launcher-Linux-x86_64.AppImage` |
           | Linux, archive | `SafeHouse-Launcher-Linux-x86_64.tar.gz` |
           | Linux on ARM (Steam Frame), AppImage | `SafeHouse-Launcher-Linux-aarch64.AppImage` |
           | Linux on ARM, archive | `SafeHouse-Launcher-Linux-aarch64.tar.gz` |
           | macOS, Apple silicon | `SafeHouse-Launcher-macOS-arm64.dmg` |
           | macOS, Intel | `SafeHouse-Launcher-macOS-x86_64.dmg` |
+          | Nintendo Switch (homebrew, copy to `sdmc:/switch/SafeHouse/`) | `SafeHouse.nro` |
 
           The launcher updates itself (Settings > Launcher > Check for updates). SHA-256 checksums are in `SHA256SUMS`.
           On macOS, open the app with right-click > Open the first time. The packages contain no game data.

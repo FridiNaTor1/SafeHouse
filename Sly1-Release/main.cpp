@@ -25,6 +25,10 @@
 #include "content.h"
 #include "../platform/platform.h"
 #include "../platform/game_sched.h"
+#ifdef __SWITCH__
+#include "../platform/switch/runtime.h"
+#include "../platform/switch/sly1/deko/backend.h"
+#endif
 #include <atomic>
 #include <chrono>
 #include <cstdio>
@@ -296,6 +300,9 @@ void RunGameFrame()
     if (g_transition.m_fPending != 0)
     {
 		FlushTransitionFrame();
+#ifdef __SWITCH__
+		CaneSwitch::LoadingBoost boost;
+#endif
 		g_transition.Execute(file);
     }
 
@@ -339,6 +346,16 @@ void RunGameFrame()
     // runs the scene to its natural end.
     UpdateSkipCut(g_clock.dtReal);
     const bool fSkipFast = g_psw != nullptr && FSkipCutFastForward();
+#ifdef __SWITCH__
+    // CPU boost while a skipped cutscene fast-forwards (nothing is drawn)
+    static bool s_fSkipBoost = false;
+    if (fSkipFast != s_fSkipBoost)
+    {
+        s_fSkipBoost = fSkipFast;
+        if (fSkipFast) CaneSwitch::BeginLoadingBoost();
+        else CaneSwitch::EndLoadingBoost();
+    }
+#endif
     RenderMenuGui(g_psw);
 
     if (fSkipFast)
@@ -455,6 +472,10 @@ void RunGameFrame()
         stbi_flip_vertically_on_write(true);
         stbi_write_png(s_smokeWindowShot.c_str(), w, h, 4, pixels.data(), w * 4);
     }
+#ifdef __SWITCH__
+    // Render resolution reported to SaltyNX overlays
+    CaneDeko::SetFrameResolution(unsigned(g_gl.renderWidth), unsigned(g_gl.renderHeight));
+#endif
     cane::gl::SwapBuffers(g_gl.window);
 
     ++g_cframe;
@@ -755,6 +776,10 @@ void WindowPosCallback(GLFWwindow*, int, int)
 }
 }
 
+#ifdef __SWITCH__
+// Started by the launcher through cane_game_sly1 (end of this file)
+#define main Sly1Main
+#endif
 #if defined(NDEBUG) && defined(_WIN32) && !defined(CANE_PORTABLE_SHADERS)
 int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int)
 #else
@@ -949,12 +974,27 @@ int main(int cphzArgs, char* aphzArgs[])
     FreeTvGL();
     g_gl.TerminateGL();
     return 0;
-    } catch (const std::exception& e) { ReportFatalRuntimeError(e.what()); std::cerr << "SafeHouse: " << e.what() << std::endl; return 1; }
+    } catch (const std::exception& e) {
+        ReportFatalRuntimeError(e.what());
+        std::cerr << "SafeHouse: " << e.what() << std::endl;
+#ifdef __SWITCH__
+        // Release the screen for the error screen
+        ShutdownSound();
+        if (g_gl.window) g_gl.TerminateGL();
+#endif
+        return 1;
+    }
 }
+#ifdef __SWITCH__
+#undef main
+#endif
 
 
 void Startup()
 {
+#ifdef __SWITCH__
+    CaneSwitch::LoadingBoost boost;
+#endif
 	// Debug mode is intentionally sampled once. Editing the INI while running
 	// takes effect only after restarting the program.
 	LoadDebugModeSetting();
@@ -962,7 +1002,9 @@ void Startup()
     StartupControllerInput();
     ApplySwapInterval();
 
+#ifndef __SWITCH__
     std::cout << "Sly Cooper 2002 Sony Computer Entertainment America & Sucker Punch Productions\n";
+#endif
     SetPhase(PHASE_Startup);
 
     StartupClock();
@@ -981,3 +1023,47 @@ void Startup()
 }
 
 bool fQuitGame;
+
+#ifdef __SWITCH__
+#include "../platform/games.h"
+#include "../platform/installer/iso_extractor.h"
+#include "../platform/switch/installer.h"
+#include <functional>
+namespace
+{
+CaneExtract::ProgressCallback Forward(const CaneSwitch::InstallProgress& progress)
+{
+    return [&progress](const CaneExtract::Progress& p) {
+        return progress(p.total ? float(p.completed) / float(p.total) : 0.0f, p.stage, p.file);
+    };
+}
+std::string Outcome(const std::function<void()>& run)
+{
+    try { run(); }
+    catch (const CaneExtract::Cancelled&) { return "cancelled"; }
+    catch (const std::exception& e) { return e.what(); }
+    return {};
+}
+// First-boot installer: extracts any Sly 1 disc, rebuilds installations with older levels in place.
+const CaneSwitch::InstallJob s_install = {
+    int(cane::GameId::Sly1),
+    "Select a Sly Cooper ISO or CHD (USA, Europe, Japan or Korea).",
+    [](const std::string& iso, const std::string& out, const CaneSwitch::InstallProgress& progress) {
+        std::string error = Outcome([&] { CaneExtract::ExtractGame(iso, out, Forward(progress)); });
+        if (error.empty() && !CaneExtract::IsReady(out)) error = "Some game files are missing. Please run the extraction again.";
+        return error;
+    },
+    [](const std::string& data) { return CaneExtract::NeedsRebuild(data); },
+    [](const std::string& data, const CaneSwitch::InstallProgress& progress) {
+        return Outcome([&] { CaneExtract::RebuildGame(data, Forward(progress)); });
+    },
+    false,
+};
+bool FInstalled(const std::string& data) { return CaneExtract::IsReady(data); }
+const CaneSwitch::Graphics s_graphics = {CaneDeko::Initialize, CaneDeko::Shutdown, CaneDeko::ResizeOutput, CaneDeko::Present,
+                                         CaneDeko::SetSwapInterval, CaneDeko::ProcAddress, nullptr};
+}
+// The only global symbol of Sly 1's object in SafeHouse.nro (cmake/Switch.cmake)
+extern "C" const CaneSwitch::Game cane_game_sly1;
+const CaneSwitch::Game cane_game_sly1 = {"sly1", "Sly Cooper and the Thievius Raccoonus", FInstalled, &s_install, Sly1Main, &s_graphics};
+#endif

@@ -4,12 +4,16 @@
   {"name":"linux-release","generator":"Ninja","binaryDir":"${sourceDir}/build/linux-release","cacheVariables":{"CMAKE_BUILD_TYPE":"Release"}},
   {"name":"windows-release","generator":"Visual Studio 17 2022","architecture":"x64","binaryDir":"${sourceDir}/build/windows-release"},
   {"name":"windows-cross","generator":"Ninja","binaryDir":"${sourceDir}/build/windows-cross","toolchainFile":"${sourceDir}/cmake/mingw-toolchain.cmake","cacheVariables":{"CMAKE_BUILD_TYPE":"Release"}},
-  {"name":"macos-release","generator":"Ninja","binaryDir":"${sourceDir}/build/macos-release","cacheVariables":{"CMAKE_BUILD_TYPE":"Release","CANE_BUILD_GAME":"OFF","CANE_BUILD_SLY3":"ON"}}
+  {"name":"windows-arm64","generator":"Ninja","binaryDir":"${sourceDir}/build/windows-arm64","toolchainFile":"${sourceDir}/cmake/mingw-toolchain-arm64.cmake","cacheVariables":{"CMAKE_BUILD_TYPE":"Release","CANE_FFMPEG_ROOT":"${sourceDir}/build/ffmpeg-windows-arm64"}},
+  {"name":"macos-release","generator":"Ninja","binaryDir":"${sourceDir}/build/macos-release","cacheVariables":{"CMAKE_BUILD_TYPE":"Release","CANE_BUILD_GAME":"OFF","CANE_BUILD_SLY3":"ON"}},
+  {"name":"switch-release","generator":"Ninja","binaryDir":"${sourceDir}/build/switch-release","toolchainFile":"${sourceDir}/cmake/devkitA64-libnx.cmake","cacheVariables":{"CMAKE_BUILD_TYPE":"Release"}}
  ],
  "buildPresets":[
   {"name":"linux-release","configurePreset":"linux-release"},
   {"name":"windows-release","configurePreset":"windows-release","configuration":"Release"},
   {"name":"windows-cross","configurePreset":"windows-cross"},
-  {"name":"macos-release","configurePreset":"macos-release"}
+  {"name":"windows-arm64","configurePreset":"windows-arm64"},
+  {"name":"macos-release","configurePreset":"macos-release"},
+  {"name":"switch-release","configurePreset":"switch-release"}
  ]
 }

@@ -23,9 +23,12 @@ PACKAGES = {
     'linux-aarch64-tar': 'SafeHouse-Launcher-Linux-aarch64.tar.gz',
     'windows-portable': 'SafeHouse-Launcher-Windows-x86_64-Portable.zip',
     'windows-setup': 'SafeHouse-Launcher-Windows-x86_64-Setup.exe',
+    'windows-arm64-portable': 'SafeHouse-Launcher-Windows-arm64-Portable.zip',
+    'windows-arm64-setup': 'SafeHouse-Launcher-Windows-arm64-Setup.exe',
     'macos-arm64': 'SafeHouse-Launcher-macOS-arm64.zip',
     'macos-arm64-dmg': 'SafeHouse-Launcher-macOS-arm64.dmg',
     'macos-x86_64': 'SafeHouse-Launcher-macOS-x86_64.zip',
+    'switch-nro': 'SafeHouse.nro',
     'macos-x86_64-dmg': 'SafeHouse-Launcher-macOS-x86_64.dmg',
 }
 # installation kind (launcher/update.h kindKey) -> package key
@@ -36,6 +39,8 @@ UPDATER = {
     'linux-aarch64-tar': 'linux-aarch64-tar',
     'windows-portable': 'windows-portable',
     'windows-installed': 'windows-portable',
+    'windows-arm64-portable': 'windows-arm64-portable',
+    'windows-arm64-installed': 'windows-arm64-portable',
     'macos-arm64': 'macos-arm64',
     'macos-x86_64': 'macos-x86_64',
 }

@@ -1,4 +1,8 @@
 #version 430 core
+// NOKILL (the Switch): no alpha test, so depth and stencil tests run before shading.
+#ifdef NOKILL
+layout(early_fragment_tests) in;
+#endif
 #define RKO_OneWay   0
 #define RKO_ThreeWay 1
 
@@ -114,8 +118,10 @@ void main()
     projectedVolumeFinalPass = vDrawFlags.z;
     projectedVolumeColor = vProjectedVolumeColor;
 
+#ifndef NOKILL
     if (fAlphaTest == 1)
         AlphaTest();
+#endif
 
     FragColor = vec4(0.0);
 
@@ -290,8 +296,13 @@ float SampleShadowTexture(SHADOW shadow, vec2 uv)
     if (shadow.fDynamic != 0 || shadow.clampT != 0)
         uv.y = clamp(uv.y, halfTexel.y, 1.0 - halfTexel.y);
 
+#ifdef DEKO3D
+    // Implicit derivatives are undefined in this loop; the layers have one level.
+    return textureLod(shadowTextureArray, vec3(uv, float(shadow.textureSlot)), 0.0).a;
+#else
     return texture(shadowTextureArray,
         vec3(uv, float(shadow.textureSlot))).a;
+#endif
 }
 
 void ApplyFog()

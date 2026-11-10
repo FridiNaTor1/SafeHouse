@@ -24,8 +24,10 @@
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -33,8 +35,10 @@
 #include <fstream>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <set>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace fs = std::filesystem;
@@ -43,6 +47,20 @@ using json = nlohmann::ordered_json;
 namespace
 {
 uint32_t Le32(const uint8_t* p) { uint32_t v; std::memcpy(&v, p, 4); return v; }
+
+#ifdef __SWITCH__
+// (the Switch installer's progress: false from it cancels the conversion)
+const CaneConvertProgress* s_pprogress = nullptr;
+bool s_fCancelled = false;
+bool FProgress(size_t done, size_t total, const char* stage, const char* file)
+{
+    if (!s_pprogress || s_fCancelled) return !s_fCancelled;
+    if (!(*s_pprogress)(done, total, stage, file)) s_fCancelled = true;
+    return !s_fCancelled;
+}
+#else
+inline bool FProgress(size_t, size_t, const char*, const char*) { return true; }
+#endif
 
 // ---------------------------------------------------------------------------------------------------------
 // Names (CONVERTER.md "Names"): the world records' internal names (their groups' "<code>_pz" / "_vz" / "_rig"),
@@ -376,6 +394,11 @@ bool FCrawl(std::string& error)
         if (!(s_aworld[i].iwrec >= 0 && FkFromRecord(awrec[i].abRecord).cb)) continue;
         std::printf("crawl: world %zu %s\n", i, s_aworld[i].name.c_str());
         std::fflush(stdout);
+        if (!FProgress(i, s_aworld.size(), "Reading the worlds", s_aworld[i].name.c_str()))
+        {
+            error = "cancelled";
+            return false;
+        }
         FLoadWorldForCrawl(std::to_string(i), int(i));
     }
     // the kinds by content where the key's place did not say (exits, task lists, the executable's keys)
@@ -691,7 +714,8 @@ bool FConvertAudio(FILEINFO& f, std::vector<uint8_t>& ab, const fs::path& root, 
     {
         std::vector<uint8_t> abVideo;
         std::map<int, MOVIEAUDIOTRACK> mpaudio;
-        if (!FDemuxMovie(f.fk, abVideo, mpaudio)) { error = "not a PSS"; return false; }
+        // (from the bytes read: the movie is not read from the disc a second time)
+        if (!FDemuxMovie(ab, abVideo, mpaudio)) { error = "not a PSS"; return false; }
         json aaudio = json::array();
         for (const auto& [track, t] : mpaudio)
         {
@@ -794,43 +818,58 @@ int ConvertCommand(const std::string& out)
             return 1;
         }
     }
-    json files = json::array();
-    std::size_t i = 0;
-    uint64_t cbDisc = 0, cbOut = 0;
-    for (auto& [isector, f] : s_mpfile)
-    {
+    // The files, converted on worker threads: each one read, decompressed, its audio converted and written on its own
+    // (the decoders keep no shared state; the disc's reads are thread-safe). A memory budget keeps a few large files
+    // (the movies: their bytes, their video and their sound at once) from being in flight together. The manifest keeps
+    // the disc's order.
+    std::vector<std::pair<uint32_t, FILEINFO*>> afile;
+    for (auto& [isector, f] : s_mpfile) afile.emplace_back(isector, &f);
+    const std::size_t cfile = afile.size();
+    std::vector<json> ae(cfile);
+    std::atomic<std::size_t> inext{0}, cdone{0}, ilast{0};
+    std::atomic<uint64_t> cbDiscAll{0}, cbOutAll{0};
+    std::atomic<bool> fStop{false};
+    std::mutex mtx;
+    std::condition_variable cv;
+    uint64_t cbInFlight = 0;
+    constexpr uint64_t kcbBudget = 768ull << 20;
+    std::string errorFirst;
+    // one file: false and the error (what follows "convert: ") on a failure
+    auto convertOne = [&](uint32_t isector, FILEINFO& f, json& e, std::string& error) -> bool {
         std::vector<uint8_t> ab(f.fk.cb);
         if (!FReadDisc(isector, 0, ab.data(), ab.size()))
         {
-            std::fprintf(stderr, "convert: cannot read sector 0x%X\n", isector);
-            return 1;
+            char sz[48];
+            std::snprintf(sz, sizeof(sz), "cannot read sector 0x%X", isector);
+            error = sz;
+            return false;
         }
         const bool fCompressed = f.kind == "world" || f.kind == "screen";
         if (fCompressed)
         {
             try { ab = cane::decompressBrx(ab); }
-            catch (const std::exception& e)
+            catch (const std::exception& x)
             {
-                std::fprintf(stderr, "convert: %s: %s\n", f.path.c_str(), e.what());
-                return 1;
+                error = f.path + ": " + x.what();
+                return false;
             }
         }
-        json e = {{"path", f.path}, {"kind", f.kind}, {"sector", isector}, {"disc_size", f.fk.cb}, {"id", f.fk.id}};
+        e = {{"path", f.path}, {"kind", f.kind}, {"sector", isector}, {"disc_size", f.fk.cb}, {"id", f.fk.id}};
         // (format 2) the audio as WAV, the movies as M2V + WAV, the banks' samples as WAV beside them
-        std::string error;
+        uint64_t cbOut = 0;
         if (!g_fConvertPs2 && !FConvertAudio(f, ab, root, e, cbOut, error))
         {
-            std::fprintf(stderr, "convert: %s: %s\n", f.path.c_str(), error.c_str());
-            return 1;
+            error = f.path + ": " + error;
+            return false;
         }
         if (!FWriteFile(root / cane::path(f.path), ab.data(), ab.size()))
         {
-            std::fprintf(stderr, "convert: cannot write %s\n", f.path.c_str());
-            return 1;
+            error = "cannot write " + f.path;
+            return false;
         }
         e["size"] = ab.size();
-        cbDisc += f.fk.cb;
-        cbOut += ab.size();
+        cbDiscAll += f.fk.cb;
+        cbOutAll += cbOut + ab.size();
         if (!f.asectorCopy.empty()) e["copies"] = f.asectorCopy;
         if (fCompressed) e["decompressed"] = true;
         if (!f.name.empty()) e["name"] = f.name;
@@ -849,13 +888,84 @@ int ConvertCommand(const std::string& out)
             for (uint32_t va : f.ava) { char sz[16]; std::snprintf(sz, sizeof(sz), "0x%06X", va); av.push_back(sz); }
             e["executable_keys"] = av;
         }
-        files.push_back(e);
-        if (++i % 50 == 0 || i == s_mpfile.size())
+        return true;
+    };
+    auto worker = [&] {
+        for (;;)
         {
-            std::printf("progress %zu %zu %s\n", i, s_mpfile.size(), f.path.c_str());
+            const std::size_t k = inext.fetch_add(1);
+            if (k >= cfile || fStop) return;
+            auto& [isector, pf] = afile[k];
+            // (the file's bytes about three times over at most: read, converted, its parts)
+            const uint64_t cbNeed = uint64_t(pf->fk.cb) * 3 + (1u << 20);
+            {
+                std::unique_lock<std::mutex> lock(mtx);
+                cv.wait(lock, [&] { return fStop || cbInFlight == 0 || cbInFlight + cbNeed <= kcbBudget; });
+                if (fStop) return;
+                cbInFlight += cbNeed;
+            }
+            std::string error;
+            bool ok = false;
+            try { ok = convertOne(isector, *pf, ae[k], error); }
+            catch (const std::exception& x) { error = pf->path + ": " + x.what(); }
+            {
+                std::lock_guard<std::mutex> lock(mtx);
+                cbInFlight -= cbNeed;
+                if (!ok && errorFirst.empty()) errorFirst = error;
+            }
+            cv.notify_all();
+            if (!ok)
+            {
+                fStop = true;
+                return;
+            }
+            ilast = k;
+            ++cdone;
+        }
+    };
+#ifdef __SWITCH__
+    const unsigned cworker = 3;   // (cores 1 and 2, the reads' and writes' waits overlapped)
+#else
+    const unsigned cworker = 1;   // (desktop: the files one at a time, in the disc's order)
+#endif
+    std::vector<std::thread> athread;
+    for (unsigned k = 0; k < cworker; ++k) athread.emplace_back(worker);
+    // the progress from this thread (the Switch installer's callback; the "progress" lines every 50 files)
+    bool fCancelled = false;
+    std::size_t creported = 0;
+    while (!fStop)
+    {
+        const std::size_t c = cdone.load();
+        if (!FProgress(c, cfile, "Writing the game files", afile[std::min(ilast.load(), cfile - 1)].second->path.c_str()))
+        {
+            fCancelled = true;
+            fStop = true;
+            break;
+        }
+        for (; creported + 50 <= c || (c == cfile && creported < c); creported = std::min(creported + 50, cfile))
+        {
+            std::printf("progress %zu %zu %s\n", std::min(creported + 50, cfile), cfile, afile[std::min(ilast.load(), cfile - 1)].second->path.c_str());
             std::fflush(stdout);
         }
+        if (c == cfile) break;
+        std::unique_lock<std::mutex> lock(mtx);
+        cv.wait_for(lock, std::chrono::milliseconds(50));
     }
+    cv.notify_all();
+    for (std::thread& t : athread) t.join();
+    if (fCancelled)
+    {
+        std::fprintf(stderr, "convert: cancelled\n");
+        return 1;
+    }
+    if (!errorFirst.empty())
+    {
+        std::fprintf(stderr, "convert: %s\n", errorFirst.c_str());
+        return 1;
+    }
+    const uint64_t cbDisc = cbDiscAll, cbOut = cbOutAll;
+    json files = json::array();
+    for (json& e : ae) files.push_back(std::move(e));
     json worlds = json::array();
     for (const WORLDINFO& w : s_aworld)
     {
@@ -894,3 +1004,26 @@ int ConvertCommand(const std::string& out)
                 cbOut / 1048576.0, s);
     return 0;
 }
+
+#ifdef __SWITCH__
+// The Switch installer's conversion (platform/switch/installer.cpp): the disc image opened and checked, its files
+// converted into out. The textures' PNG dump (for modders) is left out: minutes of the console's CPU, ~80 MB.
+std::string CaneConvertDisc(const std::string& iso, const std::string& out, const CaneConvertProgress& progress)
+{
+    s_pprogress = &progress;
+    s_fCancelled = false;
+    struct Reset { ~Reset() { s_pprogress = nullptr; } } reset;
+    if (!FProgress(0, 1, "Checking the disc image", iso.c_str())) return "cancelled";
+    std::string error;
+    if (!g_disc.FOpen(iso, error)) return error;
+    InitLanguage();
+    g_fConvertTextures = false;
+    // (WAV, never FLAC: encoding the European discs' dialog in five languages would take the console's CPU a long
+    // time, and the game then decodes no FLAC while playing; it costs some SD space)
+    g_nConvertFlac = 0;
+    const int rc = ConvertCommand(out);
+    if (s_fCancelled) return "cancelled";
+    if (rc != 0) return "The conversion stopped with an error.";
+    return "";
+}
+#endif

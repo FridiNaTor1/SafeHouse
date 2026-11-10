@@ -11,7 +11,11 @@
 #include "wavfile.h"
 
 // FAudio on every platform (on Windows too, over SDL2), so the mixer behaves the same everywhere.
+#ifdef __SWITCH__
+#include "../platform/switch/audio_switch.h"   // (the Switch's own mixer, with the same surface)
+#else
 #include "../platform/audio_linux.h"
+#endif
 #include "../platform/game_sched.h"
 
 #include <algorithm>
@@ -27,6 +31,11 @@
 #include <thread>
 #include <unordered_map>
 #include <vector>
+#ifdef __SWITCH__
+#include <condition_variable>
+#include <deque>
+#include <mutex>
+#endif
 
 namespace
 {
@@ -1796,7 +1805,9 @@ void TickAll()
         else
             ++it;
     }
+#ifndef __SWITCH__
     SpiopUpdate();
+#endif
 }
 
 void ThreadMain()
@@ -1825,9 +1836,97 @@ void ThreadMain()
             }
             if (clock::now() >= next) next = clock::now() + period;
         }
+#ifdef __SWITCH__
+        // (the Switch: the streams' refills once the lock is let go, so their SD card reads wait without it: SpiopUpdate)
+        SpiopUpdate();
+#endif
         std::this_thread::sleep_until(next);
     }
 }
+
+#ifdef __SWITCH__
+// (the Switch) An installed bank's effect samples read ahead, after the bank's load, on a thread of their own, so a
+// sample's first play does not read its WAV from the SD card with the sound lock held. The reader holds the lock only
+// to look at the bank and to file what it read; a tone played before its sample is read loads it as before
+// (EffectToneSample), and the reader then passes it by.
+struct SAMPLEJOB
+{
+    uint32_t hbank = 0, isector = 0, sampleOffset = 0;
+};
+std::mutex s_mtxSampleJobs;
+std::condition_variable s_cvSampleJobs;
+std::deque<SAMPLEJOB> s_asamplejob;
+std::thread s_threadSamples;
+bool s_fSamplesStop = false;
+
+// (the bank looked up again under the lock: it may have been unloaded since the job was queued)
+EFFECTBANK* PbankOfSampleJob(const SAMPLEJOB& job)
+{
+    EFFECTBANK* pbank = PbankFind(job.hbank);
+    return pbank && pbank->isector == job.isector && !pbank->decodedSamples.count(job.sampleOffset) ? pbank : nullptr;
+}
+
+void SampleReaderMain()
+{
+    for (;;)
+    {
+        SAMPLEJOB job;
+        {
+            std::unique_lock<std::mutex> lock(s_mtxSampleJobs);
+            s_cvSampleJobs.wait(lock, [] { return s_fSamplesStop || !s_asamplejob.empty(); });
+            if (s_fSamplesStop) return;
+            job = s_asamplejob.front();
+            s_asamplejob.pop_front();
+        }
+        {
+            std::lock_guard<std::recursive_mutex> lock(g_mtxSound);
+            if (!PbankOfSampleJob(job)) continue;
+        }
+        const std::string path = g_disc.PathPart(job.isector, "sample" + std::to_string(job.sampleOffset));
+        DecodedEffectSample d;
+        if (path.empty() || !FLoadEffectWav(path, d)) continue;
+        std::lock_guard<std::recursive_mutex> lock(g_mtxSound);
+        EFFECTBANK* pbank = PbankOfSampleJob(job);
+        if (!pbank) continue;
+        TapEffectSample(*pbank, job.sampleOffset, d);
+        pbank->decodedSamples.emplace(job.sampleOffset, std::make_shared<const DecodedEffectSample>(std::move(d)));
+    }
+}
+
+// The samples every tone of a bank just filed plays (g_mtxSound held)
+void QueueBankSamples(const EFFECTBANK& bank)
+{
+    if (!bank.fWavSamples) return;
+    std::vector<uint32_t> aoffset;
+    for (const SOUND& sound : bank.sounds)
+        for (const GRAIN& g : sound.grains)
+            if ((g.type == GRAINK_Tone || g.type == GRAINK_Tone2) && !(g.tone.flags & 8)) aoffset.push_back(g.tone.sampleOffset);
+    std::sort(aoffset.begin(), aoffset.end());
+    aoffset.erase(std::unique(aoffset.begin(), aoffset.end()), aoffset.end());
+    if (aoffset.empty()) return;
+    {
+        std::lock_guard<std::mutex> lock(s_mtxSampleJobs);
+        if (!s_threadSamples.joinable())
+        {
+            s_fSamplesStop = false;
+            s_threadSamples = std::thread(SampleReaderMain);
+        }
+        for (uint32_t offset : aoffset) s_asamplejob.push_back({bank.hbank, bank.isector, offset});
+    }
+    s_cvSampleJobs.notify_one();
+}
+
+void StopSampleReader()
+{
+    {
+        std::lock_guard<std::mutex> lock(s_mtxSampleJobs);
+        s_fSamplesStop = true;
+        s_asamplejob.clear();
+    }
+    s_cvSampleJobs.notify_all();
+    if (s_threadSamples.joinable()) s_threadSamples.join();
+}
+#endif
 }  // namespace
 
 void snd_StartSoundSystem()
@@ -1843,6 +1942,9 @@ void snd_StartSoundSystem()
 void snd_StopSoundSystem()
 {
     if (s_fThread.exchange(false) && s_thread.joinable()) s_thread.join();
+#ifdef __SWITCH__
+    StopSampleReader();   // (before the lock: the reader may be waiting for it to file a sample)
+#endif
     std::lock_guard<std::recursive_mutex> lock(g_mtxSound);
     SpiopStopAll();
     for (auto& [h, pbs] : s_mpsound) DestroyBlockSound(*pbs);
@@ -1888,6 +1990,9 @@ uint32_t snd_BankLoadByLoc(uint32_t isector, uint32_t ib)
         std::printf("snd: bank %08x loaded from sector 0x%x (%zu bytes, %zu sounds)\n", h, isector, bank->bytes.size(),
                     bank->sounds.size());
     s_mpbank[h] = std::move(bank);
+#ifdef __SWITCH__
+    QueueBankSamples(*s_mpbank[h]);   // (its samples read ahead, off the sound lock)
+#endif
     return h;
 }
 

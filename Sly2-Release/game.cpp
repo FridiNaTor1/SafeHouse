@@ -58,6 +58,9 @@ extern uint32_t g_uRandState;  // xfmath.cpp
 #include "rtgt.h"
 
 #include "alo.h"
+#ifdef __SWITCH__
+#include "passhelpers.h"
+#endif
 #include "brx.h"
 #include "clock.h"
 #include "guard.h"
@@ -106,6 +109,9 @@ extern uint32_t g_uRandState;  // xfmath.cpp
 #include <fstream>
 #include <memory>
 #include <thread>
+#ifndef CLOCK_THREAD_CPUTIME_ID
+#define CLOCK_THREAD_CPUTIME_ID 3   // (newlib on the Switch: the FPS log's thread CPU column; clock_gettime fails for it)
+#endif
 
 double g_msGpuFpsLog = 0, g_msHudFpsLog = 0;   // (SLY2N_FPSLOG)
 
@@ -434,7 +440,10 @@ void ApplyRtgtOwners(SCENE& scene, const std::vector<ALO*>& apalo)
         {
             LO* ploCam = pr->ploCamera ? pr->ploCamera : const_cast<LO*>(static_cast<const LO*>(pt->powner));
             const glm::mat4 m = MatJtLo(ploCam);
-            if (static int s_c = 0; std::getenv("SLY2_RTGTDUMP") && s_c++ % 120 == 0)
+            // (debugging: SLY2_RTGTDUMP, every 120th frame)
+            static const bool s_fDump = std::getenv("SLY2_RTGTDUMP") != nullptr;
+            if (static int s_c = 0; s_fDump && s_c++ % 120 == 0)
+            {
                 if (const LOX* px = dynamic_cast<const LOX*>(ploCam))
                     std::printf("rtgt cam ref: ixf %d owner %d parent %d local pos %.1f %.1f %.1f r0 %.2f %.2f %.2f\n", px->ixfRef,
                                 px->pxf && px->pxf->palo ? px->pxf->palo->oid : -1, px->paloParent ? px->paloParent->oid : -1,
@@ -444,6 +453,7 @@ void ApplyRtgtOwners(SCENE& scene, const std::vector<ALO*>& apalo)
                                 rec.rgba.b, rec.rgba.a, rec.dirOrPos.x, rec.dirOrPos.y, rec.dirOrPos.z, rec.angularOffset, rec.angularScale);
                 std::printf("rtgt cam %d cid 0x%X: r0 %.2f %.2f %.2f r1 %.2f %.2f %.2f r2 %.2f %.2f %.2f\n", ploCam->oid, ploCam->Cid(),
                             m[0][0], m[0][1], m[0][2], m[1][0], m[1][1], m[1][2], m[2][0], m[2][1], m[2][2]);
+            }
             // 0x1BE6F0 hands CombineEyeLookAtProj (0x14D8F8) the rows (-r2, -r0, r1) of the object's 0x1A6318
             // matrix: forward -r2, up r1
             SetRtgtCamera(i, glm::vec3(m[3]), glm::vec3(m[1]), -glm::vec3(m[2]), -glm::vec3(m[0]), pr->radFov, pr->sNear);
@@ -578,6 +588,11 @@ int RunGame(const GAMEOPTS& go)
         }
     }
     };
+#ifdef __SWITCH__
+    // (the CPU's loading profile while the first world loads and its scene builds; CaneSwitch::Shutdown ends it on the
+    // error returns)
+    CaneSwitch::BeginLoadingBoost();
+#endif
     psw = PswUpdateTransition(std::move(psw));
     applySetProgress();
     if (!psw)
@@ -639,6 +654,9 @@ int RunGame(const GAMEOPTS& go)
             ApplyDisplaySettings(g_gl.window);
         }
     }
+#ifdef __SWITCH__
+    CaneSwitch::EndLoadingBoost();
+#endif
 
     FILE* pfDump = go.frameDump.empty() ? nullptr : std::fopen(go.frameDump.c_str(), "w");
     // the original's NTSC frame time (its clock reads the EE counter: 1001/60000 s a frame), so clip events on frame
@@ -680,6 +698,7 @@ int RunGame(const GAMEOPTS& go)
         }
         auto stepSim = [&](int frame) {
         g_iframeMain = frame;  // (debug prints: SLY2N_TRANSLOG)
+        InvalidateSceneDrawnTests();   // (scenesw.h: the placement's FAloDrawn answers do not outlive a step)
         // orig 0x20E890: a pending world change
         // (a transition with a wipe is pending only once the wipe is out (0x22B220 -> WIPES_Loading): the queued
         // movies wait for it, as the original plays them inside the transition after its sound reset; played at
@@ -694,6 +713,9 @@ int RunGame(const GAMEOPTS& go)
         }   // orig 0x1B3A48's movies, before the world they lead to
         if (g_transition.fPending)
         {
+#ifdef __SWITCH__
+            CaneSwitch::LoadingBoost boost;   // (the CPU's loading profile while the world loads and its scene builds)
+#endif
             psw = PswUpdateTransition(std::move(psw));
             scene = SCENE{};
             apalo.clear();
@@ -1646,7 +1668,21 @@ int RunGame(const GAMEOPTS& go)
                     if (!plo->paloParent && FCidDerivedFrom(plo->Cid(), 0x30)) s_apaloRoot.push_back(static_cast<ALO*>(plo.get()));
                 s_serialRoot = psw->serial, s_cploRoot = psw->aploAll.size(), s_cParentRoot = g_cLoParentChanges;
             }
+#ifdef __SWITCH__
+            // (the Switch: the hierarchies on the pass helpers, the walk being memory bound. A hierarchy whose records
+            // refer outside it stops before reading there and is redone here after the others, in order: it then reads
+            // every root's world of this frame, where the serial walk read the later roots' previous ones.)
+            static std::vector<uint8_t> s_afRedo;
+            s_afRedo.assign(s_apaloRoot.size(), 0);
+            PassHelpers().ForBlocks(s_apaloRoot.size(), 8, [&](size_t iFirst, size_t iLim) {
+                for (size_t i = iFirst; i < iLim; ++i)
+                    if (!FUpdateAloHierarchyWorldsIsolated(s_apaloRoot[i], s_apaloRoot[i])) s_afRedo[i] = 1;
+            });
+            for (size_t i = 0; i < s_apaloRoot.size(); ++i)
+                if (s_afRedo[i]) UpdateAloHierarchyWorlds(s_apaloRoot[i]);
+#else
             for (ALO* palo : s_apaloRoot) UpdateAloHierarchyWorlds(palo);
+#endif
         }
         DrawSlys(psw.get());
         DebugHitHideHolders(psw.get());   // (debug: hide.h)   // orig 0x18A238: the draw's own placement (state 3's cane on the hook), each step as drawn
@@ -1703,6 +1739,11 @@ int RunGame(const GAMEOPTS& go)
             const double tEnd = tNowSkip + 5000.0;
             double tPoll = tNowSkip;
             bool fSkipped = false;
+#ifdef __SWITCH__
+            // (the fast-forward draws nothing: the CPU's loading profile while it runs)
+            const bool fBoostSkip = FSkipCutFastForward();
+            if (fBoostSkip) CaneSwitch::BeginLoadingBoost();
+#endif
             while (FSkipCutFastForward() && (go.cframe < 0 || frame + 1 < go.cframe) && (!fWindow || now() < tEnd))
             {
                 ++frame;
@@ -1714,6 +1755,9 @@ int RunGame(const GAMEOPTS& go)
                 if (fWindow && now() - tPoll > 50.0) { glfwPollEvents(); tPoll = now(); }
                 if (!FSkipCutStep()) break;
             }
+#ifdef __SWITCH__
+            if (fBoostSkip) CaneSwitch::EndLoadingBoost();
+#endif
             if (fSkipped && std::getenv("SLY2N_SKIPPRINT")) std::printf("skipcut: %.1f ms of fast-forward this frame\n", now() - tNowSkip);
             if (fSkipped && accum.fActive && !accum.fpsVirtual)
                 accum.tLast = now() / 1000.0;   // (the skip's real time is no gameplay time to catch up)
@@ -1828,10 +1872,9 @@ int RunGame(const GAMEOPTS& go)
             static const bool s_fRelightAll = std::getenv("SLY2N_RELIGHTALL") != nullptr;   // (debug: every drawn frame, as before)
             const bool fRelight = !accum.fActive || cstep > 0 || s_fRelightAll;
             // the light contexts' positions: each entry's root object (0x1F2500: the top without a parent)
-            for (size_t k = 0; k < scene.aglobset.size() && k < apalo.size(); ++k)
-            {
+            auto posLightOf = [&](size_t k) {
                 const ALO* proot = apalo[k];
-                if (!proot) continue;
+                if (!proot) return;
                 while (proot->paloParent) proot = proot->paloParent;
                 // (0x1F2500: pl +4 = the root's +0x60 record + 0x70, its world position: an actor's object record, which the
                 // actors' slot-29 teleport moves while the root record stays at the origin)
@@ -1854,7 +1897,17 @@ int RunGame(const GAMEOPTS& go)
                 sgs.fPosLightMoved = (!fRelight && sgs.fPosLightMoved) || !sgs.fPosLight || pos != sgs.posLight;
                 sgs.fPosLight = true;
                 sgs.posLight = pos;
-            }
+            };
+            const size_t cposLight = std::min(scene.aglobset.size(), apalo.size());
+#ifdef __SWITCH__
+            // (the Switch: on the pass helpers, each entry writing only its own fields; the roots' records it reads are
+            // scattered over the scene)
+            PassHelpers().ForBlocks(cposLight, 64, [&](size_t kFirst, size_t kLim) {
+                for (size_t k = kFirst; k < kLim; ++k) posLightOf(k);
+            });
+#else
+            for (size_t k = 0; k < cposLight; ++k) posLightOf(k);
+#endif
             static const bool s_fDrawAll = std::getenv("SLY2N_DRAWALL") != nullptr;  // debug: every glob set
             if (!s_fDrawAll) ApplyDrawPass(psw.get(), scene, apalo);  // orig RenderSw 0x1CDA80's selection
             ApplyRtgtOwners(scene, apalo);   // the binocucom's talking heads (0x1BEB28's lists)
@@ -1957,6 +2010,10 @@ int RunGame(const GAMEOPTS& go)
             {
                 g_gl.Present();
                 if (s_fFpsLog && s_aqGpu[0]) glEndQuery(GL_TIME_ELAPSED), ++s_iqGpu;
+#ifdef __SWITCH__
+                // (SaltyNX's overlays: the scene's render size, which the internal resolution sets)
+                CaneDeko::SetFrameResolution(unsigned(g_gl.renderWidth), unsigned(g_gl.renderHeight));
+#endif
                 cane::gl::SwapBuffers(g_gl.window);
             }
         }

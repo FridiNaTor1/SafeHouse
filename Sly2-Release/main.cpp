@@ -262,6 +262,12 @@ void OnCrashSignal(int sig)
 }
 #endif
 
+#ifdef __SWITCH__
+// (the Switch: SafeHouse.nro runs this one as the PC launcher would, cane_game_sly2 at the end of this file)
+#include "../platform/switch/runtime.h"
+#define main Sly2Main
+#endif
+
 int main(int argc, char** argv)
 {
 #if defined(__linux__) || defined(__APPLE__)
@@ -301,8 +307,8 @@ int main(int argc, char** argv)
         else if (!std::strcmp(argv[i], "--mods") && i + 1 < argc) { modsDir = argv[++i]; fModsGiven = true; }
         else if (!std::strcmp(argv[i], "--texture-pack") && i + 1 < argc) texturePack = argv[++i];
         // the launcher's runtime contract: --data-dir <installations/sly2> --user-dir <profile>/sly2
-        else if (!std::strcmp(argv[i], "--data-dir") && i + 1 < argc) cane::dataOverride = std::filesystem::absolute(cane::path(argv[++i]));
-        else if (!std::strcmp(argv[i], "--user-dir") && i + 1 < argc) cane::userOverride = std::filesystem::absolute(cane::path(argv[++i]));
+        else if (!std::strcmp(argv[i], "--data-dir") && i + 1 < argc) cane::dataOverride = cane::absolutePath(cane::path(argv[++i]));
+        else if (!std::strcmp(argv[i], "--user-dir") && i + 1 < argc) cane::userOverride = cane::absolutePath(cane::path(argv[++i]));
         // display options for this run (over system_settings.dat; display.h)
         else if (!std::strcmp(argv[i], "--aspect") && i + 1 < argc)
         {
@@ -640,3 +646,42 @@ int main(int argc, char** argv)
                  "       | --convert DIR [--no-export-textures] | --export-textures [--out DIR] | --dump-textures DIR W\n");
     return 2;
 }
+
+#ifdef __SWITCH__
+#undef main
+#include "convert.h"
+#include "../platform/games.h"
+#include "../platform/switch/installer.h"
+#include <sys/stat.h>
+namespace
+{
+bool FInstalled(const std::string& data)
+{
+    struct stat st{};
+    return stat((data + "/extraction_manifest.json").c_str(), &st) == 0 && S_ISREG(st.st_mode);
+}
+// The installer's job (platform/switch/installer.h): the disc converted as --convert does (convert.cpp), WAV audio
+// (no FLAC encoding on the console's CPU) and no texture dump. Reading the worlds is the first fifth of the bar.
+const CaneSwitch::InstallJob s_install = {
+    int(cane::GameId::Sly2),
+    "Select a Sly 2: Band of Thieves ISO or CHD (USA, Europe or Japan).",
+    [](const std::string& iso, const std::string& out, const CaneSwitch::InstallProgress& progress) {
+        return CaneConvertDisc(iso, out, [&progress](std::size_t done, std::size_t total, const char* stage, const char* file) {
+            const std::string s = stage ? stage : "";
+            float fraction = total ? float(done) / float(total) : 0.0f;
+            if (s == "Reading the worlds") fraction *= 0.2f;
+            else if (s == "Writing the game files") fraction = 0.2f + 0.8f * fraction;
+            else fraction = 0.0f;
+            return progress(fraction, s, file ? file : "");
+        });
+    },
+    nullptr, nullptr,
+    true,   // (the conversion loaded every world: the game starts in a fresh process)
+};
+}
+// Sly 2 in SafeHouse.nro (platform/switch/runtime.h): the launcher starts it with CaneSwitch::RunGame (the first-boot
+// installer, then Sly2Main with the installation and the user folder, as the PC launcher starts it). The only global
+// symbol of the game's object (cmake/Switch.cmake).
+extern "C" const CaneSwitch::Game cane_game_sly2;
+const CaneSwitch::Game cane_game_sly2 = {"sly2", "Sly 2: Band of Thieves", FInstalled, &s_install, Sly2Main};
+#endif

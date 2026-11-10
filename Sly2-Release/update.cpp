@@ -864,13 +864,14 @@ void UpdateSw(SW* psw)
         }
         Pass(0x1C4468, psw);  // per SW +0x3EAC list entry
         Pass(0x1F77C0, psw);
+        static const bool s_fUpdMiss = std::getenv("SLY2N_UPDMISS") != nullptr;
         for (psw->iupdCur = 0; psw->iupdCur < static_cast<int>(psw->aupd.size()); ++psw->iupdCur)
         {
             const UPDENT& e = psw->aupd[psw->iupdCur];
             if (!(e.grf & GRFUPD_Update) || !e.plo) continue;
             if (FDebugSkipUpdate(psw, e.plo)) continue;   // (debugmenu.h: the noclip's player, placed by the menu)
             if (PFNUPDATE pfn = PfnUpdateForClass(e.plo->pcls)) pfn(e.plo);  // vt slot 16
-            else if (std::getenv("SLY2N_UPDMISS"))
+            else if (s_fUpdMiss)
             {
                 // (debug: the classes whose update (vt slot 16) is not native, once each)
                 static std::unordered_map<uint32_t, bool> s_mp;

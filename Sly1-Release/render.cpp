@@ -1,4 +1,8 @@
 #include "render.h"
+#ifdef CANE_DEKO3D
+#include "shadow_projection.h"
+#include "../platform/switch/sly1/deko/backend.h"
+#endif
 #include "main.h"
 #include "blip.h"
 #include "emitter.h"
@@ -571,8 +575,87 @@ namespace
 void DrawGlobElements(int baseVertex, int firstIndex, int indexCount)
 {
 	const GLuint idrawgl = static_cast<GLuint>(IdrawglCurrent());
+#ifdef CANE_DEKO3D
+	// A draw without the alpha test can use glob.frag's NOKILL variant (with early depth tests).
+	CaneDeko::SetAlphaTest(s_drawgl.fAlphaTest != 0);
+#endif
 	glDrawElementsInstancedBaseVertexBaseInstance(GL_TRIANGLES, (GLsizei)indexCount, GL_UNSIGNED_INT,
 		(void*)(uintptr_t)(firstIndex * sizeof(uint32_t)), 1, (GLint)baseVertex, idrawgl);
+#ifdef CANE_DEKO3D
+	CaneDeko::SetAlphaTest(true);
+#endif
+}
+
+// Early depth tests, only for passes without alpha-tested draws (switching per draw stalls the GPU)
+void SetEarlyDepth(bool fEnabled)
+{
+#ifdef CANE_DEKO3D
+	CaneDeko::SetEarlyDepth(fEnabled);
+#else
+	(void)fEnabled;
+#endif
+}
+
+#ifdef CANE_DEKO3D
+// Opaque draws nearest first, so early depth tests skip hidden surfaces
+void DrawRplNearestFirst(std::vector<RPL>& arpl, int crpl, const glm::vec3& posEye)
+{
+	static std::vector<RPLSORTKEY> s_akey;
+	s_akey.resize(crpl);
+	for (int i = 0; i < crpl; i++)
+	{
+		const glm::vec3 dpos = glm::vec3(arpl[i].ro.posCenter) - posEye;
+		s_akey[i] = { glm::dot(dpos, dpos), i };
+	}
+	std::stable_sort(s_akey.begin(), s_akey.end(), [](const RPLSORTKEY& key0, const RPLSORTKEY& key1)
+	{
+		return key0.z < key1.z;
+	});
+	for (const RPLSORTKEY& key : s_akey)
+		arpl[key.irpl].PFNDRAWRPL(&arpl[key.irpl]);
+}
+#endif
+
+// fFarDepth: drawn after the opaque pass on the far plane, shading only the pixels left uncovered
+void DrawSwBackground(bool fFarDepth)
+{
+	const GLenum depthFunc = fFarDepth ? GL_LEQUAL : GL_ALWAYS;
+	if (fFarDepth)
+		glUniform1i(glslFarDepth, 1);
+
+	if (g_backGroundCount > 0)
+	{
+		glDepthFunc(depthFunc);
+		glDepthMask(false);
+
+		for (int i = 0; i < g_backGroundCount; i++)
+			g_backGroundPrpl[i].PFNDRAWRPL(&g_backGroundPrpl[i]);
+
+		glDepthFunc(GL_LESS);
+		glDepthMask(true);
+
+		g_backGroundCount = 0;
+	}
+
+	if (g_backGroundBlendCount > 0)
+	{
+		glEnable(GL_BLEND);
+		glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ZERO);
+		glDepthFunc(depthFunc);
+		glDepthMask(false);
+
+		for (int i = 0; i < g_backGroundBlendCount; i++)
+			g_backGroundBlendPrpl[i].PFNDRAWRPL(&g_backGroundBlendPrpl[i]);
+
+		glDisable(GL_BLEND);
+		glDepthFunc(GL_LESS);
+		glDepthMask(true);
+
+		g_backGroundBlendCount = 0;
+	}
+
+	if (fFarDepth)
+		glUniform1i(glslFarDepth, 0);
 }
 }
 
@@ -603,6 +686,7 @@ void DrawSw(SW* psw, CM* pcm)
 
 	glstate::Verify("DrawSw begin");
 	glGlobShader.Use();
+	SetEarlyDepth(false);
 	PdrawglEdit()->projectedVolumeFinalPass = 0;
 	glUniform2f(glslShadowHalfTexel, 0.5f / static_cast<float>(g_gl.dyshWidth), 0.5f / static_cast<float>(g_gl.dyshHeight));
 
@@ -644,6 +728,22 @@ void DrawSw(SW* psw, CM* pcm)
 
 		/*glEnable(GL_BLEND);
 		glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);*/
+#ifdef CANE_DEKO3D
+		// The shadow layers are drawn without blending, stencil, scissor, culling or depth test.
+		const bool oldBlend = glIsEnabled(GL_BLEND);
+		const bool oldStencil = glIsEnabled(GL_STENCIL_TEST);
+		const bool oldScissor = glIsEnabled(GL_SCISSOR_TEST);
+		const bool oldCull = glIsEnabled(GL_CULL_FACE);
+		const bool oldDepthTest = glIsEnabled(GL_DEPTH_TEST);
+		GLboolean oldColorMask[4];
+		glGetBooleanv(GL_COLOR_WRITEMASK, oldColorMask);
+		glDisable(GL_BLEND);
+		glDisable(GL_STENCIL_TEST);
+		glDisable(GL_SCISSOR_TEST);
+		glDisable(GL_CULL_FACE);
+		glDisable(GL_DEPTH_TEST);
+		glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+#endif
 
 		glDepthFunc(GL_ALWAYS);
 		glDepthMask(false);
@@ -657,6 +757,19 @@ void DrawSw(SW* psw, CM* pcm)
 		glViewport(0, 0, g_gl.renderWidth, g_gl.renderHeight);
 
 		//glDisable(GL_BLEND);
+#ifdef CANE_DEKO3D
+		if (oldBlend) glEnable(GL_BLEND);
+		else glDisable(GL_BLEND);
+		if (oldStencil) glEnable(GL_STENCIL_TEST);
+		else glDisable(GL_STENCIL_TEST);
+		if (oldScissor) glEnable(GL_SCISSOR_TEST);
+		else glDisable(GL_SCISSOR_TEST);
+		if (oldCull) glEnable(GL_CULL_FACE);
+		else glDisable(GL_CULL_FACE);
+		if (oldDepthTest) glEnable(GL_DEPTH_TEST);
+		else glDisable(GL_DEPTH_TEST);
+		glColorMask(oldColorMask[0], oldColorMask[1], oldColorMask[2], oldColorMask[3]);
+#endif
 
 		glDepthFunc(GL_LESS);
 		glDepthMask(true);
@@ -670,35 +783,16 @@ void DrawSw(SW* psw, CM* pcm)
 	// array once before regular geometry is submitted.
 	BindSwShadowTextures(psw);
 
-	if (g_backGroundCount > 0)
+#ifdef CANE_DEKO3D
+	// Not while a TV context draws: its list blends over the background.
+	const bool fBackgroundLast = g_blotContextCount == 0 && glslFarDepth >= 0;
+#else
+	const bool fBackgroundLast = false;
+#endif
+	if (!fBackgroundLast)
 	{
-		glDepthFunc(GL_ALWAYS);
-		glDepthMask(false);
-
-		for (int i = 0; i < g_backGroundCount; i++)
-			g_backGroundPrpl[i].PFNDRAWRPL(&g_backGroundPrpl[i]);
-
-		glDepthFunc(GL_LESS);
-		glDepthMask(true);
-
-		g_backGroundCount = 0;
-	}
-
-	if (g_backGroundBlendCount > 0)
-	{
-		glEnable(GL_BLEND);
-		glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ZERO);
-		glDepthFunc(GL_ALWAYS);
-		glDepthMask(false);
-
-		for (int i = 0; i < g_backGroundBlendCount; i++)
-			g_backGroundBlendPrpl[i].PFNDRAWRPL(&g_backGroundBlendPrpl[i]);
-
-		glDisable(GL_BLEND);
-		glDepthFunc(GL_LESS);
-		glDepthMask(true);
-
-		g_backGroundBlendCount = 0;
+		SetEarlyDepth(true);
+		DrawSwBackground(false);
 	}
 
 	if (g_blotContextCount > 0)
@@ -706,6 +800,7 @@ void DrawSw(SW* psw, CM* pcm)
 		// TV lighting is scoped by PreTvContext/PostTvContext entries inside
 		// this ordered list. Never carry an unfinished context across frames.
 		g_ptvDrawContext = nullptr;
+		SetEarlyDepth(false);
 
 		for (int i = 0; i < g_blotContextCount; i++)
 			g_blotContextPrpl[i].PFNDRAWRPL(&g_blotContextPrpl[i]);
@@ -717,12 +812,25 @@ void DrawSw(SW* psw, CM* pcm)
 
 	if (g_opaqueCount > 0)
 	{
+		SetEarlyDepth(true);
+#ifdef CANE_DEKO3D
+		DrawRplNearestFirst(g_opaquePrpl, g_opaqueCount, pcm->pos);
+#else
 		for (int i = 0; i < g_opaqueCount; i++)
 			g_opaquePrpl[i].PFNDRAWRPL(&g_opaquePrpl[i]);
+#endif
 
 		g_opaqueCount = 0;
 	}
 
+	if (fBackgroundLast)
+	{
+		SetEarlyDepth(true);
+		glGlobShader.Use();
+		DrawSwBackground(true);
+	}
+
+	SetEarlyDepth(false);
 	if (g_cutOutBlendAddCount > 0)
 	{
 		glEnable(GL_BLEND);
@@ -783,6 +891,7 @@ void DrawSw(SW* psw, CM* pcm)
 
 	if (g_projVolumeCount > 0)
 	{
+		SetEarlyDepth(true);
 		glEnable(GL_BLEND);
 		glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ZERO);
 		glEnable(GL_STENCIL_TEST);
@@ -808,12 +917,18 @@ void DrawSw(SW* psw, CM* pcm)
 
 	if (g_opaqueAfterProjVolumeCount > 0)
 	{
+		SetEarlyDepth(true);
+#ifdef CANE_DEKO3D
+		DrawRplNearestFirst(g_opaqueAfterProjVolumePrpl, g_opaqueAfterProjVolumeCount, pcm->pos);
+#else
 		for (int i = 0; i < g_opaqueAfterProjVolumeCount; i++)
 			g_opaqueAfterProjVolumePrpl[i].PFNDRAWRPL(&g_opaqueAfterProjVolumePrpl[i]);
+#endif
 
 		g_opaqueAfterProjVolumeCount = 0;
 	}
 
+	SetEarlyDepth(false);
 	if (g_cutOutAfterProjVolumeAddCount > 0)
 	{
 		glEnable(GL_BLEND);
@@ -867,6 +982,7 @@ void DrawSw(SW* psw, CM* pcm)
 
 	if (g_murkClearCount > 0)
 	{
+		SetEarlyDepth(true);
 		glEnable(GL_BLEND);
 		glDepthMask(GL_FALSE);
 		glDepthFunc(GL_LEQUAL);
@@ -883,6 +999,7 @@ void DrawSw(SW* psw, CM* pcm)
 
 	if (g_murkOpaqueCount > 0)
 	{
+		SetEarlyDepth(false);
 		PdrawglEdit()->fAlphaTest = 1;
 		glUniform1f(glslAlphaCutOff, 0.1);
 
@@ -896,6 +1013,7 @@ void DrawSw(SW* psw, CM* pcm)
 
 	if (g_murkFillCount > 0)
 	{
+		SetEarlyDepth(true);
 		glEnable(GL_BLEND);
 		glDepthMask(false);
 		glDepthFunc(GL_LEQUAL);
@@ -910,6 +1028,7 @@ void DrawSw(SW* psw, CM* pcm)
 		g_murkFillCount = 0;
 	}
 
+	SetEarlyDepth(false);
 	if (g_translucentAddCount > 0)
 	{
 		glEnable(GL_BLEND);
@@ -1140,7 +1259,7 @@ void DrawDysh(RPL *prpl)
 {
 	DYSH *pdysh = prpl->pdysh;
 
-	if (pdysh == nullptr || pdysh->shadowTex == 0 || pdysh->shadowLayer < 0)
+	if (pdysh == nullptr || pdysh->pshadowGen == nullptr || pdysh->shadowTex == 0 || pdysh->shadowLayer < 0)
 		return;
 
 	glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
@@ -1151,7 +1270,11 @@ void DrawDysh(RPL *prpl)
 	glClearColor(0.f, 0.f, 0.f, 0.f);
 	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
+#ifdef CANE_DEKO3D
+	const glm::mat4 matWorldToClip = CaneShadow::ClipFromUv(pdysh->pshadowGen->matWorldToUv);
+#else
 	glm::mat4 matWorldToClip = g_uvToClip * pdysh->pshadowGen->matWorldToUv;
+#endif
 
 	glUniformMatrix4fv(glslDyshMatWorldClip, 1, GL_FALSE, glm::value_ptr(matWorldToClip));
 	glUniformMatrix4fv(glslDyshModel, 1, GL_FALSE, glm::value_ptr(prpl->ro.model));
@@ -1161,6 +1284,9 @@ void DrawDysh(RPL *prpl)
 
 	if (fHasBones)
 		glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 9, pglobset->boneMatrixSSBO);
+#ifdef CANE_DEKO3D
+	static const GLint alphaLocation = glGetUniformLocation(glDyshadow.ID, "constantAlpha");
+#endif
 
 	for (int i = 0; i < pglobset->aglob.size(); i++)
 	{
@@ -1171,6 +1297,15 @@ void DrawDysh(RPL *prpl)
 		{
 			SUBGLOB& sg = glob.asubglob[a];
 			glUniform1i(glslDyshfSkin, fHasBones && sg.cibnd > 0 ? 1 : 0);
+#ifdef CANE_DEKO3D
+			if (sg.dyshConstantAlpha < 0)
+			{
+				const float alpha = sg.vertices.empty() ? 0.0f : sg.vertices.front().color.a;
+				sg.dyshConstantAlpha = !sg.vertices.empty() && std::all_of(sg.vertices.begin(), sg.vertices.end(),
+					[alpha](const VERTICE& vertex) { return vertex.color.a == alpha; }) ? 1 : 0;
+			}
+			glUniform1i(alphaLocation, sg.dyshConstantAlpha);
+#endif
 			glDrawElementsBaseVertex(GL_TRIANGLES, (GLsizei)sg.indexCount, GL_UNSIGNED_INT, (void*)(uintptr_t)(sg.firstIndex * sizeof(uint32_t)), (GLint)sg.baseVertex);
 		}
 	}
@@ -1325,6 +1460,17 @@ void DrawGlob(RPL* prpl)
 			pdrawgl->uvOffsets = glm::vec2(sai->tcx.du, sai->tcx.dv);
 
 		SHD* pshd = sub.pshd;
+
+		if (prpl->rp == RP_Translucent && pshd != nullptr)
+		{
+			// FillShaders emits the GS ALPHA state with each material packet.
+			// grfshd 2/6 use ordinary source-alpha blending; the remaining
+			// translucent material variants use additive destination blending.
+			if (pshd->grfshd == 2 || pshd->grfshd == 6)
+				glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ZERO);
+			else
+				glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE, GL_ONE, GL_ZERO);
+		}
 
 		// The visible projected-color packet uses PRIM 0x6c (TME=0), so its
 		// PackRGBA bytes are ordinary 0..255 framebuffer color. The earlier

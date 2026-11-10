@@ -226,7 +226,7 @@ struct SystemSettings {
     int mouseMenus;               // 0/1: hover, click and right-click back
     int cameraKeyBindings[kCameraKeyCount]; // GLFW keys, kKeyUnknown = none
     int muteWhenUnfocused;        // 0/1
-    // v12, offset 284 (ProjectCane): one press of Circle skips a cutscene (else hold it 3 s)
+    // v12, offset 284 (ProjectCane): one press of Circle skips a cutscene (else hold it 2 s)
     int instantSkipCutscenes;     // 0/1, default 0
     // v13, offset 288 (ProjectCane, Sly 2): with the keyboard / mouse, the hacking minigame's ship shoots toward a
     // cursor (left click fires)
@@ -305,8 +305,15 @@ inline void defaultMouse(SystemSettings& s) {
     s.mouseAimSensitivity = 100;
     s.mouseInvertX = 0;
     s.mouseInvertY = 0;
+#ifdef __SWITCH__
+    // The Switch's default camera: Sly 2's right stick inverted on both axes, its X as Sly 1's "Right = Turn Right"
+    // default there (Sly 1 does not read these).
+    s.padInvertCameraX = 1;
+    s.padInvertCameraY = 1;
+#else
     s.padInvertCameraX = 0;
     s.padInvertCameraY = 0;
+#endif
     s.mouseInvertBinocX = 0;
     s.mouseInvertBinocY = 0;
     s.mouseInvertTurretX = 0;
@@ -337,7 +344,11 @@ inline SystemSettings defaults() {
     s.vsyncEnabled = 0;
     s.aspectMode = Aspect_Fit;
     s.guiScale = 1.0f;
+#ifdef __SWITCH__
+    s.guiStyle = Gui_Modern;   // (the Switch's default interface)
+#else
     s.guiStyle = Gui_PS2;
+#endif
     std::copy(std::begin(kDefaultKeyboardBindings), std::end(kDefaultKeyboardBindings), s.keyboardBindings);
     std::copy(std::begin(kDefaultGamepadBindings), std::end(kDefaultGamepadBindings), s.gamepadBindings);
     s.disableControllerInputWhenUnfocused = 0;

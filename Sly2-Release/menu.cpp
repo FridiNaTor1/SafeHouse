@@ -592,7 +592,11 @@ void CycleNative(MENUENT& e)
     case NID_Aspect: g_display.aspect = DISPASPECT((int(g_display.aspect) + 1) % 6); break;
     case NID_Resolution:
     {
+#ifdef __SWITCH__
+        static const int an[] = {0, 360, 480, 720, 1080};   // (the Switch: up to the docked screen's 1080 lines)
+#else
         static const int an[] = {0, 360, 480, 720, 1080, 1440, 2160};
+#endif
         const int* p = std::find(std::begin(an), std::end(an), g_display.internalHeight);
         g_display.internalHeight = (p == std::end(an) || p + 1 == std::end(an)) ? an[0] : p[1];
         break;
@@ -606,8 +610,12 @@ void CycleNative(MENUENT& e)
     }
     case NID_FrameRate:
     {
+#ifdef __SWITCH__
+        std::vector<int> an = {30, 60};   // (the Switch: its display's 60 Hz and half of it)
+#else
         // (the launcher's list: these, the monitor's refresh rate, Uncapped)
         std::vector<int> an = {30, 60, 90, 120, 144, 240, DISP_FRAMERATE_UNCAPPED};
+#endif
         if (const int hz = DisplayRefreshRate(g_gl.window); hz >= 30 && hz < DISP_FRAMERATE_UNCAPPED) an.push_back(hz);
         std::sort(an.begin(), an.end());
         an.erase(std::unique(an.begin(), an.end()), an.end());
@@ -800,6 +808,9 @@ std::vector<MENUENT> AentDisplayOptions()
     std::vector<MENUENT> a;
     for (int id = NID_Aspect; id <= NID_DrawDistance + 1; ++id)
     {
+#ifdef __SWITCH__
+        if (id == NID_Window) continue;   // (the Switch: one screen, no window to place)
+#endif
         MENUENT e;
         e.id = id <= NID_DrawDistance ? id : NID_LongShadows;   // (then Long Shadows, settings v16)
         e.pfnSelect = PFN_NativeDisplay;

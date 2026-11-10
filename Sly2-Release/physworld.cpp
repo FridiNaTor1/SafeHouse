@@ -51,6 +51,11 @@ void UpdateEntries17()
     if (!psw) return;
     for (psw->iupdCur = 0; psw->iupdCur < static_cast<int>(psw->aupd.size()); ++psw->iupdCur)
     {
+#ifdef __SWITCH__
+        // (the Switch: the object four entries ahead fetched, its class pointer the first thing read of it)
+        if (size_t(psw->iupdCur) + 4 < psw->aupd.size())
+            if (const LO* pn = psw->aupd[size_t(psw->iupdCur) + 4].plo) __builtin_prefetch(&pn->pcls);
+#endif
         const UPDENT& e = psw->aupd[psw->iupdCur];
         if (!e.plo || (e.grf & 0x24) != 4) continue;
         LO* plo = e.plo;

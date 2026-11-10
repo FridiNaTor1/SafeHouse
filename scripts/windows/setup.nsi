@@ -10,6 +10,9 @@ Unicode true
 ; ProjectCane installation stays as it is (uninstall it from Windows Settings; its uninstaller keeps AppData). The
 ; games' data folder is still %LOCALAPPDATA%\ProjectCane, shared by both, so installed games and saves carry over.
 !define APP_NAME "SafeHouse"
+!ifndef ARCH
+  !define ARCH "x86_64"
+!endif
 !define APP_KEY "Software\SafeHouse\Launcher"
 !define UNINSTALL_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\SafeHouse"
 
@@ -104,11 +107,19 @@ Section -RememberOptions
 SectionEnd
 
 Function .onInit
+!if "${ARCH}" == "arm64"
+  ${IfNot} ${IsNativeARM64}
+    MessageBox MB_OK|MB_ICONSTOP "This SafeHouse setup is for Windows on ARM PCs. Download SafeHouse-Launcher-Windows-x86_64-Setup.exe for this PC." /SD IDOK
+    SetErrorLevel 1
+    Quit
+  ${EndIf}
+!else
   ${IfNot} ${RunningX64}
     MessageBox MB_OK|MB_ICONSTOP "SafeHouse requires 64-bit Windows 10 or later." /SD IDOK
     SetErrorLevel 1
     Quit
   ${EndIf}
+!endif
   ${IfNot} ${AtLeastWin10}
     MessageBox MB_OK|MB_ICONSTOP "SafeHouse requires Windows 10 or later." /SD IDOK
     SetErrorLevel 1

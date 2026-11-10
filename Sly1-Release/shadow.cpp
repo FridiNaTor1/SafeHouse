@@ -1,5 +1,8 @@
 #include "shadow.h"
 #include "dysh.h"
+#ifdef CANE_DEKO3D
+#include "../platform/switch/sly1/deko/backend.h"
+#endif
 #include <algorithm>
 #include <cmath>
 #include <iostream>
@@ -16,6 +19,19 @@ namespace
 	GLuint shadowAlphaProgram = 0;
 	GLuint shadowAlphaVao = 0;
 
+#ifdef CANE_DEKO3D
+	// Precompiled from platform/switch/sly1/deko/shaders/shadowalpha.*
+	bool EnsureShadowAlphaProgram()
+	{
+		if (shadowAlphaProgram != 0)
+			return true;
+
+		shadowAlphaProgram = CaneDeko::CreateProgram("shadowalpha.vert", nullptr, "shadowalpha.frag");
+		if (shadowAlphaVao == 0)
+			glGenVertexArrays(1, &shadowAlphaVao);
+		return true;
+	}
+#else
 	const char* const kShadowAlphaVertexSource = R"(#version 430 core
 void main()
 {
@@ -97,6 +113,7 @@ void main()
 		shadowAlphaProgram = program;
 		return true;
 	}
+#endif
 
 	void CreateShadowTextureArray(int layerCount)
 	{

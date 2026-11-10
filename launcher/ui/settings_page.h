@@ -945,7 +945,7 @@ private:
         toggle("Original PlayStation icons", m_settings.alwaysOriginalPsPrompts,
                "Every device shows the game's original PlayStation 2 button icons. Off: PS4 / PS5 pads show their own icons, other devices theirs.");
         toggle("Instant skip cutscenes", m_settings.instantSkipCutscenes,
-               "One press of Circle skips a cutscene. Off: hold Circle for 3 seconds.");
+               "One press of Circle skips a cutscene. Off: hold Circle for 2 seconds.");
         if (m_game == GameId::Sly1 || m_game == GameId::Sly2) {
             static const std::vector<std::string> cameraRotationLabels{ "Off", "On" };
             int cameraRotation = m_settings.autoCameraRotation != 0 ? 1 : 0;
