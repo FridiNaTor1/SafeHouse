@@ -117,6 +117,12 @@ void* ThreadEntry(void* p)
 
 const Paths& GetPaths() { return g_paths; }
 
+std::string Ps3HdTexturePack(const Game& game)
+{
+    const std::string pack = g_paths.base + "/user/" + game.key + "/PS3 HD";
+    return IsFile(pack + "/Textures.pak") || IsDirectory(pack + "/Textures") ? pack : std::string();
+}
+
 bool Docked() { return appletGetOperationMode() == AppletOperationMode_Console; }
 
 void PinGameThread()
@@ -128,6 +134,7 @@ void PinSoundThread()
     const u64 mask = g_allowedCores & 0x6;
     if (mask) svcSetThreadCoreMask(CUR_THREAD_HANDLE, (mask & 4) ? 2 : 1, mask);
 }
+void LowerThreadPriority() { svcSetThreadPriority(CUR_THREAD_HANDLE, 0x3B); }
 int MixerCore() { return (g_allowedCores & 4) ? 2 : (g_allowedCores & 2) ? 1 : -2; }
 int IoCore() { return (g_allowedCores & 2) ? 1 : (g_allowedCores & 4) ? 2 : -2; }
 
@@ -247,8 +254,13 @@ int RunGame(const Game& game, int argc, char** argv)
     // (a game with its own graphics backend: the launcher's or the installer's window closed, the screen its own)
     UseGraphics(game.graphics);
     SetGameConfiguration(true);
-    // the game as the PC launcher starts it: the installation and the user folder
+    // the game as the PC launcher starts it: the installation, the user folder and the PS3 HD textures when present
     std::vector<std::string> args = {argc > 0 && argv[0] ? argv[0] : game.key, "--data-dir", g_paths.data, "--user-dir", g_paths.user};
+    if (const std::string pack = Ps3HdTexturePack(game); !pack.empty())
+    {
+        args.push_back("--texture-pack");
+        args.push_back(pack);
+    }
     std::vector<char*> av;
     for (std::string& a : args) av.push_back(a.data());
     av.push_back(nullptr);

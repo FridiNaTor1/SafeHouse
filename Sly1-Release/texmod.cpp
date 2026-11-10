@@ -18,6 +18,13 @@
 #include <string>
 #include <unordered_map>
 
+#include "../platform/texture_pak.h"
+
+#ifdef __SWITCH__
+#include "../platform/switch/job_pool.h"
+#include <condition_variable>
+#endif
+
 namespace fs = std::filesystem;
 
 namespace
@@ -28,6 +35,7 @@ constexpr uint32_t kTextureBc3 = 2;
 constexpr uint32_t kGenerateMipmaps = 1u << 2;   // (world textures; fonts lack it)
 
 fs::path s_dumpDirectory, s_packDirectory;
+cane::TexturePakReader s_pak;   // (the pack's Textures.pak: its names map to no path)
 int s_replaced = 0;
 int s_unchanged = 0;
 int s_dumped = 0;
@@ -150,7 +158,8 @@ std::string TextureName(const std::vector<uint8_t>& rgba, uint32_t w, uint32_t h
 }
 
 // The replacement textures by name (lower case): the mods folder's, then the texture pack's (--texture-pack) where
-// the mods folder has none of that name. Scanned once.
+// the mods folder has none of that name. Scanned once. The pack's are in its Textures.pak, else in its Textures folder
+// (an older import's, or a pack of loose PNGs).
 const std::unordered_map<std::string, fs::path>& ModTextures()
 {
     static std::once_flag s_once;
@@ -171,9 +180,59 @@ const std::unordered_map<std::string, fs::path>& ModTextures()
             std::printf("mods: %zu textures in %s%s\n", count, cane::utf8(directory).c_str(), what);
         };
         if (!ModsDirectory().empty()) scan(ModsDirectory() / "Textures", "");
-        if (!s_packDirectory.empty()) scan(s_packDirectory / "Textures", " (texture pack)");
+        if (!s_packDirectory.empty() && s_pak.Open(s_packDirectory / "Textures.pak"))
+        {
+            size_t count = 0;
+            for (const std::string& name : s_pak.Names()) count += s_names.emplace(name, fs::path()).second;
+            std::printf("mods: %zu textures in %s (texture pack)\n", count, cane::utf8(s_packDirectory / "Textures.pak").c_str());
+        }
+        else if (!s_packDirectory.empty()) scan(s_packDirectory / "Textures", " (texture pack)");
     });
     return s_names;
+}
+
+enum class MODRESULT { None, Unchanged, Replaced };
+
+// The replacement of an image whose level 0 is `original`, named `name`: Replaced with its RGBA (rows as the level
+// stores them) and size, Unchanged when those are the original's, else None. It writes no shared state (the Switch's
+// prefetch runs it on its workers).
+MODRESULT FindReplacement(const BMP& image, const std::vector<uint8_t>& original, const std::string& name,
+                          std::vector<uint8_t>& rgba, uint32_t& width, uint32_t& height)
+{
+    std::string key = name;
+    std::transform(key.begin(), key.end(), key.begin(), [](unsigned char c) { return char(std::tolower(c)); });
+    const auto found = ModTextures().find(key);
+    if (found == ModTextures().end()) return MODRESULT::None;
+    const fs::path path = found->second;
+    int pw = 0, ph = 0;
+    stbi_uc* pixels = nullptr;
+    std::vector<uint8_t> file;
+    if (path.empty())   // (from Textures.pak)
+    {
+        if (s_pak.Read(key, file)) pixels = stbi_load_from_memory(file.data(), int(file.size()), &pw, &ph, nullptr, 4);
+    }
+    else
+    {
+#ifdef __SWITCH__
+        // (one read of the whole file: the SD card's file system pays for every read, and stb_image reads 128 bytes at a time)
+        if (CaneSwitch::ReadFile(cane::utf8(path).c_str(), file)) pixels = stbi_load_from_memory(file.data(), int(file.size()), &pw, &ph, nullptr, 4);
+#else
+        pixels = stbi_load(cane::utf8(path).c_str(), &pw, &ph, nullptr, 4);
+#endif
+    }
+    if (pixels == nullptr || pw <= 0 || ph <= 0 || pw > 16384 || ph > 16384)
+    {
+        std::printf("mods: cannot read %s\n", path.empty() ? key.c_str() : cane::utf8(path).c_str());
+        if (pixels) stbi_image_free(pixels);
+        return MODRESULT::None;
+    }
+    rgba.assign(pixels, pixels + size_t(pw) * ph * 4);
+    stbi_image_free(pixels);
+    width = uint32_t(pw);
+    height = uint32_t(ph);
+    if (FStoredFlipped(image)) FlipRows(rgba, width, height);
+    if (width == image.bmpWidth && height == image.bmpHeight && rgba == original) return MODRESULT::Unchanged;
+    return MODRESULT::Replaced;
 }
 }  // namespace
 
@@ -228,32 +287,93 @@ bool FTextureReplacement(const BMP& image, std::vector<uint8_t>& rgba, uint32_t&
         }
     }
 
-    std::string key = name;
-    std::transform(key.begin(), key.end(), key.begin(), [](unsigned char c) { return char(std::tolower(c)); });
-    const auto found = ModTextures().find(key);
-    if (found == ModTextures().end()) return false;
-    const fs::path path = found->second;
-    int pw = 0, ph = 0;
-    stbi_uc* pixels = stbi_load(cane::utf8(path).c_str(), &pw, &ph, nullptr, 4);
-    if (pixels == nullptr || pw <= 0 || ph <= 0 || pw > 16384 || ph > 16384)
+    switch (FindReplacement(image, original, name, rgba, width, height))
     {
-        std::printf("mods: cannot read %s\n", cane::utf8(path).c_str());
-        if (pixels) stbi_image_free(pixels);
-        return false;
+    case MODRESULT::Unchanged: ++s_unchanged; return false;   // (unchanged: keep the original)
+    case MODRESULT::Replaced: ++s_replaced; return true;
+    default: return false;
     }
-    rgba.assign(pixels, pixels + size_t(pw) * ph * 4);
-    stbi_image_free(pixels);
-    width = uint32_t(pw);
-    height = uint32_t(ph);
-    if (FStoredFlipped(image)) FlipRows(rgba, width, height);
-    if (width == w && height == h && rgba == original)
+}
+
+#ifdef __SWITCH__
+// The prefetch's results, one slot per image (shared with its jobs: an exception's way out leaves them running)
+struct TEXMODPREFETCH
+{
+    struct SLOT
     {
-        ++s_unchanged;
-        return false;   // (unchanged: keep the original)
+        bool pushed = false, ready = false;
+        MODRESULT result = MODRESULT::None;
+        std::vector<uint8_t> rgba;
+        uint32_t width = 0, height = 0;
+    };
+    std::mutex mutex;
+    std::condition_variable cvReady;
+    std::vector<SLOT> aslot;
+};
+
+namespace
+{
+// (made after ModTextures' table, so the workers stop before it goes at the exit)
+CaneSwitch::JobPool& PrefetchPool()
+{
+    static CaneSwitch::JobPool s_pool(2);
+    return s_pool;
+}
+}  // namespace
+
+CTextureModPrefetch::CTextureModPrefetch(size_t cimage)
+{
+    if (!s_dumpDirectory.empty() || ModTextures().empty()) return;   // (FTextureReplacement's own way: dumping, no mods)
+    m_p = std::make_shared<TEXMODPREFETCH>();
+    m_p->aslot.resize(cimage);
+}
+
+CTextureModPrefetch::~CTextureModPrefetch()
+{
+    if (m_p) PrefetchPool().Clear();
+}
+
+void CTextureModPrefetch::Push(size_t index, const BMP& image, std::vector<uint8_t> bytes)
+{
+    if (!m_p || index >= m_p->aslot.size()) return;
+    m_p->aslot[index].pushed = true;
+    BMP copy = image;
+    copy.diffuseTexture = std::move(bytes);
+    PrefetchPool().Push([p = m_p, index, copy = std::move(copy)] {
+        TEXMODPREFETCH::SLOT slot;
+        try
+        {
+            std::vector<uint8_t> original;
+            if (DecodeLevel0(copy, original))
+                slot.result = FindReplacement(copy, original, TextureName(original, copy.bmpWidth, copy.bmpHeight), slot.rgba,
+                                              slot.width, slot.height);
+        }
+        catch (...) { slot = {}; }
+        slot.pushed = slot.ready = true;
+        std::lock_guard<std::mutex> lock(p->mutex);
+        p->aslot[index] = std::move(slot);
+        p->cvReady.notify_all();
+    });
+}
+
+bool CTextureModPrefetch::Take(size_t index, const BMP& image, std::vector<uint8_t>& rgba, uint32_t& width, uint32_t& height)
+{
+    if (!m_p || index >= m_p->aslot.size() || !m_p->aslot[index].pushed) return FTextureReplacement(image, rgba, width, height);
+    TEXMODPREFETCH::SLOT slot;
+    {
+        std::unique_lock<std::mutex> lock(m_p->mutex);
+        m_p->cvReady.wait(lock, [&] { return m_p->aslot[index].ready; });
+        slot = std::move(m_p->aslot[index]);
     }
+    if (slot.result == MODRESULT::Unchanged) ++s_unchanged;
+    if (slot.result != MODRESULT::Replaced) return false;
     ++s_replaced;
+    rgba = std::move(slot.rgba);
+    width = slot.width;
+    height = slot.height;
     return true;
 }
+#endif
 
 void ReportTextureMods()
 {

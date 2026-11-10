@@ -34,6 +34,9 @@ void CollectHackSwarmDraws(const SCENE& scene, std::vector<EXTRADRAW>& aextra); 
 #include <map>
 #include <unordered_map>
 #include <string>
+#ifdef __SWITCH__
+#include <unordered_set>
+#endif
 
 RENDERSTATS g_renderstats;
 constinit PFNEXTRADRAWS g_pfnExtraDraws = nullptr;
@@ -106,6 +109,13 @@ std::map<std::pair<const BMP*, const CLUT*>, GLuint> s_mptex;
 // world and must not keep the deleted names, which the new world's textures reuse: R5x, the guests' wrong textures
 // after a death's reload)
 uint32_t s_genTexCache = 1;
+#ifdef __SWITCH__
+// (the Switch: the texture mods streamed, texmod.h) Per GL texture the entries whose cached states name it, rebuilt alone
+// when its replacement comes in; the replaced PS2 textures, deleted a frame later (that frame's 2D quads may name them)
+std::unordered_map<GLuint, std::unordered_set<SUBGLOBGPU*>> s_mptexapsub;
+SUBGLOBGPU* s_psubEmitting = nullptr;
+std::vector<GLuint> s_atexRetired;
+#endif
 GLuint s_texWhite = 0;
 GLuint s_asampler[16] = {};  // bit 0 clamp S, 1 clamp T, 2 nearest, 3 mipmapped (a texture mod's own mip chain: texmod.h)
 // The mipmapped samplers' anisotropy (texture mods only; SLY2N_MODANISO=N, 1: off): clamped to the GPU's maximum
@@ -189,6 +199,10 @@ GLuint TexFromSel(const TEXSEL& sel)
     if (FDecodeTexture(sel.pbmp, sel.pclut, rgba, error))
     {
         // (a texture mod: Mods/Textures/<W>x<H>_<hash>.png)
+#ifdef __SWITCH__
+        // (the Switch: read and decoded on the other cores, TakeStreamedTextureMods; the PS2 texture until then)
+        RequestTextureMod(rgba, sel.pbmp->dx, sel.pbmp->dy, sel.pbmp, sel.pclut);
+#else
         if (const GLuint texMod = GlTexFromMod(rgba, sel.pbmp->dx, sel.pbmp->dy))
         {
             s_mptex[key] = texMod;
@@ -196,6 +210,7 @@ GLuint TexFromSel(const TEXSEL& sel)
             ++g_renderstats.ctexture;
             return texMod;
         }
+#endif
         glGenTextures(1, &tex);
         glBindTexture(GL_TEXTURE_2D, tex);
         glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
@@ -907,6 +922,9 @@ void EmitPass(std::vector<PASSCMD>& apasscmd, DSTATE st, const SUBGLOB& sub, con
         const TEXSEL sel = TexselFromShd(sub.pshd, sub.psaa ? sub.psaa->iframe : 0, pass.itexPass);
         st.tex = TexFromSel(sel);
         st.sampler = SamplerFor(st.tex, uint8_t((sel.fClampS ? 1 : 0) | (sel.fClampT ? 2 : 0) | (pass.fNearest ? 4 : 0)));
+#ifdef __SWITCH__
+        if (s_psubEmitting) s_mptexapsub[st.tex].insert(s_psubEmitting);
+#endif
     }
     st.fTextured = pass.fTextured ? 1 : 0;
     st.icolor = uint8_t(pass.icolor);
@@ -999,8 +1017,14 @@ const SUBGLOBGPU& SubgpuOf(const SUBGLOB& sub, GLuint vao, uint8_t fCull)
         DSTATE st;
         st.vao = vao;
         st.fCull = fCull;
+#ifdef __SWITCH__
+        s_psubEmitting = p;
+#endif
         for (size_t ipass = 0; ipass < sub.pshd->apass.size(); ++ipass)
             EmitPass(p->apasscmd, st, sub, sub.pshd->apass[ipass], int(ipass));
+#ifdef __SWITCH__
+        s_psubEmitting = nullptr;
+#endif
     }
     return *p;
 }
@@ -1885,7 +1909,44 @@ void ResetTextureCache()
     s_mptex.clear();
     s_aallpass.clear();
     ++s_genTexCache;
+#ifdef __SWITCH__
+    CancelTextureMods();
+    s_mptexapsub.clear();
+    s_atexFreed.insert(s_atexFreed.end(), s_atexRetired.begin(), s_atexRetired.end());
+    s_atexRetired.clear();
+#endif
 }
+
+#ifdef __SWITCH__
+// (the Switch) The texture mods streamed in since the last frame (texmod.h), each in its PS2 texture's place: the
+// entries that drew the PS2 texture rebuilt at their next draw (with the mipmapped sampler), the PS2 texture retired
+void TakeStreamedTextureMods()
+{
+    s_atexFreed.insert(s_atexFreed.end(), s_atexRetired.begin(), s_atexRetired.end());
+    s_atexRetired.clear();
+    std::vector<TEXMODREADY> aready;
+    TakeTextureMods(aready, 2u << 20);   // (about 2 MiB of texels a frame: one upload's cost stays small)
+    for (const TEXMODREADY& r : aready)
+    {
+        const auto it = s_mptex.find({static_cast<const BMP*>(r.key[0]), static_cast<const CLUT*>(r.key[1])});
+        if (it == s_mptex.end())
+        {
+            ForgetModTexture(r.tex);
+            s_atexRetired.push_back(r.tex);
+            continue;
+        }
+        const GLuint texOld = it->second;
+        it->second = r.tex;
+        NoteTexMinAlpha(r.tex, 0);   // (the replacement's own alpha: not known here)
+        if (const auto itsub = s_mptexapsub.find(texOld); itsub != s_mptexapsub.end())
+        {
+            for (SUBGLOBGPU* p : itsub->second) p->genTex = 0;
+            s_mptexapsub.erase(itsub);
+        }
+        if (texOld && texOld != s_texWhite) s_atexRetired.push_back(texOld);
+    }
+}
+#endif
 
 unsigned GlTextureOfShd(const SHD* pshd, int iframe)
 {
@@ -3471,6 +3532,9 @@ void RenderScene(const SCENE& scene, const CAMERA& cam, const RENDEROPTS& opts)
     g_renderstats.cdraw = g_renderstats.cpass = g_renderstats.ccel = 0;
     g_renderstats.cbatch = g_renderstats.cculled = g_renderstats.cmrd = 0;
     s_ring.BeginFrame();
+#ifdef __SWITCH__
+    TakeStreamedTextureMods();
+#endif
     // The render targets first (their globsets, their cameras), so this frame's screen quads show them.
     RenderRenderTargets(scene, opts);
     PASSVIEW pv;

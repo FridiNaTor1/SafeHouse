@@ -2,6 +2,7 @@
 // main below: the launcher (the games' covers side by side, the one selected pulsing); A starts the game in this
 // process (CaneSwitch::RunGame: it installs itself from a disc image at its first start); when it ends, SafeHouse.nro
 // starts again, back here. A release build offers a newer SafeHouse.nro from SafeHouse's GitHub releases when the launcher starts (update.h).
+// An HD mark on a cover: the game's PS3 HD textures are on the SD card, and it loads them (runtime.h).
 //
 // The games are Sly1-Release, Sly2-Release and Sly3-Release, each linked into SafeHouse.nro as one object whose only
 // global symbol is its descriptor (cane_game_sly1, cane_game_sly2, cane_game_sly3: cmake/Switch.cmake).
@@ -53,10 +54,11 @@ struct GameSlot
     GLuint cover = 0;
     bool active = false;      // A plays it or installs it
     bool toInstall = false;   // A installs it (its status shown in red, under its cover while selected)
+    bool hd = false;          // its PS3 HD textures are on the SD card: the game loads them (a mark on its cover)
     std::string status, detail;
 };
 
-// What the SD card says about a game: its installation (the game's own check).
+// What the SD card says about a game: its installation (the game's own check), its PS3 HD textures.
 void Scan(GameSlot& g)
 {
     g.game = FindGame(g.info->key);
@@ -64,6 +66,7 @@ void Scan(GameSlot& g)
     const bool ported = g.game && g.game->run;
     g.active = g.game && (ported || !installed);
     g.toInstall = g.game && !installed;
+    g.hd = installed && ported && !Ps3HdTexturePack(*g.game).empty();
     if (!g.game)
     {
         g.status = "NOT PORTED YET";
@@ -98,6 +101,17 @@ void Text(ImDrawList* dl, float size, ImVec2 at, ImU32 color, const std::string&
     dl->AddText(font, size, at, color, text.c_str());
 }
 void Outline(ImDrawList* dl, ImVec2 a, ImVec2 b, ImU32 color, float thickness) { dl->AddRect(a, b, color, 0.0f, 0, thickness); }
+// The PS3 HD textures' mark in a cover's top right corner (a to b, the cover as drawn): "HD" on a green tag.
+void HdMark(ImDrawList* dl, ImVec2 a, ImVec2 b, bool selected)
+{
+    const float scale = (b.x - a.x) / kCoverW, h = 30.0f * scale, pad = 11.0f * scale, size = 18.0f * scale;
+    const float w = pad + ImGui::GetFont()->CalcTextSizeA(size, FLT_MAX, 0.0f, "HD").x + pad;
+    const ImVec2 ta(b.x - 10.0f * scale - w, a.y + 10.0f * scale), tb(ta.x + w, ta.y + h);
+    const int alpha = selected ? 255 : 190;
+    dl->AddRectFilled(ImVec2(ta.x, ta.y + 2.0f * scale), ImVec2(tb.x, tb.y + 2.0f * scale), IM_COL32(0, 0, 0, alpha / 2), h * 0.5f);
+    dl->AddRectFilled(ta, tb, IM_COL32(40, 170, 90, alpha), h * 0.5f);
+    dl->AddText(ImGui::GetFont(), size, ImVec2(ta.x + pad, ta.y + (h - size) * 0.5f), IM_COL32(255, 255, 255, alpha), "HD");
+}
 bool Inside(ImVec2 p, ImVec2 a, ImVec2 b) { return p.x >= a.x && p.x < b.x && p.y >= a.y && p.y < b.y; }
 // The text cut with "..." to fit `width` at `size`.
 std::string Fit(float size, std::string text, float width)
@@ -356,6 +370,7 @@ private:
             const ImU32 tint = !g.active ? IM_COL32(65, 65, 65, 190) : selected ? IM_COL32(255, 255, 255, 255) : IM_COL32(155, 155, 155, 255);
             if (g.cover) dl->AddImage(Ui::Id(g.cover), a, b, ImVec2(0, 0), ImVec2(1, 1), tint);
             if (!g.active) dl->AddRectFilled(a, b, IM_COL32(0, 0, 0, 115));
+            if (g.hd) HdMark(dl, a, b, selected);
             const ImVec2 base = CoverPos(i);
             const ImU32 red = IM_COL32(235, 95, 75, 255);
             const ImU32 statusColor = g.toInstall || !g.active ? red : IM_COL32(255, 185, 80, 255);

@@ -136,15 +136,21 @@ animated (multi-frame) textures and in particles.
 If you own **The Sly Collection** for PS3, SafeHouse can take its redrawn textures (up to 4x sharper) and use them
 over Sly 2's: **Settings > Games > Sly 2: Band of Thieves > Import PS3 HD textures**. Choose the PS3 disc image
 (`.iso`), a `.zip` of it (read as it is, nothing is unpacked), or the extracted disc (the folder with `PS3_GAME`).
-It takes about 6 minutes and writes about 200 MB (5989 textures) to `PS3 HD/Textures` in your Sly 2 profile folder
-(`~/.config/projectcane/sly2/PS3 HD`, `%LOCALAPPDATA%\ProjectCane\user\sly2\PS3 HD`).
+It takes about 6 minutes and writes one file of about 200 MB (5989 textures), `PS3 HD/Textures.pak`, in your Sly 2
+profile folder (`~/.config/projectcane/sly2/PS3 HD`, `%LOCALAPPDATA%\ProjectCane\user\sly2\PS3 HD`).
 
-- The pack is a texture pack like any other: the same `<W>x<H>_<hash>.png` names. Your own `Mods/Textures` win over
-  it, so you can still change single textures.
+- `Textures.pak` holds the PNGs under the same `<W>x<H>_<hash>.png` names as any texture pack, in one file that loads
+  and copies much faster than thousands. Your own `Mods/Textures` win over it, so you can still change single
+  textures.
+- **Extract as PNG files** makes the next import write the PNG files in `PS3 HD/Textures` instead, to look through or
+  edit them. The game reads either.
 - **Use the PS3 HD textures** turns it on or off; **Remove** deletes it. The game itself never reads the PS3 disc:
   levels, scripts and gameplay stay the PS2's.
 - Without the launcher: `Sly2-Release --data-dir "<installation>" --ps3-hd-textures "<PS3 disc, .iso or .zip>" OUT`
-  builds the pack, and `--texture-pack OUT` uses it.
+  builds the pack (add `--ps3-hd-png` for the PNG files), and `--texture-pack OUT` uses it.
+- A pack imported before `Textures.pak` (a `PS3 HD/Textures` folder of PNGs) still works.
+- On the Nintendo Switch, copy the `PS3 HD` folder to `sdmc:/switch/SafeHouse/user/sly2/`. The game's cover in
+  SafeHouse shows an HD tag when it is found.
 - Only the textures are taken: the PS3's cutscenes, music and voices are the same quality as the PS2's.
 
 ### Music
@@ -447,14 +453,17 @@ The texture is then replaced wherever the game draws it, in every level and on t
 
 As for Sly 2, **Settings > Games > Sly Cooper and the Thievius Raccoonus > Import PS3 HD textures** takes the redrawn
 textures of **The Sly Collection** (PS3: the disc image, a `.zip` of it, or the extracted disc) and uses them over
-Sly 1's. It takes about 2 minutes and writes about 530 MB (9222 textures, 45 of the 46 levels; the start-up splash
-has none) to `PS3 HD/Textures` in your profile folder (`~/.config/projectcane/PS3 HD`,
+Sly 1's. It takes about 2 minutes and writes `PS3 HD/Textures.pak`, about 530 MB (9222 textures, 45 of the 46 levels;
+the start-up splash has none), in your profile folder (`~/.config/projectcane/PS3 HD`,
 `%LOCALAPPDATA%\ProjectCane\user\PS3 HD`).
 
-- The pack uses the names of `--dump-textures`, so your own `Mods/Textures` win over it.
+- `Textures.pak` holds the PNGs under the names of `--dump-textures`, so your own `Mods/Textures` win over it.
 - **Use the PS3 HD textures** turns it on or off; **Remove** deletes it. The levels stay the installation's.
 - Without the launcher: `Sly1-Release --data-dir "<installation>" --ps3-hd-textures "<PS3 disc, .iso or .zip>" OUT`,
   then `--texture-pack OUT`.
+- As for Sly 2: **Extract as PNG files** (or `--ps3-hd-png`) writes the PNG files in `PS3 HD/Textures` instead, an older
+  `PS3 HD/Textures` folder still works, and on the Nintendo Switch the `PS3 HD` folder goes to
+  `sdmc:/switch/SafeHouse/user/sly1/`.
 
 ### Text
 

@@ -1,5 +1,6 @@
 // The PS3 collection's HD textures for Sly 1: The Sly Collection's textures put over this
-// installation's as a texture pack (OUT/Textures/<the PCBRX texture's mods name>.png, texmod.h).
+// installation's as a texture pack (OUT/Textures.pak, or the PNG files in OUT/Textures: platform/texture_pak.h; each
+// under the PCBRX texture's mods name, texmod.h).
 //
 // The game never reads PS3 data: its levels stay the installation's (PCBRX, rebuilt from the PS2 disc), so it plays
 // as before by construction. This tool only reads the PS3 levels to take their textures.
@@ -15,6 +16,7 @@
 #include "shd.h"
 #include "../platform/platform.h"
 #include "../platform/ps3disc.h"
+#include "../platform/texture_pak.h"
 
 #include <stb/stb_image_write.h>
 
@@ -497,7 +499,7 @@ float ThumbDistance(const IMG& a, const IMG& b)
 
 // The PNG of a PS3 image under a PCBRX name: rows as --dump-textures writes them (the PS2's order reversed), alpha
 // 0..255.
-bool FWritePng(const fs::path& path, const IMG& img)
+std::vector<uint8_t> PngRows(const IMG& img)
 {
     std::vector<uint8_t> ab(img.rgba.size());
     const size_t row = size_t(img.dx) * 4;
@@ -513,7 +515,23 @@ bool FWritePng(const fs::path& path, const IMG& img)
             d[x + 3] = uint8_t(std::min(255u, unsigned(s[x + 3]) * 255u / 128u));
         }
     }
-    return stbi_write_png(cane::utf8(path).c_str(), img.dx, img.dy, 4, ab.data(), int(row)) != 0;
+    return ab;
+}
+bool FWritePng(const fs::path& path, const IMG& img)
+{
+    const std::vector<uint8_t> ab = PngRows(img);
+    return stbi_write_png(cane::utf8(path).c_str(), img.dx, img.dy, 4, ab.data(), img.dx * 4) != 0;
+}
+// The same PNG's bytes (for Textures.pak)
+bool FEncodePng(const IMG& img, std::vector<uint8_t>& png)
+{
+    const std::vector<uint8_t> ab = PngRows(img);
+    png.clear();
+    auto append = [](void* pv, void* pb, int cb) {
+        auto& out = *static_cast<std::vector<uint8_t>*>(pv);
+        out.insert(out.end(), static_cast<const uint8_t*>(pb), static_cast<const uint8_t*>(pb) + cb);
+    };
+    return stbi_write_png_to_func(append, &png, img.dx, img.dy, 4, ab.data(), img.dx * 4) != 0 && !png.empty();
 }
 
 struct WACENTRY { std::string name; char type = 0; uint64_t ib = 0, cb = 0; };
@@ -544,7 +562,7 @@ void Progress(const char* stage, uint64_t done, uint64_t total, const std::strin
 }
 }  // namespace
 
-int Ps3HdTexturesCommand(const fs::path& installation, const std::string& source, const std::string& out)
+int Ps3HdTexturesCommand(const fs::path& installation, const std::string& source, const std::string& out, bool png)
 {
     const auto t0 = std::chrono::steady_clock::now();
     auto fail = [](const std::string& message) {
@@ -595,9 +613,11 @@ int Ps3HdTexturesCommand(const fs::path& installation, const std::string& source
         }
     }
 
-    const fs::path dirOut = cane::path(out), dirTex = dirOut / "Textures";
+    const fs::path dirOut = cane::path(out);
     std::error_code ec;
-    fs::create_directories(dirTex, ec);
+    fs::create_directories(dirOut, ec);
+    cane::TexturePackWriter pack;
+    if (!pack.Open(dirOut, png)) return fail("Cannot write the texture pack in " + out + ".");
     FILE* pfTsv = std::fopen(cane::utf8(dirOut / "ps3hd-textures.tsv").c_str(), "w");
     if (pfTsv) std::fprintf(pfTsv, "ps3_level\tlevel\tps2_name\tps2_size\tps3_size\tmad\tr\tresult\n");
     std::set<std::string> setWritten, setLevelDone;
@@ -758,12 +778,12 @@ int Ps3HdTexturesCommand(const fs::path& installation, const std::string& source
             else if (uint64_t(pbest->dx) * pbest->dy < uint64_t(im2.img.dx) * im2.img.dy) { result = "smaller"; ++csmaller; }
             else if (pbest->dx == im2.img.dx && pbest->dy == im2.img.dy && best.mad < 1.0) { result = "same"; ++csame; }
             else if (setWritten.count(im2.name)) result = "dup";
-            else if (FWritePng(dirTex / im2.name, *pbest))
+            else if (std::vector<uint8_t> ab; FEncodePng(*pbest, ab) && pack.Add(im2.name, ab.data(), ab.size()))
             {
                 setWritten.insert(im2.name);
                 ++cwritten;
                 ++cw;
-                cbWritten += fs::file_size(dirTex / im2.name, ec);
+                cbWritten += ab.size();
                 result = "written";
             }
             else result = "write-failed";
@@ -848,5 +868,6 @@ int Ps3HdTexturesCommand(const fs::path& installation, const std::string& source
     std::printf("ps3hd: %d levels, %d HD textures written (%.1f MB), %d unchanged, %d smaller on the PS3, %d not matching (kept), "
                 "%d without a PS3 texture, %.0f s\n", clevel, cwritten, cbWritten / 1e6, csame, csmaller, cmismatch, cmissing, s);
     if (clevel == 0) return fail("No level of the disc matched this installation's levels.");
+    if (!pack.Close()) return fail("Cannot write the texture pack in " + out + ".");
     return 0;
 }

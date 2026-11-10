@@ -294,6 +294,7 @@ int main(int argc, char** argv)
     const char* arg = nullptr;
     int filter = -2;
     bool fDumpObjects = false;
+    bool fPs3HdPng = false;
     const char* arg2 = nullptr;
     int animRefB = 0;
     VIEWOPTS vo;
@@ -422,6 +423,7 @@ int main(int argc, char** argv)
         else if (!std::strcmp(argv[i], "--dump-text") && i + 1 < argc) { command = "dump-text"; arg = argv[++i]; }
         else if (!std::strcmp(argv[i], "--dump-textures") && i + 2 < argc) { command = "dump-textures"; arg = argv[++i]; arg2 = argv[++i]; }
         else if (!std::strcmp(argv[i], "--ps3-hd-textures") && i + 2 < argc) { command = "ps3-hd-textures"; arg = argv[++i]; arg2 = argv[++i]; }
+        else if (!std::strcmp(argv[i], "--ps3-hd-png")) fPs3HdPng = true;   // (--ps3-hd-textures: PNG files, not Textures.pak)
         else if (!std::strcmp(argv[i], "--phys-check"))  // physcheck.cpp: FUNC PREFIX [COUNT] (the rest of the line)
         {
             command = "phys-check";
@@ -484,8 +486,8 @@ int main(int argc, char** argv)
     if (command && !std::strcmp(command, "dump-text")) return DumpTextCommand(arg);
     int DumpTexturesCommand(const std::string&, const std::string&);  // texmod.cpp
     if (command && !std::strcmp(command, "dump-textures")) return DumpTexturesCommand(arg, arg2);
-    int Ps3HdTexturesCommand(const std::string&, const std::string&);  // ps3hd.cpp
-    if (command && !std::strcmp(command, "ps3-hd-textures")) return Ps3HdTexturesCommand(arg, arg2);
+    int Ps3HdTexturesCommand(const std::string&, const std::string&, bool);  // ps3hd.cpp
+    if (command && !std::strcmp(command, "ps3-hd-textures")) return Ps3HdTexturesCommand(arg, arg2, fPs3HdPng);
     int VtDumpCommand(const char*);  // vtaudit.cpp
     if (command && !std::strcmp(command, "vt-dump")) return VtDumpCommand(arg);
     if (command && !std::strcmp(command, "phys-check")) return PhysCheckMain(physArgs);
