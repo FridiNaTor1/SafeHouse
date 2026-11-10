@@ -1326,6 +1326,17 @@ void DrawGlob(RPL* prpl)
 
 		SHD* pshd = sub.pshd;
 
+		if (prpl->rp == RP_Translucent && pshd != nullptr)
+		{
+			// FillShaders emits the GS ALPHA state with each material packet.
+			// grfshd 2/6 use ordinary source-alpha blending; the remaining
+			// translucent material variants use additive destination blending.
+			if (pshd->grfshd == 2 || pshd->grfshd == 6)
+				glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ZERO);
+			else
+				glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE, GL_ONE, GL_ZERO);
+		}
+
 		// The visible projected-color packet uses PRIM 0x6c (TME=0), so its
 		// PackRGBA bytes are ordinary 0..255 framebuffer color. The earlier
 		// textured packet only participates in constructing the volume mask.
