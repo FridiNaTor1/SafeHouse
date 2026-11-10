@@ -27,3 +27,13 @@ int ConvertCommand(const std::string& out);
 int ConvertListCommand();
 // A world record's friendly name (the layout's folder and file name: "Paris"; record 1 "Front End"), or nullptr.
 const char* SzConvertWorldName(int iwrec);
+
+#ifdef __SWITCH__
+#include <cstddef>
+#include <functional>
+// The Switch installer's conversion (platform/switch/installer.h, main.cpp's install job): the disc image opened and
+// checked, its files converted into out; "" when done, "cancelled", or what went wrong. progress(done, total, stage,
+// file) is called per world and per file; false from it cancels.
+using CaneConvertProgress = std::function<bool(std::size_t done, std::size_t total, const char* stage, const char* file)>;
+std::string CaneConvertDisc(const std::string& iso, const std::string& out, const CaneConvertProgress& progress);
+#endif

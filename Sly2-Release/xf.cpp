@@ -794,6 +794,18 @@ void UpdateAloXfs(ALO* palo, float t, float dt)
     const bool fSnap = (GrfUpdOfLo(palo) & 0x10u) != 0;
     for (auto& up : palo->axf)
     {
+#ifdef __SWITCH__
+        // (the Switch: the record two ahead fetched, the parts of it the update reads: each record is a heap block of
+        // its own)
+        if (const size_t i = size_t(&up - palo->axf.data()); i + 2 < palo->axf.size())
+        {
+            const XF* p = palo->axf[i + 2].get();
+            __builtin_prefetch(&p->mat);
+            __builtin_prefetch(&p->kind);
+            __builtin_prefetch(&p->pctrlFirst);
+            __builtin_prefetch(&p->pvA8);
+        }
+#endif
         XF* r = up.get();
         UPD u{palo, r, fp};
         u.fSnap = fSnap;

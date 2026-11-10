@@ -3,6 +3,7 @@
 #include "disc.h"
 #include "lo.h"
 
+#include <atomic>
 #include <cstdio>
 #include <stdexcept>
 #include <unordered_map>
@@ -67,14 +68,34 @@ std::unordered_map<uint32_t, PFNLOAD>& Loaders()
 void RegisterLoaders(std::unordered_map<uint32_t, PFNLOAD>& map);  // loaders.cpp
 PFNNEW PfnNewNativeForCid(CID cid);                                 // loaders.cpp
 
+namespace
+{
+// PfnOrig's answers per class (of g_acls) and slot, + 1 (0: not read yet): each is a read through the executable's
+// image, which the per-object tests (FAloDrawn's draw slot, the vehicles', the HUD's) make every frame for every
+// object. The image does not change once the disc is open; InitClasses clears them (atomic: the pass helpers ask too).
+constexpr int CSLOT_PFN_CACHE = 128;
+std::atomic<uint32_t> s_apfnCache[CID_Max][CSLOT_PFN_CACHE];
+}
+
 uint32_t CLS::PfnOrig(int slot) const
 {
     if (!vtOrig) return 0;
+    const uintptr_t p = reinterpret_cast<uintptr_t>(this), p0 = reinterpret_cast<uintptr_t>(&g_acls[0]);
+    if (p >= p0 && p < p0 + sizeof(g_acls) && slot >= 0 && slot < CSLOT_PFN_CACHE)
+    {
+        std::atomic<uint32_t>& cached = s_apfnCache[(p - p0) / sizeof(CLS)][slot];
+        if (const uint32_t v = cached.load(std::memory_order_relaxed)) return v - 1;
+        const uint32_t pfn = g_disc.U32Elf(vtOrig + 8u * static_cast<uint32_t>(slot) + 4u);
+        cached.store(pfn + 1, std::memory_order_relaxed);
+        return pfn;
+    }
     return g_disc.U32Elf(vtOrig + 8u * static_cast<uint32_t>(slot) + 4u);
 }
 
 void InitClasses()
 {
+    for (auto& acache : s_apfnCache)
+        for (auto& cached : acache) cached.store(0, std::memory_order_relaxed);
     RegisterLoaders(Loaders());
     static char s_achName[CID_Max][16];
     for (int i = 0; i < CID_Max; ++i)

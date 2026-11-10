@@ -25,3 +25,6 @@ void UpdateSceneFromSw(SCENE& scene, const std::vector<ALO*>& apalo, const SW* p
 // One entry placed at its ALO's current transforms (whether or not the frame draws it: a render target's list).
 void PlaceSceneEntry(ALO* palo, SCENEGLOBSET& sgs);
 void ApplyDrawPass(const SW* psw, SCENE& scene, const std::vector<ALO*>& apalo);
+// ApplyDrawPass takes UpdateSceneFromSw's FAloDrawn answers of the same frame; a game step between them (the world
+// changed) drops them: called at each step's start
+void InvalidateSceneDrawnTests();

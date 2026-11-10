@@ -1,7 +1,11 @@
 #include "audio.h"
 
 // FAudio on every platform (on Windows too, over SDL2), so the mixer behaves the same everywhere.
+#ifdef __SWITCH__
+#include "../platform/switch/audio_switch.h"   // (the Switch's own mixer, with the same surface)
+#else
 #include "../platform/audio_linux.h"
+#endif
 
 #include <algorithm>
 #include <cstdio>

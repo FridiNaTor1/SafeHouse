@@ -292,6 +292,7 @@ extern GLuint glslFogMax;
 extern GLuint glslFogColor;
 extern GLuint glslAlphaCutOff;
 extern GLint glslShadowHalfTexel;
+extern GLint glslFarDepth;
 extern GLuint glslDyshMatWorldClip;
 extern GLuint glslDyshModel;
 extern GLuint glslDyshfSkin;

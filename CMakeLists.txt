@@ -2,6 +2,11 @@ cmake_minimum_required(VERSION 3.22)
 # The CMake project keeps its old name (ProjectCane): CMAKE_PROJECT_VERSION, cache entries and existing build
 # directories depend on it. The product is called SafeHouse (platform/brand.h).
 project(ProjectCane VERSION 0.1.0 LANGUAGES C CXX)
+# Nintendo Switch (the switch-release preset): cmake/Switch.cmake
+if(NINTENDO_SWITCH)
+ include(cmake/Switch.cmake)
+ return()
+endif()
 if(APPLE)
  enable_language(OBJC OBJCXX)
 endif()
@@ -61,7 +66,7 @@ add_executable(cane-extractor "File Extractor/main.cpp")
 # CHD disc images (platform/disc_image.h): cane_chd
 include(cmake/chd.cmake)
 target_link_libraries(cane-extractor PRIVATE cane_platform cane_chd)
-# Upstream ProjectCane's native level tools (File Extractor GUI/NativeTools, kept verbatim). cane-extractor
+# Upstream ProjectCane's native level tools (File Extractor GUI/NativeTools, shared with the Switch installer). cane-extractor
 # runs them as sibling executables: Sly1BrxRebuilder turns a decompressed retail BRX into PCBRX v17, and
 # Sly1PalExtractor unpacks the PAL / NTSC-J discs (every language slot, localized dialogue, banks, movies).
 # They stay separate programs because the two tools carry different versions of the same BrxWalker classes.

@@ -232,12 +232,12 @@ private:
             return {};
         };
         fs::path usrdir;
-        const std::string name = detail::upper(utf8(fs::absolute(source).filename()));
+        const std::string name = detail::upper(utf8(absolutePath(source).filename()));
         if (name == "USRDIR") usrdir = source;
         else if (name == "PS3_GAME") usrdir = child(source, "USRDIR");
         else if (fs::path g = child(source, "PS3_GAME"); !g.empty()) usrdir = child(g, "USRDIR");
-        else if ((name == "SLY1" || name == "SLY2" || name == "SLY3") && detail::upper(utf8(fs::absolute(source).parent_path().filename())) == "USRDIR")
-            usrdir = fs::absolute(source).parent_path();
+        else if ((name == "SLY1" || name == "SLY2" || name == "SLY3") && detail::upper(utf8(absolutePath(source).parent_path().filename())) == "USRDIR")
+            usrdir = absolutePath(source).parent_path();
         else if (!child(source, "SLY1").empty() || !child(source, "SLY2").empty()) usrdir = source;
         if (usrdir.empty()) {
             error = "This folder is not The Sly Collection (PS3): choose the extracted disc (the folder with PS3_GAME in it), "
@@ -252,7 +252,12 @@ private:
             }
             if (!it->is_regular_file(ec)) continue;
             File f;
+#if defined(__SWITCH__)
+            // (lexically: newlib's std::filesystem mishandles "sdmc:/" paths, see absolutePath)
+            f.path = detail::upper(utf8(it->path().lexically_relative(usrdir)));
+#else
             f.path = detail::upper(utf8(fs::relative(it->path(), usrdir, ec)));
+#endif
             std::replace(f.path.begin(), f.path.end(), '\\', '/');
             f.size = it->file_size(ec);
             f.local = it->path();

@@ -523,6 +523,10 @@ GLFWmonitor* ActiveMonitor()
 
 std::vector<int> SupportedFrameRates()
 {
+#ifdef __SWITCH__
+    // The Switch's display runs at 60 Hz: 60 or half of it.
+    return {30, 60};
+#else
     std::vector<int> frameRates{30, 60, 90, 120, 240};
     GLFWmonitor* monitor = ActiveMonitor();
 
@@ -541,6 +545,7 @@ std::vector<int> SupportedFrameRates()
     frameRates.erase(std::unique(frameRates.begin(), frameRates.end()), frameRates.end());
 
     return frameRates;
+#endif
 }
 
 void SelectNextSupportedFrameRate()
@@ -658,6 +663,11 @@ void ApplySwapInterval()
     int refreshRate = 0;
     bool fSwapPacesFrames = false;
 
+#ifdef __SWITCH__
+    // The Switch always swaps with VSync: the swap paces 60 FPS, the frame pacer 30.
+    interval = 1;
+    fSwapPacesFrames = g_targetFrameRate == 60;
+#else
     if (g_fVsync)
     {
         interval = 1;
@@ -681,6 +691,7 @@ void ApplySwapInterval()
             fSwapPacesFrames = true;
         }
     }
+#endif
 
     cane::gl::SwapInterval(interval);
     g_fSwapPacesFrames = fSwapPacesFrames;
@@ -962,6 +973,11 @@ void SetPromptPrk(PROMPT* pprompt)
 		{
 			if (response == RESPK_ControllerMapping && !gamepadAvailable)
 				continue;
+#ifdef __SWITCH__
+			// The Switch has no other window to take the controllers.
+			if (response == RESPK_DisableControllerWhenUnfocused)
+				continue;
+#endif
 			prd.arespk[prd.crespk++] = response;
 		}
 	}

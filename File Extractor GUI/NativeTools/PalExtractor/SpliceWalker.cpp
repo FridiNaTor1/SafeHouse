@@ -2,6 +2,7 @@
 
 #include <stdexcept>
 
+namespace cane::pal {
 namespace {
 constexpr unsigned kMaximumPairDepth = 4096;
 }
@@ -66,3 +67,5 @@ void BrxWalker::LoadSwSpliceFromBrx(CBinaryInputStream& s, bool debugInfo) {
 
     Trace("LoadSwSpliceFromBrx", begin, s.GetOffset());
 }
+
+} // namespace cane::pal

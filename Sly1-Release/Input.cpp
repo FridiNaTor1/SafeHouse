@@ -25,6 +25,10 @@ float g_controllerDeadzone = 0.35f;
 #include <iterator>
 #include <vector>
 
+#ifdef __SWITCH__
+void CaneSwitchRumble(float low, float high);   // platform/switch/glfw_switch.cpp
+#endif
+
 namespace
 {
 constexpr uint16_t JBC_SELECT   = 0x0001;
@@ -289,6 +293,13 @@ void SetSdlRumble(const JOY* pjoy, uint8_t highSpeedMotor, uint8_t lowSpeedMotor
     if (!g_fControllerVibration)
         highSpeedMotor = lowSpeedMotor = 0;
     s_sdlRumble.set(guid, cane::rumble::MotorsFromDualShock(highSpeedMotor, lowSpeedMotor), glfwGetTime());
+#elif defined(__SWITCH__)
+    // HD rumble: the low-speed motor on the low band, the high-speed motor on the high band.
+    if (pjoy == nullptr || !pjoy->gamepadConnected)
+        return;
+    if (!g_fControllerVibration)
+        highSpeedMotor = lowSpeedMotor = 0;
+    CaneSwitchRumble(lowSpeedMotor / 255.0f, highSpeedMotor != 0 ? 1.0f : 0.0f);
 #else
     (void)pjoy; (void)highSpeedMotor; (void)lowSpeedMotor;
 #endif
@@ -483,10 +494,17 @@ void JOY::Update(GLFWwindow* window)
     // Keyboard movement emulates the left analog stick.  The base CPMAN
     // policy is normally active during gameplay, so it must not suppress
     // these values or the player receives a permanently centered stick.
-    if (current[BTN_LEFT] && !current[BTN_RIGHT]) xRaw = -1.0f;
-    if (current[BTN_RIGHT] && !current[BTN_LEFT]) xRaw = 1.0f;
-    if (current[BTN_UP] && !current[BTN_DOWN]) yRaw = 1.0f;
-    if (current[BTN_DOWN] && !current[BTN_UP]) yRaw = -1.0f;
+#ifdef __SWITCH__
+    // Diagonals lie on the unit circle, as a stick's do: (1, 1) would widen that direction's calibrated range
+    // (ApplyStickDeadZone) and leave later full stick pushes along it at about 70% deflection.
+    const float key = current[BTN_LEFT] != current[BTN_RIGHT] && current[BTN_UP] != current[BTN_DOWN] ? 0.70710678f : 1.0f;
+#else
+    constexpr float key = 1.0f;
+#endif
+    if (current[BTN_LEFT] && !current[BTN_RIGHT]) xRaw = -key;
+    if (current[BTN_RIGHT] && !current[BTN_LEFT]) xRaw = key;
+    if (current[BTN_UP] && !current[BTN_DOWN]) yRaw = key;
+    if (current[BTN_DOWN] && !current[BTN_UP]) yRaw = -key;
 
     // Keyboard camera input emulates the right analog stick. UpdateCptn
     // consumes x2 for manual orbiting around the player. The keys are
@@ -526,10 +544,15 @@ void JOY::Update(GLFWwindow* window)
         cameraLeft = cameraRight = cameraUp = cameraDown = false;
     }
 
-    if (cameraLeft && !cameraRight) x2Raw = -1.0f;
-    if (cameraRight && !cameraLeft) x2Raw = 1.0f;
-    if (cameraUp && !cameraDown) y2Raw = 1.0f;
-    if (cameraDown && !cameraUp) y2Raw = -1.0f;
+#ifdef __SWITCH__
+    const float cameraKey = cameraLeft != cameraRight && cameraUp != cameraDown ? 0.70710678f : 1.0f;
+#else
+    constexpr float cameraKey = 1.0f;
+#endif
+    if (cameraLeft && !cameraRight) x2Raw = -cameraKey;
+    if (cameraRight && !cameraLeft) x2Raw = cameraKey;
+    if (cameraUp && !cameraDown) y2Raw = cameraKey;
+    if (cameraDown && !cameraUp) y2Raw = -cameraKey;
 
     ApplyStickDeadZone(xRaw, yRaw, &calibration, &x, &y, &uDeflect);
     ApplyStickDeadZone(x2Raw, y2Raw, &calibration2, &x2, &y2, &uDeflect2);

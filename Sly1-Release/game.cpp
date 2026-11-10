@@ -220,6 +220,9 @@ void InitGameState(GS* pgs)
     pgs->worldLevelCur = WORLDLEVEL_2;
     pgs->clife = 5;
     pgs->nPowerupLast = -1;
+#ifdef __SWITCH__
+    pgs->grfgs |= 0x1000;   // (the Switch's default camera: Right = Turn Right, cptn.cpp)
+#endif
     ApplyVibrationSetting(pgs);
 }
 

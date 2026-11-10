@@ -25,6 +25,8 @@
 #include <string.h>
 #include <glad/glad.h>
 
+/* The Switch has no system GL library: entry points come from gladLoadGLLoader. */
+#ifndef __SWITCH__
 static void* get_proc(const char *namez);
 
 #if defined(_WIN32) || defined(__CYGWIN__)
@@ -156,6 +158,7 @@ int gladLoadGL(void) {
 
     return status;
 }
+#endif /* __SWITCH__ */
 
 struct gladGLversionStruct GLVersion = { 0, 0 };
 

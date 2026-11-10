@@ -259,6 +259,9 @@ struct SUBGLOB
 	int cibnd;
 	SAI *uvSai;
 	bool usesUvAnim;
+#ifdef CANE_DEKO3D
+	int8_t dyshConstantAlpha = -1; // all vertices share one alpha (render.cpp DrawDysh), -1 until checked
+#endif
 };
 
 struct SUBGLOBI

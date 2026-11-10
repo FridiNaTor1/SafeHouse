@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <stdexcept>
 
+namespace cane::pal {
 namespace {
 void ReadSaa(CBinaryInputStream& s) {
     const auto type = s.U16Read();
@@ -101,3 +102,5 @@ void BrxWalker::LoadTexturesFromBrx(CBinaryInputStream& s) {
     s.Skip(s.Remaining());
     Trace("LoadBulkDataFromBrx", begin, s.GetOffset());
 }
+
+} // namespace cane::pal

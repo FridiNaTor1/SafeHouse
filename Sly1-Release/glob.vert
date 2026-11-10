@@ -1,4 +1,8 @@
 #version 430 core
+#ifdef DEKO3D
+invariant gl_Position;
+precise gl_Position;
+#endif
 
 #define RKO_OneWay   0
 #define RKO_ThreeWay 1
@@ -219,6 +223,11 @@ layout(std430, binding = 13) readonly buffer TVLIGHTBLK
 
 uniform int poseCount;
 
+#ifdef DEKO3D
+// Background drawn after the opaque pass on the far plane (render.cpp DrawSwBackground)
+uniform int farDepth;
+#endif
+
 int   fPose;
 int   rko;
 int   fAnimateUv;
@@ -426,6 +435,10 @@ void main()
         CalculateFog();
 
     gl_Position = cm.matWorldToClip * worldPos;
+#ifdef DEKO3D
+    if (farDepth != 0)
+        gl_Position.z = gl_Position.w;
+#endif
 }
 
 void ApplyWarp(inout vec4 vLocal, inout vec2 uvLocal)

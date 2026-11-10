@@ -11,6 +11,8 @@
 #include <cstdio>
 #include <cstring>
 #include <iterator>
+#include <memory>
+#include <mutex>
 #include <set>
 #include <cstdlib>
 #include <fstream>
@@ -29,13 +31,82 @@ constexpr uint32_t SECTOR = 2048;
 uint32_t Le32(const uint8_t* p) { uint32_t v; std::memcpy(&v, p, 4); return v; }
 uint16_t Le16(const uint8_t* p) { uint16_t v; std::memcpy(&v, p, 2); return v; }
 
+#ifdef __SWITCH__
+// (the Switch) The files read in pieces (the disc image, the streams' files: music, dialog, movies, banks) kept open, a
+// few at a time, rather than opened for each read: on the SD card an open costs most of a small read's time. Each file
+// has its own lock, so a world's load and the sound thread's stream read apart; reads of one file take turns.
+class COpenFiles
+{
+public:
+    // cb bytes at ib (fewer at the file's end: *pcbRead); the file's size in *pcbFile. False: it cannot be opened.
+    bool FRead(const std::string& path, uint64_t ib, void* pv, size_t cb, size_t* pcbRead, uint64_t* pcbFile)
+    {
+        const std::shared_ptr<ENT> e = Ent(path);
+        *pcbRead = 0;
+        if (!e) return false;
+        std::lock_guard<std::mutex> lock(e->mtx);
+        *pcbFile = e->cb;
+        const size_t cbRead = size_t(std::min<uint64_t>(cb, ib < e->cb ? e->cb - ib : 0));
+        if (!cbRead) return true;
+        e->in.clear();
+        e->in.seekg(static_cast<std::streamoff>(ib));
+        e->in.read(static_cast<char*>(pv), static_cast<std::streamsize>(cbRead));
+        *pcbRead = size_t(e->in.gcount());
+        return true;
+    }
+
+private:
+    struct ENT
+    {
+        std::mutex mtx;
+        std::ifstream in;
+        std::string path;
+        uint64_t cb = 0, tick = 0;
+    };
+    std::shared_ptr<ENT> Ent(const std::string& path)
+    {
+        std::lock_guard<std::mutex> lock(m_mtx);
+        ++m_tick;
+        for (const auto& e : m_aent)
+            if (e->path == path)
+            {
+                e->tick = m_tick;
+                return e;
+            }
+        auto e = std::make_shared<ENT>();
+        e->in.open(cane::path(path), std::ios::binary);
+        if (!e->in) return nullptr;
+        e->in.seekg(0, std::ios::end);
+        e->cb = uint64_t(e->in.tellg());
+        e->path = path;
+        e->tick = m_tick;
+        // (the least recently read one closed; a reader holding it finishes first: shared)
+        if (m_aent.size() >= kMax)
+            m_aent.erase(std::min_element(m_aent.begin(), m_aent.end(), [](const auto& a, const auto& b) { return a->tick < b->tick; }));
+        m_aent.push_back(e);
+        return e;
+    }
+    static constexpr size_t kMax = 8;
+    std::mutex m_mtx;
+    uint64_t m_tick = 0;
+    std::vector<std::shared_ptr<ENT>> m_aent;
+};
+COpenFiles s_openfiles;
+#endif
+
 bool ReadAt(const std::string& path, uint64_t offset, void* data, size_t cb)
 {
+#ifdef __SWITCH__
+    size_t cbRead = 0;
+    uint64_t cbFile = 0;
+    return s_openfiles.FRead(path, offset, data, cb, &cbRead, &cbFile) && cbRead == cb;
+#else
     std::ifstream in(cane::path(path), std::ios::binary);
     if (!in) return false;
     in.seekg(static_cast<std::streamoff>(offset));
     in.read(static_cast<char*>(data), static_cast<std::streamsize>(cb));
     return static_cast<size_t>(in.gcount()) == cb;
+#endif
 }
 
 uint32_t Crc32(const uint8_t* p, size_t cb)
@@ -197,7 +268,12 @@ bool CDisc::FOpenConverted(const std::string& dir, std::string& error)
         std::set<std::string> asetMod;
         if (!m_dirMods.empty() && fs::is_directory(cane::path(m_dirMods)))
             for (const auto& e : fs::recursive_directory_iterator(cane::path(m_dirMods), fs::directory_options::skip_permission_denied))
+#ifdef __SWITCH__
+                // (the Switch: no canonical paths on the SD card's file system)
+                if (e.is_regular_file()) asetMod.insert(cane::utf8(e.path().lexically_relative(cane::path(m_dirMods)).generic_u8string()));
+#else
                 if (e.is_regular_file()) asetMod.insert(cane::utf8(fs::relative(e.path(), cane::path(m_dirMods)).generic_u8string()));
+#endif
         // Music/ and Movies/ files also match by their number: "Music/28.wav" or "Music/28 My Song.wav" replaces
         // "Music/28 Paris.wav" (the names may change between converter versions and differ between discs); a movie's
         // sound tracks too ("Movies/French/2062.wav")
@@ -397,9 +473,20 @@ std::vector<uint8_t> CDisc::ReadFile(const FK& fk) const
     {
         const FILEENT* pent = PentFind(fk.isector);
         if (!pent) throw std::runtime_error("no installed file for the key at sector " + std::to_string(fk.isector) + " (id " + std::to_string(fk.id) + ")");
+#ifdef __SWITCH__
+        // (the whole file in one read: its size first)
+        size_t cbRead = 0;
+        uint64_t cbFile = 0;
+        if (!s_openfiles.FRead(pent->path, 0, nullptr, 0, &cbRead, &cbFile)) throw std::runtime_error("cannot read " + pent->path);
+        std::vector<uint8_t> ab(static_cast<std::size_t>(cbFile));
+        if (!s_openfiles.FRead(pent->path, 0, ab.data(), ab.size(), &cbRead, &cbFile) || cbRead != ab.size())
+            throw std::runtime_error("cannot read " + pent->path);
+        return ab;
+#else
         std::ifstream in(cane::path(pent->path), std::ios::binary);
         if (!in) throw std::runtime_error("cannot read " + pent->path);
         return std::vector<uint8_t>(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+#endif
     }
     std::vector<uint8_t> ab(fk.cb);
     if (!ReadAt(m_path, uint64_t(fk.isector) * SECTOR, ab.data(), ab.size()))
@@ -416,6 +503,13 @@ bool CDisc::FReadFileBytes(uint32_t isector, uint64_t ib, void* pv, std::size_t 
         std::fprintf(stderr, "disc: no installed file at sector 0x%X\n", isector);
         return false;
     }
+#ifdef __SWITCH__
+    std::memset(pv, 0, cb);
+    size_t cbRead = 0;
+    uint64_t cbFile = 0;
+    if (!s_openfiles.FRead(pent->path, ib, pv, cb, &cbRead, &cbFile)) return false;
+    return cbRead == std::size_t(std::min<uint64_t>(cb, ib < cbFile ? cbFile - ib : 0));
+#else
     std::ifstream in(cane::path(pent->path), std::ios::binary);
     if (!in) return false;
     in.seekg(0, std::ios::end);
@@ -426,6 +520,7 @@ bool CDisc::FReadFileBytes(uint32_t isector, uint64_t ib, void* pv, std::size_t 
     const std::size_t cbRead = std::size_t(std::min<uint64_t>(cb, cbFile - ib));
     in.read(static_cast<char*>(pv), static_cast<std::streamsize>(cbRead));
     return static_cast<size_t>(in.gcount()) == cbRead;
+#endif
 }
 
 std::string CDisc::PathOf(uint32_t isector) const

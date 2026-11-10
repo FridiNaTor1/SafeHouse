@@ -19,7 +19,9 @@ extern "C"
 #include <libswscale/swscale.h>
 }
 
-#include <SDL.h>
+#ifndef __SWITCH__
+#include <SDL.h>   // (the stand-alone movie window of --play-movie; the Switch build has no SDL)
+#endif
 
 #include <algorithm>
 #include <chrono>
@@ -40,7 +42,7 @@ uint32_t Be32(const uint8_t* p) { return (uint32_t(p[0]) << 24) | (uint32_t(p[1]
 uint32_t Be16(const uint8_t* p) { return (uint32_t(p[0]) << 8) | p[1]; }
 uint32_t Le32(const uint8_t* p) { uint32_t v; std::memcpy(&v, p, 4); return v; }
 
-// The PSS file read from the disc in pieces.
+// The PSS file read from the disc in pieces, or one already in memory (the converter's: it has the file's bytes).
 class CPssReader
 {
 public:
@@ -51,6 +53,11 @@ public:
         uint8_t h[4] = {};
         m_fElementary = g_disc.FReadFileBytes(m_isector, 0, h, 4) && Be32(h) == 0x000001B3;
     }
+    CPssReader(const uint8_t* pb, std::size_t cb) : m_isector(0), m_cbFile(cb), m_pbMemory(pb)
+    {
+        m_fElementary = cb >= 4 && Be32(pb) == 0x000001B3;
+    }
+    [[nodiscard]] std::size_t CbFile() const { return m_cbFile; }
     [[nodiscard]] bool FElementary() const { return m_fElementary; }
 
     // The next PES packet of the video (0xE0) or private stream 1 (0xBD); false at the end.
@@ -109,10 +116,11 @@ public:
     }
 
 private:
-    const uint8_t* Pb() const { return m_ab.data() + (m_ib - m_ibBuf); }
+    const uint8_t* Pb() const { return m_pbMemory ? m_pbMemory + m_ib : m_ab.data() + (m_ib - m_ibBuf); }
 
     bool FEnsure(std::size_t cb)
     {
+        if (m_pbMemory) return m_ib + cb <= m_cbFile;
         if (m_ib + cb <= m_ibBuf + m_ab.size()) return true;
         if (m_ib + cb > m_cbFile) return false;
         // Keep the unread tail, read the next 64 KB after it.
@@ -129,6 +137,7 @@ private:
 
     uint32_t m_isector;  // (the file: its key's sector)
     std::size_t m_cbFile;
+    const uint8_t* m_pbMemory = nullptr;   // (the file in memory: no reads)
     bool m_fElementary = false;
     std::vector<uint8_t> m_ab;
     std::size_t m_ibBuf = 0;  // file offset of m_ab[0]
@@ -295,10 +304,12 @@ std::string AvError(int error)
 }
 }  // namespace
 
-bool FDemuxMovie(const FK& fk, std::vector<uint8_t>& abVideo, std::map<int, MOVIEAUDIOTRACK>& mpaudio)
+namespace
 {
-    CPssReader reader(fk);
+bool FDemuxPss(CPssReader& reader, std::vector<uint8_t>& abVideo, std::map<int, MOVIEAUDIOTRACK>& mpaudio)
+{
     if (reader.FElementary()) return false;
+    abVideo.reserve(reader.CbFile());   // (the video is most of the file: no regrowth of a few hundred MB)
     std::map<int, CMovieAudio> mpdec;
     uint32_t id = 0;
     const uint8_t* pb = nullptr;
@@ -317,6 +328,19 @@ bool FDemuxMovie(const FK& fk, std::vector<uint8_t>& abVideo, std::map<int, MOVI
         t.asample.assign(dec.m_pcm.begin(), dec.m_pcm.end());
     }
     return !abVideo.empty();
+}
+}  // namespace
+
+bool FDemuxMovie(const FK& fk, std::vector<uint8_t>& abVideo, std::map<int, MOVIEAUDIOTRACK>& mpaudio)
+{
+    CPssReader reader(fk);
+    return FDemuxPss(reader, abVideo, mpaudio);
+}
+
+bool FDemuxMovie(const std::vector<uint8_t>& abFile, std::vector<uint8_t>& abVideo, std::map<int, MOVIEAUDIOTRACK>& mpaudio)
+{
+    CPssReader reader(abFile.data(), abFile.size());
+    return FDemuxPss(reader, abVideo, mpaudio);
 }
 
 std::vector<MOVIEINFO> MovieList()
@@ -587,6 +611,13 @@ int ListMoviesCommand()
     return 0;
 }
 
+#ifdef __SWITCH__
+int PlayMovieCommand(const std::string&, const std::string&, double)
+{
+    std::fprintf(stderr, "--play-movie is a desktop development command\n");
+    return 1;
+}
+#else
 namespace
 {
 struct SDLPRESENTER
@@ -695,3 +726,4 @@ int PlayMovieCommand(const std::string& arg, const std::string& dirOut, double t
     ShutdownAudio();
     return f ? 0 : 1;
 }
+#endif

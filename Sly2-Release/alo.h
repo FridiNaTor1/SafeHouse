@@ -15,6 +15,9 @@ void LoadAloFromBrx(LO* plo, CBinaryInputStream* pbis);        // orig 0x1F31E0
 
 void UpdateXfWorlds(ALO* palo);
 void UpdateAloHierarchyWorlds(ALO* palo);
+// UpdateAloHierarchyWorlds for a root's hierarchy updated alongside others on several threads (game.cpp): false, part
+// done, at a record that refers outside paloRoot's hierarchy; the caller then redoes it once the others are done.
+bool FUpdateAloHierarchyWorldsIsolated(ALO* palo, const ALO* paloRoot);
 void SetAloMatrix(ALO* palo, const glm::mat4& mat);   // orig 0x1F4010 (vt slot 37)
 void SetAloParent(ALO* palo, ALO* paloNew, XF* pxfNew, int grf);  // orig 0x1F21B8 (vt slot 10)
 void CloneAloData(const ALO* paloSrc, ALO* paloDst);  // part of vt slot 40

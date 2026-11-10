@@ -21,9 +21,23 @@
 #include <string_view>
 #include <cstdlib>
 #include "../platform/platform.h"
+#ifdef __SWITCH__
+#include "../platform/switch/file_io.h"
+#include "../platform/switch/io_worker.h"
+#endif
 
 namespace
 {
+// Restores a file whose replacement was interrupted (the Switch's FAT has no atomic rename).
+std::filesystem::path RecoverWrittenFile(const std::filesystem::path& path)
+{
+#ifdef __SWITCH__
+    return CaneIo::RecoverFile(path);
+#else
+    return path;
+#endif
+}
+
 constexpr char kSaveMagic[8] = { 'P', 'C', 'A', 'N', 'E', 'S', 'A', 'V' };
 constexpr uint32_t kSaveVersion = 3;
 int s_lastSaveSlot = -1;
@@ -138,6 +152,9 @@ void ValidateVideoSettings(VIDEOSAVESETTINGS& settings)
     glGetIntegerv(GL_MAX_SAMPLES, &maxSamples);
     cane::settings::sanitizeStatic(settings, mode != nullptr ? mode->height : 0,
         (std::max)(static_cast<int>(maxSamples), 1));
+#ifdef __SWITCH__
+    settings.frameRate = (std::min)(settings.frameRate, 60);   // (the Switch: 30 or 60, SupportedFrameRates)
+#endif
 }
 
 void ApplySavedVideoSettings(VIDEOSAVESETTINGS settings)
@@ -294,7 +311,7 @@ bool ReadSaveSlot(int slot, GS* save, VIDEOSAVESETTINGS* legacyVideo, bool* hasL
     if (save == nullptr || legacyVideo == nullptr || hasLegacyVideo == nullptr)
         return false;
 
-    std::ifstream stream(SaveSlotPath(slot), std::ios::binary);
+    std::ifstream stream(RecoverWrittenFile(SaveSlotPath(slot)), std::ios::binary);
     SaveFileHeader header{};
     if (!stream.read(reinterpret_cast<char*>(&header), sizeof(header)) ||
         std::memcmp(header.magic, kSaveMagic, sizeof(kSaveMagic)) != 0)
@@ -354,8 +371,11 @@ bool LoadSystemSettings(VIDEOSAVESETTINGS* settings)
 {
     if (settings == nullptr)
         return false;
+#ifdef __SWITCH__
+    CaneIo::Drain();   // (a queued settings write lands first)
+#endif
 
-    const cane::settings::LoadResult result = cane::settings::load(SystemSettingsPath(), *settings);
+    const cane::settings::LoadResult result = cane::settings::load(RecoverWrittenFile(SystemSettingsPath()), *settings);
     if (result == cane::settings::LoadResult::Newer)
         s_fSettingsNewer = true;
     return cane::settings::loaded(result);
@@ -368,10 +388,17 @@ bool SaveSystemSettings()
     if (s_fSettingsNewer)
         return false;
     const VIDEOSAVESETTINGS settings = CaptureVideoSettings();
+#ifdef __SWITCH__
+    // Written on the settings thread, so SD card writes never stall a menu
+    const std::filesystem::path path = SystemSettingsPath();
+    s_settingsFile = settings;
+    return CaneIo::QueueSettings([path, settings] { return cane::settings::save(path, settings); });
+#else
     if (!cane::settings::save(SystemSettingsPath(), settings))
         return false;
     s_settingsFile = settings;
     return true;
+#endif
 }
 
 void StartupSaveBlot(SAVEBLOT* psaveblot)

@@ -2,6 +2,7 @@
 
 #include "scene.h"
 
+#include "passhelpers.h"
 #include "render.h"
 #include "simdmat.h"
 
@@ -11,6 +12,7 @@
 #include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <mutex>
 #include <sstream>
 #include <unordered_map>
 
@@ -187,6 +189,9 @@ int CApplyRamTransforms(SCENE& scene, const std::string& ramPath)
         if (!fValid(agrp)) continue;
         sgs.amatGlob.resize(gs.aglob.size(), glm::mat4(1.0f));
         sgs.afVisible.resize(gs.aglob.size(), 1);
+#ifdef __SWITCH__
+        sgs.fVisibleCleared = false;   // (the groups' flags set below)
+#endif
         const uint32_t paloSelf = u32(vaGlob + 0);
         sgs.oid = static_cast<int32_t>(u32(paloSelf + 0x18));
         const uint32_t pxfRoot = u32(paloSelf + 0x60);
@@ -339,7 +344,7 @@ int RelightForward(SCENE& scene, const LIGHTSET& lightsFrame, bool fUpload, cons
                 {
                     const GLOB& glob = gs.aglob[i];
                     if (glob.meshk != MESHK_Strips || !glob.pgl || glob.avtx.empty()) continue;
-                    if (!std::any_of(glob.avtx.begin(), glob.avtx.end(), [](const VTXGLOB& v) { return v.fUnbaked != 0; })) continue;
+                    if (!FGlobLit(glob)) continue;
                     sgs.apglInst[i] = PglInstanceCopyGpu(glob);
                     fNew = true;
                     static const bool s_fDbg = std::getenv("SLY2N_INSTDBG") != nullptr;   // debugging
@@ -354,9 +359,71 @@ int RelightForward(SCENE& scene, const LIGHTSET& lightsFrame, bool fUpload, cons
         }
         if (fNew) FlushInstanceGlobsGpu();
     }
-    for (SCENEGLOBSET& sgs : scene.aglobset)
+    // The entries' checks on the pass helpers (passhelpers.h), in blocks of entries: they are memory bound (each group
+    // reads its entry's records of what it was last lit with, scattered across the scene). They read the world's lights
+    // and write only their entry's records; what they find to light (the bakes and the forward lightings, which write
+    // the groups' vertices, shared by the entries of a glob set, and upload them) is kept per block and done below.
+    struct RELIGHT
     {
+        SCENEGLOBSET* psgs;
+        uint32_t iglob;
+        bool fBake;
+        glm::vec3 pos;      // bake: the sphere's centre; forward: the light context's position
+        float sRadius;      // (bake)
+        const LIGHTSET* plights;
+        const std::vector<glm::mat4>* pamatBone;  // (forward)
+        const GLGLOB* pglInst;
+    };
+    constexpr size_t CENTRY_BLOCK = 16;
+    const size_t centryAll = scene.aglobset.size();
+    const size_t cblock = (centryAll + CENTRY_BLOCK - 1) / CENTRY_BLOCK;
+    static std::vector<std::vector<RELIGHT>> s_aarelight;
+    if (s_aarelight.size() < cblock) s_aarelight.resize(cblock);
+    static std::mutex s_mutexLitList;   // (FGlobLit's cache is the shared glob's: its first answers, one thread at a time)
+    PassHelpers().ForBlocks(centryAll, CENTRY_BLOCK, [&](size_t ientryFirst, size_t ientryLim) {
+    const size_t iblock = ientryFirst / CENTRY_BLOCK;
+    std::vector<RELIGHT>& arelight = s_aarelight[iblock];
+    arelight.clear();
+    // FBakeLightsUnchangedForAll per key version, asked once a block (most groups' keys are a frame old)
+    uint32_t avForAll[4] = {};
+    bool afForAll[4] = {};
+    int cForAll = 0;
+    auto fUnchangedForAll = [&](uint32_t v) {
+        for (int k = 0; k < cForAll; ++k)
+            if (avForAll[k] == v) return afForAll[k];
+        const bool f = FBakeLightsUnchangedForAll(v, lightsFrame);
+        if (cForAll < 4) { avForAll[cForAll] = v; afForAll[cForAll] = f; ++cForAll; }
+        return f;
+    };
+    for (size_t ientry = ientryFirst; ientry < ientryLim; ++ientry)
+    {
+#ifdef __SWITCH__
+        // (the Switch: the entry two ahead fetched, its glob set and the list of its lit groups, scattered over the heap)
+        if (ientry + 2 < ientryLim)
+        {
+            const SCENEGLOBSET& sn = scene.aglobset[ientry + 2];
+            __builtin_prefetch(sn.pglobset.get());
+            __builtin_prefetch(sn.aiglobLit.data());
+        }
+#endif
+        SCENEGLOBSET& sgs = scene.aglobset[ientry];
         if (!sgs.fTransform) continue;
+        GLOBSET& gs = *sgs.pglobset;
+        // only the groups with run-time lit vertices (SCENEGLOBSET::aiglobLit): both paths below end at that test for
+        // the others; an entry without any is passed over whole (its fields below are only read for its lit groups)
+        if (sgs.pglobLitKey != gs.aglob.data() || sgs.cglobLitKey != gs.aglob.size())
+        {
+            std::lock_guard<std::mutex> lock(s_mutexLitList);
+            sgs.aiglobLit.clear();
+            for (size_t i = 0; i < gs.aglob.size(); ++i)
+            {
+                const GLOB& g = gs.aglob[i];
+                if (g.meshk == MESHK_Strips && !g.avtx.empty() && FGlobLit(g)) sgs.aiglobLit.push_back(uint32_t(i));
+            }
+            sgs.pglobLitKey = gs.aglob.data();
+            sgs.cglobLitKey = gs.aglob.size();
+        }
+        if (sgs.aiglobLit.empty()) continue;
         const int irtgt = alightsRtgt && sgs.irtgt >= 0 && !alightsRtgt[sgs.irtgt].actx.empty() ? sgs.irtgt : -1;
         const LIGHTSET& lights = irtgt >= 0 ? alightsRtgt[irtgt] : lightsFrame;
         const bool fNewSet = sgs.irtgtLit != irtgt;
@@ -364,11 +431,22 @@ int RelightForward(SCENE& scene, const LIGHTSET& lightsFrame, bool fUpload, cons
         std::array<LIGHTREC, 4> alSel;
         bool fAlSel = false;
         glm::vec3 posAlSel(0.0f);
-        GLOBSET& gs = *sgs.pglobset;
-        for (size_t i = 0; i < gs.aglob.size(); ++i)
+        for (const uint32_t iglobLit : sgs.aiglobLit)
         {
+#ifdef __SWITCH__
+            // (the Switch: the lit group two ahead fetched, the lines of it read below and its matrices: the lit groups
+            // are a scattered few of a glob set's large groups)
+            if (const size_t k = size_t(&iglobLit - sgs.aiglobLit.data()); k + 2 < sgs.aiglobLit.size())
+            {
+                const size_t in = sgs.aiglobLit[k + 2];
+                __builtin_prefetch(&gs.aglob[in]);
+                __builtin_prefetch(&gs.aglob[in].fHistoryWorld);
+                if (in < sgs.amatGlob.size()) __builtin_prefetch(&sgs.amatGlob[in]);
+                if (in < sgs.amatLit.size()) __builtin_prefetch(&sgs.amatLit[in]);
+            }
+#endif
+            const size_t i = iglobLit;
             GLOB& glob = gs.aglob[i];
-            if (glob.meshk != MESHK_Strips || glob.avtx.empty()) continue;
             const GLGLOB* pglInst = i < sgs.apglInst.size() ? sgs.apglInst[i] : nullptr;
             if (!(glob.grfMesh & 1))
             {
@@ -383,10 +461,15 @@ int RelightForward(SCENE& scene, const LIGHTSET& lightsFrame, bool fUpload, cons
                 // (the same matrix bytes as at the last key: the key from then, unless a light it takes changed)
                 const bool fSameMat = std::memcmp(&sgs.amatLit[i], &m, sizeof(glm::mat4)) == 0;
                 sgs.amatLit[i] = m;
-                const glm::vec3 posSphere = glm::vec3(MulMat4Vec4(m, glm::vec4(glob.posCenter, 1.0f)));
-                const float sRadius = glob.sRadius * std::sqrt(std::max({glm::dot(glm::vec3(m[0]), glm::vec3(m[0])),
-                                                                         glm::dot(glm::vec3(m[1]), glm::vec3(m[1])),
-                                                                         glm::dot(glm::vec3(m[2]), glm::vec3(m[2]))}));
+                // (the sphere only when a test or the bake needs it: a key that stands (below) goes without)
+                glm::vec3 posSphere(0.0f);
+                float sRadius = 0.0f;
+                auto sphere = [&] {
+                    posSphere = glm::vec3(MulMat4Vec4(m, glm::vec4(glob.posCenter, 1.0f)));
+                    sRadius = glob.sRadius * std::sqrt(std::max({glm::dot(glm::vec3(m[0]), glm::vec3(m[0])),
+                                                                 glm::dot(glm::vec3(m[1]), glm::vec3(m[1])),
+                                                                 glm::dot(glm::vec3(m[2]), glm::vec3(m[2]))}));
+                };
                 if (sgs.akeyBake.size() != gs.aglob.size()) sgs.akeyBake.assign(gs.aglob.size(), 0);
                 if (sgs.aversionKey.size() != gs.aglob.size())
                 {
@@ -395,46 +478,26 @@ int RelightForward(SCENE& scene, const LIGHTSET& lightsFrame, bool fUpload, cons
                 }
                 static const bool s_fKeyAlways = std::getenv("SLY2N_BAKEKEYALWAYS") != nullptr;   // (debug: the old way, every key hashed)
                 const uint32_t version = WorldLightsVersion();
-                if (s_fKeyAlways || !fSameMat || sgs.aversionKey[i] == 0 ||
-                    !FBakeLightsUnchangedSince(sgs.aversionKey[i], posSphere, sRadius, lights))
-                    sgs.akeyBakeLights[i] = BakeKey(m, posSphere, sRadius, lights);
-                else if (static const bool s_fKeyCheck = std::getenv("SLY2N_BAKEKEYCHECK") != nullptr;   // (debug: the kept key checked)
-                         s_fKeyCheck && BakeKey(m, posSphere, sRadius, lights) != sgs.akeyBakeLights[i])
-                    std::printf("bakekey: kept key differs: oid %d glob %zu, kept at version %u, now %u\n", sgs.oid, i, sgs.aversionKey[i], version);
+                // (the same matrix and no change since its key that any bake takes (FBakeLightsUnchangedForAll, once
+                // per key version a call): the key stands, without the sphere or the per-group test)
+                const bool fKeyStands = !s_fKeyAlways && fSameMat && sgs.aversionKey[i] != 0 && fUnchangedForAll(sgs.aversionKey[i]);
+                if (!fKeyStands)
+                {
+                    sphere();
+                    if (s_fKeyAlways || !fSameMat || sgs.aversionKey[i] == 0 ||
+                        !FBakeLightsUnchangedSince(sgs.aversionKey[i], posSphere, sRadius, lights))
+                        sgs.akeyBakeLights[i] = BakeKey(m, posSphere, sRadius, lights);
+                    else if (static const bool s_fKeyCheck = std::getenv("SLY2N_BAKEKEYCHECK") != nullptr;   // (debug: the kept key checked)
+                             s_fKeyCheck && BakeKey(m, posSphere, sRadius, lights) != sgs.akeyBakeLights[i])
+                        std::printf("bakekey: kept key differs: oid %d glob %zu, kept at version %u, now %u\n", sgs.oid, i, sgs.aversionKey[i], version);
+                }
                 sgs.aversionKey[i] = version;
                 const uint64_t key = sgs.akeyBakeLights[i] ^ uint64_t(uintptr_t(pglInst));
                 if (key == sgs.akeyBake[i]) continue;
-                if (!std::any_of(glob.avtx.begin(), glob.avtx.end(), [](const VTXGLOB& v) { return v.fUnbaked != 0; }))
-                {
-                    sgs.akeyBake[i] = key;
-                    continue;
-                }
+                if (fKeyStands) sphere();
                 // (a shared glob without an own copy is lit by the last entry: only the entries with copies differ)
                 sgs.akeyBake[i] = key;
-                static const bool s_fBakeDiff = std::getenv("SLY2N_BAKEDIFF") != nullptr;   // debugging: vs a bake at the origin
-                float gOrigin = 0.0f;
-                auto bright = [&]() {
-                    double t = 0; size_t n = 0;
-                    for (const VTXGLOB& v : glob.avtx)
-                        if (v.fUnbaked)
-                        {
-                            for (int ch = 0; ch < 3; ++ch) t += double((v.rgbaA >> (8 * ch)) & 0xFF) + double((v.rgbaB >> (8 * ch)) & 0xFF) * double(v.rgbaB >> 24) / 128.0;
-                            ++n;
-                        }
-                    return n ? float(t / (3.0 * double(n))) : 0.0f;
-                };
-                if (s_fBakeDiff)
-                {
-                    const glm::mat4 mId = glm::mat4(glm::mat3(m));
-                    BakeGlobLighting(glob, mId, glm::vec3(mId * glm::vec4(glob.posCenter, 1.0f)), sRadius, lights);
-                    gOrigin = bright();
-                }
-                BakeGlobLighting(glob, m, posSphere, sRadius, lights);
-                if (s_fBakeDiff)
-                    std::printf("bakediff oid %d glob %zu at %.0f %.0f %.0f inst %d origin %.1f here %.1f\n", sgs.oid, i, posSphere.x, posSphere.y,
-                                posSphere.z, pglInst != nullptr, gOrigin, bright());
-                if (fUpload) UpdateGlobColorsGpu(glob, pglInst ? pglInst : glob.pgl);
-                ++c;
+                arelight.push_back({&sgs, uint32_t(i), true, posSphere, sRadius, &lights, nullptr, pglInst});   // (the bake: below)
                 continue;
             }
             const glm::mat4& m = sgs.amatGlob[i];
@@ -447,7 +510,6 @@ int RelightForward(SCENE& scene, const LIGHTSET& lightsFrame, bool fUpload, cons
             const bool fSamePlace = !glob.fHistoryWorld && sgs.amatLit[i] == m && fSameBones && !sgs.fPosLightMoved && !fNewSet;
             if (fSamePlace && sgs.versionLit == WorldLightsVersion() && irtgt < 0) continue;   // not moved, same lights
             sgs.amatLit[i] = m;
-            if (!std::any_of(glob.avtx.begin(), glob.avtx.end(), [](const VTXGLOB& v) { return v.fUnbaked != 0; })) continue;
             const glm::vec3 posCtx = sgs.fPosLight ? sgs.posLight : glm::vec3(MulMat4Vec4(m, glm::vec4(glob.posCenter, 1.0f)));
             // the lighting depends only on the place and the four lights chosen there (and the world shader): when
             // another light changed, the same four chosen bit for bit give the same colours
@@ -465,7 +527,111 @@ int RelightForward(SCENE& scene, const LIGHTSET& lightsFrame, bool fUpload, cons
             if (fSamePlace && fSameLights) continue;
             sgs.aalLit[i] = al;
             if (pamatBone) sgs.aamatBoneLit[i] = *pamatBone;
-            ForwardGlobLighting(glob, m, posCtx, lights, pamatBone, al.data());   // (the lights chosen above at posCtx)
+            arelight.push_back({&sgs, uint32_t(i), false, posCtx, 0.0f, &lights, pamatBone, pglInst});   // (the lighting: below)
+        }
+        sgs.versionLit = WorldLightsVersion();
+        sgs.worldShaderLit = lightsFrame.worldShader;   // (the targets' sets copy the frame's)
+    }
+    });
+    // what the checks found to light, in the entries' order (the blocks hold consecutive entries)
+    static std::vector<const RELIGHT*> s_apr;
+    s_apr.clear();
+    for (size_t iblock = 0; iblock < cblock; ++iblock)
+        for (const RELIGHT& r : s_aarelight[iblock]) s_apr.push_back(&r);
+    // The lightings of the groups lit once in this call (nearly all) on the pass helpers: each writes only its group's
+    // vertices. A group two entries light (a shared glob set's, lit at each entry's place into the same vertices) stays
+    // on the game thread below, in the entries' order with its upload after each; so does every group with
+    // SLY2N_BAKEDIFF (its debug bakes). The uploads follow in the entries' order.
+    static std::vector<uint8_t> s_afDone;
+    s_afDone.assign(s_apr.size(), 0);
+#ifdef __SWITCH__
+    static std::vector<GLOBCOLORS> s_acols;   // (the Switch: the colours packed on the helpers, by lighting)
+#endif
+    static const bool s_fBakeDiff = std::getenv("SLY2N_BAKEDIFF") != nullptr;   // debugging: vs a bake at the origin
+    if (!s_fBakeDiff && s_apr.size() > 1)
+    {
+        static std::vector<uint8_t> s_afAlone;
+        s_afAlone.resize(s_apr.size());
+#ifdef __SWITCH__
+        // (the Switch: the groups lit more than once found by sorting, not by a map with a node allocated per group every
+        // frame)
+        static std::vector<std::pair<const GLOB*, uint32_t>> s_aglobk;
+        s_aglobk.clear();
+        for (size_t k = 0; k < s_apr.size(); ++k) s_aglobk.emplace_back(&s_apr[k]->psgs->pglobset->aglob[s_apr[k]->iglob], uint32_t(k));
+        std::sort(s_aglobk.begin(), s_aglobk.end(), [](const auto& a, const auto& b) { return std::less<const GLOB*>()(a.first, b.first); });
+        for (size_t i = 0; i < s_aglobk.size();)
+        {
+            size_t j = i + 1;
+            while (j < s_aglobk.size() && s_aglobk[j].first == s_aglobk[i].first) ++j;
+            for (size_t m = i; m < j; ++m) s_afAlone[s_aglobk[m].second] = j - i == 1;
+            i = j;
+        }
+#else
+        static std::unordered_map<const GLOB*, int> s_mpcglob;
+        s_mpcglob.clear();
+        for (const RELIGHT* pr : s_apr) ++s_mpcglob[&pr->psgs->pglobset->aglob[pr->iglob]];
+        for (size_t k = 0; k < s_apr.size(); ++k) s_afAlone[k] = s_mpcglob[&s_apr[k]->psgs->pglobset->aglob[s_apr[k]->iglob]] == 1;
+#endif
+#ifdef __SWITCH__
+        // (the Switch: a group lit there has its colours packed there too, for its upload below; nothing lights it again
+        // in between, it is lit once in this call)
+        if (s_acols.size() < s_apr.size()) s_acols.resize(s_apr.size());
+#endif
+        PassHelpers().ForBlocks(s_apr.size(), 2, [&](size_t kFirst, size_t kLim) {
+            for (size_t k = kFirst; k < kLim; ++k)
+            {
+                if (!s_afAlone[k]) continue;
+                const RELIGHT& r = *s_apr[k];
+                SCENEGLOBSET& sgs = *r.psgs;
+                GLOB& glob = sgs.pglobset->aglob[r.iglob];
+                if (r.fBake) BakeGlobLighting(glob, sgs.amatGlob[r.iglob], r.pos, r.sRadius, *r.plights);
+                else ForwardGlobLighting(glob, sgs.amatGlob[r.iglob], r.pos, *r.plights, r.pamatBone, sgs.aalLit[r.iglob].data());
+#ifdef __SWITCH__
+                if (fUpload) PackGlobColors(glob, s_acols[k]);
+#endif
+                s_afDone[k] = 1;
+            }
+        });
+    }
+    for (size_t k = 0; k < s_apr.size(); ++k)
+    {
+        const RELIGHT& r = *s_apr[k];
+        const bool fDone = s_afDone[k] != 0;
+        SCENEGLOBSET& sgs = *r.psgs;
+        const size_t i = r.iglob;
+        GLOB& glob = sgs.pglobset->aglob[i];
+        const glm::mat4& m = sgs.amatGlob[i];
+        const LIGHTSET& lights = *r.plights;
+        if (r.fBake && !fDone)
+        {
+            const glm::vec3& posSphere = r.pos;
+            const float sRadius = r.sRadius;
+            float gOrigin = 0.0f;
+            auto bright = [&]() {
+                double t = 0; size_t n = 0;
+                for (const VTXGLOB& v : glob.avtx)
+                    if (v.fUnbaked)
+                    {
+                        for (int ch = 0; ch < 3; ++ch) t += double((v.rgbaA >> (8 * ch)) & 0xFF) + double((v.rgbaB >> (8 * ch)) & 0xFF) * double(v.rgbaB >> 24) / 128.0;
+                        ++n;
+                    }
+                return n ? float(t / (3.0 * double(n))) : 0.0f;
+            };
+            if (s_fBakeDiff)
+            {
+                const glm::mat4 mId = glm::mat4(glm::mat3(m));
+                BakeGlobLighting(glob, mId, glm::vec3(mId * glm::vec4(glob.posCenter, 1.0f)), sRadius, lights);
+                gOrigin = bright();
+            }
+            BakeGlobLighting(glob, m, posSphere, sRadius, lights);
+            if (s_fBakeDiff)
+                std::printf("bakediff oid %d glob %zu at %.0f %.0f %.0f inst %d origin %.1f here %.1f\n", sgs.oid, i, posSphere.x, posSphere.y,
+                            posSphere.z, r.pglInst != nullptr, gOrigin, bright());
+        }
+        else if (!r.fBake)
+        {
+            const glm::vec3& posCtx = r.pos;
+            if (!fDone) ForwardGlobLighting(glob, m, posCtx, lights, r.pamatBone, sgs.aalLit[i].data());   // (the lights chosen at posCtx)
             if (static const bool s_f = std::getenv("SLY2N_FWDDBG") != nullptr; s_f)   // debugging: the forward-lit groups lit
                 std::printf("fwd oid %d glob %zu ctx %.0f %.0f %.0f r %.0f A0 %08X B0 %08X\n", sgs.oid, i, posCtx.x, posCtx.y, posCtx.z, glob.sRadius,
                             glob.avtx[0].rgbaA, glob.avtx[0].rgbaB);
@@ -481,11 +647,17 @@ int RelightForward(SCENE& scene, const LIGHTSET& lightsFrame, bool fUpload, cons
                                 l.angularOffset, l.angularScale, l.distanceOffset, l.distanceScale, l.rgba.r, l.rgba.g, l.rgba.b, l.rgba.a,
                                 l.dirOrPos.x, l.dirOrPos.y, l.dirOrPos.z);
             }
-            if (fUpload) UpdateGlobColorsGpu(glob, pglInst ? pglInst : glob.pgl);
-            ++c;
         }
-        sgs.versionLit = WorldLightsVersion();
-        sgs.worldShaderLit = lightsFrame.worldShader;   // (the targets' sets copy the frame's)
+        if (fUpload)
+        {
+#ifdef __SWITCH__
+            if (fDone) UploadGlobColorsGpu(glob, r.pglInst ? r.pglInst : glob.pgl, s_acols[k]);   // (packed on the helpers)
+            else UpdateGlobColorsGpu(glob, r.pglInst ? r.pglInst : glob.pgl);
+#else
+            UpdateGlobColorsGpu(glob, r.pglInst ? r.pglInst : glob.pgl);
+#endif
+        }
+        ++c;
     }
     return c;
 }
@@ -526,4 +698,6 @@ void ApplyLighting(SCENE& scene, const LIGHTSET& lights)
             }
         }
     }
+    // (the groups it gave vertices are lit now: every entry's list found again, a shared GLOBSET's entries too)
+    for (SCENEGLOBSET& sgs : scene.aglobset) sgs.pglobLitKey = nullptr;
 }

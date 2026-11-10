@@ -1,4 +1,9 @@
 #version 430 core
+#ifdef DEKO3D
+// (the Switch: computed exactly as written, as glob.vert, so the borders' depth matches the surfaces they outline)
+invariant gl_Position;
+precise gl_Position;
+#endif
 // Cel borders (mesh type 1), adapted from Sly1-Release celborder.vert: per edge {E0, E1, OA, OB} the silhouette
 // test of the VU1 program P_A (the two faces on either side of the edge face opposite ways on screen), drawn
 // as a screen-space quad of the edge (P_A offsets along the edge's normal) instead of a GL line.

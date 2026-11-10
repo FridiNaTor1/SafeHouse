@@ -76,6 +76,10 @@ inline std::string DescribeContextFailure() {
 inline bool CreateContext(GLFWwindow* window, std::string* error) {
 #if defined(__APPLE__)
   return gl_metal::CreateContext(window, error);
+#elif defined(__SWITCH__)
+  if (window && glfwGetCurrentContext() == window) return true;
+  if (error) *error = "deko3d did not start";
+  return false;
 #else
   (void)error;
   glfwMakeContextCurrent(window);

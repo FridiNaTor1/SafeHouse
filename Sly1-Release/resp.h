@@ -401,8 +401,11 @@ inline RESPK s_arespkVideoMenu[] =
     RESPK_FrameRate,
     RESPK_InternalResolution,
     RESPK_DrawDistance,
+    // Not on the Switch: one screen, no window to place, and VSync always on (ApplySwapInterval).
+#ifndef __SWITCH__
     RESPK_WindowMode,
     RESPK_Vsync,
+#endif
     RESPK_AspectRatio,
     RESPK_Fog,
     RESPK_GuiStyle,

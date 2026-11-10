@@ -33,6 +33,8 @@ struct MOVIEAUDIOTRACK
     std::vector<int16_t> asample;  // stereo, interleaved
 };
 bool FDemuxMovie(const FK& fk, std::vector<uint8_t>& abVideo, std::map<int, MOVIEAUDIOTRACK>& mpaudio);
+// The same from the file's bytes already read (the converter's).
+bool FDemuxMovie(const std::vector<uint8_t>& abFile, std::vector<uint8_t>& abVideo, std::map<int, MOVIEAUDIOTRACK>& mpaudio);
 
 // The movies on the disc, from the executable's keys.
 std::vector<MOVIEINFO> MovieList();

@@ -18,6 +18,7 @@
 #include "objmethod.h"
 #include "vtnative.h"
 
+#include <atomic>
 #include <stdexcept>
 #include <cstdio>
 #include <cstdlib>
@@ -263,7 +264,9 @@ void LoadAloFromBrx(LO* plo, CBinaryInputStream* pbis)
 // index search. A reference inside the object is done first; records of other objects are taken as they are.)
 namespace
 {
-uint64_t s_genXfWorld = 0;
+// (atomic: FUpdateAloHierarchyWorldsIsolated takes stamps on several threads at once)
+std::atomic<uint64_t> s_genXfWorld{0};
+uint64_t NextGenXfWorld() { return s_genXfWorld.fetch_add(1, std::memory_order_relaxed) + 1; }   // (64 bits: never wraps)
 void UpdateXfWorld(ALO* palo, XF* pxf, uint64_t gen)
 {
     if (pxf->genWorld == 2 * gen + 1) return;
@@ -274,12 +277,35 @@ void UpdateXfWorld(ALO* palo, XF* pxf, uint64_t gen)
     pxf->matWorld = pxfRef ? MulMat4(pxfRef->matWorld, pxf->mat) : pxf->mat;   // (simdmat.h: glm's product exactly)
     pxf->genWorld = 2 * gen + 1;
 }
+// UpdateXfWorld for a hierarchy updated alongside others: false, the reference not read, when it lies outside the
+// hierarchy of paloRoot (another thread may be writing its world). Across hierarchies only the records' owners and the
+// objects' parents are read, which nothing writes meanwhile. A record left started (2g) is redone under a new stamp.
+bool FUpdateXfWorldIsolated(ALO* palo, XF* pxf, uint64_t gen, const ALO* paloRoot)
+{
+    if (pxf->genWorld == 2 * gen + 1) return true;
+    if (pxf->genWorld == 2 * gen) { pxf->matWorld = pxf->mat; return true; }  // (a cycle: not expected)
+    pxf->genWorld = 2 * gen;
+    XF* pxfRef = pxf->pxfRef;
+    if (pxfRef && pxfRef->palo == palo)
+    {
+        if (!FUpdateXfWorldIsolated(palo, pxfRef, gen, paloRoot)) return false;
+    }
+    else if (pxfRef)
+    {
+        const ALO* p = pxfRef->palo;
+        while (p && p != paloRoot) p = p->paloParent;
+        if (!p) return false;
+    }
+    pxf->matWorld = pxfRef ? MulMat4(pxfRef->matWorld, pxf->mat) : pxf->mat;
+    pxf->genWorld = 2 * gen + 1;
+    return true;
+}
 }  // namespace
 
 void UpdateXfWorlds(ALO* palo)
 {
     if (palo->axf.empty()) return;
-    const uint64_t gen = ++s_genXfWorld;   // (64 bits: never wraps)
+    const uint64_t gen = NextGenXfWorld();
     for (auto& pxf : palo->axf) UpdateXfWorld(palo, pxf.get(), gen);
 }
 
@@ -289,6 +315,42 @@ void UpdateAloHierarchyWorlds(ALO* palo)
     UpdateXfWorlds(palo);
     for (LO* pc : palo->aploChild)
         if (FCidDerivedFrom(pc->Cid(), 0x30)) UpdateAloHierarchyWorlds(static_cast<ALO*>(pc));
+}
+
+bool FUpdateAloHierarchyWorldsIsolated(ALO* palo, const ALO* paloRoot)
+{
+#ifdef __SWITCH__
+    // (the Switch: the records two ahead and the children's class pointers prefetched; each record is a heap block of
+    // its own)
+    auto prefetchXf = [](const XF* p) {
+        __builtin_prefetch(&p->genWorld);
+        __builtin_prefetch(&p->mat);
+        __builtin_prefetch(&p->matWorld, 1);
+    };
+    for (const LO* pc : palo->aploChild) __builtin_prefetch(&pc->pcls);
+    const size_t cxf = palo->axf.size();
+    if (cxf > 0) prefetchXf(palo->axf[0].get());
+    if (cxf > 1) prefetchXf(palo->axf[1].get());
+    if (cxf)
+    {
+        const uint64_t gen = NextGenXfWorld();
+        for (size_t i = 0; i < cxf; ++i)
+        {
+            if (i + 2 < cxf) prefetchXf(palo->axf[i + 2].get());
+            if (!FUpdateXfWorldIsolated(palo, palo->axf[i].get(), gen, paloRoot)) return false;
+        }
+    }
+#else
+    if (!palo->axf.empty())
+    {
+        const uint64_t gen = NextGenXfWorld();
+        for (auto& pxf : palo->axf)
+            if (!FUpdateXfWorldIsolated(palo, pxf.get(), gen, paloRoot)) return false;
+    }
+#endif
+    for (LO* pc : palo->aploChild)
+        if (FCidDerivedFrom(pc->Cid(), 0x30) && !FUpdateAloHierarchyWorldsIsolated(static_cast<ALO*>(pc), paloRoot)) return false;
+    return true;
 }
 
 // orig 0x001F4010 (ALO vt slot 37 SetMatrix): the first record's local = m * local (the original's 0x11C168(m,

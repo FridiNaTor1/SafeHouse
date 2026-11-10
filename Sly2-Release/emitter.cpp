@@ -2649,12 +2649,23 @@ void DrawParticles(const glm::mat4& matWorldToClip, const glm::vec3& posCamera, 
     glDepthFunc(GL_GREATER);   // TEST 0x7180B: ZTST GREATER
     glEnable(GL_BLEND);
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_FALSE);
+#ifdef __SWITCH__
+    // (the Switch: the vertices and the matrices kept from one system and frame to the next, not allocated anew for
+    // every particle system every frame)
+    static std::vector<PVTX> av;
+    static std::vector<glm::mat4> amat;
+#else
     std::vector<PVTX> av;
+#endif
     for (const auto& pp : s_apsys)
     {
         if (pp->cparticle <= 0) continue;
         // 0x13A1E8: once per visible member instance of the group, or once untransformed
+#ifdef __SWITCH__
+        amat.clear();
+#else
         std::vector<glm::mat4> amat;
+#endif
         const EMITTERN* par = pp->pemitterPar;
         // (QoL draw distance below 1x: the particles of an emitter beyond its scaled range are not drawn; it still runs
         // as the original's, UpdateEmitter)

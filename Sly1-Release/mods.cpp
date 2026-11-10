@@ -78,7 +78,7 @@ const std::unordered_map<std::string, fs::path>& Index()
 
 void SetModsDirectory(const fs::path& directory)
 {
-    s_modsDirectory = directory.empty() ? fs::path() : fs::absolute(directory);
+    s_modsDirectory = directory.empty() ? fs::path() : cane::absolutePath(directory);
     if (s_modsDirectory.empty())
         std::printf("mods: off\n");
 }
@@ -93,8 +93,8 @@ fs::path InstallationRelativePath(const fs::path& installed)
     const CONTENT_PACKAGE& package = ContentPackage();
     if (!package.manifestLoaded || package.root.empty() || installed.empty())
         return {};
-    const fs::path relative = fs::absolute(installed).lexically_normal().lexically_relative(
-        fs::absolute(package.root).lexically_normal());
+    const fs::path relative = cane::absolutePath(installed).lexically_normal().lexically_relative(
+        cane::absolutePath(package.root).lexically_normal());
     if (relative.empty() || *relative.begin() == "..")
         return {};
     return relative;

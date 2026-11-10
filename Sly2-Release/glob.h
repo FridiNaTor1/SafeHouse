@@ -176,7 +176,28 @@ struct GLOB
     // Renderer cache (gl objects; owned by render.cpp).
     struct GLGLOB* pgl = nullptr;
     bool fHistoryWorld = false;   // CID 0x69: positions and live material alpha come from its history
+
+    // FGlobLit's answer and the vertex array it was found for
+    mutable const VTXGLOB* pvtxLitKey = nullptr;
+    mutable size_t cvtxLitKey = 0;
+    mutable bool fLitKey = false;
 };
+
+// Whether any of the glob's vertices is lit at run time (VTXGLOB::fUnbaked), kept per vertex array: the flags are set
+// at load (a bake only turns 1 into 2) and the array is only ever replaced whole (ApplyLighting's template copy).
+inline bool FGlobLit(const GLOB& glob)
+{
+    if (glob.pvtxLitKey != glob.avtx.data() || glob.cvtxLitKey != glob.avtx.size())
+    {
+        bool f = false;
+        for (const VTXGLOB& v : glob.avtx)
+            if (v.fUnbaked) { f = true; break; }
+        glob.fLitKey = f;
+        glob.pvtxLitKey = glob.avtx.data();
+        glob.cvtxLitKey = glob.avtx.size();
+    }
+    return glob.fLitKey;
+}
 
 // A sphere of a sphere set (0x167870): kind -1 end, 0 a group's bounds, 1 a link to another set.
 struct GLOBSPHERE
@@ -201,6 +222,11 @@ struct GLOBSET
     std::vector<GLOB> aglob;            // +0x38 groups (templates and their instances)
     std::vector<std::array<GLOBSPHERE, 4>> asphereset;  // +0x48
     uint64_t grfglobset = 0;            // +0x50: bit 32 lit, bit 33 type-2 mesh
+#ifdef __SWITCH__
+    // (the Switch: per group whether it is a cel border, set at the load (glob.cpp), for the volume tree's walk
+    // (render.cpp) instead of each group's large record)
+    std::vector<uint8_t> afCelBorder;
+#endif
 };
 
 // orig: 0x00167320 LoadGlob (entry point for the world loader: an ALO's mesh)

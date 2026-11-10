@@ -543,5 +543,9 @@ void LoadGlobsetFromBrx(GLOBSET* pglobset, ALO* palo, CBinaryInputStream* pbis)
         i += csub;
     }
     LoadGlobSpheresFromBrx(pglobset, pbis);
+#ifdef __SWITCH__
+    pglobset->afCelBorder.resize(pglobset->aglob.size());
+    for (size_t k = 0; k < pglobset->aglob.size(); ++k) pglobset->afCelBorder[k] = pglobset->aglob[k].meshk == MESHK_CelBorder ? 1 : 0;
+#endif
     ++g_globstats.cglobset;
 }

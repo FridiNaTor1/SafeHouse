@@ -47,6 +47,17 @@ void UpdateGlobColorsGpu(const GLOB& glob);
 void UpdateGlobVerticesGpu(const GLOB& glob);
 // The same into an entry's own copy of the glob's vertices (an instance of a shared GLOBSET lit at its own place).
 void UpdateGlobColorsGpu(const GLOB& glob, const struct GLGLOB* pgl);
+#ifdef __SWITCH__
+// (the Switch) UpdateGlobColorsGpu in two halves: the colours packed on any thread (the pass helpers, right after they
+// light the glob), then uploaded on the game thread
+struct GLOBCOLORS
+{
+    std::vector<uint8_t> ab;   // per vertex its colours A and B, as the colour buffer holds them
+    uint8_t aMin = 255;        // the lowest colour-A alpha (GLGLOB::aMinA)
+};
+void PackGlobColors(const GLOB& glob, GLOBCOLORS& cols);
+void UploadGlobColorsGpu(const GLOB& glob, const struct GLGLOB* pgl, const GLOBCOLORS& cols);
+#endif
 // A copy of a strip glob's vertices and indices for one instance (its own lit colours); not drawable until
 // FlushInstanceGlobsGpu.
 struct GLGLOB* PglInstanceCopyGpu(const GLOB& glob);

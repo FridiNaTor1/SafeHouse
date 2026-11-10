@@ -55,6 +55,13 @@ inline void StartupGameScheduling()
 inline void RegisterAudioThread() { detail::MmcssRegister(L"Audio"); }
 
 }  // namespace cane::sched
+#elif defined(__SWITCH__)
+// The Switch: the game thread keeps core 0 to itself; the 989snd tick runs beside the mixer (platform/switch/runtime.h).
+#include "switch/runtime.h"
+namespace cane::sched {
+inline void StartupGameScheduling() { CaneSwitch::PinGameThread(); }
+inline void RegisterAudioThread() { CaneSwitch::PinSoundThread(); }
+}  // namespace cane::sched
 #else
 namespace cane::sched {
 inline void StartupGameScheduling() {}
