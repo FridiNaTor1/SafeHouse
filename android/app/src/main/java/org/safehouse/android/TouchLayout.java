@@ -10,12 +10,14 @@ package org.safehouse.android;
  * Right Down Left, axes LX LY RX RY LT RT (released triggers rest at -1).
  */
 final class TouchLayout {
-    static final int A = 0, B = 1, X = 2, Y = 3, LB = 4, RB = 5, BACK = 6, START = 7,
+    static final int A = 0, B = 1, X = 2, Y = 3, LB = 4, RB = 5, BACK = 6, START = 7, L3_BUTTON = 9, R3_BUTTON = 10,
         UP = 11, RIGHT = 12, DOWN = 13, LEFT = 14, BUTTONS = 15, AXES = 6;
     static final int CONTEXT_GAMEPLAY = 0, CONTEXT_MENU = 1, CONTEXT_CINEMATIC = 2;
     // Elements. FACE and DPAD are four-button clusters.
     static final int STICK = 0, CAMERA = 1, FACE = 2, DPAD = 3, L1 = 4, L2 = 5, R1 = 6, R2 = 7,
-        SELECT = 8, START_KEY = 9, CHAT = 10, EDIT = 11, ELEMENTS = 12;
+        SELECT = 8, START_KEY = 9, CHAT = 10, EDIT = 11, L3 = 12, R3 = 13,
+        // The whole screen during a scene: holding it holds the skip button (circle).
+        HOLD = 14, ELEMENTS = 15;
     // Groups the player can move. The D-pad shares the stick's place: menus
     // show the D-pad, gameplay the stick.
     static final int G_STICK = 0, G_FACE = 1, G_LEFT = 2, G_RIGHT = 3, G_CENTER = 4, GROUPS = 5;
@@ -40,7 +42,7 @@ final class TouchLayout {
     final float[] halfWidth = new float[ELEMENTS], halfHeight = new float[ELEMENTS];
     final float[] groupX = new float[GROUPS], groupY = new float[GROUPS];
     final float[][] groupExtent = new float[GROUPS][4]; // left, top, right, bottom
-    float stickRadius, knobRadius, cameraRadius, faceSpacing, faceRadius, dpadArm, dpadHalf;
+    float stickRadius, knobRadius, cameraRadius, faceSpacing, faceRadius, dpadArm, dpadHalf, clickRadius;
 
     // Display cutouts as left, top, right, bottom quadruples in pixels. Only
     // groups that would sit on a cutout move, unlike a whole safe-area inset
@@ -69,18 +71,19 @@ final class TouchLayout {
     }
     boolean visible(int element) {
         // SafeHouse is single-player: ThiefRush's chat key (CHAT) is never shown or pressed.
-        if (element == CHAT) return false;
+        if (element == CHAT || element == HOLD) return false;
         switch (context) {
         case CONTEXT_MENU:
-            return element != STICK && element != CAMERA;
+            return element != STICK && element != CAMERA && element != L3 && element != R3;
         case CONTEXT_CINEMATIC:
-            return element == FACE || element == SELECT || element == START_KEY;
+            return false; // a scene: nothing covers the picture
         default:
             return element != DPAD && element != EDIT;
         }
     }
     // The stick also works invisibly around the menu D-pad for analog menus.
     private boolean usable(int element) {
+        if (element == HOLD) return context == CONTEXT_CINEMATIC;
         if (element == STICK) return context != CONTEXT_CINEMATIC;
         return visible(element);
     }
@@ -101,13 +104,15 @@ final class TouchLayout {
         final float u = unit * scale;
         stickRadius = .15f * u; knobRadius = .066f * u; cameraRadius = .105f * u;
         faceSpacing = .118f * u; faceRadius = .066f * u;
-        dpadArm = .1f * u; dpadHalf = .052f * u;
+        dpadArm = .1f * u; dpadHalf = .052f * u; clickRadius = .05f * u;
         final float pillWidth = .25f * u, pillHeight = .1f * u, gap = .03f * u;
         final float smallWidth = .19f * u, smallHeight = .075f * u, chatRadius = .046f * u;
         final float centerSpacing = .165f * u;
         final float face = faceSpacing + faceRadius;
-        setExtent(G_STICK, stickRadius, stickRadius, stickRadius, stickRadius);
-        setExtent(G_FACE, face, face, face, face);
+        // The stick-click buttons sit inward of the stick and of the face buttons, low, and move with them.
+        final float click = .025f * u + 2 * clickRadius;
+        setExtent(G_STICK, stickRadius, stickRadius, stickRadius + click, stickRadius);
+        setExtent(G_FACE, face + click, face, face, face);
         // The menu-only Layout pill hangs below L1, in the free space above the
         // D-pad and clear of the game's top-center pause counters.
         // It keeps one size: it is a menu shortcut, not a thumb target.
@@ -135,6 +140,8 @@ final class TouchLayout {
         set(STICK, groupX[G_STICK], groupY[G_STICK], stickRadius, stickRadius);
         set(DPAD, groupX[G_STICK], groupY[G_STICK], dpadArm + dpadHalf, dpadArm + dpadHalf);
         set(FACE, groupX[G_FACE], groupY[G_FACE], face, face);
+        set(L3, groupX[G_STICK] + stickRadius + click - clickRadius, groupY[G_STICK] + stickRadius - clickRadius, clickRadius, clickRadius);
+        set(R3, groupX[G_FACE] - face - click + clickRadius, groupY[G_FACE] + face - clickRadius, clickRadius, clickRadius);
         set(L2, groupX[G_LEFT], groupY[G_LEFT] - (pillHeight + gap) / 2, pillWidth / 2, pillHeight / 2);
         set(L1, groupX[G_LEFT], groupY[G_LEFT] + (pillHeight + gap) / 2, pillWidth / 2, pillHeight / 2);
         set(R2, groupX[G_RIGHT], groupY[G_RIGHT] - (pillHeight + gap) / 2, pillWidth / 2, pillHeight / 2);
@@ -231,6 +238,9 @@ final class TouchLayout {
     }
     /** Which element a new finger at (px, py) controls, or -1. */
     int targetAt(float px, float py) {
+        if (usable(HOLD)) return HOLD;
+        if (usable(L3) && insideCircle(px, py, x[L3], y[L3], clickRadius * SLOP)) return L3;
+        if (usable(R3) && insideCircle(px, py, x[R3], y[R3], clickRadius * SLOP)) return R3;
         if (usable(FACE) && insideCircle(px, py, x[FACE], y[FACE], (faceSpacing + faceRadius) * SLOP)) return FACE;
         if (usable(DPAD) && insideCircle(px, py, x[DPAD], y[DPAD], (dpadArm + dpadHalf) * SLOP)) return DPAD;
         for (int element = L1; element <= EDIT; ++element)
@@ -327,6 +337,9 @@ final class TouchLayout {
             case R2: axes[5] = 1; break;
             case SELECT: buttons[BACK] = true; break;
             case START_KEY: buttons[START] = true; break;
+            case L3: buttons[L3_BUTTON] = true; break;
+            case R3: buttons[R3_BUTTON] = true; break;
+            case HOLD: buttons[B] = true; break;
             case CHAT: chat = true; break;
             default: break;
             }
@@ -343,6 +356,15 @@ final class TouchLayout {
     boolean held(int element) {
         for (int i = 0; i < MAX_POINTERS; ++i) if (pointerId[i] >= 0 && target[i] == element) return true;
         return false;
+    }
+    /** Where the finger holding this element is, or NaN. */
+    float pointerX(int element) {
+        for (int i = 0; i < MAX_POINTERS; ++i) if (pointerId[i] >= 0 && target[i] == element) return pointerX[i];
+        return Float.NaN;
+    }
+    float pointerY(int element) {
+        for (int i = 0; i < MAX_POINTERS; ++i) if (pointerId[i] >= 0 && target[i] == element) return pointerY[i];
+        return Float.NaN;
     }
     /** The active stick/camera origin, or NaN when nothing holds it. */
     float anchorX(int element) {

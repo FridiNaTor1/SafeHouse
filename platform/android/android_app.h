@@ -63,6 +63,9 @@ void setTouchControlsVisible(bool visible);
 enum class TouchContext : int { Gameplay = 0, Menu = 1, Cinematic = 2 };
 // Cheap to call every frame: Java is only notified when the context changes.
 void setTouchContext(TouchContext context);
+// The device's vibrator at this strength (0..255; 0 stops it). Call it every frame a motor runs: the strength is
+// held for a quarter of a second after the last call.
+void vibrate(int amplitude);
 // Asks the display for the game's frame rate (glfw_sdl.cpp). Cheap per frame.
 void setPresentationRate(int framesPerSecond);
 // A frame-rate ceiling while Android reports severe thermal status (API 29+),

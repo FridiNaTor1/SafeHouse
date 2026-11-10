@@ -259,6 +259,20 @@ public final class NativeBridge {
         UI.post(() -> current.startActivity(new Intent(current, GameActivity.class)
             .addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT | Intent.FLAG_ACTIVITY_NEW_TASK)));
     }
+    /** The device's vibrator (the game's rumble with the on-screen pad): amplitude 0..255, 0 stops it. */
+    public static void vibrate(int amplitude, int milliseconds) {
+        Context current = activity != null ? activity : starter;
+        if (current == null) return;
+        try {
+            android.os.Vibrator vibrator = (android.os.Vibrator)current.getSystemService(Context.VIBRATOR_SERVICE);
+            if (vibrator == null || !vibrator.hasVibrator()) return;
+            if (amplitude <= 0) { vibrator.cancel(); return; }
+            int strength = vibrator.hasAmplitudeControl() ? Math.max(1, Math.min(255, amplitude))
+                : android.os.VibrationEffect.DEFAULT_AMPLITUDE;
+            vibrator.vibrate(android.os.VibrationEffect.createOneShot(Math.max(1, milliseconds), strength),
+                new android.media.AudioAttributes.Builder().setUsage(android.media.AudioAttributes.USAGE_GAME).build());
+        } catch (RuntimeException ignored) { }
+    }
     public static void showLauncher() {
         GameActivity.visibleRequested = false;
         Activity current = activity;

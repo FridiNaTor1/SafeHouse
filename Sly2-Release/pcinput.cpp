@@ -2,6 +2,7 @@
 // the camera keys, the device tracker) and mouseinput.cpp (capture, motion, bindings, menu buttons).
 
 #include "pcinput.h"
+#include "skipcut.h"
 #if defined(__ANDROID__)
 #include "android/android_app.h"
 bool g_fMovieTouchContext = false;   // (fmv.cpp: a movie plays; its layout stays)
@@ -525,7 +526,13 @@ void ReadPcInput(GLFWwindow* window, uint16_t* pgrf, float* pxl, float* pyl, flo
 #if defined(__ANDROID__)
     // the on-screen pad's layout (platform/android TouchLayout): the D-pad and menu keys in menus, the stick in play
     // (movies set the cinematic layout themselves, fmv.cpp); Java is told only when it changes
-    if (!g_fMovieTouchContext) cane::android::setTouchContext(fMenu ? cane::android::TouchContext::Menu : cane::android::TouchContext::Gameplay);
+    // a skippable scene (a binocucom talk, a cinematic): the pad is hidden and holding the screen skips; a scene
+    // that waits for a button keeps the pad
+    if (!g_fMovieTouchContext)
+        cane::android::setTouchContext(FCutsceneActive() && !FSkipCutWaitsForButton() && !FMouseMenuUp()
+                                           ? cane::android::TouchContext::Cinematic   // (a talk also locks the pad: before fMenu)
+                                       : fMenu ? cane::android::TouchContext::Menu
+                                       : cane::android::TouchContext::Gameplay);
 #endif
     const bool fGadgetMenuBindings = sly2actions::profile.enabled && FGadgetMenuShown();
     auto isMenuGadgetSlot = [&](int button) {
@@ -923,4 +930,13 @@ bool FDebugKeyHeld(GLFWwindow* window, int key)
 {
     if (!g_pcinput.fDebugKeys) return false;
     return FTestKeyHeld(key) || (window && glfwGetKey(window, key) == GLFW_PRESS);
+}
+
+bool FTouchPadActive()
+{
+#if defined(__ANDROID__)
+    return s_jidPad == GLFW_JOYSTICK_LAST;
+#else
+    return false;
+#endif
 }

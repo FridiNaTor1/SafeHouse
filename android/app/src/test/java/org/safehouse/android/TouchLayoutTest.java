@@ -180,13 +180,25 @@ public class TouchLayoutTest {
         l.cancelAll();
         assertEquals(TouchLayout.EDIT, l.down(1, l.x[TouchLayout.EDIT], l.y[TouchLayout.EDIT]));
         l.cancelAll();
-        // Right half does nothing in menus; cinematics keep only skip/advance keys.
+        // Right half does nothing in menus; a scene hides every control and holding the screen holds circle (skip).
         tap(l, l.width * .62f, l.height * .5f);
         assertEquals(0, axes[2], EPSILON);
         l.cancelAll();
         l.setContext(TouchLayout.CONTEXT_CINEMATIC);
-        tap(l, l.x[TouchLayout.L1], l.y[TouchLayout.L1]); assertFalse(buttons[TouchLayout.LB]); l.cancelAll();
-        tap(l, l.x[TouchLayout.START_KEY], l.y[TouchLayout.START_KEY]); assertTrue(buttons[TouchLayout.START]);
+        for (int e = 0; e < TouchLayout.ELEMENTS; ++e) assertFalse("element " + e, l.visible(e));
+        tap(l, l.x[TouchLayout.L1], l.y[TouchLayout.L1]);
+        assertFalse(buttons[TouchLayout.LB]); assertTrue(buttons[TouchLayout.B]); l.cancelAll();
+        tap(l, l.width * .5f, l.height * .5f); assertTrue(buttons[TouchLayout.B]);
+        l.setContext(TouchLayout.CONTEXT_GAMEPLAY); l.compute(axes, buttons);
+        assertFalse(buttons[TouchLayout.B]); // the held finger is released when the scene ends
+    }
+
+    @Test public void stickClickButtons() {
+        TouchLayout l = phone();
+        tap(l, l.x[TouchLayout.L3], l.y[TouchLayout.L3]); assertTrue(buttons[TouchLayout.L3_BUTTON]); l.cancelAll();
+        tap(l, l.x[TouchLayout.R3], l.y[TouchLayout.R3]); assertTrue(buttons[TouchLayout.R3_BUTTON]); l.cancelAll();
+        l.setContext(TouchLayout.CONTEXT_MENU);
+        tap(l, l.x[TouchLayout.R3], l.y[TouchLayout.R3]); assertFalse(buttons[TouchLayout.R3_BUTTON]);
     }
 
     @Test public void hidingAnElementReleasesItsFinger() {

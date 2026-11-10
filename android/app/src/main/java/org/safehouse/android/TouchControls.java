@@ -47,6 +47,8 @@ final class TouchControls extends View implements InputManager.InputDeviceListen
     private final boolean[] buttons = new boolean[TouchLayout.BUTTONS];
     private final boolean[] pressedBefore = new boolean[TouchLayout.BUTTONS];
     private boolean physical, editing, detected;
+    private long holdStart; // when the finger holding a scene's screen went down (0: none)
+    private static final long HOLD_MILLISECONDS = 2000; // the game's hold to skip
 
     // Edit mode.
     private static final int DRAG_NONE = 0, DRAG_GROUP = 1, DRAG_PANEL = 2, DRAG_SIZE = 3, DRAG_OPACITY = 4,
@@ -208,6 +210,35 @@ final class TouchControls extends View implements InputManager.InputDeviceListen
         label(canvas, label, layout.x[element], layout.y[element], hh * (label.length() > 2 ? .78f : 1.02f),
             argb(TEXT, alpha));
     }
+    private void click(Canvas canvas, int element, String name, boolean pressed, float alpha) {
+        final float r = layout.clickRadius;
+        disc(canvas, layout.x[element], layout.y[element], r, pressed, alpha);
+        label(canvas, name, layout.x[element], layout.y[element], r * .72f, argb(TEXT, pressed ? 1 : alpha * 1.15f));
+    }
+    // A scene: the finger holding the screen, as a fingertip in a ring that closes over the hold (the game skips
+    // the scene when the hold is complete). Drawn above the finger so the hand does not cover it.
+    private void hold(Canvas canvas) {
+        if (!layout.held(TouchLayout.HOLD)) { holdStart = 0; return; }
+        final long now = android.os.SystemClock.uptimeMillis();
+        if (holdStart == 0) holdStart = now;
+        final float u = layout.unit, r = u * .055f;
+        final float cx = TouchLayout.clamp(layout.pointerX(TouchLayout.HOLD), r * 1.6f, getWidth() - r * 1.6f);
+        final float cy = TouchLayout.clamp(layout.pointerY(TouchLayout.HOLD) - u * .2f, r * 1.6f, getHeight() - r * 1.6f);
+        final float progress = Math.min(1f, (now - holdStart) / (float)HOLD_MILLISECONDS);
+        fill.setColor(argb(SURFACE, .7f)); canvas.drawCircle(cx, cy, r * 1.25f, fill);
+        stroke.setStrokeWidth(u * .008f); stroke.setColor(argb(BORDER, .9f)); canvas.drawCircle(cx, cy, r * 1.25f, stroke);
+        stroke.setColor(argb(CTA, 1));
+        rect.set(cx - r * 1.25f, cy - r * 1.25f, cx + r * 1.25f, cy + r * 1.25f);
+        canvas.drawArc(rect, -90, 360 * progress, false, stroke);
+        // the fingertip: a rounded finger from below with a touch mark at its tip
+        fill.setColor(argb(TEXT, 1));
+        rect.set(cx - r * .2f, cy - r * .3f, cx + r * .2f, cy + r * .95f);
+        canvas.drawRoundRect(rect, r * .2f, r * .2f, fill);
+        stroke.setStrokeWidth(u * .005f); stroke.setColor(argb(TEXT, .9f));
+        rect.set(cx - r * .48f, cy - r * .78f, cx + r * .48f, cy + r * .18f);
+        canvas.drawArc(rect, 200, 140, false, stroke);
+        if (progress < 1f) postInvalidateOnAnimation();
+    }
     private void label(Canvas canvas, String value, float cx, float cy, float size, int color) {
         text.setTextSize(size); text.setColor(color);
         canvas.drawText(value, cx, cy - (text.ascent() + text.descent()) * .5f, text);
@@ -310,6 +341,9 @@ final class TouchControls extends View implements InputManager.InputDeviceListen
         if (shown(TouchLayout.SELECT)) pill(canvas, TouchLayout.SELECT, "SELECT", buttons[TouchLayout.BACK], alpha, false);
         if (shown(TouchLayout.START_KEY)) pill(canvas, TouchLayout.START_KEY, "START", buttons[TouchLayout.START], alpha, false);
         if (shown(TouchLayout.EDIT)) pill(canvas, TouchLayout.EDIT, "LAYOUT", false, Math.max(alpha, .8f), true);
+        if (shown(TouchLayout.L3)) click(canvas, TouchLayout.L3, "L3", buttons[TouchLayout.L3_BUTTON], alpha);
+        if (shown(TouchLayout.R3)) click(canvas, TouchLayout.R3, "R3", buttons[TouchLayout.R3_BUTTON], alpha);
+        if (!editing) hold(canvas);
         if (editing) drawEditor(canvas);
     }
 

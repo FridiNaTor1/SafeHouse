@@ -127,3 +127,6 @@ bool FDebugKeyHeld(GLFWwindow* window, int key);
 // ---- capture for the in-game rebinding (menu.cpp's Controls page)
 // The first newly pressed key or mouse button this step (or -1); Escape gives settings::kKeyEscape.
 int KeyBindingPressed(GLFWwindow* window);
+
+// The on-screen pad (Android) is the pad in use.
+bool FTouchPadActive();

@@ -279,6 +279,22 @@ int thermalFrameCap() {
     // and lets the SoC cool; MODERATE keeps the user's rate.
     return thermalStatus.load(std::memory_order_relaxed) >= 3 ? 30 : 0;
 }
+void vibrate(int amplitude) {
+    static int last = 0;
+    static std::chrono::steady_clock::time_point sent{};
+    amplitude = std::clamp(amplitude, 0, 255);
+    const auto now = std::chrono::steady_clock::now();
+    // (Java is called when the strength changes, and every 150 ms while it runs: each call holds for 250 ms)
+    if (amplitude == last && (amplitude == 0 || now - sent < std::chrono::milliseconds(150))) return;
+    last = amplitude; sent = now;
+    try {
+        Environment e;
+        e.env->CallStaticVoidMethod(bridge,e.method("vibrate","(II)V"),jint(amplitude),jint(250));
+        e.check();
+    } catch (const std::exception& failure) {
+        std::fprintf(stderr, "vibrate: %s\n", failure.what());
+    }
+}
 void setTouchContext(TouchContext context) {
     static int reported = -1;
     if (int(context) == reported) return;

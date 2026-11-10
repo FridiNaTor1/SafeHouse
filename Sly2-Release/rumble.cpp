@@ -1,4 +1,8 @@
 // The pad's vibration: rumble.h.
+#include <algorithm>
+#if defined(__ANDROID__)
+#include "android/android_app.h"
+#endif
 #include "rumble.h"
 
 #include "clock.h"
@@ -68,6 +72,15 @@ void SendMotors(uint8_t bSmall, uint8_t bBig)
     CaneSwitchRumble(float(bBig) / 255.0f, bSmall ? 1.0f : 0.0f);
 #elif defined(CANE_SDL_RUMBLE)
     if (!s_fWindow || s_jid < 0) return;   // (headless, the keyboard and mouse: nothing to drive)
+#if defined(__ANDROID__)
+    if (s_jid == GLFW_JOYSTICK_LAST)
+    {
+        // the on-screen pad: the device's own vibrator, the big motor as its strength (the small one: a light buzz)
+        if (!g_fControllerVibration) bSmall = bBig = 0;
+        cane::android::vibrate(std::max<int>(bBig, bSmall ? 96 : 0));
+        return;
+    }
+#endif
     if (!s_sdl.ready()) return;   // (started by SetRumblePad at the first windowed frame)
     if (!g_fControllerVibration) bSmall = bBig = 0;
     s_sdl.set(glfwGetJoystickGUID(s_jid), cane::rumble::MotorsFromDualShock(bSmall, bBig), glfwGetTime());
