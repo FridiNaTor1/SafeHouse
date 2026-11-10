@@ -46,7 +46,25 @@ public final class NativeBridge {
     private static volatile ImportState iso = new ImportState();
     private static volatile ImportState mod = new ImportState();
 
+    // This process's token: the process that started it watches the token's death (startChild).
+    private static final Binder ALIVE = new Binder();
+
     private NativeBridge() { }
+    // Another process of this app, by pid. /proc/<pid> of a sibling process is not readable on every Android
+    // version, so the activity manager's list of the app's own processes is asked instead.
+    private static boolean siblingAlive(int pid) {
+        Context current = activity != null ? activity : starter;
+        if (current == null) return true;
+        try {
+            android.app.ActivityManager manager =
+                (android.app.ActivityManager)current.getSystemService(Context.ACTIVITY_SERVICE);
+            java.util.List<android.app.ActivityManager.RunningAppProcessInfo> list =
+                manager == null ? null : manager.getRunningAppProcesses();
+            if (list == null) return true;
+            for (android.app.ActivityManager.RunningAppProcessInfo info : list) if (info.pid == pid) return true;
+            return false;
+        } catch (RuntimeException error) { return true; }
+    }
     private static final class Child {
         volatile int pid;
         volatile boolean running = true;
@@ -54,6 +72,7 @@ public final class NativeBridge {
         volatile boolean supervised;
         final long created = android.os.SystemClock.elapsedRealtime();
         final long createdWall = System.currentTimeMillis();
+        volatile long lastAliveCheck, goneSince;
         ServiceConnection keepalive;
         PipeBinder pipes;
     }
@@ -120,6 +139,7 @@ public final class NativeBridge {
         finally { request.recycle(); reply.recycle(); }
         if (owner != null) {
             Bundle result = new Bundle(); result.putInt("pid", android.os.Process.myPid());
+            result.putBinder("alive", ALIVE);
             owner.send(EVENT_PID, result);
         }
     }
@@ -146,6 +166,12 @@ public final class NativeBridge {
                 if (resultCode == EVENT_PID) {
                     state.pid = result.getInt("pid");
                     if (!state.running) android.os.Process.killProcess(state.pid);
+                    // The child's end: its token dies with its process (after its exit code, sent first, arrived).
+                    IBinder alive = result.getBinder("alive");
+                    if (alive != null) {
+                        try { alive.linkToDeath(() -> UI.post(() -> state.running = false), 0); }
+                        catch (RemoteException gone) { UI.post(() -> state.running = false); }
+                    }
                 } else if (resultCode == EVENT_EXIT) {
                     state.exitCode = result.getInt("code", 1); state.running = false;
                 }
@@ -188,7 +214,14 @@ public final class NativeBridge {
     public static boolean childRunning(long handle) {
         Child child = CHILDREN.get(handle);
         if (child == null) return false;
-        if (child.running && child.pid != 0 && !new File("/proc/" + child.pid).exists()) child.running = false;
+        // (a fallback beside the token: the process is gone from the app's process list for half a second)
+        final long now = android.os.SystemClock.elapsedRealtime();
+        if (child.running && child.pid != 0 && now - child.lastAliveCheck > 500) {
+            child.lastAliveCheck = now;
+            if (siblingAlive(child.pid)) child.goneSince = 0;
+            else if (child.goneSince == 0) child.goneSince = now;
+            else if (now - child.goneSince >= 500) child.running = false;
+        }
         if (child.running && child.pid == 0 && android.os.SystemClock.elapsedRealtime() - child.created > 20000) child.running = false;
         return child.running;
     }
