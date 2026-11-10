@@ -121,6 +121,8 @@ PROMPTKEYGLYPH::~PROMPTKEYGLYPH()
 std::string StrPromptButtonWords(const std::string& text, int textId)
 {
     if (g_pcinput.fAlwaysOriginalPs) return text;
+    // (the on-screen pad: its buttons carry these words themselves, so the text keeps them)
+    if (FTouchPadActive()) return text;
     const bool fireBriefing = sly2actions::profile.enabled &&
         (textId == s_idTurretBriefing || textId == s_idTankBriefing);
     if (text.find("START") == std::string::npos && text.find("SELECT") == std::string::npos &&
