@@ -447,10 +447,16 @@ int desktop(cane::LauncherBackend& backend, const ui::fixtures::Options* fixture
         if (windowHidden) {
             job.reap();
             updates.poll(shell, true);
-            if (job.busy) continue;
+            if (job.busy) {
+                lastLabel = job.label;
+                continue;
+            }
             glfwShowWindow(window);
             glfwFocusWindow(window);
             windowHidden = false;
+            // The game's end goes through this frame's finished-job step below, which also clears the page's
+            // "playing" mark: left set, the next job of any kind (an install, a verification) hid the window too.
+            wasBusy = true;
         }
         if (pendingScale > 0) userScale = pendingScale, pendingScale = 0;
         {
