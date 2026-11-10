@@ -11,7 +11,7 @@
 #include <cstdio>
 #if defined(__SSE2__) || defined(_M_X64)
 #include <emmintrin.h>
-#elif defined(__SWITCH__)
+#elif defined(__aarch64__) || defined(_M_ARM64)
 #include <arm_neon.h>
 #endif
 
@@ -333,8 +333,8 @@ void BakeGlobLighting(GLOB& glob, const glm::mat4& matWorld, const glm::vec3& po
         const SHD* pshd = sub.pshd;
         const uint32_t m = pshd ? pshd->argba[0] : 0x80808080u;
         const float selfIllum = pshd ? pshd->unSelfIllum / 4096.0f : 0.0f;
-#ifdef __SWITCH__
-        // (the Switch: four vertices at a time through the lights, one per NEON lane, each lane the loop below's
+#if defined(__aarch64__) || defined(_M_ARM64)
+        // (AArch64: four vertices at a time through the lights, one per NEON lane, each lane the loop below's
         // operations in its order (-ffp-contract=off: no fused multiply-adds): the same colours. The position, the
         // normal and the decomposition stay the scalar code's.)
         {
@@ -566,7 +566,7 @@ uint32_t ForwardLitSse(GLOB& glob, const SUBGLOB& sub, uint32_t m, float wAdd, c
 }
 }  // namespace
 #define FORWARD_LIT_4 ForwardLitSse
-#elif defined(__SWITCH__)
+#elif defined(__aarch64__) || defined(_M_ARM64)
 #define FWD_SSE 1
 namespace
 {
@@ -583,7 +583,7 @@ const INTENSITY127 s_intensity127;
 inline float32x4_t MinSse(float32x4_t x, float32x4_t y) { return vbslq_f32(vcltq_f32(x, y), x, y); }
 inline float32x4_t MaxSse(float32x4_t x, float32x4_t y) { return vbslq_f32(vcgtq_f32(x, y), x, y); }
 
-// ForwardLitSse on NEON (the Switch): the same operations in the same order per lane (-ffp-contract=off: no fused
+// ForwardLitSse on NEON (AArch64): the same operations in the same order per lane (-ffp-contract=off: no fused
 // multiply-adds), float -> int truncating (fcvtzs, as the scalar casts compile on AArch64), the clamp to 0..255 by
 // saturating narrows. Returns the first vertex of the sub-group not done (the scalar tail).
 uint32_t ForwardLitNeon(GLOB& glob, const SUBGLOB& sub, uint32_t m, float wAdd, const glm::vec3 dirLocal[4], const glm::vec4 respColor[4],

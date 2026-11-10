@@ -13,7 +13,7 @@ def nsis_string(value):
     return value.replace('$', '$$').replace('"', '$\\"')
 
 
-def build_setup(source, payload, build, output, compiler=None):
+def build_setup(source, payload, build, output, compiler=None, arch='x86_64'):
     compiler = str(compiler) if compiler else shutil.which('makensis')
     if not compiler and os.name == 'nt':
         for env in ('ProgramFiles(x86)', 'ProgramFiles'):
@@ -61,10 +61,10 @@ def build_setup(source, payload, build, output, compiler=None):
         path = generated / (key.lower() + '.nsh')
         path.write_text('\n'.join(lines) + '\n', encoding='utf-8')
         defines[key] = nsis_string(path)
-    target = output / 'SafeHouse-Launcher-Windows-x86_64-Setup.exe'
+    target = output / f'SafeHouse-Launcher-Windows-{arch}-Setup.exe'
     temporary = target.with_suffix('.exe.building')
     temporary.unlink(missing_ok=True)
-    defines.update(VERSION=version[1], OUTPUT_EXE=nsis_string(temporary),
+    defines.update(VERSION=version[1], OUTPUT_EXE=nsis_string(temporary), ARCH=arch,
                    APP_ICON=nsis_string(source / 'launcher/assets/safehouse.ico'))
     prefix = '/' if os.name == 'nt' else '-'
     env = dict(os.environ)

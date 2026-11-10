@@ -69,6 +69,9 @@ extern GL g_gl;
 extern GLSHADER glGlobShader;
 // (perf-3) glGlobShader built with ARB_bindless_texture (the pass draws' textures per draw: render.cpp)
 extern bool g_fGlobBindless;
+// The pass runs drawn one by one, not by glMultiDrawElementsIndirect (render.cpp): on Mesa's OpenGL on Direct3D 12
+// (Windows on ARM) each indirect draw costs a compute pass (glob.vert reads gl_VertexID)
+extern bool g_fDirectRuns;
 extern GLSHADER glCelBorderShader;
 extern GLSHADER glHudShader;
 extern GLSHADER glOverlayShader;

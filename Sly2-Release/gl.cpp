@@ -26,6 +26,7 @@ GL g_gl;
 GLSHADER glGlobShader;
 GLSHADER glGlobShaderNoKill;
 bool g_fGlobBindless = false;
+bool g_fDirectRuns = false;
 GLSHADER glCelBorderShader;
 GLSHADER glHudShader;
 GLSHADER glOverlayShader;
@@ -234,6 +235,8 @@ bool GL::FInit(int w, int h, bool fVisible, const char* title, std::string& erro
     if (!cane::gl::CreateContext(window, &error)) return false;
     if (!gladLoadGLLoader(reinterpret_cast<GLADloadproc>(cane::gl::ProcAddress))) { error = "glad failed"; return false; }
     std::printf("OpenGL: %s / %s\n", glGetString(GL_RENDERER), glGetString(GL_VERSION));
+    const char* szRenderer = reinterpret_cast<const char*>(glGetString(GL_RENDERER));
+    g_fDirectRuns = szRenderer && !std::strncmp(szRenderer, "D3D12 (", 7);
     StartupPcInput();   // (the prompt icons' atlases: pcinput.h / promptglyph.h)
     cane::gl::SwapInterval(1);
     // Reversed Z in [0, 1]: the GS's depth tests (GREATER / GEQUAL, larger = nearer) map one to one.

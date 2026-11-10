@@ -11,6 +11,7 @@
 #   scripts/ffmpeg-minimal.sh linux-aarch64 <prefix>   cross build for 64-bit ARM Linux (aarch64-linux-gnu-gcc)
 #   scripts/ffmpeg-minimal.sh windows <prefix>   cross build with LLVM/MinGW (x86_64-w64-mingw32-clang on PATH, or
 #                                                CANE_MINGW_ROOT set to the toolchain)
+#   scripts/ffmpeg-minimal.sh windows-arm64 <prefix>   the same for Windows on ARM (aarch64-w64-mingw32-clang)
 #   scripts/ffmpeg-minimal.sh --print-args       the configure arguments, one per line
 # The result is cached: nothing is rebuilt when <prefix>/RECIPE matches.
 set -euo pipefail
@@ -43,14 +44,15 @@ case "$TARGET" in
   linux-aarch64)
     CONFIGURE_ARGS+=(--enable-cross-compile --target-os=linux --arch=aarch64 --cross-prefix=aarch64-linux-gnu-)
     CHECK="$PREFIX/lib/libavcodec.so" ;;
-  windows)
+  windows|windows-arm64)
+    if [ "$TARGET" = windows ]; then MINGW_ARCH=x86_64; else MINGW_ARCH=aarch64; fi
     if [ -n "${CANE_MINGW_ROOT:-}" ]; then export PATH="$CANE_MINGW_ROOT/bin:$PATH"; fi
-    command -v x86_64-w64-mingw32-clang >/dev/null || { echo "ffmpeg: x86_64-w64-mingw32-clang not found (set CANE_MINGW_ROOT)" >&2; exit 1; }
-    CONFIGURE_ARGS+=(--enable-cross-compile --target-os=mingw32 --arch=x86_64 --cross-prefix=x86_64-w64-mingw32-
-      --cc=x86_64-w64-mingw32-clang --cxx=x86_64-w64-mingw32-clang++ --ar=llvm-ar --ranlib=llvm-ranlib --nm=llvm-nm
+    command -v $MINGW_ARCH-w64-mingw32-clang >/dev/null || { echo "ffmpeg: $MINGW_ARCH-w64-mingw32-clang not found (set CANE_MINGW_ROOT)" >&2; exit 1; }
+    CONFIGURE_ARGS+=(--enable-cross-compile --target-os=mingw32 --arch=$MINGW_ARCH --cross-prefix=$MINGW_ARCH-w64-mingw32-
+      --cc=$MINGW_ARCH-w64-mingw32-clang --cxx=$MINGW_ARCH-w64-mingw32-clang++ --ar=llvm-ar --ranlib=llvm-ranlib --nm=llvm-nm
       --strip=llvm-strip)
     CHECK="$PREFIX/bin/avcodec-61.dll" ;;
-  *) echo "ffmpeg: unknown target $TARGET (linux, linux-aarch64 or windows)" >&2; exit 2 ;;
+  *) echo "ffmpeg: unknown target $TARGET (linux, linux-aarch64, windows or windows-arm64)" >&2; exit 2 ;;
 esac
 command -v nasm >/dev/null 2>&1 || CONFIGURE_ARGS+=(--disable-x86asm)
 
@@ -75,7 +77,7 @@ make -j"$(nproc)" > "$WORK/build.log" 2>&1 || { tail -n 40 "$WORK/build.log"; ex
 make install > "$WORK/install.log" 2>&1
 # The import libraries go beside the .def files in lib/, as in the prebuilt Windows FFmpeg the build used before
 # (CMakeLists.txt links Sly 1 from <root>/lib; cmake/ffmpeg.cmake looks there too).
-if [ "$TARGET" = windows ]; then mv "$PREFIX"/bin/*.lib "$PREFIX/lib/"; fi
+case "$TARGET" in windows*) mv "$PREFIX"/bin/*.lib "$PREFIX/lib/" ;; esac
 [ -f "$CHECK" ] || { echo "ffmpeg: $CHECK missing after install" >&2; ls -R "$PREFIX" | head -40; exit 1; }
 printf '%s\n' "$RECIPE" > "$PREFIX/RECIPE"
 cp COPYING.LGPLv2.1 "$PREFIX/COPYING.LGPLv2.1"

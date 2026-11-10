@@ -3287,8 +3287,14 @@ void RenderPass(const SCENE& scene, const PASSVIEW& pv, const RENDEROPTS& opts)
             useGlob(fKill || fKeepKill ? 0 : 1);
             // (bindless: a run with handles leaves the texture unit alone; one without, a single state, binds it)
             sc.Apply(st, !g_fGlobBindless || !HandleOfIstate(cmd.istate));
-            glMultiDrawElementsIndirect(GL_TRIANGLES, GL_UNSIGNED_INT, reinterpret_cast<void*>(offIndirect + size_t(run.ideiFirst) * sizeof(DEICMD)),
-                                        GLsizei(run.cdei), 0);
+            if (g_fDirectRuns)
+                for (uint32_t i = run.ideiFirst; i < run.ideiFirst + run.cdei; ++i)
+                    glDrawElementsInstancedBaseVertexBaseInstance(GL_TRIANGLES, GLsizei(s_adei[i].count), GL_UNSIGNED_INT,
+                                                                  reinterpret_cast<void*>(size_t(s_adei[i].firstIndex) * 4), 1,
+                                                                  s_adei[i].baseVertex, s_adei[i].baseInstance);
+            else
+                glMultiDrawElementsIndirect(GL_TRIANGLES, GL_UNSIGNED_INT,
+                                            reinterpret_cast<void*>(offIndirect + size_t(run.ideiFirst) * sizeof(DEICMD)), GLsizei(run.cdei), 0);
             // (its alpha writes rewrite the stencil's FBA bit: the DATE mark is made again before the next DATE draw)
             if (st.colorMask & 2) fDateMarked = false;
             s_glstats.crun += 1; s_glstats.cpass += run.cdei;

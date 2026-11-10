@@ -2570,8 +2570,14 @@ void RenderPass(const SCENE& scene, const PASSVIEW& pv, const RENDEROPTS& opts)
             useGlob();
             // (bindless: a run with handles leaves the texture unit alone; one without, a single state, binds it)
             sc.Apply(s_astate[cmd.istate], !g_fGlobBindless || !HandleOfIstate(cmd.istate));
-            glMultiDrawElementsIndirect(GL_TRIANGLES, GL_UNSIGNED_INT, reinterpret_cast<void*>(offIndirect + size_t(run.ideiFirst) * sizeof(DEICMD)),
-                                        GLsizei(run.cdei), 0);
+            if (g_fDirectRuns)
+                for (uint32_t i = run.ideiFirst; i < run.ideiFirst + run.cdei; ++i)
+                    glDrawElementsInstancedBaseVertexBaseInstance(GL_TRIANGLES, GLsizei(s_adei[i].count), GL_UNSIGNED_INT,
+                                                                  reinterpret_cast<void*>(size_t(s_adei[i].firstIndex) * 4), 1,
+                                                                  s_adei[i].baseVertex, s_adei[i].baseInstance);
+            else
+                glMultiDrawElementsIndirect(GL_TRIANGLES, GL_UNSIGNED_INT,
+                                            reinterpret_cast<void*>(offIndirect + size_t(run.ideiFirst) * sizeof(DEICMD)), GLsizei(run.cdei), 0);
             s_glstats.crun += 1; s_glstats.cpass += run.cdei;
             g_renderstats.cpass += int(run.cdei);
             ++g_renderstats.cbatch;

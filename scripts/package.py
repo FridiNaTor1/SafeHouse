@@ -9,14 +9,17 @@ p.add_argument('--windows-package',choices=['both','portable','setup'],default='
 p.add_argument('--makensis',type=pathlib.Path)
 p.add_argument('--appimagetool',type=pathlib.Path)
 p.add_argument('--appimage-runtime',type=pathlib.Path)
-p.add_argument('--arch',choices=['x86_64','aarch64'],help='Linux target (default: this machine); set it for a cross build')
+p.add_argument('--arch',choices=['x86_64','aarch64','arm64'],help='Linux: x86_64 or aarch64 (default: this machine). Windows: x86_64 (default) or arm64')
 a=p.parse_args()
 source=pathlib.Path(__file__).resolve().parent.parent
 output=a.output.resolve();output.mkdir(parents=True,exist_ok=True)
 # Product name SafeHouse since 2026-11-03 (ProjectCane before); the user data folders keep their old names.
-arch=a.arch or {'arm64':'aarch64'}.get(platform.machine(),platform.machine())
-if not a.windows and arch not in ['x86_64','aarch64']:raise RuntimeError('Unsupported Linux architecture: '+arch)
-name='SafeHouse-Launcher-Windows-x86_64' if a.windows else 'SafeHouse-Launcher-Linux-'+arch
+if a.windows:
+ arch={'aarch64':'arm64'}.get(a.arch,a.arch or 'x86_64')
+else:
+ arch=a.arch or {'arm64':'aarch64'}.get(platform.machine(),platform.machine())
+ if arch not in ['x86_64','aarch64']:raise RuntimeError('Unsupported Linux architecture: '+arch)
+name='SafeHouse-Launcher-Windows-'+arch if a.windows else 'SafeHouse-Launcher-Linux-'+arch
 stage=output/name
 if stage.exists():shutil.rmtree(stage)
 subprocess.run(['cmake','--install',str(a.build.resolve()),'--config','Release','--prefix',str(stage)],check=True)
@@ -35,7 +38,7 @@ if a.windows:
  # the toolchain; native MSVC builds use their statically linked CRT instead.
  toolchain=os.environ.get('CANE_MINGW_ROOT')
  if toolchain:
-  for folder in [pathlib.Path(toolchain)/'bin',pathlib.Path(toolchain)/'x86_64-w64-mingw32/bin']:
+  for folder in [pathlib.Path(toolchain)/'bin',pathlib.Path(toolchain)/({'arm64':'aarch64'}.get(arch,arch)+'-w64-mingw32')/'bin']:
    for dllname in ['libc++.dll','libunwind.dll','libwinpthread-1.dll']:
     dll=folder/dllname
     if dll.exists():shutil.copy2(dll,stage/'bin'/dll.name)
@@ -51,7 +54,7 @@ if a.windows:
   temporary.replace(output/(portable_name+'.zip'))
  if a.windows_package in ['both','setup']:
   from windows.package_setup import build_setup
-  print(build_setup(source,stage,a.build.resolve(),output,a.makensis))
+  print(build_setup(source,stage,a.build.resolve(),output,a.makensis,arch))
 else:
  # Debian/Ubuntu copyright files cover the shared libraries collected by
  # CMake, including transitive codec dependencies. Keep exact package/source

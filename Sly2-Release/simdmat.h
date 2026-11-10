@@ -2,7 +2,7 @@
 
 // (perf-2) glm's 4x4 products with SSE, lane for lane the same IEEE operations in the same order as glm's own
 // (scalar here: no GLM_FORCE_INTRINSICS), so bit for bit the same results; the build has no FMA contraction
-// (-ffp-contract=off; SSE2 has no FMA). On the Switch the same with NEON. Elsewhere: glm itself.
+// (-ffp-contract=off; SSE2 has no FMA). On AArch64 the same with NEON. Elsewhere: glm itself.
 
 #include <glm/glm.hpp>
 
@@ -33,10 +33,10 @@ inline glm::vec4 MulMat4Vec4(const glm::mat4& m, const glm::vec4& v)
     _mm_storeu_ps(&r[0], _mm_add_ps(a0, a1));
     return r;
 }
-#elif defined(__SWITCH__)
+#elif defined(__aarch64__) || defined(_M_ARM64)
 #include <arm_neon.h>
 
-// (the Switch) the same products on NEON, the same operations in the same order (-ffp-contract=off: no fused
+// (AArch64) the same products on NEON, the same operations in the same order (-ffp-contract=off: no fused
 // multiply-adds; a lane multiply is the plain multiply by that element)
 inline glm::mat4 MulMat4(const glm::mat4& a, const glm::mat4& b)
 {
