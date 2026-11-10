@@ -1,5 +1,5 @@
 #pragma once
-// Background search for PlayStation 2 disc images in the usual places, so a pad user
+// Background search for PlayStation 2 disc images (.iso, .chd) in the usual places, so a pad user
 // can pick one without a file dialog. Bounded: each root is searched at most
 // two folders deep, symlinked folders are not followed, and the search stops
 // after 200 images or 20000 folder entries. Emulator ROM folders (EmuDeck,
@@ -16,7 +16,7 @@
 #include <system_error>
 #include <thread>
 #include <vector>
-#include "games.h"
+#include "disc_image.h"
 #include "platform.h"
 
 namespace cane::ui {
@@ -89,10 +89,11 @@ public:
 #endif
         return result;
     }
+    // A disc image the installers read: an .iso or a CHD.
     static bool isIso(const std::filesystem::path& file) {
         auto ext = utf8(file.extension());
         std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-        return ext == ".iso";
+        return ext == ".iso" || ext == ".chd";
     }
 
 private:
@@ -127,7 +128,7 @@ private:
             const auto size = it->file_size(e);
             if (e || size < kMinSize) continue;
             if (std::any_of(found.begin(), found.end(), [&](const auto& c) { return fs::equivalent(c.path, it->path(), e); })) continue;
-            found.push_back({ it->path(), size, it->last_write_time(e), identifyDisc(it->path()) });
+            found.push_back({ it->path(), size, it->last_write_time(e), identifyDiscImage(it->path()) });
         }
     }
     void run() {

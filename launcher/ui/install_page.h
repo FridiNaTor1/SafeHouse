@@ -171,7 +171,7 @@ public:
             if (r->status == filedialog::Status::Chosen) {
                 rememberFolder(path(r->path).parent_path());
                 if (!IsoScanner::isIso(path(r->path)))
-                    m_note = "That file is not an .iso disc image.";
+                    m_note = "That file is not a disc image (.iso or .chd).";
                 else {
                     m_iso = r->path;
                     if (m_installAfterSelection) startInstall(m_iso);
@@ -235,7 +235,7 @@ private:
         std::error_code ec;
         if (fs::is_regular_file(chosen, ec)) {
             if (!IsoScanner::isIso(chosen)) {
-                m_pathNote = "That file is not an .iso disc image.";
+                m_pathNote = "That file is not a disc image (.iso or .chd).";
                 return;
             }
             m_iso = utf8(chosen);
@@ -313,7 +313,7 @@ private:
         if (!m_native.start(filedialog::Kind::OpenIso, browseTitle(), browseFolder())) openLauncherPicker();
     }
     void openLauncherPicker() {
-        ImGuiFileDialog::Instance()->OpenDialog("iso", browseTitle().c_str(), ".iso,.ISO", utf8(browseFolder()), "", 1, nullptr,
+        ImGuiFileDialog::Instance()->OpenDialog("iso", browseTitle().c_str(), "Disc images{.iso,.ISO,.chd,.CHD}", utf8(browseFolder()), "", 1, nullptr,
                                                 ImGuiFileDialogFlags_Modal);
     }
     void install() {
@@ -479,7 +479,7 @@ private:
             chosen.path = path(m_iso);
             std::error_code ec;
             chosen.size = fs::file_size(chosen.path, ec);
-            chosen.identity = identifyDisc(chosen.path);
+            chosen.identity = identifyDiscImage(chosen.path);
             found.insert(found.begin(), chosen);
         }
         // Images of this game first, the rest after them.
@@ -524,7 +524,7 @@ private:
             const auto t = measure(fonts().body, label);
             dl->AddText(fonts().body, fonts().body->FontSize, { std::round(c.x - t.x * 0.5f), c.y }, ink(color::text2), label);
             const char* sub = padUser() ? "Enter the folder that holds your disc image to search it."
-                                        : "Use Browse… or drop an .iso file onto this window.";
+                                        : "Use Browse… or drop an .iso or .chd file onto this window.";
             const auto t2 = measure(fonts().caption, sub);
             dl->AddText(fonts().caption, fonts().caption->FontSize, { std::round(c.x - t2.x * 0.5f), c.y + px(28) }, ink(color::muted), sub);
         }
@@ -599,7 +599,7 @@ private:
         ImGui::SetCursorPosY(ImGui::GetCursorPosY() + px(2));
         const float y = ImGui::GetCursorPosY();
         ImGui::SetCursorPosY(y + (largeHeight() - fonts().caption->FontSize) * 0.5f);
-        text(padUser() ? "Not listed? Enter the folder that holds it." : "You can also drop an .iso file onto this window.", fonts().caption,
+        text(padUser() ? "Not listed? Enter the folder that holds it." : "You can also drop an .iso or .chd file onto this window.", fonts().caption,
              color::muted);
         ImGui::SetCursorPos({ ImGui::GetCursorPosX() + w - ctaW, y });
         ImGui::BeginDisabled(sessionActive || m_job.busy || !mismatch.empty());

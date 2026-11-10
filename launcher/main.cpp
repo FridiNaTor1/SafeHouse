@@ -746,7 +746,7 @@ int main(int argc, char** argv) {
             if (args[0] == "--install" && args.size() == 2) {
                 // The disc decides the game (Sly 1 for anything unrecognised,
                 // which the extractor then rejects).
-                const auto identity = cane::identifyDisc(cane::path(args[1]));
+                const auto identity = cane::identifyDiscImage(cane::path(args[1]));
                 const GameId game = identity.game && cane::installable(*identity.game) ? *identity.game : GameId::Sly1;
                 backend.install(args[1], game, cancel, log);
                 return 0;

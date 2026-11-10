@@ -39,7 +39,7 @@
 #endif
 
 namespace cane::filedialog {
-// OpenIso: a PS2 disc image (.iso); OpenPs3: The Sly Collection (PS3) as an .iso or a .zip of one (Settings > Games).
+// OpenIso: a PS2 disc image (.iso, .chd); OpenPs3: The Sly Collection (PS3) as an .iso or a .zip of one (Settings > Games).
 enum class Kind { OpenIso, PickFolder, OpenPs3 };
 enum class Status { Idle, Running, Chosen, Cancelled, Unavailable, Failed };
 
@@ -130,7 +130,7 @@ inline Result runWindows(Kind kind, const std::string& title, const fs::path& st
     const std::wstring wtitle = path(title).wstring();
     dialog->SetTitle(wtitle.c_str());
     if (kind == Kind::OpenIso) {
-        const COMDLG_FILTERSPEC filters[] = { { L"Disc images (*.iso)", L"*.iso" }, { L"All files", L"*.*" } };
+        const COMDLG_FILTERSPEC filters[] = { { L"Disc images (*.iso, *.chd)", L"*.iso;*.chd" }, { L"All files", L"*.*" } };
         dialog->SetFileTypes(2, filters);
         dialog->SetFileTypeIndex(1);
     }
@@ -352,7 +352,7 @@ inline Result runPortal(Kind kind, const std::string& title, const fs::path& sta
                 d->iter_close_container(&arr, &st);
             };
             if (kind == Kind::OpenPs3) one("Disc images (*.iso, *.zip)", { "*.iso", "*.ISO", "*.zip", "*.ZIP" });
-            else one("Disc images (*.iso)", { "*.iso", "*.ISO" });
+            else one("Disc images (*.iso, *.chd)", { "*.iso", "*.ISO", "*.chd", "*.CHD" });
             one("All files", { "*" });
             d->iter_close_container(&v, &arr);
         };
@@ -462,12 +462,12 @@ inline Result runHelper(const std::string& program, Kind kind, const std::string
         args.insert(args.end(), { "--file-selection", "--title=" + title });
         if (kind == Kind::PickFolder) args.push_back("--directory");
         else if (kind == Kind::OpenPs3) args.insert(args.end(), { "--file-filter=Disc images (*.iso, *.zip) | *.iso *.ISO *.zip *.ZIP", "--file-filter=All files | *" });
-        else args.insert(args.end(), { "--file-filter=Disc images (*.iso) | *.iso *.ISO", "--file-filter=All files | *" });
+        else args.insert(args.end(), { "--file-filter=Disc images (*.iso, *.chd) | *.iso *.ISO *.chd *.CHD", "--file-filter=All files | *" });
         if (!folder.empty()) args.push_back("--filename=" + folder);
     } else {
         if (kind == Kind::PickFolder) args.insert(args.end(), { "--getexistingdirectory", folder.empty() ? "." : folder });
         else if (kind == Kind::OpenPs3) args.insert(args.end(), { "--getopenfilename", folder.empty() ? "." : folder, "*.iso *.ISO *.zip *.ZIP|Disc images (*.iso, *.zip)\n*|All files" });
-        else args.insert(args.end(), { "--getopenfilename", folder.empty() ? "." : folder, "*.iso *.ISO|Disc images (*.iso)\n*|All files" });
+        else args.insert(args.end(), { "--getopenfilename", folder.empty() ? "." : folder, "*.iso *.ISO *.chd *.CHD|Disc images (*.iso, *.chd)\n*|All files" });
         args.insert(args.end(), { "--title", title });
     }
     std::string chosen;

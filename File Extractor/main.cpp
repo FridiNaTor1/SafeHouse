@@ -5,6 +5,7 @@
 #endif
 #include "../platform/install.h"
 #include "../platform/brx_decompress.h"
+#include "../platform/disc_image.h"
 #include "pcbrx.h"
 #include <memory>
 #include <optional>
@@ -207,6 +208,8 @@ constexpr DIALOGAUDIOINFO DIALOG_AUDIO_TABLE[] =
 
 static bool g_nonInteractive=false, g_progressJson=false;
 static uint64_t g_isoSize=0;
+// The disc image given (an .iso, or a CHD read through its decompressed copy): what the installation records.
+static fs::path g_sourcePath;
 static std::streambuf* g_stdoutBuffer=nullptr;
 static void Progress(const std::string& stage,size_t completed,size_t total,const std::string& item="") {
     if(g_progressJson) {std::ostream out(g_stdoutBuffer);out << cane::json({{"stage",stage},{"completed",completed},{"total",total},{"item",item}}).dump()<<std::endl;}
@@ -1321,7 +1324,7 @@ std::vector<uint8_t> Decompress(std::span<const uint8_t> input) {return cane::de
 // Prints what a disc image is, as one JSON line, for the launcher and tests.
 static int Identify(const fs::path& isoPath)
 {
-    const auto id = cane::identifyDisc(isoPath);
+    const auto id = cane::identifyDiscImage(isoPath);
     static constexpr const char* kinds[] = {"unreadable","not-ps2","supported","other-region","no-port","unknown"};
     cane::json out{{"kind",kinds[static_cast<int>(id.kind)]},{"boot_file",id.bootFile},{"label",id.label},
                    {"game",id.game?cane::json(cane::game(*id.game).key):cane::json(nullptr)}};
@@ -1407,7 +1410,7 @@ static int ExtractDiscImage(const cane::DiscImageInstall& d,const fs::path& isoP
         }
         const cane::json manifest={{"schema",1},{"game",g.key},{"asset_version",d.assetVersion},{"extractor_version","0.3.0"},
                                    {"layout","files"},{"disc",variant->bootFile},{"serial",variant->serial},{"region",variant->region},
-                                   {"disc_sha1",variant->executableSha1},{"iso_path",cane::utf8(fs::absolute(isoPath))},{"files",files}};
+                                   {"disc_sha1",variant->executableSha1},{"iso_path",cane::utf8(fs::absolute(g_sourcePath))},{"files",files}};
         cane::writeJson(out/"installation.json",manifest);
         transaction.commit();
         std::cout<<"Installed "<<g.title<<" into:\n"<<requestedOutput<<'\n';
@@ -1452,7 +1455,7 @@ static int ExtractDiscImage(const cane::DiscImageInstall& d,const fs::path& isoP
     cane::json manifest={{"schema",1},{"game",g.key},{"asset_version",d.assetVersion},{"extractor_version","0.2.0"},
                          {"disc",variant->bootFile},{"serial",variant->serial},{"region",variant->region},
                          {"disc_sha1",variant->executableSha1},
-                         {"iso_path",cane::utf8(fs::absolute(isoPath))},
+                         {"iso_path",cane::utf8(fs::absolute(g_sourcePath))},
                          {"image",{{"path",d.imageName},{"size",imageSize},{"sectors",volume.blocks}}},
                          {"files",files}};
     cane::writeJson(out/"installation.json",manifest);
@@ -1480,7 +1483,7 @@ static int Extract(int argc, char** argv)
         else if(option=="--iso" || option=="--output") {
             if(++i==args.size())throw std::runtime_error("Missing path for "+option);
             if(option=="--iso")isoPath=cane::path(args[i]);else requestedOutput=cane::path(args[i]);
-        } else if(option=="--help") {std::cout<<"cane-extractor --iso PATH --output DIRECTORY [--game sly1|sly2|sly3] [--validate-only] [--identify] [--non-interactive] [--progress=jsonl]\n";return 0;}
+        } else if(option=="--help") {std::cout<<"cane-extractor --iso PATH (.iso or .chd) --output DIRECTORY [--game sly1|sly2|sly3] [--validate-only] [--identify] [--non-interactive] [--progress=jsonl]\n";return 0;}
         else if(isoPath.empty() && !option.starts_with("--"))isoPath=cane::path(option);
         else throw std::runtime_error("Unknown argument: "+option);
     }
@@ -1491,6 +1494,39 @@ static int Extract(int argc, char** argv)
     {
         std::cerr << "ISO does not exist:\n" << isoPath << '\n';
         return Finish(EXIT_FAILURE);
+    }
+
+    // A CHD (MAME's compressed disc image) is written out as an .iso first, beside the installation (else in the
+    // temporary folder), read as one from here and deleted at the end; the installation records the CHD.
+    g_sourcePath=isoPath;
+    struct TemporaryImage {
+        fs::path path;
+        ~TemporaryImage() {if(!path.empty()) {std::error_code ec;fs::remove(path,ec);}}
+    } decompressed;
+    if(cane::chdFile(isoPath)) {
+        std::string error;
+        uint64_t size=0;
+        if(const auto image=cane::DiscImage::open(isoPath,&error))size=image->size();
+        else {std::cerr<<error<<'\n';return Finish(EXIT_FAILURE);}
+        const fs::path folder=requestedOutput.empty()?fs::temp_directory_path():fs::absolute(requestedOutput).parent_path();
+        fs::create_directories(folder);
+        if(fs::space(folder).available<size+(256ull<<20)) {
+            const uint64_t tenths=((size+(256ull<<20))*10+(1ull<<30)-1)>>30;
+            throw std::runtime_error("Decompressing the CHD requires at least "+std::to_string(tenths/10)+"."+std::to_string(tenths%10)+" GiB of free space");
+        }
+        fs::path name=isoPath.stem();
+        name+=".from-chd.iso";
+        decompressed.path=folder/name;
+        const std::string item=cane::utf8(isoPath.filename());
+        size_t reported=0;
+        Progress("decompress",0,size_t(size>>20),item);
+        error=cane::writeChdAsIso(isoPath,decompressed.path,[&](uint64_t done,uint64_t total) {
+            const size_t mib=size_t(done>>20);
+            if(mib>=reported+32 || done==total)Progress("decompress",reported=mib,size_t(total>>20),item);
+            return true;
+        });
+        if(!error.empty()) {std::cerr<<error<<'\n';return Finish(EXIT_FAILURE);}
+        isoPath=decompressed.path;
     }
 
     g_isoSize=fs::file_size(isoPath);
@@ -1542,7 +1578,7 @@ static int Extract(int argc, char** argv)
         pcbrx::ExtractLocalized(isoPath,outputDirectory,region,progress);
         pcbrx::TryRemove(outputDirectory/".pal-level-identities.txt");
         pcbrx::WriteExtractionManifest(outputDirectory,*disc);
-        auto manifest=cane::makeManifest(outputDirectory,isoPath,*disc,[](size_t n,size_t total,const std::string& item){Progress("verify",n,total,item);});
+        auto manifest=cane::makeManifest(outputDirectory,g_sourcePath,*disc,[](size_t n,size_t total,const std::string& item){Progress("verify",n,total,item);});
         cane::writeJson(outputDirectory/"installation.json",manifest);
         if(transaction)transaction->commit();
         std::cout<<"Installed "<<disc->title<<" ("<<disc->region<<").\n";
@@ -2216,7 +2252,7 @@ static int Extract(int argc, char** argv)
     commentaryManifest.close();
     if(!commentaryManifest)throw std::runtime_error("Failed writing commentary map");
     pcbrx::WriteExtractionManifest(outputDirectory,*disc);
-    auto manifest=cane::makeManifest(outputDirectory,isoPath,*disc,[](size_t n,size_t total,const std::string& item){Progress("verify",n,total,item);});
+    auto manifest=cane::makeManifest(outputDirectory,g_sourcePath,*disc,[](size_t n,size_t total,const std::string& item){Progress("verify",n,total,item);});
     cane::writeJson(outputDirectory/"installation.json",manifest);
     if(transaction)transaction->commit();
     Progress("complete",1,1);

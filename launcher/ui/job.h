@@ -175,7 +175,7 @@ struct Job {
 };
 inline std::string stageLabel(const std::string& stage) {
     static const std::unordered_map<std::string, std::string> labels = {
-        {"validate", "Checking your disc"},     {"levels", "Preparing worlds"},
+        {"decompress", "Decompressing the CHD"}, {"validate", "Checking your disc"}, {"levels", "Preparing worlds"},
         {"music", "Preparing music"},           {"sound-banks", "Preparing sound effects"},
         {"commentary", "Preparing commentary"}, {"dialogue", "Preparing dialogue"},
         {"ambient", "Preparing ambient audio"}, {"cutscenes", "Preparing movies"},
