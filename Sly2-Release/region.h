@@ -26,6 +26,13 @@ enum LANGUAGE : int
 extern int g_nLang;
 // orig (Europe) 0x2CA958: the language chosen on the title's menu this session, or -1. It wins over a save's.
 extern int g_nLangChosen;
+// (PC) The voices' language when it is not the text's (-1: the same as the text, g_nLang): the dialogue lines, the
+// binocucom, the movies' sound. Japanese voices with English text, English voices with Japanese text, ... The text,
+// its font and the port's own strings follow g_nLang; the lines' keys, lengths (so the subtitles' timing) and the
+// movies' sound track follow LangVoice(). The line ids are the same in every language (the subtitles are the lines'
+// text ids), so any pair works; a language with no voice lines of its own (a PS3 import, a subtitle mod) is offered
+// for the text only.
+extern int g_nLangVoice;
 
 // orig 0x1A2C48: the disc's languages (its region's list in the executable); orig 0x1A2C98: their count.
 int CLanguagesDisc();
@@ -41,6 +48,23 @@ bool FLanguageAvailable(int lang);
 // The language whose world-file data is read (the text block's strings, the dialog lines' keys): g_nLang when the
 // disc has it, else the disc's language that the chosen one falls back to (English, else the disc's first).
 int LangWorld();
+// The voices' language (g_nLangVoice when it can be played, else g_nLang) and the language whose dialog keys the
+// world files are read with for it (LangWorld() when it is the text's).
+int LangVoice();
+int LangWorldVoice();
+// What a language can be chosen for on this disc: the text (the disc's, or the folder's with text this disc can
+// draw) and the voices (the disc's, or the folder's with voice lines of their own).
+bool FLanguageTextAvailable(int lang);
+bool FLanguageVoiceAvailable(int lang);
+// (the pause menu's Language page) the text / voices chosen there, applied when the next world loads (the world's
+// text and lines are read in the language as it loads): -2 nothing pending; voice -1 the same as the text.
+void SetPendingLanguages(int langText, int langVoice);
+bool FLanguagesPending(int* plangText = nullptr, int* plangVoice = nullptr);
+// (at the start of a world's load) the pending choice applied; it is the session's (as the title's) and Settings.ini's.
+void ApplyPendingLanguages();
+// The title's language menu: the text and the voices both become lang (and are saved): nobody stays in a language
+// they cannot read.
+void ChooseLanguageOnTitle(int lang);
 // The language the text is shown in (the port's own text's column, porttext.h): g_nLang, or LangWorld() when the
 // chosen language's text cannot be shown with this disc's fonts (Japanese text on the USA / European discs).
 int LangText();
@@ -51,6 +75,10 @@ void InitLanguage();
 // (PC, Settings.ini "Language") a language set in the settings: chosen for the session (no language menu at the
 // title, it wins over a save's); "" or one not installed: nothing changes.
 void ApplyLanguageSetting(const std::string& key);
+// (Settings.ini "Voices") the voices' language: "" the same as the text; one without voices on this disc: ignored.
+void ApplyVoiceLanguageSetting(const std::string& key);
+// A language's id by its folder / game name ("" or unknown: -1).
+int LangOfSettingKey(const std::string& key);
 // orig 0x1A2BD0: the language set (-1: the region's first).
 void SetLanguage(int lang);
 const char* SzLanguage(int lang);
@@ -66,6 +94,12 @@ extern bool g_fPs3World;
 // character (the screen objects' sets: orig JP 0x215DF8). The port keeps a 16-bit character c >= 0x80 in its
 // std::string text as the UTF-8 encoding of c (Utf8Encode / ChDecode), so the text code stays byte based.
 bool FWideText();
+// (PC) The text shown is 16-bit characters (the strings' UTF-8 form above) drawn with the Japanese font: the Japanese
+// disc's own text, and on the other discs a language of the languages folder that brings that font (langstore.h:
+// Japanese imported from the Japanese disc). It follows the world's text: set when a world's text loads
+// (SetStoreWideChars), so a language chosen on the title changes it with the world that reloads.
+bool FWideChars();
+void SetStoreWideChars(bool fWide);
 void AppendCh16(std::string& str, uint32_t ch);
 // Text ids. The Japanese build's text has a few strings more and other memory card messages, so its ids from 0x12 on
 // are the USA ids moved by 2..4 (found from the world files' texts and the executables' calls of the text lookup
@@ -75,8 +109,10 @@ void AppendCh16(std::string& str, uint32_t ch);
 // disc's string has no USA id).
 int IdText(int idUsa);
 int IdTextUsa(int id);
+// The Japanese disc's id for a USA id, on any disc (the port's Japanese wording of its messages is kept by them).
+int IdTextJapanOfUsa(int idUsa);
 
-// The character at str[ib] (a byte, or a UTF-8 sequence on the Japanese disc); *pcb its length.
+// The character at str[ib] (a byte, or a UTF-8 sequence of 16-bit text: FWideChars); *pcb its length.
 uint32_t ChDecode(const std::string& str, std::size_t ib, std::size_t* pcb = nullptr);
 // The menus' buttons (the pad's bits). The Japanese build confirms with Circle and goes back with Cross (the menus
 // 0x1AEEE0, the episode select 0x15CF30, the shops 0x1DB870 / 0x1DAA90 / 0x1DCD30, the scripts' button wait
@@ -97,7 +133,7 @@ bool FJapaneseNoBreakAfter(uint32_t ch);
 // The European build's title: the language menu needed (orig 0x1DDB68: two or more languages, none chosen yet this
 // session, no game on the card to continue, the title's input not yet taken).
 bool FTitleNeedsLanguage(bool fTitleInputTaken, bool fContinueSlot);
-// The text shown with Latin line breaks (at spaces): every disc's text but Japanese text on the Japanese disc.
+// The text shown with Latin line breaks (at spaces): every text but Japanese text (drawn with the Japanese font).
 bool FLatinLineBreaks();
 // The European title's help line: the "Triangle: Language" label in each language, cycling (orig 0x1DE1F8's end,
 // the table at 0x2CAA08); empty without one.

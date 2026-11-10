@@ -909,7 +909,7 @@ private:
             if (stepperRow(tr("Speakers"), &speaker, speakers)) m_sly2.game.speakers = values[speaker], commit();
             describe(tr("Mono mixes both channels together, for a single speaker or one ear. Surround (the PS2's default) and "
                      "Stereo both play in stereo. The same as the in-game Speakers option."));
-            languageRow();
+            languageRow(), voiceLanguageRow();
             audioDeviceRows();
         }
         auto volume = [&](const char* label, float& value, const char* help) {
@@ -1695,10 +1695,12 @@ private:
         m_ownLangs = m_backend.sly2InstallationsWithOwnLanguages();
         m_ps3Missing = m_backend.ps3MissingLanguages();
         m_langRegion = m_backend.selectedRegion(GameId::Sly2);
+        m_japaneseFontMissing = m_backend.japaneseFontMissing();
+        m_japaneseFontInstalled = m_backend.japaneseFontSource().has_value();
     }
     // How a language plays on the selected region's disc (its text needs that disc's fonts)
     std::string languageNote(const LauncherBackend::LanguageInfo& l) const {
-        if (l.wide && m_langRegion != "japan") return tr("its voices, English text on this disc");
+        if (l.wide && !l.font && m_langRegion != "japan") return tr("its voices, English text on this disc");
         if (!l.wide && m_langRegion == "japan" && l.key != "English" && l.key.rfind("English", 0) != 0) return tr("text without accents on this disc");
         if (!l.voice) return tr("subtitles, English voices");
         return "";
@@ -1755,6 +1757,30 @@ private:
                        "opens the list again). More languages: Settings > Games > Sly 2 > Languages.")
                      : tr("Only your installed disc's language is available. Import other regions' languages in Settings > Games > Sly 2 > Languages."));
     }
+    // Settings.ini [Language] Voices: Same as text, or a language with voices (the disc's own, or the folder's with
+    // Dialog lines: not a subtitle-only language such as the PS3 import's)
+    void voiceLanguageRow() {
+        refreshLanguages();
+        std::vector<std::string> names{ tr("Same as text") };
+        std::vector<std::string> keys{ std::string() };
+        int index = 0;
+        for (const auto& l : m_langs) {
+            if (!l.voice) continue;
+            keys.push_back(l.key);
+            names.push_back(tr(l.key));
+            if (l.key == m_sly2.game.voiceLanguage) index = int(names.size()) - 1;
+        }
+        if (!m_sly2.game.voiceLanguage.empty() && index == 0)
+            names.push_back(trf("%s (not installed)", tr(m_sly2.game.voiceLanguage).c_str())), keys.push_back(m_sly2.game.voiceLanguage),
+                index = int(names.size()) - 1;
+        if (keys.size() <= 2 && m_sly2.game.voiceLanguage.empty()) return;   // (one language with voices: nothing to choose)
+        if (stepperRow(tr("Voice language"), &index, names)) {
+            m_sly2.game.voiceLanguage = size_t(index) < keys.size() ? keys[size_t(index)] : std::string();
+            commit();
+        }
+        describe(tr("The dialogue and the cutscenes' sound, apart from the text: Japanese voices with English text, or the other way "
+                 "round. Choosing a language on the game's title screen sets both back to it."));
+    }
     void languagesRows(bool gameRunning) {
         refreshLanguages();
         gap(6);
@@ -1780,6 +1806,20 @@ private:
             ImGui::PopID();
             describe(tr("This installation keeps its languages in its own folder (installed with an older SafeHouse). Moves them into "
                      "the shared languages folder, so every installed region offers them; nothing is copied twice."));
+        }
+        if (m_japaneseFontMissing) {
+            // (Japanese imported before its font was taken along: voices only on the USA / European discs until then)
+            if (m_japaneseFontInstalled) {
+                if (linkRow(tr("Add the Japanese text"), nullptr, nullptr, Icon::ChevronRight)) {
+                    m_job.start("Languages (Japanese text)", [this](const auto& log) { m_backend.addJapaneseFont(m_job.cancel, log); });
+                    m_langsDirty = true;
+                }
+                describe(tr("Japanese plays only its voices on the USA and European discs until the characters of your Japanese "
+                         "disc are added. They are read from your Japan installation; a few seconds."));
+            } else {
+                caption(tr("Japanese plays only its voices on the USA and European discs until the characters of your Japanese "
+                           "disc are added: choose your Japan disc image below once more."), color::text2);
+            }
         }
         if (linkRow(tr("Import languages from a disc image…"), ".iso", nullptr, Icon::Disc)) startLanguagePick(LangPick::Disc);
         describe(tr("Adds another region's languages without installing it: Europe has English (UK), French, German, Spanish, "
@@ -1995,6 +2035,7 @@ private:
     std::vector<Installation> m_ownLangs;
     std::vector<std::string> m_ps3Missing;
     std::string m_langRegion;
+    bool m_japaneseFontMissing = false, m_japaneseFontInstalled = false;
     double m_nextLangs = 0;
     bool m_langsDirty = true, m_langsFixture = false;
     LauncherBackend::Sly1Languages m_sly1Langs;

@@ -45,6 +45,9 @@ struct Sly2GameOptions {
     // (lang) the game's language: "" (Auto: the PC's language, then the title's language menu each session, as the
     // European discs do) or a language's folder name ("English", "French", "Japanese", "English (UK)", a mod's)
     std::string language;
+    // (lang) the voices' language (the dialogue, the binocucom, the movies' sound): "" Same As Text, else a language's
+    // folder name with voice lines (Japanese voices with English text, ...); [Language] Voices
+    std::string voiceLanguage;
     // (audio, notes/AUDIO_2026-11-10.md; platform/audio_devices.h) the devices by name, "" the system default
     std::string outputDevice;   // the game's sound
     std::string inputDevice;    // the microphone (only recorded while USB Headset is on)
@@ -400,6 +403,17 @@ inline const std::vector<Sly2Key>& sly2Schema() {
                       [](Sly2Settings& s, const std::string& v) {
                           const std::string t = ini::trim(v);
                           s.game.language = ini::keyForm(t) == "auto" ? std::string() : t;
+                          return true;
+                      } });
+        // (the text is Language's; a file without Voices plays the voices in it too)
+        k.push_back({ "Language", "Voices",
+                      "Same As Text, or a language with voices (English, Japanese, French, ... or a folder of the languages\n"
+                      "folder): the dialogue and the cutscenes' sound in another language than the text. Choosing a language\n"
+                      "on the title screen sets both back to it",
+                      [](const Sly2Settings& s) { return s.game.voiceLanguage.empty() ? std::string("Same As Text") : s.game.voiceLanguage; },
+                      [](Sly2Settings& s, const std::string& v) {
+                          const std::string t = ini::trim(v);
+                          s.game.voiceLanguage = ini::keyForm(t) == "sameastext" ? std::string() : t;
                           return true;
                       } });
         // [Controls]

@@ -463,6 +463,8 @@ int main(int argc, char** argv)
         else if (!std::strcmp(argv[i], "--replace-languages")) limport.fReplace = true;
         else if (!std::strcmp(argv[i], "--only-language") && i + 1 < argc) limport.alangOnly.emplace_back(argv[++i]);
         else if (!std::strcmp(argv[i], "--list-languages")) command = "list-languages";
+        else if (!std::strcmp(argv[i], "--language-selftest")) command = "language-selftest";
+        else if (!std::strcmp(argv[i], "--check-language") && i + 1 < argc) { command = "check-language"; arg = argv[++i]; }
         else if (!std::strcmp(argv[i], "--import-ps3-languages") && i + 2 < argc) { command = "import-ps3-languages"; arg = argv[++i]; arg2 = argv[++i]; }
         else if (!std::strcmp(argv[i], "--dump-textures") && i + 2 < argc) { command = "dump-textures"; arg = argv[++i]; arg2 = argv[++i]; }
         else if (!std::strcmp(argv[i], "--ps3-hd-textures") && i + 2 < argc) { command = "ps3-hd-textures"; arg = argv[++i]; arg2 = argv[++i]; }
@@ -487,6 +489,7 @@ int main(int argc, char** argv)
     if (command && !std::strcmp(command, "action-input-selftest")) return sly2actions::SelfTest();
     if (command && !std::strcmp(command, "settings-selftest")) { int SettingsSelfTest(); return SettingsSelfTest(); }   // (settings_test.cpp)
     if (command && !std::strcmp(command, "rumble-selftest")) return RumbleSelfTestCommand();
+    if (command && !std::strcmp(command, "language-selftest")) return LanguageSelfTest();
     // (audio.h, notes/AUDIO_2026-11-10.md) the devices by name, their fallback / recovery, the USB headset's microphone
     if (command && !std::strcmp(command, "audio-selftest")) { int AudioSelfTest(const char*); return AudioSelfTest(arg ? arg : ""); }
     if (command && !std::strcmp(command, "list-audio-devices"))
@@ -533,6 +536,7 @@ int main(int argc, char** argv)
     InitLanguageStore();   // (langstore.h: the other regions' languages, imports, mods)
     InitLanguage();   // (region.h: the disc's languages, the PC's language)
     if (command && !std::strcmp(command, "list-languages")) return ListLanguagesCommand();
+    if (command && !std::strcmp(command, "check-language")) return CheckLanguageCommand(arg);
     if (command && !std::strcmp(command, "import-ps3-languages"))
     {
         int ImportPs3LanguagesCommand(const std::string&, const std::string&, bool);   // ps3lang.cpp
@@ -735,6 +739,7 @@ int main(int argc, char** argv)
             FLoadDisplaySettings(cane::userDirectory(), &message);
             std::printf("settings: %s\n", message.c_str());
             ApplyLanguageSetting(g_saveopts.language);   // (region.h: Settings.ini's Language)
+            ApplyVoiceLanguageSetting(g_saveopts.voiceLanguage);   // (Voices: "" the same as the text)
             // the debug keys and the debug menu: the launcher's Settings > Advanced > Debug mode (<user-dir>/Debug
             // Mode.ini, which the launcher copies there at each start; not headless, where SLY2N_PCOPT=debugkeys=1)
             void ApplyPcDebugMode();   // pcinput.h

@@ -410,13 +410,20 @@ bool FPlayMovie(const FK& fk, PFNMOVIEPRESENT pfnPresent, void* pv, MOVIESTATS* 
     // (PC) an M2V's sound: the WAV of track 0 (one sound track: the USA disc), else the language's (track + 1)
     // (PC: a language the disc lacks: its sound from the languages folder, langstore.h, over a PSS's own too)
     const std::string pathStore = PathLanguageStoreMovieAudio(fk.isector);
-    if (!pathStore.empty()) audio.FOpenWav(pathStore);
+    if (!pathStore.empty())
+    {
+        const bool fOpen = audio.FOpenWav(pathStore);
+        std::printf("movie %u: the sound of %s from the languages folder%s\n", fk.id, SzLanguage(LangVoice()), fOpen ? "" : " could not be read");
+    }
     else if (reader.FElementary())
     {
         std::string path = g_disc.PathPart(fk.isector, "audio0");
-        if (path.empty()) path = g_disc.PathPart(fk.isector, "audio" + std::to_string(LangWorld() + 1));
+        if (path.empty()) path = g_disc.PathPart(fk.isector, "audio" + std::to_string(LangWorldVoice() + 1));
         if (!path.empty()) audio.FOpenWav(path);
+        if (LangVoice() != g_nLang) std::printf("movie %u: the disc's sound (%s voices)\n", fk.id, SzLanguage(LangWorldVoice()));
     }
+    else if (LangVoice() != g_nLang)
+        std::printf("movie %u: the disc's sound track %d (%s voices)\n", fk.id, CLanguagesDisc() > 1 ? LangWorldVoice() + 1 : 0, SzLanguage(LangWorldVoice()));
     CPcmStream pcm;
     std::deque<PICTURE> apicture;
     bool fEof = false, fQuit = false, fAudioStarted = false;
@@ -503,7 +510,7 @@ bool FPlayMovie(const FK& fk, PFNMOVIEPRESENT pfnPresent, void* pv, MOVIESTATS* 
             if (id == 0xE0) feedVideo(pb, cb);
             // orig 0x1B3EC0: the sound streams with the id 0 (one sound track: the USA disc) or the language's + 1 (the
             // European discs: one track per language, 1..11; region.h)
-            else if (cb >= 4 && pathStore.empty() && (pb[3] == 0 || pb[3] == LangWorld() + 1)) audio.AddPacket(pb, cb);
+            else if (cb >= 4 && pathStore.empty() && (pb[3] == 0 || pb[3] == LangWorldVoice() + 1)) audio.AddPacket(pb, cb);
             if (apicture.size() > 8) break;  // (sound far behind the pictures: show some first)
         }
     };

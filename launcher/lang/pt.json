@@ -915,6 +915,12 @@
   "Your Sly Collection (PS3) also has these languages, which your installation lacks: their text, as subtitles over the English voices (the PS3's voice files cannot be matched to the lines).": "A tua Sly Collection (PS3) também tem estes idiomas, que faltam à tua instalação: o seu texto, como legendas sobre as vozes em inglês (os ficheiros de voz da PS3 não podem ser associados às falas).",
   "Zoom in": "Aproximar",
   "Zoom out": "Afastar",
-  "Zoom the Binocucom and turrets with unassigned wheel inputs.": "Fazer zoom no binocucom e nas torretas com as voltas da roda não atribuídas."
+  "Zoom the Binocucom and turrets with unassigned wheel inputs.": "Fazer zoom no binocucom e nas torretas com as voltas da roda não atribuídas.",
+  "Add the Japanese text": "Adicionar o texto japonês",
+  "Japanese plays only its voices on the USA and European discs until the characters of your Japanese disc are added. They are read from your Japan installation; a few seconds.": "O japonês só reproduz as suas vozes nos discos dos EUA e da Europa até serem adicionados os carateres do teu disco japonês. São lidos da tua instalação do Japão; alguns segundos.",
+  "Japanese plays only its voices on the USA and European discs until the characters of your Japanese disc are added: choose your Japan disc image below once more.": "O japonês só reproduz as suas vozes nos discos dos EUA e da Europa até serem adicionados os carateres do teu disco japonês: escolhe mais uma vez, abaixo, a imagem do teu disco do Japão.",
+  "Voice language": "Idioma das vozes",
+  "Same as text": "Igual ao texto",
+  "The dialogue and the cutscenes' sound, apart from the text: Japanese voices with English text, or the other way round. Choosing a language on the game's title screen sets both back to it.": "Os diálogos e o som das cenas animadas, à parte do texto: vozes em japonês com texto em inglês, ou o contrário. Escolher um idioma no ecrã de título do jogo repõe ambos nesse idioma."
  }
 }

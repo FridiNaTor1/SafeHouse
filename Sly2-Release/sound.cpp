@@ -951,7 +951,8 @@ void LoadMusicFromBrx(CBinaryInputStream* pbis)
     const int nl = pbis->U8Read();
     int sel = 0;
     s.alanguage.clear();
-    const int langWorld = LangWorld();   // (PC: a language the disc lacks: the one it falls back to; langstore.h)
+    // (PC: the voices' language, region.h LangVoice; a language the disc lacks: the one it falls back to, langstore.h)
+    const int langWorld = LangWorldVoice();
     for (int i = 0; i < nl; ++i)
     {
         s.alanguage.push_back(pbis->U8Read());
@@ -989,7 +990,8 @@ void LoadMusicFromBrx(CBinaryInputStream* pbis)
         pbis->Read(static_cast<std::size_t>(std::max(c, 0)) * 8, e.aevent.data());  // the original reads even 0 bytes
         s.adialog.push_back(std::move(e));
     }
-    if (cStore) std::printf("languages: %d of %d dialog lines in %s\n", cStore, ne, SzLanguage(g_nLang));
+    if (cStore) std::printf("languages: %d of %d dialog lines in %s\n", cStore, ne, SzLanguage(LangVoice()));
+    else if (LangVoice() != g_nLang) std::printf("languages: %d dialog lines in %s (the disc's)\n", ne, SzLanguage(LangVoice()));
     const int no = pbis->S32Read();
     for (int i = 0; i < no; ++i)
     {

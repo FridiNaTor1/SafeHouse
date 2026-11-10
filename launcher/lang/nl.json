@@ -915,6 +915,12 @@
   "Your Sly Collection (PS3) also has these languages, which your installation lacks: their text, as subtitles over the English voices (the PS3's voice files cannot be matched to the lines).": "Je Sly Collection (PS3) heeft ook deze talen, die je installatie mist: hun tekst, als ondertitels over de Engelse stemmen (de stembestanden van de PS3 kunnen niet aan de regels worden gekoppeld).",
   "Zoom in": "Inzoomen",
   "Zoom out": "Uitzoomen",
-  "Zoom the Binocucom and turrets with unassigned wheel inputs.": "Binocucom en geschut zoomen met niet-toegewezen wielbewegingen."
+  "Zoom the Binocucom and turrets with unassigned wheel inputs.": "Binocucom en geschut zoomen met niet-toegewezen wielbewegingen.",
+  "Add the Japanese text": "Japanse tekst toevoegen",
+  "Japanese plays only its voices on the USA and European discs until the characters of your Japanese disc are added. They are read from your Japan installation; a few seconds.": "Japans speelt op de Amerikaanse en Europese discs alleen zijn stemmen af totdat de schrifttekens van je Japanse disc zijn toegevoegd. Ze worden uit je Japan-installatie gelezen; een paar seconden.",
+  "Japanese plays only its voices on the USA and European discs until the characters of your Japanese disc are added: choose your Japan disc image below once more.": "Japans speelt op de Amerikaanse en Europese discs alleen zijn stemmen af totdat de schrifttekens van je Japanse disc zijn toegevoegd: kies hieronder nog een keer je Japanse disc-image.",
+  "Voice language": "Taal van de stemmen",
+  "Same as text": "Zelfde als de tekst",
+  "The dialogue and the cutscenes' sound, apart from the text: Japanese voices with English text, or the other way round. Choosing a language on the game's title screen sets both back to it.": "De dialogen en het geluid van de tussenfilmpjes, los van de tekst: Japanse stemmen met Engelse tekst, of andersom. Een taal kiezen op het titelscherm van het spel zet beide weer op die taal."
  }
 }

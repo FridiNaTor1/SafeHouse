@@ -162,10 +162,10 @@ constexpr ROW s_arow[] = {
         "Camera omlaag", "Câmara baixo", "Kamera ned", "Kamera alas", "Kamera ned", "Kamera ner", "カメラ下"}},
     {PTX_TankLeftTrack, {"Tank: Left Track", "Char : chenille gauche", "Carro: cingolo sinistro", "Panzer: linke Kette",
         "Tanque: oruga izquierda", "Tank: linkerrups", "Tanque: lagarta esquerda", "Tank: venstre bælte",
-        "Panssari: vasen tela", "Stridsvogn: venstre belte", "Stridsvagn: vänster band", "戦車：左キャタピラ"}},
+        "Panssari: vasen tela", "Stridsvogn: venstre belte", "Stridsvagn: vänster band", "戦車:左キャタピラ"}},
     {PTX_TankRightTrack, {"Tank: Right Track", "Char : chenille droite", "Carro: cingolo destro", "Panzer: rechte Kette",
         "Tanque: oruga derecha", "Tank: rechterrups", "Tanque: lagarta direita", "Tank: højre bælte",
-        "Panssari: oikea tela", "Stridsvogn: høyre belte", "Stridsvagn: höger band", "戦車：右キャタピラ"}},
+        "Panssari: oikea tela", "Stridsvogn: høyre belte", "Stridsvagn: höger band", "戦車:右キャタピラ"}},
     {PTX_PressAKey, {"press a key (Esc cancels)", "appuie sur une touche (Échap : annuler)",
         "premi un tasto (Esc annulla)", "Taste drücken (Esc bricht ab)", "pulsa una tecla (Esc cancela)",
         "druk op een toets (Esc annuleert)", "prime uma tecla (Esc cancela)", "tryk på en tast (Esc annullerer)",
@@ -418,6 +418,24 @@ constexpr ROW s_arow[] = {
     {PTX_NotConnected, {"%s (not connected)", "%s (non connecté)", "%s (non collegato)", "%s (nicht verbunden)",
         "%s (no conectado)", "%s (niet verbonden)", "%s (não ligado)", "%s (ikke tilsluttet)", "%s (ei yhdistetty)",
         "%s (ikke tilkoblet)", "%s (inte ansluten)", "%s (なし)"}},
+    // P: the language menu: a language of the languages folder that plays its voices over this disc's text
+    {PTX_LanguageVoicesOnly, {"%s (voices only)", "%s (voix seulement)", "%s (solo voci)", "%s (nur Stimmen)",
+        "%s (solo voces)", "%s (alleen stemmen)", "%s (apenas vozes)", "%s (kun stemmer)", "%s (vain äänet)",
+        "%s (bare stemmer)", "%s (endast röster)", "%s (音声のみ)"}},
+    // P: the options' Language... page (the text and the voices apart; G: the Japanese 使用する言語 of the title's menu)
+    {PTX_LanguagePage, {"Language...", "Langue...", "Lingua...", "Sprache...", "Idioma...", "Taal...", "Idioma...",
+        "Sprog...", "Kieli...", "Språk...", "Språk...", "使用する言語"}},
+    {PTX_TextLanguage, {"Text Language", "Langue du texte", "Lingua del testo", "Textsprache", "Idioma del texto",
+        "Teksttaal", "Idioma do texto", "Tekstsprog", "Tekstin kieli", "Tekstspråk", "Textspråk", "テキストの言語"}},
+    {PTX_VoiceLanguage, {"Voice Language", "Langue des voix", "Lingua delle voci", "Sprache der Stimmen",
+        "Idioma de las voces", "Taal van de stemmen", "Idioma das vozes", "Stemmernes sprog", "Puheen kieli",
+        "Stemmenes språk", "Rösternas språk", "音声の言語"}},
+    {PTX_SameAsText, {"Same as Text", "Comme le texte", "Come il testo", "Wie der Text", "Igual que el texto",
+        "Zelfde als tekst", "Igual ao texto", "Samme som tekst", "Sama kuin teksti", "Samme som tekst", "Samma som text",
+        "テキストとおなじ"}},
+    {PTX_FromNextArea, {"%s (next area)", "%s (zone suivante)", "%s (prossima zona)", "%s (nächstes Gebiet)",
+        "%s (próxima zona)", "%s (volgend gebied)", "%s (próxima zona)", "%s (næste område)", "%s (seuraava alue)",
+        "%s (neste område)", "%s (nästa område)", "%s (次のエリア)"}},
 };
 // clang-format on
 static_assert(std::size(s_arow) == PTX_Max, "one row per PTX");
@@ -435,8 +453,9 @@ int IlangTable()
     // (the text's language: a store language's own, or the disc's that it falls back to; region.h LangText)
     const int lang = LangText();
     const int ilang = lang >= 0 && lang < CLANG ? lang : LANG_English;
-    // (the Japanese column needs the Japanese disc's font; Latin columns on the Japanese disc are folded: StrToGameText)
-    return ilang == LANG_Japanese && !FWideText() ? LANG_English : ilang;
+    // (the Japanese column needs the Japanese font: the Japanese disc's, or the languages folder's on the other discs;
+    // Latin columns drawn with it are folded: StrToGameText)
+    return ilang == LANG_Japanese && !FWideChars() ? LANG_English : ilang;
 }
 
 const char* SzRow(PTX ptx) { return s_arow[ptx].asz[IlangTable()]; }
@@ -456,8 +475,8 @@ bool FDecimalComma()
 
 std::string StrToGameText(const std::string& utf8)
 {
-    // the Japanese disc's text keeps characters >= 0x80 as UTF-8 already (region.h)
-    if (FWideText()) return IlangTable() == LANG_Japanese ? utf8 : StrFoldLatinForWideFont(utf8);   // (langstore.h)
+    // 16-bit text keeps characters >= 0x80 as UTF-8 already (region.h FWideChars)
+    if (FWideChars()) return IlangTable() == LANG_Japanese ? utf8 : StrFoldLatinForWideFont(utf8);   // (langstore.h)
     // the other discs' text is Latin-1 (their fonts' glyphs 0x20..0xFF)
     std::string out;
     out.reserve(utf8.size());
@@ -844,10 +863,12 @@ const char* SzEpisodeMenuWording(int idDisc)
 
 const char* SzPcWording(int idDisc)
 {
-    if (FWideText() && IlangTable() == LANG_Japanese)
+    if (FWideChars() && IlangTable() == LANG_Japanese)
     {
+        // (the other discs: the Japanese disc's id of the same message, region.h)
+        const int idJp = FWideText() ? idDisc : IdTextJapanOfUsa(IdTextUsa(idDisc));
         for (const PCROWJP& r : s_apcrowJp)
-            if (r.id == idDisc) return r.sz;
+            if (r.id == idJp) return r.sz;
         return nullptr;
     }
     const int ilang = IlangTable();

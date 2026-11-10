@@ -595,7 +595,15 @@ struct LauncherBackend {
         std::vector<std::string> arguments{utf8(binary(runtime)), "--data-dir", utf8(dataDir(game)),
                                            "--user-dir", utf8(userDir(game))};
         for (auto& a : ps3HdArguments(game)) arguments.push_back(a);
-        if (game == GameId::Sly2) arguments.insert(arguments.end(), {"--languages-dir", utf8(languagesDir(game))});
+        if (game == GameId::Sly2) {
+            // (a languages folder from before the Japanese font was imported: taken from the Japan installation now,
+            // so that Japanese shows its text on the other discs; the game starts either way)
+            try {
+                if (japaneseFontSource()) addJapaneseFont(cancel, [](const std::string&) {});
+            } catch (...) {
+            }
+            arguments.insert(arguments.end(), {"--languages-dir", utf8(languagesDir(game))});
+        }
         checkedProcess(arguments, tools, cancel, log);
     }
     // Sly 2's texture dump (Textures/ in the installation, MODDING.md): the converter writes it at install since
@@ -760,7 +768,8 @@ struct LauncherBackend {
         std::string key;            // the folder name ("French", "English (UK)"): Settings.ini's Language value
         std::string source;         // the disc it came from
         bool text = false, voice = false, movies = false;
-        bool wide = false;          // Japanese script: only the Japanese disc shows its text
+        bool wide = false;          // Japanese script: its text needs the Japanese font
+        bool font = false;          // (wide) the languages folder has that font (Font.bin): every disc shows its text
         bool disc = false;          // one of an installation's own (its world files)
     };
     // The languages the game offers on the selected region (Sly2-Release/langstore.cpp InitLanguageStore, the same
@@ -819,8 +828,12 @@ struct LauncherBackend {
                 } catch (...) {
                 }
                 if (!script && (key == "Japanese" || key == "Korean" || key == "Chinese")) info.wide = true;
+                info.font = info.font || fs::is_regular_file(e.path() / "Font.bin", ec);
             }
         }
+        // (a Japanese text variant without a font of its own is drawn with the "Japanese" folder's: langstore.cpp)
+        if (const auto japanese = folder.find("Japanese"); japanese != folder.end() && japanese->second.font)
+            for (auto& [key, info] : folder) info.font = info.font || info.wide;
         for (auto& [key, info] : folder) {
             if (all.count(key)) {
                 // (a disc language the folder adds to: still the disc's)
@@ -936,6 +949,29 @@ struct LauncherBackend {
         if (cancel) throw std::runtime_error("Cancelled");
         if (code != 0) throw std::runtime_error(error.empty() ? trf("The language import failed (exit %d). Details are in the launcher output", code) : error);
         log(json({{"stage", stage}, {"completed", 1}, {"total", 1}}).dump());
+    }
+    // Japanese is in the languages folder without the Japanese disc's text font (imported by a SafeHouse before the
+    // font was taken along): the USA / European discs then play its voices over their own text.
+    bool japaneseFontMissing() const {
+        std::error_code ec;
+        const fs::path dir = languagesDir(GameId::Sly2) / "Japanese";
+        return fs::is_regular_file(dir / "Text.json", ec) && !fs::is_regular_file(dir / "Font.bin", ec);
+    }
+    // The installed Japan disc, when it can supply that font.
+    std::optional<Installation> japaneseFontSource() const {
+        if (!japaneseFontMissing()) return std::nullopt;
+        for (const auto& in : installations(GameId::Sly2))
+            if (in.region == "japan" && in.current) return in;
+        return std::nullopt;
+    }
+    // Adds the font from the Japan installation (the game program's language import: it writes only what the folder
+    // lacks; a few seconds).
+    void addJapaneseFont(const std::atomic<bool>& cancel, const LogFunction& log) {
+        const auto in = japaneseFontSource();
+        if (!in) return;
+        runLanguageTool({"--data-dir", utf8(in->dir), "--user-dir", utf8(userDir(GameId::Sly2)), "--languages-dir",
+                         utf8(languagesDir(GameId::Sly2)), "--import-languages", utf8(languagesDir(GameId::Sly2)), "--only-language", "Japanese"},
+                        "languages", cancel, log);
     }
     // A disc image's languages (Europe: 11, Japan: Japanese; USA: English) into the folder, without installing it.
     void importLanguagesFromDisc(const std::string& iso, const std::atomic<bool>& cancel, const LogFunction& log) {

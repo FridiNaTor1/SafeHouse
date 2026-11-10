@@ -85,6 +85,8 @@ enum NATIVEID : int
     NID_RemapPage,   // (2026-11-10) Remap Controls...: the Remap page (remappage.h)
     // (audio, notes/AUDIO_2026-11-10.md) Audio Devices...: the output, the microphone, the headset's speaker
     NID_AudioPage, NID_AudioOutput, NID_AudioInput, NID_AudioHeadsetOutput,
+    // (lang) Language...: the text's and the voices' languages apart (region.h g_nLangVoice)
+    NID_LanguagePage, NID_TextLanguage, NID_VoiceLanguage,
     // (VR, vr.h) the pause menu's VR Settings page (a headset in use)
     NID_Vr = NID_Base + 0x200,
     NID_VrPage = NID_Vr, NID_VrMode, NID_VrAutoCam, NID_VrVignette, NID_VrScreenSize, NID_VrRefresh, NID_VrWorldScale,
@@ -107,6 +109,7 @@ constexpr uint32_t PFN_NativeInvertPage = 0xFFFF0009;    // (Invert Controls...)
 constexpr uint32_t VA_NativeInvertPage = 0xFFFF0109;
 constexpr uint32_t PFN_NativeVrPage = 0xFFFF0020, PFN_NativeVr = 0xFFFF0021;   // (VR Settings: its page, its options)
 constexpr uint32_t PFN_NativeAudioPage = 0xFFFF0022, PFN_NativeAudio = 0xFFFF0023;   // (Audio Devices: its page, its rows)
+constexpr uint32_t PFN_NativeLanguagePage = 0xFFFF0024, PFN_NativeLanguageRow = 0xFFFF0025;   // (Language...: page, rows)
 constexpr uint32_t PFN_ActionDevices = 0xFFFF0010, PFN_ActionGroups = 0xFFFF0011,
                    PFN_ActionRows = 0xFFFF0012, PFN_ActionCapture = 0xFFFF0013;
 constexpr uint32_t PFN_RemapPage = 0xFFFF0014;           // (the Remap page over the menu)
@@ -428,12 +431,36 @@ std::string StrAudioDevice(const std::string& name, bool fInput, PTX ptxDefault,
     return ach;
 }
 
+// a language's name in the text's language (the game's 14 by the text 0x58..; a custom one by its own name)
+std::string StrLanguageName(int lang)
+{
+    if (lang < 0) return "";
+    if (lang < LANG_Max)
+    {
+        std::string s = StrLocalized(s_psw, IdText(0x58 + lang));
+        if (!s.empty()) return s;
+    }
+    const std::string sCustom = StrLangStoreDisplayName(lang);
+    return sCustom.empty() ? StrToGameText(SzLanguageModName(lang)) : sCustom;
+}
+
 // (the port's own options: their text in the game's language, porttext.h; English on the USA disc)
 std::string StrNative(int id)
 {
     char ach[96];
     auto onOff = [](PTX ptx, bool f) { return StrPortOnOff(ptx, f); };
-    if (id >= NID_LanguageFirst && id < NID_LanguageFirst + 0x100) return StrLangStoreDisplayName(id - NID_LanguageFirst);
+    if (id >= NID_LanguageFirst && id < NID_LanguageFirst + 0x100)
+    {
+        const int lang = id - NID_LanguageFirst;
+        // (one of the game's 14 here: a language whose text this disc cannot show, OpenLanguageMenu)
+        std::string name = StrLanguageName(lang);
+        if (FLangStoreVoicesOnly(lang))
+        {
+            std::snprintf(ach, sizeof(ach), StrPort(PTX_LanguageVoicesOnly).c_str(), name.c_str());
+            name = ach;
+        }
+        return name;
+    }
     switch (id)
     {
     case NID_Aspect:
@@ -478,6 +505,34 @@ std::string StrNative(int id)
     case NID_InvertPage: return StrPort(PTX_InvertControlsPage);
     case NID_RemapPage: return StrPort(PTX_RemapPage);
     case NID_AudioPage: return StrPort(PTX_AudioDevicesPage);
+    case NID_LanguagePage: return StrPort(PTX_LanguagePage);
+    case NID_TextLanguage:
+    case NID_VoiceLanguage:
+    {
+        // the choice (a pending one: from the next world, region.h SetPendingLanguages)
+        int langText = -2, langVoice = -2;
+        FLanguagesPending(&langText, &langVoice);
+        const bool fText = id == NID_TextLanguage;
+        const bool fPending = fText ? langText != -2 : langVoice != -2;
+        const int lang = fText ? (fPending ? langText : g_nLang) : (fPending ? langVoice : g_nLangVoice);
+        std::string value = !fText && (lang < 0 || (!fPending && LangVoice() == g_nLang)) ? StrPort(PTX_SameAsText) : StrLanguageName(lang);
+        // (a text language this disc cannot draw, chosen before: its voices over the disc's text, langstore.h)
+        if (fText && FLangStoreVoicesOnly(lang))
+        {
+            std::snprintf(ach, sizeof(ach), StrPort(PTX_LanguageVoicesOnly).c_str(), value.c_str());
+            value = ach;
+        }
+        // ("next area" only when what will be heard / read changes)
+        const int textNext = langText != -2 ? langText : g_nLang;
+        const int voiceNext = langVoice != -2 ? langVoice : g_nLangVoice;
+        const bool fChanges = fText ? textNext != g_nLang : (voiceNext < 0 ? textNext : voiceNext) != LangVoice();
+        if (fPending && fChanges)
+        {
+            std::snprintf(ach, sizeof(ach), StrPort(PTX_FromNextArea).c_str(), value.c_str());
+            value = ach;
+        }
+        return StrPortValue(fText ? PTX_TextLanguage : PTX_VoiceLanguage, value);
+    }
     case NID_AudioOutput: return StrPortValue(PTX_OutputDevice, StrAudioDevice(g_saveopts.outputDevice, false, PTX_SystemDefault, PTX_OutputDevice));
     case NID_AudioInput: return StrPortValue(PTX_InputDevice, StrAudioDevice(g_saveopts.inputDevice, true, PTX_SystemDefault, PTX_InputDevice));
     case NID_AudioHeadsetOutput:
@@ -1015,6 +1070,55 @@ void CycleAudio(const MENUENT& e)
     FSaveDisplaySettings(cane::userDirectory());
 }
 
+// (lang) Language...: Text Language (the languages whose text this disc can draw) and Voice Language (Same as Text,
+// then the languages with voices); chosen here, they apply when the next world loads (its text and lines are read in
+// them) and are Settings.ini's [Language] Language / Voices
+std::vector<MENUENT> AentLanguage()
+{
+    std::vector<MENUENT> a;
+    for (int id : {int(NID_TextLanguage), int(NID_VoiceLanguage)})
+    {
+        MENUENT e;
+        e.id = id;
+        e.pfnSelect = PFN_NativeLanguageRow;
+        a.push_back(e);
+    }
+    return a;
+}
+
+void CycleLanguage(const MENUENT& e)
+{
+    int langText = -2, langVoice = -2;
+    FLanguagesPending(&langText, &langVoice);
+    if (langText == -2) langText = g_nLang;
+    if (langVoice == -2) langVoice = g_nLangVoice;
+    std::vector<int> achoice;
+    if (e.id == NID_VoiceLanguage) achoice.push_back(-1);   // (Same as Text)
+    for (int i = 0; i < CLanguages(); ++i)
+    {
+        const int lang = LanguageOfIndex(i);
+        if (e.id == NID_TextLanguage ? FLanguageTextAvailable(lang) : FLanguageVoiceAvailable(lang)) achoice.push_back(lang);
+    }
+    if (achoice.empty()) return;
+    int& cur = e.id == NID_TextLanguage ? langText : langVoice;
+    size_t i = 0;
+    for (size_t k = 0; k < achoice.size(); ++k)
+        if (achoice[k] == cur) i = k + 1;
+    cur = achoice[i % achoice.size()];
+    // (nothing pending when the choice is what plays now)
+    const int curText = langText == g_nLang ? -2 : langText;
+    const int curVoice = langVoice == g_nLangVoice ? -2 : langVoice;
+    SetPendingLanguages(curText, curVoice);
+    std::printf("language: text %s, voices %s from the next world\n", SzLanguage(langText),
+                langVoice < 0 ? "as the text" : SzLanguage(langVoice));
+    if (g_saveopts.fStore)
+    {
+        g_saveopts.language = SzLanguageModName(langText);
+        g_saveopts.voiceLanguage = langVoice < 0 ? std::string() : std::string(SzLanguageModName(langVoice));
+        FSaveDisplaySettings(cane::userDirectory());
+    }
+}
+
 // (native) the PC display options' page
 std::vector<MENUENT> AentDisplayOptions()
 {
@@ -1052,6 +1156,13 @@ std::vector<MENUENT> AentOptions()
     e.id = NID_ControlsPage;
     e.pfnSelect = PFN_NativeControlsPage;
     a.push_back(e);
+    // (lang) Language... (two or more languages: the text and the voices apart)
+    if (CLanguages() >= 2)
+    {
+        e.id = NID_LanguagePage;
+        e.pfnSelect = PFN_NativeLanguagePage;
+        a.push_back(e);
+    }
     // (audio) Audio Devices... (desktop builds, with Settings.ini; not on the Switch / Android)
     if (FAudioDeviceChoiceShown() && g_saveopts.fStore)
     {
@@ -1331,6 +1442,11 @@ void SelectEntry(MENUENT& e)
     case PFN_NativeControls: CycleControls(e); e.grf |= 2; break;
     case PFN_NativeVr: CycleVr(e); e.grf |= 2; break;
     case PFN_NativeAudio: CycleAudio(e); e.grf |= 2; break;
+    case PFN_NativeLanguageRow: CycleLanguage(e); e.grf |= 2; break;
+    case PFN_NativeLanguagePage:
+        ReplacePage(AentLanguage(), 0);
+        e.grf |= 2;
+        break;
     case PFN_NativeAudioPage:
         ReplacePage(AentAudio(), 0);
         e.grf |= 2;
@@ -1398,13 +1514,14 @@ void SelectEntry(MENUENT& e)
     case PFN_NativeLanguage:
         // orig (Europe) 0x1DDCA8: the language chosen (it wins over a save's: ApplyGameSettings), then the title's world
         // again in it (0x1DD8E0's transition: the current world, the flags 1)
-        g_nLangChosen = e.n;
-        SetLanguage(e.n);
+        // (PC) the text and the voices both (the pause menu's Language page can set them apart): region.h
+        ChooseLanguageOnTitle(e.n);
         std::printf("language: %s chosen\n", SzLanguage(e.n));
         // (PC) remembered in Settings.ini (the launcher shows and sets the same): the next start begins in it
         if (g_saveopts.fStore)
         {
             g_saveopts.language = SzLanguageModName(e.n);
+            g_saveopts.voiceLanguage.clear();
             FSaveDisplaySettings(cane::userDirectory());
         }
         CloseMenu();
@@ -1675,6 +1792,8 @@ void OpenLanguageMenu(SW* psw, bool fCanCancel)
         MENUENT e;
         // (the game's 14 by the disc's text 0x58.. in the current language; a custom one by its own name)
         e.id = lang < LANG_Max ? 0x58 + lang : NID_LanguageFirst + lang;   // (the USA ids the table 0x2C35B8 holds)
+        // (a language whose text this disc cannot show, langstore.h: named "... (voices only)")
+        if (FLangStoreVoicesOnly(lang)) e.id = NID_LanguageFirst + lang;
         e.pfnSelect = PFN_NativeLanguage;
         e.n = lang;
         aent.push_back(e);

@@ -69,6 +69,11 @@ enum PTX : int
     // Headset), the headset's speaker; a device's values ("%s (not connected)": a chosen device that is missing)
     PTX_AudioDevicesPage, PTX_OutputDevice, PTX_InputDevice, PTX_HeadsetOutputDevice, PTX_SystemDefault, PTX_SameAsOutput,
     PTX_NotConnected,
+    // (langstore.h) the language menu's entry of a language whose text this disc cannot show: "Japanese (voices only)"
+    PTX_LanguageVoicesOnly,
+    // (the options' Language... page, region.h g_nLangVoice) its entry, its two rows, the voices' default, a choice
+    // that takes effect when the next world loads
+    PTX_LanguagePage, PTX_TextLanguage, PTX_VoiceLanguage, PTX_SameAsText, PTX_FromNextArea,
     PTX_Max
 };
 

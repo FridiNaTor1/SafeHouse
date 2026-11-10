@@ -2,6 +2,7 @@
 
 #include "screenobj.h"
 
+#include "langstore.h"
 #include "loadtrace.h"
 #include "region.h"
 
@@ -61,6 +62,7 @@ void LoadElemBodyFromBrx(SELEM& e, CBinaryInputStream* pbis)
             g.second.idx = uint32_t(e.asub.size());
             e.asub.push_back(std::move(g.second));
         }
+        if (g_plangcapture) g_plangcapture->Font(e);   // (--import-languages: the text font, langstore.h)
         return;
     }
     if (FWideText() && (e.kind == SELEMK_Transform || e.kind > SELEMK_Set)) return;  // (the Japanese build reads no data for kinds 2 and 9..: JP 0x215DF8)

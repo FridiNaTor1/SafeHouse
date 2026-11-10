@@ -4,6 +4,7 @@
 
 #include "screenrt.h"
 #include "worldglobals.h"
+#include "langstore.h"
 #include "region.h"
 #include "dance.h"
 #include "actor.h"
@@ -657,7 +658,20 @@ namespace
 std::vector<FONTBRX> s_afont;   // (the HUD's fonts: the text and the button icons; found at a world's first draw)
 uint32_t s_serialFonts = 0;
 }
-const FONTBRX* PfontHud() { return s_afont.empty() ? nullptr : &s_afont[0]; }
+const FONTBRX* PfontHud()
+{
+    if (s_afont.empty()) return nullptr;
+    // (PC, langstore.h) Japanese text on a USA / European disc: the languages folder's Japanese font in the place of
+    // the world's text font (the button icons stay the world's)
+    if (const SELEM* pset = PsetLanguageStoreFont())
+    {
+        static FONTBRX s_fontStore;
+        s_fontStore = s_afont[0];
+        s_fontStore.pset = pset;
+        return &s_fontStore;
+    }
+    return &s_afont[0];
+}
 const FONTBRX* PfontHudIcons() { return s_afont.size() > 1 && s_afont[1].pso == s_afont[0].pso ? &s_afont[1] : nullptr; }
 
 // (QoL) SLY2N_WIPEMASKFIX=0: the wipe's mask widened as before
@@ -690,8 +704,8 @@ void DrawScreenObjs(SW* psw)
                 std::printf("\n");
             }
     }
-    const FONTBRX* pfont = s_afont.empty() ? nullptr : &s_afont[0];
-    const FONTBRX* picons = s_afont.size() > 1 && s_afont[1].pso == s_afont[0].pso ? &s_afont[1] : nullptr;
+    const FONTBRX* pfont = PfontHud();
+    const FONTBRX* picons = PfontHudIcons();
     s_pswText = psw;
     std::string (*pfnOld)(int) = g_pfnScriptString;
     g_pfnScriptString = StrScreenScript;

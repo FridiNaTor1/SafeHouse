@@ -915,6 +915,12 @@
   "Your Sly Collection (PS3) also has these languages, which your installation lacks: their text, as subtitles over the English voices (the PS3's voice files cannot be matched to the lines).": "La tua Sly Collection (PS3) ha anche queste lingue, che mancano alla tua installazione: il loro testo, come sottotitoli sulle voci inglesi (i file vocali della PS3 non si possono abbinare alle battute).",
   "Zoom in": "Ingrandisci",
   "Zoom out": "Rimpicciolisci",
-  "Zoom the Binocucom and turrets with unassigned wheel inputs.": "Ingrandisci binocucom e torrette con gli scatti della rotellina non assegnati."
+  "Zoom the Binocucom and turrets with unassigned wheel inputs.": "Ingrandisci binocucom e torrette con gli scatti della rotellina non assegnati.",
+  "Add the Japanese text": "Aggiungi il testo giapponese",
+  "Japanese plays only its voices on the USA and European discs until the characters of your Japanese disc are added. They are read from your Japan installation; a few seconds.": "Il giapponese riproduce solo le sue voci sui dischi USA ed europei finché non vengono aggiunti i caratteri del tuo disco giapponese. Vengono letti dalla tua installazione Giappone; pochi secondi.",
+  "Japanese plays only its voices on the USA and European discs until the characters of your Japanese disc are added: choose your Japan disc image below once more.": "Il giapponese riproduce solo le sue voci sui dischi USA ed europei finché non vengono aggiunti i caratteri del tuo disco giapponese: scegli ancora una volta qui sotto l'immagine del tuo disco giapponese.",
+  "Voice language": "Lingua delle voci",
+  "Same as text": "Come il testo",
+  "The dialogue and the cutscenes' sound, apart from the text: Japanese voices with English text, or the other way round. Choosing a language on the game's title screen sets both back to it.": "I dialoghi e l'audio dei filmati, separati dal testo: voci giapponesi con testo inglese o il contrario. Scegliere una lingua nella schermata del titolo del gioco riporta entrambi su quella lingua."
  }
 }

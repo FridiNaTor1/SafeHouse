@@ -13,6 +13,7 @@
 #include "splayer.h"
 #include "sm.h"
 #include "worldaccess.h"
+#include "region.h"
 #include "render.h"
 #include "rtgt.h"
 #include "cls.h"
@@ -29,6 +30,7 @@
 #include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <functional>
 #include <memory>
 #include <set>
 #include <sstream>
@@ -293,6 +295,43 @@ int ViewWorld(const VIEWOPTS& vo)
                     std::printf("]");
                 }
                 std::printf("\n");
+            }
+            if (std::getenv("SLY2_DUMPSCREENHASH"))   // (debug: every element's and group's content as a hash: two discs compared)
+            {
+                auto mix = [](uint64_t& h, const void* pv, size_t cb) { const uint8_t* pb = static_cast<const uint8_t*>(pv); for (size_t i = 0; i < cb; ++i) h = (h ^ pb[i]) * 1099511628211ull; };
+                std::function<uint64_t(const SELEM&)> hashElem = [&](const SELEM& e) {
+                    uint64_t h = 1469598103934665603ull;
+                    mix(h, &e.kind, 4);
+                    for (const SPOLY& poly : e.apoly) { mix(h, &poly.primitive, 1); mix(h, &poly.control, 1); mix(h, &poly.rgba, 4); mix(h, poly.axy.data(), poly.axy.size() * 4); }
+                    if (e.kind == 2) mix(h, &e.mat, sizeof(e.mat));
+                    for (const auto& r : e.arec) mix(h, r.data(), r.size());
+                    if (e.kind == 3) { mix(h, &e.aul3[1], 4); mix(h, e.ag3, 12); mix(h, e.ab3, 2); const int id = e.ab3[1] == 0 ? IdTextUsa(e.n3) : e.n3; mix(h, &id, 4); }
+                    if (e.kind == 4) mix(h, &e.ref, 2);
+                    if (e.kind == 6 || e.kind == 7) { mix(h, &e.x0, 2); mix(h, &e.y0, 2); mix(h, &e.x1, 2); mix(h, &e.y1, 2); mix(h, &e.idTexture, 4); }
+                    return h;
+                };
+                for (const SELEM& e : pso->aelem)
+                    if (e.kind == 8) std::printf("    H elem %u kind 8: %zu glyphs\n", e.idx, e.aul.size());
+                    else if (e.kind) std::printf("    H elem %u kind %u: %016llx\n", e.idx, e.kind, static_cast<unsigned long long>(hashElem(e)));
+                for (size_t g = 0; g < pso->agroup.size(); ++g)
+                {
+                    uint64_t h = 1469598103934665603ull;
+                    const SGROUP& grp = pso->agroup[g];
+                    mix(h, &grp.cframeSet, 2); mix(h, &grp.cframe, 2);
+                    for (const SPART& part : grp.apart)
+                    {
+                        mix(h, &part.dt, 4); mix(h, &part.id, 4);
+                        for (const SKEY& k : part.akey)
+                        {
+                            mix(h, &k.t, 4);
+                            for (const SITEM& it : k.aitem) { mix(h, it.aw, 6); mix(h, &it.s6, 2); mix(h, &it.b30, 1); mix(h, &it.b31, 1); mix(h, &it.n34, 4); mix(h, &it.mat, sizeof(it.mat)); }
+                            for (const auto& c : k.acolor) mix(h, c.data(), 8);
+                            mix(h, k.aw.data(), k.aw.size() * 2); mix(h, k.ab.data(), k.ab.size());
+                            for (const auto& t : k.atag) { mix(h, &t.first, 1); mix(h, &t.second, 4); }
+                        }
+                    }
+                    std::printf("    H group %zu: %016llx\n", g, static_cast<unsigned long long>(h));
+                }
             }
             for (const SELEM& e : pso->aelem)
             {

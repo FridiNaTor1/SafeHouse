@@ -4,6 +4,8 @@
 
 #include "promptglyph.h"
 
+#include "region.h"
+
 #include "pcinput.h"
 #include "shop.h"
 
@@ -125,15 +127,24 @@ std::string StrPromptButtonWords(const std::string& text, int textId)
     if (FTouchPadActive()) return text;
     const bool fireBriefing = sly2actions::profile.enabled &&
         (textId == s_idTurretBriefing || textId == s_idTankBriefing);
+    // (lang) Japanese text from the languages folder on a USA / European disc: its "スタートボタン" / "セレクトボタン"
+    // as the icon and "ボタン" (the way that text writes the other buttons: "(O)ボタン"), and L3 / R3 next to kana.
+    // (The Japanese disc's own text is left as it is.)
+    const bool fStoreJapanese = FWideChars() && !FWideText();
+    static constexpr char s_szStartJp[] = "スタートボタン", s_szSelectJp[] = "セレクトボタン";
     if (text.find("START") == std::string::npos && text.find("SELECT") == std::string::npos &&
         text.find("L3") == std::string::npos && text.find("R3") == std::string::npos &&
-        !(fireBriefing && text.find("R1") != std::string::npos)) return text;
-    struct WORD { const char* sz; size_t cch; const char* szIcon; bool briefingOnly = false; };
+        !(fireBriefing && text.find("R1") != std::string::npos) &&
+        !(fStoreJapanese && (text.find(s_szStartJp) != std::string::npos || text.find(s_szSelectJp) != std::string::npos))) return text;
+    struct WORD { const char* sz; size_t cch; const char* szIcon; bool briefingOnly = false; bool storeJapanese = false; };
     // (lang 2026-11-10: L3 / R3 too, the stick buttons every language names by their code: "the L3 button", "Touche
     // L3 :", "L3-Taste", "R3 tasten", ...)
     static constexpr WORD s_aword[] = {{"START", 5, "&2!&."}, {"SELECT", 6, "&2_&."}, {"L3", 2, "&2{&."}, {"R3", 2, "&2}&."},
-                                       {"R1", 2, "&2R&.", true}};
-    auto fLetter = [](unsigned char ch) { return std::isalnum(ch) || ch >= 0x80; };
+                                       {"R1", 2, "&2R&.", true},
+                                       {s_szStartJp, sizeof(s_szStartJp) - 1, "&2!&.ボタン", false, true},
+                                       {s_szSelectJp, sizeof(s_szSelectJp) - 1, "&2_&.ボタン", false, true}};
+    // (a byte >= 0x80: an accented letter of Latin text; of that Japanese text: kana or kanji, no part of the word)
+    auto fLetter = [fStoreJapanese](unsigned char ch) { return std::isalnum(ch) || (ch >= 0x80 && !fStoreJapanese); };
     std::string out;
     out.reserve(text.size());
     bool fIconFont = false;   // (inside an "&2 ... &." run the words are glyph letters, not text)
@@ -151,7 +162,7 @@ std::string StrPromptButtonWords(const std::string& text, int textId)
             for (const WORD& w : s_aword)
                 // (after the word: not another capital or digit; a lower-case letter is a compound's next part, as the
                 // Swedish "STARTknappen")
-                if ((!w.briefingOnly || fireBriefing) && text.compare(i, w.cch, w.sz) == 0 &&
+                if ((!w.briefingOnly || fireBriefing) && (!w.storeJapanese || fStoreJapanese) && text.compare(i, w.cch, w.sz) == 0 &&
                     (i + w.cch == text.size() || !(std::isupper(uint8_t(text[i + w.cch])) || std::isdigit(uint8_t(text[i + w.cch])))))
                 {
                     out += w.szIcon;

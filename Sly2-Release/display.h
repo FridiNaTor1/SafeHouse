@@ -92,6 +92,7 @@ struct SAVEOPTS
     int speakers = 0;             // flags "nMixerMode": 0 Surround, 1 Mono, 2 Stereo (settings::Sly2Speakers)
     float gMusic = 1.0f, gEffects = 1.0f, gDialog = 1.0f;   // 0..1 (sound.h SetSoundUserVolumes)
     std::string language;         // (lang) "" Auto, else a language's folder name (region.h InitLanguage)
+    std::string voiceLanguage;    // (lang) "" Same As Text, else a language's folder name (region.h g_nLangVoice)
     // (audio, notes/AUDIO_2026-11-10.md) the devices by name ("" the system default) and the original's USB Headset
     // (flags "fUseHeadset": the sound manager's +0x10, sound.cpp UpdateMicNoise / spiop's headset tracks)
     std::string outputDevice, inputDevice, headsetOutputDevice;

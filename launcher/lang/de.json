@@ -915,6 +915,12 @@
   "Your Sly Collection (PS3) also has these languages, which your installation lacks: their text, as subtitles over the English voices (the PS3's voice files cannot be matched to the lines).": "Deine Sly Collection (PS3) hat auch diese Sprachen, die deiner Installation fehlen: deren Text, als Untertitel über der englischen Sprachausgabe (die Sprachdateien der PS3 lassen sich den Zeilen nicht zuordnen).",
   "Zoom in": "Heranzoomen",
   "Zoom out": "Herauszoomen",
-  "Zoom the Binocucom and turrets with unassigned wheel inputs.": "Binocucom und Geschütze mit nicht belegten Mausradeingaben zoomen."
+  "Zoom the Binocucom and turrets with unassigned wheel inputs.": "Binocucom und Geschütze mit nicht belegten Mausradeingaben zoomen.",
+  "Add the Japanese text": "Japanischen Text hinzufügen",
+  "Japanese plays only its voices on the USA and European discs until the characters of your Japanese disc are added. They are read from your Japan installation; a few seconds.": "Japanisch spielt auf den USA- und Europa-Discs nur seine Sprachausgabe ab, bis die Schriftzeichen deiner japanischen Disc hinzugefügt sind. Sie werden aus deiner Japan-Installation gelesen; ein paar Sekunden.",
+  "Japanese plays only its voices on the USA and European discs until the characters of your Japanese disc are added: choose your Japan disc image below once more.": "Japanisch spielt auf den USA- und Europa-Discs nur seine Sprachausgabe ab, bis die Schriftzeichen deiner japanischen Disc hinzugefügt sind: Wähle unten noch einmal dein japanisches Disc-Image.",
+  "Voice language": "Sprache der Stimmen",
+  "Same as text": "Wie der Text",
+  "The dialogue and the cutscenes' sound, apart from the text: Japanese voices with English text, or the other way round. Choosing a language on the game's title screen sets both back to it.": "Die Dialoge und der Ton der Zwischensequenzen, unabhängig vom Text: japanische Stimmen mit englischem Text oder umgekehrt. Wählst du auf dem Titelbildschirm des Spiels eine Sprache, werden beide wieder auf sie gesetzt."
  }
 }

@@ -915,6 +915,12 @@
   "Your Sly Collection (PS3) also has these languages, which your installation lacks: their text, as subtitles over the English voices (the PS3's voice files cannot be matched to the lines).": "Twoja Sly Collection (PS3) ma także te języki, których brakuje w instalacji: ich tekst, jako napisy do angielskich głosów (plików głosowych z PS3 nie da się dopasować do kwestii).",
   "Zoom in": "Przybliż",
   "Zoom out": "Oddal",
-  "Zoom the Binocucom and turrets with unassigned wheel inputs.": "Przybliżaj binocucom i działka nieprzypisanymi ruchami kółka."
+  "Zoom the Binocucom and turrets with unassigned wheel inputs.": "Przybliżaj binocucom i działka nieprzypisanymi ruchami kółka.",
+  "Add the Japanese text": "Dodaj japoński tekst",
+  "Japanese plays only its voices on the USA and European discs until the characters of your Japanese disc are added. They are read from your Japan installation; a few seconds.": "Japoński odtwarza na płytach z USA i Europy tylko swoje głosy, dopóki nie zostaną dodane znaki pisma z twojej japońskiej płyty. Są odczytywane z twojej instalacji japońskiej; kilka sekund.",
+  "Japanese plays only its voices on the USA and European discs until the characters of your Japanese disc are added: choose your Japan disc image below once more.": "Japoński odtwarza na płytach z USA i Europy tylko swoje głosy, dopóki nie zostaną dodane znaki pisma z twojej japońskiej płyty: wybierz poniżej jeszcze raz obraz swojej japońskiej płyty.",
+  "Voice language": "Język głosów",
+  "Same as text": "Taki jak tekst",
+  "The dialogue and the cutscenes' sound, apart from the text: Japanese voices with English text, or the other way round. Choosing a language on the game's title screen sets both back to it.": "Dialogi i dźwięk przerywników niezależnie od tekstu: japońskie głosy z angielskim tekstem lub odwrotnie. Wybranie języka na ekranie tytułowym gry przywraca do niego oba."
  }
 }

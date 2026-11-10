@@ -35,10 +35,10 @@ const char* const s_aszLanguage[LANG_Max] = {"English", "French", "Italian", "Ge
 
 bool s_fOff = false;  // (--dump-text: the disc's own strings)
 
-// The game's strings are Latin-1 bytes (the Japanese disc's: UTF-8 already, region.h AppendCh16); the files UTF-8.
+// The game's strings are Latin-1 bytes (16-bit text: UTF-8 already, region.h FWideChars / AppendCh16); the files UTF-8.
 std::string Utf8OfLatin1(const std::string& s)
 {
-    if (FWideText()) return s;
+    if (FWideChars()) return s;
     std::string out;
     for (unsigned char c : s)
     {
@@ -49,7 +49,7 @@ std::string Utf8OfLatin1(const std::string& s)
 }
 std::string Latin1OfUtf8(const std::string& s)
 {
-    if (FWideText()) return s;
+    if (FWideChars()) return s;
     std::string out;
     for (std::size_t i = 0; i < s.size();)
     {

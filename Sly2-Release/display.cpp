@@ -53,6 +53,7 @@ void FromGameOptions(const st::Sly2GameOptions& o)
     g_saveopts.fInvertTurret = o.invertTurret != 0;
     g_saveopts.speakers = std::clamp(o.speakers, 0, 2);
     g_saveopts.language = o.language;
+    g_saveopts.voiceLanguage = o.voiceLanguage;
     g_saveopts.outputDevice = o.outputDevice;
     g_saveopts.inputDevice = o.inputDevice;
     g_saveopts.headsetOutputDevice = o.headsetOutputDevice;
@@ -70,6 +71,7 @@ void ToGameOptions(st::Sly2GameOptions& o)
     o.invertTurret = g_saveopts.fInvertTurret ? 1 : 0;
     o.speakers = g_saveopts.speakers;
     o.language = g_saveopts.language;
+    o.voiceLanguage = g_saveopts.voiceLanguage;
     o.outputDevice = g_saveopts.outputDevice;
     o.inputDevice = g_saveopts.inputDevice;
     o.headsetOutputDevice = g_saveopts.headsetOutputDevice;

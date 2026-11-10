@@ -856,7 +856,7 @@ void CHud::DrawTextBox(const FONTBRX& fontBase, const FONTBRX* pfontOther, const
             st.m[8] = tx;
             st.m[9] = ty;
             // the button icons: the bound button for the device in use (promptglyph.h; widths unchanged)
-            const PROMPTGLYPH pg = pfont == pfontOther && (ch < 0x80 || !FWideText()) ? PromptGlyphFor(char(ch)) : PROMPTGLYPH{};
+            const PROMPTGLYPH pg = pfont == pfontOther && (ch < 0x80 || !FWideChars()) ? PromptGlyphFor(char(ch)) : PROMPTGLYPH{};
             glm::vec2 lo, hi;
             float z = 0.0f, a = 0.0f;
             if (pg.kind == PROMPTGLYPH::Icon && FGlyphBox(*pglyph, st, &lo, &hi, &z, &a))

@@ -915,6 +915,12 @@
   "Your Sly Collection (PS3) also has these languages, which your installation lacks: their text, as subtitles over the English voices (the PS3's voice files cannot be matched to the lines).": "Votre Sly Collection (PS3) a aussi ces langues, qui manquent à votre installation : leur texte, en sous-titres sur les voix anglaises (les fichiers de voix de la PS3 ne peuvent pas être associés aux répliques).",
   "Zoom in": "Zoom avant",
   "Zoom out": "Zoom arrière",
-  "Zoom the Binocucom and turrets with unassigned wheel inputs.": "Zoomer le binocucom et les tourelles avec les crans de molette non attribués."
+  "Zoom the Binocucom and turrets with unassigned wheel inputs.": "Zoomer le binocucom et les tourelles avec les crans de molette non attribués.",
+  "Add the Japanese text": "Ajouter le texte japonais",
+  "Japanese plays only its voices on the USA and European discs until the characters of your Japanese disc are added. They are read from your Japan installation; a few seconds.": "Le japonais ne joue que ses voix sur les disques américain et européens tant que les caractères de ton disque japonais ne sont pas ajoutés. Ils sont lus depuis ton installation Japon ; quelques secondes.",
+  "Japanese plays only its voices on the USA and European discs until the characters of your Japanese disc are added: choose your Japan disc image below once more.": "Le japonais ne joue que ses voix sur les disques américain et européens tant que les caractères de ton disque japonais ne sont pas ajoutés : choisis encore une fois l'image de ton disque japonais ci-dessous.",
+  "Voice language": "Langue des voix",
+  "Same as text": "Comme le texte",
+  "The dialogue and the cutscenes' sound, apart from the text: Japanese voices with English text, or the other way round. Choosing a language on the game's title screen sets both back to it.": "Les dialogues et le son des cinématiques, indépendamment du texte : voix japonaises avec texte anglais, ou l'inverse. Choisir une langue sur l'écran titre du jeu remet les deux sur cette langue."
  }
 }

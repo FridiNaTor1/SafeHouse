@@ -915,6 +915,12 @@
   "Your Sly Collection (PS3) also has these languages, which your installation lacks: their text, as subtitles over the English voices (the PS3's voice files cannot be matched to the lines).": "Sly Collectionissasi (PS3) on myös nämä kielet, jotka asennuksestasi puuttuvat: niiden teksti tekstityksenä englanninkielisen puheen päällä (PS3:n äänitiedostoja ei voi yhdistää repliikkeihin).",
   "Zoom in": "Lähennä",
   "Zoom out": "Loitonna",
-  "Zoom the Binocucom and turrets with unassigned wheel inputs.": "Zoomaa binocucomia ja tykkejä määrittämättömillä rullan liikkeillä."
+  "Zoom the Binocucom and turrets with unassigned wheel inputs.": "Zoomaa binocucomia ja tykkejä määrittämättömillä rullan liikkeillä.",
+  "Add the Japanese text": "Lisää japaninkielinen teksti",
+  "Japanese plays only its voices on the USA and European discs until the characters of your Japanese disc are added. They are read from your Japan installation; a few seconds.": "Japani toistaa Yhdysvaltain ja Euroopan levyillä vain puheensa, kunnes japanilaisen levysi kirjainmerkit on lisätty. Ne luetaan Japani-asennuksestasi; muutama sekunti.",
+  "Japanese plays only its voices on the USA and European discs until the characters of your Japanese disc are added: choose your Japan disc image below once more.": "Japani toistaa Yhdysvaltain ja Euroopan levyillä vain puheensa, kunnes japanilaisen levysi kirjainmerkit on lisätty: valitse japanilainen levykuvasi alta vielä kerran.",
+  "Voice language": "Puheen kieli",
+  "Same as text": "Sama kuin teksti",
+  "The dialogue and the cutscenes' sound, apart from the text: Japanese voices with English text, or the other way round. Choosing a language on the game's title screen sets both back to it.": "Dialogi ja välivideoiden ääni tekstistä erillään: japanilainen puhe englanninkielisellä tekstillä tai päinvastoin. Kielen valitseminen pelin aloitusruudussa palauttaa molemmat siihen."
  }
 }

@@ -15,14 +15,21 @@
 //     Dialog/**/<line>.flac|wav|vag   dialog lines by USA line id (= the subtitle's text id); any subfolders
 //     Dialog/lengths.json       optional: {"<line>": seconds} (the world files' line lengths; default: the audio's)
 //     Movies/<Name>.flac|wav    a movie's sound by its name (CONVERTER.md: "Prologue", "Ep1 Intro", ...)
+//     Font.bin                  optional ("script": "japanese"): the Japanese disc's text font (kana, kanji, its
+//                               ASCII), which the import takes from the user's own Japanese disc; without it the
+//                               USA / European discs cannot show the language's text (format: langstore.cpp)
 //
 // The disc's own languages play from the world files as before (byte for byte: the gates). A language the disc
 // lacks is offered on the title's language menu (region.h CLanguages) and, chosen, plays the world files' text and
-// dialog of LangWorld() with the folder's strings, lines and movie sound over them. Text the disc's fonts cannot
-// show (Japanese on the USA / European discs) falls back to the disc's English; Latin text on the Japanese disc is
-// shown without accents (its font has ASCII only).
+// dialog of LangWorld() with the folder's strings, lines and movie sound over them. Japanese text on the USA /
+// European discs is drawn with the language's own Font.bin (region.h FWideChars), with the Japanese build's line
+// breaks and its few wider text boxes (splayer.cpp); a Japanese language without that file falls back to the disc's
+// English text (the title's language menu and the launcher then name it "voices only"). Latin text on the Japanese
+// disc is shown without accents (its font has ASCII only).
 
 #include "disc.h"
+
+struct SELEM;
 
 #include <string>
 #include <utility>
@@ -47,6 +54,17 @@ int LangStoreTextFallback(int lang);
 bool FStoreTextShown();
 int LangStoreTextLanguage();
 bool FStoreTextWide();
+// A store language whose text this disc cannot show (Japanese script without its Font.bin on a USA / European disc):
+// chosen, it plays its voices and movie sound over the disc's text. The language menu says so.
+bool FLangStoreVoicesOnly(int lang);
+// A store language with voice lines of its own (it can be chosen as the voices' language: region.h g_nLangVoice).
+bool FLangStoreHasVoices(int lang);
+// (LoadTextFromBrx, before the strings) g_nLang's text as this world shows it: sets region.h's FWideChars and the
+// font below.
+void LatchLanguageStoreText();
+// The text font of the languages folder while FWideChars() on a USA / European disc (a set element: the characters,
+// their widths, their glyphs, as a Japanese world's font: screenobj.h), else nullptr.
+const SELEM* PsetLanguageStoreFont();
 
 // (LoadTextFromBrx) g_nLang's store strings over the world's (USA ids mapped to the disc's: region.h IdText): a
 // language the disc lacks (fDiscMods false), or the mods folder's Mods/Languages/<key>/Text.json over a disc language
@@ -68,6 +86,7 @@ struct LANGCAPTURE
     virtual ~LANGCAPTURE() = default;
     virtual void Text(int lang, int id, const std::string& str) = 0;          // the disc's id and encoding
     virtual void Dialog(int lang, int id, const FK& fk, float tLength) = 0;   // the disc's line id
+    virtual void Font(const SELEM&) {}                                        // a font set of a Japanese world
 };
 extern LANGCAPTURE* g_plangcapture;
 
@@ -88,3 +107,6 @@ struct LANGIMPORT
 int ImportLanguagesCommand(const LANGIMPORT& opts);
 // --list-languages: the available languages as JSON lines (the launcher's languages list).
 int ListLanguagesCommand();
+// --language-selftest (no disc), --check-language KEY (a disc / an installation and the languages folder): langstore.cpp
+int LanguageSelfTest();
+int CheckLanguageCommand(const std::string& key);

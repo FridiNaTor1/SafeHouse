@@ -988,7 +988,10 @@ std::string StrFrontEndScript(int id)
         if (CLanguages() >= 2)
         {
             // (the USA build's 0x1DDBF0 has the text 0x56 here; the European build its own labels)
-            const std::string label = g_disc.VaLanguageLabels() ? StrLanguageHelpLabel(g_clock.t - s_tTitleShown) : StrLocalized(s_pswText, IdText(0x56));
+            // (Japanese text from the languages folder on a European disc: the executable's labels are Latin-1 text
+            // for the disc's own font, so the line is the text's, as on the USA disc)
+            const bool fLabels = g_disc.VaLanguageLabels() && !(FWideChars() && !FWideText());
+            const std::string label = fLabels ? StrLanguageHelpLabel(g_clock.t - s_tTitleShown) : StrLocalized(s_pswText, IdText(0x56));
             if (!label.empty()) str += "\n" + label;
         }
         return str;

@@ -770,6 +770,43 @@ float DxTextUi(const FONTBRX& fontBase, const FONTBRX* pfontOther, const std::st
 bool FHudPromptTicker(float* pt, float* pgEnd);   // hudwidget.cpp (0x3DA0C0 in state 2: its time, its +0x1C)
 void EndHudPromptTicker();                         // (0x1DA5C8(0x3DA0C0, 3))
 
+namespace
+{
+// (PC, langstore.h) Japanese text from the languages folder on a USA / European disc: the text boxes the Japanese
+// build's screens size differently, so that its strings fit as on its own disc. (Found by comparing every screen
+// object of the USA and the Japanese world files: all other text elements have the same size, box and alignment.)
+// el: the disc's text element; *pel: the element to draw with.
+bool FJapaneseTextBox(const SCREENOBJ* pso, const SELEM& el, SELEM* pel)
+{
+    if (!pso || !FWideChars() || FWideText()) return false;
+    const bool fScript = el.ab3[1] == 1;                       // a script value, else a text id
+    const int id = el.ab3[1] == 0 ? IdTextUsa(el.n3) : el.n3;
+    float size = el.ag3[0], w = el.ag3[1], h = el.ag3[2];
+    int align = el.ab3[0];
+    auto near = [](float a, float b) { return std::fabs(a - b) < 0.2f; };
+    if (pso->oid == 0x52C && fScript && id == 0x2F2) size = 26.0f;                        // the card dialog's message
+    else if (pso->oid == 0x378 && fScript && ((id >= 0x442 && id <= 0x447) || (id >= 0x44E && id <= 0x453)) && near(w, 55.0f))
+        w = 82.4f;                                                                        // the shop's prices
+    else if (pso->oid == 0x190C && el.ab3[1] == -1 && near(h, 92.3f)) h = 102.0f;
+    else if (pso->oid == 0x360 && fScript && id == 0x2E5) { w = 176.6f; h = 41.8f; align = 0; }   // the binocucom's task
+    else if (pso->oid == 0x360 && fScript && id == 0x2E6) { w = 191.5f; h = 41.8f; }
+    else if (((!fScript && id == 0x6C) || (fScript && (id == 0x52F || id == 0x530))) && near(size, 24.0f) && near(w, 230.9f))
+    {
+        // the episode menu's "Start Episode", completion and time
+        size = 22.0f;
+        w = 369.5f;
+        h = 26.4f;
+    }
+    else return false;
+    *pel = el;
+    pel->ag3[0] = size;
+    pel->ag3[1] = w;
+    pel->ag3[2] = h;
+    pel->ab3[0] = int8_t(align);
+    return true;
+}
+}  // namespace
+
 void CScreenPlayer::Draw(const FONTBRX* pfont, const FONTBRX* pfontIcons, const SW* psw)
 {
     if (agroup.empty() || agroup[0].aentry.empty()) return;
@@ -802,7 +839,8 @@ void CScreenPlayer::Draw(const FONTBRX* pfont, const FONTBRX* pfontIcons, const 
         fCtlPage = FControlsPageBegin(pso, apiece, pfont, pfontIcons, psw);
     }
     auto drawPiece = [&](const SSLOT& y, const HUDSTATE& st) {
-        const SELEM& el = *y.pelem;
+        SELEM elJapanese;
+        const SELEM& el = y.pelem->kind == SELEMK_Sound && FJapaneseTextBox(pso, *y.pelem, &elJapanese) ? elJapanese : *y.pelem;
         switch (el.kind)
         {
         case SELEMK_Sprite: g_hud.DrawSprite(el, st); break;

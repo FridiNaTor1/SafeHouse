@@ -293,7 +293,9 @@ folders (the launcher: Settings > Games > Sly 2 > Languages > Languages folder).
 `English`, `French`, `Japanese`, `English (UK)`... Installing a disc puts its languages there; the launcher can also
 import another region's languages from a disc image, or French and Spanish subtitles from The Sly Collection (PS3).
 Every language in the folder is offered on the title screen of every disc (Triangle opens the list; Settings.ini's
-`[Language]` remembers the choice).
+`[Language]` remembers the choice). The options' Language... page chooses the text and the voices apart (Japanese
+voices with English text, ...; `Language` and `Voices` in Settings.ini); a language without its own `Dialog` lines
+is offered for the text only. Choosing on the title screen sets both.
 
 A language folder holds any of these:
 
@@ -304,6 +306,7 @@ A language folder holds any of these:
 | `Dialog/lengths.json` | optional `{"<line>": seconds}`: how long each line's subtitle stays (else the file's length) |
 | `Movies/<name>.wav` (or `.flac`) | a cutscene's sound by its name: `Prologue`, `Ep1 Intro`, `Ep3 Briefing 2`, ... (stereo) |
 | `language.json` | optional: `{"name": "Klingon", "text": "English", "voice": "English", "script": "latin"}` |
+| `Font.bin` | Japanese only: the Japanese disc's text font (kana, kanji), which the import takes from your own Japanese disc |
 
 **Make a new language:** create `Mods/Languages/<Name>/` (or a folder in the languages folder) with a `Text.json`. That
 is a subtitle language: the voices fall back to English (`"voice"` in language.json picks another). For a dub, add the
@@ -315,9 +318,16 @@ strings or lines of the shared folder, on every disc. `Mods/Text/<Language>.json
 disc: `--dump-text` shows them).
 
 Starting points: the languages folder's own `Text.json` files, or `Sly2-Release --disc "<installation>" --dump-text
-text`. Fonts: the USA and European discs show Western European (Latin-1) characters; Japanese text needs the Japanese
-disc (elsewhere a Japanese language plays its voices with English text), and Latin text on the Japanese disc is shown
-without accents.
+text`. Fonts: the USA and European discs show Western European (Latin-1) characters, and Latin text on the Japanese disc is
+shown without accents. Japanese text (`"script": "japanese"` in language.json) is drawn with the Japanese disc's own
+font on every disc: installing the Japanese disc, or importing its languages from a disc image, writes that font to
+`Japanese/Font.bin` in the languages folder, and the USA and European discs then show the Japanese text with the
+Japanese line breaks; the menus' button lines name the buttons of the disc you play (Cross confirms on the USA and
+European discs, Circle on the Japanese). A Japanese text of your own (`Mods/Languages/Japanese (Mine)/` with
+`"script": "japanese"`) uses the `Japanese` folder's font and can only show the characters that font has. Without a
+`Font.bin` (a languages folder made by an older version: start the game from the launcher once with the Japan disc
+installed, or import the Japan disc image again) Japanese plays its voices over the disc's own text, and the title's
+language list says "voices only".
 
 ### Movies
 

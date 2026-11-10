@@ -247,6 +247,7 @@ void LoadTextFromBrx(SW* psw, CBinaryInputStream* pbis)
         }
     {
         // (native: the mods folder's strings, textmod.h; the ids they change keep them over the PC wording, porttext.h)
+        LatchLanguageStoreText();   // (langstore.h: Japanese text on the other discs, its font; region.h FWideChars)
         ApplyLanguageStoreText(psw->atext, false);   // (a language the disc lacks: its strings, langstore.h; not a mod)
         const std::vector<std::pair<int, std::string>> atextDisc = psw->atext;
         ApplyLanguageStoreText(psw->atext, true);    // (Mods/Languages/<the disc's language>/Text.json)
@@ -304,6 +305,7 @@ void LoadCmeshFromBrx(SW* psw, CBinaryInputStream* pbis)
 // orig 0x0013DA18 LoadSwFromBrx
 void LoadSwFromBrx(SW* psw, CBinaryInputStream* pbis)
 {
+    ApplyPendingLanguages();   // (PC: the pause menu's Language page, region.h: the world's text and lines in it)
     LOADFN(0x13DA18);
     g_psw = psw;
     g_nFilterCur = psw->filter;

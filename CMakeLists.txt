@@ -358,6 +358,9 @@ if(CANE_BUILD_SLY2)
   # the texture cache (platform/texture_cache.h, texmod.cpp): a new / changed / removed PNG, cut and damaged cache
   # files, the mods folder over a texture pack, on made-up PNGs in the build folder
   add_test(NAME sly2-texcache COMMAND Sly2-Release --texcache-selftest "${CMAKE_BINARY_DIR}/texcache-selftest")
+  # the languages folder (Sly2-Release/langstore.h): the Japanese font file, the menus' button lines, 16-bit text on
+  # a USA / European disc (no game data)
+  add_test(NAME sly2-language COMMAND Sly2-Release --language-selftest)
   # the audio devices by name (fallback to the default when one is unplugged, taken again when back, the voices keep
   # playing), the USB headset's microphone level (spiop.irx's RMS) from SDL's disk capture; silent (disk driver)
   add_test(NAME sly2-audio COMMAND Sly2-Release --audio-selftest "${CMAKE_BINARY_DIR}/audio-selftest")
@@ -474,6 +477,12 @@ if(BUILD_TESTING)
  find_package(Python3 QUIET COMPONENTS Interpreter)
  if(Python3_FOUND)
   add_test(NAME extractor-rejection COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/scripts/test-extractor.py" "$<TARGET_FILE:cane-extractor>")
+  if(CANE_BUILD_SLY2 AND TARGET Sly2-Release)
+   # Japanese chosen on a USA / European installation shows Japanese text (the user's own data: SLY2_TEST_USA and
+   # SLY2_TEST_LANGUAGES or SLY2_TEST_JAPAN; skipped without them)
+   add_test(NAME sly2-language-japanese COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/scripts/test-sly2-languages.py" "$<TARGET_FILE:Sly2-Release>")
+   set_tests_properties(sly2-language-japanese PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 1800)
+  endif()
   if(CANE_BUILD_GAME)
    # The PS3 HD import's disc reader (platform/ps3disc.h): folder / ISO / zip sources and their error sentences.
    add_test(NAME ps3-import-sources COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/scripts/test-ps3-import.py" "$<TARGET_FILE:Sly1-Release>")
