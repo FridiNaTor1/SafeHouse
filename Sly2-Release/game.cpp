@@ -434,7 +434,10 @@ void ApplyRtgtOwners(SCENE& scene, const std::vector<ALO*>& apalo)
         {
             LO* ploCam = pr->ploCamera ? pr->ploCamera : const_cast<LO*>(static_cast<const LO*>(pt->powner));
             const glm::mat4 m = MatJtLo(ploCam);
-            if (static int s_c = 0; std::getenv("SLY2_RTGTDUMP") && s_c++ % 120 == 0)
+            // (debugging: SLY2_RTGTDUMP, every 120th frame)
+            static const bool s_fDump = std::getenv("SLY2_RTGTDUMP") != nullptr;
+            if (static int s_c = 0; s_fDump && s_c++ % 120 == 0)
+            {
                 if (const LOX* px = dynamic_cast<const LOX*>(ploCam))
                     std::printf("rtgt cam ref: ixf %d owner %d parent %d local pos %.1f %.1f %.1f r0 %.2f %.2f %.2f\n", px->ixfRef,
                                 px->pxf && px->pxf->palo ? px->pxf->palo->oid : -1, px->paloParent ? px->paloParent->oid : -1,
@@ -444,6 +447,7 @@ void ApplyRtgtOwners(SCENE& scene, const std::vector<ALO*>& apalo)
                                 rec.rgba.b, rec.rgba.a, rec.dirOrPos.x, rec.dirOrPos.y, rec.dirOrPos.z, rec.angularOffset, rec.angularScale);
                 std::printf("rtgt cam %d cid 0x%X: r0 %.2f %.2f %.2f r1 %.2f %.2f %.2f r2 %.2f %.2f %.2f\n", ploCam->oid, ploCam->Cid(),
                             m[0][0], m[0][1], m[0][2], m[1][0], m[1][1], m[1][2], m[2][0], m[2][1], m[2][2]);
+            }
             // 0x1BE6F0 hands CombineEyeLookAtProj (0x14D8F8) the rows (-r2, -r0, r1) of the object's 0x1A6318
             // matrix: forward -r2, up r1
             SetRtgtCamera(i, glm::vec3(m[3]), glm::vec3(m[1]), -glm::vec3(m[2]), -glm::vec3(m[0]), pr->radFov, pr->sNear);
