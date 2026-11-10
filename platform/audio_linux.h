@@ -21,7 +21,11 @@ using ULONG = uint32_t;
 constexpr HRESULT S_OK = 0;
 constexpr HRESULT E_FAIL = static_cast<int32_t>(0x80004005u);
 constexpr HRESULT E_POINTER = static_cast<int32_t>(0x80004003u);
+#if defined(__APPLE__)
+#include <mach-o/dyld.h>   // (its enum DYLD_BOOL already names FALSE = 0 / TRUE = 1)
+#else
 constexpr int TRUE = 1, FALSE = 0;
+#endif
 inline bool FAILED(HRESULT r) { return r < 0; }
 inline bool SUCCEEDED(HRESULT r) { return r >= 0; }
 #endif

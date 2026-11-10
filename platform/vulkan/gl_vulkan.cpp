@@ -2372,6 +2372,9 @@ void APIENTRY ClearStencil(GLint v) { s.clearStencil = v; }
 // (Vulkan's depth range is [0, 1] and the framebuffers' rows are GL's: the game's glClipControl(GL_LOWER_LEFT,
 // GL_ZERO_TO_ONE) is how this layer works anyway)
 void APIENTRY ClipControl(GLenum, GLenum) {}
+#ifdef MemoryBarrier
+#undef MemoryBarrier   // (winnt.h's macro on ARM64 Windows)
+#endif
 void APIENTRY MemoryBarrier(GLbitfield) {}
 void APIENTRY Flush() { if (g_recording) Submit(); }
 

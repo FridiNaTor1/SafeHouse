@@ -114,10 +114,14 @@ def main():
         # ---- screenshots render (fixtures; the synthetic PS3 files; options, extras)
         shots = work / "shots"
         shots.mkdir()
-        for name, extra in (("none", []), ("some", ["--collection-games", "sly1,sly2"]),
+        # (the renders need a desktop session: on a Linux machine without X11 / Wayland, such as CI, they are skipped)
+        have_display = not sys.platform.startswith("linux") or bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+        if not have_display:
+            print("no display: the screenshot and launch-from-the-menu checks are skipped")
+        for name, extra in (() if not have_display else (("none", []), ("some", ["--collection-games", "sly1,sly2"]),
                             ("ps3", ["--collection-games", "sly2", "--collection-ps3", cache.parent.parent]),
                             ("options", ["--screen", "options"]), ("extras", ["--screen", "extras"]),
-                            ("wide", ["--size", "3440x1080", "--nav", "right,right"]), ("narrow", ["--size", "1024x768"])):
+                            ("wide", ["--size", "3440x1080", "--nav", "right,right"]), ("narrow", ["--size", "1024x768"]))):
             out = shots / f"{name}.png"
             r = run([copied, "--screenshot", out, "--collection"] + extra, env=env)
             assert r.returncode == 0 and out.is_file() and out.stat().st_size > 10000, (name, r)
@@ -127,7 +131,7 @@ def main():
         assert r.returncode == 0 and not cache.exists(), r
 
         # ---- a launch from the menu: the flag reaches the game, the menu comes back
-        if os.name != "nt":
+        if os.name != "nt" and have_display:
             data = portable / "data"
             sly2 = data / "installations" / "sly2"
             sly2.mkdir(parents=True)
