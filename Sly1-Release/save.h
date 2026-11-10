@@ -54,7 +54,7 @@ extern bool g_fAlwaysOriginalPsLayout;
 // 0 = Automatic (follow the last used device), clamped to 0-5.
 extern int g_promptStyle;
 // Persisted with the system settings (v12). One press of Circle skips a
-// cutscene (else it is held for 3 s). Off by default.
+// cutscene (else it is held for 2 s). Off by default.
 extern bool g_fInstantSkipCutscenes;
 // System settings v18: passive follow-camera steering; manual and scripted cameras remain active.
 extern bool g_fAutoCameraRotation;

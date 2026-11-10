@@ -226,7 +226,7 @@ struct SystemSettings {
     int mouseMenus;               // 0/1: hover, click and right-click back
     int cameraKeyBindings[kCameraKeyCount]; // GLFW keys, kKeyUnknown = none
     int muteWhenUnfocused;        // 0/1
-    // v12, offset 284 (ProjectCane): one press of Circle skips a cutscene (else hold it 3 s)
+    // v12, offset 284 (ProjectCane): one press of Circle skips a cutscene (else hold it 2 s)
     int instantSkipCutscenes;     // 0/1, default 0
     // v13, offset 288 (ProjectCane, Sly 2): with the keyboard / mouse, the hacking minigame's ship shoots toward a
     // cursor (left click fires)

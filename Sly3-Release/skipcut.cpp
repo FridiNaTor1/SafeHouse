@@ -11,6 +11,7 @@
 #include "clock.h"
 #include "cm.h"
 #include "cls.h"
+#include "display.h"
 #include "hud.h"
 #include "joy.h"
 #include "menu.h"
@@ -38,7 +39,7 @@ extern int g_frameJoy;   // (joy.cpp: the step's frame)
 
 namespace
 {
-constexpr float T_HOLD = 3.0f;          // seconds of Circle to skip
+constexpr float T_HOLD = 2.0f;          // seconds of Circle to skip
 constexpr float T_HINT = 4.0f;          // the hint stays this long after the last button
 constexpr int CSTEP_MAX = 60 * 600;     // a skip's fast-forward stops after 10 minutes of game time (a stuck scene; Ep 8's Arpeggio / Clockwerk scene 3299 is 4 min)
 
@@ -144,7 +145,8 @@ float DxText(const FONTBRX& font, const FONTBRX* picons, const std::string& text
     return w * size / 51.2f;
 }
 
-// the hint (and the indicator while Circle is held) at the bottom right of the 4:3 canvas
+// the hint (and the indicator while Circle is held), small in the picture's bottom right corner: on a wide picture
+// past the 4:3 canvas, clear of the subtitle box
 void DrawHint(const SKIPCUT& s)
 {
     if (!s.fHint) return;
@@ -152,8 +154,12 @@ void DrawHint(const SKIPCUT& s)
     const FONTBRX* picons = PfontHudIcons();
     if (!pfont) return;
     const std::string text = StrPort(picons ? PTX_HoldToSkip : PTX_HoldToSkipNoIcons);   // (the game's language: porttext.h)
-    const float size = 24.0f;
-    const float xRight = 616.0f, yTop = 412.0f;   // (canvas pixels)
+    const float k = 0.75f;   // (of the size it was tuned with)
+    const float size = 24.0f * k;
+    // (canvas pixels: the picture's right and bottom edges, the 4:3 canvas's or past them on a wider / taller picture)
+    const glm::vec2 ui = g_display.uiScale;
+    const float xEdge = ui.x < 1.0f ? 320.0f + 320.0f / ui.x : 640.0f, yEdge = ui.y < 1.0f ? 224.0f + 224.0f / ui.y : 448.0f;
+    const float xRight = xEdge - 14.0f, yTop = yEdge - 10.0f - size * 0.909f;
     const float w = DxText(*pfont, picons, text, size);
     const float depth = 16000000.0f;   // (over every screen object)
     // (the colour offset leaves the glyphs' own alpha alone, as the game's HUD texts do (marker.cpp, dance.cpp): an
@@ -165,17 +171,18 @@ void DrawHint(const SKIPCUT& s)
     };
     // a dark plate under the text
     const float hText = size * 0.909f;
-    g_hud.FillScreenRect(xRight - w - 10.0f, yTop - 5.0f, xRight + 6.0f, yTop + hText + 7.0f, glm::vec4(0, 0, 0, 72), depth / 16777216.0f - 1e-4f);
+    g_hud.FillScreenRect(xRight - w - 10.0f * k, yTop - 5.0f * k, xRight + 6.0f * k, yTop + hText + 7.0f * k, glm::vec4(0, 0, 0, 72),
+                         depth / 16777216.0f - 1e-4f);
     drawText(text, xRight - w, yTop, size, white, 100.0f);
     if (s.tHold > 0.0f && picons && !g_pcinput.fInstantSkipCutscenes)
     {
         // the indicator: the Circle icon, a line circling it as the hold fills
-        const float hIcon = 26.0f;
-        const float cx = xRight - w - 26.0f, cy = yTop + hText * 0.5f + 1.0f;
+        const float hIcon = 26.0f * k;
+        const float cx = xRight - w - 26.0f * k, cy = yTop + hText * 0.5f + k;
         g_hud.DrawIconGlyph(*picons, 'O', cx, cy, hIcon, depth + 200.0f);
         const float r = hIcon * 0.62f;
-        g_hud.DrawRing(cx, cy, r + 3.5f, r, 1.0f, glm::vec4(0, 0, 0, 80), 0.99f);
-        g_hud.DrawRing(cx, cy, r + 3.0f, r + 0.5f, s.tHold / T_HOLD, glm::vec4(250, 250, 250, 128), 0.995f);
+        g_hud.DrawRing(cx, cy, r + 3.5f * k, r, 1.0f, glm::vec4(0, 0, 0, 80), 0.99f);
+        g_hud.DrawRing(cx, cy, r + 3.0f * k, r + 0.5f * k, s.tHold / T_HOLD, glm::vec4(250, 250, 250, 128), 0.995f);
     }
 }
 

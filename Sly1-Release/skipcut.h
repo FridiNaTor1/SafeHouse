@@ -2,7 +2,7 @@
 // Skip cutscenes (PC QoL, as Sly2-Native's skipcut.h; USER_BUGS Phase 3 items 4 / 8).
 // Nothing shows until a button is pressed during a cutscene; then a small
 // "Hold (O) to skip" hint. Holding Circle (the bound button, drawn with the
-// dynamic prompts of prompt_glyphs.h) for 3 s skips, while an indicator (the
+// dynamic prompts of prompt_glyphs.h) for 2 s skips, while an indicator (the
 // button's icon with a line circling it) fills. With "Instant Skip Cutscenes"
 // (off by default) one press of Circle skips.
 //

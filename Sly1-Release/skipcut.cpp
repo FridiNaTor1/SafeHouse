@@ -22,7 +22,7 @@
 
 namespace
 {
-constexpr float T_HOLD = 3.0f;           // seconds of Circle to skip
+constexpr float T_HOLD = 2.0f;           // seconds of Circle to skip
 constexpr float T_HINT = 4.0f;           // the hint stays this long after the last button
 constexpr float DT_CAP = 240.0f;         // a skip stops after 4 minutes of game time (a stuck scene)
 
@@ -106,15 +106,14 @@ void StartFast()
     if (FPrint()) std::printf("skipcut: skipping (fast-forward) at t %.2f\n", g_clock.t);
 }
 
-// The hint (and the indicator while Circle is held) at the bottom right.
+// The hint (and the indicator while Circle is held), small in the bottom right corner, clear of the subtitles.
 void DrawHint(const SKIPCUT& s)
 {
     if (!s.fHint || g_pfont == nullptr) return;
     CFontBrx* pfont = g_pfont;
     const bool fIcons = FFontLoaded(1);
-    // 0.75 of the text font at the 0.8 scale the hint was tuned with (when credits
-    // still rescaled the shared font).
-    const float scale = g_gl.uiScale * 0.6f;
+    // 0.75 of the text font at the 0.6 scale the hint was tuned with.
+    const float scale = g_gl.uiScale * 0.45f;
     char achz[128];
     std::snprintf(achz, sizeof(achz), "%s", PchzPort(fIcons ? PTX_HoldToSkip : PTX_HoldToSkipNoIcons));
 
@@ -122,8 +121,8 @@ void DrawHint(const SKIPCUT& s)
     const float dy = static_cast<float>(pfont->m_dyUnscaled) * pfont->m_ryScale;
     CRichText text(achz, pfont);
     const float dx = text.Dx();
-    const float xRight = static_cast<float>(g_gl.width) - 28.0f * g_gl.uiScale;
-    const float yTop = static_cast<float>(g_gl.height) - 56.0f * g_gl.uiScale;
+    const float xRight = static_cast<float>(g_gl.width) - 20.0f * g_gl.uiScale;
+    const float yTop = static_cast<float>(g_gl.height) - 20.0f * g_gl.uiScale - dy;
 
     // a dark plate under the text
     glBlotShader.Use();

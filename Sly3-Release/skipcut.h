@@ -2,7 +2,7 @@
 
 // Skip cutscenes (Phase 3 QoL, USER_BUGS Phase 3 item 8). Nothing shows until a button is pressed during a
 // cutscene; then a small "Hold (O) to skip" hint. Holding Circle (the bound button: B on Xbox / Steam, the dynamic
-// prompts of promptglyph.h) for 3 s skips, while an indicator (the button's icon with a line circling it) fills.
+// prompts of promptglyph.h) for 2 s skips, while an indicator (the button's icon with a line circling it) fills.
 // With "Instant Skip Cutscenes" (off by default) one press of Circle skips.
 //
 // A skip never cuts anything: the game itself runs to the cutscene's natural end, fast (its 60 Hz steps, sound
