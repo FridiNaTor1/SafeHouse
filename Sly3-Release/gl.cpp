@@ -80,6 +80,13 @@ bool GLSHADER::FInit(const char* vertexFile, const char* fragmentFile, const cha
 
 bool GLSHADER::FInit(const char* vertexFile, const char* geometryFile, const char* fragmentFile, const char* szPrefix)
 {
+#ifdef __SWITCH__
+    // (deko3d: the programs and their variants are compiled offline, cmake/switch_shaders.py; a variant not built fails
+    // as a failed link would, and the caller falls back)
+    const GLuint idDeko = CaneDeko::CreateProgram(vertexFile, geometryFile, fragmentFile, szPrefix);
+    if (idDeko) ID = idDeko;
+    return idDeko != 0;
+#endif
     auto withPrefix = [&](std::string src) {
         const size_t i = src.find("#version");
         const size_t j = i == std::string::npos ? 0 : src.find('\n', i) + 1;
@@ -151,6 +158,10 @@ bool GLSHADER::CompileErrors(GLuint shader, const char* type, const char* file)
 
 void GLSHADER::Init(const char* vertexFile, const char* fragmentFile)
 {
+#ifdef __SWITCH__
+    ID = CaneDeko::CreateProgram(vertexFile, nullptr, fragmentFile, "");
+    return;
+#endif
     const std::string vs = ShaderSource(vertexFile), fs = ShaderSource(fragmentFile);
     const char* pvs = vs.c_str();
     const char* pfs = fs.c_str();
@@ -257,7 +268,11 @@ bool GL::FInit(int w, int h, bool fVisible, const char* title, std::string& erro
     // (R51) glob.geom clips at the near plane as the original's VU1 program does, so the GS's screen-affine colours
     // start from the clip-space values there; SLY2N_NEARCLIP=0: GL's own clipping (its noperspective rule extrapolates
     // under a low camera). If the stage fails to build, the program without it.
+#ifdef __SWITCH__
+    constexpr bool s_fNearClip = false;   // (the Switch: GL's own clipping; the stage costs GPU time on every draw)
+#else
     static const bool s_fNearClip = !(std::getenv("SLY2N_NEARCLIP") && std::atoi(std::getenv("SLY2N_NEARCLIP")) == 0);
+#endif
     auto initGlob = [&](const char* szPrefix) {
         if (s_fNearClip && glGlobShader.FInit("glob.vert", "glob.geom", "glob.frag", (std::string(szPrefix) + "#define GEOM 1\n").c_str())) return true;
         return glGlobShader.FInit("glob.vert", "glob.frag", szPrefix);

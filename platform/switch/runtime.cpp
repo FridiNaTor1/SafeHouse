@@ -237,7 +237,7 @@ bool Startup(int& argc, char**& argv, const Game& game)
 
 int RunGame(const Game& game, int argc, char** argv)
 {
-    // (a game without its main yet, Sly 3: its installer only)
+    // (a game without its main: its installer only)
     if (!Startup(argc, argv, game) || !game.run)
     {
         ReleaseGraphics();   // (the installer's screen, when it ran: the window back to the system)

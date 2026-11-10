@@ -9,6 +9,9 @@
 #include <string>
 
 #include "gl_context.h"
+#ifdef __SWITCH__
+#include "../platform/switch/deko/gl_deko.h"   // (Sly 3's OpenGL on SafeHouse's deko3d layer: the offline programs)
+#endif
 
 class GLSHADER
 {

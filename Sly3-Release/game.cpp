@@ -109,6 +109,9 @@ extern uint32_t g_uRandState;  // xfmath.cpp
 #include <fstream>
 #include <memory>
 #include <thread>
+#ifndef CLOCK_THREAD_CPUTIME_ID
+#define CLOCK_THREAD_CPUTIME_ID 3   // (newlib on the Switch: the FPS log's thread CPU column; clock_gettime fails for it)
+#endif
 
 double g_msGpuFpsLog = 0, g_msHudFpsLog = 0;   // (SLY2N_FPSLOG)
 
@@ -573,6 +576,19 @@ int RunGame(const GAMEOPTS& go)
     // yet unless SLY3_WORLD=1 (development)
     if (go.world == "boot" && !std::getenv("SLY3_WORLD"))
     {
+#ifdef __SWITCH__
+        // (the Switch: the logos are drawn into the window, which otherwise opens only with the world below)
+        if (!go.fHeadless)
+        {
+            if (!g_gl.FInit(go.width, go.height, true, "Sly2-Release", error))
+            {
+                std::fprintf(stderr, "%s\n", error.c_str());
+                return 1;
+            }
+            InstallDisplayCallbacks(g_gl.window);
+            ApplyDisplaySettings(g_gl.window);
+        }
+#endif
         PlayQueuedMovies(!go.fHeadless);
         std::printf("Sly 3: the logos played; the world after them (m_ext, the title) is not ported yet\n");
         return 0;
@@ -606,6 +622,11 @@ int RunGame(const GAMEOPTS& go)
         }
     }
     };
+#ifdef __SWITCH__
+    // (the CPU's loading profile while the first world loads and its scene builds; CaneSwitch::Shutdown ends it on the
+    // error returns)
+    CaneSwitch::BeginLoadingBoost();
+#endif
     psw = PswUpdateTransition(std::move(psw));
     applySetProgress();
     if (!psw)
@@ -669,6 +690,9 @@ int RunGame(const GAMEOPTS& go)
             ApplyDisplaySettings(g_gl.window);
         }
     }
+#ifdef __SWITCH__
+    CaneSwitch::EndLoadingBoost();
+#endif
 
     FILE* pfDump = go.frameDump.empty() ? nullptr : std::fopen(go.frameDump.c_str(), "w");
     // the original's NTSC frame time (its clock reads the EE counter: 1001/60000 s a frame), so clip events on frame
@@ -724,6 +748,9 @@ int RunGame(const GAMEOPTS& go)
         }   // orig 0x1B3A48's movies, before the world they lead to
         if (g_transition.fPending)
         {
+#ifdef __SWITCH__
+            CaneSwitch::LoadingBoost boost;   // (the CPU's loading profile while the world loads and its scene builds)
+#endif
             psw = PswUpdateTransition(std::move(psw));
             scene = SCENE{};
             apalo.clear();
@@ -1747,6 +1774,11 @@ int RunGame(const GAMEOPTS& go)
             const double tEnd = tNowSkip + 5000.0;
             double tPoll = tNowSkip;
             bool fSkipped = false;
+#ifdef __SWITCH__
+            // (the fast-forward draws nothing: the CPU's loading profile while it runs)
+            const bool fBoostSkip = FSkipCutFastForward();
+            if (fBoostSkip) CaneSwitch::BeginLoadingBoost();
+#endif
             while (FSkipCutFastForward() && (go.cframe < 0 || frame + 1 < go.cframe) && (!fWindow || now() < tEnd))
             {
                 ++frame;
@@ -1758,6 +1790,9 @@ int RunGame(const GAMEOPTS& go)
                 if (fWindow && now() - tPoll > 50.0) { glfwPollEvents(); tPoll = now(); }
                 if (!FSkipCutStep()) break;
             }
+#ifdef __SWITCH__
+            if (fBoostSkip) CaneSwitch::EndLoadingBoost();
+#endif
             if (fSkipped && std::getenv("SLY2N_SKIPPRINT")) std::printf("skipcut: %.1f ms of fast-forward this frame\n", now() - tNowSkip);
             if (fSkipped && accum.fActive && !accum.fpsVirtual)
                 accum.tLast = now() / 1000.0;   // (the skip's real time is no gameplay time to catch up)
@@ -2012,6 +2047,10 @@ int RunGame(const GAMEOPTS& go)
             {
                 g_gl.Present();
                 if (s_fFpsLog && s_aqGpu[0]) glEndQuery(GL_TIME_ELAPSED), ++s_iqGpu;
+#ifdef __SWITCH__
+                // (SaltyNX's overlays: the scene's render size, which the internal resolution sets)
+                CaneDeko::SetFrameResolution(unsigned(g_gl.renderWidth), unsigned(g_gl.renderHeight));
+#endif
                 cane::gl::SwapBuffers(g_gl.window);
             }
         }

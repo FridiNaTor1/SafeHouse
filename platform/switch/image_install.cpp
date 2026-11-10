@@ -1,19 +1,19 @@
-// Sly 3 on the Switch: its installation only, ahead of its port. The disc is installed as the PC's extractor does it
-// (File Extractor/main.cpp ExtractDiscImage, platform/install.h): the image kept whole as disc.iso (the game reads
-// SLY3.WAD by sector), its system files beside it and installation.json, so the port finds the PC's layout.
-#include "../installer.h"
-#include "../runtime.h"
-#include "../../disc_image.h"
-#include "../../install.h"
+// See image_install.h.
+#include "image_install.h"
+#include "../disc_image.h"
+#include "../install.h"
 
 #include <switch.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <memory>
 #include <vector>
 
+namespace CaneSwitch
+{
 namespace
 {
 namespace fs = std::filesystem;
@@ -25,17 +25,29 @@ std::string Hex(const u8* hash)
     return text;
 }
 
-// (an .iso or a CHD: platform/disc_image.h)
-std::string Convert(const std::string& isoPath, const std::string& directory, const CaneSwitch::InstallProgress& progress)
+// "(USA, SCUS-97464)" for the error message: the accepted releases
+std::string Releases(const cane::DiscImageInstall& d)
 {
-    const cane::DiscImageInstall& d = *cane::discImageInstall(cane::GameId::Sly3);
+    std::string text;
+    for (size_t k = 0; k < d.variantCount; ++k)
+        text += std::string(k ? "; " : "") + d.variants[k].region + ", " + d.variants[k].serial;
+    return text.empty() ? text : " (" + text + ")";
+}
+}  // namespace
+
+std::string InstallDiscImage(cane::GameId game, const std::string& isoPath, const std::string& directory, const InstallProgress& progress)
+{
+    const cane::DiscImageInstall* install = cane::discImageInstall(game);
+    if (!install) return "This game is not installed from a whole disc image.";
+    const cane::DiscImageInstall& d = *install;
     std::string error;
     const std::unique_ptr<cane::DiscImage> image = cane::DiscImage::open(isoPath, &error);
     if (!image) return error;
     if (!progress(0.0f, "Checking your ISO", fs::path(isoPath).filename().string())) return "cancelled";
     const cane::IsoVolume volume = cane::readIsoVolume(image->reader());
     const uint64_t imageSize = uint64_t(volume.blocks) * cane::kIsoSector;
-    // the release: its executable with its SHA-1, the volume's size, the system files and SLY3.WAD where the game reads them
+    // the release: its executable with its SHA-1, the volume's size, the system files and the data file where the game
+    // reads them
     const cane::DiscVariant* variant = nullptr;
     for (size_t k = 0; k < d.variantCount && !variant && volume.valid; ++k)
     {
@@ -58,7 +70,8 @@ std::string Convert(const std::string& isoPath, const std::string& directory, co
         const cane::IsoFile* file = volume.find(d.dataFile);
         valid = file && file->sector == d.dataFileSector && uint64_t(file->sector) * cane::kIsoSector + file->size <= imageSize;
     }
-    if (!valid) return "That disc image is damaged or not the original Sly 3 disc (USA, SCUS-97464).";
+    if (!valid)
+        return std::string("That disc image is damaged or not an original ") + cane::game(game).title + " disc" + Releases(d) + ".";
 
     // one pass: the image copied and hashed
     cane::json files = cane::json::array();
@@ -109,31 +122,19 @@ std::string Convert(const std::string& isoPath, const std::string& directory, co
     return {};
 }
 
-// installation.json current for Sly 3 (platform/install.h manifestCurrent) and the image of its size beside it
-bool Installed(const std::string& directory)
+bool DiscImageInstalled(cane::GameId game, const std::string& directory)
 {
+    const cane::DiscImageInstall* install = cane::discImageInstall(game);
+    if (!install) return false;
     std::ifstream in(fs::path(directory) / "installation.json");
     if (!in) return false;
     const cane::json manifest = cane::json::parse(in, nullptr, false);
-    if (!cane::manifestCurrent(manifest, cane::GameId::Sly3)) return false;
+    if (!cane::manifestCurrent(manifest, game)) return false;
     uint64_t expected = 0;
     if (const auto image = manifest.find("image"); image != manifest.end() && image->is_object())
         if (const auto size = image->find("size"); size != image->end() && size->is_number_unsigned()) expected = size->get<uint64_t>();
     std::error_code ec;
-    const uint64_t size = fs::file_size(fs::path(directory) / cane::discImageInstall(cane::GameId::Sly3)->imageName, ec);
+    const uint64_t size = fs::file_size(fs::path(directory) / install->imageName, ec);
     return !ec && expected && size == expected;
 }
-
-const CaneSwitch::InstallJob s_install = {
-    int(cane::GameId::Sly3),
-    "Select a Sly 3: Honor Among Thieves ISO or CHD (USA).",
-    Convert,
-    nullptr, nullptr,
-    false,   // (nothing runs after it yet: back to the launcher)
-    true,    // (a CHD read as it is: the image is copied once)
-};
-}  // namespace
-
-// Sly 3's descriptor for the launcher (launcher.cpp): installed and installable, without a main yet.
-extern "C" const CaneSwitch::Game cane_game_sly3;
-const CaneSwitch::Game cane_game_sly3 = {"sly3", "Sly 3: Honor Among Thieves", Installed, &s_install, nullptr};
+}  // namespace CaneSwitch

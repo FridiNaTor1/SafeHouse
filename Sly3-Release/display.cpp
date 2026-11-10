@@ -90,6 +90,15 @@ bool FLoadDisplaySettings(const std::filesystem::path& userDir, std::string* pme
     if (!st::loaded(result)) s = st::sly2Defaults();   // (Sly 2's own keyboard / mouse layout)
     st::sanitizeStatic(s, 0, 0, st::kSly2DefaultKeyboardBindings);
     FromSettings(s);
+#ifdef __SWITCH__
+    // (the Switch: one screen at 60 Hz, the swap paces the frames at 30 or 60; the internal resolution from the menu's
+    // list, at most the docked screen's 1080 lines)
+    g_display.window = DISPWINDOW_Fullscreen;
+    g_display.fVsync = true;
+    if (g_display.frameRate != 30) g_display.frameRate = 60;
+    g_display.msaaSamples = 0;
+    if (g_display.internalHeight > 1080) g_display.internalHeight = 0;
+#endif
     const char* psz = "";
     switch (result)
     {

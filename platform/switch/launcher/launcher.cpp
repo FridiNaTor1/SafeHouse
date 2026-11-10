@@ -1,11 +1,10 @@
 // SafeHouse on the Switch: SafeHouse.nro, the program the Homebrew Menu lists, the launcher and the games in one.
 // main below: the launcher (the games' covers side by side, the one selected pulsing); A starts the game in this
 // process (CaneSwitch::RunGame: it installs itself from a disc image at its first start); when it ends, SafeHouse.nro
-// starts again, back here. Sly 3 installs from its disc image but does not play yet (not ported to the Switch).
-// A release build offers a newer SafeHouse.nro from SafeHouse's GitHub releases when the launcher starts (update.h).
+// starts again, back here. A release build offers a newer SafeHouse.nro from SafeHouse's GitHub releases when the launcher starts (update.h).
 //
-// The games are Sly1-Release and Sly2-Release, each linked into SafeHouse.nro as one object whose only global symbol
-// is its descriptor (cane_game_sly1, cane_game_sly2: cmake/Switch.cmake); Sly 3's descriptor installs it (sly3.cpp).
+// The games are Sly1-Release, Sly2-Release and Sly3-Release, each linked into SafeHouse.nro as one object whose only
+// global symbol is its descriptor (cane_game_sly1, cane_game_sly2, cane_game_sly3: cmake/Switch.cmake).
 //
 // The design is the Half-Life 2 Switch port's game picker (NaGaa95/hl2_nx source/picker.c): the covers' layout, the
 // pulse, the orange (playable) and red (not) borders, the status lines under the covers and the detail line at the
@@ -29,7 +28,7 @@
 #include <string>
 #include <vector>
 
-// The games (Sly1-Release/main.cpp, Sly2-Release/main.cpp) and Sly 3's installation (sly3.cpp)
+// The games (Sly1-Release/main.cpp, Sly2-Release/main.cpp, Sly3-Release/main.cpp)
 extern "C" const CaneSwitch::Game cane_game_sly1, cane_game_sly2, cane_game_sly3;
 
 namespace

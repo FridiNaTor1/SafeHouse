@@ -2,6 +2,13 @@
 // Sly 2 glob program (type-0 meshes), adapted from Sly1-Release glob.vert: what the VU1 program P_G computes for
 // a vertex (transform, the pass's vertex colour) done the GL way. Colours stay in GS units (0..255, 0x80 = 1.0).
 
+#ifdef DEKO3D
+// (the Switch: the position computed exactly as written, so celborder.vert's depth test (GEQUAL against this depth)
+// sees the same bits: the compiler would otherwise fuse multiply-adds differently in the two programs)
+invariant gl_Position;
+precise gl_Position;
+#endif
+
 // (with glob.geom, the near-plane clip: the outputs go to it under these names, and it passes them on as v*)
 #ifdef GEOM
 #define vColor gsColor

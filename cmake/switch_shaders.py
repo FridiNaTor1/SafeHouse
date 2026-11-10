@@ -5,8 +5,9 @@
 
 deko3d has no run-time GLSL compiler, so every program a game builds (its GLSHADER Init / FInit calls, with the
 variants it asks for) is compiled here with uam into DKSH and written into DIR/deko_shaders.cpp, which defines the
-table platform/switch/deko/deko_shaders.h declares: the programs of the games on SafeHouse's deko3d layer (Sly 2) and
-the shared ones, each tagged with its game. (Sly 1 runs on Project Cane's backend: cmake/switch_shaders_sly1.py.)
+table platform/switch/deko/deko_shaders.h declares: the programs of the games on SafeHouse's deko3d layer (Sly 2,
+Sly 3) and the shared ones, each tagged with its game. (Sly 1 runs on Project Cane's backend:
+cmake/switch_shaders_sly1.py.)
 With them the GL layer stands in for the driver's linker (platform/switch/deko/gl_deko.cpp):
 
 - the loose uniforms ("uniform mat4 matWorldToClip;") become one std140 block at binding 15 (CaneConstants) with
@@ -32,6 +33,7 @@ from pathlib import Path
 
 NATIVE = 'platform/switch/deko/shaders'
 SLY2 = 'Sly2-Release'
+SLY3 = 'Sly3-Release'
 
 # key, vertex, geometry, fragment, defines, directory
 GAMES = {
@@ -52,6 +54,17 @@ GAMES = {
         ('shadowdate', 'shadowcombine.vert', None, 'shadowdate.frag', {}, SLY2),
         ('shadowvol', 'shadowvol.vert', None, 'shadowvol.frag', {}, SLY2),
         ('shadowvol_nokill', 'shadowvol.vert', None, 'shadowvol.frag', {'NOKILL': '1'}, SLY2),
+    ],
+    'sly3': [
+        ('glob', 'glob.vert', None, 'glob.frag', {}, SLY3),
+        ('glob_geom', 'glob.vert', 'glob.geom', 'glob.frag', {'GEOM': '1'}, SLY3),
+        ('celborder', 'celborder.vert', None, 'celborder.frag', {}, SLY3),
+        ('hud', 'hud.vert', None, 'hud.frag', {}, SLY3),
+        ('overlay', 'overlay.vert', None, 'overlay.frag', {}, SLY3),
+        ('particle', 'particle.vert', None, 'particle.frag', {}, SLY3),
+        ('screen', 'screen.vert', None, 'screen.frag', {}, SLY3),
+        ('shadowcombine', 'shadowcombine.vert', None, 'shadowcombine.frag', {}, SLY3),
+        ('shadowvol', 'shadowvol.vert', None, 'shadowvol.frag', {}, SLY3),
     ],
 }
 # (every game's: game '' in the table)

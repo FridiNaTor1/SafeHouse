@@ -1,11 +1,11 @@
-# Nintendo Switch build: SafeHouse.nro, one homebrew program (sdmc:/switch/SafeHouse/) holding the launcher, Sly 1 and
-# Sly 2. Sly 3 can be installed but is not ported yet. Included by CMakeLists.txt with the devkitA64 toolchain
+# Nintendo Switch build: SafeHouse.nro, one homebrew program (sdmc:/switch/SafeHouse/) holding the launcher, Sly 1,
+# Sly 2 and Sly 3 (in development, as on PC). Included by CMakeLists.txt with the devkitA64 toolchain
 # (cmake/devkitA64-libnx.cmake):
 #
 #   cmake --preset switch-release
 #   cmake --build --preset switch-release
 #
-# Sly 1 and Sly 2 share thousands of global names, so each game is first linked on its own into one relocatable object
+# The games share thousands of global names, so each game is first linked on its own into one relocatable object
 # whose only global symbol is its descriptor (cane_game_<key>, platform/switch/runtime.h). The launcher and the Switch
 # layer (cane_switch) are then linked with both objects.
 #
@@ -72,9 +72,10 @@ add_custom_command(OUTPUT "${gen}/launcher_assets.h"
           cane_cover_sly3 "${root}/launcher/assets/steam/sly3/grid.jpg"
   DEPENDS "${root}/launcher/assets/steam/sly1/grid.png" "${root}/launcher/assets/steam/sly2/grid.png"
           "${root}/launcher/assets/steam/sly3/grid.jpg" "${root}/cmake/switch_embed.py" VERBATIM)
-# the shaders, compiled offline for deko3d by uam: the shared GL layer's (launcher, Sly 2) and Sly 1's backend's
+# the shaders, compiled offline for deko3d by uam: the shared GL layer's (launcher, Sly 2, Sly 3) and Sly 1's backend's
 file(GLOB deko_shader_sources CONFIGURE_DEPENDS "${root}/platform/switch/deko/shaders/*"
-  "${root}/Sly2-Release/*.vert" "${root}/Sly2-Release/*.frag" "${root}/Sly2-Release/*.geom")
+  "${root}/Sly2-Release/*.vert" "${root}/Sly2-Release/*.frag" "${root}/Sly2-Release/*.geom"
+  "${root}/Sly3-Release/*.vert" "${root}/Sly3-Release/*.frag" "${root}/Sly3-Release/*.geom")
 add_custom_command(OUTPUT "${gen}/deko_shaders.cpp"
   COMMAND "${Python3_EXECUTABLE}" "${root}/cmake/switch_shaders.py" --source "${root}" --output "${gen}" --uam "${CANE_UAM}"
   DEPENDS ${deko_shader_sources} "${root}/cmake/switch_shaders.py" VERBATIM)
@@ -90,6 +91,7 @@ add_library(cane_switch STATIC
   "${root}/platform/switch/glfw_switch.cpp"
   "${root}/platform/switch/audio_switch.cpp"
   "${root}/platform/switch/installer.cpp"
+  "${root}/platform/switch/image_install.cpp"
   "${root}/platform/switch/switch_ui.cpp"
   "${root}/platform/switch/saltynx.cpp"
   "${root}/platform/switch/io_worker.cpp"
@@ -191,6 +193,27 @@ add_custom_target(sly2_version
 add_dependencies(sly2_game sly2_version)
 target_sources(sly2_game PRIVATE "${gen}/sly2/embedded_shaders.h" "${gen}/sly2/sly2n_logo.h" ${prompt_headers})
 
+# ---- Sly 3 (forked from Sly 2: the same build, its numbers in game/)
+file(GLOB sly3_sources CONFIGURE_DEPENDS "${root}/Sly3-Release/*.cpp" "${root}/Sly3-Release/*.c" "${root}/Sly3-Release/game/*.cpp")
+add_library(sly3_game STATIC ${sly3_sources} "${root}/Libraries/miniz/miniz.c" "${root}/assets/prompts/prompt_data.cpp")
+cane_switch_game(sly3_game sly3)
+target_include_directories(sly3_game PRIVATE "${root}/Sly3-Release" "${root}/platform" "${root}/Libraries/miniz"
+  "${root}/assets/prompts" "${gen}/prompts" "${gen}/sly3")
+target_compile_definitions(sly3_game PRIVATE "SLY2N_DEV_ROOT=\"sdmc:/switch/SafeHouse\"" CANE_HAVE_PROMPT_ATLAS=1 CANE_HAVE_GAMECONTROLLERDB=1)
+file(MAKE_DIRECTORY "${gen}/sly3")
+add_custom_command(OUTPUT "${gen}/sly3/embedded_shaders.h"
+  COMMAND ${CMAKE_COMMAND} -DSOURCE=${root}/Sly3-Release -DOUTPUT=${gen}/sly3/embedded_shaders.h -P ${root}/cmake/embed-shaders.cmake
+  DEPENDS ${root}/cmake/embed-shaders.cmake VERBATIM)
+add_custom_command(OUTPUT "${gen}/sly3/sly2n_logo.h"
+  COMMAND "${Python3_EXECUTABLE}" "${root}/cmake/switch_embed.py" "${gen}/sly3/sly2n_logo.h" sly2n_logo_png "${root}/launcher/assets/games/sly3-logo.png"
+  DEPENDS "${root}/launcher/assets/games/sly3-logo.png" "${root}/cmake/switch_embed.py" VERBATIM)
+add_custom_target(sly3_version
+  COMMAND ${CMAKE_COMMAND} -DROOT=${root} -DVERSION=${sly2_port_version} -DHASH=${CANE_GIT_HASH}
+          -DOUTPUT=${gen}/sly3/sly2_version.h -P ${root}/cmake/sly2-version.cmake
+  BYPRODUCTS "${gen}/sly3/sly2_version.h" VERBATIM)
+add_dependencies(sly3_game sly3_version)
+target_sources(sly3_game PRIVATE "${gen}/sly3/embedded_shaders.h" "${gen}/sly3/sly2n_logo.h" ${prompt_headers})
+
 # ---- Sly 1: the vcxproj's sources, as the desktop build takes them
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${root}/Sly1-Release/Sly1-Release.vcxproj")
 file(STRINGS "${root}/Sly1-Release/Sly1-Release.vcxproj" sly1_lines REGEX "<ClCompile Include=")
@@ -249,7 +272,7 @@ target_precompile_headers(sly1_game PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:${sly1_pc
 # ---- SafeHouse.nro: the launcher's main and the games' objects
 set_source_files_properties(${cane_switch_game_objects} PROPERTIES EXTERNAL_OBJECT TRUE GENERATED TRUE)
 add_executable(safehouse "${root}/platform/switch/launcher/launcher.cpp" "${root}/platform/switch/launcher/update.cpp"
-  "${root}/platform/switch/launcher/sly3.cpp" "${gen}/launcher_assets.h" "${gen}/deko_shaders.cpp" ${cane_switch_game_objects})
+  "${gen}/launcher_assets.h" "${gen}/deko_shaders.cpp" ${cane_switch_game_objects})
 set_target_properties(safehouse PROPERTIES OUTPUT_NAME SafeHouse SUFFIX ".elf")
 target_link_libraries(safehouse PRIVATE cane_switch)
 target_compile_options(safehouse PRIVATE ${cane_switch_options})

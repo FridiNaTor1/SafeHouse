@@ -1,5 +1,5 @@
 // Dear ImGui's OpenGL 3 renderer (imgui_impl_opengl3.h, the same functions) on the Switch's GL layer: the installer, the
-// launcher and Sly 2's debug menu draw through it (Sly 1 has its own, sly1/deko/imgui.cpp). The standard backend compiles
+// launcher and the debug menus of Sly 2 and Sly 3 draw through it (Sly 1 has its own, sly1/deko/imgui.cpp). The standard backend compiles
 // GLSL at run time, which deko3d cannot: this one uses the precompiled imgui program (deko/shaders/imgui.*,
 // cmake/switch_shaders.py) and otherwise draws as the standard one does, restoring the caller's GL state after it.
 // After ProjectCane's platform/switch/deko/imgui.cpp.

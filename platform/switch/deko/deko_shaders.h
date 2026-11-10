@@ -1,5 +1,5 @@
 #pragma once
-// The precompiled programs of the shared GL layer (the launcher, the installers, Sly 2): cmake/switch_shaders.py compiles
+// The precompiled programs of the shared GL layer (the launcher, the installers, Sly 2, Sly 3): cmake/switch_shaders.py compiles
 // the games' GLSL offline with uam and writes deko_shaders.cpp, which defines `programs`, every game's in one table, each
 // tagged with its game (games share file names such as glob.vert); the GL layer (gl_deko.cpp) looks them up by their
 // game, files and #defines (CreateProgram, SetShaderSet) and stands in for the driver's linker with these tables.

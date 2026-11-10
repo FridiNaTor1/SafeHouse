@@ -1,6 +1,6 @@
 #pragma once
-// The Switch build's runtime (platform/switch/runtime.cpp), shared by everything in SafeHouse.nro (the launcher, Sly 1,
-// Sly 2): the folders on the SD card, the cores the threads run on, the first-boot installer, the error screen, and
+// The Switch build's runtime (platform/switch/runtime.cpp), shared by everything in SafeHouse.nro (the launcher, the
+// games): the folders on the SD card, the cores the threads run on, the first-boot installer, the error screen, and
 // the hand-over from the launcher to a game and back.
 //
 // One program, several parts: the launcher runs first (platform/switch/launcher/launcher.cpp); the game it starts runs
@@ -18,7 +18,7 @@ namespace CaneSwitch
 struct InstallJob;
 
 // A graphics backend: the OpenGL implementation the screen runs on (glfw_switch.cpp starts the window through the
-// current one). The shared one is platform/switch/deko/gl_deko.h (the launcher, the installers, Sly 2); a game can
+// current one). The shared one is platform/switch/deko/gl_deko.h (the launcher, the installers, Sly 2, Sly 3); a game can
 // bring its own (Sly 1: Project Cane's deko3d backend, platform/switch/sly1/deko).
 struct Graphics
 {
@@ -32,7 +32,8 @@ struct Graphics
 };
 
 // What a part of the program is to the runtime: the launcher (no installation, no run) or a game. Each game exports
-// one (Sly1-Release/main.cpp, Sly2-Release/main.cpp: cane_game_sly1, cane_game_sly2), the only global symbol of its
+// one (Sly1-Release/main.cpp, Sly2-Release/main.cpp, Sly3-Release/main.cpp: cane_game_sly1, cane_game_sly2,
+// cane_game_sly3), the only global symbol of its
 // object in SafeHouse.nro (cmake/Switch.cmake).
 struct Game
 {
