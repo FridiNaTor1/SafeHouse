@@ -249,6 +249,37 @@ namespace
 		glEnable(GL_DEPTH_TEST);
 		glBindVertexArray(0);
 	}
+
+	// The controller font's glyph for the controller in use (prompt_glyphs.h), for the batched text paths: the button's
+	// own glyph is returned, or a prompt atlas icon is drawn in the glyph's cell after the batch so far and 0 returned.
+	uint32_t ChJoyGlyph(GlyphVertices& vertices, GLuint texture, bool nearest, CFontBrx* font, uint32_t codepoint,
+		float x, float y, const glm::vec4& color)
+	{
+		if ((font->m_grffont & kgrffontJoy) == 0 || codepoint >= 0x80)
+			return codepoint;
+		const PROMPTGLYPH prompt = PromptGlyphFor(static_cast<char>(codepoint));
+		if (prompt.kind != PROMPTGLYPH::Icon)
+			return static_cast<unsigned char>(prompt.ch);
+		FlushGlyphs(vertices, texture, nearest);
+		// As DxDrawPromptIcon: a line-height square centred in the cell, at full intensity for the GS colour 0x80.
+		const float dx = font->DxFromCh(static_cast<char>(codepoint));
+		const float dy = static_cast<float>(font->m_dyUnscaled) * font->m_ryScale;
+		const float side = (std::min)(dy, dx * 1.2f);
+		const glm::vec4 tint((std::min)(1.0f, color.r * 2.0f), (std::min)(1.0f, color.g * 2.0f),
+			(std::min)(1.0f, color.b * 2.0f), color.a);
+		const float left = x + (dx - side) * 0.5f, top = y + (dy - side) * 0.5f;
+		GlyphVertices icon;
+		AppendQuad(icon, left, top, left + side, top + side, prompt.u0, prompt.v1, prompt.u1, prompt.v0, tint);
+		FlushGlyphs(icon, prompt.texture, false);
+		return 0;
+	}
+	// A glyph's advance, matching ChJoyGlyph for the controller font.
+	float DxGlyph(CFontBrx* font, uint32_t codepoint)
+	{
+		return (font->m_grffont & kgrffontJoy) != 0 && codepoint < 0x80
+			? font->DxFromCh(static_cast<char>(codepoint))
+			: font->DxFromCodepoint(codepoint);
+	}
 }
 
 void CTextBox::SetPos(float x, float y)
@@ -664,7 +695,7 @@ float CRichText::Dx()
 		if (ch == '\0')
 			break;
 
-		dx += m_pfontCur->DxFromCodepoint(ch);
+		dx += DxGlyph(m_pfontCur, ch);
 	}
 
 	return dx;
@@ -708,7 +739,7 @@ void CRichText::Draw(CTextBox* ptbx, CTextBox* ptbxClip,
 		}
 
 		if (m_pfontCur != nullptr)
-			lineWidths[lineCount] += m_pfontCur->DxFromCodepoint(ch) * outputScaleX;
+			lineWidths[lineCount] += DxGlyph(m_pfontCur, ch) * outputScaleX;
 	}
 
 	const float lineHeight = static_cast<float>(m_pfontBase->m_dyUnscaled) *
@@ -835,8 +866,9 @@ void CRichText::Draw(CTextBox* ptbx, CTextBox* ptbxClip,
 		const float ryScale = currentFont->m_ryScale;
 		currentFont->m_rxScale *= outputScaleX;
 		currentFont->m_ryScale *= outputScaleY;
-		AppendGlyph(glyphs, currentFont, ch, xCursor, yCursor, m_rgbaCur);
-		xCursor += currentFont->DxFromCodepoint(ch);
+		if (const uint32_t chDraw = ChJoyGlyph(glyphs, batchTexture, batchNearest, currentFont, ch, xCursor, yCursor, m_rgbaCur))
+			AppendGlyph(glyphs, currentFont, chDraw, xCursor, yCursor, m_rgbaCur);
+		xCursor += DxGlyph(currentFont, ch);
 		currentFont->m_rxScale = rxScale;
 		currentFont->m_ryScale = ryScale;
 	}
@@ -1453,7 +1485,7 @@ void CFontBrx::DrawPchz(char* pchz, CTextBox* ptbx)
 				float lineWidth = 0.0f;
 				const char* p = pchz;
 				while (*p != '\0' && *p != '\n') {
-					lineWidth += DxFromCodepoint(DecodeUtf8(p));
+					lineWidth += DxGlyph(this, DecodeUtf8(p));
 				}
 
 				if (ptbx->m_jh == JH_Right) {
@@ -1468,8 +1500,10 @@ void CFontBrx::DrawPchz(char* pchz, CTextBox* ptbx)
 
 		const char* next = pchz;
 		const uint32_t codepoint = DecodeUtf8(next);
-		AppendGlyph(glyphs, this, codepoint, x, y, ptbx->m_rgba);
-		float charWidth = DxFromCodepoint(codepoint);
+		if (const uint32_t chDraw = ChJoyGlyph(glyphs, m_pbmp != nullptr ? m_pbmp->glDiffuseMap : 0, FGuiSpriteFont(this), this,
+				codepoint, x, y, ptbx->m_rgba))
+			AppendGlyph(glyphs, this, chDraw, x, y, ptbx->m_rgba);
+		float charWidth = DxGlyph(this, codepoint);
 		x += charWidth;
 		pchz = const_cast<char*>(next);
 	}

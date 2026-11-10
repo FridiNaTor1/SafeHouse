@@ -2055,6 +2055,7 @@ const char* AchzFromRespk(RESPK respk)
 			case RESPK_BinocInvert: variant = (g_pgsCur->grfgs & 0x200U) != 0; break;
 			case RESPK_TurretInvert: variant = (g_pgsCur->grfgs & 0x400U) != 0; break;
 			case RESPK_JetpackInvert: variant = (g_pgsCur->grfgs & 0x800U) != 0; break;
+			case RESPK_CameraInvert: variant = (g_pgsCur->grfgs & 0x1000U) != 0; break;
 			default: break;
 		}
 		if (const char* localized = PalResponseText(respk, variant))
@@ -2464,6 +2465,21 @@ void UpdatePromptActive(PROMPT* pprompt, JOY* pjoy)
             const int selection = pprompt->irespk;
             SetPromptPrk(pprompt);
             pprompt->irespk = selection;
+            StartSound(static_cast<SFXID>(121), nullptr, nullptr, nullptr, 3000.0f, 300.0f, 1.0f, 0.0f, 0.0f, nullptr, nullptr);
+            return;
+        }
+    }
+
+    // The Controls menu's camera and invert toggles also flip with left / right.
+    if (prk == PRK_ControlsMenu && promptResponses != nullptr &&
+        pprompt->irespk >= 0 && pprompt->irespk < promptResponseCount)
+    {
+        const RESPK response = promptResponses[pprompt->irespk];
+        const bool toggle = response == RESPK_CameraInvert || response == RESPK_BinocInvert ||
+            response == RESPK_TurretInvert || response == RESPK_JetpackInvert ||
+            response == RESPK_DisableControllerWhenUnfocused;
+        if (toggle && pjoy->DxSelectionJoy(g_clock.tReal) != 0) {
+            ExecutePrompt(pprompt);
             StartSound(static_cast<SFXID>(121), nullptr, nullptr, nullptr, 3000.0f, 300.0f, 1.0f, 0.0f, 0.0f, nullptr, nullptr);
             return;
         }
