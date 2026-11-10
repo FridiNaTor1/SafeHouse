@@ -3,12 +3,14 @@
 // left (one logo per game, then Settings, About and the community links), the selected page on the
 // right, and a 44 px footer with controller/keyboard hints across the bottom.
 // Also the activity-log drawer, toasts and the About page.
+#include <cstring>
 #include <deque>
 #include <functional>
 #include <span>
 #include <string>
 #include <vector>
 #include "brand.h"
+#include "../credits.h"
 #include "games.h"
 #include "install.h"
 #include "prompt_bar.h"
@@ -306,11 +308,111 @@ private:
 };
 
 // ---------------------------------------------------------------- About
+// A section the About page scrolls to (screenshots: "--screen about:<section id>", launcher/credits.h ids).
+inline std::string& aboutScrollTarget() {
+    static std::string target;
+    return target;
+}
+// A link of the credits: its label, the address beside it (below it when the line is too narrow); A / Enter, a click
+// or a tap opens it in the browser.
+inline void creditLink(const char* label, const char* url, float width) {
+    ImGuiWindow* window = ImGui::GetCurrentWindow();
+    if (window->SkipItems) return;
+    const ImGuiID id = window->GetID(url);
+    std::string shown(url);
+    for (const char* scheme : { "https://", "http://" })
+        if (shown.rfind(scheme, 0) == 0) shown.erase(0, std::strlen(scheme));
+    if (shown.rfind("www.", 0) == 0) shown.erase(0, 4);
+    ImFont* fl = fonts().body;
+    ImFont* fu = fonts().caption;
+    const ImVec2 ls = measure(fl, label), us = measure(fu, shown.c_str());
+    const float avail = std::max(width, px(80));
+    const float padX = px(6), padY = px(4), gapX = px(10);
+    const bool oneLine = padX * 2 + ls.x + gapX + us.x <= avail;
+    const ImVec2 size{ std::min(avail, padX * 2 + (oneLine ? ls.x + gapX + us.x : std::max(ls.x, us.x))),
+                       padY * 2 + (oneLine ? std::max(ls.y, us.y) : ls.y + us.y + px(2)) };
+    const ImVec2 p = window->DC.CursorPos;
+    // (a hair to the left, so the label lines up with the text above while the hover fill has room)
+    const ImRect bb({ p.x - padX, p.y }, { p.x - padX + size.x, p.y + size.y });
+    ImGui::ItemSize(ImVec2(size.x - padX, size.y));
+    if (!ImGui::ItemAdd(bb, id)) return;
+    bool hovered = false, held = false;
+    if (ImGui::ButtonBehavior(bb, id, &hovered, &held)) openLink(url);
+    auto* dl = window->DrawList;
+    if (hovered) {
+        dl->AddRectFilled(bb.Min, bb.Max, ink(held ? color::border : color::raised), px(6));
+        ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+    }
+    const uint32_t tone = hovered ? color::primaryHover : color::accent;
+    const ImVec2 lp{ bb.Min.x + padX, bb.Min.y + padY };
+    dl->AddText(fl, fl->FontSize, lp, ink(tone), label);
+    dl->AddLine({ lp.x, lp.y + ls.y - px(1) }, { lp.x + ls.x, lp.y + ls.y - px(1) }, ink(tone, hovered ? 1.0f : 0.45f), px(1));
+    const ImVec2 up = oneLine ? ImVec2{ lp.x + ls.x + gapX, lp.y + std::round((ls.y - us.y) * 0.5f) } : ImVec2{ lp.x, lp.y + ls.y + px(2) };
+    dl->PushClipRect(bb.Min, bb.Max, true);
+    dl->AddText(fu, fu->FontSize, up, ink(color::muted), shown.c_str());
+    dl->PopClipRect();
+    focusRing(bb, id, px(6));
+    recordLayout((std::string("credits-link ") + url).c_str(), bb);
+    if (hovered && input::tracker().lastWasMouse() && GImGui->HoveredIdTimer > 0.5f) ImGui::SetTooltip("%s", url);
+}
+// The developers (launcher/credits.h): each one's picture in a round frame, the name and the role. The frame takes
+// the developer's colour under the pointer.
+inline void developersCard(float width) {
+    beginCard("about-developers", { width, 0 }, 24);
+    const ImVec2 cardTop = ImGui::GetCursorScreenPos();
+    heading(tr("Developers"));
+    gap(4);
+    auto* dl = ImGui::GetWindowDrawList();
+    const float d = px(64), r = d * 0.5f;
+    const float avail = ImGui::GetContentRegionAvail().x;
+    // two columns when each still has room for a role on two lines
+    const int columns = avail >= px(640) ? 2 : 1;
+    const float colW = (avail - px(16) * float(columns - 1)) / float(columns);
+    const ImVec2 origin = ImGui::GetCursorScreenPos();
+    float y = origin.y, rowH = 0;
+    int i = 0;
+    for (const auto& who : credits::kDevelopers) {
+        const int col = i % columns;
+        if (col == 0 && i) y += rowH + px(14), rowH = 0;
+        const ImVec2 p{ origin.x + float(col) * (colW + px(16)), y };
+        const ImVec2 c{ p.x + r, p.y + r };
+        // (a very narrow card: the name and role under the picture)
+        const bool below = colW - d - px(16) < px(120);
+        const float textX = below ? p.x : p.x + d + px(16), wrap = below ? colW : colW - d - px(16);
+        const char* role = tr(who.role);
+        const ImVec2 ns = measure(fonts().tab, who.name);
+        const ImVec2 rs = fonts().caption->CalcTextSizeA(fonts().caption->FontSize, FLT_MAX, wrap, role);
+        const float textH = ns.y + px(2) + rs.y, h = below ? d + px(8) + textH : std::max(d, textH);
+        const ImRect row(p, { p.x + colW, p.y + h });
+        const bool hovered = ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows) && row.Contains(ImGui::GetIO().MousePos);
+        const uint32_t ring = who.colour;
+        dl->AddCircleFilled(c, r, ink(ring, hovered ? 0.55f : 0.22f), 64);
+        if (const ImTextureID picture = images().developers[i])
+            dl->AddImageRounded(picture, { c.x - r, c.y - r }, { c.x + r, c.y + r }, { 0, 0 }, { 1, 1 }, IM_COL32_WHITE, r, ImDrawFlags_RoundCornersAll);
+        dl->AddCircle(c, r, ink(hovered ? ring : color::borderStrong), 64, px(hovered ? 2.5f : 1.5f));
+        const float ty = below ? p.y + d + px(8) : p.y + std::max(0.0f, (d - textH) * 0.5f);
+        dl->AddText(fonts().tab, fonts().tab->FontSize, { textX, ty }, ink(color::text), who.name);
+        dl->AddText(fonts().caption, fonts().caption->FontSize, { textX, ty + ns.y + px(2) }, ink(color::text2), role, nullptr, wrap);
+        recordLayout((std::string("developer ") + who.name).c_str(), row);
+        rowH = std::max(rowH, h);
+        ++i;
+    }
+    y += rowH;
+    ImGui::SetCursorScreenPos(origin);
+    ImGui::Dummy({ avail, y - origin.y });
+    recordLayout("credits-developers", ImRect(cardTop, { cardTop.x + avail, y }));
+    endCard();
+}
 inline void aboutPage() {
+    ImGuiWindow* page = ImGui::GetCurrentWindow();
     titleBar(tr("About"), false);
     const ImVec2 area = ImGui::GetContentRegionAvail();
     const bool wide = area.x >= px(820);
     const float leftW = wide ? std::floor((area.x - px(24)) * 0.46f) : area.x;
+    // (screenshots: the page scrolled so a section is at the top)
+    auto scrollHere = [&](const char* id) {
+        if (aboutScrollTarget() == id) ImGui::SetScrollFromPosY(page, ImGui::GetCursorScreenPos().y - page->Pos.y - px(36), 0.0f);
+    };
     beginCard("about-intro", { leftW, 0 }, 28);
     {
         const ImVec2 p = ImGui::GetCursorScreenPos();
@@ -322,65 +424,123 @@ inline void aboutPage() {
         ImGui::Dummy({ brandWidth(logoH, f), logoH });
     }
     gap(8);
-    textWrapped(tr(brand::credit), fonts().body, color::text);
+    {
+        const ImVec2 p = ImGui::GetCursorScreenPos();
+        textWrapped(tr(brand::credit), fonts().body, color::text);
+        recordLayout("credits-safehouse", ImRect(p, { p.x + ImGui::GetContentRegionAvail().x, ImGui::GetCursorScreenPos().y }));
+    }
     gap(2);
     textWrapped(tr("Sly Cooper and the Thievius Raccoonus and Sly 2: Band of Thieves are fully playable. "
                 "Sly 3: Honor Among Thieves is in early development and not fully playable yet: expect missing features and crashes."),
                 fonts().caption, color::text2);
     divider(14);
-    heading(tr("Community"));
-    caption(tr("News, help and the upcoming ThiefRush multiplayer fork."), color::text2);
-    gap(2);
-    if (button(tr(brand::discordLabel), Tone::Secondary, { 0, 0 }, Icon::Chat)) openLink(brand::discordUrl);
-    if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) ImGui::SetTooltip("%s", brand::discordUrl);
-    if (button(tr(brand::patreonLabel), Tone::Secondary, { 0, 0 }, Icon::Heart)) openLink(brand::patreonUrl);
-    if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) ImGui::SetTooltip("%s", brand::patreonUrl);
+    {
+        const ImVec2 p = ImGui::GetCursorScreenPos();
+        heading(tr("Community"));
+        caption(tr("News, help and the upcoming ThiefRush multiplayer fork."), color::text2);
+        gap(2);
+        if (button(tr(brand::discordLabel), Tone::Secondary, { 0, 0 }, Icon::Chat)) openLink(brand::discordUrl);
+        takeFocus(!input::tracker().lastWasMouse());
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) ImGui::SetTooltip("%s", brand::discordUrl);
+        if (button(tr(brand::patreonLabel), Tone::Secondary, { 0, 0 }, Icon::Heart)) openLink(brand::patreonUrl);
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) ImGui::SetTooltip("%s", brand::patreonUrl);
+        recordLayout("credits-community", ImRect(p, { p.x + ImGui::GetContentRegionAvail().x, ImGui::GetCursorScreenPos().y }));
+    }
     endCard();
     if (wide) ImGui::SameLine(0, px(24));
     else gap(4);
-    beginCard("about-credits", { wide ? area.x - leftW - px(24) : area.x, 0 }, 24);
+    scrollHere("developers");
+    developersCard(wide ? area.x - leftW - px(24) : area.x);
+    gap(4);
+    // The full credits (launcher/credits.h, the same sections as the Collection Style Launcher's Credits panel; the
+    // introduction, the developers and the community links are shown above).
+    // (drawn on the page itself, not as a child card: a child grows at most to the window's height, the credits do not
+    // fit in that on a small screen)
+    auto* pdl = ImGui::GetWindowDrawList();
+    const ImVec2 cardMin = ImGui::GetCursorScreenPos();
+    const float pad = px(24), inner = area.x - pad * 2, right = cardMin.x + area.x - pad;
+    pdl->ChannelsSplit(2);
+    pdl->ChannelsSetCurrent(1);
+    ImGui::SetCursorScreenPos({ cardMin.x + pad, cardMin.y + pad });
+    ImGui::BeginGroup();
     heading(tr("Credits"));
-    gap(2);
-    auto credit = [](const char* role, const char* who, ImTextureID image = nullptr) {
-        const ImVec2 p = ImGui::GetCursorScreenPos();
-        auto* dl = ImGui::GetWindowDrawList();
-        float x = p.x;
-        if (image) {
-            dl->AddRectFilled(p, { p.x + px(48), p.y + px(48) }, ink(color::raised), px(10));
-            dl->AddImage(image, { p.x + px(4), p.y + px(4) }, { p.x + px(44), p.y + px(44) });
-            x += px(62);
-        }
-        dl->AddText(fonts().caption, fonts().caption->FontSize, { x, p.y + px(2) }, ink(color::muted), role);
-        const float wrap = ImGui::GetContentRegionAvail().x - (x - p.x);
-        dl->AddText(fonts().body, fonts().body->FontSize, { x, p.y + px(22) }, ink(color::text), who, nullptr, wrap);
-        const auto t = fonts().body->CalcTextSizeA(fonts().body->FontSize, FLT_MAX, wrap, who);
-        ImGui::Dummy({ 1, std::max(image ? px(48) : 0.0f, px(22) + t.y) });
-        recordLayout(role, ImRect(p, { p.x + wrap, p.y + px(22) + t.y }));
+    gap(4);
+    // text wrapped at the card's inner right edge
+    auto wrapped = [&](const char* value, ImFont* font, uint32_t rgb) {
+        FontScope f(font);
+        ColorScope c(rgb);
+        ImGui::PushTextWrapPos(right - page->Pos.x + page->Scroll.x);
+        ImGui::TextUnformatted(value);
+        ImGui::PopTextWrapPos();
     };
-    credit(tr("Sly Cooper and the Thievius Raccoonus port"), brand::projectCaneCredit);
-    credit(tr("SafeHouse logo"), brand::logoCredit, images().logo);
-    credit(tr("App icon"), brand::iconCredit, images().icon);
-    credit(tr("Steam library artwork"), "SteamGridDB: ctwoafiveb, Benuno, AnimeFan69, Spaghetti Overlord, Pedrogon18, "
-                                    "RealSayakaMaizono, Nuke, simenfje, FrostWolf (share/safehouse/steam/CREDITS.md)");
-    credit(tr("Controller prompts"), "Kenney Input Prompts (CC0) · kenney.nl");
-    credit(tr("Controller database"), "SDL_GameControllerDB (zlib)");
-    credit(tr("Typeface"), "Atkinson Hyperlegible, Braille Institute (SIL Open Font License)");
-    credit(tr("Japanese and Cyrillic letters"), "Noto Sans CJK JP, Noto Sans, Google (SIL Open Font License)");
-    divider(14);
-    caption(tr("Full licence texts ship in the licenses folder and THIRD_PARTY_NOTICES.md."), color::text2);
-    caption(tr("Sly Cooper, its sequels, Bentley's Hackpack and their logos are trademarks of Sony Interactive Entertainment. "
-            "The game logos identify the games only. SafeHouse is an unofficial fan project, not affiliated with or endorsed by "
-            "Sony Interactive Entertainment, Sucker Punch Productions or Sanzaru Games. Controller names and symbols belong to their owners."));
-    const fs::path licences = executableDirectory().parent_path() / "licenses";
-    std::error_code ec;
-    if (fs::is_directory(licences, ec)) {
-        gap(2);
-        if (button(tr("Open licences"), Tone::Quiet, { 0, 0 }, Icon::Folder)) try {
-                openFolder(licences);
-            } catch (...) {
+    // wide: the headings in a column on the left; narrow: above their text
+    const bool columns = inner >= px(620);
+    const float labelW = columns ? std::floor(std::min(px(280), inner * 0.3f)) : 0.0f, bodyX = columns ? labelW + px(24) : 0.0f;
+    const float x0 = cardMin.x + pad;
+    bool first = true;
+    for (const credits::Section& section : credits::sections()) {
+        const std::string_view id = section.id;
+        if (id == "safehouse" || id == "developers" || id == "community") continue;
+        if (!first) {
+            ImGui::Dummy({ 1, px(2) });
+            const ImVec2 p = ImGui::GetCursorScreenPos();
+            pdl->AddLine({ x0, p.y }, { right, p.y }, ink(color::divider), px(1));
+            ImGui::Dummy({ 1, px(6) });
+        }
+        first = false;
+        ImGui::SetCursorScreenPos({ x0, ImGui::GetCursorScreenPos().y });
+        scrollHere(section.id);
+        const ImVec2 top = ImGui::GetCursorScreenPos();
+        const char* headingText = tr(section.heading);
+        float headingH = 0;
+        if (columns) {
+            pdl->AddText(fonts().caption, fonts().caption->FontSize, { top.x, top.y + px(2) }, ink(color::muted), headingText, nullptr, labelW);
+            headingH = fonts().caption->CalcTextSizeA(fonts().caption->FontSize, FLT_MAX, labelW, headingText).y + px(2);
+        } else
+            wrapped(headingText, fonts().caption, color::muted);
+        ImTextureID picture = section.picture ? (std::string_view(section.picture) == "logo" ? images().logo : images().icon) : nullptr;
+        float y = columns ? top.y : ImGui::GetCursorScreenPos().y;
+        const float y0 = y;
+        if (picture) {
+            const ImVec2 p{ top.x + bodyX, y };
+            pdl->AddRectFilled(p, { p.x + px(48), p.y + px(48) }, ink(color::raised), px(10));
+            const float aspect = std::string_view(section.picture) == "logo" ? images().logoAspect : 1.0f;
+            const float w = aspect >= 1 ? px(40) : px(40) * aspect, h = aspect >= 1 ? px(40) / aspect : px(40);
+            pdl->AddImage(picture, { p.x + px(24) - w * 0.5f, p.y + px(24) - h * 0.5f }, { p.x + px(24) + w * 0.5f, p.y + px(24) + h * 0.5f });
+        }
+        const float textLeft = bodyX + (picture ? px(62) : 0.0f);
+        for (const credits::Line& line : section.lines) {
+            ImGui::SetCursorScreenPos({ top.x + textLeft, y });
+            if (line.kind == credits::Line::Link) creditLink(tr(line.text), line.url, right - (top.x + textLeft));
+            else if (line.kind == credits::Line::Text) wrapped(tr(line.text), fonts().body, color::text);
+            y = ImGui::GetCursorScreenPos().y;
+        }
+        if (picture) y = std::max(y, y0 + px(48) + ImGui::GetStyle().ItemSpacing.y);
+        if (id == "licences") {
+            const fs::path licences = executableDirectory().parent_path() / "licenses";
+            std::error_code ec;
+            if (fs::is_directory(licences, ec)) {
+                ImGui::SetCursorScreenPos({ top.x + textLeft, y + px(4) });
+                if (button(tr("Open licences"), Tone::Quiet, { 0, 0 }, Icon::Folder)) try {
+                        openFolder(licences);
+                    } catch (...) {
+                    }
+                y = ImGui::GetCursorScreenPos().y;
             }
-        takeFocus(!input::tracker().lastWasMouse());
+        }
+        y = std::max(y, top.y + headingH);
+        ImGui::SetCursorScreenPos({ top.x, y });
+        ImGui::Dummy({ inner, 0 });
+        recordLayout((std::string("credits-") + section.id).c_str(), ImRect(top, { top.x + inner, y }));
     }
-    endCard();
+    ImGui::EndGroup();
+    const ImVec2 cardMax{ cardMin.x + area.x, ImGui::GetItemRectMax().y + pad };
+    pdl->ChannelsSetCurrent(0);
+    pdl->AddRectFilled(cardMin, cardMax, ink(color::surface), px(12));
+    pdl->AddRect(cardMin, cardMax, ink(color::border), px(12), 0, px(1));
+    pdl->ChannelsMerge();
+    ImGui::SetCursorScreenPos(cardMin);
+    ImGui::Dummy({ area.x, cardMax.y - cardMin.y });
+    recordLayout("about-credits", ImRect(cardMin, cardMax));
 }
 } // namespace cane::ui

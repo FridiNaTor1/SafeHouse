@@ -38,6 +38,7 @@
 #include <imgui/imgui_internal.h>
 
 #include "../backend.h"
+#include "../credits.h"
 #include "../native_dialog.h"
 #include "../ui/face_buttons.h"
 #include "../ui/gamepad_nav.h"
@@ -217,7 +218,10 @@ public:
             m_developer = std::clamp(m_fixture.screen[9] - '1', 0, 4);
         }
         else if (m_fixture.screen == "confirm") m_page = indexOf(Page::Sly3), m_confirm = true;
-        else if (m_fixture.screen == "credits") m_page = indexOf(Page::Extras), m_credits = true;
+        else if (m_fixture.screen.rfind("credits", 0) == 0) {  // "credits" or "credits:<section id>" (launcher/credits.h)
+            m_page = indexOf(Page::Extras), m_credits = true;
+            if (const auto colon = m_fixture.screen.find(':'); colon != std::string::npos) m_creditsSection = m_fixture.screen.substr(colon + 1);
+        }
         else if (m_fixture.screen == "launch") m_launchFade = 1.0f, m_launching = int(GameId::Sly2);
         m_cameraX = m_pages[size_t(m_page)].x;
         if (m_fixture.screen == "glide") {  // (a shot halfway between the title and Sly 1)
@@ -372,19 +376,9 @@ private:
     }
     static bool ends(const std::string& s, std::string_view tail) { return s.size() >= tail.size() && s.compare(s.size() - tail.size(), tail.size(), tail) == 0; }
     static bool starts(const std::string& s, std::string_view head) { return s.compare(0, head.size(), head) == 0; }
-    // The developers page: who, and what they did (their own words for it; the names stay as written).
-    struct Developer {
-        const char* name;
-        const char* role;
-        uint32_t colour;  // the disc's colour when chosen (the PS3 menu's four, Tuning.xmb Game.PlayerColor)
-    };
-    static constexpr Developer kDevelopers[5] = {
-        {"FridiNaTor", N_("Main dev of the Sly 2 and Sly 3 ports and maintainer"), 0x4288FE},
-        {"theclub654", N_("Main dev of Sly 1 via Project Cane. Special Thanks!"), 0x8E5E87},
-        {"menaman123", N_("Contributor and macOS port"), 0x57A95F},
-        {"thematuu", N_("Contributor"), 0xEBC113},
-        {"NaGaa95", N_("Contributor and Switch and Windows for ARM port"), 0x4288FE},
-    };
+    // The developers page: who, and what they did (launcher/credits.h, the same list as the About page's).
+    using Developer = credits::Developer;
+    static constexpr const auto& kDevelopers = credits::kDevelopers;
     void style() {
         const bool paris = page() > Page::Sly3;  // (the pages over the scene's second half)
         for (auto& n : m_scene.nodes()) {
@@ -1373,40 +1367,21 @@ private:
         const float pw = std::min(W - 48 * s, 900 * s);
         const ImRect pr({W * 0.5f - pw * 0.5f, 130 * s}, {W * 0.5f + pw * 0.5f, H - 90 * s});
         panel(dl, pr, 1.0f);
-        // Everything the SafeHouse launcher's About page and the notices credit. Headings are translated; names, licences
-        // and the notices' text stay as they are.
-        std::vector<std::pair<std::string, std::string>> lines = {
-            {"SafeHouse", tr(brand::credit)},
-            {tr("Developers"), [] {
-                 std::string all;
-                 for (const Developer& d : kDevelopers) all += std::string(all.empty() ? "" : "\n") + d.name + ": " + tr(d.role);
-                 return all;
-             }()},
-            {tr("Developers' pictures"), std::string(tr("Each picture on the Developers page is courtesy of its owner.")) +
-                                             " FridiNaTor, theclub654, menaman123, thematuu, NaGaa95."},
-            {tr("Sly Cooper and the Thievius Raccoonus port"), brand::projectCaneCredit},
-            {tr("SafeHouse logo"), brand::logoCredit},
-            {tr("App icon"), brand::iconCredit},
-            {tr("Steam library artwork"), "SteamGridDB (steamgriddb.com): ctwoafiveb, Benuno, AnimeFan69, Spaghetti Overlord, Pedrogon18, RealSayakaMaizono, Nuke, "
-                                          "simenfje, FrostWolf"},
-            {tr("Controller prompts"), "Kenney Input Prompts (CC0) · kenney.nl"},
-            {tr("Controller database"), "SDL_GameControllerDB (zlib)"},
-            {tr("Typeface"), "Atkinson Hyperlegible, Braille Institute (SIL Open Font License)"},
-            {tr("Japanese and Cyrillic letters"), "Noto Sans CJK JP, Noto Sans, The Noto Project Authors / Adobe (SIL Open Font License 1.1)"},
-            {tr("This menu"), tr("The Sly Collection's (PS3) own menu: its scene, art, letters, sounds and music are read from your own disc and "
-                                 "stay in your profile. Nothing of it comes with SafeHouse.")},
-            {tr("Third-party libraries"),
-             "GLFW 3.4 (zlib/libpng) · FAudio 25.02 (zlib) · SDL2 (zlib) · Dear ImGui, ImGuiFileDialog (MIT) · GLAD (MIT / public domain) · GLM (MIT) · "
-             "stb (MIT / public domain) · nlohmann/json (MIT) · PicoSHA2 1.0.1 (MIT) · miniz 3.1.2 (MIT) · LZ4 1.10.0 (BSD 2-Clause) · "
-             "libchdr (BSD 3-Clause) with the LZMA SDK (public domain), zstd (BSD) and dr_flac (public domain or MIT-0) · "
-             "FFmpeg 7.1.1 (LGPL 2.1, ffmpeg.org) · Vulkan headers and OpenXR headers and loader, The Khronos Group (Apache-2.0 / MIT) · "
-             "989snd rules after OpenGOAL's reimplementation (ISC) · AppImage type2-runtime (MIT) · NSIS · Microsoft XAudio2 redistributable"},
-            {tr("Community"), std::string(brand::discordLabel) + ": " + brand::discordUrl + "\n" + brand::patreonLabel + ": " + brand::patreonUrl},
-            {tr("Trademarks"), tr("Sly Cooper, its sequels, Bentley's Hackpack and their logos are trademarks of Sony Interactive Entertainment. "
-                                  "The game logos identify the games only. SafeHouse is an unofficial fan project, not affiliated with or endorsed by "
-                                  "Sony Interactive Entertainment, Sucker Punch Productions or Sanzaru Games. Controller names and symbols belong to their owners.")},
-            {tr("Licences"), tr("Full licence texts ship in the licenses folder and THIRD_PARTY_NOTICES.md.")},
+        // The full credits (launcher/credits.h: the same sections as the SafeHouse launcher's About page), then the
+        // package's notices. Headings are translated; names, links and licences stay as they are.
+        struct Block {
+            std::string id, heading, body;
         };
+        std::vector<Block> lines;
+        for (const credits::Section& section : credits::sections()) {
+            std::string body;
+            for (const credits::Line& line : section.lines) {
+                if (line.kind == credits::Line::Developers)
+                    for (const Developer& d : kDevelopers) body += std::string(body.empty() ? "" : "\n") + d.name + ": " + tr(d.role);
+                else body += std::string(body.empty() ? "" : "\n") + (line.kind == credits::Line::Link ? credits::linkText(line) : std::string(tr(line.text)));
+            }
+            lines.push_back({section.id, tr(section.heading), body});
+        }
         // the notices themselves, when the package's file is beside the program
         if (m_notices.empty() && !m_noticesRead) {
             m_noticesRead = true;
@@ -1417,20 +1392,32 @@ private:
                     m_notices.assign(bytes.begin(), bytes.end());
                 }
         }
-        if (!m_notices.empty()) lines.push_back({"THIRD_PARTY_NOTICES.md", m_notices});
+        if (!m_notices.empty()) lines.push_back({"notices", "THIRD_PARTY_NOTICES.md", m_notices});
         const float wrap = pw - 96 * s;
-        float total = 0;
-        for (const auto& [a, b] : lines) total += 38 * s + ui::fonts().body->CalcTextSizeA(19 * s, FLT_MAX, wrap, b.c_str()).y + 22 * s;
+        float total = 0, target = -1;
+        for (const Block& b : lines) {
+            if (b.id == m_creditsSection) target = total;  // (screenshots: "--screen credits:<id>" opens the panel there)
+            total += 38 * s + ui::fonts().body->CalcTextSizeA(19 * s, FLT_MAX, wrap, b.body.c_str()).y + 22 * s;
+        }
+        if (target >= 0) m_creditsScroll = target, m_creditsSection.clear();
         const float viewH = pr.GetHeight() - 56 * s;
         m_creditsScroll = std::clamp(m_creditsScroll, 0.0f, std::max(0.0f, total - viewH));
         dl->PushClipRect({pr.Min.x, pr.Min.y + 26 * s}, {pr.Max.x, pr.Max.y - 26 * s}, true);
         float y = pr.Min.y + 34 * s - m_creditsScroll;
-        for (const auto& [a, b] : lines) {
-            caption(dl, 20 * s, {pr.Min.x + 46 * s, y}, 0xFFD21E, a.c_str());
+        for (const Block& b : lines) {
+            const float top = y;
+            caption(dl, 20 * s, {pr.Min.x + 46 * s, y}, 0xFFD21E, b.heading.c_str());
             y += 38 * s;
-            dl->AddText(ui::fonts().body, 19 * s, {pr.Min.x + 48 * s, y}, draw::rgba(0xFFFFFF), b.c_str(), nullptr, wrap);
-            y += ui::fonts().body->CalcTextSizeA(19 * s, FLT_MAX, wrap, b.c_str()).y + 22 * s;
+            dl->AddText(ui::fonts().body, 19 * s, {pr.Min.x + 48 * s, y}, draw::rgba(0xFFFFFF), b.body.c_str(), nullptr, wrap);
+            y += ui::fonts().body->CalcTextSizeA(19 * s, FLT_MAX, wrap, b.body.c_str()).y + 22 * s;
+            // the layout dump (--dump-layout): every section, and each link's address, where it is drawn
+            const ImRect rect({pr.Min.x + 46 * s, top}, {pr.Min.x + 48 * s + wrap, y - 22 * s});
+            ui::recordLayout(("credits-" + b.id).c_str(), rect);
         }
+        if (ui::layoutRecording())
+            for (const credits::Section& section : credits::sections())
+                for (const credits::Line& line : section.lines)
+                    if (line.kind == credits::Line::Link) ui::recordLayout((std::string("credits-link ") + line.url).c_str(), pr);
         dl->PopClipRect();
     }
 
@@ -1471,6 +1458,7 @@ private:
     std::deque<std::pair<double, float>> m_trail;  // the pointer's recent places (time, x): a flick's speed
     ImRect m_hitBack;
     float m_musicVolume = 0.7f, m_soundVolume = 0.8f, m_optionsScroll = 0, m_creditsScroll = 0, m_toastTime = 0;
+    std::string m_creditsSection;  // a section the credits panel scrolls to once (screenshots)
     std::string m_toast, m_notices;
     bool m_noticesRead = false;
     std::vector<Row> m_rows;

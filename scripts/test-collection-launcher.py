@@ -15,7 +15,9 @@ Checks, with synthetic data and a private profile only:
   - a launch from the menu (scripted --live run, keyboard nav to Sly 2, Enter) starts the game runtime with
     SAFEHOUSE_LAUNCHER=collection and the menu comes back after the game quits;
   - the game started any other way (--play) does not get the variable;
-  - the Steam and desktop shortcuts for the collection (`--collection`).
+  - the Steam and desktop shortcuts for the collection (`--collection`);
+  - the full credits (launcher/credits.h) on both the SafeHouse launcher's About page and the menu's Credits panel:
+    every section (the decompilation projects among them), every link, the developers.
 With --ps3 it also imports from a real Sly Collection source (folder, .iso or .zip).
 """
 import argparse
@@ -23,6 +25,7 @@ import hashlib
 import json
 import os
 import pathlib
+import re
 import shutil
 import struct
 import subprocess
@@ -388,6 +391,21 @@ def pixel(image, x, y):
     return tuple(rows[y][x * channels:x * channels + 3])
 
 
+def shared_credits():
+    """launcher/credits.h: the section ids and the links both credits screens show."""
+    text = (ROOT / "launcher" / "credits.h").read_text(encoding="utf-8")
+    body = text[text.index("sections()"):]
+    ids = re.findall(r'^\s*\{"([a-z0-9]+)", (?:N_\()?"', body, re.M)
+    constants = dict(re.findall(r'inline constexpr const char\* (\w+) = "([^"]+)";', text))
+    brand = dict(re.findall(r'inline constexpr const char\* (\w+) = "([^"]+)";', (ROOT / "platform" / "brand.h").read_text(encoding="utf-8")))
+    links = []
+    for m in re.finditer(r'\{Line::Link, [^{}]*?, (?:"([^"]+)"|(?:brand::)?(\w+))\}', body):
+        links.append(m.group(1) or constants.get(m.group(2)) or brand[m.group(2)])
+    assert len(ids) >= 15 and "decompilation" in ids and "trademarks" in ids, ids
+    assert "https://github.com/Komasia/sly2-decomp" in links and "https://github.com/NaGaa95/sly3-decomp" in links, links
+    return ids, links
+
+
 def near(colour, wanted, tolerance=14):
     return all(abs(a - b) <= tolerance for a, b in zip(colour, wanted))
 
@@ -452,6 +470,28 @@ def main():
             assert any("Import the Collection menu from The Sly Collection (PS3)" in l for l in labels), labels
             assert any("Import from the extracted disc" in l for l in labels), labels
             assert not any("Remove the imported Collection menu" in l for l in labels), labels
+
+        # ---- the SafeHouse launcher's About page: the developers with their pictures, then the full credits
+        # (launcher/credits.h, the same list as the menu's Credits panel); a window tall enough to show every link
+        credit_ids, credit_links = shared_credits()
+        developers = ["FridiNaTor", "theclub654", "menaman123", "thematuu", "NaGaa95"]
+        if have_display:
+            for size in ("1280x4000", "390x4300"):
+                out = shots / f"about-{size}.png"
+                r = run([copied, "--screenshot", out, "--screen", "about", "--size", size, "--dump-layout", layout], env=env)
+                assert r.returncode == 0 and out.is_file(), r
+                labels = {e["label"] for e in json.loads(layout.read_text())["entries"]}
+                missing = {f"credits-{i}" for i in credit_ids} - labels
+                assert not missing, (size, sorted(missing))
+                missing = {f"credits-link {u}" for u in credit_links if not u.startswith("https://discord") and "patreon" not in u} - labels
+                assert not missing, (size, sorted(missing))  # (the community links are the intro's buttons)
+                assert {f"developer {d}" for d in developers} <= labels, (size, sorted(labels))
+            # scrolled to the decompilation projects: their section at the top of the page
+            r = run([copied, "--screenshot", shots / "about-decomp.png", "--screen", "about:decompilation", "--dump-layout", layout], env=env)
+            entries = {e["label"]: e for e in json.loads(layout.read_text())["entries"]}
+            assert r.returncode == 0 and 0 < entries["credits-decompilation"]["y"] < 200, entries.get("credits-decompilation")
+            assert "credits-link https://github.com/NaGaa95/sly3-decomp" in entries, sorted(entries)
+            print(f"About page: {len(credit_ids)} credit sections, {len(credit_links)} links, the five developers")
 
         # ---- the import from a synthetic Sly Collection folder (a made-up menu in the disc's formats)
         disc = work / "disc"
@@ -590,6 +630,15 @@ def main():
                                 ("wide", ["--size", "3440x1080", "--nav", "right,right"]), ("narrow", ["--size", "1024x768"]),
                                 ("ultrawide", ["--size", "3840x1080"]), ("portrait", ["--size", "720x1280", "--screen", "developers"])):
                 render(name, ["--collection-ps3", profile] + extra)
+            # the Credits panel: the same sections and links as the About page, scrolled to the decompilation projects
+            if render("credits-decomp", ["--collection-ps3", profile, "--screen", "credits:decompilation", "--dump-layout", layout]):
+                entries = {e["label"]: e for e in json.loads(layout.read_text())["entries"]}
+                assert json.loads(layout.read_text())["view"] == "collection"
+                missing = {f"credits-{i}" for i in credit_ids} - set(entries)
+                assert not missing, sorted(missing)
+                missing = {f"credits-link {u}" for u in credit_links} - set(entries)
+                assert not missing, sorted(missing)
+                assert 130 < entries["credits-decompilation"]["y"] < 220, entries["credits-decompilation"]
             image = read_png(render("ultrawide-check", ["--collection-ps3", profile, "--size", "3840x1080", "--screen", "extras"], plain))
             assert near(pixel(image, 4, 60), (13, 19, 79)), pixel(image, 4, 60)           # the strip is carried on past its end
             render("bloom", ps3)  # (the glow's passes run)

@@ -58,7 +58,9 @@ LABELS = {
     "game-hackpack": (set(), {"Play", "Install"}),
     "install-path": ({"Search"}, set()),
     "sly3-notice": ({"sly3-notice", "Don't show again", "Cancel", "Play anyway"}, set()),
-    "about": ({"Join us on Discord (ThiefRush)", "Support us on Patreon", "rail-discord", "rail-patreon"}, {"sly3-notice"}),
+    # (the developers and the full credits of launcher/credits.h; scripts/test-collection-launcher.py checks every one)
+    "about": ({"Join us on Discord (ThiefRush)", "Support us on Patreon", "rail-discord", "rail-patreon", "credits-developers",
+               "developer FridiNaTor", "credits-decompilation", "credits-trademarks", "credits-licences"}, {"sly3-notice"}),
     "settings-controls": ({"Disable controller input when unfocused"}, {"Always show Original PS layout", "Button prompts", "Debug keys"}),
     "settings-interface": ({"Menu style", "Menu size"}, {"Streamer mode"}),
     "settings-launcher": ({"Launcher size", "Button prompts"}, set()),

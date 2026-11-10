@@ -77,6 +77,7 @@ const EmbeddedImage cane_developer_pictures[] = {
     {cane_developer_menaman123, sizeof(cane_developer_menaman123)}, {cane_developer_menaman123_silhouette, sizeof(cane_developer_menaman123_silhouette)},
     {cane_developer_thematuu, sizeof(cane_developer_thematuu)},     {cane_developer_thematuu_silhouette, sizeof(cane_developer_thematuu_silhouette)},
     {cane_developer_nagaa95, sizeof(cane_developer_nagaa95)},       {cane_developer_nagaa95_silhouette, sizeof(cane_developer_nagaa95_silhouette)}};
+static_assert(std::size(cane_developer_pictures) == 2 * std::size(cane::credits::kDevelopers));
 std::string fixtureIso(int index) { return cane::utf8(ui::fixtures::isos()[static_cast<size_t>(index)].path); }
 struct Texture {
     GLuint id = 0;
@@ -314,6 +315,12 @@ int desktop(cane::LauncherBackend& backend, const ui::fixtures::Options* fixture
         gameLogos.push_back(std::make_unique<Texture>(cane_game_logos[i].data, cane_game_logos[i].size, "game logo"));
         ui::images().games[i] = {gameLogos.back()->imgui(), gameLogos.back()->aspect()};
     }
+    // The developers' pictures (the About page; without their silhouettes).
+    std::vector<std::unique_ptr<Texture>> developerPictures;
+    for (size_t i = 0; i < std::size(ui::images().developers); ++i) {
+        developerPictures.push_back(std::make_unique<Texture>(cane_developer_pictures[i * 2].data, cane_developer_pictures[i * 2].size, "developer picture"));
+        ui::images().developers[i] = developerPictures.back()->imgui();
+    }
 
     // Declared before the job so its worker is joined before these go away.
     ui::SessionLog sessionLog(backend.locations.logs);
@@ -433,7 +440,10 @@ int desktop(cane::LauncherBackend& backend, const ui::fixtures::Options* fixture
             job.label = "Installation";
             job.stage = "copy";
             job.progress = 0.42f;
-        } else if (s == "about") shell.open(ui::View::About);
+        } else if (s.rfind("about", 0) == 0) {  // "about" or "about:<section id>" (launcher/credits.h): scrolled there
+            shell.open(ui::View::About);
+            if (auto colon = s.find(':'); colon != std::string::npos) ui::aboutScrollTarget() = s.substr(colon + 1);
+        }
         else if (s == "sly3-notice") page.showSly3Notice();
         else if (s == "desktop-shortcut") page.showDesktopShortcut(shell.game, false);
         else if (s == "desktop-shortcut-done") page.showDesktopShortcut(shell.game, true);
@@ -726,6 +736,8 @@ int desktop(cane::LauncherBackend& backend, const ui::fixtures::Options* fixture
     job.cancel = true;
     if (job.worker.joinable()) job.worker.join();
     gameLogos.clear();
+    developerPictures.clear();
+    for (auto& picture : ui::images().developers) picture = nullptr;
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplGlfw_Shutdown();
     ImGui::DestroyContext();
@@ -839,6 +851,7 @@ int collectionDesktop(cane::LauncherBackend& backend, const ui::fixtures::Option
         developerPictures.push_back(std::make_unique<Texture>(cane_developer_pictures[i].data, cane_developer_pictures[i].size, "developer picture"));
         (i % 2 ? data.developers[i / 2].silhouette : data.developers[i / 2].picture) = developerPictures.back()->imgui();
     }
+    ui::layoutRecording() = fixture && !fixture->layoutPath.empty();
     auto menu = std::make_unique<col::Menu>(backend, window, data);
     std::unique_ptr<Offscreen> offscreen;
     if (fixture) offscreen = std::make_unique<Offscreen>(fixture->width, fixture->height);
@@ -890,6 +903,7 @@ int collectionDesktop(cane::LauncherBackend& backend, const ui::fixtures::Option
         }
         faceSwap.end();
         ImGui::NewFrame();
+        ui::layoutEntries().clear();
         const double now = glfwGetTime();
         // (screenshots: a fixed step, so a shot is the same every run)
         const float dt = fixture ? 1.0f / 60.0f : static_cast<float>(std::min(0.1, now - last));
@@ -908,6 +922,13 @@ int collectionDesktop(cane::LauncherBackend& backend, const ui::fixtures::Option
         if (fixture && ++frames >= 40 + 4 * static_cast<int>(fixture->nav.size()) + 2 * static_cast<int>(fixture->pointer.size()) && glfwGetTime() >= fixture->delay &&
             !menu->busy()) {
             screenshot(fw, fh, screenshotPath);
+            if (!fixture->layoutPath.empty()) {
+                // (--dump-layout: the labelled rectangles the menu recorded, e.g. the credits' sections)
+                auto entries = cane::json::array();
+                for (const auto& e : ui::layoutEntries())
+                    entries.push_back({{"label", e.label}, {"x", e.rect.Min.x}, {"y", e.rect.Min.y}, {"w", e.rect.GetWidth()}, {"h", e.rect.GetHeight()}});
+                cane::writeJson(cane::path(fixture->layoutPath), cane::json{{"entries", entries}, {"view", "collection"}});
+            }
             glfwSetWindowShouldClose(window, true);
         }
         if (!fixture) glfwSwapBuffers(window);

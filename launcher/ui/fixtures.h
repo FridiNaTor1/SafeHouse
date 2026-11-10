@@ -10,7 +10,7 @@
 
 namespace cane::ui::fixtures {
 struct Options {
-    // game | install | install-progress | settings[:category] | about | desktop-shortcut[-done] | sly3-notice
+    // game | install | install-progress | settings[:category] | about[:section] | desktop-shortcut[-done] | sly3-notice
     std::string screen = "game";
     std::optional<GameId> game; // --game KEY (default: the remembered game)
     int width = 1280, height = 800;

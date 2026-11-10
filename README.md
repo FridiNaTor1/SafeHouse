@@ -141,6 +141,8 @@ cmake --build --preset linux-release --parallel 4
   libchdr and FFmpeg. Their licences are in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) and [`licenses/`](licenses).
 
 And at the root of the Sly 2 port: the **[Sly 2 decompilation](https://github.com/Komasia/sly2-decomp)**.
+The Sly 3 port is built with the help of the **[Sly 3 decompilation](https://github.com/NaGaa95/sly3-decomp)**.
+Thanks to everyone who contributed to these projects.
 
 ## Legal
 
