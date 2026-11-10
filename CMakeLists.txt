@@ -475,11 +475,12 @@ if(BUILD_TESTING)
    add_test(NAME collection-launcher COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/scripts/test-collection-launcher.py" "$<TARGET_FILE:cane-launcher>")
    # The profile folders' move from their old name (platform/user_folders.h) and installs in other folders
    # (launcher/backend.h installRoot / moveInstallation), in private HOMEs.
-   add_test(NAME folder-upgrade COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/scripts/test-folder-upgrade.py" "$<TARGET_FILE:cane-launcher>")
-   add_test(NAME install-location COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/scripts/test-install-location.py" "$<TARGET_FILE:cane-launcher>")
    add_test(NAME steam-shortcuts COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/scripts/test-steam-shortcuts.py" "$<TARGET_FILE:cane-launcher>" "${CMAKE_CURRENT_SOURCE_DIR}/launcher/assets/steam")
    # The update check and in-place update against a local fake release (launcher/update.h; Linux only).
    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    # (Linux's XDG profile layout: macOS keeps its profile in Application Support and never had the old folder name)
+    add_test(NAME folder-upgrade COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/scripts/test-folder-upgrade.py" "$<TARGET_FILE:cane-launcher>")
+    add_test(NAME install-location COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/scripts/test-install-location.py" "$<TARGET_FILE:cane-launcher>")
     add_test(NAME launcher-update COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/scripts/test-launcher-update.py" "$<TARGET_FILE:cane-launcher>")
    endif()
    if(NOT APPLE)

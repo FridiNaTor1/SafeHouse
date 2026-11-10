@@ -124,6 +124,11 @@ def main():
                             ("wide", ["--size", "3440x1080", "--nav", "right,right"]), ("narrow", ["--size", "1024x768"]))):
             out = shots / f"{name}.png"
             r = run([copied, "--screenshot", out, "--collection"] + extra, env=env)
+            if r.returncode != 0 and (b"Cannot create launcher window" in r.stderr or b"Cannot initialize desktop display" in r.stderr):
+                # (a machine without a usable GL context, such as a CI Mac runner: the renders and the launch are skipped)
+                print("no GL window available: the screenshot and launch-from-the-menu checks are skipped")
+                have_display = False
+                break
             assert r.returncode == 0 and out.is_file() and out.stat().st_size > 10000, (name, r)
         r = run([copied, "--collection-sounds"], env=env)
         assert r.returncode == 0 and b"FrontEnd_Loop frames 128" in r.stdout and b"positive_03 frames 128" in r.stdout, r

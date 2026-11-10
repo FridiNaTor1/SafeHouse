@@ -255,6 +255,63 @@ jobs:
           name: windows-smoke-screenshots
           path: ${{ runner.temp }}/smoke/*.png
 
+  # Android (phones, tablets, handhelds) and Meta Quest: one arm64 APK with the launcher and Sly 2 (VR through OpenXR on a
+  # headset). scripts/android/build-package.py: the locked dependencies (cached), the native libraries with NDK 29, the
+  # Gradle app. Signed with the SafeHouse release key from the repository secrets (ANDROID_*) when they are available;
+  # without them (pull requests from forks) a debug-signed APK is built and kept as an artifact only.
+  android:
+    name: Android / Meta Quest (arm64 APK)
+    needs: version
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      SAFEHOUSE_VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Android SDK packages (NDK 29, platform 36)
+        run: |
+          set -eu
+          sm="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$sm" --licenses > /dev/null || true
+          "$sm" --install "ndk;29.0.14206865" "platforms;android-36" "build-tools;36.0.0" > /dev/null
+      - name: Gradle 9.6.1 (pinned checksum)
+        run: |
+          set -eu
+          curl -fsSL https://services.gradle.org/distributions/gradle-9.6.1-bin.zip -o "$RUNNER_TEMP/gradle.zip"
+          echo "9c0f7faeeb306cb14e4279a3e084ca6b596894089a0638e68a07c945a32c9e14  $RUNNER_TEMP/gradle.zip" | sha256sum -c -
+          unzip -q "$RUNNER_TEMP/gradle.zip" -d "$RUNNER_TEMP"
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: build/android-deps
+          key: android-deps-${{ hashFiles('scripts/android/dependencies.json', 'scripts/android/bootstrap-dependencies.py', 'scripts/android/build-package.py') }}
+      - name: Release signing key (when the secrets are available)
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          set -eu
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/safehouse-release.keystore"
+            echo "SAFEHOUSE_ANDROID_KEYSTORE=$RUNNER_TEMP/safehouse-release.keystore" >> "$GITHUB_ENV"
+          else
+            echo "No signing secrets: building the debug APK"
+          fi
+      - name: Build the APK
+        env:
+          SAFEHOUSE_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          SAFEHOUSE_ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          SAFEHOUSE_ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: >-
+          python3 scripts/android/build-package.py --sdk "$ANDROID_HOME" --gradle "$RUNNER_TEMP/gradle-9.6.1/bin/gradle"
+          --java-home "$JAVA_HOME_21_X64" --parallel 4
+      - name: Remove the signing key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/safehouse-release.keystore"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: android-release
+          path: dist/android/SafeHouse-Android-arm64-v8a*.apk
+          if-no-files-found: error
+
   # Nintendo Switch: SafeHouse.nro (launcher, Sly 1 and Sly 2) with devkitPro's devkitA64 + libnx + deko3d
   # (cmake/devkitA64-libnx.cmake, cmake/Switch.cmake). The image already has switch-dev, switch-ffmpeg, deko3d and uam.
   switch:
@@ -296,7 +353,7 @@ jobs:
 
   release:
     name: Publish the release
-    needs: [version, linux, windows, windows-smoke, macos, switch]
+    needs: [version, linux, windows, windows-smoke, macos, switch, android]
     # Only from the public repository's main branch, and only when every package built and the Windows ones started.
     if: ${{ github.repository == 'FridiNaTor1/SafeHouse' && needs.version.outputs.publish == 'true' }}
     runs-on: ubuntu-24.04
@@ -328,7 +385,7 @@ jobs:
           rm -f release/*.sha256
           python3 scripts/release-manifest.py release --version "$VERSION" --tag "$TAG" --commit "$COMMIT" --date "$DATE" \
             --require linux-appimage --require linux-tar --require linux-aarch64-appimage --require linux-aarch64-tar --require windows-portable --require windows-setup \
-            --require windows-arm64-portable --require windows-arm64-setup --require macos-arm64 --require macos-x86_64 --require switch-nro
+            --require windows-arm64-portable --require windows-arm64-setup --require macos-arm64 --require macos-x86_64 --require switch-nro --require android-apk
           # (the previous release: the newest tag of this scheme, vX.Y.Z)
           previous=$(git tag --list 'v*' --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sed -n 1p || true)
           {
@@ -355,6 +412,7 @@ jobs:
           | macOS, Apple silicon | `SafeHouse-Launcher-macOS-arm64.dmg` |
           | macOS, Intel | `SafeHouse-Launcher-macOS-x86_64.dmg` |
           | Nintendo Switch (homebrew, copy to `sdmc:/switch/SafeHouse/`) | `SafeHouse.nro` |
+          | Android and Meta Quest (preview) | `SafeHouse-Android-arm64-v8a.apk` |
 
           The launcher updates itself (Settings > Launcher > Check for updates). SHA-256 checksums are in `SHA256SUMS`.
           On macOS, open the app with right-click > Open the first time. The packages contain no game data.

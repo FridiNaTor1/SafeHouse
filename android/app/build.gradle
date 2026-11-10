@@ -4,6 +4,12 @@ if (providers.gradleProperty('safehouseAppBuildDir').isPresent()) {
     layout.buildDirectory.set(file(providers.gradleProperty('safehouseAppBuildDir').get()))
 }
 
+// Release signing: the keystore from the environment (CI: the repository's ANDROID_* secrets), else unsigned / debug.
+def safehouseKeystore = System.getenv('SAFEHOUSE_ANDROID_KEYSTORE')
+// The release version x.y.z (CI's SAFEHOUSE_VERSION) as versionName, and y * 10000 + z as the increasing versionCode.
+def safehouseVersion = providers.gradleProperty('safehouseVersion').getOrElse('')
+def safehouseVersionParts = safehouseVersion ==~ /\d+\.\d+\.\d+/ ? safehouseVersion.tokenize('.')*.toInteger() : null
+
 android {
     namespace 'org.safehouse.android'
     compileSdk 36
@@ -11,15 +17,26 @@ android {
         applicationId 'org.safehouse.android'
         minSdk providers.gradleProperty('safehouseMinSdk').getOrElse('26').toInteger()
         targetSdk 36
-        versionCode 1
-        versionName '0.1.0-android-preview'
+        versionCode safehouseVersionParts ? safehouseVersionParts[1] * 10000 + safehouseVersionParts[2] : 1
+        versionName safehouseVersionParts ? safehouseVersion : '0.1.0-android-preview'
+    }
+    signingConfigs {
+        if (safehouseKeystore) {
+            safehouse {
+                storeFile file(safehouseKeystore)
+                storePassword System.getenv('SAFEHOUSE_ANDROID_KEYSTORE_PASSWORD')
+                keyAlias System.getenv('SAFEHOUSE_ANDROID_KEY_ALIAS')
+                keyPassword System.getenv('SAFEHOUSE_ANDROID_KEY_PASSWORD')
+            }
+        }
     }
     buildTypes {
         debug { debuggable true }
         release {
             minifyEnabled false
-            // Development APKs use Android's dedicated debug key. Publishing
-            // requires an explicitly supplied release signing configuration.
+            // Signed with the SafeHouse release key when SAFEHOUSE_ANDROID_KEYSTORE is set; development APKs use
+            // Android's debug key (assembleDebug).
+            if (safehouseKeystore) signingConfig signingConfigs.safehouse
         }
     }
     compileOptions {

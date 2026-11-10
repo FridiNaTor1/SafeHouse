@@ -119,13 +119,18 @@ def main():
     environment = {**os.environ, 'ANDROID_HOME': str(args.sdk), 'JAVA_HOME': str(args.java_home),
                    'PATH': str(args.java_home / 'bin') + os.pathsep + os.environ.get('PATH', '')}
     gradle_build = stage / 'gradle-app'
-    run([args.gradle, '-p', ROOT / 'android', 'assembleDebug', '--console=plain', '--max-workers=2', '--no-daemon',
-         '--project-cache-dir', stage / 'gradle-project-cache', '-PsafehouseAppBuildDir=' + str(gradle_build),
-         '-PsafehouseJniDir=' + str(stage / 'jniLibs'), '-PsafehouseAssetsDir=' + str(assets)], environment)
-    apk = gradle_build / 'outputs/apk/debug/app-debug.apk'
+    # (SAFEHOUSE_ANDROID_KEYSTORE set: the release APK signed with the SafeHouse key; else the debug APK)
+    release = bool(os.environ.get('SAFEHOUSE_ANDROID_KEYSTORE'))
+    variant = 'release' if release else 'debug'
+    version = os.environ.get('SAFEHOUSE_VERSION', '')
+    run([args.gradle, '-p', ROOT / 'android', 'assembleRelease' if release else 'assembleDebug', '--console=plain',
+         '--max-workers=2', '--no-daemon', '--project-cache-dir', stage / 'gradle-project-cache',
+         '-PsafehouseAppBuildDir=' + str(gradle_build), '-PsafehouseJniDir=' + str(stage / 'jniLibs'),
+         '-PsafehouseAssetsDir=' + str(assets)] + (['-PsafehouseVersion=' + version] if version else []), environment)
+    apk = gradle_build / 'outputs/apk' / variant / ('app-' + variant + '.apk')
     dist = ROOT / 'dist/android'
     dist.mkdir(parents=True, exist_ok=True)
-    out = dist / ('SafeHouse-Android-' + args.abi + '-debug.apk')
+    out = dist / ('SafeHouse-Android-' + args.abi + ('' if release else '-debug') + '.apk')
     shutil.copy2(apk, out)
     print('APK: ' + str(out))
 
