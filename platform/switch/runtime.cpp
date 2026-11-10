@@ -261,17 +261,17 @@ int RunGame(const Game& game, int argc, char** argv)
     }
     catch (const std::exception& e) { failure = std::string("The game stopped: ") + e.what(); }
     catch (...) { failure = "The game stopped: an unknown error."; }
-    if (!failure.empty())
-    {
-        ReleaseGraphics();   // (the screen back to the console)
-        ErrorScreen(failure.c_str());
-    }
+    // (a game returning early, as on an error, still has its window and its audio)
+    ReleaseGraphics();
+    StopAudio();
+    if (!failure.empty()) ErrorScreen(failure.c_str());
     Shutdown();
     return rc;
 }
 
 void Shutdown()
 {
+    StopAudio();
     EndLoadingBoost();
     SetGameConfiguration(false);   // (the next program, the launcher or the Homebrew Menu, with the launcher's configuration)
     saltynx_stop();

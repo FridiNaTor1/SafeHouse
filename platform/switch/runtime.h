@@ -94,6 +94,8 @@ struct LoadingBoost
 // other threads share 1 and 2.
 void PinGameThread();
 void PinSoundThread();
+// (audio_switch.cpp) The game's audio output stopped, even when the game did not release its engine.
+void StopAudio();
 int MixerCore();
 int IoCore();
 // The console's mode: 1920x1080 docked, 1280x720 handheld.

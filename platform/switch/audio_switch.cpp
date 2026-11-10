@@ -590,23 +590,43 @@ void OutputThread(void* arg)
     }
     if (R_FAILED(d.error.load())) d.engine->NotifyCriticalError(E_FAIL);
 }
+
+Device* g_output = nullptr;   // (the running engine, for CaneSwitch::StopAudio)
+
+// (buffers left queued to audout at exit stay locked: the Homebrew loader cannot take that memory back)
+void StopOutput(Device& d)
+{
+    d.stop.store(true, std::memory_order_release);
+    if (d.threadStarted) threadWaitForExit(&d.thread);
+    if (d.threadCreated) threadClose(&d.thread);
+    d.threadStarted = d.threadCreated = false;
+    if (d.service)
+    {
+        audoutStopAudioOut();
+        bool flushed = false;
+        audoutFlushAudioOutBuffers(&flushed);
+        audoutExit();
+        d.service = false;
+    }
+    for (AudioOutBuffer& b : d.buffers)
+    {
+        std::free(b.buffer);
+        b.buffer = nullptr;
+    }
+}
 }  // namespace
+
+void CaneSwitch::StopAudio()
+{
+    if (g_output) StopOutput(*g_output);
+}
 
 void IXAudio2::Release()
 {
     if (auto* d = static_cast<Device*>(native))
     {
-        d->stop.store(true, std::memory_order_release);
-        if (d->threadStarted) threadWaitForExit(&d->thread);
-        if (d->threadCreated) threadClose(&d->thread);
-        if (d->service)
-        {
-            audoutStopAudioOut();
-            bool flushed = false;
-            audoutFlushAudioOutBuffers(&flushed);
-            audoutExit();
-        }
-        for (AudioOutBuffer& b : d->buffers) std::free(b.buffer);
+        StopOutput(*d);
+        if (g_output == d) g_output = nullptr;
         delete d;
         native = nullptr;
     }
@@ -653,6 +673,7 @@ HRESULT XAudio2Create(IXAudio2** out, UINT32, UINT32)
         engine->Release();
         return E_FAIL;
     }
+    g_output = d;
     *out = engine;
     return S_OK;
 }
