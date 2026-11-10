@@ -811,7 +811,7 @@ int main(int cphzArgs, char* aphzArgs[])
     if(const int toolResult=RunMusicTool(args);toolResult>=0)return toolResult;
     // Mods (mods.h, texmod.h, textmod.h): --mods DIR, $SLY1_MODS, else <user dir>/Mods; an empty value: none.
     std::string modsDir;bool modsGiven=false;std::filesystem::path dumpTexturesDir,dumpTextDir;
-    std::vector<std::string> runtimeArgs;std::string ps3Source,ps3Out;
+    std::vector<std::string> runtimeArgs;std::string ps3Source,ps3Out;bool ps3Png=false;
     for(size_t i=0;i<args.size();++i) {
         if(args[i]=="--smoke-fixed-step"){g_dtFixedStep=1.0f/60.0f;continue;}
         if(args[i]=="--mods"||args[i]=="--dump-text"||args[i]=="--dump-textures") {
@@ -828,6 +828,8 @@ int main(int cphzArgs, char* aphzArgs[])
         if(args[i]=="--texture-pack"){if(++i==args.size())throw std::runtime_error("Missing value for --texture-pack");SetTexturePackDirectory(cane::path(args[i]));continue;}
         // --ps3-hd-textures SOURCE OUT: the PS3 HD texture pack from The Sly Collection (ps3hd.cpp)
         if(args[i]=="--ps3-hd-textures"){if(i+2>=args.size())throw std::runtime_error("Usage: --ps3-hd-textures SOURCE OUT");ps3Source=args[i+1];ps3Out=args[i+2];i+=2;continue;}
+        // --ps3-hd-png: the pack as PNG files (OUT/Textures) rather than OUT/Textures.pak
+        if(args[i]=="--ps3-hd-png"){ps3Png=true;continue;}
         if(args[i]=="--test-prompt-strip"){s_fPromptStripFixture=true;continue;}
         // the run fails unless its last frame shows a picture in the window (the scene composited: tools/sly1-boot-check.sh)
         if(args[i]=="--smoke-require-picture"){smokeRequirePicture=true;continue;}
@@ -866,7 +868,7 @@ int main(int cphzArgs, char* aphzArgs[])
     SetModsDirectory(cane::path(modsDir));
     RefreshContentPackage(cane::dataDirectory());
     if(!dumpTextDir.empty())return DumpTextCommand(dumpTextDir);
-    if(!ps3Out.empty())return Ps3HdTexturesCommand(cane::dataDirectory(),ps3Source,ps3Out);
+    if(!ps3Out.empty())return Ps3HdTexturesCommand(cane::dataDirectory(),ps3Source,ps3Out,ps3Png);
     if(!dumpTexturesDir.empty())SetTextureDumpDirectory(dumpTexturesDir);
     Startup();
     if(!smokeLevel.empty()) {

@@ -6,6 +6,7 @@
 #include "shd.h"
 #include "sw.h"
 #include "../platform/platform.h"
+#include "../platform/texture_pak.h"
 
 #include <glad/glad.h>
 #define STB_IMAGE_STATIC
@@ -21,6 +22,13 @@
 #include <unordered_map>
 #include <unordered_set>
 
+#ifdef __SWITCH__
+#include "../platform/switch/job_pool.h"
+#include <atomic>
+#include <iterator>
+#include <mutex>
+#endif
+
 namespace fs = std::filesystem;
 
 namespace
@@ -33,8 +41,10 @@ uint64_t HashRgba(const std::vector<uint8_t>& ab)
 }
 
 // The replacement textures by name: the mods folder's, then the texture pack's (--texture-pack: the PS3 HD pack)
-// where the mods folder has none of that name. Scanned once.
+// where the mods folder has none of that name. Scanned once. The pack's are in its Textures.pak (their path empty),
+// else in its Textures folder (an older import's, or a pack of loose PNGs).
 std::string s_dirPack;
+cane::TexturePakReader s_pak;
 const std::unordered_map<std::string, std::string>& ModTextures()
 {
     static const std::unordered_map<std::string, std::string> s_map = [] {
@@ -50,10 +60,29 @@ const std::unordered_map<std::string, std::string>& ModTextures()
             if (c) std::printf("mods: %zu textures%s\n", c, what);
         };
         scan(g_disc.DirMods(), "");
-        scan(s_dirPack, " (texture pack)");
+        if (!s_dirPack.empty() && s_pak.Open(cane::path(s_dirPack) / "Textures.pak"))
+        {
+            size_t c = 0;
+            for (const std::string& name : s_pak.Names()) c += map.emplace(name, std::string()).second;
+            if (c) std::printf("mods: %zu textures (texture pack)\n", c);
+        }
+        else scan(s_dirPack, " (texture pack)");
         return map;
     }();
     return s_map;
+}
+
+// A replacement's PNG decoded (RGBA): from Textures.pak (an empty path), else its own file
+stbi_uc* LoadModPng(const std::string& name, const std::string& path, int* w, int* h)
+{
+    std::vector<uint8_t> ab;
+    if (path.empty()) return s_pak.Read(name, ab) ? stbi_load_from_memory(ab.data(), int(ab.size()), w, h, nullptr, 4) : nullptr;
+#ifdef __SWITCH__
+    // (one read of the whole file: the SD card's file system pays for every read, and stb_image reads 128 bytes at a time)
+    return CaneSwitch::ReadFile(path.c_str(), ab) ? stbi_load_from_memory(ab.data(), int(ab.size()), w, h, nullptr, 4) : nullptr;
+#else
+    return stbi_load(path.c_str(), w, h, nullptr, 4);
+#endif
 }
 }  // namespace
 
@@ -76,10 +105,10 @@ bool FLoadTextureMod(const std::vector<uint8_t>& rgba, int dx, int dy, std::vect
     if (it == map.end()) return false;
     const std::string& path = it->second;
     int w = 0, h = 0;
-    stbi_uc* pb = stbi_load(path.c_str(), &w, &h, nullptr, 4);
+    stbi_uc* pb = LoadModPng(it->first, path, &w, &h);
     if (!pb || w <= 0 || h <= 0 || w > 16384 || h > 16384)
     {
-        std::fprintf(stderr, "mods: cannot read %s\n", path.c_str());
+        std::fprintf(stderr, "mods: cannot read %s\n", path.empty() ? it->first.c_str() : path.c_str());
         if (pb) stbi_image_free(pb);
         return false;
     }
@@ -102,21 +131,11 @@ namespace
 {
 std::unordered_map<unsigned, double> s_settexMod;   // a texture mod's GL texture: its GPU bytes (with mips)
 double s_cbMods = 0;
-}
 
-unsigned GlTexFromMod(const std::vector<uint8_t>& rgba, int dx, int dy)
+// A texture mod's GL texture from its texels (FLoadTextureMod's, w x h, for a dx x dy original), counted in the mods'
+// GPU memory
+GLuint GlTexFromTexels(const std::vector<uint8_t>& ab, int w, int h, int dx, int dy)
 {
-    std::vector<uint8_t> ab;
-    int w = 0, h = 0;
-    if (!FLoadTextureMod(rgba, dx, dy, ab, &w, &h)) return 0;
-    GLint cMax = 0;
-    glGetIntegerv(GL_MAX_TEXTURE_SIZE, &cMax);
-    if (cMax > 0 && (w > cMax || h > cMax))
-    {
-        std::fprintf(stderr, "mods: %s is %dx%d, over this GPU's limit (%d): not used\n", SzTextureModName(rgba, dx, dy).c_str(), w, h,
-                     int(cMax));
-        return 0;
-    }
     // the full mip chain (sampled trilinear by render.cpp's mipmapped samplers, so a large replacement does not
     // shimmer at a distance); level 0 is the PNG as is
     int clevel = 1;
@@ -138,6 +157,23 @@ unsigned GlTexFromMod(const std::vector<uint8_t>& rgba, int dx, int dy)
                     s_cbMods / 1048576.0);
     return tex;
 }
+}  // namespace
+
+unsigned GlTexFromMod(const std::vector<uint8_t>& rgba, int dx, int dy)
+{
+    std::vector<uint8_t> ab;
+    int w = 0, h = 0;
+    if (!FLoadTextureMod(rgba, dx, dy, ab, &w, &h)) return 0;
+    GLint cMax = 0;
+    glGetIntegerv(GL_MAX_TEXTURE_SIZE, &cMax);
+    if (cMax > 0 && (w > cMax || h > cMax))
+    {
+        std::fprintf(stderr, "mods: %s is %dx%d, over this GPU's limit (%d): not used\n", SzTextureModName(rgba, dx, dy).c_str(), w, h,
+                     int(cMax));
+        return 0;
+    }
+    return GlTexFromTexels(ab, w, h, dx, dy);
+}
 
 bool FTextureIsMod(unsigned tex) { return tex != 0 && s_settexMod.count(tex) != 0; }
 void ForgetModTexture(unsigned tex)
@@ -147,6 +183,66 @@ void ForgetModTexture(unsigned tex)
     s_cbMods -= it->second;
     s_settexMod.erase(it);
 }
+
+#ifdef __SWITCH__
+namespace
+{
+// A replacement read and decoded by the workers, waiting for TakeTextureMods (a stale world's dropped: gen)
+struct STREAMED
+{
+    const void* key[2];
+    uint32_t gen;
+    int dx, dy, w = 0, h = 0;
+    std::vector<uint8_t> texels;
+};
+std::mutex s_mutexStreamed;
+std::vector<STREAMED> s_astreamed;
+std::atomic<uint32_t> s_genStream{0};
+CaneSwitch::JobPool* s_ppoolStream = nullptr;
+
+// (made after ModTextures' table, so the workers stop before it goes at the exit)
+CaneSwitch::JobPool& StreamPool()
+{
+    static CaneSwitch::JobPool s_pool(2);
+    s_ppoolStream = &s_pool;
+    return s_pool;
+}
+}  // namespace
+
+void RequestTextureMod(const std::vector<uint8_t>& rgba, int dx, int dy, const void* key0, const void* key1)
+{
+    if (ModTextures().empty()) return;
+    const uint32_t gen = s_genStream.load();
+    StreamPool().Push([rgba, dx, dy, key0, key1, gen] {
+        STREAMED s{{key0, key1}, gen, dx, dy};
+        if (!FLoadTextureMod(rgba, dx, dy, s.texels, &s.w, &s.h)) return;
+        std::lock_guard<std::mutex> lock(s_mutexStreamed);
+        if (gen == s_genStream.load()) s_astreamed.push_back(std::move(s));
+    });
+}
+
+void TakeTextureMods(std::vector<TEXMODREADY>& aready, size_t cbBudget)
+{
+    std::vector<STREAMED> a;
+    {
+        std::lock_guard<std::mutex> lock(s_mutexStreamed);
+        size_t n = 0, cb = 0;
+        while (n < s_astreamed.size() && (n == 0 || cb < cbBudget)) cb += s_astreamed[n++].texels.size();
+        a.assign(std::make_move_iterator(s_astreamed.begin()), std::make_move_iterator(s_astreamed.begin() + std::ptrdiff_t(n)));
+        s_astreamed.erase(s_astreamed.begin(), s_astreamed.begin() + std::ptrdiff_t(n));
+    }
+    for (const STREAMED& s : a)
+        if (s.gen == s_genStream.load()) aready.push_back({{s.key[0], s.key[1]}, GlTexFromTexels(s.texels, s.w, s.h, s.dx, s.dy)});
+}
+
+void CancelTextureMods()
+{
+    ++s_genStream;
+    if (s_ppoolStream) s_ppoolStream->Clear();
+    std::lock_guard<std::mutex> lock(s_mutexStreamed);
+    s_astreamed.clear();
+}
+#endif
 
 namespace
 {

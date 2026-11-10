@@ -1,5 +1,6 @@
 // The PS3 collection's HD assets: textures from The Sly Collection (PS3) put over the PS2 game as a
-// texture pack in the Mods layout (Textures/<W>x<H>_<hash>.png, named after the PS2 texture each one replaces).
+// texture pack (Textures.pak, or the PNG files in Textures: platform/texture_pak.h; <W>x<H>_<hash>.png, named after the
+// PS2 texture each one replaces).
 //
 // The game itself never reads PS3 data: the worlds, scripts and logic stay the PS2 disc's, so the game plays as on the
 // PS2 by construction. This tool only reads the PS3 world files to take their textures.
@@ -17,6 +18,7 @@
 #include "disc.h"
 #include "../platform/platform.h"
 #include "../platform/ps3disc.h"
+#include "../platform/texture_pak.h"
 
 #include <nlohmann/json.hpp>
 #include <stb/stb_image_write.h>
@@ -390,7 +392,7 @@ std::string SzName(const TEXIMG& img)
 }
 
 // As --dump-textures writes a texture: rows top-down, alpha doubled (the PS2's 0x80 = 255).
-bool FWritePng(const std::string& path, const TEXIMG& img)
+std::vector<uint8_t> PngRows(const TEXIMG& img)
 {
     std::vector<uint8_t> ab(img.rgba.size());
     for (int y = 0; y < img.dy; ++y)
@@ -400,7 +402,23 @@ bool FWritePng(const std::string& path, const TEXIMG& img)
                 const uint8_t v = img.rgba[(size_t(y) * img.dx + x) * 4 + k];
                 ab[(size_t(img.dy - 1 - y) * img.dx + x) * 4 + k] = k < 3 ? v : uint8_t(std::min(255, v * 2));
             }
+    return ab;
+}
+bool FWritePng(const std::string& path, const TEXIMG& img)
+{
+    const std::vector<uint8_t> ab = PngRows(img);
     return stbi_write_png(path.c_str(), img.dx, img.dy, 4, ab.data(), img.dx * 4) != 0;
+}
+// The same PNG's bytes (for Textures.pak)
+bool FEncodePng(const TEXIMG& img, std::vector<uint8_t>& png)
+{
+    const std::vector<uint8_t> ab = PngRows(img);
+    png.clear();
+    auto append = [](void* pv, void* pb, int cb) {
+        auto& out = *static_cast<std::vector<uint8_t>*>(pv);
+        out.insert(out.end(), static_cast<const uint8_t*>(pb), static_cast<const uint8_t*>(pb) + cb);
+    };
+    return stbi_write_png_to_func(append, &png, img.dx, img.dy, 4, ab.data(), img.dx * 4) != 0 && !png.empty();
 }
 
 // The kind of file starting at a sector of SLY2.WAL: worlds (LZ, "FK$X" debug names at +3), dialog (VAGp), music and
@@ -436,11 +454,12 @@ std::string SzWorldHeader(const std::vector<uint8_t>& ab)
 }  // namespace
 
 // --ps3-hd-textures SOURCE OUT (with --disc / --data-dir on the PS2 installation): every PS3 world's textures over its
-// PS2 world's, written as OUT/Textures/<the PS2 texture's mods name>.png, and OUT/ps3hd-textures.tsv (the pairs and
-// checks). SOURCE: the extracted disc (or USRDIR, or SLY2.WAL's folder), the disc image, or a .zip of it
-// (platform/ps3disc.h): SLY2.WAL is read once, in order, and each world is taken as it is read. Errors are printed as
-// "ps3hd: error: <a sentence>" (the launcher shows it), progress as "ps3hd-progress <stage> <done> <total> <item>".
-int Ps3HdTexturesCommand(const std::string& source, const std::string& out)
+// PS2 world's, written as OUT/Textures.pak (each under the PS2 texture's mods name; png: OUT/Textures/<that name>, the
+// PNG files), and OUT/ps3hd-textures.tsv (the pairs and checks). SOURCE: the extracted disc (or USRDIR, or SLY2.WAL's
+// folder), the disc image, or a .zip of it (platform/ps3disc.h): SLY2.WAL is read once, in order, and each world is
+// taken as it is read. Errors are printed as "ps3hd: error: <a sentence>" (the launcher shows it), progress as
+// "ps3hd-progress <stage> <done> <total> <item>".
+int Ps3HdTexturesCommand(const std::string& source, const std::string& out, bool png)
 {
     const auto t0 = std::chrono::steady_clock::now();
     auto fail = [](const std::string& message) {
@@ -479,8 +498,9 @@ int Ps3HdTexturesCommand(const std::string& source, const std::string& out)
             mpheader[SzWorldHeader(ab)] = {cane::utf8(p), p.stem().string()};
         }
 
-    const fs::path dirTex = cane::path(out) / "Textures";
-    fs::create_directories(dirTex);
+    fs::create_directories(cane::path(out));
+    cane::TexturePackWriter pack;
+    if (!pack.Open(cane::path(out), png)) return fail("Cannot write the texture pack in " + out + ".");
     FILE* pfTsv = std::fopen(cane::utf8(cane::path(out) / "ps3hd-textures.tsv").c_str(), "w");
     if (pfTsv) std::fprintf(pfTsv, "world\tps2_name\tps2_size\tps3_size\tbmp\tclut\tmad\tr\tresult\tpaired_by\n");
 
@@ -561,14 +581,13 @@ int Ps3HdTexturesCommand(const std::string& source, const std::string& out)
             else if (setWritten.count(name)) result = "dup";
             else
             {
-                const std::string path = cane::utf8(dirTex / name);
-                if (FWritePng(path, *pimg3))
+                std::vector<uint8_t> ab;
+                if (FEncodePng(*pimg3, ab) && pack.Add(name, ab.data(), ab.size()))
                 {
                     setWritten.insert(name);
                     ++cwritten;
                     ++cw;
-                    std::error_code ec;
-                    cbWritten += fs::file_size(cane::path(path), ec);
+                    cbWritten += ab.size();
                     result = "written";
                 }
                 else result = "write-failed";
@@ -628,5 +647,6 @@ int Ps3HdTexturesCommand(const std::string& source, const std::string& out)
     std::printf("ps3hd: %d worlds, %d HD textures written (%.1f MB), %d unchanged, %d not matching (kept PS2), %d without a PS3 "
                 "texture, %.0f s\n", cworld, cwritten, cbWritten / 1e6, csame, cmismatch, cmissing, s);
     if (!cworld) return fail("No world of the disc matched this Sly 2 installation's worlds.");
+    if (!pack.Close()) return fail("Cannot write the texture pack in " + out + ".");
     return 0;
 }

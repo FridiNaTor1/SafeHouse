@@ -10,7 +10,7 @@
 // The SD card (the folder of SafeHouse.nro, normally sdmc:/switch/SafeHouse):
 //   SafeHouse.nro          the program (the one the Homebrew Menu lists)
 //   sly1/, sly2/, sly3/    the installed games (the installers write them)
-//   user/sly1/, user/sly2/ saves and settings
+//   user/sly1/, user/sly2/ saves and settings, and the PS3 HD textures (PS3 HD/, as in a PC profile)
 #include <string>
 
 namespace CaneSwitch
@@ -59,6 +59,10 @@ struct Paths
     std::string user;       // its saves and settings: base/user/<key>
 };
 const Paths& GetPaths();
+// The game's PS3 HD textures (docs/MODDING.md: The Sly Collection's, imported by the PC launcher), its PS3 HD folder
+// copied from a PC profile to user/<game>/ (Textures.pak, platform/texture_pak.h; an older import's Textures folder is
+// read too, slowly from the SD card): the game loads them over its own (--texture-pack). "" when there are none.
+std::string Ps3HdTexturePack(const Game& game);
 
 // The start of a part: the folders and the shader set; the first call of the process also the cores, the language,
 // the system checks, SaltyNX and the file worker. A game is installed first when it is not. False: this part must end
@@ -95,6 +99,8 @@ struct LoadingBoost
 // other threads share 1 and 2.
 void PinGameThread();
 void PinSoundThread();
+// The calling thread below the game's threads' priority (background work: job_pool.h).
+void LowerThreadPriority();
 // (audio_switch.cpp) The game's audio output stopped, even when the game did not release its engine.
 void StopAudio();
 int MixerCore();

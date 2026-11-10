@@ -1128,8 +1128,8 @@ private:
         if (pack.installed) {
             bool on = pack.enabled;
             char sub[160];
-            std::snprintf(sub, sizeof(sub), "%d textures from The Sly Collection (PS3), %.0f MB%s%s", pack.textures, pack.megabytes,
-                          pack.date.empty() ? "" : ", imported ", pack.date.c_str());
+            std::snprintf(sub, sizeof(sub), "%d textures from The Sly Collection (PS3), %.0f MB%s%s%s", pack.textures, pack.megabytes,
+                          pack.png ? ", PNG files" : "", pack.date.empty() ? "" : ", imported ", pack.date.c_str());
             if (toggleRow("Use the PS3 HD textures", &on, sub)) {
                 try {
                     m_backend.setPs3HdEnabled(g, on);
@@ -1140,6 +1140,15 @@ private:
             describe("The redrawn textures of The Sly Collection (PS3), up to 4x sharper, over the original ones. The levels, "
                      "the gameplay and your Mods stay as they are; your own Mods/Textures win. Applies the next time the game starts.");
         }
+        bool png = m_backend.ps3HdPng(g);
+        if (toggleRow("Extract as PNG files", &png)) {
+            try {
+                m_backend.setPs3HdPng(g, png);
+            } catch (...) {
+            }
+        }
+        describe("The next import writes the textures as PNG files in a Textures folder, to look through or edit, instead of "
+                 "one Textures.pak file. The game reads either; the one file loads faster.");
         if (linkRow(pack.installed ? "Import again from a disc image…" : "Import PS3 HD textures (The Sly Collection)…", ".iso / .zip", nullptr, Icon::Disc))
             startPs3Pick(g, false);
         describe("Choose The Sly Collection (PS3): its disc image (.iso) or a .zip of it, read as it is, nothing is unpacked. "
@@ -1204,7 +1213,8 @@ private:
         } catch (...) {
         }
         const std::string label = std::string("PS3 HD import (") + cane::game(g).shortName + ")";
-        m_job.start(label, [this, g, source](const auto& log) { m_backend.importPs3Hd(g, source, m_job.cancel, log); });
+        const bool png = m_backend.ps3HdPng(g);
+        m_job.start(label, [this, g, source, png](const auto& log) { m_backend.importPs3Hd(g, source, png, m_job.cancel, log); });
     }
     void advancedRows(bool gameRunning) {
         bool debug = m_debug;

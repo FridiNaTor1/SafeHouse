@@ -6,7 +6,7 @@
 
 <p align="center">
   A launcher and native PC ports of the <b>Sly Cooper</b> games.<br>
-  Play from your own disc images, on Windows, Linux (including the Steam Deck) and macOS.
+  Play from your own disc images, on Windows, Linux (including the Steam Deck), macOS and the Nintendo Switch.
 </p>
 
 <p align="center">
@@ -25,8 +25,7 @@
 
 ## What it is
 
-SafeHouse installs each game from **your own PlayStation 2 disc image** and runs it as a native PC program: no
-emulator, no BIOS. **SafeHouse includes no game data.**
+SafeHouse installs each game from **your own PlayStation 2 disc image** and runs it as a native program: no emulator, no BIOS. **SafeHouse includes no game data.**
 
 | Game | Status |
 | --- | --- |
@@ -47,7 +46,7 @@ Japan. On macOS the packages carry the launcher, Sly 2 and Sly 3.
    | Linux / Steam Deck | `SafeHouse-Launcher-Linux-x86_64.AppImage` (make it executable and open it) or `...-Linux-x86_64.tar.gz` |
    | macOS | `SafeHouse.app` in a `.dmg` or `.zip` (Apple Silicon and Intel) |
 
-2. Open **SafeHouse**, pick a game, choose **Install** and select (or drag in) your disc image (`.iso`).
+2. Open **SafeHouse**, pick a game, choose **Install** and select (or drag in) your disc image (`.iso` or `.chd`).
    The image is checked first: the game, the region, the free space and whether the image is complete.
 3. Choose **Play**.
 
@@ -131,14 +130,15 @@ cmake --build --preset linux-release --parallel 4
 - **[ProjectCane](https://github.com/theclub654/ProjectCane) by theclub654:** the native PC port of Sly 1. SafeHouse
   grew out of it; without it none of this would exist.
 - **Antonio Mena:** work on the Sly 2 port and the macOS port.
+- **NaGaa95:** Sly 2 - 3 decompilation, Switch and Windows ARM port.
 - **HoshiYumeHime** (DeviantArt): the SafeHouse logo and the app icon.
 - **SteamGridDB artists** (ctwoafiveb, Benuno, AnimeFan69, Spaghetti Overlord, Pedrogon18, RealSayakaMaizono, Nuke,
   simenfje, FrostWolf): the Steam library artwork (`launcher/assets/steam/CREDITS.md`).
 - **Kenney** ([kenney.nl](https://kenney.nl)): Input Prompts (CC0), the controller button icons.
 - **SDL_GameControllerDB:** the controller mappings.
 - **The Braille Institute:** the Atkinson Hyperlegible typeface.
-- **The libraries** SafeHouse uses: GLFW, SDL2, FAudio, Dear ImGui, GLAD, GLM, stb, nlohmann/json, miniz, PicoSHA2
-  and FFmpeg. Their licences are in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) and [`licenses/`](licenses).
+- **The libraries** SafeHouse uses: GLFW, SDL2, FAudio, Dear ImGui, GLAD, GLM, stb, nlohmann/json, miniz, PicoSHA2,
+  libchdr and FFmpeg. Their licences are in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) and [`licenses/`](licenses).
 
 And at the root of the Sly 2 port: the **[Sly 2 decompilation](https://github.com/Komasia/sly2-decomp)**.
 
