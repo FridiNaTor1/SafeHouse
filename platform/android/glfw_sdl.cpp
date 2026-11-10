@@ -124,7 +124,9 @@ void error(int code, const char* detail) {
     if (errorCallback) errorCallback(code,lastError.c_str());
 }
 void useTouchControls(bool visible) {
-    if(touchControlsKnown && touchControlsVisible==visible)return;
+    // (the pad's own state, which Java also changes when a device is plugged in or removed, decides: a stale
+    // copy here once left the pad hidden for good)
+    if(touchControlsKnown && touchControlsVisible==visible && cane::android::touchState().active==visible)return;
     touchControlsKnown=true;touchControlsVisible=visible;
     try{cane::android::setTouchControlsVisible(visible);}
     catch(const std::exception& failure){error(GLFW_PLATFORM_ERROR,failure.what());}

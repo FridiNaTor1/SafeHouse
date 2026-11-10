@@ -583,11 +583,16 @@ void CycleControls(MENUENT& e)
         if (!sly2actions::profile.readOnly) {
             sly2actions::profile.enabled = !sly2actions::profile.enabled;
             sly2actions::Save(cane::userDirectory());
-            if (PAGE* pg = PpageCur()) for (MENUENT& row : pg->aent)
-                if (row.id == NID_KeyboardPage || row.id == NID_ActionDevices) {
-                    row.id = sly2actions::profile.enabled ? NID_ActionDevices : NID_KeyboardPage;
-                    row.pfnSelect = sly2actions::profile.enabled ? PFN_ActionDevices : PFN_NativeKeyboardPage;
+            // (the devices row exists only while the advanced mapping is on: the last row of the page)
+            if (PAGE* pg = PpageCur()) {
+                std::erase_if(pg->aent, [](const MENUENT& row) { return row.id == NID_KeyboardPage || row.id == NID_ActionDevices; });
+                if (sly2actions::profile.enabled) {
+                    MENUENT devices;
+                    devices.id = NID_ActionDevices;
+                    devices.pfnSelect = PFN_ActionDevices;
+                    pg->aent.push_back(devices);
                 }
+            }
         }
         return;
     case NID_ResetActions:
@@ -1081,6 +1086,8 @@ std::vector<MENUENT> AentControls()
     for (int id = NID_PromptStyle; id <= NID_KeyboardPage; ++id)
     {
         if (id == NID_InvertY) continue;
+        // (the keys are bound on the Remap page; this row is the advanced mapping's devices, only while that is on)
+        if (id == NID_KeyboardPage && !sly2actions::profile.enabled) continue;
         MENUENT e;
         e.id = id == NID_InvertX ? NID_InvertPage : id;   // (the mouse's inversion: on Invert Controls..., with the rest)
         e.pfnSelect = id == NID_KeyboardPage ? PFN_NativeKeyboardPage : id == NID_InvertX ? PFN_NativeInvertPage : PFN_NativeControls;

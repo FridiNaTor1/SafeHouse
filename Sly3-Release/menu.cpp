@@ -852,6 +852,7 @@ std::vector<MENUENT> AentControls()
     for (int id = NID_PromptStyle; id <= NID_KeyboardPage; ++id)
     {
         if (id == NID_InvertY || id == NID_HackMouse) continue;   // (no hacking minigame mouse aim in Sly 3 yet)
+        if (id == NID_KeyboardPage) continue;   // (the keys are bound on the Remap page)
         MENUENT e;
         e.id = id == NID_InvertX ? NID_InvertPage : id;
         e.pfnSelect = id == NID_KeyboardPage ? PFN_NativeKeyboardPage : id == NID_InvertX ? PFN_NativeInvertPage : PFN_NativeControls;

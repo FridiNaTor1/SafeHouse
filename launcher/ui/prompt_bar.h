@@ -161,6 +161,10 @@ namespace detail {
 inline float hints(ImDrawList* drawList, ImVec2 rightBaseline, float iconPx, std::span<const Hint> hints, ImU32 text,
                    ImU32 muted, input::Family family, bool draw) {
     if (input::tracker().lastWasMouse()) return 0.0f;
+#if defined(CANE_ANDROID)
+    // (a phone or tablet before any key or controller was used: touch needs no key hints)
+    if (input::tracker().idle()) return 0.0f;
+#endif
     const bool keyboard = family == input::Family::Keyboard;
     const float iconGap = std::round(iconPx * 0.3f), hintGap = std::round(iconPx * 0.9f);
     float x = rightBaseline.x;

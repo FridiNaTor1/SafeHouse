@@ -46,7 +46,7 @@ final class TouchControls extends View implements InputManager.InputDeviceListen
     private final float[] axes = {0, 0, 0, 0, -1, -1};
     private final boolean[] buttons = new boolean[TouchLayout.BUTTONS];
     private final boolean[] pressedBefore = new boolean[TouchLayout.BUTTONS];
-    private boolean physical, editing;
+    private boolean physical, editing, detected;
 
     // Edit mode.
     private static final int DRAG_NONE = 0, DRAG_GROUP = 1, DRAG_PANEL = 2, DRAG_SIZE = 3, DRAG_OPACITY = 4,
@@ -68,7 +68,7 @@ final class TouchControls extends View implements InputManager.InputDeviceListen
         load();
         manager = (InputManager)context.getSystemService(Context.INPUT_SERVICE);
         if (manager != null) manager.registerInputDeviceListener(this, null);
-        detectPhysicalInput();
+        detectPhysicalInput(true);
     }
 
     // ---- Settings ------------------------------------------------------
@@ -90,25 +90,46 @@ final class TouchControls extends View implements InputManager.InputDeviceListen
     }
 
     // ---- Visibility ----------------------------------------------------
-    private void detectPhysicalInput() {
+    // Physical input that replaces the on-screen pad: a gamepad (a handheld's built-in one included), or an
+    // external mouse, touchpad or alphabetic keyboard (USB / Bluetooth). A phone's own devices do not count: the
+    // volume and power keys are keyboards, and a built-in pen or touchpad reports itself as a mouse.
+    private static boolean isGamepad(InputDevice device) {
+        int sources = device.getSources();
+        boolean pad = (sources & InputDevice.SOURCE_GAMEPAD) == InputDevice.SOURCE_GAMEPAD;
+        boolean stick = (sources & InputDevice.SOURCE_JOYSTICK) == InputDevice.SOURCE_JOYSTICK;
+        if (!pad && !stick) return false;
+        if (device.isExternal()) return true;
+        // (built in: some phones' sensors claim to be gamepads; a real pad has face buttons or stick axes)
+        boolean[] keys = device.hasKeys(KeyEvent.KEYCODE_BUTTON_A, KeyEvent.KEYCODE_BUTTON_B);
+        boolean buttons = keys.length == 2 && keys[0] && keys[1];
+        boolean axes = device.getMotionRange(MotionEvent.AXIS_X, InputDevice.SOURCE_JOYSTICK) != null &&
+            device.getMotionRange(MotionEvent.AXIS_Y, InputDevice.SOURCE_JOYSTICK) != null;
+        return buttons || axes;
+    }
+    private void detectPhysicalInput() { detectPhysicalInput(false); }
+    private void detectPhysicalInput(boolean first) {
         boolean found = false;
         for (int id : InputDevice.getDeviceIds()) {
             InputDevice device = InputDevice.getDevice(id);
             if (device == null || device.isVirtual()) continue;
             int sources = device.getSources();
-            boolean gamepad = (sources & InputDevice.SOURCE_GAMEPAD) == InputDevice.SOURCE_GAMEPAD ||
-                (sources & InputDevice.SOURCE_JOYSTICK) == InputDevice.SOURCE_JOYSTICK;
-            boolean pointer = (sources & InputDevice.SOURCE_MOUSE) == InputDevice.SOURCE_MOUSE ||
-                (sources & InputDevice.SOURCE_TOUCHPAD) == InputDevice.SOURCE_TOUCHPAD;
-            // Volume/power buttons are keyboard devices too. Only a real external
-            // alphabetic keyboard should hide the handheld controls at connection.
+            boolean pointer = device.isExternal() &&
+                ((sources & InputDevice.SOURCE_MOUSE) == InputDevice.SOURCE_MOUSE ||
+                 (sources & InputDevice.SOURCE_TOUCHPAD) == InputDevice.SOURCE_TOUCHPAD);
             boolean keyboard = device.isExternal() &&
                 device.getKeyboardType() == InputDevice.KEYBOARD_TYPE_ALPHABETIC;
-            found |= gamepad || pointer || keyboard;
+            found |= isGamepad(device) || pointer || keyboard;
         }
-        setInputFamilyVisible(!found);
+        // (a device's own change events repeat on some phones: only a change of the answer switches the pad)
+        if (!first && found == detected) return;
+        detected = found;
+        applyInputFamilyVisible(!found);
     }
     void setInputFamilyVisible(boolean visible) {
+        if (physical == !visible) return;   // (unchanged: the touches held now stay held)
+        applyInputFamilyVisible(visible);
+    }
+    private void applyInputFamilyVisible(boolean visible) {
         physical = !visible;
         if (physical) editing = false;
         release(); setVisibility(visible ? View.VISIBLE : View.GONE); invalidate();

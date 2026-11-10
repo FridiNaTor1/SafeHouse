@@ -709,6 +709,8 @@ public:
     }
     bool lastWasVr() const { return m_forced ? isVrFamily(*m_forced) : m_device == Device::Vr; }
     bool lastWasMouse() const { return !m_forced && m_device == Device::Mouse; }
+    // Nothing was used yet (and no gamepad was there to adopt).
+    bool idle() const { return !m_forced && m_device == Device::None; }
     // Applies brand::testPromptFamilyEnv when set to a known family; input
     // then no longer changes family(). Returns whether a family was forced.
     bool forceFromEnv() {
