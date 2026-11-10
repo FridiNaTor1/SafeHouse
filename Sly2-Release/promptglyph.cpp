@@ -25,6 +25,9 @@ struct GLYPHACTION { char ch; PCACTION action; };
 constexpr GLYPHACTION s_aglyphaction[] = {
     {'X', PCA_Cross}, {'O', PCA_Circle}, {'S', PCA_Square}, {'T', PCA_Triangle},
     {'L', PCA_L1}, {'R', PCA_R1}, {'l', PCA_L2}, {'r', PCA_R2}, {'!', PCA_Start}, {'_', PCA_Select},
+    // (lang: the words L3 / R3 in the text, StrPromptButtonWords) the sticks pressed: pseudo glyphs the icon font
+    // draws as its sticks '(' / ')' (screenobj.cpp FONTBRX), resolved to the button / key bound to L3 / R3
+    {'{', PCA_L3}, {'}', PCA_R3},
 };
 
 int ActionFromGlyph(char ch)
@@ -121,9 +124,13 @@ std::string StrPromptButtonWords(const std::string& text, int textId)
     const bool fireBriefing = sly2actions::profile.enabled &&
         (textId == s_idTurretBriefing || textId == s_idTankBriefing);
     if (text.find("START") == std::string::npos && text.find("SELECT") == std::string::npos &&
+        text.find("L3") == std::string::npos && text.find("R3") == std::string::npos &&
         !(fireBriefing && text.find("R1") != std::string::npos)) return text;
     struct WORD { const char* sz; size_t cch; const char* szIcon; bool briefingOnly = false; };
-    static constexpr WORD s_aword[] = {{"START", 5, "&2!&."}, {"SELECT", 6, "&2_&."}, {"R1", 2, "&2R&.", true}};
+    // (lang 2026-11-10: L3 / R3 too, the stick buttons every language names by their code: "the L3 button", "Touche
+    // L3 :", "L3-Taste", "R3 tasten", ...)
+    static constexpr WORD s_aword[] = {{"START", 5, "&2!&."}, {"SELECT", 6, "&2_&."}, {"L3", 2, "&2{&."}, {"R3", 2, "&2}&."},
+                                       {"R1", 2, "&2R&.", true}};
     auto fLetter = [](unsigned char ch) { return std::isalnum(ch) || ch >= 0x80; };
     std::string out;
     out.reserve(text.size());

@@ -32,6 +32,15 @@
 #include "prompts_ps4_png.h"
 #include "prompts_ps5_png.h"
 #include "prompts_steamcontroller2026_png.h"
+#include "prompts_gamecube_png.h"
+#include "prompts_switch2_png.h"
+#include "prompts_wii_png.h"
+#include "prompts_wiiu_png.h"
+#include "prompts_metaquest_png.h"
+#include "prompts_valveindex_png.h"
+#include "prompts_steamframe_png.h"
+#include "prompts_vivewand_png.h"
+#include "prompts_pico_png.h"
 #include "prompts_devices_png.h"
 #include "gamecontrollerdb_txt.h"
 // Declarations (checked against the definitions below).
@@ -55,6 +64,15 @@ const Blob kAtlases[] = {
     { cane_prompts_ps4, sizeof(cane_prompts_ps4) },
     { cane_prompts_ps5, sizeof(cane_prompts_ps5) },
     { cane_prompts_steamcontroller2026, sizeof(cane_prompts_steamcontroller2026) },
+    { cane_prompts_gamecube, sizeof(cane_prompts_gamecube) },
+    { cane_prompts_switch2, sizeof(cane_prompts_switch2) },
+    { cane_prompts_wii, sizeof(cane_prompts_wii) },
+    { cane_prompts_wiiu, sizeof(cane_prompts_wiiu) },
+    { cane_prompts_metaquest, sizeof(cane_prompts_metaquest) },
+    { cane_prompts_valveindex, sizeof(cane_prompts_valveindex) },
+    { cane_prompts_steamframe, sizeof(cane_prompts_steamframe) },
+    { cane_prompts_vivewand, sizeof(cane_prompts_vivewand) },
+    { cane_prompts_pico, sizeof(cane_prompts_pico) },
 };
 constexpr int kAtlasCount = static_cast<int>(sizeof(kAtlases) / sizeof(kAtlases[0]));
 } // namespace

@@ -170,7 +170,14 @@ add_custom_command(OUTPUT "${gen}/sly2/sly2n_logo.h"
   DEPENDS "${root}/launcher/assets/games/sly2-logo.png" "${root}/cmake/switch_embed.py" VERBATIM)
 # the controller prompt atlases and SDL_GameControllerDB (prompt_data.cpp)
 set(prompt_headers "")
-foreach(family keyboard playstation xbox nintendo steamdeck steamcontroller ps4 ps5 steamcontroller2026 devices)
+# (every atlas in assets/prompts, as prompt_data.cpp includes them all)
+file(GLOB prompt_pngs RELATIVE "${root}/assets/prompts" "${root}/assets/prompts/prompts_*.png")
+set(prompt_families "")
+foreach(png ${prompt_pngs})
+  string(REGEX REPLACE "^prompts_(.*)\\.png$" "\\1" family "${png}")
+  list(APPEND prompt_families "${family}")
+endforeach()
+foreach(family ${prompt_families})
   set(header "${gen}/prompts/prompts_${family}_png.h")
   add_custom_command(OUTPUT "${header}"
     COMMAND "${Python3_EXECUTABLE}" "${root}/cmake/switch_embed.py" "${header}" cane_prompts_${family} "${root}/assets/prompts/prompts_${family}.png"

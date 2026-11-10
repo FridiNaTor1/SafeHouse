@@ -42,6 +42,10 @@ inline fs::path absolutePath(const fs::path& p) {
  return fs::absolute(p);
 }
 inline fs::path executableDirectory() {
+#if defined(CANE_ANDROID)
+ // Android: the app's native library folder (the programs are lib<name>.so there; android_app.cpp sets it)
+ if(const char* libraries=std::getenv("SAFEHOUSE_ANDROID_LIBS");libraries && *libraries) return path(libraries);
+#endif
 #ifdef _WIN32
  std::wstring p(32768,L'\0'); auto n=GetModuleFileNameW(nullptr,p.data(),static_cast<DWORD>(p.size()));
  if(n && n<p.size()) {p.resize(n);return fs::path(p).parent_path();}

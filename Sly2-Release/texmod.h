@@ -7,6 +7,7 @@
 // original is bilinear; point-sampled textures stay point-sampled when magnified).
 
 #include <cstdint>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -30,6 +31,11 @@ int DumpTexturesCommand(const std::string& dir, const std::string& world);
 // written once. fProgress: "textures I N WORLD" lines on stdout (cane-extractor, the launcher). Returns the count
 // written, or -1.
 int ExportAllTextures(const std::string& dir, bool fProgress);
+// The world just loaded's textures (the renderer's tables) into dir, each PNG written by the pool (null: at once);
+// setName: the names written so far (a texture several worlds draw is written once). The converter calls it after
+// each world of its crawl (convert.cpp), so no world is loaded twice. Returns the PNGs written or queued.
+class CWorkPool;
+int DumpLoadedWorldTextures(const std::string& dir, std::set<std::string>& setName, CWorkPool* ppool);
 // --export-textures without --convert: every world's textures into DIR (main.cpp: --out, else <installation>/Textures), written into
 // DIR.partial and renamed when complete (an existing DIR is replaced).
 int ExportTexturesCommand(const std::string& dir);

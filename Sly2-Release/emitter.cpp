@@ -4,6 +4,7 @@
 // has no port (the option getters / setters 0x258658..0x258EC8, 0x2584A8, 0x2586D8, disassembled), in plain
 // IEEE float.
 
+#include "fastpaths.h"
 #include "emitter.h"
 #include "worldglobals.h"
 #include "texmod.h"
@@ -2649,7 +2650,7 @@ void DrawParticles(const glm::mat4& matWorldToClip, const glm::vec3& posCamera, 
     glDepthFunc(GL_GREATER);   // TEST 0x7180B: ZTST GREATER
     glEnable(GL_BLEND);
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_FALSE);
-#ifdef __SWITCH__
+#if SLY2_FASTPATHS
     // (the Switch: the vertices and the matrices kept from one system and frame to the next, not allocated anew for
     // every particle system every frame)
     static std::vector<PVTX> av;
@@ -2661,7 +2662,7 @@ void DrawParticles(const glm::mat4& matWorldToClip, const glm::vec3& posCamera, 
     {
         if (pp->cparticle <= 0) continue;
         // 0x13A1E8: once per visible member instance of the group, or once untransformed
-#ifdef __SWITCH__
+#if SLY2_FASTPATHS
         amat.clear();
 #else
         std::vector<glm::mat4> amat;

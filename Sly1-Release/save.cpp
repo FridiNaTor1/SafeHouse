@@ -683,7 +683,7 @@ void TestSaveCompatibility(const std::filesystem::path& fixtures)
     static_assert(sizeof(GS)==6656 && alignof(GS)==4 && sizeof(WS)==1100 && sizeof(LS)==120);
     static_assert(offsetof(GS,aws)==16 && offsetof(GS,gameWorldCur)==6616);
     static_assert(sizeof(SaveFileHeader)==20 && sizeof(cane::settings::Header)==20);
-    static_assert(sizeof(cane::settings::legacy::V8)==196 && sizeof(VIDEOSAVESETTINGS)==340);
+    static_assert(sizeof(cane::settings::legacy::V8)==196 && sizeof(VIDEOSAVESETTINGS)==348 && offsetof(VIDEOSAVESETTINGS,fastShadows)==340 && offsetof(VIDEOSAVESETTINGS,renderer)==344);
     static_assert(offsetof(VIDEOSAVESETTINGS,hackMouseAim)==288 && offsetof(VIDEOSAVESETTINGS,debugKeys)==292 && offsetof(VIDEOSAVESETTINGS,controllerVibration)==296 && offsetof(VIDEOSAVESETTINGS,longShadows)==300);
     static_assert(offsetof(VIDEOSAVESETTINGS,padInvertCameraX)==304 && offsetof(VIDEOSAVESETTINGS,mouseInvertTurretY)==324);
     static_assert(offsetof(VIDEOSAVESETTINGS,alwaysOriginalPsPrompts)==200 && offsetof(VIDEOSAVESETTINGS,instantSkipCutscenes)==284);

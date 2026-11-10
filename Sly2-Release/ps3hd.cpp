@@ -435,6 +435,10 @@ std::string SzWorldHeader(const std::vector<uint8_t>& ab)
 }
 }  // namespace
 
+// (lang, ps3lang.cpp) the PS3 archive's world decompression and file kinds, shared
+std::vector<uint8_t> Ps3DecompressWorld(const std::vector<uint8_t>& in) { return DecompressTolerant(in); }
+char Ps3KindOfSector(const uint8_t* p) { return KindOfSector(p); }
+
 // --ps3-hd-textures SOURCE OUT (with --disc / --data-dir on the PS2 installation): every PS3 world's textures over its
 // PS2 world's, written as OUT/Textures/<the PS2 texture's mods name>.png, and OUT/ps3hd-textures.tsv (the pairs and
 // checks). SOURCE: the extracted disc (or USRDIR, or SLY2.WAL's folder), the disc image, or a .zip of it

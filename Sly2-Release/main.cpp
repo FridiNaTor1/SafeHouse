@@ -1,6 +1,9 @@
 // Sly2-Release: Sly 2: Band of Thieves as a native PC port (see PLAN.md).
 // Development commands for now; the game loop comes with milestone M2/M3.
 
+#include "renderer.h"
+#include "audio.h"
+#include "../platform/audio_devices.h"
 #include "rumble.h"
 #include "actioninput.h"
 #include "bis.h"
@@ -9,6 +12,8 @@
 #include "cls.h"
 #include "disc.h"
 #include "convert.h"
+#include "langstore.h"
+#include "worldparts.h"
 #include "texmod.h"
 #include "region.h"
 #include "readtrace.h"
@@ -29,6 +34,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <nlohmann/json.hpp>
 #include <functional>
 #include <memory>
 #include <map>
@@ -241,8 +247,9 @@ void DumpObjects(const SW* psw, FILE* pf)
 int PhysCheckMain(const std::vector<std::string>& args);  // physcheck.cpp
 
 #include "pcguard.h"
+#include "vr.h"
 
-#if defined(__linux__) || defined(__APPLE__)
+#if (defined(__linux__) && !defined(__ANDROID__)) || defined(__APPLE__)
 #include <csignal>
 #include <execinfo.h>
 #include <unistd.h>
@@ -270,7 +277,7 @@ void OnCrashSignal(int sig)
 
 int main(int argc, char** argv)
 {
-#if defined(__linux__) || defined(__APPLE__)
+#if (defined(__linux__) && !defined(__ANDROID__)) || defined(__APPLE__)
     std::signal(SIGSEGV, OnCrashSignal);
     std::signal(SIGABRT, OnCrashSignal);
 #endif
@@ -288,8 +295,9 @@ int main(int argc, char** argv)
     bool fVerbose = false;
     int idSong = -1, istem = 1;
     double tSeconds = -1.0;  // (unset: 30 s for the sound commands, the whole movie)
-    std::string modsDir, texturePack;
-    bool fModsGiven = false;
+    std::string modsDir, texturePack, languagesDir;
+    bool fModsGiven = false, fLanguagesGiven = false;
+    LANGIMPORT limport;
     const char* command = nullptr;
     const char* arg = nullptr;
     int filter = -2;
@@ -299,8 +307,16 @@ int main(int argc, char** argv)
     VIEWOPTS vo;
     std::string cmRanges = "2DDED0+6A0,2DFBC0+2240,FB1580+1100,FB37E0+80,140C9F0+600,1486000+3400";
     bool fCmFree = false;
-    struct { bool fAspect = false; DISPASPECT aspect = DISPASPECT_Fit; int internalHeight = -1, frameRate = -1, vsync = -1, window = -1, wideBackgrounds = -1, hqLogo = -1, longShadows = -1; float drawDistance = -1; } dispo;
+    struct { bool fAspect = false; DISPASPECT aspect = DISPASPECT_Fit; int internalHeight = -1, frameRate = -1, vsync = -1, window = -1, wideBackgrounds = -1, hqLogo = -1, longShadows = -1, fastShadows = -1, msaa = -1; float drawDistance = -1; } dispo;
     std::vector<std::string> rest, physArgs;
+    RENDERER rendererArg = RENDERER::Auto;
+    bool fRendererArg = false;
+    // (vr.h) SLY2N_VR=1 as --vr; Android: a headset's runtime is tried always (none: the game as on a phone)
+#if defined(__ANDROID__)
+    vr::Request(true);
+#endif
+    // (SLY2N_VR=0: no VR, also on Android: the flat game on a headset, device tests)
+    if (const char* sz = std::getenv("SLY2N_VR"); sz) vr::Request(std::atoi(sz) != 0);
     for (int i = 1; i < argc; ++i)
     {
         if (!std::strcmp(argv[i], "--disc") && i + 1 < argc) disc = argv[++i];
@@ -309,7 +325,7 @@ int main(int argc, char** argv)
         // the launcher's runtime contract: --data-dir <installations/sly2> --user-dir <profile>/sly2
         else if (!std::strcmp(argv[i], "--data-dir") && i + 1 < argc) cane::dataOverride = cane::absolutePath(cane::path(argv[++i]));
         else if (!std::strcmp(argv[i], "--user-dir") && i + 1 < argc) cane::userOverride = cane::absolutePath(cane::path(argv[++i]));
-        // display options for this run (over system_settings.dat; display.h)
+        // display options for this run (over Settings.ini; display.h)
         else if (!std::strcmp(argv[i], "--aspect") && i + 1 < argc)
         {
             if (!FParseAspect(argv[++i], dispo.aspect)) { std::fprintf(stderr, "bad --aspect (fit, 4:3, 16:9, 16:10, ps2-4:3, ps2-16:9)\n"); return 2; }
@@ -322,7 +338,13 @@ int main(int argc, char** argv)
         else if (!std::strcmp(argv[i], "--wide-backgrounds") && i + 1 < argc) dispo.wideBackgrounds = std::atoi(argv[++i]);   // (the launcher's option)
         else if (!std::strcmp(argv[i], "--hq-logo") && i + 1 < argc) dispo.hqLogo = std::atoi(argv[++i]);   // (QoL: the launcher's logo in the front end)
         else if (!std::strcmp(argv[i], "--long-shadows") && i + 1 < argc) dispo.longShadows = std::atoi(argv[++i]);   // (QoL: display.h fLongShadows)
+        else if (!std::strcmp(argv[i], "--fast-shadows") && i + 1 < argc) dispo.fastShadows = std::atoi(argv[++i]);   // (low-end: display.h fFastShadows)
         else if (!std::strcmp(argv[i], "--window-mode") && i + 1 < argc) dispo.window = std::atoi(argv[++i]);
+        else if (!std::strcmp(argv[i], "--renderer") && i + 1 < argc)   // (renderer.h: auto, vulkan, opengl)
+        {
+            if (!FParseRenderer(argv[++i], &rendererArg)) { std::fprintf(stderr, "bad --renderer (auto, vulkan, opengl)\n"); return 2; }
+            fRendererArg = true;
+        }
         else if (!std::strcmp(argv[i], "--out") && i + 1 < argc) out = argv[++i];
         else if (!std::strcmp(argv[i], "--list-keys")) command = "list-keys";
         else if (!std::strcmp(argv[i], "--vt-dump") && i + 1 < argc) { command = "vt-dump"; arg = argv[++i]; }  // (vtaudit.cpp)
@@ -331,7 +353,10 @@ int main(int argc, char** argv)
         else if (!std::strcmp(argv[i], "--blends") || !std::strcmp(argv[i], "--ai") || !std::strcmp(argv[i], "--ai-carry")) {}  // (anim-ref)
         else if (!std::strcmp(argv[i], "--splice-selftest")) command = "splice-selftest";
         else if (!std::strcmp(argv[i], "--action-input-selftest")) command = "action-input-selftest";
+        else if (!std::strcmp(argv[i], "--settings-selftest")) command = "settings-selftest";
         else if (!std::strcmp(argv[i], "--rumble-selftest")) command = "rumble-selftest";
+        else if (!std::strcmp(argv[i], "--audio-selftest")) { command = "audio-selftest"; if (i + 1 < argc && argv[i + 1][0] != '-') arg = argv[++i]; }
+        else if (!std::strcmp(argv[i], "--list-audio-devices")) command = "list-audio-devices";
         else if (!std::strcmp(argv[i], "--parse-splice") && i + 1 < argc) { command = "parse-splice"; arg = argv[++i]; }
         else if (!std::strcmp(argv[i], "--eval-splice") && i + 1 < argc) { command = "eval-splice"; arg = argv[++i]; }
         else if (!std::strcmp(argv[i], "--dump-world") && i + 1 < argc) { command = "dump-world"; arg = argv[++i]; }
@@ -350,6 +375,7 @@ int main(int argc, char** argv)
         }
         else if (!std::strcmp(argv[i], "--frames") && i + 1 < argc) { go.cframe = std::atoi(argv[++i]); fGame = true; }
         else if (!std::strcmp(argv[i], "--headless")) { go.fHeadless = true; fGame = true; }
+        else if (!std::strcmp(argv[i], "--vr")) vr::Request(true);   // (vr.h: a headset through OpenXR, if there is one)
         else if (!std::strcmp(argv[i], "--fixed-dt")) go.fFixedDt = true;
         else if (!std::strcmp(argv[i], "--save") && i + 1 < argc) go.save = argv[++i];
         else if (!std::strcmp(argv[i], "--print-progress") && i + 1 < argc) { go.aprintProgress.push_back(argv[++i]); fGame = true; }
@@ -388,7 +414,7 @@ int main(int argc, char** argv)
         else if (!std::strcmp(argv[i], "--camera-ram") && i + 1 < argc) vo.cameraRam = argv[++i];
         else if (!std::strcmp(argv[i], "--loadmaps") && i + 1 < argc) vo.loadmaps = argv[++i];
         else if (!std::strcmp(argv[i], "--size") && i + 1 < argc) std::sscanf(argv[++i], "%dx%d", &vo.width, &vo.height);
-        else if (!std::strcmp(argv[i], "--msaa") && i + 1 < argc) vo.msaa = std::atoi(argv[++i]);
+        else if (!std::strcmp(argv[i], "--msaa") && i + 1 < argc) dispo.msaa = vo.msaa = std::atoi(argv[++i]);   // (the game: over Settings.ini)
         else if (!std::strcmp(argv[i], "--no-cel")) vo.fNoCel = true;
         else if (!std::strcmp(argv[i], "--from-map")) vo.fFromMap = true;
         else if (!std::strcmp(argv[i], "--no-fog")) vo.fNoFog = true;
@@ -414,12 +440,24 @@ int main(int argc, char** argv)
         else if (!std::strcmp(argv[i], "--list-movies")) command = "list-movies";
         else if (!std::strcmp(argv[i], "--convert") && i + 1 < argc) { command = "convert"; arg = argv[++i]; }
         else if (!std::strcmp(argv[i], "--convert-list")) command = "convert-list";
+        else if (!std::strcmp(argv[i], "--whole-worlds")) g_fConvertWholeWorlds = true;
+        else if (!std::strcmp(argv[i], "--world-unpack") && i + 2 < argc) { command = "world-unpack"; arg = argv[++i]; arg2 = argv[++i]; }
+        else if (!std::strcmp(argv[i], "--world-pack") && i + 2 < argc) { command = "world-pack"; arg = argv[++i]; arg2 = argv[++i]; }
+        else if (!std::strcmp(argv[i], "--world-check")) command = "world-check";
         else if (!std::strcmp(argv[i], "--ps2-formats")) g_fConvertPs2 = true;
         else if (!std::strcmp(argv[i], "--flac")) g_nConvertFlac = 1;
         else if (!std::strcmp(argv[i], "--no-flac")) g_nConvertFlac = 0;
         else if (!std::strcmp(argv[i], "--export-textures")) { g_fConvertTextures = true; fExportTextures = true; }
         else if (!std::strcmp(argv[i], "--no-export-textures")) g_fConvertTextures = false;
         else if (!std::strcmp(argv[i], "--dump-text") && i + 1 < argc) { command = "dump-text"; arg = argv[++i]; }
+        // (languages, langstore.h) the shared languages folder; importing a disc's / an installation's languages into it
+        else if (!std::strcmp(argv[i], "--languages-dir") && i + 1 < argc) { languagesDir = argv[++i]; fLanguagesGiven = true; }
+        else if (!std::strcmp(argv[i], "--import-languages") && i + 1 < argc) { command = "import-languages"; limport.dirOut = argv[++i]; }
+        else if (!std::strcmp(argv[i], "--move-languages")) limport.fMove = true;
+        else if (!std::strcmp(argv[i], "--replace-languages")) limport.fReplace = true;
+        else if (!std::strcmp(argv[i], "--only-language") && i + 1 < argc) limport.alangOnly.emplace_back(argv[++i]);
+        else if (!std::strcmp(argv[i], "--list-languages")) command = "list-languages";
+        else if (!std::strcmp(argv[i], "--import-ps3-languages") && i + 2 < argc) { command = "import-ps3-languages"; arg = argv[++i]; arg2 = argv[++i]; }
         else if (!std::strcmp(argv[i], "--dump-textures") && i + 2 < argc) { command = "dump-textures"; arg = argv[++i]; arg2 = argv[++i]; }
         else if (!std::strcmp(argv[i], "--ps3-hd-textures") && i + 2 < argc) { command = "ps3-hd-textures"; arg = argv[++i]; arg2 = argv[++i]; }
         else if (!std::strcmp(argv[i], "--phys-check"))  // physcheck.cpp: FUNC PREFIX [COUNT] (the rest of the line)
@@ -437,8 +475,20 @@ int main(int argc, char** argv)
     cane::configureRuntime(rest);
     if (command && !std::strcmp(command, "test-load")) return TestLoad(arg, arg2, fVerbose);
     if (command && !std::strcmp(command, "splice-selftest")) return SpliceSelfTestCommand();
+    // (worldparts.h: a world's parts packed into one file: no game data needed)
+    if (command && !std::strcmp(command, "world-pack")) return WorldPackCommand(arg, arg2);
     if (command && !std::strcmp(command, "action-input-selftest")) return sly2actions::SelfTest();
+    if (command && !std::strcmp(command, "settings-selftest")) { int SettingsSelfTest(); return SettingsSelfTest(); }   // (settings_test.cpp)
     if (command && !std::strcmp(command, "rumble-selftest")) return RumbleSelfTestCommand();
+    // (audio.h, notes/AUDIO_2026-11-10.md) the devices by name, their fallback / recovery, the USB headset's microphone
+    if (command && !std::strcmp(command, "audio-selftest")) { int AudioSelfTest(const char*); return AudioSelfTest(arg ? arg : ""); }
+    if (command && !std::strcmp(command, "list-audio-devices"))
+    {
+        const cane::audio::DeviceList list = ListAudioDevices();
+        for (const std::string& n : list.outputs) std::printf("output: %s\n", n.c_str());
+        for (const std::string& n : list.inputs) std::printf("input: %s\n", n.c_str());
+        return list.available ? 0 : 1;
+    }
     std::string error;
     // the mods folder: --mods DIR, SLY2_MODS, else <user dir>/Mods; empty: none
     if (!fModsGiven)
@@ -448,8 +498,47 @@ int main(int argc, char** argv)
     }
     g_disc.SetModsDirectory(modsDir);
     SetTexturePackDirectory(texturePack);
+    // the shared languages folder (langstore.h): --languages-dir DIR, SLY2_LANGUAGES, else sly2-languages beside a
+    // converted installation (the launcher's installations/sly2, installations/sly2-europe, ...); none for a disc image
+    if (!fLanguagesGiven)
+    {
+        if (const char* sz = std::getenv("SLY2_LANGUAGES")) languagesDir = sz;
+        else if (std::error_code ec; std::filesystem::is_directory(cane::path(DiscPath(disc)), ec))
+        {
+            // (the folder the installation's languages went to, installation.json "languages_dir"; else beside it)
+            const auto dir = std::filesystem::absolute(cane::path(DiscPath(disc)));
+            languagesDir = cane::utf8(dir.parent_path() / "sly2-languages");
+            try
+            {
+                std::ifstream in(dir / "installation.json");
+                const nlohmann::json j = in ? nlohmann::json::parse(in) : nlohmann::json();
+                if (j.is_object() && j.contains("languages_dir") && j.at("languages_dir").is_string())
+                    languagesDir = j.at("languages_dir").get<std::string>();
+            }
+            catch (...) {}
+        }
+    }
+    g_disc.SetLanguagesDirectory(languagesDir);
     if (!g_disc.FOpen(DiscPath(disc), error)) { std::fprintf(stderr, "%s\n", error.c_str()); return 1; }
+    InitLanguageStore();   // (langstore.h: the other regions' languages, imports, mods)
     InitLanguage();   // (region.h: the disc's languages, the PC's language)
+    if (command && !std::strcmp(command, "list-languages")) return ListLanguagesCommand();
+    if (command && !std::strcmp(command, "import-ps3-languages"))
+    {
+        int ImportPs3LanguagesCommand(const std::string&, const std::string&, bool);   // ps3lang.cpp
+        const int rc = ImportPs3LanguagesCommand(arg, arg2, limport.fReplace);
+        std::fflush(stdout);
+        std::_Exit(rc);
+    }
+    if (command && !std::strcmp(command, "import-languages"))
+    {
+        // (with --data-dir / --disc on the source; --move-languages: the installation's own files move into the folder)
+        if (limport.fMove) limport.dirInstall = cane::utf8(std::filesystem::absolute(cane::path(DiscPath(disc))));
+        const int rc = ImportLanguagesCommand(limport);
+        std::fflush(stdout);
+        std::fflush(stderr);
+        std::_Exit(rc);
+    }
     if (std::getenv("SLY2_PS3WORLD")) g_fPs3World = true;  // (exploration: a PS3 world through --load-world)
 
     if (command && !std::strcmp(command, "list-keys")) return ListKeys();
@@ -458,7 +547,19 @@ int main(int argc, char** argv)
         // (the installer's converter: every file is written and closed by now; leave without running the static
         // destructors of the 44 worlds the texture export loaded, a Windows player's install failed there after
         // "converted ..." with std::bad_alloc)
-        const int rc = ConvertCommand(arg);
+        int rc = ConvertCommand(arg);
+        // (languages, langstore.h) with --languages-dir: the installation's languages go into the shared folder (the
+        // dialog lines, the movies' sound, the text), so every region's installation shares them; the converted
+        // folder's manifest points there
+        if (rc == 0 && fLanguagesGiven && !languagesDir.empty() && !g_fConvertPs2)
+        {
+            if (!g_disc.FOpen(arg, error)) { std::fprintf(stderr, "%s\n", error.c_str()); std::_Exit(1); }
+            limport.dirOut = languagesDir;
+            limport.dirInstall = cane::utf8(std::filesystem::absolute(cane::path(arg)));
+            limport.fMove = true;
+            limport.szProgress = "languages";
+            rc = ImportLanguagesCommand(limport);
+        }
         std::fflush(stdout);
         std::fflush(stderr);
         std::_Exit(rc);
@@ -480,6 +581,8 @@ int main(int argc, char** argv)
         return ExportTexturesCommand(dir);
     }
     if (command && !std::strcmp(command, "convert-list")) return ConvertListCommand();
+    if (command && !std::strcmp(command, "world-unpack")) return WorldUnpackCommand(arg, arg2, filter == -2 ? -1 : filter);
+    if (command && !std::strcmp(command, "world-check")) return WorldCheckCommand(DiscPath(disc));
     int DumpTextCommand(const std::string&);  // textmod.cpp
     if (command && !std::strcmp(command, "dump-text")) return DumpTextCommand(arg);
     int DumpTexturesCommand(const std::string&, const std::string&);  // texmod.cpp
@@ -509,7 +612,11 @@ int main(int argc, char** argv)
         if (dispo.wideBackgrounds >= 0) g_display.fWideBackgrounds = dispo.wideBackgrounds != 0;
         if (dispo.hqLogo >= 0) g_display.fHqLogo = dispo.hqLogo != 0;
         if (dispo.longShadows >= 0) g_display.fLongShadows = dispo.longShadows != 0;
+        if (const char* psz = std::getenv("SLY2N_FASTSHADOWS")) g_display.fFastShadows = std::atoi(psz) != 0;
+        if (dispo.fastShadows >= 0) g_display.fFastShadows = dispo.fastShadows != 0;
         if (dispo.window >= 0 && dispo.window <= 2) g_display.window = DISPWINDOW(dispo.window);
+        if (fRendererArg) g_rendererWanted = rendererArg;
+        if (dispo.msaa >= 0) g_display.msaaSamples = dispo.msaa > 1 ? dispo.msaa : 0;
     };
     applyDisplayOverrides();
     if (command && !std::strcmp(command, "view-world")) return ViewWorld(vo);
@@ -611,12 +718,13 @@ int main(int argc, char** argv)
             go.world = "boot";
             g_fDevCard = false;
         }
-        // the game (default: the Paris hub): the PC options from <user-dir>/Saves/system_settings.dat
+        // the game (default: the Paris hub): the PC options from <user-dir>/Settings.ini
         if (!go.fHeadless)
         {
             std::string message;
             FLoadDisplaySettings(cane::userDirectory(), &message);
             std::printf("settings: %s\n", message.c_str());
+            ApplyLanguageSetting(g_saveopts.language);   // (region.h: Settings.ini's Language)
             // the debug keys and the debug menu: the launcher's Settings > Advanced > Debug mode (<user-dir>/Debug
             // Mode.ini, which the launcher copies there at each start; not headless, where SLY2N_PCOPT=debugkeys=1)
             void ApplyPcDebugMode();   // pcinput.h
@@ -640,7 +748,7 @@ int main(int argc, char** argv)
     std::fprintf(stderr,
                  "usage: Sly2-Release [--disc disc.iso | --data-dir dir] --list-keys | --dump-world VA|SECTOR:CB [--out file]\n"
                  "       | --load-world W|boot|frontend [--filter N] [--load-trace map.txt] [--dump-objects [file]]\n"
-                 "       | --parse-splice W | --eval-splice W [--maps dir] [-v] | --splice-selftest | --rumble-selftest | --action-input-selftest\n"
+                 "       | --parse-splice W | --eval-splice W [--maps dir] [-v] | --splice-selftest | --rumble-selftest | --action-input-selftest | --settings-selftest\n"
                  "       | --list-sounds W | --play-music W [--song ID] [--stem 0|1|2] | --play-sfx W [--song SOUNDID] | --play-dialog W [--song ID]\n"
                  "       | --list-movies | --play-movie ID [--out frames-dir] [--seconds T]   (W: boot, frontend, a world record 2..43, SECTOR:CB)\n"
                  "       | --convert DIR [--no-export-textures] | --export-textures [--out DIR] | --dump-textures DIR W\n");

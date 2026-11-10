@@ -276,6 +276,12 @@ void SetHeldNoise(NOISE** ppn, NOISETMPL* ptmpl, const glm::vec3& pos, LO* ploOw
 
 size_t CNoiseAllocated() { return AnoiseOwned().size(); }
 size_t CNoisePooled() { return ApnoiseFree().size(); }
+bool FNoiseAllocated(const NOISE* pn)
+{
+    for (const auto& p : AnoiseOwned())
+        if (p.get() == pn) return true;
+    return false;
+}
 // orig: 0x00140F90 event 0x27C walks the live DLI, including appended rows and
 // skipping rows removed by callbacks. New noises append; storage remains owned
 // until world teardown, so an already-visited object cannot be reused here.

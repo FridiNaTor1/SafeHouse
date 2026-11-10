@@ -1,7 +1,11 @@
 // Movies (see fmv.h). The PSS demux is Sly1-Release's "File Extractor/main.cpp" DemuxPss / DecodePssAudioToWav
 // made incremental (packets read from the disc as the movie plays); the decoder setup is Sly1-Release fmv.cpp's.
 
+#if defined(__ANDROID__)
+#include "android/android_app.h"
+#endif
 #include "fmv.h"
+#include "langstore.h"
 #include "region.h"
 
 #include "audio.h"
@@ -377,6 +381,13 @@ bool FFindMovie(const std::string& arg, MOVIEINFO* pinfo)
 // fmv.cpp PlayCutscene (the FFmpeg decoder, the frame pacing)
 bool FPlayMovie(const FK& fk, PFNMOVIEPRESENT pfnPresent, void* pv, MOVIESTATS* pstats, double tMax)
 {
+#if defined(__ANDROID__)
+    // the on-screen pad shows only the skip / advance keys while a movie plays (pcinput.cpp)
+    extern bool g_fMovieTouchContext;
+    g_fMovieTouchContext = true;
+    cane::android::setTouchContext(cane::android::TouchContext::Cinematic);
+    struct MovieContextEnd { ~MovieContextEnd() { g_fMovieTouchContext = false; } } movieContextEnd;
+#endif
     MOVIESTATS stats;
     av_log_set_level(AV_LOG_ERROR);
     const AVCodec* codec = avcodec_find_decoder(AV_CODEC_ID_MPEG2VIDEO);
@@ -397,10 +408,13 @@ bool FPlayMovie(const FK& fk, PFNMOVIEPRESENT pfnPresent, void* pv, MOVIESTATS* 
     CPssReader reader(fk);
     CMovieAudio audio;
     // (PC) an M2V's sound: the WAV of track 0 (one sound track: the USA disc), else the language's (track + 1)
-    if (reader.FElementary())
+    // (PC: a language the disc lacks: its sound from the languages folder, langstore.h, over a PSS's own too)
+    const std::string pathStore = PathLanguageStoreMovieAudio(fk.isector);
+    if (!pathStore.empty()) audio.FOpenWav(pathStore);
+    else if (reader.FElementary())
     {
         std::string path = g_disc.PathPart(fk.isector, "audio0");
-        if (path.empty()) path = g_disc.PathPart(fk.isector, "audio" + std::to_string(g_nLang + 1));
+        if (path.empty()) path = g_disc.PathPart(fk.isector, "audio" + std::to_string(LangWorld() + 1));
         if (!path.empty()) audio.FOpenWav(path);
     }
     CPcmStream pcm;
@@ -489,7 +503,7 @@ bool FPlayMovie(const FK& fk, PFNMOVIEPRESENT pfnPresent, void* pv, MOVIESTATS* 
             if (id == 0xE0) feedVideo(pb, cb);
             // orig 0x1B3EC0: the sound streams with the id 0 (one sound track: the USA disc) or the language's + 1 (the
             // European discs: one track per language, 1..11; region.h)
-            else if (cb >= 4 && (pb[3] == 0 || pb[3] == g_nLang + 1)) audio.AddPacket(pb, cb);
+            else if (cb >= 4 && pathStore.empty() && (pb[3] == 0 || pb[3] == LangWorld() + 1)) audio.AddPacket(pb, cb);
             if (apicture.size() > 8) break;  // (sound far behind the pictures: show some first)
         }
     };

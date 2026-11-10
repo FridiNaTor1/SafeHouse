@@ -13,6 +13,11 @@
 #include "controller_family.h"
 #include "gamepad_mappings.h"
 #include "glfw_platform.h"
+#if defined(__ANDROID__)
+#include "gles_sly2.h"
+#endif
+#include "vr.h"
+#include "renderer.h"
 
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include <stb/stb_image_write.h>
@@ -25,7 +30,12 @@
 GL g_gl;
 GLSHADER glGlobShader;
 GLSHADER glGlobShaderNoKill;
+GLSHADER glGlobShaderNoGeom, glGlobShaderNoKillNoGeom;
+bool g_fGlobNoGeom = false;
 bool g_fGlobBindless = false;
+bool g_fGlobArrays = false;
+bool g_fDrawUniform = false;
+bool g_fHudAlphaLayer = false;
 bool g_fDirectRuns = false;
 GLSHADER glCelBorderShader;
 GLSHADER glHudShader;
@@ -38,6 +48,10 @@ std::string ShaderSource(const char* file)
     std::string source = CaneEmbeddedShader(file);
     // Strip a UTF-8 BOM (AMD's compiler rejects it before #version).
     if (source.size() >= 3 && static_cast<unsigned char>(source[0]) == 0xEF) source.erase(0, 3);
+#if defined(__ANDROID__)
+    // OpenGL ES 3.2 (platform/android/gles_sly2.cpp): the GLSL 4.30 sources with an ES header in place of #version
+    source = cane::gles::TranslateShader(source);
+#endif
     return source;
 }
 }
@@ -82,6 +96,11 @@ bool GLSHADER::FInit(const char* vertexFile, const char* fragmentFile, const cha
 
 bool GLSHADER::FInit(const char* vertexFile, const char* geometryFile, const char* fragmentFile, const char* szPrefix)
 {
+    if (FRendererVulkan())   // (renderer.h: the programs compiled to SPIR-V at build time)
+    {
+        ID = IdVulkanProgram(vertexFile, geometryFile, fragmentFile, szPrefix);
+        return ID != 0;
+    }
 #ifdef __SWITCH__
     // (deko3d: the programs and their variants are compiled offline, cmake/switch_shaders.py; a variant not built fails
     // as a failed link would, and the caller falls back)
@@ -129,8 +148,127 @@ bool GLSHADER::FInit(const char* vertexFile, const char* geometryFile, const cha
     glDeleteShader(v);
     if (g) glDeleteShader(g);
     glDeleteShader(f);
-    if (fOk) ID = id;
+    if (fOk)
+    {
+        ID = id;
+        m_vs = vs, m_fs = fs, m_fGeometry = geometryFile != nullptr;
+        m_fFullScreen = !std::strcmp(vertexFile, "shadowcombine.vert");
+    }
     return fOk;
+}
+
+bool g_fMultiviewPass = false, g_fMultiviewFailed = false;
+unsigned g_serialMultiview = 0;
+float g_amatMultiviewLtoR[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+
+void GLSHADER::Use() const
+{
+    if (g_fMultiviewPass && !g_fMultiviewFailed)
+    {
+        if (m_iMvState == 0) m_iMvState = FBuildMultiview() ? 1 : -1;
+        if (m_iMvState < 0) g_fMultiviewFailed = true;
+        else
+        {
+            glUseProgram(m_idMv);
+            // (view 1's matrix in a buffer, not a uniform: a new uniform would move the others' locations)
+            static GLuint s_abuf[2] = {};
+            static unsigned s_serial = 0;
+            if (!s_abuf[0])
+            {
+                static const float s_aidentity[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+                glGenBuffers(2, s_abuf);
+                glBindBuffer(GL_SHADER_STORAGE_BUFFER, s_abuf[1]);
+                glBufferData(GL_SHADER_STORAGE_BUFFER, sizeof(s_aidentity), s_aidentity, GL_STATIC_DRAW);
+                glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 12, s_abuf[1]);
+            }
+            if (s_serial != g_serialMultiview)
+            {
+                glBindBuffer(GL_SHADER_STORAGE_BUFFER, s_abuf[0]);
+                glBufferData(GL_SHADER_STORAGE_BUFFER, sizeof(g_amatMultiviewLtoR), g_amatMultiviewLtoR, GL_STREAM_DRAW);
+                glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 11, s_abuf[0]);
+                glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 12, s_abuf[1]);
+                s_serial = g_serialMultiview;
+            }
+            return;
+        }
+    }
+    glUseProgram(ID);
+}
+
+// The two-view variant: the vertex program's main renamed and called by one that gives view 1 the clip position of
+// view 0's times caneClipLtoR (clip = matrix x world for both eyes, so one 4x4 maps the one to the other; a full-screen
+// pass keeps its position) and the view to the fragment program, whose frame copies (texDate / texAlpha) become the
+// two-view arrays.
+bool GLSHADER::FBuildMultiview() const
+{
+    if (m_vs.empty() || m_fs.empty() || m_fGeometry) return false;
+    std::string vs = m_vs, fs = m_fs;
+    auto afterVersion = [](std::string& src, const char* sz) {
+        const size_t i = src.find("#version");
+        const size_t j = i == std::string::npos ? 0 : src.find('\n', i) + 1;
+        src.insert(j, sz);
+    };
+    auto replaceAll = [](std::string& src, const std::string& from, const std::string& to) {
+        for (size_t i = src.find(from); i != std::string::npos; i = src.find(from, i + to.size())) src.replace(i, from.size(), to);
+    };
+    afterVersion(vs, "#extension GL_OVR_multiview2 : require\n");
+    const size_t iMain = vs.find("void main()");
+    if (iMain == std::string::npos) return false;
+    vs.replace(iMain, 11, "void caneMainBody()");
+    vs += std::string("\nlayout(num_views = 2) in;\nlayout(std430, binding = ") + (m_fFullScreen ? "12" : "11") +
+          ") readonly buffer CANEMULTIVIEW { mat4 caneClipLtoR; };\nflat out uint caneView;\n"
+          "void main() { caneMainBody(); caneView = gl_ViewID_OVR; if (gl_ViewID_OVR != 0u) gl_Position = caneClipLtoR * gl_Position; }\n";
+    const size_t iMainF = fs.find("void main()");
+    if (iMainF == std::string::npos) return false;
+    fs.insert(iMainF, "flat in uint caneView;\n");
+    for (const char* sz : {"texDate", "texAlpha"})
+    {
+        replaceAll(fs, std::string("uniform sampler2D ") + sz + ";", std::string("uniform highp sampler2DArray ") + sz + ";");
+        replaceAll(fs, std::string("texelFetch(") + sz + ", ivec2(gl_FragCoord.xy), 0)",
+                   std::string("texelFetch(") + sz + ", ivec3(ivec2(gl_FragCoord.xy), int(caneView)), 0)");
+    }
+    const char* pvs = vs.c_str();
+    const char* pfs = fs.c_str();
+    const GLuint v = glCreateShader(GL_VERTEX_SHADER);
+    glShaderSource(v, 1, &pvs, nullptr);
+    glCompileShader(v);
+    const GLuint f = glCreateShader(GL_FRAGMENT_SHADER);
+    glShaderSource(f, 1, &pfs, nullptr);
+    glCompileShader(f);
+    bool fOk = CompileErrors(v, "VERTEX", "multiview") && CompileErrors(f, "FRAGMENT", "multiview");
+    GLuint id = 0;
+    if (fOk)
+    {
+        id = glCreateProgram();
+        glAttachShader(id, v);
+        glAttachShader(id, f);
+        glLinkProgram(id);
+        fOk = CompileErrors(id, "PROGRAM", "multiview");
+    }
+    glDeleteShader(v);
+    glDeleteShader(f);
+    // (the callers keep the program's uniform locations: the variant's must be the same)
+    if (fOk)
+    {
+        GLint c = 0;
+        glGetProgramiv(ID, GL_ACTIVE_UNIFORMS, &c);
+        for (GLint i = 0; i < c && fOk; ++i)
+        {
+            char name[256];
+            GLsizei len = 0;
+            GLint size = 0;
+            GLenum type = 0;
+            glGetActiveUniform(ID, GLuint(i), sizeof(name), &len, &size, &type, name);
+            if (glGetUniformLocation(ID, name) != glGetUniformLocation(id, name))
+            {
+                std::printf("OpenGL: multiview variant: uniform %s at another location: eyes one by one\n", name);
+                fOk = false;
+            }
+        }
+    }
+    if (!fOk) { if (id) glDeleteProgram(id); return false; }
+    m_idMv = id;
+    return true;
 }
 
 bool GLSHADER::CompileErrors(GLuint shader, const char* type, const char* file)
@@ -160,6 +298,11 @@ bool GLSHADER::CompileErrors(GLuint shader, const char* type, const char* file)
 
 void GLSHADER::Init(const char* vertexFile, const char* fragmentFile)
 {
+    if (FRendererVulkan())
+    {
+        ID = IdVulkanProgram(vertexFile, nullptr, fragmentFile, "");
+        return;
+    }
 #ifdef __SWITCH__
     ID = CaneDeko::CreateProgram(vertexFile, nullptr, fragmentFile, "");
     return;
@@ -182,6 +325,8 @@ void GLSHADER::Init(const char* vertexFile, const char* fragmentFile)
     CompileErrors(ID, "PROGRAM", vertexFile);
     glDeleteShader(v);
     glDeleteShader(f);
+    m_vs = vs, m_fs = fs, m_fGeometry = false;
+    m_fFullScreen = !std::strcmp(vertexFile, "shadowcombine.vert");
 }
 
 bool GL::FInit(int w, int h, bool fVisible, const char* title, std::string& error)
@@ -198,9 +343,11 @@ bool GL::FInit(int w, int h, bool fVisible, const char* title, std::string& erro
     };
     width = w;
     height = h;
-    window = createWindow(5);
+    // (renderer.h) Vulkan when it is chosen and starts: the GL calls below then run on it; otherwise OpenGL
+    window = PwindowVulkan(w, h, fVisible, title);
+    if (!window) window = createWindow(5);
     std::string contextFailure;
-#if defined(__linux__)
+#if defined(__linux__) && !defined(__ANDROID__)
     // A GPU whose native Mesa driver stops short of OpenGL 4.5 (ARM devices) may reach it through Mesa's Zink, on Vulkan.
     if (!window)
     {
@@ -235,6 +382,12 @@ bool GL::FInit(int w, int h, bool fVisible, const char* title, std::string& erro
     if (!cane::gl::CreateContext(window, &error)) return false;
     if (!gladLoadGLLoader(reinterpret_cast<GLADloadproc>(cane::gl::ProcAddress))) { error = "glad failed"; return false; }
     std::printf("OpenGL: %s / %s\n", glGetString(GL_RENDERER), glGetString(GL_VERSION));
+#if defined(__ANDROID__)
+    // The GL 4.3 loader stops at the version an ES context reports (3.2): the ES 3.x entry points with desktop names
+    // are fetched by name, the desktop-only ones point at ES equivalents (gles_sly2.cpp).
+    if (!cane::gles::FillGlad(error)) return false;
+    g_fDrawUniform = !cane::gles::HasBaseInstance();
+#endif
     const char* szRenderer = reinterpret_cast<const char*>(glGetString(GL_RENDERER));
     g_fDirectRuns = szRenderer && !std::strncmp(szRenderer, "D3D12 (", 7);
     StartupPcInput();   // (the prompt icons' atlases: pcinput.h / promptglyph.h)
@@ -244,7 +397,7 @@ bool GL::FInit(int w, int h, bool fVisible, const char* title, std::string& erro
     using PFNCLIPCONTROL = void (*)(GLenum, GLenum);
     auto pfnClipControl = reinterpret_cast<PFNCLIPCONTROL>(cane::gl::ProcAddress("glClipControl"));
     if (!pfnClipControl) { error = "glClipControl (GL 4.5) is required"; return false; }
-#if defined(__linux__)
+#if defined(__linux__) && !defined(__ANDROID__)
     if ((GLVersion.major < 4 || (GLVersion.major == 4 && GLVersion.minor < 5)) && !glfwExtensionSupported("GL_ARB_clip_control"))
     {
         error = "OpenGL 4.5 or GL_ARB_clip_control is required; this driver offers " + std::string(reinterpret_cast<const char*>(glGetString(GL_VERSION)));
@@ -275,7 +428,16 @@ bool GL::FInit(int w, int h, bool fVisible, const char* title, std::string& erro
 #ifdef __SWITCH__
     constexpr bool s_fNearClip = false;   // (the Switch: GL's own clipping; the stage costs GPU time on every draw)
 #else
+    // (VR on OpenGL ES, vr.h: without the stage: geometry programs are slow on mobile GPUs, and the eyes' two-view pass
+    // cannot have one; GL's own near clipping)
+#if defined(__ANDROID__)
+    // (Android: built as everywhere; while an OpenXR session is active the runs use the programs without it, render.cpp
+    // useGlob: the stage was half the frame on the Quest's Adreno in VR. VR is requested on every Android device, but a
+    // phone never gets a session, so flat devices keep the original near-plane clip.)
     static const bool s_fNearClip = !(std::getenv("SLY2N_NEARCLIP") && std::atoi(std::getenv("SLY2N_NEARCLIP")) == 0);
+#else
+    static const bool s_fNearClip = !(std::getenv("SLY2N_NEARCLIP") && std::atoi(std::getenv("SLY2N_NEARCLIP")) == 0);
+#endif
 #endif
     // (the prefix and stages the glob program was built with: its NOKILL variant below takes the same)
     std::string globPrefix;
@@ -286,19 +448,38 @@ bool GL::FInit(int w, int h, bool fVisible, const char* title, std::string& erro
         return fGlobGeom || glGlobShader.FInit("glob.vert", "glob.frag", szPrefix);
     };
     g_fGlobBindless = fBindlessWanted && FBindlessWorks() && initGlob("#extension GL_ARB_bindless_texture : require\n#define BINDLESS 1\n");
-    if (!g_fGlobBindless && !initGlob(""))
+    // (perf-5) without bindless textures: the pass draws' textures as layers of array textures (render.cpp LayerRefOfTex),
+    // so runs join across textures of one size; needs glCopyImageSubData and glTexStorage3D (GL 4.3 / GLES 3.2).
+    // SLY2N_NOTEXARRAYS=1: each run binds its texture as before. Not on the Switch (its programs are built offline).
+#ifndef __SWITCH__
+    if (!g_fGlobBindless && glCopyImageSubData && glTexStorage3D && !(std::getenv("SLY2N_NOTEXARRAYS") && std::atoi(std::getenv("SLY2N_NOTEXARRAYS")) != 0))
+        g_fGlobArrays = initGlob("#define TEXARRAY 1\n");
+#endif
+    if (!g_fGlobBindless && !g_fGlobArrays && !initGlob(""))
     {
         glGlobShader.Init("glob.vert", "glob.frag");
         globPrefix.clear();
         fGlobGeom = false;
     }
-    std::printf("OpenGL: textures %s\n", g_fGlobBindless ? "bindless (ARB_bindless_texture)" : "bound");
+    std::printf("OpenGL: textures %s\n", g_fGlobBindless ? "bindless (ARB_bindless_texture)" : g_fGlobArrays ? "bound, as array layers" : "bound");
     // The glob program without its fragment discards (NOKILL: no alpha test, no DATE), for the runs that need neither
     // (render.cpp): the GPU then tests depth and stencil before the fragments. ID 0 if it does not build: glGlobShader.
     const std::string prefixNoKill = globPrefix + (fGlobGeom ? "#define GEOM 1\n" : "") + "#define NOKILL 1\n";
     if (!(fGlobGeom ? glGlobShaderNoKill.FInit("glob.vert", "glob.geom", "glob.frag", prefixNoKill.c_str())
                     : glGlobShaderNoKill.FInit("glob.vert", "glob.frag", prefixNoKill.c_str())))
         glGlobShaderNoKill.ID = 0;
+    // (perf-4) both without the near-clip stage, for the runs whose draws are all wholly in front of the near plane
+    // (render.cpp): glob.geom passes their triangles through unchanged, and a geometry stage costs GPU time on every draw
+    // (the Switch leaves it out altogether; tile GPUs and Zink pay most). SLY2N_GLOBNOGEOM=0: the stage everywhere.
+    glGlobShaderNoGeom.ID = glGlobShaderNoKillNoGeom.ID = 0;
+    g_fGlobNoGeom = false;
+    if (fGlobGeom && !(std::getenv("SLY2N_GLOBNOGEOM") && std::atoi(std::getenv("SLY2N_GLOBNOGEOM")) == 0))
+    {
+        if (!glGlobShaderNoGeom.FInit("glob.vert", "glob.frag", globPrefix.c_str())) glGlobShaderNoGeom.ID = 0;
+        if (!glGlobShaderNoKill.ID || !glGlobShaderNoKillNoGeom.FInit("glob.vert", "glob.frag", (globPrefix + "#define NOKILL 1\n").c_str()))
+            glGlobShaderNoKillNoGeom.ID = 0;
+        g_fGlobNoGeom = glGlobShaderNoGeom.ID != 0;
+    }
     glCelBorderShader.Init("celborder.vert", "celborder.frag");
     glHudShader.Init("hud.vert", "hud.frag");
     glOverlayShader.Init("overlay.vert", "overlay.frag");
@@ -426,11 +607,28 @@ void GL::ReleaseOverlaySources()
 
 void GL::Present()
 {
+    if (vr::FPresent()) return;   // (vr.h: the picture to the headset, the window mirrors it)
+    // (perf-4) the scene's depth / stencil are not read after the frame (the next frame's passes clear them first): a tile
+    // GPU need not write them back to memory (Zink: the render pass's store op DONT_CARE). GL 4.3 / GLES 3.0.
+    if (glInvalidateFramebuffer)
+    {
+        static const GLenum s_aattDepth[] = {GL_DEPTH_STENCIL_ATTACHMENT};
+        glBindFramebuffer(GL_FRAMEBUFFER, FboScene());
+        glInvalidateFramebuffer(GL_FRAMEBUFFER, 1, s_aattDepth);
+    }
     if (fboMsaa)
     {
         glBindFramebuffer(GL_READ_FRAMEBUFFER, fboMsaa);
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fbo);
         glBlitFramebuffer(0, 0, renderWidth, renderHeight, 0, 0, renderWidth, renderHeight, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+        // (perf-5) the multisampled colour is not read after its resolve either: every drawn frame starts with a clear
+        // (RenderPass, or the animated overlay's DrawAnimatedOverlayFrame); the overlay captures read it before this
+        if (glInvalidateFramebuffer)
+        {
+            static const GLenum s_aattColor[] = {GL_COLOR_ATTACHMENT0};
+            glBindFramebuffer(GL_FRAMEBUFFER, fboMsaa);
+            glInvalidateFramebuffer(GL_FRAMEBUFFER, 1, s_aattColor);
+        }
     }
     glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo);
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);

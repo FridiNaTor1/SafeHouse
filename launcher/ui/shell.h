@@ -69,7 +69,8 @@ public:
         return nav && std::find(m_ids.begin(), m_ids.end(), nav) != m_ids.end();
     }
     static float railWidth(float windowWidth) { return std::clamp(std::round(windowWidth * 0.19f), px(196), px(248)); }
-    void toast(std::string message, bool ok = true) { m_toasts.push_back({ std::move(message), ImGui::GetTime(), ok }); }
+    // (a message that is a launcher string, e.g. an error a backend throws, shows translated)
+    void toast(const std::string& message, bool ok = true) { m_toasts.push_back({ tr(message), ImGui::GetTime(), ok }); }
 
     // The rail, drawn straight into the launcher window so pad and keyboard
     // navigation move between it and the page.
@@ -89,7 +90,7 @@ public:
         recordLayout("brand", ImRect({ std::round(o.x + (w - brandW) * 0.5f), o.y + px(16) },
                                      { std::round(o.x + (w + brandW) * 0.5f), o.y + px(16) + logoH }));
         float y = o.y + px(16) + logoH + px(16);
-        dl->AddText(fonts().label, fonts().label->FontSize, { o.x + pad + px(6), y }, u32(color::muted), "GAMES");
+        dl->AddText(fonts().label, fonts().label->FontSize, { o.x + pad + px(6), y }, u32(color::muted), tr("GAMES"));
         y += fonts().label->FontSize + px(8);
         // Footer rows first, so the game tiles can share the rest.
         const float rowH = px(44), linkH = px(30), rowsH = rowH * 2 + px(8) + px(12) + linkH + px(10);
@@ -124,15 +125,15 @@ public:
                  [&, target] { open(target, false); }, nullptr);
             ry += rowH + px(4);
         };
-        row("rail-settings", "Settings", Icon::Cog, View::Settings);
-        row("rail-about", "About", Icon::Info, View::About);
+        row("rail-settings", tr("Settings"), Icon::Cog, View::Settings);
+        row("rail-about", tr("About"), Icon::Info, View::About);
         // The community links, side by side under About.
         const float linkW = std::floor((w - pad - px(4)) * 0.5f);
         link("rail-discord", { o.x + pad * 0.5f, ry }, { o.x + pad * 0.5f + linkW, ry + linkH }, "Discord", Icon::Chat, brand::discordUrl,
-             brand::discordLabel);
+             tr(brand::discordLabel));
         const ImGuiID discord = m_ids.empty() ? 0 : m_ids.back();
         link("rail-patreon", { o.x + w - pad * 0.5f - linkW, ry }, { o.x + w - pad * 0.5f, ry + linkH }, "Patreon", Icon::Heart,
-             brand::patreonUrl, brand::patreonLabel);
+             brand::patreonUrl, tr(brand::patreonLabel));
         m_focusRail = false;
         // Right (or confirm) on the rail enters the page (on the Discord link, right moves to Patreon).
         const bool inRail = railFocused();
@@ -179,11 +180,11 @@ public:
         auto* dl = ImGui::GetWindowDrawList();
         const ImVec2 p = ImGui::GetWindowPos();
         dl->AddLine(p, { p.x + w, p.y }, u32(color::borderStrong), px(1));
-        heading("Activity log");
+        heading(tr("Activity log"));
         ImGui::SameLine(0, 0);
         ImGui::SetCursorPosX(w - px(32) - px(36));
         ImGui::SetCursorPosY(ImGui::GetCursorPosY() - px(6));
-        if (iconButton("Close log", Icon::Close, px(36))) *open = false;
+        if (iconButton(tr("Close log"), Icon::Close, px(36))) *open = false;
         ImGui::PushStyleColor(ImGuiCol_ChildBg, vec(color::bg));
         ImGui::BeginChild("activity-lines", { 0, 0 }, ImGuiChildFlags_Border);
         {
@@ -191,7 +192,7 @@ public:
             // acts on the current window's draw list.
             FontScope f(fonts().caption);
             ColorScope c(color::text2);
-            if (lines.empty()) ImGui::TextUnformatted("Nothing yet. Installs, checks, source builds and game output are shown here.");
+            if (lines.empty()) ImGui::TextUnformatted(tr("Nothing yet. Installs, checks, source builds and game output are shown here."));
             for (const auto& line : lines) ImGui::TextUnformatted(line.c_str());
             if (follow) ImGui::SetScrollHereY(1);
             padScrollHere();
@@ -236,7 +237,7 @@ private:
         if (!ImGui::ItemAdd(bb, gid)) return;
         m_ids.push_back(gid);
         bool hovered = false, held = false;
-        if (ImGui::ButtonBehavior(bb, gid, &hovered, &held) && !openLink(url)) toast("Could not open your web browser", false);
+        if (ImGui::ButtonBehavior(bb, gid, &hovered, &held) && !openLink(url)) toast(tr("Could not open your web browser"), false);
         auto* dl = window->DrawList;
         if (hovered) dl->AddRectFilled(bb.Min, bb.Max, ink(color::surface), px(8));
         const uint32_t tone = hovered ? color::text : color::text2;
@@ -306,7 +307,7 @@ private:
 
 // ---------------------------------------------------------------- About
 inline void aboutPage() {
-    titleBar("About", false);
+    titleBar(tr("About"), false);
     const ImVec2 area = ImGui::GetContentRegionAvail();
     const bool wide = area.x >= px(820);
     const float leftW = wide ? std::floor((area.x - px(24)) * 0.46f) : area.x;
@@ -321,24 +322,24 @@ inline void aboutPage() {
         ImGui::Dummy({ brandWidth(logoH, f), logoH });
     }
     gap(8);
-    textWrapped(brand::credit, fonts().body, color::text);
+    textWrapped(tr(brand::credit), fonts().body, color::text);
     gap(2);
-    textWrapped("Sly Cooper and the Thievius Raccoonus and Sly 2: Band of Thieves are fully playable. "
-                "Sly 3: Honor Among Thieves is in early development and not fully playable yet: expect missing features and crashes.",
+    textWrapped(tr("Sly Cooper and the Thievius Raccoonus and Sly 2: Band of Thieves are fully playable. "
+                "Sly 3: Honor Among Thieves is in early development and not fully playable yet: expect missing features and crashes."),
                 fonts().caption, color::text2);
     divider(14);
-    heading("Community");
-    caption("News, help and the upcoming ThiefRush multiplayer fork.", color::text2);
+    heading(tr("Community"));
+    caption(tr("News, help and the upcoming ThiefRush multiplayer fork."), color::text2);
     gap(2);
-    if (button(brand::discordLabel, Tone::Secondary, { 0, 0 }, Icon::Chat)) openLink(brand::discordUrl);
+    if (button(tr(brand::discordLabel), Tone::Secondary, { 0, 0 }, Icon::Chat)) openLink(brand::discordUrl);
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) ImGui::SetTooltip("%s", brand::discordUrl);
-    if (button(brand::patreonLabel, Tone::Secondary, { 0, 0 }, Icon::Heart)) openLink(brand::patreonUrl);
+    if (button(tr(brand::patreonLabel), Tone::Secondary, { 0, 0 }, Icon::Heart)) openLink(brand::patreonUrl);
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) ImGui::SetTooltip("%s", brand::patreonUrl);
     endCard();
     if (wide) ImGui::SameLine(0, px(24));
     else gap(4);
     beginCard("about-credits", { wide ? area.x - leftW - px(24) : area.x, 0 }, 24);
-    heading("Credits");
+    heading(tr("Credits"));
     gap(2);
     auto credit = [](const char* role, const char* who, ImTextureID image = nullptr) {
         const ImVec2 p = ImGui::GetCursorScreenPos();
@@ -356,24 +357,25 @@ inline void aboutPage() {
         ImGui::Dummy({ 1, std::max(image ? px(48) : 0.0f, px(22) + t.y) });
         recordLayout(role, ImRect(p, { p.x + wrap, p.y + px(22) + t.y }));
     };
-    credit("Sly Cooper and the Thievius Raccoonus port", brand::projectCaneCredit);
-    credit("SafeHouse logo", brand::logoCredit, images().logo);
-    credit("App icon", brand::iconCredit, images().icon);
-    credit("Steam library artwork", "SteamGridDB artists: ctwoafiveb, Benuno, AnimeFan69, Spaghetti Overlord, Pedrogon18, "
+    credit(tr("Sly Cooper and the Thievius Raccoonus port"), brand::projectCaneCredit);
+    credit(tr("SafeHouse logo"), brand::logoCredit, images().logo);
+    credit(tr("App icon"), brand::iconCredit, images().icon);
+    credit(tr("Steam library artwork"), "SteamGridDB: ctwoafiveb, Benuno, AnimeFan69, Spaghetti Overlord, Pedrogon18, "
                                     "RealSayakaMaizono, Nuke, simenfje, FrostWolf (share/safehouse/steam/CREDITS.md)");
-    credit("Controller prompts", "Kenney Input Prompts (CC0) · kenney.nl");
-    credit("Controller database", "SDL_GameControllerDB (zlib licence)");
-    credit("Typeface", "Atkinson Hyperlegible by the Braille Institute (SIL Open Font License)");
+    credit(tr("Controller prompts"), "Kenney Input Prompts (CC0) · kenney.nl");
+    credit(tr("Controller database"), "SDL_GameControllerDB (zlib)");
+    credit(tr("Typeface"), "Atkinson Hyperlegible, Braille Institute (SIL Open Font License)");
+    credit(tr("Japanese and Cyrillic letters"), "Noto Sans CJK JP, Noto Sans, Google (SIL Open Font License)");
     divider(14);
-    caption("Full licence texts ship in the licenses folder and THIRD_PARTY_NOTICES.md.", color::text2);
-    caption("Sly Cooper, its sequels, Bentley's Hackpack and their logos are trademarks of Sony Interactive Entertainment. "
+    caption(tr("Full licence texts ship in the licenses folder and THIRD_PARTY_NOTICES.md."), color::text2);
+    caption(tr("Sly Cooper, its sequels, Bentley's Hackpack and their logos are trademarks of Sony Interactive Entertainment. "
             "The game logos identify the games only. SafeHouse is an unofficial fan project, not affiliated with or endorsed by "
-            "Sony Interactive Entertainment, Sucker Punch Productions or Sanzaru Games. Controller names and symbols belong to their owners.");
+            "Sony Interactive Entertainment, Sucker Punch Productions or Sanzaru Games. Controller names and symbols belong to their owners."));
     const fs::path licences = executableDirectory().parent_path() / "licenses";
     std::error_code ec;
     if (fs::is_directory(licences, ec)) {
         gap(2);
-        if (button("Open licences", Tone::Quiet, { 0, 0 }, Icon::Folder)) try {
+        if (button(tr("Open licences"), Tone::Quiet, { 0, 0 }, Icon::Folder)) try {
                 openFolder(licences);
             } catch (...) {
             }

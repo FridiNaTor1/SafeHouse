@@ -6,7 +6,7 @@
 //
 // File: 20-byte header {char magic[8]="PCANESYS"; u32 version; u32 payloadSize;
 // u32 fnv1a32(payload)} followed by the raw little-endian payload. Every
-// historic version (1-19) still loads; a write produces kVersion. A
+// historic version (1-21) still loads; a write produces kVersion. A
 // file with a higher version (for example from a newer or forked build) is
 // reported as Newer and never overwritten.
 #include <algorithm>
@@ -21,7 +21,7 @@
 namespace cane::settings {
 namespace fs = std::filesystem;
 inline constexpr char kMagic[8] = { 'P', 'C', 'A', 'N', 'E', 'S', 'Y', 'S' };
-inline constexpr uint32_t kVersion = 19;
+inline constexpr uint32_t kVersion = 21;
 // Action order: Up, Down, Left, Right, Square, Circle, Cross, Triangle, Start,
 // Select, L1, R1, L2, R2, L3, R3 (Input.h JOY_BUTTON).
 inline constexpr int kBindingCount = 16;
@@ -68,7 +68,12 @@ enum GuiStyleValue : int { Gui_PS2 = 0, Gui_Modern = 1 };
 // launcher.json "prompt_style" for its screens).
 enum PromptStyleValue : int { Prompt_Auto = 0, Prompt_PlayStation = 1, Prompt_Xbox = 2,
                               Prompt_Nintendo = 3, Prompt_SteamDeck = 4, Prompt_SteamController = 5,
-                              Prompt_PS4 = 6, Prompt_PS5 = 7, Prompt_SteamController2026 = 8 };
+                              Prompt_PS4 = 6, Prompt_PS5 = 7, Prompt_SteamController2026 = 8,
+                              // (2026-11-10, same field: the remaining Kenney Nintendo families)
+                              Prompt_GameCube = 9, Prompt_Switch2 = 10, Prompt_Wii = 11, Prompt_WiiU = 12,
+                              // (VR controllers: controller_family.h isVrFamily)
+                              Prompt_MetaQuest = 13, Prompt_ValveIndex = 14, Prompt_SteamFrame = 15, Prompt_ViveWand = 16,
+                              Prompt_Pico = 17, Prompt_Last = Prompt_Pico };
 inline constexpr int kInternalResolutions[] = { 0, 360, 480, 720, 1080, 1440, 2160 };
 // v11 video options (ThiefRush's layout; Sly2-Release does not read them yet).
 enum UpscalerValue : int { Upscale_Bilinear = 0, Upscale_Fsr1 = 1 };
@@ -183,9 +188,19 @@ struct V18 {
     V17 base;
     int autoCameraRotation;
 };
+// v19: + tankKeyBindings.
+struct V19 {
+    V18 base;
+    int tankKeyBindings[2];
+};
+// v20: + fastShadows.
+struct V20 {
+    V19 base;
+    int fastShadows;
+};
 } // namespace legacy
 
-// Current (v19) payload (Sly1-Release's VIDEOSAVESETTINGS); its first 196 bytes are the v8 layout, v9..v11 == ThiefRush's.
+// Current (v21) payload (Sly1-Release's VIDEOSAVESETTINGS); its first 196 bytes are the v8 layout, v9..v11 == ThiefRush's.
 // Append new fields only at the end, bump kVersion and add a legacy::V<n> snapshot plus a load branch.
 struct SystemSettings {
     int fogType;                  // 0 off, 1 PS2 (default), 2 PS3
@@ -257,6 +272,13 @@ struct SystemSettings {
     int autoCameraRotation;       // 0/1, default 1
     // v19, offset 332 (Sly 2, keyboard): the tank's tracks (the Ep5 RC tank reads both sticks' Y): left, right
     int tankKeyBindings[2];       // GLFW keys, default A / D
+    // v20, offset 340 (Sly 2, low-end): Fast shadows (Sly2-Release display.h fFastShadows, render.cpp FBuildShadow2 /
+    // DrawShadow2): the cast shadows with less stencil fill (nearly the same picture). Default off; on for a new
+    // Android profile (the Quest: GPU-bound). v19 files load with the platform's default.
+    int fastShadows;              // 0/1
+    // v21, offset 344 (Sly 2): the renderer (Sly2-Release renderer.h): 0 Auto, 1 Vulkan, 2 OpenGL. Auto is OpenGL
+    // until Vulkan is the default (notes/VULKAN_2026-11-10.md); Vulkan falls back to OpenGL when it cannot start.
+    int renderer;
 };
 static_assert(sizeof(Header) == 20);
 static_assert(sizeof(legacy::V1) == 36 && sizeof(legacy::V2) == 40 && sizeof(legacy::V3) == 104);
@@ -265,7 +287,8 @@ static_assert(sizeof(legacy::V7) == 180 && sizeof(legacy::V8) == 196 && sizeof(l
 static_assert(sizeof(legacy::V10) == 208 && sizeof(legacy::V11) == 284 && sizeof(legacy::V12) == 288);
 static_assert(sizeof(legacy::V13) == 292 && sizeof(legacy::V14) == 296 && sizeof(legacy::V15) == 300);
 static_assert(sizeof(legacy::V16) == 304 && sizeof(legacy::V17) == 328 && sizeof(legacy::V18) == 332);
-static_assert(sizeof(SystemSettings) == 340);
+static_assert(sizeof(legacy::V19) == 340 && sizeof(legacy::V20) == 344);
+static_assert(sizeof(SystemSettings) == 348);
 static_assert(offsetof(SystemSettings, guiStyle) == 40 && offsetof(SystemSettings, keyboardBindings) == 44);
 static_assert(offsetof(SystemSettings, gamepadBindings) == 108);
 static_assert(offsetof(SystemSettings, disableControllerInputWhenUnfocused) == 172);
@@ -278,6 +301,7 @@ static_assert(offsetof(SystemSettings, debugKeys) == 292 && offsetof(SystemSetti
 static_assert(offsetof(SystemSettings, longShadows) == 300 && offsetof(SystemSettings, padInvertCameraX) == 304);
 static_assert(offsetof(SystemSettings, mouseInvertTurretY) == 324);
 static_assert(offsetof(SystemSettings, autoCameraRotation) == 328);
+static_assert(offsetof(SystemSettings, fastShadows) == 340 && offsetof(SystemSettings, renderer) == 344);
 
 inline uint32_t checksum(const void* data, size_t size) {
     const auto* bytes = static_cast<const uint8_t*>(data);
@@ -339,6 +363,11 @@ inline SystemSettings defaults() {
     s.msaaSamples = 4;
     s.frameRate = 60;
     s.internalResolutionHeight = 0;
+#ifdef CANE_ANDROID
+    // Android (android/README.md): a new profile renders at 720 lines, not a phone / headset panel's full resolution
+    // (the Quest 3S panel window: 1600x1000; GPU-bound at native). The setting and its file format are unchanged.
+    s.internalResolutionHeight = 720;
+#endif
     s.drawDistance = 1.0f;
     s.windowMode = Window_Windowed;
     s.vsyncEnabled = 0;
@@ -367,6 +396,12 @@ inline SystemSettings defaults() {
     s.longShadows = 1;
     s.autoCameraRotation = 1;
     std::copy(std::begin(kDefaultTankKeys), std::end(kDefaultTankKeys), s.tankKeyBindings);
+#ifdef CANE_ANDROID
+    s.fastShadows = 1;   // (the Quest / phones: GPU-bound; perf-5)
+#else
+    s.fastShadows = 0;
+#endif
+    s.renderer = 0;   // (Auto)
     return s;
 }
 // Sly 2's defaults: defaults() with Sly 2's keyboard / mouse layout. (A file that lacks the bindings still takes
@@ -415,6 +450,8 @@ inline SystemSettings upgrade(const legacy::V15& old) { return detail::fromPrefi
 inline SystemSettings upgrade(const legacy::V16& old) { return detail::fromPrefix(old); }
 inline SystemSettings upgrade(const legacy::V17& old) { return detail::fromPrefix(old); }
 inline SystemSettings upgrade(const legacy::V18& old) { return detail::fromPrefix(old); }
+inline SystemSettings upgrade(const legacy::V19& old) { return detail::fromPrefix(old); }
+inline SystemSettings upgrade(const legacy::V20& old) { return detail::fromPrefix(old); }
 
 // Ok: current version. Upgraded: an older version, converted in memory (the
 // file is untouched until save()). Missing: no file. Corrupt: unreadable,
@@ -472,6 +509,8 @@ inline LoadResult load(const fs::path& file, SystemSettings& out, uint32_t* vers
     case 16: result = detail::loadLegacy<legacy::V16>(stream, header, out); break;
     case 17: result = detail::loadLegacy<legacy::V17>(stream, header, out); break;
     case 18: result = detail::loadLegacy<legacy::V18>(stream, header, out); break;
+    case 19: result = detail::loadLegacy<legacy::V19>(stream, header, out); break;
+    case 20: result = detail::loadLegacy<legacy::V20>(stream, header, out); break;
     case kVersion: {
         SystemSettings current{};
         if (detail::readPayload(stream, header, current)) {
@@ -499,6 +538,8 @@ inline uint32_t payloadSize(uint32_t version) {
     case 16: return sizeof(legacy::V16);
     case 17: return sizeof(legacy::V17);
     case 18: return sizeof(legacy::V18);
+    case 19: return sizeof(legacy::V19);
+    case 20: return sizeof(legacy::V20);
     case kVersion: return sizeof(SystemSettings);
     default: return 0;
     }
@@ -570,7 +611,7 @@ inline void sanitizeStatic(SystemSettings& s, int monitorHeight, int maxSamples,
     s.streamerMode = s.streamerMode != 0;
     s.alwaysOriginalPsPrompts = s.alwaysOriginalPsPrompts != 0;
     s.promptStyle = std::clamp(s.promptStyle, static_cast<int>(Prompt_Auto),
-                               static_cast<int>(Prompt_SteamController2026));
+                               static_cast<int>(Prompt_Last));
     s.guiScale = coupledGuiScale(s.guiStyle, s.guiScale);
     s.fovPercent = std::clamp(s.fovPercent, 0, kFovPercentMax) / kFovPercentStep * kFovPercentStep;
     if (std::find(std::begin(kAnisotropyLevels), std::end(kAnisotropyLevels), s.anisotropy) == std::end(kAnisotropyLevels))
@@ -600,6 +641,8 @@ inline void sanitizeStatic(SystemSettings& s, int monitorHeight, int maxSamples,
     s.controllerVibration = s.controllerVibration != 0;
     s.longShadows = s.longShadows != 0;
     s.autoCameraRotation = s.autoCameraRotation != 0;
+    s.fastShadows = s.fastShadows != 0;
+    if (s.renderer < 0 || s.renderer > 2) s.renderer = 0;
     for (int i = 0; i < kCameraKeyCount; ++i)
         if (!validCameraKey(s.cameraKeyBindings[i])) s.cameraKeyBindings[i] = kDefaultCameraKeys[i];
     for (int i = 0; i < 2; ++i)

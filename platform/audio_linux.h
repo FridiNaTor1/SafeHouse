@@ -220,10 +220,11 @@ struct IXAudio2 {
     void UnregisterForCallbacks(IXAudio2EngineCallback*) {}
     // Defaults keep the original fixed 2 ch / 48 kHz mix (Sly 2 relies on it);
     // Sly 1 passes its own format.
+    // (deviceIndex: FAudio's, 0 the default device, else SDL's output device index + 1; Sly2-Release audio.cpp)
     HRESULT CreateMasteringVoice(IXAudio2MasteringVoice** result, uint32_t channels = 2,
-                                 uint32_t sampleRate = 48000) {
+                                 uint32_t sampleRate = 48000, uint32_t deviceIndex = 0) {
         auto voice = std::make_unique<IXAudio2MasteringVoice>();
-        auto r = FAudio_CreateMasteringVoice(handle, &voice->handle, channels, sampleRate, 0, 0, nullptr);
+        auto r = FAudio_CreateMasteringVoice(handle, &voice->handle, channels, sampleRate, 0, deviceIndex, nullptr);
         if (!r) *result = voice.release();
         return static_cast<HRESULT>(r);
     }

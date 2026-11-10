@@ -96,7 +96,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y ninja-build ccache file desktop-file-utils libgl1-mesa-dev libxrandr-dev libxinerama-dev \
-            libxcursor-dev libxi-dev libwayland-dev libxkbcommon-dev wayland-protocols nasm
+            libxcursor-dev libxi-dev libwayland-dev libxkbcommon-dev wayland-protocols nasm glslang-tools
+          # (glslang-tools: Sly 2's Vulkan renderer compiles its SPIR-V at build time; without it Sly 2 builds OpenGL-only)
           # SDL2 is built from source (Ubuntu 22.04's is too old for FAudio). Without these headers it builds with no
           # audio drivers (only dummy / disk: "SDL audio failed to initialize") and no udev / HIDAPI controller support.
           # SDL loads each of these libraries at run time, so they add no hard dependency. Same set as the local
@@ -173,7 +174,7 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Build tools (Ninja, NSIS, ccache)
-        run: sudo apt-get update && sudo apt-get install -y ninja-build nsis ccache nasm
+        run: sudo apt-get update && sudo apt-get install -y ninja-build nsis ccache nasm glslang-tools   # (glslang: Sly 2's Vulkan SPIR-V)
       - name: LLVM/MinGW cache
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:

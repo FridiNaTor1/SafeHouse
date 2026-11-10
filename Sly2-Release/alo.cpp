@@ -1,3 +1,4 @@
+#include "fastpaths.h"
 #include <execinfo.h>
 #include "simdmat.h"
 #include "clock.h"
@@ -319,7 +320,7 @@ void UpdateAloHierarchyWorlds(ALO* palo)
 
 bool FUpdateAloHierarchyWorldsIsolated(ALO* palo, const ALO* paloRoot)
 {
-#ifdef __SWITCH__
+#if SLY2_FASTPATHS
     // (the Switch: the records two ahead and the children's class pointers prefetched; each record is a heap block of
     // its own)
     auto prefetchXf = [](const XF* p) {

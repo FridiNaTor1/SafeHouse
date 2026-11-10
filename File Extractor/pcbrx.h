@@ -78,7 +78,9 @@ inline std::string UniqueStem() {
 
 // A native tool beside cane-extractor (BundledToolService / FindRebuilder in the C# extractor).
 inline fs::path Tool(const char* name) {
-#ifdef _WIN32
+#if defined(CANE_ANDROID)
+    const fs::path file = cane::executableDirectory() / ("lib" + std::string(name) + ".so");
+#elif defined(_WIN32)
     const fs::path file = cane::executableDirectory() / (std::string(name) + ".exe");
 #else
     const fs::path file = cane::executableDirectory() / name;

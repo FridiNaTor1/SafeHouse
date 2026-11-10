@@ -7,6 +7,10 @@
 
 #include "rumble.h"
 #include "frontend.h"
+#include "cheat.h"
+#include "../platform/sly2_settings.h"
+#include "display.h"
+#include <type_traits>
 #include "replay.h"
 #include "game.h"
 
@@ -102,6 +106,8 @@ const char* const s_aszEpisode[9] = {"intro", "nightclub", "palace", "temple", "
 
 // orig 0x2BE080.. (the episode menu's tables in the executable)
 int32_t NElf(uint32_t va) { return int32_t(g_disc.U32Elf(va)); }  // (an address comes back as the USA one: disc.h)
+// orig 0x2BE26C: every episode and movie open (0 in the executable; the cheat code R R1 D R1 D D sets it: cheat.h)
+bool FAllEpisodesOpen() { return NElf(0x2BE26C) != 0 || FCheatAllEpisodes(); }
 
 GAMESAVE s_gsPending;   // orig taskmgr +0x1C (0x2DEB4C): the save the next load starts from
 bool s_fPending = false;
@@ -188,7 +194,7 @@ void SetEpMode(EPMENU& p, int mode, int sub)
 // orig 0x0015D798: the movies open for the current episode's list
 int CmovieOpen(const EPMENU& p)
 {
-    if (NElf(0x2BE26C)) return 0x10;
+    if (FAllEpisodesOpen()) return 0x10;
     int n = NElf(0x2BE2D0 + 4 * uint32_t(p.max));
     if (GRef(RefGetProgress({"episode", s_aszEpisode[p.max], "dt"})) == 0.0f) n -= 2;
     else if (NRef(RefGetProgress({"episode", s_aszEpisode[p.max], "percent_complete"})) <= 99) n -= 1;
@@ -203,7 +209,7 @@ void StartEpMenu(EPMENU& p, LO* plo)
     p = EPMENU{};
     p.plo = plo;
     p.max = 8;
-    while (!NElf(0x2BE26C))
+    while (!FAllEpisodesOpen())
     {
         if (GRef(RefGetProgress({"episode", s_aszEpisode[p.max], "dt"})) != 0.0f) break;
         if (NRef(RefGetProgress({"episode", s_aszEpisode[p.max - 1], "percent_complete"})) >= 100) break;
@@ -268,7 +274,7 @@ void UpdateEpMenu(EPMENU& p, SW* psw)
         if (p.hint == 0)
         {
             const int32_t va = NElf(0x2BE248 + 4 * uint32_t(p.cur));
-            const bool fOpen = FPercentDone(p.cur) || NElf(0x2BE26C) != 0;
+            const bool fOpen = FPercentDone(p.cur) || FAllEpisodesOpen();
             if (va && fOpen && g_clock.tReal - p.t130 > 10.0f) SetHint(p, 1);
         }
         else if (p.hint == 1)
@@ -600,6 +606,37 @@ void ReadSaveSlots(const std::string& dirDev)
     s_fSlotsChosen = false;
 }
 
+// (PC, migration once: display.h MigrateSaveOptions) the option flags of the newest slot with a game into Settings.ini
+// while it marks them pending (the first run after the options moved out of the saves); a card with slots but no
+// game: nothing to take (no longer pending)
+void MigrateSaveOptionsFromNewestSlot()
+{
+    if (!FSaveOptionsPending()) return;
+    cane::settings::SaveOptionValues v;
+    if (g_islotCur >= 0 && g_aslot[g_islotCur].fFile && GRef(RefProgressOfSlot(g_islotCur, {"dt"})) != 0.0f)
+    {
+        auto flag = [](int islot, const char* name, bool& has, auto& value) {
+            const CRef r = RefProgressOfSlot(islot, {"flags", name});
+            has = r.m_tagk != TAGK_Nil;
+            if (!has) return;
+            using T = std::decay_t<decltype(value)>;
+            if constexpr (std::is_same_v<T, float>) value = GRef(r);
+            else if constexpr (std::is_same_v<T, int>) value = NRef(r);
+            else value = NRef(r) != 0;
+        };
+        flag(g_islotCur, "fNoVibration", v.hasVibration, v.noVibration);
+        flag(g_islotCur, "uMusicVolume", v.hasMusic, v.musicComplement);
+        flag(g_islotCur, "uEffectsVolume", v.hasEffects, v.effectsComplement);
+        flag(g_islotCur, "nMixerMode", v.hasSpeakers, v.speakers);
+        flag(g_islotCur, "fReverseLookAround", v.hasInvertBinocucom, v.invertBinocucom);
+        flag(g_islotCur, "fReverseAim", v.hasInvertTurret, v.invertTurret);
+        std::printf("settings: the options of save %d (vibration %s, music %.2f, effects %.2f, speakers %d, invert binocucom %d, "
+                    "turret %d)\n", g_islotCur + 1, v.noVibration ? "off" : "on", 1.0f - v.musicComplement,
+                    1.0f - v.effectsComplement, v.speakers, int(v.invertBinocucom), int(v.invertTurret));
+    }
+    MigrateSaveOptions(v);
+}
+
 // orig 0x001AB418 (6): the newest of the slots with a game (time played +0x3B1C not 0); at a world's start (the
 // progress layout is the world's)
 void ChooseNewestSlot()
@@ -629,6 +666,7 @@ void ChooseNewestSlot()
         if (GRef(RefProgressOfSave(g_aslot[i].save, {"dt"})) == 0.0f) continue;
         if (g_aslot[g_islotCur].tWrite < g_aslot[i].tWrite || !g_aslot[g_islotCur].fFile) g_islotCur = i;
     }
+    MigrateSaveOptionsFromNewestSlot();
 }
 
 void RechooseSaveSlots()
@@ -653,6 +691,10 @@ bool FWriteSaveSlot(int islot)
     // orig 0x1ABCE8 / 0x1ABD40: 0x1D54B8 (the vibration choice into the record), 0x1D84B0 (the record into the slot),
     // then the card thread writes it
     ApplyVibrationSetting();
+    // (PC) the record's option flags as Settings.ini's (menu.h); a save written by this build carries them, so the
+    // options are no longer pending a migration from the saves (display.h)
+    SyncOptionsToRecord();
+    if (FSaveOptionsPending()) MigrateSaveOptions(cane::settings::SaveOptionValues{});
     GAMESAVE gs;
     CopyGameSaveForSlot(gs);
     MergeReplaySave(gs);   // (QoL Replay Jobs: a replay keeps the save's progress)
@@ -759,6 +801,7 @@ void OnGameRecordEvent(int grfReq)
     if (IepisodeCur() == 0 && g_islotChosen < 0 && g_islotCur >= 0 && GRef(RefGetProgress({"dt"})) == 0.0f &&
         GRef(RefProgressOfSlot(g_islotCur, {"dt"})) != 0.0f)
         ApplyGameSettings(g_aslot[g_islotCur].save);
+    SyncOptionsToRecord();   // (PC: the record's option flags mirror Settings.ini, menu.h)
 }
 
 void StartFrontEnd(SW* psw, int grfReq)

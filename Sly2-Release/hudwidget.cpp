@@ -3,6 +3,7 @@
 // func_001DA4B8.c / func_001DA578.c.
 
 #include "hudwidget.h"
+#include "cheat.h"
 #include "actioninput.h"
 #include "skipcut.h"
 #include "debugmenu.h"
@@ -488,6 +489,7 @@ void UpdateHud(SW* psw)
     UpdateShop(psw);
     UpdateJobHelp(psw);
     UpdateGadgetMenu(psw, PloPlayerPo());
+    UpdateCheatCodes(psw);   // 0x14BFF8 on 0x2DDEC0 (cheat.h)
     UpdateGauge(s_gauge);
     // Development-only semantic trace for comparisons with the original gauge.
     static const bool s_fMeter = std::getenv("SLY2N_HUDMETER") != nullptr;

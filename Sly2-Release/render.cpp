@@ -1,5 +1,6 @@
 // See render.h.
 
+#include "fastpaths.h"
 #include "texmod.h"
 #include "render.h"
 #include "simdmat.h"
@@ -9,6 +10,7 @@
 #include "cm.h"
 #include "emitter.h"
 #include "gl.h"
+#include "vr.h"
 #include "light.h"
 #include "laserrender.h"
 #include "pocket.h"
@@ -49,6 +51,7 @@ struct GLGLOB
     GLuint ssboEdgeSkin = 0;   // per edge vertex: bone weights and indices (skinned cel borders)
     glm::vec3 posCenter{0.0f};  // the geometry's bounding sphere (for globs without a draw record)
     float sRadius = -1.0f;
+    bool fBoundsExact = false;  // (perf-4) the sphere holds the uploaded vertices (SetBounds; not once they move)
     GLsizei cedge = 0;
     GLsizei cindex = 0;
     // its vertices' lowest colour-A alpha as last uploaded: with the texture's lowest, a bound on each fragment's alpha
@@ -141,6 +144,50 @@ void NoteTexMinAlpha(GLuint tex, uint8_t aMin)
     s_aallpass.clear();
 }
 
+// (perf-5, g_fGlobArrays: GL / GLES without bindless textures) the pass draws' textures copied into layers of 2D array
+// textures, one array per size ("pages" of several layers): a run of draws then binds one array and each draw picks its
+// layer (glob.vert TEXARRAY, SSBO 5), so neighbouring commands that differ only in their textures (of one size) join one
+// run, as the bindless runs do. The 2D textures stay (every other user, and the states without a layer: texture mods,
+// sizes not known); a layer is a GPU copy of one (glCopyImageSubData), sampled with the same sampler object, so the same
+// texels. Freed with the texture cache (ResetTextureCache, a world change).
+struct TEXPAGE { GLuint tex = 0; int dx = 0, dy = 0, clayer = 0, cused = 0; };
+std::vector<TEXPAGE> s_atexpage;
+std::unordered_map<GLuint, uint32_t> s_mptexlayer;              // texture -> page << 16 | layer
+std::unordered_map<GLuint, std::pair<int, int>> s_mptexsize;    // TexFromSel's own textures (not mods): their size
+uint32_t s_genArray = 1;
+constexpr uint32_t LAYERREF_NONE = UINT32_MAX;
+uint32_t LayerRefOfTex(GLuint tex)
+{
+    if (const auto it = s_mptexlayer.find(tex); it != s_mptexlayer.end()) return it->second;
+    const auto itSize = s_mptexsize.find(tex);
+    if (itSize == s_mptexsize.end()) return s_mptexlayer[tex] = LAYERREF_NONE;
+    const auto [dx, dy] = itSize->second;
+    size_t ipage = 0;
+    while (ipage < s_atexpage.size() && !(s_atexpage[ipage].dx == dx && s_atexpage[ipage].dy == dy && s_atexpage[ipage].cused < s_atexpage[ipage].clayer))
+        ++ipage;
+    if (ipage == s_atexpage.size())
+    {
+        if (ipage >= 0xFFFF) return s_mptexlayer[tex] = LAYERREF_NONE;
+        static const GLint s_clayerMax = [] { GLint c = 256; glGetIntegerv(GL_MAX_ARRAY_TEXTURE_LAYERS, &c); return std::max<GLint>(c, 1); }();
+        // (about 4 MiB a page: small textures share a page by the dozens, a 512 x 512 one has 4 neighbours)
+        TEXPAGE page;
+        page.dx = dx, page.dy = dy;
+        page.clayer = int(std::clamp<size_t>((size_t(4) << 20) / (size_t(dx) * size_t(dy) * 4), 1, size_t(std::min(s_clayerMax, 256))));
+        glGenTextures(1, &page.tex);
+        glBindTexture(GL_TEXTURE_2D_ARRAY, page.tex);
+        glTexStorage3D(GL_TEXTURE_2D_ARRAY, 1, GL_RGBA8, dx, dy, page.clayer);
+        glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
+        s_atexpage.push_back(page);
+    }
+    TEXPAGE& page = s_atexpage[ipage];
+    const int layer = page.cused++;
+    // (a copy needs a complete source: its single level, whatever the texture's own filter says; the draws sample it
+    // through sampler objects, which do not read these)
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAX_LEVEL, 0);
+    glCopyImageSubData(tex, GL_TEXTURE_2D, 0, 0, 0, 0, page.tex, GL_TEXTURE_2D_ARRAY, 0, 0, 0, layer, dx, dy, 1);
+    return s_mptexlayer[tex] = uint32_t(ipage) << 16 | uint32_t(layer);
+}
 // (perf-3, g_fGlobBindless) the resident handles of (texture, sampler) pairs the pass draws use; a deleted texture's are
 // made non-resident first and forgotten (its name may come back), and the per-state cache is invalidated
 std::unordered_map<uint64_t, GLuint64> s_mphandle;
@@ -200,6 +247,7 @@ GLuint TexFromSel(const TEXSEL& sel)
         glBindTexture(GL_TEXTURE_2D, tex);
         glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, sel.pbmp->dx, sel.pbmp->dy, 0, GL_RGBA, GL_UNSIGNED_BYTE, rgba.data());
+        s_mptexsize[tex] = {sel.pbmp->dx, sel.pbmp->dy};   // (g_fGlobArrays: LayerRefOfTex)
         uint8_t aMin = 255;
         for (size_t i = 3; i < rgba.size(); i += 4) aMin = std::min(aMin, rgba[i]);
         NoteTexMinAlpha(tex, rgba.size() >= 4 ? aMin : 0);
@@ -225,6 +273,7 @@ void InitCommon()
     glBindTexture(GL_TEXTURE_2D, s_texWhite);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, &white);
     NoteTexMinAlpha(s_texWhite, 0x80);
+    s_mptexsize[s_texWhite] = {1, 1};
     glGenSamplers(16, s_asampler);
     constexpr GLenum kMaxAniso = 0x84FF, kAniso = 0x84FE;  // GL_(MAX_)TEXTURE_MAX_ANISOTROPY (4.6, EXT before)
     GLfloat rAnisoMax = 0.0f;
@@ -260,6 +309,7 @@ template <class F> void SetBounds(GLGLOB* pgl, size_t c, F posOf)
     float r2 = 0;
     for (size_t i = 0; i < c; ++i) { const glm::vec3 d = posOf(i) - pgl->posCenter; r2 = std::max(r2, glm::dot(d, d)); }
     pgl->sRadius = std::sqrt(r2);
+    pgl->fBoundsExact = true;
 }
 
 void AppendArena(GLGLOB* pgl, const std::vector<GPUVTX>& av, const std::vector<uint32_t>& ai)
@@ -273,6 +323,24 @@ void AppendArena(GLGLOB* pgl, const std::vector<GPUVTX>& av, const std::vector<u
     s_avtxArena.insert(s_avtxArena.end(), av.begin(), av.end());
     s_aindexArena.insert(s_aindexArena.end(), ai.begin(), ai.end());
     s_apglArena.push_back(pgl);
+}
+
+// (g_fDrawUniform, OpenGL ES without base instance: glob.vert CANE_PULL) per arena (its VAO) the buffers the vertex
+// program reads and a CPU copy of its indices, from which a run's sub-draws become one draw (BuildPullDraws)
+struct PULLARENA { GLuint vbo = 0, vboColor = 0; std::vector<uint32_t> aindex; };
+std::unordered_map<GLuint, PULLARENA> s_mppullarena;
+GLuint s_vaoPullBound = 0;   // (the arena whose buffers are on bindings 6 / 7)
+const PULLARENA* PpullArena(GLuint vao)
+{
+    const auto it = s_mppullarena.find(vao);
+    if (it == s_mppullarena.end()) return nullptr;
+    if (vao != s_vaoPullBound)
+    {
+        glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 6, it->second.vbo);
+        glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 7, it->second.vboColor);
+        s_vaoPullBound = vao;
+    }
+    return &it->second;
 }
 
 void FlushArena()
@@ -319,6 +387,7 @@ void FlushArena()
     glVertexAttribDivisor(6, 1);
     glBindVertexArray(0);
     for (GLGLOB* pgl : s_apglArena) { pgl->vao = vao; pgl->vbo = vbo; pgl->vboColor = vboColor; }
+    if (g_fDrawUniform) s_mppullarena[vao] = PULLARENA{vbo, vboColor, s_aindexArena};
     s_apglArena.clear();
     std::vector<GPUVTX>().swap(s_avtxArena);
     std::vector<uint32_t>().swap(s_aindexArena);
@@ -477,7 +546,7 @@ struct DRAWREC
     uint32_t iboneFirst = 0;                            // their place in the frame's bone SSBO
 };
 
-#ifdef __SWITCH__
+#if SLY2_FASTPATHS
 // (the Switch) What RenderPass's command loop reads of the next records, prefetched in stages along their chains of
 // pointers: the groups six records ahead, their entries four ahead, what those point to two ahead, the passes one.
 void PrefetchRecordsAhead(const std::vector<DRAWREC>& arec, size_t irec)
@@ -528,17 +597,21 @@ struct UNIFORMS
 {
     GLint matWorldToClip, icolor, rgbaConst, posCamera, dirCamera;
     GLint tex, fTextured, ate, atst, aref, afailMode, fogColor, fFogBlack, fDate, texDate;
+    GLint texArr = -1;         // (g_fGlobArrays: glob.frag TEXARRAY's array, unit 2)
+    GLint caneDrawBase = -1, caneVertexBase = -1;   // (g_fDrawUniform: glob.vert CANE_PULL's bases)
 };
-// The glob programs: 0 glGlobShader, 1 glGlobShaderNoKill (no discards: the runs without alpha test and DATE). Each has
-// its own uniform locations and values; s_pu is the bound one's (RenderPass's useGlob).
-UNIFORMS s_au[2];
+// The glob programs: 0 glGlobShader, 1 glGlobShaderNoKill (no discards: the runs without alpha test and DATE); 2 / 3 the
+// same without the near-clip geometry stage (perf-4: the runs whose draws cannot reach the near plane). Each has its own
+// uniform locations and values; s_pu is the bound one's (RenderPass's useGlob).
+constexpr int CPROGGLOB = 4;
+UNIFORMS s_au[CPROGGLOB];
 const UNIFORMS* s_pu = &s_au[0];
 int s_iprogGlob = 0;
-GLSHADER* const s_apshGlob[2] = {&glGlobShader, &glGlobShaderNoKill};
+GLSHADER* const s_apshGlob[CPROGGLOB] = {&glGlobShader, &glGlobShaderNoKill, &glGlobShaderNoGeom, &glGlobShaderNoKillNoGeom};
 // The glob uniforms outside DSTATE that a draw inherits from whatever set them last (rgbaConst: the volumes and hulls;
 // fFogBlack: the passes): kept per program, brought to the last value set when it is bound (SyncGlobInherited).
 struct GLOBINHERIT { glm::vec4 rgbaConst{0.0f}; int fFogBlack = 0; };
-GLOBINHERIT s_aglobinh[2], s_globinhLast;
+GLOBINHERIT s_aglobinh[CPROGGLOB], s_globinhLast;
 void SetGlobRgbaConst(float r, float g, float b, float a)
 {
     glUniform4f(s_pu->rgbaConst, r, g, b, a);
@@ -658,6 +731,7 @@ struct CMD
     int32_t baseVertex = 0;
     uint32_t idraw = 0;
     CMDK cmdk = CMDK_Pass;
+    uint8_t fNoClip = 0;        // (perf-4) its record's vertices all in front of the near plane: no glob.geom needed
     const DRAWREC* prec = nullptr;
     const SUBGLOB* psub = nullptr;
 };
@@ -768,6 +842,36 @@ struct STREAMRING
 };
 STREAMRING s_ring;
 
+// (g_fGlobArrays) a pass state's layer (LAYERREF_NONE: untextured, or drawn with its 2D texture bound) and its class: the
+// states the same but for the texture (one page) are one class
+struct LAYEROFSTATE { uint32_t gen = 0; uint32_t iclass = UINT32_MAX; uint32_t ref = LAYERREF_NONE; };
+std::vector<LAYEROFSTATE> s_alayerIstate;
+std::unordered_map<DSTATE, uint32_t, DSTATEHASH> s_mpclassArray;
+const LAYEROFSTATE& LayerEntryOfIstate(uint32_t istate)
+{
+    if (istate >= s_alayerIstate.size()) s_alayerIstate.resize(istate + 1);
+    LAYEROFSTATE& e = s_alayerIstate[istate];
+    if (e.gen != s_genArray)
+    {
+        DSTATE st = s_astate[istate];
+        e.gen = s_genArray;
+        e.ref = st.fTextured ? LayerRefOfTex(st.tex) : LAYERREF_NONE;
+        st.tex = e.ref == LAYERREF_NONE ? st.tex : 0x80000000u | (e.ref >> 16);
+        e.iclass = s_mpclassArray.try_emplace(st, uint32_t(s_mpclassArray.size())).first->second;
+    }
+    return e;
+}
+uint32_t LayerRefOfIstate(uint32_t istate) { return LayerEntryOfIstate(istate).ref; }
+bool FSameButLayer(uint32_t istateA, uint32_t istateB)
+{
+    if (istateA == istateB) return true;
+    LayerEntryOfIstate(istateA);
+    LayerEntryOfIstate(istateB);   // (both made first: a lookup may grow the vector)
+    const LAYEROFSTATE& a = s_alayerIstate[istateA];
+    const LAYEROFSTATE& b = s_alayerIstate[istateB];
+    return a.iclass == b.iclass && a.ref != LAYERREF_NONE && b.ref != LAYERREF_NONE;
+}
+
 // (g_fGlobBindless) a state's texture handle (0: untextured, or none made: then drawn with the texture bound) and its
 // merge class (the state without its texture and sampler, interned: equal classes differ only in those)
 struct HANDLEOFSTATE { uint32_t gen = 0; uint32_t iclass = UINT32_MAX; GLuint64 handle = 0; };
@@ -811,11 +915,11 @@ struct STATECACHE
     DSTATE cur;
     bool fValid = false;
     // the uniforms each glob program was last given (a program keeps its own), and the bound program
-    DSTATE aucur[2];
-    bool afuValid[2] = {};
+    DSTATE aucur[CPROGGLOB];
+    bool afuValid[CPROGGLOB] = {};
     int iprog = 0;
     // everything set outside Apply: the GL state and both programs' uniforms set again at the next run
-    void Invalidate() { fValid = false; afuValid[0] = afuValid[1] = false; }
+    void Invalidate() { fValid = false; for (bool& f : afuValid) f = false; }
     // fBindTexture false: the run's draws take their textures from handles (g_fGlobBindless): the unit's binding is left
     // as it is (and forgotten: the next run that binds one binds it)
     void Apply(const DSTATE& st, bool fBindTexture = true)
@@ -1013,7 +1117,7 @@ const SUBGLOBGPU& SubgpuOf(const SUBGLOB& sub, GLuint vao, uint8_t fCull)
 // along the axis), with the faces toward the centre as the near cap and their projections as the far cap: a
 // shadow volume. The pixels inside are darkened like the type-3 hulls (z-fail stencil, the shader's alpha).
 std::vector<glm::vec3> s_avtxShadow2;
-#ifdef __SWITCH__
+#if SLY2_FASTPATHS
 std::vector<uint32_t> s_acvtxShadow2Caster;   // (the Switch: the vertex count of each of the pass's casters, in order)
 #endif
 GLSHADER s_shShadowVol, s_shShadowVolNoKill;
@@ -1033,7 +1137,7 @@ bool FBuildShadow2(const SCENEGLOBSET& sgs, size_t iglob, const GLOB& glob, cons
     const std::vector<glm::mat4>* pamatBone = iglob < sgs.aamatBone.size() && !sgs.aamatBone[iglob].empty() ? &sgs.aamatBone[iglob] : nullptr;
     // the world positions (skinned by the weights' bones)
     static thread_local std::vector<std::vector<glm::vec3>> s_aav;
-#ifdef __SWITCH__
+#if SLY2_FASTPATHS
     // (the Switch: never shrunk, so the pieces' vectors keep their storage from one caster to the next)
     if (s_aav.size() < glob.asubfx.size()) s_aav.resize(glob.asubfx.size());
 #else
@@ -1128,7 +1232,15 @@ bool FBuildShadow2(const SCENEGLOBSET& sgs, size_t iglob, const GLOB& glob, cons
         static thread_local std::vector<uint32_t> s_akDone;
         for (uint32_t k : s_akDone) s_abDone[k >> 6] = 0;
         s_akDone.clear();
+        // (display.h fFastShadows, the Switch always)
 #ifdef __SWITCH__
+        constexpr bool fFastShadows = true;
+#else
+        static const int s_maskFastSh = std::getenv("SLY2N_FASTSHADOWMASK") ? std::atoi(std::getenv("SLY2N_FASTSHADOWMASK")) : 3;   // (debug: 1 walls, 2 z-pass)
+        const bool fFastShadows = g_display.fFastShadows && (s_maskFastSh & 1);
+#endif
+        if (fFastShadows)
+        {
         // (the Switch: the same prisms without the side walls two of them share from opposite sides: the same four
         // corners, one counting +1 where the other counts -1 in z-pass and z-fail alike, so the pair counts nothing.
         // Only a hairline along the wall's diagonal, which each prism split its own way, can count differently.)
@@ -1201,7 +1313,9 @@ bool FBuildShadow2(const SCENEGLOBSET& sgs, size_t iglob, const GLOB& glob, cons
             if (p.grfWall & 2) { side(b, c, cf); side(b, cf, bf); }
             if (p.grfWall & 4) { side(c, a, af); side(c, af, cf); }
         }
-#else
+        }
+        else
+        {
         auto prism = [&](uint8_t ia, uint8_t ib, uint8_t ic) {
             std::array<uint8_t, 3> key{ia, ib, ic};
             // (sorted: a three-element network, the same order as std::sort)
@@ -1233,7 +1347,7 @@ bool FBuildShadow2(const SCENEGLOBSET& sgs, size_t iglob, const GLOB& glob, cons
             prism(oa, e0, e1);
             prism(e1, e0, ob);
         }
-#endif
+        }
     }
     cmd.firstIndex = ivtxFirst;
     cmd.count = uint32_t(avtxOut.size()) - ivtxFirst;
@@ -1248,6 +1362,30 @@ bool FBuildShadow2(const SCENEGLOBSET& sgs, size_t iglob, const GLOB& glob, cons
 constexpr GLuint STENCIL_FBA = 0x80, STENCIL_SH7 = 0x40, STENCIL_SH8 = 0x20, STENCIL_COUNT7 = 0x7F, STENCIL_COUNT8 = 0x3F;
 
 // fDateMarked: the stencil's STENCIL_FBA holds the phase's DATE (FMarkDate), so the program without the discard draws.
+// Whether triangles (3 vertices each) form closed, consistently oriented surfaces: each directed edge p -> q (exact
+// positions) appears as often as q -> p.
+bool FClosedOriented(const glm::vec3* av, uint32_t cvtx)
+{
+    struct EDGE { std::array<uint32_t, 6> a; bool operator<(const EDGE& o) const { return a < o.a; } bool operator==(const EDGE& o) const { return a == o.a; } };
+    static thread_local std::vector<EDGE> s_aedge, s_arev;
+    s_aedge.clear();
+    s_arev.clear();
+    auto bits = [](const glm::vec3& p, uint32_t* pu) { std::memcpy(pu, &p, sizeof(glm::vec3)); };
+    for (uint32_t t = 0; t + 2 < cvtx; t += 3)
+        for (int k = 0; k < 3; ++k)
+        {
+            const glm::vec3 &p = av[t + uint32_t(k)], &q = av[t + uint32_t((k + 1) % 3)];
+            EDGE e, r;
+            bits(p, e.a.data()); bits(q, e.a.data() + 3);
+            bits(q, r.a.data()); bits(p, r.a.data() + 3);
+            s_aedge.push_back(e);
+            s_arev.push_back(r);
+        }
+    std::sort(s_aedge.begin(), s_aedge.end());
+    std::sort(s_arev.begin(), s_arev.end());
+    return s_aedge == s_arev;
+}
+
 // pplaneNear (the Switch): the plane past which a vertex lies in front of the drawn near plane (n . p + d > 0).
 void DrawShadow2(const CMD& cmd, const glm::mat4& matWorldToClip, bool fDateMarked, const glm::vec4* pplaneNear = nullptr)
 {
@@ -1275,12 +1413,17 @@ void DrawShadow2(const CMD& cmd, const glm::mat4& matWorldToClip, bool fDateMark
     const glm::vec3* pvtx = s_avtxShadow2.data() + cmd.firstIndex;
     uint32_t cpass = 0;   // (the Switch: the vertices counted z-pass, uploaded first)
 #ifdef __SWITCH__
+    constexpr bool fFastShadows = true;
+#else
+    static const int s_maskFastSh = std::getenv("SLY2N_FASTSHADOWMASK") ? std::atoi(std::getenv("SLY2N_FASTSHADOWMASK")) : 3;
+    const bool fFastShadows = g_display.fFastShadows && (s_maskFastSh & 2);   // (display.h: not the same picture, an extra dark quad at the Ep8 roof chase's start)
+#endif
     // (the Switch: a caster's volume wholly in front of the drawn near plane neither holds the camera nor is cut by it,
     // so z-pass counts it as z-fail does, and its fragments behind the scene (most of a long shadow) fail early Z)
     static std::vector<glm::vec3> s_avtxSplit;
     uint32_t cvtxCasters = 0;
     for (uint32_t c : s_acvtxShadow2Caster) cvtxCasters += c;
-    if (pplaneNear && cvtxCasters == cmd.count)
+    if (fFastShadows && pplaneNear && cvtxCasters == cmd.count)
     {
         s_avtxSplit.resize(cmd.count);
         const glm::vec3 n(*pplaneNear);
@@ -1289,13 +1432,16 @@ void DrawShadow2(const CMD& cmd, const glm::mat4& matWorldToClip, bool fDateMark
         {
             bool fFront = true;
             for (uint32_t k = 0; k < c && fFront; ++k) fFront = glm::dot(n, pvtx[i + k]) + pplaneNear->w > 0.0f;
+            // (perf-5) and only a consistently oriented closed surface: every directed edge met by its reverse as often.
+            // Then z-pass counts as z-fail does; a caster whose prism faces the outward test turned the wrong way (the
+            // long shadows' twisted prisms) keeps z-fail (the extra dark quad at the Ep8 roof chase's start)
+            if (fFront) fFront = FClosedOriented(pvtx + i, c);
             if (fFront) { std::copy(pvtx + i, pvtx + i + c, s_avtxSplit.data() + cpass); cpass += c; }
             else { cfail -= c; std::copy(pvtx + i, pvtx + i + c, s_avtxSplit.data() + cfail); }
             i += c;
         }
         pvtx = s_avtxSplit.data();
     }
-#endif
     glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(size_t(cmd.count) * sizeof(glm::vec3)), pvtx, GL_STREAM_DRAW);
     // the prisms' z-fail count into kind 7's (closed volumes: the original's +-2 per face in front of the scene)
     glEnable(GL_STENCIL_TEST);
@@ -1322,10 +1468,27 @@ void DrawShadow2(const CMD& cmd, const glm::mat4& matWorldToClip, bool fDateMark
     glStencilMask(0xFF);
 }
 
+// One indexed draw with its draw index (glob.vert aDraw): the instance base, or with g_fDrawUniform (OpenGL ES without
+// EXT_base_instance) the uniform caneDrawBase of the glob program, which is current for every caller.
+// (CANE_PULL: the vertex program reads the bound arena's vertices from caneVertexBase + the index, the draw index
+// itself with bit 31 set in caneDrawBase)
+static void DrawIndexed(uint32_t count, uint32_t firstIndex, int32_t baseVertex, uint32_t idraw, GLuint vao)
+{
+    if (g_fDrawUniform)
+    {
+        PpullArena(vao);
+        glUniform1ui(s_pu->caneVertexBase, uint32_t(baseVertex));
+        glUniform1ui(s_pu->caneDrawBase, idraw | 0x80000000u);
+        glDrawElements(GL_TRIANGLES, GLsizei(count), GL_UNSIGNED_INT, reinterpret_cast<void*>(size_t(firstIndex) * 4));
+        return;
+    }
+    glDrawElementsInstancedBaseVertexBaseInstance(GL_TRIANGLES, GLsizei(count), GL_UNSIGNED_INT,
+                                                  reinterpret_cast<void*>(size_t(firstIndex) * 4), 1, baseVertex, idraw);
+}
+
 void DrawOne(const CMD& cmd)
 {
-    glDrawElementsInstancedBaseVertexBaseInstance(GL_TRIANGLES, GLsizei(cmd.count), GL_UNSIGNED_INT,
-                                                  reinterpret_cast<void*>(size_t(cmd.firstIndex) * 4), 1, cmd.baseVertex, cmd.idraw);
+    DrawIndexed(cmd.count, cmd.firstIndex, cmd.baseVertex, cmd.idraw, cmd.vao);
     ++g_renderstats.cpass;
 }
 
@@ -1598,15 +1761,55 @@ void DrawShadow(const CMD& cmd, const glm::vec3& posCamera, float sNearClip, con
 // and the combine read (resolved when multisampled).
 GLuint s_fboShAlpha = 0, s_texShAlpha = 0;
 int s_dxShAlpha = 0, s_dyShAlpha = 0;
+// (VR multiview: the two views' copies, a two-layer array, from the eyes' image g_texMultiviewColor)
+GLuint s_texShAlphaMv = 0, s_afboShAlphaMv[2] = {}, s_fboShAlphaMvSrc = 0;
+int s_dxShAlphaMv = 0, s_dyShAlphaMv = 0;
+GLuint g_texMultiviewColor = 0;
+void BindShadowAlpha()
+{
+    glActiveTexture(GL_TEXTURE1);
+    if (g_fMultiviewPass) glBindTexture(GL_TEXTURE_2D_ARRAY, s_texShAlphaMv);
+    else glBindTexture(GL_TEXTURE_2D, s_texShAlpha);
+    glActiveTexture(GL_TEXTURE0);
+}
+void CopyShadowAlphaMultiview(GLuint fbo, int dx, int dy)
+{
+    if (!s_texShAlphaMv || dx != s_dxShAlphaMv || dy != s_dyShAlphaMv)
+    {
+        if (s_texShAlphaMv) { glDeleteTextures(1, &s_texShAlphaMv); glDeleteFramebuffers(2, s_afboShAlphaMv); }
+        glGenTextures(1, &s_texShAlphaMv);
+        glBindTexture(GL_TEXTURE_2D_ARRAY, s_texShAlphaMv);
+        glTexStorage3D(GL_TEXTURE_2D_ARRAY, 1, GL_RGBA8, dx, dy, 2);
+        glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glGenFramebuffers(2, s_afboShAlphaMv);
+        for (int l = 0; l < 2; ++l)
+        {
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, s_afboShAlphaMv[l]);
+            glFramebufferTextureLayer(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, s_texShAlphaMv, 0, l);
+        }
+        if (!s_fboShAlphaMvSrc) glGenFramebuffers(1, &s_fboShAlphaMvSrc);
+        s_dxShAlphaMv = dx, s_dyShAlphaMv = dy;
+    }
+    for (int l = 0; l < 2; ++l)
+    {
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, s_fboShAlphaMvSrc);
+        glFramebufferTextureLayer(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, g_texMultiviewColor, 0, l);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, s_afboShAlphaMv[l]);
+        glBlitFramebuffer(0, 0, dx, dy, 0, 0, dx, dy, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+}
 GLSHADER s_shShadowCombine;
-#ifdef __SWITCH__
+#if SLY2_FASTPATHS
 // (the Switch) The frame rectangle a shadow phase's volumes can reach (x, y, width, height; set by RenderPass at the
 // phase's start): the frame copy, the DATE mark and the combine's ramps only there (the marks are under the volumes).
 std::array<int, 4> s_rectShPhase = {0, 0, 0, 0};
 #endif
 void ShadowBegin(GLuint fbo, int dx, int dy, int kind)
 {
-    if (!s_fboShAlpha || dx != s_dxShAlpha || dy != s_dyShAlpha)
+    if (g_fMultiviewPass) CopyShadowAlphaMultiview(fbo, dx, dy);
+    else if (!s_fboShAlpha || dx != s_dxShAlpha || dy != s_dyShAlpha)
     {
         if (!s_fboShAlpha) { glGenFramebuffers(1, &s_fboShAlpha); glGenTextures(1, &s_texShAlpha); }
         glBindTexture(GL_TEXTURE_2D, s_texShAlpha);
@@ -1619,9 +1822,11 @@ void ShadowBegin(GLuint fbo, int dx, int dy, int kind)
         s_dyShAlpha = dy;
     }
     glDisable(GL_SCISSOR_TEST);
+    if (!g_fMultiviewPass)
+    {
     glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo);
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, s_fboShAlpha);
-#ifdef __SWITCH__
+#if SLY2_FASTPATHS
     {
         const std::array<int, 4>& r = s_rectShPhase;
         if (r[2] > 0 && r[3] > 0)
@@ -1631,9 +1836,8 @@ void ShadowBegin(GLuint fbo, int dx, int dy, int kind)
     glBlitFramebuffer(0, 0, dx, dy, 0, 0, dx, dy, GL_COLOR_BUFFER_BIT, GL_NEAREST);
 #endif
     glBindFramebuffer(GL_FRAMEBUFFER, fbo);
-    glActiveTexture(GL_TEXTURE1);
-    glBindTexture(GL_TEXTURE_2D, s_texShAlpha);
-    glActiveTexture(GL_TEXTURE0);
+    }
+    BindShadowAlpha();
     // the count's base (the green fill)
     glStencilMask(STENCIL_COUNT7);
     glClearStencil(kind == 8 ? 0x1F : 0x3F);
@@ -1663,12 +1867,10 @@ bool FMarkDate()
     static int s_state = 0;   // 0: not tried yet, 1: available, -1: not
     if (s_state == 0)
         s_state = glGlobShaderNoKill.ID && s_shShadowDate.FInit("shadowcombine.vert", "shadowdate.frag", "") ? 1 : -1;
-    if (s_state < 0 || !s_texShAlpha) return false;
+    if (s_state < 0 || !(g_fMultiviewPass ? s_texShAlphaMv : s_texShAlpha)) return false;
     s_shShadowDate.Use();
     glUniform1i(s_shShadowDate.Loc("texDate"), 1);
-    glActiveTexture(GL_TEXTURE1);
-    glBindTexture(GL_TEXTURE_2D, s_texShAlpha);
-    glActiveTexture(GL_TEXTURE0);
+    BindShadowAlpha();
     glBindVertexArray(s_vaoEmpty);
     glDisable(GL_DEPTH_TEST);
     glDepthMask(GL_FALSE);
@@ -1679,7 +1881,7 @@ bool FMarkDate()
     glStencilMask(STENCIL_FBA);
     glStencilFunc(GL_ALWAYS, GLint(STENCIL_FBA), STENCIL_FBA);
     glStencilOp(GL_KEEP, GL_KEEP, GL_REPLACE);
-#ifdef __SWITCH__
+#if SLY2_FASTPATHS
     glEnable(GL_SCISSOR_TEST);   // (the phase's volumes' rectangle: s_rectShPhase)
     glScissor(s_rectShPhase[0], s_rectShPhase[1], s_rectShPhase[2], s_rectShPhase[3]);
     glDrawArrays(GL_TRIANGLES, 0, 3);
@@ -1740,9 +1942,7 @@ void ShadowCombine(bool f7, bool f8)
     s_shShadowCombine.Use();
     glUniform1i(s_shShadowCombine.Loc("texAlpha"), 1);
     const GLint locGain = s_shShadowCombine.Loc("gain"), locM8 = s_shShadowCombine.Loc("m8"), locReset = s_shShadowCombine.Loc("fReset");
-    glActiveTexture(GL_TEXTURE1);
-    glBindTexture(GL_TEXTURE_2D, s_texShAlpha);
-    glActiveTexture(GL_TEXTURE0);
+    BindShadowAlpha();
     glBindVertexArray(s_vaoEmpty);
     glDisable(GL_DEPTH_TEST);
     glDepthMask(GL_FALSE);
@@ -1768,7 +1968,7 @@ void ShadowCombine(bool f7, bool f8)
     struct RAMP { GLuint stencil; float gain; int m8; bool f; };
     const RAMP aramp[] = {{STENCIL_SH7, 128.0f, 0, f7}, {STENCIL_SH8, 96.0f, 1, f8}, {STENCIL_SH7 | STENCIL_SH8, 160.0f, 1, f7 && f8}};
     const GLuint maskMarks = f8 ? STENCIL_SH7 | STENCIL_SH8 : STENCIL_SH7;   // (without kind 8, bit 5 is kind 7's count)
-#ifdef __SWITCH__
+#if SLY2_FASTPATHS
     glEnable(GL_SCISSOR_TEST);   // (the marks are within the phase's volumes' rectangle: s_rectShPhase)
     glScissor(s_rectShPhase[0], s_rectShPhase[1], s_rectShPhase[2], s_rectShPhase[3]);
 #endif
@@ -1780,7 +1980,7 @@ void ShadowCombine(bool f7, bool f8)
         glUniform1i(locM8, r.m8);
         glDrawArrays(GL_TRIANGLES, 0, 3);
     }
-#ifdef __SWITCH__
+#if SLY2_FASTPATHS
     glDisable(GL_SCISSOR_TEST);
 #endif
     glDisable(GL_BLEND);
@@ -1801,6 +2001,7 @@ void UpdateGlobVerticesGpu(const GLOB& glob)
     if (!pgl || !pgl->vbo || glob.meshk != MESHK_Strips || glob.avtx.empty()) return;
     static std::vector<GPUVTX> s_av;
     GpuVerticesOfGlob(glob, s_av);
+    const_cast<GLGLOB*>(pgl)->fBoundsExact = false;   // (perf-4: the sphere no longer holds them)
     glBindBuffer(GL_ARRAY_BUFFER, pgl->vbo);
     glBufferSubData(GL_ARRAY_BUFFER, GLintptr(size_t(pgl->baseVertex) * sizeof(GPUVTX)), GLsizeiptr(s_av.size() * sizeof(GPUVTX)), s_av.data());
     glBindBuffer(GL_ARRAY_BUFFER, 0);
@@ -1812,6 +2013,7 @@ void SetGlobBoundsGpu(const GLOB& glob, const glm::vec3& posCenter, float sRadiu
     if (!glob.pgl) return;
     glob.pgl->posCenter = posCenter;
     glob.pgl->sRadius = sRadius;
+    glob.pgl->fBoundsExact = false;
 }
 
 void UpdateGlobColorsGpu(const GLOB& glob, const GLGLOB* pgl)
@@ -1832,7 +2034,7 @@ void UpdateGlobColorsGpu(const GLOB& glob, const GLGLOB* pgl)
     glBindBuffer(GL_ARRAY_BUFFER, 0);
 }
 
-#ifdef __SWITCH__
+#if SLY2_FASTPATHS
 void PackGlobColors(const GLOB& glob, GLOBCOLORS& cols)
 {
     cols.ab.resize(glob.avtx.size() * sizeof(GPUCOL));
@@ -1873,6 +2075,9 @@ void FlushInstanceGlobsGpu() { FlushArena(); }
 
 void ResetTextureCache()
 {
+    // (CANE_PULL) the old world's arenas keep their buffers, not their CPU indices: a kept world's guests draw from
+    // them sub-draw by sub-draw (RenderPass)
+    for (auto& [vao, pa] : s_mppullarena) std::vector<uint32_t>().swap(pa.aindex);
     // The cache is keyed by the old world's BMP / CLUT records, which ResetShaders frees: a new world's record may get
     // a freed one's address (the wrong texture), and the old textures would stay in GPU memory for the whole session
     // (with texture mods, ~400 MiB per world at 4x: MODDING.md "Limits").
@@ -1885,6 +2090,12 @@ void ResetTextureCache()
     s_mptex.clear();
     s_aallpass.clear();
     ++s_genTexCache;
+    // (g_fGlobArrays) the pages go with the textures (deleted with them at the next TexFromSel)
+    for (const TEXPAGE& page : s_atexpage) s_atexFreed.push_back(page.tex);
+    s_atexpage.clear();
+    s_mptexlayer.clear();
+    for (auto it = s_mptexsize.begin(); it != s_mptexsize.end();) it = it->first == s_texWhite ? std::next(it) : s_mptexsize.erase(it);
+    ++s_genArray;
 }
 
 unsigned GlTextureOfShd(const SHD* pshd, int iframe)
@@ -1930,7 +2141,7 @@ void BuildSceneGpu(SCENE& scene)
         for (GLOB& glob : sgs.pglobset->aglob)
             BuildGlobGpu(glob);
     FlushArena();
-    for (int iprog = 0; iprog < 2; ++iprog)
+    for (int iprog = 0; iprog < CPROGGLOB; ++iprog)
     {
         const GLSHADER& sh = *s_apshGlob[iprog];
         UNIFORMS& u = s_au[iprog];
@@ -1949,6 +2160,9 @@ void BuildSceneGpu(SCENE& scene)
         u.fFogBlack = sh.Loc("fFogBlack");
         u.fDate = sh.Loc("fDate");
         u.texDate = sh.Loc("texDate");
+        u.texArr = sh.Loc("texArr");
+        u.caneDrawBase = g_fDrawUniform ? sh.Loc("caneDrawBase") : -1;
+        u.caneVertexBase = g_fDrawUniform ? sh.Loc("caneVertexBase") : -1;
     }
     s_pu = &s_au[0];
     s_uc.matWorldToClip = glCelBorderShader.Loc("matWorldToClip");
@@ -1987,6 +2201,7 @@ struct PASSVIEW
     bool fForeground = false;   // the foreground kinds 22..25 only (after the HUD, over a cleared depth)
     uint32_t rgbaClear = 0;
     uint8_t alphaClear = 0;
+    const STEREOVIEW* pstereo = nullptr;   // (VR) both eyes: drawn twice from one choice of records
 };
 
 // orig: 0x002C0B28 / 0x002C0B90 (D_002C0BF8's per-target tables: a group kind -> its kind in the target, -1 not
@@ -2015,7 +2230,7 @@ void SortKeysUnique(std::vector<uint64_t>& akey)
     {
         std::fill(std::begin(s_ac), std::end(s_ac), 0u);
         for (uint64_t k : *psrc) ++s_ac[(k >> shift) & 0xFFF];
-#ifdef __SWITCH__
+#if SLY2_FASTPATHS
         // (the Switch: a digit every key shares orders nothing: that pass is skipped)
         if (s_ac[(psrc->front() >> shift) & 0xFFF] == psrc->size()) continue;
 #endif
@@ -2060,14 +2275,14 @@ void RenderPass(const SCENE& scene, const PASSVIEW& pv, const RENDEROPTS& opts)
     struct { glm::vec3 pos, dir; glm::vec3 Dir() const { return dir; } } cam{pv.pos, pv.dir};
     const float sNearClipSh = g_cm.sNearClip;   // (CM +0x4C: the hulls' near test, DrawShadow)
     // the drawn near plane's corners (NDC depth 1 in the reversed-Z projection): the hulls it reaches count z-fail
-    std::array<glm::vec3, 4> aposNear;
+    std::array<glm::vec3, 4> aposNearPass;
     {
         const glm::mat4 m = glm::inverse(matWorldToClip);
         const float ax[4] = {-1.0f, 1.0f, 1.0f, -1.0f}, ay[4] = {-1.0f, -1.0f, 1.0f, 1.0f};
         for (size_t i = 0; i < 4; ++i)
         {
             const glm::vec4 v = m * glm::vec4(ax[i], ay[i], 1.0f, 1.0f);
-            aposNear[i] = glm::vec3(v) / v.w;
+            aposNearPass[i] = glm::vec3(v) / v.w;
         }
     }
     // The view frustum's planes (Gribb / Hartmann on the clip matrix; reversed Z, infinite far: left, right, bottom,
@@ -2297,7 +2512,7 @@ void RenderPass(const SCENE& scene, const PASSVIEW& pv, const RENDEROPTS& opts)
         if (fTree)
         {
             s_agVisTree.assign(gs.aglob.size(), 0.0f);
-#ifdef __SWITCH__
+#if SLY2_FASTPATHS
             // (the Switch: the groups' cel-border flags from the glob set's list (glob.cpp), while it matches them)
             const uint8_t* afCel = gs.afCelBorder.size() == gs.aglob.size() ? gs.afCelBorder.data() : nullptr;
 #endif
@@ -2313,7 +2528,7 @@ void RenderPass(const SCENE& scene, const PASSVIEW& pv, const RENDEROPTS& opts)
                     if (sphere.kind == -1) continue;
                     if (!(sphere.mask & pv.grfChannels)) continue;
                     if (!s_fNoFrustum && outside(sphere.pos, sphere.sRadius)) continue;
-#ifdef __SWITCH__
+#if SLY2_FASTPATHS
                     const bool fCel = sphere.kind == 0 && sphere.iglob >= 0 && size_t(sphere.iglob) < gs.aglob.size() &&
                                       (afCel ? afCel[size_t(sphere.iglob)] != 0 : gs.aglob[size_t(sphere.iglob)].meshk == MESHK_CelBorder);
 #else
@@ -2352,7 +2567,7 @@ void RenderPass(const SCENE& scene, const PASSVIEW& pv, const RENDEROPTS& opts)
         iLim = std::min(iLim, gs.aglob.size());
         for (size_t i = iFirst; i < iLim; ++i)
         {
-#ifdef __SWITCH__
+#if SLY2_FASTPATHS
             // (the Switch: the parts of the group four ahead that the tests below read)
             if (i + 4 < iLim)
             {
@@ -2703,7 +2918,7 @@ void RenderPass(const SCENE& scene, const PASSVIEW& pv, const RENDEROPTS& opts)
         default: return false;
         }
     };
-#ifdef __SWITCH__
+#if SLY2_FASTPATHS
     // (the Switch: the keys sorted, then the records moved once. A key is the kind, the distance's bits in float order
     // (-0 as +0; reversed for far to near) and the place: ties keep their order as in the stable sort. NaN: the sort.)
     constexpr unsigned CBIT_PLACE = 27;
@@ -2837,7 +3052,7 @@ void RenderPass(const SCENE& scene, const PASSVIEW& pv, const RENDEROPTS& opts)
             if (!(rec.pglobGeom->asubfx[0].pshd->grfshd & 8)) cmdAll.order = 0;   // (DATE unless every shader has flag 8)
             cmdAll.prec = &rec;
         };
-#ifdef __SWITCH__
+#if SLY2_FASTPATHS
         // (the Switch: the volumes built on the frame's helpers, each caster's into its own vertices, joined in order)
         struct CASTER { const DRAWREC* prec = nullptr; std::vector<glm::vec3> avtx; CMD cmd; bool f = false; };
         static std::vector<CASTER> s_acaster;
@@ -2917,7 +3132,7 @@ void RenderPass(const SCENE& scene, const PASSVIEW& pv, const RENDEROPTS& opts)
     };
     for (const DRAWREC& rec : arec)
     {
-#ifdef __SWITCH__
+#if SLY2_FASTPATHS
         PrefetchRecordsAhead(arec, size_t(&rec - arec.data()));
 #endif
         const GLOB& glob = *rec.pglob;
@@ -2931,7 +3146,7 @@ void RenderPass(const SCENE& scene, const PASSVIEW& pv, const RENDEROPTS& opts)
         }
         if (rec.kind > 12) addParticles();
         if (rec.kind != kindSeg) { endSegment(!s_fNoRegroup && kindSeg >= 0 && !fSortedKind(kindSeg)); kindSeg = rec.kind; }
-        if (s_adrawgpu.size() + geom.asubglob.size() * (g_fGlobBindless ? 16 : 1) + 1 > CDRAW_MAX) break;
+        if (s_adrawgpu.size() + geom.asubglob.size() * (g_fGlobBindless || g_fGlobArrays ? 16 : 1) + 1 > CDRAW_MAX) break;
         const uint32_t irec = uint32_t(s_arecgpu.size());
         if (geom.meshk == MESHK_Strips && opts.fMeshes)
         {
@@ -2957,6 +3172,28 @@ void RenderPass(const SCENE& scene, const PASSVIEW& pv, const RENDEROPTS& opts)
             }
             CMD base;
             base.vao = pglDraw->vao;
+            // (perf-4) every vertex in front of the near plane with a wide margin for the GPU's rounding (in each eye's
+            // view in VR): glob.geom would pass each triangle through unchanged (its test is w - z >= 0 per vertex, linear
+            // in the position), so the run may draw without it. Only the arena's own unmoved, unskinned, unwarped
+            // vertices, whose sphere (SetBounds) holds them; the sphere's world radius by the matrix's Frobenius norm
+            // (at least its largest stretch).
+            if (g_fGlobNoGeom && !rec.pamatBone && s_arecgpu.back().warp.x == 0 && pglDraw->fBoundsExact && pglDraw->sRadius >= 0.0f)
+            {
+                const glm::mat4& m = *rec.pmat;
+                const glm::vec3 c = glm::vec3(m * glm::vec4(pglDraw->posCenter, 1.0f));
+                const float frob = std::sqrt(glm::dot(glm::vec3(m[0]), glm::vec3(m[0])) + glm::dot(glm::vec3(m[1]), glm::vec3(m[1])) +
+                                             glm::dot(glm::vec3(m[2]), glm::vec3(m[2])));
+                const float r = pglDraw->sRadius * frob;
+                auto fInFront = [&](const glm::mat4& mc) {
+                    const glm::vec4 l = glm::vec4(mc[0][3] - mc[0][2], mc[1][3] - mc[1][2], mc[2][3] - mc[2][2], mc[3][3] - mc[3][2]);
+                    const float gl = glm::length(glm::vec3(l));
+                    const float dMin = glm::dot(glm::vec3(l), c) + l.w - r * gl;   // (w - z = l . (p, 1))
+                    const float margin = 1e-3f * (gl * (glm::length(c) + r) + std::fabs(l.w)) + 1e-3f;
+                    return std::isfinite(dMin) && std::isfinite(margin) && dMin > margin;
+                };
+                base.fNoClip = pv.pstereo ? fInFront(pv.pstereo->amatWorldToClip[0]) && fInFront(pv.pstereo->amatWorldToClip[1])
+                                          : fInFront(pv.matWorldToClip);
+            }
             // the bound of the record's vertex alpha x object alpha, for the alpha tests it passes on every fragment
             // (AllPassOf); 0: not decided (the view-angle alpha changes it per vertex)
             const bool fSpec = geom.iSpec != -1 && !(geom.grfMesh & 1);
@@ -3001,7 +3238,7 @@ void RenderPass(const SCENE& scene, const PASSVIEW& pv, const RENDEROPTS& opts)
                     continue;
                 }
                 const DRAWGPU drawgpu{sub.psaa ? sub.psaa->du / 4096.0f : 0.0f, sub.psaa ? sub.psaa->dv / 4096.0f : 0.0f, rec.alpha, irec};
-                if (!g_fGlobBindless) s_adrawgpu.push_back(drawgpu);
+                if (!g_fGlobBindless && !g_fGlobArrays) s_adrawgpu.push_back(drawgpu);
                 for (const PASSCMD& pc : SubgpuOf(sub, pglDraw->vao, fCull).apasscmd)
                 {
                     uint32_t istate = pc.istate;
@@ -3016,8 +3253,8 @@ void RenderPass(const SCENE& scene, const PASSVIEW& pv, const RENDEROPTS& opts)
                     }
                     base.istate = fFbaPass && (rec.kind == 4 || rec.kind == 6) ? IstateFba(istate) : istate;
                     base.order = pc.order;
-                    // (bindless: each pass draw its own draw entry, for its texture handle: s_atexh)
-                    if (g_fGlobBindless)
+                    // (bindless / arrays: each pass draw its own draw entry, for its texture handle or layer: s_atexh)
+                    if (g_fGlobBindless || g_fGlobArrays)
                     {
                         base.idraw = uint32_t(s_adrawgpu.size());
                         s_adrawgpu.push_back(drawgpu);
@@ -3059,6 +3296,29 @@ void RenderPass(const SCENE& scene, const PASSVIEW& pv, const RENDEROPTS& opts)
     // Regroup: within a segment of an unsorted kind, by (pass, sub-draw) then state (stable: record order inside).
     static std::vector<uint64_t> s_akey;
     static std::vector<CMD> s_acmdTmp;
+    // (perf-5, g_fGlobArrays) the states ranked by their array class (the same but for the texture, one page) first, so
+    // the states a run can join are neighbours in the regroup as they are with bindless (where any texture joins)
+    static std::vector<uint32_t> s_arankIstate;
+    static uint32_t s_genRank = 0;
+    static size_t s_cstateRank = 0;
+    // Opt-in (SLY2N_ARRAYRANK=1): not the same order, so coplanar draws of different states can swap which one shows
+    // (single pixels in Paris); with it Paris draws ~1140 runs instead of ~1400 (bound textures: ~1470).
+    static const bool s_fRank = std::getenv("SLY2N_ARRAYRANK") && std::atoi(std::getenv("SLY2N_ARRAYRANK")) != 0;
+    const bool fRank = g_fGlobArrays && s_fRank;
+    if (fRank && (s_genRank != s_genArray || s_cstateRank != s_astate.size()))
+    {
+        static std::vector<std::pair<uint64_t, uint32_t>> s_aord;
+        s_aord.clear();
+        for (uint32_t i = 0; i < s_astate.size(); ++i)
+        {
+            const LAYEROFSTATE& e = LayerEntryOfIstate(i);
+            s_aord.push_back({(uint64_t(e.ref == LAYERREF_NONE ? 0xFFFFFFFFu : e.iclass) << 32) | i, i});
+        }
+        std::sort(s_aord.begin(), s_aord.end());
+        s_arankIstate.assign(s_astate.size(), 0);
+        for (uint32_t r = 0; r < s_aord.size(); ++r) s_arankIstate[s_aord[r].second] = r;
+        s_genRank = s_genArray, s_cstateRank = s_astate.size();
+    }
     for (const SEGMENT& seg : aseg)
     {
         if (!seg.fRegroup || seg.icmdLim - seg.icmdFirst < 2) continue;
@@ -3066,14 +3326,15 @@ void RenderPass(const SCENE& scene, const PASSVIEW& pv, const RENDEROPTS& opts)
         for (size_t i = seg.icmdFirst; i < seg.icmdLim; ++i)
         {
             const CMD& c = s_acmd[i];
-            s_akey.push_back((uint64_t(std::min(c.order, 0xFFFu)) << 52) | (uint64_t(c.istate & 0xFFFFFFu) << 28) | uint64_t(i - seg.icmdFirst));
+            const uint32_t kState = fRank && c.istate < s_arankIstate.size() ? s_arankIstate[c.istate] : c.istate;
+            s_akey.push_back((uint64_t(std::min(c.order, 0xFFFu)) << 52) | (uint64_t(kState & 0xFFFFFFu) << 28) | uint64_t(i - seg.icmdFirst));
         }
         SortKeysUnique(s_akey);
         s_acmdTmp.assign(s_acmd.begin() + std::ptrdiff_t(seg.icmdFirst), s_acmd.begin() + std::ptrdiff_t(seg.icmdLim));
         for (size_t i = 0; i < s_akey.size(); ++i) s_acmd[seg.icmdFirst + i] = s_acmdTmp[size_t(s_akey[i] & 0xFFFFFFFu)];
     }
     // Runs of equal state -> indirect commands.
-    struct RUN { size_t icmd; uint32_t ideiFirst, cdei; };
+    struct RUN { size_t icmd; uint32_t ideiFirst, cdei; bool fNoClip = false; uint32_t isegFirst = 0, cseg = 0; };
     static std::vector<DEICMD> s_adei;
     static std::vector<RUN> s_arun;
     s_adei.clear();
@@ -3084,15 +3345,113 @@ void RenderPass(const SCENE& scene, const PASSVIEW& pv, const RENDEROPTS& opts)
         if (cmd.cmdk != CMDK_Pass) { s_arun.push_back({i, 0, 0}); ++i; continue; }
         RUN run{i, uint32_t(s_adei.size()), 0};
         size_t j = i;
+        bool fNoClip = true;   // (perf-4: every draw of the run, for the program without the geometry stage)
         // (bindless: the neighbours that differ only in their textures join the run, in the same order)
-        for (; j < s_acmd.size() && s_acmd[j].cmdk == CMDK_Pass && (s_acmd[j].istate == cmd.istate || (g_fGlobBindless && FSameButTexture(cmd.istate, s_acmd[j].istate))); ++j)
+        for (; j < s_acmd.size() && s_acmd[j].cmdk == CMDK_Pass && (s_acmd[j].istate == cmd.istate || (g_fGlobBindless && FSameButTexture(cmd.istate, s_acmd[j].istate)) ||
+                                                                     (g_fGlobArrays && FSameButLayer(cmd.istate, s_acmd[j].istate))); ++j)
         {
             const CMD& c = s_acmd[j];
             s_adei.push_back({c.count, 1, c.firstIndex, c.baseVertex, c.idraw});
             ++run.cdei;
+            fNoClip = fNoClip && c.fNoClip;
         }
+        run.fNoClip = fNoClip;
         s_arun.push_back(run);
         i = j;
+    }
+    // (g_fDrawUniform, OpenGL ES without base instance or multi-draw: glob.vert CANE_PULL) each run's sub-draws as
+    // few draws of one per-pass index list: an index holds the segment's sub-draw (bits 22..31) and the vertex from the
+    // segment's base (bits 0..21); the draw map turns segment base + sub-draw into the draw index. Same triangles in the
+    // same order as the sub-draws; built once for all the pass's eyes.
+    struct PULLSEG { uint32_t offset, count, vbase, imap; };
+    // (per kind of pass its own buffers, kept while its sub-draws stay the same from frame to frame: then nothing is
+    // built or uploaded again)
+    struct PULLCACHE
+    {
+        GLuint vao = 0, ebo = 0, ssbo = 0;
+        std::vector<DEICMD> adei;
+        std::vector<uint32_t> arunsig, arunseg;
+        std::vector<PULLSEG> aseg;
+    };
+    static std::map<int, PULLCACHE> s_mppullcache;
+    static std::vector<uint32_t> s_aipull, s_adrawmap;
+    static std::vector<uint32_t> s_arunsig;
+    const PULLCACHE* ppc = nullptr;
+    if (g_fDrawUniform)
+    {
+        PULLCACHE& pc = s_mppullcache[(pv.fForeground ? 1000 : 0) + pv.irtgt + 1];
+        ppc = &pc;
+        s_arunsig.clear();
+        for (const RUN& run : s_arun)
+        {
+            s_arunsig.push_back(run.ideiFirst);
+            s_arunsig.push_back(run.cdei);
+            s_arunsig.push_back(run.cdei ? s_astate[s_acmd[run.icmd].istate].vao : 0);
+        }
+        const bool fSame = pc.vao && pc.adei.size() == s_adei.size() && pc.arunsig == s_arunsig &&
+                           (s_adei.empty() || !std::memcmp(pc.adei.data(), s_adei.data(), s_adei.size() * sizeof(DEICMD)));
+        if (!fSame)
+        {
+            s_aipull.clear(); s_adrawmap.clear(); pc.aseg.clear(); pc.arunseg.clear();
+            for (RUN& run : s_arun)
+            {
+                run.isegFirst = run.cseg = 0;
+                const PULLARENA* pa = nullptr;
+                if (run.cdei)
+                    if (const auto it = s_mppullarena.find(s_astate[s_acmd[run.icmd].istate].vao); it != s_mppullarena.end() && !it->second.aindex.empty())
+                        pa = &it->second;
+                if (pa)
+                {
+                    run.isegFirst = uint32_t(pc.aseg.size());
+                    PULLSEG seg{0, 0, 0, 0};
+                    bool fOpen = false, fBad = false;
+                    for (uint32_t i = run.ideiFirst; i < run.ideiFirst + run.cdei && !fBad; ++i)
+                    {
+                        const DEICMD& d = s_adei[i];
+                        if (size_t(d.firstIndex) + d.count > pa->aindex.size()) { fBad = true; break; }
+                        uint32_t imax = 0;
+                        for (uint32_t k = 0; k < d.count; ++k) imax = std::max(imax, pa->aindex[d.firstIndex + k]);
+                        const uint32_t ld = fOpen ? uint32_t(s_adrawmap.size()) - seg.imap : 0;
+                        if (!fOpen || uint32_t(d.baseVertex) < seg.vbase || uint64_t(uint32_t(d.baseVertex) - seg.vbase) + imax >= (1u << 22) || ld >= 1024u)
+                        {
+                            if (fOpen) { pc.aseg.push_back(seg); ++run.cseg; }
+                            seg = PULLSEG{uint32_t(s_aipull.size()), 0, uint32_t(d.baseVertex), uint32_t(s_adrawmap.size())};
+                            fOpen = true;
+                        }
+                        const uint32_t hi = (uint32_t(s_adrawmap.size()) - seg.imap) << 22, dv = uint32_t(d.baseVertex) - seg.vbase;
+                        s_adrawmap.push_back(d.baseInstance);
+                        const uint32_t* pi = pa->aindex.data() + d.firstIndex;
+                        for (uint32_t k = 0; k < d.count; ++k) s_aipull.push_back(hi | (dv + pi[k]));
+                        seg.count += d.count;
+                    }
+                    if (fBad) { pc.aseg.resize(run.isegFirst); run.cseg = 0; }
+                    else if (fOpen) { pc.aseg.push_back(seg); ++run.cseg; }
+                }
+                pc.arunseg.push_back(run.isegFirst);
+                pc.arunseg.push_back(run.cseg);
+            }
+            if (!pc.vao)
+            {
+                glGenVertexArrays(1, &pc.vao);
+                glGenBuffers(1, &pc.ebo);
+                glGenBuffers(1, &pc.ssbo);
+                glBindVertexArray(pc.vao);
+                glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, pc.ebo);
+                glBindVertexArray(0);
+            }
+            glBindVertexArray(pc.vao);
+            glBufferData(GL_ELEMENT_ARRAY_BUFFER, GLsizeiptr(std::max<size_t>(s_aipull.size(), 1) * 4), nullptr, GL_STREAM_DRAW);
+            if (!s_aipull.empty()) glBufferSubData(GL_ELEMENT_ARRAY_BUFFER, 0, GLsizeiptr(s_aipull.size() * 4), s_aipull.data());
+            glBindVertexArray(0);
+            glBindBuffer(GL_SHADER_STORAGE_BUFFER, pc.ssbo);
+            glBufferData(GL_SHADER_STORAGE_BUFFER, GLsizeiptr(std::max<size_t>(s_adrawmap.size(), 1) * 4), nullptr, GL_STREAM_DRAW);
+            if (!s_adrawmap.empty()) glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, GLsizeiptr(s_adrawmap.size() * 4), s_adrawmap.data());
+            pc.adei = s_adei;
+            pc.arunsig = s_arunsig;
+        }
+        else
+            for (size_t r = 0; r < s_arun.size(); ++r) s_arun[r].isegFirst = pc.arunseg[2 * r], s_arun[r].cseg = pc.arunseg[2 * r + 1];
+        glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 10, pc.ssbo);
     }
     static const bool s_fPerfDbg = std::getenv("SLY2_PERFDBG") != nullptr;
     if (s_fPerfDbg)
@@ -3109,7 +3468,7 @@ void RenderPass(const SCENE& scene, const PASSVIEW& pv, const RENDEROPTS& opts)
     struct BUFRANGE { GLuint buf; size_t off, cb; };
     const size_t cbAll = s_arecgpu.size() * sizeof(RECGPU) + s_amatBone.size() * sizeof(glm::mat4) + s_adrawgpu.size() * sizeof(DRAWGPU) +
                          s_awarpst.size() * sizeof(glm::vec4) + s_amatWarp.size() * sizeof(glm::mat4) + s_adei.size() * sizeof(DEICMD) +
-                         (g_fGlobBindless ? s_adrawgpu.size() * sizeof(GLuint64) : 0) + 8 * (s_ring.align + 16);
+                         (g_fGlobBindless || g_fGlobArrays ? s_adrawgpu.size() * sizeof(GLuint64) : 0) + 8 * (s_ring.align + 16);
     size_t offRing = s_ring.Alloc(cbAll);
     auto upload = [&](GLenum target, GLuint buf, const void* pv, size_t cb) -> BUFRANGE {
         const size_t cbBind = std::max<size_t>(cb, 16);
@@ -3141,8 +3500,38 @@ void RenderPass(const SCENE& scene, const PASSVIEW& pv, const RENDEROPTS& opts)
             if (c.cmdk == CMDK_Pass) s_atexh[c.idraw] = HandleOfIstate(c.istate);
         brTexh = upload(GL_SHADER_STORAGE_BUFFER, s_ssboTexh, s_atexh.data(), s_atexh.size() * sizeof(GLuint64));
     }
+    else if (g_fGlobArrays)
+    {
+        // each pass draw's layer + 1 by its draw entry (0: the bound texture: the other entries, a state without a layer)
+        static std::vector<glm::uvec2> s_alayer;
+        s_alayer.assign(s_adrawgpu.size(), glm::uvec2(0u));
+        for (const CMD& c : s_acmd)
+            if (c.cmdk == CMDK_Pass)
+                if (const uint32_t ref = LayerRefOfIstate(c.istate); ref != LAYERREF_NONE) s_alayer[c.idraw].x = (ref & 0xFFFFu) + 1u;
+        brTexh = upload(GL_SHADER_STORAGE_BUFFER, s_ssboTexh, s_alayer.data(), s_alayer.size() * sizeof(glm::uvec2));
+    }
 
-    glBindFramebuffer(GL_FRAMEBUFFER, pv.fbo);
+    // (VR) a stereo pass draws the same runs into each eye with the eye's own matrix and position; a plain pass
+    // draws once with its own (the names below are the eye's: the same values as before for a plain pass)
+    const int ceyePass = pv.pstereo && !pv.pstereo->fMultiview ? 2 : 1;   // (multiview: both eyes in one)
+    for (int ieye = 0; ieye < ceyePass; ++ieye)
+    {
+    const STEREOVIEW* const psv = pv.pstereo;
+    const glm::mat4& matWorldToClip = psv ? psv->amatWorldToClip[ieye] : pv.matWorldToClip;
+    struct { glm::vec3 pos, dir; glm::vec3 Dir() const { return dir; } } cam{psv ? psv->apos[ieye] : pv.pos, pv.dir};
+    std::array<glm::vec3, 4> aposNear = aposNearPass;
+    if (psv)
+    {
+        const glm::mat4 m = glm::inverse(matWorldToClip);
+        const float ax[4] = {-1.0f, 1.0f, 1.0f, -1.0f}, ay[4] = {-1.0f, -1.0f, 1.0f, 1.0f};
+        for (size_t i = 0; i < 4; ++i)
+        {
+            const glm::vec4 v = m * glm::vec4(ax[i], ay[i], 1.0f, 1.0f);
+            aposNear[i] = glm::vec3(v) / v.w;
+        }
+    }
+    const GLuint fboEye = psv ? GLuint(psv->afbo[ieye]) : pv.fbo;
+    glBindFramebuffer(GL_FRAMEBUFFER, fboEye);
     glViewport(0, 0, pv.dx, pv.dy);
     const glm::vec4 clear = Vec4FromRgba(pv.rgbaClear, 1.0f / 255.0f);
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
@@ -3163,7 +3552,7 @@ void RenderPass(const SCENE& scene, const PASSVIEW& pv, const RENDEROPTS& opts)
     bindRange(2, brBone);
     bindRange(3, brWarp);
     bindRange(4, brWarpMat);
-    if (g_fGlobBindless) bindRange(5, brTexh);
+    if (g_fGlobBindless || g_fGlobArrays) bindRange(5, brTexh);
     glBindBuffer(GL_DRAW_INDIRECT_BUFFER, brIndirect.buf);
     const size_t offIndirect = brIndirect.off;
     glActiveTexture(GL_TEXTURE0);
@@ -3171,8 +3560,15 @@ void RenderPass(const SCENE& scene, const PASSVIEW& pv, const RENDEROPTS& opts)
     // the glob program bound (0 glGlobShader, 1 glGlobShaderNoKill, -1 another program), and which of the two have this
     // pass's frame uniforms
     int iprogGlob = -1;
-    bool afFrameUniforms[2] = {};
+    GLuint texArrBound = 0;   // (g_fGlobArrays: unit 2's page and sampler)
+    int samplerArrBound = -1;
+    bool afFrameUniforms[CPROGGLOB] = {};
     auto useGlob = [&](int iprog) {
+#if defined(__ANDROID__)
+        // (Android with an OpenXR session: every run without the near-clip stage, gl.cpp; flat: only the provable ones)
+        if (vr::FActive()) iprog |= 2;
+#endif
+        if ((iprog & 2) && !s_apshGlob[iprog]->ID) iprog &= 1;   // (not built: with the geometry stage)
         if (iprog == 1 && !glGlobShaderNoKill.ID) iprog = 0;
         if (iprog == iprogGlob) return;
         const bool fFromOther = iprogGlob < 0;
@@ -3188,6 +3584,7 @@ void RenderPass(const SCENE& scene, const PASSVIEW& pv, const RENDEROPTS& opts)
             glUniform3fv(s_pu->dirCamera, 1, glm::value_ptr(cam.Dir()));
             glUniform1i(s_pu->tex, 0);
             glUniform1i(s_pu->texDate, 1);
+            if (s_pu->texArr >= 0) glUniform1i(s_pu->texArr, 2);
             glUniform1i(s_pu->fDate, 0);
             glUniform4fv(s_pu->fogColor, 1, glm::value_ptr(Vec4FromRgba(opts.rgbaFog, 1.0f / 255.0f)));
             afFrameUniforms[iprog] = true;
@@ -3206,7 +3603,7 @@ void RenderPass(const SCENE& scene, const PASSVIEW& pv, const RENDEROPTS& opts)
         return fDateMarked;
     };
     static const bool s_fCelAlways = std::getenv("SLY2_CELALWAYS") != nullptr;
-#ifdef __SWITCH__
+#if SLY2_FASTPATHS
     // (DrawShadow2's plane for its z-pass casters: the drawn near plane (aposNear) moved toward the scene by a margin)
     glm::vec4 planeNearSh(0.0f);
     {
@@ -3277,21 +3674,49 @@ void RenderPass(const SCENE& scene, const PASSVIEW& pv, const RENDEROPTS& opts)
         {
             const DSTATE& st = s_astate[cmd.istate];
             const bool fKill = FStateNeedsKill(st);
-#ifdef __SWITCH__
+#if SLY2_FASTPATHS
             // (the Switch: the blended kinds' runs keep the program with discards, which would otherwise change nearly
             // every run; it draws a run without alpha test the same, its discards needing ate and afailMode, or fDate)
             const bool fKeepKill = cmd.prec && fSortedKind(cmd.prec->kind);
 #else
             constexpr bool fKeepKill = false;
 #endif
-            useGlob(fKill || fKeepKill ? 0 : 1);
+            useGlob((fKill || fKeepKill ? 0 : 1) | (run.fNoClip ? 2 : 0));
             // (bindless: a run with handles leaves the texture unit alone; one without, a single state, binds it)
-            sc.Apply(st, !g_fGlobBindless || !HandleOfIstate(cmd.istate));
-            if (g_fDirectRuns)
+            if (const uint32_t ref = g_fGlobArrays ? LayerRefOfIstate(cmd.istate) : LAYERREF_NONE; ref != LAYERREF_NONE)
+            {
+                // (arrays: the run's page and the state's sampler on unit 2; unit 0 left alone)
+                const GLuint texPage = s_atexpage[ref >> 16].tex;
+                if (texPage != texArrBound || st.sampler != samplerArrBound)
+                {
+                    glActiveTexture(GL_TEXTURE2);
+                    if (texPage != texArrBound) glBindTexture(GL_TEXTURE_2D_ARRAY, texPage);
+                    glActiveTexture(GL_TEXTURE0);
+                    if (st.sampler != samplerArrBound) glBindSampler(2, s_asampler[st.sampler & 15u]);
+                    texArrBound = texPage, samplerArrBound = st.sampler;
+                }
+                sc.Apply(st, false);
+            }
+            else
+                sc.Apply(st, !g_fGlobBindless || !HandleOfIstate(cmd.istate));
+            // (g_fDrawUniform, OpenGL ES without base instance: DrawIndexed sets the draw index as a uniform)
+            if (g_fDrawUniform && run.cseg)
+            {
+                // (CANE_PULL: the run's segments from the pass's index list, then the state's own arena back)
+                PpullArena(st.vao);
+                glBindVertexArray(ppc->vao);
+                for (uint32_t iseg = run.isegFirst; iseg < run.isegFirst + run.cseg; ++iseg)
+                {
+                    const PULLSEG& seg = ppc->aseg[iseg];
+                    glUniform1ui(s_pu->caneVertexBase, seg.vbase);
+                    glUniform1ui(s_pu->caneDrawBase, seg.imap);
+                    glDrawElements(GL_TRIANGLES, GLsizei(seg.count), GL_UNSIGNED_INT, reinterpret_cast<void*>(size_t(seg.offset) * 4));
+                }
+                glBindVertexArray(st.vao);
+            }
+            else if (g_fDirectRuns || g_fDrawUniform)
                 for (uint32_t i = run.ideiFirst; i < run.ideiFirst + run.cdei; ++i)
-                    glDrawElementsInstancedBaseVertexBaseInstance(GL_TRIANGLES, GLsizei(s_adei[i].count), GL_UNSIGNED_INT,
-                                                                  reinterpret_cast<void*>(size_t(s_adei[i].firstIndex) * 4), 1,
-                                                                  s_adei[i].baseVertex, s_adei[i].baseInstance);
+                    DrawIndexed(s_adei[i].count, s_adei[i].firstIndex, s_adei[i].baseVertex, s_adei[i].baseInstance, st.vao);
             else
                 glMultiDrawElementsIndirect(GL_TRIANGLES, GL_UNSIGNED_INT,
                                             reinterpret_cast<void*>(offIndirect + size_t(run.ideiFirst) * sizeof(DEICMD)), GLsizei(run.cdei), 0);
@@ -3322,10 +3747,10 @@ void RenderPass(const SCENE& scene, const PASSVIEW& pv, const RENDEROPTS& opts)
             break;
         }
         case CMDK_ShadowBegin:
-#ifdef __SWITCH__
+#if SLY2_FASTPATHS
             s_rectShPhase = shadowPhaseRect(run.icmd);
 #endif
-            ShadowBegin(pv.fbo, pv.dx, pv.dy, int(cmd.order));
+            ShadowBegin(fboEye, pv.dx, pv.dy, int(cmd.order));
             fShadowPhase = true;
             fDateMarked = false;
             sc.Invalidate();   // (its stencil clear leaves the write mask at 0xFF)
@@ -3351,7 +3776,7 @@ void RenderPass(const SCENE& scene, const PASSVIEW& pv, const RENDEROPTS& opts)
         case CMDK_Shadow2:
         {
             const bool fMarked = !(cmd.order & 8) && markDate();
-#ifdef __SWITCH__
+#if SLY2_FASTPATHS
             DrawShadow2(cmd, matWorldToClip, fMarked, &planeNearSh);
 #else
             DrawShadow2(cmd, matWorldToClip, fMarked);
@@ -3409,6 +3834,7 @@ void RenderPass(const SCENE& scene, const PASSVIEW& pv, const RENDEROPTS& opts)
         }
         }
     }
+    }   // (the eyes)
     if (s_cframeGlStats && pv.irtgt < 0 && !pv.fForeground)
     {
         static int s_cframe = 0;
@@ -3423,6 +3849,7 @@ void RenderPass(const SCENE& scene, const PASSVIEW& pv, const RENDEROPTS& opts)
     }
     glBindVertexArray(0);
     glBindBuffer(GL_DRAW_INDIRECT_BUFFER, 0);
+    if (g_fGlobArrays) glBindSampler(2, 0);   // (unit 2's sampler object would override another user's texture state)
     glDisable(GL_STENCIL_TEST);
     glStencilMask(0xFF);
     glDepthMask(GL_TRUE);
@@ -3509,4 +3936,49 @@ void RenderSceneForeground(const SCENE& scene, const CAMERA& cam, const RENDEROP
     pv.dy = g_gl.renderHeight;
     pv.fForeground = true;
     RenderPass(scene, pv, opts);
+}
+
+// (VR, vr.h) the frame's pass and the foreground kinds into both eyes: the records chosen once from the frustum
+// holding both (STEREOVIEW::matCull), each eye drawn with its own matrix. The picture-aspect options (display.h) do not
+// apply: the eyes' projections are the headset's.
+void RenderSceneStereo(const SCENE& scene, const CAMERA& cam, const RENDEROPTS& opts, const STEREOVIEW& sv)
+{
+    g_renderstats.cdraw = g_renderstats.cpass = g_renderstats.ccel = 0;
+    g_renderstats.cbatch = g_renderstats.cculled = g_renderstats.cmrd = 0;
+    s_ring.BeginFrame();
+    RenderRenderTargets(scene, opts);
+    PASSVIEW pv;
+    pv.aspect = float(sv.dx) / float(sv.dy);
+    pv.matWorldToClip = sv.matCull;
+    pv.rMRDAdjust = cam.rMRDAdjust;
+    pv.grfChannels = cam.grfChannels;
+    pv.pos = sv.posCenter;
+    pv.dir = sv.dirCenter;
+    pv.fbo = sv.afbo[0];
+    pv.dx = sv.dx;
+    pv.dy = sv.dy;
+    pv.rgbaClear = opts.rgbaClear;
+    pv.pstereo = &sv;
+    // (multiview: one pass into the two-view target, view 0's matrix and position, view 1's clip from view 0's)
+    if (sv.fMultiview)
+    {
+        g_fMultiviewPass = true;
+        ++g_serialMultiview;
+        const glm::mat4 m = sv.amatWorldToClip[1] * glm::inverse(sv.amatWorldToClip[0]);
+        std::memcpy(g_amatMultiviewLtoR, glm::value_ptr(m), sizeof(g_amatMultiviewLtoR));
+        g_texMultiviewColor = sv.texMultiviewColor;
+        // (the glob programs' inherited uniforms are not known for the two-view variants: sent again)
+        for (GLOBINHERIT& h : s_aglobinh) h = GLOBINHERIT{glm::vec4(-1.0f), -1};
+    }
+    RenderPass(scene, pv, opts);
+    if (std::any_of(scene.aglobset.begin(), scene.aglobset.end(), [](const SCENEGLOBSET& s) { return s.fForeground && s.irtgt < 0; }))
+    {
+        pv.fForeground = true;
+        RenderPass(scene, pv, opts);
+    }
+    if (sv.fMultiview)
+    {
+        g_fMultiviewPass = false;
+        for (GLOBINHERIT& h : s_aglobinh) h = GLOBINHERIT{glm::vec4(-1.0f), -1};
+    }
 }

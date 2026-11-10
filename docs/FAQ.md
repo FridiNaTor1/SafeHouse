@@ -27,12 +27,11 @@ Follow progress on [Discord](https://discord.com/invite/SfvzvMg7Mk).
 
 | | Installed games | Saves, settings and mods |
 | --- | --- | --- |
-| Linux | `~/.local/share/projectcane/installations` | `~/.config/projectcane` (Sly 2: `sly2/`) |
-| Windows setup | `%LOCALAPPDATA%\ProjectCane\installations` | `%LOCALAPPDATA%\ProjectCane\user` (Sly 2: `sly2\`) |
+| Linux | `~/.local/share/SafeHouse/installations` | `~/.config/SafeHouse` (Sly 2: `sly2/`) |
+| Windows setup | `%LOCALAPPDATA%\SafeHouse\installations` | `%LOCALAPPDATA%\SafeHouse\user` (Sly 2: `sly2\`) |
 | Windows portable | `data\installations` beside `bin` | `data\user` beside `bin` |
 
-The folders keep the project's old name (ProjectCane) on purpose, so games, saves and settings from earlier versions
-carry over. The game page's **Open save folder** and **Open game folder** buttons open them. Re-extracting or
+Until 2026-11-10 these folders had the project's old name (`projectcane` on Linux, `ProjectCane` on Windows). The first start of a newer launcher moves them to `SafeHouse` once: games, saves, settings, mods and logs carry over, and paths stored in the launcher's settings are updated. If both folders exist, files the new folder already has win and differing old versions are kept in `ProjectCane leftovers` inside it; nothing is deleted before it is in the new place. **Settings > Games > Install games to** puts new installations in another folder or on another drive (they go to a `SafeHouse` folder there); **Move…** moves an installed game. The game page's **Open save folder** and **Open game folder** buttons open them. Re-extracting or
 uninstalling a game never touches your saves.
 
 ## How do I update?

@@ -2,22 +2,28 @@
 
 // The frame's helper threads, for the per-frame loops over the whole scene (render.cpp's records, scene.cpp's lighting,
 // scenesw.cpp's placement): Run(cpart, fn) calls fn(0) on the caller and fn(1) .. fn(cpart - 1) on up to two helpers,
-// returning when all have; ForBlocks hands out [0, c) in blocks to whichever thread is free. The Switch only: elsewhere
-// everything runs on the calling thread. The helpers live as long as the process, in an object that is never destroyed
-// (libnx has no thread detach, and a joinable thread's destructor terminates).
+// returning when all have; ForBlocks hands out [0, c) in blocks to whichever thread is free. Written for the Switch, on
+// every platform since perf-4 (fastpaths.h; SLY2_FASTPATHS 0: everything on the calling thread). The helpers live as
+// long as the process, in an object that is never destroyed (libnx has no thread detach, and a joinable thread's
+// destructor terminates).
 
+#include "fastpaths.h"
 #include <algorithm>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <functional>
-#ifdef __SWITCH__
+#if SLY2_FASTPATHS
 #include <chrono>
 #include <condition_variable>
 #include <exception>
 #include <mutex>
 #include <thread>
 #include <vector>
+#if defined(__linux__)
+#include <sched.h>
+#endif
 #endif
 
 class PASSHELPERS
@@ -25,7 +31,7 @@ class PASSHELPERS
 public:
     void Run(int cpart, const std::function<void(int)>& fn)
     {
-#ifdef __SWITCH__
+#if SLY2_FASTPATHS
         if (!m_fStarted) Start();
         cpart = std::min(cpart, m_chelper + 1);
         if (cpart > 1)
@@ -52,7 +58,7 @@ public:
         Run(cblocks > 1 ? 3 : 1, work);
     }
 
-#ifdef __SWITCH__
+#if SLY2_FASTPATHS
 private:
     // The helpers and the caller spin a while before they sleep: the frame's sections are mostly a fraction of a
     // millisecond apart, and a wake-up from the condition variable costs tens of microseconds.
@@ -84,9 +90,21 @@ private:
     void Start()
     {
         m_fStarted = true;
-        // (two helpers: the runtime starts threads on cores 1 and 2, the game thread keeps core 0)
-        m_athread.reserve(2);
-        for (int i = 0; i < 2; ++i)
+        // (two helpers: on the Switch the runtime starts threads on cores 1 and 2, the game thread keeps core 0. Elsewhere
+        // two fewer than the CPUs the process may run on, at most two: the game thread and the GL driver's thread keep
+        // theirs (on two CPUs the helpers measured slower: they and the driver take turns). SLY2N_HELPERS=0..2 sets the
+        // count, 0: everything on the calling thread)
+        int chelper = 2;
+#ifndef __SWITCH__
+        int ccpu = int(std::thread::hardware_concurrency());
+#if defined(__linux__)
+        if (cpu_set_t set; sched_getaffinity(0, sizeof(set), &set) == 0) ccpu = CPU_COUNT(&set);   // (taskset, cgroups)
+#endif
+        if (ccpu > 0) chelper = std::clamp(ccpu - 2, 0, 2);
+        if (const char* psz = std::getenv("SLY2N_HELPERS")) chelper = std::clamp(std::atoi(psz), 0, 2);
+#endif
+        m_athread.reserve(size_t(std::max(chelper, 0)));
+        for (int i = 0; i < chelper; ++i)
         {
             try { m_athread.emplace_back([this, i] { Helper(i + 1); }); }
             catch (const std::exception&) { break; }

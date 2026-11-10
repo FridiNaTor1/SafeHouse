@@ -13,6 +13,12 @@ endif()
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+# Android (NDK toolchain): the launcher, the extractor and Sly 2 as the org.safehouse.android app's JNI libraries
+# (cmake/android.cmake, android/README.md); none of the desktop targets below are configured.
+if(ANDROID)
+ include(cmake/android.cmake)
+ return()
+endif()
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 # Without a build type, single-config generators compile without optimization.
 if(NOT CMAKE_CONFIGURATION_TYPES AND NOT CMAKE_BUILD_TYPE)
@@ -272,12 +278,14 @@ if(CANE_BUILD_LAUNCHER)
  target_include_directories(cane-launcher BEFORE PRIVATE "${glfw_SOURCE_DIR}/include" "${CMAKE_BINARY_DIR}/generated")
  target_link_libraries(cane-launcher PRIVATE cane_ui cane_chd Threads::Threads ${CMAKE_DL_LIBS})
  if(WIN32)
-  # The update check and download (launcher/update.h): WinHTTP, and miniz to unpack the portable zip.
+  # The update check and download (launcher/update.h): WinHTTP.
   target_link_libraries(cane-launcher PRIVATE winhttp)
-  target_sources(cane-launcher PRIVATE Libraries/miniz/miniz.c)
-  set_source_files_properties(Libraries/miniz/miniz.c PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
-  target_include_directories(cane-launcher PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Libraries/miniz")
  endif()
+ # miniz: the Windows update's portable zip, and the Collection Style Launcher's PS3 menu files (platform/ps3disc.h,
+ # launcher/collection/assets.h: a .zip of the disc image, the menu's IMAGE.ZIP).
+ target_sources(cane-launcher PRIVATE Libraries/miniz/miniz.c)
+ set_source_files_properties(Libraries/miniz/miniz.c PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+ target_include_directories(cane-launcher PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Libraries/miniz")
  if(CANE_LAUNCHER_SOURCE_BUILD)
   target_compile_definitions(cane-launcher PRIVATE CANE_LAUNCHER_SOURCE_BUILD)
  endif()
@@ -334,6 +342,13 @@ if(CANE_BUILD_SLY2)
   # the rumble scheduler's timing against the retail patterns and the PS2 -> SDL motor mapping (platform/pad_rumble.h)
   add_test(NAME sly2-rumble COMMAND Sly2-Release --rumble-selftest)
   add_test(NAME sly2-action-input COMMAND Sly2-Release --action-input-selftest)
+  # Settings.ini (platform/sly2_settings.h): round trip, hand-edited files, the migration from system_settings.dat
+  add_test(NAME sly2-settings COMMAND Sly2-Release --settings-selftest)
+  # the audio devices by name (fallback to the default when one is unplugged, taken again when back, the voices keep
+  # playing), the USB headset's microphone level (spiop.irx's RMS) from SDL's disk capture; silent (disk driver)
+  add_test(NAME sly2-audio COMMAND Sly2-Release --audio-selftest "${CMAKE_BINARY_DIR}/audio-selftest")
+  set_tests_properties(sly2-audio PROPERTIES ENVIRONMENT
+   "SDL_AUDIODRIVER=disk;SDL_DISKAUDIOFILE=${CMAKE_BINARY_DIR}/audio-selftest/out.raw;SLY2_AUDIO=0")
  endif()
 endif()
 # Sly 3's native port (Sly3-Release/CMakeLists.txt), the same way.
@@ -439,6 +454,7 @@ if(CANE_BUILD_GAME OR CANE_BUILD_LAUNCHER)
 endif()
 
 install(FILES launcher/assets/OFL.txt DESTINATION licenses/AtkinsonHyperlegible)
+install(FILES launcher/assets/l10n/OFL.txt DESTINATION licenses/NotoSans)
 
 if(BUILD_TESTING)
  find_package(Python3 QUIET COMPONENTS Interpreter)
@@ -450,7 +466,17 @@ if(BUILD_TESTING)
   endif()
   if(CANE_BUILD_LAUNCHER)
    add_test(NAME launcher-profile COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/scripts/test-launcher-profile.py" "$<TARGET_FILE:cane-launcher>")
-   add_test(NAME launcher-games COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/scripts/test-launcher-games.py" "$<TARGET_FILE:cane-launcher>" "$<TARGET_FILE:cane-extractor>")
+   # The launcher's languages: every file has every key with matching printf specifiers, the fonts draw every
+   # character, and the system language is detected (launcher/l10n.h, launcher/lang).
+   add_test(NAME launcher-l10n COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/scripts/test-launcher-l10n.py" "$<TARGET_FILE:cane-launcher>")
+   add_test(NAME launcher-games COMMAND
+ "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/scripts/test-launcher-games.py" "$<TARGET_FILE:cane-launcher>" "$<TARGET_FILE:cane-extractor>")
+   # The Collection Style Launcher: its PS3 menu import, screenshots, the launch flag and return, its shortcuts.
+   add_test(NAME collection-launcher COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/scripts/test-collection-launcher.py" "$<TARGET_FILE:cane-launcher>")
+   # The profile folders' move from their old name (platform/user_folders.h) and installs in other folders
+   # (launcher/backend.h installRoot / moveInstallation), in private HOMEs.
+   add_test(NAME folder-upgrade COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/scripts/test-folder-upgrade.py" "$<TARGET_FILE:cane-launcher>")
+   add_test(NAME install-location COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/scripts/test-install-location.py" "$<TARGET_FILE:cane-launcher>")
    add_test(NAME steam-shortcuts COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/scripts/test-steam-shortcuts.py" "$<TARGET_FILE:cane-launcher>" "${CMAKE_CURRENT_SOURCE_DIR}/launcher/assets/steam")
    # The update check and in-place update against a local fake release (launcher/update.h; Linux only).
    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")

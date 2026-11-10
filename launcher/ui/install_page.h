@@ -9,6 +9,7 @@
 #include <mutex>
 #include <imgui/ImGuiFileDialog.h>
 #include "../backend.h"
+#include "../install_location.h"
 #include "../native_dialog.h"
 #include "fixtures.h"
 #include "games.h"
@@ -21,8 +22,8 @@
 namespace cane::ui {
 inline std::string sizeText(uintmax_t bytes) {
     char buf[32];
-    if (bytes >= (1ull << 30)) std::snprintf(buf, sizeof(buf), "%.2f GB", double(bytes) / double(1ull << 30));
-    else std::snprintf(buf, sizeof(buf), "%.0f MB", double(bytes) / double(1ull << 20));
+    if (bytes >= (1ull << 30)) std::snprintf(buf, sizeof(buf), tr("%.2f GB"), double(bytes) / double(1ull << 30));
+    else std::snprintf(buf, sizeof(buf), tr("%.0f MB"), double(bytes) / double(1ull << 20));
     return buf;
 }
 
@@ -33,6 +34,8 @@ public:
     std::function<void()> onBack;
     std::function<void(GameId, std::string)> onRoute;
     std::function<void(GameId)> onStarted;
+    // "Change…" beside "Installs to": Settings > Games, where the install folder is chosen.
+    std::function<void()> onChangeLocation;
 
     InstallPage(LauncherBackend& backend, Job& job) : m_backend(backend), m_job(job) {}
     void useFixture(bool installed) {
@@ -100,11 +103,11 @@ public:
     }
     std::vector<launcher::Hint> hints() const {
         using input::Button;
-        if (m_job.busy) return { { backButton(), GLFW_KEY_ESCAPE, "Back" }, { confirmButton(), GLFW_KEY_ENTER, "Select" } };
-        std::vector<launcher::Hint> h{ { Button::West, 0, "Enter path" } };
-        if (!(m_fixture ? m_fixtureInstalled : m_installed) || m_addRegion) h.push_back({ Button::Start, 0, "Install" });
-        h.push_back({ backButton(), GLFW_KEY_ESCAPE, "Back" });
-        h.push_back({ confirmButton(), GLFW_KEY_ENTER, "Select" });
+        if (m_job.busy) return { { backButton(), GLFW_KEY_ESCAPE, N_("Back") }, { confirmButton(), GLFW_KEY_ENTER, N_("Select") } };
+        std::vector<launcher::Hint> h{ { Button::West, 0, N_("Enter path") } };
+        if (!(m_fixture ? m_fixtureInstalled : m_installed) || m_addRegion) h.push_back({ Button::Start, 0, N_("Install") });
+        h.push_back({ backButton(), GLFW_KEY_ESCAPE, N_("Back") });
+        h.push_back({ confirmButton(), GLFW_KEY_ENTER, N_("Select") });
         return h;
     }
     // X is a pad button, so it always opens the pad-friendly path entry.
@@ -141,10 +144,10 @@ public:
             if (m_showLog) lines = m_job.lines;
         }
         const GameInfo& g = cane::game(m_game);
-        const std::string title = m_addRegion ? std::string("Install another region of ") + g.shortName : std::string("Install ") + g.shortName;
+        const std::string title = m_addRegion ? trf("Install another region of %s", g.shortName) : trf("Install %s", g.shortName);
         const std::string sub = m_addRegion
-                                    ? std::string("Each region installs side by side; a dropdown on the game page picks the one to play. Saves are shared.")
-                                    : std::string("SafeHouse installs ") + g.title + " from your own disc image (" + supportedRegionList(m_game) + ").";
+                                    ? std::string(tr("Each region installs side by side; a dropdown on the game page picks the one to play. Saves are shared."))
+                                    : trf("SafeHouse installs %s from your own disc image (%s).", g.title, supportedRegionList(m_game).c_str());
         if (titleBar(title.c_str(), true, sub.c_str()) && onBack) onBack();
         if (m_choseFirst) {
             // Opening the page puts the focus on the chosen image or Install.
@@ -153,7 +156,7 @@ public:
         }
         if (!busy && !otherJob && message != "Ready" && message != m_dismissed && m_jobGame == m_game) {
             const bool ok = message == "Completed";
-            if (banner("job-result", ok ? (m_lastLabel.empty() ? std::string("Done.") : m_lastLabel + " finished.") : message,
+            if (banner("job-result", ok ? (m_lastLabel.empty() ? std::string(tr("Done.")) : trf("%s finished.", tr(m_lastLabel).c_str())) : tr(message),
                        ok ? BannerTone::Success : message == "Cancelled" ? BannerTone::Info : BannerTone::Error))
                 m_dismissed = message;
         }
@@ -171,9 +174,12 @@ public:
             if (r->status == filedialog::Status::Chosen) {
                 rememberFolder(path(r->path).parent_path());
                 if (!IsoScanner::isIso(path(r->path)))
-                    m_note = "That file is not a disc image (.iso or .chd).";
+                    m_note = tr("That file is not a disc image (.iso or .chd).");
                 else {
                     m_iso = r->path;
+#ifdef CANE_ANDROID
+                    if (!m_fixture) m_scanner.scan();  // (the copy in files/imports joins the list, iso_scan.h)
+#endif
                     if (m_installAfterSelection) startInstall(m_iso);
                 }
                 m_installAfterSelection = false;
@@ -209,6 +215,11 @@ private:
     // or .iso path instead (with the on-screen keyboard).
     static bool padUser() { return input::tracker().lastWasGamepad(); }
     void choose(bool installAfter) {
+#ifdef CANE_ANDROID
+        // Android: the system document picker works with a pad too (native_dialog.h); typed paths cannot reach it
+        if (!m_fixture) browse(installAfter);
+        return;
+#endif
         if (padUser()) openPathEntry(installAfter);
         else if (!m_fixture) browse(installAfter);
     }
@@ -235,7 +246,7 @@ private:
         std::error_code ec;
         if (fs::is_regular_file(chosen, ec)) {
             if (!IsoScanner::isIso(chosen)) {
-                m_pathNote = "That file is not a disc image (.iso or .chd).";
+                m_pathNote = tr("That file is not a disc image (.iso or .chd).");
                 return;
             }
             m_iso = utf8(chosen);
@@ -245,7 +256,7 @@ private:
             if (!m_fixture) m_scanner.scan({ chosen });
             m_pathOpen = false;
         } else {
-            m_pathNote = "Nothing found at that path.";
+            m_pathNote = tr("Nothing found at that path.");
             return;
         }
         m_installAfterSelection = false;
@@ -254,15 +265,15 @@ private:
     }
     void pathEntry(float w) {
         gap(10);
-        field("Folder or disc image", "Folders are searched two levels deep");
+        field(tr("Folder or disc image"), tr("Folders are searched two levels deep"));
         const float searchW = px(120), cancelW = px(100);
         const bool entered = inputField("##iso-path", m_pathBuf, sizeof(m_pathBuf), launcher::Charset::Free,
 #ifdef _WIN32
-                                        "e.g. D:\\Games or D:\\Games\\Sly.iso",
+                                        tr("e.g. D:\\Games or D:\\Games\\Sly.iso"),
 #elif defined(__APPLE__)
-                                        "e.g. ~/Downloads/Sly.iso or /Volumes/Games",
+                                        tr("e.g. ~/Downloads/Sly.iso or /Volumes/Games"),
 #else
-                                        "e.g. /run/media/deck/SD/Emulation/roms/ps2",
+                                        tr("e.g. /run/media/deck/SD/Emulation/roms/ps2"),
 #endif
                                         w - searchW - cancelW - px(16), ImGuiInputTextFlags_EnterReturnsTrue);
         // Opening the entry focuses the field. A pad user confirms it to open
@@ -282,10 +293,10 @@ private:
         if (entered) submitPath();
         ImGui::SameLine(0, px(8));
         ImGui::BeginDisabled(!m_pathBuf[0]);
-        if (button("Search", Tone::Primary, { searchW, 0 }, Icon::Search)) submitPath();
+        if (button(tr("Search"), Tone::Primary, { searchW, 0 }, Icon::Search)) submitPath();
         ImGui::EndDisabled();
         ImGui::SameLine(0, px(8));
-        if (button("Cancel", Tone::Quiet, { cancelW, 0 })) back();
+        if (button(tr("Cancel"), Tone::Quiet, { cancelW, 0 })) back();
         if (!m_pathNote.empty()) {
             tighten(2);
             text(m_pathNote.c_str(), fonts().caption, color::warning);
@@ -294,7 +305,7 @@ private:
     }
     // Browse: the operating system's file dialog where there is one (and the launcher is not in Game Mode / Big
     // Picture), else the in-launcher one. It opens in the folder last used, else Downloads / home.
-    std::string browseTitle() const { return std::string("Choose your ") + cane::game(m_game).shortName + " disc image"; }
+    std::string browseTitle() const { return trf("Choose your %s disc image", cane::game(m_game).shortName); }
     fs::path browseFolder() const {
         return filedialog::startFolder({ m_iso, m_backend.config.value("browse_dir", std::string{}) });
     }
@@ -359,29 +370,29 @@ private:
         ImGui::BeginGroup();
         const std::string& label = m_job.label;
         std::string installedList;
-        for (const auto& r : m_regions) installedList += (installedList.empty() ? "" : ", ") + r.name();
-        const std::string regionSuffix = m_regions.size() > 1 ? " (" + selectedRegionName() + ")" : std::string{};
-        heading(busy ? (label == "Verification" ? "Checking your files…" : "Installing…")
-                : m_addRegion ? "Install another region"
-                : ready ? ("Ready to play" + regionSuffix).c_str() : outdated ? ("Update needed" + regionSuffix).c_str()
-                : needsRepair ? "Needs repair" : "Not installed yet");
+        for (const auto& r : m_regions) installedList += (installedList.empty() ? "" : ", ") + tr(r.name());
+        const std::string regionSuffix = m_regions.size() > 1 ? " (" + tr(selectedRegionName()) + ")" : std::string{};
+        heading(busy ? (label == "Verification" ? tr("Checking your files…") : tr("Installing…"))
+                : m_addRegion ? tr("Install another region")
+                : ready ? (tr("Ready to play") + regionSuffix).c_str() : outdated ? (tr("Update needed") + regionSuffix).c_str()
+                : needsRepair ? tr("Needs repair") : tr("Not installed yet"));
         tighten(8);
         std::string sub;
         if (busy)
-            sub = "This takes a few minutes. Keep the launcher open until it finishes.";
+            sub = tr("This takes a few minutes. Keep the launcher open until it finishes.");
         else if (ready) {
             const auto from = m_backend.rememberedIso(m_game);
-            sub = from.empty() || m_fixture ? "Game files are installed and verified." : "Installed from " + utf8(path(from).filename());
+            sub = from.empty() || m_fixture ? std::string(tr("Game files are installed and verified.")) : trf("Installed from %s", utf8(path(from).filename()).c_str());
         } else if (m_addRegion)
-            sub = (installedList.empty() ? std::string("No region is installed yet.") : "Installed: " + installedList + ".") +
-                  " Choose a disc image of another region below.";
+            sub = (installedList.empty() ? std::string(tr("No region is installed yet.")) : trf("Installed: %s.", installedList.c_str())) + " " +
+                  tr("Choose a disc image of another region below.");
         else if (outdated)
-            sub = "A SafeHouse update changed the format of the game files. Extract your disc again (the image you installed from is "
-                  "selected below). Your saves are kept.";
+            sub = tr("A SafeHouse update changed the format of the game files. Extract your disc again (the image you installed from is "
+                  "selected below). Your saves are kept.");
         else if (needsRepair)
-            sub = "This installation is damaged or incomplete. Choose your disc image and reinstall.";
+            sub = tr("This installation is damaged or incomplete. Choose your disc image and reinstall.");
         else
-            sub = "Choose your disc image below, then install. It needs " + spaceRange(m_game) + " of free space.";
+            sub = trf("Choose your disc image below, then install. It needs %s of free space.", spaceRange(m_game).c_str());
         ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + width - px(48) - badge - px(18) - px(190));
         text(sub.c_str(), fonts().caption, color::text2);
         ImGui::PopTextWrapPos();
@@ -390,7 +401,7 @@ private:
             ImGui::SameLine(0, 0);
             ImGui::SetCursorScreenPos({ p.x + width - px(40) - px(170), p.y + px(8) });
             ImGui::BeginDisabled(busy || sessionActive);
-            if (button("Verify files", Tone::Secondary, { px(170), 0 }, Icon::Check) && !m_fixture)
+            if (button(tr("Verify files"), Tone::Secondary, { px(170), 0 }, Icon::Check) && !m_fixture)
                 m_jobGame = m_game, m_job.start("Verification", [this, data = m_backend.dataDir(m_game)](const auto& log) {
                     verifyInstallation(
                         data,
@@ -424,10 +435,10 @@ private:
             text(item.c_str(), fonts().caption, color::muted);
         }
         gap(4);
-        if (button(m_showLog ? "Hide details" : "Show details", Tone::Quiet, { 0, 0 }, m_showLog ? Icon::ChevronDown : Icon::ChevronRight))
+        if (button(m_showLog ? tr("Hide details") : tr("Show details"), Tone::Quiet, { 0, 0 }, m_showLog ? Icon::ChevronDown : Icon::ChevronRight))
             m_showLog = !m_showLog;
         ImGui::SameLine(0, px(8));
-        if (button("Cancel", Tone::Danger, { px(120), 0 })) m_job.cancel = true;
+        if (button(tr("Cancel"), Tone::Danger, { px(120), 0 })) m_job.cancel = true;
         takeFocus(!input::tracker().lastWasMouse());
         if (m_showLog) {
             ImGui::PushStyleColor(ImGuiCol_ChildBg, vec(color::bg));
@@ -448,24 +459,38 @@ private:
         const float w = ImGui::GetContentRegionAvail().x;
         const ImVec2 row = ImGui::GetCursorScreenPos();
         // Room for the heading next to the Search again / Browse buttons.
-        const char* browseLabel = padUser() ? "Enter path…###browse" : "Browse…###browse";
+#ifdef CANE_ANDROID
+        const char* browseLabel = tr("Browse…###browse");
+#else
+        const char* browseLabel = padUser() ? tr("Enter path…###browse") : tr("Browse…###browse");
+#endif
         const float browseW = std::max(px(130), fonts().body->CalcTextSizeA(fonts().body->FontSize, FLT_MAX, 0.0f, browseLabel, ImGui::FindRenderedTextEnd(browseLabel)).x + px(68));
         const float rescanW = controlHeight();
         ImGui::BeginGroup();
-        heading("Disc image");
+        heading(tr("Disc image"));
         tighten(8);
         ImGui::PushClipRect(ImGui::GetCursorScreenPos(), { row.x + w - browseW - rescanW - px(20), row.y + px(80) }, true);
-#ifdef _WIN32
-        const char* where = "Found in your Downloads, Documents and Desktop folders";
+#if defined(CANE_ANDROID)
+        const char* where = tr("Disc images you picked with Browse…");
+#elif defined(_WIN32)
+        const char* where = tr("Found in your Downloads, Documents and Desktop folders");
 #else
-        const char* where = "Found in your Emulation, Games, Downloads, Desktop and Documents folders and on removable drives";
+        const char* where = tr("Found in your Emulation, Games, Downloads, Desktop and Documents folders and on removable drives");
 #endif
-        text(m_scanner.scanning() ? "Searching your folders…" : where, fonts().caption, color::muted);
+        {
+            // (two lines when a translation is longer than the room beside the buttons)
+            const float wrapRight = row.x + w - browseW - rescanW - px(20);
+            FontScope f(fonts().caption);
+            ColorScope c(color::muted);
+            ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + (wrapRight - ImGui::GetCursorScreenPos().x));
+            ImGui::TextUnformatted(m_scanner.scanning() ? tr("Searching your folders…") : where);
+            ImGui::PopTextWrapPos();
+        }
         ImGui::PopClipRect();
         ImGui::EndGroup();
         // Pad users get the path entry instead of the mouse-only file dialog.
         sameRow(row, w - browseW - rescanW - px(8));
-        if (iconButton("Search again", Icon::Refresh, rescanW) && !m_fixture) m_scanner.scan();
+        if (iconButton(tr("Search again"), Icon::Refresh, rescanW) && !m_fixture) m_scanner.scan();
         ImGui::SameLine(0, px(8));
         ImGui::BeginDisabled(m_native.running());  // the system's file dialog is open in its own window
         if (button(browseLabel, Tone::Secondary, { browseW, 0 }, padUser() ? Icon::Search : Icon::Folder)) choose(false);
@@ -505,8 +530,25 @@ private:
         const bool canRoute = check && check->status == DiscCheck::Status::WrongGame && check->game && installable(*check->game) &&
                               check->region && check->region->supported;
         const std::string info = check && check->ok() ? discInfo(*check) : std::string{};
+        // Where it goes (backend.h regionDir: the region's folder, else a new one in the install folder).
+        const std::string regionKey = check && check->ok() && check->region ? check->region->key : std::string{};
+        if (ImGui::GetTime() >= m_nextDestination || regionKey != m_destinationRegion) {
+            m_nextDestination = ImGui::GetTime() + 1.0;
+            m_destinationRegion = regionKey;
+            try {
+                m_destination = regionKey.empty() ? m_backend.installRoot() : m_backend.regionDir(m_game, regionKey);
+            } catch (...) {
+                m_destination = m_backend.installRoot();
+            }
+            m_destinationFree = freeBytes(m_destination);
+            if (m_fixture) {  // (screenshots: the fixtures' player)
+                m_destination = path(std::string("/home/player/.local/share/SafeHouse/installations/") + cane::game(m_game).key);
+                m_destinationFree = 212ull << 30;
+            }
+        }
+        const bool showDestination = mismatch.empty();
         const float footer = largeHeight() + px(14) + (mismatch.empty() ? 0.0f : px(40) + (canRoute ? controlHeight() : 0.0f)) +
-                             (info.empty() ? 0.0f : px(34));
+                             (info.empty() ? 0.0f : px(34)) + (showDestination ? controlHeight() + px(8) : 0.0f);
         // A little padding keeps the focus ring of the first and last rows visible.
         ImGui::SetCursorPosX(ImGui::GetCursorPosX() - px(6));
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, { px(6), px(6) });
@@ -518,13 +560,17 @@ private:
             const ImVec2 o = ImGui::GetCursorScreenPos();
             auto* dl = ImGui::GetWindowDrawList();
             const ImVec2 c{ o.x + area.x * 0.5f, o.y + area.y * 0.42f };
-            const char* label = m_scanner.scanning() ? "Looking for disc images…" : "No disc images found in your usual folders.";
+            const char* label = m_scanner.scanning() ? tr("Looking for disc images…") : tr("No disc images found in your usual folders.");
             if (m_scanner.scanning()) spinner(dl, { c.x, c.y - px(26) }, px(14));
             else drawIcon(dl, Icon::Disc, { c.x, c.y - px(26) }, px(34), ink(color::muted));
             const auto t = measure(fonts().body, label);
             dl->AddText(fonts().body, fonts().body->FontSize, { std::round(c.x - t.x * 0.5f), c.y }, ink(color::text2), label);
-            const char* sub = padUser() ? "Enter the folder that holds your disc image to search it."
-                                        : "Use Browse… or drop an .iso or .chd file onto this window.";
+#ifdef CANE_ANDROID
+            const char* sub = tr("Use Browse… to pick it with Android's file picker.");
+#else
+            const char* sub = padUser() ? tr("Enter the folder that holds your disc image to search it.")
+                                        : tr("Use Browse… or drop an .iso or .chd file onto this window.");
+#endif
             const auto t2 = measure(fonts().caption, sub);
             dl->AddText(fonts().caption, fonts().caption->FontSize, { std::round(c.x - t2.x * 0.5f), c.y + px(28) }, ink(color::muted), sub);
         }
@@ -581,7 +627,7 @@ private:
             ImGui::PopTextWrapPos();
             if (canRoute) {
                 const GameId other = *selected->identity.game;
-                const std::string label = std::string("Install as ") + cane::game(other).shortName + " instead";
+                const std::string label = trf("Install as %s instead", cane::game(other).shortName);
                 ImGui::SetCursorPosX(ImGui::GetCursorPosX() + px(28));
                 if (button(label.c_str(), Tone::Secondary, { 0, 0 }, Icon::ChevronRight) && onRoute) onRoute(other, m_iso);
             }
@@ -594,22 +640,48 @@ private:
             ImGui::SetCursorScreenPos({ p.x + px(28), p.y });
             text(info.c_str(), fonts().body, color::text);
         }
+        // "Installs to <folder> · N GB free   [Change…]"
+        if (showDestination) {
+            gap(2);
+            const ImVec2 p = ImGui::GetCursorScreenPos();
+            const float changeW = std::max(px(130), measure(fonts().body, tr("Change…")).x + px(64));
+            const float rowH = controlHeight();
+            drawIcon(ImGui::GetWindowDrawList(), Icon::Folder, { p.x + px(10), p.y + rowH * 0.5f }, px(18), ink(color::text2));
+            const std::string dest = trf("Installs to %s", utf8(m_destination).c_str()) + " · " + freeText(m_destinationFree);
+            ImGui::PushClipRect(p, { p.x + w - changeW - px(12), p.y + rowH }, true);
+            ImGui::GetWindowDrawList()->AddText(fonts().body, fonts().body->FontSize,
+                                                { p.x + px(28), std::round(p.y + (rowH - fonts().body->FontSize) * 0.5f) }, ink(color::text2),
+                                                dest.c_str());
+            ImGui::PopClipRect();
+            ImGui::SetCursorScreenPos({ p.x + w - changeW, p.y });
+            ImGui::BeginDisabled(m_job.busy);
+            if (button(tr("Change…###install-location"), Tone::Quiet, { changeW, rowH }, Icon::ChevronRight) && onChangeLocation && !m_fixture)
+                onChangeLocation();
+            ImGui::EndDisabled();
+            ImGui::SetCursorScreenPos({ p.x, p.y + rowH + px(6) });
+            ImGui::Dummy({ 1, 0 });
+        }
         // Footer: hint and the main action.
         const float ctaW = px(260);
         ImGui::SetCursorPosY(ImGui::GetCursorPosY() + px(2));
         const float y = ImGui::GetCursorPosY();
         ImGui::SetCursorPosY(y + (largeHeight() - fonts().caption->FontSize) * 0.5f);
-        text(padUser() ? "Not listed? Enter the folder that holds it." : "You can also drop an .iso or .chd file onto this window.", fonts().caption,
+#ifdef CANE_ANDROID
+        text(tr("The file picker copies the disc image into the app."), fonts().caption, color::muted);
+#else
+        text(padUser() ? tr("Not listed? Enter the folder that holds it.") : tr("You can also drop an .iso or .chd file onto this window."), fonts().caption,
              color::muted);
+#endif
         ImGui::SetCursorPos({ ImGui::GetCursorPosX() + w - ctaW, y });
         ImGui::BeginDisabled(sessionActive || m_job.busy || !mismatch.empty());
-        std::string ctaLabel = ready && !m_addRegion ? "Reinstall" : "Install";
+        std::string ctaLabel = ready && !m_addRegion ? tr("Reinstall") : tr("Install");
         bool ctaQuiet = ready && !m_addRegion;
         if (check && check->ok() && check->region) {
             const auto it = std::find_if(m_regions.begin(), m_regions.end(), [&](const auto& r) { return r.region == check->region->key; });
-            if (it == m_regions.end()) ctaLabel = "Install " + check->region->name, ctaQuiet = false;
-            else if (it->outdated) ctaLabel = "Re-extract " + check->region->name, ctaQuiet = false;
-            else ctaLabel = (it->current ? "Reinstall " : "Repair ") + check->region->name, ctaQuiet = it->current;
+            const std::string region = tr(check->region->name);
+            if (it == m_regions.end()) ctaLabel = trf("Install %s", region.c_str()), ctaQuiet = false;
+            else if (it->outdated) ctaLabel = trf("Re-extract %s", region.c_str()), ctaQuiet = false;
+            else ctaLabel = (it->current ? trf("Reinstall %s", region.c_str()) : trf("Repair %s", region.c_str())), ctaQuiet = it->current;
         }
         ctaLabel += "###install";
         if (button(ctaLabel.c_str(), ctaQuiet ? Tone::Secondary : Tone::Cta, { ctaW, largeHeight() }, Icon::Disc)) install();
@@ -623,16 +695,16 @@ private:
     static std::string discTag(const DiscIdentity& id) {
         switch (id.kind) {
         case DiscIdentity::Kind::Supported: return std::string(cane::game(*id.game).shortName) + " · " + regionOf(id);
-        case DiscIdentity::Kind::OtherRegion: return std::string(cane::game(*id.game).shortName) + " · " + regionOf(id) + " · not yet";
-        case DiscIdentity::Kind::NoPort: return std::string(cane::game(*id.game).shortName) + " · no port yet";
-        case DiscIdentity::Kind::Unknown: return "Other PS2 disc";
-        default: return "Not a PS2 disc";
+        case DiscIdentity::Kind::OtherRegion: return std::string(cane::game(*id.game).shortName) + " · " + regionOf(id) + " · " + tr("not yet");
+        case DiscIdentity::Kind::NoPort: return std::string(cane::game(*id.game).shortName) + " · " + tr("no port yet");
+        case DiscIdentity::Kind::Unknown: return tr("Other PS2 disc");
+        default: return tr("Not a PS2 disc");
         }
     }
     static std::string regionOf(const DiscIdentity& id) {
         if (id.game)
-            if (auto r = regionByBootFile(*id.game, id.bootFile)) return r->name;
-        return "other region";
+            if (auto r = regionByBootFile(*id.game, id.bootFile)) return tr(r->name);
+        return tr("other region");
     }
     bool regionInstalled(const IsoCandidate& c) const {
         if (!c.identity.game) return false;
@@ -676,10 +748,10 @@ private:
         std::string out = c.label();
         if (c.region) {
             if (!c.region->serial.empty()) out += " · " + c.region->serial;
-            out += " · needs " + aboutGb(c.region->needBytes) + " free";
+            out += " · " + trf("needs %s free", aboutGb(c.region->needBytes).c_str());
             const bool there = std::any_of(m_regions.begin(), m_regions.end(), [&](const auto& r) { return r.region == c.region->key; });
-            if (there) out += " · replaces the installed " + c.region->name + " files";
-            else if (!m_regions.empty()) out += " · installs beside " + (m_regions.size() == 1 ? m_regions[0].name() : std::string("your other regions"));
+            if (there) out += " · " + trf("replaces the installed %s files", tr(c.region->name).c_str());
+            else if (!m_regions.empty()) out += " · " + trf("installs beside %s", m_regions.size() == 1 ? tr(m_regions[0].name()).c_str() : tr("your other regions"));
         }
         return out;
     }
@@ -703,5 +775,9 @@ private:
     std::string m_pathNote;
     double m_nextCheck = 0;
     bool m_wasBusy = false;
+    fs::path m_destination;
+    std::string m_destinationRegion = "-";
+    uint64_t m_destinationFree = 0;
+    double m_nextDestination = 0;
 };
 } // namespace cane::ui

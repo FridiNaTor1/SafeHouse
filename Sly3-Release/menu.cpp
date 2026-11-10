@@ -456,7 +456,7 @@ std::string StrNative(int id)
     case NID_PromptStyle:
     {
         // (the controllers' names stay as they are)
-        static const char* const asz[] = {nullptr, "PlayStation", "Xbox", "Nintendo", "Steam Deck", "Steam Controller", "PlayStation 4", "PlayStation 5", "Steam Controller (2026)"};
+        static const char* const asz[cane::input::kPromptStyleLast + 1] = {nullptr, "PlayStation", "Xbox", "Nintendo", "Steam Deck", "Steam Controller", "PlayStation 4", "PlayStation 5", "Steam Controller (2026)", "Nintendo GameCube", "Nintendo Switch 2", "Wii Classic Controller", "Wii U Pro Controller", "Meta Quest Touch", "Valve Index", "Steam Frame", "HTC Vive", "Pico"};
         const int i = std::clamp(g_pcinput.promptStyle, 0, cane::input::kPromptStyleLast);
         return StrPortValue(PTX_ButtonIcons, i == 0 ? StrPort(PTX_Auto) : std::string(asz[i]));
     }

@@ -1,5 +1,7 @@
 #include "disc.h"
+#include "worldparts.h"
 #include "bis.h"
+#include "cls.h"
 #include "convert.h"
 
 #include "../platform/brx_decompress.h"
@@ -256,7 +258,8 @@ bool CDisc::FOpenConverted(const std::string& dir, std::string& error)
             error = dir + ": not a converted Sly 2 installation";
             return false;
         }
-        if (m.value("format_version", 0) != SLY2_FILES_FORMAT && m.value("format_version", 0) != SLY2_FILES_FORMAT_PS2)
+        if (m.value("format_version", 0) != SLY2_FILES_FORMAT && m.value("format_version", 0) != SLY2_FILES_FORMAT_WAV &&
+            m.value("format_version", 0) != SLY2_FILES_FORMAT_PS2)
         {
             error = dir + ": installed with another version of the converter: install Sly 2 again from the launcher";
             return false;
@@ -294,7 +297,8 @@ bool CDisc::FOpenConverted(const std::string& dir, std::string& error)
         for (const std::string& rel : asetMod)
             if (const std::string k = keyOfNumber(rel); !k.empty()) mpnumberMod.emplace(k, rel);
         // the mods folder's file for an installed path: the same path, else the same number
-        auto relModOf = [&](const std::string& rel) -> std::string {
+        auto relModOf = [&](const std::string& relIn) -> std::string {
+            const std::string rel = relIn.rfind("@languages/", 0) == 0 ? "Languages/" + relIn.substr(11) : relIn;
             if (asetMod.count(rel)) return rel;
             if (const std::string k = keyOfNumber(rel); !k.empty())
                 if (const auto it = mpnumberMod.find(k); it != mpnumberMod.end()) return it->second;
@@ -305,14 +309,41 @@ bool CDisc::FOpenConverted(const std::string& dir, std::string& error)
             return (dot == std::string::npos ? rel : rel.substr(0, dot)) + ext;
         };
         m_cmod = 0;
+        m_mpsectorName.clear();
+        // (an installation's languages in the shared languages folder, langstore.h: "@languages/French/...". Their mods
+        // are Mods/Languages/French/..., as langstore.cpp takes them.)
+        auto pathInstalled = [&](const std::string& rel) -> fs::path {
+            if (rel.rfind("@languages/", 0) == 0) return cane::path(m_dirLanguages) / cane::path(rel.substr(11));
+            return root / cane::path(rel);
+        };
         for (const auto& f : m.at("files"))
         {
             const std::string rel = f.at("path").get<std::string>();
             if (rel.find("..") != std::string::npos) continue;
             const std::string kind = f.value("kind", "");
+            if (f.contains("name")) m_mpsectorName[f.at("sector").get<uint32_t>()] = f.at("name").get<std::string>();
             FILEENT ent;
             ent.fDecompressed = f.value("decompressed", false);
+            ent.rel = rel;
             std::string relMod = relModOf(rel);
+            // (format 3) a world as its parts: its index; a whole world file in the mods folder (Mods/.../<World>.brx,
+            // as before format 3) replaces it all, else each part the mods folder has replaces that part (FRavelWorld)
+            if (kind == "world" && f.value("layout", "") == "parts")
+            {
+                ent.fParts = true;
+                const std::string suffix = ".world.json";
+                if (rel.size() > suffix.size() && rel.compare(rel.size() - suffix.size(), suffix.size(), suffix) == 0)
+                    if (const std::string relBrx = relModOf(rel.substr(0, rel.size() - suffix.size()) + ".brx"); !relBrx.empty())
+                    {
+                        relMod = relBrx;
+                        ent.fParts = false;
+                    }
+                if (ent.fParts)
+                {
+                    const std::string dirParts = rel.substr(0, rel.rfind('/') + 1) + "World/";
+                    for (auto it = asetMod.lower_bound(dirParts); it != asetMod.end() && it->compare(0, dirParts.size(), dirParts) == 0; ++it) ++m_cmod;
+                }
+            }
             // the other formats the game reads at the same path: a dialog line as WAV or FLAC, and the PS2 formats of
             // earlier installations (a VPK the music or ambience's WAV, a VAG a dialog line's, a PSS a movie's M2V and
             // sound): the game reads either (spiop.cpp, fmv.cpp)
@@ -332,8 +363,8 @@ bool CDisc::FOpenConverted(const std::string& dir, std::string& error)
                 ent.fMod = true;
                 ++m_cmod;
             }
-            else ent.path = cane::utf8(root / cane::path(rel));
-            ent.pathInstalled = cane::utf8(root / cane::path(rel));
+            else ent.path = cane::utf8(pathInstalled(rel));
+            ent.pathInstalled = cane::utf8(pathInstalled(rel));
             // the file's parts: a movie's sound tracks ("audio": [{"track", "path"}]), a bank's samples ("samples":
             // [{"offset", "path"}]); each can be replaced on its own
             auto addParts = [&](const char* name, const char* key, const char* prefix) {
@@ -347,7 +378,7 @@ bool CDisc::FOpenConverted(const std::string& dir, std::string& error)
                         if (relPartMod.empty() && !std::strcmp(prefix, "audio")) relPartMod = relModOf(withExt(relPart, ext));
                     if (!relPartMod.empty()) ++m_cmod;
                     ent.mppart[prefix + std::to_string(p.at(key).get<uint32_t>())] =
-                        relPartMod.empty() ? cane::utf8(root / cane::path(relPart)) : cane::utf8(cane::path(m_dirMods) / cane::path(relPartMod));
+                        relPartMod.empty() ? cane::utf8(pathInstalled(relPart)) : cane::utf8(cane::path(m_dirMods) / cane::path(relPartMod));
                 }
             };
             addParts("audio", "track", "audio");
@@ -363,6 +394,7 @@ bool CDisc::FOpenConverted(const std::string& dir, std::string& error)
             m_afile.emplace_back(f.at("sector").get<uint32_t>(), std::move(ent));
         }
         std::sort(m_afile.begin(), m_afile.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+        m_setMod = std::move(asetMod);
     }
     catch (const std::exception& e)
     {
@@ -460,6 +492,30 @@ const CDisc::FILEENT* CDisc::PentFind(uint32_t isector) const
     return it != m_afile.end() && it->first == isector ? &it->second : nullptr;
 }
 
+const CDisc::FILEENT* CDisc::PentFindAny(uint32_t isector) const
+{
+    if (isector >= ISECTOR_EXTERNAL)
+        return isector - ISECTOR_EXTERNAL < m_aentExternal.size() ? &m_aentExternal[isector - ISECTOR_EXTERNAL] : nullptr;
+    return m_fConverted ? PentFind(isector) : nullptr;
+}
+
+uint32_t CDisc::IsectorExternal(const std::string& path)
+{
+    if (const auto it = m_mppathExternal.find(path); it != m_mppathExternal.end()) return it->second;
+    FILEENT ent;
+    ent.path = ent.pathInstalled = path;
+    m_aentExternal.push_back(std::move(ent));
+    const uint32_t isector = ISECTOR_EXTERNAL + uint32_t(m_aentExternal.size() - 1);
+    m_mppathExternal.emplace(path, isector);
+    return isector;
+}
+
+std::string CDisc::SzFileName(uint32_t isector) const
+{
+    const auto it = m_mpsectorName.find(isector);
+    return it != m_mpsectorName.end() ? it->second : std::string();
+}
+
 uint32_t CDisc::VaRegion(uint32_t vaUsa) const { return m_amap ? VaLookup(m_amap, m_cmap, vaUsa) : vaUsa; }
 
 uint32_t CDisc::VaUsa(uint32_t vaRegion) const
@@ -469,9 +525,9 @@ uint32_t CDisc::VaUsa(uint32_t vaRegion) const
 
 std::vector<uint8_t> CDisc::ReadFile(const FK& fk) const
 {
-    if (m_fConverted)
+    if (m_fConverted || fk.isector >= ISECTOR_EXTERNAL)
     {
-        const FILEENT* pent = PentFind(fk.isector);
+        const FILEENT* pent = PentFindAny(fk.isector);
         if (!pent) throw std::runtime_error("no installed file for the key at sector " + std::to_string(fk.isector) + " (id " + std::to_string(fk.id) + ")");
 #ifdef __SWITCH__
         // (the whole file in one read: its size first)
@@ -496,8 +552,8 @@ std::vector<uint8_t> CDisc::ReadFile(const FK& fk) const
 
 bool CDisc::FReadFileBytes(uint32_t isector, uint64_t ib, void* pv, std::size_t cb) const
 {
-    if (!m_fConverted) return ReadAt(m_path, uint64_t(isector) * SECTOR + ib, pv, cb);
-    const FILEENT* pent = PentFind(isector);
+    if (!m_fConverted && isector < ISECTOR_EXTERNAL) return ReadAt(m_path, uint64_t(isector) * SECTOR + ib, pv, cb);
+    const FILEENT* pent = PentFindAny(isector);
     if (!pent)
     {
         std::fprintf(stderr, "disc: no installed file at sector 0x%X\n", isector);
@@ -525,7 +581,7 @@ bool CDisc::FReadFileBytes(uint32_t isector, uint64_t ib, void* pv, std::size_t 
 
 std::string CDisc::PathOf(uint32_t isector) const
 {
-    const FILEENT* pent = m_fConverted ? PentFind(isector) : nullptr;
+    const FILEENT* pent = PentFindAny(isector);
     return pent ? pent->path : std::string();
 }
 
@@ -539,7 +595,7 @@ std::string CDisc::PathPart(uint32_t isector, const std::string& key) const
 
 std::string CDisc::PathInstalled(uint32_t isector) const
 {
-    const FILEENT* pent = m_fConverted ? PentFind(isector) : nullptr;
+    const FILEENT* pent = PentFindAny(isector);
     return pent ? pent->pathInstalled : std::string();
 }
 
@@ -551,15 +607,50 @@ bool CDisc::FModded(uint32_t isector) const
 
 uint64_t CDisc::CbFile(uint32_t isector, uint64_t cbKey) const
 {
-    if (!m_fConverted) return cbKey;
-    const FILEENT* pent = PentFind(isector);
+    if (!m_fConverted && isector < ISECTOR_EXTERNAL) return cbKey;
+    const FILEENT* pent = PentFindAny(isector);
     std::error_code ec;
     const uint64_t cb = pent ? std::filesystem::file_size(cane::path(pent->path), ec) : 0;
     return ec ? 0 : cb;
 }
 
-std::vector<uint8_t> CDisc::ReadWorld(const FK& fk) const
+std::vector<uint8_t> CDisc::ReadWorld(const FK& fk) const { return ReadWorldParts(fk, false); }
+std::vector<uint8_t> CDisc::ReadWorldReduced(const FK& fk) const
 {
+    static const bool s_fFull = std::getenv("SLY2N_KEPTFULL") && std::atoi(std::getenv("SLY2N_KEPTFULL")) != 0;
+    return ReadWorldParts(fk, !s_fFull);
+}
+
+std::vector<uint8_t> CDisc::ReadWorldParts(const FK& fk, bool fReduced) const
+{
+    // (format 3) a world's parts put back together (worldparts.h): each part the mods folder's, else the installed one
+    if (const FILEENT* pent = m_fConverted ? PentFind(fk.isector) : nullptr; pent && pent->fParts)
+    {
+        nlohmann::json index;
+        {
+            std::ifstream in(cane::path(pent->path));
+            if (!in) throw std::runtime_error("cannot read " + pent->path);
+            in >> index;
+        }
+        const std::string relDir = pent->rel.substr(0, pent->rel.rfind('/') == std::string::npos ? 0 : pent->rel.rfind('/'));
+        std::vector<uint8_t> ab;
+        std::string error;
+        const std::filesystem::path root = cane::path(m_path);
+        const std::set<int> setDrop = fReduced ? SetLevelGroups(index) : std::set<int>();
+        const PFNKEEPOBJ pfnKeep = setDrop.empty() ? PFNKEEPOBJ() : PFNKEEPOBJ([](const WORLDOBJREC& r) { return FCidDerivedFrom(r.cid, 6); });
+        auto ravel = [&](bool fMods) {
+            return FRavelWorld(index, relDir, [&](const std::string& rel) {
+                return fMods && m_setMod.count(rel) ? cane::utf8(cane::path(m_dirMods) / cane::path(rel)) : cane::utf8(root / cane::path(rel));
+            }, ab, error, pfnKeep, setDrop.empty() ? nullptr : &setDrop);
+        };
+        if (!ravel(true))
+        {
+            // (a mod's part that does not compile, a script's typo: said, and the world loads as installed)
+            std::fprintf(stderr, "mods: %s: %s: the world loads without its mods\n", pent->rel.c_str(), error.c_str());
+            if (!ravel(false)) throw std::runtime_error(pent->rel + ": " + error);
+        }
+        return ab;
+    }
     std::vector<uint8_t> ab = ReadFile(fk);
     if (m_fConverted)
         if (const FILEENT* pent = PentFind(fk.isector); pent && pent->fDecompressed) return ab;

@@ -101,6 +101,8 @@ std::string StrLocalized(const SW* psw, int id)
         {
             // (native: the PS2's memory card messages said for a PC, porttext.h; not a text mod's string, not with
             // the "Original PlayStation Icons" option)
+            const bool fModded = std::find(psw->aidTextModded.begin(), psw->aidTextModded.end(), id) != psw->aidTextModded.end();
+            if (const char* sz = SzEpisodeMenuWording(id); sz && !fModded) return StrToGameText(sz);
             if (FPcWording())
                 if (const char* sz = SzPcWording(id);
                     sz && std::find(psw->aidTextModded.begin(), psw->aidTextModded.end(), id) == psw->aidTextModded.end())
@@ -818,6 +820,8 @@ void CScreenPlayer::Draw(const FONTBRX* pfont, const FONTBRX* pfontIcons, const 
                 // the subtitle (0x216BC8's 0x2EF): the line's whole text wrapped (0x215F40), typed by the line's time
                 // (0x227820), then only its last lines that fit the box (height +0x28 / size +0x20) kept
                 if (!FDialogSubtitleText(&text)) break;
+                // (lang: the words L3 / R3 / START / SELECT as the device's icons in the subtitles too, promptglyph.h)
+                if (pfontIcons) text = StrPromptButtonWords(text, IdTextUsa(g_dialogsub.id));
                 text = StrDialogSubtitleTyped(StrWrapped(*pfont, pfontIcons, text, el.ag3[0] / 51.2f, el.ag3[1]));
                 int cline = 1;
                 for (char ch : text) cline += ch == '\n';

@@ -23,11 +23,21 @@ public:
     bool FInit(const char* vertexFile, const char* fragmentFile, const char* szPrefix);
     // The same with a geometry stage (between the two; the prefix goes into all three).
     bool FInit(const char* vertexFile, const char* geometryFile, const char* fragmentFile, const char* szPrefix);
-    void Use() const { glUseProgram(ID); }
+    // (VR multiview, OpenGL ES with GL_OVR_multiview2) while g_fMultiviewPass: the program's two-view variant (built on
+    // first use: the same sources, the clip position of view 1 from view 0's by caneClipLtoR, its uniforms at the same
+    // locations), else the program
+    void Use() const;
     void Delete() { glDeleteProgram(ID); ID = 0; }
     GLint Loc(const char* name) const { return glGetUniformLocation(ID, name); }
 
 private:
+    // (multiview) the sources as compiled, the two-view program, the pass its caneClipLtoR was set for
+    std::string m_vs, m_fs;
+    bool m_fGeometry = false, m_fFullScreen = false;
+    mutable GLuint m_idMv = 0;
+    mutable int m_iMvState = 0;   // 0 not tried, 1 built, -1 failed
+    mutable unsigned m_serialMv = 0;
+    bool FBuildMultiview() const;
     static bool CompileErrors(GLuint shader, const char* type, const char* file);
 };
 
@@ -66,11 +76,27 @@ private:
 };
 
 extern GL g_gl;
+// (VR multiview, vr.cpp / render.cpp RenderSceneStereo) a pass drawing both eyes at once into a two-view framebuffer:
+// GLSHADER::Use binds the programs' two-view variants and sets their caneClipLtoR (view 1's clip from view 0's) for the
+// pass g_serialMultiview; a variant that cannot be made sets g_fMultiviewFailed (VR then draws the eyes one by one)
+extern bool g_fMultiviewPass, g_fMultiviewFailed;
+extern unsigned g_serialMultiview;
+extern float g_amatMultiviewLtoR[16];
 extern GLSHADER glGlobShader;
 // glGlobShader without its fragment discards (NOKILL), for the runs without alpha test and DATE; ID 0: none
 extern GLSHADER glGlobShaderNoKill;
+// (perf-4) both without the near-clip geometry stage (ID 0: not built); g_fGlobNoGeom: render.cpp may use them
+extern GLSHADER glGlobShaderNoGeom, glGlobShaderNoKillNoGeom;
+extern bool g_fGlobNoGeom;
 // (perf-3) glGlobShader built with ARB_bindless_texture (the pass draws' textures per draw: render.cpp)
 extern bool g_fGlobBindless;
+// (perf-5) without bindless: the pass draws' textures as array texture layers (glob shaders TEXARRAY; render.cpp)
+extern bool g_fGlobArrays;
+// OpenGL ES (Android) without EXT_base_instance / multi-draw-indirect: each draw sets glob.vert's caneDrawBase (render.cpp DrawIndexed)
+extern bool g_fDrawUniform;
+// (VR Immersive, vr.h) the HUD drawn over transparency for the headset's panel: its alpha written too (premultiplied
+// colours, "over" alpha); false (always outside VR): the alpha kept as before
+extern bool g_fHudAlphaLayer;
 // The pass runs drawn one by one, not by glMultiDrawElementsIndirect (render.cpp): on Mesa's OpenGL on Direct3D 12
 // (Windows on ARM) each indirect draw costs a compute pass (glob.vert reads gl_VertexID)
 extern bool g_fDirectRuns;

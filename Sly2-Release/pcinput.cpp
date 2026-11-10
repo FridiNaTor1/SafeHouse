@@ -2,6 +2,11 @@
 // the camera keys, the device tracker) and mouseinput.cpp (capture, motion, bindings, menu buttons).
 
 #include "pcinput.h"
+#if defined(__ANDROID__)
+#include "android/android_app.h"
+bool g_fMovieTouchContext = false;   // (fmv.cpp: a movie plays; its layout stays)
+#endif
+#include "vr.h"
 #include "actioninput.h"
 #include "rumble.h"
 
@@ -517,6 +522,11 @@ void ReadPcInput(GLFWwindow* window, uint16_t* pgrf, float* pxl, float* pyl, flo
     UpdateMouse(window);
     const bool fFocused = glfwGetWindowAttrib(window, GLFW_FOCUSED) == GLFW_TRUE;
     const bool fMenu = FPcMenuMode();
+#if defined(__ANDROID__)
+    // the on-screen pad's layout (platform/android TouchLayout): the D-pad and menu keys in menus, the stick in play
+    // (movies set the cinematic layout themselves, fmv.cpp); Java is told only when it changes
+    if (!g_fMovieTouchContext) cane::android::setTouchContext(fMenu ? cane::android::TouchContext::Menu : cane::android::TouchContext::Gameplay);
+#endif
     const bool fGadgetMenuBindings = sly2actions::profile.enabled && FGadgetMenuShown();
     auto isMenuGadgetSlot = [&](int button) {
         return fGadgetMenuBindings && cane::sly2input::isGadgetSlot(cane::sly2input::legacyButtonAction(button));
@@ -542,7 +552,9 @@ void ReadPcInput(GLFWwindow* window, uint16_t* pgrf, float* pxl, float* pyl, flo
     {
         s_jidPad = cane::input::selectActivePad(s_jidPad, &gp);
         cane::input::tracker().pollGamepads();
-        if (s_jidPad >= 0)
+        // (vr.h) the headset's controllers as the pad when no other pad is in use
+        const bool fVrPad = s_jidPad < 0 && vr::FPadState(&gp);
+        if (s_jidPad >= 0 || fVrPad)
         {
             *pfPad = true;
             for (int a = 0; a < PCA_Max; ++a)
@@ -891,7 +903,7 @@ int KeyBindingPressed(GLFWwindow* window)
     int found = -1;
     for (int k = GLFW_KEY_SPACE; k <= GLFW_KEY_LAST; ++k)
     {
-        const bool f = glfwGetKey(window, k) == GLFW_PRESS;
+        const bool f = glfwGetKey(window, k) == GLFW_PRESS || FTestKeyHeld(k);   // (tests: SLY2N_TESTKEYS too)
         if (f && !s_afPrev[k] && found < 0) found = k;
         s_afPrev[k] = f;
     }

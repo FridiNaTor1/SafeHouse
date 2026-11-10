@@ -1,5 +1,6 @@
 // See hud.h.
 
+#include "fastpaths.h"
 #include "hud.h"
 #include "texmod.h"
 #include "region.h"
@@ -729,7 +730,7 @@ std::string StrWrapped(const FONTBRX& fontBase, const FONTBRX* pfontOther, const
         std::size_t cb = 1;
         const uint32_t ch = ChDecode(out, i, &cb);
         const float dx = pfont->DxFromCh(ch) * k88;
-        if (FWideText())
+        if (!FLatinLineBreaks())   // (PC: Latin text on the Japanese disc, langstore.h: at spaces, below)
         {
             // orig JP 0x217538: the character that passes the box goes to the next line, with the characters before
             // it back to the last place a line may break (JP 0x220840: not before a closing mark, not after an
@@ -916,13 +917,14 @@ void CHud::Flush(int width, int height)
     glEnable(GL_BLEND);
     glBlendEquation(GL_FUNC_ADD);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_FALSE);
+    if (g_fHudAlphaLayer) glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GLboolean(g_fHudAlphaLayer));
     glHudShader.Use();
     glUniform4f(glHudShader.Loc("uCanvas"), g_display.uiScale.x, g_display.uiScale.y, g_display.uiOffset.x, g_display.uiOffset.y);
     glBindVertexArray(s_vao);
     glBindBuffer(GL_ARRAY_BUFFER, s_vbo);
     // one buffer: the triangles, the lines, the quads
-#ifdef __SWITCH__
+#if SLY2_FASTPATHS
     // (the Switch: each part written into the buffer where it goes, not gathered into one array first and copied again)
     std::vector<size_t> aivtxQuad;
     size_t cvtx = m_atri.size() + m_aline.size();
@@ -952,7 +954,7 @@ void CHud::Flush(int width, int height)
     auto setMode = [&](int mode) {
         // the 2D modes of 0x217298 (MSCAL pairs into P_K21's GS-state blocks), as the HUD uses them around a
         // masked piece: 1 writes the mask, 3 draws inside it, 2 clears it, 4 (and 0) draw normally.
-        glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_FALSE);
+        glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GLboolean(g_fHudAlphaLayer));
         glDisable(GL_STENCIL_TEST);
         glEnable(GL_DEPTH_TEST);
         glDepthMask(GL_TRUE);

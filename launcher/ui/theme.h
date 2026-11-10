@@ -8,10 +8,19 @@
 #include <cmath>
 #include <cstdint>
 #include <imgui/imgui.h>
+#include <vector>
+#include "../l10n.h"
 #include "launcher_font.h"
 #if __has_include("launcher_font_bold.h")
 #include "launcher_font_bold.h"
 #define CANE_LAUNCHER_HAS_BOLD 1
+#endif
+// The languages' other letters (launcher/assets/l10n, scripts/make-launcher-l10n-fonts.py): Noto Sans CJK JP for
+// Japanese and Noto Sans for Cyrillic and the rest, subset to the characters launcher/lang uses, merged into each font
+// for the glyphs Atkinson Hyperlegible lacks.
+#if __has_include("launcher_l10n_fonts.h")
+#include "launcher_l10n_fonts.h"
+#define CANE_LAUNCHER_HAS_L10N_FONTS 1
 #endif
 
 namespace cane::ui {
@@ -83,42 +92,97 @@ inline Theme& theme() {
 inline float px(float value) { return std::round(value * theme().scale); }
 inline Fonts& fonts() { return theme().font; }
 
-// Latin-1 plus the punctuation the launcher prints: – — • … ‹ ›.
+// Atkinson Hyperlegible's letters: Latin-1 and Latin Extended-A (Polish, Czech, Turkish...) plus the punctuation the
+// launcher prints (– — ‘ ’ “ ” „ • … ‹ › €).
 inline const ImWchar* glyphRanges() {
-    static const ImWchar ranges[] = { 0x0020, 0x00FF, 0x2013, 0x2014, 0x2022, 0x2022,
-                                      0x2026, 0x2026, 0x2039, 0x203A, 0 };
+    static const ImWchar ranges[] = { 0x0020, 0x017F, 0x2013, 0x2014, 0x2018, 0x201E, 0x2022, 0x2022,
+                                      0x2026, 0x2026, 0x2039, 0x203A, 0x20AC, 0x20AC, 0 };
     return ranges;
+}
+// The active language's other characters (and every language's own name, for the language list): merged from the
+// Noto fonts. Rebuilt when the language changes (loadFonts).
+inline std::vector<ImWchar>& languageRanges() {
+    static std::vector<ImWchar> ranges;
+    return ranges;
+}
+inline void buildLanguageRanges(const l10n::Table& table) {
+    auto& out = languageRanges();
+    out.clear();
+    std::u32string cps = l10n::codepoints(table);
+    std::sort(cps.begin(), cps.end());
+    cps.erase(std::unique(cps.begin(), cps.end()), cps.end());
+    for (char32_t c : cps) {
+        if (c > 0xFFFF || (c >= 0x20 && c <= 0x17F)) continue;
+        if (!out.empty() && out.back() + 1 == static_cast<ImWchar>(c)) out.back() = static_cast<ImWchar>(c);
+        else out.push_back(static_cast<ImWchar>(c)), out.push_back(static_cast<ImWchar>(c));
+    }
+    out.push_back(0);
+}
+// Adds one launcher font (Atkinson Hyperlegible plus the merged Noto letters) to an atlas.
+inline ImFont* addLauncherFont(ImFontAtlas* atlas, bool bold, float pixels) {
+    ImFontConfig config;
+    config.FontDataOwnedByAtlas = false;
+    config.OversampleH = 2;
+    config.OversampleV = 1;
+#ifdef CANE_LAUNCHER_HAS_BOLD
+    const unsigned char* data = bold ? cane_font_bold : cane_font;
+    const size_t size = bold ? sizeof(cane_font_bold) : sizeof(cane_font);
+#else
+    (void)bold;
+    const unsigned char* data = cane_font;
+    const size_t size = sizeof(cane_font);
+#endif
+    ImFont* font = atlas->AddFontFromMemoryTTF(const_cast<unsigned char*>(data), static_cast<int>(size), pixels, &config, glyphRanges());
+#ifdef CANE_LAUNCHER_HAS_L10N_FONTS
+    if (languageRanges().size() > 1) {
+        ImFontConfig merge;
+        merge.FontDataOwnedByAtlas = false;
+        merge.MergeMode = true;
+        merge.OversampleH = 1;
+        merge.OversampleV = 1;
+        // (Noto's letters sit a little lower than Atkinson's at the same size: nudge them up to share its baseline)
+        merge.GlyphOffset.y = 0;
+        auto add = [&](const unsigned char* d, size_t n) {
+            atlas->AddFontFromMemoryTTF(const_cast<unsigned char*>(d), static_cast<int>(n), pixels, &merge, languageRanges().data());
+        };
+        if (bold) add(cane_l10n_noto_bold, sizeof(cane_l10n_noto_bold)), add(cane_l10n_cjk_bold, sizeof(cane_l10n_cjk_bold));
+        else add(cane_l10n_noto_regular, sizeof(cane_l10n_noto_regular)), add(cane_l10n_cjk_regular, sizeof(cane_l10n_cjk_regular));
+    }
+#endif
+    return font;
+}
+// The characters of a language the launcher's fonts cannot draw (--l10n-check).
+inline std::u32string missingGlyphs(const l10n::Table& table) {
+    buildLanguageRanges(table);
+    ImFontAtlas atlas;
+    ImFont* regular = addLauncherFont(&atlas, false, 18);
+    ImFont* bold = addLauncherFont(&atlas, true, 18);
+    atlas.Build();
+    std::u32string missing;
+    for (char32_t c : l10n::codepoints(table))
+        if (c <= 0xFFFF && (!regular->FindGlyphNoFallback(static_cast<ImWchar>(c)) || !bold->FindGlyphNoFallback(static_cast<ImWchar>(c))) &&
+            missing.find(c) == std::u32string::npos)
+            missing.push_back(c);
+    return missing;
 }
 
 // Rebuilds the font atlas for a launcher scale. The caller re-creates the
 // renderer's font texture afterwards.
+// (the active language's letters too: call it again when l10n::generation() changes)
 inline void loadFonts(float scale) {
     auto& io = ImGui::GetIO();
     io.Fonts->Clear();
-    auto add = [&](const unsigned char* data, size_t size, float pixels) {
-        ImFontConfig config;
-        config.FontDataOwnedByAtlas = false;
-        config.OversampleH = 2;
-        config.OversampleV = 1;
-        return io.Fonts->AddFontFromMemoryTTF(const_cast<unsigned char*>(data), static_cast<int>(size),
-                                              std::round(pixels * scale), &config, glyphRanges());
-    };
-#ifdef CANE_LAUNCHER_HAS_BOLD
-    const unsigned char* bold = cane_font_bold;
-    const size_t boldSize = sizeof(cane_font_bold);
-#else
-    const unsigned char* bold = cane_font;
-    const size_t boldSize = sizeof(cane_font);
-#endif
+    buildLanguageRanges(l10n::active());
+    auto add = [&](bool bold, float pixels) { return addLauncherFont(io.Fonts, bold, std::round(pixels * scale)); };
     auto& f = theme().font;
     // The first font added is ImGui's default: body text.
-    f.body = add(cane_font, sizeof(cane_font), 18);
-    f.caption = add(cane_font, sizeof(cane_font), 15);
-    f.title = add(bold, boldSize, 30);
-    f.heading = add(bold, boldSize, 20);
-    f.tab = add(bold, boldSize, 18);
-    f.label = add(bold, boldSize, 13);
-    f.display = add(bold, boldSize, 40);
+    f.body = add(false, 18);
+    f.caption = add(false, 15);
+    f.title = add(true, 30);
+    f.heading = add(true, 20);
+    f.tab = add(true, 18);
+    f.label = add(true, 13);
+    f.display = add(true, 40);
     theme().scale = scale;
 }
 

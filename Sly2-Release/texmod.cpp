@@ -5,6 +5,7 @@
 #include "disc.h"
 #include "shd.h"
 #include "sw.h"
+#include "workpool.h"
 #include "../platform/platform.h"
 
 #include <glad/glad.h>
@@ -148,15 +149,10 @@ void ForgetModTexture(unsigned tex)
     s_settexMod.erase(it);
 }
 
-namespace
+// The loaded world's textures (the renderer's tables) into dir: decoded here, each PNG written by the pool (or here
+// without one). setName: the names already written, by this world or an earlier one. Returns the PNGs queued.
+int DumpLoadedWorldTextures(const std::string& dir, std::set<std::string>& setName, CWorkPool* ppool)
 {
-// One world's textures into dir (setName: the names already written, by this world or an earlier one).
-int DumpWorldTextures(const std::string& dir, const FK& fk, int filter, const std::string& world, std::set<std::string>& setName)
-{
-    auto psw = std::make_unique<SW>();
-    psw->filter = filter;
-    std::size_t cbRead = 0, cbFile = 0;
-    if (!FLoadWorldFile(psw.get(), fk, "", &cbRead, &cbFile)) { std::fprintf(stderr, "world %s did not load\n", world.c_str()); return -1; }
     std::set<std::pair<const BMP*, const CLUT*>> setDone;
     std::string err;
     int c = 0;
@@ -172,21 +168,37 @@ int DumpWorldTextures(const std::string& dir, const FK& fk, int filter, const st
                 std::vector<uint8_t> rgba;
                 if (!FDecodeTexture(sel.pbmp, sel.pclut, rgba, err)) continue;
                 const int dx = sel.pbmp->dx, dy = sel.pbmp->dy;
-                const std::string name = SzTextureModName(rgba, dx, dy);
+                std::string name = SzTextureModName(rgba, dx, dy);
                 if (!setName.insert(name).second) continue;  // (the same texels under another CLUT / bitmap, or world)
-                std::vector<uint8_t> ab(rgba.size());
-                for (int y = 0; y < dy; ++y)
-                    for (int x = 0; x < dx; ++x)
-                        for (int k = 0; k < 4; ++k)
-                        {
-                            const uint8_t v = rgba[(size_t(y) * dx + x) * 4 + k];
-                            ab[(size_t(dy - 1 - y) * dx + x) * 4 + k] = k < 3 ? v : uint8_t(std::min(255, v * 2));
-                        }
-                const std::string path = cane::utf8(cane::path(dir) / name);
-                if (stbi_write_png(path.c_str(), dx, dy, 4, ab.data(), dx * 4)) ++c;
+                auto write = [dx, dy, rgba = std::move(rgba), path = cane::utf8(cane::path(dir) / name)] {
+                    std::vector<uint8_t> ab(rgba.size());
+                    for (int y = 0; y < dy; ++y)
+                        for (int x = 0; x < dx; ++x)
+                            for (int k = 0; k < 4; ++k)
+                            {
+                                const uint8_t v = rgba[(size_t(y) * dx + x) * 4 + k];
+                                ab[(size_t(dy - 1 - y) * dx + x) * 4 + k] = k < 3 ? v : uint8_t(std::min(255, v * 2));
+                            }
+                    if (!stbi_write_png(path.c_str(), dx, dy, 4, ab.data(), dx * 4)) std::fprintf(stderr, "textures: cannot write %s\n", path.c_str());
+                };
+                if (ppool) ppool->Push(std::move(write), uint64_t(dx) * dy * 8);
+                else write();
+                ++c;
             }
     }
     return c;
+}
+
+namespace
+{
+// One world's textures into dir
+int DumpWorldTextures(const std::string& dir, const FK& fk, int filter, const std::string& world, std::set<std::string>& setName, CWorkPool* ppool)
+{
+    auto psw = std::make_unique<SW>();
+    psw->filter = filter;
+    std::size_t cbRead = 0, cbFile = 0;
+    if (!FLoadWorldFile(psw.get(), fk, "", &cbRead, &cbFile)) { std::fprintf(stderr, "world %s did not load\n", world.c_str()); return -1; }
+    return DumpLoadedWorldTextures(dir, setName, ppool);
 }
 }  // namespace
 
@@ -199,7 +211,7 @@ int DumpTexturesCommand(const std::string& dir, const std::string& world)
     if (!FResolveWorld(world, fk, filter, err)) { std::fprintf(stderr, "%s\n", err.c_str()); return 2; }
     fs::create_directories(cane::path(dir));
     std::set<std::string> setName;
-    const int c = DumpWorldTextures(dir, fk, filter, world, setName);
+    const int c = DumpWorldTextures(dir, fk, filter, world, setName, nullptr);
     if (c < 0) return 1;
     std::printf("%d textures of world %s written to %s\n", c, world.c_str(), dir.c_str());
     return 0;
@@ -210,23 +222,26 @@ int ExportAllTextures(const std::string& dir, bool fProgress)
     InitClasses();
     std::error_code ec;
     fs::create_directories(cane::path(dir), ec);
-    // the worlds: the boot world (its logo screens), then the records (from the boot world) that have a file
+    // the worlds: the boot world (its logo screens), then the records (from the boot world) that have a file (the boot
+    // world loaded once for its records; each world once)
     std::vector<std::pair<std::string, std::pair<FK, int>>> aworld;
     std::string err;
     FK fk;
     int filter = 0;
     if (FResolveWorld("boot", fk, filter, err)) aworld.push_back({"boot", {fk, filter}});
-    for (int iwrec = 0;; ++iwrec)
     {
-        err.clear();
-        if (FResolveWorld(std::to_string(iwrec), fk, filter, err)) aworld.push_back({std::to_string(iwrec), {fk, filter}});
-        else if (err.find("no world record") != std::string::npos || err.find("boot world") != std::string::npos) break;
+        auto pswBoot = std::make_unique<SW>();
+        std::size_t cbRead = 0, cbFile = 0;
+        if (!aworld.empty() && FLoadWorldFile(pswBoot.get(), aworld[0].second.first, "", &cbRead, &cbFile))
+            for (std::size_t iwrec = 0; iwrec < pswBoot->awrec.size(); ++iwrec)
+                if (const FK& fkRec = pswBoot->awrec[iwrec].fk; fkRec.cb != 0 && fkRec.id != 0) aworld.push_back({std::to_string(iwrec), {fkRec, int(iwrec)}});
     }
     std::set<std::string> setName;
     int c = 0;
+    CWorkPool pool;
     for (size_t i = 0; i < aworld.size(); ++i)
     {
-        const int cw = DumpWorldTextures(dir, aworld[i].second.first, aworld[i].second.second, aworld[i].first, setName);
+        const int cw = DumpWorldTextures(dir, aworld[i].second.first, aworld[i].second.second, aworld[i].first, setName, &pool);
         if (cw > 0) c += cw;
         if (fProgress)
         {
@@ -234,6 +249,7 @@ int ExportAllTextures(const std::string& dir, bool fProgress)
             std::fflush(stdout);
         }
     }
+    pool.Wait();
     std::printf("%d textures of %zu worlds written to %s\n", c, aworld.size(), dir.c_str());
     return aworld.empty() ? -1 : c;
 }

@@ -26,6 +26,7 @@
 #include <vector>
 
 #include "games.h"
+#include "l10n.h"
 #include "platform.h"
 
 #ifdef _WIN32
@@ -296,6 +297,17 @@ inline Shortcut shortcutFor(GameId game, const fs::path& program = launcherProgr
     s.appId = shortcutAppId(s.exe, s.name);
     return s;
 }
+// The Collection Style Launcher's shortcut (`safehouse --collection`, launcher/collection/collection.h).
+inline constexpr const char* kCollectionName = "SafeHouse Collection";
+inline Shortcut collectionShortcut(const fs::path& program = launcherProgram()) {
+    Shortcut s;
+    s.name = kCollectionName;
+    s.exe = quoted(program);
+    s.startDir = quoted(program.parent_path());
+    s.launchOptions = "--collection";
+    s.appId = shortcutAppId(s.exe, s.name);
+    return s;
+}
 inline constexpr const char* kTag = "SafeHouse";
 inline bool tagged(const Node& entry) {
     const Node* tags = entry.find("tags");
@@ -326,9 +338,8 @@ inline Node readShortcuts(const fs::path& file) {
     root.map("shortcuts");
     return root;
 }
-// Is the game's shortcut in every account?
-inline bool added(const Installation& s, GameId game) {
-    const Shortcut sc = shortcutFor(game);
+// Is the shortcut in every account?
+inline bool added(const Installation& s, const Shortcut& sc) {
     if (s.accounts.empty()) return false;
     for (const auto& account : s.accounts) {
         try {
@@ -340,6 +351,7 @@ inline bool added(const Installation& s, GameId game) {
     }
     return true;
 }
+inline bool added(const Installation& s, GameId game) { return added(s, shortcutFor(game)); }
 struct Result {
     int accounts = 0, addedEntries = 0, updatedEntries = 0, images = 0;
     std::vector<fs::path> backups;
@@ -385,16 +397,14 @@ inline fs::path copyArt(const fs::path& art, const fs::path& grid, uint32_t appI
 }
 // The bundled artwork: <prefix>/share/safehouse/steam/<game> (SAFEHOUSE_STEAM_ART=<dir> replaces <prefix>/.../steam,
 // for tests run from a build tree).
-inline fs::path artDirectory(GameId game) {
-    if (auto o = detail::env("SAFEHOUSE_STEAM_ART"); !o.empty()) return path(o) / cane::game(game).key;
-    return shareDirectory() / "safehouse" / "steam" / cane::game(game).key;
+inline fs::path artDirectory(const std::string& key) {
+    if (auto o = detail::env("SAFEHOUSE_STEAM_ART"); !o.empty()) return path(o) / key;
+    return shareDirectory() / "safehouse" / "steam" / key;
 }
-// Adds (or updates) the game's shortcut in every account. Throws before writing anything for an account whose
-// shortcuts.vdf cannot be read.
-inline Result add(const Installation& s, GameId game, const fs::path& program = launcherProgram(),
-                  const fs::path& art = {}) {
-    const Shortcut sc = shortcutFor(game, program);
-    const fs::path artDir = art.empty() ? artDirectory(game) : art;
+inline fs::path artDirectory(GameId game) { return artDirectory(cane::game(game).key); }
+// Adds (or updates) a shortcut in every account, with the artwork in artDir. Throws before writing anything for an
+// account whose shortcuts.vdf cannot be read.
+inline Result add(const Installation& s, const Shortcut& sc, const fs::path& artDir) {
     Result result;
     const std::string stamp = utcStamp();
     for (const auto& account : s.accounts) {
@@ -476,16 +486,24 @@ inline Result add(const Installation& s, GameId game, const fs::path& program = 
         {
             std::ofstream o(temporary, std::ios::binary | std::ios::trunc);
             o.write(reinterpret_cast<const char*>(out.data()), static_cast<std::streamsize>(out.size()));
-            if (!o) throw std::runtime_error("Could not write " + utf8(temporary));
+            if (!o) throw std::runtime_error(trf("Could not write %s", utf8(temporary).c_str()));
         }
         // A check that Steam's reader would see the same entries: parse what was written.
         Node check = VdfReader(readFile(temporary)).root();
-        if (!findEntry(check.map("shortcuts"), sc)) throw std::runtime_error("shortcuts.vdf check failed");
+        if (!findEntry(check.map("shortcuts"), sc)) throw std::runtime_error(tr("shortcuts.vdf check failed"));
         fs::rename(temporary, file);
         ++result.accounts;
         result.images += copied;
         (isNew ? result.addedEntries : result.updatedEntries)++;
     }
     return result;
+}
+// The game's shortcut (`safehouse --play <game>`).
+inline Result add(const Installation& s, GameId game, const fs::path& program = launcherProgram(), const fs::path& art = {}) {
+    return add(s, shortcutFor(game, program), art.empty() ? artDirectory(game) : art);
+}
+// The Collection Style Launcher's shortcut (its artwork: share/safehouse/steam/collection, the SafeHouse icon).
+inline Result addCollection(const Installation& s, const fs::path& program = launcherProgram()) {
+    return add(s, collectionShortcut(program), artDirectory("collection"));
 }
 } // namespace cane::steam

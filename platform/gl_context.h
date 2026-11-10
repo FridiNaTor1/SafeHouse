@@ -5,8 +5,13 @@
 
 #include <string>
 
+#include "gl_backend.h"
+
 #if defined(__APPLE__)
 #include "metal/gl_metal.h"
+#endif
+#if defined(__ANDROID__)
+#include "android/gles_sly2.h"
 #endif
 
 #if defined(_WIN32)
@@ -45,7 +50,7 @@ inline void ApplyWindowHints(int major, int minor) {
 #endif
 }
 
-#if defined(__linux__)
+#if defined(__linux__) && !defined(__ANDROID__)
 // After a context could not be created: GLFW's reason and what the system's OpenGL does offer, for the log.
 inline std::string DescribeContextFailure() {
   const char* message = nullptr;
@@ -74,6 +79,7 @@ inline std::string DescribeContextFailure() {
 #endif
 
 inline bool CreateContext(GLFWwindow* window, std::string* error) {
+  if (const Backend* b = ActiveBackend()) return b->createContext(window, error);
 #if defined(__APPLE__)
   return gl_metal::CreateContext(window, error);
 #elif defined(__SWITCH__)
@@ -91,6 +97,11 @@ inline bool CreateContext(GLFWwindow* window, std::string* error) {
 }
 
 inline void DestroyContext(GLFWwindow* window) {
+  if (const Backend* b = ActiveBackend()) {
+    b->destroyContext(window);
+    ActiveBackend() = nullptr;
+    return;
+  }
   (void)window;
 #if defined(__APPLE__)
   gl_metal::DestroyContext();
@@ -100,17 +111,22 @@ inline void DestroyContext(GLFWwindow* window) {
 }
 
 inline GLFWglproc ProcAddress(const char* name) {
+  if (const Backend* b = ActiveBackend()) return b->procAddress(name);
 #if defined(__APPLE__)
   return reinterpret_cast<GLFWglproc>(gl_metal::ProcAddress(name));
 #else
 #if defined(_WIN32)
   if (GLFWglproc wrapper = dxgi::ProcAddress(name)) return wrapper;
 #endif
+#if defined(__ANDROID__)
+  return reinterpret_cast<GLFWglproc>(gles::ProcAddress(name));
+#endif
   return glfwGetProcAddress(name);
 #endif
 }
 
 inline void SwapInterval(int interval) {
+  if (const Backend* b = ActiveBackend()) return b->swapInterval(interval);
 #if defined(__APPLE__)
   gl_metal::SetSwapInterval(interval);
 #else
@@ -122,6 +138,7 @@ inline void SwapInterval(int interval) {
 }
 
 inline void SwapBuffers(GLFWwindow* window) {
+  if (const Backend* b = ActiveBackend()) return b->swapBuffers(window);
 #if defined(__APPLE__)
   (void)window;
   gl_metal::SwapBuffers();

@@ -24,6 +24,7 @@
 
 #include "brand.h"
 #include "games.h"
+#include "l10n.h"
 #include "platform.h"
 #include "process.h"
 #include "steam.h"
@@ -62,9 +63,9 @@ inline int iconResource(GameId game) { return 101 + static_cast<int>(game); }
 enum class Where { Desktop, Menu };
 inline const char* whereName(Where w) {
 #ifdef _WIN32
-    return w == Where::Desktop ? "desktop" : "Start menu";
+    return w == Where::Desktop ? "desktop" : tr("Start menu");
 #else
-    return w == Where::Desktop ? "desktop" : "applications menu";
+    return w == Where::Desktop ? "desktop" : tr("applications menu");
 #endif
 }
 
@@ -208,7 +209,7 @@ inline fs::path knownFolder(REFKNOWNFOLDERID id) {
     fs::path result;
     if (SUCCEEDED(SHGetKnownFolderPath(id, KF_FLAG_CREATE, nullptr, &p)) && p) result = fs::path(p);
     CoTaskMemFree(p);
-    if (result.empty()) throw std::runtime_error("Windows did not report the folder for the shortcut");
+    if (result.empty()) throw std::runtime_error(tr("Windows did not report the folder for the shortcut"));
     return result;
 }
 // "Sly 2: Band of Thieves" -> "Sly 2 - Band of Thieves" (a file name).
@@ -253,7 +254,7 @@ inline LinkInfo readLink(const fs::path& lnk) {
     detail::Ptr<IPersistFile> file;
     if (FAILED(CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER, IID_IShellLinkW, reinterpret_cast<void**>(&link.p))) ||
         FAILED(link->QueryInterface(IID_IPersistFile, reinterpret_cast<void**>(&file.p))) || FAILED(file->Load(lnk.c_str(), STGM_READ)))
-        throw std::runtime_error("Could not read " + utf8(lnk));
+        throw std::runtime_error(trf("Could not read %s", utf8(lnk).c_str()));
     wchar_t buffer[2048];
     LinkInfo info;
     if (SUCCEEDED(link->GetPath(buffer, 2048, nullptr, SLGP_RAWPATH))) info.target = utf8(fs::path(buffer));
@@ -291,7 +292,7 @@ struct Result {
 };
 // Creates or updates the game's shortcut in that place.
 inline Result create(GameId game, Where where, const fs::path& program = steam::launcherProgram()) {
-    if (!supported(game)) throw std::runtime_error(std::string("Desktop shortcuts are not available for ") + cane::game(game).shortName + " yet");
+    if (!supported(game)) throw std::runtime_error(trf("Desktop shortcuts are not available for %s yet", cane::game(game).shortName));
     Result r;
     r.file = file(game, where);
     std::error_code ec;
@@ -335,18 +336,109 @@ inline Result create(GameId game, Where where, const fs::path& program = steam::
     detail::Ptr<IShellLinkW> link;
     detail::Ptr<IPersistFile> persist;
     if (FAILED(CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER, IID_IShellLinkW, reinterpret_cast<void**>(&link.p))))
-        throw std::runtime_error("Windows could not create the shortcut (IShellLink)");
+        throw std::runtime_error(tr("Windows could not create the shortcut (IShellLink)"));
     const std::wstring args = L"--play " + path(cane::game(game).key).wstring();
     const std::wstring description = path(std::string("Play ") + cane::game(game).title + " (SafeHouse)").wstring();
     if (FAILED(link->SetPath(program.c_str())) || FAILED(link->SetArguments(args.c_str())) ||
         FAILED(link->SetWorkingDirectory(program.parent_path().c_str())) || FAILED(link->SetDescription(description.c_str())) ||
         FAILED(link->SetIconLocation(program.c_str(), -iconResource(game))))
-        throw std::runtime_error("Windows could not set up the shortcut");
+        throw std::runtime_error(tr("Windows could not set up the shortcut"));
     if (FAILED(link->QueryInterface(IID_IPersistFile, reinterpret_cast<void**>(&persist.p))) || FAILED(persist->Save(r.file.c_str(), TRUE)))
-        throw std::runtime_error("Could not save " + utf8(r.file));
+        throw std::runtime_error(trf("Could not save %s", utf8(r.file).c_str()));
     r.changed = true;
     SHChangeNotify(r.existed ? SHCNE_UPDATEITEM : SHCNE_CREATE, SHCNF_PATHW, r.file.c_str(), nullptr);
 #endif
     return r;
+}
+
+// ---------------------------------------------------------------- the Collection Style Launcher's shortcut
+// `safehouse --collection` (launcher/collection/collection.h), with the SafeHouse icon.
+inline constexpr const char* kCollectionTitle = "SafeHouse Collection";
+#ifndef _WIN32
+inline fs::path collectionFile(Where where) { return folder(where) / "safehouse-collection.desktop"; }
+inline std::string collectionEntry(const fs::path& program) {
+    std::string t = "[Desktop Entry]\n";
+    t += "Type=Application\n";
+    t += "Version=1.0\n";
+    t += std::string("Name=") + kCollectionTitle + "\n";
+    t += "Comment=Choose and play your Sly Cooper games (SafeHouse)\n";
+    t += "Exec=" + detail::execValue({utf8(program), "--collection"}) + "\n";
+    t += "Path=" + detail::stringValue(utf8(program.parent_path())) + "\n";
+    t += std::string("Icon=") + brand::appId + "\n";
+    t += "Terminal=false\n";
+    t += "Categories=Game;\n";
+    t += std::string("StartupWMClass=") + brand::wmClass + "\n";
+    t += "X-SafeHouse-Game=collection\n";
+    return t;
+}
+#else
+inline fs::path collectionFile(Where where) { return folder(where) / (path(kCollectionTitle).wstring() + L".lnk"); }
+#endif
+inline bool collectionExists(Where where) {
+    try {
+        std::error_code ec;
+        return fs::exists(collectionFile(where), ec);
+    } catch (...) {
+        return false;
+    }
+}
+inline Result createCollection(Where where, const fs::path& program = steam::launcherProgram()) {
+#if defined(__APPLE__)
+    (void)where, (void)program;
+    throw std::runtime_error(tr("Desktop shortcuts are not available on macOS"));
+#else
+    Result r;
+    r.file = collectionFile(where);
+    std::error_code ec;
+    r.existed = fs::exists(r.file, ec);
+    fs::create_directories(r.file.parent_path());
+#ifndef _WIN32
+    const std::string text = collectionEntry(program);
+    if (!r.existed || detail::readText(r.file) != text) {
+        detail::writeAtomically(r.file, text);
+        r.changed = true;
+    }
+    fs::permissions(r.file, fs::perms::owner_all | fs::perms::group_read | fs::perms::group_exec | fs::perms::others_read |
+                                fs::perms::others_exec, fs::perm_options::replace);
+    if (where == Where::Desktop) {
+        std::string gio = "gio";
+        if (const char* o = std::getenv("SAFEHOUSE_GIO")) gio = o;
+        if (!gio.empty() && gio != "none") {
+            std::atomic<bool> cancel{false};
+            try {
+                r.trusted = runProcess({gio, "set", utf8(r.file), "metadata::trusted", "true"}, r.file.parent_path(), cancel,
+                                       [](const std::string&) {}) == 0;
+            } catch (...) {
+            }
+        }
+    }
+#else
+    detail::Com com;
+    const std::wstring description = path(std::string("Choose and play your Sly Cooper games (SafeHouse)")).wstring();
+    if (r.existed) {
+        try {
+            const auto l = readLink(r.file);
+            const auto same = [](const std::string& a, const fs::path& b) { return path(a).lexically_normal() == b.lexically_normal(); };
+            if (same(l.target, program) && l.arguments == "--collection" && same(l.workingDirectory, program.parent_path()) &&
+                same(l.iconFile, program) && l.iconIndex == 0)
+                return r;
+        } catch (...) {
+        }
+    }
+    detail::Ptr<IShellLinkW> link;
+    detail::Ptr<IPersistFile> persist;
+    if (FAILED(CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER, IID_IShellLinkW, reinterpret_cast<void**>(&link.p))))
+        throw std::runtime_error(tr("Windows could not create the shortcut (IShellLink)"));
+    if (FAILED(link->SetPath(program.c_str())) || FAILED(link->SetArguments(L"--collection")) ||
+        FAILED(link->SetWorkingDirectory(program.parent_path().c_str())) || FAILED(link->SetDescription(description.c_str())) ||
+        FAILED(link->SetIconLocation(program.c_str(), 0)))
+        throw std::runtime_error(tr("Windows could not set up the shortcut"));
+    if (FAILED(link->QueryInterface(IID_IPersistFile, reinterpret_cast<void**>(&persist.p))) || FAILED(persist->Save(r.file.c_str(), TRUE)))
+        throw std::runtime_error(trf("Could not save %s", utf8(r.file).c_str()));
+    r.changed = true;
+    SHChangeNotify(r.existed ? SHCNE_UPDATEITEM : SHCNE_CREATE, SHCNF_PATHW, r.file.c_str(), nullptr);
+#endif
+    return r;
+#endif
 }
 } // namespace cane::shortcut

@@ -213,8 +213,8 @@ def folder_tests(launcher, work):
     check(os.path.islink(old / 'SafeHouse') and os.path.islink(old / 'bin' / 'cane-launcher'), 'update: links kept as links')
     check(os.access(old / 'bin' / 'safehouse', os.X_OK), 'update: the launcher is executable')
     check((old / '.update' / 'previous' / 'share' / 'version.txt').read_text() == 'old\n', 'update: the old files are kept aside')
-    result = json.loads((work / 'profile' / 'config' / 'projectcane' / 'update-result.json').read_text()) \
-        if (work / 'profile' / 'config' / 'projectcane' / 'update-result.json').is_file() else {}
+    result = json.loads((work / 'profile' / 'config' / 'SafeHouse' / 'update-result.json').read_text()) \
+        if (work / 'profile' / 'config' / 'SafeHouse' / 'update-result.json').is_file() else {}
     if not result:  # portable.txt: the profile is the folder's data/
         result_file = old / 'data' / 'config' / 'update-result.json'
         result = json.loads(result_file.read_text()) if result_file.is_file() else {}

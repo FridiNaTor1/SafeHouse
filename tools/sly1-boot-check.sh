@@ -19,12 +19,12 @@ fail() { echo "FAIL: $*"; exit 1; }
 if [ -z "$SRC" ]; then fail "give an ISO or an installation folder"; fi
 if [ -f "$SRC" ]; then
     rm -rf "$OUT/profile"; mkdir -p "$OUT/profile"
-    # the launcher's own install, in a private profile (never ~/.config/projectcane)
+    # the launcher's own install, in a private profile (never ~/.config/SafeHouse)
     XDG_CONFIG_HOME=$OUT/profile/config XDG_DATA_HOME=$OUT/profile/data XDG_STATE_HOME=$OUT/profile/state \
         "$BIN/safehouse" --install "$SRC" > "$OUT/install.log" 2>&1 || fail "install (see $OUT/install.log)"
     XDG_CONFIG_HOME=$OUT/profile/config XDG_DATA_HOME=$OUT/profile/data XDG_STATE_HOME=$OUT/profile/state \
         "$BIN/safehouse" --verify sly1 >> "$OUT/install.log" 2>&1 || fail "verify (see $OUT/install.log)"
-    DATA=$OUT/profile/data/projectcane/installations/sly1
+    DATA=$OUT/profile/data/SafeHouse/installations/sly1
 else
     DATA=$(cd "$SRC" && pwd)
 fi

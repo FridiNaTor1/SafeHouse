@@ -1,8 +1,8 @@
 #pragma once
 
 // PC display options, as in Sly1-Release (gl.cpp ApplyAspectRatioSettings / ApplyWindowModeSettings /
-// FrameBufferSizeCallBack, cm.cpp RecalcCm), stored in <user-dir>/Saves/system_settings.dat through
-// platform/system_settings.h (the launcher's Settings page edits the same file): aspect mode, internal resolution,
+// FrameBufferSizeCallBack, cm.cpp RecalcCm), stored in <user-dir>/Settings.ini through
+// platform/sly2_settings.h (the launcher's Settings page edits the same file): aspect mode, internal resolution,
 // MSAA, frame-rate cap, draw distance, window mode, VSync.
 //
 // The layout: the window (output) holds a centred picture of the chosen aspect (pillar- / letterboxed); the scene
@@ -32,7 +32,7 @@ constexpr int DISP_FRAMERATE_UNCAPPED = 1000;   // (the launcher's "Uncapped": a
 
 struct DISPLAY
 {
-    // Options (system_settings.dat)
+    // Options (Settings.ini)
     DISPASPECT aspect = DISPASPECT_Fit;
     int internalHeight = 0;     // 0: the picture's own size
     int msaaSamples = 0;        // 0 / 1: off
@@ -40,18 +40,26 @@ struct DISPLAY
     float drawDistance = 1.0f;  // multiplies the distance limits (MRD), 0.75 .. 3; above 1x also drawdist.h (visual only)
     DISPWINDOW window = DISPWINDOW_Windowed;
     bool fVsync = false;
-    // Native QoL, always on (not in system_settings.dat; the launcher dropped its toggle 2026-11-05; --wide-backgrounds 0 or
+    // Native QoL, always on (not in Settings.ini; the launcher dropped its toggle 2026-11-05; --wide-backgrounds 0 or
     // SLY2N_WIDEBG=0 turns it off): the 2D's full-screen backgrounds
     // (vector polygons on the 4:3 canvas's edges: the binocucom's surround, the pause menu's backdrop, the cut
     // scenes' bars, the fades) reach the window's edges; everything else keeps the 4:3 canvas.
     bool fWideBackgrounds = true;
-    // Native QoL (not in system_settings.dat; --hq-logo 0 / SLY2N_HQLOGO=0 turn it off): the front end's Sly 2 logo is
+    // Native QoL (not in Settings.ini; --hq-logo 0 / SLY2N_HQLOGO=0 turn it off): the front end's Sly 2 logo is
     // the launcher's high-quality one (qolview.h GlTexLogoOverride)
     bool fHqLogo = true;
-    // Native QoL (system_settings.dat v16 longShadows, default on; --long-shadows 0 / SLY2N_LONGSHADOWS=0 turn it off):
+    // Native QoL (Settings.ini Long Shadows, default on; --long-shadows 0 / SLY2N_LONGSHADOWS=0 turn it off):
     // the type-2 cast shadows (Sly's, the guards') reach the floor instead of ending at the original's fixed far cap
     // (render.cpp FBuildShadow2, render.md "Long shadows", R39). Off: the original's prisms exactly.
     bool fLongShadows = true;
+    // Low-end option (perf-4; default off = the current look): the type-2 cast shadows with less stencil fill, as the
+    // Switch draws them (render.cpp FBuildShadow2 / DrawShadow2): the side walls two prisms share from opposite sides
+    // left out, and casters wholly in front of the near plane with closed, consistently oriented volumes counted z-pass
+    // (their far parts fail early Z). The same pictures in the frames tested (perf-5; a hairline along a left-out wall's
+    // diagonal can differ). The shadow volumes
+    // are the largest GPU fill of a frame (~36 screens of stencil samples in Paris): for tile GPUs (Quest, Steam Frame).
+    // --fast-shadows 1 / SLY2N_FASTSHADOWS=1; the Switch always.
+    bool fFastShadows = false;
 
     // The swap (ApplyDisplaySettings): VSync gates the frames at the cap (the pacer then runs 1 % fast, so only the
     // swap gates: platform/frame_pacer.h), and a generation that changes with the swap's configuration
@@ -70,11 +78,37 @@ extern DISPLAY g_display;
 // The refresh rate of the monitor holding most of the window (0: unknown)
 int DisplayRefreshRate(GLFWwindow* window);
 
-// Reads the options (a missing file is created with the defaults; a newer one is read-only). Returns false and
-// keeps the defaults when the file cannot be used.
+// (PC, Settings.ini: platform/sly2_settings.h) the original game's own options, which the PS2 kept in each save's
+// "flags": on PC they live in Settings.ini with every other option (the launcher edits the same file) and the save's
+// flags only mirror them (menu.cpp SyncOptionsToRecord). Vibration is rumble.h g_fControllerVibration.
+// fStore: Settings.ini was read (a game run with a window: FLoadDisplaySettings); otherwise (headless tests) the
+// original's behaviour: the record's flags are the options.
+struct SAVEOPTS
+{
+    bool fStore = false;
+    bool fInvertBinoc = false;    // flags "fReverseLookAround"
+    bool fInvertTurret = false;   // flags "fReverseAim"
+    int speakers = 0;             // flags "nMixerMode": 0 Surround, 1 Mono, 2 Stereo (settings::Sly2Speakers)
+    float gMusic = 1.0f, gEffects = 1.0f, gDialog = 1.0f;   // 0..1 (sound.h SetSoundUserVolumes)
+    std::string language;         // (lang) "" Auto, else a language's folder name (region.h InitLanguage)
+    // (audio, notes/AUDIO_2026-11-10.md) the devices by name ("" the system default) and the original's USB Headset
+    // (flags "fUseHeadset": the sound manager's +0x10, sound.cpp UpdateMicNoise / spiop's headset tracks)
+    std::string outputDevice, inputDevice, headsetOutputDevice;
+    bool fHeadset = false;
+};
+extern SAVEOPTS g_saveopts;
+
+// Reads every option from <user-dir>/Settings.ini (made once from the old Saves/system_settings.dat when missing).
+// Returns false and keeps the defaults when the file cannot be used.
 bool FLoadDisplaySettings(const std::filesystem::path& userDir, std::string* pmessage = nullptr);
-// Writes the options back into the file (the other fields, key bindings and audio, kept).
+// Writes every option back into Settings.ini (keys this build does not know kept).
 bool FSaveDisplaySettings(const std::filesystem::path& userDir);
+// The volumes and the speakers (g_saveopts) to the sound (sound.h SetSoundUserVolumes, audio.h SetMonoOutput)
+void ApplySoundOptions();
+// (migration, once) the save-kept options of the newest save into Settings.ini while it marks them pending
+namespace cane::settings { struct SaveOptionValues; }
+bool FSaveOptionsPending();
+void MigrateSaveOptions(const cane::settings::SaveOptionValues& values);
 
 // The window's framebuffer changed (or an option did): the picture, the scene target (g_gl.CreateFramebuffers
 // when its size or MSAA changes) and the 2D canvas.

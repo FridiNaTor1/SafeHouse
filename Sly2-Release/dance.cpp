@@ -515,6 +515,7 @@ void AddDanceBeat(LO* ploDancer, int nButton, int nMove, float gTime)
 }
 
 bool FDanceDirector() { return s_ploDance != nullptr; }
+bool FDanceActive() { return s_ploDance && Dance(s_ploDance).state != 0; }
 
 // the director's init 0x1526D8 (the global director, its update flags 0xA) / post-load 0x1527C8 (its world pass)
 void PostLoadDance(LO* plo)

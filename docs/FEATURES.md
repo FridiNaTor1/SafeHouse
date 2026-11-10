@@ -66,10 +66,10 @@ can be turned off where it changes how the game looks or plays.
 
 The guide: [MODDING.md](MODDING.md).
 
-## The debug menu and PC Extras
+## The debug menu and Extras
 
 With **Settings > Advanced > Debug mode** on, Sly 2 has a debug menu (F10, or R1 + Select): warps to every world,
-character switching, noclip, teleports, job tools, game speed, a free camera and a frame-rate display. Its **PC Extras**
+character switching, noclip, teleports, job tools, game speed, a free camera and a frame-rate display. Its **Extras**
 let you play as **Carmelita** (with her own moves), as the game's **guards and bosses**, or fly **Bentley's RC chopper**
 in any world. Sly 1 has its own debug window (F3).
 

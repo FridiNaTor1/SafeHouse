@@ -179,7 +179,7 @@ if ($UpdateTest) {
 
     $check = Run $launcher '--check-update'
     Check ($check.Code -eq 0 -and $check.Output -match 'install windows-installed' -and $check.Output -match 'newer') 'installed: the check finds 99.0.0'
-    $userData = Join-Path $env:LOCALAPPDATA 'ProjectCane'
+    $userData = Join-Path $env:LOCALAPPDATA 'SafeHouse'
     New-Item -ItemType Directory -Force (Join-Path $userData 'user') | Out-Null
     Set-Content (Join-Path $userData 'user\update-test.txt') 'my save'
     Remove-Item -Force (Join-Path $bin 'cane-extractor.exe')

@@ -24,7 +24,7 @@ SINGLE = ["game-sly1-notinstalled", "game-sly2-notinstalled", "game-sly2-install
           "nav-rail", "nav-rail-down", "nav-enter-page", "nav-open-install", "nav-install-back", "nav-rb",
           "nav-nintendo-enter", "nav-keyboard-down", "nav-settings-row", "install-path", "binding-capture",
           "remembered-game", "nav-right-page", "nav-left-rail", "nav-settings-rows", "sly3-notice",
-          "nav-rail-discord", "nav-rail-patreon"] + ["settings-" + c for c in
+          "nav-rail-discord", "nav-rail-patreon", "settings-games"] + ["settings-" + c for c in
                                 ("display", "graphics", "audio", "controls", "interface", "launcher", "advanced")] + [
           "settings-sly2-" + c for c in ("display", "graphics", "launcher", "advanced")]
 # name: (game, view) the layout dump must report.

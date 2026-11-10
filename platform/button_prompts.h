@@ -11,6 +11,7 @@
 // GL entry points are fetched through glfwGetProcAddress, so this header works
 // with glad, with <GL/gl.h> or with no GL header included at all.
 #include "controller_family.h"
+#include "gl_backend.h"
 #ifdef CANE_HAVE_PROMPT_ATLAS
 #include <algorithm>
 #include <array>
@@ -110,8 +111,12 @@ struct PromptGl {
     GetIntegerv getIntegerv = nullptr;
     PixelStorei pixelStorei = nullptr;
     bool load() {
-        if (!glfwGetCurrentContext()) return false;
-        auto get = [](auto& fn, const char* name) { fn = reinterpret_cast<std::decay_t<decltype(fn)>>(glfwGetProcAddress(name)); };
+        // (a renderer standing in for OpenGL, gl_context.h ActiveBackend: Sly 2 on Vulkan, which has no GL context)
+        const cane::gl::Backend* backend = cane::gl::ActiveBackend();
+        if (!backend && !glfwGetCurrentContext()) return false;
+        auto get = [&](auto& fn, const char* name) {
+            fn = reinterpret_cast<std::decay_t<decltype(fn)>>(backend ? backend->procAddress(name) : glfwGetProcAddress(name));
+        };
         get(genTextures, "glGenTextures");
         get(deleteTextures, "glDeleteTextures");
         get(bindTexture, "glBindTexture");

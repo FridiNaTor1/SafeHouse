@@ -5,10 +5,12 @@
 #include <memory>
 #include <nlohmann/json.hpp>
 #include <system_error>
+#include <vector>
 
 #include "brand.h"
 #include "games.h"
 #include "picosha2.h"
+#include "sha256.h"
 #include "platform.h"
 #ifndef _WIN32
 #include <fcntl.h>
@@ -58,7 +60,10 @@ inline const Sly1Disc* sly1DiscFromBootFile(const std::string& bootFile) {
 // Asset version 3 (2026-11-04, CONVERTER.md "Audio formats"): the audio as WAV (dialog and movie sound FLAC on the
 // European discs), the movies as M2V + WAV, the banks' samples as WAV. Version 2 installs (the PS2 formats) still
 // play, but the launcher offers the re-extract.
-inline constexpr int sly2AssetVersion = 3;
+// Asset version 4 (2026-11-10, notes/UNRAVEL_2026-11-10.md): the worlds unravelled into their parts (a
+// <World>.world.json index, the text as JSON, the scripts as text, each block a file; Sly2-Release worldparts.h).
+// Version 3 installs still play, but the launcher offers the re-extract.
+inline constexpr int sly2AssetVersion = 4;
 inline constexpr const char* sly2ExecutableSha1 = "de2af92a54de71e33edc8a160c31c0337a95e6f5";
 inline constexpr uint32_t sly2VolumeBlocks = 1408272;
 inline constexpr const char* sly2ImageName = "disc.iso";
@@ -86,21 +91,20 @@ struct DiscVariant {
     // 0: the disc image is copied (Sly 3).
     uint64_t installedBytes = 0;
 };
-// The Sly 2 conversions' sizes (asset version 3, 2026-11-04, CONVERTER.md "Sizes"), with the Textures/ folder the
-// converter writes by default since 2026-11-04 (7,051 PNGs: USA 66,550,144 bytes, Europe v1.00 66,550,155, v2.01
-// 66,549,764, Japan 66,519,515; ~83 MB on disk): USA 4,856,096,772 bytes (24,473 files), Europe v2.01 8,193,742,437
-// bytes (41,764 files: 11 languages of dialog and movie sound, as FLAC), v1.00 8,193,742,859, Japan 4,369,661,290
-// bytes (24,505 files). (Without the textures: 4,789,546,628 / 8,127,192,673 / 8,127,192,704 / 4,303,141,775. Version 2,
-// the PS2 formats: 2.76 / 4.25 / 2.37 GB.)
+// The Sly 2 conversions' sizes (asset version 4, 2026-11-10, CONVERTER.md "Sizes"; the Textures/ folder included):
+// USA 4,870,016,654 bytes (41,313 files), Europe v2.01 8,212,190,183 bytes (58,604 files: 11 languages of dialog and
+// movie sound, as FLAC), v1.00 8,212,190,604, Japan 4,384,013,926 bytes (41,345 files). (Version 3, the worlds as one
+// file each: 4,856,096,772 / 8,193,742,437 / 8,193,742,859 / 4,369,661,290. Version 2, the PS2 formats: 2.76 / 4.25 /
+// 2.37 GB.)
 inline constexpr DiscVariant sly2Variants[] = {
     {"SCUS_973.16", "SCUS-97316", "USA", sly2ExecutableSha1, sly2VolumeBlocks, sly2SystemFiles, std::size(sly2SystemFiles),
-     4856096772ull},
+     4870016654ull},
     {"SCES_525.29", "SCES-52529", "Europe v1.00", "329e5df6e6d9524cac8391a900fa96703fc9a8be", 2242304, sly2PalSystemFiles,
-     std::size(sly2PalSystemFiles), 8193742859ull},
+     std::size(sly2PalSystemFiles), 8212190604ull},
     {"SCES_525.29", "SCES-52529", "Europe v2.01", "532daf70b535216498b026e57e4a42b9f701698f", 2242304, sly2PalSystemFiles,
-     std::size(sly2PalSystemFiles), 8193742437ull},
+     std::size(sly2PalSystemFiles), 8212190183ull},
     {"SCPS_150.90", "SCPS-15090", "Japan", "cabc5d0eedaa892bb4dc70408c9cd1418cbd3c60", 1213424, sly2JapanSystemFiles,
-     std::size(sly2JapanSystemFiles), 4369661290ull},
+     std::size(sly2JapanSystemFiles), 4384013926ull},
 };
 inline constexpr DiscVariant sly3Variants[] = {
     {"SCUS_974.64", "SCUS-97464", "USA", sly3ExecutableSha1, sly3VolumeBlocks, sly3SystemFiles, std::size(sly3SystemFiles)},
@@ -147,19 +151,19 @@ inline const DiscImageInstall* discImageInstall(GameId game) {
 }
 inline std::string hashFile(const fs::path& file, const std::function<bool()>& cancelled = {},
                             const std::function<void(uint64_t)>& bytesRead = {}) {
+    // (sha256.h: the CPU's SHA extensions when it has them, about 12x picosha2; 1 MiB reads)
     std::ifstream in(file, std::ios::binary);
     if (!in) throw std::runtime_error("Cannot read: " + utf8(file));
-    picosha2::hash256_one_by_one hash;
-    std::array<char, 65536> buffer;
+    Sha256 hash;
+    std::vector<char> buffer(size_t(1) << 20);
     while (in) {
         if (cancelled && cancelled()) throw std::runtime_error("Cancelled");
-        in.read(buffer.data(), buffer.size());
-        hash.process(buffer.begin(), buffer.begin() + in.gcount());
+        in.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
+        hash.update(buffer.data(), static_cast<size_t>(in.gcount()));
         if (bytesRead) bytesRead(static_cast<uint64_t>(in.gcount()));
     }
     if (!in.eof()) throw std::runtime_error("Read failed: " + utf8(file));
-    hash.finish();
-    return picosha2::get_hash_hex_string(hash);
+    return hash.hex();
 }
 inline json readJson(const fs::path& file) {
     std::ifstream in(file);
@@ -409,8 +413,8 @@ inline fs::path environmentDirectory(const char* key, const fs::path& fallback) 
     return value && *value ? path(value) : fallback;
 #endif
 }
-// The folders keep the name "ProjectCane" / "projectcane" after the rename to SafeHouse (2026-11-03), so existing
-// installations, saves and settings keep working with no migration: nothing is moved, copied or renamed.
+// The profile folders (brand::userFolder). Before 2026-11-10 they had the old product name (brand::legacyUserFolder);
+// the launcher moves them once at its start (platform/user_folders.h migrateLegacyFolders()), before it uses these.
 inline UserPaths userPaths(const fs::path& executableDir = executableDirectory()) {
     for (const auto& root : {executableDir.parent_path(), executableDir}) {
         if (fs::is_regular_file(root / "portable.txt")) {
@@ -420,15 +424,15 @@ inline UserPaths userPaths(const fs::path& executableDir = executableDirectory()
         }
     }
 #ifdef _WIN32
-    auto base = environmentDirectory("LOCALAPPDATA", userDirectory()) / "ProjectCane";
+    auto base = environmentDirectory("LOCALAPPDATA", userDirectory()) / brand::userFolder;
     return {base / "installations" / "sly1", base / "user", base / "config", base / "logs"};
 #elif defined(__APPLE__)
-    auto base = environmentDirectory("HOME", userDirectory()) / "Library/Application Support" / brand::appName;
+    auto base = environmentDirectory("HOME", userDirectory()) / "Library/Application Support" / brand::userFolder;
     return {base / "installations" / "sly1", base / "user", base / "config", base / "logs"};
 #else
     auto home = environmentDirectory("HOME", userDirectory());
-    auto base = environmentDirectory("XDG_DATA_HOME", home / ".local/share") / "projectcane";
-    auto config = environmentDirectory("XDG_CONFIG_HOME", home / ".config") / "projectcane";
+    auto base = environmentDirectory("XDG_DATA_HOME", home / ".local/share") / brand::userFolder;
+    auto config = environmentDirectory("XDG_CONFIG_HOME", home / ".config") / brand::userFolder;
     return {base / "installations" / "sly1", config, config, config / "logs"};
 #endif
 }
@@ -451,7 +455,7 @@ inline fs::path legacyLogDirectory(const UserPaths& locations) {
     return locations.logs;
 #else
     auto home = environmentDirectory("HOME", userDirectory());
-    return environmentDirectory("XDG_STATE_HOME", home / ".local/state") / "projectcane/logs";
+    return environmentDirectory("XDG_STATE_HOME", home / ".local/state") / brand::userFolder / "logs";
 #endif
 }
 // Stage imports before activation, leaving the original and any newer profile intact.

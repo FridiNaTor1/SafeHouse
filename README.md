@@ -92,7 +92,7 @@ On the Steam Deck, install in Desktop Mode, then use **Add to Steam** on the gam
     <td><img src="docs/images/high-refresh.jpg" alt="Frame-rate choices"><br><sub>High refresh rates, up to uncapped</sub></td>
   </tr>
   <tr>
-    <td><img src="docs/images/pc-extras-carmelita-aim.webp" alt="Playing as Carmelita in aim mode"><br><sub>PC Extras: play as Carmelita</sub></td>
+    <td><img src="docs/images/pc-extras-carmelita-aim.webp" alt="Playing as Carmelita in aim mode"><br><sub>Extras: play as Carmelita</sub></td>
     <td><img src="docs/images/debug-menu.jpg" alt="The debug menu"><br><sub>The debug menu (F10)</sub></td>
   </tr>
   <tr>

@@ -5,7 +5,8 @@
 // the south button. Xbox, PlayStation and Steam pads confirm with south (A /
 // Cross) and go back with east (B / Circle). Nintendo confirms with A and
 // goes back with B, and its A sits east and its B south, so for the Nintendo
-// prompt family the two are swapped. The swap follows the family the footer
+// layout families (Switch, Switch 2, Wii, Wii U; not the GameCube, whose A is
+// south) the two are swapped. The swap follows the family the footer
 // shows (input::promptFamily), so a forced prompt style or "Original PlayStation
 // Icons" picks the convention the prompts show.
 //
@@ -16,7 +17,7 @@
 #include <imgui/imgui_internal.h>
 #include "controller_family.h"
 namespace cane::ui {
-inline bool eastConfirms(input::Family family) { return family == input::Family::Nintendo; }
+inline bool eastConfirms(input::Family family) { return input::isNintendoLayout(family); }
 // The family the launcher's prompts and confirm/back buttons follow this
 // frame (main.cpp sets it before the screens are drawn).
 inline input::Family& faceButtonFamily() {

@@ -175,18 +175,19 @@ struct Job {
 };
 inline std::string stageLabel(const std::string& stage) {
     static const std::unordered_map<std::string, std::string> labels = {
-        {"decompress", "Decompressing the CHD"}, {"validate", "Checking your disc"}, {"levels", "Preparing worlds"},
-        {"music", "Preparing music"},           {"sound-banks", "Preparing sound effects"},
-        {"commentary", "Preparing commentary"}, {"dialogue", "Preparing dialogue"},
-        {"ambient", "Preparing ambient audio"}, {"cutscenes", "Preparing movies"},
-        {"copy", "Copying the disc image"},     {"extract", "Extracting system files"},
-        {"convert", "Converting the game files"}, {"inventory", "Listing installed files"},
-        {"textures", "Exporting textures"},
-        {"ps3-prepare", "Reading your installed textures"}, {"ps3-read", "Reading The Sly Collection (PS3)"},
-        {"ps3-textures", "Matching the PS3 HD textures"},  {"ps3-done", "PS3 HD textures installed"},
-        {"verify", "Checking installed files"}, {"complete", "Ready to play"},
-        {"error", "Installation failed"}};
+        {"decompress", N_("Decompressing the CHD")}, {"validate", N_("Checking your disc")}, {"levels", N_("Preparing worlds")},
+        {"music", N_("Preparing music")},           {"sound-banks", N_("Preparing sound effects")},
+        {"commentary", N_("Preparing commentary")}, {"dialogue", N_("Preparing dialogue")},
+        {"ambient", N_("Preparing ambient audio")}, {"cutscenes", N_("Preparing movies")},
+        {"copy", N_("Copying the disc image")},     {"extract", N_("Extracting system files")},
+        {"convert", N_("Converting the game files")}, {"inventory", N_("Listing installed files")},
+        {"textures", N_("Exporting textures")},
+        {"ps3-prepare", N_("Reading your installed textures")}, {"ps3-read", N_("Reading The Sly Collection (PS3)")},
+        {"ps3-textures", N_("Matching the PS3 HD textures")},  {"ps3-done", N_("PS3 HD textures installed")},
+        {"languages", N_("Sharing the languages")},          {"ps3-languages", N_("Reading The Sly Collection's languages")},
+        {"verify", N_("Checking installed files")}, {"move", N_("Moving the installation")}, {"moved", N_("Installation moved")}, {"complete", N_("Ready to play")},
+        {"error", N_("Installation failed")}};
     auto found = labels.find(stage);
-    return found == labels.end() ? stage : found->second;
+    return found == labels.end() ? stage : std::string(tr(found->second.c_str()));
 }
 } // namespace cane::ui

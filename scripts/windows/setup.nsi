@@ -8,7 +8,9 @@ Unicode true
 
 ; SafeHouse was called ProjectCane until 2026-11-03. Setup uses new registry keys and a new default folder, so an old
 ; ProjectCane installation stays as it is (uninstall it from Windows Settings; its uninstaller keeps AppData). The
-; games' data folder is still %LOCALAPPDATA%\ProjectCane, shared by both, so installed games and saves carry over.
+; games' data folder is %LOCALAPPDATA%\SafeHouse since 2026-11-10: the launcher moves an old %LOCALAPPDATA%\ProjectCane
+; there at its first start (platform/user_folders.h), so installed games and saves carry over. Settings > Games
+; "Install games to" puts new installations on another drive.
 !define APP_NAME "SafeHouse"
 !ifndef ARCH
   !define ARCH "x86_64"

@@ -16,7 +16,7 @@ QUICK=${3:-}
 mkdir -p "$OUT"
 T=$(mktemp -d)
 trap 'rm -rf "$T"' EXIT INT TERM
-export XDG_CONFIG_HOME="$T/cfg" XDG_DATA_HOME="$T/data" XDG_STATE_HOME="$T/state"
+export XDG_CONFIG_HOME="$T/cfg" XDG_DATA_HOME="$T/data" XDG_STATE_HOME="$T/state" XDG_CACHE_HOME="$T/cache"
 FAMILIES="xbox ps nintendo steamdeck steamcontroller keyboard"
 [ "$QUICK" = "--quick" ] && FAMILIES="xbox"
 shot() {
@@ -47,8 +47,15 @@ shot install-progress-sly2 xbox --game sly2 --screen install-progress --installe
 for c in display graphics audio controls interface launcher advanced; do
     shot "settings-$c" xbox --screen "settings:$c" --installed-fixture
 done
-for c in display graphics launcher advanced; do
+shot settings-games xbox --screen settings:games --installed-fixture
+for c in display graphics audio controls launcher advanced; do
     shot "settings-sly2-$c" xbox --game sly2 --screen "settings:$c" --installed-fixture --sly2-installed-fixture
+done
+# The Controls page (its controller card and binding icons) for every prompt family.
+CONTROL_FAMILIES="xbox ps ps4 ps5 nintendo switch2 gamecube wii wiiu steamdeck steamcontroller steamcontroller2026 keyboard"
+[ "$QUICK" = "--quick" ] && CONTROL_FAMILIES="xbox gamecube"
+for f in $CONTROL_FAMILIES; do
+    shot "settings-sly2-controls-$f" "$f" --game sly2 --screen settings:controls --installed-fixture --sly2-installed-fixture
 done
 shot about xbox --screen about --installed-fixture
 # Sly 3: the notice before Play; the community links under About in the rail.
@@ -80,8 +87,8 @@ shot nav-settings-row xbox --game sly1 --installed-fixture --nav b,down,down,dow
 shot install-path steamdeck --game sly2 --screen install --installed-fixture --nav x
 shot binding-capture ps --screen settings:controls --installed-fixture --nav right,down,down,down,down,down,down,a
 # The last selected game is remembered (launcher.json "last_game").
-mkdir -p "$XDG_CONFIG_HOME/projectcane"
-printf '{"last_game": "sly3"}\n' > "$XDG_CONFIG_HOME/projectcane/launcher.json"
+mkdir -p "$XDG_CONFIG_HOME/SafeHouse"
+printf '{"last_game": "sly3"}\n' > "$XDG_CONFIG_HOME/SafeHouse/launcher.json"
 shot remembered-game xbox --installed-fixture
-rm "$XDG_CONFIG_HOME/projectcane/launcher.json"
+rm "$XDG_CONFIG_HOME/SafeHouse/launcher.json"
 echo "Screenshots written to $OUT"

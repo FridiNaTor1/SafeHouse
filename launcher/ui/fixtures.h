@@ -24,6 +24,14 @@ struct Options {
     // --nav up,down,left,right,a,b,x,y,lb,rb,lt,rt,start,select: pad presses
     // replayed one every 4 frames before the screenshot.
     std::vector<std::string> nav;
+    // --collection: the Collection Style Launcher instead (collection/collection.h), with --collection-games (the games
+    // shown installed), --collection-ps3 (a profile holding Collection/PS3 menu) and --collection-sly2 (an installation
+    // for the music and skies).
+    bool collection = false;
+    std::vector<std::string> collectionGames;
+    std::string collectionPs3, collectionSly2;
+    // --language CODE: the launcher language of the shot (default English; "system" follows the environment).
+    std::string language = "en";
 };
 
 inline IsoCandidate iso(const char* file, uintmax_t size, int hoursAgo, GameId game, const char* boot, const char* region) {

@@ -2,10 +2,10 @@
 // Source zip sha256 ac2fcf599080b0f3ba2d174c9474db6df1a0e96ff0662580e2da79a122ab78a1.
 // Rects are {x, y, w, h} in pixels of the unflipped atlas; w == 0 means no icon.
 // Indexed by cane::input::Family and cane::input::Button.
-inline constexpr int kPromptAtlasCount = 9;
-inline constexpr PromptRect kPromptAtlasSize[kPromptAtlasCount] = {{0, 0, 1024, 2048}, {0, 0, 1024, 512}, {0, 0, 1024, 512}, {0, 0, 1024, 512}, {0, 0, 1024, 512}, {0, 0, 1024, 512}, {0, 0, 1024, 512}, {0, 0, 1024, 512}, {0, 0, 1024, 512}};
+inline constexpr int kPromptAtlasCount = 18;
+inline constexpr PromptRect kPromptAtlasSize[kPromptAtlasCount] = {{0, 0, 1024, 2048}, {0, 0, 1024, 512}, {0, 0, 1024, 512}, {0, 0, 1024, 512}, {0, 0, 1024, 512}, {0, 0, 1024, 512}, {0, 0, 1024, 512}, {0, 0, 1024, 512}, {0, 0, 1024, 512}, {0, 0, 1024, 512}, {0, 0, 1024, 512}, {0, 0, 1024, 512}, {0, 0, 1024, 512}, {0, 0, 1024, 512}, {0, 0, 1024, 512}, {0, 0, 1024, 512}, {0, 0, 1024, 512}, {0, 0, 1024, 512}};
 // Embedded PNG size and FNV-1a 64 of its bytes (stale-table check).
-inline constexpr PromptBlobId kPromptAtlasBlob[kPromptAtlasCount] = {{59044u, 0xb31a791dea94e5b2ull}, {23637u, 0x4959581f2bbbaf2dull}, {22680u, 0x718954379a40f10cull}, {18672u, 0x55a28f67de570ebbull}, {15995u, 0x674ac1efd2ec2db0ull}, {19689u, 0xeb00f0b4faa0989cull}, {18285u, 0x60cbfa5c259cef40ull}, {18129u, 0x28764b055acd91b6ull}, {18192u, 0x1d94ad3014145c6dull}};
+inline constexpr PromptBlobId kPromptAtlasBlob[kPromptAtlasCount] = {{59044u, 0xb31a791dea94e5b2ull}, {23637u, 0x4959581f2bbbaf2dull}, {22680u, 0x718954379a40f10cull}, {18672u, 0x55a28f67de570ebbull}, {15995u, 0x674ac1efd2ec2db0ull}, {19689u, 0xeb00f0b4faa0989cull}, {18285u, 0x60cbfa5c259cef40ull}, {18129u, 0x28764b055acd91b6ull}, {18192u, 0x1d94ad3014145c6dull}, {18588u, 0x73a46202b8615dd8ull}, {18724u, 0x5fd1d0f9ff611cbcull}, {16334u, 0x28443f60e3b89767ull}, {16254u, 0x94fde577f22b1f3aull}, {30612u, 0xdf6c3eb82d82a2b2ull}, {26905u, 0x108472cc9003aa4cull}, {15995u, 0x674ac1efd2ec2db0ull}, {9627u, 0x3677a7701bcde282ull}, {30192u, 0x008b4bb5f4487c25ull}};
 inline constexpr PromptRect kPromptRects[kPromptAtlasCount][20] = {
     { // keyboard: South East West North LB RB LT RT Back Start LS RS LSPress RSPress DpadUp DpadDown DpadLeft DpadRight Dpad Guide
         {0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0} },
@@ -25,6 +25,24 @@ inline constexpr PromptRect kPromptRects[kPromptAtlasCount][20] = {
         {16, 16, 112, 112}, {160, 16, 112, 112}, {304, 16, 112, 112}, {448, 16, 112, 112}, {592, 16, 112, 112}, {736, 16, 112, 112}, {880, 16, 112, 112}, {16, 160, 112, 112}, {160, 160, 112, 112}, {304, 160, 112, 112}, {448, 160, 112, 112}, {592, 160, 112, 112}, {736, 160, 112, 112}, {880, 160, 112, 112}, {16, 304, 112, 112}, {160, 304, 112, 112}, {304, 304, 112, 112}, {448, 304, 112, 112}, {592, 304, 112, 112}, {0, 0, 0, 0} },
     { // steamcontroller2026: South East West North LB RB LT RT Back Start LS RS LSPress RSPress DpadUp DpadDown DpadLeft DpadRight Dpad Guide
         {16, 16, 112, 112}, {160, 16, 112, 112}, {304, 16, 112, 112}, {448, 16, 112, 112}, {592, 16, 112, 112}, {736, 16, 112, 112}, {880, 16, 112, 112}, {16, 160, 112, 112}, {160, 160, 112, 112}, {304, 160, 112, 112}, {448, 160, 112, 112}, {592, 160, 112, 112}, {736, 160, 112, 112}, {880, 160, 112, 112}, {16, 304, 112, 112}, {160, 304, 112, 112}, {304, 304, 112, 112}, {448, 304, 112, 112}, {592, 304, 112, 112}, {736, 304, 112, 112} },
+    { // gamecube: South East West North LB RB LT RT Back Start LS RS LSPress RSPress DpadUp DpadDown DpadLeft DpadRight Dpad Guide
+        {16, 16, 112, 112}, {160, 16, 112, 112}, {304, 16, 112, 112}, {448, 16, 112, 112}, {0, 0, 0, 0}, {592, 16, 112, 112}, {736, 16, 112, 112}, {880, 16, 112, 112}, {0, 0, 0, 0}, {16, 160, 112, 112}, {160, 160, 112, 112}, {304, 160, 112, 112}, {160, 160, 112, 112}, {304, 160, 112, 112}, {448, 160, 112, 112}, {592, 160, 112, 112}, {736, 160, 112, 112}, {880, 160, 112, 112}, {16, 304, 112, 112}, {0, 0, 0, 0} },
+    { // switch2: South East West North LB RB LT RT Back Start LS RS LSPress RSPress DpadUp DpadDown DpadLeft DpadRight Dpad Guide
+        {16, 16, 112, 112}, {160, 16, 112, 112}, {304, 16, 112, 112}, {448, 16, 112, 112}, {592, 16, 112, 112}, {736, 16, 112, 112}, {880, 16, 112, 112}, {16, 160, 112, 112}, {160, 160, 112, 112}, {304, 160, 112, 112}, {448, 160, 112, 112}, {592, 160, 112, 112}, {736, 160, 112, 112}, {880, 160, 112, 112}, {16, 304, 112, 112}, {160, 304, 112, 112}, {304, 304, 112, 112}, {448, 304, 112, 112}, {592, 304, 112, 112}, {736, 304, 112, 112} },
+    { // wii: South East West North LB RB LT RT Back Start LS RS LSPress RSPress DpadUp DpadDown DpadLeft DpadRight Dpad Guide
+        {16, 16, 112, 112}, {160, 16, 112, 112}, {304, 16, 112, 112}, {448, 16, 112, 112}, {592, 16, 112, 112}, {736, 16, 112, 112}, {880, 16, 112, 112}, {16, 160, 112, 112}, {160, 160, 112, 112}, {304, 160, 112, 112}, {448, 160, 112, 112}, {592, 160, 112, 112}, {448, 160, 112, 112}, {592, 160, 112, 112}, {736, 160, 112, 112}, {880, 160, 112, 112}, {16, 304, 112, 112}, {160, 304, 112, 112}, {304, 304, 112, 112}, {448, 304, 112, 112} },
+    { // wiiu: South East West North LB RB LT RT Back Start LS RS LSPress RSPress DpadUp DpadDown DpadLeft DpadRight Dpad Guide
+        {16, 16, 112, 112}, {160, 16, 112, 112}, {304, 16, 112, 112}, {448, 16, 112, 112}, {592, 16, 112, 112}, {736, 16, 112, 112}, {880, 16, 112, 112}, {16, 160, 112, 112}, {160, 160, 112, 112}, {304, 160, 112, 112}, {448, 160, 112, 112}, {592, 160, 112, 112}, {448, 160, 112, 112}, {592, 160, 112, 112}, {736, 160, 112, 112}, {880, 160, 112, 112}, {16, 304, 112, 112}, {160, 304, 112, 112}, {304, 304, 112, 112}, {448, 304, 112, 112} },
+    { // metaquest: South East West North LB RB LT RT Back Start LS RS LSPress RSPress DpadUp DpadDown DpadLeft DpadRight Dpad Guide
+        {16, 16, 112, 112}, {160, 16, 112, 112}, {304, 16, 112, 112}, {448, 16, 112, 112}, {592, 16, 112, 112}, {736, 16, 112, 112}, {880, 16, 112, 112}, {16, 160, 112, 112}, {0, 0, 0, 0}, {160, 160, 112, 112}, {304, 160, 112, 112}, {448, 160, 112, 112}, {592, 160, 112, 112}, {736, 160, 112, 112}, {880, 160, 112, 112}, {16, 304, 112, 112}, {160, 304, 112, 112}, {304, 304, 112, 112}, {304, 160, 112, 112}, {448, 304, 112, 112} },
+    { // valveindex: South East West North LB RB LT RT Back Start LS RS LSPress RSPress DpadUp DpadDown DpadLeft DpadRight Dpad Guide
+        {16, 16, 112, 112}, {160, 16, 112, 112}, {16, 16, 112, 112}, {160, 16, 112, 112}, {304, 16, 112, 112}, {448, 16, 112, 112}, {592, 16, 112, 112}, {736, 16, 112, 112}, {880, 16, 112, 112}, {16, 160, 112, 112}, {160, 160, 112, 112}, {304, 160, 112, 112}, {448, 160, 112, 112}, {592, 160, 112, 112}, {736, 160, 112, 112}, {880, 160, 112, 112}, {16, 304, 112, 112}, {160, 304, 112, 112}, {160, 160, 112, 112}, {16, 160, 112, 112} },
+    { // steamframe: South East West North LB RB LT RT Back Start LS RS LSPress RSPress DpadUp DpadDown DpadLeft DpadRight Dpad Guide
+        {16, 16, 112, 112}, {160, 16, 112, 112}, {304, 16, 112, 112}, {448, 16, 112, 112}, {592, 16, 112, 112}, {736, 16, 112, 112}, {880, 16, 112, 112}, {16, 160, 112, 112}, {160, 160, 112, 112}, {304, 160, 112, 112}, {448, 160, 112, 112}, {592, 160, 112, 112}, {736, 160, 112, 112}, {880, 160, 112, 112}, {16, 304, 112, 112}, {160, 304, 112, 112}, {304, 304, 112, 112}, {448, 304, 112, 112}, {592, 304, 112, 112}, {736, 304, 112, 112} },
+    { // vivewand: South East West North LB RB LT RT Back Start LS RS LSPress RSPress DpadUp DpadDown DpadLeft DpadRight Dpad Guide
+        {16, 16, 112, 112}, {160, 16, 112, 112}, {16, 16, 112, 112}, {160, 16, 112, 112}, {304, 16, 112, 112}, {448, 16, 112, 112}, {592, 16, 112, 112}, {736, 16, 112, 112}, {160, 16, 112, 112}, {160, 16, 112, 112}, {880, 16, 112, 112}, {880, 16, 112, 112}, {16, 16, 112, 112}, {16, 16, 112, 112}, {16, 160, 112, 112}, {160, 160, 112, 112}, {0, 0, 0, 0}, {0, 0, 0, 0}, {880, 16, 112, 112}, {304, 160, 112, 112} },
+    { // pico: South East West North LB RB LT RT Back Start LS RS LSPress RSPress DpadUp DpadDown DpadLeft DpadRight Dpad Guide
+        {16, 16, 112, 112}, {160, 16, 112, 112}, {304, 16, 112, 112}, {448, 16, 112, 112}, {592, 16, 112, 112}, {736, 16, 112, 112}, {880, 16, 112, 112}, {16, 160, 112, 112}, {0, 0, 0, 0}, {160, 160, 112, 112}, {304, 160, 112, 112}, {448, 160, 112, 112}, {592, 160, 112, 112}, {736, 160, 112, 112}, {880, 160, 112, 112}, {16, 304, 112, 112}, {160, 304, 112, 112}, {304, 304, 112, 112}, {304, 160, 112, 112}, {448, 304, 112, 112} },
 };
 // GLFW key code -> keycap rect in the keyboard atlas (index 0).
 inline constexpr PromptKeyRect kPromptKeyRects[105] = {
@@ -137,8 +155,8 @@ inline constexpr PromptKeyRect kPromptKeyRects[105] = {
 // Controller pictures (prompts_devices.png, Sly 2's pause Controls page): per device the body and its
 // underlay cells, and the cell's top left in the Kenney SVG's 64 x 64 units (8 px per unit).
 inline constexpr int kPromptDevicePxPerUnit = 8;
-inline constexpr PromptRect kPromptDevicesSize = {0, 0, 938, 1920};
-inline constexpr PromptDeviceRect kPromptDeviceRects[7] = {
+inline constexpr PromptRect kPromptDevicesSize = {0, 0, 938, 3100};
+inline constexpr PromptDeviceRect kPromptDeviceRects[11] = {
     {2, {0, 0, 402, 281}, {473, 0, 402, 281}, 6.875f, 14.000f}, // xbox
     {3, {0, 285, 400, 281}, {473, 285, 400, 281}, 7.000f, 13.875f}, // nintendo
     {4, {0, 570, 465, 229}, {473, 570, 465, 229}, 3.000f, 16.500f}, // steamdeck
@@ -146,4 +164,8 @@ inline constexpr PromptDeviceRect kPromptDeviceRects[7] = {
     {6, {0, 1088, 400, 258}, {473, 1088, 400, 258}, 7.000f, 14.875f}, // ps4
     {7, {0, 1350, 402, 273}, {473, 1350, 402, 273}, 6.875f, 15.000f}, // ps5
     {8, {0, 1627, 401, 289}, {473, 1627, 401, 289}, 7.000f, 14.000f}, // steamcontroller2026
+    {9, {0, 1920, 402, 313}, {473, 1920, 402, 313}, 6.875f, 12.500f}, // gamecube
+    {10, {0, 2237, 401, 297}, {473, 2237, 401, 297}, 7.000f, 13.000f}, // switch2
+    {11, {0, 2538, 401, 280}, {473, 2538, 401, 280}, 7.000f, 14.000f}, // wii
+    {12, {0, 2822, 401, 274}, {473, 2822, 401, 274}, 7.000f, 14.875f}, // wiiu
 };

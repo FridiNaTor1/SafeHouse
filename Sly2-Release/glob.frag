@@ -18,6 +18,10 @@ uniform sampler2D texDate;   //   (texDate, 0x16DA48's copy) is below 0x80
 #ifdef BINDLESS
 flat in uvec2 vTexh;
 #endif
+#ifdef TEXARRAY
+uniform sampler2DArray texArr;   // (perf-5: the run's page of layers, unit 2; vLayer 0: the bound tex)
+flat in uint vLayer;
+#endif
 noperspective in vec4 vColor;
 in vec2 vUv;
 noperspective in float vFog;
@@ -50,6 +54,9 @@ void main()
 #ifdef BINDLESS
         // (the same texture and sampler as a bound one: handle 0 is the special draws', which bind tex)
         vec4 t = (vTexh != uvec2(0u) ? texture(sampler2D(vTexh), vUv) : texture(tex, vUv)) * 255.0;
+#elif defined(TEXARRAY)
+        // (the same texels and sampler as the bound 2D texture: the layer is its copy)
+        vec4 t = (vLayer != 0u ? texture(texArr, vec3(vUv, float(vLayer - 1u))) : texture(tex, vUv)) * 255.0;
 #else
         vec4 t = texture(tex, vUv) * 255.0;
 #endif

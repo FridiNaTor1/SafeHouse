@@ -19,7 +19,7 @@ with tempfile.TemporaryDirectory(prefix="cane-profile-") as temporary:
                LOCALAPPDATA=str(root / "Local"),
                APPDATA=str(root / "Roaming"))
     if os.name == "nt":
-        base = root / "Local" / "ProjectCane"
+        base = root / "Local" / "SafeHouse"
         saves, logs, config = base / "user/Saves", base / "logs", base / "config"
         bulk = base
     elif sys.platform == "darwin":
@@ -27,10 +27,10 @@ with tempfile.TemporaryDirectory(prefix="cane-profile-") as temporary:
         saves, logs, config = base / "user/Saves", base / "logs", base / "config"
         bulk = base
     else:
-        bulk = root / "data/projectcane"
-        config = root / "config/projectcane"
+        bulk = root / "data/SafeHouse"
+        config = root / "config/SafeHouse"
         saves, logs = config / "Saves", config / "logs"
-        old_saves, old_logs = bulk / "user/Saves", root / "state/projectcane/logs"
+        old_saves, old_logs = bulk / "user/Saves", root / "state/SafeHouse/logs"
         old_saves.mkdir(parents=True)
         old_logs.mkdir(parents=True)
         (old_saves / "system_settings.dat").write_bytes(b"previous settings\x00\xff")

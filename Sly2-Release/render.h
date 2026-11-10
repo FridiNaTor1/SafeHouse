@@ -4,6 +4,7 @@
 // the Sly 2 RPL kind (DrawRpl 0x157FA0: counting sort by the 26 kinds, far-to-near for 1, 2, 5, 6, 10, 25), each
 // shader drawn pass by pass with the GS state its register lists ask for (shd.cpp SHDPASS -> GL state).
 
+#include "fastpaths.h"
 #include "scene.h"
 
 #include <glm/glm.hpp>
@@ -47,7 +48,7 @@ void UpdateGlobColorsGpu(const GLOB& glob);
 void UpdateGlobVerticesGpu(const GLOB& glob);
 // The same into an entry's own copy of the glob's vertices (an instance of a shared GLOBSET lit at its own place).
 void UpdateGlobColorsGpu(const GLOB& glob, const struct GLGLOB* pgl);
-#ifdef __SWITCH__
+#if SLY2_FASTPATHS
 // (the Switch) UpdateGlobColorsGpu in two halves: the colours packed on any thread (the pass helpers, right after they
 // light the glob), then uploaded on the game thread
 struct GLOBCOLORS
@@ -72,6 +73,22 @@ void ResetTextureCache();
 void RenderScene(const SCENE& scene, const CAMERA& cam, const RENDEROPTS& opts);
 // The foreground kinds 22..25 (SCENEGLOBSET::fForeground) after the HUD, over a cleared depth.
 void RenderSceneForeground(const SCENE& scene, const CAMERA& cam, const RENDEROPTS& opts);
+
+// (VR, vr.h) Both eyes of a stereo frame: the scene's records are chosen once (culled with matCull from posCenter,
+// sorted, uploaded), then drawn into each eye's target with its own matrix.
+struct STEREOVIEW
+{
+    glm::mat4 amatWorldToClip[2]{glm::mat4(1.0f), glm::mat4(1.0f)};
+    glm::vec3 apos[2]{glm::vec3(0.0f), glm::vec3(0.0f)};
+    glm::mat4 matCull{1.0f};        // a frustum holding both eyes' (the records' culling, billboards' up)
+    glm::vec3 posCenter{0.0f}, dirCenter{1, 0, 0};
+    unsigned afbo[2]{0, 0};
+    int dx = 1, dy = 1;
+    bool fMultiview = false;           // (OpenGL ES, GL_OVR_multiview2) afbo[0] holds both eyes as two views
+    unsigned texMultiviewColor = 0;    // its colour (a two-layer array): the shadow phases' frame copies
+};
+// The render targets, then the frame's pass and the foreground kinds, into both eyes.
+void RenderSceneStereo(const SCENE& scene, const CAMERA& cam, const RENDEROPTS& opts, const STEREOVIEW& sv);
 
 // More instances of loaded globs to draw this frame (RIPs' models: the glob iglob of an entry at mat, faded by
 // alpha); the particles fill them through the hook.

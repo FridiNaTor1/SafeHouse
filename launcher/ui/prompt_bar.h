@@ -12,6 +12,7 @@
 #include <string>
 #include "button_prompts.h"
 #include "controller_family.h"
+#include "../l10n.h"
 namespace cane::launcher {
 struct Hint {
     input::Button button; // pad button (positional), or Button::Count for keyboard-only hints
@@ -61,29 +62,29 @@ inline input::Family launcherPromptFamily() {
 inline std::string keyCapText(int key) {
     switch (key) {
     case 0: return {};
-    case input::kMouseLeftKey: return "Click";
-    case GLFW_KEY_ENTER: case GLFW_KEY_KP_ENTER: return "Enter";
-    case GLFW_KEY_ESCAPE: return "Esc";
-    case GLFW_KEY_TAB: return "Tab";
-    case GLFW_KEY_SPACE: return "Space";
-    case GLFW_KEY_BACKSPACE: return "Backspace";
-    case GLFW_KEY_DELETE: return "Del";
-    case GLFW_KEY_UP: return "Up";
-    case GLFW_KEY_DOWN: return "Down";
-    case GLFW_KEY_LEFT: return "Left";
-    case GLFW_KEY_RIGHT: return "Right";
-    case GLFW_KEY_LEFT_SHIFT: case GLFW_KEY_RIGHT_SHIFT: return "Shift";
-    case GLFW_KEY_LEFT_CONTROL: case GLFW_KEY_RIGHT_CONTROL: return "Ctrl";
-    case GLFW_KEY_LEFT_ALT: case GLFW_KEY_RIGHT_ALT: return "Alt";
-    case GLFW_KEY_PAGE_UP: return "PgUp";
-    case GLFW_KEY_PAGE_DOWN: return "PgDn";
-    case GLFW_KEY_HOME: return "Home";
-    case GLFW_KEY_END: return "End";
-    case GLFW_KEY_INSERT: return "Ins";
+    case input::kMouseLeftKey: return tr("Click");
+    case GLFW_KEY_ENTER: case GLFW_KEY_KP_ENTER: return tr("Enter");
+    case GLFW_KEY_ESCAPE: return tr("Esc");
+    case GLFW_KEY_TAB: return tr("Tab");
+    case GLFW_KEY_SPACE: return tr("Space");
+    case GLFW_KEY_BACKSPACE: return tr("Backspace");
+    case GLFW_KEY_DELETE: return tr("Del");
+    case GLFW_KEY_UP: return tr("Up");
+    case GLFW_KEY_DOWN: return tr("Down");
+    case GLFW_KEY_LEFT: return tr("Left");
+    case GLFW_KEY_RIGHT: return tr("Right");
+    case GLFW_KEY_LEFT_SHIFT: case GLFW_KEY_RIGHT_SHIFT: return tr("Shift");
+    case GLFW_KEY_LEFT_CONTROL: case GLFW_KEY_RIGHT_CONTROL: return tr("Ctrl");
+    case GLFW_KEY_LEFT_ALT: case GLFW_KEY_RIGHT_ALT: return tr("Alt");
+    case GLFW_KEY_PAGE_UP: return tr("PgUp");
+    case GLFW_KEY_PAGE_DOWN: return tr("PgDn");
+    case GLFW_KEY_HOME: return tr("Home");
+    case GLFW_KEY_END: return tr("End");
+    case GLFW_KEY_INSERT: return tr("Ins");
     default: break;
     }
     if (key >= GLFW_KEY_F1 && key <= GLFW_KEY_F25) return "F" + std::to_string(key - GLFW_KEY_F1 + 1);
-    if (key >= GLFW_KEY_KP_0 && key <= GLFW_KEY_KP_9) return "Num " + std::to_string(key - GLFW_KEY_KP_0);
+    if (key >= GLFW_KEY_KP_0 && key <= GLFW_KEY_KP_9) return trf("Num %d", key - GLFW_KEY_KP_0);
     if ((key >= GLFW_KEY_A && key <= GLFW_KEY_Z) || (key >= GLFW_KEY_0 && key <= GLFW_KEY_9))
         return std::string(1, static_cast<char>(key));
     if (glfwGetCurrentContext())
@@ -92,7 +93,7 @@ inline std::string keyCapText(int key) {
             for (char& c : text) c = static_cast<char>(c >= 'a' && c <= 'z' ? c - 32 : c);
             return text;
         }
-    return "Key " + std::to_string(key);
+    return trf("Key %d", key);
 }
 
 namespace detail {
@@ -167,7 +168,7 @@ inline float hints(ImDrawList* drawList, ImVec2 rightBaseline, float iconPx, std
     for (auto it = hints.rbegin(); it != hints.rend(); ++it) {
         if (keyboard ? it->key == 0 : it->button == input::Button::Count) continue;
         // A hint without a label shares the next hint's label ("LB RB Move").
-        const char* label = it->label ? it->label : "";
+        const char* label = it->label ? tr(it->label) : "";
         if (!first) x -= *label ? hintGap : std::round(iconGap * 0.5f);
         first = false;
         if (*label) {

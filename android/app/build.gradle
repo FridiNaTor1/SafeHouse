@@ -1,0 +1,44 @@
+plugins { id 'com.android.application' }
+
+if (providers.gradleProperty('safehouseAppBuildDir').isPresent()) {
+    layout.buildDirectory.set(file(providers.gradleProperty('safehouseAppBuildDir').get()))
+}
+
+android {
+    namespace 'org.safehouse.android'
+    compileSdk 36
+    defaultConfig {
+        applicationId 'org.safehouse.android'
+        minSdk providers.gradleProperty('safehouseMinSdk').getOrElse('26').toInteger()
+        targetSdk 36
+        versionCode 1
+        versionName '0.1.0-android-preview'
+    }
+    buildTypes {
+        debug { debuggable true }
+        release {
+            minifyEnabled false
+            // Development APKs use Android's dedicated debug key. Publishing
+            // requires an explicitly supplied release signing configuration.
+        }
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    sourceSets {
+        main {
+            jniLibs.srcDirs = [providers.gradleProperty('safehouseJniDir').getOrElse('src/main/jniLibs')]
+            assets.srcDirs = [providers.gradleProperty('safehouseAssetsDir').getOrElse('src/main/assets')]
+        }
+    }
+    packaging {
+        jniLibs { useLegacyPackaging true }
+        resources { excludes += ['META-INF/LICENSE*', 'META-INF/NOTICE*'] }
+    }
+}
+
+dependencies {
+    // Plain JVM tests of the platform-free touch layout (TouchLayoutTest).
+    testImplementation 'junit:junit:4.13.2'
+}

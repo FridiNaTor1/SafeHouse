@@ -19,7 +19,8 @@ struct SW;
 void InitMenu(SW* psw);        // orig 0x001AE928 (+ the card dialogs' 0x1DA770): after a world load
 void UpdateMenu(SW* psw);      // orig 0x001AEEE0 and the card dialog's 0x1ACCC8, every frame
 bool FMenuShown();             // orig 0x001D9880 on 0x3D9ED0 / 0x2E6550 / 0x3DA4F0 (the episode menu waits)
-bool FMenuActive();            // the menu is in the HUD's list (the game paused under it)
+bool FMenuActive();
+int NMenuState();              // orig 0x3DA0B8 (MENU +0x1E8): 0 none; the cheat codes (cheat.h) read it            // the menu is in the HUD's list (the game paused under it)
 bool FCardMessageActive();     // orig 0x001D9880 on the card widget 0x2E6550
 // orig 0x001B0290: the pause menu (false when it cannot open now)
 bool FOpenPauseMenu(SW* psw);
@@ -45,3 +46,6 @@ bool FCardSettled();
 
 // orig 0x001D8FF8: a record's settings take effect (the mixer mode, the music and effects volumes)
 void ApplyGameSettings(const GAMESAVE& gs);
+// (PC, Settings.ini) the current record's option flags set to the options (display.h GAMEOPTS); nothing in headless
+// runs, where the record's flags are the options as in the original
+void SyncOptionsToRecord();

@@ -36,8 +36,8 @@ public:
         if (fs::is_regular_file(file, ec)) {
             try {
                 const json r = readJson(file);
-                if (r.value("ok", false)) shell.toast("SafeHouse was updated to " + update::text(r, "version") + ".");
-                else shell.toast("SafeHouse could not be updated: " + update::text(r, "message"), false);
+                if (r.value("ok", false)) shell.toast(trf("SafeHouse was updated to %s.", update::text(r, "version").c_str()));
+                else shell.toast(trf("SafeHouse could not be updated: %s", tr(update::text(r, "message")).c_str()), false);
             } catch (...) {
             }
             fs::remove(file, ec);
@@ -62,8 +62,8 @@ public:
             m_package = update::packageFor(m_release, m_install);
             const bool skipped = m_backend.config.value("skipped_update", std::string{}) == m_release.tag;
             if (m_manual || (!skipped && !gameRunning)) m_openDialog = true;
-        } else if (phase == Phase::UpToDate && m_manual) shell.toast("SafeHouse is up to date (" + update::describe(update::current()) + ").");
-        else if (phase == Phase::CheckFailed && m_manual) shell.toast("Could not check for updates: " + m_shared->error, false);
+        } else if (phase == Phase::UpToDate && m_manual) shell.toast(trf("SafeHouse is up to date (%s).", update::describe(update::current()).c_str()));
+        else if (phase == Phase::CheckFailed && m_manual) shell.toast(trf("Could not check for updates: %s", tr(m_shared->error).c_str()), false);
         else if (phase == Phase::Ready) m_plan = m_shared->plan;
         else if (phase == Phase::Failed) {
             m_error = m_shared->error;
@@ -81,21 +81,21 @@ public:
     // Settings > Launcher.
     template <class Describe> void settingsRows(Describe describe, bool fixture) {
         if (!available() && !fixture) {
-            linkRow("Version", update::describe(update::current()).c_str(), nullptr, Icon::None);
-            describe("A development build: it does not check for updates.");
+            linkRow(tr("Version"), update::describe(update::current()).c_str(), nullptr, Icon::None);
+            describe(tr("A development build: it does not check for updates."));
             return;
         }
         bool on = checkSetting();
-        if (toggleRow("Check for updates", &on) && !fixture) setCheckSetting(on);
-        describe("When the launcher starts, asks GitHub whether a newer SafeHouse exists. Only the launcher's version is sent.");
+        if (toggleRow(tr("Check for updates"), &on) && !fixture) setCheckSetting(on);
+        describe(tr("When the launcher starts, asks GitHub whether a newer SafeHouse exists. Only the launcher's version is sent."));
         const bool checking = m_seen == Phase::Checking;
-        m_versionText = checking ? "Checking…" : update::describe(update::current());
-        if (linkRow("Check for updates now", m_versionText.c_str(), nullptr, Icon::Refresh) && !checking && !fixture) checkNow();
-        describe("Looks for a newer version now. Your version is shown on the right.");
+        m_versionText = checking ? tr("Checking…") : update::describe(update::current());
+        if (linkRow(tr("Check for updates now"), m_versionText.c_str(), nullptr, Icon::Refresh) && !checking && !fixture) checkNow();
+        describe(tr("Looks for a newer version now. Your version is shown on the right."));
         if (m_seen == Phase::Available || m_seen == Phase::Downloading || m_seen == Phase::Ready) {
             m_availableText = m_release.version;
-            if (linkRow("Update available", m_availableText.c_str(), nullptr, Icon::ChevronRight)) m_openDialog = true;
-            describe("Shows what is new and updates SafeHouse.");
+            if (linkRow(tr("Update available"), m_availableText.c_str(), nullptr, Icon::ChevronRight)) m_openDialog = true;
+            describe(tr("Shows what is new and updates SafeHouse."));
         }
     }
 
@@ -114,7 +114,7 @@ public:
                  : screen == "update-failed" ? Phase::Failed : Phase::Available;
         m_shared->done = 112592592;
         m_shared->total = 187654321;
-        m_error = "The download is damaged (its SHA-256 does not match the release). Nothing was changed.";
+        m_error = tr("The download is damaged (its SHA-256 does not match the release). Nothing was changed.");
         m_fixture = true;
         m_openDialog = true;
     }
@@ -223,7 +223,7 @@ private:
     }
     static std::string megabytes(uint64_t bytes) {
         char text[32];
-        std::snprintf(text, sizeof text, "%.1f MB", static_cast<double>(bytes) / 1e6);
+        std::snprintf(text, sizeof text, tr("%.1f MB"), static_cast<double>(bytes) / 1e6);
         return text;
     }
     // GitHub's release notes (Markdown) as plain lines: headings and bullets kept, tables and markup left out.
@@ -249,17 +249,17 @@ private:
             out += clean + "\n";
         }
         while (!out.empty() && (out.back() == '\n' || out.back() == ' ')) out.pop_back();
-        return out.empty() ? "No release notes." : out;
+        return out.empty() ? tr("No release notes.") : out;
     }
     void header(const char* title) {
         heading(title);
         const auto b = build();
         const int days = update::daysBehind(b.date, m_release.date);
-        std::string line = "Released " + (m_release.date.size() >= 10 ? m_release.date.substr(0, 10) : std::string("recently")) + ". You have " +
-                           update::describe(b) + ".";
+        std::string line = (m_release.date.size() >= 10 ? trf("Released %s.", m_release.date.substr(0, 10).c_str()) : std::string(tr("Released recently."))) + " " +
+                           trf("You have %s.", update::describe(b).c_str());
         textWrapped(line.c_str(), fonts().body, color::text2);
         if (days > 0) {
-            const std::string old = "Your build is " + std::to_string(days) + (days == 1 ? " day old." : " days old.");
+            const std::string old = days == 1 ? std::string(tr("Your build is 1 day old.")) : trf("Your build is %d days old.", days);
             textWrapped(old.c_str(), fonts().body, days >= 30 ? color::warning : color::text);
         }
     }
@@ -278,10 +278,10 @@ private:
         }
     }
     void offer(bool back) {
-        const std::string title = "SafeHouse " + m_release.version + " is available";
+        const std::string title = trf("SafeHouse %s is available", m_release.version.c_str());
         header(title.c_str());
         gap(6);
-        overline("WHAT'S NEW");
+        overline(tr("WHAT'S NEW"));
         gap(2);
         ImGui::PushStyleColor(ImGuiCol_ChildBg, vec(color::bg));
         ImGui::BeginChild("update-notes", { 0, px(200) }, ImGuiChildFlags_Border);
@@ -299,16 +299,16 @@ private:
         gap(4);
         const bool can = m_package.has_value();
         if (can) {
-            const std::string what = "Downloads " + m_package->file + " (" + megabytes(m_package->size) +
-                                     ") and restarts SafeHouse. Your games, saves and settings are not changed.";
+            const std::string what = trf("Downloads %s (%s) and restarts SafeHouse. Your games, saves and settings are not changed.",
+                                         m_package->file.c_str(), megabytes(m_package->size).c_str());
             caption(what.c_str(), color::muted);
         } else {
-            caption((m_install.reason.empty() ? std::string("This release has no package that can update this copy of SafeHouse.")
-                                              : m_install.reason).c_str(), color::warning);
+            caption((m_install.reason.empty() ? std::string(tr("This release has no package that can update this copy of SafeHouse."))
+                                              : tr(m_install.reason)).c_str(), color::warning);
         }
         gap(8);
         int pressed = -1;
-        buttonsRow({ { "Skip this version", Tone::Quiet }, { "Later", Tone::Secondary }, { can ? "Update now" : "Open download page", Tone::Cta } }, &pressed);
+        buttonsRow({ { tr("Skip this version"), Tone::Quiet }, { tr("Later"), Tone::Secondary }, { can ? tr("Update now") : tr("Open download page"), Tone::Cta } }, &pressed);
         if (pressed == 0) {
             if (!m_fixture) {
                 m_backend.config["skipped_update"] = m_release.tag;
@@ -326,9 +326,9 @@ private:
         }
     }
     void downloading(bool back) {
-        const std::string title = "Updating to SafeHouse " + m_release.version;
+        const std::string title = trf("Updating to SafeHouse %s", m_release.version.c_str());
         heading(title.c_str());
-        textWrapped("Downloading and checking the new version. SafeHouse restarts when it is ready; your games, saves and settings are not changed.",
+        textWrapped(tr("Downloading and checking the new version. SafeHouse restarts when it is ready; your games, saves and settings are not changed."),
                     fonts().body, color::text2);
         gap(10);
         const uint64_t done = m_shared->done, total = m_shared->total;
@@ -341,38 +341,38 @@ private:
         recordLayout("update-progress", ImRect(p, { p.x + w, p.y + px(8) }));
         ImGui::Dummy({ w, px(8) });
         gap(4);
-        const std::string amount = megabytes(done) + (total ? " of " + megabytes(total) : std::string{});
+        const std::string amount = total ? trf("%s of %s", megabytes(done).c_str(), megabytes(total).c_str()) : megabytes(done);
         caption(amount.c_str(), color::text2);
         gap(8);
         int pressed = -1;
-        buttonsRow({ { "Cancel", Tone::Secondary } }, &pressed);
+        buttonsRow({ { tr("Cancel"), Tone::Secondary } }, &pressed);
         if ((pressed == 0 || back) && !m_fixture) {
             m_shared->cancel = true;
             ImGui::CloseCurrentPopup();
         }
     }
     void ready(bool busy, bool back) {
-        const std::string title = "SafeHouse " + m_release.version + " is ready";
+        const std::string title = trf("SafeHouse %s is ready", m_release.version.c_str());
         heading(title.c_str());
-        textWrapped(busy || m_fixture ? "SafeHouse restarts to finish the update as soon as the game or the current task ends."
-                                      : "Restarting SafeHouse…",
+        textWrapped(busy || m_fixture ? tr("SafeHouse restarts to finish the update as soon as the game or the current task ends.")
+                                      : tr("Restarting SafeHouse…"),
                     fonts().body, color::text2);
         gap(8);
         int pressed = -1;
-        buttonsRow({ { "Update when I close SafeHouse", Tone::Secondary } }, &pressed);
+        buttonsRow({ { tr("Update when I close SafeHouse"), Tone::Secondary } }, &pressed);
         if ((pressed == 0 || back) && !m_fixture) {
             m_restart = false;
             ImGui::CloseCurrentPopup();
         }
     }
     void failed(bool back) {
-        heading("SafeHouse could not be updated");
+        heading(tr("SafeHouse could not be updated"));
         textWrapped(m_error.c_str(), fonts().body, color::warning);
         gap(4);
-        caption("You can also download the new version from the releases page.", color::text2);
+        caption(tr("You can also download the new version from the releases page."), color::text2);
         gap(8);
         int pressed = -1;
-        buttonsRow({ { "Close", Tone::Secondary }, { "Open download page", Tone::Primary } }, &pressed);
+        buttonsRow({ { tr("Close"), Tone::Secondary }, { tr("Open download page"), Tone::Primary } }, &pressed);
         if (pressed == 1 && !m_fixture) openPage();
         if ((pressed >= 0 || back) && !m_fixture) {
             std::lock_guard lock(m_shared->mutex);
