@@ -6,9 +6,10 @@
 #   workflow_call       from build.yml, with the release version, its build date and commit
 #   workflow_dispatch   this workflow alone, by hand
 #
-# The .ipa is signed ad hoc, for sideloading tools (AltStore, SideStore, a developer's own signing). With the secrets
-# APPLE_CERT_P12_BASE64, APPLE_CERT_PASSWORD, APPLE_PROVISIONING_PROFILE_BASE64 and APPLE_TEAM_ID (optional:
-# APPLE_BUNDLE_ID, the profile's app id) it is signed with that certificate and profile as well (a second .ipa).
+# The .ipa is signed ad hoc: it is sideloaded (AltStore, SideStore, Sideloadly with a free Apple ID; packaging/README.md),
+# which signs it again. It needs no entitlements. (Dormant: with the secrets APPLE_CERT_P12_BASE64,
+# APPLE_CERT_PASSWORD, APPLE_PROVISIONING_PROFILE_BASE64 and APPLE_TEAM_ID, optionally APPLE_BUNDLE_ID, a second .ipa
+# signed with that certificate and profile is made too; none are set.)
 name: iOS app
 
 on:

@@ -1,7 +1,7 @@
 # SafeHouse
 
-SafeHouse is an offline launcher with native PC ports of the Sly Cooper games, for Linux (including the Steam Deck)
-and Windows:
+SafeHouse is an offline launcher with native PC ports of the Sly Cooper games, for Linux (including the Steam Deck),
+Windows, macOS and iPhone / iPad:
 
 - **Sly Cooper and the Thievius Raccoonus** (Sly 1): USA, Europe, Japan and Korea discs.
 - **Sly 2: Band of Thieves**: USA, Europe (v1.00 and v2.01) and Japan discs.
@@ -21,12 +21,33 @@ Entertainment or Sucker Punch Productions.
 | `SafeHouse-Launcher-Windows-x86_64-Setup.exe` | Installs for your Windows account into `%LOCALAPPDATA%\Programs\SafeHouse`, with a Start Menu entry. |
 | `SafeHouse-Launcher-Windows-x86_64-Portable.zip` | Extract it into a writable folder and open **SafeHouse.exe**. Keep `portable.txt` beside `bin`. |
 | `SafeHouse-Launcher-macOS-arm64.dmg` / `-x86_64.dmg` (macOS, Apple silicon / Intel; Sly 2 only for now) | Drag **SafeHouse** to Applications, then open it with right-click > **Open** the first time. |
+| `SafeHouse-iOS.ipa` (iPhone and iPad, iOS / iPadOS 15 or newer; Sly 2 only, in testing) | Sideload it (see **iPhone and iPad** below). |
 
 Then pick a game, choose **Install** and select (or drag in) your disc image. The image is checked first: the game,
 the region, the free space needed, and whether the image is complete. When the install is done, choose **Play**.
 
 On the Steam Deck, install in Desktop Mode, then use **Add to Steam** on the game's page (exit Steam first, or
 restart it afterwards). Run the Linux package natively; do not force Proton.
+
+## iPhone and iPad
+
+SafeHouse is not in the App Store: install `SafeHouse-iOS.ipa` with a sideloading tool and a free Apple ID (no paid
+developer account is needed, and the app asks for nothing a free account cannot grant).
+
+- **AltStore** (with AltServer on a Mac or Windows PC) or **SideStore** (on the device, after a one-time setup with a
+  computer): add the `.ipa` in the app's **My Apps** tab. Both refresh the app's signature in the background.
+- **Sideloadly** (Mac or Windows): connect the device, drop the `.ipa` in, sign in with your Apple ID.
+
+With a free Apple ID the signature lasts **7 days**: refresh it before then (AltStore / SideStore do it on their own
+when they can reach their server; with Sideloadly install again), or the app stops opening until you do. A free
+account can have **3 sideloaded apps** at a time. The first start may need **Settings > General > VPN & Device
+Management** > your Apple ID > **Trust**, and on iOS 16 or newer **Settings > Privacy & Security > Developer Mode**.
+
+To install a game, choose **Browse…** on its Install page and pick your disc image in the file picker (it is copied
+into the app, about 3 GB for Sly 2, and removed after the install unless **Settings > Games > Keep imported disc
+images** is on), or copy the image into SafeHouse's folder with the **Files** app first. Play with the on-screen
+controls or a controller (Xbox, PlayStation, MFi); connecting a controller hides the touch controls. After quitting a
+game, close SafeHouse in the app switcher and open it again to start another session.
 
 ## Where your files are
 
@@ -36,6 +57,7 @@ restart it afterwards). Run the Linux package natively; do not force Proton.
 | Windows setup | `%LOCALAPPDATA%\SafeHouse\installations` | `%LOCALAPPDATA%\SafeHouse\user` (Sly 2: `sly2\`) |
 | Windows portable | `data\installations` beside `bin` | `data\user` beside `bin` |
 | macOS | `~/Library/Application Support/SafeHouse/installations` | `~/Library/Application Support/SafeHouse/user` |
+| iPhone / iPad | **Files** > **On My iPhone / iPad** > **SafeHouse** > `installations` | the same folder's `user` (Sly 2: `sly2/`) |
 
 Until 2026-11-10 these folders had the project's old name (`projectcane` on Linux, `ProjectCane` on Windows). The first start of a newer launcher moves them to `SafeHouse` once: games, saves, settings, mods and logs carry over, and paths stored in the launcher's settings are updated. If both folders exist, files the new folder already has win and differing old versions are kept in `ProjectCane leftovers` inside it; nothing is deleted before it is in the new place. **Settings > Games > Install games to** puts new installations in another folder or on another drive (they go to a `SafeHouse` folder there); **Move…** moves an installed game. Re-extracting or uninstalling a game never touches your saves.
 

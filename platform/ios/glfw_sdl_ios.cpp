@@ -488,6 +488,7 @@ void glfwTerminate() {
     joystickCallback = nullptr;
     SDL_QuitSubSystem(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER | SDL_INIT_EVENTS);
 }
+void glfwInitHint(int, int) {}
 void glfwWindowHint(int hint, int value) {
     if (hint == GLFW_VISIBLE) visibleHint = value != 0;
     else if (hint == GLFW_CLIENT_API) noApiHint = value == GLFW_NO_API;

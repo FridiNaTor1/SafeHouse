@@ -66,11 +66,11 @@ target_include_directories(SafeHouseCore PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/pl
 target_compile_options(SafeHouseCore PRIVATE -fobjc-arc)
 target_link_libraries(SafeHouseCore PRIVATE "$<LINK_LIBRARY:WHOLE_ARCHIVE,SDL2-static>" "-framework Foundation" "-framework UIKit"
  "-framework GameController" "-framework QuartzCore" "-framework UniformTypeIdentifiers" "-framework CoreGraphics")
-# (the programs see SDL's headers and link SDL from SafeHouseCore; Sly2-Release/CMakeLists.txt links SDL2::SDL2)
+# (the programs see SDL's headers and link SDL from SafeHouseCore: cane_sdl; Sly2-Release/CMakeLists.txt's CANE_IOS)
 add_library(cane_sdl INTERFACE)
 target_include_directories(cane_sdl INTERFACE ${cane_sdl_includes})
 target_link_libraries(cane_sdl INTERFACE SafeHouseCore)
-add_library(SDL2::SDL2 ALIAS cane_sdl)
+# (SDL2::SDL2 is SDL's own alias of SDL2-static: nothing here links it but SafeHouseCore)
 
 # The frameworks: @rpath install names; the app's Frameworks folder holds them all (scripts/ios/package.py)
 function(cane_ios_framework target name)

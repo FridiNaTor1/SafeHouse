@@ -351,14 +351,22 @@ void attachTouchOverlay(void* uiWindow) {
       if (!connectObserver) {
           NSNotificationCenter* center = NSNotificationCenter.defaultCenter;
           connectObserver = [center addObserverForName:GCControllerDidConnectNotification object:nil queue:NSOperationQueue.mainQueue
-                                            usingBlock:^(NSNotification*) { detectPhysical(); }];
+                                            usingBlock:^(NSNotification* note) {
+                                                (void)note;
+                                                detectPhysical(); }];
           disconnectObserver = [center addObserverForName:GCControllerDidDisconnectNotification object:nil queue:NSOperationQueue.mainQueue
-                                               usingBlock:^(NSNotification*) { detectPhysical(); }];
+                                               usingBlock:^(NSNotification* note) {
+                                                (void)note;
+                                                detectPhysical(); }];
           if (@available(iOS 14.0, *)) {
               [center addObserverForName:GCKeyboardDidConnectNotification object:nil queue:NSOperationQueue.mainQueue
-                              usingBlock:^(NSNotification*) { detectPhysical(); }];
+                              usingBlock:^(NSNotification* note) {
+                                                (void)note;
+                                                detectPhysical(); }];
               [center addObserverForName:GCKeyboardDidDisconnectNotification object:nil queue:NSOperationQueue.mainQueue
-                              usingBlock:^(NSNotification*) { detectPhysical(); }];
+                              usingBlock:^(NSNotification* note) {
+                                                (void)note;
+                                                detectPhysical(); }];
           }
       }
       overlay.hidden = NO;

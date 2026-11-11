@@ -352,7 +352,8 @@ jobs:
       build-date: ${{ needs.version.outputs.date }}
       commit: ${{ needs.version.outputs.commit }}
 
-  # iOS / iPadOS (ios.yml): the .ipa and a simulator start. Not part of the release yet (the app is in testing).
+  # iOS / iPadOS (ios.yml): the .ipa (sideloaded; no App Store) and a simulator start. The release attaches the .ipa
+  # when this job succeeded and is published without it otherwise.
   ios:
     name: iOS
     needs: version
@@ -365,9 +366,13 @@ jobs:
 
   release:
     name: Publish the release
-    needs: [version, linux, windows, windows-smoke, macos, switch, android]
+    needs: [version, linux, windows, windows-smoke, macos, switch, android, ios]
     # Only from the public repository's main branch, and only when every package built and the Windows ones started.
-    if: ${{ github.repository == 'FridiNaTor1/SafeHouse' && needs.version.outputs.publish == 'true' }}
+    # The iOS .ipa is attached when its job succeeded; its failure does not hold the release back.
+    if: >-
+      ${{ !cancelled() && github.repository == 'FridiNaTor1/SafeHouse' && needs.version.outputs.publish == 'true'
+      && needs.linux.result == 'success' && needs.windows.result == 'success' && needs.windows-smoke.result == 'success'
+      && needs.macos.result == 'success' && needs.switch.result == 'success' && needs.android.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
@@ -425,6 +430,7 @@ jobs:
           | macOS, Intel | `SafeHouse-Launcher-macOS-x86_64.dmg` |
           | Nintendo Switch (homebrew, copy to `sdmc:/switch/SafeHouse/`) | `SafeHouse.nro` |
           | Android and Meta Quest (preview) | `SafeHouse-Android-arm64-v8a.apk` |
+          | iPhone and iPad (sideload with AltStore, SideStore or Sideloadly; in testing) | `SafeHouse-iOS.ipa` |
 
           The launcher updates itself (Settings > Launcher > Check for updates). SHA-256 checksums are in `SHA256SUMS`.
           On macOS, open the app with right-click > Open the first time. The packages contain no game data.
