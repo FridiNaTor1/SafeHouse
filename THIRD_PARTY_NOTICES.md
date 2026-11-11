@@ -10,7 +10,7 @@ The release packages for Windows and Linux ship a small FFmpeg (LGPL 2.1, shared
 
 AppImages embed the MIT-licensed type2-runtime release 20251108, pinned by SHA-256. Its source is https://github.com/AppImage/type2-runtime/tree/dd6cebedcbddde9c82f89b011e8e1d40b6e43868 and its license is shipped in `licenses/appimage-runtime.txt`.
 
-Vulkan (Sly 2's optional Vulkan renderer, `platform/vulkan/`): the Vulkan headers 1.4.321 by the Khronos Group (Apache-2.0, `Libraries/include/vulkan/`, `Libraries/include/vk_video/`); the licence text is in `licenses/vulkan-headers/`. The Vulkan loader is the system's (installed with the GPU driver), loaded at run time; the game falls back to OpenGL without it.
+Vulkan (Sly 2's Vulkan renderer, `platform/vulkan/`, the default on Linux and Windows): the Vulkan headers 1.4.321 by the Khronos Group (Apache-2.0, `Libraries/include/vulkan/`, `Libraries/include/vk_video/`); the licence text is in `licenses/vulkan-headers/`. The Vulkan loader is the system's (installed with the GPU driver), loaded at run time; the game falls back to OpenGL without it.
 
 VR (Sly 2's optional OpenXR mode, `Sly2-Release/vr.cpp`): the OpenXR headers 1.1.63 by the Khronos Group (Apache-2.0 OR MIT, `Libraries/include/openxr/`) and, where VR is used, the Khronos OpenXR loader (Apache-2.0): the system's loader on Linux, `openxr_loader.dll` on Windows, and on Android the loader from Maven Central's `org.khronos.openxr:openxr_loader_for_android:1.1.63`. Sources, checksums and both licence texts are in `licenses/openxr/`. The game does not need the loader to start.
 

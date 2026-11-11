@@ -70,7 +70,16 @@ you downloaded it from this repository's Releases page.
 - Lower **Settings > Graphics > Internal resolution** and **MSAA**.
 - On weak integrated GPUs, **Fullscreen** usually performs better than **Borderless** or **Windowed**.
 - A frame-rate limit equal to your monitor's refresh rate (or half of it) with VSync on gives the smoothest result.
-- The games need OpenGL 4.3 (Metal on macOS).
+- The games need OpenGL 4.3 (Metal on macOS). Sly 2 uses Vulkan 1.3 where the driver has it and OpenGL
+  otherwise; if one renderer runs badly on your GPU, try the other in **Settings > Graphics > Renderer**.
+
+## Sly 2 uses OpenGL instead of Vulkan
+
+On Windows and Linux Sly 2 starts on Vulkan and switches to OpenGL by itself when the graphics driver cannot run
+it (no Vulkan 1.3 driver, a missing feature, an error while starting). The game's log says why, in a line that starts
+with `Vulkan:` or `Renderer:`. After a Vulkan start that failed (a crash or a driver error while starting), **Auto**
+stays on OpenGL until a new version of the game: choose **Vulkan** in **Settings > Graphics > Renderer** to try again,
+then **Auto** once it works. Deleting `vulkan-start.txt` from the game's folder in your profile does the same.
 
 ## The controller does not work, or shows the wrong buttons
 

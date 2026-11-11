@@ -1,8 +1,10 @@
 #pragma once
-// Which renderer draws Sly 2: OpenGL (gl.cpp, as always) or Vulkan (platform/vulkan/gl_vulkan.h: the same GL calls run
-// on Vulkan; Linux and Windows builds with CANE_VULKAN). Chosen by Settings.ini ([Graphics] Renderer), --renderer or
-// SLY2N_RENDERER (auto / vulkan / opengl); Vulkan falls back to OpenGL, with the reason in the log, when it cannot
-// start. VR runs on OpenGL. notes/VULKAN_2026-11-10.md.
+// Which renderer draws the game: Vulkan (platform/vulkan/gl_vulkan.h: the same GL calls run on Vulkan; Linux and Windows
+// builds with CANE_VULKAN) or OpenGL (gl.cpp, as always). Chosen by Settings.ini ([Graphics] Renderer), --renderer or
+// SLY2N_RENDERER (auto / vulkan / opengl). Auto is Vulkan with OpenGL as the fallback (platform/renderer_choice.h): when
+// Vulkan cannot start the game comes up on OpenGL in the same run, with the reason in the log, and a start that did not
+// finish is remembered so the next Auto start uses OpenGL. VR runs on OpenGL. notes/VULKAN_2026-11-10.md,
+// notes/VULKAN_DEFAULT_2026-11-10.md.
 #include <string>
 
 struct GLFWwindow;
@@ -17,6 +19,8 @@ bool FParseRenderer(const char* sz, RENDERER* prenderer);
 bool FRendererVulkan();
 // "Vulkan" or "OpenGL" (the log, the debug menu).
 const char* SzRendererName();
+// (main.cpp) the command line, so that a Vulkan error in the first seconds restarts the game on OpenGL (Linux)
+void SetRendererRelaunch(int argc, char** argv);
 // (gl.cpp GL::FInit) the game's window on Vulkan when Vulkan is chosen and starts; nullptr: OpenGL (why is logged).
 GLFWwindow* PwindowVulkan(int width, int height, bool fVisible, const char* title);
 // (gl.cpp GLSHADER) a program compiled at build time for Vulkan; 0 when that variant does not exist.

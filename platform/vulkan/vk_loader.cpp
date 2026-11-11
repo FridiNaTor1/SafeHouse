@@ -1,6 +1,8 @@
 // The Vulkan loader opened at run time: see vk_loader.h.
 #include "vk_loader.h"
 
+#include <cstdlib>
+
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -34,6 +36,19 @@ void* Symbol(const char* name) { return dlsym(g_library, name); }
 bool LoadLoader(std::string* error)
 {
     if (vkGetInstanceProcAddr) return true;
+    // (tests: SLY2N_VKLOADER=<library> loads that library instead of the system's loader; a name that does not exist
+    // is a machine without Vulkan)
+    const char* szOverride = std::getenv("SLY2N_VKLOADER");
+    if (szOverride && *szOverride)
+    {
+#if defined(_WIN32)
+        g_library = LoadLibraryA(szOverride);
+#else
+        g_library = dlopen(szOverride, RTLD_NOW | RTLD_LOCAL);
+#endif
+    }
+    else
+    {
 #if defined(_WIN32)
     g_library = LoadLibraryA("vulkan-1.dll");
 #elif defined(__APPLE__)
@@ -43,6 +58,7 @@ bool LoadLoader(std::string* error)
     g_library = dlopen("libvulkan.so.1", RTLD_NOW | RTLD_LOCAL);
     if (!g_library) g_library = dlopen("libvulkan.so", RTLD_NOW | RTLD_LOCAL);
 #endif
+    }
     if (!g_library)
     {
         if (error) *error = "no Vulkan loader on this system";

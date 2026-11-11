@@ -768,10 +768,13 @@ private:
     }
     static std::string percent(int v) { return std::to_string(v) + "%"; }
     void displayRows() {
+#if !defined(CANE_ANDROID)
+        // (Android: the system places the window, in DeX too; nothing to choose)
         const std::vector<std::string> modes{ tr("Windowed"), tr("Borderless"), tr("Fullscreen") };
         int mode = m_settings.windowMode;
         if (stepperRow(tr("Window mode"), &mode, modes)) m_settings.windowMode = mode, commit();
         describe(tr("Borderless fills the screen without changing its resolution."));
+#endif
         toggle(tr("VSync"), m_settings.vsyncEnabled, tr("Matches the frame rate to the display to stop tearing."));
         const std::vector<std::string> aspects{ tr("Fit to screen"), "4:3", "16:9", "16:10", tr("4:3 (PS2)"), tr("16:9 (PS2)") };
         int aspect = m_settings.aspectMode;
@@ -833,13 +836,15 @@ private:
             toggle(tr("Fast shadows"), m_settings.fastShadows,
                    tr("Character shadows with less GPU work, for low-end devices. The picture stays nearly the same."));
 #if defined(_WIN32) || (defined(__linux__) && !defined(__ANDROID__))
-        // (settings v21 renderer: Sly2-Release renderer.h; Vulkan where the build has it, OpenGL the fallback)
+        // (settings v21 renderer: Sly2-Release renderer.h, platform/renderer_choice.h: Auto is Vulkan with OpenGL the
+        // fallback; Linux and Windows, where the game has the Vulkan renderer)
         if (m_game == GameId::Sly2) {
-            const std::vector<std::string> renderers{ tr("Automatic"), "Vulkan", "OpenGL" };
+            const std::vector<std::string> renderers{ tr("Auto (Vulkan)"), "Vulkan", "OpenGL" };
             int renderer = std::clamp(m_settings.renderer, 0, 2);
             if (stepperRow(tr("Renderer"), &renderer, renderers)) m_settings.renderer = renderer, commit();
-            describe(tr("Auto uses OpenGL for now. Vulkan falls back to OpenGL by itself when the graphics driver cannot run "
-                        "it. Takes effect the next time the game starts."));
+            describe(tr("Auto uses Vulkan and switches to OpenGL by itself when the graphics driver cannot run Vulkan. After a "
+                        "Vulkan start that failed, Auto stays on OpenGL until Vulkan is chosen here. Takes effect the next "
+                        "time the game starts."));
         }
 #endif
         if (m_game != GameId::Sly1) return;   // (Sly 2 has no fog option)

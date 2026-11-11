@@ -276,8 +276,8 @@ struct SystemSettings {
     // DrawShadow2): the cast shadows with less stencil fill (nearly the same picture). Default off; on for a new
     // Android profile (the Quest: GPU-bound). v19 files load with the platform's default.
     int fastShadows;              // 0/1
-    // v21, offset 344 (Sly 2): the renderer (Sly2-Release renderer.h): 0 Auto, 1 Vulkan, 2 OpenGL. Auto is OpenGL
-    // until Vulkan is the default (notes/VULKAN_2026-11-10.md); Vulkan falls back to OpenGL when it cannot start.
+    // v21, offset 344 (Sly 2): the renderer (Sly2-Release renderer.h): 0 Auto, 1 Vulkan, 2 OpenGL. Auto is Vulkan
+    // with OpenGL as the fallback (platform/renderer_choice.h); Vulkan chosen falls back to OpenGL too when it cannot start.
     int renderer;
 };
 static_assert(sizeof(Header) == 20);

@@ -2,6 +2,7 @@
 // Development commands for now; the game loop comes with milestone M2/M3.
 
 #include "renderer.h"
+#include "renderer_choice_test.h"
 #include "audio.h"
 #include "../platform/audio_devices.h"
 #include "rumble.h"
@@ -281,6 +282,7 @@ int main(int argc, char** argv)
     std::signal(SIGSEGV, OnCrashSignal);
     std::signal(SIGABRT, OnCrashSignal);
 #endif
+    SetRendererRelaunch(argc, argv);   // (renderer.h: a Vulkan error in the first seconds restarts on OpenGL)
     // the mods' audio tools (audiomod.cpp: --make-music, --make-vpk, --make-vag, --export-wav): no game data needed
     {
         int AudioToolMain(int, char**);
@@ -360,6 +362,7 @@ int main(int argc, char** argv)
         else if (!std::strcmp(argv[i], "--splice-selftest")) command = "splice-selftest";
         else if (!std::strcmp(argv[i], "--action-input-selftest")) command = "action-input-selftest";
         else if (!std::strcmp(argv[i], "--settings-selftest")) command = "settings-selftest";
+        else if (!std::strcmp(argv[i], "--renderer-selftest")) command = "renderer-selftest";
         else if (!std::strcmp(argv[i], "--rumble-selftest")) command = "rumble-selftest";
         else if (!std::strcmp(argv[i], "--audio-selftest")) { command = "audio-selftest"; if (i + 1 < argc && argv[i + 1][0] != '-') arg = argv[++i]; }
         else if (!std::strcmp(argv[i], "--list-audio-devices")) command = "list-audio-devices";
@@ -488,6 +491,9 @@ int main(int argc, char** argv)
     if (command && !std::strcmp(command, "world-pack")) return WorldPackCommand(arg, arg2);
     if (command && !std::strcmp(command, "action-input-selftest")) return sly2actions::SelfTest();
     if (command && !std::strcmp(command, "settings-selftest")) { int SettingsSelfTest(); return SettingsSelfTest(); }   // (settings_test.cpp)
+    // (platform/renderer_choice.h: Auto / Vulkan / OpenGL, the fallback's start marker; no GPU needed)
+    if (command && !std::strcmp(command, "renderer-selftest"))
+        return cane::renderer::selfTest([](const char* sz) { RENDERER r; return FParseRenderer(sz, &r) ? int(r) : -1; });
     if (command && !std::strcmp(command, "rumble-selftest")) return RumbleSelfTestCommand();
     if (command && !std::strcmp(command, "language-selftest")) return LanguageSelfTest();
     // (audio.h, notes/AUDIO_2026-11-10.md) the devices by name, their fallback / recovery, the USB headset's microphone
@@ -764,7 +770,7 @@ int main(int argc, char** argv)
     std::fprintf(stderr,
                  "usage: Sly2-Release [--disc disc.iso | --data-dir dir] --list-keys | --dump-world VA|SECTOR:CB [--out file]\n"
                  "       | --load-world W|boot|frontend [--filter N] [--load-trace map.txt] [--dump-objects [file]]\n"
-                 "       | --parse-splice W | --eval-splice W [--maps dir] [-v] | --splice-selftest | --rumble-selftest | --action-input-selftest | --settings-selftest\n"
+                 "       | --parse-splice W | --eval-splice W [--maps dir] [-v] | --splice-selftest | --rumble-selftest | --action-input-selftest | --settings-selftest | --renderer-selftest\n"
                  "       | --list-sounds W | --play-music W [--song ID] [--stem 0|1|2] | --play-sfx W [--song SOUNDID] | --play-dialog W [--song ID]\n"
                  "       | --list-movies | --play-movie ID [--out frames-dir] [--seconds T]   (W: boot, frontend, a world record 2..43, SECTOR:CB)\n"
                  "       | --convert DIR [--no-export-textures] | --export-textures [--out DIR] | --dump-textures DIR W\n");

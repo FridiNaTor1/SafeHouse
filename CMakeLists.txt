@@ -355,6 +355,9 @@ if(CANE_BUILD_SLY2)
   add_test(NAME sly2-action-input COMMAND Sly2-Release --action-input-selftest)
   # Settings.ini (platform/sly2_settings.h): round trip, hand-edited files, the migration from system_settings.dat
   add_test(NAME sly2-settings COMMAND Sly2-Release --settings-selftest)
+  # the renderer choice (platform/renderer_choice.h): Auto = Vulkan with OpenGL as the fallback, the explicit choices,
+  # VR, builds without Vulkan, the start marker of a Vulkan start that did not finish (no GPU needed)
+  add_test(NAME sly2-renderer COMMAND Sly2-Release --renderer-selftest)
   # the texture cache (platform/texture_cache.h, texmod.cpp): a new / changed / removed PNG, cut and damaged cache
   # files, the mods folder over a texture pack, on made-up PNGs in the build folder
   add_test(NAME sly2-texcache COMMAND Sly2-Release --texcache-selftest "${CMAKE_BINARY_DIR}/texcache-selftest")

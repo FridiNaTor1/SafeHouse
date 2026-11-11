@@ -38,6 +38,9 @@ can be turned off where it changes how the game looks or plays.
   floor in full instead of ending in a straight cut, which shows most at wide aspect ratios.
   **Settings > Graphics > Long shadows**; off gives the original's shadows exactly.
 - **Low-end GPUs:** weak integrated graphics start at a lower internal resolution on first launch.
+- **Vulkan (Sly 2):** on Windows and Linux (Steam Deck included) the game renders with Vulkan, and switches to
+  OpenGL by itself when the graphics driver cannot run Vulkan. **Settings > Graphics > Renderer** offers Auto,
+  Vulkan and OpenGL. macOS renders through Metal, the Switch through deko3d.
 
 ## Controls
 

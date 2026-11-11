@@ -66,6 +66,7 @@ constexpr uint32_t kPushBytes = 256;
 
 VkDeviceSize Align(VkDeviceSize v, VkDeviceSize a) { return (v + a - 1) / a * a; }
 
+void (*g_onFatal)(const char* why) = nullptr;   // (Options::onFatal)
 [[noreturn]] void Fatal(const char* fmt, ...)
 {
     char sz[512];
@@ -75,7 +76,23 @@ VkDeviceSize Align(VkDeviceSize v, VkDeviceSize a) { return (v + a - 1) / a * a;
     va_end(args);
     std::fprintf(stderr, "Vulkan: %s\n", sz);
     std::fflush(stderr);
+    if (auto onFatal = g_onFatal)
+    {
+        g_onFatal = nullptr;   // (once, also when the hook itself fails)
+        onFatal(sz);
+    }
     std::abort();
+}
+// (tests: SLY2N_VKFAIL=<stage>[,<stage>...] makes a stage fail as a driver would: feature (no device has a required
+// feature), oldloader / olddriver (a loader / driver older than Vulkan 1.3), device (vkCreateDevice), swapchain, program (no program compiled for Vulkan), pipeline (the first pipeline
+// creation), devicelost (the first submission))
+bool FForcedFailure(const char* stage)
+{
+    static const std::string s_list = [] {
+        const char* sz = std::getenv("SLY2N_VKFAIL");
+        return sz && *sz ? "," + std::string(sz) + "," : std::string();
+    }();
+    return !s_list.empty() && s_list.find("," + std::string(stage) + ",") != std::string::npos;
 }
 #define VKCHECK(call)                                                        \
     do {                                                                     \
@@ -1486,7 +1503,7 @@ void SubmitBatch(VkCommandBuffer* cmds, uint32_t n, uint64_t value, VkSemaphore 
     si.signalSemaphoreCount = signal ? 2 : 1;
     si.pSignalSemaphores = signals;
     const VkResult r = vkQueueSubmit(g_queue, 1, &si, VK_NULL_HANDLE);
-    if (r == VK_ERROR_DEVICE_LOST) Fatal("the GPU device was lost (a command faulted)");
+    if (r == VK_ERROR_DEVICE_LOST || FForcedFailure("devicelost")) Fatal("the GPU device was lost (a command faulted)");
     VKCHECK(r);
 }
 void BeginFrame()
@@ -2779,7 +2796,9 @@ VkPipeline CreatePipeline(const PipelineKey& k, const Program& p)
     ci.pDynamicState = &dy;
     ci.layout = g_pipelineLayout;
     VkPipeline pipeline;
-    VKCHECK(vkCreateGraphicsPipelines(g_device, g_pipelineCache, 1, &ci, nullptr, &pipeline));
+    const VkResult r = FForcedFailure("pipeline") ? VK_ERROR_INITIALIZATION_FAILED
+                                                  : vkCreateGraphicsPipelines(g_device, g_pipelineCache, 1, &ci, nullptr, &pipeline);
+    if (r != VK_SUCCESS) Fatal("vkCreateGraphicsPipelines failed (%d)", int(r));
     ++g_stats.pipelinesCreated;
     return pipeline;
 }
@@ -3848,6 +3867,7 @@ void DestroySwapchain()
     g_swapchain = VK_NULL_HANDLE;
     g_swapImages.clear();
 }
+VkPresentModeKHR g_swapMode = VK_PRESENT_MODE_MAX_ENUM_KHR;
 bool CreateSwapchain(std::string* error)
 {
     VkSurfaceCapabilitiesKHR caps;
@@ -3899,6 +3919,11 @@ bool CreateSwapchain(std::string* error)
         VKCHECK(vkCreateSemaphore(g_device, &si, nullptr, &sem));
     }
     g_swapFormat = chosen.format;
+    // (the log: what the window system gave; a tester's log then tells FIFO (VSync) from IMMEDIATE / MAILBOX)
+    if (extent.width != g_swapExtent.width || extent.height != g_swapExtent.height || mode != g_swapMode)
+        std::printf("Vulkan: swapchain %ux%u, %u images, %s\n", extent.width, extent.height, n,
+                    mode == VK_PRESENT_MODE_FIFO_KHR ? "FIFO (VSync)" : mode == VK_PRESENT_MODE_IMMEDIATE_KHR ? "IMMEDIATE" : "MAILBOX");
+    g_swapMode = mode;
     g_swapExtent = extent;
     g_swapchainStale = false;
     return true;
@@ -3987,7 +4012,7 @@ bool Initialize(GLFWwindow* window, const Options& options, std::string* error)
     if (!LoadLoader(error)) return false;
     uint32_t apiVersion = VK_API_VERSION_1_0;
     if (vkEnumerateInstanceVersion) vkEnumerateInstanceVersion(&apiVersion);
-    if (apiVersion < VK_API_VERSION_1_3) return fail("the Vulkan loader is older than 1.3");
+    if (apiVersion < VK_API_VERSION_1_3 || FForcedFailure("oldloader")) return fail("the Vulkan loader is older than 1.3");
     g_window = window;
     g_visible = options.visible;
     // (tests: SLY2N_VKHEADLESSWSI=1: a hidden window still gets a swapchain, on VK_EXT_headless_surface, so the acquire /
@@ -3996,6 +4021,7 @@ bool Initialize(GLFWwindow* window, const Options& options, std::string* error)
     if (fHeadlessWsi) g_visible = true;
     g_swapInterval = std::clamp(options.swapInterval, 0, 1);
     g_cachePath = options.pipelineCachePath;
+    g_onFatal = options.onFatal;
     std::vector<const char*> extensions;
     if (fHeadlessWsi) extensions = {VK_KHR_SURFACE_EXTENSION_NAME, VK_EXT_HEADLESS_SURFACE_EXTENSION_NAME};
     else if (g_visible)
@@ -4061,7 +4087,8 @@ bool Initialize(GLFWwindow* window, const Options& options, std::string* error)
         VkPhysicalDeviceProperties props;
         vkGetPhysicalDeviceProperties(pd, &props);
         auto reject = [&](const char* why) { reasons += std::string(reasons.empty() ? "" : "; ") + props.deviceName + ": " + why; };
-        if (props.apiVersion < VK_API_VERSION_1_3) { reject("Vulkan 1.3 is required"); continue; }
+        if (props.apiVersion < VK_API_VERSION_1_3 || FForcedFailure("olddriver")) { reject("Vulkan 1.3 is required"); continue; }
+        if (FForcedFailure("feature")) { reject("no descriptor indexing (SLY2N_VKFAIL)"); continue; }
         uint32_t ne = 0;
         vkEnumerateDeviceExtensionProperties(pd, nullptr, &ne, nullptr);
         std::vector<VkExtensionProperties> exts(ne);
@@ -4186,7 +4213,7 @@ bool Initialize(GLFWwindow* window, const Options& options, std::string* error)
     dci.pQueueCreateInfos = &qi;
     dci.enabledExtensionCount = uint32_t(deviceExtensions.size());
     dci.ppEnabledExtensionNames = deviceExtensions.data();
-    if (vkCreateDevice(g_phys, &dci, nullptr, &g_device) != VK_SUCCESS) return fail("vkCreateDevice failed");
+    if (FForcedFailure("device") || vkCreateDevice(g_phys, &dci, nullptr, &g_device) != VK_SUCCESS) return fail("vkCreateDevice failed");
     if (!LoadDevice(g_device, error)) return fail(error ? *error : "device entry points");
     if (!vkCmdPushDescriptorSetKHR) return fail("no vkCmdPushDescriptorSetKHR");
     if (!vkCmdSetColorBlendEnableEXT || !vkCmdSetColorBlendEquationEXT || !vkCmdSetColorWriteMaskEXT) g_feat.eds3 = false;
@@ -4350,6 +4377,20 @@ bool Initialize(GLFWwindow* window, const Options& options, std::string* error)
         g_workerDone = 0;
         g_worker = std::thread(WorkerLoop);
     }
+    // (a game that ends with exit() without Shutdown: the worker is stopped before the statics it waits on are
+    // destroyed (a joinable std::thread or a condition variable with a waiter at exit hangs or aborts), and the
+    // pipeline cache is kept)
+    static bool s_fAtExit = false;
+    if (!s_fAtExit)
+    {
+        s_fAtExit = true;
+        std::atexit([] {
+            if (!g_device) return;
+            StopWorker();
+            vkDeviceWaitIdle(g_device);
+            SavePipelineCache();
+        });
+    }
     BeginFrame();
     g_blackTexture = MakeBlack(false);
     g_blackArray = MakeBlack(true);
@@ -4357,7 +4398,8 @@ bool Initialize(GLFWwindow* window, const Options& options, std::string* error)
     if (g_visible)
     {
         std::string why;
-        if (!CreateSwapchain(&why)) return fail(why);
+        if (FForcedFailure("swapchain")) why = "vkCreateSwapchainKHR failed (SLY2N_VKFAIL)";
+        if (!why.empty() || !CreateSwapchain(&why)) return fail(why);
     }
     const bool fBuffersLocal = (g_memProps.memoryTypes[g_bufferHeap->Type()].propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != 0;
     std::printf("Vulkan: %s%s\n", g_rendererString.c_str(), fBuffersLocal ? "" : " (buffers in system memory)");
@@ -4505,7 +4547,7 @@ void Present()
 
 GLuint CreateProgram(const char* vertexFile, const char* geometryFile, const char* fragmentFile, const char* prefix)
 {
-    if (!g_device) return 0;
+    if (!g_device || (FForcedFailure("program") && std::strcmp(vertexFile, "clear.vert"))) return 0;
     std::vector<std::string> defines;
     if (prefix)
     {

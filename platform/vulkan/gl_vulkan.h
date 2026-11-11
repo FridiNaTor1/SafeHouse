@@ -25,6 +25,9 @@ struct Options
     bool visible = true;              // false: no surface or swapchain (headless screenshots, tests)
     int swapInterval = 1;
     std::string pipelineCachePath;    // the driver's pipeline cache between runs ("" none)
+    // Called once with the reason when Vulkan stops with an error it cannot recover from (device lost, a failed pipeline
+    // or allocation), just before the process ends (the game remembers it and may restart itself on OpenGL).
+    void (*onFatal)(const char* why) = nullptr;
 };
 // The instance, device and (visible) swapchain for the window (created with GLFW_CLIENT_API = GLFW_NO_API). False
 // (and why) when Vulkan cannot run the game here: the caller falls back to OpenGL.

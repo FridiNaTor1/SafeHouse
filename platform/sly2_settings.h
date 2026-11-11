@@ -346,13 +346,14 @@ inline const std::vector<Sly2Key>& sly2Schema() {
                                 "moment when it first appears. Off: each loads when it is first drawn (a pause on slow disks)",
                                 &Sly2GameOptions::textureStreaming));
         // (settings v21, Sly2-Release renderer.h: read when the game starts)
-        k.push_back({ "Graphics", "Renderer", "Auto, Vulkan or OpenGL (Auto: OpenGL until Vulkan is the default; Vulkan falls back to OpenGL when it cannot start)",
+        k.push_back({ "Graphics", "Renderer", "Auto, Vulkan or OpenGL (Auto: Vulkan, with OpenGL as the fallback when Vulkan cannot start on\n"
+                                              "this computer; after a failed Vulkan start Auto stays on OpenGL until Vulkan is chosen)",
                       [](const Sly2Settings& s) {
                           return std::string(s.system.renderer == 1 ? "Vulkan" : s.system.renderer == 2 ? "OpenGL" : "Auto");
                       },
                       [](Sly2Settings& s, const std::string& v) {
                           const std::string f = ini::keyForm(v);
-                          if (f == "auto" || f == "automatic") return s.system.renderer = 0, true;
+                          if (f == "auto" || f == "automatic" || f.rfind("auto(", 0) == 0) return s.system.renderer = 0, true;
                           if (f == "vulkan") return s.system.renderer = 1, true;
                           if (f == "opengl" || f == "gl") return s.system.renderer = 2, true;
                           return false;
