@@ -181,6 +181,10 @@ public:
         m_pages = {{Page::Extras, title - width},   {Page::Title, title},          {Page::Sly1, first},
                    {Page::Sly2, first + width},     {Page::Sly3, last},            {Page::Sly4, last + width},
                    {Page::Hackpack, last + 2 * width}, {Page::Developers, last + 3 * width}};
+        // The game pages share the night drive: its strips repeat on under Sly 4 and the Hackpack, and Paris begins
+        // halfway between the Hackpack and the developers, cross-faded over a third of a page (the PS3 menu's dark bars
+        // between the halves are not shown).
+        m_scene.setTransition(last + 2.5f * width, width / 6.0f);
         // What the scene has no art for: the launcher's own logos (SafeHouse on the title, the two games in
         // development), placed and shadowed as the scene's logos are; and arrows for the pages after Sly 3 (copies of
         // the title's).
@@ -227,6 +231,12 @@ public:
         if (m_fixture.screen == "glide") {  // (a shot halfway between the title and Sly 1)
             m_page = indexOf(Page::Sly1);
             m_cameraX = (m_pages[size_t(indexOf(Page::Title))].x + m_pages[size_t(m_page)].x) * 0.5f;
+            m_frozen = true;
+        } else if (m_fixture.screen.rfind("glide:", 0) == 0) {  // "glide:5.5": the camera that far along the pages (5.5: between Sly 4 and the Hackpack)
+            const float at = std::clamp(float(std::atof(m_fixture.screen.c_str() + 6)), 0.0f, float(m_pages.size() - 1));
+            const int below = std::min(int(at), int(m_pages.size()) - 2);
+            m_page = std::min(int(std::ceil(at)), int(m_pages.size()) - 1);
+            m_cameraX = m_pages[size_t(below)].x + (m_pages[size_t(below + 1)].x - m_pages[size_t(below)].x) * (at - float(below));
             m_frozen = true;
         }
         const auto& c = collectionConfig();
@@ -380,14 +390,15 @@ private:
     using Developer = credits::Developer;
     static constexpr const auto& kDevelopers = credits::kDevelopers;
     void style() {
-        const bool paris = page() > Page::Sly3;  // (the pages over the scene's second half)
+        const bool paris = page() == Page::Developers;  // (the page over the scene's second half, Paris)
         for (auto& n : m_scene.nodes()) {
             if (n.parent >= 0) continue;
             const std::string& name = n.name;
             n.show = true, n.alpha = 1, n.shade = 1;
             if (starts(name, "STATIC_SlyCollectionLogo") || starts(name, "STATIC_MCGameLogo") || starts(name, "STATIC_Minigame") || starts(name, "STATIC_Player") ||
-                starts(name, "STATIC_MoveArrow") || name.find("Locked") != std::string::npos) {
-                // the PS3 menu's own title logo (SafeHouse's is shown) and its minigame and player pages
+                starts(name, "STATIC_MoveArrow") || name.find("Locked") != std::string::npos || starts(name, "STATIC_Border")) {
+                // the PS3 menu's own title logo (SafeHouse's is shown), its minigame and player pages, and the dark bars
+                // between the scene's halves (the halves are cross-faded after the Hackpack instead)
                 n.show = false;
             } else if (ends(name, "_US") || ends(name, "_EU") || ends(name, "_JP") || ends(name, "_KR")) {
                 const std::string base = name.substr(0, name.size() - 3);
@@ -811,14 +822,18 @@ private:
         }
         if (m_page == 0) m_hitLeft = {};
         if (m_page + 1 == int(m_pages.size())) m_hitRight = {};
-        // every page's own pieces, so they slide with the scene while the camera glides
+        // every page's own pieces, so they slide with the scene while the camera glides; they fade out as the camera
+        // leaves the page (gone one page away: a wide window, 21:9 or 32:9, shows the neighbouring pages' scene, never a
+        // cut-off piece of their notes or buttons)
+        const float pageWidth = m_pages.size() > 1 ? std::fabs(m_pages[1].x - m_pages[0].x) : 5.4f;
         for (const auto& info : m_pages) {
-            const float centre = m_view.project(info.x, 0, 0).x;
-            if (centre < -m_size.x || centre > m_size.x * 2) continue;
+            const float away = std::fabs(info.x - m_cameraX) / std::max(0.01f, pageWidth);
+            const float alpha = std::clamp((1.0f - away) / 0.75f, 0.0f, 1.0f);
             const bool current = info.page == page();
-            if (isGame(info.page)) drawGameNotes(dl, info.page, current && settled);
-            else if (info.page == Page::Extras) drawExtras(dl, current && settled);
-            else if (info.page == Page::Developers) drawDevelopers(dl, m_dt);
+            if (alpha <= 0 && info.page != Page::Developers) continue;  // (the developers' pictures fade on their own clock)
+            if (isGame(info.page)) drawGameNotes(dl, info.page, alpha);
+            else if (info.page == Page::Extras) drawExtras(dl, current && settled, alpha);
+            else if (info.page == Page::Developers) drawDevelopers(dl, m_dt, alpha);
         }
         const Page p = page();
         if (p == Page::Title) m_hitLogo = m_scene.rect(m_view, "SAFEHOUSE_Title");
@@ -828,7 +843,7 @@ private:
     }
     // Beside a game's logo: the padlock badge and a note when it is not installed or cannot be installed yet (Sly 4,
     // the Hackpack), and on Sly 3's page the SafeHouse launcher's own warning that it is not fully playable yet.
-    void drawGameNotes(ImDrawList* dl, Page p, bool) {
+    void drawGameNotes(ImDrawList* dl, Page p, float alpha) {
         const State st = state(p);
         if (st == State::Playable) return;
         const GameId g = gameOf(p);
@@ -846,7 +861,7 @@ private:
                     const Tex& tex = m_scene.texture(it->texture);
                     if (!tex) continue;
                     const ImVec2 o = shadow ? ImVec2{c.x - 5 * m_s, c.y + 5 * m_s} : c;
-                    dl->AddImage(tex.im(), {o.x - r, o.y - r}, {o.x + r, o.y + r}, {0, 0}, {1, 1}, shadow ? IM_COL32(0, 0, 0, 128) : IM_COL32(204, 204, 204, 255));
+                    dl->AddImage(tex.im(), {o.x - r, o.y - r}, {o.x + r, o.y + r}, {0, 0}, {1, 1}, shadow ? IM_COL32(0, 0, 0, int(128 * alpha)) : IM_COL32(204, 204, 204, int(255 * alpha)));
                 }
             }
         } else {
@@ -860,11 +875,11 @@ private:
         const float size = 19 * m_s, lines = std::ceil(captionSize(size, note.c_str()).x / (2 * half - 44 * m_s) + 0.35f);
         const float h = std::max(62 * m_s, (lines * size * 1.3f + 44 * m_s) * 0.5f);
         const ImRect r({c.x - half, c.y - h}, {c.x + half, c.y + h});
-        panel(dl, r, 1.0f);
-        captionWrapped(dl, size, r.GetCenter(), r.GetWidth() - 44 * m_s, st == State::InDevelopment ? 0xFFD21E : 0xFFFFFF, note);
+        panel(dl, r, alpha);
+        captionWrapped(dl, size, r.GetCenter(), r.GetWidth() - 44 * m_s, st == State::InDevelopment ? 0xFFD21E : 0xFFFFFF, note, alpha);
     }
     // The page left of the title (the PS3 menu: two bordered buttons, Credits and the teaser): SafeHouse's own four.
-    void drawExtras(ImDrawList* dl, bool current) {
+    void drawExtras(ImDrawList* dl, bool current, float alpha) {
         static const char* labels[4] = {N_("Options"), N_("Credits"), N_("SafeHouse launcher"), N_("Quit")};
         for (int i = 0; i < 4; ++i) {
             const ImVec2 c = overlay(Page::Extras, 0, -165 + 110 * float(i));
@@ -872,18 +887,19 @@ private:
             const float k = on ? 1.05f : 1.0f;  // (the PS3 menu: Game.UI.FrameScaleOn 1.05)
             const ImRect r({c.x - 190 * m_s * k, c.y - 46 * m_s * k}, {c.x + 190 * m_s * k, c.y + 46 * m_s * k});
             if (current) m_hitButton[size_t(i)] = r;
-            button(dl, r, 1.0f);
-            captionCentred(dl, (on ? 31 : 28) * m_s, r.GetCenter(), on ? 0xFFD21E : 0xFFFFFF, tr(labels[i]));
+            button(dl, r, alpha);
+            captionCentred(dl, (on ? 31 : 28) * m_s, r.GetCenter(), on ? 0xFFD21E : 0xFFFFFF, tr(labels[i]), alpha);
         }
     }
     // The last page (where the PS3 menu has its minigame circles and player pages): the developers, one circle each.
     // A circle shows the developer's silhouette on a grey disc until it is chosen (the mouse over it, the pad's focus,
     // a tap); then the disc takes its colour, the silhouette gives way to the picture, and a bar says who and what.
     // The circle itself is the menu's own piece (a player circle's rim and shadow; its inside is covered).
-    void drawDevelopers(ImDrawList* dl, float dt) {
+    void drawDevelopers(ImDrawList* dl, float dt, float alpha) {
         const Page p = Page::Developers;
         const bool current = page() == p;
-        banner(dl, overlay(p, 222, -262), 400 * m_s, tr("Developers"), 1.0f);
+        banner(dl, overlay(p, 222, -262), 400 * m_s, tr("Developers"), alpha);
+        auto faded = [&](ImU32 c) { return (c & ~IM_COL32_A_MASK) | (ImU32(float(c >> IM_COL32_A_SHIFT) * alpha + 0.5f) << IM_COL32_A_SHIFT); };
         // the first developer large at the left, the others where the PS3 page has its four circles
         static constexpr float place[5][3] = {{-322, -52, 146}, {110, -62, 104}, {334, -62, 104}, {110, 160, 104}, {334, 160, 104}};
         const MenuScene::Mesh* rim = nullptr;
@@ -895,7 +911,7 @@ private:
             if (!tex || mesh.v.size() < 36) return false;
             float u0 = 1e9f, v0 = 1e9f, u1 = -1e9f, v1 = -1e9f;
             for (size_t k = 0; k + 8 < mesh.v.size(); k += 9) u0 = std::min(u0, mesh.v[k + 3]), u1 = std::max(u1, mesh.v[k + 3]), v0 = std::min(v0, mesh.v[k + 4]), v1 = std::max(v1, mesh.v[k + 4]);
-            dl->AddImage(tex.im(), {c.x - half, c.y - half}, {c.x + half, c.y + half}, {u0, v0}, {u1, v1}, colour);
+            dl->AddImage(tex.im(), {c.x - half, c.y - half}, {c.x + half, c.y + half}, {u0, v0}, {u1, v1}, faded(colour));
             return true;
         };
         for (int i = 0; i < 5; ++i) {
@@ -906,27 +922,27 @@ private:
             if (current) m_hitDeveloper[size_t(i)] = ImRect({c.x - half, c.y - half}, {c.x + half, c.y + half});
             const bool drawn = rim && piece(*shadow, {c.x - half * 0.19f, c.y + half * 0.19f}, half, IM_COL32(0, 0, 0, 128)) && piece(*rim, c, half, IM_COL32(204, 204, 204, 255));
             if (!drawn) {  // (a menu without that piece: a plain rim)
-                dl->AddCircleFilled({c.x - half * 0.1f, c.y + half * 0.1f}, half * 0.93f, IM_COL32(0, 0, 0, 128), 64);
-                dl->AddCircleFilled(c, half * 0.93f, IM_COL32(235, 235, 235, 255), 64);
+                dl->AddCircleFilled({c.x - half * 0.1f, c.y + half * 0.1f}, half * 0.93f, faded(IM_COL32(0, 0, 0, 128)), 64);
+                dl->AddCircleFilled(c, half * 0.93f, faded(IM_COL32(235, 235, 235, 255)), 64);
             }
             // the disc: grey, the developer's colour when chosen
             auto mix = [&](int grey, uint32_t colour, int shift) { return int(float(grey) + (float((colour >> shift) & 255) - float(grey)) * shown); };
-            dl->AddCircleFilled(c, inner, IM_COL32(mix(150, kDevelopers[i].colour, 16), mix(150, kDevelopers[i].colour, 8), mix(150, kDevelopers[i].colour, 0), 255), 96);
+            dl->AddCircleFilled(c, inner, faded(IM_COL32(mix(150, kDevelopers[i].colour, 16), mix(150, kDevelopers[i].colour, 8), mix(150, kDevelopers[i].colour, 0), 255)), 96);
             const auto& art = m_fixture.developers[size_t(i)];
             const ImVec2 a{c.x - inner, c.y - inner}, b{c.x + inner, c.y + inner};
-            if (art.picture && shown > 0) dl->AddImageRounded(art.picture, a, b, {0, 0}, {1, 1}, IM_COL32(255, 255, 255, int(255 * shown)), inner, ImDrawFlags_RoundCornersAll);
-            if (art.silhouette && shown < 1) dl->AddImage(art.silhouette, a, b, {0, 0}, {1, 1}, IM_COL32(255, 255, 255, int(255 * (1 - shown))));
+            if (art.picture && shown > 0) dl->AddImageRounded(art.picture, a, b, {0, 0}, {1, 1}, faded(IM_COL32(255, 255, 255, int(255 * shown))), inner, ImDrawFlags_RoundCornersAll);
+            if (art.silhouette && shown < 1) dl->AddImage(art.silhouette, a, b, {0, 0}, {1, 1}, faded(IM_COL32(255, 255, 255, int(255 * (1 - shown)))));
         }
         // the bar: who and what, over the first circle
         if (!current || m_developer < 0) return;
         const Developer& who = kDevelopers[m_developer];
-        const float alpha = m_reveal[size_t(m_developer)];
+        const float barAlpha = m_reveal[size_t(m_developer)] * alpha;
         ImVec2 c = overlay(p, -322, -272);
         c.x = std::max(c.x, 222 * m_s);
         const ImRect r({c.x - 212 * m_s, c.y - 60 * m_s}, {c.x + 212 * m_s, c.y + 60 * m_s});
-        panel(dl, r, alpha);
-        captionCentred(dl, 28 * m_s, {c.x, c.y - 30 * m_s}, 0xFFD21E, who.name, alpha);
-        captionWrapped(dl, 16 * m_s, {c.x, c.y + 24 * m_s}, r.GetWidth() - 44 * m_s, 0xFFFFFF, tr(who.role), alpha);
+        panel(dl, r, barAlpha);
+        captionCentred(dl, 28 * m_s, {c.x, c.y - 30 * m_s}, 0xFFD21E, who.name, barAlpha);
+        captionWrapped(dl, 16 * m_s, {c.x, c.y + 24 * m_s}, r.GetWidth() - 44 * m_s, 0xFFFFFF, tr(who.role), barAlpha);
     }
     // Sly 3: the SafeHouse launcher's question before it starts (its words; "Don't show again" is the same setting).
     void confirmInput(bool up, bool down, bool left, bool right, bool confirm, bool back) {

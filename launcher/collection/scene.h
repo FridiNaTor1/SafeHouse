@@ -95,6 +95,7 @@ public:
         std::vector<UvAnimation> uv;
         // a scrolling strip (one wide quad whose texture repeats): cut at the seams, carried on past the outer end
         bool strip = false, carryLeft = false, carryRight = false, sky = false, ground = false;
+        int half = 0;  // (a strip: 1 of the world's first half, the night drive; 2 of the second, Paris)
         uint32_t edgeColour = 0;  // (sky: the top row's colour, ground: the bottom row's)
     };
     struct Sway {
@@ -231,6 +232,10 @@ public:
     }
     // The seam between the two halves of the world (the night drive, Paris at dusk): where the first half's strips end.
     float seamX() const { return m_seam; }
+    // Moves the change from the first half's strips to the second's to x: the first half's repeat on (their texture
+    // repeats anyway) up to there and the second's begin there, cross-faded over x +- halfWidth, so no edge shows.
+    // halfWidth 0: the scene's own seam, as the file has it.
+    void setTransition(float x, float halfWidth) { m_transition = x, m_transitionHalf = std::max(0.0f, halfWidth); }
     const Tex& texture(const std::string& name) {
         auto it = m_textures.find(name);
         if (it != m_textures.end()) return it->second;
@@ -421,7 +426,10 @@ private:
             if (a.mode == 1 && a.frames == 0 && a.rate != 0) {
                 o = a.range * float(std::sin(m_time * double(a.rate) / double(a.range) * 6.283185307179586));  // a sway (the van's engine)
             } else if (a.frames > 0) {
-                o = float(std::floor(std::fmod(m_time * double(a.rate), double(a.frames)))) / a.frames * a.range;  // a flipbook
+                // a flipbook: the offset runs as a scroll does (rate: the range per second) and steps in `frames` steps
+                // (Sly's run: 8 x 8 frames, U 9.6 rows per second, V 1.2 sheets per second: 76.8 frames per second)
+                const double range = a.range > 0 ? a.range : 1.0, run = std::fmod(m_time * double(a.rate), range) / range;
+                o = float(std::floor(run * double(a.frames)) / double(a.frames) * range);
             } else {
                 o = float(std::fmod(m_time * double(a.rate), double(a.range > 0 ? a.range : 1.0f)));  // a scroll
             }
@@ -484,36 +492,70 @@ private:
         if (x1 <= x0 || u1 == u0) return;
         const float perUnit = (u1 - u0) / (x1 - x0);  // texture widths per world unit
         float left = x0, right = x1;
+        // the change of halves moved (setTransition): the first half's strips run on to it, the second's start there
+        const bool moved = m_transitionHalf > 0 && mesh.half != 0;
+        const float fadeFrom = m_transition - m_transitionHalf, fadeTo = m_transition + m_transitionHalf;
+        if (moved && mesh.half == 1) right = fadeTo;
+        if (moved && mesh.half == 2) left = fadeFrom;
         const float viewLeft = view.worldAt(0, z) - 0.01f, viewRight = view.worldAt(view.size.x, z) + 0.01f;
         if (mesh.carryLeft) left = std::min(left, viewLeft);
         if (mesh.carryRight) right = std::max(right, viewRight);
         left = std::max(left, viewLeft), right = std::min(right, viewRight);
         if (right <= left) return;
-        const ImU32 col = colour(&mesh.v[5], shade, alpha);
+        // how much of the strip shows at x: across the change the second half is laid over the first (it reaches full
+        // cover halfway, where the first begins to fade out under it), so the two always cover the picture together
+        auto cover = [&](float wx) {
+            if (!moved) return 1.0f;
+            const float t = std::clamp((wx - fadeFrom) / (fadeTo - fadeFrom), 0.0f, 1.0f);
+            return std::min(1.0f, 2.0f * (mesh.half == 1 ? 1.0f - t : t));
+        };
+        auto tint = [&](float a) { return colour(&mesh.v[5], shade, alpha * a); };
         const float top = view.project(0, y1, z).y, bottom = view.project(0, y0, z).y;
-        dl->PushTextureID(tex.im());
-        auto uAt = [&](float wx) { return u0 + (wx - x0) * perUnit + du; };
+        const ImU32 edge = IM_COL32(int(float(mesh.edgeColour & 255) * mesh.v[5] * shade), int(float((mesh.edgeColour >> 8) & 255) * mesh.v[6] * shade),
+                                    int(float((mesh.edgeColour >> 16) & 255) * mesh.v[7] * shade), 0);
+        auto edgeTint = [&](float a) { return edge | (ImU32(std::clamp(int(255 * alpha * a + 0.5f), 0, 255)) << IM_COL32_A_SHIFT); };
+        auto screenX = [&](float wx, bool last) { return last ? std::ceil(view.project(wx, 0, z).x) : std::floor(view.project(wx, 0, z).x); };
         // half a texel is kept off each seam (the two sides of a seam are different ends of the picture)
         const float inset = 0.5f / float(std::max(1, tex.w));
-        for (float wx = left; wx < right - 1e-4f;) {
-            const float u = uAt(wx), tile = std::floor(u + 1e-5f);
-            // the world x where this tile ends
-            float end = perUnit > 0 ? x0 + (tile + 1 - du - u0) / perUnit : x0 + (tile - du - u0) / perUnit;
-            if (end <= wx + 1e-4f) end = wx + 1.0f / std::fabs(perUnit);
-            end = std::min(end, right);
-            float ua = u - tile, ub = uAt(end) - tile;
-            ua = std::clamp(ua, inset, 1 - inset), ub = std::clamp(ub, inset, 1 - inset);
-            const float sa = std::floor(view.project(wx, 0, z).x), sb = end >= right ? std::ceil(view.project(end, 0, z).x) : std::floor(view.project(end, 0, z).x);
-            dl->PrimReserve(6, 4);
-            dl->PrimQuadUV({sa, top}, {sb, top}, {sb, bottom}, {sa, bottom}, {ua, vTop + dv}, {ub, vTop + dv}, {ub, vBottom + dv}, {ua, vBottom + dv}, col);
-            wx = end;
+        auto uAt = [&](float wx) { return u0 + (wx - x0) * perUnit + du; };
+        // pieces of constant slope of the cover: cut where the fade begins, peaks and ends
+        float cuts[5] = {left, fadeFrom, m_transition, fadeTo, right};
+        int count = 0;
+        float pieces[5];
+        for (float c : cuts)
+            if (c >= left && c <= right && (count == 0 || c > pieces[count - 1] + 1e-4f)) pieces[count++] = c;
+        if (pieces[count - 1] < right - 1e-4f) pieces[count++] = right;
+        for (int p = 0; p + 1 < count; ++p) {
+            const float pa = pieces[p], pb = pieces[p + 1], ca = cover(pa), cb = cover(pb);
+            if (ca <= 0 && cb <= 0) continue;
+            auto coverAt = [&](float wx) { return ca + (cb - ca) * (wx - pa) / (pb - pa); };
+            const bool lastPiece = pb >= right - 1e-4f;
+            dl->PushTextureID(tex.im());
+            for (float wx = pa; wx < pb - 1e-4f;) {
+                const float u = uAt(wx), tile = std::floor(u + 1e-5f);
+                // the world x where this tile ends
+                float end = perUnit > 0 ? x0 + (tile + 1 - du - u0) / perUnit : x0 + (tile - du - u0) / perUnit;
+                if (end <= wx + 1e-4f) end = wx + 1.0f / std::fabs(perUnit);
+                end = std::min(end, pb);
+                float ua = u - tile, ub = uAt(end) - tile;
+                ua = std::clamp(ua, inset, 1 - inset), ub = std::clamp(ub, inset, 1 - inset);
+                const float sa = screenX(wx, false), sb = screenX(end, lastPiece && end >= pb);
+                const ImU32 cl = tint(coverAt(wx)), cr = tint(coverAt(end));
+                dl->PrimReserve(6, 4);
+                const ImDrawIdx base = ImDrawIdx(dl->_VtxCurrentIdx);
+                dl->PrimWriteIdx(base), dl->PrimWriteIdx(ImDrawIdx(base + 1)), dl->PrimWriteIdx(ImDrawIdx(base + 2));
+                dl->PrimWriteIdx(base), dl->PrimWriteIdx(ImDrawIdx(base + 2)), dl->PrimWriteIdx(ImDrawIdx(base + 3));
+                dl->PrimWriteVtx({sa, top}, {ua, vTop + dv}, cl), dl->PrimWriteVtx({sb, top}, {ub, vTop + dv}, cr);
+                dl->PrimWriteVtx({sb, bottom}, {ub, vBottom + dv}, cr), dl->PrimWriteVtx({sa, bottom}, {ua, vBottom + dv}, cl);
+                wx = end;
+            }
+            dl->PopTextureID();
+            // the sky above / the ground below: the strip's edge colour carried on to the window's edge
+            const float sl = screenX(pa, false), sr = screenX(pb, lastPiece);
+            const ImU32 el = edgeTint(ca), er = edgeTint(cb);
+            if (mesh.sky && top > 0) dl->AddRectFilledMultiColor({sl, 0}, {sr, top + 1}, el, er, er, el);
+            if (mesh.ground && bottom < view.size.y) dl->AddRectFilledMultiColor({sl, bottom - 1}, {sr, view.size.y}, el, er, er, el);
         }
-        dl->PopTextureID();
-        const float sl = std::floor(view.project(left, 0, z).x), sr = std::ceil(view.project(right, 0, z).x);
-        const ImU32 edge = IM_COL32(int(float(mesh.edgeColour & 255) * mesh.v[5] * shade), int(float((mesh.edgeColour >> 8) & 255) * mesh.v[6] * shade),
-                                    int(float((mesh.edgeColour >> 16) & 255) * mesh.v[7] * shade), int(255 * alpha));
-        if (mesh.sky && top > 0) dl->AddRectFilled({sl, 0}, {sr, top + 1}, edge);
-        if (mesh.ground && bottom < view.size.y) dl->AddRectFilled({sl, bottom - 1}, {sr, view.size.y}, edge);
     }
     void drawParticles(ImDrawList* dl, const View& view, int ni, float fade) {
         const Node& n = m_nodes[size_t(ni)];
@@ -565,6 +607,11 @@ private:
             if (f.right < xMax - 0.01f) m_seam = std::min(m_seam, f.right);
         }
         if (m_seam > 1e8f) m_seam = xMax;
+        // which half each strip belongs to (the ones that end at the seam, the ones that begin there)
+        for (const auto& f : found) {
+            Mesh& mesh = m_nodes[size_t(f.node)].meshes[size_t(f.mesh)];
+            mesh.half = std::fabs(f.right - m_seam) < 0.01f ? 1 : std::fabs(f.left - m_seam) < 0.01f ? 2 : 0;
+        }
     }
     // A strip's edge colour from its picture: the top row (the sky carried on upwards), the bottom row (the ground).
     void noteEdges(const std::string& name, const Image& img) {
@@ -598,7 +645,7 @@ private:
     std::set<int> m_rides;
     json m_bloom;
     double m_time = 0;
-    float m_seam = 18.9f;
+    float m_seam = 18.9f, m_transition = 18.9f, m_transitionHalf = 0;
     uint32_t m_seed = 12345;
 };
 

@@ -21,6 +21,9 @@ struct Options {
     bool live = false;          // --live: read the (private) profile instead of fake states
     std::string iso;            // --iso PATH: the disc image the install page opens with (live)
     double delay = 0;           // --delay SECONDS: wait (e.g. for the disc image search) before the shot
+    // The Collection Style Launcher's shots: --frame-rate N (its fixed time step, 1 / N s; default 60) and --seconds S
+    // (the shot after exactly S seconds of the menu's time, whatever else is pending: the animations' timing checks).
+    double frameRate = 60, seconds = 0;
     // --nav up,down,left,right,a,b,x,y,lb,rb,lt,rt,start,select: pad presses
     // replayed one every 4 frames before the screenshot.
     std::vector<std::string> nav;

@@ -99,7 +99,7 @@ def synthetic_scene():
         field(head, 12, (name + ".tga").encode())
         out.extend(chunk(b"TEXR", chunk(b"TXRH", bytes(head)) + chunk(b"TGTF", gtf(width, height, pixel, alpha))))
 
-    def material(name, tex, scroll=None, particle=False):
+    def material(name, tex, scroll=None, particle=False, flipbook=None):
         head = bytearray(0x64)
         head[0] = 4
         struct.pack_into("<I", head, 1, textures[tex])
@@ -111,6 +111,13 @@ def synthetic_scene():
             c = bytearray(36)
             c[0] = 3
             struct.pack_into("<3f", c, 1, scroll, 0.0, 1.0)
+            data += chunk(b"MTLC", bytes(c))
+        for channel, rate, frames in flipbook or ():
+            # a flipbook channel: the offset runs at rate (texture widths per second) in frames steps
+            c = bytearray(36)
+            c[0] = 3
+            struct.pack_into("<3f", c, 1, rate, frames, 1.0)
+            c[34] = channel
             data += chunk(b"MTLC", bytes(c))
         out.extend(chunk(b"MATL", data))
 
@@ -182,6 +189,9 @@ def synthetic_scene():
     texture("Sky", 64, 16, lambda x, y: (16, 24, 96))
     texture("Ground", 64, 16, lambda x, y: (40, 16, 8), alpha=255)
     texture("Paris", 64, 16, lambda x, y: (160, 64, 120))
+    texture("Bar", 32, 32, lambda x, y: (255, 255, 255))
+    # Sly's run: 8 x 8 frames, each its own colour (red: the column, green: the row)
+    texture("SlyRun", 64, 64, lambda x, y: (x // 8 * 32 + 16, y // 8 * 32 + 16, 128), alpha=255)
     texture("Logos", 1024, 1024, lambda x, y: ((200, 40, 40), (40, 40, 200), (200, 200, 40), (40, 200, 200))[(x >= 512) + 2 * (y >= 512)], alpha=255)
     for name, colour in (("Logo1", (40, 200, 40)), ("Logo2", (200, 200, 40)), ("Logo3", (200, 40, 200)), ("Arrow", (240, 180, 0)), ("Van", (80, 80, 240)),
                          ("Puff", (200, 200, 200)), ("Circle", (128, 128, 128)), ("CircleOn", (64, 128, 255)), ("Lock", (0, 96, 255))):
@@ -191,6 +201,8 @@ def synthetic_scene():
                               ("Mat_Van", "Van", None), ("Mat_Circle", "Circle", None), ("Mat_CircleOn", "CircleOn", None), ("Mat_Lock", "Lock", None)):
         material(name, tex, scroll)
     material("Mat_Puff", "Puff", particle=True)
+    material("Mat_Bar", "Bar")
+    material("Mat_SlyRun", "SlyRun", flipbook=[(0, 9.6, 8.0), (1, 1.2, 8.0)])  # (the disc's values)
     grey, shadow = (204, 204, 204, 255), (0, 0, 0, 127)
     wide = (-0.61, 0.0, 1.61, 1.0)
     mesh("STATIC_BackgroundA", [("Mat_Sky", quad(-13.5, -1.5, 13.5, 1.5, 0, grey, wide))])
@@ -203,6 +215,8 @@ def synthetic_scene():
         mesh(name, [(mat, quad(-0.7, -0.4, 0.7, 0.4, 0, grey, uv)), (mat, quad(-0.74, -0.44, 0.66, 0.36, -0.05, shadow, uv))])
     mesh("Arrow", [("Mat_Arrow", quad(-0.09, -0.09, 0.09, 0.09, 0, grey))])
     mesh("STATIC_SlyVanIcon", [("Mat_Van", quad(-0.19, -0.19, 0.19, 0.19, 0, grey))])
+    mesh("STATIC_Border1", [("Mat_Bar", quad(-0.17, -1.5, 0.17, 1.5, 0, (18, 13, 33, 255)))])
+    mesh("STATIC_SlyIcon", [("Mat_SlyRun", quad(-0.48, -0.24, 0.48, 0.24, 0, grey, (0.0, 0.0, 0.125, 0.125)))])
     mesh("DEF_Cloud", [("Mat_Puff", quad(-0.06, -0.06, 0.06, 0.06, 0, grey))])
     mesh("Circle", [("Mat_Circle", quad(-0.27, -0.27, 0.27, 0.27, 0, grey))])
     mesh("CircleOn", [("Mat_CircleOn", quad(-0.27, -0.27, 0.27, 0.27, 0, grey))])
@@ -234,6 +248,8 @@ def synthetic_scene():
         out.extend(instance(f"STATIC_ScreenArrow{2 * i + 3}", (x - 0.7, -0.32, 0.45), sway=True, geometry="Arrow"))
     out.extend(instance("STATIC_SlyVan", (0, -0.61, 0.2), geometry="none",
                         children=instance("STATIC_SlyVanIcon", (0, 0, 0)) + instance("STATICParticle_Exhaust", (-0.2, -0.1, 0), tag=b"EINS", head_tag=b"EINH", geometry="Exhaust")))
+    out.extend(instance("STATIC_Border1", (18.9, 0, 0.25)))  # (the dark bar between the halves)
+    out.extend(instance("STATIC_Sly", (21.6, -0.5, 0.2), geometry="none", children=instance("STATIC_SlyIcon", (-0.737, -0.037, 0))))
     for i, who in enumerate(("Sly", "Murray", "Bentley", "Carmelita")):
         x, y = 21.67 + 0.55 * (i % 2), 0.126 - 0.55 * (i // 2)
         out.extend(instance(f"STATIC_Minigame{who}", (x, y, 0.4), geometry="Circle"))
@@ -601,10 +617,33 @@ def main():
             assert near(pixel(image, 640, 299), (13, 19, 79)), pixel(image, 640, 299)     # between two pages: no logo in the middle
             # the pages after Sly 3: Sly 4 and the Hackpack (the launcher's logos, in development: a tap starts nothing),
             # then the developers; they lie over the other half of the world
+            sky, paris = (13, 19, 79), (130, 52, 98)
             image = read_png(render("sly4", games + ["--nav", "right,right,right,right", "--pointer", "w " * 20 + "d640,299 u"], plain))
-            assert near(pixel(image, 100, 60), (130, 52, 98)), pixel(image, 100, 60)
+            assert near(pixel(image, 100, 60), sky), pixel(image, 100, 60)               # the game pages' strips repeat on under Sly 4
             image = read_png(render("hackpack", games + ["--nav", "right,right,right,right,right"], plain))
-            assert near(pixel(image, 100, 60), (130, 52, 98)), pixel(image, 100, 60)
+            assert near(pixel(image, 100, 60), sky) and near(pixel(image, 1270, 60), sky), (pixel(image, 100, 60), pixel(image, 1270, 60))
+
+            def continuous(image, y, where):
+                """Along a row: only the two halves' colours and their mixes (no dark bar, no gap, no hard edge)."""
+                row = [pixel(image, x, y) for x in range(image[0])]
+                for x, c in enumerate(row):
+                    assert all(min(a, b) - 8 <= v <= max(a, b) + 8 for v, a, b in zip(c, sky, paris)), (where, x, c)
+                for x in range(1, len(row)):
+                    assert max(abs(a - b) for a, b in zip(row[x], row[x - 1])) <= 6, (where, "an edge at", x, row[x - 1], row[x])
+                return row
+            # the dark bar the scene has between its halves is not shown (the camera right over it: Sly 3 -> Sly 4)
+            image = read_png(render("glide-sly3-sly4", games + ["--screen", "glide:4.5"], plain))
+            assert all(near(c, sky) for c in continuous(image, 60, "sly3-sly4")), "not the game pages' sky between Sly 3 and Sly 4"
+            image = read_png(render("glide-sly4-hackpack", games + ["--screen", "glide:5.5"], plain))
+            assert all(near(c, sky) for c in continuous(image, 60, "sly4-hackpack")), "not the game pages' sky between Sly 4 and the Hackpack"
+            # after the Hackpack: the change to Paris, cross-faded, from the game pages' sky on the left to Paris on the right
+            image = read_png(render("glide-hackpack-developers", games + ["--screen", "glide:6.5"], plain))
+            row = continuous(image, 60, "hackpack-developers")
+            assert near(row[0], sky) and near(row[-1], paris), (row[0], row[-1])
+            for size in ("3840x1080", "2400x1080", "1024x768"):  # (32:9, a phone's 20:9, 4:3)
+                for at in ("5", "6", "6.5", "7"):
+                    image = read_png(render(f"strip-{at}-{size}", games + ["--size", size, "--screen", f"glide:{at}"], plain))
+                    continuous(image, 40, f"glide:{at} {size}")
             # the developers: five circles with the launcher's own pictures (no PS3 data needed for them); a silhouette
             # until one is chosen, then the picture and a bar (the menu's frame) with the name
             image = read_png(render("developers", ps3 + ["--screen", "developers"], plain))
@@ -620,6 +659,19 @@ def main():
             assert not near(pixel(image, 318, 88), (0, 48, 128)), pixel(image, 318, 88)   # a tap elsewhere chooses none
             image = read_png(render("developers-end", games + ["--nav", "right,right,right,right,right,right,right,right"], plain))
             assert near(pixel(image, 318, 88), (0, 48, 128)), pixel(image, 318, 88)       # with keys: the first is chosen; Right stays on the page
+            # Sly's run (on the developers' page): the flipbook steps by the menu's time, not by frames drawn. Its offset runs
+            # as a scroll does (U 9.6 widths a second in 8 steps, V 1.2 in 8 steps): 76.8 frames a second, the same frame
+            # after the same time at 60 and at 120 frames per second
+            def run_frame(seconds, rate):
+                image = read_png(render(f"sly-run-{seconds}-{rate}", ps3 + ["--screen", "developers", "--seconds", str(seconds), "--frame-rate", str(rate)], plain))
+                r, g, b = pixel(image, 354, 609)
+                assert abs(b - 102) <= 10, (seconds, rate, (r, g, b), "not Sly's flipbook")
+                return round((r / 0.8 - 16) / 32) + 8 * round((g / 0.8 - 16) / 32)
+            for seconds in (1, 2, 2.3):
+                expected = int(seconds * 76.8 + 1e-6) % 64
+                frames = {rate: run_frame(seconds, rate) for rate in (60, 120, 144)}
+                assert set(frames.values()) == {expected}, (seconds, frames, expected)
+            print("flipbook: frames", [int(t * 76.8 + 1e-6) % 64 for t in (1, 2, 2.3)], "after 1 / 2 / 2.3 s at 60, 120 and 144 frames per second")
             # Sly 3 asks first, as the SafeHouse launcher does
             image = read_png(render("sly3-question", ps3 + ["--collection-games", "sly1,sly2,sly3", "--nav", "right,right,right,a"], plain))
             assert near(pixel(image, 290, 200), (0, 48, 128)), pixel(image, 290, 200)

@@ -762,7 +762,7 @@ void replayPointer(const ui::fixtures::Options& options, int frame) {
 }
 // The Collection Style Launcher's window (`safehouse --collection`, collection/collection.h). With a fixture: the hidden
 // screenshot hook (--screenshot PATH --collection [--collection-games sly1,sly2,...] [--collection-ps3 PROFILE]
-// [--screen options|extras|credits|launch|more|glide] [--size WxH] [--nav ...]). Without the menu imported from the
+// [--screen options|extras|credits|launch|more|glide|glide:PAGES] [--size WxH] [--nav ...] [--frame-rate N] [--seconds S]). Without the menu imported from the
 // player's Sly Collection there is no Collection style: the SafeHouse launcher opens instead.
 int collectionDesktop(cane::LauncherBackend& backend, const ui::fixtures::Options* fixture, const cane::fs::path& screenshotPath) {
     namespace col = cane::collection;
@@ -905,8 +905,8 @@ int collectionDesktop(cane::LauncherBackend& backend, const ui::fixtures::Option
         ImGui::NewFrame();
         ui::layoutEntries().clear();
         const double now = glfwGetTime();
-        // (screenshots: a fixed step, so a shot is the same every run)
-        const float dt = fixture ? 1.0f / 60.0f : static_cast<float>(std::min(0.1, now - last));
+        // (screenshots: a fixed step, so a shot is the same every run; --frame-rate sets it)
+        const float dt = fixture ? static_cast<float>(1.0 / fixture->frameRate) : static_cast<float>(std::min(0.1, now - last));
         last = now;
         menu->frame({static_cast<float>(width), static_cast<float>(height)}, pad, family, dt);
         if (menu->quitRequested()) glfwSetWindowShouldClose(window, true);
@@ -919,8 +919,11 @@ int collectionDesktop(cane::LauncherBackend& backend, const ui::fixtures::Option
         glClearColor(0, 0, 0, 1);
         glClear(GL_COLOR_BUFFER_BIT);
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
-        if (fixture && ++frames >= 40 + 4 * static_cast<int>(fixture->nav.size()) + 2 * static_cast<int>(fixture->pointer.size()) && glfwGetTime() >= fixture->delay &&
-            !menu->busy()) {
+        // (--seconds: the shot after exactly that much of the menu's time, frame-rate frames per second)
+        const int framesWanted = fixture ? (fixture->seconds > 0 ? static_cast<int>(std::lround(fixture->seconds * fixture->frameRate))
+                                                                 : 40 + 4 * static_cast<int>(fixture->nav.size()) + 2 * static_cast<int>(fixture->pointer.size()))
+                                         : 0;
+        if (fixture && ++frames >= framesWanted && (fixture->seconds > 0 || (glfwGetTime() >= fixture->delay && !menu->busy()))) {
             screenshot(fw, fh, screenshotPath);
             if (!fixture->layoutPath.empty()) {
                 // (--dump-layout: the labelled rectangles the menu recorded, e.g. the credits' sections)
@@ -982,6 +985,13 @@ bool screenshotOptions(const std::vector<std::string>& args, ui::fixtures::Optio
         else if (a == "--iso" && i + 1 < args.size()) options.iso = args[++i];
         else if (a == "--language" && i + 1 < args.size()) options.language = args[++i];
         else if (a == "--delay" && i + 1 < args.size()) options.delay = std::atof(args[++i].c_str());
+        else if (a == "--frame-rate" && i + 1 < args.size()) {
+            options.frameRate = std::atof(args[++i].c_str());
+            if (!(options.frameRate >= 10 && options.frameRate <= 1000)) return false;
+        } else if (a == "--seconds" && i + 1 < args.size()) {
+            options.seconds = std::atof(args[++i].c_str());
+            if (!(options.seconds >= 0 && options.seconds <= 600)) return false;
+        }
         else if (a == "--nav" && i + 1 < args.size()) {
             std::stringstream list(args[++i]);
             for (std::string token; std::getline(list, token, ',');)
