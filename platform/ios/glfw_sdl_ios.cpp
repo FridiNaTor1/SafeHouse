@@ -165,12 +165,13 @@ void updateScale(GLFWwindow* w) {
 void reportDisplay(GLFWwindow* w) {
     void* window = uiWindow(w);
     if (!window) return;
-    SDL_SetHint(SDL_HINT_ORIENTATIONS, cane::ios::orientations(window));
+    const char* orientations = cane::ios::orientations(window, !launcherRole());
+    SDL_SetHint(SDL_HINT_ORIENTATIONS, orientations);
     int pw = 0, ph = 0;
     drawableSize(w, &pw, &ph);
     const std::string report = std::string("iOS: ") + cane_ios_program_role() + " window " + std::to_string(pw) + "x" +
                                std::to_string(ph) + " px, " + std::to_string(w->width) + "x" + std::to_string(w->height) +
-                               (w->metal ? " (Metal); " : " (OpenGL ES); ") + cane::ios::displayReport(window);
+                               (w->metal ? " (Metal); " : " (OpenGL ES); ") + cane::ios::displayReport(window, orientations);
     if (report == w->reported) return;
     w->reported = report;
     cane::ios::log(report);
@@ -580,8 +581,9 @@ extern "C" void* cane_glfw_metal_layer(GLFWwindow* w) {
 extern "C" {
 int glfwInit() {
     SDL_SetHint(SDL_HINT_TOUCH_MOUSE_EVENTS, "1");
-    // (landscape on a phone; every orientation on an iPad / a near-square screen: reportDisplay keeps it current)
-    SDL_SetHint(SDL_HINT_ORIENTATIONS, cane::ios::orientations(nullptr));
+    // (landscape on a phone; every orientation on an iPad / for the launcher on a near-square screen: reportDisplay
+    // keeps it current)
+    SDL_SetHint(SDL_HINT_ORIENTATIONS, cane::ios::orientations(nullptr, !launcherRole()));
     SDL_SetHint(SDL_HINT_IOS_HIDE_HOME_INDICATOR, launcherRole() ? "0" : "2");
     SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "0");
     if (SDL_InitSubSystem(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER | SDL_INIT_EVENTS) != 0) {

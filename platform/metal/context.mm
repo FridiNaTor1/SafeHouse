@@ -13,7 +13,11 @@ extern "C" void* cane_glfw_metal_layer(GLFWwindow* window);
 #endif
 
 #include <algorithm>
+#include <cstdio>
 #include <cstring>
+#include <mutex>
+#include <set>
+#include <utility>
 
 namespace cane::gl_metal {
 
@@ -223,8 +227,14 @@ void Context::SwapBuffers() {
   Submit(false);
 }
 
-void Context::SetError(GLenum error) {
+void Context::SetError(GLenum error, const char* where, GLenum value) {
   if (error_ == gl::kNoError) error_ = error;
+  if (!where) return;
+  static std::mutex mutex;
+  static std::set<std::pair<std::string, GLenum>> reported;
+  std::lock_guard<std::mutex> lock(mutex);
+  if (reported.size() < 64 && reported.emplace(where, value).second)
+    std::fprintf(stderr, "Metal: GL_INVALID_ENUM in %s: 0x%04X (not translated)\n", where, unsigned(value));
 }
 
 GLenum Context::TakeError() {
@@ -246,7 +256,7 @@ const char* Context::GetString(GLenum name) {
     case gl::kExtensions:
       return "GL_ARB_clip_control";
     default:
-      SetError(gl::kInvalidEnum);
+      SetError(gl::kInvalidEnum, __func__, name);
       return nullptr;
   }
 }

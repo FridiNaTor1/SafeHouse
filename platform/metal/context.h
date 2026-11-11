@@ -83,7 +83,9 @@ class Context {
   void Finish();
 
   // Errors and queries about the implementation.
-  void SetError(GLenum error);
+  // (where / value: an enum the layer does not translate; logged once per call site and value, "Metal: GL_INVALID_ENUM
+  // in CreateShader: 0x8DD9", so a translation gap shows in the game's log rather than only as glGetError's code)
+  void SetError(GLenum error, const char* where = nullptr, GLenum value = 0);
   GLenum TakeError();
   const char* GetString(GLenum name);
   const char* GetStringIndexed(GLenum name, uint32_t index);

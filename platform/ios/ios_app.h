@@ -69,11 +69,12 @@ void adoptWindow(void* uiWindow);
 std::array<float, 4> safeAreaInsets(void* uiWindow);
 // (main thread) The orientations SDL may rotate to (SDL_HINT_ORIENTATIONS): landscape on a phone-shaped screen; every
 // orientation on an iPad and on a near-square screen (a foldable's inner screen), where a locked orientation makes iOS
-// show the app in a compatibility frame.
-const char* orientations(void* uiWindow);
+// show the app in a compatibility frame. The game (`game`: its window, 16:9 picture and touch layout) is landscape on
+// every phone screen, the near-square one too (in portrait its picture would be a third of the screen).
+const char* orientations(void* uiWindow, bool game);
 // (main thread) One log line about the screen and the window: sizes, scale, safe area, orientation, and whether
 // iOS shows the app in a compatibility frame (window smaller than the screen).
-std::string displayReport(void* uiWindow);
+std::string displayReport(void* uiWindow, const char* orientations);
 // A haptic tap at this strength (0..255; 0: nothing). Call it every frame a motor runs.
 void vibrate(int amplitude);
 // (the app's main, platform/ios/main.mm) the folders, the log, controller notifications; --ios-smoke / --ios-selftest

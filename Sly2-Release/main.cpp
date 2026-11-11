@@ -298,6 +298,12 @@ static int GlSelfTestCommand(const std::string& out)
     }
     std::printf("gl-selftest: %s / %s, scene %dx%d\n", reinterpret_cast<const char*>(glGetString(GL_RENDERER)),
                 reinterpret_cast<const char*>(glGetString(GL_VERSION)), g_gl.renderWidth, g_gl.renderHeight);
+    // (an error the start left behind fails the test as one in the frames does; reported apart so the log says which)
+    const GLenum errInit = glGetError();
+    if (errInit != GL_NO_ERROR) std::printf("gl-selftest: GL error 0x%x after the renderer's start\n", unsigned(errInit));
+    // (a program that did not build: the game would fall back to a variant, which is not what Play is meant to run)
+    const int cShaderErrors = g_cShaderErrors;
+    if (cShaderErrors) std::printf("gl-selftest: %d program(s) failed to build (shader compile / link error above)\n", cShaderErrors);
     for (int frame = 0; frame < 30; ++frame)
     {
         glBindFramebuffer(GL_FRAMEBUFFER, g_gl.FboScene());
@@ -321,10 +327,10 @@ static int GlSelfTestCommand(const std::string& out)
     const bool fWritten = out.empty() || g_gl.FWriteScreenshot(out);
     const bool fColor = g_gl.FboScene() != g_gl.fbo || (std::abs(rgba[0] - 64) <= 2 && std::abs(rgba[1] - 128) <= 2 && std::abs(rgba[2] - 191) <= 2);
     const GLenum err = glGetError();
-    std::printf("gl-selftest: centre %d %d %d, GL error 0x%x%s%s\n", rgba[0], rgba[1], rgba[2], unsigned(err),
+    std::printf("gl-selftest: centre %d %d %d (cleared 64 128 191), GL error 0x%x%s%s\n", rgba[0], rgba[1], rgba[2], unsigned(err),
                 out.empty() ? "" : fWritten ? ", wrote " : ", FAILED to write ", out.c_str());
     g_gl.Terminate();
-    const bool fOk = fWritten && fColor && err == GL_NO_ERROR;
+    const bool fOk = fWritten && fColor && err == GL_NO_ERROR && errInit == GL_NO_ERROR && cShaderErrors == 0;
     std::printf("gl-selftest: %s\n", fOk ? "passed" : "FAILED");
     return fOk ? 0 : 1;
 }

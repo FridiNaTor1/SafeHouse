@@ -74,9 +74,14 @@ for kind in iPhone iPad; do
   launch 180 "$dir/smoke-console.txt" "$device" --ios-smoke &
   runner=$!
   sleep 4
-  xcrun simctl io "$device" screenshot "$dir/simulator-screenshot.png" > /dev/null 2>&1 || echo "  (no simulator screenshot)"
+  xcrun simctl io "$device" screenshot "$dir/simulator-screenshot.png" > /dev/null 2>&1 ||
+    { sleep 2; xcrun simctl io "$device" screenshot "$dir/simulator-screenshot.png" > /dev/null 2>&1; } ||
+    echo "  (no simulator screenshot)"
   wait "$runner"
   tail -n 30 "$dir/smoke-console.txt"
+  # (this run's ios.log: the page screenshots below start the app again and write their own)
+  data="$(xcrun simctl get_app_container "$device" "$BUNDLE" data 2>/dev/null)"
+  [ -n "$data" ] && cp "$data/Documents/logs/ios.log" "$dir/smoke-ios.log" 2>/dev/null
 
   echo "-- launcher pages (the launcher's own screenshot fixtures: what iOS shows and hides)"
   data="$(xcrun simctl get_app_container "$device" "$BUNDLE" data 2>/dev/null)"
@@ -105,7 +110,13 @@ SHOTS
   grep -q "^exit 0" "$dir/Documents/smoke-game.log" 2>/dev/null || { echo "$kind: the game's renderer self test did not pass"; failures=$((failures + 1)); }
   [ -f "$dir/Documents/smoke-game.png" ] || { echo "$kind: no game frame from the renderer self test"; failures=$((failures + 1)); }
   [ -f "$dir/Documents/smoke-launcher-after.png" ] || { echo "$kind: the launcher did not draw again after the game"; failures=$((failures + 1)); }
-  grep -E "gl-selftest|smoke:|window failed" "$dir/Documents/logs/ios.log" 2>/dev/null | head -n 20
+  # (a phone shows the game in landscape, a foldable's near-square inner screen too: the game window's last line)
+  if [ "$kind" = iPhone ]; then
+    grep "game window" "$dir/smoke-ios.log" 2>/dev/null | tail -n 1 | grep -q "scene landscape" ||
+      { echo "$kind: the game's window is not landscape"; failures=$((failures + 1)); }
+  fi
+  # (the game's window lines: on a phone the game must be landscape; Metal: an enum the layer did not translate)
+  grep -E "gl-selftest|smoke:|window failed|game window|Metal: GL_|shader (compile|link) error" "$dir/smoke-ios.log" 2>/dev/null | head -n 30
   xcrun simctl shutdown "$device" 2>/dev/null
 done
 echo "simulator smoke: $failures problem(s)"

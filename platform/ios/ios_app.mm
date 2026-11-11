@@ -537,10 +537,11 @@ UIScreen* screenOf(UIWindow* window) {
     return window.screen ?: UIScreen.mainScreen;
 }
 }  // namespace
-const char* orientations(void* uiWindow) {
+const char* orientations(void* uiWindow, bool game) {
     static const char* const landscape = "LandscapeLeft LandscapeRight";
     static const char* const all = "LandscapeLeft LandscapeRight Portrait PortraitUpsideDown";
     if (UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPad) return all;
+    if (game) return landscape;
     UIWindow* window = (__bridge UIWindow*)uiWindow;
     UIScreen* screen = window ? screenOf(window) : UIScreen.mainScreen;
     // (nativeBounds: the panel itself, also when iOS runs the app in a smaller compatibility frame)
@@ -548,7 +549,7 @@ const char* orientations(void* uiWindow) {
     const CGFloat longSide = std::max(size.width, size.height), shortSide = std::min(size.width, size.height);
     return shortSide > 0 && longSide / shortSide < 1.5 ? all : landscape;
 }
-std::string displayReport(void* uiWindow) {
+std::string displayReport(void* uiWindow, const char* orientations) {
     UIWindow* window = (__bridge UIWindow*)uiWindow;
     UIScreen* screen = window ? screenOf(window) : UIScreen.mainScreen;
     const CGRect bounds = screen.bounds, native = screen.nativeBounds;
@@ -575,7 +576,7 @@ std::string displayReport(void* uiWindow) {
         if (panelArea > 0 && windowArea < panelArea * 0.9) line += "; COMPATIBILITY FRAME (window smaller than the screen)";
     }
     line += std::string("; idiom ") + (UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPad ? "pad" : "phone");
-    line += std::string("; orientations ") + orientations(uiWindow);
+    line += std::string("; orientations ") + (orientations ? orientations : "?");
     return line;
 }
 

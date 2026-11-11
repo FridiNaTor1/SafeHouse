@@ -274,6 +274,8 @@ bool GLSHADER::FBuildMultiview() const
     return true;
 }
 
+int g_cShaderErrors = 0;
+
 bool GLSHADER::CompileErrors(GLuint shader, const char* type, const char* file)
 {
     GLint fOk = 0;
@@ -285,6 +287,7 @@ bool GLSHADER::CompileErrors(GLuint shader, const char* type, const char* file)
         {
             glGetShaderInfoLog(shader, sizeof(log), nullptr, log);
             std::fprintf(stderr, "shader compile error (%s):\n%s\n", file, log);
+            ++g_cShaderErrors;
         }
     }
     else
@@ -294,6 +297,7 @@ bool GLSHADER::CompileErrors(GLuint shader, const char* type, const char* file)
         {
             glGetProgramInfoLog(shader, sizeof(log), nullptr, log);
             std::fprintf(stderr, "shader link error (%s):\n%s\n", file, log);
+            ++g_cShaderErrors;
         }
     }
     return fOk != 0;
@@ -445,6 +449,11 @@ bool GL::FInit(int w, int h, bool fVisible, const char* title, std::string& erro
     // under a low camera). If the stage fails to build, the program without it.
 #ifdef __SWITCH__
     constexpr bool s_fNearClip = false;   // (the Switch: GL's own clipping; the stage costs GPU time on every draw)
+#elif defined(__APPLE__)
+    // (macOS / iOS: the programs run on Metal (platform/metal), which has no geometry stage: glCreateShader refuses
+    // GL_GEOMETRY_SHADER with GL_INVALID_ENUM and glob.metal is the program without it, so the stage is not asked for
+    // (it used to be: "shader compile error (glob.geom)" and a GL error left behind at every start). GL's own clipping.
+    constexpr bool s_fNearClip = false;
 #else
     // (VR on OpenGL ES, vr.h: without the stage: geometry programs are slow on mobile GPUs, and the eyes' two-view pass
     // cannot have one; GL's own near clipping)

@@ -94,6 +94,8 @@ private:
 };
 
 extern GL g_gl;
+// (GLSHADER::CompileErrors) the programs that failed to compile or link so far (main.cpp --gl-selftest: none may)
+extern int g_cShaderErrors;
 // (VR multiview, vr.cpp / render.cpp RenderSceneStereo) a pass drawing both eyes at once into a two-view framebuffer:
 // GLSHADER::Use binds the programs' two-view variants and sets their caneClipLtoR (view 1's clip from view 0's) for the
 // pass g_serialMultiview; a variant that cannot be made sets g_fMultiviewFailed (VR then draws the eyes one by one)

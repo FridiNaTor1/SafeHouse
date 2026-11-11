@@ -51,7 +51,7 @@ uint32_t* Context::BindingSlot(GLenum target) {
 BufferRecord* Context::BoundBuffer(GLenum target) {
   uint32_t* slot = BindingSlot(target);
   if (!slot) {
-    SetError(gl::kInvalidEnum);
+    SetError(gl::kInvalidEnum, __func__, target);
     return nullptr;
   }
   BufferRecord* record = buffers_.Find(*slot);
@@ -80,7 +80,7 @@ void Context::DeleteBuffers(int count, const uint32_t* names) {
 void Context::BindBuffer(GLenum target, uint32_t name) {
   uint32_t* slot = BindingSlot(target);
   if (!slot) {
-    SetError(gl::kInvalidEnum);
+    SetError(gl::kInvalidEnum, __func__, target);
     return;
   }
   if (name) buffers_.FindOrCreate(name);
@@ -252,7 +252,7 @@ void Context::DeleteTextures(int count, const uint32_t* names) {
 void Context::ActiveTexture(GLenum unit) {
   const int index = static_cast<int>(unit - gl::kTexture0);
   if (index < 0 || index >= kTextureSlotCount) {
-    SetError(gl::kInvalidEnum);
+    SetError(gl::kInvalidEnum, __func__, unit);
     return;
   }
   state_.active_unit = index;
@@ -269,7 +269,7 @@ void Context::BindTexture(GLenum target, uint32_t name) {
   } else if (target == gl::kTexture2D) {
     unit.texture_2d = name;
   } else {
-    SetError(gl::kInvalidEnum);
+    SetError(gl::kInvalidEnum, __func__, target);
   }
 }
 
@@ -299,7 +299,7 @@ bool Context::DefineTexture(TextureRecord* record, GLenum target, GLenum interna
                             int height, int layers, int levels) {
   const PixelFormatInfo info = ToPixelFormat(internal_format);
   if (info.format == MTLPixelFormatInvalid || width <= 0 || height <= 0) {
-    SetError(gl::kInvalidEnum);
+    SetError(gl::kInvalidEnum, __func__, internal_format);
     return false;
   }
   record->texture = AllocateTexture(target, info.format, width, height, layers, levels, 1);
@@ -453,7 +453,7 @@ void Context::SetTextureParameter(TextureRecord* record, GLenum pname, int value
       record->swizzle[pname - gl::kTextureSwizzleR] = static_cast<GLenum>(value);
       break;
     default:
-      SetError(gl::kInvalidEnum);
+      SetError(gl::kInvalidEnum, __func__, pname);
       break;
   }
 }
@@ -500,7 +500,7 @@ void Context::PixelStorei(GLenum pname, int value) {
   } else if (pname == gl::kUnpackAlignment) {
     state_.unpack_alignment = value;
   } else if (pname != gl::kUnpackRowLength && pname != gl::kPackRowLength) {
-    SetError(gl::kInvalidEnum);
+    SetError(gl::kInvalidEnum, __func__, pname);
   }
 }
 
@@ -581,7 +581,7 @@ void Context::SamplerParameteri(uint32_t name, GLenum pname, int value) {
       sampler->wrap_r = static_cast<GLenum>(value);
       break;
     default:
-      SetError(gl::kInvalidEnum);
+      SetError(gl::kInvalidEnum, __func__, pname);
       break;
   }
 }
@@ -621,7 +621,7 @@ void Context::DeleteRenderbuffers(int count, const uint32_t* names) {
 
 void Context::BindRenderbuffer(GLenum target, uint32_t name) {
   if (target != gl::kRenderbuffer) {
-    SetError(gl::kInvalidEnum);
+    SetError(gl::kInvalidEnum, __func__, target);
     return;
   }
   if (name) renderbuffers_.FindOrCreate(name);
@@ -638,7 +638,7 @@ void Context::RenderbufferStorage(GLenum target, int samples, GLenum internal_fo
   }
   const PixelFormatInfo info = ToPixelFormat(internal_format);
   if (info.format == MTLPixelFormatInvalid) {
-    SetError(gl::kInvalidEnum);
+    SetError(gl::kInvalidEnum, __func__, internal_format);
     return;
   }
   int chosen = std::max(samples, 1);
@@ -782,7 +782,7 @@ void Context::FramebufferTexture2D(GLenum target, GLenum attachment, uint32_t te
   }
   Attachment* slot = AttachmentFor(framebuffer, attachment);
   if (!slot) {
-    SetError(gl::kInvalidEnum);
+    SetError(gl::kInvalidEnum, __func__, attachment);
     return;
   }
   *slot = value;
@@ -804,7 +804,7 @@ void Context::FramebufferRenderbuffer(GLenum target, GLenum attachment, uint32_t
   }
   Attachment* slot = AttachmentFor(framebuffer, attachment);
   if (!slot) {
-    SetError(gl::kInvalidEnum);
+    SetError(gl::kInvalidEnum, __func__, attachment);
     return;
   }
   *slot = value;
