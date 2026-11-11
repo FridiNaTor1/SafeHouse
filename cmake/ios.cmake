@@ -64,7 +64,10 @@ target_link_libraries(cane_platform INTERFACE "-framework CoreFoundation" "-fram
 add_library(SafeHouseCore SHARED platform/ios/ios_app.mm platform/ios/touch_overlay.mm)
 target_include_directories(SafeHouseCore PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/platform/ios" "${CMAKE_CURRENT_SOURCE_DIR}/platform")
 target_compile_options(SafeHouseCore PRIVATE -fobjc-arc)
-target_link_libraries(SafeHouseCore PRIVATE "$<LINK_LIBRARY:WHOLE_ARCHIVE,SDL2-static>" "-framework Foundation" "-framework UIKit"
+# (every SDL object, so the programs find all of SDL here: -force_load. CMake's WHOLE_ARCHIVE feature has no OBJCXX
+# link rule on Apple, and this library links as Objective-C++)
+target_link_options(SafeHouseCore PRIVATE "LINKER:-force_load,$<TARGET_FILE:SDL2-static>")
+target_link_libraries(SafeHouseCore PRIVATE SDL2-static "-framework Foundation" "-framework UIKit"
  "-framework GameController" "-framework QuartzCore" "-framework UniformTypeIdentifiers" "-framework CoreGraphics")
 # (the programs see SDL's headers and link SDL from SafeHouseCore: cane_sdl; Sly2-Release/CMakeLists.txt's CANE_IOS)
 add_library(cane_sdl INTERFACE)
