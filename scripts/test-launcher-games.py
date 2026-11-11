@@ -136,6 +136,38 @@ def main():
                        "sha256": hashlib.sha256(b"{}").hexdigest()}]}))
         result = run([copied, "--play", "sly2"], env=env)
         assert result.returncode != 0 and b"in development" in result.stderr, result
+
+        # ---- custom install root and previous-root fallback on Windows and Linux
+        # Portable profile keeps test data away from the user's real games.
+        config = data / "config/launcher.json"
+        config.parent.mkdir(parents=True, exist_ok=True)
+        root_a = work / "Games A"
+        root_b = work / "Games B"
+        a_sly2, b_sly2 = root_a / "sly2", root_b / "sly2"
+        shutil.copytree(sly2, a_sly2)
+        shutil.copytree(sly2, b_sly2)
+        iso_library = work / "Disc library"
+        iso_library.mkdir()
+        config.write_text(json.dumps({
+            "install_dir": str(root_b),
+            "install_roots": [str(root_a)],
+            "iso_library_dir": str(iso_library),
+        }))
+        result = run([copied, "--installs"], env=env)
+        assert result.returncode == 0, result
+        listed = result.stdout.decode().splitlines()
+        assert any("sly2 usa" in line and str(b_sly2) in line for line in listed), listed
+        assert not any("sly2 usa" in line and str(a_sly2) in line for line in listed), listed
+        shutil.rmtree(b_sly2)
+        result = run([copied, "--installs"], env=env)
+        listed = result.stdout.decode().splitlines()
+        assert result.returncode == 0 and any("sly2 usa" in line and str(a_sly2) in line for line in listed), listed
+        shutil.rmtree(a_sly2)
+        result = run([copied, "--installs"], env=env)
+        listed = result.stdout.decode().splitlines()
+        assert result.returncode == 0 and any("sly2 usa" in line and str(sly2) in line for line in listed), listed
+        assert json.loads(config.read_text())["iso_library_dir"] == str(iso_library)
+        config.unlink()
         if os.name != "nt":
             runtime = bin_dir / "Sly2-Release"
             runtime.write_text('#!/bin/sh\nprintf "%s\\n" "$@" > "$4/runtime-args.txt"\npwd >> "$4/runtime-args.txt"\n')
@@ -222,6 +254,36 @@ def main():
                 lines = (data / "user/sly2/runtime-args.txt").read_text().splitlines()
                 assert lines == default_args + [str(bin_dir)], (value, lines)
                 assert json.loads(config.read_text()) == selection
+        # ---- user-selected install root, without moving or hiding legacy game files
+        if os.name != "nt":
+            config = data / "config/launcher.json"
+            custom = work / "Games on another drive"
+            custom_sly2 = custom / "sly2"
+            shutil.copytree(sly2, custom_sly2)
+            iso_library = work / "Disc library"
+            iso_library.mkdir(exist_ok=True)
+            selection = {"install_dir": str(custom), "iso_library_dir": str(iso_library)}
+            config.write_text(json.dumps(selection))
+            result = run([copied, "--installs"], env=env)
+            assert result.returncode == 0, result
+            entries = result.stdout.decode().splitlines()
+            assert any("sly2 usa" in line and str(custom_sly2) in line for line in entries), entries
+            assert not any("sly2 usa" in line and str(sly2) in line for line in entries), entries
+            assert any("sly1 usa" in line and str(sly1) in line for line in entries), entries
+            result = run([copied, "--play", "sly2"], env=env)
+            assert result.returncode == 0, result
+            lines = (data / "user/sly2/runtime-args.txt").read_text().splitlines()
+            assert lines[:2] == ["--data-dir", str(custom_sly2)], lines
+            # Removing a custom installation reveals the unchanged original.
+            shutil.rmtree(custom_sly2)
+            result = run([copied, "--installs"], env=env)
+            assert result.returncode == 0 and str(sly2).encode() in result.stdout, result
+            result = run([copied, "--play", "sly2"], env=env)
+            assert result.returncode == 0, result
+            lines = (data / "user/sly2/runtime-args.txt").read_text().splitlines()
+            assert lines[:2] == ["--data-dir", str(sly2)], lines
+            config.write_text("{}")
+
         result = run([copied, "--play", "sly3"], env=env)
         assert result.returncode != 0, result
         # ---- Sly 3 launch contract (the same as Sly 2's, its own folders)
