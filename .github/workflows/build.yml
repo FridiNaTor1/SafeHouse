@@ -269,6 +269,8 @@ jobs:
       SAFEHOUSE_VERSION: ${{ needs.version.outputs.version }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: glslang (Sly 2's Vulkan SPIR-V)
+        run: sudo apt-get update && sudo apt-get install -y glslang-tools
       - name: Android SDK packages (NDK 29, platform 36)
         run: |
           set -eu

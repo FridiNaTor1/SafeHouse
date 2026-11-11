@@ -434,9 +434,17 @@ void readViewFramebuffer(GLFWwindow* w) {
     SDL_VERSION(&info.version);
     if (SDL_GetWindowWMInfo(w->native, &info) && info.subsystem == SDL_SYSWM_UIKIT) w->viewFramebuffer = info.info.uikit.framebuffer;
 }
-// --ios-smoke: the launcher's 300th frame (about 5 s) as Documents/smoke-launcher.png, then it closes (CI, ios.yml)
+// --ios-smoke: the first launcher frame drawn 5 s or more after its first one, as Documents/smoke-launcher.png; then
+// it closes (CI, ios.yml). (Time, not a frame count: an idle launcher draws only a few frames a second.)
+double smokeStart = -1;
+bool smokeDone = false;
 void smokeFrame(GLFWwindow* w) {
-    if (!cane::ios::smokeTest() || !launcherRole() || ++swaps != 300) return;
+    if (!cane::ios::smokeTest() || !launcherRole() || smokeDone) return;
+    ++swaps;
+    const double now = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    if (smokeStart < 0) smokeStart = now;
+    if (now - smokeStart < 5.0 || swaps < 10) return;
+    smokeDone = true;
     int pw = 0, ph = 0;
     drawableSize(w, &pw, &ph);
     std::vector<unsigned char> pixels(size_t(std::max(pw, 1)) * size_t(std::max(ph, 1)) * 4);
@@ -445,8 +453,18 @@ void smokeFrame(GLFWwindow* w) {
     stbi_flip_vertically_on_write(1);
     const std::string file = cane::ios::documentsDirectory() + "/smoke-launcher.png";
     const bool ok = pw > 0 && ph > 0 && stbi_write_png(file.c_str(), pw, ph, 4, pixels.data(), pw * 4);
-    cane::ios::log(std::string("smoke: launcher frame ") + std::to_string(pw) + "x" + std::to_string(ph) + (ok ? " saved to " : " NOT saved to ") + file);
+    cane::ios::log(std::string("smoke: launcher frame ") + std::to_string(swaps) + ", " + std::to_string(pw) + "x" + std::to_string(ph) + (ok ? " saved to " : " NOT saved to ") + file);
     w->close = true;
+}
+// (--ios-smoke) the launcher stops after 30 s even when it drew no frame to save
+void smokeDeadline() {
+    if (!cane::ios::smokeTest() || !launcherRole() || !mainWindow || smokeStart < 0) return;
+    const double now = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    if (!smokeDone && now - smokeStart > 30.0) {
+        smokeDone = true;
+        cane::ios::log("smoke: no launcher frame after 30 s (" + std::to_string(swaps) + " frames drawn): closing");
+        mainWindow->close = true;
+    }
 }
 }  // namespace
 
@@ -583,6 +601,7 @@ void glfwSwapInterval(int value) {
     if (current && !current->metal) SDL_GL_SetSwapInterval(value);
 }
 void glfwPollEvents() {
+    smokeDeadline();
     // (the launcher) a game waiting for the main thread runs here, in place of the launcher's frames
     if (launcherRole() && cane::ios::programWaiting()) {
         GLFWwindow* w = mainWindow;
@@ -611,6 +630,7 @@ void glfwPollEvents() {
     while (SDL_PollEvent(&ev)) event(ev);
 }
 void glfwWaitEventsTimeout(double seconds) {
+    smokeDeadline();
     if (launcherRole() && cane::ios::programWaiting()) return glfwPollEvents();
     SDL_Event ev;
     if (SDL_WaitEventTimeout(&ev, int(std::clamp(seconds, 0.0, 1.0) * 1000))) event(ev);

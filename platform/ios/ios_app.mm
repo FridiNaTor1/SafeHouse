@@ -299,6 +299,7 @@ int runProgramNow(const std::vector<std::string>& arguments) {
     p.arguments = arguments;
     p.path = arguments[0];
     p.image = baseName(p.path);
+    p.mainThread = NSThread.isMainThread;
     return runProgram(p);
 }
 bool processRunning(std::int64_t handle) {
