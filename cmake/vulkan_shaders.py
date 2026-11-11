@@ -23,6 +23,14 @@ table platform/vulkan/vk_shaders.h declares:
   mat3 is Mesa's GLSL built-in (cofactors, then each column / the determinant). The pictures then match bit for bit;
   without it a pixel here and there differs by one (floor() of a product near a whole number).
 
+Per-state specialization (the glob programs): the loose uniforms a draw packet's state sets once for a run (SPEC: the
+texture function, colour source, blend-pair mode, alpha test, fog black) are read through specialization constants:
+`name` becomes a global set at main()'s start from the constant `caneS_name` (constant_id = its SPEC index + 1) where
+bit i of `caneSpecMask` (constant_id 0) is set, else from the push block's member (renamed `caneU_name`). A pipeline
+made without specialization info (mask 0) reads the push block as before, computing the same bits; one made with a
+state's values (the layer's PacketState spec, SLY2N_VKSPEC) has those branches folded away by the driver. `specMask`
+in the table: the SPEC uniforms the program's stages read.
+
 The variants are switch_shaders.py's plus BINDLESS (the game asks for it with the extension's #extension line, which
 the layer reads as the define). VULKAN is defined for every program.
 
@@ -81,6 +89,10 @@ PROGRAMS += [
     ('vrcopy_array', 'vrfull.vert', None, 'vrcopy.frag', {'CANE_ARRAY': '1'}, SLY2_ONLY),
     ('vrvignette', 'vrfull.vert', None, 'vrvignette.frag', {}, SLY2_ONLY),
     ('vrmark', 'vrmark.vert', None, 'vrmark.frag', {}, SLY2_ONLY),
+    # (upscaling, fsr.h: FSR 1's two passes; the EASU from a two-layer eye target too, a layer a draw)
+    ('fsreasu', 'vrfull.vert', None, 'fsreasu.frag', {}, SLY2_ONLY),
+    ('fsreasu_array', 'vrfull.vert', None, 'fsreasu.frag', {'CANE_ARRAY': '1'}, SLY2_ONLY),
+    ('fsrrcas', 'vrfull.vert', None, 'fsrrcas.frag', {}, SLY2_ONLY),
 ]
 # (the layer's own: the masked clears' full-frame triangle, platform/vulkan/shaders)
 NATIVE = 'platform/vulkan/shaders'
@@ -135,6 +147,11 @@ TOKEN = re.compile(r'\s+|(?P<tok>[A-Za-z_]\w*|\d+\.?\d*(?:[eE][-+]?\d+)?[uUfF]?|
 KEYWORDS = {'return', 'if', 'else', 'for', 'while', 'do', 'switch', 'case', 'default', 'break', 'continue', 'discard',
             'in', 'out', 'inout', 'const', 'uniform', 'flat', 'noperspective', 'smooth'}
 MATRIX_CALLS = {'inverse', 'caneInverse', 'transpose', 'mat2', 'mat3', 'mat4'}
+
+
+# (per-state specialization) the glob uniforms a packet state fixes for its run; the order is the layer's (gl_vulkan.cpp
+# kSpecNames) and the constant ids are index + 1 (0: caneSpecMask)
+SPEC = ['fTextured', 'icolor', 'caneBlend1', 'ate', 'atst', 'aref', 'afailMode', 'fFogBlack']
 
 
 def tokens(src):
@@ -319,6 +336,9 @@ def build_program(root, key, files, defines, directory, out_dir, glslang):
         for loc, kind, _ in VERT_INPUT.findall(sources['vert']):
             inputs[int(loc)] = input_kind(kind)
 
+    specialize = key.startswith('glob')
+    spec_used = set()
+
     def stage_text(stage, src, mv):
         if re.search(r'\bgl_InstanceID\b', src):
             fail(f'{key}.{stage}: gl_InstanceID (Vulkan counts the base instance in) is not handled')
@@ -380,10 +400,12 @@ def build_program(root, key, files, defines, directory, out_dir, glslang):
         for name, s in samplers.items():
             if name in stage_samplers[stage]:
                 block_members.append(f'    layout(offset = {8 * s["binding"]}) uvec2 caneTex_{s["binding"]};')
+        spec_here = [f for f in members if f['name'] in stage_uniforms[stage] and specialize and f['name'] in SPEC and f['count'] == 1]
         for f in members:
             if f['name'] in stage_uniforms[stage]:
                 suffix = f'[{f["count"]}]' if f['count'] > 1 else ''
-                block_members.append(f'    layout(offset = {f["offset"]}) {f["type"]} {f["name"]}{suffix};')
+                member = ('caneU_' if f in spec_here else '') + f['name']
+                block_members.append(f'    layout(offset = {f["offset"]}) {f["type"]} {member}{suffix};')
         if block_members:
             decl += ['layout(push_constant, std140) uniform CanePush', '{'] + block_members + ['};']
         for name, s in samplers.items():
@@ -397,6 +419,14 @@ def build_program(root, key, files, defines, directory, out_dir, glslang):
                          r'sampler2D(caneTex2D[nonuniformEXT(\1.x)], caneSamplers[nonuniformEXT(\1.y)])', src)
         if 'CANE_FETCH' in defines and stage == 'frag':
             decl.append(f'layout(input_attachment_index = 0, set = {SET_BUFFERS}, binding = 16) uniform subpassInput caneFbFetch;')
+        if spec_here:
+            decl.append('layout(constant_id = 0) const uint caneSpecMask = 0u;')
+            for f in spec_here:
+                i = SPEC.index(f['name'])
+                zero = '0.0' if f['type'] == 'float' else '0u' if f['type'] == 'uint' else '0'
+                decl.append(f'layout(constant_id = {i + 1}) const {f["type"]} caneS_{f["name"]} = {zero};')
+                decl.append(f'{f["type"]} {f["name"]};')
+            spec_used.update(SPEC.index(f['name']) for f in spec_here)
         decl.append(glsl_fuse.fma_helpers() + HELPERS)
         if decl:
             func = re.search(r'^[ \t]*(?:void|bool|float|int|uint|vec[234]|ivec[234]|uvec[234]|mat[34]|\w+)\s+\w+\s*\([^;{]*\)\s*\{',
@@ -405,6 +435,13 @@ def build_program(root, key, files, defines, directory, out_dir, glslang):
                 fail(f'{key}.{stage}: no function to place the declarations before')
             src = src[:func.start()] + '\n'.join(decl) + '\n' + src[func.start():]
 
+        if spec_here:
+            sets = ''.join(f'    {f["name"]} = (caneSpecMask & {1 << SPEC.index(f["name"])}u) != 0u ? caneS_{f["name"]} : caneU_{f["name"]};\n'
+                           for f in spec_here)
+            m = re.search(r'\bvoid\s+main\s*\(\s*(?:void)?\s*\)\s*\{[ \t]*\n?', src)
+            if not m:
+                fail(f'{key}.{stage}: no main() for the specialization constants')
+            src = src[:m.end()] + sets + src[m.end():]
         if stage in ('vert', 'geom') and not NOFUSE:
             src = glsl_fuse.fuse_source(src)   # (the OpenGL compiler's fused multiply-adds: cmake/glsl_fuse.py)
         header = '#version 460\n#extension GL_EXT_nonuniform_qualifier : require\n'
@@ -460,7 +497,8 @@ def build_program(root, key, files, defines, directory, out_dir, glslang):
 
     sampler_list = sorted(samplers.items(), key=lambda kv: kv[1]['binding'])
     return {'key': key, 'files': files, 'defines': defines, 'rows': rows, 'push_size': push_size,
-            'samplers': sampler_list, 'stages': result, 'inputs': inputs}
+            'samplers': sampler_list, 'stages': result, 'inputs': inputs,
+            'spec_mask': sum(1 << i for i in spec_used)}
 
 
 def c_words(name, data):
@@ -531,7 +569,8 @@ def main():
                        f'{uniforms}, {len(rows)}, {p["push_size"]}, {{{storage}}}, {len(p["samplers"])}, '
                        f'{input_mask}u, {input_kinds}u, '
                        f'{{{", ".join(b[0] for b in ubo_blobs)}}}, {{{", ".join(b[1] for b in ubo_blobs)}}}, '
-                       f'{{{", ".join(b[0] for b in mv_blobs)}}}, {{{", ".join(b[1] for b in mv_blobs)}}}, {{{storage_mv}}}}},')
+                       f'{{{", ".join(b[0] for b in mv_blobs)}}}, {{{", ".join(b[1] for b in mv_blobs)}}}, {{{storage_mv}}}, '
+                       f'{p["spec_mask"]}u}},')
     c.append('}  // namespace')
     c.append('const Program programs[] = {')
     c.extend(entries)

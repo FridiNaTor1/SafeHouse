@@ -41,6 +41,9 @@ struct Program
     const uint32_t* spirvMv[3];
     uint32_t spirvMvSize[3];
     uint16_t storageMaskMv[3];
+    // (per-state specialization, cmake/vulkan_shaders.py SPEC) bit i: the program reads SPEC uniform i through
+    // specialization constant i + 1 where bit i of constant 0 is set
+    uint32_t specMask;
 };
 extern const Program programs[];
 extern const size_t programCount;

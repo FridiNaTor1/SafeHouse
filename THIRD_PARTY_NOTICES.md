@@ -16,6 +16,8 @@ Vulkan (Sly 2's Vulkan renderer, `platform/vulkan/`, the default on Linux and Wi
 
 VR (Sly 2's optional OpenXR mode, `Sly2-Release/vr.cpp`): the OpenXR headers 1.1.63 by the Khronos Group (Apache-2.0 OR MIT, `Libraries/include/openxr/`) and, where VR is used, the Khronos OpenXR loader (Apache-2.0): the system's loader on Linux, `openxr_loader.dll` on Windows, and on Android the loader from Maven Central's `org.khronos.openxr:openxr_loader_for_android:1.1.63`. Sources, checksums and both licence texts are in `licenses/openxr/`. The game does not need the loader to start.
 
+Upscaling (Sly 2's FSR 1 option, `Sly2-Release/fsr.h`): AMD FidelityFX Super Resolution 1.0 by Advanced Micro Devices, Inc. (MIT). Its shader headers `ffx_a.h` and `ffx_fsr1.h` (https://github.com/GPUOpen-Effects/FidelityFX-FSR, commit a21ffb8f6c13233ba336352bdff293894c706575) are kept unmodified in `Libraries/fidelityfx-fsr1/`; `Sly2-Release/fsreasu.frag` and `fsrrcas.frag` are GLSL versions of their EASU and RCAS passes. The licence text is in `licenses/fidelityfx-fsr.txt`. FidelityFX is a trademark of Advanced Micro Devices, Inc.
+
 No original Sly Cooper game data is included in release packages.
 
 Sly 2 (`Sly2-Release/`, the native port; called Sly2-Native before 2026-10-28) contains no PS2 emulation code. Its sound engine (`Sly2-Release/snd989.cpp`) follows the 989snd rules of OpenGOAL's reimplementation of 989snd (ISC). The emulated Sly 2 reference used during development, with its vendored rac1-native-game (MIT) and OpenGOAL 989snd (ISC) code, is no longer part of this repository or of the packages.

@@ -25,6 +25,7 @@
 #include "display.h"
 #include "frontend.h"
 #include "gl.h"
+#include "fsr.h"
 #include "hudwidget.h"
 #include "po.h"
 #include "ref.h"
@@ -87,6 +88,9 @@ enum NATIVEID : int
     NID_AudioPage, NID_AudioOutput, NID_AudioInput, NID_AudioHeadsetOutput,
     // (lang) Language...: the text's and the voices' languages apart (region.h g_nLangVoice)
     NID_LanguagePage, NID_TextLanguage, NID_VoiceLanguage,
+    // (upscaling, fsr.h; display.h fUpscale) Upscaling, then while it is on its method, preset and sharpness: on the display
+    // options' page after the resolution, and in VR Settings on a PC headset (the same setting)
+    NID_Upscale, NID_UpscaleMethod, NID_UpscalePreset, NID_UpscaleSharpness,
     // (VR, vr.h) the pause menu's VR Settings page (a headset in use)
     NID_Vr = NID_Base + 0x200,
     NID_VrPage = NID_Vr, NID_VrMode, NID_VrAutoCam, NID_VrVignette, NID_VrScreenSize, NID_VrRefresh, NID_VrEyeRes, NID_VrMsaa, NID_VrFoveation, NID_VrWorldScale,
@@ -487,6 +491,18 @@ std::string StrNative(int id)
     case NID_Vsync: return onOff(PTX_VSync, g_display.fVsync);
     case NID_DrawDistance: return StrPortValue(PTX_DrawDistance, StrPortDecimal(g_display.drawDistance, 2) + "x");
     case NID_LongShadows: return onOff(PTX_LongShadows, g_display.fLongShadows);
+    case NID_Upscale: return onOff(PTX_Upscaling, g_display.fUpscale);
+    case NID_UpscaleMethod: return StrPortValue(PTX_UpscaleMethod, "FSR 1");
+    case NID_UpscalePreset:
+    {
+        static const PTX aptx[] = {PTX_UltraQuality, PTX_Quality, PTX_Balanced, PTX_Performance};
+        const int i = std::clamp(g_display.upscalePreset, 0, 3);
+        std::snprintf(ach, sizeof(ach), " (%d%%)", int(std::lround(100.0 / fsr::RScalePreset(i))));
+        return StrPortValue(PTX_UpscalePreset, StrPort(aptx[i]) + ach);
+    }
+    case NID_UpscaleSharpness:
+        std::snprintf(ach, sizeof(ach), "%d%%", g_display.upscaleSharpness);
+        return StrPortValue(PTX_UpscaleSharpness, ach);
     case NID_ExitToDesktop: return StrPort(FQuitToLauncher() ? PTX_QuitToLauncher : PTX_ExitToDesktop);
     case NID_DisplayPage: return StrPort(PTX_DisplayOptions);
     case NID_ControlsPage: return StrPort(PTX_ControlsAndPrompts);
@@ -727,6 +743,27 @@ void BindKey(int i, int key)
     FSaveDisplaySettings(cane::userDirectory());
 }
 
+// (upscaling) the rows shown: not where the headset's compositor upscales (the Quest: VR Settings' own Upscaling), nor
+// where FSR 1 cannot run (fsr.h: the Metal layer)
+bool FUpscaleRowsShown()
+{
+    if (vr::FActive() && vr::FCompositorUpscaling()) return false;
+    return g_gl.window && fsr::FAvailable();
+}
+// Upscaling's rows (fSubOnly: only the method, preset and sharpness, those while it is on), with the page's select function
+void AppendUpscaleRows(std::vector<MENUENT>& a, uint32_t pfnSelect, bool fSubOnly)
+{
+    if (!FUpscaleRowsShown()) return;
+    for (int id = fSubOnly ? int(NID_UpscaleMethod) : int(NID_Upscale); id <= NID_UpscaleSharpness; ++id)
+    {
+        if (id != NID_Upscale && !g_display.fUpscale) break;
+        MENUENT e;
+        e.id = id;
+        e.pfnSelect = pfnSelect;
+        a.push_back(e);
+    }
+}
+
 // a PC display option's next value
 void CycleNative(MENUENT& e)
 {
@@ -769,6 +806,27 @@ void CycleNative(MENUENT& e)
     case NID_Window: g_display.window = DISPWINDOW((int(g_display.window) + 1) % 3); break;
     case NID_Vsync: g_display.fVsync = !g_display.fVsync; break;
     case NID_LongShadows: g_display.fLongShadows = !g_display.fLongShadows; break;
+    case NID_Upscale:
+        g_display.fUpscale = !g_display.fUpscale;
+        // (the method, preset and sharpness rows exist only while it is on: right after it; the pages keep room for them)
+        if (PAGE* pg = PpageCur())
+        {
+            auto& a = pg->aent;
+            std::erase_if(a, [](const MENUENT& row) { return row.id >= NID_UpscaleMethod && row.id <= NID_UpscaleSharpness; });
+            if (g_display.fUpscale)
+                for (size_t i = 0; i < a.size(); ++i)
+                    if (a[i].id == NID_Upscale)
+                    {
+                        std::vector<MENUENT> arow;
+                        AppendUpscaleRows(arow, a[i].pfnSelect, true);
+                        a.insert(a.begin() + std::ptrdiff_t(i) + 1, arow.begin(), arow.end());
+                        break;
+                    }
+        }
+        break;
+    case NID_UpscaleMethod: break;   // (FSR 1 only, for now)
+    case NID_UpscalePreset: g_display.upscalePreset = (g_display.upscalePreset + 1) % 4; break;
+    case NID_UpscaleSharpness: g_display.upscaleSharpness = g_display.upscaleSharpness >= 100 ? 0 : (g_display.upscaleSharpness / 10 + 1) * 10; break;
     case NID_DrawDistance:
     {
         static const float ag[] = {0.75f, 1.0f, 1.5f, 2.0f, 3.0f};
@@ -1021,12 +1079,18 @@ std::vector<MENUENT> AentVr()
     for (int id : {int(NID_VrMode), int(NID_VrAutoCam), int(NID_VrCutscenes), int(NID_VrVignette), int(NID_VrScreenSize),
                    int(NID_VrRefresh), int(NID_VrEyeRes), int(NID_VrFoveation), idUpscaling, int(NID_VrMsaa), int(NID_VrMultiview), int(NID_VrWorldScale), int(NID_VrRcTable), int(NID_VrRecenter)})
     {
-        if (!id) continue;
+        if (!id)
+        {
+            // (a PC headset: the display options' Upscaling rows, the same setting, cycled as there)
+            AppendUpscaleRows(a, PFN_NativeDisplay, false);
+            continue;
+        }
         MENUENT e;
         e.id = id;
         e.pfnSelect = PFN_NativeVr;
         a.push_back(e);
     }
+    a.reserve(a.size() + 4);   // (NID_Upscale's rows inserted in place)
     return a;
 }
 
@@ -1157,7 +1221,9 @@ std::vector<MENUENT> AentDisplayOptions()
         e.id = id <= NID_DrawDistance ? id : NID_LongShadows;   // (then Long Shadows, settings v16)
         e.pfnSelect = PFN_NativeDisplay;
         a.push_back(e);
+        if (id == NID_Resolution) AppendUpscaleRows(a, PFN_NativeDisplay, false);   // (upscaling: after the resolution)
     }
+    a.reserve(a.size() + 4);   // (NID_Upscale's rows inserted in place: the rows do not move)
     return a;
 }
 

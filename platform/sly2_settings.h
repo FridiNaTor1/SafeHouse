@@ -80,10 +80,24 @@ struct Sly2VrOptions {
     int upscaling = 2;           // the headset compositor's filter on the eyes: 0 Off, 1 Sharpen, 2 Super Resolution
 };
 
+// Upscaling (Sly2-Release fsr.h, display.h fUpscale): [Display] in the file. The scene drawn at the preset's fraction of
+// the picture and scaled up by the method; off (the default) keeps the internal resolution and the bilinear stretch.
+// Not offered on the Meta Quest (its compositor's own upscaling: [VR]); on a PC headset VR Settings shows these same keys.
+enum Sly2UpscaleMethod : int { UpscaleMethod_Fsr1 = 1 };
+enum Sly2UpscalePreset : int { UpscalePreset_UltraQuality = 0, UpscalePreset_Quality = 1, UpscalePreset_Balanced = 2,
+                               UpscalePreset_Performance = 3 };
+struct Sly2UpscaleOptions {
+    int enabled = 0;
+    int method = UpscaleMethod_Fsr1;
+    int preset = UpscalePreset_Quality;   // AMD's FSR 1 presets: 1.3x, 1.5x, 1.7x, 2x per axis
+    int sharpness = 80;                   // 0..100 % (RCAS)
+};
+
 struct Sly2Settings {
     SystemSettings system = sly2Defaults();
     Sly2GameOptions game;
     Sly2VrOptions vr;
+    Sly2UpscaleOptions upscale;
     // the save-kept options still to be taken from the newest save (migration; the schema's key names)
     std::vector<std::string> pendingSaveOptions;
     // keys and sections this build does not know, written back as they are
@@ -298,6 +312,40 @@ inline const std::vector<Sly2Key>& sly2Schema() {
                           int n = 0;
                           if (!names::parseInt(v, n) || n < 30) return false;
                           s.system.frameRate = std::min(n, 1000);
+                          return true;
+                      } });
+        // [Display] Upscaling (Sly2UpscaleOptions)
+        k.push_back({ "Display", "Upscaling", "On or Off: the 3D scene drawn smaller and scaled up to the window (FSR 1)",
+                      [](const Sly2Settings& s) { return std::string(s.upscale.enabled ? "On" : "Off"); },
+                      [](Sly2Settings& s, const std::string& v) { return names::parseBool(v, s.upscale.enabled); } });
+        k.push_back({ "Display", "Upscaling Method", "FSR 1 (AMD FidelityFX Super Resolution 1.0)",
+                      [](const Sly2Settings&) { return std::string("FSR 1"); },
+                      [](Sly2Settings& s, const std::string& v) {
+                          const std::string f = ini::keyForm(v);
+                          if (f != "fsr1" && f != "fsr") return false;
+                          s.upscale.method = UpscaleMethod_Fsr1;
+                          return true;
+                      } });
+        k.push_back({ "Display", "Upscaling Preset", "Ultra Quality (1.3x), Quality (1.5x), Balanced (1.7x) or Performance (2x)",
+                      [](const Sly2Settings& s) {
+                          static const char* const names[] = { "Ultra Quality", "Quality", "Balanced", "Performance" };
+                          return std::string(names[std::clamp(s.upscale.preset, 0, 3)]);
+                      },
+                      [](Sly2Settings& s, const std::string& v) {
+                          const std::string f = ini::keyForm(v);
+                          static const char* const forms[] = { "ultraquality", "quality", "balanced", "performance" };
+                          for (int i = 0; i < 4; ++i)
+                              if (f == forms[i]) return s.upscale.preset = i, true;
+                          return false;
+                      } });
+        k.push_back({ "Display", "Upscaling Sharpness", "0 to 100 (%)",
+                      [](const Sly2Settings& s) { return std::to_string(s.upscale.sharpness); },
+                      [](Sly2Settings& s, const std::string& v) {
+                          int n = 0;
+                          std::string t = ini::trim(v);
+                          if (!t.empty() && t.back() == '%') t.pop_back();
+                          if (!names::parseInt(ini::trim(t), n) || n < 0 || n > 100) return false;
+                          s.upscale.sharpness = n;
                           return true;
                       } });
         // [Graphics]

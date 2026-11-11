@@ -61,6 +61,14 @@ struct DISPLAY
     // are the largest GPU fill of a frame (~36 screens of stencil samples in Paris): for tile GPUs (Quest, Steam Frame).
     // --fast-shadows 1 / SLY2N_FASTSHADOWS=1; the Switch always.
     bool fFastShadows = false;
+    // Upscaling (Settings.ini [Display] Upscaling, Upscaling Method / Preset / Sharpness; --upscale, fsr.h; default
+    // off = the current pictures): on, the scene renders at the preset's fraction of the picture (in place of the
+    // internal resolution) and the method (FSR 1: EASU + RCAS) scales it up; the HUD, menus and overlays then draw at
+    // the picture's own size (gl.h BeginNativeUi). Not in VR (vr.cpp upscales each eye) or where FSR cannot run.
+    bool fUpscale = false;
+    int upscaleMethod = 1;      // fsr.h METHOD
+    int upscalePreset = 1;      // fsr.h PRESET: 0 Ultra Quality (1.3x), 1 Quality (1.5x), 2 Balanced (1.7x), 3 Performance (2x)
+    int upscaleSharpness = 80;  // 0..100 %
 
     // The swap (ApplyDisplaySettings): VSync gates the frames at the cap (the pacer then runs 1 % fast, so only the
     // swap gates: platform/frame_pacer.h), and a generation that changes with the swap's configuration

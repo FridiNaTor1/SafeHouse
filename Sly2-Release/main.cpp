@@ -318,7 +318,7 @@ int main(int argc, char** argv)
     VIEWOPTS vo;
     std::string cmRanges = "2DDED0+6A0,2DFBC0+2240,FB1580+1100,FB37E0+80,140C9F0+600,1486000+3400";
     bool fCmFree = false;
-    struct { bool fAspect = false; DISPASPECT aspect = DISPASPECT_Fit; int internalHeight = -1, frameRate = -1, vsync = -1, window = -1, wideBackgrounds = -1, hqLogo = -1, longShadows = -1, fastShadows = -1, msaa = -1; float drawDistance = -1; } dispo;
+    struct { bool fAspect = false; DISPASPECT aspect = DISPASPECT_Fit; int internalHeight = -1, frameRate = -1, vsync = -1, window = -1, wideBackgrounds = -1, hqLogo = -1, longShadows = -1, fastShadows = -1, msaa = -1, upscale = -1, upscalePreset = -1, upscaleSharpness = -1; float drawDistance = -1; } dispo;
     std::vector<std::string> rest, physArgs;
     RENDERER rendererArg = RENDERER::Auto;
     bool fRendererArg = false;
@@ -356,6 +356,16 @@ int main(int argc, char** argv)
         else if (!std::strcmp(argv[i], "--long-shadows") && i + 1 < argc) dispo.longShadows = std::atoi(argv[++i]);   // (QoL: display.h fLongShadows)
         else if (!std::strcmp(argv[i], "--fast-shadows") && i + 1 < argc) dispo.fastShadows = std::atoi(argv[++i]);   // (low-end: display.h fFastShadows)
         else if (!std::strcmp(argv[i], "--window-mode") && i + 1 < argc) dispo.window = std::atoi(argv[++i]);
+        // (display.h fUpscale: off or fsr1; the preset 0..3 or its name; the sharpness 0..100)
+        else if (!std::strcmp(argv[i], "--upscale") && i + 1 < argc) dispo.upscale = !std::strcmp(argv[++i], "fsr1") || !std::strcmp(argv[i], "1") ? 1 : 0;
+        else if (!std::strcmp(argv[i], "--upscale-preset") && i + 1 < argc)
+        {
+            const char* psz = argv[++i];
+            static const char* const s_aszPreset[] = {"ultra", "quality", "balanced", "performance"};
+            for (int j = 0; j < 4; ++j)
+                if (!std::strcmp(psz, s_aszPreset[j]) || (psz[0] == char('0' + j) && !psz[1])) dispo.upscalePreset = j;
+        }
+        else if (!std::strcmp(argv[i], "--upscale-sharpness") && i + 1 < argc) dispo.upscaleSharpness = std::clamp(std::atoi(argv[++i]), 0, 100);
         else if (!std::strcmp(argv[i], "--renderer") && i + 1 < argc)   // (renderer.h: auto, vulkan, opengl)
         {
             if (!FParseRenderer(argv[++i], &rendererArg)) { std::fprintf(stderr, "bad --renderer (auto, vulkan, opengl)\n"); return 2; }
@@ -642,6 +652,9 @@ int main(int argc, char** argv)
         if (dispo.longShadows >= 0) g_display.fLongShadows = dispo.longShadows != 0;
         if (const char* psz = std::getenv("SLY2N_FASTSHADOWS")) g_display.fFastShadows = std::atoi(psz) != 0;
         if (dispo.fastShadows >= 0) g_display.fFastShadows = dispo.fastShadows != 0;
+        if (dispo.upscale >= 0) g_display.fUpscale = dispo.upscale != 0;
+        if (dispo.upscalePreset >= 0) g_display.upscalePreset = dispo.upscalePreset;
+        if (dispo.upscaleSharpness >= 0) g_display.upscaleSharpness = dispo.upscaleSharpness;
         if (dispo.window >= 0 && dispo.window <= 2) g_display.window = DISPWINDOW(dispo.window);
         if (fRendererArg) g_rendererWanted = rendererArg;
         if (dispo.msaa >= 0) g_display.msaaSamples = dispo.msaa > 1 ? dispo.msaa : 0;

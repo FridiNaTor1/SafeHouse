@@ -927,6 +927,18 @@
   "Japanese plays only its voices on the USA and European discs until the characters of your Japanese disc are added: choose your Japan disc image below once more.": "O japonês só reproduz as suas vozes nos discos dos EUA e da Europa até serem adicionados os carateres do teu disco japonês: escolhe mais uma vez, abaixo, a imagem do teu disco do Japão.",
   "Voice language": "Idioma das vozes",
   "Same as text": "Igual ao texto",
-  "The dialogue and the cutscenes' sound, apart from the text: Japanese voices with English text, or the other way round. Choosing a language on the game's title screen sets both back to it.": "Os diálogos e o som das cenas animadas, à parte do texto: vozes em japonês com texto em inglês, ou o contrário. Escolher um idioma no ecrã de título do jogo repõe ambos nesse idioma."
+  "The dialogue and the cutscenes' sound, apart from the text: Japanese voices with English text, or the other way round. Choosing a language on the game's title screen sets both back to it.": "Os diálogos e o som das cenas animadas, à parte do texto: vozes em japonês com texto em inglês, ou o contrário. Escolher um idioma no ecrã de título do jogo repõe ambos nesse idioma.",
+  "Upscaling": "Aumento de resolução",
+  "Upscaling method": "Método de aumento",
+  "Upscaling preset": "Predefinição de aumento",
+  "Ultra quality": "Qualidade ultra",
+  "Quality": "Qualidade",
+  "Balanced": "Equilibrado",
+  "Performance": "Desempenho",
+  "Sharpness": "Nitidez",
+  "AMD FidelityFX Super Resolution 1.0: edge-aware upscaling with sharpening.": "AMD FidelityFX Super Resolution 1.0: aumento de resolução atento às arestas, com nitidez.",
+  "How large the 3D scene is drawn, as a share of the screen's width and height. Lower is faster.": "O tamanho com que a cena 3D é desenhada, como parte da largura e da altura do ecrã. Menos é mais rápido.",
+  "How much the upscaled picture is sharpened.": "Quanto a imagem aumentada é tornada mais nítida.",
+  "Draws the 3D scene smaller and scales it up to the screen with a sharpening upscaler: faster, nearly as sharp. The HUD and menus stay at full resolution. While on, it replaces the internal resolution.": "Desenha a cena 3D mais pequena e aumenta-a para o ecrã com um aumento de resolução que dá nitidez: mais rápido e quase tão nítido. O HUD e os menus ficam em resolução total. Ligado, substitui a resolução interna."
  }
 }

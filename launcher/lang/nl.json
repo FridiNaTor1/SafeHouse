@@ -927,6 +927,18 @@
   "Japanese plays only its voices on the USA and European discs until the characters of your Japanese disc are added: choose your Japan disc image below once more.": "Japans speelt op de Amerikaanse en Europese discs alleen zijn stemmen af totdat de schrifttekens van je Japanse disc zijn toegevoegd: kies hieronder nog een keer je Japanse disc-image.",
   "Voice language": "Taal van de stemmen",
   "Same as text": "Zelfde als de tekst",
-  "The dialogue and the cutscenes' sound, apart from the text: Japanese voices with English text, or the other way round. Choosing a language on the game's title screen sets both back to it.": "De dialogen en het geluid van de tussenfilmpjes, los van de tekst: Japanse stemmen met Engelse tekst, of andersom. Een taal kiezen op het titelscherm van het spel zet beide weer op die taal."
+  "The dialogue and the cutscenes' sound, apart from the text: Japanese voices with English text, or the other way round. Choosing a language on the game's title screen sets both back to it.": "De dialogen en het geluid van de tussenfilmpjes, los van de tekst: Japanse stemmen met Engelse tekst, of andersom. Een taal kiezen op het titelscherm van het spel zet beide weer op die taal.",
+  "Upscaling": "Opschaling",
+  "Upscaling method": "Opschalingsmethode",
+  "Upscaling preset": "Opschalingsniveau",
+  "Ultra quality": "Ultrakwaliteit",
+  "Quality": "Kwaliteit",
+  "Balanced": "Gebalanceerd",
+  "Performance": "Prestaties",
+  "Sharpness": "Scherpte",
+  "AMD FidelityFX Super Resolution 1.0: edge-aware upscaling with sharpening.": "AMD FidelityFX Super Resolution 1.0: randbewuste opschaling met verscherping.",
+  "How large the 3D scene is drawn, as a share of the screen's width and height. Lower is faster.": "Hoe groot de 3D-scène wordt getekend, als deel van de breedte en hoogte van het scherm. Lager is sneller.",
+  "How much the upscaled picture is sharpened.": "Hoeveel het opgeschaalde beeld wordt verscherpt.",
+  "Draws the 3D scene smaller and scales it up to the screen with a sharpening upscaler: faster, nearly as sharp. The HUD and menus stay at full resolution. While on, it replaces the internal resolution.": "Tekent de 3D-scène kleiner en schaalt hem op naar het scherm met een verscherpende upscaler: sneller en bijna even scherp. De HUD en menu's blijven op volledige resolutie. Aan vervangt hij de interne resolutie."
  }
 }

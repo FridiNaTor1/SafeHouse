@@ -7,6 +7,7 @@
 #include "vr.h"
 
 #include "gl.h"
+#include "fsr.h"
 #include "pcinput.h"
 #include "actioninput.h"
 #include "sound.h"
@@ -117,6 +118,22 @@ void ToVrOptions(st::Sly2VrOptions& o)
     o.upscaling = v.upscaling;
 }
 
+void FromUpscaleOptions(const st::Sly2UpscaleOptions& o)
+{
+    g_display.fUpscale = o.enabled != 0;
+    g_display.upscaleMethod = st::UpscaleMethod_Fsr1;
+    g_display.upscalePreset = std::clamp(o.preset, 0, 3);
+    g_display.upscaleSharpness = std::clamp(o.sharpness, 0, 100);
+}
+
+void ToUpscaleOptions(st::Sly2UpscaleOptions& o)
+{
+    o.enabled = g_display.fUpscale ? 1 : 0;
+    o.method = g_display.upscaleMethod;
+    o.preset = g_display.upscalePreset;
+    o.sharpness = g_display.upscaleSharpness;
+}
+
 void ToSettings(st::SystemSettings& s)
 {
     s.aspectMode = int(g_display.aspect);
@@ -184,6 +201,7 @@ bool FLoadDisplaySettings(const std::filesystem::path& userDir, std::string* pme
     FromSettings(s.system);
     FromGameOptions(s.game);
     FromVrOptions(s.vr);
+    FromUpscaleOptions(s.upscale);
     sly2actions::Load(userDir);
 #ifdef __SWITCH__
     // (the Switch: one screen at 60 Hz, the swap paces the frames at 30 or 60; the internal resolution from the menu's
@@ -218,6 +236,7 @@ bool FSaveDisplaySettings(const std::filesystem::path& userDir)
     ToSettings(s.system);
     ToGameOptions(s.game);
     ToVrOptions(s.vr);
+    ToUpscaleOptions(s.upscale);
     return st::saveSly2(userDir, s);
 }
 
@@ -272,7 +291,9 @@ void LayoutDisplay(int outputWidth, int outputHeight)
     d.presentX = (d.outputWidth - dx) / 2;
     d.presentY = (d.outputHeight - dy) / 2;
     int dxRender = dx, dyRender = dy;
-    if (d.internalHeight > 0)
+    if (d.fUpscale && g_gl.window && !vr::FActive() && fsr::FAvailable())
+        fsr::RenderSizeForPreset(d.upscalePreset, dx, dy, &dxRender, &dyRender);   // (gl.h BeginNativeUi scales it up)
+    else if (d.internalHeight > 0)
     {
         dyRender = d.internalHeight;
         dxRender = std::max(1, int(std::lround(double(dyRender) * double(dx) / double(dy))));

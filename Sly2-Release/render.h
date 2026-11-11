@@ -42,6 +42,9 @@ struct RENDEROPTS
 };
 
 void BuildSceneGpu(SCENE& scene);
+// A world's load (scope: its record index): the backend makes the pipelines it saw used there before ahead (Vulkan's
+// prewarm; nothing on OpenGL), waiting a short while for them.
+void PrewarmRenderer(int scope);
 // A glob's vertex colours changed (run-time lighting): its colours again into its arena (the colour buffer only).
 void UpdateGlobColorsGpu(const GLOB& glob);
 // A glob's vertices moved (trails, ropes): its whole vertices (and colours) again into its arena.

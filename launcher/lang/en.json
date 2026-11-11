@@ -927,6 +927,18 @@
   "Japanese plays only its voices on the USA and European discs until the characters of your Japanese disc are added: choose your Japan disc image below once more.": "Japanese plays only its voices on the USA and European discs until the characters of your Japanese disc are added: choose your Japan disc image below once more.",
   "Voice language": "Voice language",
   "Same as text": "Same as text",
-  "The dialogue and the cutscenes' sound, apart from the text: Japanese voices with English text, or the other way round. Choosing a language on the game's title screen sets both back to it.": "The dialogue and the cutscenes' sound, apart from the text: Japanese voices with English text, or the other way round. Choosing a language on the game's title screen sets both back to it."
+  "The dialogue and the cutscenes' sound, apart from the text: Japanese voices with English text, or the other way round. Choosing a language on the game's title screen sets both back to it.": "The dialogue and the cutscenes' sound, apart from the text: Japanese voices with English text, or the other way round. Choosing a language on the game's title screen sets both back to it.",
+  "Upscaling": "Upscaling",
+  "Upscaling method": "Upscaling method",
+  "Upscaling preset": "Upscaling preset",
+  "Ultra quality": "Ultra quality",
+  "Quality": "Quality",
+  "Balanced": "Balanced",
+  "Performance": "Performance",
+  "Sharpness": "Sharpness",
+  "AMD FidelityFX Super Resolution 1.0: edge-aware upscaling with sharpening.": "AMD FidelityFX Super Resolution 1.0: edge-aware upscaling with sharpening.",
+  "How large the 3D scene is drawn, as a share of the screen's width and height. Lower is faster.": "How large the 3D scene is drawn, as a share of the screen's width and height. Lower is faster.",
+  "How much the upscaled picture is sharpened.": "How much the upscaled picture is sharpened.",
+  "Draws the 3D scene smaller and scales it up to the screen with a sharpening upscaler: faster, nearly as sharp. The HUD and menus stay at full resolution. While on, it replaces the internal resolution.": "Draws the 3D scene smaller and scales it up to the screen with a sharpening upscaler: faster, nearly as sharp. The HUD and menus stay at full resolution. While on, it replaces the internal resolution."
  }
 }

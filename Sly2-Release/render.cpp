@@ -19,6 +19,7 @@ void CollectHackSwarmDraws(const SCENE& scene, std::vector<EXTRADRAW>& aextra); 
 #include "renderer.h"
 #include "wr.h"
 #include "passhelpers.h"
+#include "gl_backend.h"
 
 #include <stb/stb_image_write.h>
 
@@ -559,12 +560,15 @@ int Blend1Mode(uint64_t alpha)
     if (c != 0 || d != 1 || a != 0) return 0;   // (C = As, D = Cd, A = Cs)
     return b == 1 ? 1 : b == 2 ? 2 : 0;          // (B = Cd: alpha blending; B = 0: additive)
 }
-bool FSetBlend(uint64_t alpha, bool fBlend1 = false)
+// The blend a GS ALPHA asks for as draw-packet enums (platform/draw_packet.h): FSetBlend sets it with GL calls, the
+// draw packets take it as part of their state. False: not expressible (the alpha blend instead).
+struct BLENDGL { uint8_t opColor, opAlpha, src, dst, srcA, dstA; bool fConst; float fix; };
+bool FBlendOf(uint64_t alpha, bool fBlend1, BLENDGL& bl)
 {
+    using namespace cane::draw;
     if (fBlend1 && Blend1Mode(alpha) != 0)
     {
-        glBlendEquation(GL_FUNC_ADD);
-        glBlendFuncSeparate(GL_ONE, GL_ONE_MINUS_SRC1_ALPHA, GL_ONE, GL_ZERO);
+        bl = {kBlendAdd, kBlendAdd, kFactorOne, kFactorOneMinusSrc1Alpha, kFactorOne, kFactorZero, false, 0.0f};
         return true;
     }
     const int a = int(alpha & 3), b = int((alpha >> 2) & 3), c = int((alpha >> 4) & 3), d = int((alpha >> 6) & 3);
@@ -576,12 +580,13 @@ bool FSetBlend(uint64_t alpha, bool fBlend1 = false)
     int s1, sc, d1, dc;
     coef(0, s1, sc);
     coef(1, d1, dc);
-    const GLenum cf = c == 0 ? GL_SRC_ALPHA : c == 1 ? GL_DST_ALPHA : GL_CONSTANT_ALPHA;
-    const GLenum cfInv = c == 0 ? GL_ONE_MINUS_SRC_ALPHA : c == 1 ? GL_ONE_MINUS_DST_ALPHA : GL_ONE_MINUS_CONSTANT_ALPHA;
-    if (c == 2) glBlendColor(0, 0, 0, fix);
-    auto factor = [&](int k1, int kc, GLenum& f) {
-        if (k1 == 0 && kc == 0) f = GL_ZERO;
-        else if (k1 == 1 && kc == 0) f = GL_ONE;
+    const uint8_t cf = c == 0 ? kFactorSrcAlpha : c == 1 ? kFactorDstAlpha : kFactorConstantAlpha;
+    const uint8_t cfInv = c == 0 ? kFactorOneMinusSrcAlpha : c == 1 ? kFactorOneMinusDstAlpha : kFactorOneMinusConstantAlpha;
+    bl.fConst = c == 2;
+    bl.fix = fix;
+    auto factor = [&](int k1, int kc, uint8_t& f) {
+        if (k1 == 0 && kc == 0) f = kFactorZero;
+        else if (k1 == 1 && kc == 0) f = kFactorOne;
         else if (k1 == 0 && kc == 1) f = cf;
         else if (k1 == 1 && kc == -1) f = cfInv;
         else return false;
@@ -589,21 +594,64 @@ bool FSetBlend(uint64_t alpha, bool fBlend1 = false)
     };
     // The GS blends only the colour: the frame's alpha is the source alpha (the shadow pass, 0x16DA48 / 0x16DD58,
     // reads it: render.md "shadow frame-channel pass").
-    GLenum fs, fd;
+    bl.srcA = kFactorOne, bl.dstA = kFactorZero, bl.opAlpha = kBlendAdd;
+    uint8_t fs, fd;
     if (sc == -1 && s1 == 0 && factor(d1, dc, fd))
     {
-        glBlendEquationSeparate(GL_FUNC_REVERSE_SUBTRACT, GL_FUNC_ADD);
-        glBlendFuncSeparate(cf, fd, GL_ONE, GL_ZERO);
+        bl.opColor = kBlendReverseSubtract, bl.src = cf, bl.dst = fd;
         return true;
     }
-    glBlendEquation(GL_FUNC_ADD);
+    bl.opColor = kBlendAdd;
     if (!factor(s1, sc, fs) || !factor(d1, dc, fd))
     {
-        glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ZERO);
+        bl.src = kFactorSrcAlpha, bl.dst = kFactorOneMinusSrcAlpha;
         return false;
     }
-    glBlendFuncSeparate(fs, fd, GL_ONE, GL_ZERO);
+    bl.src = fs, bl.dst = fd;
     return true;
+}
+GLenum GlFactorOf(uint8_t f)
+{
+    static const GLenum k[] = {GL_ZERO, GL_ONE, GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_DST_ALPHA, GL_ONE_MINUS_DST_ALPHA,
+                               GL_CONSTANT_ALPHA, GL_ONE_MINUS_CONSTANT_ALPHA, GL_SRC1_ALPHA, GL_ONE_MINUS_SRC1_ALPHA};
+    return k[f];
+}
+bool FSetBlend(uint64_t alpha, bool fBlend1 = false)
+{
+    BLENDGL bl;
+    const bool fOk = FBlendOf(alpha, fBlend1, bl);
+    if (bl.fConst) glBlendColor(0, 0, 0, bl.fix);
+    auto eq = [](uint8_t op) { return op == cane::draw::kBlendReverseSubtract ? GL_FUNC_REVERSE_SUBTRACT : GL_FUNC_ADD; };
+    if (bl.opColor == bl.opAlpha) glBlendEquation(eq(bl.opColor));
+    else glBlendEquationSeparate(eq(bl.opColor), eq(bl.opAlpha));
+    glBlendFuncSeparate(GlFactorOf(bl.src), GlFactorOf(bl.dst), GlFactorOf(bl.srcA), GlFactorOf(bl.dstA));
+    return fOk;
+}
+// (draw packets, platform/draw_packet.h) FSetBlend's blend as a packet state's (blend on)
+void PacketBlendOf(uint64_t alpha, cane::draw::State& ps)
+{
+    BLENDGL bl;
+    FBlendOf(alpha, false, bl);
+    ps.blend = 1;
+    ps.srcColor = bl.src, ps.dstColor = bl.dst, ps.srcAlpha = bl.srcA, ps.dstAlpha = bl.dstA;
+    ps.opColor = bl.opColor, ps.opAlpha = bl.opAlpha;
+    ps.fBlendConstant = bl.fConst;
+    ps.blendConstant[3] = bl.fix;
+}
+// The backend's packets for the render pass's special draws (null: the GL calls), and a special's packet state made once
+// per key (its program and variant bits; build fills the State)
+const cane::draw::Packets* PpacketsSpecial()
+{
+    const cane::draw::Packets* pk = cane::gl::ActiveBackend() ? cane::gl::ActiveBackend()->packets : nullptr;
+    return pk && pk->drawArrays && pk->applyState && pk->setConstant ? pk : nullptr;
+}
+template <class F> uint32_t PacketStateFor(const cane::draw::Packets& pk, uint64_t key, F&& build)
+{
+    static std::unordered_map<uint64_t, uint32_t> s_mpid;
+    if (auto it = s_mpid.find(key); it != s_mpid.end()) return it->second;
+    cane::draw::State ps;
+    build(ps);
+    return s_mpid[key] = pk.createState(ps);
 }
 
 struct DRAWREC
@@ -1147,6 +1195,64 @@ void SyncGlobInherited(STATECACHE& sc)
     }
 }
 
+// (draw packets, platform/draw_packet.h: the Vulkan renderer) a run's state as the backend's packet state, made once
+// per state, glob program and winding: what STATECACHE::Apply sets with GL calls (the fixed-function state, the
+// program's loose uniforms), so the backend's GL-style state after a packet draw is the same as after Apply's calls.
+uint32_t PacketStateOf(const cane::draw::Packets& pk, uint32_t istate, int iprog)
+{
+    struct ENTRY { uint32_t id = 0; GLuint prog = 0; };
+    static std::vector<ENTRY> s_aentry;
+    const size_t k = (size_t(istate) * CPROGGLOB + size_t(iprog)) * 2 + (s_fFlipFaces ? 1 : 0);
+    if (k >= s_aentry.size()) s_aentry.resize(k + 1 + s_aentry.size() / 2);
+    const GLuint prog = s_apshGlob[iprog]->ID;
+    ENTRY& e = s_aentry[k];
+    if (e.prog == prog) return e.id;
+    using namespace cane::draw;
+    const DSTATE& st = s_astate[istate];
+    const UNIFORMS& u = s_au[iprog];
+    const bool fBlend1 = g_fBlend1 && u.caneBlend1 >= 0;
+    State ps;
+    ps.program = prog;
+    ps.blend = st.fBlend;
+    if (st.fBlend)
+    {
+        BLENDGL bl;
+        FBlendOf(st.alpha, fBlend1, bl);
+        ps.srcColor = bl.src, ps.dstColor = bl.dst, ps.srcAlpha = bl.srcA, ps.dstAlpha = bl.dstA;
+        ps.opColor = bl.opColor, ps.opAlpha = bl.opAlpha;
+        ps.fBlendConstant = bl.fConst;
+        ps.blendConstant[3] = bl.fix;
+    }
+    ps.colorMask = uint8_t(((st.colorMask & 1) ? 7 : 0) | ((st.colorMask & 2) ? 8 : 0));
+    ps.cull = st.fCull ? 1 : 0;
+    ps.frontCCW = FrontCCW() == GL_CCW;
+    ps.depthTest = 1;
+    ps.depthWrite = st.depthMask ? 1 : 0;
+    ps.depthCompare = st.depthFunc == 0 ? kAlways : st.depthFunc == 1 ? kGreaterEqual : kGreater;
+    ps.stencilTest = 1;
+    ps.stencilCompare = kAlways;
+    ps.stencilRef = st.fFba ? 0x80 : 0;
+    ps.stencilCompareMask = 0x80;
+    ps.stencilWriteMask = (st.colorMask & 2) ? 0x80 : 0;
+    ps.stencilFail = ps.stencilDepthFail = kStencilKeep;
+    ps.stencilPass = kStencilReplace;
+    auto add = [&](GLint loc, uint32_t bits) { if (loc >= 0) ps.aconst[ps.cconst++] = {loc, bits}; };
+    const float aref = float(st.aref);
+    uint32_t arefBits;
+    std::memcpy(&arefBits, &aref, 4);
+    add(u.fTextured, st.fTextured);
+    add(u.icolor, st.icolor);
+    if (fBlend1) add(u.caneBlend1, uint32_t(st.fBlend ? Blend1Mode(st.alpha) : 0));
+    add(u.ate, st.ate);
+    add(u.atst, st.atst);
+    add(u.aref, arefBits);
+    add(u.afailMode, st.afailMode);
+    add(u.fFogBlack, st.fFogBlack);
+    e.id = pk.createState(ps);
+    e.prog = prog;
+    return e.id;
+}
+
 // One shader pass of an entry (formerly drawn directly): the GL state its GS registers ask for, as 1..2 commands
 // (the alpha test's pass / fail sub-draws).
 void EmitPass(std::vector<PASSCMD>& apasscmd, DSTATE st, const SUBGLOB& sub, const SHDPASS& pass, int ipass)
@@ -1566,12 +1672,54 @@ void DrawShadow2(const CMD& cmd, const glm::mat4& matWorldToClip, bool fDateMark
     }
     const bool fDate = !(cmd.order & 8);   // (the shader's flag 8: no DATE)
     const GLSHADER& sh = (!fDate || fDateMarked) && s_shShadowVolNoKill.ID ? s_shShadowVolNoKill : s_shShadowVol;
-    sh.Use();
-    glUniformMatrix4fv(sh.Loc("matWorldToClip"), 1, GL_FALSE, glm::value_ptr(matWorldToClip));
-    glUniform1i(sh.Loc("texDate"), 1);
-    glUniform1i(sh.Loc("fDate"), fDate && !fDateMarked ? 1 : 0);
-    glUniform4f(sh.Loc("rgba"), 0, 0, 0, 0);
-    glBindVertexArray(s_vaoShadowVol);
+    // (draw packets: the z-pass and z-fail counts and the GL state left after them as packet states)
+    const cane::draw::Packets* ppk = PpacketsSpecial();
+    uint32_t aidPk[3] = {};
+    struct LOCSV { GLuint prog = 0; GLint matWorldToClip = -1, texDate = -1, fDate = -1, rgba = -1; };
+    static LOCSV s_alocsv[2];
+    LOCSV& loc = s_alocsv[&sh == &s_shShadowVolNoKill ? 1 : 0];
+    if (ppk)
+    {
+        if (loc.prog != sh.ID)
+            loc = {sh.ID, sh.Loc("matWorldToClip"), sh.Loc("texDate"), sh.Loc("fDate"), sh.Loc("rgba")};
+        const bool fCCW = FrontCCW() == GL_CCW;
+        const uint32_t maskDate = (cmd.order & 8) ? 0 : STENCIL_FBA;
+        const int fDateU = fDate && !fDateMarked ? 1 : 0;
+        for (int k = 0; k < 3; ++k)
+        {
+            using namespace cane::draw;
+            const uint64_t key = (uint64_t(sh.ID) << 32) | (uint64_t(k) << 8) | (fCCW ? 1u : 0u) | (maskDate ? 2u : 0u) | (fDateU ? 4u : 0u);
+            aidPk[k] = PacketStateFor(*ppk, key, [&](State& ps) {
+                ps.program = sh.ID;
+                ps.winding = 1, ps.frontCCW = fCCW;
+                ps.depthTest = 1, ps.depthWrite = 0, ps.depthCompare = kGreater;
+                ps.colorMask = k == 2 ? 0xF : 0;
+                ps.stencilTest = k != 2, ps.stencilWriteMask = uint8_t(k == 2 ? 0xFFu : STENCIL_COUNT7);
+                ps.stencilCompare = kEqual, ps.stencilRef = 0, ps.stencilCompareMask = uint8_t(maskDate);
+                ps.stencilBack = 1;
+                if (k == 0) ps.stencilPass = kStencilIncrWrap, ps.stencilBackPass = kStencilDecrWrap;
+                else ps.stencilDepthFail = kStencilDecrWrap, ps.stencilBackDepthFail = kStencilIncrWrap;
+                if (loc.texDate >= 0) ps.aconst[ps.cconst++] = {loc.texDate, 1};
+                if (loc.fDate >= 0) ps.aconst[ps.cconst++] = {loc.fDate, uint32_t(fDateU)};
+            });
+            if (!aidPk[k]) ppk = nullptr;
+        }
+    }
+    if (ppk)
+    {
+        ppk->setConstant(sh.ID, loc.matWorldToClip, glm::value_ptr(matWorldToClip), 64);
+        const float argba0[4] = {};
+        ppk->setConstant(sh.ID, loc.rgba, argba0, 16);
+    }
+    else
+    {
+        sh.Use();
+        glUniformMatrix4fv(sh.Loc("matWorldToClip"), 1, GL_FALSE, glm::value_ptr(matWorldToClip));
+        glUniform1i(sh.Loc("texDate"), 1);
+        glUniform1i(sh.Loc("fDate"), fDate && !fDateMarked ? 1 : 0);
+        glUniform4f(sh.Loc("rgba"), 0, 0, 0, 0);
+        glBindVertexArray(s_vaoShadowVol);
+    }
     glBindBuffer(GL_ARRAY_BUFFER, s_vboShadowVol);
     const glm::vec3* pvtx = s_avtxShadow2.data() + cmd.firstIndex;
     uint32_t cpass = 0;   // (the Switch: the vertices counted z-pass, uploaded first)
@@ -1611,6 +1759,13 @@ void DrawShadow2(const CMD& cmd, const glm::mat4& matWorldToClip, bool fDateMark
         pvtx = s_avtxSplit.data();
     }
     glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(size_t(cmd.count) * sizeof(glm::vec3)), pvtx, GL_STREAM_DRAW);
+    if (ppk)
+    {
+        if (cpass) ppk->drawArrays(aidPk[0], s_vaoShadowVol, 0, cpass, nullptr, 0);
+        if (cmd.count > cpass) ppk->drawArrays(aidPk[1], s_vaoShadowVol, cpass, cmd.count - cpass, nullptr, 0);
+        ppk->drawArrays(aidPk[2], s_vaoShadowVol, 0, 0, nullptr, 0);   // (no triangles: the state and vertex array the GL calls leave)
+        return;
+    }
     // the prisms' z-fail count into kind 7's (closed volumes: the original's +-2 per face in front of the scene)
     glEnable(GL_STENCIL_TEST);
     glStencilMask(STENCIL_COUNT7);
@@ -1661,6 +1816,114 @@ void DrawOne(const CMD& cmd)
     ++g_renderstats.cpass;
 }
 
+// (draw packets) DrawOne's draw as a packet draw with the state id
+void DrawOnePacket(const cane::draw::Packets& pk, uint32_t id, const CMD& cmd)
+{
+    if (g_fDrawUniform)
+    {
+        PpullArena(cmd.vao);
+        const cane::draw::Constant abase[2] = {{s_pu->caneVertexBase, uint32_t(cmd.baseVertex)}, {s_pu->caneDrawBase, cmd.idraw | 0x80000000u}};
+        pk.drawIndexed(id, cmd.vao, cmd.count, cmd.firstIndex, 0, 0, abase, 2);
+        s_vaoPullCur = cmd.vao;
+    }
+    else
+        pk.drawIndexed(id, cmd.vao, cmd.count, cmd.firstIndex, cmd.baseVertex, cmd.idraw, nullptr, 0);
+    ++g_renderstats.cpass;
+}
+// (draw packets) DrawProjVolume's draws below as packets: each GL state of its sequence one packet state, the GL-style
+// state after it as the GL calls leave it. False: a state the backend cannot take (nothing drawn: the GL calls then).
+bool FDrawProjVolumePackets(const cane::draw::Packets& pk, const CMD& cmd)
+{
+    using namespace cane::draw;
+    const SUBGLOB& sub = *cmd.psub;
+    const SHD* pshd = sub.pshd;
+    const uint8_t fl = pshd->grfshd;
+    static const bool s_fVolDbg = std::getenv("SLY2N_VOLDBG") != nullptr;
+    static const bool s_fVa = std::getenv("SLY2N_VOLVA") != nullptr;
+    if (s_fVolDbg) return false;
+    const GLuint prog = s_apshGlob[s_iprogGlob]->ID;
+    const UNIFORMS& u = *s_pu;
+    const bool fCCW = FrontCCW() == GL_CCW;
+    const uint64_t alpha = (uint64_t((fl & 1) ? 2 : 1) << 2) | 0x40u;
+    // (the step k of the textured / untextured sequence; key: program, step, winding, blend, SLY2N_VOLVA)
+    auto state = [&](int k) {
+        const uint64_t key = (uint64_t(prog) << 32) | (uint64_t(k) << 8) | (fCCW ? 1u : 0u) | ((fl & 1) ? 2u : 0u) | (s_fVa ? 4u : 0u);
+        return PacketStateFor(pk, key, [&](State& ps) {
+            ps.program = prog;
+            ps.frontCCW = fCCW;
+            ps.depthTest = 1, ps.depthWrite = 0, ps.depthCompare = kGreater;
+            ps.stencilTest = 1, ps.stencilWriteMask = 0x80, ps.stencilCompareMask = 0x80;
+            auto add = [&](GLint loc, uint32_t bits) { if (loc >= 0) ps.aconst[ps.cconst++] = {loc, bits}; };
+            add(u.fTextured, 0), add(u.ate, 0), add(u.afailMode, 0);
+            switch (k)
+            {
+            case 0: case 1:   // (untextured: the mask, z-fail through the back faces, then cleared through the front)
+                ps.cull = k == 0 ? 2 : 1;
+                ps.colorMask = 0;
+                ps.stencilCompare = kAlways, ps.stencilRef = 0x80;
+                ps.stencilDepthFail = k == 0 ? kStencilReplace : kStencilZero;
+                break;
+            case 2: case 3:   // (the fill through the back faces, no depth test; 3: the GL state left after it)
+                ps.cull = k == 2 ? 2 : 1;
+                ps.depthTest = k == 3;
+                ps.stencilTest = k == 2;
+                if (k == 3) ps.stencilWriteMask = 0xFF;
+                ps.stencilCompare = kEqual, ps.stencilRef = 0x80;
+                ps.stencilPass = kStencilZero;
+                PacketBlendOf(alpha, ps);
+                add(u.icolor, s_fVa ? 3 : 2);
+                break;
+            case 4: case 5:   // (textured: the front faces in front of the scene once per pixel, then the bit cleared)
+                ps.cull = 1;
+                ps.colorMask = k == 4 ? 0xF : 0;
+                ps.stencilCompare = k == 4 ? kNotEqual : kAlways, ps.stencilRef = k == 4 ? 0x80 : 0;
+                ps.stencilPass = k == 4 ? kStencilReplace : kStencilZero;
+                PacketBlendOf(alpha, ps);
+                add(u.icolor, 3);
+                break;
+            default:          // (6: the textured surface, blended, no Z write)
+                ps.cull = 1;
+                ps.stencilTest = 0, ps.stencilWriteMask = 0xFF;
+                ps.depthCompare = kGreaterEqual;
+                ps.stencilCompare = kAlways, ps.stencilRef = 0;
+                ps.stencilPass = kStencilZero;
+                PacketBlendOf(alpha, ps);
+                ps.cconst = 0;
+                add(u.fTextured, 1), add(u.ate, 0), add(u.afailMode, 0), add(u.icolor, 0);
+                break;
+            }
+        });
+    };
+    glm::vec4 c;
+    for (int i = 0; i < 4; ++i) c[i] = float(((pshd->argba[1] >> (8 * i)) & 0xFF) + 1) / 2.0f;
+    auto rgbaConst = [&]() {
+        pk.setConstant(prog, u.rgbaConst, glm::value_ptr(c), 16);
+        s_aglobinh[s_iprogGlob].rgbaConst = s_globinhLast.rgbaConst = c;
+    };
+    if (!(fl & 2))
+    {
+        const uint32_t aid[4] = {state(0), state(1), state(2), state(3)};
+        if (!aid[0] || !aid[1] || !aid[2] || !aid[3]) return false;
+        DrawOnePacket(pk, aid[0], cmd);
+        DrawOnePacket(pk, aid[1], cmd);
+        rgbaConst();
+        DrawOnePacket(pk, aid[2], cmd);
+        pk.applyState(aid[3]);
+        return true;
+    }
+    const uint32_t aid[3] = {state(4), state(5), state(6)};
+    if (!aid[0] || !aid[1] || !aid[2]) return false;
+    rgbaConst();
+    DrawOnePacket(pk, aid[0], cmd);
+    DrawOnePacket(pk, aid[1], cmd);
+    const TEXSEL sel = TexselFromShd(pshd, sub.psaa ? sub.psaa->iframe : 0, 0);
+    const GLuint tex = TexFromSel(sel);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glBindSampler(0, s_asampler[SamplerFor(tex, uint8_t((sel.fClampS ? 1 : 0) | (sel.fClampT ? 2 : 0)))]);
+    DrawOnePacket(pk, aid[2], cmd);
+    return true;
+}
+
 // Shader kind 3 (rp 11 / 13): a projected volume. 0x1EB960's four lists use the destination alpha's bit 7 as a
 // mask (two untextured passes over the volume, a DATE-tested fill with (rgba1 + 1) / 2, a last pass with rgba2);
 // as in Sly1-Release's DrawProjVolume the mask is the stencil's bit 7: set where the scene is in front of the
@@ -1675,6 +1938,7 @@ void DrawProjVolume(const CMD& cmd)
         std::printf("vol: oid %d glob %zu kind %d shd %d grfshd 0x%X tris %u rgba %08X %08X %08X at %.0f %.0f %.0f\n",
                     cmd.prec->psgs ? cmd.prec->psgs->oid : -1, cmd.prec->iglob, cmd.prec->kind, pshd->id, unsigned(fl), cmd.count / 3,
                     pshd->argba[0], pshd->argba[1], pshd->argba[2], (*cmd.prec->pmat)[3].x, (*cmd.prec->pmat)[3].y, (*cmd.prec->pmat)[3].z);
+    if (const cane::draw::Packets* ppk = PpacketsSpecial(); ppk && FDrawProjVolumePackets(*ppk, cmd)) return;
     glBindVertexArray(cmd.vao);
     glUniform1i(s_pu->fTextured, 0);
     glUniform1i(s_pu->ate, 0);
@@ -1895,6 +2159,43 @@ void DrawShadow(const CMD& cmd, const glm::vec3& posCamera0, float sNearClip, co
     if (static const bool s_fDbg = std::getenv("SLY2N_SHHULLDBG") != nullptr; s_fDbg)
         std::printf("shhull: oid %d glob %zu kind %d grfshd 0x%X near %d tris %u r %.0f\n", cmd.prec->psgs ? cmd.prec->psgs->oid : -1, cmd.prec->iglob,
                     cmd.prec->kind, unsigned(geom.asubfx[0].pshd->grfshd), int(fNear), cmd.count / 3, geom.pgl ? geom.pgl->sRadius : -1.0f);
+    if (const cane::draw::Packets* ppk = PpacketsSpecial())
+    {
+        // (draw packets: the count's state, then the GL state the calls below leave after it)
+        using namespace cane::draw;
+        const GLuint prog = s_apshGlob[s_iprogGlob]->ID;
+        const UNIFORMS& u = *s_pu;
+        const bool fCCW = FrontCCW() == GL_CCW;
+        const int fDateU = fDate && !fDateMarked ? 1 : 0;
+        uint32_t aid[2];
+        for (int k = 0; k < 2; ++k)
+        {
+            const uint64_t key = (uint64_t(prog) << 32) | (uint64_t(k) << 8) | (fCCW ? 1u : 0u) | (fDate ? 2u : 0u) | (fDateU ? 4u : 0u) |
+                                 (fNear ? 8u : 0u) | (maskCount == STENCIL_COUNT8 ? 16u : 0u);
+            aid[k] = PacketStateFor(*ppk, key, [&](State& ps) {
+                ps.program = prog;
+                ps.winding = 1, ps.frontCCW = fCCW;
+                ps.depthTest = 1, ps.depthWrite = 0, ps.depthCompare = kGreater;
+                ps.colorMask = k ? 0xF : 0;
+                ps.stencilTest = !k, ps.stencilWriteMask = uint8_t(k ? 0xFFu : maskCount);
+                ps.stencilCompare = kEqual, ps.stencilRef = 0, ps.stencilCompareMask = uint8_t(fDate ? STENCIL_FBA : 0);
+                ps.stencilBack = 1;
+                if (fNear) ps.stencilDepthFail = kStencilDecrWrap, ps.stencilBackDepthFail = kStencilIncrWrap;
+                else ps.stencilPass = kStencilIncrWrap, ps.stencilBackPass = kStencilDecrWrap;
+                auto add = [&](GLint loc, uint32_t bits) { if (loc >= 0) ps.aconst[ps.cconst++] = {loc, bits}; };
+                add(u.fTextured, 0), add(u.ate, 0), add(u.afailMode, 0), add(u.icolor, 2), add(u.fDate, k ? 0u : uint32_t(fDateU));
+            });
+        }
+        if (aid[0] && aid[1])
+        {
+            const glm::vec4 rgba0(0.0f);
+            ppk->setConstant(prog, u.rgbaConst, glm::value_ptr(rgba0), 16);
+            s_aglobinh[s_iprogGlob].rgbaConst = s_globinhLast.rgbaConst = rgba0;
+            DrawOnePacket(*ppk, aid[0], cmd);
+            ppk->applyState(aid[1]);
+            return;
+        }
+    }
     glBindVertexArray(cmd.vao);
     glUniform1i(s_pu->fTextured, 0);
     glUniform1i(s_pu->ate, 0);
@@ -2519,6 +2820,11 @@ glm::mat4 CAMERA::MatWorldToClip(float aspect) const
     }
     const glm::mat4 view = glm::lookAt(pos, pos + Dir(), glm::vec3(0, 0, 1));
     return proj * view;
+}
+
+void PrewarmRenderer(int scope)
+{
+    if (const cane::gl::Backend* pb = cane::gl::ActiveBackend(); pb && pb->prewarm) pb->prewarm(scope, 1000);
 }
 
 void BuildSceneGpu(SCENE& scene)
@@ -4200,17 +4506,33 @@ void RenderPass(const SCENE& scene, const PASSVIEW& pv, const RENDEROPTS& opts)
     }
     const std::array<glm::vec3, 4>& aposNear = aposNearV[0];
     const GLuint fboEye = psv ? GLuint(psv->afbo[ieye]) : pv.fbo;
-    glBindFramebuffer(GL_FRAMEBUFFER, fboEye);
-    glViewport(0, 0, pv.dx, pv.dy);
+    // (the backend's draw packets, platform/draw_packet.h: the Vulkan renderer; nullptr: the GL calls)
+    const cane::draw::Packets* const ppackets = cane::gl::ActiveBackend() ? cane::gl::ActiveBackend()->packets : nullptr;
     const glm::vec4 clear = Vec4FromRgba(pv.rgbaClear, 1.0f / 255.0f);
-    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
-    glDepthMask(GL_TRUE);
-    glClearColor(clear.r, clear.g, clear.b, float(pv.alphaClear) / 128.0f);
-    glClearDepth(0.0);
-    glStencilMask(0xFF);
-    glClearStencil(0);
     // (the foreground pass: only the depth (0x2DF010's Z 0 over the frame) and the stencil, over the frame and HUD)
-    glClear(pv.fForeground ? GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT : GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+    if (ppackets && ppackets->beginPass)
+    {
+        cane::draw::Pass pass;
+        pass.framebuffer = fboEye;
+        pass.viewport[2] = pv.dx, pass.viewport[3] = pv.dy;
+        pass.clear = uint8_t(cane::draw::kClearDepth | cane::draw::kClearStencil | (pv.fForeground ? 0 : cane::draw::kClearColor));
+        pass.color[0] = clear.r, pass.color[1] = clear.g, pass.color[2] = clear.b, pass.color[3] = float(pv.alphaClear) / 128.0f;
+        pass.depth = 0.0f;
+        pass.stencil = 0;
+        ppackets->beginPass(pass);
+    }
+    else
+    {
+        glBindFramebuffer(GL_FRAMEBUFFER, fboEye);
+        glViewport(0, 0, pv.dx, pv.dy);
+        glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+        glDepthMask(GL_TRUE);
+        glClearColor(clear.r, clear.g, clear.b, float(pv.alphaClear) / 128.0f);
+        glClearDepth(0.0);
+        glStencilMask(0xFF);
+        glClearStencil(0);
+        glClear(pv.fForeground ? GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT : GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+    }
     glDisable(GL_CULL_FACE);
 
     auto bindRange = [](GLuint ibinding, const BUFRANGE& br) {
@@ -4392,6 +4714,7 @@ void RenderPass(const SCENE& scene, const PASSVIEW& pv, const RENDEROPTS& opts)
         {
             const DSTATE& st = s_astate[cmd.istate];
             const bool fKill = FStateNeedsKill(st);
+            bool fPacketDrawn = false;
 #if SLY2_FASTPATHS
             // (the Switch: the blended kinds' runs keep the program with discards, which would otherwise change nearly
             // every run; it draws a run without alpha test the same, its discards needing ate and afailMode, or fDate)
@@ -4415,10 +4738,56 @@ void RenderPass(const SCENE& scene, const PASSVIEW& pv, const RENDEROPTS& opts)
                 }
                 sc.Apply(st, false);
             }
+            else if (const bool fBindTexture = !g_fGlobBindless || !HandleOfIstate(cmd.istate);
+                     ppackets && (!fBindTexture || !st.fTextured))
+            {
+                // (draw packets: the state and the draws straight to the backend; the cache then as Apply leaves it)
+                if (const uint32_t idPacket = PacketStateOf(*ppackets, cmd.istate, iprogGlob))
+                {
+                    if (g_fDrawUniform && run.cseg)
+                    {
+                        // (CANE_PULL: the run's segments from the pass's index list, each with its bases)
+                        PpullArena(st.vao);
+                        for (uint32_t iseg = run.isegFirst; iseg < run.isegFirst + run.cseg; ++iseg)
+                        {
+                            const PULLSEG& seg = ppc->aseg[iseg];
+                            const cane::draw::Constant abase[2] = {{s_pu->caneVertexBase, seg.vbase}, {s_pu->caneDrawBase, seg.imap}};
+                            ppackets->drawIndexed(idPacket, ppc->vao, seg.count, seg.offset, 0, 0, abase, 2);
+                        }
+                        s_vaoPullCur = ppc->vao;
+                    }
+                    else if (g_fDrawUniform)
+                    {
+                        for (uint32_t i = run.ideiFirst; i < run.ideiFirst + run.cdei; ++i)
+                        {
+                            const DEICMD& d = s_adei[i];
+                            PpullArena(st.vao);
+                            const cane::draw::Constant abase[2] = {{s_pu->caneVertexBase, uint32_t(d.baseVertex)}, {s_pu->caneDrawBase, d.baseInstance | 0x80000000u}};
+                            ppackets->drawIndexed(idPacket, st.vao, d.count, d.firstIndex, 0, 0, abase, 2);
+                        }
+                        s_vaoPullCur = st.vao;
+                    }
+                    else if (g_fDirectRuns)
+                        for (uint32_t i = run.ideiFirst; i < run.ideiFirst + run.cdei; ++i)
+                            ppackets->drawIndexed(idPacket, st.vao, s_adei[i].count, s_adei[i].firstIndex, s_adei[i].baseVertex, s_adei[i].baseInstance, nullptr, 0);
+                    else
+                        ppackets->drawIndirect(idPacket, st.vao, brIndirect.buf, offIndirect + size_t(run.ideiFirst) * sizeof(DEICMD), run.cdei);
+                    sc.cur = st;
+                    sc.fValid = true;
+                    sc.aucur[sc.iprog] = st;
+                    sc.afuValid[sc.iprog] = true;
+                    sc.fTexBound = fBindTexture;
+                    s_aglobinh[sc.iprog].fFogBlack = s_globinhLast.fFogBlack = st.fFogBlack;
+                    fPacketDrawn = true;
+                }
+                else
+                    sc.Apply(st, fBindTexture);
+            }
             else
                 sc.Apply(st, !g_fGlobBindless || !HandleOfIstate(cmd.istate));
             // (g_fDrawUniform, OpenGL ES without base instance: DrawIndexed sets the draw index as a uniform)
-            if (g_fDrawUniform && run.cseg)
+            if (fPacketDrawn) {}
+            else if (g_fDrawUniform && run.cseg)
             {
                 // (CANE_PULL: the run's segments from the pass's index list, then the state's own arena back)
                 PpullArena(st.vao);
@@ -4522,6 +4891,49 @@ void RenderPass(const SCENE& scene, const PASSVIEW& pv, const RENDEROPTS& opts)
         case CMDK_Cel:
         {
             const GLOB& geom = *cmd.prec->pglobGeom;
+            if (ppackets && ppackets->drawArrays)
+            {
+                // (draw packets: the border's state made once per program, its values as the draw's constants)
+                static uint32_t s_idCel = 0;
+                static GLuint s_progCel = 0;
+                if (s_progCel != glCelBorderShader.ID)
+                {
+                    cane::draw::State ps;
+                    ps.program = glCelBorderShader.ID;
+                    ps.blend = 1;
+                    ps.srcColor = ps.srcAlpha = cane::draw::kFactorSrcAlpha;
+                    ps.dstColor = ps.dstAlpha = cane::draw::kFactorOneMinusSrcAlpha;
+                    ps.depthTest = 1;
+                    ps.depthCompare = s_fCelAlways ? cane::draw::kAlways : cane::draw::kGreaterEqual;
+                    if (s_uc.edgeBase >= 0) ps.aconst[ps.cconst++] = {s_uc.edgeBase, 0};
+                    s_idCel = ppackets->createState(ps);
+                    s_progCel = glCelBorderShader.ID;
+                }
+                if (s_idCel)
+                {
+                    otherProgram();
+                    sc.Invalidate();
+                    ppackets->setConstant(glCelBorderShader.ID, s_uc.matWorldToClip, glm::value_ptr(matWorldToClip), 64);
+                    ppackets->setConstant(glCelBorderShader.ID, s_uc.matModel, glm::value_ptr(*cmd.prec->pmat), 64);
+                    const float hy = 1.0f / 448.0f;
+                    const glm::vec2 halfWidth(hy / aspect, hy);
+                    ppackets->setConstant(glCelBorderShader.ID, s_uc.halfWidthNdc, glm::value_ptr(halfWidth), 8);
+                    glm::vec4 rgba = Vec4FromRgba(opts.rgbaCel, 1.0f / 255.0f);
+                    if (const float gFlash = cmd.prec->psgs ? cmd.prec->psgs->gFlash : 0.0f; 0.0f < gFlash)
+                        rgba = glm::vec4(glm::mix(glm::vec3(rgba), glm::vec3(159.0f / 255.0f, 0.0f, 0.0f), std::min(gFlash, 1.0f)), rgba.a);
+                    const float a2 = cmd.prec->alpha2;
+                    rgba.a = std::min(rgba.a * 255.0f / 128.0f, 1.0f) * (a2 < 1.0f ? a2 * 0.6f : 1.0f);
+                    ppackets->setConstant(glCelBorderShader.ID, s_uc.celRgba, glm::value_ptr(rgba), 16);
+                    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 8, geom.pgl->ssboEdges);
+                    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 9, geom.pgl->ssboEdgeSkin);
+                    const cane::draw::Constant abone[2] = {{s_uc.cbone, uint32_t(cmd.prec->pamatBone ? GLint(cmd.prec->pamatBone->size()) : 0)},
+                                                           {s_uc.iboneFirst, uint32_t(GLint(cmd.prec->iboneFirst))}};
+                    ppackets->drawArrays(s_idCel, s_vaoEmpty, 0, uint32_t(geom.pgl->cedge * 6), abone, 2);
+                    ++g_renderstats.ccel;
+                    ++g_renderstats.cbatch;
+                    break;
+                }
+            }
             glDisable(GL_CULL_FACE);
             glDisable(GL_STENCIL_TEST);
             glCelBorderShader.Use();

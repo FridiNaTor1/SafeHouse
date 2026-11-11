@@ -65,6 +65,16 @@ public:
     GLuint FboScene() const { return fboMsaa ? fboMsaa : fbo; }
     // Resolves MSAA and copies the scene to the window.
     void Present();
+    // (upscaling, fsr.h; display.h fUpscale) after the scene, before the HUD: the scene (fScene; else nothing, for the
+    // overlay's frames that draw only it) upscaled into a target of the picture's size, which then stands in for the
+    // scene target until EndNativeUi (fbo / fbc / rbo, renderWidth / renderHeight its, no MSAA), so the HUD, the menus,
+    // the foreground kinds and the overlay draw at the window's resolution over it. Nothing when FUpscaleFrame is false.
+    void BeginNativeUi(bool fScene);
+    // The scene target back (Present calls it; also at the frame's end without a window)
+    void EndNativeUi();
+    // This frame upscales: the option on, the scene smaller than the picture both ways, FSR 1 available, outside VR
+    bool FUpscaleFrame() const;
+    bool FNativeUi() const { return fNativeUi; }
     // Reads the resolved scene as RGBA rows (top row first) and writes a PNG.
     bool FWriteScreenshot(const std::string& path);
     void Terminate();
@@ -72,7 +82,15 @@ public:
 private:
     GLuint fboOverlay = 0, fboOverlaySource[2]{}, texOverlaySource[2]{};
     int iOverlaySource = 0, cOverlaySources = 0;
+    // (the overlay's textures' sizes: the scene target's, or the native target's while upscaling)
+    int dxOverlaySource = 0, dyOverlaySource = 0, dxOverlay = 0, dyOverlay = 0;
     void ReleaseOverlaySources();
+    // (BeginNativeUi) the native target while the scene target waits, and the scene target's MSAA framebuffer
+    GLuint fboUi = 0, texUi = 0, rboUi = 0, fboMsaaScene = 0;
+    int dxUi = 0, dyUi = 0;
+    bool fNativeUi = false;
+    void SwapNativeUi();
+    void ReleaseNativeUi();
 };
 
 extern GL g_gl;

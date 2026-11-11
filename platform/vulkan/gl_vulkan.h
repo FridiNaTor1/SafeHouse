@@ -18,6 +18,8 @@
 #endif
 #include <vulkan/vulkan.h>
 
+#include "draw_packet.h"
+
 #include <cstdint>
 #include <functional>
 #include <string>
@@ -51,6 +53,13 @@ struct Options
 // (and why) when Vulkan cannot run the game here: the caller falls back to OpenGL.
 bool Initialize(GLFWwindow* window, const Options& options, std::string* error);
 bool Initialized();
+// The draw packets (draw_packet.h): states decided once, drawn without the GL-style calls.
+const cane::draw::Packets* DrawPackets();
+// Pipeline prewarm (notes/VKGPU_2026-11-11.md): the game enters a scope (Sly 2: a world's load). The pipelines noted in
+// that scope before (this run or earlier ones, <pipeline cache>.keys) are made on a worker thread; this waits up to
+// waitMs for them (the rest are made while the game runs; one needed first is made on the spot). Pipelines made from
+// now on are noted for this scope. SLY2N_VKPREWARM=0: off.
+void PrewarmPipelines(int32_t scope, unsigned waitMs);
 void Shutdown();
 // glad's loader: the implemented GL functions by name (nullptr for the others).
 void* ProcAddress(const char* name);

@@ -18,6 +18,7 @@
 #endif
 #include "vr.h"
 #include "renderer.h"
+#include "fsr.h"
 
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include <stb/stb_image_write.h>
@@ -513,6 +514,7 @@ bool GL::FInit(int w, int h, bool fVisible, const char* title, std::string& erro
 
 void GL::CreateFramebuffers(int w, int h)
 {
+    EndNativeUi();
     ReleaseOverlaySources();  // the immutable photograph survives resizing its presentation target
     renderWidth = w;
     renderHeight = h;
@@ -550,7 +552,10 @@ void GL::CreateFramebuffers(int w, int h)
 void GL::RememberOverlaySourceFrame()
 {
     if (!window) return;
+    // (upscaling: the frame is the native target's while BeginNativeUi holds; a size change starts over)
+    if (fboOverlaySource[0] && (dxOverlaySource != renderWidth || dyOverlaySource != renderHeight)) ReleaseOverlaySources();
     if (!fboOverlaySource[0]) {
+        dxOverlaySource = renderWidth, dyOverlaySource = renderHeight;
         glGenFramebuffers(2, fboOverlaySource);
         glGenTextures(2, texOverlaySource);
         for (int i = 0; i < 2; ++i) {
@@ -583,7 +588,12 @@ void GL::RememberOverlaySourceFrame()
 bool GL::CaptureOverlayFrame()
 {
     if (!window || cOverlaySources == 0) return false;
+    if (fboOverlay && (dxOverlay != renderWidth || dyOverlay != renderHeight)) {
+        glDeleteFramebuffers(1, &fboOverlay); glDeleteTextures(1, &texOverlay);
+        fboOverlay = texOverlay = 0;
+    }
     if (!fboOverlay) {
+        dxOverlay = renderWidth, dyOverlay = renderHeight;
         glGenFramebuffers(1, &fboOverlay);
         glGenTextures(1, &texOverlay);
         glBindTexture(GL_TEXTURE_2D, texOverlay);
@@ -599,10 +609,12 @@ bool GL::CaptureOverlayFrame()
     // The original's picture is its whole 4:3 frame; the overlay draws it in the 4:3 UI canvas. At other aspects
     // the native view is wider (or taller) than that frame, so the picture is the centred 4:3 part of the render,
     // not the whole render squeezed into it (U31: squashed at 32:9).
-    int dxSrc = renderWidth, dySrc = renderHeight;
+    // (the sources' own size: the native target's when they were taken while upscaling)
+    const int dxSource = dxOverlaySource, dySource = dyOverlaySource;
+    int dxSrc = dxSource, dySrc = dySource;
     if (dxSrc * 3 > dySrc * 4) dxSrc = std::max(1, int(std::lround(dySrc * 4.0 / 3.0)));
     else if (dxSrc * 3 < dySrc * 4) dySrc = std::max(1, int(std::lround(dxSrc * 3.0 / 4.0)));
-    const int xSrc = (renderWidth - dxSrc) / 2, ySrc = (renderHeight - dySrc) / 2;
+    const int xSrc = (dxSource - dxSrc) / 2, ySrc = (dySource - dySrc) / 2;
     for (int i = 0; i < 2; ++i) {
         const int source = i == 0 && cOverlaySources == 2 ? iOverlaySource : iOverlaySource ^ 1;
         glBindFramebuffer(GL_READ_FRAMEBUFFER, fboOverlaySource[source]);
@@ -628,6 +640,84 @@ void GL::ReleaseOverlaySources()
     glDeleteFramebuffers(2, fboOverlaySource); glDeleteTextures(2, texOverlaySource);
     for (int i = 0; i < 2; ++i) fboOverlaySource[i] = texOverlaySource[i] = 0;
     iOverlaySource = cOverlaySources = 0;
+    dxOverlaySource = dyOverlaySource = 0;
+}
+
+bool GL::FUpscaleFrame() const
+{
+    const DISPLAY& d = g_display;
+    if (fNativeUi) return true;
+    if (!window || !d.fUpscale || vr::FActive()) return false;
+    return renderWidth < d.presentWidth && renderHeight < d.presentHeight && fsr::FAvailable();
+}
+
+void GL::SwapNativeUi()
+{
+    std::swap(fbo, fboUi);
+    std::swap(fbc, texUi);
+    std::swap(rbo, rboUi);
+    std::swap(fboMsaa, fboMsaaScene);
+    std::swap(renderWidth, dxUi);
+    std::swap(renderHeight, dyUi);
+    fNativeUi = !fNativeUi;
+}
+
+void GL::BeginNativeUi(bool fScene)
+{
+    if (fNativeUi || !FUpscaleFrame()) return;
+    const DISPLAY& d = g_display;
+    const int dx = d.presentWidth, dy = d.presentHeight;
+    if (!fboUi || dxUi != dx || dyUi != dy)
+    {
+        ReleaseNativeUi();
+        dxUi = dx, dyUi = dy;
+        glGenFramebuffers(1, &fboUi);
+        glBindFramebuffer(GL_FRAMEBUFFER, fboUi);
+        glGenTextures(1, &texUi);
+        glBindTexture(GL_TEXTURE_2D, texUi);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, dx, dy, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texUi, 0);
+        glGenRenderbuffers(1, &rboUi);
+        glBindRenderbuffer(GL_RENDERBUFFER, rboUi);
+        glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH32F_STENCIL8, dx, dy);
+        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, rboUi);
+    }
+    if (fScene)
+    {
+        if (fboMsaa)
+        {
+            glDisable(GL_SCISSOR_TEST);
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, fboMsaa);
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fbo);
+            glBlitFramebuffer(0, 0, renderWidth, renderHeight, 0, 0, renderWidth, renderHeight, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+        }
+        fsr::SOURCE src;
+        src.tex = fbc;
+        src.dx = renderWidth, src.dy = renderHeight;
+        fsr::FUpscale(src, fboUi, 0, 0, dx, dy, fsr::GSharpness(d.upscaleSharpness));
+    }
+    SwapNativeUi();
+    // (the HUD's depth test and the foreground's stencil start from a clear: hud.cpp, render.cpp)
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    glDepthMask(GL_TRUE);
+    glStencilMask(0xFF);
+    glClearDepth(0.0);
+    glClearStencil(0);
+    glClear(GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+}
+
+void GL::EndNativeUi()
+{
+    if (fNativeUi) SwapNativeUi();
+}
+
+void GL::ReleaseNativeUi()
+{
+    if (fboUi) { glDeleteFramebuffers(1, &fboUi); glDeleteTextures(1, &texUi); glDeleteRenderbuffers(1, &rboUi); }
+    fboUi = texUi = rboUi = 0;
+    dxUi = dyUi = 0;
 }
 
 void GL::Present()
@@ -663,9 +753,11 @@ void GL::Present()
     glClearColor(0, 0, 0, 1);
     glClear(GL_COLOR_BUFFER_BIT);
     const DISPLAY& d = g_display;
+    // (upscaling: the native target is the picture's size, so this copies it one to one)
     glBlitFramebuffer(0, 0, renderWidth, renderHeight, d.presentX, d.presentY, d.presentX + d.presentWidth,
-                      d.presentY + d.presentHeight, GL_COLOR_BUFFER_BIT, GL_LINEAR);
+                      d.presentY + d.presentHeight, GL_COLOR_BUFFER_BIT, fNativeUi ? GL_NEAREST : GL_LINEAR);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    EndNativeUi();
 }
 
 bool GL::FWriteScreenshot(const std::string& path)
@@ -694,6 +786,9 @@ void GL::Terminate()
 {
     ShutdownPadRumble();   // (rumble.h: every motor off before the window goes)
     if (window) {
+        EndNativeUi();
+        ReleaseNativeUi();
+        fsr::Release();
         ReleaseOverlayFrame();
         ResetAnimatedOverlayGraphics();
         glOverlayShader.Delete();

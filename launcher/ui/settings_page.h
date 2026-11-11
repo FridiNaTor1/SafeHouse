@@ -15,6 +15,9 @@
 #include <functional>
 #include <string>
 #include <vector>
+#if defined(__ANDROID__)
+#include <sys/system_properties.h>
+#endif
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
 #include "../backend.h"
@@ -666,6 +669,7 @@ private:
         switch (category) {
         case Display:
             s.windowMode = d.windowMode, s.vsyncEnabled = d.vsyncEnabled, s.aspectMode = d.aspectMode, s.frameRate = d.frameRate;
+            m_sly2.upscale = settings::Sly2UpscaleOptions{};
             break;
         case Graphics:
             s.internalResolutionHeight = d.internalResolutionHeight, s.msaaEnabled = d.msaaEnabled, s.msaaSamples = d.msaaSamples;
@@ -788,6 +792,40 @@ private:
         if (stepperRow(tr("Frame rate limit"), &index, labels, nullptr, index < 0 ? custom.c_str() : nullptr))
             m_settings.frameRate = rates[static_cast<size_t>(index)], commit();
         describe(tr("The highest frame rate the game runs at. Gameplay speed is the same at every setting."));
+        upscalingRows();
+    }
+    // (Sly 2, Settings.ini [Display] Upscaling: Sly2-Release fsr.h; the game's Display options and, on a PC headset,
+    // its VR Settings show the same rows. Not on the Meta Quest: its compositor upscales the eyes, VR Settings there.)
+    static bool vrHeadsetDevice() {
+#if defined(__ANDROID__)
+        char manufacturer[PROP_VALUE_MAX] = {};
+        __system_property_get("ro.product.manufacturer", manufacturer);
+        const std::string m = manufacturer;
+        return m == "Oculus" || m == "oculus" || m == "Meta" || m == "meta";
+#else
+        return false;
+#endif
+    }
+    void upscalingRows() {
+#if defined(__APPLE__)
+        return;   // (macOS: the game's Metal layer has no FSR 1 programs yet; the game keeps the bilinear scale)
+#endif
+        if (m_game != GameId::Sly2 || vrHeadsetDevice()) return;
+        settings::Sly2UpscaleOptions& u = m_sly2.upscale;
+        toggle(tr("Upscaling"), u.enabled,
+               tr("Draws the 3D scene smaller and scales it up to the screen with a sharpening upscaler: faster, nearly as "
+                  "sharp. The HUD and menus stay at full resolution. While on, it replaces the internal resolution."));
+        if (!u.enabled) return;
+        const std::vector<std::string> methods{ "FSR 1" };
+        int method = 0;
+        stepperRow(tr("Upscaling method"), &method, methods);
+        describe(tr("AMD FidelityFX Super Resolution 1.0: edge-aware upscaling with sharpening."));
+        const std::vector<std::string> presets{ std::string(tr("Ultra quality")) + " (77%)", std::string(tr("Quality")) + " (67%)",
+                                                std::string(tr("Balanced")) + " (59%)", std::string(tr("Performance")) + " (50%)" };
+        int preset = std::clamp(u.preset, 0, 3);
+        if (stepperRow(tr("Upscaling preset"), &preset, presets)) u.preset = preset, commit();
+        describe(tr("How large the 3D scene is drawn, as a share of the screen's width and height. Lower is faster."));
+        rangeRow(tr("Sharpness"), u.sharpness, 0, 100, 10, tr("How much the upscaled picture is sharpened."), percent);
     }
     void graphicsRows() {
         const int monitor = monitorHeight();

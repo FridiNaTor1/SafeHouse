@@ -927,6 +927,18 @@
   "Japanese plays only its voices on the USA and European discs until the characters of your Japanese disc are added: choose your Japan disc image below once more.": "日本版ディスクの文字を追加するまで、北米版とヨーロッパ版のディスクでは日本語は音声のみになります。下の項目で日本版のディスクイメージをもう一度選んでください。",
   "Voice language": "音声の言語",
   "Same as text": "テキストと同じ",
-  "The dialogue and the cutscenes' sound, apart from the text: Japanese voices with English text, or the other way round. Choosing a language on the game's title screen sets both back to it.": "セリフとムービーの音声を、テキストとは別に選べます（日本語の音声と英語のテキストなど）。ゲームのタイトル画面で言語を選ぶと、両方ともその言語に戻ります。"
+  "The dialogue and the cutscenes' sound, apart from the text: Japanese voices with English text, or the other way round. Choosing a language on the game's title screen sets both back to it.": "セリフとムービーの音声を、テキストとは別に選べます（日本語の音声と英語のテキストなど）。ゲームのタイトル画面で言語を選ぶと、両方ともその言語に戻ります。",
+  "Upscaling": "アップスケーリング",
+  "Upscaling method": "アップスケーリング方式",
+  "Upscaling preset": "アップスケーリングのプリセット",
+  "Ultra quality": "ウルトラクオリティ",
+  "Quality": "クオリティ",
+  "Balanced": "バランス",
+  "Performance": "パフォーマンス",
+  "Sharpness": "シャープネス",
+  "AMD FidelityFX Super Resolution 1.0: edge-aware upscaling with sharpening.": "AMD FidelityFX Super Resolution 1.0:輪郭を保つアップスケーリングとシャープネス。",
+  "How large the 3D scene is drawn, as a share of the screen's width and height. Lower is faster.": "3Dシーンを描く大きさ(画面のサイズに対する割合)。低いほど高速です。",
+  "How much the upscaled picture is sharpened.": "アップスケールした画像をどれだけシャープにするか。",
+  "Draws the 3D scene smaller and scales it up to the screen with a sharpening upscaler: faster, nearly as sharp. The HUD and menus stay at full resolution. While on, it replaces the internal resolution.": "3Dシーンを小さく描き、シャープにするアップスケーラーで画面サイズに拡大します。より高速で、ほぼ同じ鮮明さです。HUDとメニューはフル解像度のままです。オンの間は内部解像度の代わりに使われます。"
  }
 }

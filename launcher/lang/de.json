@@ -927,6 +927,18 @@
   "Japanese plays only its voices on the USA and European discs until the characters of your Japanese disc are added: choose your Japan disc image below once more.": "Japanisch spielt auf den USA- und Europa-Discs nur seine Sprachausgabe ab, bis die Schriftzeichen deiner japanischen Disc hinzugefügt sind: Wähle unten noch einmal dein japanisches Disc-Image.",
   "Voice language": "Sprache der Stimmen",
   "Same as text": "Wie der Text",
-  "The dialogue and the cutscenes' sound, apart from the text: Japanese voices with English text, or the other way round. Choosing a language on the game's title screen sets both back to it.": "Die Dialoge und der Ton der Zwischensequenzen, unabhängig vom Text: japanische Stimmen mit englischem Text oder umgekehrt. Wählst du auf dem Titelbildschirm des Spiels eine Sprache, werden beide wieder auf sie gesetzt."
+  "The dialogue and the cutscenes' sound, apart from the text: Japanese voices with English text, or the other way round. Choosing a language on the game's title screen sets both back to it.": "Die Dialoge und der Ton der Zwischensequenzen, unabhängig vom Text: japanische Stimmen mit englischem Text oder umgekehrt. Wählst du auf dem Titelbildschirm des Spiels eine Sprache, werden beide wieder auf sie gesetzt.",
+  "Upscaling": "Hochskalierung",
+  "Upscaling method": "Hochskalierungsmethode",
+  "Upscaling preset": "Hochskalierungsstufe",
+  "Ultra quality": "Ultra-Qualität",
+  "Quality": "Qualität",
+  "Balanced": "Ausgewogen",
+  "Performance": "Leistung",
+  "Sharpness": "Schärfe",
+  "AMD FidelityFX Super Resolution 1.0: edge-aware upscaling with sharpening.": "AMD FidelityFX Super Resolution 1.0: kantenbewusste Hochskalierung mit Nachschärfung.",
+  "How large the 3D scene is drawn, as a share of the screen's width and height. Lower is faster.": "Wie groß die 3D-Szene gezeichnet wird, als Anteil an Breite und Höhe des Bildschirms. Weniger ist schneller.",
+  "How much the upscaled picture is sharpened.": "Wie stark das hochskalierte Bild nachgeschärft wird.",
+  "Draws the 3D scene smaller and scales it up to the screen with a sharpening upscaler: faster, nearly as sharp. The HUD and menus stay at full resolution. While on, it replaces the internal resolution.": "Zeichnet die 3D-Szene kleiner und skaliert sie mit einem schärfenden Upscaler auf den Bildschirm: schneller, fast genauso scharf. HUD und Menüs bleiben in voller Auflösung. Eingeschaltet ersetzt sie die interne Auflösung."
  }
 }

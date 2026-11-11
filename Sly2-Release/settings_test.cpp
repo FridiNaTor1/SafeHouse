@@ -124,6 +124,23 @@ int SettingsSelfTest()
         // every key the schema writes is read back (none lands in the unknown keys)
         Check(c2.unknown.sections.empty(), "custom: no unknown key");
     }
+    // (upscaling) [Display] Upscaling's keys: off by default, a hand-written value of each read and written back
+    {
+        const st::Sly2Settings d = st::sly2FromIni(st::sly2ToIni(st::Sly2Settings{}));
+        Check(d.upscale.enabled == 0 && d.upscale.method == st::UpscaleMethod_Fsr1 && d.upscale.preset == st::UpscalePreset_Quality &&
+              d.upscale.sharpness == 80, "upscaling: off by default (FSR 1, Quality, 80 %)");
+        std::vector<std::string> invalid;
+        const st::Sly2Settings u = st::sly2FromIni("[Display]\nUpscaling = On\nUpscaling Method = fsr1\n"
+                                                 "upscaling_preset = ultra quality\nUpscaling Sharpness = 35%\n", &invalid);
+        Check(u.upscale.enabled == 1 && u.upscale.preset == st::UpscalePreset_UltraQuality && u.upscale.sharpness == 35 && invalid.empty(),
+              "upscaling: hand-written keys read");
+        const st::Sly2Settings u2 = st::sly2FromIni(st::sly2ToIni(u));
+        Check(u2.upscale.enabled == 1 && u2.upscale.preset == u.upscale.preset && u2.upscale.sharpness == 35, "upscaling: round trip");
+        invalid.clear();
+        const st::Sly2Settings bad = st::sly2FromIni("[Display]\nUpscaling Preset = Extreme\nUpscaling Sharpness = 101\n", &invalid);
+        Check(bad.upscale.preset == st::UpscalePreset_Quality && bad.upscale.sharpness == 80 && invalid.size() == 2,
+              "upscaling: unreadable values keep the defaults");
+    }
     // the names: every key and button name reads back to its value
     {
         bool ok = true;

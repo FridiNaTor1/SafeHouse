@@ -451,6 +451,24 @@ constexpr ROW s_arow[] = {
     {PTX_FromNextArea, {"%s (next area)", "%s (zone suivante)", "%s (prossima zona)", "%s (nächstes Gebiet)",
         "%s (próxima zona)", "%s (volgend gebied)", "%s (próxima zona)", "%s (næste område)", "%s (seuraava alue)",
         "%s (neste område)", "%s (nästa område)", "%s (次のエリア)"}},
+    // P: the display options' Upscaling (fsr.h; the Japanese in kana, the font's)
+    {PTX_Upscaling, {"Upscaling", "Mise à l'échelle", "Upscaling", "Hochskalierung", "Reescalado", "Opschaling",
+        "Aumento de resolução", "Opskalering", "Skaalaus", "Oppskalering", "Uppskalning", "アップスケール"}},
+    {PTX_UpscaleMethod, {"Method", "Méthode", "Metodo", "Methode", "Método", "Methode", "Método", "Metode", "Menetelmä",
+        "Metode", "Metod", "ほうしき"}},
+    {PTX_UpscalePreset, {"Preset", "Préréglage", "Preimpostazione", "Voreinstellung", "Ajuste", "Voorinstelling",
+        "Predefinição", "Niveau", "Esiasetus", "Nivå", "Nivå", "プリセット"}},
+    {PTX_UpscaleSharpness, {"Sharpness", "Netteté", "Nitidezza", "Schärfe", "Nitidez", "Scherpte", "Nitidez", "Skarphed",
+        "Terävyys", "Skarphet", "Skärpa", "シャープネス"}},
+    {PTX_UltraQuality, {"Ultra Quality", "Ultra qualité", "Qualità ultra", "Ultra-Qualität", "Calidad ultra",
+        "Ultrakwaliteit", "Qualidade ultra", "Ultrakvalitet", "Ultralaatu", "Ultrakvalitet", "Ultrakvalitet",
+        "ウルトラクオリティ"}},
+    {PTX_Quality, {"Quality", "Qualité", "Qualità", "Qualität", "Calidad", "Kwaliteit", "Qualidade", "Kvalitet", "Laatu",
+        "Kvalitet", "Kvalitet", "クオリティ"}},
+    {PTX_Balanced, {"Balanced", "Équilibré", "Bilanciato", "Ausgewogen", "Equilibrado", "Gebalanceerd", "Equilibrado",
+        "Balanceret", "Tasapainoinen", "Balansert", "Balanserad", "バランス"}},
+    {PTX_Performance, {"Performance", "Performance", "Prestazioni", "Leistung", "Rendimiento", "Prestaties", "Desempenho",
+        "Ydelse", "Suorituskyky", "Ytelse", "Prestanda", "パフォーマンス"}},
 };
 // clang-format on
 static_assert(std::size(s_arow) == PTX_Max, "one row per PTX");

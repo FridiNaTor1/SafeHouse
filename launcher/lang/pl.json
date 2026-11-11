@@ -927,6 +927,18 @@
   "Japanese plays only its voices on the USA and European discs until the characters of your Japanese disc are added: choose your Japan disc image below once more.": "Japoński odtwarza na płytach z USA i Europy tylko swoje głosy, dopóki nie zostaną dodane znaki pisma z twojej japońskiej płyty: wybierz poniżej jeszcze raz obraz swojej japońskiej płyty.",
   "Voice language": "Język głosów",
   "Same as text": "Taki jak tekst",
-  "The dialogue and the cutscenes' sound, apart from the text: Japanese voices with English text, or the other way round. Choosing a language on the game's title screen sets both back to it.": "Dialogi i dźwięk przerywników niezależnie od tekstu: japońskie głosy z angielskim tekstem lub odwrotnie. Wybranie języka na ekranie tytułowym gry przywraca do niego oba."
+  "The dialogue and the cutscenes' sound, apart from the text: Japanese voices with English text, or the other way round. Choosing a language on the game's title screen sets both back to it.": "Dialogi i dźwięk przerywników niezależnie od tekstu: japońskie głosy z angielskim tekstem lub odwrotnie. Wybranie języka na ekranie tytułowym gry przywraca do niego oba.",
+  "Upscaling": "Skalowanie",
+  "Upscaling method": "Metoda skalowania",
+  "Upscaling preset": "Profil skalowania",
+  "Ultra quality": "Ultra jakość",
+  "Quality": "Jakość",
+  "Balanced": "Zrównoważony",
+  "Performance": "Wydajność",
+  "Sharpness": "Ostrość",
+  "AMD FidelityFX Super Resolution 1.0: edge-aware upscaling with sharpening.": "AMD FidelityFX Super Resolution 1.0: skalowanie z zachowaniem krawędzi i wyostrzaniem.",
+  "How large the 3D scene is drawn, as a share of the screen's width and height. Lower is faster.": "Wielkość, w jakiej rysowana jest scena 3D, jako część szerokości i wysokości ekranu. Mniej znaczy szybciej.",
+  "How much the upscaled picture is sharpened.": "Jak mocno wyostrzany jest przeskalowany obraz.",
+  "Draws the 3D scene smaller and scales it up to the screen with a sharpening upscaler: faster, nearly as sharp. The HUD and menus stay at full resolution. While on, it replaces the internal resolution.": "Rysuje scenę 3D mniejszą i skaluje ją do ekranu z wyostrzaniem: szybciej i prawie tak samo ostro. HUD i menu pozostają w pełnej rozdzielczości. Gdy jest włączone, zastępuje rozdzielczość wewnętrzną."
  }
 }

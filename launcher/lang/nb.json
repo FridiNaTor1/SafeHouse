@@ -927,6 +927,18 @@
   "Japanese plays only its voices on the USA and European discs until the characters of your Japanese disc are added: choose your Japan disc image below once more.": "Japansk spiller bare av stemmene sine på de amerikanske og europeiske platene til skrifttegnene fra den japanske platen din er lagt til: velg den japanske plateavbildningen din nedenfor én gang til.",
   "Voice language": "Stemmespråk",
   "Same as text": "Samme som teksten",
-  "The dialogue and the cutscenes' sound, apart from the text: Japanese voices with English text, or the other way round. Choosing a language on the game's title screen sets both back to it.": "Dialogen og lyden i mellomsekvensene, uavhengig av teksten: japanske stemmer med engelsk tekst, eller omvendt. Velger du et språk på spillets tittelskjerm, settes begge tilbake til det."
+  "The dialogue and the cutscenes' sound, apart from the text: Japanese voices with English text, or the other way round. Choosing a language on the game's title screen sets both back to it.": "Dialogen og lyden i mellomsekvensene, uavhengig av teksten: japanske stemmer med engelsk tekst, eller omvendt. Velger du et språk på spillets tittelskjerm, settes begge tilbake til det.",
+  "Upscaling": "Oppskalering",
+  "Upscaling method": "Oppskaleringsmetode",
+  "Upscaling preset": "Oppskaleringsnivå",
+  "Ultra quality": "Ultrakvalitet",
+  "Quality": "Kvalitet",
+  "Balanced": "Balansert",
+  "Performance": "Ytelse",
+  "Sharpness": "Skarphet",
+  "AMD FidelityFX Super Resolution 1.0: edge-aware upscaling with sharpening.": "AMD FidelityFX Super Resolution 1.0: kantbevisst oppskalering med skarphet.",
+  "How large the 3D scene is drawn, as a share of the screen's width and height. Lower is faster.": "Hvor stor 3D-scenen tegnes, som andel av skjermens bredde og høyde. Lavere er raskere.",
+  "How much the upscaled picture is sharpened.": "Hvor mye det oppskalerte bildet gjøres skarpere.",
+  "Draws the 3D scene smaller and scales it up to the screen with a sharpening upscaler: faster, nearly as sharp. The HUD and menus stay at full resolution. While on, it replaces the internal resolution.": "Tegner 3D-scenen mindre og skalerer den opp til skjermen med en skarp oppskalering: raskere og nesten like skarpt. HUD og menyer forblir i full oppløsning. Når den er på, erstatter den den interne oppløsningen."
  }
 }

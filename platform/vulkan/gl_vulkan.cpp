@@ -37,6 +37,7 @@
 #include <thread>
 #include <array>
 #include <bit>
+#include <chrono>
 #include <cmath>
 #include <cstdarg>
 #include <cstdio>
@@ -301,6 +302,13 @@ public:
         return name;
     }
     T* Get(GLuint name) const { return name < m_objects.size() ? m_objects[name].get() : nullptr; }
+    GLuint Limit() const { return GLuint(m_objects.size()); }   // (names below this: Get them to walk the table)
+    GLuint Adopt(std::unique_ptr<T> object)
+    {
+        const GLuint name = Gen();
+        m_objects[name] = std::move(object);
+        return name;
+    }
     T* Default() { if (!m_objects[0]) m_objects[0] = std::make_unique<T>(); return m_objects[0].get(); }
     T* Ensure(GLuint name)
     {
@@ -429,6 +437,8 @@ struct Program
     unsigned samplerCount = 0;
     uint16_t storageMask = 0, storageMaskMv = 0;
     bool uniformBuffer = false;    // its block from a uniform buffer (set 2) instead of push constants (g_feat.pushBytes)
+    std::array<uint16_t, 8> specOffset{};   // (per-state specialization) the SPEC uniforms' block offsets (info->specMask)
+    uint32_t hash = 0;             // (prewarm manifest: the build-time key, the block's source and the SPIR-V)
 };
 struct Query
 {
@@ -451,6 +461,8 @@ Table<Query> g_queries;
 std::vector<std::unique_ptr<Sync>> g_syncs;
 uint32_t g_programSerial = 0;
 std::vector<VkShaderModule> g_retiredModules;
+std::vector<std::unique_ptr<Program>> g_prePrograms;   // (made by the prewarm before the game asked for them)
+std::unique_ptr<Program> MakeProgram(const Shaders::Program* info, bool uniformBuffer);
 
 // ------------------------------------------------------------------------------------------------ GL state
 struct Range { GLuint buffer = 0; uint32_t offset = 0, size = 0; bool whole = true; };
@@ -482,6 +494,9 @@ struct State
     GLenum error = GL_NO_ERROR;
 };
 State s;
+// (draw packets) the fixed-function group of the packet state whose values s holds (0: none known): every GL call that
+// changes one of those fields forgets it
+uint32_t g_fixedPacket = 0;
 
 // What the command buffer has been told (reset with each command buffer).
 struct Bound
@@ -499,6 +514,7 @@ struct Bound
     // the program and its resources
     GLuint program = ~0u;
     uint32_t programSerial = 0;
+    uint16_t spec = 0;             // (the bound pipeline's spec set)
     VkPipeline pipeline = VK_NULL_HANDLE;
     GLenum mode = ~0u;
     // vertex input
@@ -550,6 +566,9 @@ struct Frame
     std::vector<VkDescriptorPool> setPools;
     size_t setPoolIndex = 0;
     std::vector<std::pair<VkBuffer, VkDescriptorSet>> uniformSets;
+    // (SLY2N_VKGPUTIME) the render-pass instances timed in this frame: their sizes and attachments
+    uint32_t passTimed = 0;
+    std::vector<std::array<uint32_t, 3>> passInfo;
 };
 std::array<Frame, kFrameSlots> g_frames;
 unsigned g_frameIndex = 0;
@@ -569,6 +588,14 @@ bool g_threaded = false;
 // (threaded: the open rendering instance's attachments in the stream, glInvalidateFramebuffer; and what it dropped)
 VkRenderingAttachmentInfo *g_recColor = nullptr, *g_recDepth = nullptr, *g_recStencil = nullptr;
 bool g_invalidatedColor = false, g_invalidatedDepth = false;
+// (threaded, the classic render pass object of the in-place read: the instance's begin as recorded; glInvalidateFramebuffer
+// swaps its render pass for the compatible one with DONT_CARE stores, g_instanceClassicKey's ops changed)
+VkRenderPassBeginInfo* g_recClassic = nullptr;
+// (threaded) the depth-stencil image of the last instance that ended, while nothing has used it since (a layout change,
+// another instance on it, the submission): a glInvalidateFramebuffer of it then still drops that instance's stores
+// (the scene's depth: the frame copy ends its instance before GL::Present invalidates it). Its recorded attachments /
+// classic begin and ops below (EndedInstance).
+const void* g_endedDepth = nullptr;
 const CaneVk::ExternalDevice* g_external = nullptr;   // (VR: the instance / device through OpenXR)
 const VkCommandBuffer kStreamMain = reinterpret_cast<VkCommandBuffer>(uintptr_t(0x10)), kStreamPre = reinterpret_cast<VkCommandBuffer>(uintptr_t(0x20));
 class Stream
@@ -797,6 +824,7 @@ void vkCmdBeginRenderPass2(VkCommandBuffer cmd, const VkRenderPassBeginInfo* rb,
         r2->pNext = a2;
     }
     const VkSubpassBeginInfo sb2 = *sb;
+    g_recClassic = r2;
     s.Rec([=](VkCommandBuffer c) { cane::vk::vkCmdBeginRenderPass2(c, r2, &sb2); });
 }
 void vkCmdEndRenderPass2(VkCommandBuffer cmd, const VkSubpassEndInfo* ei)
@@ -1016,6 +1044,7 @@ struct Barriers
     bool fMemory = false;
     void Image(const struct Image& im, VkImageLayout from, VkImageLayout to, uint32_t level = 0, uint32_t levels = VK_REMAINING_MIP_LEVELS)
     {
+        if (&im == g_endedDepth) g_endedDepth = nullptr;
         VkImageMemoryBarrier2 bar{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
         const LayoutScope a = ScopeOf(from), z = ScopeOf(to);
         bar.srcStageMask = a.stage ? a.stage : VK_PIPELINE_STAGE_2_NONE;
@@ -1244,6 +1273,7 @@ VkImageView AttachView(Image& im, unsigned level, unsigned layer, unsigned layer
 }
 void DestroyImage(Image& im)
 {
+    if (&im == g_endedDepth) g_endedDepth = nullptr;
     for (auto& [k, v] : im.attachViews) vkDestroyImageView(g_device, v, nullptr);
     if (im.view) vkDestroyImageView(g_device, im.view, nullptr);
     if (im.external) return;
@@ -1447,6 +1477,12 @@ struct Target
 };
 Target g_target;                   // the target of the instance being recorded (or about to begin)
 bool g_inRendering = false;        // between vkCmdBeginRendering and vkCmdEndRendering
+// (the open instance: whether anything wrote its colour / depth-stencil (a clear, a draw that can write them); not
+// written: its store becomes STORE_OP_NONE at its end (threaded: still patchable), so a tiler does not write back what
+// it loaded unchanged; SLY2N_VKSTORENONE=0: off)
+bool g_instWroteColor = false, g_instWroteDepth = false;
+unsigned g_storesNone = 0;         // (SLY2N_VKSTATS: stores made NONE)
+unsigned g_storesDropped = 0;     // (SLY2N_VKSTATS: instances whose depth store glInvalidateFramebuffer dropped)
 bool g_pendingBegin = false;       // g_target set, its instance not begun yet (the next draw begins it)
 bool g_fetchUsed = false;          // a CANE_FETCH program exists: colour attachments that allow it begin in the local-read layout
 bool g_instanceLocalRead = false;
@@ -1462,6 +1498,13 @@ struct ClassicKey
     bool operator==(const ClassicKey&) const = default;
 };
 std::vector<std::pair<ClassicKey, VkRenderPass>> g_classicPasses;
+ClassicKey g_instanceClassicKey;   // (the open classic instance's attachments and load / store ops)
+struct EndedInstance
+{
+    VkRenderingAttachmentInfo *depth = nullptr, *stencil = nullptr;
+    VkRenderPassBeginInfo* classic = nullptr;
+    ClassicKey key;
+} g_ended;
 VkRenderPass ClassicRenderPass(const ClassicKey& k)
 {
     for (const auto& [key, rp] : g_classicPasses)
@@ -1619,6 +1662,8 @@ VkFramebuffer ClassicFramebuffer(const ClassicFbKey& k)
 }  // the instance's colour attachment is in VK_IMAGE_LAYOUT_RENDERING_LOCAL_READ_KHR
 struct PendingClear { bool color = false, depth = false, stencil = false; VkClearValue colorValue{}, depthValue{}; } g_pendingClear;
 
+void TimePassBegin();
+void TimePassEnd();
 void BeginRenderingNow()
 {
     VkCommandBuffer cmd = Main();
@@ -1683,6 +1728,7 @@ void BeginRenderingNow()
     }
     if (Image* im = g_target.depth)
     {
+        if (im == g_endedDepth) g_endedDepth = nullptr;
         bar.Image(*im, im->layout, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
         im->layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
         im->useSegment = g_segment;
@@ -1708,6 +1754,7 @@ void BeginRenderingNow()
         ri.pStencilAttachment = &stencil;
     }
     bar.Flush(cmd);
+    TimePassBegin();
     g_instanceClassic = classic;
     if (classic)
     {
@@ -1722,6 +1769,8 @@ void BeginRenderingNow()
         }
         ck.fdm = fdmImage != nullptr;
         ck.viewMask = uint8_t(ri.viewMask);
+        g_instanceClassicKey = ck;
+        g_recClassic = nullptr;   // (set by the stream's vkCmdBeginRenderPass2 below)
         const VkRenderPass rp = ClassicRenderPass(ck);
         ClassicKey compat;
         compat.color = ck.color, compat.depth = ck.depth, compat.fdm = ck.fdm, compat.viewMask = ck.viewMask;
@@ -1754,6 +1803,8 @@ void BeginRenderingNow()
     else vkCmdBeginRendering(cmd, &ri);
     g_inRendering = true;
     g_pendingBegin = false;
+    g_instWroteColor = g_pendingClear.color;
+    g_instWroteDepth = g_pendingClear.depth || g_pendingClear.stencil;
     g_pendingClear = PendingClear{};
     ++g_stats.renderPasses;
 }
@@ -1761,11 +1812,46 @@ void EnsureRendering()
 {
     if (g_pendingBegin) BeginRenderingNow();
 }
+void StoreNoneUnwritten()
+{
+    static const bool s_fOff = std::getenv("SLY2N_VKSTORENONE") && std::atoi(std::getenv("SLY2N_VKSTORENONE")) == 0;
+    if (s_fOff) return;
+    const bool color = !g_instWroteColor && g_target.color && !g_target.color->external;
+    const bool depth = !g_instWroteDepth && g_target.depth;
+    if (!color && !depth) return;
+    if (g_recColor || g_recDepth)
+    {
+        if (color && g_recColor && g_recColor->storeOp == VK_ATTACHMENT_STORE_OP_STORE) g_recColor->storeOp = VK_ATTACHMENT_STORE_OP_NONE, ++g_storesNone;
+        if (depth && g_recDepth && g_recStencil && g_recDepth->storeOp == VK_ATTACHMENT_STORE_OP_STORE && g_recStencil->storeOp == VK_ATTACHMENT_STORE_OP_STORE)
+        {
+            g_recDepth->storeOp = g_recStencil->storeOp = VK_ATTACHMENT_STORE_OP_NONE;
+            ++g_storesNone;
+        }
+    }
+    else if (g_recClassic && g_instanceClassic)
+    {
+        ClassicKey& ck = g_instanceClassicKey;
+        bool changed = false;
+        if (color && ck.ops[1] == uint8_t(VK_ATTACHMENT_STORE_OP_STORE)) ck.ops[1] = uint8_t(VK_ATTACHMENT_STORE_OP_NONE), changed = true, ++g_storesNone;
+        if (depth && ck.depth != VK_FORMAT_UNDEFINED && ck.ops[3] == uint8_t(VK_ATTACHMENT_STORE_OP_STORE) && ck.ops[5] == uint8_t(VK_ATTACHMENT_STORE_OP_STORE))
+            ck.ops[3] = ck.ops[5] = uint8_t(VK_ATTACHMENT_STORE_OP_NONE), changed = true, ++g_storesNone;
+        if (changed) g_recClassic->renderPass = ClassicRenderPass(ck);
+    }
+}
 // The instance ends (a transfer, a read-back, another target, the submission); the next draw on the target resumes it.
 void EndRendering()
 {
     if (g_pendingBegin && (g_pendingClear.color || g_pendingClear.depth || g_pendingClear.stencil)) BeginRenderingNow();
     if (!g_inRendering) return;
+    StoreNoneUnwritten();
+    g_endedDepth = nullptr;
+    if (g_target.depth && (g_recDepth || (g_instanceClassic && g_recClassic)))
+    {
+        g_ended.depth = g_recDepth, g_ended.stencil = g_recStencil;
+        g_ended.classic = g_instanceClassic ? g_recClassic : nullptr;
+        g_ended.key = g_instanceClassicKey;
+        g_endedDepth = g_target.depth;
+    }
     if (g_instanceClassic)
     {
         VkSubpassEndInfo ei{VK_STRUCTURE_TYPE_SUBPASS_END_INFO};
@@ -1773,8 +1859,10 @@ void EndRendering()
         g_instanceClassic = false;
     }
     else vkCmdEndRendering(g_main);
+    TimePassEnd();
     g_inRendering = false;
     g_recColor = g_recDepth = g_recStencil = nullptr;
+    g_recClassic = nullptr;
     g_invalidatedColor = g_invalidatedDepth = false;
     g_pendingBegin = true;
     if (g_target.color) MarkDirty(*g_target.color);
@@ -1820,9 +1908,70 @@ void WaitValue(uint64_t value)
     wi.pValues = &value;
     VKCHECK(vkWaitSemaphores(g_device, &wi, UINT64_MAX));
 }
+// (SLY2N_VKGPUTIME=N: every N frames, the GPU time of each render-pass instance by its place in the frame and their sum,
+// averaged, stderr. A bottom-of-pipe timestamp before each instance's begin and after its end: what the instance adds
+// once the work before it is done.)
+constexpr uint32_t kPassTimes = 64;
+PFN_vkResetQueryPool g_vkResetQueryPool = nullptr;
+int g_gpuTimeEvery = 0;
+VkQueryPool g_passPool = VK_NULL_HANDLE;
+struct PassTimeSum { double ms = 0; uint32_t n = 0; std::array<uint32_t, 3> info{}; };
+std::array<PassTimeSum, kPassTimes> g_passSums;
+double g_passFrameMs = 0;
+int g_passFrames = 0;
+void ReadPassTimes(Frame& f, uint32_t slot)
+{
+    if (!g_passPool) return;
+    const uint32_t base = slot * kPassTimes * 2;
+    if (f.passTimed)
+    {
+        std::array<uint64_t, kPassTimes * 2> t{};
+        if (vkGetQueryPoolResults(g_device, g_passPool, base, f.passTimed * 2, sizeof(uint64_t) * f.passTimed * 2, t.data(), 8,
+                                  VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT) == VK_SUCCESS)
+        {
+            double frame = 0;
+            for (uint32_t i = 0; i < f.passTimed; ++i)
+            {
+                const double ms = t[2 * i + 1] > t[2 * i] ? double(t[2 * i + 1] - t[2 * i]) * double(g_props.limits.timestampPeriod) * 1e-6 : 0.0;
+                g_passSums[i].ms += ms, ++g_passSums[i].n, g_passSums[i].info = f.passInfo[i];
+                frame += ms;
+            }
+            g_passFrameMs += frame;
+            if (++g_passFrames == g_gpuTimeEvery)
+            {
+                std::fprintf(stderr, "vkgpu: %.3f ms a frame in render passes:", g_passFrameMs / g_passFrames);
+                for (uint32_t i = 0; i < kPassTimes; ++i)
+                    if (g_passSums[i].n)
+                        std::fprintf(stderr, " [%u %ux%u%s %.3f]", i, g_passSums[i].info[0], g_passSums[i].info[1],
+                                     g_passSums[i].info[2] == 1 ? "c" : g_passSums[i].info[2] == 2 ? "d" : "cd", g_passSums[i].ms / g_passFrames);
+                std::fprintf(stderr, "\n");
+                g_passSums = {};
+                g_passFrameMs = 0, g_passFrames = 0;
+            }
+        }
+    }
+    g_vkResetQueryPool(g_device, g_passPool, base, kPassTimes * 2);
+    f.passTimed = 0;
+    f.passInfo.clear();
+}
+void TimePassBegin()
+{
+    Frame& f = Cur();
+    if (!g_passPool || f.passTimed >= kPassTimes) return;
+    vkCmdWriteTimestamp(Main(), VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, g_passPool, g_frameIndex * kPassTimes * 2 + f.passTimed * 2);
+}
+void TimePassEnd()
+{
+    Frame& f = Cur();
+    if (!g_passPool || f.passTimed >= kPassTimes) return;
+    vkCmdWriteTimestamp(Main(), VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, g_passPool, g_frameIndex * kPassTimes * 2 + f.passTimed * 2 + 1);
+    f.passInfo.push_back({b.width, b.height, uint32_t((g_target.color ? 1 : 0) | (g_target.depth ? 2 : 0))});
+    ++f.passTimed;
+}
 void RetireFrame(Frame& f)
 {
     WaitValue(f.lastValue);   // (the CPU two frames ahead of the GPU waits here)
+    ReadPassTimes(f, uint32_t(&f - g_frames.data()));
     for (VkDescriptorPool pool : f.setPools) vkResetDescriptorPool(g_device, pool, 0);
     f.setPoolIndex = 0;
     f.uniformSets.clear();
@@ -1908,6 +2057,7 @@ void Submit(VkSemaphore wait, VkSemaphore signal)
 {
     if (!g_recording) return;
     EndRendering();
+    g_endedDepth = nullptr;
     FlushCopies();
     // (no image waits in a transfer or attachment layout between submissions: the sampled ones back to readable)
     {
@@ -2680,15 +2830,50 @@ void RestoreInvalidatedStores()
     if (g_invalidatedColor && g_recColor) g_recColor->storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     if (g_invalidatedDepth && g_recDepth) g_recDepth->storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     if (g_invalidatedDepth && g_recStencil) g_recStencil->storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    if (g_recClassic && (g_invalidatedColor || g_invalidatedDepth))
+    {
+        if (g_invalidatedColor) g_instanceClassicKey.ops[1] = uint8_t(VK_ATTACHMENT_STORE_OP_STORE);
+        if (g_invalidatedDepth) g_instanceClassicKey.ops[3] = g_instanceClassicKey.ops[5] = uint8_t(VK_ATTACHMENT_STORE_OP_STORE);
+        g_recClassic->renderPass = ClassicRenderPass(g_instanceClassicKey);
+    }
     g_invalidatedColor = g_invalidatedDepth = false;
 }
 void APIENTRY InvalidateFramebuffer(GLenum target, GLsizei n, const GLenum* attachments)
 {
     if (!g_recording || target == GL_READ_FRAMEBUFFER || !attachments) return;
     ApplyTarget();   // (the bound framebuffer's: the open instance if it is the same target)
-    if (!g_inRendering) return;
     static const bool s_fOff = std::getenv("SLY2N_VKINVALIDATE") && std::atoi(std::getenv("SLY2N_VKINVALIDATE")) == 0;
     if (s_fOff) return;
+    if (!g_inRendering)
+    {
+        // (the target's last instance already ended, unused since: its depth-stencil stores dropped; SLY2N_VKENDEDINV=0: not)
+        static const bool s_fEndedOff = std::getenv("SLY2N_VKENDEDINV") && std::atoi(std::getenv("SLY2N_VKENDEDINV")) == 0;
+        bool ds[2] = {false, false};
+        for (GLsizei i = 0; i < n; ++i)
+        {
+            const GLenum a = attachments[i];
+            ds[0] |= a == GL_DEPTH_ATTACHMENT || a == GL_DEPTH_STENCIL_ATTACHMENT || a == GL_DEPTH;
+            ds[1] |= a == GL_STENCIL_ATTACHMENT || a == GL_DEPTH_STENCIL_ATTACHMENT || a == GL_STENCIL;
+        }
+        if (s_fEndedOff || !ds[0] || !ds[1] || !g_target.depth || g_target.depth != g_endedDepth) return;
+        if (g_ended.classic)
+        {
+            ClassicKey ck = g_ended.key;
+            if (ck.ops[3] != uint8_t(VK_ATTACHMENT_STORE_OP_DONT_CARE) || ck.ops[5] != uint8_t(VK_ATTACHMENT_STORE_OP_DONT_CARE))
+            {
+                ck.ops[3] = ck.ops[5] = uint8_t(VK_ATTACHMENT_STORE_OP_DONT_CARE);
+                g_ended.classic->renderPass = ClassicRenderPass(ck);
+                ++g_storesDropped;
+            }
+        }
+        else if (g_ended.depth && g_ended.stencil && g_ended.depth->storeOp != VK_ATTACHMENT_STORE_OP_DONT_CARE)
+        {
+            g_ended.depth->storeOp = g_ended.stencil->storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+            ++g_storesDropped;
+        }
+        g_endedDepth = nullptr;
+        return;
+    }
     bool color = false, depth = false, stencil = false;
     for (GLsizei i = 0; i < n; ++i)
     {
@@ -2702,11 +2887,30 @@ void APIENTRY InvalidateFramebuffer(GLenum target, GLsizei n, const GLenum* atta
     {
         g_recDepth->storeOp = g_recStencil->storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
         g_invalidatedDepth = true;
+        ++g_storesDropped;
     }
     if (color && g_recColor && g_target.color && !g_target.color->external)
     {
         g_recColor->storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
         g_invalidatedColor = true;
+    }
+    // (the classic in-place-read instance: the compatible render pass object with those stores DONT_CARE; SLY2N_VKCLASSICINV=0: kept)
+    static const bool s_fClassicOff = std::getenv("SLY2N_VKCLASSICINV") && std::atoi(std::getenv("SLY2N_VKCLASSICINV")) == 0;
+    if (g_recClassic && g_instanceClassic && !s_fClassicOff)
+    {
+        ClassicKey& ck = g_instanceClassicKey;
+        bool changed = false;
+        if (depth && stencil && ck.depth != VK_FORMAT_UNDEFINED && ck.ops[3] == uint8_t(VK_ATTACHMENT_STORE_OP_STORE))
+        {
+            ck.ops[3] = ck.ops[5] = uint8_t(VK_ATTACHMENT_STORE_OP_DONT_CARE);
+            g_invalidatedDepth = changed = true;
+        }
+        if (color && g_target.color && !g_target.color->external && ck.ops[1] == uint8_t(VK_ATTACHMENT_STORE_OP_STORE))
+        {
+            ck.ops[1] = uint8_t(VK_ATTACHMENT_STORE_OP_DONT_CARE);
+            g_invalidatedColor = changed = true;
+        }
+        if (changed) g_recClassic->renderPass = ClassicRenderPass(ck), ++g_storesDropped;
     }
 }
 
@@ -2728,6 +2932,7 @@ void SetCapability(GLenum cap, bool enable)
     bool* p = Capability(cap);
     if (!p || *p == enable) return;
     *p = enable;
+    g_fixedPacket = 0;
     switch (cap)
     {
     case GL_DEPTH_TEST: case GL_STENCIL_TEST: b.depthDirty = true; break;
@@ -2740,15 +2945,16 @@ void SetCapability(GLenum cap, bool enable)
 void APIENTRY Enable(GLenum cap) { SetCapability(cap, true); }
 void APIENTRY Disable(GLenum cap) { SetCapability(cap, false); }
 GLboolean APIENTRY IsEnabled(GLenum cap) { const bool* p = Capability(cap); return p && *p ? GL_TRUE : GL_FALSE; }
-void APIENTRY DepthMask(GLboolean flag) { if (s.depthWrite != (flag != GL_FALSE)) { s.depthWrite = flag != GL_FALSE; b.depthDirty = true; } }
-void APIENTRY DepthFunc(GLenum func) { if (s.depthFunc != func) { s.depthFunc = func; b.depthDirty = true; } }
+void APIENTRY DepthMask(GLboolean flag) { g_fixedPacket = 0; if (s.depthWrite != (flag != GL_FALSE)) { s.depthWrite = flag != GL_FALSE; b.depthDirty = true; } }
+void APIENTRY DepthFunc(GLenum func) { g_fixedPacket = 0; if (s.depthFunc != func) { s.depthFunc = func; b.depthDirty = true; } }
 void APIENTRY DepthRange(GLdouble n, GLdouble f) { s.depthNear = float(std::clamp(n, 0.0, 1.0)); s.depthFar = float(std::clamp(f, 0.0, 1.0)); b.viewportDirty = true; }
 void APIENTRY DepthRangef(GLfloat n, GLfloat f) { DepthRange(n, f); }
-void APIENTRY FrontFace(GLenum mode) { if (s.frontFace != mode) { s.frontFace = mode; b.rasterDirty = true; } }
-void APIENTRY CullFace(GLenum mode) { if (s.cullFace != mode) { s.cullFace = mode; b.rasterDirty = true; } }
+void APIENTRY FrontFace(GLenum mode) { g_fixedPacket = 0; if (s.frontFace != mode) { s.frontFace = mode; b.rasterDirty = true; } }
+void APIENTRY CullFace(GLenum mode) { g_fixedPacket = 0; if (s.cullFace != mode) { s.cullFace = mode; b.rasterDirty = true; } }
 void APIENTRY PolygonMode(GLenum, GLenum mode) { if (s.polygonMode != mode) { s.polygonMode = mode; b.pipelineDirty = true; } }
 void APIENTRY BlendFuncSeparate(GLenum src, GLenum dst, GLenum srcA, GLenum dstA)
 {
+    g_fixedPacket = 0;
     if (s.blendSrc == src && s.blendDst == dst && s.blendSrcAlpha == srcA && s.blendDstAlpha == dstA) return;
     s.blendSrc = src; s.blendDst = dst; s.blendSrcAlpha = srcA; s.blendDstAlpha = dstA;
     if (s.blend) BlendChanged();
@@ -2756,6 +2962,7 @@ void APIENTRY BlendFuncSeparate(GLenum src, GLenum dst, GLenum srcA, GLenum dstA
 void APIENTRY BlendFunc(GLenum src, GLenum dst) { BlendFuncSeparate(src, dst, src, dst); }
 void APIENTRY BlendEquationSeparate(GLenum rgb, GLenum alpha)
 {
+    g_fixedPacket = 0;
     if (s.blendEq == rgb && s.blendEqAlpha == alpha) return;
     s.blendEq = rgb; s.blendEqAlpha = alpha;
     if (s.blend) BlendChanged();
@@ -2763,16 +2970,19 @@ void APIENTRY BlendEquationSeparate(GLenum rgb, GLenum alpha)
 void APIENTRY BlendEquation(GLenum mode) { BlendEquationSeparate(mode, mode); }
 void APIENTRY BlendColor(GLfloat r, GLfloat g, GLfloat bl, GLfloat a)
 {
+    g_fixedPacket = 0;
     const std::array<float, 4> c{r, g, bl, a};
     if (s.blendColor != c) { s.blendColor = c; b.blendConstDirty = true; }
 }
 void APIENTRY ColorMask(GLboolean r, GLboolean g, GLboolean bl, GLboolean a)
 {
+    g_fixedPacket = 0;
     const unsigned mask = (r ? 1u : 0u) | (g ? 2u : 0u) | (bl ? 4u : 0u) | (a ? 8u : 0u);
     if (s.colorMask != mask) { s.colorMask = mask; BlendChanged(); }
 }
 void APIENTRY StencilFuncSeparate(GLenum face, GLenum func, GLint ref, GLuint mask)
 {
+    g_fixedPacket = 0;
     for (State::Face* f : {&s.front, &s.back})
     {
         if ((f == &s.front && face == GL_BACK) || (f == &s.back && face == GL_FRONT)) continue;
@@ -2783,6 +2993,7 @@ void APIENTRY StencilFuncSeparate(GLenum face, GLenum func, GLint ref, GLuint ma
 void APIENTRY StencilFunc(GLenum func, GLint ref, GLuint mask) { StencilFuncSeparate(GL_FRONT_AND_BACK, func, ref, mask); }
 void APIENTRY StencilOpSeparate(GLenum face, GLenum fail, GLenum zfail, GLenum zpass)
 {
+    g_fixedPacket = 0;
     for (State::Face* f : {&s.front, &s.back})
     {
         if ((f == &s.front && face == GL_BACK) || (f == &s.back && face == GL_FRONT)) continue;
@@ -2793,6 +3004,7 @@ void APIENTRY StencilOpSeparate(GLenum face, GLenum fail, GLenum zfail, GLenum z
 void APIENTRY StencilOp(GLenum fail, GLenum zfail, GLenum zpass) { StencilOpSeparate(GL_FRONT_AND_BACK, fail, zfail, zpass); }
 void APIENTRY StencilMaskSeparate(GLenum face, GLuint mask)
 {
+    g_fixedPacket = 0;
     if (face != GL_BACK) s.front.writeMask = mask;
     if (face != GL_FRONT) s.back.writeMask = mask;
     b.stencilDirty = true;
@@ -3096,6 +3308,13 @@ VkFormat AttribFormat(const Attrib& a)
     }
     return f;
 }
+uint16_t InternLayout(const VertexLayout& l)
+{
+    for (size_t k = 0; k < g_layouts.size(); ++k)
+        if (g_layouts[k] == l) return uint16_t(k);
+    g_layouts.push_back(l);
+    return uint16_t(g_layouts.size() - 1);
+}
 uint16_t LayoutFor(const VertexArray& vao, const Program& p)
 {
     VertexLayout l;
@@ -3116,10 +3335,7 @@ uint16_t LayoutFor(const VertexArray& vao, const Program& p)
             l.genericKind[i] = uint8_t((p.info->inputKinds >> (2 * i)) & 3);
         }
     }
-    for (size_t k = 0; k < g_layouts.size(); ++k)
-        if (g_layouts[k] == l) return uint16_t(k);
-    g_layouts.push_back(l);
-    return uint16_t(g_layouts.size() - 1);
+    return InternLayout(l);
 }
 
 struct PipelineKey
@@ -3128,9 +3344,36 @@ struct PipelineKey
     uint16_t layout = 0;
     uint8_t topology = 0, colorFormat = 0, depthFormat = 0, samples = 1, colorMask = 0xF, blend = 0, polygon = 0, pad[3]{};
     uint32_t blendFactors = 0;
+    uint16_t spec = 0, pad2 = 0;   // (per-state specialization: g_specSets index, 0 none)
     bool operator==(const PipelineKey& o) const { return std::memcmp(this, &o, sizeof(*this)) == 0; }
 };
-static_assert(sizeof(PipelineKey) == 20);
+static_assert(sizeof(PipelineKey) == 24);
+
+// ------------------------------------------------------------------------------------------------ per-state specialization
+// (cmake/vulkan_shaders.py SPEC) The glob programs read the uniforms a packet state fixes for its run (the texture
+// function, colour source, blend-pair mode, alpha test, fog black) through specialization constants where the
+// pipeline has them: a packet state's values become a spec set (interned; PipelineKey::spec), and its draws take the
+// pipeline made with them, so the driver folds those branches away. Draws without a packet state (the GL-style calls)
+// use spec 0: the push block, as before. Off by default; SLY2N_VKSPEC=ff: on, =hex: only these SPEC uniforms (bit i = kSpecNames[i]).
+constexpr const char* kSpecNames[8] = {"fTextured", "icolor", "caneBlend1", "ate", "atst", "aref", "afailMode", "fFogBlack"};
+struct SpecData
+{
+    uint32_t mask = 0;
+    uint32_t value[8] = {};
+    bool operator==(const SpecData&) const = default;
+};
+std::vector<SpecData> g_specSets(1);
+uint32_t g_specAllowed = 0;     // (SLY2N_VKSPEC)
+uint16_t g_drawSpec = 0;        // (the packet draw being made: its state's spec set)
+uint16_t InternSpec(const SpecData& d)
+{
+    if (!d.mask) return 0;
+    for (size_t i = 1; i < g_specSets.size(); ++i)
+        if (g_specSets[i] == d) return uint16_t(i);
+    if (g_specSets.size() >= 0xFFFF) return 0;
+    g_specSets.push_back(d);
+    return uint16_t(g_specSets.size() - 1);
+}
 struct PipelineKeyHash
 {
     size_t operator()(const PipelineKey& k) const
@@ -3143,11 +3386,32 @@ struct PipelineKeyHash
 };
 std::unordered_map<PipelineKey, VkPipeline, PipelineKeyHash> g_pipelines;
 
-VkPipeline CreatePipeline(const PipelineKey& k, const Program& p)
+// (SLY2N_VKPIPELOG=1: each frame that made pipelines on the game thread, with the time spent, and a summary at the end)
+uint64_t g_frameSerial = 0;                 // (frames presented since the start)
+double g_pipeMsFrame = 0, g_pipeMsTotal = 0, g_pipeMsMaxFrame = 0;
+unsigned g_pipeCountFrame = 0, g_pipeCountTotal = 0;
+double MsSince(std::chrono::steady_clock::time_point t0)
+{
+    return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+}
+// What a pipeline is made from besides its key: the program's modules, the vertex layout, the classic render pass (all
+// copied, so the prewarm worker never reads the game thread's tables)
+struct PipelineSource
+{
+    std::array<VkShaderModule, 3> modules{}, modulesMv{};
+    VertexLayout layout;
+    VkRenderPass classic = VK_NULL_HANDLE;
+    SpecData spec;
+};
+VkPipeline CreatePipeline(const PipelineKey& k, const PipelineSource& p, bool fGameThread = true)
 {
     std::array<VkPipelineShaderStageCreateInfo, 3> stages{};
     uint32_t nStages = 0;
     const VkShaderStageFlagBits kinds[3] = {VK_SHADER_STAGE_VERTEX_BIT, VK_SHADER_STAGE_GEOMETRY_BIT, VK_SHADER_STAGE_FRAGMENT_BIT};
+    // (per-state specialization: constant 0 the mask, i + 1 SPEC uniform i's value; the same for every stage)
+    VkSpecializationMapEntry specEntries[9];
+    for (uint32_t i = 0; i < 9; ++i) specEntries[i] = {i, i * 4, 4};
+    const VkSpecializationInfo specInfo{9, specEntries, sizeof(SpecData), &p.spec};
     for (unsigned i = 0; i < 3; ++i)
     {
         if (!p.modules[i]) continue;
@@ -3156,8 +3420,9 @@ VkPipeline CreatePipeline(const PipelineKey& k, const Program& p)
         st.stage = kinds[i];
         st.module = (k.pad[2] & 2) && p.modulesMv[i] ? p.modulesMv[i] : p.modules[i];
         st.pName = "main";
+        if (p.spec.mask) st.pSpecializationInfo = &specInfo;
     }
-    const VertexLayout& l = g_layouts[k.layout];
+    const VertexLayout& l = p.layout;
     std::vector<VkVertexInputBindingDescription> bindings;
     std::vector<VkVertexInputAttributeDescription> attributes;
     for (unsigned i = 0; i < kGenericBinding; ++i)
@@ -3238,13 +3503,8 @@ VkPipeline CreatePipeline(const PipelineKey& k, const Program& p)
     if (k.pad[1])
     {
         // (classic fetch: for the render pass object's subpass; any of its load / store variants is compatible)
-        ClassicKey compat;
-        compat.color = colorFormat;
-        compat.depth = k.depthFormat ? g_feat.depthStencil : VK_FORMAT_UNDEFINED;
-        compat.fdm = (k.pad[2] & 1) != 0;
-        compat.viewMask = multiview ? 3 : 0;
         ci.pNext = nullptr;
-        ci.renderPass = ClassicRenderPass(compat);
+        ci.renderPass = p.classic;
         ci.subpass = 0;
     }
     ci.stageCount = nStages;
@@ -3259,18 +3519,241 @@ VkPipeline CreatePipeline(const PipelineKey& k, const Program& p)
     ci.pDynamicState = &dy;
     ci.layout = g_pipelineLayout;
     VkPipeline pipeline;
+    const auto t0 = std::chrono::steady_clock::now();
     const VkResult r = FForcedFailure("pipeline") ? VK_ERROR_INITIALIZATION_FAILED
                                                   : vkCreateGraphicsPipelines(g_device, g_pipelineCache, 1, &ci, nullptr, &pipeline);
     if (r != VK_SUCCESS) Fatal("vkCreateGraphicsPipelines failed (%d)", int(r));
-    ++g_stats.pipelinesCreated;
+    if (fGameThread)
+    {
+        ++g_stats.pipelinesCreated;
+        g_pipeMsFrame += MsSince(t0);
+        ++g_pipeCountFrame;
+    }
     return pipeline;
 }
+// (classic fetch) the render pass object a pipeline of this key is made for: any load / store variant is compatible
+VkRenderPass ClassicPassFor(const PipelineKey& k)
+{
+    if (!k.pad[1]) return VK_NULL_HANDLE;
+    ClassicKey compat;
+    compat.color = VK_FORMAT_R8G8B8A8_UNORM;
+    compat.depth = k.depthFormat ? g_feat.depthStencil : VK_FORMAT_UNDEFINED;
+    compat.fdm = (k.pad[2] & 1) != 0;
+    compat.viewMask = (k.pad[2] & 2) ? 3 : 0;
+    return ClassicRenderPass(compat);
+}
+
+// ------------------------------------------------------------------------------------------------ pipeline prewarm
+// Every pipeline made is noted in a manifest (<pipeline cache>.keys: the program by its build-time key, the vertex
+// layout, the rest of the key, and the scope it was first used in: the game's world, PrewarmPipelines). When the game
+// enters a scope again (a world's load, a later run, a new build whose driver cache is cold), a worker thread makes that
+// scope's pipelines from the manifest (through the driver's disk cache) while the load finishes; the load waits a short
+// while for it. A pipeline the game needs before the worker got to it is made on the game thread as before (the
+// worker's own copy is then dropped). SLY2N_VKPREWARM=0: no manifest, no worker.
+struct ManifestEntry
+{
+    uint32_t program = 0;          // (ProgramHashOf: the build-time key, the block's source and the SPIR-V)
+    int32_t scope = 0;
+    PipelineKey key;               // (program serial, layout index and spec 0)
+    VertexLayout layout;
+    SpecData spec;
+};
+static_assert(std::is_trivially_copyable_v<ManifestEntry>);
+struct PrewarmJob
+{
+    PipelineKey key;
+    PipelineSource source;
+    std::shared_ptr<std::vector<ManifestEntry>> save;   // (instead: write these entries and the driver cache)
+};
+std::mutex g_pipeMutex;                  // (g_pipelines, while the prewarm worker runs)
+bool g_prewarmOn = false;
+int32_t g_scope = INT32_MIN;            // (the game's scope: its world; INT32_MIN none set)
+uint32_t g_scopeSerial = 1;             // (changes with the scope: a pipeline noted for the current one)
+std::unordered_map<VkPipeline, uint32_t> g_pipeScopeMark;   // (pipeline -> the scope serial it was last noted for)
+std::vector<ManifestEntry> g_manifest;
+std::unordered_map<uint64_t, uint32_t> g_manifestIndex;      // (entry hash -> count, dedup)
+size_t g_manifestSaved = 0;             // (entries in the file)
+std::vector<int32_t> g_scopesWarmed;
+std::deque<PrewarmJob> g_prewarmJobs;
+std::mutex g_prewarmMutex;
+std::condition_variable g_prewarmCv, g_prewarmIdleCv;
+bool g_prewarmBusy = false, g_prewarmQuit = false;
+std::thread g_prewarmThread;
+unsigned g_prewarmMade = 0, g_prewarmDropped = 0;
+uint64_t g_deviceSignature = 0;
+uint64_t g_manifestNoteFrame = 0;       // (the frame of the last new entry)
+void SavePipelineCache();
+
+uint64_t Fnv64(const void* data, size_t n, uint64_t h = 1469598103934665603ull)
+{
+    const auto* p = static_cast<const uint8_t*>(data);
+    for (size_t i = 0; i < n; ++i) h = (h ^ p[i]) * 1099511628211ull;
+    return h;
+}
+// (a program changed by a new build gets another hash: its old entries are not made for it)
+uint32_t ProgramHashOf(const Shaders::Program* info, bool uniformBuffer)
+{
+    uint64_t h = Fnv64(info->key, std::strlen(info->key), uniformBuffer ? 0x5542ull : 0x5043ull);
+    for (unsigned k = 0; k < 3; ++k)
+    {
+        const uint32_t* code = uniformBuffer ? info->spirvUbo[k] : info->spirv[k];
+        if (code) h = Fnv64(code, uniformBuffer ? info->spirvUboSize[k] : info->spirvSize[k], h);
+    }
+    return uint32_t(h ^ (h >> 32));
+}
+uint32_t ProgramHash(const Program& p) { return p.hash; }
+uint64_t EntryHash(const ManifestEntry& e) { return Fnv64(&e, sizeof e); }
+void NoteManifest(const PipelineKey& k, const Program& p, const VertexLayout& layout)
+{
+    if (!g_prewarmOn || g_scope == INT32_MIN || !p.info) return;
+    ManifestEntry e;
+    std::memset(&e, 0, sizeof e);
+    e.program = ProgramHash(p);
+    e.scope = g_scope;
+    e.key = k;
+    e.key.program = 0;
+    e.key.layout = 0;
+    e.key.spec = 0;
+    e.layout = layout;
+    e.spec = g_specSets[k.spec];
+    if (g_manifestIndex.emplace(EntryHash(e), 0).second)
+    {
+        g_manifest.push_back(e);
+        g_manifestNoteFrame = g_frameSerial;
+    }
+}
+std::string ManifestPath() { return g_cachePath.empty() ? std::string() : g_cachePath + ".keys"; }
+constexpr uint32_t kManifestMagic = 0x4D4B5643u, kManifestVersion = 2;   // "CVKM"
+void LoadManifest()
+{
+    const std::string path = ManifestPath();
+    if (path.empty()) return;
+    std::ifstream f(path, std::ios::binary);
+    uint32_t head[4] = {};
+    uint64_t sig = 0;
+    if (!f.read(reinterpret_cast<char*>(head), sizeof head) || !f.read(reinterpret_cast<char*>(&sig), sizeof sig)) return;
+    // (another device, driver or feature set: other keys; the file is written anew)
+    if (head[0] != kManifestMagic || head[1] != kManifestVersion || head[2] != sizeof(ManifestEntry) || sig != g_deviceSignature) return;
+    const uint32_t n = std::min<uint32_t>(head[3], 1u << 16);
+    for (uint32_t i = 0; i < n; ++i)
+    {
+        ManifestEntry e;
+        if (!f.read(reinterpret_cast<char*>(&e), sizeof e)) break;
+        if (g_manifestIndex.emplace(EntryHash(e), 0).second) g_manifest.push_back(e);
+    }
+    g_manifestSaved = g_manifest.size();
+}
+void WriteManifest(const std::vector<ManifestEntry>& entries)
+{
+    const std::string path = ManifestPath();
+    const std::string tmp = path + ".tmp";
+    {
+        std::ofstream f(tmp, std::ios::binary | std::ios::trunc);
+        if (!f) return;
+        const uint32_t head[4] = {kManifestMagic, kManifestVersion, uint32_t(sizeof(ManifestEntry)), uint32_t(entries.size())};
+        f.write(reinterpret_cast<const char*>(head), sizeof head);
+        f.write(reinterpret_cast<const char*>(&g_deviceSignature), sizeof g_deviceSignature);
+        f.write(reinterpret_cast<const char*>(entries.data()), std::streamsize(entries.size() * sizeof(ManifestEntry)));
+        if (!f) return;
+    }
+    std::remove(path.c_str());
+    std::rename(tmp.c_str(), path.c_str());
+}
+void SaveManifest()
+{
+    if (ManifestPath().empty() || !g_prewarmOn || g_manifest.size() == g_manifestSaved) return;
+    WriteManifest(g_manifest);
+    g_manifestSaved = g_manifest.size();
+}
+void PrewarmLoop()
+{
+    for (;;)
+    {
+        PrewarmJob job;
+        {
+            std::unique_lock<std::mutex> lock(g_prewarmMutex);
+            g_prewarmBusy = false;
+            if (g_prewarmJobs.empty()) g_prewarmIdleCv.notify_all();
+            g_prewarmCv.wait(lock, [] { return g_prewarmQuit || !g_prewarmJobs.empty(); });
+            if (g_prewarmQuit) { g_prewarmIdleCv.notify_all(); return; }
+            job = g_prewarmJobs.front();
+            g_prewarmJobs.pop_front();
+            g_prewarmBusy = true;
+        }
+        if (job.save)
+        {
+            WriteManifest(*job.save);
+            SavePipelineCache();
+            continue;
+        }
+        {
+            std::lock_guard<std::mutex> lock(g_pipeMutex);
+            if (g_pipelines.count(job.key)) continue;
+        }
+        const VkPipeline pipeline = CreatePipeline(job.key, job.source, false);
+        std::lock_guard<std::mutex> lock(g_pipeMutex);
+        if (g_pipelines.emplace(job.key, pipeline).second) ++g_prewarmMade;
+        else
+        {
+            vkDestroyPipeline(g_device, pipeline, nullptr);   // (the game thread made it meanwhile)
+            ++g_prewarmDropped;
+        }
+    }
+}
+void StopPrewarm()
+{
+    if (!g_prewarmThread.joinable()) return;
+    {
+        std::lock_guard<std::mutex> lock(g_prewarmMutex);
+        g_prewarmQuit = true;
+        g_prewarmJobs.clear();
+    }
+    g_prewarmCv.notify_all();
+    g_prewarmThread.join();
+    g_prewarmQuit = false;
+}
+// true: the queue is done (false: still working after waitMs)
+bool WaitPrewarm(unsigned waitMs)
+{
+    std::unique_lock<std::mutex> lock(g_prewarmMutex);
+    return g_prewarmIdleCv.wait_for(lock, std::chrono::milliseconds(waitMs), [] { return g_prewarmJobs.empty() && !g_prewarmBusy; });
+}
+
 VkPipeline PipelineFor(const PipelineKey& k, const Program& p)
 {
-    auto it = g_pipelines.find(k);
-    if (it != g_pipelines.end()) return it->second;
-    const VkPipeline pipeline = CreatePipeline(k, p);
-    g_pipelines.emplace(k, pipeline);
+    {
+        std::unique_lock<std::mutex> lock(g_pipeMutex, std::defer_lock);
+        if (g_prewarmOn) lock.lock();
+        auto it = g_pipelines.find(k);
+        if (it != g_pipelines.end())
+        {
+            const VkPipeline pipeline = it->second;
+            if (lock.owns_lock()) lock.unlock();
+            // (made in another scope, or by the worker: noted for this one too)
+            if (g_prewarmOn)
+            {
+                uint32_t& mark = g_pipeScopeMark[pipeline];
+                if (mark != g_scopeSerial) { mark = g_scopeSerial; NoteManifest(k, p, g_layouts[k.layout]); }
+            }
+            return pipeline;
+        }
+    }
+    PipelineSource src;
+    src.modules = p.modules, src.modulesMv = p.modulesMv;
+    src.layout = g_layouts[k.layout];
+    src.classic = ClassicPassFor(k);
+    src.spec = g_specSets[k.spec];
+    const VkPipeline pipeline = CreatePipeline(k, src);
+    {
+        std::unique_lock<std::mutex> lock(g_pipeMutex, std::defer_lock);
+        if (g_prewarmOn) lock.lock();
+        g_pipelines.emplace(k, pipeline);   // (the worker checks before it makes one)
+    }
+    if (g_prewarmOn)
+    {
+        g_pipeScopeMark[pipeline] = g_scopeSerial;
+        NoteManifest(k, p, src.layout);
+    }
     return pipeline;
 }
 // (the depth format's key: one depth format for every target here)
@@ -3290,6 +3773,7 @@ void ApplyPipeline(GLenum mode, Program& p)
     }
     if (mode != b.mode) { b.mode = mode; b.pipelineDirty = true; }
     if (b.programSerial != p.serial) b.pipelineDirty = true;
+    if (b.spec != g_drawSpec) { b.spec = g_drawSpec; b.pipelineDirty = true; }
     if (!b.pipelineDirty) return;
     PipelineKey k;
     k.program = p.serial;
@@ -3304,6 +3788,7 @@ void ApplyPipeline(GLenum mode, Program& p)
     k.colorMask = g_feat.eds3 ? 0xF : uint8_t(s.colorMask);
     k.blend = s.blend && !g_feat.eds3 ? 1 : 0;
     k.polygon = PolygonCode();
+    k.spec = g_drawSpec;
     if (s.blend && !g_feat.eds3)
         k.blendFactors = FactorCode(s.blendSrc) | (FactorCode(s.blendDst) << 5) | (FactorCode(s.blendSrcAlpha) << 10) |
                          (FactorCode(s.blendDstAlpha) << 15) | (BlendOpCode(s.blendEq) << 20) | (BlendOpCode(s.blendEqAlpha) << 23);
@@ -3430,7 +3915,9 @@ void ApplyResources(Program& p)
         uint32_t lo = 0, hi = size;
         if (g_pushValid >= size)
         {
-            while (lo < size && g_pushShadow[lo] == p.constants[lo]) ++lo;
+            // (this program pushed last: the command buffer holds its bytes outside the range written since)
+            if (!fProgram) lo = std::min(p.dirtyLo, size), hi = std::min(p.dirtyHi, size);
+            while (lo < hi && g_pushShadow[lo] == p.constants[lo]) ++lo;
             while (hi > lo && g_pushShadow[hi - 1] == p.constants[hi - 1]) --hi;
         }
         lo &= ~3u;
@@ -3571,6 +4058,8 @@ bool PrepareDraw(GLenum mode)
     if (p->fetch && g_inRendering && !g_instanceLocalRead && !g_instanceClassic) EndRendering();
     EnsureRendering();
     if (g_invalidatedColor || g_invalidatedDepth) RestoreInvalidatedStores();
+    if (s.colorMask & 0xF) g_instWroteColor = true;
+    if ((s.depthTest && s.depthWrite) || (s.stencilTest && ((s.front.writeMask | s.back.writeMask) & 0xFF))) g_instWroteDepth = true;
     ApplyPipeline(mode, *p);
     ApplyDynamic();
     ApplyResources(*p);
@@ -3646,6 +4135,245 @@ void APIENTRY MultiDrawElementsIndirect(GLenum mode, GLenum type, const void* in
     }
 }
 
+// ------------------------------------------------------------------------------------------------ draw packets
+// (platform/draw_packet.h) A packet state decided once: its fixed-function values as the GL state they stand for (the
+// fields of s the equivalent GL calls set) and its constants as places in the program's block. A draw with it writes
+// those directly: the group of fixed values skipped while s still holds them (g_fixedPacket), the constants compared
+// word by word; the pipeline, dynamic state, push constants and draw then go the same way as a GL draw's.
+struct PacketFixed
+{
+    uint32_t blend, src, dst, srcA, dstA, eq, eqA, fConst;
+    std::array<float, 4> konst;
+    uint32_t colorMask, cull, cullFace, frontFace, depthTest, depthWrite, depthFunc;
+    uint32_t stencilTest, sfunc, sref, smask, swrite, sfail, szfail, szpass, sbfail, sbzfail, sbzpass;
+};
+struct PacketState
+{
+    uint32_t fixed = 0;
+    GLuint program = 0;
+    uint32_t cconst = 0, csampler = 0;
+    struct { uint32_t offset, bits; } aconst[10]{};
+    struct { uint8_t binding, unit; } asampler[4]{};   // (sampler uniforms: their units)
+    uint16_t spec = 0;
+};
+std::vector<PacketFixed> g_packetFixed(1);
+const Shaders::Uniform* UniformAt(const Program& p, GLint location);
+std::vector<PacketState> g_packetStates(1);
+
+GLenum GlFactor(uint8_t f)
+{
+    using namespace cane::draw;
+    switch (f)
+    {
+    case kFactorZero: return GL_ZERO;
+    case kFactorOne: return GL_ONE;
+    case kFactorSrcAlpha: return GL_SRC_ALPHA;
+    case kFactorOneMinusSrcAlpha: return GL_ONE_MINUS_SRC_ALPHA;
+    case kFactorDstAlpha: return GL_DST_ALPHA;
+    case kFactorOneMinusDstAlpha: return GL_ONE_MINUS_DST_ALPHA;
+    case kFactorConstantAlpha: return GL_CONSTANT_ALPHA;
+    case kFactorOneMinusConstantAlpha: return GL_ONE_MINUS_CONSTANT_ALPHA;
+    case kFactorSrc1Alpha: return GL_SRC1_ALPHA;
+    default: return GL_ONE_MINUS_SRC1_ALPHA;
+    }
+}
+GLenum GlCompare(uint8_t c)
+{
+    static const GLenum k[8] = {GL_NEVER, GL_LESS, GL_EQUAL, GL_LEQUAL, GL_GREATER, GL_NOTEQUAL, GL_GEQUAL, GL_ALWAYS};
+    return k[c & 7];
+}
+GLenum GlStencilOp(uint8_t o)
+{
+    using namespace cane::draw;
+    return o == kStencilZero ? GL_ZERO : o == kStencilReplace ? GL_REPLACE : o == kStencilIncrWrap ? GL_INCR_WRAP : o == kStencilDecrWrap ? GL_DECR_WRAP : GL_KEEP;
+}
+
+uint32_t PacketCreateState(const cane::draw::State& st)
+{
+    Program* p = g_programs.Get(st.program);
+    if (!p || p->uniformBuffer || st.cconst > 10) return 0;
+    PacketFixed f;
+    std::memset(&f, 0, sizeof f);
+    f.blend = st.blend;
+    if (st.blend)
+    {
+        f.src = GlFactor(st.srcColor), f.dst = GlFactor(st.dstColor), f.srcA = GlFactor(st.srcAlpha), f.dstA = GlFactor(st.dstAlpha);
+        f.eq = st.opColor == cane::draw::kBlendReverseSubtract ? GL_FUNC_REVERSE_SUBTRACT : GL_FUNC_ADD;
+        f.eqA = st.opAlpha == cane::draw::kBlendReverseSubtract ? GL_FUNC_REVERSE_SUBTRACT : GL_FUNC_ADD;
+        f.fConst = st.fBlendConstant;
+        if (st.fBlendConstant) for (int i = 0; i < 4; ++i) f.konst[size_t(i)] = st.blendConstant[i];
+    }
+    f.colorMask = st.colorMask & 0xF;
+    f.cull = st.cull ? 1 : 0;
+    if (st.cull) f.cullFace = st.cull == 2 ? GL_FRONT : GL_BACK;
+    if (st.cull || st.winding) f.frontFace = st.frontCCW ? GL_CCW : GL_CW;   // (0: left as it was)
+    f.depthTest = st.depthTest, f.depthWrite = st.depthWrite, f.depthFunc = GlCompare(st.depthCompare);
+    f.stencilTest = st.stencilTest;
+    f.sfunc = GlCompare(st.stencilCompare), f.sref = st.stencilRef, f.smask = st.stencilCompareMask, f.swrite = st.stencilWriteMask;
+    f.sfail = GlStencilOp(st.stencilFail), f.szfail = GlStencilOp(st.stencilDepthFail), f.szpass = GlStencilOp(st.stencilPass);
+    f.sbfail = f.sfail, f.sbzfail = f.szfail, f.sbzpass = f.szpass;
+    if (st.stencilBack)
+        f.sbfail = GlStencilOp(st.stencilBackFail), f.sbzfail = GlStencilOp(st.stencilBackDepthFail), f.sbzpass = GlStencilOp(st.stencilBackPass);
+    PacketState ps;
+    for (size_t i = 1; i < g_packetFixed.size() && !ps.fixed; ++i)
+        if (!std::memcmp(&g_packetFixed[i], &f, sizeof f)) ps.fixed = uint32_t(i);
+    if (!ps.fixed) { ps.fixed = uint32_t(g_packetFixed.size()); g_packetFixed.push_back(f); }
+    ps.program = st.program;
+    for (unsigned i = 0; i < st.cconst; ++i)
+    {
+        const Shaders::Uniform* u = UniformAt(*p, st.aconst[i].location);
+        if (u && u->type >= 32 && u->binding < kMaxBindings && st.aconst[i].bits < kMaxUnits && ps.csampler < 4)
+        {
+            ps.asampler[ps.csampler++] = {uint8_t(u->binding), uint8_t(st.aconst[i].bits)};
+            continue;
+        }
+        if (!u || u->type >= 32 || uint32_t(u->offset) + 4 > p->constants.size()) return 0;
+        ps.aconst[ps.cconst++] = {u->offset, st.aconst[i].bits};
+    }
+    // (per-state specialization: the constants the program reads as SPEC uniforms)
+    if (const uint32_t mask = p->info->specMask & g_specAllowed)
+    {
+        SpecData d;
+        for (uint32_t i = 0; i < ps.cconst; ++i)
+            for (uint32_t j = 0; j < 8; ++j)
+                if ((mask & (1u << j)) && p->specOffset[j] == ps.aconst[i].offset) d.mask |= 1u << j, d.value[j] = ps.aconst[i].bits;
+        ps.spec = InternSpec(d);
+    }
+    g_packetStates.push_back(ps);
+    return uint32_t(g_packetStates.size() - 1);
+}
+
+// s set to the packet's fixed values as the GL calls would set them (each change marking what it dirties)
+void ApplyPacketFixed(uint32_t id)
+{
+    if (g_fixedPacket == id) return;
+    const PacketFixed& f = g_packetFixed[id];
+    if (s.blend != bool(f.blend)) { s.blend = f.blend; BlendChanged(); }
+    if (f.blend)
+    {
+        if (s.blendEq != f.eq || s.blendEqAlpha != f.eqA) { s.blendEq = f.eq; s.blendEqAlpha = f.eqA; BlendChanged(); }
+        if (s.blendSrc != f.src || s.blendDst != f.dst || s.blendSrcAlpha != f.srcA || s.blendDstAlpha != f.dstA)
+        {
+            s.blendSrc = f.src; s.blendDst = f.dst; s.blendSrcAlpha = f.srcA; s.blendDstAlpha = f.dstA;
+            BlendChanged();
+        }
+        if (f.fConst && s.blendColor != f.konst) { s.blendColor = f.konst; b.blendConstDirty = true; }
+    }
+    if (s.cull != bool(f.cull)) { s.cull = f.cull; b.rasterDirty = true; }
+    if (f.cull && s.cullFace != f.cullFace) { s.cullFace = f.cullFace; b.rasterDirty = true; }
+    if (f.frontFace && s.frontFace != f.frontFace) { s.frontFace = f.frontFace; b.rasterDirty = true; }
+    if (s.depthTest != bool(f.depthTest)) { s.depthTest = f.depthTest; b.depthDirty = true; }
+    if (s.depthFunc != f.depthFunc) { s.depthFunc = f.depthFunc; b.depthDirty = true; }
+    if (s.depthWrite != bool(f.depthWrite)) { s.depthWrite = f.depthWrite; b.depthDirty = true; }
+    if (s.colorMask != f.colorMask) { s.colorMask = f.colorMask; BlendChanged(); }
+    if (s.stencilTest != bool(f.stencilTest)) { s.stencilTest = f.stencilTest; b.depthDirty = true; }
+    for (State::Face* fc : {&s.front, &s.back})
+    {
+        if (fc->func != f.sfunc || fc->ref != GLint(f.sref) || fc->mask != f.smask)
+        {
+            fc->func = f.sfunc; fc->ref = GLint(f.sref); fc->mask = f.smask;
+            b.depthDirty = b.stencilDirty = true;
+        }
+        const bool back = fc == &s.back;
+        const uint32_t fail = back ? f.sbfail : f.sfail, zfail = back ? f.sbzfail : f.szfail, zpass = back ? f.sbzpass : f.szpass;
+        if (fc->fail != fail || fc->zfail != zfail || fc->zpass != zpass)
+        {
+            fc->fail = fail; fc->zfail = zfail; fc->zpass = zpass;
+            b.depthDirty = true;
+        }
+        if (fc->writeMask != f.swrite) { fc->writeMask = f.swrite; b.stencilDirty = true; }
+    }
+    g_fixedPacket = id;
+}
+
+inline void PutConstant(Program& p, uint32_t at, uint32_t bits)
+{
+    uint8_t* const base = p.constants.data();
+    uint32_t cur;
+    std::memcpy(&cur, base + at, 4);
+    if (cur == bits) return;
+    std::memcpy(base + at, &bits, 4);
+    p.dirtyLo = std::min(p.dirtyLo, at);
+    p.dirtyHi = std::max(p.dirtyHi, at + 4);
+}
+// the packet's state into s and its program's constants; false: no such packet
+bool ApplyPacket(uint32_t id, uint32_t vao, const cane::draw::Constant* aextra = nullptr, uint32_t cextra = 0)
+{
+    if (!id || id >= g_packetStates.size()) return false;
+    const PacketState& ps = g_packetStates[id];
+    s.program = ps.program;
+    ApplyPacketFixed(ps.fixed);
+    if (Program* p = g_programs.Get(ps.program))
+    {
+        for (uint32_t i = 0; i < ps.cconst; ++i) PutConstant(*p, ps.aconst[i].offset, ps.aconst[i].bits);
+        for (uint32_t i = 0; i < ps.csampler; ++i) p->samplerUnit[ps.asampler[i].binding] = ps.asampler[i].unit;
+        for (uint32_t i = 0; i < cextra; ++i)
+            if (const Shaders::Uniform* u = UniformAt(*p, aextra[i].location); u && u->type < 32 && uint32_t(u->offset) + 4 <= p->constants.size())
+                PutConstant(*p, u->offset, aextra[i].bits);
+    }
+    if (vao && !g_arrays.Get(vao)) g_arrays.Ensure(vao);
+    s.vertexArray = vao;
+    return true;
+}
+void PacketDrawIndexed(uint32_t id, uint32_t vao, uint32_t count, uint32_t firstIndex, int32_t baseVertex, uint32_t baseInstance,
+                       const cane::draw::Constant* aconst, uint32_t cconst)
+{
+    if (!ApplyPacket(id, vao, aconst, cconst)) return;
+    g_drawSpec = g_packetStates[id].spec;   // (the packet's own draws only: PacketApplyState's GL-style draws use spec 0)
+    DrawElementsInstancedBaseVertexBaseInstance(GL_TRIANGLES, GLsizei(count), GL_UNSIGNED_INT, reinterpret_cast<const void*>(size_t(firstIndex) * 4), 1,
+                                                baseVertex, baseInstance);
+    g_drawSpec = 0;
+}
+void PacketDrawIndirect(uint32_t id, uint32_t vao, uint32_t indirectBuffer, size_t offset, uint32_t count)
+{
+    if (!ApplyPacket(id, vao)) return;
+    g_drawSpec = g_packetStates[id].spec;
+    s.indirectBuffer = indirectBuffer;
+    MultiDrawElementsIndirect(GL_TRIANGLES, GL_UNSIGNED_INT, reinterpret_cast<const void*>(offset), GLsizei(count), 0);
+    g_drawSpec = 0;
+}
+void PacketDrawArrays(uint32_t id, uint32_t vao, uint32_t first, uint32_t count, const cane::draw::Constant* aconst, uint32_t cconst)
+{
+    if (!ApplyPacket(id, vao, aconst, cconst)) return;
+    g_drawSpec = g_packetStates[id].spec;
+    DrawArraysInstancedBaseInstance(GL_TRIANGLES, GLint(first), GLsizei(count), 1, 0);
+    g_drawSpec = 0;
+}
+void PacketApplyState(uint32_t id) { ApplyPacket(id, s.vertexArray); }
+void PacketSetConstant(uint32_t program, int32_t location, const void* data, uint32_t bytes)
+{
+    Program* p = g_programs.Get(program);
+    const Shaders::Uniform* u = p ? UniformAt(*p, location) : nullptr;
+    if (!u || u->type >= 32 || !data) return;
+    bytes = std::min({bytes, uint32_t(u->count) * u->stride + 16u, uint32_t(p->constants.size()) - std::min<uint32_t>(u->offset, uint32_t(p->constants.size()))});
+    const auto* src = static_cast<const uint8_t*>(data);
+    for (uint32_t at = 0; at + 4 <= bytes; at += 4)
+    {
+        uint32_t bits;
+        std::memcpy(&bits, src + at, 4);
+        PutConstant(*p, u->offset + at, bits);
+    }
+}
+void APIENTRY Clear(GLbitfield mask);
+void PacketBeginPass(const cane::draw::Pass& pass)
+{
+    BindFramebuffer(GL_FRAMEBUFFER, pass.framebuffer);
+    Viewport(pass.viewport[0], pass.viewport[1], pass.viewport[2], pass.viewport[3]);
+    if (!pass.clear) return;
+    g_fixedPacket = 0;
+    if (s.colorMask != 0xF) { s.colorMask = 0xF; BlendChanged(); }
+    if (!s.depthWrite) { s.depthWrite = true; b.depthDirty = true; }
+    s.front.writeMask = s.back.writeMask = 0xFF;
+    b.stencilDirty = true;
+    s.clearColor = {pass.color[0], pass.color[1], pass.color[2], pass.color[3]};
+    s.clearDepth = std::clamp(pass.depth, 0.0f, 1.0f);
+    s.clearStencil = pass.stencil;
+    Clear(((pass.clear & cane::draw::kClearColor) ? GL_COLOR_BUFFER_BIT : 0) | ((pass.clear & cane::draw::kClearDepth) ? GL_DEPTH_BUFFER_BIT : 0) |
+          ((pass.clear & cane::draw::kClearStencil) ? GL_STENCIL_BUFFER_BIT : 0));
+}
+const cane::draw::Packets g_packets{PacketCreateState, PacketDrawIndirect, PacketDrawIndexed, PacketBeginPass, PacketApplyState, PacketDrawArrays,
+                                    PacketSetConstant};
+
 // ------------------------------------------------------------------------------------------------ clears and blits
 GLuint g_clearProgram = 0;
 // A clear the attachment clears cannot do (a partial colour or stencil write mask, which GL's clears obey): one
@@ -3655,6 +4383,8 @@ void ClearMasked(bool color, bool depth, bool stencil)
     Program* p = g_programs.Get(g_clearProgram);
     if (!p) return;
     EnsureRendering();
+    if (color) g_instWroteColor = true;
+    if (depth || stencil) g_instWroteDepth = true;
     VkCommandBuffer cmd = g_main;
     PipelineKey k;
     k.program = p->serial;
@@ -3743,6 +4473,8 @@ void APIENTRY Clear(GLbitfield mask)
     if (depth || stencil)
         atts[n++] = {VkImageAspectFlags((depth ? VK_IMAGE_ASPECT_DEPTH_BIT : 0) | (stencil ? VK_IMAGE_ASPECT_STENCIL_BIT : 0)), 0, dv};
     const VkClearRect cr{rect, 0, 1};
+    if (color) g_instWroteColor = true;
+    if (depth || stencil) g_instWroteDepth = true;
     vkCmdClearAttachments(g_main, n, atts, 1, &cr);
 }
 void APIENTRY ClearBufferfv(GLenum buffer, GLint, const GLfloat* value)
@@ -4007,7 +4739,6 @@ void APIENTRY GetProgramInfoLog(GLuint p, GLsizei size, GLsizei* length, GLchar*
 // ------------------------------------------------------------------------------------------------ queries and syncs
 VkQueryPool g_queryPool = VK_NULL_HANDLE;
 constexpr uint32_t kQueries = 64;
-PFN_vkResetQueryPool g_vkResetQueryPool = nullptr;
 std::vector<uint32_t> g_freeQueries;
 void APIENTRY GenQueries(GLsizei n, GLuint* names)
 {
@@ -5189,6 +5920,25 @@ bool Initialize(GLFWwindow* window, const Options& options, std::string* error)
         dai.pSetLayouts = &g_setLayoutTextures;
         if (vkAllocateDescriptorSets(g_device, &dai, &g_textureSet) != VK_SUCCESS) return fail("descriptor set");
     }
+    // (pipeline prewarm: the manifest of the pipelines made before, for this device / driver / feature set)
+    {
+        const char* sz = std::getenv("SLY2N_VKPREWARM");
+        g_prewarmOn = !g_cachePath.empty() && !(sz && std::atoi(sz) == 0);
+        const char* szSpec = std::getenv("SLY2N_VKSPEC");
+        // (off by default: on RDNA the extra pipeline binds cost more than the folded branches save, notes/VKGPU)
+        g_specAllowed = !szSpec ? 0u : uint32_t(std::strtoul(szSpec, nullptr, 16)) & 0xFFu;
+        g_specSets.assign(1, SpecData{});
+        VkPhysicalDeviceProperties pp;
+        vkGetPhysicalDeviceProperties(g_phys, &pp);
+        const uint32_t ids[4] = {pp.vendorID, pp.deviceID, pp.driverVersion, pp.apiVersion};
+        g_deviceSignature = Fnv64(ids, sizeof ids);
+        const uint32_t feats[] = {g_feat.eds3, g_feat.dualSrcBlend, g_feat.msrtss, g_feat.fdm, g_feat.provokingLast, g_feat.classicFetch,
+                                  g_feat.localRead, g_feat.multiview, g_feat.pushBytes, uint32_t(g_feat.depthStencil), g_feat.geometry};
+        g_deviceSignature = Fnv64(feats, sizeof feats, g_deviceSignature);
+        g_manifest.clear(); g_manifestIndex.clear(); g_manifestSaved = 0; g_scopesWarmed.clear(); g_pipeScopeMark.clear();
+        g_scope = INT32_MIN;
+        if (g_prewarmOn) LoadManifest();
+    }
     // the pipeline cache from the last run
     {
         std::vector<uint8_t> data = g_cachePath.empty() ? std::vector<uint8_t>{} : ReadFile(g_cachePath);
@@ -5216,6 +5966,11 @@ bool Initialize(GLFWwindow* window, const Options& options, std::string* error)
         qpi.queryCount = kQueries * 2;
         if (vkCreateQueryPool(g_device, &qpi, nullptr, &g_queryPool) == VK_SUCCESS)
             for (uint32_t i = kQueries; i-- > 0;) g_freeQueries.push_back(i * 2);
+        g_gpuTimeEvery = std::getenv("SLY2N_VKGPUTIME") ? std::max(0, std::atoi(std::getenv("SLY2N_VKGPUTIME"))) : 0;
+        qpi.queryCount = kFrameSlots * kPassTimes * 2;
+        if (g_gpuTimeEvery > 0 && g_props.limits.timestampComputeAndGraphics &&
+            vkCreateQueryPool(g_device, &qpi, nullptr, &g_passPool) == VK_SUCCESS)
+            g_vkResetQueryPool(g_device, g_passPool, 0, qpi.queryCount);
     }
     for (Frame& f : g_frames)
     {
@@ -5250,6 +6005,9 @@ bool Initialize(GLFWwindow* window, const Options& options, std::string* error)
     if (g_feat.nonUniform) g_extensions.push_back("GL_ARB_bindless_texture");
 
     s = State{};
+    g_fixedPacket = 0;
+    g_packetFixed.resize(1);
+    g_packetStates.resize(1);
     {
         int fbw = 0, fbh = 0;
         if (window) glfwGetWindowSize(window, &fbw, &fbh);
@@ -5285,8 +6043,10 @@ bool Initialize(GLFWwindow* window, const Options& options, std::string* error)
         std::atexit([] {
             if (!g_device) return;
             StopWorker();
+            StopPrewarm();
             if (g_external) return;   // (VR: the OpenXR runtime owns the device)
             vkDeviceWaitIdle(g_device);
+            SaveManifest();
             SavePipelineCache();
         });
     }
@@ -5311,6 +6071,82 @@ bool Initialize(GLFWwindow* window, const Options& options, std::string* error)
 }
 
 bool Initialized() { return g_device != VK_NULL_HANDLE; }
+const cane::draw::Packets* DrawPackets() { return &g_packets; }
+
+void PrewarmPipelines(int32_t scope, unsigned waitMs)
+{
+    if (!g_device || !g_prewarmOn) return;
+    if (scope != g_scope) { g_scope = scope; ++g_scopeSerial; }
+    if (std::find(g_scopesWarmed.begin(), g_scopesWarmed.end(), scope) != g_scopesWarmed.end()) return;
+    g_scopesWarmed.push_back(scope);
+    const auto t0 = std::chrono::steady_clock::now();
+    // (the live programs by their manifest hash)
+    std::unordered_map<uint32_t, std::vector<const Program*>> programs;
+    for (GLuint name = 1; name < g_programs.Limit(); ++name)
+        if (const Program* p = g_programs.Get(name); p && p->info) programs[ProgramHash(*p)].push_back(p);
+    for (const auto& pp : g_prePrograms) programs[ProgramHash(*pp)].push_back(pp.get());
+    // (a program the game makes on first use, later in the frame: made now, CreateProgram hands it over then)
+    for (const ManifestEntry& e : g_manifest)
+    {
+        if (e.scope != scope || programs.count(e.program)) continue;
+        for (size_t i = 0; i < Shaders::programCount; ++i)
+        {
+            const Shaders::Program* info = &Shaders::programs[i];
+            const bool ub = info->pushSize > g_feat.pushBytes;
+            if (info->pushSize > kPushBytes || (ub && !info->spirvUbo[0]) || (info->geom && !g_feat.geometry)) continue;
+            if (ProgramHashOf(info, ub) != e.program) continue;
+            g_prePrograms.push_back(MakeProgram(info, ub));
+            programs[e.program].push_back(g_prePrograms.back().get());
+            break;
+        }
+    }
+    std::vector<PrewarmJob> jobs;
+    for (const ManifestEntry& e : g_manifest)
+    {
+        if (e.scope != scope) continue;
+        auto it = programs.find(e.program);
+        if (it == programs.end()) continue;
+        for (const Program* p : it->second)
+        {
+            PrewarmJob job;
+            job.key = e.key;
+            job.key.program = p->serial;
+            job.key.layout = InternLayout(e.layout);
+            job.key.spec = (e.spec.mask & ~(p->info->specMask & g_specAllowed)) ? 0xFFFF : InternSpec(e.spec);
+            if (job.key.spec == 0xFFFF) continue;   // (specialization off now, or another subset)
+            {
+                std::lock_guard<std::mutex> lock(g_pipeMutex);
+                if (g_pipelines.count(job.key)) continue;
+            }
+            if ((job.key.pad[2] & 2) && !g_feat.multiview) continue;
+            job.source.modules = p->modules, job.source.modulesMv = p->modulesMv;
+            job.source.layout = e.layout;
+            job.source.classic = ClassicPassFor(job.key);
+            job.source.spec = e.spec;
+            jobs.push_back(job);
+        }
+    }
+    if (!jobs.empty())
+    {
+        {
+            std::lock_guard<std::mutex> lock(g_prewarmMutex);
+            for (PrewarmJob& j : jobs) g_prewarmJobs.push_back(j);
+        }
+        if (!g_prewarmThread.joinable()) g_prewarmThread = std::thread(PrewarmLoop);
+        g_prewarmCv.notify_all();
+    }
+    const bool done = jobs.empty() || WaitPrewarm(waitMs);
+    static const bool s_fLog = std::getenv("SLY2N_VKPIPELOG") && std::atoi(std::getenv("SLY2N_VKPIPELOG")) != 0;
+    if (s_fLog || !jobs.empty())
+        std::fprintf(s_fLog ? stderr : stdout, "Vulkan: scope %d: %zu pipelines from the manifest%s (%.1f ms at the load)\n", int(scope),
+                     jobs.size(), done ? "" : ", the rest while the game runs", MsSince(t0));
+    // (the load's moment: the driver cache and the manifest written, so a run that is killed later keeps them)
+    if (done && (g_manifest.size() != g_manifestSaved))
+    {
+        SaveManifest();
+        SavePipelineCache();
+    }
+}
 const char* DeviceName() { return g_deviceName.c_str(); }
 bool FramebufferFetchUsable()
 {
@@ -5483,11 +6319,38 @@ void Present()
         {
             const double n = s_cStats;
             std::fprintf(stderr, "vkstats: per frame %.1f draws, %.1f pipeline binds (%.2f created), %.1f render passes (%.2f split by "
-                         "copies), %.2f submits, %.1f pushes (%.0f bytes), %.1f descriptor pushes\n", s_sum.draws / n, s_sum.pipelines / n,
+                         "copies), %.2f submits, %.1f pushes (%.0f bytes), %.1f descriptor pushes, %.2f stores NONE, %.2f depth stores dropped\n", s_sum.draws / n, s_sum.pipelines / n,
                          s_sum.pipelinesCreated / n, s_sum.renderPasses / n, s_sum.splits / n, s_sum.submits / n, s_sum.pushes / n,
-                         s_sum.pushBytes / n, s_sum.descriptorPushes / n);
+                         s_sum.pushBytes / n, s_sum.descriptorPushes / n, g_storesNone / n, g_storesDropped / n);
+            g_storesNone = 0, g_storesDropped = 0;
             s_sum = Stats{};
             s_iStats = 0;
+        }
+    }
+    {
+        static const bool s_fPipeLog = std::getenv("SLY2N_VKPIPELOG") && std::atoi(std::getenv("SLY2N_VKPIPELOG")) != 0;
+        if (g_pipeCountFrame)
+        {
+            if (s_fPipeLog) std::fprintf(stderr, "vkpipe: frame %llu: %u pipelines made in %.2f ms\n", (unsigned long long)g_frameSerial,
+                                         g_pipeCountFrame, g_pipeMsFrame);
+            g_pipeMsTotal += g_pipeMsFrame, g_pipeCountTotal += g_pipeCountFrame;
+            g_pipeMsMaxFrame = std::max(g_pipeMsMaxFrame, g_pipeMsFrame);
+        }
+        g_pipeMsFrame = 0, g_pipeCountFrame = 0;
+        ++g_frameSerial;
+        // (new pipelines noted and none for 10 s of frames: the manifest and the driver cache written on the worker, so
+        // a run that never exits cleanly (Android, a crash) keeps them; the exit writes them again)
+        if (g_prewarmOn && g_manifest.size() != g_manifestSaved && g_frameSerial - g_manifestNoteFrame >= 600)
+        {
+            PrewarmJob job;
+            job.save = std::make_shared<std::vector<ManifestEntry>>(g_manifest);
+            {
+                std::lock_guard<std::mutex> lock(g_prewarmMutex);
+                g_prewarmJobs.push_back(job);
+            }
+            if (!g_prewarmThread.joinable()) g_prewarmThread = std::thread(PrewarmLoop);
+            g_prewarmCv.notify_all();
+            g_manifestSaved = g_manifest.size();
         }
     }
     // (the frame's last submission is the one Submit just made; the segment it began is dropped with the frame)
@@ -5713,11 +6576,26 @@ GLuint CreateProgram(const char* vertexFile, const char* geometryFile, const cha
     const bool uniformBuffer = info->pushSize > g_feat.pushBytes;
     if (uniformBuffer && !info->spirvUbo[0]) return 0;
     if (!g_recording) BeginFrame();
-    const GLuint name = g_programs.Gen();
-    Program* p = g_programs.Get(name);
-    p->info = info;
-    p->fetch = fetch;
+    // (made ahead by the prewarm, PrewarmPipelines: the same object, so the pipelines made for it match)
+    std::unique_ptr<Program> made;
+    for (auto it = g_prePrograms.begin(); it != g_prePrograms.end(); ++it)
+        if ((*it)->info == info && (*it)->uniformBuffer == uniformBuffer)
+        {
+            made = std::move(*it);
+            g_prePrograms.erase(it);
+            break;
+        }
+    if (!made) made = MakeProgram(info, uniformBuffer);
+    made->fetch = fetch;
     g_fetchUsed = g_fetchUsed || fetch;
+    return g_programs.Adopt(std::move(made));
+}
+namespace
+{
+std::unique_ptr<Program> MakeProgram(const Shaders::Program* info, bool uniformBuffer)
+{
+    auto p = std::make_unique<Program>();
+    p->info = info;
     p->serial = ++g_programSerial;
     p->uniformBuffer = uniformBuffer;
     for (unsigned k = 0; k < 3; ++k)
@@ -5738,6 +6616,11 @@ GLuint CreateProgram(const char* vertexFile, const char* geometryFile, const cha
         }
     }
     p->constants.assign(info->pushSize, 0);
+    for (uint32_t j = 0; j < 8; ++j)
+        if (info->specMask & (1u << j))
+            for (uint32_t i = 0; i < info->uniformCount; ++i)
+                if (!std::strcmp(info->uniforms[i].name, kSpecNames[j])) p->specOffset[j] = info->uniforms[i].offset;
+    p->hash = ProgramHashOf(info, uniformBuffer);
     for (uint32_t i = 0; i < info->uniformCount; ++i)
     {
         const Shaders::Uniform& u = info->uniforms[i];
@@ -5746,8 +6629,9 @@ GLuint CreateProgram(const char* vertexFile, const char* geometryFile, const cha
         p->samplerUnit[u.binding] = 0;
         p->samplerCount = std::max<unsigned>(p->samplerCount, u.binding + 1u);
     }
-    return name;
+    return p;
 }
+}  // namespace
 
 void* ProcAddress(const char* name)
 {
@@ -5765,6 +6649,12 @@ void DestroyAll()
     {
         StopWorker();
         vkDeviceWaitIdle(g_device);
+        StopPrewarm();
+        SaveManifest();
+        if (std::getenv("SLY2N_VKPIPELOG") && std::atoi(std::getenv("SLY2N_VKPIPELOG")) != 0)
+            std::fprintf(stderr, "vkpipe: %u pipelines made on the game thread in %.1f ms (worst frame %.2f ms) over %llu frames\n",
+                         g_pipeCountTotal + g_pipeCountFrame, g_pipeMsTotal + g_pipeMsFrame, std::max(g_pipeMsMaxFrame, g_pipeMsFrame),
+                         (unsigned long long)g_frameSerial);
         SavePipelineCache();
         g_mainXfers = XferList{};
         g_preXfers = XferList{};
@@ -5789,6 +6679,12 @@ void DestroyAll()
             for (VkShaderModule m : p.modules) if (m) vkDestroyShaderModule(g_device, m, nullptr);
             for (VkShaderModule m : p.modulesMv) if (m) vkDestroyShaderModule(g_device, m, nullptr);
         });
+        for (auto& pp : g_prePrograms)
+        {
+            for (VkShaderModule m : pp->modules) if (m) vkDestroyShaderModule(g_device, m, nullptr);
+            for (VkShaderModule m : pp->modulesMv) if (m) vkDestroyShaderModule(g_device, m, nullptr);
+        }
+        g_prePrograms.clear();
         for (VkShaderModule m : g_retiredModules) vkDestroyShaderModule(g_device, m, nullptr);
         g_retiredModules.clear();
         g_buffers.Clear(); g_arrays.Clear(); g_textures.Clear(); g_samplers.Clear(); g_renderbuffers.Clear();
@@ -5806,6 +6702,9 @@ void DestroyAll()
         g_freeSlots2D.clear(); g_freeSlotsArray.clear(); g_nextSlot2D = g_nextSlotArray = 1;
         DestroySwapchain();
         if (g_queryPool) vkDestroyQueryPool(g_device, g_queryPool, nullptr);
+        if (g_passPool) vkDestroyQueryPool(g_device, g_passPool, nullptr);
+        g_passPool = VK_NULL_HANDLE;
+        for (Frame& f : g_frames) f.passTimed = 0, f.passInfo.clear();
         g_queryPool = VK_NULL_HANDLE;
         g_freeQueries.clear();
         if (g_timeline) vkDestroySemaphore(g_device, g_timeline, nullptr);

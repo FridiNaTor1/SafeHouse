@@ -74,6 +74,10 @@ enum PTX : int
     // (the options' Language... page, region.h g_nLangVoice) its entry, its two rows, the voices' default, a choice
     // that takes effect when the next world loads
     PTX_LanguagePage, PTX_TextLanguage, PTX_VoiceLanguage, PTX_SameAsText, PTX_FromNextArea,
+    // (upscaling, fsr.h) the display options' Upscaling rows (also in VR Settings on a PC headset): the option, its
+    // method, preset and sharpness rows, AMD's preset names
+    PTX_Upscaling, PTX_UpscaleMethod, PTX_UpscalePreset, PTX_UpscaleSharpness, PTX_UltraQuality, PTX_Quality, PTX_Balanced,
+    PTX_Performance,
     PTX_Max
 };
 

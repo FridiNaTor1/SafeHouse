@@ -98,7 +98,7 @@ void SwapBuffers(GLFWwindow*)
     CaneVk::Present();
     NoteFrameShown();
 }
-const cane::gl::Backend s_backend{CreateContext, DestroyContext, ProcAddress, SwapInterval, SwapBuffers};
+cane::gl::Backend s_backend{CreateContext, DestroyContext, ProcAddress, SwapInterval, SwapBuffers};
 
 // The programs every frame draws with: Vulkan without them (SPIR-V that does not match the build) cannot run the game.
 bool FProgramsComplete(std::string* missing)
@@ -260,6 +260,10 @@ GLFWwindow* PwindowVulkan(int width, int height, bool fVisible, const char* titl
             const uint64_t i = frame++;
             return i % n >= n - n / 4 ? 0 : 1 + i / n;
         });
+    // (the renderer's hot draws as draw packets, platform/draw_packet.h; SLY2N_VKNATIVE=0: through the GL-style calls)
+    const char* const pszNative = std::getenv("SLY2N_VKNATIVE");
+    s_backend.packets = !pszNative || std::atoi(pszNative) != 0 ? CaneVk::DrawPackets() : nullptr;
+    s_backend.prewarm = [](int scope, unsigned waitMs) { CaneVk::PrewarmPipelines(scope, waitMs); };
     cane::gl::ActiveBackend() = &s_backend;
     s_fVulkan = true;
     s_cPresents = 0;

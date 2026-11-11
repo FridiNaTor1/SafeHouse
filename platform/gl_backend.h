@@ -7,6 +7,8 @@
 
 #include <string>
 
+#include "draw_packet.h"
+
 namespace cane::gl {
 struct Backend {
   bool (*createContext)(GLFWwindow* window, std::string* error);
@@ -14,6 +16,11 @@ struct Backend {
   GLFWglproc (*procAddress)(const char* name);
   void (*swapInterval)(int interval);
   void (*swapBuffers)(GLFWwindow* window);
+  // the backend's draw packets (draw_packet.h; nullptr: none, the renderer's GL calls as before)
+  const draw::Packets* packets = nullptr;
+  // (optional) the renderer enters a scope (a world's load): the backend may make its pipelines for it ahead, waiting
+  // up to waitMs (Vulkan: CaneVk::PrewarmPipelines)
+  void (*prewarm)(int scope, unsigned waitMs) = nullptr;
 };
 inline const Backend*& ActiveBackend() {
   static const Backend* backend = nullptr;

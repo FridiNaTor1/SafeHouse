@@ -678,6 +678,7 @@ int RunGame(const GAMEOPTS& go)
             return 1;
         }
         BuildSceneGpu(scene);
+        PrewarmRenderer(g_transition.iwrecCur);
         if (fWindow)
         {
             // the PC options (display.h; <user-dir>/Settings.ini, loaded by main)
@@ -760,6 +761,7 @@ int RunGame(const GAMEOPTS& go)
                 CBuildSceneFromSw(psw.get(), scene, &apalo);
                 ApproximateBakeLighting(scene);
                 BuildSceneGpu(scene);
+                PrewarmRenderer(g_transition.iwrecCur);
             }
         }
         else if (FPcCharTakeSceneRebuild() && fDraws)
@@ -2034,6 +2036,7 @@ int RunGame(const GAMEOPTS& go)
                     g_fHudAlphaLayer = true;
                 }
                 else RenderScene(scene, cam, opts);
+                g_gl.BeginNativeUi(true);   // (upscaling, gl.h: the scene scaled up; the rest at the picture's size)
                 const double tHud = s_fFpsLog ? now() : 0.0;
                 DrawHud(psw.get(), g_gl.renderWidth, g_gl.renderHeight);
                 if (s_fFpsLog) g_msHudFpsLog += now() - tHud;
@@ -2043,6 +2046,7 @@ int RunGame(const GAMEOPTS& go)
                 g_fHudAlphaLayer = false;
                 g_gl.RememberOverlaySourceFrame();
             }
+            g_gl.BeginNativeUi(false);   // (upscaling: the overlay's own frames at the picture's size too)
             DrawAnimatedOverlayFrame();  // orig: 0x1477D8, capture then clear/draw the exclusive surfaces
             if (!go.screenshot.empty() && frame + 1 == go.cframe)
             {
@@ -2072,6 +2076,7 @@ int RunGame(const GAMEOPTS& go)
             else if (s_fFpsLog && s_aqGpu[0]) glEndQuery(GL_TIME_ELAPSED), ++s_iqGpu;
             // (renderer.h: Vulkan ends its frame at the swap; a headless frame is submitted the same way, as an
             // OpenGL driver flushes on its own)
+            g_gl.EndNativeUi();   // (without a window: Present did not)
             if (!fWindow && FRendererVulkan()) cane::gl::SwapBuffers(g_gl.window);
         }
         else PrepareAnimatedOverlayFrame();  // same logical boundary for frames without a GL target

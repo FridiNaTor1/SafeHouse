@@ -47,6 +47,7 @@ void NoteThread(VRTHREAD) {}
 #include "controller_family.h"
 #include "display.h"
 #include "gl.h"
+#include "fsr.h"
 #include "render.h"
 
 #include <GLFW/glfw3.h>
@@ -342,6 +343,48 @@ uint64_t LayerFilterFlags()
 // the runtime has the extension and Upscaling is on), so the headroom goes into the frame rate and the filter makes up
 // the detail; the floor stays 75 % either way (never a large upscale)
 float EyeResCeiling() { return LayerFilterFlags() ? kEyeResCeilingUpscaled : 1.0f; }
+// Upscaling (fsr.h; the Display options' Upscaling, which VR Settings shows on a PC headset): where the compositor has no
+// filter of its own, the eyes drawn at the preset's fraction of their images (in place of Eye Resolution) and FSR 1
+// scales each up into its whole image (FinishEyes). Not with GLES's two-view pass (the whole image is drawn).
+bool FFsrEyes()
+{
+    if (!g_display.fUpscale || s_fExtLayerSettings || (s_fMultiview && !s_fVk)) return false;
+    return fsr::FAvailable();
+}
+GLuint s_fboFsrSrc = 0, s_texFsrSrc = 0, s_afboFsrDst[2] = {};
+int s_dxFsrSrc = 0, s_dyFsrSrc = 0;
+// The eye's picture (the bottom-left dx x dy of the image, or of its layer) upscaled into the whole image: copied out to a
+// texture, then FSR 1 back into the image (the rows as they are: no flip)
+void UpscaleEyeInImage(GLuint texImage, int layer, int dxImage, int dyImage, int dx, int dy)
+{
+    if (!s_fboFsrSrc || s_dxFsrSrc != dx || s_dyFsrSrc != dy)
+    {
+        if (!s_fboFsrSrc) glGenFramebuffers(1, &s_fboFsrSrc);
+        if (s_texFsrSrc) glDeleteTextures(1, &s_texFsrSrc);
+        glGenTextures(1, &s_texFsrSrc);
+        glBindTexture(GL_TEXTURE_2D, s_texFsrSrc);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, dx, dy, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glBindTexture(GL_TEXTURE_2D, 0);
+        glBindFramebuffer(GL_FRAMEBUFFER, s_fboFsrSrc);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, s_texFsrSrc, 0);
+        s_dxFsrSrc = dx, s_dyFsrSrc = dy;
+    }
+    GLuint& fboDst = s_afboFsrDst[layer];
+    if (!fboDst) glGenFramebuffers(1, &fboDst);
+    glBindFramebuffer(GL_FRAMEBUFFER, fboDst);
+    if (layer > 0 || s_fMultiview) glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, texImage, 0, layer);
+    else glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texImage, 0);
+    glDisable(GL_SCISSOR_TEST);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, fboDst);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, s_fboFsrSrc);
+    glBlitFramebuffer(0, 0, dx, dy, 0, 0, dx, dy, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    fsr::SOURCE src;
+    src.tex = s_texFsrSrc;
+    src.dx = dx, src.dy = dy;
+    fsr::FUpscale(src, fboDst, 0, 0, dxImage, dyImage, fsr::GSharpness(g_display.upscaleSharpness));
+}
 void UpdateEyeResolution(bool fEyesLastFrame)
 {
     const bool fFullOnly = s_fMultiview && !s_fVk;   // (GLES's two-view pass: the whole image)
@@ -2095,6 +2138,7 @@ bool FEyeViews(const CAMERA& cam, STEREOVIEW* psv)
     s_dxEye = std::max(16, int(float(s_aeye[0].dx) * s_gEyeRes) & ~7);
     s_dyEye = std::max(16, int(float(s_aeye[0].dy) * s_gEyeRes) & ~7);
     if (s_gEyeRes >= 1.0f) s_dxEye = s_aeye[0].dx, s_dyEye = s_aeye[0].dy;
+    if (FFsrEyes()) fsr::RenderSizeForPreset(g_display.upscalePreset, s_aeye[0].dx, s_aeye[0].dy, &s_dxEye, &s_dyEye);   // (upscaled in FinishEyes)
     psv->dx = s_dxEye;
     psv->dy = s_dyEye;
     ApplyFoveation();   // (a new level, or the density maps over a new eye resolution)
@@ -2291,6 +2335,11 @@ void FinishEyes()
             else if (FOrientCheck()) CheckOrientation("eye", s_afboMsaa[i], fboImage, dx, dy);
             glBindFramebuffer(GL_FRAMEBUFFER, s_afboMsaa[i]);
         }
+        // (upscaling: the eye's picture, now in its image's bottom-left part, scaled up to the whole image)
+        const bool fFsr = FFsrEyes() && (s_dxEye < s_aeye[i].dx || s_dyEye < s_aeye[i].dy);
+        if (fFsr)
+            for (int l = 0; l < (s_fMultiview ? 2 : 1); ++l)
+                UpscaleEyeInImage(s_aeye[i].atex[s_aeye[i].iimage], l, s_aeye[i].dx, s_aeye[i].dy, s_dxEye, s_dyEye);
         // (test: SLY2N_VR_SHOT=prefix@frame: that immersive frame's eyes as prefix_eye0.png / _eye1.png, its HUD panel
         // as prefix_panel.png; prefix@f1,f2,...: several frames, prefix_<frame>_eye0.png ...)
         static const char* const s_szShot = std::getenv("SLY2N_VR_SHOT");
@@ -2303,12 +2352,15 @@ void FinishEyes()
         {
             const bool fSeveral = std::strchr(pchAt, ',') != nullptr;
             const std::string prefix = std::string(s_szShot, pchAt) + (fSeveral ? "_" + std::to_string(s_cframeShot) : std::string());
-            const int dx = s_dxEye, dy = s_dyEye;
+            const int dx = fFsr ? s_aeye[i].dx : s_dxEye, dy = fFsr ? s_aeye[i].dy : s_dyEye;
             for (int ieye = s_fMultiview ? 0 : i; ieye <= (s_fMultiview ? 1 : i); ++ieye)
             {
                 std::vector<uint8_t> ab(size_t(dx) * size_t(dy) * 4), flipped(ab.size());
                 static GLuint s_fboLayer = 0;
-                if (fViewsVk)
+                if (fFsr)
+                    // (upscaled: the image (its layer) as FSR wrote it)
+                    glBindFramebuffer(GL_READ_FRAMEBUFFER, s_afboFsrDst[s_fMultiview ? ieye : 0]);
+                else if (fViewsVk)
                     // (Vulkan multiview: the eyes' two-layer target (GL's rows), or the image drawn straight into (rows from
                     // the top: written as they are below))
                     FboLayerVk(s_atexEyeVk[0] ? 0 : 1, ieye, s_atexEyeVk[0] ? s_atexEyeVk[0] : s_aeye[0].atex[s_aeye[0].iimage]);
@@ -2322,7 +2374,7 @@ void FinishEyes()
                 else glBindFramebuffer(GL_READ_FRAMEBUFFER, s_fVk && s_afboMsaa[i] ? s_afboMsaa[i] : FboEyeImage(i));
                 glPixelStorei(GL_PACK_ALIGNMENT, 1);
                 glReadPixels(0, 0, dx, dy, GL_RGBA, GL_UNSIGNED_BYTE, ab.data());
-                const bool fTopFirst = s_fVkDirect;   // (drawn straight into the image: its rows from the top)
+                const bool fTopFirst = fFsr ? s_fVk : s_fVkDirect;   // (drawn straight into the image: its rows from the top)
                 for (int y = 0; y < dy; ++y) std::memcpy(&flipped[size_t(y) * size_t(dx) * 4], &ab[size_t(fTopFirst ? y : dy - 1 - y) * size_t(dx) * 4], size_t(dx) * 4);
                 for (size_t k = 3; k < flipped.size(); k += 4) flipped[k] = 255;
                 stbi_write_png((prefix + "_eye" + std::to_string(ieye) + ".png").c_str(), dx, dy, 4, flipped.data(), dx * 4);
@@ -2382,7 +2434,9 @@ bool FPresent()
                     apv[i].subImage.swapchain = sc.h;
                     // (the eye resolution: the part drawn; OpenGL's rows from the bottom, Vulkan's copy from the top)
                     const bool fWhole = s_fMultiview && !s_fVk;   // (GLES's two-view pass: the whole image)
-                    apv[i].subImage.imageRect = {{0, 0}, {fWhole ? sc.dx : s_dxEye, fWhole ? sc.dy : s_dyEye}};
+                    // (upscaling: FSR 1 filled the whole image, FinishEyes)
+                    const bool fUpscaled = FFsrEyes() && (s_dxEye < sc.dx || s_dyEye < sc.dy);
+                    apv[i].subImage.imageRect = {{0, 0}, {fWhole || fUpscaled ? sc.dx : s_dxEye, fWhole || fUpscaled ? sc.dy : s_dyEye}};
                     apv[i].subImage.imageArrayIndex = s_fMultiview ? uint32_t(i) : 0;
                 }
                 proj.space = s_spaceLocal;

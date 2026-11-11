@@ -927,6 +927,18 @@
   "Japanese plays only its voices on the USA and European discs until the characters of your Japanese disc are added: choose your Japan disc image below once more.": "Japani toistaa Yhdysvaltain ja Euroopan levyillä vain puheensa, kunnes japanilaisen levysi kirjainmerkit on lisätty: valitse japanilainen levykuvasi alta vielä kerran.",
   "Voice language": "Puheen kieli",
   "Same as text": "Sama kuin teksti",
-  "The dialogue and the cutscenes' sound, apart from the text: Japanese voices with English text, or the other way round. Choosing a language on the game's title screen sets both back to it.": "Dialogi ja välivideoiden ääni tekstistä erillään: japanilainen puhe englanninkielisellä tekstillä tai päinvastoin. Kielen valitseminen pelin aloitusruudussa palauttaa molemmat siihen."
+  "The dialogue and the cutscenes' sound, apart from the text: Japanese voices with English text, or the other way round. Choosing a language on the game's title screen sets both back to it.": "Dialogi ja välivideoiden ääni tekstistä erillään: japanilainen puhe englanninkielisellä tekstillä tai päinvastoin. Kielen valitseminen pelin aloitusruudussa palauttaa molemmat siihen.",
+  "Upscaling": "Skaalaus",
+  "Upscaling method": "Skaalausmenetelmä",
+  "Upscaling preset": "Skaalauksen esiasetus",
+  "Ultra quality": "Ultralaatu",
+  "Quality": "Laatu",
+  "Balanced": "Tasapainoinen",
+  "Performance": "Suorituskyky",
+  "Sharpness": "Terävyys",
+  "AMD FidelityFX Super Resolution 1.0: edge-aware upscaling with sharpening.": "AMD FidelityFX Super Resolution 1.0: reunat huomioiva skaalaus ja terävöinti.",
+  "How large the 3D scene is drawn, as a share of the screen's width and height. Lower is faster.": "Kuinka suurena 3D-näkymä piirretään, osuutena näytön leveydestä ja korkeudesta. Pienempi on nopeampi.",
+  "How much the upscaled picture is sharpened.": "Kuinka paljon skaalattua kuvaa terävöitetään.",
+  "Draws the 3D scene smaller and scales it up to the screen with a sharpening upscaler: faster, nearly as sharp. The HUD and menus stay at full resolution. While on, it replaces the internal resolution.": "Piirtää 3D-näkymän pienempänä ja skaalaa sen näytölle terävöittävällä skaalaimella: nopeampi ja lähes yhtä terävä. HUD ja valikot pysyvät täydellä tarkkuudella. Päällä se korvaa sisäisen tarkkuuden."
  }
 }
