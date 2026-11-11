@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.22)
 # The CMake project keeps its old name (ProjectCane): CMAKE_PROJECT_VERSION, cache entries and existing build
 # directories depend on it. The product is called SafeHouse (platform/brand.h).
-project(ProjectCane VERSION 0.1.0 LANGUAGES C CXX)
+project(ProjectCane VERSION 0.2.0 LANGUAGES C CXX)
 # Nintendo Switch (the switch-release preset): cmake/Switch.cmake
 if(NINTENDO_SWITCH)
  include(cmake/Switch.cmake)

@@ -18,7 +18,7 @@ android {
         minSdk providers.gradleProperty('safehouseMinSdk').getOrElse('26').toInteger()
         targetSdk 36
         versionCode safehouseVersionParts ? safehouseVersionParts[1] * 10000 + safehouseVersionParts[2] : 1
-        versionName safehouseVersionParts ? safehouseVersion : '0.1.0-android-preview'
+        versionName safehouseVersionParts ? safehouseVersion : '0.2.0-android-preview'
     }
     signingConfigs {
         if (safehouseKeystore) {
