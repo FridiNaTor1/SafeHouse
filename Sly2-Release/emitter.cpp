@@ -2120,14 +2120,21 @@ float Curve(const float c[3], float age) { return c[0] + c[1] * age + c[2] * (ag
 float Unit(float x) { return std::clamp(x, 0.0f, 1.0f); }
 
 // The VU1 programs (native_blip_geometry.cpp's reconstruction): per particle a quad in clip space.
-void ExpandParticles(const PSYS* pp, const glm::mat4& matModel, const glm::mat4& matWorldToClip, std::vector<PVTX>& av)
+// (VR, both eyes in one pass: pmat1 is the second eye's matrix, its corners go to *pav1, one a vertex of av: a particle
+// behind one eye is a point for that eye (drawn nowhere), the same as the eye's own pass leaving it out)
+void ExpandParticles(const PSYS* pp, const glm::mat4& matModel, const glm::mat4& matWorldToClip, std::vector<PVTX>& av,
+                     const glm::mat4* pmat1 = nullptr, std::vector<glm::vec4>* pav1 = nullptr)
 {
     const float t = g_clock.t;
-    const glm::vec4 forward(matWorldToClip[0][3], matWorldToClip[1][3], matWorldToClip[2][3], 0.0f);
-    // the projection's x / y scales (CM +0x100 / +0x114): the clip offsets of a unit corner (the clip matrix's x / y
-    // rows are the view's axes times them)
-    const float sxProj = glm::length(glm::vec3(matWorldToClip[0][0], matWorldToClip[1][0], matWorldToClip[2][0]));
-    const float syProj = glm::length(glm::vec3(matWorldToClip[0][1], matWorldToClip[1][1], matWorldToClip[2][1]));
+    struct VIEWP { const glm::mat4* pm; glm::vec4 forward; float sxProj, syProj; };
+    auto viewOf = [](const glm::mat4& m) {
+        // the projection's x / y scales (CM +0x100 / +0x114): the clip offsets of a unit corner (the clip matrix's x / y
+        // rows are the view's axes times them)
+        return VIEWP{&m, glm::vec4(m[0][3], m[1][3], m[2][3], 0.0f), glm::length(glm::vec3(m[0][0], m[1][0], m[2][0])),
+                     glm::length(glm::vec3(m[0][1], m[1][1], m[2][1]))};
+    };
+    const VIEWP aview[2] = {viewOf(matWorldToClip), viewOf(pmat1 ? *pmat1 : matWorldToClip)};
+    const int cview = pmat1 && pav1 ? 2 : 1;
     for (const auto& pb : pp->ablk)
         for (int i = 0; i < pb->c; ++i)
         {
@@ -2159,7 +2166,14 @@ void ExpandParticles(const PSYS* pp, const glm::mat4& matModel, const glm::mat4&
                     rgba[l] = float(uint8_t(float(pp->argba[first][size_t(l)]) * (1 - color) + float(pp->argba[first - 1][size_t(l)]) * color));
             rgba.a = float(uint8_t(rgba.a * alpha));
             const glm::vec3 world = glm::vec3(matModel * glm::vec4(glm::vec3(pc), 1.0f));
-            glm::vec4 clip[4];
+            glm::vec4 aclip[2][4];
+            bool afBehind[2] = {false, false};
+            for (int iview = 0; iview < cview; ++iview)
+            {
+            const glm::mat4& matWorldToClip = *aview[iview].pm;
+            const glm::vec4& forward = aview[iview].forward;
+            const float sxProj = aview[iview].sxProj, syProj = aview[iview].syProj;
+            glm::vec4* clip = aclip[iview];
             if (pp->kDraw == 1)
             {
                 glm::vec3 motion = glm::mat3(matModel) * glm::vec3(vd) * (pp->gFlying * g_clock.dt40);
@@ -2210,13 +2224,16 @@ void ExpandParticles(const PSYS* pp, const glm::mat4& matModel, const glm::mat4&
                     clip[k].y -= corners[size_t(k)].y * syProj;
                 }
             }
-            bool fBehind = false;
-            for (const auto& v : clip) fBehind = fBehind || v.w <= 0.0f;
-            if (fBehind) continue;
+            for (int k = 0; k < 4; ++k) afBehind[iview] = afBehind[iview] || clip[k].w <= 0.0f;
+            }   // (the views)
+            if (afBehind[0] && (cview == 1 || afBehind[1])) continue;
+            for (int iview = 0; iview < cview; ++iview)
+                if (afBehind[iview]) for (glm::vec4& v : aclip[iview]) v = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
             // the strip's corners (0, 1, 2, 3) with STQ (0, 1) (1, 1) (0, 0) (1, 0) -> two triangles
             static const glm::vec2 s_auv[4] = {{0, 1}, {1, 1}, {0, 0}, {1, 0}};
             static const int s_ai[6] = {0, 1, 2, 2, 1, 3};
-            for (int k : s_ai) av.push_back({clip[k], s_auv[k], float(layer), 0.0f, rgba});
+            for (int k : s_ai) av.push_back({aclip[0][k], s_auv[k], float(layer), 0.0f, rgba});
+            if (cview == 2) for (int k : s_ai) pav1->push_back(aclip[1][k]);
             ++g_particlestats.cdrawn;
         }
 }
@@ -2602,7 +2619,8 @@ void StepParticles(SW* psw, int cframe, float dt)
     (void)dtSave;
 }
 
-void DrawParticles(const glm::mat4& matWorldToClip, const glm::vec3& posCamera, float aspect)
+void DrawParticles(const glm::mat4& matWorldToClip, const glm::vec3& posCamera, float aspect, const glm::mat4* pmatView1,
+                   const glm::vec3* pposView1)
 {
     (void)aspect;
     s_posCamera = posCamera;
@@ -2626,17 +2644,24 @@ void DrawParticles(const glm::mat4& matWorldToClip, const glm::vec3& posCamera, 
     }
     g_particlestats.cdrawn = 0;
     g_particlestats.cpsys = int(s_apsys.size());
-    // the view frustum (as render.cpp's)
-    glm::vec4 aplane[5];
+    // the view frustum (as render.cpp's); (VR, both eyes in one pass) either eye's
+    glm::vec4 aplane[2][5];
+    const int cview = pmatView1 ? 2 : 1;
+    for (int iview = 0; iview < cview; ++iview)
     {
-        const glm::mat4 mt = glm::transpose(matWorldToClip);
-        aplane[0] = mt[3] + mt[0]; aplane[1] = mt[3] - mt[0]; aplane[2] = mt[3] + mt[1]; aplane[3] = mt[3] - mt[1]; aplane[4] = mt[3] - mt[2];
-        for (glm::vec4& p : aplane) p /= glm::length(glm::vec3(p));
+        const glm::mat4 mt = glm::transpose(iview ? *pmatView1 : matWorldToClip);
+        glm::vec4* pl = aplane[iview];
+        pl[0] = mt[3] + mt[0]; pl[1] = mt[3] - mt[0]; pl[2] = mt[3] + mt[1]; pl[3] = mt[3] - mt[1]; pl[4] = mt[3] - mt[2];
+        for (int k = 0; k < 5; ++k) pl[k] /= glm::length(glm::vec3(pl[k]));
     }
     auto fVisible = [&](const glm::vec3& c, float r) {
-        for (const glm::vec4& p : aplane)
-            if (glm::dot(glm::vec3(p), c) + p.w < -r) return false;
-        return true;
+        for (int iview = 0; iview < cview; ++iview)
+        {
+            bool f = true;
+            for (int k = 0; k < 5 && f; ++k) f = glm::dot(glm::vec3(aplane[iview][k]), c) + aplane[iview][k].w >= -r;
+            if (f) return true;
+        }
+        return false;
     };
     s_shParticle.Use();
     glBindVertexArray(s_vao);
@@ -2658,6 +2683,7 @@ void DrawParticles(const glm::mat4& matWorldToClip, const glm::vec3& posCamera, 
 #else
     std::vector<PVTX> av;
 #endif
+    static std::vector<glm::vec4> s_av1;   // (both eyes in one pass: the second eye's corners)
     for (const auto& pp : s_apsys)
     {
         if (pp->cparticle <= 0) continue;
@@ -2675,6 +2701,7 @@ void DrawParticles(const glm::mat4& matWorldToClip, const glm::vec3& posCamera, 
             if (!(rScale < 1.0f) || !p || !p->plo || !p->plo->paloParent) return false;
             const glm::vec3 pos(MatWorldOfEmitter(p)[3]);
             const float r = p->e.F(0x38) * rScale;
+            if (pposView1 && glm::dot(pos - *pposView1, pos - *pposView1) < r * r) return false;   // (seen by the second eye)
             return glm::dot(pos - posCamera, pos - posCamera) >= r * r;
         };
         if (par && !par->amember.empty())
@@ -2704,14 +2731,24 @@ void DrawParticles(const glm::mat4& matWorldToClip, const glm::vec3& posCamera, 
         else if (fVisible(pp->posCenter, pp->sRadius) && !fHiddenDd(par)) amat.push_back(glm::mat4(1.0f));
         if (amat.empty()) continue;
         av.clear();
-        for (const glm::mat4& m : amat) ExpandParticles(pp.get(), m, matWorldToClip, av);
+        s_av1.clear();
+        for (const glm::mat4& m : amat) ExpandParticles(pp.get(), m, matWorldToClip, av, pmatView1, pmatView1 ? &s_av1 : nullptr);
         if (av.empty()) continue;
         const auto [tex, ctex] = TexArrayOf(pp->pshd);
         glBindTexture(GL_TEXTURE_2D_ARRAY, tex);
         glUniform1i(s_shParticle.Loc("fTextured"), tex ? 1 : 0);
         glBlendEquation(GL_FUNC_ADD);
         glBlendFunc(GL_SRC_ALPHA, pp->fAdditive ? GL_ONE : GL_ONE_MINUS_SRC_ALPHA);
-        glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(av.size() * sizeof(PVTX)), av.data(), GL_STREAM_DRAW);
+        if (pmatView1)
+        {
+            // (the second eye's corners after the vertices, read by the two-view program's storage buffer 10)
+            const size_t cbVtx = av.size() * sizeof(PVTX), offClip1 = (cbVtx + 255) & ~size_t(255), cbClip1 = s_av1.size() * sizeof(glm::vec4);
+            glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(offClip1 + cbClip1), nullptr, GL_STREAM_DRAW);
+            glBufferSubData(GL_ARRAY_BUFFER, 0, GLsizeiptr(cbVtx), av.data());
+            glBufferSubData(GL_ARRAY_BUFFER, GLintptr(offClip1), GLsizeiptr(cbClip1), s_av1.data());
+            glBindBufferRange(GL_SHADER_STORAGE_BUFFER, 10, s_vbo, GLintptr(offClip1), GLsizeiptr(cbClip1));
+        }
+        else glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(av.size() * sizeof(PVTX)), av.data(), GL_STREAM_DRAW);
         // ATE GEQUAL 0x80 with AFAIL FB_ONLY: the opaque part writes Z, the rest only colour
         glUniform1i(locAfail, 1);
         glDepthMask(GL_TRUE);

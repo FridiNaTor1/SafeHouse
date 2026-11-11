@@ -76,18 +76,15 @@ inline std::string describe(const Marker& m) {
     return m.reason.empty() ? std::string("the game stopped while Vulkan was starting") : m.reason;
 }
 
-// The rules. builtWithVulkan: the game has the Vulkan renderer (Linux and Windows builds); vr: an OpenXR session is wanted
-// (VR runs on OpenGL); marker: the start marker read from the user folder; version: this build's version.
-inline Decision decide(Choice wanted, bool builtWithVulkan, bool vr, const Marker& marker, const std::string& version,
+// The rules (VR follows them too: its Vulkan path goes through the OpenXR runtime). builtWithVulkan: the
+// game has the Vulkan renderer (Linux, Windows and Android builds); marker: the start marker read from the user folder;
+// version: this build's version.
+inline Decision decide(Choice wanted, bool builtWithVulkan, const Marker& marker, const std::string& version,
                        bool autoPrefersVulkan = kAutoPrefersVulkan) {
     Decision d;
     if (wanted == Choice::OpenGL) return d;
     if (!builtWithVulkan) {
         if (wanted == Choice::Vulkan) d.why = "this build has no Vulkan renderer";
-        return d;
-    }
-    if (vr) {
-        d.why = "VR runs on OpenGL";
         return d;
     }
     if (wanted == Choice::Auto) {

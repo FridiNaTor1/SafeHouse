@@ -17,11 +17,20 @@ extern RENDERER g_rendererSetting;
 bool FParseRenderer(const char* sz, RENDERER* prenderer);
 // True while the game renders on Vulkan.
 bool FRendererVulkan();
+// (game.cpp) a frame shown without the window's swap (VR on Vulkan: the headset's frame): counts toward the start being
+// trusted (the start marker, platform/renderer_choice.h), as the swap does
+void RendererFrameShown();
 // "Vulkan" or "OpenGL" (the log, the debug menu).
 const char* SzRendererName();
 // (main.cpp) the command line, so that a Vulkan error in the first seconds restarts the game on OpenGL (Linux)
 void SetRendererRelaunch(int argc, char** argv);
 // (gl.cpp GL::FInit) the game's window on Vulkan when Vulkan is chosen and starts; nullptr: OpenGL (why is logged).
 GLFWwindow* PwindowVulkan(int width, int height, bool fVisible, const char* title);
+// (render.cpp, the shadow phases) whether the bound draw framebuffer's colour can be read in place on Vulkan
+// (CANE_FETCH programs: CaneVk::FramebufferFetchUsable)
+bool FVulkanFramebufferFetch();
+// (game.cpp SLY2N_FPSLOG) the Vulkan submission worker's thread CPU time so far, ms (all, recording + submission); false
+// without one
+bool FVulkanWorkerCpuMs(double* pmsAll, double* pmsRecord);
 // (gl.cpp GLSHADER) a program compiled at build time for Vulkan; 0 when that variant does not exist.
 unsigned IdVulkanProgram(const char* vertexFile, const char* geometryFile, const char* fragmentFile, const char* prefix);

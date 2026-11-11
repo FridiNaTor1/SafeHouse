@@ -94,6 +94,7 @@ extern bool g_fGlobBindless;
 extern bool g_fGlobArrays;
 // OpenGL ES (Android) without EXT_base_instance / multi-draw-indirect: each draw sets glob.vert's caneDrawBase (render.cpp DrawIndexed)
 extern bool g_fDrawUniform;
+extern bool g_fBlend1;   // (glob.frag CANE_BLEND1, render.cpp FSetBlend: the Vulkan renderer on Android)
 // (VR Immersive, vr.h) the HUD drawn over transparency for the headset's panel: its alpha written too (premultiplied
 // colours, "over" alpha); false (always outside VR): the alpha kept as before
 extern bool g_fHudAlphaLayer;

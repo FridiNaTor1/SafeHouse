@@ -122,6 +122,7 @@ extern uint32_t g_uRandState;  // xfmath.cpp
 #endif
 
 double g_msGpuFpsLog = 0, g_msHudFpsLog = 0;   // (SLY2N_FPSLOG)
+double g_msEyesCpuFpsLog = 0;   // (SLY2N_FPSLOG, VR: the game thread's CPU time drawing the eyes: RenderSceneStereo + FinishEyes)
 
 namespace
 {
@@ -1701,21 +1702,9 @@ int RunGame(const GAMEOPTS& go)
                     if (!plo->paloParent && FCidDerivedFrom(plo->Cid(), 0x30)) s_apaloRoot.push_back(static_cast<ALO*>(plo.get()));
                 s_serialRoot = psw->serial, s_cploRoot = psw->aploAll.size(), s_cParentRoot = g_cLoParentChanges;
             }
-#ifdef __SWITCH__
-            // (the Switch only: perf-4 keeps it off elsewhere, as it is not the same steps, see below. The hierarchies on
-            // the pass helpers, the walk being memory bound. A hierarchy whose records refer outside it stops before reading there and is redone here after the others, in order: it then reads
-            // every root's world of this frame, where the serial walk read the later roots' previous ones.)
-            static std::vector<uint8_t> s_afRedo;
-            s_afRedo.assign(s_apaloRoot.size(), 0);
-            PassHelpers().ForBlocks(s_apaloRoot.size(), 8, [&](size_t iFirst, size_t iLim) {
-                for (size_t i = iFirst; i < iLim; ++i)
-                    if (!FUpdateAloHierarchyWorldsIsolated(s_apaloRoot[i], s_apaloRoot[i])) s_afRedo[i] = 1;
-            });
-            for (size_t i = 0; i < s_apaloRoot.size(); ++i)
-                if (s_afRedo[i]) UpdateAloHierarchyWorlds(s_apaloRoot[i]);
-#else
-            for (ALO* palo : s_apaloRoot) UpdateAloHierarchyWorlds(palo);
-#endif
+            // (alo.cpp: the hierarchies on the pass helpers where that gives the serial walk's results, the others
+            // after them in order)
+            UpdateAloRootsWorlds(s_apaloRoot);
         }
         DrawSlys(psw.get());
         DebugHitHideHolders(psw.get());   // (debug: hide.h)   // orig 0x18A238: the draw's own placement (state 3's cane on the hook), each step as drawn
@@ -2028,8 +2017,11 @@ int RunGame(const GAMEOPTS& go)
             if (FAnimatedOverlayDrawNormal()) {
                 if (fEyes)
                 {
+                    auto msThreadCpu = [] { timespec ts{}; clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts); return ts.tv_sec * 1e3 + ts.tv_nsec / 1e6; };
+                    const double msEyes0 = s_fFpsLog ? msThreadCpu() : 0.0;
                     RenderSceneStereo(scene, cam, opts, sv);
                     vr::FinishEyes();
+                    if (s_fFpsLog) g_msEyesCpuFpsLog += msThreadCpu() - msEyes0;
                     glBindFramebuffer(GL_FRAMEBUFFER, g_gl.FboScene());
                     glViewport(0, 0, g_gl.renderWidth, g_gl.renderHeight);
                     glDisable(GL_SCISSOR_TEST);
@@ -2075,6 +2067,7 @@ int RunGame(const GAMEOPTS& go)
                 CaneDeko::SetFrameResolution(unsigned(g_gl.renderWidth), unsigned(g_gl.renderHeight));
 #endif
                 if (!vr::FSkipSwap()) cane::gl::SwapBuffers(g_gl.window);
+                else RendererFrameShown();   // (VR on Vulkan: the start marker cleared after its first frames too)
             }
             else if (s_fFpsLog && s_aqGpu[0]) glEndQuery(GL_TIME_ELAPSED), ++s_iqGpu;
             // (renderer.h: Vulkan ends its frame at the swap; a headless frame is submitted the same way, as an
@@ -2123,17 +2116,30 @@ int RunGame(const GAMEOPTS& go)
             static int s_c = 0;
             const double tEnd = now();
             s_aMs[0] += t1 - t0, s_aMs[1] += t2 - t1, s_aMs[2] += msScene - s_aMs[3], s_aMs[3] = msScene;
-            static double s_msGpu0 = 0, s_msHud0 = 0;
+            static double s_msGpu0 = 0, s_msHud0 = 0, s_msEyes0 = 0;
             auto msCpu = [] { timespec ts{}; clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts); return ts.tv_sec * 1e3 + ts.tv_nsec / 1e6; };
             static double s_msCpu0 = msCpu();
+            static double s_msWorker0 = 0, s_msWorkerRec0 = 0;
+            if (static bool s_fWorker0 = false; !s_fWorker0) s_fWorker0 = true, FVulkanWorkerCpuMs(&s_msWorker0, &s_msWorkerRec0);
             ++s_c;
             if (tEnd - s_t0 >= s_sFpsLog * 1000.0)
             {
                 const double msFrame = (tEnd - s_t0) / s_c;
-                std::printf("fps %.1f step %d t %.2f: %.3f ms/frame: update %.3f, draw %.3f (scene %.3f, hud %.3f), present+wait %.3f; gpu %.3f; main thread cpu %.3f\n",
+                // (the Vulkan submission worker's share, where there is one: its recording + submission, and all of it)
+                double msWorker = 0, msWorkerRec = 0;
+                char achWorker[128] = "";
+                if (FVulkanWorkerCpuMs(&msWorker, &msWorkerRec))
+                    std::snprintf(achWorker, sizeof(achWorker), "; vulkan worker cpu %.3f (recording + submission %.3f)",
+                                  (msWorker - s_msWorker0) / s_c, (msWorkerRec - s_msWorkerRec0) / s_c);
+                if (g_msEyesCpuFpsLog > s_msEyes0)
+                    std::snprintf(achWorker + std::strlen(achWorker), sizeof(achWorker) - std::strlen(achWorker), "; eyes cpu %.3f",
+                                  (g_msEyesCpuFpsLog - s_msEyes0) / s_c);
+                s_msEyes0 = g_msEyesCpuFpsLog;
+                s_msWorker0 = msWorker, s_msWorkerRec0 = msWorkerRec;
+                std::printf("fps %.1f step %d t %.2f: %.3f ms/frame: update %.3f, draw %.3f (scene %.3f, hud %.3f), present+wait %.3f; gpu %.3f; main thread cpu %.3f%s\n",
                             1000.0 / msFrame, frame, g_clock.t, msFrame, s_aMs[0] / s_c, s_aMs[1] / s_c, s_aMs[2] / s_c,
                             (g_msHudFpsLog - s_msHud0) / s_c, msFrame - (s_aMs[0] + s_aMs[1]) / s_c, (g_msGpuFpsLog - s_msGpu0) / s_c,
-                            (msCpu() - s_msCpu0) / s_c);
+                            (msCpu() - s_msCpu0) / s_c, achWorker);
                 s_msCpu0 = msCpu();
                 s_msGpu0 = g_msGpuFpsLog, s_msHud0 = g_msHudFpsLog;
                 s_t0 = tEnd, s_c = 0, s_aMs[0] = s_aMs[1] = s_aMs[2] = 0;

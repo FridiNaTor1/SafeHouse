@@ -61,6 +61,7 @@ constexpr unsigned kFrameSlots = 2;          // frames in flight: the CPU runs a
 constexpr uint32_t kMaxImages = 16384, kMaxArrays = 1024, kMaxSamplers = 256;
 constexpr VkDeviceSize kBufferBlockSize = 64ull << 20, kImageBlockSize = 128ull << 20, kRingChunkSize = 8ull << 20;
 constexpr unsigned kMaxAttribs = 16, kGenericBinding = 15, kMaxUnits = 32, kMaxBindings = 16;
+constexpr unsigned kFetchBinding = kMaxBindings;   // (set 1: the in-place read's input attachment, after the storage buffers)
 constexpr GLenum kAnisotropyEnum = 0x84FE, kMaxAnisotropyEnum = 0x84FF;   // (GL 4.6 / EXT_texture_filter_anisotropic)
 constexpr uint32_t kPushBytes = 256;
 
@@ -112,11 +113,22 @@ VkPhysicalDeviceMemoryProperties g_memProps{};
 std::string g_deviceName;
 struct Features
 {
+    bool dualSrcBlend = false;
+    bool msrtss = false;   // (VK_EXT_multisampled_render_to_single_sampled, Android: MSAA resolved on the tile)
+    bool fdm = false;      // (VK_EXT_fragment_density_map with non-subsampled images: VR's fixed foveation)
+    VkExtent2D fdmTexel{32, 32};   // (GL_SRC1_* factors: Sly 2's glob CANE_BLEND1 on Android)
     bool geometry = false, wideLines = false, anisotropy = false, mdi = false, firstInstance = false, nonUniform = false;
     bool fillModeNonSolid = false;
     bool provokingLast = false;
     bool eds3 = false;
     bool demote = false;            // (VK_EXT_extended_dynamic_state3: blend and colour mask dynamic, fewer pipelines)   // (VK_EXT_provoking_vertex: GL's flat outputs come from a primitive's last vertex)
+    bool pushDescriptors = true;    // (VK_KHR_push_descriptor: the storage buffers pushed; else per-frame descriptor sets)
+    uint32_t pushBytes = 256;       // the push-constant bytes used (a program with a larger block reads it from set 2)
+    bool classicFetch = false;      // (no local read: the in-place read in a render pass object's subpass, the colour also its
+                                    // input attachment with a by-region self-dependency: core Vulkan; SLY2N_VKCLASSICFETCH=0: off)
+    bool localRead = false;         // (VK_KHR_dynamic_rendering_local_read: the colour attachment read in place, FramebufferFetchUsable)
+    bool multiview = false;         // (VK_KHR_multiview, core 1.1: VR's eyes as the two views of one pass; MultiviewSupported)
+    bool multiviewGeometry = false; // (multiviewGeometryShader: the near-clip geometry stage in such a pass)
     float lineWidthMax = 1.0f, anisotropyMax = 1.0f;
     VkFormat depthStencil = VK_FORMAT_D32_SFLOAT_S8_UINT, depth24 = VK_FORMAT_D24_UNORM_S8_UINT;
     VkSampleCountFlags samples = VK_SAMPLE_COUNT_1_BIT;
@@ -320,10 +332,11 @@ struct Image
     VkImage image = VK_NULL_HANDLE;
     Alloc memory;
     VkImageView view = VK_NULL_HANDLE;                       // the sampled view (all levels and layers)
-    std::vector<std::pair<uint32_t, VkImageView>> attachViews;   // (level | layer << 8)
+    std::vector<std::pair<uint32_t, VkImageView>> attachViews;   // (level | layer << 8 | layers << 24: more than one: an array view)
     VkFormat format = VK_FORMAT_R8G8B8A8_UNORM;
     VkImageAspectFlags aspect = VK_IMAGE_ASPECT_COLOR_BIT;
     uint32_t width = 0, height = 0, layers = 1, levels = 1, samples = 1;
+    VkImageUsageFlags usage = 0;   // (as created: an imageless framebuffer names it)
     bool array = false, depth = false, sampled = false, immutable = false;
     VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED;
     int slot = -1;                 // the descriptor slot (binding 0: 2D, binding 2: arrays)
@@ -331,6 +344,12 @@ struct Image
     uint64_t xferBatch = 0;        // the transfer batch that last took it (Xfers)
     bool dirty = false;            // in g_dirty (left in an attachment or transfer layout)
     bool resident = false;         // a bindless handle names it (its uses are not seen per draw)
+    bool inputAttachment = false;  // (g_feat.localRead) single-sampled colour with input-attachment use: readable in place
+    bool external = false;         // (VR) an OpenXR swapchain image: not created, allocated or destroyed here
+    bool transient = false;
+    uint8_t renderSamples = 1;     // (msrtss) a single-sampled image drawn with this many samples, resolved on the tile
+    bool fdm = false;              // a fragment density map (VR's fixed foveation: SetDensityMap)
+    Image* densityMap = nullptr;   // drawn into with this density map (its passes shade the edges more coarsely)        // (VR, SetRenderbufferTransient) depth / stencil never read after a pass: not stored
 };
 struct Buffer
 {
@@ -389,6 +408,7 @@ struct Attachment
     bool renderbuffer = false;
     uint16_t layer = 0;
     uint8_t level = 0;
+    uint8_t views = 0;             // (VR multiview, FramebufferMultiview) 2: layers layer, layer + 1 as a pass's two views
 };
 struct Framebuffer
 {
@@ -398,14 +418,17 @@ struct Framebuffer
 struct Program
 {
     const Shaders::Program* info = nullptr;
+    bool fetch = false;            // (CANE_FETCH) reads the colour attachment in place (subpassInput, set 1 binding kFetchBinding)
     uint32_t serial = 0;           // (pipeline keys: unique per program object)
     std::array<VkShaderModule, 3> modules{};
+    std::array<VkShaderModule, 3> modulesMv{};   // (two-view passes: the stages made for them, else modules)
     std::vector<uint8_t> constants;
     uint32_t dirtyLo = UINT32_MAX, dirtyHi = 0;
     std::array<uint8_t, kMaxBindings> samplerUnit{};
     std::array<uint8_t, kMaxBindings> samplerArray{};
     unsigned samplerCount = 0;
-    uint16_t storageMask = 0;
+    uint16_t storageMask = 0, storageMaskMv = 0;
+    bool uniformBuffer = false;    // its block from a uniform buffer (set 2) instead of push constants (g_feat.pushBytes)
 };
 struct Query
 {
@@ -468,6 +491,10 @@ struct Bound
     // the target
     bool hasColor = false, hasDepth = false;
     uint32_t width = 0, height = 0, samples = 1;
+    bool msrtss = false;   // (the target's images are drawn multisampled into single-sampled storage)
+    bool classic = false;  // (the instance is a render pass object: the pipelines made for it, g_feat.classicFetch)
+    bool fdm = false;      // (the target is drawn with a fragment density map: the pipelines made for it)
+    bool multiview = false;  // (the target's attachments are two views: the pipelines made for the view mask, the programs' two-view stages)
     uint8_t colorFormat = 0, depthFormat = 0;   // (pipeline keys: 0 none, 1 RGBA8 / the depth format)
     // the program and its resources
     GLuint program = ~0u;
@@ -485,6 +512,7 @@ struct Bound
     VkIndexType indexType = VK_INDEX_TYPE_UINT32;
     bool genericBound = false;
     GLuint storageProgram = ~0u;
+    bool storageMv = false;
     uint64_t storageEpoch = 0, storageAddrEpoch = 0;
     const VertexArray* vertexVao = nullptr;
     uint32_t vertexVaoVersion = 0;
@@ -517,6 +545,11 @@ struct Frame
     std::vector<uint32_t> garbageSlots2D, garbageSlotsArray;
     std::vector<GLuint> streamBuffers;
     VkSemaphore acquire = VK_NULL_HANDLE;
+    // (no push descriptors / few push-constant bytes) the frame's descriptor sets: storage buffers (set 1) and the
+    // uniform-buffer sets of set 2 (one per ring buffer), from pools reset when the frame retires
+    std::vector<VkDescriptorPool> setPools;
+    size_t setPoolIndex = 0;
+    std::vector<std::pair<VkBuffer, VkDescriptorSet>> uniformSets;
 };
 std::array<Frame, kFrameSlots> g_frames;
 unsigned g_frameIndex = 0;
@@ -533,6 +566,10 @@ Frame& Cur() { return g_frames[g_frameIndex]; }
 // cane::vk's vkCmd* in this file: with the worker they append, without it they call the driver directly. g_main and
 // g_pre are then stream tokens, not command buffers.
 bool g_threaded = false;
+// (threaded: the open rendering instance's attachments in the stream, glInvalidateFramebuffer; and what it dropped)
+VkRenderingAttachmentInfo *g_recColor = nullptr, *g_recDepth = nullptr, *g_recStencil = nullptr;
+bool g_invalidatedColor = false, g_invalidatedDepth = false;
+const CaneVk::ExternalDevice* g_external = nullptr;   // (VR: the instance / device through OpenXR)
 const VkCommandBuffer kStreamMain = reinterpret_cast<VkCommandBuffer>(uintptr_t(0x10)), kStreamPre = reinterpret_cast<VkCommandBuffer>(uintptr_t(0x20));
 class Stream
 {
@@ -713,13 +750,60 @@ void vkCmdBeginRendering(VkCommandBuffer cmd, const VkRenderingInfo* ri)
     Stream& s = S(cmd);
     auto* r2 = static_cast<VkRenderingInfo*>(s.Alloc(sizeof(VkRenderingInfo)));
     *r2 = *ri;
+    // (the one extension structure BeginRenderingNow chains: msrtss's)
+    // (the extension structures BeginRenderingNow chains: msrtss's, the density map's)
+    {
+        const void** link = &r2->pNext;
+        *link = nullptr;
+        for (auto* p = static_cast<const VkBaseInStructure*>(ri->pNext); p; p = p->pNext)
+        {
+            void* q = nullptr;
+            if (p->sType == VK_STRUCTURE_TYPE_MULTISAMPLED_RENDER_TO_SINGLE_SAMPLED_INFO_EXT)
+                q = const_cast<VkMultisampledRenderToSingleSampledInfoEXT*>(s.Dup(reinterpret_cast<const VkMultisampledRenderToSingleSampledInfoEXT*>(p), 1));
+            else if (p->sType == VK_STRUCTURE_TYPE_RENDERING_FRAGMENT_DENSITY_MAP_ATTACHMENT_INFO_EXT)
+                q = const_cast<VkRenderingFragmentDensityMapAttachmentInfoEXT*>(s.Dup(reinterpret_cast<const VkRenderingFragmentDensityMapAttachmentInfoEXT*>(p), 1));
+            if (!q) continue;
+            static_cast<VkBaseOutStructure*>(q)->pNext = nullptr;
+            *link = q;
+            link = const_cast<const void**>(reinterpret_cast<void**>(&static_cast<VkBaseOutStructure*>(q)->pNext));
+        }
+    }
     r2->pColorAttachments = s.Dup(ri->pColorAttachments, ri->colorAttachmentCount);
     r2->pDepthAttachment = s.Dup(ri->pDepthAttachment, ri->pDepthAttachment ? 1 : 0);
     r2->pStencilAttachment = s.Dup(ri->pStencilAttachment, ri->pStencilAttachment ? 1 : 0);
+    // (the instance's attachments as recorded: glInvalidateFramebuffer may still drop their stores before the worker
+    // replays them)
+    g_recColor = const_cast<VkRenderingAttachmentInfo*>(r2->pColorAttachments);
+    g_recDepth = const_cast<VkRenderingAttachmentInfo*>(r2->pDepthAttachment);
+    g_recStencil = const_cast<VkRenderingAttachmentInfo*>(r2->pStencilAttachment);
     s.Rec([=](VkCommandBuffer c) { cane::vk::vkCmdBeginRendering(c, r2); });
 }
 void vkCmdEndRendering(VkCommandBuffer cmd)
 { CANE_DEFER(vkCmdEndRendering(cmd), [=](VkCommandBuffer c) { cane::vk::vkCmdEndRendering(c); }); }
+void vkCmdBeginRenderPass2(VkCommandBuffer cmd, const VkRenderPassBeginInfo* rb, const VkSubpassBeginInfo* sb)
+{
+    if (!g_threaded) return cane::vk::vkCmdBeginRenderPass2(cmd, rb, sb);
+    Stream& s = S(cmd);
+    auto* r2 = static_cast<VkRenderPassBeginInfo*>(s.Alloc(sizeof(VkRenderPassBeginInfo)));
+    *r2 = *rb;
+    r2->pClearValues = s.Dup(rb->pClearValues, rb->clearValueCount);
+    // (the one extension structure: the imageless framebuffer's views)
+    if (rb->pNext)
+    {
+        const auto* a = static_cast<const VkRenderPassAttachmentBeginInfo*>(rb->pNext);
+        auto* a2 = static_cast<VkRenderPassAttachmentBeginInfo*>(s.Alloc(sizeof(VkRenderPassAttachmentBeginInfo)));
+        *a2 = *a;
+        a2->pAttachments = s.Dup(a->pAttachments, a->attachmentCount);
+        r2->pNext = a2;
+    }
+    const VkSubpassBeginInfo sb2 = *sb;
+    s.Rec([=](VkCommandBuffer c) { cane::vk::vkCmdBeginRenderPass2(c, r2, &sb2); });
+}
+void vkCmdEndRenderPass2(VkCommandBuffer cmd, const VkSubpassEndInfo* ei)
+{
+    const VkSubpassEndInfo e2 = *ei;
+    CANE_DEFER(vkCmdEndRenderPass2(cmd, ei), [=](VkCommandBuffer c) { cane::vk::vkCmdEndRenderPass2(c, &e2); });
+}
 void vkCmdPipelineBarrier2(VkCommandBuffer cmd, const VkDependencyInfo* di)
 {
     if (!g_threaded) return cane::vk::vkCmdPipelineBarrier2(cmd, di);
@@ -806,7 +890,9 @@ struct Batch
     VkSwapchainKHR swapchain = VK_NULL_HANDLE;
     uint32_t imageIndex = 0;
     bool quit = false;
+    std::vector<std::function<void()>> after;   // (VR: AfterNextSubmit's calls, run after the submission)
 };
+std::vector<std::function<void()>> g_afterSubmit;   // (AfterNextSubmit: for the next submission)
 std::thread g_worker;
 std::mutex g_workerMutex;
 std::condition_variable g_workerCv, g_workerDoneCv;
@@ -814,6 +900,13 @@ std::deque<Batch> g_batches;
 std::vector<Stream*> g_freeStreams;
 uint64_t g_workerDone = 0;              // the last batch value the worker has submitted (under g_workerMutex)
 std::atomic<bool> g_presentStale{false};
+// (Android reports SUBOPTIMAL for every present whose transform is not the display's current rotation: the swapchain
+// keeps the identity transform there and the compositor rotates; a new size comes as OUT_OF_DATE or a window resize)
+#if defined(__ANDROID__)
+constexpr bool kSuboptimalStale = false;
+#else
+constexpr bool kSuboptimalStale = true;
+#endif
 Stream* TakeStream()
 {
     std::lock_guard<std::mutex> lock(g_workerMutex);
@@ -827,6 +920,9 @@ VkDescriptorSetLayout g_setLayoutTextures = VK_NULL_HANDLE, g_setLayoutBuffers =
 VkPipelineLayout g_pipelineLayout = VK_NULL_HANDLE;
 VkDescriptorPool g_descriptorPool = VK_NULL_HANDLE;
 VkDescriptorSet g_textureSet = VK_NULL_HANDLE;
+VkDescriptorSetLayout g_setLayoutUniforms = VK_NULL_HANDLE;   // (set 2: g_feat.pushBytes below a program's block)
+constexpr uint32_t kSetPoolSize = 1024;                         // descriptor sets per frame pool (more pools when needed)
+uint32_t g_uniformAlign = 256;
 VkShaderStageFlags g_stages = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
 Alloc g_nullStorage;               // (a storage binding with nothing bound reads zeros)
 Alloc g_generic;                   // the disabled attributes' values: 16 x float (0, 0, 0, 1), then 16 x int (0, 0, 0, 1)
@@ -906,6 +1002,9 @@ LayoutScope ScopeOf(VkImageLayout layout)
     case VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL:
         return {VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT,
                 VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT};
+    case VK_IMAGE_LAYOUT_RENDERING_LOCAL_READ_KHR:
+        return {VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
+                VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_2_INPUT_ATTACHMENT_READ_BIT};
     case VK_IMAGE_LAYOUT_PRESENT_SRC_KHR: return {VK_PIPELINE_STAGE_2_NONE, VK_ACCESS_2_NONE};
     default: return {VK_PIPELINE_STAGE_2_NONE, VK_ACCESS_2_NONE};
     }
@@ -954,6 +1053,7 @@ struct Barriers
 };
 VkImageLayout FinalLayout(const Image& im)
 {
+    if (im.fdm) return VK_IMAGE_LAYOUT_FRAGMENT_DENSITY_MAP_OPTIMAL_EXT;
     if (im.sampled) return VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
     return im.depth ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL : VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 }
@@ -1065,8 +1165,10 @@ bool IsDepthFormat(VkFormat f) { return f == VK_FORMAT_D32_SFLOAT_S8_UINT || f =
 
 struct XferOp;
 void QueueClear(Image& im);
+uint32_t g_nextRenderSamples = 1;   // (msrtss: the next image made is drawn with this many samples; SetNextImageRenderSamples)
+uint32_t g_nextRenderbufferLayers = 1;   // (VR multiview: the next renderbuffer made has this many layers; SetNextRenderbufferLayers)
 std::unique_ptr<Image> MakeImage(uint32_t width, uint32_t height, uint32_t layers, uint32_t levels, uint32_t samples,
-                                 VkFormat format, bool array, bool sampled)
+                                 VkFormat format, bool array, bool sampled, VkImageUsageFlags extraUsage = 0)
 {
     auto im = std::make_unique<Image>();
     im->width = width; im->height = height; im->layers = layers; im->levels = levels; im->samples = samples;
@@ -1081,10 +1183,24 @@ std::unique_ptr<Image> MakeImage(uint32_t width, uint32_t height, uint32_t layer
     ci.arrayLayers = layers;
     ci.samples = SampleBits(samples);
     ci.tiling = VK_IMAGE_TILING_OPTIMAL;
+    if (g_nextRenderSamples > 1 && samples == 1 && g_feat.msrtss)
+    {
+        ci.flags |= VK_IMAGE_CREATE_MULTISAMPLED_RENDER_TO_SINGLE_SAMPLED_BIT_EXT;
+        im->renderSamples = uint8_t(g_nextRenderSamples);
+        static int s_cLogged = 0;
+        if (s_cLogged++ < 4) std::printf("Vulkan: %ux%u %s drawn with %u samples into one (resolved on the tile)\n", width, height,
+                                         IsDepthFormat(format) ? "depth" : "colour", g_nextRenderSamples);
+    }
+    g_nextRenderSamples = 1;
     ci.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
     if (im->depth) ci.usage |= VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
     else ci.usage |= VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
     if (sampled) ci.usage |= VK_IMAGE_USAGE_SAMPLED_BIT;
+    // (not with msrtss: an in-place read of a single-sampled image drawn multisampled is not defined)
+    im->inputAttachment = (g_feat.localRead || g_feat.classicFetch) && !im->depth && samples <= 1 && im->renderSamples <= 1;
+    if (im->inputAttachment) ci.usage |= VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT;
+    ci.usage |= extraUsage;
+    im->usage = ci.usage;
     ci.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     VKCHECK(vkCreateImage(g_device, &ci, nullptr, &im->image));
     static const bool s_fTrace = std::getenv("SLY2N_VKIMAGES") != nullptr;
@@ -1112,15 +1228,15 @@ std::unique_ptr<Image> MakeImage(uint32_t width, uint32_t height, uint32_t layer
     QueueClear(*im);
     return im;
 }
-VkImageView AttachView(Image& im, unsigned level, unsigned layer)
+VkImageView AttachView(Image& im, unsigned level, unsigned layer, unsigned layers = 1)
 {
-    const uint32_t key = level | (layer << 8);
+    const uint32_t key = level | (layer << 8) | (layers > 1 ? layers << 24 : 0u);
     for (auto& [k, v] : im.attachViews) if (k == key) return v;
     VkImageViewCreateInfo vi{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
     vi.image = im.image;
-    vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    vi.viewType = layers > 1 ? VK_IMAGE_VIEW_TYPE_2D_ARRAY : VK_IMAGE_VIEW_TYPE_2D;
     vi.format = im.format;
-    vi.subresourceRange = {im.aspect, level, 1, layer, 1};
+    vi.subresourceRange = {im.aspect, level, 1, layer, layers};
     VkImageView v;
     VKCHECK(vkCreateImageView(g_device, &vi, nullptr, &v));
     im.attachViews.emplace_back(key, v);
@@ -1130,6 +1246,7 @@ void DestroyImage(Image& im)
 {
     for (auto& [k, v] : im.attachViews) vkDestroyImageView(g_device, v, nullptr);
     if (im.view) vkDestroyImageView(g_device, im.view, nullptr);
+    if (im.external) return;
     if (im.image) vkDestroyImage(g_device, im.image, nullptr);
     FreeAlloc(im.memory);
 }
@@ -1325,11 +1442,181 @@ struct Target
     Image* depth = nullptr;
     uint16_t colorLayer = 0, depthLayer = 0;
     uint8_t colorLevel = 0, depthLevel = 0;
+    uint8_t views = 0;             // (multiview: the attachments' two views; 0 one)
     bool operator==(const Target&) const = default;
 };
 Target g_target;                   // the target of the instance being recorded (or about to begin)
 bool g_inRendering = false;        // between vkCmdBeginRendering and vkCmdEndRendering
 bool g_pendingBegin = false;       // g_target set, its instance not begun yet (the next draw begins it)
+bool g_fetchUsed = false;          // a CANE_FETCH program exists: colour attachments that allow it begin in the local-read layout
+bool g_instanceLocalRead = false;
+// (g_feat.classicFetch) the instance is a render pass object's single subpass: its colour attachment is also its input
+// attachment (GENERAL), with a by-region self-dependency for the in-place reads (ApplyFetch's barrier)
+bool g_instanceClassic = false;
+struct ClassicKey
+{
+    VkFormat color = VK_FORMAT_UNDEFINED, depth = VK_FORMAT_UNDEFINED;
+    uint8_t ops[6] = {};   // colour load / store, depth load / store, stencil load / store
+    bool fdm = false;      // a fragment density map attachment after them
+    uint8_t viewMask = 0;  // (multiview) the subpass's views
+    bool operator==(const ClassicKey&) const = default;
+};
+std::vector<std::pair<ClassicKey, VkRenderPass>> g_classicPasses;
+VkRenderPass ClassicRenderPass(const ClassicKey& k)
+{
+    for (const auto& [key, rp] : g_classicPasses)
+        if (key == k) return rp;
+    VkAttachmentDescription2 at[3]{{VK_STRUCTURE_TYPE_ATTACHMENT_DESCRIPTION_2}, {VK_STRUCTURE_TYPE_ATTACHMENT_DESCRIPTION_2},
+                                   {VK_STRUCTURE_TYPE_ATTACHMENT_DESCRIPTION_2}};
+    at[0].format = k.color;
+    at[0].samples = VK_SAMPLE_COUNT_1_BIT;
+    at[0].loadOp = VkAttachmentLoadOp(k.ops[0]);
+    at[0].storeOp = VkAttachmentStoreOp(k.ops[1]);
+    at[0].stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    at[0].stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    at[0].initialLayout = at[0].finalLayout = VK_IMAGE_LAYOUT_GENERAL;
+    at[1].format = k.depth;
+    at[1].samples = VK_SAMPLE_COUNT_1_BIT;
+    at[1].loadOp = VkAttachmentLoadOp(k.ops[2]);
+    at[1].storeOp = VkAttachmentStoreOp(k.ops[3]);
+    at[1].stencilLoadOp = VkAttachmentLoadOp(k.ops[4]);
+    at[1].stencilStoreOp = VkAttachmentStoreOp(k.ops[5]);
+    at[1].initialLayout = at[1].finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+    VkAttachmentReference2 cref{VK_STRUCTURE_TYPE_ATTACHMENT_REFERENCE_2, nullptr, 0, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_ASPECT_COLOR_BIT};
+    VkAttachmentReference2 iref = cref;
+    VkAttachmentReference2 dref{VK_STRUCTURE_TYPE_ATTACHMENT_REFERENCE_2, nullptr, 1, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+                                VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT};
+    VkSubpassDescription2 sd{VK_STRUCTURE_TYPE_SUBPASS_DESCRIPTION_2};
+    sd.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    sd.colorAttachmentCount = 1;
+    sd.pColorAttachments = &cref;
+    sd.inputAttachmentCount = 1;
+    sd.pInputAttachments = &iref;
+    sd.viewMask = k.viewMask;   // (the input attachment then reads each view's own layer)
+    if (k.depth != VK_FORMAT_UNDEFINED) sd.pDepthStencilAttachment = &dref;
+    VkSubpassDependency2 dep[3]{{VK_STRUCTURE_TYPE_SUBPASS_DEPENDENCY_2}, {VK_STRUCTURE_TYPE_SUBPASS_DEPENDENCY_2}, {VK_STRUCTURE_TYPE_SUBPASS_DEPENDENCY_2}};
+    // (the in-place reads: the earlier draws' colour writes before the input attachment's reads, per region)
+    dep[0].srcSubpass = dep[0].dstSubpass = 0;
+    dep[0].srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    dep[0].dstStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    dep[0].srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    dep[0].dstAccessMask = VK_ACCESS_INPUT_ATTACHMENT_READ_BIT;
+    dep[0].dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT;
+    // (before and after: as dynamic rendering's instances, the explicit barriers outside order the rest)
+    const VkPipelineStageFlags attach = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
+                                        VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    const VkAccessFlags attachAccess = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+                                       VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT |
+                                       VK_ACCESS_INPUT_ATTACHMENT_READ_BIT;
+    dep[1].srcSubpass = VK_SUBPASS_EXTERNAL;
+    dep[1].dstSubpass = 0;
+    dep[1].srcStageMask = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+    dep[1].dstStageMask = attach;
+    dep[1].srcAccessMask = VK_ACCESS_MEMORY_WRITE_BIT;
+    dep[1].dstAccessMask = attachAccess;
+    dep[2].srcSubpass = 0;
+    dep[2].dstSubpass = VK_SUBPASS_EXTERNAL;
+    dep[2].srcStageMask = attach;
+    dep[2].dstStageMask = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
+    dep[2].srcAccessMask = attachAccess;
+    dep[2].dstAccessMask = VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT;
+    VkRenderPassCreateInfo2 ci{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO_2};
+    ci.attachmentCount = k.depth != VK_FORMAT_UNDEFINED ? 2 : 1;
+    ci.pAttachments = at;
+    VkRenderPassFragmentDensityMapCreateInfoEXT fdmci{VK_STRUCTURE_TYPE_RENDER_PASS_FRAGMENT_DENSITY_MAP_CREATE_INFO_EXT};
+    if (k.fdm)
+    {
+        VkAttachmentDescription2& a = at[ci.attachmentCount];
+        a.format = VK_FORMAT_R8G8_UNORM;
+        a.samples = VK_SAMPLE_COUNT_1_BIT;
+        a.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+        a.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        a.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+        a.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        a.initialLayout = a.finalLayout = VK_IMAGE_LAYOUT_FRAGMENT_DENSITY_MAP_OPTIMAL_EXT;
+        fdmci.fragmentDensityMapAttachment = {ci.attachmentCount, VK_IMAGE_LAYOUT_FRAGMENT_DENSITY_MAP_OPTIMAL_EXT};
+        ++ci.attachmentCount;
+        ci.pNext = &fdmci;
+    }
+    ci.subpassCount = 1;
+    ci.pSubpasses = &sd;
+    ci.dependencyCount = 3;
+    ci.pDependencies = dep;
+    // (multiview: the self-dependency stays within a view; the views are correlated, a hint to render them together)
+    const uint32_t correlated = k.viewMask;
+    if (k.viewMask)
+    {
+        dep[0].dependencyFlags |= VK_DEPENDENCY_VIEW_LOCAL_BIT;
+        dep[0].viewOffset = 0;
+        ci.correlatedViewMaskCount = 1;
+        ci.pCorrelatedViewMasks = &correlated;
+    }
+    VkRenderPass rp = VK_NULL_HANDLE;
+    VKCHECK(vkCreateRenderPass2(g_device, &ci, nullptr, &rp));
+    g_classicPasses.push_back({k, rp});
+    return rp;
+}
+// (imageless: one framebuffer per size and attachments' kind, the views given at each begin)
+struct ClassicFbKey
+{
+    VkRenderPass pass;
+    uint32_t width, height;
+    VkFormat color, depth;
+    VkImageUsageFlags colorUsage, depthUsage;
+    uint32_t fdmWidth = 0, fdmHeight = 0;   // (a density map: its size)
+    uint32_t layers = 1, fdmLayers = 1;      // (multiview: the attachments' views' layers)
+    bool operator==(const ClassicFbKey&) const = default;
+};
+std::vector<std::pair<ClassicFbKey, VkFramebuffer>> g_classicFbs;
+std::vector<std::pair<std::array<VkImageView, 3>, VkFramebuffer>> g_viewFbs;
+VkFramebuffer ViewsFramebuffer(VkRenderPass pass, const VkImageView* views, uint32_t n, uint32_t w, uint32_t h)
+{
+    const std::array<VkImageView, 3> key{views[0], n > 1 ? views[1] : VK_NULL_HANDLE, n > 2 ? views[2] : VK_NULL_HANDLE};
+    for (const auto& [k, fb] : g_viewFbs)
+        if (k == key) return fb;
+    VkFramebufferCreateInfo ci{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
+    ci.renderPass = pass;
+    ci.attachmentCount = n;
+    ci.pAttachments = views;
+    ci.width = w, ci.height = h, ci.layers = 1;
+    VkFramebuffer fb = VK_NULL_HANDLE;
+    VKCHECK(vkCreateFramebuffer(g_device, &ci, nullptr, &fb));
+    g_viewFbs.push_back({key, fb});
+    return fb;
+}
+VkFramebuffer ClassicFramebuffer(const ClassicFbKey& k)
+{
+    for (const auto& [key, fb] : g_classicFbs)
+        if (key == k) return fb;
+    VkFramebufferAttachmentImageInfo ai[3]{{VK_STRUCTURE_TYPE_FRAMEBUFFER_ATTACHMENT_IMAGE_INFO}, {VK_STRUCTURE_TYPE_FRAMEBUFFER_ATTACHMENT_IMAGE_INFO},
+                                           {VK_STRUCTURE_TYPE_FRAMEBUFFER_ATTACHMENT_IMAGE_INFO}};
+    ai[0].usage = k.colorUsage;
+    ai[0].width = k.width, ai[0].height = k.height, ai[0].layerCount = k.layers;
+    ai[0].viewFormatCount = 1, ai[0].pViewFormats = &k.color;
+    ai[1].usage = k.depthUsage;
+    ai[1].width = k.width, ai[1].height = k.height, ai[1].layerCount = k.layers;
+    ai[1].viewFormatCount = 1, ai[1].pViewFormats = &k.depth;
+    VkFramebufferAttachmentsCreateInfo aci{VK_STRUCTURE_TYPE_FRAMEBUFFER_ATTACHMENTS_CREATE_INFO};
+    aci.attachmentImageInfoCount = k.depth != VK_FORMAT_UNDEFINED ? 2 : 1;
+    static const VkFormat kFdmFormat = VK_FORMAT_R8G8_UNORM;
+    if (k.fdmWidth)
+    {
+        VkFramebufferAttachmentImageInfo& f = ai[aci.attachmentImageInfoCount++];
+        f.usage = VK_IMAGE_USAGE_FRAGMENT_DENSITY_MAP_BIT_EXT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+        f.width = k.fdmWidth, f.height = k.fdmHeight, f.layerCount = k.fdmLayers;
+        f.viewFormatCount = 1, f.pViewFormats = &kFdmFormat;
+    }
+    aci.pAttachmentImageInfos = ai;
+    VkFramebufferCreateInfo ci{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO, &aci};
+    ci.flags = VK_FRAMEBUFFER_CREATE_IMAGELESS_BIT;
+    ci.renderPass = k.pass;
+    ci.attachmentCount = aci.attachmentImageInfoCount;
+    ci.width = k.width, ci.height = k.height, ci.layers = 1;
+    VkFramebuffer fb = VK_NULL_HANDLE;
+    VKCHECK(vkCreateFramebuffer(g_device, &ci, nullptr, &fb));
+    g_classicFbs.push_back({k, fb});
+    return fb;
+}  // the instance's colour attachment is in VK_IMAGE_LAYOUT_RENDERING_LOCAL_READ_KHR
 struct PendingClear { bool color = false, depth = false, stencil = false; VkClearValue colorValue{}, depthValue{}; } g_pendingClear;
 
 void BeginRenderingNow()
@@ -1353,13 +1640,41 @@ void BeginRenderingNow()
     VkRenderingInfo ri{VK_STRUCTURE_TYPE_RENDERING_INFO};
     ri.layerCount = 1;
     ri.renderArea = {{0, 0}, {b.width, b.height}};
+    // (multiview: both eyes in one instance, the attachments' array views; a common render area: the eyes are drawn at
+    // one size)
+    const unsigned nviews = g_target.views > 1 ? g_target.views : 1;
+    ri.viewMask = nviews > 1 ? (1u << nviews) - 1u : 0u;
+    VkMultisampledRenderToSingleSampledInfoEXT msi{VK_STRUCTURE_TYPE_MULTISAMPLED_RENDER_TO_SINGLE_SAMPLED_INFO_EXT};
+    if (b.msrtss)
+    {
+        msi.multisampledRenderToSingleSampledEnable = VK_TRUE;
+        msi.rasterizationSamples = SampleBits(b.samples);
+        ri.pNext = &msi;
+    }
+    VkRenderingFragmentDensityMapAttachmentInfoEXT fdi{VK_STRUCTURE_TYPE_RENDERING_FRAGMENT_DENSITY_MAP_ATTACHMENT_INFO_EXT};
+    Image* fdmImage = b.fdm && g_target.color ? g_target.color->densityMap : nullptr;
+    if (fdmImage)
+    {
+        // (multiview: a layer a view where the map has them, else the one shared)
+        fdi.imageView = AttachView(*fdmImage, 0, 0, nviews > 1 && fdmImage->layers >= nviews ? nviews : 1);
+        fdi.imageLayout = VK_IMAGE_LAYOUT_FRAGMENT_DENSITY_MAP_OPTIMAL_EXT;
+        fdi.pNext = ri.pNext;
+        ri.pNext = &fdi;
+    }
+    g_instanceLocalRead = false;
+    const bool classic = g_feat.classicFetch && g_fetchUsed && g_target.color && g_target.color->inputAttachment && !b.msrtss;
+    if (classic != b.classic) b.classic = classic, b.pipelineDirty = true;
     if (Image* im = g_target.color)
     {
-        bar.Image(*im, im->layout, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
-        im->layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        // (a frame read in place by a CANE_FETCH program: the whole instance in the local-read layout; classic: GENERAL)
+        const VkImageLayout layout = classic ? VK_IMAGE_LAYOUT_GENERAL
+                                   : g_fetchUsed && im->inputAttachment ? VK_IMAGE_LAYOUT_RENDERING_LOCAL_READ_KHR : VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        g_instanceLocalRead = layout == VK_IMAGE_LAYOUT_RENDERING_LOCAL_READ_KHR;
+        bar.Image(*im, im->layout, layout);
+        im->layout = layout;
         im->useSegment = g_segment;
-        color.imageView = AttachView(*im, g_target.colorLevel, g_target.colorLayer);
-        color.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        color.imageView = AttachView(*im, g_target.colorLevel, g_target.colorLayer, nviews);
+        color.imageLayout = layout;
         color.loadOp = g_pendingClear.color ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
         color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
         color.clearValue = g_pendingClear.colorValue;
@@ -1371,18 +1686,72 @@ void BeginRenderingNow()
         bar.Image(*im, im->layout, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
         im->layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
         im->useSegment = g_segment;
-        depth.imageView = AttachView(*im, g_target.depthLevel, g_target.depthLayer);
+        depth.imageView = AttachView(*im, g_target.depthLevel, g_target.depthLayer, nviews);
         depth.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
         depth.loadOp = g_pendingClear.depth ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
         depth.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
         depth.clearValue = g_pendingClear.depthValue;
         stencil = depth;
         stencil.loadOp = g_pendingClear.stencil ? VK_ATTACHMENT_LOAD_OP_CLEAR : VK_ATTACHMENT_LOAD_OP_LOAD;
+        if (im->transient)
+        {
+            // (SetRenderbufferTransient: not stored; an instance that would load it back means the hint was wrong:
+            // stored from then on)
+            if (depth.loadOp == VK_ATTACHMENT_LOAD_OP_LOAD || stencil.loadOp == VK_ATTACHMENT_LOAD_OP_LOAD)
+            {
+                im->transient = false;
+                std::printf("Vulkan: a transient depth target loaded back: stored from now on\n");
+            }
+            else depth.storeOp = stencil.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        }
         ri.pDepthAttachment = &depth;
         ri.pStencilAttachment = &stencil;
     }
     bar.Flush(cmd);
-    vkCmdBeginRendering(cmd, &ri);
+    g_instanceClassic = classic;
+    if (classic)
+    {
+        ClassicKey ck;
+        ck.color = g_target.color->format;
+        ck.ops[0] = uint8_t(color.loadOp), ck.ops[1] = uint8_t(color.storeOp);
+        if (g_target.depth)
+        {
+            ck.depth = g_target.depth->format;
+            ck.ops[2] = uint8_t(depth.loadOp), ck.ops[3] = uint8_t(depth.storeOp);
+            ck.ops[4] = uint8_t(stencil.loadOp), ck.ops[5] = uint8_t(stencil.storeOp);
+        }
+        ck.fdm = fdmImage != nullptr;
+        ck.viewMask = uint8_t(ri.viewMask);
+        const VkRenderPass rp = ClassicRenderPass(ck);
+        ClassicKey compat;
+        compat.color = ck.color, compat.depth = ck.depth, compat.fdm = ck.fdm, compat.viewMask = ck.viewMask;
+        VkImageView views[3] = {color.imageView, VK_NULL_HANDLE, VK_NULL_HANDLE};
+        uint32_t cview = 1;
+        if (g_target.depth) views[cview++] = depth.imageView;
+        if (fdmImage) views[cview++] = fdi.imageView;
+        // (an OpenXR image: a framebuffer of its views, its usage and view formats being the runtime's; else imageless)
+        const VkFramebuffer fb = g_target.color->external
+                                     ? ViewsFramebuffer(ClassicRenderPass(compat), views, cview, b.width, b.height)
+                                     : ClassicFramebuffer({ClassicRenderPass(compat), b.width, b.height, ck.color, ck.depth,
+                                                           g_target.color->usage, g_target.depth ? g_target.depth->usage : 0,
+                                                           fdmImage ? fdmImage->width : 0, fdmImage ? fdmImage->height : 0, nviews,
+                                                           fdmImage && nviews > 1 && fdmImage->layers >= nviews ? nviews : 1u});
+        VkClearValue clears[3] = {color.clearValue, depth.clearValue, {}};
+        clears[1].depthStencil.stencil = stencil.clearValue.depthStencil.stencil;
+        VkRenderPassAttachmentBeginInfo abi{VK_STRUCTURE_TYPE_RENDER_PASS_ATTACHMENT_BEGIN_INFO};
+        abi.attachmentCount = cview;
+        abi.pAttachments = views;
+        VkRenderPassBeginInfo rb{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO, g_target.color->external ? nullptr : &abi};
+        rb.renderPass = rp;
+        rb.framebuffer = fb;
+        rb.renderArea = ri.renderArea;
+        rb.clearValueCount = abi.attachmentCount;
+        rb.pClearValues = clears;
+        VkSubpassBeginInfo sb{VK_STRUCTURE_TYPE_SUBPASS_BEGIN_INFO};
+        sb.contents = VK_SUBPASS_CONTENTS_INLINE;
+        vkCmdBeginRenderPass2(cmd, &rb, &sb);
+    }
+    else vkCmdBeginRendering(cmd, &ri);
     g_inRendering = true;
     g_pendingBegin = false;
     g_pendingClear = PendingClear{};
@@ -1397,8 +1766,16 @@ void EndRendering()
 {
     if (g_pendingBegin && (g_pendingClear.color || g_pendingClear.depth || g_pendingClear.stencil)) BeginRenderingNow();
     if (!g_inRendering) return;
-    vkCmdEndRendering(g_main);
+    if (g_instanceClassic)
+    {
+        VkSubpassEndInfo ei{VK_STRUCTURE_TYPE_SUBPASS_END_INFO};
+        vkCmdEndRenderPass2(g_main, &ei);
+        g_instanceClassic = false;
+    }
+    else vkCmdEndRendering(g_main);
     g_inRendering = false;
+    g_recColor = g_recDepth = g_recStencil = nullptr;
+    g_invalidatedColor = g_invalidatedDepth = false;
     g_pendingBegin = true;
     if (g_target.color) MarkDirty(*g_target.color);
     if (g_target.depth) MarkDirty(*g_target.depth);
@@ -1446,6 +1823,9 @@ void WaitValue(uint64_t value)
 void RetireFrame(Frame& f)
 {
     WaitValue(f.lastValue);   // (the CPU two frames ahead of the GPU waits here)
+    for (VkDescriptorPool pool : f.setPools) vkResetDescriptorPool(g_device, pool, 0);
+    f.setPoolIndex = 0;
+    f.uniformSets.clear();
     for (const Alloc& a : f.garbage) FreeAlloc(a);
     f.garbage.clear();
     for (auto& im : f.garbageImages) DestroyImage(*im);
@@ -1561,6 +1941,7 @@ void Submit(VkSemaphore wait, VkSemaphore signal)
         bt.value = ++g_submitValue;
         bt.present = g_pendingPresent.present;
         g_pendingPresent = PendingPresent{};
+        bt.after.swap(g_afterSubmit);
         if (!bt.pre) g_streamPre->Clear();
         Stream* spareMain = TakeStream();
         Stream* sparePre = bt.pre ? TakeStream() : g_streamPre;
@@ -1591,6 +1972,12 @@ void Submit(VkSemaphore wait, VkSemaphore signal)
     cmds[n++] = g_main;
     const uint64_t value = ++g_submitValue;
     SubmitBatch(cmds, n, value, wait, signal);
+    if (!g_afterSubmit.empty())
+    {
+        std::vector<std::function<void()>> after;
+        after.swap(g_afterSubmit);
+        for (auto& fn : after) fn();
+    }
     Cur().lastValue = value;
     ++g_segment;
     ++g_stats.submits;
@@ -2205,7 +2592,7 @@ void Attach(GLenum target, GLenum attachment, GLuint object, bool renderbuffer, 
 {
     Framebuffer* f = TargetFramebuffer(target);
     if (!f) { SetError(GL_INVALID_OPERATION); return; }
-    const Attachment a{object, renderbuffer, uint16_t(layer), uint8_t(level)};
+    const Attachment a{object, renderbuffer, uint16_t(layer), uint8_t(level), 0};
     if (attachment == GL_COLOR_ATTACHMENT0) f->color = a;
     else if (attachment == GL_DEPTH_STENCIL_ATTACHMENT || attachment == GL_DEPTH_ATTACHMENT) f->depth = a;
     else if (attachment == GL_STENCIL_ATTACHMENT) { if (!f->depth.object) f->depth = a; }
@@ -2248,7 +2635,12 @@ void APIENTRY RenderbufferStorageMultisample(GLenum, GLsizei samples, GLenum int
     while (n > 1 && !(g_feat.samples & n)) n >>= 1;
     ForgetTarget(rb->image.get());
     ReleaseImage(rb->image);
-    rb->image = MakeImage(uint32_t(width), uint32_t(height), 1, 1, n, format, false, false);
+    // (msrtss: a multisampled renderbuffer is a single-sampled image drawn with n samples, resolved on the tile as it is
+    // stored: its resolve blit becomes a copy)
+    if (n > 1 && g_feat.msrtss) g_nextRenderSamples = n, n = 1;
+    const uint32_t layers = g_nextRenderbufferLayers;
+    g_nextRenderbufferLayers = 1;
+    rb->image = MakeImage(uint32_t(width), uint32_t(height), layers, 1, n, format, false, false);
     b.targetDirty = true;
 }
 void APIENTRY RenderbufferStorage(GLenum target, GLenum internal, GLsizei width, GLsizei height)
@@ -2278,7 +2670,45 @@ void APIENTRY DrawBuffer(GLenum mode)
 }
 void APIENTRY DrawBuffers(GLsizei n, const GLenum* modes) { DrawBuffer(n > 0 ? modes[0] : GL_NONE); }
 void APIENTRY ReadBuffer(GLenum) {}
-void APIENTRY InvalidateFramebuffer(GLenum, GLsizei, const GLenum*) {}
+// The draw framebuffer's attachments not kept: while their rendering instance is still open (recorded, not yet replayed:
+// the threaded stream), its store operations become DONT_CARE, so a tiler never writes them out; a draw or clear into
+// the instance after this stores them again. (Without the worker the instance's stores are already recorded: the
+// transient hint, SetRenderbufferTransient, covers VR's eyes.)
+void ApplyTarget();
+void RestoreInvalidatedStores()
+{
+    if (g_invalidatedColor && g_recColor) g_recColor->storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    if (g_invalidatedDepth && g_recDepth) g_recDepth->storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    if (g_invalidatedDepth && g_recStencil) g_recStencil->storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    g_invalidatedColor = g_invalidatedDepth = false;
+}
+void APIENTRY InvalidateFramebuffer(GLenum target, GLsizei n, const GLenum* attachments)
+{
+    if (!g_recording || target == GL_READ_FRAMEBUFFER || !attachments) return;
+    ApplyTarget();   // (the bound framebuffer's: the open instance if it is the same target)
+    if (!g_inRendering) return;
+    static const bool s_fOff = std::getenv("SLY2N_VKINVALIDATE") && std::atoi(std::getenv("SLY2N_VKINVALIDATE")) == 0;
+    if (s_fOff) return;
+    bool color = false, depth = false, stencil = false;
+    for (GLsizei i = 0; i < n; ++i)
+    {
+        const GLenum a = attachments[i];
+        color |= a == GL_COLOR_ATTACHMENT0 || a == GL_COLOR;
+        depth |= a == GL_DEPTH_ATTACHMENT || a == GL_DEPTH_STENCIL_ATTACHMENT || a == GL_DEPTH;
+        stencil |= a == GL_STENCIL_ATTACHMENT || a == GL_DEPTH_STENCIL_ATTACHMENT || a == GL_STENCIL;
+    }
+    // (depth and stencil share one image: both or neither)
+    if (depth && stencil && g_recDepth && g_recStencil)
+    {
+        g_recDepth->storeOp = g_recStencil->storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        g_invalidatedDepth = true;
+    }
+    if (color && g_recColor && g_target.color && !g_target.color->external)
+    {
+        g_recColor->storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+        g_invalidatedColor = true;
+    }
+}
 
 // ------------------------------------------------------------------------------------------------ state
 bool* Capability(GLenum cap)
@@ -2428,6 +2858,8 @@ VkBlendFactor Factor(GLenum f)
     case GL_SRC_ALPHA_SATURATE: return VK_BLEND_FACTOR_SRC_ALPHA_SATURATE;
     case GL_CONSTANT_COLOR: return VK_BLEND_FACTOR_CONSTANT_COLOR; case GL_ONE_MINUS_CONSTANT_COLOR: return VK_BLEND_FACTOR_ONE_MINUS_CONSTANT_COLOR;
     case GL_CONSTANT_ALPHA: return VK_BLEND_FACTOR_CONSTANT_ALPHA; case GL_ONE_MINUS_CONSTANT_ALPHA: return VK_BLEND_FACTOR_ONE_MINUS_CONSTANT_ALPHA;
+    case GL_SRC1_ALPHA: return VK_BLEND_FACTOR_SRC1_ALPHA; case GL_ONE_MINUS_SRC1_ALPHA: return VK_BLEND_FACTOR_ONE_MINUS_SRC1_ALPHA;
+    case GL_SRC1_COLOR: return VK_BLEND_FACTOR_SRC1_COLOR; case GL_ONE_MINUS_SRC1_COLOR: return VK_BLEND_FACTOR_ONE_MINUS_SRC1_COLOR;
     default: return VK_BLEND_FACTOR_ONE;
     }
 }
@@ -2460,6 +2892,9 @@ void ApplyTarget()
     if (!b.targetDirty) return;
     Target t;
     uint32_t w = 1, h = 1, samples = 1;
+    const bool msrtssWas = b.msrtss, fdmWas = b.fdm, multiviewWas = b.multiview;
+    b.msrtss = false;
+    b.fdm = false;
     if (!s.drawFramebuffer)
     {
         t.color = g_windowImage.get();
@@ -2478,9 +2913,15 @@ void ApplyTarget()
             w = std::max(1u, dims->width >> level);
             h = std::max(1u, dims->height >> level);
             samples = dims->samples;
+            if (dims->renderSamples > 1) samples = dims->renderSamples;
         }
+        b.msrtss = dims && dims->renderSamples > 1;
+        b.fdm = ci && ci->densityMap && f->drawColor;
         if (ci && f->drawColor) { t.color = ci; t.colorLevel = f->color.level; t.colorLayer = f->color.layer; }
         if (di) { t.depth = di; t.depthLevel = f->depth.level; t.depthLayer = f->depth.layer; }
+        // (multiview: every attachment drawn has the two views)
+        const uint8_t views = t.color ? f->color.views : t.depth ? f->depth.views : 0;
+        if (views > 1 && g_feat.multiview && (!t.color || f->color.views == views) && (!t.depth || f->depth.views == views)) t.views = views;
     }
     if (!(t == g_target) || (!g_pendingBegin && !g_inRendering))
     {
@@ -2490,7 +2931,10 @@ void ApplyTarget()
         g_pendingClear = PendingClear{};
     }
     const uint8_t colorFormat = t.color ? 1 : 0, depthFormat = t.depth ? 1 : 0;
-    if (colorFormat != b.colorFormat || depthFormat != b.depthFormat || samples != b.samples) b.pipelineDirty = true;
+    b.multiview = t.views > 1;
+    if (colorFormat != b.colorFormat || depthFormat != b.depthFormat || samples != b.samples || msrtssWas != b.msrtss || fdmWas != b.fdm ||
+        multiviewWas != b.multiview)
+        b.pipelineDirty = true;
     b.hasColor = t.color != nullptr;
     b.hasDepth = t.depth != nullptr;
     b.colorFormat = colorFormat;
@@ -2710,7 +3154,7 @@ VkPipeline CreatePipeline(const PipelineKey& k, const Program& p)
         VkPipelineShaderStageCreateInfo& st = stages[nStages++];
         st.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
         st.stage = kinds[i];
-        st.module = p.modules[i];
+        st.module = (k.pad[2] & 2) && p.modulesMv[i] ? p.modulesMv[i] : p.modules[i];
         st.pName = "main";
     }
     const VertexLayout& l = g_layouts[k.layout];
@@ -2749,6 +3193,9 @@ VkPipeline CreatePipeline(const PipelineKey& k, const Program& p)
     if (g_feat.provokingLast) rs.pNext = &pv;
     VkPipelineMultisampleStateCreateInfo ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
     ms.rasterizationSamples = SampleBits(k.samples);
+    VkMultisampledRenderToSingleSampledInfoEXT msi{VK_STRUCTURE_TYPE_MULTISAMPLED_RENDER_TO_SINGLE_SAMPLED_INFO_EXT};
+    msi.multisampledRenderToSingleSampledEnable = VK_TRUE;
+    msi.rasterizationSamples = SampleBits(k.samples);
     VkPipelineDepthStencilStateCreateInfo ds{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
     ds.maxDepthBounds = 1.0f;
     VkPipelineColorBlendAttachmentState att{};
@@ -2784,6 +3231,22 @@ VkPipeline CreatePipeline(const PipelineKey& k, const Program& p)
     rci.stencilAttachmentFormat = rci.depthAttachmentFormat;
     VkGraphicsPipelineCreateInfo ci{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
     ci.pNext = &rci;
+    if (k.pad[0]) msi.pNext = rci.pNext, rci.pNext = &msi;
+    if ((k.pad[2] & 1) && !k.pad[1]) ci.flags |= VK_PIPELINE_CREATE_RENDERING_FRAGMENT_DENSITY_MAP_ATTACHMENT_BIT_EXT;
+    const bool multiview = (k.pad[2] & 2) != 0;
+    rci.viewMask = multiview ? 3u : 0u;
+    if (k.pad[1])
+    {
+        // (classic fetch: for the render pass object's subpass; any of its load / store variants is compatible)
+        ClassicKey compat;
+        compat.color = colorFormat;
+        compat.depth = k.depthFormat ? g_feat.depthStencil : VK_FORMAT_UNDEFINED;
+        compat.fdm = (k.pad[2] & 1) != 0;
+        compat.viewMask = multiview ? 3 : 0;
+        ci.pNext = nullptr;
+        ci.renderPass = ClassicRenderPass(compat);
+        ci.subpass = 0;
+    }
     ci.stageCount = nStages;
     ci.pStages = stages.data();
     ci.pVertexInputState = &vi;
@@ -2835,6 +3298,9 @@ void ApplyPipeline(GLenum mode, Program& p)
     k.colorFormat = b.colorFormat;
     k.depthFormat = b.depthFormat;
     k.samples = uint8_t(b.samples);
+    k.pad[0] = b.msrtss ? 1 : 0;   // (msrtss: the pipeline carries VkMultisampledRenderToSingleSampledInfoEXT)
+    k.pad[1] = b.classic ? 1 : 0;  // (classic fetch: made for the render pass object)
+    k.pad[2] = uint8_t((b.fdm ? 1 : 0) | (b.multiview ? 2 : 0));   // (drawn with a fragment density map; two views)
     k.colorMask = g_feat.eds3 ? 0xF : uint8_t(s.colorMask);
     k.blend = s.blend && !g_feat.eds3 ? 1 : 0;
     k.polygon = PolygonCode();
@@ -2883,6 +3349,50 @@ std::pair<uint32_t, uint32_t> TextureSlots(unsigned unit, bool array)
     t->image->useSegment = g_segment;
     return {uint32_t(t->image->slot), uint32_t(slot)};
 }
+// A descriptor set of the current frame (freed when it retires).
+VkDescriptorSet FrameSet(VkDescriptorSetLayout layout)
+{
+    Frame& f = Cur();
+    for (;; ++f.setPoolIndex)
+    {
+        if (f.setPoolIndex == f.setPools.size())
+        {
+            const VkDescriptorPoolSize sizes[2] = {{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, kSetPoolSize * kMaxBindings},
+                                                   {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, kSetPoolSize}};
+            VkDescriptorPoolCreateInfo pi{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+            pi.maxSets = kSetPoolSize;
+            pi.poolSizeCount = 2;
+            pi.pPoolSizes = sizes;
+            VkDescriptorPool pool;
+            VKCHECK(vkCreateDescriptorPool(g_device, &pi, nullptr, &pool));
+            f.setPools.push_back(pool);
+        }
+        VkDescriptorSetAllocateInfo ai{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+        ai.descriptorPool = f.setPools[f.setPoolIndex];
+        ai.descriptorSetCount = 1;
+        ai.pSetLayouts = &layout;
+        VkDescriptorSet set;
+        if (vkAllocateDescriptorSets(g_device, &ai, &set) == VK_SUCCESS) return set;
+    }
+}
+// Set 2 for a ring buffer (its range a block's worth; the draw's place in it is the dynamic offset).
+VkDescriptorSet UniformSet(VkBuffer buffer)
+{
+    Frame& f = Cur();
+    for (const auto& [b2, set] : f.uniformSets) if (b2 == buffer) return set;
+    const VkDescriptorSet set = FrameSet(g_setLayoutUniforms);
+    VkDescriptorBufferInfo info{buffer, 0, kPushBytes};
+    VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    w.dstSet = set;
+    w.dstBinding = 0;
+    w.descriptorCount = 1;
+    w.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
+    w.pBufferInfo = &info;
+    vkUpdateDescriptorSets(g_device, 1, &w, 0, nullptr);
+    f.uniformSets.emplace_back(buffer, set);
+    return set;
+}
+
 void ApplyResources(Program& p)
 {
     VkCommandBuffer cmd = g_main;
@@ -2902,7 +3412,20 @@ void ApplyResources(Program& p)
     // (the push constants outlive pipeline binds: only the bytes that differ from what the command buffer holds are
     // pushed, whichever program pushed them; the glob variants share one layout)
     const uint32_t size = p.info->pushSize;
-    if (size && (fProgram || p.dirtyLo < p.dirtyHi))
+    if (p.uniformBuffer)
+    {
+        // (a block larger than the device's push constants: a copy in this frame's ring, bound with a dynamic offset)
+        if (fProgram || p.dirtyLo < p.dirtyHi)
+        {
+            const Upload u = Ring(kPushBytes, g_uniformAlign);
+            std::memcpy(u.cpu, p.constants.data(), size);
+            const VkDescriptorSet set = UniformSet(u.buffer);
+            const uint32_t offset = uint32_t(u.offset);
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, g_pipelineLayout, 2, 1, &set, 1, &offset);
+            ++g_stats.pushes, g_stats.pushBytes += size;
+        }
+    }
+    else if (size && (fProgram || p.dirtyLo < p.dirtyHi))
     {
         uint32_t lo = 0, hi = size;
         if (g_pushValid >= size)
@@ -2929,12 +3452,14 @@ void ApplyResources(Program& p)
     p.dirtyHi = 0;
     b.program = s.program;
     // (the storage buffers pushed again only when the program, a storage binding or a buffer's storage changed)
-    if (p.storageMask && (b.storageProgram != s.program || b.storageEpoch != g_storageEpoch || b.storageAddrEpoch != g_addrEpoch))
+    const uint16_t storageMask = b.multiview ? p.storageMaskMv : p.storageMask;
+    if (storageMask && (b.storageProgram != s.program || b.storageMv != b.multiview || b.storageEpoch != g_storageEpoch ||
+                        b.storageAddrEpoch != g_addrEpoch))
     {
         std::array<VkDescriptorBufferInfo, kMaxBindings> infos{};
         std::array<VkWriteDescriptorSet, kMaxBindings> writes{};
         uint32_t n = 0;
-        unsigned mask = p.storageMask;
+        unsigned mask = storageMask;
         while (mask)
         {
             const unsigned slot = unsigned(std::countr_zero(mask));
@@ -2956,9 +3481,18 @@ void ApplyResources(Program& p)
             w.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
             w.pBufferInfo = &info;
         }
-        vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, g_pipelineLayout, 1, n, writes.data());
+        if (g_feat.pushDescriptors) vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, g_pipelineLayout, 1, n, writes.data());
+        else
+        {
+            // (no push descriptors: a set of this frame's, written now, bound in order)
+            const VkDescriptorSet set = FrameSet(g_setLayoutBuffers);
+            for (uint32_t i = 0; i < n; ++i) writes[i].dstSet = set;
+            vkUpdateDescriptorSets(g_device, n, writes.data(), 0, nullptr);
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, g_pipelineLayout, 1, 1, &set, 0, nullptr);
+        }
         ++g_stats.descriptorPushes;
         b.storageProgram = s.program;
+        b.storageMv = b.multiview;
         b.storageEpoch = g_storageEpoch;
         b.storageAddrEpoch = g_addrEpoch;
     }
@@ -2997,6 +3531,34 @@ void ApplyVertexInput()
     b.vertexLayout = b.layout;
 }
 
+// A CANE_FETCH draw: the attachment as its input attachment (pushed), after the earlier draws' writes to it (a
+// by-region barrier inside the instance: VK_KHR_dynamic_rendering_local_read)
+void ApplyFetch()
+{
+    VkCommandBuffer cmd = g_main;
+    // (multiview: the attachment's own array view: each view reads its layer)
+    const unsigned nviews = g_target.views > 1 ? g_target.views : 1;
+    VkDescriptorImageInfo info{VK_NULL_HANDLE, AttachView(*g_target.color, g_target.colorLevel, g_target.colorLayer, nviews),
+                               g_instanceClassic ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_RENDERING_LOCAL_READ_KHR};
+    VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    w.dstBinding = kFetchBinding;
+    w.descriptorCount = 1;
+    w.descriptorType = VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT;
+    w.pImageInfo = &info;
+    vkCmdPushDescriptorSetKHR(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, g_pipelineLayout, 1, 1, &w);
+    ++g_stats.descriptorPushes;
+    VkMemoryBarrier2 mb{VK_STRUCTURE_TYPE_MEMORY_BARRIER_2};
+    mb.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+    mb.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+    mb.dstStageMask = VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+    mb.dstAccessMask = VK_ACCESS_2_INPUT_ATTACHMENT_READ_BIT;
+    VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+    di.dependencyFlags = VK_DEPENDENCY_BY_REGION_BIT | (nviews > 1 ? VK_DEPENDENCY_VIEW_LOCAL_BIT : 0);   // (multiview: within each view)
+    di.memoryBarrierCount = 1;
+    di.pMemoryBarriers = &mb;
+    vkCmdPipelineBarrier2(cmd, &di);
+}
+
 bool PrepareDraw(GLenum mode)
 {
     if (!g_recording) BeginFrame();
@@ -3004,10 +3566,15 @@ bool PrepareDraw(GLenum mode)
     ApplyTarget();
     Program* p = g_programs.Get(s.program);
     if (!p || !(g_target.color || g_target.depth)) return false;
+    if (p->fetch && (!g_target.color || !g_target.color->inputAttachment)) return false;   // (FramebufferFetchUsable said no)
+    // (an instance begun before the first CANE_FETCH program: begun again in the local-read layout)
+    if (p->fetch && g_inRendering && !g_instanceLocalRead && !g_instanceClassic) EndRendering();
     EnsureRendering();
+    if (g_invalidatedColor || g_invalidatedDepth) RestoreInvalidatedStores();
     ApplyPipeline(mode, *p);
     ApplyDynamic();
     ApplyResources(*p);
+    if (p->fetch) ApplyFetch();
     ApplyVertexInput();
     ++g_stats.draws;
     return true;
@@ -3096,6 +3663,9 @@ void ClearMasked(bool color, bool depth, bool stencil)
     k.colorFormat = b.colorFormat;
     k.depthFormat = b.depthFormat;
     k.samples = uint8_t(b.samples);
+    k.pad[0] = b.msrtss ? 1 : 0;   // (msrtss: the pipeline carries VkMultisampledRenderToSingleSampledInfoEXT)
+    k.pad[1] = b.classic ? 1 : 0;  // (classic fetch: made for the render pass object)
+    k.pad[2] = uint8_t((b.fdm ? 1 : 0) | (b.multiview ? 2 : 0));   // (drawn with a fragment density map; two views)
     k.colorMask = g_feat.eds3 ? 0xF : uint8_t(color ? s.colorMask : 0);
     const VkPipeline pipeline = PipelineFor(k, *p);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
@@ -3166,6 +3736,7 @@ void APIENTRY Clear(GLbitfield mask)
         return;
     }
     EnsureRendering();
+    if (g_invalidatedColor || g_invalidatedDepth) RestoreInvalidatedStores();
     VkClearAttachment atts[2];
     uint32_t n = 0;
     if (color) atts[n++] = {VK_IMAGE_ASPECT_COLOR_BIT, 0, cv};
@@ -3344,6 +3915,7 @@ void APIENTRY DeleteProgram(GLuint program)
     if (!p) return;
     // (its modules stay until the end: pipelines made from them may still be bound; a few kilobytes, once per program)
     for (VkShaderModule m : p->modules) if (m) g_retiredModules.push_back(m);
+    for (VkShaderModule m : p->modulesMv) if (m) g_retiredModules.push_back(m);
     if (s.program == program) s.program = 0;
     if (b.program == program) b.program = ~0u;
 }
@@ -3563,6 +4135,7 @@ void APIENTRY GetIntegerv(GLenum pname, GLint* v)
     case GL_MAX_TEXTURE_IMAGE_UNITS: case GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS: *v = GLint(kMaxUnits); break;
     case GL_MAX_VERTEX_ATTRIBS: *v = GLint(kGenericBinding); break;
     case GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS: case GL_MAX_UNIFORM_BUFFER_BINDINGS: *v = GLint(kMaxBindings); break;
+    case GL_MAX_DUAL_SOURCE_DRAW_BUFFERS: *v = g_feat.dualSrcBlend ? 1 : 0; break;
     case GL_SHADER_STORAGE_BUFFER_OFFSET_ALIGNMENT: *v = GLint(std::max<VkDeviceSize>(g_props.limits.minStorageBufferOffsetAlignment, 4)); break;
     case GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT: *v = GLint(std::max<VkDeviceSize>(g_props.limits.minUniformBufferOffsetAlignment, 4)); break;
     case GL_MAX_SHADER_STORAGE_BLOCK_SIZE: *v = GLint(std::min<uint32_t>(g_props.limits.maxStorageBufferRange, 0x7FFFFFFF)); break;
@@ -3711,6 +4284,19 @@ std::vector<VkSemaphore> g_presentSemaphores;
 VkExtent2D g_swapExtent{};
 int g_swapInterval = 1;
 bool g_swapchainStale = false;
+// Pre-rotation (Android, the submission worker): a phone held in landscape has a display turned against its panel;
+// the swapchain then takes the display's own orientation and transform, and the window's picture is drawn into it
+// turned (shaders/present.*) instead of being copied, so the compositor need not turn every frame.
+uint32_t g_swapRotation = 0;                 // the swapchain's clockwise quarter turns (0: identity, the copy)
+bool g_swapTransformMatches = true;          // its transform was the display's when made (SUBOPTIMAL: the display turned)
+std::vector<VkImageView> g_swapViews;
+GLuint g_presentProgram = 0;
+VkPipeline g_presentPipeline = VK_NULL_HANDLE;
+VkFormat g_presentPipelineFormat = VK_FORMAT_UNDEFINED;
+uint64_t (*g_surfaceSerialFn)() = nullptr;   // (SetSurfaceSerial)
+uint64_t g_surfaceSerial = 0;                // the serial g_surface was made for (0: none)
+unsigned g_surfaceRetry = 0;                 // frames until a failed surface is tried again
+bool g_headlessWsi = false;                  // (SLY2N_VKHEADLESSWSI: the surface is a VK_EXT_headless_surface one)
 
 GLuint MakeBlack(bool array)
 {
@@ -3737,10 +4323,12 @@ VkCommandBuffer WorkerRecord(Frame& f, const Stream& stream)
     return cmd;
 }
 // (recorded as one deferred command: the image index is the worker's)
-struct WindowPicture { VkImage image; uint32_t width, height; };
+struct WindowPicture { VkImage image; uint32_t width, height; uint32_t rotation = 0, imageSlot = 0, samplerSlot = 0; };
+void RecordPresentDraw(VkCommandBuffer cmd, uint32_t index, const WindowPicture& win);
 void RecordSwapBlit(VkCommandBuffer cmd, uint32_t index, WindowPicture win)
 {
     if (index == UINT32_MAX) return;
+    if (win.rotation) return RecordPresentDraw(cmd, index, win);
     VkImageMemoryBarrier2 sw{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
     sw.srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
     sw.dstStageMask = VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT;
@@ -3772,6 +4360,16 @@ void RecordSwapBlit(VkCommandBuffer cmd, uint32_t index, WindowPicture win)
     sw.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
     cane::vk::vkCmdPipelineBarrier2(cmd, &di);
 }
+// (SLY2N_FPSLOG: the worker's thread CPU time: all of it, and its recording and submission)
+std::atomic<int64_t> g_workerCpuNs{0}, g_workerRecordCpuNs{0};
+int64_t ThreadCpuNs()
+{
+#if defined(CLOCK_THREAD_CPUTIME_ID) && !defined(_WIN32)
+    timespec ts{};
+    if (clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts) == 0) return int64_t(ts.tv_sec) * 1000000000 + ts.tv_nsec;
+#endif
+    return 0;
+}
 void WorkerLoop()
 {
     for (;;)
@@ -3801,15 +4399,17 @@ void WorkerLoop()
                 g_workerIndex = index;
                 wait = f.acquire;
                 signal = g_presentSemaphores[index];
-                if (r == VK_SUBOPTIMAL_KHR) g_presentStale = true;
+                if (r == VK_SUBOPTIMAL_KHR && (kSuboptimalStale || g_swapTransformMatches)) g_presentStale = true;
             }
             else g_presentStale = true;
         }
         VkCommandBuffer cmds[2];
         uint32_t n = 0;
+        const int64_t nsRecord0 = ThreadCpuNs();
         if (bt.pre) cmds[n++] = WorkerRecord(f, *bt.pre);
         cmds[n++] = WorkerRecord(f, *bt.main);
         SubmitBatch(cmds, n, bt.value, wait, signal);
+        g_workerRecordCpuNs += ThreadCpuNs() - nsRecord0;
         if (g_workerIndex != UINT32_MAX)
         {
             VkPresentInfoKHR pi{VK_STRUCTURE_TYPE_PRESENT_INFO_KHR};
@@ -3819,9 +4419,12 @@ void WorkerLoop()
             pi.pSwapchains = &g_swapchain;
             pi.pImageIndices = &g_workerIndex;
             const VkResult r = vkQueuePresentKHR(g_queue, &pi);
-            if (r == VK_ERROR_OUT_OF_DATE_KHR || r == VK_SUBOPTIMAL_KHR) g_presentStale = true;
+            if (r == VK_ERROR_OUT_OF_DATE_KHR || r == VK_ERROR_SURFACE_LOST_KHR || (r == VK_SUBOPTIMAL_KHR && (kSuboptimalStale || g_swapTransformMatches)))
+                g_presentStale = true;
             else if (r == VK_ERROR_DEVICE_LOST) Fatal("the GPU device was lost");
         }
+        for (auto& fn : bt.after) fn();
+        g_workerCpuNs = ThreadCpuNs();
         {
             std::lock_guard<std::mutex> lock(g_workerMutex);
             if (bt.pre) bt.pre->Clear(), g_freeStreams.push_back(bt.pre);
@@ -3856,6 +4459,116 @@ void StopWorker()
     g_freeStreams.clear();
 }
 
+// (pre-rotation) the present program's pipeline for the swapchain's format: no vertex input, no depth, no blending
+void CreatePresentPipeline(VkFormat format)
+{
+    Program* p = g_programs.Get(g_presentProgram);
+    if (!p) return;
+    if (g_presentPipeline) vkDestroyPipeline(g_device, g_presentPipeline, nullptr);
+    g_presentPipeline = VK_NULL_HANDLE;
+    VkPipelineShaderStageCreateInfo stages[2]{};
+    for (unsigned k = 0; k < 2; ++k)
+    {
+        stages[k].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        stages[k].stage = k ? VK_SHADER_STAGE_FRAGMENT_BIT : VK_SHADER_STAGE_VERTEX_BIT;
+        stages[k].module = p->modules[k ? 2 : 0];
+        stages[k].pName = "main";
+    }
+    VkPipelineVertexInputStateCreateInfo vi{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
+    VkPipelineInputAssemblyStateCreateInfo ia{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
+    ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    VkPipelineViewportStateCreateInfo vp{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
+    vp.viewportCount = vp.scissorCount = 1;
+    VkPipelineRasterizationStateCreateInfo rs{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
+    rs.polygonMode = VK_POLYGON_MODE_FILL;
+    rs.cullMode = VK_CULL_MODE_NONE;
+    rs.lineWidth = 1.0f;
+    VkPipelineMultisampleStateCreateInfo ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
+    ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    VkPipelineColorBlendAttachmentState att{};
+    att.colorWriteMask = 0xF;
+    VkPipelineColorBlendStateCreateInfo cb{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
+    cb.attachmentCount = 1;
+    cb.pAttachments = &att;
+    const VkDynamicState dyn[2] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+    VkPipelineDynamicStateCreateInfo ds{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
+    ds.dynamicStateCount = 2;
+    ds.pDynamicStates = dyn;
+    VkPipelineRenderingCreateInfo rci{VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO};
+    rci.colorAttachmentCount = 1;
+    rci.pColorAttachmentFormats = &format;
+    VkGraphicsPipelineCreateInfo ci{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
+    ci.pNext = &rci;
+    ci.stageCount = 2;
+    ci.pStages = stages;
+    ci.pVertexInputState = &vi;
+    ci.pInputAssemblyState = &ia;
+    ci.pViewportState = &vp;
+    ci.pRasterizationState = &rs;
+    ci.pMultisampleState = &ms;
+    ci.pColorBlendState = &cb;
+    ci.pDynamicState = &ds;
+    ci.layout = g_pipelineLayout;
+    if (vkCreateGraphicsPipelines(g_device, g_pipelineCache, 1, &ci, nullptr, &g_presentPipeline) != VK_SUCCESS) g_presentPipeline = VK_NULL_HANDLE;
+    g_presentPipelineFormat = g_presentPipeline ? format : VK_FORMAT_UNDEFINED;
+}
+// (the worker) the window's picture drawn turned into swapchain image `index` (pre-rotation; else RecordSwapBlit's copy)
+void RecordPresentDraw(VkCommandBuffer cmd, uint32_t index, const WindowPicture& win)
+{
+    Program* p = g_programs.Get(g_presentProgram);
+    VkImageMemoryBarrier2 sw{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER_2};
+    sw.srcStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+    sw.dstStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+    sw.dstAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+    sw.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    sw.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    sw.srcQueueFamilyIndex = sw.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    sw.image = g_swapImages[index];
+    sw.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    VkDependencyInfo di{VK_STRUCTURE_TYPE_DEPENDENCY_INFO};
+    di.imageMemoryBarrierCount = 1;
+    di.pImageMemoryBarriers = &sw;
+    cane::vk::vkCmdPipelineBarrier2(cmd, &di);
+    VkRenderingAttachmentInfo ca{VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO};
+    ca.imageView = g_swapViews[index];
+    ca.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    ca.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    ca.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    VkRenderingInfo ri{VK_STRUCTURE_TYPE_RENDERING_INFO};
+    ri.renderArea = {{0, 0}, g_swapExtent};
+    ri.layerCount = 1;
+    ri.colorAttachmentCount = 1;
+    ri.pColorAttachments = &ca;
+    cane::vk::vkCmdBeginRendering(cmd, &ri);
+    if (p && g_presentPipeline)
+    {
+        const VkViewport viewport{0.0f, 0.0f, float(g_swapExtent.width), float(g_swapExtent.height), 0.0f, 1.0f};
+        const VkRect2D scissor{{0, 0}, g_swapExtent};
+        cane::vk::vkCmdSetViewport(cmd, 0, 1, &viewport);
+        cane::vk::vkCmdSetScissor(cmd, 0, 1, &scissor);
+        cane::vk::vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, g_presentPipeline);
+        cane::vk::vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, g_pipelineLayout, 0, 1, &g_textureSet, 0, nullptr);
+        // (the program's push constants: the picture's slot pair, the turn)
+        uint8_t push[64] = {};
+        for (uint32_t i = 0; i < p->info->uniformCount; ++i)
+        {
+            const Shaders::Uniform& u = p->info->uniforms[i];
+            if (u.type >= 32) { const uint32_t pair[2] = {win.imageSlot, win.samplerSlot}; std::memcpy(push + u.offset, pair, 8); }
+            else if (!std::strcmp(u.name, "rotation")) { const int32_t r = int32_t(win.rotation); std::memcpy(push + u.offset, &r, 4); }
+        }
+        cane::vk::vkCmdPushConstants(cmd, g_pipelineLayout, g_stages, 0, std::min<uint32_t>(p->info->pushSize, sizeof push), push);
+        cane::vk::vkCmdDraw(cmd, 3, 1, 0, 0);
+    }
+    cane::vk::vkCmdEndRendering(cmd);
+    sw.srcStageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+    sw.srcAccessMask = VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+    sw.dstStageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+    sw.dstAccessMask = 0;
+    sw.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    sw.newLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    cane::vk::vkCmdPipelineBarrier2(cmd, &di);
+}
+
 void DestroySwapchain()
 {
     if (!g_device) return;
@@ -3863,6 +4576,8 @@ void DestroySwapchain()
     vkDeviceWaitIdle(g_device);
     for (VkSemaphore sem : g_presentSemaphores) vkDestroySemaphore(g_device, sem, nullptr);
     g_presentSemaphores.clear();
+    for (VkImageView v : g_swapViews) vkDestroyImageView(g_device, v, nullptr);
+    g_swapViews.clear();
     if (g_swapchain) vkDestroySwapchainKHR(g_device, g_swapchain, nullptr);
     g_swapchain = VK_NULL_HANDLE;
     g_swapImages.clear();
@@ -3870,12 +4585,22 @@ void DestroySwapchain()
 VkPresentModeKHR g_swapMode = VK_PRESENT_MODE_MAX_ENUM_KHR;
 bool CreateSwapchain(std::string* error)
 {
+    if (!g_surface) return true;   // (Android in the background: no surface until the app returns)
     VkSurfaceCapabilitiesKHR caps;
     if (vkGetPhysicalDeviceSurfaceCapabilitiesKHR(g_phys, g_surface, &caps) != VK_SUCCESS) { if (error) *error = "surface capabilities"; return false; }
     int fbw = 0, fbh = 0;
     glfwGetFramebufferSize(g_window, &fbw, &fbh);
     VkExtent2D extent = caps.currentExtent;
     if (extent.width == UINT32_MAX) extent = {uint32_t(std::max(fbw, 1)), uint32_t(std::max(fbh, 1))};
+    uint32_t rotation = 0;
+#if defined(__ANDROID__)
+    static const bool s_fNoPreRotate = std::getenv("SLY2N_VKNOPREROTATE") && std::atoi(std::getenv("SLY2N_VKNOPREROTATE")) != 0;
+    if (g_threaded && g_presentProgram && !s_fNoPreRotate && (caps.supportedTransforms & caps.currentTransform))
+        rotation = caps.currentTransform == VK_SURFACE_TRANSFORM_ROTATE_90_BIT_KHR ? 1 : caps.currentTransform == VK_SURFACE_TRANSFORM_ROTATE_180_BIT_KHR ? 2
+                 : caps.currentTransform == VK_SURFACE_TRANSFORM_ROTATE_270_BIT_KHR ? 3 : 0;
+    // (Android reports the extent as the app sees it: the image in the display's orientation has it the other way)
+    if (rotation == 1 || rotation == 3) std::swap(extent.width, extent.height);
+#endif
     extent.width = std::clamp(extent.width, caps.minImageExtent.width, caps.maxImageExtent.width);
     extent.height = std::clamp(extent.height, caps.minImageExtent.height, caps.maxImageExtent.height);
     if (!extent.width || !extent.height) return true;   // (minimized: no swapchain until it has a size)
@@ -3901,9 +4626,10 @@ bool CreateSwapchain(std::string* error)
     ci.imageColorSpace = chosen.colorSpace;
     ci.imageExtent = extent;
     ci.imageArrayLayers = 1;
-    ci.imageUsage = VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    ci.imageUsage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | (rotation ? VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT : 0);
     ci.imageSharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    ci.preTransform = (caps.supportedTransforms & VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR) ? VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR : caps.currentTransform;
+    ci.preTransform = rotation ? caps.currentTransform
+                    : (caps.supportedTransforms & VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR) ? VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR : caps.currentTransform;
     ci.compositeAlpha = (caps.supportedCompositeAlpha & VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR) ? VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR
                       : VkCompositeAlphaFlagBitsKHR(caps.supportedCompositeAlpha & (~caps.supportedCompositeAlpha + 1));
     ci.presentMode = mode;
@@ -3926,7 +4652,76 @@ bool CreateSwapchain(std::string* error)
     g_swapMode = mode;
     g_swapExtent = extent;
     g_swapchainStale = false;
+    g_swapRotation = rotation;
+    g_swapTransformMatches = ci.preTransform == caps.currentTransform;
+    if (rotation)
+    {
+        for (VkImage image : g_swapImages)
+        {
+            VkImageViewCreateInfo vi{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+            vi.image = image;
+            vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
+            vi.format = chosen.format;
+            vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            VkImageView v;
+            VKCHECK(vkCreateImageView(g_device, &vi, nullptr, &v));
+            g_swapViews.push_back(v);
+        }
+        if (g_presentPipelineFormat != chosen.format) CreatePresentPipeline(chosen.format);
+    }
+    std::printf("Vulkan: swapchain %ux%u (surface %ux%u, transform 0x%x, %s)\n", extent.width, extent.height, caps.currentExtent.width,
+                caps.currentExtent.height, unsigned(caps.currentTransform), rotation ? "pre-rotated" : "identity");
     return true;
+}
+
+// The surface without its swapchain (Android: the activity's surface went away or failed; PollSurface makes it again).
+void DropSurface()
+{
+    DestroySwapchain();
+    if (g_surface && vkDestroySurfaceKHR) vkDestroySurfaceKHR(g_instance, g_surface, nullptr);
+    g_surface = VK_NULL_HANDLE;
+}
+// (SetSurfaceSerial) the platform's surface replaced or gone: the swapchain and surface follow; while there is none the
+// frames are rendered and submitted without a present.
+void PollSurface()
+{
+    if (!g_surfaceSerialFn) return;
+    const uint64_t serial = g_surfaceSerialFn();
+    if (serial != g_surfaceSerial)
+    {
+        if (g_surface) DropSurface();
+        g_surfaceSerial = serial;
+        g_surfaceRetry = 0;
+        std::printf("Vulkan: %s\n", serial ? "the window has a new surface" : "no window surface (in the background)");
+    }
+    if (g_surface || !serial) return;
+    if (g_surfaceRetry) { --g_surfaceRetry; return; }
+    VkSurfaceKHR surface = VK_NULL_HANDLE;
+    VkResult r = VK_ERROR_INITIALIZATION_FAILED;
+    if (g_headlessWsi)
+    {
+        auto create = reinterpret_cast<PFN_vkCreateHeadlessSurfaceEXT>(vkGetInstanceProcAddr(g_instance, "vkCreateHeadlessSurfaceEXT"));
+        VkHeadlessSurfaceCreateInfoEXT hi{VK_STRUCTURE_TYPE_HEADLESS_SURFACE_CREATE_INFO_EXT};
+        if (create) r = create(g_instance, &hi, nullptr, &surface);
+    }
+    else r = glfwCreateWindowSurface(g_instance, g_window, nullptr, &surface);
+    if (r != VK_SUCCESS || !surface)
+    {
+        std::printf("Vulkan: no surface for the window yet (%d): trying again\n", int(r));
+        g_surfaceRetry = 30;
+        return;
+    }
+    VkBool32 present = VK_FALSE;
+    vkGetPhysicalDeviceSurfaceSupportKHR(g_phys, g_queueFamily, surface, &present);
+    if (!present)
+    {
+        std::printf("Vulkan: the queue cannot present to the new surface\n");
+        vkDestroySurfaceKHR(g_instance, surface, nullptr);
+        g_surfaceRetry = 600;
+        return;
+    }
+    g_surface = surface;
+    g_swapchainStale = true;
 }
 
 // The window's picture at the window's size (framebuffer 0), made again when the window's size changes.
@@ -3946,7 +4741,12 @@ void ResizeWindowImage()
         ReleaseImage(g_windowImage);
         g_swapchainStale = true;
     }
+#if defined(__ANDROID__)
+    // (Android: also sampled, by the pre-rotated present's draw: RecordPresentDraw)
+    g_windowImage = MakeImage(w, h, 1, 1, 1, VK_FORMAT_R8G8B8A8_UNORM, false, false, VK_IMAGE_USAGE_SAMPLED_BIT);
+#else
     g_windowImage = MakeImage(w, h, 1, 1, 1, VK_FORMAT_R8G8B8A8_UNORM, false, false);
+#endif
     g_outputWidth = w;
     g_outputHeight = h;
     b.targetDirty = true;
@@ -4019,6 +4819,7 @@ bool Initialize(GLFWwindow* window, const Options& options, std::string* error)
     // copy / present path runs without anything on the screen)
     const bool fHeadlessWsi = !g_visible && std::getenv("SLY2N_VKHEADLESSWSI") && std::atoi(std::getenv("SLY2N_VKHEADLESSWSI")) != 0;
     if (fHeadlessWsi) g_visible = true;
+    g_headlessWsi = fHeadlessWsi;
     g_swapInterval = std::clamp(options.swapInterval, 0, 1);
     g_cachePath = options.pipelineCachePath;
     g_onFatal = options.onFatal;
@@ -4054,7 +4855,14 @@ bool Initialize(GLFWwindow* window, const Options& options, std::string* error)
     ici.ppEnabledExtensionNames = extensions.data();
     ici.enabledLayerCount = uint32_t(layers.size());
     ici.ppEnabledLayerNames = layers.data();
-    if (vkCreateInstance(&ici, nullptr, &g_instance) != VK_SUCCESS) return fail("vkCreateInstance failed");
+    g_external = options.external;
+    if (g_external)
+    {
+        // (VR) through the OpenXR runtime, which adds the extensions it needs
+        if (g_external->createInstance(g_external->user, vkGetInstanceProcAddr, &ici, &g_instance) != VK_SUCCESS)
+            return fail("the OpenXR runtime could not create the Vulkan instance");
+    }
+    else if (vkCreateInstance(&ici, nullptr, &g_instance) != VK_SUCCESS) return fail("vkCreateInstance failed");
     if (!LoadInstance(g_instance, error)) return fail(error ? *error : "instance entry points");
     if (fValidate && vkCreateDebugUtilsMessengerEXT)
     {
@@ -4078,6 +4886,13 @@ bool Initialize(GLFWwindow* window, const Options& options, std::string* error)
     std::vector<VkPhysicalDevice> devices(n);
     vkEnumeratePhysicalDevices(g_instance, &n, devices.data());
     if (devices.empty()) return fail("no Vulkan device");
+    if (g_external)
+    {
+        // (VR) the runtime's device only
+        const VkPhysicalDevice pdXr = g_external->physicalDevice(g_external->user, g_instance);
+        if (!pdXr) return fail("the OpenXR runtime named no Vulkan device");
+        devices.assign(1, pdXr);
+    }
     const char* szWanted = std::getenv("SLY2N_VKDEVICE");
     std::string reasons;
     int bestScore = -1;
@@ -4093,25 +4908,54 @@ bool Initialize(GLFWwindow* window, const Options& options, std::string* error)
         vkEnumerateDeviceExtensionProperties(pd, nullptr, &ne, nullptr);
         std::vector<VkExtensionProperties> exts(ne);
         vkEnumerateDeviceExtensionProperties(pd, nullptr, &ne, exts.data());
-        if (!HasExtension(exts, VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME)) { reject("no VK_KHR_push_descriptor"); continue; }
+        // (push descriptors and 256 push-constant bytes where the device has them; else per-frame descriptor sets and
+        // the programs' uniform-buffer variants, vk_shaders.h spirvUbo)
+        const bool hasPushDescriptors = HasExtension(exts, VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME) && !std::getenv("SLY2N_VKNOPUSHDESC");
         if (g_visible && !HasExtension(exts, VK_KHR_SWAPCHAIN_EXTENSION_NAME)) { reject("no swapchain"); continue; }
         VkPhysicalDeviceExtendedDynamicState3FeaturesEXT fe3{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTENDED_DYNAMIC_STATE_3_FEATURES_EXT};
         const bool hasEds3 = HasExtension(exts, VK_EXT_EXTENDED_DYNAMIC_STATE_3_EXTENSION_NAME) && !std::getenv("SLY2N_VKNOEDS3");
-        VkPhysicalDeviceProvokingVertexFeaturesEXT fpv{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROVOKING_VERTEX_FEATURES_EXT, hasEds3 ? &fe3 : nullptr};
+        VkPhysicalDeviceDynamicRenderingLocalReadFeaturesKHR flr{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_LOCAL_READ_FEATURES_KHR,
+                                                                 hasEds3 ? &fe3 : nullptr};
+        // (the in-place read: tile GPUs (Android), or SLY2N_SHFETCH=1 (a test elsewhere); the desktop keeps its images as
+        // they were, without the input-attachment use)
+#if defined(__ANDROID__)
+        const bool wantLocalRead = !(std::getenv("SLY2N_SHFETCH") && std::atoi(std::getenv("SLY2N_SHFETCH")) == 0);
+#else
+        const bool wantLocalRead = std::getenv("SLY2N_SHFETCH") && std::atoi(std::getenv("SLY2N_SHFETCH")) != 0;
+#endif
+        // (SLY2N_VKNOLOCALREAD=1: as a driver without it: the classic fetch, a test where the driver has local read)
+        const bool hasLocalRead = wantLocalRead && HasExtension(exts, VK_KHR_DYNAMIC_RENDERING_LOCAL_READ_EXTENSION_NAME) &&
+                                  !(std::getenv("SLY2N_VKNOLOCALREAD") && std::atoi(std::getenv("SLY2N_VKNOLOCALREAD")) != 0);
+        VkPhysicalDeviceProvokingVertexFeaturesEXT fpv{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROVOKING_VERTEX_FEATURES_EXT, &flr};
         const bool hasProvoking = HasExtension(exts, VK_EXT_PROVOKING_VERTEX_EXTENSION_NAME);
-        VkPhysicalDeviceVulkan13Features f13{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES, &fpv};
+#if defined(__ANDROID__)
+        // (a tiler's GL-style MSAA: GL_EXT_multisampled_render_to_texture's Vulkan form; SLY2N_VKMSRTSS=0: real MSAA images)
+        const bool hasMsrtss = HasExtension(exts, VK_EXT_MULTISAMPLED_RENDER_TO_SINGLE_SAMPLED_EXTENSION_NAME) &&
+                               !(std::getenv("SLY2N_VKMSRTSS") && std::atoi(std::getenv("SLY2N_VKMSRTSS")) == 0);
+#else
+        const bool hasMsrtss = false;
+#endif
+        const bool hasFdm = HasExtension(exts, VK_EXT_FRAGMENT_DENSITY_MAP_EXTENSION_NAME) &&
+                            !(std::getenv("SLY2N_VKFDM") && std::atoi(std::getenv("SLY2N_VKFDM")) == 0);
+        VkPhysicalDeviceFragmentDensityMapFeaturesEXT ffdm{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_DENSITY_MAP_FEATURES_EXT, &fpv};
+        VkPhysicalDeviceVulkan13Features f13{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES, hasFdm ? static_cast<void*>(&ffdm) : static_cast<void*>(&fpv)};
         VkPhysicalDeviceVulkan12Features f12{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES, &f13};
-        VkPhysicalDeviceFeatures2 f2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, &f12};
+        VkPhysicalDeviceVulkan11Features f11{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES, &f12};
+        VkPhysicalDeviceFeatures2 f2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, &f11};
         vkGetPhysicalDeviceFeatures2(pd, &f2);
         if (!f13.dynamicRendering || !f13.synchronization2) { reject("no dynamic rendering / synchronization2"); continue; }
         if (!f12.timelineSemaphore || !f12.hostQueryReset) { reject("no timeline semaphores"); continue; }
         if (!f12.runtimeDescriptorArray || !f12.descriptorBindingPartiallyBound || !f12.descriptorBindingSampledImageUpdateAfterBind ||
             !f12.descriptorBindingUpdateUnusedWhilePending) { reject("no descriptor indexing"); continue; }
         VkPhysicalDevicePushDescriptorPropertiesKHR pp{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PUSH_DESCRIPTOR_PROPERTIES_KHR};
-        VkPhysicalDeviceProperties2 p2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, &pp};
+        VkPhysicalDeviceFragmentDensityMapPropertiesEXT pfdm{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_DENSITY_MAP_PROPERTIES_EXT, &pp};
+        VkPhysicalDeviceProperties2 p2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, hasFdm ? static_cast<void*>(&pfdm) : static_cast<void*>(&pp)};
         vkGetPhysicalDeviceProperties2(pd, &p2);
-        if (pp.maxPushDescriptors < kMaxBindings) { reject("too few push descriptors"); continue; }
-        if (props.limits.maxPushConstantsSize < kPushBytes) { reject("too few push-constant bytes"); continue; }
+        const bool pushDescriptors = hasPushDescriptors && pp.maxPushDescriptors >= kMaxBindings;
+        uint32_t pushBytes = std::min(props.limits.maxPushConstantsSize, kPushBytes);
+        if (const char* sz = std::getenv("SLY2N_VKPUSHBYTES"); sz && std::atoi(sz) >= 128) pushBytes = std::min(pushBytes, uint32_t(std::atoi(sz)));
+        if (pushBytes < 128) { reject("fewer than 128 push-constant bytes"); continue; }
+        if (pushBytes < kPushBytes && props.limits.maxDescriptorSetUniformBuffersDynamic < 1) { reject("no dynamic uniform buffers"); continue; }
         uint32_t nq = 0;
         vkGetPhysicalDeviceQueueFamilyProperties(pd, &nq, nullptr);
         std::vector<VkQueueFamilyProperties> queues(nq);
@@ -4142,6 +4986,7 @@ bool Initialize(GLFWwindow* window, const Options& options, std::string* error)
             g_props = props;
             g_feat = Features{};
             g_feat.geometry = f2.features.geometryShader;
+            g_feat.dualSrcBlend = f2.features.dualSrcBlend;
             g_feat.wideLines = f2.features.wideLines;
             g_feat.lineWidthMax = props.limits.lineWidthRange[1];
             g_feat.anisotropy = f2.features.samplerAnisotropy;
@@ -4150,12 +4995,26 @@ bool Initialize(GLFWwindow* window, const Options& options, std::string* error)
             g_feat.firstInstance = f2.features.drawIndirectFirstInstance;
             g_feat.fillModeNonSolid = f2.features.fillModeNonSolid;
             g_feat.provokingLast = hasProvoking && fpv.provokingVertexLast;
+            g_feat.msrtss = hasMsrtss;
+            g_feat.fdm = hasFdm && ffdm.fragmentDensityMap && ffdm.fragmentDensityMapNonSubsampledImages;
+            if (g_feat.fdm) g_feat.fdmTexel = pfdm.maxFragmentDensityTexelSize;
             g_feat.demote = f13.shaderDemoteToHelperInvocation;
             g_feat.eds3 = hasEds3 && fe3.extendedDynamicState3ColorBlendEnable && fe3.extendedDynamicState3ColorBlendEquation &&
                           fe3.extendedDynamicState3ColorWriteMask;
             g_feat.nonUniform = f12.shaderSampledImageArrayNonUniformIndexing;
+            g_feat.pushDescriptors = pushDescriptors;
+            g_feat.pushBytes = pushBytes;
+            g_uniformAlign = uint32_t(std::max<VkDeviceSize>(props.limits.minUniformBufferOffsetAlignment, 16));
+            // (the in-place read's input attachment is pushed after the storage buffers: push descriptors only)
+            g_feat.localRead = hasLocalRead && flr.dynamicRenderingLocalRead && pushDescriptors && pp.maxPushDescriptors > kMaxBindings;
+            g_feat.classicFetch = !g_feat.localRead && wantLocalRead && f12.imagelessFramebuffer && pushDescriptors &&
+                                  pp.maxPushDescriptors > kMaxBindings &&
+                                  !(std::getenv("SLY2N_VKCLASSICFETCH") && std::atoi(std::getenv("SLY2N_VKCLASSICFETCH")) == 0);
             g_feat.samples = props.limits.framebufferColorSampleCounts & props.limits.framebufferDepthSampleCounts &
                              props.limits.framebufferStencilSampleCounts;
+            // (VR's two views in one pass; SLY2N_VKMULTIVIEW=0: not offered)
+            g_feat.multiview = f11.multiview && !(std::getenv("SLY2N_VKMULTIVIEW") && std::atoi(std::getenv("SLY2N_VKMULTIVIEW")) == 0);
+            g_feat.multiviewGeometry = g_feat.multiview && f11.multiviewGeometryShader;
         }
     }
     if (!g_phys) return fail("no suitable Vulkan device (" + reasons + ")");
@@ -4167,6 +5026,12 @@ bool Initialize(GLFWwindow* window, const Options& options, std::string* error)
         if (f == VK_FORMAT_D32_SFLOAT_S8_UINT && !ok) g_feat.depthStencil = VK_FORMAT_D24_UNORM_S8_UINT;
         if (f == VK_FORMAT_D24_UNORM_S8_UINT && !ok) g_feat.depth24 = g_feat.depthStencil;
     }
+#if defined(__ANDROID__)
+    // (Android: D24S8 where it attaches, as OpenGL ES there: a tiler keeps fewer bytes a pixel on chip, so bigger tiles
+    // (the Quest 3S's eyes in 8 tiles, not 12: Paris 36 -> 42 fps); SLY2N_VKD24=0: D32S8)
+    if (g_feat.depth24 == VK_FORMAT_D24_UNORM_S8_UINT && !(std::getenv("SLY2N_VKD24") && std::atoi(std::getenv("SLY2N_VKD24")) == 0))
+        g_feat.depthStencil = VK_FORMAT_D24_UNORM_S8_UINT;
+#endif
     // (one depth format for every target: the pipelines' depth format is the device's)
     g_feat.depth24 = g_feat.depthStencil;
     vkGetPhysicalDeviceMemoryProperties(g_phys, &g_memProps);
@@ -4181,6 +5046,15 @@ bool Initialize(GLFWwindow* window, const Options& options, std::string* error)
     VkPhysicalDeviceProvokingVertexFeaturesEXT fpv{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROVOKING_VERTEX_FEATURES_EXT};
     fpv.provokingVertexLast = VK_TRUE;
     void* chain = nullptr;
+    VkPhysicalDeviceMultisampledRenderToSingleSampledFeaturesEXT fms{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MULTISAMPLED_RENDER_TO_SINGLE_SAMPLED_FEATURES_EXT};
+    fms.multisampledRenderToSingleSampled = VK_TRUE;
+    if (g_feat.msrtss) fms.pNext = chain, chain = &fms;
+    VkPhysicalDeviceFragmentDensityMapFeaturesEXT ffdmOn{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_DENSITY_MAP_FEATURES_EXT};
+    ffdmOn.fragmentDensityMap = ffdmOn.fragmentDensityMapNonSubsampledImages = VK_TRUE;
+    if (g_feat.fdm) ffdmOn.pNext = chain, chain = &ffdmOn;
+    VkPhysicalDeviceDynamicRenderingLocalReadFeaturesKHR flr{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_LOCAL_READ_FEATURES_KHR};
+    flr.dynamicRenderingLocalRead = VK_TRUE;
+    if (g_feat.localRead) flr.pNext = chain, chain = &flr;
     if (g_feat.eds3) fe3.pNext = chain, chain = &fe3;
     if (g_feat.provokingLast) fpv.pNext = chain, chain = &fpv;
     VkPhysicalDeviceVulkan13Features f13{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES, chain};
@@ -4188,6 +5062,9 @@ bool Initialize(GLFWwindow* window, const Options& options, std::string* error)
     f13.synchronization2 = VK_TRUE;
     f13.shaderDemoteToHelperInvocation = g_feat.demote;
     VkPhysicalDeviceVulkan12Features f12{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES, &f13};
+    VkPhysicalDeviceVulkan11Features f11{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES, &f12};
+    f11.multiview = g_feat.multiview;
+    f11.multiviewGeometryShader = g_feat.multiviewGeometry;
     f12.timelineSemaphore = VK_TRUE;
     f12.hostQueryReset = VK_TRUE;
     f12.runtimeDescriptorArray = VK_TRUE;
@@ -4195,27 +5072,36 @@ bool Initialize(GLFWwindow* window, const Options& options, std::string* error)
     f12.descriptorBindingSampledImageUpdateAfterBind = VK_TRUE;
     f12.descriptorBindingUpdateUnusedWhilePending = VK_TRUE;
     f12.shaderSampledImageArrayNonUniformIndexing = g_feat.nonUniform;
-    VkPhysicalDeviceFeatures2 f2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, &f12};
+    f12.imagelessFramebuffer = g_feat.classicFetch;
+    VkPhysicalDeviceFeatures2 f2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, g_feat.multiview ? static_cast<void*>(&f11) : static_cast<void*>(&f12)};
     f2.features.geometryShader = g_feat.geometry;
+    f2.features.dualSrcBlend = g_feat.dualSrcBlend;
     f2.features.wideLines = g_feat.wideLines;
     f2.features.samplerAnisotropy = g_feat.anisotropy;
     f2.features.multiDrawIndirect = g_feat.mdi;
     f2.features.drawIndirectFirstInstance = g_feat.firstInstance;
     f2.features.fillModeNonSolid = g_feat.fillModeNonSolid;
     f2.features.shaderSampledImageArrayDynamicIndexing = VK_TRUE;
-    std::vector<const char*> deviceExtensions = {VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME};
+    std::vector<const char*> deviceExtensions;
+    if (g_feat.pushDescriptors) deviceExtensions.push_back(VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME);
     if (g_visible) deviceExtensions.push_back(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
     if (g_feat.provokingLast) deviceExtensions.push_back(VK_EXT_PROVOKING_VERTEX_EXTENSION_NAME);
     if (g_feat.eds3) deviceExtensions.push_back(VK_EXT_EXTENDED_DYNAMIC_STATE_3_EXTENSION_NAME);
+    if (g_feat.msrtss) deviceExtensions.push_back(VK_EXT_MULTISAMPLED_RENDER_TO_SINGLE_SAMPLED_EXTENSION_NAME);
+    if (g_feat.fdm) deviceExtensions.push_back(VK_EXT_FRAGMENT_DENSITY_MAP_EXTENSION_NAME);
+    if (g_feat.localRead) deviceExtensions.push_back(VK_KHR_DYNAMIC_RENDERING_LOCAL_READ_EXTENSION_NAME);
     VkDeviceCreateInfo dci{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
     dci.pNext = &f2;
     dci.queueCreateInfoCount = 1;
     dci.pQueueCreateInfos = &qi;
     dci.enabledExtensionCount = uint32_t(deviceExtensions.size());
     dci.ppEnabledExtensionNames = deviceExtensions.data();
-    if (FForcedFailure("device") || vkCreateDevice(g_phys, &dci, nullptr, &g_device) != VK_SUCCESS) return fail("vkCreateDevice failed");
+    if (FForcedFailure("device")) return fail("vkCreateDevice failed");
+    if (g_external ? g_external->createDevice(g_external->user, vkGetInstanceProcAddr, g_phys, &dci, &g_device) != VK_SUCCESS
+                   : vkCreateDevice(g_phys, &dci, nullptr, &g_device) != VK_SUCCESS)
+        return fail(g_external ? "the OpenXR runtime could not create the Vulkan device" : "vkCreateDevice failed");
     if (!LoadDevice(g_device, error)) return fail(error ? *error : "device entry points");
-    if (!vkCmdPushDescriptorSetKHR) return fail("no vkCmdPushDescriptorSetKHR");
+    if (g_feat.pushDescriptors && !vkCmdPushDescriptorSetKHR) return fail("no vkCmdPushDescriptorSetKHR");
     if (!vkCmdSetColorBlendEnableEXT || !vkCmdSetColorBlendEquationEXT || !vkCmdSetColorWriteMaskEXT) g_feat.eds3 = false;
     g_vkResetQueryPool = reinterpret_cast<PFN_vkResetQueryPool>(vkGetDeviceProcAddr(g_device, "vkResetQueryPool"));
     vkGetDeviceQueue(g_device, g_queueFamily, 0, &g_queue);
@@ -4266,17 +5152,26 @@ bool Initialize(GLFWwindow* window, const Options& options, std::string* error)
         li.bindingCount = 3;
         li.pBindings = bindings;
         if (vkCreateDescriptorSetLayout(g_device, &li, nullptr, &g_setLayoutTextures) != VK_SUCCESS) return fail("descriptor set layout");
-        std::array<VkDescriptorSetLayoutBinding, kMaxBindings> sb{};
+        std::array<VkDescriptorSetLayoutBinding, kMaxBindings + 1> sb{};
         for (uint32_t i = 0; i < kMaxBindings; ++i) sb[i] = {i, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, g_stages, nullptr};
+        sb[kFetchBinding] = {kFetchBinding, VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT, 1, VK_SHADER_STAGE_FRAGMENT_BIT, nullptr};
         VkDescriptorSetLayoutCreateInfo bli{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-        bli.flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR;
-        bli.bindingCount = kMaxBindings;
+        bli.flags = g_feat.pushDescriptors ? VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR : 0;
+        bli.bindingCount = kMaxBindings + (g_feat.localRead || g_feat.classicFetch ? 1 : 0);
         bli.pBindings = sb.data();
         if (vkCreateDescriptorSetLayout(g_device, &bli, nullptr, &g_setLayoutBuffers) != VK_SUCCESS) return fail("push descriptor set layout");
-        const VkDescriptorSetLayout sets[2] = {g_setLayoutTextures, g_setLayoutBuffers};
-        const VkPushConstantRange range{g_stages, 0, kPushBytes};
+        if (g_feat.pushBytes < kPushBytes)
+        {
+            const VkDescriptorSetLayoutBinding ub{0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 1, g_stages, nullptr};
+            VkDescriptorSetLayoutCreateInfo uli{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+            uli.bindingCount = 1;
+            uli.pBindings = &ub;
+            if (vkCreateDescriptorSetLayout(g_device, &uli, nullptr, &g_setLayoutUniforms) != VK_SUCCESS) return fail("uniform set layout");
+        }
+        const VkDescriptorSetLayout sets[3] = {g_setLayoutTextures, g_setLayoutBuffers, g_setLayoutUniforms};
+        const VkPushConstantRange range{g_stages, 0, g_feat.pushBytes};
         VkPipelineLayoutCreateInfo pli{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
-        pli.setLayoutCount = 2;
+        pli.setLayoutCount = g_setLayoutUniforms ? 3 : 2;
         pli.pSetLayouts = sets;
         pli.pushConstantRangeCount = 1;
         pli.pPushConstantRanges = &range;
@@ -4369,13 +5264,16 @@ bool Initialize(GLFWwindow* window, const Options& options, std::string* error)
     InvalidateBound();
     g_frameIndex = 0;
     g_recording = false;
-    g_threaded = !(std::getenv("SLY2N_VKTHREAD") && std::atoi(std::getenv("SLY2N_VKTHREAD")) == 0);
+    g_threaded = !options.singleThread && !(std::getenv("SLY2N_VKTHREAD") && std::atoi(std::getenv("SLY2N_VKTHREAD")) == 0);
     if (g_threaded)
     {
         g_streamMain = new Stream;
         g_streamPre = new Stream;
         g_workerDone = 0;
-        g_worker = std::thread(WorkerLoop);
+        g_worker = std::thread([fn = options.onWorkerThread] {
+            if (fn) fn();
+            WorkerLoop();
+        });
     }
     // (a game that ends with exit() without Shutdown: the worker is stopped before the statics it waits on are
     // destroyed (a joinable std::thread or a condition variable with a waiter at exit hangs or aborts), and the
@@ -4387,6 +5285,7 @@ bool Initialize(GLFWwindow* window, const Options& options, std::string* error)
         std::atexit([] {
             if (!g_device) return;
             StopWorker();
+            if (g_external) return;   // (VR: the OpenXR runtime owns the device)
             vkDeviceWaitIdle(g_device);
             SavePipelineCache();
         });
@@ -4395,6 +5294,9 @@ bool Initialize(GLFWwindow* window, const Options& options, std::string* error)
     g_blackTexture = MakeBlack(false);
     g_blackArray = MakeBlack(true);
     g_clearProgram = CreateProgram("clear.vert", nullptr, "clear.frag", "");
+#if defined(__ANDROID__)
+    g_presentProgram = CreateProgram("present.vert", nullptr, "present.frag", "");
+#endif
     if (g_visible)
     {
         std::string why;
@@ -4402,12 +5304,21 @@ bool Initialize(GLFWwindow* window, const Options& options, std::string* error)
         if (!why.empty() || !CreateSwapchain(&why)) return fail(why);
     }
     const bool fBuffersLocal = (g_memProps.memoryTypes[g_bufferHeap->Type()].propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) != 0;
-    std::printf("Vulkan: %s%s\n", g_rendererString.c_str(), fBuffersLocal ? "" : " (buffers in system memory)");
+    std::printf("Vulkan: %s%s%s%s\n", g_rendererString.c_str(), fBuffersLocal ? "" : " (buffers in system memory)",
+                g_feat.pushDescriptors ? "" : " (descriptor sets: no push descriptors)",
+                g_feat.pushBytes < kPushBytes ? " (uniform buffers for the large blocks: few push-constant bytes)" : "");
     return true;
 }
 
 bool Initialized() { return g_device != VK_NULL_HANDLE; }
 const char* DeviceName() { return g_deviceName.c_str(); }
+bool FramebufferFetchUsable()
+{
+    if (!g_feat.localRead && !g_feat.classicFetch) return false;
+    unsigned level, layer;
+    const Image* im = ColorImageOf(s.drawFramebuffer, &level, &layer);
+    return im && im->inputAttachment;
+}
 Stats TakeStats()
 {
     Stats st = g_stats;
@@ -4415,6 +5326,12 @@ Stats TakeStats()
     g_stats = Stats{};
     g_splits = 0;
     return st;
+}
+
+void SetSurfaceSerial(uint64_t (*serial)())
+{
+    g_surfaceSerialFn = serial;
+    g_surfaceSerial = serial && g_surface ? serial() : 0;
 }
 
 void SetSwapInterval(int interval)
@@ -4434,25 +5351,57 @@ void Present()
     Frame& f = Cur();
     if (g_visible)
     {
-        if (g_swapchainStale || !g_swapchain)
+        PollSurface();
+        if (g_surface && (g_swapchainStale || !g_swapchain))
         {
             // (a new size or present mode: the frame's commands first, then the swapchain again)
             Submit();
             DestroySwapchain();
             std::string why;
-            if (!CreateSwapchain(&why)) Fatal("%s", why.c_str());
+            if (!CreateSwapchain(&why))
+            {
+                // (Android: the surface may be gone before the platform said so: it is made again in a moment)
+                if (!g_surfaceSerialFn) Fatal("%s", why.c_str());
+                std::printf("Vulkan: %s: the surface is made again\n", why.c_str());
+                DropSurface();
+                g_surfaceRetry = 30;
+            }
         }
         if (g_threaded)
         {
             // (the worker acquires, copies and presents: the swapchain is its alone while it runs)
             if (g_presentStale.exchange(false)) g_swapchainStale = true;
             Image& win = *g_windowImage;
+            WindowPicture pic{win.image, win.width, win.height};   // (the main thread may replace the window's image)
+            const VkImageLayout layout = g_swapRotation ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+            if (g_swapRotation)
+            {
+                // (pre-rotation: the picture sampled through a view and a descriptor slot of its own)
+                if (!win.view)
+                {
+                    VkImageViewCreateInfo vi{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+                    vi.image = win.image;
+                    vi.viewType = VK_IMAGE_VIEW_TYPE_2D;
+                    vi.format = win.format;
+                    vi.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                    VKCHECK(vkCreateImageView(g_device, &vi, nullptr, &win.view));
+                    WriteImageDescriptor(win);
+                }
+                SamplerParams sp;
+                const bool same = win.width == (g_swapRotation & 1 ? g_swapExtent.height : g_swapExtent.width) &&
+                                  win.height == (g_swapRotation & 1 ? g_swapExtent.width : g_swapExtent.height);
+                sp.minFilter = sp.magFilter = same ? GL_NEAREST : GL_LINEAR;
+                sp.wrapS = sp.wrapT = GL_CLAMP_TO_EDGE;
+                sp.maxLevel = 0;
+                pic.rotation = g_swapRotation;
+                pic.imageSlot = uint32_t(win.slot);
+                pic.samplerSlot = uint32_t(SamplerSlot(sp));
+            }
             Barriers bar;
-            bar.Image(win, win.layout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
-            win.layout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+            bar.Image(win, win.layout, layout);
+            win.layout = layout;
             bar.Flush(g_main);
             win.useSegment = g_segment;
-            const WindowPicture pic{win.image, win.width, win.height};   // (the main thread may replace the window's image)
             g_streamMain->Rec([pic](VkCommandBuffer c) { RecordSwapBlit(c, g_workerIndex, pic); });
             g_pendingPresent.present = g_swapchain != VK_NULL_HANDLE;
             Submit();
@@ -4463,7 +5412,7 @@ void Present()
                                  : VK_ERROR_OUT_OF_DATE_KHR;
         if (r == VK_SUCCESS || r == VK_SUBOPTIMAL_KHR)
         {
-            if (r == VK_SUBOPTIMAL_KHR) g_swapchainStale = true;
+            if (r == VK_SUBOPTIMAL_KHR && (kSuboptimalStale || g_swapTransformMatches)) g_swapchainStale = true;
             VkCommandBuffer cmd = g_main;
             Image& win = *g_windowImage;
             Barriers bar;
@@ -4508,7 +5457,8 @@ void Present()
             pi.pSwapchains = &g_swapchain;
             pi.pImageIndices = &index;
             r = vkQueuePresentKHR(g_queue, &pi);
-            if (r == VK_ERROR_OUT_OF_DATE_KHR || r == VK_SUBOPTIMAL_KHR) g_swapchainStale = true;
+            if (r == VK_ERROR_OUT_OF_DATE_KHR || r == VK_ERROR_SURFACE_LOST_KHR || (r == VK_SUBOPTIMAL_KHR && (kSuboptimalStale || g_swapTransformMatches)))
+                g_swapchainStale = true;
             else if (r == VK_ERROR_DEVICE_LOST) Fatal("the GPU device was lost");
         }
         else if (!g_threaded)
@@ -4545,6 +5495,174 @@ void Present()
     g_frameIndex = (g_frameIndex + 1) % kFrameSlots;
 }
 
+Handles DeviceHandles() { return Handles{g_instance, g_phys, g_device, g_queueFamily, 0}; }
+
+GLuint WrapImage(VkImage image, VkFormat viewFormat, uint32_t width, uint32_t height, uint32_t layers, uint32_t samples)
+{
+    auto im = std::make_unique<Image>();
+    im->image = image;
+    im->external = true;
+    im->format = viewFormat;
+    im->width = width, im->height = height, im->layers = layers, im->levels = 1, im->samples = samples;
+    im->array = layers > 1;
+    im->aspect = VK_IMAGE_ASPECT_COLOR_BIT;
+    const GLuint name = g_textures.Gen();
+    g_textures.Ensure(name);
+    g_textures.Get(name)->image = std::move(im);
+    return name;
+}
+
+void SetImageAttributes(GLuint texture, uint32_t renderSamples, bool inputAttachment, VkImageUsageFlags usage)
+{
+    Texture* t = g_textures.Get(texture);
+    if (!t || !t->image) return;
+    t->image->renderSamples = uint8_t(g_feat.msrtss ? std::max(1u, renderSamples) : 1u);
+    t->image->inputAttachment = inputAttachment && (g_feat.localRead || g_feat.classicFetch) && t->image->renderSamples <= 1;
+    t->image->usage = usage;
+}
+bool CanReadInPlace() { return g_feat.localRead || g_feat.classicFetch; }
+
+// (VR's fixed foveation) density maps: R8G8 images of one texel per maxFragmentDensityTexelSize of the target
+std::vector<std::unique_ptr<Image>> g_densityMaps;
+bool DensityMapsSupported() { return g_feat.fdm; }
+GLuint CreateDensityMap(uint32_t width, uint32_t height, uint32_t layers)
+{
+    if (!g_feat.fdm || !g_device) return 0;
+    if (!g_recording) BeginFrame();
+    auto im = std::make_unique<Image>();
+    im->width = std::max(1u, (width + g_feat.fdmTexel.width - 1) / g_feat.fdmTexel.width);
+    im->height = std::max(1u, (height + g_feat.fdmTexel.height - 1) / g_feat.fdmTexel.height);
+    im->format = VK_FORMAT_R8G8_UNORM;
+    im->aspect = VK_IMAGE_ASPECT_COLOR_BIT;
+    im->fdm = true;
+    im->layers = std::max(1u, layers);   // (multiview: one a view)
+    VkImageCreateInfo ci{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+    ci.imageType = VK_IMAGE_TYPE_2D;
+    ci.format = im->format;
+    ci.extent = {im->width, im->height, 1};
+    ci.mipLevels = 1;
+    ci.arrayLayers = im->layers;
+    ci.samples = VK_SAMPLE_COUNT_1_BIT;
+    ci.tiling = VK_IMAGE_TILING_OPTIMAL;
+    ci.usage = VK_IMAGE_USAGE_FRAGMENT_DENSITY_MAP_BIT_EXT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+    im->usage = ci.usage;
+    ci.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    VKCHECK(vkCreateImage(g_device, &ci, nullptr, &im->image));
+    VkMemoryRequirements req;
+    vkGetImageMemoryRequirements(g_device, im->image, &req);
+    int type = FindMemoryType(req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    if (type < 0) type = FindMemoryType(req.memoryTypeBits, 0);
+    auto& heap = g_imageHeaps[uint32_t(type)];
+    if (!heap) heap = std::make_unique<Heap>(uint32_t(type), kImageBlockSize, false);
+    if (!heap->Allocate(req.size, req.alignment, &im->memory)) return 0;
+    VKCHECK(vkBindImageMemory(g_device, im->image, im->memory.block->memory, im->memory.offset));
+    g_densityMaps.push_back(std::move(im));
+    return GLuint(g_densityMaps.size());
+}
+// Its densities: full within the inner ring around (cx, cy) (the lens's centre in the drawn rectangle's -1..1), then a half
+// and a quarter outwards by the level (1 low, 2 medium, 3 high; 0: full everywhere); usedW / usedH: the part of the target
+// drawn (the eye resolution), the rest at full density
+void FillDensityMap(GLuint map, uint32_t usedW, uint32_t usedH, float cx, float cy, int level, uint32_t layer)
+{
+    if (!map || map > g_densityMaps.size()) return;
+    Image& im = *g_densityMaps[map - 1];
+    if (layer >= im.layers) return;
+    if (!g_recording) BeginFrame();
+    static const float s_ar[4][2] = {{9.0f, 9.0f}, {0.75f, 9.0f}, {0.6f, 0.9f}, {0.45f, 0.75f}};
+    const float* ar = s_ar[std::clamp(level, 0, 3)];
+    const Upload u = Ring(VkDeviceSize(im.width) * im.height * 2, 16);
+    for (uint32_t y = 0; y < im.height; ++y)
+        for (uint32_t x = 0; x < im.width; ++x)
+        {
+            const float px = (float(x) + 0.5f) * float(g_feat.fdmTexel.width), py = (float(y) + 0.5f) * float(g_feat.fdmTexel.height);
+            const float nx = px / float(std::max(1u, usedW)) * 2.0f - 1.0f - cx, ny = py / float(std::max(1u, usedH)) * 2.0f - 1.0f - cy;
+            const float r = std::sqrt(nx * nx + ny * ny);
+            const uint8_t d = r > ar[1] ? 64 : r > ar[0] ? 128 : 255;
+            u.cpu[(size_t(y) * im.width + x) * 2] = u.cpu[(size_t(y) * im.width + x) * 2 + 1] = d;
+        }
+    XferOp op;
+    op.kind = XferOp::BufferToImage;
+    op.srcBuffer = u.buffer;
+    op.srcOffset = u.offset;
+    op.image = &im;
+    op.layer = layer;
+    op.width = im.width;
+    op.height = im.height;
+    op.rowLength = im.width;
+    QueueImageOp(op);
+}
+void SetDensityMap(GLuint texture, GLuint map)
+{
+    Texture* t = g_textures.Get(texture);
+    if (!t || !t->image) return;
+    Image* fdm = map && map <= g_densityMaps.size() ? g_densityMaps[map - 1].get() : nullptr;
+    if (t->image->densityMap != fdm) { t->image->densityMap = fdm; b.targetDirty = true; }
+}
+void SetNextImageRenderSamples(uint32_t samples) { g_nextRenderSamples = g_feat.msrtss ? std::max(1u, samples) : 1u; }
+bool RendersToSingleSampled() { return g_feat.msrtss; }
+void SetRenderbufferTransient(GLuint renderbuffer, bool transient)
+{
+    if (Renderbuffer* rb = g_renderbuffers.Get(renderbuffer); rb && rb->image && rb->image->depth) rb->image->transient = transient;
+}
+bool MultiviewSupported(bool geometryStage)
+{
+    // (the programs' two-view stages read their block as push constants; the near-clip geometry stage where the caller
+    // draws with it and the device has one)
+    return g_feat.multiview && g_feat.pushBytes >= kPushBytes && (!geometryStage || !g_feat.geometry || g_feat.multiviewGeometry);
+}
+void SetNextRenderbufferLayers(uint32_t layers) { g_nextRenderbufferLayers = std::max(1u, layers); }
+void FramebufferMultiview(GLenum target, GLenum attachment, GLuint object, bool renderbuffer, GLint baseLayer, GLsizei views)
+{
+    Attach(target, attachment, object, renderbuffer, 0, unsigned(std::max(baseLayer, 0)));
+    if (Framebuffer* f = TargetFramebuffer(target))
+    {
+        const uint8_t n = uint8_t(std::clamp<GLsizei>(views, 0, 2));
+        if (attachment == GL_COLOR_ATTACHMENT0) f->color.views = n;
+        else f->depth.views = n;
+    }
+}
+
+void AcquireImage(GLuint texture, VkImageLayout layout)
+{
+    if (Texture* t = g_textures.Get(texture); t && t->image) t->image->layout = layout;
+}
+
+void ReleaseImage(GLuint texture, VkImageLayout layout, bool submit)
+{
+    Texture* t = g_textures.Get(texture);
+    if (!g_device || !t || !t->image) return;
+    if (!g_recording) BeginFrame();
+    EndRendering();
+    FlushCopies();
+    Image& im = *t->image;
+    if (im.dirty) g_dirty.erase(std::remove(g_dirty.begin(), g_dirty.end(), &im), g_dirty.end()), im.dirty = false;
+    if (im.layout != layout)
+    {
+        Barriers bar;
+        bar.Image(im, im.layout, layout);
+        im.layout = layout;
+        bar.Flush(Main());
+    }
+    if (submit) Submit();
+}
+
+void EndFrame() { Present(); }
+
+void AfterNextSubmit(std::function<void()> fn)
+{
+    if (!g_device) { fn(); return; }
+    g_afterSubmit.push_back(std::move(fn));
+}
+
+void WaitSubmissions() { WorkerIdle(); }
+
+bool FSubmitsOnWorker() { return g_threaded && g_worker.joinable(); }
+void WorkerCpuMs(double* pmsAll, double* pmsRecord)
+{
+    *pmsAll = double(g_workerCpuNs.load()) / 1e6;
+    *pmsRecord = double(g_workerRecordCpuNs.load()) / 1e6;
+}
+
 GLuint CreateProgram(const char* vertexFile, const char* geometryFile, const char* fragmentFile, const char* prefix)
 {
     if (!g_device || (FForcedFailure("program") && std::strcmp(vertexFile, "clear.vert"))) return 0;
@@ -4579,6 +5697,8 @@ GLuint CreateProgram(const char* vertexFile, const char* geometryFile, const cha
     std::string key;
     for (const auto& d : defines) key += (key.empty() ? "" : ";") + d;
     if (geometryFile && !g_feat.geometry) return 0;
+    const bool fetch = key.find("CANE_FETCH=") != std::string::npos;
+    if (fetch && !g_feat.localRead && !g_feat.classicFetch) return 0;
     const Shaders::Program* info = nullptr;
     for (size_t i = 0; i < Shaders::programCount; ++i)
     {
@@ -4589,19 +5709,33 @@ GLuint CreateProgram(const char* vertexFile, const char* geometryFile, const cha
         break;
     }
     if (!info || info->pushSize > kPushBytes) return 0;
+    // (fewer push-constant bytes than the block: the variant reading it from set 2)
+    const bool uniformBuffer = info->pushSize > g_feat.pushBytes;
+    if (uniformBuffer && !info->spirvUbo[0]) return 0;
     if (!g_recording) BeginFrame();
     const GLuint name = g_programs.Gen();
     Program* p = g_programs.Get(name);
     p->info = info;
+    p->fetch = fetch;
+    g_fetchUsed = g_fetchUsed || fetch;
     p->serial = ++g_programSerial;
+    p->uniformBuffer = uniformBuffer;
     for (unsigned k = 0; k < 3; ++k)
     {
         if (!info->spirv[k]) continue;
         VkShaderModuleCreateInfo mi{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
-        mi.codeSize = info->spirvSize[k];
-        mi.pCode = info->spirv[k];
+        mi.codeSize = uniformBuffer ? info->spirvUboSize[k] : info->spirvSize[k];
+        mi.pCode = uniformBuffer ? info->spirvUbo[k] : info->spirv[k];
         if (vkCreateShaderModule(g_device, &mi, nullptr, &p->modules[k]) != VK_SUCCESS) Fatal("shader module %s", info->key);
         p->storageMask |= info->storageMask[k];
+        p->storageMaskMv |= info->storageMaskMv[k];
+        // (two views: the stage made for them; not with the uniform-buffer block, MultiviewSupported)
+        if (info->spirvMv[k] && !uniformBuffer && g_feat.multiview)
+        {
+            mi.codeSize = info->spirvMvSize[k];
+            mi.pCode = info->spirvMv[k];
+            if (vkCreateShaderModule(g_device, &mi, nullptr, &p->modulesMv[k]) != VK_SUCCESS) Fatal("shader module %s (two views)", info->key);
+        }
     }
     p->constants.assign(info->pushSize, 0);
     for (uint32_t i = 0; i < info->uniformCount; ++i)
@@ -4644,18 +5778,26 @@ void DestroyAll()
             RetireFrame(f);
             if (f.pool) vkDestroyCommandPool(g_device, f.pool, nullptr);
             if (f.acquire) vkDestroySemaphore(g_device, f.acquire, nullptr);
+            for (VkDescriptorPool pool : f.setPools) vkDestroyDescriptorPool(g_device, pool, nullptr);
             f = Frame{};
         }
         g_textures.ForEach([](GLuint, Texture& t) { if (t.image) DestroyImage(*t.image); t.image.reset(); });
         g_renderbuffers.ForEach([](GLuint, Renderbuffer& r) { if (r.image) DestroyImage(*r.image); r.image.reset(); });
         if (g_windowImage) DestroyImage(*g_windowImage);
         g_windowImage.reset();
-        g_programs.ForEach([](GLuint, Program& p) { for (VkShaderModule m : p.modules) if (m) vkDestroyShaderModule(g_device, m, nullptr); });
+        g_programs.ForEach([](GLuint, Program& p) {
+            for (VkShaderModule m : p.modules) if (m) vkDestroyShaderModule(g_device, m, nullptr);
+            for (VkShaderModule m : p.modulesMv) if (m) vkDestroyShaderModule(g_device, m, nullptr);
+        });
         for (VkShaderModule m : g_retiredModules) vkDestroyShaderModule(g_device, m, nullptr);
         g_retiredModules.clear();
         g_buffers.Clear(); g_arrays.Clear(); g_textures.Clear(); g_samplers.Clear(); g_renderbuffers.Clear();
         g_framebuffers.Clear(); g_programs.Clear(); g_queries.Clear(); g_syncs.clear();
         for (auto& [k, pl] : g_pipelines) vkDestroyPipeline(g_device, pl, nullptr);
+        if (g_presentPipeline) vkDestroyPipeline(g_device, g_presentPipeline, nullptr);
+        g_presentPipeline = VK_NULL_HANDLE;
+        g_presentPipelineFormat = VK_FORMAT_UNDEFINED;
+        g_presentProgram = 0;
         g_pipelines.clear();
         g_layouts.clear();
         for (VkSampler sm : g_vkSamplers) vkDestroySampler(g_device, sm, nullptr);
@@ -4674,6 +5816,8 @@ void DestroyAll()
         if (g_pipelineLayout) vkDestroyPipelineLayout(g_device, g_pipelineLayout, nullptr);
         if (g_setLayoutTextures) vkDestroyDescriptorSetLayout(g_device, g_setLayoutTextures, nullptr);
         if (g_setLayoutBuffers) vkDestroyDescriptorSetLayout(g_device, g_setLayoutBuffers, nullptr);
+        if (g_setLayoutUniforms) vkDestroyDescriptorSetLayout(g_device, g_setLayoutUniforms, nullptr);
+        g_setLayoutUniforms = VK_NULL_HANDLE;
         g_descriptorPool = VK_NULL_HANDLE; g_pipelineLayout = VK_NULL_HANDLE;
         g_setLayoutTextures = g_setLayoutBuffers = VK_NULL_HANDLE;
         g_textureSet = VK_NULL_HANDLE;
@@ -4704,5 +5848,7 @@ void DestroyAll()
 void Shutdown()
 {
     DestroyAll();
+    g_surfaceSerialFn = nullptr;
+    g_surfaceSerial = 0;
 }
 }  // namespace CaneVk

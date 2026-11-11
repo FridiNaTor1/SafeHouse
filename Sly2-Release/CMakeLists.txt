@@ -101,9 +101,9 @@ add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/generated/embedded_shader
   DEPENDS ${sly2n_shaders} ${CANE_ROOT}/cmake/embed-shaders.cmake VERBATIM)
 target_sources(Sly2-Release PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated/embedded_shaders.h")
 # Vulkan renderer (platform/vulkan: the game's GL calls on Vulkan, chosen at run time, OpenGL the fallback; notes/
-# VULKAN_2026-11-10.md): Linux and Windows. The programs are compiled to SPIR-V at build time (cmake/vulkan_shaders.py,
+# VULKAN_2026-11-10.md): Linux, Windows and Android (the Quest's VR and phones, with GLES as the fallback). The programs are compiled to SPIR-V at build time (cmake/vulkan_shaders.py,
 # glslangValidator); without glslangValidator or Python the game builds without it (OpenGL only).
-if(WIN32 OR (UNIX AND NOT APPLE AND NOT ANDROID))
+if(WIN32 OR ANDROID OR (UNIX AND NOT APPLE))
   set(sly2n_vulkan_default ON)
 else()
   set(sly2n_vulkan_default OFF)

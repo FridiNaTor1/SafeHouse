@@ -35,6 +35,7 @@ bool g_fGlobNoGeom = false;
 bool g_fGlobBindless = false;
 bool g_fGlobArrays = false;
 bool g_fDrawUniform = false;
+bool g_fBlend1 = false;   // (glob.frag CANE_BLEND1: the alpha / additive blends as one fixed blend; the Vulkan renderer on Android)
 bool g_fHudAlphaLayer = false;
 bool g_fDirectRuns = false;
 GLSHADER glCelBorderShader;
@@ -163,7 +164,8 @@ float g_amatMultiviewLtoR[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1}
 
 void GLSHADER::Use() const
 {
-    if (g_fMultiviewPass && !g_fMultiviewFailed)
+    // (Vulkan: the layer runs the program's two-view stages, made at build time, in a two-view pass)
+    if (g_fMultiviewPass && !g_fMultiviewFailed && !FRendererVulkan())
     {
         if (m_iMvState == 0) m_iMvState = FBuildMultiview() ? 1 : -1;
         if (m_iMvState < 0) g_fMultiviewFailed = true;
@@ -384,9 +386,24 @@ bool GL::FInit(int w, int h, bool fVisible, const char* title, std::string& erro
     std::printf("OpenGL: %s / %s\n", glGetString(GL_RENDERER), glGetString(GL_VERSION));
 #if defined(__ANDROID__)
     // The GL 4.3 loader stops at the version an ES context reports (3.2): the ES 3.x entry points with desktop names
-    // are fetched by name, the desktop-only ones point at ES equivalents (gles_sly2.cpp).
-    if (!cane::gles::FillGlad(error)) return false;
-    g_fDrawUniform = !cane::gles::HasBaseInstance();
+    // are fetched by name, the desktop-only ones point at ES equivalents (gles_sly2.cpp). (The Vulkan renderer: its
+    // own entry points, the desktop paths.)
+    if (!FRendererVulkan())
+    {
+        if (!cane::gles::FillGlad(error)) return false;
+        g_fDrawUniform = !cane::gles::HasBaseInstance();
+    }
+    else
+    {
+        // (the Vulkan renderer on Android: render.cpp's merged runs with glob.vert's vertex pulling (CANE_PULL), plain
+        // indexed draws in place of multi-draw-indirect: Adreno's tile binning cannot skip the sub-draws of an indirect
+        // draw per tile. SLY2N_VKPULL=0: multi-draw-indirect.)
+        // (Quest 3S, Paris Immersive: 21 -> 36 fps, the eye passes binned in place of the driver's direct mode)
+        g_fDrawUniform = !(std::getenv("SLY2N_VKPULL") && std::atoi(std::getenv("SLY2N_VKPULL")) == 0);
+    }
+#else
+    // (a test of the Android Vulkan path elsewhere: SLY2N_VKPULL=1, the pulled runs and their one blend pair)
+    if (FRendererVulkan() && std::getenv("SLY2N_VKPULL") && std::atoi(std::getenv("SLY2N_VKPULL")) == 1) g_fDrawUniform = true;
 #endif
     const char* szRenderer = reinterpret_cast<const char*>(glGetString(GL_RENDERER));
     g_fDirectRuns = szRenderer && !std::strncmp(szRenderer, "D3D12 (", 7);
@@ -442,10 +459,18 @@ bool GL::FInit(int w, int h, bool fVisible, const char* title, std::string& erro
     // (the prefix and stages the glob program was built with: its NOKILL variant below takes the same)
     std::string globPrefix;
     bool fGlobGeom = false;
+    // (the Vulkan renderer's pulled draws, g_fDrawUniform: OpenGL ES gets CANE_PULL from its translation layer,
+    // gles_sly2.cpp; Vulkan's programs are built ahead with it, cmake/vulkan_shaders.py)
+    // (and CANE_BLEND1, render.cpp g_fBlend1: the alpha / additive blend pair as one pipeline; SLY2N_VKBLEND1=0: off)
+    GLint cDualSource = 0;
+    if (g_fDrawUniform && FRendererVulkan()) glGetIntegerv(GL_MAX_DUAL_SOURCE_DRAW_BUFFERS, &cDualSource);
+    g_fBlend1 = g_fDrawUniform && FRendererVulkan() && cDualSource > 0 &&
+                !(std::getenv("SLY2N_VKBLEND1") && std::atoi(std::getenv("SLY2N_VKBLEND1")) == 0);
+    const std::string pullDef = g_fDrawUniform && FRendererVulkan() ? "#define CANE_PULL 1\n#define CANE_BLEND1 1\n" : "";
     auto initGlob = [&](const char* szPrefix) {
-        globPrefix = szPrefix;
+        globPrefix = szPrefix + pullDef;
         fGlobGeom = s_fNearClip && glGlobShader.FInit("glob.vert", "glob.geom", "glob.frag", (globPrefix + "#define GEOM 1\n").c_str());
-        return fGlobGeom || glGlobShader.FInit("glob.vert", "glob.frag", szPrefix);
+        return fGlobGeom || glGlobShader.FInit("glob.vert", "glob.frag", globPrefix.c_str());
     };
     g_fGlobBindless = fBindlessWanted && FBindlessWorks() && initGlob("#extension GL_ARB_bindless_texture : require\n#define BINDLESS 1\n");
     // (perf-5) without bindless textures: the pass draws' textures as layers of array textures (render.cpp LayerRefOfTex),

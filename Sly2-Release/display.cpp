@@ -92,6 +92,11 @@ void FromVrOptions(const st::Sly2VrOptions& o)
     v.worldScale = o.worldScale;
     v.fCutscenesFlat = o.cutscenesFlat != 0;
     v.fRcTable = o.rcTable != 0;
+    v.eyeResolution = o.eyeResolution == 0 ? 0 : std::clamp(o.eyeResolution, 50, 100);
+    v.msaa = o.msaa <= 1 ? 1 : 2;
+    v.foveation = std::clamp(o.foveation, 0, 3);
+    v.fMultiview = o.multiview != 0;
+    v.upscaling = std::clamp(o.upscaling, 0, 2);
 }
 
 void ToVrOptions(st::Sly2VrOptions& o)
@@ -105,6 +110,11 @@ void ToVrOptions(st::Sly2VrOptions& o)
     o.worldScale = v.worldScale;
     o.cutscenesFlat = v.fCutscenesFlat ? 1 : 0;
     o.rcTable = v.fRcTable ? 1 : 0;
+    o.eyeResolution = v.eyeResolution;
+    o.msaa = v.msaa;
+    o.foveation = v.foveation;
+    o.multiview = v.fMultiview ? 1 : 0;
+    o.upscaling = v.upscaling;
 }
 
 void ToSettings(st::SystemSettings& s)

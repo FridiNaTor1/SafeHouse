@@ -89,8 +89,8 @@ enum NATIVEID : int
     NID_LanguagePage, NID_TextLanguage, NID_VoiceLanguage,
     // (VR, vr.h) the pause menu's VR Settings page (a headset in use)
     NID_Vr = NID_Base + 0x200,
-    NID_VrPage = NID_Vr, NID_VrMode, NID_VrAutoCam, NID_VrVignette, NID_VrScreenSize, NID_VrRefresh, NID_VrWorldScale,
-    NID_VrRecenter, NID_VrCutscenes, NID_VrRcTable,
+    NID_VrPage = NID_Vr, NID_VrMode, NID_VrAutoCam, NID_VrVignette, NID_VrScreenSize, NID_VrRefresh, NID_VrEyeRes, NID_VrMsaa, NID_VrFoveation, NID_VrWorldScale,
+    NID_VrRecenter, NID_VrCutscenes, NID_VrRcTable, NID_VrMultiview, NID_VrUpscaling,
     NID_AdvancedControls = NID_Base + 0x1000, NID_ActionDevices, NID_ActionKeyboard, NID_ActionController, NID_ResetActions,
     NID_ActionGroupFirst = NID_Base + 0x2000,
     NID_ActionBindingFirst = NID_Base + 0x3000,
@@ -569,10 +569,26 @@ std::string StrNative(int id)
         if (vr::g_vropts.refreshRate <= 0) return StrPortValue(PTX_VrRefreshRate, StrPort(PTX_Auto));
         std::snprintf(ach, sizeof(ach), "%d Hz", vr::g_vropts.refreshRate);
         return StrPortValue(PTX_VrRefreshRate, ach);
+    case NID_VrFoveation:
+    {
+        static const PTX aptx[] = {PTX_Off, PTX_VrLow, PTX_VrMedium, PTX_VrHigh};
+        return StrPortValue(PTX_VrFoveation, StrPort(aptx[std::clamp(vr::g_vropts.foveation, 0, 3)]));
+    }
+    case NID_VrMsaa: return StrToGameText("MSAA") + StrPort(PTX_Sep) + (vr::g_vropts.msaa > 1 ? std::string("2x") : StrPort(PTX_Off));
+    case NID_VrEyeRes:
+        if (vr::g_vropts.eyeResolution <= 0) return StrPortValue(PTX_VrEyeResolution, StrPort(PTX_VrDynamic));
+        std::snprintf(ach, sizeof(ach), "%d%%", vr::g_vropts.eyeResolution);
+        return StrPortValue(PTX_VrEyeResolution, ach);
     case NID_VrWorldScale: return StrPortValue(PTX_VrWorldScale, StrPortDecimal(vr::g_vropts.worldScale, 2) + "x");
     case NID_VrRecenter: return StrPort(PTX_VrRecenter);
     case NID_VrCutscenes: return StrPortValue(PTX_VrCutscenes, StrPort(vr::g_vropts.fCutscenesFlat ? PTX_VrFlatScreen : PTX_VrImmersive));
     case NID_VrRcTable: return onOff(PTX_VrRcTable, vr::g_vropts.fRcTable);
+    case NID_VrMultiview: return onOff(PTX_VrMultiview, vr::g_vropts.fMultiview);
+    case NID_VrUpscaling:
+    {
+        static const PTX aptx[] = {PTX_Off, PTX_VrSharpen, PTX_VrSuperResolution};
+        return StrPortValue(PTX_VrUpscaling, StrPort(aptx[std::clamp(vr::g_vropts.upscaling, 0, 2)]));
+    }
     case NID_ActionDevices: return StrPort(PTX_ActionBindings);
     case NID_ActionKeyboard: return StrPort(PTX_ActionKeyboard);
     case NID_ActionController: return StrPort(PTX_ActionController);
@@ -999,9 +1015,13 @@ std::vector<MENUENT> AentPause()
 std::vector<MENUENT> AentVr()
 {
     std::vector<MENUENT> a;
+    // (Upscaling: the headset compositor's filter where the runtime has it (the Quest); elsewhere (PCVR) the Display
+    // options' upscaler belongs in its place, as the same setting)
+    const int idUpscaling = vr::FCompositorUpscaling() ? int(NID_VrUpscaling) : 0;
     for (int id : {int(NID_VrMode), int(NID_VrAutoCam), int(NID_VrCutscenes), int(NID_VrVignette), int(NID_VrScreenSize),
-                   int(NID_VrRefresh), int(NID_VrWorldScale), int(NID_VrRcTable), int(NID_VrRecenter)})
+                   int(NID_VrRefresh), int(NID_VrEyeRes), int(NID_VrFoveation), idUpscaling, int(NID_VrMsaa), int(NID_VrMultiview), int(NID_VrWorldScale), int(NID_VrRcTable), int(NID_VrRecenter)})
     {
+        if (!id) continue;
         MENUENT e;
         e.id = id;
         e.pfnSelect = PFN_NativeVr;
@@ -1024,6 +1044,9 @@ void CycleVr(const MENUENT& e)
     case NID_VrVignette: o.vignette = (o.vignette + 1) % 4; break;
     case NID_VrScreenSize: o.screenSize = (o.screenSize + 1) % 3; break;
     case NID_VrRefresh: o.refreshRate = nextOf(o.refreshRate, {0, 72, 90, 120}); vr::ApplyRefreshRate(); break;
+    case NID_VrEyeRes: o.eyeResolution = nextOf(o.eyeResolution, {0, 100, 90, 75, 60, 50}); break;
+    case NID_VrMsaa: o.msaa = o.msaa > 1 ? 1 : 2; break;
+    case NID_VrFoveation: o.foveation = (o.foveation + 1) % 4; break;
     case NID_VrWorldScale:
     {
         const int n = nextOf(int(std::lround(o.worldScale * 100.0f)), {50, 75, 100, 125, 150, 200});
@@ -1032,6 +1055,8 @@ void CycleVr(const MENUENT& e)
     }
     case NID_VrCutscenes: o.fCutscenesFlat = !o.fCutscenesFlat; break;
     case NID_VrRcTable: o.fRcTable = !o.fRcTable; break;
+    case NID_VrMultiview: o.fMultiview = !o.fMultiview; break;
+    case NID_VrUpscaling: o.upscaling = (o.upscaling + 1) % 3; break;
     case NID_VrRecenter: vr::Recenter(); return;
     default: return;
     }

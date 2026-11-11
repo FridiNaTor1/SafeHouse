@@ -25,6 +25,14 @@ table platform/vulkan/vk_shaders.h declares:
 
 The variants are switch_shaders.py's plus BINDLESS (the game asks for it with the extension's #extension line, which
 the layer reads as the define). VULKAN is defined for every program.
+
+Two views (VR multiview, VK_KHR_multiview: both eyes in one render pass): each stage whose result depends on the eye is
+compiled a second time with CANE_MULTIVIEW defined (`spirvMv`; the layer takes it for a pipeline of a two-view pass).
+The eye's own values come from the storage block CaneViews (set 1, binding 11), indexed by gl_ViewIndex: the frame
+matrix and camera position for every program that reads them (MV_UNIFORMS), the frame copies' texel offsets for the
+fragment programs that read texDate / texAlpha (render.cpp keeps both views' copies side by side), and per-program
+values (MV_PROGRAM); a stage may also have code of its own under #ifdef CANE_MULTIVIEW. The variant reads exactly
+the values the eye-by-eye pass pushes, so both make the same bits.
 """
 import argparse
 import os
@@ -38,6 +46,7 @@ import switch_shaders as sw  # noqa: E402
 import glsl_fuse  # noqa: E402
 
 SLY2 = 'Sly2-Release'
+SLY2_ONLY = 'Sly2-Release only'   # (programs of Sly 2's own files, not built for another game's --game: VR's)
 _glob = [
     # key suffix, geometry, defines
     ('', None, {}),
@@ -49,6 +58,10 @@ PROGRAMS = []
 for suffix, geom, defs in _glob:
     PROGRAMS.append(('glob' + suffix, 'glob.vert', geom, 'glob.frag', dict(defs), SLY2))
     PROGRAMS.append(('glob' + suffix + '_bindless', 'glob.vert', geom, 'glob.frag', dict(defs, BINDLESS='1'), SLY2))
+    # (vertex pulling and the one blend pipeline, gl.cpp g_fDrawUniform / g_fBlend1: the Vulkan renderer on Android)
+    PROGRAMS.append(('glob' + suffix + '_pull', 'glob.vert', geom, 'glob.frag', dict(defs, CANE_PULL='1', CANE_BLEND1='1'), SLY2))
+    PROGRAMS.append(('glob' + suffix + '_bindless_pull', 'glob.vert', geom, 'glob.frag',
+                     dict(defs, BINDLESS='1', CANE_PULL='1', CANE_BLEND1='1'), SLY2))
 PROGRAMS += [
     ('celborder', 'celborder.vert', None, 'celborder.frag', {}, SLY2),
     ('hud', 'hud.vert', None, 'hud.frag', {}, SLY2),
@@ -57,17 +70,39 @@ PROGRAMS += [
     ('screen', 'screen.vert', None, 'screen.frag', {}, SLY2),
     ('shadowcombine', 'shadowcombine.vert', None, 'shadowcombine.frag', {}, SLY2),
     ('shadowdate', 'shadowcombine.vert', None, 'shadowdate.frag', {}, SLY2),
+    # (the shadow phases' frame alpha read in place: the colour attachment as input attachment, set 1 binding 16; the
+    # layer offers them with VK_KHR_dynamic_rendering_local_read)
+    ('shadowcombine_fetch', 'shadowcombine.vert', None, 'shadowcombine.frag', {'CANE_FETCH': '1'}, SLY2),
+    ('shadowdate_fetch', 'shadowcombine.vert', None, 'shadowdate.frag', {'CANE_FETCH': '1'}, SLY2),
     ('shadowvol', 'shadowvol.vert', None, 'shadowvol.frag', {}, SLY2),
     ('shadowvol_nokill', 'shadowvol.vert', None, 'shadowvol.frag', {'NOKILL': '1'}, SLY2),
+    # (VR, vr.cpp: the panel's copy, the comfort vignette, the RC table's aim mark)
+    ('vrcopy', 'vrfull.vert', None, 'vrcopy.frag', {}, SLY2_ONLY),
+    ('vrcopy_array', 'vrfull.vert', None, 'vrcopy.frag', {'CANE_ARRAY': '1'}, SLY2_ONLY),
+    ('vrvignette', 'vrfull.vert', None, 'vrvignette.frag', {}, SLY2_ONLY),
+    ('vrmark', 'vrmark.vert', None, 'vrmark.frag', {}, SLY2_ONLY),
 ]
 # (the layer's own: the masked clears' full-frame triangle, platform/vulkan/shaders)
 NATIVE = 'platform/vulkan/shaders'
-PROGRAMS += [('cane_clear', 'clear.vert', None, 'clear.frag', {}, NATIVE)]
+PROGRAMS += [('cane_clear', 'clear.vert', None, 'clear.frag', {}, NATIVE),
+             ('cane_present', 'present.vert', None, 'present.frag', {}, NATIVE)]
 
 STAGES = sw.STAGES
 NOFUSE = bool(os.environ.get('CANE_VK_NOFUSE'))
 SET_TEXTURES, SET_BUFFERS = 0, 1
+# (devices with only Vulkan's minimum of 128 push-constant bytes, e.g. Mali, SwiftShader: a program whose block is
+# larger also gets a variant that reads the same block, at the same offsets, from a uniform buffer with a dynamic offset
+# in set 2; the layer picks the variant at device creation, platform/vulkan/gl_vulkan.cpp)
+SET_UNIFORMS = 2
+PUSH_MINIMUM = 128
 INPUT_KIND = {'float': 0, 'int': 1, 'uint': 2}
+# (two views: see the module comment) the eye's values by uniform name, in every program, and per source file
+MV_BLOCK = ('layout(std430, binding = 11) readonly buffer CaneViews { mat4 caneViewMat[2]; vec4 caneViewPos[2]; '
+            'vec4 caneViewAux[2]; ivec4 caneViewFetch; };\n')
+MV_UNIFORMS = {'matWorldToClip': 'caneViewMat[gl_ViewIndex]', 'posCamera': 'caneViewPos[gl_ViewIndex].xyz'}
+MV_PROGRAM = {'vrvignette.frag': {'center': 'caneViewAux[gl_ViewIndex].xy', 'scale': 'caneViewAux[gl_ViewIndex].zw'},
+              'vrcopy.frag': {'layer': 'int(gl_ViewIndex)'}}
+MV_FETCH = re.compile(r'texelFetch\(\s*(texDate|texAlpha)\s*,\s*ivec2\(gl_FragCoord\.xy\)')
 VERT_INPUT = re.compile(r'layout\s*\(\s*location\s*=\s*(\d+)\s*\)\s*in\s+(\w+)\s+(\w+)\s*;')
 SAMPLER_CTOR = {'sampler2D': ('caneTex2D', 'texture2D'), 'sampler2DArray': ('caneTexArray', 'texture2DArray')}
 
@@ -284,14 +319,20 @@ def build_program(root, key, files, defines, directory, out_dir, glslang):
         for loc, kind, _ in VERT_INPUT.findall(sources['vert']):
             inputs[int(loc)] = input_kind(kind)
 
-    result = {}
-    for stage in [s for s in STAGES if s in sources]:
-        src = sources[stage]
+    def stage_text(stage, src, mv):
         if re.search(r'\bgl_InstanceID\b', src):
             fail(f'{key}.{stage}: gl_InstanceID (Vulkan counts the base instance in) is not handled')
         src = re.sub(r'\bgl_VertexID\b', 'gl_VertexIndex', src)
         src = gl_arithmetic(src, structs, mats)
         src = sw.UNIFORM.sub('', src)
+        if mv is not None:
+            # (two views: the eye's values from CaneViews; the uniforms stay in the push block, unread)
+            for n, v in mv.items():
+                src = re.sub(r'\b' + n + r'\b', v, src)
+            if stage == 'frag':
+                src = MV_FETCH.sub(r'texelFetch(\1, ivec2(gl_FragCoord.xy) + ivec2(caneViewFetch.x * int(gl_ViewIndex), 0)', src)
+            if 'caneView' in src:
+                src = MV_BLOCK + src
 
         def interface(m):
             direction, kind, name, array = m.group('dir'), m.group('type'), m.group('name'), m.group('array') or ''
@@ -354,6 +395,8 @@ def build_program(root, key, files, defines, directory, out_dir, glslang):
             # (the layer's texture handles: x the image's slot, y the sampler's)
             src = re.sub(r'\bsampler2D\(\s*(\w+)\s*\)',
                          r'sampler2D(caneTex2D[nonuniformEXT(\1.x)], caneSamplers[nonuniformEXT(\1.y)])', src)
+        if 'CANE_FETCH' in defines and stage == 'frag':
+            decl.append(f'layout(input_attachment_index = 0, set = {SET_BUFFERS}, binding = 16) uniform subpassInput caneFbFetch;')
         decl.append(glsl_fuse.fma_helpers() + HELPERS)
         if decl:
             func = re.search(r'^[ \t]*(?:void|bool|float|int|uint|vec[234]|ivec[234]|uvec[234]|mat[34]|\w+)\s+\w+\s*\([^;{]*\)\s*\{',
@@ -365,19 +408,55 @@ def build_program(root, key, files, defines, directory, out_dir, glslang):
         if stage in ('vert', 'geom') and not NOFUSE:
             src = glsl_fuse.fuse_source(src)   # (the OpenGL compiler's fused multiply-adds: cmake/glsl_fuse.py)
         header = '#version 460\n#extension GL_EXT_nonuniform_qualifier : require\n'
-        text = header + src
-        glsl = out_dir / f'{key}.{stage}.glsl'
-        binary = out_dir / f'{key}.{stage}.spv'
-        glsl.write_text(text, encoding='utf-8')
-        proc = subprocess.run([str(glslang), '-V', '--target-env', 'vulkan1.2', '--quiet', '-S', stage, '-o', str(binary),
-                               str(glsl)], capture_output=True, text=True)
-        if proc.returncode != 0:
-            sys.stderr.write(proc.stdout + proc.stderr)
-            fail(f'glslangValidator failed on {glsl}')
-        data = binary.read_bytes()
-        if len(data) < 20 or len(data) % 4 or data[:4] != b'\x03\x02\x23\x07':
-            fail(f'invalid SPIR-V output: {binary}')
-        result[stage] = {'data': data, 'storage': storage}
+        if mv is not None:
+            header += '#extension GL_EXT_multiview : require\n'
+        return header + src, storage
+
+    def view_source(stage, name):
+        """The stage's two-view source (None: the same as the one view's): preprocessed with CANE_MULTIVIEW, the eye's
+        values from CaneViews."""
+        text = (root / directory / name).read_text(encoding='utf-8-sig')
+        src = sw.preprocess(sw.strip_comments(text), dict(stage_defines, CANE_MULTIVIEW='1'))
+        changed = src != sources[stage]
+        if sorted(sw.UNIFORM.findall(src)) != sorted(sw.UNIFORM.findall(sources[stage])):
+            fail(f'{key}.{stage}: CANE_MULTIVIEW changes the uniforms (the push block must stay the same)')
+        names = set(sw.UNIFORM.findall(src))
+        subst = {n: v for n, v in dict(MV_UNIFORMS, **MV_PROGRAM.get(name, {})).items() if any(u[1] == n for u in names)}
+        if subst or (stage == 'frag' and MV_FETCH.search(src)):
+            changed = True
+        if not changed:
+            return None, subst
+        return src, subst
+
+    result = {}
+    for stage, name in zip(STAGES, files):
+        if stage not in sources:
+            continue
+        text, storage = stage_text(stage, sources[stage], None)
+
+        def compile_text(text, suffix):
+            glsl = out_dir / f'{key}{suffix}.{stage}.glsl'
+            binary = out_dir / f'{key}{suffix}.{stage}.spv'
+            glsl.write_text(text, encoding='utf-8')
+            proc = subprocess.run([str(glslang), '-V', '--target-env', 'vulkan1.2', '--quiet', '-S', stage, '-o', str(binary),
+                                   str(glsl)], capture_output=True, text=True)
+            if proc.returncode != 0:
+                sys.stderr.write(proc.stdout + proc.stderr)
+                fail(f'glslangValidator failed on {glsl}')
+            data = binary.read_bytes()
+            if len(data) < 20 or len(data) % 4 or data[:4] != b'\x03\x02\x23\x07':
+                fail(f'invalid SPIR-V output: {binary}')
+            return data
+        result[stage] = {'data': compile_text(text, ''), 'storage': storage, 'ubo': None, 'mv': None, 'storage_mv': storage}
+        if push_size > PUSH_MINIMUM:
+            push_decl = 'layout(push_constant, std140) uniform CanePush'
+            ubo_text = text.replace(push_decl, f'layout(set = {SET_UNIFORMS}, binding = 0, std140) uniform CanePush')
+            result[stage]['ubo'] = compile_text(ubo_text, '_ubo')
+        mv_src, subst = view_source(stage, name)
+        if mv_src is not None:
+            mv_text, mv_storage = stage_text(stage, mv_src, subst)
+            result[stage]['mv'] = compile_text(mv_text, '_mv')
+            result[stage]['storage_mv'] = mv_storage
 
     sampler_list = sorted(samplers.items(), key=lambda kv: kv[1]['binding'])
     return {'key': key, 'files': files, 'defines': defines, 'rows': rows, 'push_size': push_size,
@@ -398,25 +477,38 @@ def main():
     parser.add_argument('--source', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--glslang', type=Path, required=True)
+    parser.add_argument('--game', default=SLY2, help='the game folder whose GLSL sources are compiled (default Sly2-Release)')
     args = parser.parse_args()
 
     work = args.output / 'vk_shaders'
     work.mkdir(parents=True, exist_ok=True)
     programs = [build_program(args.source, key, (vert, geom, frag), defines, directory, work, args.glslang)
-                for key, vert, geom, frag, defines, directory in PROGRAMS]
+                for key, vert, geom, frag, defines, directory in
+                [(k, v, g, f, d, args.game if dr in (SLY2, SLY2_ONLY) else dr) for k, v, g, f, d, dr in PROGRAMS
+                 if dr != SLY2_ONLY or args.game == SLY2]]
 
     c = ['// Generated by cmake/vulkan_shaders.py from the GLSL sources: do not edit.',
          '#include "vk_shaders.h"', 'namespace CaneVk::Shaders {', 'namespace {']
     entries = []
     for p in programs:
         key = p['key']
-        blobs = []
+        blobs, ubo_blobs, mv_blobs = [], [], []
         for stage in STAGES:
+            if stage in p['stages'] and p['stages'][stage]['mv']:
+                c.extend(c_words(f'{key}_{stage}_mv', p['stages'][stage]['mv']))
+                mv_blobs.append((f'{key}_{stage}_mv', f'sizeof({key}_{stage}_mv)'))
+            else:
+                mv_blobs.append(('nullptr', '0'))
             if stage in p['stages']:
                 c.extend(c_words(f'{key}_{stage}', p['stages'][stage]['data']))
                 blobs.append((f'{key}_{stage}', f'sizeof({key}_{stage})'))
             else:
                 blobs.append(('nullptr', '0'))
+            if stage in p['stages'] and p['stages'][stage]['ubo']:
+                c.extend(c_words(f'{key}_{stage}_ubo', p['stages'][stage]['ubo']))
+                ubo_blobs.append((f'{key}_{stage}_ubo', f'sizeof({key}_{stage}_ubo)'))
+            else:
+                ubo_blobs.append(('nullptr', '0'))
         rows = [f'    {{"{f["name"]}", {f["offset"]}, {f["size"]}, {f["count"]}, {f["stride"]}, {sw.TYPE_CODES[f["type"]]}, 0, 0}},'
                 for f in p['rows']]
         rows += [f'    {{"{name}", {8 * s["binding"]}, 8, 1, 8, {sw.TYPE_CODES[s["type"]]}, {s["binding"]}, {s["stages"]}}},'
@@ -428,6 +520,7 @@ def main():
             c.append('};')
             uniforms = f'{key}_uniforms'
         storage = ', '.join(str(p['stages'][s]['storage']) if s in p['stages'] else '0' for s in STAGES)
+        storage_mv = ', '.join(str(p['stages'][s]['storage_mv']) if s in p['stages'] else '0' for s in STAGES)
         input_mask = sum(1 << loc for loc in p['inputs'])
         input_kinds = sum(kind << (2 * loc) for loc, kind in p['inputs'].items())
         defines = ';'.join(f'{k}={v}' for k, v in sorted(p['defines'].items()))
@@ -436,7 +529,9 @@ def main():
         entries.append(f'    {{"{p["key"]}", "{vert}", {geom_c}, "{frag}", "{defines}", '
                        f'{{{", ".join(b[0] for b in blobs)}}}, {{{", ".join(b[1] for b in blobs)}}}, '
                        f'{uniforms}, {len(rows)}, {p["push_size"]}, {{{storage}}}, {len(p["samplers"])}, '
-                       f'{input_mask}u, {input_kinds}u}},')
+                       f'{input_mask}u, {input_kinds}u, '
+                       f'{{{", ".join(b[0] for b in ubo_blobs)}}}, {{{", ".join(b[1] for b in ubo_blobs)}}}, '
+                       f'{{{", ".join(b[0] for b in mv_blobs)}}}, {{{", ".join(b[1] for b in mv_blobs)}}}, {{{storage_mv}}}}},')
     c.append('}  // namespace')
     c.append('const Program programs[] = {')
     c.extend(entries)

@@ -95,6 +95,7 @@
   "Audio": "Audio",
   "Auto uses Vulkan and switches to OpenGL by itself when the graphics driver cannot run Vulkan. After a Vulkan start that failed, Auto stays on OpenGL until Vulkan is chosen here. Takes effect the next time the game starts.": "Automático usa Vulkan y pasa por sí solo a OpenGL si el controlador gráfico no puede ejecutar Vulkan. Tras un inicio fallido de Vulkan, Automático sigue con OpenGL hasta que elijas Vulkan aquí. Se aplica la próxima vez que inicies el juego.",
   "Auto (Vulkan)": "Automático (Vulkan)",
+  "Auto uses Vulkan, and OpenGL ES when this device cannot run it, in VR, or when the last start on Vulkan did not finish. Vulkan tries it again. Takes effect the next time the game starts.": "Automático usa Vulkan, y OpenGL ES cuando este dispositivo no puede ejecutarlo, en RV o cuando el último inicio con Vulkan no terminó. Vulkan lo vuelve a intentar. Se aplica la próxima vez que inicies el juego.",
   "Automatic": "Automático",
   "Automatic camera rotation": "Rotación automática de la cámara",
   "Back": "Atrás",

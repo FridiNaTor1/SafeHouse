@@ -22,6 +22,9 @@ std::string filesDirectory();
 std::string nativeLibraryDirectory();
 void showGame();
 void showLauncher();
+// (the launcher's own process: LauncherActivity or DirectActivity) its activity back to the front, e.g. when its game
+// has ended (glfwShowWindow there).
+void showLauncherWindow();
 // Called on the SDL owner thread before closing FAudio. Background audio must
 // resume its buffer callbacks so SDL can join its mixing thread during teardown.
 void prepareRuntimeShutdown();
@@ -68,6 +71,10 @@ void setTouchContext(TouchContext context);
 void vibrate(int amplitude);
 // Asks the display for the game's frame rate (glfw_sdl.cpp). Cheap per frame.
 void setPresentationRate(int framesPerSecond);
+// (glfw_sdl.cpp) The game window's surface for a Vulkan renderer (a window made with GLFW_CLIENT_API = GLFW_NO_API):
+// a number that changes whenever Android replaced the activity's surface (pause / resume, a new window), 0 while
+// there is none or the app is in the background. Cheap per frame.
+std::uint64_t windowSurfaceSerial();
 // A frame-rate ceiling while Android reports severe thermal status (API 29+),
 // or 0. The user's saved frame-rate choice is never changed.
 int thermalFrameCap();

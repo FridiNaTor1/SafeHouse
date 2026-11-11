@@ -846,6 +846,16 @@ private:
                         "Vulkan start that failed, Auto stays on OpenGL until Vulkan is chosen here. Takes effect the next "
                         "time the game starts."));
         }
+#elif defined(__ANDROID__)
+        // (Sly2-Release renderer.cpp on Android: Auto is Vulkan, OpenGL ES when it cannot start, for VR, or after a
+        // start that stopped in its first frames)
+        if (m_game == GameId::Sly2) {
+            const std::vector<std::string> renderers{ tr("Automatic"), "Vulkan", "OpenGL ES" };
+            int renderer = std::clamp(m_settings.renderer, 0, 2);
+            if (stepperRow(tr("Renderer"), &renderer, renderers)) m_settings.renderer = renderer, commit();
+            describe(tr("Auto uses Vulkan, and OpenGL ES when this device cannot run it, in VR, or when the last start on "
+                        "Vulkan did not finish. Vulkan tries it again. Takes effect the next time the game starts."));
+        }
 #endif
         if (m_game != GameId::Sly1) return;   // (Sly 2 has no fog option)
         const std::vector<std::string> fogs{ tr("PS2 style"), tr("PS3 style") };

@@ -75,6 +75,7 @@ public final class NativeBridge {
         volatile long lastAliveCheck, goneSince;
         ServiceConnection keepalive;
         PipeBinder pipes;
+        volatile boolean game;         // the game's activity (GameActivity), not a tool service
     }
     private static final class PipeBinder extends Binder {
         private ParcelFileDescriptor input, output;
@@ -197,6 +198,7 @@ public final class NativeBridge {
                     if (!current.getApplicationContext().bindService(new Intent(current, RuntimeKeeperService.class),
                         state.keepalive, Context.BIND_AUTO_CREATE | Context.BIND_IMPORTANT))
                         throw new IOException("Cannot keep the native session process connected");
+                    state.game = true;
                     intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK); current.startActivity(intent);
                 }
             } catch (Exception error) { failure[0] = error; }
@@ -222,7 +224,8 @@ public final class NativeBridge {
             else if (child.goneSince == 0) child.goneSince = now;
             else if (now - child.goneSince >= 500) child.running = false;
         }
-        if (child.running && child.pid == 0 && android.os.SystemClock.elapsedRealtime() - child.created > 20000) child.running = false;
+        // (a child that never reported its process: given up after a minute; a slow device took 21 s to start one)
+        if (child.running && child.pid == 0 && android.os.SystemClock.elapsedRealtime() - child.created > 60000) child.running = false;
         return child.running;
     }
     public static int childExitCode(long handle) {
@@ -252,6 +255,27 @@ public final class NativeBridge {
     }
     static boolean exitWasReported() { return reportedExit; }
 
+    /**
+     * The launcher's activity came to the front while its game still runs (Android's Recents shows only the launcher's
+     * task, and the app's icon brings it back too): the launcher draws nothing while a game runs, so the game's
+     * activity is brought back to the front. Checked again a moment later, so that a game which is just ending (its
+     * exit code on the way) is not started again. Not after the game itself asked for the launcher (showLauncher).
+     */
+    static void resumeRunningGame(LauncherActivity launcher) {
+        if (launcher.getIntent() != null && launcher.getIntent().getBooleanExtra("game-asked", false)) {
+            launcher.getIntent().removeExtra("game-asked");
+            return;
+        }
+        UI.postDelayed(() -> {
+            boolean running = false;
+            for (java.util.Map.Entry<Long, Child> entry : CHILDREN.entrySet())
+                if (entry.getValue().game && childRunning(entry.getKey())) running = true;
+            if (!running || launcher.isFinishing() || launcher.isDestroyed()) return;
+            if (!launcher.resumed) return;   // (left again in the meantime)
+            launcher.startActivity(new Intent(launcher, GameActivity.class)
+                .addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT | Intent.FLAG_ACTIVITY_NEW_TASK));
+        }, 300);
+    }
     public static void showGame() {
         GameActivity.visibleRequested = true;
         Activity current = activity;
@@ -273,11 +297,18 @@ public final class NativeBridge {
                 new android.media.AudioAttributes.Builder().setUsage(android.media.AudioAttributes.USAGE_GAME).build());
         } catch (RuntimeException ignored) { }
     }
+    /** (the launcher's process) its own activity, LauncherActivity or DirectActivity, back to the front. */
+    public static void showLauncherWindow() {
+        Activity current = activity;
+        if (current == null) return;
+        UI.post(() -> current.startActivity(new Intent(current, current.getClass()).putExtra("game-asked", true)
+            .addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT | Intent.FLAG_ACTIVITY_NEW_TASK)));
+    }
     public static void showLauncher() {
         GameActivity.visibleRequested = false;
         Activity current = activity;
         if (current == null) return;
-        UI.post(() -> current.startActivity(new Intent(current, LauncherActivity.class)
+        UI.post(() -> current.startActivity(new Intent(current, LauncherActivity.class).putExtra("game-asked", true)
             .addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT | Intent.FLAG_ACTIVITY_NEW_TASK)));
     }
     public static void prepareRuntimeShutdown() {

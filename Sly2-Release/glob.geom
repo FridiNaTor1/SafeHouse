@@ -9,6 +9,10 @@
 // shadow combine's darkness) to 0. Here the near plane is w - z >= 0 (render.cpp: reversed-Z, z = near); a triangle
 // wholly in front is passed through unchanged.
 
+#if defined(CANE_BLEND1) && defined(BINDLESS)
+#define CANE_DRAWSTATE 1   // (glob.vert)
+#endif
+
 layout (triangles) in;
 layout (triangle_strip, max_vertices = 4) out;
 
@@ -18,6 +22,10 @@ noperspective in float gsFog[];
 #ifdef BINDLESS
 flat in uvec2 gsTexh[];
 flat out uvec2 vTexh;
+#endif
+#ifdef CANE_DRAWSTATE
+flat in uint gsDrawState[];
+flat out uint vDrawState;
 #endif
 #ifdef TEXARRAY
 flat in uint gsLayer[];
@@ -36,6 +44,9 @@ void EmitAt(int i, int j, float t)
     vFog = mix(gsFog[i], gsFog[j], t);
 #ifdef BINDLESS
     vTexh = gsTexh[0];
+#endif
+#ifdef CANE_DRAWSTATE
+    vDrawState = gsDrawState[0];
 #endif
 #ifdef TEXARRAY
     vLayer = gsLayer[0];

@@ -1,5 +1,10 @@
+#ifndef VK_NO_PROTOTYPES
+#define VK_NO_PROTOTYPES
+#endif
+#include <vulkan/vulkan.h>   // (glfwCreateWindowSurface: Sly 2's Vulkan renderer on the SDL surface)
 #include <GLFW/glfw3.h>
 #include <SDL.h>
+#include <SDL_vulkan.h>
 #include <SDL_syswm.h>
 #include <android/native_window.h>
 #include <dlfcn.h>
@@ -36,6 +41,7 @@ struct GLFWwindow {
     // cameras and offscreen preview/readback retain their physical pixels.
     float uiScale = 1;
     bool close = false, focused = true, visible = true;
+    bool vulkan = false;   // (made with GLFW_NO_API: SDL_WINDOW_VULKAN, no GL context)
     int cursorMode = GLFW_CURSOR_NORMAL;
     std::array<unsigned char, GLFW_KEY_LAST + 1> keys{};
     std::array<unsigned char, 8> mouse{};
@@ -64,6 +70,7 @@ GLFWmonitorfun monitorCallback = nullptr;
 std::string lastError, clipboard;
 int lastCode = 0;
 bool visibleHint = true;
+bool noApiHint = false;   // GLFW_CLIENT_API = GLFW_NO_API: a Vulkan window (no EGL context)
 bool lostGraphics = false;
 bool appForeground = true;
 struct AndroidIme {
@@ -73,6 +80,7 @@ struct AndroidIme {
     bool wanted = false, wasActive = false, reactivate = false;
     bool consumeBackRelease = false;
 } ime;
+std::uint64_t surfaceGeneration = 1;   // (cane::android::windowSurfaceSerial)
 bool touchControlsVisible = true;
 bool touchControlsKnown = false;
 struct TouchDrag {
@@ -148,7 +156,7 @@ void createParkingSurface(GLFWwindow* window) {
     window->parkingSurface=eglCreatePbufferSurface(window->display,config,size);
 }
 void retainGraphicsContext(GLFWwindow* window) {
-    if(!window || window->offscreen || lostGraphics)return;
+    if(!window || window->offscreen || window->vulkan || lostGraphics)return;
     const auto expected=static_cast<EGLContext>(window->context);
     const EGLContext actual=eglGetCurrentContext();
     if(actual==expected)return;
@@ -345,6 +353,9 @@ void event(const SDL_Event& ev) {
     switch(ev.type) {
     case SDL_QUIT: w->close=true;break;
     case SDL_RENDER_DEVICE_RESET:
+        // (a Vulkan window has no EGL context to lose: SDL's resume posts this when its EGL restore finds none; the
+        // renderer makes its surface again itself, cane::android::windowSurfaceSerial)
+        if(w->vulkan)break;
         // SDL can replace a lost EGL context on resume. Every engine GPU name
         // and state cache then belongs to the former context. End the session
         // through its normal save/exit path rather than use those stale names.
@@ -354,7 +365,7 @@ void event(const SDL_Event& ev) {
         w->keys.fill(0);w->mouse.fill(0);w->focused=false;
         if(w->focus)w->focus(w,0);break;
     case SDL_APP_DIDENTERFOREGROUND:
-        appForeground=true;
+        appForeground=true;++surfaceGeneration;
         w->focused=true;if(w->focus)w->focus(w,1);break;
     case SDL_WINDOWEVENT:
         if(ev.window.event==SDL_WINDOWEVENT_SIZE_CHANGED || ev.window.event==SDL_WINDOWEVENT_RESIZED) {
@@ -445,8 +456,30 @@ void event(const SDL_Event& ev) {
     }
 }
 }
+namespace {
+SDL_Window* createSurfaceWindow(const char* title,const GLFWvidmode& dm,Uint32 flags) {
+    // The activity can be between surfaces when the game makes its window (a portrait phone turning to landscape at
+    // start destroys the first surface): SDL then fails with "Could not fetch native window". Wait for the new one.
+    for(int attempt=0;;++attempt){
+        SDL_Window* window=SDL_CreateWindow(title,0,0,dm.width>0?dm.width:1280,dm.height>0?dm.height:720,flags);
+        if(window || attempt>=100)return window;
+        if(attempt==0)std::cerr<<"Android: no surface for the window yet ("<<SDL_GetError()<<"): waiting"<<std::endl;
+        SDL_PumpEvents();SDL_Delay(30);
+    }
+}
+}
 namespace cane::android {
 bool graphicsContextLost(){return lostGraphics;}
+std::uint64_t windowSurfaceSerial() {
+    // SDL replaces data->native_window on the Java thread (surfaceDestroyed: NULL, surfaceCreated: the new one); a
+    // change seen here, or a return to the foreground, means a new surface for the renderer.
+    static ANativeWindow* seen=nullptr;
+    if(!current || !current->vulkan || !current->native)return 0;
+    SDL_SysWMinfo info;SDL_VERSION(&info.version);
+    ANativeWindow* window=SDL_GetWindowWMInfo(current->native,&info) && info.subsystem==SDL_SYSWM_ANDROID?info.info.android.window:nullptr;
+    if(window!=seen){seen=window;++surfaceGeneration;}
+    return window && appForeground?surfaceGeneration:0;
+}
 void setPresentationRate(int framesPerSecond) {
     // ANativeWindow_setFrameRate (API 30) lets a 90/120 Hz panel drop to the
     // game's rate: the display and compositor stop waking twice per frame and
@@ -476,7 +509,8 @@ int glfwInit() {
     refreshPads();return 1;
 }
 void glfwTerminate(){for(auto& p:pads){if(p.controller)SDL_GameControllerClose(p.controller);p={};}joystickCallback=nullptr;SDL_QuitSubSystem(SDL_INIT_VIDEO|SDL_INIT_GAMECONTROLLER);}
-void glfwWindowHint(int hint,int value){if(hint==GLFW_VISIBLE)visibleHint=value!=0;}
+void glfwWindowHint(int hint,int value){if(hint==GLFW_VISIBLE)visibleHint=value!=0;else if(hint==GLFW_CLIENT_API)noApiHint=value==GLFW_NO_API;}
+void glfwDefaultWindowHints(){visibleHint=true;noApiHint=false;}
 void glfwWindowHintString(int,const char*){}
 int glfwGetPlatform(){return GLFW_PLATFORM_NULL;}
 GLFWwindow* glfwCreateWindow(int width,int height,const char* title,GLFWmonitor*,GLFWwindow*) {
@@ -506,6 +540,16 @@ GLFWwindow* glfwCreateWindow(int width,int height,const char* title,GLFWmonitor*
     }
     if(const char* role=std::getenv("SAFEHOUSE_ANDROID_ROLE");role && std::strcmp(role,"game")==0)
         cane::android::showGame();
+    if(noApiHint){
+        // (Sly 2's Vulkan renderer: the activity's surface for VK_KHR_android_surface; no EGL context)
+        auto* w=new GLFWwindow;w->visible=visibleHint;w->vulkan=true;
+        auto dm=mode();
+        w->native=createSurfaceWindow(title,dm,SDL_WINDOW_VULKAN|SDL_WINDOW_FULLSCREEN|SDL_WINDOW_RESIZABLE|SDL_WINDOW_ALLOW_HIGHDPI);
+        if(!w->native){error(GLFW_PLATFORM_ERROR,SDL_GetError());delete w;return nullptr;}
+        updateUiScale(w);
+        if(!launcherProcess() && SDL_IsTextInputActive())SDL_StopTextInput();
+        current=w;return w;
+    }
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK,SDL_GL_CONTEXT_PROFILE_ES);
     // ES 3.2: Sly 2's glob program has a geometry stage and vertex-stage storage buffers (gles_sly2.cpp).
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION,3);SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION,2);
@@ -517,7 +561,7 @@ GLFWwindow* glfwCreateWindow(int width,int height,const char* title,GLFWmonitor*
     SDL_GL_SetAttribute(SDL_GL_ALPHA_SIZE,0);
     auto* w=new GLFWwindow;w->visible=visibleHint;
     auto dm=mode();
-    w->native=SDL_CreateWindow(title,0,0,dm.width>0?dm.width:1280,dm.height>0?dm.height:720,SDL_WINDOW_OPENGL|SDL_WINDOW_FULLSCREEN|SDL_WINDOW_RESIZABLE|SDL_WINDOW_ALLOW_HIGHDPI);
+    w->native=createSurfaceWindow(title,dm,SDL_WINDOW_OPENGL|SDL_WINDOW_FULLSCREEN|SDL_WINDOW_RESIZABLE|SDL_WINDOW_ALLOW_HIGHDPI);
     if(w->native)w->context=SDL_GL_CreateContext(w->native);
     // (an ES 3.1 / 3.0 GPU, or the emulator's software renderer, still runs the launcher; Sly 2 reports what it lacks)
     for(int minor=1;w->native && !w->context && minor>=0;--minor){
@@ -542,17 +586,19 @@ void glfwDestroyWindow(GLFWwindow* w){
             if(eglGetCurrentSurface(EGL_DRAW)==w->parkingSurface)eglMakeCurrent(w->display,EGL_NO_SURFACE,EGL_NO_SURFACE,EGL_NO_CONTEXT);
             eglDestroySurface(w->display,w->parkingSurface);
         }
-        SDL_GL_DeleteContext(w->context);SDL_DestroyWindow(w->native);
+        if(w->context)SDL_GL_DeleteContext(w->context);
+        SDL_DestroyWindow(w->native);
     }
     if(current==w)current=nullptr;delete w;
 }
 void glfwMakeContextCurrent(GLFWwindow* w){
     if(w){
         if(w->offscreen){if(!eglMakeCurrent(w->display,w->surface,w->surface,w->eglContext)){error(GLFW_PLATFORM_ERROR,"Cannot activate Android preview pbuffer");return;}}
+        else if(w->vulkan){}
         else if(SDL_GL_MakeCurrent(w->native,w->context)!=0){error(GLFW_PLATFORM_ERROR,SDL_GetError());return;}
     }else if(current){
         if(current->offscreen)eglMakeCurrent(current->display,EGL_NO_SURFACE,EGL_NO_SURFACE,EGL_NO_CONTEXT);
-        else SDL_GL_MakeCurrent(current->native,nullptr);
+        else if(!current->vulkan)SDL_GL_MakeCurrent(current->native,nullptr);
     }
     current=w;
 }
@@ -573,7 +619,18 @@ int glfwExtensionSupported(const char* extension){
     }
     return SDL_GL_ExtensionSupported(extension);
 }
-void glfwSwapBuffers(GLFWwindow* w){if(w){if(w->offscreen)glFlush();else if(w->native && w->focused && !lostGraphics)SDL_GL_SwapWindow(w->native);}}
+void glfwSwapBuffers(GLFWwindow* w){if(w && !w->vulkan){if(w->offscreen)glFlush();else if(w->native && w->focused && !lostGraphics)SDL_GL_SwapWindow(w->native);}}
+const char** glfwGetRequiredInstanceExtensions(uint32_t* count){
+    static std::vector<const char*> names;
+    unsigned n=0;
+    if(!current || !current->vulkan || !SDL_Vulkan_GetInstanceExtensions(current->native,&n,nullptr)){if(count)*count=0;return nullptr;}
+    names.resize(n);SDL_Vulkan_GetInstanceExtensions(current->native,&n,names.data());
+    if(count)*count=n;return names.data();
+}
+VkResult glfwCreateWindowSurface(VkInstance instance,GLFWwindow* w,const VkAllocationCallbacks*,VkSurfaceKHR* surface){
+    if(!w || !w->vulkan || !SDL_Vulkan_CreateSurface(w->native,instance,surface))return VK_ERROR_INITIALIZATION_FAILED;
+    return VK_SUCCESS;
+}
 void glfwSwapInterval(int value){if(!current || !current->offscreen)SDL_GL_SetSwapInterval(value);}
 void glfwPollEvents(){
     installIme();detectImeDismissal();
@@ -583,7 +640,7 @@ void glfwPollEvents(){
 void glfwWaitEventsTimeout(double seconds){SDL_Event ev;if(SDL_WaitEventTimeout(&ev,int(std::clamp(seconds,0.0,1.0)*1000)))event(ev);glfwPollEvents();}
 int glfwWindowShouldClose(GLFWwindow* w){return w?w->close:0;}
 void glfwSetWindowShouldClose(GLFWwindow* w,int value){if(w)w->close=value!=0;}
-void glfwGetFramebufferSize(GLFWwindow* w,int* width,int* height){int a=0,b=0;if(w){if(w->offscreen){a=w->width;b=w->height;}else SDL_GL_GetDrawableSize(w->native,&a,&b);}if(width)*width=a;if(height)*height=b;}
+void glfwGetFramebufferSize(GLFWwindow* w,int* width,int* height){int a=0,b=0;if(w){if(w->offscreen){a=w->width;b=w->height;}else if(w->vulkan)SDL_Vulkan_GetDrawableSize(w->native,&a,&b);else SDL_GL_GetDrawableSize(w->native,&a,&b);}if(width)*width=a;if(height)*height=b;}
 void glfwGetWindowSize(GLFWwindow* w,int* width,int* height){int a=0,b=0;if(w){if(w->offscreen){a=w->width;b=w->height;}else{updateUiScale(w);SDL_GetWindowSize(w->native,&a,&b);a=int(std::round(a/w->uiScale));b=int(std::round(b/w->uiScale));}}if(width)*width=a;if(height)*height=b;}
 void glfwGetWindowContentScale(GLFWwindow* w,float* x,float* y){updateUiScale(w);const auto scale=coordinateScale(w);if(x)*x=scale.x;if(y)*y=scale.y;}
 void glfwGetWindowPos(GLFWwindow*,int* x,int* y){if(x)*x=0;if(y)*y=0;}
@@ -601,8 +658,17 @@ void glfwSetWindowMonitor(GLFWwindow*,GLFWmonitor*,int,int,int,int,int){}
 void glfwSetWindowIcon(GLFWwindow*,int,const GLFWimage*){}
 void glfwSetWindowAttrib(GLFWwindow*,int,int){}
 int glfwGetWindowAttrib(GLFWwindow* w,int attr){if(!w)return 0;if(attr==GLFW_FOCUSED)return w->focused;if(attr==GLFW_ICONIFIED)return !w->focused;if(attr==GLFW_VISIBLE)return w->visible;return 0;}
-void glfwShowWindow(GLFWwindow* w){if(w){w->visible=true;if(!w->offscreen)cane::android::showGame();}}
-void glfwHideWindow(GLFWwindow* w){if(w){w->visible=false;if(!w->offscreen)cane::android::showLauncher();}}
+// (the game's process: its window shown = the game's activity, hidden = the launcher's. The launcher's process hides
+// its window while a game runs, which the game's activity covers by itself, and shows it when the game has ended: its
+// own activity back to the front. It never starts the game's activity: one started without its session ends at once.)
+void glfwShowWindow(GLFWwindow* w){
+    if(!w)return;
+    w->visible=true;
+    if(w->offscreen)return;
+    if(launcherProcess())cane::android::showLauncherWindow();
+    else cane::android::showGame();
+}
+void glfwHideWindow(GLFWwindow* w){if(w){w->visible=false;if(!w->offscreen && !launcherProcess())cane::android::showLauncher();}}
 void glfwIconifyWindow(GLFWwindow*){}
 void glfwRestoreWindow(GLFWwindow*){}
 void glfwFocusWindow(GLFWwindow*){}

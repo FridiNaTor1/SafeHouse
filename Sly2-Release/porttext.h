@@ -60,7 +60,7 @@ enum PTX : int
     PTX_RemapBack, PTX_RemapChange, PTX_RemapClear, PTX_RemapPressKey, PTX_RemapPressButton, PTX_RemapFixed,
     // (VR, vr.h) the pause menu's VR Settings page (shown with a headset only)
     PTX_VrSettings, PTX_VrMode, PTX_VrImmersive, PTX_VrFlatScreen, PTX_VrVignette, PTX_VrLow, PTX_VrMedium, PTX_VrHigh,
-    PTX_VrScreenSize, PTX_VrSmall, PTX_VrLarge, PTX_VrRefreshRate, PTX_VrWorldScale, PTX_VrRecenter,
+    PTX_VrScreenSize, PTX_VrSmall, PTX_VrLarge, PTX_VrRefreshRate, PTX_VrEyeResolution, PTX_VrFoveation, PTX_VrMultiview, PTX_VrUpscaling, PTX_VrSharpen, PTX_VrSuperResolution, PTX_VrDynamic, PTX_VrWorldScale, PTX_VrRecenter,
     PTX_VrCutscenes, PTX_VrRcTable,
     // the pause menu's Exit to Desktop when the game was started from SafeHouse's Collection Style Launcher
     // (SAFEHOUSE_LAUNCHER=collection: quitting returns to it)

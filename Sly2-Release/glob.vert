@@ -9,6 +9,12 @@ invariant gl_Position;
 precise gl_Position;
 #endif
 
+// (render.cpp FDrawStateOn: the Vulkan renderer's pulled programs with bindless handles take each pass draw's colour
+// source, fog black and CANE_BLEND1 mode from its draw entry, the handle's third word; 0 there: the uniforms)
+#if defined(CANE_BLEND1) && defined(BINDLESS)
+#define CANE_DRAWSTATE 1
+#endif
+
 // (with glob.geom, the near-plane clip: the outputs go to it under these names, and it passes them on as v*)
 #ifdef GEOM
 #define vColor gsColor
@@ -16,6 +22,7 @@ precise gl_Position;
 #define vFog gsFog
 #define vTexh gsTexh
 #define vLayer gsLayer
+#define vDrawState gsDrawState
 #endif
 
 #ifdef CANE_PULL
@@ -87,7 +94,12 @@ layout (std430, binding = 4) readonly buffer WARPMATS { mat4 amatWarp[]; };
 layout (std430, binding = 1) readonly buffer DRAWS { vec4 adraw[]; };   // SAA du, dv (P_G 421 adds it to every ST), object alpha (qw8.x), record
 #ifdef BINDLESS
 // (perf-3, ARB_bindless_texture) each pass draw's texture + sampler handle (render.cpp: 0 = the bound tex)
+#ifdef CANE_DRAWSTATE
+layout (std430, binding = 5) readonly buffer TEXHANDLES { uvec4 atexh[]; };   // handle, state word (render.cpp DrawStateWord)
+flat out uint vDrawState;
+#else
 layout (std430, binding = 5) readonly buffer TEXHANDLES { uvec2 atexh[]; };
+#endif
 flat out uvec2 vTexh;
 #endif
 #ifdef TEXARRAY
@@ -112,8 +124,16 @@ void main()
     CanePull();
 #endif
     vec4 d = adraw[aDraw];
+#ifdef CANE_DRAWSTATE
+    uvec4 texhds = atexh[aDraw];
+    vTexh = texhds.xy;
+    vDrawState = texhds.z;
+    int icolorDraw = (texhds.z & 0x80000000u) != 0u ? int(texhds.z & 3u) : icolor;
+#define icolor icolorDraw
+#else
 #ifdef BINDLESS
     vTexh = atexh[aDraw];
+#endif
 #endif
 #ifdef TEXARRAY
     vLayer = alayer[aDraw].x;

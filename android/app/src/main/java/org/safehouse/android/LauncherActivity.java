@@ -27,7 +27,17 @@ public class LauncherActivity extends SDLActivity {
         super.onActivityResult(request, result, data);
         NativeBridge.selectionResult(request, result, data);
     }
-    @Override protected void onResume() { super.onResume(); DesktopMode.apply(this); }
+    volatile boolean resumed;
+    @Override protected void onResume() {
+        super.onResume(); DesktopMode.apply(this);
+        resumed = true;
+        NativeBridge.resumeRunningGame(this);   // (back from Recents or the icon while a game runs: the game's activity)
+    }
+    @Override protected void onPause() { resumed = false; super.onPause(); }
+    @Override protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);   // (NativeBridge.resumeRunningGame reads "game-asked": the game's own showLauncher)
+    }
     @Override public void onConfigurationChanged(Configuration config) {
         super.onConfigurationChanged(config); DesktopMode.apply(this);
     }

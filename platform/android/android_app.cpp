@@ -195,6 +195,7 @@ std::string filesDirectory() { std::lock_guard lock(stateMutex); return filesPat
 std::string nativeLibraryDirectory() { std::lock_guard lock(stateMutex); return libraryPath; }
 void showGame() { call("showGame"); }
 void showLauncher() { call("showLauncher"); }
+void showLauncherWindow() { call("showLauncherWindow"); }
 void prepareRuntimeShutdown() {
     if (!SDL_WasInit(SDL_INIT_VIDEO)) return;
     // Native resume only posts SDL's lifecycle semaphore. Pump it here on the

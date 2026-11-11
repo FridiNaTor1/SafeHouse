@@ -73,6 +73,11 @@ struct Sly2VrOptions {
     float worldScale = 1.0f;     // Immersive: 1.00 life size (0.50 to 2.00)
     int cutscenesFlat = 1;       // Immersive: the cutscenes on the Flat Screen
     int rcTable = 0;             // Immersive, experimental: Ep7's RC Combat Club from the table
+    int eyeResolution = 0;       // Immersive: 0 Dynamic (100 % to 75 %), else 100 / 90 / 75 / 60 / 50 (%)
+    int msaa = 2;                // the eyes' MSAA: 2 (2x) or 1 (Off)
+    int foveation = 2;           // fixed foveation: 0 Off, 1 Low, 2 Medium, 3 High
+    int multiview = 1;           // Vulkan: both eyes drawn in one pass (1 On, 0 Off: the eyes one by one)
+    int upscaling = 2;           // the headset compositor's filter on the eyes: 0 Off, 1 Sharpen, 2 Super Resolution
 };
 
 struct Sly2Settings {
@@ -523,6 +528,20 @@ inline const std::vector<Sly2Key>& sly2Schema() {
                              { { 0, "Small" }, { 1, "Medium" }, { 2, "Large" } }));
         k.push_back(vrChoice("Refresh Rate", "Automatic (up to 120 Hz), 72, 80, 90 or 120", &Sly2VrOptions::refreshRate,
                              { { 0, "Automatic" }, { 72, "72" }, { 80, "80" }, { 90, "90" }, { 120, "120" } }));
+        k.push_back(vrChoice("Eye Resolution",
+                             "Immersive: Dynamic (100 % down to 75 % while the headset's frame rate is missed), 100, 90, 75, 60 or 50 (%)",
+                             &Sly2VrOptions::eyeResolution,
+                             { { 0, "Dynamic" }, { 100, "100" }, { 90, "90" }, { 75, "75" }, { 60, "60" }, { 50, "50" } }));
+        k.push_back(vrChoice("Foveation", "Off, Low, Medium or High: the image's edges shaded more coarsely (fixed, no eye tracking)",
+                             &Sly2VrOptions::foveation, { { 0, "Off" }, { 1, "Low" }, { 2, "Medium" }, { 3, "High" } }));
+        k.push_back(vrChoice("MSAA", "2x or Off (the eyes' edges; Off is faster: on Vulkan one pass an eye)", &Sly2VrOptions::msaa,
+                             { { 2, "2x" }, { 1, "Off" } }));
+        k.push_back(vrChoice("Upscaling",
+                             "Off, Sharpen or Super Resolution: the headset's compositor sharpens / upscales the eyes (Quest); "
+                             "on, Dynamic eye resolution works between 90 and 75 %",
+                             &Sly2VrOptions::upscaling, { { 0, "Off" }, { 1, "Sharpen" }, { 2, "Super Resolution" } }));
+        k.push_back(vrChoice("Multiview", "On or Off: both eyes drawn in one pass where the device can (Vulkan); Off: the eyes one by one",
+                             &Sly2VrOptions::multiview, { { 1, "On" }, { 0, "Off" } }));
         k.push_back({ "VR", "World Scale", "Immersive: 0.50 to 2.00 (1.00: life size)",
                       [](const Sly2Settings& s) { return names::decimal(s.vr.worldScale); },
                       [](Sly2Settings& s, const std::string& v) {

@@ -54,6 +54,8 @@ bool LoadLoader(std::string* error)
 #elif defined(__APPLE__)
     g_library = dlopen("libvulkan.1.dylib", RTLD_NOW | RTLD_LOCAL);
     if (!g_library) g_library = dlopen("libMoltenVK.dylib", RTLD_NOW | RTLD_LOCAL);
+#elif defined(__ANDROID__)
+    g_library = dlopen("libvulkan.so", RTLD_NOW | RTLD_LOCAL);   // (the system's loader: no .so.1 on Android)
 #else
     g_library = dlopen("libvulkan.so.1", RTLD_NOW | RTLD_LOCAL);
     if (!g_library) g_library = dlopen("libvulkan.so", RTLD_NOW | RTLD_LOCAL);

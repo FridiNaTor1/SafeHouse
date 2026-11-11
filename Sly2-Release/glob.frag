@@ -18,6 +18,11 @@ uniform sampler2D texDate;   //   (texDate, 0x16DA48's copy) is below 0x80
 #ifdef BINDLESS
 flat in uvec2 vTexh;
 #endif
+#if defined(CANE_BLEND1) && defined(BINDLESS)
+// (glob.vert CANE_DRAWSTATE: the pass draw's state word; bit 31 clear: the uniforms)
+#define CANE_DRAWSTATE 1
+flat in uint vDrawState;
+#endif
 #ifdef TEXARRAY
 uniform sampler2DArray texArr;   // (perf-5: the run's page of layers, unit 2; vLayer 0: the bound tex)
 flat in uint vLayer;
@@ -27,6 +32,13 @@ in vec2 vUv;
 noperspective in float vFog;
 
 out vec4 FragColor;
+#ifdef CANE_BLEND1
+// (the Vulkan renderer on Android, render.cpp g_fBlend1: the GS's two common blends, (Cs - Cd) x As + Cd and Cs x As + Cd,
+// as one fixed blend, ONE / ONE_MINUS_SRC1_ALPHA: the colour premultiplied here, the second output's alpha As or 0.
+// 0: the blend is GL state as usual. (Without dynamic blend state each blend change is a pipeline bind.))
+uniform int caneBlend1;
+layout(location = 0, index = 1) out vec4 FragColor1;
+#endif
 
 bool AlphaPasses(float a)
 {
@@ -45,6 +57,13 @@ bool AlphaPasses(float a)
 
 void main()
 {
+#ifdef CANE_DRAWSTATE
+    bool fDs = (vDrawState & 0x80000000u) != 0u;
+    int fFogBlackDraw = fDs ? int((vDrawState >> 2) & 1u) : fFogBlack;
+    int caneBlend1Draw = fDs ? int((vDrawState >> 3) & 3u) : caneBlend1;
+#define fFogBlack fFogBlackDraw
+#define caneBlend1 caneBlend1Draw
+#endif
 #ifndef NOKILL
     if (fDate != 0 && texelFetch(texDate, ivec2(gl_FragCoord.xy), 0).a > 254.0 / 255.0) discard;
 #endif
@@ -74,4 +93,8 @@ void main()
     rgb = mix(rgb, fFogBlack != 0 ? vec3(0.0) : fogColor.rgb, vFog);
     // The GS blends with As / 128 (0x80 = 1.0).
     FragColor = vec4(rgb, min(c.a / 128.0, 1.0));
+#ifdef CANE_BLEND1
+    if (caneBlend1 != 0) FragColor.rgb *= FragColor.a;
+    FragColor1 = vec4(0.0, 0.0, 0.0, caneBlend1 == 1 ? FragColor.a : 0.0);
+#endif
 }

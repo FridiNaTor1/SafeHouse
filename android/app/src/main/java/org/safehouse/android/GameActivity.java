@@ -86,10 +86,24 @@ public class GameActivity extends SDLActivity {
         // and lobby pauses retain SDL's normal background behavior.
         if (!nativeShutdownRequested) super.pauseNativeThread();
     }
+    // A VR headset (Meta Quest): the game is the immersive activity of a hybrid app. Started from the launcher's panel
+    // (Play), the panel keeps the input focus and this window may never get it, while SDL starts the native game only
+    // with focus (SDLActivity.handleNativeState): the surroundings went black and the game never started. Here the
+    // OpenXR session owns the display and the controllers, so the window counts as focused.
+    static boolean vrHeadset() {
+        final String m = android.os.Build.MANUFACTURER;
+        return m != null && (m.equalsIgnoreCase("Oculus") || m.equalsIgnoreCase("Meta"));
+    }
+    @Override protected void onResume() {
+        if (vrHeadset()) mHasFocus = true;
+        super.onResume();
+        DesktopMode.apply(this);
+    }
     @Override public void onWindowFocusChanged(boolean hasFocus) {
+        if (vrHeadset()) hasFocus = true;
         if (!nativeShutdownRequested) super.onWindowFocusChanged(hasFocus);
     }
-    @Override protected void onResume() { super.onResume(); DesktopMode.apply(this); }
+
     @Override public void onConfigurationChanged(Configuration config) {
         super.onConfigurationChanged(config); DesktopMode.apply(this);
     }

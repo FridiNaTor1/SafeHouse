@@ -86,6 +86,7 @@ struct STEREOVIEW
     int dx = 1, dy = 1;
     bool fMultiview = false;           // (OpenGL ES, GL_OVR_multiview2) afbo[0] holds both eyes as two views
     unsigned texMultiviewColor = 0;    // its colour (a two-layer array): the shadow phases' frame copies
+    bool fFlipY = false;               // (Vulkan VR, straight into the OpenXR images) the clip space's Y flipped: the winding too
 };
 // The render targets, then the frame's pass and the foreground kinds, into both eyes.
 void RenderSceneStereo(const SCENE& scene, const CAMERA& cam, const RENDEROPTS& opts, const STEREOVIEW& sv);

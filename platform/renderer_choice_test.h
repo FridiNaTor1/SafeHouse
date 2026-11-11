@@ -29,34 +29,31 @@ inline int selfTest(int (*parse)(const char*)) {
 
     // Auto: Vulkan first
     check(kAutoPrefersVulkan, "Auto prefers Vulkan");
-    check(decide(Choice::Auto, true, false, none, v).tryVulkan, "Auto tries Vulkan");
-    check(!decide(Choice::Auto, true, false, none, v, false).tryVulkan, "Auto without the preference is OpenGL");
+    check(decide(Choice::Auto, true, none, v).tryVulkan, "Auto tries Vulkan");
+    check(!decide(Choice::Auto, true, none, v, false).tryVulkan, "Auto without the preference is OpenGL");
     // explicit choices
-    check(decide(Choice::Vulkan, true, false, none, v).tryVulkan, "Vulkan chosen tries Vulkan");
-    check(!decide(Choice::OpenGL, true, false, none, v).tryVulkan, "OpenGL chosen is OpenGL");
-    check(decide(Choice::OpenGL, true, false, failedStart, v).why.empty(), "OpenGL chosen says nothing");
-    // builds without Vulkan (macOS: Metal; the Switch: deko3d; Android)
-    check(!decide(Choice::Auto, false, false, none, v).tryVulkan, "no Vulkan build: Auto is OpenGL");
-    check(decide(Choice::Auto, false, false, none, v).why.empty(), "no Vulkan build: Auto says nothing");
-    check(!decide(Choice::Vulkan, false, false, none, v).tryVulkan, "no Vulkan build: Vulkan chosen is OpenGL");
-    check(!decide(Choice::Vulkan, false, false, none, v).why.empty(), "no Vulkan build: Vulkan chosen says why");
-    // VR
-    check(!decide(Choice::Auto, true, true, none, v).tryVulkan, "VR: Auto is OpenGL");
-    check(!decide(Choice::Vulkan, true, true, none, v).tryVulkan, "VR: Vulkan chosen is OpenGL");
+    check(decide(Choice::Vulkan, true, none, v).tryVulkan, "Vulkan chosen tries Vulkan");
+    check(!decide(Choice::OpenGL, true, none, v).tryVulkan, "OpenGL chosen is OpenGL");
+    check(decide(Choice::OpenGL, true, failedStart, v).why.empty(), "OpenGL chosen says nothing");
+    // builds without Vulkan (macOS: Metal; the Switch: deko3d)
+    check(!decide(Choice::Auto, false, none, v).tryVulkan, "no Vulkan build: Auto is OpenGL");
+    check(decide(Choice::Auto, false, none, v).why.empty(), "no Vulkan build: Auto says nothing");
+    check(!decide(Choice::Vulkan, false, none, v).tryVulkan, "no Vulkan build: Vulkan chosen is OpenGL");
+    check(!decide(Choice::Vulkan, false, none, v).why.empty(), "no Vulkan build: Vulkan chosen says why");
     // the start marker
-    check(!decide(Choice::Auto, true, false, starting, v).tryVulkan, "a start that did not finish: Auto is OpenGL");
-    check(!decide(Choice::Auto, true, false, failedStart, v).tryVulkan, "a failed start: Auto is OpenGL");
-    check(decide(Choice::Auto, true, false, failedStart, v).why.find("vkCreateDevice failed") != std::string::npos,
+    check(!decide(Choice::Auto, true, starting, v).tryVulkan, "a start that did not finish: Auto is OpenGL");
+    check(!decide(Choice::Auto, true, failedStart, v).tryVulkan, "a failed start: Auto is OpenGL");
+    check(decide(Choice::Auto, true, failedStart, v).why.find("vkCreateDevice failed") != std::string::npos,
           "a failed start: the log says why");
-    check(decide(Choice::Vulkan, true, false, failedStart, v).tryVulkan, "a failed start: Vulkan chosen tries again");
-    check(decide(Choice::Auto, true, false, otherVersion, v).tryVulkan, "a failed start of another version: Auto tries again");
-    check(!decide(Choice::Auto, true, false, running, v).tryVulkan, "a start marker of this process counts");
+    check(decide(Choice::Vulkan, true, failedStart, v).tryVulkan, "a failed start: Vulkan chosen tries again");
+    check(decide(Choice::Auto, true, otherVersion, v).tryVulkan, "a failed start of another version: Auto tries again");
+    check(!decide(Choice::Auto, true, running, v).tryVulkan, "a start marker of this process counts");
 #if CANE_RENDERER_CHOICE_POSIX
     Marker other = starting;   // (the parent process: alive)
     other.pid = static_cast<long>(getppid());
-    check(decide(Choice::Auto, true, false, other, v).tryVulkan, "another copy still starting: Auto tries Vulkan");
+    check(decide(Choice::Auto, true, other, v).tryVulkan, "another copy still starting: Auto tries Vulkan");
     other.reason = "vkCreateDevice failed";
-    check(!decide(Choice::Auto, true, false, other, v).tryVulkan, "another copy's failure: Auto is OpenGL");
+    check(!decide(Choice::Auto, true, other, v).tryVulkan, "another copy's failure: Auto is OpenGL");
 #endif
 
     // the marker file
@@ -72,7 +69,7 @@ inline int selfTest(int (*parse)(const char*)) {
     check(writeMarker(path, v, "Vulkan error: the GPU device was lost"), "marker written (reason)");
     m = readMarker(path);
     check(m.present && m.reason == "Vulkan error: the GPU device was lost", "marker read back (reason)");
-    check(!decide(Choice::Auto, true, false, m, v).tryVulkan, "marker file: Auto is OpenGL");
+    check(!decide(Choice::Auto, true, m, v).tryVulkan, "marker file: Auto is OpenGL");
     check(!fs::exists(fs::path(path).concat(".tmp")), "no temporary file left");
     clearMarker(path);
     check(!readMarker(path).present, "marker cleared");

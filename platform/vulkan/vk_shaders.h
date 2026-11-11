@@ -31,6 +31,16 @@ struct Program
     uint8_t samplerCount;
     uint32_t inputMask;                // the vertex inputs' locations
     uint32_t inputKinds;               // 2 bits per location: 0 float, 1 int, 2 uint
+    // (pushSize above Vulkan's minimum of 128 bytes) the same program reading its block from a uniform buffer with a
+    // dynamic offset (set 2, binding 0) in place of push constants: devices with fewer push-constant bytes
+    const uint32_t* spirvUbo[3];
+    uint32_t spirvUboSize[3];
+    // (VR multiview) the stages whose result depends on the eye, made for a two-view pass (CANE_MULTIVIEW: gl_ViewIndex
+    // picks the eye's values from the storage block CaneViews, set 1 binding 11); nullptr: the stage above serves both
+    // views. Their storage bindings (with CaneViews').
+    const uint32_t* spirvMv[3];
+    uint32_t spirvMvSize[3];
+    uint16_t storageMaskMv[3];
 };
 extern const Program programs[];
 extern const size_t programCount;
