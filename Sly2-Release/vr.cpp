@@ -2485,6 +2485,7 @@ bool FPresent()
         ei.environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
         ei.layerCount = uint32_t(alayer.size());
         ei.layers = alayer.data();
+#if CANE_VULKAN
         if (FVkDeferred())
         {
             // (on the worker after the frame's submission: the layers copied, their pointers made again there)
@@ -2517,7 +2518,9 @@ bool FPresent()
                 FCheck(pxrEndFrame(session, &p->ei), "xrEndFrame");
             });
         }
-        else FCheck(pxrEndFrame(s_session, &ei), "xrEndFrame");
+        else
+#endif
+            FCheck(pxrEndFrame(s_session, &ei), "xrEndFrame");
         s_frame.fBegun = false;
         // (SLY2N_VR_FPSLOG: the headset frames' rate every 5 s)
         static const bool s_fLog = std::getenv("SLY2N_VR_FPSLOG") != nullptr;

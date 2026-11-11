@@ -593,6 +593,8 @@ IGFD_API bool IGFD::Utils::CreateDirectoryIfNotExist(const std::string& name) {
             std::string str = std::string("FS.mkdir('") + name + "');";
             emscripten_run_script(str.c_str());
             res = true;
+#elif defined(CANE_IOS)  // (SafeHouse: iOS has no system())
+            res = ::mkdir(name.c_str(), 0755) == 0 || errno == EEXIST;
 #elif defined(_IGFD_UNIX_)
             char buffer[PATH_MAX] = {};
             snprintf(buffer, PATH_MAX, "mkdir -p \"%s\"", name.c_str());

@@ -81,8 +81,8 @@ jobs:
       - name: Build (device)
         run: |
           set -o pipefail
-          cmake --build build/ios-device --parallel 3 2>&1 | tee build/ios-device-build.log || {
-            echo "::group::first errors"; grep -n -E "error:|undefined|ld: " build/ios-device-build.log | head -n 120; echo "::endgroup::"; exit 1; }
+          cmake --build build/ios-device --parallel 3 -- -k 0 2>&1 | tee build/ios-device-build.log || {
+            echo "::group::first errors"; grep -E "error:|undefined|ld: |FAILED:" build/ios-device-build.log | sort -u | head -n 300; echo "::endgroup::"; exit 1; }
 
       - name: Package (device, ad hoc signed .ipa)
         run: python3 scripts/ios/package.py --build build/ios-device --sdk iphoneos --out dist/ios --ipa --ffmpeg "$RUNNER_TEMP/ffmpeg-iphoneos"
@@ -134,8 +134,8 @@ jobs:
           set -o pipefail
           cmake -G Ninja -S . -B build/ios-sim -DCMAKE_TOOLCHAIN_FILE=cmake/ios-toolchain.cmake \
             -DCMAKE_OSX_SYSROOT=iphonesimulator -DCANE_FFMPEG_ROOT="$RUNNER_TEMP/ffmpeg-iphonesimulator"
-          cmake --build build/ios-sim --parallel 3 2>&1 | tee build/ios-sim-build.log || {
-            echo "::group::first errors"; grep -n -E "error:|undefined|ld: " build/ios-sim-build.log | head -n 120; echo "::endgroup::"; exit 1; }
+          cmake --build build/ios-sim --parallel 3 -- -k 0 2>&1 | tee build/ios-sim-build.log || {
+            echo "::group::first errors"; grep -E "error:|undefined|ld: |FAILED:" build/ios-sim-build.log | sort -u | head -n 300; echo "::endgroup::"; exit 1; }
           python3 scripts/ios/package.py --build build/ios-sim --sdk iphonesimulator --out dist/ios-sim \
             --ffmpeg "$RUNNER_TEMP/ffmpeg-iphonesimulator"
 
