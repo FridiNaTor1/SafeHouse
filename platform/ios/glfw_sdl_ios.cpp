@@ -19,6 +19,9 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cstdio>
+#include <thread>
+#include <unistd.h>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -44,6 +47,7 @@ struct GLFWwindow {
     int width = 0, height = 0;   // logical size
     std::array<float, 4> safe{};  // the safe area insets in logical units (left, top, right, bottom)
     std::string reported;         // (the last display report logged: logged again when it changes)
+    std::string title;
     bool close = false, focused = true, visible = true;
     int cursorMode = GLFW_CURSOR_NORMAL;
     std::array<unsigned char, GLFW_KEY_LAST + 1> keys{};
@@ -113,11 +117,24 @@ void drawableSize(GLFWwindow* w, int* width, int* height) {
     if (width) *width = a;
     if (height) *height = b;
 }
-void* uiWindow(GLFWwindow* w) {
-    if (!w || !w->native) return nullptr;
+void* uiWindowOf(SDL_Window* native) {
+    if (!native) return nullptr;
     SDL_SysWMinfo info;
     SDL_VERSION(&info.version);
-    return SDL_GetWindowWMInfo(w->native, &info) && info.subsystem == SDL_SYSWM_UIKIT ? (void*)info.info.uikit.window : nullptr;
+    return SDL_GetWindowWMInfo(native, &info) && info.subsystem == SDL_SYSWM_UIKIT ? (void*)info.info.uikit.window : nullptr;
+}
+void* uiWindow(GLFWwindow* w) { return w ? uiWindowOf(w->native) : nullptr; }
+// A full-screen SDL window in the app's window scene (ios_app.h adoptWindow: SDL 2.30 knows no scenes): made hidden,
+// put into the scene, then shown.
+SDL_Window* makeWindow(const char* title, Uint32 api, bool visible) {
+    SDL_DisplayMode dm{};
+    if (SDL_GetDesktopDisplayMode(0, &dm) != 0) dm.w = 1280, dm.h = 720;
+    const Uint32 flags = SDL_WINDOW_FULLSCREEN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI | SDL_WINDOW_BORDERLESS | SDL_WINDOW_HIDDEN | api;
+    SDL_Window* native = SDL_CreateWindow(title, 0, 0, dm.w, dm.h, flags);
+    if (!native) return nullptr;
+    cane::ios::adoptWindow(uiWindowOf(native));
+    if (visible) SDL_ShowWindow(native);
+    return native;
 }
 // The logical size: pixels for the game, >= 1280x720 units for the launcher (as Android's density scaling). The
 // launcher's 1280x720 is counted inside the safe area (it lays itself out there: cane_glfw_safe_area).
@@ -464,35 +481,80 @@ void readViewFramebuffer(GLFWwindow* w) {
     SDL_VERSION(&info.version);
     if (SDL_GetWindowWMInfo(w->native, &info) && info.subsystem == SDL_SYSWM_UIKIT) w->viewFramebuffer = info.info.uikit.framebuffer;
 }
-// --ios-smoke: the first launcher frame drawn 5 s or more after its first one, as Documents/smoke-launcher.png; then
-// it closes (CI, ios.yml). (Time, not a frame count: an idle launcher draws only a few frames a second.)
-double smokeStart = -1;
-bool smokeDone = false;
-void smokeFrame(GLFWwindow* w) {
-    if (!cane::ios::smokeTest() || !launcherRole() || smokeDone) return;
-    ++swaps;
-    const double now = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
-    if (smokeStart < 0) smokeStart = now;
-    if (now - smokeStart < 5.0 || swaps < 10) return;
-    smokeDone = true;
+// --ios-smoke (CI, ios.yml): the first launcher frame drawn 5 s or more after its first one, as
+// Documents/smoke-launcher.png; then Sly 2's renderer self test is started as Play starts the game (on the main thread,
+// in place of the launcher's window: ios_app.mm, glfwPollEvents below): its window, the Metal context, its programs and
+// a few frames (Documents/smoke-game.png, smoke-game.log "exit N"); then the launcher's window must come back and draw
+// (smoke-launcher-after.png), and the launcher closes. (Time, not a frame count: an idle launcher draws only a few frames
+// a second.)
+double smokeStart = -1, smokeGameEnd = -1;
+int smokeStage = 0;  // 0: launcher, 1: the game's self test, 2: the launcher again, 3: done
+std::int64_t smokeGame = 0;
+int smokeSwapsAfter = 0;
+double smokeNow() { return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
+bool smokeShot(GLFWwindow* w, const char* name) {
     int pw = 0, ph = 0;
     drawableSize(w, &pw, &ph);
     std::vector<unsigned char> pixels(size_t(std::max(pw, 1)) * size_t(std::max(ph, 1)) * 4);
     glBindFramebuffer(GL_FRAMEBUFFER, w->viewFramebuffer);
     glReadPixels(0, 0, pw, ph, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
     stbi_flip_vertically_on_write(1);
-    const std::string file = cane::ios::documentsDirectory() + "/smoke-launcher.png";
+    const std::string file = cane::ios::documentsDirectory() + "/" + name;
     const bool ok = pw > 0 && ph > 0 && stbi_write_png(file.c_str(), pw, ph, 4, pixels.data(), pw * 4);
-    cane::ios::log(std::string("smoke: launcher frame ") + std::to_string(swaps) + ", " + std::to_string(pw) + "x" + std::to_string(ph) + (ok ? " saved to " : " NOT saved to ") + file);
+    cane::ios::log(std::string("smoke: launcher frame ") + std::to_string(swaps) + ", " + std::to_string(pw) + "x" + std::to_string(ph) +
+                   (ok ? " saved to " : " NOT saved to ") + file);
+    return ok;
+}
+void smokeFrame(GLFWwindow* w) {
+    if (!cane::ios::smokeTest() || !launcherRole() || smokeStage == 1 || smokeStage == 3) return;
+    ++swaps;
+    const double now = smokeNow();
+    if (smokeStart < 0) smokeStart = now;
+    if (smokeStage == 0) {
+        if (now - smokeStart < 5.0 || swaps < 10) return;
+        smokeShot(w, "smoke-launcher.png");
+        const auto child = cane::ios::startProcess({cane::ios::programPath("Sly2-Release"), "--gl-selftest", "--out",
+                                                    cane::ios::documentsDirectory() + "/smoke-game.png"});
+        if (child.outputFd < 0) {
+            cane::ios::log("smoke: the game's self test did not start");
+            smokeStage = 3;
+            w->close = true;
+            return;
+        }
+        // (its output also goes to ios.log through the bridge's relay; the pipe is drained so it never blocks)
+        std::thread([fd = child.outputFd] {
+            char buffer[4096];
+            while (read(fd, buffer, sizeof(buffer)) > 0) {
+            }
+            close(fd);
+        }).detach();
+        smokeGame = child.handle;
+        smokeStage = 1;
+        return;
+    }
+    // (stage 2) the launcher draws again after the game
+    if (++smokeSwapsAfter < 5 || now - smokeGameEnd < 2.0) return;
+    smokeShot(w, "smoke-launcher-after.png");
+    smokeStage = 3;
     w->close = true;
 }
-// (--ios-smoke) the launcher stops after 30 s even when it drew no frame to save
+// (--ios-smoke) the game's end; the launcher stops after 120 s whatever happened
 void smokeDeadline() {
-    if (!cane::ios::smokeTest() || !launcherRole() || !mainWindow || smokeStart < 0) return;
-    const double now = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
-    if (!smokeDone && now - smokeStart > 30.0) {
-        smokeDone = true;
-        cane::ios::log("smoke: no launcher frame after 30 s (" + std::to_string(swaps) + " frames drawn): closing");
+    if (!cane::ios::smokeTest() || !launcherRole() || !mainWindow || smokeStart < 0 || smokeStage == 3) return;
+    if (smokeStage == 1 && !cane::ios::processRunning(smokeGame)) {
+        const int code = cane::ios::processExitCode(smokeGame);
+        cane::ios::log("smoke: the game's renderer self test exited with " + std::to_string(code));
+        if (FILE* f = std::fopen((cane::ios::documentsDirectory() + "/smoke-game.log").c_str(), "w")) {
+            std::fprintf(f, "exit %d\n", code);
+            std::fclose(f);
+        }
+        smokeGameEnd = smokeNow();
+        smokeStage = 2;
+    }
+    if (smokeNow() - smokeStart > 120.0) {
+        cane::ios::log("smoke: not finished after 120 s (stage " + std::to_string(smokeStage) + ", " + std::to_string(swaps) +
+                       " frames drawn): closing");
+        smokeStage = 3;
         mainWindow->close = true;
     }
 }
@@ -552,12 +614,10 @@ GLFWwindow* glfwCreateWindow(int, int, const char* title, GLFWmonitor*, GLFWwind
     }
     auto* w = new GLFWwindow;
     w->visible = visibleHint;
-    const auto dm = mode();
-    Uint32 flags = SDL_WINDOW_FULLSCREEN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI | SDL_WINDOW_BORDERLESS;
-    if (!visibleHint) flags |= SDL_WINDOW_HIDDEN;
+    w->title = title ? title : "SafeHouse";
     if (noApiHint) {
         w->metal = true;
-        w->native = SDL_CreateWindow(title, 0, 0, dm.width, dm.height, flags | SDL_WINDOW_METAL);
+        w->native = makeWindow(w->title.c_str(), SDL_WINDOW_METAL, visibleHint);
     } else {
         SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
         SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
@@ -569,13 +629,15 @@ GLFWwindow* glfwCreateWindow(int, int, const char* title, GLFWmonitor*, GLFWwind
         SDL_GL_SetAttribute(SDL_GL_GREEN_SIZE, 8);
         SDL_GL_SetAttribute(SDL_GL_BLUE_SIZE, 8);
         SDL_GL_SetAttribute(SDL_GL_ALPHA_SIZE, 0);
-        w->native = SDL_CreateWindow(title, 0, 0, dm.width, dm.height, flags | SDL_WINDOW_OPENGL);
+        w->native = makeWindow(w->title.c_str(), SDL_WINDOW_OPENGL, visibleHint);
         if (w->native) w->context = SDL_GL_CreateContext(w->native);
         if (w->native && !w->context) {
             cane::ios::log(std::string("iOS: no OpenGL ES 3.0 context: ") + SDL_GetError());
         }
     }
     if (!w->native || (!w->metal && !w->context)) {
+        // (in the log too: the game's own message is only "could not create a graphics context")
+        cane::ios::log(std::string("iOS: ") + cane_ios_program_role() + " window failed: " + SDL_GetError());
         error(GLFW_VERSION_UNAVAILABLE, SDL_GetError());
         if (w->native) SDL_DestroyWindow(w->native);
         delete w;
@@ -631,19 +693,32 @@ void glfwPollEvents() {
     // (the launcher) a game waiting for the main thread runs here, in place of the launcher's frames
     if (launcherRole() && cane::ios::programWaiting()) {
         GLFWwindow* w = mainWindow;
+        // SDL's UIKit backend has one window per screen ("Only one window allowed per display"): the game's own window
+        // cannot be made while the launcher's exists, hidden or not. The launcher's window goes; its GL context
+        // stays (with it the launcher's textures and programs, and the GL view that draws them), and is put into a
+        // new window afterwards (SDL_GL_MakeCurrent attaches the context's view to the window it is given).
         if (w && w->native) {
             if (w->context) SDL_GL_MakeCurrent(w->native, nullptr);
-            SDL_HideWindow(w->native);
+            SDL_DestroyWindow(w->native);
+            w->native = nullptr;
         }
         cane::ios::runPendingProgram();
         // (a program that left without closing its window: the window and the touch pad go away with it)
         cane::ios::attachTouchOverlay(nullptr);
-        for (Uint32 id = 1; id < 256; ++id)
-            if (SDL_Window* other = SDL_GetWindowFromID(id); other && (!w || other != w->native)) SDL_HideWindow(other);
+        for (Uint32 id = 1; id < 1024; ++id)
+            if (SDL_Window* other = SDL_GetWindowFromID(id)) {
+                cane::ios::log("iOS: a window the game left open is closed");
+                SDL_DestroyWindow(other);
+            }
+        if (w) {
+            w->native = makeWindow(w->title.c_str(), SDL_WINDOW_OPENGL, w->visible);
+            if (!w->native) cane::ios::log(std::string("iOS: the launcher's window could not be made again: ") + SDL_GetError());
+        }
         if (w && w->native) {
-            if (w->visible) SDL_ShowWindow(w->native);
-            if (w->context) SDL_GL_MakeCurrent(w->native, w->context);
+            if (w->context && SDL_GL_MakeCurrent(w->native, w->context) != 0)
+                cane::ios::log(std::string("iOS: the launcher's GL context did not come back: ") + SDL_GetError());
             readViewFramebuffer(w);
+            w->reported.clear();
             current = w;
             w->keys.fill(0);
             w->mouse.fill(0);

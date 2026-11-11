@@ -176,6 +176,7 @@
   "Choose The Sly Collection (PS3): its disc image (.iso) or a .zip of it, read as it is, nothing is unpacked. The menu is converted into your profile (about 30 MB).": "Valitse The Sly Collection (PS3): sen levykuva (.iso) tai siitä tehty .zip; se luetaan sellaisenaan, mitään ei pureta. Valikko muunnetaan profiiliisi (noin 30 Mt).",
   "Choose this region: Play, Verify and Add to Steam use it.": "Valitse tämä alue: Pelaa, Tarkista ja Lisää Steamiin käyttävät sitä.",
   "Choose this region: Play, Verify and shortcuts use it.": "Valitse tämä alue: Pelaa, Tarkista ja pikakuvakkeet käyttävät sitä.",
+  "Choose this region: Play and Verify use it.": "Valitse tämä alue: Pelaa ja Tarkista käyttävät sitä.",
   "Choose where SafeHouse installs games": "Valitse, minne SafeHouse asentaa pelit",
   "Choose your %s disc image": "Valitse pelin %s levykuva",
   "Choose your disc image below, then install. It needs %s of free space.": "Valitse levykuvasi alta ja asenna sitten. Se vaatii %s vapaata tilaa.",

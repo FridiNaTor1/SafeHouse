@@ -543,7 +543,12 @@ private:
         ImGui::TextUnformatted(value);
     }
     // "Add to Steam" for a game that can be played.
+#if defined(CANE_IOS)
+    // (iOS: no Steam, no desktop, and no home-screen shortcuts an app can add: the row is left out)
+    static bool steamRow(const GameStatus&) { return false; }
+#else
     static bool steamRow(const GameStatus& s) { return s.assets && s.runtime; }
+#endif
     // "Add desktop shortcut" (Sly 1 and Sly 2 only for now), on the Steam row.
     static bool shortcutRow(GameId id, const GameStatus& s) { return steamRow(s) && shortcut::supported(id); }
     static const char* steamLabel(const GameStatus& s) { return s.inSteam ? N_("Update Steam shortcut") : N_("Add to Steam"); }

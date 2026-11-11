@@ -34,8 +34,26 @@ permissions:
 
 jobs:
   ios:
-    name: iOS / iPadOS (arm64 .ipa + simulator)
-    runs-on: macos-15
+    name: iOS / iPadOS (arm64 .ipa + simulator, ${{ matrix.sdk }})
+    # Two builds of the same app: with the newest Xcode (the xcode-27 image: the iOS 27 SDK, which a new device class
+    # such as a foldable's inner screen needs for its native size, and which requires the UIScene life cycle), and with
+    # Xcode 16.4 / the iOS 18.5 SDK (macos-15's default; the build the first testers had) as the fallback. The first is
+    # the release's .ipa; the second is an artifact only (SafeHouse-iOS-sdk18.ipa).
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - sdk: newest SDK
+            runner: xcode-27
+            ipa: SafeHouse-iOS.ipa
+            release-artifact: ios-release
+            logs-artifact: ios-simulator-and-logs
+          - sdk: iOS 18.5 SDK
+            runner: macos-15
+            ipa: SafeHouse-iOS-sdk18.ipa
+            release-artifact: ios-sdk18-ipa
+            logs-artifact: ios-sdk18-simulator-and-logs
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 150
     env:
       SAFEHOUSE_VERSION: ${{ inputs.version }}
@@ -61,7 +79,7 @@ jobs:
           path: |
             ${{ runner.temp }}/ffmpeg-iphoneos
             ${{ runner.temp }}/ffmpeg-iphonesimulator
-          key: ffmpeg-ios-${{ hashFiles('scripts/ios/ffmpeg.sh') }}
+          key: ffmpeg-ios-${{ matrix.runner }}-${{ hashFiles('scripts/ios/ffmpeg.sh') }}
 
       - name: FFmpeg (scripts/ios/ffmpeg.sh)
         if: steps.ffmpeg-cache.outputs.cache-hit != 'true'
@@ -150,18 +168,24 @@ jobs:
           cp build/ios-*-build.log dist/ios-smoke/ 2>/dev/null || true
           cp ~/Library/Logs/DiagnosticReports/SafeHouse* dist/ios-smoke/ 2>/dev/null || true
 
+      - name: Name the .ipa for this SDK
+        if: matrix.ipa != 'SafeHouse-iOS.ipa'
+        run: |
+          ipa="${{ matrix.ipa }}"
+          [ ! -f dist/ios/SafeHouse-iOS.ipa ] || mv dist/ios/SafeHouse-iOS.ipa "dist/ios/$ipa"
+          [ ! -f dist/ios/SafeHouse-iOS-signed.ipa ] || mv dist/ios/SafeHouse-iOS-signed.ipa "dist/ios/${ipa%.ipa}-signed.ipa"
+
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: ios-release
+          name: ${{ matrix.release-artifact }}
           path: |
-            dist/ios/SafeHouse-iOS.ipa
-            dist/ios/SafeHouse-iOS-signed.ipa
+            dist/ios/*.ipa
           if-no-files-found: warn
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()
         with:
-          name: ios-simulator-and-logs
+          name: ${{ matrix.logs-artifact }}
           path: |
             dist/ios-sim/SafeHouse-iOS-Simulator.app.zip
             dist/ios-smoke

@@ -61,6 +61,9 @@ enum class TouchContext : int { Gameplay = 0, Menu = 1, Cinematic = 2 };
 void setTouchContext(TouchContext context);
 // Puts the touch overlay over this UIWindow (the game's SDL window; nullptr removes it). (glfw_sdl_ios.cpp)
 void attachTouchOverlay(void* uiWindow);
+// (main thread) Puts a window SDL made into the app's window scene (the UIScene life cycle; SDL 2.30 knows no scenes)
+// and sizes it to the scene. Waits up to 5 s for the scene to connect at the app's start.
+void adoptWindow(void* uiWindow);
 // (main thread) The window's safe area insets in points: left, top, right, bottom (the notch / Dynamic Island, the
 // home indicator, a foldable's hinge area). Zero without a window.
 std::array<float, 4> safeAreaInsets(void* uiWindow);

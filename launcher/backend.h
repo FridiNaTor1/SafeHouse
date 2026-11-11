@@ -1,5 +1,6 @@
 #pragma once
 #include <algorithm>
+#include <cctype>
 #include <cstdio>
 #include <fstream>
 #include <map>
@@ -644,7 +645,27 @@ struct LauncherBackend {
             }
             arguments.insert(arguments.end(), {"--languages-dir", utf8(languagesDir(game))});
         }
-        checkedProcess(arguments, tools, cancel, log);
+        explainedProcess(arguments, cancel, log);
+    }
+    // checkedProcess, but a failure's message is the program's own reason (its last line that reads as an error, else
+    // its last line) with the exit code, not "Details are in the launcher output" (the toast is all a phone shows).
+    void explainedProcess(const std::vector<std::string>& arguments, const std::atomic<bool>& cancel, const LogFunction& log) {
+        std::string last, lastError;
+        const int code = runProcess(arguments, tools, cancel, [&](const std::string& line) {
+            if (!line.empty() && line.front() != '{') {
+                last = line;
+                std::string lower = line;
+                std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) { return char(std::tolower(c)); });
+                for (const char* word : {"error", "fail", "required", "cannot", "could not", "once per app start"})
+                    if (lower.find(word) != std::string::npos) lastError = line;
+            }
+            log(line);
+        });
+        if (code == 0) return;
+        const std::string& reason = lastError.empty() ? last : lastError;
+        if (cancel || reason.empty())
+            throw std::runtime_error(arguments[0] + " failed (exit " + std::to_string(code) + "). Details are in the launcher output.");
+        throw std::runtime_error(reason + " (" + utf8(path(arguments[0]).filename()) + ", exit " + std::to_string(code) + ")");
     }
     // Sly 2's texture dump (Textures/ in the installation, MODDING.md): the converter writes it at install since
     // 2026-11-04; an installation from before has none, and "Export textures" writes it in place (no re-extract).

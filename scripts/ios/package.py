@@ -86,6 +86,16 @@ def app_plist(bundle_id, version, build, sdk):
         "UISupportedInterfaceOrientations~ipad": every,
         # (any window size: the launcher and the game lay out for every size and aspect, and follow live resizes)
         "UIRequiresFullScreen": False,
+        # The UIScene life cycle (platform/ios/ios_app.mm SHSceneDelegate; SDL's windows are put into the scene): what
+        # the iOS 27 SDK requires to start, and what new screens (a foldable's inner screen) need for their native size.
+        "UIApplicationSceneManifest": {
+            "UIApplicationSupportsMultipleScenes": False,
+            "UISceneConfigurations": {
+                "UIWindowSceneSessionRoleApplication": [
+                    {"UISceneConfigurationName": "Default Configuration", "UISceneDelegateClassName": "SHSceneDelegate"}
+                ]
+            },
+        },
         "UIStatusBarHidden": True,
         "UIViewControllerBasedStatusBarAppearance": False,
         "UIApplicationSupportsIndirectInputEvents": True,
@@ -100,6 +110,27 @@ def app_plist(bundle_id, version, build, sdk):
         "NSMicrophoneUsageDescription": "Sly 2's USB headset feature can use a microphone.",
         "ITSAppUsesNonExemptEncryption": False,
     }
+
+
+def sdk_keys(sdk):
+    """The DT* keys Xcode writes (the SDK and Xcode the app was built with), from xcrun; none without it."""
+    keys = {}
+    try:
+        def ask(*args):
+            return subprocess.run(["xcrun", *args], check=True, capture_output=True, text=True).stdout.strip()
+        sdk_version = ask("--sdk", sdk, "--show-sdk-version")
+        keys["DTSDKName"] = f"{sdk}{sdk_version}"
+        keys["DTPlatformVersion"] = sdk_version
+        keys["DTSDKBuild"] = ask("--sdk", sdk, "--show-sdk-build-version")
+        xcode = subprocess.run(["xcodebuild", "-version"], check=True, capture_output=True, text=True).stdout.split()
+        # ("Xcode 26.6 Build version 17F113": DTXcode 2660, DTXcodeBuild 17F113)
+        parts = (xcode[1].split(".") + ["0", "0"])[:3]
+        keys["DTXcode"] = f"{int(parts[0]):02d}{int(parts[1])}{int(parts[2])}"
+        keys["DTXcodeBuild"] = xcode[-1]
+    except (subprocess.CalledProcessError, FileNotFoundError, IndexError, ValueError) as failure:
+        print(f"no SDK keys ({failure})", flush=True)
+    print(f"SDK keys: {keys}", flush=True)
+    return keys
 
 
 def compile_icon(source, app, sdk, work):
@@ -176,6 +207,7 @@ def main():
         (framework / "Info.plist").write_bytes(plistlib.dumps(framework_plist(name, identifier, version, options.sdk)))
 
     info = app_plist(options.bundle_id, version, options.build_number, options.sdk)
+    info.update(sdk_keys(options.sdk))
     with tempfile.TemporaryDirectory() as temporary:
         info.update(compile_icon(source, app, options.sdk, pathlib.Path(temporary)))
     (app / "Info.plist").write_bytes(plistlib.dumps(info))

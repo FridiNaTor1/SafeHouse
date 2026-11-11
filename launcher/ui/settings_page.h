@@ -1387,6 +1387,11 @@ private:
         });
     }
     void collectionRows() {
+#if defined(CANE_IOS)
+        // (iOS: the Collection Style Launcher is a program of its own that the app cannot start, and its rows are
+        // Steam / desktop shortcuts and a PS3 import for it: the section is left out)
+        return;
+#endif
         refreshCollection();
         const bool importing = m_job.busy && m_job.label == kCollectionImportLabel;
         section(tr("Collection Style Launcher"));
@@ -1531,6 +1536,8 @@ private:
                 ImGui::PopID();
 #ifdef CANE_ANDROID
                 describe(installs.size() > 1 ? tr("Choose this region: Play, Verify and shortcuts use it.") : tr("The installed region."));
+#elif defined(CANE_IOS)
+                describe(installs.size() > 1 ? tr("Choose this region: Play and Verify use it.") : tr("The installed region."));  // (no shortcuts on iOS)
 #else
                 describe(installs.size() > 1 ? tr("Choose this region: Play, Verify and Add to Steam use it.") : tr("The installed region."));
 #endif

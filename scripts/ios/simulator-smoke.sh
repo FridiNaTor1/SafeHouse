@@ -2,8 +2,8 @@
 # The iOS app on the simulators (.github/workflows/ios.yml): an iPhone and an iPad simulator each install the app and
 # run it three times: --ios-selftest (Sly 2's self tests inside the app, no game data), --ios-extract-smoke (the
 # extractor through the launcher's program runner: --help, a missing and a damaged disc image with their reasons in the
-# output and in the app log) and --ios-smoke (the launcher draws
-# for about 5 s, saves its own screenshot, quits); a simulator screenshot is taken meanwhile. Everything the app wrote
+# output and in the app log) and --ios-smoke (the launcher draws for about 5 s and saves its own screenshot, starts
+# Sly 2's renderer self test as Play starts the game, draws again afterwards, quits); a simulator screenshot is taken meanwhile. Everything the app wrote
 # (Documents: logs, smoke-launcher.png, selftest.log) is copied to OUT/<device>/.
 #
 #   simulator-smoke.sh SafeHouse.app BUNDLE_ID OUT
@@ -71,20 +71,41 @@ for kind in iPhone iPad; do
   grep -q "^0 failed" "$dir/extract-smoke.log" 2>/dev/null || { echo "$kind: extractor smoke did not pass"; failures=$((failures + 1)); }
 
   echo "-- launcher smoke"
-  launch 60 "$dir/smoke-console.txt" "$device" --ios-smoke &
+  launch 180 "$dir/smoke-console.txt" "$device" --ios-smoke &
   runner=$!
   sleep 4
   xcrun simctl io "$device" screenshot "$dir/simulator-screenshot.png" > /dev/null 2>&1 || echo "  (no simulator screenshot)"
   wait "$runner"
   tail -n 30 "$dir/smoke-console.txt"
 
+  echo "-- launcher pages (the launcher's own screenshot fixtures: what iOS shows and hides)"
   data="$(xcrun simctl get_app_container "$device" "$BUNDLE" data 2>/dev/null)"
+  if [ -n "$data" ]; then
+    mkdir -p "$data/Documents/shots"
+    while read -r name args; do
+      # shellcheck disable=SC2086
+      launch 60 "$dir/shot-$name.txt" "$device" --screenshot "$data/Documents/shots/$name.png" --size 1280x720 $args
+      [ -f "$data/Documents/shots/$name.png" ] || echo "  (no $name screenshot)"
+    done <<'SHOTS'
+game-sly2 --game sly2 --screen game --installed-fixture --sly2-installed-fixture --sly2-runtime-fixture
+settings-launcher --screen settings:launcher --installed-fixture --sly2-installed-fixture --sly2-runtime-fixture
+settings-games --game sly2 --screen settings:games --installed-fixture --sly2-installed-fixture --sly2-runtime-fixture
+settings-display --game sly2 --screen settings:display --installed-fixture --sly2-installed-fixture --sly2-runtime-fixture
+SHOTS
+  fi
+
   if [ -n "$data" ] && [ -d "$data/Documents" ]; then
     cp -R "$data/Documents" "$dir/Documents"
     find "$dir/Documents" -maxdepth 3 -type f | head -n 50
   fi
   grep -q "^0 failed" "$dir/Documents/selftest.log" 2>/dev/null || { echo "$kind: self tests did not pass"; failures=$((failures + 1)); }
   [ -f "$dir/Documents/smoke-launcher.png" ] || { echo "$kind: no launcher screenshot from the app"; failures=$((failures + 1)); }
+  # (Sly 2's renderer started from the launcher as Play starts it: its window, the Metal context, a few frames)
+  cat "$dir/Documents/smoke-game.log" 2>/dev/null
+  grep -q "^exit 0" "$dir/Documents/smoke-game.log" 2>/dev/null || { echo "$kind: the game's renderer self test did not pass"; failures=$((failures + 1)); }
+  [ -f "$dir/Documents/smoke-game.png" ] || { echo "$kind: no game frame from the renderer self test"; failures=$((failures + 1)); }
+  [ -f "$dir/Documents/smoke-launcher-after.png" ] || { echo "$kind: the launcher did not draw again after the game"; failures=$((failures + 1)); }
+  grep -E "gl-selftest|smoke:|window failed" "$dir/Documents/logs/ios.log" 2>/dev/null | head -n 20
   xcrun simctl shutdown "$device" 2>/dev/null
 done
 echo "simulator smoke: $failures problem(s)"

@@ -263,7 +263,36 @@ UIViewController* topViewController() {
 }
 
 cane::ios::ImportStatus isoStatus;
+
+// The app's window scene (the UIScene life cycle: Info.plist UIApplicationSceneManifest, scripts/ios/package.py).
+// iOS shows an app without it, or one linked against an older SDK, in a compatibility frame on screens it does not
+// know (a foldable's inner screen); an app built with the iOS 27 SDK must have it to start at all. SDL 2.30 has no
+// scene support: SDL's windows are put into this scene when they are made (adoptWindow).
+__weak UIWindowScene* appScene = nil;
 }  // namespace
+
+@interface SHSceneDelegate : UIResponder <UIWindowSceneDelegate>
+@property(nonatomic, strong) UIWindow* window;
+@end
+@implementation SHSceneDelegate
+- (void)scene:(UIScene*)scene willConnectToSession:(UISceneSession*)session options:(UISceneConnectionOptions*)options {
+    if (![scene isKindOfClass:UIWindowScene.class]) return;
+    appScene = (UIWindowScene*)scene;
+    cane::ios::log("iOS: window scene connected");
+}
+- (void)windowScene:(UIWindowScene*)scene
+    didUpdateCoordinateSpace:(id<UICoordinateSpace>)previousCoordinateSpace
+        interfaceOrientation:(UIInterfaceOrientation)previousInterfaceOrientation
+             traitCollection:(UITraitCollection*)previousTraitCollection {
+    // (a fold / unfold, a rotation, a Stage Manager resize: SDL's windows follow the scene; SDL's view controller then
+    // reports the new size: SDL_WINDOWEVENT_RESIZED)
+    for (UIWindow* window in scene.windows)
+        if (!CGRectEqualToRect(window.frame, scene.coordinateSpace.bounds)) window.frame = scene.coordinateSpace.bounds;
+}
+- (void)sceneDidDisconnect:(UIScene*)scene {
+    if (scene == appScene) appScene = nil;
+}
+@end
 
 @interface SHDocumentPickerDelegate : NSObject <UIDocumentPickerDelegate>
 @end
@@ -363,7 +392,8 @@ ChildProcess startProcess(const std::vector<std::string>& arguments) {
         p->path = bundlePath + "/Frameworks/Sly2Tools.framework/Sly2Tools";
     }
     p->outputFd = fds[1];
-    p->mainThread = p->image == "Sly2Release";  // (the game: UIKit wants its windows on the main thread)
+    // (the game: UIKit wants its windows on the main thread; so does the renderer's self test, in Sly2Tools)
+    p->mainThread = p->image == "Sly2Release" || std::find(arguments.begin(), arguments.end(), "--gl-selftest") != arguments.end();
     p->nested = redirectedHere != nullptr && !p->mainThread;
     std::int64_t handle;
     {
@@ -477,6 +507,23 @@ ImportStatus isoSelection() {
     return isoStatus;
 }
 
+void adoptWindow(void* uiWindow) {
+    UIWindow* window = (__bridge UIWindow*)uiWindow;
+    if (!window) return;
+    // (SDL's main runs from the app delegate's launch; the scene may connect a moment later: wait for it a little)
+    // (up to 5 s; only with a scene manifest in Info.plist)
+    static const bool sceneManifest = [NSBundle.mainBundle objectForInfoDictionaryKey:@"UIApplicationSceneManifest"] != nil;
+    for (int i = 0; sceneManifest && i < 250 && !appScene; ++i) CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.02, true);
+    UIWindowScene* scene = appScene;
+    if (!scene) {
+        static bool logged = false;
+        if (!logged) log("iOS: no window scene (the app runs without the scene life cycle)");
+        logged = true;
+        return;
+    }
+    if (window.windowScene != scene) window.windowScene = scene;
+    if (!CGRectEqualToRect(window.frame, scene.coordinateSpace.bounds)) window.frame = scene.coordinateSpace.bounds;
+}
 std::array<float, 4> safeAreaInsets(void* uiWindow) {
     UIWindow* window = (__bridge UIWindow*)uiWindow;
     if (!window) return {0, 0, 0, 0};

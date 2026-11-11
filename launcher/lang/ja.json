@@ -176,6 +176,7 @@
   "Choose The Sly Collection (PS3): its disc image (.iso) or a .zip of it, read as it is, nothing is unpacked. The menu is converted into your profile (about 30 MB).": "The Sly Collection (PS3) を選んでください: ディスクイメージ (.iso) またはその .zip。そのまま読み取り、展開はしません。メニューはプロファイルに変換されます（約 30 MB）。",
   "Choose this region: Play, Verify and Add to Steam use it.": "このリージョンを選択：プレイ、ファイル確認、Steam に追加でこのリージョンを使います。",
   "Choose this region: Play, Verify and shortcuts use it.": "このリージョンを選択：プレイ、ファイル確認、ショートカットでこのリージョンを使います。",
+  "Choose this region: Play and Verify use it.": "このリージョンを選択：プレイとファイル確認でこのリージョンを使います。",
   "Choose where SafeHouse installs games": "SafeHouse のゲームのインストール先を選択",
   "Choose your %s disc image": "%s のディスクイメージを選択",
   "Choose your disc image below, then install. It needs %s of free space.": "下でディスクイメージを選んでからインストールしてください。%s の空き容量が必要です。",

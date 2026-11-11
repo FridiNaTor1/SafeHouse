@@ -276,6 +276,59 @@ void OnCrashSignal(int sig)
 #define main Sly2Main
 #endif
 
+#include "gl.h"
+#include "../platform/gl_context.h"
+// --gl-selftest [--out PNG]: the game's renderer as it starts for play (the window, the context: Metal on Apple,
+// OpenGL / Vulkan elsewhere, every program built), a few presented frames of a known colour, the scene target read
+// back (and written to PNG). No game data. The iOS CI starts it from the launcher as Play does (ios_app.mm,
+// platform/ios/glfw_sdl_ios.cpp --ios-smoke), so the game's window and renderer are checked where no disc is.
+static int GlSelfTestCommand(const std::string& out)
+{
+    std::string error;
+#if defined(CANE_IOS) || defined(__ANDROID__)
+    constexpr bool fVisible = true;   // (a phone's window is the screen)
+#else
+    constexpr bool fVisible = false;
+#endif
+    if (!g_gl.FInit(1280, 720, fVisible, "Sly2-Release", error))
+    {
+        std::fprintf(stderr, "gl-selftest: FAILED: %s\n", error.c_str());
+        g_gl.Terminate();
+        return 1;
+    }
+    std::printf("gl-selftest: %s / %s, scene %dx%d\n", reinterpret_cast<const char*>(glGetString(GL_RENDERER)),
+                reinterpret_cast<const char*>(glGetString(GL_VERSION)), g_gl.renderWidth, g_gl.renderHeight);
+    for (int frame = 0; frame < 30; ++frame)
+    {
+        glBindFramebuffer(GL_FRAMEBUFFER, g_gl.FboScene());
+        glDisable(GL_SCISSOR_TEST);
+        glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+        glClearColor(0.25f, 0.5f, 0.75f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+        g_gl.Present();
+        cane::gl::SwapBuffers(g_gl.window);
+        glfwPollEvents();
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, g_gl.FboScene());
+    glClearColor(0.25f, 0.5f, 0.75f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glFinish();
+    // (the scene target's centre must be the colour cleared)
+    unsigned char rgba[4] = {};
+    glBindFramebuffer(GL_FRAMEBUFFER, g_gl.FboScene());
+    if (g_gl.FboScene() == g_gl.fbo)
+        glReadPixels(g_gl.renderWidth / 2, g_gl.renderHeight / 2, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+    const bool fWritten = out.empty() || g_gl.FWriteScreenshot(out);
+    const bool fColor = g_gl.FboScene() != g_gl.fbo || (std::abs(rgba[0] - 64) <= 2 && std::abs(rgba[1] - 128) <= 2 && std::abs(rgba[2] - 191) <= 2);
+    const GLenum err = glGetError();
+    std::printf("gl-selftest: centre %d %d %d, GL error 0x%x%s%s\n", rgba[0], rgba[1], rgba[2], unsigned(err),
+                out.empty() ? "" : fWritten ? ", wrote " : ", FAILED to write ", out.c_str());
+    g_gl.Terminate();
+    const bool fOk = fWritten && fColor && err == GL_NO_ERROR;
+    std::printf("gl-selftest: %s\n", fOk ? "passed" : "FAILED");
+    return fOk ? 0 : 1;
+}
+
 // The tool commands leave through std::_Exit (no static destructors after the converter's 44 worlds). iOS runs them in
 // the app's own process (platform/ios/ios_app.h), where that would end the app: there they return from main.
 #if defined(CANE_IOS)
@@ -381,6 +434,7 @@ int main(int argc, char** argv)
         else if (!std::strcmp(argv[i], "--action-input-selftest")) command = "action-input-selftest";
         else if (!std::strcmp(argv[i], "--settings-selftest")) command = "settings-selftest";
         else if (!std::strcmp(argv[i], "--renderer-selftest")) command = "renderer-selftest";
+        else if (!std::strcmp(argv[i], "--gl-selftest")) command = "gl-selftest";
         else if (!std::strcmp(argv[i], "--rumble-selftest")) command = "rumble-selftest";
         else if (!std::strcmp(argv[i], "--audio-selftest")) { command = "audio-selftest"; if (i + 1 < argc && argv[i + 1][0] != '-') arg = argv[++i]; }
         else if (!std::strcmp(argv[i], "--list-audio-devices")) command = "list-audio-devices";
@@ -513,6 +567,11 @@ int main(int argc, char** argv)
     if (command && !std::strcmp(command, "renderer-selftest"))
         return cane::renderer::selfTest([](const char* sz) { RENDERER r; return FParseRenderer(sz, &r) ? int(r) : -1; });
     if (command && !std::strcmp(command, "rumble-selftest")) return RumbleSelfTestCommand();
+    if (command && !std::strcmp(command, "gl-selftest"))   // (no disc; --renderer as for play)
+    {
+        if (fRendererArg) g_rendererWanted = rendererArg;
+        return GlSelfTestCommand(out);
+    }
     if (command && !std::strcmp(command, "language-selftest")) return LanguageSelfTest();
     // (audio.h, notes/AUDIO_2026-11-10.md) the devices by name, their fallback / recovery, the USB headset's microphone
     if (command && !std::strcmp(command, "audio-selftest")) { int AudioSelfTest(const char*); return AudioSelfTest(arg ? arg : ""); }
