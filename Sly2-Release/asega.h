@@ -51,7 +51,7 @@ struct ASEGA : BASIC
     float svtSuck = 1.0f;             // +0x4C: from the suck history (0x154C90) by the ASEG's polynomial
     int iea = 0;                      // +0x50: the next timed event
     int ieaEnd = 0;                   // +0x54: the end list's next event (fired at the retraction)
-    int fSound = 0;                   // +0x58
+    int fPause = 0;                   // +0x58: the game paused while it plays (0x131990: PauseGame / ResumeGame (3))
     std::vector<ASEGALISTENER*> aplistener;
     bool fRetracted = false;          // not in the global list (0x3E1218) any more
 };
