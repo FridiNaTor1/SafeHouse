@@ -57,7 +57,10 @@ def framework_plist(name, identifier, version, sdk):
 
 
 def app_plist(bundle_id, version, build, sdk):
-    landscape = ["UIInterfaceOrientationLandscapeLeft", "UIInterfaceOrientationLandscapeRight"]
+    # (landscape first: the launch orientation; the app itself turns only to landscape on a phone-shaped screen,
+    # SDL_HINT_ORIENTATIONS from platform/ios/ios_app.mm orientations())
+    every = ["UIInterfaceOrientationLandscapeLeft", "UIInterfaceOrientationLandscapeRight",
+             "UIInterfaceOrientationPortrait", "UIInterfaceOrientationPortraitUpsideDown"]
     return {
         "CFBundleDevelopmentRegion": "en",
         "CFBundleDisplayName": PRODUCT,
@@ -76,10 +79,12 @@ def app_plist(bundle_id, version, build, sdk):
         "UIRequiredDeviceCapabilities": ["arm64", "metal"],
         # (a launch screen: without one iOS runs the app letterboxed at an old phone's size)
         "UILaunchScreen": {},
-        # iPhone: landscape; iPad: every orientation, so Split View, Slide Over and Stage Manager windows work
-        "UISupportedInterfaceOrientations": landscape,
-        "UISupportedInterfaceOrientations~ipad": landscape + ["UIInterfaceOrientationPortrait",
-                                                              "UIInterfaceOrientationPortraitUpsideDown"],
+        # Every orientation on iPhone and iPad: an app that declares only some runs in a compatibility frame
+        # (letterboxed, zoomable) on screens that are not phone-shaped: iPad windows (Split View, Slide Over, Stage
+        # Manager) and a foldable iPhone's near-square inner screen. At run time a phone-shaped screen stays landscape.
+        "UISupportedInterfaceOrientations": every,
+        "UISupportedInterfaceOrientations~ipad": every,
+        # (any window size: the launcher and the game lay out for every size and aspect, and follow live resizes)
         "UIRequiresFullScreen": False,
         "UIStatusBarHidden": True,
         "UIViewControllerBasedStatusBarAppearance": False,

@@ -42,6 +42,8 @@ struct GLFWwindow {
     bool metal = false;          // (made with GLFW_NO_API: the game's Metal window)
     float uiScale = 1;           // logical units per pixel (the launcher: >= 1280x720 logical)
     int width = 0, height = 0;   // logical size
+    std::array<float, 4> safe{};  // the safe area insets in logical units (left, top, right, bottom)
+    std::string reported;         // (the last display report logged: logged again when it changes)
     bool close = false, focused = true, visible = true;
     int cursorMode = GLFW_CURSOR_NORMAL;
     std::array<unsigned char, GLFW_KEY_LAST + 1> keys{};
@@ -111,23 +113,50 @@ void drawableSize(GLFWwindow* w, int* width, int* height) {
     if (width) *width = a;
     if (height) *height = b;
 }
-// The logical size: pixels for the game, >= 1280x720 units for the launcher (as Android's density scaling).
+void* uiWindow(GLFWwindow* w) {
+    if (!w || !w->native) return nullptr;
+    SDL_SysWMinfo info;
+    SDL_VERSION(&info.version);
+    return SDL_GetWindowWMInfo(w->native, &info) && info.subsystem == SDL_SYSWM_UIKIT ? (void*)info.info.uikit.window : nullptr;
+}
+// The logical size: pixels for the game, >= 1280x720 units for the launcher (as Android's density scaling). The
+// launcher's 1280x720 is counted inside the safe area (it lays itself out there: cane_glfw_safe_area).
 void updateScale(GLFWwindow* w) {
     if (!w || !w->native) return;
     int pw = 0, ph = 0;
     drawableSize(w, &pw, &ph);
     if (pw <= 0 || ph <= 0) return;
+    int points = 0, pointsH = 0;
+    SDL_GetWindowSize(w->native, &points, &pointsH);
+    const float density = points > 0 ? float(pw) / float(points) : 1.f;  // pixels per point (2 or 3)
+    std::array<float, 4> insetPx{};
     if (launcherRole()) {
-        int points = 0, unused = 0;
-        SDL_GetWindowSize(w->native, &points, &unused);
-        const float density = points > 0 ? float(pw) / float(points) : 1.f;  // pixels per point (2 or 3)
-        const float fit = std::max(1.f, std::min(pw / 1280.f, ph / 720.f));
+        const auto inset = cane::ios::safeAreaInsets(uiWindow(w));
+        for (int i = 0; i < 4; ++i) insetPx[i] = std::max(0.f, inset[i]) * density;
+        const float safeW = std::max(1.f, pw - insetPx[0] - insetPx[2]), safeH = std::max(1.f, ph - insetPx[1] - insetPx[3]);
+        const float fit = std::max(1.f, std::min(safeW / 1280.f, safeH / 720.f));
         w->uiScale = std::clamp(density, 1.f, fit);
     } else {
         w->uiScale = 1;
     }
     w->width = std::max(1, int(std::round(pw / w->uiScale)));
     w->height = std::max(1, int(std::round(ph / w->uiScale)));
+    for (int i = 0; i < 4; ++i) w->safe[i] = insetPx[i] / w->uiScale;
+}
+// Logs the screen / window / safe area once per change (ios.log: the next tester round shows what iOS gave the app),
+// and lets SDL rotate to what this screen allows (a foldable's inner screen: every orientation).
+void reportDisplay(GLFWwindow* w) {
+    void* window = uiWindow(w);
+    if (!window) return;
+    SDL_SetHint(SDL_HINT_ORIENTATIONS, cane::ios::orientations(window));
+    int pw = 0, ph = 0;
+    drawableSize(w, &pw, &ph);
+    const std::string report = std::string("iOS: ") + cane_ios_program_role() + " window " + std::to_string(pw) + "x" +
+                               std::to_string(ph) + " px, " + std::to_string(w->width) + "x" + std::to_string(w->height) +
+                               (w->metal ? " (Metal); " : " (OpenGL ES); ") + cane::ios::displayReport(window);
+    if (report == w->reported) return;
+    w->reported = report;
+    cane::ios::log(report);
 }
 // SDL's window coordinates (points) -> logical units
 ImVec2 logicalPosition(GLFWwindow* w, float x, float y) {
@@ -288,6 +317,7 @@ GLFWvidmode mode() {
 }
 void notifySize(GLFWwindow* w) {
     updateScale(w);
+    reportDisplay(w);
     int fw = 0, fh = 0;
     drawableSize(w, &fw, &fh);
     if (w->framebuffer) w->framebuffer(w, fw, fh);
@@ -488,7 +518,8 @@ extern "C" void* cane_glfw_metal_layer(GLFWwindow* w) {
 extern "C" {
 int glfwInit() {
     SDL_SetHint(SDL_HINT_TOUCH_MOUSE_EVENTS, "1");
-    SDL_SetHint(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight");
+    // (landscape on a phone; every orientation on an iPad / a near-square screen: reportDisplay keeps it current)
+    SDL_SetHint(SDL_HINT_ORIENTATIONS, cane::ios::orientations(nullptr));
     SDL_SetHint(SDL_HINT_IOS_HIDE_HOME_INDICATOR, launcherRole() ? "0" : "2");
     SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "0");
     if (SDL_InitSubSystem(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER | SDL_INIT_EVENTS) != 0) {
@@ -554,12 +585,7 @@ GLFWwindow* glfwCreateWindow(int, int, const char* title, GLFWmonitor*, GLFWwind
     updateScale(w);
     // (SDL starts text input with its video; the launcher manages it per ImGui field, the game has none)
     if (SDL_IsTextInputActive()) SDL_StopTextInput();
-    {
-        int pw = 0, ph = 0;
-        drawableSize(w, &pw, &ph);
-        cane::ios::log(std::string("iOS: ") + cane_ios_program_role() + " window " + std::to_string(pw) + "x" + std::to_string(ph) +
-                       " px, " + std::to_string(w->width) + "x" + std::to_string(w->height) + (w->metal ? " (Metal)" : " (OpenGL ES)"));
-    }
+    reportDisplay(w);
     mainWindow = w;
     current = w;
     return w;
@@ -647,6 +673,14 @@ void glfwSetWindowShouldClose(GLFWwindow* w, int value) {
     if (w) w->close = value != 0;
 }
 void glfwGetFramebufferSize(GLFWwindow* w, int* width, int* height) { drawableSize(w, width, height); }
+// (launcher/main.cpp, iOS) the safe area insets in logical units: the launcher keeps its layout inside them.
+void cane_glfw_safe_area(GLFWwindow* w, float* left, float* top, float* right, float* bottom) {
+    if (w) updateScale(w);
+    if (left) *left = w ? w->safe[0] : 0;
+    if (top) *top = w ? w->safe[1] : 0;
+    if (right) *right = w ? w->safe[2] : 0;
+    if (bottom) *bottom = w ? w->safe[3] : 0;
+}
 void glfwGetWindowSize(GLFWwindow* w, int* width, int* height) {
     if (w) updateScale(w);
     if (width) *width = w ? w->width : 0;

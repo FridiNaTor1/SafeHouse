@@ -61,6 +61,16 @@ enum class TouchContext : int { Gameplay = 0, Menu = 1, Cinematic = 2 };
 void setTouchContext(TouchContext context);
 // Puts the touch overlay over this UIWindow (the game's SDL window; nullptr removes it). (glfw_sdl_ios.cpp)
 void attachTouchOverlay(void* uiWindow);
+// (main thread) The window's safe area insets in points: left, top, right, bottom (the notch / Dynamic Island, the
+// home indicator, a foldable's hinge area). Zero without a window.
+std::array<float, 4> safeAreaInsets(void* uiWindow);
+// (main thread) The orientations SDL may rotate to (SDL_HINT_ORIENTATIONS): landscape on a phone-shaped screen; every
+// orientation on an iPad and on a near-square screen (a foldable's inner screen), where a locked orientation makes iOS
+// show the app in a compatibility frame.
+const char* orientations(void* uiWindow);
+// (main thread) One log line about the screen and the window: sizes, scale, safe area, orientation, and whether
+// iOS shows the app in a compatibility frame (window smaller than the screen).
+std::string displayReport(void* uiWindow);
 // A haptic tap at this strength (0..255; 0: nothing). Call it every frame a motor runs.
 void vibrate(int amplitude);
 // (the app's main, platform/ios/main.mm) the folders, the log, controller notifications; --ios-smoke / --ios-selftest

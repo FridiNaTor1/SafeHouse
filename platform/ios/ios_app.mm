@@ -13,6 +13,8 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cerrno>
+#include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <deque>
@@ -21,6 +23,7 @@
 #include <mutex>
 #include <set>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -29,12 +32,18 @@ std::string documentsPath, bundlePath;
 bool smoke = false;
 FILE* logFile = nullptr;
 std::mutex logMutex;
+// The console (Xcode / simctl --console-pty) as it was at start: a program's run points stdout / stderr at its pipe, and
+// the app's own log lines must not land in that pipe (the relay below would read them back).
+int consoleFd = STDERR_FILENO;
 
 struct Program {
     std::string path, image;
     std::vector<std::string> arguments;
     int outputFd = -1;  // the write end of the caller's pipe (-1: the app's own output)
     bool mainThread = false;
+    // Started by a program whose output is redirected (the extractor runs Sly 2's converter, File Extractor/pcbrx.h
+    // RunTool): that program holds outputMutex and waits for this one, so this one must not wait for the mutex.
+    bool nested = false;
     std::atomic<bool> running{true};
     std::atomic<int> code{1};
 };
@@ -42,7 +51,10 @@ std::map<std::int64_t, std::shared_ptr<Program>> programs;
 std::deque<std::shared_ptr<Program>> mainQueue;
 std::set<std::string> imagesRun;  // (program images that already ran their main in this app session)
 std::int64_t nextHandle = 1;
-std::mutex outputMutex;  // one program's output redirection at a time
+std::mutex outputMutex;  // one program's output redirection at a time (a nested program stacks on its parent's)
+// The program running on this thread with its output redirected (nullptr: none): startProcess marks a program it
+// starts from here as nested.
+thread_local Program* redirectedHere = nullptr;
 
 NSString* ns(const std::string& text) { return [NSString stringWithUTF8String:text.c_str()] ?: @""; }
 
@@ -69,6 +81,69 @@ bool sly2Tool(const std::vector<std::string>& arguments) {
 void writeLine(int fd, const std::string& line) {
     const std::string text = line + "\n";
     if (fd >= 0) (void)!write(fd, text.data(), text.size());
+}
+
+// A progress line: JSON progress of a stage other than "error" (the extractor's --progress=jsonl), or a tool's
+// "progress|languages|textures|worlds N M item" line. The app log keeps one of these every few seconds, every other line.
+bool progressLine(const std::string& line) {
+    if (!line.empty() && line.front() == '{')
+        return line.find("\"stage\"") != std::string::npos && line.find("\"stage\":\"error\"") == std::string::npos;
+    for (const char* word : {"progress ", "languages ", "textures ", "worlds ", "convert "}) {
+        const size_t n = std::strlen(word);
+        if (line.size() > n && line.compare(0, n, word) == 0 && line[n] >= '0' && line[n] <= '9') return true;
+    }
+    return false;
+}
+// Copies a program's output from `from` (its stdout / stderr while it runs) to its caller's pipe `to`, and each line
+// to the app log (Documents/logs/ios.log) as "<program>: line": the reason a program failed is in the log even when
+// the caller shows only an exit code. Ends at EOF (the program's run restored stdout / stderr).
+void relayOutput(int from, int to, std::string name) {
+    std::string pending;
+    char buffer[8192];
+    auto lastProgress = std::chrono::steady_clock::now() - std::chrono::seconds(10);
+    size_t skipped = 0;
+    auto logLine = [&](std::string line) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (line.empty()) return;
+        if (progressLine(line)) {
+            const auto now = std::chrono::steady_clock::now();
+            if (now - lastProgress < std::chrono::seconds(3)) {
+                ++skipped;
+                return;
+            }
+            lastProgress = now;
+        }
+        if (line.size() > 2000) line = line.substr(0, 2000) + " ...";
+        cane::ios::log(name + ": " + line + (skipped ? " (" + std::to_string(skipped) + " progress lines skipped)" : std::string()));
+        skipped = 0;
+    };
+    for (;;) {
+        const ssize_t n = read(from, buffer, sizeof(buffer));
+        if (n < 0 && errno == EINTR) continue;
+        if (n <= 0) break;
+        if (to >= 0) {
+            for (ssize_t done = 0; done < n;) {
+                const ssize_t w = write(to, buffer + done, size_t(n - done));
+                if (w < 0 && errno == EINTR) continue;
+                if (w <= 0) {
+                    to = -1;  // (the caller stopped reading: keep logging)
+                    break;
+                }
+                done += w;
+            }
+        }
+        pending.append(buffer, size_t(n));
+        for (size_t end; (end = pending.find('\n')) != std::string::npos;) {
+            logLine(pending.substr(0, end));
+            pending.erase(0, end + 1);
+        }
+        if (pending.size() > 65536) {
+            logLine(pending);
+            pending.clear();
+        }
+    }
+    logLine(pending);
+    close(from);
 }
 
 // Runs the program's main in this process. Its stdout / stderr go to its pipe while it runs.
@@ -106,24 +181,50 @@ int runProgram(Program& p) {
     for (const auto& a : p.arguments) line += " " + a;
     cane::ios::log(line + (p.mainThread ? " (main thread)" : " (worker thread)"));
 
+    // stdout / stderr are the process's: while the program runs they point at a relay pipe whose thread copies the
+    // output to the caller's pipe and to the app log. A nested program (the extractor's converter) points them at
+    // its own relay and gives them back to its parent's when it ends.
     std::unique_lock output(outputMutex, std::defer_lock);
     int savedOut = -1, savedErr = -1;
+    std::thread relay;
+    Program* const outer = redirectedHere;
     if (p.outputFd >= 0) {
-        output.lock();
+        if (!p.nested) output.lock();
+        int relayPipe[2] = {-1, -1};
         std::fflush(nullptr);
         savedOut = dup(STDOUT_FILENO);
         savedErr = dup(STDERR_FILENO);
-        dup2(p.outputFd, STDOUT_FILENO);
-        dup2(p.outputFd, STDERR_FILENO);
+        if (pipe(relayPipe) == 0) {
+            fcntl(relayPipe[0], F_SETFD, FD_CLOEXEC);
+            fcntl(relayPipe[1], F_SETFD, FD_CLOEXEC);
+            relay = std::thread(relayOutput, relayPipe[0], p.outputFd, p.image);
+            dup2(relayPipe[1], STDOUT_FILENO);
+            dup2(relayPipe[1], STDERR_FILENO);
+            close(relayPipe[1]);
+        } else {
+            dup2(p.outputFd, STDOUT_FILENO);
+            dup2(p.outputFd, STDERR_FILENO);
+        }
         setvbuf(stdout, nullptr, _IOLBF, 0);
+        redirectedHere = &p;
     }
-    const int code = entry(int(arguments.size()), argv.data());
+    int code = 1;
+    try {
+        code = entry(int(arguments.size()), argv.data());
+    } catch (const std::exception& e) {
+        std::fprintf(stderr, "%s stopped: %s\n", p.image.c_str(), e.what());
+    } catch (...) {
+        std::fprintf(stderr, "%s stopped (unknown exception)\n", p.image.c_str());
+    }
     if (p.outputFd >= 0) {
         std::fflush(nullptr);
         dup2(savedOut, STDOUT_FILENO);
         dup2(savedErr, STDERR_FILENO);
         close(savedOut);
         close(savedErr);
+        redirectedHere = outer;
+        // (the relay's write end is closed now everywhere: it reads to the end and stops)
+        if (relay.joinable()) relay.join();
     }
     cane::ios::log(baseName(p.path) + " exited with " + std::to_string(code));
     return code;
@@ -170,6 +271,16 @@ cane::ios::ImportStatus isoStatus;
 - (void)documentPicker:(UIDocumentPickerViewController*)controller didPickDocumentsAtURLs:(NSArray<NSURL*>*)urls {
     NSURL* url = urls.firstObject;
     std::string path, error;
+    // An archive (.7z, .rar, .gz, ...) is not a disc image: the extractor reads .iso / .chd (and the PS3 import a
+    // .zip). Say so instead of copying gigabytes into Documents/imports that nothing can read.
+    NSString* extension = url.pathExtension.lowercaseString ?: @"";
+    if (url && [@[ @"7z", @"rar", @"gz", @"tgz", @"xz", @"bz2", @"tar", @"cso", @"zso", @"ecm" ] containsObject:extension]) {
+        error = std::string("This is a .") + extension.UTF8String +
+                " archive, not a disc image. Unpack it first (for example with a 7-Zip app or on a computer), then pick the "
+                ".iso (or .chd) inside it.";
+        [NSFileManager.defaultManager removeItemAtURL:url error:nil];  // (the picker's own copy in our tmp inbox)
+        url = nil;
+    }
     if (url) {
         // (asCopy: the system copied the file into our tmp inbox; move it to Documents/imports, the same volume)
         NSString* imports = ns(cane::ios::importsDirectory());
@@ -208,6 +319,10 @@ void initialize(int argc, char** argv) {
         NSString* logs = [ns(documentsPath) stringByAppendingPathComponent:@"logs"];
         [NSFileManager.defaultManager createDirectoryAtPath:logs withIntermediateDirectories:YES attributes:nil error:nil];
         logFile = std::fopen((std::string(logs.UTF8String) + "/ios.log").c_str(), "w");
+        if (const int console = dup(STDERR_FILENO); console >= 0) {
+            fcntl(console, F_SETFD, FD_CLOEXEC);
+            consoleFd = console;
+        }
         UIDevice* device = UIDevice.currentDevice;
         log(std::string("SafeHouse iOS: ") + device.model.UTF8String + ", " + device.systemName.UTF8String + " " +
             device.systemVersion.UTF8String + "; documents " + documentsPath);
@@ -215,8 +330,8 @@ void initialize(int argc, char** argv) {
 }
 bool smokeTest() { return smoke; }
 void log(const std::string& line) {
-    std::fprintf(stderr, "%s\n", line.c_str());
     std::lock_guard lock(logMutex);
+    writeLine(consoleFd, line);
     if (logFile) {
         std::fprintf(logFile, "%s\n", line.c_str());
         std::fflush(logFile);
@@ -249,6 +364,7 @@ ChildProcess startProcess(const std::vector<std::string>& arguments) {
     }
     p->outputFd = fds[1];
     p->mainThread = p->image == "Sly2Release";  // (the game: UIKit wants its windows on the main thread)
+    p->nested = redirectedHere != nullptr && !p->mainThread;
     std::int64_t handle;
     {
         std::lock_guard lock(stateMutex);
@@ -359,6 +475,61 @@ void requestIsoSelection() {
 ImportStatus isoSelection() {
     std::lock_guard lock(stateMutex);
     return isoStatus;
+}
+
+std::array<float, 4> safeAreaInsets(void* uiWindow) {
+    UIWindow* window = (__bridge UIWindow*)uiWindow;
+    if (!window) return {0, 0, 0, 0};
+    UIView* view = window.rootViewController.view ?: window;
+    const UIEdgeInsets i = view.safeAreaInsets;
+    return {float(i.left), float(i.top), float(i.right), float(i.bottom)};
+}
+namespace {
+UIScreen* screenOf(UIWindow* window) {
+    if (window.windowScene) return window.windowScene.screen;
+    return window.screen ?: UIScreen.mainScreen;
+}
+}  // namespace
+const char* orientations(void* uiWindow) {
+    static const char* const landscape = "LandscapeLeft LandscapeRight";
+    static const char* const all = "LandscapeLeft LandscapeRight Portrait PortraitUpsideDown";
+    if (UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPad) return all;
+    UIWindow* window = (__bridge UIWindow*)uiWindow;
+    UIScreen* screen = window ? screenOf(window) : UIScreen.mainScreen;
+    // (nativeBounds: the panel itself, also when iOS runs the app in a smaller compatibility frame)
+    const CGSize size = screen.nativeBounds.size;
+    const CGFloat longSide = std::max(size.width, size.height), shortSide = std::min(size.width, size.height);
+    return shortSide > 0 && longSide / shortSide < 1.5 ? all : landscape;
+}
+std::string displayReport(void* uiWindow) {
+    UIWindow* window = (__bridge UIWindow*)uiWindow;
+    UIScreen* screen = window ? screenOf(window) : UIScreen.mainScreen;
+    const CGRect bounds = screen.bounds, native = screen.nativeBounds;
+    char text[512];
+    std::snprintf(text, sizeof(text), "screen %.0fx%.0f pt (scale %.2f), panel %.0fx%.0f px (native scale %.2f)",
+                  bounds.size.width, bounds.size.height, screen.scale, native.size.width, native.size.height,
+                  screen.nativeScale);
+    std::string line = text;
+    if (window) {
+        const CGRect frame = window.frame;
+        const auto inset = safeAreaInsets(uiWindow);
+        std::snprintf(text, sizeof(text), "; window %.0fx%.0f pt; safe area insets l%.0f t%.0f r%.0f b%.0f",
+                      frame.size.width, frame.size.height, inset[0], inset[1], inset[2], inset[3]);
+        line += text;
+        if (UIWindowScene* scene = window.windowScene) {
+            static const char* const names[] = {"unknown", "portrait", "portrait upside down", "landscape right", "landscape left"};
+            const long o = long(scene.interfaceOrientation);
+            line += std::string("; scene ") + (o >= 0 && o <= 4 ? names[o] : "?");
+        }
+        // (a window clearly smaller than the panel in points: iOS shows the app in a compatibility frame)
+        const CGFloat panelW = native.size.width / std::max<CGFloat>(screen.nativeScale, 1),
+                      panelH = native.size.height / std::max<CGFloat>(screen.nativeScale, 1);
+        const CGFloat windowArea = frame.size.width * frame.size.height, panelArea = panelW * panelH;
+        if (panelArea > 0 && windowArea < panelArea * 0.9) line += "; COMPATIBILITY FRAME (window smaller than the screen)";
+    }
+    line += std::string("; idiom ") + (UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPad ? "pad" : "phone");
+    line += std::string("; orientations ") + orientations(uiWindow);
+    return line;
 }
 
 void vibrate(int amplitude) {

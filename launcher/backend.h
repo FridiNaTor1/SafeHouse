@@ -4,6 +4,7 @@
 #include <fstream>
 #include <map>
 #include <ctime>
+#include <deque>
 #include <mutex>
 
 #include "install.h"
@@ -432,6 +433,12 @@ struct LauncherBackend {
     void install(const std::string& iso, GameId game, const std::atomic<bool>& cancel, const LogFunction& log) {
         if (!installable(game))
             throw std::runtime_error(trf("%s cannot be installed yet", cane::game(game).title));
+#if defined(CANE_MOBILE)
+        // (the phone / tablet apps carry Sly 2 only: Sly 1's level tools and Sly 3's are not in the app, so its
+        // extraction could only fail)
+        if (!runtimeAvailable(game))
+            throw std::runtime_error(trf("%s cannot be installed yet", cane::game(game).title));
+#endif
         const DiscCheck check = checkDisc(path(iso), game);
         if (!check.ok()) throw std::runtime_error(check.message);
         const std::string region = check.region->key;
@@ -442,8 +449,22 @@ struct LauncherBackend {
         if (game != GameId::Sly1) arguments.insert(arguments.begin() + 1, {"--game", cane::game(game).key});
         // (Sly 2: the disc's languages go into the shared languages folder, langstore.h)
         if (game == GameId::Sly2) arguments.insert(arguments.end(), {"--languages-dir", utf8(languagesDir(game))});
+        // The extractor's reason for a failure (its "error" progress event, else its last plain lines) replaces the bare
+        // exit code in the message the install page shows.
+        std::string reason;
+        std::deque<std::string> lastLines;
+        const LogFunction watch = [&](const std::string& line) {
+            if (!line.empty() && line.front() == '{') {
+                const auto event = json::parse(line, nullptr, false);
+                if (event.is_object() && event.value("stage", std::string{}) == "error") reason = event.value("item", std::string{});
+            } else if (!line.empty()) {
+                lastLines.push_back(line);
+                if (lastLines.size() > 2) lastLines.pop_front();
+            }
+            log(line);
+        };
         try {
-            checkedProcess(arguments, tools, cancel, log);
+            checkedProcess(arguments, tools, cancel, watch);
         } catch (...) {
             // The extractor may be terminated without running destructors.
             // Acquire its released lock before discarding incomplete staging.
@@ -451,7 +472,18 @@ struct LauncherBackend {
                 InstallationTransaction cleanup(target);
             } catch (...) {
             }
-            throw;
+            if (cancel || (reason.empty() && lastLines.empty())) throw;
+            if (reason.empty()) {
+                // (no error event: the exit code, then what the extractor said last)
+                try {
+                    throw;
+                } catch (const std::exception& e) {
+                    reason = e.what();
+                } catch (...) {
+                }
+                for (const auto& line : lastLines) reason += (reason.empty() ? "" : " ") + line;
+            }
+            throw std::runtime_error(reason);
         }
         if (target == baseDir(game)) config[isoKey(game)] = iso;
         rememberInstallPath(game, target);

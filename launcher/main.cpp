@@ -50,6 +50,10 @@
 #include "launcher_developer_nagaa95.h"
 #include "launcher_developer_nagaa95-silhouette.h"
 #include "launcher_icon.h"
+#if defined(CANE_IOS)
+// (platform/ios/glfw_sdl_ios.cpp) the window's safe area insets in the launcher's logical units
+extern "C" void cane_glfw_safe_area(GLFWwindow* window, float* left, float* top, float* right, float* bottom);
+#endif
 #include "launcher_logo.h"
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb/stb_image.h>
@@ -618,8 +622,18 @@ int desktop(cane::LauncherBackend& backend, const ui::fixtures::Options* fixture
         int width, height;
         if (fixture) width = fixture->width, height = fixture->height;
         else glfwGetWindowSize(window, &width, &height);
-        const ImVec2 size{static_cast<float>(width), static_cast<float>(height)};
-        ImGui::SetNextWindowPos({0, 0});
+        ImVec2 size{static_cast<float>(width), static_cast<float>(height)}, origin{0, 0};
+#if defined(CANE_IOS)
+        // (iPhone / iPad: the notch / Dynamic Island, the home indicator and rounded corners stay outside the layout;
+        // the background colour fills them. The shim counts the launcher's 1280x720 units inside the safe area.)
+        if (!fixture) {
+            float left = 0, top = 0, right = 0, bottom = 0;
+            cane_glfw_safe_area(window, &left, &top, &right, &bottom);
+            origin = {std::round(left), std::round(top)};
+            size = {std::max(1.0f, std::round(size.x - left - right)), std::max(1.0f, std::round(size.y - top - bottom))};
+        }
+#endif
+        ImGui::SetNextWindowPos(origin);
         ImGui::SetNextWindowSize(size);
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {0, 0});
         ImGui::Begin(cane::brand::appName, nullptr,

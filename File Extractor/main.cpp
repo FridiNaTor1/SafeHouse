@@ -29,6 +29,9 @@
 #include <string>
 #include <utility>
 #include <vector>
+#if defined(CANE_IOS)
+#include <unistd.h>
+#endif
 
 namespace fs = std::filesystem;
 
@@ -216,8 +219,23 @@ static fs::path g_languagesDir;   // (--languages-dir: Sly 2's shared languages 
 // The disc image given (an .iso, or a CHD read through its decompressed copy): what the installation records.
 static fs::path g_sourcePath;
 static std::streambuf* g_stdoutBuffer=nullptr;
+#if defined(CANE_IOS)
+// iOS: the launcher's pipe as it was at start. The extractor runs in the app's process (platform/ios/ios_app.mm), where
+// a tool it runs (Sly 2's converter) takes stdout while it runs; the progress lines keep going to the launcher.
+static int g_progressFd=-1;
+#endif
 static void Progress(const std::string& stage,size_t completed,size_t total,const std::string& item="") {
-    if(g_progressJson) {std::ostream out(g_stdoutBuffer);out << cane::json({{"stage",stage},{"completed",completed},{"total",total},{"item",item}}).dump()<<std::endl;}
+    if(!g_progressJson)return;
+    const std::string line=cane::json({{"stage",stage},{"completed",completed},{"total",total},{"item",item}}).dump();
+#if defined(CANE_IOS)
+    if(g_progressFd>=0) {
+        std::cout.flush();std::cerr.flush();
+        const std::string text=line+"\n";
+        for(size_t done=0;done<text.size();) {const auto n=write(g_progressFd,text.data()+done,text.size()-done);if(n<=0)break;done+=size_t(n);}
+        return;
+    }
+#endif
+    std::ostream out(g_stdoutBuffer);out<<line<<std::endl;
 }
 static void CheckRange(uint64_t offset,uint64_t size) {
     constexpr uint64_t limit=512ull*1024*1024;
@@ -2300,6 +2318,15 @@ static int Extract(int argc, char** argv)
 
 int main(int argc,char** argv) {
     g_stdoutBuffer=std::cout.rdbuf();
+    // (iOS / Android run main again in the same image: no option of the previous run carries over)
+    g_nonInteractive=false;g_progressJson=false;g_languagesDir.clear();g_sourcePath.clear();g_isoSize=0;
+#if defined(CANE_IOS)
+    // (closed before main returns, also on an exception: the app's output relay ends when every copy is closed)
+    struct ProgressFd {
+        ProgressFd() {std::fflush(stdout);g_progressFd=dup(STDOUT_FILENO);}
+        ~ProgressFd() {if(g_progressFd>=0)close(g_progressFd);g_progressFd=-1;}
+    } progressFd;
+#endif
     int result;
     try {result=Extract(argc,argv);}catch(const std::exception& e) {std::cerr<<"Extraction failed: "<<e.what()<<std::endl;Progress("error",0,0,e.what());result=1;}
     std::cout.rdbuf(g_stdoutBuffer);return result;

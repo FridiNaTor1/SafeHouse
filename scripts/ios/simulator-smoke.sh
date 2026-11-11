@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # The iOS app on the simulators (.github/workflows/ios.yml): an iPhone and an iPad simulator each install the app and
-# run it twice: --ios-selftest (Sly 2's self tests inside the app, no game data) and --ios-smoke (the launcher draws
+# run it three times: --ios-selftest (Sly 2's self tests inside the app, no game data), --ios-extract-smoke (the
+# extractor through the launcher's program runner: --help, a missing and a damaged disc image with their reasons in the
+# output and in the app log) and --ios-smoke (the launcher draws
 # for about 5 s, saves its own screenshot, quits); a simulator screenshot is taken meanwhile. Everything the app wrote
 # (Documents: logs, smoke-launcher.png, selftest.log) is copied to OUT/<device>/.
 #
@@ -56,6 +58,17 @@ for kind in iPhone iPad; do
   echo "-- self tests"
   launch 240 "$dir/selftest-console.txt" "$device" --ios-selftest
   tail -n 30 "$dir/selftest-console.txt"
+
+  echo "-- extractor smoke"
+  launch 120 "$dir/extract-console.txt" "$device" --ios-extract-smoke
+  tail -n 30 "$dir/extract-console.txt"
+  data="$(xcrun simctl get_app_container "$device" "$BUNDLE" data 2>/dev/null)"
+  if [ -n "$data" ] && [ -f "$data/Documents/extract-smoke.log" ]; then
+    cp "$data/Documents/extract-smoke.log" "$dir/extract-smoke.log"
+    cp "$data/Documents/logs/ios.log" "$dir/extract-ios.log" 2>/dev/null
+    cat "$dir/extract-smoke.log"
+  fi
+  grep -q "^0 failed" "$dir/extract-smoke.log" 2>/dev/null || { echo "$kind: extractor smoke did not pass"; failures=$((failures + 1)); }
 
   echo "-- launcher smoke"
   launch 60 "$dir/smoke-console.txt" "$device" --ios-smoke &
