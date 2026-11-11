@@ -491,18 +491,19 @@ inline Result runHelper(const std::string& program, Kind kind, const std::string
 #endif
 
 inline Result run(Kind kind, const std::string& title, const fs::path& start, const std::atomic<bool>& cancel) {
-#if defined(CANE_ANDROID)
+#if defined(CANE_ANDROID) || defined(CANE_IOS)
     // Android: the system document picker (ACTION_OPEN_DOCUMENT). The chosen document is copied into the app's
     // storage (files/imports, NativeBridge.java) so the extractor can read it as a file; folders: the launcher picker.
+    // iOS: UIDocumentPickerViewController, the copy goes to Documents/imports (ios/ios_app.mm).
     (void)title;
     (void)start;
     if (kind == Kind::PickFolder) return {Status::Unavailable, {}, "android", {}};
-    android::requestIsoSelection();
+    mobile::requestIsoSelection();
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
-    android::ImportStatus s = android::isoSelection();
+    mobile::ImportStatus s = mobile::isoSelection();
     while (s.pending && !cancel) {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
-        s = android::isoSelection();
+        s = mobile::isoSelection();
     }
     if (!s.error.empty()) return {Status::Failed, {}, "android", s.error};
     if (s.path.empty()) return {Status::Cancelled, {}, "android", {}};

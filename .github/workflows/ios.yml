@@ -1,0 +1,167 @@
+# The iOS / iPadOS app (SafeHouse.app: the launcher and Sly 2 on Metal; Sly2-Release/notes/IOS_2026-11-11.md):
+# an .ipa for iPhone and iPad, and a simulator build that starts on an iPhone and an iPad simulator (Sly 2's self
+# tests in the app, then the launcher with a screenshot). FFmpeg comes from scripts/ios/ffmpeg.sh (cached), SDL2 and
+# FAudio from their pinned sources through CMake (cmake/ios.cmake), the app from scripts/ios/package.py.
+#
+#   workflow_call       from build.yml, with the release version, its build date and commit
+#   workflow_dispatch   this workflow alone, by hand
+#
+# The .ipa is signed ad hoc, for sideloading tools (AltStore, SideStore, a developer's own signing). With the secrets
+# APPLE_CERT_P12_BASE64, APPLE_CERT_PASSWORD, APPLE_PROVISIONING_PROFILE_BASE64 and APPLE_TEAM_ID (optional:
+# APPLE_BUNDLE_ID, the profile's app id) it is signed with that certificate and profile as well (a second .ipa).
+name: iOS app
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: Release version (x.y.z); empty for a development build
+        type: string
+        default: ''
+      build-date:
+        description: UTC build time (YYYY-MM-DDTHH:MM:SSZ)
+        type: string
+        default: ''
+      commit:
+        description: Short commit hash
+        type: string
+        default: ''
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ios:
+    name: iOS / iPadOS (arm64 .ipa + simulator)
+    runs-on: macos-15
+    timeout-minutes: 150
+    env:
+      SAFEHOUSE_VERSION: ${{ inputs.version }}
+      BUNDLE_ID: org.safehouse.ios
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+
+      - name: Tools and SDKs
+        run: |
+          brew install ninja
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-path
+          xcrun --sdk iphonesimulator --show-sdk-path
+          xcrun simctl list runtimes
+          cmake --version
+
+      - name: FFmpeg cache (keyed on the recipe)
+        id: ffmpeg-cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ${{ runner.temp }}/ffmpeg-iphoneos
+            ${{ runner.temp }}/ffmpeg-iphonesimulator
+          key: ffmpeg-ios-${{ hashFiles('scripts/ios/ffmpeg.sh') }}
+
+      - name: FFmpeg (scripts/ios/ffmpeg.sh)
+        if: steps.ffmpeg-cache.outputs.cache-hit != 'true'
+        run: |
+          scripts/ios/ffmpeg.sh "$RUNNER_TEMP/ffmpeg-iphoneos" iphoneos
+          scripts/ios/ffmpeg.sh "$RUNNER_TEMP/ffmpeg-iphonesimulator" iphonesimulator
+
+      - name: Configure (device)
+        env:
+          SAFEHOUSE_BUILD_DATE: ${{ inputs.build-date }}
+          CANE_GIT_HASH: ${{ inputs.commit }}
+        run: >-
+          cmake -G Ninja -S . -B build/ios-device -DCMAKE_TOOLCHAIN_FILE=cmake/ios-toolchain.cmake
+          -DCMAKE_OSX_SYSROOT=iphoneos -DCANE_FFMPEG_ROOT="$RUNNER_TEMP/ffmpeg-iphoneos"
+          -DSAFEHOUSE_VERSION="$SAFEHOUSE_VERSION" -DSAFEHOUSE_BUILD_DATE="$SAFEHOUSE_BUILD_DATE" -DCANE_GIT_HASH="$CANE_GIT_HASH"
+
+      - name: Build (device)
+        run: |
+          set -o pipefail
+          cmake --build build/ios-device --parallel 3 2>&1 | tee build/ios-device-build.log || {
+            echo "::group::first errors"; grep -n -E "error:|undefined|ld: " build/ios-device-build.log | head -n 120; echo "::endgroup::"; exit 1; }
+
+      - name: Package (device, ad hoc signed .ipa)
+        run: python3 scripts/ios/package.py --build build/ios-device --sdk iphoneos --out dist/ios --ipa --ffmpeg "$RUNNER_TEMP/ffmpeg-iphoneos"
+
+      - name: Signing certificate and profile (when the secrets are available)
+        id: signing
+        env:
+          CERT_P12: ${{ secrets.APPLE_CERT_P12_BASE64 }}
+          CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
+          PROFILE: ${{ secrets.APPLE_PROVISIONING_PROFILE_BASE64 }}
+          TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -eu
+          if [ -z "$CERT_P12" ] || [ -z "$PROFILE" ] || [ -z "$TEAM_ID" ]; then
+            echo "No signing secrets: the ad hoc signed .ipa only"; echo "enabled=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          keychain="$RUNNER_TEMP/signing.keychain-db"; password="$(uuidgen)"
+          printf '%s' "$CERT_P12" | base64 -d > "$RUNNER_TEMP/cert.p12"
+          printf '%s' "$PROFILE" | base64 -d > "$RUNNER_TEMP/profile.mobileprovision"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 3600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          security import "$RUNNER_TEMP/cert.p12" -P "$CERT_PASSWORD" -A -t cert -f pkcs12 -k "$keychain"
+          security set-key-partition-list -S apple-tool:,apple: -k "$password" "$keychain" > /dev/null
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          identity="$(security find-identity -v -p codesigning "$keychain" | grep "$TEAM_ID" | head -n 1 | awk '{print $2}')"
+          [ -n "$identity" ] || { echo "no codesigning identity of team $TEAM_ID in the certificate"; exit 1; }
+          echo "enabled=true" >> "$GITHUB_OUTPUT"
+          echo "identity=$identity" >> "$GITHUB_OUTPUT"
+
+      - name: Package (device, signed with the team's profile)
+        if: steps.signing.outputs.enabled == 'true'
+        env:
+          SAFEHOUSE_IOS_BUNDLE_ID: ${{ secrets.APPLE_BUNDLE_ID }}
+        run: >-
+          python3 scripts/ios/package.py --build build/ios-device --sdk iphoneos --out dist/ios-signed --ipa
+          --ffmpeg "$RUNNER_TEMP/ffmpeg-iphoneos" --identity "${{ steps.signing.outputs.identity }}"
+          --profile "$RUNNER_TEMP/profile.mobileprovision"
+          && mv dist/ios-signed/SafeHouse-iOS.ipa dist/ios/SafeHouse-iOS-signed.ipa
+
+      - name: Remove the signing material
+        if: always()
+        run: |
+          rm -f "$RUNNER_TEMP/cert.p12" "$RUNNER_TEMP/profile.mobileprovision"
+          security delete-keychain "$RUNNER_TEMP/signing.keychain-db" 2>/dev/null || true
+
+      - name: Configure and build (simulator)
+        run: |
+          set -o pipefail
+          cmake -G Ninja -S . -B build/ios-sim -DCMAKE_TOOLCHAIN_FILE=cmake/ios-toolchain.cmake \
+            -DCMAKE_OSX_SYSROOT=iphonesimulator -DCANE_FFMPEG_ROOT="$RUNNER_TEMP/ffmpeg-iphonesimulator"
+          cmake --build build/ios-sim --parallel 3 2>&1 | tee build/ios-sim-build.log || {
+            echo "::group::first errors"; grep -n -E "error:|undefined|ld: " build/ios-sim-build.log | head -n 120; echo "::endgroup::"; exit 1; }
+          python3 scripts/ios/package.py --build build/ios-sim --sdk iphonesimulator --out dist/ios-sim \
+            --ffmpeg "$RUNNER_TEMP/ffmpeg-iphonesimulator"
+
+      - name: The app starts on the simulators (self tests, launcher screenshot)
+        run: scripts/ios/simulator-smoke.sh dist/ios-sim/SafeHouse.app "$BUNDLE_ID" dist/ios-smoke
+
+      - name: Pack the simulator app
+        if: always()
+        run: |
+          if [ -d dist/ios-sim/SafeHouse.app ]; then (cd dist/ios-sim && zip -qry SafeHouse-iOS-Simulator.app.zip SafeHouse.app); fi
+          mkdir -p dist/ios-smoke
+          cp build/ios-*-build.log dist/ios-smoke/ 2>/dev/null || true
+          cp ~/Library/Logs/DiagnosticReports/SafeHouse* dist/ios-smoke/ 2>/dev/null || true
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ios-release
+          path: |
+            dist/ios/SafeHouse-iOS.ipa
+            dist/ios/SafeHouse-iOS-signed.ipa
+          if-no-files-found: warn
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: ios-simulator-and-logs
+          path: |
+            dist/ios-sim/SafeHouse-iOS-Simulator.app.zip
+            dist/ios-smoke
+          if-no-files-found: warn

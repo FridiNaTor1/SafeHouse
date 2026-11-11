@@ -78,6 +78,11 @@ inline bool spawnDetached(const fs::path& program, const std::vector<std::string
     // Android: the launcher or the direct activity (--collection) of the app (android_app.h startApp); no exec
     (void)program;
     return android::startApp(args);
+#elif defined(CANE_IOS)
+    // iOS: one program at a time in the app; the Collection Style Launcher is not offered there yet
+    (void)program;
+    (void)args;
+    return false;
 #elif defined(_WIN32)
     std::wstring line = quoteWindows(program.wstring());
     for (const auto& a : args) line += L" " + quoteWindows(path(a).wstring());

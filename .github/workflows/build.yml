@@ -14,7 +14,8 @@
 # The packages are built the way the local packaging builds them: Linux on
 # Ubuntu 22.04 (glibc baseline), Release, LTO off, X11 and Wayland in GLFW, the pinned AppImage runtime and
 # appimagetool; Windows cross-built with LLVM/MinGW 20260616 (UCRT) and NSIS, then installed and started on a real
-# Windows (scripts/windows/smoke.ps1, including an update from a local fake release); macOS from macos.yml.
+# Windows (scripts/windows/smoke.ps1, including an update from a local fake release); macOS from macos.yml; the iOS
+# app from ios.yml (artifacts only).
 # Downloads are pinned by version and SHA-256; actions by commit. No secrets beyond GITHUB_TOKEN.
 name: Build and release
 
@@ -346,6 +347,17 @@ jobs:
     name: macOS
     needs: version
     uses: ./.github/workflows/macos.yml
+    with:
+      version: ${{ needs.version.outputs.version }}
+      build-date: ${{ needs.version.outputs.date }}
+      commit: ${{ needs.version.outputs.commit }}
+
+  # iOS / iPadOS (ios.yml): the .ipa and a simulator start. Not part of the release yet (the app is in testing).
+  ios:
+    name: iOS
+    needs: version
+    uses: ./.github/workflows/ios.yml
+    secrets: inherit
     with:
       version: ${{ needs.version.outputs.version }}
       build-date: ${{ needs.version.outputs.date }}

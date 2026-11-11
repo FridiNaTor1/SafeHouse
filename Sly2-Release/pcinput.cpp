@@ -3,8 +3,8 @@
 
 #include "pcinput.h"
 #include "skipcut.h"
-#if defined(__ANDROID__)
-#include "android/android_app.h"
+#if defined(__ANDROID__) || defined(CANE_IOS)
+#include "mobile_app.h"
 bool g_fMovieTouchContext = false;   // (fmv.cpp: a movie plays; its layout stays)
 #endif
 #include "vr.h"
@@ -523,16 +523,16 @@ void ReadPcInput(GLFWwindow* window, uint16_t* pgrf, float* pxl, float* pyl, flo
     UpdateMouse(window);
     const bool fFocused = glfwGetWindowAttrib(window, GLFW_FOCUSED) == GLFW_TRUE;
     const bool fMenu = FPcMenuMode();
-#if defined(__ANDROID__)
-    // the on-screen pad's layout (platform/android TouchLayout): the D-pad and menu keys in menus, the stick in play
+#if defined(__ANDROID__) || defined(CANE_IOS)
+    // the on-screen pad's layout (platform/android TouchLayout; iOS: platform/touch_layout.h): the D-pad and menu keys in menus, the stick in play
     // (movies set the cinematic layout themselves, fmv.cpp); Java is told only when it changes
     // a skippable scene (a binocucom talk, a cinematic): the pad is hidden and holding the screen skips; a scene
     // that waits for a button keeps the pad
     if (!g_fMovieTouchContext)
-        cane::android::setTouchContext(FCutsceneActive() && !FSkipCutWaitsForButton() && !FMouseMenuUp()
-                                           ? cane::android::TouchContext::Cinematic   // (a talk also locks the pad: before fMenu)
-                                       : fMenu ? cane::android::TouchContext::Menu
-                                       : cane::android::TouchContext::Gameplay);
+        cane::mobile::setTouchContext(FCutsceneActive() && !FSkipCutWaitsForButton() && !FMouseMenuUp()
+                                          ? cane::mobile::TouchContext::Cinematic   // (a talk also locks the pad: before fMenu)
+                                      : fMenu ? cane::mobile::TouchContext::Menu
+                                      : cane::mobile::TouchContext::Gameplay);
 #endif
     const bool fGadgetMenuBindings = sly2actions::profile.enabled && FGadgetMenuShown();
     auto isMenuGadgetSlot = [&](int button) {
@@ -934,7 +934,7 @@ bool FDebugKeyHeld(GLFWwindow* window, int key)
 
 bool FTouchPadActive()
 {
-#if defined(__ANDROID__)
+#if defined(__ANDROID__) || defined(CANE_IOS)
     return s_jidPad == GLFW_JOYSTICK_LAST;
 #else
     return false;

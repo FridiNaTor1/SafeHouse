@@ -23,6 +23,13 @@ if(ANDROID)
   target_compile_definitions(Sly2-Release PRIVATE CANE_ANDROID_GAME_ENTRY)
   target_compile_options(Sly2-Release PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:SHELL:-include ${CANE_ROOT}/platform/android/sly_android_compat.h>"
                          -Wno-error=format-security)
+elseif(CANE_IOS)
+  # (cmake/ios.cmake) Sly2Release.framework: the app's bridge runs main.cpp's main under another name in the app's
+  # own process (platform/ios/program_entry.cpp, ios_app.mm), the game on the main thread, the tools on a worker
+  add_library(Sly2-Release SHARED ${sly2n_sources} "${CANE_ROOT}/platform/ios/program_entry.cpp")
+  set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/main.cpp" PROPERTIES COMPILE_DEFINITIONS main=cane_sly2_main)
+  target_compile_definitions(Sly2-Release PRIVATE CANE_IOS_ENTRY=cane_sly2_main "CANE_IOS_ROLE=\"game\"")
+  target_link_libraries(Sly2-Release PRIVATE cane_platform)
 else()
   add_executable(Sly2-Release ${sly2n_sources})
 endif()

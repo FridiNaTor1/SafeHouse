@@ -412,7 +412,11 @@ inline std::optional<Family> familyFromName(std::string_view name) {
 // The Android on-screen pad (platform/android/glfw_sdl.cpp, last joystick
 // slot). It is drawn as a PlayStation pad, so it gets the game's original
 // PlayStation glyphs; physical pads keep the normal detection below.
+#if defined(CANE_IOS)
+inline constexpr std::string_view kTouchPadName = "Touch controls";   // (the iOS app's on-screen pad)
+#else
 inline constexpr std::string_view kTouchPadName = "Android touch controls";
+#endif
 
 // Order: 0 the on-screen pad, 1 Sony, 2 Nintendo, 3 Valve product table, 4 Microsoft or XInput,
 // 5 name heuristics (joystick name, then mapping name), 6 an unresolved

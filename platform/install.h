@@ -426,6 +426,10 @@ inline UserPaths userPaths(const fs::path& executableDir = executableDirectory()
 #ifdef _WIN32
     auto base = environmentDirectory("LOCALAPPDATA", userDirectory()) / brand::userFolder;
     return {base / "installations" / "sly1", base / "user", base / "config", base / "logs"};
+#elif defined(CANE_IOS)
+    // iOS: the app's Documents folder, which the Files app shows as SafeHouse's own (Info.plist UIFileSharingEnabled)
+    auto base = environmentDirectory("HOME", userDirectory()) / "Documents";
+    return {base / "installations" / "sly1", base / "user", base / "config", base / "logs"};
 #elif defined(__APPLE__)
     auto base = environmentDirectory("HOME", userDirectory()) / "Library/Application Support" / brand::userFolder;
     return {base / "installations" / "sly1", base / "user", base / "config", base / "logs"};

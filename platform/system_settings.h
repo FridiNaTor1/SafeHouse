@@ -363,8 +363,8 @@ inline SystemSettings defaults() {
     s.msaaSamples = 4;
     s.frameRate = 60;
     s.internalResolutionHeight = 0;
-#ifdef CANE_ANDROID
-    // Android (android/README.md): a new profile renders at 720 lines, not a phone / headset panel's full resolution
+#if defined(CANE_ANDROID) || defined(CANE_IOS)
+    // Android (android/README.md), iOS: a new profile renders at 720 lines, not a phone / headset panel's full resolution
     // (the Quest 3S panel window: 1600x1000; GPU-bound at native). The setting and its file format are unchanged.
     s.internalResolutionHeight = 720;
 #endif

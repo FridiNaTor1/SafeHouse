@@ -1,9 +1,16 @@
 #include "context.h"
 
+#include <TargetConditionals.h>
+#if TARGET_OS_IPHONE
+// iOS (cmake/ios.cmake): the window is SDL's (platform/ios/glfw_sdl_ios.cpp), which makes the Metal view and layer.
+#include <GLFW/glfw3.h>
+extern "C" void* cane_glfw_metal_layer(GLFWwindow* window);
+#else
 #define GLFW_EXPOSE_NATIVE_COCOA
 #import <Cocoa/Cocoa.h>
 #include <GLFW/glfw3.h>
 #include <GLFW/glfw3native.h>
+#endif
 
 #include <algorithm>
 #include <cstring>
@@ -39,6 +46,17 @@ bool Context::Initialize(GLFWwindow* window, std::string* error) {
     }
   }
 
+#if TARGET_OS_IPHONE
+  layer_ = (__bridge CAMetalLayer*)cane_glfw_metal_layer(window);
+  if (!layer_) {
+    if (error) *error = "the window has no Metal layer";
+    return false;
+  }
+  layer_.device = device_;
+  layer_.pixelFormat = MTLPixelFormatBGRA8Unorm;
+  layer_.framebufferOnly = NO;
+  layer_.maximumDrawableCount = 3;
+#else
   NSWindow* ns_window = glfwGetCocoaWindow(window);
   if (!ns_window) {
     if (error) *error = "GLFW window has no Cocoa window";
@@ -54,6 +72,7 @@ bool Context::Initialize(GLFWwindow* window, std::string* error) {
   layer_.contentsScale = ns_window.backingScaleFactor;
   view.layer = layer_;
   view.wantsLayer = YES;
+#endif
   UpdateDrawableSize();
 
   transient_ = std::make_unique<TransientAllocator>(device_);
@@ -185,8 +204,13 @@ void Context::Finish() { Submit(true); }
 
 void Context::SetSwapInterval(int interval) {
   swap_interval_ = interval;
+#if TARGET_OS_IPHONE
+  // (iOS always presents in step with the display; three drawables keep the GPU fed)
+  layer_.maximumDrawableCount = 3;
+#else
   layer_.displaySyncEnabled = interval != 0;
   layer_.maximumDrawableCount = interval != 0 ? 2 : 3;
+#endif
 }
 
 void Context::SwapBuffers() {

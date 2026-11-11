@@ -1,7 +1,7 @@
 // The pad's vibration: rumble.h.
 #include <algorithm>
-#if defined(__ANDROID__)
-#include "android/android_app.h"
+#if defined(__ANDROID__) || defined(CANE_IOS)
+#include "mobile_app.h"
 #endif
 #include "rumble.h"
 
@@ -72,12 +72,12 @@ void SendMotors(uint8_t bSmall, uint8_t bBig)
     CaneSwitchRumble(float(bBig) / 255.0f, bSmall ? 1.0f : 0.0f);
 #elif defined(CANE_SDL_RUMBLE)
     if (!s_fWindow || s_jid < 0) return;   // (headless, the keyboard and mouse: nothing to drive)
-#if defined(__ANDROID__)
+#if defined(__ANDROID__) || defined(CANE_IOS)
     if (s_jid == GLFW_JOYSTICK_LAST)
     {
         // the on-screen pad: the device's own vibrator, the big motor as its strength (the small one: a light buzz)
         if (!g_fControllerVibration) bSmall = bBig = 0;
-        cane::android::vibrate(std::max<int>(bBig, bSmall ? 96 : 0));
+        cane::mobile::vibrate(std::max<int>(bBig, bSmall ? 96 : 0));
         return;
     }
 #endif

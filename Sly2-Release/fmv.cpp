@@ -1,8 +1,8 @@
 // Movies (see fmv.h). The PSS demux is Sly1-Release's "File Extractor/main.cpp" DemuxPss / DecodePssAudioToWav
 // made incremental (packets read from the disc as the movie plays); the decoder setup is Sly1-Release fmv.cpp's.
 
-#if defined(__ANDROID__)
-#include "android/android_app.h"
+#if defined(__ANDROID__) || defined(CANE_IOS)
+#include "mobile_app.h"
 #endif
 #include "fmv.h"
 #include "langstore.h"
@@ -381,11 +381,11 @@ bool FFindMovie(const std::string& arg, MOVIEINFO* pinfo)
 // fmv.cpp PlayCutscene (the FFmpeg decoder, the frame pacing)
 bool FPlayMovie(const FK& fk, PFNMOVIEPRESENT pfnPresent, void* pv, MOVIESTATS* pstats, double tMax)
 {
-#if defined(__ANDROID__)
+#if defined(__ANDROID__) || defined(CANE_IOS)
     // the on-screen pad shows only the skip / advance keys while a movie plays (pcinput.cpp)
     extern bool g_fMovieTouchContext;
     g_fMovieTouchContext = true;
-    cane::android::setTouchContext(cane::android::TouchContext::Cinematic);
+    cane::mobile::setTouchContext(cane::mobile::TouchContext::Cinematic);
     struct MovieContextEnd { ~MovieContextEnd() { g_fMovieTouchContext = false; } } movieContextEnd;
 #endif
     MOVIESTATS stats;

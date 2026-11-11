@@ -177,7 +177,7 @@ public:
                     m_note = tr("That file is not a disc image (.iso or .chd).");
                 else {
                     m_iso = r->path;
-#ifdef CANE_ANDROID
+#if defined(CANE_ANDROID) || defined(CANE_IOS)
                     if (!m_fixture) m_scanner.scan();  // (the copy in files/imports joins the list, iso_scan.h)
 #endif
                     if (m_installAfterSelection) startInstall(m_iso);
@@ -215,8 +215,8 @@ private:
     // or .iso path instead (with the on-screen keyboard).
     static bool padUser() { return input::tracker().lastWasGamepad(); }
     void choose(bool installAfter) {
-#ifdef CANE_ANDROID
-        // Android: the system document picker works with a pad too (native_dialog.h); typed paths cannot reach it
+#if defined(CANE_ANDROID) || defined(CANE_IOS)
+        // Android / iOS: the system document picker works with a pad too (native_dialog.h); typed paths cannot reach it
         if (!m_fixture) browse(installAfter);
         return;
 #endif
@@ -459,7 +459,7 @@ private:
         const float w = ImGui::GetContentRegionAvail().x;
         const ImVec2 row = ImGui::GetCursorScreenPos();
         // Room for the heading next to the Search again / Browse buttons.
-#ifdef CANE_ANDROID
+#if defined(CANE_ANDROID) || defined(CANE_IOS)
         const char* browseLabel = tr("Browse…###browse");
 #else
         const char* browseLabel = padUser() ? tr("Enter path…###browse") : tr("Browse…###browse");
@@ -470,7 +470,7 @@ private:
         heading(tr("Disc image"));
         tighten(8);
         ImGui::PushClipRect(ImGui::GetCursorScreenPos(), { row.x + w - browseW - rescanW - px(20), row.y + px(80) }, true);
-#if defined(CANE_ANDROID)
+#if defined(CANE_ANDROID) || defined(CANE_IOS)
         const char* where = tr("Disc images you picked with Browse…");
 #elif defined(_WIN32)
         const char* where = tr("Found in your Downloads, Documents and Desktop folders");
@@ -565,8 +565,10 @@ private:
             else drawIcon(dl, Icon::Disc, { c.x, c.y - px(26) }, px(34), ink(color::muted));
             const auto t = measure(fonts().body, label);
             dl->AddText(fonts().body, fonts().body->FontSize, { std::round(c.x - t.x * 0.5f), c.y }, ink(color::text2), label);
-#ifdef CANE_ANDROID
+#if defined(CANE_ANDROID)
             const char* sub = tr("Use Browse… to pick it with Android's file picker.");
+#elif defined(CANE_IOS)
+            const char* sub = tr("The file picker copies the disc image into the app.");
 #else
             const char* sub = padUser() ? tr("Enter the folder that holds your disc image to search it.")
                                         : tr("Use Browse… or drop an .iso or .chd file onto this window.");
@@ -666,7 +668,7 @@ private:
         ImGui::SetCursorPosY(ImGui::GetCursorPosY() + px(2));
         const float y = ImGui::GetCursorPosY();
         ImGui::SetCursorPosY(y + (largeHeight() - fonts().caption->FontSize) * 0.5f);
-#ifdef CANE_ANDROID
+#if defined(CANE_ANDROID) || defined(CANE_IOS)
         text(tr("The file picker copies the disc image into the app."), fonts().caption, color::muted);
 #else
         text(padUser() ? tr("Not listed? Enter the folder that holds it.") : tr("You can also drop an .iso or .chd file onto this window."), fonts().caption,

@@ -276,6 +276,14 @@ void OnCrashSignal(int sig)
 #define main Sly2Main
 #endif
 
+// The tool commands leave through std::_Exit (no static destructors after the converter's 44 worlds). iOS runs them in
+// the app's own process (platform/ios/ios_app.h), where that would end the app: there they return from main.
+#if defined(CANE_IOS)
+#define SLY2_LEAVE_TOOL(rc) return (rc)
+#else
+#define SLY2_LEAVE_TOOL(rc) std::_Exit(rc)
+#endif
+
 int main(int argc, char** argv)
 {
 #if (defined(__linux__) && !defined(__ANDROID__)) || defined(__APPLE__)
@@ -548,7 +556,7 @@ int main(int argc, char** argv)
         int ImportPs3LanguagesCommand(const std::string&, const std::string&, bool);   // ps3lang.cpp
         const int rc = ImportPs3LanguagesCommand(arg, arg2, limport.fReplace);
         std::fflush(stdout);
-        std::_Exit(rc);
+        SLY2_LEAVE_TOOL(rc);
     }
     if (command && !std::strcmp(command, "import-languages"))
     {
@@ -557,7 +565,7 @@ int main(int argc, char** argv)
         const int rc = ImportLanguagesCommand(limport);
         std::fflush(stdout);
         std::fflush(stderr);
-        std::_Exit(rc);
+        SLY2_LEAVE_TOOL(rc);
     }
     if (std::getenv("SLY2_PS3WORLD")) g_fPs3World = true;  // (exploration: a PS3 world through --load-world)
 
@@ -573,7 +581,7 @@ int main(int argc, char** argv)
         // folder's manifest points there
         if (rc == 0 && fLanguagesGiven && !languagesDir.empty() && !g_fConvertPs2)
         {
-            if (!g_disc.FOpen(arg, error)) { std::fprintf(stderr, "%s\n", error.c_str()); std::_Exit(1); }
+            if (!g_disc.FOpen(arg, error)) { std::fprintf(stderr, "%s\n", error.c_str()); SLY2_LEAVE_TOOL(1); }
             limport.dirOut = languagesDir;
             limport.dirInstall = cane::utf8(std::filesystem::absolute(cane::path(arg)));
             limport.fMove = true;
@@ -582,7 +590,7 @@ int main(int argc, char** argv)
         }
         std::fflush(stdout);
         std::fflush(stderr);
-        std::_Exit(rc);
+        SLY2_LEAVE_TOOL(rc);
     }
     // --export-textures without --convert: into the installation (or --out DIR); texmod.h
     if (!command && fExportTextures)

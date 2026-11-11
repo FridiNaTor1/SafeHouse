@@ -1125,8 +1125,8 @@ std::vector<MENUENT> AentDisplayOptions()
     std::vector<MENUENT> a;
     for (int id = NID_Aspect; id <= NID_DrawDistance + 1; ++id)
     {
-#if defined(__SWITCH__) || defined(__ANDROID__)
-        if (id == NID_Window) continue;   // (the Switch / Android: the system places the window, DeX included)
+#if defined(__SWITCH__) || defined(__ANDROID__) || defined(CANE_IOS)
+        if (id == NID_Window) continue;   // (the Switch / Android / iOS: the system places the window, DeX included)
 #endif
         MENUENT e;
         e.id = id <= NID_DrawDistance ? id : NID_LongShadows;   // (then Long Shadows, settings v16)

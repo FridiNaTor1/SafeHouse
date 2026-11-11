@@ -76,6 +76,8 @@ private:
         const char* platform = "Windows";
 #elif defined(__linux__)
         const char* platform = "Linux";
+#elif defined(CANE_IOS)
+        const char* platform = "iOS";
 #elif defined(__APPLE__)
         const char* platform = "macOS";
 #else

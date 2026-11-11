@@ -69,6 +69,10 @@ inline Installation readInstallation(const fs::path& dir, GameId game) {
 inline std::string executableName(const std::string& name) {
 #if defined(CANE_ANDROID)
     return "lib" + name + ".so";  // (the app's JNI libraries; platform/process.h starts them in their own process)
+#elif defined(CANE_IOS)
+    // (the app's frameworks, relative to SafeHouse.app; platform/process.h runs them in the app, ios/ios_app.h)
+    const std::string full = cane::ios::programPath(name), bundle = cane::ios::bundleDirectory() + "/";
+    return full.compare(0, bundle.size(), bundle) == 0 ? full.substr(bundle.size()) : full;
 #elif defined(_WIN32)
     return name + ".exe";
 #else
@@ -458,14 +462,18 @@ struct LauncherBackend {
         if (!config.contains("regions")) config["regions"] = json::object();
         config["regions"][cane::game(game).key] = region;
         saveConfig();
-#ifdef CANE_ANDROID
+#if defined(CANE_ANDROID) || defined(CANE_IOS)
         // Android: the document picker copied the disc image into the app (files/imports, native_dialog.h); once the game is
         // installed that copy only takes space (2.7 GB for Sly 2), unless Settings > Games "Keep imported disc images" is on.
-        // Only a file inside files/imports is ever removed; a re-extract asks for the disc image again.
+        // Only a file inside files/imports is ever removed; a re-extract asks for the disc image again. (iOS: Documents/imports)
         if (!config.value("keep_imported_iso", false)) {
             std::error_code ec;
+#if defined(CANE_IOS)
+            const fs::path imports = fs::weakly_canonical(path(cane::ios::importsDirectory()), ec);
+#else
             const char* home = std::getenv("HOME");
             const fs::path imports = home && *home ? fs::weakly_canonical(path(home) / "imports", ec) : fs::path{};
+#endif
             const fs::path file = fs::weakly_canonical(path(iso), ec);
             if (!imports.empty() && !ec && file.parent_path() == imports && fs::is_regular_file(file, ec) && fs::remove(file, ec))
                 log("Removed the app's copy of the disc image (" + utf8(file.filename()) + ")");

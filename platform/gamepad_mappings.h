@@ -96,6 +96,8 @@ namespace detail {
 inline constexpr std::string_view kMappingPlatform =
 #if defined(_WIN32)
     "Windows";
+#elif defined(CANE_IOS)
+    "iOS";   // (SDL's name for it; the iOS app's GLFW is SDL, platform/ios/glfw_sdl_ios.cpp)
 #elif defined(__APPLE__)
     "Mac OS X";
 #elif defined(__ANDROID__)

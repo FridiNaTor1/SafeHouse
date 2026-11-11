@@ -768,8 +768,8 @@ private:
     }
     static std::string percent(int v) { return std::to_string(v) + "%"; }
     void displayRows() {
-#if !defined(CANE_ANDROID)
-        // (Android: the system places the window, in DeX too; nothing to choose)
+#if !defined(CANE_ANDROID) && !defined(CANE_IOS)
+        // (Android: the system places the window, in DeX too; nothing to choose. iOS: the app fills its window)
         const std::vector<std::string> modes{ tr("Windowed"), tr("Borderless"), tr("Fullscreen") };
         int mode = m_settings.windowMode;
         if (stepperRow(tr("Window mode"), &mode, modes)) m_settings.windowMode = mode, commit();
@@ -859,7 +859,7 @@ private:
     cane::audio::DeviceList m_audioDevices;
     double m_audioListed = -1.0;
     void audioDeviceRows() {
-#if !defined(__ANDROID__) && !defined(__SWITCH__)
+#if !defined(__ANDROID__) && !defined(__SWITCH__) && !defined(CANE_IOS)
         if (m_audioListed < 0 || ImGui::GetTime() - m_audioListed > 3.0) {
             m_audioDevices = cane::audio::listDevices();
             m_audioListed = ImGui::GetTime();
@@ -1285,7 +1285,7 @@ private:
             if (setScale) setScale(scales[static_cast<size_t>(index)]);
         }
         describe(tr("Makes the launcher's text and controls larger, for TVs and handhelds."));
-#ifndef CANE_ANDROID  // (Android: the app fills its window; DeX / freeform windows are sized by the system)
+#if !defined(CANE_ANDROID) && !defined(CANE_IOS)  // (Android: the app fills its window; DeX / freeform windows are sized by the system)
         bool fullscreen = m_backend.config.value("start_fullscreen", defaultFullscreen());
         if (toggleRow(tr("Start in fullscreen"), &fullscreen)) {
             m_backend.config["start_fullscreen"] = fullscreen;
@@ -1438,7 +1438,7 @@ private:
     // Each installable game: its installed regions (choosing one makes it the one Play starts) and "Install another
     // region", with the regions it installs from and the space each needs.
     void gamesRows(bool gameRunning) {
-#ifdef CANE_ANDROID
+#if defined(CANE_ANDROID) || defined(CANE_IOS)
         {
             // (backend.h install: the app's copy of a picked disc image is removed after a successful install unless this is on)
             bool keep = m_backend.config.value("keep_imported_iso", false);

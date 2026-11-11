@@ -296,7 +296,7 @@ int desktop(cane::LauncherBackend& backend, const ui::fixtures::Options* fixture
     ui::loadFonts(scale);
     ui::applyStyle(scale);
     ImGui_ImplGlfw_InitForOpenGL(window, true);
-#if defined(CANE_ANDROID)
+#if defined(CANE_ANDROID) || defined(CANE_IOS)
     ImGui_ImplOpenGL3_Init("#version 300 es");  // (OpenGL ES 3.x: platform/android/glfw_sdl.cpp)
 #else
     ImGui_ImplOpenGL3_Init("#version 330");
@@ -825,7 +825,7 @@ int collectionDesktop(cane::LauncherBackend& backend, const ui::fixtures::Option
     ui::loadFonts(scale);
     ui::applyStyle(scale);
     ImGui_ImplGlfw_InitForOpenGL(window, true);
-#if defined(CANE_ANDROID)
+#if defined(CANE_ANDROID) || defined(CANE_IOS)
     ImGui_ImplOpenGL3_Init("#version 300 es");
 #else
     ImGui_ImplOpenGL3_Init("#version 330");

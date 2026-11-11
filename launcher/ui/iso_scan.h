@@ -65,6 +65,8 @@ public:
             const fs::path h(home);
 #ifdef CANE_ANDROID
             result.push_back(h / "imports");  // (the disc images copied in through the document picker, native_dialog.h)
+#elif defined(CANE_IOS)
+            result.push_back(h / "Documents" / "imports");  // (the document picker's copies; Documents: the Files app's folder)
 #endif
             for (auto name : romFolders) result.push_back(h / name);
             for (auto name : { "Games", "Downloads", "Desktop", "Documents" }) general.push_back(h / name);
