@@ -18,6 +18,8 @@
 #include "snd989.h"
 #include "sound.h"
 #include "ai.h"
+#include "ainoise.h"
+#include "guard.h"
 #include "sw.h"
 #include "screenrt.h"
 #include "sm.h"
@@ -538,6 +540,28 @@ void StartupGameSound()
         };
     g_sndhooks.pfnText = [](int id) { return StrLocalized(g_psw, id); };
     g_sndhooks.pfnTGame = [] { return g_clock.t; };
+    // (0x1FDA48, the USB headset's microphone) the current player when an actor (0x1C4840(g_game), 0x132B10 cid 0x34),
+    // its position (0x1A62E8); the noise held at it of the fixed template 711 (SW +0x4034) with the level's radius
+    // (+0x54) and height range (+0x58 = -dz, +0x5C = dz), 0x156BE0
+    g_sndhooks.pfnMicPlayer = [](glm::vec3* ppos) -> void* {
+        LO* plo = g_psw ? PloPoCurrent(g_psw) : nullptr;
+        if (!plo || !FIsLoDerivedFrom(plo, 0x34)) return nullptr;
+        *ppos = PosAi(plo);
+        return plo;
+    };
+    g_sndhooks.pfnHoldMicNoise = [](void** ppnoise, void* pplayer, const glm::vec3& pos, float sRadius, float dz) {
+        NOISE** ppn = reinterpret_cast<NOISE**>(ppnoise);
+        if (*ppn && !FNoiseAllocated(*ppn)) *ppn = nullptr;   // (its world's noises already freed)
+        NOISETMPL* pt = pplayer ? PtmplNoiseFixed(5) : nullptr;
+        if (pt)
+        {
+            pt->sRadius = sRadius;
+            pt->rz = glm::vec2(-dz, dz);
+        }
+        if (std::getenv("SLY2N_MICPRINT") && pt)
+            std::printf("mic: t %.3f level %.3f noise r %.0f dz %.0f at (%.0f %.0f %.0f)\n", g_clock.t, g_sound.gMic, sRadius, dz, pos.x, pos.y, pos.z);
+        SetHeldNoise(ppn, pt, pos, static_cast<LO*>(pplayer));
+    };
     // the gait's footsteps (actanim.cpp, 0x1FBB90 + 0x1FB2F8 with the walker as the source)
     g_pfnGaitFootstep = [](int sfx, ALO* palo, float gVolume) {
         if (CSnd* p = PsndStartSound(sfx, gVolume, 0, palo)) p->SetFalloff(500.0f, 2000.0f);  // (0x20BC08)

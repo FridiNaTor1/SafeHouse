@@ -54,6 +54,9 @@ GAMES = {
         ('shadowdate', 'shadowcombine.vert', None, 'shadowdate.frag', {}, SLY2),
         ('shadowvol', 'shadowvol.vert', None, 'shadowvol.frag', {}, SLY2),
         ('shadowvol_nokill', 'shadowvol.vert', None, 'shadowvol.frag', {'NOKILL': '1'}, SLY2),
+        # (upscaling, fsr.h: FSR 1's two passes)
+        ('fsreasu', 'vrfull.vert', None, 'fsreasu.frag', {}, SLY2),
+        ('fsrrcas', 'vrfull.vert', None, 'fsrrcas.frag', {}, SLY2),
     ],
     'sly3': [
         ('glob', 'glob.vert', None, 'glob.frag', {}, SLY3),

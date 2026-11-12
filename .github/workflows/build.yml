@@ -14,7 +14,8 @@
 # The packages are built the way the local packaging builds them: Linux on
 # Ubuntu 22.04 (glibc baseline), Release, LTO off, X11 and Wayland in GLFW, the pinned AppImage runtime and
 # appimagetool; Windows cross-built with LLVM/MinGW 20260616 (UCRT) and NSIS, then installed and started on a real
-# Windows (scripts/windows/smoke.ps1, including an update from a local fake release); macOS from macos.yml.
+# Windows (scripts/windows/smoke.ps1, including an update from a local fake release); macOS from macos.yml; the iOS
+# app from ios.yml (artifacts only).
 # Downloads are pinned by version and SHA-256; actions by commit. No secrets beyond GITHUB_TOKEN.
 name: Build and release
 
@@ -96,7 +97,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y ninja-build ccache file desktop-file-utils libgl1-mesa-dev libxrandr-dev libxinerama-dev \
-            libxcursor-dev libxi-dev libwayland-dev libxkbcommon-dev wayland-protocols nasm
+            libxcursor-dev libxi-dev libwayland-dev libxkbcommon-dev wayland-protocols nasm glslang-tools
+          # (glslang-tools: Sly 2's Vulkan renderer compiles its SPIR-V at build time; without it Sly 2 builds OpenGL-only)
           # SDL2 is built from source (Ubuntu 22.04's is too old for FAudio). Without these headers it builds with no
           # audio drivers (only dummy / disk: "SDL audio failed to initialize") and no udev / HIDAPI controller support.
           # SDL loads each of these libraries at run time, so they add no hard dependency. Same set as the local
@@ -144,6 +146,18 @@ jobs:
           chmod +x "$RUNNER_TEMP/appimagetool"
           python3 scripts/package.py --build build/linux --output dist --appimagetool "$RUNNER_TEMP/appimagetool"
           dist/SafeHouse-Launcher-Linux-${{ matrix.arch }}/bin/safehouse --version
+      # Sly 2's VR (the Steam Frame runs the aarch64 package; SteamVR / Monado / WiVRn on both): the bundled OpenXR loader
+      # (cmake/openxr-loader.cmake) must be found by the game through its run path, and the Vulkan renderer built in.
+      - name: Check Sly 2's VR path (OpenXR loader, Vulkan renderer)
+        run: |
+          set -euo pipefail
+          d=dist/SafeHouse-Launcher-Linux-${{ matrix.arch }}
+          test -f "$d/lib/libopenxr_loader.so.1" || { echo "::error::the package has no OpenXR loader (lib/libopenxr_loader.so.1)"; exit 1; }
+          grep -Eq '^SLY2N_GLSLANG:FILEPATH=/' build/linux/CMakeCache.txt || { echo "::error::Sly 2 was built without its Vulkan renderer"; exit 1; }
+          out=$("$d/bin/Sly2-Release" --vr-check || true)
+          echo "$out"
+          # (no runtime on the runner: the loader answers "no-runtime"; "no-loader" means the bundled one was not found)
+          echo "$out" | grep -Eq '^vr-check: (no-runtime|no-headset|ready)' || { echo "::error::Sly2-Release did not open the bundled OpenXR loader"; exit 1; }
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: linux-${{ matrix.arch }}-release
@@ -173,7 +187,7 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Build tools (Ninja, NSIS, ccache)
-        run: sudo apt-get update && sudo apt-get install -y ninja-build nsis ccache nasm
+        run: sudo apt-get update && sudo apt-get install -y ninja-build nsis ccache nasm glslang-tools   # (glslang: Sly 2's Vulkan SPIR-V)
       - name: LLVM/MinGW cache
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
@@ -210,7 +224,10 @@ jobs:
       - name: Build
         run: cmake --build build/windows-cross --parallel 4
       - name: Package (portable zip and offline setup)
-        run: python3 scripts/package.py --build build/windows-cross --output dist --windows --arch ${{ matrix.arch }}
+        run: |
+          python3 scripts/package.py --build build/windows-cross --output dist --windows --arch ${{ matrix.arch }}
+          # (Sly 2's VR: the OpenXR loader beside the game, cmake/openxr-loader.cmake)
+          test -f dist/SafeHouse-Launcher-Windows-${{ matrix.arch }}/bin/openxr_loader.dll || { echo "::error::the package has no openxr_loader.dll"; exit 1; }
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: windows-${{ matrix.arch }}-release
@@ -254,6 +271,65 @@ jobs:
           name: windows-smoke-screenshots
           path: ${{ runner.temp }}/smoke/*.png
 
+  # Android (phones, tablets, handhelds) and Meta Quest: one arm64 APK with the launcher and Sly 2 (VR through OpenXR on a
+  # headset). scripts/android/build-package.py: the locked dependencies (cached), the native libraries with NDK 29, the
+  # Gradle app. Signed with the SafeHouse release key from the repository secrets (ANDROID_*) when they are available;
+  # without them (pull requests from forks) a debug-signed APK is built and kept as an artifact only.
+  android:
+    name: Android / Meta Quest (arm64 APK)
+    needs: version
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      SAFEHOUSE_VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: glslang (Sly 2's Vulkan SPIR-V)
+        run: sudo apt-get update && sudo apt-get install -y glslang-tools
+      - name: Android SDK packages (NDK 29, platform 36)
+        run: |
+          set -eu
+          sm="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$sm" --licenses > /dev/null || true
+          "$sm" --install "ndk;29.0.14206865" "platforms;android-36" "build-tools;36.0.0" > /dev/null
+      - name: Gradle 9.6.1 (pinned checksum)
+        run: |
+          set -eu
+          curl -fsSL https://services.gradle.org/distributions/gradle-9.6.1-bin.zip -o "$RUNNER_TEMP/gradle.zip"
+          echo "9c0f7faeeb306cb14e4279a3e084ca6b596894089a0638e68a07c945a32c9e14  $RUNNER_TEMP/gradle.zip" | sha256sum -c -
+          unzip -q "$RUNNER_TEMP/gradle.zip" -d "$RUNNER_TEMP"
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: build/android-deps
+          key: android-deps-${{ hashFiles('scripts/android/dependencies.json', 'scripts/android/bootstrap-dependencies.py', 'scripts/android/build-package.py') }}
+      - name: Release signing key (when the secrets are available)
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          set -eu
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/safehouse-release.keystore"
+            echo "SAFEHOUSE_ANDROID_KEYSTORE=$RUNNER_TEMP/safehouse-release.keystore" >> "$GITHUB_ENV"
+          else
+            echo "No signing secrets: building the debug APK"
+          fi
+      - name: Build the APK
+        env:
+          SAFEHOUSE_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          SAFEHOUSE_ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          SAFEHOUSE_ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: >-
+          python3 scripts/android/build-package.py --sdk "$ANDROID_HOME" --gradle "$RUNNER_TEMP/gradle-9.6.1/bin/gradle"
+          --java-home "$JAVA_HOME_21_X64" --parallel 4
+      - name: Remove the signing key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/safehouse-release.keystore"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: android-release
+          path: dist/android/SafeHouse-Android-arm64-v8a*.apk
+          if-no-files-found: error
+
   # Nintendo Switch: SafeHouse.nro (launcher, Sly 1 and Sly 2) with devkitPro's devkitA64 + libnx + deko3d
   # (cmake/devkitA64-libnx.cmake, cmake/Switch.cmake). The image already has switch-dev, switch-ffmpeg, deko3d and uam.
   switch:
@@ -293,11 +369,27 @@ jobs:
       build-date: ${{ needs.version.outputs.date }}
       commit: ${{ needs.version.outputs.commit }}
 
+  # iOS / iPadOS (ios.yml): the .ipa (sideloaded; no App Store) and a simulator start. The release attaches the .ipa
+  # when this job succeeded and is published without it otherwise.
+  ios:
+    name: iOS
+    needs: version
+    uses: ./.github/workflows/ios.yml
+    secrets: inherit
+    with:
+      version: ${{ needs.version.outputs.version }}
+      build-date: ${{ needs.version.outputs.date }}
+      commit: ${{ needs.version.outputs.commit }}
+
   release:
     name: Publish the release
-    needs: [version, linux, windows, windows-smoke, macos, switch]
+    needs: [version, linux, windows, windows-smoke, macos, switch, android, ios]
     # Only from the public repository's main branch, and only when every package built and the Windows ones started.
-    if: ${{ github.repository == 'FridiNaTor1/SafeHouse' && needs.version.outputs.publish == 'true' }}
+    # The iOS .ipa is attached when its job succeeded; its failure does not hold the release back.
+    if: >-
+      ${{ !cancelled() && github.repository == 'FridiNaTor1/SafeHouse' && needs.version.outputs.publish == 'true'
+      && needs.linux.result == 'success' && needs.windows.result == 'success' && needs.windows-smoke.result == 'success'
+      && needs.macos.result == 'success' && needs.switch.result == 'success' && needs.android.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
@@ -327,7 +419,7 @@ jobs:
           rm -f release/*.sha256
           python3 scripts/release-manifest.py release --version "$VERSION" --tag "$TAG" --commit "$COMMIT" --date "$DATE" \
             --require linux-appimage --require linux-tar --require linux-aarch64-appimage --require linux-aarch64-tar --require windows-portable --require windows-setup \
-            --require windows-arm64-portable --require windows-arm64-setup --require macos-arm64 --require macos-x86_64 --require switch-nro
+            --require windows-arm64-portable --require windows-arm64-setup --require macos-arm64 --require macos-x86_64 --require switch-nro --require android-apk
           # (the previous release: the newest tag of this scheme, vX.Y.Z)
           previous=$(git tag --list 'v*' --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sed -n 1p || true)
           {
@@ -354,6 +446,8 @@ jobs:
           | macOS, Apple silicon | `SafeHouse-Launcher-macOS-arm64.dmg` |
           | macOS, Intel | `SafeHouse-Launcher-macOS-x86_64.dmg` |
           | Nintendo Switch (homebrew, copy to `sdmc:/switch/SafeHouse/`) | `SafeHouse.nro` |
+          | Android and Meta Quest (preview) | `SafeHouse-Android-arm64-v8a.apk` |
+          | iPhone and iPad (sideload with AltStore, SideStore or Sideloadly; in testing) | `SafeHouse-iOS.ipa` |
 
           The launcher updates itself (Settings > Launcher > Check for updates). SHA-256 checksums are in `SHA256SUMS`.
           On macOS, open the app with right-click > Open the first time. The packages contain no game data.

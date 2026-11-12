@@ -25,25 +25,48 @@
 #include <utility>
 #include <vector>
 #include "brand.h"
+#include "gamepad_mappings.h"
 #include "system_settings.h"
 namespace cane::input {
 // PlayStation: the game's original PS2 icons (any Sony pad not recognised as a DualShock 4 / DualSense, and the
 // "Original PlayStation Icons" option); PS4 / PS5: DualShock 4 / DualSense (and DualSense Edge) with Kenney's modern
 // PlayStation icons. SteamController is the 2015 one (one stick, two round pads); SteamController2026 the 2026 one
 // ("Triton": two sticks above two square pads, the Steam Deck's controls without the screen).
+// Nintendo is the Switch (Pro Controller, Joy-Con); Switch2 the Switch 2 (Pro Controller 2, Joy-Con 2); GameCube the
+// GameCube pad (adapters, the Switch Online GameCube controller); Wii the Wii Remote with a Classic Controller (Pro);
+// WiiU the Wii U Pro Controller. Anything unrecognised is Xbox.
 enum class Family : uint8_t { Keyboard, PlayStation, Xbox, Nintendo, SteamDeck, SteamController, PS4, PS5,
-                              SteamController2026 };
-inline constexpr int kFamilyCount = 9;
+                              SteamController2026, GameCube, Switch2, Wii, WiiU,
+                              // VR controllers, the two hands as one pad (selected by the VR code: noteVr / prompt style)
+                              MetaQuest, ValveIndex, SteamFrame, ViveWand, Pico };
+inline constexpr int kFamilyCount = 18;
+inline constexpr bool isVrFamily(Family family) {
+    return family == Family::MetaQuest || family == Family::ValveIndex || family == Family::SteamFrame ||
+           family == Family::ViveWand || family == Family::Pico;
+}
 inline constexpr bool isPlayStationFamily(Family family) {
     return family == Family::PlayStation || family == Family::PS4 || family == Family::PS5;
 }
+// Nintendo's face-button layout: A east, B south (the launcher confirms with A). Not the GameCube, whose big A is
+// the south button.
+inline constexpr bool isNintendoLayout(Family family) {
+    return family == Family::Nintendo || family == Family::Switch2 || family == Family::Wii || family == Family::WiiU;
+}
+// Steam hardware with trackpads (the launcher's Steam keyboard hint).
+inline constexpr bool isSteamFamily(Family family) {
+    return family == Family::SteamDeck || family == Family::SteamController || family == Family::SteamController2026;
+}
 // Stored as SystemSettings::promptStyle.
 enum class PromptStyle : int { Auto = 0, PlayStation = 1, Xbox = 2, Nintendo = 3, SteamDeck = 4, SteamController = 5,
-                               PS4 = 6, PS5 = 7, SteamController2026 = 8 };
-inline constexpr int kPromptStyleLast = static_cast<int>(PromptStyle::SteamController2026);
+                               PS4 = 6, PS5 = 7, SteamController2026 = 8, GameCube = 9, Switch2 = 10, Wii = 11,
+                               WiiU = 12, MetaQuest = 13, ValveIndex = 14, SteamFrame = 15, ViveWand = 16, Pico = 17 };
+inline constexpr int kPromptStyleLast = static_cast<int>(PromptStyle::Pico);
 static_assert(static_cast<int>(PromptStyle::SteamController) == settings::Prompt_SteamController);
 static_assert(static_cast<int>(PromptStyle::PS5) == settings::Prompt_PS5);
-static_assert(kPromptStyleLast == settings::Prompt_SteamController2026);
+static_assert(kPromptStyleLast == settings::Prompt_Last);
+static_assert(static_cast<int>(PromptStyle::GameCube) == settings::Prompt_GameCube);
+// Every family but Keyboard has a prompt style of the same number.
+static_assert(kPromptStyleLast == kFamilyCount - 1);
 static_assert(static_cast<int>(PromptStyle::Nintendo) == settings::Prompt_Nintendo);
 // Positional buttons. LS/RS are stick movement, LSPress/RSPress are clicks
 // (L3/R3), Dpad is the whole pad. Guide may have no icon (fall back to text).
@@ -106,8 +129,41 @@ inline const char* familyId(Family family) {
     case Family::PS4: return "ps4";
     case Family::PS5: return "ps5";
     case Family::SteamController2026: return "steamcontroller2026";
+    case Family::GameCube: return "gamecube";
+    case Family::Switch2: return "switch2";
+    case Family::Wii: return "wii";
+    case Family::WiiU: return "wiiu";
+    case Family::MetaQuest: return "metaquest";
+    case Family::ValveIndex: return "valveindex";
+    case Family::SteamFrame: return "steamframe";
+    case Family::ViveWand: return "vivewand";
+    case Family::Pico: return "pico";
     }
     return "xbox";
+}
+// The controller's name for menus ("Nintendo Switch", "PlayStation 5"); "Keyboard and mouse" for Keyboard.
+inline const char* familyDisplayName(Family family) {
+    switch (family) {
+    case Family::Keyboard: return "Keyboard and mouse";
+    case Family::PlayStation: return "PlayStation";
+    case Family::Xbox: return "Xbox";
+    case Family::Nintendo: return "Nintendo Switch";
+    case Family::SteamDeck: return "Steam Deck";
+    case Family::SteamController: return "Steam Controller";
+    case Family::PS4: return "PlayStation 4";
+    case Family::PS5: return "PlayStation 5";
+    case Family::SteamController2026: return "Steam Controller (2026)";
+    case Family::GameCube: return "Nintendo GameCube";
+    case Family::Switch2: return "Nintendo Switch 2";
+    case Family::Wii: return "Wii Classic Controller";
+    case Family::WiiU: return "Wii U Pro Controller";
+    case Family::MetaQuest: return "Meta Quest Touch";
+    case Family::ValveIndex: return "Valve Index";
+    case Family::SteamFrame: return "Steam Frame";
+    case Family::ViveWand: return "HTC Vive";
+    case Family::Pico: return "Pico";
+    }
+    return "Xbox";
 }
 // Accepts familyId() values plus the short forms ps, switch, deck and sc2026.
 inline std::optional<Family> parseFamily(std::string_view text) {
@@ -115,7 +171,16 @@ inline std::optional<Family> parseFamily(std::string_view text) {
     if (value == "keyboard" || value == "kbm") return Family::Keyboard;
     if (value == "ps" || value == "playstation") return Family::PlayStation;
     if (value == "xbox") return Family::Xbox;
-    if (value == "nintendo" || value == "switch") return Family::Nintendo;
+    if (value == "nintendo" || value == "switch" || value == "joycon") return Family::Nintendo;
+    if (value == "gamecube" || value == "gc") return Family::GameCube;
+    if (value == "switch2" || value == "ns2") return Family::Switch2;
+    if (value == "wii") return Family::Wii;
+    if (value == "wiiu") return Family::WiiU;
+    if (value == "metaquest" || value == "quest" || value == "oculus" || value == "touch") return Family::MetaQuest;
+    if (value == "valveindex" || value == "index" || value == "knuckles") return Family::ValveIndex;
+    if (value == "steamframe" || value == "frame") return Family::SteamFrame;
+    if (value == "vivewand" || value == "vive") return Family::ViveWand;
+    if (value == "pico") return Family::Pico;
     if (value == "steamdeck" || value == "deck") return Family::SteamDeck;
     if (value == "steamcontroller") return Family::SteamController;
     if (value == "steamcontroller2026" || value == "sc2026" || value == "triton") return Family::SteamController2026;
@@ -133,9 +198,23 @@ inline Family familyForStyle(PromptStyle style) {
     case PromptStyle::PS4: return Family::PS4;
     case PromptStyle::PS5: return Family::PS5;
     case PromptStyle::SteamController2026: return Family::SteamController2026;
+    case PromptStyle::GameCube: return Family::GameCube;
+    case PromptStyle::Switch2: return Family::Switch2;
+    case PromptStyle::Wii: return Family::Wii;
+    case PromptStyle::WiiU: return Family::WiiU;
+    case PromptStyle::MetaQuest: return Family::MetaQuest;
+    case PromptStyle::ValveIndex: return Family::ValveIndex;
+    case PromptStyle::SteamFrame: return Family::SteamFrame;
+    case PromptStyle::ViveWand: return Family::ViveWand;
+    case PromptStyle::Pico: return Family::Pico;
     case PromptStyle::Auto: break;
     }
     return Family::Xbox;
+}
+// The prompt-style choices' names, in PromptStyle order ("Automatic" first): the launcher's and the games' menus.
+inline const char* promptStyleName(int style) {
+    if (style <= 0 || style > kPromptStyleLast) return "Automatic";
+    return familyDisplayName(familyForStyle(static_cast<PromptStyle>(style)));
 }
 
 // SDL-style GUID as produced by GLFW: bus(LE) 0000 vendor(LE) 0000
@@ -211,9 +290,17 @@ inline std::optional<Family> familyFromSteamType(std::string_view type) {
     if (value == "ps4") return Family::PS4;
     if (value == "ps5") return Family::PS5;
     if (value == "ps3" || value.rfind("playstation", 0) == 0) return Family::PlayStation;
+    if (detail::contains(value, "gamecube")) return Family::GameCube;
+    if (detail::contains(value, "switch2") || value.rfind("ns2", 0) == 0) return Family::Switch2;
+    if (detail::contains(value, "wiiu")) return Family::WiiU;
+    if (value.rfind("wii", 0) == 0) return Family::Wii;
     if (value.rfind("switch", 0) == 0 || detail::contains(value, "joycon")) return Family::Nintendo;
     if (value == "steamdeck" || detail::contains(value, "neptune")) return Family::SteamDeck;
     if (detail::contains(value, "triton") || value == "steamcontroller2026") return Family::SteamController2026;
+    if (detail::contains(value, "frame")) return Family::SteamFrame;
+    if (detail::contains(value, "knuckles") || detail::contains(value, "index")) return Family::ValveIndex;
+    if (detail::contains(value, "oculus") || detail::contains(value, "quest")) return Family::MetaQuest;
+    if (detail::contains(value, "vive")) return Family::ViveWand;
     if (value.rfind("steamcontroller", 0) == 0) return Family::SteamController;
     return std::nullopt;
 }
@@ -261,12 +348,23 @@ inline std::optional<Family> familyFromIds(uint16_t vid, uint16_t pid) {
         default: return Family::PlayStation;
         }
     }
-    if (vid == kVendorNintendo) return Family::Nintendo;
+    if (vid == kVendorNintendo) {
+        switch (pid) {
+        case 0x0337: return Family::GameCube;                            // GameCube adapter for Wii U / Switch
+        case 0x2073: return Family::GameCube;                            // Switch Online GameCube controller
+        case 0x2066: case 0x2067: case 0x2069: return Family::Switch2;   // Joy-Con 2 (R, L), Pro Controller 2
+        // 0306 / 0330 are the Wii Remote (Plus) and the Wii U Pro Controller alike (hid-wiimote names each part:
+        // familyFromName below tells them apart)
+        case 0x0306: case 0x0330: return std::nullopt;
+        default: return Family::Nintendo;
+        }
+    }
     if (vid == kVendorValve) {
         if (pid == 0x1205) return Family::SteamDeck;                    // Steam Deck ("Neptune")
         // 2026 Steam Controller ("Triton"; SDL controller_list.h): 1302 USB, 1303 Bluetooth LE, 1304 / 1305 its
         // Proteus / Nereid wireless dongles
         if (pid >= 0x1302 && pid <= 0x1305) return Family::SteamController2026;
+        if (pid == 0x2300) return Family::ValveIndex;                   // Valve Index controller ("Knuckles", SDL)
         switch (pid) {                                                  // 2015 Steam Controller
         case 0x1101: case 0x1102: case 0x1105: case 0x1106: case 0x1142: case 0x1201: case 0x1202:
             return Family::SteamController;
@@ -286,10 +384,24 @@ inline std::optional<Family> familyFromName(std::string_view name) {
     if (contains(n, "ps4") || contains(n, "dualshock 4") || contains(n, "dualshock4")) return Family::PS4;
     if (contains(n, "ps3") || contains(n, "dualshock") || contains(n, "playstation"))
         return Family::PlayStation;
+    if (contains(n, "gamecube") || contains(n, "game cube") || contains(n, "wavebird")) return Family::GameCube;
+    if (contains(n, "switch 2") || contains(n, "switch2") || contains(n, "joy-con 2") || contains(n, "joy-con2"))
+        return Family::Switch2;
+    // hid-wiimote: "Nintendo Wii Remote Pro Controller" is the Wii U Pro Controller
+    if (contains(n, "wii u") || contains(n, "wiiu") || (contains(n, "wii remote") && contains(n, "pro controller")) ||
+        contains(n, "rvl-cnt-01-uc"))
+        return Family::WiiU;
+    if (contains(n, "wii") || contains(n, "rvl-cnt-01")) return Family::Wii;
     if (contains(n, "switch") || contains(n, "nintendo") || contains(n, "joy-con") || contains(n, "joycon") ||
         contains(n, "pro controller"))
         return Family::Nintendo;
     if (contains(n, "steam deck")) return Family::SteamDeck;
+    if (contains(n, "steam frame")) return Family::SteamFrame;
+    if (contains(n, "oculus") || contains(n, "meta quest") || contains(n, "quest touch") || contains(n, "touch controller"))
+        return Family::MetaQuest;
+    if (contains(n, "index controller") || contains(n, "knuckles") || contains(n, "valve index")) return Family::ValveIndex;
+    if (contains(n, "vive")) return Family::ViveWand;
+    if (contains(n, "pico")) return Family::Pico;
     if (contains(n, "triton") || contains(n, "steam controller (2026)") || contains(n, "steam controller 2026"))
         return Family::SteamController2026;
     if (contains(n, "steam controller")) return Family::SteamController;
@@ -300,7 +412,11 @@ inline std::optional<Family> familyFromName(std::string_view name) {
 // The Android on-screen pad (platform/android/glfw_sdl.cpp, last joystick
 // slot). It is drawn as a PlayStation pad, so it gets the game's original
 // PlayStation glyphs; physical pads keep the normal detection below.
+#if defined(CANE_IOS)
+inline constexpr std::string_view kTouchPadName = "Touch controls";   // (the iOS app's on-screen pad)
+#else
 inline constexpr std::string_view kTouchPadName = "Android touch controls";
+#endif
 
 // Order: 0 the on-screen pad, 1 Sony, 2 Nintendo, 3 Valve product table, 4 Microsoft or XInput,
 // 5 name heuristics (joystick name, then mapping name), 6 an unresolved
@@ -331,6 +447,9 @@ struct PadInfo {
     int steamSlot = -1;
     std::string joystickName, gamepadName;
     Family family = Family::Xbox;
+    // How its gamepad mapping was found (gamepad_mappings.h): Builtin (GLFW / the bundled database by exact GUID),
+    // Database (the same pad with another version), Evdev / Generic (no database line: an Xbox layout).
+    MappingSource mapping = MappingSource::None;
 };
 
 namespace detail {
@@ -420,7 +539,7 @@ inline const PadInfo& identify(int jid) {
     const auto ids = parseGuid(guid);
     const bool steamDependent = (ids.valid && isSteamVirtualGamepad(ids.vendor, ids.product)) || ids.xinput;
     if (cached.known && cached.guid == guid && cached.name == name &&
-        (!steamDependent || cached.steamGeneration == generation))
+        (!steamDependent || cached.steamGeneration == generation) && cached.info.mapping == mappingSource(jid))
         return cached.info;
 
     PadInfo info;
@@ -429,6 +548,7 @@ inline const PadInfo& identify(int jid) {
     info.product = ids.product;
     info.xinput = ids.xinput;
     info.joystickName = name;
+    info.mapping = mappingSource(jid);
     if (glfwJoystickIsGamepad(jid))
         if (const char* mapping = glfwGetGamepadName(jid)) info.gamepadName = mapping;
     const bool deck = steamDeckEnvironment();
@@ -481,14 +601,15 @@ inline void installJoystickCallback() {
 
 // Activity score used to pick the pad in use (moved from Input.cpp): 2 for a
 // held button, otherwise the largest stick deflection or trigger travel.
-inline float gamepadActivity(const GLFWgamepadstate& state) {
+// jid >= 0: a fallback-mapped pad's sticks count from their rest position (restAxis), so a wheel pedal or slider
+// pinned at -1 does not look held.
+inline float gamepadActivity(const GLFWgamepadstate& state, int jid = -1) {
     float activity = 0.0f;
     for (int button = 0; button <= GLFW_GAMEPAD_BUTTON_LAST; ++button)
         if (state.buttons[button] == GLFW_PRESS) activity = (std::max)(activity, 2.0f);
-    activity = (std::max)(activity, std::abs(state.axes[GLFW_GAMEPAD_AXIS_LEFT_X]));
-    activity = (std::max)(activity, std::abs(state.axes[GLFW_GAMEPAD_AXIS_LEFT_Y]));
-    activity = (std::max)(activity, std::abs(state.axes[GLFW_GAMEPAD_AXIS_RIGHT_X]));
-    activity = (std::max)(activity, std::abs(state.axes[GLFW_GAMEPAD_AXIS_RIGHT_Y]));
+    for (int axis : { GLFW_GAMEPAD_AXIS_LEFT_X, GLFW_GAMEPAD_AXIS_LEFT_Y, GLFW_GAMEPAD_AXIS_RIGHT_X,
+                      GLFW_GAMEPAD_AXIS_RIGHT_Y })
+        activity = (std::max)(activity, std::abs(state.axes[axis] - restAxis(jid, axis)));
     // GLFW trigger axes rest at -1. Convert them to a zero-to-one range so
     // an untouched trigger does not make every connected pad look active.
     activity = (std::max)(activity, (state.axes[GLFW_GAMEPAD_AXIS_LEFT_TRIGGER] + 1.0f) * 0.5f);
@@ -522,6 +643,7 @@ inline bool ignoredSteamDuplicate(int jid) {
 // duplicates. Returns -1 when no gamepad is available; *stateOut receives the
 // chosen pad's state (zeroed when none).
 inline int selectActivePad(int previousJid, GLFWgamepadstate* stateOut = nullptr) {
+    ensureFallbackMappings();   // (pads without a database mapping get an Xbox-layout one first)
     GLFWgamepadstate best{};
     int bestJid = -1;
     float bestActivity = -1.0f;
@@ -530,7 +652,7 @@ inline int selectActivePad(int previousJid, GLFWgamepadstate* stateOut = nullptr
         if (ignoredSteamDuplicate(jid)) continue;
         GLFWgamepadstate candidate{};
         if (!glfwGetGamepadState(jid, &candidate)) continue;
-        float activity = gamepadActivity(candidate);
+        float activity = gamepadActivity(candidate, jid);
         if (jid == previousJid) activity += 0.01f;
         if (bestJid < 0 || activity > bestActivity) {
             best = candidate;
@@ -550,10 +672,18 @@ public:
     void noteKeyboard() { m_device = Device::Keyboard; }
     // Mouse movement or clicks. Only the launcher calls this.
     void noteMouse() { m_device = Device::Mouse; }
+    // A VR controller was used (the VR code calls this on its controllers' input; family: an isVrFamily one, e.g.
+    // MetaQuest on a Quest, ValveIndex / ViveWand / SteamFrame / Pico by the OpenXR interaction profile). Prompts then
+    // show that family until a key, the mouse or a gamepad is used.
+    void noteVr(Family family) {
+        m_device = Device::Vr;
+        m_vrFamily = family;
+    }
     // Call once per frame. A newly pressed button or a stick/trigger that
     // crosses 0.5 makes that pad the active device. Before any input at all,
     // the first connected gamepad is adopted so prompts start out right.
     void pollGamepads() {
+        ensureFallbackMappings();
         for (int jid = GLFW_JOYSTICK_1; jid <= GLFW_JOYSTICK_LAST; ++jid) {
             GLFWgamepadstate state{};
             if (!glfwJoystickPresent(jid) || !glfwJoystickIsGamepad(jid) || ignoredSteamDuplicate(jid) ||
@@ -561,7 +691,7 @@ public:
                 m_previous[jid] = 0;
                 continue;
             }
-            const uint32_t mask = activityMask(state);
+            const uint32_t mask = activityMask(state, jid);
             const uint32_t pressed = mask & ~m_previous[jid];
             m_previous[jid] = mask;
             if (pressed || m_device == Device::None) activate(jid);
@@ -573,13 +703,18 @@ public:
 #ifdef CANE_VITA
         return Family::PlayStation;
 #else
-        return m_device == Device::Gamepad ? m_family : Family::Keyboard;
+        return m_device == Device::Gamepad ? m_family : m_device == Device::Vr ? m_vrFamily : Family::Keyboard;
 #endif
     }
     // The pad used last, or -1.
     int jid() const { return m_device == Device::Gamepad ? m_jid : -1; }
-    bool lastWasGamepad() const { return m_forced ? *m_forced != Family::Keyboard : m_device == Device::Gamepad; }
+    bool lastWasGamepad() const {
+        return m_forced ? *m_forced != Family::Keyboard : m_device == Device::Gamepad || m_device == Device::Vr;
+    }
+    bool lastWasVr() const { return m_forced ? isVrFamily(*m_forced) : m_device == Device::Vr; }
     bool lastWasMouse() const { return !m_forced && m_device == Device::Mouse; }
+    // Nothing was used yet (and no gamepad was there to adopt).
+    bool idle() const { return !m_forced && m_device == Device::None; }
     // Applies brand::testPromptFamilyEnv when set to a known family; input
     // then no longer changes family(). Returns whether a family was forced.
     bool forceFromEnv() {
@@ -592,16 +727,17 @@ public:
     bool forced() const { return m_forced.has_value(); }
 
 private:
-    enum class Device { None, Keyboard, Mouse, Gamepad };
-    static uint32_t activityMask(const GLFWgamepadstate& state) {
+    enum class Device { None, Keyboard, Mouse, Gamepad, Vr };
+    static uint32_t activityMask(const GLFWgamepadstate& state, int jid) {
         uint32_t mask = 0;
         for (int button = 0; button <= GLFW_GAMEPAD_BUTTON_LAST; ++button)
             if (state.buttons[button] == GLFW_PRESS) mask |= 1u << button;
         int bit = GLFW_GAMEPAD_BUTTON_LAST + 1;
         for (int axis : { GLFW_GAMEPAD_AXIS_LEFT_X, GLFW_GAMEPAD_AXIS_LEFT_Y, GLFW_GAMEPAD_AXIS_RIGHT_X,
                           GLFW_GAMEPAD_AXIS_RIGHT_Y }) {
-            if (state.axes[axis] > 0.5f) mask |= 1u << bit;
-            if (state.axes[axis] < -0.5f) mask |= 1u << (bit + 1);
+            const float value = state.axes[axis] - restAxis(jid, axis);
+            if (value > 0.5f) mask |= 1u << bit;
+            if (value < -0.5f) mask |= 1u << (bit + 1);
             bit += 2;
         }
         for (int axis : { GLFW_GAMEPAD_AXIS_LEFT_TRIGGER, GLFW_GAMEPAD_AXIS_RIGHT_TRIGGER })
@@ -616,6 +752,7 @@ private:
     }
     Device m_device = Device::None;
     Family m_family = Family::Xbox;
+    Family m_vrFamily = Family::MetaQuest;
     int m_jid = -1;
     std::array<uint32_t, GLFW_JOYSTICK_LAST + 1> m_previous{};
     std::optional<Family> m_forced;
@@ -666,32 +803,93 @@ inline Button fromGlfwBinding(int binding) {
 // game's historic neutral names ("A / Cross"), used when no pad is active.
 // Button::Count returns "Unbound".
 inline const char* buttonLabel(Button button, Family family) {
-    // Columns: Keyboard, PlayStation, Xbox, Nintendo, SteamDeck, SteamController, PS4, PS5, SteamController2026.
+    // Columns: Keyboard, PlayStation, Xbox, Nintendo, SteamDeck, SteamController, PS4, PS5, SteamController2026,
+    // GameCube, Switch2, Wii, WiiU, MetaQuest, ValveIndex, SteamFrame, ViveWand, Pico. The GameCube is positional as SDL maps it: B west, X east, Z the right bumper,
+    // L / R the triggers; its left bumper is the Switch Online pad's ZL.
     static constexpr const char* table[kButtonCount][kFamilyCount] = {
-        { "A / Cross", "Cross", "A", "B", "A", "A", "Cross", "Cross", "A" },                                   // South
-        { "B / Circle", "Circle", "B", "A", "B", "B", "Circle", "Circle", "B" },                                 // East
-        { "X / Square", "Square", "X", "Y", "X", "X", "Square", "Square", "X" },                                 // West
-        { "Y / Triangle", "Triangle", "Y", "X", "Y", "Y", "Triangle", "Triangle", "Y" },                             // North
-        { "Left Bumper", "L1", "LB", "L", "L1", "LB", "L1", "L1", "L1" },                                 // LB
-        { "Right Bumper", "R1", "RB", "R", "R1", "RB", "R1", "R1", "R1" },                                // RB
-        { "Left Trigger", "L2", "LT", "ZL", "L2", "LT", "L2", "L2", "L2" },                               // LT
-        { "Right Trigger", "R2", "RT", "ZR", "R2", "RT", "R2", "R2", "R2" },                              // RT
-        { "Back / Select", "Select", "View", "-", "View", "Back", "Share", "Create", "View" },                     // Back
-        { "Start", "Start", "Menu", "+", "Menu", "Start", "Options", "Options", "Menu" },                          // Start
-        { "Left Stick", "Left stick", "Left stick", "Left stick", "Left stick", "Stick", "Left stick", "Left stick", "Left stick" },          // LS
-        { "Right Stick", "Right stick", "Right stick", "Right stick", "Right stick", "Right pad", "Right stick", "Right stick", "Right stick" },   // RS
-        { "Left Stick", "L3", "LS", "L-stick", "L3", "Stick click", "L3", "L3", "L3" },                   // LSPress
-        { "Right Stick", "R3", "RS", "R-stick", "R3", "Pad click", "R3", "R3", "R3" },                    // RSPress
-        { "D-Pad Up", "Up", "Up", "Up", "Up", "Up", "Up", "Up", "Up" },                                   // DpadUp
-        { "D-Pad Down", "Down", "Down", "Down", "Down", "Down", "Down", "Down", "Down" },                       // DpadDown
-        { "D-Pad Left", "Left", "Left", "Left", "Left", "Left", "Left", "Left", "Left" },                       // DpadLeft
-        { "D-Pad Right", "Right", "Right", "Right", "Right", "Right", "Right", "Right", "Right" },                 // DpadRight
-        { "D-Pad", "D-pad", "D-pad", "D-pad", "D-pad", "D-pad", "D-pad", "D-pad", "D-pad" },                       // Dpad
-        { "Guide", "PS", "Xbox", "Home", "Steam", "Steam", "PS", "PS", "Steam" },                            // Guide
+        { "A / Cross", "Cross", "A", "B", "A", "A", "Cross", "Cross", "A", "A", "B", "B", "B", "A", "A", "A", "R Pad", "A" },                                   // South
+        { "B / Circle", "Circle", "B", "A", "B", "B", "Circle", "Circle", "B", "X", "A", "A", "A", "L Grip", "L Grip", "B", "L Grip", "L Grip" },                                 // East
+        { "X / Square", "Square", "X", "Y", "X", "X", "Square", "Square", "X", "B", "Y", "Y", "Y", "B", "B", "X", "L Pad", "B" },                                 // West
+        { "Y / Triangle", "Triangle", "Y", "X", "Y", "Y", "Triangle", "Triangle", "Y", "Y", "X", "X", "X", "R Grip", "R Grip", "Y", "R Grip", "R Grip" },                             // North
+        { "Left Bumper", "L1", "LB", "L", "L1", "LB", "L1", "L1", "L1", "ZL", "L", "L", "L", "L Trigger", "L Trigger", "L1", "L Trigger", "L Trigger" },                                 // LB
+        { "Right Bumper", "R1", "RB", "R", "R1", "RB", "R1", "R1", "R1", "Z", "R", "R", "R", "R Trigger", "R Trigger", "R1", "R Trigger", "R Trigger" },                                // RB
+        { "Left Trigger", "L2", "LT", "ZL", "L2", "LT", "L2", "L2", "L2", "L", "ZL", "ZL", "ZL", "X", "L A", "L2", "Unbound", "X" },                               // LT
+        { "Right Trigger", "R2", "RT", "ZR", "R2", "RT", "R2", "R2", "R2", "R", "ZR", "ZR", "ZR", "Y", "L B", "R2", "Unbound", "Y" },                              // RT
+        { "Back / Select", "Select", "View", "-", "View", "Back", "Share", "Create", "View", "Select", "-", "-", "-", "L Grip + L3", "L Grip + L3", "View", "Menu", "L Grip + L3" },                     // Back
+        { "Start", "Start", "Menu", "+", "Menu", "Start", "Options", "Options", "Menu", "Start", "+", "+", "+", "Menu", "R Grip + R3", "Menu", "Menu", "Menu" },                          // Start
+        { "Left Stick", "Left stick", "Left stick", "Left stick", "Left stick", "Stick", "Left stick", "Left stick", "Left stick", "Control stick", "Left stick", "Left stick", "Left stick", "Left stick", "Left stick", "Left stick", "Left pad", "Left stick" },          // LS
+        { "Right Stick", "Right stick", "Right stick", "Right stick", "Right stick", "Right pad", "Right stick", "Right stick", "Right stick", "C-stick", "Right stick", "Right stick", "Right stick", "Right stick", "Right stick", "Right stick", "Right pad", "Right stick" },   // RS
+        { "Left Stick", "L3", "LS", "L-stick", "L3", "Stick click", "L3", "L3", "L3", "L3", "L-stick", "L-stick", "L-stick", "L3", "L3", "L3", "L Pad click", "L3" },                   // LSPress
+        { "Right Stick", "R3", "RS", "R-stick", "R3", "Pad click", "R3", "R3", "R3", "R3", "R-stick", "R-stick", "R-stick", "R3", "R3", "R3", "R Pad click", "R3" },                    // RSPress
+        { "D-Pad Up", "Up", "Up", "Up", "Up", "Up", "Up", "Up", "Up", "Up", "Up", "Up", "Up", "Up", "Up", "Up", "Up", "Up" },                                   // DpadUp
+        { "D-Pad Down", "Down", "Down", "Down", "Down", "Down", "Down", "Down", "Down", "Down", "Down", "Down", "Down", "Down", "Down", "Down", "Down", "Down" },                       // DpadDown
+        { "D-Pad Left", "Left", "Left", "Left", "Left", "Left", "Left", "Left", "Left", "Left", "Left", "Left", "Left", "Left", "Left", "Left", "Left", "Left" },                       // DpadLeft
+        { "D-Pad Right", "Right", "Right", "Right", "Right", "Right", "Right", "Right", "Right", "Right", "Right", "Right", "Right", "Right", "Right", "Right", "Right", "Right" },                 // DpadRight
+        { "D-Pad", "D-pad", "D-pad", "D-pad", "D-pad", "D-pad", "D-pad", "D-pad", "D-pad", "D-pad", "D-pad", "D-pad", "D-pad", "D-pad", "D-pad", "D-pad", "D-pad", "D-pad" },                       // Dpad
+        { "Guide", "PS", "Xbox", "Home", "Steam", "Steam", "PS", "PS", "Steam", "Home", "Home", "Home", "Home", "Meta", "System", "Steam", "System", "Home" },                            // Guide
     };
     const int index = static_cast<int>(button), column = static_cast<int>(family);
     if (index < 0 || index >= kButtonCount || column < 0 || column >= kFamilyCount) return "Unbound";
     return table[index][column];
+}
+
+// ---- button names inside text (the API other code uses to put a button's icon or name into a string)
+// A button's name in any family's words, case-insensitive: the positional names (South, East, ..., DpadUp), the
+// PlayStation names (Cross, Circle, Square, Triangle, L1, R1, L2, R2, L3, R3, Select, Start, Share, Create, Options),
+// the Xbox ones (A, B, X, Y, LB, RB, LT, RT, LS, RS, View, Menu, Back) and Up / Down / Left / Right / Dpad / Guide /
+// Home / PS. Letters are Xbox positions (A south). nullopt for anything else.
+inline std::optional<Button> buttonFromName(std::string_view name) {
+    struct Entry { const char* name; Button button; };
+    static constexpr Entry entries[] = {
+        {"south", Button::South}, {"east", Button::East}, {"west", Button::West}, {"north", Button::North},
+        {"cross", Button::South}, {"circle", Button::East}, {"square", Button::West}, {"triangle", Button::North},
+        {"a", Button::South}, {"b", Button::East}, {"x", Button::West}, {"y", Button::North},
+        {"lb", Button::LB}, {"rb", Button::RB}, {"lt", Button::LT}, {"rt", Button::RT},
+        {"l1", Button::LB}, {"r1", Button::RB}, {"l2", Button::LT}, {"r2", Button::RT},
+        {"l3", Button::LSPress}, {"r3", Button::RSPress}, {"lspress", Button::LSPress}, {"rspress", Button::RSPress},
+        {"ls", Button::LS}, {"rs", Button::RS}, {"lstick", Button::LS}, {"rstick", Button::RS},
+        {"back", Button::Back}, {"select", Button::Back}, {"view", Button::Back}, {"share", Button::Back},
+        {"create", Button::Back}, {"minus", Button::Back},
+        {"start", Button::Start}, {"menu", Button::Start}, {"options", Button::Start}, {"plus", Button::Start},
+        {"up", Button::DpadUp}, {"down", Button::DpadDown}, {"left", Button::DpadLeft}, {"right", Button::DpadRight},
+        {"dpadup", Button::DpadUp}, {"dpaddown", Button::DpadDown}, {"dpadleft", Button::DpadLeft},
+        {"dpadright", Button::DpadRight}, {"dpad", Button::Dpad}, {"d-pad", Button::Dpad},
+        {"guide", Button::Guide}, {"home", Button::Guide}, {"ps", Button::Guide},
+    };
+    const auto value = detail::lowered(detail::trim(name));
+    for (const Entry& e : entries)
+        if (value == e.name) return e.button;
+    return std::nullopt;
+}
+// "{L3}"-style tokens in text: the first "{NAME}" at or after `from` whose NAME is a buttonFromName() name. begin ==
+// npos when there is none. Braces around anything else are left alone.
+struct ButtonToken {
+    size_t begin = std::string_view::npos, end = std::string_view::npos; // [begin, end) covers the braces
+    Button button = Button::Count;
+};
+inline ButtonToken findButtonToken(std::string_view text, size_t from = 0) {
+    while (from < text.size()) {
+        const size_t open = text.find('{', from);
+        if (open == std::string_view::npos) break;
+        const size_t close = text.find('}', open + 1);
+        if (close == std::string_view::npos) break;
+        if (close - open - 1 <= 16)
+            if (auto button = buttonFromName(text.substr(open + 1, close - open - 1))) return {open, close + 1, *button};
+        from = open + 1;
+    }
+    return {};
+}
+// Replaces every button token with buttonLabel(button, family): for text drawn without icons.
+inline std::string replaceButtonTokens(std::string_view text, Family family) {
+    std::string out;
+    size_t at = 0;
+    for (ButtonToken t = findButtonToken(text); t.begin != std::string_view::npos; t = findButtonToken(text, at)) {
+        out.append(text.substr(at, t.begin - at));
+        out += buttonLabel(t.button, family);
+        at = t.end;
+    }
+    out.append(text.substr(at));
+    return out;
 }
 
 // The retail font-1 glyph (Splash.brx) for a positional button, used to draw

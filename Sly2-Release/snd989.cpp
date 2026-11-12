@@ -1179,14 +1179,7 @@ void PlayEffectTone(BLOCKSOUND& bs, const TONE& tone)
                     tone.flags, tone.centerNote, tone.centerFine, bs.note, bs.fine, bs.curPb, bs.curPm, v.gVol, tone.adsr1, tone.adsr2,
                     tone.sampleOffset);
 
-    WAVEFORMATEX format{};
-    format.wFormatTag = WAVE_FORMAT_PCM;
-    format.nChannels = 1;
-    format.nSamplesPerSec = 48000;
-    format.wBitsPerSample = 16;
-    format.nBlockAlign = 2;
-    format.nAvgBytesPerSec = format.nSamplesPerSec * format.nBlockAlign;
-    if (SUCCEEDED(g_pxaudio2->CreateSourceVoice(&v.voice, &format, 0, kSpuMaximumFrequencyRatio)) && v.voice) ++s_cHostVoiceCreated;
+    if (FCreateGameSourceVoice(&v.voice, 1, 48000, kSpuMaximumFrequencyRatio)) ++s_cHostVoiceCreated;   // (audio.h: into the output bus)
     else
     {
         v.voice = nullptr;

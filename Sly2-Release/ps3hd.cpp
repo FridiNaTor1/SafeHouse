@@ -16,6 +16,7 @@
 #include "bis.h"
 #include "cls.h"
 #include "disc.h"
+#include "worldparts.h"
 #include "../platform/platform.h"
 #include "../platform/ps3disc.h"
 #include "../platform/texture_pak.h"
@@ -440,6 +441,51 @@ void Progress(const char* stage, uint64_t done, uint64_t total, const std::strin
     std::fflush(stdout);
 }
 
+// Whether an installation's world entry is format 3's index of parts (worldparts.h)
+bool FWorldPartsIndex(const std::string& rel)
+{
+    static const std::string s_ext = ".world.json";
+    return rel.size() > s_ext.size() && rel.compare(rel.size() - s_ext.size(), s_ext.size(), s_ext) == 0;
+}
+
+// An installed PS2 world's file (decompressed), by its manifest path (relative to the installation). Format 3 keeps a
+// world as parts (<World>.world.json and its World folder, worldparts.h): put back together as the game's loader does,
+// from the installed parts (never a mod's: the pack is named after the installed textures). fHeader: only the start
+// (the group table, SzWorldHeader) is needed: of a whole file its first bytes; the parts are always put together.
+bool FReadPs2World(const std::string& rel, bool fHeader, std::vector<uint8_t>& ab, std::string& error)
+{
+    const fs::path root = cane::path(g_disc.Path());
+    const fs::path p = root / cane::path(rel);
+    if (FWorldPartsIndex(rel))
+    {
+        nlohmann::json index;
+        try
+        {
+            std::ifstream in(p);
+            if (!in) { error = "cannot be read"; return false; }
+            in >> index;
+        }
+        catch (const std::exception&) { error = "is not a world index"; return false; }
+        const size_t islash = rel.rfind('/');
+        const std::string relDir = islash == std::string::npos ? std::string() : rel.substr(0, islash);
+        try
+        {
+            return FRavelWorld(index, relDir, [&root](const std::string& relPart) { return cane::utf8(root / cane::path(relPart)); }, ab, error);
+        }
+        catch (const std::exception& e) { error = e.what(); return false; }
+    }
+    std::ifstream in(p, std::ios::binary);
+    if (!in) { error = "cannot be read"; return false; }
+    if (fHeader)
+    {
+        ab.resize(64 * 1024 * 4);
+        in.read(reinterpret_cast<char*>(ab.data()), std::streamsize(ab.size()));
+        ab.resize(size_t(in.gcount()));
+    }
+    else ab.assign(std::istreambuf_iterator<char>(in), {});
+    return true;
+}
+
 // A world file's group names (the header: S16 count, then 0x54-byte records whose first 64 bytes are the name):
 // the PS3 port kept them, so they identify the PS2 world.
 std::string SzWorldHeader(const std::vector<uint8_t>& ab)
@@ -452,6 +498,10 @@ std::string SzWorldHeader(const std::vector<uint8_t>& ab)
     return s;
 }
 }  // namespace
+
+// (lang, ps3lang.cpp) the PS3 archive's world decompression and file kinds, shared
+std::vector<uint8_t> Ps3DecompressWorld(const std::vector<uint8_t>& in) { return DecompressTolerant(in); }
+char Ps3KindOfSector(const uint8_t* p) { return KindOfSector(p); }
 
 // --ps3-hd-textures SOURCE OUT (with --disc / --data-dir on the PS2 installation): every PS3 world's textures over its
 // PS2 world's, written as OUT/Textures.pak (each under the PS2 texture's mods name; png: OUT/Textures/<that name>, the
@@ -485,18 +535,28 @@ int Ps3HdTexturesCommand(const std::string& source, const std::string& out, bool
         if (!in) return fail("Install Sly 2 with this SafeHouse first: no extraction_manifest.json in its installation.");
         try { in >> m; } catch (...) { return fail("The Sly 2 installation's extraction_manifest.json cannot be read: repair the installation."); }
     }
+    // (path: the manifest's, relative to the installation: the world file, or format 3's <World>.world.json)
     struct PS2WORLD { std::string path, name; };
     std::map<std::string, PS2WORLD> mpheader;
+    int cworldPs2 = 0, cworldUnread = 0;
     for (const auto& f : m.at("files"))
         if (f.value("kind", "") == "world")
         {
-            const fs::path p = cane::path(g_disc.Path()) / cane::path(f.at("path").get<std::string>());
-            std::ifstream in(p, std::ios::binary);
-            std::vector<uint8_t> ab(64 * 1024 * 4);
-            in.read(reinterpret_cast<char*>(ab.data()), std::streamsize(ab.size()));
-            ab.resize(size_t(in.gcount()));
-            mpheader[SzWorldHeader(ab)] = {cane::utf8(p), p.stem().string()};
+            const std::string rel = f.at("path").get<std::string>();
+            ++cworldPs2;
+            std::vector<uint8_t> ab;
+            std::string errWorld;
+            if (!FReadPs2World(rel, true, ab, errWorld))
+            {
+                ++cworldUnread;
+                std::printf("ps3hd: %s: %s\n", rel.c_str(), errWorld.c_str());
+                continue;
+            }
+            std::string name = cane::utf8(cane::path(rel).stem());
+            if (FWorldPartsIndex(rel)) name = cane::utf8(cane::path(name).stem());   // ("Paris.world.json")
+            mpheader[SzWorldHeader(ab)] = {rel, name};
         }
+    if (cworldPs2 && cworldUnread == cworldPs2) return fail("The Sly 2 installation's worlds cannot be read: repair the installation.");
 
     fs::create_directories(cane::path(out));
     cane::TexturePackWriter pack;
@@ -518,9 +578,10 @@ int Ps3HdTexturesCommand(const std::string& source, const std::string& out, bool
         Progress("textures", setDoneWorld.size() - 1, mpheader.size(), it->second.name);
 
         std::vector<uint8_t> ab2;
+        if (std::string errWorld; !FReadPs2World(it->second.path, false, ab2, errWorld))
         {
-            std::ifstream in(cane::path(it->second.path), std::ios::binary);
-            ab2.assign(std::istreambuf_iterator<char>(in), {});
+            std::printf("ps3hd: %s: %s\n", it->second.path.c_str(), errWorld.c_str());
+            return;
         }
         g_fPs3World = false;
         const std::vector<BLOCK> ablk2 = LoadTextureBlocks(ab2);

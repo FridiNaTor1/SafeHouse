@@ -24,7 +24,8 @@ SINGLE = ["game-sly1-notinstalled", "game-sly2-notinstalled", "game-sly2-install
           "nav-rail", "nav-rail-down", "nav-enter-page", "nav-open-install", "nav-install-back", "nav-rb",
           "nav-nintendo-enter", "nav-keyboard-down", "nav-settings-row", "install-path", "binding-capture",
           "remembered-game", "nav-right-page", "nav-left-rail", "nav-settings-rows", "sly3-notice",
-          "nav-rail-discord", "nav-rail-patreon"] + ["settings-" + c for c in
+          "nav-rail-discord", "nav-rail-patreon", "nav-rail-quit", "settings-games", "game-sly2-vr",
+          "game-sly2-vr-steamvr", "quit-confirm"] + ["settings-" + c for c in
                                 ("display", "graphics", "audio", "controls", "interface", "launcher", "advanced")] + [
           "settings-sly2-" + c for c in ("display", "graphics", "launcher", "advanced")]
 # name: (game, view) the layout dump must report.
@@ -35,6 +36,8 @@ STATES = {
     "nav-settings-row": (None, "settings"), "remembered-game": ("sly3", "game"), "about": (None, "about"),
     "game-hackpack": ("hackpack", "game"), "install-sly2": ("sly2", "install"),
     "sly3-notice": ("sly3", "game"), "nav-rail-discord": (None, "about"), "nav-rail-patreon": (None, "about"),
+    # Quit focused from About: still on About (only A / Enter quits)
+    "nav-rail-quit": (None, "about"), "game-sly2-vr": ("sly2", "game"),
 }
 # name: label of the item that must have the pad/keyboard focus
 FOCUSED = {
@@ -45,20 +48,28 @@ FOCUSED = {
     "binding-capture": "Move up",
     # The community links under About: down from About, right to Patreon (right stays in the rail there).
     "nav-rail-discord": "rail-discord", "nav-rail-patreon": "rail-patreon", "sly3-notice": "Play anyway",
+    "nav-rail-quit": "rail-quit", "game-sly2-vr": "Play", "quit-confirm": "Cancel",
 }
 # name: (labels that must be present, labels that must be absent)
 LABELS = {
-    "game-sly1-xbox": ({"Play", "Verify files", "Reinstall", "Uninstall", "rail-discord", "rail-patreon"}, {"Install", "sly3-notice"}),
+    "game-sly1-xbox": ({"Play", "Verify files", "Reinstall", "Uninstall", "rail-discord", "rail-patreon", "rail-quit"},
+                       {"Install", "sly3-notice", "Play in VR"}),
     "game-sly1-notinstalled": ({"Install"}, {"Play"}),
     "game-sly2-notinstalled": ({"Install"}, {"Play"}),
     "game-sly2-installed": ({"In development", "Verify files"}, {"Play", "Install"}),
-    "game-sly2-ready": ({"Play"}, {"Install", "In development"}),
+    "game-sly2-ready": ({"Play"}, {"Install", "In development", "Play in VR"}),
+    # "Play in VR" beside Play when a PC headset (or SteamVR) is there (launcher/vr_probe.h)
+    "game-sly2-vr": ({"Play", "Play in VR"}, {"Install"}),
+    "game-sly2-vr-steamvr": ({"Play", "Play in VR"}, {"Install"}),
+    "quit-confirm": ({"Cancel", "Quit"}, set()),
     # Sly 3's early-development banner, on its page only; the confirmation before it plays.
     "game-sly3": ({"Install", "sly3-notice"}, {"Play"}), "game-sly4": (set(), {"Play", "Install"}),
     "game-hackpack": (set(), {"Play", "Install"}),
     "install-path": ({"Search"}, set()),
     "sly3-notice": ({"sly3-notice", "Don't show again", "Cancel", "Play anyway"}, set()),
-    "about": ({"Join us on Discord (ThiefRush)", "Support us on Patreon", "rail-discord", "rail-patreon"}, {"sly3-notice"}),
+    # (the developers and the full credits of launcher/credits.h; scripts/test-collection-launcher.py checks every one)
+    "about": ({"Join us on Discord (ThiefRush)", "Support us on Patreon", "rail-discord", "rail-patreon", "credits-developers",
+               "developer FridiNaTor", "credits-decompilation", "credits-trademarks", "credits-licences"}, {"sly3-notice"}),
     "settings-controls": ({"Disable controller input when unfocused"}, {"Always show Original PS layout", "Button prompts", "Debug keys"}),
     "settings-interface": ({"Menu style", "Menu size"}, {"Streamer mode"}),
     "settings-launcher": ({"Launcher size", "Button prompts"}, set()),

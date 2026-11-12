@@ -9,14 +9,58 @@ invariant gl_Position;
 precise gl_Position;
 #endif
 
+// (render.cpp FDrawStateOn: the Vulkan renderer's pulled programs with bindless handles take each pass draw's colour
+// source, fog black and CANE_BLEND1 mode from its draw entry, the handle's third word; 0 there: the uniforms)
+#if defined(CANE_BLEND1) && defined(BINDLESS)
+#define CANE_DRAWSTATE 1
+#endif
+
 // (with glob.geom, the near-plane clip: the outputs go to it under these names, and it passes them on as v*)
 #ifdef GEOM
 #define vColor gsColor
 #define vUv gsUv
 #define vFog gsFog
 #define vTexh gsTexh
+#define vLayer gsLayer
+#define vDrawState gsDrawState
 #endif
 
+#ifdef CANE_PULL
+// (OpenGL ES without EXT_base_instance, gl.cpp g_fDrawUniform: render.cpp draws a run of sub-draws as one draw of a
+// per-frame index list; each index holds the run's sub-draw (bits 22..31, from caneDrawBase) and the vertex (bits
+// 0..21, from caneVertexBase), and the vertex is read here from the arena's buffers (render.cpp GPUVTX / GPUCOL))
+layout (std430, binding = 6) readonly buffer PULLVTX { uint apullv[]; };   // GPUVTX: 12 words a vertex
+layout (std430, binding = 7) readonly buffer PULLCOL { uint apullc[]; };   // GPUCOL: 2 words a vertex
+layout (std430, binding = 10) readonly buffer PULLDRAWMAP { uint adrawmap[]; };   // the pass's segments' draw indices
+uniform uint caneDrawBase;
+uniform uint caneVertexBase;
+vec3 aPos;
+vec2 aUv;
+vec4 aRgbaA;
+vec4 aRgbaB;
+vec3 aNormal;
+uvec4 aBone;
+uint aDraw;
+vec4 aWeight;
+uint caneVertexId;
+uvec4 CaneBytes(uint w) { return uvec4(w & 255u, (w >> 8) & 255u, (w >> 16) & 255u, w >> 24); }
+void CanePull()
+{
+    uint id = uint(gl_VertexID);
+    caneVertexId = caneVertexBase + (id & 0x3FFFFFu);
+    aDraw = (caneDrawBase & 0x80000000u) != 0u ? (caneDrawBase & 0x7FFFFFFFu) : adrawmap[caneDrawBase + (id >> 22)];
+    uint o = caneVertexId * 12u;
+    aPos = vec3(uintBitsToFloat(apullv[o]), uintBitsToFloat(apullv[o + 1u]), uintBitsToFloat(apullv[o + 2u]));
+    aUv = vec2(uintBitsToFloat(apullv[o + 3u]), uintBitsToFloat(apullv[o + 4u]));
+    aNormal = vec3(uintBitsToFloat(apullv[o + 7u]), uintBitsToFloat(apullv[o + 8u]), uintBitsToFloat(apullv[o + 9u]));
+    aBone = CaneBytes(apullv[o + 10u]);
+    aWeight = unpackUnorm4x8(apullv[o + 11u]);
+    uint c = caneVertexId * 2u;
+    aRgbaA = vec4(CaneBytes(apullc[c]));
+    aRgbaB = vec4(CaneBytes(apullc[c + 1u]));
+}
+#define CANE_VERTEX_ID caneVertexId
+#else
 layout (location = 0) in vec3 aPos;
 layout (location = 1) in vec2 aUv;
 layout (location = 2) in vec4 aRgbaA;   // unnormalized bytes
@@ -25,6 +69,8 @@ layout (location = 4) in vec3 aNormal;
 layout (location = 5) in uvec4 aBone;   // skinning: the group's bone indices
 layout (location = 6) in uint aDraw;    // the draw index (instanced, from the command's baseInstance)
 layout (location = 7) in vec4 aWeight;  // and their weights (raw / 255, P_G 726)
+#define CANE_VERTEX_ID uint(gl_VertexID)
+#endif
 
 // Per-frame draw data (render.cpp RECGPU / DRAWGPU).
 struct REC
@@ -48,8 +94,23 @@ layout (std430, binding = 4) readonly buffer WARPMATS { mat4 amatWarp[]; };
 layout (std430, binding = 1) readonly buffer DRAWS { vec4 adraw[]; };   // SAA du, dv (P_G 421 adds it to every ST), object alpha (qw8.x), record
 #ifdef BINDLESS
 // (perf-3, ARB_bindless_texture) each pass draw's texture + sampler handle (render.cpp: 0 = the bound tex)
+#ifdef CANE_DRAWSTATE
+layout (std430, binding = 5) readonly buffer TEXHANDLES { uvec4 atexh[]; };   // handle, state word (render.cpp DrawStateWord)
+flat out uint vDrawState;
+#elif defined(VULKAN) && defined(CANE_PULL)
+// (the Vulkan pulled path's program without CANE_BLEND1, gl.cpp glGlobShaderVol: the handle buffer laid out as for
+// the others there, render.cpp FDrawStateLayout)
+layout (std430, binding = 5) readonly buffer TEXHANDLES { uvec4 atexh[]; };
+#define CANE_TEXH4 1
+#else
 layout (std430, binding = 5) readonly buffer TEXHANDLES { uvec2 atexh[]; };
+#endif
 flat out uvec2 vTexh;
+#endif
+#ifdef TEXARRAY
+// (perf-5, no bindless: render.cpp g_fGlobArrays) each pass draw's layer + 1 in the bound array texture (0: the bound tex)
+layout (std430, binding = 5) readonly buffer TEXLAYERS { uvec2 alayer[]; };
+flat out uint vLayer;
 #endif
 
 uniform mat4 matWorldToClip;
@@ -64,16 +125,32 @@ noperspective out float vFog;
 
 void main()
 {
+#ifdef CANE_PULL
+    CanePull();
+#endif
     vec4 d = adraw[aDraw];
-#ifdef BINDLESS
+#ifdef CANE_DRAWSTATE
+    uvec4 texhds = atexh[aDraw];
+    vTexh = texhds.xy;
+    vDrawState = texhds.z;
+    int icolorDraw = (texhds.z & 0x80000000u) != 0u ? int(texhds.z & 3u) : icolor;
+#define icolor icolorDraw
+#else
+#ifdef CANE_TEXH4
+    vTexh = atexh[aDraw].xy;
+#elif defined(BINDLESS)
     vTexh = atexh[aDraw];
+#endif
+#endif
+#ifdef TEXARRAY
+    vLayer = alayer[aDraw].x;
 #endif
     // (the record's fields read where they are used, not the whole record per vertex: a skinned vertex never reads the
     // model matrix, and only the view-angle groups read the spec fields)
-    const uint irec = floatBitsToUint(d.w);
+    uint irec = floatBitsToUint(d.w);   // (no const: GLSL ES wants constant initializers there)
     vec4 fogParams = arec[irec].fog;
-    const uvec4 recBone = arec[irec].bone;
-    const uvec4 recWarp = arec[irec].warp;
+    uvec4 recBone = arec[irec].bone;
+    uvec4 recWarp = arec[irec].warp;
     vec4 posWorld;
     if (recBone.y != 0u)
     {
@@ -89,7 +166,7 @@ void main()
     vec2 duv = vec2(0.0);
     if (recWarp.x != 0u)
     {
-        uint ivtx = uint(gl_VertexID) - recBone.z;
+        uint ivtx = CANE_VERTEX_ID - recBone.z;
         uint cmat = recWarp.w & 0xFFu;
         vec3 dpos = vec3(0.0);
         for (uint imat = 0u; imat < cmat; ++imat)
@@ -109,8 +186,8 @@ void main()
         // P_G 638: the direction to the camera in the group's space (1909's matrix; 0: -view direction, 1: from the
         // point, 2: from the vertex), . the S8 normal (n x 127, truncated as 0x16A000 packs it), a quadratic gain
         // clamped, colour A's alpha x gain rounded (FTOI0 of a x g + 0.5)
-        const mat4 model = arec[irec].model;
-        const vec4 spec0 = arec[irec].spec0, spec1 = arec[irec].spec1;
+        mat4 model = arec[irec].model;
+        vec4 spec0 = arec[irec].spec0, spec1 = arec[irec].spec1;
         mat3 mInv = inverse(mat3(model));
         vec3 v;
         if (spec0.w == 0.0) v = mInv * -dirCamera;

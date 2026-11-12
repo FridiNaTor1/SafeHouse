@@ -55,11 +55,39 @@ enum PTX : int
     PTX_AutoCameraRotation,
     PTX_AdvancedBindings, PTX_ActionBindings, PTX_ActionKeyboard, PTX_ActionController,
     PTX_ResetAdvancedBindings, PTX_CaptureAction,
+    // the Remap page (remappage.h): its entry, title, column heads, last rows, hints and capture lines
+    PTX_RemapPage, PTX_RemapTitle, PTX_RemapAction, PTX_RemapKeyboard, PTX_RemapController, PTX_RemapReset,
+    PTX_RemapBack, PTX_RemapChange, PTX_RemapClear, PTX_RemapPressKey, PTX_RemapPressButton, PTX_RemapFixed,
+    // (VR, vr.h) the pause menu's VR Settings page (shown with a headset only)
+    PTX_VrSettings, PTX_VrMode, PTX_VrImmersive, PTX_VrFlatScreen, PTX_VrVignette, PTX_VrLow, PTX_VrMedium, PTX_VrHigh,
+    PTX_VrScreenSize, PTX_VrSmall, PTX_VrLarge, PTX_VrRefreshRate, PTX_VrEyeResolution, PTX_VrFoveation, PTX_VrMultiview, PTX_VrUpscaling, PTX_VrSharpen, PTX_VrSuperResolution, PTX_VrDynamic, PTX_VrWorldScale, PTX_VrRecenter,
+    PTX_VrCutscenes, PTX_VrRcTable,
+    // the pause menu's Exit to Desktop when the game was started from SafeHouse's Collection Style Launcher
+    // (SAFEHOUSE_LAUNCHER=collection: quitting returns to it)
+    PTX_QuitToLauncher,
+    // (audio, notes/AUDIO_2026-11-10.md) the options' Audio Devices page: the game's output, the microphone (USB
+    // Headset), the headset's speaker; a device's values ("%s (not connected)": a chosen device that is missing)
+    PTX_AudioDevicesPage, PTX_OutputDevice, PTX_InputDevice, PTX_HeadsetOutputDevice, PTX_SystemDefault, PTX_SameAsOutput,
+    PTX_NotConnected,
+    // (langstore.h) the language menu's entry of a language whose text this disc cannot show: "Japanese (voices only)"
+    PTX_LanguageVoicesOnly,
+    // (the options' Language... page, region.h g_nLangVoice) its entry, its two rows, the voices' default, a choice
+    // that takes effect when the next world loads
+    PTX_LanguagePage, PTX_TextLanguage, PTX_VoiceLanguage, PTX_SameAsText, PTX_FromNextArea,
+    // (upscaling, fsr.h) the display options' Upscaling rows (also in VR Settings on a PC headset): the option, its
+    // method, preset and sharpness rows, AMD's preset names
+    PTX_Upscaling, PTX_UpscaleMethod, PTX_UpscalePreset, PTX_UpscaleSharpness, PTX_UltraQuality, PTX_Quality, PTX_Balanced,
+    PTX_Performance,
+    // (display.h outlineThickness) the display options' and VR Settings' Outline Thickness
+    PTX_OutlineThickness,
     PTX_Max
 };
 
 // The string in the current language, in the game's text encoding.
 std::string StrPort(PTX ptx);
+// Started from SafeHouse's Collection Style Launcher (SAFEHOUSE_LAUNCHER=collection): the pause menu's Exit to Desktop
+// says Quit to Launcher (PTX_QuitToLauncher; quitting returns to that launcher, which waits for the game).
+bool FQuitToLauncher();
 // "<label><sep><value>" ("Mouse Camera: On"); a value from the port's table or any text already encoded.
 std::string StrPortValue(PTX ptxLabel, const std::string& value);
 std::string StrPortOnOff(PTX ptxLabel, bool f);
@@ -80,3 +108,8 @@ bool FPortEnglish();
 // FPcWording(): the "Original PlayStation Icons" option shows the original wording.
 const char* SzPcWording(int idDisc);
 bool FPcWording();
+
+// The pause menu's "Exit to Episode Menu" in the languages whose text says "DVD menu" (Dutch, Portuguese, Danish,
+// Finnish, Norwegian, Swedish) named as the others name it (UTF-8; null: the game's own string). splayer.cpp
+// StrLocalized, always (not a PS2-for-PC wording: a naming fix), unless a text mod changed the string.
+const char* SzEpisodeMenuWording(int idDisc);

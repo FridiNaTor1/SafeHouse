@@ -65,7 +65,7 @@ void Context::SetCapability(GLenum cap, bool enabled) {
     case gl::kDither:
       break;
     default:
-      SetError(gl::kInvalidEnum);
+      SetError(gl::kInvalidEnum, __func__, cap);
       break;
   }
 }
@@ -552,7 +552,7 @@ void Context::BlitFramebuffer(int sx0, int sy0, int sx1, int sy1, int dx0, int d
 void Context::ReadPixels(int x, int y, int width, int height, GLenum format, GLenum type,
                          void* data) {
   if (format != gl::kRgba || type != gl::kUnsignedByte || width <= 0 || height <= 0) {
-    SetError(gl::kInvalidEnum);
+    SetError(gl::kInvalidEnum, __func__, format != gl::kRgba ? format : type);
     return;
   }
   RenderTarget source;

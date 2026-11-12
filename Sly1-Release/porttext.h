@@ -53,8 +53,12 @@ enum PTX : int
     // the cutscene skip hint
     PTX_HoldToSkip, PTX_HoldToSkipNoIcons,
     PTX_AutoCameraRotation, PTX_HelpAutoCameraRotation,
+    // Exit to Desktop when started from SafeHouse's Collection Style Launcher (SAFEHOUSE_LAUNCHER=collection)
+    PTX_QuitToLauncher,
     PTX_Max
 };
+// Started from SafeHouse's Collection Style Launcher: the pause menu says Quit to Launcher (quitting returns to it).
+bool FQuitToLauncher();
 
 // The string in the current language.
 const char* PchzPort(PTX ptx);

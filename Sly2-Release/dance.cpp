@@ -21,6 +21,8 @@
 
 #include "dance.h"
 #include "worldglobals.h"
+#include "vr.h"
+#include "system_settings.h"
 
 #include "activate.h"
 #include "alo.h"
@@ -515,6 +517,7 @@ void AddDanceBeat(LO* ploDancer, int nButton, int nMove, float gTime)
 }
 
 bool FDanceDirector() { return s_ploDance != nullptr; }
+bool FDanceActive() { return s_ploDance && Dance(s_ploDance).state != 0; }
 
 // the director's init 0x1526D8 (the global director, its update flags 0xA) / post-load 0x1527C8 (its world pass)
 void PostLoadDance(LO* plo)
@@ -548,17 +551,27 @@ void DrawDancePrompts(const FONTBRX* pfont, const FONTBRX* picons)
     const float t = TMusicTop();
     struct KEY { int id; char ch; float dx, dy; };
     static const KEY s_akey[4] = {{0x10, 'T', -0.5f, -3.0f}, {0x20, 'O', 0.5f, -2.0f}, {0x40, 'X', -0.5f, -1.0f}, {0x80, 'S', -1.5f, -2.0f}};
-    const float sBig = 0.55f, sSmall = 0.35f, sA = 1.2f, sB = 0.6f;
+    // (VR with the Touch layout, vr.h FDanceLayout: the four as the face buttons sit on the hands, two pairs side by side
+    // (left: Triangle Y over Circle X; right: Square B over Cross A), drawn with those buttons' icons; the prompts a little
+    // smaller and nearer the canvas's centre, low in the view)
+    static const KEY s_akeyVr[4] = {{0x10, 'T', -1.3f, -2.6f}, {0x20, 'O', -1.3f, -1.5f}, {0x40, 'X', 0.3f, -1.5f}, {0x80, 'S', 0.3f, -2.6f}};
+    const bool fVr = vr::FDanceLayout();
+    const KEY* const akey = fVr ? s_akeyVr : s_akey;
+    const float kVr = fVr ? 0.85f : 1.0f;
+    const float sBig = 0.55f * kVr, sSmall = 0.35f * kVr, sA = 1.2f * kVr, sB = 0.6f * kVr;
+    auto place = [fVr](glm::vec3 p) { return fVr ? glm::vec3(320.0f + (p.x - 320.0f) * 0.7f, p.y, p.z) : p; };
     const float dxBig = DxTextUi(*pfont, picons, "&2T&.", sBig), dyBig = sBig * 51.2f;
     const float dxSmall = DxTextUi(*pfont, picons, "&2T&.", sSmall), dySmall = sSmall * 51.2f;
     const float dxA = DxTextUi(*pfont, picons, "&2?&.", sA), dyA = sA * 51.2f;
     const float dxB = DxTextUi(*pfont, picons, "&2m&.", sB), dyB = sB * 51.2f;
     for (const PROMPT& pr : d.aprompt)
     {
+        const glm::vec3 pos = place(pr.pos);
         if (d.state == 1 || pr.fDone || pr.t + d.g5C < t)
-            for (const KEY& k : s_akey)
+            for (int ik = 0; ik < 4; ++ik)
             {
-                float x = pr.pos.x + k.dx * dxSmall, y = pr.pos.y + k.dy * dySmall;
+                const KEY& k = akey[ik];
+                float x = pos.x + k.dx * dxSmall, y = pos.y + k.dy * dySmall;
                 char ch = 'o';
                 float scale = sSmall;
                 if (k.id == pr.k)
@@ -568,7 +581,14 @@ void DrawDancePrompts(const FONTBRX* pfont, const FONTBRX* picons)
                     ch = k.ch;
                     scale = sBig;
                 }
-                if (sly2actions::profile.enabled) {
+                if (fVr && k.id == pr.k) {
+                    // (the Touch button's own icon: Circle on X (the left trigger's place, L2), Triangle on Y (R2), Cross on
+                    // A, Square on B)
+                    const int binding = k.id == 0x20 ? cane::settings::kGamepadLeftTrigger : k.id == 0x10 ? cane::settings::kGamepadRightTrigger
+                                        : k.id == 0x40 ? 0 /*GLFW_GAMEPAD_BUTTON_A*/ : 2 /*GLFW_GAMEPAD_BUTTON_X*/;
+                    PROMPTKEYGLYPH glyph(ch, -1, binding);
+                    DrawIcon(*pfont, picons, std::string("&2") + ch + "&.", scale, x, y);
+                } else if (sly2actions::profile.enabled) {
                     using sly2actions::Action;
                     const Action action = k.id == 0x80 ? Action::DanceSquare : k.id == 0x20 ? Action::DanceCircle :
                                           k.id == 0x40 ? Action::DanceCross : Action::DanceTriangle;
@@ -576,7 +596,7 @@ void DrawDancePrompts(const FONTBRX* pfont, const FONTBRX* picons)
                     DrawIcon(*pfont, picons, std::string("&2") + ch + "&.", scale, x, y);
                 } else DrawIcon(*pfont, picons, std::string("&2") + ch + "&.", scale, x, y);
             }
-        else DrawIcon(*pfont, picons, "&2?&.", sA, pr.pos.x - dxA * 0.5f, pr.pos.y - dyA);
+        else DrawIcon(*pfont, picons, "&2?&.", sA, pos.x - dxA * 0.5f, pos.y - dyA);
     }
     if (d.iHint < static_cast<int>(d.aprompt.size()))
     {
@@ -600,7 +620,8 @@ void DrawDancePrompts(const FONTBRX* pfont, const FONTBRX* picons)
             d.velHint = glm::vec3(vel);
         }
     }
-    DrawIcon(*pfont, picons, "&2m&.", sB, d.posHint.x - dxB * 0.5f, d.posHint.y - dySmall * 3.0f - dyB - 7.0f);
+    const glm::vec3 posHint = place(d.posHint);
+    DrawIcon(*pfont, picons, "&2m&.", sB, posHint.x - dxB * 0.5f, posHint.y - dySmall * 3.0f - dyB - 7.0f);
 }
 
 // (sw.cpp: a world's objects gone)

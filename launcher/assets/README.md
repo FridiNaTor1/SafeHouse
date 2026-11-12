@@ -29,6 +29,13 @@ games (see THIRD_PARTY_NOTICES.md).
 `AtkinsonHyperlegible-Regular.ttf` and `-Bold.ttf` are the launcher typeface
 (SIL Open Font License, `OFL.txt`).
 
+`l10n/NotoSans-*.subset.ttf` and `l10n/NotoSansCJKjp-*.subset.otf` hold the
+letters Atkinson Hyperlegible lacks (Japanese, Cyrillic) for the launcher's
+languages (`launcher/lang`): subsets of Noto Sans and Noto Sans CJK JP (SIL Open
+Font License 1.1, `l10n/OFL.txt`) with exactly the characters the language files
+use plus kana and Cyrillic, made by `scripts/make-launcher-l10n-fonts.py` (about
+550 KiB in all). Run it again after changing translations.
+
 `steam/<game>/{grid,wide,hero,logo,icon}` are the Steam library images that the
 launcher's "Add to Steam" button copies into Steam's grid folder. They come from
 SteamGridDB; sources and authors are in `steam/CREDITS.md`.

@@ -32,6 +32,7 @@
 #include "install.h"
 #include "process.h"
 #include "safehouse_version.h"
+#include "l10n.h"
 #ifdef _WIN32
 #include <winhttp.h>
 #include <miniz.h>
@@ -77,9 +78,9 @@ inline BuildInfo current() {
     return b;
 }
 inline std::string describe(const BuildInfo& b) {
-    std::string text = b.version.empty() ? std::string("development build") : b.version;
+    std::string text = b.version.empty() ? std::string(tr("development build")) : b.version;
     if (!b.commit.empty()) text += " (" + b.commit + ")";
-    if (b.date.size() >= 10) text += ", built " + b.date.substr(0, 10);
+    if (b.date.size() >= 10) text += ", " + trf("built %s", b.date.substr(0, 10).c_str());
     return text;
 }
 // Release builds with a version check for updates; debug and development builds never do (unless a test points
@@ -165,12 +166,12 @@ struct WinHttpHandle {
 };
 inline std::runtime_error winHttpError(const char* what) {
     const DWORD code = GetLastError();
-    const char* reason = code == 12007 ? "the server name was not found"
-                         : code == 12029 || code == 12030 ? "no connection"
-                         : code == 12002 ? "the connection timed out"
-                         : code == 12175 || code == 12045 || code == 12038 || code == 12037 ? "the secure connection failed"
+    const char* reason = code == 12007 ? tr("the server name was not found")
+                         : code == 12029 || code == 12030 ? tr("no connection")
+                         : code == 12002 ? tr("the connection timed out")
+                         : code == 12175 || code == 12045 || code == 12038 || code == 12037 ? tr("the secure connection failed")
                                                                                                : nullptr;
-    return std::runtime_error(std::string(what) + ": " + (reason ? reason : "network error " + std::to_string(code)));
+    return std::runtime_error(std::string(what) + ": " + (reason ? std::string(reason) : trf("network error %lu", static_cast<unsigned long>(code))));
 }
 inline void httpGet(const Request& r) {
     const std::wstring url = path(r.url).wstring();
@@ -178,28 +179,28 @@ inline void httpGet(const Request& r) {
     c.dwStructSize = sizeof c;
     c.dwSchemeLength = c.dwHostNameLength = c.dwUrlPathLength = c.dwExtraInfoLength = static_cast<DWORD>(-1);
     if (!WinHttpCrackUrl(url.c_str(), 0, 0, &c) || (c.nScheme != INTERNET_SCHEME_HTTPS && c.nScheme != INTERNET_SCHEME_HTTP))
-        throw std::runtime_error("Unsupported address: " + r.url);
+        throw std::runtime_error(trf("Unsupported address: %s", r.url.c_str()));
     const std::wstring host(c.lpszHostName, c.dwHostNameLength);
     std::wstring object(c.lpszUrlPath, c.dwUrlPathLength + c.dwExtraInfoLength);
     if (object.empty()) object = L"/";
     const std::wstring userAgentText = path(userAgent()).wstring();
     WinHttpHandle session(WinHttpOpen(userAgentText.c_str(), WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0));
     if (!session.h) session.h = WinHttpOpen(userAgentText.c_str(), WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
-    if (!session.h) throw winHttpError("Cannot start the download");
+    if (!session.h) throw winHttpError(tr("Cannot start the download"));
     WinHttpSetTimeouts(session.h, 10000, 10000, 15000, r.api ? 15000 : 30000);
     WinHttpHandle connection(WinHttpConnect(session.h, host.c_str(), c.nPort, 0));
-    if (!connection.h) throw winHttpError("Cannot connect");
+    if (!connection.h) throw winHttpError(tr("Cannot connect"));
     WinHttpHandle request(WinHttpOpenRequest(connection.h, L"GET", object.c_str(), nullptr, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES,
                                              c.nScheme == INTERNET_SCHEME_HTTPS ? WINHTTP_FLAG_SECURE : 0));
-    if (!request.h) throw winHttpError("Cannot connect");
+    if (!request.h) throw winHttpError(tr("Cannot connect"));
     const wchar_t* headers = r.api ? L"Accept: application/vnd.github+json\r\n" : WINHTTP_NO_ADDITIONAL_HEADERS;
     if (!WinHttpSendRequest(request.h, headers, r.api ? static_cast<DWORD>(-1L) : 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0) ||
         !WinHttpReceiveResponse(request.h, nullptr))
-        throw winHttpError("Cannot reach the update server");
+        throw winHttpError(tr("Cannot reach the update server"));
     DWORD status = 0, size = sizeof status;
     WinHttpQueryHeaders(request.h, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_HEADER_NAME_BY_INDEX, &status, &size,
                         WINHTTP_NO_HEADER_INDEX);
-    if (status != 200) throw std::runtime_error("The update server answered " + std::to_string(status));
+    if (status != 200) throw std::runtime_error(trf("The update server answered %d", static_cast<int>(status)));
     uint64_t total = 0;
     wchar_t lengthText[32] = {};
     size = sizeof lengthText;
@@ -211,21 +212,21 @@ inline void httpGet(const Request& r) {
     std::vector<char> buffer(1 << 16);
     uint64_t done = 0;
     for (;;) {
-        if (cancelled(r)) throw std::runtime_error("Cancelled");
+        if (cancelled(r)) throw std::runtime_error(tr("Cancelled"));
         DWORD got = 0;
         if (!WinHttpReadData(request.h, buffer.data(), static_cast<DWORD>(buffer.size()), &got)) throw winHttpError("The download was interrupted");
         if (got == 0) break;
         done += got;
         if (out) {
-            if (std::fwrite(buffer.data(), 1, got, out) != got) throw std::runtime_error("Cannot write " + utf8(r.file) + " (is the disk full?)");
+            if (std::fwrite(buffer.data(), 1, got, out) != got) throw std::runtime_error(trf("Cannot write %s (is the disk full?)", utf8(r.file).c_str()));
         } else if (r.body) {
-            if (r.body->size() + got > r.maxBody) throw std::runtime_error("The update server's answer is too large");
+            if (r.body->size() + got > r.maxBody) throw std::runtime_error(tr("The update server's answer is too large"));
             r.body->append(buffer.data(), got);
         }
         if (r.progress) r.progress(done, total);
     }
-    if (total && done != total) throw std::runtime_error("The download was interrupted");
-    if (out && std::fflush(out) != 0) throw std::runtime_error("Cannot write " + utf8(r.file));
+    if (total && done != total) throw std::runtime_error(tr("The download was interrupted"));
+    if (out && std::fflush(out) != 0) throw std::runtime_error(trf("Cannot write %s", utf8(r.file).c_str()));
 }
 #else
 // libcurl, loaded at run time from the system (every Linux distribution and macOS has it), so the packages bundle
@@ -282,12 +283,12 @@ struct CurlTransfer {
         if (cancelled(*t->request)) return 0;
         if (t->out) {
             if (std::fwrite(data, 1, n, t->out) != n) {
-                t->error = "Cannot write " + utf8(t->request->file) + " (is the disk full?)";
+                t->error = trf("Cannot write %s (is the disk full?)", utf8(t->request->file).c_str());
                 return 0;
             }
         } else if (t->request->body) {
             if (t->request->body->size() + n > t->request->maxBody) {
-                t->error = "The update server's answer is too large";
+                t->error = tr("The update server's answer is too large");
                 return 0;
             }
             t->request->body->append(data, n);
@@ -316,19 +317,19 @@ inline void curlProgram(const Request& r) {
         if (cancelled(r)) throw std::runtime_error("Cancelled");
         code = 127;
     }
-    if (code == 127) throw std::runtime_error("Cannot download: neither libcurl nor the curl program was found");
-    if (code != 0) throw std::runtime_error(code == 6 ? "Cannot reach the update server: the server name was not found"
-                                           : code == 7 ? "Cannot reach the update server: no connection"
-                                           : code == 22 ? "The update server refused the request"
-                                           : code == 28 ? "The connection timed out"
-                                           : code == 18 || code == 56 ? "The download was interrupted"
-                                                                      : "The download failed (curl " + std::to_string(code) + ")");
+    if (code == 127) throw std::runtime_error(tr("Cannot download: neither libcurl nor the curl program was found"));
+    if (code != 0) throw std::runtime_error(code == 6 ? tr("Cannot reach the update server: the server name was not found")
+                                           : code == 7 ? tr("Cannot reach the update server: no connection")
+                                           : code == 22 ? tr("The update server refused the request")
+                                           : code == 28 ? tr("The connection timed out")
+                                           : code == 18 || code == 56 ? tr("The download was interrupted")
+                                                                      : trf("The download failed (curl %d)", static_cast<int>(code)));
     if (r.body) {
         std::ifstream in(target, std::ios::binary);
         r.body->assign(std::istreambuf_iterator<char>(in), {});
         std::error_code ec;
         fs::remove(target, ec);
-        if (r.body->size() > r.maxBody) throw std::runtime_error("The update server's answer is too large");
+        if (r.body->size() > r.maxBody) throw std::runtime_error(tr("The update server's answer is too large"));
     }
     if (r.progress) {
         std::error_code ec;
@@ -340,10 +341,10 @@ inline void httpGet(const Request& r) {
     Curl& c = Curl::get();
     if (!c.ok) return curlProgram(r);
     CurlTransfer t{&r};
-    if (!r.file.empty() && !(t.out = std::fopen(utf8(r.file).c_str(), "wb"))) throw std::runtime_error("Cannot write " + utf8(r.file));
+    if (!r.file.empty() && !(t.out = std::fopen(utf8(r.file).c_str(), "wb"))) throw std::runtime_error(trf("Cannot write %s", utf8(r.file).c_str()));
     std::unique_ptr<FILE, int (*)(FILE*)> closer(t.out, [](FILE* f) { return f ? std::fclose(f) : 0; });
     std::unique_ptr<void, void (*)(void*)> handle(c.easyInit(), c.easyCleanup);
-    if (!handle) throw std::runtime_error("Cannot start the download");
+    if (!handle) throw std::runtime_error(tr("Cannot start the download"));
     void* h = handle.get();
     void* headers = r.api ? c.slistAppend(nullptr, "Accept: application/vnd.github+json") : nullptr;
     std::unique_ptr<void, void (*)(void*)> headerList(headers, c.slistFreeAll);
@@ -367,19 +368,19 @@ inline void httpGet(const Request& r) {
     c.easySetopt(h, 20219 /*XFERINFOFUNCTION*/, &CurlTransfer::progress);
     c.easySetopt(h, 10057 /*XFERINFODATA*/, &t);
     const int code = c.easyPerform(h);
-    if (cancelled(r)) throw std::runtime_error("Cancelled");
+    if (cancelled(r)) throw std::runtime_error(tr("Cancelled"));
     if (!t.error.empty()) throw std::runtime_error(t.error);
     if (code != 0) {
         long status = 0;
         c.easyGetinfo(h, 0x200002 /*RESPONSE_CODE*/, &status);
-        throw std::runtime_error(code == 6 ? "Cannot reach the update server: the server name was not found"
-                                 : code == 7 ? "Cannot reach the update server: no connection"
-                                 : code == 22 ? "The update server answered " + std::to_string(status)
-                                 : code == 28 ? std::string("The connection timed out")
-                                 : code == 18 || code == 56 ? std::string("The download was interrupted")
-                                                            : std::string("The download failed: ") + c.easyStrerror(code));
+        throw std::runtime_error(code == 6 ? tr("Cannot reach the update server: the server name was not found")
+                                 : code == 7 ? tr("Cannot reach the update server: no connection")
+                                 : code == 22 ? trf("The update server answered %d", static_cast<int>(status))
+                                 : code == 28 ? std::string(tr("The connection timed out"))
+                                 : code == 18 || code == 56 ? std::string(tr("The download was interrupted"))
+                                                            : trf("The download failed: %s", c.easyStrerror(code)));
     }
-    if (t.out && std::fflush(t.out) != 0) throw std::runtime_error("Cannot write " + utf8(r.file));
+    if (t.out && std::fflush(t.out) != 0) throw std::runtime_error(trf("Cannot write %s", utf8(r.file).c_str()));
 }
 #endif
 
@@ -405,7 +406,7 @@ inline Release fetchLatest(const std::atomic<bool>* cancel = nullptr) {
     std::string body;
     httpGet({.url = apiUrl(), .body = &body, .api = true, .cancel = cancel});
     const json release = json::parse(body, nullptr, false);
-    if (!release.is_object()) throw std::runtime_error("The update server sent something unexpected");
+    if (!release.is_object()) throw std::runtime_error(tr("The update server sent something unexpected"));
     Release r;
     r.tag = text(release, "tag_name");
     r.notes = text(release, "body");
@@ -416,11 +417,11 @@ inline Release fetchLatest(const std::atomic<bool>* cancel = nullptr) {
         for (const auto& a : release.at("assets"))
             if (!text(a, "name").empty()) assets[text(a, "name")] = text(a, "browser_download_url");
     const auto manifestUrl = assets.find(manifestName);
-    if (manifestUrl == assets.end() || manifestUrl->second.empty()) throw std::runtime_error("The latest release has no update information");
+    if (manifestUrl == assets.end() || manifestUrl->second.empty()) throw std::runtime_error(tr("The latest release has no update information"));
     body.clear();
     httpGet({.url = manifestUrl->second, .body = &body, .api = false, .cancel = cancel});
     const json m = json::parse(body, nullptr, false);
-    if (!m.is_object() || versionParts(text(m, "version")).empty()) throw std::runtime_error("The latest release's update information is damaged");
+    if (!m.is_object() || versionParts(text(m, "version")).empty()) throw std::runtime_error(tr("The latest release's update information is damaged"));
     r.version = text(m, "version");
     r.commit = text(m, "commit");
     if (!text(m, "date").empty()) r.date = text(m, "date");
@@ -476,7 +477,7 @@ inline Install detectInstall() {
 #ifdef _WIN32
     const fs::path root = exe.parent_path();
     if (exe.filename() != "bin" || !fs::is_regular_file(root / "SafeHouse.exe", ec)) {
-        in.reason = "This copy of SafeHouse was not installed from a release package.";
+        in.reason = tr("This copy of SafeHouse was not installed from a release package.");
         return in;
     }
     in.kind = fs::is_regular_file(root / "portable.txt", ec) || !fs::is_regular_file(root / "Uninstall.exe", ec) ? Kind::WindowsPortable
@@ -486,11 +487,11 @@ inline Install detectInstall() {
 #elif defined(__APPLE__)
     const fs::path app = exe.parent_path().parent_path();
     if (exe.filename() != "MacOS" || app.extension() != ".app") {
-        in.reason = "This copy of SafeHouse is not an app bundle.";
+        in.reason = tr("This copy of SafeHouse is not an app bundle.");
         return in;
     }
     if (utf8(app).find("/AppTranslocation/") != std::string::npos) {
-        in.reason = "Move SafeHouse to your Applications folder first; macOS runs it from a temporary copy until then.";
+        in.reason = tr("Move SafeHouse to your Applications folder first; macOS runs it from a temporary copy until then.");
         return in;
     }
     in.kind = Kind::MacApp;
@@ -505,8 +506,8 @@ inline Install detectInstall() {
     }
     const fs::path root = exe.parent_path();
     if (exe.filename() != "bin" || !fs::is_symlink(root / "SafeHouse", ec)) {
-        in.reason = "This copy of SafeHouse was not installed from a release package (for example a distribution package or "
-                    "a build from source). Update it the way you installed it.";
+        in.reason = tr("This copy of SafeHouse was not installed from a release package (for example a distribution package or "
+                    "a build from source). Update it the way you installed it.");
         return in;
     }
     in.kind = Kind::LinuxFolder;
@@ -546,7 +547,7 @@ inline Plan planFrom(const json& j) {
     p.staging = path(text(j, "staging"));
     p.version = text(j, "version");
     p.fromVersion = text(j, "from_version");
-    if (p.kind == Kind::Unsupported || p.source.empty() || p.target.empty() || p.staging.empty()) throw std::runtime_error("Invalid update plan");
+    if (p.kind == Kind::Unsupported || p.source.empty() || p.target.empty() || p.staging.empty()) throw std::runtime_error(tr("Invalid update plan"));
     return p;
 }
 inline std::string lower(std::string s) {
@@ -557,25 +558,25 @@ inline std::string lower(std::string s) {
 inline fs::path onlyFolder(const fs::path& dir) {
     fs::path found;
     for (const auto& e : fs::directory_iterator(dir)) {
-        if (!e.is_directory() || !found.empty()) throw std::runtime_error("The update package has an unexpected layout");
+        if (!e.is_directory() || !found.empty()) throw std::runtime_error(tr("The update package has an unexpected layout"));
         found = e.path();
     }
-    if (found.empty()) throw std::runtime_error("The update package is empty");
+    if (found.empty()) throw std::runtime_error(tr("The update package is empty"));
     return found;
 }
 #ifdef _WIN32
 inline void unzip(const fs::path& zip, const fs::path& dir, const std::atomic<bool>* cancel) {
     FILE* file = _wfopen(zip.c_str(), L"rb");
-    if (!file) throw std::runtime_error("Cannot open the update package");
+    if (!file) throw std::runtime_error(tr("Cannot open the update package"));
     std::unique_ptr<FILE, int (*)(FILE*)> closer(file, std::fclose);
     mz_zip_archive archive;
     mz_zip_zero_struct(&archive);
-    if (!mz_zip_reader_init_cfile(&archive, file, fs::file_size(zip), 0)) throw std::runtime_error("The update package is damaged");
+    if (!mz_zip_reader_init_cfile(&archive, file, fs::file_size(zip), 0)) throw std::runtime_error(tr("The update package is damaged"));
     std::unique_ptr<mz_zip_archive, mz_bool (*)(mz_zip_archive*)> end(&archive, mz_zip_reader_end);
     for (mz_uint i = 0; i < mz_zip_reader_get_num_files(&archive); ++i) {
-        if (cancel && *cancel) throw std::runtime_error("Cancelled");
+        if (cancel && *cancel) throw std::runtime_error(tr("Cancelled"));
         mz_zip_archive_file_stat st;
-        if (!mz_zip_reader_file_stat(&archive, i, &st)) throw std::runtime_error("The update package is damaged");
+        if (!mz_zip_reader_file_stat(&archive, i, &st)) throw std::runtime_error(tr("The update package is damaged"));
         std::string name = st.m_filename;
         std::replace(name.begin(), name.end(), '\\', '/');
         while (!name.empty() && name.back() == '/') name.pop_back();
@@ -587,30 +588,30 @@ inline void unzip(const fs::path& zip, const fs::path& dir, const std::atomic<bo
         }
         fs::create_directories(out.parent_path());
         FILE* target = _wfopen(out.c_str(), L"wb");
-        if (!target) throw std::runtime_error("Cannot unpack " + name);
+        if (!target) throw std::runtime_error(trf("Cannot unpack %s", name.c_str()));
         const bool ok = mz_zip_reader_extract_to_cfile(&archive, i, target, 0);
         const bool closed = std::fclose(target) == 0;
-        if (!ok || !closed) throw std::runtime_error("Cannot unpack " + name + " (the package is damaged or the disk is full)");
+        if (!ok || !closed) throw std::runtime_error(trf("Cannot unpack %s (the package is damaged or the disk is full)", name.c_str()));
     }
 }
 #endif
 // Downloads, checks and unpacks the package beside the installation. Nothing of the installation changes.
 inline Plan stage(const Release& r, const Install& in, const Progress& progress, const std::atomic<bool>* cancel, const LogFunction& log) {
     const auto package = packageFor(r, in);
-    if (!package) throw std::runtime_error("The latest release has no package for this kind of installation");
+    if (!package) throw std::runtime_error(tr("The latest release has no package for this kind of installation"));
     std::error_code ec;
     fs::remove_all(in.staging, ec);
     fs::create_directories(in.staging, ec);
-    if (ec) throw std::runtime_error("SafeHouse cannot write to its folder (" + utf8(in.target.parent_path()) + "), so it cannot update itself there");
+    if (ec) throw std::runtime_error(trf("SafeHouse cannot write to its folder (%s), so it cannot update itself there", utf8(in.target.parent_path()).c_str()));
     const fs::path download = in.staging / package->file, part = in.staging / (package->file + ".part");
     log("Downloading " + package->file + " (" + r.version + ")");
     httpGet({.url = package->url, .file = part, .progress = progress, .cancel = cancel});
     if (package->size && fs::file_size(part, ec) != package->size)
-        throw std::runtime_error("The download is incomplete. Nothing was changed; try again later.");
+        throw std::runtime_error(tr("The download is incomplete. Nothing was changed; try again later."));
     log("Checking SHA-256");
     if (lower(hashFile(part, [&] { return cancel && cancel->load(); })) != lower(package->sha256)) {
         fs::remove(part, ec);
-        throw std::runtime_error("The download is damaged (its SHA-256 does not match the release). Nothing was changed.");
+        throw std::runtime_error(tr("The download is damaged (its SHA-256 does not match the release). Nothing was changed."));
     }
     fs::rename(part, download);
     Plan plan{in.kind, {}, in.target, in.staging, r.version, current().version};
@@ -629,7 +630,7 @@ inline Plan stage(const Release& r, const Install& in, const Progress& progress,
         unzip(download, unpacked, cancel);
         plan.source = onlyFolder(unpacked);
         if (!fs::is_regular_file(plan.source / "bin" / "safehouse.exe") || !fs::is_regular_file(plan.source / "SafeHouse.exe"))
-            throw std::runtime_error("The update package has an unexpected layout");
+            throw std::runtime_error(tr("The update package has an unexpected layout"));
         break;
 #else
     case Kind::LinuxFolder:
@@ -644,18 +645,18 @@ inline Plan stage(const Release& r, const Install& in, const Progress& progress,
         const std::vector<std::string> command{"tar", "-xzf", utf8(download), "-C", utf8(unpacked)};
 #endif
         if (runProcess(command, {}, cancel ? *cancel : stop, [&](const std::string& line) { output += line + "\n"; }) != 0)
-            throw std::runtime_error("Cannot unpack the update package: " + output);
+            throw std::runtime_error(trf("Cannot unpack the update package: %s", output.c_str()));
         plan.source = onlyFolder(unpacked);
 #ifdef __APPLE__
         if (plan.source.extension() != ".app" || !fs::is_regular_file(plan.source / "Contents/MacOS/safehouse"))
 #else
         if (!fs::is_regular_file(plan.source / "bin/safehouse"))
 #endif
-            throw std::runtime_error("The update package has an unexpected layout");
+            throw std::runtime_error(tr("The update package has an unexpected layout"));
         break;
     }
 #endif
-    default: throw std::runtime_error("This installation cannot update itself");
+    default: throw std::runtime_error(tr("This installation cannot update itself"));
     }
     if (in.kind != Kind::AppImage) fs::remove(download, ec);
     writeJson(in.staging / "plan.json", toJson(plan));
@@ -874,7 +875,7 @@ inline void launchHelper(const Plan& plan, bool restart) {
     PROCESS_INFORMATION process{};
     const std::wstring dir = helper.wstring();
     if (!CreateProcessW(exe.c_str(), line.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, dir.c_str(), &startup, &process))
-        throw std::runtime_error("Cannot start the updater");
+        throw std::runtime_error(tr("Cannot start the updater"));
     CloseHandle(process.hThread);
     CloseHandle(process.hProcess);
 }
@@ -909,7 +910,7 @@ inline int applyMain(const std::vector<std::string>& args) {
     std::string message;
     if (waitPid && processAlive(waitPid)) {
         ok = false;
-        message = "SafeHouse did not close, so it was not updated.";
+        message = tr("SafeHouse did not close, so it was not updated.");
     } else {
         try {
             log("Updating " + utf8(plan.target) + " to " + plan.version);
@@ -924,7 +925,7 @@ inline int applyMain(const std::vector<std::string>& args) {
     writeResult(config, plan, ok, message);
 #ifdef _WIN32
     if (!ok && restart)
-        MessageBoxW(nullptr, path("SafeHouse could not be updated: " + message).c_str(), L"SafeHouse", MB_OK | MB_ICONWARNING);
+        MessageBoxW(nullptr, path(trf("SafeHouse could not be updated: %s", message.c_str())).c_str(), L"SafeHouse", MB_OK | MB_ICONWARNING);
 #endif
     if (restart) startLauncher(plan);
     return ok ? 0 : 1;

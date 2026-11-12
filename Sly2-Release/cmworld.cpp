@@ -1,4 +1,5 @@
 // The camera in the native game (see cmworld.h).
+#include "debugphys.h"
 #include "turret.h"
 #include "vehiclehooks.h"
 #include "cmworld.h"
@@ -900,6 +901,7 @@ CAMERA CameraFromCm(const CM& cm)
     cam.sFar = cm.sFarClip;
     cam.rMRDAdjust = cm.rMRDAdjust;
     cam.grfChannels = static_cast<uint32_t>(cm.nCur);
+    ApplyDebugCharScaleCamera(&cam);   // (PC debug menu's character scale: debugphys.h)
     return cam;
 }
 
@@ -910,6 +912,7 @@ void ApplyCmFog(const CM& cm, RENDEROPTS* popts)
     popts->uFogMax = cm.uFogMax;
     // FOGCOL (0x2DE18C, the world shaders' 0x3D register: 0x1EB960) is the camera's colour (+0x24C, SetCmRgbaFog 0x14F6F0)
     popts->rgbaFog = cm.rgbaFog;
+    ApplyDebugCharScaleFog(popts);   // (PC debug menu's character scale: debugphys.h)
     popts->fFog = popts->sFogNear > 0 && popts->sFogFar > popts->sFogNear;
 }
 

@@ -15,8 +15,8 @@ originals. The installation itself is never touched, so removing a file from Mod
 
 | What | Linux | Windows | Portable SafeHouse |
 |---|---|---|---|
-| The installation (read only for mods) | `~/.local/share/projectcane/installations/sly2` | `%LOCALAPPDATA%\ProjectCane\installations\sly2` | `data/installations/sly2` |
-| **Your Mods folder** | `~/.config/projectcane/sly2/Mods` | `%LOCALAPPDATA%\ProjectCane\user\sly2\Mods` | `data/user/sly2/Mods` |
+| The installation (read only for mods) | `~/.local/share/SafeHouse/installations/sly2` | `%LOCALAPPDATA%\SafeHouse\installations\sly2` | `data/installations/sly2` |
+| **Your Mods folder** | `~/.config/SafeHouse/sly2/Mods` | `%LOCALAPPDATA%\SafeHouse\user\sly2\Mods` | `data/user/sly2/Mods` |
 
 - A second region, such as Europe installed beside USA, is in `installations/sly2-europe`. The Mods folder is shared
   by both.
@@ -30,7 +30,13 @@ The installation looks like this:
 sly2/
   extraction_manifest.json        the index: every file, what it is, and which levels use it
   Worlds/<N> <Episode>/<Level>/
-      <Level>.brx                 the level
+      <Level>.world.json          the level's parts, in the order the game reads them (see "Levels")
+      World/Text.json             its text and subtitles, every language (editable)
+      World/<nnn> <group>/        one folder per group of the level (Sly, Murray, a guard, a door, the level itself):
+          Scripts.splice              its scripts, as text (editable)
+          Graphics.bin                its textures and shaders
+          Objects.bin                 its objects: models, animations, actors (the index lists each one)
+      World/Groups.bin, Sound.bin, Progress.bin, ...   the level's other blocks
       <Level>.bnk                 its sound effects' definitions
       Sounds/Sound <n>.wav        its sound effects, one WAV per sample
       Ambience.wav                its background ambience
@@ -48,7 +54,7 @@ voice lines and the movies' sound are **FLAC** instead (lossless, about 60 % of 
 open it): `Dialog/French/Paris/1259.flac`, `Movies/French/2062 Ep1 Intro.flac`. The game plays exactly the sound
 of the disc from these files.
 
-Examples: `Worlds/1 The Black Chateau/Paris/Paris.brx`, `Music/18 The Jungle.wav`,
+Examples: `Worlds/1 The Black Chateau/Paris/World/227 jt/Scripts.splice` (Sly's scripts in Paris), `Music/18 The Jungle.wav`,
 `Movies/2013 Ep2 Operation Hippo Drop.m2v`.
 
 **The rule: a file in Mods at the same path as a file of the installation replaces it.** For example,
@@ -123,6 +129,20 @@ animated (multi-frame) textures and in particles.
   ignored.
 - **Alpha:** 255 is fully opaque. The game's own range is half that, and SafeHouse converts it both ways, so a
   dumped PNG put back unchanged looks identical. Upscaled edges with in-between alpha are fine.
+- **Texture cache:** the first time a replacement is drawn, the game keeps its decoded picture in a cache file, so the
+  next load does not read and decode the PNG again. A PNG you add or change is picked up by itself (the cache goes by
+  the file's name, size and time; for a pack's `Textures.pak` by that file's size and time), and a removed one is
+  dropped. The picture is the same with and without the cache. It lives in your cache folder (Linux:
+  `~/.cache/SafeHouse/sly2/Textures`, Windows: `%LOCALAPPDATA%\SafeHouse\Cache\sly2\Textures`, macOS:
+  `~/Library/Caches/SafeHouse/sly2/Textures`, a portable copy: `data/cache/sly2/Textures`, Switch and Android:
+  `Cache/Textures` in the Sly 2 profile folder) and can be deleted at any time: `Sly2-Release --clear-texture-cache`
+  does it. `Sly2-Release --data-dir "<installation>" --build-texture-cache` (with `--texture-pack DIR` for a pack)
+  fills it ahead of time. `Texture Cache = Off` under `[Graphics]` in `Settings.ini` turns it off; on the Nintendo
+  Switch it is off unless you set it to `On` (it takes about two thirds of the pack's size on the SD card again).
+- **Texture streaming:** replacements load on the processor's other cores while the game goes on, so a texture can
+  show its original for a moment when it first appears instead of the game pausing; a level starts with its
+  replacements in place where the computer is fast enough. `Texture Streaming = Off` under `[Graphics]` in
+  `Settings.ini` loads each replacement the moment it is first drawn instead.
 - **Shared textures:** a texture used by several levels has the same name in each, so one PNG covers all of them.
 - **Animated textures and particles:** each frame is its own PNG. Give all the frames of one animation the same
   size (particle frames of another size are scaled to the first replaced frame's size).
@@ -137,7 +157,7 @@ If you own **The Sly Collection** for PS3, SafeHouse can take its redrawn textur
 over Sly 2's: **Settings > Games > Sly 2: Band of Thieves > Import PS3 HD textures**. Choose the PS3 disc image
 (`.iso`), a `.zip` of it (read as it is, nothing is unpacked), or the extracted disc (the folder with `PS3_GAME`).
 It takes about 6 minutes and writes one file of about 200 MB (5989 textures), `PS3 HD/Textures.pak`, in your Sly 2
-profile folder (`~/.config/projectcane/sly2/PS3 HD`, `%LOCALAPPDATA%\ProjectCane\user\sly2\PS3 HD`).
+profile folder (`~/.config/SafeHouse/sly2/PS3 HD`, `%LOCALAPPDATA%\SafeHouse\user\sly2\PS3 HD`).
 
 - `Textures.pak` holds the PNGs under the same `<W>x<H>_<hash>.png` names as any texture pack, in one file that loads
   and copies much faster than thousands. Your own `Mods/Textures` win over it, so you can still change single
@@ -266,6 +286,49 @@ How the file works:
 
 A translation is a full `<Language>.json` with every string changed.
 
+### Languages (new languages, dubs and subtitles)
+
+Every Sly 2 installation (USA, Europe, Japan) shares one **languages folder**, `sly2-languages`, beside the game
+folders (the launcher: Settings > Games > Sly 2 > Languages > Languages folder). Each language is a folder in it:
+`English`, `French`, `Japanese`, `English (UK)`... Installing a disc puts its languages there; the launcher can also
+import another region's languages from a disc image, or French and Spanish subtitles from The Sly Collection (PS3).
+Every language in the folder is offered on the title screen of every disc (Triangle opens the list; Settings.ini's
+`[Language]` remembers the choice). The options' Language... page chooses the text and the voices apart (Japanese
+voices with English text, ...; `Language` and `Voices` in Settings.ini); a language without its own `Dialog` lines
+is offered for the text only. Choosing on the title screen sets both.
+
+A language folder holds any of these:
+
+| File | What |
+|---|---|
+| `Text.json` | the strings, in the `Mods/Text` format above, **numbered as on the USA disc** (the same numbers on every disc) |
+| `Dialog/<anything>/<line>.wav` (or `.flac`) | the voice lines, named by the USA line number (the subfolders don't matter) |
+| `Dialog/lengths.json` | optional `{"<line>": seconds}`: how long each line's subtitle stays (else the file's length) |
+| `Movies/<name>.wav` (or `.flac`) | a cutscene's sound by its name: `Prologue`, `Ep1 Intro`, `Ep3 Briefing 2`, ... (stereo) |
+| `language.json` | optional: `{"name": "Klingon", "text": "English", "voice": "English", "script": "latin"}` |
+| `Font.bin` | Japanese only: the Japanese disc's text font (kana, kanji), which the import takes from your own Japanese disc |
+
+**Make a new language:** create `Mods/Languages/<Name>/` (or a folder in the languages folder) with a `Text.json`. That
+is a subtitle language: the voices fall back to English (`"voice"` in language.json picks another). For a dub, add the
+`Dialog` (and `Movies`) files; a dub without its own text names the text it shows with `"text"`. Missing strings and
+lines always fall back, so a partial translation works.
+
+**Change an existing language:** `Mods/Languages/English/Text.json` (or one `Dialog` file) overrides just those
+strings or lines of the shared folder, on every disc. `Mods/Text/<Language>.json` still works too (numbered as on your
+disc: `--dump-text` shows them).
+
+Starting points: the languages folder's own `Text.json` files, or `Sly2-Release --disc "<installation>" --dump-text
+text`. Fonts: the USA and European discs show Western European (Latin-1) characters, and Latin text on the Japanese disc is
+shown without accents. Japanese text (`"script": "japanese"` in language.json) is drawn with the Japanese disc's own
+font on every disc: installing the Japanese disc, or importing its languages from a disc image, writes that font to
+`Japanese/Font.bin` in the languages folder, and the USA and European discs then show the Japanese text with the
+Japanese line breaks; the menus' button lines name the buttons of the disc you play (Cross confirms on the USA and
+European discs, Circle on the Japanese). A Japanese text of your own (`Mods/Languages/Japanese (Mine)/` with
+`"script": "japanese"`) uses the `Japanese` folder's font and can only show the characters that font has. Without a
+`Font.bin` (a languages folder made by an older version: start the game from the launcher once with the Japan disc
+installed, or import the Japan disc image again) Japanese plays its voices over the disc's own text, and the title's
+language list says "voices only".
+
 ### Movies
 
 Each movie is two files, like Sly 1's cutscenes: `Movies/<number> <name>.m2v`, the picture (MPEG-2 video, 640x480,
@@ -315,8 +378,33 @@ samples. SafeHouse has no tool for banks, and every sound the level asks for mus
 
 ### Levels
 
-A level file (`<Level>.brx`) is Sly 2's own level format, uncompressed. A modified one in
-`Mods/Worlds/<N> <Episode>/<Level>/<Level>.brx` loads instead of the original.
+Since SafeHouse 2026-11-10 (asset version 4) each level is stored as its **parts**, the blocks of Sly 2's level
+format each in a file of its own, so you can change one part without touching the rest:
+
+- `<Level>.world.json` lists the parts in the order the game reads them. The game puts them back together when the
+  level loads; with no mods that is byte for byte the level on the disc.
+- `World/Text.json`: the level's text, every language: `{"id": 305, "English": "Press &2X&. to play as Sly."}`.
+  Edit a string and put the file at the same path in Mods. (`Mods/Text/<Language>.json`, above, changes a string
+  in every level at once; it is applied on top.)
+- `World/<nnn> <group>/Scripts.splice`: the scripts of one group (the level's objects come in groups: `227 jt` is
+  Sly, `245 murray` Murray, `147 npc_dimitri` Dimitri, the groups named after the level are the level itself). They
+  are the game's compiled scripts written as S-expressions: `(define sym1049 #obj:0)`, `(<seto!> sym1053 178 #t)`.
+  `symN` is a variable (its number: the names are not on the disc), `<name>` a built-in function, numbers with a
+  `.` are floats. Edit, save in Mods at the same path, and the game compiles the text when the level loads. A file
+  that does not compile is reported in the log (`mods: ... line 8: unknown word ...`) and the level loads without
+  your mods. Comments start with `;`.
+- `Graphics.bin`, `Objects.bin`, `Collision.bin` and the `World/*.bin` blocks are binary, as on the disc. The index
+  lists each group's objects (number, class, offset, size) for tools.
+- A whole level file still works: `Mods/Worlds/<N> <Episode>/<Level>/<Level>.brx` (uncompressed) loads instead of
+  all the parts.
+
+Tools:
+
+```sh
+Sly2-Release --world-pack "<installation>/Worlds/1 The Black Chateau/Paris/Paris.world.json" Paris.brx
+Sly2-Release --disc "<installation>" --world-unpack 2 paris-parts     # a level (record 2) or a .brx file into parts
+Sly2-Release --disc "<installation>" --world-check                    # every level put back together and compared
+```
 
 This is the advanced end of modding:
 
@@ -337,7 +425,8 @@ Start from small changes, and test with a fresh save.
 | Movies, any length | Yes: an M2V and a WAV of the same length |
 | Sound effect samples | Yes |
 | Sound effect banks | With care: every sound the level uses must be present |
-| Level files | Advanced. Can break jobs and saves. |
+| Level text (`Text.json`) | Yes, as Text and subtitles |
+| Level scripts and other parts | Advanced. Can break jobs and saves. |
 | The installation folder itself | No. Re-extracting or reinstalling replaces it, and Verify reports changed files. Use Mods. |
 
 **Saves:**
@@ -354,8 +443,8 @@ Start from small changes, and test with a fresh save.
 
 | What | Linux | Windows | Portable SafeHouse |
 |---|---|---|---|
-| The installation (read only for mods) | `~/.local/share/projectcane/installations/sly1` | `%LOCALAPPDATA%\ProjectCane\installations\sly1` | `data/installations/sly1` |
-| **Your Mods folder** | `~/.config/projectcane/Mods` | `%LOCALAPPDATA%\ProjectCane\user\Mods` | `data/user/Mods` |
+| The installation (read only for mods) | `~/.local/share/SafeHouse/installations/sly1` | `%LOCALAPPDATA%\SafeHouse\installations\sly1` | `data/installations/sly1` |
+| **Your Mods folder** | `~/.config/SafeHouse/Mods` | `%LOCALAPPDATA%\SafeHouse\user\Mods` | `data/user/Mods` |
 
 - A European, Japanese or Korean installation is in `installations/sly1-europe` (`-japan`, `-korea`). The Mods
   folder is shared by all of them.
@@ -454,8 +543,8 @@ The texture is then replaced wherever the game draws it, in every level and on t
 As for Sly 2, **Settings > Games > Sly Cooper and the Thievius Raccoonus > Import PS3 HD textures** takes the redrawn
 textures of **The Sly Collection** (PS3: the disc image, a `.zip` of it, or the extracted disc) and uses them over
 Sly 1's. It takes about 2 minutes and writes `PS3 HD/Textures.pak`, about 530 MB (9222 textures, 45 of the 46 levels;
-the start-up splash has none), in your profile folder (`~/.config/projectcane/PS3 HD`,
-`%LOCALAPPDATA%\ProjectCane\user\PS3 HD`).
+the start-up splash has none), in your profile folder (`~/.config/SafeHouse/PS3 HD`,
+`%LOCALAPPDATA%\SafeHouse\user\PS3 HD`).
 
 - `Textures.pak` holds the PNGs under the names of `--dump-textures`, so your own `Mods/Textures` win over it.
 - **Use the PS3 HD textures** turns it on or off; **Remove** deletes it. The levels stay the installation's.

@@ -150,7 +150,7 @@ inline bool navRightPressed() {
 // ---------------------------------------------------------------- icons
 enum class Icon {
     None, Plus, Search, ChevronLeft, ChevronRight, ChevronDown, Heart, Chat, Check, Copy, Refresh,
-    Folder, Disc, Lock, Warning, Users, Info, External, Close, Play, Star, Cog, Trash, Stop, Wrench
+    Folder, Disc, Lock, Warning, Users, Info, External, Close, Play, Star, Cog, Trash, Stop, Wrench, Power, Headset
 };
 inline void drawIcon(ImDrawList* dl, Icon icon, ImVec2 c, float s, ImU32 col) {
     const float t = std::max(1.5f, s * 0.09f);
@@ -278,6 +278,23 @@ inline void drawIcon(ImDrawList* dl, Icon icon, ImVec2 c, float s, ImU32 col) {
         dl->PathArcTo({ c.x + s * 0.16f, c.y - s * 0.16f }, s * 0.17f, IM_PI * 0.75f, IM_PI * 2.25f, 16);
         dl->PathStroke(col, 0, t * 1.6f);
         break;
+    case Icon::Power: {   // (Quit) a ring open at the top with a bar through the gap
+        const float r = s * 0.3f;
+        dl->PathArcTo({ c.x, c.y + s * 0.03f }, r, -IM_PI * 0.5f + 0.75f, IM_PI * 1.5f - 0.75f, 24);
+        dl->PathStroke(col, 0, t * 1.3f);
+        dl->AddLine({ c.x, c.y - s * 0.36f }, { c.x, c.y - s * 0.02f }, col, t * 1.3f);
+        break;
+    }
+    case Icon::Headset: {   // (Play in VR) a headset seen from the front: the visor with its two lenses and the nose gap
+        const ImVec2 a{ c.x - s * 0.42f, c.y - s * 0.22f }, b{ c.x + s * 0.42f, c.y + s * 0.2f };
+        dl->AddRectFilled(a, b, col, s * 0.12f);
+        dl->AddTriangleFilled({ c.x - s * 0.1f, b.y + 1 }, { c.x + s * 0.1f, b.y + 1 }, { c.x, c.y + s * 0.04f }, u32(color::bg));
+        dl->AddCircleFilled({ c.x - s * 0.19f, c.y - s * 0.02f }, s * 0.1f, u32(color::bg), 16);
+        dl->AddCircleFilled({ c.x + s * 0.19f, c.y - s * 0.02f }, s * 0.1f, u32(color::bg), 16);
+        dl->AddLine({ a.x, c.y - s * 0.06f }, { a.x - s * 0.06f, c.y - s * 0.06f }, col, t * 1.4f);
+        dl->AddLine({ b.x, c.y - s * 0.06f }, { b.x + s * 0.06f, c.y - s * 0.06f }, col, t * 1.4f);
+        break;
+    }
     case Icon::Star: {
         ImVec2 p[10];
         for (int i = 0; i < 10; ++i) {
@@ -318,10 +335,16 @@ inline bool button(const char* label, Tone tone = Tone::Primary, ImVec2 size = {
     const ImGuiID id = window->GetID(label);
     ImFont* font = fontOverride ? fontOverride : (tone == Tone::Quiet || tone == Tone::Secondary) ? fonts().body : fonts().tab;
     const char* end = ImGui::FindRenderedTextEnd(label);
-    const ImVec2 textSize = font->CalcTextSizeA(font->FontSize, FLT_MAX, 0, label, end);
+    ImVec2 textSize = font->CalcTextSizeA(font->FontSize, FLT_MAX, 0, label, end);
     const float iconSize = icon == Icon::None ? 0.0f : px(fontOverride ? 22 : 18);
     const float iconGap = icon == Icon::None || label == end ? 0.0f : px(10);
-    const float padX = px(tone == Tone::Quiet ? 12 : 20);
+    float padX = px(tone == Tone::Quiet ? 12 : 20);
+    // A fixed width a longer translation does not fit: the smaller caption type, then tighter padding.
+    if (size.x > 0 && !fontOverride && textSize.x + iconSize + iconGap + padX * 2 > size.x) {
+        font = fonts().caption;
+        textSize = font->CalcTextSizeA(font->FontSize, FLT_MAX, 0, label, end);
+        padX = std::max(px(6), std::min(padX, std::floor((size.x - textSize.x - iconSize - iconGap) * 0.5f)));
+    }
     if (size.x <= 0) size.x = textSize.x + iconSize + iconGap + padX * 2;
     if (size.y <= 0) size.y = controlHeight();
     const ImRect bb(window->DC.CursorPos, { window->DC.CursorPos.x + size.x, window->DC.CursorPos.y + size.y });
@@ -465,7 +488,7 @@ inline bool banner(const char* id, const std::string& message, BannerTone tone, 
     bool closed = false;
     if (dismissible) {
         ImGui::SetCursorScreenPos({ pos.x + width - px(44), pos.y + (height - px(36)) * 0.5f });
-        closed = iconButton("Dismiss", Icon::Close, px(36));
+        closed = iconButton(tr("Dismiss"), Icon::Close, px(36));
     }
     ImGui::SetCursorScreenPos(pos);
     ImGui::Dummy({ width, height });
@@ -581,16 +604,24 @@ inline Row rowBehavior(const char* strId, float height, bool horizontal, float c
     focusRing(r.bb, r.id, px(8));
     return r;
 }
-// Draws the row's label (and an optional caption under it) on the left.
-inline void rowLabel(const Row& r, const char* label, const char* sub = nullptr, uint32_t rgb = color::text) {
+// Draws the row's label (and an optional caption under it) on the left, up to the control (or `right`, an absolute x,
+// when the control leaves more room). A label too long for one line (a longer translation) drops to the caption size,
+// then wraps onto two lines.
+inline void rowLabel(const Row& r, const char* label, const char* sub = nullptr, uint32_t rgb = color::text, float right = 0) {
     auto* dl = ImGui::GetWindowDrawList();
     ImFont* font = fonts().body;
     ImFont* subFont = fonts().caption;
-    const float maxWidth = r.control.Min.x - r.bb.Min.x - px(32);
-    const float block = font->FontSize + (sub ? px(2) + subFont->FontSize : 0);
+    const float maxWidth = (right > 0 ? std::max(right, r.bb.Min.x + r.bb.GetWidth() * 0.4f) : r.control.Min.x) - r.bb.Min.x - px(32);
+    float wrap = 0;
+    if (!sub && measure(font, label).x > maxWidth) {
+        font = fonts().caption;
+        if (measure(font, label).x > maxWidth) wrap = maxWidth;
+    }
+    const float labelH = wrap > 0 ? font->CalcTextSizeA(font->FontSize, FLT_MAX, wrap, label).y : font->FontSize;
+    const float block = labelH + (sub ? px(2) + subFont->FontSize : 0);
     float y = std::round(r.bb.Min.y + (r.bb.GetHeight() - block) * 0.5f);
     dl->PushClipRect(r.bb.Min, { r.bb.Min.x + px(16) + maxWidth, r.bb.Max.y }, true);
-    dl->AddText(font, font->FontSize, { r.bb.Min.x + px(16), y }, ink(rgb), label);
+    dl->AddText(font, font->FontSize, { r.bb.Min.x + px(16), y }, ink(rgb), label, nullptr, wrap);
     if (sub) dl->AddText(subFont, subFont->FontSize, { r.bb.Min.x + px(16), y + font->FontSize + px(2) }, ink(color::muted), sub);
     dl->PopClipRect();
     recordLayout(label, r.bb);
@@ -612,7 +643,7 @@ inline bool toggleRow(const char* label, bool* value, const char* sub = nullptr,
         *value = !*value;
         changed = true;
     }
-    rowLabel(r, label, sub);
+    rowLabel(r, label, sub, color::text, r.control.Max.x - px(56));
     drawSwitch(ImGui::GetWindowDrawList(), { r.control.Max.x - px(22), r.bb.GetCenter().y }, *value);
     return changed;
 }
@@ -706,7 +737,6 @@ inline bool linkRow(const char* label, const char* value, const char* sub = null
                     float height = 0) {
     const Row r = rowBehavior(label, height > 0 ? height : px(sub ? 64 : 56), false);
     if (!r.visible) return false;
-    rowLabel(r, label, sub);
     auto* dl = ImGui::GetWindowDrawList();
     const float cy = r.bb.GetCenter().y;
     float right = r.control.Max.x;
@@ -714,11 +744,15 @@ inline bool linkRow(const char* label, const char* value, const char* sub = null
         drawIcon(dl, trailing, { right - px(10), cy }, px(20), ink(r.hovered || r.focused ? color::text : color::muted));
         right -= px(30);
     }
+    // (the label may use the room the value leaves; a long value and a long label share it)
+    float labelRight = right;
     if (value && *value) {
         ImFont* font = fonts().body;
         const auto t = measure(font, value);
+        labelRight = right - t.x - px(8);
         dl->AddText(font, font->FontSize, { right - t.x, std::round(cy - t.y * 0.5f) }, ink(color::text2), value);
     }
+    rowLabel(r, label, sub, color::text, labelRight);
     return r.activated && !r.disabled;
 }
 
@@ -944,6 +978,7 @@ struct Images {
     ImTextureID logo = nullptr, icon = nullptr;
     float logoAspect = 1.04f; // width / height (launcher/assets/safehouse-logo.png)
     Image games[5];
+    ImTextureID developers[5] = {}; // launcher/credits.h kDevelopers order (launcher/assets/developers)
 };
 inline Images& images() {
     static Images instance;
@@ -979,7 +1014,7 @@ inline bool titleBar(const char* title, bool back, const char* sub = nullptr) {
     const float h = px(40);
     const ImVec2 start = ImGui::GetCursorPos();
     if (back) {
-        pressed = iconButton("Back##title", Icon::ChevronLeft, h, color::text);
+        pressed = iconButton(tr("Back##title"), Icon::ChevronLeft, h, color::text);
         ImGui::SameLine(0, px(10));
     }
     ImFont* font = fonts().title;

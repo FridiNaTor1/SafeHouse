@@ -9,6 +9,7 @@
 // Instances ("sub-meshes", 0x169AC8) are GLOBs that share their template's geometry with their own matrix and
 // colours.
 
+#include "fastpaths.h"
 #include "bis.h"
 #include "shd.h"
 
@@ -222,7 +223,7 @@ struct GLOBSET
     std::vector<GLOB> aglob;            // +0x38 groups (templates and their instances)
     std::vector<std::array<GLOBSPHERE, 4>> asphereset;  // +0x48
     uint64_t grfglobset = 0;            // +0x50: bit 32 lit, bit 33 type-2 mesh
-#ifdef __SWITCH__
+#if SLY2_FASTPATHS
     // (the Switch: per group whether it is a cel border, set at the load (glob.cpp), for the volume tree's walk
     // (render.cpp) instead of each group's large record)
     std::vector<uint8_t> afCelBorder;

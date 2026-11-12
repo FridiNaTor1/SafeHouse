@@ -153,9 +153,9 @@ endfunction()
 
 # ---- Sly 2
 file(GLOB sly2_sources CONFIGURE_DEPENDS "${root}/Sly2-Release/*.cpp" "${root}/Sly2-Release/*.c")
-add_library(sly2_game STATIC ${sly2_sources} "${root}/Libraries/miniz/miniz.c" "${root}/assets/prompts/prompt_data.cpp")
+add_library(sly2_game STATIC ${sly2_sources} "${root}/Libraries/miniz/miniz.c" "${root}/Libraries/lz4/lz4.c" "${root}/Libraries/lz4/lz4hc.c" "${root}/assets/prompts/prompt_data.cpp")
 cane_switch_game(sly2_game sly2)
-target_include_directories(sly2_game PRIVATE "${root}/Sly2-Release" "${root}/platform" "${root}/Libraries/miniz"
+target_include_directories(sly2_game PRIVATE "${root}/Sly2-Release" "${root}/platform" "${root}/Libraries/miniz" "${root}/Libraries/lz4"
   "${root}/assets/prompts" "${gen}/prompts" "${gen}/sly2")
 target_compile_definitions(sly2_game PRIVATE "SLY2N_DEV_ROOT=\"sdmc:/switch/SafeHouse\"" CANE_HAVE_PROMPT_ATLAS=1 CANE_HAVE_GAMECONTROLLERDB=1)
 set_source_files_properties("${root}/Libraries/miniz/miniz.c" PROPERTIES COMPILE_OPTIONS "-w")
@@ -170,7 +170,14 @@ add_custom_command(OUTPUT "${gen}/sly2/sly2n_logo.h"
   DEPENDS "${root}/launcher/assets/games/sly2-logo.png" "${root}/cmake/switch_embed.py" VERBATIM)
 # the controller prompt atlases and SDL_GameControllerDB (prompt_data.cpp)
 set(prompt_headers "")
-foreach(family keyboard playstation xbox nintendo steamdeck steamcontroller ps4 ps5 steamcontroller2026 devices)
+# (every atlas in assets/prompts, as prompt_data.cpp includes them all)
+file(GLOB prompt_pngs RELATIVE "${root}/assets/prompts" "${root}/assets/prompts/prompts_*.png")
+set(prompt_families "")
+foreach(png ${prompt_pngs})
+  string(REGEX REPLACE "^prompts_(.*)\\.png$" "\\1" family "${png}")
+  list(APPEND prompt_families "${family}")
+endforeach()
+foreach(family ${prompt_families})
   set(header "${gen}/prompts/prompts_${family}_png.h")
   add_custom_command(OUTPUT "${header}"
     COMMAND "${Python3_EXECUTABLE}" "${root}/cmake/switch_embed.py" "${header}" cane_prompts_${family} "${root}/assets/prompts/prompts_${family}.png"

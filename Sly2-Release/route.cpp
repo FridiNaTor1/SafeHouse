@@ -38,6 +38,7 @@
 #include "task.h"
 #include "transition.h"
 #include "routetele.h"
+#include "savedata.h"
 #include "vtnative.h"
 
 #include <algorithm>
@@ -352,6 +353,30 @@ bool FRouteSample(int frame, uint16_t* pgrf, uint8_t abAxis[4])
         if (LO* ploH = PloPoCurrent(g_psw))
             if (ACTOR* pa = PactorFromLo(ploH))
                 if (int* pn = const_cast<int*>(DmgCounterOf(pa)); pn && *pn > 0 && *pn < std::atoi(s_szHold)) *pn = std::atoi(s_szHold);
+    // (test only: SLY2N_SETPROGRESSAT="FRAME:path=N[,path=N..];FRAME:..": integer progress values set at that frame,
+    // e.g. 900:sly.hpCur=15,sly.mpCur=30 (the players' counters are these slots: damage taken / power used), as the
+    // reference's SLY2_POKE on the save block)
+    static const char* s_szAt = std::getenv("SLY2N_SETPROGRESSAT");
+    if (s_szAt)
+        for (const char* q = s_szAt; q && *q; q = std::strchr(q, ';') ? std::strchr(q, ';') + 1 : nullptr)
+        {
+            if (std::atoi(q) != frame) continue;
+            const char* c = std::strchr(q, ':');
+            const char* e = std::strchr(q, ';');
+            if (!c || (e && c > e)) continue;
+            std::stringstream ss(std::string(c + 1, e ? e : c + std::strlen(c)));
+            for (std::string item; std::getline(ss, item, ',');)
+            {
+                const size_t eq = item.find('=');
+                if (eq == std::string::npos) continue;
+                std::vector<std::string> apath;
+                std::stringstream sp(item.substr(0, eq));
+                for (std::string s; std::getline(sp, s, '.');) apath.push_back(s);
+                CRef ref;
+                ref.SetS32(std::atoi(item.c_str() + eq + 1));
+                std::printf("progress %s at frame %d: %s\n", item.c_str(), frame, FSetProgress(apath, ref) ? "set" : "not set");
+            }
+        }
     if (s_fHp)
     {
         static int s_hp = -1000;

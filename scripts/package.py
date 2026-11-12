@@ -13,7 +13,8 @@ p.add_argument('--arch',choices=['x86_64','aarch64','arm64'],help='Linux: x86_64
 a=p.parse_args()
 source=pathlib.Path(__file__).resolve().parent.parent
 output=a.output.resolve();output.mkdir(parents=True,exist_ok=True)
-# Product name SafeHouse since 2026-11-03 (ProjectCane before); the user data folders keep their old names.
+# Product name SafeHouse since 2026-11-03 (ProjectCane before); the user data folders were renamed on 2026-11-10
+# (the launcher moves the old ones, platform/user_folders.h).
 if a.windows:
  arch={'aarch64':'arm64'}.get(a.arch,a.arch or 'x86_64')
 else:

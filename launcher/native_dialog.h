@@ -25,6 +25,7 @@
 #include <type_traits>
 #include <vector>
 
+#include "l10n.h"
 #include "platform.h"
 #include "process.h"
 
@@ -152,7 +153,7 @@ inline Result runWindows(Kind kind, const std::string& title, const fs::path& st
     if (hr == HRESULT_FROM_WIN32(ERROR_CANCELLED)) r.status = Status::Cancelled;
     else if (FAILED(hr)) {
         r.status = Status::Failed;
-        r.error = "The file dialog could not be shown";
+        r.error = tr("The file dialog could not be shown");
     } else {
         IShellItem* item = nullptr;
         PWSTR name = nullptr;
@@ -403,7 +404,7 @@ inline Result runPortal(Kind kind, const std::string& title, const fs::path& sta
         }
         if (!d->read_write(conn, 100)) {
             r.status = Status::Failed;
-            r.error = "The desktop portal connection closed";
+            r.error = tr("The desktop portal connection closed");
             break;
         }
         while (void* m = d->pop_message(conn)) {
@@ -440,7 +441,7 @@ inline Result runPortal(Kind kind, const std::string& title, const fs::path& sta
                 if (code == 0 && !r.path.empty()) r.status = Status::Chosen;
                 else if (code == 2) {
                     r.status = Status::Failed;
-                    r.error = "The desktop portal could not show the file dialog";
+                    r.error = tr("The desktop portal could not show the file dialog");
                 }
             }
             d->message_unref(m);
@@ -490,7 +491,24 @@ inline Result runHelper(const std::string& program, Kind kind, const std::string
 #endif
 
 inline Result run(Kind kind, const std::string& title, const fs::path& start, const std::atomic<bool>& cancel) {
-#ifdef _WIN32
+#if defined(CANE_ANDROID) || defined(CANE_IOS)
+    // Android: the system document picker (ACTION_OPEN_DOCUMENT). The chosen document is copied into the app's
+    // storage (files/imports, NativeBridge.java) so the extractor can read it as a file; folders: the launcher picker.
+    // iOS: UIDocumentPickerViewController, the copy goes to Documents/imports (ios/ios_app.mm).
+    (void)title;
+    (void)start;
+    if (kind == Kind::PickFolder) return {Status::Unavailable, {}, "android", {}};
+    mobile::requestIsoSelection();
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    mobile::ImportStatus s = mobile::isoSelection();
+    while (s.pending && !cancel) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        s = mobile::isoSelection();
+    }
+    if (!s.error.empty()) return {Status::Failed, {}, "android", s.error};
+    if (s.path.empty()) return {Status::Cancelled, {}, "android", {}};
+    return {Status::Chosen, s.path, "android", {}};
+#elif defined(_WIN32)
     (void)cancel;
     return runWindows(kind, title, start);
 #else

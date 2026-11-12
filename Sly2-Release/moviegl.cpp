@@ -4,6 +4,7 @@
 
 #include "display.h"
 #include "gl.h"
+#include "gl_backend.h"
 #include "hud.h"
 #include "skipcut.h"
 
@@ -43,31 +44,68 @@ void DrawMoviePicture(MOVIEGL& m, const uint8_t* prgba, int cx, int cy)
 {
     if (!s_vao)
     {
-        glGenVertexArrays(1, &s_vao);
+        s_vao = GlNewVertexArray();
         s_shader.Init("screen.vert", "screen.frag");
     }
     if (!m.tex || m.cx != cx || m.cy != cy)
     {
-        if (m.tex) glDeleteTextures(1, &m.tex);
-        glGenTextures(1, &m.tex);
-        glBindTexture(GL_TEXTURE_2D, m.tex);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, cx, cy, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        GlDeleteTexture(m.tex);
+        m.tex = GlNewTexture(cx, cy, GL_LINEAR, true);
         m.cx = cx;
         m.cy = cy;
     }
-    glBindTexture(GL_TEXTURE_2D, m.tex);
-    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, cx, cy, GL_RGBA, GL_UNSIGNED_BYTE, prgba);
+    if (const cane::draw::Packets* pkTex = PpacketsTex()) pkTex->uploadTexture(m.tex, 0, 0, 0, 0, uint32_t(cx), uint32_t(cy), prgba);
+    else
+    {
+        glBindTexture(GL_TEXTURE_2D, m.tex);
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, cx, cy, GL_RGBA, GL_UNSIGNED_BYTE, prgba);
+    }
     // letterboxed to the PS2's 4:3 display
     const int w = g_gl.renderWidth, h = g_gl.renderHeight;
     const double aspect = 4.0 / 3.0;
     int vx = 0, vy = 0, vw = w, vh = h;
     if (w > h * aspect) { vw = int(h * aspect); vx = (w - vw) / 2; }
     else { vh = int(w / aspect); vy = (h - vh) / 2; }
+    // (draw packets, platform/draw_packet.h: the Vulkan renderer; the GL-style state after them as the GL calls below
+    // leave it: the masks, depth compare, stencil and blend factors they do not set left as they are)
+    const cane::draw::Packets* pk = cane::gl::ActiveBackend() ? cane::gl::ActiveBackend()->packets : nullptr;
+    if (pk && !(pk->beginPass && pk->clear && pk->drawArrays && pk->bindTexture)) pk = nullptr;
+    static uint32_t s_idPk = 0;
+    static GLuint s_progPk = 0;
+    if (pk && s_progPk != s_shader.ID)
+    {
+        using namespace cane::draw;
+        State st;
+        st.program = s_shader.ID;
+        st.blend = 0, st.cull = 0, st.depthTest = 0, st.stencilTest = 0;
+        st.keep = kKeepColorMask | kKeepDepthWrite | kKeepDepthCompare | kKeepStencil;
+        if (const GLint loc = s_shader.Loc("tex"); loc >= 0) st.aconst[st.cconst++] = {loc, 0};
+        s_idPk = pk->createState(st);
+        s_progPk = s_shader.ID;
+    }
+    if (pk && s_idPk)
+    {
+        using namespace cane::draw;
+        auto pass = [&](int x, int y, int cx, int cy) {
+            Pass ps;
+            ps.framebuffer = g_gl.FboScene();
+            ps.viewport[0] = x, ps.viewport[1] = y, ps.viewport[2] = cx, ps.viewport[3] = cy;
+            pk->beginPass(ps);
+        };
+        pass(0, 0, w, h);
+        Clear c;
+        c.clear = kClearColor;
+        c.color[3] = 1.0f;
+        c.stencilMaskKept = 1;
+        pk->clear(c);
+        pass(vx, vy, vw, vh);
+        pk->bindTexture(0, m.tex, 0, kSamplerKept);
+        pk->drawArrays(s_idPk, s_vao, 0, 6, nullptr, 0);
+        pk->drawArrays(s_idPk, 0, 0, 0, nullptr, 0);   // (no triangles: the vertex array the GL calls leave)
+        pass(0, 0, w, h);
+        return;
+    }
     glBindFramebuffer(GL_FRAMEBUFFER, g_gl.FboScene());
     glViewport(0, 0, w, h);
     glClearColor(0, 0, 0, 1);

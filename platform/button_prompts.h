@@ -11,6 +11,7 @@
 // GL entry points are fetched through glfwGetProcAddress, so this header works
 // with glad, with <GL/gl.h> or with no GL header included at all.
 #include "controller_family.h"
+#include "gl_backend.h"
 #ifdef CANE_HAVE_PROMPT_ATLAS
 #include <algorithm>
 #include <array>
@@ -110,8 +111,12 @@ struct PromptGl {
     GetIntegerv getIntegerv = nullptr;
     PixelStorei pixelStorei = nullptr;
     bool load() {
-        if (!glfwGetCurrentContext()) return false;
-        auto get = [](auto& fn, const char* name) { fn = reinterpret_cast<std::decay_t<decltype(fn)>>(glfwGetProcAddress(name)); };
+        // (a renderer standing in for OpenGL, gl_context.h ActiveBackend: Sly 2 on Vulkan, which has no GL context)
+        const cane::gl::Backend* backend = cane::gl::ActiveBackend();
+        if (!backend && !glfwGetCurrentContext()) return false;
+        auto get = [&](auto& fn, const char* name) {
+            fn = reinterpret_cast<std::decay_t<decltype(fn)>>(backend ? backend->procAddress(name) : glfwGetProcAddress(name));
+        };
         get(genTextures, "glGenTextures");
         get(deleteTextures, "glDeleteTextures");
         get(bindTexture, "glBindTexture");
@@ -153,6 +158,10 @@ public:
     // available or the upload failed (nothing is then kept).
     bool upload() {
         if (m_uploaded) return true;
+        // (draw packets' texture entries, draw_packet.h: Sly 2's Vulkan renderer makes them natively, no GL state touched;
+        // the same texture, parameters and mip chain as the GL calls below)
+        const draw::Packets* pk = gl::ActiveBackend() ? gl::ActiveBackend()->packets : nullptr;
+        if (pk && pk->createTexture && pk->generateMipmaps && pk->deleteTextures) return uploadNative(*pk);
         detail::PromptGl gl;
         if (!gl.load()) return false;
         using namespace detail;
@@ -230,6 +239,43 @@ public:
         if (!ok) {
             for (unsigned& texture : textures)
                 if (texture) gl.deleteTextures(1, &texture);
+            return false;
+        }
+        m_textures = textures;
+        m_devices = devices;
+        m_uploaded = true;
+        return true;
+    }
+    bool uploadNative(const draw::Packets& pk) {
+        auto make = [&](const embedded::Image& image, int maxLevel) -> unsigned {
+            draw::TextureDesc d;
+            d.width = uint32_t(image.width), d.height = uint32_t(image.height), d.storage = 0, d.pixels = image.rgba;
+            d.wrapS = d.wrapT = draw::kWrapClampToEdge;
+            d.minFilter = draw::kFilterLinearMipLinear, d.magFilter = draw::kFilterLinear, d.maxLevel = maxLevel;
+            const unsigned texture = pk.createTexture(d);
+            if (texture) pk.generateMipmaps(texture);
+            return texture;
+        };
+        bool ok = true;
+        std::array<unsigned, kFamilyCount> textures{};
+        for (int atlas = 0; atlas < kFamilyCount && ok; ++atlas) {
+            embedded::Image image = embedded::decodePromptAtlas(atlas);
+            ok = image.rgba && image.width == prompt_atlas::kPromptAtlasSize[atlas].w &&
+                 image.height == prompt_atlas::kPromptAtlasSize[atlas].h;
+            if (ok) textures[atlas] = make(image, detail::kPromptMaxMipLevel);
+            embedded::freeImage(image);
+            ok = ok && textures[atlas] != 0;
+        }
+        unsigned devices = 0;
+        if (ok) {
+            embedded::Image image = embedded::decodePromptDevices();
+            if (image.rgba && image.width == prompt_atlas::kPromptDevicesSize.w && image.height == prompt_atlas::kPromptDevicesSize.h)
+                devices = make(image, 2);
+            embedded::freeImage(image);
+        }
+        if (!ok) {
+            for (unsigned& texture : textures)
+                if (texture) pk.deleteTextures(1, &texture);
             return false;
         }
         m_textures = textures;

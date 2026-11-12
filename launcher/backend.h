@@ -1,9 +1,15 @@
 #pragma once
+#include <algorithm>
+#include <cctype>
 #include <cstdio>
+#include <fstream>
+#include <map>
 #include <ctime>
+#include <deque>
 #include <mutex>
 
 #include "install.h"
+#include "user_folders.h"
 #include "process.h"
 #include "regions.h"
 namespace cane {
@@ -63,20 +69,47 @@ inline Installation readInstallation(const fs::path& dir, GameId game) {
     return in;
 }
 inline std::string executableName(const std::string& name) {
-#ifdef _WIN32
+#if defined(CANE_ANDROID)
+    return "lib" + name + ".so";  // (the app's JNI libraries; platform/process.h starts them in their own process)
+#elif defined(CANE_IOS)
+    // (the app's frameworks, relative to SafeHouse.app; platform/process.h runs them in the app, ios/ios_app.h)
+    const std::string full = cane::ios::programPath(name), bundle = cane::ios::bundleDirectory() + "/";
+    return full.compare(0, bundle.size(), bundle) == 0 ? full.substr(bundle.size()) : full;
+#elif defined(_WIN32)
     return name + ".exe";
 #else
     return name;
 #endif
 }
+// The profile folders after the one-time move from their old name (platform/user_folders.h), which runs before
+// anything opens them.
+inline UserPaths upgradedUserPaths(folders::Report* report = nullptr) {
+    auto r = folders::migrateLegacyFolders();
+    if (report) *report = std::move(r);
+    return userPaths();
+}
 struct LauncherBackend {
-    UserPaths locations = userPaths();
+    folders::Report folderUpgrade;
+    UserPaths locations = upgradedUserPaths(&folderUpgrade);
     fs::path tools = executableDirectory();
     json config = json::object();
     LauncherBackend() {
         for (auto& p :
              {locations.data.parent_path(), locations.user, locations.config, locations.logs})
             fs::create_directories(p);
+        // What the folder move did (kept for bug reports; the move only runs while an old folder exists).
+        if (folderUpgrade.any()) {
+            json record = {{"date", [] { auto t = std::time(nullptr); char b[32]; std::strftime(b, sizeof(b), "%Y-%m-%d %H:%M:%S", std::localtime(&t)); return std::string(b); }()},
+                           {"renamed", folderUpgrade.renamed}, {"copied", folderUpgrade.copied}, {"duplicates", folderUpgrade.duplicates},
+                           {"leftovers", folderUpgrade.leftovers}, {"failed", folderUpgrade.failed}, {"rewritten", folderUpgrade.rewritten},
+                           {"moves", json::array()}, {"log", folderUpgrade.lines}};
+            for (const auto& m : folderUpgrade.moved) record["moves"].push_back({{"from", utf8(m.from)}, {"to", utf8(m.to)}});
+            try {
+                writeJson(locations.config / "folder-upgrade.json", record);
+            } catch (...) {
+            }
+            for (const auto& line : folderUpgrade.lines) std::fprintf(stderr, "SafeHouse folders: %s\n", line.c_str());
+        }
         {
             FileLock migrationLock(locations.config / "profile-migration.lock");
             importDirectoryIfEmpty(runtimeStorage(locations) / "Saves", locations.user / "Saves");
@@ -99,7 +132,7 @@ struct LauncherBackend {
                 for (auto key : {"sly2_iso_path", "sly3_iso_path", "last_game", "sly2_runtime", "browse_dir", "skipped_update"})
                     if (config.contains(key) && !config.at(key).is_string()) config.erase(key);
                 // "sly2_wide_backgrounds" (Sly 2's "Widescreen backgrounds", removed 2026-11-05) is ignored and kept as it is.
-                for (auto key : {"show_logs", "start_fullscreen", "sly2_native_preview", "sly3_notice_hidden", "check_updates"})
+                for (auto key : {"show_logs", "start_fullscreen", "sly2_native_preview", "sly3_notice_hidden", "check_updates", "keep_imported_iso"})
                     if (config.contains(key) && !config.at(key).is_boolean()) config.erase(key);
                 for (auto key : {"ui_scale", "prompt_style"})
                     if (config.contains(key) && !config.at(key).is_number()) config.erase(key);
@@ -181,9 +214,79 @@ struct LauncherBackend {
     mutable std::vector<CacheEntry> m_cache;
     // The game's original folder (installations/<game>): its first installed region.
     fs::path baseDir(GameId game) const { return gameDataDirectory(locations, game); }
+    // ---- Where games install. Default: the profile's installations folder (baseDir's parent), as always. Settings >
+    // Games "Install games to" (launcher.json "install_dir") picks another folder, e.g. another drive: new installs go
+    // to <that folder>/SafeHouse/<game>[-<region>]. Every installation outside the default folder is remembered in
+    // launcher.json "install_paths" ({"sly2": [dir, ...]}), so it is found wherever it is, also after the setting
+    // changes again or when its drive was away for a while.
+    fs::path defaultInstallRoot() const { return locations.data.parent_path(); }
+    // The folder a chosen folder installs into: <chosen>/SafeHouse, unless the chosen folder is the default one, is
+    // itself called SafeHouse or already holds SafeHouse installations.
+    fs::path installRootFor(const fs::path& chosen) const {
+        const fs::path c = fs::absolute(chosen).lexically_normal();
+        const auto same = [](const fs::path& a, const fs::path& b) { return folders::detail::comparable(a) == folders::detail::comparable(b); };
+        if (same(c, defaultInstallRoot()) || folders::detail::comparable(c.filename()) == folders::detail::comparable(brand::userFolder)) return c;
+        std::error_code ec;
+        for (GameId g : {GameId::Sly1, GameId::Sly2, GameId::Sly3})
+            if (fs::is_regular_file(c / cane::game(g).key / "installation.json", ec)) return c;
+        return c / brand::userFolder;
+    }
+    bool customInstallRoot() const {
+        return config.contains("install_dir") && config.at("install_dir").is_string() && !config.at("install_dir").get<std::string>().empty();
+    }
+    fs::path installRoot() const { return customInstallRoot() ? path(config.at("install_dir").get<std::string>()) : defaultInstallRoot(); }
+    // chosen: the folder picked (installRootFor() makes the install root); empty: back to the default.
+    void setInstallRoot(const fs::path& chosen) {
+        const auto previous = config;
+        if (chosen.empty()) config.erase("install_dir");
+        else {
+            const fs::path root = installRootFor(chosen);
+            if (folders::detail::comparable(root) == folders::detail::comparable(defaultInstallRoot())) config.erase("install_dir");
+            else config["install_dir"] = utf8(root);
+        }
+        try {
+            saveConfig();
+        } catch (...) {
+            config = previous;
+            throw;
+        }
+    }
+    std::vector<fs::path> rememberedInstallPaths(GameId game) const {
+        std::vector<fs::path> out;
+        const char* key = cane::game(game).key;
+        if (config.contains("install_paths") && config.at("install_paths").is_object() && config.at("install_paths").contains(key) &&
+            config.at("install_paths").at(key).is_array())
+            for (const auto& v : config.at("install_paths").at(key))
+                if (v.is_string() && !v.get<std::string>().empty()) out.push_back(path(v.get<std::string>()));
+        return out;
+    }
+    void forgetInstallPath(GameId game, const fs::path& dir) {
+        const char* key = cane::game(game).key;
+        if (!config.contains("install_paths") || !config["install_paths"].is_object() || !config["install_paths"].contains(key) ||
+            !config["install_paths"][key].is_array())
+            return;
+        auto& list = config["install_paths"][key];
+        const auto target = folders::detail::comparable(fs::absolute(dir));
+        for (size_t i = list.size(); i-- > 0;)
+            if (list[i].is_string() && folders::detail::comparable(path(list[i].get<std::string>())) == target) list.erase(i);
+        if (list.empty()) config["install_paths"].erase(key);
+        if (config["install_paths"].empty()) config.erase("install_paths");
+    }
+    // Remembers an installation outside the default folder (one inside it is found by name anyway).
+    void rememberInstallPath(GameId game, const fs::path& dir) {
+        forgetInstallPath(game, dir);
+        const fs::path d = fs::absolute(dir).lexically_normal();
+        if (folders::detail::comparable(d.parent_path()) == folders::detail::comparable(defaultInstallRoot())) return;
+        if (!config.contains("install_paths") || !config["install_paths"].is_object()) config["install_paths"] = json::object();
+        auto& list = config["install_paths"][cane::game(game).key];
+        if (!list.is_array()) list = json::array();
+        list.push_back(utf8(d));
+    }
     // Every installed region of a game: the original folder, then installations/<game>-<region> in the order of
-    // knownRegions(). A folder whose installation.json is missing is not an installation; one that cannot be read
-    // still is (it needs repair). Staging / previous folders and locks use a '.' and are never listed.
+    // knownRegions(), then the same names in the chosen install folder, then the remembered installations elsewhere.
+    // A folder whose installation.json is missing is not an installation; one that cannot be read still is (it needs
+    // repair). Staging / previous folders and locks use a '.' and are never listed. A region found twice is listed
+    // once (the first one wins).
     std::vector<Installation> installations(GameId game) const {
         std::vector<Installation> out;
         if (!installable(game)) return out;
@@ -191,16 +294,31 @@ struct LauncherBackend {
         const fs::path base = baseDir(game);
         if (fs::is_regular_file(base / "installation.json", ec)) out.push_back(cachedInstallation(base, game));
         const std::string prefix = std::string(cane::game(game).key) + "-";
-        std::vector<Installation> extra;
-        for (const auto& r : knownRegions(game)) {
-            const fs::path dir = base.parent_path() / (prefix + r.key);
-            if (!fs::is_regular_file(dir / "installation.json", ec)) continue;
+        std::vector<std::string> seen{folders::detail::comparable(base)};
+        auto consider = [&](const fs::path& dir, const std::string& regionFromName) {
+            const auto id = folders::detail::comparable(dir);
+            if (std::find(seen.begin(), seen.end(), id) != seen.end()) return;
+            seen.push_back(id);
+            if (!fs::is_regular_file(dir / "installation.json", ec)) return;
             Installation in = cachedInstallation(dir, game);
-            if (in.region.empty()) in.region = r.key, in.release = r.name;
+            if (in.region.empty() && !regionFromName.empty()) in.region = regionFromName, in.release = regionName(regionFromName);
             // (a region already in the original folder wins; the duplicate is not listed)
-            if (std::none_of(out.begin(), out.end(), [&](const Installation& o) { return o.region == in.region; })) out.push_back(in);
+            if (out.empty() || std::none_of(out.begin(), out.end(), [&](const Installation& o) { return o.region == in.region; }))
+                out.push_back(in);
+        };
+        for (const auto& r : knownRegions(game)) consider(base.parent_path() / (prefix + r.key), r.key);
+        if (customInstallRoot()) {
+            const fs::path root = installRoot();
+            consider(root / cane::game(game).key, {});
+            for (const auto& r : knownRegions(game)) consider(root / (prefix + r.key), r.key);
         }
-        if (!out.empty() && out[0].region.empty()) out[0].release = "Unknown region";
+        for (const auto& dir : rememberedInstallPaths(game)) {
+            std::string fromName;
+            for (const auto& r : knownRegions(game))
+                if (utf8(dir.filename()) == prefix + r.key) fromName = r.key;
+            consider(dir, fromName);
+        }
+        if (!out.empty() && out[0].region.empty()) out[0].release = tr("Unknown region");
         return out;
     }
     std::optional<Installation> installation(GameId game, const std::string& region) const {
@@ -228,14 +346,20 @@ struct LauncherBackend {
         config["regions"][cane::game(game).key] = region;
         saveConfig();
     }
-    // Where a region installs: its existing folder, the original folder when the game has no installation there,
-    // else installations/<game>-<region>.
+    // Where a region installs: its existing folder; else, in the install folder (installRoot()), <game> when that is
+    // free (the default folder: when the game has no installation there) or <game>-<region>.
     fs::path regionDir(GameId game, const std::string& region) const {
         if (auto in = installation(game, region)) return in->dir;
+        return newRegionDir(game, region, installRoot());
+    }
+    fs::path newRegionDir(GameId game, const std::string& region, const fs::path& root) const {
         std::error_code ec;
-        const fs::path base = baseDir(game);
-        if (!fs::exists(base / "installation.json", ec)) return base;
-        return base.parent_path() / (std::string(cane::game(game).key) + "-" + region);
+        const fs::path base = root / cane::game(game).key;
+        if (folders::detail::comparable(root) == folders::detail::comparable(defaultInstallRoot())) {
+            if (!fs::exists(base / "installation.json", ec)) return base;
+        } else if (!fs::exists(base, ec) || (fs::is_directory(base, ec) && fs::is_empty(base, ec)))
+            return base;
+        return root / (std::string(cane::game(game).key) + "-" + region);
     }
     // The selected region's folder (the game's original folder when nothing is installed).
     fs::path dataDir(GameId game) const {
@@ -309,7 +433,13 @@ struct LauncherBackend {
     // disc installs beside the existing ones and the same region's disc replaces (re-extracts) that one.
     void install(const std::string& iso, GameId game, const std::atomic<bool>& cancel, const LogFunction& log) {
         if (!installable(game))
-            throw std::runtime_error(std::string(cane::game(game).title) + " cannot be installed yet");
+            throw std::runtime_error(trf("%s cannot be installed yet", cane::game(game).title));
+#if defined(CANE_MOBILE)
+        // (the phone / tablet apps carry Sly 2 only: Sly 1's level tools and Sly 3's are not in the app, so its
+        // extraction could only fail)
+        if (!runtimeAvailable(game))
+            throw std::runtime_error(trf("%s cannot be installed yet", cane::game(game).title));
+#endif
         const DiscCheck check = checkDisc(path(iso), game);
         if (!check.ok()) throw std::runtime_error(check.message);
         const std::string region = check.region->key;
@@ -318,8 +448,24 @@ struct LauncherBackend {
         std::vector<std::string> arguments{utf8(binary("cane-extractor")), "--iso", iso, "--output", utf8(target),
                                            "--non-interactive", "--progress=jsonl"};
         if (game != GameId::Sly1) arguments.insert(arguments.begin() + 1, {"--game", cane::game(game).key});
+        // (Sly 2: the disc's languages go into the shared languages folder, langstore.h)
+        if (game == GameId::Sly2) arguments.insert(arguments.end(), {"--languages-dir", utf8(languagesDir(game))});
+        // The extractor's reason for a failure (its "error" progress event, else its last plain lines) replaces the bare
+        // exit code in the message the install page shows.
+        std::string reason;
+        std::deque<std::string> lastLines;
+        const LogFunction watch = [&](const std::string& line) {
+            if (!line.empty() && line.front() == '{') {
+                const auto event = json::parse(line, nullptr, false);
+                if (event.is_object() && event.value("stage", std::string{}) == "error") reason = event.value("item", std::string{});
+            } else if (!line.empty()) {
+                lastLines.push_back(line);
+                if (lastLines.size() > 2) lastLines.pop_front();
+            }
+            log(line);
+        };
         try {
-            checkedProcess(arguments, tools, cancel, log);
+            checkedProcess(arguments, tools, cancel, watch);
         } catch (...) {
             // The extractor may be terminated without running destructors.
             // Acquire its released lock before discarding incomplete staging.
@@ -327,9 +473,21 @@ struct LauncherBackend {
                 InstallationTransaction cleanup(target);
             } catch (...) {
             }
-            throw;
+            if (cancel || (reason.empty() && lastLines.empty())) throw;
+            if (reason.empty()) {
+                // (no error event: the exit code, then what the extractor said last)
+                try {
+                    throw;
+                } catch (const std::exception& e) {
+                    reason = e.what();
+                } catch (...) {
+                }
+                for (const auto& line : lastLines) reason += (reason.empty() ? "" : " ") + line;
+            }
+            throw std::runtime_error(reason);
         }
         if (target == baseDir(game)) config[isoKey(game)] = iso;
+        rememberInstallPath(game, target);
         if (!config.contains("region_isos")) config["region_isos"] = json::object();
         if (!config["region_isos"].contains(cane::game(game).key) || !config["region_isos"][cane::game(game).key].is_object())
             config["region_isos"][cane::game(game).key] = json::object();
@@ -337,6 +495,23 @@ struct LauncherBackend {
         if (!config.contains("regions")) config["regions"] = json::object();
         config["regions"][cane::game(game).key] = region;
         saveConfig();
+#if defined(CANE_ANDROID) || defined(CANE_IOS)
+        // Android: the document picker copied the disc image into the app (files/imports, native_dialog.h); once the game is
+        // installed that copy only takes space (2.7 GB for Sly 2), unless Settings > Games "Keep imported disc images" is on.
+        // Only a file inside files/imports is ever removed; a re-extract asks for the disc image again. (iOS: Documents/imports)
+        if (!config.value("keep_imported_iso", false)) {
+            std::error_code ec;
+#if defined(CANE_IOS)
+            const fs::path imports = fs::weakly_canonical(path(cane::ios::importsDirectory()), ec);
+#else
+            const char* home = std::getenv("HOME");
+            const fs::path imports = home && *home ? fs::weakly_canonical(path(home) / "imports", ec) : fs::path{};
+#endif
+            const fs::path file = fs::weakly_canonical(path(iso), ec);
+            if (!imports.empty() && !ec && file.parent_path() == imports && fs::is_regular_file(file, ec) && fs::remove(file, ec))
+                log("Removed the app's copy of the disc image (" + utf8(file.filename()) + ")");
+        }
+#endif
     }
     // Removes the selected region's installed files. Saves and settings are kept.
     void uninstall(GameId game) {
@@ -349,6 +524,76 @@ struct LauncherBackend {
             p += suffix;
             fs::remove_all(p);
         }
+        forgetInstallPath(game, target);
+        saveConfig();
+    }
+    // Moves an installed region to another install folder (Settings > Games "Move <region> to the install folder"; --move-install passes
+    // installRootFor(the folder given)), named like a new install there. One rename on the same drive; else a copy into "<target>.staging" (sizes checked file by
+    // file), renamed into place when complete, and only then is the old folder removed. Saves are not touched.
+    fs::path moveInstallation(GameId game, const std::string& region, const fs::path& installFolder, const std::atomic<bool>& cancel,
+                              const LogFunction& log) {
+        const auto in = installation(game, region);
+        if (!in) throw std::runtime_error(trf("%s has no %s installation", cane::game(game).shortName, tr(regionName(region)).c_str()));
+        const fs::path source = fs::absolute(in->dir).lexically_normal();
+        const fs::path root = fs::absolute(installFolder).lexically_normal();
+        const fs::path target = fs::absolute(newRegionDir(game, in->region.empty() ? std::string("other") : in->region, root)).lexically_normal();
+        const auto inside = [](const fs::path& a, const fs::path& b) {  // a inside (or equal to) b
+            const auto x = folders::detail::comparable(a), y = folders::detail::comparable(b);
+            return x == y || (x.size() > y.size() && x.compare(0, y.size(), y) == 0 && x[y.size()] == '/');
+        };
+        if (inside(target, source) || inside(source, target) ||
+            folders::detail::comparable(source.parent_path()) == folders::detail::comparable(root))
+            throw std::runtime_error(tr("The installation is already in that folder"));
+        std::error_code ec;
+        if (fs::exists(target, ec) && !fs::is_empty(target, ec))
+            throw std::runtime_error(trf("%s already exists. Choose another folder", utf8(target).c_str()));
+        auto sourceLock = source;
+        sourceLock += ".lock";
+        FileLock guard(sourceLock);
+        fs::create_directories(root);
+        fs::remove(target, ec);  // (an empty folder)
+        log("Moving " + utf8(source) + " -> " + utf8(target));
+        ec.clear();
+        if (folders::detail::renameAllowed()) fs::rename(source, target, ec);
+        else ec = std::make_error_code(std::errc::cross_device_link);  // (test hook: as if on another drive)
+        if (ec) {
+            // another drive: copy, check, switch, then remove the original
+            std::vector<std::pair<fs::path, uintmax_t>> files;
+            uintmax_t total = 0;
+            for (fs::recursive_directory_iterator it(source), end; it != end; ++it)
+                if (it->is_regular_file()) files.emplace_back(it->path(), it->file_size()), total += files.back().second;
+            if (const auto space = fs::space(root, ec); !ec && space.available < total + (256ull << 20))
+                throw std::runtime_error(trf("Not enough free space in %s: the installation needs %s", utf8(root).c_str(), aboutGb(total).c_str()));
+            InstallationTransaction transaction(target);
+            uintmax_t done = 0;
+            size_t lastMiB = 0;
+            for (fs::recursive_directory_iterator it(source), end; it != end; ++it) {
+                if (cancel) throw std::runtime_error("Cancelled");
+                const fs::path to = transaction.directory() / it->path().lexically_relative(source);
+                if (it->is_directory()) fs::create_directories(to);
+                else if (it->is_regular_file()) {
+                    fs::create_directories(to.parent_path());
+                    fs::copy_file(it->path(), to, fs::copy_options::overwrite_existing);
+                    if (fs::file_size(to) != it->file_size()) throw std::runtime_error(trf("Copy failed: %s", utf8(to).c_str()));
+                    done += it->file_size();
+                    if (const size_t mib = size_t(done >> 20); mib >= lastMiB + 16 || done == total)
+                        log(json({{"stage", "move"}, {"completed", lastMiB = mib}, {"total", size_t(total >> 20)},
+                                  {"item", utf8(it->path().lexically_relative(source))}})
+                                .dump());
+                }
+            }
+            for (const auto& [file, size] : files)
+                if (fs::file_size(transaction.directory() / file.lexically_relative(source), ec) != size || ec)
+                    throw std::runtime_error(trf("Copy failed: %s", utf8(file).c_str()));
+            transaction.commit();
+            fs::remove_all(source, ec);
+            if (ec) log("The old folder could not be removed completely: " + utf8(source));
+        }
+        forgetInstallPath(game, source);
+        rememberInstallPath(game, target);
+        saveConfig();
+        log(json({{"stage", "moved"}, {"completed", 1}, {"total", 1}}).dump());
+        return target;
     }
     void play(const std::atomic<bool>& cancel, const LogFunction& log) { play(GameId::Sly1, cancel, log); }
     // Settings > Advanced > Debug mode: one Debug Mode.ini in the profile root (Sly 1's user folder). Sly 2 and Sly 3 run
@@ -364,22 +609,24 @@ struct LauncherBackend {
     // Runtime contract (all games): <runtime> --data-dir <installations/KEY>
     // --user-dir <profile>[/KEY], started in the runtime's own folder.
     // The region played is the selected one (`region`, when given, is selected first and so remembered).
-    void play(GameId game, const std::atomic<bool>& cancel, const LogFunction& log, const std::string& region = {}) {
+    // vr: Sly 2 in VR (Sly2-Release --vr: an OpenXR headset; the game runs flat when it finds none). The launcher's
+    // "Play in VR" (ui/game_page.h, vr_probe.h) and `--play-vr sly2`.
+    void play(GameId game, const std::atomic<bool>& cancel, const LogFunction& log, const std::string& region = {}, bool vr = false) {
         if (!region.empty()) {
             if (!installation(game, region))
-                throw std::runtime_error(std::string(cane::game(game).shortName) + " has no " + regionName(region) + " installation");
+                throw std::runtime_error(trf("%s has no %s installation", cane::game(game).shortName, tr(regionName(region)).c_str()));
             setSelectedRegion(game, region);
         }
         if (needsReextract(game))
-            throw std::runtime_error("An update changed the format of " + std::string(cane::game(game).shortName) +
-                                     "'s game files. Open SafeHouse and re-extract your disc to keep playing");
+            throw std::runtime_error(trf("An update changed the format of the %s game files. Open SafeHouse and re-extract your disc to keep playing",
+                                         cane::game(game).shortName));
         if (game == GameId::Sly1 && !installed())
-            throw std::runtime_error("Install the game with this launcher version first");
+            throw std::runtime_error(tr("Install the game with this launcher version first"));
         if (game != GameId::Sly1) {
             if (!assetsInstalled(game))
-                throw std::runtime_error("Install the game with this launcher version first");
+                throw std::runtime_error(tr("Install the game with this launcher version first"));
             if (!runtimeAvailable(game))
-                throw std::runtime_error(std::string(cane::game(game).title) + " is still in development");
+                throw std::runtime_error(trf("%s is still in development", cane::game(game).title));
         }
         fs::create_directories(userDir(game));
         syncDebugMode(game);
@@ -391,7 +638,37 @@ struct LauncherBackend {
         std::vector<std::string> arguments{utf8(binary(runtime)), "--data-dir", utf8(dataDir(game)),
                                            "--user-dir", utf8(userDir(game))};
         for (auto& a : ps3HdArguments(game)) arguments.push_back(a);
-        checkedProcess(arguments, tools, cancel, log);
+        if (game == GameId::Sly2) {
+            // (a languages folder from before the Japanese font was imported: taken from the Japan installation now,
+            // so that Japanese shows its text on the other discs; the game starts either way)
+            try {
+                if (japaneseFontSource()) addJapaneseFont(cancel, [](const std::string&) {});
+            } catch (...) {
+            }
+            arguments.insert(arguments.end(), {"--languages-dir", utf8(languagesDir(game))});
+            if (vr) arguments.push_back("--vr");
+        }
+        explainedProcess(arguments, cancel, log);
+    }
+    // checkedProcess, but a failure's message is the program's own reason (its last line that reads as an error, else
+    // its last line) with the exit code, not "Details are in the launcher output" (the toast is all a phone shows).
+    void explainedProcess(const std::vector<std::string>& arguments, const std::atomic<bool>& cancel, const LogFunction& log) {
+        std::string last, lastError;
+        const int code = runProcess(arguments, tools, cancel, [&](const std::string& line) {
+            if (!line.empty() && line.front() != '{') {
+                last = line;
+                std::string lower = line;
+                std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char c) { return char(std::tolower(c)); });
+                for (const char* word : {"error", "fail", "required", "cannot", "could not", "once per app start"})
+                    if (lower.find(word) != std::string::npos) lastError = line;
+            }
+            log(line);
+        });
+        if (code == 0) return;
+        const std::string& reason = lastError.empty() ? last : lastError;
+        if (cancel || reason.empty())
+            throw std::runtime_error(arguments[0] + " failed (exit " + std::to_string(code) + "). Details are in the launcher output.");
+        throw std::runtime_error(reason + " (" + utf8(path(arguments[0]).filename()) + ", exit " + std::to_string(code) + ")");
     }
     // Sly 2's texture dump (Textures/ in the installation, MODDING.md): the converter writes it at install since
     // 2026-11-04; an installation from before has none, and "Export textures" writes it in place (no re-extract).
@@ -402,7 +679,7 @@ struct LauncherBackend {
     }
     void exportTextures(GameId game, const std::atomic<bool>& cancel, const LogFunction& log) {
         if (game != GameId::Sly2 || !assetsInstalled(game))
-            throw std::runtime_error("Install the game with this launcher version first");
+            throw std::runtime_error(tr("Install the game with this launcher version first"));
         fs::create_directories(userDir(game));
         // (Sly2-Release --export-textures: Textures.partial, renamed when complete; "textures I N WORLD" lines)
         checkedProcess({utf8(binary(cane::game(game).runtime)), "--data-dir", utf8(dataDir(game)), "--user-dir",
@@ -478,13 +755,13 @@ struct LauncherBackend {
     // Imports the pack from a disc source (png: as PNG files); the old pack (if any) is replaced only when the new one is
     // complete. The game program's "ps3hd: error: ..." line becomes the error shown.
     void importPs3Hd(GameId game, const std::string& source, bool png, const std::atomic<bool>& cancel, const LogFunction& log) {
-        if (!ps3HdGame(game)) throw std::runtime_error("The PS3 HD textures are for Sly 1 and Sly 2");
-        if (!assetsInstalled(game)) throw std::runtime_error("Install " + std::string(cane::game(game).shortName) + " first: the HD textures replace its installed ones");
-        if (!runtimeAvailable(game)) throw std::runtime_error(std::string(cane::game(game).title) + " is still in development");
+        if (!ps3HdGame(game)) throw std::runtime_error(tr("The PS3 HD textures are for Sly 1 and Sly 2"));
+        if (!assetsInstalled(game)) throw std::runtime_error(trf("Install %s first: the HD textures replace its installed ones", cane::game(game).shortName));
+        if (!runtimeAvailable(game)) throw std::runtime_error(trf("%s is still in development", cane::game(game).title));
         std::error_code ec;
         fs::create_directories(userDir(game), ec);
         if (const auto space = fs::space(userDir(game), ec); !ec && space.available < (2ull << 30))
-            throw std::runtime_error("Not enough free disk space: the PS3 HD textures need about 1 GB (Sly 1: 0.6 GB, Sly 2: 0.3 GB)");
+            throw std::runtime_error(tr("Not enough free disk space: the PS3 HD textures need about 1 GB (Sly 1: 0.6 GB, Sly 2: 0.3 GB)"));
         auto staging = ps3HdDir(game);
         staging += ".staging";
         fs::remove_all(staging, ec);
@@ -525,8 +802,7 @@ struct LauncherBackend {
                 if (error.back() == '.') error.pop_back();
                 throw std::runtime_error(error);
             }
-            throw std::runtime_error(std::string(cane::game(game).runtime) + " could not import the PS3 HD textures (exit " +
-                                     std::to_string(code) + "). Details are in the launcher output");
+            throw std::runtime_error(trf("%s could not import the PS3 HD textures (exit %d). Details are in the launcher output", cane::game(game).runtime, code));
         }
         // pack.json: what the Settings page shows
         int textures = 0;
@@ -544,6 +820,248 @@ struct LauncherBackend {
         fs::remove_all(previous, ec);
         setPs3HdEnabled(game, true);
         log(json({{"stage", "ps3-done"}, {"completed", 1}, {"total", 1}}).dump());
+    }
+    // ---- Sly 2's languages (Sly2-Release/langstore.h, notes/LANG_2026-11-10.md): one languages folder shared by every
+    // region's installation, sly2-languages beside them. The converter puts each installed disc's languages there
+    // (cane-extractor --languages-dir); other discs' languages are imported into it (a disc image, an older
+    // installation's own, The Sly Collection's French / Spanish subtitles). The game offers them all on the title.
+    fs::path languagesDir(GameId game) const {
+        return baseDir(game).parent_path() / (std::string(cane::game(game).key) + "-languages");
+    }
+    struct LanguageInfo {
+        std::string key;            // the folder name ("French", "English (UK)"): Settings.ini's Language value
+        std::string source;         // the disc it came from
+        bool text = false, voice = false, movies = false;
+        bool wide = false;          // Japanese script: its text needs the Japanese font
+        bool font = false;          // (wide) the languages folder has that font (Font.bin): every disc shows its text
+        bool disc = false;          // one of an installation's own (its world files)
+    };
+    // The languages the game offers on the selected region (Sly2-Release/langstore.cpp InitLanguageStore, the same
+    // rules): its installation's own, then the languages folder's and the mods folder's Mods/Languages/ that have text,
+    // except those taken from a disc of the selected region's own family ("English (UK)" on Europe); the game's order,
+    // then by name. Another region's own languages appear once shared into the folder (Settings > Games > Sly 2).
+    std::vector<LanguageInfo> sly2Languages() const {
+        static const char* const order[] = {"English", "French", "Italian", "German", "Spanish", "Dutch", "Portuguese",
+                                            "Danish", "Finnish", "Norwegian", "Swedish", "Japanese", "Korean", "Chinese"};
+        std::map<std::string, LanguageInfo> all;
+        std::error_code ec;
+        const std::string selected = selectedRegion(GameId::Sly2);
+        std::string family;
+        auto regionFamily = [](const std::string& disc) { return disc.substr(0, disc.find(' ')); };
+        for (const auto& in : installations(GameId::Sly2)) {
+            if (in.region != selected) continue;
+            family = regionFamily(in.name());
+            try {
+                // (the manifest's "languages" near its start: the whole file is megabytes)
+                std::ifstream f(in.dir / "extraction_manifest.json", std::ios::binary);
+                std::string head(8192, '\0');
+                f.read(head.data(), std::streamsize(head.size()));
+                head.resize(size_t(f.gcount()));
+                const auto at = head.find("\"languages\"");
+                const auto open = at == std::string::npos ? at : head.find('[', at);
+                const auto close = open == std::string::npos ? open : head.find(']', open);
+                if (close == std::string::npos) continue;
+                for (const auto& l : json::parse(head.substr(open, close - open + 1))) {
+                    auto& info = all[l.get<std::string>()];
+                    info.key = l.get<std::string>();
+                    info.disc = info.text = info.voice = info.movies = true;
+                    info.wide = info.key == "Japanese";
+                    if (info.source.empty()) info.source = in.name();
+                }
+            } catch (...) {
+            }
+        }
+        std::map<std::string, LanguageInfo> folder;
+        for (const fs::path& dir : {languagesDir(GameId::Sly2), userDir(GameId::Sly2) / "Mods" / "Languages"}) {
+            if (!fs::is_directory(dir, ec)) continue;
+            for (const auto& e : fs::directory_iterator(dir, ec)) {
+                if (!e.is_directory(ec)) continue;
+                const std::string key = utf8(e.path().filename());
+                if (key.empty() || key[0] == '.') continue;
+                auto& info = folder[key];
+                info.key = key;
+                info.text = info.text || fs::is_regular_file(e.path() / "Text.json", ec);
+                info.voice = info.voice || fs::is_directory(e.path() / "Dialog", ec);
+                info.movies = info.movies || fs::is_directory(e.path() / "Movies", ec);
+                bool script = false;
+                try {
+                    const json j = readJson(e.path() / "language.json");
+                    if (info.source.empty()) info.source = j.value("source", std::string{});
+                    if (j.contains("text") && !info.text) info.text = info.voice;  // (a dub that names its text)
+                    if (j.contains("script")) script = true, info.wide = info.wide || j.value("script", std::string{}) == "japanese";
+                } catch (...) {
+                }
+                if (!script && (key == "Japanese" || key == "Korean" || key == "Chinese")) info.wide = true;
+                info.font = info.font || fs::is_regular_file(e.path() / "Font.bin", ec);
+            }
+        }
+        // (a Japanese text variant without a font of its own is drawn with the "Japanese" folder's: langstore.cpp)
+        if (const auto japanese = folder.find("Japanese"); japanese != folder.end() && japanese->second.font)
+            for (auto& [key, info] : folder) info.font = info.font || info.wide;
+        for (auto& [key, info] : folder) {
+            if (all.count(key)) {
+                // (a disc language the folder adds to: still the disc's)
+                auto& d = all[key];
+                d.voice = d.voice || info.voice, d.movies = d.movies || info.movies;
+                continue;
+            }
+            if (!info.text) continue;
+            if (!family.empty() && !info.source.empty() && regionFamily(info.source) == family) continue;
+            all[key] = info;
+        }
+        std::vector<LanguageInfo> out;
+        for (auto& [k, v] : all) out.push_back(v);
+        auto rank = [&](const std::string& key) {
+            const std::string base = key.substr(0, key.find(" ("));
+            for (size_t i = 0; i < std::size(order); ++i)
+                if (base == order[i]) return int(i) * 2 + (base == key ? 0 : 1);
+            return 100;
+        };
+        std::stable_sort(out.begin(), out.end(), [&](const auto& a, const auto& b) {
+            return rank(a.key) != rank(b.key) ? rank(a.key) < rank(b.key) : a.key < b.key;
+        });
+        return out;
+    }
+    // ---- Sly 1's language (Sly1-Release/content.cpp): the selected installation's manifest lists its languages
+    // ("languages", Japan also "voiceLanguages"); the choice is <profile>/content_settings.json "languages" {serial:
+    // name}, which the game reads at start and its PAL menu writes. Nothing else changes: the same file and names.
+    struct Sly1Languages {
+        std::string serial, region;           // "SCES-509.17", "PAL"
+        std::vector<std::string> languages;   // text languages, then voice-only ones (Japan: "English" voices)
+        std::vector<std::string> voiceOnly;
+        std::string selected;                 // the saved choice, else the game's default
+    };
+    Sly1Languages sly1Languages() const {
+        Sly1Languages out;
+        const auto in = installation(GameId::Sly1, selectedRegion(GameId::Sly1));
+        if (!in) return out;
+        try {
+            const json m = readJson(in->dir / "extraction_manifest.json");
+            out.serial = m.value("serial", std::string{});
+            out.region = m.value("region", std::string{});
+            if (m.contains("languages") && m["languages"].is_array())
+                for (const auto& l : m["languages"])
+                    if (l.is_string()) out.languages.push_back(l.get<std::string>());
+            if (m.contains("voiceLanguages") && m["voiceLanguages"].is_array())
+                for (const auto& l : m["voiceLanguages"])
+                    if (l.is_string() && std::find(out.languages.begin(), out.languages.end(), l.get<std::string>()) == out.languages.end())
+                        out.languages.push_back(l.get<std::string>()), out.voiceOnly.push_back(l.get<std::string>());
+        } catch (...) {
+            return {};
+        }
+        if (out.languages.empty()) out.languages.push_back("English");
+        out.selected = out.region == "NTSC-J" ? "Japanese" : out.region == "NTSC-K" ? "Korean" : "English";
+        try {
+            const json s = readJson(userDir(GameId::Sly1) / "content_settings.json");
+            if (s.contains("languages") && s["languages"].is_object() && s["languages"].contains(out.serial) && s["languages"][out.serial].is_string())
+                out.selected = s["languages"][out.serial].get<std::string>();
+        } catch (...) {
+        }
+        return out;
+    }
+    void setSly1Language(const std::string& serial, const std::string& language) const {
+        if (serial.empty()) return;
+        const fs::path file = userDir(GameId::Sly1) / "content_settings.json";
+        json s = json::object();
+        try {
+            s = readJson(file);
+            if (!s.is_object()) s = json::object();
+        } catch (...) {
+        }
+        if (!s.contains("languages") || !s["languages"].is_object()) s["languages"] = json::object();
+        s["languages"][serial] = language;
+        writeJson(file, s);
+    }
+    // An installation that still keeps its languages in its own folder (installed before the languages folder):
+    // "share" moves them there, so the other regions offer them too.
+    std::vector<Installation> sly2InstallationsWithOwnLanguages() const {
+        std::vector<Installation> out;
+        for (const auto& in : installations(GameId::Sly2)) {
+            if (!in.current) continue;
+            std::error_code ec;
+            if (fs::is_directory(in.dir / "Dialog", ec)) out.push_back(in);
+        }
+        return out;
+    }
+    // The Sly Collection's languages (French, Spanish) the game has neither on an installation nor in the folder.
+    std::vector<std::string> ps3MissingLanguages() const {
+        std::vector<std::string> out;
+        const auto have = sly2Languages();
+        for (const char* key : {"French", "Spanish"})
+            if (std::none_of(have.begin(), have.end(), [&](const LanguageInfo& l) { return l.key == key && l.text; })) out.push_back(key);
+        return out;
+    }
+    // Runs the game program's language import (its "progress N M item" lines as the job's).
+    void runLanguageTool(std::vector<std::string> arguments, const char* stage, const std::atomic<bool>& cancel, const LogFunction& log) {
+        if (!runtimeAvailable(GameId::Sly2)) throw std::runtime_error(tr("Sly 2 is still in development"));
+        std::error_code ec;
+        fs::create_directories(userDir(GameId::Sly2), ec);
+        fs::create_directories(languagesDir(GameId::Sly2), ec);
+        std::string error;
+        arguments.insert(arguments.begin(), utf8(binary(cane::game(GameId::Sly2).runtime)));
+        const int code = runProcess(arguments, tools, cancel, [&](const std::string& line) {
+            unsigned long long done = 0, total = 0;
+            char item[256] = {};
+            if (std::sscanf(line.c_str(), "progress %llu %llu %255[^\n]", &done, &total, item) >= 2) {
+                log(json({{"stage", stage}, {"completed", done}, {"total", total}, {"item", item}}).dump());
+                return;
+            }
+            if (line.rfind("ps3lang: error: ", 0) == 0) error = line.substr(16);
+            else if (line.rfind("import-languages: ", 0) == 0 && line.find(" files written") == std::string::npos) error = line.substr(18);
+            log(line);
+        });
+        if (cancel) throw std::runtime_error("Cancelled");
+        if (code != 0) throw std::runtime_error(error.empty() ? trf("The language import failed (exit %d). Details are in the launcher output", code) : error);
+        log(json({{"stage", stage}, {"completed", 1}, {"total", 1}}).dump());
+    }
+    // Japanese is in the languages folder without the Japanese disc's text font (imported by a SafeHouse before the
+    // font was taken along): the USA / European discs then play its voices over their own text.
+    bool japaneseFontMissing() const {
+        std::error_code ec;
+        const fs::path dir = languagesDir(GameId::Sly2) / "Japanese";
+        return fs::is_regular_file(dir / "Text.json", ec) && !fs::is_regular_file(dir / "Font.bin", ec);
+    }
+    // The installed Japan disc, when it can supply that font.
+    std::optional<Installation> japaneseFontSource() const {
+        if (!japaneseFontMissing()) return std::nullopt;
+        for (const auto& in : installations(GameId::Sly2))
+            if (in.region == "japan" && in.current) return in;
+        return std::nullopt;
+    }
+    // Adds the font from the Japan installation (the game program's language import: it writes only what the folder
+    // lacks; a few seconds).
+    void addJapaneseFont(const std::atomic<bool>& cancel, const LogFunction& log) {
+        const auto in = japaneseFontSource();
+        if (!in) return;
+        runLanguageTool({"--data-dir", utf8(in->dir), "--user-dir", utf8(userDir(GameId::Sly2)), "--languages-dir",
+                         utf8(languagesDir(GameId::Sly2)), "--import-languages", utf8(languagesDir(GameId::Sly2)), "--only-language", "Japanese"},
+                        "languages", cancel, log);
+    }
+    // A disc image's languages (Europe: 11, Japan: Japanese; USA: English) into the folder, without installing it.
+    void importLanguagesFromDisc(const std::string& iso, const std::atomic<bool>& cancel, const LogFunction& log) {
+        const DiscCheck check = checkDisc(path(iso), GameId::Sly2);
+        if (!check.ok()) throw std::runtime_error(check.message);
+        runLanguageTool({"--disc", iso, "--user-dir", utf8(userDir(GameId::Sly2)), "--languages-dir", utf8(languagesDir(GameId::Sly2)),
+                         "--import-languages", utf8(languagesDir(GameId::Sly2))},
+                        "languages", cancel, log);
+    }
+    // An older installation's own languages moved into the folder (its manifests point there afterwards).
+    void shareInstallationLanguages(const std::string& region, const std::atomic<bool>& cancel, const LogFunction& log) {
+        const auto in = installation(GameId::Sly2, region);
+        if (!in) throw std::runtime_error(trf("%s has no %s installation", "Sly 2", tr(regionName(region)).c_str()));
+        auto lock = fs::absolute(in->dir);
+        lock += ".lock";
+        FileLock guard(lock);
+        runLanguageTool({"--data-dir", utf8(in->dir), "--user-dir", utf8(userDir(GameId::Sly2)), "--languages-dir",
+                         utf8(languagesDir(GameId::Sly2)), "--import-languages", utf8(languagesDir(GameId::Sly2)), "--move-languages"},
+                        "languages", cancel, log);
+    }
+    // The Sly Collection's (PS3) French and Spanish (text: subtitles over the English voices), when missing.
+    void importPs3Languages(const std::string& source, const std::atomic<bool>& cancel, const LogFunction& log) {
+        if (!assetsInstalled(GameId::Sly2)) throw std::runtime_error(tr("Install Sly 2 first (the USA or a European disc)"));
+        runLanguageTool({"--data-dir", utf8(dataDir(GameId::Sly2)), "--user-dir", utf8(userDir(GameId::Sly2)), "--languages-dir",
+                         utf8(languagesDir(GameId::Sly2)), "--import-ps3-languages", source, utf8(languagesDir(GameId::Sly2))},
+                        "ps3-languages", cancel, log);
     }
     // The game's --texture-pack argument while the pack is installed and on.
     std::vector<std::string> ps3HdArguments(GameId game) const {
@@ -613,7 +1131,7 @@ struct LauncherBackend {
                        source, cancel, log);
         for (auto name : {"cane-extractor", "Sly1-Release"})
             if (!fs::is_regular_file(transaction.directory() / "bin" / executableName(name)))
-                throw std::runtime_error("Build did not install required programs");
+                throw std::runtime_error(tr("Build did not install required programs"));
         transaction.commit();
         tools = runtime / "bin";
         config["runtime_dir"] =

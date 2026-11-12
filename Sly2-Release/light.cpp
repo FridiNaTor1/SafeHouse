@@ -1,5 +1,6 @@
 // See light.h.
 
+#include "fastpaths.h"
 #include "light.h"
 
 #include "glob.h"
@@ -42,7 +43,7 @@ struct WORLDLIGHTS
     std::vector<std::pair<uint32_t, uint32_t>> alog;
     uint32_t vLogBase = 0, vReset = 0, vShader = 0, vUntracked = 0;
     size_t cBakeMax = 0;
-#ifdef __SWITCH__
+#if SLY2_FASTPATHS
     size_t ieNext = 0;   // (SetWorldLight: the entry after the last one set)
 #endif
 } s_wl;
@@ -100,7 +101,7 @@ void SetWorldLight(const void* plight, const LIGHTREC& rec, bool fActive)
 void SetWorldLight(const void* plight, const LIGHTREC& rec, const LIGHTSEL& sel, bool fBake, bool fContext)
 {
     s_wl.fSet = true;
-#ifdef __SWITCH__
+#if SLY2_FASTPATHS
     // (the Switch: the lights are set in the same order every frame (UpdateWorldLightsFromSw), so the entry after the
     // last one set is usually this light's, found without a search; a light has one entry at most)
     const size_t ieFirst = s_wl.ieNext < s_wl.a.size() && s_wl.a[s_wl.ieNext].plight == plight ? s_wl.ieNext : 0;
@@ -110,7 +111,7 @@ void SetWorldLight(const void* plight, const LIGHTREC& rec, const LIGHTSEL& sel,
     for (size_t ie = ieFirst; ie < s_wl.a.size(); ++ie)
         if (WORLDLIGHTENTRY& e = s_wl.a[ie]; e.plight == plight)
         {
-#ifdef __SWITCH__
+#if SLY2_FASTPATHS
             s_wl.ieNext = ie + 1;
 #endif
             if (e.fSel && e.fBake == fBake && e.fContext == fContext && !std::memcmp(&e.rec, &rec, sizeof(LIGHTREC)) &&
@@ -128,7 +129,7 @@ void SetWorldLight(const void* plight, const LIGHTREC& rec, const LIGHTSEL& sel,
     WORLDLIGHTENTRY e;
     e.plight = plight; e.rec = rec; e.sel = sel; e.fBake = fBake; e.fContext = fContext; e.fSel = true;
     s_wl.a.push_back(e);
-#ifdef __SWITCH__
+#if SLY2_FASTPATHS
     s_wl.ieNext = s_wl.a.size();
 #endif
     LogEntryChange(s_wl.a.back(), s_wl.a.size() - 1);
@@ -310,7 +311,7 @@ void BakeGlobLighting(GLOB& glob, const glm::mat4& matWorld, const glm::vec3& po
 {
     const glm::mat3 matNormal = NormalMatrix(matWorld);
     // Point lights whose range does not reach the group's sphere are skipped for the whole group.
-#ifdef __SWITCH__
+#if SLY2_FASTPATHS
     // (the Switch: each thread's list kept from one bake to the next, the game thread's and the pass helpers')
     static thread_local std::vector<const LIGHTREC*> apl;
     apl.clear();

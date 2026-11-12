@@ -3,7 +3,7 @@
 # Libraries/gamecontrollerdb), embedded into the game and the launcher.
 # Included at the end of CMakeLists.txt, after every target exists.
 set(cane_prompt_source "${CMAKE_CURRENT_SOURCE_DIR}/assets/prompts")
-set(cane_prompt_families keyboard playstation xbox nintendo steamdeck steamcontroller ps4 ps5 steamcontroller2026 devices)
+set(cane_prompt_families keyboard playstation xbox nintendo steamdeck steamcontroller ps4 ps5 steamcontroller2026 gamecube switch2 wii wiiu metaquest valveindex steamframe vivewand pico devices)
 set(cane_gamecontrollerdb "${CMAKE_CURRENT_SOURCE_DIR}/Libraries/gamecontrollerdb/gamecontrollerdb.txt")
 if(TARGET glfw AND EXISTS "${cane_prompt_source}/prompt_atlas_rects.inc" AND EXISTS "${cane_gamecontrollerdb}")
  set(cane_prompt_generated "${CMAKE_BINARY_DIR}/generated/prompts")
@@ -53,6 +53,22 @@ if(TARGET glfw AND EXISTS "${cane_prompt_source}/prompt_atlas_rects.inc" AND EXI
   # (needs a display; skipped without one).
   add_test(NAME button-prompts-render COMMAND cane-button-prompts-tests --source "${CMAKE_CURRENT_SOURCE_DIR}" --render "${CMAKE_BINARY_DIR}/prompt-review")
   set_tests_properties(button-prompts-render PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 60)
+ endif()
+ # Controller support: fallback mappings for fake devices, family detection, button tokens (tools/controller_selftest.cpp);
+ # controllers-uinput drives a real virtual pad through GLFW (Linux, needs /dev/uinput and a display; skipped otherwise).
+ if(BUILD_TESTING)
+  add_executable(cane-controller-tests tools/controller_selftest.cpp)
+  target_link_libraries(cane-controller-tests PRIVATE cane_prompts cane_platform glfw)
+  target_include_directories(cane-controller-tests BEFORE PRIVATE "${glfw_SOURCE_DIR}/include" "${CMAKE_CURRENT_SOURCE_DIR}/platform")
+  add_dependencies(cane-controller-tests cane_prompts_data)
+  if(MSVC)
+   set_property(TARGET cane-controller-tests PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+  endif()
+  add_test(NAME controllers COMMAND cane-controller-tests)
+  if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+   add_test(NAME controllers-uinput COMMAND cane-controller-tests --uinput)
+   set_tests_properties(controllers-uinput PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 60)
+  endif()
  endif()
  # Optional: -DCANE_KENNEY_ZIP=<kenney_input-prompts_1.5.zip> checks that the
  # committed atlases are exactly what tools/pack_prompts.py produces (Pillow).

@@ -1,3 +1,4 @@
+#include "fastpaths.h"
 #include <execinfo.h>
 #include "simdmat.h"
 #include "clock.h"
@@ -17,8 +18,13 @@
 #include "xfphys.h"
 #include "objmethod.h"
 #include "vtnative.h"
+#include "passhelpers.h"
 
 #include <atomic>
+#include <vector>
+#include <unordered_map>
+#include <cstring>
+#include <algorithm>
 #include <stdexcept>
 #include <cstdio>
 #include <cstdlib>
@@ -264,7 +270,7 @@ void LoadAloFromBrx(LO* plo, CBinaryInputStream* pbis)
 // index search. A reference inside the object is done first; records of other objects are taken as they are.)
 namespace
 {
-// (atomic: FUpdateAloHierarchyWorldsIsolated takes stamps on several threads at once)
+// (atomic: UpdateAloRootsWorlds takes stamps on several threads at once)
 std::atomic<uint64_t> s_genXfWorld{0};
 uint64_t NextGenXfWorld() { return s_genXfWorld.fetch_add(1, std::memory_order_relaxed) + 1; }   // (64 bits: never wraps)
 void UpdateXfWorld(ALO* palo, XF* pxf, uint64_t gen)
@@ -276,29 +282,6 @@ void UpdateXfWorld(ALO* palo, XF* pxf, uint64_t gen)
     if (pxfRef && pxfRef->palo == palo) UpdateXfWorld(palo, pxfRef, gen);
     pxf->matWorld = pxfRef ? MulMat4(pxfRef->matWorld, pxf->mat) : pxf->mat;   // (simdmat.h: glm's product exactly)
     pxf->genWorld = 2 * gen + 1;
-}
-// UpdateXfWorld for a hierarchy updated alongside others: false, the reference not read, when it lies outside the
-// hierarchy of paloRoot (another thread may be writing its world). Across hierarchies only the records' owners and the
-// objects' parents are read, which nothing writes meanwhile. A record left started (2g) is redone under a new stamp.
-bool FUpdateXfWorldIsolated(ALO* palo, XF* pxf, uint64_t gen, const ALO* paloRoot)
-{
-    if (pxf->genWorld == 2 * gen + 1) return true;
-    if (pxf->genWorld == 2 * gen) { pxf->matWorld = pxf->mat; return true; }  // (a cycle: not expected)
-    pxf->genWorld = 2 * gen;
-    XF* pxfRef = pxf->pxfRef;
-    if (pxfRef && pxfRef->palo == palo)
-    {
-        if (!FUpdateXfWorldIsolated(palo, pxfRef, gen, paloRoot)) return false;
-    }
-    else if (pxfRef)
-    {
-        const ALO* p = pxfRef->palo;
-        while (p && p != paloRoot) p = p->paloParent;
-        if (!p) return false;
-    }
-    pxf->matWorld = pxfRef ? MulMat4(pxfRef->matWorld, pxf->mat) : pxf->mat;
-    pxf->genWorld = 2 * gen + 1;
-    return true;
 }
 }  // namespace
 
@@ -317,40 +300,138 @@ void UpdateAloHierarchyWorlds(ALO* palo)
         if (FCidDerivedFrom(pc->Cid(), 0x30)) UpdateAloHierarchyWorlds(static_cast<ALO*>(pc));
 }
 
-bool FUpdateAloHierarchyWorldsIsolated(ALO* palo, const ALO* paloRoot)
+// The step's walk over the roots' hierarchies (game.cpp) on the pass helpers, with the serial walk's results. In the
+// serial walk (UpdateAloHierarchyWorlds of each root in turn) a record referring into another root's hierarchy reads
+// that root's world of this step when the root comes earlier, of the last step when it comes later. So:
+//  1. each hierarchy is looked over (on the helpers, nothing written): the roots its records refer into and the
+//     roots of children walked here that are another root's (a child list and parent links that disagree);
+//  2. a hierarchy that refers outside itself is walked after the others, in the roots' order, on this thread; so is
+//     a self-contained hierarchy that such a walk earlier in the order reads (it must still hold the last step's);
+//  3. the other self-contained hierarchies first, on the helpers: they read and write only their own records.
+// A record referring to one of no hierarchy walked here, or to one without an owner, makes its hierarchy go in
+// order too (nothing writes those meanwhile; this keeps the rule simple). SLY2N_HIERSERIAL=1: the serial walk;
+// SLY2N_HIERCHECK=1: each step also walks serially from the same start and compares every record (debug).
+namespace
 {
-#ifdef __SWITCH__
-    // (the Switch: the records two ahead and the children's class pointers prefetched; each record is a heap block of
-    // its own)
-    auto prefetchXf = [](const XF* p) {
-        __builtin_prefetch(&p->genWorld);
-        __builtin_prefetch(&p->mat);
-        __builtin_prefetch(&p->matWorld, 1);
-    };
-    for (const LO* pc : palo->aploChild) __builtin_prefetch(&pc->pcls);
-    const size_t cxf = palo->axf.size();
-    if (cxf > 0) prefetchXf(palo->axf[0].get());
-    if (cxf > 1) prefetchXf(palo->axf[1].get());
-    if (cxf)
+const ALO* PaloTopOf(const ALO* p)
+{
+    while (p->paloParent) p = p->paloParent;
+    return p;
+}
+struct HIERDEP
+{
+    bool fOut = false;              // refers outside its hierarchy (or walks another root's child)
+    std::vector<uint32_t> airoot;   // the walked roots it refers into
+};
+void NoteHierarchyRef(const ALO* paloTop, const ALO* paloRoot, const std::unordered_map<const ALO*, uint32_t>& mpiroot, HIERDEP& dep)
+{
+    if (paloTop == paloRoot) return;
+    dep.fOut = true;
+    if (!paloTop) return;
+    const auto it = mpiroot.find(paloTop);
+    if (it != mpiroot.end() && std::find(dep.airoot.begin(), dep.airoot.end(), it->second) == dep.airoot.end()) dep.airoot.push_back(it->second);
+}
+// (the walk of UpdateAloHierarchyWorlds: the same objects, the same records)
+void ClassifyHierarchy(const ALO* palo, const ALO* paloRoot, const std::unordered_map<const ALO*, uint32_t>& mpiroot, HIERDEP& dep)
+{
+    for (const auto& pxf : palo->axf)
     {
-        const uint64_t gen = NextGenXfWorld();
-        for (size_t i = 0; i < cxf; ++i)
+        const XF* pxfRef = pxf->pxfRef;
+        if (!pxfRef || pxfRef->palo == palo) continue;
+        NoteHierarchyRef(pxfRef->palo ? PaloTopOf(pxfRef->palo) : nullptr, paloRoot, mpiroot, dep);
+    }
+    for (const LO* pc : palo->aploChild)
+    {
+        if (!FCidDerivedFrom(pc->Cid(), 0x30)) continue;
+        const ALO* pac = static_cast<const ALO*>(pc);
+        if (pac->paloParent != palo) NoteHierarchyRef(PaloTopOf(pac), paloRoot, mpiroot, dep);
+        ClassifyHierarchy(pac, paloRoot, mpiroot, dep);
+    }
+}
+void CollectHierarchyXfs(ALO* palo, std::vector<XF*>& apxf)
+{
+    for (auto& pxf : palo->axf) apxf.push_back(pxf.get());
+    for (LO* pc : palo->aploChild)
+        if (FCidDerivedFrom(pc->Cid(), 0x30)) CollectHierarchyXfs(static_cast<ALO*>(pc), apxf);
+}
+void UpdateAloRootsWorldsParallel(const std::vector<ALO*>& apaloRoot)
+{
+    static std::unordered_map<const ALO*, uint32_t> s_mpiroot;
+    static std::vector<ALO*> s_apaloKey;
+    if (s_apaloKey != apaloRoot)
+    {
+        s_apaloKey = apaloRoot;
+        s_mpiroot.clear();
+        for (size_t i = 0; i < apaloRoot.size(); ++i) s_mpiroot.emplace(apaloRoot[i], uint32_t(i));
+    }
+    const size_t c = apaloRoot.size();
+    static std::vector<HIERDEP> s_adep;
+    static std::vector<uint8_t> s_afSerial;
+    if (s_adep.size() < c) s_adep.resize(c);
+    PassHelpers().ForBlocks(c, 16, [&](size_t iFirst, size_t iLim) {
+        for (size_t i = iFirst; i < iLim; ++i)
         {
-            if (i + 2 < cxf) prefetchXf(palo->axf[i + 2].get());
-            if (!FUpdateXfWorldIsolated(palo, palo->axf[i].get(), gen, paloRoot)) return false;
+            HIERDEP& dep = s_adep[i];
+            dep.fOut = false;
+            dep.airoot.clear();
+            ClassifyHierarchy(apaloRoot[i], apaloRoot[i], s_mpiroot, dep);
+        }
+    });
+    s_afSerial.assign(c, 0);
+    for (size_t i = 0; i < c; ++i)
+    {
+        if (!s_adep[i].fOut) continue;
+        s_afSerial[i] = 1;
+        for (uint32_t j : s_adep[i].airoot)
+            if (j > i) s_afSerial[j] = 1;
+    }
+    PassHelpers().ForBlocks(c, 8, [&](size_t iFirst, size_t iLim) {
+        for (size_t i = iFirst; i < iLim; ++i)
+            if (!s_afSerial[i]) UpdateAloHierarchyWorlds(apaloRoot[i]);
+    });
+    for (size_t i = 0; i < c; ++i)
+        if (s_afSerial[i]) UpdateAloHierarchyWorlds(apaloRoot[i]);
+    if (static const bool s_fStats = std::getenv("SLY2N_HIERSTATS") != nullptr; s_fStats)
+    {
+        static int s_cstep = 0;
+        if (++s_cstep % 300 == 0)
+        {
+            size_t cOut = 0, cSerial = 0;
+            for (size_t i = 0; i < c; ++i) cOut += s_adep[i].fOut, cSerial += s_afSerial[i];
+            std::printf("hierstats: %zu roots, %zu refer outside, %zu walked in order\n", c, cOut, cSerial);
         }
     }
-#else
-    if (!palo->axf.empty())
+}
+}  // namespace
+
+void UpdateAloRootsWorlds(const std::vector<ALO*>& apaloRoot)
+{
+    static const bool s_fSerial = std::getenv("SLY2N_HIERSERIAL") && std::atoi(std::getenv("SLY2N_HIERSERIAL")) != 0;
+    static const bool s_fCheck = std::getenv("SLY2N_HIERCHECK") && std::atoi(std::getenv("SLY2N_HIERCHECK")) != 0;
+    if (s_fSerial)
     {
-        const uint64_t gen = NextGenXfWorld();
-        for (auto& pxf : palo->axf)
-            if (!FUpdateXfWorldIsolated(palo, pxf.get(), gen, paloRoot)) return false;
+        for (ALO* palo : apaloRoot) UpdateAloHierarchyWorlds(palo);
+        return;
     }
-#endif
-    for (LO* pc : palo->aploChild)
-        if (FCidDerivedFrom(pc->Cid(), 0x30) && !FUpdateAloHierarchyWorldsIsolated(static_cast<ALO*>(pc), paloRoot)) return false;
-    return true;
+    if (!s_fCheck)
+    {
+        UpdateAloRootsWorldsParallel(apaloRoot);
+        return;
+    }
+    // (debug) the serial walk's results from the same start, compared bit for bit with the parallel walk's
+    std::vector<XF*> apxf;
+    for (ALO* palo : apaloRoot) CollectHierarchyXfs(palo, apxf);
+    std::vector<glm::mat4> amatStart(apxf.size()), amatSerial(apxf.size());
+    for (size_t i = 0; i < apxf.size(); ++i) amatStart[i] = apxf[i]->matWorld;
+    for (ALO* palo : apaloRoot) UpdateAloHierarchyWorlds(palo);
+    for (size_t i = 0; i < apxf.size(); ++i) amatSerial[i] = apxf[i]->matWorld, apxf[i]->matWorld = amatStart[i];
+    UpdateAloRootsWorldsParallel(apaloRoot);
+    static int s_cstep = 0, s_cbad = 0;
+    ++s_cstep;
+    for (size_t i = 0; i < apxf.size(); ++i)
+        if (std::memcmp(&amatSerial[i], &apxf[i]->matWorld, sizeof(glm::mat4)) != 0 && ++s_cbad <= 20)
+            std::printf("hiercheck: step %d: a record of object %d differs from the serial walk\n", s_cstep, apxf[i]->palo ? apxf[i]->palo->oid : -1);
+    if (s_cstep % 600 == 0) std::printf("hiercheck: %d steps, %d records differed, %zu records\n", s_cstep, s_cbad, apxf.size());
 }
 
 // orig 0x001F4010 (ALO vt slot 37 SetMatrix): the first record's local = m * local (the original's 0x11C168(m,

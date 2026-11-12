@@ -1,5 +1,6 @@
 // See scene.h.
 
+#include "fastpaths.h"
 #include "scene.h"
 
 #include "passhelpers.h"
@@ -189,7 +190,7 @@ int CApplyRamTransforms(SCENE& scene, const std::string& ramPath)
         if (!fValid(agrp)) continue;
         sgs.amatGlob.resize(gs.aglob.size(), glm::mat4(1.0f));
         sgs.afVisible.resize(gs.aglob.size(), 1);
-#ifdef __SWITCH__
+#if SLY2_FASTPATHS
         sgs.fVisibleCleared = false;   // (the groups' flags set below)
 #endif
         const uint32_t paloSelf = u32(vaGlob + 0);
@@ -318,6 +319,22 @@ bool FLightsFromRam(const std::string& ramPath, LIGHTSET& lights)
     return true;
 }
 
+// ForwardGlobLighting with the debug menu's character scale taken out of the bones (their normals lit without the
+// scale, debugphys.h); the scale 1 calls it directly
+static void ForwardGlobLightingScaled(const SCENEGLOBSET& sgs, GLOB& glob, const glm::mat4& m, const glm::vec3& posCtx,
+                                      const LIGHTSET& lights, const std::vector<glm::mat4>* pamatBone, const LIGHTREC* palLit)
+{
+    if (pamatBone && sgs.sDrawScale != 1.0f)
+    {
+        std::vector<glm::mat4> amatUnscaled = *pamatBone;
+        for (glm::mat4& mb : amatUnscaled)
+            for (int c = 0; c < 3; ++c) mb[c] = glm::vec4(glm::vec3(mb[c]) / sgs.sDrawScale, mb[c].w);
+        ForwardGlobLighting(glob, m, posCtx, lights, &amatUnscaled, palLit);
+        return;
+    }
+    ForwardGlobLighting(glob, m, posCtx, lights, pamatBone, palLit);
+}
+
 int RelightForward(SCENE& scene, const LIGHTSET& lightsFrame, bool fUpload, const LIGHTSET* alightsRtgt)
 {
     int c = 0;
@@ -397,7 +414,7 @@ int RelightForward(SCENE& scene, const LIGHTSET& lightsFrame, bool fUpload, cons
     };
     for (size_t ientry = ientryFirst; ientry < ientryLim; ++ientry)
     {
-#ifdef __SWITCH__
+#if SLY2_FASTPATHS
         // (the Switch: the entry two ahead fetched, its glob set and the list of its lit groups, scattered over the heap)
         if (ientry + 2 < ientryLim)
         {
@@ -433,7 +450,7 @@ int RelightForward(SCENE& scene, const LIGHTSET& lightsFrame, bool fUpload, cons
         glm::vec3 posAlSel(0.0f);
         for (const uint32_t iglobLit : sgs.aiglobLit)
         {
-#ifdef __SWITCH__
+#if SLY2_FASTPATHS
             // (the Switch: the lit group two ahead fetched, the lines of it read below and its matrices: the lit groups
             // are a scattered few of a glob set's large groups)
             if (const size_t k = size_t(&iglobLit - sgs.aiglobLit.data()); k + 2 < sgs.aiglobLit.size())
@@ -544,7 +561,7 @@ int RelightForward(SCENE& scene, const LIGHTSET& lightsFrame, bool fUpload, cons
     // SLY2N_BAKEDIFF (its debug bakes). The uploads follow in the entries' order.
     static std::vector<uint8_t> s_afDone;
     s_afDone.assign(s_apr.size(), 0);
-#ifdef __SWITCH__
+#if SLY2_FASTPATHS
     static std::vector<GLOBCOLORS> s_acols;   // (the Switch: the colours packed on the helpers, by lighting)
 #endif
     static const bool s_fBakeDiff = std::getenv("SLY2N_BAKEDIFF") != nullptr;   // debugging: vs a bake at the origin
@@ -552,7 +569,7 @@ int RelightForward(SCENE& scene, const LIGHTSET& lightsFrame, bool fUpload, cons
     {
         static std::vector<uint8_t> s_afAlone;
         s_afAlone.resize(s_apr.size());
-#ifdef __SWITCH__
+#if SLY2_FASTPATHS
         // (the Switch: the groups lit more than once found by sorting, not by a map with a node allocated per group every
         // frame)
         static std::vector<std::pair<const GLOB*, uint32_t>> s_aglobk;
@@ -572,7 +589,7 @@ int RelightForward(SCENE& scene, const LIGHTSET& lightsFrame, bool fUpload, cons
         for (const RELIGHT* pr : s_apr) ++s_mpcglob[&pr->psgs->pglobset->aglob[pr->iglob]];
         for (size_t k = 0; k < s_apr.size(); ++k) s_afAlone[k] = s_mpcglob[&s_apr[k]->psgs->pglobset->aglob[s_apr[k]->iglob]] == 1;
 #endif
-#ifdef __SWITCH__
+#if SLY2_FASTPATHS
         // (the Switch: a group lit there has its colours packed there too, for its upload below; nothing lights it again
         // in between, it is lit once in this call)
         if (s_acols.size() < s_apr.size()) s_acols.resize(s_apr.size());
@@ -585,8 +602,8 @@ int RelightForward(SCENE& scene, const LIGHTSET& lightsFrame, bool fUpload, cons
                 SCENEGLOBSET& sgs = *r.psgs;
                 GLOB& glob = sgs.pglobset->aglob[r.iglob];
                 if (r.fBake) BakeGlobLighting(glob, sgs.amatGlob[r.iglob], r.pos, r.sRadius, *r.plights);
-                else ForwardGlobLighting(glob, sgs.amatGlob[r.iglob], r.pos, *r.plights, r.pamatBone, sgs.aalLit[r.iglob].data());
-#ifdef __SWITCH__
+                else ForwardGlobLightingScaled(sgs, glob, sgs.amatGlob[r.iglob], r.pos, *r.plights, r.pamatBone, sgs.aalLit[r.iglob].data());
+#if SLY2_FASTPATHS
                 if (fUpload) PackGlobColors(glob, s_acols[k]);
 #endif
                 s_afDone[k] = 1;
@@ -631,7 +648,7 @@ int RelightForward(SCENE& scene, const LIGHTSET& lightsFrame, bool fUpload, cons
         else if (!r.fBake)
         {
             const glm::vec3& posCtx = r.pos;
-            if (!fDone) ForwardGlobLighting(glob, m, posCtx, lights, r.pamatBone, sgs.aalLit[i].data());   // (the lights chosen at posCtx)
+            if (!fDone) ForwardGlobLightingScaled(sgs, glob, m, posCtx, lights, r.pamatBone, sgs.aalLit[i].data());   // (the lights chosen at posCtx)
             if (static const bool s_f = std::getenv("SLY2N_FWDDBG") != nullptr; s_f)   // debugging: the forward-lit groups lit
                 std::printf("fwd oid %d glob %zu ctx %.0f %.0f %.0f r %.0f A0 %08X B0 %08X\n", sgs.oid, i, posCtx.x, posCtx.y, posCtx.z, glob.sRadius,
                             glob.avtx[0].rgbaA, glob.avtx[0].rgbaB);
@@ -650,7 +667,7 @@ int RelightForward(SCENE& scene, const LIGHTSET& lightsFrame, bool fUpload, cons
         }
         if (fUpload)
         {
-#ifdef __SWITCH__
+#if SLY2_FASTPATHS
             if (fDone) UploadGlobColorsGpu(glob, r.pglInst ? r.pglInst : glob.pgl, s_acols[k]);   // (packed on the helpers)
             else UpdateGlobColorsGpu(glob, r.pglInst ? r.pglInst : glob.pgl);
 #else

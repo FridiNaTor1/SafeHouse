@@ -4,6 +4,9 @@
 #include <functional>
 
 #include "platform.h"
+#if defined(CANE_ANDROID) || defined(CANE_IOS)
+#include "mobile_app.h"
+#endif
 #ifndef _WIN32
 #include <fcntl.h>
 #include <poll.h>
@@ -55,7 +58,46 @@ inline int runProcess(const std::vector<std::string>& arguments, const fs::path&
         }
     };
     int code = 1;
-#ifdef _WIN32
+#if defined(CANE_MOBILE)
+    // Android: no fork/exec of app code. The program (lib<name>.so) runs its entry point in a private process of
+    // the app (the game activity, the extractor or the tool service: android/.../NativeBridge.java startChild); its
+    // stdout/stderr come back through a pipe, as on the desktop. (directory is unused: the programs take paths.)
+    // iOS: the program's framework runs in the app's own process (ios/ios_app.h), its output on the same kind of pipe.
+    (void)directory;
+    const auto child = mobile::startProcess(arguments);
+    if (child.inputFd >= 0) close(child.inputFd);
+    const int output = child.outputFd;
+    if (output < 0) throw std::runtime_error("Cannot create the Android process pipe");
+    fcntl(output, F_SETFL, O_NONBLOCK);
+    bool eof = false, finished = false, cancelSent = false;
+    auto drainDeadline = std::chrono::steady_clock::time_point::max();
+    char buffer[8192];
+    while (!eof) {
+        if (cancelled && !cancelSent) {
+            mobile::cancelProcess(child.handle);
+            cancelSent = true;
+        }
+        pollfd fd{output, POLLIN | POLLHUP, 0};
+        poll(&fd, 1, 50);
+        for (;;) {
+            auto n = read(output, buffer, sizeof(buffer));
+            if (n > 0) consume(buffer, size_t(n));
+            else {
+                if (n == 0) eof = true;
+                break;
+            }
+        }
+        // (a process killed by Android may leave the pipe open in a lingering binder: stop one second after it ended)
+        if (!finished && !mobile::processRunning(child.handle)) {
+            finished = true;
+            drainDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+        }
+        if (finished && std::chrono::steady_clock::now() > drainDeadline) break;
+    }
+    close(output);
+    while (mobile::processRunning(child.handle) && !cancelled) std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    code = mobile::processExitCode(child.handle);
+#elif defined(_WIN32)
     SECURITY_ATTRIBUTES security{sizeof(SECURITY_ATTRIBUTES), nullptr, TRUE};
     HANDLE reader = nullptr, writer = nullptr;
     // The default pipe buffer is only a few KiB; a burst of child output
@@ -227,7 +269,9 @@ inline void checkedProcess(const std::vector<std::string>& arguments, const fs::
                                  "). Details are in the launcher output.");
 }
 inline void openFolder(const fs::path& directory) {
-#ifdef _WIN32
+#if defined(CANE_MOBILE)
+    mobile::openFolder(utf8(directory));
+#elif defined(_WIN32)
     auto result = reinterpret_cast<intptr_t>(
         ShellExecuteW(nullptr, L"open", directory.c_str(), nullptr, nullptr, SW_SHOWNORMAL));
     if (result <= 32) throw std::runtime_error("Could not open folder");
@@ -254,7 +298,9 @@ inline void openFolder(const fs::path& directory) {
 }
 // Opens a web link in the system browser (ShellExecute / open / xdg-open), detached from the launcher.
 inline void openUrl(const std::string& url) {
-#ifdef _WIN32
+#if defined(CANE_MOBILE)
+    mobile::openUrl(url);
+#elif defined(_WIN32)
     const std::wstring wide(url.begin(), url.end()); // the links are ASCII (brand.h)
     auto result = reinterpret_cast<intptr_t>(ShellExecuteW(nullptr, L"open", wide.c_str(), nullptr, nullptr, SW_SHOWNORMAL));
     if (result <= 32) throw std::runtime_error("Could not open the browser");

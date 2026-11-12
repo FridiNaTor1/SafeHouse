@@ -1,0 +1,12 @@
+# Embeds several files as unsigned char arrays in one header: -DFILES="a;b" -DSYMBOLS="sa;sb" -DOUTPUT=header.
+set(body "#pragma once\n")
+list(LENGTH FILES count)
+math(EXPR last "${count} - 1")
+foreach(i RANGE ${last})
+ list(GET FILES ${i} file)
+ list(GET SYMBOLS ${i} symbol)
+ file(READ "${file}" bytes HEX)
+ string(REGEX REPLACE "(..)" "0x\\1," bytes "${bytes}")
+ string(APPEND body "inline const unsigned char ${symbol}[] = {${bytes}};\n")
+endforeach()
+file(WRITE "${OUTPUT}" "${body}")

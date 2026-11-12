@@ -26,10 +26,13 @@ MARGIN=8          # every icon used stays 8 px inside its 128 px frame (most kee
 BUTTONS=['South','East','West','North','LB','RB','LT','RT','Back','Start','LS','RS','LSPress','RSPress',
  'DpadUp','DpadDown','DpadLeft','DpadRight','Dpad','Guide']
 # Order == cane::input::Family. Keyboard has no button icons; it uses KEYS.
-FAMILIES=['keyboard','playstation','xbox','nintendo','steamdeck','steamcontroller','ps4','ps5','steamcontroller2026']
+FAMILIES=['keyboard','playstation','xbox','nintendo','steamdeck','steamcontroller','ps4','ps5','steamcontroller2026',
+ 'gamecube','switch2','wii','wiiu','metaquest','valveindex','steamframe','vivewand','pico']
 
 def series(folder,prefix,names):
  return [None if n is None else n if '/' in n else f'{folder}/Double/{prefix}{n}.png' for n in names]
+# (the Quest's Select: the left grip held + the left stick clicked)
+QUEST_COMBO_L='combo:Meta Quest/Double/quest_grip_left.png|Meta Quest/Double/quest_stick_l_press.png'
 DPAD=['dpad_up','dpad_down','dpad_left','dpad_right','dpad']
 ICONS={
  # The Switch column is positional: GLFW A (south) is the button Nintendo labels B.
@@ -64,6 +67,55 @@ ICONS={
   'Steam Deck/Double/steamdeck_stick_l.png','Steam Deck/Double/steamdeck_stick_r.png',
   'Steam Deck/Double/steamdeck_stick_l_press.png','Steam Deck/Double/steamdeck_stick_r_press.png']+DPAD+
   ['Steam Deck/Double/steamdeck_button_guide.png']),
+ # GameCube, positional as SDL maps it: A south, X east, B west, Y north, Z the right bumper, L / R the triggers, the
+ # yellow C-stick as the right stick. It has no left bumper (the Switch Online pad's ZL), Select or Home, and no stick
+ # clicks: the stick art stands in for L3 / R3 (as the 2015 Steam Controller's pad does), the rest stays text.
+ 'gamecube':series('Nintendo Gamecube','gamecube_',['button_color_a','button_x','button_color_b','button_y',None,'button_z',
+  'trigger_l','trigger_r',None,'button_start','stick','stick_color_c','stick','stick_color_c']+DPAD+[None]),
+ # Switch 2 (Pro Controller 2, Joy-Con 2): Kenney's Switch 2 set, positional like the Switch's.
+ 'switch2':series('Nintendo Switch 2','switch_',['button_b','button_a','button_y','button_x','button_l','button_r','button_zl',
+  'button_zr','button_minus','button_plus','stick_l','stick_r','stick_l_press','stick_r_press']+DPAD+['button_home']),
+ # Wii Classic Controller (Pro), positional. Kenney's Wii "B" is the Remote's trigger, so the round Wii U B stands in;
+ # the Classic has no stick clicks (the stick art stands in).
+ 'wii':series('Nintendo Wii','wii_',['Nintendo WiiU/Double/wiiu_button_b.png','button_a','button_y','button_x','button_l',
+  'button_r','button_zl','button_zr','button_minus','button_plus','stick_l','stick_r','stick_l','stick_r']+DPAD+['button_home']),
+ # Wii U Pro Controller, positional (Kenney has no stick-click art for it: the stick art stands in).
+ 'wiiu':series('Nintendo WiiU','wiiu_',['button_b','button_a','button_y','button_x','button_l','button_r','button_zl',
+  'button_zr','button_minus','button_plus','stick_l','stick_r','stick_l','stick_r']+DPAD+['button_home']),
+ # VR controllers, the two hands as one pad, in the VR pad layout (platform/vr_pad_map.h, the user's 2026-11-11):
+ # the right hand's lower face button south (Cross), its upper one west (Square), the left grip east (Circle), the
+ # right grip north (Triangle), the left hand's lower / upper face buttons the triggers' places (L2 / R2), the triggers
+ # the bumpers (L1 / R1), the sticks; no d-pad (the left stick's directions stand in). Controllers without real Start /
+ # Select buttons hold a grip and click that hand's stick: their cell is the two icons side by side ("combo:A|B":
+ # compose_combo; the in-game text draws the two full-size icons, promptglyph.cpp).
+ # Meta Quest Touch (also Touch Plus / Touch Pro): A B X Y, grips, triggers, the left Menu as Start, Meta as Guide.
+ 'metaquest':series('Meta Quest','quest_',['button_a','grip_left','button_b','grip_right','trigger_left','trigger_right',
+  'button_x','button_y',QUEST_COMBO_L,'button_menu','stick_l','stick_r','stick_l_press','stick_r_press',
+  'stick_l_up','stick_l_down','stick_l_left','stick_l_right','stick_l','button_meta']),
+ # Valve Index ("Knuckles"): A / B on each hand (Kenney has one A / B pair: the left hand's are labelled by text), the
+ # Quest's grip art (Kenney's Index set has none), the triggers; no Start / Select buttons: the grip + stick-click
+ # combos (the Quest's grip art with the Index stick clicks).
+ 'valveindex':series('Valve Index','index_',['button_a','Meta Quest/Double/quest_grip_left.png','button_b',
+  'Meta Quest/Double/quest_grip_right.png','lt','rt','button_a','button_b',
+  'combo:Meta Quest/Double/quest_grip_left.png|Valve Index/Double/index_stick_l_press.png',
+  'combo:Meta Quest/Double/quest_grip_right.png|Valve Index/Double/index_stick_r_press.png',
+  'stick_l','stick_r','stick_l_press','stick_r_press','stick_l_up','stick_l_down','stick_l_left','stick_l_right',
+  'stick_l','button']),
+ # Steam Frame controllers: the Steam Controller's layout split in two hands (Kenney's Steam Frame set, complete).
+ 'steamframe':series('Steam Frame','frame_',['button_a','button_b','button_x','button_y','button_l1','button_r1',
+  'button_l2','button_r2','button_view','button_options','stick_l','stick_r','stick_l_press','stick_r_press']+
+  ['dpad_up','dpad_down','dpad_left','dpad_right','dpad','Steam Deck/Double/steamdeck_button_guide.png']),
+ # HTC Vive wands (Kenney has none: its Index trackpad, trigger and the Quest's grip / menu art, all CC0): each wand's
+ # trackpad press as its face button (right south, left west), the grips east / north, the triggers the bumpers, no
+ # L2 / R2, the menu buttons Back / Start, the trackpads as the sticks and the left one's edges as the d-pad.
+ 'vivewand':series('Valve Index','index_',['track_press','Meta Quest/Double/quest_grip_left.png','track_press',
+  'Meta Quest/Double/quest_grip_right.png','lt','rt',None,None,
+  'Meta Quest/Double/quest_button_menu.png','Meta Quest/Double/quest_button_menu.png',
+  'track','track','track_press','track_press','track_up','track_down',None,None,'track','button']),
+ # Pico (4 / 4 Ultra / Neo 3) controllers: the Quest's layout and art (Kenney has no Pico set).
+ 'pico':series('Meta Quest','quest_',['button_a','grip_left','button_b','grip_right','trigger_left','trigger_right',
+  'button_x','button_y',QUEST_COMBO_L,'button_menu','stick_l','stick_r','stick_l_press','stick_r_press',
+  'stick_l_up','stick_l_down','stick_l_left','stick_l_right','stick_l','button_oculus']),
  # The 2015 Steam Controller: one stick plus the right trackpad as "RS".
  'steamcontroller':series('Steam Controller','steam_',['button_a','button_b','button_x','button_y','lb','rb','lt','rt',
   'button_back_icon','button_start_icon','stick','pad','stick_l_press','pad']+DPAD+['Steam Deck/Double/steamdeck_button_guide.png']),
@@ -96,7 +148,9 @@ KEY_ALIASES=[(344,340),(345,341),(346,342),(335,257),(333,45),(330,46)]+[(320+i,
 DEVICES=[('xbox','Xbox Series/Vector/controller_xboxseries.svg'),('nintendo','Nintendo Switch/Vector/controller_switch_pro.svg'),
  ('steamdeck','compose_steamdeck'),('steamcontroller','Steam Controller/Vector/controller_steam.svg'),
  ('ps4','PlayStation Series/Vector/controller_playstation4.svg'),('ps5','PlayStation Series/Vector/controller_playstation5.svg'),
- ('steamcontroller2026','compose_steamcontroller2026')]
+ ('steamcontroller2026','compose_steamcontroller2026'),
+ ('gamecube','Nintendo Gamecube/Vector/gamecube_controller.svg'),('switch2','Nintendo Switch 2/Vector/controller_switch_pro.svg'),
+ ('wii','Nintendo Wii/Vector/controller_wii_classic_pro.svg'),('wiiu','Nintendo WiiU/Vector/controller_wiiu_pro.svg')]
 PX_PER_UNIT=8
 SUPER=4
 OUTLINE_UNITS=0.75
@@ -233,6 +287,9 @@ def pack_devices(z):
 
 SHRINK={f'Keyboard & Mouse/Double/{n}.png' for n in ('mouse_scroll_up','mouse_scroll_down','mouse_scroll','mouse_side_back','mouse_side_forward','mouse_move','mouse_right','keyboard_arrows')}
 
+# (the VR sets' stick / trackpad direction arrows reach the cell's edge too: scaled the same way)
+SHRINK_FOLDERS=('Meta Quest/','Valve Index/','Steam Frame/')
+
 def bleed(icon):
  """Gives every fully transparent pixel the colour of its nearest visible
  pixel (multi-source BFS, deterministic). Kenney's transparent pixels are
@@ -261,12 +318,31 @@ def place(atlas,icon,index):
    dst[x0+dx,y0+dy]=(r,g,b,0)
  return (x0+MARGIN,y0+MARGIN,CELL-2*MARGIN,CELL-2*MARGIN)
 
+def compose_combo(z,name):
+ """'combo:A|B': icons A and B side by side in one cell (a button held + another pressed), each scaled to fit half
+ the cell's width inside the margin, centred down; their edges may touch."""
+ a,b=name[len('combo:'):].split('|')
+ half=(CELL-2*MARGIN)//2+4
+ cell=Image.new('RGBA',(CELL,CELL),(0,0,0,0))
+ for i,part in enumerate((a,b)):
+  icon=load(z,part)
+  box=icon.getbbox() or (0,0,CELL,CELL)
+  icon=icon.crop(box)
+  k=min(half/icon.size[0],(CELL-2*MARGIN)/icon.size[1])
+  w,h=max(1,round(icon.size[0]*k)),max(1,round(icon.size[1]*k))
+  icon=icon.resize((w,h),Image.LANCZOS)
+  x=MARGIN+(half-w)//2 if i==0 else CELL-MARGIN-half+(half-w)//2
+  layer=Image.new('RGBA',(CELL,CELL),(0,0,0,0));layer.paste(icon,(x,(CELL-h)//2))
+  cell=Image.alpha_composite(cell,layer)
+ return bleed(cell)
+
 def load(z,name):
+ if name.startswith('combo:'):return compose_combo(z,name)
  icon=Image.open(io.BytesIO(z.read(name))).convert('RGBA')
  if icon.size!=(CELL,CELL):sys.exit(f'{name}: expected {CELL}x{CELL}, got {icon.size}')
  box=icon.getbbox()
  if box and (box[0]<MARGIN or box[1]<MARGIN or box[2]>CELL-MARGIN or box[3]>CELL-MARGIN):
-  if name not in SHRINK:sys.exit(f'{name}: artwork {box} exceeds the {MARGIN} px margin')
+  if name not in SHRINK and not name.startswith(SHRINK_FOLDERS):sys.exit(f'{name}: artwork {box} exceeds the {MARGIN} px margin')
   # (a few mouse icons reach the cell's edge: scaled down about the cell's centre to fit the margin)
   c=CELL/2;k=min((c-MARGIN)/max(c-box[0],box[2]-c,1),(c-MARGIN)/max(c-box[1],box[3]-c,1))
   n=int(CELL*k)//2*2;small=icon.resize((n,n),Image.LANCZOS)
@@ -290,20 +366,36 @@ def pack(z,names,height):
    rects[name]=place(atlas,load(z,name),cells[name])
  return atlas,rects
 
+class DirSource:
+ """zipfile.ZipFile.read() over an extracted folder."""
+ def __init__(self,root):self.root=root
+ def read(self,name):
+  path=self.root/name
+  if not path.is_file():sys.exit(f'{path}: missing')
+  return path.read_bytes()
+
 def main():
  p=argparse.ArgumentParser(description=__doc__.splitlines()[0])
  root=pathlib.Path(__file__).resolve().parent.parent
- p.add_argument('--zip',type=pathlib.Path,required=True)
+ src=p.add_mutually_exclusive_group(required=True)
+ src.add_argument('--zip',type=pathlib.Path,help='the pinned kenney_input-prompts_1.5.zip')
+ src.add_argument('--dir',type=pathlib.Path,help='an extracted copy of the same release (its top folder: "Xbox Series", ...); '
+  'used when the zip cannot be downloaded. Not hash-pinned: --check against the committed atlases is the proof')
  p.add_argument('--out',type=pathlib.Path,default=root/'assets/prompts')
  p.add_argument('--licenses',type=pathlib.Path,default=root/'licenses/kenney-input-prompts')
  p.add_argument('--check',action='store_true',help='verify committed outputs instead of writing')
  a=p.parse_args()
- data=a.zip.read_bytes()
- digest=hashlib.sha256(data).hexdigest()
- if digest!=ZIP_SHA256:sys.exit(f'{a.zip}: sha256 {digest} does not match the pinned Kenney 1.5 release {ZIP_SHA256}')
- z=zipfile.ZipFile(io.BytesIO(data))
- licence=z.read('License.txt')
- if b'Creative Commons Zero, CC0' not in licence or b'Input Prompts (1.5A)' not in licence:sys.exit('unexpected License.txt')
+ if a.zip:
+  data=a.zip.read_bytes()
+  digest=hashlib.sha256(data).hexdigest()
+  if digest!=ZIP_SHA256:sys.exit(f'{a.zip}: sha256 {digest} does not match the pinned Kenney 1.5 release {ZIP_SHA256}')
+  z=zipfile.ZipFile(io.BytesIO(data))
+  licence=z.read('License.txt')
+ else:
+  z=DirSource(a.dir)
+  # (mirrors usually leave out License.txt: keep the committed one)
+  licence=z.read('License.txt') if (a.dir/'License.txt').is_file() else (a.licenses/'License.txt').read_bytes()
+ if b'Creative Commons Zero, CC0' not in licence or b'Input Prompts (1.5' not in licence:sys.exit('unexpected License.txt')
  outputs={}
  table=[]
  sizes=[]

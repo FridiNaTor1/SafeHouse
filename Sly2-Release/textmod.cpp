@@ -7,6 +7,7 @@
 #include "disc.h"
 #include "region.h"
 #include "sw.h"
+#include "langstore.h"
 
 #include "../platform/platform.h"
 
@@ -34,10 +35,10 @@ const char* const s_aszLanguage[LANG_Max] = {"English", "French", "Italian", "Ge
 
 bool s_fOff = false;  // (--dump-text: the disc's own strings)
 
-// The game's strings are Latin-1 bytes (the Japanese disc's: UTF-8 already, region.h AppendCh16); the files UTF-8.
+// The game's strings are Latin-1 bytes (16-bit text: UTF-8 already, region.h FWideChars / AppendCh16); the files UTF-8.
 std::string Utf8OfLatin1(const std::string& s)
 {
-    if (FWideText()) return s;
+    if (FWideChars()) return s;
     std::string out;
     for (unsigned char c : s)
     {
@@ -48,7 +49,7 @@ std::string Utf8OfLatin1(const std::string& s)
 }
 std::string Latin1OfUtf8(const std::string& s)
 {
-    if (FWideText()) return s;
+    if (FWideChars()) return s;
     std::string out;
     for (std::size_t i = 0; i < s.size();)
     {
@@ -68,6 +69,13 @@ std::string Latin1OfUtf8(const std::string& s)
     return out;
 }
 
+}  // namespace
+
+std::string Utf8OfGameText(const std::string& s) { return Utf8OfLatin1(s); }
+std::string GameTextOfUtf8(const std::string& s) { return Latin1OfUtf8(s); }
+
+namespace
+{
 bool FParseId(const std::string& key, int& id)
 {
     char* end = nullptr;
@@ -89,9 +97,9 @@ const TEXTMOD* PtextmodForLanguage(int lang)
     const auto it = s_mp.find(lang);
     if (it != s_mp.end()) return it->second.get();
     std::unique_ptr<TEXTMOD> p;
-    if (!g_disc.DirMods().empty() && lang >= 0 && lang < LANG_Max)
+    if (!g_disc.DirMods().empty() && lang >= 0)
     {
-        const fs::path path = cane::path(g_disc.DirMods()) / "Text" / (std::string(s_aszLanguage[lang]) + ".json");
+        const fs::path path = cane::path(g_disc.DirMods()) / "Text" / (std::string(SzLanguageModName(lang)) + ".json");
         std::error_code ec;
         if (fs::is_regular_file(path, ec))
         {
@@ -126,7 +134,12 @@ const TEXTMOD* PtextmodForLanguage(int lang)
 }
 }  // namespace
 
-const char* SzLanguageModName(int lang) { return lang >= 0 && lang < LANG_Max ? s_aszLanguage[lang] : "Unknown"; }
+const char* SzLanguageModName(int lang)
+{
+    if (lang >= 0 && lang < LANG_Max) return s_aszLanguage[lang];
+    const char* sz = SzLangStoreKey(lang);   // (a custom language: its folder name, langstore.h)
+    return sz ? sz : "Unknown";
+}
 
 void ApplyTextMods(std::vector<std::pair<int, std::string>>& atext)
 {
@@ -172,9 +185,9 @@ int DumpTextCommand(const std::string& dir)
     std::error_code ec;
     fs::create_directories(cane::path(dir), ec);
     const int langSave = g_nLang;
-    for (int k = 0; k < CLanguages(); ++k)
+    for (int k = 0; k < CLanguagesDisc(); ++k)
     {
-        g_nLang = LanguageOfIndex(k);
+        g_nLang = LanguageOfDiscIndex(k);
         // id -> (string -> the worlds that have it)
         std::map<int, std::map<std::string, std::vector<std::string>>> mp;
         for (const auto& [name, fk, filter] : aworld)

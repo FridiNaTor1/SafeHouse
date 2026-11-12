@@ -9,6 +9,7 @@
 #include "../backend.h"
 #include "../desktop_shortcut.h"
 #include "../steam.h"
+#include "../vr_probe.h"
 #include "games.h"
 #include "job.h"
 #include "prompt_bar.h"
@@ -74,15 +75,29 @@ public:
         }
         m_shortcutGame = static_cast<int>(game);
         m_shortcutOk = true;
-        m_shortcutHeading = "Desktop shortcut added";
+        m_shortcutHeading = tr("Desktop shortcut added");
         try {
-            m_shortcutMessage = std::string(cane::game(game).title) + " has a shortcut on your desktop now:\n" +
-                                shortcut::displayPath(shortcut::file(game, shortcut::Where::Desktop)) + "\n\nand in the " +
-                                shortcut::whereName(shortcut::Where::Menu) + ":\n" + shortcut::displayPath(shortcut::file(game, shortcut::Where::Menu));
+            m_shortcutMessage = trf("%s has a shortcut on your desktop now:", cane::game(game).title) + "\n" +
+                                shortcut::displayPath(shortcut::file(game, shortcut::Where::Desktop)) + "\n\n" +
+                                trf("and in the %s:", tr(shortcut::whereName(shortcut::Where::Menu))) + "\n" + shortcut::displayPath(shortcut::file(game, shortcut::Where::Menu));
         } catch (...) {
         }
         m_showShortcutResult = true;
     }
+    // The page of `game` was shown (main.cpp, on a page or game change and when the window gets the focus back): Sly 2
+    // checks for a VR headset (vr_probe.h; in the background, at most every few seconds) for its "Play in VR" button.
+    void shown(GameId game) {
+        if constexpr (!vrprobe::kSupported) return;
+        if (m_fixture || game != GameId::Sly2) return;
+        const auto& s = status(game);
+        if (!s.assets || !s.runtime) return;
+        try {
+            m_vr.refresh(m_backend.binary(cane::game(game).runtime), m_backend.tools);
+        } catch (...) {
+        }
+    }
+    // Screenshots (--vr-fixture): the headset check's answer.
+    void useVrFixture(vrprobe::State state, std::string runtime, std::string headset) { m_vr.fixture(state, std::move(runtime), std::move(headset)); }
     // Screenshots: the Sly 3 notice shown before Play.
     void showSly3Notice() { m_confirmSly3 = true; }
     // Start: the page's main action.
@@ -95,13 +110,13 @@ public:
     }
     std::vector<launcher::Hint> hints(GameId game) {
         using input::Button;
-        std::vector<launcher::Hint> h{ { Button::LB, 0, "" }, { Button::RB, 0, "Games" } };
+        std::vector<launcher::Hint> h{ { Button::LB, 0, "" }, { Button::RB, 0, N_("Games") } };
         const auto& s = status(game);
-        if (!m_job.busy && s.assets && s.runtime) h.push_back({ Button::Start, 0, "Play" });
+        if (!m_job.busy && s.assets && s.runtime) h.push_back({ Button::Start, 0, N_("Play") });
         else if (!m_job.busy && installable(game))
-            h.push_back({ Button::Start, 0, s.outdated ? "Re-extract" : s.repair ? "Repair" : s.assets ? "Reinstall" : "Install" });
-        h.push_back({ backButton(), GLFW_KEY_ESCAPE, "Back" });
-        h.push_back({ confirmButton(), GLFW_KEY_ENTER, "Select" });
+            h.push_back({ Button::Start, 0, s.outdated ? N_("Re-extract") : s.repair ? N_("Repair") : s.assets ? N_("Reinstall") : N_("Install") });
+        h.push_back({ backButton(), GLFW_KEY_ESCAPE, N_("Back") });
+        h.push_back({ confirmButton(), GLFW_KEY_ENTER, N_("Select") });
         return h;
     }
 
@@ -124,7 +139,7 @@ public:
         const bool hasActions = installable(id);
         // (Sly 2 runs the native port; the emulated runtime's renderer preview toggle is gone)
         const bool showNativePreview = false;
-        constexpr const char* previewHelp = "Experimental. GS compatibility stays active; F8 switches views.";
+        const char* previewHelp = tr("Experimental. GS compatibility stays active; F8 switches views.");
         const float previewHelpH = fonts().caption->CalcTextSizeA(fonts().caption->FontSize, FLT_MAX,
                                                                  actionsW - px(32), previewHelp).y;
         const float previewH = px(48) + previewHelpH + px(12);
@@ -157,19 +172,19 @@ public:
         {
             std::string pill;
             uint32_t tone = color::muted;
-            if (playing) pill = "Playing", tone = color::success;
-            else if (installing) pill = "Installing", tone = color::accent;
-            else if (!installable(id)) pill = "In development", tone = color::accent;
-            else if (s.outdated) pill = "Update needed", tone = color::warning;
-            else if (s.repair) pill = "Needs repair", tone = color::warning;
-            else if (s.assets && s.runtime) pill = "Ready to play", tone = color::success;
-            else if (s.assets) pill = "Installed", tone = color::success;
-            else pill = "Not installed", tone = color::muted;
+            if (playing) pill = tr("Playing"), tone = color::success;
+            else if (installing) pill = tr("Installing"), tone = color::accent;
+            else if (!installable(id)) pill = tr("In development"), tone = color::accent;
+            else if (s.outdated) pill = tr("Update needed"), tone = color::warning;
+            else if (s.repair) pill = tr("Needs repair"), tone = color::warning;
+            else if (s.assets && s.runtime) pill = tr("Ready to play"), tone = color::success;
+            else if (s.assets) pill = tr("Installed"), tone = color::success;
+            else pill = tr("Not installed"), tone = color::muted;
             const ImVec2 p = ImGui::GetCursorScreenPos();
             drawPill(dl, p, pill.c_str(), tone);
             float x = p.x + pillSize(pill.c_str()).x + px(8);
             if (s.assets && !s.runtime && installable(id)) {
-                const char* dev = "Port in development";
+                const char* dev = tr("Port in development");
                 drawPill(dl, { x, p.y }, dev, color::accent);
                 x += pillSize(dev).x + px(8);
             }
@@ -180,7 +195,7 @@ public:
             ImFont* titleFont = measure(fonts().display, g.title).x <= infoW ? fonts().display : fonts().title;
             wrapped(g.title, titleFont, color::text);
             tighten(6);
-            wrapped(g.blurb, fonts().body, color::text2);
+            wrapped(tr(g.blurb), fonts().body, color::text2);
             tighten(4);
             wrapped(detail(id, s, installing).c_str(), fonts().caption, color::muted);
         }
@@ -195,22 +210,31 @@ public:
         const ImVec2 cta{ actionsW, px(58) };
         if (regionRow) regionPicker(id, s, actionsW, busy);
         if (playing) {
-            if (button("Stop game", Tone::Danger, cta, Icon::Stop)) m_job.cancel = true;
+            if (button(tr("Stop game"), Tone::Danger, cta, Icon::Stop)) m_job.cancel = true;
             takeFocus(!input::tracker().lastWasMouse());
         } else if (installing) {
             progressButton(cta);
         } else if (s.assets && !s.runtime) {
-            badge("In development", cta);
+            badge(tr("In development"), cta);
         } else {
             ImGui::BeginDisabled(busy);
             const bool ready = s.assets && s.runtime;
-            const char* label = ready ? "Play" : s.outdated ? "Re-extract" : s.repair ? "Repair" : "Install";
-            if (bigButton(label, cta, ready ? Icon::Play : s.outdated ? Icon::Refresh : Icon::Disc)) {
+            const char* label = ready ? tr("Play") : s.outdated ? tr("Re-extract") : s.repair ? tr("Repair") : tr("Install");
+            // "Play in VR" beside Play when a PC headset answers (vr_probe.h); Play keeps the larger part of the row
+            const bool vr = ready && vrAvailable(id);
+            const char* vrLabel = tr("Play in VR");
+            const float vrW = vr ? std::clamp(measure(fonts().tab, vrLabel).x + px(22 + 10 + 32), px(150), std::floor(actionsW * 0.5f)) : 0.0f;
+            if (bigButton(label, vr ? ImVec2{ actionsW - vrW - px(8), cta.y } : cta, ready ? Icon::Play : s.outdated ? Icon::Refresh : Icon::Disc)) {
                 if (ready) play(id);
                 else if (s.outdated) m_confirmReextract = static_cast<int>(id);
                 else if (openInstall) openInstall(id);
             }
             takeFocus(!input::tracker().lastWasMouse());
+            if (vr) {
+                ImGui::SameLine(0, px(8));
+                if (button(vrLabel, Tone::Secondary, { vrW, cta.y }, Icon::Headset, fonts().tab)) play(id, true);
+                if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) ImGui::SetTooltip("%s", vrTooltip(id).c_str());
+            }
             ImGui::EndDisabled();
         }
         if (showNativePreview) {
@@ -221,7 +245,7 @@ public:
             ImGui::PopStyleVar();
             ImGui::BeginDisabled(busy);
             bool enabled = m_backend.sly2NativePreviewEnabled();
-            if (toggleRow("Native renderer preview", &enabled, nullptr, px(48)) && !m_fixture) {
+            if (toggleRow(tr("Native renderer preview"), &enabled, nullptr, px(48)) && !m_fixture) {
                 try {
                     m_backend.setSly2NativePreviewEnabled(enabled);
                 } catch (const std::exception& e) {
@@ -247,65 +271,79 @@ public:
             if (installing) {
                 next();
                 ImGui::EndDisabled();
-                if (button("Show progress", Tone::Secondary, { half, 0 }, Icon::ChevronRight) && openInstall) openInstall(id);
+                if (button(tr("Show progress"), Tone::Secondary, { half, 0 }, Icon::ChevronRight) && openInstall) openInstall(id);
                 takeFocus(!input::tracker().lastWasMouse());
                 ImGui::BeginDisabled(busy);
             }
             if (s.assets && !installing) {
                 next();
-                if (button("Verify files", Tone::Secondary, { half, 0 }, Icon::Check)) verify(id);
+                if (button(tr("Verify files"), Tone::Secondary, { half, 0 }, Icon::Check)) verify(id);
                 takeFocus(!input::tracker().lastWasMouse());
                 next();
-                if (button("Reinstall", Tone::Secondary, { half, 0 }, Icon::Disc) && openInstall) openInstall(id);
+                if (button(tr("Reinstall"), Tone::Secondary, { half, 0 }, Icon::Disc) && openInstall) openInstall(id);
                 // Another region / release beside this one (the Region menu above Play then switches between them).
                 next();
-                if (button("Add region", Tone::Secondary, { half, 0 }, Icon::Plus) && addRegion) addRegion(id);
+                if (button(tr("Add region"), Tone::Secondary, { half, 0 }, Icon::Plus) && addRegion) addRegion(id);
                 if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
-                    ImGui::SetTooltip("Install another region of %s (%s) beside this one.\n"
-                                      "Your installed regions stay; pick one with the Region menu above Play.\n"
-                                      "Saves and settings are shared by the regions.", game(id).shortName, supportedRegionList(id).c_str());
+                    ImGui::SetTooltip("%s", trf("Install another region of %s (%s) beside this one.\n"
+                                                "Your installed regions stay; pick one with the Region menu above Play.\n"
+                                                "Saves and settings are shared by the regions.", game(id).shortName, supportedRegionList(id).c_str()).c_str());
                 next();
-                if (button("Uninstall", Tone::Secondary, { half, 0 }, Icon::Trash)) m_confirmUninstall = static_cast<int>(id);
+                if (button(tr("Uninstall"), Tone::Secondary, { half, 0 }, Icon::Trash)) m_confirmUninstall = static_cast<int>(id);
                 // (Sly 2 installed before 2026-11-04: its texture dump, a third row of the grid; gridRows)
                 if (s.texturesMissing) {
                     next();
-                    if (button("Export textures", Tone::Secondary, { half, 0 }, Icon::Folder)) exportTextures(id);
+                    if (button(tr("Export textures"), Tone::Secondary, { half, 0 }, Icon::Folder)) exportTextures(id);
                     if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
-                        ImGui::SetTooltip("Write every texture of the game as a PNG into the game folder's Textures folder,\n"
-                                          "for texture mods (about 80 MB, under a minute). Newer installs have it already.");
+                        ImGui::SetTooltip("%s", tr("Write every texture of the game as a PNG into the game folder's Textures folder,\n"
+                                          "for texture mods (about 80 MB, under a minute). Newer installs have it already."));
                 }
             }
             ImGui::EndDisabled();
             if (!installing) {
                 gap(0);
-                if (button("Open save folder", Tone::Quiet, { 0, px(30) }, Icon::Folder)) openFolderSafe(m_backend.userDir(id));
+                if (button(tr("Open save folder"), Tone::Quiet, { 0, px(30) }, Icon::Folder)) openFolderSafe(m_backend.userDir(id));
                 if (s.assets || s.repair) {
                     ImGui::SameLine(0, px(4));
-                    if (button("Open game folder", Tone::Quiet, { 0, px(30) }, Icon::Folder)) openFolderSafe(m_backend.dataDir(id));
+                    if (button(tr("Open game folder"), Tone::Quiet, { 0, px(30) }, Icon::Folder)) openFolderSafe(m_backend.dataDir(id));
                 }
             }
         }
+#ifdef CANE_ANDROID
+        // Android: no Steam; "Add shortcut" asks the home screen to pin one that starts the game directly
+        // (android_app.h pinShortcut: the direct activity runs `--play GAME`, the app closes when the game quits).
         if (steamRow(s) && !installing) {
+            gap(0);
+            ImGui::BeginDisabled(busy);
+            if (button(tr("Add shortcut"), Tone::Quiet, { 0, px(30) }, Icon::Plus) && !m_fixture) pinShortcut(id);
+            ImGui::EndDisabled();
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled | ImGuiHoveredFlags_DelayShort))
+                ImGui::SetTooltip("%s", tr("Put a shortcut on your home screen that starts this game directly"));
+        }
+        if ((false)) {
+#else
+        if (steamRow(s) && !installing) {
+#endif
             gap(0);
             // Disabled without Steam; the tooltip says why (also over the disabled button).
             ImGui::BeginDisabled(busy || !m_steam);
-            if (button(s.inSteam ? "Update Steam shortcut" : "Add to Steam", Tone::Quiet, { 0, px(30) }, s.inSteam ? Icon::Refresh : Icon::Plus))
+            if (button(s.inSteam ? tr("Update Steam shortcut") : tr("Add to Steam"), Tone::Quiet, { 0, px(30) }, s.inSteam ? Icon::Refresh : Icon::Plus))
                 m_confirmSteam = static_cast<int>(id);
             ImGui::EndDisabled();
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled | ImGuiHoveredFlags_DelayShort))
-                ImGui::SetTooltip("%s", !m_steam ? "Steam was not found on this computer"
-                                       : s.inSteam ? "The shortcut is in Steam. Update it (for example after moving SafeHouse)"
-                                                   : "Add a Steam shortcut that starts this game directly, with its artwork");
+                ImGui::SetTooltip("%s", !m_steam ? tr("Steam was not found on this computer")
+                                       : s.inSteam ? tr("The shortcut is in Steam. Update it (for example after moving SafeHouse)")
+                                                   : tr("Add a Steam shortcut that starts this game directly, with its artwork"));
             // "Add desktop shortcut" (Sly 1, Sly 2): beside "Add to Steam" when both fit, else under it.
             if (shortcutRow(id, s)) {
                 if (shortcutBesideSteam(s, actionsW)) ImGui::SameLine(0, px(4));
                 ImGui::BeginDisabled(busy);
-                if (button(shortcutLabel(s), Tone::Quiet, { 0, px(30) }, s.onDesktop ? Icon::Refresh : Icon::Plus))
+                if (button(tr(shortcutLabel(s)), Tone::Quiet, { 0, px(30) }, s.onDesktop ? Icon::Refresh : Icon::Plus))
                     m_confirmShortcut = static_cast<int>(id);
                 ImGui::EndDisabled();
                 if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled | ImGuiHoveredFlags_DelayShort))
-                    ImGui::SetTooltip("%s", s.onDesktop ? "The shortcut is on your desktop. Update it (for example after moving SafeHouse)"
-                                                        : "Put a shortcut that starts this game directly on your desktop");
+                    ImGui::SetTooltip("%s", s.onDesktop ? tr("The shortcut is on your desktop. Update it (for example after moving SafeHouse)")
+                                                        : tr("Put a shortcut that starts this game directly on your desktop"));
             }
         }
         ImGui::EndGroup();
@@ -321,40 +359,43 @@ public:
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, { px(24), px(22) });
         if (ImGui::BeginPopupModal("Steam##confirm", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove)) {
             const GameId id = static_cast<GameId>(std::clamp(m_steamGame, 0, kGameCount - 1));
-            heading(("Add " + std::string(game(id).shortName) + " to Steam?").c_str());
+            heading(trf("Add %s to Steam?", game(id).shortName).c_str());
             const int accounts = m_steam ? static_cast<int>(m_steam->accounts.size()) : 0;
-            textWrapped(("SafeHouse adds a shortcut that starts " + std::string(game(id).title) + " directly, with its library artwork, to "
-                         + (accounts == 1 ? std::string("your Steam account") : std::to_string(accounts) + " Steam accounts")
-                         + ". Steam's shortcut list is backed up first.").c_str(), fonts().body, color::text2);
+            textWrapped((accounts == 1 ? trf("SafeHouse adds a shortcut that starts %s directly, with its library artwork, to your Steam account. "
+                                             "Steam's shortcut list is backed up first.", game(id).title)
+                                       : trf("SafeHouse adds a shortcut that starts %s directly, with its library artwork, to %d Steam accounts. "
+                                             "Steam's shortcut list is backed up first.", game(id).title, accounts)).c_str(), fonts().body, color::text2);
             if (m_status[static_cast<size_t>(id)].regions.size() > 1) {
                 gap(4);
-                textWrapped(("The shortcut starts the region selected here, now " + m_status[static_cast<size_t>(id)].regionName() +
-                             ". Pick another region in SafeHouse and Steam starts that one.").c_str(), fonts().body, color::text2);
+                textWrapped(trf("The shortcut starts the region selected here, now %s. Pick another region in SafeHouse and Steam starts that one.",
+                                tr(m_status[static_cast<size_t>(id)].regionName()).c_str()).c_str(), fonts().body, color::text2);
             }
             if (m_steamRunning) {
                 gap(4);
-                textWrapped("Steam is running. It only reads shortcuts when it starts, and it can write its own list back over the new "
-                            "shortcut. Exit Steam first for the safest result, or restart Steam after adding.",
+                textWrapped(tr("Steam is running. It only reads shortcuts when it starts, and it can write its own list back over the new "
+                            "shortcut. Exit Steam first for the safest result, or restart Steam after adding."),
                             fonts().body, color::warning);
             }
             gap(8);
             const float w = std::floor((ImGui::GetContentRegionAvail().x - px(12)) * 0.5f);
-            if (button("Cancel", Tone::Secondary, { w, 0 }) || ImGui::IsKeyPressed(ImGuiKey_Escape, false) ||
+            if (button(tr("Cancel"), Tone::Secondary, { w, 0 }) || ImGui::IsKeyPressed(ImGuiKey_Escape, false) ||
                 ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false))
                 ImGui::CloseCurrentPopup();
             takeFocusNow();
             ImGui::SameLine(0, px(12));
-            if (button("Add to Steam", Tone::Primary, { w, 0 }, Icon::Plus)) {
+            if (button(tr("Add to Steam"), Tone::Primary, { w, 0 }, Icon::Plus)) {
                 ImGui::CloseCurrentPopup();
                 if (!m_fixture && m_steam) {
                     try {
                         const auto r = steam::add(*m_steam, id);
-                        m_steamMessage = std::string(game(id).title) + (r.addedEntries ? " was added to " : " is up to date in ")
-                                         + (r.accounts == 1 ? std::string("your Steam library") : std::to_string(r.accounts) + " Steam libraries")
-                                         + (steam::running(*m_steam) ? ". Restart Steam to see it." : ". It shows the next time Steam starts.");
+                        m_steamMessage = (r.addedEntries ? (r.accounts == 1 ? trf("%s was added to your Steam library.", game(id).title)
+                                                                            : trf("%s was added to %d Steam libraries.", game(id).title, r.accounts))
+                                                         : (r.accounts == 1 ? trf("%s is up to date in your Steam library.", game(id).title)
+                                                                            : trf("%s is up to date in %d Steam libraries.", game(id).title, r.accounts)))
+                                         + " " + (steam::running(*m_steam) ? tr("Restart Steam to see it.") : tr("It shows the next time Steam starts."));
                         m_steamOk = true;
                     } catch (const std::exception& e) {
-                        m_steamMessage = std::string("Could not add the shortcut: ") + e.what() + ". Steam's files were not changed.";
+                        m_steamMessage = trf("Could not add the shortcut: %s. Steam's files were not changed.", tr(std::string(e.what())).c_str());
                         m_steamOk = false;
                     }
                     m_showSteamResult = true;
@@ -371,10 +412,10 @@ public:
         ImGui::SetNextWindowSize({ px(480), 0 });
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, { px(24), px(22) });
         if (ImGui::BeginPopupModal("Steam##result", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove)) {
-            heading(m_steamOk ? "Added to Steam" : "Steam shortcut not added");
+            heading(m_steamOk ? tr("Added to Steam") : tr("Steam shortcut not added"));
             textWrapped(m_steamMessage.c_str(), fonts().body, color::text2);
             gap(8);
-            if (button("Close", Tone::Secondary, { 0, 0 }) || ImGui::IsKeyPressed(ImGuiKey_Escape, false) ||
+            if (button(tr("Close"), Tone::Secondary, { 0, 0 }) || ImGui::IsKeyPressed(ImGuiKey_Escape, false) ||
                 ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false))
                 ImGui::CloseCurrentPopup();
             takeFocusNow();
@@ -401,31 +442,31 @@ public:
         if (ImGui::BeginPopupModal("Shortcut##confirm", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove)) {
             const GameId id = static_cast<GameId>(std::clamp(m_shortcutGame, 0, kGameCount - 1));
             const auto& st = m_status[static_cast<size_t>(id)];
-            heading(((m_shortcutExists ? "Update the desktop shortcut for " : "Add a desktop shortcut for ") + std::string(game(id).shortName) + "?").c_str());
-            textWrapped((std::string(m_shortcutExists ? "SafeHouse updates the shortcut on your desktop" : "SafeHouse puts a shortcut on your desktop") +
-                         " that starts " + game(id).title + " directly, without the launcher window. Desktop folder:").c_str(),
+            heading((m_shortcutExists ? trf("Update the desktop shortcut for %s?", game(id).shortName) : trf("Add a desktop shortcut for %s?", game(id).shortName)).c_str());
+            textWrapped((m_shortcutExists ? trf("SafeHouse updates the shortcut on your desktop that starts %s directly, without the launcher window. Desktop folder:", game(id).title)
+                                          : trf("SafeHouse puts a shortcut on your desktop that starts %s directly, without the launcher window. Desktop folder:", game(id).title)).c_str(),
                         fonts().body, color::text2);
-            caption(m_shortcutFolder.empty() ? "(not found)" : m_shortcutFolder.c_str(), color::text);
+            caption(m_shortcutFolder.empty() ? tr("(not found)") : m_shortcutFolder.c_str(), color::text);
             if (st.regions.size() > 1) {
                 gap(4);
-                textWrapped(("The shortcut starts the region selected here, now " + st.regionName() +
-                             ". Pick another region in SafeHouse and the shortcut starts that one.").c_str(), fonts().body, color::text2);
+                textWrapped(trf("The shortcut starts the region selected here, now %s. Pick another region in SafeHouse and the shortcut starts that one.",
+                                tr(st.regionName()).c_str()).c_str(), fonts().body, color::text2);
             }
             gap(4);
 #ifdef _WIN32
-            toggleRow("Also add it to the Start menu", &m_shortcutMenu, nullptr, px(48));
+            toggleRow(tr("Also add it to the Start menu"), &m_shortcutMenu, nullptr, px(48));
 #else
-            toggleRow("Also add it to the applications menu", &m_shortcutMenu, nullptr, px(48));
+            toggleRow(tr("Also add it to the applications menu"), &m_shortcutMenu, nullptr, px(48));
 #endif
             caption(shortcut::iconCredit(id));
             gap(8);
             const float w = std::floor((ImGui::GetContentRegionAvail().x - px(12)) * 0.5f);
-            if (button("Cancel", Tone::Secondary, { w, 0 }) || ImGui::IsKeyPressed(ImGuiKey_Escape, false) ||
+            if (button(tr("Cancel"), Tone::Secondary, { w, 0 }) || ImGui::IsKeyPressed(ImGuiKey_Escape, false) ||
                 ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false))
                 ImGui::CloseCurrentPopup();
             takeFocusNow();
             ImGui::SameLine(0, px(12));
-            if (button(m_shortcutExists ? "Update shortcut" : "Add shortcut", Tone::Primary, { w, 0 }, m_shortcutExists ? Icon::Refresh : Icon::Plus)) {
+            if (button(m_shortcutExists ? tr("Update shortcut") : tr("Add shortcut"), Tone::Primary, { w, 0 }, m_shortcutExists ? Icon::Refresh : Icon::Plus)) {
                 ImGui::CloseCurrentPopup();
                 if (!m_fixture) createShortcut(id);
             }
@@ -442,7 +483,7 @@ public:
             heading(m_shortcutHeading.c_str());
             textWrapped(m_shortcutMessage.c_str(), fonts().body, m_shortcutOk ? color::text2 : color::warning);
             gap(8);
-            if (button("Close", Tone::Secondary, { 0, 0 }) || ImGui::IsKeyPressed(ImGuiKey_Escape, false) ||
+            if (button(tr("Close"), Tone::Secondary, { 0, 0 }) || ImGui::IsKeyPressed(ImGuiKey_Escape, false) ||
                 ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false))
                 ImGui::CloseCurrentPopup();
             takeFocusNow();
@@ -463,10 +504,10 @@ public:
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {px(24), px(22)});
         if (ImGui::BeginPopupModal("Renderer setting##error", nullptr,
                                   ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove)) {
-            heading("Could not save renderer setting");
+            heading(tr("Could not save renderer setting"));
             textWrapped(m_previewError.c_str(), fonts().body, color::text2);
             gap(8);
-            if (button("Close", Tone::Secondary, {0, 0}) || ImGui::IsKeyPressed(ImGuiKey_Escape, false) ||
+            if (button(tr("Close"), Tone::Secondary, {0, 0}) || ImGui::IsKeyPressed(ImGuiKey_Escape, false) ||
                 ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false))
                 ImGui::CloseCurrentPopup();
             takeFocusNow();
@@ -483,20 +524,20 @@ public:
         if (ImGui::BeginPopupModal("Uninstall##confirm", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove)) {
             const GameId id = static_cast<GameId>(std::clamp(m_pending, 0, kGameCount - 1));
             const auto& st = m_status[static_cast<size_t>(id)];
-            const std::string which = st.regions.size() > 1 ? " (" + st.regionName() + ")" : std::string{};
-            heading(("Uninstall " + std::string(game(id).shortName) + which + "?").c_str());
-            textWrapped(((st.regions.size() > 1 ? "The installed game files of the " + st.regionName() + " version are removed; your other regions stay. "
-                                                : std::string("The installed game files are removed. ")) +
-                         "Your saves and settings are kept, and you can install again from your disc image at any time.").c_str(),
+            const std::string which = st.regions.size() > 1 ? std::string(game(id).shortName) + " (" + tr(st.regionName()) + ")" : std::string(game(id).shortName);
+            heading(trf("Uninstall %s?", which.c_str()).c_str());
+            textWrapped(((st.regions.size() > 1 ? trf("The installed game files of the %s version are removed; your other regions stay.", tr(st.regionName()).c_str())
+                                                : std::string(tr("The installed game files are removed."))) + " " +
+                         tr("Your saves and settings are kept, and you can install again from your disc image at any time.")).c_str(),
                         fonts().body, color::text2);
             gap(8);
             const float w = std::floor((ImGui::GetContentRegionAvail().x - px(12)) * 0.5f);
-            if (button("Cancel", Tone::Secondary, { w, 0 }) || ImGui::IsKeyPressed(ImGuiKey_Escape, false) ||
+            if (button(tr("Cancel"), Tone::Secondary, { w, 0 }) || ImGui::IsKeyPressed(ImGuiKey_Escape, false) ||
                 ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false))
                 ImGui::CloseCurrentPopup();
             takeFocusNow();
             ImGui::SameLine(0, px(12));
-            if (button("Uninstall", Tone::Danger, { w, 0 }, Icon::Trash)) {
+            if (button(tr("Uninstall"), Tone::Danger, { w, 0 }, Icon::Trash)) {
                 ImGui::CloseCurrentPopup();
                 if (!m_fixture)
                     m_job.start("Uninstall", [this, id](const auto& log) {
@@ -526,34 +567,56 @@ private:
         ImGui::TextUnformatted(value);
     }
     // "Add to Steam" for a game that can be played.
+#if defined(CANE_IOS)
+    // (iOS: no Steam, no desktop, and no home-screen shortcuts an app can add: the row is left out)
+    static bool steamRow(const GameStatus&) { return false; }
+#else
     static bool steamRow(const GameStatus& s) { return s.assets && s.runtime; }
+#endif
     // "Add desktop shortcut" (Sly 1 and Sly 2 only for now), on the Steam row.
     static bool shortcutRow(GameId id, const GameStatus& s) { return steamRow(s) && shortcut::supported(id); }
-    static const char* steamLabel(const GameStatus& s) { return s.inSteam ? "Update Steam shortcut" : "Add to Steam"; }
-    static const char* shortcutLabel(const GameStatus& s) { return s.onDesktop ? "Update desktop shortcut" : "Add desktop shortcut"; }
+    static const char* steamLabel(const GameStatus& s) { return s.inSteam ? N_("Update Steam shortcut") : N_("Add to Steam"); }
+    static const char* shortcutLabel(const GameStatus& s) { return s.onDesktop ? N_("Update desktop shortcut") : N_("Add desktop shortcut"); }
     static float quietWidth(const char* label) { return measure(fonts().body, label).x + px(18 + 10 + 12 * 2); }
     static bool shortcutBesideSteam(const GameStatus& s, float width) {
-        return quietWidth(steamLabel(s)) + px(4) + quietWidth(shortcutLabel(s)) <= width;
+        return quietWidth(tr(steamLabel(s))) + px(4) + quietWidth(tr(shortcutLabel(s))) <= width;
     }
+#ifdef CANE_ANDROID
+    void pinShortcut(GameId id) {
+        m_shortcutGame = static_cast<int>(id);
+        m_shortcutHeading = tr("Add shortcut");
+        try {
+            const std::string icon = shortcut::iconImage(id);  // (none yet for Sly 3: Android shows the app's icon)
+            m_shortcutOk = android::pinShortcut(std::string("play-") + game(id).key, game(id).shortName, icon, { "--play", game(id).key });
+            m_shortcutMessage = m_shortcutOk ? trf("Confirm the shortcut in the window that opens. It starts %s directly, without the launcher, "
+                                                   "and closes the app when you quit the game.", game(id).title)
+                                             : std::string(tr("This device's home screen does not take shortcuts from apps."));
+        } catch (const std::exception& e) {
+            m_shortcutOk = false;
+            m_shortcutMessage = trf("Could not add the shortcut: %s.", tr(std::string(e.what())).c_str());
+        }
+        if (!m_shortcutOk) m_showShortcutResult = true;  // (on success Android shows its own confirmation)
+    }
+#endif
     void createShortcut(GameId id) {
         try {
             const auto desktop = shortcut::create(id, shortcut::Where::Desktop);
-            std::string text = std::string(game(id).title) + (desktop.existed ? "'s desktop shortcut is up to date:\n" : " has a shortcut on your desktop now:\n") +
-                               shortcut::displayPath(desktop.file);
+            std::string text = (desktop.existed ? trf("The desktop shortcut for %s is up to date:", game(id).title) : trf("%s has a shortcut on your desktop now:", game(id).title)) +
+                               "\n" + shortcut::displayPath(desktop.file);
             if (m_shortcutMenu) {
                 const auto menu = shortcut::create(id, shortcut::Where::Menu);
-                text += std::string("\n\nand in the ") + shortcut::whereName(shortcut::Where::Menu) + ":\n" + shortcut::displayPath(menu.file);
+                text += "\n\n" + trf("and in the %s:", tr(shortcut::whereName(shortcut::Where::Menu))) + "\n" + shortcut::displayPath(menu.file);
             }
 #ifndef _WIN32
             if (!desktop.trusted)
-                text += "\n\nIf your desktop shows it as a file, right-click it and choose \"Allow Launching\".";
+                text += std::string("\n\n") + tr("If your desktop shows it as a file, right-click it and choose \"Allow Launching\".");
 #endif
-            m_shortcutHeading = desktop.existed ? "Desktop shortcut updated" : "Desktop shortcut added";
+            m_shortcutHeading = desktop.existed ? tr("Desktop shortcut updated") : tr("Desktop shortcut added");
             m_shortcutMessage = text;
             m_shortcutOk = true;
         } catch (const std::exception& e) {
-            m_shortcutHeading = "Desktop shortcut not added";
-            m_shortcutMessage = std::string("Could not create the shortcut: ") + e.what();
+            m_shortcutHeading = tr("Desktop shortcut not added");
+            m_shortcutMessage = trf("Could not create the shortcut: %s", tr(std::string(e.what())).c_str());
             m_shortcutOk = false;
         }
         m_showShortcutResult = true;
@@ -576,20 +639,20 @@ private:
     }
     std::string detail(GameId id, const GameStatus& s, bool installing) const {
         const GameInfo& g = game(id);
-        if (!installable(id)) return std::string("A native port of ") + g.title + " is in development. There is nothing to install yet.";
-        if (installing) return "Installing your game files. Keep the launcher open until it finishes.";
+        if (!installable(id)) return trf("A native port of %s is in development. There is nothing to install yet.", g.title);
+        if (installing) return tr("Installing your game files. Keep the launcher open until it finishes.");
         if (s.outdated)
-            return std::string("A SafeHouse update changed the format of ") + g.shortName + "'s game files, so they must be extracted from your disc "
-                   "again before you can play. It takes a few minutes; your saves and settings are kept.";
-        if (s.repair) return std::string("This installation is damaged or incomplete. Repair it from your ") + g.shortName + " disc image.";
+            return trf("A SafeHouse update changed the format of the %s game files, so they must be extracted from your disc "
+                       "again before you can play. It takes a few minutes; your saves and settings are kept.", g.shortName);
+        if (s.repair) return trf("This installation is damaged or incomplete. Repair it from your %s disc image.", g.shortName);
         if (s.assets) {
-            std::string from = s.iso.empty() ? std::string("Game files installed") : "Installed from " + utf8(path(s.iso).filename());
-            if (!s.runtime) from += ". The " + std::string(g.shortName) + " port is not ready to play yet; your files are ready for it.";
+            std::string from = s.iso.empty() ? std::string(tr("Game files installed")) : trf("Installed from %s", utf8(path(s.iso).filename()).c_str());
+            if (!s.runtime) from += ". " + trf("The %s port is not ready to play yet; your files are ready for it.", g.shortName);
             return from;
         }
-        std::string text = std::string("Install from your own ") + g.shortName + " disc image (" + supportedRegionList(id) + "). Needs " +
-                           spaceRange(id) + " of free space.";
-        if (!s.runtime) text += " The port itself is still in development.";
+        std::string text = trf("Install from your own %s disc image (%s). Needs %s of free space.", g.shortName, supportedRegionList(id).c_str(),
+                               spaceRange(id).c_str());
+        if (!s.runtime) text += std::string(" ") + tr("The port itself is still in development.");
         return text;
     }
     // The region dropdown (shown with two or more installed regions). The choice is remembered at once
@@ -598,16 +661,16 @@ private:
         const float labelW = px(84);
         const ImVec2 p = ImGui::GetCursorPos();
         ImGui::SetCursorPosY(p.y + (controlHeight() - fonts().caption->FontSize) * 0.5f);
-        text("Region", fonts().tab, color::text2);
+        text(tr("Region"), fonts().tab, color::text2);
         ImGui::SetCursorPos({ p.x + labelW, p.y });
         ImGui::BeginDisabled(busy);
         pushComboStyle();
         ImGui::SetNextItemWidth(width - labelW);
-        const std::string preview = s.regionName() + (s.outdated ? "  ·  update needed" : "");
+        const std::string preview = tr(s.regionName()) + (s.outdated ? std::string("  ·  ") + tr("update needed") : std::string());
         const ImVec2 at = ImGui::GetCursorScreenPos();
         if (beginCombo("##region", preview.c_str())) {
             for (const auto& r : s.regions) {
-                const std::string label = r.name() + (r.outdated ? "  ·  update needed" : !r.current ? "  ·  needs repair" : "");
+                const std::string label = tr(r.name()) + (r.outdated ? std::string("  ·  ") + tr("update needed") : !r.current ? std::string("  ·  ") + tr("needs repair") : std::string());
                 if (ImGui::Selectable(label.c_str(), r.region == s.region) && r.region != s.region && !m_fixture) {
                     try {
                         m_backend.setSelectedRegion(id, r.region);
@@ -644,28 +707,27 @@ private:
             const GameId id = static_cast<GameId>(std::clamp(m_reextractGame, 0, kGameCount - 1));
             const auto& st = m_status[static_cast<size_t>(id)];
             const std::string region = st.regionName();
-            heading(("Re-extract " + std::string(game(id).shortName) + (region.empty() ? "" : " (" + region + ")") + "?").c_str());
-            textWrapped(("A SafeHouse update changed the format of " + std::string(game(id).shortName) +
-                         "'s game files. The files installed from your disc are in the old format, so the disc must be extracted again "
-                         "before you can play. This takes a few minutes. Your saves and settings are not touched.").c_str(),
+            heading(trf("Re-extract %s?", (std::string(game(id).shortName) + (region.empty() ? "" : " (" + tr(region) + ")")).c_str()).c_str());
+            textWrapped(trf("A SafeHouse update changed the format of the %s game files. The files installed from your disc are in the old format, so the disc must be extracted again "
+                            "before you can play. This takes a few minutes. Your saves and settings are not touched.", game(id).shortName).c_str(),
                         fonts().body, color::text2);
             gap(6);
             if (m_reextractIsoFound) {
-                text("Disc image", fonts().caption, color::muted);
+                text(tr("Disc image"), fonts().caption, color::muted);
                 tighten(4);
                 textWrapped(utf8(path(m_reextractIso).filename()).c_str(), fonts().tab, color::text);
                 tighten(4);
                 textWrapped(utf8(path(m_reextractIso).parent_path()).c_str(), fonts().caption, color::muted);
             } else if (!m_reextractIso.empty())
-                textWrapped(("The disc image it was installed from was not found: " + m_reextractIso + ". Choose your disc image.").c_str(),
+                textWrapped(trf("The disc image it was installed from was not found: %s. Choose your disc image.", m_reextractIso.c_str()).c_str(),
                             fonts().body, color::warning);
             gap(8);
             const float w = std::floor((ImGui::GetContentRegionAvail().x - px(12) * 2) / 3.0f);
-            if (button("Cancel", Tone::Secondary, { w, 0 }) || ImGui::IsKeyPressed(ImGuiKey_Escape, false) ||
+            if (button(tr("Cancel"), Tone::Secondary, { w, 0 }) || ImGui::IsKeyPressed(ImGuiKey_Escape, false) ||
                 ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false))
                 ImGui::CloseCurrentPopup();
             ImGui::SameLine(0, px(12));
-            if (button(m_reextractIsoFound ? "Other disc…" : "Choose disc…", m_reextractIsoFound ? Tone::Secondary : Tone::Primary, { w, 0 },
+            if (button(m_reextractIsoFound ? tr("Other disc…") : tr("Choose disc…"), m_reextractIsoFound ? Tone::Secondary : Tone::Primary, { w, 0 },
                        Icon::Disc)) {
                 ImGui::CloseCurrentPopup();
                 if (!m_fixture && openInstall) openInstall(id);
@@ -673,7 +735,7 @@ private:
             if (!m_reextractIsoFound) takeFocusNow();
             if (m_reextractIsoFound) {
                 ImGui::SameLine(0, px(12));
-                if (button("Re-extract", Tone::Cta, { w, 0 }, Icon::Refresh)) {
+                if (button(tr("Re-extract"), Tone::Cta, { w, 0 }, Icon::Refresh)) {
                     ImGui::CloseCurrentPopup();
                     if (!m_fixture && reextract) {
                         installingGame = static_cast<int>(id);
@@ -691,13 +753,13 @@ private:
         auto* dl = ImGui::GetWindowDrawList();
         ImFont* f = fonts().body;
         const float iw = px(20), padX = px(16), textW = width - padX * 2 - iw - px(12);
-        const auto t = f->CalcTextSizeA(f->FontSize, FLT_MAX, textW, brand::sly3Notice);
+        const auto t = f->CalcTextSizeA(f->FontSize, FLT_MAX, textW, tr(brand::sly3Notice));
         const float h = std::max(px(44), t.y + px(20));
         const ImVec2 b{ p.x + width, p.y + h };
         dl->AddRectFilled(p, b, ink(color::warning, 0.12f), px(10));
         dl->AddRect(p, b, ink(color::warning, 0.55f), px(10), 0, px(1));
         drawIcon(dl, Icon::Warning, { p.x + padX + iw * 0.5f, p.y + h * 0.5f }, iw, ink(color::warning));
-        dl->AddText(f, f->FontSize, { p.x + padX + iw + px(12), std::round(p.y + (h - t.y) * 0.5f) }, ink(color::text), brand::sly3Notice,
+        dl->AddText(f, f->FontSize, { p.x + padX + iw + px(12), std::round(p.y + (h - t.y) * 0.5f) }, ink(color::text), tr(brand::sly3Notice),
                     nullptr, textW);
         recordLayout("sly3-notice", ImRect(p, b));
         return h;
@@ -712,19 +774,19 @@ private:
         ImGui::SetNextWindowSize({ px(540), 0 });
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, { px(24), px(22) });
         if (ImGui::BeginPopupModal("Sly 3##notice", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove)) {
-            heading("Sly 3 is in early development");
-            textWrapped("Sly 3: Honor Among Thieves is not fully playable yet. Expect missing features, visual and audio problems, "
-                        "and crashes. Progress may stop at points the port cannot handle yet.",
+            heading(tr("Sly 3 is in early development"));
+            textWrapped(tr("Sly 3: Honor Among Thieves is not fully playable yet. Expect missing features, visual and audio problems, "
+                        "and crashes. Progress may stop at points the port cannot handle yet."),
                         fonts().body, color::text2);
             gap(4);
-            toggleRow("Don't show again", &m_sly3DontShow, nullptr, px(48));
+            toggleRow(tr("Don't show again"), &m_sly3DontShow, nullptr, px(48));
             gap(8);
             const float w = std::floor((ImGui::GetContentRegionAvail().x - px(12)) * 0.5f);
-            if (button("Cancel", Tone::Secondary, { w, 0 }) || ImGui::IsKeyPressed(ImGuiKey_Escape, false) ||
+            if (button(tr("Cancel"), Tone::Secondary, { w, 0 }) || ImGui::IsKeyPressed(ImGuiKey_Escape, false) ||
                 ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false))
                 ImGui::CloseCurrentPopup();
             ImGui::SameLine(0, px(12));
-            if (button("Play anyway", Tone::Cta, { w, 0 }, Icon::Play)) {
+            if (button(tr("Play anyway"), Tone::Cta, { w, 0 }, Icon::Play)) {
                 ImGui::CloseCurrentPopup();
                 if (m_sly3DontShow && !m_fixture) try {
                         m_backend.hideSly3Notice();
@@ -769,13 +831,27 @@ private:
         dl->AddRectFilled(p, { p.x + size.x * std::clamp(progress, 0.0f, 1.0f), p.y + size.y }, ink(color::primary, 0.55f), px(8));
         dl->AddRect(p, { p.x + size.x, p.y + size.y }, ink(color::borderStrong), px(8), 0, px(1));
         char label[96];
-        std::snprintf(label, sizeof(label), "%s · %.0f%%", stage.empty() ? "Installing" : stageLabel(stage).c_str(), progress * 100);
+        std::snprintf(label, sizeof(label), "%s · %.0f%%", stage.empty() ? tr("Installing") : stageLabel(stage).c_str(), progress * 100);
         const auto t = measure(fonts().tab, label);
         dl->AddText(fonts().tab, fonts().tab->FontSize, { std::round(p.x + (size.x - t.x) * 0.5f), std::round(p.y + (size.y - t.y) * 0.5f) },
                     ink(color::text), label);
         ImGui::Dummy(size);
     }
-    void play(GameId id) {
+    // Sly 2's "Play in VR" button: a PC build, the game ready, a headset (or SteamVR, which the game starts) found
+    bool vrAvailable(GameId id) {
+        if constexpr (!vrprobe::kSupported) return false;
+        const auto& s = status(id);
+        return id == GameId::Sly2 && s.assets && s.runtime && m_vr.available();
+    }
+    std::string vrTooltip(GameId id) const {
+        const auto r = m_vr.result();
+        std::string text = trf("Start %s on your VR headset.", game(id).shortName);
+        if (r.state == vrprobe::State::SteamVrIdle) text += "\n" + std::string(tr("SteamVR starts with the game."));
+        else if (!r.headset.empty() || !r.runtime.empty())
+            text += "\n" + (r.headset.empty() ? r.runtime : r.runtime.empty() ? r.headset : r.headset + " (" + r.runtime + ")");
+        return text;
+    }
+    void play(GameId id, bool vr = false) {
         if (m_job.busy) return;
         // Sly 3 asks first (until "Don't show again").
         if (id == GameId::Sly3 && !m_sly3Confirmed && !m_backend.sly3NoticeHidden()) {
@@ -785,7 +861,8 @@ private:
         m_sly3Confirmed = false;
         if (m_fixture) return;
         playingGame = static_cast<int>(id);
-        m_job.start(std::string("Playing ") + game(id).shortName, [this, id](const auto& log) { m_backend.play(id, m_job.cancel, log); });
+        m_job.start(std::string("Playing ") + game(id).shortName,
+                    [this, id, vr](const auto& log) { m_backend.play(id, m_job.cancel, log, {}, vr); });
     }
     void verify(GameId id) {
         if (m_fixture || m_job.busy) return;
@@ -851,6 +928,7 @@ private:
     int m_confirmUninstall = -1, m_pending = -1;
     bool m_confirmSly3 = false, m_sly3Confirmed = false, m_sly3DontShow = false;
     std::optional<steam::Installation> m_steam;
+    vrprobe::Probe m_vr;
     int m_confirmSteam = -1, m_steamGame = -1;
     int m_confirmReextract = -1, m_reextractGame = -1;
     std::string m_reextractIso;

@@ -1,5 +1,10 @@
 // The pad's vibration: rumble.h.
+#include <algorithm>
+#if defined(__ANDROID__) || defined(CANE_IOS)
+#include "mobile_app.h"
+#endif
 #include "rumble.h"
+#include "vr.h"
 
 #include "clock.h"
 #include "joy.h"
@@ -60,6 +65,15 @@ namespace
 #endif
 void SendMotors(uint8_t bSmall, uint8_t bBig)
 {
+    // (VR, vr.h: the headset's controllers are the pad (pcinput: no joystick chosen): both hands vibrate, the big motor as
+    // the strength, the small one (on / off, a light buzz on the DualShock) as a light one; Controller Vibration Off: none)
+    if (vr::FActive() && s_fWindow && s_jid < 0)
+    {
+        if (!g_fControllerVibration) bSmall = bBig = 0;
+        const float g = std::max(float(bBig) / 255.0f, bSmall ? 0.3f : 0.0f);
+        vr::Rumble(g, g);
+        return;
+    }
 #if defined(__SWITCH__)
     // the DualShock's motors on the Joy-Cons / Pro Controller: the big one (0..255) as the low band's amplitude, the
     // small one (on / off) as the high band at full
@@ -68,6 +82,15 @@ void SendMotors(uint8_t bSmall, uint8_t bBig)
     CaneSwitchRumble(float(bBig) / 255.0f, bSmall ? 1.0f : 0.0f);
 #elif defined(CANE_SDL_RUMBLE)
     if (!s_fWindow || s_jid < 0) return;   // (headless, the keyboard and mouse: nothing to drive)
+#if defined(__ANDROID__) || defined(CANE_IOS)
+    if (s_jid == GLFW_JOYSTICK_LAST)
+    {
+        // the on-screen pad: the device's own vibrator, the big motor as its strength (the small one: a light buzz)
+        if (!g_fControllerVibration) bSmall = bBig = 0;
+        cane::mobile::vibrate(std::max<int>(bBig, bSmall ? 96 : 0));
+        return;
+    }
+#endif
     if (!s_sdl.ready()) return;   // (started by SetRumblePad at the first windowed frame)
     if (!g_fControllerVibration) bSmall = bBig = 0;
     s_sdl.set(glfwGetJoystickGUID(s_jid), cane::rumble::MotorsFromDualShock(bSmall, bBig), glfwGetTime());

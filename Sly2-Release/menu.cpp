@@ -9,7 +9,10 @@
 
 #include "rumble.h"
 #include "menu.h"
+#include "langstore.h"
+#include "textmod.h"
 #include "pcinput.h"
+#include "vr.h"
 #include "actioninput.h"
 #include "porttext.h"
 #include "region.h"
@@ -22,6 +25,7 @@
 #include "display.h"
 #include "frontend.h"
 #include "gl.h"
+#include "fsr.h"
 #include "hudwidget.h"
 #include "po.h"
 #include "ref.h"
@@ -32,9 +36,13 @@
 #include "sw.h"
 #include "task.h"
 #include "transition.h"
+#include "remappage.h"
 #include "../platform/controller_family.h"
 #include "../platform/platform.h"
 #include "../platform/system_settings.h"
+#include "../platform/sly2_settings.h"
+#include "../platform/audio_devices.h"
+#include "audio.h"
 
 #include <GLFW/glfw3.h>
 
@@ -75,9 +83,25 @@ enum NATIVEID : int
     NID_Pc2 = NID_Base + 0x100,
     NID_LongShadows = NID_Pc2, NID_InvertPage, NID_PadInvertX, NID_PadInvertY, NID_BinocInvertX, NID_BinocInvertY,
     NID_TurretInvertX, NID_TurretInvertY, NID_AutoCameraRotation,
+    NID_RemapPage,   // (2026-11-10) Remap Controls...: the Remap page (remappage.h)
+    // (audio, notes/AUDIO_2026-11-10.md) Audio Devices...: the output, the microphone, the headset's speaker
+    NID_AudioPage, NID_AudioOutput, NID_AudioInput, NID_AudioHeadsetOutput,
+    // (lang) Language...: the text's and the voices' languages apart (region.h g_nLangVoice)
+    NID_LanguagePage, NID_TextLanguage, NID_VoiceLanguage,
+    // (upscaling, fsr.h; display.h fUpscale) Upscaling, then while it is on its method, preset and sharpness: on the display
+    // options' page after the resolution, and in VR Settings on a PC headset (the same setting)
+    NID_Upscale, NID_UpscaleMethod, NID_UpscalePreset, NID_UpscaleSharpness,
+    // (display.h outlineThickness) Outline Thickness: the cel outlines' width (%), on the display options' page after Long
+    // Shadows and in VR Settings (the same setting; in VR matched to the headset's field of view); left / right step it
+    NID_OutlineThickness,
+    // (VR, vr.h) the pause menu's VR Settings page (a headset in use)
+    NID_Vr = NID_Base + 0x200,
+    NID_VrPage = NID_Vr, NID_VrMode, NID_VrAutoCam, NID_VrVignette, NID_VrScreenSize, NID_VrRefresh, NID_VrEyeRes, NID_VrMsaa, NID_VrFoveation, NID_VrWorldScale,
+    NID_VrRecenter, NID_VrCutscenes, NID_VrRcTable, NID_VrMultiview, NID_VrUpscaling,
     NID_AdvancedControls = NID_Base + 0x1000, NID_ActionDevices, NID_ActionKeyboard, NID_ActionController, NID_ResetActions,
     NID_ActionGroupFirst = NID_Base + 0x2000,
     NID_ActionBindingFirst = NID_Base + 0x3000,
+    NID_LanguageFirst = NID_Base + 0x4000,   // .. + language: a custom language's name (langstore.h)
 };
 constexpr uint32_t PFN_NativeDisplay = 0xFFFF0001;   // (a native select function)
 constexpr uint32_t PFN_NativeExit = 0xFFFF0002;
@@ -90,8 +114,12 @@ constexpr uint32_t PFN_NativeLanguage = 0xFFFF0008;      // (the title's languag
 constexpr uint32_t PFN_NativeInvertPage = 0xFFFF0009;    // (Invert Controls...)
 // the native pages' tables (their identity: the invert page's rows show the controller's icons)
 constexpr uint32_t VA_NativeInvertPage = 0xFFFF0109;
+constexpr uint32_t PFN_NativeVrPage = 0xFFFF0020, PFN_NativeVr = 0xFFFF0021;   // (VR Settings: its page, its options)
+constexpr uint32_t PFN_NativeAudioPage = 0xFFFF0022, PFN_NativeAudio = 0xFFFF0023;   // (Audio Devices: its page, its rows)
+constexpr uint32_t PFN_NativeLanguagePage = 0xFFFF0024, PFN_NativeLanguageRow = 0xFFFF0025;   // (Language...: page, rows)
 constexpr uint32_t PFN_ActionDevices = 0xFFFF0010, PFN_ActionGroups = 0xFFFF0011,
                    PFN_ActionRows = 0xFFFF0012, PFN_ActionCapture = 0xFFFF0013;
+constexpr uint32_t PFN_RemapPage = 0xFFFF0014;           // (the Remap page over the menu)
 std::vector<std::string> ActionGroups()
 {
     std::vector<std::string> groups;
@@ -274,12 +302,12 @@ void SetMenuState(int st)
         case 0x67:
             SelectScreenObjPart(plo, 0x333);
             SelectScreenObjPart(plo, 0x315);
-            SetScreenObjFraction(plo, 0x315, 1.0f - GRef(RefSetting("uMusicVolume")));
+            SetScreenObjFraction(plo, 0x315, g_saveopts.fStore ? g_saveopts.gMusic : 1.0f - GRef(RefSetting("uMusicVolume")));
             break;
         case 0x68:
             SelectScreenObjPart(plo, 0x334);
             SelectScreenObjPart(plo, 0x315);
-            SetScreenObjFraction(plo, 0x315, 1.0f - GRef(RefSetting("uEffectsVolume")));
+            SetScreenObjFraction(plo, 0x315, g_saveopts.fStore ? g_saveopts.gEffects : 1.0f - GRef(RefSetting("uEffectsVolume")));
             break;
         case 0x3F: SelectScreenObjPart(plo, 0x335); break;
         default: break;
@@ -388,11 +416,58 @@ void StartSlider()
 }
 
 // ------------------------------------------------------------ the options (0x1AF9C8 / 0x1AFB88 / 0x1AF6D0)
+// (audio) a device row's value: the default's name, the device (shortened to fit the page), "(not connected)" when
+// missing
+std::string StrAudioDevice(const std::string& name, bool fInput, PTX ptxDefault, PTX ptxLabel)
+{
+    const std::string n = cane::audio::cleanName(name);
+    if (n.empty()) return StrPort(ptxDefault);
+    std::string shown = n;
+    // (the row on one line: the label and the name within about 36 letters, the page's width at its font size)
+    const size_t cmax = std::max<size_t>(14, 36 - std::min<size_t>(22, StrPort(ptxLabel).size() + 2));
+    if (shown.size() > cmax)
+    {
+        size_t cut = cmax - 3;
+        while (cut > 0 && (static_cast<unsigned char>(shown[cut]) & 0xC0) == 0x80) --cut;   // (not inside a UTF-8 letter)
+        shown = shown.substr(0, cut) + "...";
+    }
+    const cane::audio::DeviceList list = ListAudioDevices();
+    if (cane::audio::findDevice(fInput ? list.inputs : list.outputs, n) >= 0) return StrToGameText(shown);
+    char ach[256];
+    std::snprintf(ach, sizeof(ach), StrPort(PTX_NotConnected).c_str(), StrToGameText(shown).c_str());
+    return ach;
+}
+
+// a language's name in the text's language (the game's 14 by the text 0x58..; a custom one by its own name)
+std::string StrLanguageName(int lang)
+{
+    if (lang < 0) return "";
+    if (lang < LANG_Max)
+    {
+        std::string s = StrLocalized(s_psw, IdText(0x58 + lang));
+        if (!s.empty()) return s;
+    }
+    const std::string sCustom = StrLangStoreDisplayName(lang);
+    return sCustom.empty() ? StrToGameText(SzLanguageModName(lang)) : sCustom;
+}
+
 // (the port's own options: their text in the game's language, porttext.h; English on the USA disc)
 std::string StrNative(int id)
 {
     char ach[96];
     auto onOff = [](PTX ptx, bool f) { return StrPortOnOff(ptx, f); };
+    if (id >= NID_LanguageFirst && id < NID_LanguageFirst + 0x100)
+    {
+        const int lang = id - NID_LanguageFirst;
+        // (one of the game's 14 here: a language whose text this disc cannot show, OpenLanguageMenu)
+        std::string name = StrLanguageName(lang);
+        if (FLangStoreVoicesOnly(lang))
+        {
+            std::snprintf(ach, sizeof(ach), StrPort(PTX_LanguageVoicesOnly).c_str(), name.c_str());
+            name = ach;
+        }
+        return name;
+    }
     switch (id)
     {
     case NID_Aspect:
@@ -419,15 +494,29 @@ std::string StrNative(int id)
     case NID_Vsync: return onOff(PTX_VSync, g_display.fVsync);
     case NID_DrawDistance: return StrPortValue(PTX_DrawDistance, StrPortDecimal(g_display.drawDistance, 2) + "x");
     case NID_LongShadows: return onOff(PTX_LongShadows, g_display.fLongShadows);
-    case NID_ExitToDesktop: return StrPort(PTX_ExitToDesktop);
+    case NID_OutlineThickness:
+        std::snprintf(ach, sizeof(ach), "%d%%", g_display.outlineThickness);
+        return StrPortValue(PTX_OutlineThickness, ach);
+    case NID_Upscale: return onOff(PTX_Upscaling, g_display.fUpscale);
+    case NID_UpscaleMethod: return StrPortValue(PTX_UpscaleMethod, "FSR 1");
+    case NID_UpscalePreset:
+    {
+        static const PTX aptx[] = {PTX_UltraQuality, PTX_Quality, PTX_Balanced, PTX_Performance};
+        const int i = std::clamp(g_display.upscalePreset, 0, 3);
+        std::snprintf(ach, sizeof(ach), " (%d%%)", int(std::lround(100.0 / fsr::RScalePreset(i))));
+        return StrPortValue(PTX_UpscalePreset, StrPort(aptx[i]) + ach);
+    }
+    case NID_UpscaleSharpness:
+        std::snprintf(ach, sizeof(ach), "%d%%", g_display.upscaleSharpness);
+        return StrPortValue(PTX_UpscaleSharpness, ach);
+    case NID_ExitToDesktop: return StrPort(FQuitToLauncher() ? PTX_QuitToLauncher : PTX_ExitToDesktop);
     case NID_DisplayPage: return StrPort(PTX_DisplayOptions);
     case NID_ControlsPage: return StrPort(PTX_ControlsAndPrompts);
     case NID_PromptStyle:
     {
-        // (the controllers' names stay as they are)
-        static const char* const asz[] = {nullptr, "PlayStation", "Xbox", "Nintendo", "Steam Deck", "Steam Controller", "PlayStation 4", "PlayStation 5", "Steam Controller (2026)"};
+        // (the controllers' names stay as they are: controller_family.h)
         const int i = std::clamp(g_pcinput.promptStyle, 0, cane::input::kPromptStyleLast);
-        return StrPortValue(PTX_ButtonIcons, i == 0 ? StrPort(PTX_Auto) : std::string(asz[i]));
+        return StrPortValue(PTX_ButtonIcons, i == 0 ? StrPort(PTX_Auto) : std::string(cane::input::promptStyleName(i)));
     }
     case NID_AlwaysPs: return onOff(PTX_OriginalPsIcons, g_pcinput.fAlwaysOriginalPs);
     case NID_InstantSkip: return onOff(PTX_InstantSkip, g_pcinput.fInstantSkipCutscenes);
@@ -436,6 +525,40 @@ std::string StrNative(int id)
     case NID_MouseSens: std::snprintf(ach, sizeof(ach), "%d%%", g_pcinput.mouseSensitivity); return StrPortValue(PTX_MouseSensitivity, ach);
     case NID_AimSens: std::snprintf(ach, sizeof(ach), "%d%%", g_pcinput.mouseAimSensitivity); return StrPortValue(PTX_MouseAimSensitivity, ach);
     case NID_InvertPage: return StrPort(PTX_InvertControlsPage);
+    case NID_RemapPage: return StrPort(PTX_RemapPage);
+    case NID_AudioPage: return StrPort(PTX_AudioDevicesPage);
+    case NID_LanguagePage: return StrPort(PTX_LanguagePage);
+    case NID_TextLanguage:
+    case NID_VoiceLanguage:
+    {
+        // the choice (a pending one: from the next world, region.h SetPendingLanguages)
+        int langText = -2, langVoice = -2;
+        FLanguagesPending(&langText, &langVoice);
+        const bool fText = id == NID_TextLanguage;
+        const bool fPending = fText ? langText != -2 : langVoice != -2;
+        const int lang = fText ? (fPending ? langText : g_nLang) : (fPending ? langVoice : g_nLangVoice);
+        std::string value = !fText && (lang < 0 || (!fPending && LangVoice() == g_nLang)) ? StrPort(PTX_SameAsText) : StrLanguageName(lang);
+        // (a text language this disc cannot draw, chosen before: its voices over the disc's text, langstore.h)
+        if (fText && FLangStoreVoicesOnly(lang))
+        {
+            std::snprintf(ach, sizeof(ach), StrPort(PTX_LanguageVoicesOnly).c_str(), value.c_str());
+            value = ach;
+        }
+        // ("next area" only when what will be heard / read changes)
+        const int textNext = langText != -2 ? langText : g_nLang;
+        const int voiceNext = langVoice != -2 ? langVoice : g_nLangVoice;
+        const bool fChanges = fText ? textNext != g_nLang : (voiceNext < 0 ? textNext : voiceNext) != LangVoice();
+        if (fPending && fChanges)
+        {
+            std::snprintf(ach, sizeof(ach), StrPort(PTX_FromNextArea).c_str(), value.c_str());
+            value = ach;
+        }
+        return StrPortValue(fText ? PTX_TextLanguage : PTX_VoiceLanguage, value);
+    }
+    case NID_AudioOutput: return StrPortValue(PTX_OutputDevice, StrAudioDevice(g_saveopts.outputDevice, false, PTX_SystemDefault, PTX_OutputDevice));
+    case NID_AudioInput: return StrPortValue(PTX_InputDevice, StrAudioDevice(g_saveopts.inputDevice, true, PTX_SystemDefault, PTX_InputDevice));
+    case NID_AudioHeadsetOutput:
+        return StrPortValue(PTX_HeadsetOutputDevice, StrAudioDevice(g_saveopts.headsetOutputDevice, false, PTX_SameAsOutput, PTX_HeadsetOutputDevice));
     // (the controller's rows: the right stick's icon, the device's, promptglyph.h)
     case NID_PadInvertX: return "&2)&. " + onOff(PTX_PadInvertCameraX, g_pcinput.fPadInvertCameraX);
     case NID_PadInvertY: return "&2)&. " + onOff(PTX_PadInvertCameraY, g_pcinput.fPadInvertCameraY);
@@ -451,6 +574,45 @@ std::string StrNative(int id)
     case NID_KeyboardPage: return StrPort(PTX_KeyboardMapping);
     case NID_ResetKeys: return StrPort(PTX_ResetKeyboardMapping);
     case NID_AdvancedControls: return onOff(PTX_AdvancedBindings, sly2actions::profile.enabled);
+    case NID_VrPage: return StrPort(PTX_VrSettings);
+    case NID_VrMode: return StrPortValue(PTX_VrMode, StrPort(vr::g_vropts.mode == vr::VRMODE_Immersive ? PTX_VrImmersive : PTX_VrFlatScreen));
+    case NID_VrAutoCam: return onOff(PTX_AutoCameraRotation, vr::g_vropts.fAutoCameraRotation);
+    case NID_VrVignette:
+    {
+        static const PTX aptx[] = {PTX_Off, PTX_VrLow, PTX_VrMedium, PTX_VrHigh};
+        return StrPortValue(PTX_VrVignette, StrPort(aptx[std::clamp(vr::g_vropts.vignette, 0, 3)]));
+    }
+    case NID_VrScreenSize:
+    {
+        static const PTX aptx[] = {PTX_VrSmall, PTX_VrMedium, PTX_VrLarge};
+        return StrPortValue(PTX_VrScreenSize, StrPort(aptx[std::clamp(vr::g_vropts.screenSize, 0, 2)]));
+    }
+    case NID_VrRefresh:
+        if (vr::g_vropts.refreshRate <= 0) return StrPortValue(PTX_VrRefreshRate, StrPort(PTX_Auto));
+        std::snprintf(ach, sizeof(ach), "%d Hz", vr::g_vropts.refreshRate);
+        return StrPortValue(PTX_VrRefreshRate, ach);
+    case NID_VrFoveation:
+    {
+        static const PTX aptx[] = {PTX_Off, PTX_VrLow, PTX_VrMedium, PTX_VrHigh};
+        return StrPortValue(PTX_VrFoveation, StrPort(aptx[std::clamp(vr::g_vropts.foveation, 0, 3)]));
+    }
+    case NID_VrMsaa:
+        return StrToGameText("MSAA") + StrPort(PTX_Sep) +
+               (vr::g_vropts.msaa <= 0 ? StrPort(PTX_Auto) : vr::g_vropts.msaa > 1 ? std::string("2x") : StrPort(PTX_Off));
+    case NID_VrEyeRes:
+        if (vr::g_vropts.eyeResolution <= 0) return StrPortValue(PTX_VrEyeResolution, StrPort(PTX_VrDynamic));
+        std::snprintf(ach, sizeof(ach), "%d%%", vr::g_vropts.eyeResolution);
+        return StrPortValue(PTX_VrEyeResolution, ach);
+    case NID_VrWorldScale: return StrPortValue(PTX_VrWorldScale, StrPortDecimal(vr::g_vropts.worldScale, 2) + "x");
+    case NID_VrRecenter: return StrPort(PTX_VrRecenter);
+    case NID_VrCutscenes: return StrPortValue(PTX_VrCutscenes, StrPort(vr::g_vropts.fCutscenesFlat ? PTX_VrFlatScreen : PTX_VrImmersive));
+    case NID_VrRcTable: return onOff(PTX_VrRcTable, vr::g_vropts.fRcTable);
+    case NID_VrMultiview: return onOff(PTX_VrMultiview, vr::g_vropts.fMultiview);
+    case NID_VrUpscaling:
+    {
+        static const PTX aptx[] = {PTX_Off, PTX_VrSharpen, PTX_VrSuperResolution};
+        return StrPortValue(PTX_VrUpscaling, StrPort(aptx[std::clamp(vr::g_vropts.upscaling, 0, 2)]));
+    }
     case NID_ActionDevices: return StrPort(PTX_ActionBindings);
     case NID_ActionKeyboard: return StrPort(PTX_ActionKeyboard);
     case NID_ActionController: return StrPort(PTX_ActionController);
@@ -502,7 +664,7 @@ void ApplyDisplay()
     FSaveDisplaySettings(cane::userDirectory());
 }
 
-// a controls option's next value (pcinput.h), saved with the display options (system_settings.dat)
+// a controls option's next value (pcinput.h), saved with the display options (Settings.ini)
 void CycleControls(MENUENT& e)
 {
     PCINPUTOPT& o = g_pcinput;
@@ -516,11 +678,16 @@ void CycleControls(MENUENT& e)
         if (!sly2actions::profile.readOnly) {
             sly2actions::profile.enabled = !sly2actions::profile.enabled;
             sly2actions::Save(cane::userDirectory());
-            if (PAGE* pg = PpageCur()) for (MENUENT& row : pg->aent)
-                if (row.id == NID_KeyboardPage || row.id == NID_ActionDevices) {
-                    row.id = sly2actions::profile.enabled ? NID_ActionDevices : NID_KeyboardPage;
-                    row.pfnSelect = sly2actions::profile.enabled ? PFN_ActionDevices : PFN_NativeKeyboardPage;
+            // (the devices row exists only while the advanced mapping is on: the last row of the page)
+            if (PAGE* pg = PpageCur()) {
+                std::erase_if(pg->aent, [](const MENUENT& row) { return row.id == NID_KeyboardPage || row.id == NID_ActionDevices; });
+                if (sly2actions::profile.enabled) {
+                    MENUENT devices;
+                    devices.id = NID_ActionDevices;
+                    devices.pfnSelect = PFN_ActionDevices;
+                    pg->aent.push_back(devices);
                 }
+            }
         }
         return;
     case NID_ResetActions:
@@ -584,6 +751,47 @@ void BindKey(int i, int key)
     FSaveDisplaySettings(cane::userDirectory());
 }
 
+// (upscaling) the rows shown: not where the headset's compositor upscales (the Quest: VR Settings' own Upscaling), nor
+// where FSR 1 cannot run (fsr.h: the Metal layer)
+bool FUpscaleRowsShown()
+{
+    if (vr::FActive() && vr::FCompositorUpscaling()) return false;
+    return g_gl.window && fsr::FAvailable();
+}
+// Upscaling's rows (fSubOnly: only the method, preset and sharpness, those while it is on), with the page's select function
+void AppendUpscaleRows(std::vector<MENUENT>& a, uint32_t pfnSelect, bool fSubOnly)
+{
+    if (!FUpscaleRowsShown()) return;
+    for (int id = fSubOnly ? int(NID_UpscaleMethod) : int(NID_Upscale); id <= NID_UpscaleSharpness; ++id)
+    {
+        if (id != NID_Upscale && !g_display.fUpscale) break;
+        MENUENT e;
+        e.id = id;
+        e.pfnSelect = pfnSelect;
+        a.push_back(e);
+    }
+}
+
+// World Scale (VR Settings) and Outline Thickness (the display options, VR Settings): Cross steps up and wraps round,
+// left / right step down / up and stop at the ends (StepNativeLeftRight)
+void StepWorldScale(int n, bool fWrap)
+{
+    namespace st = cane::settings;
+    const int lo = int(std::lround(st::kVrWorldScaleMin * 10.0f)), hi = int(std::lround(st::kVrWorldScaleMax * 10.0f));
+    // (in tenths; an older file's 0.75 / 1.25 rounds to the nearest tenth first)
+    int t = int(std::lround(vr::g_vropts.worldScale * 10.0f)) + n;
+    t = t > hi ? (fWrap ? lo : hi) : t < lo ? (fWrap ? hi : lo) : t;
+    vr::g_vropts.worldScale = float(t) / 10.0f;
+}
+void StepOutlineThickness(int n, bool fWrap)
+{
+    namespace st = cane::settings;
+    int v = (g_display.outlineThickness / st::kOutlineThicknessStep + n) * st::kOutlineThicknessStep;
+    v = v > st::kOutlineThicknessMax ? (fWrap ? st::kOutlineThicknessMin : st::kOutlineThicknessMax)
+      : v < st::kOutlineThicknessMin ? (fWrap ? st::kOutlineThicknessMax : st::kOutlineThicknessMin) : v;
+    g_display.outlineThickness = v;
+}
+
 // a PC display option's next value
 void CycleNative(MENUENT& e)
 {
@@ -626,6 +834,28 @@ void CycleNative(MENUENT& e)
     case NID_Window: g_display.window = DISPWINDOW((int(g_display.window) + 1) % 3); break;
     case NID_Vsync: g_display.fVsync = !g_display.fVsync; break;
     case NID_LongShadows: g_display.fLongShadows = !g_display.fLongShadows; break;
+    case NID_OutlineThickness: StepOutlineThickness(1, true); break;
+    case NID_Upscale:
+        g_display.fUpscale = !g_display.fUpscale;
+        // (the method, preset and sharpness rows exist only while it is on: right after it; the pages keep room for them)
+        if (PAGE* pg = PpageCur())
+        {
+            auto& a = pg->aent;
+            std::erase_if(a, [](const MENUENT& row) { return row.id >= NID_UpscaleMethod && row.id <= NID_UpscaleSharpness; });
+            if (g_display.fUpscale)
+                for (size_t i = 0; i < a.size(); ++i)
+                    if (a[i].id == NID_Upscale)
+                    {
+                        std::vector<MENUENT> arow;
+                        AppendUpscaleRows(arow, a[i].pfnSelect, true);
+                        a.insert(a.begin() + std::ptrdiff_t(i) + 1, arow.begin(), arow.end());
+                        break;
+                    }
+        }
+        break;
+    case NID_UpscaleMethod: break;   // (FSR 1 only, for now)
+    case NID_UpscalePreset: g_display.upscalePreset = (g_display.upscalePreset + 1) % 4; break;
+    case NID_UpscaleSharpness: g_display.upscaleSharpness = g_display.upscaleSharpness >= 100 ? 0 : (g_display.upscaleSharpness / 10 + 1) * 10; break;
     case NID_DrawDistance:
     {
         static const float ag[] = {0.75f, 1.0f, 1.5f, 2.0f, 3.0f};
@@ -639,9 +869,39 @@ void CycleNative(MENUENT& e)
     ApplyDisplay();
 }
 
-// orig 0x001AF9C8 (an option entry shows the setting's value)
+// (PC, Settings.ini: display.h SAVEOPTS) the save's option flags mirror the options: every record the game keeps or
+// writes carries them (an original or older build that loads the save gets the same options). The values equal to
+// the defaults are the record's zero bytes, so a default run leaves records as the original's.
+void SyncRecordOptions()
+{
+    if (!g_saveopts.fStore) return;
+    auto setB = [](const char* name, bool f) { if (RefSetting(name).m_tagk != TAGK_Nil && FSettingFlag(name) != f) SetSettingB(name, f); };
+    setB("fNoVibration", !g_fControllerVibration);
+    setB("fReverseLookAround", g_saveopts.fInvertBinoc);
+    setB("fReverseAim", g_saveopts.fInvertTurret);
+    if (const CRef r = RefSetting("nMixerMode"); r.m_tagk != TAGK_Nil && NRef(r) != g_saveopts.speakers) SetSettingN("nMixerMode", g_saveopts.speakers);
+    auto setVolume = [](const char* name, float g) {
+        const float u = cane::settings::saveComplement(g);
+        if (const CRef r = RefSetting(name); r.m_tagk != TAGK_Nil && GRef(r) != u) SetSettingF(name, u);
+    };
+    setVolume("uMusicVolume", g_saveopts.gMusic);
+    setVolume("uEffectsVolume", g_saveopts.gEffects);
+    setB("fUseHeadset", g_saveopts.fHeadset);   // (audio: the original's USB Headset, which works on PC now)
+}
+
+// orig 0x001AF9C8 (an option entry shows the setting's value; PC: Settings.ini's, display.h SAVEOPTS)
 void InitOptionText(MENUENT& e)
 {
+    if (g_saveopts.fStore)
+        switch (e.id)
+        {
+        case 76: case 77: case 78: e.id = g_saveopts.speakers == 1 ? 0x4C : g_saveopts.speakers == 2 ? 0x4D : 0x4E; return;
+        case 72: case 73: e.id = g_fControllerVibration ? 0x48 : 0x49; return;
+        case 81: case 82: e.id = g_saveopts.fInvertBinoc ? 0x52 : 0x51; return;
+        case 83: case 84: e.id = g_saveopts.fInvertTurret ? 0x54 : 0x53; return;
+        case 79: case 80: e.id = g_saveopts.fHeadset ? 0x4F : 0x50; return;
+        default: break;
+        }
     switch (e.id)
     {
     case 76: case 77: case 78:
@@ -677,6 +937,22 @@ void ApplyOption(const MENUENT& e)
     case 83: case 84: SetSettingB("fReverseAim", e.id == 84); break;
     default: break;
     }
+    if (g_saveopts.fStore)
+    {
+        // (PC) the option into Settings.ini (display.h SAVEOPTS), which the launcher shows too
+        switch (e.id)
+        {
+        case 78: g_saveopts.speakers = cane::settings::Speakers_Surround; break;
+        case 77: g_saveopts.speakers = cane::settings::Speakers_Stereo; break;
+        case 76: g_saveopts.speakers = cane::settings::Speakers_Mono; break;
+        case 72: case 73: g_fControllerVibration = e.id == 72; break;
+        case 81: case 82: g_saveopts.fInvertBinoc = e.id == 82; break;
+        case 83: case 84: g_saveopts.fInvertTurret = e.id == 84; break;
+        case 79: case 80: g_saveopts.fHeadset = e.id == 79; break;
+        default: break;
+        }
+        if (e.id == 0x67 || e.id == 0x68 || (e.id >= 72 && e.id <= 84)) FSaveDisplaySettings(cane::userDirectory());
+    }
     ApplyGameSettings(g_gamesave);   // orig 0x1D8FF8(the record): the settings take effect
 }
 
@@ -702,6 +978,17 @@ void UpdateSlider(PAGE& pg, MENUENT& e)
     case 0x67:
     case 0x68:
     {
+        if (g_saveopts.fStore)
+        {
+            // (PC) Settings.ini's music / effects volume (the launcher's sliders: the user's factor, sound.cpp), the
+            // record's mirror kept (SyncOptionsToRecord); saved when the slider is let go (ApplyOption)
+            float& g = e.id == 0x67 ? g_saveopts.gMusic : g_saveopts.gEffects;
+            g = std::clamp(std::round((g + float(n) * 0.1f) * 100.0f) / 100.0f, 0.0f, 1.0f);
+            ApplySoundOptions();
+            SyncRecordOptions();
+            SetScreenObjFraction(pg.plo, 0x315, g);
+            break;
+        }
         // the channel's volume (the sound's factor 1: music channel 1, effects 0 and 3) moves; the record keeps its
         // complement (0x1AFB88 cases 103 / 104: 1 - the volume)
         const char* name = e.id == 0x67 ? "uMusicVolume" : "uEffectsVolume";
@@ -794,6 +1081,14 @@ std::vector<MENUENT> AentPause()
         }
         if (f) a.push_back(e);
     }
+    // (VR, vr.h) VR Settings, with a headset only
+    if (vr::FMenuShown())
+    {
+        MENUENT v;
+        v.id = NID_VrPage;
+        v.pfnSelect = PFN_NativeVrPage;
+        a.push_back(v);
+    }
     // (native) Exit to Desktop, as Sly1-Release's pause menu
     MENUENT ex;
     ex.id = NID_ExitToDesktop;
@@ -802,20 +1097,165 @@ std::vector<MENUENT> AentPause()
     return a;
 }
 
+// (VR, vr.h) VR Settings: the mode, Immersive's camera rotation and vignette, the Flat Screen's size, the refresh rate,
+// the world scale, recentering
+std::vector<MENUENT> AentVr()
+{
+    std::vector<MENUENT> a;
+    // (Upscaling: the headset compositor's filter where the runtime has it (the Quest); elsewhere (PCVR) the Display
+    // options' upscaler belongs in its place, as the same setting)
+    const int idUpscaling = vr::FCompositorUpscaling() ? int(NID_VrUpscaling) : 0;
+    for (int id : {int(NID_VrMode), int(NID_VrAutoCam), int(NID_VrCutscenes), int(NID_VrVignette), int(NID_VrScreenSize),
+                   int(NID_VrRefresh), int(NID_VrEyeRes), int(NID_VrFoveation), idUpscaling, int(NID_VrMsaa), int(NID_VrMultiview), int(NID_VrWorldScale),
+                   int(NID_OutlineThickness), int(NID_VrRcTable), int(NID_VrRecenter)})
+    {
+        if (!id)
+        {
+            // (a PC headset: the display options' Upscaling rows, the same setting, cycled as there)
+            AppendUpscaleRows(a, PFN_NativeDisplay, false);
+            continue;
+        }
+        MENUENT e;
+        e.id = id;
+        e.pfnSelect = PFN_NativeVr;
+        a.push_back(e);
+    }
+    a.reserve(a.size() + 4);   // (NID_Upscale's rows inserted in place)
+    return a;
+}
+
+void CycleVr(const MENUENT& e)
+{
+    vr::VROPTS& o = vr::g_vropts;
+    auto nextOf = [](int n, std::initializer_list<int> an) {
+        auto it = std::find(an.begin(), an.end(), n);
+        return (it == an.end() || it + 1 == an.end()) ? *an.begin() : it[1];
+    };
+    switch (e.id)
+    {
+    case NID_VrMode: o.mode = o.mode == vr::VRMODE_Immersive ? vr::VRMODE_Flat : vr::VRMODE_Immersive; vr::Recenter(); break;
+    case NID_VrAutoCam: o.fAutoCameraRotation = !o.fAutoCameraRotation; break;
+    case NID_VrVignette: o.vignette = (o.vignette + 1) % 4; break;
+    case NID_VrScreenSize: o.screenSize = (o.screenSize + 1) % 3; break;
+    case NID_VrRefresh: o.refreshRate = nextOf(o.refreshRate, {0, 72, 90, 120}); vr::ApplyRefreshRate(); break;
+    case NID_VrEyeRes: o.eyeResolution = nextOf(o.eyeResolution, {0, 100, 90, 75, 60, 50}); break;
+    case NID_VrMsaa: o.msaa = nextOf(o.msaa, {0, 2, 1}); break;   // (Automatic, 2x, Off)
+    case NID_VrFoveation: o.foveation = (o.foveation + 1) % 4; break;
+    case NID_VrWorldScale: StepWorldScale(1, true); break;
+    case NID_OutlineThickness: StepOutlineThickness(1, true); break;
+    case NID_VrCutscenes: o.fCutscenesFlat = !o.fCutscenesFlat; break;
+    case NID_VrRcTable: o.fRcTable = !o.fRcTable; break;
+    case NID_VrMultiview: o.fMultiview = !o.fMultiview; break;
+    case NID_VrUpscaling: o.upscaling = (o.upscaling + 1) % 3; break;
+    case NID_VrRecenter: vr::Recenter(); return;
+    default: return;
+    }
+    FSaveDisplaySettings(cane::userDirectory());
+}
+
+// (audio, notes/AUDIO_2026-11-10.md) Audio Devices...: the game's output, the microphone (recorded only while the USB
+// Headset option is on), the headset's speaker (where USB Headset plays the dialogue); each row cycles "System Default"
+// (or "Same as Output") and the devices present; Settings.ini's [Audio] keys, as the launcher's Settings > Audio
+std::vector<MENUENT> AentAudio()
+{
+    std::vector<MENUENT> a;
+    for (int id : {int(NID_AudioOutput), int(NID_AudioInput), int(NID_AudioHeadsetOutput)})
+    {
+        MENUENT e;
+        e.id = id;
+        e.pfnSelect = PFN_NativeAudio;
+        a.push_back(e);
+    }
+    return a;
+}
+
+void CycleAudio(const MENUENT& e)
+{
+    std::string* pname = e.id == NID_AudioOutput ? &g_saveopts.outputDevice
+                       : e.id == NID_AudioInput  ? &g_saveopts.inputDevice
+                       : e.id == NID_AudioHeadsetOutput ? &g_saveopts.headsetOutputDevice : nullptr;
+    if (!pname) return;
+    const cane::audio::DeviceList list = ListAudioDevices();
+    const std::vector<std::string> choices = cane::audio::deviceChoices(e.id == NID_AudioInput ? list.inputs : list.outputs, *pname);
+    size_t i = 0;
+    for (size_t k = 0; k < choices.size(); ++k)
+        if (choices[k] == cane::audio::cleanName(*pname)) i = k;
+    *pname = choices[(i + 1) % choices.size()];
+    ApplySoundOptions();   // (display.h: SetAudioDevices)
+    FSaveDisplaySettings(cane::userDirectory());
+}
+
+// (lang) Language...: Text Language (the languages whose text this disc can draw) and Voice Language (Same as Text,
+// then the languages with voices); chosen here, they apply when the next world loads (its text and lines are read in
+// them) and are Settings.ini's [Language] Language / Voices
+std::vector<MENUENT> AentLanguage()
+{
+    std::vector<MENUENT> a;
+    for (int id : {int(NID_TextLanguage), int(NID_VoiceLanguage)})
+    {
+        MENUENT e;
+        e.id = id;
+        e.pfnSelect = PFN_NativeLanguageRow;
+        a.push_back(e);
+    }
+    return a;
+}
+
+void CycleLanguage(const MENUENT& e)
+{
+    int langText = -2, langVoice = -2;
+    FLanguagesPending(&langText, &langVoice);
+    if (langText == -2) langText = g_nLang;
+    if (langVoice == -2) langVoice = g_nLangVoice;
+    std::vector<int> achoice;
+    if (e.id == NID_VoiceLanguage) achoice.push_back(-1);   // (Same as Text)
+    for (int i = 0; i < CLanguages(); ++i)
+    {
+        const int lang = LanguageOfIndex(i);
+        if (e.id == NID_TextLanguage ? FLanguageTextAvailable(lang) : FLanguageVoiceAvailable(lang)) achoice.push_back(lang);
+    }
+    if (achoice.empty()) return;
+    int& cur = e.id == NID_TextLanguage ? langText : langVoice;
+    size_t i = 0;
+    for (size_t k = 0; k < achoice.size(); ++k)
+        if (achoice[k] == cur) i = k + 1;
+    cur = achoice[i % achoice.size()];
+    // (nothing pending when the choice is what plays now)
+    const int curText = langText == g_nLang ? -2 : langText;
+    const int curVoice = langVoice == g_nLangVoice ? -2 : langVoice;
+    SetPendingLanguages(curText, curVoice);
+    std::printf("language: text %s, voices %s from the next world\n", SzLanguage(langText),
+                langVoice < 0 ? "as the text" : SzLanguage(langVoice));
+    if (g_saveopts.fStore)
+    {
+        g_saveopts.language = SzLanguageModName(langText);
+        g_saveopts.voiceLanguage = langVoice < 0 ? std::string() : std::string(SzLanguageModName(langVoice));
+        FSaveDisplaySettings(cane::userDirectory());
+    }
+}
+
 // (native) the PC display options' page
 std::vector<MENUENT> AentDisplayOptions()
 {
     std::vector<MENUENT> a;
     for (int id = NID_Aspect; id <= NID_DrawDistance + 1; ++id)
     {
-#ifdef __SWITCH__
-        if (id == NID_Window) continue;   // (the Switch: one screen, no window to place)
+#if defined(__SWITCH__) || defined(__ANDROID__) || defined(CANE_IOS)
+        if (id == NID_Window) continue;   // (the Switch / Android / iOS: the system places the window, DeX included)
 #endif
         MENUENT e;
         e.id = id <= NID_DrawDistance ? id : NID_LongShadows;   // (then Long Shadows, settings v16)
         e.pfnSelect = PFN_NativeDisplay;
         a.push_back(e);
+        if (id == NID_Resolution) AppendUpscaleRows(a, PFN_NativeDisplay, false);   // (upscaling: after the resolution)
     }
+    {
+        MENUENT e;   // (then Outline Thickness)
+        e.id = NID_OutlineThickness;
+        e.pfnSelect = PFN_NativeDisplay;
+        a.push_back(e);
+    }
+    a.reserve(a.size() + 4);   // (NID_Upscale's rows inserted in place: the rows do not move)
     return a;
 }
 
@@ -839,6 +1279,29 @@ std::vector<MENUENT> AentOptions()
     e.id = NID_ControlsPage;
     e.pfnSelect = PFN_NativeControlsPage;
     a.push_back(e);
+    // (lang) Language... (two or more languages: the text and the voices apart)
+    if (CLanguages() >= 2)
+    {
+        e.id = NID_LanguagePage;
+        e.pfnSelect = PFN_NativeLanguagePage;
+        a.push_back(e);
+    }
+    // (audio) Audio Devices... (desktop builds, with Settings.ini; not on the Switch / Android)
+    if (FAudioDeviceChoiceShown() && g_saveopts.fStore)
+    {
+        e.id = NID_AudioPage;
+        e.pfnSelect = PFN_NativeAudioPage;
+        a.push_back(e);
+    }
+    // (native) Exit to Desktop on the title's data access menu (Select) too, as the pause menu has it (in a game this
+    // page is reached from the pause menu, which has it)
+    if (fTitle)
+    {
+        MENUENT ex;
+        ex.id = NID_ExitToDesktop;
+        ex.pfnSelect = PFN_NativeExit;
+        a.push_back(ex);
+    }
     return a;
 }
 
@@ -846,6 +1309,10 @@ std::vector<MENUENT> AentOptions()
 std::vector<MENUENT> AentControls()
 {
     std::vector<MENUENT> a;
+    MENUENT remap;   // (first: every binding on one roomy page)
+    remap.id = NID_RemapPage;
+    remap.pfnSelect = PFN_RemapPage;
+    a.push_back(remap);
     MENUENT advanced;
     advanced.id = NID_AdvancedControls;
     advanced.pfnSelect = PFN_NativeControls;
@@ -853,6 +1320,8 @@ std::vector<MENUENT> AentControls()
     for (int id = NID_PromptStyle; id <= NID_KeyboardPage; ++id)
     {
         if (id == NID_InvertY) continue;
+        // (the keys are bound on the Remap page; this row is the advanced mapping's devices, only while that is on)
+        if (id == NID_KeyboardPage && !sly2actions::profile.enabled) continue;
         MENUENT e;
         e.id = id == NID_InvertX ? NID_InvertPage : id;   // (the mouse's inversion: on Invert Controls..., with the rest)
         e.pfnSelect = id == NID_KeyboardPage ? PFN_NativeKeyboardPage : id == NID_InvertX ? PFN_NativeInvertPage : PFN_NativeControls;
@@ -1094,6 +1563,21 @@ void SelectEntry(MENUENT& e)
         break;
     case PFN_NativeDisplay: CycleNative(e); e.grf |= 2; break;
     case PFN_NativeControls: CycleControls(e); e.grf |= 2; break;
+    case PFN_NativeVr: CycleVr(e); e.grf |= 2; break;
+    case PFN_NativeAudio: CycleAudio(e); e.grf |= 2; break;
+    case PFN_NativeLanguageRow: CycleLanguage(e); e.grf |= 2; break;
+    case PFN_NativeLanguagePage:
+        ReplacePage(AentLanguage(), 0);
+        e.grf |= 2;
+        break;
+    case PFN_NativeAudioPage:
+        ReplacePage(AentAudio(), 0);
+        e.grf |= 2;
+        break;
+    case PFN_NativeVrPage:
+        ReplacePage(AentVr(), 0);
+        e.grf |= 2;
+        break;
     case PFN_ActionDevices:
         ReplacePage(AentActionDevices(), 0);
         e.grf |= 2;
@@ -1119,6 +1603,10 @@ void SelectEntry(MENUENT& e)
     // (PC menus) the native pages swap in place of the current one, as the pause menu's Options... does
     // (0x1B04E0: ReplacePage, the entries' swap 0x14 / 0xC, back the same way); pushed, they replayed the whole pause
     // menu's opening (0x0) and closed it on the way back
+    case PFN_RemapPage:
+        OpenRemapPage();
+        e.grf |= 2;
+        break;
     case PFN_NativeControlsPage:
         ReplacePage(AentControls(), 0);
         e.grf |= 2;
@@ -1149,9 +1637,16 @@ void SelectEntry(MENUENT& e)
     case PFN_NativeLanguage:
         // orig (Europe) 0x1DDCA8: the language chosen (it wins over a save's: ApplyGameSettings), then the title's world
         // again in it (0x1DD8E0's transition: the current world, the flags 1)
-        g_nLangChosen = e.n;
-        SetLanguage(e.n);
+        // (PC) the text and the voices both (the pause menu's Language page can set them apart): region.h
+        ChooseLanguageOnTitle(e.n);
         std::printf("language: %s chosen\n", SzLanguage(e.n));
+        // (PC) remembered in Settings.ini (the launcher shows and sets the same): the next start begins in it
+        if (g_saveopts.fStore)
+        {
+            g_saveopts.language = SzLanguageModName(e.n);
+            g_saveopts.voiceLanguage.clear();
+            FSaveDisplaySettings(cane::userDirectory());
+        }
         CloseMenu();
         RequestTransition(s_psw, g_disc.PbElf(VA_FK_BOOT_WORLD, 64), 0x189, -1, 1, -1);
         break;
@@ -1347,6 +1842,8 @@ void UpdateCard()
 }
 }  // namespace
 
+void SyncOptionsToRecord() { SyncRecordOptions(); }
+
 // ------------------------------------------------------------ public
 void ShowCardMessage(int idMsg, int nAfter)
 {
@@ -1372,7 +1869,9 @@ void InitMenu(SW* psw)
 int g_ncardMode = 0;
 
 bool FMenuShown() { return s_menu.fShown || s_card.fShown; }
+bool FPauseMenuShown() { return s_menu.fShown; }
 bool FMenuActive() { return s_menu.fShown; }
+int NMenuState() { return s_menu.state; }
 bool FCardMessageActive() { return s_card.fShown; }
 
 bool FOpenPauseMenu(SW* psw)
@@ -1396,14 +1895,16 @@ void HudAutoSaveFrontEnd() { HudAutoSave(true); }
 // its one language): the disc's languages from the current one on, each its name (the text 0x2C35B8[language]),
 // on the title's language screen object 0x5D6.
 //
-// This is where the language is chosen. A future QoL could let users add their own dubs, subtitles or whole new
-// languages (text tables, dialog and movie sound beside the disc) and offer this menu on the USA disc too; the
-// rest of the port only reads g_nLang (region.h).
+// This is where the language is chosen. (PC, lang 2026-11-10) The list is the disc's languages and the shared
+// languages folder's (langstore.h: other regions' installations, imports, user-made dubs and subtitles), so the
+// menu is offered on the USA and Japanese discs too as soon as there are two; the rest of the port only reads
+// g_nLang (region.h).
 void OpenLanguageMenu(SW* psw, bool fCanCancel)
 {
     s_psw = psw;
     LO* plo = psw ? PloFindSwObjectByOid(psw, 0x5D6) : nullptr;
     const int c = CLanguages();
+    if (!plo && c >= 2) std::printf("language: the title's language menu object 0x5D6 is missing\n");
     if (!plo || c < 2 || s_menu.fShown) return;
     int icur = 0;
     for (int i = 0; i < c; ++i)
@@ -1413,12 +1914,19 @@ void OpenLanguageMenu(SW* psw, bool fCanCancel)
     {
         const int lang = LanguageOfIndex((i + icur) % c);
         MENUENT e;
-        e.id = NElf(0x2C35B8 + 4 * uint32_t(lang));
+        // (the game's 14 by the disc's text 0x58.. in the current language; a custom one by its own name)
+        e.id = lang < LANG_Max ? 0x58 + lang : NID_LanguageFirst + lang;   // (the USA ids the table 0x2C35B8 holds)
+        // (a language whose text this disc cannot show, langstore.h: named "... (voices only)")
+        if (FLangStoreVoicesOnly(lang)) e.id = NID_LanguageFirst + lang;
         e.pfnSelect = PFN_NativeLanguage;
         e.n = lang;
         aent.push_back(e);
     }
-    PushPage(std::move(aent), 0, plo, 0x2C35F0);
+    // (PC: the Japanese title world's language screen 0x5D6 draws nothing (the build never shows it); the menu's own
+    // wheel 0x370 with the options' animations instead)
+    uint32_t vaAnim = 0x2C35F0;
+    if (g_disc.Region() == DISCREGION::Japan && s_menu.ploDefault) vaAnim = 0x2BFD38;
+    PushPage(std::move(aent), 0, plo, vaAnim);
     if (PAGE* pg = PpageCur()) pg->fCanCancel = fCanCancel;
 }
 
@@ -1433,9 +1941,24 @@ void UpdateMenu(SW* psw)
     s_psw = psw;
     UpdateCardStatus();
     UpdateCard();
-    if (!s_menu.fShown || s_card.fShown) { s_ikeyCapture = s_iActionCapture = -1; return; }
+    if (!s_menu.fShown || s_card.fShown) { s_ikeyCapture = s_iActionCapture = -1; CloseRemapPage(); return; }
     PAGE* pe = PpageCur();
     if (!pe) return;
+    // (tests) SLY2N_REMAPPAGE=1: the Remap page opens with the menu
+    if (static bool s_fTestRemap = std::getenv("SLY2N_REMAPPAGE") != nullptr; s_fTestRemap && s_menu.state == 7)
+    {
+        s_fTestRemap = false;
+        OpenRemapPage();
+    }
+    // (tests) SLY2N_VRPAGE=1: the VR Settings page opens with the menu (a headset in use: its rows' screenshots)
+    if (static bool s_fTestVr = std::getenv("SLY2N_VRPAGE") != nullptr; s_fTestVr && s_menu.state == 7 && vr::FActive())
+    {
+        s_fTestVr = false;
+        ReplacePage(AentVr(), 0);
+        return;
+    }
+    // the Remap page over the menu takes the input while it is open
+    if (FRemapPageOpen()) { UpdateRemapPage(); return; }
     if (s_iActionCapture >= 0) {
         GrfbtnTakePressed(0xFFFF);
         const int key = g_gl.window ? KeyBindingPressed(g_gl.window) : GLFW_KEY_ESCAPE;
@@ -1560,7 +2083,21 @@ void UpdateMenu(SW* psw)
             if (std::getenv("SLY2N_MENULOG")) std::printf("menu: slot page %d\n", s_ipageSlot + 1);
             return;
         }
-        if (!pe->aent.empty()) step(NStepUpDown());
+        if (!pe->aent.empty())
+        {
+            // (World Scale, Outline Thickness: left / right step the value, as a slider)
+            MENUENT& e = pe->aent[size_t(pe->isel)];
+            if (e.id == NID_VrWorldScale || e.id == NID_OutlineThickness)
+                if (const int n = NStepLeftRight())
+                {
+                    if (e.id == NID_VrWorldScale) StepWorldScale(n, false);
+                    else StepOutlineThickness(n, false);
+                    FSaveDisplaySettings(cane::userDirectory());
+                    PsndStartSound(0x35);   // (the shop's row step, as the slot pages')
+                    return;
+                }
+            step(NStepUpDown());
+        }
         return;
     }
     case 8:
@@ -1688,7 +2225,7 @@ std::string StrMenuScript(int id)
 
 // orig: 0x001D8FF8 func_001D8FF8: a record's settings take effect: the language (0x1A2BD0 when the disc has two or more:
 // the USA disc has one), the mixer mode (0x1FE9C8), the music volume (factor 1 of channel 1) and the effects' (channels 0
-// and 3) as 1 - the stored values, the headset (D_003DD050: no headset natively) and the screen centre (the GS display's
+// and 3) as 1 - the stored values, the headset (D_003DD050, the sound manager's USB headset flag) and the screen centre (the GS display's
 // offsets +636 / +50: none on PC)
 void ApplyGameSettings(const GAMESAVE& gs)
 {
@@ -1708,8 +2245,21 @@ void ApplyGameSettings(const GAMESAVE& gs)
             if (&gs == &g_gamesave) SetSettingN("lang", g_nLangChosen);
             SetLanguage(g_nLangChosen);
         }
-        else if (rLang.m_tagk != TAGK_Nil && FLanguageOnDisc(NRef(rLang))) SetLanguage(NRef(rLang));
+        else if (rLang.m_tagk != TAGK_Nil && FLanguageAvailable(NRef(rLang))) SetLanguage(NRef(rLang));
     }
+    if (g_saveopts.fStore)
+    {
+        // (PC) the options are Settings.ini's (display.h SAVEOPTS), not a record's: the current record mirrors them
+        SyncOptionsToRecord();
+        SetSoundPlaybackMode(g_saveopts.speakers);
+        ApplySoundOptions();
+        g_sound.fEffect = g_saveopts.fHeadset ? 1 : 0;   // (D_003DD050 = the headset option, as below)
+        return;
+    }
+    // the headset (D_003DD050 = flags "fUseHeadset": sound.cpp UpdateMicNoise, spiop's headset tracks)
+    if (const CRef r = [&] { GAMESAVE s0 = g_gamesave; g_gamesave = gs; CRef rr = RefSetting("fUseHeadset"); g_gamesave = s0; return rr; }();
+        r.m_tagk != TAGK_Nil)
+        g_sound.fEffect = NRef(r);
     if (rMix.m_tagk != TAGK_Nil) SetSoundPlaybackMode(NRef(rMix));
     if (rMusic.m_tagk != TAGK_Nil) SetSoundChannelVolume(1, 1, 1.0f - GRef(rMusic));
     if (rEffects.m_tagk != TAGK_Nil)

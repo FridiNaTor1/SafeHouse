@@ -78,14 +78,20 @@ inline std::string UniqueStem() {
 
 // A native tool beside cane-extractor (BundledToolService / FindRebuilder in the C# extractor).
 inline fs::path Tool(const char* name) {
-#ifdef _WIN32
+#if defined(CANE_ANDROID)
+    const fs::path file = cane::executableDirectory() / ("lib" + std::string(name) + ".so");
+#elif defined(CANE_IOS)
+    // (iOS: the programs are frameworks of SafeHouse.app, run in the app by platform/process.h; executableDirectory()
+    // is the app bundle, where no tool file is)
+    const fs::path file = cane::path(cane::ios::programPath(name));
+#elif defined(_WIN32)
     const fs::path file = cane::executableDirectory() / (std::string(name) + ".exe");
 #else
     const fs::path file = cane::executableDirectory() / name;
 #endif
     if (!fs::is_regular_file(file))
-        throw std::runtime_error("The level tool " + cane::utf8(file.filename()) +
-                                 " is missing beside cane-extractor. Reinstall SafeHouse.");
+        throw std::runtime_error("The level tool " + cane::utf8(file.filename()) + " is missing beside cane-extractor (" +
+                                 cane::utf8(file) + "). Reinstall SafeHouse.");
     return file;
 }
 

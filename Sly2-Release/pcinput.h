@@ -2,8 +2,8 @@
 
 // PC input QoL (Phase 3, ported from ThiefRush-Dev's Sly1-Release Input.cpp / mouseinput.cpp): the keyboard and
 // gamepad bindings, the keyboard camera keys, the mouse (camera, aim, bindings, menus) and the last used device
-// (for the dynamic button prompts, promptglyph.h). The options live in <user-dir>/Saves/system_settings.dat
-// (platform/system_settings.h v12; the launcher's Settings page edits the same fields).
+// (for the dynamic button prompts, promptglyph.h). The options live in <user-dir>/Settings.ini
+// (platform/sly2_settings.h; the launcher's Settings page edits the same file).
 //
 // Defaults keep the original's controls: Cross / Circle / ... on the pad's positional buttons, the triggers as
 // L2 / R2. Nothing here runs in headless or scripted runs (no window): those keep reading only the press lists.
@@ -127,3 +127,6 @@ bool FDebugKeyHeld(GLFWwindow* window, int key);
 // ---- capture for the in-game rebinding (menu.cpp's Controls page)
 // The first newly pressed key or mouse button this step (or -1); Escape gives settings::kKeyEscape.
 int KeyBindingPressed(GLFWwindow* window);
+
+// The on-screen pad (Android) is the pad in use.
+bool FTouchPadActive();

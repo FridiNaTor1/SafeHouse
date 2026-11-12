@@ -1,4 +1,5 @@
 #include "joy.h"
+#include "cheat.h"
 #include "rumble.h"
 
 #include "pcinput.h"
@@ -266,7 +267,7 @@ void GetJoyXYDeflection(const JOYPS2* pjoy, uint8_t bx, uint8_t by, float* px, f
 }  // namespace
 
 // orig: 0x00187998 FReadJoy (the read part; the pad's state machine 0x1871C0 is always ready natively, the cheat
-// codes 0x14BF48 and the idle broadcast 0x1619A0 are TODO(world))
+// codes 0x14BF48 (cheat.h) and the idle broadcast 0x1619A0)
 void ReadJoyPs2(JOYPS2* pjoy, const uint8_t* abRaw)
 {
     std::memcpy(pjoy->ab, abRaw, sizeof pjoy->ab);
@@ -301,6 +302,7 @@ void ReadJoyPs2(JOYPS2* pjoy, const uint8_t* abRaw)
     pjoy->dy = (pjoy->y - y) / dt;
     pjoy->dx2 = (pjoy->x2 - x2) / dt;
     pjoy->dy2 = (pjoy->y2 - y2) / dt;
+    if (pjoy == &g_joyps2) MatchCheatCodes(grfbtnOld, pjoy->grfbtn);   // 0x14BF48 (the cheat codes, cheat.h)
     pjoy->tRead = g_clock.t3C;
     if (pjoy->grfbtn != 0 || !(pjoy->uDeflect == 0.0f) || !(pjoy->uDeflect2 == 0.0f))
     {

@@ -3,6 +3,7 @@
 #include "rtgt.h"
 
 #include "gl.h"
+#include "gl_backend.h"
 
 #include <algorithm>
 #include <cmath>
@@ -16,26 +17,47 @@ void EnsureFbo(RTGT& r)
 {
     if (r.fbo) return;
     GLuint fbo = 0, tex = 0, rbo = 0;
+    if (const cane::draw::Packets* pkf = PpacketsFbo())
+    {
+        // (native: the texture, the depth-stencil renderbuffer and the framebuffer, nothing bound; the clear below binds it)
+        tex = GlNewTexture(r.dx, r.dy, GL_LINEAR, true);
+        cane::draw::RenderbufferDesc rd;
+        rd.width = uint32_t(r.dx), rd.height = uint32_t(r.dy), rd.format = cane::draw::kRenderbufferDepth32fStencil8;
+        rbo = pkf->createRenderbuffer(rd);
+        fbo = GlNewFramebuffer(tex, rbo);
+    }
+    else
+    {
     glGenFramebuffers(1, &fbo);
     glBindFramebuffer(GL_FRAMEBUFFER, fbo);
-    glGenTextures(1, &tex);
-    glBindTexture(GL_TEXTURE_2D, tex);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, r.dx, r.dy, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
     // TEX1 0x60 (bilinear), CLAMP 5 (clamp S and T)
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    tex = GlNewTexture(r.dx, r.dy, GL_LINEAR, true);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex, 0);
     glGenRenderbuffers(1, &rbo);
     glBindRenderbuffer(GL_RENDERBUFFER, rbo);
     glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH32F_STENCIL8, r.dx, r.dy);
     glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, rbo);
+    }
     // cleared as 0x1BE398's packet does until something is drawn
-    glClearColor(0, 0, 0, 0);
-    glClearDepth(0.0);
-    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    // (draw packets, platform/draw_packet.h: the Vulkan renderer; the masks and the scissor as they are, as for the GL calls)
+    const cane::draw::Packets* pk = cane::gl::ActiveBackend() ? cane::gl::ActiveBackend()->packets : nullptr;
+    if (pk && pk->clear && pk->bindTarget)
+    {
+        cane::draw::Clear c;
+        c.clear = cane::draw::kClearColor | cane::draw::kClearDepth;
+        c.depth = 0.0f;
+        c.stencilMaskKept = 1;
+        pk->bindTarget(fbo);
+        pk->clear(c);
+        pk->bindTarget(0);
+    }
+    else
+    {
+        glClearColor(0, 0, 0, 0);
+        glClearDepth(0.0);
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    }
     r.fbo = fbo;
     r.tex = tex;
     r.rboDepth = rbo;
@@ -110,9 +132,9 @@ unsigned GlTextureOfRtgt(int irtgt)
     {
         if (p->fbo)
         {
-            glDeleteFramebuffers(1, &p->fbo);
-            glDeleteTextures(1, &p->tex);
-            glDeleteRenderbuffers(1, &p->rboDepth);
+            GlDeleteFramebuffers(1, &p->fbo);
+            GlDeleteTexture(p->tex);
+            GlDeleteRenderbuffer(p->rboDepth);
             p->fbo = p->tex = p->rboDepth = 0;
         }
         p->dx = p->dy = dx;

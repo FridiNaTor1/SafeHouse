@@ -168,6 +168,29 @@ const DEVLAYOUT s_adevlayout[] = {
                                    {25.2f, 26.0f}, {38.8f, 26.0f}, {25.2f, 26.0f}, {38.8f, 26.0f}, {16.0f, 22.6f},
                                    {16.0f, 27.4f}, {13.6f, 25.0f}, {18.4f, 25.0f}, {16.0f, 25.0f}, {32.0f, 24.0f}},
      1.0f, 3.4f, 5.6f, 4.4f, 4.4f, 7.8f},
+    // (Kenney's GameCube silhouette: the stick top left, A with B at its lower left, the d-pad and the C-stick below;
+    // its X / Y have no holes, so their icons sit right of / above A. Z is the right bumper (outboard of R, clear of Y),
+    // L / R the triggers on the shoulders; the
+    // left bumper (the Switch Online pad's ZL), Select and Home have no icon.)
+    {Family::GameCube, {{46.0f, 24.0f}, {51.6f, 22.4f}, {39.5f, 26.6f}, {44.5f, 19.6f}, {17.5f, 17.6f}, {50.0f, 16.6f},
+                        {18.0f, 12.4f}, {46.0f, 12.4f}, {28.0f, 26.0f}, {32.0f, 26.0f}, {18.0f, 25.0f}, {40.0f, 37.0f},
+                        {18.0f, 25.0f}, {40.0f, 37.0f}, {24.0f, 34.8f}, {24.0f, 39.2f}, {21.8f, 37.0f}, {26.2f, 37.0f},
+                        {24.0f, 37.0f}, {32.0f, 30.0f}}, 1.0f, 4.4f, 6.6f, 5.0f, 3.6f, 5.6f},
+    // (the Switch 2 Pro Controller: the Switch Pro's holes, its body one unit taller at the top)
+    {Family::Switch2, {{44.9f, 27.9f}, {48.9f, 24.9f}, {40.9f, 24.9f}, {44.9f, 21.9f}, {17.5f, 15.1f}, {46.5f, 15.1f},
+                       {17.5f, 10.7f}, {46.5f, 10.7f}, {28.0f, 21.5f}, {36.0f, 21.5f}, {18.9f, 23.9f}, {37.9f, 31.9f},
+                       {18.9f, 23.9f}, {37.9f, 31.9f}, {24.9f, 29.5f}, {24.9f, 34.3f}, {22.5f, 31.9f}, {27.3f, 31.9f},
+                       {24.9f, 31.9f}, {32.0f, 25.0f}}, 1.0f, 4.4f, 6.2f, 5.0f, 3.6f, 5.6f},
+    // (the Wii Classic Controller Pro: the d-pad top left, both sticks below, - / Home / + between)
+    {Family::Wii, {{45.0f, 29.0f}, {49.0f, 25.0f}, {41.0f, 25.0f}, {45.0f, 21.0f}, {17.5f, 16.1f}, {46.5f, 16.1f},
+                   {17.5f, 11.7f}, {46.5f, 11.7f}, {27.6f, 23.0f}, {36.4f, 23.0f}, {26.0f, 33.0f}, {38.0f, 33.0f},
+                   {26.0f, 33.0f}, {38.0f, 33.0f}, {19.0f, 21.0f}, {19.0f, 27.0f}, {16.0f, 24.0f}, {22.0f, 24.0f},
+                   {19.0f, 24.0f}, {32.0f, 23.0f}}, 1.0f, 4.4f, 6.2f, 5.0f, 3.6f, 8.0f},
+    // (the Wii U Pro Controller: both sticks on top, the d-pad and the small face buttons below them, Home between)
+    {Family::WiiU, {{40.5f, 33.5f}, {43.5f, 30.5f}, {37.5f, 30.5f}, {40.5f, 27.5f}, {17.5f, 17.1f}, {46.5f, 17.1f},
+                    {17.5f, 12.7f}, {46.5f, 12.7f}, {27.4f, 26.0f}, {36.6f, 26.0f}, {18.0f, 23.0f}, {46.0f, 23.0f},
+                    {18.0f, 23.0f}, {46.0f, 23.0f}, {23.0f, 28.8f}, {23.0f, 33.2f}, {20.8f, 31.0f}, {25.2f, 31.0f},
+                    {23.0f, 31.0f}, {32.0f, 26.0f}}, 1.3f, 3.4f, 6.2f, 5.0f, 3.6f, 5.6f},
 };
 const DEVLAYOUT* PdevlayoutOf(Family f)
 {

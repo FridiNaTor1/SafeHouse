@@ -1,6 +1,7 @@
 // See lightsw.h. Ported from Sly2-Reference game/m_1A3260.cpp (0x1A3260..0x1A3B38), util.cpp (ConvertHsvToRgb
 // 0x11DD90, ConvertUserHsvToUserRgb 0x11DFA0) and m_20D9D0_p3.cpp (0x20F1C8), in plain IEEE float.
 
+#include "fastpaths.h"
 #include "jt.h"
 #include "lightsw.h"
 
@@ -167,7 +168,7 @@ int UpdateWorldLightsFromSw(const SW* psw)
     static const SW* s_psw = nullptr;
     static size_t s_clight = 0;
     const size_t clight = psw ? AploLights(psw).size() : 0;
-#ifdef __SWITCH__
+#if SLY2_FASTPATHS
     // (the Switch: each light's parameters kept while its options are the same (they only grow, by a proxy's binds,
     // activate.cpp: the light, its option count and their storage tell), its record and selection data computed again
     // only when its world matrix changed. A light placed by a record (LOX, nearly all): the record and both matrices
@@ -198,7 +199,7 @@ int UpdateWorldLightsFromSw(const SW* psw)
     bool fWorldLight = false;
     for (const LO* plo : AploLights(psw))
     {
-#ifdef __SWITCH__
+#if SLY2_FASTPATHS
         // (the lights four ahead, as last frame had them, prefetched: their objects, records and matrices are
         // scattered)
         if (ilight + 4 < s_akept.size())

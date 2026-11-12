@@ -36,8 +36,8 @@ if(NOT SLY2N_DEV_ROOT)
   endif()
 endif()
 target_compile_definitions(Sly3-Release PRIVATE "SLY2N_DEV_ROOT=\"${SLY2N_DEV_ROOT}\"")
-# The debug menu's title line (debugmenu.cpp): the top-level project version (CMakeLists.txt's project(ProjectCane
-# VERSION ...)) and the checkout's short git hash, regenerated at every build (cmake/sly2-version.cmake).
+# The debug menu's title line (debugmenu.cpp): the release version (SAFEHOUSE_VERSION, the one the launcher shows; CI
+# passes it) and the checkout's short git hash, regenerated at every build (cmake/sly2-version.cmake).
 file(STRINGS "${CANE_ROOT}/CMakeLists.txt" sly2n_project_line REGEX "^project\\(ProjectCane VERSION")
 string(REGEX MATCH "VERSION ([0-9.]+)" sly2n_version_match "${sly2n_project_line}")
 set(SLY2N_PORT_VERSION "${CMAKE_MATCH_1}")
@@ -48,7 +48,7 @@ endif()
 # variable CANE_GIT_HASH at build time; empty: git)
 set(CANE_GIT_HASH "" CACHE STRING "The git hash for the Sly 2 port's version string (empty: ask git)")
 add_custom_target(sly3_version
-  COMMAND ${CMAKE_COMMAND} -DROOT=${CANE_ROOT} -DVERSION=${SLY2N_PORT_VERSION} -DHASH=${CANE_GIT_HASH}
+  COMMAND ${CMAKE_COMMAND} -DROOT=${CANE_ROOT} -DVERSION=${SLY2N_PORT_VERSION} -DRELEASE=${SAFEHOUSE_VERSION} -DHASH=${CANE_GIT_HASH}
           -DOUTPUT=${CMAKE_CURRENT_BINARY_DIR}/generated/sly2_version.h -P ${CANE_ROOT}/cmake/sly2-version.cmake
   BYPRODUCTS "${CMAKE_CURRENT_BINARY_DIR}/generated/sly2_version.h" VERBATIM)
 add_dependencies(Sly3-Release sly3_version)
@@ -146,7 +146,7 @@ if(EXISTS "${sly2n_prompt_source}/prompt_atlas_rects.inc" AND EXISTS "${sly2n_ga
   set(sly2n_prompt_generated "${CMAKE_CURRENT_BINARY_DIR}/generated/prompts")
   file(MAKE_DIRECTORY "${sly2n_prompt_generated}")
   set(sly2n_prompt_headers "")
-  foreach(family keyboard playstation xbox nintendo steamdeck steamcontroller ps4 ps5 steamcontroller2026 devices)
+  foreach(family keyboard playstation xbox nintendo steamdeck steamcontroller ps4 ps5 steamcontroller2026 gamecube switch2 wii wiiu metaquest valveindex steamframe vivewand pico devices)
     set(image "${sly2n_prompt_source}/prompts_${family}.png")
     set(header "${sly2n_prompt_generated}/prompts_${family}_png.h")
     add_custom_command(OUTPUT "${header}" COMMAND ${CMAKE_COMMAND} -DSOURCE=${image} -DOUTPUT=${header} -DSYMBOL=cane_prompts_${family}
