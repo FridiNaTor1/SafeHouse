@@ -51,6 +51,7 @@ void SetBinocZoom(float) {}
 bool FBinocCanvas(glm::vec2*) { return false; }
 bool FWholeViewCanvas(glm::vec2*) { return false; }
 bool FWipeCanvas() { return false; }
+bool FHudOnlyPicture() { return false; }
 void SetMoviePlaying(bool) {}
 bool FRcTableActive() { return false; }
 bool FCompositorUpscaling() { return false; }
@@ -582,12 +583,16 @@ BINOCLAYOUT s_binoc;
 // canvas at the HUD panel's usual angular size (1.5 m of 16:9 at 1.4 m: its 4:3 part 1.125 m, at 1 m 0.80 m) and its
 // pixels as the HUD panel's (1440 across the canvas)
 BINOCLAYOUT s_wipe;
+bool s_fHudOnly = false;  // (FHudOnlyPicture as the game picture was last laid out)
 bool s_fMovie = false;   // (SetMoviePlaying) a queued movie playing: no wipe layout meanwhile
 constexpr float kWipeCanvasW = 1.5f * 0.75f / 1.4f, kWipeCanvasH = kWipeCanvasW * 0.75f, kWipePxPerM = 1440.0f / kWipeCanvasW;
 // (the canvas as the panel showed it before (2.2 m wide, 16:9 at 1 m: the 4:3 canvas 1.65 x 1.2375 m), its pixels as
 // a 1080p picture's (1440 across the canvas); the panel past the eyes' fields by 8 %, at most 2048 pixels a side)
 constexpr float kBinocCanvasW = 1.65f, kBinocCanvasH = 1.2375f, kBinocPxPerM = 1440.0f / 1.65f, kBinocMargin = 1.08f;
 constexpr int kBinocPxMax = 2048;
+// (the binocucom's whole-view panel: the talks' text in its 4:3 canvas, ~64 degrees tall on a Quest 3S; 2048 px for the
+// whole panel left the canvas ~680 px tall, so it gets more: the canvas ~850 px, still a 2D picture of a few polygons)
+constexpr int kBinocTalkPxMax = 2560;
 glm::vec3 s_posRc{0.0f};                               // RcTable: the fixed view's place and heading
 float s_yawRc = 0.0f;
 float s_zRcArena = 0.0f;
@@ -2401,7 +2406,7 @@ void BeginFrame()
 
 // A head-fixed panel 1 m ahead covering the eyes' fields (tangents at 1 m) with a margin, at least wMin x hMin metres,
 // pxPerM pixels a metre (at most kBinocPxMax a side), the 4:3 canvas canvasW x canvasH metres in it
-BINOCLAYOUT WholeViewLayout(float canvasW, float canvasH, float pxPerM, float wMin, float hMin, float* ptx, float* pty)
+BINOCLAYOUT WholeViewLayout(float canvasW, float canvasH, float pxPerM, float wMin, float hMin, float* ptx, float* pty, int pxMax = kBinocPxMax)
 {
     float tx = 0.0f, ty = 0.0f;
     for (const XrView& v : s_frame.aview)
@@ -2413,7 +2418,7 @@ BINOCLAYOUT WholeViewLayout(float canvasW, float canvasH, float pxPerM, float wM
     b.f = true;
     b.w = std::max(2.0f * std::min(tx, 4.0f) * kBinocMargin, wMin);
     b.h = std::max(2.0f * std::min(ty, 4.0f) * kBinocMargin, hMin);
-    const float k = std::min(1.0f, float(kBinocPxMax) / (std::max(b.w, b.h) * pxPerM));
+    const float k = std::min(1.0f, float(pxMax) / (std::max(b.w, b.h) * pxPerM));
     b.dx = std::max(64, int(b.w * pxPerM * k) & ~1);
     b.dy = std::max(64, int(b.h * pxPerM * k) & ~1);
     b.uiScale = glm::vec2(canvasW / b.w, canvasH / b.h);
@@ -2429,11 +2434,15 @@ void UpdateBinocLayout()
     const bool fWant = (s_view == VRVIEW_Binoc || s_view == VRVIEW_BinocTalk) && g_vropts.mode == VRMODE_Immersive && s_frame.fViews;
     // (the wipe: kept while a load's frame has no views; not over the Flat Screen's moments)
     const bool fWantWipe = !fWant && !s_fMovie && s_moment.fWipe && g_vropts.mode == VRMODE_Immersive && s_view != VRVIEW_Flat && (s_frame.fViews || s_wipe.f);
-    if (fWant == s_binoc.f && fWantWipe == s_wipe.f) return;
+    // (the game picture holds only the HUD (the eyes draw the world): laid out at its full size, Internal Resolution
+    // not applied (display.cpp LayoutDisplay); the Flat Screen's moments keep it)
+    const bool fHudOnly = g_vropts.mode == VRMODE_Immersive && s_view != VRVIEW_Flat;
+    if (fWant == s_binoc.f && fWantWipe == s_wipe.f && fHudOnly == s_fHudOnly) return;
+    s_fHudOnly = fHudOnly;
     float tx = 0.0f, ty = 0.0f;
     if (fWant)
     {
-        const BINOCLAYOUT b = WholeViewLayout(kBinocCanvasW, kBinocCanvasH, kBinocPxPerM, 2.2f, kBinocCanvasH, &tx, &ty);
+        const BINOCLAYOUT b = WholeViewLayout(kBinocCanvasW, kBinocCanvasH, kBinocPxPerM, 2.2f, kBinocCanvasH, &tx, &ty, kBinocTalkPxMax);
         if (!s_binoc.f)
             Log("binocucom: its frame over the whole view: %.2f x %.2f m at 1 m (the eyes' fields to tan %.3f / %.3f), picture %d x %d, "
                 "canvas %.3f x %.3f", double(b.w), double(b.h), double(tx), double(ty), b.dx, b.dy, double(b.uiScale.x), double(b.uiScale.y));
@@ -2469,6 +2478,7 @@ bool FWholeViewCanvas(glm::vec2* puiScale)
     return true;
 }
 bool FWipeCanvas() { return s_wipe.f && !s_binoc.f; }
+bool FHudOnlyPicture() { return s_fStarted && s_fHudOnly; }
 void SetMoviePlaying(bool f)
 {
     s_fMovie = f;

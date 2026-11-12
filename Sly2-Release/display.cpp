@@ -299,7 +299,7 @@ void LayoutDisplay(int outputWidth, int outputHeight)
     int dxRender = dx, dyRender = dy;
     if (d.fUpscale && g_gl.window && !vr::FActive() && fsr::FAvailable())
         fsr::RenderSizeForPreset(d.upscalePreset, dx, dy, &dxRender, &dyRender);   // (gl.h BeginNativeUi scales it up)
-    else if (d.internalHeight > 0)
+    else if (d.internalHeight > 0 && !vr::FHudOnlyPicture())   // (VR Immersive: a HUD-only picture, at its full size)
     {
         dyRender = d.internalHeight;
         dxRender = std::max(1, int(std::lround(double(dyRender) * double(dx) / double(dy))));

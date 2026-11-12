@@ -119,6 +119,9 @@ bool FWipeCanvas();
 // A queued movie playing (frontend.cpp PlayQueuedMovies, around it): the movie on a screen, the wipe's whole-view layout
 // set aside meanwhile (a movie inside a transition's load: a job's end).
 void SetMoviePlaying(bool f);
+// (Immersive, not a Flat Screen moment) the game picture holds only the HUD, the world is in the eyes: display.cpp lays it
+// out at the panel's full size without Internal Resolution (the HUD's and the binocucom talks' text sharp).
+bool FHudOnlyPicture();
 // Binoc: the head's turn (radians: pan + left, tilt + up) since the last call; false (zeros) otherwise.
 bool FHeadLook(float* pdradPan, float* pdradTilt);
 // RcTable: on (the car's controls and aim change: vehiclecontrol.cpp); the point on the arena the head looks at.
