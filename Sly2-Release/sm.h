@@ -23,7 +23,7 @@ struct ASEG : LO
     ASEGD asegd;
     std::vector<ASEGA*> apasega;   // orig +0x50: its playing ASEGAs
     int prio = 0;                  // orig +0x6C: its controllers' priority
-    int fSound = 0;                // orig +0x70: the ASEGAs' initial event-sound flag
+    int fHandsOff = 0;             // orig +0x70: its ASEGAs start hands-off (0x131990)
     float svt = 1.0f;              // orig +0x78
     float gSuck0 = 1.0f, gSuck1 = 0.0f, gSuck2 = 0.0f;  // orig +0x80/+0x84/+0x88: the speed's polynomial of the
     float gSuckMin = 0.0f, gSuckMax = 1.0f;             // suck history, clamped into [+0x90, +0x94]

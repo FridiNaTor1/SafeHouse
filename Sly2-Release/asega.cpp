@@ -19,6 +19,9 @@
 #include <cstdio>
 #include <cstdlib>
 
+void PauseGame(int grf);   // ai.cpp: orig 0x20EFC0
+void ResumeGame(int grf);  // ai.cpp: orig 0x20F030
+
 std::vector<ASEGA*> g_apasega;
 WORLD_TABLE(g_apasega);   // (PC: moved aside while a kept world loads, worldglobals.h)
 constinit void (*g_pfnAsegaEventOther)(ASEGA*, ASEGEV*) = nullptr;
@@ -105,13 +108,14 @@ void NotifyAsega(ASEGA* pasega, int msgk)
     ReleaseAsega(pasega);
 }
 
-// orig 0x00131990
-void SetAsegaEventSound(ASEGA* pasega, int f)
+// orig 0x00131990 (the ASEGA's hands-off: the game paused with 3 while on, the pad locked)
+void SetAsegaHandsOff(ASEGA* pasega, int f)
 {
     if (FAsegaRetracted(pasega)) return;
-    if (f == pasega->fSound) return;
-    // TODO(media): 0x20EFC0 / 0x20F030 (G, 3): the game's count of sounding animations
-    pasega->fSound = f;
+    if (f == pasega->fHandsOff) return;
+    if (f) PauseGame(3);
+    else ResumeGame(3);
+    pasega->fHandsOff = f;
 }
 
 void Script(ASEGA* pasega, int k, int n = 0)
@@ -495,7 +499,7 @@ void FireAsegaEvent(ASEGA* pasega, ASEGEV* pev)
     }
     case 5: SetAsegaTime(pasega, 0, pev->ag[0], pev->ag[1]); break;
     case 6: RetractAsega(pasega); break;
-    case 9: case 10: SetAsegaEventSound(pasega, static_cast<int>(k == 9) ^ static_cast<int>(fBack)); break;
+    case 9: case 10: SetAsegaHandsOff(pasega, static_cast<int>(k == 9) ^ static_cast<int>(fBack)); break;
     case 11:
         // message 9 {pasega, t, n} to the ASEGA's object and listeners
         if (pasega->palo && g_pfnLoMessage)
@@ -770,7 +774,7 @@ void ApplyAseg(ASEG* paseg, ALO* palo, float t, float svt, int grfapl, ASEGA** p
         pasega->alink.push_back(ASEGAL{chg.ptrkg.get(), pg, plo, chg.kind});
         if (g_pfnAsegParamUse) g_pfnAsegParamUse(plo, chg.kind, true);  // vt slot 44 (kind): the parameter in use
     }
-    SetAsegaEventSound(pasega, paseg->fSound);
+    SetAsegaHandsOff(pasega, paseg->fHandsOff);
     pasega->tEvent = t;
     for (ASEGEV& ev : pasegd->aaev[0]) FireAsegaEvent(pasega, &ev);
     pasega->t = pasega->tEvent;
@@ -938,7 +942,7 @@ void RetractAsega(ASEGA* pasega)
             return;
         }
     }
-    SetAsegaEventSound(pasega, 0);
+    SetAsegaHandsOff(pasega, 0);
     pasega->fRetracted = true;
     {
         auto it = std::find(g_apasega.begin(), g_apasega.end(), pasega);
