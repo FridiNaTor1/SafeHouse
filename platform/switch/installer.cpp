@@ -1,5 +1,7 @@
 // See installer.h. The screens are ProjectCane's (platform/installer/view.h); this drives them on the Switch:
-//   Browse    the SD card's folders and disc images: D-pad, A opens / installs, B goes up, + quits (touch works too)
+//   Browse    the SD card's and USB drives' folders and disc images: D-pad, A opens / installs, B goes up, + quits
+//             (touch works too). With a USB drive plugged in it starts at the choice of the SD card or a drive, where
+//             B from the top of either goes back.
 //   Languages a disc's languages (the game's own choice): D-pad, A ticks one, X installs, B back to the list
 //   Extract   the conversion's progress, on its own thread with the CPU boost mode on; B cancels
 //   Complete  keep or delete the disc image: Left / Right, A confirms (B keeps it)
@@ -12,6 +14,7 @@
 #include "../installer/view.h"
 
 #include <pthread.h>
+#include <usbhsfs.h>
 
 #include <algorithm>
 #include <atomic>
@@ -46,6 +49,55 @@ uint64_t FreeBytes(const char* path)
 {
     struct statvfs st{};
     return statvfs(path, &st) == 0 ? uint64_t(st.f_bavail) * uint64_t(st.f_bsize) : 0;
+}
+
+// USB drives (cmake/usbhsfs.cmake: FAT and exFAT), mounted as ums0:/, ums1:/, ... while the installer runs.
+class UsbDrives
+{
+public:
+    UsbDrives()
+    {
+        m_ok = R_SUCCEEDED(usbHsFsInitialize(0));
+        if (m_ok)
+            usbHsFsSetPopulateCallback([](const UsbHsFsDevice*, u32, void* self) { static_cast<UsbDrives*>(self)->m_changed = true; },
+                                       this);
+    }
+    ~UsbDrives()
+    {
+        if (!m_ok) return;
+        usbHsFsSetPopulateCallback(nullptr, nullptr);
+        usbHsFsExit();
+    }
+    UsbDrives(const UsbDrives&) = delete;
+    UsbDrives& operator=(const UsbDrives&) = delete;
+    // A drive was plugged in or taken out since the last call.
+    bool TakeChanged() { return m_changed.exchange(false); }
+    std::vector<UsbHsFsDevice> Drives() const
+    {
+        std::vector<UsbHsFsDevice> drives;
+        if (!m_ok) return drives;
+        drives.resize(usbHsFsGetMountedDeviceCount());
+        drives.resize(usbHsFsListMountedDevices(drives.data(), u32(drives.size())));
+        return drives;
+    }
+
+private:
+    bool m_ok = false;
+    std::atomic<bool> m_changed{false};
+};
+// "USB: SanDisk Ultra (exFAT, 57.30 GB)"
+std::string DriveName(const UsbHsFsDevice& d)
+{
+    std::string name = d.product_name[0] ? d.product_name : d.manufacturer[0] ? d.manufacturer : "drive";
+    while (!name.empty() && name.back() == ' ') name.pop_back();
+    return "USB: " + name + " (" + LIBUSBHSFS_FS_TYPE_STR(d.fs_type) + ", " + SizeText(d.capacity) + ")";
+}
+// The storage a path is on: "sdmc:/", "ums0:/"
+fs::path Root(const fs::path& path)
+{
+    const std::string s = path.string();
+    const size_t colon = s.find(':');
+    return colon == std::string::npos ? fs::path("sdmc:/") : fs::path(s.substr(0, colon + 1) + "/");
 }
 
 // The worker's state: it writes the progress, the screen reads it.
@@ -105,6 +157,7 @@ public:
         if (!m_ui.Begin()) return Action::Exit;
         const u64 pressed = m_ui.Pressed();
         CaneSetup::View& v = m_view;
+        if (v.screen == Screen::Browse && m_usb.TakeChanged()) UsbChanged();
         Action input = Action::None;
         if ((pressed & HidNpadButton_Plus) && v.screen != Screen::Extract) input = Action::Exit;
         else if (v.screen == Screen::Browse)
@@ -169,6 +222,7 @@ public:
                 else if (action == Action::Select && v.selected < m_paths.size())
                 {
                     const fs::path path = m_paths[v.selected];
+                    m_moved = true;
                     if (v.entries[v.selected].folder) { m_folder = path; Refresh(); }
                     else Begin(path);
                 }
@@ -235,8 +289,38 @@ private:
         return Lower((folder ? path : path.stem()).extension().string()) == ".iso" && !cane::imageParts(path).empty();
     }
 
+    // A drive plugged in or taken out: the choice of storage listed again, or offered while the browsing has not
+    // begun; a folder on a drive taken out leaves for the choice (the SD card when no drive is left).
+    void UsbChanged()
+    {
+        const std::vector<UsbHsFsDevice> drives = m_usb.Drives();
+        const fs::path root = Root(m_folder);
+        const bool mounted = root == fs::path("sdmc:/") || std::any_of(drives.begin(), drives.end(), [&](const UsbHsFsDevice& d) {
+            return root == fs::path(std::string(d.name) + "/");
+        });
+        if (m_folder.empty() || !mounted || (!m_moved && m_folder == fs::path("sdmc:/")))
+        {
+            m_folder = drives.empty() ? fs::path("sdmc:/") : fs::path();
+            Refresh();
+        }
+    }
     void Refresh()
     {
+        m_paths.clear();
+        m_view.entries.clear();
+        m_view.selected = m_view.firstVisible = 0;
+        if (m_folder.empty())
+        {
+            m_view.directory = "SD card or USB drive";
+            m_paths.push_back("sdmc:/");
+            m_view.entries.push_back({"SD card", true});
+            for (const UsbHsFsDevice& d : m_usb.Drives())
+            {
+                m_paths.push_back(std::string(d.name) + "/");
+                m_view.entries.push_back({DriveName(d), true});
+            }
+            return;
+        }
         struct Item
         {
             fs::path path;
@@ -258,11 +342,9 @@ private:
             if (a.folder != b.folder) return a.folder;
             return Lower(a.path.filename().string()) < Lower(b.path.filename().string());
         });
-        m_paths.clear();
-        m_view.entries.clear();
-        m_view.selected = m_view.firstVisible = 0;
-        m_view.directory = "SD card";
-        const fs::path relative = m_folder.lexically_relative(fs::path("sdmc:/"));
+        const fs::path root = Root(m_folder);
+        m_view.directory = root == fs::path("sdmc:/") ? "SD card" : "USB drive";
+        const fs::path relative = m_folder.lexically_relative(root);
         if (!relative.empty() && relative != ".") m_view.directory += " / " + relative.generic_string();
         for (const Item& item : items)
         {
@@ -272,9 +354,20 @@ private:
     }
     void Up()
     {
-        if (m_folder == fs::path("sdmc:/")) return;
-        m_folder = m_folder.parent_path();
-        if (m_folder.empty() || m_folder == fs::path("sdmc:")) m_folder = "sdmc:/";
+        const fs::path root = Root(m_folder);
+        m_moved = true;
+        if (m_folder.empty()) return;
+        // (the top of the SD card or a drive: the choice of storage, when a drive is plugged in)
+        if (m_folder == root)
+        {
+            if (m_usb.Drives().empty()) return;
+            m_folder.clear();
+        }
+        else
+        {
+            m_folder = m_folder.parent_path();
+            if (m_folder.empty() || m_folder.string().back() == ':') m_folder = root;
+        }
         Refresh();
     }
     void ShowError(const std::string& message)
@@ -454,9 +547,11 @@ private:
 
     const InstallJob& m_job;
     Ui m_ui;
+    UsbDrives m_usb;
     GLuint m_background = 0;
     CaneSetup::View m_view;
-    fs::path m_folder = "sdmc:/";
+    fs::path m_folder = "sdmc:/";  // (empty: the choice of the SD card or a USB drive)
+    bool m_moved = false;          // the player has browsed (a drive found later no longer moves the screen)
     std::vector<fs::path> m_paths;
     fs::path m_iso;
     // the disc image chosen: its boot file, size, kind, the .iso written out for it (0: none), its languages
