@@ -2156,7 +2156,18 @@ void DrawOnePacket(const cane::draw::Packets& pk, uint32_t id, const CMD& cmd, c
 // The volumes' colour draws on the Vulkan renderer's pulled path: glGlobShaderVol (gl.cpp: the no-discard program without
 // CANE_BLEND1's second output, which hangs the Quest 3S's GPU in these draws under its video capture) with its uniforms
 // and the pass's values RenderPass sets at each volume (the glob programs get them at useGlob)
-UNIFORMS s_uVol;
+// ([0] glGlobShaderVol, [1] glGlobShaderVolNoGeom: the one matching the glob program's near-clip stage, PshVol)
+UNIFORMS s_auVol[2];
+// The volumes' colour program for the glob program now (useGlob): without the near-clip stage when its runs draw
+// without it (the same triangles as the stencil mask's; no geometry stage in a two-view pass); nullptr: the glob program
+const GLSHADER* PshVol(int iprogGlob, const UNIFORMS** ppu)
+{
+    const int i = (iprogGlob & 2) ? 1 : 0;
+    const GLSHADER* psh = i ? &glGlobShaderVolNoGeom : &glGlobShaderVol;
+    if (!glGlobShaderVol.ID || !psh->ID) return nullptr;
+    *ppu = &s_auVol[i];
+    return psh;
+}
 struct VOLFRAME { glm::mat4 matWorldToClip{1.0f}; glm::vec3 posCamera{0.0f}, dirCamera{0.0f}; glm::vec4 fogColor{0.0f}; } s_volframe;
 // (draw packets) DrawProjVolume's draws below as packets: each GL state of its sequence one packet state, the GL-style
 // state after it as the GL calls leave it. False: a state the backend cannot take (nothing drawn: the GL calls then).
@@ -2170,9 +2181,11 @@ bool FDrawProjVolumePackets(const cane::draw::Packets& pk, const CMD& cmd)
     static const bool s_fVa = std::getenv("SLY2N_VOLVA") != nullptr;
     if (s_fVolDbg) return false;
     const GLuint progGlob = s_apshGlob[s_iprogGlob]->ID;
-    const bool fVolProg = glGlobShaderVol.ID != 0;
-    const GLuint progVol = fVolProg ? glGlobShaderVol.ID : progGlob;
-    const UNIFORMS& uVol = fVolProg ? s_uVol : *s_pu;
+    const UNIFORMS* puVol = s_pu;
+    const GLSHADER* const pshVol = PshVol(s_iprogGlob, &puVol);
+    const bool fVolProg = pshVol != nullptr;
+    const GLuint progVol = fVolProg ? pshVol->ID : progGlob;
+    const UNIFORMS& uVol = *puVol;
     const bool fCCW = FrontCCW() == GL_CCW;
     const uint64_t alpha = (uint64_t((fl & 1) ? 2 : 1) << 2) | 0x40u;
     // (the step k of the textured / untextured sequence; key: program, step, winding, blend, SLY2N_VOLVA; the colour
@@ -3443,11 +3456,11 @@ void BuildSceneGpu(SCENE& scene)
         for (GLOB& glob : sgs.pglobset->aglob)
             BuildGlobGpu(glob);
     FlushArena();
-    for (int iprog = 0; iprog <= CPROGGLOB; ++iprog)
+    for (int iprog = 0; iprog <= CPROGGLOB + 1; ++iprog)
     {
-        if (iprog == CPROGGLOB && !glGlobShaderVol.ID) break;
-        const GLSHADER& sh = iprog < CPROGGLOB ? *s_apshGlob[iprog] : glGlobShaderVol;   // (CPROGGLOB: s_uVol)
-        UNIFORMS& u = iprog < CPROGGLOB ? s_au[iprog] : s_uVol;
+        const GLSHADER& sh = iprog < CPROGGLOB ? *s_apshGlob[iprog] : iprog == CPROGGLOB ? glGlobShaderVol : glGlobShaderVolNoGeom;   // (s_auVol)
+        if (iprog >= CPROGGLOB && !sh.ID) continue;
+        UNIFORMS& u = iprog < CPROGGLOB ? s_au[iprog] : s_auVol[iprog - CPROGGLOB];
         u.matWorldToClip = sh.Loc("matWorldToClip");
         u.icolor = sh.Loc("icolor");
         u.rgbaConst = sh.Loc("rgbaConst");

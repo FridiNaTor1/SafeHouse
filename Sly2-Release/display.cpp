@@ -275,7 +275,7 @@ void LayoutDisplay(int outputWidth, int outputHeight)
     float rAspect = float(d.outputWidth) / float(d.outputHeight);
     // (VR's binocucom over the whole view: its picture as the panel is, the canvas placed by vr.cpp)
     glm::vec2 uiScaleBinoc(1.0f);
-    const bool fBinoc = vr::FBinocCanvas(&uiScaleBinoc);
+    const bool fBinoc = vr::FWholeViewCanvas(&uiScaleBinoc);   // (or a transition's wipe: vr.h FWipeCanvas)
     if (!fBinoc)
     switch (d.aspect)
     {

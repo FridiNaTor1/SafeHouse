@@ -6,6 +6,7 @@
 // func_001880D8.c / func_00187E88.c (the pad's steps).
 
 #include "rumble.h"
+#include "vr.h"
 #include "frontend.h"
 #include "cheat.h"
 #include "../platform/sly2_settings.h"
@@ -770,7 +771,9 @@ void PlayQueuedMovies(bool fWindow)
         BeginMoviePresentation(m);
         std::printf("movie %u\n", fk.id);
         g_fMoviePlaying = true;   // (pcinput.cpp: no menu cursor over a movie)
+        vr::SetMoviePlaying(true);   // (VR: the movie on a screen, not a wipe's whole-view panel)
         FPlayMovie(fk, PresentMovieGl, &m);
+        vr::SetMoviePlaying(false);
         g_fMoviePlaying = false;
     }
 }

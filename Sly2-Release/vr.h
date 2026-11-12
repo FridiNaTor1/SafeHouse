@@ -109,6 +109,16 @@ void SetBinocZoom(float k);
 // tall as the view): the 4:3 canvas's scale in that picture (display.cpp LayoutDisplay; both < 1: the frame goes on
 // past the canvas on all four sides, hud.cpp ExtendEdgeTriangle). False otherwise.
 bool FBinocCanvas(glm::vec2* puiScale);
+// The game picture over the whole view (Immersive): the binocucom's frame (FBinocCanvas) or a transition's wipe (the
+// Sly mask closing / opening over a load, FWipeCanvas): the 4:3 canvas's scale in that picture (display.cpp LayoutDisplay).
+bool FWholeViewCanvas(glm::vec2* puiScale);
+// (Immersive) a transition's wipe and its load over the whole view: the HUD panel fixed to the head and past the eyes'
+// fields, the canvas at the HUD panel's usual angular size, the wipe's black backdrop widened to the panel's edges
+// (hud.cpp WidenToPicture), no world past it. The frames without the eyes (the load) on the same panel.
+bool FWipeCanvas();
+// A queued movie playing (frontend.cpp PlayQueuedMovies, around it): the movie on a screen, the wipe's whole-view layout
+// set aside meanwhile (a movie inside a transition's load: a job's end).
+void SetMoviePlaying(bool f);
 // Binoc: the head's turn (radians: pan + left, tilt + up) since the last call; false (zeros) otherwise.
 bool FHeadLook(float* pdradPan, float* pdradTilt);
 // RcTable: on (the car's controls and aim change: vehiclecontrol.cpp); the point on the arena the head looks at.

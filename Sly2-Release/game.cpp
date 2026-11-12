@@ -1651,6 +1651,11 @@ int RunGame(const GAMEOPTS& go)
         if (static const char* s_szF9 = std::getenv("SLY2N_COMPLETEJOBAT"); s_szF9)
             for (const char* q = s_szF9; q && *q; q = std::strchr(q, ',') ? std::strchr(q, ',') + 1 : nullptr)
                 if (std::atoi(q) == frame) FDebugCompleteJob();
+        // debug: SLY2N_WIPEAT=frame: the current world again at its checkpoint with the Sly-mask wipe (as a lost life,
+        // task.cpp event 16), headless: the wipe and the load in a test (VR: the whole-view wipe)
+        if (static const int s_iframeWipe = std::getenv("SLY2N_WIPEAT") ? std::atoi(std::getenv("SLY2N_WIPEAT")) : -1;
+            frame == s_iframeWipe && !g_transition.fPending && g_transition.wipes == WIPES_Idle)
+            RequestTransition(psw.get(), nullptr, g_transition.oidPointCur, g_transition.oidKeyCur, 0, 0x30A);
         // debug keys (only with the launcher's Settings > Advanced > Debug mode on, Debug Mode.ini; README.md):
         // F2 the Paris hub, F3 the next world record (with the wipe)
         if (g_pcinput.fDebugKeys && !g_transition.fPending && g_transition.wipes == WIPES_Idle)

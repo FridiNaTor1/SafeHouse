@@ -105,7 +105,7 @@ extern float g_amatMultiviewLtoR[16];
 extern GLSHADER glGlobShader;
 // glGlobShader without its fragment discards (NOKILL), for the runs without alpha test and DATE; ID 0: none
 extern GLSHADER glGlobShaderNoKill;
-extern GLSHADER glGlobShaderVol;   // (render.cpp DrawProjVolume: the pulled no-discard program without CANE_BLEND1; ID 0 elsewhere)
+extern GLSHADER glGlobShaderVol, glGlobShaderVolNoGeom;   // (render.cpp DrawProjVolume: the pulled no-discard program without CANE_BLEND1, with / without the near-clip stage; ID 0 elsewhere)
 // (perf-4) both without the near-clip geometry stage (ID 0: not built); g_fGlobNoGeom: render.cpp may use them
 extern GLSHADER glGlobShaderNoGeom, glGlobShaderNoKillNoGeom;
 extern bool g_fGlobNoGeom;

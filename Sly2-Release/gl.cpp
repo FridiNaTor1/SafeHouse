@@ -32,7 +32,7 @@
 GL g_gl;
 GLSHADER glGlobShader;
 GLSHADER glGlobShaderNoKill;
-GLSHADER glGlobShaderVol;
+GLSHADER glGlobShaderVol, glGlobShaderVolNoGeom;
 GLSHADER glGlobShaderNoGeom, glGlobShaderNoKillNoGeom;
 bool g_fGlobNoGeom = false;
 bool g_fGlobBindless = false;
@@ -519,9 +519,10 @@ bool GL::FInit(int w, int h, bool fVisible, const char* title, std::string& erro
     // the volumes' fill with that output (a blend that doesn't read it) while its video capture preempts the GPU (notes/
     // STATUS-VK.md volume-dim). Same pictures. SLY2N_VKVOLPROG=0: the volumes with the glob program as before.
     glGlobShaderVol.ID = 0;
+    std::string prefixVol;
     if (!pullDef.empty() && glGlobShaderNoKill.ID && !(std::getenv("SLY2N_VKVOLPROG") && std::atoi(std::getenv("SLY2N_VKVOLPROG")) == 0))
     {
-        std::string prefixVol = prefixNoKill;
+        prefixVol = prefixNoKill;
         static const char szBlend1[] = "#define CANE_BLEND1 1\n";
         if (const size_t i = prefixVol.find(szBlend1); i != std::string::npos) prefixVol.erase(i, sizeof(szBlend1) - 1);
         if (!(fGlobGeom ? glGlobShaderVol.FInit("glob.vert", "glob.geom", "glob.frag", prefixVol.c_str())
@@ -540,6 +541,18 @@ bool GL::FInit(int w, int h, bool fVisible, const char* title, std::string& erro
         if (!glGlobShaderNoKill.ID || !glGlobShaderNoKillNoGeom.FInit("glob.vert", "glob.frag", (globPrefix + "#define NOKILL 1\n").c_str()))
             glGlobShaderNoKillNoGeom.ID = 0;
         g_fGlobNoGeom = glGlobShaderNoGeom.ID != 0;
+    }
+    // (the volumes' colour program without the near-clip stage too, for the passes whose glob runs draw without it (VR on
+    // Android and tile GPUs: render.cpp FVrNoNearClip): the fill then takes the same triangles as its stencil mask, and a
+    // two-view pass gets no geometry stage, which needs multiviewGeometryShader: the Quest 3S's Adreno has none, and with
+    // it the right eye's flashlight beams / light shafts were filled wrongly (mostly missing, flickering))
+    glGlobShaderVolNoGeom.ID = 0;
+    if (glGlobShaderVol.ID && fGlobGeom && glGlobShaderNoKillNoGeom.ID)
+    {
+        static const char szGeom[] = "#define GEOM 1\n";
+        if (const size_t i = prefixVol.find(szGeom); i != std::string::npos) prefixVol.erase(i, sizeof(szGeom) - 1);
+        if (!glGlobShaderVolNoGeom.FInit("glob.vert", "glob.frag", prefixVol.c_str())) glGlobShaderVolNoGeom.ID = 0;
+        if (!glGlobShaderVolNoGeom.ID) std::printf("OpenGL: projected volumes: no program without the near-clip stage (the glob program there)\n");
     }
     glCelBorderShader.Init("celborder.vert", "celborder.frag");
     glHudShader.Init("hud.vert", "hud.frag");

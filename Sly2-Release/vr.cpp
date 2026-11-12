@@ -49,6 +49,9 @@ bool FTitleMoment() { return false; }
 bool FHeadLook(float* a, float* b) { *a = *b = 0.0f; return false; }
 void SetBinocZoom(float) {}
 bool FBinocCanvas(glm::vec2*) { return false; }
+bool FWholeViewCanvas(glm::vec2*) { return false; }
+bool FWipeCanvas() { return false; }
+void SetMoviePlaying(bool) {}
 bool FRcTableActive() { return false; }
 bool FCompositorUpscaling() { return false; }
 bool FRcAimPoint(glm::vec3*) { return false; }
@@ -575,6 +578,12 @@ float s_kBinocZoom = 1.0f;                             // Binoc: the zoom (SetBi
 // ahead, w x h metres, the game picture dx x dy for it, the 4:3 canvas's scale in it
 struct BINOCLAYOUT { bool f = false; float w = 0, h = 0; int dx = 0, dy = 0; glm::vec2 uiScale{1.0f}; };
 BINOCLAYOUT s_binoc;
+// (Immersive) a transition's wipe over the whole view (UpdateBinocLayout, FWipeCanvas): the same head-fixed panel, the
+// canvas at the HUD panel's usual angular size (1.5 m of 16:9 at 1.4 m: its 4:3 part 1.125 m, at 1 m 0.80 m) and its
+// pixels as the HUD panel's (1440 across the canvas)
+BINOCLAYOUT s_wipe;
+bool s_fMovie = false;   // (SetMoviePlaying) a queued movie playing: no wipe layout meanwhile
+constexpr float kWipeCanvasW = 1.5f * 0.75f / 1.4f, kWipeCanvasH = kWipeCanvasW * 0.75f, kWipePxPerM = 1440.0f / kWipeCanvasW;
 // (the canvas as the panel showed it before (2.2 m wide, 16:9 at 1 m: the 4:3 canvas 1.65 x 1.2375 m), its pixels as
 // a 1080p picture's (1440 across the canvas); the panel past the eyes' fields by 8 %, at most 2048 pixels a side)
 constexpr float kBinocCanvasW = 1.65f, kBinocCanvasH = 1.2375f, kBinocPxPerM = 1440.0f / 1.65f, kBinocMargin = 1.08f;
@@ -2284,10 +2293,10 @@ void NoteThread(VRTHREAD kind)
 bool FPanelSize(int* pdx, int* pdy)
 {
     if (!s_fStarted) return false;
-    if (s_binoc.f)
+    if (s_binoc.f || s_wipe.f)
     {
-        *pdx = s_binoc.dx;
-        *pdy = s_binoc.dy;
+        *pdx = s_binoc.f ? s_binoc.dx : s_wipe.dx;
+        *pdy = s_binoc.f ? s_binoc.dy : s_wipe.dy;
         return true;
     }
     *pdx = 1920;
@@ -2390,34 +2399,58 @@ void BeginFrame()
     }
 }
 
-// (SetGameView, each frame) the binocucom's whole-view layout on in Immersive's binocucom view, off otherwise; the game
-// picture laid out again when it changes (display.cpp LayoutDisplay: FPanelSize, FBinocCanvas)
+// A head-fixed panel 1 m ahead covering the eyes' fields (tangents at 1 m) with a margin, at least wMin x hMin metres,
+// pxPerM pixels a metre (at most kBinocPxMax a side), the 4:3 canvas canvasW x canvasH metres in it
+BINOCLAYOUT WholeViewLayout(float canvasW, float canvasH, float pxPerM, float wMin, float hMin, float* ptx, float* pty)
+{
+    float tx = 0.0f, ty = 0.0f;
+    for (const XrView& v : s_frame.aview)
+    {
+        tx = std::max({tx, std::tan(-v.fov.angleLeft), std::tan(v.fov.angleRight)});
+        ty = std::max({ty, std::tan(v.fov.angleUp), std::tan(-v.fov.angleDown)});
+    }
+    BINOCLAYOUT b;
+    b.f = true;
+    b.w = std::max(2.0f * std::min(tx, 4.0f) * kBinocMargin, wMin);
+    b.h = std::max(2.0f * std::min(ty, 4.0f) * kBinocMargin, hMin);
+    const float k = std::min(1.0f, float(kBinocPxMax) / (std::max(b.w, b.h) * pxPerM));
+    b.dx = std::max(64, int(b.w * pxPerM * k) & ~1);
+    b.dy = std::max(64, int(b.h * pxPerM * k) & ~1);
+    b.uiScale = glm::vec2(canvasW / b.w, canvasH / b.h);
+    *ptx = tx, *pty = ty;
+    return b;
+}
+
+// (SetGameView / SetMoment, each frame) the whole-view layouts: the binocucom's in Immersive's binocucom view, a
+// transition's wipe (and its load) in the Immersive view otherwise; the game picture laid out again when one changes
+// (display.cpp LayoutDisplay: FPanelSize, FWholeViewCanvas)
 void UpdateBinocLayout()
 {
     const bool fWant = (s_view == VRVIEW_Binoc || s_view == VRVIEW_BinocTalk) && g_vropts.mode == VRMODE_Immersive && s_frame.fViews;
-    if (fWant == s_binoc.f) return;
+    // (the wipe: kept while a load's frame has no views; not over the Flat Screen's moments)
+    const bool fWantWipe = !fWant && !s_fMovie && s_moment.fWipe && g_vropts.mode == VRMODE_Immersive && s_view != VRVIEW_Flat && (s_frame.fViews || s_wipe.f);
+    if (fWant == s_binoc.f && fWantWipe == s_wipe.f) return;
+    float tx = 0.0f, ty = 0.0f;
     if (fWant)
     {
-        // the eyes' fields together (tangents at 1 m), the panel centred ahead covering them
-        float tx = 0.0f, ty = 0.0f;
-        for (const XrView& v : s_frame.aview)
-        {
-            tx = std::max({tx, std::tan(-v.fov.angleLeft), std::tan(v.fov.angleRight)});
-            ty = std::max({ty, std::tan(v.fov.angleUp), std::tan(-v.fov.angleDown)});
-        }
-        BINOCLAYOUT b;
-        b.f = true;
-        b.w = std::max(2.0f * std::min(tx, 4.0f) * kBinocMargin, 2.2f);
-        b.h = std::max(2.0f * std::min(ty, 4.0f) * kBinocMargin, kBinocCanvasH);
-        const float k = std::min(1.0f, float(kBinocPxMax) / (std::max(b.w, b.h) * kBinocPxPerM));
-        b.dx = std::max(64, int(b.w * kBinocPxPerM * k) & ~1);
-        b.dy = std::max(64, int(b.h * kBinocPxPerM * k) & ~1);
-        b.uiScale = glm::vec2(kBinocCanvasW / b.w, kBinocCanvasH / b.h);
+        const BINOCLAYOUT b = WholeViewLayout(kBinocCanvasW, kBinocCanvasH, kBinocPxPerM, 2.2f, kBinocCanvasH, &tx, &ty);
+        if (!s_binoc.f)
+            Log("binocucom: its frame over the whole view: %.2f x %.2f m at 1 m (the eyes' fields to tan %.3f / %.3f), picture %d x %d, "
+                "canvas %.3f x %.3f", double(b.w), double(b.h), double(tx), double(ty), b.dx, b.dy, double(b.uiScale.x), double(b.uiScale.y));
         s_binoc = b;
-        Log("binocucom: its frame over the whole view: %.2f x %.2f m at 1 m (the eyes' fields to tan %.3f / %.3f), picture %d x %d, "
-            "canvas %.3f x %.3f", double(b.w), double(b.h), double(tx), double(ty), b.dx, b.dy, double(b.uiScale.x), double(b.uiScale.y));
     }
     else s_binoc = BINOCLAYOUT{};
+    if (fWantWipe && !s_wipe.f)
+    {
+        s_wipe = WholeViewLayout(kWipeCanvasW, kWipeCanvasH, kWipePxPerM, kWipeCanvasW, kWipeCanvasH, &tx, &ty);
+        Log("wipe: over the whole view: %.2f x %.2f m at 1 m, picture %d x %d, canvas %.3f x %.3f", double(s_wipe.w), double(s_wipe.h),
+            s_wipe.dx, s_wipe.dy, double(s_wipe.uiScale.x), double(s_wipe.uiScale.y));
+    }
+    else if (!fWantWipe && s_wipe.f)
+    {
+        s_wipe = BINOCLAYOUT{};
+        Log("wipe: ended");
+    }
     LayoutDisplay(std::max(1, g_display.outputWidth), std::max(1, g_display.outputHeight));
 }
 
@@ -2427,6 +2460,19 @@ bool FBinocCanvas(glm::vec2* puiScale)
     if (!s_binoc.f) return false;
     *puiScale = s_binoc.uiScale;
     return true;
+}
+bool FWholeViewCanvas(glm::vec2* puiScale)
+{
+    const BINOCLAYOUT& b = s_binoc.f ? s_binoc : s_wipe;
+    if (!b.f) return false;
+    if (puiScale) *puiScale = b.uiScale;
+    return true;
+}
+bool FWipeCanvas() { return s_wipe.f && !s_binoc.f; }
+void SetMoviePlaying(bool f)
+{
+    s_fMovie = f;
+    if (s_fStarted) UpdateBinocLayout();
 }
 
 void SetGameView(int view)
@@ -2453,7 +2499,11 @@ void SetGameView(int view)
 }
 
 void DrawVignettePass(const cane::draw::Packets* pk, bool fViewsVk, int i, float gVig, const glm::vec4& tint);
-void SetMoment(const VRMOMENT& m) { s_moment = m; }
+void SetMoment(const VRMOMENT& m)
+{
+    s_moment = m;
+    if (s_fStarted) UpdateBinocLayout();   // (a wipe's whole-view layout from its first frame)
+}
 // (test: SLY2N_VR_TESTUNFOCUS=from@to: headset frames as if the session were VISIBLE, not FOCUSED)
 bool FTestUnfocused()
 {
@@ -2997,7 +3047,8 @@ bool FMaskWindow(glm::vec3* ppos, glm::quat* pq, glm::vec2* phalf)
         *phalf = 0.5f * 0.995f * glm::vec2(s_binoc.w, s_binoc.h);
         return true;
     }
-    if (s_moment.fWipe && s_panelLast.f && s_view != VRVIEW_Flat)
+    // (a wipe over the whole view, FWipeCanvas: nothing past it to mask)
+    if (s_moment.fWipe && s_panelLast.f && s_view != VRVIEW_Flat && !s_wipe.f)
     {
         *ppos = s_panelLast.pos;
         *pq = s_panelLast.q;
@@ -3496,11 +3547,21 @@ bool FPresent()
                     quad.pose.position = XrVector3f{0.0f, 0.0f, -1.0f};
                     quad.size = s_binoc.f ? XrExtent2Df{s_binoc.w, s_binoc.h} : XrExtent2Df{2.2f, 2.2f / rAspect};
                 }
+                else if (s_wipe.f && s_spaceView)
+                {
+                    // (Immersive: a transition's wipe and its load over the whole view, FWipeCanvas: the panel fixed to the
+                    // head 1 m ahead, past the eyes' fields; the HUD's (the wipe's mask over the eyes) and the frames
+                    // without the eyes (the load's picture) alike)
+                    quad.space = s_spaceView;
+                    quad.pose.orientation = XrQuaternionf{0, 0, 0, 1};
+                    quad.pose.position = XrVector3f{0.0f, 0.0f, -1.0f};
+                    quad.size = XrExtent2Df{s_wipe.w, s_wipe.h};
+                }
                 quad.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
                 quad.subImage.swapchain = s_panel.h;
                 quad.subImage.imageRect = {{0, 0}, {dx, dy}};
                 if (fHud && s_view == VRVIEW_BinocTalk && s_binoc.f) quad.space = s_spaceLocal;
-                else if (!fHud && s_moment.fWipe && s_panelLast.f && g_vropts.mode == VRMODE_Immersive)
+                else if (!fHud && s_moment.fWipe && s_panelLast.f && g_vropts.mode == VRMODE_Immersive && quad.space != s_spaceView)
                 {
                     // (a frame without the eyes during a transition's wipe (the load): where the HUD panel was, the
                     // void black round it, so the wipe's picture stays in view)

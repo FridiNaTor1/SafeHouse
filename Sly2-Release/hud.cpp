@@ -55,7 +55,8 @@ glm::vec2 ScreenFromGs(float tx, float ty)
 glm::vec2 WidenToPicture(glm::vec2 p)
 {
     static const bool s_fOff = [] { const char* sz = std::getenv("SLY2N_WIDEBG"); return sz && sz[0] == '0'; }();
-    if (!g_display.fWideBackgrounds || s_fOff) return p;
+    // (VR Immersive: a transition's wipe over the whole view widens its backdrop whatever the option: vr.h FWipeCanvas)
+    if ((!g_display.fWideBackgrounds && !vr::FWipeCanvas()) || s_fOff) return p;
     const glm::vec2 s = g_display.uiScale;
     constexpr float eps = 0.5f;
     // (only where the window reaches past the canvas: a 4:3 picture is unchanged)
