@@ -20,7 +20,9 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <cstdint>
 #include <deque>
 #include <functional>
@@ -64,6 +66,8 @@ namespace cane::collection {
 using namespace cane::settings;  // (Sly 2's Settings.ini: platform/sly2_settings.h)
 // The environment variable a game started from here sees ("collection"): its pause menu says Quit to Launcher.
 inline constexpr const char* kLauncherEnv = "SAFEHOUSE_LAUNCHER";
+// Set for a game that hands off (platform/gl_context.h): its window waits for its first frame, which it announces.
+inline constexpr const char* kHandoffEnv = "SAFEHOUSE_HANDOFF";
 inline void setEnv(const char* key, const char* value) {
 #ifdef _WIN32
     _putenv_s(key, value ? value : "");
@@ -149,6 +153,7 @@ public:
         fs::path profile;                 // holds Collection/Menu (empty: the backend's)
         std::string screen;               // "", "options", "extras", "credits", "launch", "developers", "confirm", "glide"
         bool scripted = false;            // presses are replayed a few frames apart: no input delay between pages
+        int aspect = -1;                  // Sly 2's aspect ratio setting shown (-1: Fit; a live run reads Settings.ini)
         // the developers page's pictures (the launcher's own, launcher/assets/developers): each with its silhouette
         struct DeveloperPicture {
             ImTextureID picture = nullptr, silhouette = nullptr;
@@ -244,6 +249,9 @@ public:
             m_cameraX = m_pages[size_t(below)].x + (m_pages[size_t(below + 1)].x - m_pages[size_t(below)].x) * (at - float(below));
             m_frozen = true;
         }
+        // (Sly 2's Settings.ini: the aspect ratio this menu shares with the game)
+        if (!m_fixture.active) loadSly2Settings();
+        else if (m_fixture.aspect >= 0) m_sly2.system.aspectMode = m_fixture.aspect;
         const auto& c = collectionConfig();
         m_musicVolume = std::clamp(c.value("music", 0.7f), 0.0f, 1.0f);
         m_soundVolume = std::clamp(c.value("sounds", 0.8f), 0.0f, 1.0f);
@@ -258,6 +266,25 @@ public:
         if (m_loader.joinable()) m_loader.join();
     }
     bool gameRunning() const { return m_job.busy && m_playing >= 0; }
+    // Whether the window steps aside for the game. Sly 2 hands off (platform/gl_context.h): the fade and the loading
+    // screen stay until its first frame is on screen, and the menu comes back as soon as the game starts to close.
+    // The other games: at once, as before. (A game that never shows a frame: after 30 s.)
+    bool windowAway() const {
+        if (!gameRunning() || m_gameLeaving) return false;
+        return !handsOff(GameId(m_playing)) || m_gameShown ||
+               std::chrono::steady_clock::now() - m_pressedAt > std::chrono::seconds(30);
+    }
+    // The picture's shape: Sly 2's Aspect Ratio setting, which this menu shares (0: the whole window).
+    float aspect() const {
+        switch (m_sly2.system.aspectMode) {
+        case Aspect_4_3:
+        case Aspect_PS2_4_3: return 4.0f / 3.0f;
+        case Aspect_16_9:
+        case Aspect_PS2_16_9: return 16.0f / 9.0f;
+        case Aspect_16_10: return 16.0f / 10.0f;
+        default: return 0.0f;
+        }
+    }
     // A game is starting, running or the menu is fading back in.
     bool busy() const {
         if (m_fixture.screen == "launch") return false;
@@ -288,12 +315,15 @@ public:
         m_inputWait = std::max(0.0f, m_inputWait - dt);
         style();
         m_view = m_scene.view(size, m_cameraX);
-        if (m_launching < 0 && !gameRunning()) m_scene.update(dt, m_cameraX);
+        if ((m_launching < 0 && !gameRunning()) || m_gameLeaving) m_scene.update(dt, m_cameraX);
         auto* dl = ImGui::GetBackgroundDrawList();
         dl->AddRectFilled({0, 0}, size, IM_COL32(0, 0, 0, 255));
-        m_bloom.begin(dl, m_scene.bloom(), m_fixture.active);
-        m_scene.draw(dl, m_view);
-        m_bloom.end(dl);
+        // (under the whole loading screen the scene is not drawn: the GPU is the starting game's)
+        if (!(m_launching >= 0 && m_launchFade >= 1.0f && !m_gameLeaving)) {
+            m_bloom.begin(dl, m_scene.bloom(), m_fixture.active);
+            m_scene.draw(dl, m_view);
+            m_bloom.end(dl);
+        }
         auto* fg = ImGui::GetForegroundDrawList();
         drawPage(fg);
         if (m_options) drawOptions(fg);
@@ -306,8 +336,11 @@ public:
     }
     // The window comes back after a game: the scene fades in.
     void returned() {
+        timeNote("the window is back");
         m_returnFade = 1.0f;
+        m_launchFade = 0;
         m_audio.setMuted(false);
+        if (!m_fixture.active) loadSly2Settings();  // (the game's own options may have changed the aspect ratio)
     }
 
 private:
@@ -652,8 +685,7 @@ private:
                 m_confirm = true, m_confirmChoice = 2, m_confirmHide = false;
                 return;
             }
-            m_launching = int(g);
-            m_launchFade = 0;
+            beginLaunch(g);
             break;
         default:
             sound(Sfx::Cancel);
@@ -671,19 +703,74 @@ private:
     void openSafeHouse() {
         if (m_fixture.active) return;
         setEnv(kLauncherEnv, nullptr);  // (the SafeHouse launcher's games quit to the desktop)
+        setEnv(kHandoffEnv, nullptr);
         const bool ok = spawnDetached(steam::launcherProgram(), {});
         setEnv(kLauncherEnv, "collection");
         if (ok) m_quit = true;
         else toast(tr("Could not start the SafeHouse launcher."));
     }
-    // Starting the chosen game once the screen is black.
+    // Sly 2 hands off (platform/gl_context.h: its window shows with its first frame, then it says so).
+    // (SAFEHOUSE_COLLECTION_HANDOFF=0: the old way, for comparisons)
+    static bool handsOff(GameId g) {
+#if defined(CANE_ANDROID) || defined(CANE_IOS)
+        (void)g;
+        return false;  // (Android: the game is its own activity over this one)
+#else
+        static const bool off = std::getenv("SAFEHOUSE_COLLECTION_HANDOFF") && std::string(std::getenv("SAFEHOUSE_COLLECTION_HANDOFF")) == "0";
+        return g == GameId::Sly2 && !off;
+#endif
+    }
+public:
+    // SAFEHOUSE_COLLECTION_TIMES=1: the start's and the return's moments on stderr, in seconds after the press.
+    void timeNote(const char* what) const {
+        static const bool on = std::getenv("SAFEHOUSE_COLLECTION_TIMES") != nullptr;
+        if (!on) return;
+        const double t = std::chrono::duration<double>(std::chrono::steady_clock::now() - m_pressedAt).count();
+        std::fprintf(stderr, "collection time %7.3f %s\n", t, what);
+    }
+private:
+    // A game chosen: the fade to black and the loading screen. A game that hands off starts at once, under them (its
+    // start overlaps the fade); the others once the screen is black.
+    void beginLaunch(GameId g) {
+        m_launching = int(g);
+        m_launchFade = 0;
+        m_pressedAt = std::chrono::steady_clock::now();
+        timeNote("pressed");
+        if (handsOff(g) && m_fixture.screen != "launch") launchNow();
+    }
     void launchNow() {
         const GameId g = GameId(m_launching);
         m_playing = int(g);
-        m_audio.setMuted(true);
-        saveConfig();
-        if (m_fixture.active) return;
-        m_job.start(std::string("Playing ") + game(g).shortName, [this, g](const auto& log) { m_backend.play(g, m_job.cancel, log); });
+        m_gameShown = false;
+        m_gameLeaving = false;
+        if (m_fixture.active) return saveConfig();
+        timeNote("starting the game");
+        setEnv(kHandoffEnv, handsOff(g) ? "1" : nullptr);
+        m_job.start(std::string("Playing ") + game(g).shortName, [this, g](const LogFunction& log) {
+            const auto started = std::chrono::steady_clock::now();
+            const auto seconds = [&] { return std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count(); };
+            bool first = true;
+            m_backend.play(g, m_job.cancel, [&](const std::string& line) {
+                if (first) first = false, timeNote("the game's first line");
+                // (the hand-off's lines: platform/gl_context.h)
+                if (line.rfind("{\"event\":", 0) == 0) {
+                    char note[96];
+                    if (line.find("\"first-frame\"") != std::string::npos) {
+                        m_gameShown = true;
+                        timeNote("the game's first frame");
+                        std::snprintf(note, sizeof note, "collection: the game's first frame %.2f s after it started", seconds());
+                        log(note);
+                    } else if (line.find("\"leaving\"") != std::string::npos) {
+                        m_gameLeaving = true;
+                        timeNote("the game is leaving");
+                    }
+                }
+                log(line);
+            });
+        });
+        // (the job is polled by the frames, which stop while the window is away: the end must be seen when it is back)
+        m_wasBusy = m_job.busy.load();
+        saveConfig();  // (after the start: the game does not wait for it)
     }
     void pollJob() {
         const bool busy = m_job.busy.load();
@@ -694,9 +781,14 @@ private:
                 message = m_job.message;
             }
             if (message != "Completed" && message != "Cancelled") toast(message);
+            timeNote("the game has ended");
+            // (a game that ends before it was on screen: the scene fades in from the black of the loading screen)
+            if (m_launchFade > 0) m_returnFade = std::max(m_returnFade, m_launchFade);
             m_playing = -1;
             m_launching = -1;
             m_launchFade = 0;
+            m_gameShown = false;
+            m_gameLeaving = false;
         }
         m_wasBusy = busy;
     }
@@ -977,7 +1069,7 @@ private:
                 } catch (...) {
                 }
             sound(Sfx::Select);
-            m_launching = int(GameId::Sly3), m_launchFade = 0;
+            beginLaunch(GameId::Sly3);
         }
     }
     void drawConfirm(ImDrawList* dl) {
@@ -1123,11 +1215,12 @@ private:
             dl->AddRectFilled({0, 0}, m_size, draw::rgba(0x000000, m_returnFade));
             m_returnFade = std::max(0.0f, m_returnFade - dt * 2.0f);
         }
-        if (m_launching < 0) return;
-        if (!gameRunning()) {
-            const float before = m_launchFade;
-            m_launchFade = std::min(1.0f, m_launchFade + dt * 2.0f);
-            if (before < 1.0f && m_launchFade >= 1.0f && m_fixture.screen != "launch") launchNow();
+        if (m_launching < 0 || m_gameLeaving) return;
+        const float before = m_launchFade;
+        m_launchFade = std::min(1.0f, m_launchFade + dt * 2.0f);
+        if (before < 1.0f && m_launchFade >= 1.0f) {
+            m_audio.setMuted(true);
+            if (m_playing < 0 && m_fixture.screen != "launch") launchNow();
         }
         const float a = m_launchFade, s = m_s;
         dl->AddRectFilled({0, 0}, m_size, draw::rgba(0x000000, a));
@@ -1219,6 +1312,16 @@ private:
                               sound(Sfx::Move);
                           },
                           {}, N_("The menu's sounds.")});
+        // the picture's shape, the SafeHouse launcher's choices: this menu's and Sly 2's (its Settings.ini [Display] Aspect
+        // Ratio, which the game starts with); the menu is drawn in that shape in the middle of the window
+        static const std::vector<std::string> aspects{N_("Fit to screen"), "4:3", "16:9", "16:10", N_("4:3 (PS2)"), N_("16:9 (PS2)")};
+        m_rows.push_back({"", N_("Aspect ratio"), [this] { return aspects[size_t(std::clamp(m_sly2.system.aspectMode, 0, int(aspects.size()) - 1))]; },
+                          [this](int d) {
+                              const int n = int(aspects.size());
+                              m_sly2.system.aspectMode = ((std::clamp(m_sly2.system.aspectMode, 0, n - 1) + d) % n + n) % n;
+                              saveSly2Settings();
+                          },
+                          {}, N_("The shape of this menu and of Sly 2's picture. Fit to screen uses the whole window. The PS2 options match the original framing.")});
 #ifndef CANE_ANDROID  // (Android: the app fills its window)
         m_rows.push_back({"", N_("Start in fullscreen"), [this] { return collectionConfig().value("fullscreen", true) ? std::string(N_("On")) : std::string(N_("Off")); },
                           [this](int) {
@@ -1249,7 +1352,6 @@ private:
         // Sly 2's own options, the same Settings.ini the game and the SafeHouse launcher use
         m_rows.push_back({"Sly 2: Band of Thieves", "", {}, {}, {}, ""});
         m_rows.push_back(sly2Row(N_("Display"), N_("Window Mode"), {N_("Windowed"), N_("Borderless"), N_("Fullscreen")}, N_("How the game's window opens.")));
-        m_rows.push_back(sly2Row(N_("Display"), N_("Aspect Ratio"), {N_("Fit"), "4:3", "16:9", "16:10", N_("PS2 4:3"), N_("PS2 16:9")}, N_("The picture's shape.")));
         m_rows.push_back(sly2Row(N_("Display"), N_("VSync"), {N_("On"), N_("Off")}, N_("Waits for the screen's refresh.")));
         m_rows.push_back(sly2Row(N_("Display"), N_("Frame Rate Limit"), {"30", "60", "120", "144", "240", N_("Uncapped")}, N_("Frames per second.")));
         m_rows.push_back(sly2Row(N_("Graphics"), N_("Internal Resolution"), {N_("Native"), "480", "720", "1080", "1440", "2160"}, N_("The 3D scene's height.")));
@@ -1464,6 +1566,8 @@ private:
     ImVec2 m_size{1280, 720}, m_dragFrom{};
     float m_s = 1, m_cameraX = 0, m_glide = 0.1f, m_delay = 0.5f, m_inputWait = 0, m_returnFade = 0, m_launchFade = 0, m_startFade = 0;
     int m_page = 0, m_extra = 0, m_launching = -1, m_playing = -1, m_confirmChoice = 2;
+    std::chrono::steady_clock::time_point m_pressedAt{};
+    std::atomic<bool> m_gameShown{false}, m_gameLeaving{false};  // (the hand-off's lines, from the job's thread)
     bool m_confirm = false, m_confirmHide = false, m_sly3Confirmed = false;
     std::array<ImRect, 3> m_hitConfirm{};
     std::array<ImRect, 5> m_hitDeveloper{};

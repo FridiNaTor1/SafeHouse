@@ -33,6 +33,11 @@ shot game-sly1-notinstalled xbox --game sly1
 shot game-sly2-notinstalled xbox --game sly2 --installed-fixture
 shot game-sly2-installed xbox --game sly2 --installed-fixture --sly2-installed-fixture
 shot game-sly2-ready xbox --game sly2 --installed-fixture --sly2-installed-fixture --sly2-runtime-fixture
+# "Play in VR" beside Play (a PC headset found: launcher/vr_probe.h), and SteamVR registered but not running
+shot game-sly2-vr xbox --game sly2 --installed-fixture --sly2-installed-fixture --sly2-runtime-fixture --vr-fixture ready
+shot game-sly2-vr-steamvr xbox --game sly2 --installed-fixture --sly2-installed-fixture --sly2-runtime-fixture --vr-fixture steamvr
+# Quit (the rail's last entry on the desktops) while a game runs: the confirmation
+shot quit-confirm xbox --game sly1 --installed-fixture --screen quit-confirm
 shot game-sly2-installing xbox --game sly2 --screen progress-page
 for g in sly3 sly4 hackpack; do
     shot "game-$g" xbox --game "$g" --installed-fixture
@@ -60,8 +65,10 @@ done
 shot about xbox --screen about --installed-fixture
 # Sly 3: the notice before Play; the community links under About in the rail.
 shot sly3-notice xbox --game sly3 --installed-fixture --screen sly3-notice
-shot nav-rail-discord xbox --screen about --installed-fixture --nav b,down
-shot nav-rail-patreon xbox --screen about --installed-fixture --nav b,down,right
+# (down from About: Quit, the desktops' last rail row (the focus alone does nothing), then the community links)
+shot nav-rail-quit xbox --screen about --installed-fixture --nav b,down
+shot nav-rail-discord xbox --screen about --installed-fixture --nav b,down,down
+shot nav-rail-patreon xbox --screen about --installed-fixture --nav b,down,down,right
 # Window sizes: Steam Deck, the smallest window, and 1080p.
 for z in 1280x800 960x600 1920x1080 2560x1440; do
     shot "size-game-sly1-$z" xbox --game sly1 --installed-fixture --size "$z"

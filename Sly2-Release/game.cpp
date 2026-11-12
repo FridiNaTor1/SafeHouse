@@ -16,6 +16,7 @@
 #include "breakable.h"
 #include "nav.h"
 #include "skipcut.h"
+#include "menu.h"
 #include "debugmenu.h"
 #include "remappage.h"
 #include "pccharacter.h"
@@ -528,15 +529,24 @@ void ReportGangHarness();
 
 bool g_fDevCard = true;
 
-// (VR, vr.h) the game's moment for the Immersive view: the cutscenes (the skippable scenes: the binocucom talks, the
+// (VR, vr.h) the game's moment for the Immersive view: everything before the title on the Flat Screen; the cutscenes (the skippable scenes: the binocucom talks, the
 // scripted scenes with dialogue or three or more shots; not a door opening), the Ep2 dance and the RC chopper on the
 // Flat Screen; the binocucom's recon view; Ep7's RC Combat Club from the table (VR Settings, experimental)
 static int VrGameView(SW* psw)
 {
     LO* po = psw ? PloPoCurrent(psw) : nullptr;
-    if (vr::g_vropts.fCutscenesFlat && (FCutsceneActive() || FDanceActive())) return vr::VRVIEW_Flat;
+    // the boot's intro scene before the title (its title card is framed for the screen; not a skippable cutscene)
+    // (test: SLY2N_VR_PRETITLE=1: the intro Immersive too, its title card's look in the Immersive view)
+    static const bool s_fPretitleTest = std::getenv("SLY2N_VR_PRETITLE") != nullptr;
+    if (FBeforeTitle() && !s_fPretitleTest) return vr::VRVIEW_Flat;
+    // (the Ep2 dance is Immersive whatever the cutscenes' setting: its prompts as the Touch buttons, vr.h FDanceLayout)
+    if (vr::g_vropts.fCutscenesFlat && FCutsceneActive() && !FDanceActive()) return vr::VRVIEW_Flat;
+    // (a scripted binocucom talk: a cutscene with the binocucom's frame up (the player's own recon view is no cutscene))
+    if (FCutsceneActive() && FBinocFrameDrawn()) return vr::VRVIEW_BinocTalk;
     if (po && po->oid == kRcChopperOid && FCidDerivedFrom(po->Cid(), 0x32)) return vr::VRVIEW_Flat;
     if (g_cm.ccpr > 0 && g_cm.acpr[0].pcplcy == &g_cmpolicies.cprecon) return vr::VRVIEW_Binoc;
+    // (Bentley's hack: the player is the hack ship)
+    if (po && FCidDerivedFrom(po->Cid(), 0x48)) return vr::VRVIEW_Hack;
     if (vr::g_vropts.fRcTable && po)
         if (const VEHICLE* pv = Pvehicle(po); pv && pv->mode == 2)
         {
@@ -2012,10 +2022,24 @@ int RunGame(const GAMEOPTS& go)
             if (fVr)
             {
                 vr::BeginFrame();
-                vr::SetGameView(VrGameView(psw.get()));
+                const int view = VrGameView(psw.get());
+                // (the binocucom's zoom: the camera's field now against the recon view's unzoomed one, CPRECON::Update)
+                if (view == vr::VRVIEW_Binoc)
+                {
+                    const float radFar = g_cmpolicies.cprecon.radFOVFar;
+                    vr::SetBinocZoom(radFar > 1e-4f && g_cm.radFOV > 1e-4f ? std::tan(0.5f * g_cm.radFOV) / std::tan(0.5f * radFar) : 1.0f);
+                }
+                vr::SetGameView(view);
+                vr::VRMOMENT m;
+                m.fCutscene = FCutsceneActive();
+                m.fPause = FPauseMenuShown();
+                m.fWipe = g_transition.wipes != WIPES_Idle;
+                m.fDance = FDanceActive();
+                m.fTitle = FTitleShown();
+                vr::SetMoment(m);
             }
             STEREOVIEW sv;
-            const bool fEyes = fVr && FAnimatedOverlayDrawNormal() && !FAnimatedOverlayNeedsFrame() && vr::FEyeViews(cam, &sv);
+            const bool fEyes = fVr && !vr::FUnfocused() && FAnimatedOverlayDrawNormal() && !FAnimatedOverlayNeedsFrame() && vr::FEyeViews(cam, &sv);
             if (FAnimatedOverlayDrawNormal()) {
                 if (fEyes)
                 {
@@ -2035,16 +2059,33 @@ int RunGame(const GAMEOPTS& go)
                     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
                     g_fHudAlphaLayer = true;
                 }
+                else if (fVr && vr::FUnfocused())
+                {
+                    // (VR, the headset's focus lost: no world (the system menu is in front; the least GPU work), only the
+                    // game picture: the pause menu on the screen)
+                    glBindFramebuffer(GL_FRAMEBUFFER, g_gl.FboScene());
+                    glViewport(0, 0, g_gl.renderWidth, g_gl.renderHeight);
+                    glDisable(GL_SCISSOR_TEST);
+                    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+                    glDepthMask(GL_TRUE);
+                    glStencilMask(0xFF);
+                    glClearColor(0, 0, 0, 1);
+                    glClearDepth(0.0);
+                    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+                }
                 else RenderScene(scene, cam, opts);
                 g_gl.BeginNativeUi(true);   // (upscaling, gl.h: the scene scaled up; the rest at the picture's size)
                 const double tHud = s_fFpsLog ? now() : 0.0;
+                if (FGpuMarks()) GpuMark("hud");
                 DrawHud(psw.get(), g_gl.renderWidth, g_gl.renderHeight);
                 if (s_fFpsLog) g_msHudFpsLog += now() - tHud;
-                if (!fEyes) RenderSceneForeground(scene, cam, opts);   // kinds 22..25 over the HUD (group 10, 0x157CF0)
+                if (!fEyes && !(fVr && vr::FUnfocused())) RenderSceneForeground(scene, cam, opts);   // kinds 22..25 over the HUD (group 10, 0x157CF0)
                 DrawRemapOverlay(g_gl.renderWidth, g_gl.renderHeight);   // (remappage.h: the Remap page over the pause menu)
                 DrawDebugOverlay(g_gl.renderWidth, g_gl.renderHeight);   // (debugmenu.h: the debug menu over all; Debug keys only)
                 g_fHudAlphaLayer = false;
+                if (FGpuMarks()) GpuMark("overlay capture");
                 g_gl.RememberOverlaySourceFrame();
+                if (FGpuMarks()) GpuMark("animated overlay");
             }
             g_gl.BeginNativeUi(false);   // (upscaling: the overlay's own frames at the picture's size too)
             DrawAnimatedOverlayFrame();  // orig: 0x1477D8, capture then clear/draw the exclusive surfaces
@@ -2064,6 +2105,7 @@ int RunGame(const GAMEOPTS& go)
             t2 = now();
             if (fWindow)
             {
+                if (FGpuMarks()) GpuMark("present");
                 g_gl.Present();
                 if (s_fFpsLog && s_aqGpu[0]) glEndQuery(GL_TIME_ELAPSED), ++s_iqGpu;
 #ifdef __SWITCH__
@@ -2152,6 +2194,7 @@ int RunGame(const GAMEOPTS& go)
         }
         if (cstep > 0) ++frame;
     }
+    if (fWindow) cane::gl::HandoffLeaving();   // (the Collection Style Launcher comes back while the world unloads)
     if (pfDump) std::fclose(pfDump);
     // debug: SLY2N_DUMPSAVE=file: the save block (orig 0x3D4A60) at the end (tools/savedump.py prints / diffs it)
     if (const char* sz = std::getenv("SLY2N_DUMPSAVE"))

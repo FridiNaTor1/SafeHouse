@@ -609,7 +609,9 @@ struct LauncherBackend {
     // Runtime contract (all games): <runtime> --data-dir <installations/KEY>
     // --user-dir <profile>[/KEY], started in the runtime's own folder.
     // The region played is the selected one (`region`, when given, is selected first and so remembered).
-    void play(GameId game, const std::atomic<bool>& cancel, const LogFunction& log, const std::string& region = {}) {
+    // vr: Sly 2 in VR (Sly2-Release --vr: an OpenXR headset; the game runs flat when it finds none). The launcher's
+    // "Play in VR" (ui/game_page.h, vr_probe.h) and `--play-vr sly2`.
+    void play(GameId game, const std::atomic<bool>& cancel, const LogFunction& log, const std::string& region = {}, bool vr = false) {
         if (!region.empty()) {
             if (!installation(game, region))
                 throw std::runtime_error(trf("%s has no %s installation", cane::game(game).shortName, tr(regionName(region)).c_str()));
@@ -644,6 +646,7 @@ struct LauncherBackend {
             } catch (...) {
             }
             arguments.insert(arguments.end(), {"--languages-dir", utf8(languagesDir(game))});
+            if (vr) arguments.push_back("--vr");
         }
         explainedProcess(arguments, cancel, log);
     }

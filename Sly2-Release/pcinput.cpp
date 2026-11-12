@@ -508,6 +508,7 @@ constexpr uint16_t s_abtnAction[PCA_Max] = {
 
 float Deadzone(float g) { return std::fabs(g) < 0.15f ? 0.0f : g; }
 int s_jidPad = -1;
+bool s_fVrPadLast = false;   // (the VR controllers were the pad last step)
 uint64_t s_grfKeyboardPrev = 0;
 }  // namespace
 
@@ -559,8 +560,24 @@ void ReadPcInput(GLFWwindow* window, uint16_t* pgrf, float* pxl, float* pyl, flo
     {
         s_jidPad = cane::input::selectActivePad(s_jidPad, &gp);
         cane::input::tracker().pollGamepads();
-        // (vr.h) the headset's controllers as the pad when no other pad is in use
-        const bool fVrPad = s_jidPad < 0 && vr::FPadState(&gp);
+        // (vr.h) the headset's controllers as the pad: when no other pad is in use, or when they are used more than it
+        // (an idle pad, e.g. a handheld PC's built-in one, kept them out; the VR pad is preferred on a tie once in use);
+        // the on-screen touch pad (Android / iOS: jid GLFW_JOYSTICK_LAST, present while it is shown) never counts: it
+        // cannot be seen or touched in the headset (the Quest's title took no button at all)
+#if defined(__ANDROID__) || defined(CANE_IOS)
+        const bool fTouchPad = s_jidPad == GLFW_JOYSTICK_LAST;
+#else
+        const bool fTouchPad = false;
+#endif
+        GLFWgamepadstate gpVr{};
+        bool fVrPad = vr::FPadState(&gpVr);
+        if (fVrPad && s_jidPad >= 0 && !fTouchPad)
+        {
+            const float gVr = cane::input::gamepadActivity(gpVr), gPad = cane::input::gamepadActivity(gp, s_jidPad);
+            fVrPad = s_fVrPadLast ? gVr + 0.01f >= gPad : gVr > gPad + 0.01f;
+        }
+        s_fVrPadLast = fVrPad;
+        if (fVrPad) s_jidPad = -1, gp = gpVr;
         if (s_jidPad >= 0 || fVrPad)
         {
             *pfPad = true;
@@ -935,7 +952,8 @@ bool FDebugKeyHeld(GLFWwindow* window, int key)
 bool FTouchPadActive()
 {
 #if defined(__ANDROID__) || defined(CANE_IOS)
-    return s_jidPad == GLFW_JOYSTICK_LAST;
+    // (VR: never: the headset has no touch screen, its controllers' prompts are shown)
+    return s_jidPad == GLFW_JOYSTICK_LAST && !vr::FActive();
 #else
     return false;
 #endif

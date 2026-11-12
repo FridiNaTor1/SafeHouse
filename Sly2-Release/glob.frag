@@ -79,7 +79,12 @@ void main()
 #else
         vec4 t = texture(tex, vUv) * 255.0;
 #endif
+#if defined(CANE_FP16) && CANE_FP16 >= 2
+        // (throwaway experiment, SLY2N_VKFP16=2: the texture function's product in float16 too; not exact)
+        c = vec4(floor(f16vec4(t) * f16vec4(vColor) / float16_t(128.0)));
+#else
         c = floor(t * vColor / 128.0);
+#endif
     }
     c = clamp(c, 0.0, 255.0);
 #ifndef NOKILL
@@ -89,10 +94,17 @@ void main()
         if ((afailMode == 1) != fPass) discard;
     }
 #endif
+#ifdef CANE_FP16
+    // (throwaway experiment, SLY2N_VKFP16=1: the fog mix and the alpha in float16; the fog mix is not exact)
+    f16vec3 rgbh = f16vec3(c.rgb) / float16_t(255.0);
+    rgbh = mix(rgbh, fFogBlack != 0 ? f16vec3(0.0) : f16vec3(fogColor.rgb), float16_t(vFog));
+    FragColor = vec4(vec3(rgbh), float(min(float16_t(c.a) / float16_t(128.0), float16_t(1.0))));
+#else
     vec3 rgb = c.rgb / 255.0;
     rgb = mix(rgb, fFogBlack != 0 ? vec3(0.0) : fogColor.rgb, vFog);
     // The GS blends with As / 128 (0x80 = 1.0).
     FragColor = vec4(rgb, min(c.a / 128.0, 1.0));
+#endif
 #ifdef CANE_BLEND1
     if (caneBlend1 != 0) FragColor.rgb *= FragColor.a;
     FragColor1 = vec4(0.0, 0.0, 0.0, caneBlend1 == 1 ? FragColor.a : 0.0);

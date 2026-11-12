@@ -4,6 +4,7 @@
 #include "mobile_app.h"
 #endif
 #include "rumble.h"
+#include "vr.h"
 
 #include "clock.h"
 #include "joy.h"
@@ -64,6 +65,15 @@ namespace
 #endif
 void SendMotors(uint8_t bSmall, uint8_t bBig)
 {
+    // (VR, vr.h: the headset's controllers are the pad (pcinput: no joystick chosen): both hands vibrate, the big motor as
+    // the strength, the small one (on / off, a light buzz on the DualShock) as a light one; Controller Vibration Off: none)
+    if (vr::FActive() && s_fWindow && s_jid < 0)
+    {
+        if (!g_fControllerVibration) bSmall = bBig = 0;
+        const float g = std::max(float(bBig) / 255.0f, bSmall ? 0.3f : 0.0f);
+        vr::Rumble(g, g);
+        return;
+    }
 #if defined(__SWITCH__)
     // the DualShock's motors on the Joy-Cons / Pro Controller: the big one (0..255) as the low band's amplitude, the
     // small one (on / off) as the high band at full

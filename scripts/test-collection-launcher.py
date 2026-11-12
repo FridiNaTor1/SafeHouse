@@ -694,6 +694,16 @@ def main():
             image = read_png(render("ultrawide-check", ["--collection-ps3", profile, "--size", "3840x1080", "--screen", "extras"], plain))
             assert near(pixel(image, 4, 60), (13, 19, 79)), pixel(image, 4, 60)           # the strip is carried on past its end
             render("bloom", ps3)  # (the glow's passes run)
+            # Sly 2's aspect ratio, which the menu shares (Options): 4:3 in a 16:9 window has black bars at the sides and
+            # the scene in the middle; 16:9 in a 32:9 window too; Fit fills the window (above)
+            for size, aspect, bar in (("1280x720", "4:3", (40, 360)), ("3840x1080", "16:9", (300, 540))):
+                shot = render(f"aspect-{aspect.replace(':', 'x')}", ["--collection-ps3", profile, "--size", size, "--collection-aspect", aspect], plain)
+                if shot:
+                    image = read_png(shot)
+                    assert pixel(image, *bar) == (0, 0, 0), (aspect, pixel(image, *bar))
+                    w = int(size.split("x")[0])
+                    assert pixel(image, w - 1 - bar[0], bar[1]) == (0, 0, 0), aspect
+                    assert pixel(image, w // 2, 60) != (0, 0, 0), aspect  # (the sky)
         # ---- a launch from the menu: the flag reaches the game, the menu comes back
         if os.name != "nt" and have_display:
             data = portable / "data"
@@ -706,7 +716,11 @@ def main():
             (sly2 / "installation.json").write_text(json.dumps(manifest))
             runtime = bin_dir / "Sly2-Release"
             log = work / "runtime.log"
-            runtime.write_text(f'#!/bin/sh\necho "launcher=$SAFEHOUSE_LAUNCHER" >> "{log}"\nprintf "%s\\n" "$@" >> "{log}"\n')
+            # (the hand-off, platform/gl_context.h: Sly 2 is told SAFEHOUSE_HANDOFF=1, announces its first frame and its exit;
+            # the menu steps aside at the first and comes back at the second, a --live run as a real one)
+            runtime.write_text(f'#!/bin/sh\necho "launcher=$SAFEHOUSE_LAUNCHER" >> "{log}"\nprintf "%s\\n" "$@" >> "{log}"\n'
+                               f'echo "handoff=$SAFEHOUSE_HANDOFF" >> "{log}"\n'
+                               '[ "$SAFEHOUSE_HANDOFF" = 1 ] && echo \'{"event":"first-frame"}\' && sleep 1 && echo \'{"event":"leaving"}\'\nexit 0\n')
             runtime.chmod(0o755)
             r = run([copied, "--play", "sly2"], env=env)
             if r.returncode != 0:
@@ -717,13 +731,18 @@ def main():
                 log.unlink()
                 out = shots / "launched.png"
                 # the menu opens on the collection's own item: Right twice (Sly 1, Sly 2), Enter
-                r = run([copied, "--screenshot", out, "--collection", "--live", "--nav", "right,right,a", "--delay", "3"], env=env)
+                r = run([copied, "--screenshot", out, "--collection", "--live", "--nav", "right,right,a", "--delay", "3"],
+                        env=dict(env, SAFEHOUSE_COLLECTION_TIMES="1"))
                 assert r.returncode == 0 and out.is_file(), r
                 assert log.is_file(), "the game was not started from the menu"
                 lines = log.read_text().splitlines()
                 assert lines[0] == "launcher=collection", lines
                 assert "--data-dir" in lines and "--user-dir" in lines, lines
-                print("launch from the menu: runtime started with SAFEHOUSE_LAUNCHER=collection, menu back afterwards")
+                assert "handoff=1" in lines, lines
+                assert r.stderr.count(b"the window steps aside") == 1 and b"the window is back" in r.stderr, r.stderr[-800:]
+                after = r.stderr[r.stderr.index(b"the game's first frame"):]
+                assert b"the window steps aside" in after, r.stderr[-800:]  # (not before the game's first frame)
+                print("launch from the menu: runtime started with SAFEHOUSE_LAUNCHER=collection and the hand-off, menu back afterwards")
                 # the same with a finger: a tap on a game that is not installed starts nothing, a tap on Sly 2's logo starts it
                 log.unlink()
                 r = run([copied, "--screenshot", out, "--collection", "--live", "--nav", "right", "--pointer", "w " * 20 + "d640,299 u", "--delay", "2"], env=env)

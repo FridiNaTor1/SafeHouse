@@ -3,6 +3,7 @@
 
 #include "rumble.h"
 #include "gl.h"
+#include "gl_backend.h"
 
 #include <cstdlib>
 #include "pcinput.h"
@@ -31,6 +32,7 @@
 GL g_gl;
 GLSHADER glGlobShader;
 GLSHADER glGlobShaderNoKill;
+GLSHADER glGlobShaderVol;
 GLSHADER glGlobShaderNoGeom, glGlobShaderNoKillNoGeom;
 bool g_fGlobNoGeom = false;
 bool g_fGlobBindless = false;
@@ -64,6 +66,8 @@ static bool FBindlessWorks()
 {
     if (!GLAD_GL_ARB_bindless_texture) return false;
     if (!glGetTextureSamplerHandleARB || !glMakeTextureHandleResidentARB || !glMakeTextureHandleNonResidentARB) return false;
+    // (Vulkan: the layer reports the extension only where its handles work, global descriptor arrays; no probe texture)
+    if (FRendererVulkan()) return true;
     while (glGetError() != GL_NO_ERROR) {}
     GLuint tex = 0, sampler = 0;
     glGenTextures(1, &tex);
@@ -350,6 +354,8 @@ bool GL::FInit(int w, int h, bool fVisible, const char* title, std::string& erro
     };
     width = w;
     height = h;
+    // (a launcher handing off to the game: the window is shown with its first frame, platform/gl_context.h)
+    fVisible = cane::gl::HandoffVisible(fVisible);
     // (renderer.h) Vulkan when it is chosen and starts: the GL calls below then run on it; otherwise OpenGL
     window = PwindowVulkan(w, h, fVisible, title);
     if (!window) window = createWindow(5);
@@ -503,6 +509,21 @@ bool GL::FInit(int w, int h, bool fVisible, const char* title, std::string& erro
     if (!(fGlobGeom ? glGlobShaderNoKill.FInit("glob.vert", "glob.geom", "glob.frag", prefixNoKill.c_str())
                     : glGlobShaderNoKill.FInit("glob.vert", "glob.frag", prefixNoKill.c_str())))
         glGlobShaderNoKill.ID = 0;
+    // (the Vulkan renderer's pulled programs, CANE_BLEND1) the no-discard program without CANE_BLEND1's second output, for
+    // the projected volumes' colour draws (render.cpp FDrawProjVolumePackets): the Quest 3S's Adreno hangs the GPU drawing
+    // the volumes' fill with that output (a blend that doesn't read it) while its video capture preempts the GPU (notes/
+    // STATUS-VK.md volume-dim). Same pictures. SLY2N_VKVOLPROG=0: the volumes with the glob program as before.
+    glGlobShaderVol.ID = 0;
+    if (!pullDef.empty() && glGlobShaderNoKill.ID && !(std::getenv("SLY2N_VKVOLPROG") && std::atoi(std::getenv("SLY2N_VKVOLPROG")) == 0))
+    {
+        std::string prefixVol = prefixNoKill;
+        static const char szBlend1[] = "#define CANE_BLEND1 1\n";
+        if (const size_t i = prefixVol.find(szBlend1); i != std::string::npos) prefixVol.erase(i, sizeof(szBlend1) - 1);
+        if (!(fGlobGeom ? glGlobShaderVol.FInit("glob.vert", "glob.geom", "glob.frag", prefixVol.c_str())
+                        : glGlobShaderVol.FInit("glob.vert", "glob.frag", prefixVol.c_str())))
+            glGlobShaderVol.ID = 0;
+        std::printf("OpenGL: projected volumes %s\n", glGlobShaderVol.ID ? "with the program without CANE_BLEND1" : "with the glob program (no variant)");
+    }
     // (perf-4) both without the near-clip stage, for the runs whose draws are all wholly in front of the near plane
     // (render.cpp): glob.geom passes their triangles through unchanged, and a geometry stage costs GPU time on every draw
     // (the Switch leaves it out altogether; tile GPUs and Zink pay most). SLY2N_GLOBNOGEOM=0: the stage everywhere.
@@ -527,15 +548,35 @@ void GL::CreateFramebuffers(int w, int h)
     ReleaseOverlaySources();  // the immutable photograph survives resizing its presentation target
     renderWidth = w;
     renderHeight = h;
-    if (fbo) { glDeleteFramebuffers(1, &fbo); glDeleteTextures(1, &fbc); glDeleteRenderbuffers(1, &rbo); }
-    if (fboMsaa) { glDeleteFramebuffers(1, &fboMsaa); glDeleteRenderbuffers(1, &rboColorMsaa); glDeleteRenderbuffers(1, &rboDepthMsaa); fboMsaa = 0; }
+    if (fbo) { GlDeleteFramebuffers(1, &fbo); GlDeleteTexture(fbc); GlDeleteRenderbuffer(rbo); }
+    if (fboMsaa) { GlDeleteFramebuffers(1, &fboMsaa); GlDeleteRenderbuffer(rboColorMsaa); GlDeleteRenderbuffer(rboDepthMsaa); fboMsaa = 0; }
+    if (const cane::draw::Packets* pkf = PpacketsFbo())
+    {
+        // (native render targets: nothing bound, as the GL calls below leave framebuffer 0)
+        using namespace cane::draw;
+        fbc = GlNewTexture(w, h, GL_LINEAR, false);
+        RenderbufferDesc rd;
+        rd.width = uint32_t(w), rd.height = uint32_t(h), rd.format = kRenderbufferDepth32fStencil8;
+        rbo = pkf->createRenderbuffer(rd);
+        fbo = GlNewFramebuffer(fbc, rbo);
+        if (msaa > 1)
+        {
+            rd.samples = uint8_t(msaa);
+            rd.format = kRenderbufferRgba8;
+            rboColorMsaa = pkf->createRenderbuffer(rd);
+            rd.format = kRenderbufferDepth32fStencil8;
+            rboDepthMsaa = pkf->createRenderbuffer(rd);
+            Attachment c, d;
+            c.object = rboColorMsaa, c.renderbuffer = 1;
+            d.object = rboDepthMsaa, d.renderbuffer = 1;
+            fboMsaa = pkf->createFramebuffer(c, d);
+        }
+        pkf->bindTarget(0);
+        return;
+    }
     glGenFramebuffers(1, &fbo);
     glBindFramebuffer(GL_FRAMEBUFFER, fbo);
-    glGenTextures(1, &fbc);
-    glBindTexture(GL_TEXTURE_2D, fbc);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    fbc = GlNewTexture(w, h, GL_LINEAR, false);
     glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, fbc, 0);
     glGenRenderbuffers(1, &rbo);
     glBindRenderbuffer(GL_RENDERBUFFER, rbo);
@@ -557,6 +598,141 @@ void GL::CreateFramebuffers(int w, int h)
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
+// (draw packets, platform/draw_packet.h: the Vulkan renderer's table, null on the others: the GL calls)
+static const cane::draw::Packets* PacketsActive()
+{
+    return cane::gl::ActiveBackend() ? cane::gl::ActiveBackend()->packets : nullptr;
+}
+
+const cane::draw::Packets* PpacketsTex()
+{
+    const cane::draw::Packets* pk = PacketsActive();
+    return pk && pk->createTexture && pk->uploadTexture && pk->generateMipmaps && pk->deleteTextures ? pk : nullptr;
+}
+const cane::draw::Packets* PpacketsBuf()
+{
+    const cane::draw::Packets* pk = PacketsActive();
+    return pk && pk->createBuffer && pk->bufferData && pk->bufferSubData && pk->deleteBuffers && pk->mapStream && pk->mapRange ? pk : nullptr;
+}
+GLuint GlNewBuffer(GLenum target, size_t cb, const void* pv, GLenum usage)
+{
+    if (const cane::draw::Packets* pk = PpacketsBuf())
+        return pk->createBuffer(cb, pv, uint8_t(BufferUsageOf(usage) | (target == GL_DRAW_INDIRECT_BUFFER ? cane::draw::kBufferIndirect : 0)));
+    GLuint buf = 0;
+    glGenBuffers(1, &buf);
+    if (!cb) return buf;
+    glBindBuffer(target, buf);
+    glBufferData(target, GLsizeiptr(cb), pv, usage);
+    return buf;
+}
+uint8_t BufferUsageOf(GLenum usage)
+{
+    return usage == GL_STREAM_DRAW ? cane::draw::kBufferStream : usage == GL_DYNAMIC_DRAW ? cane::draw::kBufferDynamic : cane::draw::kBufferStatic;
+}
+void GlBufferData(GLenum target, GLuint buf, size_t cb, const void* pv, GLenum usage)
+{
+    if (const cane::draw::Packets* pk = PpacketsBuf())
+        return pk->bufferData(buf, cb, pv, uint8_t(BufferUsageOf(usage) | (target == GL_DRAW_INDIRECT_BUFFER ? cane::draw::kBufferIndirect : 0)));
+    glBindBuffer(target, buf);
+    glBufferData(target, GLsizeiptr(cb), pv, usage);
+}
+void GlBufferSubData(GLenum target, GLuint buf, size_t off, size_t cb, const void* pv)
+{
+    if (const cane::draw::Packets* pk = PpacketsBuf()) return pk->bufferSubData(buf, off, cb, pv);
+    glBindBuffer(target, buf);
+    glBufferSubData(target, GLintptr(off), GLsizeiptr(cb), pv);
+}
+void GlDeleteBuffer(GLuint buf)
+{
+    if (!buf) return;
+    if (const cane::draw::Packets* pk = PpacketsBuf()) pk->deleteBuffers(1, &buf);
+    else glDeleteBuffers(1, &buf);
+}
+const cane::draw::Packets* PpacketsVao()
+{
+    const cane::draw::Packets* pk = PpacketsBuf();
+    return pk && pk->createVertexArray && pk->deleteVertexArrays ? pk : nullptr;
+}
+const cane::draw::Packets* PpacketsFbo()
+{
+    const cane::draw::Packets* pk = PpacketsTex();
+    return pk && pk->createRenderbuffer && pk->deleteRenderbuffers && pk->createFramebuffer && pk->attach && pk->deleteFramebuffers &&
+           pk->framebufferComplete && pk->bindTarget ? pk : nullptr;
+}
+const cane::draw::Packets* PpacketsSampler()
+{
+    const cane::draw::Packets* pk = PacketsActive();
+    return pk && pk->createSampler && pk->deleteSamplers ? pk : nullptr;
+}
+GLuint GlNewFramebuffer(GLuint tex, GLuint rboDepth)
+{
+    if (const cane::draw::Packets* pk = PpacketsFbo())
+    {
+        cane::draw::Attachment c, d;
+        c.object = tex;
+        d.object = rboDepth, d.renderbuffer = 1;
+        return pk->createFramebuffer(c, d);
+    }
+    GLuint fbo = 0;
+    glGenFramebuffers(1, &fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    if (tex) glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, tex, 0);
+    if (rboDepth) glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, rboDepth);
+    return fbo;
+}
+void GlDeleteFramebuffers(GLsizei n, const GLuint* afbo)
+{
+    if (const cane::draw::Packets* pk = PpacketsFbo()) pk->deleteFramebuffers(uint32_t(n), afbo);
+    else glDeleteFramebuffers(n, afbo);
+}
+void GlDeleteRenderbuffer(GLuint rbo)
+{
+    if (const cane::draw::Packets* pk = PpacketsFbo()) pk->deleteRenderbuffers(1, &rbo);
+    else glDeleteRenderbuffers(1, &rbo);
+}
+GLuint GlNewVertexArray()
+{
+    if (const cane::draw::Packets* pk = PpacketsVao()) return pk->createVertexArray(nullptr, 0, 0);
+    GLuint vao = 0;
+    glGenVertexArrays(1, &vao);
+    return vao;
+}
+void GlDeleteVertexArray(GLuint vao)
+{
+    if (!vao) return;
+    if (const cane::draw::Packets* pk = PpacketsVao()) pk->deleteVertexArrays(1, &vao);
+    else glDeleteVertexArrays(1, &vao);
+}
+GLuint GlNewTexture(int dx, int dy, GLenum filter, bool fClamp)
+{
+    GLuint tex = 0;
+    if (const cane::draw::Packets* pk = PpacketsTex())
+    {
+        cane::draw::TextureDesc d;
+        d.width = uint32_t(dx), d.height = uint32_t(dy), d.storage = 0;
+        d.minFilter = d.magFilter = filter == GL_NEAREST ? cane::draw::kFilterNearest : cane::draw::kFilterLinear;
+        if (fClamp) d.wrapS = d.wrapT = cane::draw::kWrapClampToEdge;
+        return pk->createTexture(d);
+    }
+    glGenTextures(1, &tex);
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, dx, dy, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GLint(filter));
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GLint(filter));
+    if (fClamp)
+    {
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    }
+    return tex;
+}
+void GlDeleteTexture(GLuint tex)
+{
+    if (!tex) return;
+    if (const cane::draw::Packets* pk = PpacketsTex()) pk->deleteTextures(1, &tex);
+    else glDeleteTextures(1, &tex);
+}
+
 // orig: 0x16FB78/0x16FCA8: retain the displayed picture separately from the one being drawn.
 void GL::RememberOverlaySourceFrame()
 {
@@ -565,32 +741,41 @@ void GL::RememberOverlaySourceFrame()
     if (fboOverlaySource[0] && (dxOverlaySource != renderWidth || dyOverlaySource != renderHeight)) ReleaseOverlaySources();
     if (!fboOverlaySource[0]) {
         dxOverlaySource = renderWidth, dyOverlaySource = renderHeight;
+        if (PpacketsFbo())
+            for (int i = 0; i < 2; ++i) {
+                texOverlaySource[i] = GlNewTexture(renderWidth, renderHeight, GL_LINEAR, true);
+                fboOverlaySource[i] = GlNewFramebuffer(texOverlaySource[i], 0);
+            }
+        else {
         glGenFramebuffers(2, fboOverlaySource);
-        glGenTextures(2, texOverlaySource);
         for (int i = 0; i < 2; ++i) {
-            glBindTexture(GL_TEXTURE_2D, texOverlaySource[i]);
-            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, renderWidth, renderHeight, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-            glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+            texOverlaySource[i] = GlNewTexture(renderWidth, renderHeight, GL_LINEAR, true);
             glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fboOverlaySource[i]);
             glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texOverlaySource[i], 0);
         }
+        }
     }
     // Resolve first: multisample resolves cannot also scale the picture into the atlas.
-    glDisable(GL_SCISSOR_TEST);
-    if (fboMsaa) {
-        glBindFramebuffer(GL_READ_FRAMEBUFFER, fboMsaa);
-        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fbo);
+    // (draw packets: the scissor off and the scene framebuffer bound afterwards, as the GL calls leave them)
+    if (const cane::draw::Packets* pk = PacketsActive(); pk && pk->scissor && pk->copy) {
+        const int32_t full[4] = {0, 0, renderWidth, renderHeight};
+        pk->scissor(nullptr);
+        if (fboMsaa) pk->copy(fboMsaa, fbo, full, 0, 0, fbo);
+        pk->copy(fbo, fboOverlaySource[iOverlaySource], full, 0, 0, FboScene());
+    } else {
+        glDisable(GL_SCISSOR_TEST);
+        if (fboMsaa) {
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, fboMsaa);
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fbo);
+            glBlitFramebuffer(0, 0, renderWidth, renderHeight, 0, 0, renderWidth, renderHeight, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+        }
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fboOverlaySource[iOverlaySource]);
         glBlitFramebuffer(0, 0, renderWidth, renderHeight, 0, 0, renderWidth, renderHeight, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+        glBindFramebuffer(GL_FRAMEBUFFER, FboScene());
     }
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo);
-    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fboOverlaySource[iOverlaySource]);
-    glBlitFramebuffer(0, 0, renderWidth, renderHeight, 0, 0, renderWidth, renderHeight, GL_COLOR_BUFFER_BIT, GL_NEAREST);
     iOverlaySource ^= 1;
     cOverlaySources = std::min(cOverlaySources + 1, 2);
-    glBindFramebuffer(GL_FRAMEBUFFER, FboScene());
 }
 
 // orig: 0x1475C0: previous picture in the left atlas half; current picture in the right.
@@ -598,23 +783,25 @@ bool GL::CaptureOverlayFrame()
 {
     if (!window || cOverlaySources == 0) return false;
     if (fboOverlay && (dxOverlay != renderWidth || dyOverlay != renderHeight)) {
-        glDeleteFramebuffers(1, &fboOverlay); glDeleteTextures(1, &texOverlay);
+        GlDeleteFramebuffers(1, &fboOverlay); GlDeleteTexture(texOverlay);
         fboOverlay = texOverlay = 0;
+    }
+    if (!fboOverlay && PpacketsFbo()) {
+        dxOverlay = renderWidth, dyOverlay = renderHeight;
+        texOverlay = GlNewTexture(renderWidth, renderHeight, GL_LINEAR, true);
+        fboOverlay = GlNewFramebuffer(texOverlay, 0);
     }
     if (!fboOverlay) {
         dxOverlay = renderWidth, dyOverlay = renderHeight;
         glGenFramebuffers(1, &fboOverlay);
-        glGenTextures(1, &texOverlay);
-        glBindTexture(GL_TEXTURE_2D, texOverlay);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, renderWidth, renderHeight, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        texOverlay = GlNewTexture(renderWidth, renderHeight, GL_LINEAR, true);
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fboOverlay);
         glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texOverlay, 0);
     }
-    glDisable(GL_SCISSOR_TEST);
+    const cane::draw::Packets* pk = PacketsActive();
+    if (pk && !(pk->scissor && pk->blit)) pk = nullptr;
+    if (pk) pk->scissor(nullptr);
+    else glDisable(GL_SCISSOR_TEST);
     // The original's picture is its whole 4:3 frame; the overlay draws it in the 4:3 UI canvas. At other aspects
     // the native view is wider (or taller) than that frame, so the picture is the centred 4:3 part of the render,
     // not the whole render squeezed into it (U31: squashed at 32:9).
@@ -626,19 +813,26 @@ bool GL::CaptureOverlayFrame()
     const int xSrc = (dxSource - dxSrc) / 2, ySrc = (dySource - dySrc) / 2;
     for (int i = 0; i < 2; ++i) {
         const int source = i == 0 && cOverlaySources == 2 ? iOverlaySource : iOverlaySource ^ 1;
+        if (pk) {
+            // (draw packets: the scene framebuffer bound afterwards, as the GL calls leave it)
+            const int32_t rcSrc[4] = {xSrc, ySrc, dxSrc, dySrc};
+            const int32_t rcDst[4] = {i * renderWidth / 2, 0, (i + 1) * renderWidth / 2 - i * renderWidth / 2, renderHeight};
+            pk->blit(fboOverlaySource[source], fboOverlay, rcSrc, rcDst, 1, FboScene());
+            continue;
+        }
         glBindFramebuffer(GL_READ_FRAMEBUFFER, fboOverlaySource[source]);
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fboOverlay);
         glBlitFramebuffer(xSrc, ySrc, xSrc + dxSrc, ySrc + dySrc, i * renderWidth / 2, 0,
                           (i + 1) * renderWidth / 2, renderHeight, GL_COLOR_BUFFER_BIT, GL_LINEAR);
     }
-    glBindFramebuffer(GL_FRAMEBUFFER, FboScene());
+    if (!pk) glBindFramebuffer(GL_FRAMEBUFFER, FboScene());
     return true;
 }
 
 void GL::ReleaseOverlayFrame()
 {
     if (!window) return;
-    glDeleteFramebuffers(1, &fboOverlay); glDeleteTextures(1, &texOverlay);
+    GlDeleteFramebuffers(1, &fboOverlay); GlDeleteTexture(texOverlay);
     fboOverlay = texOverlay = 0;
     ReleaseOverlaySources();
 }
@@ -646,7 +840,7 @@ void GL::ReleaseOverlayFrame()
 void GL::ReleaseOverlaySources()
 {
     if (!window) return;
-    glDeleteFramebuffers(2, fboOverlaySource); glDeleteTextures(2, texOverlaySource);
+    GlDeleteFramebuffers(2, fboOverlaySource); GlDeleteTexture(texOverlaySource[0]); GlDeleteTexture(texOverlaySource[1]);
     for (int i = 0; i < 2; ++i) fboOverlaySource[i] = texOverlaySource[i] = 0;
     iOverlaySource = cOverlaySources = 0;
     dxOverlaySource = dyOverlaySource = 0;
@@ -680,22 +874,38 @@ void GL::BeginNativeUi(bool fScene)
     {
         ReleaseNativeUi();
         dxUi = dx, dyUi = dy;
+        if (const cane::draw::Packets* pkf = PpacketsFbo())
+        {
+            // (native: nothing bound; every user binds the target itself)
+            texUi = GlNewTexture(dx, dy, GL_LINEAR, false);
+            cane::draw::RenderbufferDesc rd;
+            rd.width = uint32_t(dx), rd.height = uint32_t(dy), rd.format = cane::draw::kRenderbufferDepth32fStencil8;
+            rboUi = pkf->createRenderbuffer(rd);
+            fboUi = GlNewFramebuffer(texUi, rboUi);
+        }
+        else
+        {
         glGenFramebuffers(1, &fboUi);
         glBindFramebuffer(GL_FRAMEBUFFER, fboUi);
-        glGenTextures(1, &texUi);
-        glBindTexture(GL_TEXTURE_2D, texUi);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, dx, dy, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        texUi = GlNewTexture(dx, dy, GL_LINEAR, false);
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texUi, 0);
         glGenRenderbuffers(1, &rboUi);
         glBindRenderbuffer(GL_RENDERBUFFER, rboUi);
         glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH32F_STENCIL8, dx, dy);
         glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, rboUi);
+        }
     }
+    const cane::draw::Packets* pk = PacketsActive();
     if (fScene)
     {
-        if (fboMsaa)
+        if (fboMsaa && pk && pk->scissor && pk->copy)
+        {
+            // (draw packets: the scissor off; the framebuffer bound after it is FUpscale's to set)
+            const int32_t full[4] = {0, 0, renderWidth, renderHeight};
+            pk->scissor(nullptr);
+            pk->copy(fboMsaa, fbo, full, 0, 0, fbo);
+        }
+        else if (fboMsaa)
         {
             glDisable(GL_SCISSOR_TEST);
             glBindFramebuffer(GL_READ_FRAMEBUFFER, fboMsaa);
@@ -709,6 +919,17 @@ void GL::BeginNativeUi(bool fScene)
     }
     SwapNativeUi();
     // (the HUD's depth test and the foreground's stencil start from a clear: hud.cpp, render.cpp)
+    if (pk && pk->clear && pk->bindTarget)
+    {
+        // (draw packets: the depth / stencil write masks set as the GL calls set them, the colour mask and scissor as they are)
+        cane::draw::Clear c;
+        c.clear = cane::draw::kClearDepth | cane::draw::kClearStencil;
+        c.depthWrite = 1;
+        c.stencilWriteMask = c.stencilWriteMaskAfter = 0xFF;
+        pk->bindTarget(fbo);
+        pk->clear(c);
+        return;
+    }
     glBindFramebuffer(GL_FRAMEBUFFER, fbo);
     glDepthMask(GL_TRUE);
     glStencilMask(0xFF);
@@ -724,7 +945,7 @@ void GL::EndNativeUi()
 
 void GL::ReleaseNativeUi()
 {
-    if (fboUi) { glDeleteFramebuffers(1, &fboUi); glDeleteTextures(1, &texUi); glDeleteRenderbuffers(1, &rboUi); }
+    if (fboUi) { GlDeleteFramebuffers(1, &fboUi); GlDeleteTexture(texUi); GlDeleteRenderbuffer(rboUi); }
     fboUi = texUi = rboUi = 0;
     dxUi = dyUi = 0;
 }
@@ -732,6 +953,31 @@ void GL::ReleaseNativeUi()
 void GL::Present()
 {
     if (vr::FPresent()) return;   // (vr.h: the picture to the headset, the window mirrors it)
+    // (draw packets, platform/draw_packet.h: the Vulkan renderer; the GL-style state afterwards as the GL calls below leave
+    // it: framebuffer 0 bound, the scissor test off, all colours written, the clear colour black)
+    if (const cane::draw::Packets* pk = PacketsActive(); pk && pk->blit && pk->invalidate && pk->clear && pk->copy && pk->bindTarget)
+    {
+        using namespace cane::draw;
+        if (glInvalidateFramebuffer) pk->invalidate(FboScene(), kClearDepth | kClearStencil);
+        const int32_t full[4] = {0, 0, renderWidth, renderHeight};
+        if (fboMsaa)
+        {
+            pk->copy(fboMsaa, fbo, full, 0, 0, fboMsaa);
+            if (glInvalidateFramebuffer) pk->invalidate(fboMsaa, kClearColor);
+        }
+        pk->bindTarget(0);
+        Clear c;
+        c.clear = kClearColor;
+        c.color[3] = 1.0f;
+        c.colorMask = 0xF, c.scissor = 0;
+        c.stencilMaskKept = 1;
+        pk->clear(c);
+        const DISPLAY& d = g_display;
+        const int32_t dst[4] = {d.presentX, d.presentY, d.presentWidth, d.presentHeight};
+        pk->blit(fbo, 0, full, dst, fNativeUi ? 0 : 1, 0);
+        EndNativeUi();
+        return;
+    }
     // (perf-4) the scene's depth / stencil are not read after the frame (the next frame's passes clear them first): a tile
     // GPU need not write them back to memory (Zink: the render pass's store op DONT_CARE). GL 4.3 / GLES 3.0.
     if (glInvalidateFramebuffer)
@@ -771,17 +1017,29 @@ void GL::Present()
 
 bool GL::FWriteScreenshot(const std::string& path)
 {
-    if (fboMsaa)
-    {
-        glBindFramebuffer(GL_READ_FRAMEBUFFER, fboMsaa);
-        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fbo);
-        glBlitFramebuffer(0, 0, renderWidth, renderHeight, 0, 0, renderWidth, renderHeight, GL_COLOR_BUFFER_BIT, GL_NEAREST);
-    }
     std::vector<uint8_t> ab(size_t(renderWidth) * size_t(renderHeight) * 4);
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo);
-    glPixelStorei(GL_PACK_ALIGNMENT, 1);
-    glReadPixels(0, 0, renderWidth, renderHeight, GL_RGBA, GL_UNSIGNED_BYTE, ab.data());
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    // (draw packets: the resolve as copy (the read / draw bindings after it are the read-back's own), the read-back
+    // natively, framebuffer 0 bound afterwards as the GL calls leave it)
+    const cane::draw::Packets* pk = PacketsActive();
+    if (pk && pk->copy && pk->readPixels)
+    {
+        const int32_t rect[4] = {0, 0, renderWidth, renderHeight};
+        if (fboMsaa) pk->copy(fboMsaa, fbo, rect, 0, 0, fbo);
+        pk->readPixels(fbo, rect, ab.data(), 0);
+    }
+    else
+    {
+        if (fboMsaa)
+        {
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, fboMsaa);
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fbo);
+            glBlitFramebuffer(0, 0, renderWidth, renderHeight, 0, 0, renderWidth, renderHeight, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+        }
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, fbo);
+        glPixelStorei(GL_PACK_ALIGNMENT, 1);
+        glReadPixels(0, 0, renderWidth, renderHeight, GL_RGBA, GL_UNSIGNED_BYTE, ab.data());
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    }
     // bottom-up -> top-down, opaque
     std::vector<uint8_t> flipped(ab.size());
     const size_t row = size_t(renderWidth) * 4;

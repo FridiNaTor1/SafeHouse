@@ -146,6 +146,18 @@ jobs:
           chmod +x "$RUNNER_TEMP/appimagetool"
           python3 scripts/package.py --build build/linux --output dist --appimagetool "$RUNNER_TEMP/appimagetool"
           dist/SafeHouse-Launcher-Linux-${{ matrix.arch }}/bin/safehouse --version
+      # Sly 2's VR (the Steam Frame runs the aarch64 package; SteamVR / Monado / WiVRn on both): the bundled OpenXR loader
+      # (cmake/openxr-loader.cmake) must be found by the game through its run path, and the Vulkan renderer built in.
+      - name: Check Sly 2's VR path (OpenXR loader, Vulkan renderer)
+        run: |
+          set -euo pipefail
+          d=dist/SafeHouse-Launcher-Linux-${{ matrix.arch }}
+          test -f "$d/lib/libopenxr_loader.so.1" || { echo "::error::the package has no OpenXR loader (lib/libopenxr_loader.so.1)"; exit 1; }
+          grep -Eq '^SLY2N_GLSLANG:FILEPATH=/' build/linux/CMakeCache.txt || { echo "::error::Sly 2 was built without its Vulkan renderer"; exit 1; }
+          out=$("$d/bin/Sly2-Release" --vr-check || true)
+          echo "$out"
+          # (no runtime on the runner: the loader answers "no-runtime"; "no-loader" means the bundled one was not found)
+          echo "$out" | grep -Eq '^vr-check: (no-runtime|no-headset|ready)' || { echo "::error::Sly2-Release did not open the bundled OpenXR loader"; exit 1; }
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: linux-${{ matrix.arch }}-release
@@ -212,7 +224,10 @@ jobs:
       - name: Build
         run: cmake --build build/windows-cross --parallel 4
       - name: Package (portable zip and offline setup)
-        run: python3 scripts/package.py --build build/windows-cross --output dist --windows --arch ${{ matrix.arch }}
+        run: |
+          python3 scripts/package.py --build build/windows-cross --output dist --windows --arch ${{ matrix.arch }}
+          # (Sly 2's VR: the OpenXR loader beside the game, cmake/openxr-loader.cmake)
+          test -f dist/SafeHouse-Launcher-Windows-${{ matrix.arch }}/bin/openxr_loader.dll || { echo "::error::the package has no openxr_loader.dll"; exit 1; }
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: windows-${{ matrix.arch }}-release

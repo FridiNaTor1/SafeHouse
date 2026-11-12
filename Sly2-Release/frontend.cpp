@@ -118,6 +118,7 @@ std::vector<std::array<uint8_t, 64>> s_aabMovie;
 // ------------------------------------------------------------ the title (orig 0x3DA530: the widget, +0x24 0x5D2)
 LO* s_ploTitle = nullptr;
 bool s_fTitle = false;
+bool s_fTitleReached = false;   // (the title was shown in this world: FBeforeTitle)
 bool s_fTitleInputTaken = false;   // orig (Europe) 0x3E1D84: the title has taken input once (no language menu by itself after)
 bool s_fTitleCardWait = false;    // (Europe: the first Start waits for the card it turned on)
 float s_tTitleShown = 0.0f;
@@ -809,6 +810,7 @@ void StartFrontEnd(SW* psw, int grfReq)
     s_pswText = psw;
     s_mptLoad.clear();
     s_fTitle = false;
+    s_fTitleReached = false;
     s_ploTitle = nullptr;
     s_epm = EPMENU{};
     // the title's screen object (0x3DA530 +0x24) in the boot world started by the boot sequence; shown by its
@@ -855,6 +857,7 @@ struct INITTITLESETTERS
 
 bool FTitleShown() { return s_fTitle; }
 bool FTitleWorld() { return s_ploTitle != nullptr; }
+bool FBeforeTitle() { return s_ploTitle != nullptr && !s_fTitleReached; }
 
 // orig 0x001DD820 (on 0x3DA530: SCPT command 0x44): the title's screen object shown (its vt slot 49 with -1).
 // TODO: the vt slot 10 call before it. RumbleUnknown1 0x1D5498 after it: the vibration option from boot's 0 (none) to 1.
@@ -862,6 +865,7 @@ void ShowTitle()
 {
     if (!s_ploTitle) return;
     s_fTitle = true;
+    s_fTitleReached = true;
     std::printf("title: shown at t %.2f (newest slot %d: %s)\n", g_clock.t, g_islotCur + 1,
                 g_islotCur >= 0 && GRef(RefProgressOfSlot(g_islotCur, {"dt"})) != 0.0f ? "Resume Game" : "New Game");
     ShowScreenObj(s_ploTitle, -1);

@@ -105,6 +105,7 @@ extern float g_amatMultiviewLtoR[16];
 extern GLSHADER glGlobShader;
 // glGlobShader without its fragment discards (NOKILL), for the runs without alpha test and DATE; ID 0: none
 extern GLSHADER glGlobShaderNoKill;
+extern GLSHADER glGlobShaderVol;   // (render.cpp DrawProjVolume: the pulled no-discard program without CANE_BLEND1; ID 0 elsewhere)
 // (perf-4) both without the near-clip geometry stage (ID 0: not built); g_fGlobNoGeom: render.cpp may use them
 extern GLSHADER glGlobShaderNoGeom, glGlobShaderNoKillNoGeom;
 extern bool g_fGlobNoGeom;
@@ -124,3 +125,38 @@ extern bool g_fDirectRuns;
 extern GLSHADER glCelBorderShader;
 extern GLSHADER glHudShader;
 extern GLSHADER glOverlayShader;
+
+// (draw packets' resource entries, platform/draw_packet.h: textures made, uploaded and deleted natively on the Vulkan
+// renderer, no GL binding point touched; null on the others and with SLY2N_VKNATIVE=0: the GL calls)
+namespace cane::draw { struct Packets; }
+const cane::draw::Packets* PpacketsTex();
+// A new render texture (RGBA8, one level, zeros; the filter for both directions, clamped to the edge or GL's repeat):
+// native on Vulkan (no binding touched), else glGenTextures + glBindTexture(GL_TEXTURE_2D) + glTexImage2D(nullptr) +
+// glTexParameteri, the texture left bound as those leave it. GlDeleteTexture: the same split for glDeleteTextures.
+GLuint GlNewTexture(int dx, int dy, GLenum filter, bool fClamp);
+void GlDeleteTexture(GLuint tex);
+// (the buffer entries: native on Vulkan, no binding point touched; null elsewhere and with SLY2N_VKNATIVE=0) and the
+// split helpers: GlNewBuffer = glGenBuffers (+ glBindBuffer(target) + glBufferData(cb, pv, usage) when cb > 0, the buffer
+// left bound to target as those leave it); GlBufferData / GlBufferSubData = glBindBuffer(target, buf) + the GL call;
+// GlDeleteBuffer = glDeleteBuffers. On Vulkan none of them binds anything.
+const cane::draw::Packets* PpacketsBuf();
+uint8_t BufferUsageOf(GLenum usage);
+GLuint GlNewBuffer(GLenum target, size_t cb, const void* pv, GLenum usage);
+void GlBufferData(GLenum target, GLuint buf, size_t cb, const void* pv, GLenum usage);
+void GlBufferSubData(GLenum target, GLuint buf, size_t off, size_t cb, const void* pv);
+void GlDeleteBuffer(GLuint buf);
+// (the vertex array entries, with the buffer ones: native on Vulkan, no binding touched; null elsewhere)
+const cane::draw::Packets* PpacketsVao();
+// An empty vertex array (glGenVertexArrays: no attributes, for the full-screen programs) and glDeleteVertexArrays.
+GLuint GlNewVertexArray();
+// (the framebuffer entries: native on Vulkan, no binding touched; null elsewhere) GlNewFramebuffer: a framebuffer of the
+// texture tex (colour 0, level 0) and the renderbuffer rboDepth (depth-stencil; 0: none): native on Vulkan, else
+// glGenFramebuffers + glBindFramebuffer(GL_FRAMEBUFFER) + the attachments, left bound as those leave it. The deletes:
+// the same split.
+const cane::draw::Packets* PpacketsFbo();
+// (the sampler entries: native on Vulkan; null elsewhere)
+const cane::draw::Packets* PpacketsSampler();
+GLuint GlNewFramebuffer(GLuint tex, GLuint rboDepth);
+void GlDeleteFramebuffers(GLsizei n, const GLuint* afbo);
+void GlDeleteRenderbuffer(GLuint rbo);
+void GlDeleteVertexArray(GLuint vao);

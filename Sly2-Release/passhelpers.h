@@ -25,6 +25,9 @@
 #include <mutex>
 #include <thread>
 #include <vector>
+#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
+#include <immintrin.h>
+#endif
 #endif
 
 class PASSHELPERS
@@ -78,8 +81,12 @@ private:
         if (fNotify) m_cvWork.notify_all();
         fn(0);
         const int cwait = cpart - 1;
-        const auto tSpinEnd = std::chrono::steady_clock::now() + kSpin;
-        while (m_cdoneSpin.load(std::memory_order_acquire) != cwait && std::chrono::steady_clock::now() < tSpinEnd) {}
+        const auto tSpinEnd = std::chrono::steady_clock::now() + Spin();
+        for (unsigned n = 1; m_cdoneSpin.load(std::memory_order_acquire) != cwait; ++n)
+        {
+            CpuRelax();
+            if (n % kcSpinClock == 0 && std::chrono::steady_clock::now() >= tSpinEnd) break;
+        }
         if (m_cdoneSpin.load(std::memory_order_acquire) != cwait)
         {
             std::unique_lock<std::mutex> lock(m_mutex);
@@ -124,10 +131,16 @@ private:
             uint64_t section = m_sectionSpin.load(std::memory_order_acquire);
             if (section == genSeen)
             {
-                const auto tSpinEnd = std::chrono::steady_clock::now() + kSpin;
-                while ((section = m_sectionSpin.load(std::memory_order_acquire)) == genSeen &&
-                       std::chrono::steady_clock::now() < tSpinEnd)
-                    std::this_thread::yield();
+                const auto tSpinEnd = std::chrono::steady_clock::now() + Spin();
+                for (unsigned n = 1; (section = m_sectionSpin.load(std::memory_order_acquire)) == genSeen; ++n)
+                {
+                    CpuRelax();
+                    if (n % kcSpinClock == 0)
+                    {
+                        if (std::chrono::steady_clock::now() >= tSpinEnd) break;
+                        std::this_thread::yield();
+                    }
+                }
             }
             if (section == genSeen)
             {
@@ -158,7 +171,32 @@ private:
     bool m_fStarted = false;
     // (the hand-off: the section (its number << 8 | its part count) and its finished parts as atomics; the sleepers
     // counted and the caller's wait flagged under m_mutex, so a notify is only sent to a thread that sleeps)
-    static constexpr std::chrono::microseconds kSpin{200};
+    // (vkalpha) the spin: a pause instruction per poll of the atomic (the core's sibling and the power draw), the clock
+    // read and the helpers' yield every kcSpinClock polls, not each (they were ~39 % of a desktop profile's samples).
+    // How long: kSpinDefault, per platform (battery devices may want less: measured on the device first, so the same
+    // everywhere for now); SLY2N_HELPERSPIN=us sets it (0: sleep at once).
+#if defined(__ANDROID__) || defined(__SWITCH__)
+    static constexpr int kSpinDefault = 200;   // (hook: Quest / phones / Switch)
+#else
+    static constexpr int kSpinDefault = 200;
+#endif
+    static constexpr unsigned kcSpinClock = 32;
+    static std::chrono::microseconds Spin()
+    {
+        static const std::chrono::microseconds s_spin{[] {
+            const char* psz = std::getenv("SLY2N_HELPERSPIN");
+            return psz ? std::max(std::atoi(psz), 0) : kSpinDefault;
+        }()};
+        return s_spin;
+    }
+    static void CpuRelax()
+    {
+#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
+        _mm_pause();
+#elif defined(__aarch64__) || defined(__arm__)
+        __asm__ __volatile__("yield");
+#endif
+    }
     std::atomic<uint64_t> m_sectionSpin{0};
     std::atomic<int> m_cdoneSpin{0};
     int m_csleeping = 0;

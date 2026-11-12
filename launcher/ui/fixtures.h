@@ -10,7 +10,8 @@
 
 namespace cane::ui::fixtures {
 struct Options {
-    // game | install | install-progress | settings[:category] | about[:section] | desktop-shortcut[-done] | sly3-notice
+    // game | install | install-progress | settings[:category] | about[:section] | desktop-shortcut[-done] | sly3-notice |
+    // quit-confirm
     std::string screen = "game";
     std::optional<GameId> game; // --game KEY (default: the remembered game)
     int width = 1280, height = 800;
@@ -36,8 +37,11 @@ struct Options {
     bool collection = false;
     std::vector<std::string> collectionGames;
     std::string collectionPs3;
+    int collectionAspect = -1;  // --collection-aspect fit|4:3|16:9|16:10|ps2-4:3|ps2-16:9: Sly 2's Aspect Ratio
     // --language CODE: the launcher language of the shot (default English; "system" follows the environment).
     std::string language = "en";
+    // --vr-fixture ready|steamvr|none: the VR headset check's answer (vr_probe.h; Sly 2's "Play in VR" button)
+    std::string vr;
 };
 
 inline IsoCandidate iso(const char* file, uintmax_t size, int hoursAgo, GameId game, const char* boot, const char* region) {

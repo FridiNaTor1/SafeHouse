@@ -150,7 +150,7 @@ inline bool navRightPressed() {
 // ---------------------------------------------------------------- icons
 enum class Icon {
     None, Plus, Search, ChevronLeft, ChevronRight, ChevronDown, Heart, Chat, Check, Copy, Refresh,
-    Folder, Disc, Lock, Warning, Users, Info, External, Close, Play, Star, Cog, Trash, Stop, Wrench
+    Folder, Disc, Lock, Warning, Users, Info, External, Close, Play, Star, Cog, Trash, Stop, Wrench, Power, Headset
 };
 inline void drawIcon(ImDrawList* dl, Icon icon, ImVec2 c, float s, ImU32 col) {
     const float t = std::max(1.5f, s * 0.09f);
@@ -278,6 +278,23 @@ inline void drawIcon(ImDrawList* dl, Icon icon, ImVec2 c, float s, ImU32 col) {
         dl->PathArcTo({ c.x + s * 0.16f, c.y - s * 0.16f }, s * 0.17f, IM_PI * 0.75f, IM_PI * 2.25f, 16);
         dl->PathStroke(col, 0, t * 1.6f);
         break;
+    case Icon::Power: {   // (Quit) a ring open at the top with a bar through the gap
+        const float r = s * 0.3f;
+        dl->PathArcTo({ c.x, c.y + s * 0.03f }, r, -IM_PI * 0.5f + 0.75f, IM_PI * 1.5f - 0.75f, 24);
+        dl->PathStroke(col, 0, t * 1.3f);
+        dl->AddLine({ c.x, c.y - s * 0.36f }, { c.x, c.y - s * 0.02f }, col, t * 1.3f);
+        break;
+    }
+    case Icon::Headset: {   // (Play in VR) a headset seen from the front: the visor with its two lenses and the nose gap
+        const ImVec2 a{ c.x - s * 0.42f, c.y - s * 0.22f }, b{ c.x + s * 0.42f, c.y + s * 0.2f };
+        dl->AddRectFilled(a, b, col, s * 0.12f);
+        dl->AddTriangleFilled({ c.x - s * 0.1f, b.y + 1 }, { c.x + s * 0.1f, b.y + 1 }, { c.x, c.y + s * 0.04f }, u32(color::bg));
+        dl->AddCircleFilled({ c.x - s * 0.19f, c.y - s * 0.02f }, s * 0.1f, u32(color::bg), 16);
+        dl->AddCircleFilled({ c.x + s * 0.19f, c.y - s * 0.02f }, s * 0.1f, u32(color::bg), 16);
+        dl->AddLine({ a.x, c.y - s * 0.06f }, { a.x - s * 0.06f, c.y - s * 0.06f }, col, t * 1.4f);
+        dl->AddLine({ b.x, c.y - s * 0.06f }, { b.x + s * 0.06f, c.y - s * 0.06f }, col, t * 1.4f);
+        break;
+    }
     case Icon::Star: {
         ImVec2 p[10];
         for (int i = 0; i < 10; ++i) {

@@ -8,5 +8,7 @@ Loader (libopenxr_loader / openxr_loader.dll): Apache-2.0.
   Android: org.khronos.openxr:openxr_loader_for_android:1.1.63 from Maven Central
   (https://repo1.maven.org/maven2/org/khronos/openxr/openxr_loader_for_android/1.1.63/, sha256 of the .aar
    622419d2f6741c3443a3beb4779af0764318edd01830de967f24c741ebcded73), packaged as lib/arm64-v8a/libopenxr_loader.so.
-  Desktop: loaded at run time when VR is asked for (--vr); the system's loader (libopenxr_loader.so.1) on Linux,
-  openxr_loader.dll next to the game on Windows. The game starts and runs normally without it.
+  Desktop (Linux x86_64 / aarch64, Windows): built from the same OpenXR-SDK release archive (cmake/openxr-loader.cmake,
+  the loader target only, with the SDK's bundled jsoncpp: MIT, jsoncpp-LICENSE.txt here) and shipped beside the games as
+  lib/libopenxr_loader.so.1 (Linux) or bin/openxr_loader.dll (Windows). Loaded at run time only when VR is asked for
+  (--vr, the launcher's "Play in VR" and its headset check); the game starts and runs normally without it.

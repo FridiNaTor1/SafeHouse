@@ -4,7 +4,9 @@
 //
 // Usage: cane-controller-tests [--uinput]
 #include "controller_family.h"
+#include "vr_pad_map.h"
 #include "sly2_settings.h"
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
@@ -299,6 +301,131 @@ static void familyTests() {
           "GameCube / Wii U labels are positional");
 }
 
+// platform/vr_pad_map.h: the Steam Frame's controllers (XR_VALVE_frame_controller_interaction) as a standard pad, the
+// Steam Controller (2026)'s layout: the profile names, the Gamepad layout, its prompts
+static void frameTests() {
+    using namespace cane::vrpad;
+    check(std::string(kFrameProfile) == "/interaction_profiles/valve/frame_controller_valve" &&
+              std::string(kFrameExtension) == "XR_VALVE_frame_controller_interaction",
+          "Steam Frame: Valve's interaction profile and extension names");
+    check(controllersOf(kFrameProfile) == Controllers::Frame && controllersOf(kFrameProfileOld) == Controllers::Frame,
+          "Steam Frame: both profile names (SteamVR 2.15.1+ and before) are the Frame's controllers");
+    check(controllersOf("/interaction_profiles/valve/index_controller") == Controllers::Index &&
+              controllersOf("/interaction_profiles/oculus/touch_controller") == Controllers::Touch &&
+              controllersOf("/interaction_profiles/microsoft/motion_controller") == Controllers::Wmr &&
+              controllersOf("/interaction_profiles/htc/vive_controller") == Controllers::Vive &&
+              controllersOf("/interaction_profiles/khr/simple_controller") == Controllers::Simple &&
+              controllersOf("/interaction_profiles/bytedance/pico4_controller") == Controllers::Pico &&
+              controllersOf("") == Controllers::None,
+          "the other profiles keep their controllers");
+    check(layoutOf(Controllers::Frame) == Layout::Gamepad && realStartSelectOf(Controllers::Frame) &&
+              layoutOf(Controllers::Index) == Layout::Touch && !realStartSelectOf(Controllers::Index) &&
+              layoutOf(Controllers::Wmr) == Layout::Pads && realStartSelectOf(Controllers::Wmr) &&
+              layoutOf(Controllers::Touch) == Layout::Touch && !realStartSelectOf(Controllers::Touch),
+          "layouts: Frame Gamepad (real Start / Select), Index / Touch Touch (combos), WMR Pads");
+    State s;
+    Raw r;
+    Pad p;
+    const auto press = [&](Raw raw) { s = State{}; return map(raw, Layout::Gamepad, true, 0.0, s); };
+    r = Raw{}; r.a = true; p = press(r);
+    check(p.buttons[kA] && !p.buttons[kB] && !p.buttons[kX] && !p.buttons[kY], "Frame A = Cross");
+    r = Raw{}; r.b = true; p = press(r);
+    check(p.buttons[kB] && !p.buttons[kA] && !p.buttons[kX], "Frame B = Circle (east)");
+    r = Raw{}; r.x = true; p = press(r);
+    check(p.buttons[kX] && p.axes[kAxisLT] == -1.0f, "Frame X = Square (west), not L2");
+    r = Raw{}; r.y = true; p = press(r);
+    check(p.buttons[kY] && p.axes[kAxisRT] == -1.0f, "Frame Y = Triangle (north), not R2");
+    r = Raw{}; r.bumperL = true; r.bumperR = true; p = press(r);
+    check(p.buttons[kLB] && p.buttons[kRB], "Frame bumpers = L1 / R1");
+    r = Raw{}; r.trigL = 0.3f; p = press(r);
+    check(!p.buttons[kLB] && std::fabs(p.axes[kAxisLT] - (-0.4f)) < 1e-5f && p.axes[kAxisRT] == -1.0f,
+          "Frame triggers = L2 / R2, analog (not L1 / R1)");
+    r = Raw{}; r.trigR = 1.0f; p = press(r);
+    check(p.axes[kAxisRT] == 1.0f && !p.buttons[kRB], "Frame right trigger fully = R2");
+    r = Raw{}; r.clickL = true; r.clickR = true; p = press(r);
+    check(p.buttons[kLThumb] && p.buttons[kRThumb] && !p.buttons[kStart] && !p.buttons[kBack], "Frame stick clicks = L3 / R3");
+    r = Raw{}; r.start = true; p = press(r);
+    check(p.buttons[kStart] && !p.buttons[kBack], "Frame Menu = Start");
+    r = Raw{}; r.select = true; p = press(r);
+    check(p.buttons[kBack] && !p.buttons[kStart], "Frame View = Select");
+    r = Raw{}; r.dpadUp = true; r.dpadLeft = true; p = press(r);
+    check(p.buttons[kDpadUp] && p.buttons[kDpadLeft] && !p.buttons[kDpadDown] && !p.buttons[kDpadRight], "Frame d-pad = d-pad");
+    r = Raw{}; r.gripL = 1.0f; r.gripR = 1.0f; p = press(r);
+    bool none = true;
+    for (bool b : p.buttons) none = none && !b;
+    check(none && p.axes[kAxisLT] == -1.0f && p.axes[kAxisRT] == -1.0f, "Frame grips are free (no game button: they hold the controllers)");
+    r = Raw{}; r.gripR = 1.0f; r.clickR = true; p = press(r);
+    check(p.buttons[kRThumb] && !p.buttons[kStart], "Frame: no grip + stick-click combos (real Start / Select)");
+    r = Raw{}; r.lx = 0.5f; r.ly = 1.0f; r.rx = -1.0f; r.ry = -0.25f; p = press(r);
+    check(p.axes[kAxisLX] == 0.5f && p.axes[kAxisLY] == -1.0f && p.axes[kAxisRX] == -1.0f && p.axes[kAxisRY] == 0.25f,
+          "Frame sticks (OpenXR y up -> GLFW y down)");
+    // the prompts: the Steam Frame family reads like the 2026 Steam Controller (a standard pad by position)
+    struct L { Button b; const char* label; };
+    bool labels = true;
+    for (const L& l : {L{Button::South, "A"}, L{Button::East, "B"}, L{Button::West, "X"}, L{Button::North, "Y"},
+                       L{Button::LB, "L1"}, L{Button::RB, "R1"}, L{Button::LT, "L2"}, L{Button::RT, "R2"},
+                       L{Button::Back, "View"}, L{Button::Start, "Menu"}, L{Button::LSPress, "L3"}, L{Button::RSPress, "R3"}})
+        labels = labels && std::string(buttonLabel(l.b, Family::SteamFrame)) == l.label &&
+                 std::string(buttonLabel(l.b, Family::SteamFrame)) == buttonLabel(l.b, Family::SteamController2026);
+    check(labels, "Steam Frame prompts = the Steam Controller (2026)'s (A B X Y, L1 R1 L2 R2, View, Menu, L3 R3)");
+}
+
+// platform/vr_pad_map.h: the Touch layout and the grip + stick-click combos
+static void vrPadTests() {
+    using namespace cane::vrpad;
+    State s;
+    Raw r;
+    r.a = true; Pad p = map(r, Layout::Touch, false, 0.0, s);
+    check(p.buttons[kA], "Touch A = Cross");
+    r = Raw{}; r.b = true; p = map(r, Layout::Touch, false, 0.0, s);
+    check(p.buttons[kX] && !p.buttons[kB], "Touch B = Square");
+    r = Raw{}; r.x = true; p = map(r, Layout::Touch, false, 0.0, s);
+    check(p.axes[kAxisLT] == 1.0f && !p.buttons[kB] && !p.buttons[kX], "Touch X = L2");
+    r = Raw{}; r.y = true; p = map(r, Layout::Touch, false, 0.0, s);
+    check(p.axes[kAxisRT] == 1.0f && !p.buttons[kY], "Touch Y = R2");
+    s = State{}; r = Raw{}; r.gripL = 0.9f; p = map(r, Layout::Touch, false, 0.0, s);
+    check(p.buttons[kB] && p.axes[kAxisLT] == -1.0f, "the left grip = Circle at once");
+    s = State{}; r = Raw{}; r.gripR = 0.9f; p = map(r, Layout::Touch, false, 0.0, s);
+    check(p.buttons[kY], "the right grip = Triangle at once");
+    r.gripR = 0.4f; p = map(r, Layout::Touch, false, 0.0, s);
+    check(p.buttons[kY], "Triangle held down to the release threshold");
+    r.gripR = 0.1f; p = map(r, Layout::Touch, false, 0.0, s);
+    check(!p.buttons[kY], "Triangle released");
+    r = Raw{}; r.x = true; p = map(r, Layout::Pads, true, 0.0, s);
+    check(p.buttons[kX] && p.axes[kAxisLT] == -1.0f, "Pads: the left trackpad click = Square");
+    s = State{}; r = Raw{}; r.trigR = 0.8f; p = map(r, Layout::Touch, false, 0.0, s);
+    check(p.buttons[kRB], "the right trigger = R1");
+    r.trigR = 0.5f; p = map(r, Layout::Touch, false, 0.0, s);
+    check(p.buttons[kRB], "R1 held down to the release threshold");
+    r.trigR = 0.1f; p = map(r, Layout::Touch, false, 0.0, s);
+    check(!p.buttons[kRB], "R1 released");
+    // Start: the right grip (Triangle at once), then the right stick click: Start, Triangle and R3 away
+    s = State{}; r = Raw{}; r.gripR = 1.0f;
+    p = map(r, Layout::Touch, false, 0.0, s);
+    check(p.buttons[kY] && !p.buttons[kStart], "the grip first: Triangle");
+    r.clickR = true; p = map(r, Layout::Touch, false, 0.0, s);
+    check(p.buttons[kStart] && !p.buttons[kY] && !p.buttons[kRThumb], "R grip + R3 = Start, no Triangle / R3");
+    r.clickR = false; p = map(r, Layout::Touch, false, 0.0, s);
+    check(!p.buttons[kStart] && !p.buttons[kY], "the click up: Start up, the grip still away from the game");
+    r.gripR = 0.0f; map(r, Layout::Touch, false, 0.0, s);
+    r.gripR = 1.0f; p = map(r, Layout::Touch, false, 0.0, s);
+    check(p.buttons[kY], "a new squeeze after the combo is Triangle again");
+    // Select: left grip + left stick click
+    s = State{}; r = Raw{}; r.gripL = 1.0f; map(r, Layout::Touch, false, 0.0, s);
+    r.clickL = true; p = map(r, Layout::Touch, false, 0.0, s);
+    check(p.buttons[kBack] && !p.buttons[kLThumb] && !p.buttons[kB], "L grip + L3 = Select");
+    // the click first, then the grip: L3 and Circle, no combo
+    s = State{}; r = Raw{}; r.clickL = true; map(r, Layout::Touch, false, 0.0, s);
+    r.gripL = 1.0f; p = map(r, Layout::Touch, false, 0.0, s);
+    check(p.buttons[kLThumb] && !p.buttons[kBack] && p.buttons[kB], "L3 then L grip: L3 + Circle");
+    s = State{}; r = Raw{}; r.menu = true; p = map(r, Layout::Touch, false, 0.0, s);
+    check(p.buttons[kStart], "the menu button = Start");
+    s = State{}; r = Raw{}; r.gripL = 1.0f; r.clickL = true; map(r, Layout::Pads, true, 0.0, s);
+    p = map(r, Layout::Pads, true, 0.0, s);
+    check(p.buttons[kB] && p.buttons[kLThumb] && !p.buttons[kBack], "real Start / Select: no combos");
+    frameTests();
+}
+
 static void vrTests() {
     ActivityTracker t;
     t.noteVr(Family::ValveIndex);
@@ -307,10 +434,15 @@ static void vrTests() {
     check(t.family() == Family::Keyboard && !t.lastWasVr(), "a key press after VR: keyboard prompts");
     check(isVrFamily(Family::MetaQuest) && isVrFamily(Family::Pico) && !isVrFamily(Family::SteamController2026),
           "isVrFamily");
-    check(std::string(buttonLabel(Button::LB, Family::MetaQuest)) == "L Grip" &&
+    check(std::string(buttonLabel(Button::LB, Family::MetaQuest)) == "L Trigger" &&
+              std::string(buttonLabel(Button::RT, Family::MetaQuest)) == "Y" &&
+              std::string(buttonLabel(Button::West, Family::MetaQuest)) == "B" &&
+              std::string(buttonLabel(Button::East, Family::MetaQuest)) == "L Grip" &&
+              std::string(buttonLabel(Button::North, Family::MetaQuest)) == "R Grip" &&
               std::string(buttonLabel(Button::Guide, Family::MetaQuest)) == "Meta" &&
               std::string(buttonLabel(Button::South, Family::ViveWand)) == "R Pad",
-          "VR labels (grips as bumpers, Meta as guide, Vive pads as face buttons)");
+          "VR labels (triggers L1 / R1, grips Circle / Triangle, X / Y L2 / R2, B Square, Meta as guide, Vive pads as face buttons)");
+    vrPadTests();
 }
 
 static void tokenTests() {

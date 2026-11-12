@@ -349,6 +349,9 @@ int main(int argc, char** argv)
     std::signal(SIGSEGV, OnCrashSignal);
     std::signal(SIGABRT, OnCrashSignal);
 #endif
+    // (vr.h Check: the launcher's "Play in VR" check, launcher/vr_probe.h: an OpenXR runtime with a headset; no window)
+    for (int i = 1; i < argc; ++i)
+        if (!std::strcmp(argv[i], "--vr-check")) return vr::Check();
     SetRendererRelaunch(argc, argv);   // (renderer.h: a Vulkan error in the first seconds restarts on OpenGL)
     // the mods' audio tools (audiomod.cpp: --make-music, --make-vpk, --make-vag, --export-wav): no game data needed
     {

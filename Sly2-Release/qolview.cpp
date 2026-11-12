@@ -9,6 +9,8 @@
 
 #include "sly2n_logo.h"
 
+#include "gl.h"
+#include "../platform/draw_packet.h"
 #include <glad/glad.h>
 
 #define STB_IMAGE_STATIC
@@ -70,11 +72,21 @@ GLuint TexLogo()
             pd[3] = uint8_t((ps[3] * 128 + 127) / 255);
         }
     stbi_image_free(pb);
-    glGenTextures(1, &s_tex);
-    glBindTexture(GL_TEXTURE_2D, s_tex);
-    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, dx, dy, 0, GL_RGBA, GL_UNSIGNED_BYTE, ab.data());
-    glGenerateMipmap(GL_TEXTURE_2D);
+    if (const cane::draw::Packets* pk = PpacketsTex())
+    {
+        cane::draw::TextureDesc d;
+        d.width = uint32_t(dx), d.height = uint32_t(dy), d.storage = 0, d.pixels = ab.data();
+        s_tex = pk->createTexture(d);
+        pk->generateMipmaps(s_tex);
+    }
+    else
+    {
+        glGenTextures(1, &s_tex);
+        glBindTexture(GL_TEXTURE_2D, s_tex);
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, dx, dy, 0, GL_RGBA, GL_UNSIGNED_BYTE, ab.data());
+        glGenerateMipmap(GL_TEXTURE_2D);
+    }
     s_aspect = float(dx) / float(dy);
     return s_tex;
 }

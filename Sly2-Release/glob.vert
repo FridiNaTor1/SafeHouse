@@ -97,6 +97,11 @@ layout (std430, binding = 1) readonly buffer DRAWS { vec4 adraw[]; };   // SAA d
 #ifdef CANE_DRAWSTATE
 layout (std430, binding = 5) readonly buffer TEXHANDLES { uvec4 atexh[]; };   // handle, state word (render.cpp DrawStateWord)
 flat out uint vDrawState;
+#elif defined(VULKAN) && defined(CANE_PULL)
+// (the Vulkan pulled path's program without CANE_BLEND1, gl.cpp glGlobShaderVol: the handle buffer laid out as for
+// the others there, render.cpp FDrawStateLayout)
+layout (std430, binding = 5) readonly buffer TEXHANDLES { uvec4 atexh[]; };
+#define CANE_TEXH4 1
 #else
 layout (std430, binding = 5) readonly buffer TEXHANDLES { uvec2 atexh[]; };
 #endif
@@ -131,7 +136,9 @@ void main()
     int icolorDraw = (texhds.z & 0x80000000u) != 0u ? int(texhds.z & 3u) : icolor;
 #define icolor icolorDraw
 #else
-#ifdef BINDLESS
+#ifdef CANE_TEXH4
+    vTexh = atexh[aDraw].xy;
+#elif defined(BINDLESS)
     vTexh = atexh[aDraw];
 #endif
 #endif

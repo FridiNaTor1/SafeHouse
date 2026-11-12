@@ -39,6 +39,11 @@ int ActionFromGlyph(char ch)
     return -1;
 }
 
+// (VR, the controllers without real Start / Select buttons: vr_pad_map.h's grip + stick-click combos) pseudo glyphs of
+// the icon font for a combo's parts: the grip (the VR pad layout's Circle / Triangle place) and the stick click. The font has no
+// glyphs at these codes: screenobj.cpp sizes them as Triangle / the sticks.
+constexpr char kChVrGripL = '\x01', kChVrGripR = '\x02', kChVrClickL = '\x03', kChVrClickR = '\x04';
+
 int s_textId = -1;
 char s_chKeyOverride = '\0';
 int s_keyOverride = 0, s_padOverride = -2;
@@ -87,6 +92,11 @@ Button ButtonForGlyph(char ch)
     if (ch == s_chKeyOverride && s_chKeyOverride && s_padOverride != -2) return cane::input::fromGlfwBinding(s_padOverride);
     switch (ch)
     {
+    // (the VR combos' parts, StrPromptButtonWords: the controls themselves, whatever the bindings)
+    case kChVrGripL: return Button::East;    // (the left grip: Circle's place in the VR pad layout)
+    case kChVrGripR: return Button::North;   // (the right grip: Triangle's)
+    case kChVrClickL: return Button::LSPress;
+    case kChVrClickR: return Button::RSPress;
     case '(': return Button::LS;
     case ')': return Button::RS;
     case '+': return Button::Dpad;
@@ -120,7 +130,53 @@ PROMPTKEYGLYPH::~PROMPTKEYGLYPH()
     s_familyOverride = familyPrev;
 }
 
+namespace
+{
+// (VR) the Start / Select icons of an icon run, for controllers without real Start / Select buttons (Meta Quest Touch,
+// Pico, Valve Index: vr_pad_map.h's combos), as the combo's two icons with "+" between (the plus in the text's font:
+// the icon font's '+' is the d-pad); Start on Touch / Pico also as its menu button first ("≡ / grip + click"). Only
+// where Start / Select are bound to the pad's Start / Back (the combos make those); other bindings keep one icon.
+std::string StrVrCombos(const std::string& text)
+{
+    const Family family = PromptFamily();
+    const bool fMenu = family == Family::MetaQuest || family == Family::Pico;
+    if ((!fMenu && family != Family::ValveIndex) || text.find('&') == std::string::npos) return text;
+    const bool fSelect = ButtonForGlyph('_') == Button::Back, fStart = ButtonForGlyph('!') == Button::Start;
+    if (!fSelect && !fStart) return text;
+    std::string out;
+    out.reserve(text.size() + 16);
+    char chRun = 0;   // (inside an icon run: its font code, "&2" -> '2')
+    for (size_t i = 0; i < text.size(); ++i)
+    {
+        const char ch = text[i];
+        if (ch == '&' && i + 1 < text.size())
+        {
+            if (text[i + 1] != '&') chRun = text[i + 1] == '.' ? 0 : text[i + 1];
+            out.append(text, i, 2);
+            ++i;
+            continue;
+        }
+        const std::string strRun = chRun ? std::string("&") + chRun : std::string();
+        if (chRun && ch == '_' && fSelect)
+            out += std::string(1, kChVrGripL) + "&.+" + strRun + kChVrClickL;
+        else if (chRun && ch == '!' && fStart)
+            out += (fMenu ? std::string("!&. / ") + strRun : std::string()) + kChVrGripR + "&.+" + strRun + kChVrClickR;
+        else out += ch;
+    }
+    return out;
+}
+std::string StrPromptButtonWordsBase(const std::string& text, int textId);
+}  // namespace
+
 std::string StrPromptButtonWords(const std::string& text, int textId)
+{
+    if (g_pcinput.fAlwaysOriginalPs || FTouchPadActive()) return text;
+    return StrVrCombos(StrPromptButtonWordsBase(text, textId));
+}
+
+namespace
+{
+std::string StrPromptButtonWordsBase(const std::string& text, int textId)
 {
     if (g_pcinput.fAlwaysOriginalPs) return text;
     // (the on-screen pad: its buttons carry these words themselves, so the text keeps them)
@@ -174,6 +230,7 @@ std::string StrPromptButtonWords(const std::string& text, int textId)
     }
     return out;
 }
+}  // namespace
 
 Family PromptFamily()
 {

@@ -10,19 +10,25 @@
 
 #if defined(__SWITCH__)
 // (no OpenXR, no dlopen on the Switch: VR stays off, the hooks do nothing)
+#include <cstdio>
 namespace vr
 {
 VROPTS g_vropts;
 void Request(bool) {}
 bool FRequested() { return false; }
 bool FRuntimeAvailable() { return false; }
+int Check() { std::printf("vr-check: no-loader\n"); return 3; }
 bool FStart() { return false; }
 bool FActive() { return false; }
 bool FMenuShown() { return false; }
 void Shutdown() {}
 bool FExitRequested() { return false; }
+bool FUnfocused() { return false; }
+bool FPauseForFocus() { return false; }
+void TakePauseForFocus() {}
 void BeginFrame() {}
 bool FImmersiveFrame() { return false; }
+bool FImmersiveView() { return false; }
 bool FEyeViews(const CAMERA&, STEREOVIEW*) { return false; }
 void FinishEyes() {}
 bool FPresent() { return false; }
@@ -34,7 +40,15 @@ void ApplyRefreshRate() {}
 void Recenter() {}
 bool FAutoCameraRotation(bool fFlatOption) { return fFlatOption; }
 void SetGameView(int) {}
+void SetMoment(const VRMOMENT&) {}
+bool FTakeEyeFill(const glm::vec4&) { return false; }
+void DrawEyeFills(const STEREOVIEW&) {}
+bool FCutsceneView() { return false; }
+bool FDanceLayout() { return false; }
+bool FTitleMoment() { return false; }
 bool FHeadLook(float* a, float* b) { *a = *b = 0.0f; return false; }
+void SetBinocZoom(float) {}
+bool FBinocCanvas(glm::vec2*) { return false; }
 bool FRcTableActive() { return false; }
 bool FCompositorUpscaling() { return false; }
 bool FRcAimPoint(glm::vec3*) { return false; }
@@ -45,8 +59,10 @@ void NoteThread(VRTHREAD) {}
 #else
 
 #include "controller_family.h"
+#include "vr_pad_map.h"
 #include "display.h"
 #include "gl.h"
+#include "gl_backend.h"
 #include "fsr.h"
 #include "render.h"
 
@@ -114,6 +130,8 @@ typedef void (*__eglMustCastToProperFunctionPointerType)(void);
 #include <openxr/openxr.h>
 #include <openxr/openxr_platform.h>
 
+extern int g_frameJoy;   // joy.cpp (the input step's frame: SLY2N_VR_TESTPAD)
+
 namespace vr
 {
 VROPTS g_vropts;
@@ -156,7 +174,7 @@ PFN_xrGetInstanceProcAddr s_pfnGetProc = nullptr;
     XRFN(xrLocateSpace) XRFN(xrStringToPath) XRFN(xrPathToString) XRFN(xrCreateActionSet) XRFN(xrCreateAction)      \
     XRFN(xrSuggestInteractionProfileBindings) XRFN(xrAttachSessionActionSets) XRFN(xrSyncActions)                   \
     XRFN(xrGetActionStateBoolean) XRFN(xrGetActionStateFloat) XRFN(xrGetActionStateVector2f)                        \
-    XRFN(xrApplyHapticFeedback) XRFN(xrGetCurrentInteractionProfile) XRFN(xrResultToString)                         \
+    XRFN(xrApplyHapticFeedback) XRFN(xrStopHapticFeedback) XRFN(xrGetCurrentInteractionProfile) XRFN(xrResultToString)                         \
     XRFN(xrCreateActionSpace) XRFN(xrEnumerateViewConfigurations)
 XRFN_LIST
 #undef XRFN
@@ -246,9 +264,11 @@ XrInstance s_inst = XR_NULL_HANDLE;
 XrSystemId s_sys = XR_NULL_SYSTEM_ID;
 XrSession s_session = XR_NULL_HANDLE;
 XrSessionState s_state = XR_SESSION_STATE_UNKNOWN;
+bool s_fPauseForFocus = false;   // (FPauseForFocus)
 bool s_fRunning = false;          // between xrBeginSession and xrEndSession
 XrSpace s_spaceLocal = XR_NULL_HANDLE, s_spaceView = XR_NULL_HANDLE;
 std::vector<std::string> s_aext;  // the runtime's extensions
+bool s_fExtFrame = false;   // XR_VALVE_frame_controller_interaction (the Steam Frame's controllers)
 bool s_fExtRefresh = false, s_fExtFoveation = false, s_fExtPerf = false, s_fExtEglMndx = false, s_fExtThreads = false;
 // (Vulkan: the eyes drawn straight into the OpenXR images, with their clip space's Y flipped (the images are read top
 // row first); the images made with the tile MSAA flag or the input-attachment use (XR_META_vulkan_swapchain_create_info).
@@ -301,6 +321,28 @@ SWAPCHAIN s_aeye[2], s_panel;
 std::vector<XrViewConfigurationView> s_aviewcfg;
 GLuint s_arboDepth[2] = {}, s_afboMsaa[2] = {}, s_arboColorMsaa[2] = {};   // the eyes' depth; desktop MSAA targets
 GLuint s_atexEyeVk[2] = {};   // (Vulkan: the eyes' colour targets, drawn flipped into the images; multiview: [0] a two-layer array)
+// An eye target (RGBA8, one level, nearest; layers 0: a 2D texture, else a 2D array): natively (draw_packet.h's
+// createTexture), else glTexStorage2D / 3D with the GL binding left at 0 as the GL calls leave it
+GLuint TexEyeVk(int dx, int dy, int layers)
+{
+    if (const cane::draw::Packets* pk = PpacketsTex())
+    {
+        cane::draw::TextureDesc d;
+        d.width = uint32_t(dx), d.height = uint32_t(dy), d.layers = uint32_t(layers);
+        d.minFilter = d.magFilter = cane::draw::kFilterNearest;
+        return pk->createTexture(d);
+    }
+    const GLenum target = layers ? GL_TEXTURE_2D_ARRAY : GL_TEXTURE_2D;
+    GLuint tex = 0;
+    glGenTextures(1, &tex);
+    glBindTexture(target, tex);
+    if (layers) glTexStorage3D(target, 1, GL_RGBA8, dx, dy, layers);
+    else glTexStorage2D(target, 1, GL_RGBA8, dx, dy);
+    glTexParameteri(target, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(target, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glBindTexture(target, 0);
+    return tex;
+}
 int64_t s_formatColor = 0;
 bool s_fSrgb = false;
 
@@ -352,6 +394,19 @@ bool FFsrEyes()
     return fsr::FAvailable();
 }
 GLuint s_fboFsrSrc = 0, s_texFsrSrc = 0, s_afboFsrDst[2] = {};
+// (Vulkan) the FSR destinations' framebuffers per image layer (image << 8 | layer), attached once: the images are the
+// swapchains' few, so no attachment changes per frame (DestroySwapchain forgets a swapchain's)
+std::map<uint64_t, GLuint> s_mpfboFsrDst;
+// (draw packets, platform/draw_packet.h: the Vulkan renderer) vr.cpp's own draws, copies and binds on the Vulkan VR path
+// as the backend's packets; null: the GL calls (OpenGL, GLES, SLY2N_VKNATIVE=0). After each the GL-style state is what the
+// GL calls beside it leave (the depth write / compare and the stencil function / operations, which they never set, kept).
+const cane::draw::Packets* PpacketsVr()
+{
+    if (!s_fVk) return nullptr;
+    const cane::draw::Packets* pk = cane::gl::ActiveBackend() ? cane::gl::ActiveBackend()->packets : nullptr;
+    return pk && pk->beginPass && pk->scissor && pk->drawArrays && pk->bindTexture && pk->setConstant && pk->bindTarget && pk->copy &&
+           pk->mapStream && pk->bindStorage ? pk : nullptr;
+}
 int s_dxFsrSrc = 0, s_dyFsrSrc = 0;
 // The eye's picture (the bottom-left dx x dy of the image, or of its layer) upscaled into the whole image: copied out to a
 // texture, then FSR 1 back into the image (the rows as they are: no flip)
@@ -359,27 +414,58 @@ void UpscaleEyeInImage(GLuint texImage, int layer, int dxImage, int dyImage, int
 {
     if (!s_fboFsrSrc || s_dxFsrSrc != dx || s_dyFsrSrc != dy)
     {
-        if (!s_fboFsrSrc) glGenFramebuffers(1, &s_fboFsrSrc);
-        if (s_texFsrSrc) glDeleteTextures(1, &s_texFsrSrc);
-        glGenTextures(1, &s_texFsrSrc);
-        glBindTexture(GL_TEXTURE_2D, s_texFsrSrc);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, dx, dy, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-        glBindTexture(GL_TEXTURE_2D, 0);
+        const cane::draw::Packets* const pkf = PpacketsFbo();
+        if (!s_fboFsrSrc && !pkf) glGenFramebuffers(1, &s_fboFsrSrc);
+        GlDeleteTexture(s_texFsrSrc);
+        s_texFsrSrc = GlNewTexture(dx, dy, GL_NEAREST, false);
+        if (!PpacketsTex()) glBindTexture(GL_TEXTURE_2D, 0);
+        if (pkf)
+        {
+            // (native: attached without a binding; the copy below names its framebuffers)
+            cane::draw::Attachment c;
+            c.object = s_texFsrSrc;
+            if (s_fboFsrSrc) pkf->attach(s_fboFsrSrc, cane::draw::kClearColor, c);
+            else s_fboFsrSrc = pkf->createFramebuffer(c, cane::draw::Attachment{});
+        }
+        else
+        {
         glBindFramebuffer(GL_FRAMEBUFFER, s_fboFsrSrc);
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, s_texFsrSrc, 0);
+        }
         s_dxFsrSrc = dx, s_dyFsrSrc = dy;
     }
-    GLuint& fboDst = s_afboFsrDst[layer];
-    if (!fboDst) glGenFramebuffers(1, &fboDst);
-    glBindFramebuffer(GL_FRAMEBUFFER, fboDst);
-    if (layer > 0 || s_fMultiview) glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, texImage, 0, layer);
-    else glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texImage, 0);
-    glDisable(GL_SCISSOR_TEST);
-    glBindFramebuffer(GL_READ_FRAMEBUFFER, fboDst);
-    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, s_fboFsrSrc);
-    glBlitFramebuffer(0, 0, dx, dy, 0, 0, dx, dy, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    const bool fCached = PpacketsVr() != nullptr;
+    GLuint& fboDst = fCached ? s_mpfboFsrDst[uint64_t(texImage) << 8 | uint64_t(layer)] : s_afboFsrDst[layer];
+    if (fCached && !fboDst && PpacketsFbo())
+    {
+        // (native: the image layer's framebuffer made once, nothing bound)
+        cane::draw::Attachment c;
+        c.object = texImage, c.layer = uint16_t(layer);
+        fboDst = PpacketsFbo()->createFramebuffer(c, cane::draw::Attachment{});
+    }
+    if (!fCached || !fboDst)
+    {
+        if (!fboDst) glGenFramebuffers(1, &fboDst);
+        glBindFramebuffer(GL_FRAMEBUFFER, fboDst);
+        if (layer > 0 || s_fMultiview) glFramebufferTextureLayer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, texImage, 0, layer);
+        else glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texImage, 0);
+    }
+    s_afboFsrDst[layer] = fboDst;   // (the test shots read the last one)
+    // (draw packets: the scissor off and the copy; FUpscale binds its own target first, so the draw framebuffer bound
+    // after it stands for both bindings the GL calls leave)
+    if (const cane::draw::Packets* pk = PpacketsVr())
+    {
+        const int32_t rect[4] = {0, 0, dx, dy};
+        pk->scissor(nullptr);
+        pk->copy(fboDst, s_fboFsrSrc, rect, 0, 0, s_fboFsrSrc);
+    }
+    else
+    {
+        glDisable(GL_SCISSOR_TEST);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, fboDst);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, s_fboFsrSrc);
+        glBlitFramebuffer(0, 0, dx, dy, 0, 0, dx, dy, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    }
     fsr::SOURCE src;
     src.tex = s_texFsrSrc;
     src.dx = dx, src.dy = dy;
@@ -447,14 +533,50 @@ int s_view = VRVIEW_Normal, s_viewPrev = VRVIEW_Normal;
 float s_yawHead = 0.0f, s_pitchHead = 0.0f;           // the head now, relative to the anchor (BeginFrame)
 float s_yawConsumed = 0.0f, s_pitchConsumed = 0.0f;   // Binoc: the head's turn already given to the game (FHeadLook)
 glm::vec3 s_posHeadBinoc{0.0f};                        // Binoc: the head's place when it opened
+float s_kBinocZoom = 1.0f;                             // Binoc: the zoom (SetBinocZoom: tan(fov / 2) now / unzoomed)
+// Binoc (Immersive): the binocucom's frame over the whole view (UpdateBinocLayout): the panel fixed to the head 1 m
+// ahead, w x h metres, the game picture dx x dy for it, the 4:3 canvas's scale in it
+struct BINOCLAYOUT { bool f = false; float w = 0, h = 0; int dx = 0, dy = 0; glm::vec2 uiScale{1.0f}; };
+BINOCLAYOUT s_binoc;
+// (the canvas as the panel showed it before (2.2 m wide, 16:9 at 1 m: the 4:3 canvas 1.65 x 1.2375 m), its pixels as
+// a 1080p picture's (1440 across the canvas); the panel past the eyes' fields by 8 %, at most 2048 pixels a side)
+constexpr float kBinocCanvasW = 1.65f, kBinocCanvasH = 1.2375f, kBinocPxPerM = 1440.0f / 1.65f, kBinocMargin = 1.08f;
+constexpr int kBinocPxMax = 2048;
 glm::vec3 s_posRc{0.0f};                               // RcTable: the fixed view's place and heading
 float s_yawRc = 0.0f;
 float s_zRcArena = 0.0f;
 glm::vec3 s_posAim{0.0f};                              // RcTable: where the head looks on the arena
 bool s_fAim = false;
 glm::mat4 s_amatEye[2]{glm::mat4(1.0f), glm::mat4(1.0f)};   // this frame's eyes (the aim mark)
+VRMOMENT s_moment;                                     // (SetMoment) this frame's cutscene / pause
+glm::vec4 s_fillNext{0.0f}, s_fillEyes{0.0f};          // the full-screen fills taken from the HUD (premultiplied), for the next frame's eyes
+glm::mat4 s_matLocalToWorld{1.0f};                     // this frame's eyes: the local space (metres) into the game's world
+// the HUD panel as the last frame placed it (local space: its centre, turn, size): the pause menu's window
+struct PANELPLACE { bool f = false; glm::vec3 pos{0.0f}; glm::quat q{1, 0, 0, 0}; float w = 0, h = 0; };
+PANELPLACE s_panelLast;
+float s_pitchPanel = 0.0f;                             // (the cutscenes: the panel follows the head's pitch too)
+// (the binocucom talks) where the head was and faced when the talk began: the frame stays there (local space)
+glm::vec3 s_posTalk{0.0f};
+float s_yawTalk = 0.0f;
 bool s_fShotPanel = false;      // (SLY2N_VR_SHOT: the HUD panel's picture at Present)
 std::string s_strShotPanel;
+// (test: SLY2N_VR_VIEWSHOT=prefix@f1,f2,...: at those headset frames (every frame counts, immersive or not) eye 0 as
+// prefix_<f>_eye0.png (when drawn), the game picture as prefix_<f>_panel.png and the frame's layout (eye 0's pose and
+// field, the quad layer's space, pose and size) as prefix_<f>_view.json: tools/vrview.py composites what the eye sees)
+int s_cframePresent = 0;
+bool FViewShotFrame(int frame, std::string* pprefix)
+{
+    static const char* const s_sz = std::getenv("SLY2N_VR_VIEWSHOT");
+    const char* const pchAt = s_sz ? std::strchr(s_sz, '@') : nullptr;
+    if (!pchAt) return false;
+    for (const char* p = pchAt; p; p = std::strchr(p + 1, ','))
+        if (std::atoi(p + 1) == frame)
+        {
+            if (pprefix) *pprefix = std::string(s_sz, pchAt) + "_" + std::to_string(frame);
+            return true;
+        }
+    return false;
+}
 
 // ------------------------------------------------------------ math
 glm::quat Quat(const XrQuaternionf& q) { return glm::quat(q.w, q.x, q.y, q.z); }
@@ -541,11 +663,12 @@ GLint s_locVigCenter = -1, s_locVigStrength = -1, s_locVigScale = -1;
 // (multiview: the vignette over both views at once, each view's centre and scale)
 GLuint s_progVignetteMv = 0;
 GLint s_locVigMvCenter = -1, s_locVigMvStrength = -1, s_locVigMvScale = -1;
+GLint s_locVigTint = -1, s_locVigMvTint = -1;   // (the eye fills: vrvignette.frag's tint)
 const char* const s_szFragVignette =
-    "uniform float strength;\nout vec4 FragColor;\n"
+    "uniform float strength;\nuniform vec4 tint;\nout vec4 FragColor;\n"
     "void main() { vec2 d = (vUv * 2.0 - 1.0 - vCenter) * vScale; float r = length(d);\n"
     "  float inner = mix(1.1, 0.35, strength); float a = smoothstep(inner, inner + 0.45, r) * min(strength * 1.5, 1.0);\n"
-    "  FragColor = vec4(0.0, 0.0, 0.0, a); }\n";
+    "  float A = tint.a > 0.0 ? 1.0 - (1.0 - tint.a) * (1.0 - a) : a; FragColor = vec4(A > 0.0 ? tint.rgb / A : vec3(0.0), A); }\n";
 
 void InitGlPrograms()
 {
@@ -569,15 +692,24 @@ void InitGlPrograms()
     s_locVigCenter = glGetUniformLocation(s_progVignette, "center");
     s_locVigStrength = glGetUniformLocation(s_progVignette, "strength");
     s_locVigScale = glGetUniformLocation(s_progVignette, "scale");
-    glGenVertexArrays(1, &s_vaoEmpty);
+    s_locVigTint = glGetUniformLocation(s_progVignette, "tint");
+    s_vaoEmpty = GlNewVertexArray();
     s_progMark = s_shMark.ID;
+    s_vboMark = GlNewBuffer(GL_ARRAY_BUFFER, 0, nullptr, GL_STREAM_DRAW);
+    if (const cane::draw::Packets* pkv = PpacketsVao())
+    {
+        const cane::draw::VertexAttrib a{0, 4, cane::draw::kAttribFloat, 0, 0, s_vboMark, 0, 16, 0};
+        s_vaoMark = pkv->createVertexArray(&a, 1, 0);
+    }
+    else
+    {
     glGenVertexArrays(1, &s_vaoMark);
-    glGenBuffers(1, &s_vboMark);
     glBindVertexArray(s_vaoMark);
     glBindBuffer(GL_ARRAY_BUFFER, s_vboMark);
     glEnableVertexAttribArray(0);
     glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, 16, nullptr);
     glBindVertexArray(0);
+    }
     if (FGles() && s_fMultiviewExt)
     {
         s_progVignetteMv = ProgramFrom(
@@ -589,6 +721,7 @@ void InitGlPrograms()
         s_locVigMvCenter = glGetUniformLocation(s_progVignetteMv, "center");
         s_locVigMvStrength = glGetUniformLocation(s_progVignetteMv, "strength");
         s_locVigMvScale = glGetUniformLocation(s_progVignetteMv, "scale");
+        s_locVigMvTint = glGetUniformLocation(s_progVignetteMv, "tint");
     }
 }
 
@@ -693,7 +826,9 @@ bool FCreateSwapchain(SWAPCHAIN& sc, int dx, int dy, int64_t format, uint32_t sa
                                                VK_IMAGE_USAGE_TRANSFER_DST_BIT | (fInput ? VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT : 0));
         }
         sc.afbo.assign(sc.atex.size(), 0);
-        glGenFramebuffers(GLsizei(sc.afbo.size()), sc.afbo.data());
+        if (const cane::draw::Packets* pkf = PpacketsFbo())
+            for (GLuint& fbo : sc.afbo) fbo = pkf->createFramebuffer(cane::draw::Attachment{}, cane::draw::Attachment{});
+        else glGenFramebuffers(GLsizei(sc.afbo.size()), sc.afbo.data());
         return true;
     }
 #endif
@@ -719,7 +854,15 @@ void DestroySwapchain(SWAPCHAIN& sc)
 {
     WaitVkSubmissions();
     for (GLuint fbo : sc.afbo) s_mpfFboReady.erase(fbo);
-    if (!sc.afbo.empty()) glDeleteFramebuffers(GLsizei(sc.afbo.size()), sc.afbo.data());
+    for (auto it = s_mpfboFsrDst.begin(); it != s_mpfboFsrDst.end();)
+        if (std::find(sc.atex.begin(), sc.atex.end(), GLuint(it->first >> 8)) != sc.atex.end())
+        {
+            for (GLuint& fbo : s_afboFsrDst) if (fbo == it->second) fbo = 0;
+            GlDeleteFramebuffers(1, &it->second);
+            it = s_mpfboFsrDst.erase(it);
+        }
+        else ++it;
+    if (!sc.afbo.empty()) GlDeleteFramebuffers(GLsizei(sc.afbo.size()), sc.afbo.data());
     if (sc.h) pxrDestroySwapchain(sc.h);
     sc = SWAPCHAIN{};
 }
@@ -816,6 +959,23 @@ GLuint FboEyeImage(int ieye)
 {
     SWAPCHAIN& sc = s_aeye[ieye];
     GLuint& fbo = sc.afbo[sc.iimage];
+#if CANE_VULKAN
+    if (const cane::draw::Packets* pkf = s_fVk ? PpacketsFbo() : nullptr; pkf && !s_mpfFboReady[fbo])
+    {
+        // (native framebuffers: the same attachments as the GL-style calls below, no binding)
+        using cane::draw::Attachment;
+        Attachment c, d;
+        c.object = sc.atex[sc.iimage];
+        const int iDepth = s_fMultiview ? 0 : ieye;
+        if (!s_afboMsaa[iDepth]) d.object = s_arboDepth[iDepth], d.renderbuffer = 1;
+        if (s_fMultiview) c.views = 2, d.views = d.object ? 2 : 0;
+        pkf->attach(fbo, cane::draw::kClearColor, c);
+        if (d.object) pkf->attach(fbo, cane::draw::kClearDepth | cane::draw::kClearStencil, d);
+        if (!pkf->framebufferComplete(fbo)) Log("eye %d framebuffer incomplete", ieye);
+        s_mpfFboReady[fbo] = true;
+        return fbo;
+    }
+#endif
     if (!s_mpfFboReady[fbo])
     {
         glBindFramebuffer(GL_FRAMEBUFFER, fbo);
@@ -873,11 +1033,11 @@ void DestroyEyeTargets()
     for (int i = 0; i < 2; ++i)
     {
         DestroySwapchain(s_aeye[i]);
-        if (s_arboDepth[i]) glDeleteRenderbuffers(1, &s_arboDepth[i]), s_arboDepth[i] = 0;
-        if (s_arboColorMsaa[i]) glDeleteRenderbuffers(1, &s_arboColorMsaa[i]), s_arboColorMsaa[i] = 0;
-        if (s_afboMsaa[i]) glDeleteFramebuffers(1, &s_afboMsaa[i]), s_afboMsaa[i] = 0;
-        if (s_atexEyeVk[i]) glDeleteTextures(1, &s_atexEyeVk[i]), s_atexEyeVk[i] = 0;
-        for (GLuint& fbo : s_afboLayerVk[i]) if (fbo) glDeleteFramebuffers(1, &fbo), fbo = 0;
+        if (s_arboDepth[i]) GlDeleteRenderbuffer(s_arboDepth[i]), s_arboDepth[i] = 0;
+        if (s_arboColorMsaa[i]) GlDeleteRenderbuffer(s_arboColorMsaa[i]), s_arboColorMsaa[i] = 0;
+        if (s_afboMsaa[i]) GlDeleteFramebuffers(1, &s_afboMsaa[i]), s_afboMsaa[i] = 0;
+        if (s_atexEyeVk[i]) GlDeleteTexture(s_atexEyeVk[i]), s_atexEyeVk[i] = 0;
+        for (GLuint& fbo : s_afboLayerVk[i]) if (fbo) GlDeleteFramebuffers(1, &fbo), fbo = 0;
     }
     if (s_texDepthMv) glDeleteTextures(1, &s_texDepthMv), s_texDepthMv = 0;
     s_levelFoveationApplied = -1;
@@ -955,6 +1115,24 @@ bool FCreateEyeTargets()
             Log("multiview: no two-layer swapchain (the eyes one by one)");
             s_fMultiview = false;
         }
+        else if (const cane::draw::Packets* pkf = PpacketsFbo())
+        {
+            // (native: the same targets as the GL-style calls below, nothing bound)
+            using namespace cane::draw;
+            RenderbufferDesc rd;
+            rd.width = uint32_t(dx), rd.height = uint32_t(dy), rd.format = kRenderbufferDepth32fStencil8;
+            rd.samples = uint8_t(std::max(s_msaa, 1)), rd.layers = 2, rd.transient = 1;   // (cleared at the start, dropped at the end)
+            s_arboDepth[0] = pkf->createRenderbuffer(rd);
+            if (!s_fVkDirect)
+            {
+                CaneVk::SetNextImageRenderSamples(uint32_t(s_msaa));   // (MSAA resolved on the tile, as the depth's)
+                s_atexEyeVk[0] = TexEyeVk(dx, dy, 2);
+                Attachment c, d;
+                c.object = s_atexEyeVk[0], c.views = 2;
+                d.object = s_arboDepth[0], d.renderbuffer = 1, d.views = 2;
+                s_afboMsaa[0] = pkf->createFramebuffer(c, d);
+            }
+        }
         else
         {
             glGenRenderbuffers(1, &s_arboDepth[0]);
@@ -964,13 +1142,8 @@ bool FCreateEyeTargets()
             CaneVk::SetRenderbufferTransient(s_arboDepth[0], true);   // (cleared at the start, dropped at the end)
             if (!s_fVkDirect)
             {
-                glGenTextures(1, &s_atexEyeVk[0]);
-                glBindTexture(GL_TEXTURE_2D_ARRAY, s_atexEyeVk[0]);
                 CaneVk::SetNextImageRenderSamples(uint32_t(s_msaa));   // (MSAA resolved on the tile, as the depth's)
-                glTexStorage3D(GL_TEXTURE_2D_ARRAY, 1, GL_RGBA8, dx, dy, 2);
-                glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-                glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-                glBindTexture(GL_TEXTURE_2D_ARRAY, 0);
+                s_atexEyeVk[0] = TexEyeVk(dx, dy, 2);
                 glGenFramebuffers(1, &s_afboMsaa[0]);
                 glBindFramebuffer(GL_FRAMEBUFFER, s_afboMsaa[0]);
                 CaneVk::FramebufferMultiview(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, s_atexEyeVk[0], false, 0, 2);
@@ -1010,6 +1183,28 @@ bool FCreateEyeTargets()
         dx = std::min(dx, int(v.maxImageRectWidth));
         dy = std::min(dy, int(v.maxImageRectHeight));
         if (!FCreateSwapchain(s_aeye[i], dx, dy, s_formatColor, 1, 1, true)) return false;
+#if CANE_VULKAN
+        if (const cane::draw::Packets* pkf = s_fVk ? PpacketsFbo() : nullptr)
+        {
+            // (native: the same targets as the GL-style calls below, nothing bound: the depth (not stored), and unless
+            // drawn straight into the image the eye's own texture target, copied in flipped by FinishEyes)
+            using namespace cane::draw;
+            RenderbufferDesc rd;
+            rd.width = uint32_t(dx), rd.height = uint32_t(dy), rd.format = kRenderbufferDepth32fStencil8;
+            rd.samples = uint8_t(std::max(s_msaa, 1)), rd.transient = 1;
+            s_arboDepth[i] = pkf->createRenderbuffer(rd);
+            if (!s_fVkDirect)
+            {
+                CaneVk::SetNextImageRenderSamples(uint32_t(s_msaa));   // (MSAA resolved on the tile, the depth's alike)
+                s_atexEyeVk[i] = TexEyeVk(dx, dy, 0);
+                Attachment c, d;
+                c.object = s_atexEyeVk[i];
+                d.object = s_arboDepth[i], d.renderbuffer = 1;
+                s_afboMsaa[i] = pkf->createFramebuffer(c, d);
+            }
+            continue;
+        }
+#endif
         glGenRenderbuffers(1, &s_arboDepth[i]);
         glBindRenderbuffer(GL_RENDERBUFFER, s_arboDepth[i]);
         // (Vulkan: the eye is drawn into a target of its own and copied flipped into the image, FinishEyes: the
@@ -1039,15 +1234,10 @@ bool FCreateEyeTargets()
             {
                 // (a texture: drawn into the image by vrcopy, through the image's view, flipped; a blit would convert
                 // into the image's sRGB format)
-                glGenTextures(1, &s_atexEyeVk[i]);
-                glBindTexture(GL_TEXTURE_2D, s_atexEyeVk[i]);
 #if CANE_VULKAN
                 CaneVk::SetNextImageRenderSamples(uint32_t(s_msaa));   // (MSAA resolved on the tile, the depth's alike)
 #endif
-                glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA8, dx, dy);
-                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-                glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-                glBindTexture(GL_TEXTURE_2D, 0);
+                s_atexEyeVk[i] = TexEyeVk(dx, dy, 0);
                 glBindFramebuffer(GL_FRAMEBUFFER, s_afboMsaa[i]);
                 glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, s_atexEyeVk[i], 0);
             }
@@ -1067,7 +1257,8 @@ bool FCreateEyeTargets()
         }
         else glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH32F_STENCIL8, dx, dy);
     }
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    if (const cane::draw::Packets* pkf = s_fVk ? PpacketsFbo() : nullptr) pkf->bindTarget(0);   // (as the GL calls leave it)
+    else glBindFramebuffer(GL_FRAMEBUFFER, 0);
     Log("eyes %dx%d, %s, MSAA %dx%s%s, %s", s_aeye[0].dx, s_aeye[0].dy, s_fSrgb ? "sRGB" : "RGBA8", s_msaa,
         (FGles() && s_fGlesMsrtt || s_fVk) && s_msaa > 1 ? " (resolved on the tile)" : "", s_fMultiview ? ", multiview (both eyes in one pass)" : "",
         s_fVk ? (s_fVkDirect ? "Vulkan, straight into the images" : "Vulkan") : kGles ? "OpenGL ES" : "OpenGL");
@@ -1156,6 +1347,8 @@ enum ACT : int
     ACT_ClickL, ACT_ClickR,                    // the sticks' clicks
     ACT_Menu,                                  // Touch's left menu button: Start as well
     ACT_Start, ACT_Select,                     // controllers with real Start / Select buttons
+    ACT_BumperL, ACT_BumperR,                  // the Steam Frame's bumpers (L1 / R1; vr_pad_map.h Gamepad layout)
+    ACT_DpadUp, ACT_DpadDown, ACT_DpadLeft, ACT_DpadRight,   // its left hand's d-pad
     ACT_HapticL, ACT_HapticR,
     ACT_Max
 };
@@ -1166,7 +1359,8 @@ GLFWgamepadstate s_pad{};
 bool s_fPad = false;           // the controllers are in use (an interaction profile bound)
 bool s_fPadNoted = false;      // (the prompts told once that VR controllers are here)
 bool s_fRealStartSelect = false;
-bool s_afCombo[2] = {};
+cane::vrpad::Layout s_layoutPad = cane::vrpad::Layout::Touch;   // (UpdateProfile: one face button a hand -> Pads)
+cane::vrpad::State s_padmap;
 cane::input::Family s_familyPrompt = cane::input::Family::MetaQuest;        // grip + stick click held as Start (right) / Select (left)
 
 XrPath Path(const char* sz)
@@ -1192,6 +1386,9 @@ bool FCreateActions()
         {"l3", "L3", XR_ACTION_TYPE_BOOLEAN_INPUT}, {"r3", "R3", XR_ACTION_TYPE_BOOLEAN_INPUT},
         {"menu", "Menu", XR_ACTION_TYPE_BOOLEAN_INPUT},
         {"start", "Start", XR_ACTION_TYPE_BOOLEAN_INPUT}, {"select", "Select", XR_ACTION_TYPE_BOOLEAN_INPUT},
+        {"bumper_left", "L1 (bumper)", XR_ACTION_TYPE_BOOLEAN_INPUT}, {"bumper_right", "R1 (bumper)", XR_ACTION_TYPE_BOOLEAN_INPUT},
+        {"dpad_up", "D-pad up", XR_ACTION_TYPE_BOOLEAN_INPUT}, {"dpad_down", "D-pad down", XR_ACTION_TYPE_BOOLEAN_INPUT},
+        {"dpad_left", "D-pad left", XR_ACTION_TYPE_BOOLEAN_INPUT}, {"dpad_right", "D-pad right", XR_ACTION_TYPE_BOOLEAN_INPUT},
         {"rumble_left", "Rumble (left)", XR_ACTION_TYPE_VIBRATION_OUTPUT}, {"rumble_right", "Rumble (right)", XR_ACTION_TYPE_VIBRATION_OUTPUT},
     };
     for (int i = 0; i < ACT_Max; ++i)
@@ -1225,7 +1422,7 @@ bool FCreateActions()
         {ACT_ClickL, "/user/hand/left/input/thumbstick/click"}, {ACT_ClickR, "/user/hand/right/input/thumbstick/click"},
         {ACT_Menu, "/user/hand/left/input/menu/click"},
         {ACT_HapticL, "/user/hand/left/output/haptic"}, {ACT_HapticR, "/user/hand/right/output/haptic"}});
-    // Valve Index: A / B on each hand (left A / B: Square / Triangle)
+    // Valve Index: A / B on each hand (right A / B: Cross / Square, left A / B: L2 / R2, as the Touch layout)
     suggest("/interaction_profiles/valve/index_controller", {
         {ACT_A, "/user/hand/right/input/a/click"}, {ACT_B, "/user/hand/right/input/b/click"},
         {ACT_X, "/user/hand/left/input/a/click"}, {ACT_Y, "/user/hand/left/input/b/click"},
@@ -1235,7 +1432,7 @@ bool FCreateActions()
         {ACT_ClickL, "/user/hand/left/input/thumbstick/click"}, {ACT_ClickR, "/user/hand/right/input/thumbstick/click"},
         {ACT_HapticL, "/user/hand/left/output/haptic"}, {ACT_HapticR, "/user/hand/right/output/haptic"}});
     // Windows Mixed Reality: the menu buttons are real Start / Select equivalents; the touchpad clicks as the face
-    // buttons' Cross / Square
+    // buttons' Cross / Square (vr_pad_map.h Pads layout)
     suggest("/interaction_profiles/microsoft/motion_controller", {
         {ACT_A, "/user/hand/right/input/trackpad/click"}, {ACT_X, "/user/hand/left/input/trackpad/click"},
         {ACT_GripL, "/user/hand/left/input/squeeze/click"}, {ACT_GripR, "/user/hand/right/input/squeeze/click"},
@@ -1252,6 +1449,21 @@ bool FCreateActions()
         {ACT_StickL, "/user/hand/left/input/trackpad"}, {ACT_StickR, "/user/hand/right/input/trackpad"},
         {ACT_Select, "/user/hand/left/input/menu/click"}, {ACT_Start, "/user/hand/right/input/menu/click"},
         {ACT_HapticL, "/user/hand/left/output/haptic"}, {ACT_HapticR, "/user/hand/right/output/haptic"}});
+    // the Steam Frame's controllers (XR_VALVE_frame_controller_interaction, vr_pad_map.h Gamepad layout): a standard pad
+    // split in two hands, A / B / X / Y on the right, the d-pad on the left, bumpers, analog triggers, View / Menu
+    if (s_fExtFrame)
+        for (const char* szProfile : {cane::vrpad::kFrameProfile, cane::vrpad::kFrameProfileOld})
+            suggest(szProfile, {
+                {ACT_A, "/user/hand/right/input/a/click"}, {ACT_B, "/user/hand/right/input/b/click"},
+                {ACT_X, "/user/hand/right/input/x/click"}, {ACT_Y, "/user/hand/right/input/y/click"},
+                {ACT_BumperL, "/user/hand/left/input/bumper/click"}, {ACT_BumperR, "/user/hand/right/input/bumper/click"},
+                {ACT_TrigL, "/user/hand/left/input/trigger/value"}, {ACT_TrigR, "/user/hand/right/input/trigger/value"},
+                {ACT_StickL, "/user/hand/left/input/thumbstick"}, {ACT_StickR, "/user/hand/right/input/thumbstick"},
+                {ACT_ClickL, "/user/hand/left/input/thumbstick/click"}, {ACT_ClickR, "/user/hand/right/input/thumbstick/click"},
+                {ACT_DpadUp, "/user/hand/left/input/dpad_up/click"}, {ACT_DpadDown, "/user/hand/left/input/dpad_down/click"},
+                {ACT_DpadLeft, "/user/hand/left/input/dpad_left/click"}, {ACT_DpadRight, "/user/hand/left/input/dpad_right/click"},
+                {ACT_Select, "/user/hand/left/input/view/click"}, {ACT_Start, "/user/hand/right/input/menu/click"},
+                {ACT_HapticL, "/user/hand/left/output/haptic"}, {ACT_HapticR, "/user/hand/right/output/haptic"}});
     // the generic profile every runtime knows: confirm and Start
     suggest("/interaction_profiles/khr/simple_controller", {
         {ACT_A, "/user/hand/right/input/select/click"}, {ACT_X, "/user/hand/left/input/select/click"},
@@ -1277,13 +1489,16 @@ void UpdateProfile()
     if (str != s_strProfile) Log("controllers: %s", str.empty() ? "none" : str.c_str());
     s_strProfile = str;
     s_fPad = !str.empty();
-    // (the controllers with real Start / Select buttons use them; the others keep grip + stick click)
-    auto has = [&](const char* sz) { return str.find(sz) != std::string::npos; };
-    s_fRealStartSelect = has("microsoft/motion_controller") || has("htc/vive_controller") || has("frame");
-    // the prompts' family (controllers' controller_family.h VR families)
+    // (platform/vr_pad_map.h: the controllers' layout; those with real Start / Select buttons use them, the others keep
+    // grip + stick click)
+    const cane::vrpad::Controllers ctl = cane::vrpad::controllersOf(str.c_str());
+    s_fRealStartSelect = cane::vrpad::realStartSelectOf(ctl);
+    s_layoutPad = cane::vrpad::layoutOf(ctl);
+    // the prompts' family (controllers' controller_family.h VR families; the Steam Frame's: its gamepad layout)
     using cane::input::Family;
-    s_familyPrompt = has("valve/index") ? Family::ValveIndex : has("htc/vive") ? Family::ViveWand
-                   : has("frame") ? Family::SteamFrame : has("pico") || has("bytedance") ? Family::Pico : Family::MetaQuest;
+    using C = cane::vrpad::Controllers;
+    s_familyPrompt = ctl == C::Index ? Family::ValveIndex : ctl == C::Vive ? Family::ViveWand
+                   : ctl == C::Frame ? Family::SteamFrame : ctl == C::Pico ? Family::Pico : Family::MetaQuest;
 }
 
 bool BoolOf(int act)
@@ -1308,9 +1523,9 @@ glm::vec2 Vec2Of(int act)
     return XR_SUCCEEDED(pxrGetActionStateVector2f(s_session, &gi, &st)) && st.isActive ? glm::vec2(st.currentState.x, st.currentState.y) : glm::vec2(0.0f);
 }
 
-// the controllers into the pad (GLFW's layout, the game's PS2 names: A Cross, B Circle, X Square, Y Triangle, the
-// grips L1 / R1, the triggers L2 / R2, the sticks' clicks L3 / R3; Start = right grip + right stick click (and
-// Touch's menu button), Select = left grip + left stick click, except on controllers with real Start / Select)
+// the controllers into the pad (platform/vr_pad_map.h; Touch: A Cross, B Square, the grips Circle / Triangle, X / Y
+// L2 / R2, the triggers L1 / R1, the sticks' clicks L3 / R3; Start = Touch's menu button or right grip + right stick
+// click, Select = left grip + left stick click, except on controllers with real Start / Select)
 void SyncActions()
 {
     if (!s_actionset || !s_fRunning) return;
@@ -1319,39 +1534,54 @@ void SyncActions()
     si.countActiveActionSets = 1;
     si.activeActionSets = &aas;
     if (XR_FAILED(pxrSyncActions(s_session, &si))) return;
-    GLFWgamepadstate p{};
-    const float gGripL = FloatOf(ACT_GripL), gGripR = FloatOf(ACT_GripR);
-    bool fClickL = BoolOf(ACT_ClickL), fClickR = BoolOf(ACT_ClickR);
-    bool fGripL = gGripL > 0.5f, fGripR = gGripR > 0.5f;
-    bool fStart = BoolOf(ACT_Start) || BoolOf(ACT_Menu), fSelect = BoolOf(ACT_Select);
-    if (!s_fRealStartSelect)
-    {
-        // the combo holds from the click's press with the grip down until the click is released; meanwhile neither
-        // the grip nor the click goes to the game
-        if (!fClickR) s_afCombo[1] = false;
-        else if (fGripR && !s_afCombo[1] && !(s_pad.buttons[GLFW_GAMEPAD_BUTTON_RIGHT_THUMB])) s_afCombo[1] = true;
-        if (!fClickL) s_afCombo[0] = false;
-        else if (fGripL && !s_afCombo[0] && !(s_pad.buttons[GLFW_GAMEPAD_BUTTON_LEFT_THUMB])) s_afCombo[0] = true;
-        if (s_afCombo[1]) fStart = true, fClickR = false, fGripR = false;
-        if (s_afCombo[0]) fSelect = true, fClickL = false, fGripL = false;
-    }
-    p.buttons[GLFW_GAMEPAD_BUTTON_A] = BoolOf(ACT_A);
-    p.buttons[GLFW_GAMEPAD_BUTTON_B] = BoolOf(ACT_B);
-    p.buttons[GLFW_GAMEPAD_BUTTON_X] = BoolOf(ACT_X);
-    p.buttons[GLFW_GAMEPAD_BUTTON_Y] = BoolOf(ACT_Y);
-    p.buttons[GLFW_GAMEPAD_BUTTON_LEFT_BUMPER] = fGripL;
-    p.buttons[GLFW_GAMEPAD_BUTTON_RIGHT_BUMPER] = fGripR;
-    p.buttons[GLFW_GAMEPAD_BUTTON_BACK] = fSelect;
-    p.buttons[GLFW_GAMEPAD_BUTTON_START] = fStart;
-    p.buttons[GLFW_GAMEPAD_BUTTON_LEFT_THUMB] = fClickL;
-    p.buttons[GLFW_GAMEPAD_BUTTON_RIGHT_THUMB] = fClickR;
+    // (platform/vr_pad_map.h: the layout, the triggers' and grips' thresholds, the grip + stick-click combos)
+    cane::vrpad::Raw raw;
+    raw.a = BoolOf(ACT_A), raw.b = BoolOf(ACT_B), raw.x = BoolOf(ACT_X), raw.y = BoolOf(ACT_Y);
+    raw.gripL = FloatOf(ACT_GripL), raw.gripR = FloatOf(ACT_GripR);
+    raw.trigL = FloatOf(ACT_TrigL), raw.trigR = FloatOf(ACT_TrigR);
     const glm::vec2 l = Vec2Of(ACT_StickL), r = Vec2Of(ACT_StickR);
-    p.axes[GLFW_GAMEPAD_AXIS_LEFT_X] = l.x;
-    p.axes[GLFW_GAMEPAD_AXIS_LEFT_Y] = -l.y;   // (GLFW: down is positive)
-    p.axes[GLFW_GAMEPAD_AXIS_RIGHT_X] = r.x;
-    p.axes[GLFW_GAMEPAD_AXIS_RIGHT_Y] = -r.y;
-    p.axes[GLFW_GAMEPAD_AXIS_LEFT_TRIGGER] = FloatOf(ACT_TrigL) * 2.0f - 1.0f;
-    p.axes[GLFW_GAMEPAD_AXIS_RIGHT_TRIGGER] = FloatOf(ACT_TrigR) * 2.0f - 1.0f;
+    raw.lx = l.x, raw.ly = l.y, raw.rx = r.x, raw.ry = r.y;
+    raw.clickL = BoolOf(ACT_ClickL), raw.clickR = BoolOf(ACT_ClickR);
+    raw.menu = BoolOf(ACT_Menu), raw.start = BoolOf(ACT_Start), raw.select = BoolOf(ACT_Select);
+    if (s_layoutPad == cane::vrpad::Layout::Gamepad)
+    {
+        raw.bumperL = BoolOf(ACT_BumperL), raw.bumperR = BoolOf(ACT_BumperR);
+        raw.dpadUp = BoolOf(ACT_DpadUp), raw.dpadDown = BoolOf(ACT_DpadDown);
+        raw.dpadLeft = BoolOf(ACT_DpadLeft), raw.dpadRight = BoolOf(ACT_DpadRight);
+    }
+    const double t = std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    const cane::vrpad::Pad m = cane::vrpad::map(raw, s_layoutPad, s_fRealStartSelect, t, s_padmap);
+    GLFWgamepadstate p{};
+    for (int b = 0; b < cane::vrpad::kButtonCount && b <= GLFW_GAMEPAD_BUTTON_LAST; ++b) p.buttons[b] = m.buttons[b] ? GLFW_PRESS : GLFW_RELEASE;
+    for (int a = 0; a < cane::vrpad::kAxisCount && a <= GLFW_GAMEPAD_AXIS_LAST; ++a) p.axes[a] = m.axes[a];
+    // (the Ep2 dance: Touch's X / Y are Circle / Triangle, not L2 / R2: FDanceLayout)
+    if (FDanceLayout())
+    {
+        p.buttons[GLFW_GAMEPAD_BUTTON_B] |= raw.x ? GLFW_PRESS : GLFW_RELEASE;
+        p.buttons[GLFW_GAMEPAD_BUTTON_Y] |= raw.y ? GLFW_PRESS : GLFW_RELEASE;
+        p.axes[GLFW_GAMEPAD_AXIS_LEFT_TRIGGER] = p.axes[GLFW_GAMEPAD_AXIS_RIGHT_TRIGGER] = -1.0f;
+    }
+    // (tests) SLY2N_VR_TESTPAD=button@frame[+count],...: a GLFW gamepad button (or aN=value@frame[+count]: an axis) held on the controllers from the input
+    // step's frame (joy.cpp g_frameJoy) for count frames (default 4), as if pressed (Monado's simulated controllers have
+    // no buttons; the Quest without a hand in it)
+    if (const char* psz = std::getenv("SLY2N_VR_TESTPAD"))
+    {
+        for (const char* pch = psz; *pch;)
+        {
+            int b = -1, frame = 0, count = 4;
+            float g = 0.0f;
+            if (std::sscanf(pch, "%d@%d+%d", &b, &frame, &count) >= 2 && b >= 0 && b <= GLFW_GAMEPAD_BUTTON_LAST &&
+                ::g_frameJoy >= frame && ::g_frameJoy < frame + count)
+                p.buttons[b] = GLFW_PRESS;
+            // ("aN=value@frame[+count]": axis N (GLFW's: 3 the right stick's y, down positive) at that value)
+            else if (std::sscanf(pch, "a%d=%f@%d+%d", &b, &g, &frame, &count) >= 3 && b >= 0 && b <= GLFW_GAMEPAD_AXIS_LAST &&
+                     ::g_frameJoy >= frame && ::g_frameJoy < frame + count)
+                p.axes[b] = g;
+            const char* pchNext = std::strchr(pch, ',');
+            if (!pchNext) break;
+            pch = pchNext + 1;
+        }
+    }
     // a newly pressed button or a stick / trigger past half: the prompts show these controllers' icons
     bool fActive = false;
     for (int b = 0; b <= GLFW_GAMEPAD_BUTTON_LAST; ++b) fActive |= p.buttons[b] && !s_pad.buttons[b];
@@ -1433,6 +1663,9 @@ void PollEvents()
         case XR_TYPE_EVENT_DATA_SESSION_STATE_CHANGED:
         {
             const auto& e = *reinterpret_cast<XrEventDataSessionStateChanged*>(&ev);
+            // (the focus lost while running: the game pauses itself, FPauseForFocus; back before it could: no pause)
+            if (s_state == XR_SESSION_STATE_FOCUSED && e.state != XR_SESSION_STATE_FOCUSED) s_fPauseForFocus = true;
+            if (e.state == XR_SESSION_STATE_FOCUSED) s_fPauseForFocus = false;
             s_state = e.state;
             Log("session state %d", int(s_state));
             if (s_state == XR_SESSION_STATE_READY) BeginSessionNow();
@@ -1621,6 +1854,78 @@ bool FRuntimeAvailable()
     s_iAvailable = 1;
     return true;
 }
+// --vr-check (the launcher's "Play in VR" button, launcher/vr_probe.h): an OpenXR runtime with a headset, without
+// graphics or a session: the loader, an instance with no extensions, the head-mounted system, its name. One line on
+// stdout ("vr-check: ready|<runtime>|<headset>", "no-loader", "no-runtime", "no-headset|<runtime>", "no-graphics|
+// <runtime>"); the exit code 0 ready, 2 no headset, 3 no loader / runtime, 4 the runtime failed, 5 no graphics binding
+// this game can use.
+int Check()
+{
+    if (!FOpenLoader()) { std::printf("vr-check: no-loader\n"); return 3; }
+    PFN_xrEnumerateInstanceExtensionProperties pfnEnum = nullptr;
+    PFN_xrCreateInstance pfnCreate = nullptr;
+    GetProc(XR_NULL_HANDLE, "xrEnumerateInstanceExtensionProperties", pfnEnum);
+    GetProc(XR_NULL_HANDLE, "xrCreateInstance", pfnCreate);
+    uint32_t c = 0;
+    if (!pfnEnum || !pfnCreate || XR_FAILED(pfnEnum(nullptr, 0, &c, nullptr)) || c == 0) { std::printf("vr-check: no-runtime\n"); return 3; }
+    std::vector<XrExtensionProperties> aprop(c, {XR_TYPE_EXTENSION_PROPERTIES});
+    pfnEnum(nullptr, c, &c, aprop.data());
+    bool fGraphics = false;
+    for (const auto& p : aprop)
+#if defined(__ANDROID__)
+        fGraphics |= !std::strcmp(p.extensionName, XR_KHR_OPENGL_ES_ENABLE_EXTENSION_NAME)   // (Android: GLES's binding)
+#else
+        fGraphics |= !std::strcmp(p.extensionName, XR_KHR_OPENGL_ENABLE_EXTENSION_NAME)
+#endif
+#if CANE_VULKAN
+                     || !std::strcmp(p.extensionName, XR_KHR_VULKAN_ENABLE2_EXTENSION_NAME)
+#endif
+            ;
+    XrInstanceCreateInfo ici{XR_TYPE_INSTANCE_CREATE_INFO};
+    std::strcpy(ici.applicationInfo.applicationName, "SafeHouse VR check");
+    ici.applicationInfo.applicationVersion = 1;
+    std::strcpy(ici.applicationInfo.engineName, "SafeHouse");
+    ici.applicationInfo.engineVersion = 1;
+    ici.applicationInfo.apiVersion = XR_MAKE_VERSION(1, 0, 0);
+    XrInstance inst = XR_NULL_HANDLE;
+    if (XR_FAILED(pfnCreate(&ici, &inst))) { std::printf("vr-check: no-runtime\n"); return 3; }
+    PFN_xrGetInstanceProperties pfnProps = nullptr;
+    PFN_xrGetSystem pfnSystem = nullptr;
+    PFN_xrGetSystemProperties pfnSystemProps = nullptr;
+    PFN_xrDestroyInstance pfnDestroy = nullptr;
+    GetProc(inst, "xrGetInstanceProperties", pfnProps);
+    GetProc(inst, "xrGetSystem", pfnSystem);
+    GetProc(inst, "xrGetSystemProperties", pfnSystemProps);
+    GetProc(inst, "xrDestroyInstance", pfnDestroy);
+    XrInstanceProperties ip{XR_TYPE_INSTANCE_PROPERTIES};
+    std::string strRuntime = "OpenXR";
+    if (pfnProps && XR_SUCCEEDED(pfnProps(inst, &ip))) strRuntime = ip.runtimeName;
+    int code = 0;
+    XrSystemGetInfo sgi{XR_TYPE_SYSTEM_GET_INFO};
+    sgi.formFactor = XR_FORM_FACTOR_HEAD_MOUNTED_DISPLAY;
+    XrSystemId sys = XR_NULL_SYSTEM_ID;
+    const XrResult r = pfnSystem ? pfnSystem(inst, &sgi, &sys) : XR_ERROR_FUNCTION_UNSUPPORTED;
+    if (XR_FAILED(r))
+    {
+        code = r == XR_ERROR_FORM_FACTOR_UNAVAILABLE || r == XR_ERROR_FORM_FACTOR_UNSUPPORTED ? 2 : 4;
+        std::printf("vr-check: %s|%s\n", code == 2 ? "no-headset" : "runtime-error", strRuntime.c_str());
+    }
+    else if (!fGraphics)
+    {
+        code = 5;
+        std::printf("vr-check: no-graphics|%s\n", strRuntime.c_str());
+    }
+    else
+    {
+        XrSystemProperties sp{XR_TYPE_SYSTEM_PROPERTIES};
+        std::string strSystem;
+        if (pfnSystemProps && XR_SUCCEEDED(pfnSystemProps(inst, sys, &sp))) strSystem = sp.systemName;
+        std::printf("vr-check: ready|%s|%s\n", strRuntime.c_str(), strSystem.c_str());
+    }
+    std::fflush(stdout);
+    if (pfnDestroy) pfnDestroy(inst);
+    return code;
+}
 bool FActive() { return s_fStarted; }
 bool FMenuShown() { return s_fStarted; }
 bool FExitRequested() { return s_fExit; }
@@ -1693,6 +1998,8 @@ bool FCreateInstance(bool fVulkan)
         aextWant.push_back(XR_FB_SWAPCHAIN_UPDATE_STATE_EXTENSION_NAME);
     }
     if ((s_fExtPerf = FHasExt(XR_EXT_PERFORMANCE_SETTINGS_EXTENSION_NAME))) aextWant.push_back(XR_EXT_PERFORMANCE_SETTINGS_EXTENSION_NAME);
+    // (the Steam Frame's controllers as themselves, not as Touch controllers: vr_pad_map.h Gamepad layout)
+    if ((s_fExtFrame = FHasExt(cane::vrpad::kFrameExtension))) aextWant.push_back(cane::vrpad::kFrameExtension);
     if ((s_fExtLayerSettings = FHasExt(XR_FB_COMPOSITION_LAYER_SETTINGS_EXTENSION_NAME))) aextWant.push_back(XR_FB_COMPOSITION_LAYER_SETTINGS_EXTENSION_NAME);
     if ((s_fExtAutoLayerFilter = s_fExtLayerSettings && FHasExt("XR_META_automatic_layer_filter"))) aextWant.push_back("XR_META_automatic_layer_filter");
     s_fExtVkSwapchainMeta = s_fVkDirect = false;
@@ -1918,6 +2225,12 @@ void NoteThread(VRTHREAD kind)
 bool FPanelSize(int* pdx, int* pdy)
 {
     if (!s_fStarted) return false;
+    if (s_binoc.f)
+    {
+        *pdx = s_binoc.dx;
+        *pdy = s_binoc.dy;
+        return true;
+    }
     *pdx = 1920;
     *pdy = 1080;
     return true;
@@ -1948,6 +2261,8 @@ void BeginFrame()
     PollEvents();
     s_frame.fEyesDrawn = false;
     s_frame.fImmersive = false;
+    s_fillEyes = s_fillNext;   // (the last frame's HUD fills over this frame's eyes)
+    s_fillNext = glm::vec4(0.0f);
     if (!s_fRunning) return;
     s_frame.state = XrFrameState{XR_TYPE_FRAME_STATE};
     XrFrameWaitInfo wi{XR_TYPE_FRAME_WAIT_INFO};
@@ -1968,12 +2283,25 @@ void BeginFrame()
                      (vs.viewStateFlags & XR_VIEW_STATE_ORIENTATION_VALID_BIT) && (vs.viewStateFlags & XR_VIEW_STATE_POSITION_VALID_BIT);
     // (test, SLY2N_VR_FIXEDPOSE=1: the head still, level, 1.6 m up, the eyes 64 mm apart, the runtime's fields of view:
     // frames that repeat run to run with --fixed-dt, for picture comparisons)
+    // (SLY2N_VR_TESTTURN=yaw:pitch@frame,...: from that headset frame on, the still head turned by those degrees (yaw +
+    // left, pitch + up): the head-driven views' tests)
     if (s_frame.fViews && FFixedPose())
+    {
+        float yawT = 0.0f, pitchT = 0.0f;
+        if (const char* psz = std::getenv("SLY2N_VR_TESTTURN"))
+            for (const char* p = psz; p && *p; p = std::strchr(p, ',') ? std::strchr(p, ',') + 1 : nullptr)
+            {
+                float y = 0.0f, pt = 0.0f;
+                int f = 0;
+                if (std::sscanf(p, "%f:%f@%d", &y, &pt, &f) == 3 && s_cframePresent + 1 >= f) yawT = y, pitchT = pt;
+            }
+        const glm::quat qT = glm::angleAxis(glm::radians(yawT), glm::vec3(0, 1, 0)) * glm::angleAxis(glm::radians(pitchT), glm::vec3(1, 0, 0));
         for (int i = 0; i < 2; ++i)
         {
-            s_frame.aview[i].pose.orientation = XrQuaternionf{0.0f, 0.0f, 0.0f, 1.0f};
-            s_frame.aview[i].pose.position = XrVector3f{i ? 0.032f : -0.032f, 1.6f, 0.0f};
+            s_frame.aview[i].pose.orientation = XrQuat(qT);
+            s_frame.aview[i].pose.position = XrVec(glm::vec3(0.0f, 1.6f, 0.0f) + qT * glm::vec3(i ? 0.032f : -0.032f, 0.0f, 0.0f));
         }
+    }
     if (s_frame.fViews && !s_fAnchored)
     {
         // the anchor: the head (between the eyes) and its heading now
@@ -1992,13 +2320,59 @@ void BeginFrame()
     }
 }
 
+// (SetGameView, each frame) the binocucom's whole-view layout on in Immersive's binocucom view, off otherwise; the game
+// picture laid out again when it changes (display.cpp LayoutDisplay: FPanelSize, FBinocCanvas)
+void UpdateBinocLayout()
+{
+    const bool fWant = (s_view == VRVIEW_Binoc || s_view == VRVIEW_BinocTalk) && g_vropts.mode == VRMODE_Immersive && s_frame.fViews;
+    if (fWant == s_binoc.f) return;
+    if (fWant)
+    {
+        // the eyes' fields together (tangents at 1 m), the panel centred ahead covering them
+        float tx = 0.0f, ty = 0.0f;
+        for (const XrView& v : s_frame.aview)
+        {
+            tx = std::max({tx, std::tan(-v.fov.angleLeft), std::tan(v.fov.angleRight)});
+            ty = std::max({ty, std::tan(v.fov.angleUp), std::tan(-v.fov.angleDown)});
+        }
+        BINOCLAYOUT b;
+        b.f = true;
+        b.w = std::max(2.0f * std::min(tx, 4.0f) * kBinocMargin, 2.2f);
+        b.h = std::max(2.0f * std::min(ty, 4.0f) * kBinocMargin, kBinocCanvasH);
+        const float k = std::min(1.0f, float(kBinocPxMax) / (std::max(b.w, b.h) * kBinocPxPerM));
+        b.dx = std::max(64, int(b.w * kBinocPxPerM * k) & ~1);
+        b.dy = std::max(64, int(b.h * kBinocPxPerM * k) & ~1);
+        b.uiScale = glm::vec2(kBinocCanvasW / b.w, kBinocCanvasH / b.h);
+        s_binoc = b;
+        Log("binocucom: its frame over the whole view: %.2f x %.2f m at 1 m (the eyes' fields to tan %.3f / %.3f), picture %d x %d, "
+            "canvas %.3f x %.3f", double(b.w), double(b.h), double(tx), double(ty), b.dx, b.dy, double(b.uiScale.x), double(b.uiScale.y));
+    }
+    else s_binoc = BINOCLAYOUT{};
+    LayoutDisplay(std::max(1, g_display.outputWidth), std::max(1, g_display.outputHeight));
+}
+
+void SetBinocZoom(float k) { s_kBinocZoom = std::clamp(std::isfinite(k) ? k : 1.0f, 0.02f, 1.0f); }
+bool FBinocCanvas(glm::vec2* puiScale)
+{
+    if (!s_binoc.f) return false;
+    *puiScale = s_binoc.uiScale;
+    return true;
+}
+
 void SetGameView(int view)
 {
     s_viewPrev = s_view;
     s_view = view;
+    if (s_fStarted) UpdateBinocLayout();
     if (view == s_viewPrev) return;
-    static const char* const s_asz[] = {"normal", "flat (cutscene / dance / RC chopper)", "binocucom", "RC table"};
-    Log("view: %s", s_asz[std::clamp(view, 0, 3)]);
+    static const char* const s_asz[] = {"normal", "flat (cutscene / dance / RC chopper / before the title)", "binocucom", "RC table", "binocucom talk", "hack"};
+    Log("view: %s", s_asz[std::clamp(view, 0, 5)]);
+    // (a binocucom talk: its frame where the head is and faces now, level)
+    if (view == VRVIEW_BinocTalk && s_frame.fViews)
+    {
+        s_posTalk = (Vec(s_frame.aview[0].pose.position) + Vec(s_frame.aview[1].pose.position)) * 0.5f;
+        s_yawTalk = YawOf(Quat(s_frame.aview[0].pose.orientation));
+    }
     // (entering the binocucom: the head's turn so far is not the game's; entering the RC table: re-anchored there)
     if (view == VRVIEW_Binoc)
     {
@@ -2006,6 +2380,70 @@ void SetGameView(int view)
         s_posHeadBinoc = s_frame.fViews ? (Vec(s_frame.aview[0].pose.position) + Vec(s_frame.aview[1].pose.position)) * 0.5f : s_posAnchor;
     }
     s_fAim = false;
+}
+
+void DrawVignettePass(const cane::draw::Packets* pk, bool fViewsVk, int i, float gVig, const glm::vec4& tint);
+void SetMoment(const VRMOMENT& m) { s_moment = m; }
+// (test: SLY2N_VR_TESTUNFOCUS=from@to: headset frames as if the session were VISIBLE, not FOCUSED)
+bool FTestUnfocused()
+{
+    static const char* const s_sz = std::getenv("SLY2N_VR_TESTUNFOCUS");
+    int a = 0, b = 0;
+    return s_sz && std::sscanf(s_sz, "%d@%d", &a, &b) == 2 && s_cframePresent + 1 >= a && s_cframePresent + 1 < b;
+}
+bool FUnfocused()
+{
+    return s_fStarted && s_fRunning && ((s_state == XR_SESSION_STATE_VISIBLE || s_state == XR_SESSION_STATE_SYNCHRONIZED) || FTestUnfocused());
+}
+bool FPauseForFocus()
+{
+    static bool s_fTestWas = false;
+    const bool fTest = FTestUnfocused();
+    if (fTest && !s_fTestWas) s_fPauseForFocus = true;
+    if (!fTest && s_fTestWas && s_state == XR_SESSION_STATE_FOCUSED) s_fPauseForFocus = false;
+    s_fTestWas = fTest;
+    return s_fStarted && s_fPauseForFocus;
+}
+void TakePauseForFocus()
+{
+    if (s_fPauseForFocus) Log("focus lost: the pause menu opened");
+    s_fPauseForFocus = false;
+}
+bool FTitleMoment() { return s_fStarted && s_moment.fTitle; }
+bool FDanceLayout() { return s_fStarted && s_fRunning && s_moment.fDance && s_layoutPad == cane::vrpad::Layout::Touch; }
+bool FCutsceneView() { return s_fStarted && g_vropts.mode == VRMODE_Immersive && s_view == VRVIEW_Normal && s_moment.fCutscene; }
+
+bool FTakeEyeFill(const glm::vec4& rgba)
+{
+    if (!s_fStarted || !s_frame.fEyesDrawn) return false;
+    const float a = std::clamp(rgba.a, 0.0f, 1.0f);
+    const glm::vec3 c = glm::clamp(glm::vec3(rgba), glm::vec3(0.0f), glm::vec3(1.0f));
+    // (in drawing order: this one over the ones before)
+    s_fillNext = glm::vec4(c * a + glm::vec3(s_fillNext) * (1.0f - a), 1.0f - (1.0f - s_fillNext.a) * (1.0f - a));
+    return true;
+}
+
+void DrawEyeFills(const STEREOVIEW& sv)
+{
+    if (!s_fStarted || s_fillEyes.a < 1.0f / 512.0f) return;
+    const bool fViewsVk = s_fVk && s_fMultiview;
+    const cane::draw::Packets* const pk = PpacketsVr();
+    for (int i = 0; i < (s_fMultiview ? 1 : 2); ++i)
+    {
+        if (pk)
+        {
+            cane::draw::Pass ps;
+            ps.framebuffer = sv.afbo[i];
+            ps.viewport[2] = sv.dx, ps.viewport[3] = sv.dy;
+            pk->beginPass(ps);
+        }
+        else
+        {
+            glBindFramebuffer(GL_FRAMEBUFFER, sv.afbo[i]);
+            glViewport(0, 0, sv.dx, sv.dy);
+        }
+        DrawVignettePass(pk, fViewsVk, i, 0.0f, s_fillEyes);
+    }
 }
 
 bool FHeadLook(float* pdradPan, float* pdradTilt)
@@ -2031,6 +2469,7 @@ bool FRcAimPoint(glm::vec3* ppos)
 void SetRcArenaHeight(float z) { s_zRcArena = z; }
 
 bool FImmersiveFrame() { return s_frame.fBegun && s_frame.fImmersive && s_view != VRVIEW_Flat; }
+bool FImmersiveView() { return s_fStarted && g_vropts.mode == VRMODE_Immersive && s_view != VRVIEW_Flat; }
 
 bool FEyeViews(const CAMERA& cam, STEREOVIEW* psv)
 {
@@ -2074,6 +2513,12 @@ bool FEyeViews(const CAMERA& cam, STEREOVIEW* psv)
     const glm::vec3 fwd(f2, 0.0f), up(0, 0, 1), right = glm::cross(fwd, up);
     // XR (x right, y up, -z forward) -> game (z up)
     glm::mat3 B(right, up, -fwd);
+    // (the hack: the camera's pitch kept (no roll): the arena below framed as the flat game frames it)
+    if (s_view == VRVIEW_Hack && glm::length(f) > 1e-3f)
+    {
+        const glm::vec3 fwdP = glm::normalize(f), upP = glm::normalize(glm::cross(right, fwdP));
+        B = glm::mat3(right, upP, -fwdP);
+    }
     const float s = 100.0f * std::clamp(g_vropts.worldScale, 0.1f, 10.0f);   // game units a metre
     // the head relative to the anchor (its heading undone)
     glm::quat qAnchorInv = glm::angleAxis(-s_yawAnchor, glm::vec3(0, 1, 0));
@@ -2090,51 +2535,115 @@ bool FEyeViews(const CAMERA& cam, STEREOVIEW* psv)
     }
     glm::vec3 aposEye[2];
     glm::mat3 arot[2];
-    for (int i = 0; i < 2; ++i)
+    // (a binocucom talk: the shot through the frame fixed in the room (FPresent, FMaskWindow): the scripted camera's whole
+    // orientation along the frame's axis, the shot magnified so the frame's 4:3 canvas holds what the flat picture shows
+    // (its vertical field over the canvas's height at 1 m); the head's turn and movement are its own (world-fixed: no
+    // rotation is forced on the eyes), so turning looks at the frame's edges, never away from the shot)
+    if (s_view == VRVIEW_BinocTalk)
     {
-        const XrView& v = s_frame.aview[i];
-        const glm::vec3 p = glm::angleAxis(-s_yawAnchor, glm::vec3(0, 1, 0)) * (Vec(v.pose.position) - posHeadRef);
-        const glm::quat q = qAnchorInv * Quat(v.pose.orientation);
-        // (the binocucom: the head's movement along the camera's own heading)
-        aposEye[i] = posBase + (s_view == VRVIEW_Binoc ? glm::mat3(right, up, -fwd) : B) * (p * s);
-        arot[i] = B * glm::mat3_cast(q);
-        glm::mat4 eye(1.0f);
-        eye[0] = glm::vec4(arot[i][0], 0.0f);
-        eye[1] = glm::vec4(arot[i][1], 0.0f);
-        eye[2] = glm::vec4(arot[i][2], 0.0f);
-        eye[3] = glm::vec4(aposEye[i], 1.0f);
-        psv->amatWorldToClip[i] = ProjOfFov(v.fov, cam.sNear) * glm::inverse(eye);
-        // (Vulkan, straight into the OpenXR images: the image is read top row first, the renderer's rows are GL's: the
-        // eye drawn with its clip space's Y flipped (render.cpp turns the winding with it); Meta's compositor does not
-        // flip projection layers (XR_FB_composition_layer_image_layout))
-        if (s_fVkDirect) psv->amatWorldToClip[i] = glm::scale(glm::mat4(1.0f), glm::vec3(1.0f, -1.0f, 1.0f)) * psv->amatWorldToClip[i];
-        s_amatEye[i] = psv->amatWorldToClip[i];
-        psv->apos[i] = aposEye[i];
-        psv->afbo[i] = s_fMultiview ? (s_afboMsaa[0] ? s_afboMsaa[0] : FboEyeImage(0)) : s_afboMsaa[i] ? s_afboMsaa[i] : FboEyeImage(i);
+        const glm::vec3 fwdB = glm::normalize(f), leftB = cam.fMat ? glm::normalize(cam.mat[1]) : glm::normalize(glm::cross(glm::vec3(0, 0, 1), fwdB));
+        const glm::vec3 upB = glm::normalize(glm::cross(fwdB, leftB));
+        const glm::mat3 Bm(-leftB, upB, -fwdB);
+        const float mag = std::clamp(0.5f * kBinocCanvasH / std::tan(glm::radians(std::clamp(cam.fovY, 1.0f, 170.0f)) * 0.5f), 0.2f, 50.0f);
+        const glm::mat4 matTalkToLocal = glm::translate(glm::mat4(1.0f), s_posTalk) * glm::mat4_cast(glm::angleAxis(s_yawTalk, glm::vec3(0, 1, 0)));
+        // world -> local: the camera's frame (metres), magnified across its axis, into the frame's place
+        const glm::mat4 matWorldToLocal = matTalkToLocal * glm::scale(glm::mat4(1.0f), glm::vec3(mag, mag, 1.0f)) * glm::scale(glm::mat4(1.0f), glm::vec3(1.0f / s)) *
+                                          glm::mat4(glm::transpose(Bm)) * glm::translate(glm::mat4(1.0f), -cam.pos);
+        s_matLocalToWorld = glm::inverse(matWorldToLocal);
+        glm::mat4 amatEyeLocal[2];
+        for (int i = 0; i < 2; ++i)
+        {
+            const XrView& v = s_frame.aview[i];
+            glm::mat4 eye = glm::mat4_cast(Quat(v.pose.orientation));
+            eye[3] = glm::vec4(Vec(v.pose.position), 1.0f);
+            amatEyeLocal[i] = eye;
+            psv->amatWorldToClip[i] = ProjOfFov(v.fov, cam.sNear) * glm::scale(glm::mat4(1.0f), glm::vec3(s)) * glm::inverse(eye) * matWorldToLocal;
+            if (s_fVkDirect) psv->amatWorldToClip[i] = glm::scale(glm::mat4(1.0f), glm::vec3(1.0f, -1.0f, 1.0f)) * psv->amatWorldToClip[i];
+            s_amatEye[i] = psv->amatWorldToClip[i];
+            aposEye[i] = glm::vec3(s_matLocalToWorld * glm::vec4(Vec(v.pose.position), 1.0f));
+            psv->apos[i] = aposEye[i];
+            psv->afbo[i] = s_fMultiview ? (s_afboMsaa[0] ? s_afboMsaa[0] : FboEyeImage(0)) : s_afboMsaa[i] ? s_afboMsaa[i] : FboEyeImage(i);
+        }
+        XrFovf fov;
+        fov.angleLeft = std::min(s_frame.aview[0].fov.angleLeft, s_frame.aview[1].fov.angleLeft);
+        fov.angleRight = std::max(s_frame.aview[0].fov.angleRight, s_frame.aview[1].fov.angleRight);
+        fov.angleUp = std::max(s_frame.aview[0].fov.angleUp, s_frame.aview[1].fov.angleUp);
+        fov.angleDown = std::min(s_frame.aview[0].fov.angleDown, s_frame.aview[1].fov.angleDown);
+        const glm::vec3 posMid = (Vec(s_frame.aview[0].pose.position) + Vec(s_frame.aview[1].pose.position)) * 0.5f;
+        glm::mat4 eyeC = amatEyeLocal[0];
+        const glm::vec3 back = glm::vec3(eyeC[2]);
+        eyeC[3] = glm::vec4(posMid + back * (glm::distance(Vec(s_frame.aview[0].pose.position), Vec(s_frame.aview[1].pose.position)) * 1.5f + 0.01f), 1.0f);
+        psv->matCull = ProjOfFov(fov, cam.sNear) * glm::scale(glm::mat4(1.0f), glm::vec3(s)) * glm::inverse(eyeC) * matWorldToLocal;
+        psv->posCenter = glm::vec3(s_matLocalToWorld * glm::vec4(posMid, 1.0f));
+        psv->dirCenter = glm::normalize(glm::vec3(s_matLocalToWorld * glm::vec4(posMid - back, 1.0f)) - psv->posCenter);
     }
-    // the culling frustum: both eyes' fields from between them, a little behind
-    XrFovf fov;
-    fov.angleLeft = std::min(s_frame.aview[0].fov.angleLeft, s_frame.aview[1].fov.angleLeft);
-    fov.angleRight = std::max(s_frame.aview[0].fov.angleRight, s_frame.aview[1].fov.angleRight);
-    fov.angleUp = std::max(s_frame.aview[0].fov.angleUp, s_frame.aview[1].fov.angleUp);
-    fov.angleDown = std::min(s_frame.aview[0].fov.angleDown, s_frame.aview[1].fov.angleDown);
-    const glm::vec3 posCenter = (aposEye[0] + aposEye[1]) * 0.5f;
-    const float sBack = glm::distance(aposEye[0], aposEye[1]) * 1.5f + 1.0f;
-    glm::mat4 eyeC(1.0f);
-    eyeC[0] = glm::vec4(arot[0][0], 0.0f);
-    eyeC[1] = glm::vec4(arot[0][1], 0.0f);
-    eyeC[2] = glm::vec4(arot[0][2], 0.0f);
-    eyeC[3] = glm::vec4(posCenter + arot[0][2] * sBack, 1.0f);
-    psv->matCull = ProjOfFov(fov, cam.sNear) * glm::inverse(eyeC);
-    psv->posCenter = posCenter;
+    else
+    {
+
+        // (the binocucom zoomed in: the eyes' fields narrowed by the camera's zoom (the picture magnified as the flat game's),
+        // the eyes' separation and the head's movement with them (a magnified picture with the parallax of an unzoomed one))
+        const float kZoom = s_view == VRVIEW_Binoc ? s_kBinocZoom : 1.0f;
+        XrFovf afov[2] = {s_frame.aview[0].fov, s_frame.aview[1].fov};
+        if (kZoom < 1.0f)
+            for (XrFovf& fv : afov)
+            {
+                fv.angleLeft = std::atan(std::tan(fv.angleLeft) * kZoom);
+                fv.angleRight = std::atan(std::tan(fv.angleRight) * kZoom);
+                fv.angleUp = std::atan(std::tan(fv.angleUp) * kZoom);
+                fv.angleDown = std::atan(std::tan(fv.angleDown) * kZoom);
+            }
+        for (int i = 0; i < 2; ++i)
+        {
+            XrView v = s_frame.aview[i];
+            v.fov = afov[i];
+            const glm::vec3 p = glm::angleAxis(-s_yawAnchor, glm::vec3(0, 1, 0)) * (Vec(v.pose.position) - posHeadRef) * kZoom;
+            const glm::quat q = qAnchorInv * Quat(v.pose.orientation);
+            // (the binocucom: the head's movement along the camera's own heading)
+            aposEye[i] = posBase + (s_view == VRVIEW_Binoc ? glm::mat3(right, up, -fwd) : B) * (p * s);
+            arot[i] = B * glm::mat3_cast(q);
+            glm::mat4 eye(1.0f);
+            eye[0] = glm::vec4(arot[i][0], 0.0f);
+            eye[1] = glm::vec4(arot[i][1], 0.0f);
+            eye[2] = glm::vec4(arot[i][2], 0.0f);
+            eye[3] = glm::vec4(aposEye[i], 1.0f);
+            psv->amatWorldToClip[i] = ProjOfFov(v.fov, cam.sNear) * glm::inverse(eye);
+            // (Vulkan, straight into the OpenXR images: the image is read top row first, the renderer's rows are GL's: the
+            // eye drawn with its clip space's Y flipped (render.cpp turns the winding with it); Meta's compositor does not
+            // flip projection layers (XR_FB_composition_layer_image_layout))
+            if (s_fVkDirect) psv->amatWorldToClip[i] = glm::scale(glm::mat4(1.0f), glm::vec3(1.0f, -1.0f, 1.0f)) * psv->amatWorldToClip[i];
+            s_amatEye[i] = psv->amatWorldToClip[i];
+            psv->apos[i] = aposEye[i];
+            psv->afbo[i] = s_fMultiview ? (s_afboMsaa[0] ? s_afboMsaa[0] : FboEyeImage(0)) : s_afboMsaa[i] ? s_afboMsaa[i] : FboEyeImage(i);
+        }
+        // (the local space into the world as the eyes see it: the eye masks)
+        s_matLocalToWorld = glm::translate(glm::mat4(1.0f), posBase) * glm::mat4(s_view == VRVIEW_Binoc ? glm::mat3(right, up, -fwd) : B) *
+                            glm::scale(glm::mat4(1.0f), glm::vec3(s)) * glm::mat4_cast(glm::angleAxis(-s_yawAnchor, glm::vec3(0, 1, 0))) *
+                            glm::translate(glm::mat4(1.0f), -posHeadRef);
+        // the culling frustum: both eyes' fields from between them, a little behind
+        XrFovf fov;
+        fov.angleLeft = std::min(afov[0].angleLeft, afov[1].angleLeft);
+        fov.angleRight = std::max(afov[0].angleRight, afov[1].angleRight);
+        fov.angleUp = std::max(afov[0].angleUp, afov[1].angleUp);
+        fov.angleDown = std::min(afov[0].angleDown, afov[1].angleDown);
+        const glm::vec3 posCenter = (aposEye[0] + aposEye[1]) * 0.5f;
+        const float sBack = glm::distance(aposEye[0], aposEye[1]) * 1.5f + 1.0f;
+        glm::mat4 eyeC(1.0f);
+        eyeC[0] = glm::vec4(arot[0][0], 0.0f);
+        eyeC[1] = glm::vec4(arot[0][1], 0.0f);
+        eyeC[2] = glm::vec4(arot[0][2], 0.0f);
+        eyeC[3] = glm::vec4(posCenter + arot[0][2] * sBack, 1.0f);
+        psv->matCull = ProjOfFov(fov, cam.sNear) * glm::inverse(eyeC);
+        psv->posCenter = posCenter;
+    }
     // (the RC table: the gaze from between the eyes onto the arena's plane)
     if (s_view == VRVIEW_RcTable)
     {
         const glm::vec3 dir = -arot[0][2];
+        const glm::vec3 posCenter = psv->posCenter;
         s_fAim = dir.z < -0.05f && posCenter.z > s_zRcArena;
         if (s_fAim) s_posAim = posCenter + dir * ((s_zRcArena - posCenter.z) / dir.z);
     }
-    psv->dirCenter = -arot[0][2];
+    if (s_view != VRVIEW_BinocTalk) psv->dirCenter = -arot[0][2];
     s_dxEye = std::max(16, int(float(s_aeye[0].dx) * s_gEyeRes) & ~7);
     s_dyEye = std::max(16, int(float(s_aeye[0].dy) * s_gEyeRes) & ~7);
     if (s_gEyeRes >= 1.0f) s_dxEye = s_aeye[0].dx, s_dyEye = s_aeye[0].dy;
@@ -2168,6 +2677,49 @@ bool FEyeViews(const CAMERA& cam, STEREOVIEW* psv)
     return true;
 }
 
+// ------------------------------------------------------------ draw packets
+// A full-screen pass's state of program prog, made once per key (program, kind, variant): depth test, stencil test,
+// cull and blend off (kPkOver: source alpha over), colour mask all (kPkOver / kPkRgb: no alpha), the constants given
+// (fixed per key). 0: the backend cannot (the GL calls).
+enum { kPkOpaque, kPkOver, kPkRgb };
+uint32_t PacketStateVr(const cane::draw::Packets& pk, GLuint prog, int kind, int variant = 0,
+                       std::initializer_list<std::pair<const char*, uint32_t>> aconst = {})
+{
+    static std::map<uint64_t, uint32_t> s_mpid;
+    const uint64_t key = (uint64_t(prog) << 32) | (uint64_t(kind) << 8) | uint64_t(variant);
+    if (auto it = s_mpid.find(key); it != s_mpid.end()) return it->second;
+    using namespace cane::draw;
+    State st;
+    st.program = prog;
+    st.cull = 0, st.depthTest = 0, st.stencilTest = 0;
+    st.blend = kind == kPkOver ? 1 : 0;
+    if (st.blend)
+    {
+        st.srcColor = st.srcAlpha = kFactorSrcAlpha;
+        st.dstColor = st.dstAlpha = kFactorOneMinusSrcAlpha;
+        st.opColor = st.opAlpha = kBlendAdd;
+    }
+    st.colorMask = kind == kPkOpaque ? 0xF : 0x7;
+    st.keep = kKeepDepthWrite | kKeepDepthCompare | kKeepStencil;
+    for (const auto& [name, v] : aconst)
+        if (const GLint loc = glGetUniformLocation(prog, name); loc >= 0 && st.cconst < 10) st.aconst[st.cconst++] = {loc, v};
+    return s_mpid[key] = pk.createState(st);
+}
+// a uniform's location, looked up once per program (glGetUniformLocation is a string search in the layer)
+GLint LocVr(GLuint prog, const char* name)
+{
+    static std::map<std::pair<GLuint, std::string>, GLint> s_mploc;
+    auto [it, fNew] = s_mploc.try_emplace({prog, name}, -1);
+    if (fNew) it->second = glGetUniformLocation(prog, name);
+    return it->second;
+}
+uint32_t BitsOf(float g)
+{
+    uint32_t bits;
+    std::memcpy(&bits, &g, 4);
+    return bits;
+}
+
 // (Vulkan multiview: the two-view programs' per-eye values, CaneViews at storage binding 11 (cmake/vulkan_shaders.py
 // MV_BLOCK): the eyes' matrices (the aim mark) and per-program values (the vignette's centre and scale))
 void BindVkViews(const glm::vec4 aaux[2])
@@ -2175,7 +2727,17 @@ void BindVkViews(const glm::vec4 aaux[2])
     struct { glm::mat4 amat[2]; glm::vec4 apos[2], aaux[2]; glm::ivec4 fetch; } views{};
     for (int i = 0; i < 2; ++i) views.amat[i] = s_amatEye[i], views.aaux[i] = aaux[i];
     static GLuint s_buf = 0;
-    if (!s_buf) glGenBuffers(1, &s_buf);
+    if (!s_buf) s_buf = GlNewBuffer(GL_SHADER_STORAGE_BUFFER, 0, nullptr, GL_STREAM_DRAW);
+    // (draw packets: written straight into the backend's stream memory, bound by the entry; native buffers: no binding)
+    const cane::draw::Packets* const pkVr = PpacketsVr();
+    if (!pkVr || !PpacketsBuf()) glBindBuffer(GL_SHADER_STORAGE_BUFFER, s_buf);
+    if (const cane::draw::Packets* pk = pkVr)
+        if (void* p = pk->mapStream(s_buf, sizeof(views)))
+        {
+            std::memcpy(p, &views, sizeof(views));
+            pk->bindStorage(11, s_buf, 0, 0);
+            return;
+        }
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, s_buf);
     glBufferData(GL_SHADER_STORAGE_BUFFER, sizeof(views), &views, GL_STREAM_DRAW);
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 11, s_buf);
@@ -2190,70 +2752,261 @@ GLuint FboLayerVk(int kind, int layer, GLuint tex)
     return fbo;
 }
 
+// (draw packets) FinishEyes' comfort vignette over the eye (or both views): its GL calls' state, the per-eye centre and
+// scale as constants (multiview: in the views' block), the strength as the draw's constant, then the state those calls
+// leave (blend off, colour mask all). False: the GL calls (nothing done yet).
+bool FVignettePackets(const cane::draw::Packets& pk, bool fViewsVk, int ieye, float gVig, const glm::vec4& tint)
+{
+    const uint32_t id = PacketStateVr(pk, s_progVignette, kPkOver), idLeft = PacketStateVr(pk, s_progVignette, kPkOpaque);
+    if (!id || !idLeft) return false;
+    pk.scissor(nullptr);
+    if (fViewsVk)
+    {
+        glm::vec4 aaux[2];
+        for (int k = 0; k < 2; ++k)
+        {
+            const XrFovf& f = s_frame.aview[k].fov;
+            const float l = std::tan(f.angleLeft), r = std::tan(f.angleRight), u = std::tan(f.angleUp), d = std::tan(f.angleDown);
+            aaux[k] = glm::vec4(-(r + l) / (r - l), (s_fVkDirect ? 1.0f : -1.0f) * (u + d) / (u - d), (r - l) * 0.5f, (u - d) * 0.5f);
+        }
+        BindVkViews(aaux);
+    }
+    else
+    {
+        const XrFovf& fov = s_frame.aview[ieye].fov;
+        const float tl = std::tan(fov.angleLeft), tr = std::tan(fov.angleRight), tu = std::tan(fov.angleUp), td = std::tan(fov.angleDown);
+        const float center[2] = {-(tr + tl) / (tr - tl), (s_fVkDirect ? 1.0f : -1.0f) * (tu + td) / (tu - td)};
+        const float scale[2] = {(tr - tl) * 0.5f, (tu - td) * 0.5f};
+        if (s_locVigCenter >= 0) pk.setConstant(s_progVignette, s_locVigCenter, center, sizeof center);
+        if (s_locVigScale >= 0) pk.setConstant(s_progVignette, s_locVigScale, scale, sizeof scale);
+    }
+    if (s_locVigTint >= 0) pk.setConstant(s_progVignette, s_locVigTint, &tint[0], sizeof(float) * 4);
+    const cane::draw::Constant strength{s_locVigStrength, BitsOf(gVig)};
+    pk.drawArrays(id, s_vaoEmpty, 0, 3, &strength, s_locVigStrength >= 0 ? 1 : 0);
+    pk.drawArrays(idLeft, 0, 0, 0, nullptr, 0);   // (no triangles: vertex array 0, blend off, colour mask all)
+    return true;
+}
+// (draw packets) the RC table's aim mark: two strips in one colour, the vertices in the backend's stream memory, then the
+// state its GL calls leave (colour mask all, vertex array 0). False: the GL calls (nothing done yet).
+bool FMarkPackets(const cane::draw::Packets& pk, const std::vector<glm::vec4>& av, size_t cRing)
+{
+    if (!pk.drawArraysMode) return false;
+    const uint32_t id = PacketStateVr(pk, s_progMark, kPkRgb), idLeft = PacketStateVr(pk, s_progMark, kPkOpaque);
+    if (!id || !idLeft) return false;
+    const size_t cb = av.size() * sizeof(glm::vec4);
+    if (!PpacketsBuf()) glBindBuffer(GL_ARRAY_BUFFER, s_vboMark);   // (the binding the GL calls leave; native buffers: none)
+    void* const p = pk.mapStream(s_vboMark, cb);
+    if (!p) return false;
+    std::memcpy(p, av.data(), cb);
+    const GLint locRgba = LocVr(s_progMark, "rgba");
+    const float rgba[4] = {1.0f, 0.78f, 0.1f, 1.0f};
+    if (locRgba >= 0) pk.setConstant(s_progMark, locRgba, rgba, sizeof rgba);
+    using cane::draw::kTriangleStrip;
+    pk.drawArraysMode(id, s_vaoMark, kTriangleStrip, 0, uint32_t(cRing), 0.0f, nullptr, 0);
+    pk.drawArraysMode(id, s_vaoMark, kTriangleStrip, uint32_t(cRing), uint32_t(av.size() - cRing), 0.0f, nullptr, 0);
+    pk.drawArraysMode(idLeft, 0, cane::draw::kTriangles, 0, 0, 0.0f, nullptr, 0);
+    return true;
+}
+// (draw packets) the Vulkan eye's target (both layers with multiview, a two-view draw) flipped into the image's rows:
+// beginPass on the image, the scissor off, the copy program's state, uvScale, the texture on unit 0 (its sampler kept),
+// the draw, vertex array 0 and the texture unbound as the GL calls leave them.
+bool FEyeCopyPackets(const cane::draw::Packets& pk, bool fViewsVk, int ieye, GLuint fboImage, int dx, int dy)
+{
+    const GLSHADER& sh = fViewsVk ? s_shCopyArray : s_shCopy;
+    const uint32_t id = PacketStateVr(pk, sh.ID, kPkOpaque, 1, {{"tex", 0}, {"fOpaque", 1}, {"fFlipY", 1}});
+    if (!id) return false;
+    cane::draw::Pass ps;
+    ps.framebuffer = fboImage;
+    ps.viewport[2] = dx, ps.viewport[3] = dy;
+    pk.beginPass(ps);
+    pk.scissor(nullptr);
+    const float uv[2] = {float(dx) / float(s_aeye[ieye].dx), float(dy) / float(s_aeye[ieye].dy)};
+    if (const GLint loc = LocVr(sh.ID, "uvScale"); loc >= 0) pk.setConstant(sh.ID, loc, uv, sizeof uv);
+    pk.bindTexture(0, s_atexEyeVk[ieye], fViewsVk ? 1 : 0, cane::draw::kSamplerKept);
+    pk.drawArrays(id, s_vaoEmpty, 0, 3, nullptr, 0);
+    pk.drawArrays(id, 0, 0, 0, nullptr, 0);   // (no triangles: vertex array 0, as the GL calls leave it)
+    pk.bindTexture(0, 0, fViewsVk ? 1 : 0, cane::draw::kSamplerKept);
+    return true;
+}
+
+// The comfort vignette (strength gVig) with a fill over it (tint: premultiplied; 0 none) over eye i's target (bound;
+// Vulkan multiview: both views).
+void DrawVignettePass(const cane::draw::Packets* pk, bool fViewsVk, int i, float gVig, const glm::vec4& tint)
+{
+    if (pk && FVignettePackets(*pk, fViewsVk, i, gVig, tint)) return;
+    {
+        const XrFovf& fov = s_frame.aview[i].fov;
+        const float tl = std::tan(fov.angleLeft), tr = std::tan(fov.angleRight), tu = std::tan(fov.angleUp), td = std::tan(fov.angleDown);
+        glDisable(GL_DEPTH_TEST);
+        glDisable(GL_STENCIL_TEST);
+        glDisable(GL_CULL_FACE);
+        glDisable(GL_SCISSOR_TEST);
+        glEnable(GL_BLEND);
+        glBlendEquation(GL_FUNC_ADD);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_FALSE);
+        if (fViewsVk)
+        {
+            glm::vec4 aaux[2];
+            for (int k = 0; k < 2; ++k)
+            {
+                const XrFovf& f = s_frame.aview[k].fov;
+                const float l = std::tan(f.angleLeft), r = std::tan(f.angleRight), u = std::tan(f.angleUp), d = std::tan(f.angleDown);
+                aaux[k] = glm::vec4(-(r + l) / (r - l), (s_fVkDirect ? 1.0f : -1.0f) * (u + d) / (u - d), (r - l) * 0.5f, (u - d) * 0.5f);
+            }
+            BindVkViews(aaux);
+            s_shVignette.Use();
+            glUniform1f(s_locVigStrength, gVig);
+            glUniform4f(s_locVigTint, tint.r, tint.g, tint.b, tint.a);
+        }
+        else if (s_fMultiview)
+        {
+            float acenter[4], ascale[4];
+            for (int k = 0; k < 2; ++k)
+            {
+                const XrFovf& f = s_frame.aview[k].fov;
+                const float l = std::tan(f.angleLeft), r = std::tan(f.angleRight), u = std::tan(f.angleUp), d = std::tan(f.angleDown);
+                acenter[2 * k] = -(r + l) / (r - l), acenter[2 * k + 1] = -(u + d) / (u - d);
+                ascale[2 * k] = (r - l) * 0.5f, ascale[2 * k + 1] = (u - d) * 0.5f;
+            }
+            glUseProgram(s_progVignetteMv);
+            glUniform2fv(s_locVigMvCenter, 2, acenter);
+            glUniform2fv(s_locVigMvScale, 2, ascale);
+            glUniform1f(s_locVigMvStrength, gVig);
+            glUniform4f(s_locVigMvTint, tint.r, tint.g, tint.b, tint.a);
+        }
+        else
+        {
+            s_shVignette.Use();
+            glUniform2f(s_locVigCenter, -(tr + tl) / (tr - tl), (s_fVkDirect ? 1.0f : -1.0f) * (tu + td) / (tu - td));
+            glUniform2f(s_locVigScale, (tr - tl) * 0.5f, (tu - td) * 0.5f);
+            glUniform1f(s_locVigStrength, gVig);
+            glUniform4f(s_locVigTint, tint.r, tint.g, tint.b, tint.a);
+        }
+        glBindVertexArray(s_vaoEmpty);
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+        glBindVertexArray(0);
+        glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+        glDisable(GL_BLEND);
+    }
+}
+// (draw packets) black triangles (world space on Vulkan multiview, else clip space), then the state the GL calls leave.
+bool FMaskPackets(const cane::draw::Packets& pk, const std::vector<glm::vec4>& av)
+{
+    if (!pk.drawArraysMode) return false;
+    const uint32_t id = PacketStateVr(pk, s_progMark, kPkRgb), idLeft = PacketStateVr(pk, s_progMark, kPkOpaque);
+    if (!id || !idLeft) return false;
+    const size_t cb = av.size() * sizeof(glm::vec4);
+    if (!PpacketsBuf()) glBindBuffer(GL_ARRAY_BUFFER, s_vboMark);   // (as FMarkPackets)
+    void* const p = pk.mapStream(s_vboMark, cb);
+    if (!p) return false;
+    std::memcpy(p, av.data(), cb);
+    const GLint locRgba = LocVr(s_progMark, "rgba");
+    const float rgba[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+    if (locRgba >= 0) pk.setConstant(s_progMark, locRgba, rgba, sizeof rgba);
+    pk.drawArraysMode(id, s_vaoMark, cane::draw::kTriangles, 0, uint32_t(av.size()), 0.0f, nullptr, 0);
+    pk.drawArraysMode(idLeft, 0, cane::draw::kTriangles, 0, 0, 0.0f, nullptr, 0);
+    return true;
+}
+// The window the world is seen through (local space: its centre, turn, half sizes; its front faces +z), false: none.
+// The pause menu: the 4:3 canvas on the HUD panel as last placed.
+bool FMaskWindow(glm::vec3* ppos, glm::quat* pq, glm::vec2* phalf)
+{
+    if (s_view == VRVIEW_BinocTalk && s_binoc.f)
+    {
+        // (the binocucom talk: black past its frame's extended edges)
+        *pq = glm::angleAxis(s_yawTalk, glm::vec3(0, 1, 0));
+        *ppos = s_posTalk + *pq * glm::vec3(0.0f, 0.0f, -1.0f);
+        *phalf = 0.5f * 0.995f * glm::vec2(s_binoc.w, s_binoc.h);
+        return true;
+    }
+    if (s_moment.fWipe && s_panelLast.f && s_view != VRVIEW_Flat)
+    {
+        *ppos = s_panelLast.pos;
+        *pq = s_panelLast.q;
+        *phalf = 0.5f * 0.995f * glm::vec2(s_panelLast.w, s_panelLast.h);
+        return true;
+    }
+    if (s_moment.fPause && s_panelLast.f && s_view != VRVIEW_Flat)
+    {
+        *ppos = s_panelLast.pos;
+        *pq = s_panelLast.q;
+        *phalf = 0.5f * glm::vec2(s_panelLast.w * std::min(1.0f, g_display.uiScale.x), s_panelLast.h * std::min(1.0f, g_display.uiScale.y));
+        return true;
+    }
+    return false;
+}
+// Black over eye i around the window (FMaskWindow): a box round the head 30 m out, its front face the window's plane
+// with the window cut out (drawn over everything; the HUD panel then lies on the window).
+void DrawEyeMask(const cane::draw::Packets* pk, bool fViewsVk, int i)
+{
+    glm::vec3 c;
+    glm::quat q;
+    glm::vec2 hw;
+    if (!FMaskWindow(&c, &q, &hw) || (s_fMultiview && !fViewsVk)) return;
+    const float L = 30.0f;
+    std::vector<glm::vec4> av;
+    const glm::mat4 m = (fViewsVk ? glm::mat4(1.0f) : s_amatEye[i]) * s_matLocalToWorld;
+    auto quad = [&](glm::vec3 a, glm::vec3 b, glm::vec3 cc, glm::vec3 d) {
+        for (const glm::vec3& p : {a, b, cc, a, cc, d}) av.push_back(m * glm::vec4(c + q * p, 1.0f));
+    };
+    // the window's plane round the window
+    quad({-L, -L, 0}, {-hw.x, -L, 0}, {-hw.x, L, 0}, {-L, L, 0});
+    quad({hw.x, -L, 0}, {L, -L, 0}, {L, L, 0}, {hw.x, L, 0});
+    quad({-hw.x, hw.y, 0}, {hw.x, hw.y, 0}, {hw.x, L, 0}, {-hw.x, L, 0});
+    quad({-hw.x, -L, 0}, {hw.x, -L, 0}, {hw.x, -hw.y, 0}, {-hw.x, -hw.y, 0});
+    // the box's other faces (the head on the window's +z side)
+    quad({-L, -L, 0}, {-L, L, 0}, {-L, L, L}, {-L, -L, L});
+    quad({L, -L, 0}, {L, L, 0}, {L, L, L}, {L, -L, L});
+    quad({-L, L, 0}, {L, L, 0}, {L, L, L}, {-L, L, L});
+    quad({-L, -L, 0}, {L, -L, 0}, {L, -L, L}, {-L, -L, L});
+    quad({-L, -L, L}, {L, -L, L}, {L, L, L}, {-L, L, L});
+    if (fViewsVk)
+    {
+        const glm::vec4 aaux[2] = {glm::vec4(0.0f), glm::vec4(0.0f)};
+        BindVkViews(aaux);
+    }
+    if (pk && FMaskPackets(*pk, av)) return;
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_STENCIL_TEST);
+    glDisable(GL_CULL_FACE);
+    glDisable(GL_BLEND);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_FALSE);
+    s_shMark.Use();
+    glUniform4f(glGetUniformLocation(s_progMark, "rgba"), 0.0f, 0.0f, 0.0f, 1.0f);
+    glBindVertexArray(s_vaoMark);
+    glBindBuffer(GL_ARRAY_BUFFER, s_vboMark);
+    glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(av.size() * sizeof(glm::vec4)), av.data(), GL_STREAM_DRAW);
+    glDrawArrays(GL_TRIANGLES, 0, GLsizei(av.size()));
+    glBindVertexArray(0);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+}
+
 void FinishEyes()
 {
     if (!s_aeye[0].fAcquired) return;
     const bool fViewsVk = s_fVk && s_fMultiview;   // (Vulkan multiview: both eyes at once, the two-view programs)
     static const float s_agLevel[4] = {0.0f, 0.55f, 0.8f, 1.0f};
     const float gVig = s_agLevel[std::clamp(g_vropts.vignette, 0, 3)] * s_gVignette;
+    const cane::draw::Packets* const pk = PpacketsVr();
     for (int i = 0; i < (s_fMultiview ? 1 : 2); ++i)
     {
         const GLuint fboDraw = s_afboMsaa[i] ? s_afboMsaa[i] : FboEyeImage(i);
-        glBindFramebuffer(GL_FRAMEBUFFER, fboDraw);
-        glViewport(0, 0, s_dxEye, s_dyEye);
-        if (gVig > 0.01f)
+        if (pk)
         {
-            const XrFovf& fov = s_frame.aview[i].fov;
-            const float tl = std::tan(fov.angleLeft), tr = std::tan(fov.angleRight), tu = std::tan(fov.angleUp), td = std::tan(fov.angleDown);
-            glDisable(GL_DEPTH_TEST);
-            glDisable(GL_STENCIL_TEST);
-            glDisable(GL_CULL_FACE);
-            glDisable(GL_SCISSOR_TEST);
-            glEnable(GL_BLEND);
-            glBlendEquation(GL_FUNC_ADD);
-            glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-            glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_FALSE);
-            if (fViewsVk)
-            {
-                glm::vec4 aaux[2];
-                for (int k = 0; k < 2; ++k)
-                {
-                    const XrFovf& f = s_frame.aview[k].fov;
-                    const float l = std::tan(f.angleLeft), r = std::tan(f.angleRight), u = std::tan(f.angleUp), d = std::tan(f.angleDown);
-                    aaux[k] = glm::vec4(-(r + l) / (r - l), (s_fVkDirect ? 1.0f : -1.0f) * (u + d) / (u - d), (r - l) * 0.5f, (u - d) * 0.5f);
-                }
-                BindVkViews(aaux);
-                s_shVignette.Use();
-                glUniform1f(s_locVigStrength, gVig);
-            }
-            else if (s_fMultiview)
-            {
-                float acenter[4], ascale[4];
-                for (int k = 0; k < 2; ++k)
-                {
-                    const XrFovf& f = s_frame.aview[k].fov;
-                    const float l = std::tan(f.angleLeft), r = std::tan(f.angleRight), u = std::tan(f.angleUp), d = std::tan(f.angleDown);
-                    acenter[2 * k] = -(r + l) / (r - l), acenter[2 * k + 1] = -(u + d) / (u - d);
-                    ascale[2 * k] = (r - l) * 0.5f, ascale[2 * k + 1] = (u - d) * 0.5f;
-                }
-                glUseProgram(s_progVignetteMv);
-                glUniform2fv(s_locVigMvCenter, 2, acenter);
-                glUniform2fv(s_locVigMvScale, 2, ascale);
-                glUniform1f(s_locVigMvStrength, gVig);
-            }
-            else
-            {
-                s_shVignette.Use();
-                glUniform2f(s_locVigCenter, -(tr + tl) / (tr - tl), (s_fVkDirect ? 1.0f : -1.0f) * (tu + td) / (tu - td));
-                glUniform2f(s_locVigScale, (tr - tl) * 0.5f, (tu - td) * 0.5f);
-                glUniform1f(s_locVigStrength, gVig);
-            }
-            glBindVertexArray(s_vaoEmpty);
-            glDrawArrays(GL_TRIANGLES, 0, 3);
-            glBindVertexArray(0);
-            glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
-            glDisable(GL_BLEND);
+            cane::draw::Pass ps;
+            ps.framebuffer = fboDraw;
+            ps.viewport[2] = s_dxEye, ps.viewport[3] = s_dyEye;
+            pk->beginPass(ps);
         }
+        else
+        {
+            glBindFramebuffer(GL_FRAMEBUFFER, fboDraw);
+            glViewport(0, 0, s_dxEye, s_dyEye);
+        }
+        if (gVig > 0.01f) DrawVignettePass(pk, fViewsVk, i, gVig, glm::vec4(0.0f));
+        // (the pause menu: the world black around the menu's window; the binocucom talk: past its frame)
+        DrawEyeMask(pk, fViewsVk, i);
         // (the RC table: where the gun aims, a ring on the arena with a dot, over everything)
         if (s_fAim && s_view == VRVIEW_RcTable && (!s_fMultiview || fViewsVk))
         {
@@ -2280,60 +3033,69 @@ void FinishEyes()
                 av.push_back(matMark * glm::vec4(s_posAim + glm::vec3(0, 0, 2), 1.0f));
                 av.push_back(matMark * glm::vec4(s_posAim + glm::vec3(std::cos(a), std::sin(a), 0.0f) * 6.0f + glm::vec3(0, 0, 2), 1.0f));
             }
-            glDisable(GL_DEPTH_TEST);
-            glDisable(GL_STENCIL_TEST);
-            glDisable(GL_CULL_FACE);
-            glDisable(GL_BLEND);
-            glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_FALSE);
-            s_shMark.Use();
-            glUniform4f(glGetUniformLocation(s_progMark, "rgba"), 1.0f, 0.78f, 0.1f, 1.0f);
-            glBindVertexArray(s_vaoMark);
-            glBindBuffer(GL_ARRAY_BUFFER, s_vboMark);
-            glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(av.size() * sizeof(glm::vec4)), av.data(), GL_STREAM_DRAW);
-            glDrawArrays(GL_TRIANGLE_STRIP, 0, GLsizei(cRing));
-            glDrawArrays(GL_TRIANGLE_STRIP, GLsizei(cRing), GLsizei(av.size() - cRing));
-            glBindVertexArray(0);
-            glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+            if (pk && FMarkPackets(*pk, av, cRing)) {}
+            else
+            {
+                glDisable(GL_DEPTH_TEST);
+                glDisable(GL_STENCIL_TEST);
+                glDisable(GL_CULL_FACE);
+                glDisable(GL_BLEND);
+                glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_FALSE);
+                s_shMark.Use();
+                glUniform4f(glGetUniformLocation(s_progMark, "rgba"), 1.0f, 0.78f, 0.1f, 1.0f);
+                glBindVertexArray(s_vaoMark);
+                glBindBuffer(GL_ARRAY_BUFFER, s_vboMark);
+                glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(av.size() * sizeof(glm::vec4)), av.data(), GL_STREAM_DRAW);
+                glDrawArrays(GL_TRIANGLE_STRIP, 0, GLsizei(cRing));
+                glDrawArrays(GL_TRIANGLE_STRIP, GLsizei(cRing), GLsizei(av.size() - cRing));
+                glBindVertexArray(0);
+                glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+            }
         }
         if (s_afboMsaa[i])
         {
             // desktop MSAA: resolved into the image; Vulkan: copied in flipped (the image is read top row first)
             const GLuint fboImage = FboEyeImage(i);
-            glBindFramebuffer(GL_READ_FRAMEBUFFER, s_afboMsaa[i]);
-            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fboImage);
             const int dx = s_dxEye, dy = s_dyEye;
-            if (s_atexEyeVk[i])
+            if (s_atexEyeVk[i] && pk && FEyeCopyPackets(*pk, fViewsVk, i, fboImage, dx, dy)) {}
+            else
             {
-                // (the eye's part of its target, flipped into the same part of the image's rows)
-                glBindFramebuffer(GL_FRAMEBUFFER, fboImage);
-                glViewport(0, 0, dx, dy);
-                glDisable(GL_DEPTH_TEST);
-                glDisable(GL_STENCIL_TEST);
-                glDisable(GL_BLEND);
-                glDisable(GL_CULL_FACE);
-                glDisable(GL_SCISSOR_TEST);
-                glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
-                // (multiview: both layers in one two-view draw into the image's two layers)
-                const GLSHADER& sh = fViewsVk ? s_shCopyArray : s_shCopy;
-                const GLenum targetTex = fViewsVk ? GL_TEXTURE_2D_ARRAY : GL_TEXTURE_2D;
-                sh.Use();
-                glUniform1i(sh.Loc("tex"), 0);
-                glUniform1i(sh.Loc("fOpaque"), 1);
-                glUniform1i(sh.Loc("fFlipY"), 1);
-                glUniform2f(sh.Loc("uvScale"), float(dx) / float(s_aeye[i].dx), float(dy) / float(s_aeye[i].dy));
-                glActiveTexture(GL_TEXTURE0);
-                glBindTexture(targetTex, s_atexEyeVk[i]);
-                glBindVertexArray(s_vaoEmpty);
-                glDrawArrays(GL_TRIANGLES, 0, 3);
-                glBindVertexArray(0);
-                glBindTexture(targetTex, 0);
+                glBindFramebuffer(GL_READ_FRAMEBUFFER, s_afboMsaa[i]);
+                glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fboImage);
+                if (s_atexEyeVk[i])
+                {
+                    // (the eye's part of its target, flipped into the same part of the image's rows)
+                    glBindFramebuffer(GL_FRAMEBUFFER, fboImage);
+                    glViewport(0, 0, dx, dy);
+                    glDisable(GL_DEPTH_TEST);
+                    glDisable(GL_STENCIL_TEST);
+                    glDisable(GL_BLEND);
+                    glDisable(GL_CULL_FACE);
+                    glDisable(GL_SCISSOR_TEST);
+                    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+                    // (multiview: both layers in one two-view draw into the image's two layers)
+                    const GLSHADER& sh = fViewsVk ? s_shCopyArray : s_shCopy;
+                    const GLenum targetTex = fViewsVk ? GL_TEXTURE_2D_ARRAY : GL_TEXTURE_2D;
+                    sh.Use();
+                    glUniform1i(sh.Loc("tex"), 0);
+                    glUniform1i(sh.Loc("fOpaque"), 1);
+                    glUniform1i(sh.Loc("fFlipY"), 1);
+                    glUniform2f(sh.Loc("uvScale"), float(dx) / float(s_aeye[i].dx), float(dy) / float(s_aeye[i].dy));
+                    glActiveTexture(GL_TEXTURE0);
+                    glBindTexture(targetTex, s_atexEyeVk[i]);
+                    glBindVertexArray(s_vaoEmpty);
+                    glDrawArrays(GL_TRIANGLES, 0, 3);
+                    glBindVertexArray(0);
+                    glBindTexture(targetTex, 0);
+                }
+                else glBlitFramebuffer(0, 0, dx, dy, 0, 0, dx, dy, GL_COLOR_BUFFER_BIT, GL_NEAREST);
             }
-            else glBlitFramebuffer(0, 0, dx, dy, 0, 0, dx, dy, GL_COLOR_BUFFER_BIT, GL_NEAREST);
             if (FOrientCheck() && fViewsVk)
                 for (int l = 0; l < 2; ++l)
                     CheckOrientation(l ? "eye 1" : "eye", FboLayerVk(0, l, s_atexEyeVk[0]), FboLayerVk(1, l, s_aeye[0].atex[s_aeye[0].iimage]), dx, dy);
             else if (FOrientCheck()) CheckOrientation("eye", s_afboMsaa[i], fboImage, dx, dy);
-            glBindFramebuffer(GL_FRAMEBUFFER, s_afboMsaa[i]);
+            if (pk) pk->bindTarget(s_afboMsaa[i]);
+            else glBindFramebuffer(GL_FRAMEBUFFER, s_afboMsaa[i]);
         }
         // (upscaling: the eye's picture, now in its image's bottom-left part, scaled up to the whole image)
         const bool fFsr = FFsrEyes() && (s_dxEye < s_aeye[i].dx || s_dyEye < s_aeye[i].dy);
@@ -2348,12 +3110,14 @@ void FinishEyes()
         const char* const pchAt = s_szShot ? std::strchr(s_szShot, '@') : nullptr;
         bool fShotFrame = false;
         for (const char* p = pchAt; p && !fShotFrame; p = std::strchr(p + 1, ',')) fShotFrame = s_cframeShot == std::atoi(p + 1);
-        if (fShotFrame)
+        std::string prefixView;
+        const bool fViewShot = i == 0 && FViewShotFrame(s_cframePresent + 1, &prefixView);
+        if (fShotFrame || fViewShot)
         {
-            const bool fSeveral = std::strchr(pchAt, ',') != nullptr;
-            const std::string prefix = std::string(s_szShot, pchAt) + (fSeveral ? "_" + std::to_string(s_cframeShot) : std::string());
+            const bool fSeveral = pchAt && std::strchr(pchAt, ',') != nullptr;
+            const std::string prefix = !fShotFrame ? prefixView : std::string(s_szShot, pchAt) + (fSeveral ? "_" + std::to_string(s_cframeShot) : std::string());
             const int dx = fFsr ? s_aeye[i].dx : s_dxEye, dy = fFsr ? s_aeye[i].dy : s_dyEye;
-            for (int ieye = s_fMultiview ? 0 : i; ieye <= (s_fMultiview ? 1 : i); ++ieye)
+            for (int ieye = s_fMultiview ? 0 : i; ieye <= (fShotFrame ? (s_fMultiview ? 1 : i) : 0); ++ieye)
             {
                 std::vector<uint8_t> ab(size_t(dx) * size_t(dy) * 4), flipped(ab.size());
                 static GLuint s_fboLayer = 0;
@@ -2383,12 +3147,19 @@ void FinishEyes()
             }
         }
         // the depth is not kept (a tiler then never writes it out)
-        const GLenum aatt[] = {GL_DEPTH_ATTACHMENT, GL_STENCIL_ATTACHMENT};
-        glBindFramebuffer(GL_FRAMEBUFFER, fboDraw);
-        if (s_pfnInvalidate) s_pfnInvalidate(GL_FRAMEBUFFER, 2, aatt);
+        // (draw packets: invalidate's depth-stencil, which the layer takes as the two attachments' invalidation)
+        if (pk && pk->invalidate && s_pfnInvalidate) pk->invalidate(fboDraw, cane::draw::kClearDepth | cane::draw::kClearStencil);
+        else if (pk && !s_pfnInvalidate) pk->bindTarget(fboDraw);
+        else
+        {
+            const GLenum aatt[] = {GL_DEPTH_ATTACHMENT, GL_STENCIL_ATTACHMENT};
+            glBindFramebuffer(GL_FRAMEBUFFER, fboDraw);
+            if (s_pfnInvalidate) s_pfnInvalidate(GL_FRAMEBUFFER, 2, aatt);
+        }
         Release(s_aeye[i]);
     }
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    if (pk) pk->bindTarget(0);
+    else glBindFramebuffer(GL_FRAMEBUFFER, 0);
     s_frame.fEyesDrawn = true;
 }
 
@@ -2397,7 +3168,15 @@ bool FPresent()
     if (!s_fStarted) return false;
     if (!s_frame.fBegun) BeginFrame();   // (a movie's or a load's picture: a frame of its own)
     // the game picture (resolved)
-    if (g_gl.fboMsaa)
+    const cane::draw::Packets* const pk = PpacketsVr();
+    if (g_gl.fboMsaa && pk)
+    {
+        // (draw packets: the resolve as the copy entry; the picture's framebuffer bound after it (the GL calls leave the
+        // MSAA one as the read framebuffer: every user after this binds its own first))
+        const int32_t rect[4] = {0, 0, g_gl.renderWidth, g_gl.renderHeight};
+        pk->copy(g_gl.fboMsaa, g_gl.fbo, rect, 0, 0, g_gl.fbo);
+    }
+    else if (g_gl.fboMsaa)
     {
         glBindFramebuffer(GL_READ_FRAMEBUFFER, g_gl.fboMsaa);
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, g_gl.fbo);
@@ -2465,42 +3244,100 @@ bool FPresent()
             if (s_panel.h && FAcquire(s_panel))
             {
                 const GLuint fbo = s_panel.afbo[s_panel.iimage];
-                glBindFramebuffer(GL_FRAMEBUFFER, fbo);
-                glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, s_panel.atex[s_panel.iimage], 0);
-                glViewport(0, 0, dx, dy);
-                glDisable(GL_DEPTH_TEST);
-                glDisable(GL_STENCIL_TEST);
-                glDisable(GL_BLEND);
-                glDisable(GL_CULL_FACE);
-                glDisable(GL_SCISSOR_TEST);
-                if (FGles() && s_fSrgb) glDisable(kGlFramebufferSrgb);
-                glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
-                s_shCopy.Use();
-                glUniform1i(glGetUniformLocation(s_progCopy, "tex"), 0);
-                glUniform1i(glGetUniformLocation(s_progCopy, "fOpaque"), fHud ? 0 : 1);
-                glUniform1i(glGetUniformLocation(s_progCopy, "fFlipY"), s_fVk ? 1 : 0);
-                glUniform2f(glGetUniformLocation(s_progCopy, "uvScale"), 1.0f, 1.0f);
-                glActiveTexture(GL_TEXTURE0);
-                glBindTexture(GL_TEXTURE_2D, g_gl.fbc);
-                glBindVertexArray(s_vaoEmpty);
-                glDrawArrays(GL_TRIANGLES, 0, 3);
-                glBindVertexArray(0);
+                // (draw packets: the image attached once per framebuffer (each of the swapchain's images has its own), the
+                // pass, the copy program's state with fOpaque per draw, the picture on unit 0 (left bound, as the GL calls
+                // leave it), vertex array 0 after)
+                const uint32_t idPk = pk ? PacketStateVr(*pk, s_progCopy, kPkOpaque, 2, {{"tex", 0}, {"fFlipY", 1}}) : 0;
+                if (idPk)
+                {
+                    if (!s_mpfFboReady[fbo])
+                    {
+                        if (const cane::draw::Packets* pkf = PpacketsFbo())
+                        {
+                            cane::draw::Attachment c;   // (native: no binding; the pass below binds it)
+                            c.object = s_panel.atex[s_panel.iimage];
+                            pkf->attach(fbo, cane::draw::kClearColor, c);
+                        }
+                        else
+                        {
+                        glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+                        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, s_panel.atex[s_panel.iimage], 0);
+                        }
+                        s_mpfFboReady[fbo] = true;
+                    }
+                    cane::draw::Pass ps;
+                    ps.framebuffer = fbo;
+                    ps.viewport[2] = dx, ps.viewport[3] = dy;
+                    pk->beginPass(ps);
+                    pk->scissor(nullptr);
+                    const float uv[2] = {1.0f, 1.0f};
+                    if (const GLint loc = LocVr(s_progCopy, "uvScale"); loc >= 0) pk->setConstant(s_progCopy, loc, uv, sizeof uv);
+                    const GLint locOpaque = LocVr(s_progCopy, "fOpaque");
+                    const cane::draw::Constant opaque{locOpaque, fHud ? 0u : 1u};
+                    pk->bindTexture(0, g_gl.fbc, 0, cane::draw::kSamplerKept);
+                    pk->drawArrays(idPk, s_vaoEmpty, 0, 3, &opaque, locOpaque >= 0 ? 1 : 0);
+                    pk->drawArrays(idPk, 0, 0, 0, nullptr, 0);
+                }
+                else
+                {
+                    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+                    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, s_panel.atex[s_panel.iimage], 0);
+                    glViewport(0, 0, dx, dy);
+                    glDisable(GL_DEPTH_TEST);
+                    glDisable(GL_STENCIL_TEST);
+                    glDisable(GL_BLEND);
+                    glDisable(GL_CULL_FACE);
+                    glDisable(GL_SCISSOR_TEST);
+                    if (FGles() && s_fSrgb) glDisable(kGlFramebufferSrgb);
+                    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+                    s_shCopy.Use();
+                    glUniform1i(glGetUniformLocation(s_progCopy, "tex"), 0);
+                    glUniform1i(glGetUniformLocation(s_progCopy, "fOpaque"), fHud ? 0 : 1);
+                    glUniform1i(glGetUniformLocation(s_progCopy, "fFlipY"), s_fVk ? 1 : 0);
+                    glUniform2f(glGetUniformLocation(s_progCopy, "uvScale"), 1.0f, 1.0f);
+                    glActiveTexture(GL_TEXTURE0);
+                    glBindTexture(GL_TEXTURE_2D, g_gl.fbc);
+                    glBindVertexArray(s_vaoEmpty);
+                    glDrawArrays(GL_TRIANGLES, 0, 3);
+                    glBindVertexArray(0);
+                }
                 if (FOrientCheck()) CheckOrientation(fHud ? "HUD panel" : "flat screen", g_gl.fbo, fbo, dx, dy);
                 Release(s_panel);
                 // where it floats: the Flat Screen ahead of the anchor; the HUD panel nearer, turning after the head
                 const float rAspect = float(dx) / float(dy);
                 float width = 0.0f, dist = 0.0f;
                 float yaw = s_yawAnchor;
+                // (the cutscenes: the panel (the subtitles) follows the head both ways, lazily: it eases back under the gaze
+                // (about a second) and catches up quickly past a margin (15 degrees across, 10 up / down); level with the
+                // head's place)
+                const bool fFollow = fHud && FCutsceneView() && s_frame.fViews;
                 if (fHud)
                 {
-                    width = 1.5f, dist = 1.4f;
+                    // (the title screen: the panel 2 m away (~41 degrees across, 24 high): the logo and the prompts at once)
+                    width = 1.5f, dist = s_moment.fTitle ? 2.0f : 1.4f;
                     if (s_frame.fViews)
                     {
-                        float d = YawOf(Quat(s_frame.aview[0].pose.orientation)) - s_yawPanel;
+                        const glm::quat qHead = Quat(s_frame.aview[0].pose.orientation);
+                        float d = YawOf(qHead) - s_yawPanel;
                         while (d > kPi) d -= 2.0f * kPi;
                         while (d < -kPi) d += 2.0f * kPi;
-                        const float dMax = glm::radians(30.0f);
-                        if (std::fabs(d) > dMax) s_yawPanel += d > 0 ? d - dMax : d + dMax;
+                        if (fFollow)
+                        {
+                            const float dt = std::clamp(s_frame.state.predictedDisplayPeriod > 0 ? float(s_frame.state.predictedDisplayPeriod) * 1e-9f : 1.0f / 72.0f, 0.001f, 0.1f);
+                            auto ease = [dt](float delta, float margin) {
+                                const float excess = std::fabs(delta) > margin ? (delta > 0 ? delta - margin : delta + margin) : 0.0f;
+                                return delta * (1.0f - std::exp(-dt / 1.0f)) + excess * (1.0f - std::exp(-dt / 0.2f));
+                            };
+                            const float pitchHead = std::asin(std::clamp((qHead * glm::vec3(0, 0, -1)).y, -1.0f, 1.0f));
+                            s_yawPanel += ease(d, glm::radians(15.0f));
+                            s_pitchPanel += ease(std::clamp(pitchHead, glm::radians(-45.0f), glm::radians(35.0f)) - s_pitchPanel, glm::radians(10.0f));
+                        }
+                        else
+                        {
+                            const float dMax = glm::radians(30.0f);
+                            if (std::fabs(d) > dMax) s_yawPanel += d > 0 ? d - dMax : d + dMax;
+                            s_pitchPanel = 0.0f;
+                        }
                     }
                     yaw = s_yawPanel;
                 }
@@ -2510,29 +3347,78 @@ bool FPresent()
                     width = s_awidth[std::clamp(g_vropts.screenSize, 0, 2)];
                     dist = 3.0f;
                 }
-                const glm::quat q = glm::angleAxis(yaw, glm::vec3(0, 1, 0));
-                const glm::vec3 pos = s_posAnchor + q * glm::vec3(0.0f, fHud ? -0.1f : 0.0f, -dist);
+                const glm::quat q = fFollow ? glm::angleAxis(yaw, glm::vec3(0, 1, 0)) * glm::angleAxis(s_pitchPanel, glm::vec3(1, 0, 0))
+                                            : glm::angleAxis(yaw, glm::vec3(0, 1, 0));
+                const glm::vec3 pos = fFollow ? (Vec(s_frame.aview[0].pose.position) + Vec(s_frame.aview[1].pose.position)) * 0.5f + q * glm::vec3(0.0f, 0.0f, -dist)
+                                              : s_posAnchor + q * glm::vec3(0.0f, fHud ? -0.1f : 0.0f, -dist);
                 quad.layerFlags = fHud ? XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT : 0;
                 quad.space = s_spaceLocal;
-                // (the binocucom: its frame fixed to the head, wide enough that the window fills the view)
-                if (fHud && s_view == VRVIEW_Binoc && s_spaceView)
+                // (the binocucom: its frame fixed to the head, wide enough that the window fills the view; its picture
+                // laid out for the whole view (UpdateBinocLayout): the frame covers it all)
+                if (fHud && s_view == VRVIEW_BinocTalk && s_binoc.f)
+                {
+                    // (the binocucom talk: its frame fixed in the room where the head faced at the start, 1 m ahead)
+                    const glm::quat qT = glm::angleAxis(s_yawTalk, glm::vec3(0, 1, 0));
+                    quad.space = s_spaceView;   // (placed below in the local space; marks it as placed here)
+                    quad.pose.orientation = XrQuat(qT);
+                    quad.pose.position = XrVec(s_posTalk + qT * glm::vec3(0.0f, 0.0f, -1.0f));
+                    quad.size = XrExtent2Df{s_binoc.w, s_binoc.h};
+                }
+                else if (fHud && s_view == VRVIEW_Binoc && s_spaceView)
                 {
                     quad.space = s_spaceView;
                     quad.pose.orientation = XrQuaternionf{0, 0, 0, 1};
                     quad.pose.position = XrVector3f{0.0f, 0.0f, -1.0f};
-                    quad.size = {2.2f, 2.2f / rAspect};
+                    quad.size = s_binoc.f ? XrExtent2Df{s_binoc.w, s_binoc.h} : XrExtent2Df{2.2f, 2.2f / rAspect};
                 }
                 quad.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
                 quad.subImage.swapchain = s_panel.h;
                 quad.subImage.imageRect = {{0, 0}, {dx, dy}};
-                if (quad.space != s_spaceView)
+                if (fHud && s_view == VRVIEW_BinocTalk && s_binoc.f) quad.space = s_spaceLocal;
+                else if (!fHud && s_moment.fWipe && s_panelLast.f && g_vropts.mode == VRMODE_Immersive)
+                {
+                    // (a frame without the eyes during a transition's wipe (the load): where the HUD panel was, the
+                    // void black round it, so the wipe's picture stays in view)
+                    quad.pose.orientation = XrQuat(s_panelLast.q);
+                    quad.pose.position = XrVec(s_panelLast.pos);
+                    quad.size = {s_panelLast.w, s_panelLast.h};
+                }
+                else if (quad.space != s_spaceView)
                 {
                     quad.pose.orientation = XrQuat(q);
                     quad.pose.position = XrVec(pos);
                     quad.size = {width, width / rAspect};
                 }
+                s_panelLast = PANELPLACE{};
+                if (fHud && quad.space == s_spaceLocal) s_panelLast = PANELPLACE{true, pos, q, quad.size.width, quad.size.height};
                 alayer.push_back(reinterpret_cast<const XrCompositionLayerBaseHeader*>(&quad));
             }
+        }
+        if (std::string prefix; FViewShotFrame(s_cframePresent + 1, &prefix))
+        {
+            // (test: SLY2N_VR_VIEWSHOT: the game picture and the frame's layout, tools/vrview.py)
+            const int dx = g_gl.renderWidth, dy = g_gl.renderHeight;
+            std::vector<uint8_t> ab(size_t(dx) * size_t(dy) * 4), flipped(ab.size());
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, g_gl.fbo);
+            glPixelStorei(GL_PACK_ALIGNMENT, 1);
+            glReadPixels(0, 0, dx, dy, GL_RGBA, GL_UNSIGNED_BYTE, ab.data());
+            for (int y = 0; y < dy; ++y) std::memcpy(&flipped[size_t(y) * size_t(dx) * 4], &ab[size_t(dy - 1 - y) * size_t(dx) * 4], size_t(dx) * 4);
+            stbi_write_png((prefix + "_panel.png").c_str(), dx, dy, 4, flipped.data(), dx * 4);
+            if (FILE* pf = std::fopen((prefix + "_view.json").c_str(), "w"))
+            {
+                const XrView& v = s_frame.aview[0];
+                const bool fQuad = alayer.size() > 0 && alayer.back() == reinterpret_cast<const XrCompositionLayerBaseHeader*>(&quad);
+                std::fprintf(pf, "{\"eyes\": %d, \"view\": %d, \"fov\": [%f, %f, %f, %f], \"pos\": [%f, %f, %f], \"quat\": [%f, %f, %f, %f],\n",
+                             s_frame.fEyesDrawn ? 1 : 0, s_view, double(v.fov.angleLeft), double(v.fov.angleRight), double(v.fov.angleUp), double(v.fov.angleDown),
+                             double(v.pose.position.x), double(v.pose.position.y), double(v.pose.position.z), double(v.pose.orientation.x),
+                             double(v.pose.orientation.y), double(v.pose.orientation.z), double(v.pose.orientation.w));
+                std::fprintf(pf, " \"quad\": %d, \"quadview\": %d, \"qpos\": [%f, %f, %f], \"qquat\": [%f, %f, %f, %f], \"qsize\": [%f, %f], \"qalpha\": %d}\n",
+                             fQuad ? 1 : 0, quad.space == s_spaceView ? 1 : 0, double(quad.pose.position.x), double(quad.pose.position.y), double(quad.pose.position.z),
+                             double(quad.pose.orientation.x), double(quad.pose.orientation.y), double(quad.pose.orientation.z), double(quad.pose.orientation.w),
+                             double(quad.size.width), double(quad.size.height), (quad.layerFlags & XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT) ? 1 : 0);
+                std::fclose(pf);
+            }
+            Log("wrote %s_view.json", prefix.c_str());
         }
         XrFrameEndInfo ei{XR_TYPE_FRAME_END_INFO};
         ei.displayTime = s_frame.state.predictedDisplayTime;
@@ -2594,6 +3480,7 @@ bool FPresent()
     }
     else
         std::this_thread::sleep_for(std::chrono::milliseconds(5));   // (no frame slot: the session not running)
+    ++s_cframePresent;
     s_fEyesLastFrame = s_frame.fEyesDrawn;   // (the eye resolution: this frame was immersive)
     s_frame.fEyesDrawn = false;
 #if CANE_VULKAN
@@ -2638,7 +3525,9 @@ bool FSkipSwap()
 
 bool FPadState(GLFWgamepadstate* pstate)
 {
-    if (!s_fStarted || !s_fPad || !s_fRunning) return false;
+    // (tests: SLY2N_VR_TESTPAD's controllers are the pad even without an interaction profile: Monado's simulated HMD)
+    static const bool s_fTestPad = std::getenv("SLY2N_VR_TESTPAD") != nullptr;
+    if (!s_fStarted || !(s_fPad || s_fTestPad) || !s_fRunning) return false;
     *pstate = s_pad;
     return true;
 }
@@ -2646,19 +3535,33 @@ bool FPadState(GLFWgamepadstate* pstate)
 void Rumble(float gLow, float gHigh)
 {
     if (!s_fStarted || !s_fRunning || !s_actionset) return;
+    // (a vibration lasts kRenew; renewed while the motor runs, so a long rumble does not stop half way; stopped at 0)
+    constexpr XrDuration kRenew = 250000000;
     static float s_aPrev[2] = {-1.0f, -1.0f};
-    const float ag[2] = {gLow, gHigh};
+    static double s_atApplied[2] = {-1.0, -1.0};
+    const double t = glfwGetTime();
+    const float ag[2] = {std::clamp(gLow, 0.0f, 1.0f), std::clamp(gHigh, 0.0f, 1.0f)};
     for (int i = 0; i < 2; ++i)
     {
-        if (std::fabs(ag[i] - s_aPrev[i]) < 0.02f) continue;
+        const bool fChanged = std::fabs(ag[i] - s_aPrev[i]) >= 0.02f;
+        const bool fRenew = ag[i] > 0.0f && t - s_atApplied[i] >= 0.6 * double(kRenew) / 1e9;
+        if (!fChanged && !fRenew) continue;
         s_aPrev[i] = ag[i];
+        s_atApplied[i] = t;
         XrHapticActionInfo hi{XR_TYPE_HAPTIC_ACTION_INFO};
         hi.action = s_aaction[i == 0 ? ACT_HapticL : ACT_HapticR];
+        if (ag[i] <= 0.0f)
+        {
+            if (pxrStopHapticFeedback) pxrStopHapticFeedback(s_session, &hi);
+            continue;
+        }
         XrHapticVibration v{XR_TYPE_HAPTIC_VIBRATION};
-        v.amplitude = std::clamp(ag[i], 0.0f, 1.0f);
-        v.duration = ag[i] > 0.0f ? XrDuration(500000000) : XR_MIN_HAPTIC_DURATION;   // (renewed while it changes)
+        v.amplitude = ag[i];
+        v.duration = kRenew;
         v.frequency = XR_FREQUENCY_UNSPECIFIED;
-        pxrApplyHapticFeedback(s_session, &hi, reinterpret_cast<const XrHapticBaseHeader*>(&v));
+        const XrResult r = pxrApplyHapticFeedback(s_session, &hi, reinterpret_cast<const XrHapticBaseHeader*>(&v));
+        static const bool s_fLog = std::getenv("SLY2N_RUMBLELOG") != nullptr;
+        if (s_fLog) Log("haptic: %s hand amplitude %.2f (%d)", i == 0 ? "left" : "right", double(ag[i]), int(r));
     }
 }
 }  // namespace vr

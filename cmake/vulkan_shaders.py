@@ -70,6 +70,17 @@ for suffix, geom, defs in _glob:
     PROGRAMS.append(('glob' + suffix + '_pull', 'glob.vert', geom, 'glob.frag', dict(defs, CANE_PULL='1', CANE_BLEND1='1'), SLY2))
     PROGRAMS.append(('glob' + suffix + '_bindless_pull', 'glob.vert', geom, 'glob.frag',
                      dict(defs, BINDLESS='1', CANE_PULL='1', CANE_BLEND1='1'), SLY2))
+# (the same, without CANE_BLEND1's second output: gl.cpp glGlobShaderVol, the projected volumes' colour draws; with the
+# second output the Quest 3S's Adreno hangs drawing them while its video capture preempts the GPU)
+for suffix, geom, defs in _glob:
+    if 'NOKILL' in defs:
+        PROGRAMS.append(('glob' + suffix + '_pullvol', 'glob.vert', geom, 'glob.frag', dict(defs, CANE_PULL='1'), SLY2))
+        PROGRAMS.append(('glob' + suffix + '_bindless_pullvol', 'glob.vert', geom, 'glob.frag',
+                         dict(defs, BINDLESS='1', CANE_PULL='1'), SLY2))
+# (throwaway experiment, SLY2N_VKFP16=1 / 2: glob's fragment maths partly / fully in float16; see notes/VKGPU section 3)
+for k, v, g, f, d, dr in list(PROGRAMS):
+    for level in ('1', '2'):
+        PROGRAMS.append((k + '_fp16_' + level, v, g, f, dict(d, CANE_FP16=level), dr))
 PROGRAMS += [
     ('celborder', 'celborder.vert', None, 'celborder.frag', {}, SLY2),
     ('hud', 'hud.vert', None, 'hud.frag', {}, SLY2),
@@ -445,6 +456,8 @@ def build_program(root, key, files, defines, directory, out_dir, glslang):
         if stage in ('vert', 'geom') and not NOFUSE:
             src = glsl_fuse.fuse_source(src)   # (the OpenGL compiler's fused multiply-adds: cmake/glsl_fuse.py)
         header = '#version 460\n#extension GL_EXT_nonuniform_qualifier : require\n'
+        if 'CANE_FP16' in defines and stage == 'frag':
+            header += '#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require\n'
         if mv is not None:
             header += '#extension GL_EXT_multiview : require\n'
         return header + src, storage

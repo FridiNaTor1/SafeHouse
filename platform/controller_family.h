@@ -808,15 +808,15 @@ inline const char* buttonLabel(Button button, Family family) {
     // L / R the triggers; its left bumper is the Switch Online pad's ZL.
     static constexpr const char* table[kButtonCount][kFamilyCount] = {
         { "A / Cross", "Cross", "A", "B", "A", "A", "Cross", "Cross", "A", "A", "B", "B", "B", "A", "A", "A", "R Pad", "A" },                                   // South
-        { "B / Circle", "Circle", "B", "A", "B", "B", "Circle", "Circle", "B", "X", "A", "A", "A", "B", "B", "B", "R Menu", "B" },                                 // East
-        { "X / Square", "Square", "X", "Y", "X", "X", "Square", "Square", "X", "B", "Y", "Y", "Y", "X", "L A", "X", "L Pad", "X" },                                 // West
-        { "Y / Triangle", "Triangle", "Y", "X", "Y", "Y", "Triangle", "Triangle", "Y", "Y", "X", "X", "X", "Y", "L B", "Y", "L Menu", "Y" },                             // North
-        { "Left Bumper", "L1", "LB", "L", "L1", "LB", "L1", "L1", "L1", "ZL", "L", "L", "L", "L Grip", "L Grip", "L1", "L Grip", "L Grip" },                                 // LB
-        { "Right Bumper", "R1", "RB", "R", "R1", "RB", "R1", "R1", "R1", "Z", "R", "R", "R", "R Grip", "R Grip", "R1", "R Grip", "R Grip" },                                // RB
-        { "Left Trigger", "L2", "LT", "ZL", "L2", "LT", "L2", "L2", "L2", "L", "ZL", "ZL", "ZL", "L Trigger", "L Trigger", "L2", "L Trigger", "L Trigger" },                               // LT
-        { "Right Trigger", "R2", "RT", "ZR", "R2", "RT", "R2", "R2", "R2", "R", "ZR", "ZR", "ZR", "R Trigger", "R Trigger", "R2", "R Trigger", "R Trigger" },                              // RT
-        { "Back / Select", "Select", "View", "-", "View", "Back", "Share", "Create", "View", "Select", "-", "-", "-", "Menu", "L Pad", "View", "Menu", "Menu" },                     // Back
-        { "Start", "Start", "Menu", "+", "Menu", "Start", "Options", "Options", "Menu", "Start", "+", "+", "+", "Menu", "System", "Menu", "Menu", "Menu" },                          // Start
+        { "B / Circle", "Circle", "B", "A", "B", "B", "Circle", "Circle", "B", "X", "A", "A", "A", "L Grip", "L Grip", "B", "L Grip", "L Grip" },                                 // East
+        { "X / Square", "Square", "X", "Y", "X", "X", "Square", "Square", "X", "B", "Y", "Y", "Y", "B", "B", "X", "L Pad", "B" },                                 // West
+        { "Y / Triangle", "Triangle", "Y", "X", "Y", "Y", "Triangle", "Triangle", "Y", "Y", "X", "X", "X", "R Grip", "R Grip", "Y", "R Grip", "R Grip" },                             // North
+        { "Left Bumper", "L1", "LB", "L", "L1", "LB", "L1", "L1", "L1", "ZL", "L", "L", "L", "L Trigger", "L Trigger", "L1", "L Trigger", "L Trigger" },                                 // LB
+        { "Right Bumper", "R1", "RB", "R", "R1", "RB", "R1", "R1", "R1", "Z", "R", "R", "R", "R Trigger", "R Trigger", "R1", "R Trigger", "R Trigger" },                                // RB
+        { "Left Trigger", "L2", "LT", "ZL", "L2", "LT", "L2", "L2", "L2", "L", "ZL", "ZL", "ZL", "X", "L A", "L2", "Unbound", "X" },                               // LT
+        { "Right Trigger", "R2", "RT", "ZR", "R2", "RT", "R2", "R2", "R2", "R", "ZR", "ZR", "ZR", "Y", "L B", "R2", "Unbound", "Y" },                              // RT
+        { "Back / Select", "Select", "View", "-", "View", "Back", "Share", "Create", "View", "Select", "-", "-", "-", "L Grip + L3", "L Grip + L3", "View", "Menu", "L Grip + L3" },                     // Back
+        { "Start", "Start", "Menu", "+", "Menu", "Start", "Options", "Options", "Menu", "Start", "+", "+", "+", "Menu", "R Grip + R3", "Menu", "Menu", "Menu" },                          // Start
         { "Left Stick", "Left stick", "Left stick", "Left stick", "Left stick", "Stick", "Left stick", "Left stick", "Left stick", "Control stick", "Left stick", "Left stick", "Left stick", "Left stick", "Left stick", "Left stick", "Left pad", "Left stick" },          // LS
         { "Right Stick", "Right stick", "Right stick", "Right stick", "Right stick", "Right pad", "Right stick", "Right stick", "Right stick", "C-stick", "Right stick", "Right stick", "Right stick", "Right stick", "Right stick", "Right stick", "Right pad", "Right stick" },   // RS
         { "Left Stick", "L3", "LS", "L-stick", "L3", "Stick click", "L3", "L3", "L3", "L3", "L-stick", "L-stick", "L-stick", "L3", "L3", "L3", "L Pad click", "L3" },                   // LSPress

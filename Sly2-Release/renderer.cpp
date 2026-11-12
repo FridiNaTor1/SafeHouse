@@ -56,7 +56,11 @@ void RememberFailure(const std::string& why) { s_fMarker = cane::renderer::write
 // (CaneVk::Options::onFatal: Vulkan stopped with an error it cannot recover from; the process ends after this)
 void OnVulkanFatal(const char* why)
 {
-    RememberFailure(std::string("Vulkan error: ") + why);
+    // (VR after the start: not remembered. A GPU hang or a lost device while the headset's system captures, records or
+    // shows its overlays (2026-11-11: the Quest's video recording) is not Vulkan failing to start: the next start
+    // keeps Vulkan)
+    if (!(s_fStarted && vr::FActive())) RememberFailure(std::string("Vulkan error: ") + why);
+    else std::printf("Vulkan: %s (VR, after the start: not remembered)\n", why);
 #if !defined(_WIN32) && !defined(__ANDROID__)
     if (s_cPresents < kPresentsRestart && !s_relaunchArgs.empty())
     {
@@ -87,7 +91,9 @@ void SwapInterval(int interval) { CaneVk::SetSwapInterval(interval); }
 void NoteFrameShown()
 {
     if (s_cPresents < kPresentsRestart) ++s_cPresents;
-    if (!s_fStarted && s_cPresents >= kPresentsStarted && glfwGetTime() - s_tStart >= kSecondsStarted)
+    // (VR: the frames reached the headset: started, at once; a start the player leaves within seconds (the headset's
+    // menu, a quick quit) is not a failure)
+    if (!s_fStarted && s_cPresents >= kPresentsStarted && (vr::FActive() || glfwGetTime() - s_tStart >= kSecondsStarted))
     {
         s_fStarted = true;
         ClearMarker();
@@ -298,6 +304,31 @@ bool FVulkanFramebufferFetch()
     return s_fVulkan && CaneVk::FramebufferFetchUsable();
 #else
     return false;
+#endif
+}
+
+bool FVulkanDepthBounds()
+{
+#if CANE_VULKAN
+    return s_fVulkan && CaneVk::DepthBoundsSupported();
+#else
+    return false;
+#endif
+}
+bool FGpuMarks()
+{
+#if CANE_VULKAN
+    return s_fVulkan && CaneVk::GpuMarksOn();
+#else
+    return false;
+#endif
+}
+void GpuMark(const char* label)
+{
+#if CANE_VULKAN
+    if (s_fVulkan) CaneVk::GpuMark(label);
+#else
+    (void)label;
 #endif
 }
 

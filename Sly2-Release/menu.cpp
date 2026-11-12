@@ -1837,6 +1837,7 @@ void InitMenu(SW* psw)
 int g_ncardMode = 0;
 
 bool FMenuShown() { return s_menu.fShown || s_card.fShown; }
+bool FPauseMenuShown() { return s_menu.fShown; }
 bool FMenuActive() { return s_menu.fShown; }
 int NMenuState() { return s_menu.state; }
 bool FCardMessageActive() { return s_card.fShown; }

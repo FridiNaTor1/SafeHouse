@@ -17,6 +17,7 @@
 #include "disc.h"
 #include "display.h"
 #include "gl.h"
+#include "gl_backend.h"
 #include "lo.h"
 #include "render.h"
 #include "scene.h"
@@ -2033,7 +2034,8 @@ std::pair<GLuint, int> TexArrayOf(const SHD* pshd)
 {
     if (!s_atexarrayFreed.empty())
     {
-        glDeleteTextures(static_cast<GLsizei>(s_atexarrayFreed.size()), s_atexarrayFreed.data());
+        if (const cane::draw::Packets* pk = PpacketsTex()) pk->deleteTextures(uint32_t(s_atexarrayFreed.size()), s_atexarrayFreed.data());
+        else glDeleteTextures(static_cast<GLsizei>(s_atexarrayFreed.size()), s_atexarrayFreed.data());
         s_atexarrayFreed.clear();
     }
     auto it = s_mptexarray.find(pshd);
@@ -2081,10 +2083,28 @@ std::pair<GLuint, int> TexArrayOf(const SHD* pshd)
         int clevel = 1;
         if (fMod)
             for (int d = std::max(dx, dy); d > 1; d >>= 1) ++clevel;
-        glGenTextures(1, &r.first);
-        glBindTexture(GL_TEXTURE_2D_ARRAY, r.first);
-        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-        glTexStorage3D(GL_TEXTURE_2D_ARRAY, clevel, GL_RGBA8, dx, dy, c);
+        // (native: no binding point touched; TEX1 0x60 (bilinear; a texture mod's mip chain trilinear), CLAMP of the
+        // record, as the GL calls' parameters below)
+        const cane::draw::Packets* pk = PpacketsTex();
+        if (pk)
+        {
+            cane::draw::TextureDesc d;
+            d.width = uint32_t(dx), d.height = uint32_t(dy), d.layers = uint32_t(c), d.levels = uint32_t(clevel);
+            d.minFilter = clevel > 1 ? cane::draw::kFilterLinearMipLinear : cane::draw::kFilterLinear, d.magFilter = cane::draw::kFilterLinear;
+            d.wrapS = d.wrapT = cane::draw::kWrapClampToEdge;
+            r.first = pk->createTexture(d);
+        }
+        else
+        {
+            glGenTextures(1, &r.first);
+            glBindTexture(GL_TEXTURE_2D_ARRAY, r.first);
+            glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+            glTexStorage3D(GL_TEXTURE_2D_ARRAY, clevel, GL_RGBA8, dx, dy, c);
+        }
+        auto upload = [&](int i, const void* p) {
+            if (pk) pk->uploadTexture(r.first, 0, uint32_t(i), 0, 0, uint32_t(dx), uint32_t(dy), p);
+            else glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0, i, dx, dy, 1, GL_RGBA, GL_UNSIGNED_BYTE, p);
+        };
         for (int i = 0; i < c; ++i)
         {
             const std::vector<uint8_t>* p = nullptr;
@@ -2094,7 +2114,7 @@ std::pair<GLuint, int> TexArrayOf(const SHD* pshd)
             if (!p) continue;
             if (dxFrame == dx && dyFrame == dy)
             {
-                glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0, i, dx, dy, 1, GL_RGBA, GL_UNSIGNED_BYTE, p->data());
+                upload(i, p->data());
                 continue;
             }
             // (a frame of another size: scaled to the array's, nearest texel)
@@ -2102,14 +2122,18 @@ std::pair<GLuint, int> TexArrayOf(const SHD* pshd)
             for (int y = 0; y < dy; ++y)
                 for (int x = 0; x < dx; ++x)
                     std::memcpy(&ab[(size_t(y) * dx + x) * 4], &(*p)[(size_t(y * dyFrame / dy) * dxFrame + size_t(x * dxFrame / dx)) * 4], 4);
-            glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0, i, dx, dy, 1, GL_RGBA, GL_UNSIGNED_BYTE, ab.data());
+            upload(i, ab.data());
         }
-        if (clevel > 1) glGenerateMipmap(GL_TEXTURE_2D_ARRAY);
+        if (pk && clevel > 1) pk->generateMipmaps(r.first);
+        if (!pk && clevel > 1) glGenerateMipmap(GL_TEXTURE_2D_ARRAY);
         // TEX1 0x60 (bilinear; a texture mod's mip chain trilinear), CLAMP of the record
-        glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, clevel > 1 ? GL_LINEAR_MIPMAP_LINEAR : GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        if (!pk)
+        {
+            glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, clevel > 1 ? GL_LINEAR_MIPMAP_LINEAR : GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        }
         r.second = c;
     }
     s_mptexarray[pshd] = r;
@@ -2620,16 +2644,31 @@ void StepParticles(SW* psw, int cframe, float dt)
 }
 
 void DrawParticles(const glm::mat4& matWorldToClip, const glm::vec3& posCamera, float aspect, const glm::mat4* pmatView1,
-                   const glm::vec3* pposView1)
+                   const glm::vec3* pposView1, bool fStencilOff)
 {
     (void)aspect;
     s_posCamera = posCamera;
-    if (s_apsys.empty()) return;
+    if (s_apsys.empty())
+    {
+        if (fStencilOff) glDisable(GL_STENCIL_TEST);
+        return;
+    }
     if (!s_shParticle.ID)
     {
         s_shParticle.Init("particle.vert", "particle.frag");
+        s_vbo = GlNewBuffer(GL_ARRAY_BUFFER, 0, nullptr, GL_STREAM_DRAW);
+        if (const cane::draw::Packets* pkv = PpacketsVao())
+        {
+            using namespace cane::draw;
+            const VertexAttrib aattr[] = {{0, 4, kAttribFloat, 0, 0, s_vbo, uint32_t(offsetof(PVTX, clip)), sizeof(PVTX), 0},
+                                          {1, 2, kAttribFloat, 0, 0, s_vbo, uint32_t(offsetof(PVTX, uv)), sizeof(PVTX), 0},
+                                          {2, 1, kAttribFloat, 0, 0, s_vbo, uint32_t(offsetof(PVTX, layer)), sizeof(PVTX), 0},
+                                          {3, 4, kAttribFloat, 0, 0, s_vbo, uint32_t(offsetof(PVTX, rgba)), sizeof(PVTX), 0}};
+            s_vao = pkv->createVertexArray(aattr, 4, 0);
+        }
+        else
+        {
         glGenVertexArrays(1, &s_vao);
-        glGenBuffers(1, &s_vbo);
         glBindVertexArray(s_vao);
         glBindBuffer(GL_ARRAY_BUFFER, s_vbo);
         glEnableVertexAttribArray(0);
@@ -2641,6 +2680,7 @@ void DrawParticles(const glm::mat4& matWorldToClip, const glm::vec3& posCamera, 
         glEnableVertexAttribArray(3);
         glVertexAttribPointer(3, 4, GL_FLOAT, GL_FALSE, sizeof(PVTX), reinterpret_cast<void*>(offsetof(PVTX, rgba)));
         glBindVertexArray(0);
+        }
     }
     g_particlestats.cdrawn = 0;
     g_particlestats.cpsys = int(s_apsys.size());
@@ -2663,18 +2703,53 @@ void DrawParticles(const glm::mat4& matWorldToClip, const glm::vec3& posCamera, 
         }
         return false;
     };
+    // (draw packets, platform/draw_packet.h: per blend and Z write a state made once per program, the state the GL calls
+    // leave afterwards one more; the texture, the storage buffer and the per-draw values through the entries)
+    struct PKLOCS { GLuint prog = 0; GLint tex = -1, fTextured = -1, afail = -1; uint32_t aid[5] = {}; };
+    static PKLOCS s_pkl;
+    const cane::draw::Packets* pk = cane::gl::ActiveBackend() ? cane::gl::ActiveBackend()->packets : nullptr;
+    if (!(fStencilOff && pk && pk->drawArrays && pk->applyState && pk->bindTexture && pk->bindStorage)) pk = nullptr;
+    if (pk && s_pkl.prog != s_shParticle.ID)
+    {
+        using namespace cane::draw;
+        s_pkl = {};
+        s_pkl.prog = s_shParticle.ID;
+        s_pkl.tex = s_shParticle.Loc("tex"), s_pkl.fTextured = s_shParticle.Loc("fTextured"), s_pkl.afail = s_shParticle.Loc("afailMode");
+        for (int k = 0; k < 5; ++k)
+        {
+            // k 0..3: additive (bit 0), Z write (bit 1); 4: afterwards (blend on, its factors left, all written)
+            State ps;
+            ps.program = s_shParticle.ID;
+            ps.keep = kKeepStencil | (k == 4 ? kKeepBlendFactors : 0);
+            ps.blend = 1;
+            ps.srcColor = ps.srcAlpha = kFactorSrcAlpha;
+            ps.dstColor = ps.dstAlpha = (k & 1) ? kFactorOne : kFactorOneMinusSrcAlpha;
+            ps.colorMask = k == 4 ? 0xF : 0x7;
+            ps.depthTest = 1, ps.depthWrite = k == 4 || (k & 2) ? 1 : 0, ps.depthCompare = kGreater;
+            if (s_pkl.tex >= 0) ps.aconst[ps.cconst++] = {s_pkl.tex, 0};
+            s_pkl.aid[k] = pk->createState(ps);
+        }
+    }
+    if (pk && !(s_pkl.aid[0] && s_pkl.aid[1] && s_pkl.aid[2] && s_pkl.aid[3] && s_pkl.aid[4])) pk = nullptr;
+    bool fSamplerBound = false;
+    const GLint locAfail = pk ? s_pkl.afail : s_shParticle.Loc("afailMode");
+    const cane::draw::Packets* const pkb = pk ? PpacketsBuf() : nullptr;   // (native buffers: the uploads by name, no binding)
+    if (pk) { if (!pkb) glBindBuffer(GL_ARRAY_BUFFER, s_vbo); }   // (the uploads below)
+    else
+    {
+    if (fStencilOff) glDisable(GL_STENCIL_TEST);
     s_shParticle.Use();
     glBindVertexArray(s_vao);
     glBindBuffer(GL_ARRAY_BUFFER, s_vbo);
     glActiveTexture(GL_TEXTURE0);
     glBindSampler(0, 0);
     glUniform1i(s_shParticle.Loc("tex"), 0);
-    const GLint locAfail = s_shParticle.Loc("afailMode");
     glDisable(GL_CULL_FACE);
     glEnable(GL_DEPTH_TEST);
     glDepthFunc(GL_GREATER);   // TEST 0x7180B: ZTST GREATER
     glEnable(GL_BLEND);
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_FALSE);
+    }
 #if SLY2_FASTPATHS
     // (the Switch: the vertices and the matrices kept from one system and frame to the next, not allocated anew for
     // every particle system every frame)
@@ -2735,20 +2810,58 @@ void DrawParticles(const glm::mat4& matWorldToClip, const glm::vec3& posCamera, 
         for (const glm::mat4& m : amat) ExpandParticles(pp.get(), m, matWorldToClip, av, pmatView1, pmatView1 ? &s_av1 : nullptr);
         if (av.empty()) continue;
         const auto [tex, ctex] = TexArrayOf(pp->pshd);
+        if (pk)
+        {
+            pk->bindTexture(0, tex, 1, fSamplerBound ? cane::draw::kSamplerKept : 0u);
+            fSamplerBound = true;
+        }
+        else
+        {
         glBindTexture(GL_TEXTURE_2D_ARRAY, tex);
         glUniform1i(s_shParticle.Loc("fTextured"), tex ? 1 : 0);
         glBlendEquation(GL_FUNC_ADD);
         glBlendFunc(GL_SRC_ALPHA, pp->fAdditive ? GL_ONE : GL_ONE_MINUS_SRC_ALPHA);
+        }
         if (pmatView1)
         {
             // (the second eye's corners after the vertices, read by the two-view program's storage buffer 10)
             const size_t cbVtx = av.size() * sizeof(PVTX), offClip1 = (cbVtx + 255) & ~size_t(255), cbClip1 = s_av1.size() * sizeof(glm::vec4);
+            if (uint8_t* p = pk && pk->mapStream ? static_cast<uint8_t*>(pk->mapStream(s_vbo, offClip1 + cbClip1)) : nullptr)
+            {
+                std::memcpy(p, av.data(), cbVtx);
+                if (cbClip1) std::memcpy(p + offClip1, s_av1.data(), cbClip1);
+            }
+            else if (pkb)
+            {
+                pkb->bufferData(s_vbo, offClip1 + cbClip1, nullptr, cane::draw::kBufferStream);
+                pkb->bufferSubData(s_vbo, 0, cbVtx, av.data());
+                pkb->bufferSubData(s_vbo, offClip1, cbClip1, s_av1.data());
+            }
+            else
+            {
             glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(offClip1 + cbClip1), nullptr, GL_STREAM_DRAW);
             glBufferSubData(GL_ARRAY_BUFFER, 0, GLsizeiptr(cbVtx), av.data());
             glBufferSubData(GL_ARRAY_BUFFER, GLintptr(offClip1), GLsizeiptr(cbClip1), s_av1.data());
-            glBindBufferRange(GL_SHADER_STORAGE_BUFFER, 10, s_vbo, GLintptr(offClip1), GLsizeiptr(cbClip1));
+            }
+            if (pk && cbClip1) pk->bindStorage(10, s_vbo, offClip1, cbClip1);
+            else glBindBufferRange(GL_SHADER_STORAGE_BUFFER, 10, s_vbo, GLintptr(offClip1), GLsizeiptr(cbClip1));
         }
+        else if (void* p = pk && pk->mapStream ? pk->mapStream(s_vbo, av.size() * sizeof(PVTX)) : nullptr) std::memcpy(p, av.data(), av.size() * sizeof(PVTX));
+        else if (pkb) pkb->bufferData(s_vbo, av.size() * sizeof(PVTX), av.data(), cane::draw::kBufferStream);
         else glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(av.size() * sizeof(PVTX)), av.data(), GL_STREAM_DRAW);
+        if (pk)
+        {
+            const int a = pp->fAdditive ? 1 : 0;
+            cane::draw::Constant ac[2];
+            uint32_t cc = 0;
+            if (s_pkl.fTextured >= 0) ac[cc++] = {s_pkl.fTextured, tex ? 1u : 0u};
+            const uint32_t iafail = cc;
+            if (locAfail >= 0) ac[cc++] = {locAfail, 1u};
+            pk->drawArrays(s_pkl.aid[a | 2], s_vao, 0, uint32_t(av.size()), ac, cc);
+            if (locAfail >= 0) ac[iafail].bits = 2;
+            pk->drawArrays(s_pkl.aid[a], s_vao, 0, uint32_t(av.size()), ac, cc);
+            continue;
+        }
         // ATE GEQUAL 0x80 with AFAIL FB_ONLY: the opaque part writes Z, the rest only colour
         glUniform1i(locAfail, 1);
         glDepthMask(GL_TRUE);
@@ -2756,6 +2869,12 @@ void DrawParticles(const glm::mat4& matWorldToClip, const glm::vec3& posCamera, 
         glUniform1i(locAfail, 2);
         glDepthMask(GL_FALSE);
         glDrawArrays(GL_TRIANGLES, 0, GLsizei(av.size()));
+    }
+    if (pk)
+    {
+        if (!fSamplerBound) glBindSampler(0, 0);
+        pk->drawArrays(s_pkl.aid[4], 0, 0, 0, nullptr, 0);   // (the state and vertex array the GL calls leave)
+        return;
     }
     glDepthMask(GL_TRUE);
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);

@@ -115,6 +115,7 @@ std::string g_deviceName;
 struct Features
 {
     bool dualSrcBlend = false;
+    bool depthBounds = false;      // (GL_EXT_depth_bounds_test: glEnable(GL_DEPTH_BOUNDS_TEST_EXT), glDepthBoundsEXT)
     bool msrtss = false;   // (VK_EXT_multisampled_render_to_single_sampled, Android: MSAA resolved on the tile)
     bool fdm = false;      // (VK_EXT_fragment_density_map with non-subsampled images: VR's fixed foveation)
     VkExtent2D fdmTexel{32, 32};   // (GL_SRC1_* factors: Sly 2's glob CANE_BLEND1 on Android)
@@ -122,6 +123,7 @@ struct Features
     bool fillModeNonSolid = false;
     bool provokingLast = false;
     bool eds3 = false;
+    bool float16 = false;           // (shaderFloat16: the SLY2N_VKFP16 experiment)
     bool demote = false;            // (VK_EXT_extended_dynamic_state3: blend and colour mask dynamic, fewer pipelines)   // (VK_EXT_provoking_vertex: GL's flat outputs come from a primitive's last vertex)
     bool pushDescriptors = true;    // (VK_KHR_push_descriptor: the storage buffers pushed; else per-frame descriptor sets)
     uint32_t pushBytes = 256;       // the push-constant bytes used (a program with a larger block reads it from set 2)
@@ -208,6 +210,11 @@ public:
     {
         size = Align(std::max<VkDeviceSize>(size, 1), 64);
         alignment = std::max<VkDeviceSize>(alignment, 64);
+        // (buffer heaps: the size rounded up to the alignment, so consecutive allocations leave no gap below the next
+        // aligned start. Every buffer allocation is 256-aligned, and such a gap could never hold one: the offsets are the
+        // same as before, but the free list no longer collects one dead gap per allocation, which the first-fit scan
+        // below walked on every allocation (a streamed world part's ~700 buffers: ~3 ms))
+        if (m_buffers) size = Align(size, alignment);
         for (auto& b : m_blocks)
         {
             VkDeviceSize offset;
@@ -335,8 +342,13 @@ private:
     std::vector<GLuint> m_free;
 };
 
+uint64_t g_imageIds = 0;
 struct Image
 {
+    // (the colour resolve once a frame, BlitFramebuffer: which image, and a count of the commands recorded that may
+    // change its contents: render-pass instances it is attached to, transfers into it, external acquires)
+    const uint64_t id = ++g_imageIds;
+    uint64_t writes = 0;
     VkImage image = VK_NULL_HANDLE;
     Alloc memory;
     VkImageView view = VK_NULL_HANDLE;                       // the sampled view (all levels and layers)
@@ -475,6 +487,8 @@ struct State
     std::array<GLuint, kMaxUnits> samplerUnits{};
     std::array<Range, kMaxBindings> storage{};
     bool depthTest = false, blend = false, cull = false, stencilTest = false, scissorTest = false;
+    bool depthBoundsTest = false;
+    float depthBoundsMin = 0.0f, depthBoundsMax = 1.0f;
     bool depthWrite = true;
     GLenum depthFunc = GL_LESS, frontFace = GL_CCW, cullFace = GL_BACK;
     GLenum blendSrc = GL_ONE, blendDst = GL_ZERO, blendSrcAlpha = GL_ONE, blendDstAlpha = GL_ZERO;
@@ -545,6 +559,66 @@ void SetError(GLenum error) { if (s.error == GL_NO_ERROR) s.error = error; }
 // The blend state or colour mask changed: dynamic state with extended_dynamic_state3, else a pipeline's.
 void BlendChanged() { if (g_feat.eds3) b.blendDirty = true; else b.pipelineDirty = true; }
 
+// ------------------------------------------------------------------------------------------------ resource log
+// SLY2N_VKRESLOG=1: the game thread's time in resource creation / upload calls (GL-style and native alike): before the
+// first frame was presented ("load") and after it (each frame over 1 ms printed: a mid-game hitch), summed at the exit.
+struct ResLog
+{
+    double ms = 0, bufferMs = 0;
+    uint64_t bytes = 0, bufferBytes = 0;
+    uint32_t textures = 0, uploads = 0, buffers = 0;
+    void Add(const ResLog& o)
+    {
+        ms += o.ms; bytes += o.bytes; textures += o.textures; uploads += o.uploads; buffers += o.buffers;
+        bufferMs += o.bufferMs; bufferBytes += o.bufferBytes;
+    }
+};
+const bool g_resLogOn = std::getenv("SLY2N_VKRESLOG") && std::atoi(std::getenv("SLY2N_VKRESLOG")) != 0;
+ResLog g_resFrame, g_resLoad, g_resAfter;
+double g_resMaxFrame = 0;
+uint64_t g_resMaxFrameSerial = 0, g_resFrames = 0;
+bool g_resLoaded = false;
+const std::chrono::steady_clock::time_point g_resStart = std::chrono::steady_clock::now();
+struct ResTime
+{
+    std::chrono::steady_clock::time_point t0;
+    int depth = 0;
+    bool on;
+    static int& Depth() { static int d = 0; return d; }
+    explicit ResTime(bool count = true) : on(g_resLogOn && count) { if (on) { depth = Depth()++; t0 = std::chrono::steady_clock::now(); } }
+    ~ResTime()
+    {
+        if (!on) return;
+        --Depth();
+        if (depth == 0) g_resFrame.ms += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    }
+};
+// (at each Present: the frame's share)
+void ResLogFrame()
+{
+    if (!g_resLogOn) return;
+    if (!g_resLoaded)
+    {
+        g_resLoad.Add(g_resFrame);
+        g_resLoaded = true;
+        std::fprintf(stderr, "vkres: load: %u textures, %u uploads (%.1f MB), %u buffers (%.1f MB, %.1f ms): %.1f ms in resource calls; first frame "
+                     "presented %.1f ms into the run\n", g_resLoad.textures, g_resLoad.uploads, g_resLoad.bytes / 1048576.0, g_resLoad.buffers,
+                     g_resLoad.bufferBytes / 1048576.0, g_resLoad.bufferMs, g_resLoad.ms,
+                     std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - g_resStart).count());
+    }
+    else
+    {
+        if (g_resFrame.ms > 1.0)
+            std::fprintf(stderr, "vkres: frame %llu: %u textures, %u uploads (%.2f MB), %u buffers (%.2f MB, %.2f ms): %.2f ms\n",
+                         (unsigned long long)g_resFrames, g_resFrame.textures, g_resFrame.uploads, g_resFrame.bytes / 1048576.0, g_resFrame.buffers,
+                         g_resFrame.bufferBytes / 1048576.0, g_resFrame.bufferMs, g_resFrame.ms);
+        if (g_resFrame.ms > g_resMaxFrame) g_resMaxFrame = g_resFrame.ms, g_resMaxFrameSerial = g_resFrames;
+        g_resAfter.Add(g_resFrame);
+    }
+    ++g_resFrames;
+    g_resFrame = ResLog{};
+}
+
 // ------------------------------------------------------------------------------------------------ frames
 struct RingChunk { Alloc alloc; VkDeviceSize cursor = 0; };
 struct Frame
@@ -569,6 +643,8 @@ struct Frame
     // (SLY2N_VKGPUTIME) the render-pass instances timed in this frame: their sizes and attachments
     uint32_t passTimed = 0;
     std::vector<std::array<uint32_t, 3>> passInfo;
+    // (SLY2N_VKGPUMARKS) the marks written in this frame
+    std::vector<const char*> markLabels;
 };
 std::array<Frame, kFrameSlots> g_frames;
 unsigned g_frameIndex = 0;
@@ -750,7 +826,10 @@ CANE_DEFER_1(vkCmdSetDepthTestEnable, VkBool32)
 CANE_DEFER_1(vkCmdSetDepthWriteEnable, VkBool32)
 CANE_DEFER_1(vkCmdSetDepthCompareOp, VkCompareOp)
 CANE_DEFER_1(vkCmdSetStencilTestEnable, VkBool32)
+CANE_DEFER_1(vkCmdSetDepthBoundsTestEnable, VkBool32)
 #undef CANE_DEFER_1
+void vkCmdSetDepthBounds(VkCommandBuffer cmd, float lo, float hi)
+{ CANE_DEFER(vkCmdSetDepthBounds(cmd, lo, hi), [=](VkCommandBuffer c) { cane::vk::vkCmdSetDepthBounds(c, lo, hi); }); }
 void vkCmdSetStencilOp(VkCommandBuffer cmd, VkStencilFaceFlags f, VkStencilOp a, VkStencilOp b, VkStencilOp d, VkCompareOp o)
 { CANE_DEFER(vkCmdSetStencilOp(cmd, f, a, b, d, o), [=](VkCommandBuffer c) { cane::vk::vkCmdSetStencilOp(c, f, a, b, d, o); }); }
 void vkCmdSetColorBlendEnableEXT(VkCommandBuffer cmd, uint32_t first, uint32_t n, const VkBool32* e)
@@ -1197,7 +1276,7 @@ void QueueClear(Image& im);
 uint32_t g_nextRenderSamples = 1;   // (msrtss: the next image made is drawn with this many samples; SetNextImageRenderSamples)
 uint32_t g_nextRenderbufferLayers = 1;   // (VR multiview: the next renderbuffer made has this many layers; SetNextRenderbufferLayers)
 std::unique_ptr<Image> MakeImage(uint32_t width, uint32_t height, uint32_t layers, uint32_t levels, uint32_t samples,
-                                 VkFormat format, bool array, bool sampled, VkImageUsageFlags extraUsage = 0)
+                                 VkFormat format, bool array, bool sampled, VkImageUsageFlags extraUsage = 0, bool fClear = true)
 {
     auto im = std::make_unique<Image>();
     im->width = width; im->height = height; im->layers = layers; im->levels = levels; im->samples = samples;
@@ -1253,8 +1332,9 @@ std::unique_ptr<Image> MakeImage(uint32_t width, uint32_t height, uint32_t layer
         VKCHECK(vkCreateImageView(g_device, &vi, nullptr, &im->view));
         WriteImageDescriptor(*im);
     }
-    // (GL's new storage reads as zeros on the drivers the game is tested with: cleared, which also gives it a layout)
-    QueueClear(*im);
+    // (GL's new storage reads as zeros on the drivers the game is tested with: cleared, which also gives it a layout;
+    // not when the caller's upload covers every texel next: createTexture with pixels)
+    if (fClear) QueueClear(*im);
     return im;
 }
 VkImageView AttachView(Image& im, unsigned level, unsigned layer, unsigned layers = 1)
@@ -1378,6 +1458,7 @@ void ExecuteXfers(VkCommandBuffer cmd, XferList& list)
     for (const XferOp& op : list.ops)
     {
         hazard(op);
+        if (op.image) ++op.image->writes;
         switch (op.kind)
         {
         case XferOp::CopyBuffer:
@@ -1663,7 +1744,7 @@ VkFramebuffer ClassicFramebuffer(const ClassicFbKey& k)
 struct PendingClear { bool color = false, depth = false, stencil = false; VkClearValue colorValue{}, depthValue{}; } g_pendingClear;
 
 void TimePassBegin();
-void TimePassEnd();
+void TimePassEnd(uint32_t kind, uint32_t width, uint32_t height);
 void BeginRenderingNow()
 {
     VkCommandBuffer cmd = Main();
@@ -1754,6 +1835,8 @@ void BeginRenderingNow()
         ri.pStencilAttachment = &stencil;
     }
     bar.Flush(cmd);
+    if (g_target.color) ++g_target.color->writes;
+    if (g_target.depth) ++g_target.depth->writes;
     TimePassBegin();
     g_instanceClassic = classic;
     if (classic)
@@ -1859,7 +1942,7 @@ void EndRendering()
         g_instanceClassic = false;
     }
     else vkCmdEndRendering(g_main);
-    TimePassEnd();
+    TimePassEnd(0, 0, 0);
     g_inRendering = false;
     g_recColor = g_recDepth = g_recStencil = nullptr;
     g_recClassic = nullptr;
@@ -1917,7 +2000,56 @@ int g_gpuTimeEvery = 0;
 VkQueryPool g_passPool = VK_NULL_HANDLE;
 struct PassTimeSum { double ms = 0; uint32_t n = 0; std::array<uint32_t, 3> info{}; };
 std::array<PassTimeSum, kPassTimes> g_passSums;
-double g_passFrameMs = 0;
+double g_passFrameMs = 0, g_passSpanMs = 0;
+constexpr uint32_t kMarks = 256;
+VkQueryPool g_markPool = VK_NULL_HANDLE;
+struct MarkSum { double ms = 0; uint32_t n = 0; uint32_t order = 0; };
+std::map<std::string, MarkSum> g_markSums;
+uint32_t g_markOrder = 0;
+uint64_t g_markLastEnd = 0;
+void ReadMarks(Frame& f, uint32_t slot)
+{
+    if (!g_markPool) return;
+    const uint32_t base = slot * kMarks;
+    const uint32_t n = uint32_t(f.markLabels.size());
+    if (n > 1)
+    {
+        std::vector<uint64_t> t(n);
+        if (vkGetQueryPoolResults(g_device, g_markPool, base, n, sizeof(uint64_t) * n, t.data(), 8,
+                                  VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT) == VK_SUCCESS)
+        {
+            // (between the frames: the last mark of the frame before to this one's first: the swap blit, idle time)
+            if (g_markLastEnd && t[0] > g_markLastEnd)
+            {
+                MarkSum& m = g_markSums["(between frames)"];
+                if (!m.n && m.ms == 0) m.order = g_markOrder++;
+                m.ms += double(t[0] - g_markLastEnd) * double(g_props.limits.timestampPeriod) * 1e-6;
+                ++m.n;
+            }
+            g_markLastEnd = t[n - 1];
+            for (uint32_t i = 0; i + 1 < n; ++i)
+            {
+                MarkSum& m = g_markSums[f.markLabels[i]];
+                if (!m.n && m.ms == 0) m.order = g_markOrder++;
+                m.ms += t[i + 1] > t[i] ? double(t[i + 1] - t[i]) * double(g_props.limits.timestampPeriod) * 1e-6 : 0.0;
+                ++m.n;
+            }
+        }
+    }
+    g_vkResetQueryPool(g_device, g_markPool, base, kMarks);
+    f.markLabels.clear();
+}
+void PrintMarks(int frames)
+{
+    std::vector<std::pair<uint32_t, const std::pair<const std::string, MarkSum>*>> v;
+    for (const auto& kv : g_markSums) v.push_back({kv.second.order, &kv});
+    std::sort(v.begin(), v.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+    std::fprintf(stderr, "vkmarks:");
+    for (const auto& e : v) std::fprintf(stderr, " [%s %.3f x%.1f]", e.second->first.c_str(), e.second->second.ms / frames, double(e.second->second.n) / frames);
+    std::fprintf(stderr, "\n");
+    g_markSums.clear();
+    g_markOrder = 0;
+}
 int g_passFrames = 0;
 void ReadPassTimes(Frame& f, uint32_t slot)
 {
@@ -1937,16 +2069,22 @@ void ReadPassTimes(Frame& f, uint32_t slot)
                 frame += ms;
             }
             g_passFrameMs += frame;
+            if (t[2 * f.passTimed - 1] > t[0]) g_passSpanMs += double(t[2 * f.passTimed - 1] - t[0]) * double(g_props.limits.timestampPeriod) * 1e-6;
             if (++g_passFrames == g_gpuTimeEvery)
             {
-                std::fprintf(stderr, "vkgpu: %.3f ms a frame in render passes:", g_passFrameMs / g_passFrames);
+                std::fprintf(stderr, "vkgpu: %.3f ms a frame in render passes and transfers (first to last %.3f):", g_passFrameMs / g_passFrames,
+                             g_passSpanMs / g_passFrames);
                 for (uint32_t i = 0; i < kPassTimes; ++i)
                     if (g_passSums[i].n)
+                    {
+                        const uint32_t k = g_passSums[i].info[2];
                         std::fprintf(stderr, " [%u %ux%u%s %.3f]", i, g_passSums[i].info[0], g_passSums[i].info[1],
-                                     g_passSums[i].info[2] == 1 ? "c" : g_passSums[i].info[2] == 2 ? "d" : "cd", g_passSums[i].ms / g_passFrames);
+                                     k == 1 ? "c" : k == 2 ? "d" : k == 3 ? "cd" : k == 4 ? "r" : k == 8 ? "x" : k == 32 ? "s" : "b", g_passSums[i].ms / g_passFrames);
+                    }
                 std::fprintf(stderr, "\n");
                 g_passSums = {};
-                g_passFrameMs = 0, g_passFrames = 0;
+                if (g_markPool) PrintMarks(g_passFrames);
+                g_passFrameMs = 0, g_passSpanMs = 0, g_passFrames = 0;
             }
         }
     }
@@ -1960,17 +2098,20 @@ void TimePassBegin()
     if (!g_passPool || f.passTimed >= kPassTimes) return;
     vkCmdWriteTimestamp(Main(), VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, g_passPool, g_frameIndex * kPassTimes * 2 + f.passTimed * 2);
 }
-void TimePassEnd()
+// (kind: 0 a render pass (its attachments from the target), else a transfer outside the passes: 4 resolve, 8 copy, 16 blit)
+void TimePassEnd(uint32_t kind, uint32_t width, uint32_t height)
 {
     Frame& f = Cur();
     if (!g_passPool || f.passTimed >= kPassTimes) return;
     vkCmdWriteTimestamp(Main(), VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, g_passPool, g_frameIndex * kPassTimes * 2 + f.passTimed * 2 + 1);
-    f.passInfo.push_back({b.width, b.height, uint32_t((g_target.color ? 1 : 0) | (g_target.depth ? 2 : 0))});
+    if (kind) f.passInfo.push_back({width, height, kind});
+    else f.passInfo.push_back({b.width, b.height, uint32_t((g_target.color ? 1 : 0) | (g_target.depth ? 2 : 0))});
     ++f.passTimed;
 }
 void RetireFrame(Frame& f)
 {
     WaitValue(f.lastValue);   // (the CPU two frames ahead of the GPU waits here)
+    ReadMarks(f, uint32_t(&f - g_frames.data()));
     ReadPassTimes(f, uint32_t(&f - g_frames.data()));
     for (VkDescriptorPool pool : f.setPools) vkResetDescriptorPool(g_device, pool, 0);
     f.setPoolIndex = 0;
@@ -2252,12 +2393,21 @@ void Persist(Buffer& buf)
     buf.useSegment = 0;
     ++g_addrEpoch;
 }
-void APIENTRY BufferData(GLenum target, GLsizeiptr size, const void* data, GLenum usage)
+// (glBufferData on a buffer by name: the GL call's body and the bufferData / createBuffer packets'; indirect: the buffer's
+// target is GL_DRAW_INDIRECT_BUFFER)
+void BufferDataOn(GLuint name, GLsizeiptr size, const void* data, GLenum usage, bool indirect)
 {
-    const GLuint name = BufferBinding(target);
+    const bool fRes = usage != GL_STREAM_DRAW;
+    ResTime rt(fRes);
+    struct BufTime   // (SLY2N_VKRESLOG: the buffers' own share)
+    {
+        bool on; std::chrono::steady_clock::time_point t0;
+        ~BufTime() { if (on) g_resFrame.bufferMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count(); }
+    } bt{g_resLogOn && fRes, g_resLogOn && fRes ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{}};
+    if (g_resLogOn && fRes) ++g_resFrame.buffers, g_resFrame.bufferBytes += uint64_t(std::max<GLsizeiptr>(size, 0));
     Buffer* buf = g_buffers.Get(name);
     if (!buf || size < 0 || uint64_t(size) > 0x7FFFFFFF) { SetError(GL_INVALID_OPERATION); return; }
-    if (target == GL_DRAW_INDIRECT_BUFFER && !g_feat.mdi) buf->keepShadow = true;
+    if (indirect && !g_feat.mdi) buf->keepShadow = true;
     Respecify(name, *buf, uint32_t(size), usage);
     ++buf->version;
     if (data && size) std::memcpy(buf->cpu, data, size_t(size));
@@ -2267,67 +2417,71 @@ void APIENTRY BufferData(GLenum target, GLsizeiptr size, const void* data, GLenu
         if (data && size) std::memcpy(buf->shadow.data(), data, size_t(size));
     }
 }
-void APIENTRY BufferSubData(GLenum target, GLintptr offset, GLsizeiptr size, const void* data)
+void APIENTRY BufferData(GLenum target, GLsizeiptr size, const void* data, GLenum usage)
+{ BufferDataOn(BufferBinding(target), size, data, usage, target == GL_DRAW_INDIRECT_BUFFER); }
+// Where BufferSubData's size bytes at offset go (the caller writes them there at once): in place while nothing
+// recorded reads this storage, else a copy on write (a stream buffer of this frame) or a transfer from ring memory.
+uint8_t* SubDataTarget(GLuint name, Buffer& buf, GLintptr offset, GLsizeiptr size)
 {
-    const GLuint name = BufferBinding(target);
+    if (!buf.bound)
+    {
+        // nothing recorded reads this storage yet: written in place (a stream buffer from an earlier frame moves to
+        // persistent storage first: that frame's ring is not ours)
+        if (buf.stream && buf.serial != Cur().serial) Persist(buf);
+        return buf.cpu + offset;
+    }
+    if (buf.stream && buf.serial == Cur().serial)
+    {
+        // read by an earlier draw of this frame: the later draws get a copy with the update (copy on write)
+        const Upload u = Ring(buf.size, 256);
+        if (buf.stream)
+        {
+            std::memcpy(u.cpu, buf.cpu, buf.size);
+            buf.vk = u.buffer;
+            buf.offset = u.offset;
+            buf.cpu = u.cpu;
+            buf.bound = false;
+            buf.useSegment = 0;
+            ++g_addrEpoch;
+            Cur().streamBuffers.push_back(name);
+            return u.cpu + offset;
+        }
+        if (!buf.bound) return buf.cpu + offset;
+    }
+    if (buf.stream)
+    {
+        Persist(buf);
+        return buf.cpu + offset;
+    }
+    const Upload u = Ring(uint32_t(size), 16);
+    XferOp op;
+    op.kind = XferOp::CopyBuffer;
+    op.srcBuffer = u.buffer;
+    op.srcOffset = u.offset;
+    op.dstBuffer = buf.vk;
+    op.dstOffset = buf.offset + VkDeviceSize(offset);
+    op.size = VkDeviceSize(size);
+    XferList& list = ListFor(buf.useSegment);
+    list.ops.push_back(op);
+    return u.cpu;
+}
+void BufferSubDataOn(GLuint name, GLintptr offset, GLsizeiptr size, const void* data, bool indirect)
+{
     Buffer* buf = g_buffers.Get(name);
     if (!buf || offset < 0 || size < 0 || uint64_t(offset) + uint64_t(size) > buf->size) { SetError(GL_INVALID_VALUE); return; }
     if (!size || !data) return;
     if (!g_recording) BeginFrame();
-    if (target == GL_DRAW_INDIRECT_BUFFER && !g_feat.mdi && !buf->keepShadow)
+    if (indirect && !g_feat.mdi && !buf->keepShadow)
     {
         buf->keepShadow = true;
         buf->shadow.assign(buf->size, 0);
     }
     if (buf->keepShadow) std::memcpy(buf->shadow.data() + offset, data, size_t(size));
     ++buf->version;
-    if (!buf->bound)
-    {
-        // nothing recorded reads this storage yet: written in place (a stream buffer from an earlier frame moves to
-        // persistent storage first: that frame's ring is not ours)
-        if (buf->stream && buf->serial != Cur().serial) Persist(*buf);
-        std::memcpy(buf->cpu + offset, data, size_t(size));
-        return;
-    }
-    if (buf->stream && buf->serial == Cur().serial)
-    {
-        // read by an earlier draw of this frame: the later draws get a copy with the update (copy on write)
-        const Upload u = Ring(buf->size, 256);
-        if (buf->stream)
-        {
-            std::memcpy(u.cpu, buf->cpu, buf->size);
-            std::memcpy(u.cpu + offset, data, size_t(size));
-            buf->vk = u.buffer;
-            buf->offset = u.offset;
-            buf->cpu = u.cpu;
-            buf->bound = false;
-            buf->useSegment = 0;
-            ++g_addrEpoch;
-            Cur().streamBuffers.push_back(name);
-            return;
-        }
-        if (!buf->bound)
-        {
-            std::memcpy(buf->cpu + offset, data, size_t(size));
-            return;
-        }
-    }
-    if (buf->stream) Persist(*buf), std::memcpy(buf->cpu + offset, data, size_t(size));
-    else
-    {
-        const Upload u = Ring(uint32_t(size), 16);
-        std::memcpy(u.cpu, data, size_t(size));
-        XferOp op;
-        op.kind = XferOp::CopyBuffer;
-        op.srcBuffer = u.buffer;
-        op.srcOffset = u.offset;
-        op.dstBuffer = buf->vk;
-        op.dstOffset = buf->offset + VkDeviceSize(offset);
-        op.size = VkDeviceSize(size);
-        XferList& list = ListFor(buf->useSegment);
-        list.ops.push_back(op);
-    }
+    std::memcpy(SubDataTarget(name, *buf, offset, size), data, size_t(size));
 }
+void APIENTRY BufferSubData(GLenum target, GLintptr offset, GLsizeiptr size, const void* data)
+{ BufferSubDataOn(BufferBinding(target), offset, size, data, target == GL_DRAW_INDIRECT_BUFFER); }
 // (not supported: the caller falls back)
 void* APIENTRY MapBufferRange(GLenum, GLintptr, GLsizeiptr, GLbitfield) { return nullptr; }
 GLboolean APIENTRY UnmapBuffer(GLenum) { return GL_TRUE; }
@@ -2461,6 +2615,7 @@ void ForgetTarget(const Image* im)
 }
 void APIENTRY DeleteTextures(GLsizei n, const GLuint* names)
 {
+    ResTime rt;
     for (GLsizei i = 0; i < n; ++i)
     {
         const GLuint name = names[i];
@@ -2521,8 +2676,20 @@ bool FormatComponents(GLenum format, unsigned* components)
     }
 }
 // Pixels into the ring as tightly laid out RGBA8 rows and a queued copy.
+void UploadPixelsPitch(Image& im, unsigned level, unsigned layer, int x, int y, unsigned width, unsigned height, GLenum format, GLenum type,
+                       const void* pixels, size_t srcPitch);
 void UploadPixels(Image& im, unsigned level, unsigned layer, int x, int y, unsigned width, unsigned height, GLenum format, GLenum type, const void* pixels)
 {
+    unsigned components = 4;
+    FormatComponents(format, &components);
+    const size_t srcPitch = Align(VkDeviceSize(s.unpackRowLength ? s.unpackRowLength : width) * components, VkDeviceSize(std::max(1, s.unpackAlignment)));
+    UploadPixelsPitch(im, level, layer, x, y, width, height, format, type, pixels, srcPitch);
+}
+void UploadPixelsPitch(Image& im, unsigned level, unsigned layer, int x, int y, unsigned width, unsigned height, GLenum format, GLenum type,
+                       const void* pixels, size_t srcPitch)
+{
+    ResTime rt;
+    if (g_resLogOn && pixels) ++g_resFrame.uploads, g_resFrame.bytes += uint64_t(width) * height * 4;
     if (!pixels || !width || !height) return;
     if (im.format != VK_FORMAT_R8G8B8A8_UNORM || type != GL_UNSIGNED_BYTE) return;
     unsigned components = 0;
@@ -2530,7 +2697,6 @@ void UploadPixels(Image& im, unsigned level, unsigned layer, int x, int y, unsig
     const uint32_t mipW = std::max(1u, im.width >> level), mipH = std::max(1u, im.height >> level);
     if (x < 0 || y < 0 || uint64_t(x) + width > mipW || uint64_t(y) + height > mipH || level >= im.levels || layer >= im.layers)
     { SetError(GL_INVALID_VALUE); return; }
-    const size_t srcPitch = Align(VkDeviceSize(s.unpackRowLength ? s.unpackRowLength : width) * components, VkDeviceSize(std::max(1, s.unpackAlignment)));
     const size_t pitch = size_t(width) * 4;
     const Upload u = Ring(VkDeviceSize(pitch) * height, 16);
     const auto* src = static_cast<const uint8_t*>(pixels);
@@ -2588,6 +2754,8 @@ unsigned FullLevels(uint32_t w, uint32_t h)
 // (the uncompressed textures are RGBA8, whatever their internal format)
 void APIENTRY TexImage2D(GLenum target, GLint level, GLint, GLsizei width, GLsizei height, GLint, GLenum format, GLenum type, const void* pixels)
 {
+    ResTime rt;
+    if (g_resLogOn) ++g_resFrame.textures;
     Texture* t = BoundTexture(target);
     if (!t || target != GL_TEXTURE_2D || level < 0 || width <= 0 || height <= 0) { SetError(GL_INVALID_OPERATION); return; }
     if (!g_recording) BeginFrame();
@@ -2602,6 +2770,8 @@ void APIENTRY TexImage2D(GLenum target, GLint level, GLint, GLsizei width, GLsiz
 }
 void APIENTRY TexStorage2D(GLenum target, GLsizei levels, GLenum, GLsizei width, GLsizei height)
 {
+    ResTime rt;
+    if (g_resLogOn) ++g_resFrame.textures;
     Texture* t = BoundTexture(target);
     if (!t || levels <= 0 || width <= 0 || height <= 0) { SetError(GL_INVALID_OPERATION); return; }
     if (!g_recording) BeginFrame();
@@ -2611,6 +2781,8 @@ void APIENTRY TexStorage2D(GLenum target, GLsizei levels, GLenum, GLsizei width,
 }
 void APIENTRY TexStorage3D(GLenum target, GLsizei levels, GLenum, GLsizei width, GLsizei height, GLsizei depth)
 {
+    ResTime rt;
+    if (g_resLogOn) ++g_resFrame.textures;
     Texture* t = BoundTexture(target);
     if (!t || target != GL_TEXTURE_2D_ARRAY || levels <= 0 || width <= 0 || height <= 0 || depth <= 0) { SetError(GL_INVALID_OPERATION); return; }
     if (!g_recording) BeginFrame();
@@ -2620,12 +2792,14 @@ void APIENTRY TexStorage3D(GLenum target, GLsizei levels, GLenum, GLsizei width,
 }
 void APIENTRY TexSubImage2D(GLenum target, GLint level, GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, const void* pixels)
 {
+    ResTime rt;
     Texture* t = BoundTexture(target);
     if (!t || !t->image || level < 0 || width < 0 || height < 0) { SetError(GL_INVALID_OPERATION); return; }
     UploadPixels(*t->image, unsigned(level), 0, x, y, unsigned(width), unsigned(height), format, type, pixels);
 }
 void APIENTRY TexSubImage3D(GLenum target, GLint level, GLint x, GLint y, GLint z, GLsizei width, GLsizei height, GLsizei depth, GLenum format, GLenum type, const void* pixels)
 {
+    ResTime rt;
     Texture* t = BoundTexture(target);
     if (!t || !t->image || level < 0 || width < 0 || height < 0 || depth < 0 || z < 0) { SetError(GL_INVALID_OPERATION); return; }
     unsigned components = 4;
@@ -2635,9 +2809,14 @@ void APIENTRY TexSubImage3D(GLenum target, GLint level, GLint x, GLint y, GLint 
         UploadPixels(*t->image, unsigned(level), unsigned(z + i), x, y, unsigned(width), unsigned(height), format, type,
                      pixels ? static_cast<const uint8_t*>(pixels) + layerBytes * size_t(i) : nullptr);
 }
+void GenerateMips(Texture* t);
 void APIENTRY GenerateMipmap(GLenum target)
 {
-    Texture* t = BoundTexture(target);
+    ResTime rt;
+    GenerateMips(BoundTexture(target));
+}
+void GenerateMips(Texture* t)
+{
     if (!t || !t->image || t->image->samples > 1) return;
     if (!g_recording) BeginFrame();
     if (t->image->levels == 1)
@@ -2769,9 +2948,12 @@ void APIENTRY DeleteRenderbuffers(GLsizei n, const GLuint* names)
         DetachEverywhere(names[i], true);
     }
 }
+void RenderbufferStorageOn(Renderbuffer* rb, GLsizei samples, GLenum internal, GLsizei width, GLsizei height);
 void APIENTRY RenderbufferStorageMultisample(GLenum, GLsizei samples, GLenum internal, GLsizei width, GLsizei height)
+{ RenderbufferStorageOn(g_renderbuffers.Get(s.renderbuffer), samples, internal, width, height); }
+// (the GL call's body on a renderbuffer by name: also the createRenderbuffer packet's)
+void RenderbufferStorageOn(Renderbuffer* rb, GLsizei samples, GLenum internal, GLsizei width, GLsizei height)
 {
-    Renderbuffer* rb = g_renderbuffers.Get(s.renderbuffer);
     if (!rb || width <= 0 || height <= 0) { SetError(GL_INVALID_OPERATION); return; }
     if (!g_recording) BeginFrame();
     VkFormat format = VK_FORMAT_R8G8B8A8_UNORM;
@@ -2924,6 +3106,7 @@ bool* Capability(GLenum cap)
     case GL_CULL_FACE: return &s.cull;
     case GL_STENCIL_TEST: return &s.stencilTest;
     case GL_SCISSOR_TEST: return &s.scissorTest;
+    case 0x8890: return g_feat.depthBounds ? &s.depthBoundsTest : nullptr;   // GL_DEPTH_BOUNDS_TEST_EXT
     default: return nullptr;
     }
 }
@@ -2935,7 +3118,7 @@ void SetCapability(GLenum cap, bool enable)
     g_fixedPacket = 0;
     switch (cap)
     {
-    case GL_DEPTH_TEST: case GL_STENCIL_TEST: b.depthDirty = true; break;
+    case GL_DEPTH_TEST: case GL_STENCIL_TEST: case 0x8890: b.depthDirty = true; break;
     case GL_BLEND: BlendChanged(); break;
     case GL_CULL_FACE: b.rasterDirty = true; break;
     case GL_SCISSOR_TEST: b.viewportDirty = true; break;
@@ -2945,6 +3128,14 @@ void SetCapability(GLenum cap, bool enable)
 void APIENTRY Enable(GLenum cap) { SetCapability(cap, true); }
 void APIENTRY Disable(GLenum cap) { SetCapability(cap, false); }
 GLboolean APIENTRY IsEnabled(GLenum cap) { const bool* p = Capability(cap); return p && *p ? GL_TRUE : GL_FALSE; }
+void APIENTRY DepthBoundsEXT(GLclampd zmin, GLclampd zmax)
+{
+    const float lo = float(std::clamp(zmin, 0.0, 1.0)), hi = float(std::clamp(zmax, 0.0, 1.0));
+    if (s.depthBoundsMin == lo && s.depthBoundsMax == hi) return;
+    s.depthBoundsMin = lo, s.depthBoundsMax = hi;
+    if (s.depthBoundsTest) b.depthDirty = true;
+    g_fixedPacket = 0;
+}
 void APIENTRY DepthMask(GLboolean flag) { g_fixedPacket = 0; if (s.depthWrite != (flag != GL_FALSE)) { s.depthWrite = flag != GL_FALSE; b.depthDirty = true; } }
 void APIENTRY DepthFunc(GLenum func) { g_fixedPacket = 0; if (s.depthFunc != func) { s.depthFunc = func; b.depthDirty = true; } }
 void APIENTRY DepthRange(GLdouble n, GLdouble f) { s.depthNear = float(std::clamp(n, 0.0, 1.0)); s.depthFar = float(std::clamp(f, 0.0, 1.0)); b.viewportDirty = true; }
@@ -3201,6 +3392,12 @@ void ApplyDynamic()
         vkCmdSetStencilTestEnable(cmd, stencil);
         vkCmdSetStencilOp(cmd, VK_STENCIL_FACE_FRONT_BIT, StencilOpOf(s.front.fail), StencilOpOf(s.front.zpass), StencilOpOf(s.front.zfail), Compare(s.front.func));
         vkCmdSetStencilOp(cmd, VK_STENCIL_FACE_BACK_BIT, StencilOpOf(s.back.fail), StencilOpOf(s.back.zpass), StencilOpOf(s.back.zfail), Compare(s.back.func));
+        if (g_feat.depthBounds)
+        {
+            const bool bounds = s.depthBoundsTest && b.hasDepth;
+            vkCmdSetDepthBoundsTestEnable(cmd, bounds);
+            if (bounds) vkCmdSetDepthBounds(cmd, s.depthBoundsMin, s.depthBoundsMax);
+        }
         b.depthDirty = false;
     }
     if (b.stencilDirty)
@@ -3482,6 +3679,7 @@ VkPipeline CreatePipeline(const PipelineKey& k, const PipelineSource& p, bool fG
         VK_DYNAMIC_STATE_DEPTH_WRITE_ENABLE, VK_DYNAMIC_STATE_DEPTH_COMPARE_OP, VK_DYNAMIC_STATE_STENCIL_TEST_ENABLE,
         VK_DYNAMIC_STATE_STENCIL_OP};
     std::vector<VkDynamicState> dynamic(std::begin(kDynamic), std::end(kDynamic));
+    if (g_feat.depthBounds) dynamic.push_back(VK_DYNAMIC_STATE_DEPTH_BOUNDS_TEST_ENABLE), dynamic.push_back(VK_DYNAMIC_STATE_DEPTH_BOUNDS);
     if (g_feat.eds3 && k.colorFormat)
         for (VkDynamicState d : {VK_DYNAMIC_STATE_COLOR_BLEND_ENABLE_EXT, VK_DYNAMIC_STATE_COLOR_BLEND_EQUATION_EXT, VK_DYNAMIC_STATE_COLOR_WRITE_MASK_EXT})
             dynamic.push_back(d);
@@ -3589,6 +3787,27 @@ uint64_t Fnv64(const void* data, size_t n, uint64_t h = 1469598103934665603ull)
     const auto* p = static_cast<const uint8_t*>(data);
     for (size_t i = 0; i < n; ++i) h = (h ^ p[i]) * 1099511628211ull;
     return h;
+}
+// (experiment, notes/VKGPU section 3b) the float16 level of glob's fragment maths: SLY2N_VKFP16, else the platform's
+// default (kFp16Default*: 0 everywhere for now; Android / the Quest: kFp16DefaultAndroid)
+int Fp16Level()
+{
+#if defined(__ANDROID__)
+    constexpr int kFp16Default = 0;   // (kFp16DefaultAndroid)
+#else
+    constexpr int kFp16Default = 0;
+#endif
+    static const int s_level = std::getenv("SLY2N_VKFP16") ? std::atoi(std::getenv("SLY2N_VKFP16")) : kFp16Default;
+    return s_level;
+}
+// (a table program the run can use: the float16 variants only at their level, so with the switch off the prewarm's
+// look-ups never hash them)
+bool FProgramInUse(const Shaders::Program& p)
+{
+    const char* f = std::strstr(p.defines, "CANE_FP16=");
+    if (!f) return true;
+    const int level = Fp16Level();
+    return (level == 1 || level == 2) && g_feat.float16 && f[10] == char('0' + level);
 }
 // (a program changed by a new build gets another hash: its old entries are not made for it)
 uint32_t ProgramHashOf(const Shaders::Program* info, bool uniformBuffer)
@@ -4146,6 +4365,7 @@ struct PacketFixed
     std::array<float, 4> konst;
     uint32_t colorMask, cull, cullFace, frontFace, depthTest, depthWrite, depthFunc;
     uint32_t stencilTest, sfunc, sref, smask, swrite, sfail, szfail, szpass, sbfail, sbzfail, sbzpass;
+    uint32_t keep;   // (cane::draw::kKeep*: fields left as they were)
 };
 struct PacketState
 {
@@ -4214,6 +4434,7 @@ uint32_t PacketCreateState(const cane::draw::State& st)
     f.sbfail = f.sfail, f.sbzfail = f.szfail, f.sbzpass = f.szpass;
     if (st.stencilBack)
         f.sbfail = GlStencilOp(st.stencilBackFail), f.sbzfail = GlStencilOp(st.stencilBackDepthFail), f.sbzpass = GlStencilOp(st.stencilBackPass);
+    f.keep = st.keep;
     PacketState ps;
     for (size_t i = 1; i < g_packetFixed.size() && !ps.fixed; ++i)
         if (!std::memcmp(&g_packetFixed[i], &f, sizeof f)) ps.fixed = uint32_t(i);
@@ -4249,7 +4470,7 @@ void ApplyPacketFixed(uint32_t id)
     if (g_fixedPacket == id) return;
     const PacketFixed& f = g_packetFixed[id];
     if (s.blend != bool(f.blend)) { s.blend = f.blend; BlendChanged(); }
-    if (f.blend)
+    if (f.blend && !(f.keep & cane::draw::kKeepBlendFactors))
     {
         if (s.blendEq != f.eq || s.blendEqAlpha != f.eqA) { s.blendEq = f.eq; s.blendEqAlpha = f.eqA; BlendChanged(); }
         if (s.blendSrc != f.src || s.blendDst != f.dst || s.blendSrcAlpha != f.srcA || s.blendDstAlpha != f.dstA)
@@ -4263,10 +4484,11 @@ void ApplyPacketFixed(uint32_t id)
     if (f.cull && s.cullFace != f.cullFace) { s.cullFace = f.cullFace; b.rasterDirty = true; }
     if (f.frontFace && s.frontFace != f.frontFace) { s.frontFace = f.frontFace; b.rasterDirty = true; }
     if (s.depthTest != bool(f.depthTest)) { s.depthTest = f.depthTest; b.depthDirty = true; }
-    if (s.depthFunc != f.depthFunc) { s.depthFunc = f.depthFunc; b.depthDirty = true; }
-    if (s.depthWrite != bool(f.depthWrite)) { s.depthWrite = f.depthWrite; b.depthDirty = true; }
-    if (s.colorMask != f.colorMask) { s.colorMask = f.colorMask; BlendChanged(); }
+    if (!(f.keep & cane::draw::kKeepDepthCompare) && s.depthFunc != f.depthFunc) { s.depthFunc = f.depthFunc; b.depthDirty = true; }
+    if (!(f.keep & cane::draw::kKeepDepthWrite) && s.depthWrite != bool(f.depthWrite)) { s.depthWrite = f.depthWrite; b.depthDirty = true; }
+    if (!(f.keep & cane::draw::kKeepColorMask) && s.colorMask != f.colorMask) { s.colorMask = f.colorMask; BlendChanged(); }
     if (s.stencilTest != bool(f.stencilTest)) { s.stencilTest = f.stencilTest; b.depthDirty = true; }
+    if (!(f.keep & cane::draw::kKeepStencil))
     for (State::Face* fc : {&s.front, &s.back})
     {
         if (fc->func != f.sfunc || fc->ref != GLint(f.sref) || fc->mask != f.smask)
@@ -4344,7 +4566,15 @@ void PacketSetConstant(uint32_t program, int32_t location, const void* data, uin
 {
     Program* p = g_programs.Get(program);
     const Shaders::Uniform* u = p ? UniformAt(*p, location) : nullptr;
-    if (!u || u->type >= 32 || !data) return;
+    if (!u || !data) return;
+    if (u->type >= 32)
+    {
+        // (a sampler uniform: its unit, as glProgramUniform1i)
+        int32_t unit;
+        std::memcpy(&unit, data, 4);
+        if (u->binding < kMaxBindings && unit >= 0 && unit < int32_t(kMaxUnits)) p->samplerUnit[u->binding] = uint8_t(unit);
+        return;
+    }
     bytes = std::min({bytes, uint32_t(u->count) * u->stride + 16u, uint32_t(p->constants.size()) - std::min<uint32_t>(u->offset, uint32_t(p->constants.size()))});
     const auto* src = static_cast<const uint8_t*>(data);
     for (uint32_t at = 0; at + 4 <= bytes; at += 4)
@@ -4355,6 +4585,7 @@ void PacketSetConstant(uint32_t program, int32_t location, const void* data, uin
     }
 }
 void APIENTRY Clear(GLbitfield mask);
+void APIENTRY BlitFramebuffer(GLint sx0, GLint sy0, GLint sx1, GLint sy1, GLint dx0, GLint dy0, GLint dx1, GLint dy1, GLbitfield mask, GLenum filter);
 void PacketBeginPass(const cane::draw::Pass& pass)
 {
     BindFramebuffer(GL_FRAMEBUFFER, pass.framebuffer);
@@ -4370,9 +4601,336 @@ void PacketBeginPass(const cane::draw::Pass& pass)
     s.clearStencil = pass.stencil;
     Clear(((pass.clear & cane::draw::kClearColor) ? GL_COLOR_BUFFER_BIT : 0) | ((pass.clear & cane::draw::kClearDepth) ? GL_DEPTH_BUFFER_BIT : 0) |
           ((pass.clear & cane::draw::kClearStencil) ? GL_STENCIL_BUFFER_BIT : 0));
+    if (pass.cullOff) SetCapability(GL_CULL_FACE, false);
 }
+// (the masks and the scissor as glColorMask / glDepthMask / glStencilMask / glEnable(GL_SCISSOR_TEST) + glScissor set them;
+// cane::draw::kMaskKept: left)
+void PacketMasks(uint8_t colorMask, uint8_t depthWrite, uint8_t stencilWriteMask, uint8_t scissor, const int32_t* rect, bool stencilKept = false)
+{
+    constexpr uint8_t kept = cane::draw::kMaskKept;
+    if (colorMask != kept && s.colorMask != (colorMask & 0xFu)) { s.colorMask = colorMask & 0xFu; BlendChanged(); g_fixedPacket = 0; }
+    if (depthWrite != kept && s.depthWrite != bool(depthWrite)) { s.depthWrite = depthWrite; b.depthDirty = true; g_fixedPacket = 0; }
+    if (!stencilKept && (s.front.writeMask != stencilWriteMask || s.back.writeMask != stencilWriteMask))
+    {
+        s.front.writeMask = s.back.writeMask = stencilWriteMask;
+        b.stencilDirty = true;
+        g_fixedPacket = 0;
+    }
+    if (scissor == kept) return;
+    if (scissor) Scissor(rect[0], rect[1], rect[2], rect[3]);
+    SetCapability(GL_SCISSOR_TEST, scissor != 0);
+}
+void PacketClear(const cane::draw::Clear& c)
+{
+    PacketMasks(c.colorMask, c.depthWrite, c.stencilWriteMask, c.scissor, c.rect, c.stencilMaskKept);
+    GLbitfield mask = 0;
+    if (c.clear & cane::draw::kClearColor) { s.clearColor = {c.color[0], c.color[1], c.color[2], c.color[3]}; mask |= GL_COLOR_BUFFER_BIT; }
+    if (c.clear & cane::draw::kClearDepth) { s.clearDepth = std::clamp(c.depth, 0.0f, 1.0f); mask |= GL_DEPTH_BUFFER_BIT; }
+    if (c.clear & cane::draw::kClearStencil) { s.clearStencil = c.stencil; mask |= GL_STENCIL_BUFFER_BIT; }
+    if (mask) Clear(mask);
+    PacketMasks(c.colorMaskAfter, c.depthWriteAfter, c.stencilWriteMaskAfter, c.scissorAfter, c.rect, c.stencilMaskKept);
+}
+void PacketCopy(uint32_t src, uint32_t dst, const int32_t rect[4], int32_t dstX, int32_t dstY, uint32_t framebufferAfter)
+{
+    BindFramebuffer(GL_READ_FRAMEBUFFER, src);
+    BindFramebuffer(GL_DRAW_FRAMEBUFFER, dst);
+    BlitFramebuffer(rect[0], rect[1], rect[0] + rect[2], rect[1] + rect[3], dstX, dstY, dstX + rect[2], dstY + rect[3], GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    BindFramebuffer(GL_FRAMEBUFFER, framebufferAfter);
+}
+void PacketScissor(const int32_t* rect)
+{
+    if (rect) Scissor(rect[0], rect[1], rect[2], rect[3]);
+    SetCapability(GL_SCISSOR_TEST, rect != nullptr);
+}
+void PacketBindTexture(uint32_t unit, uint32_t texture, uint8_t array, uint32_t sampler)
+{
+    if (unit >= kMaxUnits) return;
+    if (texture) g_textures.Ensure(texture);
+    s.units[unit][array ? 1 : 0] = texture;
+    if (sampler != cane::draw::kSamplerKept)
+    {
+        if (sampler) g_samplers.Ensure(sampler);
+        s.samplerUnits[unit] = sampler;
+    }
+    s.activeUnit = 0;
+}
+void PacketBindStorage(uint32_t binding, uint32_t buffer, size_t offset, size_t size)
+{
+    if (size) BindBufferRange(GL_SHADER_STORAGE_BUFFER, binding, buffer, GLintptr(offset), GLsizeiptr(size));
+    else BindBufferBase(GL_SHADER_STORAGE_BUFFER, binding, buffer);
+}
+void* PacketMapStream(uint32_t name, size_t size)
+{
+    Buffer* buf = name ? g_buffers.Get(name) : nullptr;
+    if (!buf || !size || size > 0x7FFFFFFF || buf->keepShadow) return nullptr;   // (a CPU shadow kept: the GL calls)
+    Respecify(name, *buf, uint32_t(size), GL_STREAM_DRAW);
+    ++buf->version;
+    return buf->cpu;
+}
+// (BufferSubData with the caller writing the bytes: a buffer keeping a CPU shadow takes the GL call)
+void* PacketMapRange(uint32_t name, size_t offset, size_t size)
+{
+    Buffer* buf = name ? g_buffers.Get(name) : nullptr;
+    if (!buf || !size || buf->keepShadow || uint64_t(offset) + uint64_t(size) > buf->size) return nullptr;
+    if (!g_recording) BeginFrame();
+    ++buf->version;
+    return SubDataTarget(name, *buf, GLintptr(offset), GLsizeiptr(size));
+}
+// (copyLayer: the source layer attached to a framebuffer of the layer's own, one per layer, as the GL calls attach it)
+void PacketCopyLayer(uint32_t texture, uint32_t layer, uint32_t dst, const int32_t rect[4], int32_t dstX, int32_t dstY, uint32_t framebufferAfter)
+{
+    static std::vector<GLuint> s_afbo;
+    if (layer >= s_afbo.size()) s_afbo.resize(layer + 1, 0);
+    if (!s_afbo[layer]) s_afbo[layer] = g_framebuffers.Gen();
+    BindFramebuffer(GL_READ_FRAMEBUFFER, s_afbo[layer]);
+    FramebufferTextureLayer(GL_READ_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, texture, 0, GLint(layer));
+    PacketCopy(s_afbo[layer], dst, rect, dstX, dstY, framebufferAfter);
+}
+void PacketBindTarget(uint32_t framebuffer) { BindFramebuffer(GL_FRAMEBUFFER, framebuffer); }
+void PacketDrawArraysMode(uint32_t id, uint32_t vao, uint8_t primitive, uint32_t first, uint32_t count, float lineWidth,
+                          const cane::draw::Constant* aconst, uint32_t cconst)
+{
+    if (!ApplyPacket(id, vao, aconst, cconst)) return;
+    if (lineWidth > 0.0f) LineWidth(lineWidth);
+    if (!count) return;   // (GL draws nothing: only the state, constants and vertex array)
+    using namespace cane::draw;
+    const GLenum mode = primitive == kLines ? GL_LINES : primitive == kTriangleStrip ? GL_TRIANGLE_STRIP : GL_TRIANGLES;
+    g_drawSpec = g_packetStates[id].spec;
+    DrawArraysInstancedBaseInstance(mode, GLint(first), GLsizei(count), 1, 0);
+    g_drawSpec = 0;
+}
+// (as glTexParameteri sets them on the texture; the sampler slot looked up again only when a value changes)
+void PacketTextureParams(uint32_t texture, uint8_t wrapS, uint8_t wrapT, uint8_t minFilter, uint8_t magFilter)
+{
+    Texture* t = texture ? g_textures.Ensure(texture) : nullptr;
+    if (!t) return;
+    static const GLenum kWrap[3] = {GL_REPEAT, GL_CLAMP_TO_EDGE, GL_MIRRORED_REPEAT};
+    static const GLenum kFilter[6] = {GL_NEAREST, GL_LINEAR, GL_NEAREST_MIPMAP_NEAREST, GL_LINEAR_MIPMAP_NEAREST, GL_NEAREST_MIPMAP_LINEAR,
+                                      GL_LINEAR_MIPMAP_LINEAR};
+    const GLenum ws = kWrap[wrapS % 3], wt = kWrap[wrapT % 3], mn = kFilter[minFilter % 6], mg = kFilter[magFilter % 6];
+    SamplerParams& p = t->params;
+    if (p.wrapS != ws || p.wrapT != wt || p.minFilter != mn || p.magFilter != mg)
+    {
+        p.wrapS = ws, p.wrapT = wt, p.minFilter = mn, p.magFilter = mg;
+        t->samplerSlot = -1;
+    }
+}
+void PacketBlit(uint32_t src, uint32_t dst, const int32_t sr[4], const int32_t dr[4], uint8_t linear, uint32_t framebufferAfter)
+{
+    BindFramebuffer(GL_READ_FRAMEBUFFER, src);
+    BindFramebuffer(GL_DRAW_FRAMEBUFFER, dst);
+    BlitFramebuffer(sr[0], sr[1], sr[0] + sr[2], sr[1] + sr[3], dr[0], dr[1], dr[0] + dr[2], dr[1] + dr[3], GL_COLOR_BUFFER_BIT,
+                    linear ? GL_LINEAR : GL_NEAREST);
+    BindFramebuffer(GL_FRAMEBUFFER, framebufferAfter);
+}
+void PacketInvalidate(uint32_t framebuffer, uint8_t mask)
+{
+    BindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+    GLenum a[2];
+    GLsizei n = 0;
+    if (mask & cane::draw::kClearColor) a[n++] = GL_COLOR_ATTACHMENT0;
+    if (mask & (cane::draw::kClearDepth | cane::draw::kClearStencil)) a[n++] = GL_DEPTH_STENCIL_ATTACHMENT;
+    if (n) InvalidateFramebuffer(GL_FRAMEBUFFER, n, a);
+}
+// Resources (the texture entries: no binding point changes; the same objects as the GL-style calls make)
+uint32_t PacketCreateTexture(const cane::draw::TextureDesc& d)
+{
+    ResTime rt;
+    if (!d.width || !d.height || (d.storage == 0 && d.layers > 0)) return 0;
+    if (g_resLogOn) ++g_resFrame.textures;
+    if (!g_recording) BeginFrame();
+    const GLuint name = g_textures.Gen();
+    Texture* t = g_textures.Ensure(name);
+    if (!t) return 0;
+    const bool array = d.layers > 0;
+    const uint32_t layers = array ? d.layers : 1u;
+    const unsigned levels = d.storage ? std::min<unsigned>(std::max(1u, d.levels), FullLevels(d.width, d.height)) : 1u;
+    // (every texel written by the upload below: no clear first; with more levels the others are still GL's zeros)
+    Replace(*t, MakeImage(d.width, d.height, layers, levels, 1, VK_FORMAT_R8G8B8A8_UNORM, array, true, 0, !(d.pixels && levels == 1)));
+    t->image->immutable = d.storage != 0;
+    static const GLenum kWrap[3] = {GL_REPEAT, GL_CLAMP_TO_EDGE, GL_MIRRORED_REPEAT};
+    static const GLenum kFilter[6] = {GL_NEAREST, GL_LINEAR, GL_NEAREST_MIPMAP_NEAREST, GL_LINEAR_MIPMAP_NEAREST, GL_NEAREST_MIPMAP_LINEAR,
+                                      GL_LINEAR_MIPMAP_LINEAR};
+    t->params.wrapS = kWrap[d.wrapS % 3], t->params.wrapT = kWrap[d.wrapT % 3];
+    t->params.minFilter = kFilter[d.minFilter % 6], t->params.magFilter = kFilter[d.magFilter % 6];
+    t->params.maxLevel = d.maxLevel;
+    t->samplerSlot = -1;
+    if (d.pixels)
+        for (uint32_t i = 0; i < layers; ++i)
+            UploadPixelsPitch(*t->image, 0, i, 0, 0, d.width, d.height, GL_RGBA, GL_UNSIGNED_BYTE,
+                              static_cast<const uint8_t*>(d.pixels) + size_t(d.width) * d.height * 4 * i, size_t(d.width) * 4);
+    return name;
+}
+void PacketUploadTexture(uint32_t texture, uint32_t level, uint32_t layer, int32_t x, int32_t y, uint32_t width, uint32_t height, const void* rgba)
+{
+    Texture* t = g_textures.Get(texture);
+    if (!t || !t->image) { SetError(GL_INVALID_OPERATION); return; }
+    UploadPixelsPitch(*t->image, level, layer, x, y, width, height, GL_RGBA, GL_UNSIGNED_BYTE, rgba, size_t(width) * 4);
+}
+void PacketGenerateMipmaps(uint32_t texture)
+{
+    ResTime rt;
+    GenerateMips(g_textures.Get(texture));
+}
+void PacketDeleteTextures(uint32_t count, const uint32_t* textures) { DeleteTextures(GLsizei(count), textures); }
+
+// (the last leftovers: the program unbound, the screenshot's read-back, the FSR timer)
+void APIENTRY UseProgram(GLuint program);
+void APIENTRY ReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, void* pixels);
+void APIENTRY GenQueries(GLsizei n, GLuint* names);
+void APIENTRY BeginQuery(GLenum target, GLuint name);
+void APIENTRY EndQuery(GLenum);
+void APIENTRY GetQueryObjectui64v(GLuint name, GLenum pname, GLuint64* value);
+void PacketUseProgram(uint32_t program) { UseProgram(program); }
+void PacketReadPixels(uint32_t framebuffer, const int32_t r[4], void* rgba, uint32_t framebufferAfter)
+{
+    BindFramebuffer(GL_READ_FRAMEBUFFER, framebuffer);
+    const GLint pack = s.packAlignment;
+    s.packAlignment = 1;
+    ReadPixels(r[0], r[1], r[2], r[3], GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+    s.packAlignment = pack;
+    BindFramebuffer(GL_FRAMEBUFFER, framebufferAfter);
+}
+uint32_t PacketCreateTimer() { GLuint q = 0; GenQueries(1, &q); return q; }
+void PacketBeginTimer(uint32_t timer) { BeginQuery(GL_TIME_ELAPSED, timer); }
+void PacketEndTimer() { EndQuery(GL_TIME_ELAPSED); }
+uint64_t PacketTimerResult(uint32_t timer) { GLuint64 ns = 0; GetQueryObjectui64v(timer, GL_QUERY_RESULT, &ns); return ns; }
+
+// Buffers (no binding point changes: the same Buffer objects, storage and transfer rules as the GL-style calls)
+GLenum UsageOf(uint8_t usage)
+{
+    switch (usage & 0x0F)
+    {
+    case cane::draw::kBufferDynamic: return GL_DYNAMIC_DRAW;
+    case cane::draw::kBufferStream: return GL_STREAM_DRAW;
+    default: return GL_STATIC_DRAW;
+    }
+}
+uint32_t PacketCreateBuffer(size_t size, const void* data, uint8_t usage)
+{
+    if (size > 0x7FFFFFFF) return 0;
+    const GLuint name = g_buffers.Gen();
+    if (size) BufferDataOn(name, GLsizeiptr(size), data, UsageOf(usage), (usage & cane::draw::kBufferIndirect) != 0);
+    return name;
+}
+void PacketBufferData(uint32_t buffer, size_t size, const void* data, uint8_t usage)
+{
+    if (buffer) g_buffers.Ensure(buffer);
+    BufferDataOn(buffer, GLsizeiptr(size), data, UsageOf(usage), (usage & cane::draw::kBufferIndirect) != 0);
+}
+void PacketBufferSubData(uint32_t buffer, size_t offset, size_t size, const void* data)
+{
+    Buffer* buf = buffer ? g_buffers.Get(buffer) : nullptr;
+    BufferSubDataOn(buffer, GLintptr(offset), GLsizeiptr(size), data, buf && buf->keepShadow);
+}
+void PacketDeleteBuffers(uint32_t count, const uint32_t* buffers) { DeleteBuffers(GLsizei(count), buffers); }
+// Vertex arrays (no binding point changes: the same VertexArray / Attrib fields SetAttrib writes, so the pipeline key's
+// vertex layout, LayoutFor, and the prewarm manifest's keys are the same)
+uint32_t PacketCreateVertexArray(const cane::draw::VertexAttrib* aattrib, uint32_t cattrib, uint32_t elements)
+{
+    const GLuint name = g_arrays.Gen();
+    VertexArray* vao = g_arrays.Ensure(name);
+    if (!vao) return 0;
+    if (elements) g_buffers.Ensure(elements);
+    vao->elements = elements;
+    static const GLenum kType[3] = {GL_FLOAT, GL_UNSIGNED_BYTE, GL_UNSIGNED_INT};
+    for (uint32_t i = 0; i < cattrib; ++i)
+    {
+        const cane::draw::VertexAttrib& d = aattrib[i];
+        if (d.index >= kGenericBinding || d.components < 1 || d.components > 4) { SetError(GL_INVALID_VALUE); continue; }
+        if (d.buffer) g_buffers.Ensure(d.buffer);
+        Attrib& a = vao->attribs[d.index];
+        a.buffer = d.buffer;
+        a.components = d.components;
+        a.type = kType[d.type % 3];
+        a.normalized = d.normalized != 0;
+        a.integer = d.integer != 0;
+        a.offset = d.offset;
+        a.stride = d.stride ? d.stride : uint32_t(d.components) * ComponentBytes(a.type);
+        a.divisor = d.divisor;
+        a.enabled = true;
+    }
+    ++vao->version;
+    return name;
+}
+void PacketDeleteVertexArrays(uint32_t count, const uint32_t* arrays) { DeleteVertexArrays(GLsizei(count), arrays); }
+// Framebuffers and renderbuffers (no binding point changes: the same Framebuffer / Renderbuffer objects and images as the
+// GL-style calls, so ForgetTarget / DetachEverywhere / msrtss / multiview / the transient hint work as before)
+uint32_t PacketCreateRenderbuffer(const cane::draw::RenderbufferDesc& d)
+{
+    if (!d.width || !d.height) return 0;
+    const GLuint name = g_renderbuffers.Gen();
+    Renderbuffer* rb = g_renderbuffers.Ensure(name);
+    static const GLenum kFormat[3] = {GL_RGBA8, GL_DEPTH32F_STENCIL8, GL_DEPTH24_STENCIL8};
+    g_nextRenderbufferLayers = std::max<uint32_t>(1u, d.layers);
+    RenderbufferStorageOn(rb, GLsizei(std::max<uint8_t>(d.samples, 1)), kFormat[d.format % 3], GLsizei(d.width), GLsizei(d.height));
+    g_nextRenderbufferLayers = 1;
+    if (d.transient) SetRenderbufferTransient(name, true);
+    return name;
+}
+void PacketDeleteRenderbuffers(uint32_t count, const uint32_t* names) { DeleteRenderbuffers(GLsizei(count), names); }
+Attachment AttachmentOf(const cane::draw::Attachment& a)
+{
+    if (a.object) { if (a.renderbuffer) g_renderbuffers.Ensure(a.object); else g_textures.Ensure(a.object); }
+    return Attachment{a.object, a.renderbuffer != 0, a.layer, a.level, uint8_t(std::min<uint8_t>(a.views, 2))};
+}
+void PacketAttach(uint32_t framebuffer, uint8_t mask, const cane::draw::Attachment& a)
+{
+    Framebuffer* f = framebuffer ? g_framebuffers.Get(framebuffer) : nullptr;
+    if (!f) { SetError(GL_INVALID_OPERATION); return; }
+    if (mask & cane::draw::kClearColor) f->color = AttachmentOf(a);
+    if (mask & (cane::draw::kClearDepth | cane::draw::kClearStencil)) f->depth = AttachmentOf(a);
+    b.targetDirty = true;   // (as Attach: the target looked at again at the next draw)
+}
+uint32_t PacketCreateFramebuffer(const cane::draw::Attachment& color, const cane::draw::Attachment& depth)
+{
+    const GLuint name = g_framebuffers.Gen();
+    Framebuffer* f = g_framebuffers.Ensure(name);
+    if (!f) return 0;
+    f->color = AttachmentOf(color);
+    f->depth = AttachmentOf(depth);
+    return name;
+}
+void PacketDeleteFramebuffers(uint32_t count, const uint32_t* names) { DeleteFramebuffers(GLsizei(count), names); }
+// Samplers (the same Sampler objects as GenSamplers / SamplerParameter*: the sampler cache and the handles' slots unchanged)
+uint32_t PacketCreateSampler(const cane::draw::SamplerDesc& d)
+{
+    const GLuint name = g_samplers.Gen();
+    Sampler* sm = g_samplers.Ensure(name);
+    if (!sm) return 0;
+    static const GLenum kWrap[3] = {GL_REPEAT, GL_CLAMP_TO_EDGE, GL_MIRRORED_REPEAT};
+    static const GLenum kFilter[6] = {GL_NEAREST, GL_LINEAR, GL_NEAREST_MIPMAP_NEAREST, GL_LINEAR_MIPMAP_NEAREST, GL_NEAREST_MIPMAP_LINEAR,
+                                      GL_LINEAR_MIPMAP_LINEAR};
+    sm->params.wrapS = kWrap[d.wrapS % 3], sm->params.wrapT = kWrap[d.wrapT % 3];
+    sm->params.minFilter = kFilter[d.minFilter % 6], sm->params.magFilter = kFilter[d.magFilter % 6];
+    // (as the GL calls: glSamplerParameterf with the wanted value clamped to GL_MAX_TEXTURE_MAX_ANISOTROPY, when above 1)
+    const float aniso = std::min(d.anisotropy, g_feat.anisotropy ? g_feat.anisotropyMax : 1.0f);
+    if (aniso > 1.0f) sm->params.anisotropy = aniso;
+    sm->samplerSlot = -1;
+    return name;
+}
+void PacketDeleteSamplers(uint32_t count, const uint32_t* names) { DeleteSamplers(GLsizei(count), names); }
+uint8_t PacketFramebufferComplete(uint32_t framebuffer)
+{
+    Framebuffer* f = framebuffer ? g_framebuffers.Get(framebuffer) : nullptr;
+    if (!f) return 0;
+    Image* color = AttachmentImage(f->color);
+    Image* depth = AttachmentImage(f->depth);
+    if (!color && !depth) return 0;
+    if ((f->color.object && !color) || (f->depth.object && !depth)) return 0;
+    return !(color && depth && color->samples != depth->samples);
+}
+
 const cane::draw::Packets g_packets{PacketCreateState, PacketDrawIndirect, PacketDrawIndexed, PacketBeginPass, PacketApplyState, PacketDrawArrays,
-                                    PacketSetConstant};
+                                    PacketSetConstant, PacketClear, PacketCopy, PacketScissor, PacketBindTexture, PacketBindStorage,
+                                    PacketMapStream, PacketMapRange, PacketCopyLayer, PacketBindTarget, PacketDrawArraysMode,
+                                    PacketTextureParams, PacketBlit, PacketInvalidate,
+                                    PacketCreateTexture, PacketUploadTexture, PacketGenerateMipmaps, PacketDeleteTextures,
+                                    PacketUseProgram, PacketReadPixels, PacketCreateTimer, PacketBeginTimer, PacketEndTimer,
+                                    PacketTimerResult, PacketCreateBuffer, PacketBufferData, PacketBufferSubData, PacketDeleteBuffers,
+                                    PacketCreateVertexArray, PacketDeleteVertexArrays, PacketCreateRenderbuffer, PacketDeleteRenderbuffers,
+                                    PacketCreateFramebuffer, PacketAttach, PacketDeleteFramebuffers, PacketFramebufferComplete,
+                                    PacketCreateSampler, PacketDeleteSamplers};
 
 // ------------------------------------------------------------------------------------------------ clears and blits
 GLuint g_clearProgram = 0;
@@ -4414,6 +4972,7 @@ void ClearMasked(bool color, bool depth, bool stencil)
     vkCmdSetDepthTestEnable(cmd, depth);
     vkCmdSetDepthWriteEnable(cmd, depth);
     vkCmdSetDepthCompareOp(cmd, VK_COMPARE_OP_ALWAYS);
+    if (g_feat.depthBounds) vkCmdSetDepthBoundsTestEnable(cmd, VK_FALSE);
     vkCmdSetStencilTestEnable(cmd, stencil);
     vkCmdSetStencilOp(cmd, VK_STENCIL_FACE_FRONT_AND_BACK, VK_STENCIL_OP_REPLACE, VK_STENCIL_OP_REPLACE, VK_STENCIL_OP_REPLACE, VK_COMPARE_OP_ALWAYS);
     vkCmdSetStencilWriteMask(cmd, VK_STENCIL_FACE_FRONT_AND_BACK, s.front.writeMask & 0xFF);
@@ -4496,6 +5055,22 @@ Image* ColorImageOf(GLuint fbo, unsigned* level, unsigned* layer)
     if (im) { *level = f->color.level; *layer = f->color.layer; }
     return im;
 }
+// (BlitFramebuffer) the last colour resolve recorded and its images' write counts after it
+struct ResolveMemo
+{
+    uint64_t srcId = 0, dstId = 0;
+    VkImage src = VK_NULL_HANDLE, dst = VK_NULL_HANDLE;
+    uint64_t srcWrites = 0, dstWrites = 0;
+    std::array<unsigned, 4> sub{};
+    std::array<GLint, 6> rect{};
+    bool operator==(const ResolveMemo& o) const
+    {
+        return srcId == o.srcId && dstId == o.dstId && src == o.src && dst == o.dst && srcWrites == o.srcWrites && dstWrites == o.dstWrites &&
+               sub == o.sub && rect == o.rect;
+    }
+};
+ResolveMemo g_lastResolve;
+uint64_t g_resolvesSkipped = 0;
 void TransferLayouts(Image& src, Image& dst)
 {
     Barriers bar;
@@ -4534,9 +5109,25 @@ void APIENTRY BlitFramebuffer(GLint sx0, GLint sy0, GLint sx1, GLint sy1, GLint 
     TransferLayouts(*src, *dst);
     VkCommandBuffer cmd = g_main;
     const bool same = sx1 - sx0 == dx1 - dx0 && sy1 - sy0 == dy1 - dy0 && !flipX && !flipY;
+    const uint64_t dstWritesBefore = dst->writes++;
+    TimePassBegin();
+    struct TimeXfer { uint32_t kind, w, h; ~TimeXfer() { TimePassEnd(kind, w, h); } } timeXfer{
+        src->samples > 1 ? 4u : same && src->format == dst->format ? 8u : 16u, uint32_t(sx1 - sx0), uint32_t(sy1 - sy0)};
     if (src->samples > 1)
     {
-        // a multisample resolve (the same rectangle size: GL has no scaled resolves)
+        // a multisample resolve (the same rectangle size: GL has no scaled resolves). The same resolve again with neither
+        // image written since (the game resolves the frame for the overlay capture and again at the present): its
+        // result is already there, so only the layouts change (SLY2N_VKRESOLVEONCE=0: resolved every time).
+        static const bool s_fOnceOff = std::getenv("SLY2N_VKRESOLVEONCE") && std::atoi(std::getenv("SLY2N_VKRESOLVEONCE")) == 0;
+        const ResolveMemo memo{src->id, dst->id, src->image, dst->image, src->writes, dstWritesBefore, {sl, sla, dl, dla}, {sx0, sy0, sx1, sy1, dx0, dy0}};
+        if (dst->samples == 1 && same && !s_fOnceOff && memo == g_lastResolve)
+        {
+            dst->writes = dstWritesBefore;   // (nothing written)
+            ++g_resolvesSkipped;
+            timeXfer.kind = 32;
+            b.targetDirty = true;
+            return;
+        }
         if (dst->samples == 1 && same)
         {
             VkImageResolve r{};
@@ -4546,6 +5137,8 @@ void APIENTRY BlitFramebuffer(GLint sx0, GLint sy0, GLint sx1, GLint sy1, GLint 
             r.dstOffset = {dx0, dy0, 0};
             r.extent = {uint32_t(sx1 - sx0), uint32_t(sy1 - sy0), 1};
             vkCmdResolveImage(cmd, src->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, dst->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &r);
+            g_lastResolve = memo;
+            g_lastResolve.dstWrites = dst->writes;   // (this resolve's own write counted)
         }
     }
     else if (same && src->format == dst->format)
@@ -4957,7 +5550,7 @@ const ProcEntry kProcs[] = {
     P("GetError", GetError), P("GetString", GetString), P("GetStringi", GetStringi), P("GetIntegerv", GetIntegerv),
     P("GetBooleanv", GetBooleanv), P("GetFloatv", GetFloatv), P("GetDoublev", GetDoublev),
     P("Enable", Enable), P("Disable", Disable), P("IsEnabled", IsEnabled), P("Viewport", Viewport), P("Scissor", Scissor),
-    P("DepthRange", DepthRange), P("DepthRangef", DepthRangef), P("ClearColor", ClearColor), P("ClearDepth", ClearDepth),
+    P("DepthRange", DepthRange), P("DepthRangef", DepthRangef), P("DepthBoundsEXT", DepthBoundsEXT), P("ClearColor", ClearColor), P("ClearDepth", ClearDepth),
     P("ClearDepthf", ClearDepthf), P("ClearStencil", ClearStencil), P("Clear", Clear), P("ClearBufferfv", ClearBufferfv),
     P("ColorMask", ColorMask), P("DepthMask", DepthMask), P("DepthFunc", DepthFunc), P("StencilMask", StencilMask),
     P("StencilMaskSeparate", StencilMaskSeparate), P("StencilFunc", StencilFunc), P("StencilFuncSeparate", StencilFuncSeparate),
@@ -5718,6 +6311,7 @@ bool Initialize(GLFWwindow* window, const Options& options, std::string* error)
             g_feat = Features{};
             g_feat.geometry = f2.features.geometryShader;
             g_feat.dualSrcBlend = f2.features.dualSrcBlend;
+            g_feat.depthBounds = f2.features.depthBounds && !(std::getenv("SLY2N_VKDEPTHBOUNDS") && std::atoi(std::getenv("SLY2N_VKDEPTHBOUNDS")) == 0);
             g_feat.wideLines = f2.features.wideLines;
             g_feat.lineWidthMax = props.limits.lineWidthRange[1];
             g_feat.anisotropy = f2.features.samplerAnisotropy;
@@ -5730,6 +6324,7 @@ bool Initialize(GLFWwindow* window, const Options& options, std::string* error)
             g_feat.fdm = hasFdm && ffdm.fragmentDensityMap && ffdm.fragmentDensityMapNonSubsampledImages;
             if (g_feat.fdm) g_feat.fdmTexel = pfdm.maxFragmentDensityTexelSize;
             g_feat.demote = f13.shaderDemoteToHelperInvocation;
+            g_feat.float16 = f12.shaderFloat16;
             g_feat.eds3 = hasEds3 && fe3.extendedDynamicState3ColorBlendEnable && fe3.extendedDynamicState3ColorBlendEquation &&
                           fe3.extendedDynamicState3ColorWriteMask;
             g_feat.nonUniform = f12.shaderSampledImageArrayNonUniformIndexing;
@@ -5798,6 +6393,7 @@ bool Initialize(GLFWwindow* window, const Options& options, std::string* error)
     f11.multiviewGeometryShader = g_feat.multiviewGeometry;
     f12.timelineSemaphore = VK_TRUE;
     f12.hostQueryReset = VK_TRUE;
+    f12.shaderFloat16 = g_feat.float16;
     f12.runtimeDescriptorArray = VK_TRUE;
     f12.descriptorBindingPartiallyBound = VK_TRUE;
     f12.descriptorBindingSampledImageUpdateAfterBind = VK_TRUE;
@@ -5807,6 +6403,7 @@ bool Initialize(GLFWwindow* window, const Options& options, std::string* error)
     VkPhysicalDeviceFeatures2 f2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, g_feat.multiview ? static_cast<void*>(&f11) : static_cast<void*>(&f12)};
     f2.features.geometryShader = g_feat.geometry;
     f2.features.dualSrcBlend = g_feat.dualSrcBlend;
+    f2.features.depthBounds = g_feat.depthBounds;
     f2.features.wideLines = g_feat.wideLines;
     f2.features.samplerAnisotropy = g_feat.anisotropy;
     f2.features.multiDrawIndirect = g_feat.mdi;
@@ -5971,6 +6568,10 @@ bool Initialize(GLFWwindow* window, const Options& options, std::string* error)
         if (g_gpuTimeEvery > 0 && g_props.limits.timestampComputeAndGraphics &&
             vkCreateQueryPool(g_device, &qpi, nullptr, &g_passPool) == VK_SUCCESS)
             g_vkResetQueryPool(g_device, g_passPool, 0, qpi.queryCount);
+        qpi.queryCount = kFrameSlots * kMarks;
+        if (g_passPool && std::getenv("SLY2N_VKGPUMARKS") && std::atoi(std::getenv("SLY2N_VKGPUMARKS")) != 0 &&
+            vkCreateQueryPool(g_device, &qpi, nullptr, &g_markPool) == VK_SUCCESS)
+            g_vkResetQueryPool(g_device, g_markPool, 0, qpi.queryCount);
     }
     for (Frame& f : g_frames)
     {
@@ -6092,6 +6693,7 @@ void PrewarmPipelines(int32_t scope, unsigned waitMs)
         for (size_t i = 0; i < Shaders::programCount; ++i)
         {
             const Shaders::Program* info = &Shaders::programs[i];
+            if (!FProgramInUse(*info)) continue;
             const bool ub = info->pushSize > g_feat.pushBytes;
             if (info->pushSize > kPushBytes || (ub && !info->spirvUbo[0]) || (info->geom && !g_feat.geometry)) continue;
             if (ProgramHashOf(info, ub) != e.program) continue;
@@ -6155,6 +6757,16 @@ bool FramebufferFetchUsable()
     const Image* im = ColorImageOf(s.drawFramebuffer, &level, &layer);
     return im && im->inputAttachment;
 }
+bool DepthBoundsSupported() { return g_feat.depthBounds; }
+bool GpuMarksOn() { return g_markPool != VK_NULL_HANDLE; }
+void GpuMark(const char* label)
+{
+    if (!g_markPool || !g_recording) return;
+    Frame& f = Cur();
+    if (f.markLabels.size() >= kMarks) return;
+    vkCmdWriteTimestamp(Main(), VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, g_markPool, g_frameIndex * kMarks + uint32_t(f.markLabels.size()));
+    f.markLabels.push_back(label);
+}
 Stats TakeStats()
 {
     Stats st = g_stats;
@@ -6184,6 +6796,7 @@ void Present()
     if (!g_recording) BeginFrame();
     EndRendering();
     FlushCopies();
+    GpuMark("frame end");
     Frame& f = Cur();
     if (g_visible)
     {
@@ -6327,6 +6940,7 @@ void Present()
             s_iStats = 0;
         }
     }
+    ResLogFrame();
     {
         static const bool s_fPipeLog = std::getenv("SLY2N_VKPIPELOG") && std::atoi(std::getenv("SLY2N_VKPIPELOG")) != 0;
         if (g_pipeCountFrame)
@@ -6487,7 +7101,7 @@ void FramebufferMultiview(GLenum target, GLenum attachment, GLuint object, bool 
 
 void AcquireImage(GLuint texture, VkImageLayout layout)
 {
-    if (Texture* t = g_textures.Get(texture); t && t->image) t->image->layout = layout;
+    if (Texture* t = g_textures.Get(texture); t && t->image) t->image->layout = layout, ++t->image->writes;
 }
 
 void ReleaseImage(GLuint texture, VkImageLayout layout, bool submit)
@@ -6556,6 +7170,18 @@ GLuint CreateProgram(const char* vertexFile, const char* geometryFile, const cha
             }
         }
     }
+    // (experiment, notes/VKGPU section 3b: glob's fragment maths in float16 where the device has shaderFloat16; 1: the fog
+    // mix and alpha, 2: also the texture-function product. The per-platform default (kFp16Default*) is 0 everywhere for
+    // now; to ship it on Android / the Quest only, set kFp16DefaultAndroid = 1. SLY2N_VKFP16=0 / 1 / 2 overrides.)
+    const int s_fp16 = Fp16Level();
+    static bool s_fLogged = false;
+    if (!s_fLogged && (s_fp16 == 1 || s_fp16 == 2))
+    {
+        s_fLogged = true;
+        std::printf("Vulkan: glob fragment maths in float16 (level %d)%s\n", s_fp16, g_feat.float16 ? "" : ": no shaderFloat16 on this device, fp32");
+    }
+    if ((s_fp16 == 1 || s_fp16 == 2) && g_feat.float16 && !std::strcmp(fragmentFile, "glob.frag"))
+        defines.push_back(std::string("CANE_FP16=") + char('0' + s_fp16));
     std::sort(defines.begin(), defines.end());
     std::string key;
     for (const auto& d : defines) key += (key.empty() ? "" : ";") + d;
@@ -6655,6 +7281,10 @@ void DestroyAll()
             std::fprintf(stderr, "vkpipe: %u pipelines made on the game thread in %.1f ms (worst frame %.2f ms) over %llu frames\n",
                          g_pipeCountTotal + g_pipeCountFrame, g_pipeMsTotal + g_pipeMsFrame, std::max(g_pipeMsMaxFrame, g_pipeMsFrame),
                          (unsigned long long)g_frameSerial);
+        if (g_resLogOn)
+            std::fprintf(stderr, "vkres: after the load: %u textures, %u uploads (%.1f MB), %u buffers: %.1f ms over %llu frames (worst frame "
+                         "%llu: %.2f ms)\n", g_resAfter.textures, g_resAfter.uploads, g_resAfter.bytes / 1048576.0, g_resAfter.buffers, g_resAfter.ms,
+                         (unsigned long long)g_resFrames, (unsigned long long)g_resMaxFrameSerial, g_resMaxFrame);
         SavePipelineCache();
         g_mainXfers = XferList{};
         g_preXfers = XferList{};
@@ -6704,7 +7334,9 @@ void DestroyAll()
         if (g_queryPool) vkDestroyQueryPool(g_device, g_queryPool, nullptr);
         if (g_passPool) vkDestroyQueryPool(g_device, g_passPool, nullptr);
         g_passPool = VK_NULL_HANDLE;
-        for (Frame& f : g_frames) f.passTimed = 0, f.passInfo.clear();
+        if (g_markPool) vkDestroyQueryPool(g_device, g_markPool, nullptr);
+        g_markPool = VK_NULL_HANDLE;
+        for (Frame& f : g_frames) f.passTimed = 0, f.passInfo.clear(), f.markLabels.clear();
         g_queryPool = VK_NULL_HANDLE;
         g_freeQueries.clear();
         if (g_timeline) vkDestroySemaphore(g_device, g_timeline, nullptr);

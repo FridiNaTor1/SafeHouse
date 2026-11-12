@@ -31,6 +31,8 @@ FAMILIES=['keyboard','playstation','xbox','nintendo','steamdeck','steamcontrolle
 
 def series(folder,prefix,names):
  return [None if n is None else n if '/' in n else f'{folder}/Double/{prefix}{n}.png' for n in names]
+# (the Quest's Select: the left grip held + the left stick clicked)
+QUEST_COMBO_L='combo:Meta Quest/Double/quest_grip_left.png|Meta Quest/Double/quest_stick_l_press.png'
 DPAD=['dpad_up','dpad_down','dpad_left','dpad_right','dpad']
 ICONS={
  # The Switch column is positional: GLFW A (south) is the button Nintendo labels B.
@@ -80,34 +82,39 @@ ICONS={
  # Wii U Pro Controller, positional (Kenney has no stick-click art for it: the stick art stands in).
  'wiiu':series('Nintendo WiiU','wiiu_',['button_b','button_a','button_y','button_x','button_l','button_r','button_zl',
   'button_zr','button_minus','button_plus','stick_l','stick_r','stick_l','stick_r']+DPAD+['button_home']),
- # VR controllers, the two hands as one pad (SteamVR / OpenXR gamepad style): the right hand's lower / upper face
- # button south / east, the left hand's west / north, the grips the bumpers, the triggers, the sticks; no d-pad (the
- # left stick's directions stand in).
+ # VR controllers, the two hands as one pad, in the VR pad layout (platform/vr_pad_map.h, the user's 2026-11-11):
+ # the right hand's lower face button south (Cross), its upper one west (Square), the left grip east (Circle), the
+ # right grip north (Triangle), the left hand's lower / upper face buttons the triggers' places (L2 / R2), the triggers
+ # the bumpers (L1 / R1), the sticks; no d-pad (the left stick's directions stand in). Controllers without real Start /
+ # Select buttons hold a grip and click that hand's stick: their cell is the two icons side by side ("combo:A|B":
+ # compose_combo; the in-game text draws the two full-size icons, promptglyph.cpp).
  # Meta Quest Touch (also Touch Plus / Touch Pro): A B X Y, grips, triggers, the left Menu as Start, Meta as Guide.
- 'metaquest':series('Meta Quest','quest_',['button_a','button_b','button_x','button_y','grip_left','grip_right',
-  'trigger_left','trigger_right',None,'button_menu','stick_l','stick_r','stick_l_press','stick_r_press',
+ 'metaquest':series('Meta Quest','quest_',['button_a','grip_left','button_b','grip_right','trigger_left','trigger_right',
+  'button_x','button_y',QUEST_COMBO_L,'button_menu','stick_l','stick_r','stick_l_press','stick_r_press',
   'stick_l_up','stick_l_down','stick_l_left','stick_l_right','stick_l','button_meta']),
- # Valve Index ("Knuckles"): A / B on each hand (Kenney has one A / B pair: the left hand's are labelled by text),
- # the trackpads (the left one's press as Back), the triggers; Kenney's Index set has no grip art: the Quest's.
- 'valveindex':series('Valve Index','index_',['button_a','button_b','button_a','button_b',
-  'Meta Quest/Double/quest_grip_left.png','Meta Quest/Double/quest_grip_right.png','lt','rt','track_press','button',
+ # Valve Index ("Knuckles"): A / B on each hand (Kenney has one A / B pair: the left hand's are labelled by text), the
+ # Quest's grip art (Kenney's Index set has none), the triggers; no Start / Select buttons: the grip + stick-click
+ # combos (the Quest's grip art with the Index stick clicks).
+ 'valveindex':series('Valve Index','index_',['button_a','Meta Quest/Double/quest_grip_left.png','button_b',
+  'Meta Quest/Double/quest_grip_right.png','lt','rt','button_a','button_b',
+  'combo:Meta Quest/Double/quest_grip_left.png|Valve Index/Double/index_stick_l_press.png',
+  'combo:Meta Quest/Double/quest_grip_right.png|Valve Index/Double/index_stick_r_press.png',
   'stick_l','stick_r','stick_l_press','stick_r_press','stick_l_up','stick_l_down','stick_l_left','stick_l_right',
   'stick_l','button']),
  # Steam Frame controllers: the Steam Controller's layout split in two hands (Kenney's Steam Frame set, complete).
  'steamframe':series('Steam Frame','frame_',['button_a','button_b','button_x','button_y','button_l1','button_r1',
   'button_l2','button_r2','button_view','button_options','stick_l','stick_r','stick_l_press','stick_r_press']+
   ['dpad_up','dpad_down','dpad_left','dpad_right','dpad','Steam Deck/Double/steamdeck_button_guide.png']),
- # HTC Vive wands (Kenney has none: its Index trackpad, trigger and the Quest's grip art, all CC0): each wand's
- # trackpad press as its face button (right south, left west), the menu buttons east / north and Back / Start, the
- # trackpads as the sticks and the left one's edges as the d-pad.
- 'vivewand':series('Valve Index','index_',['track_press','Meta Quest/Double/quest_button_menu.png','track_press',
-  'Meta Quest/Double/quest_button_menu.png','Meta Quest/Double/quest_grip_left.png','Meta Quest/Double/quest_grip_right.png',
-  'lt','rt','Meta Quest/Double/quest_button_menu.png','Meta Quest/Double/quest_button_menu.png','track','track',
-  'track_press','track_press','track_up','track_down',None,None,'track','button']),
- # Pico (4 / 4 Ultra / Neo 3) controllers: the Quest's layout (A B X Y, grips, triggers, sticks, Menu / Home), drawn
- # with Kenney's Quest art (Kenney has no Pico set).
- 'pico':series('Meta Quest','quest_',['button_a','button_b','button_x','button_y','grip_left','grip_right',
-  'trigger_left','trigger_right',None,'button_menu','stick_l','stick_r','stick_l_press','stick_r_press',
+ # HTC Vive wands (Kenney has none: its Index trackpad, trigger and the Quest's grip / menu art, all CC0): each wand's
+ # trackpad press as its face button (right south, left west), the grips east / north, the triggers the bumpers, no
+ # L2 / R2, the menu buttons Back / Start, the trackpads as the sticks and the left one's edges as the d-pad.
+ 'vivewand':series('Valve Index','index_',['track_press','Meta Quest/Double/quest_grip_left.png','track_press',
+  'Meta Quest/Double/quest_grip_right.png','lt','rt',None,None,
+  'Meta Quest/Double/quest_button_menu.png','Meta Quest/Double/quest_button_menu.png',
+  'track','track','track_press','track_press','track_up','track_down',None,None,'track','button']),
+ # Pico (4 / 4 Ultra / Neo 3) controllers: the Quest's layout and art (Kenney has no Pico set).
+ 'pico':series('Meta Quest','quest_',['button_a','grip_left','button_b','grip_right','trigger_left','trigger_right',
+  'button_x','button_y',QUEST_COMBO_L,'button_menu','stick_l','stick_r','stick_l_press','stick_r_press',
   'stick_l_up','stick_l_down','stick_l_left','stick_l_right','stick_l','button_oculus']),
  # The 2015 Steam Controller: one stick plus the right trackpad as "RS".
  'steamcontroller':series('Steam Controller','steam_',['button_a','button_b','button_x','button_y','lb','rb','lt','rt',
@@ -311,7 +318,26 @@ def place(atlas,icon,index):
    dst[x0+dx,y0+dy]=(r,g,b,0)
  return (x0+MARGIN,y0+MARGIN,CELL-2*MARGIN,CELL-2*MARGIN)
 
+def compose_combo(z,name):
+ """'combo:A|B': icons A and B side by side in one cell (a button held + another pressed), each scaled to fit half
+ the cell's width inside the margin, centred down; their edges may touch."""
+ a,b=name[len('combo:'):].split('|')
+ half=(CELL-2*MARGIN)//2+4
+ cell=Image.new('RGBA',(CELL,CELL),(0,0,0,0))
+ for i,part in enumerate((a,b)):
+  icon=load(z,part)
+  box=icon.getbbox() or (0,0,CELL,CELL)
+  icon=icon.crop(box)
+  k=min(half/icon.size[0],(CELL-2*MARGIN)/icon.size[1])
+  w,h=max(1,round(icon.size[0]*k)),max(1,round(icon.size[1]*k))
+  icon=icon.resize((w,h),Image.LANCZOS)
+  x=MARGIN+(half-w)//2 if i==0 else CELL-MARGIN-half+(half-w)//2
+  layer=Image.new('RGBA',(CELL,CELL),(0,0,0,0));layer.paste(icon,(x,(CELL-h)//2))
+  cell=Image.alpha_composite(cell,layer)
+ return bleed(cell)
+
 def load(z,name):
+ if name.startswith('combo:'):return compose_combo(z,name)
  icon=Image.open(io.BytesIO(z.read(name))).convert('RGBA')
  if icon.size!=(CELL,CELL):sys.exit(f'{name}: expected {CELL}x{CELL}, got {icon.size}')
  box=icon.getbbox()

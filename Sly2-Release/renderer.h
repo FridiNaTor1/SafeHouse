@@ -29,6 +29,11 @@ GLFWwindow* PwindowVulkan(int width, int height, bool fVisible, const char* titl
 // (render.cpp, the shadow phases) whether the bound draw framebuffer's colour can be read in place on Vulkan
 // (CANE_FETCH programs: CaneVk::FramebufferFetchUsable)
 bool FVulkanFramebufferFetch();
+// (measurement, Vulkan: SLY2N_VKGPUTIME + SLY2N_VKGPUMARKS) GPU timestamps between labelled parts of the frame
+bool FGpuMarks();
+// (Vulkan) the layer takes glEnable(GL_DEPTH_BOUNDS_TEST_EXT) / glDepthBoundsEXT (render.cpp DrawShadow2)
+bool FVulkanDepthBounds();
+void GpuMark(const char* label);
 // (game.cpp SLY2N_FPSLOG) the Vulkan submission worker's thread CPU time so far, ms (all, recording + submission); false
 // without one
 bool FVulkanWorkerCpuMs(double* pmsAll, double* pmsRecord);

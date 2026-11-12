@@ -218,6 +218,7 @@ const SELEM* FONTBRX::PglyphFromCh(uint32_t ch) const
     // orig: 0x00215A50 CFontBrx::PglyffFromCh (binary search; 1-based)
     auto it = std::lower_bound(pset->aul.begin(), pset->aul.end(), uint32_t(ch));
     if ((it == pset->aul.end() || *it != ch) && (ch == '{' || ch == '}')) return PglyphFromCh(ch == '{' ? '(' : ')');   // (PC: L3 / R3, promptglyph.cpp)
+    if ((it == pset->aul.end() || *it != ch) && ch >= 1 && ch <= 4) return PglyphFromCh(ch <= 2 ? 'T' : ch == 3 ? '(' : ')');   // (PC: the VR grips / stick clicks, promptglyph.h)
     if (it == pset->aul.end() || *it != ch) return nullptr;
     const size_t i = size_t(it - pset->aul.begin()) + 1;
     return i < pset->asub.size() ? &pset->asub[i] : nullptr;
@@ -227,6 +228,7 @@ float FONTBRX::DxFromCh(uint32_t ch) const
 {
     const auto it = std::lower_bound(pset->aul.begin(), pset->aul.end(), uint32_t(ch));
     if ((it == pset->aul.end() || *it != ch) && (ch == '{' || ch == '}')) return DxFromCh(ch == '{' ? '(' : ')');   // (PC: L3 / R3)
+    if ((it == pset->aul.end() || *it != ch) && ch >= 1 && ch <= 4) return DxFromCh(ch <= 2 ? 'T' : ch == 3 ? '(' : ')');   // (PC: the VR combos)
     if (it == pset->aul.end() || *it != ch) return 0.0f;
     const size_t i = size_t(it - pset->aul.begin());
     return i < pset->ag.size() ? pset->ag[i] : 0.0f;

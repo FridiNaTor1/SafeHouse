@@ -2,6 +2,7 @@
 // m_1D93D8_c.cpp (0x1D9520, 0x1D9648, 0x1DA2E0, 0x1DA350), m_1D9DF8_p3.cpp (0x1D9968, 0x1D9DF8); the decomp's
 // func_001DA4B8.c / func_001DA578.c.
 
+#include "vr.h"
 #include "hudwidget.h"
 #include "cheat.h"
 #include "actioninput.h"
@@ -485,6 +486,14 @@ void UpdateHud(SW* psw)
     // orig 0x1D9648 reads the gameplay pad (JoyFor(2)); a failure screen's
     // PauseGame(0) leaves confirmation available but prevents opening this menu.
     if ((g_grfjoyt & 2) && !FTitleShown() && !FMenuShown() && !FShopShown() && !FGadgetMenuShown() && !FJobHelpShown() && GrfbtnPressed(0x800) && FOpenPauseMenu(psw)) GrfbtnTakePressed(0x800);
+    // (VR: the headset's focus lost (its system menu, the guardian): the pause menu, as soon as Start could open it; already
+    // open (or open by Start): nothing more)
+    if (vr::FPauseForFocus())
+    {
+        if (FPauseMenuShown()) vr::TakePauseForFocus();
+        else if ((g_grfjoyt & 2) && !FTitleShown() && !FMenuShown() && !FShopShown() && !FGadgetMenuShown() && !FJobHelpShown() && FOpenPauseMenu(psw))
+            vr::TakePauseForFocus();
+    }
     UpdateMenu(psw);
     UpdateShop(psw);
     UpdateJobHelp(psw);

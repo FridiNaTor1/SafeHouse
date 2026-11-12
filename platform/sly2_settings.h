@@ -69,12 +69,24 @@ struct Sly2VrOptions {
     int autoCameraRotation = 0;  // Immersive: the follow camera's passive steering (off: only the right stick turns it)
     int vignette = 0;            // 0 Off, 1 Low, 2 Medium, 3 High
     int screenSize = 1;          // Flat Screen: 0 Small, 1 Medium, 2 Large
+#if defined(__ANDROID__)
+    int refreshRate = 90;        // 0 Automatic (the headset's best up to 120 Hz), else 72 / 80 / 90 / 120; 90 Hz by default on
+                                 // the Meta Quest (measured: 120 Hz never more fps, twice the stale frames)
+#else
     int refreshRate = 0;         // 0 Automatic (the headset's best up to 120 Hz), else 72 / 80 / 90 / 120
+#endif
     float worldScale = 1.0f;     // Immersive: 1.00 life size (0.50 to 2.00)
-    int cutscenesFlat = 1;       // Immersive: the cutscenes on the Flat Screen
+    int cutscenesFlat = 1;       // (Sly 3) Immersive: the cutscenes on the Flat Screen
+    int cutscenesView = 0;       // (Sly 2, "Cutscene View") Immersive: the cutscenes 0 Immersive (the default: the subtitles on
+                                 // a panel following the head), 1 on the Flat Screen; a key of its own so a file saved with the
+                                 // old default ("Cutscenes = Flat Screen") still starts Immersive
     int rcTable = 0;             // Immersive, experimental: Ep7's RC Combat Club from the table
     int eyeResolution = 0;       // Immersive: 0 Dynamic (100 % to 75 %), else 100 / 90 / 75 / 60 / 50 (%)
+#if defined(__ANDROID__)
+    int msaa = 1;                // the eyes' MSAA: 2 (2x) or 1 (Off); Off by default on the Meta Quest (one pass an eye, faster)
+#else
     int msaa = 2;                // the eyes' MSAA: 2 (2x) or 1 (Off)
+#endif
     int foveation = 2;           // fixed foveation: 0 Off, 1 Low, 2 Medium, 3 High
     int multiview = 1;           // Vulkan: both eyes drawn in one pass (1 On, 0 Off: the eyes one by one)
     int upscaling = 2;           // the headset compositor's filter on the eyes: 0 Off, 1 Sharpen, 2 Super Resolution
@@ -598,8 +610,10 @@ inline const std::vector<Sly2Key>& sly2Schema() {
                           s.vr.worldScale = std::clamp(g, 0.5f, 2.0f);
                           return true;
                       } });
-        k.push_back(vrChoice("Cutscenes", "Immersive: Flat Screen (the cutscenes, the Episode 2 dance and the RC chopper on the screen) or Immersive",
+        k.push_back(vrChoice("Cutscenes", "(Sly 3) Immersive: Flat Screen (the cutscenes, the Episode 2 dance and the RC chopper on the screen) or Immersive",
                              &Sly2VrOptions::cutscenesFlat, { { 1, "Flat Screen" }, { 0, "Immersive" }, { 1, "Flat" } }));
+        k.push_back(vrChoice("Cutscene View", "(Sly 2) Immersive: Immersive (the subtitles follow the head) or Flat Screen (the cutscenes and the RC chopper on the screen)",
+                             &Sly2VrOptions::cutscenesView, { { 0, "Immersive" }, { 1, "Flat Screen" }, { 1, "Flat" } }));
         k.push_back({ "VR", "RC Car Table View", "Immersive, experimental: On: Episode 7's RC Combat Club seen from the table",
                       [](const Sly2Settings& s) { return std::string(s.vr.rcTable ? "On" : "Off"); },
                       [](Sly2Settings& s, const std::string& v) { return names::parseBool(v, s.vr.rcTable); } });

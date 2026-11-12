@@ -39,15 +39,25 @@ struct VROPTS
     bool fAutoCameraRotation = false;   // Immersive: the follow camera's passive steering (the flat game's option otherwise)
     int vignette = 0;                   // 0 off, 1 low, 2 medium, 3 high
     int screenSize = 1;                 // Flat Screen: 0 small, 1 medium, 2 large
+#if defined(__ANDROID__)
+    int refreshRate = 90;               // (90 Hz by default on the Meta Quest)
+#else
     int refreshRate = 0;                // 0 the headset's best (up to 120), else Hz (72, 80, 90, 120)
+#endif
     float worldScale = 1.0f;            // Immersive: 1 = life size (100 game units a metre)
-    bool fCutscenesFlat = true;         // Immersive: the cutscenes (and the dance, the RC chopper) on the Flat Screen
+    bool fCutscenesFlat = false;        // Immersive: the cutscenes on the Flat Screen (Settings.ini "Cutscene View"; default:
+                                        // Immersive, the subtitles on a panel following the head; the dance stays Immersive)
     bool fRcTable = false;              // Immersive, experimental: Ep7's RC Combat Club from the table (fixed view)
     int eyeResolution = 0;              // Immersive: 0 dynamic (100 % down to 75 % while frames are missed; from 90 % while
                                         // the compositor upscales, Upscaling), else a fixed %
     int foveation = 2;                  // fixed foveation (no eye tracking): 0 off, 1 low, 2 medium, 3 high (the edges shaded
                                         // more coarsely)
-    int msaa = 2;                       // the eyes' MSAA: 2 (2x), 1 off (Vulkan: then one pass an eye, straight into the
+#if defined(__ANDROID__)
+    int msaa = 1;                       // (Off by default on the Meta Quest: one pass an eye, faster)
+#else
+    int msaa = 2;
+#endif
+                                        // the eyes' MSAA: 2 (2x), 1 off (Vulkan: then one pass an eye, straight into the
                                         // OpenXR images); at the next VR start
     bool fMultiview = true;             // (Vulkan) both eyes in one render pass (VK_KHR_multiview) where the device can
     int upscaling = 2;                  // the compositor's filter for the eyes (XR_FB_composition_layer_settings, Meta's
@@ -60,8 +70,49 @@ struct VROPTS
 //  - Binoc: the binocucom's first-person view; its pan / tilt follow the head (FHeadLook), its eye moves with it.
 //  - RcTable: the RC Combat Club from a fixed place at the table (the view captured when the match starts, not
 //    following the car); the car steered by the stick relative to itself, its gun aimed where the head looks.
-enum VRVIEW : int { VRVIEW_Normal = 0, VRVIEW_Flat, VRVIEW_Binoc, VRVIEW_RcTable };
+//  - BinocTalk: a scripted binocucom talk (a cutscene with the binocucom frame up): the shot seen through the binocucom
+//    frame fixed in the room where the head faced when it began (its edges extended, black past them), the shot inside
+//    it magnified as the flat picture frames it: turning the head looks at the frame, never away from the shot.
+//  - Hack: Bentley's hacking minigame (the player is the hack ship, cid 0x48): from the game camera with its pitch (the
+//    arena below, framed as the flat game frames it, filling the view), the head looks around from there.
+enum VRVIEW : int { VRVIEW_Normal = 0, VRVIEW_Flat, VRVIEW_Binoc, VRVIEW_RcTable, VRVIEW_BinocTalk, VRVIEW_Hack };
 void SetGameView(int view);
+// The moment's details for the Immersive view (game.cpp, each frame with SetGameView):
+//  - fCutscene: a cutscene (Immersive): the HUD panel (the subtitles) follows the head lazily (smoothed, both ways), the
+//    head looks around the scene freely; the subtitle box's top bar left out, its bottom bar kept see-through.
+//  - fPause: the pause menu: the world black around the menu's window (its 4:3 canvas on the HUD panel).
+//  - fWipe: a transition's wipe: the world black past the HUD panel (the wipe's black reaches the panel's edges), so the
+//    wipe and the load behind it cover the whole view, not a box in front.
+struct VRMOMENT
+{
+    bool fCutscene = false;
+    bool fPause = false;
+    bool fWipe = false;      // a transition's wipe (the Sly mask closing / opening over a load): black past the HUD panel
+    bool fDance = false;     // the Ep2 dance: the face buttons as its four (FDanceLayout)
+    bool fTitle = false;     // the title screen (shown until New Game / the menu): its bars kept, the HUD panel farther
+};                           // away (2 m: the logo and both prompts in view at once)
+// The title screen in VR (VRMOMENT::fTitle): hud.cpp keeps the subtitle box's bars there.
+bool FTitleMoment();
+// The Ep2 dance with the Touch layout's controllers (VRMOMENT::fDance): its four buttons on the four face buttons, laid out
+// as on the hands (left X / Y, right A / B): Cross A, Square B (as in play), Circle X, Triangle Y (X / Y are L2 / R2
+// otherwise; the grips stay Circle / Triangle too). dance.cpp draws its prompts in that 2 x 2 layout with those icons.
+bool FDanceLayout();
+void SetMoment(const VRMOMENT& m);
+// (hud.cpp, Immersive) a full-screen fill (a fade, a title card's colour, the pause backdrop: 0..1, alpha 0..1) goes over
+// the eyes instead of the HUD panel: true when taken (this frame's eyes were drawn). Applied to the next frame's eyes, over
+// the world and under the foreground kinds (Sly and his prize over the title card's colour, as the flat game's order).
+bool FTakeEyeFill(const glm::vec4& rgba);
+// (render.cpp RenderSceneStereo, between the world's pass and the foreground kinds) the fills over the eyes.
+void DrawEyeFills(const STEREOVIEW& sv);
+// The Immersive cutscene view (the subtitle box's bars: hud.cpp).
+bool FCutsceneView();
+// Binoc: the binocucom's zoom (game.cpp, each frame): tan(fov / 2) of the camera now over its unzoomed one (1: not
+// zoomed in). The eyes' fields of view narrow by it (the picture magnified as in the flat game).
+void SetBinocZoom(float k);
+// Binoc (Immersive): the game picture is the binocucom's frame over the whole view (its panel fixed to the head, as
+// tall as the view): the 4:3 canvas's scale in that picture (display.cpp LayoutDisplay; both < 1: the frame goes on
+// past the canvas on all four sides, hud.cpp ExtendEdgeTriangle). False otherwise.
+bool FBinocCanvas(glm::vec2* puiScale);
 // Binoc: the head's turn (radians: pan + left, tilt + up) since the last call; false (zeros) otherwise.
 bool FHeadLook(float* pdradPan, float* pdradTilt);
 // RcTable: on (the car's controls and aim change: vehiclecontrol.cpp); the point on the arena the head looks at.
@@ -80,6 +131,8 @@ bool FRequested();
 // Before any graphics exist (renderer.cpp's choice): an OpenXR loader and a runtime answer here (a headset), so a
 // session can be tried; false on a phone or a PC without a runtime. Cached; cheap after the first call.
 bool FRuntimeAvailable();
+// --vr-check: is there an OpenXR runtime with a headset? One "vr-check: ..." line on stdout; 0 = ready (vr.cpp Check).
+int Check();
 // (renderer.cpp, VR on the Vulkan renderer) the OpenXR instance made first with XR_KHR_vulkan_enable2, and the hooks
 // that make the Vulkan instance / device through it (a CaneVk::ExternalDevice*); null: no runtime / headset, or the
 // runtime has no Vulkan path (VR then runs on OpenGL)
@@ -96,12 +149,21 @@ void Shutdown();
 
 // The OpenXR runtime asked the game to stop (the headset's system menu: Quit).
 bool FExitRequested();
+// The session runs but has lost the input focus (the Quest's system menu, the guardian: VISIBLE, not FOCUSED): the game
+// draws no world then (game.cpp: only the game picture, on the screen), the least GPU work while it is behind the menu.
+bool FUnfocused();
+// The focus was lost since the game last opened its pause menu for it (hudwidget.cpp opens the pause menu as soon as it
+// can, as Quest games do; the player resumes by hand). Cleared when taken, and when the focus comes back first.
+bool FPauseForFocus();
+void TakePauseForFocus();
 
 // ------------------------------------------------------------ the frame
 // Before drawing a game frame: waits for the headset's frame slot (this paces the game) and reads the head.
 void BeginFrame();
 // This frame draws both eyes (Immersive, the session showing, no full-screen transition).
 bool FImmersiveFrame();
+// The Immersive view is on now (VR Settings' Mode Immersive, the game's moment not on the Flat Screen: SetGameView).
+bool FImmersiveView();
 // The two eyes' views of the game camera, into the eyes' targets of this frame.
 bool FEyeViews(const CAMERA& cam, STEREOVIEW* psv);
 // After the eyes: the comfort vignette over them.

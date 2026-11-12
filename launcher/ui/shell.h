@@ -1,6 +1,6 @@
 #pragma once
 // Launcher frame, laid out like the OpenGOAL launcher: a game rail on the
-// left (one logo per game, then Settings, About and the community links), the selected page on the
+// left (one logo per game, then Settings, About, Quit (desktops) and the community links), the selected page on the
 // right, and a 44 px footer with controller/keyboard hints across the bottom.
 // Also the activity-log drawer, toasts and the About page.
 #include <cstring>
@@ -18,6 +18,14 @@
 
 namespace cane::ui {
 enum class View { Game, Install, Settings, About };
+// The rail's Quit entry: the desktops (Linux incl. the Steam Deck's Game Mode and the Steam Frame, Windows, macOS), where
+// the launcher may run full screen from Steam Big Picture with no window buttons. Not on iOS (Apple's guidelines: apps do
+// not quit themselves) or Android / the Meta Quest (the system's Back / Home).
+#if defined(CANE_IOS) || defined(CANE_ANDROID) || defined(CANE_MOBILE) || defined(__ANDROID__)
+inline constexpr bool kQuitEntry = false;
+#else
+inline constexpr bool kQuitEntry = true;
+#endif
 inline float footerHeight() { return px(44); }
 // Opens a community link (brand.h) in the system browser; false when that failed.
 inline bool openLink(const char* url) {
@@ -47,6 +55,8 @@ public:
     View view = View::Game;
     // Set when the game or view changed this frame (cleared by the caller).
     bool changed = true;
+    // The rail's Quit (kQuitEntry; main.cpp: closes the window, asking first while a game or task runs: askQuit).
+    std::function<void()> onQuit;
     void selectGame(GameId next) {
         if (next == game && view == View::Game) return;
         game = next;
@@ -95,9 +105,16 @@ public:
         dl->AddText(fonts().label, fonts().label->FontSize, { o.x + pad + px(6), y }, u32(color::muted), tr("GAMES"));
         y += fonts().label->FontSize + px(8);
         // Footer rows first, so the game tiles can share the rest.
-        const float rowH = px(44), linkH = px(30), rowsH = rowH * 2 + px(8) + px(12) + linkH + px(10);
-        const float tileGap = px(6);
-        const float tileH = std::clamp(std::floor((bottom - rowsH - px(12) - y - tileGap * (kGameCount - 1)) / kGameCount), px(48), px(86));
+        const bool quit = kQuitEntry && onQuit;
+        const float linkH = px(30), tileGap = px(6);
+        const auto tilesFor = [&](float rowH) {
+            const float rowsH = rowH * (quit ? 3 : 2) + px(quit ? 12 : 8) + px(12) + linkH + px(10);
+            return std::floor((bottom - rowsH - px(12) - y - tileGap * (kGameCount - 1)) / kGameCount);
+        };
+        // (a short window, e.g. the smallest 960 x 600, with Quit's third row: the rows a little lower, the tiles smaller)
+        const float rowH = quit && tilesFor(px(44)) < px(48) ? px(38) : px(44);
+        const float rowsH = rowH * (quit ? 3 : 2) + px(quit ? 12 : 8) + px(12) + linkH + px(10);
+        const float tileH = std::clamp(tilesFor(rowH), px(40), px(86));
         for (const auto& g : games()) {
             item(g.key, { o.x + pad * 0.5f, y }, { o.x + w - pad * 0.5f, y + tileH }, view != View::Settings && view != View::About && game == g.id,
                  [&](ImDrawList* d, const ImRect& bb, bool selected, bool hovered) {
@@ -116,19 +133,27 @@ public:
         float ry = bottom - rowsH + px(4);
         dl->AddLine({ o.x + pad, ry }, { o.x + w - pad, ry }, u32(color::divider), px(1));
         ry += px(8);
+        const auto drawRow = [&](const char* label, Icon icon) {
+            return [label, icon](ImDrawList* d, const ImRect& bb, bool selected, bool hovered) {
+                const uint32_t tone = selected || hovered ? color::text : color::text2;
+                drawIcon(d, icon, { bb.Min.x + px(26), bb.GetCenter().y }, px(20), u32(tone));
+                ImFont* f = selected ? fonts().tab : fonts().body;
+                d->AddText(f, f->FontSize, { bb.Min.x + px(48), std::round(bb.GetCenter().y - f->FontSize * 0.5f) }, u32(tone), label);
+            };
+        };
         const auto row = [&](const char* id, const char* label, Icon icon, View target) {
-            item(id, { o.x + pad * 0.5f, ry }, { o.x + w - pad * 0.5f, ry + rowH }, view == target,
-                 [&](ImDrawList* d, const ImRect& bb, bool selected, bool hovered) {
-                     const uint32_t tone = selected || hovered ? color::text : color::text2;
-                     drawIcon(d, icon, { bb.Min.x + px(26), bb.GetCenter().y }, px(20), u32(tone));
-                     ImFont* f = selected ? fonts().tab : fonts().body;
-                     d->AddText(f, f->FontSize, { bb.Min.x + px(48), std::round(bb.GetCenter().y - f->FontSize * 0.5f) }, u32(tone), label);
-                 },
+            item(id, { o.x + pad * 0.5f, ry }, { o.x + w - pad * 0.5f, ry + rowH }, view == target, drawRow(label, icon),
                  [&, target] { open(target, false); }, nullptr);
             ry += rowH + px(4);
         };
         row("rail-settings", tr("Settings"), Icon::Cog, View::Settings);
         row("rail-about", tr("About"), Icon::Info, View::About);
+        // Quit: like the rows above, but only A / Enter / a click acts (moving the focus onto it does nothing).
+        if (quit) {
+            item("rail-quit", { o.x + pad * 0.5f, ry }, { o.x + w - pad * 0.5f, ry + rowH }, false, drawRow(tr("Quit"), Icon::Power),
+                 [this] { onQuit(); }, nullptr, false);
+            ry += rowH + px(4);
+        }
         // The community links, side by side under About.
         const float linkW = std::floor((w - pad - px(4)) * 0.5f);
         link("rail-discord", { o.x + pad * 0.5f, ry }, { o.x + pad * 0.5f + linkW, ry + linkH }, "Discord", Icon::Chat, brand::discordUrl,
@@ -205,6 +230,33 @@ public:
         ImGui::PopStyleVar(2);
         ImGui::PopStyleColor();
     }
+    // Quit while a game or task runs: asks first (main.cpp onQuit). quitDialog draws it; `quit` closes the launcher.
+    void askQuit() { m_askQuit = true; }
+    void quitDialog(const std::function<void()>& quit) {
+        if (m_askQuit) {
+            ImGui::OpenPopup("Quit##confirm");
+            m_askQuit = false;
+        }
+        ImGui::SetNextWindowSize({ px(480), 0 });
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, { px(24), px(22) });
+        if (ImGui::BeginPopupModal("Quit##confirm", nullptr, ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove)) {
+            heading(tr("Quit SafeHouse?"));
+            textWrapped(tr("A game or task started from the launcher is still running. Quitting stops it."), fonts().body, color::text2);
+            gap(8);
+            const float bw = std::floor((ImGui::GetContentRegionAvail().x - px(12)) * 0.5f);
+            if (button(tr("Cancel"), Tone::Secondary, { bw, 0 }) || ImGui::IsKeyPressed(ImGuiKey_Escape, false) ||
+                ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false))
+                ImGui::CloseCurrentPopup();
+            if (ImGui::IsWindowAppearing()) setFocus(GImGui->LastItemData.ID, ImGui::GetCurrentWindow(), !input::tracker().lastWasMouse());
+            ImGui::SameLine(0, px(12));
+            if (button(tr("Quit"), Tone::Danger, { bw, 0 }, Icon::Power)) {
+                ImGui::CloseCurrentPopup();
+                quit();
+            }
+            ImGui::EndPopup();
+        }
+        ImGui::PopStyleVar();
+    }
     void toasts(ImVec2 size) {
         const double now = ImGui::GetTime();
         while (!m_toasts.empty() && now - m_toasts.front().shown > 4.0) m_toasts.pop_front();
@@ -254,8 +306,9 @@ private:
     }
     // One rail entry: selection marker, hover/selection fill, focus ring.
     // Pad/keyboard focus selects (console style); a click selects too.
+    // pageItem false: an action (Quit), not a page: no select on focus, A / Enter does not enter the page.
     template <class Draw, class Select>
-    void item(const char* id, ImVec2 min, ImVec2 max, bool selected, Draw draw, Select select, const char* tooltip) {
+    void item(const char* id, ImVec2 min, ImVec2 max, bool selected, Draw draw, Select select, const char* tooltip, bool pageItem = true) {
         ImGuiWindow* window = ImGui::GetCurrentWindow();
         const ImGuiID gid = window->GetID(id);
         const ImRect bb(min, max);
@@ -269,8 +322,8 @@ private:
         if (pressed) {
             select();
             // A or Enter on the rail enters the page.
-            if (!mouse) requestFocus();
-        } else if (GImGui->NavJustMovedToId == gid && m_wasInRail && (m_navKey || navKeyDown()) && !mouse && !selected && !m_focusRail)
+            if (!mouse && pageItem) requestFocus();
+        } else if (pageItem && GImGui->NavJustMovedToId == gid && m_wasInRail && (m_navKey || navKeyDown()) && !mouse && !selected && !m_focusRail)
             select();
         if (m_focusRail && selected) {
             setFocus(gid, window, !mouse);
@@ -305,6 +358,7 @@ private:
     std::deque<Toast> m_toasts;
     std::vector<ImGuiID> m_ids;
     bool m_focusRail = false;
+    bool m_askQuit = false;
 };
 
 // ---------------------------------------------------------------- About

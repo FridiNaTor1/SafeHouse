@@ -141,4 +141,10 @@ bool FramebufferFetchUsable();
 // (tests) render-pass instances begun and transfer batches recorded inside the frame since the last call
 struct Stats { unsigned renderPasses = 0, splits = 0, pipelines = 0, pipelinesCreated = 0, draws = 0, submits = 0, pushes = 0, pushBytes = 0, descriptorPushes = 0; };
 Stats TakeStats();
+// (measurement: SLY2N_VKGPUTIME=N with SLY2N_VKGPUMARKS=1) a GPU timestamp in the frame's command stream; every N frames
+// the average GPU ms between each mark and the next, by the earlier mark's label (a string that outlives the run), stderr.
+bool GpuMarksOn();
+// GL_EXT_depth_bounds_test (glEnable(GL_DEPTH_BOUNDS_TEST_EXT), glDepthBoundsEXT) on a device with depthBounds
+bool DepthBoundsSupported();
+void GpuMark(const char* label);
 }  // namespace CaneVk

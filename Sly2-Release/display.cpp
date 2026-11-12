@@ -91,7 +91,7 @@ void FromVrOptions(const st::Sly2VrOptions& o)
     v.screenSize = std::clamp(o.screenSize, 0, 2);
     v.refreshRate = o.refreshRate;
     v.worldScale = o.worldScale;
-    v.fCutscenesFlat = o.cutscenesFlat != 0;
+    v.fCutscenesFlat = o.cutscenesView != 0;   // (Sly 2's own key: Immersive by default)
     v.fRcTable = o.rcTable != 0;
     v.eyeResolution = o.eyeResolution == 0 ? 0 : std::clamp(o.eyeResolution, 50, 100);
     v.msaa = o.msaa <= 1 ? 1 : 2;
@@ -109,7 +109,7 @@ void ToVrOptions(st::Sly2VrOptions& o)
     o.screenSize = v.screenSize;
     o.refreshRate = v.refreshRate;
     o.worldScale = v.worldScale;
-    o.cutscenesFlat = v.fCutscenesFlat ? 1 : 0;
+    o.cutscenesView = v.fCutscenesFlat ? 1 : 0;
     o.rcTable = v.fRcTable ? 1 : 0;
     o.eyeResolution = v.eyeResolution;
     o.msaa = v.msaa;
@@ -271,6 +271,10 @@ void LayoutDisplay(int outputWidth, int outputHeight)
     d.outputWidth = std::max(1, outputWidth);
     d.outputHeight = std::max(1, outputHeight);
     float rAspect = float(d.outputWidth) / float(d.outputHeight);
+    // (VR's binocucom over the whole view: its picture as the panel is, the canvas placed by vr.cpp)
+    glm::vec2 uiScaleBinoc(1.0f);
+    const bool fBinoc = vr::FBinocCanvas(&uiScaleBinoc);
+    if (!fBinoc)
     switch (d.aspect)
     {
     case DISPASPECT_Fixed_4_3: case DISPASPECT_PS2_4_3: rAspect = 4.0f / 3.0f; break;
@@ -303,6 +307,7 @@ void LayoutDisplay(int outputWidth, int outputHeight)
     // The 2D canvas (the PS2 frame at 4:3) centred in the picture.
     const float rCanvas = 4.0f / 3.0f;
     d.uiScale = rAspect > rCanvas ? glm::vec2(rCanvas / rAspect, 1.0f) : glm::vec2(1.0f, rAspect / rCanvas);
+    if (fBinoc) d.uiScale = uiScaleBinoc;
     d.uiOffset = glm::vec2(0.0f);
     if (g_gl.window)
     {

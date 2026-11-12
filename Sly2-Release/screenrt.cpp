@@ -24,6 +24,7 @@
 #include "disc.h"
 #include "frontend.h"
 #include "hud.h"
+#include "vr.h"
 #include "menu.h"
 #include "shop.h"
 #include "ref.h"
@@ -681,6 +682,8 @@ static bool NoWipeMaskFix()
     return s_f;
 }
 
+namespace { bool s_fBinocFrameDrawn = false; }
+bool FBinocFrameDrawn() { return s_fBinocFrameDrawn; }
 void DrawScreenObjs(SW* psw)
 {
     if (!psw) return;
@@ -725,6 +728,7 @@ void DrawScreenObjs(SW* psw)
     // of one object have distinct depths (splayer.cpp); objects of one priority tie slot for slot, so the later queued
     // object's slot is drawn first and the first one's ends on top (the HUD's depth test is GEQUAL: last drawn wins).)
     std::reverse(adraw.begin(), adraw.end());
+    s_fBinocFrameDrawn = std::any_of(adraw.begin(), adraw.end(), [](const auto& e) { return e.first->oid >= 0x35F && e.first->oid <= 0x361; });
     std::stable_sort(adraw.begin(), adraw.end(), [](const auto& a, const auto& b) { return a.second->prio < b.second->prio; });
     for (auto [plo, p] : adraw)
     {
@@ -734,13 +738,21 @@ void DrawScreenObjs(SW* psw)
                                 int(plo->U32Field(0, 0xA8, 0x7777)), int(plo->U32Field(0, 0xAC, 0x7777)), int(plo->U32Field(0, 0xB0, 0x7777)));
         g_zScreenBase = float(std::max(0, p->prio)) * 262144.0f;   // (+0xA4 << 18)
         g_hud.fWideEdgesObj = plo->oid >= 0x35F && plo->oid <= 0x361;   // (the binocucom frames: Sly's, Bentley's, Murray's)
+        glm::vec2 uiBinoc;
+        g_hud.fVrBandsObj = g_hud.fWideEdgesObj && vr::FBinocCanvas(&uiBinoc);   // (VR: bands above / below, hud.h)
         const bool fFourThree = FFourThreeMenuObj(plo);   // (qolview.h: the gadget grid, Job Help)
         g_hud.fClipCanvasObj = FClipEpisodeMenuToCanvas(plo) || fFourThree;   // (frontend.h: the episode menu on a wide picture)
         g_hud.fWideRectsOnlyObj = plo->oid == 0x30A && !NoWipeMaskFix();   // (the wipe's Sly mask)
+        // (VR, vr.h: in the Immersive view the subtitle box's letterbox bars (the scripted pauses: the safe house's door,
+        // Ep1's arrival) would sit in front of the eyes as two black slabs; the Flat Screen view and flat play keep them)
+        g_hud.fNoBarsObj = plo->oid == 0x373 && vr::FImmersiveView() && !vr::FTitleMoment();   // (the title keeps its bars)
         p->player.Draw(pfont, picons, psw);
+        g_hud.EndWideEdgesObj();
         if (fFourThree) g_hud.Pillarbox(glm::vec4(0, 0, 0, 128), (g_zScreenBase + 262000.0f) / 16777216.0f);   // (over the world, under higher priorities)
         g_hud.fWideRectsOnlyObj = false;
+        g_hud.fNoBarsObj = false;
         g_hud.fWideEdgesObj = false;
+        g_hud.fVrBandsObj = false;
         g_hud.fClipCanvasObj = false;
     }
     s_psrtDrawing = nullptr;

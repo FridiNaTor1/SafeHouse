@@ -9,6 +9,7 @@
 #include "../backend.h"
 #include "../desktop_shortcut.h"
 #include "../steam.h"
+#include "../vr_probe.h"
 #include "games.h"
 #include "job.h"
 #include "prompt_bar.h"
@@ -83,6 +84,20 @@ public:
         }
         m_showShortcutResult = true;
     }
+    // The page of `game` was shown (main.cpp, on a page or game change and when the window gets the focus back): Sly 2
+    // checks for a VR headset (vr_probe.h; in the background, at most every few seconds) for its "Play in VR" button.
+    void shown(GameId game) {
+        if constexpr (!vrprobe::kSupported) return;
+        if (m_fixture || game != GameId::Sly2) return;
+        const auto& s = status(game);
+        if (!s.assets || !s.runtime) return;
+        try {
+            m_vr.refresh(m_backend.binary(cane::game(game).runtime), m_backend.tools);
+        } catch (...) {
+        }
+    }
+    // Screenshots (--vr-fixture): the headset check's answer.
+    void useVrFixture(vrprobe::State state, std::string runtime, std::string headset) { m_vr.fixture(state, std::move(runtime), std::move(headset)); }
     // Screenshots: the Sly 3 notice shown before Play.
     void showSly3Notice() { m_confirmSly3 = true; }
     // Start: the page's main action.
@@ -205,12 +220,21 @@ public:
             ImGui::BeginDisabled(busy);
             const bool ready = s.assets && s.runtime;
             const char* label = ready ? tr("Play") : s.outdated ? tr("Re-extract") : s.repair ? tr("Repair") : tr("Install");
-            if (bigButton(label, cta, ready ? Icon::Play : s.outdated ? Icon::Refresh : Icon::Disc)) {
+            // "Play in VR" beside Play when a PC headset answers (vr_probe.h); Play keeps the larger part of the row
+            const bool vr = ready && vrAvailable(id);
+            const char* vrLabel = tr("Play in VR");
+            const float vrW = vr ? std::clamp(measure(fonts().tab, vrLabel).x + px(22 + 10 + 32), px(150), std::floor(actionsW * 0.5f)) : 0.0f;
+            if (bigButton(label, vr ? ImVec2{ actionsW - vrW - px(8), cta.y } : cta, ready ? Icon::Play : s.outdated ? Icon::Refresh : Icon::Disc)) {
                 if (ready) play(id);
                 else if (s.outdated) m_confirmReextract = static_cast<int>(id);
                 else if (openInstall) openInstall(id);
             }
             takeFocus(!input::tracker().lastWasMouse());
+            if (vr) {
+                ImGui::SameLine(0, px(8));
+                if (button(vrLabel, Tone::Secondary, { vrW, cta.y }, Icon::Headset, fonts().tab)) play(id, true);
+                if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) ImGui::SetTooltip("%s", vrTooltip(id).c_str());
+            }
             ImGui::EndDisabled();
         }
         if (showNativePreview) {
@@ -813,7 +837,21 @@ private:
                     ink(color::text), label);
         ImGui::Dummy(size);
     }
-    void play(GameId id) {
+    // Sly 2's "Play in VR" button: a PC build, the game ready, a headset (or SteamVR, which the game starts) found
+    bool vrAvailable(GameId id) {
+        if constexpr (!vrprobe::kSupported) return false;
+        const auto& s = status(id);
+        return id == GameId::Sly2 && s.assets && s.runtime && m_vr.available();
+    }
+    std::string vrTooltip(GameId id) const {
+        const auto r = m_vr.result();
+        std::string text = trf("Start %s on your VR headset.", game(id).shortName);
+        if (r.state == vrprobe::State::SteamVrIdle) text += "\n" + std::string(tr("SteamVR starts with the game."));
+        else if (!r.headset.empty() || !r.runtime.empty())
+            text += "\n" + (r.headset.empty() ? r.runtime : r.runtime.empty() ? r.headset : r.headset + " (" + r.runtime + ")");
+        return text;
+    }
+    void play(GameId id, bool vr = false) {
         if (m_job.busy) return;
         // Sly 3 asks first (until "Don't show again").
         if (id == GameId::Sly3 && !m_sly3Confirmed && !m_backend.sly3NoticeHidden()) {
@@ -823,7 +861,8 @@ private:
         m_sly3Confirmed = false;
         if (m_fixture) return;
         playingGame = static_cast<int>(id);
-        m_job.start(std::string("Playing ") + game(id).shortName, [this, id](const auto& log) { m_backend.play(id, m_job.cancel, log); });
+        m_job.start(std::string("Playing ") + game(id).shortName,
+                    [this, id, vr](const auto& log) { m_backend.play(id, m_job.cancel, log, {}, vr); });
     }
     void verify(GameId id) {
         if (m_fixture || m_job.busy) return;
@@ -889,6 +928,7 @@ private:
     int m_confirmUninstall = -1, m_pending = -1;
     bool m_confirmSly3 = false, m_sly3Confirmed = false, m_sly3DontShow = false;
     std::optional<steam::Installation> m_steam;
+    vrprobe::Probe m_vr;
     int m_confirmSteam = -1, m_steamGame = -1;
     int m_confirmReextract = -1, m_reextractGame = -1;
     std::string m_reextractIso;

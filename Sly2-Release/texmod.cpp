@@ -12,6 +12,8 @@
 #include "../platform/texture_pak.h"
 #include "../platform/texture_options.h"
 
+#include "gl.h"
+#include "../platform/draw_packet.h"
 #include <glad/glad.h>
 #define STB_IMAGE_STATIC
 #define STB_IMAGE_IMPLEMENTATION
@@ -378,16 +380,30 @@ unsigned GlTexFromTexels(const std::vector<uint8_t>& ab, int w, int h, int dx, i
     int clevel = 1;
     for (int d = std::max(w, h); d > 1; d >>= 1) ++clevel;
     GLuint tex = 0;
-    glGenTextures(1, &tex);
-    glBindTexture(GL_TEXTURE_2D, tex);
-    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    const cane::draw::Packets* pk = PpacketsTex();
+    if (!pk)
+    {
+        glGenTextures(1, &tex);
+        glBindTexture(GL_TEXTURE_2D, tex);
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    }
     const bool fStats = FTexStats();
     if (fStats) glFinish();
     double t0 = fStats ? MsTexStatsNow() : 0.0;
-    glTexStorage2D(GL_TEXTURE_2D, clevel, GL_RGBA8, w, h);
-    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, ab.data());
+    if (pk)
+    {
+        // (native: glTexStorage2D's levels with level 0 uploaded, GL's default parameters, no binding left)
+        cane::draw::TextureDesc d;
+        d.width = uint32_t(w), d.height = uint32_t(h), d.levels = uint32_t(clevel), d.pixels = ab.data();
+        tex = pk->createTexture(d);
+    }
+    else
+    {
+        glTexStorage2D(GL_TEXTURE_2D, clevel, GL_RGBA8, w, h);
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, ab.data());
+    }
     if (fStats) { glFinish(); const double t = MsTexStatsNow(); TexStatsAdd(TEXSTATK_Upload, t - t0); t0 = t; }
-    if (clevel > 1) glGenerateMipmap(GL_TEXTURE_2D);
+    if (clevel > 1) { if (pk) pk->generateMipmaps(tex); else glGenerateMipmap(GL_TEXTURE_2D); }
     if (fStats) { glFinish(); TexStatsAdd(TEXSTATK_Mips, MsTexStatsNow() - t0); }
     const double cb = double(w) * h * 4 * (clevel > 1 ? 4.0 / 3.0 : 1.0);
     s_settexMod[tex] = cb;

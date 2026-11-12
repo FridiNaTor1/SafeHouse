@@ -58,6 +58,7 @@ struct GLOBCOLORS
 {
     std::vector<uint8_t> ab;   // per vertex its colours A and B, as the colour buffer holds them
     uint8_t aMin = 255;        // the lowest colour-A alpha (GLGLOB::aMinA)
+    uint8_t aMax = 255;        // the highest (GLGLOB::aMaxA)
 };
 void PackGlobColors(const GLOB& glob, GLOBCOLORS& cols);
 void UploadGlobColorsGpu(const GLOB& glob, const struct GLGLOB* pgl, const GLOBCOLORS& cols);
@@ -112,6 +113,7 @@ extern PFNEXTRADRAWS g_pfnExtraDraws;
 struct RENDERSTATS
 {
     int cdraw = 0, cpass = 0, ccel = 0, ctexture = 0, cfailTexture = 0;
+    int cfailAll = 0;   // (vkalpha) alpha-tested sub-draws no fragment passes: not drawn
     int cbatch = 0;     // GL draw calls for the passes (glMultiDrawElementsIndirect runs and special draws)
     int cculled = 0;    // records outside the view frustum
     int cmrd = 0;       // records beyond their MRD
