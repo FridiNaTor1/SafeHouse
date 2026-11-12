@@ -58,6 +58,12 @@ public:
         return m_installed;
     }
     void invalidate() { m_nextCheck = 0; }
+    void scanConfigured() {
+        const auto library = m_backend.isoLibrary();
+        m_scannedLibrary = utf8(library);
+        m_scanner.scan(library.empty() ? std::vector<fs::path>{} : std::vector<fs::path>{library});
+        m_scanned = true;
+    }
     // The page opens for a game: start looking for disc images, and pick the
     // remembered or best matching one.
     // addRegion: "Install another region" (Settings): the page offers a disc of a region not installed yet.
@@ -66,16 +72,17 @@ public:
         m_game = game;
         m_addRegion = addRegion;
         m_checkPath.clear();
+        m_installFolderEntryOpen = false;
+        m_installFolderError.clear();
         if (!m_fixture) {
             m_regions = m_backend.installations(game);
             m_region = m_backend.selectedRegion(game);
         }
         m_dismissed = m_job.message;
         invalidate();
-        if (!m_scanned) {
-            m_scanner.scan();
-            m_scanned = true;
-        }
+        // Refresh when the library folder changed since the last visit.
+        const std::string library = utf8(m_backend.isoLibrary());
+        if (!m_scanned || m_scannedLibrary != library) scanConfigured();
         if (!iso.empty()) m_iso = std::move(iso);
         else if (m_fixture) m_iso = m_fixtureInstalled ? std::string{} : bestCandidate();
         else {
@@ -116,6 +123,11 @@ public:
     }
     // B/Escape: close the path entry first.
     bool back() {
+        if (m_installFolderEntryOpen) {
+            m_installFolderEntryOpen = false;
+            requestFocus();
+            return true;
+        }
         if (!m_pathOpen) return false;
         m_pathOpen = false;
         m_installAfterSelection = false;
@@ -166,6 +178,18 @@ public:
         else isoCard(W, ImGui::GetContentRegionAvail().y - px(4), ready, sessionActive);
     }
     void drawDialogs() {
+        // Installation folder changes use the same native/fallback picker as Settings.
+        if (auto r = m_installFolderDialog.poll()) {
+            if (r->status == filedialog::Status::Chosen) applyInstallFolder(r->path);
+            else if (r->status == filedialog::Status::Unavailable) openInstallFolderPicker();
+            else if (r->status == filedialog::Status::Failed) m_installFolderError = r->error;
+        }
+        if (ImGuiFileDialog::Instance()->Display("install-folder", ImGuiWindowFlags_NoCollapse,
+                                                 { px(650), px(400) }, { px(1100), px(760) })) {
+            if (ImGuiFileDialog::Instance()->IsOk())
+                applyInstallFolder(ImGuiFileDialog::Instance()->GetCurrentPath());
+            ImGuiFileDialog::Instance()->Close();
+        }
         // The operating system's dialog (native_dialog.h) runs on its own thread; its answer arrives here.
         if (auto r = m_native.poll()) {
             if (r->status == filedialog::Status::Chosen) {
@@ -197,6 +221,58 @@ public:
     std::string error;
 
 private:
+    void applyInstallFolder(const std::string& folder) {
+        if (m_job.busy || m_fixture) return;
+        try {
+            m_backend.setInstallRoot(path(folder));
+            m_installFolderError.clear();
+            m_installFolderEntryOpen = false;
+            invalidate();
+        } catch (const std::exception& e) {
+            m_installFolderError = e.what();
+        }
+    }
+    void openInstallFolderPicker() {
+        ImGuiFileDialog::Instance()->OpenDialog("install-folder", "Choose game installation folder", nullptr,
+            utf8(filedialog::startFolder({utf8(m_backend.installRoot())})), "", 1, nullptr,
+            ImGuiFileDialogFlags_Modal);
+    }
+    void chooseInstallFolder() {
+        if (m_job.busy || m_fixture || m_installFolderDialog.running()) return;
+        if (padUser()) {
+            m_installFolderEntryOpen = true;
+            m_installFolderEntryFocus = true;
+            std::snprintf(m_installFolderBuf, sizeof(m_installFolderBuf), "%s", utf8(m_backend.installRoot()).c_str());
+        } else {
+            const auto initial = filedialog::startFolder({utf8(m_backend.installRoot())});
+            if (!m_installFolderDialog.start(filedialog::Kind::PickFolder, "Choose game installation folder", initial))
+                openInstallFolderPicker();
+        }
+    }
+    void installFolderEntry(float w) {
+        gap(3);
+        field("Game installation folder", "Changes the folder for future installations");
+        const float applyW = px(104), cancelW = px(96);
+        const bool entered = inputField("##install-folder-path", m_installFolderBuf, sizeof(m_installFolderBuf),
+            launcher::Charset::Free, "e.g. D:\\Games", w - applyW - cancelW - px(16),
+            ImGuiInputTextFlags_EnterReturnsTrue);
+        if (m_installFolderEntryFocus) {
+            m_installFolderEntryFocus = false;
+            const ImGuiID id = ImGui::GetItemID();
+            setFocus(id, ImGui::GetCurrentWindow(), true);
+            if (!padUser()) {
+                ImGui::ActivateItemByID(id);
+                GImGui->NavNextActivateFlags = ImGuiActivateFlags_PreferInput;
+            }
+        }
+        if (entered && m_installFolderBuf[0]) applyInstallFolder(m_installFolderBuf);
+        ImGui::SameLine(0, px(8));
+        ImGui::BeginDisabled(!m_installFolderBuf[0]);
+        if (button("Apply", Tone::Primary, { applyW, 0 })) applyInstallFolder(m_installFolderBuf);
+        ImGui::EndDisabled();
+        ImGui::SameLine(0, px(8));
+        if (button("Cancel", Tone::Quiet, { cancelW, 0 })) m_installFolderEntryOpen = false;
+    }
     void openFolderSafe(const fs::path& folder) {
         try {
             openFolder(folder);
@@ -460,12 +536,15 @@ private:
 #else
         const char* where = "Found in your Emulation, Games, Downloads, Desktop and Documents folders and on removable drives";
 #endif
-        text(m_scanner.scanning() ? "Searching your folders…" : where, fonts().caption, color::muted);
+        const auto library = m_backend.isoLibrary();
+        const std::string source = library.empty() ? std::string(where)
+                                                   : "Default folders + " + utf8(library);
+        text(m_scanner.scanning() ? "Searching your folders…" : source.c_str(), fonts().caption, color::muted);
         ImGui::PopClipRect();
         ImGui::EndGroup();
         // Pad users get the path entry instead of the mouse-only file dialog.
         sameRow(row, w - browseW - rescanW - px(8));
-        if (iconButton("Search again", Icon::Refresh, rescanW) && !m_fixture) m_scanner.scan();
+        if (iconButton("Search again", Icon::Refresh, rescanW) && !m_fixture) scanConfigured();
         ImGui::SameLine(0, px(8));
         ImGui::BeginDisabled(m_native.running());  // the system's file dialog is open in its own window
         if (button(browseLabel, Tone::Secondary, { browseW, 0 }, padUser() ? Icon::Search : Icon::Folder)) choose(false);
@@ -506,7 +585,9 @@ private:
                               check->region && check->region->supported;
         const std::string info = check && check->ok() ? discInfo(*check) : std::string{};
         const float footer = largeHeight() + px(14) + (mismatch.empty() ? 0.0f : px(40) + (canRoute ? controlHeight() : 0.0f)) +
-                             (info.empty() ? 0.0f : px(34));
+                             (info.empty() ? 0.0f : px(34)) + controlHeight() + px(26) +
+                             (m_installFolderEntryOpen ? controlHeight() + px(42) : 0.0f) +
+                             (m_installFolderError.empty() ? 0.0f : px(28));
         // A little padding keeps the focus ring of the first and last rows visible.
         ImGui::SetCursorPosX(ImGui::GetCursorPosX() - px(6));
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, { px(6), px(6) });
@@ -594,6 +675,31 @@ private:
             ImGui::SetCursorScreenPos({ p.x + px(28), p.y });
             text(info.c_str(), fonts().body, color::text);
         }
+        // Show the *effective* game/region destination, not merely the configured base folder.
+        // Existing installations keep their original location when the default root changes.
+        gap(3);
+        const ImVec2 folderRow = ImGui::GetCursorScreenPos();
+        const float changeW = px(122);
+        const auto installTo = check && check->ok() && check->region
+                                   ? m_backend.regionDir(m_game, check->region->key)
+                                   : m_backend.baseDir(m_game);
+        text("Install to", fonts().caption, color::muted);
+        ImGui::SameLine(0, px(10));
+        const ImVec2 pathPos = ImGui::GetCursorScreenPos();
+        ImGui::PushClipRect(pathPos, { folderRow.x + w - changeW - px(14), folderRow.y + controlHeight() }, true);
+        const auto destination = utf8(installTo);
+        text(destination.c_str(), fonts().body, color::text2);
+        ImGui::PopClipRect();
+        sameRow(folderRow, w - changeW);
+        ImGui::BeginDisabled(sessionActive || m_job.busy || m_fixture || m_installFolderDialog.running());
+        if (button("Change...###install-folder", Tone::Secondary, { changeW, 0 }, Icon::Folder))
+            chooseInstallFolder();
+        ImGui::EndDisabled();
+        caption("Changes the default for future installs; existing installations remain in place.", color::muted);
+        if (m_installFolderEntryOpen) installFolderEntry(w);
+        if (!m_installFolderError.empty()) {
+            text(m_installFolderError.c_str(), fonts().caption, color::warning);
+        }
         // Footer: hint and the main action.
         const float ctaW = px(260);
         ImGui::SetCursorPosY(ImGui::GetCursorPosY() + px(2));
@@ -602,7 +708,8 @@ private:
         text(padUser() ? "Not listed? Enter the folder that holds it." : "You can also drop an .iso or .chd file onto this window.", fonts().caption,
              color::muted);
         ImGui::SetCursorPos({ ImGui::GetCursorPosX() + w - ctaW, y });
-        ImGui::BeginDisabled(sessionActive || m_job.busy || !mismatch.empty());
+        ImGui::BeginDisabled(sessionActive || m_job.busy || !mismatch.empty() ||
+                             m_installFolderDialog.running() || m_installFolderEntryOpen);
         std::string ctaLabel = ready && !m_addRegion ? "Reinstall" : "Install";
         bool ctaQuiet = ready && !m_addRegion;
         if (check && check->ok() && check->region) {
@@ -697,9 +804,14 @@ private:
     std::string m_note;
     std::string m_iso, m_dismissed, m_lastLabel;
     bool m_scanned = false, m_installAfterSelection = false, m_showLog = false, m_fixture = false, m_fixtureInstalled = false;
+    std::string m_scannedLibrary;
     bool m_installed = false, m_pathOpen = false, m_pathFocus = false;
     char m_pathBuf[1024] = {};
     filedialog::Async m_native;
+    filedialog::Async m_installFolderDialog;
+    bool m_installFolderEntryOpen = false, m_installFolderEntryFocus = false;
+    char m_installFolderBuf[1024] = {};
+    std::string m_installFolderError;
     std::string m_pathNote;
     double m_nextCheck = 0;
     bool m_wasBusy = false;
