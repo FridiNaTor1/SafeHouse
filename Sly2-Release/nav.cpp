@@ -49,6 +49,7 @@ struct NAVWORLD
     std::vector<LO*> aploDirty;             // the DL 0x3E1A4C
     std::vector<std::shared_ptr<NAVPOLY>> apolyImported;
     int nStamp = 0;                         // GAME +0x3D70
+    int nLinkSerial = 0;                    // world BSP +0x28
     // the merges (0x1BDE80): a member's merged polygon (+0x1D8), a merged polygon's members (its DL +0x1C4), the
     // merged polygons (class 0x0E objects oid 0x2CD, +0x1C0 set) and their free pool (the DL 0x3E1A40)
     std::unordered_map<const LO*, LO*> mpowner;
@@ -465,6 +466,24 @@ void ResetNav()
 
 int NGenNav() { return s_nGenNav; }
 
+int NNavLinkSerial()
+{
+    EnsureWorld();
+    return s_nav.nLinkSerial;
+}
+
+void BumpNavLinkSerial()
+{
+    EnsureWorld();
+    ++s_nav.nLinkSerial;
+}
+
+void SetNavLinkSerial(int n)
+{
+    EnsureWorld();
+    s_nav.nLinkSerial = n;
+}
+
 // orig: 0x001F37C8 (the object's region entry moved to preg's list: off the old one's, appended to the new one's;
 // 0x1C1440's cached triangle record not kept natively)
 void SetAloRegion(ALO* palo, NAVREGION* preg)
@@ -877,6 +896,7 @@ void SmoothNav(const NAVREGION* preg, const std::vector<glm::vec3>& apos, std::v
 // orig: 0x001BFF28
 int CposNavPath(const NAVREGION* preg, const glm::vec3& qa, const glm::vec3& qb, int cMax, glm::vec4* aout)
 {
+    if (cMax < 2) return 0;
     const int la = ItriNavFrom(preg, 0, qa, 1);
     if (la < 0) return 0;
     const glm::vec3 pa = PosNearestTri(preg, la, qa);
@@ -888,9 +908,9 @@ int CposNavPath(const NAVREGION* preg, const glm::vec3& qa, const glm::vec3& qb,
     if (la == lb)
     {
         aout[0] = glm::vec4(qa, 0.0f);
-        aout[1] = glm::vec4(pa, 0.0f);
-        aout[2] = glm::vec4(pb, 0.0f);
-        n = 3;
+        aout[1] = glm::vec4(cMax == 2 ? pb : pa, 0.0f);
+        n = 2;
+        if (cMax > 2) aout[n++] = glm::vec4(pb, 0.0f);
     }
     else
     {
@@ -917,6 +937,7 @@ int CposNavPath(const NAVREGION* preg, const glm::vec3& qa, const glm::vec3& qb,
         }
         std::vector<int> ai;
         AstarNav(preg, apos, aaedge, istart, igoal, &ai);
+        if (ai.empty()) return 0;
         if (ai.size() >= 3) SmoothNav(preg, apos, &ai);
         const int c = static_cast<int>(ai.size());
         n = cMax < c ? cMax : c;
@@ -1279,6 +1300,13 @@ NAVPOLY* PpolyOfLo(LO* plo)
     EnsureWorld();
     auto it = s_nav.mppoly.find(plo);
     return it == s_nav.mppoly.end() ? nullptr : it->second.get();
+}
+
+bool FNavPolyMerged(const NAVPOLY* ppoly)
+{
+    EnsureWorld();
+    const auto it = s_nav.mpowner.find(ppoly->plo);
+    return it != s_nav.mpowner.end() && it->second != nullptr;
 }
 
 void MarkNavPolyDirty(LO* plo)

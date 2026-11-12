@@ -824,6 +824,11 @@ bool JOBFOLLOW::FStuck() const
 // orig: 0x00177F78
 void JOBFOLLOW::Steer177F78()
 {
+    // Original +0x54 is the polygon object, whose curve is resolved at use time.
+    // A pooled merged polygon can rebuild its curve without changing that object.
+    if (ppolyOther)
+        pcrvOther = ppolyOther->pcrvOwn ? ppolyOther->pcrv :
+            (ppolyOther->plo ? PcrvFromLo(ppolyOther->plo) : ppolyOther->pcrv);
     ALO* palo = PaloFollow(this);
     const glm::vec3 posSelf = PosFollow(this);
     // the actor's region entry's region (ALO +0xE8 -> +0xDC -> +0x10, kept by the ALO's update 0x1F36E0)
@@ -843,7 +848,7 @@ void JOBFOLLOW::Steer177F78()
                          palo->oid, s0, t, s, pcrv == PcrvFollowOwn(this) ? "own" : "world", pcrv->fClosed, pcrv->apos.size(),
                          SLengthCrv(pcrv), posSelf.x, posSelf.y, posSelf.z, posPath.x, posPath.y);
     }
-    if (st == 1 || st == 4)
+    if ((st == 1 || st == 4) && pcrvOther)
     {
         fRev = nWay != 2;
         const float g = fRev ? sOther - S_JOB_AHEAD : sOther + S_JOB_AHEAD;
@@ -1018,6 +1023,7 @@ void JOBFOLLOW::Update1789F8()
                 NAVREGION* preg = PregionAt(PosFollow(this), false);
                 NAVPOLY* ppoly = nullptr;
                 nWay = NNavWay(posSelf, preg, pcrv, fReverse == 0 ? 1 : 0, &ppoly, &g60, s);
+                ppolyOther = ppoly;
                 pcrvOther = ppoly ? ppoly->pcrv : nullptr;
                 if (static const char* s_sz = std::getenv("SLY2N_PATHSTEPPRINT"); s_sz && ppoly && PaloFollow(this)->oid == std::atoi(s_sz))
                     std::fprintf(stderr, "follow %d t %.3f st %d way %d poly %d (cid 0x%X kind %d) at %.0f %.0f %.0f\n", PaloFollow(this)->oid, g_clock.t, st, nWay,
@@ -1053,8 +1059,9 @@ void JOBFOLLOW::Update1789F8()
         }
         case 1: case 4:
         {
-            // (the polygon's object alive (bit 60), its +0x1D8 owner none)
-            if (!pcrvOther) SetState(0);
+            // 0x1789F8: bit 60 clear or +0x1D8 merge owner set; checked after steering.
+            if (!pcrvOther || (ppolyOther &&
+                ((ppolyOther->plo && !ppolyOther->plo->fInWorld) || FNavPolyMerged(ppolyOther)))) SetState(0);
             else if (std::fabs(DsCrv(pcrvOther, sOther, g60)) < 80.0f) SetState(0);
             else
             {
@@ -2281,7 +2288,7 @@ void JOBGOTO::Init()
     nAnim = -1;
     tSearch = -FLT_MAX;
     st = -1;
-    nSerial = 0;  // TODO(ai): the world BSP's polygon serial (+0x28)
+    nSerial = NNavLinkSerial();
 }
 
 // orig: 0x0017D3B0
@@ -2448,7 +2455,8 @@ void JOBGOTO::Search()
         if (pl->kind == 0)
         {
             const glm::vec3 pos = PosAi(pguard->palo);
-            const glm::vec3 a = pl->posBegin, b = pl->posEnd;
+            const glm::vec3 a = PosGoal(g, pos);
+            const glm::vec3 b = PosGoal(pl->agoal.size() < 2 ? g : pl->agoal[1], pos);
             const glm::vec3 d = b - a;
             const float dd = glm::dot(d, d);
             const float t = dd > 1e-6f ? glm::dot(pos - a, d) / dd : -1.0f;  // 0x11EE08
@@ -2490,7 +2498,7 @@ void JOBGOTO::Search()
     }
     SetState(k);
     tSearch = g_clock.t;
-    nSerial = 0;
+    nSerial = NNavLinkSerial();
 }
 
 // orig: 0x0017DCB8
@@ -2529,7 +2537,7 @@ void JOBGOTO::Update()
         {
             auto* t = static_cast<JOBFOLLOW*>(pchild);
             if (s0 == 2 && t && t->FArrived()) SetState(3);
-            else if (T_RESEARCH < g_clock.t - tSearch /* || the world's polygons changed (+0xA4) */) Search();
+            else if (T_RESEARCH < g_clock.t - tSearch || nSerial != NNavLinkSerial()) Search();
             else if (t && t->FStuck())
             {
                 // the shortcut at the path's end (5)

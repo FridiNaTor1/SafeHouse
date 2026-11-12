@@ -9,6 +9,7 @@
 #include <glm/glm.hpp>
 
 struct KINDE;
+struct NAVPOLY;
 
 // 0xBB (0x30: 0x17D1C0 / 0x17D1F0 / 0x17D280): hanging on a bar (GUARD +0xF80 2), state 0x28; 0xBC (0x17D2B0 /
 // 0x17D2E0 / 0x17D330): on a 0x27 (+0xF80 3), state 0x29. Both stand (a 0x9D move, state index 2); 0xBB also turns the
@@ -250,7 +251,8 @@ struct JOBFOLLOW : AIJOB
     float sStart = -1.0f;         // +0x48
     int st = -1;                  // +0x4C
     float tSt = 0;                // +0x50
-    const CRV* pcrvOther = nullptr;  // +0x54
+    const CRV* pcrvOther = nullptr;  // resolved curve of the +0x54 polygon
+    const NAVPOLY* ppolyOther = nullptr;  // original +0x54 object identity
     int nWay = 0;                 // +0x58 the search's answer (0x1BD718)
     float sOther = 0;             // +0x5C
     float g60 = 0;                // +0x60
