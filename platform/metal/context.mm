@@ -12,6 +12,7 @@ extern "C" void* cane_glfw_metal_layer(GLFWwindow* window);
 #include <GLFW/glfw3native.h>
 #endif
 
+#include <objc/message.h>
 #include <algorithm>
 #include <chrono>
 #include <cstdlib>
@@ -252,8 +253,14 @@ void Context::SwapBuffers() {
       // scheduled, MTLDrawable -presentAfterMinimumDuration:, iOS 10.3)
       id<CAMetalDrawable> drawable = drawable_;
       const CFTimeInterval minimum = MinimumPresentSeconds();
+      // (called through the runtime: the SDK headers in CI declare no such method on the drawable's visible protocols;
+      // a drawable without it presents at once)
       [CommandBuffer() addScheduledHandler:^(id<MTLCommandBuffer>) {
-        [drawable presentAfterMinimumDuration:minimum];
+        const SEL sel = NSSelectorFromString(@"presentAfterMinimumDuration:");
+        if ([(id)drawable respondsToSelector:sel])
+          reinterpret_cast<void (*)(id, SEL, CFTimeInterval)>(objc_msgSend)((id)drawable, sel, minimum);
+        else
+          reinterpret_cast<void (*)(id, SEL)>(objc_msgSend)((id)drawable, NSSelectorFromString(@"present"));
       }];
     } else
 #endif
