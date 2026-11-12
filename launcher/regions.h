@@ -48,13 +48,8 @@ inline std::string regionName(std::string_view key) {
     name[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(name[0])));
     return name;
 }
-// The free space an install needs: Sly 1 rebuilds its levels (decoded textures; PAL keeps five languages), the
-// numbers the extractor checks; Sly 2 converts its disc into files and Sly 3 copies the image: install.h
-// installNeedBytes, the extractor's own check.
-inline uint64_t sly1NeedBytes(const Sly1Disc& d) {
-    const std::string_view r = d.region;
-    return (r == "PAL" ? 12ull : r == "NTSC-U" ? 6ull : 8ull) << 30;
-}
+// The free space an install needs: Sly 1's per region (install.h sly1NeedBytes); Sly 2 converts its disc into files and
+// Sly 3 copies the image: install.h installNeedBytes, the extractor's own check.
 inline uint64_t discImageNeedBytes(const DiscVariant& v) { return installNeedBytes(v); }
 
 // The game's regions: the installable ones first (in the tables' order, USA first), then the recognized ones.

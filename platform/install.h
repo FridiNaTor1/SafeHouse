@@ -3,6 +3,7 @@
 #include <cerrno>
 #include <functional>
 #include <memory>
+#include <string_view>
 #include <nlohmann/json.hpp>
 #include <system_error>
 
@@ -50,6 +51,12 @@ inline const Sly1Disc* sly1DiscFromBootFile(const std::string& bootFile) {
     for (const auto& disc : sly1Discs)
         if (bootFile == disc.bootFile) return &disc;
     return nullptr;
+}
+// The free space a Sly 1 install needs: it rebuilds its levels (decoded textures; PAL keeps five languages), the
+// numbers the extractor checks.
+inline uint64_t sly1NeedBytes(const Sly1Disc& d) {
+    const std::string_view r = d.region;
+    return (r == "PAL" ? 12ull : r == "NTSC-U" ? 6ull : 8ull) << 30;
 }
 // Sly 2: Band of Thieves (USA, SCUS-97316). Its game data lives in raw sectors outside the ISO9660 filesystem.
 // Asset version 2 (2026-11-03): the disc is read once at install and converted

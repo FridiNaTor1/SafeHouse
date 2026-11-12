@@ -1520,7 +1520,7 @@ static int Extract(int argc, char** argv)
         const std::string item=cane::utf8(isoPath.filename());
         size_t reported=0;
         Progress("decompress",0,size_t(size>>20),item);
-        error=cane::writeChdAsIso(isoPath,decompressed.path,[&](uint64_t done,uint64_t total) {
+        error=cane::writeImageAsIso(isoPath,decompressed.path,[&](uint64_t done,uint64_t total) {
             const size_t mib=size_t(done>>20);
             if(mib>=reported+32 || done==total)Progress("decompress",reported=mib,size_t(total>>20),item);
             return true;

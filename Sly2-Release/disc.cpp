@@ -32,7 +32,7 @@ uint32_t Le32(const uint8_t* p) { uint32_t v; std::memcpy(&v, p, 4); return v; }
 uint16_t Le16(const uint8_t* p) { uint16_t v; std::memcpy(&v, p, 2); return v; }
 
 #ifdef __SWITCH__
-// (the Switch) The files read in pieces (the disc image, the streams' files: music, dialog, movies, banks) kept open, a
+// (the Switch) The files read in pieces (the streams' files: music, dialog, movies, banks) kept open, a
 // few at a time, rather than opened for each read: on the SD card an open costs most of a small read's time. Each file
 // has its own lock, so a world's load and the sound thread's stream read apart; reads of one file take turns.
 class COpenFiles
@@ -94,21 +94,6 @@ private:
 COpenFiles s_openfiles;
 #endif
 
-bool ReadAt(const std::string& path, uint64_t offset, void* data, size_t cb)
-{
-#ifdef __SWITCH__
-    size_t cbRead = 0;
-    uint64_t cbFile = 0;
-    return s_openfiles.FRead(path, offset, data, cb, &cbRead, &cbFile) && cbRead == cb;
-#else
-    std::ifstream in(cane::path(path), std::ios::binary);
-    if (!in) return false;
-    in.seekg(static_cast<std::streamoff>(offset));
-    in.read(static_cast<char*>(data), static_cast<std::streamsize>(cb));
-    return static_cast<size_t>(in.gcount()) == cb;
-#endif
-}
-
 uint32_t Crc32(const uint8_t* p, size_t cb)
 {
     uint32_t crc = 0xFFFFFFFFu;
@@ -146,14 +131,14 @@ const KNOWNDISC s_adisc[] = {
 };
 
 // A file of the image's root directory (ISO 9660): its sector and size.
-bool FFindRootFile(const std::string& path, const std::string& name, uint32_t& lba, uint32_t& cb)
+bool FFindRootFile(const cane::DiscReader& read, const std::string& name, uint32_t& lba, uint32_t& cb)
 {
     uint8_t pvd[SECTOR];
-    if (!ReadAt(path, 16ull * SECTOR, pvd, SECTOR) || std::memcmp(pvd + 1, "CD001", 5) != 0) return false;
+    if (!read(16ull * SECTOR, pvd, SECTOR) || std::memcmp(pvd + 1, "CD001", 5) != 0) return false;
     const uint32_t lbaRoot = Le32(pvd + 156 + 2), cbRoot = Le32(pvd + 156 + 10);
     if (cbRoot == 0 || cbRoot > 64 * SECTOR) return false;
     std::vector<uint8_t> ab(cbRoot);
-    if (!ReadAt(path, uint64_t(lbaRoot) * SECTOR, ab.data(), ab.size())) return false;
+    if (!read(uint64_t(lbaRoot) * SECTOR, ab.data(), ab.size())) return false;
     for (size_t o = 0; o < ab.size();)
     {
         const uint8_t cbRec = ab[o];
@@ -173,12 +158,12 @@ bool FFindRootFile(const std::string& path, const std::string& name, uint32_t& l
 }
 
 // SYSTEM.CNF's BOOT2 = cdrom0:\NAME;1 -> NAME
-std::string SzBootFile(const std::string& path)
+std::string SzBootFile(const cane::DiscReader& read)
 {
     uint32_t lba = 0, cb = 0;
-    if (!FFindRootFile(path, "SYSTEM.CNF", lba, cb) || cb > 4096) return "";
+    if (!FFindRootFile(read, "SYSTEM.CNF", lba, cb) || cb > 4096) return "";
     std::string s(cb, '\0');
-    if (!ReadAt(path, uint64_t(lba) * SECTOR, s.data(), cb)) return "";
+    if (!read(uint64_t(lba) * SECTOR, s.data(), cb)) return "";
     const size_t i = s.find("cdrom0:\\");
     if (i == std::string::npos) return "";
     const size_t j = s.find(';', i);
@@ -214,23 +199,29 @@ bool CDisc::FOpen(const std::string& path, std::string& error)
     namespace fs = std::filesystem;
     std::error_code ec;
     const fs::path p = cane::path(path);
-    if (fs::is_directory(p, ec)) return FOpenConverted(path, error);
+    if (fs::is_directory(p, ec) && cane::imageParts(p).empty()) return FOpenConverted(path, error);
     if (p.filename() == "extraction_manifest.json") return FOpenConverted(cane::utf8(p.parent_path()), error);
-    // a disc image (the developer option)
-    const std::string szBoot = SzBootFile(path);
+    // a disc image: the converter's (an .iso, a CHD or a split .iso), or the developer option
+    std::unique_ptr<cane::DiscImage> pimage = cane::DiscImage::open(p, &error);
+    if (!pimage) return false;
+    const cane::DiscReader read = pimage->reader();
+    const std::string szBoot = SzBootFile(read);
     uint32_t lba = 0, cb = 0;
-    if (szBoot.empty() || !FFindRootFile(path, szBoot, lba, cb) || cb < 0x1000 || cb > 0x800000)
+    if (szBoot.empty() || !FFindRootFile(read, szBoot, lba, cb) || cb < 0x1000 || cb > 0x800000)
     {
         error = "cannot read " + path + " (no PS2 boot executable)";
         return false;
     }
     std::vector<uint8_t> elf(cb);
-    if (!ReadAt(path, uint64_t(lba) * SECTOR, elf.data(), elf.size()))
+    if (!read(uint64_t(lba) * SECTOR, elf.data(), elf.size()))
     {
         error = "cannot read " + path;
         return false;
     }
     if (!FRecognize(szBoot, std::move(elf), path, error)) return false;
+    m_apimage.clear();
+    m_apimage.push_back(std::move(pimage));
+    m_aszLanguage.clear();
     m_path = path;
     m_fConverted = false;
     return true;
@@ -262,6 +253,9 @@ bool CDisc::FOpenConverted(const std::string& dir, std::string& error)
             return false;
         }
         m_szExe = m.at("executable").get<std::string>();
+        m_aszLanguage.clear();
+        if (m.contains("languages"))
+            for (const auto& lang : m.at("languages")) m_aszLanguage.push_back(lang.get<std::string>());
         m_afile.clear();
         m_mpsectorWorldName.clear();
         // the mods folder's files (relative paths as the manifest spells them, "/" separated)
@@ -449,9 +443,28 @@ bool CDisc::FReadRootFile(const std::string& name, std::vector<uint8_t>& ab) con
 {
     if (m_fConverted) return false;
     uint32_t lba = 0, cb = 0;
-    if (!FFindRootFile(m_path, name, lba, cb)) return false;
+    if (!FFindRootFile([this](uint64_t ib, void* pv, size_t cbRead) { return FReadImage(ib, pv, cbRead); }, name, lba, cb)) return false;
     ab.resize(cb);
-    return ReadAt(m_path, uint64_t(lba) * SECTOR, ab.data(), ab.size());
+    return FReadImage(uint64_t(lba) * SECTOR, ab.data(), ab.size());
+}
+
+bool CDisc::FReadImage(uint64_t ib, void* pv, std::size_t cb) const
+{
+    std::unique_ptr<cane::DiscImage> pimage;
+    {
+        std::lock_guard<std::mutex> lock(m_mtxImage);
+        if (!m_apimage.empty())
+        {
+            pimage = std::move(m_apimage.back());
+            m_apimage.pop_back();
+        }
+    }
+    if (!pimage) pimage = cane::DiscImage::open(cane::path(m_path));
+    if (!pimage) return false;
+    const bool fRead = pimage->read(ib, pv, cb);
+    std::lock_guard<std::mutex> lock(m_mtxImage);
+    m_apimage.push_back(std::move(pimage));
+    return fRead;
 }
 
 const CDisc::FILEENT* CDisc::PentFind(uint32_t isector) const
@@ -489,14 +502,14 @@ std::vector<uint8_t> CDisc::ReadFile(const FK& fk) const
 #endif
     }
     std::vector<uint8_t> ab(fk.cb);
-    if (!ReadAt(m_path, uint64_t(fk.isector) * SECTOR, ab.data(), ab.size()))
+    if (!FReadImage(uint64_t(fk.isector) * SECTOR, ab.data(), ab.size()))
         throw std::runtime_error("disc read failed at sector " + std::to_string(fk.isector));
     return ab;
 }
 
 bool CDisc::FReadFileBytes(uint32_t isector, uint64_t ib, void* pv, std::size_t cb) const
 {
-    if (!m_fConverted) return ReadAt(m_path, uint64_t(isector) * SECTOR + ib, pv, cb);
+    if (!m_fConverted) return FReadImage(uint64_t(isector) * SECTOR + ib, pv, cb);
     const FILEENT* pent = PentFind(isector);
     if (!pent)
     {

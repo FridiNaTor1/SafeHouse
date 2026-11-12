@@ -343,6 +343,48 @@ bool FDemuxMovie(const std::vector<uint8_t>& abFile, std::vector<uint8_t>& abVid
     return FDemuxPss(reader, abVideo, mpaudio);
 }
 
+std::vector<uint8_t> AbPssKeepTracks(const std::vector<uint8_t>& ab, const std::function<bool(int track)>& fKeep)
+{
+    // (the packets as CPssReader walks them; a pack's header is kept with the first packet kept after it)
+    std::vector<uint8_t> abOut;
+    abOut.reserve(ab.size());
+    auto copy = [&](std::size_t ib, std::size_t cb) {
+        abOut.insert(abOut.end(), ab.begin() + std::ptrdiff_t(ib), ab.begin() + std::ptrdiff_t(ib + cb));
+    };
+    std::size_t ib = 0, ibHeader = 0, cbHeader = 0;  // the pack header not copied yet (cbHeader 0: none)
+    while (ib + 6 <= ab.size())
+    {
+        const uint32_t code = Be32(ab.data() + ib);
+        if (code == 0x000001B9) break;  // program end
+        if (code == 0x000001BA)
+        {
+            if (ib + 14 > ab.size()) break;
+            ibHeader = ib;
+            cbHeader = 14 + (ab[ib + 13] & 7u);
+            ib += cbHeader;
+            continue;
+        }
+        if ((code >> 8) != 1 || (code & 0xFF) < 0xBC)
+        {
+            ++ib;  // zero fill
+            continue;
+        }
+        const std::size_t cbPacket = std::min<std::size_t>(6 + Be16(ab.data() + ib + 4), ab.size() - ib);
+        // (a sound packet's track: its payload's fourth byte, as FPlayMovie picks it)
+        const std::size_t ibData = cbPacket >= 9 ? ib + 9 + ab[ib + 8] : ib + cbPacket;
+        if (code != 0x000001BD || ibData + 4 > ib + cbPacket || fKeep(ab[ibData + 3]))
+        {
+            if (cbHeader) copy(ibHeader, cbHeader);
+            cbHeader = 0;
+            copy(ib, cbPacket);
+        }
+        ib += cbPacket;
+    }
+    ib = std::min(ib, ab.size());
+    copy(ib, ab.size() - ib);
+    return abOut;
+}
+
 std::vector<MOVIEINFO> MovieList()
 {
     std::vector<MOVIEINFO> a;

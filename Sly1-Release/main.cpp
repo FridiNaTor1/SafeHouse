@@ -1028,6 +1028,7 @@ bool fQuitGame;
 
 #ifdef __SWITCH__
 #include "../platform/games.h"
+#include "../platform/install.h"
 #include "../platform/installer/iso_extractor.h"
 #include "../platform/switch/installer.h"
 #include <functional>
@@ -1050,7 +1051,7 @@ std::string Outcome(const std::function<void()>& run)
 const CaneSwitch::InstallJob s_install = {
     int(cane::GameId::Sly1),
     "Select a Sly Cooper ISO or CHD (USA, Europe, Japan or Korea).",
-    [](const std::string& iso, const std::string& out, const CaneSwitch::InstallProgress& progress) {
+    [](const std::string& iso, const std::string& out, const std::vector<std::string>&, const CaneSwitch::InstallProgress& progress) {
         std::string error = Outcome([&] { CaneExtract::ExtractGame(iso, out, Forward(progress)); });
         if (error.empty() && !CaneExtract::IsReady(out)) error = "Some game files are missing. Please run the extraction again.";
         return error;
@@ -1060,6 +1061,12 @@ const CaneSwitch::InstallJob s_install = {
         return Outcome([&] { CaneExtract::RebuildGame(data, Forward(progress)); });
     },
     false,
+    false,
+    // (the PC extractor's figures: install.h sly1NeedBytes)
+    [](const std::string& bootFile, std::size_t) -> uint64_t {
+        const cane::Sly1Disc* disc = cane::sly1DiscFromBootFile(bootFile);
+        return disc ? cane::sly1NeedBytes(*disc) : 0;
+    },
 };
 bool FInstalled(const std::string& data) { return CaneExtract::IsReady(data); }
 const CaneSwitch::Graphics s_graphics = {CaneDeko::Initialize, CaneDeko::Shutdown, CaneDeko::ResizeOutput, CaneDeko::Present,

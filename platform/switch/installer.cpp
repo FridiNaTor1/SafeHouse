@@ -1,5 +1,8 @@
 // See installer.h. The screens are ProjectCane's (platform/installer/view.h); this drives them on the Switch:
-//   Browse    the SD card's folders and disc images: D-pad, A opens / installs, B goes up, + quits (touch works too)
+//   Browse    the SD card's and USB drives' folders and disc images: D-pad, A opens / installs, B goes up, + quits
+//             (touch works too). With a USB drive plugged in it starts at the choice of the SD card or a drive, where
+//             B from the top of either goes back.
+//   Languages a disc's languages (the game's own choice): D-pad, A ticks one, X installs, B back to the list
 //   Extract   the conversion's progress, on its own thread with the CPU boost mode on; B cancels
 //   Complete  keep or delete the disc image: Left / Right, A confirms (B keeps it)
 //   Error     what stopped it: A or B back to the list (or into the game, when it is installed after all)
@@ -11,6 +14,7 @@
 #include "../installer/view.h"
 
 #include <pthread.h>
+#include <usbhsfs.h>
 
 #include <algorithm>
 #include <atomic>
@@ -45,6 +49,55 @@ uint64_t FreeBytes(const char* path)
 {
     struct statvfs st{};
     return statvfs(path, &st) == 0 ? uint64_t(st.f_bavail) * uint64_t(st.f_bsize) : 0;
+}
+
+// USB drives (cmake/usbhsfs.cmake: FAT and exFAT), mounted as ums0:/, ums1:/, ... while the installer runs.
+class UsbDrives
+{
+public:
+    UsbDrives()
+    {
+        m_ok = R_SUCCEEDED(usbHsFsInitialize(0));
+        if (m_ok)
+            usbHsFsSetPopulateCallback([](const UsbHsFsDevice*, u32, void* self) { static_cast<UsbDrives*>(self)->m_changed = true; },
+                                       this);
+    }
+    ~UsbDrives()
+    {
+        if (!m_ok) return;
+        usbHsFsSetPopulateCallback(nullptr, nullptr);
+        usbHsFsExit();
+    }
+    UsbDrives(const UsbDrives&) = delete;
+    UsbDrives& operator=(const UsbDrives&) = delete;
+    // A drive was plugged in or taken out since the last call.
+    bool TakeChanged() { return m_changed.exchange(false); }
+    std::vector<UsbHsFsDevice> Drives() const
+    {
+        std::vector<UsbHsFsDevice> drives;
+        if (!m_ok) return drives;
+        drives.resize(usbHsFsGetMountedDeviceCount());
+        drives.resize(usbHsFsListMountedDevices(drives.data(), u32(drives.size())));
+        return drives;
+    }
+
+private:
+    bool m_ok = false;
+    std::atomic<bool> m_changed{false};
+};
+// "USB: SanDisk Ultra (exFAT, 57.30 GB)"
+std::string DriveName(const UsbHsFsDevice& d)
+{
+    std::string name = d.product_name[0] ? d.product_name : d.manufacturer[0] ? d.manufacturer : "drive";
+    while (!name.empty() && name.back() == ' ') name.pop_back();
+    return "USB: " + name + " (" + LIBUSBHSFS_FS_TYPE_STR(d.fs_type) + ", " + SizeText(d.capacity) + ")";
+}
+// The storage a path is on: "sdmc:/", "ums0:/"
+fs::path Root(const fs::path& path)
+{
+    const std::string s = path.string();
+    const size_t colon = s.find(':');
+    return colon == std::string::npos ? fs::path("sdmc:/") : fs::path(s.substr(0, colon + 1) + "/");
 }
 
 // The worker's state: it writes the progress, the screen reads it.
@@ -104,6 +157,7 @@ public:
         if (!m_ui.Begin()) return Action::Exit;
         const u64 pressed = m_ui.Pressed();
         CaneSetup::View& v = m_view;
+        if (v.screen == Screen::Browse && m_usb.TakeChanged()) UsbChanged();
         Action input = Action::None;
         if ((pressed & HidNpadButton_Plus) && v.screen != Screen::Extract) input = Action::Exit;
         else if (v.screen == Screen::Browse)
@@ -114,6 +168,20 @@ public:
                 if (pressed & HidNpadButton_AnyDown) v.selected = (v.selected + 1) % v.entries.size();
                 if (pressed & HidNpadButton_A) input = Action::Select;
             }
+            if (pressed & HidNpadButton_B) input = Action::Back;
+        }
+        else if (v.screen == Screen::Languages)
+        {
+            const size_t n = v.languages.size(), rows = CaneSetup::LanguageRows(v);
+            if (n)
+            {
+                if (pressed & HidNpadButton_AnyUp) v.language = (v.language + n - 1) % n;
+                if (pressed & HidNpadButton_AnyDown) v.language = (v.language + 1) % n;
+                if (pressed & (HidNpadButton_AnyLeft | HidNpadButton_AnyRight))
+                    v.language = v.language >= rows ? v.language - rows : std::min(v.language + rows, n - 1);
+                if (pressed & HidNpadButton_A) input = Action::Toggle;
+            }
+            if (pressed & HidNpadButton_X) input = Action::Install;
             if (pressed & HidNpadButton_B) input = Action::Back;
         }
         else if (v.screen == Screen::Extract)
@@ -154,8 +222,28 @@ public:
                 else if (action == Action::Select && v.selected < m_paths.size())
                 {
                     const fs::path path = m_paths[v.selected];
+                    m_moved = true;
                     if (v.entries[v.selected].folder) { m_folder = path; Refresh(); }
                     else Begin(path);
+                }
+                break;
+            case Screen::Languages:
+                if (action == Action::Toggle && v.language < v.chosen.size())
+                {
+                    v.chosen[v.language] = !v.chosen[v.language];
+                    NoteLanguages();
+                }
+                else if (action == Action::Install)
+                {
+                    std::vector<std::string> ids;
+                    for (size_t i = 0; i < m_languages.size() && i < v.chosen.size(); ++i)
+                        if (v.chosen[i]) ids.push_back(m_languages[i].id);
+                    if (!ids.empty()) Install(ids);
+                }
+                else if (action == Action::Back)
+                {
+                    v.screen = Screen::Browse;
+                    Refresh();
                 }
                 break;
             case Screen::Extract:
@@ -171,6 +259,7 @@ public:
                     if (action == Action::DeleteIso)
                     {
                         std::error_code ec;
+                        for (const fs::path& part : cane::imageParts(m_iso)) fs::remove(part, ec);
                         fs::remove(m_iso, ec);
                     }
                     return true;
@@ -191,10 +280,53 @@ public:
 
 private:
     static bool IsDirectory(const std::string& p) { std::error_code ec; return fs::is_directory(p, ec); }
+    // A disc image to list: an .iso, a .chd, or an .iso in parts (a folder named *.iso of 00, 01, ..., or the first of
+    // name.iso.000, .001, ...: copies for a FAT32 card, platform/disc_image.h imageParts)
+    static bool IsImage(const fs::path& path, bool folder)
+    {
+        const std::string extension = Lower(path.extension().string());
+        if (!folder && (extension == ".iso" || extension == ".chd")) return true;
+        return Lower((folder ? path : path.stem()).extension().string()) == ".iso" && !cane::imageParts(path).empty();
+    }
 
+    // A drive plugged in or taken out: the choice of storage listed again, or offered while the browsing has not
+    // begun; a folder on a drive taken out leaves for the choice (the SD card when no drive is left).
+    void UsbChanged()
+    {
+        const std::vector<UsbHsFsDevice> drives = m_usb.Drives();
+        const fs::path root = Root(m_folder);
+        const bool mounted = root == fs::path("sdmc:/") || std::any_of(drives.begin(), drives.end(), [&](const UsbHsFsDevice& d) {
+            return root == fs::path(std::string(d.name) + "/");
+        });
+        if (m_folder.empty() || !mounted || (!m_moved && m_folder == fs::path("sdmc:/")))
+        {
+            m_folder = drives.empty() ? fs::path("sdmc:/") : fs::path();
+            Refresh();
+        }
+    }
     void Refresh()
     {
-        std::vector<fs::directory_entry> items;
+        m_paths.clear();
+        m_view.entries.clear();
+        m_view.selected = m_view.firstVisible = 0;
+        if (m_folder.empty())
+        {
+            m_view.directory = "SD card or USB drive";
+            m_paths.push_back("sdmc:/");
+            m_view.entries.push_back({"SD card", true});
+            for (const UsbHsFsDevice& d : m_usb.Drives())
+            {
+                m_paths.push_back(std::string(d.name) + "/");
+                m_view.entries.push_back({DriveName(d), true});
+            }
+            return;
+        }
+        struct Item
+        {
+            fs::path path;
+            bool folder;
+        };
+        std::vector<Item> items;
         std::error_code ec;
         for (fs::directory_iterator it(m_folder, fs::directory_options::skip_permission_denied, ec), end; !ec && it != end; it.increment(ec))
         {
@@ -202,33 +334,40 @@ private:
             const std::string name = e.path().filename().string();
             std::error_code ec2;
             if (name.empty() || name.front() == '.') continue;
-            const std::string extension = Lower(e.path().extension().string());
-            if (e.is_directory(ec2) || (e.is_regular_file(ec2) && (extension == ".iso" || extension == ".chd"))) items.push_back(e);
+            const bool directory = e.is_directory(ec2);
+            if (IsImage(e.path(), directory)) items.push_back({e.path(), false});
+            else if (directory) items.push_back({e.path(), true});
         }
-        std::sort(items.begin(), items.end(), [](const fs::directory_entry& a, const fs::directory_entry& b) {
-            std::error_code e1, e2;
-            const bool da = a.is_directory(e1), db = b.is_directory(e2);
-            if (da != db) return da;
-            return Lower(a.path().filename().string()) < Lower(b.path().filename().string());
+        std::sort(items.begin(), items.end(), [](const Item& a, const Item& b) {
+            if (a.folder != b.folder) return a.folder;
+            return Lower(a.path.filename().string()) < Lower(b.path.filename().string());
         });
-        m_paths.clear();
-        m_view.entries.clear();
-        m_view.selected = m_view.firstVisible = 0;
-        m_view.directory = "SD card";
-        const fs::path relative = m_folder.lexically_relative(fs::path("sdmc:/"));
+        const fs::path root = Root(m_folder);
+        m_view.directory = root == fs::path("sdmc:/") ? "SD card" : "USB drive";
+        const fs::path relative = m_folder.lexically_relative(root);
         if (!relative.empty() && relative != ".") m_view.directory += " / " + relative.generic_string();
-        for (const fs::directory_entry& e : items)
+        for (const Item& item : items)
         {
-            std::error_code ec2;
-            m_paths.push_back(e.path());
-            m_view.entries.push_back({e.path().filename().string(), e.is_directory(ec2)});
+            m_paths.push_back(item.path);
+            m_view.entries.push_back({item.path.filename().string(), item.folder});
         }
     }
     void Up()
     {
-        if (m_folder == fs::path("sdmc:/")) return;
-        m_folder = m_folder.parent_path();
-        if (m_folder.empty() || m_folder == fs::path("sdmc:")) m_folder = "sdmc:/";
+        const fs::path root = Root(m_folder);
+        m_moved = true;
+        if (m_folder.empty()) return;
+        // (the top of the SD card or a drive: the choice of storage, when a drive is plugged in)
+        if (m_folder == root)
+        {
+            if (m_usb.Drives().empty()) return;
+            m_folder.clear();
+        }
+        else
+        {
+            m_folder = m_folder.parent_path();
+            if (m_folder.empty() || m_folder.string().back() == ':') m_folder = root;
+        }
         Refresh();
     }
     void ShowError(const std::string& message)
@@ -241,33 +380,73 @@ private:
     void Begin(const fs::path& iso)
     {
         m_iso = iso;
-        std::error_code ec;
-        uint64_t size = fs::file_size(iso, ec);
-        const cane::DiscIdentity id = cane::identifyDiscImage(iso);
+        std::string error;
+        const auto image = cane::DiscImage::open(iso, &error);
+        if (!image) { ShowError(error); return; }
+        const cane::DiscIdentity id = cane::identifyDisc(image->reader());
         const std::string mismatch = cane::discMismatch(id, cane::GameId(m_job.game));
         if (!mismatch.empty()) { ShowError(mismatch); return; }
-        // a CHD: its disc's size, and the .iso written out for the conversion (unless the game reads the CHD itself)
-        const bool chd = cane::chdFile(iso);
-        uint64_t temporary = 0;
-        if (chd)
+        // the whole disc: a copy cut short (FAT32 holds no file of 4 GB or more) stops here, not where its end is read
+        const uint64_t size = image->size(), disc = uint64_t(cane::readIsoVolume(image->reader()).blocks) * cane::kIsoSector;
+        if (size < disc)
         {
-            std::string error;
-            const auto image = cane::DiscImage::open(iso, &error);
-            if (!image) { ShowError(error); return; }
-            size = image->size();
-            if (!m_job.readsChd) temporary = size;
+            const bool fat32 = size >= (4ull << 30) - (64ull << 20) && size < (4ull << 30);
+            ShowError("That disc image is incomplete: it holds " + SizeText(size) + " of the disc's " + SizeText(disc) + ". " +
+                      (fat32 ? "A FAT32 SD card cannot hold a file of 4 GB or more, so the copy was cut short: copy the ISO "
+                               "with DBI or another app that splits it, or use a CHD."
+                             : "The copy did not finish: copy the disc image again."));
+            return;
         }
-        // (the converted files take about the disc's size; the European discs' audio as WAV up to twice that)
-        const uint64_t need = size + temporary + (512ull << 20), free = FreeBytes("sdmc:/");
+        // a CHD or a split .iso: written out as one .iso for the conversion, unless the game reads it itself
+        m_chd = cane::chdFile(iso);
+        m_temporary = (m_chd || !cane::imageParts(iso).empty()) && !m_job.readsImage ? size : 0;
+        m_size = size;
+        m_bootFile = id.bootFile;
+        // a disc of several languages: those to install first
+        size_t preferred = 0;
+        m_languages = m_job.languages ? m_job.languages(iso.string(), &preferred) : std::vector<InstallLanguage>();
+        if (m_languages.size() >= 2)
+        {
+            CaneSetup::View& v = m_view;
+            v.languages.clear();
+            for (const InstallLanguage& language : m_languages) v.languages.push_back(language.name);
+            v.language = std::min(preferred, m_languages.size() - 1);
+            v.chosen.assign(m_languages.size(), false);
+            v.chosen[v.language] = true;
+            m_free = FreeBytes("sdmc:/");
+            NoteLanguages();
+            v.screen = Screen::Languages;
+            return;
+        }
+        Install({});
+    }
+    // The free space the installation needs: what the game writes for this disc and that many languages (else about the
+    // image's size), and the .iso written out while it converts
+    uint64_t NeedBytes(size_t languages) const
+    {
+        const uint64_t output = m_job.needBytes ? m_job.needBytes(m_bootFile, languages) : 0;
+        return (output ? output : m_size + (512ull << 20)) + m_temporary;
+    }
+    void NoteLanguages()
+    {
+        const size_t n = size_t(std::count(m_view.chosen.begin(), m_view.chosen.end(), true));
+        m_view.languageNote = !n ? "Choose at least one language."
+                                 : "About " + SizeText(NeedBytes(n)) + " on the SD card" + (m_free ? ", " + SizeText(m_free) + " free." : ".");
+    }
+    void Install(const std::vector<std::string>& languages)
+    {
+        const uint64_t need = NeedBytes(languages.size()), free = FreeBytes("sdmc:/");
         if (free && free < need)
         {
             ShowError("There is not enough free space on the SD card: the game needs about " + SizeText(need) + " and " +
                       SizeText(free) + " is free.");
             return;
         }
+        const fs::path iso = m_iso;
         const std::string data = GetPaths().data, partial = data + ".partial";
-        const std::string isoPath = iso.string(), decompressed = temporary ? data + ".from-chd.iso" : std::string();
-        Start([this, isoPath, data, partial, decompressed](const InstallProgress& progress) -> std::string {
+        const std::string isoPath = iso.string(), decompressed = m_temporary ? data + ".from-image.iso" : std::string();
+        const std::string writing = m_chd ? "Decompressing the CHD" : "Joining the parts";
+        Start([this, isoPath, data, partial, decompressed, writing, languages](const InstallProgress& progress) -> std::string {
                   std::error_code e;
                   fs::remove_all(partial, e);
                   fs::create_directories(partial, e);
@@ -276,12 +455,12 @@ private:
                   if (!decompressed.empty())
                   {
                       const std::string name = fs::path(isoPath).filename().string();
-                      error = cane::writeChdAsIso(isoPath, decompressed, [&](uint64_t done, uint64_t total) {
-                          return progress(total ? float(double(done) / double(total)) : 0.0f, "Decompressing the CHD", name);
+                      error = cane::writeImageAsIso(isoPath, decompressed, [&](uint64_t done, uint64_t total) {
+                          return progress(total ? float(double(done) / double(total)) : 0.0f, writing, name);
                       });
                       source = decompressed;
                   }
-                  if (error.empty()) error = m_job.convert(source, partial, progress);
+                  if (error.empty()) error = m_job.convert(source, partial, languages, progress);
                   if (!decompressed.empty()) fs::remove(decompressed, e);
                   if (error.empty())
                   {
@@ -368,11 +547,18 @@ private:
 
     const InstallJob& m_job;
     Ui m_ui;
+    UsbDrives m_usb;
     GLuint m_background = 0;
     CaneSetup::View m_view;
-    fs::path m_folder = "sdmc:/";
+    fs::path m_folder = "sdmc:/";  // (empty: the choice of the SD card or a USB drive)
+    bool m_moved = false;          // the player has browsed (a drive found later no longer moves the screen)
     std::vector<fs::path> m_paths;
     fs::path m_iso;
+    // the disc image chosen: its boot file, size, kind, the .iso written out for it (0: none), its languages
+    std::string m_bootFile;
+    uint64_t m_size = 0, m_temporary = 0, m_free = 0;
+    bool m_chd = false;
+    std::vector<InstallLanguage> m_languages;
     Work m_work;
     bool m_boosting = false, m_updating = false, m_done = false;
 };

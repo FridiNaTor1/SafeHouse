@@ -36,7 +36,7 @@ void InitAseg(ASEG* paseg)
 {
     const ASEG* psrc = paseg;
     paseg->prio = static_cast<int>(psrc->U32Field(0, 0x6C, 0));
-    paseg->fSound = static_cast<int>(psrc->U32Field(0, 0x70, 0));
+    paseg->fHandsOff = static_cast<int>(psrc->U32Field(0, 0x70, 0));
     paseg->svt = FloatField(psrc, 0x78, 1.0f);
     paseg->gSuck0 = FloatField(psrc, 0x80, 1.0f);
     paseg->gSuck1 = FloatField(psrc, 0x84, 0.0f);
