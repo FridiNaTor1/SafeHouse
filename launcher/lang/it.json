@@ -941,6 +941,10 @@
   "AMD FidelityFX Super Resolution 1.0: edge-aware upscaling with sharpening.": "AMD FidelityFX Super Resolution 1.0: upscaling attento ai bordi, con nitidezza.",
   "How large the 3D scene is drawn, as a share of the screen's width and height. Lower is faster.": "Quanto è grande la scena 3D disegnata, come parte di larghezza e altezza dello schermo. Meno è più veloce.",
   "How much the upscaled picture is sharpened.": "Quanto viene resa nitida l'immagine scalata.",
-  "Draws the 3D scene smaller and scales it up to the screen with a sharpening upscaler: faster, nearly as sharp. The HUD and menus stay at full resolution. While on, it replaces the internal resolution.": "Disegna la scena 3D più piccola e la scala allo schermo con un upscaler che aumenta la nitidezza: più veloce, quasi altrettanto nitido. HUD e menu restano a piena risoluzione. Attivo, sostituisce la risoluzione interna."
+  "Draws the 3D scene smaller and scales it up to the screen with a sharpening upscaler: faster, nearly as sharp. The HUD and menus stay at full resolution. While on, it replaces the internal resolution.": "Disegna la scena 3D più piccola e la scala allo schermo con un upscaler che aumenta la nitidezza: più veloce, quasi altrettanto nitido. HUD e menu restano a piena risoluzione. Attivo, sostituisce la risoluzione interna.",
+  "Outline thickness": "Spessore dei contorni",
+  "The width of the characters' cartoon outlines, in percent of the original. In VR the outlines keep the flat picture's look for the headset's wider view.": "La larghezza dei contorni cartoon dei personaggi, in percentuale dell'originale. In VR i contorni mantengono l'aspetto dell'immagine piatta per il campo visivo più ampio del visore.",
+  "VR world scale": "Scala del mondo VR",
+  "Immersive VR: how big the world looks around you. 1.0x is life size; higher values make the world look smaller.": "VR immersiva: quanto appare grande il mondo intorno a te. 1.0x è la grandezza reale; valori più alti fanno sembrare il mondo più piccolo."
  }
 }

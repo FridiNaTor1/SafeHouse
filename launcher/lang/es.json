@@ -941,6 +941,10 @@
   "AMD FidelityFX Super Resolution 1.0: edge-aware upscaling with sharpening.": "AMD FidelityFX Super Resolution 1.0: reescalado que respeta los bordes, con nitidez.",
   "How large the 3D scene is drawn, as a share of the screen's width and height. Lower is faster.": "El tamaño con que se dibuja la escena 3D, como parte del ancho y el alto de la pantalla. Menos es más rápido.",
   "How much the upscaled picture is sharpened.": "Cuánto se enfoca la imagen reescalada.",
-  "Draws the 3D scene smaller and scales it up to the screen with a sharpening upscaler: faster, nearly as sharp. The HUD and menus stay at full resolution. While on, it replaces the internal resolution.": "Dibuja la escena 3D más pequeña y la reescala a la pantalla con un reescalador que da nitidez: más rápido y casi igual de nítido. El HUD y los menús siguen a resolución completa. Activado, sustituye a la resolución interna."
+  "Draws the 3D scene smaller and scales it up to the screen with a sharpening upscaler: faster, nearly as sharp. The HUD and menus stay at full resolution. While on, it replaces the internal resolution.": "Dibuja la escena 3D más pequeña y la reescala a la pantalla con un reescalador que da nitidez: más rápido y casi igual de nítido. El HUD y los menús siguen a resolución completa. Activado, sustituye a la resolución interna.",
+  "Outline thickness": "Grosor del contorno",
+  "The width of the characters' cartoon outlines, in percent of the original. In VR the outlines keep the flat picture's look for the headset's wider view.": "El ancho de los contornos de dibujo animado de los personajes, en porcentaje del original. En RV, los contornos mantienen el aspecto de la imagen plana para el campo de visión más amplio del visor.",
+  "VR world scale": "Escala del mundo en RV",
+  "Immersive VR: how big the world looks around you. 1.0x is life size; higher values make the world look smaller.": "RV inmersiva: lo grande que se ve el mundo a tu alrededor. 1.0x es el tamaño real; los valores más altos hacen que el mundo se vea más pequeño."
  }
 }

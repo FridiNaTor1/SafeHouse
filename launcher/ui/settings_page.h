@@ -670,11 +670,13 @@ private:
         case Display:
             s.windowMode = d.windowMode, s.vsyncEnabled = d.vsyncEnabled, s.aspectMode = d.aspectMode, s.frameRate = d.frameRate;
             m_sly2.upscale = settings::Sly2UpscaleOptions{};
+            if (m_game == GameId::Sly2) m_sly2.vr.worldScale = settings::Sly2VrOptions{}.worldScale;
             break;
         case Graphics:
             s.internalResolutionHeight = d.internalResolutionHeight, s.msaaEnabled = d.msaaEnabled, s.msaaSamples = d.msaaSamples;
             s.drawDistance = d.drawDistance, s.fogType = d.fogType, s.longShadows = d.longShadows, s.fastShadows = d.fastShadows;
             s.renderer = d.renderer;
+            if (m_game == GameId::Sly2) m_sly2.outlineThickness = settings::Sly2Settings{}.outlineThickness;
             break;
         case Audio:
             settings::defaultAudio(s);
@@ -793,6 +795,31 @@ private:
             m_settings.frameRate = rates[static_cast<size_t>(index)], commit();
         describe(tr("The highest frame rate the game runs at. Gameplay speed is the same at every setting."));
         upscalingRows();
+        vrRows();
+    }
+    // (Sly 2, Settings.ini [VR] World Scale: the game's VR Settings has the same row) where a headset can play: a PC
+    // (Linux, Windows: SteamVR, the Steam Frame, Monado) or the Meta Quest
+    void vrRows() {
+#if defined(__APPLE__) || defined(__SWITCH__)
+        return;
+#else
+        if (m_game != GameId::Sly2) return;
+#if defined(__ANDROID__)
+        if (!vrHeadsetDevice()) return;
+#endif
+        std::vector<std::string> labels;
+        const int lo = int(std::lround(settings::kVrWorldScaleMin * 10.0f)), hi = int(std::lround(settings::kVrWorldScaleMax * 10.0f));
+        auto name = [](int tenths) { char b[16]; std::snprintf(b, sizeof(b), "%.1fx", double(tenths) / 10.0); return std::string(b); };
+        for (int t = lo; t <= hi; ++t) labels.push_back(name(t));
+        const float scale = m_sly2.vr.worldScale;
+        const int tenths = int(std::lround(scale * 10.0f));
+        int index = std::fabs(scale * 10.0f - float(tenths)) < 0.01f && tenths >= lo && tenths <= hi ? tenths - lo : -1;
+        char custom[16];
+        std::snprintf(custom, sizeof(custom), "%.2fx", double(scale));
+        if (stepperRow(tr("VR world scale"), &index, labels, nullptr, index < 0 ? custom : nullptr))
+            m_sly2.vr.worldScale = float(lo + index) / 10.0f, commit();
+        describe(tr("Immersive VR: how big the world looks around you. 1.0x is life size; higher values make the world look smaller."));
+#endif
     }
     // (Sly 2, Settings.ini [Display] Upscaling: Sly2-Release fsr.h; the game's Display options and, on a PC headset,
     // its VR Settings show the same rows. Not on the Meta Quest: its compositor upscales the eyes, VR Settings there.)
@@ -873,6 +900,13 @@ private:
         if (m_game == GameId::Sly2)
             toggle(tr("Fast shadows"), m_settings.fastShadows,
                    tr("Character shadows with less GPU work, for low-end devices. The picture stays nearly the same."));
+        // (Sly 2, Settings.ini [Graphics] Outline Thickness: Sly2-Release render.cpp; the game's display options and VR
+        // Settings have the same row)
+        if (m_game == GameId::Sly2)
+            rangeRow(tr("Outline thickness"), m_sly2.outlineThickness, settings::kOutlineThicknessMin, settings::kOutlineThicknessMax,
+                     settings::kOutlineThicknessStep,
+                     tr("The width of the characters' cartoon outlines, in percent of the original. In VR the outlines keep the flat "
+                        "picture's look for the headset's wider view."), percent);
 #if defined(_WIN32) || (defined(__linux__) && !defined(__ANDROID__))
         // (settings v21 renderer: Sly2-Release renderer.h, platform/renderer_choice.h: Auto is Vulkan with OpenGL the
         // fallback; Linux and Windows, where the game has the Vulkan renderer)

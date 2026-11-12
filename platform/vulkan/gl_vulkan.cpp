@@ -116,7 +116,8 @@ struct Features
 {
     bool dualSrcBlend = false;
     bool depthBounds = false;      // (GL_EXT_depth_bounds_test: glEnable(GL_DEPTH_BOUNDS_TEST_EXT), glDepthBoundsEXT)
-    bool msrtss = false;   // (VK_EXT_multisampled_render_to_single_sampled, Android: MSAA resolved on the tile)
+    bool msrtss = false;   // (VK_EXT_multisampled_render_to_single_sampled, tile GPUs: MSAA resolved on the tile)
+    bool tiler = false;    // a tile-based GPU (TileGpuOf): the tilers' paths (in-place reads, D24S8, MSAA on the tile, ...)
     bool fdm = false;      // (VK_EXT_fragment_density_map with non-subsampled images: VR's fixed foveation)
     VkExtent2D fdmTexel{32, 32};   // (GL_SRC1_* factors: Sly 2's glob CANE_BLEND1 on Android)
     bool geometry = false, wideLines = false, anisotropy = false, mdi = false, firstInstance = false, nonUniform = false;
@@ -142,6 +143,7 @@ std::string g_cachePath;
 VkPipelineCache g_pipelineCache = VK_NULL_HANDLE;
 VkSemaphore g_timeline = VK_NULL_HANDLE;
 uint64_t g_submitValue = 0;            // the timeline value of the last submission
+double g_gpuWaitMs = 0;                // (FrameTimes) the game thread's waits for the GPU so far (WaitValue, DrainRing)
 Stats g_stats;
 
 // ------------------------------------------------------------------------------------------------ GPU memory
@@ -645,6 +647,7 @@ struct Frame
     std::vector<std::array<uint32_t, 3>> passInfo;
     // (SLY2N_VKGPUMARKS) the marks written in this frame
     std::vector<const char*> markLabels;
+    bool frameTimed = false;       // (SetFrameTiming) the frame's start and end timestamps written (g_framePool)
 };
 std::array<Frame, kFrameSlots> g_frames;
 unsigned g_frameIndex = 0;
@@ -1974,28 +1977,53 @@ void DrainRing()
     }
     f.streamBuffers.clear();
     Submit();
+    const auto t0 = std::chrono::steady_clock::now();
     VkSemaphoreWaitInfo wi{VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO};
     wi.semaphoreCount = 1;
     wi.pSemaphores = &g_timeline;
     wi.pValues = &g_submitValue;
     VKCHECK(vkWaitSemaphores(g_device, &wi, UINT64_MAX));
+    g_gpuWaitMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
     for (RingChunk& c : f.ring) c.cursor = 0;
     f.ringIndex = 0;
 }
 void WaitValue(uint64_t value)
 {
     if (!value) return;
+    // (FrameTimes: the time this thread waited for the GPU, when it had to)
+    uint64_t done = 0;
+    if (vkGetSemaphoreCounterValue(g_device, g_timeline, &done) == VK_SUCCESS && done >= value) return;
+    const auto t0 = std::chrono::steady_clock::now();
     VkSemaphoreWaitInfo wi{VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO};
     wi.semaphoreCount = 1;
     wi.pSemaphores = &g_timeline;
     wi.pValues = &value;
     VKCHECK(vkWaitSemaphores(g_device, &wi, UINT64_MAX));
+    g_gpuWaitMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
 }
 // (SLY2N_VKGPUTIME=N: every N frames, the GPU time of each render-pass instance by its place in the frame and their sum,
 // averaged, stderr. A bottom-of-pipe timestamp before each instance's begin and after its end: what the instance adds
 // once the work before it is done.)
 constexpr uint32_t kPassTimes = 64;
 PFN_vkResetQueryPool g_vkResetQueryPool = nullptr;
+// (SetFrameTiming, VR's log) a timestamp at each frame's start and end: the GPU's time from the frame's first command
+// to its last (FrameTimes)
+VkQueryPool g_framePool = VK_NULL_HANDLE;
+double g_gpuFrameMs = 0;
+uint32_t g_gpuFramesTimed = 0;
+void ReadFrameTime(Frame& f, uint32_t slot)
+{
+    if (!g_framePool || !f.frameTimed) return;
+    f.frameTimed = false;
+    uint64_t t[2] = {};
+    if (vkGetQueryPoolResults(g_device, g_framePool, slot * 2, 2, sizeof t, t, 8, VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT) == VK_SUCCESS &&
+        t[1] > t[0])
+    {
+        g_gpuFrameMs += double(t[1] - t[0]) * double(g_props.limits.timestampPeriod) * 1e-6;
+        ++g_gpuFramesTimed;
+    }
+    g_vkResetQueryPool(g_device, g_framePool, slot * 2, 2);
+}
 int g_gpuTimeEvery = 0;
 VkQueryPool g_passPool = VK_NULL_HANDLE;
 struct PassTimeSum { double ms = 0; uint32_t n = 0; std::array<uint32_t, 3> info{}; };
@@ -2113,6 +2141,7 @@ void RetireFrame(Frame& f)
     WaitValue(f.lastValue);   // (the CPU two frames ahead of the GPU waits here)
     ReadMarks(f, uint32_t(&f - g_frames.data()));
     ReadPassTimes(f, uint32_t(&f - g_frames.data()));
+    ReadFrameTime(f, uint32_t(&f - g_frames.data()));
     for (VkDescriptorPool pool : f.setPools) vkResetDescriptorPool(g_device, pool, 0);
     f.setPoolIndex = 0;
     f.uniformSets.clear();
@@ -2191,6 +2220,11 @@ void BeginFrame()
     f.ringIndex = 0;
     f.serial = g_nextSerial++;
     BeginSegment();
+    if (g_framePool)
+    {
+        vkCmdWriteTimestamp(Main(), VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, g_framePool, g_frameIndex * 2);
+        f.frameTimed = true;
+    }
     ResizeWindowImage();
 }
 // The commands recorded so far to the GPU: the pre list first (its own command buffer), then the main one.
@@ -6083,6 +6117,46 @@ VKAPI_ATTR VkBool32 VKAPI_CALL DebugCallback(VkDebugUtilsMessageSeverityFlagBits
     return VK_FALSE;
 }
 
+// (a test switch: unset -> the default, "0" -> off, anything else -> on)
+bool EnvSwitch(const char* name, bool fDefault)
+{
+    const char* sz = std::getenv(name);
+    return sz && *sz ? std::atoi(sz) != 0 : fDefault;
+}
+// A tile-based GPU (binning / tile memory: the passes' load / store ops and their splits cost a trip through memory):
+// by the device, not the platform. Qualcomm Adreno (0x5143: Android, Linux's Turnip on the Steam Frame, Windows on
+// ARM's Snapdragon X), ARM Mali (0x13B5), Imagination PowerVR (0x1010), Apple (0x106B; Asahi's Honeykrisp), Broadcom
+// VideoCore (0x14E4), or a Mesa driver for one of these by its driver ID. Every Android device counts as one (as before:
+// the Android paths were the tilers' paths). SLY2N_VKTILER=0 / 1 overrides it (tests on a desktop GPU).
+bool TileGpuOf(VkPhysicalDevice pd, const VkPhysicalDeviceProperties& props)
+{
+#if defined(__ANDROID__)
+    bool tiler = true;
+#else
+    bool tiler = false;
+    switch (props.vendorID)
+    {
+    case 0x5143: case 0x13B5: case 0x1010: case 0x106B: case 0x14E4: tiler = true; break;
+    default: break;
+    }
+    if (!tiler && props.apiVersion >= VK_API_VERSION_1_2)
+    {
+        VkPhysicalDeviceDriverProperties dp{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES};
+        VkPhysicalDeviceProperties2 p2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, &dp};
+        vkGetPhysicalDeviceProperties2(pd, &p2);
+        switch (dp.driverID)
+        {
+        case VK_DRIVER_ID_QUALCOMM_PROPRIETARY: case VK_DRIVER_ID_MESA_TURNIP: case VK_DRIVER_ID_ARM_PROPRIETARY:
+        case VK_DRIVER_ID_MESA_PANVK: case VK_DRIVER_ID_IMAGINATION_PROPRIETARY: case VK_DRIVER_ID_IMAGINATION_OPEN_SOURCE_MESA:
+        case VK_DRIVER_ID_BROADCOM_PROPRIETARY: case VK_DRIVER_ID_MESA_V3DV: case VK_DRIVER_ID_MESA_HONEYKRISP:
+            tiler = true; break;
+        default: break;
+        }
+    }
+#endif
+    return EnvSwitch("SLY2N_VKTILER", tiler);
+}
+
 bool HasExtension(const std::vector<VkExtensionProperties>& list, const char* name)
 {
     for (const auto& e : list) if (!std::strcmp(e.extensionName, name)) return true;
@@ -6240,25 +6314,19 @@ bool Initialize(GLFWwindow* window, const Options& options, std::string* error)
         const bool hasEds3 = HasExtension(exts, VK_EXT_EXTENDED_DYNAMIC_STATE_3_EXTENSION_NAME) && !std::getenv("SLY2N_VKNOEDS3");
         VkPhysicalDeviceDynamicRenderingLocalReadFeaturesKHR flr{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DYNAMIC_RENDERING_LOCAL_READ_FEATURES_KHR,
                                                                  hasEds3 ? &fe3 : nullptr};
-        // (the in-place read: tile GPUs (Android), or SLY2N_SHFETCH=1 (a test elsewhere); the desktop keeps its images as
-        // they were, without the input-attachment use)
-#if defined(__ANDROID__)
-        const bool wantLocalRead = !(std::getenv("SLY2N_SHFETCH") && std::atoi(std::getenv("SLY2N_SHFETCH")) == 0);
-#else
-        const bool wantLocalRead = std::getenv("SLY2N_SHFETCH") && std::atoi(std::getenv("SLY2N_SHFETCH")) != 0;
-#endif
+        // (a tile-based GPU: TileGpuOf, by the device, not the platform: Android, the Steam Frame's Turnip, Windows on ARM)
+        const bool tiler = TileGpuOf(pd, props);
+        // (the in-place read: tile GPUs, or SLY2N_SHFETCH=1 (a test elsewhere); SLY2N_SHFETCH=0: never; the desktop keeps
+        // its images as they were, without the input-attachment use)
+        const bool wantLocalRead = EnvSwitch("SLY2N_SHFETCH", tiler);
         // (SLY2N_VKNOLOCALREAD=1: as a driver without it: the classic fetch, a test where the driver has local read)
         const bool hasLocalRead = wantLocalRead && HasExtension(exts, VK_KHR_DYNAMIC_RENDERING_LOCAL_READ_EXTENSION_NAME) &&
                                   !(std::getenv("SLY2N_VKNOLOCALREAD") && std::atoi(std::getenv("SLY2N_VKNOLOCALREAD")) != 0);
         VkPhysicalDeviceProvokingVertexFeaturesEXT fpv{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROVOKING_VERTEX_FEATURES_EXT, &flr};
         const bool hasProvoking = HasExtension(exts, VK_EXT_PROVOKING_VERTEX_EXTENSION_NAME);
-#if defined(__ANDROID__)
-        // (a tiler's GL-style MSAA: GL_EXT_multisampled_render_to_texture's Vulkan form; SLY2N_VKMSRTSS=0: real MSAA images)
-        const bool hasMsrtss = HasExtension(exts, VK_EXT_MULTISAMPLED_RENDER_TO_SINGLE_SAMPLED_EXTENSION_NAME) &&
-                               !(std::getenv("SLY2N_VKMSRTSS") && std::atoi(std::getenv("SLY2N_VKMSRTSS")) == 0);
-#else
-        const bool hasMsrtss = false;
-#endif
+        // (a tiler's GL-style MSAA: GL_EXT_multisampled_render_to_texture's Vulkan form; SLY2N_VKMSRTSS=0: real MSAA images,
+        // =1: also on another GPU that offers it (a test))
+        const bool hasMsrtss = HasExtension(exts, VK_EXT_MULTISAMPLED_RENDER_TO_SINGLE_SAMPLED_EXTENSION_NAME) && EnvSwitch("SLY2N_VKMSRTSS", tiler);
         const bool hasFdm = HasExtension(exts, VK_EXT_FRAGMENT_DENSITY_MAP_EXTENSION_NAME) &&
                             !(std::getenv("SLY2N_VKFDM") && std::atoi(std::getenv("SLY2N_VKFDM")) == 0);
         VkPhysicalDeviceFragmentDensityMapFeaturesEXT ffdm{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_DENSITY_MAP_FEATURES_EXT, &fpv};
@@ -6321,6 +6389,7 @@ bool Initialize(GLFWwindow* window, const Options& options, std::string* error)
             g_feat.fillModeNonSolid = f2.features.fillModeNonSolid;
             g_feat.provokingLast = hasProvoking && fpv.provokingVertexLast;
             g_feat.msrtss = hasMsrtss;
+            g_feat.tiler = tiler;
             g_feat.fdm = hasFdm && ffdm.fragmentDensityMap && ffdm.fragmentDensityMapNonSubsampledImages;
             if (g_feat.fdm) g_feat.fdmTexel = pfdm.maxFragmentDensityTexelSize;
             g_feat.demote = f13.shaderDemoteToHelperInvocation;
@@ -6352,12 +6421,10 @@ bool Initialize(GLFWwindow* window, const Options& options, std::string* error)
         if (f == VK_FORMAT_D32_SFLOAT_S8_UINT && !ok) g_feat.depthStencil = VK_FORMAT_D24_UNORM_S8_UINT;
         if (f == VK_FORMAT_D24_UNORM_S8_UINT && !ok) g_feat.depth24 = g_feat.depthStencil;
     }
-#if defined(__ANDROID__)
-    // (Android: D24S8 where it attaches, as OpenGL ES there: a tiler keeps fewer bytes a pixel on chip, so bigger tiles
-    // (the Quest 3S's eyes in 8 tiles, not 12: Paris 36 -> 42 fps); SLY2N_VKD24=0: D32S8)
-    if (g_feat.depth24 == VK_FORMAT_D24_UNORM_S8_UINT && !(std::getenv("SLY2N_VKD24") && std::atoi(std::getenv("SLY2N_VKD24")) == 0))
+    // (a tile GPU: D24S8 where it attaches, as OpenGL ES on Android: a tiler keeps fewer bytes a pixel on chip, so bigger
+    // tiles (the Quest 3S's eyes in 8 tiles, not 12: Paris 36 -> 42 fps); SLY2N_VKD24=0: D32S8, =1: D24S8 elsewhere too)
+    if (g_feat.depth24 == VK_FORMAT_D24_UNORM_S8_UINT && EnvSwitch("SLY2N_VKD24", g_feat.tiler))
         g_feat.depthStencil = VK_FORMAT_D24_UNORM_S8_UINT;
-#endif
     // (one depth format for every target: the pipelines' depth format is the device's)
     g_feat.depth24 = g_feat.depthStencil;
     vkGetPhysicalDeviceMemoryProperties(g_phys, &g_memProps);
@@ -6668,6 +6735,11 @@ bool Initialize(GLFWwindow* window, const Options& options, std::string* error)
     std::printf("Vulkan: %s%s%s%s\n", g_rendererString.c_str(), fBuffersLocal ? "" : " (buffers in system memory)",
                 g_feat.pushDescriptors ? "" : " (descriptor sets: no push descriptors)",
                 g_feat.pushBytes < kPushBytes ? " (uniform buffers for the large blocks: few push-constant bytes)" : "");
+    if (g_feat.tiler)
+        std::printf("Vulkan: a tile-based GPU: %s depth, in-place reads %s, MSAA on the tile %s\n",
+                    g_feat.depthStencil == VK_FORMAT_D24_UNORM_S8_UINT ? "D24S8" : "D32S8",
+                    g_feat.localRead ? "(local read)" : g_feat.classicFetch ? "(render pass objects)" : "off",
+                    g_feat.msrtss ? "on" : "off");
     return true;
 }
 
@@ -6798,6 +6870,7 @@ void Present()
     FlushCopies();
     GpuMark("frame end");
     Frame& f = Cur();
+    if (g_framePool && f.frameTimed) vkCmdWriteTimestamp(Main(), VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, g_framePool, g_frameIndex * 2 + 1);
     if (g_visible)
     {
         PollSurface();
@@ -7139,6 +7212,22 @@ void WorkerCpuMs(double* pmsAll, double* pmsRecord)
     *pmsAll = double(g_workerCpuNs.load()) / 1e6;
     *pmsRecord = double(g_workerRecordCpuNs.load()) / 1e6;
 }
+bool TileGpu() { return g_feat.tiler; }
+void SetFrameTiming(bool on)
+{
+    if (!g_device || !on || g_framePool || !g_props.limits.timestampComputeAndGraphics || !g_vkResetQueryPool) return;
+    VkQueryPoolCreateInfo qpi{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
+    qpi.queryType = VK_QUERY_TYPE_TIMESTAMP;
+    qpi.queryCount = uint32_t(kFrameSlots * 2);
+    if (vkCreateQueryPool(g_device, &qpi, nullptr, &g_framePool) != VK_SUCCESS) { g_framePool = VK_NULL_HANDLE; return; }
+    g_vkResetQueryPool(g_device, g_framePool, 0, qpi.queryCount);
+}
+void FrameTimes(double* pmsGpu, uint32_t* pframesGpu, double* pmsWait)
+{
+    *pmsGpu = g_gpuFrameMs;
+    *pframesGpu = g_gpuFramesTimed;
+    *pmsWait = g_gpuWaitMs;
+}
 
 GLuint CreateProgram(const char* vertexFile, const char* geometryFile, const char* fragmentFile, const char* prefix)
 {
@@ -7334,6 +7423,8 @@ void DestroyAll()
         if (g_queryPool) vkDestroyQueryPool(g_device, g_queryPool, nullptr);
         if (g_passPool) vkDestroyQueryPool(g_device, g_passPool, nullptr);
         g_passPool = VK_NULL_HANDLE;
+        if (g_framePool) vkDestroyQueryPool(g_device, g_framePool, nullptr);
+        g_framePool = VK_NULL_HANDLE;
         if (g_markPool) vkDestroyQueryPool(g_device, g_markPool, nullptr);
         g_markPool = VK_NULL_HANDLE;
         for (Frame& f : g_frames) f.passTimed = 0, f.passInfo.clear(), f.markLabels.clear();

@@ -52,13 +52,9 @@ struct VROPTS
                                         // the compositor upscales, Upscaling), else a fixed %
     int foveation = 2;                  // fixed foveation (no eye tracking): 0 off, 1 low, 2 medium, 3 high (the edges shaded
                                         // more coarsely)
-#if defined(__ANDROID__)
-    int msaa = 1;                       // (Off by default on the Meta Quest: one pass an eye, faster)
-#else
-    int msaa = 2;
-#endif
-                                        // the eyes' MSAA: 2 (2x), 1 off (Vulkan: then one pass an eye, straight into the
-                                        // OpenXR images); at the next VR start
+    int msaa = 0;                       // the eyes' MSAA: 2 (2x), 1 off (Vulkan: then one pass an eye, straight into the
+                                        // OpenXR images), 0 Automatic (MsaaOption: off on a standalone headset, 2x on a
+                                        // PC); at the next VR start
     bool fMultiview = true;             // (Vulkan) both eyes in one render pass (VK_KHR_multiview) where the device can
     int upscaling = 2;                  // the compositor's filter for the eyes (XR_FB_composition_layer_settings, Meta's
                                         // runtimes): VRUPSCALE_*
@@ -197,4 +193,11 @@ bool FPanelSize(int* pdx, int* pdy);
 // thread calls this once when it starts (also before a session: it is registered when one begins). No-op elsewhere.
 enum VRTHREAD { VRTHREAD_Worker = 0, VRTHREAD_RendererWorker = 1 };
 void NoteThread(VRTHREAD kind);
+
+// (game.cpp, each frame) the frame's parts on the game thread (ms): VR's perf log, every SLY2N_VR_PERFLOG seconds (20 by
+// default, 0 off), with the waits inside them and the GPU's time a frame
+void NoteFrameTimes(double msUpdate, double msScene, double msDraw, double msSwap);
+// VR Settings' MSAA as it applies: 2 (2x) or 1 (Off); its Automatic: Off on a standalone headset (the Meta Quest, the
+// Steam Frame), 2x on a PC
+int MsaaOption();
 }  // namespace vr

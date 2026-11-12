@@ -91,9 +91,13 @@ struct STEREOVIEW
     bool fMultiview = false;           // (OpenGL ES, GL_OVR_multiview2) afbo[0] holds both eyes as two views
     unsigned texMultiviewColor = 0;    // its colour (a two-layer array): the shadow phases' frame copies
     bool fFlipY = false;               // (Vulkan VR, straight into the OpenXR images) the clip space's Y flipped: the winding too
+    float tanRangeY = 0.0f;            // the eyes' vertical field as tan(up) - tan(down), magnified views' too (the cel borders'
+                                       // width matched to the flat picture's; 0: not known)
 };
 // The render targets, then the frame's pass and the foreground kinds, into both eyes.
 void RenderSceneStereo(const SCENE& scene, const CAMERA& cam, const RENDEROPTS& opts, const STEREOVIEW& sv);
+// (VR) the eyes' runs drawn without the near-clip geometry stage (Android; Vulkan on a tile GPU: FVulkanTileGpu)
+bool FVrNoNearClip();
 
 // More instances of loaded globs to draw this frame (RIPs' models: the glob iglob of an entry at mat, faded by
 // alpha); the particles fill them through the hook.

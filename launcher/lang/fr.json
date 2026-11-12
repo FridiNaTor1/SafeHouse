@@ -941,6 +941,10 @@
   "AMD FidelityFX Super Resolution 1.0: edge-aware upscaling with sharpening.": "AMD FidelityFX Super Resolution 1.0 : mise à l'échelle attentive aux contours, avec accentuation.",
   "How large the 3D scene is drawn, as a share of the screen's width and height. Lower is faster.": "La taille à laquelle la scène 3D est dessinée, en part de la largeur et de la hauteur de l'écran. Plus bas est plus rapide.",
   "How much the upscaled picture is sharpened.": "À quel point l'image mise à l'échelle est accentuée.",
-  "Draws the 3D scene smaller and scales it up to the screen with a sharpening upscaler: faster, nearly as sharp. The HUD and menus stay at full resolution. While on, it replaces the internal resolution.": "Dessine la scène 3D plus petite et la met à l'échelle de l'écran avec un upscaler qui accentue : plus rapide, presque aussi net. Le HUD et les menus restent en pleine résolution. Activé, il remplace la résolution interne."
+  "Draws the 3D scene smaller and scales it up to the screen with a sharpening upscaler: faster, nearly as sharp. The HUD and menus stay at full resolution. While on, it replaces the internal resolution.": "Dessine la scène 3D plus petite et la met à l'échelle de l'écran avec un upscaler qui accentue : plus rapide, presque aussi net. Le HUD et les menus restent en pleine résolution. Activé, il remplace la résolution interne.",
+  "Outline thickness": "Épaisseur des contours",
+  "The width of the characters' cartoon outlines, in percent of the original. In VR the outlines keep the flat picture's look for the headset's wider view.": "La largeur des contours cartoon des personnages, en pourcentage de l'original. En VR, les contours gardent l'aspect de l'image plate pour le champ de vision plus large du casque.",
+  "VR world scale": "Échelle du monde en VR",
+  "Immersive VR: how big the world looks around you. 1.0x is life size; higher values make the world look smaller.": "VR immersive : la taille apparente du monde autour de toi. 1.0x est la taille réelle ; des valeurs plus élevées font paraître le monde plus petit."
  }
 }

@@ -82,6 +82,16 @@ struct SUBGLOBGPU
 // (vr.cpp, the eyes drawn straight into Vulkan OpenXR images: their clip space's Y flipped, so the triangles' winding is
 // too: the counter-clockwise front of every GL_CCW in this file becomes clockwise while the eyes draw)
 bool s_fFlipFaces = false;
+// (VR) the eyes' runs without the near-clip geometry stage: Android (every renderer) and Vulkan on a tile GPU (the Steam
+// Frame): a geometry stage costs a tiler dearly (half the frame on the Quest's Adreno)
+bool FVrNoNearClip()
+{
+#if defined(__ANDROID__)
+    return true;
+#else
+    return FVulkanTileGpu();
+#endif
+}
 GLenum FrontCCW() { return s_fFlipFaces ? GL_CW : GL_CCW; }
 
 namespace
@@ -2746,13 +2756,10 @@ int ShadowFetchMode()
     s_modeShFetch = -1;
 #ifndef __SWITCH__
     const char* sz = std::getenv("SLY2N_SHFETCH");
-#if defined(__ANDROID__)
-    // (Android: Vulkan's local read by default; OpenGL ES's framebuffer fetch only on request (SLY2N_SHFETCH=1): on an
-    // Adreno 840 (driver V@0842.19.13) it faulted the GPU in Prague and on the train and the game process died)
-    const bool fWant = FRendererVulkan() ? !(sz && std::atoi(sz) == 0) : (sz && std::atoi(sz) != 0);
-#else
-    const bool fWant = sz && std::atoi(sz) != 0;
-#endif
+    // (Vulkan on a tile GPU (every Android device, the Steam Frame, Windows on ARM): the local read by default; elsewhere,
+    // and OpenGL ES's framebuffer fetch, only on request (SLY2N_SHFETCH=1): on an Adreno 840 (driver V@0842.19.13) the
+    // GLES fetch faulted the GPU in Prague and on the train and the game process died)
+    const bool fWant = FVulkanTileGpu() ? !(sz && *sz && std::atoi(sz) == 0) : (sz && std::atoi(sz) != 0);
     if (!fWant) return s_modeShFetch;
     if (FRendererVulkan())
     {
@@ -3487,6 +3494,7 @@ struct PASSVIEW
     GLuint fbo = 0;
     int dx = 1, dy = 1;
     float aspect = 1.0f;        // the target's pixel aspect (cel-border widths)
+    float gCelWidth = 1.0f;     // the cel borders' width in PS2 lines of the picture (Outline Thickness; VR: matched, CelWidthEyes)
     float rMRDAdjust = 1.0f;
     uint32_t grfChannels = 0xFF;   // CM +0x14 (the volume tree's channel test)
     int irtgt = -1;
@@ -3806,7 +3814,7 @@ void RenderPass(const SCENE& scene, const PASSVIEW& pv, const RENDEROPTS& opts)
     // the varyings extrapolated (vColor is not centroid), so the vertex alpha can exceed the entry's highest there: the
     // alpha-fail-all shortcut then only for entries whose vertex alpha is the same everywhere (vMin == vMax) on such a
     // target (vkparity msaa4 moved 2-8 pixels without this). The stencil shortcuts are exact with MSAA too.
-    const bool fSingleSample = pv.irtgt >= 0 || (pv.pstereo ? vr::g_vropts.msaa <= 1 : g_gl.msaa <= 1);
+    const bool fSingleSample = pv.irtgt >= 0 || (pv.pstereo ? vr::MsaaOption() <= 1 : g_gl.msaa <= 1);
     const float aspect = pv.aspect;
     const glm::mat4& matWorldToClip = pv.matWorldToClip;
     struct { glm::vec3 pos, dir; glm::vec3 Dir() const { return dir; } } cam{pv.pos, pv.dir};
@@ -5409,10 +5417,9 @@ void RenderPass(const SCENE& scene, const PASSVIEW& pv, const RENDEROPTS& opts)
     int samplerArrBound = -1;
     bool afFrameUniforms[CPROGGLOB] = {};
     auto useGlob = [&](int iprog) {
-#if defined(__ANDROID__)
-        // (Android with an OpenXR session: every run without the near-clip stage, gl.cpp; flat: only the provable ones)
-        if (vr::FActive()) iprog |= 2;
-#endif
+        // (an OpenXR session on Android or on Vulkan on a tile GPU (the Steam Frame): every run without the near-clip stage,
+        // gl.cpp: the stage was half the frame on the Quest's Adreno; flat: only the provable ones)
+        if (vr::FActive() && FVrNoNearClip()) iprog |= 2;
         if ((iprog & 2) && !s_apshGlob[iprog]->ID) iprog &= 1;   // (not built: with the geometry stage)
         if (iprog == 1 && !glGlobShaderNoKill.ID) iprog = 0;
         if (iprog == iprogGlob) return;
@@ -5896,7 +5903,7 @@ void RenderPass(const SCENE& scene, const PASSVIEW& pv, const RENDEROPTS& opts)
                     sc.Invalidate();
                     ppackets->setConstant(glCelBorderShader.ID, s_uc.matWorldToClip, glm::value_ptr(matWorldToClip), 64);
                     ppackets->setConstant(glCelBorderShader.ID, s_uc.matModel, glm::value_ptr(*cmd.prec->pmat), 64);
-                    const float hy = 1.0f / 448.0f;
+                    const float hy = pv.gCelWidth / 448.0f;
                     const glm::vec2 halfWidth(hy / aspect, hy);
                     ppackets->setConstant(glCelBorderShader.ID, s_uc.halfWidthNdc, glm::value_ptr(halfWidth), 8);
                     glm::vec4 rgba = Vec4FromRgba(opts.rgbaCel, 1.0f / 255.0f);
@@ -5923,7 +5930,7 @@ void RenderPass(const SCENE& scene, const PASSVIEW& pv, const RENDEROPTS& opts)
             glUniformMatrix4fv(s_uc.matWorldToClip, 1, GL_FALSE, glm::value_ptr(matWorldToClip));
             glUniformMatrix4fv(s_uc.matModel, 1, GL_FALSE, glm::value_ptr(*cmd.prec->pmat));
             // Half a PS2 pixel (448 lines) in NDC, square pixels; the line is one PS2 pixel wide (AA1 line + plain).
-            const float hy = 1.0f / 448.0f;
+            const float hy = pv.gCelWidth / 448.0f;
             glUniform2f(s_uc.halfWidthNdc, hy / aspect, hy);
             glUniform1i(s_uc.edgeBase, 0);
             glm::vec4 rgba = Vec4FromRgba(opts.rgbaCel, 1.0f / 255.0f);
@@ -6029,6 +6036,7 @@ void RenderRenderTargets(const SCENE& scene, const RENDEROPTS& opts)
         pv.matWorldToClip = proj * glm::lookAt(p->pos, p->pos + pv.dir, p->dirUp);
         pv.rgbaClear = 0;   // 0x1BE398's clear: RGBAQ 0, Z 0
         pv.alphaClear = 0;
+        pv.gCelWidth = float(g_display.outlineThickness) / 100.0f;
         RenderPass(scene, pv, opts);
     }
 }
@@ -6058,6 +6066,7 @@ void RenderScene(const SCENE& scene, const CAMERA& cam, const RENDEROPTS& opts)
     pv.dx = g_gl.renderWidth;
     pv.dy = g_gl.renderHeight;
     pv.rgbaClear = opts.rgbaClear;
+    pv.gCelWidth = float(g_display.outlineThickness) / 100.0f;
     RenderPass(scene, pv, opts);
 }
 
@@ -6078,12 +6087,39 @@ void RenderSceneForeground(const SCENE& scene, const CAMERA& cam, const RENDEROP
     pv.dx = g_gl.renderWidth;
     pv.dy = g_gl.renderHeight;
     pv.fForeground = true;
+    pv.gCelWidth = float(g_display.outlineThickness) / 100.0f;
     RenderPass(scene, pv, opts);
 }
 
 // (VR, vr.h) the frame's pass and the foreground kinds into both eyes: the records chosen once from the frustum
 // holding both (STEREOVIEW::matCull), each eye drawn with its own matrix. The picture-aspect options (display.h) do not
 // apply: the eyes' projections are the headset's.
+// (VR) the cel borders' width in the eyes, in PS2 lines of the eye's height: the flat picture's border is one PS2 line of
+// its height (1 / 448), which in an eye's far wider field would cover several times the angle (about 4x on a Quest 3S /
+// Steam Frame: the outlines looked thick). Matched: the same angle as the flat picture's border, i.e. scaled by the flat
+// vertical field over the eye's (tan(up) - tan(down)); times Outline Thickness; at least one eye pixel wide (thinner
+// lines break up). SLY2N_VR_CELWIDTH=g: g PS2 lines of the eye (the old look: 1).
+static float CelWidthEyes(const CAMERA& cam, const STEREOVIEW& sv)
+{
+    static const float s_gForced = std::getenv("SLY2N_VR_CELWIDTH") ? float(std::atof(std::getenv("SLY2N_VR_CELWIDTH"))) : 0.0f;
+    if (s_gForced > 0.0f) return s_gForced;
+    const float gOption = float(g_display.outlineThickness) / 100.0f;
+    if (sv.tanRangeY <= 0.0f || sv.dy <= 0) return gOption;
+    const DISPPROJ proj = ProjectionForDisplay(glm::radians(cam.fovY));
+    const float tanRangeFlat = 2.0f * std::tan(0.5f * proj.radFovY);
+    const float gMatched = gOption * tanRangeFlat / sv.tanRangeY;
+    const float gOnePixel = 448.0f / float(sv.dy);   // (the border's NDC width 2 x hy = 2 / dy: one pixel)
+    const float g = std::clamp(std::max(gMatched, gOnePixel), 0.05f, 4.0f);
+    static float s_gLogged = -1.0f;
+    if (std::fabs(g - s_gLogged) > 0.05f * std::max(g, 0.01f) && std::getenv("SLY2N_VR_CELLOG"))
+    {
+        s_gLogged = g;
+        std::printf("vr: cel borders %.3f PS2 lines of the eye (%.2f px; matched %.3f, field flat %.3f / eye %.3f)\n", double(g),
+                    double(g * float(sv.dy) / 448.0f), double(gMatched), double(tanRangeFlat), double(sv.tanRangeY));
+    }
+    return g;
+}
+
 void RenderSceneStereo(const SCENE& scene, const CAMERA& cam, const RENDEROPTS& opts, const STEREOVIEW& sv)
 {
     g_renderstats.cdraw = g_renderstats.cpass = g_renderstats.ccel = g_renderstats.cfailAll = 0;
@@ -6094,6 +6130,7 @@ void RenderSceneStereo(const SCENE& scene, const CAMERA& cam, const RENDEROPTS& 
     s_fFlipFaces = sv.fFlipY;
     PASSVIEW pv;
     pv.aspect = float(sv.dx) / float(sv.dy);
+    pv.gCelWidth = CelWidthEyes(cam, sv);
     pv.matWorldToClip = sv.matCull;
     pv.rMRDAdjust = cam.rMRDAdjust;
     pv.grfChannels = cam.grfChannels;

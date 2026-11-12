@@ -413,8 +413,13 @@ bool GL::FInit(int w, int h, bool fVisible, const char* title, std::string& erro
         g_fDrawUniform = !(std::getenv("SLY2N_VKPULL") && std::atoi(std::getenv("SLY2N_VKPULL")) == 0);
     }
 #else
-    // (a test of the Android Vulkan path elsewhere: SLY2N_VKPULL=1, the pulled runs and their one blend pair)
-    if (FRendererVulkan() && std::getenv("SLY2N_VKPULL") && std::atoi(std::getenv("SLY2N_VKPULL")) == 1) g_fDrawUniform = true;
+    // (Vulkan on a tile GPU elsewhere (the Steam Frame's Turnip, Windows on ARM's Adreno): the pulled runs as on Android;
+    // SLY2N_VKPULL=0: multi-draw-indirect; SLY2N_VKPULL=1: pulled on any GPU (a test of the Android path))
+    if (FRendererVulkan())
+    {
+        const char* szPull = std::getenv("SLY2N_VKPULL");
+        g_fDrawUniform = szPull && *szPull ? std::atoi(szPull) == 1 : FVulkanTileGpu();
+    }
 #endif
     const char* szRenderer = reinterpret_cast<const char*>(glGetString(GL_RENDERER));
     g_fDirectRuns = szRenderer && !std::strncmp(szRenderer, "D3D12 (", 7);

@@ -91,6 +91,9 @@ enum NATIVEID : int
     // (upscaling, fsr.h; display.h fUpscale) Upscaling, then while it is on its method, preset and sharpness: on the display
     // options' page after the resolution, and in VR Settings on a PC headset (the same setting)
     NID_Upscale, NID_UpscaleMethod, NID_UpscalePreset, NID_UpscaleSharpness,
+    // (display.h outlineThickness) Outline Thickness: the cel outlines' width (%), on the display options' page after Long
+    // Shadows and in VR Settings (the same setting; in VR matched to the headset's field of view); left / right step it
+    NID_OutlineThickness,
     // (VR, vr.h) the pause menu's VR Settings page (a headset in use)
     NID_Vr = NID_Base + 0x200,
     NID_VrPage = NID_Vr, NID_VrMode, NID_VrAutoCam, NID_VrVignette, NID_VrScreenSize, NID_VrRefresh, NID_VrEyeRes, NID_VrMsaa, NID_VrFoveation, NID_VrWorldScale,
@@ -491,6 +494,9 @@ std::string StrNative(int id)
     case NID_Vsync: return onOff(PTX_VSync, g_display.fVsync);
     case NID_DrawDistance: return StrPortValue(PTX_DrawDistance, StrPortDecimal(g_display.drawDistance, 2) + "x");
     case NID_LongShadows: return onOff(PTX_LongShadows, g_display.fLongShadows);
+    case NID_OutlineThickness:
+        std::snprintf(ach, sizeof(ach), "%d%%", g_display.outlineThickness);
+        return StrPortValue(PTX_OutlineThickness, ach);
     case NID_Upscale: return onOff(PTX_Upscaling, g_display.fUpscale);
     case NID_UpscaleMethod: return StrPortValue(PTX_UpscaleMethod, "FSR 1");
     case NID_UpscalePreset:
@@ -590,7 +596,9 @@ std::string StrNative(int id)
         static const PTX aptx[] = {PTX_Off, PTX_VrLow, PTX_VrMedium, PTX_VrHigh};
         return StrPortValue(PTX_VrFoveation, StrPort(aptx[std::clamp(vr::g_vropts.foveation, 0, 3)]));
     }
-    case NID_VrMsaa: return StrToGameText("MSAA") + StrPort(PTX_Sep) + (vr::g_vropts.msaa > 1 ? std::string("2x") : StrPort(PTX_Off));
+    case NID_VrMsaa:
+        return StrToGameText("MSAA") + StrPort(PTX_Sep) +
+               (vr::g_vropts.msaa <= 0 ? StrPort(PTX_Auto) : vr::g_vropts.msaa > 1 ? std::string("2x") : StrPort(PTX_Off));
     case NID_VrEyeRes:
         if (vr::g_vropts.eyeResolution <= 0) return StrPortValue(PTX_VrEyeResolution, StrPort(PTX_VrDynamic));
         std::snprintf(ach, sizeof(ach), "%d%%", vr::g_vropts.eyeResolution);
@@ -764,6 +772,26 @@ void AppendUpscaleRows(std::vector<MENUENT>& a, uint32_t pfnSelect, bool fSubOnl
     }
 }
 
+// World Scale (VR Settings) and Outline Thickness (the display options, VR Settings): Cross steps up and wraps round,
+// left / right step down / up and stop at the ends (StepNativeLeftRight)
+void StepWorldScale(int n, bool fWrap)
+{
+    namespace st = cane::settings;
+    const int lo = int(std::lround(st::kVrWorldScaleMin * 10.0f)), hi = int(std::lround(st::kVrWorldScaleMax * 10.0f));
+    // (in tenths; an older file's 0.75 / 1.25 rounds to the nearest tenth first)
+    int t = int(std::lround(vr::g_vropts.worldScale * 10.0f)) + n;
+    t = t > hi ? (fWrap ? lo : hi) : t < lo ? (fWrap ? hi : lo) : t;
+    vr::g_vropts.worldScale = float(t) / 10.0f;
+}
+void StepOutlineThickness(int n, bool fWrap)
+{
+    namespace st = cane::settings;
+    int v = (g_display.outlineThickness / st::kOutlineThicknessStep + n) * st::kOutlineThicknessStep;
+    v = v > st::kOutlineThicknessMax ? (fWrap ? st::kOutlineThicknessMin : st::kOutlineThicknessMax)
+      : v < st::kOutlineThicknessMin ? (fWrap ? st::kOutlineThicknessMax : st::kOutlineThicknessMin) : v;
+    g_display.outlineThickness = v;
+}
+
 // a PC display option's next value
 void CycleNative(MENUENT& e)
 {
@@ -806,6 +834,7 @@ void CycleNative(MENUENT& e)
     case NID_Window: g_display.window = DISPWINDOW((int(g_display.window) + 1) % 3); break;
     case NID_Vsync: g_display.fVsync = !g_display.fVsync; break;
     case NID_LongShadows: g_display.fLongShadows = !g_display.fLongShadows; break;
+    case NID_OutlineThickness: StepOutlineThickness(1, true); break;
     case NID_Upscale:
         g_display.fUpscale = !g_display.fUpscale;
         // (the method, preset and sharpness rows exist only while it is on: right after it; the pages keep room for them)
@@ -1077,7 +1106,8 @@ std::vector<MENUENT> AentVr()
     // options' upscaler belongs in its place, as the same setting)
     const int idUpscaling = vr::FCompositorUpscaling() ? int(NID_VrUpscaling) : 0;
     for (int id : {int(NID_VrMode), int(NID_VrAutoCam), int(NID_VrCutscenes), int(NID_VrVignette), int(NID_VrScreenSize),
-                   int(NID_VrRefresh), int(NID_VrEyeRes), int(NID_VrFoveation), idUpscaling, int(NID_VrMsaa), int(NID_VrMultiview), int(NID_VrWorldScale), int(NID_VrRcTable), int(NID_VrRecenter)})
+                   int(NID_VrRefresh), int(NID_VrEyeRes), int(NID_VrFoveation), idUpscaling, int(NID_VrMsaa), int(NID_VrMultiview), int(NID_VrWorldScale),
+                   int(NID_OutlineThickness), int(NID_VrRcTable), int(NID_VrRecenter)})
     {
         if (!id)
         {
@@ -1109,14 +1139,10 @@ void CycleVr(const MENUENT& e)
     case NID_VrScreenSize: o.screenSize = (o.screenSize + 1) % 3; break;
     case NID_VrRefresh: o.refreshRate = nextOf(o.refreshRate, {0, 72, 90, 120}); vr::ApplyRefreshRate(); break;
     case NID_VrEyeRes: o.eyeResolution = nextOf(o.eyeResolution, {0, 100, 90, 75, 60, 50}); break;
-    case NID_VrMsaa: o.msaa = o.msaa > 1 ? 1 : 2; break;
+    case NID_VrMsaa: o.msaa = nextOf(o.msaa, {0, 2, 1}); break;   // (Automatic, 2x, Off)
     case NID_VrFoveation: o.foveation = (o.foveation + 1) % 4; break;
-    case NID_VrWorldScale:
-    {
-        const int n = nextOf(int(std::lround(o.worldScale * 100.0f)), {50, 75, 100, 125, 150, 200});
-        o.worldScale = float(n) / 100.0f;
-        break;
-    }
+    case NID_VrWorldScale: StepWorldScale(1, true); break;
+    case NID_OutlineThickness: StepOutlineThickness(1, true); break;
     case NID_VrCutscenes: o.fCutscenesFlat = !o.fCutscenesFlat; break;
     case NID_VrRcTable: o.fRcTable = !o.fRcTable; break;
     case NID_VrMultiview: o.fMultiview = !o.fMultiview; break;
@@ -1222,6 +1248,12 @@ std::vector<MENUENT> AentDisplayOptions()
         e.pfnSelect = PFN_NativeDisplay;
         a.push_back(e);
         if (id == NID_Resolution) AppendUpscaleRows(a, PFN_NativeDisplay, false);   // (upscaling: after the resolution)
+    }
+    {
+        MENUENT e;   // (then Outline Thickness)
+        e.id = NID_OutlineThickness;
+        e.pfnSelect = PFN_NativeDisplay;
+        a.push_back(e);
     }
     a.reserve(a.size() + 4);   // (NID_Upscale's rows inserted in place: the rows do not move)
     return a;
@@ -1918,6 +1950,13 @@ void UpdateMenu(SW* psw)
         s_fTestRemap = false;
         OpenRemapPage();
     }
+    // (tests) SLY2N_VRPAGE=1: the VR Settings page opens with the menu (a headset in use: its rows' screenshots)
+    if (static bool s_fTestVr = std::getenv("SLY2N_VRPAGE") != nullptr; s_fTestVr && s_menu.state == 7 && vr::FActive())
+    {
+        s_fTestVr = false;
+        ReplacePage(AentVr(), 0);
+        return;
+    }
     // the Remap page over the menu takes the input while it is open
     if (FRemapPageOpen()) { UpdateRemapPage(); return; }
     if (s_iActionCapture >= 0) {
@@ -2044,7 +2083,21 @@ void UpdateMenu(SW* psw)
             if (std::getenv("SLY2N_MENULOG")) std::printf("menu: slot page %d\n", s_ipageSlot + 1);
             return;
         }
-        if (!pe->aent.empty()) step(NStepUpDown());
+        if (!pe->aent.empty())
+        {
+            // (World Scale, Outline Thickness: left / right step the value, as a slider)
+            MENUENT& e = pe->aent[size_t(pe->isel)];
+            if (e.id == NID_VrWorldScale || e.id == NID_OutlineThickness)
+                if (const int n = NStepLeftRight())
+                {
+                    if (e.id == NID_VrWorldScale) StepWorldScale(n, false);
+                    else StepOutlineThickness(n, false);
+                    FSaveDisplaySettings(cane::userDirectory());
+                    PsndStartSound(0x35);   // (the shop's row step, as the slot pages')
+                    return;
+                }
+            step(NStepUpDown());
+        }
         return;
     }
     case 8:

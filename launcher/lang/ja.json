@@ -941,6 +941,10 @@
   "AMD FidelityFX Super Resolution 1.0: edge-aware upscaling with sharpening.": "AMD FidelityFX Super Resolution 1.0:輪郭を保つアップスケーリングとシャープネス。",
   "How large the 3D scene is drawn, as a share of the screen's width and height. Lower is faster.": "3Dシーンを描く大きさ(画面のサイズに対する割合)。低いほど高速です。",
   "How much the upscaled picture is sharpened.": "アップスケールした画像をどれだけシャープにするか。",
-  "Draws the 3D scene smaller and scales it up to the screen with a sharpening upscaler: faster, nearly as sharp. The HUD and menus stay at full resolution. While on, it replaces the internal resolution.": "3Dシーンを小さく描き、シャープにするアップスケーラーで画面サイズに拡大します。より高速で、ほぼ同じ鮮明さです。HUDとメニューはフル解像度のままです。オンの間は内部解像度の代わりに使われます。"
+  "Draws the 3D scene smaller and scales it up to the screen with a sharpening upscaler: faster, nearly as sharp. The HUD and menus stay at full resolution. While on, it replaces the internal resolution.": "3Dシーンを小さく描き、シャープにするアップスケーラーで画面サイズに拡大します。より高速で、ほぼ同じ鮮明さです。HUDとメニューはフル解像度のままです。オンの間は内部解像度の代わりに使われます。",
+  "Outline thickness": "輪郭のサイズ",
+  "The width of the characters' cartoon outlines, in percent of the original. In VR the outlines keep the flat picture's look for the headset's wider view.": "キャラクターのアニメ調の輪郭のサイズを、オリジナルに対する割合で設定します。VRでは、ヘッドセットの大きな視界でも通常画面と同じ見た目になります。",
+  "VR world scale": "VRのワールドスケール",
+  "Immersive VR: how big the world looks around you. 1.0x is life size; higher values make the world look smaller.": "イマーシブVR：周りの世界がどれくらいの大きさに見えるか。1.0xは実物大で、値を大きくすると世界が小さく見えます。"
  }
 }

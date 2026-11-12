@@ -133,6 +133,15 @@ bool FSubmitsOnWorker();
 // (SLY2N_FPSLOG) the submission worker's thread CPU time so far (ms): all of it (with VR's xrEndFrame), and its command
 // recording and submission; 0 without a worker
 void WorkerCpuMs(double* pmsAll, double* pmsRecord);
+// A tile-based GPU (Adreno, Mali, PowerVR, Apple, VideoCore: by the device's vendor / driver, every Android device; SLY2N_VKTILER
+// overrides it): the layer's tilers' paths are on (in-place reads, D24S8, MSAA resolved on the tile); the game picks its own
+// (vertex pulling, VR's passes without the near-clip stage) by it.
+bool TileGpu();
+// (VR's log) SetFrameTiming(true): from then on a GPU timestamp at each frame's start and end. FrameTimes: the totals so far:
+// the GPU's ms from frames' first command to their last and the frames counted, and the ms this thread waited for the GPU
+// (a frame slot, a full ring).
+void SetFrameTiming(bool on);
+void FrameTimes(double* pmsGpu, uint32_t* pframesGpu, double* pmsWait);
 // The device, for the log and the debug menu ("AMD Radeon RX 9070 XT (RADV GFX1201)").
 const char* DeviceName();
 // Whether a CANE_FETCH program can read the bound draw framebuffer's colour in place (VK_KHR_dynamic_rendering_local_read,

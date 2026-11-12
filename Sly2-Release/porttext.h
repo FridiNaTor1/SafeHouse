@@ -78,6 +78,8 @@ enum PTX : int
     // method, preset and sharpness rows, AMD's preset names
     PTX_Upscaling, PTX_UpscaleMethod, PTX_UpscalePreset, PTX_UpscaleSharpness, PTX_UltraQuality, PTX_Quality, PTX_Balanced,
     PTX_Performance,
+    // (display.h outlineThickness) the display options' and VR Settings' Outline Thickness
+    PTX_OutlineThickness,
     PTX_Max
 };
 

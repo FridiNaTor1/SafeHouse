@@ -75,18 +75,15 @@ struct Sly2VrOptions {
 #else
     int refreshRate = 0;         // 0 Automatic (the headset's best up to 120 Hz), else 72 / 80 / 90 / 120
 #endif
-    float worldScale = 1.0f;     // Immersive: 1.00 life size (0.50 to 2.00)
+    float worldScale = 1.0f;     // Immersive: 1.00 life size (0.50 to 3.00, steps of 0.10; older files' 0.75 / 1.25 kept)
     int cutscenesFlat = 1;       // (Sly 3) Immersive: the cutscenes on the Flat Screen
     int cutscenesView = 0;       // (Sly 2, "Cutscene View") Immersive: the cutscenes 0 Immersive (the default: the subtitles on
                                  // a panel following the head), 1 on the Flat Screen; a key of its own so a file saved with the
                                  // old default ("Cutscenes = Flat Screen") still starts Immersive
     int rcTable = 0;             // Immersive, experimental: Ep7's RC Combat Club from the table
     int eyeResolution = 0;       // Immersive: 0 Dynamic (100 % to 75 %), else 100 / 90 / 75 / 60 / 50 (%)
-#if defined(__ANDROID__)
-    int msaa = 1;                // the eyes' MSAA: 2 (2x) or 1 (Off); Off by default on the Meta Quest (one pass an eye, faster)
-#else
-    int msaa = 2;                // the eyes' MSAA: 2 (2x) or 1 (Off)
-#endif
+    int msaa = 0;                // the eyes' MSAA: 0 Automatic (Off on a standalone headset: the Meta Quest, the Steam Frame;
+                                 // 2x on a PC), 2 (2x) or 1 (Off)
     int foveation = 2;           // fixed foveation: 0 Off, 1 Low, 2 Medium, 3 High
     int multiview = 1;           // Vulkan: both eyes drawn in one pass (1 On, 0 Off: the eyes one by one)
     int upscaling = 2;           // the headset compositor's filter on the eyes: 0 Off, 1 Sharpen, 2 Super Resolution
@@ -105,11 +102,18 @@ struct Sly2UpscaleOptions {
     int sharpness = 80;                   // 0..100 % (RCAS)
 };
 
+// VR Settings' World Scale: 0.50 to 3.00 in steps of 0.10 (the game's menu, the launcher)
+inline constexpr float kVrWorldScaleMin = 0.5f, kVrWorldScaleMax = 3.0f;
+// [Graphics] Outline Thickness: the cel outlines' width in percent (Sly2-Release render.cpp): 100 the original's (one PS2
+// line of the flat picture; in VR the same apparent width as the flat picture's, matched to the eyes' field of view)
+inline constexpr int kOutlineThicknessMin = 25, kOutlineThicknessMax = 300, kOutlineThicknessStep = 25;
+
 struct Sly2Settings {
     SystemSettings system = sly2Defaults();
     Sly2GameOptions game;
     Sly2VrOptions vr;
     Sly2UpscaleOptions upscale;
+    int outlineThickness = 100;   // [Graphics] Outline Thickness (%)
     // the save-kept options still to be taken from the newest save (migration; the schema's key names)
     std::vector<std::string> pendingSaveOptions;
     // keys and sections this build does not know, written back as they are
@@ -402,6 +406,16 @@ inline const std::vector<Sly2Key>& sly2Schema() {
                             &SS::longShadows));
         k.push_back(boolKey("Graphics", "Fast Shadows", "On: character shadows with less GPU work (low-end devices; nearly the same picture). Off: as before",
                             &SS::fastShadows));
+        k.push_back({ "Graphics", "Outline Thickness",
+                      "25 to 300 (%, steps of 25): the characters' cel outlines; 100: the original's width (in VR: the flat\n"
+                      "picture's apparent width, for the headset's field of view)",
+                      [](const Sly2Settings& s) { return std::to_string(s.outlineThickness); },
+                      [](Sly2Settings& s, const std::string& v) {
+                          int n = 0;
+                          if (!names::parseInt(v, n) || n < kOutlineThicknessMin || n > kOutlineThicknessMax) return false;
+                          s.outlineThickness = n;
+                          return true;
+                      } });
         k.push_back(gameBoolKey("Graphics", "Texture Cache",
                                 "On: texture mods and texture packs load from a cache of their decoded pictures (made as they are\n"
                                 "first used; the same picture, faster loading). Off: always from the PNG files",
@@ -594,20 +608,21 @@ inline const std::vector<Sly2Key>& sly2Schema() {
                              { { 0, "Dynamic" }, { 100, "100" }, { 90, "90" }, { 75, "75" }, { 60, "60" }, { 50, "50" } }));
         k.push_back(vrChoice("Foveation", "Off, Low, Medium or High: the image's edges shaded more coarsely (fixed, no eye tracking)",
                              &Sly2VrOptions::foveation, { { 0, "Off" }, { 1, "Low" }, { 2, "Medium" }, { 3, "High" } }));
-        k.push_back(vrChoice("MSAA", "2x or Off (the eyes' edges; Off is faster: on Vulkan one pass an eye)", &Sly2VrOptions::msaa,
-                             { { 2, "2x" }, { 1, "Off" } }));
+        k.push_back(vrChoice("MSAA", "Automatic, 2x or Off (the eyes' edges; Off is faster: on Vulkan one pass an eye; Automatic: "
+                                     "Off on a standalone headset, 2x on a PC)", &Sly2VrOptions::msaa,
+                             { { 0, "Automatic" }, { 2, "2x" }, { 1, "Off" } }));
         k.push_back(vrChoice("Upscaling",
                              "Off, Sharpen or Super Resolution: the headset's compositor sharpens / upscales the eyes (Quest); "
                              "on, Dynamic eye resolution works between 90 and 75 %",
                              &Sly2VrOptions::upscaling, { { 0, "Off" }, { 1, "Sharpen" }, { 2, "Super Resolution" } }));
         k.push_back(vrChoice("Multiview", "On or Off: both eyes drawn in one pass where the device can (Vulkan); Off: the eyes one by one",
                              &Sly2VrOptions::multiview, { { 1, "On" }, { 0, "Off" } }));
-        k.push_back({ "VR", "World Scale", "Immersive: 0.50 to 2.00 (1.00: life size)",
+        k.push_back({ "VR", "World Scale", "Immersive: 0.50 to 3.00 (1.00: life size; above 1 the world looks smaller)",
                       [](const Sly2Settings& s) { return names::decimal(s.vr.worldScale); },
                       [](Sly2Settings& s, const std::string& v) {
                           float g = 0;
-                          if (!names::parseFloat(v, g) || g < 0.5f - 1e-4f || g > 2.0f + 1e-4f) return false;
-                          s.vr.worldScale = std::clamp(g, 0.5f, 2.0f);
+                          if (!names::parseFloat(v, g) || g < kVrWorldScaleMin - 1e-4f || g > kVrWorldScaleMax + 1e-4f) return false;
+                          s.vr.worldScale = std::clamp(g, kVrWorldScaleMin, kVrWorldScaleMax);
                           return true;
                       } });
         k.push_back(vrChoice("Cutscenes", "(Sly 3) Immersive: Flat Screen (the cutscenes, the Episode 2 dance and the RC chopper on the screen) or Immersive",

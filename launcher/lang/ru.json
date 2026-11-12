@@ -941,6 +941,10 @@
   "AMD FidelityFX Super Resolution 1.0: edge-aware upscaling with sharpening.": "AMD FidelityFX Super Resolution 1.0: масштабирование с учётом краёв и повышением резкости.",
   "How large the 3D scene is drawn, as a share of the screen's width and height. Lower is faster.": "Размер, в котором рисуется 3D-сцена, как доля ширины и высоты экрана. Меньше — быстрее.",
   "How much the upscaled picture is sharpened.": "Насколько повышается резкость масштабированного изображения.",
-  "Draws the 3D scene smaller and scales it up to the screen with a sharpening upscaler: faster, nearly as sharp. The HUD and menus stay at full resolution. While on, it replaces the internal resolution.": "Рисует 3D-сцену меньше и масштабирует её до экрана с повышением резкости: быстрее и почти так же чётко. HUD и меню остаются в полном разрешении. Когда включено, заменяет внутреннее разрешение."
+  "Draws the 3D scene smaller and scales it up to the screen with a sharpening upscaler: faster, nearly as sharp. The HUD and menus stay at full resolution. While on, it replaces the internal resolution.": "Рисует 3D-сцену меньше и масштабирует её до экрана с повышением резкости: быстрее и почти так же чётко. HUD и меню остаются в полном разрешении. Когда включено, заменяет внутреннее разрешение.",
+  "Outline thickness": "Толщина контуров",
+  "The width of the characters' cartoon outlines, in percent of the original. In VR the outlines keep the flat picture's look for the headset's wider view.": "Ширина мультяшных контуров персонажей в процентах от оригинала. В VR контуры сохраняют вид плоской картинки при более широком обзоре шлема.",
+  "VR world scale": "Масштаб мира в VR",
+  "Immersive VR: how big the world looks around you. 1.0x is life size; higher values make the world look smaller.": "Иммерсивный VR: насколько большим кажется мир вокруг вас. 1.0x — реальный размер; большие значения делают мир меньше."
  }
 }

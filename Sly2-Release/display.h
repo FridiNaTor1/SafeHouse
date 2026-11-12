@@ -61,6 +61,9 @@ struct DISPLAY
     // are the largest GPU fill of a frame (~36 screens of stencil samples in Paris): for tile GPUs (Quest, Steam Frame).
     // --fast-shadows 1 / SLY2N_FASTSHADOWS=1; the Switch always.
     bool fFastShadows = false;
+    // Settings.ini [Graphics] Outline Thickness (%): the cel outlines' width, 100 the original's (render.cpp; in VR the flat
+    // picture's apparent width for the eyes' field of view, times this)
+    int outlineThickness = 100;
     // Upscaling (Settings.ini [Display] Upscaling, Upscaling Method / Preset / Sharpness; --upscale, fsr.h; default
     // off = the current pictures): on, the scene renders at the preset's fraction of the picture (in place of the
     // internal resolution) and the method (FSR 1: EASU + RCAS) scales it up; the HUD, menus and overlays then draw at

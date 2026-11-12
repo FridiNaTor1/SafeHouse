@@ -941,6 +941,10 @@
   "AMD FidelityFX Super Resolution 1.0: edge-aware upscaling with sharpening.": "AMD FidelityFX Super Resolution 1.0: edge-aware upscaling with sharpening.",
   "How large the 3D scene is drawn, as a share of the screen's width and height. Lower is faster.": "How large the 3D scene is drawn, as a share of the screen's width and height. Lower is faster.",
   "How much the upscaled picture is sharpened.": "How much the upscaled picture is sharpened.",
-  "Draws the 3D scene smaller and scales it up to the screen with a sharpening upscaler: faster, nearly as sharp. The HUD and menus stay at full resolution. While on, it replaces the internal resolution.": "Draws the 3D scene smaller and scales it up to the screen with a sharpening upscaler: faster, nearly as sharp. The HUD and menus stay at full resolution. While on, it replaces the internal resolution."
+  "Draws the 3D scene smaller and scales it up to the screen with a sharpening upscaler: faster, nearly as sharp. The HUD and menus stay at full resolution. While on, it replaces the internal resolution.": "Draws the 3D scene smaller and scales it up to the screen with a sharpening upscaler: faster, nearly as sharp. The HUD and menus stay at full resolution. While on, it replaces the internal resolution.",
+  "Outline thickness": "Outline thickness",
+  "The width of the characters' cartoon outlines, in percent of the original. In VR the outlines keep the flat picture's look for the headset's wider view.": "The width of the characters' cartoon outlines, in percent of the original. In VR the outlines keep the flat picture's look for the headset's wider view.",
+  "VR world scale": "VR world scale",
+  "Immersive VR: how big the world looks around you. 1.0x is life size; higher values make the world look smaller.": "Immersive VR: how big the world looks around you. 1.0x is life size; higher values make the world look smaller."
  }
 }

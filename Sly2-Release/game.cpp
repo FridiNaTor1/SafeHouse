@@ -2134,6 +2134,12 @@ int RunGame(const GAMEOPTS& go)
         msUpdate += t1 - t0;
         msRender += t2 - t1;
         msSwap += now() - t2;
+        if (fWindow && vr::FActive())
+        {
+            static double s_msScenePrev = 0;
+            vr::NoteFrameTimes(t1 - t0, std::max(0.0, msScene - s_msScenePrev), t2 - t1, now() - t2);
+            s_msScenePrev = msScene;
+        }
         ++cframeTimed;
         // (SLY2N_FRAMETIMES=file: one CSV line a frame, for a tester's machine: where each frame's time went. update: the
         // steps (game logic); draw: the scene's CPU side and its GL calls; swap: the present and the swap; wait: the

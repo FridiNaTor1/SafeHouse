@@ -55,6 +55,8 @@ bool FRcAimPoint(glm::vec3*) { return false; }
 void SetRcArenaHeight(float) {}
 bool FPanelSize(int*, int*) { return false; }
 void NoteThread(VRTHREAD) {}
+void NoteFrameTimes(double, double, double, double) {}
+int MsaaOption() { return g_vropts.msaa > 1 ? 2 : 1; }
 }  // namespace vr
 #else
 
@@ -124,9 +126,9 @@ typedef void (*__eglMustCastToProperFunctionPointerType)(void);
 #if CANE_VULKAN
 // (VR on the Vulkan renderer: XR_KHR_vulkan_enable2, the renderer's swapchain images, platform/vulkan/gl_vulkan.h)
 #include "vulkan/gl_vulkan.h"
-#include "renderer.h"
 #define XR_USE_GRAPHICS_API_VULKAN
 #endif
+#include "renderer.h"
 #include <openxr/openxr.h>
 #include <openxr/openxr_platform.h>
 
@@ -297,6 +299,41 @@ std::string s_strProfile;
 std::string s_strRuntime;
 
 bool FHasExt(const char* sz) { return std::find(s_aext.begin(), s_aext.end(), sz) != s_aext.end(); }
+// A standalone headset: the headset is the computer (Android: the Meta Quest; Linux on a tile GPU: the Steam Frame), not
+// a PC with a headset (a Windows on ARM laptop with a tile GPU keeps the PC's behaviour). It picks the defaults that
+// VR Settings' Automatic choices mean (MSAA Off, 90 Hz). SLY2N_VR_STANDALONE=0 / 1 overrides it (tests).
+bool FStandalone()
+{
+#if defined(__ANDROID__)
+    bool f = true;
+#elif defined(__linux__)
+    bool f = s_fVk && FVulkanTileGpu();
+#else
+    bool f = false;
+#endif
+    if (const char* sz = std::getenv("SLY2N_VR_STANDALONE"); sz && *sz) f = std::atoi(sz) != 0;
+    return f;
+}
+
+// (VR's log) where the frames' time goes, every SLY2N_VR_PERFLOG seconds (default 20, 0 off): the game thread's parts,
+// its waits (the GPU's frame slot / ring, the submission worker's xrEndFrame, xrWaitFrame) and the GPU's time a frame,
+// so a tester's log tells a CPU-bound frame from a GPU-bound one
+struct PERFWINDOW
+{
+    double t0 = -1.0;
+    int cframe = 0, cframeEyes = 0, clate = 0;
+    double msUpdate = 0, msScene = 0, msDraw = 0, msSwap = 0, msWaitFrame = 0, msWaitWorker = 0;
+    double msGpu0 = 0, msGpuWait0 = 0, msWorker0 = 0;
+    uint32_t cgpu0 = 0;
+} s_perf;
+double s_tBeginPrev = -1.0;   // (the last xrWaitFrame's return: late frames)
+double s_msWaitFrameNow = 0, s_msWaitWorkerNow = 0;   // (BeginFrame: this frame's waits)
+double MsNow() { return glfwGetTime() * 1000.0; }
+}  // namespace
+// (VR Settings' MSAA: 2 (2x) or 1 (Off); Automatic (0): Off on a standalone headset, 2x on a PC)
+int MsaaOption() { return vr::g_vropts.msaa > 0 ? vr::g_vropts.msaa : FStandalone() ? 1 : 2; }
+namespace
+{
 bool FCheck(XrResult r, const char* what)
 {
     if (XR_SUCCEEDED(r)) return true;
@@ -1016,11 +1053,8 @@ GLuint FboEyeImage(int ieye)
 
 // Multiview wanted: SLY2N_VR_MULTIVIEW=0 / 1 when set; else VR Settings' Multiview on the Vulkan renderer, off on GLES
 // (measured slower on the Quest there)
-#if defined(__ANDROID__)
-constexpr bool kVkEyesGeometryStage = false;   // (render.cpp useGlob: no near-clip geometry stage in Android's VR passes)
-#else
-constexpr bool kVkEyesGeometryStage = true;
-#endif
+// (render.cpp useGlob: no near-clip geometry stage in the VR passes on Android and on a tile GPU: FVrNoNearClip)
+bool FVkEyesGeometryStage() { return !FVrNoNearClip(); }
 bool FMultiviewWanted()
 {
     if (const char* sz = std::getenv("SLY2N_VR_MULTIVIEW")) return std::atoi(sz) != 0;
@@ -1061,7 +1095,7 @@ bool FCreateEyeTargets()
     // target is drawn into the image by a program, which reads one sample)
     if (s_fVk) s_msaa = CaneVk::RendersToSingleSampled() ? 2 : 1;
 #endif
-    if (g_vropts.msaa <= 1) s_msaa = 1;   // (VR Settings: MSAA off)
+    if (MsaaOption() <= 1) s_msaa = 1;   // (VR Settings: MSAA off; Automatic: off on a standalone headset)
     if (const char* sz = std::getenv("SLY2N_VR_MSAA")) s_msaa = std::max(1, std::atoi(sz));
 #if CANE_VULKAN
     if (s_fVk && !CaneVk::RendersToSingleSampled()) s_msaa = 1;
@@ -1093,7 +1127,7 @@ bool FCreateEyeTargets()
     // images needs the array copy program)
     if (s_fVk && FMultiviewWanted())
     {
-        if (!CaneVk::MultiviewSupported(kVkEyesGeometryStage)) Log("multiview: not on this device (the eyes one by one)");
+        if (!CaneVk::MultiviewSupported(FVkEyesGeometryStage())) Log("multiview: not on this device (the eyes one by one)");
         else if (!s_fVkDirect && !s_shCopyArray.ID) Log("multiview: no array copy program (the eyes one by one)");
         else s_fMultiview = true;
     }
@@ -1605,6 +1639,11 @@ void SetRefreshRate()
     const int want = std::getenv("SLY2N_VR_HZ") ? std::atoi(std::getenv("SLY2N_VR_HZ")) : g_vropts.refreshRate;
     for (float hz : a)
         if (want > 0 ? std::fabs(hz - float(want)) < 1.0f : (hz <= 120.5f && hz > hzWant)) hzWant = hz;
+    // (Automatic on a standalone headset: 90 Hz where offered, the Quest 3S's measured best: 120 Hz never gave more
+    // frames there, only twice the stale ones; else the best up to 120 Hz)
+    if (want <= 0 && FStandalone())
+        for (float hz : a)
+            if (std::fabs(hz - 90.0f) < 1.0f) hzWant = hz;
     if (hzWant > 0.0f && FCheck(pxrRequestDisplayRefreshRateFB(s_session, hzWant), "xrRequestDisplayRefreshRateFB")) s_hzDisplay = hzWant;
     Log("refresh rates: %s-> %.0f Hz", str.c_str(), double(s_hzDisplay));
 }
@@ -1971,6 +2010,19 @@ bool FCreateInstance(bool fVulkan)
     for (const auto& p : aprop) s_aext.push_back(p.extensionName);
     if (std::getenv("SLY2N_VR_EXTS"))
         for (const std::string& str : s_aext) Log("runtime extension %s", str.c_str());
+    else
+    {
+        // (once a run: the runtime's extensions in the log, for a tester's headset: foveation, refresh rate, performance
+        // levels, swapchain create info)
+        static bool s_fLogged = false;
+        std::string line;
+        for (size_t i = 0; !s_fLogged && i < s_aext.size(); ++i)
+        {
+            line += (line.empty() ? "" : " ") + s_aext[i];
+            if (line.size() > 800 || i + 1 == s_aext.size()) Log("runtime extensions: %s", line.c_str()), line.clear();
+        }
+        s_fLogged = true;
+    }
     std::vector<const char*> aextWant;
 #if defined(__ANDROID__)
     const char* szGraphics = XR_KHR_OPENGL_ES_ENABLE_EXTENSION_NAME;
@@ -2120,6 +2172,13 @@ bool FStart()
     if (!FCreateEyeTargets()) { Shutdown(); return false; }
     if (!FCreateActions()) Log("controllers: no actions");
     s_fStarted = true;
+#if CANE_VULKAN
+    if (s_fVk)
+    {
+        CaneVk::SetFrameTiming(true);   // (the perf log's GPU time: NoteFrameTimes)
+        // (no desktop window picture here: in VR the Vulkan renderer's window has no swapchain, renderer.cpp options.visible)
+    }
+#endif
     // the game picture's size in VR: a 16:9 screen (display.cpp LayoutDisplay asks FPanelSize)
     LayoutDisplay(1920, 1080);
     cane::gl::SwapInterval(0);   // (the headset paces the frames; the desktop window only mirrors)
@@ -2257,7 +2316,10 @@ bool FFixedPose()
 void BeginFrame()
 {
     if (!s_fStarted || s_frame.fBegun) return;
+    const double msW0 = MsNow();
     WaitVkSubmissions();   // (the last frame's xrEndFrame done: the session's calls below in their order)
+    s_msWaitWorkerNow = MsNow() - msW0;
+    s_msWaitFrameNow = 0;
     PollEvents();
     s_frame.fEyesDrawn = false;
     s_frame.fImmersive = false;
@@ -2266,7 +2328,15 @@ void BeginFrame()
     if (!s_fRunning) return;
     s_frame.state = XrFrameState{XR_TYPE_FRAME_STATE};
     XrFrameWaitInfo wi{XR_TYPE_FRAME_WAIT_INFO};
+    const double msF0 = MsNow();
     if (!FCheck(pxrWaitFrame(s_session, &wi, &s_frame.state), "xrWaitFrame")) return;
+    s_msWaitFrameNow = MsNow() - msF0;
+    {
+        // (a display refresh passed without a new frame: late, as UpdateEyeResolution counts it)
+        const double t = glfwGetTime(), period = s_hzDisplay > 1.0f ? 1.0 / double(s_hzDisplay) : 1.0 / 72.0;
+        if (s_tBeginPrev >= 0.0 && t - s_tBeginPrev > period * 1.4) ++s_perf.clate;
+        s_tBeginPrev = t;
+    }
     UpdateEyeResolution(s_fEyesLastFrame);
     XrFrameBeginInfo bi{XR_TYPE_FRAME_BEGIN_INFO};
     if (XR_FAILED(pxrBeginFrame(s_session, &bi))) return;
@@ -2483,7 +2553,7 @@ bool FEyeViews(const CAMERA& cam, STEREOVIEW* psv)
     }
 #if CANE_VULKAN
     // (Vulkan: VR Settings' Multiview changed: the targets made again for it)
-    if (s_fVk && FMultiviewWanted() != s_fMultiview && (s_fMultiview || CaneVk::MultiviewSupported(kVkEyesGeometryStage)))
+    if (s_fVk && FMultiviewWanted() != s_fMultiview && (s_fMultiview || CaneVk::MultiviewSupported(FVkEyesGeometryStage())))
     {
         Log("multiview %s", s_fMultiview ? "off: the eyes one by one" : "on: both eyes in one pass");
         DestroyEyeTargets();
@@ -2535,6 +2605,10 @@ bool FEyeViews(const CAMERA& cam, STEREOVIEW* psv)
     }
     glm::vec3 aposEye[2];
     glm::mat3 arot[2];
+    // (render.cpp CelWidthEyes) the eyes' vertical field in the world's terms, as tan(up) - tan(down): magnified by the
+    // binocucom's zoom / talk
+    auto tanRangeOf = [](const XrFovf& fv) { return std::tan(fv.angleUp) - std::tan(fv.angleDown); };
+    float tanRangeWorld = tanRangeOf(s_frame.aview[0].fov);
     // (a binocucom talk: the shot through the frame fixed in the room (FPresent, FMaskWindow): the scripted camera's whole
     // orientation along the frame's axis, the shot magnified so the frame's 4:3 canvas holds what the flat picture shows
     // (its vertical field over the canvas's height at 1 m); the head's turn and movement are its own (world-fixed: no
@@ -2545,6 +2619,7 @@ bool FEyeViews(const CAMERA& cam, STEREOVIEW* psv)
         const glm::vec3 upB = glm::normalize(glm::cross(fwdB, leftB));
         const glm::mat3 Bm(-leftB, upB, -fwdB);
         const float mag = std::clamp(0.5f * kBinocCanvasH / std::tan(glm::radians(std::clamp(cam.fovY, 1.0f, 170.0f)) * 0.5f), 0.2f, 50.0f);
+        tanRangeWorld /= mag;
         const glm::mat4 matTalkToLocal = glm::translate(glm::mat4(1.0f), s_posTalk) * glm::mat4_cast(glm::angleAxis(s_yawTalk, glm::vec3(0, 1, 0)));
         // world -> local: the camera's frame (metres), magnified across its axis, into the frame's place
         const glm::mat4 matWorldToLocal = matTalkToLocal * glm::scale(glm::mat4(1.0f), glm::vec3(mag, mag, 1.0f)) * glm::scale(glm::mat4(1.0f), glm::vec3(1.0f / s)) *
@@ -2592,6 +2667,7 @@ bool FEyeViews(const CAMERA& cam, STEREOVIEW* psv)
                 fv.angleUp = std::atan(std::tan(fv.angleUp) * kZoom);
                 fv.angleDown = std::atan(std::tan(fv.angleDown) * kZoom);
             }
+        tanRangeWorld = tanRangeOf(afov[0]);
         for (int i = 0; i < 2; ++i)
         {
             XrView v = s_frame.aview[i];
@@ -2650,6 +2726,7 @@ bool FEyeViews(const CAMERA& cam, STEREOVIEW* psv)
     if (FFsrEyes()) fsr::RenderSizeForPreset(g_display.upscalePreset, s_aeye[0].dx, s_aeye[0].dy, &s_dxEye, &s_dyEye);   // (upscaled in FinishEyes)
     psv->dx = s_dxEye;
     psv->dy = s_dyEye;
+    psv->tanRangeY = std::isfinite(tanRangeWorld) && tanRangeWorld > 0.0f ? tanRangeWorld : 0.0f;
     ApplyFoveation();   // (a new level, or the density maps over a new eye resolution)
     psv->fMultiview = s_fMultiview;
     psv->fFlipY = s_fVkDirect;
@@ -3161,6 +3238,54 @@ void FinishEyes()
     if (pk) pk->bindTarget(0);
     else glBindFramebuffer(GL_FRAMEBUFFER, 0);
     s_frame.fEyesDrawn = true;
+}
+
+void NoteFrameTimes(double msUpdate, double msScene, double msDraw, double msSwap)
+{
+    if (!s_fStarted || !s_fRunning) return;
+    static const double s_sLog = std::getenv("SLY2N_VR_PERFLOG") ? std::atof(std::getenv("SLY2N_VR_PERFLOG")) : 20.0;
+    if (s_sLog <= 0.0) return;
+    PERFWINDOW& w = s_perf;
+    const double t = glfwGetTime();
+    auto totals = [](double* pmsGpu, uint32_t* pcgpu, double* pmsGpuWait, double* pmsWorker) {
+        *pmsGpu = *pmsGpuWait = *pmsWorker = 0, *pcgpu = 0;
+#if CANE_VULKAN
+        if (s_fVk)
+        {
+            CaneVk::FrameTimes(pmsGpu, pcgpu, pmsGpuWait);
+            double msRec = 0;
+            CaneVk::WorkerCpuMs(pmsWorker, &msRec);
+        }
+#endif
+    };
+    if (w.t0 < 0.0)
+    {
+        w = PERFWINDOW{};
+        w.t0 = t;
+        totals(&w.msGpu0, &w.cgpu0, &w.msGpuWait0, &w.msWorker0);
+        return;
+    }
+    ++w.cframe;
+    w.cframeEyes += s_fEyesLastFrame ? 1 : 0;
+    w.msUpdate += msUpdate, w.msScene += msScene, w.msDraw += msDraw, w.msSwap += msSwap;
+    w.msWaitFrame += s_msWaitFrameNow, w.msWaitWorker += s_msWaitWorkerNow;
+    if (t - w.t0 < s_sLog || w.cframe == 0) return;
+    double msGpu = 0, msGpuWait = 0, msWorker = 0;
+    uint32_t cgpu = 0;
+    totals(&msGpu, &cgpu, &msGpuWait, &msWorker);
+    const double c = double(w.cframe);
+    char achGpu[96] = "";
+    if (cgpu > w.cgpu0) std::snprintf(achGpu, sizeof achGpu, "; GPU %.2f ms a frame (first to last command)", (msGpu - w.msGpu0) / double(cgpu - w.cgpu0));
+    else std::snprintf(achGpu, sizeof achGpu, "; GPU time not measured");
+    Log("perf: %.1f fps at %.0f Hz (%d of %d frames late, %d immersive), eyes %dx%d%s; game thread a frame: update %.2f, "
+        "draw %.2f (scene %.2f), present %.2f ms; its waits: GPU %.2f, submissions %.2f, xrWaitFrame %.2f ms; submission worker "
+        "CPU %.2f ms%s",
+        c / (t - w.t0), double(s_hzDisplay), w.clate, w.cframe, w.cframeEyes, s_dxEye, s_dyEye, s_fMultiview ? " multiview" : "",
+        w.msUpdate / c, w.msDraw / c, w.msScene / c, w.msSwap / c, (msGpuWait - w.msGpuWait0) / c, w.msWaitWorker / c,
+        w.msWaitFrame / c, (msWorker - w.msWorker0) / c, achGpu);
+    w = PERFWINDOW{};
+    w.t0 = t;
+    totals(&w.msGpu0, &w.cgpu0, &w.msGpuWait0, &w.msWorker0);
 }
 
 bool FPresent()

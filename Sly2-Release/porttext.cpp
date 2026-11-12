@@ -469,6 +469,10 @@ constexpr ROW s_arow[] = {
         "Balanceret", "Tasapainoinen", "Balansert", "Balanserad", "バランス"}},
     {PTX_Performance, {"Performance", "Performance", "Prestazioni", "Leistung", "Rendimiento", "Prestaties", "Desempenho",
         "Ydelse", "Suorituskyky", "Ytelse", "Prestanda", "パフォーマンス"}},
+    // P: the cel outlines' width (display.h outlineThickness; the Japanese in kana, the font's)
+    {PTX_OutlineThickness, {"Outline Thickness", "Épaisseur des contours", "Spessore dei contorni", "Konturstärke",
+        "Grosor del contorno", "Dikte van de omlijning", "Espessura do contorno", "Konturtykkelse", "Ääriviivojen paksuus",
+        "Konturtykkelse", "Konturtjocklek", "りんかくせんのふとさ"}},
 };
 // clang-format on
 static_assert(std::size(s_arow) == PTX_Max, "one row per PTX");

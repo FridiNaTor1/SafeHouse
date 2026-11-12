@@ -286,6 +286,15 @@ GLFWwindow* PwindowVulkan(int width, int height, bool fVisible, const char* titl
 #endif
 }
 
+bool FVulkanTileGpu()
+{
+#if CANE_VULKAN
+    return s_fVulkan && CaneVk::TileGpu();
+#else
+    return false;
+#endif
+}
+
 bool FVulkanWorkerCpuMs(double* pmsAll, double* pmsRecord)
 {
 #if CANE_VULKAN

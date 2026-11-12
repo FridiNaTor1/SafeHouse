@@ -94,7 +94,7 @@ void FromVrOptions(const st::Sly2VrOptions& o)
     v.fCutscenesFlat = o.cutscenesView != 0;   // (Sly 2's own key: Immersive by default)
     v.fRcTable = o.rcTable != 0;
     v.eyeResolution = o.eyeResolution == 0 ? 0 : std::clamp(o.eyeResolution, 50, 100);
-    v.msaa = o.msaa <= 1 ? 1 : 2;
+    v.msaa = o.msaa <= 0 ? 0 : o.msaa == 1 ? 1 : 2;   // (0 Automatic: vr.h MsaaOption)
     v.foveation = std::clamp(o.foveation, 0, 3);
     v.fMultiview = o.multiview != 0;
     v.upscaling = std::clamp(o.upscaling, 0, 2);
@@ -202,6 +202,7 @@ bool FLoadDisplaySettings(const std::filesystem::path& userDir, std::string* pme
     FromGameOptions(s.game);
     FromVrOptions(s.vr);
     FromUpscaleOptions(s.upscale);
+    g_display.outlineThickness = std::clamp(s.outlineThickness, st::kOutlineThicknessMin, st::kOutlineThicknessMax);
     sly2actions::Load(userDir);
 #ifdef __SWITCH__
     // (the Switch: one screen at 60 Hz, the swap paces the frames at 30 or 60; the internal resolution from the menu's
@@ -237,6 +238,7 @@ bool FSaveDisplaySettings(const std::filesystem::path& userDir)
     ToGameOptions(s.game);
     ToVrOptions(s.vr);
     ToUpscaleOptions(s.upscale);
+    s.outlineThickness = g_display.outlineThickness;
     return st::saveSly2(userDir, s);
 }
 
