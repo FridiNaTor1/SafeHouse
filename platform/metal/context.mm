@@ -247,9 +247,15 @@ void Context::SwapBuffers() {
   EndEncoders();
   if (drawable_) {
 #if TARGET_OS_IPHONE
-    if (swap_interval_ >= 2)
-      [CommandBuffer() presentDrawable:drawable_ afterMinimumDuration:MinimumPresentSeconds()];
-    else
+    if (swap_interval_ >= 2) {
+      // (MTLCommandBuffer has no afterMinimumDuration form: the drawable presents itself once the command buffer is
+      // scheduled, MTLDrawable -presentAfterMinimumDuration:, iOS 10.3)
+      id<CAMetalDrawable> drawable = drawable_;
+      const CFTimeInterval minimum = MinimumPresentSeconds();
+      [CommandBuffer() addScheduledHandler:^(id<MTLCommandBuffer>) {
+        [drawable presentAfterMinimumDuration:minimum];
+      }];
+    } else
 #endif
       [CommandBuffer() presentDrawable:drawable_];
     drawable_ = nil;
