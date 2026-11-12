@@ -1051,7 +1051,7 @@ std::string Outcome(const std::function<void()>& run)
 const CaneSwitch::InstallJob s_install = {
     int(cane::GameId::Sly1),
     "Select a Sly Cooper ISO or CHD (USA, Europe, Japan or Korea).",
-    [](const std::string& iso, const std::string& out, const CaneSwitch::InstallProgress& progress) {
+    [](const std::string& iso, const std::string& out, const std::vector<std::string>&, const CaneSwitch::InstallProgress& progress) {
         std::string error = Outcome([&] { CaneExtract::ExtractGame(iso, out, Forward(progress)); });
         if (error.empty() && !CaneExtract::IsReady(out)) error = "Some game files are missing. Please run the extraction again.";
         return error;
@@ -1063,7 +1063,7 @@ const CaneSwitch::InstallJob s_install = {
     false,
     false,
     // (the PC extractor's figures: install.h sly1NeedBytes)
-    [](const std::string& bootFile) -> uint64_t {
+    [](const std::string& bootFile, std::size_t) -> uint64_t {
         const cane::Sly1Disc* disc = cane::sly1DiscFromBootFile(bootFile);
         return disc ? cane::sly1NeedBytes(*disc) : 0;
     },

@@ -14,6 +14,7 @@
 #include "disc.h"
 
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <string>
 #include <vector>
@@ -23,6 +24,10 @@ struct MOVIEINFO
     uint32_t va = 0;  // the key's address in the executable
     FK fk;
 };
+
+// (the converter) The PSS without the sound tracks fKeep(track) refuses (track 0, or a language's + 1): their packets
+// are left out, and the pack headers left with none; the rest as it is (the player reads packets, not their offsets).
+std::vector<uint8_t> AbPssKeepTracks(const std::vector<uint8_t>& ab, const std::function<bool(int track)>& fKeep);
 
 // (the converter) A PSS split as FPlayMovie demuxes it: the video packets' bytes in
 // order (the MPEG-2 video stream, an .m2v), and each sound track (by its tag: 0 the only one, else the language + 1) as

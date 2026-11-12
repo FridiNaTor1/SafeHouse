@@ -416,6 +416,22 @@ int main(int argc, char** argv)
         else if (!std::strcmp(argv[i], "--convert") && i + 1 < argc) { command = "convert"; arg = argv[++i]; }
         else if (!std::strcmp(argv[i], "--convert-list")) command = "convert-list";
         else if (!std::strcmp(argv[i], "--ps2-formats")) g_fConvertPs2 = true;
+        else if (!std::strcmp(argv[i], "--languages") && i + 1 < argc)
+        {
+            for (std::string names = argv[++i]; !names.empty();)
+            {
+                const std::size_t comma = names.find(',');
+                const std::string name = names.substr(0, comma);
+                if (LanguageOfConvertName(name) < 0)
+                {
+                    std::fprintf(stderr, "--languages: no language \"%s\" (English, French, Italian, German, Spanish, Dutch, "
+                                         "Portuguese, Danish, Finnish, Norwegian, Swedish)\n", name.c_str());
+                    return 2;
+                }
+                g_alangConvert.push_back(LanguageOfConvertName(name));
+                names = comma == std::string::npos ? std::string() : names.substr(comma + 1);
+            }
+        }
         else if (!std::strcmp(argv[i], "--flac")) g_nConvertFlac = 1;
         else if (!std::strcmp(argv[i], "--no-flac")) g_nConvertFlac = 0;
         else if (!std::strcmp(argv[i], "--export-textures")) { g_fConvertTextures = true; fExportTextures = true; }
@@ -653,7 +669,6 @@ int main(int argc, char** argv)
 #undef main
 #include "convert.h"
 #include "../platform/games.h"
-#include "../platform/install.h"
 #include "../platform/switch/installer.h"
 #include <sys/stat.h>
 namespace
@@ -663,14 +678,14 @@ bool FInstalled(const std::string& data)
     struct stat st{};
     return stat((data + "/extraction_manifest.json").c_str(), &st) == 0 && S_ISREG(st.st_mode);
 }
-// The installer's job (platform/switch/installer.h): the disc converted as --convert does (convert.cpp), WAV audio
-// (no FLAC encoding on the console's CPU) and no texture dump, from the image as it is (a CHD or a split .iso too: the
-// European disc's 4.6 GB fit no FAT32 file). Reading the worlds is the first fifth of the bar.
+// The installer's job (platform/switch/installer.h): the disc converted as --convert --ps2-formats does (convert.cpp:
+// the audio and movies as on the disc, no texture dump) with the languages chosen, from the image as it is (a CHD or a
+// split .iso too: the European disc's 4.6 GB fit no FAT32 file). Reading the worlds is the first fifth of the bar.
 const CaneSwitch::InstallJob s_install = {
     int(cane::GameId::Sly2),
     "Select a Sly 2: Band of Thieves ISO or CHD (USA, Europe or Japan).",
-    [](const std::string& iso, const std::string& out, const CaneSwitch::InstallProgress& progress) {
-        return CaneConvertDisc(iso, out, [&progress](std::size_t done, std::size_t total, const char* stage, const char* file) {
+    [](const std::string& iso, const std::string& out, const std::vector<std::string>& languages, const CaneSwitch::InstallProgress& progress) {
+        return CaneConvertDisc(iso, out, languages, [&progress](std::size_t done, std::size_t total, const char* stage, const char* file) {
             const std::string s = stage ? stage : "";
             float fraction = total ? float(done) / float(total) : 0.0f;
             if (s == "Reading the worlds") fraction *= 0.2f;
@@ -682,13 +697,18 @@ const CaneSwitch::InstallJob s_install = {
     nullptr, nullptr,
     true,   // (the conversion loaded every world: the game starts in a fresh process)
     true,
-    // The free space: install.h's sizes, except the European discs: their 11 languages of dialog and movie sound are
-    // WAV here, not the PC's FLAC (11,630,639,057 bytes for v1.00, 11,630,639,026 for v2.01, 34,713 files).
-    [](const std::string& bootFile) -> uint64_t {
-        if (bootFile == "SCES_525.29") return 11630639057ull + (256ull << 20);
-        for (const cane::DiscVariant& v : cane::sly2Variants)
-            if (bootFile == v.bootFile) return cane::installNeedBytes(v);
-        return 0;
+    // The free space: the European discs' 2.1 GB and their languages' dialog and movie sound, about 187 MB each (v1.00:
+    // 2,296,449,756 bytes with English, 2,492,397,738 with French too, 4,250,899,778 with all 11); the other discs
+    // about their image's size.
+    [](const std::string& bootFile, std::size_t languages) -> uint64_t {
+        if (bootFile != "SCES_525.29") return 0;
+        return 2100500000ull + uint64_t(languages ? languages : 11) * (200ull << 20) + (256ull << 20);
+    },
+    // The European discs' 11 languages, the console's first
+    [](const std::string& iso, std::size_t* preferred) {
+        std::vector<CaneSwitch::InstallLanguage> alang;
+        for (const CaneLanguage& lang : CaneDiscLanguages(iso, preferred)) alang.push_back({lang.id, lang.name});
+        return alang;
     },
 };
 }

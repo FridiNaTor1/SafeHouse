@@ -221,6 +221,7 @@ bool CDisc::FOpen(const std::string& path, std::string& error)
     if (!FRecognize(szBoot, std::move(elf), path, error)) return false;
     m_apimage.clear();
     m_apimage.push_back(std::move(pimage));
+    m_aszLanguage.clear();
     m_path = path;
     m_fConverted = false;
     return true;
@@ -252,6 +253,9 @@ bool CDisc::FOpenConverted(const std::string& dir, std::string& error)
             return false;
         }
         m_szExe = m.at("executable").get<std::string>();
+        m_aszLanguage.clear();
+        if (m.contains("languages"))
+            for (const auto& lang : m.at("languages")) m_aszLanguage.push_back(lang.get<std::string>());
         m_afile.clear();
         m_mpsectorWorldName.clear();
         // the mods folder's files (relative paths as the manifest spells them, "/" separated)

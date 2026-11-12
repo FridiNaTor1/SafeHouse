@@ -95,6 +95,8 @@ public:
     [[nodiscard]] int CModFiles() const { return m_cmod; }
     // The name of the world file at isector (the manifest's: "Paris", "Front End"); "" when unknown (a disc image).
     [[nodiscard]] std::string SzWorldName(uint32_t isector) const;
+    // Converted files: the languages installed (the manifest's names, in the disc's order); empty on a disc image.
+    [[nodiscard]] const std::vector<std::string>& AszLanguages() const { return m_aszLanguage; }
 
     // The executable's loaded image (segment 0x100000..), for reading data tables at their original addresses.
     // va is always a USA executable address: on another region's disc it is translated to that executable's.
@@ -139,6 +141,7 @@ private:
     mutable std::mutex m_mtxImage;
     bool m_fConverted = false;
     std::string m_szExe;
+    std::vector<std::string> m_aszLanguage;
     std::string m_dirMods;
     int m_cmod = 0;
     std::map<uint32_t, std::string> m_mpsectorWorldName;  // (the world files' names, every copy's sector)

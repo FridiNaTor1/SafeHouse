@@ -1,5 +1,6 @@
 // See installer.h. The screens are ProjectCane's (platform/installer/view.h); this drives them on the Switch:
 //   Browse    the SD card's folders and disc images: D-pad, A opens / installs, B goes up, + quits (touch works too)
+//   Languages a disc's languages (the game's own choice): D-pad, A ticks one, X installs, B back to the list
 //   Extract   the conversion's progress, on its own thread with the CPU boost mode on; B cancels
 //   Complete  keep or delete the disc image: Left / Right, A confirms (B keeps it)
 //   Error     what stopped it: A or B back to the list (or into the game, when it is installed after all)
@@ -116,6 +117,20 @@ public:
             }
             if (pressed & HidNpadButton_B) input = Action::Back;
         }
+        else if (v.screen == Screen::Languages)
+        {
+            const size_t n = v.languages.size(), rows = CaneSetup::LanguageRows(v);
+            if (n)
+            {
+                if (pressed & HidNpadButton_AnyUp) v.language = (v.language + n - 1) % n;
+                if (pressed & HidNpadButton_AnyDown) v.language = (v.language + 1) % n;
+                if (pressed & (HidNpadButton_AnyLeft | HidNpadButton_AnyRight))
+                    v.language = v.language >= rows ? v.language - rows : std::min(v.language + rows, n - 1);
+                if (pressed & HidNpadButton_A) input = Action::Toggle;
+            }
+            if (pressed & HidNpadButton_X) input = Action::Install;
+            if (pressed & HidNpadButton_B) input = Action::Back;
+        }
         else if (v.screen == Screen::Extract)
         {
             if (pressed & HidNpadButton_B) input = Action::Back;
@@ -156,6 +171,25 @@ public:
                     const fs::path path = m_paths[v.selected];
                     if (v.entries[v.selected].folder) { m_folder = path; Refresh(); }
                     else Begin(path);
+                }
+                break;
+            case Screen::Languages:
+                if (action == Action::Toggle && v.language < v.chosen.size())
+                {
+                    v.chosen[v.language] = !v.chosen[v.language];
+                    NoteLanguages();
+                }
+                else if (action == Action::Install)
+                {
+                    std::vector<std::string> ids;
+                    for (size_t i = 0; i < m_languages.size() && i < v.chosen.size(); ++i)
+                        if (v.chosen[i]) ids.push_back(m_languages[i].id);
+                    if (!ids.empty()) Install(ids);
+                }
+                else if (action == Action::Back)
+                {
+                    v.screen = Screen::Browse;
+                    Refresh();
                 }
                 break;
             case Screen::Extract:
@@ -271,21 +305,55 @@ private:
             return;
         }
         // a CHD or a split .iso: written out as one .iso for the conversion, unless the game reads it itself
-        const bool chd = cane::chdFile(iso);
-        const uint64_t temporary = (chd || !cane::imageParts(iso).empty()) && !m_job.readsImage ? size : 0;
-        // (what the game writes for this disc, else about the image's size; and the CHD's .iso while it converts)
-        const uint64_t output = m_job.needBytes ? m_job.needBytes(id.bootFile) : 0;
-        const uint64_t need = (output ? output : size + (512ull << 20)) + temporary, free = FreeBytes("sdmc:/");
+        m_chd = cane::chdFile(iso);
+        m_temporary = (m_chd || !cane::imageParts(iso).empty()) && !m_job.readsImage ? size : 0;
+        m_size = size;
+        m_bootFile = id.bootFile;
+        // a disc of several languages: those to install first
+        size_t preferred = 0;
+        m_languages = m_job.languages ? m_job.languages(iso.string(), &preferred) : std::vector<InstallLanguage>();
+        if (m_languages.size() >= 2)
+        {
+            CaneSetup::View& v = m_view;
+            v.languages.clear();
+            for (const InstallLanguage& language : m_languages) v.languages.push_back(language.name);
+            v.language = std::min(preferred, m_languages.size() - 1);
+            v.chosen.assign(m_languages.size(), false);
+            v.chosen[v.language] = true;
+            m_free = FreeBytes("sdmc:/");
+            NoteLanguages();
+            v.screen = Screen::Languages;
+            return;
+        }
+        Install({});
+    }
+    // The free space the installation needs: what the game writes for this disc and that many languages (else about the
+    // image's size), and the .iso written out while it converts
+    uint64_t NeedBytes(size_t languages) const
+    {
+        const uint64_t output = m_job.needBytes ? m_job.needBytes(m_bootFile, languages) : 0;
+        return (output ? output : m_size + (512ull << 20)) + m_temporary;
+    }
+    void NoteLanguages()
+    {
+        const size_t n = size_t(std::count(m_view.chosen.begin(), m_view.chosen.end(), true));
+        m_view.languageNote = !n ? "Choose at least one language."
+                                 : "About " + SizeText(NeedBytes(n)) + " on the SD card" + (m_free ? ", " + SizeText(m_free) + " free." : ".");
+    }
+    void Install(const std::vector<std::string>& languages)
+    {
+        const uint64_t need = NeedBytes(languages.size()), free = FreeBytes("sdmc:/");
         if (free && free < need)
         {
             ShowError("There is not enough free space on the SD card: the game needs about " + SizeText(need) + " and " +
                       SizeText(free) + " is free.");
             return;
         }
+        const fs::path iso = m_iso;
         const std::string data = GetPaths().data, partial = data + ".partial";
-        const std::string isoPath = iso.string(), decompressed = temporary ? data + ".from-image.iso" : std::string();
-        const std::string writing = chd ? "Decompressing the CHD" : "Joining the parts";
-        Start([this, isoPath, data, partial, decompressed, writing](const InstallProgress& progress) -> std::string {
+        const std::string isoPath = iso.string(), decompressed = m_temporary ? data + ".from-image.iso" : std::string();
+        const std::string writing = m_chd ? "Decompressing the CHD" : "Joining the parts";
+        Start([this, isoPath, data, partial, decompressed, writing, languages](const InstallProgress& progress) -> std::string {
                   std::error_code e;
                   fs::remove_all(partial, e);
                   fs::create_directories(partial, e);
@@ -299,7 +367,7 @@ private:
                       });
                       source = decompressed;
                   }
-                  if (error.empty()) error = m_job.convert(source, partial, progress);
+                  if (error.empty()) error = m_job.convert(source, partial, languages, progress);
                   if (!decompressed.empty()) fs::remove(decompressed, e);
                   if (error.empty())
                   {
@@ -391,6 +459,11 @@ private:
     fs::path m_folder = "sdmc:/";
     std::vector<fs::path> m_paths;
     fs::path m_iso;
+    // the disc image chosen: its boot file, size, kind, the .iso written out for it (0: none), its languages
+    std::string m_bootFile;
+    uint64_t m_size = 0, m_temporary = 0, m_free = 0;
+    bool m_chd = false;
+    std::vector<InstallLanguage> m_languages;
     Work m_work;
     bool m_boosting = false, m_updating = false, m_done = false;
 };

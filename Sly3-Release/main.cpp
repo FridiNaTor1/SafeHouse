@@ -706,7 +706,7 @@ namespace
 const CaneSwitch::InstallJob s_install = {
     int(cane::GameId::Sly3),
     "Select a Sly 3: Honor Among Thieves ISO or CHD (USA).",
-    [](const std::string& iso, const std::string& out, const CaneSwitch::InstallProgress& progress) {
+    [](const std::string& iso, const std::string& out, const std::vector<std::string>&, const CaneSwitch::InstallProgress& progress) {
         return CaneSwitch::InstallDiscImage(cane::GameId::Sly3, iso, out, progress);
     },
     nullptr, nullptr,
