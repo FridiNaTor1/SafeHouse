@@ -90,7 +90,6 @@ void OnAdd(LO* plo)
     if (plo->pcls && plo->pcls->PfnOrig(11) == 0x224028) OnCarryAdd(plo);
     // the blocking polygons (class 0x0E's slot 11 0x1BC160, also 0x62 / 0xAE): queued for the nav's pass 0x1BE1E8
     if (plo->pcls && plo->pcls->PfnOrig(11) == 0x1BC160) MarkNavPolyDirty(plo);
-    if (plo->pcls && plo->pcls->PfnOrig(11) == 0x1C2078) BumpNavLinkSerial();
 }
 
 // vt slot 12 (0x1A5848, ALO 0x1F2D48): out of the world (the ALO's fade reset), and so are its added children
@@ -111,7 +110,6 @@ void OnRemove(LO* plo)
     if (plo->pcls && plo->pcls->PfnOrig(12) == 0x224068) OnCarryRemove(plo);
     // 0x1BC198: the polygon out of its region and the nav's queue (its merge owner's members requeued: not modelled)
     if (plo->pcls && plo->pcls->PfnOrig(12) == 0x1BC198) RemoveNavPoly(plo);
-    if (plo->pcls && plo->pcls->PfnOrig(12) == 0x1C20B0) BumpNavLinkSerial();
     if (plo->pcls && plo->pcls->PfnOrig(12) == 0x2064D8) OnRemoveGuard(plo);  // guard.cpp
     if (plo->pcls && (plo->pcls->PfnOrig(12) == 0x17F110 || plo->pcls->PfnOrig(12) == 0x17F740 ||
                       plo->pcls->PfnOrig(12) == 0x180598))

@@ -68,9 +68,6 @@ void ResetNav();
 void InitSwNav(SW* psw);   // orig: 0x001C10C8 (including the default mesh 0x001C0648)
 NAVREGION* PregionOfMesh(LOXMESH* pmesh);
 int NGenNav();  // the regions' generation (a new world's regions: a new one)
-int NNavLinkSerial();
-void BumpNavLinkSerial();  // orig: 0x1C2078 / 0x1C20B0 (a link enters or leaves the world)
-void SetNavLinkSerial(int n);  // for the differential checks (aiimport.cpp)
 // orig: 0x001C0D70: the region under a point (none: the default region when fDefault or no flagged tree, else null)
 NAVREGION* PregionAt(const glm::vec3& pos, bool fDefault);
 // orig: 0x001BF110: the triangle of the region's 2D BSP under pos (side fl & 1), -1 none
