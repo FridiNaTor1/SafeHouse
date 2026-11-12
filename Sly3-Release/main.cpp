@@ -711,7 +711,7 @@ const CaneSwitch::InstallJob s_install = {
     },
     nullptr, nullptr,
     false,
-    true,   // (a CHD read as it is: the image is copied once)
+    true,   // (a CHD or a split .iso read as it is: the image is copied once)
 };
 bool FInstalled(const std::string& data) { return CaneSwitch::DiscImageInstalled(cane::GameId::Sly3, data); }
 }

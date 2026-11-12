@@ -171,6 +171,7 @@ public:
                     if (action == Action::DeleteIso)
                     {
                         std::error_code ec;
+                        for (const fs::path& part : cane::imageParts(m_iso)) fs::remove(part, ec);
                         fs::remove(m_iso, ec);
                     }
                     return true;
@@ -191,10 +192,23 @@ public:
 
 private:
     static bool IsDirectory(const std::string& p) { std::error_code ec; return fs::is_directory(p, ec); }
+    // A disc image to list: an .iso, a .chd, or an .iso in parts (a folder named *.iso of 00, 01, ..., or the first of
+    // name.iso.000, .001, ...: copies for a FAT32 card, platform/disc_image.h imageParts)
+    static bool IsImage(const fs::path& path, bool folder)
+    {
+        const std::string extension = Lower(path.extension().string());
+        if (!folder && (extension == ".iso" || extension == ".chd")) return true;
+        return Lower((folder ? path : path.stem()).extension().string()) == ".iso" && !cane::imageParts(path).empty();
+    }
 
     void Refresh()
     {
-        std::vector<fs::directory_entry> items;
+        struct Item
+        {
+            fs::path path;
+            bool folder;
+        };
+        std::vector<Item> items;
         std::error_code ec;
         for (fs::directory_iterator it(m_folder, fs::directory_options::skip_permission_denied, ec), end; !ec && it != end; it.increment(ec))
         {
@@ -202,14 +216,13 @@ private:
             const std::string name = e.path().filename().string();
             std::error_code ec2;
             if (name.empty() || name.front() == '.') continue;
-            const std::string extension = Lower(e.path().extension().string());
-            if (e.is_directory(ec2) || (e.is_regular_file(ec2) && (extension == ".iso" || extension == ".chd"))) items.push_back(e);
+            const bool directory = e.is_directory(ec2);
+            if (IsImage(e.path(), directory)) items.push_back({e.path(), false});
+            else if (directory) items.push_back({e.path(), true});
         }
-        std::sort(items.begin(), items.end(), [](const fs::directory_entry& a, const fs::directory_entry& b) {
-            std::error_code e1, e2;
-            const bool da = a.is_directory(e1), db = b.is_directory(e2);
-            if (da != db) return da;
-            return Lower(a.path().filename().string()) < Lower(b.path().filename().string());
+        std::sort(items.begin(), items.end(), [](const Item& a, const Item& b) {
+            if (a.folder != b.folder) return a.folder;
+            return Lower(a.path.filename().string()) < Lower(b.path.filename().string());
         });
         m_paths.clear();
         m_view.entries.clear();
@@ -217,11 +230,10 @@ private:
         m_view.directory = "SD card";
         const fs::path relative = m_folder.lexically_relative(fs::path("sdmc:/"));
         if (!relative.empty() && relative != ".") m_view.directory += " / " + relative.generic_string();
-        for (const fs::directory_entry& e : items)
+        for (const Item& item : items)
         {
-            std::error_code ec2;
-            m_paths.push_back(e.path());
-            m_view.entries.push_back({e.path().filename().string(), e.is_directory(ec2)});
+            m_paths.push_back(item.path);
+            m_view.entries.push_back({item.path.filename().string(), item.folder});
         }
     }
     void Up()
@@ -241,24 +253,29 @@ private:
     void Begin(const fs::path& iso)
     {
         m_iso = iso;
-        std::error_code ec;
-        uint64_t size = fs::file_size(iso, ec);
-        const cane::DiscIdentity id = cane::identifyDiscImage(iso);
+        std::string error;
+        const auto image = cane::DiscImage::open(iso, &error);
+        if (!image) { ShowError(error); return; }
+        const cane::DiscIdentity id = cane::identifyDisc(image->reader());
         const std::string mismatch = cane::discMismatch(id, cane::GameId(m_job.game));
         if (!mismatch.empty()) { ShowError(mismatch); return; }
-        // a CHD: its disc's size, and the .iso written out for the conversion (unless the game reads the CHD itself)
-        const bool chd = cane::chdFile(iso);
-        uint64_t temporary = 0;
-        if (chd)
+        // the whole disc: a copy cut short (FAT32 holds no file of 4 GB or more) stops here, not where its end is read
+        const uint64_t size = image->size(), disc = uint64_t(cane::readIsoVolume(image->reader()).blocks) * cane::kIsoSector;
+        if (size < disc)
         {
-            std::string error;
-            const auto image = cane::DiscImage::open(iso, &error);
-            if (!image) { ShowError(error); return; }
-            size = image->size();
-            if (!m_job.readsChd) temporary = size;
+            const bool fat32 = size >= (4ull << 30) - (64ull << 20) && size < (4ull << 30);
+            ShowError("That disc image is incomplete: it holds " + SizeText(size) + " of the disc's " + SizeText(disc) + ". " +
+                      (fat32 ? "A FAT32 SD card cannot hold a file of 4 GB or more, so the copy was cut short: copy the ISO "
+                               "with DBI or another app that splits it, or use a CHD."
+                             : "The copy did not finish: copy the disc image again."));
+            return;
         }
-        // (the converted files take about the disc's size; the European discs' audio as WAV up to twice that)
-        const uint64_t need = size + temporary + (512ull << 20), free = FreeBytes("sdmc:/");
+        // a CHD or a split .iso: written out as one .iso for the conversion, unless the game reads it itself
+        const bool chd = cane::chdFile(iso);
+        const uint64_t temporary = (chd || !cane::imageParts(iso).empty()) && !m_job.readsImage ? size : 0;
+        // (what the game writes for this disc, else about the image's size; and the CHD's .iso while it converts)
+        const uint64_t output = m_job.needBytes ? m_job.needBytes(id.bootFile) : 0;
+        const uint64_t need = (output ? output : size + (512ull << 20)) + temporary, free = FreeBytes("sdmc:/");
         if (free && free < need)
         {
             ShowError("There is not enough free space on the SD card: the game needs about " + SizeText(need) + " and " +
@@ -266,8 +283,9 @@ private:
             return;
         }
         const std::string data = GetPaths().data, partial = data + ".partial";
-        const std::string isoPath = iso.string(), decompressed = temporary ? data + ".from-chd.iso" : std::string();
-        Start([this, isoPath, data, partial, decompressed](const InstallProgress& progress) -> std::string {
+        const std::string isoPath = iso.string(), decompressed = temporary ? data + ".from-image.iso" : std::string();
+        const std::string writing = chd ? "Decompressing the CHD" : "Joining the parts";
+        Start([this, isoPath, data, partial, decompressed, writing](const InstallProgress& progress) -> std::string {
                   std::error_code e;
                   fs::remove_all(partial, e);
                   fs::create_directories(partial, e);
@@ -276,8 +294,8 @@ private:
                   if (!decompressed.empty())
                   {
                       const std::string name = fs::path(isoPath).filename().string();
-                      error = cane::writeChdAsIso(isoPath, decompressed, [&](uint64_t done, uint64_t total) {
-                          return progress(total ? float(double(done) / double(total)) : 0.0f, "Decompressing the CHD", name);
+                      error = cane::writeImageAsIso(isoPath, decompressed, [&](uint64_t done, uint64_t total) {
+                          return progress(total ? float(double(done) / double(total)) : 0.0f, writing, name);
                       });
                       source = decompressed;
                   }

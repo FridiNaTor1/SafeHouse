@@ -8,8 +8,12 @@
 #include <cstddef>
 #include <cstdint>
 #include <map>
+#include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
+
+#include "disc_image.h"
 
 // A file on the disc: the decoded form of the game's 64-byte keyed record (the CHK/FK records of the original:
 // isector = (w[0x00] ^ w[0x34]) + 0xCA0, cb = w[0x04] ^ w[0x3C], id = w[0x08] ^ w[0x38]).
@@ -49,9 +53,10 @@ FK FkFromRecord(const void* record64);
 class CDisc
 {
 public:
-    // Opens the converted files (a folder with extraction_manifest.json, or that file) or a disc image; finds the
-    // boot executable and recognizes the disc (USA, Europe v1.00 / v2.01, Japan). With converted files, a file of
-    // the mods folder (SetModsDirectory) at the same relative path replaces the installed one.
+    // Opens the converted files (a folder with extraction_manifest.json, or that file) or a disc image (an .iso, a CHD or
+    // a split .iso: platform/disc_image.h); finds the boot executable and recognizes the disc (USA, Europe v1.00 /
+    // v2.01, Japan). With converted files, a file of the mods folder (SetModsDirectory) at the same relative path
+    // replaces the installed one.
     bool FOpen(const std::string& path, std::string& error);
     // The mods folder (before FOpen; empty: none).
     void SetModsDirectory(const std::string& dir) { m_dirMods = dir; }
@@ -116,6 +121,9 @@ public:
 private:
     bool FOpenConverted(const std::string& dir, std::string& error);
     bool FRecognize(const std::string& szBoot, std::vector<uint8_t>&& elf, const std::string& where, std::string& error);
+    // cb bytes at ib of the disc image, with a reader of its own while it reads (the converter's workers decompress a
+    // CHD side by side)
+    bool FReadImage(uint64_t ib, void* pv, std::size_t cb) const;
     struct FILEENT
     {
         std::string path;        // the installed file, or the mods folder's
@@ -127,6 +135,8 @@ private:
     const FILEENT* PentFind(uint32_t isector) const;
 
     std::string m_path;
+    mutable std::vector<std::unique_ptr<cane::DiscImage>> m_apimage;  // the image's readers not in use
+    mutable std::mutex m_mtxImage;
     bool m_fConverted = false;
     std::string m_szExe;
     std::string m_dirMods;

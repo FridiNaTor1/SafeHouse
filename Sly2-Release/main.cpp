@@ -653,6 +653,7 @@ int main(int argc, char** argv)
 #undef main
 #include "convert.h"
 #include "../platform/games.h"
+#include "../platform/install.h"
 #include "../platform/switch/installer.h"
 #include <sys/stat.h>
 namespace
@@ -663,7 +664,8 @@ bool FInstalled(const std::string& data)
     return stat((data + "/extraction_manifest.json").c_str(), &st) == 0 && S_ISREG(st.st_mode);
 }
 // The installer's job (platform/switch/installer.h): the disc converted as --convert does (convert.cpp), WAV audio
-// (no FLAC encoding on the console's CPU) and no texture dump. Reading the worlds is the first fifth of the bar.
+// (no FLAC encoding on the console's CPU) and no texture dump, from the image as it is (a CHD or a split .iso too: the
+// European disc's 4.6 GB fit no FAT32 file). Reading the worlds is the first fifth of the bar.
 const CaneSwitch::InstallJob s_install = {
     int(cane::GameId::Sly2),
     "Select a Sly 2: Band of Thieves ISO or CHD (USA, Europe or Japan).",
@@ -679,6 +681,15 @@ const CaneSwitch::InstallJob s_install = {
     },
     nullptr, nullptr,
     true,   // (the conversion loaded every world: the game starts in a fresh process)
+    true,
+    // The free space: install.h's sizes, except the European discs: their 11 languages of dialog and movie sound are
+    // WAV here, not the PC's FLAC (11,630,639,057 bytes for v1.00, 11,630,639,026 for v2.01, 34,713 files).
+    [](const std::string& bootFile) -> uint64_t {
+        if (bootFile == "SCES_525.29") return 11630639057ull + (256ull << 20);
+        for (const cane::DiscVariant& v : cane::sly2Variants)
+            if (bootFile == v.bootFile) return cane::installNeedBytes(v);
+        return 0;
+    },
 };
 }
 // Sly 2 in SafeHouse.nro (platform/switch/runtime.h): the launcher starts it with CaneSwitch::RunGame (the first-boot

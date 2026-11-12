@@ -1028,6 +1028,7 @@ bool fQuitGame;
 
 #ifdef __SWITCH__
 #include "../platform/games.h"
+#include "../platform/install.h"
 #include "../platform/installer/iso_extractor.h"
 #include "../platform/switch/installer.h"
 #include <functional>
@@ -1060,6 +1061,12 @@ const CaneSwitch::InstallJob s_install = {
         return Outcome([&] { CaneExtract::RebuildGame(data, Forward(progress)); });
     },
     false,
+    false,
+    // (the PC extractor's figures: install.h sly1NeedBytes)
+    [](const std::string& bootFile) -> uint64_t {
+        const cane::Sly1Disc* disc = cane::sly1DiscFromBootFile(bootFile);
+        return disc ? cane::sly1NeedBytes(*disc) : 0;
+    },
 };
 bool FInstalled(const std::string& data) { return CaneExtract::IsReady(data); }
 const CaneSwitch::Graphics s_graphics = {CaneDeko::Initialize, CaneDeko::Shutdown, CaneDeko::ResizeOutput, CaneDeko::Present,

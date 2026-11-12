@@ -1,8 +1,10 @@
 #pragma once
 // The first-boot installer (installer.cpp): every game's, with ProjectCane's screens (platform/installer/view.h) over
-// the Switch UI host (switch_ui.h). It lists the SD card's folders and disc images (.iso, .chd: platform/disc_image.h),
+// the Switch UI host (switch_ui.h). It lists the SD card's folders and disc images (.iso, .chd, a split .iso:
+// platform/disc_image.h),
 // checks the image chosen is the game's (platform/games.h), runs the game's own conversion on a worker thread into
 // <data>.partial and renames that to the game's data folder at the end, so an interrupted install never looks installed.
+#include <cstdint>
 #include <functional>
 #include <string>
 
@@ -21,7 +23,10 @@ struct InstallJob
     std::function<bool(const std::string& directory)> needsUpdate;
     std::function<std::string(const std::string& directory, const InstallProgress& progress)> update;
     bool restart = true;            // start the program again after installing (a clean process for the game)
-    bool readsChd = false;          // convert reads a CHD itself (else the installer writes it out as an .iso first)
+    bool readsImage = false;        // convert reads a CHD or a split .iso itself (else the installer writes out an .iso first)
+    // (optional) the free space the installation needs for the disc with this boot file ("SCES_525.29"); 0 or none: the
+    // image's size and 512 MB
+    std::function<uint64_t(const std::string& bootFile)> needBytes;
 };
 
 // The installer, for the game whose data folder is GetPaths().data. True: the game starts in this process; false: the
