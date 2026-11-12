@@ -947,6 +947,11 @@ struct INITKINDMETHODS
                     std::printf("setter 260 %d: target %d (t %.3f)\n", p->oid, pg->ploTarget ? pg->ploTarget->oid : -1, g_clock.t);
         });
         // (EOPID 260, the guard's +0x38C object: launcher.cpp registers it; a second copy here won on Windows only)
+        // EOPID 254 (grf 0x92, field +0x338): authored health, also read by 0x207530's instant-knockout check.
+        // Contessa's chase spider (proxy 65471) sets this to 120 through splice after its template loaded 10.
+        RegisterObjectSetter(254, [](LO* p, const CRef& r) {
+            if (GUARD* pg = PguardFromLo(p)) pg->n338 = r.RefCoerceS32().m_n;
+        });
         // EOPID 255 (grf 0x92, field +0x33C, e.g. the guards' option 381): the hit points left. Ep7's boss module 165
         // (task 3274) counts Bison's trap hits by it (s2128: a hit by someone other than Bentley that lowered it), so
         // without it the fight never reached 3282..3285
@@ -958,6 +963,15 @@ struct INITKINDMETHODS
             const GUARD* pg = PguardFromLo(p);
             r.SetS32(pg ? pg->n33C : 0);
             return r;
+        });
+        // Original field descriptors 256 / 257 share +0x340 (block capacity); 258 writes +0x344 (remaining block).
+        // The chase spider sets options 383 / 384 to 120. 0x176BE8 plays +0x348's clip while its block holds.
+        for (int eopid : {256, 257})
+            RegisterObjectSetter(eopid, [](LO* p, const CRef& r) {
+                if (GUARD* pg = PguardFromLo(p)) pg->n340 = r.RefCoerceS32().m_n;
+            });
+        RegisterObjectSetter(258, [](LO* p, const CRef& r) {
+            if (GUARD* pg = PguardFromLo(p)) pg->n344 = r.RefCoerceS32().m_n;
         });
         // orig: 0x00103AB8 (EOPID 279, e.g. the guards' option 405): is state n in the guard's mask (0x209A68), a bool
         RegisterObjectMethod(0x103AB8, [](LO* p, const std::vector<CRef>& a) {
