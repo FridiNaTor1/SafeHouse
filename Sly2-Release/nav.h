@@ -132,5 +132,6 @@ void UpdateNavPolys();
 void MarkNavPolyDirty(LO* plo);   // orig 0x1BC160 (AddLo) / a move
 void RemoveNavPoly(LO* plo);      // orig 0x1BC198
 NAVPOLY* PpolyOfLo(LO* plo);
+bool FNavPolyMerged(const NAVPOLY* ppoly);  // original polygon +0x1D8 != 0
 // For the differential checks (aiimport.cpp): a region's polygon slots replaced (null: a free slot)
 void SetRegionPolys(NAVREGION* preg, std::vector<std::shared_ptr<NAVPOLY>> apoly);

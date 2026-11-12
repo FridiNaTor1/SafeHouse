@@ -824,6 +824,11 @@ bool JOBFOLLOW::FStuck() const
 // orig: 0x00177F78
 void JOBFOLLOW::Steer177F78()
 {
+    // Original +0x54 is the polygon object, whose curve is resolved at use time.
+    // A pooled merged polygon can rebuild its curve without changing that object.
+    if (ppolyOther)
+        pcrvOther = ppolyOther->pcrvOwn ? ppolyOther->pcrv :
+            (ppolyOther->plo ? PcrvFromLo(ppolyOther->plo) : ppolyOther->pcrv);
     ALO* palo = PaloFollow(this);
     const glm::vec3 posSelf = PosFollow(this);
     // the actor's region entry's region (ALO +0xE8 -> +0xDC -> +0x10, kept by the ALO's update 0x1F36E0)
@@ -843,7 +848,7 @@ void JOBFOLLOW::Steer177F78()
                          palo->oid, s0, t, s, pcrv == PcrvFollowOwn(this) ? "own" : "world", pcrv->fClosed, pcrv->apos.size(),
                          SLengthCrv(pcrv), posSelf.x, posSelf.y, posSelf.z, posPath.x, posPath.y);
     }
-    if (st == 1 || st == 4)
+    if ((st == 1 || st == 4) && pcrvOther)
     {
         fRev = nWay != 2;
         const float g = fRev ? sOther - S_JOB_AHEAD : sOther + S_JOB_AHEAD;
@@ -1003,15 +1008,6 @@ void JOBFOLLOW::Steer177F78()
 void JOBFOLLOW::Update1789F8()
 {
     AIJOB::Update();
-    // A removed or merged polygon can lose its cached curve before the next AI update.
-    if ((st == 1 || st == 4) &&
-        (!pcrvOther || (ppolyOther && (!ppolyOther->pregion || ppolyOther->pcrv != pcrvOther ||
-                                      (ppolyOther->plo && !ppolyOther->plo->fInWorld)))))
-    {
-        pcrvOther = nullptr;
-        ppolyOther = nullptr;
-        SetState(0);
-    }
     Steer177F78();
     const glm::vec3 posSelf = PosFollow(this);
     int s0;
@@ -1063,7 +1059,9 @@ void JOBFOLLOW::Update1789F8()
         }
         case 1: case 4:
         {
-            if (!pcrvOther) SetState(0);
+            // 0x1789F8: bit 60 clear or +0x1D8 merge owner set; checked after steering.
+            if (!pcrvOther || (ppolyOther &&
+                ((ppolyOther->plo && !ppolyOther->plo->fInWorld) || FNavPolyMerged(ppolyOther)))) SetState(0);
             else if (std::fabs(DsCrv(pcrvOther, sOther, g60)) < 80.0f) SetState(0);
             else
             {
@@ -2458,7 +2456,7 @@ void JOBGOTO::Search()
         {
             const glm::vec3 pos = PosAi(pguard->palo);
             const glm::vec3 a = PosGoal(g, pos);
-            const glm::vec3 b = PosGoal(pl->agoal.empty() ? g : pl->agoal.back(), pos);
+            const glm::vec3 b = PosGoal(pl->agoal.size() < 2 ? g : pl->agoal[1], pos);
             const glm::vec3 d = b - a;
             const float dd = glm::dot(d, d);
             const float t = dd > 1e-6f ? glm::dot(pos - a, d) / dd : -1.0f;  // 0x11EE08

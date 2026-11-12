@@ -1302,6 +1302,13 @@ NAVPOLY* PpolyOfLo(LO* plo)
     return it == s_nav.mppoly.end() ? nullptr : it->second.get();
 }
 
+bool FNavPolyMerged(const NAVPOLY* ppoly)
+{
+    EnsureWorld();
+    const auto it = s_nav.mpowner.find(ppoly->plo);
+    return it != s_nav.mpowner.end() && it->second != nullptr;
+}
+
 void MarkNavPolyDirty(LO* plo)
 {
     EnsureWorld();
