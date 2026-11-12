@@ -13,6 +13,8 @@ extern "C" void* cane_glfw_metal_layer(GLFWwindow* window);
 #endif
 
 #include <algorithm>
+#include <chrono>
+#include <cstdlib>
 #include <cstdio>
 #include <cstring>
 #include <mutex>
@@ -60,6 +62,8 @@ bool Context::Initialize(GLFWwindow* window, std::string* error) {
   layer_.pixelFormat = MTLPixelFormatBGRA8Unorm;
   layer_.framebufferOnly = NO;
   layer_.maximumDrawableCount = 3;
+  // (UIScreen.maximumFramesPerSecond: SDL's display mode; 120 on ProMotion, 60 elsewhere)
+  if (const GLFWvidmode* mode = glfwGetVideoMode(glfwGetPrimaryMonitor())) display_max_hz_ = mode->refreshRate;
 #else
   NSWindow* ns_window = glfwGetCocoaWindow(window);
   if (!ns_window) {
@@ -209,20 +213,66 @@ void Context::Finish() { Submit(true); }
 void Context::SetSwapInterval(int interval) {
   swap_interval_ = interval;
 #if TARGET_OS_IPHONE
-  // (iOS always presents in step with the display; three drawables keep the GPU fed)
+  // iOS always presents in step with the display (no displaySyncEnabled); three drawables keep the GPU fed. Interval 0
+  // and 1 present at the next vblank (the game's timer caps the rate below the display's). An interval of N (Sly 2's
+  // cap at half the refresh rate: 60 FPS on a 120 Hz ProMotion screen) keeps each frame up at least N vblanks
+  // (SwapBuffers: presentDrawable:afterMinimumDuration:), as glXSwapInterval(2) does on the desktop.
   layer_.maximumDrawableCount = 3;
+  if (interval != logged_interval_) {
+    logged_interval_ = interval;
+    const int hz = display_max_hz_ > 0 ? display_max_hz_ : 60;
+    if (interval <= 0)
+      std::fprintf(stderr, "Metal: display max %d Hz, frame pacing: VSync off (the frame-rate cap's timer; each frame at the next vblank)\n", hz);
+    else if (interval == 1)
+      std::fprintf(stderr, "Metal: display max %d Hz, frame pacing: every vblank (up to %d FPS)\n", hz, hz);
+    else
+      std::fprintf(stderr, "Metal: display max %d Hz, frame pacing: every %d vblanks (each frame up at least %.1f ms: up to %d FPS)\n",
+                   hz, interval, MinimumPresentSeconds() * 1000.0, hz / interval);
+  }
 #else
   layer_.displaySyncEnabled = interval != 0;
   layer_.maximumDrawableCount = interval != 0 ? 2 : 3;
 #endif
 }
 
+// (iOS: an interval of N vblanks: 90 % of it, so a frame is never held one vblank too long by rounding: 15 ms for 2 vblanks
+// at 120 Hz still ends on the second one; on a screen held at 60 Hz (Low Power Mode) it ends on the first)
+double Context::MinimumPresentSeconds() const {
+  const int hz = display_max_hz_ > 0 ? display_max_hz_ : 60;
+  return 0.9 * double(std::max(swap_interval_, 1)) / double(hz);
+}
+
 void Context::SwapBuffers() {
   FlushPendingClear();
   EndEncoders();
   if (drawable_) {
-    [CommandBuffer() presentDrawable:drawable_];
+#if TARGET_OS_IPHONE
+    if (swap_interval_ >= 2)
+      [CommandBuffer() presentDrawable:drawable_ afterMinimumDuration:MinimumPresentSeconds()];
+    else
+#endif
+      [CommandBuffer() presentDrawable:drawable_];
     drawable_ = nil;
+#if TARGET_OS_IPHONE
+    // (the presented rate in the log, for testers without a frame counter: every 10 s while it moves by 3 FPS or
+    // more, else once a minute)
+    static auto window_start = std::chrono::steady_clock::now(), last_log = window_start;
+    static int presents = 0, logged_fps = -100;
+    ++presents;
+    const auto now = std::chrono::steady_clock::now();
+    const double seconds = std::chrono::duration<double>(now - window_start).count();
+    if (seconds >= 10.0) {
+      const int fps = int(presents / seconds + 0.5);
+      if (std::abs(fps - logged_fps) >= 3 || now - last_log >= std::chrono::seconds(60)) {
+        std::fprintf(stderr, "Metal: %d FPS presented (display max %d Hz, swap interval %d)\n", fps,
+                     display_max_hz_ > 0 ? display_max_hz_ : 60, swap_interval_);
+        logged_fps = fps;
+        last_log = now;
+      }
+      window_start = now;
+      presents = 0;
+    }
+#endif
   }
   Submit(false);
 }

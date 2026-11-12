@@ -355,6 +355,17 @@ void initialize(int argc, char** argv) {
         UIDevice* device = UIDevice.currentDevice;
         log(std::string("SafeHouse iOS: ") + device.model.UTF8String + ", " + device.systemName.UTF8String + " " +
             device.systemVersion.UTF8String + "; documents " + documentsPath);
+        // (ProMotion: 120 Hz needs CADisableMinimumFrameDurationOnPhone on an iPhone, scripts/ios/package.py; Low Power
+        // Mode holds the screen at 60 Hz. The game logs its own pacing: "Metal: display max N Hz, frame pacing: ...")
+        const bool phone = device.userInterfaceIdiom == UIUserInterfaceIdiomPhone;
+        const bool uncapped = [[NSBundle.mainBundle objectForInfoDictionaryKey:@"CADisableMinimumFrameDurationOnPhone"] boolValue];
+        char text[256];
+        std::snprintf(text, sizeof(text), "display: max %ld Hz, frame pacing %s%s", long(UIScreen.mainScreen.maximumFramesPerSecond),
+                      !phone ? "up to the display's maximum (iPad)"
+                             : uncapped ? "up to the display's maximum (CADisableMinimumFrameDurationOnPhone)"
+                                        : "capped at 60 Hz (no CADisableMinimumFrameDurationOnPhone)",
+                      NSProcessInfo.processInfo.lowPowerModeEnabled ? "; Low Power Mode on (iOS holds the screen at 60 Hz)" : "");
+        log(text);
     }
 }
 bool smokeTest() { return smoke; }

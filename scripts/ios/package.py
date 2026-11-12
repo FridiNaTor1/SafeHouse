@@ -96,6 +96,9 @@ def app_plist(bundle_id, version, build, sdk):
                 ]
             },
         },
+        # ProMotion (120 Hz) iPhones: without this key iOS caps every app's Core Animation frames (the game's
+        # CAMetalLayer, the launcher's GL view, SDL's display link) at 60 Hz. iPads allow 120 Hz without it.
+        "CADisableMinimumFrameDurationOnPhone": True,
         "UIStatusBarHidden": True,
         "UIViewControllerBasedStatusBarAppearance": False,
         "UIApplicationSupportsIndirectInputEvents": True,

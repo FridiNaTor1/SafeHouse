@@ -78,6 +78,7 @@ class Context {
 
   // Presentation.
   void SetSwapInterval(int interval);
+  double MinimumPresentSeconds() const;  // (iOS) how long a frame stays up at the swap interval
   void SwapBuffers();
   void Flush();
   void Finish();
@@ -356,6 +357,8 @@ class Context {
   GlState state_;
   GLenum error_ = gl::kNoError;
   int swap_interval_ = 1;
+  int display_max_hz_ = 0;  // (iOS) UIScreen.maximumFramesPerSecond, through the GLFW shim's video mode
+  int logged_interval_ = -1;
   int max_samples_ = 4;
   int drawable_width_ = 0;
   int drawable_height_ = 0;
