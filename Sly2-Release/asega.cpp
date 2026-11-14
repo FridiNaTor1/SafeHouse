@@ -6,6 +6,7 @@
 // evaluates the spline itself every frame (xf.cpp, mode 5 / 7).
 
 #include "asega.h"
+#include "ai.h"
 #include "task.h"
 
 #include "anim.h"
@@ -108,9 +109,13 @@ void NotifyAsega(ASEGA* pasega, int msgk)
 // orig 0x00131990
 void SetAsegaEventSound(ASEGA* pasega, int f)
 {
+    if (g_fAsegaEventsMuted) return;
     if (FAsegaRetracted(pasega)) return;
     if (f == pasega->fSound) return;
-    // TODO(media): 0x20EFC0 / 0x20F030 (G, 3): the game's count of sounding animations
+    // The authored cinematic flag owns a game pause, including the player's input lock.
+    // Shared counts keep overlapping animations / scripts locked until the last owner ends.
+    if (f) PauseGame(3);     // 0x20EFC0
+    else ResumeGame(3);     // 0x20F030
     pasega->fSound = f;
 }
 
