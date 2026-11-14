@@ -286,6 +286,15 @@ GLFWwindow* PwindowVulkan(int width, int height, bool fVisible, const char* titl
 #endif
 }
 
+bool FVulkanAvoidVertexPulling()
+{
+#if CANE_VULKAN
+    return s_fVulkan && CaneVk::AvoidVertexPulling();
+#else
+    return false;
+#endif
+}
+
 bool FVulkanTileGpu()
 {
 #if CANE_VULKAN

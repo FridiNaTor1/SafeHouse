@@ -137,6 +137,8 @@ void WorkerCpuMs(double* pmsAll, double* pmsRecord);
 // overrides it): the layer's tilers' paths are on (in-place reads, D24S8, MSAA resolved on the tile); the game picks its own
 // (vertex pulling, VR's passes without the near-clip stage) by it.
 bool TileGpu();
+// A tested driver workaround; does not disable the other tile-GPU optimizations.
+bool AvoidVertexPulling();
 // (VR's log) SetFrameTiming(true): from then on a GPU timestamp at each frame's start and end. FrameTimes: the totals so far:
 // the GPU's ms from frames' first command to their last and the frames counted, and the ms this thread waited for the GPU
 // (a frame slot, a full ring).

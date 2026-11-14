@@ -410,7 +410,8 @@ bool GL::FInit(int w, int h, bool fVisible, const char* title, std::string& erro
         // indexed draws in place of multi-draw-indirect: Adreno's tile binning cannot skip the sub-draws of an indirect
         // draw per tile. SLY2N_VKPULL=0: multi-draw-indirect.)
         // (Quest 3S, Paris Immersive: 21 -> 36 fps, the eye passes binned in place of the driver's direct mode)
-        g_fDrawUniform = !(std::getenv("SLY2N_VKPULL") && std::atoi(std::getenv("SLY2N_VKPULL")) == 0);
+        const char* szPull = std::getenv("SLY2N_VKPULL");
+        g_fDrawUniform = szPull && *szPull ? std::atoi(szPull) != 0 : !FVulkanAvoidVertexPulling();
     }
 #else
     // (Vulkan on a tile GPU elsewhere (the Steam Frame's Turnip, Windows on ARM's Adreno): the pulled runs as on Android;
@@ -418,7 +419,7 @@ bool GL::FInit(int w, int h, bool fVisible, const char* title, std::string& erro
     if (FRendererVulkan())
     {
         const char* szPull = std::getenv("SLY2N_VKPULL");
-        g_fDrawUniform = szPull && *szPull ? std::atoi(szPull) == 1 : FVulkanTileGpu();
+        g_fDrawUniform = szPull && *szPull ? std::atoi(szPull) == 1 : FVulkanTileGpu() && !FVulkanAvoidVertexPulling();
     }
 #endif
     const char* szRenderer = reinterpret_cast<const char*>(glGetString(GL_RENDERER));

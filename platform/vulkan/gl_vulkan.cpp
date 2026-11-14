@@ -117,6 +117,7 @@ struct Features
     bool dualSrcBlend = false;
     bool depthBounds = false;      // (GL_EXT_depth_bounds_test: glEnable(GL_DEPTH_BOUNDS_TEST_EXT), glDepthBoundsEXT)
     bool msrtss = false;   // (VK_EXT_multisampled_render_to_single_sampled, tile GPUs: MSAA resolved on the tile)
+    bool avoidVertexPulling = false; // Mali-G615 r44p1: pulled draws with the near-clip stage fault the GPU
     bool tiler = false;    // a tile-based GPU (TileGpuOf): the tilers' paths (in-place reads, D24S8, MSAA on the tile, ...)
     bool fdm = false;      // (VK_EXT_fragment_density_map with non-subsampled images: VR's fixed foveation)
     VkExtent2D fdmTexel{32, 32};   // (GL_SRC1_* factors: Sly 2's glob CANE_BLEND1 on Android)
@@ -6663,6 +6664,14 @@ bool Initialize(GLFWwindow* window, const Options& options, std::string* error)
     VkPhysicalDeviceDriverProperties driver{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES};
     VkPhysicalDeviceProperties2 p2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, &driver};
     vkGetPhysicalDeviceProperties2(g_phys, &p2);
+    // Keep the attribute-based draw path on this tested driver. With the near-clip geometry stage,
+    // pulled draws fault the GPU even after the geometry compiler issue is avoided. Other tiler
+    // optimizations stay enabled; SLY2N_VKPULL still permits explicit retesting on driver updates.
+    g_feat.avoidVertexPulling = g_props.vendorID == 0x13B5 &&
+        std::strcmp(g_props.deviceName, "Mali-G615 MC6") == 0 &&
+        driver.driverID == VK_DRIVER_ID_ARM_PROPRIETARY && std::strstr(driver.driverInfo, "r44p1-") != nullptr;
+    if (g_feat.avoidVertexPulling)
+        std::printf("Vulkan: Mali-G615 r44p1: using vertex attributes for near-clip compatibility\n");
     g_deviceName = g_props.deviceName;
     char sz[512];
     std::snprintf(sz, sizeof sz, "%s (Vulkan %u.%u, %s %s)", g_props.deviceName, VK_API_VERSION_MAJOR(g_props.apiVersion),
@@ -7213,6 +7222,7 @@ void WorkerCpuMs(double* pmsAll, double* pmsRecord)
     *pmsRecord = double(g_workerRecordCpuNs.load()) / 1e6;
 }
 bool TileGpu() { return g_feat.tiler; }
+bool AvoidVertexPulling() { return g_feat.avoidVertexPulling; }
 void SetFrameTiming(bool on)
 {
     if (!g_device || !on || g_framePool || !g_props.limits.timestampComputeAndGraphics || !g_vkResetQueryPool) return;

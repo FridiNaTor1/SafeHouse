@@ -40,5 +40,7 @@ bool FVulkanWorkerCpuMs(double* pmsAll, double* pmsRecord);
 // True while the game renders on Vulkan on a tile-based GPU (CaneVk::TileGpu: Adreno / Mali / PowerVR / Apple; every
 // Android device): the tilers' paths (vertex pulling, the in-place shadow reads, VR's passes without the near-clip stage)
 bool FVulkanTileGpu();
+// Driver-specific fallback to attribute-based draws; SLY2N_VKPULL can override it.
+bool FVulkanAvoidVertexPulling();
 // (gl.cpp GLSHADER) a program compiled at build time for Vulkan; 0 when that variant does not exist.
 unsigned IdVulkanProgram(const char* vertexFile, const char* geometryFile, const char* fragmentFile, const char* prefix);
