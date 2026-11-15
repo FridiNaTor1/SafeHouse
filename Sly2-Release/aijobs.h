@@ -251,8 +251,8 @@ struct JOBFOLLOW : AIJOB
     float sStart = -1.0f;         // +0x48
     int st = -1;                  // +0x4C
     float tSt = 0;                // +0x50
-    const CRV* pcrvOther = nullptr;  // +0x54
-    const NAVPOLY* ppolyOther = nullptr;
+    const CRV* pcrvOther = nullptr;  // resolved curve of the +0x54 polygon
+    const NAVPOLY* ppolyOther = nullptr;  // original +0x54 object identity
     int nWay = 0;                 // +0x58 the search's answer (0x1BD718)
     float sOther = 0;             // +0x5C
     float g60 = 0;                // +0x60
