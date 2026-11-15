@@ -10,6 +10,7 @@
 struct LO;
 
 bool FPickupLive(LO* plo);                        // a pickup with its runtime (launched)
+bool FPickupDrawn(const LO* plo);                 // orig 0x1C5FA0: state 2 never submits its ordinary model
 void SetPickupState(LO* plo, int n);              // vt slot 76
 void SetPickupLootKind(LO* plo, int id);          // orig 0x001C7A58 (loot variant)
 // orig: 0x001C6BD0 (placed at pos with the velocity: added, detached, state 3; dtSm the SM's delay +0x160, dtCollect
