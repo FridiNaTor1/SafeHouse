@@ -14,6 +14,7 @@ struct POCKETENT
     int n4 = 0;      // +0x4
     int n8 = -1;     // +0x8 (0x1C2DC8's)
     int c = 1;       // +0xC the count
+    LO* plo = nullptr;
 };
 struct POCKET
 {
@@ -31,7 +32,7 @@ void ResetPockets();                 // a new world
 LO* PloPocket(LO* plo);              // +0x494 (the guard's option 306)
 struct SMA;
 SMA** PpsmaPocket(LO* ppocket);         // orig 0x001C2D20 (the pocket object's SM +0x16C, made at the first use)
-void AddPocketPrize(LO* plo, int oid);   // orig 0x001F17B0
+void AddPocketPrize(LO* plo, int oid, LO* ploPrize = nullptr);   // orig 0x001F17B0
 void AddPocketCoins(LO* plo, int c);     // orig 0x001F1768
 void SetPocketMode(LO* plo, int n);      // orig 0x001F17F8
 void UpdatePocketMode(LO* plo);          // orig 0x001F1900
