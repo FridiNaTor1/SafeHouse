@@ -102,6 +102,15 @@ void SetStepPos(STEP* p, const glm::vec3& pos)
     const XF* pxf = PxfObj(p->palo);
     const glm::mat4 m = pxf ? pxf->matWorld : MatWorldOfAlo(p->palo);
     p->posFloor = m * glm::vec4(glm::vec3(p->vecBase), 1.0f);  // (0x1A6F00(p, 0, +0x240))
+    // Explicit placement invalidates movement progress measured at the old position.
+    // Keep the destination, but give the actor a fresh interval to reach it. This
+    // also covers repeated placements followed by movement to the same destination.
+    if (ACTOR* pa = dynamic_cast<ACTOR*>(p))
+    {
+        pa->watch.s = glm::length(glm::vec3(m[3]) - pa->watch.pos);
+        pa->watch.t = g_clock.t + 1.0f;
+        pa->watch.fActive = 0;
+    }
 }
 
 // orig: 0x002041F8
