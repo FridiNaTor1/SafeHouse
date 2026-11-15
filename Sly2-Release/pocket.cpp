@@ -565,6 +565,11 @@ void LoadPickpocket(SLY* p, ASEG* paseg)
 // does not (+0x1BD4 = 0; the controllers relax over 0.25 s): the take at the event 0x167 then gets nothing (R12).
 void UpdatePickpocketPose(SLY* p)
 {
+    // Handles are stored in mask-bit order: bit 0x20 is +0x19FC (the
+    // cane's translation), bit 0x40 is +0x19F8 (the hand's rotation).
+    CTRLSOURCE* pctrlYaw = p->slide.aphandle[6];
+    CTRLSOURCE* pctrlResidual = p->slide.aphandle[2];
+    CTRLSOURCE* pctrlX = p->slide.aphandle[5];
     ASEGA* pasega = p->pasega;
     const float t = pasega ? pasega->t : 0.0f;
     const float svt = pasega ? pasega->svt : 1.0f;
@@ -601,12 +606,21 @@ void UpdatePickpocketPose(SLY* p)
         }
         if (d < 120.0f)  // D_002BF3B8
         {
-            WarnOnce("0x18B460's arm joint controllers (0x12DA30)");
+            if (pctrlYaw) SetCtrlSourceOffset(pctrlYaw, glm::vec4(0.0f, radYaw, 0.0f, 0.0f));
+            if (pctrlResidual) SetCtrlSourceOffset(pctrlResidual, glm::vec4(vecResidual, 0.0f));
+            if (pctrlX) SetCtrlSourceOffset(pctrlX, glm::vec4(dx, 0.0f, 0.0f, 0.0f));
             p->f1BD4 = 1;
             p->t1BDC = g_clock.t;
             return;
         }
     }
+    // 0x18B460: linearly relax the last correction over 0.25 seconds after
+    // the take or losing reach, using the time remaining before this step.
+    const float remaining = p->t1BDC + 0.25f - g_clock.t;
+    const float after = remaining - g_clock.dt;
+    const float gain = after > 0.0f ? after / remaining : 0.0f;
+    for (CTRLSOURCE* pc : {pctrlYaw, pctrlResidual, pctrlX})
+        if (pc) SetCtrlSourceOffset(pc, pc->ofs * gain);
     p->f1BD4 = 0;
 }
 
