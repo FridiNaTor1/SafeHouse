@@ -216,7 +216,7 @@ void GetInteractCpdefi(ACTOR& a, const ACTORPOSE& pose, CPDEFI* pc)
             if (h == 1)
             {
                 g = i.s20 + d;
-                if (pt->U32Field(0, 0xE4, 0) == 0)
+                if (pcrv && !pcrv->fClosed)
                 {
                     float e = sLast(pcrv);
                     if (pt->U32Field(0, 0x1BC, 0) & 2) e += 100.0f;
@@ -226,7 +226,7 @@ void GetInteractCpdefi(ACTOR& a, const ACTORPOSE& pose, CPDEFI* pc)
             else
             {
                 g = i.s20 - d;
-                if (pt->U32Field(0, 0xE4, 0) == 0)
+                if (pcrv && !pcrv->fClosed)
                 {
                     float e = sFirst(pcrv);
                     if (pt->U32Field(0, 0x1BC, 0) & 1) e -= 100.0f;
@@ -249,7 +249,7 @@ void GetInteractCpdefi(ACTOR& a, const ACTORPOSE& pose, CPDEFI* pc)
         i.posFocus = pose.pos;
         i.posFocus.z = i.posFocus.z + 50.0f;
     }
-    if (fLedge && pt->U32Field(0, 0xE4, 0) == 0)
+    if (pcrv && !pcrv->fClosed)
     {
         // near an open ledge's ends (30 in, a ramp of at most 300) the entry's x offset goes to -/+150 (squared)
         const float c = 30.0f;
