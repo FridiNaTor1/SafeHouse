@@ -41,6 +41,7 @@
 #include "damage.h"
 #include "actor.h"
 #include "screenrt.h"
+#include "scenesw.h"
 #include "ainoise.h"
 #include "objmethod.h"
 int NActorPower(ACTOR* pa);           // gadget.cpp (0x1441A0)
@@ -434,6 +435,7 @@ void SetPickupStateBase(LO* plo, PICKUP& p, int n)
                     p.pos.y, p.pos.z, p.psma ? 1 : 0, (void*)plo, plo->iupd, int(plo->fNodeActive), plo->st, int(plo->fQueued), plo->sRadius, plo->bMask, g_actview.grfCm);
     p.state = n;
     p.t = g_clock.t;
+    InvalidateSceneDrawnTests();  // 0x1C5FA0's state gate also applies after placement cached a draw test
 }
 
 // orig: 0x001C65F8 (the coin: 0 rest time; 1 collected: HUD flight, sound 0x29, the +0x210 receiver,
@@ -726,7 +728,7 @@ void TestPickupCollect(LO* plo, PICKUP& p)
 // at +0x1B0 (the camera looking against the direction) or +0x1B8, for 1.5 / max(1, |the turn's speed z|) s)
 void UpdatePickupGlint(LO* plo, PICKUP& p)
 {
-    if (!p.ploGlint || p.g1A0 <= 0.0f) return;
+    if (p.state == 2 || !p.ploGlint || p.g1A0 <= 0.0f) return;
     ALO* palo = static_cast<ALO*>(plo);
     const XF* pxfObj = PxfObj(palo);
     const glm::vec3 dir = pxfObj ? glm::mat3(pxfObj->matWorld) * glm::vec3(1.0f, 1.0f, 0.0f) : glm::vec3(1.0f, 1.0f, 0.0f);
@@ -939,6 +941,15 @@ void UpdatePickupMotion(LO* plo)
 }  // namespace
 
 bool FPickupLive(LO* plo) { return Ppickup(plo) != nullptr; }
+
+// orig: 0x001C5FA0 (DrawPickup), before either the animated draw or the ALO
+// draw. Acquiring a pooled instance adds it before its caller launches it;
+// its pickup state may still be 2, even though it is registered/in the world.
+bool FPickupDrawn(const LO* plo)
+{
+    const auto it = s_mppickup.find(const_cast<LO*>(plo));
+    return it == s_mppickup.end() || it->second.state != 2;
+}
 
 // orig: 0x001C7A58 (select a loot definition by id, defaulting to the first;
 // hide all mesh groups, then show the selected definition's groups).

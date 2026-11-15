@@ -569,6 +569,7 @@ bool FAloDrawn(const SW* psw, const ALO* palo)
     if (!(grf & 8)) return false;
     const uint32_t pfnDraw = palo->pcls ? palo->pcls->PfnOrig(19) : 0;
     if (pfnDraw == 0 || pfnDraw == 0x1A5ED8) return false;
+    if (pfnDraw == 0x1C5FA0 && !FPickupDrawn(palo)) return false;
     if (!(palo->bMask & g_actview.grfCm)) return false;
     // orig: 0x001425B0 (the actors' draw, also under Sly's 0x18A238): an actor using its binocucom (+0xF04 1, on)
     // is not drawn, but in the binocucom view 2 (U19: Sly / Bentley / Murray hidden while looking through it)
