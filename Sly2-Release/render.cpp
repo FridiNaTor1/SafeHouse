@@ -2398,7 +2398,24 @@ void RenderPass(const SCENE& scene, const PASSVIEW& pv, const RENDEROPTS& opts)
                 std::printf("fadeobj oid %d center %.9g %.9g %.9g radius %.9g mrd %.9g adjust %.9g fade %.9g\n",
                             sgs.oid, sgs.posBounds.x, sgs.posBounds.y, sgs.posBounds.z, sgs.sBoundsRadius, sgs.sMRD, cmFade.rMRDAdjust, wholeFade);
             if (wholeFade == 0.0f) { ++cmrd; return pre; }
-            if (!s_fNoFrustum && outside(sgs.posBounds, sgs.sBoundsRadius)) { ++cculled; return pre; }
+            if (!s_fNoFrustum && outside(sgs.posBounds, sgs.sBoundsRadius))
+            {
+                // Parts with their own transforms can extend beyond the object's saved bounding sphere,
+                // as Clockwerk's wings do. Before hiding the entire object, check whether any visible part's
+                // transformed sphere intersects the view. recordsOfGlobs still tests each part normally.
+                // Leave the bounds used for distance fading unchanged so this fix does not alter fade distances.
+                bool fGroupInView = false;
+                for (size_t i = 0; i < gs.aglob.size() && i < sgs.amatGlob.size(); ++i)
+                {
+                    const GLOB& g = gs.aglob[i];
+                    if (i < sgs.afVisible.size() ? !sgs.afVisible[i] : g.fHidden) continue;
+                    if (!g.fDraw) continue;
+                    const glm::mat4& mat = sgs.amatGlob[i];
+                    const glm::vec3 pos = glm::vec3(MulMat4Vec4(mat, glm::vec4(g.posCenter, 1.0f)));
+                    if (!outside(pos, g.sRadius * maxScale(mat))) { fGroupInView = true; break; }
+                }
+                if (!fGroupInView) { ++cculled; return pre; }
+            }
         }
         pre.fDraw = true;
         pre.wholeFade = wholeFade;
