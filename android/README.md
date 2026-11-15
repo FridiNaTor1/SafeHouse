@@ -70,6 +70,15 @@ control). On Android (`platform/android/gles_sly2.cpp`, `Sly2-Release/gl.cpp`, `
   the draw index as a uniform (`g_fDrawUniform`, glob.vert `CANE_DRAW_UNIFORM`);
 - bindless textures and the persistent ring stay off (they are optional on the desktop too).
 
+### Mali-G615 MC6 / r44p1
+
+The RG 477M's ARM proprietary r44p1 driver uses the Vulkan attribute-based vertex path by default:
+vertex pulling combined with the near-plane geometry stage can fault this GPU. Other tile-GPU
+optimizations remain enabled, and `SLY2N_VKPULL=1` can explicitly retest the pulled path. The geometry
+shader keeps near-plane clipping and affine color/fog interpolation, using one emission loop to avoid
+a separate shader-compiler crash. This is a workaround for the tested GPU/driver, not a claim that all
+Mali drivers need it. The OpenGL ES fallback still requires vertex-stage storage buffers.
+
 ## Building
 
 Linux or macOS (WSL on Windows). Needs the Android SDK (platform 36, build-tools), NDK 29.0.14206865, CMake, Ninja,
