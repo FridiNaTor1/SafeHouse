@@ -90,6 +90,7 @@ extern uint32_t g_uRandState;  // xfmath.cpp
 #include "../platform/platform.h"
 #include "../platform/frame_pacer.h"
 #include "vr.h"
+#include "vrfirstperson.h"
 #include "dance.h"
 #include "pcrc.h"
 #include "vehicle.h"
@@ -1756,6 +1757,7 @@ int RunGame(const GAMEOPTS& go)
                 if (CAddNewAlosToScene(psw.get(), scene, &apalo) > 0) BuildSceneGpu(scene);
                 UpdateSceneFromSw(scene, apalo, s_fDrawAllStep ? nullptr : psw.get());
                 SnapshotStep(scene, CameraFromCm(g_cm));
+                vrfp::NoteStep(psw.get());   // (VR First Person: the player's place, for the eyes between steps)
             }
         }
         // (skipcut.h) a skipped cutscene: the game runs on to its natural end, many steps a frame (up to ~25 ms)
@@ -1806,6 +1808,7 @@ int RunGame(const GAMEOPTS& go)
                 if (CAddNewAlosToScene(psw.get(), scene, &apalo) > 0) BuildSceneGpu(scene);
                 UpdateSceneFromSw(scene, apalo, psw.get());
                 SnapshotStep(scene, CameraFromCm(g_cm));
+                vrfp::NoteStep(psw.get());   // (VR First Person: the player's place, for the eyes between steps)
             }
         }
         if (fWindow)
@@ -2042,6 +2045,7 @@ int RunGame(const GAMEOPTS& go)
                 m.fDance = FDanceActive();
                 m.fTitle = FTitleShown();
                 vr::SetMoment(m);
+                vrfp::PrepareFrame(psw.get(), accum.U(), accum.fActive);   // (First Person: the eyes' place this frame)
             }
             STEREOVIEW sv;
             const bool fEyes = fVr && !vr::FUnfocused() && FAnimatedOverlayDrawNormal() && !FAnimatedOverlayNeedsFrame() && vr::FEyeViews(cam, &sv);
@@ -2050,7 +2054,10 @@ int RunGame(const GAMEOPTS& go)
                 {
                     auto msThreadCpu = [] { timespec ts{}; clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts); return ts.tv_sec * 1e3 + ts.tv_nsec / 1e6; };
                     const double msEyes0 = s_fFpsLog ? msThreadCpu() : 0.0;
+                    // (VR First Person: the player drawn as its hands on the controllers, for the eyes only)
+                    if (vr::FFirstPersonFrame()) vrfp::ApplyHands(scene, apalo, psw.get());
                     RenderSceneStereo(scene, cam, opts, sv);
+                    vrfp::RestoreHands(scene);
                     vr::FinishEyes();
                     if (s_fFpsLog) g_msEyesCpuFpsLog += msThreadCpu() - msEyes0;
                     glBindFramebuffer(GL_FRAMEBUFFER, g_gl.FboScene());

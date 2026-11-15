@@ -85,7 +85,7 @@ void ToGameOptions(st::Sly2GameOptions& o)
 void FromVrOptions(const st::Sly2VrOptions& o)
 {
     vr::VROPTS& v = vr::g_vropts;
-    v.mode = std::clamp(o.mode, 0, 1);
+    v.mode = std::clamp(o.mode, 0, 2);
     v.fAutoCameraRotation = o.autoCameraRotation != 0;
     v.vignette = std::clamp(o.vignette, 0, 3);
     v.screenSize = std::clamp(o.screenSize, 0, 2);

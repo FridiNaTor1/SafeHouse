@@ -3,6 +3,7 @@
 // ports of the original's 0x1C3D70..0x1C4B00), the enable / current player (the world code) and the safe house's
 // slot 79 (0x1D7418 / 0x1D7480).
 #include "po.h"
+#include "vr.h"
 #include "actioninput.h"
 #include "rope.h"
 #include "turret.h"
@@ -314,6 +315,8 @@ void UpdatePadctl(PADCTL* ppc)
         ppc->grfbtn = (j.grfbtn & ~j.grfbtnHandled) | (ppd ? ppd->grfbtnForced : 0);
         ppc->grfbtn = sly2actions::HeldButtons(ppc, ppc->grfbtn, ppd ? ppd->grfbtnForced : 0);
         cmm::DecomposeRotateMatrixPanTilt(g_cm.mat, &radPan, &radTilt);
+        // (VR First Person, vr.h: the sticks turned by where the head faces: the left stick walks that way)
+        if (float radFp = 0.0f; vr::FFirstPersonPan(&radFp)) radPan = radFp;
     }
     ppc->matCam = cmm::BuildPanTiltMatrix(radPan, radTilt);
     TurnPadctlStick(radPan, &ppc->x, &ppc->y, &ppc->radJoy, &ppc->uJoy, &ppc->uJoyDecay);

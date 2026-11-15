@@ -61,6 +61,12 @@ bool FPanelSize(int*, int*) { return false; }
 void NoteThread(VRTHREAD) {}
 void NoteFrameTimes(double, double, double, double) {}
 int MsaaOption() { return g_vropts.msaa > 1 ? 2 : 1; }
+bool FModeImmersive() { return false; }
+void SetFirstPersonBody(bool, const glm::vec3&) {}
+bool FFirstPersonFrame() { return false; }
+bool FFirstPersonPan(float*) { return false; }
+bool FGripWorld(int, glm::mat4*) { return false; }
+float UnitsPerMetre() { return 100.0f; }
 }  // namespace vr
 #else
 
@@ -396,6 +402,8 @@ struct FRAME
     bool fViews = false;
     bool fEyesDrawn = false;
     bool fImmersive = false;
+    XrPosef aposeGrip[2]{};   // (First Person) the grips in the local space, at the predicted display time
+    bool afGrip[2]{};
 } s_frame;
 float s_hzDisplay = 0.0f;
 // Eye resolution (VR Settings): the eyes drawn into the bottom-left part of their targets (the layer's imageRect tells
@@ -600,6 +608,14 @@ glm::vec3 s_posAim{0.0f};                              // RcTable: where the hea
 bool s_fAim = false;
 glm::mat4 s_amatEye[2]{glm::mat4(1.0f), glm::mat4(1.0f)};   // this frame's eyes (the aim mark)
 VRMOMENT s_moment;                                     // (SetMoment) this frame's cutscene / pause
+// (First Person) the body: the eyes' place this frame (SetFirstPersonBody), its heading (the game's yaw, + to the left:
+// turned by the snap turns), whether this frame's eyes are its
+bool s_fFpBody = false, s_fFpFrame = false, s_fFpYaw = false;
+glm::vec3 s_posFpEye{0.0f};
+float s_yawFp = 0.0f;
+float s_sFp = 100.0f;                                   // (its units a metre this frame)
+bool s_fSnapped = false;                                // (a snap turn this frame: no vignette from it)
+constexpr float kradSnap = 0.5235988f;                  // (30 degrees)
 glm::vec4 s_fillNext{0.0f}, s_fillEyes{0.0f};          // the full-screen fills taken from the HUD (premultiplied), for the next frame's eyes
 glm::mat4 s_matLocalToWorld{1.0f};                     // this frame's eyes: the local space (metres) into the game's world
 // the HUD panel as the last frame placed it (local space: its centre, turn, size): the pause menu's window
@@ -1398,11 +1414,13 @@ enum ACT : int
     ACT_BumperL, ACT_BumperR,                  // the Steam Frame's bumpers (L1 / R1; vr_pad_map.h Gamepad layout)
     ACT_DpadUp, ACT_DpadDown, ACT_DpadLeft, ACT_DpadRight,   // its left hand's d-pad
     ACT_HapticL, ACT_HapticR,
+    ACT_GripPoseL, ACT_GripPoseR,              // (First Person) the hands where they hold the controllers
     ACT_Max
 };
 XrActionSet s_actionset = XR_NULL_HANDLE;
 std::array<XrAction, ACT_Max> s_aaction{};
 XrPath s_pathLeft = XR_NULL_PATH, s_pathRight = XR_NULL_PATH;
+XrSpace s_aspaceGrip[2]{};     // (First Person) the grip poses' spaces
 GLFWgamepadstate s_pad{};
 bool s_fPad = false;           // the controllers are in use (an interaction profile bound)
 bool s_fPadNoted = false;      // (the prompts told once that VR controllers are here)
@@ -1438,6 +1456,7 @@ bool FCreateActions()
         {"dpad_up", "D-pad up", XR_ACTION_TYPE_BOOLEAN_INPUT}, {"dpad_down", "D-pad down", XR_ACTION_TYPE_BOOLEAN_INPUT},
         {"dpad_left", "D-pad left", XR_ACTION_TYPE_BOOLEAN_INPUT}, {"dpad_right", "D-pad right", XR_ACTION_TYPE_BOOLEAN_INPUT},
         {"rumble_left", "Rumble (left)", XR_ACTION_TYPE_VIBRATION_OUTPUT}, {"rumble_right", "Rumble (right)", XR_ACTION_TYPE_VIBRATION_OUTPUT},
+        {"hand_left", "Left hand", XR_ACTION_TYPE_POSE_INPUT}, {"hand_right", "Right hand", XR_ACTION_TYPE_POSE_INPUT},
     };
     for (int i = 0; i < ACT_Max; ++i)
     {
@@ -1453,11 +1472,20 @@ bool FCreateActions()
     auto suggest = [&](const char* profile, std::initializer_list<BIND> abind) {
         std::vector<XrActionSuggestedBinding> a;
         for (const BIND& b : abind) a.push_back({s_aaction[size_t(b.act)], Path(b.path)});
+        // (First Person: the grip poses, which the core profiles all have; a profile refusing them keeps its buttons)
+        a.push_back({s_aaction[ACT_GripPoseL], Path("/user/hand/left/input/grip/pose")});
+        a.push_back({s_aaction[ACT_GripPoseR], Path("/user/hand/right/input/grip/pose")});
         XrInteractionProfileSuggestedBinding sb{XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING};
         sb.interactionProfile = Path(profile);
         sb.suggestedBindings = a.data();
         sb.countSuggestedBindings = uint32_t(a.size());
-        const XrResult r = pxrSuggestInteractionProfileBindings(s_inst, &sb);
+        XrResult r = pxrSuggestInteractionProfileBindings(s_inst, &sb);
+        if (XR_FAILED(r))
+        {
+            sb.countSuggestedBindings = uint32_t(a.size() - 2);
+            r = pxrSuggestInteractionProfileBindings(s_inst, &sb);
+            if (XR_SUCCEEDED(r)) Log("bindings for %s taken without the hands' poses (no First Person hands)", profile);
+        }
         if (XR_FAILED(r)) Log("bindings for %s not taken (%d)", profile, int(r));
     };
     // Meta Quest Touch (and Touch Pro / Plus as the runtime presents them): A / B / X / Y, grips, triggers, sticks
@@ -1520,7 +1548,16 @@ bool FCreateActions()
     XrSessionActionSetsAttachInfo ai{XR_TYPE_SESSION_ACTION_SETS_ATTACH_INFO};
     ai.countActionSets = 1;
     ai.actionSets = &s_actionset;
-    return FCheck(pxrAttachSessionActionSets(s_session, &ai), "xrAttachSessionActionSets");
+    if (!FCheck(pxrAttachSessionActionSets(s_session, &ai), "xrAttachSessionActionSets")) return false;
+    // (First Person) the hands' spaces (without them First Person shows no hands: logged, not fatal)
+    for (int k = 0; k < 2; ++k)
+    {
+        XrActionSpaceCreateInfo sci{XR_TYPE_ACTION_SPACE_CREATE_INFO};
+        sci.action = s_aaction[size_t(k ? ACT_GripPoseR : ACT_GripPoseL)];
+        sci.poseInActionSpace.orientation.w = 1.0f;
+        if (XR_FAILED(pxrCreateActionSpace(s_session, &sci, &s_aspaceGrip[k]))) s_aspaceGrip[k] = XR_NULL_HANDLE, Log("no space for the %s hand", k ? "right" : "left");
+    }
+    return true;
 }
 
 void UpdateProfile()
@@ -1602,6 +1639,20 @@ void SyncActions()
     GLFWgamepadstate p{};
     for (int b = 0; b < cane::vrpad::kButtonCount && b <= GLFW_GAMEPAD_BUTTON_LAST; ++b) p.buttons[b] = m.buttons[b] ? GLFW_PRESS : GLFW_RELEASE;
     for (int a = 0; a < cane::vrpad::kAxisCount && a <= GLFW_GAMEPAD_AXIS_LAST; ++a) p.axes[a] = m.axes[a];
+    // (First Person: the right stick snap-turns the body 30 degrees a flick, not in the pause menu; the camera's stick
+    // left alone)
+    if (s_fFpFrame && !s_moment.fPause)
+    {
+        static bool s_fSnapArmed = true;
+        if (std::fabs(r.x) < 0.4f) s_fSnapArmed = true;
+        else if (s_fSnapArmed && std::fabs(r.x) > 0.7f)
+        {
+            s_yawFp += r.x > 0.0f ? -kradSnap : kradSnap;
+            s_fSnapArmed = false;
+            s_fSnapped = true;
+        }
+        p.axes[GLFW_GAMEPAD_AXIS_RIGHT_X] = p.axes[GLFW_GAMEPAD_AXIS_RIGHT_Y] = 0.0f;
+    }
     // (the Ep2 dance: Touch's X / Y are Circle / Triangle, not L2 / R2: FDanceLayout)
     if (FDanceLayout())
     {
@@ -2214,6 +2265,8 @@ void Shutdown()
     {
         for (SWAPCHAIN& sc : s_aeye) DestroySwapchain(sc);
         DestroySwapchain(s_panel);
+        for (XrSpace& sp : s_aspaceGrip)
+            if (sp) pxrDestroySpace(sp), sp = XR_NULL_HANDLE;
         if (s_spaceLocal) pxrDestroySpace(s_spaceLocal);
         if (s_spaceView) pxrDestroySpace(s_spaceView);
         s_spaceLocal = s_spaceView = XR_NULL_HANDLE;
@@ -2317,7 +2370,7 @@ void ApplyRefreshRate()
 
 bool FAutoCameraRotation(bool fFlatOption)
 {
-    return s_fStarted && g_vropts.mode == VRMODE_Immersive ? g_vropts.fAutoCameraRotation : fFlatOption;
+    return s_fStarted && FModeImmersive() ? g_vropts.fAutoCameraRotation : fFlatOption;
 }
 
 // (test, SLY2N_VR_FIXEDPOSE=1: the head still (below) and the comfort vignette's clock a 20th of a second a frame)
@@ -2365,6 +2418,16 @@ void BeginFrame()
     s_frame.aview[0] = s_frame.aview[1] = XrView{XR_TYPE_VIEW};
     s_frame.fViews = XR_SUCCEEDED(pxrLocateViews(s_session, &li, &vs, 2, &c, s_frame.aview)) && c == 2 &&
                      (vs.viewStateFlags & XR_VIEW_STATE_ORIENTATION_VALID_BIT) && (vs.viewStateFlags & XR_VIEW_STATE_POSITION_VALID_BIT);
+    // (First Person) the hands at the same time
+    for (int k = 0; k < 2; ++k)
+    {
+        s_frame.afGrip[k] = false;
+        if (!s_aspaceGrip[k]) continue;
+        XrSpaceLocation loc{XR_TYPE_SPACE_LOCATION};
+        if (XR_SUCCEEDED(pxrLocateSpace(s_aspaceGrip[k], s_spaceLocal, s_frame.state.predictedDisplayTime, &loc)) &&
+            (loc.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT) && (loc.locationFlags & XR_SPACE_LOCATION_ORIENTATION_VALID_BIT))
+            s_frame.aposeGrip[k] = loc.pose, s_frame.afGrip[k] = true;
+    }
     // (test, SLY2N_VR_FIXEDPOSE=1: the head still, level, 1.6 m up, the eyes 64 mm apart, the runtime's fields of view:
     // frames that repeat run to run with --fixed-dt, for picture comparisons)
     // (SLY2N_VR_TESTTURN=yaw:pitch@frame,...: from that headset frame on, the still head turned by those degrees (yaw +
@@ -2395,7 +2458,8 @@ void BeginFrame()
         s_yawPanel = s_yawAnchor;
         s_fAnchored = true;
     }
-    s_frame.fImmersive = s_frame.state.shouldRender && s_frame.fViews && g_vropts.mode == VRMODE_Immersive;
+    s_frame.fImmersive = s_frame.state.shouldRender && s_frame.fViews && FModeImmersive();
+    s_fFpFrame = false;   // (First Person: set again by this frame's FEyeViews; the controllers read above used the last one)
     if (s_frame.fViews)
     {
         const glm::quat q = glm::angleAxis(-s_yawAnchor, glm::vec3(0, 1, 0)) * Quat(s_frame.aview[0].pose.orientation);
@@ -2431,12 +2495,12 @@ BINOCLAYOUT WholeViewLayout(float canvasW, float canvasH, float pxPerM, float wM
 // (display.cpp LayoutDisplay: FPanelSize, FWholeViewCanvas)
 void UpdateBinocLayout()
 {
-    const bool fWant = (s_view == VRVIEW_Binoc || s_view == VRVIEW_BinocTalk) && g_vropts.mode == VRMODE_Immersive && s_frame.fViews;
+    const bool fWant = (s_view == VRVIEW_Binoc || s_view == VRVIEW_BinocTalk) && FModeImmersive() && s_frame.fViews;
     // (the wipe: kept while a load's frame has no views; not over the Flat Screen's moments)
-    const bool fWantWipe = !fWant && !s_fMovie && s_moment.fWipe && g_vropts.mode == VRMODE_Immersive && s_view != VRVIEW_Flat && (s_frame.fViews || s_wipe.f);
+    const bool fWantWipe = !fWant && !s_fMovie && s_moment.fWipe && FModeImmersive() && s_view != VRVIEW_Flat && (s_frame.fViews || s_wipe.f);
     // (the game picture holds only the HUD (the eyes draw the world): laid out at its full size, Internal Resolution
     // not applied (display.cpp LayoutDisplay); the Flat Screen's moments keep it)
-    const bool fHudOnly = g_vropts.mode == VRMODE_Immersive && s_view != VRVIEW_Flat;
+    const bool fHudOnly = FModeImmersive() && s_view != VRVIEW_Flat;
     if (fWant == s_binoc.f && fWantWipe == s_wipe.f && fHudOnly == s_fHudOnly) return;
     s_fHudOnly = fHudOnly;
     float tx = 0.0f, ty = 0.0f;
@@ -2514,6 +2578,33 @@ void SetMoment(const VRMOMENT& m)
     s_moment = m;
     if (s_fStarted) UpdateBinocLayout();   // (a wipe's whole-view layout from its first frame)
 }
+
+// ------------------------------------------------------------ First Person (vrfirstperson.h)
+bool FModeImmersive() { return g_vropts.mode == VRMODE_Immersive || g_vropts.mode == VRMODE_FirstPerson; }
+void SetFirstPersonBody(bool fOk, const glm::vec3& posEye)
+{
+    s_fFpBody = fOk;
+    if (fOk) s_posFpEye = posEye;
+}
+bool FFirstPersonFrame() { return s_fStarted && s_fRunning && s_fFpFrame; }
+bool FFirstPersonPan(float* pradPan)
+{
+    if (!s_fStarted || !s_fRunning || !s_fFpFrame) return false;   // (the session stopped: the desktop's camera again)
+    *pradPan = s_yawFp + s_yawHead;   // (where the head faces: the body's heading and the head's turn from the anchor)
+    return true;
+}
+bool FGripWorld(int k, glm::mat4* pmat)
+{
+    if (!s_fStarted || !s_fRunning || !s_fFpFrame || k < 0 || k > 1 || !s_frame.afGrip[k]) return false;
+    // (the local space into the world as this frame's eyes see it: the turn without the scale)
+    const glm::mat3 L = glm::mat3(s_matLocalToWorld) / s_sFp;
+    const XrPosef& pose = s_frame.aposeGrip[k];
+    glm::mat4 m(L * glm::mat3_cast(Quat(pose.orientation)));
+    m[3] = s_matLocalToWorld * glm::vec4(Vec(pose.position), 1.0f);
+    *pmat = m;
+    return true;
+}
+float UnitsPerMetre() { return s_sFp; }
 // (test: SLY2N_VR_TESTUNFOCUS=from@to: headset frames as if the session were VISIBLE, not FOCUSED)
 bool FTestUnfocused()
 {
@@ -2541,7 +2632,7 @@ void TakePauseForFocus()
 }
 bool FTitleMoment() { return s_fStarted && s_moment.fTitle; }
 bool FDanceLayout() { return s_fStarted && s_fRunning && s_moment.fDance && s_layoutPad == cane::vrpad::Layout::Touch; }
-bool FCutsceneView() { return s_fStarted && g_vropts.mode == VRMODE_Immersive && s_view == VRVIEW_Normal && s_moment.fCutscene; }
+bool FCutsceneView() { return s_fStarted && FModeImmersive() && s_view == VRVIEW_Normal && s_moment.fCutscene; }
 
 bool FTakeEyeFill(const glm::vec4& rgba)
 {
@@ -2579,7 +2670,7 @@ void DrawEyeFills(const STEREOVIEW& sv)
 bool FHeadLook(float* pdradPan, float* pdradTilt)
 {
     *pdradPan = *pdradTilt = 0.0f;
-    if (!s_fStarted || s_view != VRVIEW_Binoc || g_vropts.mode != VRMODE_Immersive || !s_frame.fViews) return false;
+    if (!s_fStarted || s_view != VRVIEW_Binoc || !FModeImmersive() || !s_frame.fViews) return false;
     float d = s_yawHead - s_yawConsumed;
     while (d > kPi) d -= 2.0f * kPi;
     while (d < -kPi) d += 2.0f * kPi;
@@ -2589,7 +2680,7 @@ bool FHeadLook(float* pdradPan, float* pdradTilt)
     return true;
 }
 
-bool FRcTableActive() { return s_fStarted && s_view == VRVIEW_RcTable && g_vropts.mode == VRMODE_Immersive; }
+bool FRcTableActive() { return s_fStarted && s_view == VRVIEW_RcTable && FModeImmersive(); }
 bool FRcAimPoint(glm::vec3* ppos)
 {
     if (!FRcTableActive() || !s_fAim) return false;
@@ -2599,7 +2690,7 @@ bool FRcAimPoint(glm::vec3* ppos)
 void SetRcArenaHeight(float z) { s_zRcArena = z; }
 
 bool FImmersiveFrame() { return s_frame.fBegun && s_frame.fImmersive && s_view != VRVIEW_Flat; }
-bool FImmersiveView() { return s_fStarted && g_vropts.mode == VRMODE_Immersive && s_view != VRVIEW_Flat; }
+bool FImmersiveView() { return s_fStarted && FModeImmersive() && s_view != VRVIEW_Flat; }
 
 bool FEyeViews(const CAMERA& cam, STEREOVIEW* psv)
 {
@@ -2640,6 +2731,17 @@ bool FEyeViews(const CAMERA& cam, STEREOVIEW* psv)
         posBase = s_posRc;
         f2 = glm::vec2(std::cos(s_yawRc), std::sin(s_yawRc));
     }
+    // (First Person: the eyes at the character's, its body's heading turned by the snap turns; every other moment
+    // Immersive's. Entering it, the body faces where the camera did.)
+    s_fFpFrame = g_vropts.mode == VRMODE_FirstPerson && s_fFpBody && s_view == VRVIEW_Normal && !s_moment.fCutscene &&
+                 !s_moment.fDance && !s_moment.fWipe && !s_moment.fTitle;
+    if (s_fFpFrame)
+    {
+        if (!s_fFpYaw) s_yawFp = std::atan2(f2.y, f2.x), s_fFpYaw = true;
+        f2 = glm::vec2(std::cos(s_yawFp), std::sin(s_yawFp));
+        posBase = s_posFpEye;
+    }
+    else s_fFpYaw = false;
     const glm::vec3 fwd(f2, 0.0f), up(0, 0, 1), right = glm::cross(fwd, up);
     // XR (x right, y up, -z forward) -> game (z up)
     glm::mat3 B(right, up, -fwd);
@@ -2650,6 +2752,7 @@ bool FEyeViews(const CAMERA& cam, STEREOVIEW* psv)
         B = glm::mat3(right, upP, -fwdP);
     }
     const float s = 100.0f * std::clamp(g_vropts.worldScale, 0.1f, 10.0f);   // game units a metre
+    s_sFp = s;
     // the head relative to the anchor (its heading undone)
     glm::quat qAnchorInv = glm::angleAxis(-s_yawAnchor, glm::vec3(0, 1, 0));
     glm::vec3 posHeadRef = s_posAnchor;
@@ -2791,18 +2894,19 @@ bool FEyeViews(const CAMERA& cam, STEREOVIEW* psv)
     psv->fMultiview = s_fMultiview;
     psv->fFlipY = s_fVkDirect;
     psv->texMultiviewColor = !s_fMultiview ? 0 : s_atexEyeVk[0] ? s_atexEyeVk[0] : s_aeye[0].atex[s_aeye[0].iimage];
-    // the vignette's strength from the base camera's turn rate and speed (Immersive comfort)
+    // the vignette's strength from the base camera's turn rate and speed (Immersive comfort; First Person: the body's)
+    const glm::vec3 posVig = s_fFpFrame ? posBase : cam.pos;
     static int s_cframeFixed = 0;
     const double t = FFixedPose() ? ++s_cframeFixed / 20.0 : glfwGetTime();
     const float yaw = std::atan2(f2.y, f2.x);
     if (s_tCamPrev >= 0.0 && t > s_tCamPrev)
     {
         const float dt = float(t - s_tCamPrev);
-        float dyaw = yaw - s_yawCamPrev;
+        float dyaw = s_fSnapped ? 0.0f : yaw - s_yawCamPrev;
         while (dyaw > kPi) dyaw -= 2.0f * kPi;
         while (dyaw < -kPi) dyaw += 2.0f * kPi;
         const float degPerS = std::fabs(glm::degrees(dyaw)) / dt;
-        const float mPerS = glm::distance(cam.pos, s_posCamPrev) / s / dt;
+        const float mPerS = glm::distance(posVig, s_posCamPrev) / s / dt;
         // a jump cut (a new shot) is not motion
         const float target = mPerS > 30.0f ? 0.0f : std::clamp(std::max(degPerS / 120.0f, mPerS / 6.0f), 0.0f, 1.0f);
         const float k = target > s_gVignette ? std::min(1.0f, dt * 8.0f) : std::min(1.0f, dt * 2.5f);
@@ -2810,7 +2914,8 @@ bool FEyeViews(const CAMERA& cam, STEREOVIEW* psv)
     }
     s_tCamPrev = t;
     s_yawCamPrev = yaw;
-    s_posCamPrev = cam.pos;
+    s_posCamPrev = posVig;
+    s_fSnapped = false;
     return true;
 }
 
@@ -3571,7 +3676,7 @@ bool FPresent()
                 quad.subImage.swapchain = s_panel.h;
                 quad.subImage.imageRect = {{0, 0}, {dx, dy}};
                 if (fHud && s_view == VRVIEW_BinocTalk && s_binoc.f) quad.space = s_spaceLocal;
-                else if (!fHud && s_moment.fWipe && s_panelLast.f && g_vropts.mode == VRMODE_Immersive && quad.space != s_spaceView)
+                else if (!fHud && s_moment.fWipe && s_panelLast.f && FModeImmersive() && quad.space != s_spaceView)
                 {
                     // (a frame without the eyes during a transition's wipe (the load): where the HUD panel was, the
                     // void black round it, so the wipe's picture stays in view)
