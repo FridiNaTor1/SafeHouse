@@ -14,6 +14,7 @@
 #include "cls.h"
 #include "crv.h"
 #include "lo.h"
+#include "lox.h"
 #include "vecmat.h"
 #include "cmworld.h"
 #include "cplcy.h"
@@ -439,13 +440,15 @@ void TeleportActor(LO* plo, LO* plodest)
         // SM's retract handler at 88149, took 88149's rotation in the reference)
         SetAloPos(palo, glm::vec3(w[3]));
         SetAloRotation(palo, glm::mat3(m));
-        // then, with a physics state (+0xE8), slots 35 / 36 with the destination's slots 33 / 34 (its velocities; a
-        // LOX's are zero): e.g. the Ep1 heist harpoon put on the sign's point 142374 stops there
+        // orig 0x1F49C8: copy the destination's slots 33 / 34. Located points
+        // inherit linear and angular motion from their reference transform;
+        // discarding it introduces unintended motion relative to the parent.
         if (Psost(palo))
         {
             ALO* paloTo = FIsLoDerivedFrom(plodest, 0x30) ? static_cast<ALO*>(plodest) : nullptr;
-            SetAloVelocityTo(palo, paloTo ? VelAloPos(paloTo) : glm::vec3(0.0f));
-            SetAloAngVelocityTo(palo, paloTo ? AngVelAlo(paloTo) : glm::vec3(0.0f));
+            LOX* ploxTo = paloTo ? nullptr : static_cast<LOX*>(plodest);
+            SetAloVelocityTo(palo, paloTo ? VelAloPos(paloTo) : VelLox(ploxTo));
+            SetAloAngVelocityTo(palo, paloTo ? AngVelAlo(paloTo) : AngVelLox(ploxTo));
         }
     }
     else if (!palo->axf.empty())

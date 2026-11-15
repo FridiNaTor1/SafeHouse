@@ -398,7 +398,9 @@ ABILITY* PabilFind(BENTLEY* p, int k)  // orig 0x00136A28
 }
 bool FBentleyCanDo(BENTLEY* p, int n)
 {
-    if (p->f1818) return false;
+    // orig 0x136870 tests both adjacent flags with a 64-bit load at +0x1818.
+    // Either flag disables abilities.
+    if (p->f1818 || p->f181C) return false;
     if (static_cast<unsigned>(p->nF04) < 3) return false;  // 0x1443D8
     switch (p->state)
     {
