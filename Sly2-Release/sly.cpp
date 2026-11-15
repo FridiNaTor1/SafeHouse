@@ -54,6 +54,7 @@ void BroadcastTaskEvent(SW* psw, int n, LO* plo);  // orig 0x001619A0 (task.h)
 #include "aihit.h"
 #include "ainoise.h"
 #include "sound.h"
+#include "emitter.h"
 #include "physworld.h"
 #include "scpt.h"
 #include "climb.h"
@@ -966,8 +967,30 @@ void SetSlyState(SLY* p, int n, int m)
                 psnd->SetVolume(F32(0x3F333333));
                 psnd->SetFalloff(500.0f, 1000.0f);
             }
-            // TODO(actors): the +0x1AA8 / +0x1AAC landing effects.
             if (p->mode == 0 && n != 8 && n != 3 && n != 22) SetSlyMode(p, -1);
+            // orig: 0x0018C43C..0x0018C4D4 (table 0x2A5BC0): burst the bound landing
+            // effect, with the alternate effect for interactions 3 / 4; water suppresses both.
+            if (!p->ploWater)
+            {
+                LO* po = nullptr;
+                switch (n)
+                {
+                case 0: case 1: case 5: case 9: case 24:
+                    po = PloPart(palo, 0x1AA8);
+                    break;
+                case 7:
+                    if (p->n4C8 != 1)
+                        po = PloPart(palo, p->n4C8 == 3 || p->n4C8 == 4 ? 0x1AAC : 0x1AA8);
+                    break;
+                default: break;
+                }
+                if (po)
+                {
+                    AddLo(g_psw, po);
+                    ExplodeLo(po, nullptr);  // 0x15C150
+                    RemoveLo(g_psw, po);
+                }
+            }
             SetJumpAnimState(&p->jump, -1, nullptr);  // 0x195FB8
             break;
         case 4: SetDamageState(p, -1); break;  // 0x1A0B40 (+0xDF0)
@@ -1948,13 +1971,25 @@ void HandleActorMessage(ACTOR* pa, int msg, void* pv)
     }
     case 4: case 5:
     {
-        // the water's signals {water, object}: entered (4) / left (5): +0x108C; the splash entries +0x1090 (their slot
-        // 8 / 9: TODO)
+        // orig: 0x141424 / 0x141490: enable the splash points on entry, reset their
+        // cooldowns, and remove them again when leaving the same water.
         struct WMSG { LO* pw; LO* po; };
         const WMSG* pm = static_cast<const WMSG*>(pv);
         if (!pm || pm->po != pa->palo) break;
-        if (msg == 4) pa->ploWater = pm->pw;
-        else if (pa->ploWater == pm->pw) pa->ploWater = nullptr;
+        if (msg == 4)
+        {
+            pa->ploWater = pm->pw;
+            for (auto& [point, tLast] : pa->asplash)
+            {
+                AddLo(g_psw, point);
+                tLast = 0.0f;
+            }
+        }
+        else if (pa->ploWater == pm->pw)
+        {
+            pa->ploWater = nullptr;
+            for (auto& [point, tLast] : pa->asplash) RemoveLo(g_psw, point);
+        }
         break;
     }
     case 11:  // orig: 0x140F90, an accepted contact consumes the sender's ability

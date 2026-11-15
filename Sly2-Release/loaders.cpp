@@ -482,7 +482,9 @@ void BindLoParts(ALO* palo, int c, uint32_t vaTable)
             std::function<LO*(LO*)> find = [&](LO* p) -> LO* {
                 for (LO* pc : p->aploOwned)
                 {
-                    if (pc->oid == id) return pc;
+                    // orig: 0x15E938 kind 1 also matches the placed proxy's identity.
+                    // Murray's landing effect is proxy 252, whose emitter has its own oid.
+                    if (pc->oid == id || pc->oidInstance == id) return pc;
                     if (LO* q = find(pc)) return q;
                 }
                 return nullptr;

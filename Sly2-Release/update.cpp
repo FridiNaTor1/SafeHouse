@@ -635,7 +635,7 @@ void StartLoadedLo(SW* psw, LO* plo)
         std::function<void(LO*)> walk = [&](LO* p) {
             for (LO* pc : std::vector<LO*>(p->aploOwned))
             {
-                if (pc->oid == 0x2AB)
+                if (pc->oid == 0x2AB || pc->oidInstance == 0x2AB)
                 {
                     // (0x15E650(G, 0x401, 0x2AB, p, 16): kept as its splash points, +0x1090 / +0x1094)
                     if (ACTOR* pa = PactorFromLo(plo); pa && pa->asplash.size() < 16) pa->asplash.emplace_back(pc, 0.0f);
