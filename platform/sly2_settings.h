@@ -63,7 +63,7 @@ struct Sly2GameOptions {
 };
 
 // VR (Sly2-Release vr.h; only used with a headset): [VR] in the file.
-enum Sly2VrMode : int { VrMode_Flat = 0, VrMode_Immersive = 1 };
+enum Sly2VrMode : int { VrMode_Flat = 0, VrMode_Immersive = 1, VrMode_FirstPerson = 2 };
 struct Sly2VrOptions {
     int mode = VrMode_Immersive;
     int autoCameraRotation = 0;  // Immersive: the follow camera's passive steering (off: only the right stick turns it)
@@ -591,8 +591,10 @@ inline const std::vector<Sly2Key>& sly2Schema() {
                                 return true;
                             } };
         };
-        k.push_back(vrChoice("Mode", "Immersive (a 3D view from the game camera) or Flat Screen (the game on a big screen)",
-                             &Sly2VrOptions::mode, { { VrMode_Immersive, "Immersive" }, { VrMode_Flat, "Flat Screen" }, { VrMode_Flat, "Flat" } }));
+        k.push_back(vrChoice("Mode", "Immersive (a 3D view from the game camera), Flat Screen (the game on a big screen) or First Person "
+                             "(experimental: your eyes at the character's, its hands on your controllers)",
+                             &Sly2VrOptions::mode, { { VrMode_Immersive, "Immersive" }, { VrMode_Flat, "Flat Screen" }, { VrMode_Flat, "Flat" },
+                                                     { VrMode_FirstPerson, "First Person" } }));
         k.push_back({ "VR", "Automatic Camera Rotation", "Immersive: On: the camera turns as you move. Off: only the right stick turns it",
                       [](const Sly2Settings& s) { return std::string(s.vr.autoCameraRotation ? "On" : "Off"); },
                       [](Sly2Settings& s, const std::string& v) { return names::parseBool(v, s.vr.autoCameraRotation); } });

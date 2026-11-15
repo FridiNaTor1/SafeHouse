@@ -25,7 +25,9 @@ struct GLFWgamepadstate;
 
 namespace vr
 {
-enum VRMODE : int { VRMODE_Flat = 0, VRMODE_Immersive = 1 };
+// First Person (experimental, vrfirstperson.h): Immersive, but the eyes at the player character's head and its hands on
+// the motion controllers; every moment Immersive shows otherwise (cutscenes, the binocucom, the hack, ...) stays Immersive.
+enum VRMODE : int { VRMODE_Flat = 0, VRMODE_Immersive = 1, VRMODE_FirstPerson = 2 };
 
 // Settings.ini [VR] (platform/sly2_settings.h Sly2VrOptions mirrors these)
 // VR Settings Upscaling: the headset compositor's filter on the eyes where the runtime offers it (Quest: Off, quality
@@ -184,6 +186,25 @@ bool FPresent();
 bool FSkipSwap();
 
 // ------------------------------------------------------------ the controllers
+// ------------------------------------------------------------ First Person (experimental: vrfirstperson.h)
+// The mode is Immersive or First Person (both draw the eyes: Immersive's rules apply to both).
+bool FModeImmersive();
+// (game.cpp, each frame before FEyeViews) the player is a character whose eyes the view can take (fOk), at posEye (game
+// units, the frame's interpolated time); false: First Person falls back to Immersive this frame.
+void SetFirstPersonBody(bool fOk, const glm::vec3& posEye);
+// This frame's eyes are First Person's (the mode, a character, an ordinary moment: no cutscene, dance, wipe, title, nor a
+// view other than VRVIEW_Normal). Valid after FEyeViews.
+bool FFirstPersonFrame();
+// (po.cpp) First Person: the heading the pad's sticks turn by: where the head faces in the world (radians, as the camera's
+// pan); false: the camera's.
+bool FFirstPersonPan(float* pradPan);
+// Hand k's (0 left, 1 right) grip in the world this frame (after FEyeViews, First Person): columns +X (into the right palm,
+// out of the left), +Y, +Z (-Z along the fist, little finger to thumb), the origin the palm's centre; no scale. False: not
+// tracked.
+bool FGripWorld(int k, glm::mat4* pmat);
+// Game units per metre of the head's movement this frame.
+float UnitsPerMetre();
+
 // The headset's controllers as a pad (PS2 layout: pcinput.cpp ReadPcInput uses it like a controller).
 bool FPadState(GLFWgamepadstate* pstate);
 // The controllers' interaction profile ("/interaction_profiles/oculus/touch_controller"), empty when none.

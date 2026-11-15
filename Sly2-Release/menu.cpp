@@ -575,7 +575,10 @@ std::string StrNative(int id)
     case NID_ResetKeys: return StrPort(PTX_ResetKeyboardMapping);
     case NID_AdvancedControls: return onOff(PTX_AdvancedBindings, sly2actions::profile.enabled);
     case NID_VrPage: return StrPort(PTX_VrSettings);
-    case NID_VrMode: return StrPortValue(PTX_VrMode, StrPort(vr::g_vropts.mode == vr::VRMODE_Immersive ? PTX_VrImmersive : PTX_VrFlatScreen));
+    case NID_VrMode:
+        return StrPortValue(PTX_VrMode, StrPort(vr::g_vropts.mode == vr::VRMODE_FirstPerson ? PTX_VrFirstPerson
+                                                : vr::g_vropts.mode == vr::VRMODE_Immersive  ? PTX_VrImmersive
+                                                                                             : PTX_VrFlatScreen));
     case NID_VrAutoCam: return onOff(PTX_AutoCameraRotation, vr::g_vropts.fAutoCameraRotation);
     case NID_VrVignette:
     {
@@ -1133,7 +1136,11 @@ void CycleVr(const MENUENT& e)
     };
     switch (e.id)
     {
-    case NID_VrMode: o.mode = o.mode == vr::VRMODE_Immersive ? vr::VRMODE_Flat : vr::VRMODE_Immersive; vr::Recenter(); break;
+    // (Immersive, Flat Screen, First Person (experimental), round)
+    case NID_VrMode:
+        o.mode = o.mode == vr::VRMODE_Immersive ? vr::VRMODE_Flat : o.mode == vr::VRMODE_Flat ? vr::VRMODE_FirstPerson : vr::VRMODE_Immersive;
+        vr::Recenter();
+        break;
     case NID_VrAutoCam: o.fAutoCameraRotation = !o.fAutoCameraRotation; break;
     case NID_VrVignette: o.vignette = (o.vignette + 1) % 4; break;
     case NID_VrScreenSize: o.screenSize = (o.screenSize + 1) % 3; break;

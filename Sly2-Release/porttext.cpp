@@ -368,6 +368,8 @@ constexpr ROW s_arow[] = {
         "Immersiivinen", "Immersiv", "Immersiv", "イマーシブ"}},
     {PTX_VrFlatScreen, {"Flat Screen", "Écran plat", "Schermo piatto", "Flacher Bildschirm", "Pantalla plana",
         "Plat scherm", "Ecrã plano", "Flad skærm", "Litteä näyttö", "Flat skjerm", "Platt skärm", "フラット画面"}},
+    {PTX_VrFirstPerson, {"First Person", "Première personne", "Prima persona", "Ego-Perspektive", "Primera persona",
+        "Eerste persoon", "Primeira pessoa", "Førsteperson", "Ensimmäinen persoona", "Førsteperson", "Förstaperson", "一人称視点"}},
     {PTX_VrVignette, {"Comfort Vignette", "Vignette de confort", "Vignettatura comfort", "Komfort-Vignette",
         "Viñeta de confort", "Comfortvignet", "Vinheta de conforto", "Komfortvignet", "Mukavuusvinjetti",
         "Komfortvignett", "Komfortvinjett", "ビネット"}},
