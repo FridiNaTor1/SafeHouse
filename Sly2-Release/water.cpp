@@ -118,7 +118,14 @@ glm::vec3 VecFlow(const ALO* pw)
 LO* PloField(ALO* pw, uint32_t ib)
 {
     const int oid = static_cast<int>(pw->U32Field(0, ib, 0));
-    return oid > 0 ? PloFindSwNearest(pw, oid) : nullptr;
+    if (oid <= 0) return nullptr;
+    if (LO* child = PloFindSwChild(pw, oid)) return child;
+    // These are authored object references (OTYP 0x201E / 0x2030). A proxy
+    // explicitly named by the reference takes precedence over another placed
+    // instance's internal oid. Taking another water instance's local copy
+    // transforms the splash far from the contact.
+    if (LO* named = PloFindSwAny(oid); named && named->oidInstance == oid) return named;
+    return PloFindSwNearest(pw, oid);
 }
 
 glm::vec3 VtVelPos(ALO* p)  // vt slot 33
