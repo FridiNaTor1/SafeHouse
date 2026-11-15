@@ -95,7 +95,7 @@ LO* PloPocket(LO* plo)
 bool FPocketMore(LO* plo) { return PocketOf(plo).fMore || plo->U32Field(0, 0x490, 0) != 0; }
 
 // orig: 0x001F17B0 (a prize: the first, or more when +0x490 allows)
-void AddPocketPrize(LO* plo, int oid)
+void AddPocketPrize(LO* plo, int oid, LO* ploPrize)
 {
     POCKET& p = PocketOf(plo);
     const bool fMore = FPocketMore(plo);
@@ -106,6 +106,7 @@ void AddPocketPrize(LO* plo, int oid)
     e.n4 = 0;
     e.n8 = -1;
     e.c = 1;
+    e.plo = ploPrize;
     if (FPrint())
     {
         std::printf("pocket contents %d:", plo->oid);
@@ -124,6 +125,7 @@ void AddPocketCoins(LO* plo, int c)
     e.n8 = -1;
     e.n4 = 0;
     e.c = c;
+    e.plo = nullptr;
 }
 
 // orig: 0x001C2D20 (the pocket object's post-load, class 0x63: the ALO's 0x1F36A8, its parts 0x1A64E8 (table 0x2C0CB0:
@@ -287,7 +289,7 @@ void FillPocket(LO* plo)
     POCKETENT e{0, 0, 0, 0};  // (the memset)
     if (p.c > 0)
     {
-        LO* po = ppocket ? PloFindSwNearest(ppocket, p.ae[0].oid) : PloFindSwAny(p.ae[0].oid);  // 0x15E938 (4)
+        LO* po = p.ae[0].plo ? p.ae[0].plo : ppocket ? PloFindSwNearest(ppocket, p.ae[0].oid) : PloFindSwAny(p.ae[0].oid);  // 0x15E938 (4)
         // a carryable prize (0x5C) whose task (+0x230) is done is dropped
         if (po && FIsLoDerivedFrom(po, 0x5C))
         {
@@ -333,6 +335,7 @@ void FillPocket(LO* plo)
         POCKETENT& pe = p.ae[p.c++];
         pe.oid = 0x2B3;
         pe.n4 = 0;
+        pe.plo = nullptr;
         const int c = 0 < k ? k : 1;
         cCoin -= c;
         pe.c = c;
@@ -358,7 +361,7 @@ void NextPocketPrize(LO* plo)
     for (; p.i < p.c; p.i++)
     {
         const POCKETENT& e = p.ae[p.i];
-        LO* po = ppocket ? PloFindSwNearest(ppocket, e.oid) : PloFindSwAny(e.oid);  // 0x15E938 (4)
+        LO* po = e.plo ? e.plo : ppocket ? PloFindSwNearest(ppocket, e.oid) : PloFindSwAny(e.oid);  // 0x15E938 (4)
         if (!po) continue;
         if (FPrint()) std::printf("pocket %d: next %d prize %d -> oid %d cid 0x%X (%s)\n", plo->oid, p.i, e.oid, po->oid, po->Cid(),
                                   g_acls[po->Cid()].name);
@@ -673,7 +676,7 @@ struct INITPOCKETMETHODS
         for (uint32_t pfn : {0x103CA0u, 0x103D28u})
             RegisterObjectMethod(pfn, [](LO* plo, const std::vector<CRef>& a) {
                 LO* po = PloArg(a, 0);
-                AddPocketPrize(plo, po ? static_cast<int>(po->oid) : NArg(a, 0));
+                AddPocketPrize(plo, po ? static_cast<int>(po->oid) : NArg(a, 0), po);
                 return CRef(TAGK_Void);
             });
         // EOPID 311 (id 435): the prizes still in the pocket, from the next on (+0x488 .. +0x484), as a list of oids
@@ -703,5 +706,7 @@ struct INITPOCKETMETHODS
 void ClonePocketData(LO* source, LO* target)
 {
     const auto it = s_mppocket.find(source);
-    if (it != s_mppocket.end()) s_mppocket[target] = it->second;
+    if (it == s_mppocket.end()) return;
+    POCKET& p = s_mppocket[target] = it->second;
+    for (POCKETENT& e : p.ae) e.plo = nullptr;  // (the source's prize objects, not the copy's)
 }

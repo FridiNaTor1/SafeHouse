@@ -433,6 +433,7 @@ bool FImportSlyStart(SW* psw, const std::string& pathRam, const std::string& pat
                 pk.ae[i].n4 = r.S32(at + 0x408 + 16 * i);
                 pk.ae[i].n8 = r.S32(at + 0x40C + 16 * i);
                 pk.ae[i].c = r.S32(at + 0x410 + 16 * i);
+                pk.ae[i].plo = nullptr;
             }
             pk.c = r.S32(at + 0x484);
             pk.i = r.S32(at + 0x488);
