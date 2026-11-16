@@ -5,6 +5,7 @@
 
 #include <cstdarg>
 #include <cstdio>
+#include <cstdlib>
 #include <iterator>
 #include <string>
 
@@ -295,6 +296,8 @@ constexpr ROW s_arow[] = {
         "Ruota la telecamera mentre ti muovi. Off: mantiene la tua angolazione. Le visuali imposte restano attive.",
         "移動時にカメラを自動回転。オフ：選んだ角度を維持。固定カメラはそのまま。",
         "이동할 때 카메라를 자동으로 회전합니다. 끄면 선택한 각도를 유지합니다. 지정된 카메라는 유지됩니다."}},
+    {PTX_QuitToLauncher, {"Quit to Launcher", "Retour au lanceur", "Zurück zum Launcher", "Volver al lanzador",
+        "Torna al launcher", "ランチャーに戻る", "런처로 돌아가기"}},
 };
 // clang-format on
 static_assert(std::size(s_arow) == PTX_Max, "one row per PTX");
@@ -324,6 +327,15 @@ int IlangPort()
     case CONTENT_LANGUAGE::Italian: return 4;
     default: return 0;
     }
+}
+
+bool FQuitToLauncher()
+{
+    static const bool s_f = [] {
+        const char* sz = std::getenv("SAFEHOUSE_LAUNCHER");
+        return sz && std::string(sz) == "collection";
+    }();
+    return s_f;
 }
 
 const char* PchzPort(PTX ptx)

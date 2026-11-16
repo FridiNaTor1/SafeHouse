@@ -1,12 +1,26 @@
 #include "context.h"
 
+#include <TargetConditionals.h>
+#if TARGET_OS_IPHONE
+// iOS (cmake/ios.cmake): the window is SDL's (platform/ios/glfw_sdl_ios.cpp), which makes the Metal view and layer.
+#include <GLFW/glfw3.h>
+extern "C" void* cane_glfw_metal_layer(GLFWwindow* window);
+#else
 #define GLFW_EXPOSE_NATIVE_COCOA
 #import <Cocoa/Cocoa.h>
 #include <GLFW/glfw3.h>
 #include <GLFW/glfw3native.h>
+#endif
 
+#include <objc/message.h>
 #include <algorithm>
+#include <chrono>
+#include <cstdlib>
+#include <cstdio>
 #include <cstring>
+#include <mutex>
+#include <set>
+#include <utility>
 
 namespace cane::gl_metal {
 
@@ -39,6 +53,19 @@ bool Context::Initialize(GLFWwindow* window, std::string* error) {
     }
   }
 
+#if TARGET_OS_IPHONE
+  layer_ = (__bridge CAMetalLayer*)cane_glfw_metal_layer(window);
+  if (!layer_) {
+    if (error) *error = "the window has no Metal layer";
+    return false;
+  }
+  layer_.device = device_;
+  layer_.pixelFormat = MTLPixelFormatBGRA8Unorm;
+  layer_.framebufferOnly = NO;
+  layer_.maximumDrawableCount = 3;
+  // (UIScreen.maximumFramesPerSecond: SDL's display mode; 120 on ProMotion, 60 elsewhere)
+  if (const GLFWvidmode* mode = glfwGetVideoMode(glfwGetPrimaryMonitor())) display_max_hz_ = mode->refreshRate;
+#else
   NSWindow* ns_window = glfwGetCocoaWindow(window);
   if (!ns_window) {
     if (error) *error = "GLFW window has no Cocoa window";
@@ -54,6 +81,7 @@ bool Context::Initialize(GLFWwindow* window, std::string* error) {
   layer_.contentsScale = ns_window.backingScaleFactor;
   view.layer = layer_;
   view.wantsLayer = YES;
+#endif
   UpdateDrawableSize();
 
   transient_ = std::make_unique<TransientAllocator>(device_);
@@ -185,22 +213,91 @@ void Context::Finish() { Submit(true); }
 
 void Context::SetSwapInterval(int interval) {
   swap_interval_ = interval;
+#if TARGET_OS_IPHONE
+  // iOS always presents in step with the display (no displaySyncEnabled); three drawables keep the GPU fed. Interval 0
+  // and 1 present at the next vblank (the game's timer caps the rate below the display's). An interval of N (Sly 2's
+  // cap at half the refresh rate: 60 FPS on a 120 Hz ProMotion screen) keeps each frame up at least N vblanks
+  // (SwapBuffers: presentDrawable:afterMinimumDuration:), as glXSwapInterval(2) does on the desktop.
+  layer_.maximumDrawableCount = 3;
+  if (interval != logged_interval_) {
+    logged_interval_ = interval;
+    const int hz = display_max_hz_ > 0 ? display_max_hz_ : 60;
+    if (interval <= 0)
+      std::fprintf(stderr, "Metal: display max %d Hz, frame pacing: VSync off (the frame-rate cap's timer; each frame at the next vblank)\n", hz);
+    else if (interval == 1)
+      std::fprintf(stderr, "Metal: display max %d Hz, frame pacing: every vblank (up to %d FPS)\n", hz, hz);
+    else
+      std::fprintf(stderr, "Metal: display max %d Hz, frame pacing: every %d vblanks (each frame up at least %.1f ms: up to %d FPS)\n",
+                   hz, interval, MinimumPresentSeconds() * 1000.0, hz / interval);
+  }
+#else
   layer_.displaySyncEnabled = interval != 0;
   layer_.maximumDrawableCount = interval != 0 ? 2 : 3;
+#endif
+}
+
+// (iOS: an interval of N vblanks: 90 % of it, so a frame is never held one vblank too long by rounding: 15 ms for 2 vblanks
+// at 120 Hz still ends on the second one; on a screen held at 60 Hz (Low Power Mode) it ends on the first)
+double Context::MinimumPresentSeconds() const {
+  const int hz = display_max_hz_ > 0 ? display_max_hz_ : 60;
+  return 0.9 * double(std::max(swap_interval_, 1)) / double(hz);
 }
 
 void Context::SwapBuffers() {
   FlushPendingClear();
   EndEncoders();
   if (drawable_) {
-    [CommandBuffer() presentDrawable:drawable_];
+#if TARGET_OS_IPHONE
+    if (swap_interval_ >= 2) {
+      // (MTLCommandBuffer has no afterMinimumDuration form: the drawable presents itself once the command buffer is
+      // scheduled, MTLDrawable -presentAfterMinimumDuration:, iOS 10.3)
+      id<CAMetalDrawable> drawable = drawable_;
+      const CFTimeInterval minimum = MinimumPresentSeconds();
+      // (called through the runtime: the SDK headers in CI declare no such method on the drawable's visible protocols;
+      // a drawable without it presents at once)
+      [CommandBuffer() addScheduledHandler:^(id<MTLCommandBuffer>) {
+        const SEL sel = NSSelectorFromString(@"presentAfterMinimumDuration:");
+        if ([(id)drawable respondsToSelector:sel])
+          reinterpret_cast<void (*)(id, SEL, CFTimeInterval)>(objc_msgSend)((id)drawable, sel, minimum);
+        else
+          reinterpret_cast<void (*)(id, SEL)>(objc_msgSend)((id)drawable, NSSelectorFromString(@"present"));
+      }];
+    } else
+#endif
+      [CommandBuffer() presentDrawable:drawable_];
     drawable_ = nil;
+#if TARGET_OS_IPHONE
+    // (the presented rate in the log, for testers without a frame counter: every 10 s while it moves by 3 FPS or
+    // more, else once a minute)
+    static auto window_start = std::chrono::steady_clock::now(), last_log = window_start;
+    static int presents = 0, logged_fps = -100;
+    ++presents;
+    const auto now = std::chrono::steady_clock::now();
+    const double seconds = std::chrono::duration<double>(now - window_start).count();
+    if (seconds >= 10.0) {
+      const int fps = int(presents / seconds + 0.5);
+      if (std::abs(fps - logged_fps) >= 3 || now - last_log >= std::chrono::seconds(60)) {
+        std::fprintf(stderr, "Metal: %d FPS presented (display max %d Hz, swap interval %d)\n", fps,
+                     display_max_hz_ > 0 ? display_max_hz_ : 60, swap_interval_);
+        logged_fps = fps;
+        last_log = now;
+      }
+      window_start = now;
+      presents = 0;
+    }
+#endif
   }
   Submit(false);
 }
 
-void Context::SetError(GLenum error) {
+void Context::SetError(GLenum error, const char* where, GLenum value) {
   if (error_ == gl::kNoError) error_ = error;
+  if (!where) return;
+  static std::mutex mutex;
+  static std::set<std::pair<std::string, GLenum>> reported;
+  std::lock_guard<std::mutex> lock(mutex);
+  if (reported.size() < 64 && reported.emplace(where, value).second)
+    std::fprintf(stderr, "Metal: GL_INVALID_ENUM in %s: 0x%04X (not translated)\n", where, unsigned(value));
 }
 
 GLenum Context::TakeError() {
@@ -222,7 +319,7 @@ const char* Context::GetString(GLenum name) {
     case gl::kExtensions:
       return "GL_ARB_clip_control";
     default:
-      SetError(gl::kInvalidEnum);
+      SetError(gl::kInvalidEnum, __func__, name);
       return nullptr;
   }
 }

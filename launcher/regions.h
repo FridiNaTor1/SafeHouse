@@ -15,6 +15,7 @@
 
 #include "disc_image.h"
 #include "install.h"
+#include "l10n.h"
 
 namespace cane {
 struct RegionInfo {
@@ -118,14 +119,14 @@ inline std::string gbRoundedUp(uint64_t bytes) {
     const uint64_t tenths = (bytes * 10 + (1ull << 30) - 1) >> 30;
     return tenths % 10 ? std::to_string(tenths / 10) + "." + std::to_string(tenths % 10) : std::to_string(tenths / 10);
 }
-inline std::string aboutGb(uint64_t bytes) { return "about " + gbRoundedUp(bytes) + " GB"; }
+inline std::string aboutGb(uint64_t bytes) { return trf("about %s GB", gbRoundedUp(bytes).c_str()); }
 // "USA, Europe, Japan or Korea": the regions a game installs from.
 inline std::string supportedRegionList(GameId game) {
     std::vector<std::string> names;
     for (const auto& r : knownRegions(game))
-        if (r.supported) names.push_back(r.name);
+        if (r.supported) names.push_back(tr(r.name));
     std::string out;
-    for (size_t i = 0; i < names.size(); ++i) out += (i == 0 ? "" : i + 1 == names.size() ? " or " : ", ") + names[i];
+    for (size_t i = 0; i < names.size(); ++i) out += (i == 0 ? std::string() : i + 1 == names.size() ? std::string(tr(" or ")) : std::string(", ")) + names[i];
     return out;
 }
 // "6 GB (USA) to 12 GB (Europe)" or "about 3 GB".
@@ -140,7 +141,7 @@ inline std::string spaceRange(GameId game) {
     if (!lo) return {};
     const auto gb = [](uint64_t b) { return gbRoundedUp(b); };
     if (gb(lo->needBytes) == gb(hi->needBytes)) return aboutGb(lo->needBytes);
-    return "about " + gb(lo->needBytes) + " GB (" + lo->name + ") to " + gb(hi->needBytes) + " GB (" + hi->name + ")";
+    return trf("about %s GB (%s) to %s GB (%s)", gb(lo->needBytes).c_str(), tr(lo->name).c_str(), gb(hi->needBytes).c_str(), tr(hi->name).c_str());
 }
 
 // ---------------------------------------------------------------- a disc image's check
@@ -186,14 +187,14 @@ inline void checkDiscContents(const fs::path& file, DiscCheck& c) {
     const std::string title = cane::game(game).shortName;
     if (!image || !volume.valid) {
         c.status = DiscCheck::Status::Unreadable;
-        c.message = "That disc image cannot be read.";
+        c.message = tr("That disc image cannot be read.");
         return;
     }
     const uint64_t volumeBytes = uint64_t(volume.blocks) * kIsoSector;
     if (size < volumeBytes) {
         c.status = DiscCheck::Status::Partial;
-        c.message = "That disc image is incomplete: it holds " + gbText(size) + " of the disc's " + gbText(volumeBytes) +
-                    ". The copy or download did not finish. Make a new copy of your disc and try again.";
+        c.message = trf("That disc image is incomplete: it holds %s of the disc's %s. The copy or download did not finish. Make a new copy of your "
+                        "disc and try again.", gbText(size).c_str(), gbText(volumeBytes).c_str());
         return;
     }
     const IsoFile* exe = volume.find(c.identity.bootFile);
@@ -202,8 +203,9 @@ inline void checkDiscContents(const fs::path& file, DiscCheck& c) {
         program.resize(exe->size);
         if (!image->read(uint64_t(exe->sector) * kIsoSector, program.data(), program.size())) program.clear();
     }
-    const std::string bad = "The game program on that disc image (" + c.identity.bootFile + ") does not match any known " + title + " " +
-                            c.region->name + " disc: the image is damaged or modified (wrong checksum). Make a new copy of your disc and try again.";
+    const std::string bad = trf("The game program on that disc image (%s) does not match any known %s %s disc: the image is damaged or modified "
+                                "(wrong checksum). Make a new copy of your disc and try again.", c.identity.bootFile.c_str(), title.c_str(),
+                                tr(c.region->name).c_str());
     if (game == GameId::Sly1) {
         const Sly1Disc* d = sly1DiscFromBootFile(c.identity.bootFile);
         if (!d || program.size() != d->executableSize || volume.blocks != d->volumeBlocks ||
@@ -234,37 +236,37 @@ inline DiscCheck checkDisc(const fs::path& file, std::optional<GameId> wanted = 
     DiscCheck c;
     c.identity = identifyDiscImage(file);
     c.game = c.identity.game;
-    const std::string want = wanted ? std::string(cane::game(*wanted).title) : std::string("a Sly Cooper game");
+    const std::string want = wanted ? std::string(cane::game(*wanted).title) : std::string(tr("a Sly Cooper game"));
     switch (c.identity.kind) {
     case DiscIdentity::Kind::Unreadable:
         c.status = DiscCheck::Status::Unreadable;
-        c.message = "That disc image cannot be opened.";
+        c.message = tr("That disc image cannot be opened.");
         return c;
     case DiscIdentity::Kind::NotPs2:
         c.status = DiscCheck::Status::NotPs2;
-        c.message = "That file is not a PlayStation 2 disc image (or it is damaged). Choose the .iso or .chd of your " + want + " disc.";
+        c.message = trf("That file is not a PlayStation 2 disc image (or it is damaged). Choose the .iso or .chd of your %s disc.", want.c_str());
         return c;
     case DiscIdentity::Kind::Unknown:
         c.status = DiscCheck::Status::NotSly;
-        c.message = "That is another PlayStation 2 game (" + c.identity.bootFile + "), not " + want + ".";
+        c.message = trf("That is another PlayStation 2 game (%s), not %s.", c.identity.bootFile.c_str(), want.c_str());
         return c;
     default: break;
     }
     if (c.game) c.region = regionByBootFile(*c.game, c.identity.bootFile);
     if (wanted && c.game != wanted) {
         c.status = DiscCheck::Status::WrongGame;
-        c.message = "That disc image is " + c.identity.label + ", not " + want + ".";
+        c.message = trf("That disc image is %s, not %s.", c.identity.label.c_str(), want.c_str());
         return c;
     }
     if (!c.game || !installable(*c.game)) {
         c.status = DiscCheck::Status::NoPort;
-        c.message = c.identity.label + " does not have a port yet.";
+        c.message = trf("%s does not have a port yet.", c.identity.label.c_str());
         return c;
     }
     if (!c.region || !c.region->supported) {
         c.status = DiscCheck::Status::NotSupportedYet;
-        c.message = "That is " + c.identity.label + ". SafeHouse recognizes this release, but it is not supported yet. " +
-                    cane::game(*c.game).shortName + " installs from a " + supportedRegionList(*c.game) + " disc.";
+        c.message = trf("That is %s. SafeHouse recognizes this release, but it is not supported yet. %s installs from a %s disc.",
+                        c.identity.label.c_str(), cane::game(*c.game).shortName, supportedRegionList(*c.game).c_str());
         return c;
     }
     checkDiscContents(file, c);

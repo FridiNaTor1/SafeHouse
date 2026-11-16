@@ -5,6 +5,7 @@
 // function read which byte range), with the objects' load-time transforms taken from the reference's RAM after
 // loading the same world (final.ram). Replaced by the real world walk (0x13DA18) once it lands.
 
+#include "fastpaths.h"
 #include "glob.h"
 #include "light.h"
 #include "screenobj.h"
@@ -30,7 +31,7 @@ struct SCENEGLOBSET
     uint32_t vaGlob = 0;                    // where the reference keeps this glob (ALO+0x80)
     std::vector<glm::mat4> amatGlob;        // per GLOB: its world matrix
     std::vector<uint8_t> afVisible;         // per GLOB: not hidden in the reference's RAM
-#ifdef __SWITCH__
+#if SLY2_FASTPATHS
     // (the Switch: afVisible is all zeros since its last clear, so an entry not drawn frame after frame is not cleared
     // again twice a frame (scenesw.cpp); whatever can show a group resets it)
     bool fVisibleCleared = false;
@@ -72,6 +73,7 @@ struct SCENEGLOBSET
     // The damage flash (ALO +0xD0 = RenderGlob's MODEL +0x50, sent as qw8.z; the actors' UpdateDamage 0x1A1358 pulses it
     // while hurt): P_A draws the cel border toward red by it (N06; measured on the reference).
     float gFlash = 0.0f;
+    float sDrawScale = 1.0f;   // (PC debug menu, debugphys.h) the uniform scale in the matrices: the skinned normals lit without it
     // Drawn over the HUD (RenderGlob 0x168638: the glob set's flag bit 34, ALO +0xD0, option 69 SetSoIgnoreLocked,
     // while no screen object of priority >= 16 is shown, G_GAME +0x3BEC == 0): its kinds 3 / 4 -> 22 (23 faded),
     // 5 / 6 -> 23, 9 -> 24, 10 -> 25, drawn after kind 21 (the screen objects) over a cleared Z (group 10's

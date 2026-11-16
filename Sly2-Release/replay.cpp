@@ -428,7 +428,7 @@ bool FTextHook(const TEXTDRAW& td)
             const char* szBack = !fReplay ? SzMenuBackGlyph() : BtnReplayBack() == 0x20 ? "&2O&." : "&2X&.";
             const float dx = DxTextUi(*td.pfont, td.pfontIcons, *td.ptext, td.size / 51.2f) * td.sx;
             Text(td, std::string(szBack) + StrPort(PTX_GlyphSep) + StrLocalized(g_psw, IdText(0x40)),
-                 td.x + dx + (FWideText() ? td.size : td.size * 1.2f), td.y, td.size, 0.0f, td.off, td.sc);
+                 td.x + dx + (FWideChars() ? td.size : td.size * 1.2f), td.y, td.size, 0.0f, td.off, td.sc);
         }
         return false;
     }
@@ -462,7 +462,7 @@ bool FTextHook(const TEXTDRAW& td)
     Text(td, strDesc, td.x + 22.0f, yDesc, td.size * 0.55f, 500.0f, td.off, td.sc);
     // (the region's confirm / back buttons, the game's "Back" 0x40; the Japanese with its full-width space)
     const std::string strHint = SzMenuConfirmGlyph() + StrPort(PTX_GlyphSep) + StrPort(PTX_ReplayJob) +
-                                (FWideText() ? "\xE3\x80\x80" : "    ") + SzMenuBackGlyph() + StrPort(PTX_GlyphSep) +
+                                (FWideChars() ? "\xE3\x80\x80" : "    ") + SzMenuBackGlyph() + StrPort(PTX_GlyphSep) +
                                 StrLocalized(g_psw, IdText(0x40));
     Text(td, strHint, td.x, yDesc + 44.0f, td.size * 0.7f, 0.0f, td.off, td.sc);
     // (the icon font has no arrows: the position in the list after the buttons when it scrolls)

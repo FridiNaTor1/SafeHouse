@@ -91,7 +91,7 @@ On the Steam Deck, install in Desktop Mode, then use **Add to Steam** on the gam
     <td><img src="docs/images/high-refresh.jpg" alt="Frame-rate choices"><br><sub>High refresh rates, up to uncapped</sub></td>
   </tr>
   <tr>
-    <td><img src="docs/images/pc-extras-carmelita-aim.webp" alt="Playing as Carmelita in aim mode"><br><sub>PC Extras: play as Carmelita</sub></td>
+    <td><img src="docs/images/pc-extras-carmelita-aim.webp" alt="Playing as Carmelita in aim mode"><br><sub>Extras: play as Carmelita</sub></td>
     <td><img src="docs/images/debug-menu.jpg" alt="The debug menu"><br><sub>The debug menu (F10)</sub></td>
   </tr>
   <tr>
@@ -141,6 +141,8 @@ cmake --build --preset linux-release --parallel 4
   libchdr and FFmpeg. Their licences are in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) and [`licenses/`](licenses).
 
 And at the root of the Sly 2 port: the **[Sly 2 decompilation](https://github.com/Komasia/sly2-decomp)**.
+The Sly 3 port is built with the help of the **[Sly 3 decompilation](https://github.com/NaGaa95/sly3-decomp)**.
+Thanks to everyone who contributed to these projects.
 
 ## Legal
 

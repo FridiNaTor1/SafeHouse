@@ -24,7 +24,10 @@ struct LO;
 struct RENDEROPTS;
 
 // The particle drawing for the frame pass (render.cpp calls it where kind 12 is drawn).
-void DrawParticles(const glm::mat4& matWorldToClip, const glm::vec3& posCamera, float aspect);
+// (VR, both eyes in one pass on Vulkan: pmatView1 / pposView1 the second eye's; the program's two-view stage draws it)
+// fStencilOff: the stencil test turned off first (glDisable(GL_STENCIL_TEST), or in the draw packets' states).
+void DrawParticles(const glm::mat4& matWorldToClip, const glm::vec3& posCamera, float aspect, const glm::mat4* pmatView1 = nullptr,
+                   const glm::vec3* pposView1 = nullptr, bool fStencilOff = false);
 
 // Statistics for tests.
 struct PARTICLESTATS

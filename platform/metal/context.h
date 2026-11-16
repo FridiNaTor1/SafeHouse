@@ -78,12 +78,15 @@ class Context {
 
   // Presentation.
   void SetSwapInterval(int interval);
+  double MinimumPresentSeconds() const;  // (iOS) how long a frame stays up at the swap interval
   void SwapBuffers();
   void Flush();
   void Finish();
 
   // Errors and queries about the implementation.
-  void SetError(GLenum error);
+  // (where / value: an enum the layer does not translate; logged once per call site and value, "Metal: GL_INVALID_ENUM
+  // in CreateShader: 0x8DD9", so a translation gap shows in the game's log rather than only as glGetError's code)
+  void SetError(GLenum error, const char* where = nullptr, GLenum value = 0);
   GLenum TakeError();
   const char* GetString(GLenum name);
   const char* GetStringIndexed(GLenum name, uint32_t index);
@@ -354,6 +357,8 @@ class Context {
   GlState state_;
   GLenum error_ = gl::kNoError;
   int swap_interval_ = 1;
+  int display_max_hz_ = 0;  // (iOS) UIScreen.maximumFramesPerSecond, through the GLFW shim's video mode
+  int logged_interval_ = -1;
   int max_samples_ = 4;
   int drawable_width_ = 0;
   int drawable_height_ = 0;

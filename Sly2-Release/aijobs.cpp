@@ -291,7 +291,7 @@ void JOBREACT::React(const AIMSG& m)
         break;
     }
     }
-    if (fClear38C) pguard->plo38C = nullptr;  // orig 0x208540(actor, 0)
+    if (fClear38C) SetGuardPursued(pguard, nullptr);  // orig 0x208540(actor, 0)
 }
 
 // orig: 0x00177618

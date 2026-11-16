@@ -11,6 +11,10 @@
 #include <optional>
 
 #include <array>
+#include <atomic>
+#include <exception>
+#include <mutex>
+#include <thread>
 #include <algorithm>
 #include <cctype>
 #include <cstdio>
@@ -25,6 +29,9 @@
 #include <string>
 #include <utility>
 #include <vector>
+#if defined(CANE_IOS)
+#include <unistd.h>
+#endif
 
 namespace fs = std::filesystem;
 
@@ -208,11 +215,27 @@ constexpr DIALOGAUDIOINFO DIALOG_AUDIO_TABLE[] =
 
 static bool g_nonInteractive=false, g_progressJson=false;
 static uint64_t g_isoSize=0;
+static fs::path g_languagesDir;   // (--languages-dir: Sly 2's shared languages folder, Sly2-Release/langstore.h)
 // The disc image given (an .iso, or a CHD read through its decompressed copy): what the installation records.
 static fs::path g_sourcePath;
 static std::streambuf* g_stdoutBuffer=nullptr;
+#if defined(CANE_IOS)
+// iOS: the launcher's pipe as it was at start. The extractor runs in the app's process (platform/ios/ios_app.mm), where
+// a tool it runs (Sly 2's converter) takes stdout while it runs; the progress lines keep going to the launcher.
+static int g_progressFd=-1;
+#endif
 static void Progress(const std::string& stage,size_t completed,size_t total,const std::string& item="") {
-    if(g_progressJson) {std::ostream out(g_stdoutBuffer);out << cane::json({{"stage",stage},{"completed",completed},{"total",total},{"item",item}}).dump()<<std::endl;}
+    if(!g_progressJson)return;
+    const std::string line=cane::json({{"stage",stage},{"completed",completed},{"total",total},{"item",item}}).dump();
+#if defined(CANE_IOS)
+    if(g_progressFd>=0) {
+        std::cout.flush();std::cerr.flush();
+        const std::string text=line+"\n";
+        for(size_t done=0;done<text.size();) {const auto n=write(g_progressFd,text.data()+done,text.size()-done);if(n<=0)break;done+=size_t(n);}
+        return;
+    }
+#endif
+    std::ostream out(g_stdoutBuffer);out<<line<<std::endl;
 }
 static void CheckRange(uint64_t offset,uint64_t size) {
     constexpr uint64_t limit=512ull*1024*1024;
@@ -1387,10 +1410,14 @@ static int ExtractDiscImage(const cane::DiscImageInstall& d,const fs::path& isoP
         // Sly 2: the game's converter reads the disc once and writes its files,
         // named, with extraction_manifest.json; then every file is inventoried for the launcher's verification.
         Progress("convert",0,1,"");
-        pcbrx::RunTool({cane::utf8(pcbrx::Tool(d.converterTool)),"--disc",cane::utf8(isoPath),"--convert",cane::utf8(out)},
+        std::vector<std::string> convert{cane::utf8(pcbrx::Tool(d.converterTool)),"--disc",cane::utf8(isoPath),"--convert",cane::utf8(out)};
+        if(!g_languagesDir.empty()) {convert.push_back("--languages-dir");convert.push_back(cane::utf8(fs::absolute(g_languagesDir)));}
+        pcbrx::RunTool(convert,
                        [](const std::string& line) {
                            size_t done=0,total=0;char item[512]={};
                            if(std::sscanf(line.c_str(),"progress %zu %zu %511[^\n]",&done,&total,item)>=2)Progress("convert",done,total,item);
+                           // (then the languages into the shared folder)
+                           else if(std::sscanf(line.c_str(),"languages %zu %zu %511[^\n]",&done,&total,item)>=2)Progress("languages",done,total,item);
                            // (then every world's textures into Textures/: on by default, CONVERTER.md "Textures")
                            else if(std::sscanf(line.c_str(),"textures %zu %zu %511[^\n]",&done,&total,item)>=2)Progress("textures",done,total,item);
                        });
@@ -1403,14 +1430,39 @@ static int ExtractDiscImage(const cane::DiscImageInstall& d,const fs::path& isoP
             if(e->is_regular_file())written.push_back(e->path());
         }
         std::sort(written.begin(),written.end());
+        // (every file hashed on worker threads: the files were just written, so they are read from memory; the
+        // inventory keeps the sorted order)
+        std::vector<std::string> sha(written.size());
+        std::atomic<size_t> next{0},done{0};
+        std::mutex progressMutex;
+        std::exception_ptr failure;
+        auto hashWorker=[&] {
+            for(size_t i;(i=next++)<written.size();) {
+                try {sha[i]=cane::hashFile(written[i]);}
+                catch(...) {std::lock_guard lock(progressMutex);if(!failure)failure=std::current_exception();return;}
+                const size_t n=++done;
+                if(n%100==0 || n==written.size()) {
+                    std::lock_guard lock(progressMutex);
+                    Progress("inventory",n,written.size(),cane::utf8(fs::relative(written[i],out).generic_u8string()));
+                }
+            }
+        };
+        {
+            std::vector<std::thread> threads;
+            const unsigned count=std::clamp(std::thread::hardware_concurrency(),1u,8u);
+            for(unsigned t=0;t<count;++t)threads.emplace_back(hashWorker);
+            for(auto& t:threads)t.join();
+        }
+        if(failure)std::rethrow_exception(failure);
         for(size_t i=0;i<written.size();++i) {
             const std::string name=cane::utf8(fs::relative(written[i],out).generic_u8string());
-            files.push_back({{"path",name},{"size",fs::file_size(written[i])},{"sha256",cane::hashFile(written[i])}});
-            if((i+1)%100==0 || i+1==written.size())Progress("inventory",i+1,written.size(),name);
+            files.push_back({{"path",name},{"size",fs::file_size(written[i])},{"sha256",sha[i]}});
         }
-        const cane::json manifest={{"schema",1},{"game",g.key},{"asset_version",d.assetVersion},{"extractor_version","0.3.0"},
+        cane::json manifest={{"schema",1},{"game",g.key},{"asset_version",d.assetVersion},{"extractor_version","0.3.0"},
                                    {"layout","files"},{"disc",variant->bootFile},{"serial",variant->serial},{"region",variant->region},
                                    {"disc_sha1",variant->executableSha1},{"iso_path",cane::utf8(fs::absolute(g_sourcePath))},{"files",files}};
+        // (Sly 2: where its languages went, the game's default --languages-dir: Sly2-Release/langstore.h)
+        if(!g_languagesDir.empty())manifest["languages_dir"]=cane::utf8(fs::absolute(g_languagesDir));
         cane::writeJson(out/"installation.json",manifest);
         transaction.commit();
         std::cout<<"Installed "<<g.title<<" into:\n"<<requestedOutput<<'\n';
@@ -1480,10 +1532,15 @@ static int Extract(int argc, char** argv)
             requestedGame=cane::gameFromKey(args[i]);
             if(!requestedGame || !cane::installable(*requestedGame))throw std::runtime_error("Unknown or unsupported game: "+args[i]);
         }
+        else if(option=="--languages-dir") {
+            // (Sly 2: the converter puts the disc's languages into this shared folder: Sly2-Release/langstore.h)
+            if(++i==args.size())throw std::runtime_error("Missing path for --languages-dir");
+            g_languagesDir=cane::path(args[i]);
+        }
         else if(option=="--iso" || option=="--output") {
             if(++i==args.size())throw std::runtime_error("Missing path for "+option);
             if(option=="--iso")isoPath=cane::path(args[i]);else requestedOutput=cane::path(args[i]);
-        } else if(option=="--help") {std::cout<<"cane-extractor --iso PATH (.iso or .chd) --output DIRECTORY [--game sly1|sly2|sly3] [--validate-only] [--identify] [--non-interactive] [--progress=jsonl]\n";return 0;}
+        } else if(option=="--help") {std::cout<<"cane-extractor --iso PATH (.iso or .chd) --output DIRECTORY [--game sly1|sly2|sly3] [--validate-only] [--identify] [--non-interactive] [--progress=jsonl] [--languages-dir DIR]\n";return 0;}
         else if(isoPath.empty() && !option.starts_with("--"))isoPath=cane::path(option);
         else throw std::runtime_error("Unknown argument: "+option);
     }
@@ -2261,6 +2318,15 @@ static int Extract(int argc, char** argv)
 
 int main(int argc,char** argv) {
     g_stdoutBuffer=std::cout.rdbuf();
+    // (iOS / Android run main again in the same image: no option of the previous run carries over)
+    g_nonInteractive=false;g_progressJson=false;g_languagesDir.clear();g_sourcePath.clear();g_isoSize=0;
+#if defined(CANE_IOS)
+    // (closed before main returns, also on an exception: the app's output relay ends when every copy is closed)
+    struct ProgressFd {
+        ProgressFd() {std::fflush(stdout);g_progressFd=dup(STDOUT_FILENO);}
+        ~ProgressFd() {if(g_progressFd>=0)close(g_progressFd);g_progressFd=-1;}
+    } progressFd;
+#endif
     int result;
     try {result=Extract(argc,argv);}catch(const std::exception& e) {std::cerr<<"Extraction failed: "<<e.what()<<std::endl;Progress("error",0,0,e.what());result=1;}
     std::cout.rdbuf(g_stdoutBuffer);return result;

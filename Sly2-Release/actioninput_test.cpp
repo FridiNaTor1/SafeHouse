@@ -196,6 +196,9 @@ int sly2actions::SelfTest() {
         check(StrPromptButtonWords("Hold R1 to fire", 1594) == "Hold &2R&. to fire" &&
               PromptGlyphFor('R').ch == 'S', "turret briefing shows the mapped fire button");
         check(StrPromptButtonWords("Hold R1", 1593) == "Hold R1", "other authored R1 text is unchanged");
+        check(StrPromptButtonWords("Tryk på L3 tasten", -1) == "Tryk på &2{&. tasten" &&
+              StrPromptButtonWords("L3-Taste, R3-Taste", -1) == "&2{&.-Taste, &2}&.-Taste" &&
+              StrPromptButtonWords("AL3 L33 &2L&.", -1) == "AL3 L33 &2L&.", "the words L3 / R3 become stick-press glyphs");
     }
     LO forcedOwner;
     forcedOwner.SetField(0, 0x154, 8);

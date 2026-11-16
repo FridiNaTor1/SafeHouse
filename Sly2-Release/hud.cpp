@@ -1,5 +1,6 @@
 // See hud.h.
 
+#include "fastpaths.h"
 #include "hud.h"
 #include "texmod.h"
 #include "region.h"
@@ -7,10 +8,13 @@
 #include "display.h"
 #include "promptglyph.h"
 #include "gl.h"
+#include "gl_backend.h"
 #include "render.h"
 #include "shd.h"
 #include "qolview.h"
+#include "vr.h"
 
+#include <array>
 #include <stb/stb_image_write.h>
 
 #include <algorithm>
@@ -38,15 +42,12 @@ constexpr float UI_KY = 5.0f / 11.0f;           // 0x3EE8BA2F
 glm::vec2 ScreenFromGs(float tx, float ty)
 {
     // GS pixel = (t - 2^19) mod 4096 (the 12.4 register keeps 16 bits), then the frame offset.
-#ifdef __SWITCH__
-    // (the Switch: newlib's fmodf is a slow bit-by-bit loop. v - 4096 trunc(v / 4096) is the same value: the scalings
-    // by a power of two are exact, and so is the difference of two floats of the same sign within a factor of two of
-    // each other (Sterbenz); only an exact zero's sign may differ, which the offsets below do not see)
+    // (not std::fmod: newlib's fmodf is a slow bit-by-bit loop and glibc's an x87 fprem loop, ~45 % of DrawSprite's time
+    // on the desktop. v - 4096 trunc(v / 4096) is the same value: the scalings by a power of two are exact, and so is the
+    // difference of two floats of the same sign within a factor of two of each other (Sterbenz); only an exact zero's
+    // sign may differ, which the offsets below do not see)
     auto mod4096 = [](float v) { return v - 4096.0f * std::trunc(v * (1.0f / 4096.0f)); };
     const float gx = mod4096(tx - GS_BIAS), gy = mod4096(ty - GS_BIAS);
-#else
-    const float gx = std::fmod(tx - GS_BIAS, 4096.0f), gy = std::fmod(ty - GS_BIAS, 4096.0f);
-#endif
     return glm::vec2((gx - FRAME_OFX) * 1.25f, (gy - FRAME_OFY) * 2.0f);
 }
 
@@ -54,7 +55,8 @@ glm::vec2 ScreenFromGs(float tx, float ty)
 glm::vec2 WidenToPicture(glm::vec2 p)
 {
     static const bool s_fOff = [] { const char* sz = std::getenv("SLY2N_WIDEBG"); return sz && sz[0] == '0'; }();
-    if (!g_display.fWideBackgrounds || s_fOff) return p;
+    // (VR Immersive: a transition's wipe over the whole view widens its backdrop whatever the option: vr.h FWipeCanvas)
+    if ((!g_display.fWideBackgrounds && !vr::FWipeCanvas()) || s_fOff) return p;
     const glm::vec2 s = g_display.uiScale;
     constexpr float eps = 0.5f;
     // (only where the window reaches past the canvas: a 4:3 picture is unchanged)
@@ -162,6 +164,28 @@ void CHud::DrawSprite(const SELEM& elem, const HUDSTATE& st)
             }
             // (the wipe's Sly mask: its strips overshoot the canvas when it grows; only its rectangles (the black
             // backdrop) are widened, the mask keeps its shape)
+            // (VR Immersive: the subtitle box's letterbox bars, the polygons across the whole width at the top or the bottom
+            // edge, not drawn)
+            // (the Immersive cutscenes (vr.h FCutsceneView): the top bar left out, the bottom one under the subtitles kept,
+            // see-through, on the panel that follows the head)
+            if (fNoBarsObj && lo.x <= eps && hi.x >= 640.0f - eps && (lo.y <= eps || hi.y >= 448.0f - eps) && hi.y - lo.y < 160.0f)
+            {
+                if (lo.y > eps && vr::FCutsceneView())
+                    for (VTX& v : av) v.rgba.a *= 0.6f;
+                else
+                {
+                    cvtxLeft -= int(av.size());
+                    continue;
+                }
+            }
+            // (VR Immersive: a fill over the whole canvas (a title card's colour, the pause backdrop) goes over the eyes,
+            // under Sly and his prize (the foreground kinds), not on the HUD panel: vr.h FTakeEyeFill)
+            if (av.size() == 4 && lo.x <= eps && hi.x >= 640.0f - eps && lo.y <= eps && hi.y >= 448.0f - eps && cvtxLeft >= 4 &&
+                !fWideEdgesObj && vr::FTakeEyeFill(glm::vec4(glm::vec3(c) / 255.0f, c.a / 128.0f)))
+            {
+                cvtxLeft -= int(av.size());
+                continue;
+            }
             if (fSpan && !fWideEdgesObj && !(fWideRectsOnlyObj && av.size() > 5))
                 for (VTX& v : av) v.pos = WidenToPicture(v.pos);
         }
@@ -252,35 +276,58 @@ void CHud::ExtendEdgeTriangle(VTX a, VTX b, VTX c)
     if (!FWideExtent(lo, hi)) return;
     // (the frames overshoot the canvas a little (to -9.7 / 652) or stop just short of it (1.6 / 639.5))
     constexpr float tol = 2.0f;
-    const VTX av[3] = {a, b, c};
+    // (a picture past the canvas on both axes (VR's binocucom over the whole view, vr.h FBinocCanvas): the quads made
+    // across the left / right borders go on past the top / bottom ones too, so the corners are covered as well)
+    std::vector<std::array<VTX, 3>> atri{{a, b, c}};
     for (int k = 0; k < 2; ++k)   // x, then y
     {
         if (k == 0 ? lo.x >= 0.0f : lo.y >= 0.0f) continue;
         const float edge1 = k == 0 ? 640.0f : 448.0f;
-        for (int side = 0; side < 2; ++side)
+        if (k == 1 && fVrBandsObj)
         {
-            const float to = side ? hi[k] : lo[k];
-            int ai[3], n = 0;
-            for (int i = 0; i < 3; ++i)
-                if (side ? av[i].pos[k] >= edge1 - tol : av[i].pos[k] <= tol) ai[n++] = i;
-            if (n < 2) continue;
-            // (all three at the edge: the pair that spans the most across)
-            int i0 = ai[0], i1 = ai[1];
-            if (n == 3)
-            {
-                float best = -1.0f;
-                for (int u = 0; u < 3; ++u)
-                    for (int v = u + 1; v < 3; ++v)
-                        if (const float d = std::fabs(av[u].pos[1 - k] - av[v].pos[1 - k]); d > best) { best = d; i0 = u; i1 = v; }
-            }
-            const VTX p = av[i0], q = av[i1];
-            if (std::fabs(p.pos[1 - k] - q.pos[1 - k]) <= 1e-3f) continue;
-            VTX p2 = p, q2 = q;
-            p2.pos[k] = to;
-            q2.pos[k] = to;
-            m_atri.insert(m_atri.end(), {p, q, p2, p2, q, q2});
-            ctri += 2;
+            // (VR: no stretching up / down; the widest polygon on each border gives the band's colour)
+            for (const std::array<VTX, 3>& av : atri)
+                for (int side = 0; side < 2; ++side)
+                {
+                    float x0 = 1e9f, x1 = -1e9f;
+                    int n = 0;
+                    for (const VTX& v : av)
+                        if (side ? v.pos.y >= edge1 - tol : v.pos.y <= tol) { x0 = std::min(x0, v.pos.x); x1 = std::max(x1, v.pos.x); ++n; }
+                    // (drawn polygons only: not the masks' (modes 1 / 2), nor see-through ones)
+                    if (n >= 2 && x1 - x0 > m_aband[side].span && (m_mode == 0 || m_mode == 4) && av[0].rgba.a >= 64.0f)
+                        m_aband[side] = BAND{x1 - x0, av[0]};
+                }
+            continue;
         }
+        const size_t ntri = atri.size();
+        for (size_t itri = 0; itri < ntri; ++itri)
+            for (int side = 0; side < 2; ++side)
+            {
+                const std::array<VTX, 3> av = atri[itri];
+                const float to = side ? hi[k] : lo[k];
+                int ai[3], n = 0;
+                for (int i = 0; i < 3; ++i)
+                    if (side ? av[size_t(i)].pos[k] >= edge1 - tol : av[size_t(i)].pos[k] <= tol) ai[n++] = i;
+                if (n < 2) continue;
+                // (all three at the edge: the pair that spans the most across)
+                int i0 = ai[0], i1 = ai[1];
+                if (n == 3)
+                {
+                    float best = -1.0f;
+                    for (int u = 0; u < 3; ++u)
+                        for (int v = u + 1; v < 3; ++v)
+                            if (const float d = std::fabs(av[size_t(u)].pos[1 - k] - av[size_t(v)].pos[1 - k]); d > best) { best = d; i0 = u; i1 = v; }
+                }
+                const VTX p = av[size_t(i0)], q = av[size_t(i1)];
+                if (std::fabs(p.pos[1 - k] - q.pos[1 - k]) <= 1e-3f) continue;
+                VTX p2 = p, q2 = q;
+                p2.pos[k] = to;
+                q2.pos[k] = to;
+                m_atri.insert(m_atri.end(), {p, q, p2, p2, q, q2});
+                ctri += 2;
+                atri.push_back({p, q, p2});
+                atri.push_back({p2, q, q2});
+            }
     }
 }
 
@@ -350,6 +397,32 @@ bool CHud::FClipLineToCanvas(VTX& a, VTX& b)
     return true;
 }
 
+// (fVrBandsObj, after the frame's polygons) the picture's bands above and below the canvas, corners included, in the
+// frame's colour on that border
+void CHud::EndWideEdgesObj()
+{
+    glm::vec2 lo, hi;
+    if (fVrBandsObj && std::getenv("SLY2N_BANDDBG"))
+        std::printf("bands: %d top %.1f bottom %.1f\n", int(FWideExtent(lo, hi)), double(m_aband[0].span), double(m_aband[1].span));
+    if (fVrBandsObj && FWideExtent(lo, hi) && lo.y < 0.0f)
+        for (int side = 0; side < 2; ++side)
+        {
+            if (m_aband[side].span <= 0.0f) continue;
+            const float y0 = side ? 448.0f : lo.y, y1 = side ? hi.y : 0.0f;
+            VTX a = m_aband[side].v, b = a, c = a, d = a;
+            a.uv = b.uv = c.uv = d.uv = glm::vec2(0.0f);
+            a.pos = {lo.x, y0}, b.pos = {hi.x, y0}, c.pos = {hi.x, y1}, d.pos = {lo.x, y1};
+            // (a batch of their own in the normal mode, whatever mode the frame ended in)
+            CloseBatch();
+            m_abatch.push_back({0, m_atri.size(), 0, m_aline.size(), 0});
+            m_atri.insert(m_atri.end(), {a, b, c, a, c, d});
+            ctri += 2;
+            CloseBatch();
+            m_fBreakBatch = true;
+        }
+    m_aband[0] = m_aband[1] = BAND{};
+}
+
 // The same for a line's vertex on the canvas's border: a straight segment out to the picture's border.
 void CHud::ExtendEdgeLine(VTX v)
 {
@@ -359,6 +432,7 @@ void CHud::ExtendEdgeLine(VTX v)
     for (int k = 0; k < 2; ++k)
     {
         if (k == 0 ? lo.x >= 0.0f : lo.y >= 0.0f) continue;
+        if (k == 1 && fVrBandsObj) continue;   // (VR: the bands are filled instead, EndWideEdgesObj)
         const float edge1 = k == 0 ? 640.0f : 448.0f;
         VTX w = v;
         if (v.pos[k] <= tol) w.pos[k] = lo[k];
@@ -651,6 +725,8 @@ void CHud::Pillarbox(glm::vec4 rgba, float z)
 
 void CHud::Fade(glm::vec4 rgba)
 {
+    // (VR Immersive: the fades over the eyes, the whole view: vr.h FTakeEyeFill)
+    if (vr::FTakeEyeFill(glm::vec4(glm::vec3(rgba) / 255.0f, rgba.a / 128.0f))) return;
     float x0, x1, y0, y1;
     PictureExtent(x0, x1, y0, y1);
     if (static const bool s_f = std::getenv("SLY2N_FADEPRINT") != nullptr; s_f)
@@ -729,7 +805,7 @@ std::string StrWrapped(const FONTBRX& fontBase, const FONTBRX* pfontOther, const
         std::size_t cb = 1;
         const uint32_t ch = ChDecode(out, i, &cb);
         const float dx = pfont->DxFromCh(ch) * k88;
-        if (FWideText())
+        if (!FLatinLineBreaks())   // (PC: Latin text on the Japanese disc, langstore.h: at spaces, below)
         {
             // orig JP 0x217538: the character that passes the box goes to the next line, with the characters before
             // it back to the last place a line may break (JP 0x220840: not before a closing mark, not after an
@@ -855,7 +931,7 @@ void CHud::DrawTextBox(const FONTBRX& fontBase, const FONTBRX* pfontOther, const
             st.m[8] = tx;
             st.m[9] = ty;
             // the button icons: the bound button for the device in use (promptglyph.h; widths unchanged)
-            const PROMPTGLYPH pg = pfont == pfontOther && (ch < 0x80 || !FWideText()) ? PromptGlyphFor(char(ch)) : PROMPTGLYPH{};
+            const PROMPTGLYPH pg = pfont == pfontOther && (ch < 0x80 || !FWideChars()) ? PromptGlyphFor(char(ch)) : PROMPTGLYPH{};
             glm::vec2 lo, hi;
             float z = 0.0f, a = 0.0f;
             if (pg.kind == PROMPTGLYPH::Icon && FGlyphBox(*pglyph, st, &lo, &hi, &z, &a))
@@ -865,7 +941,7 @@ void CHud::DrawTextBox(const FONTBRX& fontBase, const FONTBRX* pfontOther, const
                 const float xc = 0.5f * (lo.x + hi.x), yc = 0.5f * (lo.y + hi.y);
                 // (the Start / Select glyphs are flat pills: their icons as tall as the face buttons' (Triangle's), so a
                 // keycap or a pad's small button stays readable; N39)
-                if (ch == '!' || ch == '_')
+                if (ch == '!' || ch == '_' || (ch >= 1 && ch <= 4))
                     if (const SELEM* pglyphT = pfont->PglyphFromCh(uint8_t('T')))
                     {
                         glm::vec2 loT, hiT;
@@ -890,8 +966,19 @@ void CHud::Flush(int width, int height)
     CloseBatch();
     if (!s_vao)
     {
+        s_vbo = GlNewBuffer(GL_ARRAY_BUFFER, 0, nullptr, GL_STREAM_DRAW);
+        if (const cane::draw::Packets* pkv = PpacketsVao())
+        {
+            using namespace cane::draw;
+            const VertexAttrib aattr[] = {{0, 2, kAttribFloat, 0, 0, s_vbo, uint32_t(offsetof(VTX, pos)), sizeof(VTX), 0},
+                                          {1, 4, kAttribFloat, 0, 0, s_vbo, uint32_t(offsetof(VTX, rgba)), sizeof(VTX), 0},
+                                          {2, 1, kAttribFloat, 0, 0, s_vbo, uint32_t(offsetof(VTX, z)), sizeof(VTX), 0},
+                                          {3, 2, kAttribFloat, 0, 0, s_vbo, uint32_t(offsetof(VTX, uv)), sizeof(VTX), 0}};
+            s_vao = pkv->createVertexArray(aattr, 4, 0);
+        }
+        else
+        {
         glGenVertexArrays(1, &s_vao);
-        glGenBuffers(1, &s_vbo);
         glBindVertexArray(s_vao);
         glBindBuffer(GL_ARRAY_BUFFER, s_vbo);
         glEnableVertexAttribArray(0);
@@ -903,7 +990,9 @@ void CHud::Flush(int width, int height)
         glEnableVertexAttribArray(3);
         glVertexAttribPointer(3, 2, GL_FLOAT, GL_FALSE, sizeof(VTX), reinterpret_cast<void*>(offsetof(VTX, uv)));
         glBindVertexArray(0);
+        }
     }
+    if (FlushPackets(width, height)) return;
     glBindFramebuffer(GL_FRAMEBUFFER, g_gl.FboScene());
     glViewport(0, 0, width, height);
     glClearDepth(0.0);
@@ -916,13 +1005,14 @@ void CHud::Flush(int width, int height)
     glEnable(GL_BLEND);
     glBlendEquation(GL_FUNC_ADD);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_FALSE);
+    if (g_fHudAlphaLayer) glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GLboolean(g_fHudAlphaLayer));
     glHudShader.Use();
     glUniform4f(glHudShader.Loc("uCanvas"), g_display.uiScale.x, g_display.uiScale.y, g_display.uiOffset.x, g_display.uiOffset.y);
     glBindVertexArray(s_vao);
     glBindBuffer(GL_ARRAY_BUFFER, s_vbo);
     // one buffer: the triangles, the lines, the quads
-#ifdef __SWITCH__
+#if SLY2_FASTPATHS
     // (the Switch: each part written into the buffer where it goes, not gathered into one array first and copied again)
     std::vector<size_t> aivtxQuad;
     size_t cvtx = m_atri.size() + m_aline.size();
@@ -952,7 +1042,7 @@ void CHud::Flush(int width, int height)
     auto setMode = [&](int mode) {
         // the 2D modes of 0x217298 (MSCAL pairs into P_K21's GS-state blocks), as the HUD uses them around a
         // masked piece: 1 writes the mask, 3 draws inside it, 2 clears it, 4 (and 0) draw normally.
-        glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_FALSE);
+        glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GLboolean(g_fHudAlphaLayer));
         glDisable(GL_STENCIL_TEST);
         glEnable(GL_DEPTH_TEST);
         glDepthMask(GL_TRUE);
@@ -1010,6 +1100,163 @@ void CHud::Flush(int width, int height)
     glBindVertexArray(0);
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
     glDisable(GL_BLEND);
+}
+
+// (draw packets, platform/draw_packet.h: the Vulkan renderer; the GL-style state afterwards as Flush's GL calls below
+// leave it. Each mode / quad kind one State: the stencil of modes 0 / 4 left as the GL calls leave it (kKeepStencil),
+// the uniforms fTextured / fAlphaNonZero / tex as each State's constants, uCanvas as setConstant.)
+bool CHud::FlushPackets(int width, int height)
+{
+    using namespace cane::draw;
+    const Packets* pk = cane::gl::ActiveBackend() ? cane::gl::ActiveBackend()->packets : nullptr;
+    if (!pk || !pk->drawArraysMode || !pk->textureParams || !pk->beginPass || !pk->clear || !pk->applyState || !pk->bindTexture ||
+        !pk->setConstant)
+        return false;
+    static const bool s_fKeepZ = std::getenv("SLY2N_HUDKEEPZ") != nullptr;
+    if (s_fKeepZ) return false;
+    static const bool s_fNoTest = std::getenv("SLY2_RTGTNOTEST") != nullptr;
+    // states: [alpha layer][mode 0..3][kind: 0 batch, 1 quad, 2 quad alpha-tested, 3 quad replaced, 4 replaced alpha-tested],
+    // [2] the base state the GL calls set first, the end state
+    static uint32_t s_aid[2][4][5], s_aidBase[2], s_aidEnd[2];
+    static GLuint s_prog = 0;
+    static GLint s_locCanvas = -1;
+    const GLuint prog = glHudShader.ID;
+    if (s_prog != prog)
+    {
+        const GLint locTextured = glHudShader.Loc("fTextured"), locTex = glHudShader.Loc("tex"), locNz = glHudShader.Loc("fAlphaNonZero");
+        s_locCanvas = glHudShader.Loc("uCanvas");
+        auto make = [&](bool fAlpha, int mode, int kind) {
+            State st;
+            st.program = prog;
+            const bool fReplace = kind >= 3;
+            st.blend = fReplace ? 0 : 1;
+            st.srcColor = st.srcAlpha = kFactorSrcAlpha;
+            st.dstColor = st.dstAlpha = kFactorOneMinusSrcAlpha;
+            if (fAlpha) st.srcAlpha = kFactorOne;
+            st.cull = 0;
+            st.depthWrite = 1;
+            st.depthCompare = kGreaterEqual;
+            const bool fMask = mode == 1 || mode == 2;
+            st.colorMask = fMask ? 0 : uint8_t(fAlpha ? 0xF : 0x7);
+            st.depthTest = fMask ? 0 : 1;
+            st.stencilTest = mode != 0;
+            if (fMask)
+                st.stencilCompare = kAlways, st.stencilRef = mode == 1 ? 1 : 0, st.stencilPass = kStencilReplace;
+            else if (mode == 3)
+                st.stencilCompare = kEqual, st.stencilRef = 1;
+            else st.keep = kKeepStencil;
+            const bool fTextured = kind >= 1 && kind <= 4;
+            const bool fNz = (kind == 2 || kind == 4);
+            if (locTextured >= 0) st.aconst[st.cconst++] = {locTextured, fTextured ? 1u : 0u};
+            if (locNz >= 0) st.aconst[st.cconst++] = {locNz, fNz ? 1u : 0u};
+            if (locTex >= 0) st.aconst[st.cconst++] = {locTex, 0};
+            return st;
+        };
+        for (int a = 0; a < 2; ++a)
+        {
+            for (int m = 0; m < 4; ++m)
+                for (int k = 0; k < 5; ++k) s_aid[a][m][k] = pk->createState(make(a != 0, m, k));
+            s_aidBase[a] = pk->createState(make(a != 0, 0, 0));
+            State st = make(a != 0, 0, 0);
+            // (the end: blend off, all colours written, the stencil test off; the HUD's uniforms 0)
+            st.blend = 0;
+            st.colorMask = 0xF;
+            st.cconst = 0;
+            if (locTextured >= 0) st.aconst[st.cconst++] = {locTextured, 0};
+            if (locNz >= 0) st.aconst[st.cconst++] = {locNz, 0};
+            s_aidEnd[a] = pk->createState(st);
+        }
+        s_prog = prog;
+    }
+    const int a = g_fHudAlphaLayer ? 1 : 0;
+    bool fOk = s_aidBase[a] && s_aidEnd[a];
+    for (int m = 0; m < 4 && fOk; ++m)
+        for (int k = 0; k < 5 && fOk; ++k) fOk = s_aid[a][m][k] != 0;
+    if (!fOk) return false;
+    Pass ps;
+    ps.framebuffer = g_gl.FboScene();
+    ps.viewport[2] = width, ps.viewport[3] = height;
+    pk->beginPass(ps);
+    {
+        Clear c;   // (glClearDepth(0) + glClear(GL_DEPTH_BUFFER_BIT) under the masks and scissor as they are)
+        c.clear = kClearDepth;
+        c.depth = 0.0f;
+        c.stencilMaskKept = 1;
+        pk->clear(c);
+    }
+    pk->applyState(s_aidBase[a]);
+    const float canvas[4] = {g_display.uiScale.x, g_display.uiScale.y, g_display.uiOffset.x, g_display.uiOffset.y};
+    if (s_locCanvas >= 0) pk->setConstant(prog, s_locCanvas, canvas, sizeof canvas);
+    // one buffer: the triangles, the lines, the quads (written in place when the backend can)
+    const cane::draw::Packets* const pkb = PpacketsBuf();   // (native buffers: by name, no binding)
+    if (!pkb) glBindBuffer(GL_ARRAY_BUFFER, s_vbo);
+    std::vector<size_t> aivtxQuad;
+    aivtxQuad.reserve(m_aquad.size());
+    size_t cvtx = m_atri.size() + m_aline.size();
+    for (const QUAD& q : m_aquad) { aivtxQuad.push_back(cvtx); cvtx += q.av.size(); }
+    VTX* pvtx = pk->mapStream && cvtx ? static_cast<VTX*>(pk->mapStream(s_vbo, cvtx * sizeof(VTX))) : nullptr;
+    if (pvtx)
+    {
+        auto put = [&](const VTX* pv, size_t c) {
+            if (c) std::memcpy(static_cast<void*>(pvtx), pv, c * sizeof(VTX));
+            pvtx += c;
+        };
+        put(m_atri.data(), m_atri.size());
+        put(m_aline.data(), m_aline.size());
+        for (const QUAD& q : m_aquad) put(q.av.data(), q.av.size());
+    }
+    else
+    {
+        if (pkb) pkb->bufferData(s_vbo, cvtx * sizeof(VTX), nullptr, cane::draw::kBufferStream);
+        else glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(cvtx * sizeof(VTX)), nullptr, GL_STREAM_DRAW);
+        size_t ivtx = 0;
+        auto put = [&](const VTX* pv, size_t c) {
+            if (c && pkb) pkb->bufferSubData(s_vbo, ivtx * sizeof(VTX), c * sizeof(VTX), pv);
+            else if (c) glBufferSubData(GL_ARRAY_BUFFER, GLintptr(ivtx * sizeof(VTX)), GLsizeiptr(c * sizeof(VTX)), pv);
+            ivtx += c;
+        };
+        put(m_atri.data(), m_atri.size());
+        put(m_aline.data(), m_aline.size());
+        for (const QUAD& q : m_aquad) put(q.av.data(), q.av.size());
+    }
+    const float lineWidth = std::max(1.0f, float(height) / 448.0f);
+    {
+        Clear c;   // (glClearStencil(0), glStencilMask(0xFF), glClear(GL_STENCIL_BUFFER_BIT))
+        c.clear = kClearStencil;
+        c.stencil = 0;
+        c.stencilWriteMask = c.stencilWriteMaskAfter = 0xFF;
+        pk->clear(c);
+    }
+    auto modeOf = [](int mode) { return mode == 1 || mode == 2 || mode == 3 ? mode : 0; };
+    size_t iquad = 0;
+    auto drawQuadsBefore = [&](size_t ibatch) {
+        for (; iquad < m_aquad.size() && m_aquad[iquad].ibatch <= ibatch; ++iquad)
+        {
+            const QUAD& q = m_aquad[iquad];
+            pk->bindTexture(0, q.tex, 0, 0);
+            // TEX1 0x60: linear, no mips (the prompt atlases, the HQ logo and texture mods keep their mipmaps)
+            pk->textureParams(q.tex, kWrapClampToEdge, kWrapClampToEdge, q.fMip || FTextureIsMod(q.tex) ? kFilterLinearMipLinear : kFilterLinear,
+                              kFilterLinear);
+            const bool fNz = (q.fReplace || q.fAlphaTest) && !s_fNoTest;
+            const int kind = (q.fReplace ? 3 : 1) + (fNz ? 1 : 0);
+            pk->drawArraysMode(s_aid[a][modeOf(q.mode)][kind], s_vao, kTriangles, uint32_t(aivtxQuad[iquad]), uint32_t(q.av.size()), lineWidth,
+                               nullptr, 0);
+        }
+    };
+    for (size_t ib = 0; ib < m_abatch.size(); ++ib)
+    {
+        const BATCH& b = m_abatch[ib];
+        drawQuadsBefore(ib);
+        const uint32_t id = s_aid[a][modeOf(b.mode)][0];
+        // (applied even without a draw: the GL calls set the mode's state either way)
+        if (!b.ctri && !b.cline) pk->applyState(id);
+        if (b.ctri) pk->drawArraysMode(id, s_vao, kTriangles, uint32_t(b.itri), uint32_t(b.ctri), lineWidth, nullptr, 0);
+        if (b.cline) pk->drawArraysMode(id, s_vao, kLines, uint32_t(m_atri.size() + b.iline), uint32_t(b.cline), lineWidth, nullptr, 0);
+    }
+    drawQuadsBefore(m_abatch.size());
+    // (no primitives: the end state, the line width and vertex array 0 as the GL calls leave them)
+    pk->drawArraysMode(s_aidEnd[a], 0, kTriangles, 0, 0, lineWidth, nullptr, 0);
+    return true;
 }
 
 namespace

@@ -152,6 +152,8 @@ float DxText(const FONTBRX& font, const FONTBRX* picons, const std::string& text
 void DrawHint(const SKIPCUT& s)
 {
     if (!s.fHint) return;
+    // (the on-screen pad is hidden in a scene: holding the screen skips, and the pad's own view draws the hold)
+    if (FTouchPadActive()) return;
     const FONTBRX* pfont = PfontHud();
     const FONTBRX* picons = PfontHudIcons();
     if (!pfont) return;
@@ -283,6 +285,7 @@ uint64_t NewSkipCutScene()
 }
 
 void NoteScptWaitsForButton() { s_skip.frameWait = g_frameJoy; }
+bool FSkipCutWaitsForButton() { return FScptWaitsNow(); }
 
 void UpdateSkipCut(float dtReal, uint16_t grfHeld, uint16_t grfPressed)
 {

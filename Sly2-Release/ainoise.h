@@ -55,6 +55,8 @@ void SetHeldNoise(NOISE** ppn, NOISETMPL* ptmpl, const glm::vec3& pos, LO* ploOw
 // (debug / tests) the noises allocated (live, held or pooled) and the pooled ones
 size_t CNoiseAllocated();
 size_t CNoisePooled();
+// (native) pn is one of this world's noises (live, held or pooled): a pointer kept across a world change is not
+bool FNoiseAllocated(const NOISE* pn);
 // orig: 0x00156548 / 0x00156698
 NOISE* PnoiseNew(NOISETMPL* ptmpl, const glm::vec3& pos, LO* ploOwner);
 // orig: 0x00156780

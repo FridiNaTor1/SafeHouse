@@ -105,3 +105,10 @@ out/
 *.ps2
 memcard*/
 /installations/
+# Android (scripts/android/build-package.py): Gradle outputs and local SDK settings
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/app/src/main/jniLibs/
+dist/android/

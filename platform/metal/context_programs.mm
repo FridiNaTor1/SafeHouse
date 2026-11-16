@@ -44,7 +44,7 @@ uint32_t ComponentCount(GlslType type) {
 
 uint32_t Context::CreateShader(GLenum type) {
   if (type != gl::kVertexShader && type != gl::kFragmentShader) {
-    SetError(gl::kInvalidEnum);
+    SetError(gl::kInvalidEnum, __func__, type);
     return 0;
   }
   const uint32_t name = shaders_table_.Create();

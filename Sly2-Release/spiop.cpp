@@ -233,6 +233,18 @@ void ApplyStream(const TRACK& t, int itrack, STREAM& s)
 {
     if (!s.pcm) return;
     float m[4] = {0, 0, 0, 0};
+    if (t.headset)
+    {
+        // (the USB headset's speaker, 0x19A4 / 0xD80: lgaud's volume from the track's (vol x 80 >> 10), no pan, no pitch,
+        //  the channels' volumes ignored (0x1B38); PC: the track's level as a centred stream, the user's dialogue
+        //  volume included; paused by stopping the voice, 0x1834 / 0x18EC lgaud 14 / 15)
+        float gLeft = 0.0f, gRight = 0.0f;
+        if (!t.paused && !t.groupPaused) snd_StreamLevels(StreamVolOf(t.vol), 0, 0, itrack, &gLeft, &gRight);
+        const float g = std::max(gLeft, gRight) * kStreamGain;
+        const float mh[4] = {g, 0.0f, g, 0.0f};
+        s.pcm->SetMatrix(mh);
+        return;
+    }
     if (!t.paused && !t.groupPaused)
     {
         if (s.ich1 < 0)
@@ -413,6 +425,28 @@ void FreeTrack(TRACK& t)
 bool FStartStreams(TRACK& t, int itrack)
 {
     const int n = static_cast<int>(t.ch.size());
+    // (0x2410 -> 0xD80: a USB headset track plays on the headset when the headset's device is open and the file has one
+    // channel (the IRX: a 22050 Hz VAGp; PC: any mono line, the installed WAV / FLAC ones too), with no SPU2 voice (so
+    // no ducking of the other groups); else its headset flag is cleared (0x2474) and it plays as any track)
+    if (t.headset && !(n == 1 && FHeadsetOutputReady())) t.headset = false;
+    if (t.headset)
+    {
+        STREAM s;
+        s.vol = StreamVolOf(t.vol);
+        s.pcm = std::make_unique<CPcmStream>();
+        if (s.pcm->FOpen(1, static_cast<int>(t.file.rate), 4.0f, true)) t.streams.push_back(std::move(s));
+        else t.headset = false;
+    }
+    if (t.headset)
+    {
+        if (std::getenv("SLY2N_SNDLOG")) std::printf("spiop: track %d id %u on the USB headset\n", itrack, t.id);
+        t.pos = 0;
+        for (int i = 0; i < CPcmStream::kcBuffer - 1 && t.state == 3; ++i) Refill(t);
+        t.groupPaused = snd_FGroupPaused(itrack);
+        ApplyTrack(t, itrack);
+        if (!t.paused && !t.groupPaused) t.streams[0].pcm->Start();
+        return true;
+    }
     for (int i = 0; i < n; ++i) t.aspu.push_back(snd_AllocStreamVoice(itrack));
     for (int i = 0; i < n; ++i)
     {
@@ -471,7 +505,7 @@ uint32_t SpiopActiveGroups()
     for (int i = 0; i < kTracks; ++i)
     {
         const TRACK& t = s_atrack[i];
-        if ((t.state == 3 || t.state == 4) && !t.paused && !t.groupPaused) grf |= 1u << i;
+        if ((t.state == 3 || t.state == 4) && !t.paused && !t.groupPaused && !t.headset) grf |= 1u << i;   // (a headset track: no SPU2 voice)
     }
     return grf;
 }

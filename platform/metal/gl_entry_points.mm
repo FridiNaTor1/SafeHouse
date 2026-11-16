@@ -41,11 +41,11 @@ const GLubyte* APIENTRY mtl_glGetStringi(GLenum name, GLuint index) {
 }
 
 void APIENTRY mtl_glGetIntegerv(GLenum pname, GLint* data) {
-  if (!Ctx()->GetInteger(pname, data)) Ctx()->SetError(GL_INVALID_ENUM);
+  if (!Ctx()->GetInteger(pname, data)) Ctx()->SetError(GL_INVALID_ENUM, "GetInteger", pname);
 }
 
 void APIENTRY mtl_glGetFloatv(GLenum pname, GLfloat* data) {
-  if (!Ctx()->GetFloat(pname, data)) Ctx()->SetError(GL_INVALID_ENUM);
+  if (!Ctx()->GetFloat(pname, data)) Ctx()->SetError(GL_INVALID_ENUM, "GetFloat", pname);
 }
 
 void APIENTRY mtl_glEnable(GLenum cap) { Ctx()->SetCapability(cap, true); }
@@ -311,7 +311,7 @@ void APIENTRY mtl_glShaderSource(GLuint shader, GLsizei count, const GLchar* con
 void APIENTRY mtl_glCompileShader(GLuint shader) { Ctx()->CompileShader(shader); }
 
 void APIENTRY mtl_glGetShaderiv(GLuint shader, GLenum pname, GLint* params) {
-  if (!Ctx()->GetShaderInt(shader, pname, params)) Ctx()->SetError(GL_INVALID_ENUM);
+  if (!Ctx()->GetShaderInt(shader, pname, params)) Ctx()->SetError(GL_INVALID_ENUM, "GetShaderInt", pname);
 }
 
 void APIENTRY mtl_glGetShaderInfoLog(GLuint shader, GLsizei bufSize, GLsizei* length,
@@ -329,7 +329,7 @@ void APIENTRY mtl_glAttachShader(GLuint program, GLuint shader) {
 void APIENTRY mtl_glLinkProgram(GLuint program) { Ctx()->LinkProgram(program); }
 
 void APIENTRY mtl_glGetProgramiv(GLuint program, GLenum pname, GLint* params) {
-  if (!Ctx()->GetProgramInt(program, pname, params)) Ctx()->SetError(GL_INVALID_ENUM);
+  if (!Ctx()->GetProgramInt(program, pname, params)) Ctx()->SetError(GL_INVALID_ENUM, "GetProgramInt", pname);
 }
 
 void APIENTRY mtl_glGetProgramInfoLog(GLuint program, GLsizei bufSize, GLsizei* length,

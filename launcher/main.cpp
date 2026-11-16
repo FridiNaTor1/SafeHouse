@@ -14,6 +14,7 @@
 #include <thread>
 
 #include "backend.h"
+#include "collection/collection.h"
 #include "desktop_shortcut.h"
 #include "steam.h"
 #include "brand.h"
@@ -38,7 +39,21 @@
 #include "launcher_game_sly3.h"
 #include "launcher_game_sly4.h"
 #include "launcher_game_hackpack.h"
+#include "launcher_developer_fridinator.h"
+#include "launcher_developer_fridinator-silhouette.h"
+#include "launcher_developer_theclub654.h"
+#include "launcher_developer_theclub654-silhouette.h"
+#include "launcher_developer_menaman123.h"
+#include "launcher_developer_menaman123-silhouette.h"
+#include "launcher_developer_thematuu.h"
+#include "launcher_developer_thematuu-silhouette.h"
+#include "launcher_developer_nagaa95.h"
+#include "launcher_developer_nagaa95-silhouette.h"
 #include "launcher_icon.h"
+#if defined(CANE_IOS)
+// (platform/ios/glfw_sdl_ios.cpp) the window's safe area insets in the launcher's logical units
+extern "C" void cane_glfw_safe_area(GLFWwindow* window, float* left, float* top, float* right, float* bottom);
+#endif
 #include "launcher_logo.h"
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb/stb_image.h>
@@ -59,6 +74,14 @@ const EmbeddedImage cane_game_logos[] = {{cane_game_sly1, sizeof(cane_game_sly1)
                                          {cane_game_sly4, sizeof(cane_game_sly4)},
                                          {cane_game_hackpack, sizeof(cane_game_hackpack)}};
 static_assert(std::size(cane_game_logos) == cane::kGameCount);
+// The Collection Style Launcher's developers page: each developer's picture, then its silhouette.
+const EmbeddedImage cane_developer_pictures[] = {
+    {cane_developer_fridinator, sizeof(cane_developer_fridinator)}, {cane_developer_fridinator_silhouette, sizeof(cane_developer_fridinator_silhouette)},
+    {cane_developer_theclub654, sizeof(cane_developer_theclub654)}, {cane_developer_theclub654_silhouette, sizeof(cane_developer_theclub654_silhouette)},
+    {cane_developer_menaman123, sizeof(cane_developer_menaman123)}, {cane_developer_menaman123_silhouette, sizeof(cane_developer_menaman123_silhouette)},
+    {cane_developer_thematuu, sizeof(cane_developer_thematuu)},     {cane_developer_thematuu_silhouette, sizeof(cane_developer_thematuu_silhouette)},
+    {cane_developer_nagaa95, sizeof(cane_developer_nagaa95)},       {cane_developer_nagaa95_silhouette, sizeof(cane_developer_nagaa95_silhouette)}};
+static_assert(std::size(cane_developer_pictures) == 2 * std::size(cane::credits::kDevelopers));
 std::string fixtureIso(int index) { return cane::utf8(ui::fixtures::isos()[static_cast<size_t>(index)].path); }
 struct Texture {
     GLuint id = 0;
@@ -147,9 +170,9 @@ struct Offscreen {
 };
 std::string activityText(const std::string& label, const std::string& stage, float progress) {
     if (label.empty()) return {};
-    if (label.rfind("Playing", 0) == 0) return label;
-    char buffer[160];
-    std::snprintf(buffer, sizeof(buffer), "%s · %s · %.0f%%", label.c_str(), stage.empty() ? "Starting" : ui::stageLabel(stage).c_str(),
+    if (label.rfind("Playing ", 0) == 0) return cane::trf("Playing %s", label.substr(8).c_str());
+    char buffer[256];
+    std::snprintf(buffer, sizeof(buffer), "%s · %s · %.0f%%", cane::tr(label).c_str(), stage.empty() ? cane::tr("Starting") : ui::stageLabel(stage).c_str(),
                   progress * 100);
     return buffer;
 }
@@ -215,7 +238,7 @@ void finishUpdate(const cane::LauncherBackend& backend) {
     try {
         cane::update::launchHelper(plan, pending.restart);
     } catch (const std::exception& e) {
-        MessageBoxW(nullptr, cane::path(std::string("SafeHouse could not be updated: ") + e.what()).c_str(), L"SafeHouse", MB_OK | MB_ICONWARNING);
+        MessageBoxW(nullptr, cane::path(cane::trf("SafeHouse could not be updated: %s", e.what())).c_str(), L"SafeHouse", MB_OK | MB_ICONWARNING);
     }
 #else
     std::ofstream log(plan.staging / "update.log", std::ios::app);
@@ -234,6 +257,9 @@ void finishUpdate(const cane::LauncherBackend& backend) {
     pending.plan.reset();
 }
 
+// `safehouse --collection` without the imported menu (there is no Collection style then): the SafeHouse launcher opens
+// instead, on the rows that import it.
+bool collectionMissing = false;
 int desktop(cane::LauncherBackend& backend, const ui::fixtures::Options* fixture, const cane::fs::path& screenshotPath) {
     glfwSetErrorCallback([](int code, const char* message) { std::cerr << "GLFW " << code << ": " << message << '\n'; });
     if (!cane::initGlfw()) throw std::runtime_error("Cannot initialize desktop display");
@@ -274,7 +300,11 @@ int desktop(cane::LauncherBackend& backend, const ui::fixtures::Options* fixture
     ui::loadFonts(scale);
     ui::applyStyle(scale);
     ImGui_ImplGlfw_InitForOpenGL(window, true);
+#if defined(CANE_ANDROID) || defined(CANE_IOS)
+    ImGui_ImplOpenGL3_Init("#version 300 es");  // (OpenGL ES 3.x: platform/android/glfw_sdl.cpp)
+#else
     ImGui_ImplOpenGL3_Init("#version 330");
+#endif
     cane::launcher::GamepadNav nav;
     nav.init(window);
     ui::FaceButtonSwap faceSwap;
@@ -288,6 +318,12 @@ int desktop(cane::LauncherBackend& backend, const ui::fixtures::Options* fixture
     for (int i = 0; i < cane::kGameCount; ++i) {
         gameLogos.push_back(std::make_unique<Texture>(cane_game_logos[i].data, cane_game_logos[i].size, "game logo"));
         ui::images().games[i] = {gameLogos.back()->imgui(), gameLogos.back()->aspect()};
+    }
+    // The developers' pictures (the About page; without their silhouettes).
+    std::vector<std::unique_ptr<Texture>> developerPictures;
+    for (size_t i = 0; i < std::size(ui::images().developers); ++i) {
+        developerPictures.push_back(std::make_unique<Texture>(cane_developer_pictures[i * 2].data, cane_developer_pictures[i * 2].size, "developer picture"));
+        ui::images().developers[i] = developerPictures.back()->imgui();
     }
 
     // Declared before the job so its worker is joined before these go away.
@@ -303,6 +339,19 @@ int desktop(cane::LauncherBackend& backend, const ui::fixtures::Options* fixture
     ui::SettingsPage settings(backend, job, window);
     ui::UpdateUi updates(backend);
     settings.updates = &updates;
+    // Settings > Launcher > Start the Collection Style Launcher: it opens, this window closes (games quit back to it).
+    settings.collectionProfile = fixture && !fixture->live ? cane::path(fixture->collectionPs3) : backend.locations.user;
+    settings.startCollection = [&] {
+        cane::collection::setEnv(cane::collection::kLauncherEnv, nullptr);
+        if (cane::collection::spawnDetached(cane::steam::launcherProgram(), {"--collection"})) glfwSetWindowShouldClose(window, true);
+        else shell.toast(cane::tr("Could not start the Collection Style Launcher."), false);
+    };
+    // The rail's Quit (desktops, ui/shell.h kQuitEntry): closes the launcher as the window's close button does; asks
+    // first while a game or task started here runs (quitting stops it).
+    shell.onQuit = [&] {
+        if (job.busy) shell.askQuit();
+        else if (!fixture) glfwSetWindowShouldClose(window, true);
+    };
     bool showLogs = backend.config.value("show_logs", false);
     float pendingScale = 0;
     settings.showLogs = &showLogs;
@@ -334,10 +383,14 @@ int desktop(cane::LauncherBackend& backend, const ui::fixtures::Options* fixture
     };
     install.onRoute = [&](GameId game, std::string iso) { openInstall(game, std::move(iso)); };
     install.onStarted = [&](GameId game) { page.installingGame = static_cast<int>(game); };
+    install.onChangeLocation = [&] {
+        shell.open(ui::View::Settings);
+        settings.selectCategory("games");
+    };
     // Drag and drop: the image goes to the page of the game it is.
     dropHandler() = [&](std::string file) {
         if (job.busy) {
-            shell.toast("Wait for the current task to finish first.", false);
+            shell.toast(cane::tr("Wait for the current task to finish first."), false);
             return;
         }
         // (the install page shows the region and any problem with the image)
@@ -346,7 +399,7 @@ int desktop(cane::LauncherBackend& backend, const ui::fixtures::Options* fixture
             openInstall(*check.game, file);
             return;
         }
-        shell.toast(check.message.empty() ? "That disc image cannot be installed." : check.message, false);
+        shell.toast(check.message.empty() ? std::string(cane::tr("That disc image cannot be installed.")) : check.message, false);
     };
     glfwSetDropCallback(window, [](GLFWwindow*, int count, const char** paths) {
         if (count && dropHandler()) dropHandler()(paths[0]);
@@ -372,6 +425,8 @@ int desktop(cane::LauncherBackend& backend, const ui::fixtures::Options* fixture
         statuses[0] = {fixture->installed, true, false, fixture->installed ? fixtureIso(0) : std::string{}};
         statuses[1] = {fixture->sly2Installed, fixture->sly2Runtime, false, fixture->sly2Installed ? fixtureIso(1) : std::string{}};
         page.useFixture(statuses);
+        if (fixture->vr == "ready") page.useVrFixture(cane::vrprobe::State::Ready, "SteamVR/OpenXR", "Valve Index");
+        else if (fixture->vr == "steamvr") page.useVrFixture(cane::vrprobe::State::SteamVrIdle, "SteamVR", "");
         install.useFixture(shell.game == GameId::Sly1 ? fixture->installed : fixture->sly2Installed);
         settings.useFixture();
         const auto& s = fixture->screen;
@@ -397,8 +452,12 @@ int desktop(cane::LauncherBackend& backend, const ui::fixtures::Options* fixture
             job.label = "Installation";
             job.stage = "copy";
             job.progress = 0.42f;
-        } else if (s == "about") shell.open(ui::View::About);
+        } else if (s.rfind("about", 0) == 0) {  // "about" or "about:<section id>" (launcher/credits.h): scrolled there
+            shell.open(ui::View::About);
+            if (auto colon = s.find(':'); colon != std::string::npos) ui::aboutScrollTarget() = s.substr(colon + 1);
+        }
         else if (s == "sly3-notice") page.showSly3Notice();
+        else if (s == "quit-confirm") shell.askQuit();
         else if (s == "desktop-shortcut") page.showDesktopShortcut(shell.game, false);
         else if (s == "desktop-shortcut-done") page.showDesktopShortcut(shell.game, true);
         else if (s.rfind("settings", 0) == 0) {
@@ -411,12 +470,17 @@ int desktop(cane::LauncherBackend& backend, const ui::fixtures::Options* fixture
             if (const GLFWvidmode* mode = glfwGetVideoMode(monitor))
                 glfwSetWindowMonitor(window, monitor, 0, 0, mode->width, mode->height, mode->refreshRate);
     }
+    if (collectionMissing) {
+        shell.open(ui::View::Settings);
+        settings.selectCategory(std::string("launcher"));
+        shell.toast(cane::tr("The Collection style needs The Sly Collection's (PS3) own menu. Import it here from your disc."), false);
+    }
     if (fixture && fixture->screen.rfind("update", 0) == 0) updates.fixture(fixture->screen);
     else if (!fixture) updates.startup(shell);
     ui::requestFocus();
 
-    int frames = 0;
-    bool blockedLastFrame = false, wasBusy = false, windowHidden = false;
+    int frames = 0, languageGeneration = cane::l10n::generation();
+    bool blockedLastFrame = false, wasBusy = false, windowHidden = false, wasFocused = false;
     std::string lastLabel;
     while (!glfwWindowShouldClose(window)) {
         // While a game runs the launcher redraws a few times a second instead
@@ -432,10 +496,16 @@ int desktop(cane::LauncherBackend& backend, const ui::fixtures::Options* fixture
         if (windowHidden) {
             job.reap();
             updates.poll(shell, true);
-            if (job.busy) continue;
+            if (job.busy) {
+                lastLabel = job.label;
+                continue;
+            }
             glfwShowWindow(window);
             glfwFocusWindow(window);
             windowHidden = false;
+            // The game's end goes through this frame's finished-job step below, which also clears the page's
+            // "playing" mark: left set, the next job of any kind (an install, a verification) hid the window too.
+            wasBusy = true;
         }
         if (pendingScale > 0) userScale = pendingScale, pendingScale = 0;
         {
@@ -444,6 +514,8 @@ int desktop(cane::LauncherBackend& backend, const ui::fixtures::Options* fixture
             const float wanted = ww > 0 && wh > 0 ? std::clamp(userScale * windowScale(ww, wh), 1.0f, 3.0f) : scale;
             if (std::fabs(wanted - scale) > 0.01f) scale = wanted, pendingScale = -1;
         }
+        // Another launcher language: its letters go into the font atlas.
+        if (cane::l10n::generation() != languageGeneration) languageGeneration = cane::l10n::generation(), pendingScale = -1;
         if (pendingScale < 0) {
             pendingScale = 0;
             ui::loadFonts(scale);
@@ -500,14 +572,16 @@ int desktop(cane::LauncherBackend& backend, const ui::fixtures::Options* fixture
             install.invalidate();
             if (installed >= 0 && message == "Completed") {
                 const GameId id = static_cast<GameId>(installed);
-                shell.toast(std::string(cane::game(id).title) + " is installed.");
+                shell.toast(cane::trf("%s is installed.", cane::game(id).title));
                 if (shell.view == ui::View::Install && shell.game == id) shell.open(ui::View::Game);
             } else if (message == "Completed" && lastLabel == "Verification")
-                shell.toast("All game files are intact.");
+                shell.toast(cane::tr("All game files are intact."));
             else if (message == "Completed" && lastLabel == "Uninstall")
-                shell.toast("Game files removed. Your saves are kept.");
+                shell.toast(cane::tr("Game files removed. Your saves are kept."));
             else if (message == "Completed" && lastLabel.rfind("PS3 HD import", 0) == 0)
-                shell.toast("PS3 HD textures installed. They show the next time the game starts.");
+                shell.toast(cane::tr("PS3 HD textures installed. They show the next time the game starts."));
+            else if (message == "Completed" && lastLabel == ui::SettingsPage::kCollectionImportLabel)
+                shell.toast(cane::tr("The Collection menu is imported. The Collection Style Launcher can start now."));
             else if (message != "Completed" && message != "Cancelled" && !(shell.view == ui::View::Install && installed >= 0))
                 shell.toast(message, false);
             page.installingGame = page.playingGame = -1;
@@ -544,6 +618,11 @@ int desktop(cane::LauncherBackend& backend, const ui::fixtures::Options* fixture
             }
             if (pad.x && shell.view == ui::View::Install) install.actionX();
         }
+        // (Sly 2's "Play in VR": the headset check when its page is shown, and when the window gets the focus back, e.g.
+        // after the headset was plugged in; vr_probe.h, in the background)
+        const bool focusedNow = !fixture && glfwGetWindowAttrib(window, GLFW_FOCUSED);
+        if (shell.view == ui::View::Game && (shell.changed || (focusedNow && !wasFocused))) page.shown(shell.game);
+        wasFocused = focusedNow;
         if (shell.changed) {
             if (shell.view == ui::View::Settings) settings.open(shell.game);
             if (shell.view == ui::View::Install && install.game() != shell.game) install.open(shell.game);
@@ -557,8 +636,18 @@ int desktop(cane::LauncherBackend& backend, const ui::fixtures::Options* fixture
         int width, height;
         if (fixture) width = fixture->width, height = fixture->height;
         else glfwGetWindowSize(window, &width, &height);
-        const ImVec2 size{static_cast<float>(width), static_cast<float>(height)};
-        ImGui::SetNextWindowPos({0, 0});
+        ImVec2 size{static_cast<float>(width), static_cast<float>(height)}, origin{0, 0};
+#if defined(CANE_IOS)
+        // (iPhone / iPad: the notch / Dynamic Island, the home indicator and rounded corners stay outside the layout;
+        // the background colour fills them. The shim counts the launcher's 1280x720 units inside the safe area.)
+        if (!fixture) {
+            float left = 0, top = 0, right = 0, bottom = 0;
+            cane_glfw_safe_area(window, &left, &top, &right, &bottom);
+            origin = {std::round(left), std::round(top)};
+            size = {std::max(1.0f, std::round(size.x - left - right)), std::max(1.0f, std::round(size.y - top - bottom))};
+        }
+#endif
+        ImGui::SetNextWindowPos(origin);
         ImGui::SetNextWindowSize(size);
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, {0, 0});
         ImGui::Begin(cane::brand::appName, nullptr,
@@ -600,6 +689,9 @@ int desktop(cane::LauncherBackend& backend, const ui::fixtures::Options* fixture
         ImGui::EndChild();
         ImGui::PopStyleColor();
         shell.rail(size);
+        shell.quitDialog([&] {
+            if (!fixture) glfwSetWindowShouldClose(window, true);
+        });
         // Log drawer and footer.
         std::string stage, label;
         float progress = 0;
@@ -615,16 +707,16 @@ int desktop(cane::LauncherBackend& backend, const ui::fixtures::Options* fixture
         using cane::input::Button;
         std::vector<cane::launcher::Hint> hints;
         if (shell.railFocused() && !settings.capturing())
-            hints = {{Button::Dpad, 0, "Choose"}, {Button::Back, 0, "Log"}, {ui::confirmButton(), GLFW_KEY_ENTER, "Open"}};
+            hints = {{Button::Dpad, 0, N_("Choose")}, {Button::Back, 0, N_("Log")}, {ui::confirmButton(), GLFW_KEY_ENTER, N_("Open")}};
         else {
             switch (shell.view) {
             case ui::View::Game: hints = page.hints(shell.game); break;
             case ui::View::Install:
-                hints = {{Button::LB, 0, ""}, {Button::RB, 0, "Games"}};
+                hints = {{Button::LB, 0, ""}, {Button::RB, 0, N_("Games")}};
                 for (const auto& h : install.hints()) hints.push_back(h);
                 break;
             case ui::View::Settings: hints = settings.hints(); break;
-            case ui::View::About: hints = {{ui::backButton(), GLFW_KEY_ESCAPE, "Back"}, {ui::confirmButton(), GLFW_KEY_ENTER, "Select"}}; break;
+            case ui::View::About: hints = {{ui::backButton(), GLFW_KEY_ESCAPE, N_("Back")}, {ui::confirmButton(), GLFW_KEY_ENTER, N_("Select")}}; break;
             }
         }
         const std::string captureStatus = shell.view == ui::View::Settings ? settings.captureStatus() : std::string{};
@@ -675,6 +767,258 @@ int desktop(cane::LauncherBackend& backend, const ui::fixtures::Options* fixture
     job.cancel = true;
     if (job.worker.joinable()) job.worker.join();
     gameLogos.clear();
+    developerPictures.clear();
+    for (auto& picture : ui::images().developers) picture = nullptr;
+    ImGui_ImplOpenGL3_Shutdown();
+    ImGui_ImplGlfw_Shutdown();
+    ImGui::DestroyContext();
+    glfwDestroyWindow(window);
+    glfwTerminate();
+    return 0;
+}
+// --pointer: a finger on the screen, replayed after the nav presses (fixtures.h).
+void replayPointer(const ui::fixtures::Options& options, int frame) {
+    const int step = frame - 8 - 4 * static_cast<int>(options.nav.size());
+    if (step < 0 || step % 2 != 0 || step / 2 >= static_cast<int>(options.pointer.size())) return;
+    const std::string& token = options.pointer[static_cast<size_t>(step / 2)];
+    auto& io = ImGui::GetIO();
+    io.AddMouseSourceEvent(ImGuiMouseSource_TouchScreen);
+    float x = 0, y = 0;
+    if ((token[0] == 'd' || token[0] == 'm') && std::sscanf(token.c_str() + 1, "%f,%f", &x, &y) == 2) {
+        io.AddMousePosEvent(x, y);
+        if (token[0] == 'd') io.AddMouseButtonEvent(0, true);
+    } else if (token[0] == 'u') {
+        io.AddMouseButtonEvent(0, false);
+    }
+}
+// The Collection Style Launcher's window (`safehouse --collection`, collection/collection.h). With a fixture: the hidden
+// screenshot hook (--screenshot PATH --collection [--collection-games sly1,sly2,...] [--collection-ps3 PROFILE]
+// [--screen options|extras|credits|launch|more|glide|glide:PAGES] [--size WxH] [--nav ...] [--frame-rate N] [--seconds S]). Without the menu imported from the
+// player's Sly Collection there is no Collection style: the SafeHouse launcher opens instead.
+int collectionDesktop(cane::LauncherBackend& backend, const ui::fixtures::Options* fixture, const cane::fs::path& screenshotPath) {
+    namespace col = cane::collection;
+    col::Menu::Fixture data;
+    if (fixture) {
+        // (--live: the private profile as it is, games really start; only the frames and the nav are scripted)
+        data.active = !fixture->live;
+        data.scripted = true;
+        for (const auto& key : fixture->collectionGames)
+            if (auto g = cane::gameFromKey(key); g && static_cast<int>(*g) < 3) data.installed[static_cast<size_t>(*g)] = true;
+        data.profile = fixture->collectionPs3.empty() ? cane::fs::path{} : cane::path(fixture->collectionPs3);
+        data.screen = fixture->screen == "game" ? std::string{} : fixture->screen;
+        data.aspect = fixture->collectionAspect;
+    }
+    if (!col::ps3menu::imported(col::Menu::profileOf(backend, data))) {
+        collectionMissing = true;
+        if (fixture) {
+            ui::fixtures::Options plain = *fixture;
+            plain.collection = false;
+            plain.screen = "game";
+            plain.nav.clear();
+            return desktop(backend, &plain, screenshotPath);
+        }
+        return desktop(backend, nullptr, screenshotPath);
+    }
+    glfwSetErrorCallback([](int code, const char* message) { std::cerr << "GLFW " << code << ": " << message << '\n'; });
+    if (!cane::initGlfw()) throw std::runtime_error("Cannot initialize desktop display");
+    cane::input::installJoystickCallback();
+    cane::input::applyBundledMappings();
+    cane::input::tracker().forceFromEnv();
+    cane::gl::ApplyNativeWindowHints(3, 3);
+    glfwWindowHintString(GLFW_X11_CLASS_NAME, cane::brand::wmClass);
+    glfwWindowHintString(GLFW_WAYLAND_APP_ID, cane::brand::appId);
+    if (fixture) glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
+    const int width0 = fixture ? fixture->width : 1280, height0 = fixture ? fixture->height : 720;
+    auto window = glfwCreateWindow(width0, height0, "SafeHouse Collection", nullptr, nullptr);
+    if (!window) {
+        glfwTerminate();
+        throw std::runtime_error("Cannot create launcher window");
+    }
+    glfwSetWindowSizeLimits(window, 640, 360, GLFW_DONT_CARE, GLFW_DONT_CARE);
+    windowIcon(window);
+    glfwMakeContextCurrent(window);
+    glfwSwapInterval(fixture ? 0 : 1);
+    if (!gladLoadGLLoader(reinterpret_cast<GLADloadproc>(glfwGetProcAddress))) throw std::runtime_error("Cannot initialize launcher graphics");
+    const bool fullscreen = !fixture && backend.config.contains("collection") && backend.config["collection"].is_object()
+                                ? backend.config["collection"].value("fullscreen", true)
+                                : !fixture;
+    if (fullscreen)
+        if (GLFWmonitor* monitor = glfwGetPrimaryMonitor())
+            if (const GLFWvidmode* mode = glfwGetVideoMode(monitor))
+                glfwSetWindowMonitor(window, monitor, 0, 0, mode->width, mode->height, mode->refreshRate);
+    ImGui::CreateContext();
+    auto& io = ImGui::GetIO();
+    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_NavEnableGamepad;
+    io.IniFilename = nullptr;
+    GImGui->ConfigNavWindowingKeyNext = GImGui->ConfigNavWindowingKeyPrev = 0;
+    // The text scale follows the window's height (the menu is laid out for 720 lines).
+    const auto scaleFor = [](int h) { return std::clamp(std::round(static_cast<float>(h) / 720.0f * 4.0f) / 4.0f, 1.0f, 3.0f); };
+    float scale = scaleFor(height0);
+    ui::loadFonts(scale);
+    ui::applyStyle(scale);
+    ImGui_ImplGlfw_InitForOpenGL(window, true);
+#if defined(CANE_ANDROID) || defined(CANE_IOS)
+    ImGui_ImplOpenGL3_Init("#version 300 es");
+#else
+    ImGui_ImplOpenGL3_Init("#version 330");
+#endif
+    cane::launcher::GamepadNav nav;
+    nav.init(window);
+    ui::FaceButtonSwap faceSwap;
+    cane::input::promptAtlas().upload();
+    Texture logo(cane_logo, sizeof(cane_logo), "logo");
+    Texture icon(cane_icon, sizeof(cane_icon), "icon");
+    ui::images().logo = logo.imgui();
+    ui::images().logoAspect = logo.aspect();
+    ui::images().icon = icon.imgui();
+    std::vector<std::unique_ptr<Texture>> gameLogos;
+    for (int i = 0; i < cane::kGameCount; ++i) {
+        gameLogos.push_back(std::make_unique<Texture>(cane_game_logos[i].data, cane_game_logos[i].size, "game logo"));
+        ui::images().games[i] = {gameLogos.back()->imgui(), gameLogos.back()->aspect()};
+    }
+    // The games started from here say "Quit to Launcher" (and quitting comes back here).
+    col::setEnv(col::kLauncherEnv, "collection");
+    col::setEnv(col::kHandoffEnv, nullptr);
+    std::vector<std::unique_ptr<Texture>> developerPictures;
+    for (size_t i = 0; i < std::size(cane_developer_pictures); ++i) {
+        developerPictures.push_back(std::make_unique<Texture>(cane_developer_pictures[i].data, cane_developer_pictures[i].size, "developer picture"));
+        (i % 2 ? data.developers[i / 2].silhouette : data.developers[i / 2].picture) = developerPictures.back()->imgui();
+    }
+    ui::layoutRecording() = fixture && !fixture->layoutPath.empty();
+    auto menu = std::make_unique<col::Menu>(backend, window, data);
+    std::unique_ptr<Offscreen> offscreen;
+    if (fixture) offscreen = std::make_unique<Offscreen>(fixture->width, fixture->height);
+    int frames = 0, languageGeneration = cane::l10n::generation();
+    bool windowHidden = false, windowWasVisible = false;
+    double last = glfwGetTime();
+    while (!glfwWindowShouldClose(window)) {
+        // (--live: a scripted run whose game really starts, also steps aside and comes back as a real one)
+        const bool live = !fixture || fixture->live;
+        if (live && (menu->windowAway() || glfwGetWindowAttrib(window, GLFW_ICONIFIED))) glfwWaitEventsTimeout(0.1);
+        else if (fixture && fixture->live && menu->gameRunning()) glfwWaitEventsTimeout(1.0 / 60.0);  // (its frames are not paced)
+        else glfwPollEvents();
+        // The window is away while a game runs (Sly 2: from its first frame on, until it starts to close) and comes
+        // back when it quits.
+        if (live && !windowHidden && menu->windowAway()) {
+            menu->timeNote("the window steps aside");
+            windowWasVisible = glfwGetWindowAttrib(window, GLFW_VISIBLE);
+            if (windowWasVisible) glfwHideWindow(window);
+            windowHidden = true;
+        }
+        if (windowHidden) {
+            if (menu->windowAway()) {
+                // (the menu's job is polled by its frame; keep it ticking without drawing)
+                continue;
+            }
+            if (windowWasVisible) {
+                glfwShowWindow(window);
+                glfwFocusWindow(window);
+            }
+            windowHidden = false;
+            menu->returned();
+        }
+        int windowWidth = width0, windowHeight = height0;
+        if (!fixture) glfwGetWindowSize(window, &windowWidth, &windowHeight);
+        // The menu's picture: the whole window, or Sly 2's aspect ratio (shared, Options) in its middle, black around it.
+        int width = windowWidth, height = windowHeight;
+        float offsetX = 0, offsetY = 0;
+        if (const float shape = menu->aspect(); shape > 0 && windowWidth > 0 && windowHeight > 0) {
+            if (static_cast<float>(windowWidth) > static_cast<float>(windowHeight) * shape + 1.0f)
+                width = static_cast<int>(std::lround(static_cast<float>(windowHeight) * shape));
+            else if (static_cast<float>(windowHeight) > static_cast<float>(windowWidth) / shape + 1.0f)
+                height = static_cast<int>(std::lround(static_cast<float>(windowWidth) / shape));
+            offsetX = std::floor(static_cast<float>(windowWidth - width) * 0.5f);
+            offsetY = std::floor(static_cast<float>(windowHeight - height) * 0.5f);
+        }
+        if (const float wanted = scaleFor(height); std::fabs(wanted - scale) > 0.01f || cane::l10n::generation() != languageGeneration) {
+            scale = wanted;
+            languageGeneration = cane::l10n::generation();
+            ui::loadFonts(scale);
+            ui::applyStyle(scale);
+            ImGui_ImplOpenGL3_DestroyFontsTexture();
+            ImGui_ImplOpenGL3_CreateFontsTexture();
+        }
+        const bool focused = fixture || glfwGetWindowAttrib(window, GLFW_FOCUSED);
+        const auto family = cane::input::promptFamily(std::clamp(backend.config.value("prompt_style", 0), 0, cane::input::kPromptStyleLast), 0);
+        ui::faceButtonFamily() = family;
+        cane::launcher::setPromptPreferences(std::clamp(backend.config.value("prompt_style", 0), 0, cane::input::kPromptStyleLast), 0);
+        ImGui_ImplOpenGL3_NewFrame();
+        faceSwap.begin(family);
+        nav.beforeBackendNewFrame();
+        ImGui_ImplGlfw_NewFrame();
+        auto pad = nav.afterBackendNewFrame(focused && !glfwGetWindowAttrib(window, GLFW_ICONIFIED));
+        if (fixture) {
+            io.DisplaySize = {static_cast<float>(fixture->width), static_cast<float>(fixture->height)};
+            io.DisplayFramebufferScale = {1, 1};
+            replayNav(*fixture, frames, pad);
+            replayPointer(*fixture, frames);
+        }
+        // (an aspect ratio: the menu sees a window of the picture's size; the pointer is moved into it)
+        io.DisplaySize = {static_cast<float>(width), static_cast<float>(height)};
+        if (offsetX != 0 || offsetY != 0)
+            for (ImGuiInputEvent& e : GImGui->InputEventsQueue)
+                if (e.Type == ImGuiInputEventType_MousePos && e.MousePos.PosX != -FLT_MAX)
+                    e.MousePos.PosX -= offsetX, e.MousePos.PosY -= offsetY;
+        faceSwap.end();
+        ImGui::NewFrame();
+        ui::layoutEntries().clear();
+        const double now = glfwGetTime();
+        // (screenshots: a fixed step, so a shot is the same every run; --frame-rate sets it)
+        const float dt = fixture ? static_cast<float>(1.0 / fixture->frameRate) : static_cast<float>(std::min(0.1, now - last));
+        last = now;
+        menu->frame({static_cast<float>(width), static_cast<float>(height)}, pad, family, dt);
+        if (menu->quitRequested()) glfwSetWindowShouldClose(window, true);
+        cane::launcher::drawOnScreenKeyboard();
+        ImGui::Render();
+        if (offscreen) glBindFramebuffer(GL_FRAMEBUFFER, offscreen->fbo);
+        int fw = windowWidth, fh = windowHeight;
+        if (!fixture) glfwGetFramebufferSize(window, &fw, &fh);
+        glViewport(0, 0, fw, fh);
+        glClearColor(0, 0, 0, 1);
+        glClear(GL_COLOR_BUFFER_BIT);
+        // (the picture placed in the window: ImGui's projection takes the display's place and size)
+        ImDrawData* drawData = ImGui::GetDrawData();
+        drawData->DisplayPos = {-offsetX, -offsetY};
+        drawData->DisplaySize = {static_cast<float>(windowWidth), static_cast<float>(windowHeight)};
+        ImGui_ImplOpenGL3_RenderDrawData(drawData);
+        if (offsetX > 0 || offsetY > 0) {
+            // the bars stay black (the glow's last pass covers the whole window)
+            const float sx = windowWidth > 0 ? static_cast<float>(fw) / static_cast<float>(windowWidth) : 1.0f;
+            const float sy = windowHeight > 0 ? static_cast<float>(fh) / static_cast<float>(windowHeight) : 1.0f;
+            const int x0 = static_cast<int>(std::lround(offsetX * sx)), x1 = static_cast<int>(std::lround((offsetX + static_cast<float>(width)) * sx));
+            const int y0 = static_cast<int>(std::lround(offsetY * sy)), y1 = static_cast<int>(std::lround((offsetY + static_cast<float>(height)) * sy));
+            glEnable(GL_SCISSOR_TEST);
+            glClearColor(0, 0, 0, 1);
+            const int bars[4][4] = {{0, 0, x0, fh}, {x1, 0, fw - x1, fh}, {0, 0, fw, fh - y1}, {0, fh - y0, fw, y0}};
+            for (const auto& b : bars)
+                if (b[2] > 0 && b[3] > 0) glScissor(b[0], b[1], b[2], b[3]), glClear(GL_COLOR_BUFFER_BIT);
+            glDisable(GL_SCISSOR_TEST);
+        }
+        // (--seconds: the shot after exactly that much of the menu's time, frame-rate frames per second)
+        const int framesWanted = fixture ? (fixture->seconds > 0 ? static_cast<int>(std::lround(fixture->seconds * fixture->frameRate))
+                                                                 : 40 + 4 * static_cast<int>(fixture->nav.size()) + 2 * static_cast<int>(fixture->pointer.size()))
+                                         : 0;
+        if (fixture && ++frames >= framesWanted && (fixture->seconds > 0 || (glfwGetTime() >= fixture->delay && !menu->busy()))) {
+            screenshot(fw, fh, screenshotPath);
+            if (!fixture->layoutPath.empty()) {
+                // (--dump-layout: the labelled rectangles the menu recorded, e.g. the credits' sections)
+                auto entries = cane::json::array();
+                for (const auto& e : ui::layoutEntries())
+                    entries.push_back({{"label", e.label}, {"x", e.rect.Min.x}, {"y", e.rect.Min.y}, {"w", e.rect.GetWidth()}, {"h", e.rect.GetHeight()}});
+                cane::writeJson(cane::path(fixture->layoutPath), cane::json{{"entries", entries}, {"view", "collection"}});
+            }
+            glfwSetWindowShouldClose(window, true);
+        }
+        if (!fixture) glfwSwapBuffers(window);
+    }
+    try {
+        if (!fixture) backend.saveConfig();
+    } catch (...) {
+    }
+    menu.reset();
+    offscreen.reset();
+    gameLogos.clear();
+    developerPictures.clear();
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplGlfw_Shutdown();
     ImGui::DestroyContext();
@@ -684,7 +1028,7 @@ int desktop(cane::LauncherBackend& backend, const ui::fixtures::Options* fixture
 }
 // Hidden screenshot options: --screenshot PATH [--screen NAME] [--game KEY]
 // [--size WxH] [--installed-fixture] [--sly2-installed-fixture]
-// [--sly2-runtime-fixture] [--dump-layout JSON] [--nav a,down,…].
+// [--sly2-runtime-fixture] [--vr-fixture ready|steamvr|none] [--dump-layout JSON] [--nav a,down,…].
 bool screenshotOptions(const std::vector<std::string>& args, ui::fixtures::Options& options) {
     for (size_t i = 2; i < args.size(); ++i) {
         const auto& a = args[i];
@@ -700,10 +1044,38 @@ bool screenshotOptions(const std::vector<std::string>& args, ui::fixtures::Optio
         } else if (a == "--installed-fixture") options.installed = true;
         else if (a == "--sly2-installed-fixture") options.sly2Installed = true;
         else if (a == "--sly2-runtime-fixture") options.sly2Runtime = true;
+        else if (a == "--vr-fixture" && i + 1 < args.size()) {
+            options.vr = args[++i];
+            if (options.vr != "ready" && options.vr != "steamvr" && options.vr != "none") return false;
+        }
         else if (a == "--dump-layout" && i + 1 < args.size()) options.layoutPath = args[++i];
         else if (a == "--live") options.live = true;
+        else if (a == "--collection") options.collection = true;
+        else if (a == "--collection-games" && i + 1 < args.size()) {
+            std::stringstream list(args[++i]);
+            for (std::string token; std::getline(list, token, ',');)
+                if (!token.empty() && token != "none") options.collectionGames.push_back(token);
+        } else if (a == "--collection-ps3" && i + 1 < args.size()) options.collectionPs3 = args[++i];
+        else if (a == "--collection-aspect" && i + 1 < args.size()) {
+            // (Sly 2's Aspect Ratio as the menu shows it: fit, 4:3, 16:9, 16:10, ps2-4:3, ps2-16:9)
+            const std::string v = args[++i];
+            options.collectionAspect = v == "4:3" ? 1 : v == "16:9" ? 2 : v == "16:10" ? 3 : v == "ps2-4:3" ? 4 : v == "ps2-16:9" ? 5 : 0;
+        }
+        else if (a == "--pointer" && i + 1 < args.size()) {
+            std::stringstream list(args[++i]);
+            std::string token;
+            while (list >> token) options.pointer.push_back(token);
+        }
         else if (a == "--iso" && i + 1 < args.size()) options.iso = args[++i];
+        else if (a == "--language" && i + 1 < args.size()) options.language = args[++i];
         else if (a == "--delay" && i + 1 < args.size()) options.delay = std::atof(args[++i].c_str());
+        else if (a == "--frame-rate" && i + 1 < args.size()) {
+            options.frameRate = std::atof(args[++i].c_str());
+            if (!(options.frameRate >= 10 && options.frameRate <= 1000)) return false;
+        } else if (a == "--seconds" && i + 1 < args.size()) {
+            options.seconds = std::atof(args[++i].c_str());
+            if (!(options.seconds >= 0 && options.seconds <= 600)) return false;
+        }
         else if (a == "--nav" && i + 1 < args.size()) {
             std::stringstream list(args[++i]);
             for (std::string token; std::getline(list, token, ',');)
@@ -712,7 +1084,28 @@ bool screenshotOptions(const std::vector<std::string>& args, ui::fixtures::Optio
     }
     return true;
 }
-// --play/--verify [GAME] [--region KEY]: Sly 1 when no game is named; the selected region when none is.
+// --l10n-check: each embedded language, its size and the characters the fonts lack (none, or the exit code is 1).
+int l10nCheck() {
+    int failures = 0;
+    const auto en = cane::l10n::find("en");
+    for (const auto& lang : cane::l10n::languages()) {
+        const auto* table = cane::l10n::find(lang.code);
+        const auto missing = ui::missingGlyphs(*table);
+        std::cout << "language " << lang.code << " " << lang.name << " (" << lang.english << ") strings " << table->strings.size();
+        if (lang.code != "en" && en && table->strings.size() < en->strings.size()) std::cout << " of " << en->strings.size();
+        std::cout << " missing glyphs " << missing.size();
+        for (char32_t c : missing) {
+            char hex[16];
+            std::snprintf(hex, sizeof(hex), " U+%04X", static_cast<unsigned>(c));
+            std::cout << hex;
+        }
+        std::cout << "\n";
+        if (!missing.empty() || table->strings.empty()) ++failures;
+    }
+    return failures ? 1 : 0;
+}
+// --play/--play-vr/--verify [GAME] [--region KEY]: Sly 1 when no game is named; the selected region when none is
+// (--play-vr: Sly 2 in VR, Sly2-Release --vr).
 std::optional<GameId> gameArgument(std::vector<std::string> args, std::string* region = nullptr) {
     if (args.size() >= 3 && args[args.size() - 2] == "--region") {
         if (region) *region = args.back();
@@ -736,12 +1129,22 @@ int main(int argc, char** argv) {
             // --apply-update PLAN [--wait-pid PID] [--restart]: the file swap of an update (the Windows helper; tests).
             // Before the backend: it must not create profile folders next to the helper.
             if (early.size() >= 2 && early[0] == "--apply-update") return cane::update::applyMain(early);
+            // --l10n-detect [--setting S]: the launcher language the system (and the launcher.json setting S) picks.
+            // --l10n-check: every language loads and the fonts draw every character (scripts/test-launcher-l10n.py).
+            if (!early.empty() && early[0] == "--l10n-detect") {
+                cane::l10n::setLanguage(early.size() == 3 && early[1] == "--setting" ? early[2] : "system");
+                std::cout << cane::l10n::current() << "\n";
+                return 0;
+            }
+            if (early.size() == 1 && early[0] == "--l10n-check") return l10nCheck();
         }
         cane::LauncherBackend backend;
         std::atomic<bool> cancel{false};
         auto log = [](const std::string& s) { std::cout << s << std::endl; };
         auto args = cane::arguments(argc, argv);
-        interactive = args.empty();
+        interactive = args.empty() || (args.size() == 1 && args[0] == "--collection");
+        // The windows speak the chosen language (launcher.json "language"); the command-line modes stay English.
+        if (interactive) cane::l10n::setLanguage(backend.config.value("language", std::string("system")));
         if (!args.empty()) {
             if (args[0] == "--install" && args.size() == 2) {
                 // The disc decides the game (Sly 1 for anything unrecognised,
@@ -760,9 +1163,9 @@ int main(int argc, char** argv) {
                     std::cout << "Installation verified\n";
                     return 0;
                 }
-            if (args[0] == "--play")
+            if (args[0] == "--play" || args[0] == "--play-vr")
                 if (auto game = gameArgument(args, &region)) {
-                    backend.play(*game, cancel, log, region);
+                    backend.play(*game, cancel, log, region, args[0] == "--play-vr");
                     return 0;
                 }
             // --installs: every installed region (the selected one marked with *), for scripts and tests.
@@ -775,8 +1178,36 @@ int main(int argc, char** argv) {
                 }
                 return 0;
             }
+            // --install-dir [FOLDER | default]: where new installations go (Settings > Games "Install games to").
+            if (args[0] == "--install-dir" && args.size() <= 2) {
+                if (args.size() == 2) backend.setInstallRoot(args[1] == "default" ? cane::fs::path{} : cane::path(args[1]));
+                std::cout << cane::utf8(backend.installRoot()) << (backend.customInstallRoot() ? "" : " (default)") << "\n";
+                return 0;
+            }
+            // --move-install GAME FOLDER [--region R]: moves an installed region (Settings > Games "Move…").
+            if (args[0] == "--move-install" && (args.size() == 3 || args.size() == 5)) {
+                std::vector<std::string> gameArgs{args[0], args[1]};
+                if (args.size() == 5) gameArgs.insert(gameArgs.end(), {args[3], args[4]});
+                if (auto game = gameArgument(gameArgs, &region)) {
+                    const auto target = backend.moveInstallation(*game, region.empty() ? backend.selectedRegion(*game) : region,
+                                                                 backend.installRootFor(cane::path(args[2])), cancel, log);
+                    std::cout << "moved to " << cane::utf8(target) << "\n";
+                    return 0;
+                }
+            }
             // --add-to-steam GAME: the game page's "Add to Steam" without the window (SAFEHOUSE_STEAM_ROOT picks a
             // Steam folder, for tests). --steam-status: what the launcher sees of Steam.
+            // (GAME collection: the Collection Style Launcher's shortcut, `safehouse --collection`)
+            if (args[0] == "--add-to-steam" && args.size() == 2 && args[1] == "collection") {
+                const auto steam = cane::steam::find();
+                if (!steam) throw std::runtime_error("Steam was not found on this computer");
+                const auto r = cane::steam::addCollection(*steam);
+                const auto sc = cane::steam::collectionShortcut();
+                std::cout << "Steam: " << cane::utf8(steam->root) << "\nshortcut: " << sc.name << " app id " << sc.appId << " exe " << sc.exe
+                          << " options " << sc.launchOptions << "\naccounts " << r.accounts << ", added " << r.addedEntries << ", updated "
+                          << r.updatedEntries << ", images " << r.images << "\n";
+                return 0;
+            }
             if (args[0] == "--add-to-steam" && args.size() == 2)
                 if (auto game = cane::gameFromKey(args[1])) {
                     const auto steam = cane::steam::find();
@@ -801,10 +1232,21 @@ int main(int argc, char** argv) {
                           << steam->accounts.size() << " account(s), " << (cane::steam::running(*steam) ? "running" : "not running") << "\n";
                 for (auto game : {GameId::Sly1, GameId::Sly2, GameId::Sly3})
                     std::cout << cane::game(game).key << ": " << (cane::steam::added(*steam, game) ? "in Steam" : "not in Steam") << "\n";
+                std::cout << "collection: " << (cane::steam::added(*steam, cane::steam::collectionShortcut()) ? "in Steam" : "not in Steam") << "\n";
                 return 0;
             }
             // --add-desktop-shortcut GAME [--menu]: the game page's "Add desktop shortcut" (--menu: also the applications /
             // Start menu). --desktop-shortcut-status: where the shortcuts go and what is there.
+            if (args[0] == "--add-desktop-shortcut" && (args.size() == 2 || (args.size() == 3 && args[2] == "--menu")) && args[1] == "collection") {
+                std::vector<cane::shortcut::Where> places{cane::shortcut::Where::Desktop};
+                if (args.size() == 3) places.push_back(cane::shortcut::Where::Menu);
+                for (auto where : places) {
+                    const auto r = cane::shortcut::createCollection(where);
+                    std::cout << cane::shortcut::whereName(where) << ": " << cane::utf8(r.file)
+                              << (!r.existed ? " (created)" : r.changed ? " (updated)" : " (up to date)") << "\n";
+                }
+                return 0;
+            }
             if (args[0] == "--add-desktop-shortcut" && (args.size() == 2 || (args.size() == 3 && args[2] == "--menu")))
                 if (auto game = cane::gameFromKey(args[1])) {
                     std::vector<cane::shortcut::Where> places{cane::shortcut::Where::Desktop};
@@ -924,16 +1366,97 @@ int main(int argc, char** argv) {
 #endif
             }
             ui::fixtures::Options options;
-            if (args[0] == "--screenshot" && args.size() >= 2 && screenshotOptions(args, options))
-                return desktop(backend, &options, cane::path(args[1]));
-            std::cout << "safehouse [--install ISO | --verify [GAME] [--region R] | --play [GAME] [--region R] | --installs | --add-to-steam GAME |\n"
-                         "           --steam-status | --add-desktop-shortcut GAME [--menu] | --desktop-shortcut-status |\n"
+            if (args[0] == "--screenshot" && args.size() >= 2 && screenshotOptions(args, options)) {
+                cane::l10n::setLanguage(options.live && options.language == "en" && !std::getenv("SAFEHOUSE_LANGUAGE")
+                                            ? backend.config.value("language", std::string("system")) : options.language);
+                return options.collection ? collectionDesktop(backend, &options, cane::path(args[1])) : desktop(backend, &options, cane::path(args[1]));
+            }
+            // --collection-import SOURCE: Settings > Launcher > "Import the Collection menu from The Sly Collection (PS3)"
+            // without the window (SOURCE: the extracted disc, its .iso or a .zip of it). --collection-remove: removes the
+            // imported menu again. --collection-status: whether it is there.
+            if (args[0] == "--collection-import" && args.size() == 2) {
+                cane::collection::ps3menu::importMenu(cane::path(args[1]), backend.locations.user, cancel, {});
+                std::cout << "Collection menu imported into " << cane::utf8(cane::collection::ps3menu::menuDir(backend.locations.user)) << "\n";
+                return 0;
+            }
+            if (args[0] == "--collection-status" && args.size() == 1) {
+                std::cout << "collection menu: " << (cane::collection::ps3menu::imported(backend.locations.user) ? "imported" : "not imported") << "\n";
+                return 0;
+            }
+            // --collection-sounds: the imported menu's music and sounds as the menu plays them (file, rate, frames, level).
+            if (args[0] == "--collection-sounds" && args.size() == 1) {
+                namespace col = cane::collection;
+                const cane::json menu = col::ps3menu::readMenu(backend.locations.user);
+                if (menu.is_null()) throw std::runtime_error("The Collection menu is not imported");
+                std::vector<std::string> files;
+                const auto& audio = menu.at("audio");
+                for (const auto& f : audio.at("music")) files.push_back(f.get<std::string>());
+                for (const char* key : {"move", "select", "cancel"})
+                    if (audio.contains(key)) files.push_back(audio.at(key).get<std::string>());
+                for (const auto& f : files) {
+                    const col::Pcm p = col::decodeWav(col::readBytes(col::ps3menu::menuDir(backend.locations.user) / cane::path(f)));
+                    double sum = 0;
+                    for (int16_t v : p.samples) sum += double(v) * v;
+                    std::cout << f << " rate " << p.rate << " frames " << p.frames() << " rms "
+                              << static_cast<int>(std::sqrt(p.samples.empty() ? 0.0 : sum / double(p.samples.size()))) << "\n";
+                }
+                return 0;
+            }
+            // --collection-audio-test SECONDS [FROM]: plays the imported menu's music (from FROM seconds in) and its three
+            // sounds through the menu's own mixer for SECONDS, without a window (the audio check: with SDL's disk
+            // driver the output lands in a file).
+            if (args[0] == "--collection-audio-test" && (args.size() == 2 || args.size() == 3)) {
+                namespace col = cane::collection;
+                const cane::json menu = col::ps3menu::readMenu(backend.locations.user);
+                if (menu.is_null()) throw std::runtime_error("The Collection menu is not imported");
+                const auto dir = col::ps3menu::menuDir(backend.locations.user);
+                auto load = [&](const std::string& rel, bool loops) -> col::PcmPtr {
+                    col::Pcm p = col::decodeWav(col::readBytes(dir / cane::path(rel)));
+                    if (p.samples.empty()) throw std::runtime_error("Cannot read " + rel);
+                    p.loops = loops, p.loopStart = 0, p.loopEnd = p.frames();
+                    return std::make_shared<const col::Pcm>(std::move(p));
+                };
+                const auto& audio = menu.at("audio");
+                const auto music = load(audio.at("music").at(0).get<std::string>(), true);
+                std::vector<col::PcmPtr> sounds;
+                for (const char* key : {"move", "select", "cancel"}) sounds.push_back(load(audio.at(key).get<std::string>(), false));
+                col::Audio out;
+                if (!out.open()) {
+                    std::cout << "no audio output\n";
+                    return 0;
+                }
+                out.setVolumes(1.0f, 1.0f);
+                out.playMusic(music, 0.05f);
+                if (args.size() == 3) out.seekMusic(std::stod(args[2]));
+                const double seconds = std::stod(args[1]);
+                const auto start = std::chrono::steady_clock::now();
+                size_t next = 0;
+                for (;;) {
+                    const double t = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+                    if (t >= seconds) break;
+                    if (next < sounds.size() && t >= 0.5 * double(next + 1)) out.playSound(sounds[next++]);
+                    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                }
+                std::cout << "played " << seconds << " s: music " << music->frames() << " frames at " << music->rate << " Hz, " << next << " sounds\n";
+                return 0;
+            }
+            if (args[0] == "--collection-remove" && args.size() == 1) {
+                cane::collection::ps3menu::removeMenu(backend.locations.user);
+                return 0;
+            }
+            // --collection: the Collection Style Launcher (collection/collection.h); the SafeHouse launcher when the menu
+            // is not imported.
+            if (args[0] == "--collection" && args.size() == 1) return collectionDesktop(backend, nullptr, {});
+            std::cout << "safehouse [--install ISO | --verify [GAME] [--region R] | --play [GAME] [--region R] | --play-vr sly2 | --installs |\n"
+                         "           --add-to-steam GAME | --steam-status | --add-desktop-shortcut GAME [--menu] | --desktop-shortcut-status |\n"
+                         "           --install-dir [FOLDER|default] | --move-install GAME FOLDER [--region R] |\n"
 #ifdef CANE_LAUNCHER_SOURCE_BUILD
                          "           --build-source CHECKOUT |\n"
 #endif
                          "           --pick-file [FOLDER] | --pick-folder [FOLDER] |\n"
-                         "           --import-ps3-hd GAME SOURCE [png] | --ps3-hd GAME [on|off|remove] | --version | --check-update | --update]\n"
-                         "GAME: sly1 (default), sly2 or sly3. R: usa, europe, japan, korea (default: the region selected in the launcher)\n";
+                         "           --import-ps3-hd GAME SOURCE [png] | --ps3-hd GAME [on|off|remove] | --version | --check-update | --update |\n"
+                         "           --collection | --collection-import SOURCE | --collection-remove | --collection-status]\n"
+                         "GAME: sly1 (default), sly2 or sly3 (--add-to-steam / --add-desktop-shortcut: also collection). R: usa, europe, japan, korea (default: the region selected in the launcher)\n";
             return args[0] == "--help" ? 0 : 1;
         }
         const int code = desktop(backend, nullptr, {});

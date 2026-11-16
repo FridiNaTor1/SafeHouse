@@ -4,6 +4,7 @@
 // has no port (the option getters / setters 0x258658..0x258EC8, 0x2584A8, 0x2586D8, disassembled), in plain
 // IEEE float.
 
+#include "fastpaths.h"
 #include "emitter.h"
 #include "worldglobals.h"
 #include "texmod.h"
@@ -16,6 +17,7 @@
 #include "disc.h"
 #include "display.h"
 #include "gl.h"
+#include "gl_backend.h"
 #include "lo.h"
 #include "render.h"
 #include "scene.h"
@@ -2032,7 +2034,8 @@ std::pair<GLuint, int> TexArrayOf(const SHD* pshd)
 {
     if (!s_atexarrayFreed.empty())
     {
-        glDeleteTextures(static_cast<GLsizei>(s_atexarrayFreed.size()), s_atexarrayFreed.data());
+        if (const cane::draw::Packets* pk = PpacketsTex()) pk->deleteTextures(uint32_t(s_atexarrayFreed.size()), s_atexarrayFreed.data());
+        else glDeleteTextures(static_cast<GLsizei>(s_atexarrayFreed.size()), s_atexarrayFreed.data());
         s_atexarrayFreed.clear();
     }
     auto it = s_mptexarray.find(pshd);
@@ -2080,10 +2083,28 @@ std::pair<GLuint, int> TexArrayOf(const SHD* pshd)
         int clevel = 1;
         if (fMod)
             for (int d = std::max(dx, dy); d > 1; d >>= 1) ++clevel;
-        glGenTextures(1, &r.first);
-        glBindTexture(GL_TEXTURE_2D_ARRAY, r.first);
-        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-        glTexStorage3D(GL_TEXTURE_2D_ARRAY, clevel, GL_RGBA8, dx, dy, c);
+        // (native: no binding point touched; TEX1 0x60 (bilinear; a texture mod's mip chain trilinear), CLAMP of the
+        // record, as the GL calls' parameters below)
+        const cane::draw::Packets* pk = PpacketsTex();
+        if (pk)
+        {
+            cane::draw::TextureDesc d;
+            d.width = uint32_t(dx), d.height = uint32_t(dy), d.layers = uint32_t(c), d.levels = uint32_t(clevel);
+            d.minFilter = clevel > 1 ? cane::draw::kFilterLinearMipLinear : cane::draw::kFilterLinear, d.magFilter = cane::draw::kFilterLinear;
+            d.wrapS = d.wrapT = cane::draw::kWrapClampToEdge;
+            r.first = pk->createTexture(d);
+        }
+        else
+        {
+            glGenTextures(1, &r.first);
+            glBindTexture(GL_TEXTURE_2D_ARRAY, r.first);
+            glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+            glTexStorage3D(GL_TEXTURE_2D_ARRAY, clevel, GL_RGBA8, dx, dy, c);
+        }
+        auto upload = [&](int i, const void* p) {
+            if (pk) pk->uploadTexture(r.first, 0, uint32_t(i), 0, 0, uint32_t(dx), uint32_t(dy), p);
+            else glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0, i, dx, dy, 1, GL_RGBA, GL_UNSIGNED_BYTE, p);
+        };
         for (int i = 0; i < c; ++i)
         {
             const std::vector<uint8_t>* p = nullptr;
@@ -2093,7 +2114,7 @@ std::pair<GLuint, int> TexArrayOf(const SHD* pshd)
             if (!p) continue;
             if (dxFrame == dx && dyFrame == dy)
             {
-                glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0, i, dx, dy, 1, GL_RGBA, GL_UNSIGNED_BYTE, p->data());
+                upload(i, p->data());
                 continue;
             }
             // (a frame of another size: scaled to the array's, nearest texel)
@@ -2101,14 +2122,18 @@ std::pair<GLuint, int> TexArrayOf(const SHD* pshd)
             for (int y = 0; y < dy; ++y)
                 for (int x = 0; x < dx; ++x)
                     std::memcpy(&ab[(size_t(y) * dx + x) * 4], &(*p)[(size_t(y * dyFrame / dy) * dxFrame + size_t(x * dxFrame / dx)) * 4], 4);
-            glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0, i, dx, dy, 1, GL_RGBA, GL_UNSIGNED_BYTE, ab.data());
+            upload(i, ab.data());
         }
-        if (clevel > 1) glGenerateMipmap(GL_TEXTURE_2D_ARRAY);
+        if (pk && clevel > 1) pk->generateMipmaps(r.first);
+        if (!pk && clevel > 1) glGenerateMipmap(GL_TEXTURE_2D_ARRAY);
         // TEX1 0x60 (bilinear; a texture mod's mip chain trilinear), CLAMP of the record
-        glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, clevel > 1 ? GL_LINEAR_MIPMAP_LINEAR : GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        if (!pk)
+        {
+            glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, clevel > 1 ? GL_LINEAR_MIPMAP_LINEAR : GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        }
         r.second = c;
     }
     s_mptexarray[pshd] = r;
@@ -2119,14 +2144,21 @@ float Curve(const float c[3], float age) { return c[0] + c[1] * age + c[2] * (ag
 float Unit(float x) { return std::clamp(x, 0.0f, 1.0f); }
 
 // The VU1 programs (native_blip_geometry.cpp's reconstruction): per particle a quad in clip space.
-void ExpandParticles(const PSYS* pp, const glm::mat4& matModel, const glm::mat4& matWorldToClip, std::vector<PVTX>& av)
+// (VR, both eyes in one pass: pmat1 is the second eye's matrix, its corners go to *pav1, one a vertex of av: a particle
+// behind one eye is a point for that eye (drawn nowhere), the same as the eye's own pass leaving it out)
+void ExpandParticles(const PSYS* pp, const glm::mat4& matModel, const glm::mat4& matWorldToClip, std::vector<PVTX>& av,
+                     const glm::mat4* pmat1 = nullptr, std::vector<glm::vec4>* pav1 = nullptr)
 {
     const float t = g_clock.t;
-    const glm::vec4 forward(matWorldToClip[0][3], matWorldToClip[1][3], matWorldToClip[2][3], 0.0f);
-    // the projection's x / y scales (CM +0x100 / +0x114): the clip offsets of a unit corner (the clip matrix's x / y
-    // rows are the view's axes times them)
-    const float sxProj = glm::length(glm::vec3(matWorldToClip[0][0], matWorldToClip[1][0], matWorldToClip[2][0]));
-    const float syProj = glm::length(glm::vec3(matWorldToClip[0][1], matWorldToClip[1][1], matWorldToClip[2][1]));
+    struct VIEWP { const glm::mat4* pm; glm::vec4 forward; float sxProj, syProj; };
+    auto viewOf = [](const glm::mat4& m) {
+        // the projection's x / y scales (CM +0x100 / +0x114): the clip offsets of a unit corner (the clip matrix's x / y
+        // rows are the view's axes times them)
+        return VIEWP{&m, glm::vec4(m[0][3], m[1][3], m[2][3], 0.0f), glm::length(glm::vec3(m[0][0], m[1][0], m[2][0])),
+                     glm::length(glm::vec3(m[0][1], m[1][1], m[2][1]))};
+    };
+    const VIEWP aview[2] = {viewOf(matWorldToClip), viewOf(pmat1 ? *pmat1 : matWorldToClip)};
+    const int cview = pmat1 && pav1 ? 2 : 1;
     for (const auto& pb : pp->ablk)
         for (int i = 0; i < pb->c; ++i)
         {
@@ -2158,7 +2190,14 @@ void ExpandParticles(const PSYS* pp, const glm::mat4& matModel, const glm::mat4&
                     rgba[l] = float(uint8_t(float(pp->argba[first][size_t(l)]) * (1 - color) + float(pp->argba[first - 1][size_t(l)]) * color));
             rgba.a = float(uint8_t(rgba.a * alpha));
             const glm::vec3 world = glm::vec3(matModel * glm::vec4(glm::vec3(pc), 1.0f));
-            glm::vec4 clip[4];
+            glm::vec4 aclip[2][4];
+            bool afBehind[2] = {false, false};
+            for (int iview = 0; iview < cview; ++iview)
+            {
+            const glm::mat4& matWorldToClip = *aview[iview].pm;
+            const glm::vec4& forward = aview[iview].forward;
+            const float sxProj = aview[iview].sxProj, syProj = aview[iview].syProj;
+            glm::vec4* clip = aclip[iview];
             if (pp->kDraw == 1)
             {
                 glm::vec3 motion = glm::mat3(matModel) * glm::vec3(vd) * (pp->gFlying * g_clock.dt40);
@@ -2209,13 +2248,16 @@ void ExpandParticles(const PSYS* pp, const glm::mat4& matModel, const glm::mat4&
                     clip[k].y -= corners[size_t(k)].y * syProj;
                 }
             }
-            bool fBehind = false;
-            for (const auto& v : clip) fBehind = fBehind || v.w <= 0.0f;
-            if (fBehind) continue;
+            for (int k = 0; k < 4; ++k) afBehind[iview] = afBehind[iview] || clip[k].w <= 0.0f;
+            }   // (the views)
+            if (afBehind[0] && (cview == 1 || afBehind[1])) continue;
+            for (int iview = 0; iview < cview; ++iview)
+                if (afBehind[iview]) for (glm::vec4& v : aclip[iview]) v = glm::vec4(0.0f, 0.0f, 0.0f, 1.0f);
             // the strip's corners (0, 1, 2, 3) with STQ (0, 1) (1, 1) (0, 0) (1, 0) -> two triangles
             static const glm::vec2 s_auv[4] = {{0, 1}, {1, 1}, {0, 0}, {1, 0}};
             static const int s_ai[6] = {0, 1, 2, 2, 1, 3};
-            for (int k : s_ai) av.push_back({clip[k], s_auv[k], float(layer), 0.0f, rgba});
+            for (int k : s_ai) av.push_back({aclip[0][k], s_auv[k], float(layer), 0.0f, rgba});
+            if (cview == 2) for (int k : s_ai) pav1->push_back(aclip[1][k]);
             ++g_particlestats.cdrawn;
         }
 }
@@ -2601,16 +2643,32 @@ void StepParticles(SW* psw, int cframe, float dt)
     (void)dtSave;
 }
 
-void DrawParticles(const glm::mat4& matWorldToClip, const glm::vec3& posCamera, float aspect)
+void DrawParticles(const glm::mat4& matWorldToClip, const glm::vec3& posCamera, float aspect, const glm::mat4* pmatView1,
+                   const glm::vec3* pposView1, bool fStencilOff)
 {
     (void)aspect;
     s_posCamera = posCamera;
-    if (s_apsys.empty()) return;
+    if (s_apsys.empty())
+    {
+        if (fStencilOff) glDisable(GL_STENCIL_TEST);
+        return;
+    }
     if (!s_shParticle.ID)
     {
         s_shParticle.Init("particle.vert", "particle.frag");
+        s_vbo = GlNewBuffer(GL_ARRAY_BUFFER, 0, nullptr, GL_STREAM_DRAW);
+        if (const cane::draw::Packets* pkv = PpacketsVao())
+        {
+            using namespace cane::draw;
+            const VertexAttrib aattr[] = {{0, 4, kAttribFloat, 0, 0, s_vbo, uint32_t(offsetof(PVTX, clip)), sizeof(PVTX), 0},
+                                          {1, 2, kAttribFloat, 0, 0, s_vbo, uint32_t(offsetof(PVTX, uv)), sizeof(PVTX), 0},
+                                          {2, 1, kAttribFloat, 0, 0, s_vbo, uint32_t(offsetof(PVTX, layer)), sizeof(PVTX), 0},
+                                          {3, 4, kAttribFloat, 0, 0, s_vbo, uint32_t(offsetof(PVTX, rgba)), sizeof(PVTX), 0}};
+            s_vao = pkv->createVertexArray(aattr, 4, 0);
+        }
+        else
+        {
         glGenVertexArrays(1, &s_vao);
-        glGenBuffers(1, &s_vbo);
         glBindVertexArray(s_vao);
         glBindBuffer(GL_ARRAY_BUFFER, s_vbo);
         glEnableVertexAttribArray(0);
@@ -2622,34 +2680,77 @@ void DrawParticles(const glm::mat4& matWorldToClip, const glm::vec3& posCamera, 
         glEnableVertexAttribArray(3);
         glVertexAttribPointer(3, 4, GL_FLOAT, GL_FALSE, sizeof(PVTX), reinterpret_cast<void*>(offsetof(PVTX, rgba)));
         glBindVertexArray(0);
+        }
     }
     g_particlestats.cdrawn = 0;
     g_particlestats.cpsys = int(s_apsys.size());
-    // the view frustum (as render.cpp's)
-    glm::vec4 aplane[5];
+    // the view frustum (as render.cpp's); (VR, both eyes in one pass) either eye's
+    glm::vec4 aplane[2][5];
+    const int cview = pmatView1 ? 2 : 1;
+    for (int iview = 0; iview < cview; ++iview)
     {
-        const glm::mat4 mt = glm::transpose(matWorldToClip);
-        aplane[0] = mt[3] + mt[0]; aplane[1] = mt[3] - mt[0]; aplane[2] = mt[3] + mt[1]; aplane[3] = mt[3] - mt[1]; aplane[4] = mt[3] - mt[2];
-        for (glm::vec4& p : aplane) p /= glm::length(glm::vec3(p));
+        const glm::mat4 mt = glm::transpose(iview ? *pmatView1 : matWorldToClip);
+        glm::vec4* pl = aplane[iview];
+        pl[0] = mt[3] + mt[0]; pl[1] = mt[3] - mt[0]; pl[2] = mt[3] + mt[1]; pl[3] = mt[3] - mt[1]; pl[4] = mt[3] - mt[2];
+        for (int k = 0; k < 5; ++k) pl[k] /= glm::length(glm::vec3(pl[k]));
     }
     auto fVisible = [&](const glm::vec3& c, float r) {
-        for (const glm::vec4& p : aplane)
-            if (glm::dot(glm::vec3(p), c) + p.w < -r) return false;
-        return true;
+        for (int iview = 0; iview < cview; ++iview)
+        {
+            bool f = true;
+            for (int k = 0; k < 5 && f; ++k) f = glm::dot(glm::vec3(aplane[iview][k]), c) + aplane[iview][k].w >= -r;
+            if (f) return true;
+        }
+        return false;
     };
+    // (draw packets, platform/draw_packet.h: per blend and Z write a state made once per program, the state the GL calls
+    // leave afterwards one more; the texture, the storage buffer and the per-draw values through the entries)
+    struct PKLOCS { GLuint prog = 0; GLint tex = -1, fTextured = -1, afail = -1; uint32_t aid[5] = {}; };
+    static PKLOCS s_pkl;
+    const cane::draw::Packets* pk = cane::gl::ActiveBackend() ? cane::gl::ActiveBackend()->packets : nullptr;
+    if (!(fStencilOff && pk && pk->drawArrays && pk->applyState && pk->bindTexture && pk->bindStorage)) pk = nullptr;
+    if (pk && s_pkl.prog != s_shParticle.ID)
+    {
+        using namespace cane::draw;
+        s_pkl = {};
+        s_pkl.prog = s_shParticle.ID;
+        s_pkl.tex = s_shParticle.Loc("tex"), s_pkl.fTextured = s_shParticle.Loc("fTextured"), s_pkl.afail = s_shParticle.Loc("afailMode");
+        for (int k = 0; k < 5; ++k)
+        {
+            // k 0..3: additive (bit 0), Z write (bit 1); 4: afterwards (blend on, its factors left, all written)
+            State ps;
+            ps.program = s_shParticle.ID;
+            ps.keep = kKeepStencil | (k == 4 ? kKeepBlendFactors : 0);
+            ps.blend = 1;
+            ps.srcColor = ps.srcAlpha = kFactorSrcAlpha;
+            ps.dstColor = ps.dstAlpha = (k & 1) ? kFactorOne : kFactorOneMinusSrcAlpha;
+            ps.colorMask = k == 4 ? 0xF : 0x7;
+            ps.depthTest = 1, ps.depthWrite = k == 4 || (k & 2) ? 1 : 0, ps.depthCompare = kGreater;
+            if (s_pkl.tex >= 0) ps.aconst[ps.cconst++] = {s_pkl.tex, 0};
+            s_pkl.aid[k] = pk->createState(ps);
+        }
+    }
+    if (pk && !(s_pkl.aid[0] && s_pkl.aid[1] && s_pkl.aid[2] && s_pkl.aid[3] && s_pkl.aid[4])) pk = nullptr;
+    bool fSamplerBound = false;
+    const GLint locAfail = pk ? s_pkl.afail : s_shParticle.Loc("afailMode");
+    const cane::draw::Packets* const pkb = pk ? PpacketsBuf() : nullptr;   // (native buffers: the uploads by name, no binding)
+    if (pk) { if (!pkb) glBindBuffer(GL_ARRAY_BUFFER, s_vbo); }   // (the uploads below)
+    else
+    {
+    if (fStencilOff) glDisable(GL_STENCIL_TEST);
     s_shParticle.Use();
     glBindVertexArray(s_vao);
     glBindBuffer(GL_ARRAY_BUFFER, s_vbo);
     glActiveTexture(GL_TEXTURE0);
     glBindSampler(0, 0);
     glUniform1i(s_shParticle.Loc("tex"), 0);
-    const GLint locAfail = s_shParticle.Loc("afailMode");
     glDisable(GL_CULL_FACE);
     glEnable(GL_DEPTH_TEST);
     glDepthFunc(GL_GREATER);   // TEST 0x7180B: ZTST GREATER
     glEnable(GL_BLEND);
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_FALSE);
-#ifdef __SWITCH__
+    }
+#if SLY2_FASTPATHS
     // (the Switch: the vertices and the matrices kept from one system and frame to the next, not allocated anew for
     // every particle system every frame)
     static std::vector<PVTX> av;
@@ -2657,11 +2758,12 @@ void DrawParticles(const glm::mat4& matWorldToClip, const glm::vec3& posCamera, 
 #else
     std::vector<PVTX> av;
 #endif
+    static std::vector<glm::vec4> s_av1;   // (both eyes in one pass: the second eye's corners)
     for (const auto& pp : s_apsys)
     {
         if (pp->cparticle <= 0) continue;
         // 0x13A1E8: once per visible member instance of the group, or once untransformed
-#ifdef __SWITCH__
+#if SLY2_FASTPATHS
         amat.clear();
 #else
         std::vector<glm::mat4> amat;
@@ -2674,6 +2776,7 @@ void DrawParticles(const glm::mat4& matWorldToClip, const glm::vec3& posCamera, 
             if (!(rScale < 1.0f) || !p || !p->plo || !p->plo->paloParent) return false;
             const glm::vec3 pos(MatWorldOfEmitter(p)[3]);
             const float r = p->e.F(0x38) * rScale;
+            if (pposView1 && glm::dot(pos - *pposView1, pos - *pposView1) < r * r) return false;   // (seen by the second eye)
             return glm::dot(pos - posCamera, pos - posCamera) >= r * r;
         };
         if (par && !par->amember.empty())
@@ -2703,14 +2806,62 @@ void DrawParticles(const glm::mat4& matWorldToClip, const glm::vec3& posCamera, 
         else if (fVisible(pp->posCenter, pp->sRadius) && !fHiddenDd(par)) amat.push_back(glm::mat4(1.0f));
         if (amat.empty()) continue;
         av.clear();
-        for (const glm::mat4& m : amat) ExpandParticles(pp.get(), m, matWorldToClip, av);
+        s_av1.clear();
+        for (const glm::mat4& m : amat) ExpandParticles(pp.get(), m, matWorldToClip, av, pmatView1, pmatView1 ? &s_av1 : nullptr);
         if (av.empty()) continue;
         const auto [tex, ctex] = TexArrayOf(pp->pshd);
+        if (pk)
+        {
+            pk->bindTexture(0, tex, 1, fSamplerBound ? cane::draw::kSamplerKept : 0u);
+            fSamplerBound = true;
+        }
+        else
+        {
         glBindTexture(GL_TEXTURE_2D_ARRAY, tex);
         glUniform1i(s_shParticle.Loc("fTextured"), tex ? 1 : 0);
         glBlendEquation(GL_FUNC_ADD);
         glBlendFunc(GL_SRC_ALPHA, pp->fAdditive ? GL_ONE : GL_ONE_MINUS_SRC_ALPHA);
-        glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(av.size() * sizeof(PVTX)), av.data(), GL_STREAM_DRAW);
+        }
+        if (pmatView1)
+        {
+            // (the second eye's corners after the vertices, read by the two-view program's storage buffer 10)
+            const size_t cbVtx = av.size() * sizeof(PVTX), offClip1 = (cbVtx + 255) & ~size_t(255), cbClip1 = s_av1.size() * sizeof(glm::vec4);
+            if (uint8_t* p = pk && pk->mapStream ? static_cast<uint8_t*>(pk->mapStream(s_vbo, offClip1 + cbClip1)) : nullptr)
+            {
+                std::memcpy(p, av.data(), cbVtx);
+                if (cbClip1) std::memcpy(p + offClip1, s_av1.data(), cbClip1);
+            }
+            else if (pkb)
+            {
+                pkb->bufferData(s_vbo, offClip1 + cbClip1, nullptr, cane::draw::kBufferStream);
+                pkb->bufferSubData(s_vbo, 0, cbVtx, av.data());
+                pkb->bufferSubData(s_vbo, offClip1, cbClip1, s_av1.data());
+            }
+            else
+            {
+            glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(offClip1 + cbClip1), nullptr, GL_STREAM_DRAW);
+            glBufferSubData(GL_ARRAY_BUFFER, 0, GLsizeiptr(cbVtx), av.data());
+            glBufferSubData(GL_ARRAY_BUFFER, GLintptr(offClip1), GLsizeiptr(cbClip1), s_av1.data());
+            }
+            if (pk && cbClip1) pk->bindStorage(10, s_vbo, offClip1, cbClip1);
+            else glBindBufferRange(GL_SHADER_STORAGE_BUFFER, 10, s_vbo, GLintptr(offClip1), GLsizeiptr(cbClip1));
+        }
+        else if (void* p = pk && pk->mapStream ? pk->mapStream(s_vbo, av.size() * sizeof(PVTX)) : nullptr) std::memcpy(p, av.data(), av.size() * sizeof(PVTX));
+        else if (pkb) pkb->bufferData(s_vbo, av.size() * sizeof(PVTX), av.data(), cane::draw::kBufferStream);
+        else glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(av.size() * sizeof(PVTX)), av.data(), GL_STREAM_DRAW);
+        if (pk)
+        {
+            const int a = pp->fAdditive ? 1 : 0;
+            cane::draw::Constant ac[2];
+            uint32_t cc = 0;
+            if (s_pkl.fTextured >= 0) ac[cc++] = {s_pkl.fTextured, tex ? 1u : 0u};
+            const uint32_t iafail = cc;
+            if (locAfail >= 0) ac[cc++] = {locAfail, 1u};
+            pk->drawArrays(s_pkl.aid[a | 2], s_vao, 0, uint32_t(av.size()), ac, cc);
+            if (locAfail >= 0) ac[iafail].bits = 2;
+            pk->drawArrays(s_pkl.aid[a], s_vao, 0, uint32_t(av.size()), ac, cc);
+            continue;
+        }
         // ATE GEQUAL 0x80 with AFAIL FB_ONLY: the opaque part writes Z, the rest only colour
         glUniform1i(locAfail, 1);
         glDepthMask(GL_TRUE);
@@ -2718,6 +2869,12 @@ void DrawParticles(const glm::mat4& matWorldToClip, const glm::vec3& posCamera, 
         glUniform1i(locAfail, 2);
         glDepthMask(GL_FALSE);
         glDrawArrays(GL_TRIANGLES, 0, GLsizei(av.size()));
+    }
+    if (pk)
+    {
+        if (!fSamplerBound) glBindSampler(0, 0);
+        pk->drawArrays(s_pkl.aid[4], 0, 0, 0, nullptr, 0);   // (the state and vertex array the GL calls leave)
+        return;
     }
     glDepthMask(GL_TRUE);
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);

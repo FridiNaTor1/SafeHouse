@@ -315,7 +315,7 @@ ASEGA* PasegaImport(REFRUN& rr, const RAM& ram, uint32_t pa, int* pclinkDiff)
     pasega->svtSuck = ram.F32(pa + 0x4C);
     pasega->iea = ram.S32(pa + 0x50);
     pasega->ieaEnd = ram.S32(pa + 0x54);
-    pasega->fSound = ram.S32(pa + 0x58);
+    pasega->fPause = ram.S32(pa + 0x58);
     rr.mpaasega[pa] = pasega;
     for (auto& [pxf, axfRam] : axf)
     {
