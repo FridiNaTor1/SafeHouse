@@ -17,6 +17,10 @@
 
 DISPLAY g_display;
 
+#ifdef __SWITCH__
+void CaneSwitchSetFrameRate(int fps);   // platform/switch/glfw_switch.cpp
+#endif
+
 namespace
 {
 namespace st = cane::settings;
@@ -91,13 +95,21 @@ bool FLoadDisplaySettings(const std::filesystem::path& userDir, std::string* pme
     st::sanitizeStatic(s, 0, 0, st::kSly2DefaultKeyboardBindings);
     FromSettings(s);
 #ifdef __SWITCH__
-    // (the Switch: one screen at 60 Hz, the swap paces the frames at 30 or 60; the internal resolution from the menu's
-    // list, at most the docked screen's 1080 lines)
+    // (the Switch: one screen, the swap paces the frames at 30 or 60, 120 on the Switch 2; the internal resolution
+    // from the menu's list, at most the docked screen's 1080 lines, 2160 on the Switch 2)
     g_display.window = DISPWINDOW_Fullscreen;
     g_display.fVsync = true;
+#if defined(__SWITCH2__)
+    if (g_display.frameRate != 30) g_display.frameRate = g_display.frameRate > 60 ? 120 : 60;
+#else
     if (g_display.frameRate != 30) g_display.frameRate = 60;
+#endif
     g_display.msaaSamples = 0;
+#if defined(__SWITCH2__)
+    if (g_display.internalHeight > 2160) g_display.internalHeight = 0;
+#else
     if (g_display.internalHeight > 1080) g_display.internalHeight = 0;
+#endif
 #endif
     const char* psz = "";
     switch (result)
@@ -153,6 +165,10 @@ void LayoutDisplay(int outputWidth, int outputHeight)
     if (d.internalHeight > 0)
     {
         dyRender = d.internalHeight;
+#if defined(__SWITCH2__)
+        // (at 120 fps, at most the picture's height; the setting applies again at 60)
+        if (d.frameRate > 60) dyRender = std::min(dyRender, dy);
+#endif
         dxRender = std::max(1, int(std::lround(double(dyRender) * double(dx) / double(dy))));
     }
     d.renderWidth = dxRender;
@@ -247,6 +263,9 @@ void ApplyDisplaySettings(GLFWwindow* window)
             fSwapPacesFrames = true;
         }
     }
+#ifdef __SWITCH__
+    CaneSwitchSetFrameRate(g_display.frameRate);
+#endif
     cane::gl::SwapInterval(interval);
     g_display.fSwapPacesFrames = fSwapPacesFrames;
     static int s_interval = -1, s_refreshRate = -1, s_frameRate = -1, s_window = -1;

@@ -1,7 +1,7 @@
 // See installer.h. The screens are ProjectCane's (platform/installer/view.h); this drives them on the Switch:
 //   Browse    the SD card's and USB drives' folders and disc images: D-pad, A opens / installs, B goes up, + quits
 //             (touch works too). With a USB drive plugged in it starts at the choice of the SD card or a drive, where
-//             B from the top of either goes back.
+//             B from the top of either goes back. The Switch 2 build has the SD card only (UsbDrives).
 //   Languages a disc's languages (the game's own choice): D-pad, A ticks one, X installs, B back to the list
 //   Extract   the conversion's progress, on its own thread with the CPU boost mode on; B cancels
 //   Complete  keep or delete the disc image: Left / Right, A confirms (B keeps it)
@@ -51,16 +51,20 @@ uint64_t FreeBytes(const char* path)
     return statvfs(path, &st) == 0 ? uint64_t(st.f_bavail) * uint64_t(st.f_bsize) : 0;
 }
 
-// USB drives (cmake/usbhsfs.cmake: FAT and exFAT), mounted as ums0:/, ums1:/, ... while the installer runs.
+// USB drives (cmake/usbhsfs.cmake: FAT and exFAT), mounted as ums0:/, ums1:/, ... while the installer runs. Not on the
+// Switch 2: kaiHEN's USB host service (usb:hs) never answers, and every later program's services then hang until a
+// reboot.
 class UsbDrives
 {
 public:
     UsbDrives()
     {
+#if !defined(__SWITCH2__)
         m_ok = R_SUCCEEDED(usbHsFsInitialize(0));
         if (m_ok)
             usbHsFsSetPopulateCallback([](const UsbHsFsDevice*, u32, void* self) { static_cast<UsbDrives*>(self)->m_changed = true; },
                                        this);
+#endif
     }
     ~UsbDrives()
     {

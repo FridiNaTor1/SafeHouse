@@ -29,7 +29,11 @@ namespace
 {
 constexpr const char* kLatest = "https://api.github.com/repos/FridiNaTor1/SafeHouse/releases/latest";
 constexpr const char* kDownloads = "https://github.com/FridiNaTor1/SafeHouse/releases/download/";
+#if defined(__SWITCH2__)
+constexpr const char* kAsset = "SafeHouse-NX2.nro";
+#else
 constexpr const char* kAsset = "SafeHouse.nro";
+#endif
 constexpr int kConnectMs = 10000, kIdleMs = 20000, kPollMs = 100;
 
 std::mutex g_mutex;

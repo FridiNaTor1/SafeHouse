@@ -27,6 +27,10 @@
 #include <iterator>
 #include <vector>
 
+#ifdef __SWITCH__
+void CaneSwitchSetFrameRate(int fps);   // platform/switch/glfw_switch.cpp
+#endif
+
 namespace
 {
 int s_iKeyboardBindingCapture = -1;
@@ -523,7 +527,10 @@ GLFWmonitor* ActiveMonitor()
 
 std::vector<int> SupportedFrameRates()
 {
-#ifdef __SWITCH__
+#if defined(__SWITCH2__)
+    // The Switch 2's display runs at 60 Hz, or 120 where the system and the display allow it.
+    return {30, 60, 120};
+#elif defined(__SWITCH__)
     // The Switch's display runs at 60 Hz: 60 or half of it.
     return {30, 60};
 #else
@@ -664,9 +671,10 @@ void ApplySwapInterval()
     bool fSwapPacesFrames = false;
 
 #ifdef __SWITCH__
-    // The Switch always swaps with VSync: the swap paces 60 FPS, the frame pacer 30.
+    // The Switch always swaps with VSync: the swap paces 60 FPS (the Switch 2's 120 at 120 Hz), the frame pacer 30.
     interval = 1;
-    fSwapPacesFrames = g_targetFrameRate == 60;
+    fSwapPacesFrames = g_targetFrameRate >= 60;
+    CaneSwitchSetFrameRate(g_targetFrameRate);
 #else
     if (g_fVsync)
     {
@@ -1499,6 +1507,9 @@ void ExecutePrompt(PROMPT* pprompt)
             case RESPK_FrameRate:
             SelectNextSupportedFrameRate();
             ApplySwapInterval();
+#if defined(__SWITCH2__)
+            ApplyInternalResolutionSettings();   // (the 120 fps render cap)
+#endif
             SaveSystemSettings();
             rebuildPromptKeepingSelection();
             return;

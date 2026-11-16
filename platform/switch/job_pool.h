@@ -1,5 +1,5 @@
 #pragma once
-// Work for the cores the game thread leaves free (runtime.cpp starts every std::thread on cores 1-2), below the game's
+// Work for the cores the game thread leaves free (runtime.cpp starts every std::thread on the others), below the game's
 // threads' priority, and whole-file reads: the texture mods' PNGs read and decoded while the game goes on
 // (Sly1-Release / Sly2-Release texmod.cpp).
 #include "runtime.h"

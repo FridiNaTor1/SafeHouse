@@ -41,7 +41,12 @@ struct Program
     const Block* blocks;
     uint32_t blockCount;
 };
+// The constants block's uniform binding (cmake/switch_shaders.py CONSTANT_BINDINGS)
+#if defined(__SWITCH2__)
+inline constexpr unsigned ConstantBinding = 12;
+#else
 inline constexpr unsigned ConstantBinding = 15;
+#endif
 extern const Program programs[];
 extern const size_t programCount;
 }  // namespace CaneDeko::Shaders

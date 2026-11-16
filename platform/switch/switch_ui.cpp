@@ -16,6 +16,7 @@
 #include <stb/stb_image.h>
 
 void CaneSwitchReleaseWindow();   // glfw_switch.cpp
+void CaneSwitchSetCursorSpace(int width, int height);   // glfw_switch.cpp
 
 namespace CaneSwitch
 {
@@ -54,6 +55,8 @@ Ui::Ui()
     io.FontGlobalScale = 1.0f / kAtlasScale;
     ImGui::StyleColorsDark();
     ImGui_ImplGlfw_InitForOpenGL(m_window, true);   // (the touch screen: the mouse)
+    // (the touches in the UI's 1280x720 layout, at any framebuffer size)
+    CaneSwitchSetCursorSpace(1280, 720);
     if (!ImGui_ImplOpenGL3_Init())
     {
         ImGui_ImplGlfw_Shutdown();

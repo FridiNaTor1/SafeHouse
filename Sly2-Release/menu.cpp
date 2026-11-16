@@ -800,7 +800,9 @@ void CycleNative(MENUENT& e)
     case NID_Aspect: g_display.aspect = DISPASPECT((int(g_display.aspect) + 1) % 6); break;
     case NID_Resolution:
     {
-#ifdef __SWITCH__
+#if defined(__SWITCH2__)
+        static const int an[] = {0, 360, 480, 720, 1080, 1440, 2160};   // (the Switch 2: up to 2160 lines)
+#elif defined(__SWITCH__)
         static const int an[] = {0, 360, 480, 720, 1080};   // (the Switch: up to the docked screen's 1080 lines)
 #else
         static const int an[] = {0, 360, 480, 720, 1080, 1440, 2160};
@@ -818,7 +820,9 @@ void CycleNative(MENUENT& e)
     }
     case NID_FrameRate:
     {
-#ifdef __SWITCH__
+#if defined(__SWITCH2__)
+        std::vector<int> an = {30, 60, 120};   // (the Switch 2: 120 where the display allows it)
+#elif defined(__SWITCH__)
         std::vector<int> an = {30, 60};   // (the Switch: its display's 60 Hz and half of it)
 #else
         // (the launcher's list: these, the monitor's refresh rate, Uncapped)
