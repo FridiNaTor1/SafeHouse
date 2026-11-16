@@ -35,6 +35,24 @@ void SetLoxRotation(LOX* plox, const glm::mat3& mat)
 }
 NATIVEFN(0x231300, SetLoxRotation);
 
+// orig: 0x231468 / 0x2314D0 (slots 33 / 34): a located point inherits
+// motion from its reference record, including rotation about an offset point.
+glm::vec3 VelLox(LOX* plox)
+{
+    if (!plox->pxf) return glm::vec3(0.0f);
+    const glm::vec3 pos(plox->pxf->matWorld * plox->mat[3]);
+    return VelXfPoint(plox->pxf, nullptr, pos);
+}
+NATIVEFN(0x231468, VelLox);
+
+glm::vec3 AngVelLox(LOX* plox)
+{
+    if (!plox->pxf) return glm::vec3(0.0f);
+    const glm::mat4 dm = DmatXfChain(plox->pxf, nullptr);
+    return glm::vec3(dm[1][2], dm[2][0], dm[0][1]);
+}
+NATIVEFN(0x2314D0, AngVelLox);
+
 // orig: 0x2315F0 (slot 10). Capture requested world components before replacing
 // the reference, perform the base parent change, then restore through the
 // object's original virtual setters. Other local components remain.

@@ -991,10 +991,11 @@ void UpdateInteract(ACTOR* pa)
             f21 = std::min(std::sqrt(std::fabs(sv * sv - l2)), f21);
             float g = f21;
             LO* pt = i.ploTarget;
-            if (pt && FIsLoDerivedFrom(pt, 0x0C) && !pt->U32Field(0, 0xE4, 0))
+            const CRV* pcrv = pt && FIsLoDerivedFrom(pt, 0x0C) ? PcrvFromLo(pt) : nullptr;
+            // PATH's closed flag is loaded into the native curve, not the option field table.
+            if (pcrv && !pcrv->fClosed)
             {
                 // an open ledge: not past its ends (30 in)
-                const CRV* pcrv = PcrvFromLo(pt);
                 float vLo = 0.0f, vHi = 0.0f;
                 GSmooth(i.s20, SMinCrv(pcrv) + 30.0f, g_clock.dt, reinterpret_cast<const SMP*>(&smp), &vLo);  // 0x11D018
                 GSmooth(i.s20, SMaxCrv(pcrv) - 30.0f, g_clock.dt, reinterpret_cast<const SMP*>(&smp), &vHi);

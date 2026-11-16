@@ -251,10 +251,9 @@ glm::mat4 MatWorldOfLo(const LO* plo)
     if (!plo) return glm::mat4(1.0f);
     if (const LOX* px = dynamic_cast<const LOX*>(plo))
     {
-        // the record it refers to, else its parent's placement (TODO(world): the LOX's own rule 0x231768)
-        if (px->pxf) return px->pxf->matWorld * px->mat;
-        if (plo->paloParent) return MatWorldOfAlo(plo->paloParent) * px->mat;
-        return px->mat;
+        // orig: 0x231440 / 0x231368: only the reference record places a LOX.
+        // A parent without a record reference must not move or scale its bursts.
+        return MatWorldLox(px);
     }
     if (FCidDerivedFrom(plo->Cid(), 0x30)) return MatJtLo(const_cast<LO*>(plo));  // vt slot 31 (the object record +0x60)
     return glm::mat4(1.0f);

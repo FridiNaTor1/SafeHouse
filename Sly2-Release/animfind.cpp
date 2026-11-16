@@ -103,7 +103,11 @@ LO* PloFindSwAny(OID oid)
     for (LO* const up : AploOfOid(g_psw, oid))
         if (FOidMatches(up, oid))
         {
-            if (up->oidInstance == oid || FLoInWorldNs(up)) return up;
+            // A clone can retain a proxy alias inside another instance. Its name
+            // is local to that instance, not a global alias (0x15E3E8's node test).
+            // Only an alias at its namespace root is visible from the world.
+            const bool fGlobalAlias = up->oidInstance == oid && FLoAliasInWorldNs(up);
+            if (fGlobalAlias || FLoInWorldNs(up)) return up;
             if (!ploFirst) ploFirst = up;
         }
     return ploFirst;

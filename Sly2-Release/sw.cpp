@@ -151,14 +151,22 @@ void NoteOidInstanceChanged(const SW* psw, LO* plo, OID oidOld)
     }
 }
 
+// orig: 0x15E3E8's namespace-node check also applies to the alias hash.
+// Copies inside an instance retain their names, but those names are local.
+bool FLoAliasInWorldNs(const LO* plo)
+{
+    return plo->oidInstance != -1 && !plo->ploNsRow && (!plo->ploNs || plo->ploNs == plo);
+}
+
 LO* PloFindSwObjectByOid(SW* psw, OID oid)
 {
     // orig 0x15E938 kind 5 (global): the world's objects of the oid first
+    if (oid == -1) return nullptr;
     LO* ploFirst = nullptr;
     for (LO* plo : AploOfOid(psw, oid))
-        if (plo->oid == oid)
+        if (plo->oid == oid || plo->oidInstance == oid)
         {
-            if (FLoInWorldNs(plo) || plo->oidInstance == oid) return plo;
+            if (FLoInWorldNs(plo) || (plo->oidInstance == oid && FLoAliasInWorldNs(plo))) return plo;
             if (!ploFirst) ploFirst = plo;
         }
     return ploFirst;

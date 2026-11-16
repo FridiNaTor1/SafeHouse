@@ -111,6 +111,7 @@ void NotifyAsega(ASEGA* pasega, int msgk)
 // E.g. Episode 1's Paris intro (ASEG 123963): Sly runs to the safe house by script while the pad is locked.
 void SetAsegaPause(ASEGA* pasega, int f)
 {
+    if (g_fAsegaEventsMuted) return;
     if (FAsegaRetracted(pasega)) return;
     if (f == pasega->fPause) return;
     if (f) PauseGame(3);

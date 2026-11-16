@@ -176,6 +176,7 @@ const std::vector<LO*>& AploOfOid(const SW* psw, OID oid);
 // An object's oidInstance changed from oidOld (its writers call it after the write).
 void NoteOidInstanceChanged(const SW* psw, LO* plo, OID oidOld);
 bool FLoInWorldNs(const LO* plo);  // (the object in the world's namespace node: not a group's / an instance's)
+bool FLoAliasInWorldNs(const LO* plo);  // (a proxy name at its namespace root, not a nested clone's local alias)
 
 // Loads the world file fk into psw (trace: a parse map of the load, or ""); false on a load error.
 bool FLoadWorldFile(SW* psw, const FK& fk, const std::string& trace, std::size_t* pcbRead, std::size_t* pcbFile);
