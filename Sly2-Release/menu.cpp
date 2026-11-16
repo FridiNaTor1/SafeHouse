@@ -1136,7 +1136,7 @@ void CycleVr(const MENUENT& e)
     };
     switch (e.id)
     {
-    // (Immersive, Flat Screen, First Person (experimental), round)
+    // (Immersive, Flat Screen, First Person (Experimental), round)
     case NID_VrMode:
         o.mode = o.mode == vr::VRMODE_Immersive ? vr::VRMODE_Flat : o.mode == vr::VRMODE_Flat ? vr::VRMODE_FirstPerson : vr::VRMODE_Immersive;
         vr::Recenter();
