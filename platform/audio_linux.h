@@ -21,7 +21,11 @@ using ULONG = uint32_t;
 constexpr HRESULT S_OK = 0;
 constexpr HRESULT E_FAIL = static_cast<int32_t>(0x80004005u);
 constexpr HRESULT E_POINTER = static_cast<int32_t>(0x80004003u);
+#if defined(__APPLE__)
+#include <mach-o/dyld.h>   // (its enum DYLD_BOOL already names FALSE = 0 / TRUE = 1)
+#else
 constexpr int TRUE = 1, FALSE = 0;
+#endif
 inline bool FAILED(HRESULT r) { return r < 0; }
 inline bool SUCCEEDED(HRESULT r) { return r >= 0; }
 #endif
@@ -220,10 +224,11 @@ struct IXAudio2 {
     void UnregisterForCallbacks(IXAudio2EngineCallback*) {}
     // Defaults keep the original fixed 2 ch / 48 kHz mix (Sly 2 relies on it);
     // Sly 1 passes its own format.
+    // (deviceIndex: FAudio's, 0 the default device, else SDL's output device index + 1; Sly2-Release audio.cpp)
     HRESULT CreateMasteringVoice(IXAudio2MasteringVoice** result, uint32_t channels = 2,
-                                 uint32_t sampleRate = 48000) {
+                                 uint32_t sampleRate = 48000, uint32_t deviceIndex = 0) {
         auto voice = std::make_unique<IXAudio2MasteringVoice>();
-        auto r = FAudio_CreateMasteringVoice(handle, &voice->handle, channels, sampleRate, 0, 0, nullptr);
+        auto r = FAudio_CreateMasteringVoice(handle, &voice->handle, channels, sampleRate, 0, deviceIndex, nullptr);
         if (!r) *result = voice.release();
         return static_cast<HRESULT>(r);
     }

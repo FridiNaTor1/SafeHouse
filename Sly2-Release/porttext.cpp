@@ -1,6 +1,7 @@
 // See porttext.h.
 
 #include "porttext.h"
+#include "langstore.h"
 #include "region.h"
 
 #include "pcinput.h"
@@ -10,6 +11,7 @@
 #include <GLFW/glfw3.h>
 
 #include <cstdint>
+#include <cstdlib>
 #include <cstdio>
 #include <cstring>
 #include <iterator>
@@ -160,10 +162,10 @@ constexpr ROW s_arow[] = {
         "Camera omlaag", "Câmara baixo", "Kamera ned", "Kamera alas", "Kamera ned", "Kamera ner", "カメラ下"}},
     {PTX_TankLeftTrack, {"Tank: Left Track", "Char : chenille gauche", "Carro: cingolo sinistro", "Panzer: linke Kette",
         "Tanque: oruga izquierda", "Tank: linkerrups", "Tanque: lagarta esquerda", "Tank: venstre bælte",
-        "Panssari: vasen tela", "Stridsvogn: venstre belte", "Stridsvagn: vänster band", "戦車：左キャタピラ"}},
+        "Panssari: vasen tela", "Stridsvogn: venstre belte", "Stridsvagn: vänster band", "戦車:左キャタピラ"}},
     {PTX_TankRightTrack, {"Tank: Right Track", "Char : chenille droite", "Carro: cingolo destro", "Panzer: rechte Kette",
         "Tanque: oruga derecha", "Tank: rechterrups", "Tanque: lagarta direita", "Tank: højre bælte",
-        "Panssari: oikea tela", "Stridsvogn: høyre belte", "Stridsvagn: höger band", "戦車：右キャタピラ"}},
+        "Panssari: oikea tela", "Stridsvogn: høyre belte", "Stridsvagn: höger band", "戦車:右キャタピラ"}},
     {PTX_PressAKey, {"press a key (Esc cancels)", "appuie sur une touche (Échap : annuler)",
         "premi un tasto (Esc annulla)", "Taste drücken (Esc bricht ab)", "pulsa una tecla (Esc cancela)",
         "druk op een toets (Esc annuleert)", "prime uma tecla (Esc cancela)", "tryk på en tast (Esc annullerer)",
@@ -310,6 +312,167 @@ constexpr ROW s_arow[] = {
         "Pulsa (Esc: cancelar, Supr: borrar)", "Druk (Esc: annuleren, Del: wissen)",
         "Prime (Esc: cancelar, Del: limpar)", "Tryk (Esc: annuller, Del: ryd)", "Paina (Esc: peruuta, Del: poista)",
         "Trykk (Esc: avbryt, Del: fjern)", "Tryck (Esc: avbryt, Del: rensa)", "ボタンをおす (Esc:やめる、Del:けす)"}},
+    // P: the Remap page (remappage.h; 2026-11-10)
+    {PTX_RemapPage, {"Remap Controls...", "Réattribuer les commandes...", "Riassegna i comandi...", "Steuerung belegen...",
+        "Reasignar controles...", "Besturing toewijzen...", "Reatribuir controlos...", "Tildel styring...",
+        "Määritä ohjaimet...", "Tilordne kontroller...", "Tilldela kontroller...", "操作のわりあて"}},
+    {PTX_RemapTitle, {"Remap Controls", "Réattribuer les commandes", "Riassegna i comandi", "Steuerung belegen",
+        "Reasignar controles", "Besturing toewijzen", "Reatribuir controlos", "Tildel styring", "Määritä ohjaimet",
+        "Tilordne kontroller", "Tilldela kontroller", "操作のわりあて"}},
+    {PTX_RemapAction, {"Action", "Action", "Azione", "Aktion", "Acción", "Actie", "Ação", "Handling", "Toiminto",
+        "Handling", "Åtgärd", "アクション"}},
+    {PTX_RemapKeyboard, {"Keyboard / Mouse", "Clavier / souris", "Tastiera / mouse", "Tastatur / Maus", "Teclado / ratón",
+        "Toetsenbord / muis", "Teclado / rato", "Tastatur / mus", "Näppäimistö / hiiri", "Tastatur / mus",
+        "Tangentbord / mus", "キーボード/マウス"}},
+    {PTX_RemapController, {"Controller", "Manette", "Controller", "Controller", "Mando", "Controller", "Comando",
+        "Controller", "Peliohjain", "Kontroller", "Handkontroll", "コントローラ"}},
+    {PTX_RemapReset, {"Reset to Defaults", "Valeurs par défaut", "Ripristina predefiniti", "Standard wiederherstellen",
+        "Restablecer valores", "Standaard herstellen", "Repor predefinições", "Nulstil til standard", "Palauta oletukset",
+        "Tilbakestill til standard", "Återställ standard", "しょきせっていにもどす"}},
+    {PTX_RemapBack, {"Back", "Retour", "Indietro", "Zurück", "Atrás", "Terug", "Voltar", "Tilbage", "Takaisin", "Tilbake",
+        "Tillbaka", "もどる"}},
+    {PTX_RemapChange, {"Change", "Changer", "Cambia", "Ändern", "Cambiar", "Wijzigen", "Mudar", "Skift", "Vaihda", "Endre",
+        "Ändra", "かえる"}},
+    {PTX_RemapClear, {"Clear", "Effacer", "Cancella", "Löschen", "Borrar", "Wissen", "Limpar", "Ryd", "Poista", "Fjern",
+        "Rensa", "けす"}},
+    {PTX_RemapPressKey, {"Press a key or mouse button (Esc: cancel, Del: clear)",
+        "Appuie sur une touche ou un bouton de souris (Échap : annuler, Suppr : effacer)",
+        "Premi un tasto o un pulsante del mouse (Esc: annulla, Canc: cancella)",
+        "Taste oder Maustaste drücken (Esc: Abbruch, Entf: löschen)",
+        "Pulsa una tecla o un botón del ratón (Esc: cancelar, Supr: borrar)",
+        "Druk op een toets of muisknop (Esc: annuleren, Del: wissen)",
+        "Prime uma tecla ou um botão do rato (Esc: cancelar, Del: limpar)",
+        "Tryk på en tast eller museknap (Esc: annuller, Del: ryd)",
+        "Paina näppäintä tai hiiren painiketta (Esc: peruuta, Del: poista)",
+        "Trykk en tast eller museknapp (Esc: avbryt, Del: fjern)",
+        "Tryck på en tangent eller musknapp (Esc: avbryt, Del: rensa)", "キーかマウスボタンをおす (Esc:やめる、Del:けす)"}},
+    {PTX_RemapPressButton, {"Press a controller button (Esc or wait: cancel, Del: clear)",
+        "Appuie sur un bouton de la manette (Échap ou attendre : annuler, Suppr : effacer)",
+        "Premi un pulsante del controller (Esc o attendi: annulla, Canc: cancella)",
+        "Controllertaste drücken (Esc oder warten: Abbruch, Entf: löschen)",
+        "Pulsa un botón del mando (Esc o espera: cancelar, Supr: borrar)",
+        "Druk op een controllerknop (Esc of wachten: annuleren, Del: wissen)",
+        "Prime um botão do comando (Esc ou esperar: cancelar, Del: limpar)",
+        "Tryk på en knap på controlleren (Esc eller vent: annuller, Del: ryd)",
+        "Paina ohjaimen painiketta (Esc tai odota: peruuta, Del: poista)",
+        "Trykk en knapp på kontrolleren (Esc eller vent: avbryt, Del: fjern)",
+        "Tryck på en knapp på handkontrollen (Esc eller vänta: avbryt, Del: rensa)",
+        "コントローラのボタンをおす (Escかまつ:やめる、Del:けす)"}},
+    {PTX_RemapFixed, {"fixed", "fixe", "fisso", "fest", "fijo", "vast", "fixo", "fast", "kiinteä", "fast", "fast", "こてい"}},
+    // P: VR Settings (vr.h)
+    {PTX_VrSettings, {"VR Settings", "Réglages VR", "Impostazioni VR", "VR-Einstellungen", "Ajustes de RV",
+        "VR-instellingen", "Definições de RV", "VR-indstillinger", "VR-asetukset", "VR-innstillinger", "VR-inställningar", "VR設定"}},
+    {PTX_VrMode, {"VR Mode", "Mode VR", "Modalità VR", "VR-Modus", "Modo RV", "VR-modus", "Modo RV", "VR-tilstand",
+        "VR-tila", "VR-modus", "VR-läge", "VRモード"}},
+    {PTX_VrImmersive, {"Immersive", "Immersif", "Immersiva", "Immersiv", "Inmersivo", "Immersief", "Imersivo", "Immersiv",
+        "Immersiivinen", "Immersiv", "Immersiv", "イマーシブ"}},
+    {PTX_VrFlatScreen, {"Flat Screen", "Écran plat", "Schermo piatto", "Flacher Bildschirm", "Pantalla plana",
+        "Plat scherm", "Ecrã plano", "Flad skærm", "Litteä näyttö", "Flat skjerm", "Platt skärm", "フラット画面"}},
+    {PTX_VrVignette, {"Comfort Vignette", "Vignette de confort", "Vignettatura comfort", "Komfort-Vignette",
+        "Viñeta de confort", "Comfortvignet", "Vinheta de conforto", "Komfortvignet", "Mukavuusvinjetti",
+        "Komfortvignett", "Komfortvinjett", "ビネット"}},
+    {PTX_VrLow, {"Low", "Faible", "Bassa", "Schwach", "Baja", "Laag", "Baixa", "Lav", "Matala", "Lav", "Låg", "よわい"}},
+    {PTX_VrMedium, {"Medium", "Moyenne", "Media", "Mittel", "Media", "Middel", "Média", "Middel", "Keskitaso", "Middels",
+        "Medel", "ふつう"}},
+    {PTX_VrHigh, {"High", "Forte", "Alta", "Stark", "Alta", "Hoog", "Alta", "Høj", "Korkea", "Høy", "Hög", "つよい"}},
+    {PTX_VrScreenSize, {"Screen Size", "Taille de l'écran", "Dimensione schermo", "Bildschirmgröße", "Tamaño de pantalla",
+        "Schermgrootte", "Tamanho do ecrã", "Skærmstørrelse", "Näytön koko", "Skjermstørrelse", "Skärmstorlek", "画面サイズ"}},
+    {PTX_VrSmall, {"Small", "Petit", "Piccolo", "Klein", "Pequeña", "Klein", "Pequeno", "Lille", "Pieni", "Liten", "Liten",
+        "ちいさい"}},
+    {PTX_VrLarge, {"Large", "Grand", "Grande", "Groß", "Grande", "Groot", "Grande", "Stor", "Suuri", "Stor", "Stor", "おおきい"}},
+    {PTX_VrRefreshRate, {"Refresh Rate", "Fréquence d'affichage", "Frequenza di aggiornamento", "Bildwiederholrate",
+        "Frecuencia de actualización", "Verversingssnelheid", "Taxa de atualização", "Opdateringshastighed",
+        "Virkistystaajuus", "Oppdateringsfrekvens", "Uppdateringsfrekvens", "リフレッシュレート"}},
+    {PTX_VrEyeResolution, {"Eye Resolution", "Résolution par œil", "Risoluzione per occhio", "Auflösung pro Auge",
+        "Resolución por ojo", "Resolutie per oog", "Resolução por olho", "Opløsning pr. øje", "Tarkkuus silmää kohden",
+        "Oppløsning per øye", "Upplösning per öga", "かいぞうど"}},
+    {PTX_VrFoveation, {"Foveation", "Rendu fovéal", "Foveazione", "Foveated Rendering", "Foveación", "Foveated rendering",
+        "Foveação", "Foveering", "Foveaatio", "Foveering", "Foveering", "しゅうへんかいぞうど"}},
+    {PTX_VrMultiview, {"Multiview", "Multivue", "Multivista", "Multiview", "Multivista", "Multiview", "Multivisão", "Multiview",
+        "Moninäkymä", "Multiview", "Multivy", "マルチビュー"}},
+    {PTX_VrUpscaling, {"Upscaling", "Mise à l'échelle", "Upscaling", "Hochskalierung", "Escalado", "Opschalen", "Upscaling",
+        "Opskalering", "Skaalaus", "Oppskalering", "Uppskalning", "アップスケール"}},
+    {PTX_VrSharpen, {"Sharpen", "Netteté", "Nitidezza", "Schärfen", "Nitidez", "Verscherpen", "Nitidez", "Skarphed",
+        "Terävöinti", "Skarphet", "Skärpa", "シャープ"}},
+    {PTX_VrSuperResolution, {"Super Resolution", "Super résolution", "Super risoluzione", "Super-Auflösung", "Superresolución",
+        "Superresolutie", "Super-resolução", "Superopløsning", "Superresoluutio", "Superoppløsning", "Superupplösning", "スーパーレゾリューション"}},
+    {PTX_VrDynamic, {"Dynamic", "Dynamique", "Dinamica", "Dynamisch", "Dinámica", "Dynamisch", "Dinâmica", "Dynamisk",
+        "Dynaaminen", "Dynamisk", "Dynamisk", "じどう"}},
+    {PTX_VrWorldScale, {"World Scale", "Échelle du monde", "Scala del mondo", "Weltgröße", "Escala del mundo",
+        "Wereldschaal", "Escala do mundo", "Verdensskala", "Maailman mittakaava", "Verdensskala", "Världsskala",
+        "ワールドスケール"}},
+    {PTX_VrRecenter, {"Recenter View", "Recentrer la vue", "Ricentra la visuale", "Ansicht zentrieren", "Recentrar la vista",
+        "Beeld centreren", "Recentrar a vista", "Centrer visningen", "Keskitä näkymä", "Sentrer visningen",
+        "Centrera vyn", "ビューをもどす"}},
+    {PTX_VrCutscenes, {"Cutscenes", "Cinématiques", "Filmati", "Zwischensequenzen", "Escenas", "Tussenfilmpjes",
+        "Cenas", "Mellemsekvenser", "Välivideot", "Mellomsekvenser", "Mellansekvenser", "ムービー"}},
+    {PTX_VrRcTable, {"RC Car Table View (Beta)", "Voiture RC vue de la table (bêta)", "Auto RC dal tavolo (beta)",
+        "RC-Auto vom Tisch (Beta)", "Coche RC desde la mesa (beta)", "RC-auto vanaf de tafel (bèta)",
+        "Carro RC da mesa (beta)", "RC-bil fra bordet (beta)", "RC-auto pöydältä (beta)", "RC-bil fra bordet (beta)",
+        "RC-bil från bordet (beta)", "RCカー テーブルビュー"}},
+    {PTX_QuitToLauncher, {"Quit to Launcher", "Retour au lanceur", "Torna al launcher", "Zurück zum Launcher",
+        "Volver al lanzador", "Terug naar de launcher", "Voltar ao launcher", "Tilbage til launcheren",
+        "Palaa käynnistimeen", "Tilbake til startprogrammet", "Tillbaka till startprogrammet", "ランチャーに戻る"}},
+    // P: (audio) the options' Audio Devices page (menu.cpp AentAudio)
+    {PTX_AudioDevicesPage, {"Audio Devices...", "Périphériques audio...", "Dispositivi audio...", "Audiogeräte...",
+        "Dispositivos de audio...", "Audioapparaten...", "Dispositivos de áudio...", "Lydenheder...", "Äänilaitteet...",
+        "Lydenheter...", "Ljudenheter...", "オーディオデバイス"}},
+    {PTX_OutputDevice, {"Output", "Sortie", "Uscita", "Ausgabe", "Salida", "Uitvoer", "Saída", "Udgang", "Ulostulo",
+        "Utgang", "Utgång", "スピーカー"}},
+    {PTX_InputDevice, {"Microphone", "Microphone", "Microfono", "Mikrofon", "Micrófono", "Microfoon", "Microfone",
+        "Mikrofon", "Mikrofoni", "Mikrofon", "Mikrofon", "マイク"}},
+    {PTX_HeadsetOutputDevice, {"Headset Output", "Sortie du casque", "Uscita cuffie", "Headset-Ausgabe",
+        "Salida de auriculares", "Headsetuitvoer", "Saída dos auscultadores", "Headsetudgang", "Kuulokkeiden ulostulo",
+        "Hodesettutgang", "Headsetutgång", "ヘッドセット"}},
+    {PTX_SystemDefault, {"System Default", "Par défaut", "Predefinito", "Systemstandard", "Predeterminado",
+        "Systeemstandaard", "Predefinição", "Systemstandard", "Järjestelmän oletus", "Systemstandard", "Systemstandard",
+        "オート"}},
+    {PTX_SameAsOutput, {"Same as Output", "Comme la sortie", "Come l'uscita", "Wie Ausgabe", "Igual que la salida",
+        "Zelfde als uitvoer", "Igual à saída", "Samme som udgang", "Sama kuin ulostulo", "Samme som utgang",
+        "Samma som utgång", "スピーカーとおなじ"}},
+    {PTX_NotConnected, {"%s (not connected)", "%s (non connecté)", "%s (non collegato)", "%s (nicht verbunden)",
+        "%s (no conectado)", "%s (niet verbonden)", "%s (não ligado)", "%s (ikke tilsluttet)", "%s (ei yhdistetty)",
+        "%s (ikke tilkoblet)", "%s (inte ansluten)", "%s (なし)"}},
+    // P: the language menu: a language of the languages folder that plays its voices over this disc's text
+    {PTX_LanguageVoicesOnly, {"%s (voices only)", "%s (voix seulement)", "%s (solo voci)", "%s (nur Stimmen)",
+        "%s (solo voces)", "%s (alleen stemmen)", "%s (apenas vozes)", "%s (kun stemmer)", "%s (vain äänet)",
+        "%s (bare stemmer)", "%s (endast röster)", "%s (音声のみ)"}},
+    // P: the options' Language... page (the text and the voices apart; G: the Japanese 使用する言語 of the title's menu)
+    {PTX_LanguagePage, {"Language...", "Langue...", "Lingua...", "Sprache...", "Idioma...", "Taal...", "Idioma...",
+        "Sprog...", "Kieli...", "Språk...", "Språk...", "使用する言語"}},
+    {PTX_TextLanguage, {"Text Language", "Langue du texte", "Lingua del testo", "Textsprache", "Idioma del texto",
+        "Teksttaal", "Idioma do texto", "Tekstsprog", "Tekstin kieli", "Tekstspråk", "Textspråk", "テキストの言語"}},
+    {PTX_VoiceLanguage, {"Voice Language", "Langue des voix", "Lingua delle voci", "Sprache der Stimmen",
+        "Idioma de las voces", "Taal van de stemmen", "Idioma das vozes", "Stemmernes sprog", "Puheen kieli",
+        "Stemmenes språk", "Rösternas språk", "音声の言語"}},
+    {PTX_SameAsText, {"Same as Text", "Comme le texte", "Come il testo", "Wie der Text", "Igual que el texto",
+        "Zelfde als tekst", "Igual ao texto", "Samme som tekst", "Sama kuin teksti", "Samme som tekst", "Samma som text",
+        "テキストとおなじ"}},
+    {PTX_FromNextArea, {"%s (next area)", "%s (zone suivante)", "%s (prossima zona)", "%s (nächstes Gebiet)",
+        "%s (próxima zona)", "%s (volgend gebied)", "%s (próxima zona)", "%s (næste område)", "%s (seuraava alue)",
+        "%s (neste område)", "%s (nästa område)", "%s (次のエリア)"}},
+    // P: the display options' Upscaling (fsr.h; the Japanese in kana, the font's)
+    {PTX_Upscaling, {"Upscaling", "Mise à l'échelle", "Upscaling", "Hochskalierung", "Reescalado", "Opschaling",
+        "Aumento de resolução", "Opskalering", "Skaalaus", "Oppskalering", "Uppskalning", "アップスケール"}},
+    {PTX_UpscaleMethod, {"Method", "Méthode", "Metodo", "Methode", "Método", "Methode", "Método", "Metode", "Menetelmä",
+        "Metode", "Metod", "ほうしき"}},
+    {PTX_UpscalePreset, {"Preset", "Préréglage", "Preimpostazione", "Voreinstellung", "Ajuste", "Voorinstelling",
+        "Predefinição", "Niveau", "Esiasetus", "Nivå", "Nivå", "プリセット"}},
+    {PTX_UpscaleSharpness, {"Sharpness", "Netteté", "Nitidezza", "Schärfe", "Nitidez", "Scherpte", "Nitidez", "Skarphed",
+        "Terävyys", "Skarphet", "Skärpa", "シャープネス"}},
+    {PTX_UltraQuality, {"Ultra Quality", "Ultra qualité", "Qualità ultra", "Ultra-Qualität", "Calidad ultra",
+        "Ultrakwaliteit", "Qualidade ultra", "Ultrakvalitet", "Ultralaatu", "Ultrakvalitet", "Ultrakvalitet",
+        "ウルトラクオリティ"}},
+    {PTX_Quality, {"Quality", "Qualité", "Qualità", "Qualität", "Calidad", "Kwaliteit", "Qualidade", "Kvalitet", "Laatu",
+        "Kvalitet", "Kvalitet", "クオリティ"}},
+    {PTX_Balanced, {"Balanced", "Équilibré", "Bilanciato", "Ausgewogen", "Equilibrado", "Gebalanceerd", "Equilibrado",
+        "Balanceret", "Tasapainoinen", "Balansert", "Balanserad", "バランス"}},
+    {PTX_Performance, {"Performance", "Performance", "Prestazioni", "Leistung", "Rendimiento", "Prestaties", "Desempenho",
+        "Ydelse", "Suorituskyky", "Ytelse", "Prestanda", "パフォーマンス"}},
+    // P: the cel outlines' width (display.h outlineThickness; the Japanese in kana, the font's)
+    {PTX_OutlineThickness, {"Outline Thickness", "Épaisseur des contours", "Spessore dei contorni", "Konturstärke",
+        "Grosor del contorno", "Dikte van de omlijning", "Espessura do contorno", "Konturtykkelse", "Ääriviivojen paksuus",
+        "Konturtykkelse", "Konturtjocklek", "りんかくせんのふとさ"}},
 };
 // clang-format on
 static_assert(std::size(s_arow) == PTX_Max, "one row per PTX");
@@ -324,7 +487,12 @@ static_assert(FRowsInOrder(), "the rows in PTX order");
 
 int IlangTable()
 {
-    return g_nLang >= 0 && g_nLang < CLANG ? g_nLang : LANG_English;
+    // (the text's language: a store language's own, or the disc's that it falls back to; region.h LangText)
+    const int lang = LangText();
+    const int ilang = lang >= 0 && lang < CLANG ? lang : LANG_English;
+    // (the Japanese column needs the Japanese font: the Japanese disc's, or the languages folder's on the other discs;
+    // Latin columns drawn with it are folded: StrToGameText)
+    return ilang == LANG_Japanese && !FWideChars() ? LANG_English : ilang;
 }
 
 const char* SzRow(PTX ptx) { return s_arow[ptx].asz[IlangTable()]; }
@@ -344,8 +512,8 @@ bool FDecimalComma()
 
 std::string StrToGameText(const std::string& utf8)
 {
-    // the Japanese disc's text keeps characters >= 0x80 as UTF-8 already (region.h)
-    if (FWideText()) return utf8;
+    // 16-bit text keeps characters >= 0x80 as UTF-8 already (region.h FWideChars)
+    if (FWideChars()) return IlangTable() == LANG_Japanese ? utf8 : StrFoldLatinForWideFont(utf8);   // (langstore.h)
     // the other discs' text is Latin-1 (their fonts' glyphs 0x20..0xFF)
     std::string out;
     out.reserve(utf8.size());
@@ -361,6 +529,15 @@ std::string StrToGameText(const std::string& utf8)
         i += cb;
     }
     return out;
+}
+
+bool FQuitToLauncher()
+{
+    static const bool s_f = [] {
+        const char* sz = std::getenv("SAFEHOUSE_LAUNCHER");
+        return sz && std::string(sz) == "collection";
+    }();
+    return s_f;
 }
 
 std::string StrPort(PTX ptx)
@@ -702,16 +879,40 @@ constexpr PCROWJP s_apcrowJp[] = {
 // clang-format on
 }  // namespace
 
+const char* SzEpisodeMenuWording(int idDisc)
+{
+    // (lang 2026-11-10) the pause menu's "Exit to Episode Menu" (USA 0x42): the Dutch, Portuguese, Danish, Finnish,
+    // Norwegian and Swedish texts say "DVD menu" (their translators' word for the PS2 disc's menu); every other
+    // language, and the USA / Japanese discs, name the episode menu. Each in its language's own word for an episode
+    // (Dutch "Deel", Finnish "Jakso", Swedish "Episod": the episode menu's "Episode 1" and "Start episode" lines).
+    if (IdTextUsa(idDisc) != 0x42) return nullptr;
+    switch (IlangTable())
+    {
+    case LANG_Dutch: return "Ga naar deelmenu";
+    case LANG_Portuguese: return "Ir para o menu de episódios";
+    case LANG_Danish: return "Afslut til episodemenu";
+    case LANG_Finnish: return "Poistu jaksovalikkoon";
+    case LANG_Norwegian: return "Gå ut til episodemenyen";
+    case LANG_Swedish: return "Avsluta till episodmeny";
+    default: return nullptr;
+    }
+}
+
 const char* SzPcWording(int idDisc)
 {
-    if (FWideText())
+    if (FWideChars() && IlangTable() == LANG_Japanese)
     {
+        // (the other discs: the Japanese disc's id of the same message, region.h)
+        const int idJp = FWideText() ? idDisc : IdTextJapanOfUsa(IdTextUsa(idDisc));
         for (const PCROWJP& r : s_apcrowJp)
-            if (r.id == idDisc) return r.sz;
+            if (r.id == idJp) return r.sz;
         return nullptr;
     }
     const int ilang = IlangTable();
     if (ilang >= 11) return nullptr;
+    // (a custom language's own messages stay; an English variant's take the English PC wording)
+    if (const int lt = LangText(); lt >= LANG_Max)
+        if (const char* key = SzLangStoreKey(lt); !key || std::strncmp(key, "English", 7) != 0) return nullptr;
     const int idUsa = IdTextUsa(idDisc);
     for (const PCROW& r : s_apcrow)
         if (r.idUsa == idUsa) return r.asz[ilang];

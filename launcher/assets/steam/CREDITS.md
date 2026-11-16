@@ -34,3 +34,9 @@ logos (`launcher/assets/shortcut/<game>-logo.*`, see `launcher/assets/README.md`
 still the Windows icons of the game programs (`launcher/assets/shortcut/<game>.ico`, `scripts/make-shortcut-icons.py`).
 
 To swap an image, replace the file (keep the name; .png or .jpg both work) and update this table (for an icon, run `scripts/make-shortcut-icons.py` too).
+
+## The Collection Style Launcher's shortcut
+
+| File | Steam use | Size | Author | Source |
+|---|---|---|---|---|
+| collection/icon.png | icon (`<id>_icon`) | 256 x 256 | HoshiYumeHime (DeviantArt) | the SafeHouse logo (launcher/assets/safehouse-logo.png) on a transparent square, by `tools/make-collection-icons.py` |

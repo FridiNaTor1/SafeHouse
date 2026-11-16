@@ -263,6 +263,15 @@ private:
             f.local = it->path();
             m_files[f.path] = std::move(f);
         }
+        for (const char* name : {"PARAM.SFO", "PIC1.PNG"}) {  // PS3_GAME's own files, as an image's
+            const fs::path p = usrdir.parent_path() / name;
+            if (!fs::is_regular_file(p, ec)) continue;
+            File f;
+            f.path = std::string("../") + name;
+            f.size = fs::file_size(p, ec);
+            f.local = p;
+            m_files[f.path] = std::move(f);
+        }
         m_kind = Kind::Folder;
         return true;
     }
@@ -336,9 +345,11 @@ private:
                 const std::string full = prefix + name;
                 static const std::string usr = "PS3_GAME/USRDIR/";
                 if (full.compare(0, usr.size(), usr) != 0) {
-                    if (full == "PS3_GAME/PARAM.SFO") {
-                        File& f = m_files["../PARAM.SFO"];
-                        f.path = "../PARAM.SFO";
+                    // (and PS3_GAME's own files the launcher reads: PARAM.SFO, the XMB background PIC1.PNG)
+                    if (full == "PS3_GAME/PARAM.SFO" || full == "PS3_GAME/PIC1.PNG") {
+                        const std::string rel = "../" + full.substr(9);
+                        File& f = m_files[rel];
+                        f.path = rel;
                         f.size = e.size;
                         f.extents = {e};
                     }

@@ -1,4 +1,4 @@
-# The debug menu and PC Extras
+# The debug menu and Extras
 
 [Back to the README](../README.md)
 
@@ -27,7 +27,7 @@ alone. Back up your saves before experimenting.
 | --- | --- |
 | **Warps** | An episode, then any of its worlds (the hub, the interiors, the job worlds), by the game's own names. The world loads as in normal play, at its entrance. |
 | **Character** | Makes Sly, Bentley or Murray the player, at the current character's place, among the characters the world has loaded (not from inside the safe house). |
-| **PC Extras** | Play as Carmelita, guards and bosses, Sly's tango outfit, and Bentley's RC chopper. See [PC Extras](#pc-extras). |
+| **Extras** | Play as Carmelita, guards and bosses, Sly's tango outfit, and Bentley's RC chopper. See [Extras](#extras). |
 | **Noclip** | Fly the current character through walls. See [Noclip](#noclip). |
 | **Teleport** | Puts the player on one of this world's checkpoints or warp points. |
 | **Jobs** | **Complete Current Job [save]** (as F9), or **start** one of this world's jobs the way the game does. |
@@ -63,7 +63,7 @@ full while flying. Turning it off (the menu again) drops the character back into
 | Select | F1 | Leave |
 | R1 + Select | | Leave and open the debug menu |
 
-## PC Extras
+## Extras
 
 Not in the original game. Each guest is loaded from its own world's files while the current world keeps running (the
 first time takes a moment; after that switching is instant). Nothing here is saved; choosing Normal, or turning Debug
@@ -71,7 +71,7 @@ mode off, puts everything back.
 
 ### Carmelita
 
-**PC Extras > Characters > Carmelita:** her Prologue, Episode 6 (snow) or Episode 2 (tango dress) model, on Sly,
+**Extras > Characters > Carmelita:** her Prologue, Episode 6 (snow) or Episode 2 (tango dress) model, on Sly,
 Bentley or Murray. With **Her moves** on (the default) she plays with her own moveset:
 
 | Button | Carmelita |
@@ -91,7 +91,7 @@ With **Her moves** off she follows the player's own moves (ledges, ropes and gad
 
 ### Guards and bosses
 
-**PC Extras > Guards > Episode n** lists every guard type of that episode; **PC Extras > Bosses** has four bosses. The
+**Extras > Guards > Episode n** lists every guard type of that episode; **Extras > Bosses** has four bosses. The
 player keeps Sly's camera, health and HUD, with the guard's model, animations and attacks: **Square** and **Circle** use
 the guard's own attacks (strikes, shots, missiles, thrown objects), and their hits knock out other guards with the
 game's own hit code. The menu row shows each character's controls.
@@ -100,7 +100,7 @@ game's own hit code. The menu row shows each character's controls.
 
 ### Bentley's RC chopper
 
-**PC Extras > Characters > Bentley's RC chopper** flies the RC chopper from Episode 2's RC Bombing Run in any world.
+**Extras > Characters > Bentley's RC chopper** flies the RC chopper from Episode 2's RC Bombing Run in any world.
 Choose the row again (or switch character) to get the player back.
 
 | Controller | Keyboard / mouse | RC chopper |

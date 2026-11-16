@@ -40,6 +40,12 @@ public:
     // (QoL) the object being drawn is the wipe (0x30A, the Sly mask transition): on a wide picture only its full-span
     // rectangles go to the picture's edges; the mask's strips, which overshoot the canvas as it grows, keep their shape
     bool fWideRectsOnlyObj = false;
+    bool fNoBarsObj = false;          // (VR Immersive: the subtitle box's letterbox bars left out, screenrt.cpp)
+    // (VR: a binocucom frame over the whole view, vr.h FBinocCanvas) past the canvas's top / bottom no polygon is
+    // stretched (its ornaments, pillars and text touching the border smeared into streaks): the bands there are filled
+    // with the frame's own colour at that border (its widest polygon on it), corners included: EndWideEdgesObj
+    bool fVrBandsObj = false;
+    void EndWideEdgesObj();
     void Begin();
     // 0x217298's 2D mode (1 mask write, 3 masked, 2 mask clear, 4 / 0 normal) for what follows.
     void SetMode(int mode);
@@ -110,8 +116,11 @@ private:
     std::vector<QUAD> m_aquad;
     struct BATCH { int mode; size_t itri, ctri, iline, cline; };
     void CloseBatch();
+    bool FlushPackets(int width, int height);   // (draw packets: the Vulkan renderer)
     void ExtendEdgeTriangle(VTX a, VTX b, VTX c);   // (the binocucom frames on wide pictures)
     void ExtendEdgeLine(VTX v);
+    struct BAND { float span = -1.0f; VTX v{}; };
+    BAND m_aband[2];                  // (fVrBandsObj: the top / bottom border's widest polygon)
     bool FClipTriangleToCanvas(const VTX& a, const VTX& b, const VTX& c);
     bool FClipLineToCanvas(VTX& a, VTX& b);
     std::vector<VTX> m_atri, m_aline;

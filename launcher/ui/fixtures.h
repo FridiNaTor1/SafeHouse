@@ -10,7 +10,8 @@
 
 namespace cane::ui::fixtures {
 struct Options {
-    // game | install | install-progress | settings[:category] | about | desktop-shortcut[-done] | sly3-notice
+    // game | install | install-progress | settings[:category] | about[:section] | desktop-shortcut[-done] | sly3-notice |
+    // quit-confirm
     std::string screen = "game";
     std::optional<GameId> game; // --game KEY (default: the remembered game)
     int width = 1280, height = 800;
@@ -21,9 +22,26 @@ struct Options {
     bool live = false;          // --live: read the (private) profile instead of fake states
     std::string iso;            // --iso PATH: the disc image the install page opens with (live)
     double delay = 0;           // --delay SECONDS: wait (e.g. for the disc image search) before the shot
+    // The Collection Style Launcher's shots: --frame-rate N (its fixed time step, 1 / N s; default 60) and --seconds S
+    // (the shot after exactly S seconds of the menu's time, whatever else is pending: the animations' timing checks).
+    double frameRate = 60, seconds = 0;
     // --nav up,down,left,right,a,b,x,y,lb,rb,lt,rt,start,select: pad presses
     // replayed one every 4 frames before the screenshot.
     std::vector<std::string> nav;
+    // --pointer "d640,300 m400,300 w u": a finger replayed after the nav, one step every 2 frames: d = down at x,y,
+    // m = move to, w = wait, u = up (the Collection Style Launcher's touch checks).
+    std::vector<std::string> pointer;
+    // --collection: the Collection Style Launcher instead (collection/collection.h), with --collection-games (the games
+    // shown installed) and --collection-ps3 (a profile holding the imported menu, Collection/Menu; also what Settings >
+    // Launcher shows as imported).
+    bool collection = false;
+    std::vector<std::string> collectionGames;
+    std::string collectionPs3;
+    int collectionAspect = -1;  // --collection-aspect fit|4:3|16:9|16:10|ps2-4:3|ps2-16:9: Sly 2's Aspect Ratio
+    // --language CODE: the launcher language of the shot (default English; "system" follows the environment).
+    std::string language = "en";
+    // --vr-fixture ready|steamvr|none: the VR headset check's answer (vr_probe.h; Sly 2's "Play in VR" button)
+    std::string vr;
 };
 
 inline IsoCandidate iso(const char* file, uintmax_t size, int hoursAgo, GameId game, const char* boot, const char* region) {

@@ -403,7 +403,7 @@ void BuildPcLabel(RESPK respk)
 	{
 		// (the controllers keep their names in every language)
 		static constexpr const char* s_apchzStyles[] =
-			{ nullptr, "PlayStation", "Xbox", "Nintendo", "Steam Deck", "Steam Controller", "PlayStation 4", "PlayStation 5", "Steam Controller (2026)" };
+			{ nullptr, "PlayStation", "Xbox", "Nintendo", "Steam Deck", "Steam Controller", "PlayStation 4", "PlayStation 5", "Steam Controller (2026)", "Nintendo GameCube", "Nintendo Switch 2", "Wii Classic Controller", "Wii U Pro Controller", "Meta Quest Touch", "Valve Index", "Steam Frame", "HTC Vive", "Pico" };
 		const int style = std::clamp(g_promptStyle, 0, static_cast<int>(std::size(s_apchzStyles)) - 1);
 		std::snprintf(out, size, "%s", StrPortValue(PTX_ButtonIcons,
 			style == 0 ? PchzPort(PTX_Automatic) : s_apchzStyles[style]).c_str());
@@ -2090,7 +2090,7 @@ const char* AchzFromRespk(RESPK respk)
 	// The port's menu entries (porttext.h).
 	switch (respk)
 	{
-	case RESPK_ExitToDesktop: return PchzPort(PTX_ExitToDesktop);
+	case RESPK_ExitToDesktop: return PchzPort(FQuitToLauncher() ? PTX_QuitToLauncher : PTX_ExitToDesktop);
 	case RESPK_Video: return PchzPort(PTX_VideoEntry);
 	case RESPK_Sound: return PchzPort(PTX_SoundEntry);
 	case RESPK_KeyboardMapping: return PchzPort(PTX_KeyboardMappingEntry);

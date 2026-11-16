@@ -1,5 +1,6 @@
 #include <execinfo.h>
 #include "worldglobals.h"
+#include "debugphys.h"
 // The ALO family's physics runtime (orig module 0x1F2108-0x1F8DD8; so.h). Ported from the reference's so_p3.cpp,
 // so_c.cpp (oracle-verified ports of the original's code) and the decomp; the order of operations is kept.
 
@@ -434,6 +435,7 @@ void RestAloSost(ALO* p)
     SOST* ps = Psost(p);
     if (!ps) return;
     ps->dvGravity = glm::vec3(0.0f, 0.0f, -1750.0f);
+    if (const float g = GDebugGravityOf(p); g != 1.0f) ps->dvGravity *= g;   // (PC debug menu: debugphys.h)
     ps->cnstrLin.kind = 3;
     ps->cnstrAng.kind = 3;
 }
@@ -707,6 +709,7 @@ void SetAloGravity(ALO* p, const glm::vec3& dv)
     XF* o = PxfPos(p);
     if (o && !o->pctrlFirst && o->mode != 2) SetXfMode(p, o, 1);
     ps->dvGravity = dv;
+    if (const float g = GDebugGravityOf(p); g != 1.0f) ps->dvGravity *= g;   // (PC debug menu: debugphys.h)
     WakeAlo(p);
 }
 

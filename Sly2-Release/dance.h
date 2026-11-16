@@ -13,6 +13,7 @@ void SetDancePrompts(int state, const std::vector<std::pair<float, int>>& aent);
 void AddDanceBeat(LO* ploDancer, int nButton, int nMove, float gTime);          // orig 0x1532D8 (command 0x4A)
 void PlayDancerDefault(LO* ploDancer, LO* ploAseg);                             // orig 0x1524A0 (command 0x4B)
 bool FDanceDirector();                                                          // D_002DE570 set
+bool FDanceActive();                                                            // (VR) the dance on (its state not 0)
 bool FDancer(const LO* plo);                                                    // cid 0x44
 void PostLoadDance(LO* plo);                                                    // orig 0x1526D8 / 0x1527C8
 void PostLoadDancer(LO* plo);                                                   // orig 0x152100

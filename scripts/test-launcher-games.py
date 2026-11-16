@@ -127,13 +127,19 @@ def main():
         subprocess.run([str(copied), "--help"], env=env, check=True, capture_output=True, timeout=30)
         sly2 = data / "installations/sly2"
         sly2.mkdir(parents=True)
-        # (asset version 3: the converted files with PC audio)
+        # (asset version 4: the converted files with PC audio and the worlds as parts; an asset version 3 install, the
+        # worlds as one file each, is outdated: the launcher offers the update)
         (sly2 / "extraction_manifest.json").write_bytes(b"{}")
-        (sly2 / "installation.json").write_text(json.dumps({
-            "schema": 1, "game": "sly2", "asset_version": 3, "layout": "files",
-            "disc_sha1": "de2af92a54de71e33edc8a160c31c0337a95e6f5",
-            "files": [{"path": "extraction_manifest.json", "size": 2,
-                       "sha256": hashlib.sha256(b"{}").hexdigest()}]}))
+        for version in (3, 4):
+            (sly2 / "installation.json").write_text(json.dumps({
+                "schema": 1, "game": "sly2", "asset_version": version, "layout": "files",
+                "disc_sha1": "de2af92a54de71e33edc8a160c31c0337a95e6f5",
+                "files": [{"path": "extraction_manifest.json", "size": 2,
+                           "sha256": hashlib.sha256(b"{}").hexdigest()}]}))
+            result = run([copied, "--installs"], env=env)
+            assert result.returncode == 0, result
+            line = next(l for l in result.stdout.decode().splitlines() if l.startswith("sly2 "))
+            assert (" outdated " if version == 3 else " ready ") in line, (version, line)
         result = run([copied, "--play", "sly2"], env=env)
         assert result.returncode != 0 and b"in development" in result.stderr, result
         if os.name != "nt":
@@ -143,7 +149,9 @@ def main():
             result = run([copied, "--play", "sly2"], env=env)
             assert result.returncode == 0, result
             lines = (data / "user/sly2/runtime-args.txt").read_text().splitlines()
-            default_args = ["--data-dir", str(sly2), "--user-dir", str(data / "user/sly2")]
+            # (Sly 2 also gets its shared languages folder beside the installations: Sly2-Release/langstore.h)
+            default_args = ["--data-dir", str(sly2), "--user-dir", str(data / "user/sly2"),
+                            "--languages-dir", str(data / "installations/sly2-languages")]
             assert lines == default_args + [str(bin_dir)], lines
             # Sly 2 is the native port: the old emulated runtime's preview option adds
             # nothing, and neither does the removed "Widescreen backgrounds" toggle's

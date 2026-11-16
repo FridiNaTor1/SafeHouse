@@ -2,6 +2,8 @@
 #include "region.h"
 
 #include "disc.h"
+#include "langstore.h"
+#include "textmod.h"
 
 #include <algorithm>
 #include <cctype>
@@ -16,6 +18,7 @@
 
 int g_nLang = LANG_English;
 int g_nLangChosen = -1;
+int g_nLangVoice = -1;
 
 namespace
 {
@@ -35,18 +38,24 @@ bool FRegionLanguages(int& c, uint32_t& vaList)
 const char* const s_aszLang[LANG_Max] = {"english", "french", "italian", "german", "spanish", "dutch", "portuguese",
                                         "danish", "finnish", "norwegian", "swedish", "japanese", "korean", "chinese"};
 
-// A converted installation's languages (those installed, in the disc's order); empty on a disc image
-std::vector<int> AlangInstalled()
+// A converted installation's languages (those installed, in the disc's order); empty on a disc image. (Kept until the
+// manifest's list changes: FLanguageOnDisc asks often.)
+const std::vector<int>& AlangInstalled()
 {
-    std::vector<int> alang;
-    for (const std::string& name : g_disc.AszLanguages())
+    static std::vector<std::string> s_aszName;
+    static std::vector<int> s_alang;
+    const std::vector<std::string>& aszName = g_disc.AszLanguages();
+    if (aszName == s_aszName) return s_alang;
+    s_aszName = aszName;
+    s_alang.clear();
+    for (const std::string& name : aszName)
         for (int lang = 0; lang < LANG_Max; ++lang)
             if (name.size() == std::strlen(s_aszLang[lang]) &&
                 std::equal(name.begin(), name.end(), s_aszLang[lang], [](char a, char b) {
                     return std::tolower(static_cast<unsigned char>(a)) == b;
                 }))
-                alang.push_back(lang);
-    return alang;
+                s_alang.push_back(lang);
+    return s_alang;
 }
 
 // The PC's language (the system locale: LANG / LC_ALL / LC_MESSAGES on Linux, the user locale on Windows) as the
@@ -85,18 +94,19 @@ int LanguageOfIso(const std::string& code)
 }
 }
 
-// (a converted installation: the languages installed only, so the title's and the options' menus offer no other)
-int CLanguages()
+// (a converted installation: the languages installed only (convert.h --languages), so the menus offer no other of the
+// disc's; one left out counts as not on the disc, so the languages folder may still add it, langstore.h)
+int CLanguagesDisc()
 {
-    if (const std::vector<int> alang = AlangInstalled(); !alang.empty()) return int(alang.size());
+    if (const std::vector<int>& alang = AlangInstalled(); !alang.empty()) return int(alang.size());
     int c = 0;
     uint32_t va = 0;
     return FRegionLanguages(c, va) ? c : 1;
 }
 
-int LanguageOfIndex(int i)
+int LanguageOfDiscIndex(int i)
 {
-    if (const std::vector<int> alang = AlangInstalled(); !alang.empty())
+    if (const std::vector<int>& alang = AlangInstalled(); !alang.empty())
         return i >= 0 && i < int(alang.size()) ? alang[std::size_t(i)] : alang[0];
     int c = 0;
     uint32_t va = 0;
@@ -106,15 +116,103 @@ int LanguageOfIndex(int i)
 
 bool FLanguageOnDisc(int lang)
 {
-    for (int i = 0, c = CLanguages(); i < c; ++i)
-        if (LanguageOfIndex(i) == lang) return true;
+    for (int i = 0, c = CLanguagesDisc(); i < c; ++i)
+        if (LanguageOfDiscIndex(i) == lang) return true;
     return false;
 }
 
-const char* SzLanguage(int lang) { return lang >= 0 && lang < LANG_Max ? s_aszLang[lang] : "?"; }
+int CLanguages() { return CLanguagesDisc() + int(AlangStoreOffered().size()); }
+
+int LanguageOfIndex(int i)
+{
+    const int cDisc = CLanguagesDisc();
+    if (i < cDisc) return LanguageOfDiscIndex(i);
+    const std::vector<int>& a = AlangStoreOffered();
+    return i - cDisc < int(a.size()) ? a[size_t(i - cDisc)] : LANG_English;
+}
+
+bool FLanguageAvailable(int lang)
+{
+    if (FLanguageOnDisc(lang)) return true;
+    for (int l : AlangStoreOffered())
+        if (l == lang) return true;
+    return false;
+}
+
+int LangWorld()
+{
+    if (FLanguageOnDisc(g_nLang)) return g_nLang;
+    // (a store language's text taken from one of the disc's own: a dub with the disc's subtitles)
+    const int langText = LangStoreTextFallback(g_nLang);
+    if (langText >= 0 && FLanguageOnDisc(langText)) return langText;
+    return FLanguageOnDisc(LANG_English) ? LANG_English : LanguageOfDiscIndex(0);
+}
+
+bool FLanguageTextAvailable(int lang) { return FLanguageAvailable(lang) && !FLangStoreVoicesOnly(lang); }
+bool FLanguageVoiceAvailable(int lang) { return FLanguageOnDisc(lang) || FLangStoreHasVoices(lang); }
+
+int LangVoice() { return g_nLangVoice >= 0 && g_nLangVoice != g_nLang && FLanguageVoiceAvailable(g_nLangVoice) ? g_nLangVoice : g_nLang; }
+
+int LangWorldVoice()
+{
+    const int lang = LangVoice();
+    if (lang == g_nLang) return LangWorld();
+    if (FLanguageOnDisc(lang)) return lang;
+    // (the folder's voices: the lines it lacks are the disc's English, else the disc's first)
+    return FLanguageOnDisc(LANG_English) ? LANG_English : LanguageOfDiscIndex(0);
+}
+
+namespace
+{
+int s_langTextPending = -2, s_langVoicePending = -2;
+}
+
+void SetPendingLanguages(int langText, int langVoice)
+{
+    s_langTextPending = langText;
+    s_langVoicePending = langVoice;
+}
+
+bool FLanguagesPending(int* plangText, int* plangVoice)
+{
+    if (plangText) *plangText = s_langTextPending;
+    if (plangVoice) *plangVoice = s_langVoicePending;
+    return s_langTextPending != -2 || s_langVoicePending != -2;
+}
+
+void ApplyPendingLanguages()
+{
+    if (!FLanguagesPending()) return;
+    if (s_langTextPending >= 0 && FLanguageTextAvailable(s_langTextPending))
+    {
+        SetLanguage(s_langTextPending);
+        g_nLangChosen = s_langTextPending;   // (the session's, as the title's: it wins over a save's)
+    }
+    if (s_langVoicePending != -2) g_nLangVoice = s_langVoicePending;
+    std::printf("language: text %s, voices %s\n", SzLanguage(g_nLang), SzLanguage(LangVoice()));
+    s_langTextPending = s_langVoicePending = -2;
+}
+
+void ChooseLanguageOnTitle(int lang)
+{
+    g_nLangChosen = lang;
+    SetLanguage(lang);
+    g_nLangVoice = -1;
+    s_langTextPending = s_langVoicePending = -2;
+}
+
+int LangText() { return FLanguageOnDisc(g_nLang) ? g_nLang : FStoreTextShown() ? LangStoreTextLanguage() : LangWorld(); }
+
+bool FLatinLineBreaks()
+{
+    if (!FWideText()) return !FWideChars();   // (the other discs: Japanese text from the languages folder breaks as on its disc)
+    return FStoreTextShown() && !FStoreTextWide();
+}
+
+const char* SzLanguage(int lang) { return lang >= 0 && lang < LANG_Max ? s_aszLang[lang] : SzLangStoreKey(lang); }
 
 // orig 0x1A2BD0
-void SetLanguage(int lang) { g_nLang = lang == -1 ? LanguageOfIndex(0) : lang; }
+void SetLanguage(int lang) { g_nLang = lang == -1 ? LanguageOfDiscIndex(0) : lang; }
 
 void InitLanguage()
 {
@@ -122,15 +220,65 @@ void InitLanguage()
     // orig 0x1A2DA0(sceScfGetLanguage()): the console's language when the disc has it, else the region's first.
     int lang = LanguageOfIso(SzSystemLanguage());
     // (testing: SLY2_LANGUAGE=<name or id> picks a language the way the console's setting would)
-    if (const char* sz = std::getenv("SLY2_LANGUAGE"); sz && *sz)
+    const char* sz = std::getenv("SLY2_LANGUAGE");
+    if (sz && *sz)
     {
         lang = -1;
         for (int i = 0; i < LANG_Max; ++i)
             if (std::strcmp(sz, s_aszLang[i]) == 0) lang = i;
         if (lang < 0 && sz[0] >= '0' && sz[0] <= '9') lang = std::atoi(sz);
     }
-    SetLanguage(lang >= 0 && FLanguageOnDisc(lang) ? lang : -1);
-    if (CLanguages() > 1) std::printf("language: %s (%d on the disc)\n", SzLanguage(g_nLang), CLanguages());
+    if (lang < 0 && sz && *sz) lang = LangStoreOfKey(sz);   // (a store language by its folder name)
+    SetLanguage(lang >= 0 && FLanguageAvailable(lang) ? lang : -1);
+    // (testing: SLY2_VOICE_LANGUAGE=<name> the voices' language, as Settings.ini's Voices)
+    g_nLangVoice = -1;
+    if (const char* szv = std::getenv("SLY2_VOICE_LANGUAGE"); szv && *szv)
+    {
+        int lv = LangOfSettingKey(szv);
+        for (int i = 0; i < LANG_Max && lv < 0; ++i)
+            if (std::strcmp(szv, s_aszLang[i]) == 0) lv = i;
+        if (lv >= 0 && FLanguageVoiceAvailable(lv)) g_nLangVoice = lv;
+    }
+    if (CLanguages() > 1)
+        std::printf("language: %s (%d on the disc, %d in all)\n", SzLanguage(g_nLang), CLanguagesDisc(), CLanguages());
+}
+
+int LangOfSettingKey(const std::string& key)
+{
+    if (key.empty()) return -1;
+    int lang = LangStoreOfKey(key.c_str());
+    for (int i = 0; i < LANG_Max && lang < 0; ++i)
+        if (key == SzLanguageModName(i)) lang = i;
+    return lang;
+}
+
+void ApplyVoiceLanguageSetting(const std::string& key)
+{
+    g_nLangVoice = -1;
+    if (key.empty()) return;
+    const int lang = LangOfSettingKey(key);
+    if (lang < 0 || !FLanguageVoiceAvailable(lang))
+    {
+        std::printf("language: voices %s (Settings.ini) are not installed: the text's language is spoken\n", key.c_str());
+        return;
+    }
+    g_nLangVoice = lang;
+    std::printf("language: voices %s (Settings.ini)\n", key.c_str());
+}
+
+void ApplyLanguageSetting(const std::string& key)
+{
+    if (key.empty()) return;
+    const int lang = LangOfSettingKey(key);
+    // (a language whose text this disc cannot draw stays choosable: its voices over the disc's text, as before)
+    if (lang < 0 || !FLanguageAvailable(lang))
+    {
+        std::printf("language: %s (Settings.ini) is not installed: ignored\n", key.c_str());
+        return;
+    }
+    SetLanguage(lang);
+    g_nLangChosen = lang;
+    std::printf("language: %s (Settings.ini)\n", key.c_str());
 }
 
 bool g_fPs3World = false;
@@ -138,6 +286,13 @@ bool g_fPs3World = false;
 bool FLaterWorldBlockOrder() { return g_fPs3World || g_disc.Region() != DISCREGION::Usa; }
 
 bool FWideText() { return g_fPs3World || g_disc.Region() == DISCREGION::Japan; }
+
+namespace
+{
+bool s_fStoreWideChars = false;
+}
+bool FWideChars() { return s_fStoreWideChars || FWideText(); }
+void SetStoreWideChars(bool fWide) { s_fStoreWideChars = fWide; }
 
 namespace
 {
@@ -200,6 +355,14 @@ int IdText(int idUsa)
     return idUsa + did;
 }
 
+int IdTextJapanOfUsa(int idUsa)
+{
+    int did = 0;
+    for (const TEXTIDRANGE& r : s_aidrJapan)
+        if (idUsa >= r.idUsa) did = r.did;
+    return idUsa < 0 ? idUsa : idUsa + did;
+}
+
 int IdTextUsa(int id)
 {
     size_t c = 0;
@@ -236,7 +399,7 @@ uint32_t ChDecode(const std::string& str, std::size_t ib, std::size_t* pcb)
     const auto b = [&](std::size_t i) { return i < str.size() ? uint32_t(uint8_t(str[i])) : 0u; };
     uint32_t ch = b(ib);
     std::size_t cb = 1;
-    if (FWideText() && ch >= 0xC0)
+    if (FWideChars() && ch >= 0xC0)
     {
         if (ch < 0xE0 && (b(ib + 1) & 0xC0) == 0x80) { ch = ((ch & 0x1F) << 6) | (b(ib + 1) & 0x3F); cb = 2; }
         else if (ch >= 0xE0 && (b(ib + 1) & 0xC0) == 0x80 && (b(ib + 2) & 0xC0) == 0x80)

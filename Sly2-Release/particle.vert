@@ -8,9 +8,16 @@ layout (location = 3) in vec4 aRgba;
 out vec2 vUv;
 out float vLayer;
 out vec4 vRgba;
+#ifdef CANE_MULTIVIEW
+// (Vulkan VR, both eyes in one pass: emitter.cpp DrawParticles writes the second eye's corners after the vertices)
+layout(std430, binding = 10) readonly buffer CaneClip1 { vec4 caneClip1[]; };
+#endif
 void main()
 {
     gl_Position = aClip;
+#ifdef CANE_MULTIVIEW
+    if (gl_ViewIndex != 0) gl_Position = caneClip1[gl_VertexID];
+#endif
     vUv = aUv;
     vLayer = aLayer;
     vRgba = aRgba;

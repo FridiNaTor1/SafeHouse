@@ -1,4 +1,6 @@
+#include "fastpaths.h"
 #include "scenesw.h"
+#include "debugphys.h"
 #include "simdmat.h"
 #include "passhelpers.h"
 #include "drawdist.h"
@@ -62,14 +64,16 @@ PLACEDELTA PlaceGlobsetPrepare(ALO* palo, SCENEGLOBSET& sgs)
     // (the arrays the runs fill, sized before any runs)
     sgs.amatGlob.resize(gs.aglob.size(), glm::mat4(1.0f));
     sgs.afVisible.resize(gs.aglob.size(), 1);
-#ifdef __SWITCH__
+#if SLY2_FASTPATHS
     sgs.fVisibleCleared = false;   // (the placement after this sets the groups' flags)
 #endif
     sgs.aamatBone.resize(gs.aglob.size());
     // orig: 0x13C000 -> 0x1A5EE8: a carried booty's scale affects drawing only. Bone matrices already transform
     // vertices to world space (bone.cpp 0x1684D0), replacing the group matrix in the shader, so both need the delta.
     PLACEDELTA delta;
-    delta.f = FBootyDrawDelta(palo, &delta.dmat);
+    sgs.sDrawScale = 1.0f;
+    const bool fCharScale = FDebugCharScaleDelta(palo, &delta.dmat, &sgs.sDrawScale);   // (the debug menu's scale: debugphys.h)
+    delta.f = fCharScale || FBootyDrawDelta(palo, &delta.dmat);
     return delta;
 }
 
@@ -82,7 +86,7 @@ void PlaceGlobsetRange(ALO* palo, SCENEGLOBSET& sgs, const PLACEDELTA& delta, si
     const bool fForceShow = s_szShow && std::strstr(s_szShow, (std::string(",") + std::to_string(palo->oid) + ",").c_str());
     for (size_t i = iglobFirst; i < iglobLim; ++i)
     {
-#ifdef __SWITCH__
+#if SLY2_FASTPATHS
         // (the Switch: the group four ahead fetched, the lines of it both loops read, and its owner record's matrix: the
         // groups are large and only these parts of them are read)
         if (i + 4 < iglobLim)
@@ -257,7 +261,7 @@ void UpdateSceneFromSw(SCENE& scene, const std::vector<ALO*>& apalo, const SW* p
     s_drawn.grfCm = g_actview.grfCm;
     s_drawn.fValid = pswDrawn != nullptr;
     s_drawn.an.assign(c, -1);
-#ifdef __SWITCH__
+#if SLY2_FASTPATHS
     // (the Switch: the entries' draw tests (FAloDrawn) done first, on the pass helpers, at the draw distance option's 1x:
     // there the test only reads the objects and the world (NDrawDistanceRoot's tree cache serves the other distances),
     // and nothing the loop below does before an entry's test (the vehicles' wheels, the placements' preparation) changes
@@ -275,7 +279,7 @@ void UpdateSceneFromSw(SCENE& scene, const std::vector<ALO*>& apalo, const SW* p
 #endif
     for (size_t i = 0; i < c; ++i)
     {
-#ifdef __SWITCH__
+#if SLY2_FASTPATHS
         // (the Switch: the parts of the object four entries ahead that the tests read, and its glob set, prefetched:
         // the objects are scattered over the heap)
         if (i + 4 < c)
@@ -293,7 +297,7 @@ void UpdateSceneFromSw(SCENE& scene, const std::vector<ALO*>& apalo, const SW* p
         static const char* s_szForce = std::getenv("SLY2_FORCEDRAW");
         const bool fForce = s_szForce && std::strstr(s_szForce, (std::string(",") + std::to_string(apalo[i]->oid) + ",").c_str());
         const int nPc = NPcCharDrawOverride(apalo[i]);   // (PC addition, debug menu only: pccharacter.h)
-#ifdef __SWITCH__
+#if SLY2_FASTPATHS
         const bool fNotDrawn = nPc < 0 && pswDrawn && sgs.fTransform && !fForce &&
                                !(s_drawn.an[i] = (fDrawnAhead ? s_afDrawnAhead[i] != 0 : FAloDrawn(pswDrawn, apalo[i])) ? 1 : 0);
 #else
@@ -301,7 +305,7 @@ void UpdateSceneFromSw(SCENE& scene, const std::vector<ALO*>& apalo, const SW* p
 #endif
         if (nPc == 0 || fNotDrawn)
         {
-#ifdef __SWITCH__
+#if SLY2_FASTPATHS
             if (!sgs.fVisibleCleared)
             {
                 std::fill(sgs.afVisible.begin(), sgs.afVisible.end(), 0);
@@ -353,7 +357,7 @@ void ApplyDrawPass(const SW* psw, SCENE& scene, const std::vector<ALO*>& apalo)
         const int8_t nCached = fCache && i < s_drawn.an.size() ? s_drawn.an[i] : int8_t(-1);
         if (nPc == 0 || !(nCached >= 0 ? nCached != 0 : FAloDrawn(psw, apalo[i])))
         {
-#ifdef __SWITCH__
+#if SLY2_FASTPATHS
             if (SCENEGLOBSET& sgs = scene.aglobset[i]; !sgs.fVisibleCleared)
             {
                 std::fill(sgs.afVisible.begin(), sgs.afVisible.end(), 0);

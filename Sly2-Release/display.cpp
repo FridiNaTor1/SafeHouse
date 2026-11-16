@@ -1,14 +1,20 @@
 // See display.h. Adapted from Sly1-Release gl.cpp (ApplyAspectRatioSettings, ApplyWindowModeSettings,
 // FrameBufferSizeCallBack) and cm.cpp (RecalcCm's aspect modes).
 
+#include "texmod.h"
+#include "renderer.h"
 #include "display.h"
+#include "vr.h"
 
 #include "gl.h"
+#include "fsr.h"
 #include "pcinput.h"
 #include "actioninput.h"
 #include "sound.h"
 
-#include "../platform/system_settings.h"
+#include "../platform/sly2_settings.h"
+#include "audio.h"
+#include "rumble.h"
 
 #include <algorithm>
 #include <cmath>
@@ -17,6 +23,7 @@
 #include <cstring>
 
 DISPLAY g_display;
+SAVEOPTS g_saveopts;
 
 namespace
 {
@@ -32,8 +39,99 @@ void FromSettings(const st::SystemSettings& s)
     g_display.window = DISPWINDOW(std::clamp(s.windowMode, 0, 2));
     g_display.fVsync = s.vsyncEnabled != 0;
     g_display.fLongShadows = s.longShadows != 0;   // (v16, QoL: render.cpp FBuildShadow2)
+    g_display.fFastShadows = s.fastShadows != 0;   // (v20, low-end: render.cpp FBuildShadow2 / DrawShadow2)
+    g_rendererSetting = g_rendererWanted = s.renderer == 1 ? RENDERER::Vulkan : s.renderer == 2 ? RENDERER::OpenGL : RENDERER::Auto;   // (v21, renderer.h)
     PcInputFromSettings(s);   // (the controls and the prompts: pcinput.h)
-    SetSoundUserVolumes(s.musicVolume, s.soundEffectsVolume, s.dialogueVolume);   // (the launcher's sliders: sound.h)
+    g_saveopts.gMusic = s.musicVolume;
+    g_saveopts.gEffects = s.soundEffectsVolume;
+    g_saveopts.gDialog = s.dialogueVolume;
+    ApplySoundOptions();
+}
+
+void FromGameOptions(const st::Sly2GameOptions& o)
+{
+    g_saveopts.fInvertBinoc = o.invertBinocucom != 0;
+    g_saveopts.fInvertTurret = o.invertTurret != 0;
+    g_saveopts.speakers = std::clamp(o.speakers, 0, 2);
+    g_saveopts.language = o.language;
+    g_saveopts.voiceLanguage = o.voiceLanguage;
+    g_saveopts.outputDevice = o.outputDevice;
+    g_saveopts.inputDevice = o.inputDevice;
+    g_saveopts.headsetOutputDevice = o.headsetOutputDevice;
+    g_saveopts.fHeadset = o.usbHeadset != 0;
+    g_saveopts.fTextureCache = o.textureCache != 0;
+    SetTextureCacheEnabled(g_saveopts.fTextureCache);   // (texmod.h: read before the first texture)
+    g_saveopts.fTextureStreaming = o.textureStreaming != 0;
+    SetTextureModStreamingEnabled(g_saveopts.fTextureStreaming);
+    ApplySoundOptions();
+}
+
+void ToGameOptions(st::Sly2GameOptions& o)
+{
+    o.invertBinocucom = g_saveopts.fInvertBinoc ? 1 : 0;
+    o.invertTurret = g_saveopts.fInvertTurret ? 1 : 0;
+    o.speakers = g_saveopts.speakers;
+    o.language = g_saveopts.language;
+    o.voiceLanguage = g_saveopts.voiceLanguage;
+    o.outputDevice = g_saveopts.outputDevice;
+    o.inputDevice = g_saveopts.inputDevice;
+    o.headsetOutputDevice = g_saveopts.headsetOutputDevice;
+    o.usbHeadset = g_saveopts.fHeadset ? 1 : 0;
+    o.textureCache = g_saveopts.fTextureCache ? 1 : 0;
+    o.textureStreaming = g_saveopts.fTextureStreaming ? 1 : 0;
+}
+
+// (vr.h) [VR]
+void FromVrOptions(const st::Sly2VrOptions& o)
+{
+    vr::VROPTS& v = vr::g_vropts;
+    v.mode = std::clamp(o.mode, 0, 1);
+    v.fAutoCameraRotation = o.autoCameraRotation != 0;
+    v.vignette = std::clamp(o.vignette, 0, 3);
+    v.screenSize = std::clamp(o.screenSize, 0, 2);
+    v.refreshRate = o.refreshRate;
+    v.worldScale = o.worldScale;
+    v.fCutscenesFlat = o.cutscenesView != 0;   // (Sly 2's own key: Immersive by default)
+    v.fRcTable = o.rcTable != 0;
+    v.eyeResolution = o.eyeResolution == 0 ? 0 : std::clamp(o.eyeResolution, 50, 100);
+    v.msaa = o.msaa <= 0 ? 0 : o.msaa == 1 ? 1 : 2;   // (0 Automatic: vr.h MsaaOption)
+    v.foveation = std::clamp(o.foveation, 0, 3);
+    v.fMultiview = o.multiview != 0;
+    v.upscaling = std::clamp(o.upscaling, 0, 2);
+}
+
+void ToVrOptions(st::Sly2VrOptions& o)
+{
+    const vr::VROPTS& v = vr::g_vropts;
+    o.mode = v.mode;
+    o.autoCameraRotation = v.fAutoCameraRotation ? 1 : 0;
+    o.vignette = v.vignette;
+    o.screenSize = v.screenSize;
+    o.refreshRate = v.refreshRate;
+    o.worldScale = v.worldScale;
+    o.cutscenesView = v.fCutscenesFlat ? 1 : 0;
+    o.rcTable = v.fRcTable ? 1 : 0;
+    o.eyeResolution = v.eyeResolution;
+    o.msaa = v.msaa;
+    o.foveation = v.foveation;
+    o.multiview = v.fMultiview ? 1 : 0;
+    o.upscaling = v.upscaling;
+}
+
+void FromUpscaleOptions(const st::Sly2UpscaleOptions& o)
+{
+    g_display.fUpscale = o.enabled != 0;
+    g_display.upscaleMethod = st::UpscaleMethod_Fsr1;
+    g_display.upscalePreset = std::clamp(o.preset, 0, 3);
+    g_display.upscaleSharpness = std::clamp(o.sharpness, 0, 100);
+}
+
+void ToUpscaleOptions(st::Sly2UpscaleOptions& o)
+{
+    o.enabled = g_display.fUpscale ? 1 : 0;
+    o.method = g_display.upscaleMethod;
+    o.preset = g_display.upscalePreset;
+    o.sharpness = g_display.upscaleSharpness;
 }
 
 void ToSettings(st::SystemSettings& s)
@@ -47,7 +145,12 @@ void ToSettings(st::SystemSettings& s)
     s.windowMode = int(g_display.window);
     s.vsyncEnabled = g_display.fVsync ? 1 : 0;
     s.longShadows = g_display.fLongShadows ? 1 : 0;
+    s.fastShadows = g_display.fFastShadows ? 1 : 0;
+    s.renderer = g_rendererSetting == RENDERER::Vulkan ? 1 : g_rendererSetting == RENDERER::OpenGL ? 2 : 0;   // (not --renderer's)
     PcInputToSettings(s);
+    s.musicVolume = g_saveopts.gMusic;
+    s.soundEffectsVolume = g_saveopts.gEffects;
+    s.dialogueVolume = g_saveopts.gDialog;
 }
 
 int s_xWindowed = 100, s_yWindowed = 100, s_dxWindowed = 1280, s_dyWindowed = 960;
@@ -83,14 +186,23 @@ void FramebufferSizeCallback(GLFWwindow*, int width, int height)
 }
 }  // namespace
 
+void ApplySoundOptions()
+{
+    SetSoundUserVolumes(g_saveopts.gMusic, g_saveopts.gEffects, g_saveopts.gDialog);   // (sound.h)
+    SetMonoOutput(g_saveopts.speakers == st::Speakers_Mono);                          // (audio.h)
+    SetAudioDevices(g_saveopts.outputDevice, g_saveopts.inputDevice, g_saveopts.headsetOutputDevice);   // (audio.h)
+}
+
 bool FLoadDisplaySettings(const std::filesystem::path& userDir, std::string* pmessage)
 {
-    const auto file = st::settingsPath(userDir);
-    st::SystemSettings s{};
-    const st::LoadResult result = st::load(file, s);
-    if (!st::loaded(result)) s = st::sly2Defaults();   // (Sly 2's own keyboard / mouse layout)
-    st::sanitizeStatic(s, 0, 0, st::kSly2DefaultKeyboardBindings);
-    FromSettings(s);
+    st::Sly2Settings s;
+    std::vector<std::string> invalid;
+    const st::Sly2Load result = st::loadSly2(userDir, s, &invalid);
+    FromSettings(s.system);
+    FromGameOptions(s.game);
+    FromVrOptions(s.vr);
+    FromUpscaleOptions(s.upscale);
+    g_display.outlineThickness = std::clamp(s.outlineThickness, st::kOutlineThicknessMin, st::kOutlineThicknessMax);
     sly2actions::Load(userDir);
 #ifdef __SWITCH__
     // (the Switch: one screen at 60 Hz, the swap paces the frames at 30 or 60; the internal resolution from the menu's
@@ -101,37 +213,70 @@ bool FLoadDisplaySettings(const std::filesystem::path& userDir, std::string* pme
     g_display.msaaSamples = 0;
     if (g_display.internalHeight > 1080) g_display.internalHeight = 0;
 #endif
-    const char* psz = "";
+    g_saveopts.fStore = result != st::Sly2Load::Unreadable;
+    std::string message;
     switch (result)
     {
-    case st::LoadResult::Ok: psz = "loaded"; break;
-    case st::LoadResult::Upgraded: psz = "loaded (older version)"; break;
-    case st::LoadResult::Missing: psz = st::save(file, s) ? "missing: written with the defaults" : "missing (not writable)"; break;
-    case st::LoadResult::Corrupt: psz = "unreadable: defaults"; break;
-    case st::LoadResult::Newer: psz = "written by a newer build: defaults (file kept)"; break;
+    case st::Sly2Load::Ok: message = "loaded"; break;
+    case st::Sly2Load::Migrated:
+        message = st::saveSly2(userDir, s) ? "made from Saves/system_settings.dat" : "made from Saves/system_settings.dat (not writable)";
+        break;
+    case st::Sly2Load::Missing: message = st::saveSly2(userDir, s) ? "missing: written with the defaults" : "missing (not writable)"; break;
+    case st::Sly2Load::Unreadable: message = "unreadable: defaults (file kept)"; break;
     }
-    if (pmessage) *pmessage = cane::utf8(file) + ": " + psz;
-    return st::loaded(result);
+    for (const std::string& key : invalid) message += "; " + key + ": invalid, the default";
+    if (pmessage) *pmessage = cane::utf8(st::sly2SettingsPath(userDir)) + ": " + message;
+    return result != st::Sly2Load::Unreadable;
 }
 
 bool FSaveDisplaySettings(const std::filesystem::path& userDir)
 {
-    const auto file = st::settingsPath(userDir);
-    st::SystemSettings s{};
-    const st::LoadResult result = st::load(file, s);
-    if (result == st::LoadResult::Newer) return false;
-    if (!st::loaded(result)) s = st::sly2Defaults();
-    ToSettings(s);
-    st::sanitizeStatic(s, 0, 0, st::kSly2DefaultKeyboardBindings);
-    return st::save(file, s);
+    // (the file read again: keys this build does not know, and the pending migration, are kept)
+    st::Sly2Settings s;
+    if (st::loadSly2(userDir, s) == st::Sly2Load::Unreadable) return false;
+    ToSettings(s.system);
+    ToGameOptions(s.game);
+    ToVrOptions(s.vr);
+    ToUpscaleOptions(s.upscale);
+    s.outlineThickness = g_display.outlineThickness;
+    return st::saveSly2(userDir, s);
+}
+
+bool FSaveOptionsPending()
+{
+    if (!g_saveopts.fStore) return false;
+    st::Sly2Settings s;
+    return st::loadSly2(cane::userDirectory(), s) == st::Sly2Load::Ok && !s.pendingSaveOptions.empty();
+}
+
+void MigrateSaveOptions(const st::SaveOptionValues& values)
+{
+    if (!g_saveopts.fStore) return;
+    const auto userDir = cane::userDirectory();
+    st::Sly2Settings s;
+    if (st::loadSly2(userDir, s) != st::Sly2Load::Ok || s.pendingSaveOptions.empty()) return;
+    // (the file's values with the save's over the pending ones; only those change in the running game, so options
+    //  given on the command line for this run are neither saved nor undone)
+    st::applySaveOptions(s, values);
+    g_fControllerVibration = s.system.controllerVibration != 0;
+    g_saveopts.gMusic = s.system.musicVolume;
+    g_saveopts.gEffects = s.system.soundEffectsVolume;
+    FromGameOptions(s.game);
+    std::printf("settings: the save's options taken into %s%s\n", cane::utf8(st::sly2SettingsPath(userDir)).c_str(),
+                st::saveSly2(userDir, s) ? "" : " (not writable)");
 }
 
 void LayoutDisplay(int outputWidth, int outputHeight)
 {
+    vr::FPanelSize(&outputWidth, &outputHeight);   // (VR: the headset's screen, not the window)
     DISPLAY& d = g_display;
     d.outputWidth = std::max(1, outputWidth);
     d.outputHeight = std::max(1, outputHeight);
     float rAspect = float(d.outputWidth) / float(d.outputHeight);
+    // (VR's binocucom over the whole view: its picture as the panel is, the canvas placed by vr.cpp)
+    glm::vec2 uiScaleBinoc(1.0f);
+    const bool fBinoc = vr::FWholeViewCanvas(&uiScaleBinoc);   // (or a transition's wipe: vr.h FWipeCanvas)
+    if (!fBinoc)
     switch (d.aspect)
     {
     case DISPASPECT_Fixed_4_3: case DISPASPECT_PS2_4_3: rAspect = 4.0f / 3.0f; break;
@@ -152,7 +297,9 @@ void LayoutDisplay(int outputWidth, int outputHeight)
     d.presentX = (d.outputWidth - dx) / 2;
     d.presentY = (d.outputHeight - dy) / 2;
     int dxRender = dx, dyRender = dy;
-    if (d.internalHeight > 0)
+    if (d.fUpscale && g_gl.window && !vr::FActive() && fsr::FAvailable())
+        fsr::RenderSizeForPreset(d.upscalePreset, dx, dy, &dxRender, &dyRender);   // (gl.h BeginNativeUi scales it up)
+    else if (d.internalHeight > 0 && !vr::FHudOnlyPicture())   // (VR Immersive: a HUD-only picture, at its full size)
     {
         dyRender = d.internalHeight;
         dxRender = std::max(1, int(std::lround(double(dyRender) * double(dx) / double(dy))));
@@ -162,6 +309,7 @@ void LayoutDisplay(int outputWidth, int outputHeight)
     // The 2D canvas (the PS2 frame at 4:3) centred in the picture.
     const float rCanvas = 4.0f / 3.0f;
     d.uiScale = rAspect > rCanvas ? glm::vec2(rCanvas / rAspect, 1.0f) : glm::vec2(1.0f, rAspect / rCanvas);
+    if (fBinoc) d.uiScale = uiScaleBinoc;
     d.uiOffset = glm::vec2(0.0f);
     if (g_gl.window)
     {

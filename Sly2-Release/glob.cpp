@@ -4,6 +4,7 @@
 // is kept as vertex arrays (see glob.h). Reference ports: Sly2-Reference game/m_167310.cpp, m_16A000_p3.cpp,
 // m_16E1A8.cpp.
 
+#include "fastpaths.h"
 #include "glob.h"
 #include "worldglobals.h"
 
@@ -543,7 +544,7 @@ void LoadGlobsetFromBrx(GLOBSET* pglobset, ALO* palo, CBinaryInputStream* pbis)
         i += csub;
     }
     LoadGlobSpheresFromBrx(pglobset, pbis);
-#ifdef __SWITCH__
+#if SLY2_FASTPATHS
     pglobset->afCelBorder.resize(pglobset->aglob.size());
     for (size_t k = 0; k < pglobset->aglob.size(); ++k) pglobset->afCelBorder[k] = pglobset->aglob[k].meshk == MESHK_CelBorder ? 1 : 0;
 #endif

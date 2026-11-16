@@ -4,6 +4,7 @@
 // and the reference's ports (0x2236E8 / 0x223A70 m_220D40_p3.cpp; 0x221DD8 round4_camera.cpp, a register-level
 // transcription: the structure below is re-derived from the asm).
 #include "cplcy.h"
+#include "vr.h"
 #include "pcinput.h"
 #include "marker.h"
 
@@ -753,7 +754,7 @@ void CPFOLLOW::Update(CPDEFI* pcpdefi, const CMJOY* pjoy)
     }
     // Hold the player's chosen angle when automatic rotation is off. Zones that disallow camera control,
     // explicit look targets, camera cuts, and the other scripted camera policies keep their original behavior.
-    const bool fAutoRotate = g_pcinput.fAutoCameraRotation || !(grf & 4) || (pz && pz->ploLook);
+    const bool fAutoRotate = vr::FAutoCameraRotation(g_pcinput.fAutoCameraRotation) || !(grf & 4) || (pz && pz->ploLook);
     if (!fDispatch && cpmode == 4 && fAutoRotate)
     {
         // Passive: the pan follows the focus's motion across the view, the tilt its limits.
@@ -1418,6 +1419,14 @@ void CPRECON::Update(CPDEFI* pcpdefi, const CMJOY* pjoy)
     const float s = (1.0f - g_cm.radFOV) * s_aReconRate[0] + g_cm.radFOV * s_aReconRate[1];
     radPan = radPan + s * dradPan * dt;
     radTilt = radTilt + s * dradTilt * dt;
+    // (VR, vr.h: the binocucom in Immersive) the head's turn onto the angles, one to one, within the limits
+    if (float dPan = 0.0f, dTilt = 0.0f; vr::FHeadLook(&dPan, &dTilt))
+    {
+        radPan += dPan;
+        if (TWO_PI <= lmPan.gMax - lmPan.gMin) radPan = RadNormalize(radPan);
+        else radPan = std::clamp(radPan, lmPan.gMin, lmPan.gMax);
+        radTilt = std::clamp(radTilt + dTilt, lmTilt.gMin, lmTilt.gMax);
+    }
     // (PC) the mouse aims straight onto the angles, slower while zoomed in, within the limits
     if (pjoy->dradAimRight != 0.0f || pjoy->dradAimUp != 0.0f)
     {

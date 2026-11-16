@@ -29,3 +29,8 @@ int DumpTextCommand(const std::string& dir);
 
 // The game's language names as the mods folder spells them ("English", "French", ...).
 const char* SzLanguageModName(int lang);
+
+// The game's text encoding (Latin-1 bytes; the Japanese disc's UTF-8 form) to UTF-8 and back (the fonts' missing
+// characters become '?'; typographic quotes and the ellipsis are written plainly).
+std::string Utf8OfGameText(const std::string& s);
+std::string GameTextOfUtf8(const std::string& s);

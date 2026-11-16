@@ -16,7 +16,7 @@
 // The games see Libraries/include's GLFW 3.3 header ahead of the 3.4 one they
 // link, so the 3.4 platform API is declared here when the header lacks it, and
 // used only when the linked library reports 3.4 or later.
-#if defined(__linux__) && !defined(GLFW_PLATFORM)
+#if defined(__linux__) && !defined(__ANDROID__) && !defined(GLFW_PLATFORM)
 #define GLFW_PLATFORM 0x00050003
 #define GLFW_ANY_PLATFORM 0x00060000
 #define GLFW_PLATFORM_WAYLAND 0x00060003
@@ -25,7 +25,7 @@ extern "C" int glfwPlatformSupported(int platform);
 #endif
 namespace cane {
 inline bool initGlfw() {
-#if defined(__linux__)
+#if defined(__linux__) && !defined(__ANDROID__)
     int major = 0, minor = 0, revision = 0;
     glfwGetVersion(&major, &minor, &revision);
     const char* choice = std::getenv("CANE_GLFW_PLATFORM");
