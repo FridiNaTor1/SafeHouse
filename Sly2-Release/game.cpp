@@ -1744,6 +1744,7 @@ int RunGame(const GAMEOPTS& go)
             if (!accum.fActive)
             {
                 stepSim(frame);
+                vrfp::NoteStep(psw.get());   // (VR First Person: the player's place; --fixed-dt draws each step as it is)
                 continue;
             }
             const float dtFixedSave = g_dtFixedStep;
