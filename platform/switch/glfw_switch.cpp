@@ -209,6 +209,15 @@ void PollPad()
 }
 }  // namespace
 
+namespace
+{
+// The pads hold a vibration until the next value, so one not written again within a second stops (pad_rumble.h's
+// kHoldMs): a game that stops writing, in a load or a stall, would leave them running.
+constexpr u64 kRumbleHoldNs = 1000000000ull;
+u64 g_rumbleWritten = 0;
+bool g_rumbleOn = false;
+}  // namespace
+
 // HD rumble on the controllers the game reads (the handheld Joy-Cons and the first player's): low = the big motor.
 void CaneSwitchRumble(float low, float high)
 {
@@ -217,9 +226,11 @@ void CaneSwitchRumble(float low, float high)
     static bool s_init[2] = {};
     static const HidNpadIdType ids[2] = {HidNpadIdType_Handheld, HidNpadIdType_No1};
     static float s_low = -1, s_high = -1;
+    g_rumbleWritten = armGetSystemTick();
     if (low == s_low && high == s_high) return;
     s_low = low;
     s_high = high;
+    g_rumbleOn = low > 0.0f || high > 0.0f;
     for (int i = 0; i < 2; ++i)
     {
         const u32 styles = hidGetNpadStyleSet(ids[i]);
@@ -242,6 +253,15 @@ void CaneSwitchRumble(float low, float high)
         hidSendVibrationValues(s_handles[i], values, 2);
     }
 }
+
+namespace
+{
+void CheckRumbleHold()
+{
+    if (!g_rumbleOn || armTicksToNs(armGetSystemTick() - g_rumbleWritten) < kRumbleHoldNs) return;
+    CaneSwitchRumble(0.0f, 0.0f);
+}
+}  // namespace
 
 // The cursor in a UI's layout size (width x height) in place of the framebuffer's pixels; 0, 0: the pixels again.
 void CaneSwitchSetCursorSpace(int width, int height)
@@ -374,6 +394,7 @@ void glfwSwapInterval(int interval)
 }
 void glfwSwapBuffers(GLFWwindow* w)
 {
+    CheckRumbleHold();   // (a loading screen presents without polling)
     if (w) g_graphics->present();
 }
 int glfwWindowShouldClose(GLFWwindow* w) { return !w || w->close; }
@@ -389,6 +410,7 @@ void glfwPollEvents(void)
     EnsurePad();
     UpdateMode();
     PollPad();
+    CheckRumbleHold();
     if (!g_window) return;
     const bool focused = appletGetFocusState() == AppletFocusState_InFocus;
     if (focused != g_window->focused)
