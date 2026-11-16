@@ -34,6 +34,24 @@ Follow progress on [Discord](https://discord.com/invite/SfvzvMg7Mk).
 Until 2026-11-10 these folders had the project's old name (`projectcane` on Linux, `ProjectCane` on Windows). The first start of a newer launcher moves them to `SafeHouse` once: games, saves, settings, mods and logs carry over, and paths stored in the launcher's settings are updated. If both folders exist, files the new folder already has win and differing old versions are kept in `ProjectCane leftovers` inside it; nothing is deleted before it is in the new place. **Settings > Games > Install games to** puts new installations in another folder or on another drive (they go to a `SafeHouse` folder there); **Move…** moves an installed game. The game page's **Open save folder** and **Open game folder** buttons open them. Re-extracting or
 uninstalling a game never touches your saves.
 
+### Can I choose where games are installed?
+
+Yes. **Settings > Games > Install games to** picks the default folder or another drive; **Choose a folder…** picks any
+folder (with a controller you type the path). New installations go to a `SafeHouse` folder there, as `sly1`, `sly2` and
+so on, with other disc regions beside them (`sly1-europe`). The install page shows the exact destination and its free
+space under the disc image list; its **Change…** button opens this setting. Installations elsewhere are remembered, so
+games installed before the change stay where they are and keep working; changing the setting never moves or deletes game
+files. **Move … to the install folder** under a game moves it, and **Use the default folder** goes back to the profile
+folder. Saves, settings and logs stay in the profile folders listed above.
+
+### Can SafeHouse find disc images in my own games folder?
+
+Yes. Choose the folder that holds your own `.iso` or `.chd` files in **Settings > Games > Disc images folder** (desktop
+versions; on Android and iOS disc images are picked with the system's file picker). The install page then searches it
+and its subfolders (up to two levels deep) before the usual folders, and recognizes the supported games and regions. The
+search stops after 200 disc images or 20,000 folder entries. Finding a disc does **not** install it; you choose which
+one to install. **Stop searching this folder** goes back to the usual folders only.
+
 ## How do I update?
 
 The launcher updates itself. At startup it checks GitHub for the latest release; when there is a newer one it shows

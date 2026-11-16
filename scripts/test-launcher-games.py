@@ -142,6 +142,68 @@ def main():
             assert (" outdated " if version == 3 else " ready ") in line, (version, line)
         result = run([copied, "--play", "sly2"], env=env)
         assert result.returncode != 0 and b"in development" in result.stderr, result
+
+        # ---- install folder (launcher.json "install_dir": the root, <chosen>/SafeHouse), remembered installations
+        # elsewhere ("install_paths") and the disc images folder ("iso_library_dir"), on Windows and Linux.
+        # The portable profile keeps the test data away from the user's real games.
+        config = data / "config/launcher.json"
+        config.parent.mkdir(parents=True, exist_ok=True)
+        root_a = work / "Games A" / "SafeHouse"
+        root_b = work / "Games B" / "SafeHouse"
+        a_sly2, b_sly2 = root_a / "sly2", root_b / "sly2"
+        shutil.copytree(sly2, a_sly2)
+        shutil.copytree(sly2, b_sly2)
+        iso_library = work / "Disc library"
+        iso_library.mkdir()
+        # (the default folder's installation is listed first when a region is in more than one place: set it aside)
+        aside = work / "default sly2"
+        sly2.rename(aside)
+        config.write_text(json.dumps({
+            "install_dir": str(root_b),
+            "install_paths": {"sly2": [str(a_sly2)]},
+            "iso_library_dir": str(iso_library),
+        }))
+
+        def sly2_usa():
+            result = run([copied, "--installs"], env=env)
+            assert result.returncode == 0, result
+            return [line for line in result.stdout.decode().splitlines() if line.startswith("sly2 usa")]
+
+        listed = sly2_usa()
+        assert len(listed) == 1 and listed[0].endswith(str(b_sly2)), listed  # the install folder before remembered ones
+        shutil.rmtree(b_sly2)
+        listed = sly2_usa()
+        assert len(listed) == 1 and listed[0].endswith(str(a_sly2)), listed  # a remembered installation elsewhere
+        shutil.rmtree(a_sly2)
+        assert sly2_usa() == [], "a missing remembered installation is not listed"
+        aside.rename(sly2)
+        shutil.copytree(sly2, b_sly2)
+        listed = sly2_usa()
+        assert len(listed) == 1 and listed[0].endswith(str(sly2)), listed  # the default folder's wins; nothing moved
+        shutil.rmtree(b_sly2)
+        assert json.loads(config.read_text())["iso_library_dir"] == str(iso_library)
+        # --install-dir (Settings > Games "Install games to"): <chosen>/SafeHouse; a folder SafeHouse cannot write to
+        # is refused and the setting stays as it was.
+        config.write_text("{}")
+        chosen = work / "Chosen drive"
+        chosen.mkdir()
+        result = run([copied, "--install-dir", chosen], env=env)
+        assert result.returncode == 0 and result.stdout.decode().strip() == str(chosen / "SafeHouse"), result
+        assert json.loads(config.read_text())["install_dir"] == str(chosen / "SafeHouse")
+        assert not (chosen / "SafeHouse").exists() and not list(chosen.iterdir()), "the write test leaves nothing behind"
+        if os.name != "nt" and os.geteuid() != 0:
+            locked = work / "Read-only drive"
+            locked.mkdir()
+            locked.chmod(0o555)
+            try:
+                result = run([copied, "--install-dir", locked], env=env)
+                assert result.returncode != 0 and b"cannot write" in result.stderr, result
+                assert json.loads(config.read_text())["install_dir"] == str(chosen / "SafeHouse")
+            finally:
+                locked.chmod(0o755)
+        result = run([copied, "--install-dir", "default"], env=env)
+        assert result.returncode == 0 and "install_dir" not in json.loads(config.read_text()), result
+        config.unlink()
         if os.name != "nt":
             runtime = bin_dir / "Sly2-Release"
             runtime.write_text('#!/bin/sh\nprintf "%s\\n" "$@" > "$4/runtime-args.txt"\npwd >> "$4/runtime-args.txt"\n')
@@ -230,6 +292,38 @@ def main():
                 lines = (data / "user/sly2/runtime-args.txt").read_text().splitlines()
                 assert lines == default_args + [str(bin_dir)], (value, lines)
                 assert json.loads(config.read_text()) == selection
+        # ---- playing from the install folder; the default folder's installation stays and is used again
+        if os.name != "nt":
+            config = data / "config/launcher.json"
+            custom = work / "Games on another drive" / "SafeHouse"
+            custom_sly2 = custom / "sly2"
+            shutil.copytree(sly2, custom_sly2)
+            iso_library = work / "Disc library"
+            iso_library.mkdir(exist_ok=True)
+            selection = {"install_dir": str(custom), "iso_library_dir": str(iso_library)}
+            config.write_text(json.dumps(selection))
+            aside = work / "default sly2"
+            sly2.rename(aside)
+            result = run([copied, "--installs"], env=env)
+            assert result.returncode == 0, result
+            entries = result.stdout.decode().splitlines()
+            assert any("sly2 usa" in line and line.endswith(str(custom_sly2)) for line in entries), entries
+            assert any("sly1 usa" in line and line.endswith(str(sly1)) for line in entries), entries
+            result = run([copied, "--play", "sly2"], env=env)
+            assert result.returncode == 0, result
+            lines = (data / "user/sly2/runtime-args.txt").read_text().splitlines()
+            assert lines[:2] == ["--data-dir", str(custom_sly2)], lines
+            # The original installation was never moved: back in place, it is the one listed and played.
+            aside.rename(sly2)
+            shutil.rmtree(custom_sly2)
+            result = run([copied, "--installs"], env=env)
+            assert result.returncode == 0 and str(sly2).encode() in result.stdout, result
+            result = run([copied, "--play", "sly2"], env=env)
+            assert result.returncode == 0, result
+            lines = (data / "user/sly2/runtime-args.txt").read_text().splitlines()
+            assert lines[:2] == ["--data-dir", str(sly2)], lines
+            config.write_text("{}")
+
         result = run([copied, "--play", "sly3"], env=env)
         assert result.returncode != 0, result
         # ---- Sly 3 launch contract (the same as Sly 2's, its own folders)

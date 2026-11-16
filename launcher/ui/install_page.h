@@ -61,6 +61,15 @@ public:
         return m_installed;
     }
     void invalidate() { m_nextCheck = 0; }
+    // Searches the disc images folder (Settings > Games, backend.h isoLibrary) and any folder typed in, then the
+    // usual places (iso_scan.h: two levels deep, at most 200 images / 20,000 entries in all).
+    void scanConfigured(std::vector<fs::path> extra = {}) {
+        const auto library = m_backend.isoLibrary();
+        m_scannedLibrary = utf8(library);
+        if (!library.empty()) extra.push_back(library);
+        m_scanner.scan(std::move(extra));
+        m_scanned = true;
+    }
     // The page opens for a game: start looking for disc images, and pick the
     // remembered or best matching one.
     // addRegion: "Install another region" (Settings): the page offers a disc of a region not installed yet.
@@ -75,10 +84,8 @@ public:
         }
         m_dismissed = m_job.message;
         invalidate();
-        if (!m_scanned) {
-            m_scanner.scan();
-            m_scanned = true;
-        }
+        // (again when the disc images folder changed since the last search; fixtures keep their list)
+        if (!m_fixture && (!m_scanned || m_scannedLibrary != utf8(m_backend.isoLibrary()))) scanConfigured();
         if (!iso.empty()) m_iso = std::move(iso);
         else if (m_fixture) m_iso = m_fixtureInstalled ? std::string{} : bestCandidate();
         else {
@@ -178,7 +185,7 @@ public:
                 else {
                     m_iso = r->path;
 #if defined(CANE_ANDROID) || defined(CANE_IOS)
-                    if (!m_fixture) m_scanner.scan();  // (the copy in files/imports joins the list, iso_scan.h)
+                    if (!m_fixture) scanConfigured();  // (the copy in files/imports joins the list, iso_scan.h)
 #endif
                     if (m_installAfterSelection) startInstall(m_iso);
                 }
@@ -253,7 +260,7 @@ private:
             m_pathOpen = false;
             if (m_installAfterSelection && !m_fixture) startInstall(m_iso);
         } else if (fs::is_directory(chosen, ec)) {
-            if (!m_fixture) m_scanner.scan({ chosen });
+            if (!m_fixture) scanConfigured({ chosen });
             m_pathOpen = false;
         } else {
             m_pathNote = tr("Nothing found at that path.");
@@ -483,14 +490,16 @@ private:
             FontScope f(fonts().caption);
             ColorScope c(color::muted);
             ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + (wrapRight - ImGui::GetCursorScreenPos().x));
-            ImGui::TextUnformatted(m_scanner.scanning() ? tr("Searching your folders…") : where);
+            const auto library = m_backend.isoLibrary();
+            const std::string source = library.empty() ? std::string(where) : trf("Your disc images folder (%s) and the usual folders", utf8(library).c_str());
+            ImGui::TextUnformatted(m_scanner.scanning() ? tr("Searching your folders…") : source.c_str());
             ImGui::PopTextWrapPos();
         }
         ImGui::PopClipRect();
         ImGui::EndGroup();
         // Pad users get the path entry instead of the mouse-only file dialog.
         sameRow(row, w - browseW - rescanW - px(8));
-        if (iconButton(tr("Search again"), Icon::Refresh, rescanW) && !m_fixture) m_scanner.scan();
+        if (iconButton(tr("Search again"), Icon::Refresh, rescanW) && !m_fixture) scanConfigured();
         ImGui::SameLine(0, px(8));
         ImGui::BeginDisabled(m_native.running());  // the system's file dialog is open in its own window
         if (button(browseLabel, Tone::Secondary, { browseW, 0 }, padUser() ? Icon::Search : Icon::Folder)) choose(false);
@@ -771,6 +780,7 @@ private:
     std::string m_note;
     std::string m_iso, m_dismissed, m_lastLabel;
     bool m_scanned = false, m_installAfterSelection = false, m_showLog = false, m_fixture = false, m_fixtureInstalled = false;
+    std::string m_scannedLibrary;
     bool m_installed = false, m_pathOpen = false, m_pathFocus = false;
     char m_pathBuf[1024] = {};
     filedialog::Async m_native;

@@ -945,6 +945,18 @@
   "Outline thickness": "Konturstärke",
   "The width of the characters' cartoon outlines, in percent of the original. In VR the outlines keep the flat picture's look for the headset's wider view.": "Die Breite der Cartoon-Konturen der Figuren, in Prozent des Originals. In VR behalten die Konturen das Aussehen des flachen Bildes für das weitere Sichtfeld des Headsets.",
   "VR world scale": "VR-Weltgröße",
-  "Immersive VR: how big the world looks around you. 1.0x is life size; higher values make the world look smaller.": "Immersives VR: wie groß die Welt um dich herum wirkt. 1.0x ist Lebensgröße; höhere Werte lassen die Welt kleiner wirken."
+  "Immersive VR: how big the world looks around you. 1.0x is life size; higher values make the world look smaller.": "Immersives VR: wie groß die Welt um dich herum wirkt. 1.0x ist Lebensgröße; höhere Werte lassen die Welt kleiner wirken.",
+  "That folder does not exist.": "Dieser Ordner existiert nicht.",
+  "SafeHouse cannot write to that folder. Choose another one.": "SafeHouse kann in diesen Ordner nicht schreiben. Wähle einen anderen.",
+  "Disc images": "Disc-Images",
+  "Not set: the install page searches the usual folders.": "Nicht festgelegt: Die Installationsseite durchsucht die üblichen Ordner.",
+  "Disc images folder": "Ordner mit Disc-Images",
+  "A folder with your .iso or .chd files. The install page searches it and its subfolders (two levels deep) before the usual folders. Nothing installs by itself; you choose the disc.": "Ein Ordner mit deinen .iso- oder .chd-Dateien. Die Installationsseite durchsucht ihn und seine Unterordner (zwei Ebenen tief) vor den üblichen Ordnern. Nichts wird von selbst installiert; du wählst die Disc.",
+  "Stop searching this folder": "Diesen Ordner nicht mehr durchsuchen",
+  "The install page searches only the usual folders again. No files are touched.": "Die Installationsseite durchsucht wieder nur die üblichen Ordner. Keine Dateien werden angerührt.",
+  "The disc images folder is not available (a drive that is not connected?).": "Der Ordner mit Disc-Images ist nicht verfügbar (ein Laufwerk, das nicht angeschlossen ist?).",
+  "Choose your disc images folder": "Deinen Ordner mit Disc-Images wählen",
+  "Apply": "Übernehmen",
+  "Your disc images folder (%s) and the usual folders": "Dein Ordner mit Disc-Images (%s) und die üblichen Ordner"
  }
 }

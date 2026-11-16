@@ -945,6 +945,18 @@
   "Outline thickness": "Толщина контуров",
   "The width of the characters' cartoon outlines, in percent of the original. In VR the outlines keep the flat picture's look for the headset's wider view.": "Ширина мультяшных контуров персонажей в процентах от оригинала. В VR контуры сохраняют вид плоской картинки при более широком обзоре шлема.",
   "VR world scale": "Масштаб мира в VR",
-  "Immersive VR: how big the world looks around you. 1.0x is life size; higher values make the world look smaller.": "Иммерсивный VR: насколько большим кажется мир вокруг вас. 1.0x — реальный размер; большие значения делают мир меньше."
+  "Immersive VR: how big the world looks around you. 1.0x is life size; higher values make the world look smaller.": "Иммерсивный VR: насколько большим кажется мир вокруг вас. 1.0x — реальный размер; большие значения делают мир меньше.",
+  "That folder does not exist.": "Такой папки нет.",
+  "SafeHouse cannot write to that folder. Choose another one.": "SafeHouse не может записывать в эту папку. Выберите другую.",
+  "Disc images": "Образы дисков",
+  "Not set: the install page searches the usual folders.": "Не задана: страница установки ищет в обычных папках.",
+  "Disc images folder": "Папка с образами дисков",
+  "A folder with your .iso or .chd files. The install page searches it and its subfolders (two levels deep) before the usual folders. Nothing installs by itself; you choose the disc.": "Папка с вашими файлами .iso или .chd. Страница установки ищет в ней и во вложенных папках (на два уровня вглубь) раньше, чем в обычных папках. Ничего не устанавливается само; диск выбираете вы.",
+  "Stop searching this folder": "Больше не искать в этой папке",
+  "The install page searches only the usual folders again. No files are touched.": "Страница установки снова ищет только в обычных папках. Файлы не затрагиваются.",
+  "The disc images folder is not available (a drive that is not connected?).": "Папка с образами дисков недоступна (диск не подключён?).",
+  "Choose your disc images folder": "Выбрать папку с образами дисков",
+  "Apply": "Применить",
+  "Your disc images folder (%s) and the usual folders": "Ваша папка с образами дисков (%s) и обычные папки"
  }
 }

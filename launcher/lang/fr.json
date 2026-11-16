@@ -945,6 +945,18 @@
   "Outline thickness": "Épaisseur des contours",
   "The width of the characters' cartoon outlines, in percent of the original. In VR the outlines keep the flat picture's look for the headset's wider view.": "La largeur des contours cartoon des personnages, en pourcentage de l'original. En VR, les contours gardent l'aspect de l'image plate pour le champ de vision plus large du casque.",
   "VR world scale": "Échelle du monde en VR",
-  "Immersive VR: how big the world looks around you. 1.0x is life size; higher values make the world look smaller.": "VR immersive : la taille apparente du monde autour de toi. 1.0x est la taille réelle ; des valeurs plus élevées font paraître le monde plus petit."
+  "Immersive VR: how big the world looks around you. 1.0x is life size; higher values make the world look smaller.": "VR immersive : la taille apparente du monde autour de toi. 1.0x est la taille réelle ; des valeurs plus élevées font paraître le monde plus petit.",
+  "That folder does not exist.": "Ce dossier n'existe pas.",
+  "SafeHouse cannot write to that folder. Choose another one.": "SafeHouse ne peut pas écrire dans ce dossier. Choisissez-en un autre.",
+  "Disc images": "Images disque",
+  "Not set: the install page searches the usual folders.": "Non défini : la page d'installation cherche dans les dossiers habituels.",
+  "Disc images folder": "Dossier d'images disque",
+  "A folder with your .iso or .chd files. The install page searches it and its subfolders (two levels deep) before the usual folders. Nothing installs by itself; you choose the disc.": "Un dossier avec vos fichiers .iso ou .chd. La page d'installation le parcourt avec ses sous-dossiers (sur deux niveaux) avant les dossiers habituels. Rien ne s'installe tout seul ; c'est vous qui choisissez le disque.",
+  "Stop searching this folder": "Ne plus chercher dans ce dossier",
+  "The install page searches only the usual folders again. No files are touched.": "La page d'installation ne cherche de nouveau que dans les dossiers habituels. Aucun fichier n'est touché.",
+  "The disc images folder is not available (a drive that is not connected?).": "Le dossier d'images disque n'est pas disponible (un disque qui n'est pas branché ?).",
+  "Choose your disc images folder": "Choisir votre dossier d'images disque",
+  "Apply": "Appliquer",
+  "Your disc images folder (%s) and the usual folders": "Votre dossier d'images disque (%s) et les dossiers habituels"
  }
 }

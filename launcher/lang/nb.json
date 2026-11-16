@@ -945,6 +945,18 @@
   "Outline thickness": "Konturtykkelse",
   "The width of the characters' cartoon outlines, in percent of the original. In VR the outlines keep the flat picture's look for the headset's wider view.": "Bredden på figurenes tegneseriekonturer i prosent av originalen. I VR beholder konturene det flate bildets utseende for headsettets bredere synsfelt.",
   "VR world scale": "VR-verdensskala",
-  "Immersive VR: how big the world looks around you. 1.0x is life size; higher values make the world look smaller.": "Immersiv VR: hvor stor verden ser ut rundt deg. 1.0x er naturlig størrelse; høyere verdier får verden til å se mindre ut."
+  "Immersive VR: how big the world looks around you. 1.0x is life size; higher values make the world look smaller.": "Immersiv VR: hvor stor verden ser ut rundt deg. 1.0x er naturlig størrelse; høyere verdier får verden til å se mindre ut.",
+  "That folder does not exist.": "Den mappen finnes ikke.",
+  "SafeHouse cannot write to that folder. Choose another one.": "SafeHouse kan ikke skrive til den mappen. Velg en annen.",
+  "Disc images": "Plateavbildninger",
+  "Not set: the install page searches the usual folders.": "Ikke valgt: installasjonssiden søker i de vanlige mappene.",
+  "Disc images folder": "Mappe med plateavbildninger",
+  "A folder with your .iso or .chd files. The install page searches it and its subfolders (two levels deep) before the usual folders. Nothing installs by itself; you choose the disc.": "En mappe med .iso- eller .chd-filene dine. Installasjonssiden søker i den og undermappene (to nivåer ned) før de vanlige mappene. Ingenting installeres av seg selv; du velger platen.",
+  "Stop searching this folder": "Slutt å søke i denne mappen",
+  "The install page searches only the usual folders again. No files are touched.": "Installasjonssiden søker igjen bare i de vanlige mappene. Ingen filer blir rørt.",
+  "The disc images folder is not available (a drive that is not connected?).": "Mappen med plateavbildninger er ikke tilgjengelig (en stasjon som ikke er koblet til?).",
+  "Choose your disc images folder": "Velg mappen med plateavbildninger",
+  "Apply": "Bruk",
+  "Your disc images folder (%s) and the usual folders": "Mappen med plateavbildninger (%s) og de vanlige mappene"
  }
 }

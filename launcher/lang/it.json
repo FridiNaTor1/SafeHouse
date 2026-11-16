@@ -945,6 +945,18 @@
   "Outline thickness": "Spessore dei contorni",
   "The width of the characters' cartoon outlines, in percent of the original. In VR the outlines keep the flat picture's look for the headset's wider view.": "La larghezza dei contorni cartoon dei personaggi, in percentuale dell'originale. In VR i contorni mantengono l'aspetto dell'immagine piatta per il campo visivo più ampio del visore.",
   "VR world scale": "Scala del mondo VR",
-  "Immersive VR: how big the world looks around you. 1.0x is life size; higher values make the world look smaller.": "VR immersiva: quanto appare grande il mondo intorno a te. 1.0x è la grandezza reale; valori più alti fanno sembrare il mondo più piccolo."
+  "Immersive VR: how big the world looks around you. 1.0x is life size; higher values make the world look smaller.": "VR immersiva: quanto appare grande il mondo intorno a te. 1.0x è la grandezza reale; valori più alti fanno sembrare il mondo più piccolo.",
+  "That folder does not exist.": "Quella cartella non esiste.",
+  "SafeHouse cannot write to that folder. Choose another one.": "SafeHouse non può scrivere in quella cartella. Scegline un'altra.",
+  "Disc images": "Immagini disco",
+  "Not set: the install page searches the usual folders.": "Non impostata: la pagina di installazione cerca nelle cartelle abituali.",
+  "Disc images folder": "Cartella delle immagini disco",
+  "A folder with your .iso or .chd files. The install page searches it and its subfolders (two levels deep) before the usual folders. Nothing installs by itself; you choose the disc.": "Una cartella con i tuoi file .iso o .chd. La pagina di installazione la cerca insieme alle sue sottocartelle (fino a due livelli) prima delle cartelle abituali. Niente si installa da solo; scegli tu il disco.",
+  "Stop searching this folder": "Smetti di cercare in questa cartella",
+  "The install page searches only the usual folders again. No files are touched.": "La pagina di installazione cerca di nuovo solo nelle cartelle abituali. Nessun file viene toccato.",
+  "The disc images folder is not available (a drive that is not connected?).": "La cartella delle immagini disco non è disponibile (un'unità non collegata?).",
+  "Choose your disc images folder": "Scegli la tua cartella delle immagini disco",
+  "Apply": "Applica",
+  "Your disc images folder (%s) and the usual folders": "La tua cartella delle immagini disco (%s) e le cartelle abituali"
  }
 }

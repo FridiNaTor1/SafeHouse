@@ -945,6 +945,18 @@
   "Outline thickness": "Dikte van de omlijning",
   "The width of the characters' cartoon outlines, in percent of the original. In VR the outlines keep the flat picture's look for the headset's wider view.": "De breedte van de cartoonomlijning van de personages, in procenten van het origineel. In VR behoudt de omlijning het uiterlijk van het platte beeld voor het bredere zicht van de headset.",
   "VR world scale": "VR-wereldschaal",
-  "Immersive VR: how big the world looks around you. 1.0x is life size; higher values make the world look smaller.": "Immersieve VR: hoe groot de wereld om je heen lijkt. 1.0x is levensgroot; hogere waarden laten de wereld kleiner lijken."
+  "Immersive VR: how big the world looks around you. 1.0x is life size; higher values make the world look smaller.": "Immersieve VR: hoe groot de wereld om je heen lijkt. 1.0x is levensgroot; hogere waarden laten de wereld kleiner lijken.",
+  "That folder does not exist.": "Die map bestaat niet.",
+  "SafeHouse cannot write to that folder. Choose another one.": "SafeHouse kan niet naar die map schrijven. Kies een andere.",
+  "Disc images": "Disc-images",
+  "Not set: the install page searches the usual folders.": "Niet ingesteld: de installatiepagina doorzoekt de gebruikelijke mappen.",
+  "Disc images folder": "Map met disc-images",
+  "A folder with your .iso or .chd files. The install page searches it and its subfolders (two levels deep) before the usual folders. Nothing installs by itself; you choose the disc.": "Een map met je .iso- of .chd-bestanden. De installatiepagina doorzoekt die map en de submappen (twee niveaus diep) vóór de gebruikelijke mappen. Er wordt niets vanzelf geïnstalleerd; jij kiest de disc.",
+  "Stop searching this folder": "Deze map niet meer doorzoeken",
+  "The install page searches only the usual folders again. No files are touched.": "De installatiepagina doorzoekt weer alleen de gebruikelijke mappen. Er worden geen bestanden aangeraakt.",
+  "The disc images folder is not available (a drive that is not connected?).": "De map met disc-images is niet beschikbaar (een schijf die niet is aangesloten?).",
+  "Choose your disc images folder": "Je map met disc-images kiezen",
+  "Apply": "Toepassen",
+  "Your disc images folder (%s) and the usual folders": "Je map met disc-images (%s) en de gebruikelijke mappen"
  }
 }

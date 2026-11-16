@@ -945,6 +945,18 @@
   "Outline thickness": "Grubość konturów",
   "The width of the characters' cartoon outlines, in percent of the original. In VR the outlines keep the flat picture's look for the headset's wider view.": "Szerokość kreskówkowych konturów postaci w procentach oryginału. W VR kontury zachowują wygląd płaskiego obrazu przy szerszym polu widzenia gogli.",
   "VR world scale": "Skala świata w VR",
-  "Immersive VR: how big the world looks around you. 1.0x is life size; higher values make the world look smaller.": "Immersyjne VR: jak duży wydaje się świat wokół ciebie. 1.0x to naturalna wielkość; wyższe wartości sprawiają, że świat wydaje się mniejszy."
+  "Immersive VR: how big the world looks around you. 1.0x is life size; higher values make the world look smaller.": "Immersyjne VR: jak duży wydaje się świat wokół ciebie. 1.0x to naturalna wielkość; wyższe wartości sprawiają, że świat wydaje się mniejszy.",
+  "That folder does not exist.": "Ten folder nie istnieje.",
+  "SafeHouse cannot write to that folder. Choose another one.": "SafeHouse nie może zapisywać w tym folderze. Wybierz inny.",
+  "Disc images": "Obrazy płyt",
+  "Not set: the install page searches the usual folders.": "Nie ustawiono: strona instalacji przeszukuje typowe foldery.",
+  "Disc images folder": "Folder z obrazami płyt",
+  "A folder with your .iso or .chd files. The install page searches it and its subfolders (two levels deep) before the usual folders. Nothing installs by itself; you choose the disc.": "Folder z twoimi plikami .iso lub .chd. Strona instalacji przeszukuje go wraz z podfolderami (dwa poziomy w głąb) przed typowymi folderami. Nic nie instaluje się samo; to ty wybierasz płytę.",
+  "Stop searching this folder": "Przestań przeszukiwać ten folder",
+  "The install page searches only the usual folders again. No files are touched.": "Strona instalacji znowu przeszukuje tylko typowe foldery. Żadne pliki nie są ruszane.",
+  "The disc images folder is not available (a drive that is not connected?).": "Folder z obrazami płyt jest niedostępny (niepodłączony dysk?).",
+  "Choose your disc images folder": "Wybierz folder z obrazami płyt",
+  "Apply": "Zastosuj",
+  "Your disc images folder (%s) and the usual folders": "Twój folder z obrazami płyt (%s) i typowe foldery"
  }
 }

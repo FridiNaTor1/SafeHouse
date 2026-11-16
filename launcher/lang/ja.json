@@ -945,6 +945,18 @@
   "Outline thickness": "輪郭のサイズ",
   "The width of the characters' cartoon outlines, in percent of the original. In VR the outlines keep the flat picture's look for the headset's wider view.": "キャラクターのアニメ調の輪郭のサイズを、オリジナルに対する割合で設定します。VRでは、ヘッドセットの大きな視界でも通常画面と同じ見た目になります。",
   "VR world scale": "VRのワールドスケール",
-  "Immersive VR: how big the world looks around you. 1.0x is life size; higher values make the world look smaller.": "イマーシブVR：周りの世界がどれくらいの大きさに見えるか。1.0xは実物大で、値を大きくすると世界が小さく見えます。"
+  "Immersive VR: how big the world looks around you. 1.0x is life size; higher values make the world look smaller.": "イマーシブVR：周りの世界がどれくらいの大きさに見えるか。1.0xは実物大で、値を大きくすると世界が小さく見えます。",
+  "That folder does not exist.": "そのフォルダーは存在しません。",
+  "SafeHouse cannot write to that folder. Choose another one.": "SafeHouse はそのフォルダーに書き込めません。別のフォルダーを選んでください。",
+  "Disc images": "ディスクイメージ",
+  "Not set: the install page searches the usual folders.": "未設定：インストールページはいつものフォルダーを検索します。",
+  "Disc images folder": "ディスクイメージのフォルダー",
+  "A folder with your .iso or .chd files. The install page searches it and its subfolders (two levels deep) before the usual folders. Nothing installs by itself; you choose the disc.": ".iso または .chd ファイルがあるフォルダー。インストールページは、いつものフォルダーより先に、このフォルダーとそのサブフォルダー（2 階層まで）を検索します。自動ではインストールされません。ディスクはあなたが選びます。",
+  "Stop searching this folder": "このフォルダーの検索をやめる",
+  "The install page searches only the usual folders again. No files are touched.": "インストールページは再びいつものフォルダーだけを検索します。ファイルには一切触れません。",
+  "The disc images folder is not available (a drive that is not connected?).": "ディスクイメージのフォルダーを使用できません（ドライブが接続されていませんか？）。",
+  "Choose your disc images folder": "ディスクイメージのフォルダーを選択",
+  "Apply": "適用",
+  "Your disc images folder (%s) and the usual folders": "ディスクイメージのフォルダー（%s）といつものフォルダー"
  }
 }

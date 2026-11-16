@@ -945,6 +945,18 @@
   "Outline thickness": "Konturtjocklek",
   "The width of the characters' cartoon outlines, in percent of the original. In VR the outlines keep the flat picture's look for the headset's wider view.": "Bredden på figurernas tecknade konturer i procent av originalet. I VR behåller konturerna den platta bildens utseende för headsetets bredare synfält.",
   "VR world scale": "VR-världsskala",
-  "Immersive VR: how big the world looks around you. 1.0x is life size; higher values make the world look smaller.": "Immersiv VR: hur stor världen ser ut runt dig. 1.0x är naturlig storlek; högre värden får världen att se mindre ut."
+  "Immersive VR: how big the world looks around you. 1.0x is life size; higher values make the world look smaller.": "Immersiv VR: hur stor världen ser ut runt dig. 1.0x är naturlig storlek; högre värden får världen att se mindre ut.",
+  "That folder does not exist.": "Den mappen finns inte.",
+  "SafeHouse cannot write to that folder. Choose another one.": "SafeHouse kan inte skriva till den mappen. Välj en annan.",
+  "Disc images": "Skivavbildningar",
+  "Not set: the install page searches the usual folders.": "Inte vald: installationssidan söker i de vanliga mapparna.",
+  "Disc images folder": "Mapp med skivavbildningar",
+  "A folder with your .iso or .chd files. The install page searches it and its subfolders (two levels deep) before the usual folders. Nothing installs by itself; you choose the disc.": "En mapp med dina .iso- eller .chd-filer. Installationssidan söker i den och dess undermappar (två nivåer ner) före de vanliga mapparna. Inget installeras av sig självt; du väljer skivan.",
+  "Stop searching this folder": "Sluta söka i den här mappen",
+  "The install page searches only the usual folders again. No files are touched.": "Installationssidan söker åter bara i de vanliga mapparna. Inga filer rörs.",
+  "The disc images folder is not available (a drive that is not connected?).": "Mappen med skivavbildningar är inte tillgänglig (en enhet som inte är ansluten?).",
+  "Choose your disc images folder": "Välj din mapp med skivavbildningar",
+  "Apply": "Verkställ",
+  "Your disc images folder (%s) and the usual folders": "Din mapp med skivavbildningar (%s) och de vanliga mapparna"
  }
 }

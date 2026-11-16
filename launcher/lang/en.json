@@ -945,6 +945,18 @@
   "Outline thickness": "Outline thickness",
   "The width of the characters' cartoon outlines, in percent of the original. In VR the outlines keep the flat picture's look for the headset's wider view.": "The width of the characters' cartoon outlines, in percent of the original. In VR the outlines keep the flat picture's look for the headset's wider view.",
   "VR world scale": "VR world scale",
-  "Immersive VR: how big the world looks around you. 1.0x is life size; higher values make the world look smaller.": "Immersive VR: how big the world looks around you. 1.0x is life size; higher values make the world look smaller."
+  "Immersive VR: how big the world looks around you. 1.0x is life size; higher values make the world look smaller.": "Immersive VR: how big the world looks around you. 1.0x is life size; higher values make the world look smaller.",
+  "That folder does not exist.": "That folder does not exist.",
+  "SafeHouse cannot write to that folder. Choose another one.": "SafeHouse cannot write to that folder. Choose another one.",
+  "Disc images": "Disc images",
+  "Not set: the install page searches the usual folders.": "Not set: the install page searches the usual folders.",
+  "Disc images folder": "Disc images folder",
+  "A folder with your .iso or .chd files. The install page searches it and its subfolders (two levels deep) before the usual folders. Nothing installs by itself; you choose the disc.": "A folder with your .iso or .chd files. The install page searches it and its subfolders (two levels deep) before the usual folders. Nothing installs by itself; you choose the disc.",
+  "Stop searching this folder": "Stop searching this folder",
+  "The install page searches only the usual folders again. No files are touched.": "The install page searches only the usual folders again. No files are touched.",
+  "The disc images folder is not available (a drive that is not connected?).": "The disc images folder is not available (a drive that is not connected?).",
+  "Choose your disc images folder": "Choose your disc images folder",
+  "Apply": "Apply",
+  "Your disc images folder (%s) and the usual folders": "Your disc images folder (%s) and the usual folders"
  }
 }

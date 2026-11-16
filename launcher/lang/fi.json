@@ -945,6 +945,18 @@
   "Outline thickness": "Ääriviivojen paksuus",
   "The width of the characters' cartoon outlines, in percent of the original. In VR the outlines keep the flat picture's look for the headset's wider view.": "Hahmojen piirrosmaisten ääriviivojen leveys prosentteina alkuperäisestä. VR:ssä ääriviivat säilyttävät tasaisen kuvan ilmeen lasien laajemmassa näkökentässä.",
   "VR world scale": "VR-maailman mittakaava",
-  "Immersive VR: how big the world looks around you. 1.0x is life size; higher values make the world look smaller.": "Immersiivinen VR: kuinka suurelta maailma näyttää ympärilläsi. 1.0x on luonnollinen koko; suuremmat arvot saavat maailman näyttämään pienemmältä."
+  "Immersive VR: how big the world looks around you. 1.0x is life size; higher values make the world look smaller.": "Immersiivinen VR: kuinka suurelta maailma näyttää ympärilläsi. 1.0x on luonnollinen koko; suuremmat arvot saavat maailman näyttämään pienemmältä.",
+  "That folder does not exist.": "Kansiota ei ole olemassa.",
+  "SafeHouse cannot write to that folder. Choose another one.": "SafeHouse ei voi kirjoittaa siihen kansioon. Valitse toinen.",
+  "Disc images": "Levykuvat",
+  "Not set: the install page searches the usual folders.": "Ei valittu: asennussivu hakee tavallisista kansioista.",
+  "Disc images folder": "Levykuvakansio",
+  "A folder with your .iso or .chd files. The install page searches it and its subfolders (two levels deep) before the usual folders. Nothing installs by itself; you choose the disc.": "Kansio, jossa ovat .iso- tai .chd-tiedostosi. Asennussivu hakee siitä ja sen alikansioista (kaksi tasoa syvälle) ennen tavallisia kansioita. Mitään ei asenneta itsestään; sinä valitset levyn.",
+  "Stop searching this folder": "Lopeta tämän kansion hakeminen",
+  "The install page searches only the usual folders again. No files are touched.": "Asennussivu hakee taas vain tavallisista kansioista. Tiedostoihin ei kosketa.",
+  "The disc images folder is not available (a drive that is not connected?).": "Levykuvakansio ei ole käytettävissä (asema, jota ei ole liitetty?).",
+  "Choose your disc images folder": "Valitse levykuvakansiosi",
+  "Apply": "Käytä",
+  "Your disc images folder (%s) and the usual folders": "Levykuvakansiosi (%s) ja tavalliset kansiot"
  }
 }

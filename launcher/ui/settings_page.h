@@ -194,6 +194,10 @@ public:
             cancelCapture();
             return true;
         }
+        if (m_folderEntry != FolderEntry::None) {
+            m_folderEntry = FolderEntry::None;
+            return true;
+        }
         if (m_paneFocused) {
             m_focusRail = true;
             return true;
@@ -238,6 +242,15 @@ public:
         }
         if (ImGuiFileDialog::Instance()->Display("installdir", ImGuiWindowFlags_NoCollapse, { px(650), px(400) }, { px(1100), px(760) })) {
             if (ImGuiFileDialog::Instance()->IsOk()) setInstallRoot(path(ImGuiFileDialog::Instance()->GetCurrentPath()));
+            ImGuiFileDialog::Instance()->Close();
+        }
+        if (auto r = m_libraryDialog.poll()) {  // "Disc images folder" (Games)
+            if (r->status == filedialog::Status::Chosen) setIsoLibrary(path(r->path));
+            else if (r->status == filedialog::Status::Unavailable) openLibraryPicker();
+            else if (r->status == filedialog::Status::Failed) m_libraryNote = r->error;
+        }
+        if (ImGuiFileDialog::Instance()->Display("isolibrary", ImGuiWindowFlags_NoCollapse, { px(650), px(400) }, { px(1100), px(760) })) {
+            if (ImGuiFileDialog::Instance()->IsOk()) setIsoLibrary(path(ImGuiFileDialog::Instance()->GetCurrentPath()));
             ImGuiFileDialog::Instance()->Close();
         }
         // the PS3 HD import's source, or the Collection menu import's (native_dialog.h)
@@ -1544,6 +1557,9 @@ private:
             m_rootFree = freeBytes(m_installRoot);
             if (!m_fixture) m_places = otherDrives();
             else m_installRoot = "/home/player/.local/share/SafeHouse/installations", m_rootFree = 212ull << 30;
+            m_library = m_backend.isoLibrary();
+            std::error_code ec;
+            m_libraryAvailable = m_library.empty() || fs::is_directory(m_library, ec);
         }
         if (!m_fixture || m_regionsFixture) {
             const double now = ImGui::GetTime();
@@ -1557,6 +1573,9 @@ private:
             }
         }
         installLocationRows(gameRunning);
+#if !defined(CANE_ANDROID) && !defined(CANE_IOS)
+        discLibraryRows(gameRunning);
+#endif
         for (GameId g : { GameId::Sly1, GameId::Sly2, GameId::Sly3 }) {
             ImGui::PushID(static_cast<int>(g));
             section(cane::game(g).title);
@@ -1634,6 +1653,7 @@ private:
                  "Installed games stay where they are; \"Move … to the install folder\" below moves one."));
         if (linkRow(tr("Choose a folder…"), nullptr, nullptr, Icon::Folder) && !m_fixture) startInstallPick();
         describe(tr("Any folder, with the system's folder picker. Games install into a SafeHouse folder inside it."));
+        folderEntryRow(FolderEntry::Install);
         if (m_customRoot && linkRow(tr("Use the default folder"), nullptr, utf8(m_backend.defaultInstallRoot()).c_str(), Icon::Refresh) && !m_fixture)
             setInstallRoot({});
         if (m_customRoot) describe(tr("New installations go to the profile folder again, as before. Installed games stay where they are."));
@@ -1653,6 +1673,109 @@ private:
         }
         m_nextRegions = 0;
         m_nextLocation = 0;
+    }
+    // "Disc images folder" (backend.h isoLibrary): a folder of the player's own .iso / .chd files that the install
+    // page searches before the usual folders. Not on Android / iOS: the app reads only the disc images picked with
+    // the system's document picker there (no access to other folders).
+    void discLibraryRows(bool gameRunning) {
+        section(tr("Disc images"));
+        ImGui::BeginDisabled(m_job.busy || gameRunning);
+        const std::string sub = m_library.empty() ? std::string(tr("Not set: the install page searches the usual folders.")) : utf8(m_library);
+        if (linkRow(tr("Disc images folder"), nullptr, sub.c_str(), Icon::Folder) && !m_fixture) startLibraryPick();
+        describe(tr("A folder with your .iso or .chd files. The install page searches it and its subfolders (two levels deep) "
+                    "before the usual folders. Nothing installs by itself; you choose the disc."));
+        folderEntryRow(FolderEntry::Library);
+        if (!m_library.empty()) {
+            if (linkRow(tr("Stop searching this folder"), nullptr, nullptr, Icon::Close) && !m_fixture) setIsoLibrary({});
+            describe(tr("The install page searches only the usual folders again. No files are touched."));
+        }
+        ImGui::EndDisabled();
+        const std::string note = !m_libraryNote.empty() ? m_libraryNote
+                                 : m_libraryAvailable ? std::string{}
+                                                      : std::string(tr("The disc images folder is not available (a drive that is not connected?)."));
+        if (!note.empty()) {
+            ImGui::Indent(px(16));
+            caption(note.c_str(), color::warning);
+            ImGui::Unindent(px(16));
+        }
+    }
+    void setIsoLibrary(const fs::path& chosen) {
+        try {
+            m_backend.setIsoLibrary(chosen);
+            m_libraryNote.clear();
+        } catch (const std::exception& e) {
+            m_libraryNote = e.what();
+        }
+        m_nextLocation = 0;
+    }
+    void startLibraryPick() {
+        if (padUser()) return openFolderEntry(FolderEntry::Library);
+        if (m_libraryDialog.running()) return;
+        const fs::path start = filedialog::startFolder({ utf8(m_library) });
+        if (!m_libraryDialog.start(filedialog::Kind::PickFolder, tr("Choose your disc images folder"), start)) openLibraryPicker();
+    }
+    void openLibraryPicker() {
+        ImGuiFileDialog::Instance()->OpenDialog("isolibrary", tr("Choose your disc images folder"), nullptr,
+                                                utf8(filedialog::startFolder({ utf8(m_library) })), "", 1, nullptr, ImGuiFileDialogFlags_Modal);
+    }
+    // Pads cannot drive the folder pickers (the system's dialog is a separate window, ImGuiFileDialog wants a mouse),
+    // so "Choose a folder…" and "Disc images folder" open a path entry under the row instead (the on-screen keyboard).
+    enum class FolderEntry { None, Install, Library };
+    static bool padUser() {
+#if defined(CANE_ANDROID) || defined(CANE_IOS)
+        return false;
+#else
+        return input::tracker().lastWasGamepad();
+#endif
+    }
+    void openFolderEntry(FolderEntry which) {
+        m_folderEntry = which;
+        m_folderEntryFocus = true;
+        const std::string current = which == FolderEntry::Install ? (m_customRoot ? utf8(m_installRoot) : std::string{}) : utf8(m_library);
+        std::snprintf(m_folderBuf, sizeof(m_folderBuf), "%s", current.c_str());
+    }
+    void folderEntryRow(FolderEntry which) {
+        if (m_folderEntry != which) return;
+        ImGui::Indent(px(16));
+        const float applyW = std::max(px(110), measure(fonts().body, tr("Apply")).x + px(40));
+        const float cancelW = std::max(px(110), measure(fonts().body, tr("Cancel")).x + px(40));
+#ifdef _WIN32
+        const char* hint = "D:\\Games";
+#else
+        const char* hint = "~/Games";
+#endif
+        const bool entered = inputField("##folder-entry", m_folderBuf, sizeof(m_folderBuf), launcher::Charset::Free, hint,
+                                        ImGui::GetContentRegionAvail().x - applyW - cancelW - px(40), ImGuiInputTextFlags_EnterReturnsTrue);
+        if (m_folderEntryFocus) {
+            m_folderEntryFocus = false;
+            setFocus(ImGui::GetItemID(), ImGui::GetCurrentWindow(), true);
+        }
+        ImGui::SameLine(0, px(8));
+        ImGui::BeginDisabled(!m_folderBuf[0]);
+        const bool apply = button(tr("Apply"), Tone::Primary, { applyW, 0 }) || (entered && m_folderBuf[0]);
+        ImGui::EndDisabled();
+        ImGui::SameLine(0, px(8));
+        if (button(tr("Cancel"), Tone::Quiet, { cancelW, 0 })) m_folderEntry = FolderEntry::None;
+        ImGui::Unindent(px(16));
+        if (!apply) return;
+        // (quotes from a pasted path and a leading ~ are taken care of)
+        std::string text = m_folderBuf;
+        const auto first = text.find_first_not_of(" \t\"'");
+        const auto last = text.find_last_not_of(" \t\"'");
+        text = first == std::string::npos ? std::string{} : text.substr(first, last - first + 1);
+        if (text.empty()) return;
+        fs::path chosen = path(text);
+#ifndef _WIN32
+        if (text == "~" || text.rfind("~/", 0) == 0)
+            if (const char* home = std::getenv("HOME"); home && *home) chosen = path(home) / path(text.size() > 2 ? text.substr(2) : std::string{});
+#endif
+        if (which == FolderEntry::Install) {
+            setInstallRoot(chosen);
+            if (m_locationNote.empty()) m_folderEntry = FolderEntry::None;
+        } else {
+            setIsoLibrary(chosen);
+            if (m_libraryNote.empty()) m_folderEntry = FolderEntry::None;
+        }
     }
     // Under an installation outside the install folder: "Move <region> to the install folder" (backend.h moveInstallation, a job with progress).
     void moveRow(GameId g, const Installation& in, bool gameRunning) {
@@ -1690,6 +1813,7 @@ private:
         ImGui::PopID();
     }
     void startInstallPick() {
+        if (padUser()) return openFolderEntry(FolderEntry::Install);
         if (m_installDialog.running()) return;
         const fs::path start = filedialog::startFolder({ utf8(m_installRoot.parent_path()) });
         if (!m_installDialog.start(filedialog::Kind::PickFolder, tr("Choose where SafeHouse installs games"), start)) openInstallPicker();
@@ -2149,6 +2273,13 @@ private:
     double m_nextLocation = 0;
     std::vector<InstallPlace> m_places;
     std::string m_locationNote;
+    filedialog::Async m_libraryDialog;
+    fs::path m_library;
+    bool m_libraryAvailable = true;
+    std::string m_libraryNote;
+    FolderEntry m_folderEntry = FolderEntry::None;
+    bool m_folderEntryFocus = false;
+    char m_folderBuf[1024] = {};
     GameId m_ps3Game = GameId::Sly2;
     bool m_ps3PickFolder = false;
 };

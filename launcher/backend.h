@@ -129,7 +129,7 @@ struct LauncherBackend {
                 if (config.contains("logging") && !config.at("logging").is_boolean())
                     config.erase("logging");
                 // Launcher preferences fall back to their defaults one by one.
-                for (auto key : {"sly2_iso_path", "sly3_iso_path", "last_game", "sly2_runtime", "browse_dir", "skipped_update"})
+                for (auto key : {"sly2_iso_path", "sly3_iso_path", "last_game", "sly2_runtime", "browse_dir", "skipped_update", "install_dir", "iso_library_dir"})
                     if (config.contains(key) && !config.at(key).is_string()) config.erase(key);
                 // "sly2_wide_backgrounds" (Sly 2's "Widescreen backgrounds", removed 2026-11-05) is ignored and kept as it is.
                 for (auto key : {"show_logs", "start_fullscreen", "sly2_native_preview", "sly3_notice_hidden", "check_updates", "keep_imported_iso"})
@@ -184,6 +184,26 @@ struct LauncherBackend {
         }
     }
     void saveConfig() { writeJson(locations.config / "launcher.json", config); }
+    // Settings > Games "Disc images folder" (launcher.json "iso_library_dir"): searched by the install page
+    // (iso_scan.h, two levels deep) before the usual folders. Empty: not set.
+    fs::path isoLibrary() const {
+        if (!config.contains("iso_library_dir") || !config.at("iso_library_dir").is_string()) return {};
+        const auto dir = path(config.at("iso_library_dir").get<std::string>());
+        return dir.is_absolute() ? dir : fs::path{};
+    }
+    void setIsoLibrary(const fs::path& requested) {
+        fs::path next;
+        if (!requested.empty()) {
+            next = fs::absolute(requested).lexically_normal();
+            std::error_code ec;
+            if (!fs::is_directory(next, ec)) throw std::runtime_error(tr("That folder does not exist."));
+        }
+        const auto oldConfig = config;
+        if (next.empty()) config.erase("iso_library_dir");
+        else config["iso_library_dir"] = utf8(next);
+        try { saveConfig(); }
+        catch (...) { config = oldConfig; throw; }
+    }
     // "Don't show again" on the Sly 3 early-development notice before Play (launcher.json "sly3_notice_hidden").
     bool sly3NoticeHidden() const { return config.value("sly3_notice_hidden", false); }
     void hideSly3Notice() {
@@ -241,6 +261,7 @@ struct LauncherBackend {
         if (chosen.empty()) config.erase("install_dir");
         else {
             const fs::path root = installRootFor(chosen);
+            checkWritableFolder(root);
             if (folders::detail::comparable(root) == folders::detail::comparable(defaultInstallRoot())) config.erase("install_dir");
             else config["install_dir"] = utf8(root);
         }
@@ -250,6 +271,23 @@ struct LauncherBackend {
             config = previous;
             throw;
         }
+    }
+    // The install root must be able to take files: a write test in it, or in its nearest existing parent folder when
+    // it is not there yet (permission bits alone do not tell, e.g. a read-only mount or a protected drive). Nothing
+    // else is created here; the first install makes the folder.
+    static void checkWritableFolder(const fs::path& root) {
+        std::error_code ec;
+        fs::path where = fs::absolute(root).lexically_normal();
+        while (!fs::exists(where, ec) && where.has_relative_path()) where = where.parent_path();
+        if (!fs::is_directory(where, ec)) throw std::runtime_error(tr("That folder does not exist."));
+        const fs::path probe = where / ".safehouse-write-test";
+        bool ok = false;
+        {
+            std::ofstream out(probe, std::ios::binary | std::ios::trunc);
+            ok = out && (out << "safehouse") && (out.flush(), bool(out));
+        }
+        fs::remove(probe, ec);
+        if (!ok) throw std::runtime_error(tr("SafeHouse cannot write to that folder. Choose another one."));
     }
     std::vector<fs::path> rememberedInstallPaths(GameId game) const {
         std::vector<fs::path> out;
