@@ -40,6 +40,48 @@ private:
     uint64_t m_size = 0;
 };
 
+// An .iso in parts (imageParts): one stream over them, in order.
+class PartsImage final : public DiscImage {
+public:
+    explicit PartsImage(const std::vector<fs::path>& paths) {
+        for (const fs::path& path : paths) {
+            std::error_code ec;
+            Part part{std::ifstream(path, std::ios::binary), m_size, fs::file_size(path, ec)};
+            if (!part.in.is_open() || ec) {
+                m_parts.clear();
+                return;
+            }
+            m_size += part.size;
+            m_parts.push_back(std::move(part));
+        }
+    }
+    bool opened() const { return !m_parts.empty(); }
+    uint64_t size() const override { return m_size; }
+    bool read(uint64_t offset, void* data, size_t size) override {
+        if (offset > m_size || size > m_size - offset) return false;
+        auto* out = static_cast<char*>(data);
+        for (Part& part : m_parts) {
+            if (!size) break;
+            if (offset >= part.start + part.size) continue;
+            const uint64_t within = offset - part.start;
+            const size_t n = size_t(std::min<uint64_t>(size, part.size - within));
+            if (!readAt(part.in, within, out, n)) return false;
+            out += n;
+            offset += n;
+            size -= n;
+        }
+        return size == 0;
+    }
+
+private:
+    struct Part {
+        std::ifstream in;
+        uint64_t start = 0, size = 0;
+    };
+    std::vector<Part> m_parts;
+    uint64_t m_size = 0;
+};
+
 // A CHD's disc: a DVD (2048-byte units), or a CD's data track (its frames' sectors from where their mode puts the
 // user data: 0 for MODE1/2048, 16 for raw MODE1, 24 for raw MODE2 form 1).
 class ChdImage final : public DiscImage {
@@ -123,7 +165,50 @@ bool chdFile(const fs::path& file) {
     return in.read(magic, sizeof(magic)) && std::memcmp(magic, "MComprHD", sizeof(magic)) == 0;
 }
 
+std::vector<fs::path> imageParts(const fs::path& path) {
+    std::error_code ec;
+    std::vector<fs::path> parts;
+    auto numbered = [&](const fs::path& stem, int first, int width) {
+        char number[16];
+        for (int i = first;; ++i) {
+            std::snprintf(number, sizeof(number), "%0*d", width, i);
+            fs::path part = stem;
+            part += number;
+            if (!fs::is_regular_file(part, ec)) break;
+            parts.push_back(part);
+        }
+    };
+    if (fs::is_directory(path, ec)) {
+        numbered(path / "", 0, 2);
+        return parts;
+    }
+    // name.iso.NNN: the first part only (from .0, or from .1 when there is no .0), and at least two
+    const std::string extension = path.extension().string();
+    const std::string digits = extension.size() > 1 ? extension.substr(1) : std::string();
+    if (digits.empty() || digits.size() > 3 || !std::all_of(digits.begin(), digits.end(), [](char c) { return c >= '0' && c <= '9'; }))
+        return {};
+    const int first = std::stoi(digits);
+    fs::path stem = path;
+    stem.replace_extension();
+    stem += ".";
+    if (first == 1) {
+        fs::path zero = stem;
+        zero += std::string(digits.size(), '0');
+        if (fs::exists(zero, ec)) return {};
+    } else if (first != 0) {
+        return {};
+    }
+    numbered(stem, first, int(digits.size()));
+    return parts.size() >= 2 ? parts : std::vector<fs::path>{};
+}
+
 std::unique_ptr<DiscImage> DiscImage::open(const fs::path& file, std::string* error) {
+    if (const std::vector<fs::path> parts = imageParts(file); !parts.empty()) {
+        auto split = std::make_unique<PartsImage>(parts);
+        if (split->opened()) return split;
+        if (error) *error = "The parts of that disc image cannot be opened.";
+        return nullptr;
+    }
     if (chdFile(file)) {
         auto chd = std::make_unique<ChdImage>();
         std::string why = chd->open(file);
@@ -142,10 +227,12 @@ DiscIdentity identifyDiscImage(const fs::path& file) {
     return image ? identifyDisc(image->reader()) : DiscIdentity{};
 }
 
-std::string writeChdAsIso(const fs::path& chd, const fs::path& iso, const std::function<bool(uint64_t, uint64_t)>& progress) {
+std::string writeImageAsIso(const fs::path& source, const fs::path& iso, const std::function<bool(uint64_t, uint64_t)>& progress) {
     std::string error;
-    const std::unique_ptr<DiscImage> image = DiscImage::open(chd, &error);
+    const std::unique_ptr<DiscImage> image = DiscImage::open(source, &error);
     if (!image) return error;
+    const std::string unreadable = chdFile(source) ? "That CHD file is damaged: part of it does not decompress."
+                                                   : "Part of that disc image cannot be read.";
     const uint64_t total = image->size();
     {
         std::ofstream out(iso, std::ios::binary | std::ios::trunc);
@@ -153,7 +240,7 @@ std::string writeChdAsIso(const fs::path& chd, const fs::path& iso, const std::f
         std::vector<char> buffer(1u << 20);
         for (uint64_t done = 0; done < total && error.empty();) {
             const size_t n = size_t(std::min<uint64_t>(buffer.size(), total - done));
-            if (!image->read(done, buffer.data(), n)) error = "That CHD file is damaged: part of it does not decompress.";
+            if (!image->read(done, buffer.data(), n)) error = unreadable;
             else if (!out.write(buffer.data(), std::streamsize(n))) error = "The disc image could not be written (is the drive full?).";
             else {
                 done += n;

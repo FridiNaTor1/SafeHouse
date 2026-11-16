@@ -6,6 +6,7 @@
 #include "textmod.h"
 
 #include <algorithm>
+#include <cctype>
 #include <clocale>
 #include <cmath>
 #include <cstdio>
@@ -13,6 +14,7 @@
 #include <cstring>
 #include <iterator>
 #include <string>
+#include <vector>
 
 int g_nLang = LANG_English;
 int g_nLangChosen = -1;
@@ -35,6 +37,26 @@ bool FRegionLanguages(int& c, uint32_t& vaList)
 
 const char* const s_aszLang[LANG_Max] = {"english", "french", "italian", "german", "spanish", "dutch", "portuguese",
                                         "danish", "finnish", "norwegian", "swedish", "japanese", "korean", "chinese"};
+
+// A converted installation's languages (those installed, in the disc's order); empty on a disc image. (Kept until the
+// manifest's list changes: FLanguageOnDisc asks often.)
+const std::vector<int>& AlangInstalled()
+{
+    static std::vector<std::string> s_aszName;
+    static std::vector<int> s_alang;
+    const std::vector<std::string>& aszName = g_disc.AszLanguages();
+    if (aszName == s_aszName) return s_alang;
+    s_aszName = aszName;
+    s_alang.clear();
+    for (const std::string& name : aszName)
+        for (int lang = 0; lang < LANG_Max; ++lang)
+            if (name.size() == std::strlen(s_aszLang[lang]) &&
+                std::equal(name.begin(), name.end(), s_aszLang[lang], [](char a, char b) {
+                    return std::tolower(static_cast<unsigned char>(a)) == b;
+                }))
+                s_alang.push_back(lang);
+    return s_alang;
+}
 
 // The PC's language (the system locale: LANG / LC_ALL / LC_MESSAGES on Linux, the user locale on Windows) as the
 // console's would be: its ISO 639 code.
@@ -72,8 +94,11 @@ int LanguageOfIso(const std::string& code)
 }
 }
 
+// (a converted installation: the languages installed only (convert.h --languages), so the menus offer no other of the
+// disc's; one left out counts as not on the disc, so the languages folder may still add it, langstore.h)
 int CLanguagesDisc()
 {
+    if (const std::vector<int>& alang = AlangInstalled(); !alang.empty()) return int(alang.size());
     int c = 0;
     uint32_t va = 0;
     return FRegionLanguages(c, va) ? c : 1;
@@ -81,6 +106,8 @@ int CLanguagesDisc()
 
 int LanguageOfDiscIndex(int i)
 {
+    if (const std::vector<int>& alang = AlangInstalled(); !alang.empty())
+        return i >= 0 && i < int(alang.size()) ? alang[std::size_t(i)] : alang[0];
     int c = 0;
     uint32_t va = 0;
     if (!FRegionLanguages(c, va) || i < 0 || i >= c) return LANG_English;

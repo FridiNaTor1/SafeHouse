@@ -27,6 +27,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
@@ -60,8 +61,10 @@ bool FProgress(size_t done, size_t total, const char* stage, const char* file)
     if (!(*s_pprogress)(done, total, stage, file)) s_fCancelled = true;
     return !s_fCancelled;
 }
+bool FConvertCancelled() { return s_fCancelled; }
 #else
 inline bool FProgress(size_t, size_t, const char*, const char*) { return true; }
+inline bool FConvertCancelled() { return false; }
 #endif
 
 // ---------------------------------------------------------------------------------------------------------
@@ -228,6 +231,11 @@ bool FUnravel(uint32_t isector) { return !g_fConvertWholeWorlds && s_mpamark.cou
 // The language tracks (dialog lines, movie sound) as FLAC: --flac / --no-flac, else when the disc has more than one
 // language (the European discs: 11 languages of dialog and movie sound would be 7.8 GB as WAV, 4.9 GB as FLAC)
 bool FConvertFlac() { return g_nConvertFlac >= 0 ? g_nConvertFlac > 0 : CLanguagesDisc() > 1; }
+// A language the conversion keeps (--languages, the Switch installer's choice)
+bool FKeepLanguage(int lang)
+{
+    return g_alangConvert.empty() || std::find(g_alangConvert.begin(), g_alangConvert.end(), lang) != g_alangConvert.end();
+}
 std::map<uint32_t, FILEINFO> s_mpfile;  // by sector
 std::map<uint32_t, uint32_t> s_mpsectorCopy;  // a merged copy's sector -> its file's
 
@@ -757,6 +765,7 @@ bool FConvertAudio(FILEINFO& f, std::vector<uint8_t>& ab, const fs::path& root, 
         json aaudio = json::array();
         for (const auto& [track, t] : mpaudio)
         {
+            if (track > 0 && !FKeepLanguage(track - 1)) continue;
             std::string rel = WithExt(f.path, FConvertFlac() ? ".flac" : ".wav");
             json ea = {{"track", track}};
             if (track > 0)
@@ -811,6 +820,20 @@ bool g_fConvertPs2 = false;
 int g_nConvertFlac = -1;
 bool g_fConvertTextures = true;
 bool g_fConvertWholeWorlds = false;
+std::vector<int> g_alangConvert;
+
+int LanguageOfConvertName(const std::string& name)
+{
+    for (int lang = 0; lang < LANG_Max; ++lang)
+    {
+        const char* sz = s_aszLanguageName[lang];
+        if (name.size() == std::strlen(sz) && std::equal(name.begin(), name.end(), sz, [](char a, char b) {
+                return std::tolower(static_cast<unsigned char>(a)) == std::tolower(static_cast<unsigned char>(b));
+            }))
+            return lang;
+    }
+    return -1;
+}
 
 const char* SzConvertWorldName(int iwrec) { return SzWorldName(iwrec, nullptr); }
 
@@ -858,6 +881,12 @@ int ConvertCommand(const std::string& out)
     const double tCrawl = tNow();
     CheckWorldCodes();
     AssignPaths();
+    if (!g_alangConvert.empty())
+    {
+        bool fAny = false;
+        for (int k = 0; k < CLanguagesDisc(); ++k) fAny = fAny || FKeepLanguage(LanguageOfDiscIndex(k));
+        if (!fAny) { std::fprintf(stderr, "convert: none of those languages is on this disc\n"); return 1; }
+    }
     // the executable and SYSTEM.CNF (the game's data tables; what the disc is)
     const std::string szExe = g_disc.SzExecutable();
     for (const std::string& name : {szExe, std::string("SYSTEM.CNF")})
@@ -878,7 +907,8 @@ int ConvertCommand(const std::string& out)
         uint64_t cbOut = 0;
     };
     std::vector<std::pair<const uint32_t, FILEINFO>*> ajob;
-    for (auto& kv : s_mpfile) ajob.push_back(&kv);
+    for (auto& kv : s_mpfile)   // (the dialog lines of the languages kept: --languages)
+        if (kv.second.kind != "dialog" || FKeepLanguage(kv.second.lang)) ajob.push_back(&kv);
     std::vector<JOBOUT> aout(ajob.size());
     std::vector<std::size_t> aorder(ajob.size());
     for (std::size_t k = 0; k < aorder.size(); ++k) aorder[k] = k;
@@ -891,6 +921,7 @@ int ConvertCommand(const std::string& out)
         JOBOUT& o = aout[i];
         std::string& error = o.error;
         uint64_t& cbOut = o.cbOut;
+        if (FConvertCancelled()) { error = "cancelled"; return; }   // (the Switch installer's Cancel: the jobs not started)
         std::vector<uint8_t> ab(f.fk.cb);
         if (!FReadDisc(isector, 0, ab.data(), ab.size()))
         {
@@ -909,6 +940,9 @@ int ConvertCommand(const std::string& out)
                 return;
             }
         }
+        // (format 1) a movie without the sound tracks of the languages left out
+        if (g_fConvertPs2 && f.kind == "movie" && !g_alangConvert.empty())
+            ab = AbPssKeepTracks(ab, [](int track) { return track == 0 || FKeepLanguage(track - 1); });
         json e = {{"path", f.path}, {"kind", f.kind}, {"sector", isector}, {"disc_size", f.fk.cb}, {"id", f.fk.id}};
         // (format 3) a world as its parts (worldparts.h): the files beside the index, the index at f.path
         if (f.kind == "world" && FUnravel(isector))
@@ -1016,7 +1050,8 @@ int ConvertCommand(const std::string& out)
         worlds.push_back(e);
     }
     json langs = json::array();
-    for (int k = 0; k < CLanguagesDisc(); ++k) langs.push_back(s_aszLanguageName[LanguageOfDiscIndex(k)]);
+    for (int k = 0; k < CLanguagesDisc(); ++k)
+        if (FKeepLanguage(LanguageOfDiscIndex(k))) langs.push_back(s_aszLanguageName[LanguageOfDiscIndex(k)]);
     json manifest = {
         {"game", "sly2"},
         {"format", "sly2-files"},
@@ -1040,7 +1075,7 @@ int ConvertCommand(const std::string& out)
     if (g_fConvertTextures) std::printf("%zu textures written to %s\n", s_setTextureName.size(), s_dirTextures.c_str());
     for (const std::string& s : s_awarning) std::printf("warning: %s\n", s.c_str());
     std::printf("converted %zu files: %.1f MB on the disc, %.1f MB written, %.1f s (crawl and textures %.1f s, files %.1f s, %d threads)\n",
-                s_mpfile.size(), cbDisc / 1048576.0, cbOut / 1048576.0, tNow(), tCrawl, tFiles - tCrawl, pool.Cthread());
+                ajob.size(), cbDisc / 1048576.0, cbOut / 1048576.0, tNow(), tCrawl, tFiles - tCrawl, pool.Cthread());
     return 0;
 }
 
@@ -1080,7 +1115,8 @@ std::vector<uint8_t> AbConvertDialogVag(const std::vector<uint8_t>& abVag, bool 
 #ifdef __SWITCH__
 // The Switch installer's conversion (platform/switch/installer.cpp): the disc image opened and checked, its files
 // converted into out. The textures' PNG dump (for modders) is left out: minutes of the console's CPU, ~80 MB.
-std::string CaneConvertDisc(const std::string& iso, const std::string& out, const CaneConvertProgress& progress)
+std::string CaneConvertDisc(const std::string& iso, const std::string& out, const std::vector<std::string>& languages,
+                            const CaneConvertProgress& progress)
 {
     s_pprogress = &progress;
     s_fCancelled = false;
@@ -1090,12 +1126,36 @@ std::string CaneConvertDisc(const std::string& iso, const std::string& out, cons
     if (!g_disc.FOpen(iso, error)) return error;
     InitLanguage();
     g_fConvertTextures = false;
-    // (WAV, never FLAC: encoding the European discs' dialog in five languages would take the console's CPU a long
-    // time, and the game then decodes no FLAC while playing; it costs some SD space)
-    g_nConvertFlac = 0;
+    // (the disc's formats: the game decodes the PS2's ADPCM as it plays, for almost no CPU; WAV would take three times
+    // the space, and FLAC the console's CPU a long time to encode)
+    g_fConvertPs2 = true;
+    g_alangConvert.clear();
+    for (const std::string& name : languages)
+        if (const int lang = LanguageOfConvertName(name); lang >= 0) g_alangConvert.push_back(lang);
     const int rc = ConvertCommand(out);
+    g_alangConvert.clear();
     if (s_fCancelled) return "cancelled";
     if (rc != 0) return "The conversion stopped with an error.";
     return "";
+}
+
+std::vector<CaneLanguage> CaneDiscLanguages(const std::string& iso, std::size_t* preferred)
+{
+    static const char* const s_aszOwnName[LANG_Max] = {"English", "Fran\u00e7ais", "Italiano", "Deutsch", "Espa\u00f1ol",
+                                                       "Nederlands", "Portugu\u00eas", "Dansk", "Suomi", "Norsk", "Svenska",
+                                                       "Japanese", "Korean", "Chinese"};
+    std::vector<CaneLanguage> alang;
+    std::string error;
+    if (!g_disc.FOpen(iso, error)) return alang;
+    InitLanguage();
+    if (CLanguagesDisc() < 2) return alang;
+    for (int k = 0; k < CLanguagesDisc(); ++k)
+    {
+        const int lang = LanguageOfDiscIndex(k);
+        if (lang < 0 || lang >= LANG_Max) continue;
+        if (lang == g_nLang && preferred) *preferred = alang.size();
+        alang.push_back({s_aszLanguageName[lang], s_aszOwnName[lang]});
+    }
+    return alang;
 }
 #endif

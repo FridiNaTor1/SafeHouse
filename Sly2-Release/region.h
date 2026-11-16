@@ -9,7 +9,8 @@
 // - the languages on the disc (the executable's region table 0x2BFBD0: the USA disc English only, the European
 //   discs 11, the Japanese disc Japanese only), and with two or more of them the title's language menu (the European
 //   build's 0x1DDB68 / 0x1DDFB8 / 0x1DDCA8).
-// The world files hold every language's text and dialog lines; the movies hold every language's sound track.
+// The world files hold every language's text and dialog lines; the movies hold every language's sound track. An
+// installation may keep only some languages' dialog and movie sound (convert.h --languages): it offers only those.
 
 #include <cstddef>
 #include <cstdint>
@@ -34,7 +35,8 @@ extern int g_nLangChosen;
 // for the text only.
 extern int g_nLangVoice;
 
-// orig 0x1A2C48: the disc's languages (its region's list in the executable); orig 0x1A2C98: their count.
+// orig 0x1A2C48: the disc's languages (its region's list in the executable; a converted installation's: those
+// installed, in that order); orig 0x1A2C98: their count.
 int CLanguagesDisc();
 int LanguageOfDiscIndex(int i);
 bool FLanguageOnDisc(int lang);

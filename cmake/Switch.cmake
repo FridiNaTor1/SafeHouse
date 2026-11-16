@@ -9,7 +9,8 @@
 # whose only global symbol is its descriptor (cane_game_<key>, platform/switch/runtime.h). The launcher and the Switch
 # layer (cane_switch) are then linked with both objects.
 #
-# Requires devkitPro's switch-dev and switch-ffmpeg packages (dkp-pacman -S switch-dev switch-ffmpeg) and Python 3.
+# Requires devkitPro's switch-dev and switch-ffmpeg packages (dkp-pacman -S switch-dev switch-ffmpeg), Python 3 and Git
+# (libusbhsfs is fetched: cmake/usbhsfs.cmake).
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS ON)   # newlib hides some POSIX declarations in strict ISO mode
@@ -113,6 +114,9 @@ endif()
 # CHD disc images for the installers (platform/disc_image.h)
 include("${root}/cmake/chd.cmake")
 target_link_libraries(cane_switch PUBLIC cane_chd)
+# USB drives for the installer
+include("${root}/cmake/usbhsfs.cmake")
+target_link_libraries(cane_switch PRIVATE libusbhsfs)
 
 # libnx's switch.specs finds its linker script through the DEVKITPRO environment variable, and GCC's parallel LTO runs
 # make: both are given to the link steps.
