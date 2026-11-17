@@ -1,6 +1,8 @@
 #include <execinfo.h>
-#include <link.h>
+#if defined(__linux__)
+#include <link.h>    // (debug: SLY3_FIELDAUDIT, the module base for caller offsets)
 #include <unistd.h>
+#endif
 #include <map>
 #include <tuple>
 #include <unordered_map>
@@ -357,8 +359,12 @@ struct FIELDAUDIT
     ~FIELDAUDIT()
     {
         uintptr_t base = 0;
+#if defined(__linux__)
         dl_iterate_phdr([](dl_phdr_info* pi, size_t, void* pv) { *static_cast<uintptr_t*>(pv) = pi->dlpi_addr; return 1; }, &base);
         const std::string path = dir + "/reads." + std::to_string(getpid()) + ".tsv";
+#else
+        const std::string path = dir + "/reads.tsv";
+#endif
         if (std::FILE* pf = std::fopen(path.c_str(), "w"))
         {
             for (const auto& [k, c] : mpcount)
