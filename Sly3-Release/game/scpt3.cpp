@@ -80,7 +80,10 @@ const char* SzScptCmd3(int id)
         "geomon", "geomoff", "byclass", "joltcm", "x40", "x41", "eyes", "asegsnd", "asegsndstop", "block45", // 3C
         "openbinoc", "x47", "cmfocus", "cmfocus49", "cmtargets", "cmzoom", "cmsnap", "x4D", "x4E", "block4F", // 46
         "title", "block51", "dialog", "dialogwait", "subreset", "holdfx", "releasefx", "x57", "x58", "pushmusic", // 50
-        "popmusic", "block5B", "murrayhold", "x5D", "x5E", "block5F", "hint", "hintclear", "guardcmd", "x63", // 5A
+        // (0x5C: Murray's button-mash struggle, state 6, once in o_bar_brawl; 0x5D / 0x5E: Bentley's hold (state 8, his
+        // aim) entered / left: AUDIT5 PLAYER5-12)
+        "popmusic", "block5B", "murraystruggle", "bentleyhold", "bentleyholdend", "block5F", "hint", "hintclear", "guardcmd", "x63", // 5A
+        // (0x64..0x67, Murray tossing Bentley: unused in the shipped game, no script of worlds 0, 2..39 has them; AUDIT5)
         "murraytoss", "bentleyjump", "murrayaim", "murrayaimwait", "exit", "x69", "x6A", "x6B", "x6C", "x6D",                  // 64
         "closebinoc", "proxy", "clue70", "clue71", "clue72", "x73", "x74", "booty", "cnstr", "face"};       // 6E
     return id >= 0 && id < 0x78 ? s_asz[id] : "?";

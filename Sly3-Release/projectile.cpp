@@ -337,10 +337,12 @@ void UpdateProjectile(LO* plo)
 }
 
 // orig: 0x0013B1C8 (excluded attachment classes and their descendants, through the candidate's ancestor chain)
+// orig3: 0x0014C778 (table D_00320278, Sly 3 cids: PO 0x32, CARRY 0x71, PROJECTILE 0x59, BOOTY 0x74, TURRET 0x44;
+// the Sly 2 port passed Sly 2's D_002BC9D0 {0x33, 0x64, 0x4F, 0x67} raw: PLAYER / HIDE / 0x4F / COIN in Sly 3)
 bool FStickyProjectileParent(ALO* parent)
 {
     for (LO* p = parent; p; p = p->paloParent)
-        for (CID cid : {0x33, 0x64, 0x4F, 0x67})  // D_002BC9D0
+        for (CID cid : {0x32, 0x71, 0x59, 0x74, 0x44})  // D_00320278
             if (FCidDerivedFrom(p->Cid(), cid)) return false;
     return true;
 }

@@ -19,7 +19,7 @@ uint64_t TickNow()
 
 namespace
 {
-// orig 0x0014D1F8: the factors' product
+// orig 0x0014D1F8: the factors' product (orig3 0x165570: ten factors)
 void UpdateClockRate(CLOCK* pclock)
 {
     pclock->rDt = 1.0f;

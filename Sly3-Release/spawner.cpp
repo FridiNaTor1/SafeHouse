@@ -227,19 +227,21 @@ int NHiddenImpl(const SPAWNER& sp, const glm::vec3& pos, float sDistance)
     return 0;
 }
 
-// orig 0x00173928: a slot freed (k 0: the guard removed; 1: put away, the place kept for 30 s)
+// orig 0x00173928: a slot freed (k 0: the guard removed; 1: put away, the place kept for 30 s) (orig3 0x199118: first
+// no longer the guard's listener (0x13BD88); k 2: the guard left the world by itself (its message 1 / 3, 0x199F80))
 void ReleaseSlot(SPAWNER& sp, SLOT& slot, int k, bool fKeep)
 {
+    if (slot.plo) RemoveLoListener(slot.plo, &sp);
     if (std::getenv("SLY2N_SPAWNDEBUG") && slot.plo)
     {
         const glm::vec3 p = PosLoWorld(slot.plo);
         std::fprintf(stderr, "spawner: slot released (k %d) guard %d at %.0f %.0f %.0f, last drawn %.2f, t %.2f\n", k, slot.plo->oid, p.x, p.y, p.z, slot.tTime, g_clock.t);
     }
     slot.k = k;
-    if (k == 0)
+    if (k == 0 || k == 2)
     {
         slot.tWait = g_clock.t;
-        if (slot.plo) RemoveLo(g_psw, slot.plo);  // vt slot 9
+        if (k == 0 && slot.plo) RemoveLo(g_psw, slot.plo);  // vt slot 9
         if (!fKeep && slot.psrc) slot.psrc->tUntil = g_clock.t;
     }
     else
@@ -293,6 +295,7 @@ void CheckSlots(SPAWNER& sp, const glm::vec3& pos)
             if (std::getenv("SLY2N_SPAWNDEBUG"))
                 std::fprintf(stderr, "spawner: slot's guard %d taken by proxy %d, t %.2f\n", slot.plo->oid,
                              PproxyOfInstance(slot.plo) ? PproxyOfInstance(slot.plo)->oid : -1, g_clock.t);
+            RemoveLoListener(slot.plo, &sp);
             slot.plo = nullptr;
             ReleaseSlot(sp, slot, 0, false);
         }
@@ -415,7 +418,7 @@ LO* PloSpawn(SPAWNER& sp, SOURCE* psrc, const glm::vec3& pos, const glm::mat3& m
     else
     {
         // the place dropped onto the ground (0x173610, D_002BE5F0), the proxies in the game's random order
-        // (NRandInRange 0x11D3F8: each swapped with one at random)
+        // (NRandInRange 0x11D3F8 (orig3 0x11E8F0 (0, n - 1) = NRandom() % n): each swapped with one at random)
         glm::vec3 posGround = pos;
         FDropOnGround(&posGround, 100.0f, -350.0f, true);
         std::vector<LO*> a = sp.aproxy;
@@ -437,8 +440,9 @@ LO* PloSpawn(SPAWNER& sp, SOURCE* psrc, const glm::vec3& pos, const glm::mat3& m
             // ALO's record list (worlds 14 / 32), the physics port)
             if (ALO* pa = dynamic_cast<ALO*>(p))
             {
-                SetAloRotation(pa, mat);  // 0x1F42E0
+                // (orig3 0x199D48: the position (vt slot 34) before the rotation (35))
                 SetAloPos(pa, pos);       // 0x1F40A0
+                SetAloRotation(pa, mat);  // 0x1F42E0
             }
             else if (LOX* px = dynamic_cast<LOX*>(p))
             {
@@ -547,6 +551,22 @@ void UpdateSpawner(LO* p)
                      plo->Cid(), psrc->oid, psrc->kind, posSpawn.x, posSpawn.y, posSpawn.z, g_clock.t, fFlip, matSpawn[0].x, matSpawn[0].y,
                      g_cm.mat[0].x, g_cm.mat[0].y, g_cm.mat[0].z);
     pslot->plo = plo;
+    // (orig3 0x199D48's end: the spawner as the guard's listener, 0x13BD00; its slot 5 0x199F80: the message 1 (out of the
+    // world) or 3 from a step guard (0x3A) frees the guard's slot, 0x1990D0 / 0x199118(k 2))
+    if (static const bool s_fPoll = std::getenv("SLY3_SPAWNPOLL") != nullptr; !s_fPoll)
+        AddLoListener(plo, &sp, [p, plo](int msgk, void*) {
+            if (msgk != 1 && msgk != 3) return;
+            if (!FCidDerivedFrom(plo->Cid(), S3CID(0x38))) return;
+            auto it = s_mpspawner.find(p);
+            if (it == s_mpspawner.end()) return;
+            for (SLOT& slot : it->second.aslot)
+                if (slot.plo == plo)
+                {
+                    if (std::getenv("SLY2N_SPAWNDEBUG")) std::fprintf(stderr, "spawner %d: guard %d's message %d frees its slot, t %.2f\n", p->oid, plo->oid, msgk, g_clock.t);
+                    ReleaseSlot(it->second, slot, 2, false);
+                    return;
+                }
+        });
     pslot->pproxy = PproxyOfInstance(plo);
     pslot->tTime = g_clock.t;
     pslot->psrc = psrc;

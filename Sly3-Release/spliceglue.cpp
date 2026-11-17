@@ -346,6 +346,15 @@ OPTVAL OptvalFromRef(const CRef& ref)
         v.ag = {vec.x, vec.y, vec.z, 0.0f};
         break;
     }
+    case TAGK_Clq: case TAGK_Lm: case TAGK_Smp:
+    {
+        // (s3fix5-ai) a CLQ / LM / SMP value (its floats in order): a splice's seto! of such a field option kept nothing,
+        // e.g. m5_recon's SCPT 3887 module setting the prox job's cylinders' z ranges (STEPGUARD options 488 / 490)
+        v.tagk = ref.m_tagk;
+        const glm::vec3 vec = ref.GetVector();
+        v.ag = {vec.x, vec.y, vec.z, 0.0f};
+        break;
+    }
     case TAGK_Basic:
         // an object (e.g. the job markers' seto! of their task +0x160 at the start, read back at the player's entry)
         v.tagk = S3TAG(0x21);
@@ -908,8 +917,10 @@ CRef RefWorldOption(int bifk, int optid, const CRef* pref)
         if (FWorldOptionFieldRead3(s_optid3Cur))
         {
             auto g = [](int i, float gDef) { return GWorldOptionField3(s_optid3Cur, i, gDef); };
-            if (s_optid3Cur == 988) ref.SetClq({g(0, 0.0f), g(1, 0.0f), g(2, 0.0f), 0.0f});
-            else if (s_optid3Cur == 989) ref.SetLm({g(0, 0.0f), g(1, 1.0f)});
+            // (988 / 989: the SW's defaults of its init 0x25A628, +0x4E00 {0.7, 0.0002, 0} / +0x4E10 {1.0, 1.5}, as
+            // scenesw.cpp reads them; audit 5 CORE5-09)
+            if (s_optid3Cur == 988) ref.SetClq({g(0, 0.7f), g(1, 0.0002f), g(2, 0.0f), 0.0f});
+            else if (s_optid3Cur == 989) ref.SetLm({g(0, 1.0f), g(1, 1.5f)});
             else if (s_optid3Cur == 990) ref.SetLm({g(0, 0.0f), g(1, 0.0f)});
             else ref.SetF32(g(0, 5500.0f));
             return ref;

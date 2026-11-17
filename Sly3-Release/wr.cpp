@@ -19,9 +19,11 @@
 #include "objmethod.h"
 #include "sw.h"
 #include "update.h"
+#include "game/ship3.h"
 
 #include <algorithm>
 #include <cfloat>
+#include <cstddef>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -32,6 +34,8 @@ glm::vec3 PosJtConvert(LO* a, LO* b, const glm::vec3& v);  // jt.h (0x1A6F00)
 // xfmath.h (its SMP clashes with splicetypes.h's through objmethod.h)
 void CalculateSinCos(float rad, float* pgSin, float* pgCos);  // 0x11D608
 float RadNormalize(float rad);                                // 0x11CF60
+float GRandInRange(float gLow, float gHigh);                  // 0x11D448 (orig3 0x11E940)
+float GModPositive(float gDividend, float gDivisor);          // 0x11D898 (orig3 0x11EDB8)
 glm::mat4 MulMatrix4(const glm::mat4& matA, const glm::mat4& matB);  // mat.h (0x11C168)
 glm::mat3 MatRotateAxis(float rad, const glm::vec3& axis);    // 0x11B500
 
@@ -242,6 +246,239 @@ void UpdateWrStateVectors(WR* pwr, WRBG* pwrbg)
     ++pwrbg->nGen;
 }
 
+// ---- class 0x89 (orig3 0x28A788..0x28AFC0) ----
+WR89* Pwr89Of(LO* plo) { return dynamic_cast<WR89*>(plo); }
+
+float GElf(uint32_t va)
+{
+    const uint32_t u = g_disc.U32Elf(va);
+    float g;
+    std::memcpy(&g, &u, 4);
+    return g;
+}
+
+// orig3: 0x0028AFC0 (the current item; fDrain (a set): its waves stopped first)
+void RemoveWrq(WR89* p, WRITEM& item, int i);
+WRITEM* PitemCur(WR89* p, bool fDrain)
+{
+    WRITEM* pitem = &p->aitem[std::clamp(p->iitemCur, 0, 7)];
+    if (fDrain)
+        while (pitem->cq > 0) RemoveWrq(p, *pitem, 0);
+    return pitem;
+}
+
+// orig3: 0x0028A818 (an entry given back: amplitude 0, no owner)
+void ReleaseWre(WR89* p, int iwre)
+{
+    if (iwre < 0 || iwre >= 8) return;
+    p->awre[iwre].gAmpl = 0.0f;
+    p->afOwned[iwre] = false;
+}
+
+// orig3: 0x0028AD48 (wave i of an item ended: its entry released, the later ones moved down; the vacated slot keeps
+// its old values, which 0x28ADC8 reads for an empty queue's fade in)
+void RemoveWrq(WR89* p, WRITEM& item, int i)
+{
+    ReleaseWre(p, item.aq[i].iwre);
+    for (int j = i; j + 1 < item.cq && j + 1 < 2; ++j) item.aq[j] = item.aq[j + 1];
+    --item.cq;
+}
+
+// orig3: 0x0028A7D0 (the first entry without an owner)
+int IwreClaim(WR89* p)
+{
+    for (int i = 0; i < p->cwre && i < 8; ++i)
+        if (!p->afOwned[i])
+        {
+            p->afOwned[i] = true;
+            return i;
+        }
+    return -1;
+}
+
+// orig3: 0x0028A920 (item i's next wave, fading in over dtIn: random wavelength / amplitude / duration / angle; its end
+// pushed past the other items' fades (merged by 0x28A868); the wave a circle along the wind's heading + pi + the
+// angle with the deep-water speed sqrt(wavelength x 278.52); a second wave starts in phase with the first at a
+// quarter of the fade in)
+void StartWrq(WR89* p, int i, float dtIn)
+{
+    WRITEM& item = p->aitem[i];
+    const int iwre = IwreClaim(p);
+    if (iwre < 0 || item.cq >= 2) { if (iwre >= 0) p->afOwned[iwre] = false; return; }
+    WRQ& q = item.aq[item.cq++];
+    q.iwre = iwre;
+    const float sWave = GRandInRange(item.lmWavelength[0], item.lmWavelength[1]);
+    const float gAmpl = GRandInRange(item.lmAmpl[0], item.lmAmpl[1]);
+    float t = GRandInRange(item.lmDuration[0], item.lmDuration[1]);
+    const float radAngle = GRandInRange(item.lmAngle[0], item.lmAngle[1]);
+    // the other items' fades (tFade, tStop), sorted and merged (0x28A868: an overlap takes the later one's end)
+    std::vector<std::pair<float, float>> afade;
+    for (int j = 0; j < p->citem && j < 8; ++j)
+    {
+        if (j == i) continue;
+        for (int k = 0; k < p->aitem[j].cq && k < 2; ++k) afade.emplace_back(p->aitem[j].aq[k].tFade, p->aitem[j].aq[k].tStop);
+    }
+    std::stable_sort(afade.begin(), afade.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+    size_t n = 0;
+    for (size_t k = 0; k < afade.size(); ++k)
+    {
+        if (k == 0) { n = 1; continue; }
+        if (afade[k].first > afade[n - 1].second) afade[n++] = afade[k];
+        else afade[n - 1].second = afade[k].second;
+    }
+    afade.resize(n);
+    const float tNow = g_clock.t;
+    float dtFade = std::min(t - dtIn, item.sFade);
+    for (const auto& f : afade)
+    {
+        const float s = tNow + t;
+        if (f.first <= s && s - dtFade < f.second)
+        {
+            t = f.second + item.sFade - tNow;
+            dtFade = item.sFade;
+        }
+    }
+    q.tStart = tNow;
+    q.tStop = tNow + t;
+    q.tFull = tNow + dtIn;
+    q.tFade = tNow + t - dtFade;
+    WRE& wre = p->awre[iwre];
+    const float rad = RadNormalize(RadWind3() + 3.1415927f + radAngle);
+    const float sSpeed = std::sqrt(sWave * 278.52115f);
+    wre.wrek = 0;
+    wre.stamp = NextStamp(p);
+    float gSin, gCos;
+    CalculateSinCos(rad, &gSin, &gCos);   // (0x11FD70: the cylindrical vector (rad, 1, 0))
+    const float axis[4] = {gCos, gSin, 0.0f, 0.0f};
+    for (int c = 0; c < 4; ++c)
+    {
+        wre.axis[c] = axis[c];
+        wre.vecA[c] = axis[c] * gAmpl;
+        wre.vecB[c] = GElf(0x317550 + 4 * uint32_t(c)) * gAmpl;
+    }
+    wre.rgDot = 1.0f / sWave;
+    wre.gFrequency = item.gSpeed * sSpeed / sWave;
+    if (item.cq < 2) wre.uPhase = 0.0f;
+    else
+    {
+        const float tt = tNow + dtIn * 0.25f;
+        const WRE& wre0 = p->awre[std::clamp(item.aq[0].iwre, 0, 7)];
+        wre.uPhase = GModPositive(wre0.gFrequency * tt + wre0.uPhase - wre.gFrequency * tt, 1.0f);
+    }
+}
+
+// orig3: 0x0028AC30 (each wave's entry amplitude: smoothstep of in / 1 / out)
+void UpdateWrqWeights(WR89* p, int i)
+{
+    WRITEM& item = p->aitem[i];
+    const float tNow = g_clock.t;
+    for (int k = 0; k < item.cq && k < 2; ++k)
+    {
+        const WRQ& q = item.aq[k];
+        if (q.iwre < 0) break;
+        float u;
+        if (tNow < q.tFull) u = (tNow - q.tStart) / (q.tFull - q.tStart);
+        else if (q.tFade < tNow) u = (q.tStop - tNow) / (q.tStop - q.tFade);
+        else u = 1.0f;
+        u = std::isnan(u) ? 0.0f : std::clamp(u, 0.0f, 1.0f);
+        p->awre[q.iwre].gAmpl = u * u * (3.0f - (u + u));
+    }
+}
+
+// orig3: 0x0028ADC8's head (vt slot 53, before 0x289F78): once per clock time the ended waves dropped, an item whose
+// queue is empty, or whose wave started fading, starts the next one (fading in over the last one's fade out), then
+// the amplitudes
+void UpdateWr89Items(WR89* p)
+{
+    if (g_clock.t == p->tLastUpdate) return;
+    const int citem = std::clamp(p->citem, 0, 8);
+    for (int i = 0; i < citem; ++i)
+    {
+        WRITEM& item = p->aitem[i];
+        while (item.cq > 0 && g_clock.t > item.aq[0].tStop) RemoveWrq(p, item, 0);
+    }
+    for (int i = 0; i < citem; ++i)
+    {
+        WRITEM& item = p->aitem[i];
+        const WRQ& q = item.aq[0];
+        if (item.cq == 0 || (item.cq == 1 && q.tFade < g_clock.t)) StartWrq(p, i, q.tStop - q.tFade);
+        UpdateWrqWeights(p, i);
+    }
+}
+
+// orig3: 0x0028AF48 (method 1048, thunk 0x10B148: a new item, current, with its circle entry of amplitude 0)
+void AddWr89Item(WR89* p)
+{
+    if (p->citem >= 8) return;
+    WRITEM& item = p->aitem[p->citem];
+    item.sFade = 1.0f;
+    item.gSpeed = 1.0f;
+    p->iitemCur = p->citem++;
+    AddWrCircleWarp(p);
+    if (p->cwre > 0) p->awre[p->iwreCur].gAmpl = 0.0f;
+}
+
+// the item options 1051..1056 (grf 0x2092 through 0x28AFC0): offset in the item, float count
+struct WRITEMFIELD { int eopid3; uint32_t ib; int cg; };
+constexpr WRITEMFIELD s_aitemfield[] = {{1051, 0x08, 2}, {1052, 0x00, 2}, {1053, 0x10, 2}, {1054, 0x18, 2}, {1055, 0x20, 1}, {1056, 0x24, 1}};
+const WRITEMFIELD* PitemfieldOf(int eopid3)
+{
+    for (const WRITEMFIELD& f : s_aitemfield)
+        if (f.eopid3 == eopid3) return &f;
+    return nullptr;
+}
+float* PgItemField(WRITEM* pitem, uint32_t ib) { return reinterpret_cast<float*>(reinterpret_cast<uint8_t*>(pitem) + ib); }
+static_assert(offsetof(WRITEM, lmAmpl) == 0x08 && offsetof(WRITEM, sFade) == 0x20 && offsetof(WRITEM, gSpeed) == 0x24 && offsetof(WRITEM, cq) == 0x28);
+
+template <int EOPID3> void SetItemFieldT(LO* plo, const CRef& r)
+{
+    WR89* p = Pwr89Of(plo);
+    const WRITEMFIELD* pf = PitemfieldOf(EOPID3);
+    if (!p || !pf) return;
+    float* pg = PgItemField(PitemCur(p, true), pf->ib);
+    if (pf->cg == 1) pg[0] = r.GAsFloat();
+    else { const LM lm = r.GetLm(); pg[0] = lm.gMin; pg[1] = lm.gMax; }
+}
+template <int EOPID3> CRef GetItemFieldT(LO* plo)
+{
+    WR89* p = Pwr89Of(plo);
+    const WRITEMFIELD* pf = PitemfieldOf(EOPID3);
+    if (!p || !pf) return CRef(TAGK_Nil);
+    const float* pg = PgItemField(PitemCur(p, false), pf->ib);
+    CRef ref;
+    if (pf->cg == 1) ref.SetF32(pg[0]);
+    else ref.SetLm({pg[0], pg[1]});
+    return ref;
+}
+template <int... AN> void RegisterItemFields(std::integer_sequence<int, AN...>)
+{
+    ((RegisterObjectSetter3(AN, SetItemFieldT<AN>), RegisterObjectGetter3(AN, GetItemFieldT<AN>), 0), ...);
+}
+struct INITWR89
+{
+    INITWR89()
+    {
+        RegisterObjectMethod3(0x10B148, [](LO* plo, const std::vector<CRef>&) {
+            if (WR89* p = Pwr89Of(plo)) AddWr89Item(p);
+            return CRef(TAGK_Void);
+        });
+        RegisterObjectGetter3(1049, [](LO* plo) {
+            CRef ref;
+            ref.SetS32(Pwr89Of(plo) ? Pwr89Of(plo)->citem : 0);
+            return ref;
+        });
+        RegisterObjectGetter3(1050, [](LO* plo) {
+            CRef ref;
+            ref.SetS32(Pwr89Of(plo) ? Pwr89Of(plo)->iitemCur : 0);
+            return ref;
+        });
+        RegisterObjectSetter3(1050, [](LO* plo, const CRef& r) {
+            if (WR89* p = Pwr89Of(plo)) p->iitemCur = r.m_tagk == TAGK_F32 ? static_cast<int>(r.m_g) : r.m_n;
+        });
+        RegisterItemFields(std::integer_sequence<int, 1051, 1052, 1053, 1054, 1055, 1056>{});
+    }
+} s_initwr89;
+
 struct INITWR
 {
     INITWR()
@@ -334,12 +571,20 @@ void AddWrCircleWarp(WR* pwr)
     }
 }
 
+// orig3: 0x0028A788 (0x89's slot 7: the WR's init 0x289678, then a circle entry (D_00317530) of amplitude 0)
+WR89::WR89()
+{
+    AddWrCircleWarp(this);
+    if (cwre > 0) awre[0].gAmpl = 0.0f;
+}
+
 // orig3: 0x0028A588 (0x28A480(1, 1): a constant entry)
 void AddWrBendWarp(WR* pwr) { PwreAddWr(pwr, 1, 1); }
 
 // orig3: 0x00289F78 (vt slot 53)
 void UpdateWrMatrixes(WR* pwr, WRBG* pwrbg)
 {
+    if (WR89* p89 = dynamic_cast<WR89*>(pwr)) UpdateWr89Items(p89);   // (0x89's slot 53, 0x28ADC8)
     if (pwrbg && pwrbg->stamp != pwr->stamp) UpdateWrStateVectors(pwr, pwrbg);
     if (g_clock.t == pwr->tLastUpdate) return;
     for (int i = 0; i < pwr->cwre; ++i)
@@ -415,6 +660,17 @@ void UpdateWrMatrixes(WR* pwr, WRBG* pwrbg)
                         e.stamp, e.axis[0], e.axis[1], e.axis[2], e.vecA[0], e.vecA[1], e.vecA[2], e.vecB[0], e.vecB[1], e.vecB[2], e.rgDot,
                         e.gFrequency, e.uPhase);
         }
+        if (const WR89* p89 = dynamic_cast<const WR89*>(pwr))
+            for (int i = 0; i < p89->citem && i < 8; ++i)
+            {
+                const WRITEM& it = p89->aitem[i];
+                std::printf("  item %d wavelength %g %g ampl %g %g duration %g %g angle %g %g fade %g speed %g waves %d", i, it.lmWavelength[0],
+                            it.lmWavelength[1], it.lmAmpl[0], it.lmAmpl[1], it.lmDuration[0], it.lmDuration[1], it.lmAngle[0], it.lmAngle[1], it.sFade,
+                            it.gSpeed, it.cq);
+                for (int k = 0; k < it.cq && k < 2; ++k)
+                    std::printf(" [wre %d %.2f %.2f %.2f %.2f]", it.aq[k].iwre, it.aq[k].tStart, it.aq[k].tFull, it.aq[k].tFade, it.aq[k].tStop);
+                std::printf("\n");
+            }
         for (const WRBG* pw : pwr->apwrbg)
             std::printf("  block of %d glob %d wek %d cmat %d dpos %d duv %d inside %d stamp %d states %zu\n", pw->palo ? pw->palo->oid : -1, pw->iglob,
                         pw->wek, pw->cmat, pw->fDpos, pw->fDuv, int(pw->fInside), pw->stamp, pw->astate.size());
@@ -471,6 +727,15 @@ void CloneWrData(const LO* ploSrc, LO* ploDst)
     pd->apwrbg = ps->apwrbg;
     pd->ploAnchor = ps->ploAnchor;
     pd->oidAnchor = ps->oidAnchor;
+    const WR89* ps89 = dynamic_cast<const WR89*>(ploSrc);
+    WR89* pd89 = dynamic_cast<WR89*>(ploDst);
+    if (ps89 && pd89)
+    {
+        pd89->citem = ps89->citem;
+        pd89->iitemCur = ps89->iitemCur;
+        std::copy(std::begin(ps89->aitem), std::end(ps89->aitem), std::begin(pd89->aitem));
+        std::copy(std::begin(ps89->afOwned), std::end(ps89->afOwned), std::begin(pd89->afOwned));
+    }
 }
 
 // The loader's options of a WR (Sly 3 EOPIDs: the entry fields 1035..1044 and the current entry 1046)
@@ -482,6 +747,19 @@ bool FLoadWrOption(LO* plo, int eopid, const float* ag, int n)
     {
         pwr->iwreCur = n;
         return true;
+    }
+    if (WR89* p89 = Pwr89Of(plo))
+    {
+        if (eopid == 1050)
+        {
+            p89->iitemCur = n;
+            return true;
+        }
+        if (const WRITEMFIELD* pf = PitemfieldOf(eopid))
+        {
+            std::memcpy(PgItemField(PitemCur(p89, true), pf->ib), ag, sizeof(float) * size_t(pf->cg));
+            return true;
+        }
     }
     const WRFIELD* pf = PwrfieldOf(eopid);
     if (!pf) return false;

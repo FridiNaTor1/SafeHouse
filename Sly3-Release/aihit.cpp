@@ -327,7 +327,7 @@ void JOBREACT::NextReaction()
     }
     else if (pg->fFA8 != 0 || pg->fF94 != 0)  // 0x177D20 (orig3 0x19AED0)
         m.k = 0xC;
-    else if (pg->n108C != 0 && pg->plo108C && pg->plo108C->fInWorld)  // orig3 0x19AF20 (any guard)
+    else if (pg->n108C != 0 && pg->plo1190 && pg->plo1190->fInWorld)  // orig3 0x19AF20 (any guard: the list and its object)
         m.k = 15;
     else if (FTargetReaction3(&m)) {}
     else if (msg.k >= 6 && msg.k < 11)

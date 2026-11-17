@@ -199,7 +199,8 @@ struct JOBPROX : AIJOB
 {
     int st = -1;                  // +0x30
     float tSt = 0;                // +0x34
-    LO* plist = nullptr;          // +0x38 the command list (the guard's +0x108C)
+    LO* plist = nullptr;          // +0x38 the command list (orig3: the guard's +0x1164; native n108C / plo108C)
+    LO* ploTarget = nullptr;      // +0x3C the object measured (orig3: the guard's +0x1190, set with the list)
     void Init() override;
     void Enter() override;
     void Exit() override;
@@ -332,12 +333,15 @@ struct JOBFOLLOW : AIJOB
     LO* ploArg = nullptr;         // +0xC8 (the go-to's +0xA8: faced at the end)
     glm::vec4 posMoved{0.0f};     // +0xD0
     float tLeft = 1.5f;           // +0xE0
+    int fFree = 0;                // (orig3 follower +0xA0: a free run: the step neither stops at the arrival nor clamps
+                                  // at the path's end, 0x1D8140; set by the walk 0x157A80 / the go-to 0x1D77E0)
     void Init() override;
     void Enter() override;
     void Update() override;
     void SetState(int n) override;
     void Steer177F78();           // orig 0x177F78
     void Update1789F8();          // orig 0x1789F8
+    void Update89B0();            // orig3 0x1D89B0 (Sly 3's: the step, the state by the radius; no nav-way states)
     bool FArrived() const;        // orig 0x178D00
     void Follow(const CRV* pcrv, int fReverse);  // orig 0x178D90
     bool FStuck() const;          // orig 0x1792E8
@@ -407,6 +411,8 @@ struct JOBGOTO : AIJOB
     std::vector<void*> anode;     // +0xB4 / +0xB8 the found path's nodes (0x1C21D8)
     int fDirect = 0;              // +0xBC
     int fC0 = 0;                  // +0xC0
+    int fFree = 0;                // (orig3 +0x94: the path step's goal was not clamped at the curve's end (0x1D9500);
+                                  // the follower of state 1 runs free, 0x1D77E0)
     void Init() override;
     void Enter() override;
     void Exit() override;

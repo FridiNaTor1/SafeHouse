@@ -941,24 +941,8 @@ void SetSlyMode(SLY* p, int n)
         break;
     case 10: MarkAloDirty(palo); paseg = PPart<ASEG>(palo, 0x14D4); break;
     case 11: MarkAloDirty(palo); paseg = PPart<ASEG>(palo, 0x14D8); break;
-    case 12: case 13: case 14: case 15: case 16: case 17: case 18: case 19: case 20: case 21:
-    case 22: case 23:
-        dtSeek = F32(0x3D888889);                          // 0x2BF43C
-        p->t19B0 = g_clock.t + F32(0x3E088889);           // 0x2BF440
-        p->f18EC = n < 22 ? 1 : 0;
-        paseg = PPart<ASEG>(palo, n < 22 ? 0x1CE0 + 4 * static_cast<uint32_t>(n - 12) : (n == 22 ? 0x1D14 : 0x1D18));
-        // (Sly 3, interim until its cane (a new combo system, orig3 0x1E24.. / 0x1EC8..: 12-byte records) is ported:
-        // Sly 2's ten swing clips +0x1CE0.. are not in Sly 3's tables; its combo swings 339..342 (1.5 s) and the
-        // 290..292 (1 s) stand in)
-        if (!paseg && n < 22)
-        {
-            const int k = n - 12;
-            const uint32_t ib3 = k < 4 ? 0x1E24 + 0xC * uint32_t(k) : k < 7 ? 0x1EC8 + 0xC * uint32_t(k - 4) : 0x1E24 + 0xC * uint32_t((k - 7) % 4);
-            paseg = PPart<ASEG>(palo, FN3_TAG | ib3);
-        }
-        if ((n < 14 || n >= 22) && p->jts == 0 && p->psmIdle && IsmsFindSm(p->psmIdle, 0x17B) >= 0 && p->psma)
-            SetSmaState(p->psma, 0x17B);  // 0x1F0400 / 0x1F09D8
-        break;
+    // (Sly 2's swing modes 12..23 (its clips +0x1CE0.., the idle SM state 0x17B) were here: Sly 3 sets only the modes
+    // 0 / 1 / 2 / 10 / 11 and has no swing modes, so they went as dead code with Sly 2's numbers: AUDIT5 PLAYER5-13)
     default:
         WarnOnce("SetSlyMode: mode " + std::to_string(n));
         break;
@@ -1150,8 +1134,6 @@ void SetSlyState(SLY* p, int n, int m)
             case 6: SetSlyMode(p, 4); break;
             case 7: SetSlyMode(p, 5); break;
             case 8: case 9: SetSlyMode(p, -1); break;
-            case 12: if (m != SubN2WindUpL) SetSlyMode(p, 0xE); break;
-            case 13: if (m != SubN2WindUpR) SetSlyMode(p, 0xF); break;
             default: break;
             }
             ActorNextLookTime(p);  // 0x155328
@@ -1352,7 +1334,8 @@ void SetSlyState(SLY* p, int n, int m)
             // orig3 0x1ADDD0 case 0x18: the map held up by Sly (0x279120, game/treasuremap3.cpp), still
             FHoldTreasureMap3(palo);
             p->vecVel = glm::vec3(0.0f);
-            fKeepAnim = true;   // (the map's substates 8 / 9 own the animation: the map mode's)
+            SetAloVelocityTo(palo, glm::vec3(0.0f));
+            SetAloAngVelocityTo(palo, glm::vec3(0.0f));
             break;
         case Boots:
             grfapl = 9;
@@ -1463,10 +1446,17 @@ void SetSlyState(SLY* p, int n, int m)
             fKeepAnim = true;
             break;
         case SubMapUp: case SubMapClip:
-            // TODO(player): the map's clips +0x1E70 / +0x1E74 / +0x1E78 (natively treasuremap3.cpp)
+        {
+            // orig3 0x1ADDD0 substates 8 / 9: the map held up (+0x1E70, grfapl 9), the step (+0x1E74 after an odd
+            // number of steps, else +0x1E78; the map's +0x27C before this step is counted) (AUDIT5 PLAYER5-08)
+            const uint32_t ib = m == SubMapUp ? 0x1E70u : (NMapSteps3() & 1) ? 0x1E74u : 0x1E78u;
+            ASEG* pa3 = PPart<ASEG>(palo, FN3_TAG | ib);
+            if (!pa3) pa3 = PPart<ASEG>(palo, ib);
+            if (pa3) { paseg = pa3; if (m == SubMapUp) grfapl = 9; }
+            else fKeepAnim = true;
             grfHandles = 0x18;
-            fKeepAnim = true;
             break;
+        }
         // Sly 2's substates (no Sly 3 substate)
         case SubN2WindUpL: case SubN2WindUpR:
             SetSlyMode(p, -1);  // 0x18E540
@@ -1538,7 +1528,7 @@ void UpdateSlyTransitions(SLY* p)
         switch (jtsOld)
         {
         case Interact: fFall = !(p->n4C8 == 12 || (p->n4C8 < 5 && (p->n4C8 >= 3 || p->n4C8 == 1))); break;
-        case Attack: fFall = sly3::FCombo3DefMoves(p); break;   // (TODO(player): or +0x10F8)
+        case Attack: fFall = sly3::FCombo3DefMoves(p); break;   // (TODO(player): or Sly 3's JT +0x10F8, whose writer is not found)
         case Stand: case Run: case Walk: case Target: case Sneak: case Pickpocket: case Throw: fFall = true; break;
         default: break;
         }
@@ -1576,8 +1566,8 @@ void UpdateSlyTransitions(SLY* p)
             if (FBtnTake(p, BTN_CROSS, 0.1f))
             {
                 if (fCarm) { if (FPcCarmCanJump()) { SetJumpKind(&p->jump, 1, 0, 0); PcCarmJumped(p->palo, false); } break; }
-                // (an outfit worn: Sly 3's jump kind 0x11; the native jump kinds are Sly 2's (0x11 its Hover Pack): 1)
-                SetJumpKind(&p->jump, 1, 0, 0);
+                // (orig3 0x1AC098: an outfit worn: Sly 3's jump kind 0x11, natively c_jkOutfit3 (jump.h); else 1)
+                SetJumpKind(&p->jump, fOutfit ? c_jkOutfit3 : 1, 0, 0);
                 break;
             }
             if (fCarm && FBtnTake(p, BTN_CIRCLE, F32(0x3E4CCCCD)))
@@ -1615,7 +1605,7 @@ void UpdateSlyTransitions(SLY* p)
                 // disguise (a deviation of s3fix-player2) dropped; the guards' sight of a disguised player is the detector's
                 // 0x170580 with 0x2544E0's kind 1 (detect.cpp))
                 if (fCarm) SetSlyState(p, Run, -1);
-                else if (fWalk && !(fOutfit && !FSlyWalkForced3(p))) SetSlyState(p, Walk, -1);
+                else if (fWalk && !fOutfit) SetSlyState(p, Walk, -1);   // (orig3 0x1AC098: an outfit runs, +0x13E8 too: AUDIT5 PLAYER5-09)
                 else SetSlyState(p, !fOutfit && fSneak ? Sneak : Run, -1);
             }
             else SetSlyState(p, !fOutfit && fSneak ? Sneak : Stand, -1);
@@ -1657,8 +1647,9 @@ void UpdateSlyTransitions(SLY* p)
             if (!p->pasega || FAsegaRetracted(p->pasega)) SetSlyState(p, Stand, -1);
             break;
         case ScriptAnim:
-            // a script's animation (+0x113C) done, else its state machine (+0x1140) done: stand
-            if (p->pasega ? FAsegaRetracted(p->pasega) : (p->psma && FSmaRetracted(p->psma))) SetSlyState(p, Stand, -1);
+            // a script's animation (+0x113C) done, or its state machine (+0x1140) done (orig3 0x1AC098 case 15: also while
+            // a clip runs, AUDIT5 PLAYER5-09): stand
+            if ((p->pasega && FAsegaRetracted(p->pasega)) || (p->psma && FSmaRetracted(p->psma))) SetSlyState(p, Stand, -1);
             break;
         case HangFollow:
             // on a kind-3 hook: cross jumps toward its target (kind 0xC, climbsurf.cpp)
@@ -1923,7 +1914,11 @@ void UpdateSlyInput(SLY* p)
     }
     case Boots: UpdateSlySlideInput(p); break;
     case RideOn: break;   // (the face buttons to the password job 0xE7 (0x18C5A8): natively its pad hold, aipassword3.cpp)
-    case Map: break;      // (TODO(player): jtbs 8 the heading toward the map's, 9 its clip's root velocity)
+    case Map:
+        // orig3 0x1AD1D0 case 24: substate 8's heading is set by the map mode (game/treasuremap3.cpp TakePadForMap3, which
+        // has the pad); substate 9: the step clip's root velocity, reversed (0x24F278)
+        if (p->jtbs == SubMapClip) p->vecVel = VecSlyRootReversed(p, p->pasega);
+        break;
     case Walk: case Climb: case ScriptSm: case HangFollow: case Throw: case Attack: case Carried: case Ride: break;
     // Sly 2's states (no Sly 3 state)
     case N2Hypno:
@@ -2261,6 +2256,12 @@ int NActorNoisyState(ACTOR* pa)
         if (sly3::FCombo3Noisy(psly)) return 1;
         switch (psly->jts) { case jts::Walk: case jts::Target: case jts::Dodge: return 1; default: return -1; }
     }
+    // orig3: Bentley's / Murray's slot 112 (0x13F290 / 0x1E0A78) start with 0x1530F8 too (AUDIT5 PLAYER5-03)
+    if (dynamic_cast<BENTLEY*>(pa) || dynamic_cast<MURRAY*>(pa))
+    {
+        if (FScripts3Active() && FPlayersPausedSel3(int(pa->palo->U32Field(0, 0x130, 0xFFFFFFFFu)))) return 0;
+        if (sly3::FCombo3Noisy(pa)) return 1;
+    }
     if (BENTLEY* pb = dynamic_cast<BENTLEY*>(pa))
     {
         switch (pb->state) { case BS3_Walk: case BS3_Push: case BS3_Push6: case BS3_Push7: case BS3_Adrenaline: return 1; default: return -1; }   // (orig3 0x13F290)
@@ -2269,7 +2270,8 @@ int NActorNoisyState(ACTOR* pa)
     {
         switch (pm->state)
         {
-        case 1: case 12: return 1;
+        case 1: case 12: return 1;   // (orig3 0x1E0A78 on the native numbering: Sly 3's 1 / 13, 5, 10 = native 1 / 12, 5, 9)
+        case 5: return pm->n1458 == 2 ? 1 : -1;   // the noisy carry move (Sly 3's +0x1594 == 2)
         case 9: return pm->n17F4 ? 1 : -1;
         default: return -1;
         }

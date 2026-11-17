@@ -243,6 +243,7 @@ GRAPPLE3* Pgrapple(LO* plo)
 }
 
 // the loaded options and the post-load 0x2855B8 (after the object's load: its sub-objects exist then)
+bool FAcceptGrappleContact(ALO* palo, CTMSG* pctm);   // (vt slot 78, below)
 void ResolveGrapple(GRAPPLE3& g)
 {
     LO* plo = g.palo;
@@ -295,6 +296,21 @@ void ResolveGrapple(GRAPPLE3& g)
     // through (0x13BD00: natively the barriers' own list, barrier.cpp, by the object's oid)
     SetAloGravity(g.palo, glm::vec3(0.0f));
     if (SM* psm = dynamic_cast<SM*>(PloFindSwNearest(plo, 0x27D))) ReplaceSmaHandle(psm, g.palo, -1, 0, &g.psma);
+    // (orig3 0x2855B8's 0x13BD00(barrier, camera): the camera listens to its barrier; its slot 5 0x285980 hands a contact
+    // the barrier accepted (message 12, native 0xB, whose receiver is the barrier) to the camera's hit slot 78 0x286E38)
+    if (g.barrier && !std::getenv("SLY3_GRAPPLENOBARRIERHIT"))
+    {
+        LO* pbarrier = g.barrier;
+        ALO* palo = g.palo;
+        RemoveLoListener(pbarrier, palo);
+        AddLoListener(pbarrier, palo, [pbarrier, palo](int msgk, void* pv) {
+            struct MSG { ALO* pso; LO* ploSender; CTMSG* pctm; };
+            const MSG* pm = static_cast<const MSG*>(pv);
+            if (msgk != 0xB || !pm || pm->pso != pbarrier || !pm->pctm) return;
+            if (FPrint()) std::printf("grapple3: %d's barrier %d hit by %d\n", palo->oid, pbarrier->oid, pm->ploSender ? pm->ploSender->oid : -1);
+            FAcceptGrappleContact(palo, pm->pctm);
+        });
+    }
     if (g.hook) SetAloGravity(g.hook, glm::vec3(0.0f));   // (the hook's post-load 0x287AC0)
     // the webcam weapon (0x285648: the progress "powerUps" "fAcquiredWebcamWeapon")
     g.fWeapon = GrappleProgressWeapon3();
@@ -1340,3 +1356,19 @@ void LeaveGrapple3(LO* pcam)
 // (player3.cpp NPlayerCamKind3) the current player object is a Grapple-Cam (Camera Options' kind 2)
 bool FGrappleCam3(const LO* plo) { return plo && plo->pcls && FIsLoDerivedFrom(const_cast<LO*>(plo), 0x56); }
 void ResetGrapples3() { s_mpgrapple.clear(); }
+// orig3 0x285848 / 0x285890 (vt slots 12 / 24: removed / out of the world, after the bases) post 0x2857D0 (D_00329688):
+// a camera not off (+0x190 != -1) that is not in the world (LO bit 56) or not active (0x1C8610) is let go to the world
+// (0x1C7A00(p, 0, 0x1F)) and blown up (0x286B00(p, 3))
+void OnGrappleLeaveWorld3(LO* plo)
+{
+    if (!Pgrapple(plo) || std::getenv("SLY3_GRAPPLENOLEAVE")) return;
+    PostDeferredCall(plo, 0x2857D0, [](void* object, int) {
+        LO* p = static_cast<LO*>(object);
+        GRAPPLE3* pg = Pgrapple(p);
+        if (!pg || pg->state == -1) return;
+        if (p->fInWorld && FLoActive(p)) return;
+        if (FPrint()) std::printf("grapple3: %d left the world in state %d: let go and blown up (t %.2f)\n", p->oid, pg->state, g_clock.t);
+        SetAloParent(pg->palo, nullptr, nullptr, 0);
+        SetChargeState(*pg, 3);
+    });
+}

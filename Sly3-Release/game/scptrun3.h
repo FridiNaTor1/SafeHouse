@@ -99,8 +99,16 @@ struct SCPTHOST3
     virtual void CutCm() {}  // 0x23
     // the run's camera keys (0x45): the move from a key toward the next ones (StartRunCamera 0x22BB78, the next keys
     // found by 0x22A500); EndRunCamera 0x22BEE8 (a key with the flags 0x60)
-    virtual void StartRunCamera(RUN3& run, const SCPTCMD3& key, const SCPTCMD3* pkeyNext, const SCPTCMD3* pkeyNext2)
-    { (void)run; (void)key; (void)pkeyNext; (void)pkeyNext2; }
+    // (dtKey / dtNext: the keys' move durations +0x28 as 0x22A500 sets them at the key: +0x50, or when it is 0 the sum
+    // of the commands that follow up to the next key (0x22A670); -1: the file's +0x50)
+    virtual void StartRunCamera(RUN3& run, const SCPTCMD3& key, const SCPTCMD3* pkeyNext, const SCPTCMD3* pkeyNext2,
+                                float dtKey = -1.0f, float dtNext = -1.0f)
+    { (void)run; (void)key; (void)pkeyNext; (void)pkeyNext2; (void)dtKey; (void)dtNext; }
+    // 0x22A670's terms: a dialog line's length (0x246E40: the sound manager's line +0x50), an ASEG's (0x16: its tMax /
+    // (its speed x the suck polynomial, clamped)), an SM's time to a goal (0x19: 0x23A850 on the object's SM)
+    virtual float DtDialogLine(int id) { (void)id; return 0.0f; }
+    virtual float DtAsegScpt(void* ploAseg) { (void)ploAseg; return 0.0f; }
+    virtual float DtSmGoal(void* plo, int oidSm, int oidGoal) { (void)plo; (void)oidSm; (void)oidGoal; return 0.0f; }
     virtual void EndRunCamera(RUN3& run) { (void)run; }
 
     // tasks (0x1E: ApplyCheckpointTasks(0x36C700, 1, {oid, state}, ctx) 0x185908)
@@ -159,6 +167,10 @@ struct SCPTHOST3
     virtual void ResetActorInteract(void* ploActor) { (void)ploActor; }
     virtual void* PcrvActorInteract(void* ploActor) { (void)ploActor; return nullptr; }
     virtual void SetActorWatchTarget(void* ploActor, const float pos[3], float gSpeed, bool fR1) { (void)ploActor; (void)pos; (void)gSpeed; (void)fR1; }
+    // the actor's progress watch (actor +0x10A0): 0x1573A0 its next check reset (0x30's start), 0x1572A0 its target (0x30's
+    // done test, 0x229438 case 48)
+    virtual void ResetActorWatch(void* ploActor) { (void)ploActor; }
+    virtual void WatchActorTarget(void* ploActor, const float pos[3]) { (void)ploActor; (void)pos; }
     // 0x36 (the actor moves to an object or a point): the object's nav helper 0x1A2A40(plo) and its goal (helper vt
     // slot +0x10/+0x14 (helper, actor, pos)); FActorMovingTo (actor +0x1014 != -1 and +0x101C == plo); the move
     // 0x1C0538(actor, goal {+0 plo, +4 helper, +0x10 pos}); then b4 == 1: actor +0x348 = 0; cid 0x34: +0x19F0 = b8.

@@ -32,6 +32,8 @@
 #include "../cm.h"
 #include "../cmworld.h"
 #include "../crv.h"
+#include "../disc.h"
+#include "../animfind.h"
 #include "../lo.h"
 #include "../nav.h"
 #include "../bif.h"
@@ -70,6 +72,7 @@
 #include <functional>
 #include <stdexcept>
 #include <string>
+#include <cstring>
 #include <unordered_map>
 #include <vector>
 
@@ -203,7 +206,7 @@ struct SHIP3
     SOE* psoeResource = nullptr;              // +0x560: the collision entry with that tag (0x23F3B8)
     std::vector<int> acidCollide;             // +0x51C (2013, at most 4): the classes it collides with
     std::vector<int> aoidCollide;             // +0x530 (2014): the objects (or aliases)
-    float tLastHit = -1.0f;                   // +0x458
+    float tLastSeen = -1.0f;                  // +0x458: the last time a camera saw it (the draw slot 21 0x214858)
     bool fFaded = false;                      // (mode 7: the fade-out started)
     glm::mat4 matPrev{0.0f};                  // (the last frame's matrix: the deck's carry of a copy's character)
     unsigned grfAuto = 0;                     // (the harness: SLY3_GALLEONAUTO's steering for this ship's seat)
@@ -1954,6 +1957,9 @@ NATIVEFN3(0x214370, FAcceptShipContact);
 NATIVEFN3(0x213F08, ResetShip);
 }  // namespace
 
+// the wind's heading (D_0047A2C8, SW +0x4E48): also the warp items' wave direction (wr.cpp, orig3 0x28A920)
+float RadWind3() { return WindHeading(); }
+
 bool FShip3(const LO* plo) { return plo && plo->pcls && FIsLoDerivedFrom(plo, CID_SHIP); }
 
 // orig3 0x002151E8 (vt slot 90, a power-up given (the SO option 947, 0x10A4A0)): a ship whose character has its pad
@@ -2595,3 +2601,248 @@ void ParkBeside3(LO* plo)
 void UpdateShipBattle3() { UpdateBattle(); }
 int CShipsSunkHud3() { return Battle().cSunkHud; }
 int CShipsLeftHud3() { BATTLE3& b = Battle(); return b.state > 0 ? CItemsLeft(b) + b.cSunkHud : 0; }
+
+// ---- the ship spawner (class 0x9A, p_at_sea's 50640; orig3 0x21A8F0..0x21B320, AUDIT5 MODES5-01) ----
+// While the first player's character is a ship sailing (mode 2), once a second (and after each spawn its interval +0x5C,
+// EOPID 1515) a record of its pool (+0x50, +0x4C records: 1513) that is free, else the one whose ship was seen longest
+// ago (more than a second), gets a ship: the nearest sample (every 2000 along each of its paths (+0x44, 1512) in the
+// world and within 40000 of the player's ship, not claimed by another record) out of the camera's view (4000) and
+// in front of the player's ship (within 45 degrees); one of its templates (+0x58, 1514, shuffled) attached there along
+// the path's tangent, sailing (mode 2) back to the path (submode 1) in the path's direction toward the player's
+// progress, faded in over 0.5 s. A record whose ship (or path) leaves the world lets it go (slot 9) and frees the path;
+// a record's time is when its ship was last seen (+0x458).
+// Off by default until checked against the reference (SLY3_SHIPSPAWNER=1 on): in the survey's m5_battle (ep5_job4120)
+// the spawned ships met the scripted battle (its participant 44989, an instance of the same proxy, was the record
+// recycled while the map screen was up: "battle: 44989 gone, 0 left", the tally then paused the run). The reference's
+// RAM at 32:4121 / 32:4146 (vblank 4600) has the spawner loaded with the same options (230 paths, 2 templates, 3
+// records, interval 1) but no ship out yet; which of the two (the original or this port's "seen" test, 0x18E500 as
+// FInsideCmPlanes on the drawn ship) differs there is open.
+namespace
+{
+struct SPAWNREC3 { LO* plo = nullptr; float t = 0.0f; int ientry = -1; };
+struct SHIPSPAWNER3
+{
+    SW* psw = nullptr;
+    uint32_t serial = 0;
+    std::vector<int> akey;              // (1512: the paths' oids)
+    std::vector<LO*> apath;             // +0x44 records' +4 (0x21AA68: found by oid)
+    std::vector<int> afClaimed;         // +0x44 records' +8
+    std::vector<LO*> atemplate;         // +0x58 (1514, at most 8)
+    std::vector<SPAWNREC3> arec;        // +0x50 (+0x4C: 1513)
+    int cActive = 0;                    // +0x48
+    float interval = 1.0f;              // +0x5C (1515; the init 0x21A8F0: 1)
+    float tNext = 0.0f;                 // +0x60
+};
+std::unordered_map<const LO*, SHIPSPAWNER3> s_mpspawner3;
+bool FSpawnerPrint() { static const bool s_f = std::getenv("SLY3_SHIPSPAWNPRINT") != nullptr; return s_f; }
+bool FLoActive3(const LO* plo) { return plo && plo->fInWorld && !plo->fRemoved; }   // (Sly 3's LO bit 56)
+
+SHIPSPAWNER3* Pspawner3(LO* plo)
+{
+    if (!plo || !g_psw) return nullptr;
+    auto it = s_mpspawner3.find(plo);
+    if (it != s_mpspawner3.end() && it->second.psw == g_psw && it->second.serial == g_psw->serial) return &it->second;
+    SHIPSPAWNER3& sp = s_mpspawner3[plo];
+    sp = SHIPSPAWNER3{};
+    sp.psw = g_psw;
+    sp.serial = g_psw->serial;
+    int crec = 0;
+    for (const OPT& o : plo->aopt)
+        for (const OPTVAL& v : o.aval)
+            switch (o.eopid)
+            {
+            case 1512: if (sp.akey.size() < 256) sp.akey.push_back(v.n); break;   // 0x21AA00
+            case 1513: crec = v.n; break;
+            case 1514: if (LO* p = PloOpt(plo, v); p && sp.atemplate.size() < 8) sp.atemplate.push_back(p); break;   // 0x21AA38
+            case 1515: sp.interval = v.ag[0]; break;
+            default: break;
+            }
+    // the start 0x21AA68: each path found by its oid (0x17E1B8 kind 5), the pool
+    for (int key : sp.akey) sp.apath.push_back(PloFindSwNearest(plo, key));
+    sp.afClaimed.assign(sp.apath.size(), 0);
+    sp.arec.assign(size_t(std::max(crec, 0)), SPAWNREC3{});
+    if (FSpawnerPrint())
+        std::printf("shipspawn3: %d paths %zu templates %zu records %zu interval %.2f\n", plo->oid, sp.apath.size(), sp.atemplate.size(), sp.arec.size(),
+                    sp.interval);
+    return &sp;
+}
+
+// orig3 0x21AB48: the record's ship let go (vt slot 9), its path free again
+void ReleaseSpawnRec3(SHIPSPAWNER3& sp, SPAWNREC3& r)
+{
+    if (r.plo) RemoveLo(g_psw, r.plo);
+    if (r.ientry >= 0 && r.ientry < static_cast<int>(sp.afClaimed.size())) sp.afClaimed[size_t(r.ientry)] = 0;
+    r = SPAWNREC3{};
+    --sp.cActive;
+}
+
+// orig3 0x21AF38: the nearest usable sample of the paths (see above); -1 none
+int IentrySpawnPoint3(SHIPSPAWNER3& sp, LO* ploShip, glm::vec3* ppos, glm::mat3* pmat, int* pfDir)
+{
+    const glm::mat4 matShip = MatOf(ploShip);
+    const glm::mat4 matInv = glm::inverse(matShip);
+    const glm::vec3 posShip(matShip[3]);
+    const uint32_t uBest = g_disc.U32Elf(0x325E28);
+    float best;
+    std::memcpy(&best, &uBest, 4);
+    int ibest = -1;
+    for (size_t i = 0; i < sp.apath.size(); ++i)
+    {
+        LO* path = sp.apath[i];
+        if (sp.afClaimed[i] || !path || !FLoActive3(path)) continue;
+        const CRV* pcrv = PcrvFromLo(path);
+        if (!pcrv) continue;
+        glm::vec3 posNear(0.0f), dirNear(0.0f);
+        float gNear = 0.0f, sNear = 0.0f;
+        NearestCrvAll(pcrv, posShip, &posNear, &dirNear, &gNear, &sNear, nullptr);   // (0x22EA88)
+        if (40000.0f < glm::length(glm::vec2(posShip - posNear))) continue;
+        const float sLen = SLengthCrv(pcrv);
+        const int c = std::max(1, static_cast<int>(sLen * 0.0005f));
+        for (int k = 0; k < c; ++k)
+        {
+            const float s = (float(k) + 0.5f) * 2000.0f;
+            glm::vec3 pos(0.0f), dir(1.0f, 0.0f, 0.0f);
+            EvalCrvS(pcrv, s, &pos, &dir);   // (0x22E330)
+            if (FInsideCmPlanes(&g_cm, pos, 4000.0f)) continue;   // (0x167F60 on the player's camera)
+            const glm::vec3 v(matInv * glm::vec4(pos, 1.0f));     // (0x1C9428: in the ship's frame)
+            if (v.x < 0.0f || v.x < std::fabs(v.y)) continue;
+            const float d = glm::length(glm::vec2(posShip - pos));
+            if (best < d) continue;
+            best = d;
+            ibest = static_cast<int>(i);
+            *ppos = pos;
+            const float rad = std::atan2(dir.y, dir.x);   // 0x1205C8, then 0x11C8C0 (about z)
+            *pmat = glm::mat3(glm::vec3(std::cos(rad), std::sin(rad), 0.0f), glm::vec3(-std::sin(rad), std::cos(rad), 0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+            *pfDir = s < sNear ? (sNear - s) < sLen * 0.5f : sLen * 0.5f < (s - sNear);
+        }
+    }
+    return ibest;
+}
+
+// orig3 0x21B320: a template (shuffled) attached at the point; the ship along the path
+LO* PloSpawnShip3(SHIPSPAWNER3& sp, LO* path, const glm::vec3& pos, const glm::mat3& mat, int fDir)
+{
+    std::vector<int> aorder(sp.atemplate.size());
+    for (size_t i = 0; i < aorder.size(); ++i) aorder[i] = static_cast<int>(i);
+    for (size_t j = 0; j < aorder.size(); ++j) std::swap(aorder[j], aorder[size_t(NRandInRange(0, static_cast<int>(aorder.size()) - 1))]);
+    for (int i : aorder)
+    {
+        LO* p = sp.atemplate[size_t(i)];
+        if (ALO* pa = dynamic_cast<ALO*>(p))
+        {
+            SetAloPos(pa, pos);        // (vt slot 34)
+            SetAloRotation(pa, mat);   // (vt slot 35)
+        }
+        else if (LOX* px = dynamic_cast<LOX*>(p))
+        {
+            px->mat = glm::mat4(mat);
+            px->mat[3] = glm::vec4(pos, 1.0f);
+        }
+        LO* plo = PloAttachProxy(g_psw, p, 2);   // 0x1FBE30(p, 0): a free row (as activate.cpp maps the option 1282)
+        if (!plo) continue;
+        if (SHIP3* ps = PshipOf(plo))
+        {
+            ps->patrolDir = fDir;                 // +0x26C
+            if (ps->patrol != path)               // 0x2172C8
+            {
+                ps->patrol = path;
+                if (ps->submode >= 0 && ps->submode < 2 && path)
+                {
+                    SetSubmode(*ps, -1);
+                    SetSubmode(*ps, 1);
+                }
+            }
+            SetMode(*ps, 2);                      // 0x2159D8
+            SetSubmode(*ps, 1);                   // 0x2171E8
+        }
+        return plo;
+    }
+    return nullptr;
+}
+
+// orig3 0x21ABA8 (vt slot 18)
+void UpdateShipSpawner3(LO* plo)
+{
+    SHIPSPAWNER3* psp = Pspawner3(plo);
+    if (!psp) return;
+    SHIPSPAWNER3& sp = *psp;
+    // 0x21ADF8: the records' ships still out (else let go), their times their last hits
+    for (SPAWNREC3& r : sp.arec)
+    {
+        if (!r.plo) continue;
+        LO* path = r.ientry >= 0 ? sp.apath[size_t(r.ientry)] : nullptr;
+        if (!FLoActive3(r.plo) || !FLoActive3(path)) ReleaseSpawnRec3(sp, r);
+        else if (SHIP3* ps = PshipOf(r.plo))
+        {
+            // (orig3 0x214858, the ship's draw: seen by a camera (0x18E500, its sphere of the length +0x220) -> +0x458 now)
+            if (FAloDrawn(g_psw, ps->palo) && FInsideCmPlanes(&g_cm, PosOf(r.plo), ps->length)) ps->tLastSeen = g_clock.t;
+            r.t = ps->tLastSeen;
+        }
+    }
+    LO* ploPlayer = PloPoCurrent(g_psw);   // (0x1F4AD0(G, 0))
+    SHIP3* pship = ploPlayer ? PshipOf(ploPlayer) : nullptr;
+    static int s_cUpd = 0;
+    if (FSpawnerPrint() && ++s_cUpd % 600 == 1)
+        std::printf("shipspawn3: %d update: player %d (cid 0x%X) ship mode %d active %d t %.2f\n", plo->oid, ploPlayer ? ploPlayer->oid : -1,
+                    ploPlayer ? ploPlayer->Cid() : -1, pship ? pship->mode : -9, sp.cActive, g_clock.t);
+    if (!pship || pship->mode != 2)
+    {
+        sp.tNext = g_clock.t + 5.0f;
+        return;
+    }
+    if (g_clock.t < sp.tNext) return;
+    sp.tNext = g_clock.t + 1.0f;
+    // 0x21AEB0: a free record, else the oldest (its time a second ago or more)
+    SPAWNREC3* prec = nullptr;
+    float tOldest = g_clock.t - 1.0f;
+    for (SPAWNREC3& r : sp.arec)
+    {
+        if (!r.plo) { prec = &r; break; }
+        if (prec && !prec->plo) continue;
+        if (tOldest <= r.t) continue;
+        tOldest = r.t;
+        prec = &r;
+    }
+    if (!prec) return;
+    glm::vec3 pos(0.0f);
+    glm::mat3 mat(1.0f);
+    int fDir = 0;
+    const int ientry = IentrySpawnPoint3(sp, ploPlayer, &pos, &mat, &fDir);
+    if (ientry < 0) return;
+    if (prec->plo) ReleaseSpawnRec3(sp, *prec);
+    LO* plo2 = PloSpawnShip3(sp, sp.apath[size_t(ientry)], pos, mat, fDir);
+    if (!plo2) return;
+    if (FIsLoDerivedFrom(plo2, S3CID(0x30)))
+    {
+        ALO* palo = static_cast<ALO*>(plo2);
+        palo->gFade = 0.01f;   // 0x2413E0 (the fade's value; above 0: in the world)
+        AddLo(g_psw, palo);
+        FadeAloIn(palo, 0.5f);                      // 0x241338
+    }
+    prec->plo = plo2;
+    prec->ientry = ientry;
+    ++sp.cActive;
+    sp.afClaimed[size_t(ientry)] = 1;
+    sp.tNext = g_clock.t + sp.interval;
+    if (FSpawnerPrint())
+        std::printf("shipspawn3: %d spawned %d on path %d at %.0f %.0f %.0f (dir %d, active %d, t %.2f)\n", plo->oid, plo2->oid,
+                    sp.apath[size_t(ientry)] ? sp.apath[size_t(ientry)]->oid : -1, pos.x, pos.y, pos.z, fDir, sp.cActive, g_clock.t);
+}
+
+struct INITSHIPSPAWNER3
+{
+    INITSHIPSPAWNER3() { RegisterLoUpdate(FN3_TAG | 0x21ABA8, UpdateShipSpawner3); }
+} s_initshipspawner3;
+}  // namespace
+
+// (update.cpp's start pass) the spawner's record and its activation (0x21AA68: 0x1C9118(p, 1), always active) with
+// its update on
+void PostLoadShipSpawner3(LO* plo)
+{
+    if (!plo || plo->Cid() != 0x9A || !g_psw) return;
+    if (static const bool s_fOn = [] { const char* sz = std::getenv("SLY3_SHIPSPAWNER"); return sz && *sz == '1'; }(); !s_fOn) return;
+    Pspawner3(plo);
+    SetLoSt(g_psw, plo, 1);
+    if (plo->iupd >= 0) g_psw->aupd[static_cast<size_t>(plo->iupd)].grf |= GRFUPD_Update;
+    else plo->grfUpd |= GRFUPD_Update;
+}

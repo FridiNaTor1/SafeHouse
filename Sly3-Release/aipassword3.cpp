@@ -12,8 +12,8 @@
 // job holds the player (po.cpp g_pfnPadctlTake3: the pad's other readers, the gadgets / the binocucom, see nothing). Lines: the world's dialog table (SW +0x4FB0, entries
 // 0..4: the guard's start / challenge / pass / fail / timeout lines) and the two id bags of 0x25EC70 (+0x60 the tones
 // of the shown buttons, 0x269..0x272; +0x64 the player's wrong answers, 0x273..0x279); the right answer is the
-// challenge row's line (the rows D_00344FC8[episode]). Not natively: the guard state bit 0x40 (Sly 3's state 64 has
-// no Sly 2 state), the proxy row lock (0x1FC118 / 0x1FC060), the talking animations (vt slots 94 / 95), the guard's own
+// challenge row's line (the rows D_00344FC8[episode]). The guard state 0x40 (Sly 3's state 64) is the synthetic native
+// 40 (s3fix5-ai). Not natively: the proxy row lock (0x1FC118 / 0x1FC060), the talking animations (vt slots 94 / 95), the guard's own
 // line table (+0x17C4), the prompt screen object (Sly +0x1F40: 0x260F18 parts 0x3B1..0x3B3 / 0x3AE..0x3B0).
 
 #include "aipassword3.h"
@@ -160,6 +160,7 @@ JOBPASSWORD3::~JOBPASSWORD3() { if (s_pjobHold == this) s_pjobHold = nullptr; }
 void JOBPASSWORD3::Init()
 {
     AIJOB::Init();
+    AddGuardState(pguard, 40);   // (orig3 0x252E40(guard, 0x40): Sly 3's state 64, natively the synthetic 40 (guard3.cpp))
     st = -1;
     stFace = -1;
     idLine = -1;
@@ -179,6 +180,7 @@ void JOBPASSWORD3::Exit()
     AIJOB::Exit();
     SetState(-1);
     SetFace(-1);
+    RemoveGuardState(pguard, 40);   // (orig3 0x252FC0(guard, 0x40))
 }
 
 // orig3 0x18B7F0 (slot 10): the check (0x18B828), then the facing (0x18BEE8: the turn's move done -> stand)

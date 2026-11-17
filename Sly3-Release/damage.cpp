@@ -6,6 +6,7 @@
 #include "objmethod.h"
 #include "booty.h"
 #include "damage.h"
+#include "splitscreen3.h"
 #include "game/suck3.h"
 #include "game/biplane3.h"
 #include "game/ship3.h"
@@ -119,11 +120,23 @@ glm::mat3 MatSender(LO* plo)
 
 // orig: 0x00155228 (the counter's change scaled by the game's suck: 0x154C90 on 0x2DE578's history between its
 // limits, D_002BDC00 +0x20 / +0x24)
-int NScaleDamage(int n)
+// orig3: 0x172268 at the hit's creation (0x240CB0 -> 0x240C78, with the receiver): only a receiver of class 0x31 that a
+// player controls (0x1F4350(o, -1): player 0's or player 1's character) is scaled, by Sly 3's suck (game/suck3.h,
+// 0x171C98) on the row 1 / 0.5, and a positive amount (a hit; Sly 3's heals are negative) stays at least 1. Here at the
+// receiver on the native delta (a loss negative): an AI partner's hits are not scaled, a 1-point hit at full suck stays
+// 1 (AUDIT5 PLAYER5-07; natively every actor was scaled and truncated to 0)
+int NScaleDamage(LO* plo, int delta)
 {
-    // (orig3 0x172268: Sly 3's suck (game/suck3.h, 0x171C98), the row 1 / 0.5; Sly 2's GSuck is 0 here)
+    bool fPlayer = false;
+    if (g_psw && plo)
+        for (int i = 0; i < 2 && !fPlayer; ++i) fPlayer = split3::PloPlayer(g_psw, i) == plo;
+    if (plo && !fPlayer && split3::IExtraPlayerOf(plo) > 0) fPlayer = true;   // (PC: the extra players of the four-player games)
+    if (!fPlayer) return delta;
+    const int amount = -delta;   // (Sly 3's sign)
     const float g = GSuck3();
-    return static_cast<int>(((1.0f - g) * 1.0f + g * 0.5f) * static_cast<float>(n));
+    int v = static_cast<int>(((1.0f - g) * 1.0f + g * 0.5f) * static_cast<float>(amount));
+    if (amount > 0 && v <= 1) v = 1;
+    return -v;
 }
 
 // orig: 0x00144418 (vt slot 86 of the actors: the hit takes at least the capacity and is not a touch (0 / 1),
@@ -956,7 +969,7 @@ bool FAcceptDamage(ACTOR* pa, CTMSG* pctm)
         // the change: none with the actor's authored +0x29C (EOPID 232: e.g. Sly, the AI partner of Boardroom
         // Brawl's battle 10:1591, option 358) or while flashing, else scaled
         if (pa->palo && pa->palo->U32Field(0, 0x29C)) delta = 0;
-        else if (d.nFlash != 1) delta = NScaleDamage(NDamageDelta3(&req));
+        else if (d.nFlash != 1) delta = NScaleDamage(pa->palo, NDamageDelta3(&req));
         if (req.grfFilter == 0x100000)
         {
             // healing

@@ -3,6 +3,7 @@
 #include "pickup.h"
 #include "worldaccess.h"
 #include "game/sly3.h"
+#include "game/suck3.h"
 #include "worldglobals.h"
 
 #include "activate.h"
@@ -650,20 +651,38 @@ void SetOtherPickupState(LO* plo, PICKUP& p, int n)
             {
                 LO* pso = PloPickupCollector3(p);
                 if (!pso || !FCidDerivedFrom(pso->Cid(), sly3::CID_SO)) { n = p.state; break; }
+                // its slot 86: the base SO's 0x1F4830 asks its splice (event 0x10, default yes; neither Carmelita nor
+                // the diver 0x57 overrides it)
+                {
+                    CRef r;
+                    r.SetS32(1);
+                    HandleLoSpliceEvent(pso, 0x10, false, 0, nullptr, &r);
+                    if ((r.m_tagk == TAGK_S32 && r.m_n == 0) || (r.m_tagk == TAGK_Bool && !r.m_bool)) { n = p.state; break; }
+                }
                 GivePickupToCollector3(plo, p);
-                // (then the collector's slot 87 with +0x1AC / +0x1B0: Carmelita's 0x15F740 (s3fix-ai3, AUDIT4 AI-14): the
-                // splice event 0xF (a, b), her health +0x16C + a within 0..+0x170 (natively n33C / n338); her +0x174 (+ b
-                // within +0x178) has no native field)
+                // then its slot 87 with +0x1AC / +0x1B0 (orig3 0x1F48A0, the base SO's: the splice event 0xF (a, b));
+                // Carmelita's 0x15F740 (s3fix-ai3, AUDIT4 AI-14) adds her health +0x16C + a within 0..+0x170 (natively
+                // n33C / n338; her +0x174 (+ b within +0x178) has no native field); the diver's 0x26CCC0 (AUDIT5
+                // MODES5-03) its hit points +0x16C + a (0x1F43D0: within 0..+0x170) and its +0x174 + b (0x1F4438:
+                // within 0..+0x178)
+                const int a = static_cast<int>(plo->U32Field(0, 0x23C, 10)), b = static_cast<int>(plo->U32Field(0, 0x240, 20));
+                {
+                    CRef aref[2];
+                    aref[0].SetS32(a);
+                    aref[1].SetS32(b);
+                    HandleLoSpliceEvent(pso, 0xF, false, 2, aref);
+                }
                 if (FCidDerivedFrom(pso->Cid(), sly3::CID_CARMELITA))
-                    if (GUARD* pg = PguardFromLo(pso))
-                    {
-                        const int a = static_cast<int>(plo->U32Field(0, 0x23C, 10)), b = static_cast<int>(plo->U32Field(0, 0x240, 20));
-                        CRef aref[2];
-                        aref[0].SetS32(a);
-                        aref[1].SetS32(b);
-                        HandleLoSpliceEvent(pso, 0xF, false, 2, aref);
-                        pg->n33C = std::max(0, std::min(pg->n338, pg->n33C + a));
-                    }
+                {
+                    if (GUARD* pg = PguardFromLo(pso)) pg->n33C = std::max(0, std::min(pg->n338, pg->n33C + a));
+                }
+                else if (FCidDerivedFrom(pso->Cid(), 0x57))
+                {
+                    SetSoHealth3(pso, NSoHealth3(pso) + a);
+                    const int nMax = static_cast<int>(pso->U32Field(0, 0x178, 0));
+                    pso->SetField(0, 0x174, static_cast<uint32_t>(std::clamp(static_cast<int>(pso->U32Field(0, 0x174, 0)) + b, 0, std::max(nMax, 0))));
+                }
+                if (FPrint()) std::printf("pickup %d: the charm given to %d (cid 0x%X): hit points %d\n", plo->oid, pso->oid, pso->Cid(), NSoHealth3(pso));
                 StartPickupPe(p.ppeCollect);
                 HandleLoSpliceEvent(plo, 5, false, 0, nullptr);
                 n = 2;
@@ -1309,7 +1328,7 @@ void SpawnPickups(int cid, const glm::vec3& pos, LO* psrc, int n)
 }
 
 // orig: 0x00154E10 (D_002DE578: the world's drop counters: coins +0x0 and charms +0x4 drawn from the table D_002BDC00
-// by the progress fraction 0x154C90 (TODO: the three progress values; 0 natively: only the charms' range depends on it);
+// by the dynamic difficulty (orig3 0x171E50 reads 0x171C98, GSuck3; Sly 2's 0x154C90);
 // a hit counts -1 (a guard's -2) and dn; n < 0: NRandInRange(4, 6) when the coins' counter ran out, else (2, 3); the
 // coins, and a charm when its counter ran out)
 void DropPickups(const glm::vec3& pos, int n, int dn, LO* psrc)
@@ -1321,7 +1340,7 @@ void DropPickups(const glm::vec3& pos, int n, int dn, LO* psrc)
         if (a < b) return a + static_cast<int>(g * ((static_cast<float>(b) + 0.999f) - static_cast<float>(a)));
         return b + static_cast<int>((1.0f - g) * ((static_cast<float>(a) + 0.999f) - static_cast<float>(b)));
     };
-    const float g = GSuck();  // 0x154C90 (task.cpp)
+    const float g = GSuck3();  // orig3 0x171E50: 0x171C98, Sly 3's dynamic difficulty (game/suck3.h)
     if (s_cCoin <= 0) s_cCoin = NRandDrop(nlerp(g, s_atbl[4], s_atbl[6]), nlerp(g, s_atbl[5], s_atbl[7]));
     if (s_cCharm <= 0) s_cCharm = NRandDrop(nlerp(g, s_atbl[8], s_atbl[10]), nlerp(g, s_atbl[9], s_atbl[11]));
     s_cCoin += psrc && FIsLoDerivedFrom(psrc, S3CID(0x38)) ? -2 : -1;

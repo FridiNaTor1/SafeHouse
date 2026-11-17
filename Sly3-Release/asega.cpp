@@ -1,5 +1,6 @@
 #include <execinfo.h>
 #include "game/sly3.h"
+#include "game/suck3.h"
 #include "worldglobals.h"
 // ASEG evaluation and ASEGA (Sly 2 0x12B3B0-0x131E18 and 0x230CF0). Specification: Sly2-Reference/Sly2-Release/game/aseg.cpp,
 // asega.cpp, m_12B3B0_p3.cpp (oracle-verified) and the decomp's func_00130D30, 00131100, 00131A90, 00230CF0
@@ -688,7 +689,7 @@ void ApplyAseg(ASEG* paseg, ALO* palo, float t, float svt, int grfapl, ASEGA** p
     pasega->t = t;
     pasega->grfapl = grfapl;
     pasega->svtAseg = paseg->svt;
-    const float x = GSuck();  // 0x154C90 (task.cpp)
+    const float x = GSuck3();  // orig3 0x136908: 0x171C98, Sly 3's dynamic difficulty (Sly 2: 0x154C90)
     float g = paseg->gSuck0 + x * (paseg->gSuck1 + x * paseg->gSuck2);
     if (g < paseg->gSuckMin) g = paseg->gSuckMin;
     else if (paseg->gSuckMax < g) g = paseg->gSuckMax;

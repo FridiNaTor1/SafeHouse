@@ -17,8 +17,8 @@ void TellGuardCommands(LO* pguard, LO* pcmds, bool fRun)
     GUARD* pg = pguard ? PguardFromLo(pguard) : nullptr;
     JOBREACT* pj = pg ? static_cast<JOBREACT*>(PjobFind(pg, 0x9C)) : nullptr;
     if (std::getenv("SLY2N_SCPTPRINT"))
-        std::fprintf(stderr, "scpt: guard %d (cid 0x%X, guard %p, job 0x9C %p, inworld %d) commands %d (cid 0x%X)\n", pguard ? pguard->oid : -1,
-                     pguard ? pguard->Cid() : 0, static_cast<void*>(pg), static_cast<void*>(pj), pguard ? pguard->fInWorld : 0,
+        std::fprintf(stderr, "scpt: guard %d (cid 0x%X, guard %p, lo %p, job 0x9C %p, inworld %d) commands %d (cid 0x%X)\n", pguard ? pguard->oid : -1,
+                     pguard ? pguard->Cid() : 0, static_cast<void*>(pg), static_cast<void*>(pguard), static_cast<void*>(pj), pguard ? pguard->fInWorld : 0,
                      pcmds ? pcmds->oid : -1, pcmds ? pcmds->Cid() : 0);
     if (std::getenv("SLY2N_SCPTPRINT"))
         if (CMDLIST* pl = dynamic_cast<CMDLIST*>(pcmds))

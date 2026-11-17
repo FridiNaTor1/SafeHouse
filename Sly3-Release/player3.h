@@ -30,7 +30,7 @@ void ActorClimbToward3(ACTOR* pa, float sGoal);
 bool FDriveActorClimb26(ACTOR* pa, PADCTL* pc);
 // orig3 0x22A7F8 cases 93 / 94 (SCPT 0x5D / 0x5E): triangle held on the actor from 0x5D until 0x5E, pressed at its start
 // (m_ext's land beast intro SCPT 4318 [31]: Bentley throws his bomb at the lamp post 15452)
-bool FHold5D3();   // opt-in SLY3_HOLD5D=1 (see player3.cpp)
+bool FHold5D3();   // on by default (SLY3_HOLD5D=0: off; see player3.cpp)
 void SetActorHold5D3(ACTOR* pa, bool fHold);
 void ApplyActorHold5D3(ACTOR* pa, PADCTL* pc);
 }  // namespace sly3

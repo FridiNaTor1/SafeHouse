@@ -5,6 +5,7 @@
 #include "game/scptgame3.h"
 #include "game/scptrun3.h"
 #include "game/sly3.h"
+#include "game/suck3.h"
 #include "worldglobals.h"
 #include "transition.h"
 #include "rumble.h"
@@ -600,8 +601,15 @@ float GCmdDuration(RUN* p, SCPTCMD* pc)
     switch (pc->kind)
     {
     case 0xA:
-        WarnOnce("0x1E4530's ASEG duration");
-        return 0.0f;
+    {
+        // the ASEG's length over its speed times the difficulty's polynomial (orig3 0x22A670 case 0x16: 0x171C98, the
+        // dynamic difficulty, GSuck3)
+        ASEG* paseg = dynamic_cast<ASEG*>(PloFind(p, pc->N(0x10)));
+        if (!paseg) return 0.0f;
+        const float t = GSuck3();
+        const float s = std::clamp(paseg->gSuck0 + t * (paseg->gSuck1 + t * paseg->gSuck2), paseg->gSuckMin, paseg->gSuckMax);
+        return PasegdOf(paseg)->tMax / (paseg->svt * s);
+    }
     case 0x32: return 0.5f;
     case 0x23: case 0x33: return pc->G(0x10);
     case 0x2C: case 0x2D: case 0x53: return pc->G(0x14);

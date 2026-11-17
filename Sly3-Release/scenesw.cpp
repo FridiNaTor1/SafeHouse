@@ -60,8 +60,27 @@ namespace
 std::unordered_map<const LO*, float> s_mptFlinch3;   // (STEPGUARD +0x380)
 bool FFalloffScaleDelta3(const ALO* palo, glm::mat4* pdmat)
 {
-    if (!palo || palo->axf.empty() || g_cm.ccpr <= 0 || !g_cm.acpr[0].pcplcy) return false;
+    if (!palo || palo->axf.empty()) return false;
     const int cid = palo->Cid();
+    // orig3: 0x1479A0 (class 0x7B's draw, vt slot 21; 2 each in h_ext / h_dogfight): for every camera seeing it, its own
+    // groups scaled about its origin by clamp(0.7 + 0.0004 d, 1, 10), d its distance to that camera (AUDIT5 RENDER5-02)
+    if (cid == 0x7B)
+    {
+        static const bool s_fOff7B = std::getenv("SLY3_NODISTSCALE7B") != nullptr;
+        if (s_fOff7B) return false;
+        const glm::mat4& w = palo->axf[0]->matWorld;
+        const float s = std::clamp(0.7f + 0.0004f * glm::distance(glm::vec3(w[3]), g_cm.pos), 1.0f, 10.0f);
+        static const bool s_fPrint7B = std::getenv("SLY3_DISTSCALEPRINT") != nullptr;
+        static int s_cPrint7B = 0;
+        if (s_fPrint7B && ++s_cPrint7B % 60 == 1)
+            std::printf("distscale7b: %d at (%.0f %.0f %.0f) scale %.2f\n", palo->oid, w[3].x, w[3].y, w[3].z, s);
+        if (s == 1.0f) return false;
+        glm::mat4 m(1.0f);
+        m[0][0] = m[1][1] = m[2][2] = s;
+        *pdmat = w * m * glm::inverse(w);
+        return true;
+    }
+    if (g_cm.ccpr <= 0 || !g_cm.acpr[0].pcplcy) return false;
     const bool fGuard = FCidDerivedFrom(cid, 0x3A), fCreature = cid == 0x7E;
     if (!fGuard && !fCreature) return false;
     const CPLCY* pcp = g_cm.acpr[0].pcplcy;

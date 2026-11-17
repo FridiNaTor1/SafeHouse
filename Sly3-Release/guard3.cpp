@@ -40,7 +40,7 @@ namespace
 // (0xB9's), 0xE2 JOBHOLD (op 5 with +0x10F0 2) 58 = 41 (the hold on a class-0x25 object: 0xCB adds 58 for it, JOBUSE 0x29 = 41 for Sly 2's 0x27), 0xE4 JOBLINK (the go-to's state 3) 61 = 44. And Sly
 // 3's new states 8..12 (job 0xEA, the trigger reaction: 0xC with 8 / 9 / 0xA / 0xB) on Sly 2 indices no native code sets
 // (59..63, in Sly 3's order), so their kind entries load and the guard's +0x1144 flags 0x20..0x100 (guardstart.cpp) hold.
-constexpr std::array<std::pair<int, int>, 59> c_aistate32 = {{
+constexpr std::array<std::pair<int, int>, 60> c_aistate32 = {{
     {0, 0}, {1, 1}, {2, 2}, {3, 3}, {4, 4}, {5, 5}, {6, 6}, {7, 7},
     {13, 8}, {14, 9},
     {17, 11}, {18, 12}, {19, 13}, {20, 14}, {21, 15},
@@ -52,7 +52,8 @@ constexpr std::array<std::pair<int, int>, 59> c_aistate32 = {{
     {65, 58},   // (s3-ai) the ridden guard's state 0x41 (job 0xE8, airide3.h: its ride entries {65, n}); no native code sets 58
     {57, 39}, {58, 41},   // (s3fix-ai2: 0xE0 / 0xE2's Init; 0xCB's ladder 0x39 / class-0x25 hold 0x3A = JOBUSE's 0x27 / 0x29)
     {8, 59}, {9, 60}, {10, 61}, {11, 62}, {12, 63},   // (s3fix-ai2: job 0xEA's states)
-    {-1, -1}, {-1, -1},
+    {45, 25}, {62, 45},   // (s3fix5-ai, AUDIT5 AI5-02: the surround 0xDC's Init 0x181F30 adds 0x2D, the settle 0xE5's 0x1D9CA8 0x3E)
+    {64, 40},             // (s3fix5-ai, AI5-03: the password check 0xE7's state 0x40, Sly 2 40 unused natively: synthetic)
 }};
 }  // namespace
 

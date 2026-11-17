@@ -811,6 +811,24 @@ struct INITKINDMETHODS
             pg->avolreact3.push_back(std::move(r));
             return CRef(TAGK_Void);
         });
+        // orig3: 0x104A70 -> 0x163D30 (STEPGUARD option 485, EOPID 358; arguments a CMDLIST (0x2086) and an object
+        // (0x2002)): the prox job's list +0x1164 and the object it measures +0x1190, the list's place +0x1168 reset; the
+        // reaction picks it up when idle (0x19AF20: kind 18 = native 15, JOBPROX). Sly 2's class-0x3C method 970
+        // (0x10DA68: the list only, measured against Sly) has no Sly 3 thunk.
+        RegisterObjectMethod3(0x104A70, [](LO* plo, const std::vector<CRef>& a) {
+            if (GUARD* pg = PguardFromLo(plo))
+            {
+                pg->plo108C = PloArg(a, 0);
+                pg->n108C = pg->plo108C ? 1 : 0;
+                pg->plo1190 = PloArg(a, 1);
+                pg->saved1090 = SAVEDSCRIPT{};
+                if (std::getenv("SLY2N_PROXPRINT"))
+                    std::fprintf(stderr, "prox %d (%p world %d at %.0f %.0f %.0f): list %d object %d\n", plo->oid, (void*)plo, int(plo->fInWorld),
+                                 PosLoWorld(plo).x, PosLoWorld(plo).y, PosLoWorld(plo).z, pg->plo108C ? pg->plo108C->oid : -1,
+                                 pg->plo1190 ? pg->plo1190->oid : -1);
+            }
+            return CRef(TAGK_Void);
+        });
         RegisterObjectMethod3(0x104090, [](LO* plo, const std::vector<CRef>&) {
             if (GUARD* pg = PguardFromLo(plo))
             {

@@ -569,7 +569,10 @@ bool FDriveActorWalk30(ACTOR* pa, PADCTL* pc)
     // speed (0x1AD7F0, sly.cpp's state 1); m_ext's attract 4262 [89] runs to 15109 at the reference's 833 a second)
     // (Sly only: the other characters' native code reads R1 as their own button (Bentley's walk in ep1_heist_end's
     // SCPT 2467 [77] then never arrived))
-    if (it->second.fR1 && dynamic_cast<SLY*>(pa)) pc->grfbtn |= 0x8;
+    // (s3-prologue2: Bentley too (m_ext's beast intro, SCPT 4318 [29] / [33]: the reference's Bentley walks in his state
+    // 1 and glides on after the stick's release, so his bomb lands at the lamp post's base; SLY3_R1SLYONLY=1: Sly only)
+    static const bool s_fSlyOnly = std::getenv("SLY3_R1SLYONLY") != nullptr;
+    if (it->second.fR1 && (dynamic_cast<SLY*>(pa) || (!s_fSlyOnly && dynamic_cast<BENTLEY*>(pa)))) pc->grfbtn |= 0x8;
     // (0x22A7F8 case 48's end: circle held (+0x18 | 0x20) while the actor's interaction is on (+0x50C != -1) and of kind 0
     // (a ledge) or 0xD: the hang is kept while the walk shimmies along it (m_ext's RC chopper scene, SCPT 4277 [15] / [16]))
     if (pa->nSub4CC != -1 && (pa->n4C8 == 0 || pa->n4C8 == 0xD)) pc->grfbtn |= 0x20;
@@ -582,10 +585,15 @@ struct HOLD5D { bool fHold = false, fFresh = false; };
 std::unordered_map<const ACTOR*, HOLD5D>& MpHold5D() { static std::unordered_map<const ACTOR*, HOLD5D> s_mp; return s_mp; }
 }  // namespace
 
-// (opt-in SLY3_HOLD5D=1: Bentley then throws in m_ext's beast intro, but the native hold (BS3_Hold) takes the camera and
-// the screen as for the player (a yellow-tinted aim view without the letterbox flashes up) and the bomb lands short of
-// the lamp post 15452, which the reference's explosion knocks over; s3-player's for the scripted-actor hold)
-bool FHold5D3() { static const bool s_f = [] { const char* sz = std::getenv("SLY3_HOLD5D"); return sz && sz[0] == '1'; }(); return s_f; }
+// (on by default since s3fix5-player, AUDIT5: in m_ext's beast intro Bentley holds, summons and drops his bomb at the
+// reference's timing (state 8 at the script's frame 218 / vblank 2013, the bomb's states 1 / 2 30 / 44 frames later) and
+// its blast knocks the lamp post 15452 over as in the reference (carry.cpp BlastCarry: Sly 3's 0x277830 hits every
+// object, natively the Sly 2 filter dropped all). The "yellow aim view" once blamed on the hold is m_ext's lightning
+// (the reference flashes the same way, e.g. vblanks 2340 / 2640). Left (not the hold's): natively Bentley stops ~75
+// short of the reference's place and faces his walk's way, so the bomb lands ~100 left of the post's base (the
+// post still falls) and the shot cuts ~100 frames earlier; the scripted walk's arrival / glide. SLY3_HOLD5D=0: the old
+// native way, 0x5D / 0x5E done at once and no hold)
+bool FHold5D3() { static const bool s_f = [] { const char* sz = std::getenv("SLY3_HOLD5D"); return !(sz && sz[0] == '0'); }(); return s_f; }
 
 void SetActorHold5D3(ACTOR* pa, bool fHold)
 {

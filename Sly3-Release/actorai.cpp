@@ -21,12 +21,17 @@
 #include "sw.h"
 #include "sly.h"
 #include "game/task3.h"
+#include "game/scptgame3.h"
+#include "guard.h"
+#include "aijobs.h"
 
 #include <algorithm>
 #include <cfloat>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
+#include <vector>
 
 namespace
 {
@@ -42,14 +47,6 @@ void RecoverTo(ACTOR* pa, const glm::vec3& pos)
 }
 // Native equivalent of SOST +0xDC's region, which native navigation queries from the same actual position.
 NAVREGION* Region(LO* p) { return PregionAt(Pos(p), !FCidDerivedFrom(p->Cid(), S3CID(0x30))); }
-void Straight(CRV* c, const glm::vec3& a, const glm::vec3& b)
-{
-    c->crvk = 0;
-    c->fClosed = 0;
-    c->apos = {a, b};
-    c->ag = {0.0f, 1.0f};
-    RecalcCrv(c, glm::mat4(1.0f));
-}
 }  // namespace
 
 // orig: 0x001448F0 (D_002BD2D8 10, D_002BD2D0 1) (orig3: 0x1572A0: a target within 10 of the last one is kept unless
@@ -63,11 +60,18 @@ void SetActorWatchTarget(ACTOR* pa, const glm::vec3& pos)
     w.t = g_clock.t + 1.0f;
 }
 
-// orig: 0x00144640 (orig3: 0x156FD0): the ordinary follower's progress / recovery check, once a second: an actor whose
-// follower 0xEF is in its state 0 (moving) and came less than 30 nearer its target (in xy) since the last check is put
-// on the ground at the target (0x198D78(100, -350), else the surface above it 0x1DA038) after the broadcast 0x5A.
-// Not ported: the paused contact-wakeup branch (an actor in the world's weight list D_00475480 waking the guards it
-// touches, 0x1F4DD8 / 0x2412C8) and a script runner's walk 0x30 (the native 0x30 walk does not set the watch target).
+// orig: 0x00144640 (orig3: 0x156FD0): the progress / recovery check, once a second, of an actor with AI jobs (+0x2A0) or
+// driven by a script run (+0x115C, 0x156700): driven by a run, only while the run's pending command is the walk 0x30
+// (whose done test sets the target, 0x229438 case 48); else while its follower 0xEF is in its state 0 (moving). One that
+// came less than 30 nearer its target (in xy) since the last check is put on the ground at the target (0x198D78(100,
+// -350), else the surface above it 0x1DA038) after the broadcast 0x5A.
+// While the actor's players are paused by the scripts (0x1A9478 with its +0x130), the check instead takes out every step
+// guard (class 0x3A) its attachment touches that is not in a reaction's script job (0xD3 +0x48): one not already fading
+// out gets the actor as its last hitter (0x1F4DD8(guard, actor, -1, now)) and the knock-out broadcast 0x10; each is
+// faded out over 0.5 s (0x2412C8); touching any, the check ends there. The recovery's veto: +0x2C is cleared before the
+// broadcast 0x5A and tested after it (its one writer in the original is the shot job's clip events 0x4E / 0x4F on its
+// owner's +0x10CC, 0x1A5750; natively that job runs on guards only, GUARD::fF60, so nothing sets it here).
+void FadeAloOut(ALO* palo, float dt);   // 0x1F7BF8 / orig3 0x2412C8 (asegevent.cpp)
 void UpdateActorWatch(ACTOR* pa)
 {
     auto& w = pa->watch;
@@ -76,22 +80,65 @@ void UpdateActorWatch(ACTOR* pa)
         if (pa->jump.state == -1) w.fActive = 0;
         return;
     }
-    if ((!pa->n270 && !pa->prunScript) || g_clock.t < w.t) return;
-    w.t = g_clock.t + 1.0f;
-    auto* p = dynamic_cast<JOBACTORFOLLOW*>(PjobFind(pa, 0xA8));
-    if (static const bool s_f = std::getenv("SLY3_WATCHPRINT") != nullptr; s_f && (pa->prunScript || !p || p->st != 0))
-        std::printf("watch: actor %d t %.3f skipped (run %p follower %p state %d)\n", pa->palo->oid, g_clock.t, pa->prunScript, (void*)p, p ? p->st : -9);
     static const bool s_fOld = std::getenv("SLY3_WATCH2") != nullptr;   // (debug: Sly 2's check, 0x144640)
-    if (pa->prunScript || !p || (s_fOld ? (p->st < 0 || p->st >= 2) : p->st != 0)) return;
+    const int idRun = s_fOld ? -1 : IdActorRunCmd3(pa);
+    if (s_fOld ? (!pa->n270 && !pa->prunScript) : (pa->n270 <= 0 && idRun < 0)) return;
+    if (g_clock.t < w.t) return;
+    w.t = g_clock.t + 1.0f;
+    static const bool s_fNoContact = std::getenv("SLY3_WATCHCONTACT0") != nullptr;   // (debug: without the paused branch)
+    if (!s_fOld && !s_fNoContact && FScripts3Active() && FPlayersPausedSel3(int(pa->palo->U32Field(0, 0x130, 0xFFFFFFFFu))))
+    {
+        bool fAny = false;
+        OXA* poxa = pa->palo->psort ? pa->palo->psort->poxa : nullptr;
+        std::vector<ALO*> aguard;
+        for (OX* pox = poxa ? poxa->pox : nullptr; pox; pox = pox->poxNext)
+            for (XP* pxp = pox->pxp; pxp; pxp = pxp->pxpNext)
+            {
+                ALO* po = pxp->axpd[pxp->axpd[0].paloRoot == pa->palo ? 1 : 0].paloRoot;
+                if (!po || !FCidDerivedFrom(po->Cid(), S3CID(0x38))) continue;
+                GUARD* pg = PguardFromLo(po);
+                if (auto* job = pg ? dynamic_cast<JOBSCRIPT*>(PjobFind(pg, 0xA9)) : nullptr; job && job->fFromReact) continue;
+                aguard.push_back(po);
+            }
+        for (ALO* po : aguard)   // (after the walk: the broadcast's handlers may change the contacts)
+        {
+            if (std::getenv("SLY3_WATCHPRINT"))
+                std::printf("watch: actor %d paused, touching guard %d (fade rate %.2f): taken out t %.3f\n", pa->palo->oid, po->oid, po->dgFade, g_clock.t);
+            if (0.0f <= po->dgFade)
+            {
+                po->SetField(0, 0x184, static_cast<uint32_t>(reinterpret_cast<uintptr_t>(pa->palo) & 0xFFFFFFFFu));   // 0x1F4DD8
+                po->SetField(0, 0x188, 0xFFFFFFFFu);
+                { uint32_t u; std::memcpy(&u, &g_clock.t, 4); po->SetField(0, 0x18C, u); }
+                Broadcast3(0x10, po);
+            }
+            FadeAloOut(po, 0.5f);
+            fAny = true;
+        }
+        if (fAny) return;
+    }
+    auto* p = dynamic_cast<JOBACTORFOLLOW*>(PjobFind(pa, 0xA8));
+    if (static const bool s_f = std::getenv("SLY3_WATCHPRINT") != nullptr; s_f && (idRun >= 0 || !p || p->st != 0))
+        std::printf("watch: actor %d t %.3f run op 0x%X follower %p state %d\n", pa->palo->oid, g_clock.t, idRun, (void*)p, p ? p->st : -9);
+    if (s_fOld)
+    {
+        if (pa->prunScript || !p || p->st < 0 || p->st >= 2) return;
+    }
+    else if (idRun >= 0)
+    {
+        if (idRun != 0x30) return;
+    }
+    else if (!p || p->st != 0) return;
     const float d = s_fOld ? glm::length(Pos(pa->palo) - w.pos) : Dxy(Pos(pa->palo), w.pos);
     if (static const bool s_f = std::getenv("SLY3_WATCHPRINT") != nullptr; s_f)
         std::printf("watch: actor %d t %.3f d %.1f last %.1f target %.0f %.0f %.0f%s\n", pa->palo->oid, g_clock.t, d, w.s, w.pos.x, w.pos.y, w.pos.z,
                     w.s - d < 30.0f ? " -> recover" : "");
     if (w.s - d < 30.0f)  // D_002BD2D4 * D_002BD2D0
     {
+        w.fVeto = 0;
         if (!s_fOld) Broadcast3(0x5A, pa->palo);
         glm::vec3 q = w.pos;
-        if (s_fOld ? FDropOnGround(&q, 100.0f, -150.0f, false) : (FDropOnGround(&q, 100.0f, -350.0f, true) || FSnapPosToSurfaceAbove(&q)))
+        if (w.fVeto) {}
+        else if (s_fOld ? FDropOnGround(&q, 100.0f, -150.0f, false) : (FDropOnGround(&q, 100.0f, -350.0f, true) || FSnapPosToSurfaceAbove(&q)))
         {
             RecoverTo(pa, q);
             w.fActive = 1;
@@ -116,19 +163,7 @@ void JOBACTORFOLLOW::Update()
 {
     static const bool s_fOld = std::getenv("SLY3_FOLLOWA8") != nullptr;
     if (s_fOld) Update1789F8();
-    else
-    {
-        AIJOB::Update();
-        Steer177F78();
-        const glm::vec3 posSelf = Pos(pactor->palo);
-        int s0;
-        do
-        {
-            s0 = st;
-            const float r = st == 0 ? sNear : sFar;
-            SetState(r < Dxy(posSelf, glm::vec3(pos)) ? 0 : 2);
-        } while (st != s0);
-    }
+    else Update89B0();
     SetActorWatchTarget(pactor, glm::vec3(pos));
 }
 // orig3: 0x1D8B40: the path taken (its end the goal), the follower at its start
@@ -137,6 +172,8 @@ void JOBACTORFOLLOW::Follow(const CRV* p, int fRev)
     JOBFOLLOW::Follow(p, fRev);
     static const bool s_fOld = std::getenv("SLY3_FOLLOWA8") != nullptr;
     if (!s_fOld && !p->apos.empty() && !p->fClosed) s = fRev ? SLengthCrv(p) : (p->as.empty() ? 0.0f : p->as.front());
+    // (the arrival point +0x90: the path's last point, open or not; 0x1D8AC0 tests it with no open-curve test)
+    if (!s_fOld && !p->apos.empty()) posEnd = glm::vec4(p->apos.back(), 0.0f);
 }
 // orig: 0x00178CD8 (A8 uses the common state change, without A7's guard animation jobs) (orig3: 0x1D8AA0)
 void JOBACTORFOLLOW::SetState(int n)
@@ -187,19 +224,17 @@ void JOBACTORWALK::Enter()
     follow->sArrive = sArrive;
     follow->fWalk = fWalk;
     follow->uSpeedActor = uSpeed;
+    follow->fFree = fFree;   // (orig3 0x1578C8: walk +0x50 -> follower +0xA0)
     SetGoal(posGoal);
     follow->Enter();
 }
 
-// orig: 0x00144EE8 (orig3: 0x157950: the follower's arrival 0x1D8AC0 only, not its state). Kept as Sly 2's (also its
-// near state) by default: the path step's walks go straight here (JOBPATHSTEP3: the original's nav path per step,
-// 0x1EF038, is not used), and with the arrival alone a straight step into an obstacle never ends (v_gauntlet's SCPT 2307
-// [6]: Bentley held at x 3305 until 2306 is forced; the original's nav path goes round it). SLY3_WALKARRIVE=1: arrival only.
+// orig: 0x00144EE8 (orig3: 0x157950: the follower's arrival 0x1D8AC0 only, not its state, now that the steps' paths are
+// Sly 3's routed ones (NavPathCrv3); until s3fix5-ai also its near state)
 bool JOBACTORWALK::FAtGoal() const
 {
     const auto* follow = static_cast<const JOBACTORFOLLOW*>(pchild);
-    static const bool s_fArrive = std::getenv("SLY3_WALKARRIVE") != nullptr;
-    return !follow || follow->FArrived() || (!s_fArrive && follow->st == 2);
+    return !follow || follow->FArrived();
 }
 
 // orig: 0x00144F48 (Sly 3: 0x157970, with fSly3)
@@ -225,17 +260,13 @@ void JOBACTORWALK::SetGoal(const glm::vec3& pos)
             pactor->safe.c = 0;
         }
     }
+    // orig3 0x157970 -> 0x1EF038: the path from the actor's position, routed in his region (none when the walk ignores
+    // the regions: straight; a failed search: Sly 3's 5-unit stub, arrived at once)
     CRV* curve = &pactor->crv294;
     const REGENT* entry = Pregent(pactor->palo);
     const NAVREGION* region = entry && entry->nGenNav == NGenNav() ? entry->preg : nullptr;
     const glm::vec3 self = Pos(pactor->palo);
-    if (!region || fRun)
-        Straight(curve, self, posGoal);
-    else
-        FNavPathCrv(region, self, posGoal, curve);  // a failed search preserves the existing curve
-    // (s3-player: a failed search on a curve never made (the first goal of a scripted walk: Sly 3's SCPT 0x34 on a
-    // player, v_gauntlet) left it empty and Follow read its points: the straight line then)
-    if (curve->apos.empty()) Straight(curve, self, posGoal);
+    NavPathCrv3(fRun ? nullptr : region, self, posGoal, curve);
     if (static const bool s_f = std::getenv("SLY3_PATHPRINT") != nullptr; s_f && fSly3)
     {
         std::printf("walk3: actor %d goal %.0f %.0f %.0f run %d region %p curve:", pactor->palo->oid, posGoal.x, posGoal.y, posGoal.z, fRun, (const void*)region);
@@ -273,13 +304,9 @@ void JOBPATHSTEP3::Enter()
     s = sN;
     auto* pwalk = static_cast<JOBACTORWALK*>(PjobPush(pactor, 0xC1));
     pwalk->fSly3 = 1;
-    // (s3-player round 24: the original's walk child is Sly 3's own follower (0x157970 -> 0x1D8B40 on +0x18: classes
-    // 0xEE / 0xEF, not ported), not the copied A8 with its region-member avoidance and nav keep. With them h_ext's moored
-    // boat 93589 (a region member on the platform path) pushed Murray onto itself at SCPT 3282 [28] and he stayed there;
-    // the reference walks him straight beside it (-3215, -1099) -> (-2723, -1203). Straight, without the avoidance, he
-    // does and the scene goes on to the boat. SLY3_PATHAVOID=1: the avoidance as before.)
-    static const bool s_fAvoid = std::getenv("SLY3_PATHAVOID") != nullptr;
-    pwalk->fRun = fNoAvoid || !s_fAvoid;
+    // (the step's +0x58 copied into the walk's +0x30: 0 routes in the actor's region with the follower's avoidance and
+    // the cross-region warp; until s3fix5-ai always straight, s3-player round 24's workaround for h_ext's boat)
+    pwalk->fRun = fNoAvoid;
     pwalk->fWalk = fWalk;
     pwalk->uSpeed = uSpeed;
     Step(true);
@@ -301,13 +328,22 @@ void JOBPATHSTEP3::Step(bool fForce)
     if (!pcrv) return;
     float d = fForward ? 200.0f : -200.0f;
     float t = s + d;
-    if (!pcrv->fClosed) t = std::clamp(t, SStart3(pcrv), SLengthCrv(pcrv));
+    bool fClamped = false;
+    if (!pcrv->fClosed)
+    {
+        const float c = std::clamp(t, SStart3(pcrv), SLengthCrv(pcrv));
+        fClamped = c != t;
+        t = c;
+    }
     else t = SWrapCrv(pcrv, t);
     if (!fForce && std::fabs(s - t) < 5.0f) return;
     s = t;
     EvalCrvS(pcrv, t, &pos, nullptr);
     auto* pwalk = static_cast<JOBACTORWALK*>(pchild);
     if (!pwalk) return;
+    // orig3 0x157A80: an unclamped step is a free run (walk +0x50, its follower's +0xA0)
+    pwalk->fFree = !fClamped;
+    if (auto* pfollow = static_cast<JOBACTORFOLLOW*>(pwalk->pchild)) pfollow->fFree = pwalk->fFree;
     if (pwalk->pchild || fForce) pwalk->SetGoal(pos);
     else
     {
@@ -387,9 +423,9 @@ void JOBCOMPANION::PlanFollow()
     const glm::vec3 self = Pos(pactor->palo);
     NAVREGION* preg = Region(pactor->palo);
     CRV* crv = &pactor->crv294;
-    if (!preg) Straight(crv, self, pos);
-    else if (Region(ploFollow) != preg) FNavPathCrv(preg, self, self, crv);
-    else if (!FNavPathCrv(preg, self, pos, crv)) FNavPathCrv(preg, self, self, crv);
+    // (orig3 0x158368: the path record 0x1EF038 in the actor's region, to himself when the followed one is in another;
+    // no region: straight; a failed search: the 5-unit stub)
+    NavPathCrv3(preg, self, preg && Region(ploFollow) != preg ? self : pos, crv);
     static_cast<JOBACTORFOLLOW*>(pchild)->Follow(crv, 0);
 }
 

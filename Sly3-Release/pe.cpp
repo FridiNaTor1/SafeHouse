@@ -1152,6 +1152,11 @@ bool FEmitPeComponent(LO* ppe, int oidComp, const glm::vec3& pos, float gScale)
     return false;
 }
 
+// orig3: 0x25BBD0's 0x203078 on every particle owner of SW +0x480C (the in-place reset): each registered instance let
+// go (its streams stopped, unbound from its effect, deleted); the continuous effects (kinds 1..3) are made again by
+// the next pass from the world's PEs, the scripts' one-shots are gone
+void ResetPesInPlace3() { ResetPes(); }
+
 // The loader's registration (loaders.cpp RegisterLoaders) and the native struct (PfnNewNativeForCid)
 void RegisterPeLoaders(std::unordered_map<uint32_t, PFNLOAD>& m) { m[0x1FE270] = LoadPeFromBrx; }
 PFNNEW PfnNewPe() { return [] () -> LO* { return new LOPE(); }; }

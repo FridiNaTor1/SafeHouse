@@ -7,9 +7,10 @@
 // update 0x203FB0 with its control 0x204048 (the pad: X drives, Square / Circle reverse, the stick steers; a path;
 // the jump back to the trail), the gun 0x205238 / 0x205418 (R1: the proxy's projectiles by the launcher, aimed at
 // the nearest gun target (an INTEREST with flag 0x100) inside the region), the trail 0x2045B0 / 0x2047D0, the forces
-// 0x205A78, the enable 0x207E18 (vt slot 83), the mode change 0x2075E8, the messages 0x207FA0.
+// 0x205A78, the enable 0x207E18 (vt slot 83), the mode change 0x2075E8, the messages 0x207FA0, the hit response
+// 0x207AE0 (AUDIT4 MODES-07).
 // Not ported: the dust and engine effects (0x204E00, the wheels' 0x78E), the horn (sound 0x2A), the clips on L2 / R2
-// (0x205750), the gun's sound gain (0x207880) and rumble, the hit response 0x207AE0 (the car takes no damage), the
+// (0x205750), the gun's sound gain (0x207880) and rumble, the
 // body's lean controller (part 0x22's +0x34C), the line-of-sight test of the aim (0x165000).
 // Debug: SLY3_RCPRINT=1 (mode, drive, steering, position, shots).
 

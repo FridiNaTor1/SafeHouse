@@ -244,8 +244,10 @@ void SetState(ROWBOAT3& b, int st)
         if (std::getenv("SLY3_ROWNOHOLD")) break;
         if (palo->Cid() != S3CID(0x53))
             if (const char* sz = std::getenv("SLY3_ROWHOLD54"); sz && *sz == '0') break;
-        if (XF* pxf = PxfPos(palo)) b.pctrlPos = PctrlNewPos(palo, pxf, 1, 0x13, 2, VecXfValue(pxf, pxf->mat));
-        if (XF* pxf = PxfRot(palo)) b.pctrlRot = PctrlNewPos(palo, pxf, 1, 0x13, 2, VecXfValue(pxf, pxf->mat));
+        // (Sly 3's record mode 0x13 is the native 0x12 XFM_Spring: the records spring back to the held value; passed raw
+        // it was the native SpringRest, which froze them (AUDIT5 MODES5-04))
+        if (XF* pxf = PxfPos(palo)) b.pctrlPos = PctrlNewPos(palo, pxf, 1, Xfm2FromXfm3(0x13), 2, VecXfValue(pxf, pxf->mat));
+        if (XF* pxf = PxfRot(palo)) b.pctrlRot = PctrlNewPos(palo, pxf, 1, Xfm2FromXfm3(0x13), 2, VecXfValue(pxf, pxf->mat));
         break;
     case 2:
         // the records in mode 2 (moving by their velocities), the turn about z only (0x23EC98 4), the heading the boat's
@@ -679,13 +681,22 @@ void UpdateJollyCannon(LO* plo, JOLLY3& j)
 }
 
 // the follow camera (orig3 0x210068 -> 0x210658: a focus of kind 15; its update 0x210790): the heading smoothed toward
-// the boat's back (0x11E840 with +0x2B4), the eye at the boat's +0x290 plus +0x2A0's length back along it and its height,
-// looking at that point (0x166E48)
+// the boat's back (0x11E840 with +0x2B4), the goal the boat's +0x290 plus +0x2A0's length back along it and its height;
+// the eye (kept: set to the goal by the start 0x2106A8) moved toward it around the world's solids (0x167660,
+// PosCmAvoid: AUDIT5 MODES5-09), looking at that point (0x166E48)
 struct CPJOLLY3 : CPLCY
 {
     LO* pboat = nullptr;
     float heading = 0.0f;
+    glm::vec3 posEye{0.0f};
     uint32_t VtOrig() const override { return 0x362A50; }
+    static glm::vec3 PosGoal(LO* pboat, const JOLLY3& j, float heading, glm::vec3* porigin)
+    {
+        const glm::vec3 origin = PosLocal(pboat, j.camOrigin);
+        const float len = std::sqrt(j.camOffset.x * j.camOffset.x + j.camOffset.y * j.camOffset.y);
+        if (porigin) *porigin = origin;
+        return origin + glm::vec3(std::cos(heading) * len, std::sin(heading) * len, j.camOffset.z);   // 0x11FD70
+    }
     void Update(CPDEFI*, const CMJOY*) override
     {
         JOLLY3* pj = Pjolly(pboat);
@@ -694,10 +705,10 @@ struct CPJOLLY3 : CPLCY
         const float target = YawOf(palo) + 3.14159265f;
         const float d = cmm::GSmooth(0.0f, cmm::RadNormalize(target - heading), g_clock.dt, &pj->camSmp, nullptr);
         heading = cmm::RadNormalize(heading + d);
-        const glm::vec3 origin = PosLocal(pboat, pj->camOrigin);
-        const float len = std::sqrt(pj->camOffset.x * pj->camOffset.x + pj->camOffset.y * pj->camOffset.y);
-        const glm::vec3 eye = origin + glm::vec3(std::cos(heading) * len, std::sin(heading) * len, pj->camOffset.z);   // 0x11FD70
-        SetCmLookAt(&g_cm, eye, origin, 0.0f, 0.0f);
+        glm::vec3 origin;
+        const glm::vec3 goal = PosGoal(pboat, *pj, heading, &origin);
+        posEye = std::getenv("SLY3_JOLLYCAMNOAVOID") ? goal : PosCmAvoid(&g_cm, posEye, goal);
+        SetCmLookAt(&g_cm, posEye, origin, 0.0f, 0.0f);
     }
 };
 CPJOLLY3 s_cpjolly;
@@ -709,6 +720,7 @@ void SyncJollyCamera(LO* plo, JOLLY3& j)
     {
         s_cpjolly.pboat = plo;
         s_cpjolly.heading = YawOf(static_cast<ALO*>(plo)) + 3.14159265f;   // (0x2106A8)
+        s_cpjolly.posEye = CPJOLLY3::PosGoal(plo, j, s_cpjolly.heading, nullptr);
         SetCmPolicy(&g_cm, 7, &s_cpjolly, plo, nullptr);
         j.fCam = true;
     }

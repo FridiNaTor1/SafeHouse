@@ -37,6 +37,7 @@
 #include "../smrun.h"
 #include "../sm.h"
 #include "../actor.h"
+#include "../actorai.h"
 #include "../combo3.h"
 #include "../damage.h"
 #include "../jt.h"
@@ -136,6 +137,19 @@ struct WDIALOG3 { std::vector<int> aid0, aid1, abag; std::size_t inext = 0; int 
 std::map<int, WDIALOG3> s_mpwdialog;   // the world option 508's table (cleared by ResetScripts3)
 bool s_fActive = false;
 int s_cframe = 0;   // the frames since the world start (the interim binocucom's timing, the debug requests)
+
+// SCPT 0x36's leap (0x1C0538 -> jump kind 0xA) for this actor: its jump set up (InitJump) and its transitions run,
+// which end the leap: Bentley's and Murray's always (as the original), Sly's only as the current player (natively his
+// transitions run only with the pad). Else the actor is placed at the goal. SLY3_ACTORPLACE36=1: the placement for
+// every actor but the current player (as before).
+bool FActorLeaps36(ACTOR* pa)
+{
+    if (!pa || pa->jump.pactor != pa || !s_psw) return false;
+    if (pa->palo == PloPoCurrent(s_psw)) return true;
+    static const bool s_fOld = std::getenv("SLY3_ACTORPLACE36") != nullptr;
+    if (s_fOld) return false;
+    return PbentleyFromLo(pa->palo) || PmurrayFromLo(pa->palo);
+}
 
 bool FPrint()
 {
@@ -246,7 +260,7 @@ struct GAMESCPTHOST3 : SCPTHOST3
     bool StartDialog(const DIALOGSTART3& d, void* ploSource) override
     {
         if (d.aid.empty()) return false;
-        CSndVoice* p = PsndStartDialog(d.aid[0], d.fQuiet);
+        CSndVoice* p = PsndStartDialog(d.aid[0], d.fQuiet, Plo(d.ploSpeaker));   // (orig3 0x228A6C: the command's target actor as the speaker)
         if (FPrint()) std::printf("scpt3: frame %d dialog %d%s\n", s_cframe, d.aid[0], p ? "" : " (no line)");
         if (!p) return false;
         NoteStreamStarted3();   // (the song clock 0x2483D8: the last stream started)
@@ -344,10 +358,12 @@ struct GAMESCPTHOST3 : SCPTHOST3
         c.radFov = g_cm.radFOV;
         return c;
     }
-    void StartRunCamera(RUN3& run, const SCPTCMD3& key, const SCPTCMD3* pnext, const SCPTCMD3* pnext2) override
+    void StartRunCamera(RUN3& run, const SCPTCMD3& key, const SCPTCMD3* pnext, const SCPTCMD3* pnext2, float dtKey, float dtNext) override
     {
-        const CMKEY3 k = KeyFromCmd3(key, PloFindOid);
-        const CMKEY3 kn = pnext ? KeyFromCmd3(*pnext, PloFindOid) : k;
+        CMKEY3 k = KeyFromCmd3(key, PloFindOid);
+        if (dtKey >= 0.0f) k.dtMove = dtKey;
+        CMKEY3 kn = pnext ? KeyFromCmd3(*pnext, PloFindOid) : k;
+        if (pnext && dtNext >= 0.0f) kn.dtMove = dtNext;
         const CMKEY3 kn2 = pnext2 ? KeyFromCmd3(*pnext2, PloFindOid) : kn;
         const bool fReal = run.pscpt && (run.pscpt->grf & 0x200);
         if (static const bool s_f = std::getenv("SLY3_CAMPRINT") != nullptr; s_f)
@@ -567,9 +583,12 @@ struct GAMESCPTHOST3 : SCPTHOST3
             std::printf("scpt3: frame %d 0x36 actor %d to %d (list %d) at %.0f %.0f %.0f: the goal %.0f %.0f %.0f\n", s_cframe,
                         pa->palo ? pa->palo->oid : -1, Plo(plo) ? Plo(plo)->oid : -1, int(jtl), e.pos.x, e.pos.y, e.pos.z, g.x, g.y, g.z);
         }
-        // (also an actor that is not the current player: natively only the current player's states and jumps update
-        // (ep1_heist_end's SCPT 2467 [85] leaps Sly while Bentley is played: the leap never ended and the scene stopped))
-        if (pa->jump.pactor != pa || !s_psw || pa->palo != PloPoCurrent(s_psw))
+        // (also Sly when he is not the current player: natively only the current Sly's transitions run (his input is
+        // gated on the pad, ep1_heist_end's SCPT 2467 [85] leaps Sly while Bentley is played: the leap never ended).
+        // Bentley and Murray run theirs every frame as the original (0x13DE58 -> 0x13D518, 0x1DD590 -> 0x1DCEA8), so
+        // their leap (kind 0xA) is the original's: the prologue's Bentley hops his chair to each point (SCPT 4318 [23],
+        // 4315), where the placement made him skip from point to point)
+        if (!FActorLeaps36(pa))
         {
             // (an actor whose jump the native code never set up (InitJump: Murray, the gang's other members in Ep4's
             // 3533 [15], actor 30): placed at the goal instead of the leap; RecoverActorTo crashed in SetJumpKind)
@@ -599,6 +618,14 @@ struct GAMESCPTHOST3 : SCPTHOST3
     // SCPT 0x30 on an interaction's object (a LEDGE, WALL, PIPE, RESPONSE, HIDE, cid 0x24: orig3 0x226D00 case 48 ->
     // 0x1B5170(actor +0x500), Sly 2's FInteractCircle 0x1938C0: the first tracked target within 250 starts its action).
     // E.g. 4277 [15]: Sly walks to the ledge 15188 and hangs from it, then [16] shimmies along it to 15189.
+    void ResetActorWatch(void* a) override
+    {
+        if (ACTOR* pa = PactorFromLo(Plo(a))) pa->watch.t = FLT_MAX;
+    }
+    void WatchActorTarget(void* a, const float pos[3]) override
+    {
+        if (ACTOR* pa = PactorFromLo(Plo(a))) ::SetActorWatchTarget(pa, glm::vec3(pos[0], pos[1], pos[2]));
+    }
     void ResetActorInteract(void* a) override
     {
         ACTOR* pa = PactorFromLo(Plo(a));
@@ -654,7 +681,7 @@ struct GAMESCPTHOST3 : SCPTHOST3
         // (an actor ActorMoveTo placed at the goal (not the current player, or no native jump): its move is over; its
         // jump kind may be a stale one from before another character was played (ep1_heist_end's SCPT 2489 [80]: Sly
         // while Bentley is played, the run waited at [85] until the task was forced))
-        if (pa && (pa->jump.pactor != pa || !s_psw || pa->palo != PloPoCurrent(s_psw))) return -1;
+        if (pa && !FActorLeaps36(pa)) return -1;
         return pa ? pa->jump.kind : -1;
     }
     void FaceObject(void* a, void* plo) override { if (g_scpthooks3.pfnFaceObject) g_scpthooks3.pfnFaceObject(Plo(a), Plo(plo)); }
@@ -910,6 +937,28 @@ struct GAMESCPTHOST3 : SCPTHOST3
     { if (g_scpthooks3.pfnActorPathStep) g_scpthooks3.pfnActorPathStep(Plo(pa), Plo(pcrv), b1, b2, g3, f104); }
     void ActorStepTo(void* pa, const float pos[3], float g1, int b2, float g3, int f104) override
     { if (g_scpthooks3.pfnActorStepTo) g_scpthooks3.pfnActorStepTo(Plo(pa), pos, g1, b2, g3, f104); }
+    // a camera key's duration terms (scptrun3.cpp DtScptCmd3, orig3 0x22A670)
+    float DtDialogLine(int id) override
+    {
+        // 0x246E40(0x474FF0, id): the line's +0x50 (0x246E10: the list newest first)
+        for (auto it = g_sound.adialog.rbegin(); it != g_sound.adialog.rend(); ++it)
+            if (it->id == id) return it->tLength;
+        return 0.0f;
+    }
+    float DtAsegScpt(void* pv) override
+    {
+        LO* plo = Plo(pv);
+        if (!plo || !FCidDerivedFrom(plo->Cid(), sly3::CID_ASEG)) return 0.0f;
+        return DtAsegSuck3(static_cast<ASEG*>(plo));
+    }
+    float DtSmGoal(void* pv, int oidSm, int oidGoal) override
+    {
+        LO* plo = Plo(pv);
+        if (!plo) return 0.0f;
+        for (SMA* pa : g_apsma)   // 0x23FB68(o, oidSm)
+            if (pa->palo == plo && (oidSm == -1 || (pa->psm && pa->psm->oid == oidSm))) return TSmaToGoal3(pa, oidGoal);
+        return 0.0f;
+    }
     void* RunSmGoal(int oid, int oidSm, int oidGoal, bool fSnap, void* ploContext) override
     {
         if (!s_psw || oid == -1) return nullptr;
@@ -1011,10 +1060,23 @@ struct GAMESCPTHOST3 : SCPTHOST3
         if (FPrint()) std::printf("scpt3: frame %d cnstr %d lin %d ang %d stop %d\n", s_cframe, palo ? palo->oid : -1, nLin, nAng, fStop);
         if (nLin != -1) SetAloCnstrLin(palo, nLin);
         if (nAng != -1) SetAloCnstrAng(palo, nAng);
+        // (orig3 0x226D00 case 118: 0x23D938 / 0x23D9D0, the velocities in the object's own space, zero: at rest relative
+        // to its parent. Slots 35 / 36 (reach a world velocity of zero) left a just-parented object the parent's velocity
+        // of that frame, negated, as its own: the prologue's Bentley (SCPT 4317 [3] / [6], held by the land beast's claw
+        // 15454) drifted out of the claw and flew off. SLY3_CNSTRSTOPTO=1: slots 35 / 36 as before)
         if (fStop)
         {
-            SetAloVelocityTo(palo, glm::vec3(0.0f));
-            SetAloAngVelocityTo(palo, glm::vec3(0.0f));
+            static const bool s_fOld = std::getenv("SLY3_CNSTRSTOPTO") != nullptr;
+            if (s_fOld)
+            {
+                SetAloVelocityTo(palo, glm::vec3(0.0f));
+                SetAloAngVelocityTo(palo, glm::vec3(0.0f));
+            }
+            else
+            {
+                SetAloVelocity(palo, glm::vec3(0.0f));
+                SetAloAngVelocity(palo, glm::vec3(0.0f));
+            }
         }
     }
     void ShowNotice(int n, void* plo) override { if (g_scpthooks3.pfnShowNotice) g_scpthooks3.pfnShowNotice(n, Plo(plo)); }
@@ -1061,7 +1123,8 @@ struct GAMESCPTHOST3 : SCPTHOST3
         MURRAY* pm = PmurrayFromLo(Plo(pa));
         if (!pm) return;
         SMA* psmaObj = nullptr;
-        for (SMA* psma : g_apsma)  // 0x23FB68(o, -1): any state machine of the object
+        for (SMA* psma : g_apsma)  // 0x23FB68(o, -1): the object's first SMA in D_00479A08 (SW +0x4588), appended at creation
+                                   // (0x239808 -> 0x11AF60) as g_apsma is: the same first match (AUDIT5 PLAYER5-11)
             if (psma->palo == Plo(plo)) { psmaObj = psma; break; }
         if (!psmaObj) return;
         if (FPrint()) std::printf("scpt3: frame %d 0x5C: Murray %d holds %d (goal %d kind %d snap %d)\n", s_cframe, pm->palo->oid, Plo(plo)->oid, oidGoal, k, fSnap);
@@ -1216,6 +1279,20 @@ struct GAMESCPTHOST3 : SCPTHOST3
 };
 GAMESCPTHOST3 s_host;
 std::vector<std::unique_ptr<SCPT3>> s_ascpt;
+}  // namespace
+
+// orig3: the run driving an actor (actor +0x115C, 0x156468) and its pending command's op (run +0x48): -1 with no run
+int IdActorRunCmd3(const ACTOR* pa)
+{
+    auto it = s_host.mpactorrun.find(pa);
+    if (it == s_host.mpactorrun.end() || !it->second) return -1;
+    const RUN3* p = it->second;
+    if (!p->pscpt || p->icmdPending < 0 || std::size_t(p->icmdPending) >= p->pscpt->acmd.size()) return 0;
+    return p->pscpt->acmd[std::size_t(p->icmdPending)].id;
+}
+
+namespace
+{
 
 // ---------------------------------------------------------------- the SCPT / TASK splice methods
 // orig3: thunks 0x108918..0x108C20 (EOPIDs 747..754: RefSetArgsFromSplice, then the executor's function)
@@ -1622,6 +1699,7 @@ void ResetScripts3()
     s_host.asndRun.clear();
     s_mpwdialog.clear();
     s_host.mprunkey.clear();
+    s_host.mpactorrun.clear();
     s_host.prunCamera = nullptr;
     s_host.radFovTargetSave = 0.0f;
     SetScptCameraActive3(false);   // (PC, skipcut.h: the old world's script camera is gone with it; s3-qol's hold would stay set)

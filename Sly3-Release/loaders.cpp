@@ -452,6 +452,8 @@ void LoadTaskFromBrx(LO* plo, CBinaryInputStream* pbis)
 void LoadLo1731B8FromBrx(LO* plo, CBinaryInputStream* pbis) { LOADFN(0x1731B8); LoadLoFromBrx(plo, pbis); }
 void LoadLo1DFB10FromBrx(LO* plo, CBinaryInputStream* pbis) { LOADFN(0x1DFB10); BeginScptLoad(plo); LoadLoFromBrx(plo, pbis); EndScptLoad(plo); }  // (scpt.cpp)
 void LoadLo14A008FromBrx(LO* plo, CBinaryInputStream* pbis) { LOADFN(0x14A008); LoadLoFromBrx(plo, pbis); }
+// orig3 0x21A928 (the ship spawner 0x9A: its two arrays around the LO's load; the options kept, game/ship3.cpp)
+void LoadLo21A928FromBrx(LO* plo, CBinaryInputStream* pbis) { LOADFN(0x21A928); LoadLoFromBrx(plo, pbis); }
 
 // orig 0x00153B08 (cid 0x7A)
 void LoadLo153B08FromBrx(LO* plo, CBinaryInputStream* pbis)
@@ -1082,6 +1084,7 @@ void RegisterLoaders(std::unordered_map<uint32_t, PFNLOAD>& m)
     // entries by EOPID 1551's builder 0x10F090), then the array trimmed to its count (+0x54). Without it the graph was a
     // shell (no entries): Carmelita's chase job in v_ext (graph 2127) had nowhere to go after the scene
     m[0x15E1D0] = LoadLo14A008FromBrx;
+    m[0x21A928] = LoadLo21A928FromBrx;        // the ship spawner 0x9A (AUDIT5 MODES5-01)
     m[0x198810] = LoadLo1731B8FromBrx;        // SPAWNER 0x8D (0x1731B8: its source records grew 0x1C -> 0x24; reads the LO only)
     // (the effects code) the world effects: ZONE 0x0E (0x220FD0), GROUPER 0x1D (0x15C1E8), EMITTER 0x1B, EXPLO 0x1F, PE 0x2D (pe.cpp)
     m[0x273CF8] = LoadZoneFromBrx;
@@ -1108,6 +1111,7 @@ PFNNEW PfnNewNativeForCid(CID cid)
         {S3CID(0x85), PloNewT<TASK>},     {S3CID(0x7A), PloNewT<LOLIST>},   {S3CID(0x84), PloNewT<JOB>},     {S3CID(0x2A), PloNewT<CHKPNT>},
         {0x2D, PfnNewPe()},               /* (the effects code: Sly 3's PE, pe.cpp) */
         {S3CID(0x71), PloNewCmdlist},     {S3CID(0x69), PloNewT<TRAIL>},    {S3CID(0x7B), PloNewChasegraph}, {S3CID(0x73), PloNewT<WR>},
+        {0x89, PloNewT<WR89>},            /* (Sly 3's scripted-warp WR, wr.h) */
     };
     if (PFNNEW pfn = PfnNewScript3(cid)) return pfn;   // (game/loaders3.cpp)
     for (CID c = cid; c >= 0; c = g_acls[c].cidBase)

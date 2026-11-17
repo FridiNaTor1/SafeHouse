@@ -12,9 +12,8 @@
 // the stride +0x264) broadcasts 0x57 and goes on; a wrong one 0x58 (and the map's miss sound); on the last record a
 // right one starts SCPT +0x288 and puts the map away (state 0).
 // Natively: Sly's state 0x18 is this module's hold (po.cpp hands it the held player's pad, as the password check);
-// a step moves Sly one stride forward in 0.4 s (the original plays the step clip +0x113C and moves by its root);
 // a wrong check puts the map away (the original calls Sly's vt slot 99). Not ported: the footprint trails (objects
-// 0x280 / 0x281, class 0x7F), the camera task +0x280 (0x2799C0), the step clip, the save flag of +0x294 (0x25E2B8).
+// 0x280 / 0x281, class 0x7F), the camera task +0x280 (0x2799C0), the save flag of +0x294 (0x25E2B8).
 // Debug: SLY3_MAPPRINT=1.
 
 #include "treasuremap3.h"
@@ -38,6 +37,10 @@
 #include "../vecmat.h"
 #include "../xf.h"
 #include "scptgame3.h"
+#include "../actor.h"
+#include "../asega.h"
+#include "../sly.h"
+#include "../stepphys.h"
 
 #include <cmath>
 #include <cstdio>
@@ -334,51 +337,61 @@ bool FHoldTreasureMap3(LO* ploPlayer)
 
 LO* PloMapHolder3() { return s_pmapHeld && s_pmapHeld->psw == g_psw && s_pmapHeld->state == 2 ? s_pmapHeld->pjt : nullptr; }
 
-// orig3 0x1B0070 / 0x1AD1D0 case 24: the held player's pad in the map mode
-void TakePadForMap3(LO* ploPlayer, uint32_t grfPressed, float xStick)
+// orig3 0x11E438: an angle snapped to the nearest of n directions (0: as it is, 1: 0)
+static float RadQuantize(float rad, int n)
+{
+    if (n == 0) return rad;
+    if (n == 1) return 0.0f;
+    rad = std::remainder(rad, 6.28318530718f);   // (0x11E3B8: into [-pi, pi])
+    const float spacing = 6.28318530718f / float(n), half = spacing * 0.5f;
+    float sign = 1.0f;
+    if (rad < 0.0f) { rad = -rad; sign = -1.0f; }
+    float snapped = 0.0f;
+    for (int i = 0; i <= n / 2; ++i)
+    {
+        snapped = spacing * float(i);
+        if (snapped - half <= rad && rad <= snapped + half) break;
+    }
+    return snapped * sign;
+}
+
+int NMapSteps3() { return s_pmapHeld ? s_pmapHeld->cStep : 0; }
+
+// orig3 0x1B0070 (Sly's update in state 0x18) and 0x1AD1D0 case 24 substate 8 (the input: the heading): the held
+// player's pad in the map mode (AUDIT5 PLAYER5-08). Substate 8 (the map held up, clip +0x1E70): Square / Circle /
+// Triangle (0xB0) check (0x279278); nothing more while off the floor over 0.15 s (0x2503C8); X (0x40) the step:
+// substate 9 (the step clip +0x1E74 / +0x1E78 by the steps' parity, Sly moved by its root: sly.cpp) and the step counted
+// (0x2791C8); the stick turns Sly to its direction snapped to the map's +0x284 directions (0x11E438, 0x24E878).
+// Substate 9: back to 8 when the step clip is over (0x138AC8). (Natively before: a stride of 200 in 0.4 s, the stick's x
+// turning him at 2 rad/s.)
+void TakePadForMap3(LO* ploPlayer, uint32_t grfPressed, float radJoy, float uJoy)
 {
     MAP3* m = s_pmapHeld;
     if (!m || m->state != 2 || m->pjt != ploPlayer) return;
-    ALO* p = m->pjt;
-    if (m->tStep >= 0.0f)
+    SLY* psly = dynamic_cast<SLY*>(PactorFromLo(ploPlayer));
+    if (!psly || psly->jts != jts::Map) return;
+    if (grfPressed && FPrint())
+        std::printf("map3: press 0x%X at t %.3f in substate %d (state %.3f s, off the floor %.3f s)\n", grfPressed, g_clock.t, psly->jtbs,
+                    g_clock.t - psly->tSubstate, g_clock.t - psly->tFloor);
+    if (psly->jtbs == jts::SubMapClip)
     {
-        // substate 9: the step under way (0.4 s), then 8
-        const float u = std::min(1.0f, (g_clock.t - m->tStep) / 0.4f);
-        SetAloPos(p, m->posStep0 + (m->posStep1 - m->posStep0) * u);
-        if (u >= 1.0f) m->tStep = -1;
+        if (!psly->pasega || FAsegaRetracted(psly->pasega)) SetSlyState(psly, jts::Map, jts::SubMapUp);
         return;
     }
+    if (psly->jtbs != jts::SubMapUp) return;
     if (grfPressed & 0xB0)
     {
         CheckMap(*m);
         return;
     }
+    if (0.15f < g_clock.t - psly->tFloor) return;
     if (grfPressed & 0x40)
     {
-        // a step: a stride forward along the facing, on the ground
-        XF* pxf = PxfObj(p);
-        if (!pxf) return;
-        const glm::vec3 pos = glm::vec3(pxf->matWorld[3]);
-        glm::vec3 dir = glm::vec3(pxf->matWorld[0]);
-        dir.z = 0;
-        if (glm::length(dir) < 1e-3f) return;
-        glm::vec3 to = pos + glm::normalize(dir) * m->stride;
-        FDropOnGround(&to, 100.0f, -350.0f, true);
-        m->posStep0 = pos;
-        m->posStep1 = to;
-        m->tStep = g_clock.t;
+        SetSlyState(psly, jts::Map, jts::SubMapClip);
         StepMap(*m);
         return;
     }
-    if (xStick != 0.0f)
-    {
-        // the turn (0x24E878 by +0x284 x the stick: natively 2 rad/s at full deflection)
-        if (XF* pxf = PxfObj(p))
-        {
-            const glm::mat3 r(pxf->matWorld);
-            SetAloRotation(p, cmm::BuildRotateMatrixAxis(-xStick * 2.0f * g_clock.dt, glm::vec3(0, 0, 1)) * r);
-        }
-    }
+    if (0.0f < uJoy) SetStepPhysHeading(m->pjt, RadQuantize(radJoy, m->nTurn));
 }
 
 void ResetTreasureMaps3()

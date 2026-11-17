@@ -18,6 +18,9 @@ struct SW;
 
 void InitMenu(SW* psw);        // orig 0x001AE928 (+ the card dialogs' 0x1DA770): after a world load
 void UpdateMenu(SW* psw);      // orig 0x001AEEE0 and the card dialog's 0x1ACCC8, every frame
+// orig3 0x001D2C90 (the in-place reset 0x25BDD0's first call): the page stack drained (each page's screen object's
+// timers 1 (0x261050) and state 1 (0x261070), deepest first), then the menu's state 0 (0x1D2ED0)
+void DrainMenu3();
 bool FMenuShown();             // orig 0x001D9880 on 0x3D9ED0 / 0x2E6550 / 0x3DA4F0 (the episode menu waits)
 bool FMenuActive();            // the menu is in the HUD's list (the game paused under it)
 int NMenuState();              // the menu's state (MENU +0x1FC): 0 none; the cheat codes (cheat.h) read it

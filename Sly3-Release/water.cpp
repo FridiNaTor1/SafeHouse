@@ -303,6 +303,8 @@ void WakeAloWater(ALO* po, ALO* pw, const glm::vec3& vFlow, const glm::vec3& pos
             psnd->SetFalloff(100.0f, 1000.0f);                                         // 0x1FB4F0
             psnd->SetVolume(gVol);                                                     // 0x1FB1F8
             wk.snd = CSndRef(psnd);                                                    // 0x258040
+            if (static const bool s_f = std::getenv("SLY3_WAKEPRINT") != nullptr; s_f)   // (debug: each wake looper started)
+                std::printf("wake start: %d in %d t %.3f speed %.1f\n", po->oid, pw->oid, g_clock.t, s);
         }
     }
     if (!fRipple)

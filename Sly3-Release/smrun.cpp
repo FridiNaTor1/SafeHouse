@@ -611,3 +611,50 @@ void ClearSmaHandle(SMA** ppsma)
     --(*ppsma)->cref;
     *ppsma = nullptr;
 }
+
+// orig3: 0x0023A850 (Sly 2 0x1F11A8, unported there): the time the SMA needs to reach the state oidGoal: the playing
+// transition's rest (unless it is flagged 2: its time left at its speed), then each transition of a shortest path
+// (0x23A210 = PsmtPath, the same random choice) at its ASEG's tMax / (speed x the suck polynomial, clamped)
+// (0x171C98). Read by a script's camera key (scptrun3.cpp DtScptCmd3, command 0x19).
+float GSuck3();
+float DtAsegSuck3(const ASEG* paseg);
+float TSmaToGoal3(SMA* psma, OID oidGoal)
+{
+    float r = 0.0f;
+    if (!psma || !psma->psm || FSmaRetracted(psma)) return r;
+    const int isEnd = IsmsFindSm(psma->psm, oidGoal);
+    int is = psma->ismsCur;
+    if (psma->pasega && psma->psmt)
+    {
+        if (!(psma->psmt->grf & 2))
+        {
+            const float d = psma->pasega->svt;
+            float x;
+            if (d < 0.0f) x = -psma->pasega->t;
+            else if (0.0f < d) x = (psma->psmt->paseg ? PasegdOf(psma->psmt->paseg)->tMax : 0.0f) - psma->pasega->t;
+            else return r;
+            r = x / d;
+        }
+        is = psma->psmt->isFrom != psma->ismsCur ? psma->psmt->isFrom : psma->psmt->isTo;
+    }
+    for (int guard = 0; is != isEnd && guard < 256; ++guard)
+    {
+        SM::SMT* pt = PsmtPath(psma->psm, psma->grfMask, is, isEnd);
+        if (!pt) break;
+        if (pt->paseg) r += DtAsegSuck3(pt->paseg);
+        is = pt->isFrom != is ? pt->isFrom : pt->isTo;
+    }
+    return r;
+}
+
+// the ASEG's length at its speed: tMax / (+0x78 x clamp(the suck polynomial +0x80.. of 0x171C98, +0x90, +0x94))
+float DtAsegSuck3(const ASEG* paseg)
+{
+    if (!paseg) return 0.0f;
+    const float x = GSuck3();
+    float g = paseg->gSuck0 + x * (paseg->gSuck1 + x * paseg->gSuck2);
+    if (g < paseg->gSuckMin) g = paseg->gSuckMin;
+    else if (paseg->gSuckMax < g) g = paseg->gSuckMax;
+    const float d = paseg->svt * g;
+    return d != 0.0f ? PasegdOf(const_cast<ASEG*>(paseg))->tMax / d : 0.0f;
+}

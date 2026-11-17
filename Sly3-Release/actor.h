@@ -184,6 +184,7 @@ struct ACTOR : STEP
         glm::vec3 pos{0.0f};      // +0xFD0 +0x10 the follower's target point
         float s = 0.0f, t = 0.0f; // +0x20 distance last checked, +0x24 next check
         int fActive = 0;          // +0x28 recovery suspends job input/update
+        int fVeto = 0;            // +0x2C the recovery's veto (cleared before the broadcast 0x5A, tested after it)
     } watch;
     int n4C8 = -1;                 // +0x4C8 (sub-object 0x4C0's kind; -1 none, as the reference's RAM)
     int nSub4CC = -1;              // +0x4CC (sub-object 0x4C0's)

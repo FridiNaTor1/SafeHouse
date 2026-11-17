@@ -895,7 +895,7 @@ void SetAloAngVelocityToLoad(ALO* p, const glm::vec3& pos, bool fLoad)
 void SetAloAngVelocityTo(ALO* p, const glm::vec3& pos) { SetAloAngVelocityToLoad(p, pos, false); }
 NATIVEFN(0x1F46D8, SetAloAngVelocityTo);
 
-// orig: 0x001F4898 func_001F4898 (the position record's velocity v from the object's space; EOPID 75) (orig3: 0x23D9D0, the same C in the Sly 3 decomp)
+// orig: 0x001F4898 func_001F4898 (the position record's velocity v from the object's space; EOPID 75) (orig3: 0x23D938, the same C in the Sly 3 decomp)
 void SetAloVelocity(ALO* p, const glm::vec3& v, bool fLoad)
 {
     XF* po = PxfPos(p);
@@ -908,7 +908,7 @@ void SetAloVelocity(ALO* p, const glm::vec3& v, bool fLoad)
     SetAloIced(p, false);
 }
 
-// orig: 0x001F4930 func_001F4930 (the rotation record's angular velocity w from the object's space) (orig3: 0x23D938, the same C in the Sly 3 decomp)
+// orig: 0x001F4930 func_001F4930 (the rotation record's angular velocity w from the object's space) (orig3: 0x23D9D0, the same C in the Sly 3 decomp)
 void SetAloAngVelocity(ALO* p, const glm::vec3& w, bool fLoad)
 {
     XF* po = PxfRot(p);

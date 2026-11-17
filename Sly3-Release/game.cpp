@@ -1048,6 +1048,13 @@ int RunGame(const GAMEOPTS& go)
             CaneSwitch::LoadingBoost boost;   // (the CPU's loading profile while the world loads and its scene builds)
 #endif
             psw = PswUpdateTransition(std::move(psw));
+            // (the lookups into the old scene's glob sets dropped: a world reset in place (worldreset3.cpp: a death or a
+            // job's retry) keeps the objects, so the effects' scene lookups keyed by them (emitter.cpp) pointed into the
+            // freed scene: the first frame drawn after the prologue's death retry crashed in RenderPass)
+            {
+                void InvalidateSceneLookups();   // emitter.cpp
+                InvalidateSceneLookups();
+            }
             scene = SCENE{};
             apalo.clear();
             ResetStepSnapshots();

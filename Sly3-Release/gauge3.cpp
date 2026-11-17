@@ -31,6 +31,8 @@
 #include "game/biplane3.h"
 #include "game/task3.h"
 #include "challenge3.h"
+#include "ai.h"
+#include "epmenu3.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -617,10 +619,19 @@ namespace
 struct NOTICE3 { int n = -1; LO* plo = nullptr; bool fUp = false; float tShown = 0; int nChoice = -1; };
 NOTICE3 s_notice;
 
+// (audit 5 CORE5-08: the clock's factor 9 and PauseGame / ResumeGame (0x1A93C8 / 0x1A9420 (SW, -1, 0)) as the
+// original; SLY3_NOTICECLOCK0=1: the menus' factor 0 without the pause, as before)
+bool FNoticeOld3() { static const bool s_f = std::getenv("SLY3_NOTICECLOCK0") != nullptr; return s_f; }
+
 void CloseNotice3()
 {
     if (!s_notice.fUp) return;
-    SetClockFactor(&g_clock, 0, 1.0f);
+    if (FNoticeOld3()) SetClockFactor(&g_clock, 0, 1.0f);
+    else
+    {
+        SetClockFactor(&g_clock, 9, 1.0f);   // 0x222DC8
+        ResumeGame(0);                       // 0x1A9420(SW, -1, 0)
+    }
     if (s_notice.plo) HideScreenObj(s_notice.plo);
     s_notice.fUp = false;
     s_notice.plo = nullptr;
@@ -642,7 +653,12 @@ void ShowNotice3(int n, LO* plo)
     if (!plo) return;
     s_notice.fUp = true;
     s_notice.tShown = g_clock.tReal;
-    SetClockFactor(&g_clock, 0, 0.0f);
+    if (FNoticeOld3()) SetClockFactor(&g_clock, 0, 0.0f);
+    else
+    {
+        SetClockFactor(&g_clock, 9, 0.0f);   // 0x222D38
+        PauseGame(0);                        // 0x1A93C8(SW, -1, 0)
+    }
     ShowScreenObj(plo, 0x377);
 }
 
@@ -710,7 +726,12 @@ void UpdateNotice3()
                     p.nChoice == 0 ? "the normal view" : "the world's own mode");
         break;
     case 2: case 3:
-        if (GrfbtnTakePressed(0x80)) std::fprintf(stderr, "sly3: the notice's transition 0x289198(2, 0) is not started natively\n");
+        // square: 0x289198(SW, 2, 0, D_00468D30): episode 2 started (epmenu3.cpp StartEpisode3); triangle closes
+        if (GrfbtnTakePressed(0x80))
+        {
+            if (FNoticeOld3()) std::fprintf(stderr, "sly3: the notice's transition 0x289198(2, 0) is not started natively\n");
+            else if (g_psw) StartEpisode3(g_psw, 2);
+        }
         else if (!GrfbtnTakePressed(0x10)) return;
         break;
     default:

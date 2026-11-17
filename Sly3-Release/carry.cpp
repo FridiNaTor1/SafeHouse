@@ -50,14 +50,6 @@ glm::vec3 DvAloImpulse(ALO* p, const glm::vec3& v);                         // s
 glm::vec3 DwAloImpulseAt(ALO* p, const glm::vec3& a, const glm::vec3& b);   // solve.cpp (0x1FAA48)
 namespace
 {
-// orig 0x001F7530 (the first ALO up the parents with one of the contact bytes f)
-ALO* PaloXpFilter(ALO* p, uint32_t f)
-{
-    for (; p; p = p->paloParent)
-        if (GrfAloXpBytes(p, f)) return p;
-    return nullptr;
-}
-
 void WarnOnce(const std::string& what)
 {
     static std::map<std::string, bool> s_mp;
@@ -207,7 +199,7 @@ void SetCarryStateBase(LO* plo, int n)
     if (std::getenv("SLY2N_CARRYDEBUG") && n == 0)
     {
         for (const auto& [k, u] : plo->afield) std::printf("  field getter 0x%X +0x%X = 0x%X\n", unsigned(k >> 32), unsigned(k & 0xFFFFFFFF), u);
-        for (const OPT& o : plo->aopt) std::printf("  option eopid %d\n", o.eopid);
+        for (const OPT& o : plo->aopt) std::printf("  option eopid %d = %d (%zu values)\n", o.eopid, o.aval.empty() ? -1 : o.aval[0].n, o.aval.size());
         for (const auto& [ib, pl] : palo->apart) std::printf("  part +0x%X oid %d cid 0x%X\n", ib, pl->oid, pl->Cid());
     }
     if (std::getenv("SLY2N_CARRYDEBUG"))
@@ -447,7 +439,7 @@ void UpdateCarry(LO* plo)
 
 
 // orig: 0x00224380 (vt slot 58: the base's; each contact of its own with something but the steppers, the
-// carryables, 0x4F, 0x67: it landed (+0x158 2, +0x1A0 the other); held a while with none: 4)
+// carryables, 0x4F, 0x67 (orig3: PO / CARRY / PROJECTILE / BOOTY / TURRET / GRAPPLECAM): it landed (+0x158 2, +0x1A0 the other); held a while with none: 4)
 void UpdateCarryContacts(ALO* palo)
 {
     NotifyAloContacts(palo);  // 0x1F4F10
@@ -461,8 +453,8 @@ void UpdateCarryContacts(ALO* palo)
         {
             ALO* q = ox->psoOther;
             bool fOk = x->xpk != 8 && FCarryLands(*pc);
-            for (ALO* r = q; r && fOk; r = r->paloParent)  // 0x224508
-                for (CID cid : {0x33, 0x64, 0x4F, 0x67})
+            for (ALO* r = q; r && fOk; r = r->paloParent)  // 0x224508 (orig3 0x277510, table D_00329150, Sly 3 cids:
+                for (CID cid : {0x32, 0x71, 0x59, 0x74, 0x44, 0x56})  // PO, CARRY, PROJECTILE, BOOTY, TURRET, GRAPPLECAM)
                     if (FIsLoDerivedFrom(r, cid)) fOk = false;
             if (fOk)
             {
@@ -508,8 +500,12 @@ void BlastRay(LO* plo, uint32_t grf, const glm::vec3& a, const glm::vec3& b, con
     const float l = glm::length(d);
     if (l <= 0.0f) return;
     const glm::vec3 n = d / l;
-    ALO* pso = PaloXpFilter(psoe->palo, grf);  // 0x1F7530
-    if (!pso) return;
+    // (orig3 0x277830: the object hit is recorded whatever its contact bytes (the filter goes into its message, 0x240CB0);
+    // Sly 2's 0x224820 kept only an owner up the parents with the filter's bytes (0x1F7530), so with a bomb's filter 0
+    // nothing was ever hit natively: m_ext's lamp post 15452 stood after Bentley's bomb)
+    ALO* pso = psoe->palo;
+    if (static const bool s_f = std::getenv("SLY2N_CARRYDEBUG") != nullptr; s_f)
+        std::printf("carry %d: blast ray hits %d (cid 0x%X) at %.0f %.0f %.0f\n", plo->oid, pso->oid, pso->Cid(), lsg.pos0.x, lsg.pos0.y, lsg.pos0.z);
     bool f = false;
     for (const BLASTHIT& h : *pahit) f = f || h.palo == pso;
     if (!f && pahit->size() < 0x20) pahit->push_back(BLASTHIT{pso, lsg.pos0, n * 1000.0f});  // D_002C4334
@@ -545,8 +541,14 @@ void BlastCarry(LO* plo, float r)
 {
     ALO* palo = static_cast<ALO*>(plo);
     const glm::vec3 pos = PosAloCenter(palo);  // (0x224E70: 0x1A62E8, the object record's position, not the root's)
-    const uint32_t grf = static_cast<uint32_t>(NCarryField(plo, 1107, 0x174, 0));
-    const int nState = NCarryField(plo, 1108, 0x178, -10);
+    // (orig3 0x277EB0: Sly 3's +0x154 the filter, +0x158 the amount, +0x15C the fatal flag (0x240CB0's sixth argument),
+    // its EOPIDs 1202 / 1203 / 1204 (Sly 2's 1107 / 1108 at +0x174 / +0x178, which Sly 3's data never has: natively the
+    // blast always took 0 / -10); m_ext's bomb 6763: 0 / 20 (option 1203) / 0, as the reference's RAM)
+    const uint32_t grf = static_cast<uint32_t>(NCarryField(plo, 1202, 0x154, 0));
+    const int nState = NCarryField(plo, 1203, 0x158, 0);
+    const int nKill = NCarryField(plo, 1204, 0x15C, 0);
+    if (std::getenv("SLY2N_CARRYDEBUG"))
+        for (const auto& [k, u] : plo->afield) std::printf("carry %d: blast field getter 0x%X +0x%X = 0x%X\n", plo->oid, unsigned(k >> 32), unsigned(k & 0xFFFFFFFF), u);
     // 0x20FC60 with the filter 0x20FA10 (context: the blast's own attachment): the attachments whose sphere (+0x20,
     // radius +0x30) is within r, their entries not of bit 48, not of an attachment marked 4 nor of its own
     FlushSwOxaDirty1();  // 0x133E30
@@ -593,6 +595,7 @@ void BlastCarry(LO* plo, float r)
         ctm.ploReceiver = h.palo;
         ctm.grfFilter = grf;
         ctm.nState = nState;
+        ctm.nKill3 = nKill;
         ctm.pos = h.pos;
         ctm.vec = h.vec;
         PaloAcceptContact(&ctm);  // 0x1F7598

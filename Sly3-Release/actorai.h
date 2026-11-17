@@ -38,6 +38,8 @@ struct JOBACTORWALK : AIJOB
     int fWalk = 1;               // +0x38
     float uSpeed = 1.0f;         // +0x3C
     glm::vec3 posGoal{0.0f};     // +0x40
+    int fFree = 0;               // +0x50 (orig3 0x157A80: the step was not clamped at the curve's end: the follower's
+                                 // free run, copied into its +0xA0 by 0x1578C8 / 0x157A80)
     int fSly3 = 0;               // (Sly 3's 0xF4: 0x157970's region rule in SetGoal)
     void Init() override;
     void Enter() override;
@@ -140,3 +142,5 @@ std::unique_ptr<AIJOB> PjobNewActor(CID cid);
 void SetActorFollow(ACTOR* pa, LO* target, const glm::vec3& offset);  // 0x142540
 void SetActorWatchTarget(ACTOR* pa, const glm::vec3& pos);            // 0x1448F0
 void UpdateActorWatch(ACTOR* pa);                                   // 0x144640
+// orig3: the script run driving the actor (+0x115C) and its pending command's op (run +0x48): -1 none (game/scptgame3.cpp)
+int IdActorRunCmd3(const ACTOR* pa);

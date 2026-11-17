@@ -12,6 +12,9 @@
 #include "rumble.h"
 #include "game/sly3.h"
 #include "menu.h"
+#include "gadget.h"
+#include "gang.h"
+#include "game/items3.h"
 #include "challenge3.h"
 #include "gauge3.h"
 #include "game/cond3.h"
@@ -65,6 +68,8 @@
 #include <vector>
 
 bool FJollyCannon3(LO* plo);   // game/rowboat3.cpp (the jolly boat's +0x284)
+int GrappleProgressWeapon3();   // game/grapplecam3.cpp (orig3 0x140738: the progress powerUps.fAcquiredWebcamWeapon)
+
 namespace
 {
 int32_t NElf(uint32_t va) { return int32_t(g_disc.U32Elf(va)); }
@@ -352,6 +357,21 @@ void SetMenuState(int st)
     case 11: SelectScreenObjPart(plo, m3::PART_SLIDER_IN); break;
     default: break;
     }
+}
+
+// orig3 0x001D2C90 (menu.h DrainMenu3)
+void DrainMenuStack()
+{
+    while (s_menu.depth > 0)
+    {
+        if (LO* plo = s_menu.apage[size_t(s_menu.depth)].plo)
+        {
+            SetScreenObjTimers(plo, 1);   // 0x261050
+            SetScreenObjState(plo, 1);    // 0x261070
+        }
+        --s_menu.depth;
+    }
+    SetMenuState(0);                      // 0x1D2ED0(menu, 0)
 }
 
 // orig3 0x001D3AE8
@@ -1048,8 +1068,33 @@ int IdControlHelpText(LO* player, int k)
     }
     if (FCidDerivedFrom(cid, 0x56))
     {
-        // (cases 5 / 6 / 8 / 9: the gadget-dependent lines 0x25E / 0x25F (0x140738 / 0x154798 on D_0036B250): not kept)
-        switch (k) { case 0: return 0x25A; case 2: return 0x25B; case 4: return 0x25C; case 1: return 0x25D; case 10: return 0x203; default: return -1; }
+        // (orig3 0x1F5720) 8: the weapon's line 0x25E once the progress powerUps.fAcquiredWebcamWeapon is set (0x140738);
+        // 5 / 6 / 9: 0x25F when the world's Bentley (D_0036B250) has the Grapple-Cam (13) on that selection's button
+        // (0x154798 & D_00346F80: 5 L1, 6 L2, 9 R2)
+        switch (k)
+        {
+        case 0: return 0x25A;
+        case 2: return 0x25B;
+        case 4: return 0x25C;
+        case 1: return 0x25D;
+        case 10: return 0x203;
+        case 8: return GrappleProgressWeapon3() ? 0x25E : -1;
+        case 5: case 6: case 9:
+        {
+            BENTLEY* pb = PbentleyGlobal();
+            const uint32_t grf = k == 5 ? 0x4 : k == 6 ? 0x1 : 0x2;
+            return pb && (GrfAbilityButton(pb, sly3::Item2FromItem3(13)) & grf) ? 0x25F : -1;
+        }
+        default: return -1;
+        }
+    }
+    // the base SO's slot 91 (orig3 0x1F4F40): by the object's oid (0x1C8768, its oid or alias): 0x7D3 the RC car, 0x7D4
+    // the dump truck (AUDIT5 MODES5-08)
+    if (FCidDerivedFrom(cid, sly3::CID_SO))
+    {
+        auto foid = [player](int oid) { return player->oid == oid || player->oidInstance == oid; };
+        if (foid(0x7D3)) return find({{0, 0x219}, {2, 0x217}, {7, 0x218}, {4, 0x216}, {8, 0x216}, {12, 0x204}});
+        if (foid(0x7D4)) return find({{0, 0x221}, {2, 0x222}, {1, 0x223}, {7, 0x224}, {12, 0x204}});
     }
     return -1;
 }
@@ -1514,6 +1559,8 @@ void EraseTarget()
     }
 }
 }  // namespace
+
+void DrainMenu3() { DrainMenuStack(); }   // orig3 0x1D2C90 (menu.h)
 
 // ------------------------------------------------------------ the card dialog's menu messages (card3.h)
 // orig3 0x001D1370 / 0x001D1190 for the menu's messages: true when handled

@@ -61,6 +61,38 @@ struct WR : LO
     int32_t oidAnchor = -1;      // (native: the option's oid until its object is found)
 };
 
+// Sly 3 class 0x89 (vtable 0x36A8A8, size 0x960; worlds 6 / 20 / 23 / 31 / 32 / 33 / 35 / 36 / 38): a WR whose
+// circle entries are dealt out to up to eight scripted wave items. Each item (orig 0x54 bytes at +0x698) keeps the
+// random ranges of its waves and a queue of at most two waves, each one entry of the WR whose amplitude (+0x10)
+// follows a smoothstep envelope (in / hold / out), the next wave starting while the last fades out (0x28ADC8).
+struct WRQ   // orig 0x14 bytes at item +0x2C
+{
+    int iwre = -1;           // +0x00: the WR entry (orig: its pointer)
+    float tStart = 0.0f;     // +0x04
+    float tFull = 0.0f;      // +0x08: full from here
+    float tFade = 0.0f;      // +0x0C: fading out from here
+    float tStop = 0.0f;      // +0x10
+};
+struct WRITEM
+{
+    float lmWavelength[2] = {};  // +0x00 (EOPID 1052)
+    float lmAmpl[2] = {};        // +0x08 (1051)
+    float lmDuration[2] = {};    // +0x10 (1053)
+    float lmAngle[2] = {};       // +0x18 (1054): around the wind's heading + pi
+    float sFade = 1.0f;          // +0x20 (1055): the longest fade out (and the gap past other items' fades)
+    float gSpeed = 1.0f;         // +0x24 (1056): the wave speed's factor
+    int cq = 0;                  // +0x28
+    WRQ aq[2]{};                 // +0x2C
+};
+struct WR89 : WR
+{
+    WR89();                      // 0x28A788 (vt slot 7): one circle entry, amplitude 0
+    int citem = 0;               // +0x690 (EOPID 1049)
+    int iitemCur = 0;            // +0x694 (1050)
+    WRITEM aitem[8]{};           // +0x698
+    bool afOwned[8] = {};        // +0x938: the entries handed to an item's wave (orig: the item)
+};
+
 // orig3 0x28A558 / 0x28A588 (0x28A480): a circle / constant entry added (the current one)
 void AddWrCircleWarp(WR* pwr);
 void AddWrBendWarp(WR* pwr);

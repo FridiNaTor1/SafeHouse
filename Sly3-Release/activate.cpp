@@ -53,6 +53,7 @@ ACTVIEW g_actview;
 void OnRemoveGuard(LO* plo);  // guard.cpp (orig 0x2064D8)
 void OnRemoveSpawner(LO* plo);  // spawner.cpp (orig 0x1746B8, after the base notification)
 
+void OnGrappleLeaveWorld3(LO* plo);  // (game/grapplecam3.cpp: the Grapple-Cam's slots 12 / 24, 0x285848 / 0x285890)
 void OnRemoveHackSo(LO* plo);  // (hack.cpp: the hack objects' 0x17F110, the ship's 0x17F740, the enemies' 0x180598)
 void OnRemoveTrigger(LO* plo);  // trigger.cpp (orig 0x149880, after the base 0x1A5848)
 
@@ -137,6 +138,7 @@ void OnRemove(LO* plo)
     // 0x1A5848's end: the notification slot 4 (0x133508) with message 1 (the object's own slot 5, then its listeners)
     if (FLoHasListeners(plo)) NotifyLoListeners(plo, 1, plo);
     if (plo->pcls && plo->pcls->PfnOrig(12) == 0x1746B8) OnRemoveSpawner(plo);
+    if (plo->pcls && FIsLoDerivedFrom(plo, 0x56)) OnGrappleLeaveWorld3(plo);
     if (plo->pcls && plo->pcls->PfnOrig(12) == 0x149880) OnRemoveTrigger(plo);
     if (plo->pcls && plo->pcls->PfnOrig(12) == 0x156D58) OnRemoveNoiseListener(plo);
     // 0x1B1E38 calls its ALO base first, then releases the flight clip/controller.
@@ -353,6 +355,7 @@ void UnregisterLoTree(SW* psw, LO* plo)
             if (!pc->fRemoved) UnregisterLoTree(psw, pc);
     if (plo->pcls && plo->pcls->PfnOrig(22) == 0x2079A0) OnGuardUnregistered(plo);
     if (plo->pcls && plo->pcls->PfnOrig(22) == 0x2213D8) OnZoneUnregistered(plo);  // (cmworld.h)
+    if (plo->pcls && FIsLoDerivedFrom(plo, 0x56)) OnGrappleLeaveWorld3(plo);
 }
 
 void QueueLoRoot(SW* psw, LO* plo)

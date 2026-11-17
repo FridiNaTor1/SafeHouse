@@ -89,3 +89,8 @@ void ReplaceSmaHandleMask(SM* psm, ALO* palo, OID oid, int grfapl, uint32_t grfM
 void ClearSmaHandle(SMA** ppsma);
 // orig: 0x001F0D88 ChooseSmaTransition
 void ChooseSmaTransition(SMA* psma, bool fReverse);
+
+// orig3: 0x23A850: the time the SMA needs to reach the state oidGoal (smrun.cpp); an ASEG's length at its speed with
+// the suck polynomial (0x22A670's kind 0x16)
+float TSmaToGoal3(SMA* psma, OID oidGoal);
+float DtAsegSuck3(const ASEG* paseg);

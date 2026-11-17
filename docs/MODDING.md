@@ -146,6 +146,11 @@ animated (multi-frame) textures and in particles.
   fills it ahead of time. `Texture Cache = Off` under `[Graphics]` in `Settings.ini` turns it off; on the Nintendo
   Switch it is off unless you set it to `On` (it takes about two thirds of the pack's size on the SD card again).
   (Sly 3 has the same cache, with `sly3` in place of `sly2`.)
+- **Sly 3's 3-D mode and two-player games use other textures.** A replacement is found by the texture's own pixels.
+  In the 3-D mode Sly 3 loads its worlds with other textures (other images, often smaller, and colours adjusted for
+  the glasses), and its two-player games (Cops and Robbers, the two-player hacking game, the duels) load the second
+  set of textures the world files carry. A pack made in normal play therefore does not change those modes; dump the
+  textures in those modes as well (play them with your mods folder's dump) and include them in the pack.
 - **Texture streaming:** replacements load on the processor's other cores while the game goes on, so a texture can
   show its original for a moment when it first appears instead of the game pausing; a level starts with its
   replacements in place where the computer is fast enough. `Texture Streaming = Off` under `[Graphics]` in

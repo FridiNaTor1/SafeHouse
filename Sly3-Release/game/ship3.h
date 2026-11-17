@@ -13,6 +13,8 @@ struct ALO;
 
 // a ship (class 0x58)
 bool FShip3(const LO* plo);
+// the wind's heading (orig3 D_0047A2C8: SW +0x4E48, the world's option 997)
+float RadWind3();
 // po.cpp's enable (orig3 vt slot 83 0x2147B0): a pad taken (n >= 0) sails it (mode 2), released (-1) idle
 void OnShipEnable3(LO* plo, int n);
 // the ship's mode (+0x1B0: 0 / 1 idle, 2 sailing, 3 the map, 4 in battle, 5 nearly sunk, 6 out, 7 sunk), -1: not a ship

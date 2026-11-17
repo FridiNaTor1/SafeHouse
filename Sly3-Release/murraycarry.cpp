@@ -341,8 +341,10 @@ void PutDownMurrayCarry(MURRAY* p) {
 void CancelMurrayCarry(MURRAY* p) {
     if(p->state==6) { if(p->psma1530)SetSmaGoal(p->psma1530,0x1F8);return; }  // (orig3 0x1E04E8: 0x1F8; Sly 2 0x1CA)
     if(!p->plo13F0)return;
+    // (orig3: vt 3 message 6 only; its task broadcast 0x1E is HandleLoSpliceEvent's (update.cpp), so the copied Sly 2
+    // BroadcastTaskEvent 0x1B is gone: AUDIT5 PLAYER5-10; it was dropped by BroadcastTaskEvent anyway)
     if(p->state==4&&p->n1450==0) {HandleLoSpliceEvent(p->plo13F0,6,false,0,nullptr);
-    BroadcastTaskEvent(g_psw,0x1B,p->plo13F0);p->plo13F0=nullptr;return;}
+    p->plo13F0=nullptr;return;}
     Detach(p);
     if(ALO* a=Owner(p)) {
         if(FIsLoDerivedFrom(a,S3CID(0x38)))ReleaseGuardHeld(a);

@@ -1440,7 +1440,9 @@ void UpdateBentley(LO* plo)
     const bool fCarmAim = PpadctlOf(p) && FPcCarmGangInput(p, BS3_Idle, BS3_Run, BS3_Walk);
     UpdateJtCandidates(p, FPcCarm(p->palo) ? 0x80 : 0xF8FE);  // 0x194A40 (the interaction targets, jt.cpp)
     UpdateBentleyF00(p);
-    if (PpadctlOf(p)) UpdateBentleyTransitions(p);
+    // (every frame, with or without the pad, as the original (0x13DE58 -> 0x13D518): a scripted Bentley's leap (SCPT 0x36) ends;
+    // the pad readers are null-safe. SLY3_GANGTRANS0=1: only with the pad, as before)
+    if (static const bool s_fOld = std::getenv("SLY3_GANGTRANS0") != nullptr; !s_fOld || PpadctlOf(p)) UpdateBentleyTransitions(p);
     switch (p->state)
     {
     case BS3_Idle:
@@ -2580,7 +2582,9 @@ void UpdateMurray(LO* plo)
     const bool fCarmAim = PpadctlOf(p) && FPcCarmGangInput(p, 0, 10, 1);
     UpdateJtCandidates(p, FPcCarm(p->palo) ? 0x80 : 0xF8FA);  // 0x194A40 (the interaction targets, jt.cpp)
     UpdateMurrayF00(p);
-    if (PpadctlOf(p)) UpdateMurrayTransitions(p);
+    // (every frame, with or without the pad, as the original (0x1DD590 -> 0x1DCEA8): a scripted Murray's leap (SCPT 0x36) ends;
+    // the pad readers are null-safe. SLY3_GANGTRANS0=1: only with the pad, as before)
+    if (static const bool s_fOld = std::getenv("SLY3_GANGTRANS0") != nullptr; !s_fOld || PpadctlOf(p)) UpdateMurrayTransitions(p);
     switch (p->state)
     {
     case 0:
@@ -2721,7 +2725,8 @@ uint32_t GrfMurrayXp(ALO* palo)
 {
     MURRAY* p = PmurrayFromLo(palo);
     if (!p || p->fNoContacts) return 0;
-    if (p->n13D8 == 1 || p->state == 20) return 0;
+    // orig3 0x1E0C68: +0x1528 == 1, state 21 (the climb, native 20) and 22 (Be The Ball: native 22 too) give none
+    if (p->n13D8 == 1 || p->state == 20 || p->state == 22) return 0;
     return GrfActorStance(p);  // 0x143C78
 }
 
@@ -2796,13 +2801,28 @@ void OnMurrayMessage(LO* plo, int msgk, void* pv)
     }
 }
 
-// orig: 0x001B7F90 (vt slot 89: the jump kind of the state, -1 none)
+// orig: 0x001B7F90 (vt slot 89: the jump kind of the state, -1 none). orig3 0x1E08F8 (AUDIT5 PLAYER5-06) on the native
+// numbering (Sly 3's states 10 / 14 / 15 / 17..21 are native 9 / 13 / 14 / 16..20): -1 -> -1, 0 / 5 -> 0, 2 -> 1, 13 -> 2,
+// 14 -> 3, 16..20 -> 4..8, 9 (the behaviour clip) -> 10, any other state 11
 int MurrayJumpKind(LO* plo)
 {
     MURRAY* p = PmurrayFromLo(plo);
     if (!p) return -1;
-    static const int s_ak[21] = {0, -1, 1, -1, -1, 0, -1, -1, -1, -1, -1, -1, -1, 2, 3, -1, 4, 5, 6, 7, 8};
-    return static_cast<unsigned>(p->state) < 21 ? s_ak[p->state] : -1;
+    switch (p->state)
+    {
+    case -1: return -1;
+    case 0: case 5: return 0;
+    case 2: return 1;
+    case 13: return 2;
+    case 14: return 3;
+    case 16: return 4;
+    case 17: return 5;
+    case 18: return 6;
+    case 19: return 7;
+    case 20: return 8;
+    case 9: return 10;
+    default: return 11;
+    }
 }
 
 // orig: 0x001B7E40 (vt slot 88)
@@ -2810,8 +2830,9 @@ void SetMurrayJumpState(LO* plo, int n)
 {
     MURRAY* p = PmurrayFromLo(plo);
     if (!p) return;
-    switch (n)
+    switch (n)   // (orig3 0x1E0770: also -1 -> state -1 and 10 -> the behaviour clip, Sly 3's 10 = native 9)
     {
+    case -1: SetMurrayState(p, -1); break;
     case 0: SetMurrayState(p, p->plo13F0 ? 5 : 0); break;
     case 1:
         if (p->jump.kind != 15 && p->jump.kind != 16) CancelMurrayCarry(p);
@@ -2824,6 +2845,7 @@ void SetMurrayJumpState(LO* plo, int n)
     case 6: CancelMurrayCarry(p); SetMurrayState(p, 0x12); break;
     case 7: CancelMurrayCarry(p); SetMurrayState(p, 0x13); break;
     case 8: CancelMurrayCarry(p); SetMurrayState(p, 0x14); break;
+    case 10: CancelMurrayCarry(p); SetMurrayState(p, 9); break;
     default: break;
     }
 }

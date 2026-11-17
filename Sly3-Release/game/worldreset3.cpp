@@ -8,10 +8,11 @@
 // (0x27FDE8, flags 0), the splice method 0x289020.
 //
 // 0x25BDD0, in order:
-//   0x1D2C90(D_0046F550)                the HUD record stack drained
+//   0x1D2C90(D_0046F550)                the menu's page stack drained (menu.cpp DrainMenu3)
 //   0x25BD68                            every SCPT (class 0x87) stopped (0x226050)
 //   0x1F4B00(p, 0 / 1, 0)               both players' characters unset (0x1F4B38: the old one's slot 83 (-1))
-//   SW +0x3EB8's objects, slot 57       the players' cameras taken off the world's list (0x1F4B38 puts them back)
+//   SW +0x3EB8's objects, slot 57       the players' cameras taken off the world's list (0x1F4B38 puts them back;
+//                                       natively the views' cameras are not listed objects: no counterpart)
 //   SW +0x4FA4 = 0; SW +0x4050          a job quit by its marker restarted (0x187118)
 //   0x188620 / 0x186298 in mode 2       the active task and the current job left, not saved; GAME +0x1498..+0x14A0 kept
 //   every task -1 in mode 2             (0x18A900's list, 0x18A3E8)
@@ -19,7 +20,8 @@
 //   0x25BBD0                            the particle owners (SW +0x480C, 0x203078) let go; the PSYS (0x1A) and RIPG
 //                                       (0x63) objects removed (slot 9)
 //   0x25BD20                            every noise removed (0x1739A8)
-//   0x15AE70 / 0x15B790                 the activation queues flushed
+//   0x15AE70 / 0x15B790                 the activation queues flushed (natively: the start tail's activation pass
+//                                       runs the queued roots, transition.cpp; no separate flush)
 //   0x1FC6A0                            every object of the world's tree (not a spare proxy row's) slot 30: LO 0x1FC768
 //                                       (slot 32 the class's release, then splice event 18), a PROXY 0x1FC7D0 (its rows
 //                                       not held detached, the pooled objects back), up to 16 passes
@@ -53,6 +55,8 @@
 #include "../jobend3.h"
 #include "../lo.h"
 #include "../objmethod.h"
+#include "../menu.h"
+#include "../pe.h"
 #include "../po.h"
 #include "../rumble.h"
 #include "../ref.h"
@@ -183,6 +187,9 @@ void ResetSwInPlace3(SW* psw)
     if (!psw) return;
     if (FPrint()) std::printf("inplace: reset of world %d (objects %zu, job %d, task %d)\n", psw->filter, psw->aploAll.size(),
                               g_gametasks3.oidJob, g_gametasks3.oidTask);
+    // 0x1D2C90(D_0046F550): the menu's page stack drained, its state 0 (audit 5 CORE5-05: natively left out)
+    static const bool s_fNoDrain = std::getenv("SLY3_INPLACEMENU0") != nullptr;
+    if (!s_fNoDrain) DrainMenu3();
     StopScripts3();                                     // 0x25BD68
     // 0x1F4B00(p, 0 / 1, 0): the players' characters unset (their pads off: slot 83 (-1)); the world start's player
     // selection (transition.cpp, 0x25B9C0) takes them again, the others not taken are removed there
@@ -195,7 +202,9 @@ void ResetSwInPlace3(SW* psw)
     SetPoCurrent(psw, nullptr);
     ResetTasksInPlace3();                               // 0x187118 / 0x188620 / 0x186298 / 0x18A3E8 in mode 2
     StopJoyRumble();                                    // 0x210C90(pad, 3)
-    // 0x25BBD0: the particle systems and ripples out of the world (their slot 9)
+    // 0x25BBD0: the particle owners of SW +0x480C let go (0x203078: every registered PE instance dropped, pe.cpp;
+    // audit 5 CORE5-05), then the particle systems and ripples out of the world (their slot 9)
+    if (!s_fNoDrain) ResetPesInPlace3();
     for (CID cid : {CID(0x1A), CID(0x63)})   // (Sly 3 cids)
         for (LO* plo : std::vector<LO*>(psw->mpcidaplo[cid]))
             if (plo->fInWorld) RemoveLo(psw, plo);

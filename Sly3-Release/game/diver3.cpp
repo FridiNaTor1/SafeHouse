@@ -29,7 +29,8 @@
 // 0x26D7B0; the shots go through it, 0x26D078), the stance method 1931 (0x110A20 -> 0x26CD28: the shots' proxy) and
 // the HUD meters' fills 0x3CA / 0x3D2 (s3fix-modes3).
 // The creatures (0x7E, e.g. p_dive's 5 sharks (40 hit points) and 12 fish (1)): see the section below (flight legs,
-// search, the path's speed envelope). Not ported: their lights 0x232710 (vt slot 21: the projected lights' pass, render).
+// search, the path's speed envelope); their lights 0x232710 (vt slot 21) are scenesw.cpp's light-falloff pass (1b28d55e).
+// The charm (vt slot 87 0x26CCC0: hit points + a, +0x174 + b) is pickup.cpp's (AUDIT5 MODES5-03).
 // Debug: SLY3_DIVEPRINT=1 (states, strokes, shots, hits; every second the swimmer).
 
 #include "../activate.h"

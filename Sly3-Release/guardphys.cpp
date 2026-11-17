@@ -24,6 +24,10 @@
 #include <cstdio>
 #include <cstdlib>
 #include "game/suck3.h"
+#include "game/task3.h"
+#include "game/scptgame3.h"
+#include "animfind.h"
+#include "asega.h"
 #include "sw.h"
 #include "po.h"
 void NoteGuardFlinch3(const LO* plo);   // scenesw.cpp (orig3 STEPGUARD +0x380)
@@ -233,8 +237,28 @@ bool FAcceptContactGuard(ALO* palo, CTMSG* pctm)
     else
     {
         // (orig3 0x2523E8: the flinch's time +0x380, read by the draw 0x252508's size pulse: scenesw.cpp)
-        if (grf & 4) ::NoteGuardFlinch3(palo);
-        return (grf & 4) != 0;  // TODO(ai): the flinch's clip (+0x... 0x137588) and broadcast 0xF
+        if (grf & 4)
+        {
+            ::NoteGuardFlinch3(palo);
+            // (orig3 0x251C08's flinch: the clip +0x368 (option 404, Sly 2's block clip +0x348) applied from 0 at speed 1
+            // into +0x36C (0x137588), then the tasks' broadcast 0xF with the guard (0x1854C8): e.g. the Prologue's Dr. M
+            // (kind 13791 sets his clip 9148) whose cane hits count in the land beast fight (task 4319's s20 handler).
+            // SLY3_FLINCH0=1: none, as before)
+            static const bool s_fOld = std::getenv("SLY3_FLINCH0") != nullptr;
+            if (!s_fOld)
+            {
+                ASEG* paseg = pg->paseg348;
+                // (the field: a splice's set (spliceglue: Sly 3's offset +0x368, e.g. kind 13791's 9148) after the
+                // loaded one (Sly 2's +0x348 natively, e.g. Dr. M's 8891))
+                int oid = static_cast<int>(palo->U32Field(0, 0x368, 0xFFFFFFFFu));
+                if (oid <= 0) oid = static_cast<int>(palo->U32Field(0, 0x348, 0xFFFFFFFFu));
+                if (LO* p = oid > 0 ? PloFindSwNearest(palo, oid) : nullptr; p && p->Cid() == S3CID(0x6D)) paseg = static_cast<ASEG*>(p);
+                if (paseg) ApplyAsegCur(paseg, palo, 0.0f, 1.0f, 1, &pg->pasega34C);
+                if (s_fDebug) std::printf("hit3: guard %d flinch clip %d (field %d), broadcast 0xF\n", palo->oid, paseg ? paseg->oid : -1, oid);
+                if (FScripts3Active()) Broadcast3(0xF, palo);
+            }
+        }
+        return (grf & 4) != 0;
     }
     CTMSG m = *pctm;
     m.grfAccepted = grf2;

@@ -345,7 +345,7 @@ void LoadOptionFromBrx(OPT& opt, LO* plo, int eopid, int grf, CBinaryInputStream
         pchildField->aopt.push_back(std::move(actionField));
     }
     // a space warp's entry fields (the getters 0x22C4D8 / 0x22C4F8: EOPIDs 947..961) and its current entry (964)
-    if (plo && plo->Cid() == S3CID(0x73) && !(grf & 0x100)) FLoadWrOption(plo, eopid, v.ag.data(), v.n);
+    if (plo && FIsLoDerivedFrom(plo, S3CID(0x73)) && !(grf & 0x100)) FLoadWrOption(plo, eopid, v.ag.data(), v.n);
     // the booty's current record (the getter 0x13C4D8: EOPIDs 1155 / 1161..1163, booty.cpp)
     if (plo && (grf & 0x2000) && e.pfnGet == 0x13C4D8) SetBootyRecordField(plo, static_cast<uint32_t>(e.c18), v);
     if ((grf & 0x90) && plo)
@@ -405,7 +405,7 @@ bool FEditorApplyOption(LO* plo, int eopid, const void* pv, std::size_t cb, cons
         grf &= 0x2580;
         if (grf & 0x401) why = "a method or list option (applied at the load)";
         else if (grf & 0x2000) why = "a sub-object's option (made at the load)";
-        else if (plo->Cid() == S3CID(0x73)) why = "a space warp's entry (built at the load)";
+        else if (FIsLoDerivedFrom(plo, S3CID(0x73))) why = "a space warp's entry (built at the load)";
         else if (k == 22 || k == 3 || k == 4 || k == 12) why = "this kind is not applied live";
         else if (!(grf & 0x190)) why = "read once at the load";
     }
@@ -645,7 +645,7 @@ LO* PloCloneLo(LO* plo, SW* psw, ALO* paloParent)
         if (const auto* ps = dynamic_cast<const LOSCPT3*>(plo))
             if (auto* pd = dynamic_cast<LOSCPT3*>(ploNew)) pd->acmd = ps->acmd;
     }
-    if (plo->Cid() == S3CID(0x73)) CloneWrData(plo, ploNew);  // 0x22B748
+    if (FIsLoDerivedFrom(plo, S3CID(0x73))) CloneWrData(plo, ploNew);  // 0x22B748 (0x89's items too)
     CloneBreakableData(plo, ploNew);   // (the breakable's fields, copied with the object)
     if (FIsLoDerivedFrom(plo, S3CID(0x30))) CloneAloData(static_cast<ALO*>(plo), static_cast<ALO*>(ploNew));
     else if (FIsLoDerivedFrom(plo, S3CID(3)))

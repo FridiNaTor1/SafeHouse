@@ -4,6 +4,8 @@
 // records (0x1F8278 / 0x20A5F8: one per pursued object, the guards on it, its timer). See aipursuit.h.
 
 #include "aipursuit.h"
+#include "projectile.h"
+#include "brx.h"
 #include "game/sly3.h"
 #include "game/scptgame3.h"
 #include "game/task3.h"
@@ -781,10 +783,12 @@ void JOBACT::Exit()
 void JOBACT::SetActState(int n)
 {
     if (st == n) return;
+    static const bool s_fNoHit = std::getenv("SLY3_ACTNOHIT") != nullptr;   // (debug: the old way, the hit never heard)
     if (st == 0)
     {
-        // (0x133448: no longer the target's listener; 0x20AC28(p, 0, 0, 0): the held attachment cleared)
-        ptarget = ptarget;
+        // (0x133448 / orig3 0x13BD88: no longer the target's listener; 0x20AC28(p, 0, 0, 0): the held attachment cleared)
+        if (plistened) RemoveLoListener(plistened, this);
+        plistened = nullptr;
     }
     EndChildJob(&pchild);
     st = n;
@@ -792,7 +796,13 @@ void JOBACT::SetActState(int n)
     GUARD* pg = pguard;
     if (n == 0)
     {
-        // (0x1333C0: the guard listens to the target (its message 0xB: the hit landed, Message))
+        // (0x1333C0 / orig3 0x13BD00: the guard listens to the target: a contact it accepted whose sender is this guard
+        // (orig3 0x257CF0: the sender's root a step guard, or a projectile's launcher's) is the hit landed, Message)
+        if (ptarget && !s_fNoHit)
+        {
+            plistened = ptarget;
+            AddLoListener(ptarget, this, [this](int msgk, void* pv) { OnTargetMessage(msgk, pv); });
+        }
         auto* o = static_cast<JOBMOVE*>(PjobPush(pg, 0x9F));
         o->ploFace = ptarget;
         // orig 0x20AE18 leaves the generated default action's +0xC0 null;
@@ -840,11 +850,27 @@ void JOBACT::Update()
             SetActState(-1);
     } while (prior != st);
 }
-// orig: 0x001756C0 (message 0xB from the target: its hit by this guard)
+// orig: 0x001756C0 (orig3 0x1A4F08: message 0xC (native 0xB) from the listened target: the contact's receiver the target and
+// 0x257CF0 of its sender this guard: +0x40 (fHit), which Update turns into state 1 (the strike ends, the recoil 4))
 int JOBACT::Message(int msg, void* pm)
 {
-    // TODO(ai): kind 0xB whose +4 is the target and 0x174898 of it this guard: +0x40 (fHit)
     return AIJOB::Message(msg, pm);
+}
+void JOBACT::OnTargetMessage(int msgk, void* pv)
+{
+    if (msgk != 0xB || !pv || !pguard || !pguard->palo) return;
+    struct MSG { ALO* pso; LO* ploSender; CTMSG* pctm; };
+    const MSG* pm = static_cast<const MSG*>(pv);
+    if (pm->pso != ptarget || !pm->ploSender) return;
+    // orig3 0x257CF0: the sender's root if a step guard (0x3A), else a projectile's (0x59) launcher's root if one
+    LO* pguardOf = nullptr;
+    if (LO* proot = PloRoot(pm->ploSender); FCidDerivedFrom(proot->Cid(), S3CID(0x38))) pguardOf = proot;
+    else if (FIsLoDerivedFrom(pm->ploSender, 0x59))
+        if (LO* pl = PloProjectileLauncher(pm->ploSender))
+            if (LO* proot2 = PloRoot(pl); FCidDerivedFrom(proot2->Cid(), S3CID(0x38))) pguardOf = proot2;
+    if (pguardOf != pguard->palo) return;
+    if (std::getenv("SLY2N_ACTDEBUG")) std::fprintf(stderr, "act: t %.3f guard %d: its hit on %d landed\n", g_clock.t, pguard->palo->oid, ptarget->oid);
+    fHit = 1;
 }
 
 // ---- 0x9F: the strike (a move with the action's entry) ----
@@ -886,6 +912,8 @@ int JOBSTRIKE::Message(int msg, void* pm)
     if (msg == 9 && pkinde)
     {
         const ASEGMSG9* pev = static_cast<const ASEGMSG9*>(pm);
+        if (std::getenv("SLY3_STRIKEPRINT"))
+            std::printf("strike: guard %d event 0x%X (own %d) t %.3f k2 %d\n", pguard->palo->oid, pev->n, int(PasegaOfKinde(pkinde) == pev->pasega), g_clock.t, f50);
         if (PasegaOfKinde(pkinde) == pev->pasega)
         {
             switch (pev->n)
@@ -970,6 +998,8 @@ glm::vec3 PosSurroundPlace(GUARD* pg, NAVREGION* preg, const glm::vec3& posOrigi
     const glm::vec3 posG = PosOf(pg);
     const glm::vec3 d = posG - posOrigin;
     const float radG = std::atan2(d.y, d.x), sG = std::sqrt(d.x * d.x + d.y * d.y);
+    if (std::getenv("SLY2N_SURRDEBUG"))
+        std::printf("surround place: ranges %.0f..%.0f / %.0f..%.0f narrow %.2f wide %.2f override %d radG %.2f sG %.0f\n", lm1.x, lm1.y, lm2.x, lm2.y, gNarrow, gWide, nOverride, radG, sG);
     const float rad = radHeading + GClampAbs(RadNorm(radG - radHeading), gNarrow);
     const float s = GClampLm(lm1, sG);
     glm::vec3 posKept(0.0f);
@@ -1038,7 +1068,7 @@ void JOBSURROUND::Enter()
         // The original reads the region through SOST +0xDC's area record (+0x10); native area membership is
         // currently queried from the same actual position (SOST::pvArea is not populated).
         NAVREGION* preg = PregionAt(pos, false);
-        if (preg) FNavPathCrv(preg, pos, pos, &pg->crv294);  // 0x17BF78 -> 0x1C02D0
+        NavPathCrv3(preg, pos, pos, &pg->crv294);  // (orig3 0x181F68 -> 0x1EF038; none: straight)
         SetSurroundState(1);
     }
     else SetSurroundState(0);
@@ -1101,7 +1131,7 @@ void JOBSURROUND::Update()
             std::printf("surround: t %.3f guard %d at %.0f %.0f target %.0f %.0f heading %.2f mode %d -> place %.0f %.0f (%.0f from the target)\n",
                         g_clock.t, pg->palo->oid, posG.x, posG.y, posT.x, posT.y, rad, pt->nMode, pos.x, pos.y,
                         glm::length(glm::vec2(pos - posT)));
-        if (preg) FNavPathCrv(preg, posG, pos, pcrv);  // 0x17C510: a failed query retains the old path
+        NavPathCrv3(preg, posG, pos, pcrv);  // (orig3 0x182450 -> 0x1EF038: routed in the region, none: straight)
         if (std::getenv("SLY2N_SURRDEBUG"))
         {
             std::printf("surround path (%zu):", pcrv->apos.size());

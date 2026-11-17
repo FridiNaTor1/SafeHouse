@@ -692,6 +692,12 @@ void StartLoadedLo(SW* psw, LO* plo)
         if (s_setcid.insert(plo->Cid()).second)
             std::fprintf(stderr, "sly3: the start of %s (oid %d) failed: %s\n", StrClassName(plo->Cid()).c_str(), int(plo->oid), e.what());
     }
+    {
+        void PostLoadRacer3(LO * plo);   // Sly 3's path racer 0x98: the course samples 0x183E00 (game/racer3.cpp)
+        PostLoadRacer3(plo);
+        void PostLoadShipSpawner3(LO * plo);   // Sly 3's ship spawner 0x9A (game/ship3.cpp)
+        PostLoadShipSpawner3(plo);
+    }
     // the players' start (0x1400B8; the rest is the actors'): their objects 0x2AB removed (vt slot 9), then slot
     // 79 (0): registered as player objects, not current
     if (FCidDerivedFrom(plo->Cid(), S3CID(0x34)))

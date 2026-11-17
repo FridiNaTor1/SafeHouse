@@ -501,6 +501,24 @@ struct PHYSPROPS
         // 0x23D938 on the position record (+0x48: Sly 2's 0x1F4848 / 0x1F4898, the velocity in the object's space) and
         // EOPID 78 (option 195) 0x23D8E0 / 0x23D9D0 on the rotation record (+0x4C: Sly 2's 0x1F4930, the angular
         // velocity). E.g. v_canal's police boat 139806 steers by option 194 each frame (block 139806 module 0's update).
+        // (s3-prologue2) Sly 3's EOPID 260 (option 387, grf 0x12, a field +0x1B8 the descriptors list as the PO's, new in
+        // Sly 3): a STEP's rotation control, read by the motion update 0x24E2B8 (Sly 2's 0x204108): 0 the rotation braked
+        // toward the heading, 1 the rotation record's velocity pushed to +0x1F0, 2 none (Sly 2's -1, STEPPHYS::nMotion).
+        // The Prologue's Dr. M (kind 13791 of 9137) sets 2: he keeps his rotation in the land beast's frame (the
+        // reference's local rotation stays the identity), natively he kept his load heading in the world and showed
+        // the camera his back. SLY3_STEPMOTION260=0: not applied (the field only)
+        RegisterObjectSetter3(260, [](LO* plo, const CRef& r) {
+            const int n = r.m_tagk == TAGK_F32 ? int(r.m_g) : r.RefCoerceS32().m_n;
+            plo->SetField(0, 0x1B8, uint32_t(n));
+            static const bool s_fOff = [] { const char* sz = std::getenv("SLY3_STEPMOTION260"); return sz && sz[0] == '0'; }();
+            if (s_fOff || !FCidDerivedFrom(plo->Cid(), S3CID(0x30)) || !PstepFromLo(static_cast<ALO*>(plo))) return;
+            StepPhysOf(static_cast<ALO*>(plo)).nMotion = n == 2 ? -1 : n;
+        });
+        RegisterObjectGetter3(260, [](LO* plo) {
+            CRef r;
+            r.SetS32(int(plo->U32Field(0, 0x1B8, 0)));
+            return r;
+        });
         RegisterObjectSetter3(77, [](LO* plo, const CRef& r) { if (ALO* p = PaloOf(plo)) SetAloVelocity(p, r.GetVector()); });
         RegisterObjectSetter3(78, [](LO* plo, const CRef& r) { if (ALO* p = PaloOf(plo)) SetAloAngVelocity(p, r.GetVector()); });
         RegisterObjectGetter3(77, [](LO* plo) {   // orig3: 0x23D888

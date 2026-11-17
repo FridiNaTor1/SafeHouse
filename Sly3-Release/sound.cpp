@@ -524,7 +524,9 @@ void CSndPlain::StartIop()
     SetDirty(0x1FFF, 0);
     // a footstep of the player character (0x6F Sly / 0x73 Bentley / 0x15 Murray): the mood sound (0x1FEED0: the
     // sneak stem's "bing" on each step, R32)
-    if ((m_sfxid == 0x6F || m_sfxid == 0x73 || m_sfxid == 0x15) && g_sndhooks.pfnFMoodStep && g_sndhooks.pfnFMoodStep(m_sfxid))
+    // (orig3 0x245AC0: also 0x93 / 0x94 / 0x95, the Guru, the Panda King, Penelope)
+    if ((m_sfxid == 0x6F || m_sfxid == 0x73 || m_sfxid == 0x15 || m_sfxid == 0x93 || m_sfxid == 0x94 || m_sfxid == 0x95) && g_sndhooks.pfnFMoodStep &&
+        g_sndhooks.pfnFMoodStep(m_sfxid))
         StepSoundMood();
 }
 
@@ -1169,7 +1171,7 @@ void StopDialog()
 
 // orig: 0x1FE5F0 (starts dialog line k (its constructor starts it): the old one ends, the line announced unless
 // fQuiet (subtitles))
-CSndVoice* PsndStartDialog(int k, int fQuiet)
+CSndVoice* PsndStartDialog(int k, int fQuiet, void* ploSpeaker)
 {
     std::lock_guard<std::recursive_mutex> lock(g_mtxSound);
     StopDialog();
@@ -1189,7 +1191,8 @@ CSndVoice* PsndStartDialog(int k, int fQuiet)
         SetDialogSubtitle(k, pd->oidSpeaker);
         if (g_sndhooks.pfnDialogStarted) g_sndhooks.pfnDialogStarted(k, pd->oidSpeaker);
     }
-    if (pd->oidSpeaker != -1 && !pd->aevent.empty() && g_sndhooks.pfnDialogBind) g_sndhooks.pfnDialogBind(pd->oidSpeaker);
+    // (orig3 0x2485D8: with events, the targets of the given object, else of the line's speaker (0x17E5D8 kind 0x105))
+    if ((ploSpeaker || pd->oidSpeaker != -1) && !pd->aevent.empty() && g_sndhooks.pfnDialogBind) g_sndhooks.pfnDialogBind(pd->oidSpeaker, ploSpeaker);
     return static_cast<CSndVoice*>(s.sndDialog.get());
 }
 

@@ -99,6 +99,9 @@ bool FNavBlocked(const NAVREGION* preg, const glm::vec3& a, const glm::vec3& b, 
 int CposNavPath(const NAVREGION* preg, const glm::vec3& a, const glm::vec3& b, int cMax, glm::vec4* apos);
 // orig: 0x001C02D0: that path into the curve (a linear CRV of its points); false without one
 bool FNavPathCrv(const NAVREGION* preg, const glm::vec3& a, const glm::vec3& b, CRV* pcrv);
+// orig3: 0x001EF038 (-> 0x1EC6E8): Sly 3's path per goal into the curve (a linear CRV): with a region its path routed
+// round the merged polygons it crosses (a failed search: a 5-unit stub, reached at once), with none straight to b
+void NavPathCrv3(const NAVREGION* preg, const glm::vec3& a, const glm::vec3& b, CRV* pcrv);
 
 // The polygons
 // orig: 0x001C1700: the region's polygons whose boxes overlap the box of a and b (in slot order, up to cMax + 1)

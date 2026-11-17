@@ -97,6 +97,8 @@ struct JOBACT : AIJOB
     float tSt = 0;                // +0x38
     ACTIONOBJ* paction = nullptr; // +0x3C
     int fHit = 0;                 // +0x40
+    LO* plistened = nullptr;      // (native: the target listened to in state 0, 0x1333C0)
+    void OnTargetMessage(int msgk, void* pv);
     void Init() override;
     void Enter() override;
     void Exit() override;

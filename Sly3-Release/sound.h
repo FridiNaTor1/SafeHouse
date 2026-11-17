@@ -56,7 +56,7 @@ struct SNDHOOKS
     // The line's targets (0x1FE5F0: a line with a speaker and events finds the speaker (0x15ED78 kind 5) and its
     // effect SMAs (0x1F67E0 with the SMs 0x1FD0C0 i: +0x22C..+0x240, target 3 the speaker itself) / at its end
     // (0x1FE738: target 5's goal 0x611, then released)
-    void (*pfnDialogBind)(int oidSpeaker) = nullptr;
+    void (*pfnDialogBind)(int oidSpeaker, void* ploSpeaker) = nullptr;   // (ploSpeaker: the caller's object, orig3 0x2485D8's 4th argument)
     void (*pfnDialogUnbind)() = nullptr;
     // The game clock's t (0x2DDED0: the subtitle's blinking cursor).
     float (*pfnTGame)() = nullptr;
@@ -326,7 +326,7 @@ CSndVoice* PsndPushMusic(int idMusic);                  // 0x1FE150
 void PopMusic(int idMusic);                             // 0x1FE310
 float TMusicTop();                                      // 0x1FE3F8
 int IdMusicTop(int* pcStack = nullptr);                 // (native: the top music's id, -1 none; skipcut.h's check)
-CSndVoice* PsndStartDialog(int idDialog, int fQuiet = 0);  // 0x1FE5F0
+CSndVoice* PsndStartDialog(int idDialog, int fQuiet = 0, void* ploSpeaker = nullptr);  // 0x1FE5F0 (orig3 0x2485D8: the speaker object given)
 void StopDialog();                                      // 0x1FE738
 // orig: 0x1A3078 / 0x1A30D0: the cut scenes' subtitle box shown (the subtitle reset first) / hidden (soundglue.cpp)
 void ShowSubtitleBox();

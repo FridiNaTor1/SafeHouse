@@ -374,7 +374,7 @@ void UpdatePadctl(PADCTL* ppc)
     else if (ppc->nControl == 1 && ppc->plo && PloMapHolder3() == ppc->plo)
     {
         SetMapButtonsHeld3(ppc->grfbtn);   // (Sly's state 0x18 leaves when the gadget's button is up: sly.cpp)
-        TakePadForMap3(ppc->plo, GrfPadctlTakePressed(ppc, 0xF0, 0.15f), ppc->uJoy > 0.2f ? ppc->x : 0.0f);
+        TakePadForMap3(ppc->plo, GrfPadctlTakePressed(ppc, 0xF0, 0.15f), ppc->radJoy, ppc->uJoy);
         ClearPadctl(ppc);
     }
     // (Sly 3, s3-player round 21, the user's report: Sly moved during cut scenes) a script's pause (SCPT 0x1F, orig3

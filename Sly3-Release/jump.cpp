@@ -120,6 +120,7 @@ void SetOwnerJumpState(ACTOR* pa, int n)
         static const int s_mpkindState[11] = {jts::Stand, jts::Jump, jts::Interact, jts::Damage, jts::ScriptSm, jts::ScriptAnim,
                                               jts::ScriptDrive, jts::Throw, jts::Climb, jts::Attack, jts::Target};
         if (n == 9) sly3::SetSlyAttack3(p);
+        else if (n == -1) SetSlyState(p, -1, -1);   // (orig3 0x1AF150 case -1, AUDIT5 PLAYER5-06)
         else if (n >= 0 && n < 11) SetSlyState(p, s_mpkindState[n], -1);
         return;
     }
@@ -225,12 +226,13 @@ glm::vec3 VelJumpLaunch(JUMP* pj, int k)
     case 2: f0 = F32(0x442F0000); break;   // 700
     case 18: f0 = F32(0x44610000); break;  // 900
     case 3: f0 = F32(0x44480000); break;   // 800
-    case 1: case 7: case 9: case 13: case 14: case 15:
+    case 1: case 7: case 9: case 13: case 14: case 15: case c_jkOutfit3:
     {
         float h = 215.0f;                   // 0x2BF738
         if (k == 13) h = 500.0f;
         else if (k == 9) h = 1200.0f;
         else if (k == 14) h = 250.0f;
+        else if (k == c_jkOutfit3) h = 150.0f;   // (orig3 0x1BB4E8 kinds 16 / 17)
         const float d = (PosProbe0(pa).z - pa->posFloor.z) - h;
         f0 = std::sqrt(std::fmax(0.0f, (g + g) * d));
         break;
@@ -759,6 +761,7 @@ void SetJumpKind(JUMP* pj, int n, int a2, LO* plo)
     case 12: jumpDir(1); pj->n40 = 3; pj->f28 = 1; pj->g38 = 1.0f; pj->f24 = 0; fSetG34 = true; break;
     case 16: jumpDir(4); pj->f24 = 0; pj->g38 = 1.0f; pj->f28 = 0; fSetG34 = true; break;
     case 15: jumpDir(0); pj->f24 = 0; pj->g38 = 1.0f; pj->f28 = 0; fSetG34 = true; break;
+    case c_jkOutfit3: jumpDir(0); pj->f24 = 0; pj->g38 = 1.0f; pj->f28 = 0; fSetG34 = true; break;   // (orig3 0x1B7268 case 17)
     case 17:
         // orig: 0x00195A00 (Hover Pack). Ground takeoff is vertical at 400;
         // the original's incidental planar carrier is zero in the compared

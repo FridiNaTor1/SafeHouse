@@ -34,6 +34,46 @@ struct DEPTH
 float F(int32_t n) { return std::bit_cast<float>(n); }
 int32_t A(const SCPTCMD3& c, std::size_t i) { return i < c.an.size() ? c.an[i] : 0; }
 
+// orig3: 0x0022B398 (0x52's line list before each line: with two or more lines, at the cursor's end (the loader starts
+// it there) the list is shuffled (each slot swapped with 0x11E8F0(0, count - 1)) and a first line equal to the last
+// one played goes to the end, the cursor to 0; else the list turns by one (the played line to the end), the cursor
+// +1). Returns the line to play (the list's first).
+// (PC: the swaps draw from their own stream, not the game's 0x11E8F0: the lines are picked at every dialog command
+// with a list, and the game's draws taken there would move every later random choice)
+int32_t IdDialogCycle(const SCPTCMD3& c)
+{
+    if (c.aidCycle.empty())
+    {
+        const int n = std::max(A(c, 0), 0);
+        for (int i = 0; i < n; ++i) c.aidCycle.push_back(A(c, 1 + std::size_t(i)));
+        c.icycle = n;
+        if (c.aidCycle.empty()) return -1;
+    }
+    std::vector<int32_t>& a = c.aidCycle;
+    const int n = int(a.size());
+    if (n >= 2 && !std::getenv("SLY3_DIALOGFIRST"))   // (SLY3_DIALOGFIRST=1: the first line always, as before)
+    {
+        const int32_t idPrev = a[0];
+        if (c.icycle == n)
+        {
+            static uint32_t s_seed = 0x22B398u;
+            for (int i = 0; i < n; ++i)
+            {
+                s_seed = s_seed * 1664525u + 1013904223u;
+                std::swap(a[std::size_t(i)], a[std::size_t((s_seed >> 8) % uint32_t(n))]);
+            }
+            if (a[0] == idPrev) std::swap(a[0], a[std::size_t(n - 1)]);
+            c.icycle = 0;
+        }
+        else
+        {
+            std::rotate(a.begin(), a.begin() + 1, a.end());
+            ++c.icycle;
+        }
+    }
+    return a[0];
+}
+
 const SCPTCMD3* Pcmd(const SCPT3* ps, int i)
 {
     return i >= 0 && i < int(ps->acmd.size()) ? &ps->acmd[std::size_t(i)] : nullptr;
@@ -87,6 +127,52 @@ void* PloFind(RUN3* p, int oid)
 }
 // orig3: 0x2267E8 (oid 0x20: the nearest of kind 0 (the camera's own?) instead)
 void* PloFindCam(RUN3* p, int oid) { return oid == 0x20 ? s_phost->PloFind(0, oid, nullptr) : PloFind(p, oid); }
+
+// orig3: 0x22A670 (a command's duration term for a camera key's move: only commands with the flag (+0 bit 8): 0x16 an
+// ASEG's length, 0x19 an SM's time to its goal, 0x2F the wait's first value (its minimum), 0x3F 0.5 s, 0x40 its float,
+// 0x52 the first line's length, 0x38 / 0x39 / 0x60 their float (+0xC); others 0)
+float DtScptCmd3(RUN3* p, const SCPTCMD3& c)
+{
+    if (!c.fFlag) return 0.0f;
+    switch (c.id)
+    {
+    case 0x16:
+        if (void* plo = PloFind(p, A(c, 0))) return s_phost->DtAsegScpt(plo);
+        return 0.0f;
+    case 0x19:
+        if (A(c, 2) == -1) return 0.0f;
+        if (void* plo = PloFind(p, A(c, 0))) return s_phost->DtSmGoal(plo, A(c, 1), A(c, 2));
+        return 0.0f;
+    case 0x2F: return F(A(c, 0));
+    case 0x3F: return 0.5f;   // (D_00344838)
+    case 0x40: return F(A(c, 0));
+    case 0x52: return A(c, 0) > 0 ? s_phost->DtDialogLine(A(c, 1)) : 0.0f;
+    case 0x38: case 0x39: case 0x60: return F(A(c, 1));
+    default: return 0.0f;
+    }
+}
+
+// orig3: 0x22A500's +0x28 for the key icmd: its +0x50 (an[8]), else the sum of the terms of its siblings up to the
+// next key (a 0x18 on the way sets the run's context, 0x226AE8, as it does when it runs)
+float DtCameraKey3(RUN3* p, const SCPT3* ps, int icmd)
+{
+    const SCPTCMD3* pk = Pcmd(ps, icmd);
+    if (!pk) return 0.0f;
+    const float dt50 = F(A(*pk, 8));
+    float dt = dt50;
+    for (int i = ISib(ps, icmd); i >= 0; i = ISib(ps, i))
+    {
+        const SCPTCMD3* pc = Pcmd(ps, i);
+        if (!pc || pc->id == 0x45) break;
+        if (pc->id == 0x18)
+        {
+            void* plo = PloFind(p, A(*pc, 0));
+            p->ploContext = plo ? plo : ps->plo;
+        }
+        if (dt50 == 0.0f) dt += DtScptCmd3(p, *pc);
+    }
+    return dt;
+}
 
 // orig3: 0x226B78 (the actor whose binocucom this run or a parent opened)
 void* PloBinoc(RUN3* p)
@@ -632,7 +718,8 @@ void ExecCmd(RUN3* p)
             d.sFalloffEnd = float(A(c, 4 + std::size_t(n)));
             d.gVolume = F(A(c, 5 + std::size_t(n)));
             d.ploSpeaker = c.oid != -1 ? p->plo28 : nullptr;
-            // (not ported: 0x22B398(run, args), before the line)
+            // 0x22B398(run, the blob): the list turned / reshuffled, then its first line plays
+            if (!d.aid.empty()) d.aid.assign(1, IdDialogCycle(c));
             if (!d.aid.empty()) s_phost->StartDialog(d, PloFind(p, d.oidSource));
             p->icmdDialog = icmd;
             return;
@@ -785,7 +872,8 @@ void ExecCmd(RUN3* p)
                     s_phost->NearestOnCurve(pcrv, pos, posN, dir, &p->uCrv80);
                 }
             }
-            SetRunPending(p, icmd, pa);  // (0x1573A0 before it: a stub)
+            s_phost->ResetActorWatch(pa);   // 0x1573A0(actor +0x10A0)
+            SetRunPending(p, icmd, pa);
             return;
         }
         case 0x36:  // the actor moves to an object (its nav helper's goal, or its aim) or, with none, where it is
@@ -1334,6 +1422,7 @@ bool FCmdDone(RUN3* p, int icmd)
             const float dx = t[0] - pos[0], dy = t[1] - pos[1];
             fDone = std::sqrt(dx * dx + dy * dy) < F(A(c, 2));
             s_phost->SetActorWatchTarget(pa, pos, std::fabs(F(A(c, 1))), A(c, 4) != 0);   // (0x22A7F8 case 48: the speed |+4|, R1 (+0x18 | 8) with +0x14)
+            s_phost->WatchActorTarget(pa, pos);   // (0x229438 case 48: 0x1572A0(actor +0x10A0, the point))
         }
         if (fDone)
         {
@@ -1400,8 +1489,23 @@ bool FCmdDone(RUN3* p, int icmd)
                     break;
                 }
             }
-        s_phost->StartRunCamera(*p, c, Pcmd(ps, inext), Pcmd(ps, inext2));
-        p->tWake = TScpt(ps) + F(A(c, 7)) + F(A(c, 8));  // 0x22BB78: T + key +0x24 + key +0x50
+        // 0x22A500 for the key and the next one: the move's duration +0x28 is +0x50 (an[8]), or when it is 0 the sum of
+        // the following commands' 0x22A670 up to the next key (the run's context moved by the 0x18s on the way,
+        // restored after); 0x22BB78's wake: T + delay +0x24 + +0x50, never when +0x50 is 0 (the following commands'
+        // own waits run the script on). Audit 5 CORE5-03; SLY3_CAMKEY2=1: the file's +0x50 for both, as before.
+        static const bool s_fOld = std::getenv("SLY3_CAMKEY2") != nullptr;
+        if (s_fOld)
+        {
+            s_phost->StartRunCamera(*p, c, Pcmd(ps, inext), Pcmd(ps, inext2));
+            p->tWake = TScpt(ps) + F(A(c, 7)) + F(A(c, 8));
+            return true;
+        }
+        void* const ploContextSave = p->ploContext;
+        const float dtKey = DtCameraKey3(p, ps, icmd);
+        const float dtNext = inext >= 0 ? DtCameraKey3(p, ps, inext) : dtKey;
+        p->ploContext = ploContextSave;
+        s_phost->StartRunCamera(*p, c, Pcmd(ps, inext), Pcmd(ps, inext2), dtKey, inext >= 0 ? dtNext : -1.0f);
+        p->tWake = F(A(c, 8)) == 0.0f ? c_tNever : TScpt(ps) + F(A(c, 7)) + F(A(c, 8));  // 0x22BB78
         return true;
     }
     case 0x46: case 0x4D:  // the binocucom is open (state 1)
@@ -1414,7 +1518,7 @@ bool FCmdDone(RUN3* p, int icmd)
         if (void* pa = PloBinoc(p)) return s_phost->FCmDone(pa, c.id);
         return true;
     case 0x50: return !s_phost->FTitleShowing();
-    case 0x52: return !s_phost->FDialogPlaying(A(c, 1));  // the first line
+    case 0x52: return !s_phost->FDialogPlaying(c.aidCycle.empty() ? A(c, 1) : c.aidCycle[0]);  // the list's current line (blob +0x1C)
     case 0x5F: return !s_phost->FDialogPlaying(-1);
     case 0x51:  // (s3-player, orig3 case 81) waits while the object (cid 0x31) is a player's character
     {

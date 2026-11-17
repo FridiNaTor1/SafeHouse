@@ -134,6 +134,15 @@ bool FMoodStep(int sfxid)
 {
     LO* pl = g_psw ? PloPoCurrent(g_psw) : nullptr;
     if (!pl) return false;
+    // orig3 0x245AC0: also 0x94 the Panda King (D_0038AE94), 0x95 Penelope (D_0038AE98), 0x93 the Guru (D_0046FF30),
+    // each when it is player 0's character (audit 5 CORE5-07; the globals are the class's object: found by class)
+    if (sfxid == 0x93 || sfxid == 0x94 || sfxid == 0x95)
+    {
+        const CID cid = CID(sfxid == 0x93 ? 0x37 : sfxid == 0x94 ? 0x38 : 0x39);
+        for (LO* plo : g_psw->mpcidaplo[cid])
+            if (!plo->ploCloneOf) return plo == pl;
+        return false;
+    }
     ACTOR* pa = sfxid == 0x6F ? static_cast<ACTOR*>(PslyGlobal()) : sfxid == 0x73 ? static_cast<ACTOR*>(PbentleyGlobal())
                                                                                    : static_cast<ACTOR*>(PmurrayGlobal());
     return pa && pa->palo == pl;
@@ -450,14 +459,21 @@ SMA* PsmaFindAloSm(const ALO* palo, OID oidSm)
     return nullptr;
 }
 
-// orig: 0x001FE5F0's tail (the speaker and its targets found, each SMA referenced)
-void BindDialogTargets(int oidSpeaker)
+// orig: 0x001FE5F0's tail (the speaker and its targets found, each SMA referenced). orig3 0x2485D8: the object the caller
+// gives (SCPT 0x52's target actor), else the line's speaker (0x17E5D8 kind 0x105: the first object of that class); the
+// targets' SMs are Sly 3's D_00349850 {1757, 1758, 1759, -, 1760, 1761, -} (0x246F30). With Sly 2's ids (1548..1552)
+// no speaker had a target: the lines' gestures, head turns and mouths never played (everyone stood in the idle).
+// SLY3_DIALOGSM2=1: Sly 2's ids, the class search only (as before).
+void BindDialogTargets(int oidSpeaker, void* ploSpeaker)
 {
-    static const int s_aidEffect[6] = {1548, 1549, 1550, -1, 1551, 1552};  // D_002C3C40 (0x1FD0C0)
+    static const bool s_fOld = std::getenv("SLY3_DIALOGSM2") != nullptr;
+    static const int s_aidEffect2[6] = {1548, 1549, 1550, -1, 1551, 1552};  // (Sly 2's D_002C3C40, 0x1FD0C0)
+    static const int s_aidEffect3[6] = {1757, 1758, 1759, -1, 1760, 1761};  // D_00349850 (its 7th, -1, has no target)
+    const int* s_aidEffect = s_fOld ? s_aidEffect2 : s_aidEffect3;
+    LO* plo = s_fOld ? nullptr : static_cast<LO*>(ploSpeaker);
     // 0x15ED78 PloFindSwObjectByClass (kind 5: the first object of the speaker's class or a derived one; the line's
-    // speaker is a class: 0x35 Sly, 0x36 Murray, 0x37 Bentley, ...)
-    LO* plo = nullptr;
-    if (g_psw)
+    // speaker is a class: 0x34 Sly, 0x35 Murray, 0x36 Bentley, ...)
+    if (g_psw && oidSpeaker != -1)
         for (int c = oidSpeaker; !plo && c >= 0 && c < CID_Max && FCidDerivedFrom(c, oidSpeaker); ++c)
             if (!g_psw->mpcidaplo[c].empty()) plo = g_psw->mpcidaplo[c].front();
     if (std::getenv("SLY2N_TALKPRINT"))

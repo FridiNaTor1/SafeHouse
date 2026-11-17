@@ -6,6 +6,7 @@
 
 #include "director3.h"
 #include "scptgame3.h"
+#include "suck3.h"
 #include "task3.h"
 
 #include "../ai.h"
@@ -59,13 +60,13 @@ float GMeter(const DIRECTOR3& d)
     return GClampLm(d.lmMin, d.lmMax, sum / float(d.cAvg));
 }
 
-// orig3: 0x20AC40: a score (a penalty scaled by the difficulty polynomial 0x325920 of 0x171C98: the difficulty's t
-// natively 0), into the 16-entry history, the meter's target, the broadcast 0x49
+// orig3: 0x20AC40: a score (a penalty scaled by the difficulty polynomial 0x325920 of 0x171C98, GSuck3),
+// into the 16-entry history, the meter's target, the broadcast 0x49
 void Score(DIRECTOR3& d, float g)
 {
     if (g < 0.0f)
     {
-        const float t = 0.0f;   // (0x171C98(D_0036BD20): TODO(sly3) the difficulty)
+        const float t = GSuck3();   // 0x171C98(D_0036BD20): the dynamic difficulty
         g *= GClampLm(0.0f, 1.0f, 1.2f + t * (-0.6f + t * 0.0f));
     }
     if (d.cScore == 16)

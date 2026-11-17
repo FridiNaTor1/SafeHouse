@@ -13,16 +13,18 @@
 // its setter 0x1846C8 puts the racer's progress at the point's and starts it when short of the end. m4_rccar's SCPT
 // 3681: the race start (69441) starts it; after the car's win, 69480 sets 1854 to 69498 and the racer's message 5 there
 // sets 3681's alarm 69484 (the reference: alarm 0x10F6C from the splice, vblank 3130).
-// Natively: the fraction g is 0 (0x171C98 counts bits of a save field over 32: not read); 0x1A9478 (the car's pad
-// slot) is "the car is the current player"; the samples of the post-load 0x183E00 (the path every +0x50, their
-// matrices) and the window +0x80 / +0x84 over them are not kept (nothing native reads them); the ground snap of
-// 0x184630 (+0x44) is the scripts' ground drop.
+// Natively: 0x1A9478 (the car's pad
+// slot) is "the car is the current player"; the ground snap of 0x184630 (+0x44) is the scripts' ground drop.
+// The course markers (AUDIT5 MODES5-02): the samples of the post-load 0x183E00, the window of the update's tail, the
+// draw slot 21 0x184350 (models 1849 / 1850; m4_rccar's 89577 / 89581).
 // Debug: SLY3_RACERPRINT=1.
 
 #include "../activate.h"
 #include "../brx.h"
 #include "../clock.h"
 #include "../crv.h"
+#include "../emitter.h"
+#include "../render.h"
 #include "../detect.h"
 #include "../lo.h"
 #include "../objmethod.h"
@@ -35,13 +37,17 @@
 #include "../vecmat.h"
 #include "../xf.h"
 #include "sly3.h"
+#include "suck3.h"
 #include "trigger3.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <unordered_map>
+
+glm::mat3 BuildLookAtMatrix(const glm::vec3& vecX, const glm::vec3& vecY);   // mat.h (0x11B830; orig3 0x11CBF0)
 
 namespace
 {
@@ -67,6 +73,15 @@ struct RACER3
     int fOn = 0;             // +0x6C
     float s = 0.0f;          // +0x70: the runner's arc length
     float ds = 0.0f;         // +0x74: its rate (the smoothing's)
+    ALO* paloAhead = nullptr;   // +0x48 (1849): the course marker ahead of the runner
+    ALO* paloBehind = nullptr;  // +0x4C (1850): behind it (the runner's progress +0x70 past the sample)
+    // the post-load 0x183E00: every +0x50 along the path a sample (+0x7C, count +0x78: its arc length, the matrix along
+    // the path (snapped to the ground with +0x44, 0x184580)); the update's window +0x80 / +0x84 of the samples around
+    // the tracked object's progress (+0x60 / +0x50 samples each way; none: -1 / -2)
+    struct SAMPLE { float s; glm::mat4 mat; };
+    std::vector<SAMPLE> asample;
+    bool fSampled = false;
+    int iFirst = 0, iLast = 0;
 };
 std::unordered_map<const LO*, RACER3> s_mpracer;
 
@@ -100,6 +115,13 @@ RACER3* Pracer(LO* plo)
         case 1855: r.tracked = PloOptRacer(plo, a); break;
         case 1856: r.window = a.ag[0]; break;
         case 1857: r.shape = PloOptRacer(plo, a); break;
+        case 1849: case 1850:
+        {
+            LO* p = PloOptRacer(plo, a);
+            ALO* palo = p && FIsLoDerivedFrom(p, sly3::CID_ALO) ? static_cast<ALO*>(p) : nullptr;
+            (o.eopid == 1849 ? r.paloAhead : r.paloBehind) = palo;
+            break;
+        }
         default: break;
         }
     }
@@ -160,6 +182,113 @@ void PlaceRunner(RACER3& r, const glm::vec3& pos)
     SetAloPos(palo, pos);   // (vt slot 34)
 }
 
+// orig3 0x184580 (the sample put on the ground: the first solid between 100 above and 350 below it (0x165000 kind 1
+// on the world's collision entries, 0x1DC7E0), the normal its up)
+void SnapSample(glm::vec3* ppos, glm::vec3* pup)
+{
+    if (!g_psw) return;
+    std::vector<SOE*> apsoe;
+    for (const auto& up : g_psw->aploAll)
+        if (up && up->fInWorld && FIsLoDerivedFrom(up.get(), sly3::CID_ALO))
+            for (SOE& e : static_cast<ALO*>(up.get())->asoe)
+                if (!e.f50)
+                {
+                    UpdateSoeWorld(&e);
+                    apsoe.push_back(&e);
+                }
+    LSG lsg;
+    const glm::vec3 a = *ppos + glm::vec3(0.0f, 0.0f, 100.0f), b = *ppos + glm::vec3(0.0f, 0.0f, -350.0f);
+    if (PsoeHitTestLineObjects(1, a, b, apsoe, &lsg) && lsg.t0 != 0.0f)
+    {
+        *ppos = lsg.pos0;
+        *pup = glm::vec3(lsg.plane0);
+    }
+}
+
+// orig3 0x183E00 (the post-load: the samples)
+void SampleRacer(RACER3& r)
+{
+    if (r.fSampled) return;
+    r.fSampled = true;
+    const CRV* pcrv = Pcrv(r);
+    if (!pcrv || r.step <= 0.0f) return;
+    const auto tStart = std::chrono::steady_clock::now();
+    const int c = static_cast<int>(SLengthCrv(pcrv) / r.step);
+    r.asample.resize(static_cast<size_t>(std::max(c, 0)));
+    float s = 0.0f;
+    for (RACER3::SAMPLE& sample : r.asample)
+    {
+        glm::vec3 pos(0.0f), dir(1.0f, 0.0f, 0.0f), up(0.0f, 0.0f, 1.0f);   // (D_00317550)
+        sample.s = s;
+        EvalCrvS(pcrv, s, &pos, &dir);   // (0x22E330)
+        if (r.fSnap) SnapSample(&pos, &up);
+        sample.mat = glm::mat4(BuildLookAtMatrix(dir, up));   // 0x11CBF0, then 0x11D6D8 (scale 1)
+        sample.mat[3] = glm::vec4(pos, 1.0f);
+        s += r.step;
+    }
+    if (FPrint())
+        std::printf("racer3: %d %zu samples (snap %d) in %.1f ms\n", r.plo->oid, r.asample.size(), r.fSnap,
+                    std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - tStart).count());
+}
+
+// orig3 0x183FA8's tail: the samples within +0x60 of the tracked object's progress (a binary search for the sample
+// pair around it)
+void UpdateRacerWindow(RACER3& r)
+{
+    SampleRacer(r);
+    const int n = static_cast<int>(r.asample.size());
+    int lo = 0, hi = n - 1, found = -1;
+    while (lo <= hi)
+    {
+        const int mid = (lo + hi) >> 1, next = mid + 1;
+        const float gMid = r.asample[size_t(mid)].s, gNext = next < n ? r.asample[size_t(next)].s : gMid;
+        if (gMid <= r.sTracked && r.sTracked <= gNext) { found = mid; break; }
+        if (r.sTracked < gMid) hi = mid - 1;
+        else lo = next;
+    }
+    if (found == -1) { r.iFirst = -1; r.iLast = -2; return; }
+    const int k = r.step != 0.0f ? static_cast<int>(r.window / r.step) : 0;
+    r.iFirst = std::max(found - k, 0);
+    r.iLast = std::min(found + k, n - 1);
+}
+
+// orig3 0x184350 (vt slot 21, the racer's draw): the samples of the window drawn (0x1C8248: the model's slot 22 at the
+// sample's matrix) with the behind model when the runner's progress is past them, else the ahead one; full within 70 %
+// of +0x60 of the tracked object, then fading to 0 at +0x60 (the per-view sphere test 0x18E500: the renderer's cull)
+PFNEXTRADRAWS s_pfnExtraPrev = nullptr;
+void CollectRacerDraws(const SCENE& scene, std::vector<EXTRADRAW>& aextra)
+{
+    if (s_pfnExtraPrev) s_pfnExtraPrev(scene, aextra);
+    if (!g_psw) return;
+    for (auto& [plo, r] : s_mpracer)
+    {
+        if (r.psw != g_psw || !plo->fInWorld || plo->fRemoved || !r.tracked) continue;
+        if (!r.fSampled) SampleRacer(r);
+        const glm::vec3 pos = PosLo(r.tracked);
+        const float sNear = r.window * 0.7f, sRange = r.window - sNear;
+        static int s_cDraw = 0;
+        if (FPrint() && ++s_cDraw % 120 == 1)
+            std::printf("racer3: %d draws samples %d..%d of %zu (tracked at %.0f (%.0f %.0f %.0f), runner %.0f) models %d / %d (scene %d / %d) sample0 (%.0f %.0f %.0f)\n", plo->oid,
+                        r.iFirst, r.iLast, r.asample.size(), r.sTracked, pos.x, pos.y, pos.z, r.s, r.paloAhead ? r.paloAhead->oid : -1, r.paloBehind ? r.paloBehind->oid : -1,
+                        r.paloAhead && PsgsOfAlo(scene, r.paloAhead) != nullptr, r.paloBehind && PsgsOfAlo(scene, r.paloBehind) != nullptr,
+                        r.asample.empty() ? 0.0f : r.asample[0].mat[3].x, r.asample.empty() ? 0.0f : r.asample[0].mat[3].y, r.asample.empty() ? 0.0f : r.asample[0].mat[3].z);
+        for (int i = std::max(r.iFirst, 0); i <= r.iLast && i < static_cast<int>(r.asample.size()); ++i)
+        {
+            const RACER3::SAMPLE& sample = r.asample[size_t(i)];
+            ALO* palo = sample.s < r.s ? r.paloBehind : r.paloAhead;
+            if (!palo) continue;
+            const float d = glm::length(pos - glm::vec3(sample.mat[3]));
+            float g = 1.0f;
+            if (sNear <= d)
+            {
+                const float t = d - sNear;
+                g = 1.0f - t / std::max(sRange, t);
+            }
+            if (0.0f < g) AppendAloExtraDraws(scene, palo, sample.mat, g, aextra);
+        }
+    }
+}
+
 // orig3 0x183FA8
 void UpdateRacer(LO* plo)
 {
@@ -168,6 +297,7 @@ void UpdateRacer(LO* plo)
     RACER3& r = *pr;
     const float sMax = SLength(r);
     if (r.tracked) r.sTracked = SNearest(r, PosLo(r.tracked));
+    UpdateRacerWindow(r);
     if (!r.fOn) return;
     const float dt = g_clock.dt;
     const bool fCar = r.tracked && FIsLoDerivedFrom(r.tracked, 0x55) && PloPoCurrent(g_psw) == r.tracked;
@@ -183,7 +313,7 @@ void UpdateRacer(LO* plo)
         }
         else
         {
-            const float g = 0.0f;   // (0x171C98(D_0036BD20): not read natively)
+            const float g = GSuck3();   // 0x171C98(D_0036BD20): the dynamic difficulty
             r.s += (1.0f + g * -0.3f) * r.speed * dt;   // D_003218B0 {1, -0.3, 0}
         }
     }
@@ -213,6 +343,8 @@ struct INITRACER3
     INITRACER3()
     {
         RegisterLoUpdate(FN3_TAG | 0x183FA8, UpdateRacer);
+        s_pfnExtraPrev = g_pfnExtraDraws;
+        g_pfnExtraDraws = CollectRacerDraws;
         // 1854: the runner's point (getter 0x184630, setter 0x1846C8)
         RegisterObjectGetter3(1854, [](LO* plo) {
             CRef ref;
@@ -238,3 +370,11 @@ struct INITRACER3
     }
 } s_initracer3;
 }  // namespace
+
+// orig3 0x183E00 (class 0x98's post-load): the course samples made at the world's start (natively at the first update
+// or draw otherwise)
+void PostLoadRacer3(LO* plo)
+{
+    if (!plo || plo->Cid() != 0x98) return;
+    if (RACER3* r = Pracer(plo)) SampleRacer(*r);
+}

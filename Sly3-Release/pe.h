@@ -40,6 +40,8 @@ struct LOPE : LOX
 
 // The world's effects each frame (the world update's 0x202D80); the camera the emission tests (0x203170) use.
 void UpdatePes(SW* psw);
+// orig3: 0x25BBD0's 0x203078 per instance (the in-place reset): every instance dropped
+void ResetPesInPlace3();
 void SetPeCamera(const glm::vec3& pos, const glm::mat3& matRows, const glm::mat4& matWorldToClip);
 // (PC split screen, orig3 0x18E728: a PE is tested against every view's camera) the other views' camera positions;
 // c 0: none

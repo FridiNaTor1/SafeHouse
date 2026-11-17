@@ -1147,7 +1147,7 @@ void StartQueuedTask3(TASK3* px)
 // (the copied entry point's name: the world start restores through StartTasks3)
 void RestoreTasks3() { StartTasks3(); }
 
-namespace { bool s_fActivatePending = false; }
+namespace { bool s_fActivatePending = false; bool s_fRestorePending = false; }
 void ActivateTasksAtStartCore3(const std::vector<TASK3*>& a);
 void StartTasks3()
 {
@@ -1162,13 +1162,23 @@ void StartTasks3()
         if (px) StartQueuedTask3(px);
         else SetTaskCur3(nullptr);
     }
-    // 0x184B60: every task restored (mode 1)
+    // 0x184B60: every task restored (mode 1). (audit 5 CORE5-06: 0x184B60 runs after the players' placement 0x25B9C0,
+    // its restores 0x188CB0 included: they wait with the activation for transition.cpp's start tail, so a restore that
+    // moves or adds a character is not undone by the placement. SLY3_TASKRESTORE2=1: the restores here, as before.)
+    static const bool s_fRestoreEarly = std::getenv("SLY3_TASKRESTORE2") != nullptr;
+    static const bool s_fOldAct = std::getenv("SLY3_QUEUEDACT2") != nullptr;
     const std::vector<TASK3*> a = AptaskOrdered3();
-    for (TASK3* p : a)
-    {
-        CMODE3 save(p, 1, nullptr);
-        RestoreTask3(p);
-    }
+    // (not in a challenge: ChallengeWorldStart3 runs before the deferred part, and a hub task's restore after it
+    // applied the task's objects over the round's (Cops and Robbers on the Outback / Holland hubs: no loot could be
+    // taken); there the restores stay before the challenge's start, as before)
+    const bool fDefer = !FChallengeRunning3() && !s_fOldAct && !s_fRestoreEarly;
+    if (!fDefer)
+        for (TASK3* p : a)
+        {
+            CMODE3 save(p, 1, nullptr);
+            RestoreTask3(p);
+        }
+    s_fRestorePending = fDefer;
     // (orig3 0x25C2A8: 0x184AA0 (the queued task) comes before the players' placement 0x25B9C0, 0x184B60 (the job's switch,
     // the task's activation and the queue) after it. Natively both ran in the batch before transition.cpp places the
     // players; a challenge's job (Cops and Robbers: its begin places both players at the spawn points farthest apart,
@@ -1195,6 +1205,16 @@ void ActivateTasksAtStart3()
 
 void ActivateTasksAtStartCore3(const std::vector<TASK3*>& a)
 {
+    // (0x184B60's first loop: the restores, when StartTasks3 left them for here)
+    if (s_fRestorePending)
+    {
+        s_fRestorePending = false;
+        for (TASK3* p : a)
+        {
+            CMODE3 save(p, 1, nullptr);
+            RestoreTask3(p);
+        }
+    }
     // the job and the active task of the keys (cleared first), mode 1
     JOB3* pjob = PjobFind3(g_gametasks3.oidJob);
     TASK3* ptask = PtaskFind3(g_gametasks3.oidTask);
@@ -1283,7 +1303,17 @@ bool FTaskStartInPlace3(OID oidTask)
                 if (int32_t(k.key) == oid) return int32_t(k.value);
             return int32_t(-1);
         };
-        int sel = valueOf(g_psw->aoptsetB, pt->oid);
+        // orig3 0x188420 (0x184B60's last loop, every world start, in AptaskOrdered3's order: the prerequisites first):
+        // a task without a selection takes its first prerequisite's (+0x88[0] +0xC0), or 12 with none (audit 5
+        // CORE5-04; natively it stayed -1 and the in-place test failed for it). SLY3_TASKSEL2=1: the old test.
+        static const bool s_fOld = std::getenv("SLY3_TASKSEL2") != nullptr;
+        std::function<int(const TASK3*, int)> selOf = [&](const TASK3* p, int depth) {
+            const int v = valueOf(g_psw->aoptsetB, p->oid);
+            if (v != -1 || s_fOld) return v;
+            if (p->aprereq.empty() || !p->aprereq[0] || depth > 64) return 12;
+            return selOf(p->aprereq[0], depth + 1);
+        };
+        int sel = selOf(pt, 0);
         if (pt->pjob)
             if (const int selJob = valueOf(g_psw->aoptsetA, pt->pjob->oid); selJob != -1) sel = selJob;
         const bool fFirst = g_psw->ioptsetChosen == 0;

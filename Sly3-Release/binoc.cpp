@@ -172,7 +172,8 @@ void ShowActorParts(ACTOR* pa, bool fHidden)
 
 // vt slot 94 (Sly 0x1894F8: the states 0 / 1 / 5 / 10 / 12 / 24 play the opening / closing). Sly 3's vt slot 104 (the
 // state numbers Sly 3's): Sly 0x1AACA0 {0, 1, 2, 6, 10, 19} (Sly's states are Sly 3's: sly.h jts::), Bentley 0x13F408
-// {0, 1, 5, 6, 7, 9}, Murray 0x1E0B10 {0, 1, 10, 11} (their native states keep Sly 3's numbers)
+// {0, 1, 5, 6, 7, 9}, Murray 0x1E0B10 {0, 1, 10, 11} (Bentley's native states keep Sly 3's numbers; the native Murray
+// keeps Sly 2's: Sly 3's 10 / 11 (the behaviour clip, the run) are his 9 / 10, AUDIT5 PLAYER5-04)
 bool FBinocAnimAllowed(ACTOR* pa)
 {
     if (SLY* p = dynamic_cast<SLY*>(pa))
@@ -190,7 +191,7 @@ bool FBinocAnimAllowed(ACTOR* pa)
     if (MURRAY* p = dynamic_cast<MURRAY*>(pa))
         switch (p->state)
         {
-        case 0: case 1: case 10: case 11: return true;
+        case 0: case 1: case 9: case 10: return true;
         default: return false;
         }
     return true;
