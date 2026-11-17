@@ -358,9 +358,9 @@ void AttachStickyProjectile(void* object, void* argument)
     SetAloCnstrLin(palo, 1);
     SetAloCnstrAng(palo, 1);
     if (std::getenv("SLY2N_PROJECTILEAUDIT"))
-        std::printf("PROJECTILE_ATTACH t=%.6f projectile=%d clone=%d target=%d parent=%d event=27\n",
+        std::printf("PROJECTILE_ATTACH t=%.6f projectile=%d clone=%d target=%d parent=%d event=0x1E\n",
                     g_clock.t, palo->oid, palo->iclone, parent->oid, palo->paloParent ? palo->paloParent->oid : -1);
-    HandleLoSpliceEvent(palo, 27, false, 0, nullptr);
+    HandleLoSpliceEvent(palo, 0x1E, false, 0, nullptr);   // (orig3 0x14C7F0: Sly 3's 0x1E; Sly 2's 27)
 }
 
 // orig: 0x0013AEB0 (nearest eligible contact; kind1 posts attachment, kinds0/2 record impact and expire)
@@ -628,6 +628,9 @@ NATIVEFN(0x1B2228, SetHomingMissileTarget);
 NATIVEFN(0x1B2468, UpdateHomingMissileAccel);
 
 // orig: 0x0013BC60: the launcher that threw it (+0x200; its overlaps retested when it changes, 0x134320)
+// (orig 0x13B860 / orig3 0x14CE20: the end now, e.g. the Grapple-Cam's blow-up, game/grapplecam3.cpp)
+void EndProjectileNow(ALO* palo) { EndProjectile(palo); }
+
 void SetProjectileLauncher(ALO* palo, LO* plaunch)
 {
     PROJ& p = Proj(palo);

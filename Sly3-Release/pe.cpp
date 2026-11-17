@@ -12,6 +12,7 @@
 #include "clock.h"
 #include "emitter.h"
 #include "game/cond3.h"
+#include "lox.h"
 #include "game/sly3.h"
 #include "readtrace.h"
 #include "sound.h"
@@ -95,6 +96,22 @@ void LoadPeFromBrx(LO* plo, CBinaryInputStream* pbis)
                              pbis->GetOffset() - ibStart, cb);
         }
         ++g_pestats.ccomp;
+        // (debug: SLY3_PECOMPOPTS=oid: that effect's components' options)
+        if (static const int s_oidOpts = std::getenv("SLY3_PECOMPOPTS") ? std::atoi(std::getenv("SLY3_PECOMPOPTS")) : -2; ppe->oid == s_oidOpts)
+            for (const OPT& o : comp.aopt)
+            {
+                std::fprintf(stderr, "pecomp %d %d: eopid %d", ppe->oid, comp.oid, o.eopid);
+                for (const auto& v : o.aval) std::fprintf(stderr, " [n %d g %g %g %g]", v.n, v.ag[0], v.ag[1], v.ag[2]);
+                std::fprintf(stderr, "\n");
+            }
+        if (static const bool s_fDbg = std::getenv("SLY3_PEDBG") != nullptr; s_fDbg)
+            for (const OPT& o : comp.aopt)
+            {
+                if (o.eopid == 588 && !o.aval.empty() && o.aval[0].n)
+                    std::fprintf(stderr, "pe %d component 0x%X %d: option 588 (depth prepass)\n", ppe->oid, comp.cid, comp.oid);
+                if (o.eopid == 558 && !o.aval.empty())
+                    std::fprintf(stderr, "pe %d component 0x%X %d: position kind %d\n", ppe->oid, comp.cid, comp.oid, o.aval[0].n);
+            }
         ppe->acomp.push_back(std::move(comp));
     }
     PopXfBase();
@@ -335,6 +352,23 @@ bool FPeNearCamera(const glm::vec3& c, float r)
     return false;
 }
 
+// orig3: 0x168098's weight (its *output): the distance scaled as above, 1 up to 400 short of the radius, then falling
+// linearly to 0 at it; the largest over the cameras (0x18E500 returns one per view). 0: beyond the radius
+float WPeNearCamera(const glm::vec3& c, float r)
+{
+    if (!s_fCam) return 1.0f;
+    const float adj = std::max(g_cm.rMRDAdjust, 1.0f);
+    auto w = [&](const glm::vec3& posCam) {
+        const float t = glm::length(c - posCam) / adj;
+        if (r < t) return 0.0f;
+        const float start = r - 400.0f;
+        return start < t ? (r - t) / (r - start) : 1.0f;
+    };
+    float wMax = w(s_posCam);
+    for (int i = 0; i < s_cCamExtra; ++i) wMax = std::max(wMax, w(s_aposCamExtra[i]));
+    return wMax;
+}
+
 // (the frustum test the native PE code used before; kept for reference / debug)
 [[maybe_unused]] bool FSphereSeen(const glm::vec3& c, float r)
 {
@@ -464,14 +498,19 @@ void EmitParticles(STREAM& s, int c, const glm::mat4& matFrame, const glm::vec3&
                 for (; it + 1 < pm->atri.size(); ++it)
                     if ((g -= pm->atri[it].sArea) <= 0.0f) break;
                 const auto& t = pm->atri[it];
-                float u = GRandPe(0.0f, 1.0f), v = GRandPe(0.0f, 1.0f);
-                if (u + v > 1.0f) { u = 1.0f - u; v = 1.0f - v; }
+                // (orig3 0x1FF6B0 case 3: u in [0, 1], v in [0, 1 - u], the point u P0 + v P1 + (1 - u - v) P2; not
+                // the folded uniform sample)
+                const float u = GRandPe(0.0f, 1.0f), v = GRandPe(0.0f, 1.0f - u);
                 auto P = [&](int k) { return size_t(t.aipos[k]) < pm->apos.size() ? pm->apos[size_t(t.aipos[k])] : glm::vec3(0.0f); };
-                p = P(0) * (1.0f - u - v) + P(1) * u + P(2) * v;
-                anormal[size_t(i)] = glm::normalize(glm::cross(P(1) - P(0), P(2) - P(0)) + glm::vec3(0, 0, 1e-6f));
+                p = P(0) * u + P(1) * v + P(2) * (1.0f - u - v);
+                // (direction kind 5: the corners' vertex normals by the same weights, normalized, 0x1FF6B0)
+                auto N = [&](int k) { return size_t(t.aipos[k]) < pm->anormal.size() ? pm->anormal[size_t(t.aipos[k])] : glm::vec3(0.0f); };
+                const glm::vec3 n = pm->anormal.empty() ? glm::cross(P(1) - P(0), P(2) - P(0)) : N(0) * u + N(1) * v + N(2) * (1.0f - u - v);
+                anormal[size_t(i)] = glm::length(n) < 1e-4f ? glm::vec3(1, 0, 0) : glm::normalize(n);
             }
             break;
-        default: p = rp.v0; break;   // 0 (2, a curve object: TODO(effects) EvalCrvS 0x22E4D0; its point)
+        default: p = rp.v0; break;   // 0 (2, points along a curve object by length, 0x1FF6B0 -> EvalCrvS 0x22E4D0: no
+                                     // Sly 3 effect uses it, option 558 is 1 / 3 (or 0) in every world)
         }
     }
     // the normals (0x1FFC20's table 0x325690)
@@ -681,6 +720,7 @@ const std::vector<PECOMP>* PacompOf(const LO* plo)
 }
 }  // namespace
 bool FPeNearCamera3(const glm::vec3& c, float r) { return FPeNearCamera(c, r); }
+float WPeNearCamera3(const glm::vec3& c, float r) { return WPeNearCamera(c, r); }
 
 void SetPeCamerasExtra(const glm::vec3* aposCam, int c)
 {
@@ -847,7 +887,7 @@ void UpdatePes(SW* psw)
                 std::printf("\n");
             }
         }
-        if (static const bool s_fList = std::getenv("SLY3_PELIST") != nullptr; s_fList && s_cUpdate == 60)
+        if (static const bool s_fList = std::getenv("SLY3_PELIST") != nullptr; s_fList && s_cUpdate % 600 == 60)
         {
             const glm::vec3 p = PosLoWorld(ppe);
             std::printf("pelist %d kind %d at %.0f %.0f %.0f d %.0f clones %zu emit %d:", ppe->oid, kind, p.x, p.y, p.z, glm::distance(p, s_posCam), amatDraw.size(), int(fEmit));
@@ -961,6 +1001,17 @@ void TriggerPe(LO* ppe, const LO* ploFrame, bool fOwnRandom)
     s_aoneshot.push_back(std::move(os));
 }
 
+void StopTriggeredPe(const LO* ppe, const LO* ploFrame)
+{
+    for (auto it = s_aoneshot.begin(); it != s_aoneshot.end();)
+        if (!it->fKeyed && it->inst.ppe == ppe && it->ploFrame == ploFrame)
+        {
+            for (STREAM& st : it->inst.astream) SetPepsysDraw(st.ppsys, true, {});
+            it = s_aoneshot.erase(it);
+        }
+        else ++it;
+}
+
 bool FPeOneShot(const LO* plo) { return plo && plo->Cid() == CID_PE && NOpt(plo, 539, 0) == 0; }
 
 // orig3: 0x25D940 (an effect by oid near the context (0x17E1B8 kind 4): a PE started (0x1FE728(pe, 1)), else an
@@ -1054,6 +1105,51 @@ void EmitPeParticles(LO* ppe, int c, const glm::vec3* apos, const glm::vec3* ave
         EmitPepsys(st.ppsys, c, apos, avel, at0, at1);
         break;
     }
+}
+
+bool FEmitPeComponent(LO* ppe, int oidComp, const glm::vec3& pos, float gScale)
+{
+    if (!ppe || !g_psw || ppe->Cid() != CID_PE) return false;
+    if (s_gen != GenPeParticles() || s_psw != g_psw || s_serial != g_psw->serial)
+    {
+        ResetPes();
+        s_gen = GenPeParticles();
+        s_psw = g_psw;
+        s_serial = g_psw->serial;
+    }
+    SetLoxPos(static_cast<LOX*>(ppe), pos);
+    ONESHOT* pos1 = nullptr;
+    for (ONESHOT& os : s_aoneshot)
+        if (os.fKeyed && os.inst.ppe == ppe) { pos1 = &os; break; }
+    if (!pos1)
+    {
+        const std::vector<PECOMP>* pacomp = PacompOf(ppe);
+        if (!pacomp) return false;
+        ONESHOT os;
+        os.inst.ppe = ppe;
+        os.inst.kind = 0;
+        os.fKeyed = true;
+        s_ploNewFor = ppe;
+        for (const PECOMP& comp : *pacomp)
+            if (comp.cid == 0xBF || comp.cid == 0xC0) os.inst.astream.push_back(StreamNew(comp));
+        s_aoneshot.push_back(std::move(os));
+        pos1 = &s_aoneshot.back();
+    }
+    pos1->matFrame = MatWorldOfPe(ppe);
+    for (STREAM& st : pos1->inst.astream)
+    {
+        if (!st.pcomp || st.pcomp->oid != oidComp) continue;
+        st.rec.sizeLo = st.rec.sizeHi = gScale;
+        const float aclq[3] = {gScale, gScale * 0.6f, 0.0f};
+        if (st.rec.vel.clqScale[0] != aclq[0] || st.rec.vel.clqScale[1] != aclq[1] || st.rec.vel.clqScale[2] != aclq[2])
+        {
+            for (int i = 0; i < 3; ++i) st.rec.desc.clqScale[i] = st.rec.vel.clqScale[i] = aclq[i];
+            if (st.ppsys) SetPepsys(st.ppsys, st.rec.desc);
+        }
+        EmitParticles(st, 1, pos1->matFrame, glm::vec3(0.0f), st.rec.vel.advLo, st.rec.vel.advHi);
+        return true;
+    }
+    return false;
 }
 
 // The loader's registration (loaders.cpp RegisterLoaders) and the native struct (PfnNewNativeForCid)

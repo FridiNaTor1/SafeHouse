@@ -1,5 +1,8 @@
 #pragma once
 
+// (platform/render: one source for Sly 2 and Sly 3, built into each game against its own headers (shd.h, cls.h, gl.h,
+// ...); the game's texture cache folder by CANE_TEXMOD_CACHE_GAME)
+
 // Texture mods (MODDING.md): Mods/Textures/<W>x<H>_<hash>.png replaces the texture whose
 // decoded RGBA hashes to <hash> (FNV-1a 64), wherever the renderer's texture cache uploads it; --dump-textures and
 // --export-textures write them. A replacement is used at its own resolution: the game's UVs are normalized, so a 4x PNG

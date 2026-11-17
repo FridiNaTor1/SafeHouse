@@ -9,6 +9,12 @@ invariant gl_Position;
 precise gl_Position;
 #endif
 
+// (render.cpp FDrawStateOn: the Vulkan renderer's pulled programs with bindless handles take each pass draw's colour
+// source, fog black and CANE_BLEND1 mode from its draw entry, the handle's third word; 0 there: the uniforms)
+#if defined(CANE_BLEND1) && defined(BINDLESS)
+#define CANE_DRAWSTATE 1
+#endif
+
 // (with glob.geom, the near-plane clip: the outputs go to it under these names, and it passes them on as v*)
 #ifdef GEOM
 #define vColor gsColor
@@ -16,6 +22,7 @@ precise gl_Position;
 #define vFog gsFog
 #define vTexh gsTexh
 #define vLayer gsLayer
+#define vDrawState gsDrawState
 #endif
 
 #ifdef CANE_PULL
@@ -72,7 +79,7 @@ struct REC
     vec4 fog;       // CM_BuildFogRecip 0x14E270: near (cm+0x240), far/near, max fog (cm+0x248 x uFog), enabled
     uvec4 bone;     // skinned groups: the first bone matrix, their count (0: not skinned); z: the vertices' base
     vec4 spec0;     // P_G 638 view-angle alpha: g0, g1, g2 (x 1/127, 1/16129), kind (0 view direction, 1 from a point, 2 per vertex)
-    vec4 spec1;     // its clamp lo, hi, on
+    vec4 spec1;     // its clamp lo, hi, on, lit (1: colour A's RGB, the normals' brightness; 0: the unlit alpha mode)
     vec4 specPos;   // kind 1's point (the group's space)
     uvec4 warp;     // space warps (wr.h): the state vectors' first + 1 (0: none), vertex count, first matrix, count | flags
 };
@@ -87,7 +94,17 @@ layout (std430, binding = 4) readonly buffer WARPMATS { mat4 amatWarp[]; };
 layout (std430, binding = 1) readonly buffer DRAWS { vec4 adraw[]; };   // SAA du, dv (P_G 421 adds it to every ST), object alpha (qw8.x), record
 #ifdef BINDLESS
 // (perf-3, ARB_bindless_texture) each pass draw's texture + sampler handle (render.cpp: 0 = the bound tex)
+#ifdef CANE_DRAWSTATE
+layout (std430, binding = 5) readonly buffer TEXHANDLES { uvec4 atexh[]; };   // handle, state word (render.cpp DrawStateWord)
+flat out uint vDrawState;
+#elif defined(VULKAN) && defined(CANE_PULL)
+// (the Vulkan pulled path's program without CANE_BLEND1, gl.cpp glGlobShaderVol: the handle buffer laid out as for
+// the others there, render.cpp FDrawStateLayout)
+layout (std430, binding = 5) readonly buffer TEXHANDLES { uvec4 atexh[]; };
+#define CANE_TEXH4 1
+#else
 layout (std430, binding = 5) readonly buffer TEXHANDLES { uvec2 atexh[]; };
+#endif
 flat out uvec2 vTexh;
 #endif
 #ifdef TEXARRAY
@@ -112,8 +129,18 @@ void main()
     CanePull();
 #endif
     vec4 d = adraw[aDraw];
-#ifdef BINDLESS
+#ifdef CANE_DRAWSTATE
+    uvec4 texhds = atexh[aDraw];
+    vTexh = texhds.xy;
+    vDrawState = texhds.z;
+    int icolorDraw = (texhds.z & 0x80000000u) != 0u ? int(texhds.z & 3u) : icolor;
+#define icolor icolorDraw
+#else
+#ifdef CANE_TEXH4
+    vTexh = atexh[aDraw].xy;
+#elif defined(BINDLESS)
     vTexh = atexh[aDraw];
+#endif
 #endif
 #ifdef TEXARRAY
     vLayer = alayer[aDraw].x;
@@ -154,7 +181,7 @@ void main()
     gl_Position = matWorldToClip * posWorld;
     vec4 c = icolor == 0 ? aRgbaA : (icolor == 1 ? aRgbaB : rgbaConst);
     float aA = aRgbaA.a;
-    if ((icolor == 0 || icolor == 3) && arec[irec].spec1.z != 0.0)
+    if ((icolor == 0 || icolor == 1 || icolor == 3) && arec[irec].spec1.z != 0.0)
     {
         // P_G 638: the direction to the camera in the group's space (1909's matrix; 0: -view direction, 1: from the
         // point, 2: from the vertex), . the S8 normal (n x 127, truncated as 0x16A000 packs it), a quadratic gain
@@ -172,8 +199,21 @@ void main()
         v = normalize(v);
         float x = dot(v, trunc(aNormal * 127.0));
         float g = clamp(spec0.x + spec0.y * x + spec0.z * x * x, spec1.x, spec1.y);
-        aA = floor(aA * g + 0.5);
-        if (icolor == 0) c.a = aA;
+        if (spec1.w != 0.0)
+        {
+            // (orig3 mesh_modulate_material, lit (flag set): the normal stream's w (the vertex's brightness, Decompose's
+            // baseIntensity) times the gain, half-unit rounded, before mesh_shade_cubic multiplies colour A's RGB by
+            // it: the baked colour A's RGB times the gain; alpha and colour B unchanged)
+            if (icolor == 0) c.rgb = floor(c.rgb * g + 0.5);
+        }
+        else
+        {
+            aA = floor(aA * g + 0.5);
+            if (icolor == 0) c.a = aA;
+            // (orig3 mesh_modulate_material, unlit: the vertex record's colour A alpha (qword 1 w) and colour B's RGB
+            // (qword 2 xyz) both times the gain, half-unit rounded: the second pass's colour dims with the view angle too)
+            if (icolor == 1) c.rgb = floor(c.rgb * g + 0.5);
+        }
     }
     if (icolor == 3) c.a *= aA / 128.0;   // a constant colour faded by the vertex alpha
     c.a *= d.z;

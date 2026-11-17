@@ -2,6 +2,7 @@
 // The binocucom (orig ACTOR +0xF00, module 0x19CBF8..0x19DE10; the reference's m_19D330_p3.cpp): binoc.h.
 
 #include "binoc.h"
+#include "gang.h"
 #include <execinfo.h>
 #include "binoc3.h"
 #include "game/scptgame3.h"
@@ -25,6 +26,7 @@
 #include "so.h"
 #include "sound.h"
 #include "sly.h"
+#include "gang.h"
 #include "smrun.h"
 #include "sm.h"
 #include "animfind.h"
@@ -168,16 +170,29 @@ void ShowActorParts(ACTOR* pa, bool fHidden)
     // (Bentley's 0x205D10: nothing)
 }
 
-// vt slot 94 (Sly 0x1894F8: the states 0 / 1 / 5 / 10 / 12 / 24 play the opening / closing)
+// vt slot 94 (Sly 0x1894F8: the states 0 / 1 / 5 / 10 / 12 / 24 play the opening / closing). Sly 3's vt slot 104 (the
+// state numbers Sly 3's): Sly 0x1AACA0 {0, 1, 2, 6, 10, 19} (Sly's states are Sly 3's: sly.h jts::), Bentley 0x13F408
+// {0, 1, 5, 6, 7, 9}, Murray 0x1E0B10 {0, 1, 10, 11} (their native states keep Sly 3's numbers)
 bool FBinocAnimAllowed(ACTOR* pa)
 {
     if (SLY* p = dynamic_cast<SLY*>(pa))
-        switch (p->state)
+        switch (p->jts)
         {
-        case 0: case 1: case 5: case 10: case 12: case 24: return true;
+        case 0: case 1: case 2: case 6: case 10: case 19: return true;
         default: return false;
         }
-    WarnOnce("vt slot 94 of Bentley / Murray (0x135FF0 / 0x1B8180)");
+    if (BENTLEY* p = dynamic_cast<BENTLEY*>(pa))
+        switch (p->state)
+        {
+        case 0: case 1: case 5: case 6: case 7: case 9: return true;
+        default: return false;
+        }
+    if (MURRAY* p = dynamic_cast<MURRAY*>(pa))
+        switch (p->state)
+        {
+        case 0: case 1: case 10: case 11: return true;
+        default: return false;
+        }
     return true;
 }
 
@@ -189,6 +204,18 @@ void DuckSounds(float g)
     SetSoundChannelVolume(1, 3, g);
 }
 }  // namespace
+
+// (binoccam3.cpp, the scripts' binocucom (orig3 0x1BDBB0 kind 1): the same actor side as the recon view's)
+bool FBinocAnimAllowed3(ACTOR* pa) { return pa && FBinocAnimAllowed(pa); }
+void DuckBinocSounds3(float g) { DuckSounds(g); }
+int NActorState3(ACTOR* pa)
+{
+    if (SLY* p = dynamic_cast<SLY*>(pa)) return p->jts;   // (Sly 3's numbers: sly.h jts::)
+    if (BENTLEY* p = dynamic_cast<BENTLEY*>(pa)) return p->state;
+    if (MURRAY* p = dynamic_cast<MURRAY*>(pa)) return p->state;
+    return -1;
+}
+void ShowBinocActorParts3(ACTOR* pa, bool fHidden) { if (pa) ShowActorParts(pa, fHidden); }
 
 // orig: 0x0019CBF8 / 0x0019D4D0
 void InitBinoc(ACTOR* pa)
@@ -208,6 +235,11 @@ void PostLoadBinoc(ACTOR* pa)
     if (FIsLoDerivedFrom(pa->palo, S3CID(0x35))) { oidFrame = 0x35F; oidWindow = 0x368; }
     else if (FIsLoDerivedFrom(pa->palo, S3CID(0x37))) { oidFrame = 0x360; oidWindow = 0x369; }
     else if (FIsLoDerivedFrom(pa->palo, S3CID(0x36))) { oidFrame = 0x361; oidWindow = 0x36A; }
+    // (Sly 3: the binocucom's screen objects are binoc3.cpp's (the frame 1038, the speaker's window 1045); Sly 2's oids
+    // 0x35F..0x36A are none of them, and 874 (0x36A) is another global screen object of every Sly 3 world, which a
+    // talk of this window would have shown. Not looked up: this window keeps no screen object in Sly 3)
+    static const bool s_fSly2Oids = std::getenv("SLY3_BINOC2OIDS") != nullptr;   // (debug: as before)
+    if (!s_fSly2Oids) oidFrame = oidWindow = -1;
     if (oidFrame != -1 && g_psw)
     {
         w.ploFrame = PloFindSwObjectByOid(g_psw, oidFrame);    // 0x15E938(kind 0x405)
@@ -294,6 +326,8 @@ void CloseBinoc(ACTOR* pa)
 // orig: 0x0019CD38
 void SetBinocState(ACTOR* pa, int n)
 {
+    // (Sly 3: one binocucom per actor (+0xF60): its -1 also shuts the scripts' one, binoccam3.cpp)
+    if (n == -1 && FScripts3Active() && pa) ShutBinocMode3(pa->palo);
     BINOC& b = pa->binoc;
     const int cur = pa->nF04;
     if (n == cur) return;
@@ -510,10 +544,15 @@ void SetBinocWindowState(ACTOR* pa, int n)
     const int old = w.state;
     w.state = n;
     const bool fTalk = pa->nF20 == 1;
+    // (Sly 3: the recon view's panel is binoc3.cpp's (OpenBinocPanel3 above), which sends Sly 3's broadcasts 2 / 3 and
+    // drives the photo helper itself (orig3 0x1BE5A8); this Sly 2 window then only keeps its own screen objects, none
+    // of which a Sly 3 world has)
+    void* pprompt = FScripts3Active() && pa->nF20 == 0 ? nullptr : w.pprompt;
+    const bool fBroadcast = !(FScripts3Active() && pa->nF20 == 0);
     switch (n)
     {
     case 0:
-        BroadcastTaskEvent(g_psw, fTalk ? 0xC : 7, nullptr);  // 0x1619A0 (the HUD)
+        if (fBroadcast) BroadcastTaskEvent(g_psw, fTalk ? 0xC : 7, nullptr);  // 0x1619A0 (the HUD)
         if (w.ploFrame)
         {
             ShowScreenObj(w.ploFrame, -1);       // vt slot 49
@@ -527,23 +566,23 @@ void SetBinocWindowState(ACTOR* pa, int n)
             ResetDialogSubtitle();  // 0x227788
             if (w.ploWindow) ShowScreenObj(w.ploWindow, -1);
         }
-        SetPhotoPromptState(w.pprompt, 0);
+        SetPhotoPromptState(pprompt, 0);
         break;
     case 2:
-        BroadcastTaskEvent(g_psw, fTalk ? 0xD : 8, nullptr);
+        if (fBroadcast) BroadcastTaskEvent(g_psw, fTalk ? 0xD : 8, nullptr);
         if (w.ploFrame) HideScreenObj(w.ploFrame);  // vt slot 50
         if (w.ploWindow) HideScreenObj(w.ploWindow);
-        SetPhotoPromptState(w.pprompt, 10);
+        SetPhotoPromptState(pprompt, 10);
         break;
     case -1:
-        if (old != 2) BroadcastTaskEvent(g_psw, fTalk ? 0xD : 8, nullptr);
+        if (old != 2 && fBroadcast) BroadcastTaskEvent(g_psw, fTalk ? 0xD : 8, nullptr);
         for (LO* plo : {w.ploFrame, w.ploWindow})
             if (plo && NScreenObjState(plo))
             {
                 SetScreenObjState(plo, 1);   // 0x212A70
                 SetScreenObjTimers(plo, 1);  // 0x212A50
             }
-        SetPhotoPromptState(w.pprompt, -1);
+        SetPhotoPromptState(pprompt, -1);
         break;
     default: break;
     }
@@ -553,7 +592,7 @@ void SetBinocWindowState(ACTOR* pa, int n)
 void UpdateBinocWindow(ACTOR* pa)
 {
     BINOCWIN& w = pa->binoc.win;
-    UpdatePhotoPrompt(w.pprompt);
+    if (!FBinocPanel3Prompt(w.pprompt)) UpdatePhotoPrompt(w.pprompt);   // (else binoc3.cpp updates it)
     const bool fTalk = pa->nF20 == 1;
     if (w.state == 0)
     {

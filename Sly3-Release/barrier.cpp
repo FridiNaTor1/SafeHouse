@@ -74,6 +74,50 @@ int OverlapKindBarrier(ALO* p, ALO* pOther)
     return f ? 2 : 1;
 }
 
+// orig3: 0x00219510 (vt slot 61 of class 0x62, Sly 2's slot 58, NEW_BARRIER_62: a BARRIER that dissolves its contacts with
+// the listed objects): the base's (0x23E068: NotifyAloContacts), then each overlap with contacts whose other object is
+// in the object list (+0x130, 0x1C8768 FOidOrAlias) or the class list (+0x144, 0x13B500): both told (vt slot 58, Sly 2's
+// 54, SetOverlap), the other woken unless still (slot 66 / 0x23E228), and the pair's contacts freed (0x1CBAA0) on both
+// records (audit 4 CORE-16; Ep5's survey: 5 cases)
+}  // namespace
+void NotifyBarrier62Contacts(ALO* p)
+{
+    using PFNOVER = void (*)(ALO*, ALO*);   // (bbmark.cpp's VtSetOverlap / VtFStill: slots 54 / 62)
+    using PFNSTILL = bool (*)(ALO*);
+    auto VtSetOverlap = [](ALO* pa, ALO* pb) { if (PFNOVER pfn = reinterpret_cast<PFNOVER>(PvNativeVt(pa, 54))) pfn(pa, pb); };
+    auto VtFStill = [](ALO* pa) { PFNSTILL pfn = reinterpret_cast<PFNSTILL>(PvNativeVt(pa, 62)); return pfn ? pfn(pa) : FAloStill(pa); };
+    NotifyAloContacts(p);
+    OXA* poxa = Poxa(p);
+    if (!poxa) return;
+    for (OX* pox = poxa->pox; pox; pox = pox->poxNext)
+    {
+        if (!pox->pxp) continue;
+        ALO* pOther = pox->psoOther;
+        if (!pOther) continue;
+        bool f = false;
+        int coid = 0, ccid = 0;
+        for (const OPT& o : p->aopt)
+        {
+            if (o.eopid == 510)
+                for (const OPTVAL& v : o.aval)
+                    if (coid++ < 4 && FOidOrAlias(pOther, v.n)) f = true;
+            if (o.eopid == 512)
+                for (const OPTVAL& v : o.aval)
+                    if (ccid++ < 4 && v.n >= 0 && FCidDerivedFrom(pOther->Cid(), static_cast<CID>(v.n))) f = true;
+        }
+        if (!f) continue;
+        VtSetOverlap(p, pOther);
+        VtSetOverlap(pOther, p);
+        if (!VtFStill(pOther)) WakeAlo(pOther);
+        FreeSwXpList(pox->pxp);
+        if (pox->poxOther) pox->poxOther->pxp = nullptr;
+        pox->pxp = nullptr;
+    }
+}
+NATIVEFN3(0x219510, NotifyBarrier62Contacts);
+namespace
+{
+
 // +0x17C: the object the barrier last told its splice event 5 about (EOPID 459, option 534 of the class)
 std::unordered_map<const LO*, LO*>& MpploToucher()
 {

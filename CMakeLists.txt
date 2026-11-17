@@ -251,7 +251,7 @@ if(CANE_BUILD_LAUNCHER)
  # embedded for Linux .desktop shortcuts (launcher/desktop_shortcut.h installIcon); Windows embeds the .ico files
  # (cmake/launcher.rc.in) instead.
  if(NOT WIN32)
-  foreach(game sly1 sly2 collection)
+  foreach(game sly1 sly2 sly3 collection)
    set(image_header "${CMAKE_BINARY_DIR}/generated/launcher_shortcut_${game}.h")
    set(image_source "${CMAKE_CURRENT_SOURCE_DIR}/launcher/assets/shortcut/${game}-logo.png")
    add_custom_command(OUTPUT "${image_header}" COMMAND ${CMAKE_COMMAND} -DSOURCE=${image_source} -DOUTPUT=${image_header} -DSYMBOL=cane_shortcut_${game} -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed-image.cmake DEPENDS "${image_source}" cmake/embed-image.cmake VERBATIM)
@@ -646,7 +646,8 @@ if(WIN32)
   file(READ cmake/launcher.rc.in launcher_icons)
   string(CONFIGURE "${launcher_icons}" launcher_icons @ONLY)
   cane_windows_resources(cane-launcher "SafeHouse Launcher" "${launcher_icons}"
-   "${cane_assets}/safehouse.ico" "${cane_assets}/shortcut/sly1-logo.ico" "${cane_assets}/shortcut/sly2-logo.ico")
+   "${cane_assets}/safehouse.ico" "${cane_assets}/shortcut/sly1-logo.ico" "${cane_assets}/shortcut/sly2-logo.ico"
+   "${cane_assets}/shortcut/sly3-logo.ico")
   cane_windows_resources(safehouse-start "SafeHouse Launcher" "IDI_SAFEHOUSE ICON \"${cane_assets}/safehouse.ico\""
    "${cane_assets}/safehouse.ico")
  endif()
@@ -655,8 +656,8 @@ if(WIN32)
  cane_windows_resources(Sly1BrxRebuilder "SafeHouse Sly 1 world converter" "")
  cane_windows_resources(Sly1-Release "Sly Cooper and the Thievius Raccoonus (SafeHouse)"
   "GLFW_ICON ICON \"${cane_assets}/shortcut/sly1.ico\"" "${cane_assets}/shortcut/sly1.ico")
- # (Sly 3: the UTF-8 / long-path manifest and file properties; no shortcut icon yet)
- cane_windows_resources(Sly3-Release "Sly 3: Honor Among Thieves (SafeHouse)" "")
+ cane_windows_resources(Sly3-Release "Sly 3: Honor Among Thieves (SafeHouse)"
+  "GLFW_ICON ICON \"${cane_assets}/shortcut/sly3.ico\"" "${cane_assets}/shortcut/sly3.ico")
  cane_windows_resources(Sly2-Release "Sly 2: Band of Thieves (SafeHouse)"
   "GLFW_ICON ICON \"${cane_assets}/shortcut/sly2.ico\"" "${cane_assets}/shortcut/sly2.ico")
 endif()

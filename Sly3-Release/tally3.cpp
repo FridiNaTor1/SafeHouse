@@ -12,7 +12,8 @@
 //
 // Also the ship battles' stats on 1945 (p_at_sea): 1964 the rank (0x21A818: (2 x captured + sunk) / 10 -> texts 501..510),
 // 1965 / 1966 the sunk / captured counts (0x25F018 on SW +0x42C0 / +0x42C4); 1960..1963 (0x21A7B8: the battle
-// manager's 0x468D24 entries) are not: that manager is not ported.
+// manager's 0x468D24 entries +0x70, "%d" of each row's reward while index < count +0x94) are game/ship3.cpp's
+// (StrBattleValue, the rows of TallyBattle 0x21A300).
 
 #include "tally3.h"
 

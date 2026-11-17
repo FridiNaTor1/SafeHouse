@@ -15,6 +15,7 @@
 #include "sw.h"
 #include "vehicle.h"
 #include "../platform/controller_family.h"
+#include "sly.h"
 #include <GLFW/glfw3.h>
 #include <algorithm>
 #include <bit>
@@ -232,10 +233,10 @@ Action ForButton(const LO* owner, int button) {
             if (button == 11) return FCidDerivedFrom(actor->palo->Cid(), S3CID(0x37)) ? Action::BentleyDart : Action::Photo;
         }
         if (auto* sly = dynamic_cast<SLY*>(actor)) {
-            if (button == 6 && (sly->state == 3 || sly->state == 22)) return Action::HangJump;
-            if (button == 6 && (sly->state == 8 || sly->state == 21)) return Action::ClimbJump;
-            if (button == 7) return sly->state == 2 ? Action::SlyDive : Action::SlyUppercut;
-            if (button == 4 && sly->state == 2) return Action::SlyAirAttack;
+            if (button == 6 && (sly->jts == jts::Hang || sly->jts == jts::HangFollow)) return Action::HangJump;
+            if (button == 6 && (sly->jts == jts::Climb || sly->jts == jts::N2ClimbSurf)) return Action::ClimbJump;
+            if (button == 7) return sly->jts == jts::Jump ? Action::SlyDive : Action::SlyUppercut;
+            if (button == 4 && sly->jts == jts::Jump) return Action::SlyAirAttack;
         } else if (FCidDerivedFrom(actor->palo->Cid(), S3CID(0x37))) {
             if (button == 4) return Action::BentleySwing;
             if (button == 7) return Action::BentleySpecial;

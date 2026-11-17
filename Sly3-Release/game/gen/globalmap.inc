@@ -105,7 +105,9 @@ GLOBALMAP(0x2CAF48, 0x351D28, 10)  //  offset from 0x2CAF08
 GLOBALMAP(0x3DD48C, 0x468D24, 65)  //  votes
 GLOBALMAP(0x3DD050, 0x475000, 65)  // g_sound votes
 GLOBALMAP(0x2BD850, 0x344450, 10)  //  offset from 0x2BD7F0
+GLOBALMAP(0x2C41D0, 0x34A060, 10)  //  offset from 0x2C41A0
 GLOBALMAP(0x2BF670, 0x345710, 10)  // g_disc offset from 0x2BF664
+GLOBALMAP(0x2C41F0, 0x34A080, 10)  // s_aLeadStick offset from 0x2C41A0
 GLOBALMAP(0x2A5000, 0x321010, 65)  // s_dposFreeEye votes
 GLOBALMAP(0x2BDA70, 0x320F70, 10)  // s_acurveTimed offset from 0x2BDA5C
 GLOBALMAP(0x2BDAD0, 0x320F80, 65)  // s_aPairHeight votes
@@ -190,7 +192,6 @@ GLOBALMAP(0x2A4FF8, 0x320E40, 65)  //  votes
 GLOBALMAP(0x2BD8B0, 0x3444B0, 10)  //  offset from 0x2BD7F0
 GLOBALMAP(0x2BD8E0, 0x344844, 10)  //  offset from 0x2BD8D8
 GLOBALMAP(0x2C41C0, 0x34A050, 10)  //  offset from 0x2C41A0
-GLOBALMAP(0x2C41D0, 0x34A060, 10)  //  offset from 0x2C41A0
 GLOBALMAP(0x2DE240, 0x36BCE4, 10)  //  offset from 0x2DE18C
 GLOBALMAP(0x2A39A8, 0x317F78, 65)  //  votes
 GLOBALMAP(0x2BBB68, 0x341FF8, 10)  //  offset from 0x2BBB64
@@ -205,7 +206,6 @@ GLOBALMAP(0x2C41E0, 0x34A070, 10)  //  offset from 0x2C41A0
 GLOBALMAP(0x2C41E4, 0x34A074, 10)  //  offset from 0x2C41A0
 GLOBALMAP(0x2C41E8, 0x34A078, 10)  //  offset from 0x2C41A0
 GLOBALMAP(0x2C41EC, 0x34A07C, 10)  //  offset from 0x2C41A0
-GLOBALMAP(0x2C41F0, 0x34A080, 10)  // s_aLeadStick offset from 0x2C41A0
 GLOBALMAP(0x2C4200, 0x34A090, 10)  // s_lmLeadStick offset from 0x2C41A0
 GLOBALMAP(0x2C4208, 0x34A098, 10)  // s_smpSample offset from 0x2C41A0
 GLOBALMAP(0x2C4220, 0x34A0B0, 10)  // s_aLeadTime offset from 0x2C41A0
@@ -401,6 +401,7 @@ GLOBALMAP(0x2BF43C, 0x32266C, 10)  //  offset from 0x2BF390
 GLOBALMAP(0x2BF440, 0x322670, 10)  // g_clock offset from 0x2BF390
 GLOBALMAP(0x2BF418, 0x322648, 10)  //  offset from 0x2BF390
 GLOBALMAP(0x2BF414, 0x322644, 10)  // g_clock offset from 0x2BF390
+GLOBALMAP(0x2A5BC0, 0x3227B0, 10)  //  offset from 0x2A5AF0
 GLOBALMAP(0x2BF3E4, 0x322614, 10)  // g_clock offset from 0x2BF390
 GLOBALMAP(0x2BF360, 0x322498, 10)  //  offset from 0x2BF348
 GLOBALMAP(0x2BF4AC, 0x3226DC, 10)  //  offset from 0x2BF390

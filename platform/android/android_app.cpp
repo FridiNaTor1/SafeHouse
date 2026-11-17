@@ -513,11 +513,12 @@ Java_org_safehouse_android_NativeBridge_nativeRunExtractor(JNIEnv* env, jclass, 
     return entry(static_cast<int>(arguments.size()), pointers.data());
 }
 extern "C" JNIEXPORT jint JNICALL
-Java_org_safehouse_android_NativeBridge_nativeRunRuntime(JNIEnv* env, jclass, jobjectArray args) {
+Java_org_safehouse_android_NativeBridge_nativeRunRuntime(JNIEnv* env, jclass, jstring program, jobjectArray args) {
     using Entry = int (*)(int, char**);
     auto entry = reinterpret_cast<Entry>(dlsym(RTLD_DEFAULT, "SDL_main"));
     if (!entry) { std::fputs("Runtime entry point is unavailable\n", stderr); return 1; }
-    std::vector<std::string> arguments{"Sly2-Release"};
+    // (argv[0]: the game library's program name, "Sly2-Release" or "Sly3-Release"; RuntimeToolService loaded it)
+    std::vector<std::string> arguments{program ? string(env, program) : std::string("Sly2-Release")};
     for (jsize i = 0; args && i < env->GetArrayLength(args); ++i) {
         auto argument = static_cast<jstring>(env->GetObjectArrayElement(args, i));
         arguments.push_back(string(env, argument)); env->DeleteLocalRef(argument);

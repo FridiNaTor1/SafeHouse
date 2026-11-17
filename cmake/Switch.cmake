@@ -191,9 +191,10 @@ endfunction()
 
 # ---- Sly 2
 file(GLOB sly2_sources CONFIGURE_DEPENDS "${root}/Sly2-Release/*.cpp" "${root}/Sly2-Release/*.c")
+list(APPEND sly2_sources "${root}/platform/render/fsr.cpp" "${root}/platform/render/texmod.cpp")   # (shared with Sly 3)
 add_library(sly2_game STATIC ${sly2_sources} "${root}/Libraries/miniz/miniz.c" "${root}/Libraries/lz4/lz4.c" "${root}/Libraries/lz4/lz4hc.c" "${root}/assets/prompts/prompt_data.cpp")
 cane_switch_game(sly2_game sly2)
-target_include_directories(sly2_game PRIVATE "${root}/Sly2-Release" "${root}/platform" "${root}/Libraries/miniz" "${root}/Libraries/lz4"
+target_include_directories(sly2_game PRIVATE "${root}/Sly2-Release" "${root}/platform" "${root}/platform/render" "${root}/Libraries/miniz" "${root}/Libraries/lz4"
   "${root}/assets/prompts" "${gen}/prompts" "${gen}/sly2")
 target_compile_definitions(sly2_game PRIVATE "SLY2N_DEV_ROOT=\"sdmc:/switch/SafeHouse\"" CANE_HAVE_PROMPT_ATLAS=1 CANE_HAVE_GAMECONTROLLERDB=1)
 set_source_files_properties("${root}/Libraries/miniz/miniz.c" PROPERTIES COMPILE_OPTIONS "-w")
@@ -240,14 +241,15 @@ target_sources(sly2_game PRIVATE "${gen}/sly2/embedded_shaders.h" "${gen}/sly2/s
 
 # ---- Sly 3 (forked from Sly 2: the same build, its numbers in game/)
 file(GLOB sly3_sources CONFIGURE_DEPENDS "${root}/Sly3-Release/*.cpp" "${root}/Sly3-Release/*.c" "${root}/Sly3-Release/game/*.cpp")
+list(APPEND sly3_sources "${root}/platform/render/fsr.cpp" "${root}/platform/render/texmod.cpp")   # (shared with Sly 2)
 add_library(sly3_game STATIC ${sly3_sources} "${root}/Libraries/miniz/miniz.c" "${root}/Libraries/lz4/lz4.c" "${root}/Libraries/lz4/lz4hc.c" "${root}/assets/prompts/prompt_data.cpp")
 cane_switch_game(sly3_game sly3)
-target_include_directories(sly3_game PRIVATE "${root}/Sly3-Release" "${root}/platform" "${root}/Libraries/miniz" "${root}/Libraries/lz4"
+target_include_directories(sly3_game PRIVATE "${root}/Sly3-Release" "${root}/platform" "${root}/platform/render" "${root}/Libraries/miniz" "${root}/Libraries/lz4"
   "${root}/assets/prompts" "${gen}/prompts" "${gen}/sly3")
-target_compile_definitions(sly3_game PRIVATE "SLY2N_DEV_ROOT=\"sdmc:/switch/SafeHouse\"" CANE_HAVE_PROMPT_ATLAS=1 CANE_HAVE_GAMECONTROLLERDB=1)
+target_compile_definitions(sly3_game PRIVATE "SLY2N_DEV_ROOT=\"sdmc:/switch/SafeHouse\"" "CANE_TEXMOD_CACHE_GAME=\"sly3\"" CANE_HAVE_PROMPT_ATLAS=1 CANE_HAVE_GAMECONTROLLERDB=1)
 file(MAKE_DIRECTORY "${gen}/sly3")
 add_custom_command(OUTPUT "${gen}/sly3/embedded_shaders.h"
-  COMMAND ${CMAKE_COMMAND} -DSOURCE=${root}/Sly3-Release -DOUTPUT=${gen}/sly3/embedded_shaders.h -P ${root}/cmake/embed-shaders.cmake
+  COMMAND ${CMAKE_COMMAND} -DSOURCE=${root}/Sly3-Release "-DEXTRA=${root}/Sly2-Release/vrfull.vert|${root}/Sly2-Release/fsreasu.frag|${root}/Sly2-Release/fsrrcas.frag" -DOUTPUT=${gen}/sly3/embedded_shaders.h -P ${root}/cmake/embed-shaders.cmake
   DEPENDS ${root}/cmake/embed-shaders.cmake VERBATIM)
 add_custom_command(OUTPUT "${gen}/sly3/sly2n_logo.h"
   COMMAND "${Python3_EXECUTABLE}" "${root}/cmake/switch_embed.py" "${gen}/sly3/sly2n_logo.h" sly2n_logo_png "${root}/launcher/assets/games/sly3-logo.png"

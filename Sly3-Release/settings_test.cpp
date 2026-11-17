@@ -42,6 +42,8 @@ int SettingsSelfTest()
     Check(st::sly2ToIni(d) != td, "Sly 2's file differs");
     Check(Has(td, "Camera Left/Right = Default") && Has(td, "Harpoon Up/Down = Default"), "the camera options' keys");
     Check(!Has(st::sly2ToIni(d), "Camera Left/Right"), "no camera options in Sly 2's file");
+    Check(d.game.mode3d == 0 && Has(td, "3D Mode = Off"), "the 3-D mode off by default");
+    Check(!Has(st::sly2ToIni(d), "3D Mode"), "no 3-D mode in Sly 2's file");
     // round trip of changed values
     st::Sly3Settings c = d;
     c.system.frameRate = 144;
@@ -52,6 +54,7 @@ int SettingsSelfTest()
     c.game.usbHeadset = 1;
     c.game.outputDevice = "USB Audio ; Device # 2";
     c.game.camReverse[3][1] = 1;   // (Turret Up/Down: Reversed)
+    c.game.mode3d = 1;
     std::vector<std::string> invalid;
     const st::Sly3Settings back = st::sly3FromIni(st::sly3ToIni(c), &invalid);
     Check(invalid.empty(), "no invalid keys");
@@ -60,6 +63,7 @@ int SettingsSelfTest()
     Check(back.game.speakers == st::Speakers_Mono && back.game.usbHeadset == 1, "game options");
     Check(back.game.outputDevice == c.game.outputDevice, "a device name", back.game.outputDevice);
     Check(back.game.camReverse[3][1] == 1 && back.game.camReverse[3][0] == 0 && back.game.camReverse[0][1] == 0, "a camera option");
+    Check(back.game.mode3d == 1 && Has(st::sly3ToIni(c), "3D Mode = On"), "the 3-D mode on");
     Check(st::sly3ToIni(back) == st::sly3ToIni(c), "stable text");
     // hand-edited: other spellings, a BOM, CRLF, an invalid value, Sly 2's key and an unknown section kept
     const std::string hand = "\xEF\xBB\xBF; mine\r\n[display]\r\nframe_rate_limit = Uncapped\r\nvsync=off\r\n[Audio]\r\n"

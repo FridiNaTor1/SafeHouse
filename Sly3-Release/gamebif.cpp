@@ -17,6 +17,8 @@
 #include "jt.h"
 #include "so.h"
 #include "game/suck3.h"
+#include "pickup.h"
+
 
 #include <algorithm>
 
@@ -126,7 +128,23 @@ struct INITGAMEBIFS
 {
     INITGAMEBIFS()
     {
+        // Sly 3's 148 add-coins (orig3 0x1276B8): the save's coins (0x1852E0) plus the argument through 0x185328 (clamped
+        // to 0..999999, the coin counter shown: 0x1853D8); returns void (tag 0x22) (audit 4 CORE-09)
+        SetBifGameHook(static_cast<BIFK>(148), [](int argc, CRef* argv, CFrame*) {
+            const int d = argc > 0 ? (argv[0].m_tagk == TAGK_F32 ? int(argv[0].m_g) : argv[0].m_n) : 0;
+            const CRef rc = RefGetProgress({"loot", "ccoin"});
+            const int c = rc.m_tagk == TAGK_S32 ? rc.m_n : rc.m_tagk == TAGK_F32 ? int(rc.m_g) : 0;
+            CRef r;
+            r.SetS32(std::clamp(int(unsigned(c) + unsigned(d)), 0, 0xF423F));
+            FSetProgress({"loot", "ccoin"}, r);
+            ShowCoinCounter();
+            return CRef(TAGK_Void);
+        });
         // 97 the world's index (0x210A88), 98 its kind (0x210A98), 99 its episode (0x210AE0), 104 0 (0x210B68)
+        // (audit 4 CORE-20: Sly 2's 98 / 99 have no Sly 3 built-in (Bifk3FromSly2: BIFK_Nil, the hooks are dropped), and
+        // Sly 2's 104 / 105 / 106 / 133 land on Sly 3's 108 / 111 / 112 / 141, which bif.cpp's table has as native BIFN
+        // entries (RefOpZero3, RefOpScheduleCallback3, RefOpCancelCallback3, RefOpSymbolValue3): a BIFN wins over a hook,
+        // so those four hooks below are never called; kept as the Sly 2 reference of the same behaviour)
         SetBifGameHook(Bifk3FromSly2(97), [](int, CRef*, CFrame*) { return RefS32(g_transition.iwrecCur); });
         SetBifGameHook(Bifk3FromSly2(98), [](int, CRef*, CFrame*) { const WREC* p = PwrecCur(); return RefS32(p ? p->kind : -1); });
         SetBifGameHook(Bifk3FromSly2(99), [](int, CRef*, CFrame*) { return RefS32(IepisodeCur()); });
@@ -184,9 +202,13 @@ struct INITGAMEBIFS
             return r;
         });
         // 131 / 132: a progress value by a path of symbols (0x125398 / 0x125450)
-        // Sly 2 130 (0x125248): the pad's rumble (kind, seconds: 0x187E28), void
-        SetBifGameHook(Bifk3FromSly2(130), [](int, CRef* argv, CFrame*) {
-            TriggerJoyRumbleRumk(argv[0].m_n, argv[1].GAsFloat(), "bif 130");
+        // Sly 2 130 (0x125248): the pad's rumble (kind, seconds: 0x187E28), void. Sly 3's 138 (0x127158) takes an
+        // optional third argument, the player (the rest list's first: 0x36E740 + n x 0x11C0, 0x1A9058); -1 none. The PC
+        // drives player 0's pad (player 1's in the split screen has no rumble of its own here)
+        SetBifGameHook(Bifk3FromSly2(130), [](int argc, CRef* argv, CFrame*) {
+            int channel = 0;
+            if (argc > 2 && argv[2].m_tagk == TAGK_Pair && argv[2].m_ppair) channel = argv[2].m_ppair->m_ref.m_n;
+            if (channel == 0) TriggerJoyRumbleRumk(argv[0].m_n, argv[1].GAsFloat(), "bif 130");
             return RefVoid();
         });
         SetBifGameHook(Bifk3FromSly2(131), [](int, CRef* argv, CFrame*) { return RefGetProgressKey(AkeyFromList(argv[0])); });

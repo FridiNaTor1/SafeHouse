@@ -103,3 +103,4 @@ extern void (*g_pfnStartScpt)(LO* plo, int n);
 // orig 0x00210338's part after the find: plo added / removed (an ALO faded over g seconds, 0x1F7C68 / 0x1F7BF8)
 void SwitchLoFaded(LO* plo, bool fOn, float g);
 void DetachAloBase27(LO* plo, LO* pproxy);  // orig 0x1CB5D0 (the ALO slot 27: the children told)
+void DetachSoBase32(LO* plo, LO* pproxy);   // orig3 0x1F3C80 (SO slot 32: the ALO base, then the hitter record cleared)

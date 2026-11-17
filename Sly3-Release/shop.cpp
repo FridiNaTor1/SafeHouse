@@ -282,14 +282,24 @@ void UpdateShopStick()
 }
 }  // namespace
 
-// orig 0x0019F0A8: every player (class 0x34, at most 8) gets vt slot 104 (0x141E30): its event 0x1A (vt slot 3 =
-// 0x1A61E0: the splice event 0x1A only, the tasks' broadcast being for 5 / 6)
+// orig 0x0019F0A8. orig3 0x1C0130: every player (class 0x33 = Sly 2's 0x34, at most 16) gets vt slot 118 (Sly 2's 104):
+// 0x1546B8 sends its vt slot 3 the splice event 0x1D (Sly 3's number of Sly 2's 0x1A, as the task broadcasts' 0x1A ->
+// 0x1D), then empties (item 0, 0x1548E8(i, 0)) each of its three gadget slots whose power-up is not owned (0x21F410).
+// Bentley's 0x1405D8 also sets his +0x4B0 to 3 with power-up 11 (Hover Pack), else 1: a dead store in Sly 3 (the
+// executable's only word access to a BENTLEY +0x4B0 is that sw at 0x140600; the other 0x4B0 operands are the guards'
+// ground watcher), so nothing to port. 0x21F410's mission branch (a power-up the current job lends): FPowerupOwned.
 void NotifyPlayersPowerups(SW* psw)
 {
     if (!psw) return;
     std::vector<LO*> aplo = AploOfClass(psw, S3CID(0x34));
-    if (aplo.size() > 8) aplo.resize(8);
-    for (LO* plo : aplo) HandleLoSpliceEvent(plo, 0x1A, false, 0, nullptr);
+    if (aplo.size() > 16) aplo.resize(16);
+    for (LO* plo : aplo)
+    {
+        HandleLoSpliceEvent(plo, 0x1D, false, 0, nullptr);
+        if (ACTOR* pa = PactorFromLo(plo))
+            for (int i = 0; i < 3; ++i)
+                if (!FPowerupOwned(IdActorAbilitySlot(pa, i))) SetActorAbilitySlot(pa, i, sly3::Item2FromItem3(0));
+    }
 }
 
 void InitShop(SW* psw)

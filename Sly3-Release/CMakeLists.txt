@@ -9,6 +9,8 @@ get_filename_component(CANE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/.." ABSOLUTE)
 
 file(GLOB sly3n_sources CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/*.c"
      "${CMAKE_CURRENT_SOURCE_DIR}/game/*.cpp")
+# (platform/render: the renderer pieces Sly 2 and Sly 3 share, built against each game's own headers: FSR 1, texture mods)
+list(APPEND sly3n_sources "${CANE_ROOT}/platform/render/fsr.cpp" "${CANE_ROOT}/platform/render/texmod.cpp")
 # (test build: the files' static constructors in reverse order, as MinGW runs them on Windows: its CRT walks the .ctors
 # list backwards. A Linux run of it shows a Windows-only static initialization order dependency; PACKAGING.md section 7)
 option(SLY3_REVERSE_INIT_ORDER "Link Sly3-Release's sources in reverse order (init-order test build)" OFF)
@@ -16,10 +18,29 @@ if(SLY3_REVERSE_INIT_ORDER)
   list(SORT sly3n_sources)
   list(REVERSE sly3n_sources)
 endif()
-add_executable(Sly3-Release ${sly3n_sources})
+if(ANDROID)
+  # (cmake/android.cmake) a JNI library, as Sly 2's: the game activity calls SDL_main (platform/android/native_entry.cpp),
+  # which runs main.cpp's main under another name; the tool service runs the same entry for --convert-worlds and the
+  # other tools. The activity loads libSly3-Release.so for the game "Sly3-Release" (GameActivity.java).
+  add_library(Sly3-Release SHARED ${sly3n_sources} "${CANE_ROOT}/platform/android/native_entry.cpp")
+  set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/main.cpp" PROPERTIES COMPILE_DEFINITIONS main=cane_sly3_main)
+  target_compile_definitions(Sly3-Release PRIVATE CANE_ANDROID_GAME_ENTRY CANE_ANDROID_GAME_MAIN=cane_sly3_main)
+  target_compile_options(Sly3-Release PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:SHELL:-include ${CANE_ROOT}/platform/android/sly_android_compat.h>"
+                         -Wno-error=format-security)
+elseif(CANE_IOS)
+  # (cmake/ios.cmake) Sly3Release.framework, as Sly 2's: the app's bridge runs main.cpp's main under another name in the
+  # app's own process (platform/ios/program_entry.cpp, ios_app.mm), the game on the main thread, the tools on a worker
+  add_library(Sly3-Release SHARED ${sly3n_sources} "${CANE_ROOT}/platform/ios/program_entry.cpp")
+  set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/main.cpp" PROPERTIES COMPILE_DEFINITIONS main=cane_sly3_main)
+  target_compile_definitions(Sly3-Release PRIVATE CANE_IOS_ENTRY=cane_sly3_main "CANE_IOS_ROLE=\"game\"")
+  target_link_libraries(Sly3-Release PRIVATE cane_platform)
+else()
+  add_executable(Sly3-Release ${sly3n_sources})
+endif()
 target_include_directories(Sly3-Release PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}" "${CANE_ROOT}/Libraries/include" "${CANE_ROOT}/platform"
+                           "${CANE_ROOT}/platform/render"
                            "${CMAKE_CURRENT_BINARY_DIR}/generated")
-target_compile_definitions(Sly3-Release PRIVATE _CRT_SECURE_NO_WARNINGS)
+target_compile_definitions(Sly3-Release PRIVATE _CRT_SECURE_NO_WARNINGS "CANE_TEXMOD_CACHE_GAME=\"sly3\"")
 # Development data: the checkout's build/ folder (the reference's RAM maps, the test memory card), used only by the
 # developer options (--loadmaps, the development card's fallback save). A git worktree uses its main checkout's, so
 # every working copy reads the same data. SLY2N_DEV_ROOT overrides it.
@@ -80,14 +101,17 @@ target_link_libraries(Sly3-Release PRIVATE glfw ${CMAKE_DL_LIBS})
 target_compile_definitions(Sly3-Release PRIVATE GLFW_INCLUDE_NONE)
 file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/generated")
 file(GLOB sly2n_shaders CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*.vert" "${CMAKE_CURRENT_SOURCE_DIR}/*.frag" "${CMAKE_CURRENT_SOURCE_DIR}/*.geom")
+# (and Sly 2's programs the shared renderer pieces draw with: platform/render/fsr.cpp's FSR 1 passes)
+set(sly3n_shared_shaders "${CANE_ROOT}/Sly2-Release/vrfull.vert" "${CANE_ROOT}/Sly2-Release/fsreasu.frag" "${CANE_ROOT}/Sly2-Release/fsrrcas.frag")
+string(REPLACE ";" "|" sly3n_shared_shaders_arg "${sly3n_shared_shaders}")
 add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/generated/embedded_shaders.h"
-  COMMAND ${CMAKE_COMMAND} -DSOURCE=${CMAKE_CURRENT_SOURCE_DIR} -DOUTPUT=${CMAKE_CURRENT_BINARY_DIR}/generated/embedded_shaders.h -P ${CANE_ROOT}/cmake/embed-shaders.cmake
-  DEPENDS ${sly2n_shaders} ${CANE_ROOT}/cmake/embed-shaders.cmake VERBATIM)
+  COMMAND ${CMAKE_COMMAND} -DSOURCE=${CMAKE_CURRENT_SOURCE_DIR} "-DEXTRA=${sly3n_shared_shaders_arg}" -DOUTPUT=${CMAKE_CURRENT_BINARY_DIR}/generated/embedded_shaders.h -P ${CANE_ROOT}/cmake/embed-shaders.cmake
+  DEPENDS ${sly2n_shaders} ${sly3n_shared_shaders} ${CANE_ROOT}/cmake/embed-shaders.cmake VERBATIM)
 target_sources(Sly3-Release PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated/embedded_shaders.h")
 # Vulkan renderer (platform/vulkan: the game's GL calls on Vulkan, chosen at run time, OpenGL the fallback; notes/
-# VULKAN_2026-11-10.md): Linux and Windows. The programs are compiled to SPIR-V at build time (cmake/vulkan_shaders.py,
+# VULKAN_2026-11-10.md): Linux, Windows and Android (as Sly 2's: OpenGL / GLES the fallback). The programs are compiled to SPIR-V at build time (cmake/vulkan_shaders.py,
 # glslangValidator); without glslangValidator or Python the game builds without it (OpenGL only).
-if(WIN32 OR (UNIX AND NOT APPLE AND NOT ANDROID))
+if(WIN32 OR ANDROID OR (UNIX AND NOT APPLE))
   set(sly3n_vulkan_default ON)
 else()
   set(sly3n_vulkan_default OFF)
@@ -120,7 +144,9 @@ target_sources(Sly3-Release PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated/sly2n
 
 # Sound and movies (sound.cpp, snd989.cpp, spiop.cpp, fmv.cpp): FAudio (XAudio2 on SDL2, as Sly1-Release on Linux),
 # FFmpeg's MPEG-2 decoder for the PSS movies, SDL2 for the stand-alone movie window (--play-movie).
-if(WIN32)
+if(ANDROID)
+  target_link_libraries(Sly3-Release PRIVATE cane_android_ffmpeg)
+elseif(WIN32)
   if(NOT CANE_FFMPEG_ROOT)
     set(CANE_FFMPEG_ROOT "${CANE_ROOT}/Libraries/ffmpeg/ffmpeg-master-latest-win64-lgpl-shared")
   endif()
@@ -157,7 +183,10 @@ if(TARGET FAudio-shared)
 else()
   target_link_libraries(Sly3-Release PRIVATE FAudio-static)
 endif()
-if(TARGET SDL2::SDL2)
+if(CANE_IOS)
+  # (cmake/ios.cmake: SDL is linked whole into SafeHouseCore, which every program shares)
+  target_link_libraries(Sly3-Release PRIVATE cane_sdl)
+elseif(TARGET SDL2::SDL2)
   target_link_libraries(Sly3-Release PRIVATE SDL2::SDL2)
 else()
   target_include_directories(Sly3-Release PRIVATE ${SDL2_INCLUDE_DIRS})

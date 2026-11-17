@@ -555,7 +555,7 @@ void UpdateSpawner(LO* p)
     sp.tNext = std::max(sp.tNext, g_clock.t + sp.dtDelay);  // (Sly 3: +0x98, 2.5 in the data seen)
     CRef ref;
     ref.SetBasic(plo);
-    HandleLoSpliceEvent(p, 0x19, false, 1, &ref);  // its script: the new guard
+    HandleLoSpliceEvent(p, 0x1C, false, 1, &ref);  // its script: the new guard (orig3 0x1992D8: vt slot 3 with 0x1C; Sly 2 0x19)
 }
 
 struct INITSPAWNER
@@ -603,9 +603,9 @@ void StartSpawner(SW* psw, LO* plo)
     {
         src.plo = PloFindSwObjectByOid(psw, src.oid);  // (0x15E938 kind 5)
         if (src.kind != 1) continue;
-        // a path source: a command list (0x13E3C8(0x71, 0, 0x2CB, -1), in the world) of one move along the path
+        // a path source: a command list (0x13E3C8(0x71, 0, 0x2CB, -1); orig3 0x150690(0x86, 0, 0x322, -1), in the world) of one move along the path
         // {n8 1, nC -1} (0x170C50: op 6)
-        if (auto* pl = static_cast<CMDLIST*>(PloNew(S3CID(0x71), psw, nullptr, 0x2CB, -1)))
+        if (auto* pl = static_cast<CMDLIST*>(PloNew(S3CID(0x71), psw, nullptr, 0x322, -1)))
         {
             if (CMD* pc = PcmdAppend(pl, 6, src.oid))
             {

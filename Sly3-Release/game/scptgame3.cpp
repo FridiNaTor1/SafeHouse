@@ -1,5 +1,6 @@
 // Sly 3's scripts and tasks in the game (scptgame3.h).
 
+#include "../binoc3.h"
 #include "ai.h"
 #include "scptgame3.h"
 #include "../step.h"
@@ -61,6 +62,8 @@
 #include "../trigger.h"
 #include "../sw.h"
 #include "../update.h"
+#include "../cmworld.h"
+#include "../jtthrow.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -80,6 +83,7 @@ constinit SCPTHOOKS3 g_scpthooks3;
 float GRandInRange(float gLow, float gHigh);  // xfmath.h (its SMP clashes with vecmat.h's)
 void TellGuardCommands(LO* pguard, LO* pcmds, bool fRun);  // scptai.cpp (0x171CF8)
 bool FGuardRunsCommands(LO* pguard, LO* pcmds);             // scptai.cpp (0x171DA8)
+bool FFloatsNear(float g1, float g2, float gEpsilon);                // xfmath.h (0x11D4D0)
 void ApplyCheckpointLo(SW* psw, LO* plo); // transition.cpp (orig 0x228750; Sly 3 0x280010)
 void StartFadeLo(LO* plo);                // hudwidget.cpp (0x15E1D8; Sly 3 0x17D7D0)
 void UseObjectBy(LO* puse, ACTOR* pa);    // interact.cpp (the use's base 0x184130; Sly 3 0x1A20F8)
@@ -108,10 +112,17 @@ void SetPlayer0Character3(SW* psw, LO* plo)
     // 3459's 0x13 to Sly) had no control: the photo tasks could not be played)
     if (plo && psw && PloPoCurrent(psw) == plo && FCidDerivedFrom(plo->Cid(), sly3::CID_PO) && NPoEnabled(plo) != 1)
         EnablePo(psw, plo, 1);
+    // (the same for a Carmelita made current without her pad: e.g. after an in-place reset, which takes the pads back
+    // (0x1F4B00(p, 0 / 1, 0): her slot 83 (-1)) while the start's player selection may make her current again: her
+    // slot 83 with the player's index, the reaction kind 20 (job 0xE9) once more)
+    if (plo && psw && PloPoCurrent(psw) == plo && PguardFromLo(plo) && FCidDerivedFrom(plo->Cid(), S3CID(0x3F)) && IPlayerCarm3(plo) != 0)
+        SetCarmPlayer3(plo, 0);
 }
 
 // (the route harness's waitcmd: how often each script command ran, keyed (script oid << 16) | index)
 std::unordered_map<int64_t, int> g_mpcScptCmdExec3;
+
+void ActivateViewer3(LO* plo, LO* ploActor);   // game/viewer3.cpp (class 0x47)
 
 namespace
 {
@@ -265,6 +276,22 @@ struct GAMESCPTHOST3 : SCPTHOST3
         s_binoc.state = 0;
         s_binoc.stateTarget = -1;
         s_binoc.cframeReady = s_cframe + 20;
+    }
+    // orig3: 0x1569A8 (actor +0xF78 == 0: the binocucom (+0xF60) up in kind 0, the player's own look-around; the scripts'
+    // are kind 1, never shut by the 0x22 place). Natively the player's own is the actor's Sly 2 binocucom (nF04 / nF20:
+    // view 0); the scripts' (binoccam3.cpp) is left alone. (Before: always true, so the 0x22 of a talk's script shut its
+    // own binocucom (the Interpol talk lost task 2086); SLY3_BINOCSHUTNOW=0: never shut, as before that was off)
+    bool FStoredFlagIsClear(void* ploActor) override
+    {
+        static const bool s_fOff = [] { const char* sz = std::getenv("SLY3_BINOCSHUTNOW"); return sz && sz[0] == '0'; }();
+        if (s_fOff) return false;
+        const ACTOR* pa = PactorFromLo(Plo(ploActor));
+        return pa && pa->nF04 != -1 && pa->nF20 == 0;
+    }
+    // orig3 0x1BDBB0(+0xF60, -1): the player's own binocucom put down at once
+    void CloseBinocNow(void* ploActor) override
+    {
+        if (ACTOR* pa = PactorFromLo(Plo(ploActor))) SetBinocState(pa, -1);
     }
     int BinocState(void* ploActor) override
     {
@@ -814,10 +841,9 @@ struct GAMESCPTHOST3 : SCPTHOST3
             HandleLoSpliceEvent(plo, 5, false, 0, nullptr);
             RunEmbeddedTriggerList(plo, 0, Plo(ploActor));
             return;
-        case 0x47:  // 0x1E8E40: +0x190 = the actor, 0x1E8E60(0): the SO takes player n's pad from the actor (0x1F4B00 with
-                    // the actor's +0x130) until X / Triangle (its update 0x1E8D80) gives it back. Only in v_apt (5) /
-                    // h_hangar_b (18), and no script of the surveys activates one: not ported natively, logged
-            std::fprintf(stderr, "scpt3: activate %d of cid 0x%X not ported\n", plo ? plo->oid : -1, cid);
+        case 0x47:  // 0x1E8E40: +0x190 = the actor, 0x1E8E60(0): the viewer takes the actor's player's pad until Triangle /
+                    // Circle (game/viewer3.cpp, MODES-11)
+            ActivateViewer3(plo, Plo(ploActor));
             return;
         default:   // 0x13BC80: the object's vt slot 3 with message 5 (its splice handler, then the broadcast 0x1D)
             HandleLoSpliceEvent(plo, 5, false, 0, nullptr);
@@ -1026,6 +1052,95 @@ struct GAMESCPTHOST3 : SCPTHOST3
         if (g_scpthooks3.pfnActorState36 && pa) return g_scpthooks3.pfnActorState36(Plo(pa));
         if (BENTLEY* p = pa ? PbentleyFromLo(Plo(pa)) : nullptr; p && sly3::FHold5D3()) return p->state;
         return -1;
+    }
+    // orig3 0x226D00 cases 92 / 100..103 and their done tests (scptrun3.cpp): the bodies Sly 2's SCPT 0x4F / 0x57..0x5A
+    // reached (scpt.cpp), on the native MURRAY / BENTLEY (gang.cpp; their states in Sly 2's numbering: the hold 6, the
+    // Bentley toss 15 (Sly 3's 16), Bentley's jump state 0x11 (Sly 3's 0x12))
+    void MurrayHold(void* pa, void* plo, int oidGoal, int k, int fSnap) override
+    {
+        MURRAY* pm = PmurrayFromLo(Plo(pa));
+        if (!pm) return;
+        SMA* psmaObj = nullptr;
+        for (SMA* psma : g_apsma)  // 0x23FB68(o, -1): any state machine of the object
+            if (psma->palo == Plo(plo)) { psmaObj = psma; break; }
+        if (!psmaObj) return;
+        if (FPrint()) std::printf("scpt3: frame %d 0x5C: Murray %d holds %d (goal %d kind %d snap %d)\n", s_cframe, pm->palo->oid, Plo(plo)->oid, oidGoal, k, fSnap);
+        StartMurrayHold(pm, psmaObj, oidGoal, k, fSnap);  // 0x1E2848
+    }
+    bool FMurrayHoldDone(void* pa, int oidGoal) override
+    {
+        MURRAY* pm = PmurrayFromLo(Plo(pa));
+        if (!pm || pm->state != 6) return true;
+        if (oidGoal == -1) return false;
+        return pm->psma && OidSmaCur(pm->psma) == oidGoal;  // 0x239E70 on +0x1140
+    }
+    void MurrayToss(void* pa) override
+    {
+        MURRAY* pm = PmurrayFromLo(Plo(pa));
+        if (!pm) return;
+        pm->jtthrow1910.selected = PbentleyGlobal() ? PbentleyGlobal()->palo : nullptr;   // +0x18F0 = D_0036B250
+        SetMurrayState(pm, 15);  // 0x1DE690(16)
+    }
+    void BentleyJumpToMurray(void* pa) override
+    {
+        if (BENTLEY* pb = PbentleyFromLo(Plo(pa))) SetJumpKind(&pb->jump, pb->jump.state == 0x11 ? 3 : 1, 0, nullptr);  // 0x1B7268
+    }
+    int MurrayThrowState(void* pa) override
+    {
+        const MURRAY* pm = pa ? PmurrayFromLo(Plo(pa)) : nullptr;
+        return pm ? pm->jtthrow1910.state : -2;
+    }
+    void MurrayAim(void* pa, void* plo) override
+    {
+        if (MURRAY* pm = PmurrayFromLo(Plo(pa)); pm && plo) SetJtThrowTarget(pm->jtthrow1910, Plo(plo));  // 0x273030
+    }
+    void* MurrayThrowOwner(void* pa) override
+    {
+        const MURRAY* pm = PmurrayFromLo(Plo(pa));
+        return pm && pm->jtthrow1910.owner ? pm->jtthrow1910.owner->palo : nullptr;
+    }
+    bool FMurrayAimArrived(void* pa) override
+    {
+        const MURRAY* pm = PmurrayFromLo(Plo(pa));
+        if (!pm) return true;
+        const JTTHROW& t = pm->jtthrow1910;
+        return FFloatsNear(t.transitionEnd.x, t.targetWorld.x, 0.1f) && FFloatsNear(t.transitionEnd.y, t.targetWorld.y, 0.1f) &&
+               FFloatsNear(t.transitionEnd.z, t.targetWorld.z, 0.1f);
+    }
+    void ActorJumpKind0(void* pa) override { if (ACTOR* p = PactorFromLo(Plo(pa))) NotifyActorJumpKind(p, 0); }   // vt slot 99 (0)
+    int ActorJumpState(void* pa) override
+    {
+        const ACTOR* p = pa ? PactorFromLo(Plo(pa)) : nullptr;
+        return p ? p->jump.state : -1;
+    }
+    // 0x24 / 0x25 (orig3 0x22B090 / 0x22B150)
+    bool FLoInWorld(void* plo) override { return plo && Plo(plo)->fInWorld; }
+    void SetZoneForcedRun(void* pz, bool fOn) override
+    {
+        if (FPrint()) std::printf("scpt3: frame %d 0x24: zone %d forced %d\n", s_cframe, Plo(pz)->oid, fOn ? 1 : -1);
+        SetZoneForced(Plo(pz), fOn ? 1 : -1);   // (Sly 3's forced-zone list entry (0, 0, 1) added / removed)
+    }
+    void AddRemoveLo(void* plo, bool fAdd) override
+    {
+        if (!s_psw || !plo) return;
+        if (fAdd) AddLo(s_psw, Plo(plo));
+        else RemoveLo(s_psw, Plo(plo));
+    }
+    void PinActorCmTarget(void* pa, const float pos[3]) override
+    {
+        ACTOR* p = PactorFromLo(Plo(pa));
+        if (!p) return;
+        p->posCmTarget = glm::vec4(pos[0], pos[1], pos[2] + p->sHeight, p->posCmTarget.w);
+        p->vecOffset = glm::vec3(0.0f);
+        p->f1044 = 1;   // 0x153EA0(actor, 1)
+    }
+    void ReleaseActorCmTarget(void* pa) override
+    {
+        ACTOR* p = PactorFromLo(Plo(pa));
+        if (!p || !p->f1044) return;
+        p->f1044 = 0;   // 0x153EA0(actor, 0): the records' offset from the actor kept, z cleared (sly.cpp's 0x183)
+        const glm::vec3 d = glm::vec3(p->posCmTarget) - PosAloCenter(p->palo);
+        p->vecOffset = glm::vec3(d.x, d.y, 0.0f);
     }
     void GuardCommand63(void* pg, void* plo) override
     { if (g_scpthooks3.pfnGuardCommand63 && pg) g_scpthooks3.pfnGuardCommand63(Plo(pg), Plo(plo)); }
@@ -1488,6 +1603,12 @@ void RestoreTasks3AtStart(SW* psw)
     if (std::getenv("SLY3_TASKPRINT")) PrintTasks3(stdout);
 }
 
+void StopScripts3()
+{
+    for (const auto& ps : std::vector<SCPT3*>([] { std::vector<SCPT3*> a; for (const auto& p : s_ascpt) a.push_back(p.get()); return a; }()))
+        StopScpt3(ps);
+}
+
 void ResetScripts3()
 {
     // (a new world: the old world's scripts go with its objects, without their stop events: those reach the old
@@ -1570,6 +1691,12 @@ int IdWorldDialog3(int i, bool fSecond, int* pindex)
 // (+0x1180) without the kind-4 pause (+0x1190); natively the scripts' pauses (0x1F) and the native pause count
 bool FPlayersPaused3() { return GAMESCPTHOST3::s_ac1180[0] > 0 || GAMESCPTHOST3::s_ac1180[1] > 0; }
 bool FPlayerSeatPaused3(int seat) { return seat >= 0 && seat < 2 && GAMESCPTHOST3::s_ac1180[seat] > 0; }
+
+// orig3: 0x1A9478 alone (sel: the actor's +0x130; -1 both players): the selected players' pads paused (+0x1180)
+bool FPlayersPausedSel3(int sel)
+{
+    return (sel != 1 && GAMESCPTHOST3::s_ac1180[0] > 0) || (sel != 0 && GAMESCPTHOST3::s_ac1180[1] > 0);
+}
 
 bool FActorHitsPaused3(int sel)
 {

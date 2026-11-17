@@ -95,7 +95,8 @@ void UpdateOverlay(LO* plo) {
     default: break;
     }
 }
-// orig: 0x147338 (the overlay's own ASEGA message9).
+// orig: 0x147338 (the overlay's own ASEGA message9). orig3 0x159F60: Sly 3's event ids 0x6CC..0x6D2 (Sly 2's
+// 0x5FB..0x601 never came: close / skip / accept stayed at their defaults); Sly 3's message kind 10 is native kind 9.
 bool Message(LO* plo, int kind, void* arg) {
     if (!g_psw || s_serial != g_psw->serial) return false;
     auto it = s_overlays.find(plo);
@@ -105,13 +106,13 @@ bool Message(LO* plo, int kind, void* arg) {
     const ASEGMSG9& msg = *static_cast<const ASEGMSG9*>(arg);
     if (msg.pasega != p.pasega) return true;
     switch (msg.n) {
-    case 0x5FB: p.canClose = 1; break;
-    case 0x5FC: p.canClose = 0; break;
-    case 0x5FD: p.canSkip = 1; break;
-    case 0x5FE: p.canSkip = 0; break;
-    case 0x5FF: p.accepts = 0; break;
-    case 0x600: p.accepts = 1; break;
-    case 0x601: if (p.dialog != -1) State(p, 3); break;
+    case 0x6CC: p.canClose = 1; break;
+    case 0x6CD: p.canClose = 0; break;
+    case 0x6CE: p.canSkip = 1; break;
+    case 0x6CF: p.canSkip = 0; break;
+    case 0x6D0: p.accepts = 0; break;
+    case 0x6D1: p.accepts = 1; break;
+    case 0x6D2: if (p.dialog != -1) State(p, 3); break;
     }
     return true;
 }

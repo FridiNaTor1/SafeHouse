@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <stdexcept>
 
@@ -26,19 +27,46 @@ inline uint8_t Byte(uint32_t rgba, int i) { return static_cast<uint8_t>(rgba >> 
 
 // (g_nFilterCur, FFilterMatches and SkipBytes are defined with the object loader, brx.cpp)
 
-// orig: 0x001ED278 (a colour through the colour adjustment, when on: 0x11DCD8 RGBA -> VECTOR, 0x1ED2D8, 0x11DD30)
+// orig3: 0x002369D8 (Sly 3's colour adjustment, only in the 3-D mode, GAME +0xC bit 1): the colour pulled toward its
+// luminance (0.3 r + 0.6 g + 0.1 b, D_00326E70) by the static camera's +0x8C (0.5): the red / cyan glasses' eyes see
+// the same brightness. In 0..1 (or any scale) per channel.
+void DesaturateRgb3(float* prgb)
+{
+    if (!((g_grfGame3 >> 1) & 1)) return;
+    static const float s_gDbg = std::getenv("SLY3_3DDESAT") ? float(std::atof(std::getenv("SLY3_3DDESAT"))) : -1.0f;   // (debug)
+    const float g = s_gDbg >= 0.0f ? s_gDbg : g_condset3.gDesaturate;
+    const float l = prgb[0] * 0.3f + prgb[1] * 0.6f + prgb[2] * 0.1f;
+    for (int i = 0; i < 3; ++i) prgb[i] = prgb[i] * (1.0f - g) + l * g;
+}
+
+// orig3: 0x00236970 / 0x00236A78 (the screen objects' colours in the 3-D mode: the RGB all set to the luminance 0.3 r +
+// 0.6 g + 0.1 b, the alpha kept; else unchanged)
+void GrayRgba3(uint32_t* prgba)
+{
+    if (!((g_grfGame3 >> 1) & 1)) return;
+    const float l = (float(Byte(*prgba, 0)) * 0.3f + float(Byte(*prgba, 1)) * 0.6f + float(Byte(*prgba, 2)) * 0.1f) * (1.0f / 255.0f);
+    const uint32_t b = uint32_t(uint8_t(int32_t(l * 255.0f + 0.5f)));
+    *prgba = (*prgba & 0xFF000000u) | b | (b << 8) | (b << 16);
+}
+
+// orig3: 0x00236908 (Sly 2's 0x1ED278 slot: an RGBA through the colour adjustment): in the 3-D mode the RGB through
+// 0x2369D8 (0x11F230: x / 255, 0x11F288: (x x 255 + 0.5) truncated), the alpha kept; else unchanged. (Sly 2's own
+// adjustment, 0x3E12C8 g_fColorAdjust, is off in the retail game and has no Sly 3 caller)
 void AdjustRgba(uint32_t* prgba)
 {
-    if (!g_fColorAdjust) return;
-    // The adjustment (luminance raised to D_002C3698 and limited, back through HSV) is off in the retail
-    // configuration (0x3E12C8 = 0 in the reference's RAM after loading Paris). Not ported yet.
-    (void)prgba;
+    if (!((g_grfGame3 >> 1) & 1)) return;
+    float rgb[3];
+    for (int i = 0; i < 3; ++i) rgb[i] = float(Byte(*prgba, i)) * (1.0f / 255.0f);
+    DesaturateRgb3(rgb);
+    uint32_t out = *prgba & 0xFF000000u;
+    for (int i = 0; i < 3; ++i) out |= uint32_t(uint8_t(int32_t(rgb[i] * 255.0f + 0.5f))) << (8 * i);
+    *prgba = out;
 }
 
 // orig: 0x001ED1A8 (an RGB5A1 colour through the colour adjustment)
 void AdjustRgba16(uint16_t* prgba16)
 {
-    if (!g_fColorAdjust) return;
+    if (!((g_grfGame3 >> 1) & 1)) return;
     const uint32_t w = *prgba16;
     uint32_t rgba = ((w & 0x1F) << 3) | (((w >> 2) & 0xF8) << 8) | (((w >> 7) & 0xF8) << 16) | ((w & 0x8000) ? 0xFF000000u : 0);
     AdjustRgba(&rgba);

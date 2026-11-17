@@ -1115,6 +1115,14 @@ void ResetBooties()
 // never called (audit 2026-11 L1)
 void DetachBooty27(LO* plo, LO*) { SetBootyState(plo, 0); }
 NATIVEFN(0x13BF30, DetachBooty27);
+// orig3: 0x14D4C8 (Sly 3's booty 0x74, vt slot 32): the ALO base's (0x1FCB20), then 0x14DC98(p, 0): state 0 (natively it
+// fell back to the ALO base's: the "[vt]" line once an in-place reset released a dropped booty)
+void DetachBooty3Slot32(LO* plo, LO* pproxy)
+{
+    DetachAloBase27(plo, pproxy);
+    SetBootyState(plo, 0);
+}
+NATIVEFN3(0x14D4C8, DetachBooty3Slot32);
 
 // orig: 0x1A6730 (CloneLo copies the object, its current record +0x158 included): natively the booty's state lives in
 // s_mpbooty, so a copy had no current record (its records are shared by oid)

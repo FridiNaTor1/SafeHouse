@@ -881,6 +881,25 @@ void ResetEnemySlot26(LO* plo, LO* pproxy)
     if (FHackSo(plo)) SetEnemyState(plo, 0);
 }
 NATIVEFN(0x180638, ResetEnemySlot26);
+// orig3: 0x0019B668 (HACKSO's vt slot 31, a pool row taken again: the base's 0x1F3C48, the hit points to the maximum,
+// out of the weight list 0x19BB00(p, 0, 0)). Its fnmap pair with 0x17F170 scores 49 (below the dispatch's 50), so the
+// slot fell back to the base's and a reused hack object kept the hit points of its death (MODES-24)
+NATIVEFN3(0x19B668, ResetHackSoSlot26);
+// orig3: 0x0019CED8 (the enemies' vt slot 31): 0x19B668, state 0 (0x19DC10), the last hitter +0x3F8 cleared. The fnmap
+// paired it with the wrong twin 0x1AE970 (score 49): a reused enemy kept its old state (-1 / 5) (MODES-05)
+void ResetEnemySlot31_3(LO* plo, LO* pproxy)
+{
+    ResetEnemySlot26(plo, pproxy);
+    SetHackEnemyHitBy3(plo, nullptr);
+}
+NATIVEFN3(0x19CED8, ResetEnemySlot31_3);
+// orig3: 0x0019CA28 (the pieces' vt slot 31): 0x19B668, then the end time +0x1F0 = FLT_MAX (D_00321FD0) (MODES-23)
+void ResetPieceSlot31_3(LO* plo, LO* pproxy)
+{
+    ResetHackSoSlot26(plo, pproxy);
+    if (FHackSo(plo)) Hack(plo).tEnd = FLT_MAX;
+}
+NATIVEFN3(0x19CA28, ResetPieceSlot31_3);
 
 LM LmArg(const std::vector<CRef>& a, size_t i)  // (an LM argument: the CRef's vector x / y)
 {
@@ -1101,8 +1120,11 @@ bool FAcceptEnemyContact(ALO* palo, CTMSG* pctm)
 {
     // orig3: 0x19DBA8 (vt slot 78): not while hit or dying (4 / 5); a hit leaving hit points: state 4 (none left: the
     // death 0x19BB78 -> vt slot 93 0x19CF40: state 5); Sly 2's task event 0x18 is gone
+    // (registered by its Sly 3 address too: the fnmap pair scores 49, below the dispatch's 50, so slot 78 fell back to
+    // HACKSO's base hit and the enemies never entered state 4 (MODES-04)); +0x3F8 the hit's sender (EOPID 1584)
     HACKSO& h = Hack(palo);
     if (h.state == 4 || h.state == 5) return false;
+    SetHackEnemyHitBy3(palo, pctm->ploSender);
     if (!FHackSoHit(palo, pctm)) return false;
     if (h.cHp > 0) SetEnemyState(palo, 4);
     return true;
@@ -1115,6 +1137,19 @@ void OnEnemyXpNew(ALO* palo, XP* pxp, int i)
     HACKSO& h = Hack(palo);
     ALO* pOther = pxp->axpd[1 - i].palo;
     if (h.nPoints && pOther && FShip(pOther)) PostKillHackSo(palo, pOther);
+}
+// orig3: 0x0019D9B0 (the enemies' vt slot 59; the fnmap pairs it with 0x180FF0 at 65): the base's (0x19B6B0), then with
+// points (+0x190, Sly 2's +0x188) touching any hack object (0x49) that is not a piece (0x4C) of another side (+0x1D0):
+// the last hitter +0x3F8 that object and the death posted with it (0x19BB00(p, 1, other), Sly 2's PostKillHackSo).
+// Sly 2's tested the ship only
+void OnEnemyXpNew3(ALO* palo, XP* pxp, int i)
+{
+    OnHackXpNew(palo, pxp, i);
+    HACKSO& h = Hack(palo);
+    LO* pOther = pxp->axpd[1 - i].palo;
+    if (!h.nPoints || !pOther || !FHackSo(pOther) || pOther->Cid() == S3CID(0x4A) || HackSide3(pOther) == HackSide3(palo)) return;
+    SetHackEnemyHitBy3(palo, pOther);
+    PostKillHackSo(palo, pOther);
 }
 
 // orig: 0x00181060 (vt slot 5 of the enemies, after the PO's 0x1C3E20: an event (message 9) of its segment's
@@ -2029,6 +2064,21 @@ void OnRemoveHackSo(LO* plo)
     else if (plo->pcls->PfnOrig(12) == 0x180598) SetEnemyState(plo, -1);  // 0x181268(p, -1)
 }
 
+// orig3: 0x19BED8 / 0x19CF10 / 0x19E030 (the ship's / the enemies' / the docks' vt slot 32: SO's 0x1F3C80, then their
+// state as above), e.g. on an in-place world reset (0x1FC6A0); natively they fell back to SO's ("[vt]" lines)
+void DetachSoBase32(LO* plo, LO* pproxy);   // (activate.cpp: orig3 0x1F3C80)
+namespace
+{
+void DetachHackSo3Slot32(LO* plo, LO* pproxy)
+{
+    DetachSoBase32(plo, pproxy);
+    OnRemoveHackSo(plo);
+}
+NATIVEFN3(0x19BED8, DetachHackSo3Slot32);
+NATIVEFN3(0x19CF10, DetachHackSo3Slot32);
+NATIVEFN3(0x19E030, DetachHackSo3Slot32);
+}  // namespace
+
 // orig: 0x00181840 (the swarm's post-load: each entry's path (none: the entries from it dropped) and its particles
 // (0x1AE2A0(0x70, 0x10)); the base's (0x17F138: 0x1F36A8, slot 83 0x1819E0); one more collision entry (+0xE4's
 // next: the object record, tag -1, a sphere sensor (bits 48 / 49); its slot 60 makes the particles' contacts), in
@@ -2134,6 +2184,7 @@ NATIVEFN(0x1803E0, OnPieceXpNew);
 NATIVEFN(0x1803A8, OverlapKindPiece);
 NATIVEFN(0x180EE8, MoveEnemy);
 NATIVEFN(0x1811B8, FAcceptEnemyContact);
+NATIVEFN3(0x19DBA8, FAcceptEnemyContact);
 // orig: 0x0017F1D0 (vt slot 75 of the base, inherited by the pieces 0x4A and the docks 0x4B: the hit; audit H2)
 bool FAcceptHackSoContact(ALO* palo, CTMSG* pctm) { return FHackSoHit(palo, pctm); }
 NATIVEFN(0x17F1D0, FAcceptHackSoContact);
@@ -2145,6 +2196,7 @@ void PostLoadHackSoBase(LO* plo)
     ResetHackSoBase(plo, Hack(plo));
 }
 NATIVEFN(0x180FF0, OnEnemyXpNew);
+NATIVEFN3(0x19D9B0, OnEnemyXpNew3);
 NATIVEFN(0x17FBE8, FAcceptShipContact);
 NATIVEFN(0x1823C8, AddSwarmXps);
 NATIVEFN(0x182780, UpdateSwarmBounds);

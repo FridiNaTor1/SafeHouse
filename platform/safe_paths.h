@@ -390,7 +390,7 @@ inline int pathsSelfTest() {
     check(utf16Units("Zo\xC3\xAB") == 3, "utf16Units Latin-1");
     check(utf16Units("\xF0\x9F\x98\x80") == 2, "utf16Units emoji (surrogate pair)");
     eqs(longPathPrefixed(std::string("C:\\Users\\a\\b.bin")), "\\\\?\\C:\\Users\\a\\b.bin", "drive path");
-    eqs(longPathPrefixed(std::string("C:/Users/a/b.bin")), "\\\\?\\C:\\Users\\a\\b.bin", "forward slashes");
+    eqs(longPathPrefixed(std::string("C:/Games/a/b.bin")), "\\\\?\\C:\\Games\\a\\b.bin", "forward slashes");
     eqs(longPathPrefixed(std::string("C:\\a\\.\\b\\..\\c\\\\d")), "\\\\?\\C:\\a\\c\\d", "dot, dot-dot, doubled separators");
     eqs(longPathPrefixed(std::string("C:\\..\\a")), "\\\\?\\C:\\a", "dot-dot at the root");
     eqs(longPathPrefixed(std::string("C:\\")), "\\\\?\\C:\\", "drive root");

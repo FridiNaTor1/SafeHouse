@@ -300,7 +300,8 @@ struct LOXPTS : LOX    // 0x185150 (cid 8/9)
 };
 struct LOXEMIT : LOX   // 0x258598 / 0x259030 (cid 0x1D, 0x20/0x21)
 {
-    struct EMITMESH { std::vector<glm::vec3> apos; struct TRI { int aipos[3]; float sArea; }; std::vector<TRI> atri; glm::vec3 v20{0.0f}; };
+    // (anormal: orig3 0x1775B8's vertex normals, the normalized sum of the faces' cross products, (0, 0, 1) when 0)
+    struct EMITMESH { std::vector<glm::vec3> apos; struct TRI { int aipos[3]; float sArea; }; std::vector<TRI> atri; glm::vec3 v20{0.0f}; std::vector<glm::vec3> anormal; };
     std::unique_ptr<EMITMESH> pemitmesh;
     int nColors = 0;
     std::vector<uint32_t> argba;

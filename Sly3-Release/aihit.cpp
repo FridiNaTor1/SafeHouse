@@ -6,6 +6,8 @@
 #include "aihit.h"
 #include "aicarm3.h"
 #include "game/sly3.h"
+#include "game/scptgame3.h"
+#include "game/task3.h"
 #include "rumble.h"
 #include "step.h"
 
@@ -113,6 +115,16 @@ void JOBREACT::SendHit(int n, LO* ploSender)
 // orig: 0x00176BE8 (the reaction job's slot 13: message 12 the contact's hit)
 int JOBREACT::Message(int nmsg, void* pv)
 {
+    // (s3fix-ai2) orig3 0x19A780 case 0x13: a class-0x17 trigger's reaction (OnTriggerGuardEnter3): the reaction 21 with
+    // the trigger
+    if (nmsg == MSG_TRIGREACT3)
+    {
+        AIMSG m;
+        m.k = 21;
+        m.plo = static_cast<LO*>(pv);
+        React(m);
+        return 1;
+    }
     if (nmsg != 0xC) return AIJOB::Message(nmsg, pv);
     CTMSG* pm = static_cast<CTMSG*>(pv);
     GUARD* pg = pguard;
@@ -484,7 +496,9 @@ void JOBHIT3::Enter()
     const glm::vec3 pos = glm::vec3((pxfObj ? pxfObj->matWorld : MatWorldOfAlo(palo)) * glm::vec4(posLocal, 1.0f));
     if (std::getenv("SLY2N_PICKUPPRINT")) std::printf("guard %d knocked out: %d coins\n", palo->oid, n);
     DropPickups(pos, n, static_cast<int32_t>(palo->U32Field(0, 0x3F0, uint32_t(-200))), palo);
-    // TODO(physics): 0x134320 (the guard's +0xEC attachment pairs retested)
+    // (s3fix-ai2) orig3 0x16D1B8 -> 0x13CD10 (Sly 2's 0x134320): the guard's collision filter against the world's
+    // objects recomputed (its +0xDC attachment), again on the exit (0x16D2E8)
+    RecalcSwOxfFilterForObject(palo);
     // 0x153FF8: the detector forgets (every entry back to state 0 at now)
     if (pguard->pdet)
         for (DETENTRY& e : pguard->pdet->ae)
@@ -492,6 +506,15 @@ void JOBHIT3::Enter()
             e.st = 0;
             e.t8 = g_clock.t;
         }
+}
+
+// orig3: 0x0016D2E8 (0xD0's exit: the base exit, then 0x13CD10)
+void JOBHIT3::Exit()
+{
+    JOBHIT::Exit();
+    // (not while the guard is out of the world: a proxy's re-attach (ResetGuard's ClearJobs) ends the job before the
+    // object's physics are back)
+    if (pguard && pguard->palo && pguard->palo->fInWorld && !pguard->palo->fRemoved) RecalcSwOxfFilterForObject(pguard->palo);
 }
 
 std::unique_ptr<AIJOB> PjobNewHit(CID cid)
@@ -840,10 +863,12 @@ void JOBB0::Enter()
 }
 
 // orig: 0x0017A7B8
+// orig3: 0x0016D710: between the two, the task broadcast 0x19 with the guard (the held guard let go)
 void JOBB0::Exit()
 {
     AIJOB::Exit();
     SetState(-1);
+    if (FScripts3Active()) Broadcast3(0x19, pguard->palo);
     RemoveGuardState(pguard, 0x16);  // 0x209970
 }
 

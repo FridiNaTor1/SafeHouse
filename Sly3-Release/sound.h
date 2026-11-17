@@ -60,6 +60,7 @@ struct SNDHOOKS
     void (*pfnDialogUnbind)() = nullptr;
     // The game clock's t (0x2DDED0: the subtitle's blinking cursor).
     float (*pfnTGame)() = nullptr;
+    float (*pfnDtGame)() = nullptr;   // (the clock's dt, D_0036BB9C: the Doppler's frame step)
     // The localized text of an id (0x13E368), for the subtitles.
     std::string (*pfnText)(int id) = nullptr;
     // The objects whose position the music's 3D stems (voices 3 and 4) follow (0x2DD5BC, 0x2F7900, 0x2E1E40).
@@ -131,6 +132,7 @@ public:
     void SetSource(void* psrc);                    // 0x1FB2F8
     void SetPosition(const glm::vec3& pos);        // 0x1FB3F0
     void SetFalloff(float sStart, float sEnd);     // 0x1FB4F0
+    void SetDoppler(float g) { m_gDoppler = g; }   // orig3 0x245130 (+0x38; Sly 2's 0x1FB520 was empty)
     void SetDirty(uint32_t mask, uint32_t value);  // 0x1FB658
     void RemoveActive();                          // 0x1FB710
     void UpdateFrame();                            // 0x1FB8E0
@@ -143,6 +145,9 @@ public:
     glm::vec3 m_pos{};            // +0x20
     float m_sStart = 300.0f;      // +0x30 (full volume within)
     float m_sEnd = 3000.0f;       // +0x34 (silent beyond)
+    float m_gDoppler = 0.0f;      // +0x38 (Sly 3) the Doppler strength: the pitch change from the source's approach
+    float m_sPrev = 0.0f;         // +0x4C (Sly 3) the listener distance at the last 3D update
+    int m_dpmDoppler = 0;         // +0x50 (Sly 3) the Doppler pitch, added to the pitch modifier (0x245DE0)
     uint32_t m_h = 0;             // +0x40 the 989snd handle / spiop id
     float m_gVolCur = 1.0f;       // +0x44 with the 3D falloff
     float m_tFade = 0.0f;         // +0x48
@@ -303,6 +308,7 @@ void CloneAmbientSoundRecords(const LO* source, LO* target);
 void ResetAmbientSounds();  // StartupSound + the object model's hooks + the gait's footsteps (soundglue.cpp)
 void ShutdownSound();
 void ResetSoundMgr();                                   // 0x1FD700
+void ResetSoundMgrInPlace3();                           // orig3 0x247588 (the in-place world reset)
 void StopSoundsForMovie();                              // before a queued movie that leads to a world change
 void LoadMusicFromBrx(CBinaryInputStream* pbis);        // 0x1FD0E8
 void LoadSoundBank();                                   // 0x1FD5E8

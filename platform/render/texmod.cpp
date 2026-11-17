@@ -6,15 +6,15 @@
 #include "shd.h"
 #include "sw.h"
 #include "workpool.h"
-#include "../platform/platform.h"
-#include "../platform/safe_paths.h"
-#include "../platform/job_pool.h"
-#include "../platform/texture_cache.h"
-#include "../platform/texture_pak.h"
-#include "../platform/texture_options.h"
+#include "../platform.h"
+#include "../safe_paths.h"
+#include "../job_pool.h"
+#include "../texture_cache.h"
+#include "../texture_pak.h"
+#include "../texture_options.h"
 
 #include "gl.h"
-#include "../platform/draw_packet.h"
+#include "../draw_packet.h"
 #include <glad/glad.h>
 #define STB_IMAGE_STATIC
 #define STB_IMAGE_IMPLEMENTATION
@@ -51,7 +51,12 @@ uint64_t HashRgba(const std::vector<uint8_t>& ab)
 }
 
 // The cache's folder name under cane::cacheDirectory
-constexpr const char* kCacheGame = "sly2";
+// (the game's own cache folder: Sly 2 "sly2", Sly 3 "sly3"; a shared source compiled into each game against its own
+// headers, the game's build defines CANE_TEXMOD_CACHE_GAME)
+#ifndef CANE_TEXMOD_CACHE_GAME
+#define CANE_TEXMOD_CACHE_GAME "sly2"
+#endif
+constexpr const char* kCacheGame = CANE_TEXMOD_CACHE_GAME;
 
 // A whole file's bytes in one read (the Switch: the SD card's file system pays for every read)
 bool FReadModFile(const std::string& path, std::vector<uint8_t>& ab)

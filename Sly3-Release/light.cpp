@@ -914,16 +914,20 @@ SHADOWCTX ShadowOfLightContext(const LIGHTSET& lights, const glm::vec3& pos, flo
     glm::vec3 acc(0.0f);
     for (int i = 0; i < 4 && apl[i]; ++i)
     {
-        if (!apsel[i]->fShadow) continue;
+        // (orig3 0x1C6418: a light with weight +0x148 0 is left out; a negative weight counts its score as is, a
+        // positive one score x weight / max(+0xE8, +0x140))
+        const float w = apsel[i]->gShadow;
+        if (!apsel[i]->fShadow || w == 0.0f) continue;
+        const float g = w < 0.0f ? ag[i] : apsel[i]->gBright != 0.0f ? ag[i] * w / apsel[i]->gBright : ag[i] * w;
         if (apl[i]->kind == 0)
         {
-            gSum += ag[i];
-            acc += (pos - apl[i]->dirOrPos * gDirDist) * ag[i];
+            gSum += g;
+            acc += (pos - apl[i]->dirOrPos * gDirDist) * g;
         }
         else if (apl[i]->kind == 1)
         {
-            gSum += ag[i];
-            acc += apl[i]->dirOrPos * ag[i];
+            gSum += g;
+            acc += apl[i]->dirOrPos * g;
         }
     }
     if (gSum == 0.0f) return sh;

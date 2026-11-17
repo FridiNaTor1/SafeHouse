@@ -9,6 +9,7 @@
 #include "jump.h"
 #include "game/guru3.h"
 #include "game/sly3.h"
+#include "combo3.h"
 #include "pccharacter.h"   // (PC addition, debug menu only: Carmelita's moveset)
 #include "activate.h"
 #include "gang.h"
@@ -114,8 +115,12 @@ void SetOwnerJumpState(ACTOR* pa, int n)
 {
     if (SLY* p = dynamic_cast<SLY*>(pa))
     {
-        static const int s_mpkindState[9] = {0, 2, 7, 4, 0x12, 0x13, 0x14, 0x17, 8};
-        if (n >= 0 && n < 9) SetSlyState(p, s_mpkindState[n], -1);
+        // (orig3 0x1AF150: Sly 3's 11 kinds -> his states (sly.h jts::); 9 the combo attack, state 23 (combo3.cpp keeps
+        // its runner in step), 10 the guard's stance 6: AUDIT4 PLAYER-11 / 12)
+        static const int s_mpkindState[11] = {jts::Stand, jts::Jump, jts::Interact, jts::Damage, jts::ScriptSm, jts::ScriptAnim,
+                                              jts::ScriptDrive, jts::Throw, jts::Climb, jts::Attack, jts::Target};
+        if (n == 9) sly3::SetSlyAttack3(p);
+        else if (n >= 0 && n < 11) SetSlyState(p, s_mpkindState[n], -1);
         return;
     }
     // the other players' slot 88 (Bentley 0x135C20, Murray 0x1B7E40: gang.cpp)
@@ -319,9 +324,9 @@ int ActorJumpKind(ACTOR* pa)
 {
     if (SLY* p = dynamic_cast<SLY*>(pa))
     {
-        // orig: 0x0018D620 (slot 88's table inverted)
-        static const int s_ak[24] = {0, -1, 1, -1, 3, -1, -1, 2, 8, -1, -1, -1, -1, -1, -1, -1, -1, -1, 4, 5, 6, -1, -1, 7};
-        return static_cast<unsigned>(p->state) < 24 ? s_ak[p->state] : -1;
+        // orig: 0x0018D620 (slot 88's table inverted); orig3 0x1AF200: Sly 3's kinds 9 (the attack) / 10 and 11 (not -1)
+        // for a state outside the table (AUDIT4 PLAYER-12; combo3.cpp NGeneric3)
+        return sly3::NSlyJumpKind3(p);
     }
     using PFN89 = int (*)(LO*);
     if (auto pfn = reinterpret_cast<PFN89>(PvNativeVt(pa->palo, 89))) return pfn(pa->palo);
@@ -414,9 +419,9 @@ void SetJumpAnimState(JUMP* pj, int n, LO* plo)
         break;
     case 17: LeaveJumpLedge(pj); break;
     case 19: case 20:
-        // the paraglider closed (unless 19 -> 20): its SM to 0x5F8, the camera zone off
+        // the paraglider closed (unless 19 -> 20): its SM to 0x6C9 (orig3 0x1B77F8; Sly 2's 0x5F8), the camera zone off
         if (n < 21 && n >= 19) break;
-        if (SLY* p = dynamic_cast<SLY*>(pa); p && p->psma1D28) SetSmaGoal(p->psma1D28, 0x5F8);  // 0x1F0660
+        if (SLY* p = dynamic_cast<SLY*>(pa); p && p->psma1D28) SetSmaGoal(p->psma1D28, 0x6C9);  // 0x1F0660
         SetActorZone(pa, nullptr);  // 0x140C88(actor, 0)
         break;
     case 7:
@@ -583,7 +588,7 @@ void SetJumpAnimState(JUMP* pj, int n, LO* plo)
         SetActorZone(pa, pj->ploGlider);  // 0x140C88
         // (its zone's first entry +0x114: the path offset +4 = the mean of D_002BF798 {-250, -500})
         if (ZONECME* pcme = PcmeFirstOfZone(pj->ploGlider)) pcme->dtPath = F32(0xC3FA0000) * 0.5f + F32(0xC37A0000) * 0.5f;
-        if (SLY* p = dynamic_cast<SLY*>(pa); p && p->psma1D28) SetSmaGoal(p->psma1D28, 0x5F7);  // 0x1F0660
+        if (SLY* p = dynamic_cast<SLY*>(pa); p && p->psma1D28) SetSmaGoal(p->psma1D28, 0x6C8);  // 0x1F0660 (orig3 0x1B77F8: 0x6C8; Sly 2's 0x5F7)
         break;
     }
     case 20:

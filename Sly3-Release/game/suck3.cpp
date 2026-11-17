@@ -18,8 +18,9 @@ const float s_gDeath = 0.1f, s_gTaskDone = -0.2f;   // D_0036BD20 +0x14: {0, 1, 
 
 bool FPrint() { static const bool s_f = std::getenv("SLY3_SUCKPRINT") != nullptr; return s_f; }
 
-// (the mission: SW +0x4044, its +0xAC the float's place in the save: the progress path of EOPID 1387)
-JOB3* PjobMission() { return g_tasks3.pjobCur && !g_tasks3.pjobCur->akeyReal.empty() ? g_tasks3.pjobCur : nullptr; }
+// (the mission: SW +0x4044, its +0xAC the float's place in the save: the progress path of EOPID 1388, <job>.suck_value;
+// before s3fix-core2 the native kept it in 1387's, <job>.time_played, which 0x187D30 also writes with the job's time)
+JOB3* PjobMission() { return g_tasks3.pjobCur && !g_tasks3.pjobCur->akeySuck.empty() ? g_tasks3.pjobCur : nullptr; }
 
 void AddSuck3(float dg)
 {
@@ -37,7 +38,7 @@ float GSuck3()
     }
     if (JOB3* pj = PjobMission())
     {
-        const CRef r = RefGetProgressKey(pj->akeyReal);
+        const CRef r = RefGetProgressKey(pj->akeySuck);
         return r.m_tagk == TAGK_F32 ? r.m_g : r.m_tagk == TAGK_S32 ? static_cast<float>(r.m_n) : 0.0f;
     }
     return 0.0f;
@@ -50,8 +51,7 @@ void SetSuck3(float g)
     if (!pj) return;
     CRef r;
     r.SetF32(std::clamp(g, 0.0f, 1.0f));
-    FSetProgressKey(pj->akeyReal, r);
-    pj->gA8 = r.m_g;
+    FSetProgressKey(pj->akeySuck, r);
     if (FPrint()) std::printf("suck3: mission %d -> %.2f\n", pj->oid, r.m_g);
 }
 

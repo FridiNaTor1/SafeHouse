@@ -33,6 +33,15 @@ int selfTests() {
         cane::ios::log(std::string("selftest ") + test + ": " + (code == 0 ? "passed" : "FAILED (" + std::to_string(code) + ")"));
         if (code != 0) ++failures;
     }
+    // (Sly 3's tools image, when the app has Sly 3: its settings schema, renderer choice and advanced input mapping)
+    const std::string tools3 = cane::ios::bundleDirectory() + "/Frameworks/Sly3Tools.framework/Sly3Tools";
+    struct stat info3 {};
+    if (stat(tools3.c_str(), &info3) == 0)
+        for (const char* test : {"--settings-selftest", "--renderer-selftest", "--action-input-selftest"}) {
+            const int code = cane::ios::runProgramNow({tools3, test});
+            cane::ios::log(std::string("selftest Sly 3 ") + test + ": " + (code == 0 ? "passed" : "FAILED (" + std::to_string(code) + ")"));
+            if (code != 0) ++failures;
+        }
     if (FILE* f = std::fopen((cane::ios::documentsDirectory() + "/selftest.log").c_str(), "w")) {
         std::fprintf(f, "%d failed\n", failures);
         std::fclose(f);
@@ -88,6 +97,9 @@ int extractSmoke() {
     struct stat info {};
     const std::string converter = cane::ios::programPath("Sly2-Release");
     check("Sly 2 converter present", stat(converter.c_str(), &info) == 0 && S_ISREG(info.st_mode), converter);
+    // (Sly 3's worlds tool, the game itself: the extractor runs it after copying the image, pcbrx.h Tool -> programPath)
+    const std::string worlds3 = cane::ios::programPath("Sly3-Release");
+    check("Sly 3 present", stat(worlds3.c_str(), &info) == 0 && S_ISREG(info.st_mode), worlds3);
     // (the app log has the extractor's own lines, not only its exit code)
     std::ifstream logFile(documents + "/logs/ios.log");
     const std::string log((std::istreambuf_iterator<char>(logFile)), std::istreambuf_iterator<char>());

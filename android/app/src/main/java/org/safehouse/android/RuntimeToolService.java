@@ -4,7 +4,8 @@ import android.app.Service;
 import android.content.Intent;
 import android.os.IBinder;
 
-/** Sly 2's windowless tools (--convert for the install, --export-textures, --ps3-hd-textures) in their own process. */
+/** The games' windowless tools (Sly 2's --convert for the install, --export-textures, --ps3-hd-textures; Sly 3's
+ * --convert-worlds) in their own process; the intent's "program" names the game library. */
 public final class RuntimeToolService extends Service {
     private boolean started;
     @Override public IBinder onBind(Intent intent) { return null; }
@@ -14,11 +15,12 @@ public final class RuntimeToolService extends Service {
         new Thread(() -> {
             int result = 1;
             try {
-                System.loadLibrary("SDL2"); System.loadLibrary("Sly2-Release");
+                final String program = NativeBridge.gameLibrary(intent);
+                System.loadLibrary("SDL2"); System.loadLibrary(program);
                 NativeBridge.initializeService(this);
                 NativeBridge.attachChild(intent);
                 String[] args = intent.getStringArrayExtra("arguments");
-                result = NativeBridge.nativeRunRuntime(args == null ? new String[0] : args);
+                result = NativeBridge.nativeRunRuntime(program, args == null ? new String[0] : args);
             } catch (Throwable error) { System.err.println("Runtime check failed: " + error.getClass().getSimpleName()); }
             finally {
                 NativeBridge.reportExit(result); stopSelf();

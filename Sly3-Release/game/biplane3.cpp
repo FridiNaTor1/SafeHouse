@@ -30,6 +30,7 @@
 // Debug: SLY3_PLANEPRINT=1 (options, states, hits), =2 (and every 30 frames each plane).
 
 #include "../activate.h"
+#include "../aicarm3.h"
 #include "../alo.h"
 #include "../asega.h"
 #include "../brx.h"
@@ -61,6 +62,7 @@
 #include "../xf.h"
 #include "../xfphys.h"
 #include "biplane3.h"
+#include "../aicarm3.h"
 #include "sly3.h"
 #include "task3.h"
 #include "suck3.h"
@@ -2365,6 +2367,42 @@ struct INITPLANE3
     }
 } s_initplane3;
 }  // namespace
+
+// orig3 0x00141810 (vt slot 88, a pickup collected, pickup.cpp GivePickupToCollector3): the SO's (0x1F48F8, nothing),
+// then from a class 0x6B pickup its +0x1A8 rounds more ammunition (0x1F4438: up to the most, +0x178) (MODES-14)
+void TakePickupPlane3(LO* pso, LO* ppickup)
+{
+    if (!pso || !ppickup || pso->Cid() != 0x52 || !FIsLoDerivedFrom(ppickup, 0x6B)) return;
+    PLANE3* p = Pplane(pso);
+    if (!p) return;
+    const int n = static_cast<int32_t>(ppickup->U32Field(0, 0x1A8, 0));
+    SetAmmo(*p, p->ammo + n);
+    if (NPrint()) std::printf("plane3: %d took pickup %d: ammunition +%d = %d\n", pso->oid, ppickup->oid, n, p->ammo);
+}
+
+// orig3 0x00141F20 (vt slot 81, the damage status the AI's target choice asks): 2 while dying (state 5), else 0
+int NPlaneDamageStatus3(LO* plo)
+{
+    PLANE3* p = PplaneFind(plo);
+    return p && p->state == 5 ? 2 : 0;
+}
+NATIVEFN3(0x141F20, NPlaneDamageStatus3);
+
+// orig3 0x00141F80 (vt slot 90, a power-up given (the SO option 947, 0x10A4A0, e.g. a breakable's splice on its
+// breaker)): the player's plane (mode +0x198 0) takes the next of its shuffled weapons (+0x434: 0x141350's {54..60},
+// 0x2BC1C8) through 0x141FD8. Returns the weapon (-1: none)
+int GivePlanePowerup3(LO* plo)
+{
+    PLANE3* p = PplaneFind(plo);
+    if (!p || p->mode != 0) return -1;
+    static std::unordered_map<const LO*, std::pair<std::vector<int>, int>> s_mpbag;
+    auto& bag = s_mpbag[plo];
+    if (bag.first.empty()) bag = {{54, 55, 56, 57, 58, 59, 60}, -1};
+    const int st = NNextShuffled3(bag.first, bag.second);
+    SetWeapon(*p, st);
+    if (NPrint()) std::printf("plane3: %d power-up 0x%X\n", plo->oid, st);
+    return st;
+}
 
 // (the harness, route.cpp's "dogfight" step) the stick (in the pad's units, after its dead zone: route.cpp turns them into
 // the raw bytes), the trigger and the speed buttons that fly the player's plane plo the way a careful player would: a

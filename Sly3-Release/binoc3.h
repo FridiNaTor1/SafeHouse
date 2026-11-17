@@ -19,6 +19,9 @@ struct SW;
 void OpenBinocPanel3(LO* ploActor, int kind, LO* ploSpeaker);
 void CloseBinocPanel3(LO* ploActor);
 int NBinocPanelState3(LO* ploActor);                  // -1 closed .. 5 closing (see above)
+// a photo helper driven by a panel here (its state set by the window states, updated every frame by
+// UpdateBinocPanels3, orig3 0x1BE5A8 / 0x1BEA30): binoc.cpp's Sly 2 window then leaves it (and the task broadcasts) alone
+bool FBinocPanel3Prompt(const void* pprompt);
 void SetBinocPanelSpeaker3(LO* ploActor, LO* ploSpeaker);
 LO* PloBinocPanelSpeaker3(LO* ploActor);              // the actor in the speaker's window (orig3 BINOC +0x40)
 // the speaker in the window held (orig3 0x1BE408, the camera's state 1 of a talk) / released (0x1BE4A8); a speaker
@@ -33,3 +36,17 @@ void UpdateBinocPanels3(SW* psw); // every frame (the HUD's update)
 void InstallBinocCam3();
 void ResetBinocCam3();
 void UpdateBinocCam3();   // every frame (UpdateBinocPanels3)
+
+// (binoc.cpp) the actor side of a binocucom state change (vt slots 94 / 87, the sound channels 0 / 1 ducked and the
+// camera cut, the model hidden while it looks: 0x241FC0 / 0x242228)
+struct ACTOR;
+bool FBinocAnimAllowed3(ACTOR* pa);
+void DuckBinocSounds3(float g);
+int NActorState3(ACTOR* pa);   // (debug: the gang's state, Sly 3 numbered)
+void ShowBinocActorParts3(ACTOR* pa, bool fHidden);
+void HideActorForBinoc3(ACTOR* pa, bool fHide);
+// the panel's window put to -1 at once (orig3 0x1BDBB0 state -1: 0x1BE5A8(hud, -1))
+void ShutBinocPanel3(LO* ploActor);
+// the scripts' binocucom's state (orig3 BINOC +0x4 at actor +0xF64: -1 none, 0 raising, 1 up, 2 lowering)
+int NBinocMode3(LO* ploActor);
+void ShutBinocMode3(LO* ploActor);   // (0x1BDBB0(-1) from elsewhere: put down at once)

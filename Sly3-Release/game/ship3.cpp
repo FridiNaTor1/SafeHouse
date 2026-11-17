@@ -22,10 +22,12 @@
 // Debug: SLY3_SHIPPRINT=1 (options, modes, hits, shots), =2 (each ship every second).
 
 #include "ship3.h"
+#include "../aicarm3.h"
 
 #include "../activate.h"
 #include "../alo.h"
 #include "../brx.h"
+#include "../bsp.h"
 #include "../clock.h"
 #include "../cm.h"
 #include "../cmworld.h"
@@ -60,6 +62,7 @@
 #include "task3.h"
 
 #include <algorithm>
+#include <bit>
 #include <array>
 #include <cmath>
 #include <cstdio>
@@ -192,9 +195,12 @@ struct SHIP3
     LM reward2{100.0f, 200.0f};               // +0x508 (2008)
     LM reward3{200.0f, 400.0f};               // +0x510 (2009)
     int busy = 0;                             // +0x518 (2010)
-    int windOwn = 0;                          // +0x550
+    int windOwn = 0;                          // +0x550: an entry of a class 0x62 object touched the hull (+0x544) this frame
+                                              // (set by the own-contacts slot 63 0x215008, cleared by slot 19 0x214928)
     int n54C = -1;                            // +0x54C (2011)
     int resourceId = -1;                      // +0x55C (2015)
+    LO* shape = nullptr;                      // +0x564 (2016): the outline for the ship-ship contacts (0x214DA8)
+    SOE* psoeResource = nullptr;              // +0x560: the collision entry with that tag (0x23F3B8)
     std::vector<int> acidCollide;             // +0x51C (2013, at most 4): the classes it collides with
     std::vector<int> aoidCollide;             // +0x530 (2014): the objects (or aliases)
     float tLastHit = -1.0f;                   // +0x458
@@ -529,6 +535,7 @@ void ApplyLoaded(SHIP3& s, const OPT& o)
     case 2011: s.n54C = v.n; break;
     case 2012: s.sink = v.ag[0]; break;
     case 2015: s.resourceId = v.n; break;
+    case 2016: s.shape = pv(); break;
     case 2013: if (s.acidCollide.size() < 4) s.acidCollide.push_back(v.n); break;
     case 2014: if (s.aoidCollide.size() < 4) s.aoidCollide.push_back(v.n); break;
     default:
@@ -614,6 +621,18 @@ void InitShip(SHIP3& s)
         if (o.eopid >= 1954 && o.eopid <= 2016) ApplyLoaded(s, o);
     // the SO's hit points as loaded (EOPIDs 1967 / 1968 set the maximum; the current from it)
     ResolveCannons(s);
+    // (0x213C90's end: the resource entry, the first collision entry with the tag of EOPID 2015 (0x23F3B8), +0x560, is
+    // flagged 0x10000 (the entry's bit 48): it is left out of the pairwise contacts and collides only through the own
+    // contacts, slot 63 0x215008 below; SLY3_SHIPRESOURCE0=1: as before)
+    s.psoeResource = nullptr;
+    if (s.resourceId != -1 && !std::getenv("SLY3_SHIPRESOURCE0"))
+        for (SOE& e : s.palo->asoe)
+            if (e.tag == s.resourceId)
+            {
+                s.psoeResource = &e;
+                e.f48 = true;
+                break;
+            }
     if (SM* psm = dynamic_cast<SM*>(s.anim)) s.psmaShip = PsmaApplySm(psm, s.palo, -1, 0);
     s.hp = s.hpMax;
     s.hpSave = s.hpMax;
@@ -625,6 +644,7 @@ void InitShip(SHIP3& s)
                     "cannons %d + %d target group %d\n", s.palo->oid, s.mode, s.phase, s.group, s.groupOwner, s.owner ? s.owner->oid : -1, s.agoal.size(), s.length, s.range,
                     s.outer, s.inner, s.hpMax[0], s.hpMax[1], s.balls ? s.balls->oid : -1, s.nav ? s.nav->oid : -1, s.patrol ? s.patrol->oid : -1, s.ccannon[0], s.ccannon[1],
                     s.targetGroup);
+        if (s.shape) std::printf("ship3: %d   outline %d (cid 0x%X)\n", s.palo->oid, s.shape->oid, unsigned(s.shape->Cid()));
         std::printf("ship3: %d   collides with cids", s.palo->oid);
         for (int c : s.acidCollide) std::printf(" 0x%X", c);
         std::printf(", oids");
@@ -1819,6 +1839,115 @@ int OverlapKindShip(ALO* palo, ALO* pother)
     if (PFN pfn = reinterpret_cast<PFN>(PvNativeFn(0x1F4FC8))) return pfn(palo, pother);
     return 0;
 }
+// orig3 0x214928 (vt slot 19, Sly 2's 17: the physics update): the ALO's (0x23C970), then +0x550 cleared
+void UpdateShipPhys(ALO* palo)
+{
+    UpdateAloPhys(palo);
+    if (SHIP3* ps = PshipFind(palo)) ps->windOwn = 0;
+}
+// orig3 0x213F68 (vt slot 32, Sly 2's 27: the pooled object's detach): SO's (0x1F3C80), the screen object +0x430
+// (EOPID 1994) hidden (its vt slot 54: SCREENOBJ 0x260FE8 = HideScreenObj), and the engine sound +0x548 stopped
+// (0x244CA8(snd, 0) / the reference cleared: natively the engine sound 0x217040 is not ported, so none is held)
+void DetachShip32(LO* plo, LO* pproxy)
+{
+    DetachSoBase32(plo, pproxy);
+    if (SHIP3* ps = PshipFind(plo))
+        if (ps->fx) HideScreenObj(ps->fx);
+}
+// orig3 0x215008 (vt slot 63, Sly 2's 60: the own contacts of the ship with another object's entry k): the ALO's
+// (0x23EDD0: none); an entry of a class 0x62 object (the wind barriers) is tested against +0x544, which nothing in the
+// executable writes (its one reference is this read), so it never touches the hull; any other entry against the
+// resource entry +0x560 (InitShip): k a sphere (its bit 49, the 0x20000 flag) by MarkSphereBsp (0x1CD858(SW, k, res)),
+// else MarkBspBsp (0x1CC790(SW, res, k, the tree arguments)), into the caller's list
+void ShipOwnContacts3(ALO* palo, SOE* k, int, const BSPREF&, int iroot, XP** ppxp)
+{
+    if (!k || !k->palo || !ppxp) return;
+    if (FCidDerivedFrom(k->palo->Cid(), S3CID(0x62))) return;
+    SHIP3* ps = PshipFind(palo);
+    SOE* pres = ps ? ps->psoeResource : nullptr;
+    if (!pres || pres == k) return;
+    if (k->f49) MarkSphereBspContacts(k, pres, nullptr, ppxp);
+    else MarkBspBspContacts(pres, k, k->bsp.abspn, k->bsp.abspn.empty() ? IBSP_NONE : iroot, ppxp);
+}
+// orig3 0x214A70: the outline's points in the world (the path's points by its matrix) and one edge plane per
+// consecutive pair (the normal: the edge x z, through the edge's first point)
+void OutlineWorld(LO* shape, std::vector<glm::vec3>* papos, std::vector<glm::vec4>* paplane)
+{
+    papos->clear();
+    paplane->clear();
+    const CRV* pcrv = PcrvFromLo(shape);
+    if (!pcrv) return;
+    const glm::mat4 m = MatWorldLox(shape);
+    for (const glm::vec3& p : pcrv->apos) papos->push_back(glm::vec3(m * glm::vec4(p, 1.0f)));
+    for (size_t j = 0; j + 1 < papos->size(); ++j)
+    {
+        const glm::vec3 e = (*papos)[j + 1] - (*papos)[j];
+        glm::vec3 n = glm::cross(e, glm::vec3(0.0f, 0.0f, 1.0f));
+        const float l = glm::length(n);
+        n = l > 0.0f ? n / l : glm::vec3(0.0f);
+        paplane->push_back(glm::vec4(n, glm::dot(n, (*papos)[j])));   // 0x119EA8
+    }
+}
+// orig3 0x214C40: the point deepest inside the planes (each point's largest plane distance, stopping at the first one
+// in front of it; the smallest of those below 0)
+void DeepestPoint(int cpos, const std::vector<glm::vec3>& apos, const std::vector<glm::vec4>& aplane, float* pdepth, glm::vec3* ppos,
+                  glm::vec4* pplane)
+{
+    float best = 0.0f;
+    for (int i = 0; i < cpos && i < int(apos.size()); ++i)
+    {
+        float dist = -FLT_MAX;   // (D_00325BB8)
+        glm::vec4 hit(0.0f);
+        for (const glm::vec4& pl : aplane)
+        {
+            const float d = glm::dot(glm::vec3(pl), apos[size_t(i)]) - pl.w;
+            if (dist < d)
+            {
+                dist = d;
+                hit = pl;
+                if (dist >= 0.0f) break;
+            }
+        }
+        if (dist < best)
+        {
+            best = dist;
+            *pplane = hit;
+            *ppos = apos[size_t(i)];
+        }
+    }
+    *pdepth = best;
+}
+// orig3 0x214F88 (the ships' vt slot 64, the pair test after the entries' contacts): once per pair of ships that both
+// have an outline (+0x564, EOPID 2016) and a resource entry (+0x560): 0x214DA8 - both outlines upright (the matrix's
+// z.z at least 0.5), each one's points against the other's planes; overlapping, the deeper point a contact of kind 10
+// between the resource entries (0x1CB8B0)
+void ShipPairContacts3(ALO* palo, ALO* paloOther, XP** ppxp)
+{
+    if (!palo || !paloOther || palo >= paloOther || !ppxp) return;
+    if (!FShip3(palo) || !FShip3(paloOther)) return;
+    SHIP3* pa = PshipFind(palo);
+    SHIP3* pb = PshipFind(paloOther);
+    if (!pa || !pb || !pa->shape || !pb->shape || !pa->psoeResource || !pb->psoeResource) return;
+    if (MatWorldLox(pa->shape)[2][2] < 0.5f || MatWorldLox(pb->shape)[2][2] < 0.5f) return;
+    std::vector<glm::vec3> aposA, aposB;
+    std::vector<glm::vec4> aplaneA, aplaneB;
+    OutlineWorld(pa->shape, &aposA, &aplaneA);
+    OutlineWorld(pb->shape, &aposB, &aplaneB);
+    if (aposA.size() < 2 || aposB.size() < 2) return;
+    float depthA = 0.0f, depthB = 0.0f;
+    glm::vec3 posA(0.0f), posB(0.0f);
+    glm::vec4 planeA(0.0f), planeB(0.0f);
+    DeepestPoint(int(aposA.size()) - 1, aposA, aplaneB, &depthA, &posA, &planeA);
+    DeepestPoint(int(aposB.size()) - 1, aposB, aplaneA, &depthB, &posB, &planeB);
+    if (depthA >= 0.0f && depthB >= 0.0f) return;
+    if (depthA < depthB) PxpAddSw(pa->psoeResource, pb->psoeResource, posA, glm::vec3(planeA), 10, nullptr, nullptr, ppxp, depthA);
+    else PxpAddSw(pb->psoeResource, pa->psoeResource, posB, glm::vec3(planeB), 10, nullptr, nullptr, ppxp, depthB);
+    if (NPrint() >= 2) std::printf("ship3: %d / %d outlines touch (depth %.1f / %.1f, t %.2f)\n", palo->oid, paloOther->oid, depthA, depthB, g_clock.t);
+}
+NATIVEFN3(0x215008, ShipOwnContacts3);
+struct INITSHIPPAIR3 { INITSHIPPAIR3() { g_pfnPairContacts3 = ShipPairContacts3; } } s_initshippair3;
+NATIVEFN3(0x214928, UpdateShipPhys);
+NATIVEFN3(0x213F68, DetachShip32);
 NATIVEFN3(0x2149A0, OverlapKindShip);
 NATIVEFN3(0x214028, ShipForces);
 NATIVEFN3(0x214370, FAcceptShipContact);
@@ -1826,6 +1955,61 @@ NATIVEFN3(0x213F08, ResetShip);
 }  // namespace
 
 bool FShip3(const LO* plo) { return plo && plo->pcls && FIsLoDerivedFrom(plo, CID_SHIP); }
+
+// orig3 0x002151E8 (vt slot 90, a power-up given (the SO option 947, 0x10A4A0)): a ship whose character has its pad
+// (phase +0x1B8 1) takes the next of its shuffled power-ups (+0x4F0: 0x213C90's {0x3E..0x42} unless the computer's,
+// phase 2) through 0x215388. Returns the power-up (-1: none)
+int GiveShipPowerup3(LO* plo)
+{
+    SHIP3* ps = FShip3(plo) ? PshipFind(plo) : nullptr;
+    if (!ps || ps->phase != 1) return -1;
+    static std::unordered_map<const LO*, std::pair<std::vector<int>, int>> s_mpbag;
+    auto& bag = s_mpbag[plo];
+    if (bag.first.empty()) bag = {{0x3E, 0x3F, 0x40, 0x41, 0x42}, -1};
+    const int type = NNextShuffled3(bag.first, bag.second);
+    SetType(*ps, type);
+    if (NPrint()) std::printf("ship3: %d power-up 0x%X\n", plo->oid, type);
+    return type;
+}
+
+// (cmfocus3.cpp, orig3 0x214820: the ships' vt slot 85) the ship's length (+0x220, EOPID 1979)
+float GShipLength3(LO* plo)
+{
+    SHIP3* ps = FShip3(plo) ? Pship(plo) : nullptr;
+    return ps ? ps->length : 0.0f;
+}
+
+// orig3 0x00215248 (vt slot 88, a pickup collected, pickup.cpp GivePickupToCollector3): from a class 0x6C pickup with
+// its split flag (+0x1B0) a random amount in +0x1A0..+0x1A4 shared between the sides' hit points (the lower side topped
+// up first, the rest halved, an odd point to the port side: 0x2157D0, then the cannons' share 0x215808 from the new
+// values); without, a random amount in +0x1A8..+0x1AC more coins (0x185328) (MODES-13)
+void AddCoins3(int n);   // pickup.cpp
+void TakePickupShip3(LO* pso, LO* ppickup)
+{
+    if (!pso || !ppickup || !FShip3(pso) || !FIsLoDerivedFrom(ppickup, 0x6C)) return;
+    SHIP3* ps = Pship(pso);
+    if (!ps) return;
+    SHIP3& s = *ps;
+    auto g = [&](uint32_t ib) { return std::bit_cast<float>(ppickup->U32Field(0, ib, 0)); };
+    if (ppickup->U32Field(0, 0x1B0, 0))
+    {
+        int amount = static_cast<int>(GRandInRange(g(0x1A0), g(0x1A4)));
+        const int first = s.hp[0], second = s.hp[1], diff = first - second;
+        int addFirst = 0, addSecond = 0;
+        if (diff < 0) addFirst = std::min(amount, -diff);
+        else if (diff > 0) addSecond = std::min(amount, diff);
+        amount -= addSecond + addFirst;
+        const bool odd = amount & 1;
+        amount /= 2;
+        if (odd) { addSecond += amount; addFirst = addFirst + 1 + amount; }
+        else { addFirst += amount; addSecond += amount; }
+        SetHp(s, first + addFirst, second + addSecond);
+        SetHpSave(s, s.hp[0] + addFirst, s.hp[1] + addSecond);
+        if (NPrint() >= 1) std::printf("ship3: %d took pickup %d: hp %d / %d\n", pso->oid, ppickup->oid, s.hp[0], s.hp[1]);
+    }
+    else
+        AddCoins3(static_cast<int>(GRandInRange(g(0x1A8), g(0x1AC))));
+}
 
 int NShipMode3(const LO* plo)
 {
@@ -2136,7 +2320,7 @@ void SetBattleState(BATTLE3& b, int st)
     if (old == 1)
     {
         if (b.hud && !b.fTwoPlayer) HideScreenObj(b.hud);
-        Broadcast3(0x5C, b.plo);
+        Broadcast3(0x5C, nullptr);   // (orig3 0x219A18 passes no object: MODES-16)
     }
     b.state = st;
     b.tState = g_clock.t;
@@ -2158,7 +2342,7 @@ void SetBattleState(BATTLE3& b, int st)
             SetOptionN(b.hud, 1244, 0);               // (+0x120)
             ShowScreenObj(b.hud, -1);
         }
-        Broadcast3(0x5B, b.plo);
+        Broadcast3(0x5B, nullptr);   // (orig3 0x219A18: no object)
         break;
     case 3:
         if (b.index < int(b.aslot.size()))
@@ -2237,7 +2421,8 @@ void StartBattleNearImpl(SHIP3& s)
     for (SHIP3* po : AshipWorld())
     {
         if (po == &s || po->mode == 7) continue;
-        if (!FInsideCmPlanes(&g_cm, PosOf(po->palo), 0.0f)) continue;
+        // (0x167F60 subtracts the camera's position itself; the native FInsideCmPlanes takes a camera-relative one)
+        if (!FInsideCmPlanes(&g_cm, PosOf(po->palo) - g_cm.pos, 0.0f)) continue;
         if (b.aitem.size() >= 5) break;
         b.aitem.push_back(po->palo);
     }

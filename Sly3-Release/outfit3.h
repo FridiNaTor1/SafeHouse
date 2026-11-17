@@ -10,6 +10,7 @@ void ResetOutfits3();
 bool FTakeOutfitSceneRebuild3();             // an outfit's meshes were streamed: the scene to rebuild (game.cpp)
 int IdOutfitWorn3(LO* ploPlayer);             // the worn outfit's id (0x759..0x75B the disguises), -1 none
 bool FWearOutfit3(LO* ploPlayer, int id);     // wear the outfit (id -1: none); false when the player has no outfits / no such one
+void TakeOffOutfits3();                       // orig3 0x1734E0: every character's outfit off at once (a job's rewards)
 bool FOutfitChanging3(LO* ploPlayer);          // the change is under way (+0x48 != -1: SCPT 0x6A waits for it)
 void OnOutfitEvent3(LO* ploPlayer, int n);     // the player's animation event (0x757: the change's moment, 0x173308)
 void UpdateOutfit3(LO* ploPlayer);
@@ -24,6 +25,7 @@ GAIT* PgaitOutfit3(LO* ploPlayer, int sfx);
 // orig3 0x156D48: the player wears an outfit (+0x1108: a record worn, 0x173428) that is a disguise in this episode (the
 // record's episode, 0x172CF8, from the table 0x321138: 0x759 Venice, 0x75A China, 0x75B the pirates; -1 any)
 bool FPlayerDisguised3(LO* ploPlayer);    // its gait (0x173408), null: the player's own
+bool FOutfitWorn3(LO* ploPlayer);        // orig3 0x173428 on +0x1108: a record worn (any episode)
 // orig3 0x16F2B0: group id of a class-0x97 object (ploOwner; null: the first of the world's that has it) streamed in,
 // the one it had before unloaded (false: none)
 bool FStreamGroup97(int id, LO* ploOwner = nullptr);

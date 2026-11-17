@@ -369,10 +369,11 @@ void UpdatePadctl(PADCTL* ppc)
         FTakePadForPassword3(ppc->plo, GrfPadctlTakePressed(ppc, 0xF0, 0.15f));
         ClearPadctl(ppc);
     }
-    // (Sly 3) the treasure map held (Sly's state 0x18, orig3 0x1B0070): the face buttons and the stick go to the map mode
-    // (game/treasuremap3.cpp), nothing else reaches the player
+    // (Sly 3) the treasure map held (Sly's state 0x18 (sly.cpp jts::Map), orig3 0x1B0070 / 0x1AD1D0 case 24): the face
+    // buttons and the stick go to the map mode (game/treasuremap3.cpp), nothing else reaches the player
     else if (ppc->nControl == 1 && ppc->plo && PloMapHolder3() == ppc->plo)
     {
+        SetMapButtonsHeld3(ppc->grfbtn);   // (Sly's state 0x18 leaves when the gadget's button is up: sly.cpp)
         TakePadForMap3(ppc->plo, GrfPadctlTakePressed(ppc, 0xF0, 0.15f), ppc->uJoy > 0.2f ? ppc->x : 0.0f);
         ClearPadctl(ppc);
     }
@@ -559,6 +560,9 @@ void EnablePo(SW* psw, LO* plo, int n)
     if (FRowboat3(plo) && (n == 0 || n == 1)) OnRowboatEnable3(plo, n);
     // Sly 3's ships (class 0x58, vt slot 83 0x2147B0, game/ship3.h): a pad sails it, released: idle
     if (FShip3(plo) && (n == 0 || n == 1)) OnShipEnable3(plo, n == 1 ? 0 : -1);
+    // Sly 3's swimmer (class 0x57, vt slot 83 0x26C8F8, game/diver3.cpp): swimming while it has the pad, else off
+    void OnDiverEnable3(LO* plo, int n);
+    if (plo->pcls && FCidDerivedFrom(plo->Cid(), 0x57) && (n == 0 || n == 1)) OnDiverEnable3(plo, n);
 }
 
 int CpoRegistered() { return static_cast<int>(s_apo.size()); }
@@ -882,4 +886,12 @@ int OidSafeHouseShown(const LO* plo, std::vector<OID>* paoidAllowed)
     if (it == s_mpsh.end() || !it->second.psma) return -1;
     if (paoidAllowed) *paoidAllowed = AoidAllowed(plo);
     return OidSmaCur(it->second.psma);
+}
+
+// (Sly 3) a plain SO's hit points (orig3 0x1F43C8 / 0x1F43F0 / 0x1F43D0: +0x16C, its maximum +0x170, clamped to 0..max)
+int NSoHealth3(const LO* plo) { return plo ? NSoHealthField(plo, 0x16C, 938) : 0; }
+int NSoHealthMax3(const LO* plo) { return plo ? NSoHealthField(plo, 0x170, 937) : 0; }
+void SetSoHealth3(LO* plo, int n)
+{
+    if (plo) SetSoHealth(plo, n);
 }

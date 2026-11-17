@@ -50,6 +50,14 @@
             <meta-data android:name="com.oculus.vr.focusaware" android:value="true" />
             <intent-filter><action android:name="android.intent.action.MAIN" /><category android:name="com.oculus.intent.category.VR" /></intent-filter>
         </activity>
+        <!-- Sly 3 (no VR mode yet): the same game process, a flat window also on a headset (FlatGameActivity.java: a 2D
+             panel on the Meta Quest, no VR category) -->
+        <activity android:name=".FlatGameActivity" android:exported="false" android:process=":game"
+            android:launchMode="singleTask" android:taskAffinity="org.safehouse.android.game"
+            android:excludeFromRecents="true" android:screenOrientation="sensorLandscape"
+            android:configChanges="keyboard|keyboardHidden|navigation|orientation|screenLayout|screenSize|smallestScreenSize|uiMode|density|colorMode">
+            <layout android:defaultWidth="1280dp" android:defaultHeight="800dp" android:minWidth="320dp" android:minHeight="240dp" android:gravity="center" />
+        </activity>
         <service android:name=".ExtractorService" android:exported="false" android:process=":extract" />
         <service android:name=".RuntimeToolService" android:exported="false" android:process=":tool" />
         <service android:name=".LauncherKeeperService" android:exported="false" />

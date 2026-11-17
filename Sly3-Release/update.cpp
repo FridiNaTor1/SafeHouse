@@ -667,8 +667,19 @@ void StartLoadedLo(SW* psw, LO* plo)
         if (plo->pcls && plo->pcls->PfnOrig(15) == 0x225AA8) PostLoadTurret(plo);      // cid 0x45 (turret.cpp)
         PostLoadVehicle(plo);       // class0x4D, orig0x1D1518
         PostLoadVehiclePickup(plo); // class0x6C, orig0x1D4EC8
-        if (plo->pcls && plo->pcls->PfnOrig(15) == 0x1527C8) PostLoadDance(plo);       // cid 0x79 (dance.cpp)
-        if (plo->pcls && plo->pcls->PfnOrig(15) == 0x152100) PostLoadDancer(plo);      // cid 0x44 (dance.cpp)
+        {
+            void PostLoadDiver3(LO * plo);   // Sly 3's swimmer 0x57 / creatures 0x7E (game/diver3.cpp)
+            PostLoadDiver3(plo);
+            void PostLoadDial3(LO * plo);    // Sly 3's safe dial 0x4F (game/dial3.cpp)
+            PostLoadDial3(plo);
+            void PostLoadViewer3(LO * plo);  // Sly 3's pan / zoom viewer 0x47 (game/viewer3.cpp)
+            PostLoadViewer3(plo);
+            void PostLoadGrapple3(LO * plo);  // Sly 3's Grapple-Cam 0x56 (game/grapplecam3.cpp)
+            PostLoadGrapple3(plo);
+        }
+        // (Sly 2's dance director 0x79 / dancers 0x44 (dance.cpp, post-loads 0x1527C8 / 0x152100) have no Sly 3 twin:
+        // Sly 3's dance is director3.cpp (class 0x46, orig3 0x209EB0..). Their post-loads are not called, so dance.cpp
+        // stays off in the Sly 3 build (AUDIT4 MODES-17; old F14's 0x34 / 0x35 are moot))
         PostLoadLaser(plo);   // CID 0x55, orig 0x1DE568: endpoint tracks and broad-phase bounds
         PostLoadTrail(plo);   // CID 0x69, orig 0x21BD18: independent vertex-history meshes
         PostLoadPathRope(plo);  // paths: the loaded rope options (rope.cpp)

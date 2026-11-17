@@ -712,13 +712,13 @@ private:
             std::copy(std::begin(d.monitor), std::end(d.monitor), s.monitor);
             m_sly2.upscale = settings::Sly2UpscaleOptions{};
             if (m_game == GameId::Sly2) m_sly2.vr.worldScale = settings::Sly2VrOptions{}.worldScale;
-            if (m_game == GameId::Sly2) m_sly2.hudPlacement = settings::Sly2Settings{}.hudPlacement;
+            if (iniGame()) m_sly2.hudPlacement = settings::Sly2Settings{}.hudPlacement;
             break;
         case Graphics:
             s.internalResolutionHeight = d.internalResolutionHeight, s.msaaEnabled = d.msaaEnabled, s.msaaSamples = d.msaaSamples;
             s.drawDistance = d.drawDistance, s.fogType = d.fogType, s.longShadows = d.longShadows, s.fastShadows = d.fastShadows;
             s.renderer = d.renderer;
-            if (m_game == GameId::Sly2) m_sly2.outlineThickness = settings::Sly2Settings{}.outlineThickness;
+            if (iniGame()) m_sly2.outlineThickness = settings::Sly2Settings{}.outlineThickness;
             break;
         case Audio:
             settings::defaultAudio(s);
@@ -860,9 +860,9 @@ private:
         int aspect = m_settings.aspectMode;
         if (stepperRow(tr("Aspect ratio"), &aspect, aspects)) m_settings.aspectMode = aspect, commit();
         describe(tr("Fit to screen uses the whole window. The PS2 options match the original framing."));
-        // (Sly 2, Settings.ini [Display] HUD Placement: Sly2-Release display.h hudPlacement; the game's Display options
-        // have the same row. Replaces the original's Center Screen.)
-        if (m_game == GameId::Sly2) {
+        // (Sly 2 / Sly 3, Settings.ini [Display] HUD Placement: Sly2-Release / Sly3-Release display.h hudPlacement; the
+        // games' Display options have the same row. Replaces the original's Center Screen.)
+        if (iniGame()) {
             const std::vector<std::string> placements{ "4:3", "16:9", "16:10", tr("Match screen") };
             int placement = std::clamp(m_sly2.hudPlacement, 0, settings::kHudPlacementCount - 1);
             if (stepperRow(tr("HUD placement"), &placement, placements)) m_sly2.hudPlacement = placement, commit();
@@ -904,7 +904,7 @@ private:
         describe(tr("Immersive VR: how big the world looks around you. 1.0x is life size; higher values make the world look smaller."));
 #endif
     }
-    // (Sly 2, Settings.ini [Display] Upscaling: Sly2-Release fsr.h; the game's Display options and, on a PC headset,
+    // (Sly 2 and Sly 3, Settings.ini [Display] Upscaling: platform/render/fsr.h; the game's Display options and, on a PC headset,
     // its VR Settings show the same rows. Not on the Meta Quest: its compositor upscales the eyes, VR Settings there.)
     static bool vrHeadsetDevice() {
 #if defined(__ANDROID__)
@@ -920,7 +920,7 @@ private:
 #if defined(__APPLE__)
         return;   // (macOS: the game's Metal layer has no FSR 1 programs yet; the game keeps the bilinear scale)
 #endif
-        if (m_game != GameId::Sly2 || vrHeadsetDevice()) return;
+        if (!iniGame() || vrHeadsetDevice()) return;
         settings::Sly2UpscaleOptions& u = m_sly2.upscale;
         toggle(tr("Upscaling"), u.enabled,
                tr("Draws the 3D scene smaller and scales it up to the screen with a sharpening upscaler: faster, nearly as "
@@ -984,13 +984,18 @@ private:
         if (iniGame())
             toggle(tr("Fast shadows"), m_settings.fastShadows,
                    tr("Character shadows with less GPU work, for low-end devices. The picture stays nearly the same."));
-        // (Sly 2, Settings.ini [Graphics] Outline Thickness: Sly2-Release render.cpp; the game's display options and VR
-        // Settings have the same row)
-        if (m_game == GameId::Sly2)
+        // (Sly 2 and Sly 3, Settings.ini [Graphics] Outline Thickness: the games' render.cpp; the game's display options
+        // (and Sly 2's VR Settings) have the same row)
+        if (iniGame())
             rangeRow(tr("Outline thickness"), m_sly2.outlineThickness, settings::kOutlineThicknessMin, settings::kOutlineThicknessMax,
                      settings::kOutlineThicknessStep,
                      tr("The width of the characters' cartoon outlines, in percent of the original. In VR the outlines keep the flat "
                         "picture's look for the headset's wider view."), percent);
+        // (Sly 3, Settings.ini [Graphics] 3D Mode: Sly3-Release gauge3.h FAsk3d3; off by default, the 3-D question never asked)
+        if (m_game == GameId::Sly3)
+            toggle(tr("3D mode (red/cyan glasses)"), m_sly2.game.mode3d,
+                   tr("The original's 3D mode for red/cyan glasses. On: the game asks whether to play in 3D, and the job "
+                      "menu offers a start in 3D. Off: never asked, normal picture."));
 #if defined(_WIN32) || (defined(__linux__) && !defined(__ANDROID__))
         // (settings v21 renderer: Sly2-Release / Sly3-Release renderer.h, platform/renderer_choice.h: Auto is Vulkan with
         // OpenGL the fallback; Linux and Windows, where the games have the Vulkan renderer)

@@ -33,6 +33,10 @@
 #include "xf.h"
 #include "xfphys.h"
 #include "game/sly3.h"
+#include "game/suck3.h"
+#include "game/task3.h"
+#include "cm.h"
+#include "rumble.h"
 
 #include <glm/gtc/quaternion.hpp>
 
@@ -368,9 +372,9 @@ void UpdateRcCar(LO* plo)
         if (++s_c % 30 == 0)
         {
             const glm::vec3 p = PosAloCenter(v.owner), vel = VelAloPos(v.owner);
-            std::printf("rccar3: %d mode %d drive %.0f steer %.2f/%.2f pos %.0f %.0f %.0f vel %.0f wheels %d heat %.2f xf %d %d sost %d\n", plo->oid, v.rc.mode, v.drive,
+            std::printf("rccar3: %d mode %d drive %.0f steer %.2f/%.2f pos %.0f %.0f %.0f vel %.0f wheels %d heat %.2f xf %d %d sost %d hp %d/%d\n", plo->oid, v.rc.mode, v.drive,
                         v.turn, v.rc.steerGoal, p.x, p.y, p.z, glm::length(vel), CwheelContact(v), v.rc.heat, PxfPos(v.owner) ? PxfPos(v.owner)->mode : -9,
-                        PxfRot(v.owner) ? PxfRot(v.owner)->mode : -9, Psost(v.owner) != nullptr);
+                        PxfRot(v.owner) ? PxfRot(v.owner)->mode : -9, Psost(v.owner) != nullptr, NSoHealth3(v.owner), NSoHealthMax3(v.owner));
         }
     }
 }
@@ -514,9 +518,135 @@ struct INITRCCAR3
     }
 } s_initrccar3;
 NATIVEFN3(0x207FA0, OnRcCarMessage);
+
+// orig3 0x207DD8 (vt slot 81, the damage status): 1 while the hit flash runs (+0x39C), else 2 with no hit points left
+int NRcCarDamageStatus(LO* plo)
+{
+    VEHICLE* pv = Pvehicle(plo);
+    if (pv && pv->rc.hurt > 0.0f) return 1;
+    return NSoHealth3(plo) > 0 ? 0 : 2;
+}
+NATIVEFN3(0x207DD8, NRcCarDamageStatus);
+
+// orig3 0x206D40 (vt slot 59, Sly 2's 55: a new contact of the car): a swept contact (kind 8) on the car's side gets its
+// direction (+0xA0) and its depth again (the lowest of the car's entry's points along it, 0x18B1E0); then by the
+// contact's normal (the car's side: as is, else reversed): a wall (z under 0.7) or another RC car slides (friction 0,
+// elasticity 0.1); a floor along the car's up axis (dot over 0.7) 0.1 / 0.1, a slope 0.5 / 0.1 (AUDIT4 MODES-21)
+void RcCarXpNew(ALO* palo, XP* pxp, int i)
+{
+    if (!palo || !pxp || i < 0 || i > 1) return;
+    if (pxp->xpk == 8 && i == 0 && pxp->pv0)
+    {
+        pxp->normal = *static_cast<const glm::vec3*>(pxp->pv0);
+        if (SOE* psoe = pxp->axpd[0].psoe)
+        {
+            UpdateSoeWorld(psoe);
+            float lowest = 0.0f;
+            for (const glm::vec3& v : psoe->geomWorld.apos) lowest = std::min(lowest, glm::dot(v - pxp->axpd[1].pos, pxp->normal));
+            pxp->gDist = lowest;
+        }
+    }
+    const glm::vec3 n = i == 0 ? pxp->normal : -pxp->normal;
+    ALO* paloOther = pxp->axpd[1 - i].palo;
+    if (n.z < 0.7f || (paloOther && FIsLoDerivedFrom(paloOther, S3CID(0x55))))
+    {
+        pxp->mu = 0.0f;
+        pxp->elas = 0.1f;
+        return;
+    }
+    const XF* pxf = PxfObj(palo);
+    const glm::vec3 up = pxf ? glm::vec3(pxf->matWorld[2]) : glm::vec3(0.0f, 0.0f, 1.0f);
+    pxp->mu = 0.7f < glm::dot(up, n) ? 0.1f : 0.5f;
+    pxp->elas = 0.1f;
+}
+NATIVEFN3(0x206D40, RcCarXpNew);
+// orig3 0x207D68 (vt slot 80, a hit kind ignored): while hurt / dead (slot 81) or jumping back to the trail (mode 4);
+// then the SO's 0x1F42E8 (the player's invulnerability counts at D_0036F8C0 / D_00370A80, or the override +0x180:
+// natively not kept, so no)
+int FRcCarIgnoresHit(LO* plo, int)
+{
+    if (NRcCarDamageStatus(plo)) return 1;
+    VEHICLE* pv = Pvehicle(plo);
+    return pv && pv->rc.mode == 4 ? 1 : 0;
+}
+NATIVEFN3(0x207D68, FRcCarIgnoresHit);
+// orig3 0x207AE0 (vt slot 78, a hit): not while slot 80 ignores it, contact bytes 2 only, not its own shot; heavy kinds
+// 0x2000 / 0x4000 destroy it unless driven on the pad (fatal hits always); else it loses the larger of 5 % of its most
+// and the amount less the suck's share; a heavy hit while driven leaves it alive only if it can jump back to the trail
+// (0x2047D0). The player's car: rumble 4 for 0.75 s and a camera jolt, then the task event 0xA (alive: the flash +0x39C =
+// +0x398) or 0xC (destroyed); someone else's: 0xF / 0x10. Before, the car took no damage (MODES-07)
+bool FAcceptRcCarContact(ALO* palo, CTMSG* pctm)
+{
+    VEHICLE* pv = Pvehicle(palo);
+    if (!pv || !pctm) return false;
+    VEHICLE& v = *pv;
+    const int kind = static_cast<int>(pctm->grfFilter);
+    if (FRcCarIgnoresHit(palo, kind)) return false;
+    if (!(pctm->grfAccepted & 2)) return false;
+    LO* pfrom = pctm->ploSender;
+    if (pfrom && FIsLoDerivedFrom(pfrom, 0x59) && PloProjectileLauncher(pfrom) == palo) return false;
+    palo->SetField(0, 0x184, static_cast<uint32_t>(reinterpret_cast<uintptr_t>(pfrom) & 0xFFFFFFFFu));   // 0x1F4DD8 (the last hit's source)
+    const bool fHeavy = kind == 0x2000 || kind == 0x4000;
+    if (pctm->nKill3 || pctm->fKill3 || (v.rc.mode != 1 && fHeavy)) SetSoHealth3(palo, 0);
+    else
+    {
+        int amount = static_cast<int>(static_cast<float>(NSoHealthMax3(palo)) * 0.05f);
+        const int cap = static_cast<int>(static_cast<float>(pctm->nState) * (1.0f - GSuck3()));
+        if (cap >= amount) amount = cap;
+        SetSoHealth3(palo, NSoHealth3(palo) - amount);
+    }
+    if (NSoHealth3(palo) > 0 && fHeavy && v.rc.mode == 1 && !FResetToTrail(v, true)) SetSoHealth3(palo, 0);
+    const bool fAlive = NSoHealth3(palo) > 0;
+    if (g_psw && PloPoCurrent(g_psw) == palo)   // 0x1F4350(p, -1)
+    {
+        TriggerJoyRumbleRumk(4, 0.75f);
+        JoltCm(&g_cm, 0);
+        if (fAlive)
+        {
+            Broadcast3(0xA, palo);
+            v.rc.hurt = v.rc.hurtTime;
+        }
+        else Broadcast3(0xC, palo);
+    }
+    else Broadcast3(fAlive ? 0xF : 0x10, palo);
+    if (FPrint()) std::printf("rc3: %d hit by %d (kind 0x%X amount %d): hp %d / %d (t %.2f)\n", palo->oid, pfrom ? pfrom->oid : -1, kind, pctm->nState,
+                              NSoHealth3(palo), NSoHealthMax3(palo), g_clock.t);
+    return true;
+}
+NATIVEFN3(0x207AE0, FAcceptRcCarContact);
+
+// orig3 0x203EC8 (vt slot 31, a pool row taken again): the SO's 0x1F3C48, then 0x203F38: the hit points full, no flash
+// (+0x39C), the gun's heat / saturation / tracking cleared (+0x404..+0x414), the trail on (+0x458), the mode 0 (0x2075E8)
+// (MODES-21)
+void ResetRcCarSlot31(LO* plo, LO*)
+{
+    VEHICLE* pv = Pvehicle(plo);
+    if (!pv) return;
+    VEHICLE& v = *pv;
+    SetSoHealth3(plo, NSoHealthMax3(plo));
+    v.rc.hurt = 0.0f;
+    v.rc.heat = 0.0f;
+    v.rc.saturated = false;
+    v.rc.tracked = 0;
+    v.rc.trailOn = true;
+    SetRcCarMode3(v, 0);
+}
+NATIVEFN3(0x203EC8, ResetRcCarSlot31);
+// orig3 0x203EF8 (vt slot 32, the detach): SO's (0x1F3C80), then the clips +0x420 / +0x424 retracted and the engine
+// sounds +0x3E8 / +0x3F4 stopped (0x205168): natively the car holds neither (MODES-21)
+void DetachRcCar32(LO* plo, LO* pproxy) { DetachSoBase32(plo, pproxy); }
+NATIVEFN3(0x203EF8, DetachRcCar32);
 }  // namespace
 
 bool FIsRcCar3(const LO* plo) { return plo && plo->pcls && FIsLoDerivedFrom(plo, 0x55); }
+
+// orig3 0x00208030 (vt slot 88, a pickup collected, pickup.cpp GivePickupToCollector3): from a charm (0x69) its +0x1AC
+// more hit points (0x1F43D0: up to the most) (MODES-21)
+void TakePickupRcCar3(LO* pso, LO* ppickup)
+{
+    if (!FIsRcCar3(pso) || !ppickup || !FIsLoDerivedFrom(ppickup, 0x69)) return;
+    SetSoHealth3(pso, NSoHealth3(pso) + static_cast<int32_t>(ppickup->U32Field(0, 0x1AC, 0)));
+}
 
 // orig3 0x203C18: the SO's init, then the tuning
 void InitRcCar3(VEHICLE& v)
@@ -537,6 +667,15 @@ void InitRcCar3(VEHICLE& v)
     rc.realignCurve = {4.0f, 0.0f, 0.5f};
     rc.steerSpeed = {1.0f, 0.0f, 0.0f};
     rc.steerLimits = {0.0f, 1.0f};
+    // the hit points: 100 (0x1F43F8(p, 100)) unless loaded (EOPID 937); full (the world start's slot 31 0x203EC8 ->
+    // 0x203F38 fills them: natively only the hack objects get that call, so here)
+    {
+        int nMax = 100;
+        for (const OPT& o : v.owner->aopt)
+            if (o.eopid == 937 && !o.aval.empty()) nMax = o.aval[0].n;
+        v.owner->SetField(0, 0x170, static_cast<uint32_t>(nMax));
+        v.owner->SetField(0, 0x16C, static_cast<uint32_t>(nMax));
+    }
     // the four wheels (0x207568 with D_003256E0 = {-40, 20}): radius 50, parts 0x76D..0x770 (D_003256E8)
     v.wheels.assign(4, VEHICLEWHEEL{});
     for (int i = 0; i < 4; ++i)

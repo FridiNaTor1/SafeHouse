@@ -293,6 +293,33 @@ struct SCPTHOST3
     virtual void* PloProxyInstance(void* pproxy) { (void)pproxy; return nullptr; }
     virtual void UnlockProxyRow(void* pproxy, void* plo) { (void)pproxy; (void)plo; }
     virtual void ReleaseProxyInstance(void* pproxy, void* plo) { (void)pproxy; (void)plo; }
+    // Murray (Sly 3 cid 0x35) and Bentley (0x36) commands (orig3 0x226D00 cases 92, 100..103; Sly 2's SCPT 0x4F, 0x57..0x5A):
+    // 0x5C: 0x1E2848(Murray, PsmaFindAloSm(obj, -1), oidGoal, k, fSnap) (his state 6, the hold); its done test: out of
+    // state 6, or (oidGoal != -1) his SM at oidGoal (0x239E70 on +0x1140)
+    virtual void MurrayHold(void* ploMurray, void* ploObj, int oidGoal, int k, int fSnap) { (void)ploMurray; (void)ploObj; (void)oidGoal; (void)k; (void)fSnap; }
+    virtual bool FMurrayHoldDone(void* ploMurray, int oidGoal) { (void)ploMurray; (void)oidGoal; return true; }
+    // 0x64: 0x1E2358 (the toss controller's +0x10 = the world's Bentley D_0036B250, Murray's state 16: the Bentley toss)
+    virtual void MurrayToss(void* ploMurray) { (void)ploMurray; }
+    // 0x65: Bentley's jump 0x1B7268(+0x320, 3 from his jump state 0x12, else 1) toward Murray's hands
+    virtual void BentleyJumpToMurray(void* ploBentley) { (void)ploBentley; }
+    // Murray's toss controller (+0x18E0): its state (+0x18E4; -2: not Murray), aimed at an object (0x273030), its +0
+    // (the owner), arrived (+0x120 == +0xF0 within 0.1 on each axis), vt slot 99 (0) on the actor; an actor's jump
+    // state (+0x33C)
+    virtual int MurrayThrowState(void* ploMurray) { (void)ploMurray; return -2; }
+    virtual void MurrayAim(void* ploMurray, void* plo) { (void)ploMurray; (void)plo; }
+    virtual void* MurrayThrowOwner(void* ploMurray) { (void)ploMurray; return nullptr; }
+    virtual bool FMurrayAimArrived(void* ploMurray) { (void)ploMurray; return true; }
+    virtual void ActorJumpKind0(void* ploActor) { (void)ploActor; }
+    virtual int ActorJumpState(void* ploActor) { (void)ploActor; return -1; }
+    // 0x24 (0x22B090): a zone (cid 0x0E) forced on for the camera (0x273E48 / 0x273ED0 with (0, 0, 1)); added to the
+    // world (vt slot 8) when it was not in it, removed again (slot 9) at the release
+    virtual bool FLoInWorld(void* plo) { (void)plo; return true; }
+    virtual void SetZoneForcedRun(void* ploZone, bool fOn) { (void)ploZone; (void)fOn; }
+    virtual void AddRemoveLo(void* plo, bool fAdd) { (void)plo; (void)fAdd; }
+    // 0x25 (0x22B150): the player actor's (cid 0x33) camera target pinned at pos plus his height (0x153EA0(actor, 1)),
+    // released (0x153EA0(actor, 0): the offset to it kept, z cleared)
+    virtual void PinActorCmTarget(void* ploActor, const float pos[3]) { (void)ploActor; (void)pos; }
+    virtual void ReleaseActorCmTarget(void* ploActor) { (void)ploActor; }
     // the done test about to run (the test hosts use it to know which command an actor query is about)
     virtual void Testing(RUN3& run, int icmd) { (void)run; (void)icmd; }
 
@@ -350,6 +377,10 @@ struct RUN3
     bool fPaused = false;        // +0x3C / +0x40 / +0x44 (0x1F: 0x22B290)
     int kindPause = 0;
     int iplayerPause = -1;
+    void* ploZone = nullptr;     // +0x74 the zone the run selected (0x24, 0x22B090; released by RetireRun)
+    bool fZoneAdded = false;     // +0x78 (that zone was not in the world: added by the run, removed at the release)
+    void* ploPin = nullptr;      // +0x7C the target the run's player is pinned to (0x25, 0x22B150)
+    void* plo94 = nullptr;       // +0x94 (0x67: Murray's throw controller's +0 kept for the done test)
     bool fRetired = false;
 };
 

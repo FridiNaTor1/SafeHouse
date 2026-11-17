@@ -32,8 +32,14 @@ void SetCombo3Listed(ACTOR* p, int oidDef, bool fIn);      // the ASEG events 25
 bool FCombo3DefMoves(ACTOR* p);                            // orig3 0x1398F0 on the runner's definition
 void StartAbilityCombo3(SLY* p, int ability);              // the abilities 31 / 25
 bool FAbilityCombo3Ready(SLY* p, int ability);             // 0x1AF308's 31 / 25 (s3-decomp, gadget.cpp)
+void StopCombo3(ACTOR* p);                                   // orig3 0x155CE0 (vt slot 102's base: the combo off)
 bool FCombo3Attacking(ACTOR* p);                             // Sly 3's state 23
 bool FLeaveCombo3Attack(SLY* p);                             // orig3 0x1AC098 case 23: the attack left for state 0 (moving)
+void UpdateCombo3Motion(ACTOR* p);                           // orig3 0x13A9E0 (the attack's air steering: Sly's state 23)
 int NCombo3State(ACTOR* p);                                  // the runner's state (-1 off)
+int NSlyJumpKind3(SLY* p);                                   // orig3 0x1AF200 (Sly's slot 100: 0..10, 11 others)
+void SetSlyAttack3(SLY* p);                                  // orig3 0x1AF150's kind 9 (state 23: the attack)
+bool FCombo3StanceAir(ACTOR* p);                             // orig3 0x156388's combo branch
+bool FCombo3Noisy(ACTOR* p);                                 // orig3 0x1530F8: a running definition's +0x78 (option 1669)
 bool StartScriptCombo3(ACTOR* p, LO* ploDef, bool fNoTarget); // SCPT 0x28 (orig3 0x13A678 from 0x226D00 case 40)
 }  // namespace sly3

@@ -89,6 +89,8 @@ void KeepCarmFlashlightOff3(LO* plo);
 // the charged shot, 0x34 the throw, 0x35 the hit; -1 none) and its meter (SO +0x174, at most +0x178 = 100). The PC's Cops
 // and Robbers rounds give them at the power-up spots (copsmap3.cpp); L1 uses it (0x15FE68).
 void SetCarmPower3(LO* plo, int kind, int meter);
+// orig3 0x161C60's kind change: the charged shot (0x33) taken aims her target box (+0x1884) at the robber; left: put away
+void SetCarmPowerKind3(LO* plo, int kindOld, int kind);
 int KindCarmPower3(const LO* plo);
 // orig3 0x161BE0 (her vt slot 90, a power-up pickup's option 947): while a pad drives her the next of her shuffled
 // power-ups {0x32, 0x33, 0x34, 0x35} (+0x18AC), the meter full; the kind (-1: not a player)

@@ -144,7 +144,7 @@ bool FMoodStep(int sfxid)
 // start / end, volume}, 8 at most at +0xF4), filled by the loader's EOPID 99 / 100 methods
 struct AMBREC
 {
-    struct SND { int id; float s0, s1, g, pitch; };
+    struct SND { int id; float s0, s1, g, pitch, doppler = 0.0f; };
     struct FALL { int id; float s0, s1, g; };
     std::vector<SND> asnd;
     std::vector<FALL> afall;
@@ -246,7 +246,7 @@ struct SOUNDPASS
         RegisterObjectMethod(0x101768, [](LO* plo, const std::vector<CRef>& a) {
             AMBREC& r = Amb(plo);
             if (r.asnd.size() < 8)
-                r.asnd.push_back({NArg(a, 0), float(NArg(a, 1)), float(NArg(a, 2)), GArg(a, 3), GArg(a, 4)});
+                r.asnd.push_back({NArg(a, 0), float(NArg(a, 1)), float(NArg(a, 2)), GArg(a, 3), GArg(a, 4), GArg(a, 5)});   // (Sly 3 0x101AC0: 6 args, the last the Doppler)
             return CRef(TAGK_Void);
         });
         RegisterObjectMethod(0x101848, [](LO* plo, const std::vector<CRef>& a) {
@@ -405,6 +405,7 @@ void OnAmbientRegistered(LO* plo)
         p->SetFalloff(e.s0, e.s1);
         p->SetVolume(e.g);
         p->SetPitch(e.pitch);
+        p->SetDoppler(e.doppler);   // orig3 0x1311F0: 0x245130(voice, row +0x14)
         r.ah.emplace_back(p);
     }
 }
@@ -495,10 +496,11 @@ void FireDialogTarget(int /*oidSpeaker*/, int itarget, int32_t value)
     SetSmaGoal(p, value);  // 0x1F0660
 }
 
-// orig: 0x001FE738's part (target 5's goal 0x611: the mouth closed; the targets released and cleared)
+// orig: 0x001FE738's part (target 5's goal: the mouth closed; the targets released and cleared). orig3 0x248740: goal 0x6E2
+// (Sly 2's 0x611 is no goal of Sly 3's mouth SM: the mouth stayed in its last pose)
 void UnbindDialogTargets()
 {
-    if (SMA* p = s_apsmaDialog[5]; p && !FSmaRetracted(p)) SetSmaGoal(p, 0x611);
+    if (SMA* p = s_apsmaDialog[5]; p && !FSmaRetracted(p)) SetSmaGoal(p, 0x6E2);
     for (SMA*& p : s_apsmaDialog)
     {
         if (p) --p->cref;  // (vt slot 1: Release)
@@ -561,6 +563,7 @@ void StartupGameSound()
         };
     g_sndhooks.pfnText = [](int id) { return StrLocalized(g_psw, id); };
     g_sndhooks.pfnTGame = [] { return g_clock.t; };
+    g_sndhooks.pfnDtGame = [] { return g_clock.dt; };
     // (orig3 0x2479C8, Sly 2's 0x1FDA48: the USB headset's microphone) the first pad's player (0x1F4AD0(game, 0)) when
     // a PLAYER (0x13B500 class 0x33, Sly 2's 0x34), its position (its vt slot 36's matrix); the noise held at it of the
     // fixed template (Sly 3: GAME +0x47BC = oid 798, the sixth of 0x173C10's, as Sly 2's 711 at SW +0x4034: checked in

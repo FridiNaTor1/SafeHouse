@@ -1023,9 +1023,14 @@ CRef RefOpLmCheck(int, CRef* a, CFrame*)
     return RefBool(g >= lm.gMin && g <= lm.gMax);
 }
 // orig: 0x00123668 .. 0x001236F8
-CRef RefOpFloor(int, CRef* a, CFrame*) { return a[0].m_tagk == TAGK_S32 ? a[0] : RefS32(static_cast<s32>(std::floor(a[0].m_g))); }
-CRef RefOpCeiling(int, CRef* a, CFrame*) { return a[0].m_tagk == TAGK_S32 ? a[0] : RefS32(static_cast<s32>(std::ceil(a[0].m_g))); }
-CRef RefOpRound(int, CRef* a, CFrame*) { return a[0].m_tagk == TAGK_S32 ? a[0] : RefS32(static_cast<s32>(std::floor(a[0].m_g + 0.5f))); }
+// orig3: 0x1255C0 / 0x1255E0 / 0x125608 (audit 4 CORE-22): the float converted by C's truncation: floor (int)g, ceiling
+// (int)(g + 1), round (int)(g + 0.5) (so ceiling 2.0 is 3 and floor -2.5 is -2, as in the game; natively they were
+// std::floor / std::ceil). The original reads the float's bits even for an integer argument; the integer is kept here.
+// SLY3_MATHROUND2=1: the old functions
+namespace { bool FOldRound() { static const bool s_f = std::getenv("SLY3_MATHROUND2") != nullptr; return s_f; } }
+CRef RefOpFloor(int, CRef* a, CFrame*) { return a[0].m_tagk == TAGK_S32 ? a[0] : RefS32(static_cast<s32>(FOldRound() ? std::floor(a[0].m_g) : a[0].m_g)); }
+CRef RefOpCeiling(int, CRef* a, CFrame*) { return a[0].m_tagk == TAGK_S32 ? a[0] : RefS32(static_cast<s32>(FOldRound() ? std::ceil(a[0].m_g) : a[0].m_g + 1.0f)); }
+CRef RefOpRound(int, CRef* a, CFrame*) { return a[0].m_tagk == TAGK_S32 ? a[0] : RefS32(static_cast<s32>(FOldRound() ? std::floor(a[0].m_g + 0.5f) : a[0].m_g + 0.5f)); }
 CRef RefOpTruncate(int, CRef* a, CFrame*) { return a[0].RefCoerceS32(); }
 CRef RefOpAbs(int, CRef* a, CFrame*)
 {
@@ -1358,7 +1363,7 @@ BIF g_mpbifkbif[BIFK_Max] = {
     BIFN((RefOpGlobalObject<124, 118>), 0, 0, "find-world-object"),
     BIFN((RefOpGlobalObject<125, 119>), 0, 0, "find-camera-object"),                 // .. Sly 2 119
     // 127 orig3 0x126708: 0x165B28(SW): SW +0x3EB8 (a count) > 0 ? the first of the list SW +0x3EBC : nil
-    BIFG(126, 0, 0, "object-478D24"), BIFN(RefOpFirstCm3, 0, 0, "sw-first-3EBC"),              // new
+    BIFG(126, 0, 0, "battle-manager-468D24"), BIFN(RefOpFirstCm3, 0, 0, "sw-first-3EBC"),              // new
     BIFN(RefOpFindObjects, 2, 0, "find-objects"),                                    // 128.. = Sly 2 120..
     BIFG(129, 2, 0, "find-objects-in-bounding-box"), BIFG(130, 2, 0, "find-objects-in-bounding-sphere"),
     BIFG(131, 3, 0, "hit-test-objects"), BIFG(132, 3, 0, "hit-test-objects-first"),

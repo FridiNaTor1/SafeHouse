@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the SafeHouse Android app: native libraries (launcher, extractor, Sly 2) and a debug-signed APK.
+"""Build the SafeHouse Android app: native libraries (launcher, extractor, Sly 2, Sly 3) and a debug-signed APK.
 
 Steps: the locked NDK dependencies (bootstrap-dependencies.py, skipped when complete), the native CMake build
 (cmake/android.cmake), staging of the JNI libraries and notices under build/android-package/<abi>/, and Gradle's
@@ -96,6 +96,9 @@ def main():
     jni.mkdir(parents=True)
     triple = 'aarch64-linux-android' if args.abi == 'arm64-v8a' else 'x86_64-linux-android'
     libraries = [native / 'lib' / name for name in ('libsafehouse.so', 'libcane-extractor.so', 'libSly2-Release.so')]
+    # (Sly 3: in the same app unless the native build was configured with -DCANE_BUILD_SLY3=OFF)
+    if (native / 'lib/libSly3-Release.so').is_file() or 'CANE_BUILD_SLY3:BOOL=ON' in (native / 'CMakeCache.txt').read_text():
+        libraries.append(native / 'lib/libSly3-Release.so')
     libraries += [install / 'lib' / name for name in ('libSDL2.so', 'libavcodec.so', 'libavformat.so', 'libavutil.so', 'libswscale.so')]
     libraries.append(ndk / 'toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/lib' / triple / 'libc++_shared.so')
     libraries.append(openxr_loader(deps, args.abi))
@@ -146,7 +149,17 @@ def main():
     dist.mkdir(parents=True, exist_ok=True)
     out = dist / ('SafeHouse-Android-' + args.abi + ('' if release else '-debug') + '.apk')
     shutil.copy2(apk, out)
-    print('APK: ' + str(out))
+    # The package's check: every staged native library (Sly 2 and Sly 3 among them) is in the APK, and both game
+    # activities are in its code (GameActivity, FlatGameActivity for Sly 3).
+    with zipfile.ZipFile(out) as package:
+        names = set(package.namelist())
+        missing = ['lib/' + args.abi + '/' + library.name for library in libraries
+                   if 'lib/' + args.abi + '/' + library.name not in names]
+        code = b''.join(package.read(name) for name in names if re.fullmatch(r'classes\d*\.dex', name))
+    missing += [name for name in ('GameActivity', 'FlatGameActivity') if ('Lorg/safehouse/android/' + name + ';').encode() not in code]
+    if missing:
+        raise SystemExit('the APK misses: ' + ', '.join(missing))
+    print('APK: ' + str(out) + ' (' + str(out.stat().st_size) + ' bytes; ' + ', '.join(l.name for l in libraries[:4]) + ', ...)')
 
 
 if __name__ == '__main__':

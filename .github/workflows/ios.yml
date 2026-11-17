@@ -1,7 +1,8 @@
-# The iOS / iPadOS app (SafeHouse.app: the launcher and Sly 2 on Metal; Sly2-Release/notes/IOS_2026-11-11.md):
-# an .ipa for iPhone and iPad, and a simulator build that starts on an iPhone and an iPad simulator (Sly 2's self
-# tests in the app, then the launcher with a screenshot). FFmpeg comes from scripts/ios/ffmpeg.sh (cached), SDL2 and
-# FAudio from their pinned sources through CMake (cmake/ios.cmake), the app from scripts/ios/package.py.
+# The iOS / iPadOS app (SafeHouse.app: the launcher, Sly 2 and Sly 3 on Metal; Sly2-Release/notes/IOS_2026-11-11.md,
+# docs/PACKAGING.md "Sly 3 on every platform"): an .ipa for iPhone and iPad (both games in it), and on request a
+# simulator build that starts on an iPhone and an iPad simulator (Sly 2's and Sly 3's self tests in the app, then the
+# launcher with a screenshot). FFmpeg comes from scripts/ios/ffmpeg.sh (cached), SDL2 and FAudio from their pinned
+# sources through CMake (cmake/ios.cmake), the app from scripts/ios/package.py.
 # The simulator build and start are off by default (input `simulator`): GitHub's macOS runners lost or cancelled that
 # step too often, and testers try every build on real devices. Run this workflow by hand with it on when needed.
 #
@@ -114,7 +115,11 @@ jobs:
             echo "::group::first errors"; grep -E "error:|undefined|ld: |FAILED:" build/ios-device-build.log | sort -u | head -n 300; echo "::endgroup::"; exit 1; }
 
       - name: Package (device, ad hoc signed .ipa)
-        run: python3 scripts/ios/package.py --build build/ios-device --sdk iphoneos --out dist/ios --ipa --ffmpeg "$RUNNER_TEMP/ffmpeg-iphoneos"
+        run: |
+          python3 scripts/ios/package.py --build build/ios-device --sdk iphoneos --out dist/ios --ipa --ffmpeg "$RUNNER_TEMP/ffmpeg-iphoneos"
+          # (both games and their tools copies are in the app)
+          for f in Sly2Release Sly2Tools Sly3Release Sly3Tools; do test -f "dist/ios/SafeHouse.app/Frameworks/$f.framework/$f"; done
+          ls -l dist/ios/*.ipa
 
       - name: Signing certificate and profile (when the secrets are available)
         id: signing

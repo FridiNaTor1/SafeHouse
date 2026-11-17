@@ -78,10 +78,12 @@ struct JOBPURSUE : AIJOB
     int f40 = 0;                  // +0x40
     NAVREGION* pregionGoal = nullptr;  // +0x44
     glm::vec4 posGoal{0.0f};      // +0x50
+    LO* ptrig9 = nullptr;         // (orig3 0x1A4800's argument for state 9: the trigger of the reaction 0xEA)
     void Init() override;
     void Enter() override;
     void Exit() override;
     void Update() override;
+    int Message(int msg, void* pm) override;   // orig3 0x1A4B28 (the message 0x13 only: states 6..8 are the hits')
     void SetPursueState(int n);   // orig 0x176458
     bool FCanShoot();             // orig 0x175D00
     bool FTryAction();            // orig 0x175FF0

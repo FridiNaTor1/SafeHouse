@@ -31,6 +31,7 @@ int NRandInRange(int nLow, int nHigh);  // (util.h: 0x11D3F8)
 #include "cmworld.h"
 
 #include "activate.h"
+#include "player3.h"
 #include "cmworld.h"
 
 #include "brx.h"
@@ -432,11 +433,11 @@ bool FLoAddedBySplice3(const LO* plo);
 static const bool s_fKeepSplice = [] { const char* sz = std::getenv("SLY3_SPLICEADDKEEP"); return !sz || sz[0] != '0'; }();
 
 // orig 0x001651D8 (a task: started now when present, else queued and its world loaded)
-void RequestTaskStart(SW* psw, int iwrec, OID oidTask, OID oidWipe)
+void RequestTaskStart(SW* psw, int iwrec, OID oidTask, OID oidWipe, int grfExtra)
 {
     EnsureWorldRecords();
     const uint8_t* pchk = iwrec >= 0 && iwrec < static_cast<int>(s_awrec.size()) ? s_awrec[iwrec].abRecord : nullptr;
-    RequestTaskStartByOid(psw, pchk, oidTask, oidWipe);
+    RequestTaskStartByOid(psw, pchk, oidTask, oidWipe, grfExtra);
 }
 
 // (debug harness, autoplay.cpp: a task of another world started by that world's load, the queued branch of 0x1651D8
@@ -523,6 +524,26 @@ std::unique_ptr<SW> PswUpdateTransition(std::unique_ptr<SW> psw)
     // requests still pass Sly 2's bits; Sly 3's 0x25C2A8 masks 0xD5 of its own bits, notes/FLOW.md)
     // (orig3 0x25C2A8: none either when the request goes to world 0, the episode chooser dvd_menu)
     const float dtTimerResume = IworldOfChk(req.abChk) == 0 ? 0.0f : DtHudTimerResume(req.flags);
+    // orig3 0x25C2A8: a request for the loaded world without Sly 3's flag 2 (native: TRANSF_INPLACE3), a file, and no
+    // movie batch since the last load (D_00389AC0) is not loaded: 0x25BDD0 resets the world in place, then the same
+    // start tail as after a load (game/worldreset3.cpp; SLY3_INPLACERESET=0: the reload as before)
+    extern bool g_fMovieSinceLoad3;   // (frontend.cpp)
+    const bool fInPlace = FScripts3Active() && FWorldResetInPlace3() && (req.flags & TRANSF_INPLACE3) && psw && t.fHaveCur &&
+                          FSameChk(req.abChk, t.abChkCur) && FkFromRecord(req.abChk).cb && !g_fMovieSinceLoad3;
+    req.flags &= ~TRANSF_INPLACE3;
+    const bool fSameWorld = t.fHaveCur && FSameChk(req.abChk, t.abChkCur);  // (0x20EA24..0x20EA70: s2 = !same)
+    int iwrec = -1;
+    if (fInPlace)
+    {
+        iwrec = t.iwrecCur;
+        t.req = req;
+        std::printf("flow: world %d %s reset in place (frame %d, point %d, flags 0x%X)\n", iwrec, g_disc.SzWorldElf(iwrec).c_str(),
+                    g_iframeMain, req.oidPoint, req.flags);
+        ResetSwInPlace3(psw.get());
+    }
+    else
+    {
+    g_fMovieSinceLoad3 = false;
     UnloadWorld(psw, true);
     PumpPcKeptWorlds(nullptr);   // (PC addition, debug menu only: a kept world still being read loaded now, no world running: pcloader.h)
     ResetClock(&g_clock);
@@ -531,10 +552,8 @@ std::unique_ptr<SW> PswUpdateTransition(std::unique_ptr<SW> psw)
     g_actview.grfCm = 0;  // (no activation by distance until the first frame's camera)
     g_actview.cExtra = 0;
     const FK fk = FkFromRecord(req.abChk);
-    int iwrec = -1;
     for (int i = 0; i < static_cast<int>(s_awrec.size()); ++i)
         if (FSameChk(s_awrec[i].abRecord, req.abChk)) iwrec = i;
-    const bool fSameWorld = t.fHaveCur && FSameChk(req.abChk, t.abChkCur);  // (0x20EA24..0x20EA70: s2 = !same)
     BuildReplayJobTables(iwrec);   // (QoL Replay Jobs, replay.h: before the front end, once; no world is current here)
     psw = std::make_unique<SW>();
     ResetPhysWorld();  // (the old world's attachments go with it, also when the new world has no file: world 18)
@@ -569,7 +588,8 @@ std::unique_ptr<SW> PswUpdateTransition(std::unique_ptr<SW> psw)
         const int iep = IepisodeCur();
         setN({"episodeCurrent"}, iep);
         const CRef rBest = RefGetProgress({"episodeBest"});
-        if ((rBest.m_tagk == TAGK_S32 ? rBest.m_n : 0) < iep) setN({"episodeBest"}, iep);
+        // (orig3 0x25B6B8: not in the two-player games, D_0036DBE0 == 2: the world's screen mode 2)
+        if (psw->nScreenMode3 != 2 && (rBest.m_tagk == TAGK_S32 ? rBest.m_n : 0) < iep) setN({"episodeBest"}, iep);
     }
     // orig 0x20E3C0's broadcast 3 (the game record: reset for the title, the pending save; frontend.h)
     BroadcastTaskEvent(psw.get(), 3, nullptr);
@@ -585,6 +605,8 @@ std::unique_ptr<SW> PswUpdateTransition(std::unique_ptr<SW> psw)
         ShowActorGlasses3(psw);   // (orig3 0x152488: the 3-D glasses hidden out of the anaglyph mode)
     });
     OnPcWorldStarted(psw.get());   // (PC addition, debug menu only: pcloader.h)
+    RecordResetPoses3(psw.get());  // (orig3 ALO slot 17 0x23C580: the reset poses of EOPID 86, for an in-place reset)
+    }
     // (Sly 3, the pending task start (the request's flag 8 natively; Sly 3's 0x4 with GAME +0x14A0): 0x184AA0 runs
     // StartTask 0x18A0D0 (its predecessors restored, the task made available, then current). Interim until game/task3
     // ports 0x18A0D0: the task forced available (mode 3) and activated, as the reference's --warp W:TASK shows it
@@ -754,6 +776,8 @@ std::unique_ptr<SW> PswUpdateTransition(std::unique_ptr<SW> psw)
     // (s3-player round 21, the user's report: no intro scene at the boot) not over a script's placement at the world start:
     // m_ext's attract SCPT 4262 puts Sly on the rope (0x22 at 15071) inside StartSw, and this put him back at his
     // instance's place, so he fell, never reached trigger 15072 (alarm 15086) and the scene waited at [41] forever
+    // (not after an in-place reset: the players stay where they were until the checkpoint places them, 0x25B9C0)
+    if (!fInPlace)
     for (const auto& [plo, mat] : psw->mpmatPlayerInstance)
         if (!sly3::FScriptPlaced3(plo)) SetLoMatrix(plo, mat);
     // (s3-player round 21: the players' base record at the identity, as the reference's: their body load replaces their
@@ -763,7 +787,7 @@ std::unique_ptr<SW> PswUpdateTransition(std::unique_ptr<SW> psw)
     // its parent were unturned: a script's placement through the slots turned him wrong. Now the same world matrix with
     // xf0 at the identity (TeleportAloMat through the slots); SLY3_ROOTBASE=0: the old way)
     static const bool s_fRootBase = [] { const char* sz = std::getenv("SLY3_ROOTBASE"); return !sz || sz[0] != '0'; }();
-    if (s_fRootBase)
+    if (s_fRootBase && !fInPlace)
         for (const auto& pl : psw->aploAll)
         {
             LO* plo = pl.get();
@@ -785,7 +809,7 @@ std::unique_ptr<SW> PswUpdateTransition(std::unique_ptr<SW> psw)
     // value "oidPoCurrent" (0x2A8A88), else Sly, Bentley, Murray (0x2E1E40 / 0x2DD5BC / 0x2F7900): added (vt slot 8),
     // enabled (slot 79), placed at the checkpoint (slot 38) unless one of its pairs places it; the other players
     // disabled before (0x1C4080 == 0) removed (slot 9)
-    if (!PloPoCurrent(psw.get()) && CpoRegistered() > 0)
+    if (!PloPoCurrent(psw.get()) && (CpoRegistered() > 0 || fInPlace))
     {
         LO* pselected = nullptr;
         // (s3-player, orig3 0x25B9C0: player 0's character is GAME +0x10 (0x185700), which a task's start sets from the
@@ -927,7 +951,18 @@ std::unique_ptr<SW> PswUpdateTransition(std::unique_ptr<SW> psw)
     ChallengeWorldLoaded3(psw.get());
     ChallengeWorldStart3(psw.get());
     hackgame3::OnWorldStart(psw.get());   // (hackgame3.h: the two-player hacking game's ships to their players' pads)
-    ActivateTasksAtStart3();   // (a chooser's game: game/task3.h)
+    // (orig3 0x184B60 after the players' placement 0x25B9C0 and the cameras' cut: game/task3.h. The activation's scripts
+    // place their actors on the ground (0x22's drop, 0x198D78): natively the collision objects are on the active list
+    // only once activated by the camera's distance (UpdateSwActivation, each frame from the first): the pass runs here
+    // from the cut camera first, else every drop of the start found no ground (ep1_turf: Sly left in the air))
+    if (FActivateTasksPending3())
+    {
+        sly3::InstallPlayerHooks3();
+        g_actview.posCm = g_cm.pos;
+        g_actview.grfCm = static_cast<uint32_t>(g_cm.nCur);
+        UpdateSwActivation(psw.get());
+    }
+    ActivateTasksAtStart3();
     BroadcastTaskEvent(psw.get(), 5, nullptr);
     t.oidTaskQueued = -1;
     // orig3 0x288FB0 (Sly 2 0x22B420): the wipe object found again in the new world; one that covered the load

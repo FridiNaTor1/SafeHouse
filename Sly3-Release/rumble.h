@@ -69,6 +69,8 @@ void SetVibrationOption(bool fOff);                              // orig 0x1AFB8
 void TriggerJoyRumbleRumk(int rumk, float dt, const char* psz = nullptr);
 // The world's end (0x20E068): the rumble stopped (it runs out its four-frame stop)
 void StopJoyRumble();
+// orig3 0x210D78: the motors set directly (the small one on / off, the big one 0..255), e.g. the safe dial (game/dial3.cpp)
+void SetJoyMotorsDirect3(bool fSmall, uint8_t bBig);
 
 // The platform: the launcher's Controller vibration (settings v15 controllerVibration), and the SDL motors (opened on
 // the first write with a window; never in headless runs). ShutdownPadRumble turns every motor off.

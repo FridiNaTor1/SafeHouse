@@ -5,6 +5,8 @@
 
 #include "aipursuit.h"
 #include "game/sly3.h"
+#include "game/scptgame3.h"
+#include "game/task3.h"
 #include "worldglobals.h"
 #include "actor.h"
 #include "vecmat.h"
@@ -32,6 +34,7 @@
 #include "xf.h"
 #include "xfphys.h"
 #include "mat.h"
+#include "sly.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -426,11 +429,12 @@ ACTIONOBJ* PactionSelect(GUARD* pg, LO* ptarget, TARGETREC* pgate)
             if (!apsoe.empty() && PsoeHitTestLineObjects(0, posG, posT, apsoe, &lsg))
                 if (glm::length(posG - lsg.pos0) < pa->g6C) continue;
         }
-        // the guard's splice event 0x18 (vt slot 3 with a result: 0x1331F8 / 0x133000) with the action's oid (type 6,
-        // the entry's +0x18): a bound handler's value replaces the true CRef; anything but true refuses the action
-        if (!FLoSpliceEventTrue(pg->palo, 0x18, plo->oid))
+        // the guard's splice event 0x1B (orig3 0x1A3BA8; Sly 2's 0x18) (vt slot 3 with a result: 0x1331F8 / 0x133000)
+        // with the action's oid (type 6, the entry's +0x18): a bound handler's value replaces the true CRef; anything
+        // but true refuses the action
+        if (!FLoSpliceEventTrue(pg->palo, 0x1B, plo->oid))
         {
-            if (s_fDebug) std::fprintf(stderr, "   splice event 0x18 refuses action %d\n", plo->oid);
+            if (s_fDebug) std::fprintf(stderr, "   splice event 0x1B refuses action %d\n", plo->oid);
             continue;
         }
         if (pa->f78)
@@ -461,17 +465,21 @@ void JOBPURSUE::Init()
     st = -1;
 }
 // orig: 0x00175790
+// orig3: 0x001A3A80 (Sly 3's pursue, class 0xD2): then the task broadcast 0x1C with the guard (a chase starts)
 void JOBPURSUE::Enter()
 {
     SetPursueState(3);
     SetGuardPursued(pguard, ptarget);
+    if (FScripts3Active()) Broadcast3(0x1C, pguard->palo);
 }
 // orig: 0x001757D0
+// orig3: 0x001A3AD8: the pursued target is let go too (0x2541F8(guard, 0))
 void JOBPURSUE::Exit()
 {
     AIJOB::Exit();
     SetPursueState(-1);
     RemoveGuardState(pguard, 0x1D);
+    SetGuardPursued(pguard, nullptr);
 }
 
 namespace
@@ -505,7 +513,7 @@ bool JOBPURSUE::FCanShoot()
             if (pt->nSubF54 != -1) k = true;
             if (FCidDerivedFrom(ptarget->Cid(), S3CID(0x35)))
                 if (SLY* psly = PslyFromLo(ptarget))
-                    if (psly->state == 3 || psly->state == 0x15 || psly->state == 0x16) k = true;
+                    if (psly->jts == jts::Hang || psly->jts == jts::N2ClimbSurf || psly->jts == jts::HangFollow) k = true;
         }
     const glm::vec3 pa = PosAi(pg->palo), pb = PosAi(ptarget);
     const glm::vec3 d = pb - pa;
@@ -581,7 +589,7 @@ bool JOBPURSUE::FLost()
 // orig: 0x00176458
 void JOBPURSUE::SetPursueState(int n)
 {
-    if (st == n) return;
+    if (st == n && n != 9) return;   // (orig3 0x1A4800: 6..9 restart)
     EndChildJob(&pchild);
     GUARD* pg = pguard;
     if (st == 1 && paction)
@@ -630,13 +638,19 @@ void JOBPURSUE::SetPursueState(int n)
     }
     case 4:
     {
-        auto* o = static_cast<JOBMOVE*>(PjobPush(pg, 0x9D));
-        o->nAnim = 0xD;
+        // orig3 0x1A4800 case 4: Sly 3's job 0xF2 with the target (Sly 2's inline move 0xD, the detector's entry back
+        // to 0, nothing pursued; Sly 3 also locks the job while the move plays: aijobs.cpp JOBLOST3)
+        auto* o = static_cast<JOBLOST3*>(PjobPush(pg, CID_JOBLOST3));
+        o->ptarget = ptarget;
         o->Enter();
-        // (0x154038: the detector forgets it: its entry's state 0)
-        if (pg->pdet)
-            if (DETENTRY* pe = PdetentryFind(pg->pdet, ptarget)) SetDetentryState(pg->pdet, pe, 0);
-        SetGuardPursued(pg, nullptr);
+        break;
+    }
+    case 9:
+    {
+        // orig3 0x1A4800 case 9: the trigger reaction 0xEA with the message's trigger; its end: back to state 3
+        auto* o = static_cast<JOBTRIGREACT3*>(PjobPush(pg, CID_JOBTRIGREACT3));
+        o->ptrig = ptrig9;
+        o->Enter();
         break;
     }
     case 5:
@@ -648,6 +662,20 @@ void JOBPURSUE::SetPursueState(int n)
     }
     default: break;
     }
+}
+
+// orig3: 0x001A4B28: the message 0x13 (a class-0x17 trigger's reaction, natively MSG_TRIGREACT3): state 9 unless the
+// job is held; taken either way. (0xE / 0xF / 0x11 -> 7 / 6 / 8 are Sly 3's hit pipeline 0x251C08, which natively runs
+// through the reactions: aihit.cpp)
+int JOBPURSUE::Message(int msg, void* pm)
+{
+    if (msg != MSG_TRIGREACT3) return AIJOB::Message(msg, pm);
+    if (!FJobDone(this))
+    {
+        ptrig9 = static_cast<LO*>(pm);
+        SetPursueState(9);
+    }
+    return 1;
 }
 
 // orig: 0x00176098
@@ -699,7 +727,11 @@ void JOBPURSUE::Update()
             if (!FJobDone(this) && pchild && static_cast<JOBSHOOT*>(pchild)->st == -1) SetPursueState(0);
             break;
         case 4:
-            if (!FJobDone(this) && pchild && static_cast<JOBMOVE*>(pchild)->st == 1) SetPursueState(-1);
+            // (orig3 0x1A4400 case 4: the child's end, locked or not)
+            if (auto* pj = dynamic_cast<JOBLOST3*>(pchild); pj && pj->st == -1) SetPursueState(-1);
+            break;
+        case 9:
+            if (auto* pj = dynamic_cast<JOBTRIGREACT3*>(pchild); !pj || pj->FDone()) SetPursueState(3);
             break;
         case 5:
             if (!FJobDone(this) && !FGuardStill(pg)) SetPursueState(3);

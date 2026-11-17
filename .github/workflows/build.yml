@@ -177,6 +177,8 @@ jobs:
           chmod +x "$RUNNER_TEMP/appimagetool"
           python3 scripts/package.py --build build/linux --output dist --appimagetool "$RUNNER_TEMP/appimagetool"
           dist/SafeHouse-Launcher-Linux-${{ matrix.arch }}/bin/safehouse --version
+          # (Sly 3 is packaged beside Sly 2 and starts from the package: its settings schema, no window)
+          dist/SafeHouse-Launcher-Linux-${{ matrix.arch }}/bin/Sly3-Release --settings-selftest
       # Sly 2's VR (the Steam Frame runs the aarch64 package; SteamVR / Monado / WiVRn on both): the bundled OpenXR loader
       # (cmake/openxr-loader.cmake) must be found by the game through its run path, and the Vulkan renderer built in.
       - name: Check Sly 2's VR path (OpenXR loader, Vulkan renderer)
@@ -475,8 +477,8 @@ jobs:
           name: windows-smoke-screenshots
           path: ${{ runner.temp }}/smoke/*.png
 
-  # Android (phones, tablets, handhelds) and Meta Quest: one arm64 APK with the launcher and Sly 2 (VR through OpenXR on a
-  # headset). scripts/android/build-package.py: the locked dependencies (cached), the native libraries with NDK 29, the
+  # Android (phones, tablets, handhelds) and Meta Quest: one arm64 APK with the launcher, Sly 2 (VR through OpenXR on a
+  # headset) and Sly 3 (a flat window, also on a headset). scripts/android/build-package.py: the locked dependencies (cached), the native libraries with NDK 29, the
   # Gradle app. Signed with the SafeHouse release key from the repository secrets (ANDROID_*) when they are available;
   # without them (pull requests from forks) a debug-signed APK is built and kept as an artifact only.
   android:
@@ -493,6 +495,8 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: glslang (Sly 2's Vulkan SPIR-V)
         run: sudo apt-get update && sudo apt-get install -y glslang-tools
+      # (build-package.py builds Sly 2 and Sly 3 into the one APK and checks the APK has every library and both game
+      # activities, GameActivity and Sly 3's FlatGameActivity)
       - name: Android SDK packages (NDK 29, platform 36)
         run: |
           set -eu
@@ -537,7 +541,7 @@ jobs:
           path: dist/android/SafeHouse-Android-arm64-v8a*.apk
           if-no-files-found: error
 
-  # Nintendo Switch: SafeHouse.nro (launcher, Sly 1 and Sly 2) with devkitPro's devkitA64 + libnx + deko3d
+  # Nintendo Switch: SafeHouse.nro (launcher, Sly 1, Sly 2 and Sly 3) with devkitPro's devkitA64 + libnx + deko3d
   # (cmake/devkitA64-libnx.cmake, cmake/Switch.cmake). The image already has switch-dev, switch-ffmpeg, deko3d and uam.
   switch:
     name: Nintendo Switch (devkitPro)

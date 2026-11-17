@@ -262,6 +262,48 @@ struct JOBSETTLE3 : AIJOB
     bool FDone() const { return mode == -1 && fStarted; }
 };
 
+// Sly 3's 0xEA (vt 0x355DB8: Init 0x16E5A0, Enter 0x16E5D8, Exit 0x16E610, Update 0x16E650, SetState 0x16E6C0, the side
+// 0x16E8D8): the trigger reaction (the reaction 21 / the pursuit's state 9, from 0x257A70: a guard entering a class-0x17
+// trigger). Sly 3 state 0xC meanwhile; the side by the trigger's kind (+0x250) and the guard's +0x1144 flags (0x20 / 0x40
+// for kind 0, 0x80 / 0x100 for kind 1; both: the side of the trigger's z (kind 0) or y (kind 1) plane the guard is on,
+// kind 1 flipped by the guard's facing): 0..3 -> Sly 3 states 8..11; the state's kind entry played by a move (0xC9; a
+// kind-2 entry: Sly 3's 0xCB mode 7 toward the point the entry's distance behind the guard, natively the kind-2 player's
+// target there); no entry: done (-1)
+constexpr CID CID_JOBTRIGREACT3 = 0x1EA;
+constexpr int MSG_TRIGREACT3 = 0x1013;   // (Sly 3's job message 0x13 with the trigger; a native id clear of the LO messages)
+void DealVolReact3(struct VOLREACT3* pr);   // orig3 0x257B80 (guard.h VOLREACT3)
+struct JOBTRIGREACT3 : AIJOB
+{
+    int st = -1;                  // +0x30
+    float tSt = 0;                // +0x34
+    LO* ptrig = nullptr;          // +0x38 the trigger
+    bool fStarted = false;
+    void Init() override;
+    void Enter() override;
+    void Exit() override;
+    void Update() override;
+    void SetState(int n) override;
+    int NSide() const;            // orig3 0x16E8D8
+    bool FDone() const { return st == -1 && fStarted; }
+};
+
+// Sly 3's 0xF2 (vt 0x35B770: Init 0x1A58D0, Enter 0x1A5900, Exit 0x1A5930, Update 0x1A5960, SetState 0x1A59C8): the
+// pursuit's state 4 (the target lost; natively Sly 2's inline move 0x9D): the lost move (Sly 3 state 0x13; a Guru target
+// with +0x15F8 set: the entry of 0x41 | 0x13), the detector's entry of the target back to 0 (0x1703C8), nothing pursued,
+// the job locked until the move ends (then unlocked, -1)
+constexpr CID CID_JOBLOST3 = 0x1F2;
+struct JOBLOST3 : AIJOB
+{
+    LO* ptarget = nullptr;        // +0x30
+    int st = -1;                  // +0x34
+    float tSt = 0;                // +0x38
+    void Init() override;
+    void Enter() override;
+    void Exit() override;
+    void Update() override;
+    void SetState(int n) override;
+};
+
 // 0xA7 (0xF0): the path follower (Init 0x178E98 (0x177E80), Enter 0x177EF0, Update 0x178EE0 (0x1789F8, steering
 // 0x177F78), SetState 0x1791C8)
 struct JOBFOLLOW : AIJOB
@@ -440,3 +482,5 @@ std::unique_ptr<AIJOB> PjobNewKind(CID cid);
 // orig 0x173610: pos dropped onto the still solid entries under it (the line +gHigh .. +gLow up; unless fAny, not
 // steeper than 0.7): false when nothing is hit
 bool FDropOnGround(glm::vec3* ppos, float gHigh, float gLow, bool fAny);
+
+bool FSnapPosToSurfaceAbove(glm::vec3* ppos);   // orig 0x17D608 (orig3 0x1DA038)

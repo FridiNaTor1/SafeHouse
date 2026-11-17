@@ -1087,8 +1087,16 @@ XP* PxpMarkOxaContacts(OXA* psoA, OXA* psoB)
         if (s0->f48) continue;
         MarkOwnContacts(fp, s5, s0, &result);
     }
+    // (Sly 3, orig3 0x1CDF20's end: each owner's vt slot 64 with the other (ALO 0x23EDD8: none; the ships' 0x214F88,
+    // game/ship3.cpp))
+    if (g_pfnPairContacts3)
+    {
+        g_pfnPairContacts3(s5->pso, fp->pso, &result);
+        g_pfnPairContacts3(fp->pso, s5->pso, &result);
+    }
     return result;
 }
+void (*g_pfnPairContacts3)(ALO* palo, ALO* paloOther, XP** ppxp) = nullptr;
 
 // orig: 0x001A8B50 (public entry point, also used by physcheck.cpp)
 void MarkBspBspContacts(SOE* pso0, SOE* pso1, const std::vector<BSPN>& absp, int iroot1, XP** ppxp)

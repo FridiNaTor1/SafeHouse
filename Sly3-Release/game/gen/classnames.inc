@@ -204,14 +204,14 @@ CLASSNAME(0xC7, "JOB")  // Sly 2 0x9B
 CLASSNAME(0xC8, "JOBREACT")  // Sly 2 0x9C
 CLASSNAME(0xC9, "JOBMOVE")  // Sly 2 0x9D
 CLASSNAME(0xCA, "JOBSTAND")  // Sly 2 0x9E
-CLASSNAME(0xCB, "JOBSTRIKE")  // Sly 2 0x9F
-CLASSNAME(0xCC, "NEW_JOB_CC")  // provisional
+CLASSNAME(0xCB, "JOBUSE")  // Sly 2 0xAC (decomp: s3fix-ai2)
+CLASSNAME(0xCC, "JOBSTRIKE")  // Sly 2 0x9F (decomp: s3fix-ai2)
 CLASSNAME(0xCD, "JOBHIT")  // Sly 2 0xA0
-CLASSNAME(0xCE, "JOBHIT2")  // Sly 2 0xA2
-CLASSNAME(0xCF, "JOBHIT3")  // Sly 2 0xA3
-CLASSNAME(0xD0, "NEW_JOBHIT_D0")  // provisional
+CLASSNAME(0xCE, "JOBHIT1")  // Sly 2 0xA1
+CLASSNAME(0xCF, "JOBHIT2")  // Sly 2 0xA2
+CLASSNAME(0xD0, "JOBHIT3")  // Sly 2 0xA3
 CLASSNAME(0xD1, "JOBACT")  // Sly 2 0xA4
-CLASSNAME(0xD2, "JOBB4")  // Sly 2 0xB4
+CLASSNAME(0xD2, "JOBPURSUE")  // Sly 2 0xA5
 CLASSNAME(0xD3, "JOBSCRIPT")  // Sly 2 0xA9
 CLASSNAME(0xD4, "JOBWAIT")  // Sly 2 0xAA
 CLASSNAME(0xD5, "JOBINVESTIGATE")  // Sly 2 0xAB
@@ -223,24 +223,24 @@ CLASSNAME(0xDA, "JOBB1")  // Sly 2 0xB1
 CLASSNAME(0xDB, "JOBB2")  // Sly 2 0xB2
 CLASSNAME(0xDC, "JOBSURROUND")  // Sly 2 0xB3
 CLASSNAME(0xDD, "JOBCHASE")  // Sly 2 0xB6
-CLASSNAME(0xDE, "JOBB5")  // Sly 2 0xB5
+CLASSNAME(0xDE, "JOBSTATION")  // Sly 2 0xB7 (decomp: s3fix-ai2)
 CLASSNAME(0xDF, "JOBRAIL")  // Sly 2 0xB8
-CLASSNAME(0xE0, "JOBSTATION")  // Sly 2 0xB7
+CLASSNAME(0xE0, "JOBLADDER")  // Sly 2 0xB9 (decomp: s3fix-ai2)
 CLASSNAME(0xE1, "JOBGOTO")  // Sly 2 0xBA
-CLASSNAME(0xE2, "JOBLADDER")  // Sly 2 0xB9
-CLASSNAME(0xE3, "NEW_JOB_E3")  // provisional
-CLASSNAME(0xE4, "JOBHOLD")  // Sly 2 0xBB
-CLASSNAME(0xE5, "JOBHOLD2")  // Sly 2 0xBC
-CLASSNAME(0xE6, "JOBBD")  // Sly 2 0xBD
-CLASSNAME(0xE7, "JOBLINK")  // Sly 2 0xBE
-CLASSNAME(0xE8, "JOBNAVPOINT")  // Sly 2 0xBF
+CLASSNAME(0xE2, "JOBHOLD")  // Sly 2 0xBB (decomp: s3fix-ai2)
+CLASSNAME(0xE3, "JOBBD")  // Sly 2 0xBD
+CLASSNAME(0xE4, "JOBLINK")  // Sly 2 0xBE (decomp: s3fix-ai2)
+CLASSNAME(0xE5, "NEW_JOB_E5")  // provisional: the reaction 17 (native JOBSETTLE3)
+CLASSNAME(0xE6, "NEW_JOB_E6")  // provisional
+CLASSNAME(0xE7, "NEW_JOB_E7")  // provisional: the reaction 23 (native JOBPASSWORD3)
+CLASSNAME(0xE8, "NEW_JOB_E8")  // provisional: the reaction 19 (native JOBRIDE3)
 CLASSNAME(0xE9, "NEW_JOB_E9")  // provisional
 CLASSNAME(0xEA, "NEW_JOB_EA")  // provisional
-CLASSNAME(0xEB, "NEW_JOB_EB")  // provisional
+CLASSNAME(0xEB, "JOBB4")  // Sly 2 0xB4
 CLASSNAME(0xEC, "NEW_JOB_EC")  // provisional
 CLASSNAME(0xED, "NEW_JOB_ED")  // provisional
 CLASSNAME(0xEE, "NEW_JOB_EE")  // provisional
-CLASSNAME(0xEF, "JOBMURRAYRAGE")  // Sly 2 0xC6
+CLASSNAME(0xEF, "JOBACTORFOLLOW")  // Sly 2 0xA8 (decomp: s3fix-ai2)
 CLASSNAME(0xF0, "JOBFOLLOW")  // Sly 2 0xA7
 CLASSNAME(0xF1, "NEW_JOB_F1")  // provisional
 CLASSNAME(0xF2, "NEW_JOB_F2")  // provisional

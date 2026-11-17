@@ -37,6 +37,8 @@ struct LIGHTSEL
     glm::vec3 pos{0.0f};
     float gConst = 0, gSlope = 0;
     int32_t fShadow = 1;    // +0x158: counts for the shadow direction (0x1A4478)
+    float gShadow = -1.0f;  // (Sly 3) +0x148: its weight there (orig3 0x1C6418, lightsw.h LIGHTPARAMS::gShadow)
+    float gBright = 0.0f;   // (Sly 3) max(+0xE8 the HSV value, +0x140 the strength): the weight's divisor
 };
 
 // The world's lights and the world shader colour (SW+0x3E28: rgb the shadow colour, w the ambient amount).

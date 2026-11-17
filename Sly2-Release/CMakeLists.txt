@@ -8,6 +8,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 get_filename_component(CANE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/.." ABSOLUTE)
 
 file(GLOB sly2n_sources CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/*.c")
+# (platform/render: the renderer pieces Sly 2 and Sly 3 share, built against each game's own headers: FSR 1, texture mods)
+list(APPEND sly2n_sources "${CANE_ROOT}/platform/render/fsr.cpp" "${CANE_ROOT}/platform/render/texmod.cpp")
 # (test build: the files' static constructors in reverse order, as MinGW runs them on Windows: its CRT walks the .ctors
 # list backwards. A Linux run of it shows a Windows-only static initialization order dependency; PACKAGING.md section 7)
 option(SLY2_REVERSE_INIT_ORDER "Link Sly2-Release's sources in reverse order (init-order test build)" OFF)
@@ -34,6 +36,7 @@ else()
   add_executable(Sly2-Release ${sly2n_sources})
 endif()
 target_include_directories(Sly2-Release PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}" "${CANE_ROOT}/Libraries/include" "${CANE_ROOT}/platform"
+                           "${CANE_ROOT}/platform/render"
                            "${CMAKE_CURRENT_BINARY_DIR}/generated")
 target_compile_definitions(Sly2-Release PRIVATE _CRT_SECURE_NO_WARNINGS)
 # Development data: the checkout's build/ folder (the reference's RAM maps, the test memory card), used only by the

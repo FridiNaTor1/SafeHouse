@@ -2,6 +2,7 @@
 
 #include "challenge3.h"
 #include "duel3.h"
+#include "gauge3.h"
 
 #include "epmenu3.h"
 #include "lo.h"
@@ -186,6 +187,7 @@ NODE3 NodeFromLo3(const LO* plo)
         {
         case 1428: n.oidJob = ival(o, 0); break;
         case 1429: n.mode = ival(o, 0); break;
+        case 1438: n.f3d = ival(o, 0); break;
         case 1432: n.oidTask = ival(o, 0); break;
         case 1433: n.iworld = ival(o, 0); break;
         case 1434: n.oidKeyTask = ival(o, 0); break;
@@ -259,6 +261,7 @@ void StartChallengeIn3(SW* psw, LO* pnode, int grf, int n, int iworldNative)
     c.oidKeyTask = OID(pnode->U32Field(0, 0x60, 0xFFFFFFFFu));
     c.value = int(pnode->U32Field(0, 0x64, 2));
     c.n14A4 = n;
+    g_n3dChoice3 = n;   // (GAME +0x14A4, the 3-D answer: X 0 the normal view, Square's "in 3-D" 1; gauge3.h)
     c.node = NodeFromLo3(pnode);
     c.ploNode = pnode;
     c.pswNode = psw;
@@ -315,6 +318,7 @@ void StartChallengeIn3(SW* psw, LO* pnode, int grf, int n, int iworldNative)
 }
 
 bool FChallengeRunning3() { return s_chal.fRunning; }
+bool FChallenge3d3() { return s_chal.fRunning && s_chal.node.f3d != 0; }
 const GAMESAVE* PgsChallengeSaved3() { return s_chal.fRunning ? &s_chal.gsSaved : nullptr; }
 int NChallengeMode3() { return s_chal.fRunning ? s_chal.mode : -1; }
 OID OidChallengeJob3() { return s_chal.fRunning ? s_chal.oidJob : -1; }
@@ -605,6 +609,8 @@ void ChallengeJobFailed3()
 
 int NChallengeState3() { return s_chal.fRunning ? s_chal.state : 0; }
 const NODE3* PnodeChallenge3() { return s_chal.fRunning ? &s_chal.node : nullptr; }
+// (the splice's option 1344 of the manager, bif 125: +0x14 the game object; null without a running game)
+LO* PloChallengeNode3() { return PloNodeCur(); }
 
 // orig3: 0x00284828: the item count of an object of the node's group (+0x8C) scaled by its factor (+0x90), at least 1
 int CChallengeScaled3(const LO* plo, int c)

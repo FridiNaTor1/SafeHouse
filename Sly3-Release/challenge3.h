@@ -32,6 +32,7 @@ struct NODE3
 {
     OID oid = -1;
     int mode = 0;             // +0x50 (1429)
+    int f3d = 0;              // +0x54 (1438): the game is played in the 3-D mode (the pause menu's 3-D resets: 0x18AE00)
     OID oidJob = -1;          // +0x48 (1428)
     OID oidTask = -1;         // +0x5C (1432)
     int iworld = -1;          // +0x58 (1433)
@@ -65,6 +66,8 @@ void StartChallenge3(SW* psw, LO* pnode, int grf, int n);
 void StartChallengeIn3(SW* psw, LO* pnode, int grf, int n, int iworldNative);
 // orig3: 0x002852B0: one runs
 bool FChallengeRunning3();
+// orig3: 0x18AE00's first half: a game runs whose node's +0x54 (option 1438) is set
+bool FChallenge3d3();
 // the running game's mode (the object's +0x50: 0 a challenge, 1 a job replay, 2 a two-player game; -1 none)
 int NChallengeMode3();
 // the running game's job (+0x48; -1 none)
@@ -106,6 +109,7 @@ void ChallengeJobFailed3();
 // the manager's state (0x7CD4; 0 none) and the running game's node (null: none)
 int NChallengeState3();
 const NODE3* PnodeChallenge3();
+LO* PloChallengeNode3();   // the manager's +0x14 (splice option 1344): the running game's node object in this world
 // orig3: 0x00284828: an item count of an object of the node's group scaled by its factor
 int CChallengeScaled3(const LO* plo, int c);
 // orig3: 0x002845B0: the running game ends with this task reaching value (2 done, 4 active, 5 left): the task's job is

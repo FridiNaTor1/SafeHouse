@@ -32,6 +32,9 @@
 #include "joy.h"
 #include "jt.h"
 #include "jump.h"
+#include "reach.h"
+#include "slyfeet.h"
+#include "xf.h"
 #include "lo.h"
 #include "po.h"
 #include "scpt.h"
@@ -52,6 +55,9 @@
 #include <cfloat>
 #include <climits>
 #include <cmath>
+
+struct SLY;
+void PlantInteractFeet3(SLY* p, INTERACT& i);   // (below)
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -115,8 +121,15 @@ bool FTake(PADCTL* pc, uint32_t grf, float dt) { return pc && GrfPadctlTakePress
 bool FWithin(PADCTL* pc, uint32_t grf, float dt) { return pc && GrfPadctlPressedWithin(pc, grf, dt); }  // 0x1C4660
 bool FMainSly(ACTOR* pa) { return PslyFromLo(pa->palo) != nullptr; }  // (the actor == 0x2E1E40, the game's Sly)
 
-// the actor's vt slot 99 (n 3: the binocucom allowed; Sly 0x18D760, Bentley / Murray their abilities)
-bool FActorCanDo(ACTOR*, int) { return true; }  // TODO(actors): slot 99's checks (sly.cpp's ground states skip them too)
+// the actor's vt slot 99 / Sly 3's 113 (n 3: the binocucom allowed; orig3 Sly 0x1AF308, Bentley 0x13FE50, Murray
+// 0x1E23F0), as called here: inside the interaction (Sly 3's state 8 / Bentley's 3 / Murray's 13), so the base's busy
+// test (0x154518: the binocucom's state below 3) and the interaction's own say (0x1B5D08: FInteractCanDo); the action 3
+// skips the outfit test. AUDIT4 PLAYER-20 (before: always true)
+bool FActorCanDo(ACTOR* pa, int n)
+{
+    if (!pa || static_cast<unsigned>(pa->nF04) < 3) return false;
+    return FInteractCanDo(pa, n);
+}
 
 // an object's vt slot 3 (the base 0x1A61E0: its splice event n, then the game's event 0x1A (5) / 0x1B (6))
 void LoEvent(LO* plo, int n)
@@ -217,7 +230,7 @@ std::vector<SOE*> AsoeInteractBox(ACTOR* pa, const glm::vec3& a, const glm::vec3
     return apsoe;
 }
 
-// orig: 0x001911A8 (kind 8: an entry within 200 above the feet, cut not at the segment's start)
+// orig: part of 0x001911A8 (kind 8: an entry within 200 above the feet, cut not at the segment's start)
 bool FInteractCovered(ACTOR* pa)
 {
     const glm::vec3 a = PosAloCenter(pa->palo) + glm::vec3(pa->vecBase);
@@ -232,7 +245,7 @@ bool FInteractCovered(ACTOR* pa)
     return false;
 }
 
-// orig: 0x001911A8 (0x19148C..0x191688: keep crawling while the standing mesh has any contacts)
+// orig: part of 0x001911A8 (0x19148C..0x191688: keep crawling while the standing mesh has any contacts)
 bool FInteractRoomBlocked(ACTOR* pa)
 {
     ALO* palo = pa->palo;
@@ -907,7 +920,7 @@ void UpdateInteractTransitions(ACTOR* pa)
             const glm::vec3 d = a - b;
             if (std::sqrt((d.x * d.x + d.y * d.y) + d.z * d.z) < 25.0f)  // 0x2BF5B4
             {
-                WarnOnce("kind 9's grab 0x1CD098");
+                AttachReachObject(&i.reach, i.ploTarget);   // (orig3 0x1B27D8 action 9: 0x2091B0 on +0x940; AUDIT4 PLAYER-18)
                 toGround(0);
             }
             break;
@@ -1215,7 +1228,46 @@ void UpdateInteract(ACTOR* pa)
             i.g50 = std::max(i.g50, WeightRb(i.rb70, i.hfdk == 1 ? 1 : 0));  // (+0x90 / +0x70: the entries' weights)
     }
     else if (st == 0 && pa->n4C8 == 3)
-        WarnOnce("kind 3's arms (0x189C40 / 0x193C98)");
+        if (SLY* psly = dynamic_cast<SLY*>(pa)) PlantInteractFeet3(psly, i);   // (AUDIT4 PLAYER-16)
+}
+
+// orig3: 0x1B30E8 step 0 with action 3 (a curve: kind 3): the feet's probes (0x1AB308 = Sly 2's 0x189C40, radius 5, the
+// records +0x1AE0 / +0x1AE8 and +0x1ADC / +0x1AE4 = Sly 2's tags 0x13 / 0x18 and 0x12 / 0x19) and 0x1B55A0 for each: the
+// curve's point at the interaction's distance (+0x520, against it when +0x524) plus the foot's local x (the curve's range,
+// or around a closed one), in Sly's space, clipped to the foot's sphere from the foot's point (0x164B08): the foot's
+// controller (+0x1AF8 / +0x1AFC = aphandle[3] / [4]) offset to it; an invalid probe sets 0. (Before: "kind 3's arms" not
+// ported: the feet did not plant on the curve.)
+void PlantInteractFeet3(SLY* p, INTERACT& i)
+{
+    if (!p->slide.aphandle[3]) return;
+    auto rec = [p](int tag, int kind) -> XF* {
+        for (const auto& xf : p->palo->axf)
+            if (xf->tag == tag && xf->kind == kind) return xf.get();
+        return nullptr;
+    };
+    RebuildSlyFootProbe(p, rec(0x13, 1), 5.0f, rec(0x18, 6), &p->slide.afoot[0]);
+    RebuildSlyFootProbe(p, rec(0x12, 1), 5.0f, rec(0x19, 6), &p->slide.afoot[1]);
+    const CRV* pcrv = i.ploTarget ? PcrvFromLo(i.ploTarget) : nullptr;
+    XF* root = PxfObj(p->palo);
+    for (int k = 0; k < 2; ++k)
+    {
+        SLYFOOTPROBE& probe = p->slide.afoot[k];
+        CTRLSOURCE* handle = p->slide.aphandle[3 + k];
+        if (!handle) continue;
+        if (!probe.valid) { SetCtrlSourceOffset(handle, glm::vec4(0.0f)); continue; }
+        if (!pcrv || pcrv->as.empty() || !root) continue;
+        const float delta = i.f24 ? -probe.posExtrem.x : probe.posExtrem.x;
+        const float sFirst = pcrv->as.front(), sLast = pcrv->as.back();   // 0x22DFB0 / 0x22DFD8
+        float s = i.s20 + delta;
+        if (pcrv->fClosed && sLast > 0.0f) { s = std::fmod(s, sLast); if (s < 0.0f) s += sLast; }   // 0x11EDB8
+        else s = std::clamp(s, sFirst, sLast);
+        glm::vec3 pos(0.0f);
+        EvalCrvS(pcrv, s, &pos, nullptr);   // 0x22E330
+        pos = PosConvertXfs(nullptr, root, pos);   // 0x1C9428 (into Sly's space)
+        LSG hit;
+        if (ClipSegmentToSphere(probe.posSphere, probe.posExtrem, pos, 1, &hit, probe.sSphere) > 0)
+            SetCtrlSourceOffset(handle, glm::vec4(hit.pos1 - probe.posExtrem, 0.0f));
+    }
 }
 
 // orig: 0x00192A28

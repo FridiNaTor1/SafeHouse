@@ -8,6 +8,9 @@
 #include "cplcy.h"
 
 #include "activate.h"
+#include "aicarm3.h"
+#include "guard.h"
+#include "stepphys.h"
 #include "actor.h"
 #include "gang.h"
 #include "clock.h"
@@ -15,9 +18,14 @@
 #include "combo3.h"
 #include "crv.h"
 #include "game/sly3.h"
+#include "game/guru3.h"
 #include "lo.h"
 #include "sly.h"
 #include "so.h"
+
+bool FIsRcCar3(const LO*);          // vehicle.h (game/rccar3.cpp)
+bool FShip3(const LO* plo);         // game/ship3.h
+float GShipLength3(LO* plo);        // game/ship3.cpp (+0x220)
 
 #include <cmath>
 #include <map>
@@ -143,30 +151,70 @@ void GetSlyCpdefiRaw3(LO* plo, SLY& s, CPDEFIRAW3* pr)
 {
     // +0x1B0C: the last time Sly was active (Sly 3's states 0 / 0xE = Sly 2's 0 / 0x12; +0x50C the interaction, +0x1014
     // the climb's state (Sly 2's +0x4CC / +0xF54); as Sly 2's 0x18A428)
-    if (s.state != 0 && s.state != 0x12 && s.nSub4CC != 0 && s.nSubF54 != 1) s.tActive = g_clock.t;
+    if (s.jts != jts::Stand && s.jts != jts::ScriptSm && s.nSub4CC != 0 && s.nSubF54 != 1) s.tActive = g_clock.t;
     GetActorCpdefiRaw3(plo, s, pr);
     // Sly 3's state 4 (Sly 2's 3: the hook / bar of +0x19F4, Sly 2's +0x18C4): the record 175 below the object; 0x11
     // (100 below it) and 0x13 (the samples' distance 75 less) have no Sly 2 state
-    if (s.state == 3 && s.ploOther)
+    if (s.jts == jts::Hang && s.ploOther)
     {
         pr->pos.z = PosLoWorld(s.ploOther).z - 175.0f;
         pr->grf &= ~4u;
     }
     // Sly 3's 4, 6, 7 = Sly 2's 3, 5, 6: moving under their own control
-    if (s.state == 3 || s.state == 5 || s.state == 6) pr->grf |= 1;
+    if (s.jts == jts::Hang || s.jts == jts::Target || s.jts == jts::Dodge) pr->grf |= 1;
+}
+// orig3: 0x00257478 (the STEPGUARD's: after the PO's 0x250690 (+0x70 5)) and 0x00161D00 (Carmelita's, after it): the
+// record's position, z on the floor (+0x218 the contact, +0x248 its point) or the base (+0x268) + 125 (the base's 180
+// overwritten), 4 when off the floor; 1 in the guard states 0x15 / 0xD; the look-ahead 100; her player job 0xE9
+// (JOBCARM3): aiming (+0x40 1) 50 higher, knocked out (+0x30 0xE) no look-ahead
+void GetCarmCpdefiRaw3(LO* plo, GUARD& g, CPDEFIRAW3* pr)
+{
+    GetSoCpdefiRaw3(plo, pr);
+    pr->n70 = 5;
+    const ACTORPOSE pose = PoseFromLo(plo);
+    pr->pos = pose.pos;
+    const STEPPHYS* ps = PstepPhysOf(g.palo);
+    if (FGuardFloor(&g) && ps) pr->pos.z = ps->posFloor.z + 125.0f;
+    else
+    {
+        pr->pos.z += (ps ? ps->vecBase.z : 0.0f) + 125.0f;
+        pr->grf |= 4;
+    }
+    if (FGuardState(&g, IstateGuard2FromIstate3(0x15)) || FGuardState(&g, IstateGuard2FromIstate3(0xD))) pr->grf |= 1;
+    pr->sAhead = 100.0f;
+    if (const JOBCARM3* pj = static_cast<const JOBCARM3*>(PjobFind(&g, CID_JOBCARM3)))
+    {
+        if (pj->stAim == 1) pr->pos.z += 50.0f;
+        if (pj->st == 0xE) pr->sAhead = 0.0f;
+    }
 }
 }  // namespace
 
 void GetLoCpdefiRaw3(LO* plo, CPDEFIRAW3* pr)
 {
     ACTOR* pa = PactorFromLo(plo);
+    if (!pa && plo && FCidDerivedFrom(plo->Cid(), sly3::CID_CARMELITA))
+        if (GUARD* pg = PguardFromLo(plo)) return GetCarmCpdefiRaw3(plo, *pg, pr);   // (her vt slot 85, AUDIT4 AI-14)
     if (!pa)
     {
         GetSoCpdefiRaw3(plo, pr);   // (the PO's 0x250690 only sets +0x70 5, not read by the camera)
+        if (FIsRcCar3(plo))
+        {
+            // orig3 0x207F00 (the RC car's slot 85): the velocity kept from pointing behind the car (its record's x row
+            // +0x40): reversing, the camera does not lead backward (MODES-21)
+            const ACTORPOSE pose = PoseFromLo(plo);
+            const glm::vec3 n = pose.mat[0];
+            const float d = glm::dot(pr->v, n);
+            if (d < 0.0f) pr->v -= n * d;
+        }
+        else if (FShip3(plo))
+            pr->sAhead = GShipLength3(plo);   // orig3 0x214820 (the ships' slot 85): the look-ahead the ship's length (MODES-22)
         return;
     }
     if (SLY* ps = dynamic_cast<SLY*>(pa)) return GetSlyCpdefiRaw3(plo, *ps, pr);
+    if (sly3::FPkMovedNow3(plo)) s_mptMove[plo] = g_clock.t;   // (the Panda King's slot 85 0x1EA298, before the base)
     GetActorCpdefiRaw3(plo, *pa, pr);
+    sly3::GuruCpdefi3(plo, &pr->dTilt, &pr->dDist, false);   // (and after it: +0x30 0.22, +0x34 100)
     if (dynamic_cast<BENTLEY*>(pa))
     {
         // orig3: 0x0013EC70 (+0x70 4; his states 5..7 move under their own control: TODO(sly3) his Sly 3 states)

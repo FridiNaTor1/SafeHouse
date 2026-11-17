@@ -1,5 +1,5 @@
-# The iOS / iPadOS build (Sly2-Release/notes/IOS_2026-11-11.md): the SafeHouse launcher, the extractor and Sly 2 as
-# frameworks of one app, SafeHouse.app. Included from CMakeLists.txt right after project() when CMAKE_SYSTEM_NAME is
+# The iOS / iPadOS build (Sly2-Release/notes/IOS_2026-11-11.md): the SafeHouse launcher, the extractor, Sly 2 and
+# Sly 3 as frameworks of one app, SafeHouse.app. Included from CMakeLists.txt right after project() when CMAKE_SYSTEM_NAME is
 # iOS (cmake/ios-toolchain.cmake); the desktop targets below it are never configured for iOS. The app bundle and the
 # .ipa are assembled by scripts/ios/package.py from what this builds.
 #
@@ -8,6 +8,7 @@
 #   SafeHouseLauncher      the launcher (cane-launcher)
 #   CaneExtractor          the disc extractor (cane-extractor)
 #   Sly2Release            Sly 2 (Sly2-Release, on Metal: platform/metal); package.py copies it to Sly2Tools
+#   Sly3Release            Sly 3 (Sly3-Release, the same way; CANE_BUILD_SLY3); package.py copies it to Sly3Tools
 #
 # Like Android's JNI libraries, every program keeps its own image (iOS cannot start processes; ios_app.h).
 set(CANE_IOS ON)
@@ -137,7 +138,7 @@ foreach(game sly1 sly2 sly3 sly4 hackpack)
  cane_ios_embed_image(cane-launcher "${CMAKE_CURRENT_SOURCE_DIR}/launcher/assets/games/${game}-logo.png" cane_game_${game}
   "${CMAKE_BINARY_DIR}/generated/launcher_game_${game}.h")
 endforeach()
-foreach(game sly1 sly2 collection collection_adaptive)
+foreach(game sly1 sly2 sly3 collection collection_adaptive)
  if(game STREQUAL "collection_adaptive")
   set(image_file "collection-adaptive")
  else()
@@ -183,6 +184,15 @@ add_subdirectory(platform/metal)
 add_subdirectory(Sly2-Release)
 cane_ios_framework(Sly2-Release Sly2Release)
 target_include_directories(Sly2-Release PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/platform/apple")
+# ---- Sly3Release.framework (Sly3-Release/CMakeLists.txt's CANE_IOS branches), as Sly 2's
+option(CANE_BUILD_SLY3 "Build Sly 3 (Sly3-Release) into the iOS app" ON)
+set(cane_ios_games Sly2-Release)
+if(CANE_BUILD_SLY3)
+ add_subdirectory(Sly3-Release)
+ cane_ios_framework(Sly3-Release Sly3Release)
+ target_include_directories(Sly3-Release PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/platform/apple")
+ list(APPEND cane_ios_games Sly3-Release)
+endif()
 
 include(cmake/prompts.cmake OPTIONAL)
 include(cmake/launcher_ui.cmake OPTIONAL)
@@ -196,4 +206,4 @@ target_link_libraries(SafeHouse PRIVATE SafeHouseCore "-framework UIKit" "-frame
 # (a plain executable here: scripts/ios/package.py builds the .app around it)
 set_target_properties(SafeHouse PROPERTIES MACOSX_BUNDLE FALSE BUILD_RPATH "@executable_path/Frameworks")
 # (built before the app is assembled: the frameworks it loads at run time)
-add_dependencies(SafeHouse cane-launcher cane-extractor Sly2-Release)
+add_dependencies(SafeHouse cane-launcher cane-extractor ${cane_ios_games})

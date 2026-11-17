@@ -8,6 +8,13 @@
 struct ACTOR;
 struct PADCTL;
 
+// Sly 3's 0xEF (vt 0x35D730, base 0xEE NEW_JOB_EE vt 0x35D850): Init 0x1D9010 (0x1D8008), Enter 0x1D9040 (0x1D8070: the
+// ranges, state 0; the watch's next check reset 0x1573A0, its target 0x1572A0), Exit 0x1D8110 (the path let go), Update
+// 0x1D9080 (0x1D89B0: the step 0x1D8140, then the state by the near / far radius: 0 moving, 1 near the steered point
+// (natively st 2); no nav-way states), the drive 0x1D90B8 (state 0 only), arrived 0x1D8AC0 (no open-curve test), Follow
+// 0x1D8B40 (the path from its start: s 0). The step 0x1D8140 is Sly 2's 0x177F78 line for line for the actor's own path
+// (the same constants: look-ahead 100, {200, -0.5} in [0, 150], 500, springs 7.5 / 30, the push 200 / 10000, the turn
+// 350 / 6000 with {0.5, -1} in [0, 1], the keep 1; the turn's side never flipped on an own path): Steer177F78.
 struct JOBACTORFOLLOW : JOBFOLLOW
 {
     PADCTL* pcCopy = nullptr;      // +0xC0 the followed player's controller
@@ -20,6 +27,7 @@ struct JOBACTORFOLLOW : JOBFOLLOW
     void Update() override;
     void SetState(int n) override;
     void Drive(PADCTL* pc) override;
+    void Follow(const CRV* pcrv, int fReverse);  // orig3 0x1D8B40
 };
 
 // 0xC1: a scripted walk goal, followed by an A8 on the actor's own curve.

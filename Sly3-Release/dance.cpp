@@ -317,9 +317,12 @@ void UpdateDance(LO* plo)
 {
     if (PFNUPDATE pfn = PfnUpdateOrig(0x1A5E28)) pfn(plo);
     DANCE& d = Dance(plo);
-    if (!d.fCrowdInit)
+    // (Sly 2's crowd (0x1527C8's world pass 0x152810, the SM 0x625 / states 0x626..0x628 by the score) is not in Sly 3:
+    // its dance update 0x209FD0 / 0x20A930 has no crowd and no SM goal at all; audit4 AI-22)
+    constexpr bool fCrowd = false;
+    if (fCrowd && !d.fCrowdInit)
     {
-        d.fCrowdInit = true;  // (0x1527C8's world pass 0x152810)
+        d.fCrowdInit = true;
         InitDanceCrowd(plo, d);
     }
     const float t = TMusicTop();
@@ -363,7 +366,7 @@ void UpdateDance(LO* plo)
     default: break;
     }
     d.g288 = GSmooth(d.g288, d.g284, g_clock.dt, &d.smp, nullptr);  // 0x11D018
-    UpdateDanceCrowd(d);
+    if (fCrowd) UpdateDanceCrowd(d);
 }
 
 // orig: 0x001533B0 (from the dancer's update while playing: its buttons pressed this frame (0x1C4660, 0xF0); the

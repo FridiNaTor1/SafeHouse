@@ -1,4 +1,4 @@
-# The Android build (android/README.md): the launcher, the extractor and Sly 2 as JNI shared libraries for the
+# The Android build (android/README.md): the launcher, the extractor, Sly 2 and Sly 3 as JNI shared libraries for the
 # org.safehouse.android app. Included from CMakeLists.txt right after project() when the NDK toolchain is used; the
 # desktop targets below it are never configured for Android. Adapted from ThiefRush's cmake/android.cmake.
 # SDL2 replaces GLFW (platform/android/glfw_sdl.cpp keeps the GLFW API), OpenGL ES 3.2 replaces desktop GL
@@ -101,7 +101,7 @@ foreach(game sly1 sly2 sly3 sly4 hackpack)
   -DSYMBOL=cane_game_${game} -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed-image.cmake DEPENDS "${image_source}" cmake/embed-image.cmake VERBATIM)
  target_sources(cane-launcher PRIVATE "${image_header}")
 endforeach()
-foreach(game sly1 sly2 collection collection_adaptive)
+foreach(game sly1 sly2 sly3 collection collection_adaptive)
  if(game STREQUAL "collection_adaptive")
   set(image_file "collection-adaptive")
  else()
@@ -130,10 +130,19 @@ target_include_directories(cane-launcher PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Li
 
 # ---- Sly 2 (libSly2-Release.so; Sly2-Release/CMakeLists.txt's ANDROID branches)
 add_subdirectory(Sly2-Release)
+# ---- Sly 3 (libSly3-Release.so; Sly3-Release/CMakeLists.txt's ANDROID branches): the same app, its own library, run
+# in the game process / tool service like Sly 2's (GameActivity / RuntimeToolService load the one the launcher names).
+# OpenGL ES 3.2 as Sly 2's fallback; its Vulkan renderer on Android comes with the Sly 3 Vulkan work (SLY3_VULKAN).
+option(CANE_BUILD_SLY3 "Build Sly 3 (Sly3-Release) into the Android app" ON)
+set(cane_android_games Sly2-Release)
+if(CANE_BUILD_SLY3)
+ add_subdirectory(Sly3-Release)
+ list(APPEND cane_android_games Sly3-Release)
+endif()
 
 include(cmake/prompts.cmake OPTIONAL)
 include(cmake/launcher_ui.cmake OPTIONAL)
-foreach(target cane-launcher cane-extractor Sly2-Release)
+foreach(target cane-launcher cane-extractor ${cane_android_games})
  target_link_options(${target} PRIVATE "-Wl,-z,max-page-size=16384" "-Wl,--no-undefined"
   "-Wl,--wrap=exit" "-Wl,--wrap=_exit" "-Wl,--wrap=_Exit")   # (native_entry.cpp: the exit code reaches the launcher)
 endforeach()

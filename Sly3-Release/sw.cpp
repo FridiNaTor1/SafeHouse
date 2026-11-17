@@ -4,6 +4,7 @@
 // The world loader (orig3 0x14F440; Sly 2 0x13DA18) and the global blocks of a world file.
 
 #include "sw.h"
+#include "copsmap3.h"
 #include "gauge3.h"
 #include "duel3.h"
 #include "game/task3.h"
@@ -334,7 +335,8 @@ void LoadPrefixFromBrx3(std::vector<SW::PREFIX3>& a, CBinaryInputStream* pbis)
 // 384 x 448 with flag 2 = the red/blue 3-D (anaglyph) mode: GAME +0x14EC bit 1, read by the colour / draw / camera
 // stereo code; 2 the two-player games' 512 x 448 frame mode, flag 1). The 3-D worlds (mode 1 for their jobs' tasks):
 // v_gauntlet 6, o_cave_a 11, the Ep3 blimp / dogfight world 21, the Ep4 world 26, the dive 33, the Ep6 gauntlet 38.
-// The PC never chooses mode 1 (s3-3d: the 3-D question is not asked, gauge3.h): the normal view, as answering No.
+// (s3fix-ai3, AUDIT4 RENDER-10) mode 1 is the 3-D mode: LoadSwFromBrx sets GAME +0xC bit 1 (g_grfGame3) for it, the
+// renderer draws the two eyes (render.cpp), the colours are desaturated (shd.cpp AdjustRgba).
 int NScreenModeFromPrefix3(const SW* psw, int32_t keyJob, int32_t keyTask)
 {
     int mode = -1;
@@ -354,8 +356,8 @@ int NScreenModeFromPrefix3(const SW* psw, int32_t keyJob, int32_t keyTask)
         if (g_n3dChoice3 == 0) mode = 0;
         else if (g_n3dChoice3 == 1) mode = 1;
     }
-    if (mode == 1) std::printf("3d: world %d would be in 3-D (anaglyph): the normal view instead\n", psw->filter);
-    return mode == 2 ? 2 : 0;   // (mode 1, the anaglyph mode, is never taken)
+    if (mode == 1) std::printf("3d: world %d in 3-D (anaglyph)\n", psw->filter);
+    return mode == 1 || mode == 2 ? mode : 0;
 }
 
 // orig3 0x1500F0 (new in Sly 3): the option sets. U8 x {U32 key, U32 value}; U8 x {U16 array (0x119968), U32 key,
@@ -503,7 +505,25 @@ void LoadSwFromBrx(SW* psw, CBinaryInputStream* pbis)
         LOADFN(sly3::FN_LOAD_PREFIX);
         LoadPrefixFromBrx3(psw->aprefixA, pbis);
         LoadPrefixFromBrx3(psw->aprefixB, pbis);
-        psw->nScreenMode3 = NScreenModeFromPrefix3(psw, g_gametasks3.oidJob, g_gametasks3.oidChk);
+        psw->nScreenMode3 = NScreenModeFromPrefix3(psw, g_gametasks3.oidJob != -1 ? g_gametasks3.oidJob : g_gametasks3.oidJobKept,
+                                                   g_gametasks3.oidChk);
+        g_gametasks3.oidJobKept = -1;
+        // (0x196228: GAME +0xC = the frame table entry's flags (0x345060 + kind): 2 for mode 1, the 3-D mode, read by the
+        // CLUT / colour loaders below (0x234500's texture pass, 0x236908), the camera's eyes and the draw; 1 for mode 2,
+        // the two-player games' frame mode: the texture pass 0 (shd.cpp ItexPass3: (flags & 3) == 0 -> pass 1), the
+        // other set of textures and CLUTs the world files carry. The PC's Cops and Robbers on another hub (copsmap3.h:
+        // the round's world, whose mode 2 is set after the load) reads it as the original's two-player path would.
+        // SLY3_2PTEXPASS1=1: the two-player games keep pass 1 (as before)
+        {
+            static uint32_t s_grfLast = 0;
+            static const bool s_fPass1 = std::getenv("SLY3_2PTEXPASS1") != nullptr;
+            const bool f2p = !s_fPass1 && (psw->nScreenMode3 == 2 || cops3::FRoundLoading(psw->filter));
+            g_grfGame3 = (g_grfGame3 & ~3u) | (psw->nScreenMode3 == 1 ? 2u : 0u) | (f2p ? 1u : 0u);
+            if (f2p) std::printf("2p: world %d reads the two-player texture set (pass 0)\n", psw->filter);
+            void ResetTextureCache();   // render.cpp
+            if ((g_grfGame3 ^ s_grfLast) & 3) ResetTextureCache();   // (a kept world's GPU textures: the other mode's colours)
+            s_grfLast = g_grfGame3;
+        }
         if (std::getenv("SLY3_PREFIXPRINT"))
         {
             for (int t = 0; t < 2; ++t)

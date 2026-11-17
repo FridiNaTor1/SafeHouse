@@ -916,8 +916,10 @@ void UpdateCameras(SW* psw)
                 if (cm.acpr[size_t(k)].pcplcy == &g_cmpolicies.cpfollow) return true;
             return false;
         };
+        bool fActivate = false;
         if (!pv->fInit || pv->ploFocus != plo || (!fFollow(pv->cm) && fFollow(g_cm)))
         {
+            fActivate = true;
             // the world camera's runtime, its focus this player's character: the follow policies (the zones') kept and
             // retargeted, player 1's scripted / recon / free / attached views dropped
             pv->cm = g_cm;
@@ -941,6 +943,10 @@ void UpdateCameras(SW* psw)
         }
         std::swap(g_cm, pv->cm);
         std::swap(g_cmpolicies, pv->pol);
+        // (the copy's top policy activated for its focus: when the world camera's top was a scripted / attached view, the
+        // follow policy under it had not been activated in this world (its zone entry +pcme still the last world's or
+        // null): the hubs 3 / 4 Cops and Robbers rounds' first frame crashed in PosCmeFocus3)
+        if (fActivate && g_cm.ccpr > 0 && g_cm.acpr[0].pcplcy) g_cm.acpr[0].pcplcy->Activate(g_cm.acpr[0].psoFocus, g_cm.acpr[0].pv);
         SyncPlaneCameraView3(plo, &g_cm);   // (s3-plane, game/biplane3.h: a plane player's own camera; nothing for others)
         auto pfnPlo = g_cmworld.pfnPloPlayer;
         auto pfnJoy = g_cmworld.pfnPjoy;

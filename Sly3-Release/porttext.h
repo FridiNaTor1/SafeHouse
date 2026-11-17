@@ -84,6 +84,12 @@ enum PTX : int
     PTX_DuelShotDown, PTX_DuelLeads, PTX_DuelWins, PTX_DuelCrashed,
     // (settings v22, display.h monitor) the display options' Monitor row and its default
     PTX_Monitor, PTX_Primary,
+    // (display.h fFastShadows, outlineThickness; upscaling, fsr.h) the display options' Fast Shadows, Outline Thickness and
+    // Upscaling rows (Sly 2's): the option, its method, preset and sharpness rows, AMD's preset names
+    PTX_FastShadows, PTX_OutlineThickness, PTX_Upscaling, PTX_UpscaleMethod, PTX_UpscalePreset, PTX_UpscaleSharpness,
+    PTX_UltraQuality, PTX_Quality, PTX_Balanced, PTX_Performance,
+    // (display.h hudPlacement) the display options' HUD Placement (4:3 / 16:9 / 16:10 / Match Screen)
+    PTX_HudPlacement, PTX_MatchScreen,
     PTX_Max
 };
 

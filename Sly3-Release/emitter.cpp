@@ -59,6 +59,7 @@ PARTICLESTATS g_particlestats;
 constinit const SHD* (*g_pfnPcShdOfLo)(const LO* plo, int32_t id) = nullptr;
 constinit LO* (*g_pfnPcFindOid)(const LO* ploNear, int32_t oid) = nullptr;
 
+extern int g_iframeMain;   // game.cpp (debug prints)
 namespace
 {
 constexpr float PI = 3.14159265f;
@@ -212,6 +213,7 @@ struct PSYS
     // amatPe (0x201390's instances: a kind-2 effect's clones), none: untransformed; fPeHidden: not drawn)
     bool fPe = false, fPeHidden = false;
     float sPeCull = 0.0f;              // (Sly 3 PE: the effect's radius, the draw's camera test; 0: none)
+    bool fPeDepthPrepass = false;      // (Sly 3 PE option 588, the shape's +0x18: 0x201390's passes 0xC then 0xD)
     std::vector<glm::mat4> amatPe;
     bool fPeRandTex = false, fPeSpinFixed = false, fPeRoll = false;
     float peSpinLo = 0, peSpinHi = 0;
@@ -736,7 +738,8 @@ glm::vec3 ChooseEmitVelocity(const EMITVX& vx, float uRandom, float rSvz, float 
     return a0 * v.x + a1 * v.y + normal * v.z;
 }
 
-// orig: 0x0015A808 ChooseEmitPosition (kinds 0 a point, 1 a box, 2 a surface (TODO), 3 a mesh)
+// orig: 0x0015A808 ChooseEmitPosition (kinds 0 a point, 1 a box, 2 points along a curve by length, 3 a mesh; orig3
+// 0x1785E8 the same, with the vertex normals for kind 3's direction 5)
 void ChooseEmitPosition(EMITTERN* pe, int i, int c, glm::vec3& pos, glm::vec3& normal)
 {
     const IMG& b = pe->b;
@@ -795,7 +798,12 @@ void ChooseEmitPosition(EMITTERN* pe, int i, int c, glm::vec3& pos, glm::vec3& n
         pos = P(0) * u + P(1) * v + P(2) * w;
         if (kVel == 5)
         {
-            const glm::vec3 n = glm::cross(P(1) - P(0), P(2) - P(0));   // (the vertex normals: the face's)
+            // (orig3 0x1785E8: the corners' vertex normals by the same weights)
+            auto N = [&](int j) {
+                const int ip = tri.aipos[j];
+                return ip >= 0 && size_t(ip) < pe->pmesh->anormal.size() ? pe->pmesh->anormal[size_t(ip)] : glm::vec3(0.0f);
+            };
+            const glm::vec3 n = pe->pmesh->anormal.empty() ? glm::cross(P(1) - P(0), P(2) - P(0)) : N(0) * u + N(1) * v + N(2) * w;
             normal = n;
             fVelocity = false;
             fNormalize = true;
@@ -1243,10 +1251,34 @@ bool FRipHit(RIPG* pg, RIPN& r, const SOE* psoe, const glm::vec3& pos, const glm
     if (FRipDebug())
         std::fprintf(stderr, "RIPHIT hit kind %d t %.3f at %.0f %.0f %.0f owner %d cid 0x%x sensor %d model %d second %d\n", r.kind, g_clock.t, pos.x, pos.y, pos.z,
                      powner ? powner->oid : -1, powner ? unsigned(powner->Cid()) : 0u, int(psoe->f48), r.pmodel ? r.pmodel->oid : -1, r.plo2 ? r.plo2->oid : -1);
+    // Sly 3's hit responses (RIP vt slot 7 of the kind vtables 0x361E30..0x3621A0; the default 0x20BEC8 only returns 1:
+    // the RIP goes on unchanged, no bounce)
+    const bool fWaterOwner = powner && FCidDerivedFrom(powner->Cid(), S3CID(0x59));
     switch (r.kind)
     {
+    case 1:
+        // orig3 0x20E320 (Sly 3 kind 0, the drip): into water a plain RIP (kind 6, native 7) of its +0xF4 model at the
+        // hit point: size 40 growing by 30, 0.75 s; removed whatever it hit
+        if (fWaterOwner && r.plo2)
+        {
+            RIPN d;
+            d.kind = 7;
+            d.tBirth = g_clock.t;
+            d.pos = d.posPrev = pos;
+            d.life = 0.75f;
+            d.size[0] = 40.0f;
+            d.size[1] = 30.0f;
+            d.pmodel = r.plo2;
+            if (FRipDebug()) std::fprintf(stderr, "RIPHIT drip ripple (hit) t %.3f at %.0f %.0f %.0f model %d\n", g_clock.t, pos.x, pos.y, pos.z, r.plo2->oid);
+            s_aripPending.push_back(std::move(d));
+        }
+        r.fRemoved = true;
+        return true;
+    case 4: case 6: case 7: case 9:
+        return true;   // orig3 0x20BEC8
     case 3:
         // 0x1CF968: not into actors (D_002C1F70 {0x32}); a decal of its +0xF0 unless water; removed
+        // (orig3 0x20CB98, Sly 3 kind 2: the same, 0x20C8E8 the decal)
         if (powner && FCidDerivedFrom(powner->Cid(), S3CID(0x32))) return false;
         if (!powner || !FCidDerivedFrom(powner->Cid(), S3CID(0x59))) PripDecal(r, pg, r.plo2, psoe->pxf, pos, normal);
         r.fRemoved = true;
@@ -1254,7 +1286,7 @@ bool FRipHit(RIPG* pg, RIPN& r, const SOE* psoe, const glm::vec3& pos, const glm
     case 5:
     {
         // 0x1D0BF8: not into class 0x33; a decal of its own model, its orientation into the owner's frame (0x1A7050);
-        // removed
+        // removed (orig3 0x20E210, Sly 3 kind 4: the same through 0x20C8E8 / 0x1C9598)
         if (powner && FCidDerivedFrom(powner->Cid(), S3CID(0x33))) return false;
         if (RIPN* pd = PripDecal(r, pg, r.pmodel, psoe->pxf, pos, normal); pd && powner)
             pd->ori = InverseMatrix3(glm::mat3(MatWorldOfAlo(powner))) * pd->ori;
@@ -1263,15 +1295,12 @@ bool FRipHit(RIPG* pg, RIPN& r, const SOE* psoe, const glm::vec3& pos, const glm
     }
     case 8:
     {
-        // 0x1CFBE0: through actors (the entry's attachment's root of class 0x32); removed in water; else the bounce
+        // 0x1CFBE0: through actors (the entry's attachment's root of class 0x32); else the bounce. (orig3 0x20CD88, Sly 3
+        // kind 7: in water not removed as Sly 2's but pulled halfway to the water's velocity and faded: FBounceRip's
+        // water branch)
         const OXA* poxa = powner ? Poxa(powner) : nullptr;
         const ALO* proot = poxa ? poxa->pso : powner;
         if (proot && FCidDerivedFrom(proot->Cid(), S3CID(0x32))) return false;
-        if (proot && FCidDerivedFrom(proot->Cid(), S3CID(0x59)))
-        {
-            r.fRemoved = true;
-            return true;
-        }
         return FBounceRip(r, psoe, pos, normal);
     }
     default: return FBounceRip(r, psoe, pos, normal);
@@ -1950,7 +1979,9 @@ void UpdateEmitter(EMITTERN* pe)
     }
     else if (k == 0)
     {
-        float f = pe->e.F(0x144) + pe->e.F(0x130) * pe->e.F(0x13C) * g_clock.dt;
+        // (orig3 0x177E78: Sly 3's kind 1 (native 0) is the carry + rate x dt alone; Sly 2's volume factor +0x13C (a box
+        // emitter's density, set when +0x100 is on) has no Sly 3 counterpart)
+        float f = pe->e.F(0x144) + pe->e.F(0x130) * g_clock.dt;
         c = int(f);
         pe->e.Wr<float>(0x144, f - float(c));
         if (c != 0) c = take(c);  // (the rate refresh below runs either way: audit E1)
@@ -2253,7 +2284,10 @@ float Curve(const float c[3], float age) { return c[0] + c[1] * age + c[2] * (ag
 float Unit(float x) { return std::clamp(x, 0.0f, 1.0f); }
 
 // The VU1 programs (native_blip_geometry.cpp's reconstruction): per particle a quad in clip space.
-void ExpandParticles(const PSYS* pp, const glm::mat4& matModel, const glm::mat4& matWorldToClip, std::vector<PVTX>& av)
+// uAlpha: the instance's alpha-curve scale (orig3 0x201390's packet word as[3] = w * 4096, the camera's MRD fade);
+// fAlphaOne: the alpha curve replaced by 1 (0x201C18's pass 0xC: D_00341FE0)
+void ExpandParticles(const PSYS* pp, const glm::mat4& matModel, const glm::mat4& matWorldToClip, std::vector<PVTX>& av,
+                     float uAlpha = 1.0f, bool fAlphaOne = false)
 {
     const float t = g_clock.t;
     const glm::vec4 forward(matWorldToClip[0][3], matWorldToClip[1][3], matWorldToClip[2][3], 0.0f);
@@ -2277,7 +2311,7 @@ void ExpandParticles(const PSYS* pp, const glm::mat4& matModel, const glm::mat4&
                 std::printf("psys shd 0x%X age %.2f scale %.1f alpha %.2f color n %zu rgba0 %d %d %d %d tex %zu add %d kdraw %d at %.0f %.0f %.0f\n",
                             pp->pshd ? pp->pshd->id : 0, age, scale, Unit(Curve(pp->clqAlpha, age)), pp->argba.size(), pp->argba[0][0],
                             pp->argba[0][1], pp->argba[0][2], pp->argba[0][3], pp->aitex.size(), int(pp->fAdditive), pp->kDraw, pc.x, pc.y, pc.z);
-            const float alpha = Unit(Curve(pp->clqAlpha, age)), color = Unit(Curve(pp->clqColor, age));
+            const float alpha = (fAlphaOne ? 1.0f : Unit(Curve(pp->clqAlpha, age))) * uAlpha, color = Unit(Curve(pp->clqColor, age));
             const float texture = Curve(pp->clqTex, age);
             const int ntab = std::max<int>(1, int(pp->aitex.size()));
             const uint32_t itab = (uTex + uint32_t(int32_t(texture))) & uint32_t(ntab - 1);
@@ -2415,8 +2449,12 @@ void SetPepsys(PEPSYS* ph, const PEPSYSDESC& d)
     const float life = d.life != 0.0f ? d.life : 1.0f;
     std::fill(std::begin(pp->clqTex), std::end(pp->clqTex), 0.0f);
     if (n >= 2) pp->clqTex[1] = float(n) / (d.dTex == 0.0f ? life : d.dTex);
-    static const float s_clqOne[3] = {1.0f, 0.0f, 0.0f};   // 0x341FE0: shared +0x18's subs (0xC / 0xD) draw at alpha 1
-    PrescaleClq(d.fAlphaOne ? s_clqOne : d.clqAlpha, pp->clqAlpha, d.fAlphaOne ? 1.0f : 1.0f / life, 0.0f);
+    // (orig3 0x201390 / 0x201C18: a shape with +0x18 (option 588) is drawn twice: pass 0xC with the alpha curve 1
+    // (0x341FE0) and the GS template 0x36B260 (TEST alpha >= 126 else KEEP, ZTST GREATER, the colour unchanged: a depth
+    // prepass), then pass 0xD with its own alpha curve (alpha >= 128 else FB_ONLY, ZTST GEQUAL). The curve was replaced
+    // by 1 for the only draw: these effects never faded in or out)
+    PrescaleClq(d.clqAlpha, pp->clqAlpha, 1.0f / life, 0.0f);
+    pp->fPeDepthPrepass = d.fAlphaOne;
     PrescaleClq(d.clqScale, pp->clqScale, 1.0f / life, 0.0f);
     {
         auto at = [&](float t) { return pp->clqScale[0] + t * (pp->clqScale[1] + t * pp->clqScale[2]); };
@@ -3011,7 +3049,7 @@ void DrawParticles(const glm::mat4& matWorldToClip, const glm::vec3& posCamera, 
     };
     // (draw packets, platform/draw_packet.h: per blend and Z write a state made once per program, the state the GL calls
     // leave afterwards one more; the texture, the storage buffer and the per-draw values through the entries)
-    struct PKLOCS { GLuint prog = 0; GLint tex = -1, fTextured = -1, afail = -1; uint32_t aid[5] = {}; };
+    struct PKLOCS { GLuint prog = 0; GLint tex = -1, fTextured = -1, afail = -1; uint32_t aid[10] = {}; };
     static PKLOCS s_pkl;
     const cane::draw::Packets* pk = cane::gl::ActiveBackend() ? cane::gl::ActiveBackend()->packets : nullptr;
     if (!(fStencilOff && pk && pk->drawArrays && pk->applyState && pk->bindTexture && pk->bindStorage)) pk = nullptr;
@@ -3021,22 +3059,24 @@ void DrawParticles(const glm::mat4& matWorldToClip, const glm::vec3& posCamera, 
         s_pkl = {};
         s_pkl.prog = s_shParticle.ID;
         s_pkl.tex = s_shParticle.Loc("tex"), s_pkl.fTextured = s_shParticle.Loc("fTextured"), s_pkl.afail = s_shParticle.Loc("afailMode");
-        for (int k = 0; k < 5; ++k)
+        for (int k = 0; k < 10; ++k)
         {
-            // k 0..3: additive (bit 0), Z write (bit 1); 4: afterwards (blend on, its factors left, all written)
+            // k 0..3: additive (bit 0), Z write (bit 1); 4: afterwards (blend on, its factors left, all written);
+            // 5: option 588's depth prepass (no colour, Z written, ZTST GREATER); 6..9: 0..3 with ZTST GEQUAL (pass 0xD)
+            const int kb = k >= 6 ? k - 6 : k;
             State ps;
             ps.program = s_shParticle.ID;
             ps.keep = kKeepStencil | (k == 4 ? kKeepBlendFactors : 0);
-            ps.blend = 1;
+            ps.blend = k == 5 ? 0 : 1;
             ps.srcColor = ps.srcAlpha = kFactorSrcAlpha;
-            ps.dstColor = ps.dstAlpha = (k & 1) ? kFactorOne : kFactorOneMinusSrcAlpha;
-            ps.colorMask = k == 4 ? 0xF : 0x7;
-            ps.depthTest = 1, ps.depthWrite = k == 4 || (k & 2) ? 1 : 0, ps.depthCompare = kGreater;
+            ps.dstColor = ps.dstAlpha = (kb & 1) ? kFactorOne : kFactorOneMinusSrcAlpha;
+            ps.colorMask = k == 4 ? 0xF : k == 5 ? 0x0 : 0x7;
+            ps.depthTest = 1, ps.depthWrite = k == 4 || k == 5 || (kb & 2) ? 1 : 0, ps.depthCompare = k >= 6 ? kGreaterEqual : kGreater;
             if (s_pkl.tex >= 0) ps.aconst[ps.cconst++] = {s_pkl.tex, 0};
             s_pkl.aid[k] = pk->createState(ps);
         }
     }
-    if (pk && !(s_pkl.aid[0] && s_pkl.aid[1] && s_pkl.aid[2] && s_pkl.aid[3] && s_pkl.aid[4])) pk = nullptr;
+    if (pk && !std::all_of(std::begin(s_pkl.aid), std::end(s_pkl.aid), [](uint32_t id) { return id != 0; })) pk = nullptr;
     bool fSamplerBound = false;
     const GLint locAfail = pk ? s_pkl.afail : s_shParticle.Loc("afailMode");
     const cane::draw::Packets* const pkb = pk ? PpacketsBuf() : nullptr;   // (native buffers: the uploads by name, no binding)
@@ -3074,6 +3114,20 @@ void DrawParticles(const glm::mat4& matWorldToClip, const glm::vec3& posCamera, 
         std::vector<glm::mat4> amat;
 #endif
         const EMITTERN* par = pp->pemitterPar;
+        // (debug: SLY3_PSYSPRINTSHD=id: who draws the particles of that shader, once a second)
+        if (static const int s_idPrint = std::getenv("SLY3_PSYSPRINTSHD") ? std::atoi(std::getenv("SLY3_PSYSPRINTSHD")) : -1;
+            s_idPrint >= 0 && pp->pshd && int(pp->pshd->id) == s_idPrint && g_iframeMain % 60 == 0)
+        {
+            std::printf("psysprint f %d shd %d pe %d prepass %d additive %d n %d par %d kdraw %d rgba", g_iframeMain, s_idPrint, int(pp->fPe), int(pp->fPeDepthPrepass),
+                        int(pp->fAdditive), pp->cparticle, par && par->plo ? par->plo->oid : -1, pp->kDraw);
+            for (const auto& c : pp->argba) std::printf(" %02X%02X%02X%02X", c[0], c[1], c[2], c[3]);
+            std::printf(" alpha %.2f %.2f %.2f:", pp->clqAlpha[0], pp->clqAlpha[1], pp->clqAlpha[2]);
+            if (par)
+                for (const EMITTERN* pm : par->amember)
+                    if (pm->plo) { const glm::vec3 q = PosLoWorld(pm->plo); std::printf(" [%d %.0f %.0f %.0f]", pm->plo->oid, q.x, q.y, q.z); }
+            std::printf("\n");
+        }
+        std::vector<float> aw;   // (the PE instances' MRD fade weights, parallel to amat)
         // (QoL draw distance below 1x: the particles of an emitter beyond its scaled range are not drawn; it still runs
         // as the original's, UpdateEmitter)
         auto fHiddenDd = [&](const EMITTERN* p) {
@@ -3086,14 +3140,26 @@ void DrawParticles(const glm::mat4& matWorldToClip, const glm::vec3& posCamera, 
         if (pp->fPe)
         {
             if (pp->fPeHidden) continue;
+            // (debug: SLY3_PESKIPSHD=id: the effects drawn with that shader left out)
+            if (static const int s_idSkip = std::getenv("SLY3_PESKIPSHD") ? std::atoi(std::getenv("SLY3_PESKIPSHD")) : -1;
+                s_idSkip >= 0 && pp->pshd && int(pp->pshd->id) == s_idSkip)
+                continue;
             // orig3 0x14A6D0: an instance whose effect has no camera within its radius (0x18E500) is not drawn (s3-hack
             // round 6: the windmill ground's sparkles 106632 (radius 3000) seen 26600 below the hack boards as orange
             // dots; the reference draws none). The QoL draw distance (pe.cpp's camera test) scales it as the MRD adjust
-            auto fNear = [&](const glm::vec3& c) { return pp->sPeCull <= 0.0f || FPeNearCamera3(c, std::min(pp->sPeCull, 1e6f)); };
-            if (pp->amatPe.empty()) { if (fVisible(pp->posCenter, pp->sRadius) && fNear(pp->posCenter)) amat.push_back(glm::mat4(1.0f)); }
+            // (orig3 0x18E500 -> 0x168098 also gives the instance a weight, 1 out to 400 units short of the radius, then
+            // falling linearly to 0 at it: 0x201390 scales the particles' alpha curve by it (as[3] = w * 4096), so an
+            // effect fades out at its draw distance instead of popping)
+            auto wNear = [&](const glm::vec3& c) { return pp->sPeCull <= 0.0f ? 1.0f : WPeNearCamera3(c, std::min(pp->sPeCull, 1e6f)); };
+            if (pp->amatPe.empty())
+            {
+                if (fVisible(pp->posCenter, pp->sRadius))
+                    if (const float w = wNear(pp->posCenter); w > 0.0f) { amat.push_back(glm::mat4(1.0f)); aw.push_back(w); }
+            }
             else
                 for (const glm::mat4& m : pp->amatPe)
-                    if (const glm::vec3 c(m * glm::vec4(pp->posCenter, 1.0f)); fVisible(c, pp->sRadius) && fNear(c)) amat.push_back(m);
+                    if (const glm::vec3 c(m * glm::vec4(pp->posCenter, 1.0f)); fVisible(c, pp->sRadius))
+                        if (const float w = wNear(c); w > 0.0f) { amat.push_back(m); aw.push_back(w); }
         }
         else if (par && !par->amember.empty())
         {
@@ -3122,8 +3188,19 @@ void DrawParticles(const glm::mat4& matWorldToClip, const glm::vec3& posCamera, 
         else if (fVisible(pp->posCenter, pp->sRadius) && !fHiddenDd(par)) amat.push_back(glm::mat4(1.0f));
         if (amat.empty()) continue;
         av.clear();
-        for (const glm::mat4& m : amat) ExpandParticles(pp.get(), m, matWorldToClip, av);
+        for (size_t im = 0; im < amat.size(); ++im) ExpandParticles(pp.get(), amat[im], matWorldToClip, av, im < aw.size() ? aw[im] : 1.0f);
         if (av.empty()) continue;
+        // (option 588: pass 0xC's vertices, the alpha curve 1; drawn first into the depth only)
+        static const bool s_fNoPrepass = std::getenv("SLY3_NO588PREPASS") != nullptr;   // (debug: as before)
+        const bool fPrepass = pp->fPeDepthPrepass && !s_fNoPrepass;
+        size_t cPrepass = 0;
+        if (fPrepass)
+        {
+            const size_t c0 = av.size();
+            for (size_t im = 0; im < amat.size(); ++im) ExpandParticles(pp.get(), amat[im], matWorldToClip, av, im < aw.size() ? aw[im] : 1.0f, true);
+            cPrepass = av.size() - c0;
+        }
+        const size_t cMain = av.size() - cPrepass;
         const auto [tex, ctex] = TexArrayOf(pp->pshd);
         if (pk)
         {
@@ -3143,23 +3220,37 @@ void DrawParticles(const glm::mat4& matWorldToClip, const glm::vec3& posCamera, 
         if (pk)
         {
             const int a = pp->fAdditive ? 1 : 0;
+            const int g = fPrepass ? 6 : 0;   // (pass 0xD after the prepass: ZTST GEQUAL)
             cane::draw::Constant ac[2];
             uint32_t cc = 0;
             if (s_pkl.fTextured >= 0) ac[cc++] = {s_pkl.fTextured, tex ? 1u : 0u};
             const uint32_t iafail = cc;
-            if (locAfail >= 0) ac[cc++] = {locAfail, 1u};
-            pk->drawArrays(s_pkl.aid[a | 2], s_vao, 0, uint32_t(av.size()), ac, cc);
+            if (locAfail >= 0) ac[cc++] = {locAfail, 3u};
+            if (fPrepass) pk->drawArrays(s_pkl.aid[5], s_vao, uint32_t(cMain), uint32_t(cPrepass), ac, cc);
+            if (locAfail >= 0) ac[iafail].bits = 1;
+            pk->drawArrays(s_pkl.aid[g + (a | 2)], s_vao, 0, uint32_t(cMain), ac, cc);
             if (locAfail >= 0) ac[iafail].bits = 2;
-            pk->drawArrays(s_pkl.aid[a], s_vao, 0, uint32_t(av.size()), ac, cc);
+            pk->drawArrays(s_pkl.aid[g + a], s_vao, 0, uint32_t(cMain), ac, cc);
             continue;
+        }
+        if (fPrepass)
+        {
+            // pass 0xC: alpha >= 126 writes Z only (ZTST GREATER), the colour unchanged
+            glUniform1i(locAfail, 3);
+            glDepthMask(GL_TRUE);
+            glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+            glDrawArrays(GL_TRIANGLES, GLint(cMain), GLsizei(cPrepass));
+            glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_FALSE);
+            glDepthFunc(GL_GEQUAL);
         }
         // ATE GEQUAL 0x80 with AFAIL FB_ONLY: the opaque part writes Z, the rest only colour
         glUniform1i(locAfail, 1);
         glDepthMask(GL_TRUE);
-        glDrawArrays(GL_TRIANGLES, 0, GLsizei(av.size()));
+        glDrawArrays(GL_TRIANGLES, 0, GLsizei(cMain));
         glUniform1i(locAfail, 2);
         glDepthMask(GL_FALSE);
-        glDrawArrays(GL_TRIANGLES, 0, GLsizei(av.size()));
+        glDrawArrays(GL_TRIANGLES, 0, GLsizei(cMain));
+        if (fPrepass) glDepthFunc(GL_GREATER);
     }
     if (pk)
     {

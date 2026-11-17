@@ -129,6 +129,12 @@ public:
     void Letterbox(float u, float hBar = 56.0f, glm::vec4 rgba = glm::vec4(0, 0, 0, 128));
     // A horizontal wipe: the screen covered from the left up to u (0..1), soft edge of dxEdge pixels.
     void Wipe(float u, glm::vec4 rgba, float dxEdge = 32.0f);
+    // (HUD Placement, display.h hudPlacement) what has been queued so far; the box of / a horizontal move of everything
+    // queued after a mark (DrawScreenObjs: one screen object's polygons, text and icons)
+    struct MARK { size_t ctri = 0, cline = 0, cquad = 0; };
+    MARK Mark() const { return {m_atri.size(), m_aline.size(), m_aquad.size()}; }
+    bool FBoundsSince(const MARK& mark, glm::vec2& lo, glm::vec2& hi) const;
+    void ShiftSince(const MARK& mark, float dx);
     // Draws the frame's 2D into the scene target (over what is there).
     void Flush(int width, int height);
 

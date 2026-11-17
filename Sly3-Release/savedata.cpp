@@ -1,4 +1,5 @@
 #include "savedata.h"
+#include "region.h"
 #include "worldglobals.h"
 
 #include "sw.h"
@@ -15,6 +16,8 @@
 #include <unordered_map>
 
 GAMESAVE g_gamesave;
+// (debug: a slot's offset in the block; the original's block is D_00468D30, so +0x468D30 is its address there)
+unsigned UOffsetInGameSave(const void* pv) { return pv ? unsigned(static_cast<const uint8_t*>(pv) - g_gamesave.ab) : 0u; }
 
 namespace
 {
@@ -138,6 +141,49 @@ void ValidateGameSave()
     std::memcpy(g_gamesave.ab + CB_PROGRESS + 4, &sum, 4);
 }
 
+// orig3: 0x21C198 (the block's identity: the layout's record count and checksum at +0x6800 / +0x6804)
+bool FGameSaveIdentityValid(const GAMESAVE& gs)
+{
+    const std::vector<uint8_t>& ab = s_layout.abRecords;
+    if (ab.size() < 10) return false;
+    int32_t sum = 0;
+    for (uint8_t b : ab) sum += b;
+    uint16_t n16;
+    std::memcpy(&n16, ab.data() + ab.size() - 6, 2);
+    int32_t nSave, sumSave;
+    std::memcpy(&nSave, gs.ab + CB_PROGRESS, 4);
+    std::memcpy(&sumSave, gs.ab + CB_PROGRESS + 4, 4);
+    return int32_t(n16) == nSave && sum == sumSave;
+}
+
+// orig3: 0x21D010 (the game record reset: a new game from the title 0x184968 (retain 0), the slot select / commit
+// 0x1D1470 / 0x1D1568 (retain 1), a fresh block written 0x1D0478 (retain 0)): with retain and a valid block the 7
+// settings keys bound by 0x25B1B8 (SW +0x4198..+0x41B0) are kept, the values cleared (0x6800 bytes), the pads' rumble
+// states re-applied (0x18AD58: the caller's ApplyVibrationSetting), then the language (SW +0x4194, "flags" "lang") set to
+// the running one (D_0036B120). The pads' camera / vibration keys are not kept (natively they were, menu.cpp before
+// audit 4 CORE-12). The block's identity (+0x6800) is left as it was, then stamped (ValidateGameSave).
+void ResetGameSave3(GAMESAVE& gs, bool fRetain)
+{
+    static const char* const s_asz[7] = {"fAutosaveWarned", "nMixerMode", "uMusicVolume", "uEffectsVolume",
+                                         "fUseHeadset", "dxScreenCenter", "dyScreenCenter"};
+    const GAMESAVE saved = g_gamesave;
+    g_gamesave = gs;
+    CRef akept[7];
+    const bool fKeep = fRetain && FGameSaveIdentityValid(g_gamesave);
+    if (fKeep)
+        for (int i = 0; i < 7; ++i) akept[i] = RefGetProgress({"flags", s_asz[i]});
+    std::memset(g_gamesave.ab, 0, CB_PROGRESS);
+    ValidateGameSave();
+    if (fKeep)
+        for (int i = 0; i < 7; ++i)
+            if (akept[i].m_tagk != TAGK_Nil) FSetProgress({"flags", s_asz[i]}, akept[i]);
+    CRef rLang;
+    rLang.SetS32(g_nLang);
+    FSetProgress({"flags", "lang"}, rLang);
+    gs = g_gamesave;
+    g_gamesave = saved;
+}
+
 namespace
 {
 CRef RefGetEntry(const PENT* pe, int n)
@@ -149,11 +195,17 @@ CRef RefGetEntry(const PENT* pe, int n)
     case 0: case 1: case 2: case 10: case 9: ref.SetS32(Rd<int32_t>(ib + 4u * n)); break;
     case 3: ref.SetF32(Rd<float>(ib + 4u * n)); break;
     case 4:
+        // (orig3 0x21C338: a bit of an indexed bool; a non-indexed bool is a whole int (4 bytes: saves written natively
+        // with one byte read the same, the other three bytes being 0))
         if (pe->fIndexed) ref.SetBool((Rd<uint8_t>(ib + n / 8) >> (n % 8)) & 1);
-        else ref.SetBool(Rd<uint8_t>(ib) != 0);
+        else ref.SetBool(Rd<int32_t>(ib) != 0);
         break;
     case 5: ref.SetVector(glm::vec3(Rd<float>(ib + 16u * n), Rd<float>(ib + 16u * n + 4), Rd<float>(ib + 16u * n + 8))); break;
-    default: ref.SetS32(Rd<int32_t>(ib + 16u * n)); break;  // 6/7/8: TODO(splice): the 2/3/4-int forms
+    // (orig3 0x21C338 cases 6 / 7 / 8: a CLQ (16 bytes, tag 0x1A), an LM (8, 0x1B), an SMP (12, 0x1C))
+    case 6: ref.SetClq({Rd<float>(ib + 16u * n), Rd<float>(ib + 16u * n + 4), Rd<float>(ib + 16u * n + 8), Rd<float>(ib + 16u * n + 12)}); break;
+    case 7: ref.SetLm({Rd<float>(ib + 8u * n), Rd<float>(ib + 8u * n + 4)}); break;
+    case 8: ref.SetSmp({Rd<float>(ib + 12u * n), Rd<float>(ib + 12u * n + 4), Rd<float>(ib + 12u * n + 8)}); break;
+    default: break;   // (the original leaves the ref nil)
     }
     return ref;
 }
@@ -174,7 +226,7 @@ bool FSetEntry(const PENT* pe, int n, const CRef& ref)
             b = f ? (b | (1u << (n % 8))) : (b & ~(1u << (n % 8)));
             Wr<uint8_t>(ib + n / 8, b);
         }
-        else Wr<uint8_t>(ib, f ? 1 : 0);
+        else Wr<int32_t>(ib, f ? 1 : 0);   // (orig3 0x21C528: the whole int)
         return true;
     }
     case 5:
@@ -185,6 +237,16 @@ bool FSetEntry(const PENT* pe, int n, const CRef& ref)
         Wr<float>(ib + 16u * n + 8, v.z);
         return true;
     }
+    // (orig3 0x21C528 cases 6 / 7 / 8: the value's 16 / 8 / 12 bytes copied)
+    case 6:
+        for (int i = 0; i < 4; ++i) Wr<float>(ib + 16u * n + 4u * i, ref.m_vector[i]);
+        return true;
+    case 7:
+        for (int i = 0; i < 2; ++i) Wr<float>(ib + 8u * n + 4u * i, ref.m_vector[i]);
+        return true;
+    case 8:
+        for (int i = 0; i < 3; ++i) Wr<float>(ib + 12u * n + 4u * i, ref.m_vector[i]);
+        return true;
     default: return false;
     }
 }
@@ -298,6 +360,7 @@ int NGamePercent(const GAMESAVE& gs)
     return std::max(1, std::min(sum * 100 / total, 99));
 }
 
+bool UpdateGameTimers3(float dt);   // game/task3.cpp (false: not Sly 3's scripts)
 // orig: 0x00161478 func_00161478 (UpdateTasks, from UpdateClock 0x14D0B8 when not paused): the play times
 void UpdateGameTimers(float dt)
 {
@@ -308,6 +371,10 @@ void UpdateGameTimers(float dt)
         w.SetF32(r.m_g + dt);
         FSetProgress({"dt"}, w);
     }
+    // (Sly 3, orig3 0x185088: the episode's "dt" under Sly 3's names (0x150600: "Intro" .. "Isle"), not in the
+    // two-player games (D_0036DBE0 == 2) nor in world 0; the current job's "time_played" (+0xA8) while a pad is in use
+    // (game/task3.cpp UpdateJobTime3). The Sly 2 names below have no key in Sly 3's layout: no episode's time counted.)
+    if (UpdateGameTimers3(dt)) return;
     // the current episode's (SW +0x3B58[i]: "episode" <name> "dt")
     static const char* const s_asz[9] = {"intro", "nightclub", "palace", "temple", "prison", "castle", "train", "sawmill", "blimp"};
     const unsigned i = static_cast<unsigned>(IepisodeCur());
@@ -377,7 +444,7 @@ void MergeProgressKeepDone(GAMESAVE& gs, const GAMESAVE& gsKeep)
     auto fInt = [](const PENT& e) { return !e.fIndexed && (e.kind == 0 || e.kind == 1 || e.kind == 2 || e.kind == 9 || e.kind == 10); };
     auto maxInt = [&](const PENT& e) { if (fInt(e)) wr32(gs, e.ib, std::max(rd32(gs, e.ib), rd32(gsKeep, e.ib))); };
     auto keepInt = [&](const PENT& e) { if (fInt(e)) wr32(gs, e.ib, rd32(gsKeep, e.ib)); };
-    auto orBool = [&](const PENT& e) { if (e.kind == 4 && !e.fIndexed && e.ib < CB_PROGRESS) gs.ab[e.ib] = (gs.ab[e.ib] || gsKeep.ab[e.ib]) ? 1 : 0; };
+    auto orBool = [&](const PENT& e) { if (e.kind == 4 && !e.fIndexed) wr32(gs, e.ib, (rd32(gs, e.ib) || rd32(gsKeep, e.ib)) ? 1 : 0); };   // (a 4-byte bool)
     auto forChildren = [&](const PENT& e, const std::function<void(const PENT&, const std::string&)>& fn) {
         if (e.kind != -1 || e.fIndexed || !e.iChild || e.iChild >= ae.size()) return;
         for (size_t i = e.iChild, guard = 0; i && i < ae.size() && guard < ae.size(); i = ae[i].iSibling, ++guard) fn(ae[i], name(ae[i].ch));

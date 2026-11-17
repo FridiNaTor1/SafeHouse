@@ -215,8 +215,9 @@ void RegisterList(SW* psw, LOLIST9D3* pl)
         if (FAllOpen()) r.fAvail = true;
         if (r.fAvail) pl->fEnabled = true;
         if (std::getenv("SLY3_EPMLISTPRINT"))
-            std::printf("epmenu3: list %d (episode %d mode %d) row %d -> %d (cid 0x%X) open %d\n", pl->oid, pl->iep, pl->mode,
-                        int(&r - pl->arow.data()), r.pnode ? r.pnode->oid : -1, r.pnode ? r.pnode->Cid() : 0, int(r.fAvail));
+            std::printf("epmenu3: list %d (episode %d mode %d) row %d -> %d (cid 0x%X) open %d job %d 3-D %d\n", pl->oid, pl->iep, pl->mode,
+                        int(&r - pl->arow.data()), r.pnode ? r.pnode->oid : -1, r.pnode ? r.pnode->Cid() : 0, int(r.fAvail),
+                        r.pnode ? int(r.pnode->U32Field(0, 0x48, 0xFFFFFFFFu)) : -1, r.pnode ? int(r.pnode->U32Field(0, 0x54, 0)) : 0);
     }
     pl->isel = -1;
     for (int i = 0; i < int(pl->arow.size()); ++i)   // (0x17AF50: the next open row)
@@ -528,7 +529,38 @@ void StartEpisode3(SW* psw, int iep)
         RequestTaskStart(psw, 35, 1798);
         return;
     }
-    const int iworld = NElf(sly3::VA_EPISODE_WORLDS + 4u * uint32_t(iep));
+    int iworld = NElf(sly3::VA_EPISODE_WORLDS + 4u * uint32_t(iep));
+    // (audit 4 CORE-18) 0x289198's special cases: China (6) starts in world 0x18 until "t4_recon_complete" is; the
+    // Pirate episode (7) in world 0x20 once "t5_treasure_complete" is and while "t5_heist_complete" is not; the Isle (8)
+    // sets episodeCurrent / episodeBest to 8 and resumes at the checkpoint-force task "oidCheckpointForce" in world
+    // "widCheckpointForce" (written by the jobs' activations / rewards, game/task3.cpp), task 0x731 when it is 0 / -1.
+    // SLY3_EPSTART2=1: the episode's first world always, as before.
+    static const bool s_fOld = std::getenv("SLY3_EPSTART2") != nullptr;
+    auto nProg = [](std::initializer_list<const char*> a) {
+        std::vector<std::string> as(a.begin(), a.end());
+        const CRef r = RefGetProgress(as);
+        return r.m_tagk == TAGK_Bool ? int(r.m_bool) : r.m_tagk == TAGK_S32 ? r.m_n : 0;
+    };
+    if (!s_fOld)
+    {
+        if (iep == sly3::EP_China && !nProg({"t4_recon_complete", "is_complete"})) iworld = 0x18;
+        else if (iep == sly3::EP_Pirate && nProg({"t5_treasure_complete", "is_complete"}) && !nProg({"t5_heist_complete", "is_complete"}))
+            iworld = 0x20;
+        else if (iep == sly3::EP_Isle)
+        {
+            CRef r;
+            r.SetS32(iep);
+            FSetProgress({"episodeCurrent"}, r);
+            FSetProgress({"episodeBest"}, r);
+            int oid = nProg({"oidCheckpointForce"});
+            if (oid == -1 || oid == 0) oid = 0x731;
+            else iworld = nProg({"widCheckpointForce"});
+            if (iworld < 0) return;
+            std::printf("flow: the Isle resumes at task %d in world %d\n", oid, iworld);
+            RequestTaskStart(psw, iworld, oid);
+            return;
+        }
+    }
     if (iworld < 0) return;
     RequestWorldWarp(psw, iworld, sly3::POINT_DEFAULT, -1);
 }
@@ -856,8 +888,8 @@ void UpdateEpMenu3(SW* psw)
             StartChallenge3(psw, pnode, 0, 0);   // (0x283BB0(0x4BC230, node, 0, 0))
             break;
         }
-        // (Square: the "... in 3-D" start, 0x283BB0(.., 1) for a row with +0x54: no 3-D (anaglyph) mode on the PC, s3-3d;
-        // with SLY3_ASK3D=1 it starts the row as X does: either answer gives the normal view)
+        // (Square: the "... in 3-D" start, 0x283BB0(.., 1) for a row with +0x54: the 3-D answer 1 (GAME +0x14A4), the job's
+        // worlds in the 3-D mode; offered only with the 3D Mode setting on: gauge3.h FAsk3d3)
         if (FAsk3d3() && TakeBtn(0x80))
         {
             LO* pnode = PnodeCur(p.cur);
@@ -982,7 +1014,7 @@ bool FStrEpMenu3(int id, std::string* pstr)
                 break;
             case 1486: case 1491:   // ("%s : &2X&." and, with the object's +0x54, "\n%s : &2S&.")
                 *pstr = text(mode == 1 ? 128 : 131) + " : " + SzMenuConfirmGlyph();
-                // (the "... in 3-D : Square" line of a 3-D job: not offered on the PC, no 3-D mode (gauge3.h); SLY3_ASK3D=1)
+                // (the "... in 3-D : Square" line of a 3-D job; only with the 3D Mode setting on: gauge3.h FAsk3d3)
                 if (fFlags && FAsk3d3()) *pstr += "\n" + text(mode == 1 ? 129 : 132) + " : &2S&.";
                 break;
             case 1488:

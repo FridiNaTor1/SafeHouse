@@ -41,6 +41,8 @@ bool FCopsNode(const LO* pnode);
 bool FStartChosen(SW* psw, LO* pnode);
 // A native round is on (its world loaded).
 bool FActive();
+// The world being loaded is a native round's hub (its load reads the two-player games' texture set: sw.cpp)
+bool FRoundLoading(int filter);
 // A world loaded (split3::OnWorldLoaded, before the players are chosen): the native round's world -> the two-player
 // screen mode, the round set up; any other world ends a round.
 void OnWorldLoaded(SW* psw);

@@ -143,6 +143,9 @@ struct HACK3
     OID oidOther = -1;
     LO* ploOther = nullptr;
     bool fOtherSet = false;
+    // the enemy (0x4B): +0x3F8 (EOPID 1584, get only): the sender of the last hit offered (0x19DBA8; the reset 0x19CED8
+    // clears it)
+    LO* ploHitBy = nullptr;
 };
 std::unordered_map<const LO*, HACK3> s_mphack3;
 WORLD_TABLE(s_mphack3);
@@ -186,6 +189,10 @@ LO* PloOther3(LO* plo)
 
 }  // namespace
 int HackSide3(LO* plo) { return Hack3(plo).nGroup; }
+void SetHackEnemyHitBy3(LO* plo, LO* ploBy)
+{
+    if (FHackSo(plo)) Hack3(plo).ploHitBy = ploBy;
+}
 LO* PloHackShipOther3(LO* plo) { return FHackSo(plo) ? PloOther3(plo) : nullptr; }
 void SetHackShipOther3(LO* plo, LO* ploOther)
 {
@@ -738,6 +745,11 @@ struct INITHACK3
         HACK3FLAG(1582, fCooldown);
         HACK3FLAG(1583, fKeepTarget);
 #undef HACK3FLAG
+        RegisterObjectGetter3(1584, [](LO* plo) {
+            CRef r;
+            if (LO* p = FHackSo(plo) ? Hack3(plo).ploHitBy : nullptr) r.SetBasic(p);
+            return r;
+        });
         // EOPID 1557 (optid 1426, +0x1D0): the side, set by the scripts too (the two-player ship's s5103 gives each shot
         // its ship's side)
         RegisterObjectGetter3(1557, [](LO* plo) { CRef r; r.SetS32(FHackSo(plo) ? Hack3(plo).nGroup : -1); return r; });

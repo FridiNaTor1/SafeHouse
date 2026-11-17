@@ -3,6 +3,7 @@
 
 #include <GLFW/glfw3.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -17,6 +18,9 @@
 #include "renderer_choice.h"
 #include "sly2_version.h"
 #include "vr.h"
+#if defined(__ANDROID__)
+#include "android_app.h"
+#endif
 #if CANE_VULKAN
 #include "vulkan/gl_vulkan.h"
 #include "vulkan/vk_loader.h"
@@ -33,8 +37,8 @@ std::vector<std::string> s_relaunchArgs;   // (SetRendererRelaunch: the command 
 #if CANE_VULKAN
 // The start (platform/renderer_choice.h): the marker is removed after kPresentsStarted frames over kSecondsStarted on
 // Vulkan (a slow device draws few frames a second); a Vulkan error
-// within the first kPresentsRestart frames restarts the game on OpenGL (Linux); any Vulkan error is remembered, so the
-// next Auto start uses OpenGL.
+// within the first kPresentsRestart frames restarts the game on OpenGL (Linux desktops); any Vulkan error is remembered,
+// so the next Auto start uses OpenGL (OpenGL ES on Android).
 constexpr unsigned kPresentsStarted = 30, kPresentsRestart = 600;
 constexpr double kSecondsStarted = 10.0;
 double s_tStart = 0;
@@ -190,21 +194,39 @@ GLFWwindow* PwindowVulkan(int width, int height, bool fVisible, const char* titl
     options.visible = fVisible;
     options.pipelineCachePath = cane::utf8(cane::userDirectory() / "vulkan-pipelines.bin");
     options.onFatal = OnVulkanFatal;
+    auto fallBack = [&](GLFWwindow* windowMade) -> GLFWwindow* {
+        std::printf("Vulkan: %s: OpenGL instead\n", error.c_str());
+        RememberFailure(error);
+        if (windowMade) glfwDestroyWindow(windowMade);
+        return nullptr;
+    };
+    // (tests: SLY2N_VKFORCEFAIL=1, an initialization failure; SLY2N_VKFAIL for the single stages: gl_vulkan.cpp)
+    if (std::getenv("SLY2N_VKFORCEFAIL") && std::atoi(std::getenv("SLY2N_VKFORCEFAIL")) != 0)
+    {
+        error = "SLY2N_VKFORCEFAIL is set";
+        return fallBack(window);
+    }
+    if (!CaneVk::Initialize(window, options, &error)) return fallBack(window);
     std::string missing;
-    bool fOk = CaneVk::Initialize(window, options, &error);
-    if (fOk && !FProgramsComplete(&missing))
+    if (!FProgramsComplete(&missing))
     {
         error = "the program " + missing + " is missing";
         CaneVk::Shutdown();
-        fOk = false;
+        return fallBack(window);
     }
-    if (!fOk)
-    {
-        std::printf("Vulkan: %s: OpenGL instead\n", error.c_str());
-        RememberFailure(error);
-        glfwDestroyWindow(window);
-        return nullptr;
-    }
+#if defined(__ANDROID__)
+    // (the game's window: the activity's surface goes away while paused and comes back on resume)
+    if (fVisible) CaneVk::SetSurfaceSerial(cane::android::windowSurfaceSerial);
+#endif
+    // (tests: SLY2N_VKSURFACECYCLE=N with SLY2N_VKHEADLESSWSI=1: the surface is lost for N / 4 frames out of every N and
+    // then comes back as a new one, as an Android pause / resume does)
+    if (const char* sz = std::getenv("SLY2N_VKSURFACECYCLE"); sz && std::atoi(sz) > 0)
+        CaneVk::SetSurfaceSerial([]() -> uint64_t {
+            static const uint64_t n = uint64_t(std::max(4, std::atoi(std::getenv("SLY2N_VKSURFACECYCLE"))));
+            static uint64_t frame = 0;
+            const uint64_t i = frame++;
+            return i % n >= n - n / 4 ? 0 : 1 + i / n;
+        });
     // (the renderer's hot draws as draw packets, platform/draw_packet.h; SLY2N_VKNATIVE=0: through the GL-style calls)
     const char* const pszNative = std::getenv("SLY2N_VKNATIVE");
     s_backend.packets = !pszNative || std::atoi(pszNative) != 0 ? CaneVk::DrawPackets() : nullptr;
@@ -242,6 +264,37 @@ bool FVulkanDepthBounds()
     return false;
 #endif
 }
+bool FVulkanAvoidVertexPulling()
+{
+#if CANE_VULKAN
+    return s_fVulkan && CaneVk::AvoidVertexPulling();
+#else
+    return false;
+#endif
+}
+
+bool FVulkanTileGpu()
+{
+#if CANE_VULKAN
+    return s_fVulkan && CaneVk::TileGpu();
+#else
+    return false;
+#endif
+}
+
+bool FVulkanWorkerCpuMs(double* pmsAll, double* pmsRecord)
+{
+#if CANE_VULKAN
+    if (s_fVulkan && CaneVk::FSubmitsOnWorker())
+    {
+        CaneVk::WorkerCpuMs(pmsAll, pmsRecord);
+        return true;
+    }
+#endif
+    *pmsAll = *pmsRecord = 0.0;
+    return false;
+}
+
 bool FGpuMarks()
 {
 #if CANE_VULKAN

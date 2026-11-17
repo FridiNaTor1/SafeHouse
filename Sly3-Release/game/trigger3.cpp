@@ -69,6 +69,13 @@ struct TRIG3
     glm::vec3 posCenter{0.0f};
     float sRadius2 = -1.0f;
     bool fOutside = false;
+    // (s3fix-ai2) class 0x17 (NEW_VOLTRIGGER_17, Init 0x27F658: +0x244 1, the class 0x3A listed, +0x254 0x03FFFFFF): the
+    // guards' trigger reaction. +0x250 its kind (EOPID 1775), +0x254 the records' mask (1776), +0x258 an object the guard
+    // must be aware of (1777); its vt slot 55 0x27F6A0 hands each guard new in the list to 0x257A70
+    bool f17 = false;
+    int k17 = 0;
+    uint32_t mask17 = 0x03FFFFFFu;
+    int oidSource17 = -1;
 };
 std::map<const LO*, TRIG3> s_mptrig;
 SW* s_psw = nullptr;
@@ -293,6 +300,15 @@ void CheckTrigger(TRIG3& t)
         std::sort(as.begin(), as.end());   // (0x292540 with 0x15D2D8: by address)
         if (as != t.aploList)
         {
+            // (s3fix-ai2) orig3 0x27F6A0 (class 0x17's slot 55): the guards new in the list since the last check, each to
+            // 0x257A70 (the guard's trigger reaction: aijobs.cpp)
+            if (t.f17)
+            {
+                LO* psource = t.oidSource17 > 0 ? PloFind(t.oidSource17) : nullptr;
+                for (LO* plo : as)
+                    if (!std::binary_search(t.aploList.begin(), t.aploList.end(), plo))
+                        OnTriggerGuardEnter3(plo, t.plo, t.k17, t.mask17, psource);
+            }
             t.aploList = as;
             if (s_fPrint) std::printf("trigger3: %d inside list changed: %zu\n", t.plo->oid, as.size());
             if (g_trighost3.pfnMessage) g_trighost3.pfnMessage(t.plo, 9);
@@ -451,6 +467,14 @@ bool FActivateTrigger3(LO* plo)
 }
 
 // (the old world's end, transition.cpp UnloadWorld through ResetTriggers: no record outlives its object)
+// orig3: VOLTRIGGER's slot 31 0x15D2A8 at the in-place world reset's start events (game/worldreset3.cpp): the base's,
+// then the component's state 0 (0x15BE10 -> 0x15C178: the exit when it was entered or done), so a trigger that fired
+// fires again
+void ResetTriggersInPlace3()
+{
+    for (auto& [plo, t] : s_mptrig) SetTriggerState(t, 0);
+}
+
 void ResetTriggers3()
 {
     s_mptrig.clear();
@@ -470,12 +494,22 @@ void StartTriggers3(SW* psw)
 // Hackathon exit docks (hackgame3.cpp MakeExitDocks) whose triggers were never checked)
 void AddNewTriggers3(SW* psw)
 {
-    for (LO* plo : psw->mpcidaplo[sly3::CID_TRIGGER])
+    // (s3fix-ai2: the class-0x17 triggers too; natively they were never checked)
+    std::vector<LO*> aplo = psw->mpcidaplo[sly3::CID_TRIGGER];
+    aplo.insert(aplo.end(), psw->mpcidaplo[CID_TRIGGER17].begin(), psw->mpcidaplo[CID_TRIGGER17].end());
+    for (LO* plo : aplo)
     {
         if (s_mptrig.count(plo)) continue;
         TRIG3& t = s_mptrig[plo];
         t.plo = static_cast<LOXSHAPE*>(plo);
         InitShapeBounds(t);
+        if (plo->Cid() == CID_TRIGGER17)
+        {
+            // (Init 0x27F658: the list kept (+0x244 = 1, the load 0x15CCB0 makes +0x12C 1 from it), the class 0x3A)
+            t.f17 = true;
+            t.fList = t.fStay = true;
+            t.acid.push_back(0x3A);
+        }
         if (s_fPrint && plo->oid == (std::getenv("SLY3_TRIGDBG") ? std::atoi(std::getenv("SLY3_TRIGDBG")) : -2))
             std::printf("trigger3: %d bounds centre %.0f %.0f %.0f radius %.0f outside %d\n", plo->oid, t.posCenter.x, t.posCenter.y,
                         t.posCenter.z, std::sqrt(t.sRadius2), int(t.fOutside));
@@ -495,6 +529,12 @@ void AddNewTriggers3(SW* psw)
             // EOPID 480 (0x106348 -> 0x15C2B8): an ALO watched (e.g. o_quarry's 121589 / 121590 watch the dump truck
             // 120533: SCPT 2708's alarms 120593 / 120595)
             if (o.eopid == 478) t.fList = t.fStay = o.aval.empty() ? 0 : o.aval[0].n != 0;   // (+0x244; 0x15CCB0: +0x12C)
+            if (t.f17 && !o.aval.empty())
+            {
+                if (o.eopid == 1775) t.k17 = o.aval[0].n;
+                if (o.eopid == 1776) t.mask17 = uint32_t(o.aval[0].n);
+                if (o.eopid == 1777) t.oidSource17 = o.aval[0].n;
+            }
             if (o.eopid == 480)
                 for (const OPTVAL& v : o.aval)
                     if (v.n > 0 && t.aoidWatch.size() < 8) t.aoidWatch.push_back(v.n);
@@ -525,6 +565,8 @@ void AddNewTriggers3(SW* psw)
                     if (std::getenv("SLY3_TRIGPRINT")) std::printf("trigger3: %d task pair {%d %d}\n", plo->oid, o.aval[i].n, o.aval[i + 1].n);
                 }
         }
+        if (s_fPrint && t.f17)
+            std::printf("trigger3: %d class 0x17 kind %d mask 0x%X source %d\n", plo->oid, t.k17, t.mask17, t.oidSource17);
         if (s_fPrint)
         {
             const glm::vec3 p(MatLoWorld3(plo)[3]);
@@ -543,13 +585,31 @@ void AddNewTriggers3(SW* psw)
     }
 }
 
+int NTriggerKind17(const LO* plo)
+{
+    auto it = s_mptrig.find(plo);
+    return it != s_mptrig.end() && it->second.f17 ? it->second.k17 : -1;
+}
+
 void UpdateTriggers3(SW* psw)
 {
     if (psw != s_psw) return;
-    if (psw->mpcidaplo[sly3::CID_TRIGGER].size() != s_mptrig.size()) AddNewTriggers3(psw);
+    if (psw->mpcidaplo[sly3::CID_TRIGGER].size() + psw->mpcidaplo[CID_TRIGGER17].size() != s_mptrig.size()) AddNewTriggers3(psw);
     static const int s_oidDbg = std::getenv("SLY3_TRIGDBG") ? std::atoi(std::getenv("SLY3_TRIGDBG")) : -2;
+    static const bool s_fOn17 = std::getenv("SLY3_TRIG17ON") != nullptr;   // (debug: the class-0x17 triggers kept in the world)
     for (auto& [plo, t] : s_mptrig)
     {
+        if (s_fOn17 && t.f17 && plo->fRemoved) AddLo(psw, t.plo);
+        // (debug: SLY3_TRIG17TEST=N: every N frames each class-0x17 trigger hands every guard in the world to the reaction,
+        // as if it had entered it; with SLY3_TRIGREACTFORCE the reaction's own tests are skipped)
+        if (static const int s_n = std::getenv("SLY3_TRIG17TEST") ? std::atoi(std::getenv("SLY3_TRIG17TEST")) : 0; s_n > 0 && t.f17)
+        {
+            static int s_c = 0;
+            if (++s_c % (s_n * 4) < 4)
+                for (int icid = 0x3A; icid <= 0x43; ++icid)
+                    for (LO* pg : psw->mpcidaplo[icid])
+                        if (FLoInWorld3(pg)) OnTriggerGuardEnter3(pg, t.plo, t.k17, t.mask17, nullptr);
+        }
         if (plo->oid == s_oidDbg)
         {
             const glm::vec3 p(MatLoWorld3(plo)[3]);

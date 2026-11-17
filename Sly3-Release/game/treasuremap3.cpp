@@ -21,7 +21,9 @@
 
 #include "task3.h"
 #include "../aijobs.h"
+#include "../activate.h"
 #include "../brx.h"
+#include "../cls.h"
 #include "../spliceglue.h"
 #include "../clock.h"
 #include "../lo.h"
@@ -187,12 +189,33 @@ void ShowScreen(MAP3& m, bool fShow)
     else HideScreenObj(m.pscreen);   // (slot 54)
 }
 
+// (s3fix-ai2) orig3 0x1ADDD0's state 0x18: the holder's part +0x144C (the actors' table entry 55, oid 1912) in the world
+// while the map is held (vt slot 8 / 9) and locked (0x23B620(1 / 0): flag bit 34). (s3fix-final) The part is a class-0x7D
+// object (vt 0x3559C8, the two-player pointer: activate.cpp FAloDrawn), not a trigger: its +0x140 is the scale controller
+// its post-load 0x1696F0 puts on its kind-12 record (0x130078(p, 0x23DDA0(p, id, 0xC), 5, 8, 3, {1, 1, 1})), whose value
+// +0x20 the state sets to clamp(0.001 x the map's +0x4C (option 1695), 0..3) (D_00322730 / D_00322740) and back to 1 on
+// leaving. The same post-load hides the part (0x1697D0(p, 0): its draw record's shown flag +0x4C->+0x90->+0x70 = 0, +0x130
+// none) and only the two-player update shows it again (0x169868 / 0x169A30, both players set): with the map (single
+// player) the scaled part is never drawn, so the scale has nothing to show and is not modelled here.
+void SetHolderTrigger(MAP3& m, bool fOn)
+{
+    if (!m.pjt || !g_psw) return;
+    for (const auto& [ib, plo] : m.pjt->apart)
+        if (ib == (FN3_TAG | 0x144C) && plo)
+        {
+            if (fOn) AddLo(g_psw, plo);
+            else RemoveLo(g_psw, plo);
+            return;
+        }
+}
+
 // orig3 0x278E58
 void SetMapState(MAP3& m, int state)
 {
     if (m.state == state) return;
     if (m.state == 2)
     {
+        SetHolderTrigger(m, false);
         Broadcast3(0x56, m.plo);
         ShowScreen(m, false);
         if (m.cPrint && ++m.cMiss >= 5) m.fHint = 1;
@@ -204,6 +227,7 @@ void SetMapState(MAP3& m, int state)
     m.state = state;
     m.tState = g_clock.t;
     if (state != 2) return;
+    SetHolderTrigger(m, true);
     Broadcast3(0x55, m.plo);
     m.cStep = 0;
     m.fDone = 0;
@@ -362,3 +386,15 @@ void ResetTreasureMaps3()
     s_mpmap.clear();
     s_pmapHeld = nullptr;
 }
+
+// orig3 0x279140 (Sly leaving his state 0x18): the map put away (state 1) when this player holds it
+void PutAwayTreasureMap3(LO* ploPlayer)
+{
+    MAP3* m = s_pmapHeld;
+    if (!m || m->psw != g_psw || m->pjt != ploPlayer) return;
+    if (m->state == 2) SetMapState(*m, 1);
+}
+
+namespace { uint32_t s_grfMapHeld = 0; }
+uint32_t GrfMapButtonsHeld3() { return s_grfMapHeld; }
+void SetMapButtonsHeld3(uint32_t grf) { s_grfMapHeld = grf; }

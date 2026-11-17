@@ -10,6 +10,11 @@
 #include "airide3.h"
 #include "game/scptrun3.h"
 #include "game/scptgame3.h"
+#include "game/task3.h"
+#include "game/trigger3.h"
+#include "game/guru3.h"
+#include "game/suck3.h"
+#include "util.h"
 #include "rumble.h"
 #include "gang.h"
 #include "po.h"
@@ -44,6 +49,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 
 #include <cfloat>
+#include <climits>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -290,6 +296,27 @@ void JOBREACT::React(const AIMSG& m)
         job(CID_JOBCARM3)->Enter();
         break;
     }
+    case 22:
+    {
+        // orig3 0x19A2D0 case 22: the job 0xEB with its +0x3C the message's argument. (s3fix-ai2) Not Sly 2's JOBB4
+        // whatever its Init's twin: 0xEB's update 0x133B08 walks the guard's +0x1764 spot table (a friendly guard, +0x2F0
+        // 2: 0x257EF8 turns the kinds 1 / 4 into 22) through the jobs 0xED / 0xEC / 0xF1 / 0xCB / 0xC9. +0x1764 is only
+        // ever set to null in Sly 3 (0x257EC8's three callers: 0x133E78, 0x16D1B8, the reset 0x251000), so 0x257EF8 is
+        // always false and the case, 0xEB and its jobs are unreachable in the retail game; kept as before
+        auto* o = static_cast<JOBB4*>(job(0xB4));
+        o->ptarget = m.plo;
+        o->Enter();
+        break;
+    }
+    case 21:
+    {
+        // orig3 0x19A2D0 case 21: the trigger reaction (0xEA) with its +0x38 the message's trigger (the message 0x13 of
+        // 0x257A70: OnTriggerGuardEnter3)
+        auto* o = static_cast<JOBTRIGREACT3*>(job(CID_JOBTRIGREACT3));
+        o->ptrig = m.plo;
+        o->Enter();
+        break;
+    }
     case 23:
     {
         // orig3 0x19A2D0 case 23: the password check (0xE7) of the disguised player
@@ -326,7 +353,7 @@ void JOBREACT::React(const AIMSG& m)
 // Sly 3's reaction kinds against the native (Sly 2) ones kept in this code: 1..12 and 19 the same; Sly 3's 13 (the
 // chase) = 14, 14 (the station) = 16, 15 (the stand with its wait) = 17, 16 (0xE3, Sly 2's 0xBD) = 18, 18 (the prox
 // list) = 15; Sly 3-only: 17 (0xE5) = 24, 20 (0xE9: a playable Carmelita), 21 (0xEA), 22 (0xEB), 23 (0xE7: the
-// password check), not ported but 23.
+// password check), ported: 20, 21 (s3fix-ai2), 22 (as Sly 2's JOBB4: unreachable in Sly 3, see JOBREACT::React), 23.
 
 // orig3 0x238AD0 on the reaction: its child job is done (natively each job's own test)
 bool JOBREACT::FChildDone() const
@@ -334,6 +361,7 @@ bool JOBREACT::FChildDone() const
     AIJOB* pc = pchild;
     if (!pc) return false;
     if (auto* p = dynamic_cast<JOBPASSWORD3*>(pc)) return p->fDone != 0;
+    if (auto* p = dynamic_cast<JOBTRIGREACT3*>(pc)) return p->FDone();   // (0x16E6C0(-1) -> 0x238AB8)
     if (dynamic_cast<JOBCARM3*>(pc)) return false;   // (the playable Carmelita's job lasts while she has the pad)
     if (auto* p = dynamic_cast<JOBRIDE3*>(pc)) return p->st == -1;   // (0x1F6148(-1) -> 0x238AB8)
     if (auto* p = dynamic_cast<JOBSCRIPT*>(pc)) return p->FDone();
@@ -341,6 +369,7 @@ bool JOBREACT::FChildDone() const
     if (auto* p = dynamic_cast<JOBNAVPOINT*>(pc)) return p->FDone();
     if (auto* p = dynamic_cast<JOBBD*>(pc)) return p->st == -1;          // (0x17DE40)
     if (auto* p = dynamic_cast<JOBPURSUE*>(pc)) return p->st == -1;      // (0x175810)
+    if (auto* p = dynamic_cast<JOBPROX*>(pc)) return p->st == -1;        // (orig3 0x163C10(-1) -> 0x238AB8)
     if (auto* p = dynamic_cast<JOBINVESTIGATE*>(pc)) return p->st == -1; // (0x172550)
     if (auto* p = dynamic_cast<JOBMOVE*>(pc)) return p->st == 1;         // (0x174FB8: the moves, hits, sleep, stand)
     return false;
@@ -1536,11 +1565,24 @@ void JOBPROX::Update()
         if (st == 1)
         {
             if (pg->pdet && psly && FPointInShape(pg->pdet->ploVolume, PosAi(psly))) SetProxState(0);
-            else if (GGuardProx(pg, 0x1088, pg->g1088) < g_clock.t - tSt) SetProxState(2);
+            else if (GGuardProx(pg, 0x1088, pg->g1088) <= g_clock.t - tSt)
+            {
+                // orig3: 0x163968: the wait out, the task broadcast 0x52 with the guard (the follow / tail mission's
+                // "lost him") and the job over (-1; Sly 3 has no state 2). Sly 2 moved on in state 2 with its task
+                // event 0x33, which has no Sly 3 code (dropped).
+                if (FScripts3Active())
+                {
+                    Broadcast3(0x52, pg->palo);
+                    SetProxState(-1);
+                }
+                else SetProxState(2);
+            }
         }
         else if (st == 0)
         {
             if (!(pg->pdet && psly && FPointInShape(pg->pdet->ploVolume2, PosAi(psly)))) SetProxState(1);
+            // (orig3 0x163968 case 0 also ends the job when its child marked it done (0x238AD0); which child does
+            // (0x238AB8) is not verified for the script job 0xD3: not ported)
         }
         if (prior == st) break;
     }
@@ -1568,6 +1610,7 @@ bool FNearRecord(const GOAL& g, GUARD* pg, float r)
     const glm::vec3 b = PosGoal(g, a);
     return glm::length(glm::vec2(a - b)) <= r;
 }
+}  // namespace
 
 // orig 0x0017D608: the point moved up to the first surface the line from it to 5000 above (D_002BE750 0 / D_002BE754
 // 5000) meets in the world's geometry (0x1B44D8)
@@ -1583,7 +1626,6 @@ bool FSnapPosToSurfaceAbove(glm::vec3* ppos)
     *ppos = lsg.pos1;
     return true;
 }
-}  // namespace
 
 // orig: 0x0017E3A0
 void JOBLINK::Init()
@@ -1854,6 +1896,225 @@ void JOBSETTLE3::Update()
     if (u >= 1.0f) SetMode(-1, pos);
 }
 
+// ---- Sly 3's 0xEA: the trigger reaction (s3fix-ai2, audit4 AI-16 / AI-18) ----
+
+// orig3: 0x0016E5A0 (Sly 3 state 0xC meanwhile)
+void JOBTRIGREACT3::Init()
+{
+    AIJOB::Init();
+    AddGuardState(pguard, IstateGuard2FromIstate3(0xC));
+    st = -1;
+    fStarted = false;
+}
+
+// orig3: 0x0016E5D8
+void JOBTRIGREACT3::Enter()
+{
+    AIJOB::Enter();
+    fStarted = true;
+    SetState(NSide());
+}
+
+// orig3: 0x0016E610
+void JOBTRIGREACT3::Exit()
+{
+    AIJOB::Exit();
+    SetState(-1);
+    RemoveGuardState(pguard, IstateGuard2FromIstate3(0xC));
+}
+
+// orig3: 0x0016E8D8: the side (-1: none) by the trigger's kind and the guard's +0x1144 flags
+int JOBTRIGREACT3::NSide() const
+{
+    if (!ptrig || !pguard || !pguard->palo) return -1;
+    const uint32_t grf = static_cast<uint32_t>(GuardField3(pguard, 0x1144, 0));
+    const glm::mat4 m = sly3::MatLoWorld3(ptrig);
+    const glm::vec3 posTrig(m[3]), posGuard = PosAi(pguard->palo);
+    // (0x119EA8: the plane through the trigger's position with the row as its normal; the guard's signed distance)
+    auto dist = [&](int irow) {
+        const glm::vec3 n(m[irow]);
+        return glm::dot(n, posGuard) - glm::dot(n, posTrig);
+    };
+    switch (static_cast<int>(sly3::NTriggerKind17(ptrig)))
+    {
+    case 0:
+        if ((grf & 0x60) == 0x60) return dist(2) > 0.0f ? 2 : 3;
+        if (grf & 0x20) return 2;
+        if (grf & 0x40) return 3;
+        return -1;
+    case 1:
+        if ((grf & 0x180) == 0x180)
+        {
+            bool f = dist(1) < 0.0f;
+            const float rad = St(pguard).radHeading;   // (the guard's x row: its facing)
+            if (glm::dot(posGuard - posTrig, glm::vec3(std::cos(rad), std::sin(rad), 0.0f)) < 0.0f) f = !f;
+            return f ? 1 : 0;
+        }
+        if (grf & 0x100) return 1;
+        if (grf & 0x80) return 0;
+        return -1;
+    default: return -1;
+    }
+}
+
+// orig3: 0x0016E6C0: sides 0..3 play Sly 3's states 8..11: the best entry for the guard's states and that one; kind 0 a
+// move (0xC9 with the state), kind 2 Sly 3's 0xCB mode 7 at the entry's distance (the kind object's +0x58, KIND2::s1C)
+// behind the guard (natively the move with the kind-2 player's target there); else (or no entry) done
+void JOBTRIGREACT3::SetState(int n)
+{
+    if (st == n) return;
+    EndChildJob(&pchild);
+    st = n;
+    tSt = g_clock.t;
+    GUARD* pg = pguard;
+    if (n >= 0 && n < 4)
+    {
+        const int istate = IstateGuard2FromIstate3(8 + n);
+        KINDE* pe = istate >= 0 ? PkindeBest(pg, pg->grfState | GrfStateBit(istate)) : nullptr;
+        if (pe && (pe->k == 0 || pe->k == 2))
+        {
+            auto* o = static_cast<JOBMOVE*>(PjobPush(pg, 0x9D));
+            o->nAnim = istate;
+            o->pkinde = pe;
+            o->Enter();
+            if (pe->k == 2 && pe->pvState)
+            {
+                K2PLAY* pk = static_cast<K2PLAY*>(pe->pvState);
+                const float s = pk->ptuning ? pk->ptuning->s1C : 0.0f;
+                const float rad = St(pg).radHeading + 3.14159265f;
+                pk->fBallistic = 1;
+                SetK2Target(pk, PosAi(pg->palo) + glm::vec3(std::cos(rad) * s, std::sin(rad) * s, 0.0f));
+            }
+            if (static const bool s_f = std::getenv("SLY3_TRIGREACTPRINT") != nullptr; s_f)
+                std::printf("trigreact3: guard %d trigger %d side %d state %d kind %d oid %d t %.3f\n", pg->palo->oid,
+                            ptrig ? ptrig->oid : -1, n, 8 + n, pe->k, pe->oid, g_clock.t);
+            return;
+        }
+        st = -1;
+        return;
+    }
+}
+
+// orig3: 0x0016E650: the move's end ends the job
+void JOBTRIGREACT3::Update()
+{
+    AIJOB::Update();
+    if (st >= 0 && st < 4 && pchild && static_cast<JOBMOVE*>(pchild)->st == 1) SetState(-1);
+}
+
+// orig3: 0x00257A70: a guard entered a class-0x17 trigger: its +0x1144 flags for the trigger's kind, not hit / held
+// (Sly 3 states 5 / 6 / 0x23 / 7), aware of the trigger's object (0x255D78 with no state mask: natively FGuardSurprised,
+// its Sly 2 twin), its record of the kind with the fewest mask bits shared with the trigger's mask (0x2579A0), the
+// record's next draw (0x257CB0): 1 offers the message 0x13 (natively MSG_TRIGREACT3) with the trigger to its jobs
+void OnTriggerGuardEnter3(LO* plo, LO* ptrig, int k, uint32_t mask, LO* psource)
+{
+    GUARD* pg = PguardFromLo(plo);
+    if (!pg || !pg->palo || !ptrig) return;
+    const uint32_t grf = static_cast<uint32_t>(GuardField3(pg, 0x1144, 0));
+    const uint32_t m = k == 0 ? (grf & 0x60) : k == 1 ? (grf & 0x180) : 0;
+    static const bool s_fPrint = std::getenv("SLY3_TRIGREACTPRINT") != nullptr;
+    if (s_fPrint)
+        std::printf("trigreact3: guard %d entered trigger %d kind %d mask 0x%X flags 0x%X records %zu t %.3f\n", plo->oid,
+                    ptrig->oid, k, mask, grf, pg->avolreact3.size(), g_clock.t);
+    if (!m) return;
+    static const bool s_fForce = std::getenv("SLY3_TRIGREACTFORCE") != nullptr;   // (debug: no state / awareness / draw test)
+    if (s_fForce) { OfferJobMessage(pg, MSG_TRIGREACT3, ptrig); return; }
+    for (int n3 : {5, 6, 0x23, 7})
+        if (FGuardState(pg, IstateGuard2FromIstate3(n3))) return;
+    if (psource && FGuardSurprised(pg, psource, 0)) return;
+    VOLREACT3* pbest = nullptr;
+    int cbest = INT_MAX;
+    for (VOLREACT3& r : pg->avolreact3)
+        if (r.k == k && (r.mask & mask))
+        {
+            const int c = __builtin_popcount(r.mask);   // (0x2BF698)
+            if (c < cbest)
+            {
+                pbest = &r;
+                cbest = c;
+            }
+        }
+    if (!pbest || pbest->abag.empty()) return;
+    const int d = pbest->abag[std::size_t(pbest->ibag++)];
+    if (pbest->ibag >= int(pbest->abag.size())) pbest->ibag = 0;
+    if (s_fPrint) std::printf("trigreact3: guard %d draw %d\n", plo->oid, d);
+    if (d == 1) OfferJobMessage(pg, MSG_TRIGREACT3, ptrig);
+}
+
+// orig3: 0x00257B80: the record's bag: by the suck g, (1 - g) of the second pair and g of the first, 32 draws in all
+// (each pair entry's share rounded, 0x2A3510), shuffled (0x11E8F0)
+void DealVolReact3(VOLREACT3* pr)
+{
+    const float g = GSuck3();
+    pr->abag.clear();
+    for (int i = 0; i < 2; ++i)
+    {
+        const float w = (1.0f - g) * pr->aw10[i] + g * pr->aw8[i];
+        const int c = static_cast<int>(std::lround(w * 32.0f));
+        for (int j = 0; j < c && pr->abag.size() < 32; ++j) pr->abag.push_back(i);
+    }
+    // (PC: the shuffle draws from its own stream, not the game's (0x11E8F0): the records are dealt at load and at every
+    // guard reset in 22 worlds, and the game's draws taken there moved every later random choice; e.g. the survey's
+    // ep1_turf2 then lost Sly to a guard the reference's route never meets)
+    static uint32_t s_seed = 0x2578D8u;
+    for (std::size_t k = 0; k < pr->abag.size(); ++k)
+    {
+        s_seed = s_seed * 1664525u + 1013904223u;
+        std::swap(pr->abag[k], pr->abag[std::size_t((s_seed >> 8) % uint32_t(pr->abag.size()))]);
+    }
+    pr->ibag = 0;
+}
+
+// ---- Sly 3's 0xF2: the pursuit's lost state (s3fix-ai2, audit4 AI-18) ----
+
+// orig3: 0x001A58D0
+void JOBLOST3::Init()
+{
+    AIJOB::Init();
+    st = -1;
+}
+// orig3: 0x001A5900
+void JOBLOST3::Enter()
+{
+    AIJOB::Enter();
+    SetState(0);
+}
+// orig3: 0x001A5930
+void JOBLOST3::Exit()
+{
+    AIJOB::Exit();
+    SetState(-1);
+}
+// orig3: 0x001A59C8
+void JOBLOST3::SetState(int n)
+{
+    if (st == n) return;
+    if (st == 0) UnlockJob(this);   // (0x238A38)
+    EndChildJob(&pchild);
+    st = n;
+    tSt = g_clock.t;
+    GUARD* pg = pguard;
+    if (n == 0)
+    {
+        auto* o = static_cast<JOBMOVE*>(PjobPush(pg, 0x9D));
+        // (a Guru target riding (+0x15F8): the entry of Sly 3's 0x41 | 0x13)
+        if (ptarget && sly3::FIsGuru3(ptarget) && ptarget->U32Field(0, 0x15F8, 0) != 0)
+            o->pkinde = PkindeBest(pg, GrfStateBit(IstateGuard2FromIstate3(0x41)) | GrfStateBit(IstateGuard2FromIstate3(0x13)));
+        o->nAnim = IstateGuard2FromIstate3(0x13);
+        o->Enter();
+        if (pg->pdet)   // (0x1703C8(detector, target, 0))
+            if (DETENTRY* pe = PdetentryFind(pg->pdet, ptarget)) SetDetentryState(pg->pdet, pe, 0);
+        SetGuardPursued(pg, nullptr);   // (0x2541F8(guard, 0))
+        LockJob(this);                   // (0x2389C0)
+    }
+}
+// orig3: 0x001A5960
+void JOBLOST3::Update()
+{
+    AIJOB::Update();
+    if (st == 0 && pchild && static_cast<JOBMOVE*>(pchild)->st == 1) SetState(-1);
+}
+
 // ---- 0xAF: asleep ----
 
 // orig: 0x0017A4B0
@@ -1901,12 +2162,12 @@ void JOBSLEEP::SetSleepState(int n)
     GUARD* pg = pguard;
     if (n == 0)
     {
-        if (pkinde && pkinde->k == 1 && pkinde->psma) SetSmaGoal(pkinde->psma, 0x44);
+        if (pkinde && pkinde->k == 1 && pkinde->psma) SetSmaGoal(pkinde->psma, 0x61);  // (orig3 0x16D480: 0x239CE8 with 0x61; Sly 2 0x44)
         tWake = g_clock.t + GRandInRange(pg->gE7C, pg->gE80);
     }
     else if (n == 1)
     {
-        if (pkinde && pkinde->k == 1 && pkinde->psma) SetSmaGoal(pkinde->psma, 0x43);
+        if (pkinde && pkinde->k == 1 && pkinde->psma) SetSmaGoal(pkinde->psma, 0x60);  // (orig3: 0x60; Sly 2 0x43)
     }
     if (std::getenv("SLY2N_HITDEBUG"))
         std::printf("sleep: t %.3f guard %d state %d (wake at %.3f) entry kind %d sma %p\n", g_clock.t, pg->palo->oid, n, tWake,
@@ -2330,6 +2591,11 @@ void JOBSCRIPT::Execute(CMD* c)
         if (LO* p = PloNear(c->oid); p && FCidDerivedFrom(p->Cid(), S3CID(0x6D)))
             ApplyAseg(static_cast<ASEG*>(p), nullptr, 0.0f, 1.0f, 0, nullptr);
         break;
+    case 16:
+        // (s3fix-ai2) orig3 0x197C08 case 16: the guard turned to its home heading (+0x340 = Sly 2's +0x310); the home
+        // list's second command (0x250BD8's 0x1975C8, guardstart.cpp)
+        SetGuardHeading(pg, pg->radHome);
+        break;
     case 15:
         // an alarm of a script object (0x1E0020 on the near object c->oid with the alarm c->n8)
         // orig3: 0x197C08 case 15: 0x2261A0 on the object c->n4 (a Sly 3 SCPT: its alarm list +0x64 / +0x68, at most
@@ -2343,10 +2609,12 @@ void JOBSCRIPT::Execute(CMD* c)
         break;
     default:
     {
-        static bool s_afWarned[16] = {};
-        if (c->op >= 0 && c->op < 16 && !s_afWarned[c->op])
+        // (ops 17 / 18: Sly 3's jobs 0xED / 0xEC on the near object; their builders (EOPIDs 744 / 745, thunks 0x108760 /
+        // 0x1087E8) are called by no world's options or scripts (s3fix-ai2: every world's splice and load methods))
+        static bool s_afWarned[19] = {};
+        if (c->op >= 0 && c->op < 19 && !s_afWarned[c->op])
             std::fprintf(stderr, "ai: command %d not ported\n", c->op);
-        if (c->op >= 0 && c->op < 16) s_afWarned[c->op] = true;
+        if (c->op >= 0 && c->op < 19) s_afWarned[c->op] = true;
         break;
     }
     }
@@ -2975,14 +3243,16 @@ void JOBBD::Init()
 }
 
 // orig: 0x0017DDA8
+// (s3fix-ai2) orig3 0x17F9B8 (Sly 3's 0xE3): the state 0 only; Sly 2's SetGuardPursued(the object) is gone
 void JOBBD::Enter()
 {
     AIJOB::Enter();
     SetState(0);
-    SetGuardPursued(pguard, ploFrom);  // 0x208540
 }
 
 // orig: 0x0017DDE8: the detector forgets (0x153FF8), nothing pursued, state 0x2B removed
+// (s3fix-ai2) orig3 0x17F9E8: the detector forgets (0x170360), the state 0x3C (= 0x2B) removed; no pursued object to
+// let go (the enter set none)
 void JOBBD::Exit()
 {
     AIJOB::Exit();
@@ -2994,7 +3264,6 @@ void JOBBD::Exit()
             e.st = 0;
             e.t8 = g_clock.t;
         }
-    SetGuardPursued(pg, nullptr);
     RemoveGuardState(pg, 0x2B);
 }
 
@@ -3303,6 +3572,8 @@ std::unique_ptr<AIJOB> PjobNewKind(CID cid)
     case CID_JOBCARM3: return std::make_unique<JOBCARM3>();           // (Sly 3's 0xE9: aicarm3.cpp)
     case CID_JOBRIDE3: return std::make_unique<JOBRIDE3>();           // (Sly 3's 0xE8: airide3.cpp)
     case CID_JOBSETTLE3: return std::make_unique<JOBSETTLE3>();       // (Sly 3's 0xE5)
+    case CID_JOBTRIGREACT3: return std::make_unique<JOBTRIGREACT3>(); // (Sly 3's 0xEA)
+    case CID_JOBLOST3: return std::make_unique<JOBLOST3>();           // (Sly 3's 0xF2)
     default: return PjobNewPursuit(cid);  // (aipursuit.cpp)
     }
 }

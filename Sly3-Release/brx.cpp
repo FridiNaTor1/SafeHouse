@@ -151,7 +151,13 @@ OPTVAL ReadOptionValue(int k, CBinaryInputStream* pbis)
     case 3: case 12:
         for (int i = 0; i < 4; ++i) v.ag[i] = pbis->F32Read();
         break;
-    case 13: v.n = static_cast<int32_t>(pbis->U32Read()); break;  // a colour (0x1ED278 converts it)
+    case 13:   // a colour (orig3 0x150AE8: through 0x236908, the 3-D mode's adjustment)
+    {
+        uint32_t u = pbis->U32Read();
+        AdjustRgba(&u);
+        v.n = static_cast<int32_t>(u);
+        break;
+    }
     case 22:
     {
         const int c = pbis->U16Read();

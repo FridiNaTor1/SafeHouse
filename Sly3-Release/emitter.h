@@ -150,6 +150,7 @@ void SetPepsysDraw(PEPSYS* pp, bool fHidden, const std::vector<glm::mat4>& amat)
 // (+0xD0's +0x34 through 0x18E500 -> 0x168048, pe.cpp FPeNearCamera); 0: no test
 void SetPepsysCullRadius(PEPSYS* pp, float sRadius);
 bool FPeNearCamera3(const glm::vec3& c, float r);   // pe.cpp (its camera test, FPeNearCamera)
+float WPeNearCamera3(const glm::vec3& c, float r);  // pe.cpp: 0x168098's fade weight (0 beyond the radius, 1 inside r - 400)
 void WrapPepsysInBox(PEPSYS* pp, const glm::mat4& mat, const glm::vec3& lo, const glm::vec3& hi);
 // A PE RIP stream's particle (orig3 0x202330, pe.cpp): a RIP of the model at pos (kind: the component's record +0x1C)
 struct PERIPDESC

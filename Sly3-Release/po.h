@@ -48,6 +48,9 @@ struct PODATA
 
 PODATA* PpodataFromLo(LO* plo);   // null for objects outside cid 0x32
 PADCTL* PpadctlOfSo3(const LO* plo);   // Sly 3: any SO's controller state once enabled (null: none)
+int NSoHealth3(const LO* plo);         // Sly 3: a plain SO's hit points (+0x16C, orig3 0x1F43C8)
+int NSoHealthMax3(const LO* plo);      // (+0x170, 0x1F43F0)
+void SetSoHealth3(LO* plo, int n);     // (0x1F43D0: clamped to 0..max)
 void ResetPlayerObjects();        // a new world
 
 // orig 0x001C4280 / 0x001C42E8 / 0x001C4330 / 0x001C4468 / 0x001C45A8 / 0x001C4640 / 0x001C4660 / 0x001C46C0 /

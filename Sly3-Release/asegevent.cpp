@@ -30,6 +30,7 @@
 #include "pe.h"
 #include "update.h"   // (PC addition, debug menu only: Carmelita's moveset)
 #include <algorithm>
+#include <bit>
 
 #include <cstdio>
 #include <cstring>
@@ -129,15 +130,22 @@ std::unordered_map<const ASEGA*, CSndRef>& MpSndAsega()
     return s_mp;
 }
 }  // namespace
-// orig: 0x00210740's pitch terms: a guard source (cid 0x38) with its scale controller (+0xFC4: the size
-// destabilizer) adds clamp(2 - 2 x its value, 0, 1) (D_002C3EA0 {2, -2, 0}, D_002C3EB0 {0, 1}): a shrunk guard sounds
-// higher; then the game's +0x475C (no writer in the matched code: 0). Natively omitted (audit 2026-11 S2)
+// orig3: 0x25DB38's pitch terms (Sly 2's 0x210740 used the shrink controller's value instead): a STEPGUARD source
+// (Sly 3 cid 0x3A) adds its option 498's field +0x11DC (EOPID 371, a per-guard pitch) and 1.0 while it is shrunk (its
+// mode +0x112C 14 / 16: the native modes 8 / 13, guard.cpp SetGuardMode); then SW +0x4F50 (no writer in the executable:
+// 0). SLY3_ASEGPITCH2=1: Sly 2's rule (clamp(2 - 2 x scale, 0, 1)), as before
 float GSoundPitchOffset(LO* pso)
 {
     float g = 0.0f;
-    if (pso && FCidDerivedFrom(pso->Cid(), S3CID(0x38)))
-        if (const GUARD* pg = PguardFromLo(pso); pg && pg->pscaleFC4)
-            g += std::clamp(2.0f - 2.0f * pg->pscaleFC4->pos.x / pg->gScale3, 0.0f, 1.0f);   // (Sly 3: against the guard's own scale, EOPID 370)
+    if (!pso || !FCidDerivedFrom(pso->Cid(), S3CID(0x38))) return g;
+    const GUARD* pg = PguardFromLo(pso);
+    if (static const bool s_fSly2 = std::getenv("SLY3_ASEGPITCH2") != nullptr; s_fSly2)
+    {
+        if (pg && pg->pscaleFC4) g += std::clamp(2.0f - 2.0f * pg->pscaleFC4->pos.x / pg->gScale3, 0.0f, 1.0f);
+        return g;
+    }
+    g += std::bit_cast<float>(pso->U32Field(0, 0x11DC, 0));
+    if (pg && (pg->nMode == 8 || pg->nMode == 13)) g += 1.0f;
     return g;
 }
 
@@ -167,6 +175,7 @@ void PlayAsegaSound(ASEGA* pasega, LO* ploOwner, const ASEGEV* pev)
     psnd->SetFalloff(static_cast<float>(pev->an[2]), static_cast<float>(pev->an[3]));
     psnd->SetVolume(pev->ag[2]);
     psnd->SetPitch(pev->ag[0] + GSoundPitchOffset(pso));
+    psnd->SetDoppler(pev->ag[1]);   // orig3 0x25DB38: 0x245130(snd, the event's second float)
     if (psnd->Kind() == 2) MpSndAsega()[pasega] = CSndRef(psnd);
 }
 

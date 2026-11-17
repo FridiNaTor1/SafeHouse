@@ -64,6 +64,10 @@ struct Sly2GameOptions {
     // (Sly 3 only, sly3_settings.h) the original's Camera Options per camera kind (the save's flags joyLeft
     // mpcamprefkfReverseHorizontal / Vertical [kind]): [kind][0] Left/Right, [kind][1] Up/Down reversed
     int camReverse[8][2] = {};
+    // (Sly 3 only, sly3_settings.h [Graphics] 3D Mode) the original's red / cyan 3-D (anaglyph) mode offered: on, the 3-D
+    // question is asked and the job chooser offers its "... in 3-D" start (Sly3-Release gauge3.h FAsk3d3); off (the
+    // default), never asked (answered No) and not offered
+    int mode3d = 0;
 };
 
 // VR (Sly2-Release vr.h; only used with a headset): [VR] in the file.
@@ -112,7 +116,7 @@ inline constexpr float kVrWorldScaleMin = 0.5f, kVrWorldScaleMax = 3.0f;
 // line of the flat picture; in VR the same apparent width as the flat picture's, matched to the eyes' field of view)
 inline constexpr int kOutlineThicknessMin = 25, kOutlineThicknessMax = 300, kOutlineThicknessStep = 25;
 // [Display] HUD Placement: the box the corner / edge HUD widgets (health, coins, counters, timers) are laid out in,
-// centred in the picture and never wider than it (Sly2-Release display.h hudPlacement). 4:3 the original's; 16:9 the
+// centred in the picture and never wider than it (Sly2-Release / Sly3-Release display.h hudPlacement). 4:3 the original's; 16:9 the
 // PS3 HD version's; Match Screen the picture's own shape (to the edges at 32:9). Replaces the original's Center Screen.
 enum Sly2HudPlacement : int { HudPlacement_4_3 = 0, HudPlacement_16_9 = 1, HudPlacement_16_10 = 2, HudPlacement_Match = 3 };
 inline constexpr int kHudPlacementCount = 4;

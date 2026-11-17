@@ -19,6 +19,7 @@
 #endif
 #include "vr.h"
 #include "renderer.h"
+#include "fsr.h"
 
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include <stb/stb_image_write.h>
@@ -31,11 +32,13 @@
 GL g_gl;
 GLSHADER glGlobShader;
 GLSHADER glGlobShaderNoKill;
+GLSHADER glGlobShaderVol, glGlobShaderVolNoGeom;
 GLSHADER glGlobShaderNoGeom, glGlobShaderNoKillNoGeom;
 bool g_fGlobNoGeom = false;
 bool g_fGlobBindless = false;
 bool g_fGlobArrays = false;
 bool g_fDrawUniform = false;
+bool g_fBlend1 = false;   // (glob.frag CANE_BLEND1: the alpha / additive blends as one fixed blend; the Vulkan renderer on Android)
 bool g_fHudAlphaLayer = false;
 bool g_fDirectRuns = false;
 GLSHADER glCelBorderShader;
@@ -274,6 +277,8 @@ bool GLSHADER::FBuildMultiview() const
     return true;
 }
 
+int g_cShaderErrors = 0;
+
 bool GLSHADER::CompileErrors(GLuint shader, const char* type, const char* file)
 {
     GLint fOk = 0;
@@ -285,6 +290,7 @@ bool GLSHADER::CompileErrors(GLuint shader, const char* type, const char* file)
         {
             glGetShaderInfoLog(shader, sizeof(log), nullptr, log);
             std::fprintf(stderr, "shader compile error (%s):\n%s\n", file, log);
+            ++g_cShaderErrors;
         }
     }
     else
@@ -294,6 +300,7 @@ bool GLSHADER::CompileErrors(GLuint shader, const char* type, const char* file)
         {
             glGetProgramInfoLog(shader, sizeof(log), nullptr, log);
             std::fprintf(stderr, "shader link error (%s):\n%s\n", file, log);
+            ++g_cShaderErrors;
         }
     }
     return fOk != 0;
@@ -387,9 +394,30 @@ bool GL::FInit(int w, int h, bool fVisible, const char* title, std::string& erro
     std::printf("OpenGL: %s / %s\n", glGetString(GL_RENDERER), glGetString(GL_VERSION));
 #if defined(__ANDROID__)
     // The GL 4.3 loader stops at the version an ES context reports (3.2): the ES 3.x entry points with desktop names
-    // are fetched by name, the desktop-only ones point at ES equivalents (gles_sly2.cpp).
-    if (!cane::gles::FillGlad(error)) return false;
-    g_fDrawUniform = !cane::gles::HasBaseInstance();
+    // are fetched by name, the desktop-only ones point at ES equivalents (gles_sly2.cpp). (The Vulkan renderer: its
+    // own entry points, the desktop paths.)
+    if (!FRendererVulkan())
+    {
+        if (!cane::gles::FillGlad(error)) return false;
+        g_fDrawUniform = !cane::gles::HasBaseInstance();
+    }
+    else
+    {
+        // (the Vulkan renderer on Android: render.cpp's merged runs with glob.vert's vertex pulling (CANE_PULL), plain
+        // indexed draws in place of multi-draw-indirect: Adreno's tile binning cannot skip the sub-draws of an indirect
+        // draw per tile. SLY2N_VKPULL=0: multi-draw-indirect.)
+        // (Quest 3S, Paris Immersive: 21 -> 36 fps, the eye passes binned in place of the driver's direct mode)
+        const char* szPull = std::getenv("SLY2N_VKPULL");
+        g_fDrawUniform = szPull && *szPull ? std::atoi(szPull) != 0 : !FVulkanAvoidVertexPulling();
+    }
+#else
+    // (Vulkan on a tile GPU elsewhere (the Steam Frame's Turnip, Windows on ARM's Adreno): the pulled runs as on Android;
+    // SLY2N_VKPULL=0: multi-draw-indirect; SLY2N_VKPULL=1: pulled on any GPU (a test of the Android path))
+    if (FRendererVulkan())
+    {
+        const char* szPull = std::getenv("SLY2N_VKPULL");
+        g_fDrawUniform = szPull && *szPull ? std::atoi(szPull) == 1 : FVulkanTileGpu() && !FVulkanAvoidVertexPulling();
+    }
 #endif
     const char* szRenderer = reinterpret_cast<const char*>(glGetString(GL_RENDERER));
     g_fDirectRuns = szRenderer && !std::strncmp(szRenderer, "D3D12 (", 7);
@@ -430,6 +458,11 @@ bool GL::FInit(int w, int h, bool fVisible, const char* title, std::string& erro
     // under a low camera). If the stage fails to build, the program without it.
 #ifdef __SWITCH__
     constexpr bool s_fNearClip = false;   // (the Switch: GL's own clipping; the stage costs GPU time on every draw)
+#elif defined(__APPLE__)
+    // (macOS / iOS: the programs run on Metal (platform/metal), which has no geometry stage: glCreateShader refuses
+    // GL_GEOMETRY_SHADER with GL_INVALID_ENUM and glob.metal is the program without it, so the stage is not asked for
+    // (as Sly 2's: "shader compile error (glob.geom)" and a GL error left behind at every start). GL's own clipping.
+    constexpr bool s_fNearClip = false;
 #else
     // (VR on OpenGL ES, vr.h: without the stage: geometry programs are slow on mobile GPUs, and the eyes' two-view pass
     // cannot have one; GL's own near clipping)
@@ -445,10 +478,18 @@ bool GL::FInit(int w, int h, bool fVisible, const char* title, std::string& erro
     // (the prefix and stages the glob program was built with: its NOKILL variant below takes the same)
     std::string globPrefix;
     bool fGlobGeom = false;
+    // (the Vulkan renderer's pulled draws, g_fDrawUniform: OpenGL ES gets CANE_PULL from its translation layer,
+    // gles_sly2.cpp; Vulkan's programs are built ahead with it, cmake/vulkan_shaders.py)
+    // (and CANE_BLEND1, render.cpp g_fBlend1: the alpha / additive blend pair as one pipeline; SLY2N_VKBLEND1=0: off)
+    GLint cDualSource = 0;
+    if (g_fDrawUniform && FRendererVulkan()) glGetIntegerv(GL_MAX_DUAL_SOURCE_DRAW_BUFFERS, &cDualSource);
+    g_fBlend1 = g_fDrawUniform && FRendererVulkan() && cDualSource > 0 &&
+                !(std::getenv("SLY2N_VKBLEND1") && std::atoi(std::getenv("SLY2N_VKBLEND1")) == 0);
+    const std::string pullDef = g_fDrawUniform && FRendererVulkan() ? "#define CANE_PULL 1\n#define CANE_BLEND1 1\n" : "";
     auto initGlob = [&](const char* szPrefix) {
-        globPrefix = szPrefix;
+        globPrefix = szPrefix + pullDef;
         fGlobGeom = s_fNearClip && glGlobShader.FInit("glob.vert", "glob.geom", "glob.frag", (globPrefix + "#define GEOM 1\n").c_str());
-        return fGlobGeom || glGlobShader.FInit("glob.vert", "glob.frag", szPrefix);
+        return fGlobGeom || glGlobShader.FInit("glob.vert", "glob.frag", globPrefix.c_str());
     };
     g_fGlobBindless = fBindlessWanted && FBindlessWorks() && initGlob("#extension GL_ARB_bindless_texture : require\n#define BINDLESS 1\n");
     // (perf-5) without bindless textures: the pass draws' textures as layers of array textures (render.cpp LayerRefOfTex),
@@ -471,6 +512,22 @@ bool GL::FInit(int w, int h, bool fVisible, const char* title, std::string& erro
     if (!(fGlobGeom ? glGlobShaderNoKill.FInit("glob.vert", "glob.geom", "glob.frag", prefixNoKill.c_str())
                     : glGlobShaderNoKill.FInit("glob.vert", "glob.frag", prefixNoKill.c_str())))
         glGlobShaderNoKill.ID = 0;
+    // (the Vulkan renderer's pulled programs, CANE_BLEND1) the no-discard program without CANE_BLEND1's second output, for
+    // the projected volumes' colour draws (render.cpp FDrawProjVolumePackets): the Quest 3S's Adreno hangs the GPU drawing
+    // the volumes' fill with that output (a blend that doesn't read it) while its video capture preempts the GPU (notes/
+    // STATUS-VK.md volume-dim). Same pictures. SLY2N_VKVOLPROG=0: the volumes with the glob program as before.
+    glGlobShaderVol.ID = 0;
+    std::string prefixVol;
+    if (!pullDef.empty() && glGlobShaderNoKill.ID && !(std::getenv("SLY2N_VKVOLPROG") && std::atoi(std::getenv("SLY2N_VKVOLPROG")) == 0))
+    {
+        prefixVol = prefixNoKill;
+        static const char szBlend1[] = "#define CANE_BLEND1 1\n";
+        if (const size_t i = prefixVol.find(szBlend1); i != std::string::npos) prefixVol.erase(i, sizeof(szBlend1) - 1);
+        if (!(fGlobGeom ? glGlobShaderVol.FInit("glob.vert", "glob.geom", "glob.frag", prefixVol.c_str())
+                        : glGlobShaderVol.FInit("glob.vert", "glob.frag", prefixVol.c_str())))
+            glGlobShaderVol.ID = 0;
+        std::printf("OpenGL: projected volumes %s\n", glGlobShaderVol.ID ? "with the program without CANE_BLEND1" : "with the glob program (no variant)");
+    }
     // (perf-4) both without the near-clip stage, for the runs whose draws are all wholly in front of the near plane
     // (render.cpp): glob.geom passes their triangles through unchanged, and a geometry stage costs GPU time on every draw
     // (the Switch leaves it out altogether; tile GPUs and Zink pay most). SLY2N_GLOBNOGEOM=0: the stage everywhere.
@@ -483,6 +540,18 @@ bool GL::FInit(int w, int h, bool fVisible, const char* title, std::string& erro
             glGlobShaderNoKillNoGeom.ID = 0;
         g_fGlobNoGeom = glGlobShaderNoGeom.ID != 0;
     }
+    // (the volumes' colour program without the near-clip stage too, for the passes whose glob runs draw without it (VR on
+    // Android and tile GPUs: render.cpp FVrNoNearClip): the fill then takes the same triangles as its stencil mask, and a
+    // two-view pass gets no geometry stage, which needs multiviewGeometryShader: the Quest 3S's Adreno has none, and with
+    // it the right eye's flashlight beams / light shafts were filled wrongly (mostly missing, flickering))
+    glGlobShaderVolNoGeom.ID = 0;
+    if (glGlobShaderVol.ID && fGlobGeom && glGlobShaderNoKillNoGeom.ID)
+    {
+        static const char szGeom[] = "#define GEOM 1\n";
+        if (const size_t i = prefixVol.find(szGeom); i != std::string::npos) prefixVol.erase(i, sizeof(szGeom) - 1);
+        if (!glGlobShaderVolNoGeom.FInit("glob.vert", "glob.frag", prefixVol.c_str())) glGlobShaderVolNoGeom.ID = 0;
+        if (!glGlobShaderVolNoGeom.ID) std::printf("OpenGL: projected volumes: no program without the near-clip stage (the glob program there)\n");
+    }
     glCelBorderShader.Init("celborder.vert", "celborder.frag");
     glHudShader.Init("hud.vert", "hud.frag");
     glOverlayShader.Init("overlay.vert", "overlay.frag");
@@ -491,6 +560,7 @@ bool GL::FInit(int w, int h, bool fVisible, const char* title, std::string& erro
 
 void GL::CreateFramebuffers(int w, int h)
 {
+    EndNativeUi();
     ReleaseOverlaySources();  // the immutable photograph survives resizing its presentation target
     renderWidth = w;
     renderHeight = h;
@@ -683,7 +753,10 @@ void GlDeleteTexture(GLuint tex)
 void GL::RememberOverlaySourceFrame()
 {
     if (!window) return;
+    // (upscaling: the frame is the native target's while BeginNativeUi holds; a size change starts over)
+    if (fboOverlaySource[0] && (dxOverlaySource != renderWidth || dyOverlaySource != renderHeight)) ReleaseOverlaySources();
     if (!fboOverlaySource[0]) {
+        dxOverlaySource = renderWidth, dyOverlaySource = renderHeight;
         if (PpacketsFbo())
             for (int i = 0; i < 2; ++i) {
                 texOverlaySource[i] = GlNewTexture(renderWidth, renderHeight, GL_LINEAR, true);
@@ -725,11 +798,17 @@ void GL::RememberOverlaySourceFrame()
 bool GL::CaptureOverlayFrame()
 {
     if (!window || cOverlaySources == 0) return false;
+    if (fboOverlay && (dxOverlay != renderWidth || dyOverlay != renderHeight)) {
+        GlDeleteFramebuffers(1, &fboOverlay); GlDeleteTexture(texOverlay);
+        fboOverlay = texOverlay = 0;
+    }
     if (!fboOverlay && PpacketsFbo()) {
+        dxOverlay = renderWidth, dyOverlay = renderHeight;
         texOverlay = GlNewTexture(renderWidth, renderHeight, GL_LINEAR, true);
         fboOverlay = GlNewFramebuffer(texOverlay, 0);
     }
     if (!fboOverlay) {
+        dxOverlay = renderWidth, dyOverlay = renderHeight;
         glGenFramebuffers(1, &fboOverlay);
         texOverlay = GlNewTexture(renderWidth, renderHeight, GL_LINEAR, true);
         glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fboOverlay);
@@ -742,10 +821,12 @@ bool GL::CaptureOverlayFrame()
     // The original's picture is its whole 4:3 frame; the overlay draws it in the 4:3 UI canvas. At other aspects
     // the native view is wider (or taller) than that frame, so the picture is the centred 4:3 part of the render,
     // not the whole render squeezed into it (U31: squashed at 32:9).
-    int dxSrc = renderWidth, dySrc = renderHeight;
+    // (the sources' own size: the native target's when they were taken while upscaling)
+    const int dxSource = dxOverlaySource, dySource = dyOverlaySource;
+    int dxSrc = dxSource, dySrc = dySource;
     if (dxSrc * 3 > dySrc * 4) dxSrc = std::max(1, int(std::lround(dySrc * 4.0 / 3.0)));
     else if (dxSrc * 3 < dySrc * 4) dySrc = std::max(1, int(std::lround(dxSrc * 3.0 / 4.0)));
-    const int xSrc = (renderWidth - dxSrc) / 2, ySrc = (renderHeight - dySrc) / 2;
+    const int xSrc = (dxSource - dxSrc) / 2, ySrc = (dySource - dySrc) / 2;
     for (int i = 0; i < 2; ++i) {
         const int source = i == 0 && cOverlaySources == 2 ? iOverlaySource : iOverlaySource ^ 1;
         if (pk) {
@@ -778,6 +859,111 @@ void GL::ReleaseOverlaySources()
     GlDeleteFramebuffers(2, fboOverlaySource); GlDeleteTexture(texOverlaySource[0]); GlDeleteTexture(texOverlaySource[1]);
     for (int i = 0; i < 2; ++i) fboOverlaySource[i] = texOverlaySource[i] = 0;
     iOverlaySource = cOverlaySources = 0;
+    dxOverlaySource = dyOverlaySource = 0;
+}
+
+bool GL::FUpscaleFrame() const
+{
+    const DISPLAY& d = g_display;
+    if (fNativeUi) return true;
+    if (!window || !d.fUpscale || vr::FActive()) return false;
+    return renderWidth < d.presentWidth && renderHeight < d.presentHeight && fsr::FAvailable();
+}
+
+void GL::SwapNativeUi()
+{
+    std::swap(fbo, fboUi);
+    std::swap(fbc, texUi);
+    std::swap(rbo, rboUi);
+    std::swap(fboMsaa, fboMsaaScene);
+    std::swap(renderWidth, dxUi);
+    std::swap(renderHeight, dyUi);
+    fNativeUi = !fNativeUi;
+}
+
+void GL::BeginNativeUi(bool fScene)
+{
+    if (fNativeUi || !FUpscaleFrame()) return;
+    const DISPLAY& d = g_display;
+    const int dx = d.presentWidth, dy = d.presentHeight;
+    if (!fboUi || dxUi != dx || dyUi != dy)
+    {
+        ReleaseNativeUi();
+        dxUi = dx, dyUi = dy;
+        if (const cane::draw::Packets* pkf = PpacketsFbo())
+        {
+            // (native: nothing bound; every user binds the target itself)
+            texUi = GlNewTexture(dx, dy, GL_LINEAR, false);
+            cane::draw::RenderbufferDesc rd;
+            rd.width = uint32_t(dx), rd.height = uint32_t(dy), rd.format = cane::draw::kRenderbufferDepth32fStencil8;
+            rboUi = pkf->createRenderbuffer(rd);
+            fboUi = GlNewFramebuffer(texUi, rboUi);
+        }
+        else
+        {
+        glGenFramebuffers(1, &fboUi);
+        glBindFramebuffer(GL_FRAMEBUFFER, fboUi);
+        texUi = GlNewTexture(dx, dy, GL_LINEAR, false);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texUi, 0);
+        glGenRenderbuffers(1, &rboUi);
+        glBindRenderbuffer(GL_RENDERBUFFER, rboUi);
+        glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH32F_STENCIL8, dx, dy);
+        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, rboUi);
+        }
+    }
+    const cane::draw::Packets* pk = PacketsActive();
+    if (fScene)
+    {
+        if (fboMsaa && pk && pk->scissor && pk->copy)
+        {
+            // (draw packets: the scissor off; the framebuffer bound after it is FUpscale's to set)
+            const int32_t full[4] = {0, 0, renderWidth, renderHeight};
+            pk->scissor(nullptr);
+            pk->copy(fboMsaa, fbo, full, 0, 0, fbo);
+        }
+        else if (fboMsaa)
+        {
+            glDisable(GL_SCISSOR_TEST);
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, fboMsaa);
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fbo);
+            glBlitFramebuffer(0, 0, renderWidth, renderHeight, 0, 0, renderWidth, renderHeight, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+        }
+        fsr::SOURCE src;
+        src.tex = fbc;
+        src.dx = renderWidth, src.dy = renderHeight;
+        fsr::FUpscale(src, fboUi, 0, 0, dx, dy, fsr::GSharpness(d.upscaleSharpness));
+    }
+    SwapNativeUi();
+    // (the HUD's depth test and the foreground's stencil start from a clear: hud.cpp, render.cpp)
+    if (pk && pk->clear && pk->bindTarget)
+    {
+        // (draw packets: the depth / stencil write masks set as the GL calls set them, the colour mask and scissor as they are)
+        cane::draw::Clear c;
+        c.clear = cane::draw::kClearDepth | cane::draw::kClearStencil;
+        c.depthWrite = 1;
+        c.stencilWriteMask = c.stencilWriteMaskAfter = 0xFF;
+        pk->bindTarget(fbo);
+        pk->clear(c);
+        return;
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    glDepthMask(GL_TRUE);
+    glStencilMask(0xFF);
+    glClearDepth(0.0);
+    glClearStencil(0);
+    glClear(GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+}
+
+void GL::EndNativeUi()
+{
+    if (fNativeUi) SwapNativeUi();
+}
+
+void GL::ReleaseNativeUi()
+{
+    if (fboUi) { GlDeleteFramebuffers(1, &fboUi); GlDeleteTexture(texUi); GlDeleteRenderbuffer(rboUi); }
+    fboUi = texUi = rboUi = 0;
+    dxUi = dyUi = 0;
 }
 
 void GL::Present()
@@ -804,7 +990,8 @@ void GL::Present()
         pk->clear(c);
         const DISPLAY& d = g_display;
         const int32_t dst[4] = {d.presentX, d.presentY, d.presentWidth, d.presentHeight};
-        pk->blit(fbo, 0, full, dst, 1, 0);
+        pk->blit(fbo, 0, full, dst, fNativeUi ? 0 : 1, 0);
+        EndNativeUi();
         return;
     }
     // (perf-4) the scene's depth / stencil are not read after the frame (the next frame's passes clear them first): a tile
@@ -837,9 +1024,11 @@ void GL::Present()
     glClearColor(0, 0, 0, 1);
     glClear(GL_COLOR_BUFFER_BIT);
     const DISPLAY& d = g_display;
+    // (upscaling: the native target is the picture's size, so this copies it one to one)
     glBlitFramebuffer(0, 0, renderWidth, renderHeight, d.presentX, d.presentY, d.presentX + d.presentWidth,
-                      d.presentY + d.presentHeight, GL_COLOR_BUFFER_BIT, GL_LINEAR);
+                      d.presentY + d.presentHeight, GL_COLOR_BUFFER_BIT, fNativeUi ? GL_NEAREST : GL_LINEAR);
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    EndNativeUi();
 }
 
 bool GL::FWriteScreenshot(const std::string& path)
@@ -880,6 +1069,9 @@ void GL::Terminate()
 {
     ShutdownPadRumble();   // (rumble.h: every motor off before the window goes)
     if (window) {
+        EndNativeUi();
+        ReleaseNativeUi();
+        fsr::Release();
         ReleaseOverlayFrame();
         ResetAnimatedOverlayGraphics();
         glOverlayShader.Delete();

@@ -12,6 +12,9 @@
 #include "sly3.h"
 
 #include "../activate.h"
+#include "../booty.h"
+#include "../po.h"
+#include "../actor.h"
 #include "../animfind.h"
 #include "../brx.h"
 #include "../disc.h"
@@ -20,16 +23,26 @@
 #include "../sm.h"
 #include "../savedata.h"
 #include "../jobend3.h"
+#include "../jt.h"
+#include "../joy.h"
+#include "../gauge3.h"
+#include "../outfit3.h"
+#include "../shop.h"
+#include "../task.h"
 #include "../sw.h"
 #include "../savedata.h"
 #include "../frontend.h"
+#include "../objmethod.h"
 #include "../transition.h"
 #include "../update.h"
 #include "../cls.h"
 #include "../lo.h"
 
 #include <algorithm>
+#include <functional>
+#include <bit>
 #include <cstdio>
+#include <cassert>
 #include <cstdlib>
 #include <map>
 
@@ -139,8 +152,24 @@ bool FTaskDone3(const TASK3* p)
 namespace
 {
 
+// orig3: 0x187D30 Task_SaveVars (the job's save, not in its modes 1 / 2): its count +0x7C, "is_complete" (0x187CD0:
+// its last task done), its float +0xA8. Without it no job was ever complete in the save and the chooser opened no
+// episode.
+void SaveJobVars3(JOB3* pj)
+{
+    if (!pj || pj->nMode == 1 || pj->nMode == 2) return;
+    WriteProgressS32(pj->akeyCount, pj->f7c);
+    WriteProgressBool(pj->akeyDoneBool, FJobDone3(pj));
+    if (!pj->akeyReal.empty())
+    {
+        CRef r;
+        r.SetF32(pj->gA8);
+        FSetProgressKey(pj->akeyReal, r);
+    }
+}
+
 // orig3: 0x188DE0 Task_SaveState (not in the modes 1 / 2: a restore, a reload): the counts, the done flag, the
-// state, the abandoned flag cleared (then the job's Task_SaveVars 0x187D30: TODO(sly3))
+// state, the abandoned flag cleared, then the job's Task_SaveVars 0x187D30
 void SaveTask3(TASK3* p)
 {
     if (p->nMode == 1 || p->nMode == 2 || p->nState == -1) return;
@@ -151,19 +180,7 @@ void SaveTask3(TASK3* p)
     WriteProgressBool(p->akeyDoneBool, FTaskDone3(p));
     WriteProgressS32(p->akeyState, p->nState);
     WriteProgressBool(p->akeyAbandoned, false);
-    // orig3: 0x187D30 (the job's save, not in its modes 1 / 2): its count, "is_complete" (0x187CD0: its last task
-    // done), its float. Without it no job was ever complete in the save and the chooser opened no episode.
-    if (JOB3* pj = p->pjob; pj && pj->nMode != 1 && pj->nMode != 2)
-    {
-        WriteProgressS32(pj->akeyCount, pj->f7c);
-        WriteProgressBool(pj->akeyDoneBool, FJobDone3(pj));
-        if (!pj->akeyReal.empty())
-        {
-            CRef r;
-            r.SetF32(pj->gA8);
-            FSetProgressKey(pj->akeyReal, r);
-        }
-    }
+    SaveJobVars3(p->pjob);
 }
 
 // ---- the broadcasts' messages (0x14 {code, object}: Task_Notify 0x189DF8 / JobOnEvent 0x186730 / the listeners)
@@ -180,9 +197,11 @@ bool FIsJobCurrent(const JOB3* p) { return g_tasks3.pjobCur == p; }
 namespace
 {
 
-// orig3: 0x18AA48 (SW +0x4044 and GAME +0x1498: the job's oid; TrackJt 0x1B67C0 when it changes: TODO(sly3))
+// orig3: 0x18AA48 (SW +0x4044 and GAME +0x1498: the job's oid; when it changes TrackJt 0x1B67C0(SW, 0, 0, 0): every
+// tracked interaction target dropped, its aura faded out over 0.5 s (jt.cpp DropJtTrack))
 void SetJobCur3(JOB3* p)
 {
+    if (p != g_tasks3.pjobCur) DropJtTrack();
     g_tasks3.pjobCur = p;
     g_gametasks3.oidJob = p ? p->oid : -1;
 }
@@ -209,9 +228,25 @@ bool FTaskPrereqsDone(const TASK3* p)
 
 // orig3: 0x186338 (from JobSwitch 0x186248): the job becomes the current one, the broadcast 0x25 (TODO(sly3): its
 // other effects: the job's objects / HUD, 0x186338's 728 bytes)
+// (SW +0x407C / +0x4080: "oidCheckpointForce" / "widCheckpointForce", the task and world the Isle's episode resumes at
+// (the chooser 0x289198, epmenu3.cpp): written by the job's activation (its target task +0x5C, EOPID 1366) and by its
+// rewards (the target of the last job that follows its last task), 0 / 0 without one)
+void WriteCheckpointForce3(const TASK3* pt)
+{
+    if (std::getenv("SLY3_NOCHKFORCE")) return;
+    CRef r;
+    r.SetS32(pt ? pt->oid : 0);
+    FSetProgress({"oidCheckpointForce"}, r);
+    r.SetS32(pt ? pt->iworld : 0);
+    FSetProgress({"widCheckpointForce"}, r);
+}
+// (0x185FD8: the job is live: not filtered out of this world (LO +0x50) and its mode +0xF0 not 3)
+bool FJobLive3(const JOB3* p) { return p && !(p->plo && p->plo->fMission) && p->nMode != 3; }
+
 void ActivateJob3(JOB3* p)
 {
     SetJobCur3(p);
+    if (!FJobLive3(p)) return;
     // orig3 0x186338: a chooser's game just started (its request's flag 0x80, SW +0x4348): every task of the job gets
     // the activation count 1 (a challenge / two-player game: the job's intro talks, asked with the script condition
     // 0x760 "first activation", are skipped as the reference's Air Time shows) or 0 (a job replay: played as new), and
@@ -227,13 +262,17 @@ void ActivateJob3(JOB3* p)
         p->f7c = n;
         if (p->ptaskFirst) SaveTask3(p->ptaskFirst);
     }
+    // the job's activations +0x7C counted (the scripts' EOPID 1373) and saved (0x187D30)
+    ++p->f7c;
+    SaveJobVars3(p);
     Broadcast3(0x25, p->plo);
     // orig3: 0x186338's self->Message(0x16): the job's splice handler (e.g. v_ext's follow job 2230: its event-22
     // procedure acquires the guard proxy 139555 that SCPT 2233's 0x62 commands; without it the guard was null and the
     // script's 0x62 wait ended at once). TODO(sly3): the job's objects / SMs (0x185A70 / 0x185DB0 in state 4)
     if (p->plo && g_taskhost3.pfnMessageLo) g_taskhost3.pfnMessageLo(p->plo, 0x16);
+    WriteCheckpointForce3(p->ptaskTarget);
 }
-// orig3: 0x186610 DeactivateJob: the broadcast 0x26
+// orig3: 0x186610 DeactivateJob: the broadcast 0x26, the message 0x17
 void DeactivateJob3(JOB3* p)
 {
     // (0x18AA48(0), the checkpoint task cleared when it is this job's: below as before)
@@ -246,7 +285,16 @@ void DeactivateJob3(JOB3* p)
         break;
     default: break;
     }
-    Broadcast3(0x26, p ? p->plo : nullptr);
+    // the live job (0x185FD8): the broadcast 0x26 and self->Message(0x17): the job's splice handler (e.g. v_ext's turf
+    // war 2139's event 23 (s1622): its wave state cleared (s6082: the wave guards let go, the list emptied, the "running"
+    // flag off), so an in-place retry starts the waves again; natively the message was not sent and the retry's
+    // waves never came). TODO(sly3): the job's objects / SMs in state 5 (0x185A70 / 0x185DB0)
+    if (FJobLive3(p))
+    {
+        Broadcast3(0x26, p->plo);
+        static const bool s_fNoMsg = std::getenv("SLY3_NOJOBMSG17") != nullptr;   // (debug: not sent, as before)
+        if (p->plo && g_taskhost3.pfnMessageLo && !s_fNoMsg) g_taskhost3.pfnMessageLo(p->plo, 0x17);
+    }
     SetJobCur3(nullptr);
 }
 // orig3: 0x186248 JobSwitch
@@ -256,22 +304,114 @@ void JobSwitch3(JOB3* p)
     if (g_tasks3.pjobCur) DeactivateJob3(g_tasks3.pjobCur);
     ActivateJob3(p);
 }
-// orig3: 0x186DA0 JobBegin: the broadcast 0x1F, the player's booty drop (DropActorBooty 0x155ED8: TODO(sly3)), JobSwitch
+// orig3: 0x186DA0 JobBegin: the broadcast 0x1F, player 1's character (0x1F4AD0(SW, 0), a PLAYER: Sly 3 cid 0x33) drops
+// the booty it carries (0x155ED8(actor, 5): +0x127C's save record kind 2, the booty's state 5: booty.cpp
+// DropActorBooty), JobSwitch
 void JobBegin3(JOB3* p)
 {
     if (FIsJobCurrent(p)) return;
     Broadcast3(0x1F, p->plo);
+    if (LO* pl = g_psw ? PloPoCurrent(g_psw) : nullptr; pl && FIsLoDerivedFrom(pl, S3CID(0x34)))
+        if (ACTOR* pa = PactorFromLo(pl)) DropActorBooty(pa);
     JobSwitch3(p);
 }
 
 void ChangeTaskState3(TASK3* p, int n);
 
-// orig3: 0x187270 (the job's rewards / close: jobend3's pfnRewards): the last task closed (3) unless the job keeps
-// them (+0x6C), the job deactivated (the scene completion 0x21F5D0 and the job's booty / progress records: TODO(sly3))
+// orig3: 0x21F5D0(id, 1) -> 0x21F510: power-up id (Sly 3's) acquired ("powerUps mppukfAcquired <id>", GAME +0xC = id,
+// the broadcast 0x4C (Sly 2's 0x3B here)), then 0x1C0130: the players (class 0x33) told (vt slot 118: shop.cpp
+// NotifyPlayersPowerups)
+void GrantPowerup3(int id)
+{
+    if (id < 0) return;
+    CRef r;
+    r.SetBool(true);
+    FSetProgress({"powerUps", "mppukfAcquired", std::to_string(id)}, r);
+    g_taskmgr.nItemC = id;
+    if (g_psw)
+    {
+        BroadcastTaskEvent(g_psw, 0x3B, nullptr);
+        NotifyPlayersPowerups(g_psw);
+    }
+    if (s_fPrint) std::printf("task3: power-up %d granted\n", id);
+}
+
+// orig3 0x185088's Sly 3 part (savedata.cpp UpdateGameTimers): the current episode's "dt" ("episode" <0x150600's name>
+// "dt", SW +0x4278[0x25E188()]) when not in the two-player games (D_0036DBE0 == 2) nor in world 0 (0x25E150); the
+// current job's +0xA8 ("time_played", EOPID 1387, saved by 0x187D30) while the pads were used in the last 10 s (the
+// smaller of the two JOYs' +0x1064 in state 3). Under the same pad test the checkpoint task (SW +0x404C) counts its
+// +0x68 (MISSION EOPID 1360) and, past the start of its range +0xB8 (EOPID 1403; the task's init 0x187E90: 240..360 s),
+// raises the suck value by dt / the range's width (0x171D98): e.g. Ep3's dogfight 1807 (900..1800 s). +0x68 has no
+// writer but its option: it starts at 0 with the task's object at a world load and keeps counting across the in-place
+// retries (transition.cpp ResetSwInPlace3). SLY3_NOCHKSUCK=1: not counted.
+}  // namespace
+namespace
+{
+// (MISSION EOPID 1360, +0x68, settable: the checkpoint task's suck timer kept on the native task)
+struct INITTASKTIMER3
+{
+    INITTASKTIMER3()
+    {
+        RegisterObjectSetter3(1360, [](LO* plo, const CRef& r) {
+            if (TASK3* pt = plo ? PtaskFind3(plo->oid) : nullptr)
+                pt->g68 = r.m_tagk == TAGK_F32 ? r.m_g : r.m_tagk == TAGK_S32 ? std::bit_cast<float>(r.m_n) : pt->g68;
+        });
+        RegisterObjectGetter3(1360, [](LO* plo) {
+            CRef r;
+            const TASK3* pt = plo ? PtaskFind3(plo->oid) : nullptr;
+            r.SetS32(pt ? std::bit_cast<int32_t>(pt->g68) : 0);
+            return r;
+        });
+    }
+} s_inittasktimer3;
+}  // namespace
+bool UpdateGameTimers3(float dt)
+{
+    if (!FScripts3Active()) return false;
+    const int iep = IepisodeCur();
+    if (g_psw && g_psw->nScreenMode3 != 2 && g_transition.iwrecCur > 0 && iep >= 0 && iep < sly3::EP_Max)
+    {
+        const CRef re = RefGetProgress({"episode", sly3::SzEpisode(iep), "dt"});
+        if (re.m_tagk == TAGK_F32)
+        {
+            CRef w;
+            w.SetF32(re.m_g + dt);
+            FSetProgress({"episode", sly3::SzEpisode(iep), "dt"}, w);
+        }
+    }
+    if (static_cast<float>(g_joyps2.dtIdle) < 10.0f)
+    {
+        if (JOB3* pj = g_tasks3.pjobCur) pj->gA8 += dt;
+        static const bool s_fNoChkSuck = std::getenv("SLY3_NOCHKSUCK") != nullptr;
+        if (TASK3* pt = g_tasks3.ptaskCur; pt && !s_fNoChkSuck)
+        {
+            pt->g68 += dt;
+            if (pt->lmSuck[0] < pt->g68) SetSuck3(GSuck3() + dt / (pt->lmSuck[1] - pt->lmSuck[0]));
+        }
+    }
+    return true;
+}
+namespace
+{
+
+// orig3: 0x187270 (the job's rewards / close: jobend3's pfnRewards): the job's first task back to 0 when its +0x40 is 2,
+// else its last task closed (3) unless the job keeps them (+0x6C); its power-up +0xF8 granted (0x21F5D0); the job
+// deactivated (0x186298); every character's outfit off (0x1734E0); the 3-D answer forgotten (D_0036DBA4 = -1); the
+// checkpoint-force keys (SW +0x407C / +0x4080) from the target (+0x5C) of the last job that follows its last task
+// (the last task's successors' jobs, +0x90 / +0x6C), 0 / 0 without one; then the autosave unless kept (+0x6C)
 void JobRewards3(JOB3* p)
 {
-    if (!p->f6c && p->ptaskLast) ChangeTaskState3(p->ptaskLast, 3);
+    if (p->n40 == 2) { if (p->ptaskFirst) ChangeTaskState3(p->ptaskFirst, 0); }
+    else if (!p->f6c && p->ptaskLast) ChangeTaskState3(p->ptaskLast, 3);
+    if (p->idReward != -1) GrantPowerup3(p->idReward);
     if (FIsJobCurrent(p)) DeactivateJob3(p);
+    TakeOffOutfits3();
+    g_n3dChoice3 = -1;
+    const TASK3* ptChosen = nullptr;
+    if (p->ptaskLast)
+        for (const TASK3* px : p->ptaskLast->anext)
+            if (px->pjob && px->pjob->ptaskTarget) ptChosen = px->pjob->ptaskTarget;
+    WriteCheckpointForce3(ptChosen);
     if (!p->f6c && g_taskhost3.pfnAutosave) g_taskhost3.pfnAutosave();   // 0x1874B4: the autosave 0x1CFE08 (the world flow code)
 }
 
@@ -332,7 +472,12 @@ void JobRestart3(JOB3* p)
     // the current world as before)
     static const bool s_fCur = std::getenv("SLY3_RESTARTCURWORLD") != nullptr;
     const int iwrec = pt && pt->iworld >= 0 && !s_fCur ? pt->iworld : g_transition.iwrecCur;
-    if (pt) RequestTaskStart(g_psw, iwrec, pt->oid, pt->pjob && FIsJobCurrent(pt->pjob) ? 0x36B : -1);
+    // (0x186FE8 -> 0x189F38(task, 0): no flag 2 for the same job in the same world: reset in place, TRANSF_INPLACE3)
+    // (on by default as the original; SLY3_INPLACERETRY=0: the reload as before. The turf war's waves come back since
+    // the job's deactivation sends its message 0x17 and the played Carmelita gives her pad back on the reset)
+    static const bool s_fRetryInPlace = [] { const char* sz = std::getenv("SLY3_INPLACERETRY"); return !sz || sz[0] != '0'; }();
+    if (pt) RequestTaskStart(g_psw, iwrec, pt->oid, pt->pjob && FIsJobCurrent(pt->pjob) ? 0x36B : -1,
+                             s_fRetryInPlace && FTaskStartInPlace3(pt->oid) ? TRANSF_INPLACE3 : 0);
 }
 
 // orig3: 0x1871C0 the job complete (+0xB8 clear): the broadcast 0x24, then the screen half (jobend3.h: the stamp, then
@@ -749,8 +894,12 @@ void InitTasks3(SW* psw)
             pj->akeyCount = akeyJ(1389);
             pj->akeyDoneBool = akeyJ(1390);
             pj->akeyReal = akeyJ(1387);
-            // (its float back from the save (the dynamic difficulty, game/suck3.cpp): the job's save writes it at
-            // every task's save, so a job made again at a world load (a restart) kept 0 and erased it)
+            pj->akeySuck = akeyJ(1388);
+            if (s_fPrint)
+                std::printf("task3: job %d keys: 1389 %s, 1390 %s, 1387 %s, 1388 %s\n", plo->oid, StrProgressKey(pj->akeyCount).c_str(),
+                            StrProgressKey(pj->akeyDoneBool).c_str(), StrProgressKey(pj->akeyReal).c_str(), StrProgressKey(akeyJ(1388)).c_str());
+            // (its time played back from the save: the job's save writes it at every task's save, so a job made again
+            // at a world load (a restart) kept 0 and erased it)
             if (!pj->akeyReal.empty())
                 if (const CRef r = RefGetProgressKey(pj->akeyReal); r.m_tagk == TAGK_F32) pj->gA8 = r.m_g;
         }
@@ -787,6 +936,19 @@ void InitTasks3(SW* psw)
         if (const OPT* po = PoptFind(plo, 1402))
             for (std::size_t i = 0; i < 2 && i < po->aval.size(); ++i) pt->aoidPlayer[i] = po->aval[i].n;
         pt->fDoneAtOnce = NOpt(plo, 1405, 0);
+        // (the checkpoint task's suck timer, 0x185088: +0x68 (MISSION EOPID 1360, settable) and the range +0xB8 (1403, an LM))
+        {
+            const int n = NOpt(plo, 1360, 0);   // (a field of kind 0: the word as written; 0x185088 reads it as a float)
+            pt->g68 = std::bit_cast<float>(n);
+        }
+        if (const OPT* po = PoptFind(plo, 1403); po && !po->aval.empty())
+        {
+            pt->fSuckRange = true;
+            pt->lmSuck[0] = po->aval[0].ag[0];
+            pt->lmSuck[1] = po->aval[0].ag[1];
+        }
+        if (s_fPrint && (pt->fSuckRange || PoptFind(plo, 1360)))
+            std::printf("task3: %d suck timer %.2f range %d %.2f..%.2f\n", plo->oid, pt->g68, int(pt->fSuckRange), pt->lmSuck[0], pt->lmSuck[1]);
         // (an instance's alias: v_ext 2086 -> 121540, the proxy whose instance is a job marker 35785: the instance, as
         // the reference's 2086 +0x70 = the marker, not the proxy)
         if (const OID oidShown = NOpt(plo, 1407, -1); oidShown >= 0)
@@ -838,8 +1000,28 @@ void InitTasks3(SW* psw)
     {
         pj->ptaskFirst = PtaskFind3(NOpt(pj->plo, 1364, -1));
         pj->ptaskLast = PtaskFind3(NOpt(pj->plo, 1365, -1));
+        pj->ptaskTarget = PtaskFind3(NOpt(pj->plo, 1366, -1));   // +0x5C
+        pj->n40 = NOpt(pj->plo, 1367, 0);                        // +0x40
+        pj->idReward = NOpt(pj->plo, 1385, -1);                  // +0xF8
         pj->ploExit = NOpt(pj->plo, 1381, -1) < 0 ? nullptr : PloFindSwObjectByOid(psw, NOpt(pj->plo, 1381, -1));
+        pj->idPowerupLent = NOpt(pj->plo, 1385, -1);
+        pj->ptaskPowerup = PtaskFind3(NOpt(pj->plo, 1386, -1));
+        if (s_fPrint && pj->idPowerupLent != -1)
+            std::printf("task3: job %d lends power-up %d (task %d)\n", pj->oid, pj->idPowerupLent,
+                        pj->ptaskPowerup ? pj->ptaskPowerup->oid : -1);
     }
+}
+
+int NJobLentPowerup3(int id3)
+{
+    const JOB3* pj = g_tasks3.pjobCur;
+    if (!pj && g_gametasks3.oidJob != -1) pj = PjobFind3(g_gametasks3.oidJob);   // 0x17E1B8(0x105, 0x36DB98)
+    if (!pj || pj->idPowerupLent != id3 || id3 < 0) return -1;
+    const TASK3* pt = pj->ptaskPowerup;
+    if (!pt) return 0;
+    int n = pt->nState;
+    if (n == -1 && !pt->akeyState.empty()) n = NProgress3(pt->akeyState);   // (+0xE8: the saved state)
+    return n >= 2 ? 1 : 0;
 }
 
 // orig3: 0x188CB0 RestoreTask: the saved state (+0xE8; unsaved 0); an abandoned job task (+0xF0) in progress is
@@ -868,11 +1050,52 @@ void RestoreTask3(TASK3* p)
     SetTaskState3(p, n);
 }
 
+// orig3: 0x18A900 (the world's tasks in order): from every task without prerequisites (+0x84 count 0), VisitTask
+// 0x188B08 counts the visits (+0x104) and outputs a task once it was reached from all its prerequisites, its depth
+// (+0x108) the longest chain and its rank (+0x10C) the number of job changes along it (a successor of another job);
+// then the list is sorted (qsort 0x292540, 0x18A890) by rank, job oid, depth, oid. Natively a prerequisites-first walk
+// in the world's order (audit 4 CORE-21). A task the walk never outputs (its prerequisites never all reached) is
+// appended (the original leaves it out). SLY3_TASKORDER2=1: the old walk.
 std::vector<TASK3*> AptaskOrdered3()
 {
     std::vector<TASK3*> a;
     std::map<TASK3*, bool> mpf;
-    for (auto& pt : g_tasks3.atask) VisitTask3(pt.get(), a, mpf);
+    static const bool s_fOld = std::getenv("SLY3_TASKORDER2") != nullptr;
+    if (s_fOld)
+    {
+        for (auto& pt : g_tasks3.atask) VisitTask3(pt.get(), a, mpf);
+        return a;
+    }
+    struct NODE { int visits = 0, depth = 0, rank = 0; };
+    std::map<TASK3*, NODE> mpnode;
+    std::function<void(TASK3*, int, int)> visit = [&](TASK3* p, int depth, int rank) {
+        NODE& n = mpnode[p];
+        ++n.visits;
+        n.depth = std::max(depth, n.depth);
+        n.rank = std::max(rank, n.rank);
+        if (n.visits < static_cast<int>(p->aprereq.size()) || mpf[p]) return;
+        mpf[p] = true;
+        a.push_back(p);
+        const int d = n.depth + 1, r = n.rank;
+        for (TASK3* pc : p->anext) visit(pc, d, r + (p->pjob && pc->pjob != p->pjob ? 1 : 0));
+    };
+    for (auto& pt : g_tasks3.atask)
+        if (pt->aprereq.empty()) visit(pt.get(), 0, 0);
+    std::sort(a.begin(), a.end(), [&](TASK3* x, TASK3* y) {
+        const NODE& nx = mpnode[x];
+        const NODE& ny = mpnode[y];
+        if (nx.rank != ny.rank) return nx.rank < ny.rank;
+        const int jx = x->pjob ? x->pjob->oid : -1, jy = y->pjob ? y->pjob->oid : -1;
+        if (jx != jy) return jx < jy;
+        if (nx.depth != ny.depth) return nx.depth < ny.depth;
+        return x->oid < y->oid;
+    });
+    std::vector<TASK3*> arest;
+    std::map<TASK3*, bool> mpf2;
+    for (auto& pt : g_tasks3.atask)
+        if (!mpf[pt.get()]) VisitTask3(pt.get(), arest, mpf2);
+    for (TASK3* p : arest)
+        if (!mpf[p]) a.push_back(p);
     return a;
 }
 
@@ -909,11 +1132,13 @@ void StartQueuedTask3(TASK3* px)
         SetTaskState3(p, -1);
     }
     g_gametasks3.oidJob = px->pjob ? px->pjob->oid : -1;
-    // (orig3 0x18A0D0 sets GAME +0x149C = the task's oid: the world start 0x184B60 then activates it (0x188540). Natively
-    // done for a game started from the chooser's lists (challenge3.h: Cops and Robbers' intro task 1811 has no other
-    // activation); the story's queued starts keep -1 (available only) as they were tuned. TODO(s3-script): the
-    // original's activation for every queued start.)
-    g_gametasks3.oidTask = FChallengeRunning3() ? px->oid : -1;
+    // orig3 0x18A0D0 sets GAME +0x149C = the task's oid: the world start 0x184B60 then activates it (0x188540, mode 1)
+    // right after the job's switch, before the queue runs (the reference's --warp 35:1798: 0x188540(1798) at the world
+    // start, its binocucom talk opened the next frame; after a retry the same: 1798 again, its trigger fires at once).
+    // (Before: only for the chooser's games; the story's queued tasks were activated by the queue's auto-activation,
+    // a frame later. SLY3_QUEUEDACT2=1: that again)
+    static const bool s_fOld = std::getenv("SLY3_QUEUEDACT2") != nullptr;
+    g_gametasks3.oidTask = FChallengeRunning3() || !s_fOld ? px->oid : -1;
     // the arrival at the task's checkpoint (the original reloads there, 0x1856E0; Sly 2's StartQueuedTask sets the
     // next point the same way: transition.cpp reads it after the world start)
     if (px->idChk != -1 && g_psw) g_psw->tasks.oidPointNext = px->idChk;
@@ -926,6 +1151,7 @@ namespace { bool s_fActivatePending = false; }
 void ActivateTasksAtStartCore3(const std::vector<TASK3*>& a);
 void StartTasks3()
 {
+    g_gametasks3.oidJobKept = -1;   // (read by the load's screen mode only; an in-place reset has none)
     // 0x184AA0 (the transition, flags 4): the queued task, else the job's first task
     if (g_gametasks3.fQueued)
     {
@@ -946,15 +1172,19 @@ void StartTasks3()
     // (orig3 0x25C2A8: 0x184AA0 (the queued task) comes before the players' placement 0x25B9C0, 0x184B60 (the job's switch,
     // the task's activation and the queue) after it. Natively both ran in the batch before transition.cpp places the
     // players; a challenge's job (Cops and Robbers: its begin places both players at the spawn points farthest apart,
-    // splice s6319) then had its placement undone by the checkpoint's. For the chooser's games the rest waits for the
-    // placement: ActivateTasksAtStart3, from transition.cpp. TODO(s3-script): the same order for every start.)
-    if (FChallengeRunning3())
+    // splice s6319) then had its placement undone by the checkpoint's. The rest waits for the placement:
+    // ActivateTasksAtStart3, from transition.cpp's start tail (a load or an in-place reset). SLY3_QUEUEDACT2=1: only
+    // for the chooser's games, as before.)
+    static const bool s_fOld = std::getenv("SLY3_QUEUEDACT2") != nullptr;
+    if (FChallengeRunning3() || !s_fOld)
     {
         s_fActivatePending = true;
         return;
     }
     ActivateTasksAtStartCore3(a);
 }
+
+bool FActivateTasksPending3() { return s_fActivatePending; }
 
 void ActivateTasksAtStart3()
 {
@@ -1009,6 +1239,60 @@ void ActivateTasksAtStartCore3(const std::vector<TASK3*>& a)
     }
 }
 
+void ResetTasksInPlace3()
+{
+    const OID oidJob = g_gametasks3.oidJob, oidTask = g_gametasks3.oidTask, oidChk = g_gametasks3.oidChk;
+    if (TASK3* p = g_tasks3.ptaskActive)
+    {
+        CMODE3 save(p, 2, nullptr);
+        DeactivateTask3(p);
+    }
+    if (JOB3* pj = g_tasks3.pjobCur)
+    {
+        const int nMode = pj->nMode;
+        void* plo = pj->ploContext;
+        pj->nMode = 2;
+        pj->ploContext = nullptr;
+        DeactivateJob3(pj);
+        pj->nMode = nMode;
+        pj->ploContext = plo;
+    }
+    g_gametasks3.oidJob = oidJob;
+    g_gametasks3.oidTask = oidTask;
+    g_gametasks3.oidChk = oidChk;
+    for (TASK3* p : AptaskOrdered3())
+    {
+        CMODE3 save(p, 2, nullptr);
+        SetTaskState3(p, -1);
+    }
+    g_tasks3.nDispatch = 0;
+}
+
+bool FTaskStartInPlace3(OID oidTask)
+{
+    const TASK3* pt = PtaskFind3(oidTask);
+    if (!pt) return false;
+    if (pt->pjob && pt->pjob != g_tasks3.pjobCur && g_psw && pt->pjob->n40 != -1 && pt->pjob->n40 != g_psw->nScreenMode3) return false;
+    // (the selections: the task's +0xC0 and its job's +0x4C hold the world's option-set tables' values for their oids
+    // (table B by the task, table A by the job; -1 none: the reference's RAM, m_ext 1798 = 12, v_ext 1826 = 23); the
+    // current one is the static camera's +0x10, or 12 while the first block is the chosen one (+0x100 = 0x36BD10))
+    if (g_psw && g_psw->aidOptset.size() >= 2)
+    {
+        auto valueOf = [](const std::vector<SW::OPTSETKEY3>& a, OID oid) {
+            for (const SW::OPTSETKEY3& k : a)
+                if (int32_t(k.key) == oid) return int32_t(k.value);
+            return int32_t(-1);
+        };
+        int sel = valueOf(g_psw->aoptsetB, pt->oid);
+        if (pt->pjob)
+            if (const int selJob = valueOf(g_psw->aoptsetA, pt->pjob->oid); selJob != -1) sel = selJob;
+        const bool fFirst = g_psw->ioptsetChosen == 0;
+        if (sel == g_condset3.cond && fFirst) sel = 12;
+        if (sel != (fFirst ? 12 : g_condset3.cond)) return false;
+    }
+    return true;
+}
+
 bool FRequestTaskStartByOid3(OID oidTask)
 {
     // the start goes through the world's (re)load in both cases (0x189F38 ends in a checkpoint transition too): the keys
@@ -1020,6 +1304,10 @@ bool FRequestTaskStartByOid3(OID oidTask)
             const OID oidJobCur = g_tasks3.pjobCur ? g_tasks3.pjobCur->oid : OidChallengeJob3();
             if ((ptask->pjob ? ptask->pjob->oid : -1) != oidJobCur) AbortChallenge3();
         }
+    {
+        const TASK3* ptask = PtaskFind3(oidTask);
+        g_gametasks3.oidJobKept = ptask && ptask->pjob && ptask->pjob == g_tasks3.pjobCur ? ptask->pjob->oid : -1;
+    }
     if (g_tasks3.pjobCur) DeactivateJob3(g_tasks3.pjobCur);   // (RestartJob 0x187118's part)
     g_gametasks3.oidChk = oidTask;
     g_gametasks3.oidTask = -1;
@@ -1054,7 +1342,7 @@ void Broadcast3(int code, LO* plo)
     // job (FRequestTaskStartByOid3), and a death broadcast every frame after it)
     if (code == 0xC && !g_tasks3.pjobCur && g_psw && !g_transition.fPending && !g_transition.fWipeReq &&
         g_transition.wipes == WIPES_Idle && !g_gametasks3.fQueued)
-        RequestTransition(g_psw, nullptr, g_transition.oidPointCur != -1 ? g_transition.oidPointCur : sly3::POINT_DEFAULT, -1, 0, 0x36B);
+        RequestTransition(g_psw, nullptr, g_transition.oidPointCur != -1 ? g_transition.oidPointCur : sly3::POINT_DEFAULT, -1, TRANSF_INPLACE3, 0x36B);
     SuckOnEvent3(code, plo);   // 0x171AA0: the dynamic difficulty (game/suck3.cpp)
     // the available tasks of the current job: Task_Notify (live ones: message 0x14 {code, object})
     for (TASK3* p : std::vector<TASK3*>(g_tasks3.aptaskAvailable))
@@ -1064,15 +1352,28 @@ void Broadcast3(int code, LO* plo)
     if (g_psw)
         for (LO* pl : std::vector<LO*>(g_psw->mpcidaplo[0x93]))
             if (sly3::FLoInWorld3(pl)) MessageArgs3(pl, 0x14, code, plo);
-    // the current job: JobOnEvent 0x186730 (message 0x14 when live; the job's end on 0xC: 0x186EC0, TODO(sly3))
+    // the current job: JobOnEvent 0x186730. Live (0x185FD8: not filtered out of this world (LO +0x50) and its mode
+    // +0xF0 not 3): message 0x14, and the job's end on 0xC
     if (JOB3* pj = g_tasks3.pjobCur)
-        if (pj->nMode != 3)
+    {
+        const bool fFiltered = pj->plo && pj->plo->fMission;
+        if (!fFiltered && pj->nMode != 3)
         {
             MessageArgs3(pj->plo, 0x14, code, plo);
             // 0xC (the player's death) in a job that does not survive it (+0x70 clear): 0x186EC0(job, -1, 0xC) ->
             // 0x186EE0 the job failed (jobend3: the broadcast 0x20, its end state: Job Failed!, the line -1: the default)
             if (code == 0xC && !pj->f70 && NJobEndState3(pj) == 0) JobEndFail3(pj, -1);
         }
+        // not live: a death (0xC) in a job that does not survive it, filtered out of this world (+0x50) and no world
+        // change under way (0x25AE28): 0x186FE8, the job again from its checkpoint task (SW +0x404C) or its first, then
+        // its end state 8 (audit 4 CORE-18)
+        else if (code == 0xC && !pj->f70 && fFiltered && !g_transition.fPending && g_transition.wipes != WIPES_Out &&
+                 !(g_psw && g_psw->ploExitPending))
+        {
+            JobRestart3(pj);
+            JobEndQuit3(pj);
+        }
+    }
     // the challenge manager 0x2849A8 last (challenge3.h: the running game's commands)
     ChallengeOnEvent3(code, plo);
 }
@@ -1082,18 +1383,31 @@ int Code3FromCode2(int code2)
     // (tools/s3script/bcastmap3.py: the pairs voted by the callers; 0x10 (the player's death) / 0x1D / 0x1E / 0x20 /
     // 0x21 by the receivers: JobOnEvent's 0xC, the job module's order. 0x15 -> 0x0F: a guard's hit reaction, orig3 0x16D038 /
     // 0x16D0C0 (the hit jobs 0xCE / 0xCF Enter: 0x1854C8(GAME, 0xF, guard)); 0x17 -> 0x10: the knock-out, 0x16D1B8 sends 0x10
-    // whoever the hit's source (Sly 2: 0x17 another's, 0x18 the player's))
+    // whoever the hit's source (Sly 2: 0x17 another's, 0x18 the player's); 0x34 / 0x35 -> 0x47 / 0x48: the dance's beat
+    // and button, orig3 0x209FD0 / 0x20A930). 0x0E -> 0x09: the player active again after 15 s idle, orig3 0x1A8B88 (joy)
+    // 0x1854C8(GAME, 9, the player); 0x3B -> 0x4C: a power-up acquired, orig3 0x21F510 0x1854C8(GAME, 0x4C, 0) (the shop /
+    // bif 139 / 147).
+    // NOT mapped on purpose: Sly 2's world-flow codes 1 / 3 / 4 / 5 (task.cpp, transition.cpp, update.cpp): Sly 3's 1 is
+    // "camera turned" (0x274AC0, sent by cplcy.cpp) and 3 the binocucom's; a 1 -> 1 or 3 -> 3 row would send those from
+    // Sly 2's world flow. The hypnosis 0x37 / 0x38 have no Sly 3 twin; the prox job's 0x33 stays dropped (Sly 3's JOBPROX 0x163968 sends 0x52 itself: aijobs.cpp).
     static const int s_amap[][2] = {
-        {0x07, 0x02}, {0x08, 0x03}, {0x0C, 0x07}, {0x0D, 0x08}, {0x0F, 0x0A}, {0x10, 0x0C}, {0x11, 0x0D}, {0x12, 0x0E},
+        {0x07, 0x02}, {0x08, 0x03}, {0x0C, 0x07}, {0x0D, 0x08}, {0x0E, 0x09}, {0x0F, 0x0A}, {0x10, 0x0C}, {0x11, 0x0D}, {0x12, 0x0E},
         {0x15, 0x0F}, {0x17, 0x10}, {0x18, 0x10}, {0x19, 0x11}, {0x1A, 0x1D}, {0x1B, 0x1E}, {0x1C, 0x1F}, {0x1D, 0x20}, {0x1E, 0x22}, {0x1F, 0x23}, {0x20, 0x24},
         {0x21, 0x25}, {0x22, 0x26}, {0x23, 0x27}, {0x24, 0x28}, {0x25, 0x29}, {0x26, 0x2A}, {0x27, 0x2B}, {0x28, 0x3A},
-        {0x2C, 0x3E}, {0x2D, 0x3F}, {0x2E, 0x40}, {0x32, 0x45}, {0x36, 0x49}, {0x39, 0x4A}, {0x3A, 0x4B}, {0x3C, 0x4D},
+        {0x2C, 0x3E}, {0x2D, 0x3F}, {0x2E, 0x40}, {0x32, 0x45}, {0x34, 0x47}, {0x35, 0x48}, {0x36, 0x49}, {0x39, 0x4A}, {0x3A, 0x4B}, {0x3B, 0x4C},
+        {0x3C, 0x4D},
         {0x3D, 0x4E}};
     // (SLY3_HITBCAST0=1: the hit jobs' 0x15 / 0x17 not sent, as before round 23)
     static const bool s_fNoHit = std::getenv("SLY3_HITBCAST0") != nullptr;
     if (s_fNoHit && (code2 == 0x15 || code2 == 0x17)) return -1;
+    // (SLY3_IDLEBCAST0=1: the idle 0x0E not sent, as before audit 4 CORE-01)
+    static const bool s_fNoIdle = std::getenv("SLY3_IDLEBCAST0") != nullptr;
+    if (s_fNoIdle && code2 == 0x0E) return -1;
     for (const auto& r : s_amap)
+    {
+        assert(r[0] != 1 && r[0] != 3 && r[0] != 4 && r[0] != 5);   // (the Sly 2 world-flow codes above stay dropped)
         if (r[0] == code2) return r[1];
+    }
     return -1;
 }
 

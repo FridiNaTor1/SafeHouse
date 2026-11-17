@@ -47,11 +47,8 @@ bool FCreateSaves3()
 {
     std::error_code ec;
     std::filesystem::create_directories(std::filesystem::path(g_aslot[0].path).parent_path(), ec);
-    const GAMESAVE saved = g_gamesave;
-    g_gamesave = GAMESAVE{};
-    ValidateGameSave();
-    const GAMESAVE gs = g_gamesave;
-    g_gamesave = saved;
+    GAMESAVE gs;
+    ResetGameSave3(gs, false);   // (orig3 0x1D0478 -> 0x21D010(block, 0): the language set)
     bool fOk = true;
     for (int i = 0; i < kSlotsCard; ++i)
     {

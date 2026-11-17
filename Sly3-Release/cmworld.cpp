@@ -139,7 +139,7 @@ std::map<LO*, ZONESTATE> s_mpzone;
 
 bool FocusNative(LO* plo, CMFOCUS* pf)
 {
-    pf->fJt = FIsLoDerivedFrom(plo, S3CID(0x34));
+    pf->fJt = FIsLoDerivedFrom(plo, sly3::CID_PLAYER);   // (orig3 0x274AC0: any player 0x33 has the focus record)
     pf->mat = MatLoNative(plo);
     // the player's interaction sub-object (+0x4C0): +0x4F4 jtfock, +0x500 its focus point, +0x4C8 / +0x4CC its kind and
     // state, +0x528 its own camera zone; +0x10E4
@@ -967,6 +967,12 @@ CAMERA CameraFromCm(const CM& cm)
     cam.sFar = cm.sFarClip;
     cam.rMRDAdjust = cm.rMRDAdjust;
     cam.grfChannels = static_cast<uint32_t>(cm.nCur);
+    // (the 3-D mode's eyes, cm.cpp UpdateCmEyes3; 0 out of the mode)
+    if ((g_grfGame3 >> 1) & 1)
+    {
+        cam.sEyeShift3 = cm.sEyeShift3;
+        cam.sConverge3 = cm.sConverge3;
+    }
     ApplyDebugCharScaleCamera(&cam);   // (PC debug menu's character scale: debugphys.h)
     return cam;
 }

@@ -773,7 +773,7 @@ void CPFOLLOW::Update(CPDEFI* pcpdefiCm, const CMJOY* pjoy)
     CPDEFI3 c;   // sp
     int cpoint = 0;
     GetFocusCpdefi3(this, pso, g_cm.fCut != 0, &c, &cpoint);
-    LO* pjt = FIsLoDerivedFromCm(pso, 0x34) ? pso : nullptr;   // fp (the player base 0x33)
+    LO* pjt = FIsLoDerivedFromCm(pso, sly3::CID_PLAYER) ? pso : nullptr;   // fp (orig3 0x274AC0: the player base 0x33, every player)
     const CMFOCUS focus = pjt ? FocusOf(pjt) : CMFOCUS{};
     CheckFocus3(this, cpoint);
     const int grf = pz ? pz->grf : 4;   // s4
@@ -881,7 +881,14 @@ void CPFOLLOW::Update(CPDEFI* pcpdefiCm, const CMJOY* pjoy)
         fLeftSamples = 1;
         pan = RadNormalize(pan + dradPan * dtReal + MOUSE_PAN_SIGN * pjoy->dradMousePan);
         tilt = GLimitLm(&s_lmTilt, RadNormalize(tilt + dradTilt * dtReal - pjoy->dradMouseTilt));
-        if (g_cmfollowworld.pfnCameraTurned) g_cmfollowworld.pfnCameraTurned();   // (0x1854C8 every 5 s)
+        if (g_cmfollowworld.pfnCameraTurned) g_cmfollowworld.pfnCameraTurned();
+        // orig3 0x274AC0: the task broadcast 1 ("camera turned") with no object, at most once every 5 s of the camera
+        // clock (g_clock +0x14) against GAME +0x4 tCmTurned
+        else if (g_clock.tReal - g_taskmgr.tCmTurned > 5.0f)
+        {
+            g_taskmgr.tCmTurned = g_clock.tReal;
+            Broadcast3(1, nullptr);
+        }
         cpmode = 4;
         tManual = t;
         fTurned = true;

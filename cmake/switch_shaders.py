@@ -68,6 +68,9 @@ GAMES = {
         ('screen', 'screen.vert', None, 'screen.frag', {}, SLY3),
         ('shadowcombine', 'shadowcombine.vert', None, 'shadowcombine.frag', {}, SLY3),
         ('shadowvol', 'shadowvol.vert', None, 'shadowvol.frag', {}, SLY3),
+        # (upscaling, platform/render/fsr.h: Sly 2's FSR 1 programs, shared)
+        ('fsreasu', 'vrfull.vert', None, 'fsreasu.frag', {}, SLY2),
+        ('fsrrcas', 'vrfull.vert', None, 'fsrrcas.frag', {}, SLY2),
     ],
 }
 # (every game's: game '' in the table)

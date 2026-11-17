@@ -7,11 +7,13 @@
 #include "vr.h"
 
 #include "gl.h"
+#include "fsr.h"
 #include "pcinput.h"
 #include "actioninput.h"
 #include "sound.h"
 
 #include "../platform/sly3_settings.h"
+#include "../platform/display_pacing.h"
 #include "../platform/monitor_select_glfw.h"
 #include "audio.h"
 #include "rumble.h"
@@ -65,8 +67,11 @@ void FromGameOptions(const st::Sly2GameOptions& o)
     g_saveopts.fHeadset = o.usbHeadset != 0;
     g_saveopts.fTextureCache = o.textureCache != 0;
     SetTextureCacheEnabled(g_saveopts.fTextureCache);   // (texmod.h: read before the first texture)
+    g_saveopts.fTextureStreaming = o.textureStreaming != 0;
+    SetTextureModStreamingEnabled(g_saveopts.fTextureStreaming);
     for (int k = 0; k < 8; ++k)
         for (int a = 0; a < 2; ++a) g_saveopts.afCamReverse[k][a] = o.camReverse[k][a] != 0;
+    g_saveopts.f3dMode = o.mode3d != 0;
     ApplySoundOptions();
 }
 
@@ -81,8 +86,10 @@ void ToGameOptions(st::Sly2GameOptions& o)
     o.headsetOutputDevice = g_saveopts.headsetOutputDevice;
     o.usbHeadset = g_saveopts.fHeadset ? 1 : 0;
     o.textureCache = g_saveopts.fTextureCache ? 1 : 0;
+    o.textureStreaming = g_saveopts.fTextureStreaming ? 1 : 0;
     for (int k = 0; k < 8; ++k)
         for (int a = 0; a < 2; ++a) o.camReverse[k][a] = g_saveopts.afCamReverse[k][a] ? 1 : 0;
+    o.mode3d = g_saveopts.f3dMode ? 1 : 0;
 }
 
 // (vr.h) [VR]
@@ -147,6 +154,22 @@ void ApplySoundOptions()
     SetAudioDevices(g_saveopts.outputDevice, g_saveopts.inputDevice, g_saveopts.headsetOutputDevice);   // (audio.h)
 }
 
+static void FromUpscaleOptions(const st::Sly2UpscaleOptions& o)
+{
+    g_display.fUpscale = o.enabled != 0;
+    g_display.upscaleMethod = st::UpscaleMethod_Fsr1;
+    g_display.upscalePreset = std::clamp(o.preset, 0, 3);
+    g_display.upscaleSharpness = std::clamp(o.sharpness, 0, 100);
+}
+
+static void ToUpscaleOptions(st::Sly2UpscaleOptions& o)
+{
+    o.enabled = g_display.fUpscale ? 1 : 0;
+    o.method = g_display.upscaleMethod;
+    o.preset = g_display.upscalePreset;
+    o.sharpness = g_display.upscaleSharpness;
+}
+
 bool FLoadDisplaySettings(const std::filesystem::path& userDir, std::string* pmessage)
 {
     st::Sly3Settings s;
@@ -155,6 +178,9 @@ bool FLoadDisplaySettings(const std::filesystem::path& userDir, std::string* pme
     FromSettings(s.system);
     FromGameOptions(s.game);
     FromVrOptions(s.vr);
+    FromUpscaleOptions(s.upscale);
+    g_display.outlineThickness = std::clamp(s.outlineThickness, st::kOutlineThicknessMin, st::kOutlineThicknessMax);
+    g_display.hudPlacement = std::clamp(s.hudPlacement, 0, st::kHudPlacementCount - 1);
     sly2actions::Load(userDir);
 #ifdef __SWITCH__
     // (the Switch: one screen, the swap paces the frames at 30 or 60, 120 on the Switch 2; the internal resolution
@@ -197,6 +223,9 @@ bool FSaveDisplaySettings(const std::filesystem::path& userDir)
     ToSettings(s.system);
     ToGameOptions(s.game);
     ToVrOptions(s.vr);
+    ToUpscaleOptions(s.upscale);
+    s.outlineThickness = g_display.outlineThickness;
+    s.hudPlacement = g_display.hudPlacement;
     return st::saveSly3(userDir, s);
 }
 
@@ -222,6 +251,16 @@ void MigrateSaveOptions(const st::SaveOptionValues& values)
     FromGameOptions(s.game);
     std::printf("settings: the save's options taken into %s%s\n", cane::utf8(st::sly3SettingsPath(userDir)).c_str(),
                 st::saveSly3(userDir, s) ? "" : " (not writable)");
+}
+
+float DxHudPlacement()
+{
+    const int n = g_display.hudPlacement;
+    if (n <= st::HudPlacement_4_3 || vr::FActive()) return 0.0f;   // (VR: the HUD panel keeps the 4:3 canvas)
+    // the picture's shape on the canvas's scale (the canvas is 4:3, uiScale.x its share of the picture's width)
+    const float rPicture = g_display.uiScale.x < 1.0f ? (4.0f / 3.0f) / g_display.uiScale.x : 4.0f / 3.0f;
+    const float rBox = std::min(rPicture, n == st::HudPlacement_16_9 ? 16.0f / 9.0f : n == st::HudPlacement_16_10 ? 16.0f / 10.0f : rPicture);
+    return std::max(0.0f, 320.0f * (rBox * 0.75f - 1.0f));
 }
 
 void LayoutDisplay(int outputWidth, int outputHeight)
@@ -251,7 +290,9 @@ void LayoutDisplay(int outputWidth, int outputHeight)
     d.presentX = (d.outputWidth - dx) / 2;
     d.presentY = (d.outputHeight - dy) / 2;
     int dxRender = dx, dyRender = dy;
-    if (d.internalHeight > 0)
+    if (d.fUpscale && g_gl.window && fsr::FAvailable())
+        fsr::RenderSizeForPreset(d.upscalePreset, dx, dy, &dxRender, &dyRender);   // (gl.h BeginNativeUi scales it up)
+    else if (d.internalHeight > 0)
     {
         dyRender = d.internalHeight;
 #if defined(__SWITCH2__)
@@ -304,6 +345,19 @@ void ApplyDisplaySettings(GLFWwindow* window)
     // then paces), 2 for a cap of half of it; another cap is paced by the timer between the vblanks.
     int interval = 0, refreshRate = 0;
     bool fSwapPacesFrames = false;
+    g_display.displayFps = 0;
+#if defined(CANE_IOS)
+    // (iOS, as Sly 2's: a CAMetalLayer always presents at a vblank, VSync or not, so the setting does not apply (the
+    // menus hide it). The display paces whenever the cap is its rate or a whole fraction of it (display_pacing.h), the
+    // game woken by a display link at the cap's rate (game.cpp); another cap is held by the timer)
+    {
+        refreshRate = DisplayRefreshRate(window);
+        const cane::pacing::SwapChoice choice = cane::pacing::ChooseLockedToVblank(g_display.frameRate, refreshRate);
+        interval = choice.interval;
+        fSwapPacesFrames = choice.fSwapPacesFrames;
+        g_display.displayFps = choice.displayFps;
+    }
+#else
     if (g_display.fVsync)
     {
         interval = 1;
@@ -317,6 +371,7 @@ void ApplyDisplaySettings(GLFWwindow* window)
             fSwapPacesFrames = true;
         }
     }
+#endif
 #ifdef __SWITCH__
     CaneSwitchSetFrameRate(g_display.frameRate);
 #endif

@@ -568,7 +568,11 @@ void SolveGroup(int flags, int nobj, ALO** objs, int ncont, XP** conts)
         if (flags == 4) return;
         ClearDzgSolution(&dzg);
     }
-    float mx = 0.0f;
+    // (orig3 0x243020: the velocities' bound starts at 100 (a speed of 10: ApplyDzg's limit at least 20); Sly 2's
+    // 0x1F9410 started at 0, so a landing's small speeds were solved within a tight limit and he stopped at once.
+    // SLY3_SOLVEMX0=1: the Sly 2 start)
+    static const float s_mx0 = std::getenv("SLY3_SOLVEMX0") ? 0.0f : 100.0f;
+    float mx = s_mx0;
     if (fl1)
     {
         UpdateXpPositions(ncont, conts);

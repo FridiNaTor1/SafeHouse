@@ -23,6 +23,7 @@ void SetDamageState(ACTOR* pa, int n);
 void UpdateDamage(ACTOR* pa);
 // orig: 0x001A15D0 (the reaction's end: the deferred action, else the states 8..12's slot 93, else the jump's kind 11)
 void EndDamageReaction(ACTOR* pa);
+void ActorDeathSlot103(ACTOR* pa, bool fEvent = false);   // orig3 0x1C3FE0 (vt slot 103)
 // orig: 0x001A12F0 (the state machine's transitions in Sly's state 4: the reaction's clip done ends it)
 void UpdateDamageTransitions(ACTOR* pa);
 // orig: 0x001A23C0 (0 free, 1 reacting, 2 reacting with the counter out; else 1 while flashing)

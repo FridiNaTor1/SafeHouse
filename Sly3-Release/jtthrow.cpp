@@ -1,4 +1,5 @@
 #include "jtthrow.h"
+#include "sly.h"
 #include "game/sly3.h"
 #include "actioninput.h"
 
@@ -354,6 +355,17 @@ void SetJtThrowState(JTTHROW& t, int state)
         // (the global Bentley still held: his carried controller +0x1800 in its state 0)
         if (BENTLEY* bentley = SelectedBentley(t); bentley && bentley->n1800 == 0)
             CancelBentleyThrow(actor, bentley);
+        else if (SLY* sly = t.selected ? PslyFromLo(t.selected) : nullptr; sly && sly->jts == jts::Carried)
+        {
+            // orig3 0x273278: Sly on Murray (state 0x14) pushed off: the jump's kind 11 (0x1B7268), 400 away from the
+            // owner in the ground plane and 600 up
+            glm::vec3 d = PosJtLo(sly->palo) - PosJtLo(actor->palo);
+            d.z = 0.0f;
+            const float l = glm::length(d);
+            const glm::vec3 dir = l < 0.0001f ? glm::vec3(1.0f, 0.0f, 0.0f) : d / l;   // (D_00317530)
+            SetJumpKind(&sly->jump, 11, 0, 0);
+            SetAloVelocityTo(sly->palo, dir * 400.0f + glm::vec3(0.0f, 0.0f, 600.0f));
+        }
         else if (t.selected && t.peer && t.selected->paloParent == t.peer->paloParent)
         {
             if (PcarryFromLo(t.selected)) SetCarryState(t.selected, 4);
@@ -569,6 +581,15 @@ void ReleaseJtThrow(JTTHROW& t)
     bool release = true;
     if (BENTLEY* bentley = SelectedBentley(t))
         release = bentley->state == BS3_Carried && SetThrownBentleyState(bentley, 1);
+    else if (SLY* sly = PslyFromLo(selected))
+    {
+        // orig3 0x2730D8: Sly thrown only from his state 0x14 (on Murray): the jump's kind 8 (0x1B7268; its exit leaves
+        // the parent and the holds), then the velocities below. (Sly 3 aims Sly's launch again from where he is
+        // (0x212480 with the controller's pitch +0x144) and sets the jump's +0x370 / +0x35C 3: TODO(player): natively
+        // the planned launch's velocity; the original's data never selects Sly)
+        release = sly->jts == jts::Carried;
+        if (release) SetJumpKind(&sly->jump, 8, 0, 0);
+    }
     else
     {
         SetAloParent(selected, nullptr, nullptr, 3);

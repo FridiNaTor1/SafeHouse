@@ -124,7 +124,7 @@ void ClearReachGrabCtrls(REACH* p)
 }
 }  // namespace
 
-// orig: 0x001CCC88: fly the object to the reach's end at event 0x1C7,
+// orig: 0x001CCC88 (orig3 0x208D50): fly the object to the reach's end at event 0x1F5 (Sly 2's 0x1C7),
 // slowing the actor's animation when the ballistic flight needs more time.
 void StartReachGrab(REACH* p, LO* plo)
 {
@@ -132,7 +132,7 @@ void StartReachGrab(REACH* p, LO* plo)
     ClearReachGrabCtrls(p);
     ALO* palo = static_cast<ALO*>(plo);
     ASEGA* a = p->pa->pasega;
-    const float tEvent = GEventAseg11(a->paseg, 0x1C7);
+    const float tEvent = GEventAseg11(a->paseg, 0x1F5);
     const float dtAnim = (tEvent - a->t) / a->svt;
     XF* pxfEnd = nullptr;
     glm::mat4 local, pose(1.0f);

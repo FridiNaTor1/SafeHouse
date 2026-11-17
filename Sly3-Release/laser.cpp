@@ -2,6 +2,7 @@
 // Source: original 0x1DE400..0x1DFAD8, matching decomp 0x1DEF98/0x1DF3D0/0x1DF260,
 // and the original assembly of 0x1DE5D8/0x1DF0A0. No mission-specific state is used.
 #include "laser.h"
+#include "laserrender.h"
 #include "game/sly3.h"
 #include "worldglobals.h"
 #include "alo.h"
@@ -177,7 +178,7 @@ void BindEnd(ALO* p, LASEREND& e)
     if (e.kind == 0) e.pos = PosConvertXfs(nullptr, PxfObj(p), e.pos);
 }
 
-// orig: 0x001DF260: choose the nearest contact and offer the beam's original damage message.
+// orig: 0x001DF260: choose the nearest contact and offer the beam's original damage message. (orig3: 0x224600)
 void ApplyLaserContacts(ALO* p)
 {
     for (LASERPAIR& pair : Laser(p).pairs)
@@ -195,7 +196,9 @@ void ApplyLaserContacts(ALO* p)
         msg.pvOther = nearest->axpd[0].psoe;
         msg.ploReceiver = nearest->axpd[1].palo;
         msg.grfFilter = 0x1000;
-        msg.nState = -10;
+        // (orig3 0x224600: 0x240CB0(.., 0x1000, 10, 0, ..): Sly 3's sign, a positive damage of 10 (scaled by the suck by
+        // 0x240C78 for a player's object: here by the receiver, damage.cpp NScaleDamage / guardphys); native Sly 2's -10)
+        msg.nState = 10;
         msg.pos = nearest->axpd[0].pos;
         PaloAcceptContact(&msg);
     }
@@ -402,6 +405,7 @@ void PostLoadLaser(LO* plo)
         entry.nStampWorld = std::numeric_limits<int32_t>::min();
     }
     if (p->fInWorld) AddAloSoes(p);
+    BindLaserModelAsegs3(p);   // orig3 0x224158
     ApplyLaserContacts(p);
     if (std::getenv("SLY2N_LASERPRINT"))
     {
@@ -439,7 +443,11 @@ void CloneLaser(const ALO* src, ALO* dst)
     s_lasers[dst] = std::move(laser);
 }
 
-void ResetLasers() { s_lasers.clear(); }
+void ResetLasers()
+{
+    s_lasers.clear();
+    ResetLaserModelAsegs3();
+}
 
 // orig: 0x001DF5B0, 0x1DF658..0x1DF6B0: truncate the visible endpoint to +0x144.
 std::vector<LASERBEAM> LaserBeams(ALO* p)
@@ -462,6 +470,59 @@ std::vector<LASERBEAM> LaserBeams(ALO* p)
     return result;
 }
 
+// orig3 0x2248F0 (from the reset 0x223A48, vt slot 31; Sly 2 folded it into the bind): every path-following endpoint
+// restarted: the cursor at its start fraction of the path, mode 0 / 8 the first record's time from it (reversed: from
+// the far end) and the second's 0, mode 16 the record the cursor is in and the time spent in it (reversed: the mirrored
+// record) (AUDIT4 RENDER-15)
+void RestartLaserEnds(ALO* p)
+{
+    auto it = s_lasers.find(p);
+    if (it == s_lasers.end()) return;
+    for (LASERPAIR& pair : it->second.pairs)
+        for (LASEREND& e : pair.ends)
+        {
+            if (e.kind != 1 || !e.ppath) continue;
+            const CRV* path = PcrvFromLo(e.ppath);
+            if (!path) continue;
+            const bool back = e.aseg[0].v < 0.0f;
+            const float length = SLengthCrv(path);   // 0x22DFD8
+            const float fraction = e.params.x;
+            const float period = e.params.z;   // (the loaded period +0x20 as it is, as 0x2248F0 reads it)
+            e.s = fraction * length;
+            const int mode = e.mode == 0 || e.mode == 8 || e.mode == 16 ? e.mode : 8;
+            if (mode == 0 || mode == 8)
+            {
+                e.aseg[0].t = (back ? 1.0f - fraction : fraction) * period;
+                if (mode == 0) e.aseg[1].t = 0.0f;
+                e.iseg = 0;
+            }
+            else
+            {
+                for (e.iseg = 0; e.iseg < 3; ++e.iseg)
+                {
+                    TRACKSEG& seg = e.aseg[size_t(e.iseg)];
+                    const TRACKSEG& next = e.aseg[size_t(e.iseg) + 1];
+                    if (e.s < next.s)
+                    {
+                        const float t = ((e.s - seg.s) + (e.s - seg.s)) / (seg.v + next.v);
+                        if (back)
+                        {
+                            e.iseg = 5 - e.iseg;
+                            e.aseg[size_t(e.iseg)].t = e.aseg[size_t(e.iseg)].duration - t;
+                        }
+                        else seg.t = t;
+                        break;
+                    }
+                }
+            }
+        }
+}
+// orig3 0x223A48 (vt slot 31): the ALO's reset (0x1FC968: no native), then 0x2248F0
+void ResetLaser3(LO* plo, LO*)
+{
+    if (plo && FCidDerivedFrom(plo->Cid(), S3CID(0x30))) RestartLaserEnds(static_cast<ALO*>(plo));
+}
+NATIVEFN3(0x223A48, ResetLaser3);
 NATIVEFN(0x1DEEA8, RemoveLaserContacts);
 NATIVEFN(0x1DE5A8, AddLaserAttachment);
 NATIVEFN(0x1DF0A0, AddLaserContacts);

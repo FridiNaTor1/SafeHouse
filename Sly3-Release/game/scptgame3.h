@@ -128,6 +128,9 @@ void StartupScripts3(SW* psw);
 void RestoreTasks3AtStart(SW* psw);
 // The scripts' records of the world left (a new world)
 void ResetScripts3();
+// orig3: 0x25BD68 (the in-place world reset 0x25BDD0): every SCPT object (class 0x87) stopped (0x226050); their
+// records stay (the world is not reloaded)
+void StopScripts3();
 // True when the world's tasks / scripts are Sly 3's (StartupScripts3 ran): the copied Sly 2 task code stands aside
 bool FScripts3Active();
 // an object a script added (SCPT 0x38) since the world started (transition.cpp's world start keeps it in the world)
@@ -136,6 +139,7 @@ bool FLoAddedByScript3(const LO* plo);
 // the scripts pause the players' pads (+0x1180) without the kind-4 pause (+0x1190), e.g. Ep1 2141's scene: Murray in the
 // canal under the wave guard 19900's shots (the reference: +0x1180 1, Murray unhurt)
 bool FActorHitsPaused3(int sel);
+bool FPlayersPausedSel3(int sel);   // orig3 0x1A9478 (the selected players' pads paused)
 // orig3: 0x1A9478(SW, -1): either player's record paused (+0x1180, the scripts' pauses): the challenge timer's stop
 bool FPlayersPaused3();
 // orig3 0x1A9630 -> 0x1A97B8: a player record whose +0x1180 count is up (a script's pause 0x1F, 0x1A93C8) hands its

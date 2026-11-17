@@ -62,10 +62,12 @@ std::string baseName(const std::string& path) {
     const auto slash = path.find_last_of('/');
     return slash == std::string::npos ? path : path.substr(slash + 1);
 }
-// Sly 2's tool commands run in its second image (Sly2Tools.framework, the same code): the game's image keeps clean
-// globals for the game after an install.
+// The games' images (a game session at most once per app start: runProgram) and their tool copies.
+bool gameImage(const std::string& image) { return image == "Sly2Release" || image == "Sly3Release"; }
+// The games' tool commands run in their second image (Sly2Tools / Sly3Tools.framework, the same code): the game's
+// image keeps clean globals for the game after an install.
 bool sly2Tool(const std::vector<std::string>& arguments) {
-    static const char* const tools[] = {"--convert", "--export-textures", "--ps3-hd-textures", "--import-languages",
+    static const char* const tools[] = {"--convert", "--convert-worlds", "--export-textures", "--ps3-hd-textures", "--import-languages",
                                         "--import-ps3-languages", "--move-languages", "--clear-texture-cache",
                                         "--build-texture-cache", "--list-languages", "--check-language", "--version",
                                         "--list-keys", "--list-audio-devices"};
@@ -150,9 +152,12 @@ void relayOutput(int from, int to, std::string name) {
 int runProgram(Program& p) {
     {
         std::lock_guard lock(stateMutex);
-        if (p.image == "Sly2Release" && imagesRun.count(p.image)) {
-            writeLine(p.outputFd, "SafeHouse on iOS starts Sly 2 once per app start. Close SafeHouse in the app switcher and open it "
-                                  "again to play once more.");
+        // (one game session per app start, whichever game: the games share SDL's window and the GL / Metal state)
+        bool gameRan = false;
+        for (const std::string& ran : imagesRun) gameRan = gameRan || gameImage(ran);
+        if (gameImage(p.image) && gameRan) {
+            writeLine(p.outputFd, "SafeHouse on iOS starts one game once per app start. Close SafeHouse in the app switcher and open "
+                                  "it again to play once more.");
             cane::ios::log("refused a second game session in this app start");
             return 75;
         }
@@ -388,6 +393,7 @@ std::string importsDirectory() { return documentsPath + "/imports"; }
 std::string programPath(const std::string& name) {
     std::string framework = name;
     if (name == "Sly2-Release") framework = "Sly2Release";
+    else if (name == "Sly3-Release") framework = "Sly3Release";
     else if (name == "cane-extractor") framework = "CaneExtractor";
     else if (name == "safehouse" || name == "cane-launcher") framework = "SafeHouseLauncher";
     return bundlePath + "/Frameworks/" + framework + ".framework/" + framework;
@@ -403,13 +409,14 @@ ChildProcess startProcess(const std::vector<std::string>& arguments) {
     p->arguments = arguments;
     p->path = arguments[0];
     p->image = baseName(p->path);
-    if (p->image == "Sly2Release" && sly2Tool(arguments)) {
-        p->image = "Sly2Tools";
-        p->path = bundlePath + "/Frameworks/Sly2Tools.framework/Sly2Tools";
+    if (gameImage(p->image) && sly2Tool(arguments)) {
+        const std::string tools = p->image.substr(0, 4) + "Tools";   // (Sly2Release -> Sly2Tools, Sly3Release -> Sly3Tools)
+        p->image = tools;
+        p->path = bundlePath + "/Frameworks/" + tools + ".framework/" + tools;
     }
     p->outputFd = fds[1];
     // (the game: UIKit wants its windows on the main thread; so does the renderer's self test, in Sly2Tools)
-    p->mainThread = p->image == "Sly2Release" || std::find(arguments.begin(), arguments.end(), "--gl-selftest") != arguments.end();
+    p->mainThread = gameImage(p->image) || std::find(arguments.begin(), arguments.end(), "--gl-selftest") != arguments.end();
     p->nested = redirectedHere != nullptr && !p->mainThread;
     std::int64_t handle;
     {

@@ -11,6 +11,7 @@
 
 #include "cm.h"
 #include "cplcy.h"
+#include "photo.h"
 #include <algorithm>
 #include "game/scptgame3.h"
 #include "game/task3.h"
@@ -40,6 +41,8 @@ struct BINOCWIN3
     LO* ploWindow = nullptr;    // +0x10
     LO* ploSpeaker = nullptr;   // BINOC +0xA0 (asked for)
     LO* ploShown = nullptr;     // BINOC +0x40 (in the window)
+    void* pprompt = nullptr;    // the window +0x14: the actor's photo helper (0x1BE4F8: class 0x34's +0x1D50; natively
+                                // binoc.cpp's PostLoadPhotoPrompt, ACTOR::binoc.win.pprompt)
 };
 std::map<LO*, BINOCWIN3> s_mpwin;
 SW* s_psw = nullptr;
@@ -55,6 +58,7 @@ BINOCWIN3& Win(LO* ploActor)
         w.ploActor = ploActor;
         w.ploFrame = PloScreen3(s_psw, OID_FRAME, ploActor->oid);
         w.ploWindow = PloScreen3(s_psw, OID_SPEAKER_WINDOW, ploActor->oid);
+        if (ACTOR* pa = PactorFromLo(ploActor)) w.pprompt = pa->binoc.win.pprompt;
     }
     return w;
 }
@@ -95,7 +99,10 @@ void SetWindowArgs(BINOCWIN3& w)
 void SetDials(BINOCWIN3& w)
 {
     if (!w.ploFrame) return;
-    const float heading = std::atan2(g_cm.mat[0][1], g_cm.mat[0][0]);   // (TODO(sly3): the binocucom camera's own heading +0x1BC)
+    // (orig3 0x1BE5A8 / 0x1BEA30: BINOC +0x0 is its actor (0x1BDA30), whose +0x1BC is the step heading (Sly 2's +0x1A8,
+    // binoc.cpp's pa->radHeading); the camera's heading only when the owner is no actor)
+    const ACTOR* pa = PactorFromLo(w.ploActor);
+    const float heading = pa ? pa->radHeading : std::atan2(g_cm.mat[0][1], g_cm.mat[0][0]);
     SetScreenObjFraction(w.ploFrame, PART_COMPASS, (heading + 3.14159274f) * 0.159154937f);
     // (orig3 0x1BEA30: BINOC +0x34, the binocucom camera's zoom: the arc's fill, all blue at the widest, purple as it
     // zooms in (the reference's talk 4271: blue, purple while the camera closes on the lab, blue again). Natively from
@@ -153,6 +160,8 @@ void SetWindowState(BINOCWIN3& w, int n)
     switch (n)
     {
     case 0:   // opening: the frame (and a talk's window) shown
+        // (orig3 0x1854C8: the task broadcast 7 for a talk, 2 for the recon view: scripts / tasks wait on it)
+        Broadcast3(w.kind == 1 ? 7 : 2, nullptr);
         PsndStartSound(0x32);
         if (w.ploFrame)
         {
@@ -170,6 +179,7 @@ void SetWindowState(BINOCWIN3& w, int n)
                 SelectScreenObjPart(w.ploWindow, PART_WINDOW);
             }
         }
+        SetPhotoPromptState(w.pprompt, 0);   // 0x24C6D8(+0x14, 0)
         break;
     case 1:
         if (w.kind == 1 && w.ploWindow) SelectScreenObjPart(w.ploWindow, PART_WINDOW);
@@ -182,16 +192,18 @@ void SetWindowState(BINOCWIN3& w, int n)
         if (w.ploWindow) SelectScreenObjPart(w.ploWindow, PART_WINDOW_IN);
         break;
     case 5:   // closing
+        Broadcast3(w.kind == 1 ? 8 : 3, nullptr);
         PsndStartSound(0x33);
         if (w.ploFrame) HideScreenObj(w.ploFrame);
         if (w.ploWindow) HideScreenObj(w.ploWindow);
+        SetPhotoPromptState(w.pprompt, 10);
         break;
     case -1:
-        if (old != 5)   // (closed at once)
-        {
-            if (w.ploFrame) { SetScreenObjState(w.ploFrame, 1); SetScreenObjTimers(w.ploFrame, 1); }
-            if (w.ploWindow) { SetScreenObjState(w.ploWindow, 1); SetScreenObjTimers(w.ploWindow, 1); }
-        }
+        if (old != 5) Broadcast3(w.kind == 1 ? 8 : 3, nullptr);   // (closed at once: the close event not sent yet)
+        // (a screen object still playing (its +0x48 state) is reset to idle with its timers off)
+        for (LO* plo : {w.ploFrame, w.ploWindow})
+            if (plo && NScreenObjState(plo)) { SetScreenObjState(plo, 1); SetScreenObjTimers(plo, 1); }
+        SetPhotoPromptState(w.pprompt, -1);
         break;
     default: break;
     }
@@ -200,6 +212,7 @@ void SetWindowState(BINOCWIN3& w, int n)
 // orig3: 0x001BEA30
 void UpdateWindow(BINOCWIN3& w)
 {
+    UpdatePhotoPrompt(w.pprompt);   // 0x24CCB0(+0x14), whatever the state
     switch (w.state)
     {
     case 0:
@@ -255,6 +268,20 @@ void CloseBinocPanel3(LO* ploActor)
 }
 
 int NBinocPanelState3(LO* ploActor) { return ploActor ? Win(ploActor).state : -1; }
+void ShutBinocPanel3(LO* ploActor)
+{
+    if (!ploActor) return;
+    BINOCWIN3& w = Win(ploActor);
+    if (w.state != -1) SetWindowState(w, -1);
+}
+
+bool FBinocPanel3Prompt(const void* pprompt)
+{
+    if (!pprompt) return false;
+    for (const auto& [plo, w] : s_mpwin)
+        if (w.pprompt == pprompt) return true;
+    return false;
+}
 
 // orig3: 0x001BE370 (a talk's speaker changes while the window is idle)
 void SetBinocPanelSpeaker3(LO* ploActor, LO* ploSpeaker)

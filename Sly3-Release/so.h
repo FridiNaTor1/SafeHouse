@@ -340,6 +340,8 @@ XP* PxpAddSw(SOE* a, SOE* b, const glm::vec3& pos, const glm::vec3& dir, int xpk
 void UpdateXpWorldPositions(int c, XP** apxp);   // 0x1A7FC0
 void UpdateXpPositions(int c, XP** apxp);        // 0x1A7E60
 XP* PxpMarkOxaContacts(OXA* poxaA, OXA* poxaB);  // 0x1AA1D8
+// (Sly 3) the owners' pair test (vt slot 64, orig3 0x1CDF20's end): set by the classes that have one (the ships)
+extern void (*g_pfnPairContacts3)(ALO* palo, ALO* paloOther, XP** ppxp);
 
 // Queries (mark.cpp; orig 0x14C6A0..0x14CC58): the pieces of a segment inside an entry, the nearest entry a line hits,
 // the union / intersection of two piece lists.

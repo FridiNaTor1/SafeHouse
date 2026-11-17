@@ -19,6 +19,8 @@
 #include "jt.h"
 #include "stepphys.h"
 #include "sw.h"
+#include "sly.h"
+#include "game/task3.h"
 
 #include <algorithm>
 #include <cfloat>
@@ -50,18 +52,22 @@ void Straight(CRV* c, const glm::vec3& a, const glm::vec3& b)
 }
 }  // namespace
 
-// orig: 0x001448F0 (D_002BD2D8 10, D_002BD2D0 1)
+// orig: 0x001448F0 (D_002BD2D8 10, D_002BD2D0 1) (orig3: 0x1572A0: a target within 10 of the last one is kept unless
+// the next check was reset (0x1573A0: FLT_MAX, the follower's Enter); the distance from the actor's position)
 void SetActorWatchTarget(ACTOR* pa, const glm::vec3& pos)
 {
     auto& w = pa->watch;
-    if (w.fActive || glm::length(w.pos - pos) < 10.0f) return;
+    if (w.fActive || (glm::length(w.pos - pos) < 10.0f && w.t != FLT_MAX)) return;
     w.pos = pos;
     w.s = glm::length(Pos(pa->palo) - pos);
     w.t = g_clock.t + 1.0f;
 }
 
-// orig: 0x00144640: the ordinary follower's progress/recovery check. The paused contact-wakeup branch is
-// shared with the existing actor-watch TODO (0x1619A0 / 0x1F7BF8); active gameplay uses the progress branch.
+// orig: 0x00144640 (orig3: 0x156FD0): the ordinary follower's progress / recovery check, once a second: an actor whose
+// follower 0xEF is in its state 0 (moving) and came less than 30 nearer its target (in xy) since the last check is put
+// on the ground at the target (0x198D78(100, -350), else the surface above it 0x1DA038) after the broadcast 0x5A.
+// Not ported: the paused contact-wakeup branch (an actor in the world's weight list D_00475480 waking the guards it
+// touches, 0x1F4DD8 / 0x2412C8) and a script runner's walk 0x30 (the native 0x30 walk does not set the watch target).
 void UpdateActorWatch(ACTOR* pa)
 {
     auto& w = pa->watch;
@@ -72,14 +78,20 @@ void UpdateActorWatch(ACTOR* pa)
     }
     if ((!pa->n270 && !pa->prunScript) || g_clock.t < w.t) return;
     w.t = g_clock.t + 1.0f;
-    // Script runners keep their existing watch behavior; a companion uses the original A8 states 0 / 1.
     auto* p = dynamic_cast<JOBACTORFOLLOW*>(PjobFind(pa, 0xA8));
-    if (pa->prunScript || !p || p->st < 0 || p->st >= 2) return;
-    const float d = glm::length(Pos(pa->palo) - w.pos);
+    if (static const bool s_f = std::getenv("SLY3_WATCHPRINT") != nullptr; s_f && (pa->prunScript || !p || p->st != 0))
+        std::printf("watch: actor %d t %.3f skipped (run %p follower %p state %d)\n", pa->palo->oid, g_clock.t, pa->prunScript, (void*)p, p ? p->st : -9);
+    static const bool s_fOld = std::getenv("SLY3_WATCH2") != nullptr;   // (debug: Sly 2's check, 0x144640)
+    if (pa->prunScript || !p || (s_fOld ? (p->st < 0 || p->st >= 2) : p->st != 0)) return;
+    const float d = s_fOld ? glm::length(Pos(pa->palo) - w.pos) : Dxy(Pos(pa->palo), w.pos);
+    if (static const bool s_f = std::getenv("SLY3_WATCHPRINT") != nullptr; s_f)
+        std::printf("watch: actor %d t %.3f d %.1f last %.1f target %.0f %.0f %.0f%s\n", pa->palo->oid, g_clock.t, d, w.s, w.pos.x, w.pos.y, w.pos.z,
+                    w.s - d < 30.0f ? " -> recover" : "");
     if (w.s - d < 30.0f)  // D_002BD2D4 * D_002BD2D0
     {
+        if (!s_fOld) Broadcast3(0x5A, pa->palo);
         glm::vec3 q = w.pos;
-        if (FDropOnGround(&q, 100.0f, -150.0f, false))
+        if (s_fOld ? FDropOnGround(&q, 100.0f, -150.0f, false) : (FDropOnGround(&q, 100.0f, -350.0f, true) || FSnapPosToSurfaceAbove(&q)))
         {
             RecoverTo(pa, q);
             w.fActive = 1;
@@ -88,13 +100,45 @@ void UpdateActorWatch(ACTOR* pa)
     w.s = d;
 }
 
-// orig: 0x00144B28
+// orig: 0x00144B28 (orig3: 0x1D9010)
 void JOBACTORFOLLOW::Init() { JOBFOLLOW::Init(); uSpeedActor = 1.0f; }
-// orig: 0x00144B58
-void JOBACTORFOLLOW::Enter() { JOBFOLLOW::Enter(); SetActorWatchTarget(pactor, glm::vec3(pos)); }
-// orig: 0x00144B90
-void JOBACTORFOLLOW::Update() { Update1789F8(); SetActorWatchTarget(pactor, glm::vec3(pos)); }
-// orig: 0x00178CD8 (A8 uses the common state change, without A7's guard animation jobs)
+// orig: 0x00144B58 (orig3: 0x1D9040: 0x1D8070, the watch's next check reset 0x1573A0, its target 0x1572A0)
+void JOBACTORFOLLOW::Enter()
+{
+    JOBFOLLOW::Enter();
+    pactor->watch.t = FLT_MAX;
+    SetActorWatchTarget(pactor, glm::vec3(pos));
+}
+// orig: 0x00144B90 (orig3: 0x1D9080 = 0x1D89B0 (the base update, the step 0x1D8140, the state by the radius: the near one
+// in state 0, the far one else; outside: 0, inside: 1 (here 2)) and 0x1572A0). Sly 3 has no nav-way states (Sly 2's
+// 0x1789F8 states 1 / 3 / 4); SLY3_FOLLOWA8=1: the copied Sly 2 update.
+void JOBACTORFOLLOW::Update()
+{
+    static const bool s_fOld = std::getenv("SLY3_FOLLOWA8") != nullptr;
+    if (s_fOld) Update1789F8();
+    else
+    {
+        AIJOB::Update();
+        Steer177F78();
+        const glm::vec3 posSelf = Pos(pactor->palo);
+        int s0;
+        do
+        {
+            s0 = st;
+            const float r = st == 0 ? sNear : sFar;
+            SetState(r < Dxy(posSelf, glm::vec3(pos)) ? 0 : 2);
+        } while (st != s0);
+    }
+    SetActorWatchTarget(pactor, glm::vec3(pos));
+}
+// orig3: 0x1D8B40: the path taken (its end the goal), the follower at its start
+void JOBACTORFOLLOW::Follow(const CRV* p, int fRev)
+{
+    JOBFOLLOW::Follow(p, fRev);
+    static const bool s_fOld = std::getenv("SLY3_FOLLOWA8") != nullptr;
+    if (!s_fOld && !p->apos.empty() && !p->fClosed) s = fRev ? SLengthCrv(p) : (p->as.empty() ? 0.0f : p->as.front());
+}
+// orig: 0x00178CD8 (A8 uses the common state change, without A7's guard animation jobs) (orig3: 0x1D8AA0)
 void JOBACTORFOLLOW::SetState(int n)
 {
     if (st == n) return;
@@ -105,7 +149,7 @@ void JOBACTORFOLLOW::SetState(int n)
 void JOBACTORFOLLOW::Drive(PADCTL* pc)
 {
     AIJOB::Drive(pc);
-    if (st < 0 || st >= 2) return;
+    if (st != 0) return;   // (orig3 0x1D90B8: +0x3C, the state, 0 only)
     glm::vec3 d = glm::vec3(pos) - Pos(pactor->palo);
     d.z = 0.0f;
     const float u = std::clamp(glm::length(glm::vec2(d)) * 0.01f, 0.0f, 1.0f);
@@ -147,11 +191,15 @@ void JOBACTORWALK::Enter()
     follow->Enter();
 }
 
-// orig: 0x00144EE8
+// orig: 0x00144EE8 (orig3: 0x157950: the follower's arrival 0x1D8AC0 only, not its state). Kept as Sly 2's (also its
+// near state) by default: the path step's walks go straight here (JOBPATHSTEP3: the original's nav path per step,
+// 0x1EF038, is not used), and with the arrival alone a straight step into an obstacle never ends (v_gauntlet's SCPT 2307
+// [6]: Bentley held at x 3305 until 2306 is forced; the original's nav path goes round it). SLY3_WALKARRIVE=1: arrival only.
 bool JOBACTORWALK::FAtGoal() const
 {
     const auto* follow = static_cast<const JOBACTORFOLLOW*>(pchild);
-    return !follow || follow->FArrived() || follow->st == 2;
+    static const bool s_fArrive = std::getenv("SLY3_WALKARRIVE") != nullptr;
+    return !follow || follow->FArrived() || (!s_fArrive && follow->st == 2);
 }
 
 // orig: 0x00144F48 (Sly 3: 0x157970, with fSly3)
@@ -617,7 +665,7 @@ void JOBSLYATTACK::Update()
                 else if (pactor->jump.state == 1 && 0.2f < g_clock.t - pactor->jump.t20) SetState(4);
             }
             break;
-        case 4: if (0.1f < g_clock.t - tSt && ps && ps->state != 13) SetState(-1); break;
+        case 4: if (0.1f < g_clock.t - tSt && ps && ps->jts != jts::N2AirSwing) SetState(-1); break;
         }
     } while (old != st);
 }

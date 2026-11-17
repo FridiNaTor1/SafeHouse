@@ -465,6 +465,8 @@ void InitHudWidgets(SW* psw)
     InitScreens3(psw);   // (screen3.h: SLY3_HUDSHOW / SLY3_HUD_LIST)
     if (std::getenv("SLY2_HUDSHOP")) SetShopPage(0);
     if (const char* sz = std::getenv("SLY2_HUDPROMPT")) HudPrompt(int(std::strtol(sz, nullptr, 0)), -1.0f);
+    // debug: SLY3_HUDTIMER=seconds starts the HUD timer (1053, as ASEG event 18 does) at the world's start
+    if (const char* sz = std::getenv("SLY3_HUDTIMER")) StartHudTimer(float(std::atof(sz)), psw);
     if (const char* sz = std::getenv("SLY2_HUDSHOW"))
         for (const char* pch = sz; *pch;)
         {

@@ -1,5 +1,5 @@
-# The macOS packages players download (SafeHouse.app in a .dmg and a .zip): the launcher, Sly 2 (on Metal) and the
-# disc tools. The FFmpeg libraries come from scripts/macos/ffmpeg.sh (LGPL, the games' codecs only); SDL2 is built
+# The macOS packages players download (SafeHouse.app in a .dmg and a .zip): the launcher, Sly 2 and Sly 3 (on Metal)
+# and the disc tools. The FFmpeg libraries come from scripts/macos/ffmpeg.sh (LGPL, the games' codecs only); SDL2 is built
 # from its pinned source by CMake; everything is bundled by scripts/macos/package.py.
 #
 #   workflow_call       from build.yml (every push to main, pull requests, by hand), with the release version, its
@@ -84,6 +84,8 @@ jobs:
       - name: The bundled game starts (Metal, offscreen)
         run: |
           dist/SafeHouse.app/Contents/MacOS/Sly2-Release --rumble-selftest
+          dist/SafeHouse.app/Contents/MacOS/Sly3-Release --settings-selftest
+          dist/SafeHouse.app/Contents/MacOS/Sly3-Release --action-input-selftest
           dist/SafeHouse.app/Contents/MacOS/safehouse --steam-status
           dist/SafeHouse.app/Contents/MacOS/safehouse --version
 

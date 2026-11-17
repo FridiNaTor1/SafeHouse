@@ -54,6 +54,10 @@ bool FTakePadForPassword3(LO* ploPlayer, uint32_t grfPressed);
 // The guard checking the player (the player's +0x1454), null: none
 LO* PloPasswordGuard3(LO* ploPlayer);
 void ResetPassword3();
+// orig3 0x1ADDD0 case 0x16: Sly's riding camera (0x16C608) on / off
+void SetRideCamera3(LO* ploSly, bool fOn);
+// orig3 0x1ADDD0 leaving Sly's 0x15 / 0x16 (not into 0x16): the check holding the player broken off (its state 11)
+void BreakOffPassword3(LO* ploPlayer);
 // (routes) the face button the check holding the player waits for next (0x10 triangle, 0x20 circle, 0x40 cross, 0x80
 // square: the row it showed), 0: none (no check, or not answering yet)
 int NPasswordButtonWanted3(LO* ploPlayer);

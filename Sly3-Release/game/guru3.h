@@ -36,9 +36,36 @@ struct GURU : ACTOR
     LO* ploRide = nullptr;          // +0x15E0's object (state 6: the object ridden; 0x6D jumps off it)
     LO* ploRideLast = nullptr;      // +0x15F0's (the object left, 0.1 s)
     float tRideLast = 0.0f;         // +0x15F4
+
+    // (the Panda King 0x38, AUDIT4 PLAYER-01: orig3 0x1E9330..0x1EB340 on the same layout; his states: 0..2 as the
+    // Guru's, 3 his third gait (+0x15E0) while the fireworks are held (+0x16A8 0 / 1), 4 the jump (+0x320), 5 the
+    // interaction (+0x500), 6 the damage (+0xE40), 7 the combo (+0x10D0), 8 a script's animation)
+    GAIT gaitThird;                 // +0x15E0 (parts +0x15F4 / +0x1634)
+    ASEG* apasegFw[4]{};            // +0x1690.. the fireworks' clips of their states 0..3 (parts 1792 / 1793 / 1791 / 1794)
+    ASEGA* pasegaFw = nullptr;      // +0x16A4
+    int stateFw = -1;               // +0x16A8 (-1 off, 0 charging, 1 charged, 2 fired, 3 fired by the time; 4 off by a script)
+    float tStateFw = 0.0f;          // +0x16AC
+    struct FWTARGET { LO* ploOwner = nullptr; LO* ploMarker = nullptr; float t = 0.0f; };
+    FWTARGET atarget[4];            // +0x16B0 (the markers follow their owners)
+    int ctarget = 0;                // +0x16E0
+    int cCharge = 0;                // +0x16E4 (event 0x704 of the fireworks' clip; EOPID 1887)
+    int cChargeMax = 4;             // +0x16E8 (EOPID 1886)
+    int fFwHeld = 0;                // +0x16EC (a script's hold: EOPIDs 1889 / 1890)
+    float dtTargetKeep = 0.5f;      // +0x16F0 (EOPID 1888)
+    LO* ploMarkerTmpl = nullptr;    // +0x16F4 (part 1795)
+    LO* ploFwCount = nullptr;       // +0x16F8 (EOPID 1881: a screen object, its part 0x3CA the charges)
+    LO* ploFwGlow = nullptr;        // +0x16FC (EOPID 1882: its part 0x37C's fraction +0x1700)
+    float uFwGlow = 0.0f;           // +0x1700
 };
 
 bool FIsGuru3(const LO* plo);
+bool FIsPandaKing3(const LO* plo);       // (class 0x38: runs on the GURU struct with his own states)
+// orig3 vt slot 102 (Sly 2's 91, "the selection reset"): every actor's combo off (0x155CE0); the Panda King's 0x1EA178
+// then his fireworks fired (charged with a charge) or off. Called where Sly 3 calls it: the damage's start (0x1C21F0)
+void ActorSlot102Sly3(ACTOR* pa);
+int NGuruNoisy3(ACTOR* pa);              // orig3 slot 112 (Guru 0x22D028, Penelope 0x1F0E38, the Panda King 0x1EA070); -2 not one
+void GuruCpdefi3(LO* plo, float* pdTilt, float* pdDist, bool fBefore);   // orig3 slot 85 (the Panda King's 0x1EA298): after
+bool FPkMovedNow3(LO* plo);             // its part before the base: the last move time set now
 bool FGuruCanDo3(LO* plo, int n);        // orig3 0x22D1F8 (vt slot 113: may the action n start)
 GURU* PguruFromLo(LO* plo);
 STEP* PstepNewGuru3(ALO* palo);          // (gang.cpp's PstepNewGang)

@@ -17,6 +17,7 @@ namespace sly3
 {
 LO* PloSly3(SW* psw);
 bool FStartPlayer3(SW* psw);              // (game.cpp, frame 0)
+void InstallPlayerHooks3();               // (the scripts' actor hooks: transition.cpp, before the start's activation)
 void TracePlayer3(SW* psw, int frame);    // (game.cpp, after each frame's update)
 int NPlayerCamKind3(SW* psw);             // orig3 0x1A9260: the current player's camera kind (menu.cpp Camera Options)
 // SLY3_SETPOS="F:X Y Z;F2:X Y Z;..": Sly moved there at the start of frame F (his velocities zeroed), as the reference's

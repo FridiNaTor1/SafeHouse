@@ -111,6 +111,13 @@ void SetJobEndState(JOB3* p, int s)
 }
 }  // namespace
 
+// orig3: 0x1878A0 (MISSION's vt slot 32, the in-place world reset's release, game/worldreset3.cpp): a job left in its
+// end state 8 (the restart asked for) goes back to 0: its screens hidden and the game resumed
+void ResetJobEndInPlace3(JOB3* p)
+{
+    if (p && p->nEnd == 8) SetJobEndState(p, 0);
+}
+
 void JobEndComplete3(JOB3* p)
 {
     if (!p || p->nEnd != 0) return;

@@ -122,7 +122,7 @@ int ItrackFromStream(const SNDSTREAM* p)
 
 // The 3D attenuation of a point (0x1FB778): the falloff of its distance to the listener over [sStart, sEnd],
 // the pan in degrees (0 when inaudible).
-void Attenuate(const glm::vec3& pos, float sStart, float sEnd, float* pg, int* ppan)
+void Attenuate(const glm::vec3& pos, float sStart, float sEnd, float* pg, int* ppan, float* ps = nullptr)
 {
     // orig3 0x245440's two-player branch (SW +0x4FA4): the louder of the two players' falloffs (their characters'
     // positions); the pan centred when both hear it, else to the side of the one who does (player 1 -90, player 2 +90)
@@ -133,6 +133,7 @@ void Attenuate(const glm::vec3& pos, float sStart, float sEnd, float* pg, int* p
             for (int i = 0; i < 2; ++i)
                 if (afHave[i]) ag[i] = GLimit01((sEnd - glm::length(pos - apos[i])) / (sEnd - sStart));
             if (pg) *pg = std::max(ag[0], ag[1]);
+            if (ps) *ps = std::min(afHave[0] ? glm::length(pos - apos[0]) : 3.4e38f, afHave[1] ? glm::length(pos - apos[1]) : 3.4e38f);
             if (ppan) *ppan = ag[0] > 0.0f && ag[1] > 0.0f ? 0 : ag[0] > 0.0f ? -90 : ag[1] > 0.0f ? 90 : 0;
             return;
         }
@@ -146,6 +147,7 @@ void Attenuate(const glm::vec3& pos, float sStart, float sEnd, float* pg, int* p
     }
     const glm::vec3 d = pos - posEar;
     const float len = std::sqrt(glm::dot(d, d));
+    if (ps) *ps = len;
     const float g = GLimit01((sEnd - len) / (sEnd - sStart));
     if (pg) *pg = g;
     if (!ppan) return;
@@ -324,9 +326,9 @@ void CSnd::Update3D()
         return;
     }
     const glm::vec3 v = m_psrc && g_sndhooks.pfnSourcePosWorld ? g_sndhooks.pfnSourcePosWorld(m_psrc, m_pos) : m_pos;
-    float g = 1.0f;
+    float g = 1.0f, s = m_sPrev;
     int pan = 0;
-    Attenuate(v, m_sStart, m_sEnd, &g, &pan);
+    Attenuate(v, m_sStart, m_sEnd, &g, &pan, &s);
     const float r = m_gVol * g;
     if (const char* selected = std::getenv("SLY2N_SNDSCRIPT"); selected && (m_grfDirty & 1))
         if (auto* plain = dynamic_cast<CSndPlain*>(this); plain && plain->m_sfxid == std::atoi(selected))
@@ -346,6 +348,24 @@ void CSnd::Update3D()
         SetDirty(0x10, 0x10);
     }
     SetPan(pan);
+    // orig3 0x245138's Doppler (Sly 3): with a source and a strength, the approach speed (the distance's drop over the
+    // frame's dt, cm/s -> mph x 0.0223694) through 989snd's snd_GetDopplerPitchMod (0x291DD0: x 1524 / 741) times the
+    // strength; 0 while the start is pending
+    if (m_psrc && m_gDoppler != 0.0f)
+    {
+        if (m_grfDirty & 1) m_dpmDoppler = 0;
+        else if (const float dt = g_sndhooks.pfnDtGame ? g_sndhooks.pfnDtGame() : 0.0f; dt > 0.0f)
+        {
+            const int mph = static_cast<int>((m_sPrev - s) / dt * 0.02236936241388321f);
+            const int n = static_cast<int>(m_gDoppler * static_cast<float>(mph * 1524 / 741));
+            if (n != m_dpmDoppler)
+            {
+                m_dpmDoppler = n;
+                SetDirty(0x40, 0x40);
+            }
+        }
+    }
+    m_sPrev = s;
 }
 
 // orig: 0x1FB8E0 (the frame update of an active sound)
@@ -534,7 +554,7 @@ void CSndPlain::SendChanges()
     if (fl & 0x40)
     {
         m |= 8;
-        pm = CvtW(m_pitch * 12.0f);
+        pm = CvtW(m_pitch * 1524.0f) + m_dpmDoppler;   // (orig3 0x245DE0: x 1524 as the start, plus the Doppler; Sly 2's x 12)
     }
     snd_SetSoundParams(m_h, m, vol, m_pan, pm, 0);
 }
@@ -633,7 +653,7 @@ void CSndVoice::SendChanges()
         if (fl & 0x40)
         {
             f |= 8;
-            pitch = CvtW(m_pitch * 12.0f);
+            pitch = CvtW(m_pitch * 1524.0f);   // (orig3 0x2465E0: x 1524; Sly 2's 0x1FC740 x 12)
         }
         SpiopSetParams(m_h, f, vol, m_pan, pitch);
     }
@@ -862,6 +882,23 @@ void StopSoundsForMovie()
     snd_StopAllSounds();
     SpiopStopAll();
     ResetSoundVolumes();
+}
+
+// orig3: 0x247588 (the in-place world reset 0x25BDD0; no world change): the microphone's noise let go, every active
+// sound stopped but the resident one (+0x260) and the top of the music stack, the alert / sneak modes and the mood
+// cleared, the state bits 3. The bank, the streams and the sounds' sources stay (the world's objects are kept).
+void ResetSoundMgrInPlace3()
+{
+    std::lock_guard<std::recursive_mutex> lock(g_mtxSound);
+    SOUNDMGR& s = g_sound;
+    if (s.pnoiseMic && g_sndhooks.pfnHoldMicNoise) g_sndhooks.pfnHoldMicNoise(&s.pnoiseMic, nullptr, glm::vec3(0.0f), 0.0f, 0.0f);
+    s.pnoiseMic = nullptr;
+    const CSnd* psndMusic = s.asndMusic.empty() ? nullptr : s.asndMusic.back().get();
+    for (CSnd* p : std::vector<CSnd*>(s.apsndActive))
+        if (p && p != s.sndResident.get() && p != psndMusic) p->Stop(0.0f);
+    s.fModeAlert = s.fModeSneak = 0;
+    s.mood = 0;
+    s.grfState = 3;
 }
 
 // orig: 0x1FD700 (before a world loads)

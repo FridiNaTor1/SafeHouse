@@ -48,6 +48,8 @@
 #include "update.h"
 #include "cm.h"
 
+#include "game/guru3.h"
+
 #include <algorithm>
 #include <cfloat>
 #include <cmath>
@@ -126,9 +128,22 @@ int NScaleDamage(int n)
 
 // orig: 0x00144418 (vt slot 86 of the actors: the hit takes at least the capacity and is not a touch (0 / 1),
 // 0x80000 or healing (0x100000): fatal)
+// (RENDER-15: Sly 3's hit records carry a positive damage (0x240CB0's amount, e.g. the lasers' 10 from 0x224600, the
+// scripts' SCPT 0x6B, the hack ships'), the copied Sly 2 senders a negative one; orig3 0x1C3470 subtracts the amount
+// (health - delta) and a heal (0x100000) is health - delta as well. The player side takes the magnitude: a loss for
+// every kind but the heal, a gain for the heal, so either sign reaches the counter the same way. Natively a positive
+// Sly 3 amount healed the player and a laser hit on a hack ship (hack.cpp, Sly 3's sign) healed it.)
+int NDamageDelta3(const CTMSG* pctm)
+{
+    const int n = std::abs(pctm->nState);
+    return pctm->grfFilter == 0x100000 ? n : -n;
+}
+
 bool FDamageFatal(ACTOR* pa, const CTMSG* pctm)
 {
-    if (-pctm->nState < Dmg(pa).cCapacity) return false;
+    // (Sly 3's +0x28 instant kill (0x19B6E0's hit points to 0, e.g. SCPT 0x6B's A3): fatal for a hit kind)
+    const bool fKill3 = pctm->nKill3 || pctm->fKill3;
+    if (!fKill3 && -NDamageDelta3(pctm) < Dmg(pa).cCapacity) return false;
     switch (pctm->grfFilter)
     {
     case 0: case 1: case 0x80000: case 0x100000: return false;
@@ -173,12 +188,12 @@ bool FSlyImmune(ACTOR* pa, int kind)
     if (SLY* p = dynamic_cast<SLY*>(pa))
     {
         if (FShieldBlocks3(pa, kind)) return true;   // (Sly 3: the shield, orig3 0x1C3DB8; s3-decomp)
-        switch (p->state)
+        switch (p->jts)
         {
-        case 3: case 8: case 21: case 22:
+        case jts::Hang: case jts::Climb: case jts::N2ClimbSurf: case jts::HangFollow:
             if (kind == 0x4000) return true;
             break;
-        case 7:
+        case jts::Interact:
             // orig: 0x00194640: a prize pose, or the two protected phases
             // of a carried-object interaction, rejects every damage kind.
             if (p->n4C8 == 12 ||
@@ -360,13 +375,14 @@ void RemoveSafeGroundReferences(LO* plo, SOE* psoe)
     if (psoe) psoe->f51 = false;
 }
 
-// orig: 0x0019FC30 (the Sly states that retain a floor or an interaction description)
+// orig: 0x0019FC30 (the Sly states that retain a floor or an interaction description) (orig3: 0x1C0CB8, Sly 3's
+// states: sly.h jts::)
 void UpdateSafeGround(ACTOR* pa, int state)
 {
     switch (state)
     {
-    case 0: case 1: case 5: case 6: case 9: case 10: case 11: case 12:
-    case 15: case 16: case 17: case 20: case 23: case 24:
+    case 0: case 1: case 2: case 6: case 7: case 10: case 11: case 12:
+    case 13: case 16: case 18: case 19: case 21: case 22: case 23: case 24:
     {
         XP* pxp = pa->pxpFloor;
         if (!pxp || !(0.7f < pxp->normal.z) || pa->ploWater) break;
@@ -375,12 +391,12 @@ void UpdateSafeGround(ACTOR* pa, int state)
         RecordSafeGround(pa, pxp->axpd[1].psoe, pxp->axpd[1].posLocal);
         break;
     }
-    case 3: case 22:
+    case 4: case 17:
         if (SLY* sly = dynamic_cast<SLY*>(pa); sly && sly->ploOther && !sly->ploOther->U32Field(0, 0x10C, 0))
             RecordSafeTarget(pa, sly->ploOther, JTL_Point, 0.0f);
         break;
-    case 7: UpdateSafeInteract(pa); break;
-    case 8: UpdateSafePipe(pa); break;
+    case 8: UpdateSafeInteract(pa); break;
+    case 9: UpdateSafePipe(pa); break;
     default: break;
     }
 }
@@ -797,7 +813,8 @@ void SetDamageState(ACTOR* pa, int n)
             SetSlyPartGravity(palo, 0x19B8, glm::vec3(0.0f, 0.0f, -750.0f));
             SetSlyPartGravity(palo, 0x19BC, glm::vec3(0.0f, 0.0f, -750.0f));
         }
-        if (SLY* psly = dynamic_cast<SLY*>(pa)) SetSlyMode(psly, -1);  // vt slot 91 (Sly 0x18D548; TODO(actors) the others')
+        if (SLY* psly = dynamic_cast<SLY*>(pa)) SetSlyMode(psly, -1);  // vt slot 91 (Sly 0x18D548)
+        sly3::ActorSlot102Sly3(pa);   // (orig3 0x1C21F0 from -1: vt slot 102, the combo off; the Panda King's fireworks 0x1EA178)
         pa->vecVel = glm::vec3(0.0f);
         if (PODATA* ppd = PpodataFromLo(palo)) ppd->n15C = 0;
         d.tFlashFade = FLT_MAX;
@@ -939,7 +956,7 @@ bool FAcceptDamage(ACTOR* pa, CTMSG* pctm)
         // the change: none with the actor's authored +0x29C (EOPID 232: e.g. Sly, the AI partner of Boardroom
         // Brawl's battle 10:1591, option 358) or while flashing, else scaled
         if (pa->palo && pa->palo->U32Field(0, 0x29C)) delta = 0;
-        else if (d.nFlash != 1) delta = NScaleDamage(req.nState);
+        else if (d.nFlash != 1) delta = NScaleDamage(NDamageDelta3(&req));
         if (req.grfFilter == 0x100000)
         {
             // healing
@@ -1080,6 +1097,26 @@ void UpdateDamage(ACTOR* pa)
     }
 }
 
+// orig3: 0x1C3FE0 (the actors' vt slot 103; Murray / Bentley 0x1535E0 without the eyes): called by the damage's end
+// (0x1C2E78, sub-states 9..13; native 8..12) and by the clip event 0x32B (0x153738, sub-state >= 9)
+void ActorDeathSlot103(ACTOR* pa, bool fEvent)
+{
+    DAMAGE& d = Dmg(pa);
+    if (fEvent && (d.fDeathSent || !FScripts3Active())) return;   // (one broadcast, as 0x1535E0's +0xE68)
+    // vt slot 93 (the actors' 0x1A2388): the eyes shut (0x1F80D0(1): the class 0x8E children's 0x1EE3B0 over the
+    // hierarchy: TODO, cosmetic), then the task event 0x10 (0x140EB0): the job restarts at its checkpoint
+    // (task.cpp's JobOnEvent, once no transition is busy)
+    SetAloEyesClosed(pa->palo, 1.0f);  // 0x1F80D0
+    if (static const bool s_f = std::getenv("SLY3_DEATHPRINT") != nullptr; s_f)  // (debug: who died, its damage sub-state and count)
+        std::printf("death: actor %d (cid 0x%X) sub %d count %d current player %d t %.3f\n", pa->palo->oid, pa->palo->Cid(), pa->nSubDF4, d.pcount ? *d.pcount : -99, PloPoCurrent(g_psw) ? PloPoCurrent(g_psw)->oid : -1, g_clock.t);
+    // (Sly 3: the actor's slot 103 0x1C3FE0 -> 0x1535E0 broadcasts 0xC once (+0xE68) until the actor is restored
+    // (option 948, 0x10A520: e.g. Cops and Robbers' respawn s6319); Sly 2 broadcast it at each end)
+    // (the flag set first: the job's handler may restore the actor within the broadcast)
+    const bool fSend = !FScripts3Active() || !d.fDeathSent;
+    d.fDeathSent = true;
+    if (fSend) BroadcastTaskEvent(g_psw, 0x10, pa->palo);
+}
+
 // orig: 0x001A15D0
 void EndDamageReaction(ACTOR* pa)
 {
@@ -1087,21 +1124,7 @@ void EndDamageReaction(ACTOR* pa)
     void (*pfn)(ACTOR*) = d.pfnNext;
     d.pfnNext = nullptr;
     if (pfn) pfn(pa);
-    else if (static_cast<unsigned>(pa->nSubDF4 - 8) < 5)
-    {
-        // vt slot 93 (the actors' 0x1A2388): the eyes shut (0x1F80D0(1): the class 0x8E children's 0x1EE3B0 over the
-        // hierarchy: TODO, cosmetic), then the task event 0x10 (0x140EB0): the job restarts at its checkpoint
-        // (task.cpp's JobOnEvent, once no transition is busy)
-        SetAloEyesClosed(pa->palo, 1.0f);  // 0x1F80D0
-        if (static const bool s_f = std::getenv("SLY3_DEATHPRINT") != nullptr; s_f)  // (debug: who died, its damage sub-state and count)
-            std::printf("death: actor %d (cid 0x%X) sub %d count %d current player %d t %.3f\n", pa->palo->oid, pa->palo->Cid(), pa->nSubDF4, d.pcount ? *d.pcount : -99, PloPoCurrent(g_psw) ? PloPoCurrent(g_psw)->oid : -1, g_clock.t);
-        // (Sly 3: the actor's slot 103 0x1C3FE0 -> 0x1535E0 broadcasts 0xC once (+0xE68) until the actor is restored
-        // (option 948, 0x10A520: e.g. Cops and Robbers' respawn s6319); Sly 2 broadcast it at each end)
-        // (the flag set first: the job's handler may restore the actor within the broadcast)
-        const bool fSend = !FScripts3Active() || !d.fDeathSent;
-        d.fDeathSent = true;
-        if (fSend) BroadcastTaskEvent(g_psw, 0x10, pa->palo);
-    }
+    else if (static_cast<unsigned>(pa->nSubDF4 - 8) < 5) ActorDeathSlot103(pa);   // (orig3 0x1C2E78: vt slot 0x67)
     else
     {
         ALO* ps = d.req.ploSender && FIsLoDerivedFrom(d.req.ploSender, S3CID(0x30)) ? static_cast<ALO*>(d.req.ploSender) : nullptr;

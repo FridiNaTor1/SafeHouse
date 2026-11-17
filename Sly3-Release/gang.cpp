@@ -33,6 +33,7 @@ void UpdateMurrayBerserkTransitions(MURRAY* p);  // (below, 0x1B8EC0)
 #include "actanim.h"
 #include "interact.h"
 #include "actmesh.h"
+#include "game/rowboat3.h"
 #include "actor.h"
 #include "jtthrow.h"
 #include "alo.h"
@@ -89,6 +90,11 @@ ALO* PaloXpFilter(ALO* p, uint32_t f);        // mark.cpp: orig 0x1F7530
 LO* PloInteractOidField(LO* plo, uint32_t ib);    // interact.cpp
 
 void FaceActorToward(ACTOR* pa, LO* plo);         // interact.cpp: 0x2046F0
+// game/grapplecam3.cpp (Bentley's Grapple-Cam, class 0x56)
+int NGrappleState3(LO* pcam);
+void LeaveGrapple3(LO* pcam);
+bool FEnterGrapple3(LO* pcam);
+
 namespace
 {
 SW* s_psw = nullptr;
@@ -617,8 +623,9 @@ void UpdateBentleyState2(BENTLEY* p)
             {
             case BS3_Idle:
                 UpdateBentleySub(p, 0);
-                if (p->f181C && p->sub.state != -1 && p->psma && p->psmIdle && IsmsFindSm(p->psmIdle, 0x17B) >= 0)
-                    SetSmaState(p->psma, 0x17B);  // 0x1F09D8
+                // (orig3 0x13F990: the SM state 0x199; Sly 2 0x17B)
+                if (p->f181C && p->sub.state != -1 && p->psma && p->psmIdle && IsmsFindSm(p->psmIdle, 0x199) >= 0)
+                    SetSmaState(p->psma, 0x199);  // 0x1F09D8
                 break;
             case BS3_Walk: case BS3_Jump: case BS3_Interact: case BS3_Run: UpdateBentleySub(p, 1); break;
             case BS3_Push: UpdateBentleySub(p, 2); break;
@@ -843,9 +850,11 @@ void UpdateBentleyTransitions(BENTLEY* p)
             }
             break;
         case BS3_ScriptSm: case BS3_ScriptMove: case BS3_17: case BS3_Push6: case BS3_Push7: break;
-        // (s3-gadgets) orig3 0x13D518 case 18: only while his Grapple-Cam (+0x19B8) is flown (its state +0x190 == 1); the
-        // camera's class 0x56 is not ported, so natively the state ends at once
-        case BS3_Idle18: SetBentleyState(p, BS3_Idle); break;
+        // (s3-gadgets) orig3 0x13D518 case 18: only while his Grapple-Cam (+0x19B8) is flown (its state +0x190 == 1,
+        // game/grapplecam3.cpp)
+        case BS3_Idle18:
+            if (!p->ploGrappleCam || NGrappleState3(p->ploGrappleCam) != 1) SetBentleyState(p, BS3_Idle);
+            break;
         case BS3_ScriptAnim:
             // a script's animation (+0x1030) or state machine (+0x1034) over: standing (0x134850)
             if (p->pasega ? FAsegaRetracted(p->pasega) : (p->psma && FSmaRetracted(p->psma))) SetBentleyState(p, 0);
@@ -1009,9 +1018,10 @@ void SetBentleyState(BENTLEY* p, int n)
     switch (cur)
     {
     case -1: break;
-    case BS3_Idle: case BS3_Idle18:   // (orig3 0x13E510: 18 as 0; its Grapple-Cam gate (+0x19B8 mode 1 -> 2): with that port)
+    case BS3_Idle: case BS3_Idle18:   // (orig3 0x13E510: 18 as 0; leaving 18 with his Grapple-Cam flown (+0x19B8 mode 1): its mode 2)
         SetXfModes(p, 2);
         ActorNextLookTime(p);  // 0x142880
+        if (cur == BS3_Idle18 && p->ploGrappleCam) LeaveGrapple3(p->ploGrappleCam);
         break;
     case BS3_ScriptSm: case BS3_ScriptAnim: case BS3_ScriptMove: SetXfModes(p, 2); break;
     case BS3_Walk: case BS3_Run: p->g1A0 = UGaitPhase(p, p->g1A0); break;
@@ -1319,7 +1329,7 @@ void UpdateBentley(LO* plo)
         {
             if (int* pc = DmgCounterOf(p)) *pc = 10;
             SetActorPower(p, 30);
-            SpawnPickups(0x5D, PosLoWorld(p->palo), p->palo, 3);
+            SpawnPickups(S3CID(0x5D), PosLoWorld(p->palo), p->palo, 3);
         }
     }
     // (debug, the actors code: SLY2N_BTELEGUARD="OID@N[,D]" puts Bentley D (default 600) in front of the first guard
@@ -1515,6 +1525,15 @@ void OnBentleyXpNew(ALO* palo, XP* pxp, int i)
     if (p && p->state == 4) AdjustDamageXp(p, pxp);  // 0x1A2100
     else if (p && p->state == BS3_Climb) WarnOnce("0x19E9C8 (+0xF50's contact)");
     else OnStepXpNew(palo, pxp, i);  // 0x204250
+}
+
+// orig3: 0x0013EE08 (Bentley's vt slot 59, AUDIT4 PLAYER-09): the step's contact (0x24E400) first, then the damage's
+// adjustment (0x1C3D18 on +0xE40) in his damage state (+0x1520 == 4); Sly 2's 0x135A48 (above) has no Sly 3 pair, so the
+// slot fell back to the base's (the step part only: bumps while hurt)
+void OnBentleyXpNew3(ALO* palo, XP* pxp, int i)
+{
+    OnStepXpNew(palo, pxp, i);   // 0x24E400
+    if (BENTLEY* p = PbentleyFromLo(palo); p && p->state == BS3_Damage) AdjustDamageXp(p, pxp);   // 0x1C3D18
 }
 
 // orig: 0x00136CC0 (vt slot 85)
@@ -1809,11 +1828,7 @@ void SetMurrayPunch(MURRAY* p, int k)
         for (int l = 0; l < 3; ++l)
             for (const ASEGEV& ev : PasegdOf(paseg)->aaev[l])
                 std::printf("punch %d clip %d list %d event t %.3f kind %d an %d %d\n", k, paseg->oid, l, ev.t, ev.kind, ev.an[0], ev.an[1]);
-    float g = 0.0f;
-    if (paseg)
-        for (const ASEGEV& ev : PasegdOf(paseg)->aaev[1])
-            if (ev.kind == 11 && ev.an[0] == 0x1AC) { g = ev.t; break; }  // 0x12F938
-    if (g != 0.0f && p->pasega) SetAsegaSeekTime(p->pasega, g_clock.t + g / p->pasega->svt);  // 0x131A90
+    // (Sly 2 then sought the clip's marker 0x1AC (0x12F938 / 0x131A90); Sly 3's 0x1E1018 seeks nothing)
     if (p->pasega)
     {
         const glm::vec3 pos = PosAloCenter(p->palo);  // 0x1A62E8
@@ -1986,10 +2001,12 @@ void UpdateMurrayBehavior(MURRAY* p)
 
 // orig: 0x001B5820 (state 6, the hold, as the current player: the face buttons pressed keep the held states
 // 0x1CB..0x1CF up; their time out drops to the next state of the tables 0x2C0908 / 0x2C0948)
+// orig3: 0x1DDE80: Sly 3's SM oids are Sly 2's + 0x2E: the held states 0x1F9..0x1FD, the drop 0x1F8, the tables
+// D_003465D0 / D_00346610 (read from the executable)
 void UpdateMurrayHold(MURRAY* p)
 {
-    static const int s_aoidOut[3][5] = {{463, -1, -1, -1, 464}, {461, -1, 463, -1, 464}, {460, 461, 462, 463, 464}};  // 0x2C0908
-    static const int s_aoidLeft[3][5] = {{458, -1, -1, -1, 459}, {458, -1, 459, -1, 461}, {458, 459, 459, 460, 461}};  // 0x2C0948
+    static const int s_aoidOut[3][5] = {{0x1FD, -1, -1, -1, 0x1FE}, {0x1FB, -1, 0x1FD, -1, 0x1FE}, {0x1FA, 0x1FB, 0x1FC, 0x1FD, 0x1FE}};  // D_003465D0
+    static const int s_aoidLeft[3][5] = {{0x1F8, -1, -1, -1, 0x1F9}, {0x1F8, -1, 0x1F9, -1, 0x1FB}, {0x1F8, 0x1F9, 0x1F9, 0x1FA, 0x1FB}};  // D_00346610
     if (PloPoCurrent(g_psw) != p->palo) return;  // 0x1C4840
     if (0 < g_gamepause.c78) return;             // 0x20F0B0
     if (!p->psma) return;
@@ -1997,7 +2014,7 @@ void UpdateMurrayHold(MURRAY* p)
     if (static int s_c = 0; std::getenv("SLY2N_GANGDEBUG") && s_c++ % 30 == 0)
         std::printf("murray hold t %.3f: sm cur %d goal %d t1524 %.2f n152C %d k %d\n", g_clock.t, oid, OidSmaGoal(p->psma), p->t1524, p->n152C, p->n1534);
     if (oid != OidSmaGoal(p->psma)) return;      // 0x1F07C8
-    if (oid >= 0x1D0 || oid < 0x1CB) return;
+    if (oid >= 0x1FE || oid < 0x1F9) return;
     p->t1524 -= g_clock.dt;
     if (FBtnTake(p, BTN_SQUARE | BTN_CROSS | BTN_CIRCLE | BTN_TRIANGLE, 0.0f))  // 0x1C46C0 (0xF0)
     {
@@ -2006,9 +2023,9 @@ void UpdateMurrayHold(MURRAY* p)
     }
     const int k = std::clamp(p->n1534, 0, 2);
     if (p->t1524 <= 0.0f)
-        oid = p->n152C <= 0 ? s_aoidOut[k][oid - 0x1CB] : s_aoidLeft[k][oid - 0x1CB];
+        oid = p->n152C <= 0 ? s_aoidOut[k][oid - 0x1F9] : s_aoidLeft[k][oid - 0x1F9];
     else if (1.0f < p->t1528 - p->t1524)  // 0x2C0900
-        oid = 0x1CA;
+        oid = 0x1F8;
     if (p->psma1530) SetSmaGoal(p->psma1530, oid);  // 0x1F0660
     SetSmaGoal(p->psma, oid);
 }
@@ -2064,7 +2081,7 @@ void SetMurrayFlopPhase(MURRAY* p, int n)
         const ASEGEV* landing = nullptr;
         if (p->pasega && p->pasega->paseg)
             for (const ASEGEV& ev : PasegdOf(p->pasega->paseg)->aaev[1])
-                if (ev.kind == 11 && ev.an[0] == 0x1A5) { landing = &ev; break; }  // 0x12F938
+                if (ev.kind == 11 && ev.an[0] == 0x1C6) { landing = &ev; break; }  // 0x12F938 (orig3 0x1DF600: 0x136880 with 0x1C6; Sly 2 0x1A5)
         if (landing) SetAsegaTime(p->pasega, 0, landing->t, 1.0f);
         else if (p->pasega) RetractAsega(p->pasega);
         break;
@@ -2121,6 +2138,7 @@ void UpdateMurrayTransitions(MURRAY* p)
         if (static_cast<unsigned>(s1 - 2) < 0x13)
             fTimed = s1 == 5 || s1 == 9 || s1 == 10 || s1 == 11 || s1 == 12 || s1 == 13 || s1 == 19;
         if (s1 == 22) fTimed = false;   // (s3-gadgets) Be The Ball leaves the floor by itself (its end: 0x1E3488's mode 2)
+        if (s1 == 23) fTimed = false;   // (orig3 0x1DCEA8: no fall in the boat, no transitions)
         if (fTimed && 0.1f < g_clock.t - p->tFloor)
         {
             const int v = p->state;
@@ -2196,7 +2214,7 @@ void UpdateMurrayTransitions(MURRAY* p)
         case 14: UpdateDamageTransitions(p); break;  // 0x1A12F0 (+0xDF0)
         case 13: UpdateInteractTransitions(p); break;  // 0x1911A8 (+0x4C0)
         case 15: UpdateJtThrow(p->jtthrow1910); break;  // 0x21F418 (+0x1910)
-        case 16: case 18: case 19: break;
+        case 16: case 18: case 19: case 23: break;
         default:
             WarnOnce("Murray's transitions of state " + std::to_string(p->state));
             break;
@@ -2380,6 +2398,7 @@ void SetMurrayState(MURRAY* p, int n)
     case 9: SetMurrayBehaviorAnim(p, -1); break;  // 0x1B5D30
     case 6: p->psma1530 = nullptr; break;
     case 22: sly3::SetBallMode3(p, -1); p->ball.pxpHolder = nullptr; break;   // (s3-gadgets) orig3 0x1DE690: Be The Ball (0x1E2E88, +0x1B00 = 0)
+    case 23: LeaveMurrayRow3(p); break;   // orig3 0x1DE690 case 23 (game/rowboat3.cpp)
     case 15:
         if (p->jtthrow1910.peer) RemoveLo(s_psw, p->jtthrow1910.peer);  // +0x191C's vt slot 9
         SetJtThrowState(p->jtthrow1910, -1);                            // 0x2206C8 (+0x1910)
@@ -2401,7 +2420,9 @@ void SetMurrayState(MURRAY* p, int n)
         SetXfModes(p, 1);
         psm = p->psmIdle;
         p->vecVel = glm::vec3(0.0f);
-        oid = old == 2 ? 0x178 : old != 10 ? 0x175 : 0x176;
+        // (orig3 0x1DE690 case 0: 0x195 after the jump (2), 0x193 after the run (Sly 3's gait 11 = native 10), else
+        // 0x192; Sly 2's 0x178 / 0x176 / 0x175)
+        oid = old == 2 ? 0x195 : old != 10 ? 0x192 : 0x193;
         if (!psm || IsmsFindSm(psm, oid) < 0) oid = -1;  // 0x1F0400
         grfMask = GrfActorLookMask(p);  // 0x1430C8
         ActorSetLookFlag(p, 1);         // 0x142868
@@ -2437,6 +2458,7 @@ void SetMurrayState(MURRAY* p, int n)
         break;
     case 9: SetMurrayBehaviorAnim(p, 0); UpdateActorStepMesh(p); return;
     case 22: sly3::SetBallMode3(p, 0); UpdateActorStepMesh(p); return;   // (s3-gadgets) orig3 0x1DE690 case 22
+    case 23: EnterMurrayRow3(p); UpdateActorStepMesh(p); return;   // orig3 0x1DE690 case 23: in the boat +0x1C90
     case 4:
         // the pickup: its clip by +0x144C (0 +0x1440, 1 +0x1444), still, the carry's state 0 (0x1B93E8)
         paseg = p->n144C == 0 ? p->paseg1440 : p->n144C == 1 ? p->paseg1444 : nullptr;
@@ -2446,7 +2468,8 @@ void SetMurrayState(MURRAY* p, int n)
     case 13: UpdateActorStepMesh(p); return;  // (the interaction's animation: 0x192BD8 after this)
     case 8:
         // Diablo Fire Slam (19) / the slam of a carried guard: +0x1AE4 when +0x143C, else +0x1438; no velocity
-        paseg = PPart<ASEG>(p->palo, 0x1AE4) && p->f143C ? PPart<ASEG>(p->palo, 0x1AE4) : PPart<ASEG>(p->palo, 0x1438);
+        // (orig3 0x1DE690 case 8: +0x1AC4 (oid 555) when +0x1578, else +0x1574; Sly 2's +0x1AE4 is Sly 3's rowing clip 0 +0x1C6C)
+        paseg = PPart<ASEG>(p->palo, FN3_TAG | 0x1AC4u) && p->f143C ? PPart<ASEG>(p->palo, FN3_TAG | 0x1AC4u) : PPart<ASEG>(p->palo, 0x1438);
         p->vecVel = glm::vec3(0.0f);
         break;
     case 21:
@@ -2581,11 +2604,13 @@ void UpdateMurray(LO* plo)
     case 11: UpdateMurrayPunch(p); break;  // 0x1B8B70
     case 12: UpdateMurrayBerserk(p); break;  // 0x1B90B8
     case 19: case 21: break;
+    case 14: case 16: break;   // (Sly 2's 0x1B50B0 has no part for 14 (the binocucom) / 16, Sly 3's 0x1DD590 none for their twins: AUDIT4 PLAYER-19)
     case 13: UpdateInteract(p); break;      // 0x191A10 (+0x4C0)
     case 4: case 5: break; // original 0x2A71E0: no additional state4/5 update body
     case 17: UpdateGangScriptAnim(p, false); break;
     case 18: UpdateGangScriptAnim(p, true); break;
     case 22: sly3::UpdateBall3(p); break;   // (s3-gadgets) orig3 0x1E3488
+    case 23: UpdateMurrayRow3(p); break;    // orig3 0x1DD590 -> 0x1E49B8 (a stroke's clip over: the idle)
     default: WarnOnce("Murray's update of state " + std::to_string(p->state)); break;
     }
     // 0x1B82A0
@@ -2764,8 +2789,9 @@ void OnMurrayMessage(LO* plo, int msgk, void* pv)
                     if (ASEG* paseg = PPart<ASEG>(p->palo, FN3_TAG | 0x145Cu)) StartPrizeInteract(p, paseg, r, -1);   // (0x154EF0; the part stored under FN3_TAG)
             }
         break;
-    // (not ported: 0x21A (the toss controller +0x18E0 in its state 3: +0x19A8 = 1), 0x247 / 0x248 (state 23's object
-    // +0x1C90: its +0x1F0 = 1 / 0x20F508))
+    // orig3 0x1DEFE8: 0x247 / 0x248 (state 23's boat +0x1C90: its +0x1F0 = 1 / the oars' splash 0x20F508)
+    case 0x247: case 0x248: OnMurrayRowEvent3(p, pm->n); break;
+    // (not ported: 0x21A (the toss controller +0x18E0 in its state 3: +0x19A8 = 1))
     default: break;
     }
 }
@@ -2953,6 +2979,7 @@ struct INITGANG
 
 NATIVEFN(0x135940, UpdateBentleyMotion);
 NATIVEFN(0x135A48, OnBentleyXpNew);
+NATIVEFN3(0x13EE08, OnBentleyXpNew3);
 NATIVEFN(0x136CC0, GrfBentleyXp);
 NATIVEFN(0x135C20, SetBentleyJumpState);
 NATIVEFN(0x135D08, BentleyJumpKind);
@@ -3067,7 +3094,8 @@ bool StartBentleyAbility(ACTOR* pa, int k)
             return true;
         }
         if (!p->ploGrappleCam) return true;
-        WarnOnce("0x286D70 (the Grapple-Cam's camera, class 0x56)");
+        // (0x140128: none of the camera's states +0x190 / +0x198 / +0x1A0 set: 0x286D70)
+        FEnterGrapple3(p->ploGrappleCam);
         return true;
     }
     switch (k)
@@ -3139,3 +3167,18 @@ bool StartBentleyAbility(ACTOR* pa, int k)
 
 // (debug) see MurrayTeleportDebug
 void MurrayTeleportPreUpdate(SW* psw) { MurrayTeleportPreUpdateImpl(psw); }
+
+// (game/grapplecam3.cpp) orig3 0x1404D8's +0x19B8: the placed camera; Bentley's slot 116 (0xD) 0x1403F8 clears it;
+// 0x13E510(+0x1AC, 0x12): his state 18 while it is flown
+void SetBentleyGrappleCam3(LO* pbentley, LO* pcam)
+{
+    if (BENTLEY* p = PbentleyFromLo(pbentley)) p->ploGrappleCam = pcam;
+}
+void ClearBentleyGrappleCam3(LO* pbentley)
+{
+    if (BENTLEY* p = PbentleyFromLo(pbentley)) p->ploGrappleCam = nullptr;
+}
+void EnterBentleyGrappleState3(LO* pbentley)
+{
+    if (BENTLEY* p = PbentleyFromLo(pbentley)) SetBentleyState(p, BS3_Idle18);
+}

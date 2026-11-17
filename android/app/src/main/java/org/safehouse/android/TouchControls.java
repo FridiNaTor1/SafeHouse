@@ -123,7 +123,7 @@ final class TouchControls extends View implements InputManager.InputDeviceListen
             found |= isGamepad(device) || pointer || keyboard;
         }
         // (a VR headset: the game is seen through OpenXR and played with its controllers; the pad would not be seen)
-        found |= GameActivity.vrHeadset();
+        found |= !(getContext() instanceof GameActivity) ? GameActivity.vrHeadset() : ((GameActivity)getContext()).immersiveOnHeadset();
         // (a device's own change events repeat on some phones: only a change of the answer switches the pad)
         if (!first && found == detected) return;
         detected = found;

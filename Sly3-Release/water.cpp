@@ -13,11 +13,16 @@
 // the actors' and falls back here): buoyancy against gravity by the fraction, the drag toward the water's flow (its
 // +0x160 velocity at the point, 0x228C18) split along / across the surface's normal, the angular drag, the righting
 // torque, and the wake (0x15A2C0) while it floats at an upward surface: the sounds 0x4B..0x4E (the object's +0x174,
-// by the relative speed) and the ripples (not ported: the class 7 objects of 0x1CE888, the emitter +0x178).
+// by the relative speed) and the ripples (Sly 3 0x178278: the water's PE +0x158, component 0x78C).
 //
-// Option fields (EOPIDs 874..881): +0x160 the flow (vector), +0x170 / +0x174 explosions (the splash), +0x178 the
+// Option fields (Sly 2 EOPIDs 874..881): +0x160 the flow (vector), +0x170 / +0x174 explosions (the splash), +0x178 the
 // wake's emitter, +0x17C the ripple, +0x180 the wake's sound on, +0x184 / +0x188 a contact state / filter (-10 /
-// 0x2000: read by the players' 0x1A28B0). The mass states' buoyancy +0xD4 / drag +0xD8 are options 59 / 60 (getter
+// 0x2000: read by the players' 0x1A28B0).
+// Sly 3 (WATER 0x65, 0x180 bytes; EOPIDs 925..935): +0x140 the flow, +0x150 the splash PE, +0x154 a PE (not read by
+// the water's code), +0x158 the wake's ripple PE, +0x15C the wake's sound on, +0x160 / +0x164 / +0x168 (925 / 926 /
+// 927: the 0x281928 setter's +0x164), +0x16C the splash's sound, +0x170 the one camera (player) that draws it (vt slot
+// 21 0x280CC8), +0x174 / +0x178 the flow zones (EOPID 929). Ported here: the flow and its zones, the splash, the wake's
+// ripple and sound flag; the slot 21 camera filter is the draw's (render: split screen). The mass states' buoyancy +0xD4 / drag +0xD8 are options 59 / 60 (getter
 // 0x1F7BF0); the water's own are 1 (0x228BB0).
 #include "so.h"
 #include "game/sly3.h"
@@ -27,6 +32,10 @@
 #include "animfind.h"
 #include "clock.h"
 #include "emitter.h"
+#include "crv.h"
+#include "detect.h"
+#include "lox.h"
+#include "pe.h"
 #include "lo.h"
 #include "mat.h"
 #include "sound.h"
@@ -114,9 +123,10 @@ void SetGField(LO* plo, uint32_t pfn, uint32_t ib, float g)
 // The mass state's buoyancy (+0xD4) and drag (+0xD8)
 float GBuoyancy(const ALO* p) { return GField(p, PFN_SOST_GETTER, 0xD4, 0.0f); }
 float GDrag(const ALO* p) { return GField(p, PFN_SOST_GETTER, 0xD8, 0.0f); }
+// (Sly 3: the flow is +0x140 (EOPID 928; Sly 2's +0x160); +0x160..+0x170 are other fields, see the top)
 glm::vec3 VecFlow(const ALO* pw)
 {
-    return glm::vec3(GField(pw, 0, 0x160, 0.0f), GField(pw, 0, 0x164, 0.0f), GField(pw, 0, 0x168, 0.0f));
+    return glm::vec3(GField(pw, 0, 0x140, 0.0f), GField(pw, 0, 0x144, 0.0f), GField(pw, 0, 0x148, 0.0f));
 }
 LO* PloField(ALO* pw, uint32_t ib)
 {
@@ -202,9 +212,44 @@ float GWaterDepth(ALO* pw, ALO* po, glm::vec3* ppos, glm::vec3* pnormal)
     return alsg[0].t1 - alsg[0].t0;
 }
 
+// orig3: the flow zones (WATER +0x174 count / +0x178 records of 0x20 bytes: +0 the shape's oid, +4 the shape (class
+// 0x13 SHAPE, resolved by vt slot 17 0x2804E8), +0x10 its flow): one per EOPID 929 (the method 0x10A3F8 -> 0x281930
+// {oid, vector}, at most 256), resolved at the first use
+struct WZONE { LO* pshape = nullptr; glm::vec3 vFlow{0.0f}; };
+std::unordered_map<const ALO*, std::pair<uint32_t, std::vector<WZONE>>> s_mpzones;
+const std::vector<WZONE>& AzoneOf(ALO* pw)
+{
+    auto& [serial, a] = s_mpzones[pw];
+    if (serial == (g_psw ? g_psw->serial : 0) + 1 && !a.empty()) return a;
+    serial = (g_psw ? g_psw->serial : 0) + 1;
+    a.clear();
+    for (const OPT& o : pw->aopt)
+    {
+        if (o.eopid != 929 || o.aval.size() < 2 || a.size() >= 256) continue;
+        WZONE z;
+        LO* plo = o.aval[0].n > 0 ? PloFindSwNearest(pw, o.aval[0].n) : nullptr;   // 0x17E1B8(G, 4, oid, water)
+        z.pshape = plo && FCidDerivedFrom(plo->Cid(), S3CID(0x16)) ? plo : nullptr;     // (0x13B500(object, 0x13))
+        z.vFlow = glm::vec3(o.aval[1].ag[0], o.aval[1].ag[1], o.aval[1].ag[2]);
+        if (FDbg()) std::printf("[water] %d zone %d (%s) flow %.1f %.1f %.1f\n", pw->oid, o.aval[0].n, z.pshape ? "shape" : "none", z.vFlow.x, z.vFlow.y, z.vFlow.z);
+        a.push_back(z);
+    }
+    return a;
+}
+
 // orig: 0x00228C18 (the water's velocity at a world point: the point (at the water's level z 0) carried by the
 // water's record chain with the flow +0x160 as its local velocity, 0x230CD0 = 0x230A98 at dt 0)
-glm::vec3 VelWaterAt(ALO* pw, const glm::vec3& pos) { return VelWaterPoint(PxfObj(pw), VecFlow(pw), pos); }
+// orig3: 0x280598: the flow +0x140 (0x1C94E8: the water's frame to the world) plus each zone's flow (in its shape's
+// frame) whose shape holds pos (0x27F258); then carried by the water's record chain the same way
+glm::vec3 VelWaterAt(ALO* pw, const glm::vec3& pos)
+{
+    XF* pxf = PxfObj(pw);
+    const glm::mat3 rot = pxf ? glm::mat3(pxf->matWorld) : glm::mat3(1.0f);
+    glm::vec3 vWorld = rot * VecFlow(pw);
+    for (const WZONE& z : AzoneOf(pw))
+        if (z.pshape && FPointInShape(z.pshape, pos)) vWorld += glm::mat3(MatWorldLox(z.pshape)) * z.vFlow;
+    // (the chain turns the local velocity into the world again: the sum given in the water's frame)
+    return VelWaterPoint(pxf, glm::inverse(rot) * vWorld, pos);
+}
 }
 
 glm::vec3 VelWaterPoint(XF* pxf, const glm::vec3& vFlow, const glm::vec3& pos)
@@ -245,7 +290,7 @@ void WakeAloWater(ALO* po, ALO* pw, const glm::vec3& vFlow, const glm::vec3& pos
     }
     float u = (s - 10.0f) * F32(0x3AA5E9F7);  // (/ 790)
     u = u < 0.0f ? 0.0f : (1.0f < u ? 1.0f : u);
-    if (pso && pw->U32Field(0, 0x180, 1))
+    if (pso && pw->U32Field(0, 0x15C, 1))   // (Sly 3 +0x15C, EOPID 933; Sly 2's +0x180)
     {
         const float gVol = u * F32(0x3F666666) + F32(0x3DCCCCCD);  // 0.9 u + 0.1
         WAKE& wk = s_mpwake[pso];
@@ -269,18 +314,13 @@ void WakeAloWater(ALO* po, ALO* pw, const glm::vec3& vFlow, const glm::vec3& pos
             fRipple = int(g_clock.t / tStep) != int((g_clock.t + dt) / tStep);
         if (!fRipple) return;
     }
-    LO* ploRipple = PloField(pw, 0x17C);
+    // orig3 0x178278 (Sly 3 drops Sly 2's class-7 RIP and the spray): the ripple is the water's PE +0x158 (EOPID 932)
+    // moved to pos, its component 0x78C given the size sRadius shrinking to 0.6 sRadius, one particle
+    LO* ploRipple = PloField(pw, 0x158);
     if (!ploRipple) return;
-    // the ripple (0x1CE888(G, 7, 0): a plain RIP at pos, size sRadius growing by 0.6 sRadius, the water's +0x17C model)
-    if (!FLaunchWaterRipple(ploRipple, pos, sRadius)) return;
     if (pso) s_mpwake[pso].tRipple = g_clock.t;
-    // faster than 500: the spray of the water's +0x178 (0x15BE28: 4..6 kind-1 RIPs from 30 above pos)
-    if (500.0f < s)
-        if (LO* ploSpray = PloField(pw, 0x178))
-        {
-            const SOST* ps = Psost(po);
-            LaunchWaterSpray(ploSpray, ploRipple, pw, pos, s, ps ? ps->dvGravity : glm::vec3(0.0f), NRandInRange(4, 6));
-        }
+    const bool fEmitted = FEmitPeComponent(ploRipple, 0x78C, pos, sRadius);
+    if (FDbg()) std::printf("[water] t %.3f ripple %d at %.0f %.0f %.0f size %.1f%s\n", g_clock.t, ploRipple->oid, pos.x, pos.y, pos.z, sRadius, fEmitted ? "" : " (no component 0x78C)");
 }
 
 // orig: 0x002297F8 func_002297F8 (ALO vt slot 72: the object in the water pw for a physics frame)
@@ -499,6 +539,9 @@ void UpdateWater(LO* plo)
             s_mpSeen[pw] = true;
             int cox = 0;
             for (OX* pox = Poxa(pw) ? Poxa(pw)->pox : nullptr; pox; pox = pox->poxNext) ++cox;
+            std::printf("[water] water %d sly3 fields: splash pe %d sfx %d ripple pe %d sound %u camera %d zones %zu flow %.1f %.1f %.1f\n", pw->oid,
+                        int(pw->U32Field(0, 0x150, 0)), int(pw->U32Field(0, 0x16C, uint32_t(-1))), int(pw->U32Field(0, 0x158, 0)),
+                        pw->U32Field(0, 0x15C, 1), int(pw->U32Field(0, 0x170, 0)), AzoneOf(pw).size(), VecFlow(pw).x, VecFlow(pw).y, VecFlow(pw).z);
             std::printf("[water] t %.3f water %d: %zu entries, attachment %p (%d overlaps), flow %.1f %.1f %.1f box %.0f %.0f %.0f .. %.0f %.0f %.0f\n", g_clock.t,
                         pw->oid, pw->asoe.size(), (void*)Poxa(pw), cox, VecFlow(pw).x, VecFlow(pw).y, VecFlow(pw).z, Poxa(pw) ? Poxa(pw)->posMin.x : 0.f, Poxa(pw) ? Poxa(pw)->posMin.y : 0.f, Poxa(pw) ? Poxa(pw)->posMin.z : 0.f, Poxa(pw) ? Poxa(pw)->posMax.x : 0.f, Poxa(pw) ? Poxa(pw)->posMax.y : 0.f, Poxa(pw) ? Poxa(pw)->posMax.z : 0.f);
         }
@@ -522,9 +565,10 @@ void UpdateWater(LO* plo)
         WNODE* pn = new WNODE{pw, po};
         anode.insert(anode.begin(), pn);
         if (FDbg()) std::printf("[water] t %.3f %d (cid 0x%X) in water %d\n", g_clock.t, po->oid, po->Cid(), pw->oid);
-        // the splash: a new one falling faster than 100, where its entries' fall crosses the water's
-        LO* ploSplash = PloField(pw, 0x170);
-        if (!pw->U32Field(0, 0x170, 0)) continue;
+        // the splash: a new one falling faster than 100, where its entries' fall crosses the water's (orig3 0x280828:
+        // only with the splash PE +0x150 (EOPID 930); vt slot 79, false only for class 0x52 (0x2BC340))
+        LO* ploSplash = PloField(pw, 0x150);
+        if (!ploSplash || po->Cid() == 0x52) continue;
         const glm::vec3 v = VtVelPos(po);
         if (!(v.z < -100.0f)) continue;
         for (SOE& e : po->asoe)
@@ -545,20 +589,22 @@ void UpdateWater(LO* plo)
             float fall = -v.z;
             fall = std::min(fall, 600.0f);
             fall = fall * F32(0x3ADA740E);  // / 600
-            const float sRadius =
-                poxa ? ((poxa->posMax.x - poxa->posMin.x) + (poxa->posMax.y - poxa->posMin.y)) * 0.5f : 0.0f;
-            if (CSnd* psnd = PsndStartSound(0x13, 1.0f, 0, po))  // 0x1FBB90 / 0x1FB2F8
+            (void)poxa;
+            // orig3 0x280BF8: the sound +0x16C (EOPID 934, -1 none) at the point (falloff 100..1000, volume the fall),
+            // then the PE +0x150 (its frame +0xE0 cleared) moved there (slot 34) and started (0x1FE728(pe, 1))
+            const glm::vec3 posSplash = alsg[0].pos0;
+            if (const int sfx = int(pw->U32Field(0, 0x16C, uint32_t(-1))); sfx != -1)
+                if (CSnd* psnd = PsndStartSound(sfx, 1.0f, 0, nullptr, &posSplash))  // 0x2459F8 / 0x245000
+                {
+                    psnd->SetFalloff(100.0f, 1000.0f);  // 0x245100
+                    psnd->SetVolume(fall);              // 0x244E08
+                }
+            if (FDbg()) std::printf("[water]   splash at %.1f %.1f %.1f fall %.2f pe %d\n", posSplash.x, posSplash.y, posSplash.z, fall, ploSplash->oid);
+            if (ploSplash->Cid() == 0x2D)
             {
-                psnd->SetFalloff(100.0f, 1000.0f);  // 0x1FB4F0
-                psnd->SetVolume(fall);              // 0x1FB1F8
+                SetLoxPos(static_cast<LOX*>(ploSplash), posSplash);
+                TriggerPe(ploSplash);
             }
-            BURSTPARAMS bp;  // (vt slot 51 of the explosion: 0x15C3C0)
-            bp.grf = 14;
-            bp.g8 = sRadius * fall;
-            bp.dir = glm::vec3(0.0f, 0.0f, 1.0f);
-            bp.pos = alsg[0].pos0;
-            if (FDbg()) std::printf("[water]   splash at %.1f %.1f %.1f strength %.2f\n", bp.pos.x, bp.pos.y, bp.pos.z, bp.g8);
-            if (ploSplash) ExplodeLo(ploSplash, &bp);
         }
     }
     // the signals: 4 entered, 5 left ({water, object})

@@ -489,6 +489,10 @@ void StartCodePanels3(SW* psw)
     }
 }
 
+// orig3: 0x171188 (the panel 0x50's vt slot 32): SO's release, then 0x171538(p, -1): its mode -1 (a panel in use
+// gives the pad back to its activator first)
+void ReleaseCodePanel3(LO* plo) { SetPanelMode(plo, -1); }
+
 bool FCodePanelCharacter3(const LO* plo)
 {
     const auto it = s_mppanel.find(const_cast<LO*>(plo));

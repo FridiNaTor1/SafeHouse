@@ -142,6 +142,11 @@ struct MURRAY : ACTOR
     // the second throw controller (state 15: the Bentley toss; peer +0x191C, selected +0x1920 = the global Bentley)
     JTTHROW jtthrow1910;           // +0x1910
     sly3::BALL3 ball;              // (s3-gadgets) Sly 3 +0x1AD4..: Be The Ball (state 22, game/ball3.cpp)
+    // (Sly 3) the boat state 23 (game/rowboat3.cpp): the rowing clip +0x1C64 (-1 none) and its start +0x1C68, the boat
+    // he rows +0x1C90 (EOPID 1152)
+    int nRow1C64 = -1;
+    float tRow1C68 = 0.0f;
+    LO* pboat1C90 = nullptr;
 };
 
 BENTLEY* PbentleyFromLo(LO* plo);  // null outside 0x37

@@ -3,7 +3,8 @@
 // FB_ONLY, ZTST GREATER), ALPHA (Cs - Cd) x As + Cd or (Cs - 0) x As + Cd (blend state in emitter.cpp).
 uniform sampler2DArray tex;
 uniform int fTextured;
-uniform int afailMode;   // 1: the fragments that pass (alpha >= 0x80), 2: those that fail
+uniform int afailMode;   // 1: the fragments that pass (alpha >= 0x80), 2: those that fail; 3: alpha >= 126 (option 588's
+                         // depth prepass, orig3 0x36B260: TEST alpha GEQUAL 126, AFAIL KEEP)
 in vec2 vUv;
 in float vLayer;
 in vec4 vRgba;
@@ -13,7 +14,14 @@ void main()
     vec4 c = vRgba;
     if (fTextured != 0) c = floor(texture(tex, vec3(vUv, vLayer)) * 255.0 * vRgba / 128.0);
     c = clamp(c, 0.0, 255.0);
-    bool fPass = c.a >= 128.0;
-    if ((afailMode == 1) != fPass) discard;
+    if (afailMode == 3)
+    {
+        if (c.a < 126.0) discard;
+    }
+    else
+    {
+        bool fPass = c.a >= 128.0;
+        if ((afailMode == 1) != fPass) discard;
+    }
     FragColor = vec4(c.rgb / 255.0, min(c.a / 128.0, 1.0));
 }

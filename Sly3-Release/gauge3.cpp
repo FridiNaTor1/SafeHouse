@@ -17,6 +17,7 @@
 #include "lo.h"
 #include "screen3.h"
 #include "screenrt.h"
+#include "display.h"
 #include "sw.h"
 #include "vecmat.h"
 #include "worldaccess.h"
@@ -28,6 +29,8 @@
 #include "splitscreen3.h"
 #include "game/sly3.h"
 #include "game/biplane3.h"
+#include "game/task3.h"
+#include "challenge3.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -500,6 +503,20 @@ void SetGaugePlayer3(LO* player)
     ShowScreenObj(plo, -1);
 }
 
+// orig3 0x21E4F0 / 0x21E558 called by others on the actor's +0x168 (Sly's state 22, the guard's check: 0x1ADDD0 hides it
+// entering, shows it leaving): the gauge's slot 54 (state -1, the base hide) / 56 (state 0, the base show)
+void ShowGaugeOf3(LO* player, bool fShow)
+{
+    GAUGE3* pg = PgaugeOfPlayer(player);
+    if (!pg || !pg->plo) return;
+    if (fShow)
+    {
+        SetGaugeState(*pg, 0);
+        ShowScreenObj(pg->plo, -1);
+    }
+    else SetGaugeState(*pg, -1);
+}
+
 // orig3 0x0021E0C8 (the update of each shown gauge, after the base update)
 void UpdateGauges3(SW* psw, LO* player)
 {
@@ -613,9 +630,10 @@ void ShowNotice3(int n, LO* plo)
 {
     if (n == 1 && !FAsk3d3())
     {
-        // (PC) the 3-D question is not asked: its No (triangle) taken at once, nothing shown, the script goes on
+        // (the 3-D mode off: the default, Settings.ini [Graphics] 3D Mode; SLY3_ASK3D=0 the test harnesses' routes) the
+        // 3-D question is not asked: its No (triangle) taken at once
         g_n3dChoice3 = 0;
-        std::printf("3d: the 3-D question (screen %d) answered No without showing it (SLY3_ASK3D=1 asks)\n", plo ? plo->oid : -1);
+        std::printf("3d: the 3-D question (screen %d) answered No without showing it (the 3-D mode off)\n", plo ? plo->oid : -1);
         return;
     }
     CloseNotice3();
@@ -631,14 +649,18 @@ void ShowNotice3(int n, LO* plo)
 bool FNoticeBusy3() { return s_notice.fUp; }
 }  // namespace
 
-int g_n3dChoice3 = 0;
+int g_n3dChoice3 = [] { const char* psz = std::getenv("SLY3_3DANSWER"); return psz ? std::atoi(psz) : 0; }();   // (debug: the answer at the start, 1 the 3-D mode)
 bool FAsk3d3()
 {
-    static const bool s_f = [] { const char* psz = std::getenv("SLY3_ASK3D"); return psz && std::atoi(psz) != 0; }();
-    return s_f;
+    // (s3-3dtoggle) SLY3_ASK3D (1 asked, 0 not) overrides Settings.ini [Graphics] 3D Mode (off by default)
+    static const int s_nEnv = [] { const char* psz = std::getenv("SLY3_ASK3D"); return psz ? (std::atoi(psz) != 0 ? 1 : 0) : -1; }();
+    return s_nEnv >= 0 ? s_nEnv != 0 : g_saveopts.f3dMode;
 }
 
 bool FNoticeShown3() { return s_notice.fUp; }
+
+bool FJob3d3() { return g_tasks3.pjobCur && g_tasks3.pjobCur->n40 == 1; }
+bool F3dChoosable3() { return FChallenge3d3() || FJob3d3(); }
 
 // orig3: 0x00223078 / 0x00223148 (script strings 852 / 853 of the table 0x47A4B8): the notice's text and its buttons
 // line by n (+0x30 of the widget: 1 the 3-D question 0x97 with "&2S&. : " Yes 0x99 "\n&2T&. : " No 0x98; 2 / 3 the
@@ -679,13 +701,13 @@ void UpdateNotice3()
     if (NScreenObjState(p.plo) != 2 || g_clock.tReal - p.tShown <= 0.1f) return;
     switch (p.n)
     {
-    case 1:   // (the 3-D question, only with SLY3_ASK3D=1)
+    case 1:   // (the 3-D question; SLY3_ASK3D=0: not asked)
         if (GrfbtnTakePressed(0x80)) p.nChoice = -1;
         else if (GrfbtnTakePressed(0x10)) p.nChoice = 0;
         else return;
         g_n3dChoice3 = p.nChoice;
-        std::printf("3d: the 3-D question answered %s (the normal view either way: the anaglyph mode is not offered)\n",
-                    p.nChoice == 0 ? "No" : "Yes");
+        std::printf("3d: the 3-D question answered %s (the next world load: %s)\n", p.nChoice == 0 ? "No" : "Yes",
+                    p.nChoice == 0 ? "the normal view" : "the world's own mode");
         break;
     case 2: case 3:
         if (GrfbtnTakePressed(0x80)) std::fprintf(stderr, "sly3: the notice's transition 0x289198(2, 0) is not started natively\n");

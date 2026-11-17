@@ -330,6 +330,73 @@ void OnCrashSignal(int sig)
 }
 #endif
 
+#include "gl.h"
+#include "../platform/gl_context.h"
+// --gl-selftest [--out PNG]: the game's renderer as it starts for play (the window, the context: Metal on Apple,
+// OpenGL / Vulkan elsewhere, every program built), a few presented frames of a known colour, the scene target read
+// back (and written to PNG). No game data. The iOS CI starts it from the launcher as Play does (ios_app.mm,
+// platform/ios/glfw_sdl_ios.cpp --ios-smoke), so the game's window and renderer are checked where no disc is.
+static int GlSelfTestCommand(const std::string& out)
+{
+    std::string error;
+#if defined(CANE_IOS) || defined(__ANDROID__)
+    constexpr bool fVisible = true;   // (a phone's window is the screen)
+#else
+    constexpr bool fVisible = false;
+#endif
+    if (!g_gl.FInit(1280, 720, fVisible, "Sly3-Release", error))
+    {
+        std::fprintf(stderr, "gl-selftest: FAILED: %s\n", error.c_str());
+        g_gl.Terminate();
+        return 1;
+    }
+    std::printf("gl-selftest: %s / %s, scene %dx%d\n", reinterpret_cast<const char*>(glGetString(GL_RENDERER)),
+                reinterpret_cast<const char*>(glGetString(GL_VERSION)), g_gl.renderWidth, g_gl.renderHeight);
+    // (an error the start left behind fails the test as one in the frames does; reported apart so the log says which)
+    const GLenum errInit = glGetError();
+    if (errInit != GL_NO_ERROR) std::printf("gl-selftest: GL error 0x%x after the renderer's start\n", unsigned(errInit));
+    // (a program that did not build: the game would fall back to a variant, which is not what Play is meant to run)
+    const int cShaderErrors = g_cShaderErrors;
+    if (cShaderErrors) std::printf("gl-selftest: %d program(s) failed to build (shader compile / link error above)\n", cShaderErrors);
+    for (int frame = 0; frame < 30; ++frame)
+    {
+        glBindFramebuffer(GL_FRAMEBUFFER, g_gl.FboScene());
+        glDisable(GL_SCISSOR_TEST);
+        glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+        glClearColor(0.25f, 0.5f, 0.75f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+        g_gl.Present();
+        cane::gl::SwapBuffers(g_gl.window);
+        glfwPollEvents();
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, g_gl.FboScene());
+    glClearColor(0.25f, 0.5f, 0.75f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glFinish();
+    // (the scene target's centre must be the colour cleared)
+    unsigned char rgba[4] = {};
+    glBindFramebuffer(GL_FRAMEBUFFER, g_gl.FboScene());
+    if (g_gl.FboScene() == g_gl.fbo)
+        glReadPixels(g_gl.renderWidth / 2, g_gl.renderHeight / 2, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+    const bool fWritten = out.empty() || g_gl.FWriteScreenshot(out);
+    const bool fColor = g_gl.FboScene() != g_gl.fbo || (std::abs(rgba[0] - 64) <= 2 && std::abs(rgba[1] - 128) <= 2 && std::abs(rgba[2] - 191) <= 2);
+    const GLenum err = glGetError();
+    std::printf("gl-selftest: centre %d %d %d (cleared 64 128 191), GL error 0x%x%s%s\n", rgba[0], rgba[1], rgba[2], unsigned(err),
+                out.empty() ? "" : fWritten ? ", wrote " : ", FAILED to write ", out.c_str());
+    g_gl.Terminate();
+    const bool fOk = fWritten && fColor && err == GL_NO_ERROR && errInit == GL_NO_ERROR && cShaderErrors == 0;
+    std::printf("gl-selftest: %s\n", fOk ? "passed" : "FAILED");
+    return fOk ? 0 : 1;
+}
+
+// The tool commands leave through std::_Exit (no static destructors after the worlds they loaded). iOS runs them in
+// the app's own process (platform/ios/ios_app.h), where that would end the app: there they return from main.
+#if defined(CANE_IOS)
+#define SLY3_LEAVE_TOOL(rc) return (rc)
+#else
+#define SLY3_LEAVE_TOOL(rc) std::_Exit(rc)
+#endif
+
 #ifdef __SWITCH__
 // (the Switch: SafeHouse.nro runs this one as the PC launcher would, cane_game_sly3 at the end of this file)
 #include "../platform/switch/runtime.h"
@@ -373,14 +440,13 @@ int main(int argc, char** argv)
     VIEWOPTS vo;
     std::string cmRanges = "2DDED0+6A0,2DFBC0+2240,FB1580+1100,FB37E0+80,140C9F0+600,1486000+3400";
     bool fCmFree = false;
-    struct { bool fAspect = false; DISPASPECT aspect = DISPASPECT_Fit; int internalHeight = -1, frameRate = -1, vsync = -1, window = -1, wideBackgrounds = -1, hqLogo = -1, longShadows = -1, fastShadows = -1, msaa = -1; float drawDistance = -1; } dispo;
+    struct { bool fAspect = false; DISPASPECT aspect = DISPASPECT_Fit; int internalHeight = -1, frameRate = -1, vsync = -1, window = -1, wideBackgrounds = -1, hqLogo = -1, longShadows = -1, fastShadows = -1, hudPlacement = -1, msaa = -1, upscale = -1, upscalePreset = -1, upscaleSharpness = -1; float drawDistance = -1; } dispo;
     std::vector<std::string> rest, physArgs;
     RENDERER rendererArg = RENDERER::Auto;
     bool fRendererArg = false;
-    // (vr.h) SLY2N_VR=1 as --vr; Android: a headset's runtime is tried always (none: the game as on a phone)
-#if defined(__ANDROID__)
-    vr::Request(true);
-#endif
+    // (vr.h) SLY2N_VR=1 as --vr. (Android: unlike Sly 2, Sly 3 does not ask for a headset by itself: its VR mode is not
+    // ready, and the app shows it as a flat window also on a Meta Quest (FlatGameActivity.java, a 2D panel), where no
+    // OpenXR session can show it.)
     // (SLY2N_VR=0: no VR, also on Android: the flat game on a headset, device tests)
     if (const char* sz = std::getenv("SLY2N_VR"); sz) vr::Request(std::atoi(sz) != 0);
     for (int i = 1; i < argc; ++i)
@@ -412,6 +478,21 @@ int main(int argc, char** argv)
         else if (!std::strcmp(argv[i], "--hq-logo") && i + 1 < argc) dispo.hqLogo = std::atoi(argv[++i]);   // (QoL: the launcher's logo in the front end)
         else if (!std::strcmp(argv[i], "--long-shadows") && i + 1 < argc) dispo.longShadows = std::atoi(argv[++i]);   // (QoL: display.h fLongShadows)
         else if (!std::strcmp(argv[i], "--fast-shadows") && i + 1 < argc) dispo.fastShadows = std::atoi(argv[++i]);   // (low-end: display.h fFastShadows)
+        // (display.h fUpscale: off or fsr1; the preset 0..3 or its name; the sharpness 0..100)
+        else if (!std::strcmp(argv[i], "--upscale") && i + 1 < argc) dispo.upscale = !std::strcmp(argv[++i], "fsr1") || !std::strcmp(argv[i], "1") ? 1 : 0;
+        else if (!std::strcmp(argv[i], "--upscale-preset") && i + 1 < argc)
+        {
+            const char* psz = argv[++i];
+            static const char* const s_aszPreset[] = {"ultra", "quality", "balanced", "performance"};
+            for (int j = 0; j < 4; ++j)
+                if (!std::strcmp(psz, s_aszPreset[j]) || (psz[0] == char('0' + j) && !psz[1])) dispo.upscalePreset = j;
+        }
+        else if (!std::strcmp(argv[i], "--upscale-sharpness") && i + 1 < argc) dispo.upscaleSharpness = std::clamp(std::atoi(argv[++i]), 0, 100);
+        else if (!std::strcmp(argv[i], "--hud-placement") && i + 1 < argc)   // (display.h hudPlacement: 4:3 | 16:9 | 16:10 | match, or 0..3)
+        {
+            const std::string v = argv[++i];
+            dispo.hudPlacement = v == "16:9" ? 1 : v == "16:10" ? 2 : v == "match" || v == "Match Screen" ? 3 : v == "4:3" ? 0 : std::clamp(std::atoi(v.c_str()), 0, 3);
+        }
         else if (!std::strcmp(argv[i], "--window-mode") && i + 1 < argc) dispo.window = std::atoi(argv[++i]);
         else if (!std::strcmp(argv[i], "--renderer") && i + 1 < argc)   // (renderer.h: auto, vulkan, opengl)
         {
@@ -428,6 +509,7 @@ int main(int argc, char** argv)
         else if (!std::strcmp(argv[i], "--action-input-selftest")) command = "action-input-selftest";
         else if (!std::strcmp(argv[i], "--settings-selftest")) command = "settings-selftest";
         else if (!std::strcmp(argv[i], "--renderer-selftest")) command = "renderer-selftest";
+        else if (!std::strcmp(argv[i], "--gl-selftest")) command = "gl-selftest";
         else if (!std::strcmp(argv[i], "--rumble-selftest")) command = "rumble-selftest";
         else if (!std::strcmp(argv[i], "--audio-selftest")) { command = "audio-selftest"; if (i + 1 < argc && argv[i + 1][0] != '-') arg = argv[++i]; }
         else if (!std::strcmp(argv[i], "--list-audio-devices")) command = "list-audio-devices";
@@ -579,6 +661,11 @@ int main(int argc, char** argv)
     if (command && !std::strcmp(command, "renderer-selftest"))
         return cane::renderer::selfTest([](const char* sz) { RENDERER r; return FParseRenderer(sz, &r) ? int(r) : -1; });
     if (command && !std::strcmp(command, "rumble-selftest")) return RumbleSelfTestCommand();
+    if (command && !std::strcmp(command, "gl-selftest"))   // (no disc; --renderer as for play)
+    {
+        if (fRendererArg) g_rendererWanted = rendererArg;
+        return GlSelfTestCommand(out);
+    }
     // (audio.h, notes/AUDIO_2026-11-10.md) the devices by name, their fallback / recovery, the USB headset's microphone
     if (command && !std::strcmp(command, "audio-selftest")) { int AudioSelfTest(const char*); return AudioSelfTest(arg ? arg : ""); }
     if (command && !std::strcmp(command, "list-audio-devices"))
@@ -640,7 +727,7 @@ int main(int argc, char** argv)
         int ImportPs3LanguagesCommand(const std::string&, const std::string&, bool);   // ps3lang.cpp
         const int rc = ImportPs3LanguagesCommand(arg, arg2, limport.fReplace);
         std::fflush(stdout);
-        std::_Exit(rc);
+        SLY3_LEAVE_TOOL(rc);
     }
     if (command && !std::strcmp(command, "import-languages"))
     {
@@ -649,7 +736,7 @@ int main(int argc, char** argv)
         const int rc = ImportLanguagesCommand(limport);
         std::fflush(stdout);
         std::fflush(stderr);
-        std::_Exit(rc);
+        SLY3_LEAVE_TOOL(rc);
     }
     if (std::getenv("SLY2_PS3WORLD")) g_fPs3World = true;  // (exploration: a PS3 world through --load-world)
 
@@ -665,7 +752,7 @@ int main(int argc, char** argv)
         // folder's manifest points there
         if (rc == 0 && fLanguagesGiven && !languagesDir.empty() && !g_fConvertPs2)
         {
-            if (!g_disc.FOpen(arg, error)) { std::fprintf(stderr, "%s\n", error.c_str()); std::_Exit(1); }
+            if (!g_disc.FOpen(arg, error)) { std::fprintf(stderr, "%s\n", error.c_str()); SLY3_LEAVE_TOOL(1); }
             limport.dirOut = languagesDir;
             limport.dirInstall = cane::utf8(std::filesystem::absolute(cane::path(arg)));
             limport.fMove = true;
@@ -674,7 +761,7 @@ int main(int argc, char** argv)
         }
         std::fflush(stdout);
         std::fflush(stderr);
-        std::_Exit(rc);
+        SLY3_LEAVE_TOOL(rc);
     }
     // --export-textures without --convert: into the installation (or --out DIR); texmod.h
     if (!command && fExportTextures)
@@ -731,6 +818,10 @@ int main(int argc, char** argv)
         if (dispo.longShadows >= 0) g_display.fLongShadows = dispo.longShadows != 0;
         if (const char* psz = std::getenv("SLY2N_FASTSHADOWS")) g_display.fFastShadows = std::atoi(psz) != 0;
         if (dispo.fastShadows >= 0) g_display.fFastShadows = dispo.fastShadows != 0;
+        if (dispo.upscale >= 0) g_display.fUpscale = dispo.upscale != 0;
+        if (dispo.upscalePreset >= 0) g_display.upscalePreset = dispo.upscalePreset;
+        if (dispo.upscaleSharpness >= 0) g_display.upscaleSharpness = dispo.upscaleSharpness;
+        if (dispo.hudPlacement >= 0) g_display.hudPlacement = dispo.hudPlacement;
         if (dispo.window >= 0 && dispo.window <= 2) g_display.window = DISPWINDOW(dispo.window);
         if (fRendererArg) g_rendererWanted = rendererArg;
         if (dispo.msaa >= 0) g_display.msaaSamples = dispo.msaa > 1 ? dispo.msaa : 0;

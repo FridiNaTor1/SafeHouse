@@ -1,5 +1,8 @@
 #pragma once
 
+// (platform/render: one source for Sly 2 and Sly 3, built into each game against its own gl.h; the programs are Sly 2's
+// files (Sly2-Release/vrfull.vert, fsreasu.frag, fsrrcas.frag), which Sly 3's build embeds / compiles too)
+
 // Upscaling (Settings.ini [Graphics] Upscaling; notes/FSR_2026-11-11.md): the scene drawn below the picture's size and
 // scaled up to it by AMD FidelityFX Super Resolution 1.0 (spatial: EASU, then RCAS sharpening; fsreasu.frag,
 // fsrrcas.frag) instead of the bilinear stretch. A self-contained pass of two full-screen fragment draws through the

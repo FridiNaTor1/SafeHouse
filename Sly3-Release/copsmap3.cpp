@@ -26,6 +26,7 @@
 #include "screenrt.h"
 #include "screen3.h"
 #include "pcloader.h"
+#include "po.h"
 #include "splitscreen3.h"
 #include "so.h"
 #include "sound.h"
@@ -57,6 +58,9 @@ void RestoreActorDamage3(ACTOR* pa);   // damage.cpp (option 948: health full, n
 extern int g_iframeMain;   // (game.cpp: debug prints)
 
 extern bool g_fSpawnersPaused;   // spawner.cpp
+
+int GiveShipPowerup3(LO* plo);    // game/ship3.cpp (the ships' vt slot 90)
+int GivePlanePowerup3(LO* plo);   // game/biplane3.cpp (the planes' vt slot 90)
 
 namespace cops3
 {
@@ -390,7 +394,7 @@ void PlacePlayer(PLAYER& p, const glm::vec3& pos)
         if (GUARD* pg = PguardFromLo(p.plo)) SetGuardHeading(pg, h);
         if (FPrint() && p.team == TEAM_Carm) std::printf("cops3: carm heading %.3f %.3f\n", std::cos(h), std::sin(h));
     }
-    if (FPrint()) std::printf("cops3: player %d placed at %.0f %.0f %.0f\n", p.plo->oid, pos.x, pos.y, pos.z);
+    if (FPrint()) std::printf("cops3: player %d placed at %.0f %.0f %.0f (cid 0x%X)\n", p.plo->oid, pos.x, pos.y, pos.z, unsigned(p.plo->Cid()));
 }
 
 void SetCarmHealth(LO* plo)
@@ -485,6 +489,7 @@ bool FStartChosen(SW* psw, LO* pnode)
 }
 
 bool FActive() { return r.fActive; }
+bool FRoundLoading(int filter) { return r.ihubPending > 0 && filter == IworldHub(r.ihubPending) && FChallengeRunning3(); }
 
 void OnWorldLoaded(SW* psw)
 {
@@ -522,6 +527,22 @@ void OnWorldLoaded(SW* psw)
     r.tBoardShow = 0.0f, r.teamBoard = -1, r.fBoardUp = false, r.idEndLine = -1;
     r.teamStreak = -1, r.cStreak = 0;
     for (int i = 0; i < kLootsOut; ++i) PlaceLoot(-1);
+    // player 1 is Sly: China's hub comes in with the safe house (0x45, a PO: its gang switch) as the current player, so
+    // the round's robber was the safe house (not drawn, no records, taken out with the hub's story below); the split
+    // screen chooses its players right after this
+    if (LO* pcur = PloPoCurrent(psw); !pcur || !FCidDerivedFrom(pcur->Cid(), sly3::CID_JT))
+    {
+        LO* psly = nullptr;
+        for (LO* plo : psw->mpcidaplo[S3CID(0x35)])
+            if (!psly || plo->oid == 24) psly = plo;
+        if (psly)
+        {
+            if (!psly->fInWorld) AddLo(psw, psly);
+            EnablePo(psw, psly, 1);
+            SetPoCurrent(psw, psly);
+            if (FPrint()) std::printf("cops3: Sly %d made the current player (was %d, cid 0x%X)\n", psly->oid, pcur ? pcur->oid : -1, pcur ? unsigned(pcur->Cid()) : 0u);
+        }
+    }
     // the hub's story quiet for the round: every task of the world taken as done without its handlers (no intro, no
     // prompts: the challenge's fresh progress would make the episode's first task available, and the hub's world
     // script plays its arrival, the gang's prompts and the hazard room's question over the round)
@@ -590,8 +611,8 @@ void OnPlayersChosen(SW* psw)
         LO* plo = up.get();
         if (!plo->fInWorld || PplayerOf(plo)) continue;
         const int cid = plo->Cid();
-        // (round 9: and the spawners (0x77): they bring guards back around the players from their proxies, spawner.cpp)
-        if (FCidDerivedFrom(cid, sly3::CID_GUARD) || cid == sly3::CID_TRIGGER || cid == 0x18 || cid == 0x45 || cid == 0x78 || cid == 0x77)
+        // (round 9: and the spawners (Sly 3 0x8D; 0x77 was Sly 2's id, Sly 3's ROPEMESH: MODES-08): they bring guards back around the players from their proxies, spawner.cpp)
+        if (FCidDerivedFrom(cid, sly3::CID_GUARD) || cid == sly3::CID_TRIGGER || cid == 0x18 || cid == 0x45 || cid == 0x78 || cid == 0x8D)
             aploOut.push_back(plo);
     }
     // (round 9: the guards' streaming proxies too: a proxy that registers near a player attaches its guard again (activate.cpp
@@ -731,6 +752,9 @@ int GivePowerup(LO* plo)
 {
     if (!plo) return -1;
     if (FCidDerivedFrom(plo->Cid(), sly3::CID_CARMELITA)) return GiveCarmPowerup3(plo);
+    // (AUDIT4 MODES-13 / 14: the ships' slot 90 0x2151E8, the planes' 0x141F80)
+    if (FCidDerivedFrom(plo->Cid(), S3CID(0x58))) return ::GiveShipPowerup3(plo);
+    if (FCidDerivedFrom(plo->Cid(), S3CID(0x52))) return ::GivePlanePowerup3(plo);
     return GivePowerupSly(plo);
 }
 
@@ -858,7 +882,7 @@ void Update(SW* psw)
             ACTOR* pa = PactorFromLo(p.plo);
             SLY* psly = PslyFromLo(p.plo);
             std::printf("cops3: t %.1f f %d player %d.%d at %.0f %.0f %.0f in %d sub %d carry %d state %d\n", t, g_iframeMain, p.plo->oid, ip, pos.x, pos.y, pos.z,
-                        int(p.plo->fInWorld), pa ? pa->nSubDF4 : -9, int(p.fCarry), psly ? psly->state : -9);
+                        int(p.plo->fInWorld), pa ? pa->nSubDF4 : -9, int(p.fCarry), psly ? psly->jts : -9);
         }
         if (p.team == TEAM_Sly)
         {

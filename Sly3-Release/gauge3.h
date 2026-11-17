@@ -55,11 +55,16 @@ bool FNoticeShown3();
 // answers 152 "No 3-D for me right now" (triangle: 0) / 153 "Yes, Bring on the 3-D!" (square: -1, the world's own mode)).
 // The answer, orig3 D_0036DBA4 (GAME 0x36C700 +0x14A4; also the pause menu's 3-D resets 0x1D54A0, -1 again at a job's
 // close 0x187270), is read only by the next world load (0x14FA38: 0 forces the normal view, -1 keeps the world's entry
-// table mode, 1 the 3-D (anaglyph) mode). The PC never asks: the notice is answered No at once and never shown, and the
-// anaglyph mode is never chosen (sw.cpp NScreenModeFromPrefix3). SLY3_ASK3D=1 shows the original question (testing:
-// either answer gives the normal view).
+// table mode, 1 the 3-D (anaglyph) mode). Asked as the original asks (s3fix-ai3: the 3-D mode is drawn, render.cpp);
+// Offered only with Settings.ini [Graphics] 3D Mode on (s3-3dtoggle, the launcher's Sly 3 Graphics "3D mode (red/cyan
+// glasses)"; off by default): off, answered No at once, never shown, and the job chooser has no "... in 3-D" start.
+// SLY3_ASK3D=1 / 0 overrides the setting (the test harnesses' routes: 0).
 extern int g_n3dChoice3;   // orig3: D_0036DBA4
-bool FAsk3d3();            // SLY3_ASK3D=1
+bool FAsk3d3();            // (3D Mode on, or SLY3_ASK3D=1; SLY3_ASK3D=0 never)
+// orig3 0x18ADB0: the current job's screen mode (0x186200: its +0x40, option 1367) is 1, the 3-D mode
+bool FJob3d3();
+// orig3 0x18AE00: a 3-D game of the chooser runs (challenge3.h FChallenge3d3) or the current job is a 3-D one
+bool F3dChoosable3();
 
 // (s3-hack) Sly 3 EOPID 948 (the SO's +0x168): the SO's gauge (h_hack's ships name theirs; the gauge's player then)
 void SetSoGauge3(LO* pso, LO* pgauge);
@@ -68,3 +73,5 @@ LO* PloSoGauge3(const LO* pso);
 // (u, v) canvas units from where it is authored (its root, SetScreenObjRootXY at scale 1) into its player's corner;
 // fOn false: where authored (the original's two players)
 void SetGaugeSlot3(LO* pgauge, bool fOn, float u, float v);
+// orig3 0x21E4F0 / 0x21E558: the player's gauge (its +0x168) hidden / shown by the caller (Sly's state 22)
+void ShowGaugeOf3(LO* player, bool fShow);

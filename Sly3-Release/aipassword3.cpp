@@ -4,9 +4,12 @@
 // from then on (+0x11BC, 0x2544E0's kind 0) and the tasks hear 0x50; wrong or too slow: the guard's line, the tasks
 // hear 0x51, the disguise comes off (0x172AE8(-1)) and the reaction pursues (0x19A948 case 23).
 //
-// The player's side (orig3 0x1ADDD0 states 0x15 / 0x16, 0x1AD1D0 case 22: each face button pressed within 0.15 s is
-// handed to the job, 0x18C5A8) is done here natively: while the job holds the player, its pad is taken (po.cpp
-// g_pfnPadctlTake3) so it stands, and the presses go to the job. Lines: the world's dialog table (SW +0x4FB0, entries
+// The player's side: the job's state 0 puts Sly in his state 0x15 (+0x1454 = the guard), its state 1 in 0x16, its end
+// (-1) back to 0 from 0x16 (orig3 0x18BB20 on D_00370AC0; sly.cpp SetSlyState jts::Ride / RideOn); Sly's 0x16 faces
+// the guard, plays his SM +0x1F38 and pushes the riding camera policy 0x16C608 (CPRIDE3 below); Sly leaving 0x15 /
+// 0x16 for anything but 0x16 breaks the check off (the job's state 11, 0x1ADDD0). The face buttons pressed within
+// 0.15 s go to the job (0x1AD1D0 case 22 -> 0x18C5A8): natively through the player's pad, which stays taken while the
+// job holds the player (po.cpp g_pfnPadctlTake3: the pad's other readers, the gadgets / the binocucom, see nothing). Lines: the world's dialog table (SW +0x4FB0, entries
 // 0..4: the guard's start / challenge / pass / fail / timeout lines) and the two id bags of 0x25EC70 (+0x60 the tones
 // of the shown buttons, 0x269..0x272; +0x64 the player's wrong answers, 0x273..0x279); the right answer is the
 // challenge row's line (the rows D_00344FC8[episode]). Not natively: the guard state bit 0x40 (Sly 3's state 64 has
@@ -14,6 +17,14 @@
 // line table (+0x17C4), the prompt screen object (Sly +0x1F40: 0x260F18 parts 0x3B1..0x3B3 / 0x3AE..0x3B0).
 
 #include "aipassword3.h"
+
+#include "actor.h"
+#include "cm.h"
+#include "cplcy.h"
+#include "alo.h"
+#include "brx.h"
+#include "sly.h"
+#include "xf.h"
 
 #include "ai.h"
 #include "aijobs.h"
@@ -101,6 +112,43 @@ BAG s_bagWrong{{0x273, 0x274, 0x275, 0x276, 0x277, 0x278, 0x279}};              
 // The job holding the player (the player's +0x1454 is its guard)
 JOBPASSWORD3* s_pjobHold = nullptr;
 int s_cPassed = 0;   // (routes: the checks passed so far)
+
+// orig3 D_00370AC0 (Sly): the original sets Sly's state whoever the target is; natively only a Sly target's (a check of
+// another player leaves Sly alone)
+SLY* PslyRide(LO* ploTarget) { return ploTarget ? PslyFromLo(ploTarget) : nullptr; }
+
+// orig3 0x16C608 (vtable 0x355C50, the base 0x169C90 with mode 4; +0x20 Sly, +0x24 the guard): Sly's riding camera.
+// Activate 0x16C670: the base's save (0x169E28), the near clip 25 (0x1679E0); deactivate 0x16C6A8: the base's restore
+// (0x169E40), a cut (0x166548); update 0x16C6D8: the eye at Sly's local (-60, -80, 110) (0x1C9428), its axes Sly's
+// turned 0.5 rad about z (0x11C8C0), the camera's matrix set (0x166DE8)
+struct CPRIDE3 : CPLCY
+{
+    LO* ploSly = nullptr;
+    uint32_t VtOrig() const override { return 0x355C50; }
+    void Activate(LO* psoFocusNew, void* pv) override
+    {
+        CPLCY::Activate(psoFocusNew, pv);
+        SetCmNearClip(&g_cm, 25.0f);
+    }
+    void Deactivate(LO* psoFocusOld, void* pv) override
+    {
+        CPLCY::Deactivate(psoFocusOld, pv);
+        CutCm(&g_cm);
+    }
+    void Update(CPDEFI*, const CMJOY*) override
+    {
+        ALO* palo = ploSly && FIsLoDerivedFrom(ploSly, S3CID(0x30)) ? static_cast<ALO*>(ploSly) : nullptr;
+        XF* pxf = palo ? PxfObj(palo) : nullptr;
+        if (!pxf) return;
+        const glm::mat4& m = pxf->matWorld;
+        const glm::vec3 pos = glm::vec3(m * glm::vec4(-60.0f, -80.0f, 110.0f, 1.0f));
+        const float c = std::cos(0.5f), sn = std::sin(0.5f);
+        const glm::mat3 rot(glm::vec3(c, sn, 0.0f), glm::vec3(-sn, c, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
+        SetCmPosMat(&g_cm, pos, rot * glm::mat3(m));
+    }
+};
+CPRIDE3 s_cpride;
+bool s_fRideCam = false;
 
 // D_00321A80 / D_00321A90: where the shown buttons (state 3) and the answer (states 5 / 6) are drawn
 const glm::vec2 c_posShown(0.55f, -0.62f), c_posAnswer(0.3f, 0.7f);
@@ -245,10 +293,13 @@ void JOBPASSWORD3::SetState(int n)
     switch (n)
     {
     case 0:
-        s_pjobHold = this;   // (the player's +0x1454 = the guard; Sly's state 0x15)
+        s_pjobHold = this;   // (the player's +0x1454 = the guard)
+        if (SLY* psly = PslyRide(ploTarget)) SetSlyState(psly, jts::Ride, -1);       // 0x1ADDD0(Sly, 0x15, -1)
         break;
     case 1:
-        PlayGuardLine(0);    // (Sly's state 0x16)
+        if (SLY* psly = PslyRide(ploTarget)) SetSlyState(psly, jts::RideOn, -1);     // 0x1ADDD0(Sly, 0x16, -1)
+        if (st != 1) break;   // (Sly's state left at once: the check broken off)
+        PlayGuardLine(0);
         break;
     case 2:
         PlayGuardLine(1);
@@ -280,8 +331,9 @@ void JOBPASSWORD3::SetState(int n)
         PlayGuardLine(4);
         break;
     case -1:
-        if (s_pjobHold == this) s_pjobHold = nullptr;   // (the player's +0x1454 = 0; Sly back to state 0)
         LockJobDone();
+        if (s_pjobHold == this) s_pjobHold = nullptr;   // (the player's +0x1454 = 0)
+        if (SLY* psly = PslyRide(ploTarget); psly && psly->jts == jts::RideOn) SetSlyState(psly, jts::Stand, -1);
         switch (old)
         {
         case 8:
@@ -353,7 +405,11 @@ LO* PloPasswordGuard3(LO* ploPlayer)
     return s_pjobHold && s_pjobHold->ploTarget == ploPlayer && s_pjobHold->pguard ? s_pjobHold->pguard->palo : nullptr;
 }
 
-void ResetPassword3() { s_pjobHold = nullptr; }
+void ResetPassword3()
+{
+    s_pjobHold = nullptr;
+    s_fRideCam = false;   // (the camera's policies go with the world)
+}
 
 int CPasswordsPassed3() { return s_cPassed; }
 
@@ -407,4 +463,24 @@ void DrawPasswordButtons3(const FONTBRX* pfont, const FONTBRX* picons)
         draw(4, p->aAnswer.data(), p->cAnswer, c_posAnswer);
         break;
     }
+}
+
+// orig3 0x1ADDD0 case 0x16's entry / exit: the riding camera (0x16C608 pushed by 0x169CE0, revoked by 0x169C40)
+void SetRideCamera3(LO* ploSly, bool fOn)
+{
+    if (fOn == s_fRideCam) return;
+    s_fRideCam = fOn;
+    if (fOn)
+    {
+        s_cpride.ploSly = ploSly;
+        SetCmPolicy(&g_cm, 7, &s_cpride, ploSly, nullptr);
+    }
+    else
+        RevokeCmPolicy(&g_cm, 0xF, 7, &s_cpride, s_cpride.ploSly, nullptr);
+}
+
+// orig3 0x1ADDD0 leaving 0x15 / 0x16 for another state but 0x16: the job (Sly +0x1454's 0xE7) broken off (state 11)
+void BreakOffPassword3(LO* ploPlayer)
+{
+    if (JOBPASSWORD3* p = s_pjobHold; p && p->ploTarget == ploPlayer) p->SetState(11);
 }

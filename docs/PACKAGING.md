@@ -73,8 +73,8 @@ Artifact configuration (both requests use it: their zips hold the programs one o
 The workflow passes the release version (`x.y.z`) as the `version` parameter. The product name / version
 restrictions check the file properties: the programs get them from `cmake/windows-version.rc.in`
 (`cane_windows_resources` in `CMakeLists.txt`), the setup from `scripts/windows/setup.nsi`. Every program in the
-package needs them, or the request is rejected: `Sly3-Release.exe` does not have them yet (add
-`cane_windows_resources(Sly3-Release ...)` and check the Windows build before the first SignPath release).
+package needs them, or the request is rejected (every program has them, `Sly3-Release.exe` included: its file
+properties, the UTF-8 manifest and, since 2026-11-17, its window / shortcut icon).
 
 Signing policy `release-signing`: approval required for every request, the GitHub trusted build system linked to the
 FridiNaTor1/SafeHouse repository, and the source branch restricted to `main`. Try the whole flow first with a
@@ -99,3 +99,23 @@ SAFEHOUSE_WINDOWS_SIGN_PFX=/path/to/cert.pfx SAFEHOUSE_WINDOWS_SIGN_PASSWORD=...
   `only` stops after the package folder; `reuse` packs an existing package folder (for example after its programs
   were signed elsewhere) without installing again. `--build` must still point at a folder with the build's
   `CMakeCache.txt` (the setup's version).
+
+## Sly 3 on every platform
+
+Sly 3 (`Sly3-Release`) is built and packaged wherever Sly 2 is (`CANE_BUILD_SLY3`, on by default everywhere):
+
+| Platform | How Sly 3 is packaged | Built by |
+| --- | --- | --- |
+| Linux x86_64 / aarch64 | `bin/Sly3-Release` in the AppImage and the tar.gz | build.yml (`scripts/package.py`) |
+| Windows x64 / ARM64 | `bin/Sly3-Release.exe` in the zip and the setup (file properties, icon) | build.yml (LLVM/MinGW cross build) |
+| macOS | `Contents/MacOS/Sly3-Release` in SafeHouse.app (OpenGL calls on Metal, `platform/metal`) | macos.yml |
+| Android (phones, Meta Quest) | `libSly3-Release.so` in the same APK; `FlatGameActivity` (a flat window, also a 2D panel on the Quest: no VR mode yet) | build.yml (`scripts/android/build-package.py`) |
+| iOS / iPadOS | `Sly3Release.framework` and its tools copy `Sly3Tools.framework` in SafeHouse.app (Metal) | ios.yml (`scripts/ios/package.py`) |
+| Switch / Switch 2 | linked into SafeHouse.nro / SafeHouse-NX2.nro (`cane_game_sly3`, `cmake/Switch.cmake`) | build.yml |
+
+The install is the same everywhere: the launcher's extractor checks the user's USA disc (`SCUS-97464`), copies the
+image as `disc.iso` (a CHD is written out as an .iso first; on the Switch also an .iso split for FAT32) and runs
+`Sly3-Release --convert-worlds` for the moddable world parts (Android: the tool service; iOS: `Sly3Tools`). Sly 3's
+renderer is OpenGL (OpenGL ES 3.2 on Android, Metal on Apple, deko3d on the Switch); its native Vulkan renderer and the
+tile-GPU paths are separate work.
+

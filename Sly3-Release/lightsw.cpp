@@ -2,6 +2,7 @@
 // 0x11DD90, ConvertUserHsvToUserRgb 0x11DFA0) and m_20D9D0_p3.cpp (0x20F1C8), in plain IEEE float.
 
 #include "fastpaths.h"
+#include "shd.h"
 #include "jt.h"
 #include "game/sly3.h"
 #include "game/cond3.h"
@@ -91,7 +92,8 @@ void ComputeLight(const LIGHTPARAMS& lp, const glm::mat4& matWorld, LIGHTREC& re
     const float deg = std::max(lp.angle, 30.0f);
     float du = 0, ru = 0;
     ConvertAngleStrength(deg, 0.0f, 0.0f, g, du, ru);
-    const glm::vec3 rgb = UserRgbFromUserHsv(lp.hsv);   // (0x1ED2D8: the colour adjustment, off unless 0x3E12C8)
+    glm::vec3 rgb = UserRgbFromUserHsv(lp.hsv);   // (orig3 0x1C5868: then 0x2369D8, the 3-D mode's colour adjustment)
+    DesaturateRgb3(&rgb.x);
     glm::vec4 c(rgb, lp.strength);
     if (0.0f < g) c /= g;
     rec = LIGHTREC{};
@@ -147,7 +149,7 @@ LIGHTPARAMS LightParamsOfLo(const LO* plo)
         case 0xE0: for (int i = 0; i < 3; ++i) lp.hsv[i] = v.ag[size_t(i)]; break;
         case 0x140: lp.strength = v.ag[0]; break;
         case 0x144: lp.angle = v.ag[0]; break;
-        case 0x148: lp.n158 = v.ag[0] != 0.0f; break;
+        case 0x148: lp.gShadow = v.ag[0]; lp.n158 = v.ag[0] != 0.0f; break;
         case 0x14C: lp.fNoContext = v.n; break;
         case 0x150: lp.fNoBake = v.n; break;
         case 0x154: lp.sNear = v.ag[0]; lp.sFar = v.ag[1]; break;
@@ -164,6 +166,8 @@ bool FLightOfLo(const LO* plo, LIGHTREC& rec, LIGHTSEL& sel)
     if (lp.kind > 1) return false;
     ComputeLight(lp, MatWorldOfLight(plo), rec, sel);
     sel.fShadow = lp.n158;
+    sel.gShadow = lp.gShadow;
+    sel.gBright = std::max(lp.hsv[2], lp.strength);   // (orig3 0x1C5868: max(+0xE8, +0x140))
     return true;
 }
 
@@ -265,6 +269,8 @@ int UpdateWorldLightsFromSw(const SW* psw)
         if (lp.kind > 1) continue;
 #endif
         sel.fShadow = lp.n158;
+        sel.gShadow = lp.gShadow;
+        sel.gBright = std::max(lp.hsv[2], lp.strength);
         static const bool s_fDbg = std::getenv("SLY2_LIGHTDBG") != nullptr;
         static int s_cdbg = 0;
         if (s_fDbg && s_cdbg < 400)

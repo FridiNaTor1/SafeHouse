@@ -589,7 +589,7 @@ private:
 #else
     static bool steamRow(const GameStatus& s) { return s.assets && s.runtime; }
 #endif
-    // "Add desktop shortcut" (Sly 1 and Sly 2 only for now), on the Steam row.
+    // "Add desktop shortcut" (Sly 1, Sly 2 and Sly 3), on the Steam row.
     static bool shortcutRow(GameId id, const GameStatus& s) { return steamRow(s) && shortcut::supported(id); }
     static const char* steamLabel(const GameStatus& s) { return s.inSteam ? N_("Update Steam shortcut") : N_("Add to Steam"); }
     static const char* shortcutLabel(const GameStatus& s) { return s.onDesktop ? N_("Update desktop shortcut") : N_("Add desktop shortcut"); }
@@ -602,7 +602,7 @@ private:
         m_shortcutGame = static_cast<int>(id);
         m_shortcutHeading = tr("Add shortcut");
         try {
-            const std::string icon = shortcut::iconImage(id);  // (none yet for Sly 3: Android shows the app's icon)
+            const std::string icon = shortcut::iconImage(id);  // (the game's logo, scripts/make-shortcut-icons.py)
             m_shortcutOk = android::pinShortcut(std::string("play-") + game(id).key, game(id).shortName, icon, { "--play", game(id).key });
             m_shortcutMessage = m_shortcutOk ? trf("Confirm the shortcut in the window that opens. It starts %s directly, without the launcher, "
                                                    "and closes the app when you quit the game.", game(id).title)

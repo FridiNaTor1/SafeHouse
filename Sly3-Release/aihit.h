@@ -39,6 +39,6 @@ struct JOBHIT : JOBMOVE
 };
 struct JOBHIT1 : JOBHIT { void Init() override; void Enter() override; };  // 0xA1 (nAnim 5)
 struct JOBHIT2 : JOBHIT { void Init() override; void Enter() override; void Exit() override; };  // 0xA2 (6)
-struct JOBHIT3 : JOBHIT { void Init() override; void Enter() override; };  // 0xA3 knocked out (7)
+struct JOBHIT3 : JOBHIT { void Init() override; void Enter() override; void Exit() override; };  // 0xA3 knocked out (7) (Sly 3 0xD0)
 
 std::unique_ptr<AIJOB> PjobNewHit(CID cid);

@@ -498,7 +498,8 @@ struct INITLAUNCHER
             return CRef(TAGK_Void);
         });
         // the guards' method 454 (0x103FE8 -> 0x206820): the full reset (slot 27 (0): TODO(ai), message 0xF, slot 26,
-        // message 0xE)
+        // message 0xE). Sly 2 only (audit4 AI-24 / F30): its EOPID 330 has no Sly 3 option and 0x206820 no Sly 3 twin,
+        // so no Sly 3 data reaches it; kept for the copied table.
         RegisterObjectMethod(0x103FE8, [](LO* plo, const std::vector<CRef>&) {
             if (!PguardFromLo(plo)) return CRef(TAGK_Void);
             HandleLoSpliceEvent(plo, 15, false, 0, nullptr);

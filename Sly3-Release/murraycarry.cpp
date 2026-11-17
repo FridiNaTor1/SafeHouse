@@ -339,7 +339,7 @@ void PutDownMurrayCarry(MURRAY* p) {
 }
 // orig: 0x001B7BA8
 void CancelMurrayCarry(MURRAY* p) {
-    if(p->state==6) { if(p->psma1530)SetSmaGoal(p->psma1530,0x1CA);return; }
+    if(p->state==6) { if(p->psma1530)SetSmaGoal(p->psma1530,0x1F8);return; }  // (orig3 0x1E04E8: 0x1F8; Sly 2 0x1CA)
     if(!p->plo13F0)return;
     if(p->state==4&&p->n1450==0) {HandleLoSpliceEvent(p->plo13F0,6,false,0,nullptr);
     BroadcastTaskEvent(g_psw,0x1B,p->plo13F0);p->plo13F0=nullptr;return;}

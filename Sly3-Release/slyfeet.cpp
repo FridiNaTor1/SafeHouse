@@ -6,6 +6,7 @@
 #include "pocket.h"
 #include "smrun.h"
 #include "xfphys.h"
+#include "sly.h"
 
 #include <algorithm>
 
@@ -25,8 +26,8 @@ XF* FindRecord(ALO* p, int tag, int kind)
 // orig: 0x00189C40 RebuildJtXmg
 void RebuildSlyFootProbe(SLY* p, XF* extrem, float radius, XF* hip, SLYFOOTPROBE* probe)
 {
-    ASEGA* playing = p->state == 0
-        ? ((p->substate >= 6 && p->substate <= 9) || p->substate == 12 || p->substate == 13
+    ASEGA* playing = p->jts == 0
+        ? ((p->jtbs >= jts::SubN2WindUpL && p->jtbs <= jts::SubN2StrikeUp) || p->jtbs == jts::SubBootsCharge || p->jtbs == jts::SubBootsDash
             ? p->pasega : (p->psma ? p->psma->pasega : nullptr))
         : (p->psma ? p->psma->pasega : p->pasega);
     if (!playing || !extrem || !hip || !PxfObj(p->palo)) return;
@@ -89,7 +90,7 @@ bool MatchSlyFootProbe(SLY* p, SLYFOOTPROBE* probe, CTRLSOURCE* handle)
     return !(p->pxpFloor && probe->posDown.z < -85.0f);
 }
 
-// orig: 0x0018BCE0, state 24
+// orig: part of 0x0018BCE0 (UpdateSly), state 24
 void UpdateSlySlideFeet(SLY* p)
 {
     if (!p->slide.aphandle[3]) return;

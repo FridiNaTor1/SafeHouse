@@ -4,6 +4,7 @@
 
 #include "screenrt.h"
 #include <array>
+#include <bit>
 #include "screen3.h"
 #include "game/sly3.h"
 #include "worldglobals.h"
@@ -27,6 +28,7 @@
 #include "disc.h"
 #include "frontend.h"
 #include "hud.h"
+#include "display.h"
 #include "menu.h"
 #include "shop.h"
 #include "ref.h"
@@ -582,17 +584,34 @@ WORLD_VALUE(s_tTimerEnd);   // (PC: moved aside while a kept world loads, worldg
 int s_nTimerTick = 0;
 WORLD_VALUE(s_nTimerTick);   // (PC: moved aside while a kept world loads, worldglobals.h)
 
-// orig: 0x0020F7E0 (every frame: the prompt 0x371 and the counters 0x36D / 0x36E / 0x36F (D_002C3E70, found by
-// 0x20F710: SW +0x3BA0..) stacked down the screen, 65 apart (D_002C3E80) in that order, the shown ones only: each one's
-// transform +0xF8's y smoothed there (0x11D1C0 with D_002C3E88), snapped when it appears; the last (the timer 0x36F)
-// ticks when its whole seconds left (SW +0x476C - t, at least 0) change: sound 0x30 on odd, 0x31 on even (SW +0x4770))
+// orig: 0x0020F7E0 (every frame: the prompt and the counters stacked down the screen, 65 apart in that order, the
+// shown ones only: each one's transform y smoothed there (0x11D1C0), snapped when it appears; the last (the timer)
+// ticks when its whole seconds left (SW +0x476C - t, at least 0) change: sound 0x30 on odd, 0x31 on even (SW +0x4770)).
+// orig3: 0x0025CB38 with the slots of 0x25CA70: SW +0x42D8[4] = the oids at 0x327720 {0x422 1058 the prompt, 0x418
+// 1048 the coins, 0x419 1049 the counter, 0x41D 1053 the timer} (Sly 2's 0x371 / 0x36D / 0x36E / 0x36F are none of
+// Sly 3's: nothing stacked, the timer never ticked). Sly 3 also lowers the stack under a shown screen object of
+// class 0x9E with a positive option 1236 (+0xF0; the list SW +0x4308 of 0x25CD00, at most 10): the first counter
+// after it starts at that object's +0xF0 instead.
 void StackCounters(SW* psw)
 {
-    static const OID s_aoid[4] = {0x371, 0x36D, 0x36E, 0x36F};
+    static const OID s_aoid[4] = {0x422, 0x418, 0x419, 0x41D};   // orig3 D_00327720
     static const cmm::SMPA s_smpa = {500.0f, 0.0f, 0.25f, 2500.0f};
     static float s_adv[4] = {};
     static bool s_afReset[4] = {true, true, true, true};
-    float t = 0.0f;
+    // orig3 0x25CD00: the class 0x9E objects with +0xF0 > 0 (made once per world)
+    static uint32_t s_serialList = 0;
+    static std::vector<LO*> s_aploOffset;
+    if (!psw) return;
+    if (s_serialList != psw->serial)
+    {
+        s_serialList = psw->serial;
+        s_aploOffset.clear();
+        for (LO* plo : AploOfClass(psw, S3CID(0x7E)))
+            if (std::bit_cast<float>(plo->U32Field(0, 0xF0, 0)) > 0.0f && s_aploOffset.size() < 10) s_aploOffset.push_back(plo);
+    }
+    float x = 0.0f, y = 0.0f;
+    for (LO* plo : s_aploOffset)
+        if (SCREENRT* p = Psrt(plo); p && FVisible(p)) y = std::bit_cast<float>(plo->U32Field(0, 0xF0, 0));
     for (int i = 0; i < 4; ++i)
     {
         LO* plo = PloFindSwObjectByOid(psw, s_aoid[i]);
@@ -603,14 +622,19 @@ void StackCounters(SW* psw)
             s_afReset[i] = true;
             continue;
         }
+        if (i > 0 && y != 0.0f)
+        {
+            x = y;
+            y = 0.0f;
+        }
         if (s_afReset[i])
         {
-            p->player.dyOwner = t;
+            p->player.dyOwner = x;
             s_adv[i] = 0.0f;
             s_afReset[i] = false;
         }
-        else p->player.dyOwner = cmm::GSmoothA(p->player.dyOwner, s_adv[i], t, g_clock.dt, &s_smpa, &s_adv[i]);
-        t += 65.0f;
+        else p->player.dyOwner = cmm::GSmoothA(p->player.dyOwner, s_adv[i], x, g_clock.dt, &s_smpa, &s_adv[i]);
+        x += 65.0f;
         if (i == 3)
         {
             const float d = std::max(0.0f, s_tTimerEnd - g_clock.t);
@@ -765,6 +789,36 @@ static bool NoWipeMaskFix()
     return s_f;
 }
 
+// (HUD Placement, display.h hudPlacement) the side a screen object moves to: -1 left, 1 right, 0 it stays. Corner /
+// edge widgets only: a drawing wholly on one side of the canvas's middle reaching into its outer quarter (the gauge, the
+// coins and the other counters, the timer, a job's own meters). Centred ones stay (they reach across the middle: the
+// prompt, dialogs, title cards, the job screens), and so do the pictures kept on the 4:3 canvas (the binocucom's pieces
+// and everything drawn with them, the menus 1056 / 1057, the card's dialog 1466, the wipe) and the two-player bands
+// (splitscreen3.h: their own layout).
+namespace
+{
+bool s_fBinocDrawn3 = false;   // (a binocucom piece is drawn this frame: screen3.h FWideEdgesScreen3)
+int DirHudPlacement(const LO* plo, glm::vec2 lo, glm::vec2 hi)
+{
+    if (plo->oid == 0x30A || plo->oid == 1056 || plo->oid == 1057 || plo->oid == 1466) return 0;
+    if (s_fBinocDrawn3 || g_hud.fWideEdgesObj || g_hud.fClipCanvasObj || g_hud.fBoard2pObj || FFourThreeMenuObj(plo)) return 0;
+    if (g_hud.band2p.f || g_hud.fCenter2p || g_hud.fWhole2p) return 0;
+    if (hi.x <= 320.0f && lo.x < 160.0f) return -1;
+    if (lo.x >= 320.0f && hi.x > 480.0f) return 1;
+    return 0;
+}
+void PlaceHudObj(const LO* plo, const CHud::MARK& mark, float dx)
+{
+    static const bool s_fDbg = std::getenv("SLY2N_HUDPLACEDBG") != nullptr;
+    if (dx <= 0.0f && !s_fDbg) return;
+    glm::vec2 lo, hi;
+    if (!g_hud.FBoundsSince(mark, lo, hi)) return;
+    const int side = DirHudPlacement(plo, lo, hi);
+    if (s_fDbg) std::printf("hudplace: %d x %.0f..%.0f y %.0f..%.0f side %d\n", plo->oid, double(lo.x), double(hi.x), double(lo.y), double(hi.y), side);
+    g_hud.ShiftSince(mark, float(side) * dx);
+}
+}  // namespace
+
 void DrawScreenObjs(SW* psw)
 {
     if (!psw) return;
@@ -827,6 +881,8 @@ void DrawScreenObjs(SW* psw)
     // object's slot is drawn first and the first one's ends on top (the HUD's depth test is GEQUAL: last drawn wins).)
     std::reverse(adraw.begin(), adraw.end());
     std::stable_sort(adraw.begin(), adraw.end(), [](const auto& a, const auto& b) { return a.second->prio < b.second->prio; });
+    s_fBinocDrawn3 = std::any_of(adraw.begin(), adraw.end(), [](const auto& e) { return FWideEdgesScreen3(e.first); });
+    const float dxPlace = DxHudPlacement();   // (HUD Placement: the corner / edge widgets out to the box's sides)
     for (auto [plo, p] : adraw)
     {
         s_psrtDrawing = p;
@@ -842,7 +898,9 @@ void DrawScreenObjs(SW* psw)
         const bool fFourThree = FFourThreeMenuObj(plo);   // (qolview.h: the gadget grid, Job Help)
         g_hud.fClipCanvasObj = FClipEpisodeMenuToCanvas(plo) || fFourThree;   // (frontend.h: the episode menu on a wide picture)
         g_hud.fWideRectsOnlyObj = plo->oid == 0x30A && !NoWipeMaskFix();   // (the wipe's Sly mask)
+        const CHud::MARK mark = g_hud.Mark();
         p->player.Draw(pfont, picons, psw);
+        PlaceHudObj(plo, mark, dxPlace);
         if (fFourThree) g_hud.Pillarbox(glm::vec4(0, 0, 0, 128), (g_zScreenBase + 262000.0f) / 16777216.0f);   // (over the world, under higher priorities)
         g_hud.fWideRectsOnlyObj = false;
         g_hud.fWideEdgesObj = false;
@@ -873,11 +931,12 @@ void DrawScreenObjs(SW* psw)
     g_pfnScriptString = pfnOld;
 }
 
-// orig: 0x001618F8
+// orig: 0x001618F8 (orig3 0x185420: the timer slot SW +0x42FC, Sly 3's 1053 (0x41D), its +0x7C (the idle limit) 0,
+// shown; the end SW +0x4F60 = t + dt)
 void StartHudTimer(float dt, SW* psw)
 {
     if (!psw) psw = g_psw;
-    if (LO* plo = psw ? PloFindSwObjectByOid(psw, 0x36F) : nullptr)
+    if (LO* plo = psw ? PloFindSwObjectByOid(psw, 0x41D) : nullptr)
         if (SCREENRT* p = Psrt(plo))
         {
             p->dtMax = 0.0f;  // +0x8C: no idle limit
@@ -886,10 +945,10 @@ void StartHudTimer(float dt, SW* psw)
     s_tTimerEnd = g_clock.t + dt;
 }
 
-// orig: 0x00161958
+// orig: 0x00161958 (orig3 0x185480: 1053 hidden (vt slot 54), the end 0)
 void StopHudTimer()
 {
-    if (LO* plo = g_psw ? PloFindSwObjectByOid(g_psw, 0x36F) : nullptr) HideScreenObj(plo);
+    if (LO* plo = g_psw ? PloFindSwObjectByOid(g_psw, 0x41D) : nullptr) HideScreenObj(plo);
     s_tTimerEnd = 0.0f;
 }
 

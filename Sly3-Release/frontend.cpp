@@ -50,6 +50,7 @@
 #include "transition.h"
 #include "update.h"
 #include "worldaccess.h"
+#include "actor.h"
 #include "../platform/platform.h"
 #include "modsave.h"
 
@@ -517,7 +518,8 @@ void UpdateExit(LO* plo, SW* psw)
             std::printf("exit %d: movie %u queued (%u bytes)\n", plo->oid, fk.id, fk.cb);
         }
     }
-    RequestTransition(psw, px->aabKey[0].data(), OID(plo->U32Field(0, OFF_EXIT_POINT, sly3::POINT_DEFAULT)), -1, 0,
+    // (orig3 0x27FDE8: flags 0, so an exit into its own world resets it in place (TRANSF_INPLACE3) unless it queued movies)
+    RequestTransition(psw, px->aabKey[0].data(), OID(plo->U32Field(0, OFF_EXIT_POINT, sly3::POINT_DEFAULT)), -1, TRANSF_INPLACE3,
                       OID(plo->U32Field(0, OFF_EXIT_WIPE, uint32_t(-1))));
     tLoad = 0.0f;
     SetExitState(plo, 5);
@@ -767,6 +769,8 @@ void QueueMovie(const uint8_t* pbKey)
 }
 
 bool FMoviesQueued() { return !s_aabMovie.empty(); }
+// (orig3 D_00389AC0: a movie batch since the last world load forces the next same-world request to reload, 0x25C2A8)
+bool g_fMovieSinceLoad3 = false;
 
 bool g_fMoviePlaying = false;
 extern int g_iframeMain;   // (game.cpp: the flow log's frame)
@@ -775,6 +779,7 @@ void PlayQueuedMovies(bool fWindow)
 {
     const auto aab = std::move(s_aabMovie);
     s_aabMovie.clear();
+    if (!aab.empty()) g_fMovieSinceLoad3 = true;
     // (test: SLY2N_MOVIESHEADLESS: played headless too, into the hidden window)
     if (!fWindow && std::getenv("SLY2N_MOVIESHEADLESS")) fWindow = true;
     if (!fWindow)   // (headless: skipped; SLY2N_TRANSLOG names them)
@@ -808,8 +813,7 @@ void OnGameRecordEvent(int grfReq)
 {
     if (grfReq & 1)
     {
-        g_gamesave = GAMESAVE{};
-        ValidateGameSave();
+        ResetGameSave3(g_gamesave, false);   // orig3 0x184968 -> 0x21D010(block, 0): cleared, the language set
         ClearModSave();   // (mod packages' custom tasks, modsave.h)
         g_islotChosen = -1;
     }
@@ -933,10 +937,26 @@ void StartGameFromSave(SW* psw, const GAMESAVE* pgs)
         return;
     }
     g_taskmgr.oidQueued = -1;
-    const int iep = NRef(RefProgressOfSave(*pgs, {"episodeCurrent"}));
+    // (orig3 0x18AB08: the save's "episodeCurrent" (1 when 0); its jobs all complete (0x25E4A0, epmenu3.cpp
+    // FEpisodeComplete3, on the save being started): the episode chooser (world 0, flags 0x12), else the episode
+    // (0x289198). Before s3fix-core2 the test read Sly 2's "episode <nightclub..> percent_complete", which Sly 3's layout
+    // does not have: a finished episode's save resumed in its world instead of the chooser. SLY3_RESUMEPCT=1: as before.)
+    int iep = NRef(RefProgressOfSave(*pgs, {"episodeCurrent"}));
+    bool fDone;
+    if (std::getenv("SLY3_RESUMEPCT"))
+        fDone = !(iep >= 0 && iep < 9) || NRef(RefProgressOfSave(*pgs, {"episode", s_aszEpisode[iep], "percent_complete"})) >= 100;
+    else
+    {
+        if (iep == 0) iep = 1;
+        const GAMESAVE saved = g_gamesave;
+        g_gamesave = *pgs;
+        fDone = FEpisodeComplete3(iep);
+        g_gamesave = saved;
+    }
     const WREC* pw = iep >= 0 && iep < 9 ? PwrecEpisodeMain(iep) : nullptr;
-    const int pct = iep >= 0 && iep < 9 ? NRef(RefProgressOfSave(*pgs, {"episode", s_aszEpisode[iep], "percent_complete"})) : 100;
-    const uint8_t* pb = pw && pct < 100 ? pw->abRecord : g_disc.PbElf(0x2A3828, 64);   // (else the front end)
+    // (the front end: Sly 3's world 0, dvd_menu (the key table's first record; Sly 2's 0x2A3828 is not Sly 3's))
+    EnsureWorldRecords();
+    const uint8_t* pb = pw && !fDone ? pw->abRecord : !AwrecWorlds().empty() ? AwrecWorlds()[0].abRecord : nullptr;
     RequestTransition(psw, pb, sly3::POINT_DEFAULT, -1, 0x40, -1);
 }
 
@@ -961,12 +981,18 @@ void UpdateTitle3(SW* psw)
     }
 }
 
-// orig 0x001DDB08: a new game (dt 0) from the current record. TODO: 0x1440D0(po, 1) on Sly / Bentley / Murray
+// orig3 0x00221EC0 (Sly 2 0x1DDB08): a new game (dt 0) from the current record; each gang character (D_00344050) gets
+// its counters started with force (0x156768(actor, 1): its health to the capacity (the challenge manager's
+// 0x284828), its power to the maximum: sly.cpp StartPlayerCounters), then StartGameFromSave 0x18AB08
+void StartPlayerCounters(ACTOR* pa, bool fReset);   // sly.cpp (orig 0x1440D0 / orig3 0x156768)
 void StartNewGameFromTitle(SW* psw)
 {
     CRef r;
     r.SetF32(0.0f);
     FSetProgress({"dt"}, r);
+    if (psw)
+        for (LO* p : AploOfClass(psw, S3CID(0x34)))
+            if (ACTOR* pa = PactorFromLo(p)) StartPlayerCounters(pa, true);
     StartGameFromSave(psw, &g_gamesave);
 }
 

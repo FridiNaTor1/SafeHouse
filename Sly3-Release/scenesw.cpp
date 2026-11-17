@@ -24,6 +24,10 @@
 #include "trail.h"
 #include "splitscreen3.h"
 #include "vehiclehooks.h"
+#include "cplcy.h"
+#include "spliceglue.h"
+#include <cmath>
+#include <unordered_map>
 
 #include <algorithm>
 #include <cstdio>
@@ -45,6 +49,59 @@ struct PLACEDELTA
     bool f = false;
     glm::mat4 dmat{1.0f};
 };
+// orig3: 0x232710 (class 0x7E's draw, vt slot 21) / 0x252508 (STEPGUARD 0x3A's): seen by a camera whose policy is of
+// kind 2 (the follow camera) or 13 (the swimmer's first-person one), the object's own groups are drawn scaled by
+// clamp(clq(distance to the camera)) (SW +0x4E00 c / l / q, option 988; +0x4E10 min / max, 989; the world start's
+// 0x25AC20: 0.7 / 0.0002 / 0 and 1 / 1.5: far ones a little larger), about its origin (0x7E) or, for the guards,
+// x / y by lo and z by hi about their base in their frame, lo / hi pulsing for 0.85 s after a flinch (+0x380: sin(80 t)
+// between -0.08 and 0.05, faded by clamp(1 - 2u + u^2), u = t / 0.85). Their children draw as they are.
+namespace
+{
+std::unordered_map<const LO*, float> s_mptFlinch3;   // (STEPGUARD +0x380)
+bool FFalloffScaleDelta3(const ALO* palo, glm::mat4* pdmat)
+{
+    if (!palo || palo->axf.empty() || g_cm.ccpr <= 0 || !g_cm.acpr[0].pcplcy) return false;
+    const int cid = palo->Cid();
+    const bool fGuard = FCidDerivedFrom(cid, 0x3A), fCreature = cid == 0x7E;
+    if (!fGuard && !fCreature) return false;
+    const CPLCY* pcp = g_cm.acpr[0].pcplcy;
+    if (pcp != &g_cmpolicies.cpfollow && pcp->VtOrig() != 0x367990) return false;
+    static const bool s_fOff = std::getenv("SLY3_NOFALLOFFSCALE") != nullptr;
+    if (s_fOff) return false;
+    const glm::mat4& w = palo->axf[0]->matWorld;
+    const float d = glm::distance(glm::vec3(w[3]), g_cm.pos);
+    const float c = GSwOptionField3(988, 0, 0.7f), l = GSwOptionField3(988, 1, 0.0002f), q = GSwOptionField3(988, 2, 0.0f);
+    const float gMin = GSwOptionField3(989, 0, 1.0f), gMax = GSwOptionField3(989, 1, 1.5f);
+    const float g0 = c + d * (l + d * q);
+    const float s = g0 < gMin ? gMin : (gMax < g0 ? gMax : g0);
+    float lo = s, hi = s;
+    glm::vec3 pivot(0.0f);
+    if (fGuard)
+    {
+        if (const STEP* pstep = PstepFromLo(const_cast<ALO*>(palo))) pivot = glm::vec3(pstep->vecBase);
+        auto it = s_mptFlinch3.find(palo);
+        const float t = it == s_mptFlinch3.end() ? 1e9f : g_clock.t - it->second;
+        if (t >= 0.0f && t < 0.85f)
+        {
+            const float sn = (std::sin(t * 80.0f) + 1.0f) * 0.5f;
+            const float u = t * 1.17647052f;
+            const float env = std::clamp(1.0f + u * (-2.0f + u), 0.0f, 1.0f);
+            const float wob = ((1.0f - sn) * -0.08f + sn * 0.05f) * env;
+            lo = s - wob;
+            hi = s + wob;
+        }
+    }
+    if (lo == 1.0f && hi == 1.0f) return false;
+    glm::mat4 m(1.0f);
+    m[0][0] = lo;
+    m[1][1] = lo;
+    m[2][2] = hi;
+    m[3] = glm::vec4((1.0f - lo) * pivot.x, (1.0f - lo) * pivot.y, (1.0f - hi) * pivot.z, 1.0f);
+    *pdmat = w * m * glm::inverse(w);
+    return true;
+}
+}  // namespace
+
 PLACEDELTA PlaceGlobsetPrepare(ALO* palo, SCENEGLOBSET& sgs)
 {
     const GLOBSET& gs = *sgs.pglobset;
@@ -75,7 +132,7 @@ PLACEDELTA PlaceGlobsetPrepare(ALO* palo, SCENEGLOBSET& sgs)
     PLACEDELTA delta;
     sgs.sDrawScale = 1.0f;
     const bool fCharScale = FDebugCharScaleDelta(palo, &delta.dmat, &sgs.sDrawScale);   // (the debug menu's scale: debugphys.h)
-    delta.f = fCharScale || FBootyDrawDelta(palo, &delta.dmat);
+    delta.f = fCharScale || FBootyDrawDelta(palo, &delta.dmat) || FFalloffScaleDelta3(palo, &delta.dmat);
     return delta;
 }
 
@@ -461,3 +518,5 @@ int CAddNewAlosToScene(SW* psw, SCENE& scene, std::vector<ALO*>* papalo)
             std::printf("scene: added %d (cid 0x%X)%s\n", (*papalo)[i]->oid, int((*papalo)[i]->Cid()), (*papalo)[i]->fInWorld ? "" : " (out of the world)");
     return cAdd;
 }
+
+void NoteGuardFlinch3(const LO* plo) { if (plo) s_mptFlinch3[plo] = g_clock.t; }

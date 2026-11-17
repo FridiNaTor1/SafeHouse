@@ -74,14 +74,14 @@ const char* SzScptCmd3(int id)
         "spawn", "block1", "block2", "block3", "while", "block5", "if", "case7", "case8", "else9",          // 00
         "blockA", "retire", "blockC", "blockD", "blockE", "alarmF", "alarm10", "stopscpt", "checkpoint", "x13",  // 0A
         "label?", "vcall15", "aseg", "startscpt", "x18", "dock", "near1A", "near1B", "near1C", "x1D",       // 14
-        "chkptasks", "x1F", "block20", "x21", "interact", "cutcm", "x24", "x25", "nearcrv", "block27",       // 1E
+        "chkptasks", "x1F", "block20", "x21", "interact", "cutcm", "selectzone", "pinplayer", "nearcrv", "block27",       // 1E
         "x28", "interact5", "carry", "interact9", "effect", "action5", "prize", "rand", "anim30", "x31",     // 28
         "x32", "job33", "job34", "x35", "drop36", "launch", "add", "remove", "x3A", "x3B",                  // 32
         "geomon", "geomoff", "byclass", "joltcm", "x40", "x41", "eyes", "asegsnd", "asegsndstop", "block45", // 3C
         "openbinoc", "x47", "cmfocus", "cmfocus49", "cmtargets", "cmzoom", "cmsnap", "x4D", "x4E", "block4F", // 46
         "title", "block51", "dialog", "dialogwait", "subreset", "holdfx", "releasefx", "x57", "x58", "pushmusic", // 50
         "popmusic", "block5B", "murrayhold", "x5D", "x5E", "block5F", "hint", "hintclear", "guardcmd", "x63", // 5A
-        "x64", "x65", "label66", "transition", "exit", "x69", "x6A", "x6B", "x6C", "x6D",                  // 64
+        "murraytoss", "bentleyjump", "murrayaim", "murrayaimwait", "exit", "x69", "x6A", "x6B", "x6C", "x6D",                  // 64
         "closebinoc", "proxy", "clue70", "clue71", "clue72", "x73", "x74", "booty", "cnstr", "face"};       // 6E
     return id >= 0 && id < 0x78 ? s_asz[id] : "?";
 }

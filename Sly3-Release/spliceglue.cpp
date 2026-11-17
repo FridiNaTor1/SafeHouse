@@ -590,6 +590,8 @@ CRef RefCmCut(BASIC*, int, CRef*)
     CutCm(&g_cm);  // 0x14D8C0
     return CRef(TAGK_Void);
 }
+int s_optid3Cur = -1;
+
 CRef RefCameraOption(int bifk, int optid, const CRef* value)
 {
     if (bifk == 111 && (optid == 233 || optid == 292))
@@ -659,9 +661,30 @@ CRef RefCameraOption(int bifk, int optid, const CRef* value)
             std::printf("CAMERA_OPTION bif=%d option=%d tag=%d t=%.9g pos=%.9g,%.9g,%.9g mrd=%.9g\n", bifk, optid, int(result.m_tagk), g_clock.t, g_cm.pos.x, g_cm.pos.y, g_cm.pos.z, g_cm.rMRD);
         return result;
     }
+    // (audit 4 CORE-08) a Sly 3-only option (no Sly 2 id): a method of its EOPID's thunk (flag 1, as the world's
+    // 0x200BA0), else its value as a script set it (keyed by the Sly 3 id), else void
+    static std::map<int, CRef> s_mpCameraOption3;
+    if (optid < 0)
+    {
+        if (const int eopid = EopidFromOptid(0x05, s_optid3Cur); eopid >= 0 && bifk == 111)
+        {
+            const uint32_t vaEopid = S3VA(0x2AC880) + static_cast<uint32_t>(eopid) * 0x28;
+            CRef rm;
+            if ((g_disc.U32Elf(vaEopid + 4) & 1) &&
+                FMakeObjectMethod(g_disc.U32Elf(vaEopid + 0x10), &s_cmbasic, static_cast<int>(g_disc.U32Elf(vaEopid + 0x18)), &rm))
+                return rm;
+        }
+        if (bifk == 110 && value)
+        {
+            s_mpCameraOption3[s_optid3Cur] = *value;
+            return CRef(TAGK_Void);
+        }
+        if (auto it = s_mpCameraOption3.find(s_optid3Cur); bifk == 111 && it != s_mpCameraOption3.end()) return it->second;
+    }
     static std::map<int, bool> s_mpWarned;
-    if (!s_mpWarned[optid]) std::fprintf(stderr, "splice: the camera's option %d (bif %d) not ported\n", optid, bifk);
-    s_mpWarned[optid] = true;
+    const int key = optid < 0 ? 0x10000 + s_optid3Cur : optid;
+    if (!s_mpWarned[key]) std::fprintf(stderr, "splice: the camera's option %d / Sly 3 %d (bif %d) not ported\n", optid, s_optid3Cur, bifk);
+    s_mpWarned[key] = true;
     return CRef(TAGK_Void);
 }
 
@@ -692,7 +715,6 @@ struct SNDBASIC : LO
 // (the Sly 3 option id of the option being read: EopidFromOptid searches Sly 3's class tables, the handlers below get
 // Sly 2's ids; before, the world's / the sound object's methods were looked up by the Sly 2 id and not found, e.g. the
 // world's 984 (Sly 2 847: player n's character) that most worlds' scripts read at their load)
-int s_optid3Cur = -1;
 
 CRef RefSoundOption(int bifk, int optid, const CRef* pref)
 {
@@ -772,7 +794,34 @@ struct SNDMETHODS
     }
 } s_sndmethods;
 
-std::map<int, CRef> s_mpWorldOption;  // (the world's other options: kept as set, TODO(world): their fields' uses)
+// (the world's other options as the scripts set them, keyed by the Sly 3 option id (s_optid3Cur): the Sly 3-only ones
+// have no Sly 2 id (-1), and keyed by that they all shared one slot (audit 4 CORE-06))
+std::map<int, CRef> s_mpWorldOption;
+
+// The SW field options the engine reads (Sly 3 ids; their EOPID = id + 1): 988 the light falloff c / l / q (+0x4E00),
+// 989 its min / max (+0x4E10, default max 1: 0x25A628), 990 the low flight band (+0x4E18 / +0x4E1C), 1007 the ceiling
+// (+0x4FF0, default 5500: 0x25A628)
+bool FWorldOptionFieldRead3(int optid3) { return optid3 == 988 || optid3 == 989 || optid3 == 990 || optid3 == 1007; }
+float GWorldOptionField3(int optid3, int i, float gDefault)
+{
+    if (auto it = s_mpWorldOption.find(optid3); it != s_mpWorldOption.end())
+    {
+        const CRef& r = it->second;
+        if (r.m_tagk == TAGK_F32 && i == 0) return r.m_g;
+        if (r.m_tagk == TAGK_S32 && i == 0) return float(r.m_n);
+        if (r.m_tagk == TAGK_Pair)
+        {
+            int j = 0;
+            for (const CPair* pp = r.m_ppair.get(); pp; pp = pp->m_ppairNext.get(), ++j)
+                if (j == i) return pp->m_ref.m_tagk == TAGK_F32 ? pp->m_ref.m_g : float(pp->m_ref.m_n);
+        }
+        if ((r.m_tagk == TAGK_Vector || r.m_tagk == TAGK_Clq || r.m_tagk == TAGK_Lm) && i < 4) return r.m_vector[i];
+    }
+    if (s_psw)
+        for (const OPT& o : s_psw->aoptSw)
+            if (o.eopid == optid3 + 1 && !o.aval.empty() && i < 4) return o.aval[0].ag[std::size_t(i)];
+    return gDefault;
+}
 
 CRef RefWorldOption(int bifk, int optid, const CRef* pref)
 {
@@ -781,7 +830,7 @@ CRef RefWorldOption(int bifk, int optid, const CRef* pref)
     if (bifk == 110 && optid == 846 && pref)  // EOPID 928: the forced player (0x1C4A60, SW +0x3F00)
     {
         SetPoForced(s_psw, dynamic_cast<LO*>(pref->m_pbasic));
-        s_mpWorldOption[optid] = *pref;
+        s_mpWorldOption[s_optid3Cur] = *pref;
         return CRef(TAGK_Void);
     }
     // EOPIDs 937 / 938 (options 855 / 856, grf 0x12, otype 6): SW +0x3C88 / +0x3C8C, the current checkpoint's
@@ -801,9 +850,10 @@ CRef RefWorldOption(int bifk, int optid, const CRef* pref)
     if (bifk != 111)
     {
         static std::map<int, bool> s_mpWarned;
-        if (!s_mpWarned[optid]) std::fprintf(stderr, "splice: the world's option %d (bif %d) kept, its use not ported\n", optid, bifk);
-        s_mpWarned[optid] = true;
-        if (pref) s_mpWorldOption[optid] = *pref;
+        if (!s_mpWarned[s_optid3Cur] && !FWorldOptionFieldRead3(s_optid3Cur))
+            std::fprintf(stderr, "splice: the world's option %d / Sly 3 %d (bif %d) kept, its use not ported\n", optid, s_optid3Cur, bifk);
+        s_mpWarned[s_optid3Cur] = true;
+        if (pref) s_mpWorldOption[s_optid3Cur] = *pref;
         return CRef(TAGK_Void);
     }
     // (Sly 3) option 508 (Sly 2 id 454; EOPID 1007, thunk 0x10AEC0 -> 0x25ED20): a method (index, ids, ids) that
@@ -844,8 +894,6 @@ CRef RefWorldOption(int bifk, int optid, const CRef* pref)
     }
     default:
     {
-        auto it = s_mpWorldOption.find(optid);
-        if (it != s_mpWorldOption.end()) return it->second;
         // the world's methods (0x200BA0: an EOPID with flag 1 gives a method object of its thunk), e.g. 861
         // (EOPID 942, thunk 0x10C2E8: 0x195608, the abandon icon on a tracked target: the safe house door in a job)
         if (const int eopid = EopidFromOptid(S3CID(0x01), s_optid3Cur); eopid >= 0)   // (the Sly 3 id: the table is Sly 3's)
@@ -854,6 +902,17 @@ CRef RefWorldOption(int bifk, int optid, const CRef* pref)
             if ((g_disc.U32Elf(vaEopid + 4) & 1) &&
                 FMakeObjectMethod(g_disc.U32Elf(vaEopid + 0x10), &s_swbasic, static_cast<int>(g_disc.U32Elf(vaEopid + 0x18)), &ref))
                 return ref;
+        }
+        // a field option: as a script set it, else the world file's value (SW's option block), else its default
+        if (auto it = s_mpWorldOption.find(s_optid3Cur); it != s_mpWorldOption.end()) return it->second;
+        if (FWorldOptionFieldRead3(s_optid3Cur))
+        {
+            auto g = [](int i, float gDef) { return GWorldOptionField3(s_optid3Cur, i, gDef); };
+            if (s_optid3Cur == 988) ref.SetClq({g(0, 0.0f), g(1, 0.0f), g(2, 0.0f), 0.0f});
+            else if (s_optid3Cur == 989) ref.SetLm({g(0, 0.0f), g(1, 1.0f)});
+            else if (s_optid3Cur == 990) ref.SetLm({g(0, 0.0f), g(1, 0.0f)});
+            else ref.SetF32(g(0, 5500.0f));
+            return ref;
         }
         static std::map<int, bool> s_mpWarned;
         if (!s_mpWarned[optid]) std::fprintf(stderr, "splice: the world's option %d not ported\n", optid);
@@ -944,7 +1003,7 @@ CRef RefOptionImpl(int bifk, BASIC* pbasic, int optid, const CRef* pref)
     }
     const int optid2 = sly3::Optid2FromOptid3(optid);
     s_optid3Cur = optid;
-    if (optid2 < 0 && pbasic && !dynamic_cast<LO*>(pbasic) && optid != 983 && optid != 1003 && optid != 1005 && optid != 1006 && optid != 759)
+    if (optid2 < 0 && pbasic && !dynamic_cast<LO*>(pbasic) && optid != 983 && optid != 1003 && optid != 1005 && optid != 1006 && optid != 759 && optid != 1344)
     {
         static std::set<int> s_aoptid;
         if (s_aoptid.insert(optid).second)
@@ -954,6 +1013,15 @@ CRef RefOptionImpl(int bifk, BASIC* pbasic, int optid, const CRef* pref)
     if (XFBASIC* handle = dynamic_cast<XFBASIC*>(pbasic)) return RefXfHandleOption(bifk, handle, optid2, pref);
     if (CSnd* psnd = dynamic_cast<CSnd*>(pbasic)) return RefSoundObjectOption(psnd, bifk, optid2, pref);
     if (auto* attachment = dynamic_cast<VEHICLEATTACH*>(pbasic)) return RefVehicleAttachmentOption(attachment, bifk, optid2, pref);
+    // (Sly 3's bif 125: the challenge manager 0x4BC230; audit 4 CORE-08) option 1344 (EOPID 1458, kind 0x20AA, field
+    // +0x14): the running game's node (a class 0xAA object), read by the jobs' end scripts (e.g. ep3 job 3202's)
+    if (pbasic == &s_cmbasic && bifk == 111 && optid == 1344)
+    {
+        CRef r;
+        if (LO* p = PloChallengeNode3()) r.SetBasic(p);
+        else r.SetBasic(nullptr);
+        return r;
+    }
     if (pbasic == &s_cmbasic && bifk == 111 && optid == 759)
     {
         // (Sly 3's bif 125 is the challenge manager 0x4BC230 (class 0xC6), natively the camera's basic) orig3: 0x10E940
@@ -1445,6 +1513,8 @@ BASIC* PbasicGlobal(int bifk)
     return nullptr;  // TODO(M3): the globals once the game sets them; the world and the camera are not LOs yet
 }
 }
+
+float GSwOptionField3(int optid3, int i, float gDefault) { return GWorldOptionField3(optid3, i, gDefault); }
 
 void InstallSpliceHooks(SW* psw)
 {

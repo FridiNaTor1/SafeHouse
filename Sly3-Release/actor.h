@@ -282,9 +282,9 @@ struct SLY : ACTOR
     glm::vec4 aq[3]{};             // +0x1890 / +0x18A0 / +0x18B0
     LO* ploOther = nullptr;        // +0x18C4 (the object of states 3 / 22)
     REACH reach;                   // +0x17D0 the cane's reach (reach.h; +0x1854 its target, +0x1858 its distance)
-    int state = -1;                // +0x18C8 (0..24)
+    int jts = -1;                  // +0x18C8 (Sly 3 JT +0x19E0: sly.h jts::, Sly 3 numbers 0..24)
     float tState = 0.0f;           // +0x18CC
-    int substate = -1;             // +0x18D0
+    int jtbs = -1;                 // +0x18D0 (Sly 3 +0x19E8)
     float tSubstate = 0.0f;        // +0x18D4
     int mode = -1;                 // +0x18D8 (0x18E540)
     float tMode = 0.0f;            // +0x18DC
@@ -353,6 +353,7 @@ struct SLY : ACTOR
         LO* retained = nullptr;
     } pockets[4]{{26}, {37}, {38}, {41}};  // orig: 0x188488, +0x1FB0..+0x1FD4
     LO* plo18C0 = nullptr;        // +0x18C0: selected strike/rush target (0x18F688)
+    struct CTRL* actrlCarried[2]{}; // (Sly 3 +0x1F00 / +0x1F04) state 20's holds on Murray: position, rotation (0x130078)
 };
 
 // The SO's pose and velocities, as the original reads them from its transform record (+0x60: world matrix +0x40,

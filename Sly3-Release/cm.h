@@ -139,6 +139,11 @@ struct CM
     int nJolt = -1;                // +0x61C
     float sStereo = 0.0f;          // +0x620
     float sStereoTarget = 10.0f;   // +0x624
+    // (Sly 3's 3-D (anaglyph) mode, orig3 0x1662C0's end while GAME +0xC bit 1: the eyes' shear (+0x410: eye 1 +, eye 2
+    // -), the convergence distance (+0x414) and its override (+0x418); 0x167E40 makes the eyes' matrices of them)
+    float sEyeShift3 = 0.0f;       // orig3 +0x410
+    float sConverge3 = 0.0f;       // orig3 +0x414
+    float sConvergeSet3 = 0.0f;    // orig3 +0x418 (0: from the focus)
 };
 
 extern CM g_cm;
@@ -240,6 +245,8 @@ void SetCmMrdRatio(CM* pcm, float rMRD);
 void JoltCm(CM* pcm, int n);
 // orig: 0x0014F768 (the stereo eye's clip matrix: k 1 left, 2 right)
 cmm::MATRIX4 MatCmStereoEye(const CM* pcm, int k, const cmm::MATRIX4* pmatProj);
+// orig3 0x1662C0's end: Sly 3's 3-D mode's eye shift / convergence (CM sEyeShift3 / sConverge3; nothing out of the mode)
+void UpdateCmEyes3(CM* pcm, bool fReset);
 // orig: 0x0014F850 FInsideCmPlanes (the point in front of the three transposed planes by w.x)
 bool FInsideCmPlanes(const CM* pcm, const glm::vec3& pos, float sRadius);
 // orig: VU0 0x38..0x53 (RenderGlob 0x168740 / 0x168A44): the sphere test's distance fade.

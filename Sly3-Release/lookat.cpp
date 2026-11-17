@@ -42,6 +42,41 @@ glm::vec3 PosOfLo(const LO* plo)
     return glm::vec3(0.0f);
 }
 
+// orig3: 0x001F4C40 (the nearest of the world's characters SW +0x45E8 (up to 16, in the order their post-loads
+// registered them with 0x1F4670: every actor (0x152488), Carmelita (0x15F490), the classes 0x45 / 0x46 / 0x47 / 0x48 /
+// 0x4A / 0x51 / 0x52 / 0x53) in the world (+0x28 bit 56), by their record's position; none: nullptr). Sly 3's look-at (0x12F6B8) and
+// birds (0x1D66D0) use it where Sly 2 took the player objects (0x1C4AF8); s3fix-ai3 (AUDIT4 AI-14: Carmelita's slot 17)
+}  // namespace
+LO* PloNearestCharacter3(const glm::vec3& pos)
+{
+    if (!g_psw) return nullptr;
+    // (s3fix-modes4: the safe house 0x45 (0x213220) and the director 0x46 (0x209FA0) register too)
+    static const int s_acid[] = {0x33 /* PLAYER: every actor */, sly3::CID_CARMELITA, 0x45, 0x46, 0x47, 0x48, 0x4A, 0x51, 0x52, 0x53};
+    LO* pbest = nullptr;
+    float s2Best = 3.4028235e38f;   // (D_003250A0)
+    int c = 0;
+    for (const auto& up : g_psw->aploAll)
+    {
+        LO* plo = up.get();
+        if (!plo) continue;
+        bool f = false;
+        for (int cid : s_acid) f = f || FCidDerivedFrom(plo->Cid(), cid);
+        if (!f) continue;
+        if (++c > 16) break;   // (the list's 16 entries)
+        if (!plo->fInWorld) continue;
+        const glm::vec3 d = pos - PosOfLo(plo);
+        const float s2 = glm::dot(d, d);
+        if (s2 < s2Best)
+        {
+            s2Best = s2;
+            pbest = plo;
+        }
+    }
+    return pbest;
+}
+namespace
+{
+
 // orig: 0x001C4AF8 (the nearest of the world's player objects SW +0x3EBC (every object vt slot 79 enabled or
 // disabled) in the world (+0x28 bit 60), by 0x1A62E8's position; none: nullptr)
 LO* PloNearestPo(const glm::vec3& pos)
@@ -143,7 +178,7 @@ void CTRLLOOKAT::Fetch()
     const OID oidTarget = job.c;         // +0x6C
     if (!plo && oidTarget != -1) plo = PloFindSwNearest(palo, oidTarget);  // (0x15E938(G, 0x104, oid, palo))
     const glm::vec3 posSelf(pxf->matWorld[3]);
-    LO* ploTarget = plo ? plo : PloNearestPo(posSelf);  // (0x1C4AF8 when no target)
+    LO* ploTarget = plo ? plo : PloNearestCharacter3(posSelf);  // (orig3 0x1F4C40 when no target; Sly 2's 0x1C4AF8)
     glm::vec3 d(0.0f);
     float dist;
     if (ploTarget)

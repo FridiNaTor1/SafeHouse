@@ -529,11 +529,13 @@ void ChooseJumpTarget(JUMP* pj, LO* ploPrev)
                                 posHit.x, posHit.y, posHit.z, vHit.x, vHit.y, vHit.z);
             }
     }
-    // the partner (Bentley only): Murray in his state 15 with his +0x1910 controller holding (state 0): its holding
-    // frame +0x191C's point (0x19A4A0, at rest), the end's z velocity the launch's plus g t; under 2500, Murray's score
-    // with the bias -500 (0x2BF904), its path clear of all but the two of them (0x19AE00 with 0x19B0A8): the state 18
-    if (FIsLoDerivedFrom(pa->palo, S3CID(0x37)))
-        if (MURRAY* pm = PmurrayGlobal(); pm && pm->state == 15 && pm->jtthrow1910.state == 0 && pm->jtthrow1910.peer)
+    // the partner (orig3 0x1BBCA8 flag 0x800): Murray in his state 15 (Sly 3's 16) with his +0x1910 controller (Sly 3's
+    // +0x18E0) holding (state 0) and selecting this player (+0x18F0: always Bentley, 0x1E2358): its holding frame
+    // +0x191C's point (0x19A4A0, at rest), the end's z velocity the launch's plus g t; under 2500, not more than 650
+    // above it (new in Sly 3), Murray's score with the bias -500 (0x2BF904), its path clear of all but the two of them
+    // (0x19AE00 with 0x19B0A8): the state 18 (Sly 3's kind 19)
+    if (MURRAY* pm = PmurrayGlobal(); pm && pm->state == 15 && pm->jtthrow1910.state == 0 && pm->jtthrow1910.peer &&
+                                      pm->jtthrow1910.selected == pa->palo)
         {
             LO* peer = pm->jtthrow1910.peer;
             const glm::vec3 posP = PosJtLo(peer);  // 0x1A62E8
@@ -544,7 +546,7 @@ void ChooseJumpTarget(JUMP* pj, LO* ploPrev)
             bool f = true;
             if (peer != ploPrev)
             {
-                if (!(sc < 2500.0f)) f = false;
+                if (!(sc < 2500.0f) || 650.0f < pos.z - posP.z) f = false;
                 else
                 {
                     sc = GTargetScore(pj, pm->palo, sc, -500.0f);  // (0x2BF904)
@@ -808,7 +810,7 @@ void ArriveJumpTarget(JUMP* pj)
         if (SLY* p = dynamic_cast<SLY*>(pa))
         {
             p->ploSurface = pj->ploC;
-            SetSlyState(p, 0x15, 0xA);
+            SetSlyState(p, jts::N2ClimbSurf, jts::SubN2SurfHeld);
         }
         break;
     case 14:
@@ -817,13 +819,16 @@ void ArriveJumpTarget(JUMP* pj)
         if (SLY* p = dynamic_cast<SLY*>(pa))
         {
             p->ploOther = pj->ploC;
-            if (pj->ploC && pj->ploC->U32Field(0, 0x124, 0) == 3) SetSlyState(p, 0x16, -1);
-            else SetSlyState(p, 3, 1);
+            if (pj->ploC && pj->ploC->U32Field(0, 0x124, 0) == 3) SetSlyState(p, jts::HangFollow, -1);
+            else SetSlyState(p, jts::Hang, jts::SubSwingStill);
         }
         break;
     case c_jsRideLink: sly3::ArriveRideLink3(pj->ploC); break;   // orig3 0x1BD520 case 17
     case 18:
-        SetBentleyState(PbentleyGlobal(), BS3_Carried);  // 0x135248(D_002DD5BC, 8): held by Murray (0x136530)
+        // orig3 0x1BD520 case 19: Bentley held by Murray (0x13E510(D_0036B250, 0xA); native 0x135248(8) -> 0x136530),
+        // anyone else Sly on Murray (0x1ADDD0(D_00370AC0, 0x14, -1))
+        if (BENTLEY* pb = PbentleyGlobal(); pb && pa == static_cast<ACTOR*>(pb)) SetBentleyState(pb, BS3_Carried);
+        else if (SLY* p = PslyGlobal()) SetSlyState(p, jts::Carried, -1);
         break;
     case 11: StartInteract(pa, 0, pj->ploC, JTL_Ledge); break;  // the ledge: kind 0 (its description +0x190)
     case 12: StartInteract(pa, 0, pj->ploC, JTL_Wall); break;
@@ -853,7 +858,7 @@ void NearestOnSegment(const glm::vec3& pos, const glm::vec3& p0, const glm::vec3
 }
 }  // namespace
 
-// orig: 0x00197F98's target search (see jump.h)
+// orig: part of 0x00197F98 (its target search; see jump.h)
 void FindJumpHideTarget(JUMP* pj)
 {
     ACTOR* pa = pj->pactor;

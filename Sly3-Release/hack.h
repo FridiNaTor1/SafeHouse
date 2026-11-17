@@ -172,6 +172,7 @@ int NHackHpMax3(const LO* plo, int nDefault);  // (Sly 3 EOPID 937: the hit poin
 LO* PloEnemyNav3(LO* plo);  // (Sly 3 +0x200, EOPID 1572: the enemy's nav mesh)
 void SeparateEnemy3(ALO* palo);  // (orig3 0x19D898: the enemies' separation 0x19F6D8)
 int HackSide3(LO* plo);  // (Sly 3 +0x1D0, EOPID 1557: the object's side)
+void SetHackEnemyHitBy3(LO* plo, LO* ploBy);  // (Sly 3 enemy +0x3F8, EOPID 1584: the last hit's sender, 0x19DBA8)
 // (Sly 3 ship +0x30C, EOPID 1567: the other ship of the two-player game; +0x310, EOPID 1568: the camera's height range)
 LO* PloHackShipOther3(LO* plo);
 void SetHackShipOther3(LO* plo, LO* ploOther);

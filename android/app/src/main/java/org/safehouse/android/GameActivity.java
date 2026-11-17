@@ -14,7 +14,8 @@ import android.os.Build;
 import android.os.PowerManager;
 import org.libsdl.app.SDLActivity;
 
-/** Sly 2 (libSly2-Release.so) in its own process (":game"), started by the launcher through NativeBridge.startChild. */
+/** The game (Sly 2: libSly2-Release.so, Sly 3: libSly3-Release.so; the intent's "program") in its own process
+ * (":game"), started by the launcher through NativeBridge.startChild. One game per process: the process ends with it. */
 public class GameActivity extends SDLActivity {
     static volatile boolean visibleRequested;
     private TouchControls controls;
@@ -22,7 +23,12 @@ public class GameActivity extends SDLActivity {
     private ServiceConnection launcherKeeper;
     private volatile boolean nativeShutdownRequested;
     private PowerManager.OnThermalStatusChangedListener thermalListener;
-    @Override protected String[] getLibraries() { return new String[] {"SDL2", "Sly2-Release"}; }
+    @Override protected String[] getLibraries() { return new String[] {"SDL2", NativeBridge.gameLibrary(getIntent())}; }
+    // The immersive activity of the hybrid app on a VR headset (the manifest's VR category; the game's OpenXR session
+    // owns the display). FlatGameActivity: false, a flat window (a 2D panel on a headset).
+    protected boolean immersive() { return true; }
+    // A headset where this activity is the immersive part.
+    boolean immersiveOnHeadset() { return immersive() && vrHeadset(); }
     // Debuggable builds: started from adb with the game's arguments in "debug-arguments" (one string, split at spaces),
     // without the launcher's session (its output goes to logcat): device tests (notes/VR_2026-11-10.md).
     private boolean debugStart() {
@@ -41,6 +47,7 @@ public class GameActivity extends SDLActivity {
         if (mBrokenLibraries) { NativeBridge.reportExit(1); return; }
         try {
             visibleRequested = false;
+            NativeBridge.gameActivity = getClass();
             SDLActivity.nativeSetenv("SDL_ANDROID_BLOCK_ON_PAUSE", "0");
             NativeBridge.initialize(this);
             DesktopMode.apply(this);
@@ -95,12 +102,12 @@ public class GameActivity extends SDLActivity {
         return m != null && (m.equalsIgnoreCase("Oculus") || m.equalsIgnoreCase("Meta"));
     }
     @Override protected void onResume() {
-        if (vrHeadset()) mHasFocus = true;
+        if (immersiveOnHeadset()) mHasFocus = true;
         super.onResume();
         DesktopMode.apply(this);
     }
     @Override public void onWindowFocusChanged(boolean hasFocus) {
-        if (vrHeadset()) hasFocus = true;
+        if (immersiveOnHeadset()) hasFocus = true;
         if (!nativeShutdownRequested) super.onWindowFocusChanged(hasFocus);
     }
 

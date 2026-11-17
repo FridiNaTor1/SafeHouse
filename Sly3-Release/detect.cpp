@@ -335,7 +335,14 @@ int NDetectState(DETECTOR* pdet, LO* pso, int k)
         return FSightBlocked(pdet, pso) ? 0 : 1;
     case 1:
         if (pdet->ploVolume2 && !FInsideShape(pdet->ploVolume2, pos)) return 0;
-        if (!FInsideShape(pdet->ploVolume, pos)) return 2;
+        // (s3fix-ai2) orig3 0x170580 case 1: leaving the view volume keeps the target as "lost but near" (2) only for a
+        // guard's detector that is hostile to it (0x2544E0 == 2); a disguised player (1), a passed one (0), or another
+        // owner's target is forgotten at once (0). Sly 2 kept 2 for everyone
+        if (!FInsideShape(pdet->ploVolume, pos))
+        {
+            GUARD* pg = pdet->ploOwner ? PguardFromLo(pdet->ploOwner) : nullptr;
+            return pg && KGuardRelation3(pg, pso) == 2 ? 2 : 0;
+        }
         break;
     case 2:
         if (pdet->ploVolume2 && !FInsideShape(pdet->ploVolume2, pos)) return 0;
@@ -528,6 +535,43 @@ struct INITDETECTOR
         RegisterObjectSetter(350, [](LO* object, const CRef& value) {
             DETECTOR* detector = PdetectorEnsure(object);
             if (detector->fOptionsBound) RemoveDetectorTarget(detector, PloDetectorOption(object, value));
+        });
+        // (audit 4 CORE-17) Sly 3 made Sly 2's add / remove target setters (EOPIDs 349 / 350) methods of the DETECTOR (class
+        // 0x0F, options 407..411, EOPIDs 383..387): thunks 0x104E10 -> 0x16FE30 (a class's objects added, the class kept;
+        // at most 8 classes), 0x104EB8 -> 0x16FF08 (those taken out), 0x104F40 -> 0x170018 (an object added; out of the
+        // removed list), 0x104FE8 -> 0x1701B0 (an object taken out), 0x105070 -> 0x170328 (every target cleared). The
+        // rank argument (0x170118's) is not kept natively (DETENTRY::n4).
+        RegisterObjectMethod3(0x104E10, [](LO* plo, const std::vector<CRef>& a) {
+            DETECTOR* d = PdetectorEnsure(plo);
+            const int cid = a.empty() ? -1 : a[0].RefCoerceS32().m_n;
+            if (d && cid >= 0 && g_psw)
+                for (LO* po : AploOfClass(g_psw, static_cast<CID>(cid)))
+                    if (po != d->ploOwner) AddDetectorTarget(d, po);
+            return CRef(TAGK_Void);
+        });
+        RegisterObjectMethod3(0x104EB8, [](LO* plo, const std::vector<CRef>& a) {
+            DETECTOR* d = PdetectorEnsure(plo);
+            const int cid = a.empty() ? -1 : a[0].RefCoerceS32().m_n;
+            if (d && cid >= 0)
+                for (int i = int(d->ae.size()) - 1; i >= 0; --i)
+                    if (LO* po = d->ae[size_t(i)].plo; po && FCidDerivedFrom(po->Cid(), static_cast<CID>(cid))) RemoveDetectorTarget(d, po);
+            return CRef(TAGK_Void);
+        });
+        RegisterObjectMethod3(0x104F40, [](LO* plo, const std::vector<CRef>& a) {
+            DETECTOR* d = PdetectorEnsure(plo);
+            LO* po = a.empty() ? nullptr : PloDetectorOption(plo, a[0]);
+            if (d && po && po != d->ploOwner) AddDetectorTarget(d, po);
+            return CRef(TAGK_Void);
+        });
+        RegisterObjectMethod3(0x104FE8, [](LO* plo, const std::vector<CRef>& a) {
+            DETECTOR* d = PdetectorEnsure(plo);
+            LO* po = a.empty() ? nullptr : PloDetectorOption(plo, a[0]);
+            if (d && po) RemoveDetectorTarget(d, po);
+            return CRef(TAGK_Void);
+        });
+        RegisterObjectMethod3(0x105070, [](LO* plo, const std::vector<CRef>&) {
+            if (DETECTOR* d = PdetectorEnsure(plo)) d->ae.clear();
+            return CRef(TAGK_Void);
         });
         // EOPID 758 (an actor's option 741, the field +0x11AC both ways): unseen by the detectors (NDetectState)
         RegisterObjectSetter(758, [](LO* object, const CRef& value) {

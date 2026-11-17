@@ -710,13 +710,16 @@ FIELDREG<1222> s_f1222;
 void PostLoadPathRope(LO* plo)
 {
     if (!plo || !FIsLoDerivedFrom(plo, S3CID(0x0A))) return;
+    // (the loaded options carry Sly 3 EOPIDs (PATH 1318..1329, orig3 0x22FDE0's family); PgField is on the Sly 2 numbers
+    // 1211..1222, the same order: AUDIT4 PLAYER-03, the range was compared raw and no rope option ever loaded)
+    static_assert(S3EOPID(1211) + 11 == S3EOPID(1222) && S3EOPID(1213) == S3EOPID(1211) + 2, "the rope EOPIDs stay contiguous");
     for (const OPT& o : plo->aopt)
     {
-        if (o.aval.empty() || o.eopid < 1211 || o.eopid > 1222 || o.eopid == S3EOPID(1212)) continue;
+        if (o.aval.empty() || o.eopid < S3EOPID(1211) || o.eopid > S3EOPID(1222) || o.eopid == S3EOPID(1212)) continue;
         ROPE* p = PropeEnsure(plo, 1);
         if (!p) return;
         if (o.eopid == S3EOPID(1211)) p->force = glm::vec3(o.aval[0].ag[0], o.aval[0].ag[1], o.aval[0].ag[2]);
-        else if (float* pg = PgField(*p, o.eopid)) *pg = o.aval[0].ag[0];
+        else if (float* pg = PgField(*p, o.eopid - S3EOPID(1211) + 1211)) *pg = o.aval[0].ag[0];
         if (FPrint()) std::printf("rope %d: loaded option eopid %d = %g\n", plo->oid, o.eopid, o.aval[0].ag[0]);
     }
 }

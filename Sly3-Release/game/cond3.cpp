@@ -6,6 +6,7 @@
 
 #include "../lo.h"
 #include "../disc.h"
+#include "../shd.h"
 
 #include <algorithm>
 #include <cmath>
@@ -108,7 +109,7 @@ bool FApplyCondSetOption3(const OPT& opt)
     }
     switch (g_disc.U32Elf(va + ((grf & 0x100) ? 0x1C : 0x14)))
     {
-    case 0x1691B0: g_condset3.rgbaFog = uint32_t(v.n); return true;   // (then AdjustRgba 0x236908: off, GAME +0xC bit 1)
+    case 0x1691B0: g_condset3.rgbaFog = uint32_t(v.n); AdjustRgba(&g_condset3.rgbaFog); return true;   // (then 0x236908: the 3-D mode's)
     case 0x1691E0:
     {
         float rgb[3];
@@ -116,6 +117,7 @@ bool FApplyCondSetOption3(const OPT& opt)
         uint32_t u = 0x80000000u;   // 0x11F288: each channel int(x x 255 + 0.5), alpha 0x80
         for (int i = 0; i < 3; ++i) u |= (uint32_t(int(rgb[i] * 255.0f + 0.5f)) & 0xFF) << (8 * i);
         g_condset3.rgbaFog = u;
+        AdjustRgba(&g_condset3.rgbaFog);   // (through 0x1691B0)
         return true;
     }
     case 0x1694D8:   // a condition more (the list +0xDC / +0xE0, unless it already matches)
@@ -130,6 +132,7 @@ void WorldShader3(float* prgbw)
     const CONDSET3& c = g_condset3;
     RgbFromHsv3(c.hsvWorld[0], c.hsvWorld[1] * K255, c.hsvWorld[2] * K255, prgbw);
     for (int i = 0; i < 3; ++i) prgbw[i] *= c.gWorldScale * K255;
+    DesaturateRgb3(prgbw);   // (0x2369D8: the 3-D mode's)
     prgbw[3] = c.gWorldAmbient * K255;
 }
 
@@ -160,6 +163,7 @@ bool FLoadCondSet3FromRam(const std::string& path, std::string& error)
     for (int i = 0; i < 3; ++i) c.hsvWorld[i] = f32(s + 0x60 + 4 * i);
     c.gWorldScale = f32(s + 0x70);
     c.gWorldAmbient = f32(s + 0x74);
+    c.gEyeFov = f32(s + 0x88);
     c.gDesaturate = f32(s + 0x8C);
     g_condset3 = c;
     g_nFilterCur3 = int32_t(u32(sly3::VA_WORLD_INDEX));

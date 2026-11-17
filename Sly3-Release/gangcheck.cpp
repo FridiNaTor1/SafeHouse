@@ -392,7 +392,7 @@ bool FImportGangStart(SW* psw, const std::string& pathRam, const std::string& pa
         SetAloGravity(palo, glm::vec3(r.V4(a + 0x80)));
         if (std::fabs(ps->m - r.G(a + 0xD0)) > 1e-6f) std::printf("gang-start: mass native %.6f ref %.6f\n", ps->m, r.G(a + 0xD0));
     }
-    SetStepPhysHeading(palo, r.G(A + 0x1A8));
+    SetStepPhysHeadingUnlocked(palo, r.G(A + 0x1A8));
     p->posFloor = r.V4(A + 0x230);  // (the floor point: a script's placement before the take-over moved it)
     p->uTurn = r.G(A + 0x180);
     p->vecVel = glm::vec3(r.V4(A + 0x190));
@@ -480,7 +480,7 @@ bool FImportGangStart(SW* psw, const std::string& pathRam, const std::string& pa
             }
             if (!q->fInWorld) AddLo(psw, q);
             SetStepPos(pq, glm::vec3(r.V4(aq + 0x230)) - glm::vec3(pq->vecBase));
-            SetStepPhysHeading(static_cast<ALO*>(q), r.G(aq + 0x1A8));
+            SetStepPhysHeadingUnlocked(static_cast<ALO*>(q), r.G(aq + 0x1A8));
             SetAloVelocityTo(static_cast<ALO*>(q), glm::vec3(0.0f));
             ImportCompanion(psw, pq, aq);
             std::printf("gang-start: player %d placed at its reference floor point %.2f %.2f %.2f\n", q->oid, r.G(aq + 0x230),

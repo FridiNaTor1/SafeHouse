@@ -56,6 +56,10 @@ struct TASK3
     // the canal run 2477: Bentley 25; v_ext's turf wars: Sly 24). StartTask 0x18A0D0 copies them to GAME +0x10 (0x1856E0)
     OID aoidPlayer[2] = {-1, -1};
     int fDoneAtOnce = 0;         // +0xC4 (1405)
+    float g68 = 0.0f;            // +0x68 (MISSION EOPID 1360): the checkpoint task's suck timer (0x185088)
+    bool fSuckRange = false;     // (EOPID 1403 loaded)
+    float lmSuck[2] = {240.0f, 360.0f};   // +0xB8 (1403; the defaults of the task's init 0x187E90): past its start
+                                 // the suck value rises by dt / its width
     LO* ploShown = nullptr;      // +0x70 (1407): in the world while the task is available and no job runs (0x188460)
     LO* ploExit = nullptr;       // +0xC8 (1406)
     LO* pscpt = nullptr;         // +0xCC (1408)
@@ -74,17 +78,24 @@ struct JOB3
     OID oid = -1;
     TASK3* ptaskFirst = nullptr; // +0x54 (1364)
     TASK3* ptaskLast = nullptr;  // +0x58 (1365)
+    TASK3* ptaskTarget = nullptr; // +0x5C (1366): its checkpoint-force task (0x186338 / 0x187270: SW +0x407C / +0x4080)
+    int n40 = 0;                 // +0x40 (1367): 2, the rewards reset its first task to 0 instead of closing its last
+    int idReward = -1;           // +0xF8 (1385): the power-up its rewards grant (0x21F5D0), -1 none
     int f6c = 0;                 // +0x6C (1361)
     int f70 = 0;                 // +0x70 (1362: the job survives the player's death, JobOnEvent 0x186730)
     int f7c = 0;                 // +0x7C
     LO* ploExit = nullptr;       // +0xC0 (1381): the exit fired when the job completes (JobCompleteClose 0x1874E8)
     int nMode = 0;               // +0xF0
     void* ploContext = nullptr;  // +0xF4
+    int idPowerupLent = -1;      // +0xF8 (EOPID 1385): a Sly 3 power-up id the job lends while it is current
+    TASK3* ptaskPowerup = nullptr; // +0xFC (1386): the task whose state (>= 2) makes the lent power-up owned
     // the job's end (jobend3.cpp: the state machine 0x1878E0 / 0x1875B0 keeps these per job)
     // the progress paths (kind 22 options): +0xD0 (EOPID 1389) the count +0x7C, +0xD8 (1390) "is_complete" (its last
     // task done: what the episode chooser reads), +0xE0 (1387) the float +0xA8
-    std::vector<int16_t> akeyCount, akeyDoneBool, akeyReal;
-    float gA8 = 0.0f;            // +0xA8
+    // (the paths: <job>.focus_count, <job>.is_complete, <job>.time_played; 1388 (+0xE8) <job>.suck_value, the dynamic
+    // difficulty's value (+0xAC points at it: game/suck3.cpp))
+    std::vector<int16_t> akeyCount, akeyDoneBool, akeyReal, akeySuck;
+    float gA8 = 0.0f;            // +0xA8 the time played (0x185088: while the pads are used)
     int nEnd = 0;                // +0xB8 its end state (0 none)
     float tEnd = 0.0f;           // +0xBC the time of its last change
     LO* pscptFail = nullptr;     // +0xC4 the failing script
@@ -144,6 +155,10 @@ void ApplyTaskSms3(SW* psw, TASK3* p, int n);
 struct GAMETASKS3
 {
     OID oidJob = -1, oidTask = -1, oidChk = -1;
+    // (orig3 0x189F38 leaves the current job current when the started task is one of its own: the next load's job key
+    // GAME +0x1498 is still that job. Natively the request deactivates it; this keeps its oid for the load's screen mode
+    // only (sw.cpp NScreenModeFromPrefix3: the pause menu's 3-D resets, a 3-D job's checkpoint restart); -1 none)
+    OID oidJobKept = -1;
     // GAME +0x10 / +0x14 (0x1856E0 / 0x185700): the players' characters, which the world start 0x25B9C0 adds and makes
     // the players (the others of the list 0x344050 removed); set by a task's start, -1 none
     OID aoidPlayer[2] = {-1, -1};
@@ -157,6 +172,14 @@ extern GAMETASKS3 g_gametasks3;
 // 0x189DF8: message 0x14 {code, object}), the listeners of 0x479B98 (the class 0x93 objects: message 0x14), the current
 // job (JobOnEvent 0x186730), 0x2849A8 (a challenge's: none natively). Codes are Sly 3's (Code3FromCode2 for the copied Sly 2 callers).
 void Broadcast3(int code, LO* plo);
+// orig3: 0x25BDD0's task part (the in-place world reset, transition.cpp): the active task and the current job
+// deactivated in mode 2 (not saved), the game's keys GAME +0x1498..+0x14A0 kept, every task to -1 (mode 2), then the
+// queue's dispatch mode 0 (0x189118); the world start's StartTasks3 restores them as after a load
+void ResetTasksInPlace3();
+// orig3: 0x189F38's test for a start in the loaded world: no flag 2 (a reload) when the task's job is the current one or
+// its screen mode (0x186200: the job's +0x40) is the world's, and, in a world with two or more option blocks
+// (SW +0x42D4), the task's condition (+0xC0, EOPID 1404; its job's +0x4C, 1369, first) is the chosen one
+bool FTaskStartInPlace3(OID oidTask);
 // The Sly 3 broadcast code of a Sly 2 one (tools/s3script/bcastmap3.py: the callers paired by the function map;
 // -1: none)
 int Code3FromCode2(int code2);
@@ -166,6 +189,7 @@ void StartTasks3();
 // (a chooser's game: the job's switch and the task's activation of the world start, after the players' placement:
 // orig3 0x25C2A8's 0x184B60 after 0x25B9C0; transition.cpp)
 void ActivateTasksAtStart3();
+bool FActivateTasksPending3();   // (StartTasks3 left the activation for ActivateTasksAtStart3)
 // orig3: 0x189E70 RequestTaskStartByOid: a task of this world started now (0x189F38), else queued for the world the
 // caller loads (false: not in this world)
 bool FRequestTaskStartByOid3(OID oidTask);
@@ -198,6 +222,10 @@ void JobFromProgress3();
 // orig3: 0x188A38 FTaskDoneJh (EOPID 1395) / 0x187CD0 the job's last task done (1374)
 bool FTaskDone3(const TASK3* p);
 bool FJobDone3(const JOB3* p);
+// orig3: 0x21F410's mission branch: the current job (SW +0x4044, else the one of the key GAME +0x1498) lends the Sly 3
+// power-up id3 (job +0xF8, EOPID 1385): 1 / 0 its task +0xFC (1386) in state >= 2 or not (unloaded: the saved state);
+// -1 when no current job lends id3 (then the progress' mppukfAcquired answers)
+int NJobLentPowerup3(int id3);
 bool FIsTaskCurrent(const TASK3* p);
 bool FIsJobCurrent(const JOB3* p);
 // orig3: 0x1878E0's start: the job's exit task (+0xB4): its last task's first successor with an exit whose other

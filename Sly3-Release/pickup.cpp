@@ -6,6 +6,7 @@
 #include "worldglobals.h"
 
 #include "activate.h"
+#include "guard.h"
 #include "alo.h"
 #include "clock.h"
 #include "cls.h"
@@ -102,6 +103,10 @@ void ShowCoinCounter()
 }
 void ShowClueCounter() { ShowCounter(0x36E); }
 
+void TakePickupPlane3(LO* pso, LO* ppickup);   // game/biplane3.cpp
+void TakePickupShip3(LO* pso, LO* ppickup);    // game/ship3.cpp
+void TakePickupRcCar3(LO* pso, LO* ppickup);   // game/rccar3.cpp
+
 namespace
 {
 
@@ -153,14 +158,15 @@ bool FActorTakesCharm(ACTOR* pa)
     if (!f) return false;
     return NDamageStatus(pa) != 2;
 }
-// orig: 0x00144268 (the players' slot 81): the splice event 0xC with (a, b) (0x1C4228), health + a up to +0xDFC,
+// orig: 0x00144268 (the players' slot 81; orig3 0x1567E8 -> 0x1F48A0): the splice event 0xF (Sly 2's 0xC; Sly 3's 0xC
+// is the hit) with (a, b), health + a up to +0xDFC,
 // power + b up to +0x1300
 void HealActor(ACTOR* pa, int a, int b)
 {
     CRef aref[2];
     aref[0].SetS32(a);
     aref[1].SetS32(b);
-    HandleLoSpliceEvent(pa->palo, 0xC, false, 2, aref);
+    HandleLoSpliceEvent(pa->palo, 0xF, false, 2, aref);
     if (int* pc = DmgCounterOf(pa)) *pc = std::min(DmgCapacityOf(pa), *pc + a);  // 0x144188
     SetActorPower(pa, NActorPower(pa) + b);                                    // 0x1441C0 / 0x1441A0
 }
@@ -240,6 +246,8 @@ struct PICKUP
     LO* ploExpire = nullptr;      // +0x218 (+0x214: timed expiry's message receiver)
     LO* ppeCollect = nullptr;     // orig3 +0x194: the effect started on collection
     LO* ppeExpire = nullptr;      // orig3 +0x198: the effect started at the timed expiry
+    LO* ploCollector = nullptr;   // orig3 +0x16C: who collected it (0x1F7700: the touching SO, or at the timed expiry the
+                                  // current player 0x1F4AD0(G, 0))
     int fSidePrev = 0;            // +0x1BC
     float tGlint = -1e9f;         // +0x1C0
     bool fWritten = false;        // (natively: the record's local translation last written by the motion, to notice
@@ -556,10 +564,33 @@ void SetPrizeState(LO* plo, PICKUP& p, int n)
 // orig: 0x001C7EE8 (0x5F, the clue bottle: collected: the +0x210's message or the sound 0x29, the noise 0x156B98,
 // the splice event 5; from a bottle proxy (cid 7): the world's afClue +0x100 set (0x1C7C30), the proxy removed,
 // the HUD's count shown (0x1618B0); gone)
+// (Sly 3) the collector's vt slot 88 with the pickup (orig3: the pickups' state 1, e.g. 0x1F91C0 / 0x1F92E0 / the charm's
+// 0x1F7DC0; the SO's own 0x1F48F8 does nothing): the planes' ammunition from class 0x6B (0x141810), the ships' repairs
+// from class 0x6C (0x215248), the RC car's hit points from the charms 0x69 (0x208030) (MODES-13 / 14 / 21)
+LO* PloPickupCollector3(PICKUP& p) { return p.ploCollector ? p.ploCollector : g_psw ? PloPoCurrent(g_psw) : nullptr; }
+void GivePickupToCollector3(LO* plo, PICKUP& p)
+{
+    LO* pso = PloPickupCollector3(p);
+    if (!pso || pso == plo) return;
+    TakePickupPlane3(pso, plo);
+    TakePickupShip3(pso, plo);
+    TakePickupRcCar3(pso, plo);
+    if (FPrint()) std::printf("pickup %d: given to %d (cid 0x%X)\n", plo->oid, pso->oid, pso->Cid());
+}
+
 void SetClueState(LO* plo, PICKUP& p, int n)
 {
     if (p.state == n) return;
-    if (n == 1)
+    if (n == 1 && !FCidDerivedFrom(PproxyOfInstance(plo) ? PproxyOfInstance(plo)->Cid() : 0, S3CID(7)))
+    {
+        // orig3 0x1F91C0 (Sly 3's class 0x6B, e.g. world 21's plane ammunition: no bottle proxy): the collector's slot 88,
+        // the effect +0x194, the splice event 5, gone (no sound, no noise)
+        GivePickupToCollector3(plo, p);
+        StartPickupPe(p.ppeCollect);
+        HandleLoSpliceEvent(plo, 5, false, 0, nullptr);
+        n = 2;
+    }
+    else if (n == 1)
     {
         StartPickupPe(p.ppeCollect);  // orig3 +0x194
         if (p.ploCollect)
@@ -612,8 +643,33 @@ void SetOtherPickupState(LO* plo, PICKUP& p, int n)
         if (FIsLoDerivedFrom(plo, S3CID(0x5D)))
         {
             // orig: 0x001C68F0 case 1: the current player (0x1C4840) takes it only when its slot 80 (0x144090) allows
-            ACTOR* pa = PactorFromLo(PloPoCurrent(g_psw));
-            if (!pa || !FActorTakesCharm(pa)) { n = p.state; break; }
+            // (orig3 0x1F7DC0: the collector +0x16C's slot 86; a plain SO's (0x1F4830) asks its splice (default yes),
+            // then its slot 88 (the RC car's hit points 0x208030))
+            ACTOR* pa = PactorFromLo(PloPickupCollector3(p));
+            if (!pa)
+            {
+                LO* pso = PloPickupCollector3(p);
+                if (!pso || !FCidDerivedFrom(pso->Cid(), sly3::CID_SO)) { n = p.state; break; }
+                GivePickupToCollector3(plo, p);
+                // (then the collector's slot 87 with +0x1AC / +0x1B0: Carmelita's 0x15F740 (s3fix-ai3, AUDIT4 AI-14): the
+                // splice event 0xF (a, b), her health +0x16C + a within 0..+0x170 (natively n33C / n338); her +0x174 (+ b
+                // within +0x178) has no native field)
+                if (FCidDerivedFrom(pso->Cid(), sly3::CID_CARMELITA))
+                    if (GUARD* pg = PguardFromLo(pso))
+                    {
+                        const int a = static_cast<int>(plo->U32Field(0, 0x23C, 10)), b = static_cast<int>(plo->U32Field(0, 0x240, 20));
+                        CRef aref[2];
+                        aref[0].SetS32(a);
+                        aref[1].SetS32(b);
+                        HandleLoSpliceEvent(pso, 0xF, false, 2, aref);
+                        pg->n33C = std::max(0, std::min(pg->n338, pg->n33C + a));
+                    }
+                StartPickupPe(p.ppeCollect);
+                HandleLoSpliceEvent(plo, 5, false, 0, nullptr);
+                n = 2;
+                break;
+            }
+            if (!FActorTakesCharm(pa)) { n = p.state; break; }
             // the flight to the health meter (0x1CE888(G, 9, 0), +0xF0 D_002C0E10, its arrival 0x1C6AB0 does nothing)
             ALO* palo = static_cast<ALO*>(plo);
             UpdateAloXfWorlds(palo);
@@ -629,6 +685,12 @@ void SetOtherPickupState(LO* plo, PICKUP& p, int n)
                 ExplodeLo(p.ploCollect, &bp);  // +0x210's slot 51 {1, the pickup}
             }
             if (FPrint()) std::printf("pickup %d: the charm taken\n", plo->oid);
+        }
+        else if (plo->Cid() == 0x6C)
+        {
+            // orig3 0x1F92E0 (Sly 3's class 0x6C, world 32's ship repairs): the collector's slot 88, the effect
+            GivePickupToCollector3(plo, p);
+            StartPickupPe(p.ppeCollect);
         }
         else if (p.iloot >= 0 && p.iloot < static_cast<int>(p.aloot.size()))
         {
@@ -777,11 +839,16 @@ void TestPickupCollect(LO* plo, PICKUP& p)
     if (!p.fCollectTimed) return;
     if (p.tCollect < g_clock.t)
     {
+        p.ploCollector = PloPoCurrent(g_psw);
         SetPickupState(plo, 1);
         return;
     }
     // the players (0x1C4BD8: the current one; the other players of the gang in the world: TODO), then 0x1C5B20
-    if (FPickupTouched(plo, p, PloPoCurrent(g_psw))) SetPickupState(plo, 1);
+    if (FPickupTouched(plo, p, PloPoCurrent(g_psw)))
+    {
+        p.ploCollector = PloPoCurrent(g_psw);
+        SetPickupState(plo, 1);
+    }
 }
 
 // orig: 0x001C6308 (the glint: the pickup's (1, 1, 0) in its frame (0x1A6FC0) against the camera's left (CM +0x70);
@@ -1144,9 +1211,9 @@ bool FFindPickupFloor(const glm::vec3& pos, std::vector<SOE*>* papsoe, float gDo
 int CpickupInstances(int cid, int n, std::vector<LO*>* paplo)
 {
     // orig3: 0x1F8280 (coins 0x67: the proxy 0x30A, none while the player is Carmelita 0x3C; charms 0x69: 0x30B; Sly 2's
-    // 0x2B3 / 0x2B4). The callers name the kinds by Sly 2's ids (0x5B / 0x5D) or Sly 3's: both are taken. (Before,
-    // the Sly 2 id was compared with its Sly 3 class and no breakable, guard or bird dropped anything.)
-    const bool fCoin = cid == 0x5B || cid == S3CID(0x5B), fCharm = cid == 0x5D || cid == S3CID(0x5D);
+    // 0x2B3 / 0x2B4). The callers name the kinds by Sly 3's ids (S3CID(0x5B) / S3CID(0x5D)); the raw Sly 2 ids are not
+    // taken any more (raw 0x5D is Sly 3's PAD: AUDIT4 PLAYER-15)
+    const bool fCoin = cid == S3CID(0x5B), fCharm = cid == S3CID(0x5D);
     LO* ppo = PloPoCurrent(g_psw);
     if (fCoin && ppo && FIsLoDerivedFrom(ppo, S3CID(0x3F))) return 0;
     const OID oid = fCoin ? 0x30A : fCharm ? 0x30B : -1;
@@ -1261,8 +1328,8 @@ void DropPickups(const glm::vec3& pos, int n, int dn, LO* psrc)
     s_cCharm += dn;
     if (n < 0) n = s_cCoin <= 0 ? NRandDrop(s_atbl[0], s_atbl[1]) : NRandDrop(s_atbl[2], s_atbl[3]);
     if (FPrint()) std::printf("drops: %d coins (counters %d / %d)\n", n, s_cCoin, s_cCharm);
-    if (n > 0) SpawnPickups(0x5B, pos, psrc, n);
-    if (s_cCharm <= 0) SpawnPickups(0x5D, pos, psrc, 1);
+    if (n > 0) SpawnPickups(S3CID(0x5B), pos, psrc, n);
+    if (s_cCharm <= 0) SpawnPickups(S3CID(0x5D), pos, psrc, 1);
 }
 
 namespace
@@ -1398,3 +1465,5 @@ int IlootIndexOfPickup(LO* plo)
     const PICKUP* p = plo ? Ppickup(plo) : nullptr;
     return p && p->iloot >= 0 && p->iloot < static_cast<int>(p->aloot.size()) ? p->aloot[p->iloot].index : -1;
 }
+
+void AddCoins3(int n) { SetCoins(std::clamp(CCoins() + n, 0, 9999)); }   // (orig3 0x185328(G, 0x1852E0(G) + n): ship3.cpp)

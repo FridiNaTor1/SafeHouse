@@ -141,6 +141,9 @@ void InitVtMap3()
     // (s3-player round 21) Penelope 0x39 (vtable 0x35F0F8, 121 slots, the same layout as the Guru's: the base's functions in
     // the same slots, her own where he has his) likewise; her own are natives by their Sly 3 address (game/guru3.cpp)
     if (sly3::CID_PENELOPE < CID_Max && sly3::CID_BENTLEY < CID_Max) a[sly3::CID_PENELOPE] = a[sly3::CID_BENTLEY];
+    // (AUDIT4 PLAYER-01) the Panda King 0x38 (vtable 0x35E930, 121 slots: the Guru's layout word by word, the base's
+    // functions in the same slots, his own where the Guru has his, plus 31 / 102 / 111) likewise (game/guru3.cpp)
+    if (sly3::CID_PANDA_KING < CID_Max && sly3::CID_BENTLEY < CID_Max) a[sly3::CID_PANDA_KING] = a[sly3::CID_BENTLEY];
     // (s3-player round 18) Murray 0x35's slot 89 (the jump kind) is his Sly 3 slot 100 (vtable 0x35DC50 +0x320 =
     // 0x1E08F8, next to slot 88 = 99 = 0x1E0770, as Bentley's 0x13F040 / 0x13F128): gen_vtslots.py left it out
     if (sly3::CID_MURRAY < CID_Max && a[sly3::CID_MURRAY][89] < 0) a[sly3::CID_MURRAY][89] = 100;

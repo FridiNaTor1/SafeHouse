@@ -26,6 +26,8 @@
 #include "game/suck3.h"
 #include "sw.h"
 #include "po.h"
+void NoteGuardFlinch3(const LO* plo);   // scenesw.cpp (orig3 STEPGUARD +0x380)
+
 namespace
 {
 // orig3 0x172268 (D_0036BD20's row +0x20 / +0x24: 1 / 0.5): a player's object (here: the current player) takes the
@@ -158,7 +160,10 @@ bool FAcceptContactGuard(ALO* palo, CTMSG* pctm)
     // 0x6B's A3) of any kind but none / 1 / the dart 0x80000 / 0x100000 knocks out at once (health 0, flags 0x10), past
     // the owner / kind / shield tests. (Not ported: the guard's own two cases, a class-0x71 sender in its state 6 aimed
     // at it, a class-0x72 sender in the guard states 5 / 6 / 0x23)
-    const bool fFatal = (pctm->nKill3 || pctm->fKill3) && kind > 1 && kind != 0x80000 && kind != 0x100000;
+    bool fFatal = (pctm->nKill3 || pctm->fKill3) && kind > 1 && kind != 0x80000 && kind != 0x100000;
+    // (s3fix-ai2, audit4 AI-14) Carmelita's slot 97 (orig3 0x15F650): the fatal hit only while she has the state 0x42
+    // (a pad drives her: aicarm3.h); as a plain guard she takes it as a hit
+    if (fFatal && FCidDerivedFrom(palo->Cid(), 0x3C) && !FGuardState(pg, IstateGuard2FromIstate3(0x42))) fFatal = false;
     if (fFatal)
     {
         pg->n33C = 0;
@@ -225,7 +230,12 @@ bool FAcceptContactGuard(ALO* palo, CTMSG* pctm)
         grf2 = fPlain ? 0x20 : 0xA0;
     }
     else if (grf & 8) grf2 = 0x20;
-    else return (grf & 4) != 0;  // TODO(ai): the flinch's clip (+0x... 0x137588) and broadcast 0xF
+    else
+    {
+        // (orig3 0x2523E8: the flinch's time +0x380, read by the draw 0x252508's size pulse: scenesw.cpp)
+        if (grf & 4) ::NoteGuardFlinch3(palo);
+        return (grf & 4) != 0;  // TODO(ai): the flinch's clip (+0x... 0x137588) and broadcast 0xF
+    }
     CTMSG m = *pctm;
     m.grfAccepted = grf2;
     m.nState = 0;

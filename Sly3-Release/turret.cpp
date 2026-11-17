@@ -317,19 +317,19 @@ void PostLoadTurret(LO* plo)
         const OPTVAL& v = o.aval[0];
         switch (o.eopid)
         {
-        case 997: t.ptarget = PloOptObject(plo, v); break;
-        case 998: t.fFollow = v.n; break;
-        case 999: t.fAim = v.n; break;
-        case 1000: t.lm19C = {v.ag[0], v.ag[1]}; break;
-        case 1001: t.lm1A4 = {v.ag[0], v.ag[1]}; break;
-        case 1002: t.ppool = PloOptObject(plo, v); break;
-        case 1003: t.plaunch = PloOptObject(plo, v); break;
-        case 1005: t.radPan = v.ag[0]; break;
-        case 1006: t.radTilt = v.ag[0]; break;
-        case 1007: t.fRotate = v.n; break;
-        case 1008: t.pmount = PloOptObject(plo, v); break;
-        case 1009: t.fSmooth = v.n; break;
-        case 1010: t.lmFov = {v.ag[0], v.ag[1]}; break;
+        case S3EOPID(997): t.ptarget = PloOptObject(plo, v); break;
+        case S3EOPID(998): t.fFollow = v.n; break;
+        case S3EOPID(999): t.fAim = v.n; break;
+        case S3EOPID(1000): t.lm19C = {v.ag[0], v.ag[1]}; break;
+        case S3EOPID(1001): t.lm1A4 = {v.ag[0], v.ag[1]}; break;
+        case S3EOPID(1002): t.ppool = PloOptObject(plo, v); break;
+        case S3EOPID(1003): t.plaunch = PloOptObject(plo, v); break;
+        case S3EOPID(1005): t.radPan = v.ag[0]; break;
+        case S3EOPID(1006): t.radTilt = v.ag[0]; break;
+        case S3EOPID(1007): t.fRotate = v.n; break;
+        case S3EOPID(1008): t.pmount = PloOptObject(plo, v); break;
+        case S3EOPID(1009): t.fSmooth = v.n; break;
+        case S3EOPID(1010): t.lmFov = {v.ag[0], v.ag[1]}; break;
         default: break;
         }
     }

@@ -210,7 +210,7 @@ void UpdatePad(LO* plo)
     {
     case 2:
         // orig: 0x148C98: this hold test applies to every pad kind.
-        if (SLY* sly = PslyGlobal(); sly && sly->state == 3 && sly->ploOther == p.ploAction) p.tState = g_clock.t;
+        if (SLY* sly = PslyGlobal(); sly && sly->jts == jts::Hang && sly->ploOther == p.ploAction) p.tState = g_clock.t;
         if (0.0f <= p.dtRearm && p.dtRearm < g_clock.t - p.tState) SetPadState(plo, p, 4);
         break;
     case 4:
@@ -251,7 +251,7 @@ void UpdatePad(LO* plo)
         else if (p.kind == 3)
         {
             SLY* sly = PslyGlobal();
-            k = sly && sly->state == 3 && sly->ploOther == p.ploAction ? 1 : 0;
+            k = sly && sly->jts == jts::Hang && sly->ploOther == p.ploAction ? 1 : 0;
         }
         SetPadState(plo, p, k);
         break;

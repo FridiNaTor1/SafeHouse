@@ -86,7 +86,7 @@ void RefreshSwPhysWorld(SW* psw)
         if (FAloStep(palo) && PxfObj(palo))
         {
             const glm::mat4& m = PxfObj(palo)->matWorld;
-            SetStepPhysHeading(palo, std::atan2(m[0][1], m[0][0]));
+            SetStepPhysHeadingUnlocked(palo, std::atan2(m[0][1], m[0][0]));
         }
         if (palo->asoe.empty()) continue;
         CopyAloSoeMatrices(palo);

@@ -33,7 +33,8 @@ struct CONDSET3
     float hsvWorld[3] = {210.0f, 150.0f, 100.0f};
     float gWorldScale = 60.0f;       // +0x70
     float gWorldAmbient = 35.0f;     // +0x74
-    float gDesaturate = 0.0f;        // +0x8C (0x2369D8's amount, used only when GAME +0xC bit 1)
+    float gEyeFov = 165.0f;          // +0x88 (0x1662C0: the 3-D eyes' shift = convergence x fov / this; 0x168FE0's 165)
+    float gDesaturate = 0.5f;        // +0x8C (0x2369D8's amount, used only when GAME +0xC bit 1; 0x168FE0's 0.5)
 };
 
 extern CONDSET3 g_condset3;

@@ -823,6 +823,18 @@ void DetachAloBase27(LO* plo, LO* pproxy)
             if (PFN27 pfn = reinterpret_cast<PFN27>(PvNativeVt(pc, 27))) pfn(pc, pproxy);
 }
 NATIVEFN(0x1CB5D0, DetachAloBase27);
+// orig3: 0x1F3C80 (SO's own vt slot 32, Sly 2's slot 27, inherited by the Sly 3-only SO classes, e.g. 0x4C / 0x52):
+// the ALO base's (0x1FCB20: DetachAloBase27 natively), then 0x1F4DD8(p, 0, -1, 0): the last hitter record +0x184 /
+// +0x188 / +0x18C cleared (audit 4 CORE-16)
+void DetachSoBase32(LO* plo, LO* pproxy)
+{
+    DetachAloBase27(plo, pproxy);
+    if (!plo) return;
+    plo->SetField(0, 0x184, 0);
+    plo->SetField(0, 0x188, 0xFFFFFFFFu);
+    plo->SetField(0, 0x18C, 0);
+}
+NATIVEFN3(0x1F3C80, DetachSoBase32);
 namespace
 {
 
@@ -1371,6 +1383,18 @@ void LockProxyRowOf(SW* psw, LO* pproxy, LO* plo, bool fLock)
     we.afRowLocked[i] = fLock ? 1 : 0;
 }
 void UnlockProxyRowOf(SW* psw, LO* pproxy, LO* plo) { LockProxyRowOf(psw, pproxy, plo, false); }
+// orig3 0x1FC7D0 (a PROXY's slot 30 at the in-place world reset 0x1FC6A0, transition.cpp / game/worldreset3.cpp): its
+// attached rows that are not held (the node's +8) detached (0x1FB710), the pooled objects given back; then its slot 32
+void DetachProxyRowsInPlace3(SW* psw, LO* pproxy)
+{
+    if (!psw || !pproxy) return;
+    auto it = psw->mpproxy.find(pproxy);
+    if (it == psw->mpproxy.end() || it->second.iwe < 0 || it->second.iwe >= static_cast<int>(psw->awe.size())) return;
+    WE& we = psw->awe[it->second.iwe];
+    EnsureRows(we);
+    for (int irow : std::vector<int>(it->second.airow))
+        if (irow >= 0 && irow < static_cast<int>(we.afRowLocked.size()) && !we.afRowLocked[irow]) DetachProxy(psw, pproxy, irow);
+}
 // (Sly 3's script command 0x70, 0x1FC0E0) the proxy's instance plo given back: its row detached (0x1CAA60)
 void ReleaseProxyObject(SW* psw, LO* pproxy, LO* plo)
 {

@@ -7,6 +7,7 @@
 #include "smrun.h"
 #include "combo3.h"
 #include "game/items3.h"
+#include "game/task3.h"
 #include "gadget.h"
 #include "game/treasuremap3.h"
 #include "game/sly3.h"
@@ -200,7 +201,7 @@ SLY::POCKET* PpocketSly(SLY* p, int id)
 bool FSlyCanDo(SLY* p, int n)
 {
     if (static_cast<unsigned>(p->nF04) < 3) return false;  // 0x1443D8 (the binocucom)
-    const int st = p->state;
+    const int st = p->jts;
     // orig3 0x1AF308 case 0x22 (Shadow Power Level 2): not in Sly 3's state 5 (the native's 4, as Thief Reflexes)
     // orig3 0x1AF308: a worn disguise (+0x1108 busy) allows only the disguises (and the action 3)
     const bool fDisguise = n >= sly3::ITEM2_SLY3 + 38 && n <= sly3::ITEM2_SLY3 + 40;
@@ -214,13 +215,13 @@ bool FSlyCanDo(SLY* p, int n)
     if (n == sly3::ITEM2_SLY3 + 36 && (!PloTreasureMap3() || PloMapHolder3())) return false;
     // orig3 0x1AF308 case 0x23 (Rocket Boots): held in Sly 3's state 19 (the native 24), else not airborne (0x2503C8)
     if (n == sly3::ITEM2_SLY3 + 35)
-        return st == 24 || (p->pxpFloor && (st == 0 || st == 1 || st == 5 || st == 10 || st == 12));
-    if (n == sly3::ITEM2_SLY3 + 34 || n == sly3::ITEM2_SLY3 + 37) return st != 4;   // (0x22 / 0x25)
+        return st == jts::Boots || (p->pxpFloor && (st == jts::Stand || st == jts::Walk || st == jts::Target || st == jts::Sneak || st == jts::Run));
+    if (n == sly3::ITEM2_SLY3 + 34 || n == sly3::ITEM2_SLY3 + 37) return st != jts::Damage;   // (0x22 / 0x25)
     // orig3 0x1AF308: Smoke Bomb / Knockout Dive are combos in Sly 3 (their definition there and none playing)
     if (n == 23 || n == 33) return st < 0x18 && sly3::FAbilityCombo3Ready(p, sly3::Item3FromItem2(n));
     if (n == 0x1D || n == 0x2A)
     {
-        if (st == 4) return false;
+        if (st == jts::Damage) return false;
         const float g = g_clock.af[1];   // (the clock's factor 1, +0x1C)
         if (g == 1.0f) return true;
         // (orig3 0x1AF308 case 0x21 / 0x1AF6C0: Thief Reflexes' factor is the literal 0.25; the mapped Sly 2 constant
@@ -230,9 +231,9 @@ bool FSlyCanDo(SLY* p, int n)
     if (static_cast<unsigned>(st) >= 0x18) return false;
     switch (st)
     {
-    case 0: case 1: case 5: case 10: case 12: break;
-    case 2: WarnOnce("0x19C8D0 (the jump's slot 99, a gadget in the air)"); return false;
-    case 7:
+    case jts::Stand: case jts::Walk: case jts::Target: case jts::Sneak: case jts::Run: break;
+    case jts::Jump: WarnOnce("0x19C8D0 (the jump's slot 99, a gadget in the air)"); return false;
+    case jts::Interact:
         // orig: 0x194558: interaction permissions precede the item's own state gates.
         // Binocucom (3) is not an assignable gadget; its camera permission remains with that subsystem.
         if (n == 3) return false;
@@ -243,9 +244,9 @@ bool FSlyCanDo(SLY* p, int n)
         default: break;
         }
         break;
-    case 8: WarnOnce("0x19EEF0 (+0xF50's slot 99, a gadget)"); return false;
-    case 3: if (n != 3) return false; break;
-    case 23:
+    case jts::Climb: WarnOnce("0x19EEF0 (+0xF50's slot 99, a gadget)"); return false;
+    case jts::Hang: if (n != 3) return false; break;
+    case jts::Throw:
         // orig: 0x18D760: aiming permits only the currently selected item.
         if ((n == 26 || n == 37 || n == 38 || n == 41) && static_cast<unsigned>(p->jtthrow.state - 4) < 3)
             if (const CARRY* carry = PcarryFromLo(p->jtthrow.selected)) return carry->kind == n;
@@ -258,8 +259,8 @@ bool FSlyCanDo(SLY* p, int n)
     case 23:  // orig: 0x18D760 / 0x1CB2C0, retained/free proxy row at threshold 2
         if (LO* proxy = PloSlyPart(p, 0x2010)) return PloProxyFreeRow(g_psw, proxy, 2) != nullptr;
         return false;
-    case 24: return st == 5;
-    case 27: return st == 2;
+    case 24: return st == jts::Target;
+    case 27: return st == jts::Jump;
     case 26: case 37: case 38: case 41:  // orig: 0x18D760 (0x1A / 0x25 / 0x26 / 0x29: the pockets)
     {
         SLY::POCKET* pocket = PpocketSly(p, n);
@@ -273,7 +274,7 @@ bool FSlyCanDo(SLY* p, int n)
     }
     case 40:
         if (p->f1D30 || p->n10EC == 4 || p->mode != -1) return false;
-        return st == 0 || st == 1 || st == 10 || st == 12;
+        return st == jts::Stand || st == jts::Walk || st == jts::Sneak || st == jts::Run;
     default: return false;
     }
 }
@@ -318,7 +319,9 @@ void StartAbility(ACTOR* pa, int n)
     {
         // orig3 0x1AF890 case 0x24, the Treasure Map: JT +0x1F20 = 0x279C28(), Sly's state 0x18 substate 8 (0x1ADDD0),
         // whose entry holds the map up (0x279120; game/treasuremap3.cpp: natively the map mode holds Sly's pad)
-        if (!FHoldTreasureMap3(pa->palo)) WarnOnce("Sly 3's treasure map: no usable class-0x99 object here");
+        if (!PloTreasureMap3()) { WarnOnce("Sly 3's treasure map: no usable class-0x99 object here"); return; }
+        // (s3fix-modes3: Sly's own state 0x18 substate 8, entered as 0x1ADDD0 does: its entry 0x279120 holds the map up)
+        SetSlyState(static_cast<SLY*>(dynamic_cast<SLY*>(pa)), jts::Map, jts::SubMapUp);
         return;
     }
     if (n == sly3::ITEM2_SLY3 + 35)
@@ -327,7 +330,7 @@ void StartAbility(ACTOR* pa, int n)
             // orig3 0x1AF6C0 case 0x23, Rocket Boots: the power spent, Sly's state 19 substate 6 (0x1ADDD0): natively
             // Sly 2's Stealth Slide state 24 / 12, its Sly 3 changes marked in sly.cpp
             SpendActorPower(pa, n);
-            SetSlyState(p, 24, 12);
+            SetSlyState(p, jts::Boots, jts::SubBootsCharge);
             return;
         }
     if (n >= sly3::ITEM2_SLY3 + 38 && n <= sly3::ITEM2_SLY3 + 40 && dynamic_cast<SLY*>(pa))
@@ -389,7 +392,7 @@ void StartAbility(ACTOR* pa, int n)
             // 0x224610's persistent carrier/listener path is for kinds7/11 only.
             p->jtthrow.selected = selected;
             (void)GrfAbilityButton(p, n);  // 0x141EA8 is a pure mask lookup
-            SetSlyState(p, 23, -1);
+            SetSlyState(p, jts::Throw, -1);
             SetJtThrowState(p, 4);
             return;
         }
@@ -399,7 +402,7 @@ void StartAbility(ACTOR* pa, int n)
             return;
         case 33:  // orig: 0x18DA48, Knockout Dive
             SpendActorPower(p, n);
-            SetSlyState(p, 9, -1);
+            SetSlyState(p, jts::N2Rush, -1);
             return;
         case 34: case 35:  // orig: 0x18DA48; activation waits for event 0x27C
             p->n9BC = n;
@@ -408,15 +411,15 @@ void StartAbility(ACTOR* pa, int n)
             return;
         case 24:  // Combat Dodge, original 0x18DA48
             SpendActorPower(p, n);
-            SetSlyState(p, 6, -1);
+            SetSlyState(p, jts::Dodge, -1);
             return;
         case 39:  // Lightning Spin, original 0x18DA48 (case 0x27): the charged strike's substate 9 (clip +0x1FE8)
             SpendActorPower(p, n);
-            SetSlyState(p, 5, 9);
+            SetSlyState(p, jts::Target, jts::SubN2StrikeUp);
             return;
         case 25:  // Stealth Slide, original 0x18DA48 (case 0x18DC88)
             SpendActorPower(p, n);
-            SetSlyState(p, 24, 12);
+            SetSlyState(p, jts::Boots, jts::SubBootsCharge);
             return;
         case 40:  // Shadow Power, original 0x18DA48
             SpendActorPower(p, n);
@@ -461,7 +464,7 @@ void EndAbility(ACTOR* pa, int n)
     if (n == sly3::ITEM2_SLY3 + 34) { AbOf(pa).fShadow2 = false; return; }   // orig3 0x1AF990 case 0x22
     if (n == sly3::ITEM2_SLY3 + 35)   // orig3 0x1AF990 case 0x23: still in state 19 (the native 24): the jump kind 11
     {
-        if (SLY* p = dynamic_cast<SLY*>(pa); p && p->state == 24) SetJumpKind(&p->jump, 11, 0, 0);
+        if (SLY* p = dynamic_cast<SLY*>(pa); p && p->jts == 19) SetJumpKind(&p->jump, 11, 0, 0);
         return;
     }
     if (!dynamic_cast<SLY*>(pa) || (n != 0x1D && n != 0x2A)) return;
@@ -524,17 +527,19 @@ bool FShieldBlocks3(ACTOR* pa, int kind)
     return true;
 }
 
+// orig3: 0x21F410 (ids >= 0x43 never; a power-up the current job lends: its task's state, task3.h NJobLentPowerup3)
 bool FPowerupOwned(int id)
 {
     const int id3 = sly3::Item3FromItem2(id);   // (the progress keeps Sly 3's ids)
-    if (id3 < 0) return false;
+    if (id3 < 0 || id3 >= 0x43) return false;
+    if (const int n = NJobLentPowerup3(id3); n != -1) return n != 0;   // (the job's lent power-up: its task done)
     const CRef r = RefGetProgress({"powerUps", "mppukfAcquired", std::to_string(id3)});
     return r.m_tagk == TAGK_S32 ? r.m_n != 0 : r.m_tagk == TAGK_Bool ? r.m_bool != 0 : false;
 }
 
 void StartActorAbility(ACTOR* pa, int id) { StartAbility(pa, id); }
 
-// orig: 0x140F90 event 0x27C, cane ability branch. The caller checks the ASEGA owner.
+// orig: part of 0x140F90 (event 0x27C), cane ability branch. The caller checks the ASEGA owner.
 bool ReleaseCaneAbility(ACTOR* pa)
 {
     if (pa->n4C8 != 11) return false;
@@ -599,7 +604,7 @@ struct INITTIMELOCK
 } s_inittimelock;
 }
 
-// orig: 0x140F90 event 0x27C, Temporal Lock branch (case 0xE: 0x141CD0 spend, then 0x19F170(G, 1)). The caller checks
+// orig: part of 0x140F90 (event 0x27C), Temporal Lock branch (case 0xE: 0x141CD0 spend, then 0x19F170(G, 1)). The caller checks
 // the ASEGA owner.
 bool ReleaseTimeLock(ACTOR* pa)
 {
@@ -612,7 +617,7 @@ bool ReleaseTimeLock(ACTOR* pa)
     return true;
 }
 
-// orig: 0x140F90 event 0x27C, Guttural Roar branch (case 0x15: 0x141CD0 spend, then 0x19F220(G, 0x15): every guard
+// orig: part of 0x140F90 (event 0x27C), Guttural Roar branch (case 0x15: 0x141CD0 spend, then 0x19F220(G, 0x15): every guard
 // (0x15E9C8 kind 0x105, class 0x38) put in mode 0x15 by 0x207030). The caller checks the ASEGA owner.
 bool ReleaseRoar(ACTOR* pa)
 {
@@ -628,7 +633,7 @@ bool ReleaseRoar(ACTOR* pa)
     return true;
 }
 
-// orig: 0x140F90 event 0x27C, Smoke Bomb branch. The caller checks the ASEGA owner.
+// orig: part of 0x140F90 (event 0x27C), Smoke Bomb branch. The caller checks the ASEGA owner.
 bool ReleaseSmokeBomb(ACTOR* pa)
 {
     if (pa->n4C8 != 11 || pa->pasegAbility || pa->n9BC != 23) return false;
@@ -774,6 +779,15 @@ void UpdateActorAbilities(ACTOR* pa)
             }
         }
     }
+}
+
+// orig3 0x152828's loop over the three slots (0x154350(p, slot, 0)), on an in-place reset (the actors' vt slot 32):
+// each slot's held item ended (e.g. a power drained while held), the slots kept
+void EndActorAbilitySlots(ACTOR* pa)
+{
+    if (!pa) return;
+    ABILITIES& ab = AbOf(pa);
+    for (ABSLOT& e : ab.a) SetAbilityState(pa, e, 0);
 }
 
 // orig 0x00141FC8: slot i takes id (its held action ended first), another slot holding id emptied (ended), then the

@@ -37,6 +37,9 @@
 
 #include "cls.h"
 #include "outfit3.h"
+#include "gang.h"
+#include "pe.h"
+#include "sound.h"
 
 #include <cfloat>
 #include <algorithm>
@@ -80,7 +83,6 @@ void TraceGuardLife(const GUARD* guard, const char* action)
 constexpr float T_MODE_8 = 10.0f, T_MODE_34 = 30.0f, T_MODE_21 = 5.0f;  // D_002C3D40..48
 constexpr float S_TARGET_NEAR = 1500.0f;               // D_002C3D04
 const glm::vec3 AXIS_Z(0.0f, 0.0f, 1.0f);
-constexpr int s_acidModeExcluded[] = {0x3B, 0x40, 0x3D, 0x3E, 0x41}; // D_002C3D10
 
 glm::vec3 PosOf(const LO* plo) { return PosAi(plo); }
 
@@ -189,9 +191,10 @@ void UnlockGuardActivation(GUARD* guard)
 void PostLoadGuardManager(LO* plo)
 {
     const auto find = g_splicegame.pfnFindObjectsByClass;
-    const int count = find ? find(0x605, 0x38, nullptr, 0, nullptr) : 0;
+    // orig3: 0x002572B8 passes the Sly 3 STEPGUARD 0x3A (Sly 2's 0x38 is PANDA_KING in Sly 3)
+    const int count = find ? find(0x605, S3CID(0x38), nullptr, 0, nullptr) : 0;
     std::vector<BASIC*> found(count);
-    if (find) find(0x405, 0x38, nullptr, count, found.data());
+    if (find) find(0x405, S3CID(0x38), nullptr, count, found.data());
     auto& guards = GuardManagers()[plo];
     guards.clear();
     guards.reserve(count);
@@ -345,10 +348,16 @@ void AddGuardState(GUARD* pg, int n)
 {
     const uint64_t m = GrfStateBit(n);
     SetGuardStateMask(pg, pg->grfState | m);
-    CRef aref[2];
-    aref[0].SetS32(n);
-    aref[1].SetS32(-1);
-    HandleLoSpliceEvent(pg->palo, 7, false, 2, aref);  // vt slot 3: (self, added state, removed state)
+    // orig3: 0x252E40 sends the Sly 3 state index (the scripts' numbers): the AI's Sly 2 index is translated
+    // (guard3.cpp); a state with no Sly 3 index sends no event (a Sly 2 number would read as another Sly 3 state)
+    const int n3 = IstateGuard3FromIstate2(n);
+    if (n3 >= 0)
+    {
+        CRef aref[2];
+        aref[0].SetS32(n3);
+        aref[1].SetS32(-1);
+        HandleLoSpliceEvent(pg->palo, 7, false, 2, aref);  // vt slot 3: (self, added state, removed state)
+    }
     // Original 0x2C3D98: test the added bit after the script, even if it was already in the state mask.
     static constexpr int anStateEvent[2][2] = {{3, 20}, {12, 22}};
     for (const auto& entry : anStateEvent)
@@ -366,10 +375,23 @@ void AddGuardState(GUARD* pg, int n)
 void RemoveGuardState(GUARD* pg, int n)
 {
     SetGuardStateMask(pg, pg->grfState & ~GrfStateBit(n));
-    CRef aref[2];
-    aref[0].SetS32(-1);
-    aref[1].SetS32(n);
-    HandleLoSpliceEvent(pg->palo, 7, false, 2, aref);
+    const int n3 = IstateGuard3FromIstate2(n);  // (orig3 0x252FC0: Sly 3's index, as AddGuardState)
+    if (n3 >= 0)
+    {
+        CRef aref[2];
+        aref[0].SetS32(-1);
+        aref[1].SetS32(n3);
+        HandleLoSpliceEvent(pg->palo, 7, false, 2, aref);
+    }
+    // orig3: 0x252FC0's switch: Sly 3 state 3 going broadcasts 0x15, 0x12 (Sly 2's 12) 0x17 through 0x1854C8 with the
+    // guard (the alert / sighting ended; Sly 2's 0x209970 sent nothing). The case 0x44 (vt slot 54 of the guard's
+    // +0x168 when option 264 (+0x2F0) is 2, as 0x252E40's slot 56) is not ported: state 0x44 is only added by the Sly
+    // 3 job 0xF1 (0x1353F0 / 0x135468), which has no native port, and the +0x168 object is not identified.
+    if (FScripts3Active())
+    {
+        if (n == 3) Broadcast3(0x15, pg->palo);
+        else if (n == 12) Broadcast3(0x17, pg->palo);
+    }
 }
 
 // orig: 0x00209AD0
@@ -565,19 +587,13 @@ bool FTargetClass(const std::vector<int>& classes, const LO* plo)
     return false;
 }
 
-namespace
-{
-
-// orig: 0x00208728 / 0x00208948: preserve the original forward removal order,
-// including advancing after a removal if the authored list contains duplicates.
-void RemoveTargetClass(std::vector<int>& classes, int cid)
-{
-    for (size_t i = 0; i < classes.size(); ++i)
-        if (classes[i] == cid) classes.erase(classes.begin() + i);
-}
-}
-
 // orig: 0x00206EB0 (0x206D48 tests the five special guard families).
+// orig3: 0x2513D0: Sly 3 renumbered the modes; the AI keeps Sly 2's numbers (callers: aihit, guardphys, gadget,
+// carry), paired by their effects in 0x2514D8 / timeouts in 0x2517C0: Sly 2 8 / 13 = Sly 3 0xE / 0x10 (the half
+// scale, 10 s), 14 = 0x16 (frozen: the clip's speed 0), 21 = 0x14 (the reaction kick, 5 s), 34 / 37 = 0xC / 0xF (30 s),
+// 11 = 10 (the extractor's pull). Sly 3's class lists (Sly 3 class ids): 0xC / 0xF not class 0x3B (D_003498F8, one
+// entry), 10 not 0x3B / 0x3C / 0x3D, 0x14 not 0x3D. (The block on the script job 0xD3's +0x48 is the native
+// JOBSCRIPT's fFromReact.)
 bool FGuardModeAllowed(GUARD* pg, int n)
 {
     if (n == -1) return true;
@@ -587,12 +603,9 @@ bool FGuardModeAllowed(GUARD* pg, int n)
     switch (n)
     {
     case 8: case 13: case 14: return true;
-    case 21: return !(is(0x3E) || is(0x42) || is(0x43));
-    case 34: case 37:
-        for (int cid : s_acidModeExcluded) if (is(cid)) return false;
-        return true;
-    case 11:
-        return !(is(0x3B) || is(0x3D) || is(0x40) || is(0x3E) || is(0x41) || is(0x3F) || is(0x3C) || is(0x42) || is(0x43));
+    case 21: return !is(0x3D);
+    case 34: case 37: return !is(0x3B);
+    case 11: return !(is(0x3B) || is(0x3C) || is(0x3D));
     default: return false;
     }
 }
@@ -615,8 +628,10 @@ void SetGuardMode(GUARD* pg, int n)
         if (pg->pscaleFC4) SetCtrlPos(pg->pscaleFC4, glm::vec4(pg->gScale3, pg->gScale3, pg->gScale3, 0.0f));
         break;
     case 34: case 37:
-        RemoveTargetClass(pg->acid398, 0x38);  // 0x208728
-        for (int cid : s_acidModeExcluded) RemoveTargetClass(pg->acid3AC, cid); // 0x206E50
+        // (orig3 0x2514D8 0xC / 0xF: the guard's effect (+0x17C8) stopped (0x203030, vt slot 2). Sly 2's guard-vs-guard
+        // targeting (class 0x38 pushed as a target, the special classes excluded) is not in Sly 3: gone.)
+        if (pg->ppeMode3) StopTriggeredPe(pg->ppeMode3, pg->palo);
+        pg->ppeMode3 = nullptr;
         break;
     case 14:
         if (auto* move = dynamic_cast<JOBMOVE*>(PjobFind(pg, 0x9D)))
@@ -633,15 +648,21 @@ void SetGuardMode(GUARD* pg, int n)
     {
     case 8: case 13:
         if (pg->pscaleFC4) SetCtrlPos(pg->pscaleFC4, glm::vec4(0.5f, 0.5f, 0.5f, 0.0f)); // D_002C3D30
+        // (s3fix-ai2) orig3 0xE / 0x10: then the world's sound 0 started at the guard (0x2459F8(0) -> 0x244F08(.., guard))
+        PsndStartSound(0, 1.0f, 0, pg->palo);
         break;
     case 34: case 37:
-        if (pg->acid398.size() < 3) pg->acid398.push_back(0x38); // 0x208700
-        // orig: 0x00206DB0: include only special guard classes present in the
-        // world (count query 0x605 includes inactive objects as well).
-        for (int cid : s_acidModeExcluded)
-            if (g_splicegame.pfnFindObjectsByClass &&
-                g_splicegame.pfnFindObjectsByClass(0x605, cid, nullptr, 0, nullptr) && pg->acid3AC.size() < 5)
-                pg->acid3AC.push_back(cid); // 0x208920
+        // (s3fix-ai2) orig3 0xC / 0xF: Bentley's effect (D_0036B250 = Sly 2's D_002DD5BC, his part +0x19C0, oid 639)
+        // started on the guard (0x1FE728(.., 1), vt slot 1, its +0x14 / +0x60 the guard: it follows him) until the mode
+        // ends; no target classes in Sly 3
+        if (BENTLEY* pb = PbentleyGlobal(); pb && pb->palo && !pg->ppeMode3)
+            for (const auto& [ib, ppe] : pb->palo->apart)
+                if (ib == (FN3_TAG | 0x19C0) && ppe)
+                {
+                    TriggerPe(ppe, pg->palo);
+                    pg->ppeMode3 = ppe;
+                    break;
+                }
         break;
     case 14:
         if (auto* move = dynamic_cast<JOBMOVE*>(PjobFind(pg, 0x9D)))
@@ -1172,6 +1193,15 @@ bool HandleGuardMessage(LO* plo, int msg, void* pv)
     // Original ASEGA notification visits its owning guard before the directional player's listener.
     if (msg == 9 && pv) OnK3Event(&pg->k3play, static_cast<const ASEGMSG9*>(pv));  // 0x20CAA8
     if (plo->pcls && plo->pcls->PfnOrig(5) == 0x14B218 && !FGuardState(pg, 0x24) && msg == 0xB && pv)
+    {
+        LO* const* pm = static_cast<LO* const*>(pv);
+        if (pm[0] == plo && pg->pdet)
+            if (DETENTRY* pe = PdetentryFind(pg->pdet, pm[1])) SetDetentryState(pg->pdet, pe, 1);
+    }
+    // orig3: 0x15F5D8 (Carmelita 0x3C's vt slot 5, after the guards' 0x252440): a contact accepted on her (Sly 3's
+    // message 0xC = native 0xB {receiver, sender}) makes the sender seen (0x1703C8 state 1) unless she is in Sly 3's
+    // state 0x36
+    if (FCidDerivedFrom(plo->Cid(), 0x3C) && msg == 0xB && pv && !FGuardState(pg, IstateGuard2FromIstate3(0x36)))
     {
         LO* const* pm = static_cast<LO* const*>(pv);
         if (pm[0] == plo && pg->pdet)

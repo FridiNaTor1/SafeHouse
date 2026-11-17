@@ -215,6 +215,8 @@ void SkipBytes(CBinaryInputStream* pbis, size_t cb);  // CBinaryInputStream::Ski
 // Colour adjustment (0x3E12C8 g_fColorAdjust: off in the retail game's settings we compare against).
 extern bool g_fColorAdjust;
 void AdjustRgba(uint32_t* prgba);       // orig3: 0x236908 (Sly 2 0x1ED278)
+void DesaturateRgb3(float* prgb);
+void GrayRgba3(uint32_t* prgba);         // orig3: 0x236970 (the 3-D mode's grey screen-object colours)        // orig3: 0x2369D8 (the 3-D mode's pull toward the luminance)
 void AdjustRgba16(uint16_t* prgba16);   // orig3: 0x236830 (Sly 2 0x1ED1A8)
 // orig3: 0x2338B8 (a CLUT colour of a record with grf8 bit 0, through the condition set's tint, lightness /
 // contrast and saturation in HLS; alpha kept)

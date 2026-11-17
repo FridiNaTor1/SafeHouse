@@ -3,8 +3,9 @@
 
 #include "pcinput.h"
 #include "splitscreen3.h"
-#if defined(__ANDROID__)
-#include "android/android_app.h"
+#include "skipcut.h"
+#if defined(__ANDROID__) || defined(CANE_IOS)
+#include "mobile_app.h"
 bool g_fMovieTouchContext = false;   // (fmv.cpp: a movie plays; its layout stays)
 #endif
 #include "vr.h"
@@ -529,10 +530,16 @@ void ReadPcInput(GLFWwindow* window, uint16_t* pgrf, float* pxl, float* pyl, flo
     UpdateMouse(window);
     const bool fFocused = glfwGetWindowAttrib(window, GLFW_FOCUSED) == GLFW_TRUE;
     const bool fMenu = FPcMenuMode();
-#if defined(__ANDROID__)
-    // the on-screen pad's layout (platform/android TouchLayout): the D-pad and menu keys in menus, the stick in play
-    // (movies set the cinematic layout themselves, fmv.cpp); Java is told only when it changes
-    if (!g_fMovieTouchContext) cane::android::setTouchContext(fMenu ? cane::android::TouchContext::Menu : cane::android::TouchContext::Gameplay);
+#if defined(__ANDROID__) || defined(CANE_IOS)
+    // the on-screen pad's layout (platform/android TouchLayout; iOS: platform/touch_layout.h): the D-pad and menu keys
+    // in menus, the stick in play (movies set the cinematic layout themselves, fmv.cpp); Java is told only when it
+    // changes. A skippable scene (a binocucom talk, a cinematic, as Sly 2's): the pad is hidden and holding the screen
+    // skips; a scene that waits for a button keeps the pad
+    if (!g_fMovieTouchContext)
+        cane::mobile::setTouchContext(FCutsceneActive() && !FSkipCutWaitsForButton() && !FMouseMenuUp()
+                                          ? cane::mobile::TouchContext::Cinematic   // (a talk also locks the pad: before fMenu)
+                                      : fMenu ? cane::mobile::TouchContext::Menu
+                                      : cane::mobile::TouchContext::Gameplay);
 #endif
     const bool fGadgetMenuBindings = sly2actions::profile.enabled && FGadgetMenuShown();
     auto isMenuGadgetSlot = [&](int button) {
@@ -975,4 +982,15 @@ bool FDebugKeyHeld(GLFWwindow* window, int key)
 {
     if (!g_pcinput.fDebugKeys) return false;
     return FTestKeyHeld(key) || (window && glfwGetKey(window, key) == GLFW_PRESS);
+}
+
+// (pcinput.h) the on-screen pad is the pad in use (Android / iOS)
+bool FTouchPadActive()
+{
+#if defined(__ANDROID__) || defined(CANE_IOS)
+    // (VR: never: the headset has no touch screen, its controllers' prompts are shown)
+    return s_jidPad == GLFW_JOYSTICK_LAST && !vr::FActive();
+#else
+    return false;
+#endif
 }

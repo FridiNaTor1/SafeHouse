@@ -2,7 +2,8 @@
 """Assembles SafeHouse.app from an iOS build (cmake/ios.cmake) and packs it as an .ipa (.github/workflows/ios.yml).
 
 The app: the SafeHouse executable, the frameworks (SafeHouseCore, SafeHouseLauncher, CaneExtractor, Sly2Release and
-its copy Sly2Tools, which runs Sly 2's install tools so the game's own image starts clean), Info.plist, the icon
+its copy Sly2Tools, which runs Sly 2's install tools so the game's own image starts clean; Sly3Release and its copy
+Sly3Tools the same way, when the build has Sly 3), Info.plist, the icon
 (packaging/ios/AppIcon-1024.png through actool) and the licences. No game data: the player installs from their own
 disc image inside the app.
 
@@ -23,6 +24,9 @@ import tempfile
 
 PRODUCT = "SafeHouse"
 FRAMEWORKS = ("SafeHouseCore", "SafeHouseLauncher", "CaneExtractor", "Sly2Release")
+# (the games' frameworks that get a tools copy: <game>Release -> <game>Tools; Sly 3's only when it was built)
+GAME_TOOLS = (("Sly2Release", "Sly2Tools"), ("Sly3Release", "Sly3Tools"))
+OPTIONAL_FRAMEWORKS = ("Sly3Release",)
 MINIMUM_OS = "15.0"
 
 
@@ -192,16 +196,22 @@ def main():
     (app / "Frameworks").mkdir(parents=True)
 
     shutil.copy2(build / "bin" / PRODUCT, app / PRODUCT)
-    for name in FRAMEWORKS:
+    for name in FRAMEWORKS + OPTIONAL_FRAMEWORKS:
         built = build / "frameworks" / f"{name}.framework"
         if not built.is_dir():
+            if name in OPTIONAL_FRAMEWORKS:
+                print(f"note: no {built} (a build without Sly 3)", flush=True)
+                continue
             sys.exit(f"missing {built}")
         shutil.copytree(built, app / "Frameworks" / f"{name}.framework", symlinks=True)
-    # Sly2Tools: Sly 2's image again under its own name (ios_app.mm runs the install tools there)
-    tools = app / "Frameworks" / "Sly2Tools.framework"
-    shutil.copytree(app / "Frameworks" / "Sly2Release.framework", tools, symlinks=True)
-    (tools / "Sly2Release").rename(tools / "Sly2Tools")
-    run("install_name_tool", "-id", "@rpath/Sly2Tools.framework/Sly2Tools", tools / "Sly2Tools")
+    # Sly2Tools / Sly3Tools: the game's image again under its own name (ios_app.mm runs the install tools there)
+    for game, copy in GAME_TOOLS:
+        if not (app / "Frameworks" / f"{game}.framework").is_dir():
+            continue
+        tools = app / "Frameworks" / f"{copy}.framework"
+        shutil.copytree(app / "Frameworks" / f"{game}.framework", tools, symlinks=True)
+        (tools / game).rename(tools / copy)
+        run("install_name_tool", "-id", f"@rpath/{copy}.framework/{copy}", tools / copy)
     for framework in sorted((app / "Frameworks").glob("*.framework")):
         name = framework.stem
         for stale in ("_CodeSignature", "Headers", "Modules"):

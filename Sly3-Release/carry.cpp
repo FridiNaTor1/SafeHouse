@@ -187,32 +187,9 @@ void SetCarryStateBase(LO* plo, int n)
         SetLoParentActivation(g_psw, plo, nullptr);  // 0x1A58D0(p, 0, 15)
         DetachFromChannel(palo);
         SetAloCnstrLin(palo, 0);
-        if (pc->kind != 0x29) SetAloCnstrAng(palo, 0);
-        else
-        {
-            SetAloCnstrAng(palo, 1);
-            // orig: 0x00224EC8: query at most 32 guards in class-list order.
-            // The fallback is the global Sly (0x2E1E40), not the selected player.
-            BASIC* candidates[32]{};
-            const int count = g_splicegame.pfnFindObjectsByClass
-                ? g_splicegame.pfnFindObjectsByClass(0x105, 0x38, nullptr, 32, candidates) : 0;
-            SLY* sly = PslyGlobal();
-            LO* nearest = sly ? sly->palo : nullptr;
-            float best = std::numeric_limits<float>::max();  // D_002A97A8
-            for (int i = 0; i < count; ++i)
-            {
-                LO* candidate = static_cast<LO*>(candidates[i]);
-                glm::vec3 delta = PosLoWorld(candidate) - PosLoWorld(plo);
-                delta.z += delta.z;
-                const float distance = std::sqrt((delta.x * delta.x + delta.y * delta.y) + delta.z * delta.z);
-                if (distance < best)
-                {
-                    best = distance;
-                    nearest = candidate;
-                }
-            }
-            pc->plo160 = nearest;
-        }
+        // orig3: 0x00277F20 case 1: both constraints off for every kind. Sly 2's 0x224EC8 kept kind 0x29's angular
+        // constraint and searched the nearest guard into +0x160 (never read); Sly 3 has neither.
+        SetAloCnstrAng(palo, 0);
         break;
     case 4:
         RecalcSwOxfFilterForObject(palo);
@@ -223,8 +200,10 @@ void SetCarryStateBase(LO* plo, int n)
     // +0x168's goal D_002C4398[state] (0x1F0730; the SM made by the OnAdd callback 0x224028)
     // Offline component loaders can enter a state without the gameplay activation pass.
     if (!pc->fSma) OnCarryAdd(plo);
-    if (pc->psma && n >= 0 && n < 6) SeekSma(pc->psma, 109 + n);  // 0x1F0730 (D_002C4398: 0x6D..0x72)
-    if (std::getenv("SLY2N_CARRYDEBUG")) std::printf("carry %d: sma %p goal %d\n", plo->oid, static_cast<void*>(pc->psma), 109 + n);
+    // orig3: 0x00277F20's tail: 0x239DB8 (SeekSma) to D_00329240[state] = 0x8B..0x91 for states 0..6 (Sly 2's
+    // D_002C4398 was 0x6D..0x72 for 0..5)
+    if (pc->psma && n >= 0 && n <= 6) SeekSma(pc->psma, 0x8B + n);
+    if (std::getenv("SLY2N_CARRYDEBUG")) std::printf("carry %d: sma %p goal %d\n", plo->oid, static_cast<void*>(pc->psma), 0x8B + n);
     if (std::getenv("SLY2N_CARRYDEBUG") && n == 0)
     {
         for (const auto& [k, u] : plo->afield) std::printf("  field getter 0x%X +0x%X = 0x%X\n", unsigned(k >> 32), unsigned(k & 0xFFFFFFFF), u);
@@ -292,7 +271,7 @@ void SetExtractorState(LO* plo, int n)
     if (n != 5) return;
     const glm::vec3 pos = PosLoWorld(PloExtractorSource(plo, pc));
     BASIC* apo[32]{};
-    const int c = g_splicegame.pfnFindObjectsByClass ? g_splicegame.pfnFindObjectsByClass(0x105, 0x38, nullptr, 32, apo) : 0;
+    const int c = g_splicegame.pfnFindObjectsByClass ? g_splicegame.pfnFindObjectsByClass(0x105, S3CID(0x38), nullptr, 32, apo) : 0;  // orig3 0x2786A0: 0x3A
     float gBest = 400.0f;
     GUARD* pgBest = nullptr;
     for (int i = 0; i < c; ++i)
@@ -374,7 +353,7 @@ void UpdateExtractor(LO* plo)
             }
             if (3.0f < g_clock.t - pc->t)
             {
-                SpawnPickups(0x5D, PosLoWorld(psrc), plo, 1);  // 0x1C6FD8
+                SpawnPickups(S3CID(0x5D), PosLoWorld(psrc), plo, 1);  // 0x1C6FD8 (Sly 3's charm class)
                 LO* ploGuard = pg->palo;
                 RemoveLo(g_psw, ploGuard);  // slot 9
                 BroadcastTaskEvent(g_psw, 0x18, ploGuard);  // 0x1619A0
@@ -409,9 +388,22 @@ void LandCarry(LO* plo, LO* q)
     if (!pc) return;
     if (pc->kind == 0x1A || pc->kind == 0x29) { SetCarryState(plo, 3); return; }
     // (s3-gadgets) orig3 0x277208: Bentley's Grapple-Cam (Sly 3's kind 13) places its camera here (0x1404D8: the placement
-    // 0x287890, an object of the proxy +0x19BC attached where it landed, 0x287080); when that fails it ends as the kinds
-    // above. The camera (class 0x56, 0x285458..0x287A00) is not ported: it always ends.
-    if (pc->kind == sly3::ITEM2_SLY3 + 13) { SetCarryState(plo, 3); return; }
+    // 0x287890, an object of the proxy +0x19BC attached where it landed, 0x287080; game/grapplecam3.cpp) and the thrown
+    // object leaves the world (vt slot 9); when that fails it ends as the kinds above
+    if (pc->kind == sly3::ITEM2_SLY3 + 13)
+    {
+        LO* PloPlaceGrapple3(LO* pbentley, LO* ploCarry, LO* ploTouched);   // game/grapplecam3.cpp
+        void SetBentleyGrappleCam3(LO* pbentley, LO* pcam);                 // gang.cpp (+0x19B8)
+        LO* pbentley = pc->plo16C;
+        if (LO* pcam = pbentley ? PloPlaceGrapple3(pbentley, plo, q) : nullptr)
+        {
+            SetBentleyGrappleCam3(pbentley, pcam);
+            if (g_psw) RemoveLo(g_psw, plo);
+            return;
+        }
+        SetCarryState(plo, 3);
+        return;
+    }
     SetAloParent(static_cast<ALO*>(plo),
                  (q && q->oid != 1 && FCidDerivedFrom(q->Cid(), S3CID(0x30))) ? static_cast<ALO*>(q) : nullptr,
                  nullptr, 3);  // 0x1A58D0(p, q, 3): preserve world position and rotation.
@@ -684,3 +676,20 @@ namespace
 void SetCarryStateVt(LO* plo, int n) { SetCarryState(plo, n); }
 }
 NATIVEFN(0x224EC8, SetCarryStateVt);
+
+// orig3: 0x00276F88 (CARRY's vt slot 32, Sly 2's slot 27: the pooled object's detach notification, inherited by BOMB
+// 0x72): the ALO base's (0x1FCB20: the children told; not SO's 0x1F3C80, so the hitter record is kept), its state -1
+// (vt slot 80, SetCarryStateBase), RemoveLo (vt slot 9), then its first transform record, unless busy (+0x94), takes
+// the object's world matrix (+0x190) and the world's transform generation (SW +0x44F4) is bumped: natively the
+// proxy release that calls this sets the object's matrix itself right after (activate.cpp ReleaseRow). Before s3fix-core
+// registered SO's 0x1F3C80 nothing ran here; after it BOMB fell back to SO's (survey: 4 cases)
+void DetachCarry32(LO* plo, LO* pproxy)
+{
+    DetachAloBase27(plo, pproxy);
+    if (!plo) return;
+    using PFN80 = void (*)(LO*, int);
+    if (PFN80 pfn = reinterpret_cast<PFN80>(PvNativeVt(plo, 76))) pfn(plo, -1);
+    else SetCarryState(plo, -1);
+    RemoveLo(g_psw, plo);
+}
+NATIVEFN3(0x276F88, DetachCarry32);

@@ -56,9 +56,16 @@ void SetPeOwnRandom(bool f);   // (the interaction sparkles, jt.cpp: their draws
 struct PEVELPARAMS { float speedLo = 0, speedHi = 0, advLo = 0, advHi = 0, ageLo = 0, ageHi = 0, life = 1; };
 bool FPeVelParams(const LO* ppe, PEVELPARAMS* pp);
 void EmitPeParticles(LO* ppe, int c, const glm::vec3* apos, const glm::vec3* avel, const float* at0, const float* at1, const float* pclqScale);
+// orig3: 0x178278's ripple (the water's wake): the PE moved to pos (SetLoxPos 0x2312A0, slot 34), its kind-0 instance
+// (0x1FE840(ppe, ppe, 0, 0)), the stream of its component oidComp (0x202C90: 0x78C) given the size range {g, g} (shared
+// record +0x14 / +0x18) and the size curve {g, 0.6 g, 0} (velocity record +0x20), one particle emitted (0x1FF590(1)).
+// False: no such component.
+bool FEmitPeComponent(LO* ppe, int oidComp, const glm::vec3& pos, float gScale);
 // orig3: 0x25D940 (the scripts' 0x41, the ASEG event 17, a breakable's item 7): the effect oidEffect found near
 // ploContext: a PE started, else an explosion (from oidSource, else itself; scaled when g != 1)
 void StartEffectByOid3(int oidEffect, int oidSource, float g, LO* ploContext, bool fOwnRandom = false);
+// orig3: 0x203030 + the instance's vt slot 2: the instances of ppe that TriggerPe started on ploFrame dropped at once
+void StopTriggeredPe(const LO* ppe, const LO* ploFrame);
 // A PE whose kind (+0xD8, option 539) is 0: a one-shot, out of the world from its start (0x1FE5E0)
 bool FPeOneShot(const LO* plo);
 // Statistics / debugging (SLY3_PEDBG=1 prints the instances).

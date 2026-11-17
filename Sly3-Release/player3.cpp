@@ -44,6 +44,7 @@
 #include "step.h"
 #include "stepphys.h"
 #include "sw.h"
+#include "update.h"
 #include "worldaccess.h"
 #include "xf.h"
 
@@ -104,6 +105,8 @@ bool FActorScriptAnim(LO* ploActor)
 LO* PloFindSwChild(LO* ploCtx, OID oid);
 
 extern int g_iframeMain;   // (game.cpp)
+
+bool FGrappleCam3(const LO* plo);   // game/grapplecam3.cpp (Bentley's Grapple-Cam, class 0x56)
 
 namespace sly3
 {
@@ -481,6 +484,12 @@ bool ActorWalkToward3(LO* ploActor, const float pos[3], float gSpeed, bool fR1)
 {
     ACTOR* pa = PactorFromLo(ploActor);
     if (!pa || std::getenv("SLY3_NOWALK30")) return false;
+    // (an actor not updated (not in the world, its root not active, or its update off: the table entry's flag 2) runs no states and cannot walk: the
+    // interim placement at once. E.g. Ep6 m_ext's Panda King 30 (an actor since AUDIT4 PLAYER-01; before, no actor: placed)
+    // floated still through SCPT 4478's walks, each waiting out the no-floor net)
+    if (!pa->palo || !pa->palo->fInWorld || !g_psw || pa->palo->iupd < 0 || pa->palo->iupd >= static_cast<int>(g_psw->aupd.size()) ||
+        !(g_psw->aupd[static_cast<size_t>(pa->palo->iupd)].grf & GRFUPD_Update))
+        return false;
     WALK30& w = MpWalk30()[pa];
     const glm::vec3 goal(pos[0], pos[1], pos[2]);
     const glm::vec3 q = PosAloCenter(pa->palo);
@@ -640,14 +649,14 @@ bool FDriveActorClimb26(ACTOR* pa, PADCTL* pc)
     return true;
 }
 
-bool FStartPlayer3(SW* psw)
+// (the scripts' actor hooks: before the first world start's task activation, transition.cpp: a script started there
+// (ep1_turf's 2142 [77]: Bentley's path step 0x33) found no hook and its job ended at once)
+void InstallPlayerHooks3()
 {
-    ::MpScriptAnimPo().clear();
     if (!g_scpthooks3.pfnPlayActorScriptAnim) g_scpthooks3.pfnPlayActorScriptAnim = PlayActorScriptAnim3;
     if (!g_scpthooks3.pfnEndActorScriptAnim)
         g_scpthooks3.pfnEndActorScriptAnim = [](LO* plo) { if (ACTOR* pa = PactorFromLo(plo)) ::EndActorScriptAnim(pa); else ::EndPoScriptAnim(plo); };   // 0x156690
     if (!g_scpthooks3.pfnFActorInScriptAnim) g_scpthooks3.pfnFActorInScriptAnim = ::FActorScriptAnim;   // 0x1566D0
-    StartCodePanels3(psw);
     if (!g_scpthooks3.pfnActorPathStep) g_scpthooks3.pfnActorPathStep = ActorPathStep3;
     if (!g_scpthooks3.pfnActorStepTo) g_scpthooks3.pfnActorStepTo = ActorStepTo3;
     if (!g_scpthooks3.pfnActorWalkToward) g_scpthooks3.pfnActorWalkToward = ActorWalkToward3;
@@ -657,6 +666,13 @@ bool FStartPlayer3(SW* psw)
     if (!g_scpthooks3.pfnActorCmd) g_scpthooks3.pfnActorCmd = ActorCmd3;
     if (!g_scpthooks3.pfnFActorCmdDone) g_scpthooks3.pfnFActorCmdDone = FActorCmdDone3;
     if (!g_scpthooks3.pfnResetActorAfterPlace) g_scpthooks3.pfnResetActorAfterPlace = ResetActorAfterPlace3;
+}
+
+bool FStartPlayer3(SW* psw)
+{
+    ::MpScriptAnimPo().clear();
+    StartCodePanels3(psw);
+    InstallPlayerHooks3();
     const char* sz = std::getenv("SLY3_START");
     if (!sz || !*sz || *sz == '0') return false;
     LO* plo = PloSly3(psw);
@@ -725,7 +741,7 @@ bool FStartPlayer3(SW* psw)
     if (std::getenv("SLY3_STARTDBG"))
         std::printf("player3: Sly iupd %d grfUpd 0x%x removed %d inworld %d st %d nodeActive %d parent %p step %p sly state %d\n", plo->iupd,
                     plo->grfUpd, plo->fRemoved, plo->fInWorld, plo->st, PloRoot(plo)->fNodeActive, (void*)plo->paloParent, (void*)p,
-                    PslyFromLo(plo) ? PslyFromLo(plo)->state : -9);
+                    PslyFromLo(plo) ? PslyFromLo(plo)->jts : -9);
     if (std::getenv("SLY3_STARTDBG"))
         if (SLY* psly = PslyFromLo(plo); psly && psly->psmIdle)
         {
@@ -761,6 +777,7 @@ int NPlayerCamKind3(SW* psw)
 {
     LO* plo = psw ? PloPoCurrent(psw) : nullptr;
     if (plo && NBinocPanelState3(plo) >= 0) return 1;
+    if (::FGrappleCam3(plo)) return 2;   // game/grapplecam3.cpp
     return 0;
 }
 
@@ -780,8 +797,9 @@ void SetPosPlayer3(SW* psw, int frame)
                 {
                     const glm::vec3 p = PosLoWorld(up.get());
                     const glm::mat4 m = sly3::MatLoWorld3(up.get());
-                    std::printf("oidpos %d f %d (oid %d cid 0x%X, removed %d, in world %d): %.1f %.1f %.1f x axis %.2f %.2f %.2f\n", oid, frame, up->oid, up->Cid(),
-                                int(up->fRemoved), int(up->fInWorld), p.x, p.y, p.z, m[0].x, m[0].y, m[0].z);
+                    const SOST* pst = FIsLoDerivedFrom(up.get(), S3CID(0x30)) ? Psost(static_cast<ALO*>(up.get())) : nullptr;
+                    std::printf("oidpos %d f %d (oid %d cid 0x%X, removed %d, in world %d): %.2f %.2f %.2f x axis %.2f %.2f %.2f gravity %.0f\n", oid, frame, up->oid, up->Cid(),
+                                int(up->fRemoved), int(up->fInWorld), p.x, p.y, p.z, m[0].x, m[0].y, m[0].z, pst ? pst->dvGravity.z : 0.0f);
                 }
             for (const auto& up : psw->aploAll)   // (and the records tagged with it: an ALO's points)
                 if (FIsLoDerivedFrom(up.get(), S3CID(0x30)))
@@ -839,7 +857,7 @@ void TracePlayer3(SW* psw, int frame)
     if (!plo || !pa) return;
     SLY* p = PslyFromLo(plo);
     int state = -1, substate = -1, mode = -1;
-    if (p) state = FCombo3Attacking(p) ? 99 : p->state, substate = p->substate, mode = p->mode;
+    if (p) state = p->jts, substate = p->jtbs, mode = p->mode;   // (Sly 3's numbers: the attack is 23)
     else if (const BENTLEY* pb = PbentleyFromLo(plo)) state = pb->state;
     else if (const MURRAY* pm = PmurrayFromLo(plo)) state = pm->state;
     // (the position record +0x58 (Sly 3 +0x48), as the reference's peek +0x48 -> +0x70: for Sly the object record's

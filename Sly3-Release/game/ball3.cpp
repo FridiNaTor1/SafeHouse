@@ -17,6 +17,7 @@
 
 #include "game/ball3.h"
 
+#include "spliceglue.h"
 #include "activate.h"
 #include "actor.h"
 #include "alo.h"
@@ -29,6 +30,7 @@
 #include "gadget.h"
 #include "game/items3.h"
 #include "game/sly3.h"
+#include "game/task3.h"
 #include "gang.h"
 #include "jump.h"
 #include "lo.h"
@@ -435,8 +437,8 @@ void UpdateBall3(MURRAY* p)
                     h = Eval(pc && (pc->grfbtn & BTN_CIRCLE) ? s_aLow : s_aMid, h);
                     StartSound(p, 0x1B, 0.7f, 0.0f, false, false);
                 }
-                // (min(+0x1B1C, SW +0x4FF0): the world's ceiling is not read natively)
-                h = std::min(h, b.zHeight - pos.z);
+                // min(+0x1B1C, SW +0x4FF0: the world's ceiling, option 1007, default 5500)
+                h = std::min(h, std::min(b.zHeight, GSwOptionField3(1007, 0, 5500.0f)) - pos.z);
                 if (h > 0.0f)
                 {
                     vel = glm::vec3(vel.x, vel.y, std::sqrt(g * (h * -2.0f)));
@@ -448,7 +450,7 @@ void UpdateBall3(MURRAY* p)
                                 vel.z, int(fBoost));
                 SetBallMode3(p, 0);
                 AddRandomSpin(p);
-                if (fBoost && g_psw) BroadcastTaskEvent(g_psw, 0x5E, b.ploHolder);   // 0x1854C8(GAME, 0x5E, +0x1B0C)
+                if (fBoost && g_psw) Broadcast3(0x5E, b.ploHolder);   // 0x1854C8(GAME, 0x5E, +0x1B0C): Sly 3's code as is (BroadcastTaskEvent translates Sly 2 codes and has no row for 0x5E: OTHER-01)
             }
             break;
         case 2:

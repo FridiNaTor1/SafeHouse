@@ -19,6 +19,7 @@
 #include "splitscreen3.h"
 #include "sound.h"
 #include "screenrt.h"
+#include "hud.h"
 #include "step.h"
 #include "stepphys.h"
 #include "sw.h"
@@ -60,6 +61,18 @@ bool FPrint() { static const bool s_f = std::getenv("SLY3_CARMPRINT") != nullptr
 std::unordered_map<const LO*, int> s_mpiplayer;
 struct CARMPOWER { int kind = -1; int meter = 0; };
 std::unordered_map<const LO*, CARMPOWER> s_mppower;   // (orig3 the guard's +0x18B0 and SO +0x174)
+
+// orig3: her +0x1884 target box (0x162108: +0x8 the state -1, +0x18 3000 the range to lock on, +0x1C 4000 the range to
+// keep it, +0x20 0.5 s to lock, +0x24 1 s out of sight to lose it; +0x0 the target, +0x4 her (the camera's owner), +0x14
+// the box's screen object (option 1414, Sly 3 EOPID 1542 +0x1898)): the charged shot's lock-on (power-up 0x33)
+struct CARMBOX
+{
+    LO* ptarget = nullptr;   // +0x0
+    int state = -1;          // +0x8
+    float tState = 0.0f;     // +0xC
+    float tSeen = 0.0f;      // +0x10
+};
+std::unordered_map<const LO*, CARMBOX> s_mpbox;
 
 // the pad's buttons as the game reads them (the PADCTL's grfbtn: the decomp's masks, 0x1A7A80)
 constexpr uint32_t BTN3_R1 = 0x08, BTN3_L1 = 0x04, BTN3_Triangle = 0x10, BTN3_Circle = 0x20, BTN3_Cross = 0x40,
@@ -113,6 +126,177 @@ float SRun(const LO* ploHer)
 float RadStick(const PADCTL* ppc) { return ppc ? ppc->radJoy : 0.0f; }
 float UStick(const PADCTL* ppc) { return ppc ? ppc->uJoy : 0.0f; }
 }  // namespace
+
+namespace
+{
+LO* PscreenBox(LO* plo)
+{
+    LO* p = plo && g_psw ? PloFindSwObjectByOid(g_psw, OID(plo->U32Field(0, 0x1898, 0xFFFFFFFFu))) : nullptr;
+    return p && FCidDerivedFrom(p->Cid(), S3CID(0x7E)) ? p : nullptr;   // (a SCREENOBJ: Sly 3 0x9E)
+}
+
+// her view's picture in the 640 x 480 canvas (the camera's rectangle +0x150 / +0x160): in the two-player screen mode her
+// band's view box hole as the HUD draws it (hud.h abox2p, 640 x 448 units), else the whole canvas
+void RectBox(const LO* plo, float* px0, float* py0, float* px1, float* py1)
+{
+    const int i = IPlayerCarm3(plo);
+    *px0 = 0.0f, *px1 = 640.0f, *py0 = 0.0f, *py1 = 480.0f;
+    if (!g_psw || g_psw->nScreenMode3 != 2 || (i != 0 && i != 1)) return;
+    const CHud::BOX2P& b = g_hud.abox2p[i];
+    if (b.frame < 0 || b.hole.z <= b.hole.x) { *py0 = 240.0f * float(i), *py1 = 240.0f * float(i + 1); return; }
+    constexpr float ky = 480.0f / 448.0f;
+    *px0 = b.hole.x, *px1 = b.hole.z, *py0 = b.hole.y * ky, *py1 = b.hole.w * ky;
+}
+
+const CM& CmBox(const LO* plo) { return split3::CmView(std::max(0, IPlayerCarm3(plo))); }
+
+// orig3: 0x162698: the box's state; the screen object's parts: 1 aiming (slot 53 on 0x3BE, placed in her camera's
+// rectangle (0x2643D0), part 0x3D8 started at fraction 0), 2 locked (0x3D5 / 0x3D6); leaving 1 / 2 resets them; -1 / 0:
+// hidden (slot 54)
+void SetBoxState(LO* plo, CARMBOX& b, int state)
+{
+    if (state == b.state) return;
+    LO* pscr = PscreenBox(plo);
+    if (pscr && b.state == 1) ResetScreenObjPart(pscr, 0x3D8);
+    if (pscr && b.state == 2) { ResetScreenObjPart(pscr, 0x3D5); ResetScreenObjPart(pscr, 0x3D6); }
+    if (FPrint()) std::printf("carm3: %d target box %d -> %d (target %d, screen %d)\n", plo->oid, b.state, state, b.ptarget ? b.ptarget->oid : -1, pscr ? pscr->oid : -1);
+    b.state = state;
+    b.tState = g_clock.t;
+    if (state == 1)
+    {
+        b.tSeen = g_clock.t;
+        if (pscr)
+        {
+            // (PC: as the aim's HUD (SetAim): drawn above the two-player frame 3325, which hid it under its view box)
+            if (g_psw && g_psw->nScreenMode3 == 2)
+                if (LO* pframe = PloFindSwObjectByOid(g_psw, 3325); pframe && NScreenObjPrio(pscr) <= NScreenObjPrio(pframe))
+                    SetScreenObjPrio(pscr, NScreenObjPrio(pframe) + 1);
+            ShowScreenObj(pscr, 0x3BE);
+            SelectScreenObjPart(pscr, 0x3D8);   // (0x262450: the group having the part plays it)
+            SetScreenObjFraction(pscr, 0x3D8, 0.0f);
+        }
+    }
+    else if (state == 2)
+    {
+        if (pscr) { SelectScreenObjPart(pscr, 0x3D5); SelectScreenObjPart(pscr, 0x3D6); }
+    }
+    else if (pscr) HideScreenObj(pscr);
+}
+
+// orig3: 0x162060: the target is in the world (bit 56), not knocked out (a PO's vt slot 81 2; the class 0x66: never)
+bool FBoxTargetValid(const CARMBOX& b)
+{
+    LO* pt = b.ptarget;
+    if (!pt || !pt->fInWorld) return false;
+    static const auto s_pfnStatus = reinterpret_cast<int (*)(LO*)>(PvNativeFn(0x140F70));   // (vt slot 81)
+    if (FCidDerivedFrom(pt->Cid(), S3CID(0x31))) return !(s_pfnStatus && s_pfnStatus(pt) == 2);
+    return true;
+}
+
+// orig3: 0x161DF8: the target seen from her camera: its sphere of radius r in the view (0x167F60), within gMax of the
+// camera, and of four points around it (r toward the camera, r up / down, r to the side) one at least not hidden from
+// the camera by the world's solids (0x25CF18 / 0x165000)
+bool FBoxTargetSeen(const LO* plo, const CARMBOX& b, float r, float gMax)
+{
+    const CM& cm = CmBox(plo);
+    const glm::vec3 pos = PosLoWorld(b.ptarget);
+    const glm::vec3 q = ConvertCmWorldToScreen(&cm, pos);
+    if (q.z <= -r) return false;
+    const float m = q.z > 1.0f ? r / q.z : r;   // (the sphere's margin on the screen, roughly)
+    if (std::fabs(q.x) > 1.0f + m / cm.xScreenRange || std::fabs(q.y) > 1.0f + m / cm.yScreenRange) return false;
+    if (gMax < glm::length(pos - cm.pos)) return false;
+    std::vector<SOE*> apsoe;
+    if (g_psw)
+        for (LO* p : g_psw->mpcidaplo[S3CID(0x31)])
+            if (p && p->fInWorld && p != b.ptarget && p != plo)
+                for (SOE& soe : static_cast<ALO*>(p)->asoe)
+                    if (!soe.f48) apsoe.push_back(&soe);
+    const glm::vec3 up = glm::vec3(cm.mat[2]);
+    glm::vec3 dir = cm.pos - pos;
+    dir = glm::length(dir) > 1e-4f ? glm::normalize(dir) : glm::vec3(1.0f, 0.0f, 0.0f);
+    glm::vec3 side = glm::cross(up, dir);
+    side = glm::length(side) > 1e-4f ? glm::normalize(side) : glm::vec3(0.0f, 1.0f, 0.0f);
+    const glm::vec3 c = pos + dir * r;
+    const glm::vec3 apos[4] = {c, c + up * r, c - up * r, c + side * r};
+    for (const glm::vec3& p : apos)
+    {
+        LSG lsg;
+        if (!PsoeHitTestLineObjects(0, cm.pos, p, apsoe, &lsg)) return true;
+    }
+    return false;
+}
+
+// orig3: 0x162148: the box's update (from the power-up's 0x15FE68 while the charged shot is held): 0 -> 1 when the target
+// is valid and seen within 3000 (radius 5); 1 -> 2 after 0.5 s, -> 0 when not seen for 1 s or invalid; 2 -> 0 likewise;
+// while 1 / 2 the target seen within 4000 (radius 50) keeps it
+void UpdateBox(LO* plo, CARMBOX& b)
+{
+    int state;
+    do
+    {
+        state = b.state;
+        switch (state)
+        {
+        case 0:
+            if (FBoxTargetValid(b) && FBoxTargetSeen(plo, b, 5.0f, 3000.0f)) SetBoxState(plo, b, 1);
+            break;
+        case 1:
+            if (!FBoxTargetValid(b)) SetBoxState(plo, b, 0);
+            else if (g_clock.t - b.tSeen > 1.0f) SetBoxState(plo, b, 0);
+            else if (g_clock.t - b.tState > 0.5f) SetBoxState(plo, b, 2);
+            break;
+        case 2:
+            if (!FBoxTargetValid(b) || g_clock.t - b.tSeen > 1.0f) SetBoxState(plo, b, 0);
+            break;
+        default: break;
+        }
+    } while (b.state != state);
+    if ((b.state == 1 || b.state == 2) && FBoxTargetSeen(plo, b, 50.0f, 4000.0f)) b.tSeen = g_clock.t;
+}
+
+// orig3: 0x162370 (her draw, slot 21 0x161CD0 -> 0x162678, in the box's states 1 / 2): the box around the target on the
+// screen: the target's centre and the 8 corners of its box ({+-50, +-50, 100 / -50} in its frame) projected through her
+// camera; the scale by the corners' spread x 0.015 in [0.25, 1.25]; aiming (1) it closes in from the view's centre at
+// scale 3.5 over the 0.5 s; the point held inside the view's rectangle (0x262848: the root scaled and moved)
+void PlaceBox(LO* plo, const CARMBOX& b)
+{
+    LO* pscr = PscreenBox(plo);
+    if (!pscr || !b.ptarget || b.state < 1 || b.state > 2) return;
+    const CM& cm = CmBox(plo);
+    float x0, y0, x1, y1;
+    RectBox(plo, &x0, &y0, &x1, &y1);
+    auto toRect = [&](const glm::vec3& w) {
+        const glm::vec3 q = ConvertCmWorldToScreen(&cm, w);
+        return glm::vec2(x0 + (q.x * 0.5f + 0.5f) * (x1 - x0), y0 + (0.5f - q.y * 0.5f) * (y1 - y0));
+    };
+    const glm::mat4 m = sly3::MatLoWorld3(b.ptarget);
+    glm::vec2 pos = toRect(glm::vec3(m[3]));
+    glm::vec2 vMin(FLT_MAX), vMax(-FLT_MAX);
+    static const glm::vec3 s_acorner[8] = {{50, 50, 100}, {50, -50, 100}, {-50, 50, 100}, {-50, -50, 100},
+                                          {50, 50, -50}, {50, -50, -50}, {-50, 50, -50}, {-50, -50, -50}};
+    for (const glm::vec3& c : s_acorner)
+    {
+        const glm::vec2 v = toRect(glm::vec3(m * glm::vec4(c, 1.0f)));
+        vMin = glm::min(vMin, v);
+        vMax = glm::max(vMax, v);
+    }
+    float gScale = std::clamp(glm::length(vMin - vMax) * 0.015f, 0.25f, 1.25f);
+    if (b.state == 1)
+    {
+        const glm::vec2 posCenter = toRect(cm.pos + glm::vec3(cm.mat[0]) * 1000.0f);   // (0x1622C0 of the origin: the view's centre)
+        const float t = std::clamp((g_clock.t - b.tState) / 0.5f, 0.0f, 1.0f);
+        pos = pos * t + posCenter * (1.0f - t);
+        gScale = (1.0f - t) * 3.5f + t * gScale;
+    }
+    pos.x = float(std::clamp(int(pos.x), int(x0), int(x1)));
+    pos.y = float(std::clamp(int(pos.y), int(y0), int(y1)));
+    SetScreenObjRootXY(pscr, true, gScale, pos.x, pos.y);
+    if (static const bool s_f = std::getenv("SLY3_CARMBOXPRINT") != nullptr; s_f)
+        std::printf("carm3: box %d state %d at %.1f %.1f scale %.2f (rect %.0f %.0f %.0f %.0f) screen state %d prio %d\n", pscr->oid, b.state, pos.x, pos.y,
+                    gScale, x0, y0, x1, y1, NScreenObjState(pscr), NScreenObjPrio(pscr));
+}
+}  // namespace
+
 
 JOBCARM3::~JOBCARM3() = default;
 
@@ -208,6 +392,13 @@ void JOBCARM3::UsePower()
     auto it = s_mppower.find(pguard->palo);
     if (it == s_mppower.end() || it->second.kind == -1 || it->second.meter <= 0) return;
     CARMPOWER& pw = it->second;
+    // (the target box's update while the charged shot is held, before the button: 0x162148; its draw 0x162370)
+    if (pw.kind == 0x33)
+    {
+        CARMBOX& b = s_mpbox[pguard->palo];
+        UpdateBox(pguard->palo, b);
+        PlaceBox(pguard->palo, b);
+    }
     PADCTL* ppc = Ppad();
     if (!ppc || !GrfPadctlPressedWithin(ppc, BTN3_L1, 0.0f)) return;
     bool fOk = false;
@@ -252,7 +443,11 @@ void JOBCARM3::UsePower()
     }
     pw.meter = std::max(0, pw.meter - (pw.kind == 0x34 || pw.kind == 0x35 ? 0x64 : 0x22));
     if (FPrint()) std::printf("carm3: %d power-up 0x%X used, meter %d\n", pguard->palo->oid, pw.kind, pw.meter);
-    if (pw.meter <= 0) pw.kind = -1;
+    if (pw.meter <= 0)
+    {
+        SetCarmPowerKind3(pguard->palo, pw.kind, -1);   // (0x161C60(-1))
+        pw.kind = -1;
+    }
 }
 
 // orig3: 0x15FB28: the place of the power-up 0x34: with the robber (D_00370AC0) in the world (bit 56) a place of his safe
@@ -351,7 +546,23 @@ int GiveCarmPowerup3(LO* plo)
 void SetCarmPower3(LO* plo, int kind, int meter)
 {
     if (!plo) return;
+    const int kindOld = s_mppower.count(plo) ? s_mppower[plo].kind : -1;
     s_mppower[plo] = CARMPOWER{kind, std::clamp(meter, 0, 100)};
+    SetCarmPowerKind3(plo, kindOld, kind);
+}
+
+// orig3: 0x161C60: the power-up's kind changed: leaving the charged shot (0x33) puts the target box away (-1); taking it
+// aims the box at the robber (D_00370AC0) in its state 0
+void SetCarmPowerKind3(LO* plo, int kindOld, int kind)
+{
+    if (kindOld == kind) return;
+    CARMBOX& b = s_mpbox[plo];
+    if (kindOld == 0x33) SetBoxState(plo, b, -1);
+    if (kind == 0x33)
+    {
+        b.ptarget = PloRobberNearest(plo);
+        SetBoxState(plo, b, 0);
+    }
 }
 
 int KindCarmPower3(const LO* plo)
@@ -819,7 +1030,10 @@ void JOBCARM3::Fire()
     SetProjectileLauncher(pp, palo);   // (object +0x1E8 = her)
     // 0x1619F8: the aim point
     glm::vec3 posAim;
-    if (LO* pt = PloShotTarget())
+    const auto itBox = s_mpbox.find(palo);
+    if (stGun == 4 && itBox != s_mpbox.end() && itBox->second.state == 2 && itBox->second.ptarget)
+        posAim = glm::vec3(sly3::MatLoWorld3(itBox->second.ptarget)[3]);   // (0x161610: the charged shot at the locked box's target)
+    else if (LO* pt = PloShotTarget())
         posAim = PosLoWorld(pt) + (FCidDerivedFrom(pt->Cid(), S3CID(0x30)) ? VelAloPos(static_cast<ALO*>(pt)) * 0.25f : glm::vec3(0.0f));
     else if (stAim == 0)
     {
@@ -1056,4 +1270,4 @@ void KeepCarmFlashlightOff3(LO* plo)
     if (fAgain) SetCarmFlashlightOff3(plo);
 }
 
-void ResetCarm3() { s_mpiplayer.clear(); s_mppower.clear(); s_mpflash.clear(); s_mpbag.clear(); }
+void ResetCarm3() { s_mpiplayer.clear(); s_mppower.clear(); s_mpflash.clear(); s_mpbag.clear(); s_mpbox.clear(); }

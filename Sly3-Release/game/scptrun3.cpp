@@ -121,6 +121,8 @@ void Exec(RUN3* p);
 void RunRun(RUN3* p);
 void RetireRun(RUN3* p);
 bool FCmdDone(RUN3* p, int icmd);
+void SelectRunZone(RUN3* p, void* ploZone);
+void PinRunPlayer(RUN3* p, void* ploTarget);
 
 // orig3: 0x22B028 SetRunPending (the command whose done test FinishRunPending runs, and the actor it drives: the
 // actor is told which run drives it, 0x156468)
@@ -292,8 +294,9 @@ void RetireRun(RUN3* p)
     }
     // (0x22B890: ClearJobs(actor +0x29C) when the current command is 0x33 / 0x34: job commands, not ported)
     SetRunPending(p, -1, nullptr);
-    // (0x22B090 / 0x22B150 (run +0x74 / +0x7C, set by 0x24 / 0x25): not used by m_ext's scripts)
+    SelectRunZone(p, nullptr);  // 0x22B090 (0x24's zone)
     LockPlayer(p, false);
+    PinRunPlayer(p, nullptr);   // 0x22B150 (0x25's pin)
     PauseRun(p, false, 0);
     if (p->psnd)
     {
@@ -411,6 +414,44 @@ bool FAdvance(RUN3* p)
 }
 
 void Wait(RUN3* p) { p->tStart = TScpt(p->pscpt); }
+
+// orig3: 0x22B090 (the run's zone +0x74: the old one's camera forcing off (0x273ED0(z, 0, 0, 1)) and, when the run added
+// it (+0x78), removed again (vt slot 9); the new one added when it is not in the world (slot 8), forced on (0x273E48))
+void SelectRunZone(RUN3* p, void* ploZone)
+{
+    if (p->ploZone)
+    {
+        s_phost->SetZoneForcedRun(p->ploZone, false);
+        if (p->fZoneAdded) s_phost->AddRemoveLo(p->ploZone, false);
+        p->ploZone = nullptr;
+    }
+    if (!ploZone) return;
+    p->ploZone = ploZone;
+    p->fZoneAdded = !s_phost->FLoInWorld(ploZone);
+    if (p->fZoneAdded) s_phost->AddRemoveLo(ploZone, true);
+    s_phost->SetZoneForcedRun(ploZone, true);
+}
+
+// orig3: 0x22B150 (the run's pin +0x7C: the run's actor (+0x28, a cid 0x33 player) released from the old one
+// (0x153EA0(actor, 0)), its camera target records set to the new target's place (GetRunAim) plus its height, their
+// motion cleared, 0x153EA0(actor, 1))
+void PinRunPlayer(RUN3* p, void* ploTarget)
+{
+    void* pa = p->plo28 && s_phost->FDerivedFrom(p->plo28, 0x33) ? p->plo28 : nullptr;
+    if (p->ploPin)
+    {
+        if (pa) s_phost->ReleaseActorCmTarget(pa);
+        p->ploPin = nullptr;
+    }
+    if (!ploTarget) return;
+    if (pa)
+    {
+        float pos[3] = {0, 0, 0};
+        GetRunAim(p, ploTarget, pos, nullptr);
+        s_phost->PinActorCmTarget(pa, pos);
+    }
+    p->ploPin = ploTarget;
+}
 
 // orig3: 0x22A430 (0x1D: the clock factor a + u (b + u c), u = t / duration clamped to [0, 1] (1 with no duration),
 // clamped to [min, max]; arguments a b c (+0x00..), min max (+0x10 / +0x14), duration (+0x18))
@@ -880,6 +921,40 @@ void ExecCmd(RUN3* p)
                 s_phost->SetActorHold5D(p->plo28, c.id == 0x5D);
             }
             return;
+        // orig3 0x226D00 cases 92 / 100..103: Murray (cid 0x35) / Bentley (cid 0x36), the run's actor (+0x28); Sly 2's
+        // SCPT 0x4F / 0x57 / 0x58 / 0x59 / 0x5A (scpt.cpp)
+        case 0x5C:  // Murray holds the object's SM (any, 0x23FB68(o, -1)) toward oid w2: kind w1, snapped w3 (0x1E2848)
+            if (p->plo28 && s_phost->FDerivedFrom(p->plo28, 0x35))
+                if (void* plo = PloFind(p, A(c, 0))) s_phost->MurrayHold(p->plo28, plo, A(c, 2), A(c, 1), A(c, 3));
+            return;
+        case 0x64:  // Murray's Bentley toss (0x1E2358)
+            if (p->plo28 && s_phost->FDerivedFrom(p->plo28, 0x35)) s_phost->MurrayToss(p->plo28);
+            return;
+        case 0x65:  // Bentley jumps into the hands of Murray (the object), pending on Bentley
+            if (p->plo28 && s_phost->FDerivedFrom(p->plo28, 0x36))
+                if (void* plo = PloFind(p, A(c, 0)); plo && s_phost->FDerivedFrom(plo, 0x35))
+                {
+                    s_phost->BentleyJumpToMurray(p->plo28);
+                    SetRunPending(p, icmd, p->plo28);
+                }
+            return;
+        case 0x66: case 0x67:  // Murray's toss (in its states 4..6) aimed at the object (0x273030); 0x67 waits on it
+            if (p->plo28 && s_phost->FDerivedFrom(p->plo28, 0x35))
+            {
+                const int st = s_phost->MurrayThrowState(p->plo28);
+                if (st >= 7 || st < 4) return;
+                if (c.id == 0x67) p->plo94 = s_phost->MurrayThrowOwner(p->plo28);
+                void* plo = PloFind(p, A(c, 0));
+                if (!plo) return;
+                s_phost->MurrayAim(p->plo28, plo);
+                if (c.id == 0x67) SetRunPending(p, icmd, p->plo28);
+            }
+            return;
+        // orig3 0x226D00 case 36 (0x22B090): the zone (cid 0x0E) selected; case 37 (0x22B150): the player pinned
+        case 0x24:
+            if (void* plo = PloFind(p, A(c, 0)); plo && s_phost->FDerivedFrom(plo, 0x0E)) SelectRunZone(p, plo);
+            return;
+        case 0x25: PinRunPlayer(p, PloFind(p, A(c, 0))); return;
         case 0x6C:  // orig3: the choice menu D_0036BB80 (none: nothing): up to 3 of the listed lines not chosen before at
                     // this command (the run's list +0x15C), with the buttons 0x80 / 0x10 / 0x20 (0x1634F0)
         {
@@ -1123,6 +1198,30 @@ bool FCmdDone(RUN3* p, int icmd)
     }
     case 0x1C: return !s_phost->FNoticeBusy();  // orig3 FCmdDone 28
     case 0x58: case 0x5B: return F(A(c, 0)) <= TDirectorStream3();  // orig3 FCmdDone 88 / 91: the song's time reached
+    case 0x5C:  // orig3 FCmdDone 92: the run's actor a Murray out of his hold (state 6), or his SM at the goal w2
+        if (!p->plo28 || !s_phost->FDerivedFrom(p->plo28, 0x35)) return false;
+        return s_phost->FMurrayHoldDone(p->plo28, A(c, 2));
+    case 0x65:  // orig3 FCmdDone 101: no pending actor, 7 s, or Murray's toss (the object) in its states 4..6
+    {
+        if (!p->ploPending) return true;
+        void* plo = PloFind(p, A(c, 0));
+        if (7.0f < TScpt(ps) - p->tStart) return true;
+        const int st = plo ? s_phost->MurrayThrowState(plo) : -2;
+        return st < 7 && st >= 4;
+    }
+    case 0x66:  // orig3 FCmdDone 102: no pending actor, 10 s, or its toss's aim arrived (0.1 on each axis)
+        if (!p->ploPending) return true;
+        if (10.0f < TScpt(ps) - p->tStart) return true;
+        return s_phost->FMurrayAimArrived(p->ploPending);
+    case 0x67:  // orig3 FCmdDone 103: no pending actor, 10 s, or the toss over (-1, or 0: vt slot 99 (0)) and the kept +0 landed
+    {
+        if (!p->ploPending) return true;
+        if (10.0f < TScpt(ps) - p->tStart) return true;
+        const int st = s_phost->MurrayThrowState(p->ploPending);
+        if (st != -1 && st != 0) return false;
+        if (st == 0) s_phost->ActorJumpKind0(p->ploPending);
+        return p->plo94 && s_phost->ActorJumpState(p->plo94) == -1;
+    }
     case 0x5D: case 0x5E:  // orig3 FCmdDone 93 / 94: no actor, or its +0x1520 == 8 (0x5D) / != 8 (0x5E)
     {
         if (!p->ploPending) return true;

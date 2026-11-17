@@ -65,6 +65,16 @@ public:
     GLuint FboScene() const { return fboMsaa ? fboMsaa : fbo; }
     // Resolves MSAA and copies the scene to the window.
     void Present();
+    // (upscaling, fsr.h; display.h fUpscale) after the scene, before the HUD: the scene (fScene; else nothing, for the
+    // overlay's frames that draw only it) upscaled into a target of the picture's size, which then stands in for the
+    // scene target until EndNativeUi (fbo / fbc / rbo, renderWidth / renderHeight its, no MSAA), so the HUD, the menus,
+    // the foreground kinds and the overlay draw at the window's resolution over it. Nothing when FUpscaleFrame is false.
+    void BeginNativeUi(bool fScene);
+    // The scene target back (Present calls it; also at the frame's end without a window)
+    void EndNativeUi();
+    // This frame upscales: the option on, the scene smaller than the picture both ways, FSR 1 available, outside VR
+    bool FUpscaleFrame() const;
+    bool FNativeUi() const { return fNativeUi; }
     // Reads the resolved scene as RGBA rows (top row first) and writes a PNG.
     bool FWriteScreenshot(const std::string& path);
     void Terminate();
@@ -72,10 +82,20 @@ public:
 private:
     GLuint fboOverlay = 0, fboOverlaySource[2]{}, texOverlaySource[2]{};
     int iOverlaySource = 0, cOverlaySources = 0;
+    // (the overlay's textures' sizes: the scene target's, or the native target's while upscaling)
+    int dxOverlaySource = 0, dyOverlaySource = 0, dxOverlay = 0, dyOverlay = 0;
     void ReleaseOverlaySources();
+    // (BeginNativeUi) the native target while the scene target waits, and the scene target's MSAA framebuffer
+    GLuint fboUi = 0, texUi = 0, rboUi = 0, fboMsaaScene = 0;
+    int dxUi = 0, dyUi = 0;
+    bool fNativeUi = false;
+    void SwapNativeUi();
+    void ReleaseNativeUi();
 };
 
 extern GL g_gl;
+// (GLSHADER::CompileErrors) the programs that failed to compile or link so far (main.cpp --gl-selftest: none may)
+extern int g_cShaderErrors;
 // (VR multiview, vr.cpp / render.cpp RenderSceneStereo) a pass drawing both eyes at once into a two-view framebuffer:
 // GLSHADER::Use binds the programs' two-view variants and sets their caneClipLtoR (view 1's clip from view 0's) for the
 // pass g_serialMultiview; a variant that cannot be made sets g_fMultiviewFailed (VR then draws the eyes one by one)
@@ -85,6 +105,7 @@ extern float g_amatMultiviewLtoR[16];
 extern GLSHADER glGlobShader;
 // glGlobShader without its fragment discards (NOKILL), for the runs without alpha test and DATE; ID 0: none
 extern GLSHADER glGlobShaderNoKill;
+extern GLSHADER glGlobShaderVol, glGlobShaderVolNoGeom;   // (render.cpp DrawProjVolume: the pulled no-discard program without CANE_BLEND1, with / without the near-clip stage; ID 0 elsewhere)
 // (perf-4) both without the near-clip geometry stage (ID 0: not built); g_fGlobNoGeom: render.cpp may use them
 extern GLSHADER glGlobShaderNoGeom, glGlobShaderNoKillNoGeom;
 extern bool g_fGlobNoGeom;
@@ -94,6 +115,7 @@ extern bool g_fGlobBindless;
 extern bool g_fGlobArrays;
 // OpenGL ES (Android) without EXT_base_instance / multi-draw-indirect: each draw sets glob.vert's caneDrawBase (render.cpp DrawIndexed)
 extern bool g_fDrawUniform;
+extern bool g_fBlend1;   // (glob.frag CANE_BLEND1, render.cpp FSetBlend: the Vulkan renderer on Android)
 // (VR Immersive, vr.h) the HUD drawn over transparency for the headset's panel: its alpha written too (premultiplied
 // colours, "over" alpha); false (always outside VR): the alpha kept as before
 extern bool g_fHudAlphaLayer;

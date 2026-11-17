@@ -113,6 +113,7 @@ struct TASKSW
 struct TASKMGR
 {
     float tIdleEvent = 0.0f;     // +0x00 (the clock's +0x3C at the last broadcast 0xE)
+    float tCmTurned = 0.0f;      // (Sly 3 GAME +0x04: the camera clock at the last broadcast 1, orig3 0x274AC0)
     int n8 = 0;
     int nItemC = -1;             // +0x0C (the item last acquired: 0x1DAF38)
     OID oidJob = -1, oidTask = -1, oidQueued = -1;  // +0x10 / +0x14 / +0x18
@@ -132,7 +133,7 @@ bool FDebugCompleteJob();  // (debug key F9: the current job completed through t
 float GSuck();  // orig 0x00154C90: the dynamic difficulty (0 .. 1), task.cpp
 void ApplyCheckpointTasks(SW* psw, LO* pchk, const std::vector<std::pair<OID, int>>& aent);  // orig 0x00161F48
 int NTaskStateOid(OID oid, bool* pfDone);  // a task's state +0x54 (-2: none) and done (0x164030)
-void RequestTaskStartByOid(SW* psw, const uint8_t* pchk, OID oidTask, OID oidWipe = -1);  // orig 0x001651D8 (Sly 3: 0x189F38's wipe)
+void RequestTaskStartByOid(SW* psw, const uint8_t* pchk, OID oidTask, OID oidWipe = -1, int grfExtra = 0);  // orig 0x001651D8 (Sly 3: 0x189F38's wipe)
 int NTasksPercentDone(SW* psw);              // orig 0x00161660
 void EndWorldTasks(SW* psw);
 void EndJob(SW* psw, JOB* pjob);             // orig 0x00162E38                 // orig 0x0020E068's part: the broadcast 1, an ended job restarted

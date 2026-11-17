@@ -18,14 +18,10 @@ namespace cane::settings {
 
 inline bool sly3HasKey(std::string_view section, std::string_view key) {
     if (section == "VR") return false;
-    if (section == "Display" && key.substr(0, 9) == "Upscaling") return false;   // (Sly 2's renderer only, for now)
     if (section == "Language" && key == "Voices") return false;   // (Sly 3: English voices only, nothing to choose)
     if (section == "Controller" && (key == kSaveOptionInvertBinocucom || key == kSaveOptionInvertTurret)) return false;
     if (section == "Keyboard" && (key == "Tank Left Track" || key == "Tank Right Track")) return false;
     if (section == "Mouse" && key == "Mouse Aim In Hacking") return false;
-    if (section == "Graphics" && key == "Texture Streaming") return false;   // (Sly 2's renderer only, for now)
-    if (section == "Graphics" && key == "Outline Thickness") return false;   // (Sly 2's renderer only, for now)
-    if (section == "Display" && key == "HUD Placement") return false;   // (Sly 2's HUD only, for now)
     return true;
 }
 
@@ -53,6 +49,11 @@ inline const std::vector<Sly2Key>& sly3Schema() {
                                   return false;
                               } });
             }
+        // (s3-3dtoggle) the original's 3-D (anaglyph) mode: off by default (never asked, not offered)
+        k.push_back(detail::gameBoolKey("Graphics", "3D Mode",
+                                "On: the original's red / cyan 3-D glasses mode is offered (the 3-D question, the job chooser's\n"
+                                "\"in 3-D\" start). Off: never asked, the normal picture",
+                                &Sly2GameOptions::mode3d));
         return k;
     }();
     return schema;

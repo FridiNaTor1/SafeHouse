@@ -16,6 +16,7 @@
 #include "game/guru3.h"
 #include "so.h"
 #include "stepphys.h"
+#include "sly.h"
 
 #include <cstdint>
 #include <cstdio>
@@ -131,13 +132,15 @@ void UpdateActorStepMesh(ACTOR* pa)
     int isoe = -1;
     if (SLY* ps = PslyFromLo(palo))
     {
-        switch (ps->state)
+        switch (ps->jts)
         {
-        case 7: isoe = IsoeInteractMesh(pa, &fSnap); break;
-        case 4: isoe = IsoeDamageMesh(pa, &fSnap); break;
-        case 2: isoe = IsoeJumpMesh(pa, &fSnap); break;
-        case 21: case 22: isoe = IsoePart(palo, 0x520); break;
-        default: isoe = IsoePart(palo, 0x1720u + 4u * static_cast<uint32_t>(ps->state)); break;
+        // (orig3 0x1ADBE0: Sly 3's states 8 / 5 / 3 their sub-objects', 17 (the hook of kind 3) +0x560; the others the
+        // word of the state, none bound by the parts tables: the base's)
+        case jts::Interact: isoe = IsoeInteractMesh(pa, &fSnap); break;
+        case jts::Damage: isoe = IsoeDamageMesh(pa, &fSnap); break;
+        case jts::Jump: isoe = IsoeJumpMesh(pa, &fSnap); break;
+        case jts::HangFollow: case jts::N2ClimbSurf: isoe = IsoePart(palo, 0x520); break;
+        default: isoe = IsoePart(palo, 0x1720u + 4u * static_cast<uint32_t>(ps->jts)); break;
         }
         if (isoe == -1) isoe = IsoePart(palo, 0x1720);
     }

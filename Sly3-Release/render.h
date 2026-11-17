@@ -22,6 +22,11 @@ struct CAMERA
     // The game's camera (cm.h): its rows (x view, y left, z up; roll included) instead of yaw / pitch.
     bool fMat = false;
     glm::mat3 mat{1.0f};
+    // (Sly 3's 3-D (anaglyph) mode, CM sEyeShift3 / sConverge3 (cm.h): RenderScene draws the two eyes when sEyeShift3 is
+    // not 0; ieye3 the eye MatWorldToClip makes (orig3 0x167E40: 1 shifted +, 2 shifted -, 0 the middle)
+    float sEyeShift3 = 0.0f;
+    float sConverge3 = 0.0f;
+    int ieye3 = 0;
 
     glm::vec3 Dir() const;
     glm::mat4 MatWorldToClip(float aspect) const;

@@ -1,7 +1,7 @@
 #pragma once
 // "Add desktop shortcut": a shortcut on the user's desktop (and, if asked, in the applications menu / Start menu) that
 // starts a game directly, like the Steam shortcut (`safehouse --play <game>`, no launcher window; the region selected in
-// SafeHouse). Sly 1 and Sly 2 only for now.
+// SafeHouse). Sly 1, Sly 2 and Sly 3.
 //
 // Linux: <desktop>/safehouse-<game>.desktop (desktop = XDG_DESKTOP_DIR from user-dirs.dirs, as `xdg-user-dir DESKTOP`
 // reads it, else ~/Desktop), executable and, where `gio` exists, metadata::trusted (GNOME; KDE needs only +x). The
@@ -39,6 +39,7 @@
 #include <sys/stat.h>
 #include "launcher_shortcut_sly1.h"
 #include "launcher_shortcut_sly2.h"
+#include "launcher_shortcut_sly3.h"
 #include "launcher_shortcut_collection.h"
 #if defined(CANE_ANDROID)
 #include "launcher_shortcut_collection_adaptive.h"
@@ -46,13 +47,13 @@
 #endif
 
 namespace cane::shortcut {
-// Games that get the button (the user's call: Sly 3 later). macOS has no .desktop files: no button there.
+// Games that get the button (Sly 3 since 2026-11-17, the beta with Sly 2's features). macOS has no .desktop files: no button there.
 inline bool supported(GameId game) {
 #if defined(__APPLE__)
     (void)game;
     return false;
 #else
-    return game == GameId::Sly1 || game == GameId::Sly2;
+    return game == GameId::Sly1 || game == GameId::Sly2 || game == GameId::Sly3;
 #endif
 }
 // The window class the game's window has (GLFW uses the window title when no class is set): StartupWMClass.
@@ -174,6 +175,7 @@ inline fs::path installedIcon(GameId game, const char* size = "256x256") {
 inline std::string iconImage(GameId game) {
     if (game == GameId::Sly1) return std::string(reinterpret_cast<const char*>(cane_shortcut_sly1), sizeof(cane_shortcut_sly1));
     if (game == GameId::Sly2) return std::string(reinterpret_cast<const char*>(cane_shortcut_sly2), sizeof(cane_shortcut_sly2));
+    if (game == GameId::Sly3) return std::string(reinterpret_cast<const char*>(cane_shortcut_sly3), sizeof(cane_shortcut_sly3));
     return {};
 }
 // The .desktop text. icon: an absolute PNG path, or a theme icon name.

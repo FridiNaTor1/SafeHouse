@@ -24,3 +24,12 @@ struct BOATWATER3
 bool FBoatWater3(const LO* plo, BOATWATER3* pbw);
 // (the harness, route.cpp's "row TASK N" step) the stick (pad units) and a stroke for the current player's boat
 bool FRowStick3(LO* plo, int oidTask, float* px, float* py, bool* pfStroke);
+
+// Murray's boat state 23 (orig3 0x1DE690 case 23; EOPID 1152's setter 0x1E47F0, the clip 0x1E4900, the update 0x1E49B8)
+struct MURRAY;
+void SetMurrayBoat3(MURRAY* p, LO* pboat);
+void SetMurrayRowClip3(MURRAY* p, int mode);
+void EnterMurrayRow3(MURRAY* p);
+void LeaveMurrayRow3(MURRAY* p);
+void UpdateMurrayRow3(MURRAY* p);
+void OnMurrayRowEvent3(MURRAY* p, int ev);   // his clip events 0x247 / 0x248

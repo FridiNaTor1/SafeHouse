@@ -3,7 +3,7 @@
 
 #if defined(__linux__) && !defined(__ANDROID__)
 #include <execinfo.h>
-#else
+#elif !defined(__ANDROID__)   // (Android: platform/android/sly_android_compat.h, force-included, has the stand-in)
 static int backtrace(void**, int) { return 0; }
 #endif
 #include <cstdio>

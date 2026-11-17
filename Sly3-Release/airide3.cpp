@@ -1,6 +1,7 @@
 // See airide3.h. Ported from the Sly 3 decomp (orig3 addresses in the comments).
 
 #include "airide3.h"
+#include "activate.h"
 
 #include "aijobs.h"
 #include "aihit.h"
@@ -452,6 +453,11 @@ void JOBRIDE3::Attack()
     auto* o = static_cast<JOBMOVE*>(PjobPush(pg, 0x9D));
     o->pkinde = pa && pa->kinde.k >= 0 ? &pa->kinde : nullptr;
     o->Enter();
+    // (s3fix-ai3, AUDIT4 AI-18) a kind-2 entry: Sly 3 pushes 0xCB with +0x120 1 / +0xCC 2 and the subject's position
+    // (0x132930: the subject +0x30, the action, its vt slot 36's position) as the leap's goal: the kind-2 player's
+    // target the action's position (was the move's own leap goal)
+    if (o->pkinde && o->pkinde->k == 2 && o->pkinde->pvState && pact)
+        SetK2Target(static_cast<K2PLAY*>(o->pkinde->pvState), PosLoWorld(pact));
     if (FPrint())
         std::printf("ride3: guard %d attacks: action %d kind %d oid %d\n", pg->palo->oid, pact ? pact->oid : -1,
                     o->pkinde ? o->pkinde->k : -9, o->pkinde ? o->pkinde->oid : -1);

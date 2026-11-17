@@ -112,7 +112,23 @@ public final class NativeBridge {
     static native void nativeTouch(boolean active, float[] axes, boolean[] buttons);
     static native void nativeThermalStatus(int status);
     static native int nativeRunExtractor(String[] arguments);
-    static native int nativeRunRuntime(String[] arguments);
+    static native int nativeRunRuntime(String program, String[] arguments);
+    // The game activity this process started or runs (GameActivity, or FlatGameActivity for a game without VR), for
+    // bringing it back to the front.
+    static volatile Class<? extends GameActivity> gameActivity = GameActivity.class;
+    // A game's activity: Sly 3 has no VR mode yet and is a flat window also on a headset.
+    static Class<? extends GameActivity> gameActivityFor(String program) {
+        return "Sly3-Release".equals(program) ? FlatGameActivity.class : GameActivity.class;
+    }
+    // The games this package runs: their JNI libraries (cmake/android.cmake), started by name ("Sly2-Release").
+    static final java.util.Set<String> GAMES = new java.util.HashSet<>(Arrays.asList("Sly2-Release", "Sly3-Release"));
+    // The game library an activity / tool intent asks for ("program"; debuggable builds: "debug-program" from adb),
+    // Sly 2 when none or an unknown one is named.
+    static String gameLibrary(Intent intent) {
+        String program = intent == null ? null : intent.getStringExtra("program");
+        if (program == null && intent != null) program = intent.getStringExtra("debug-program");
+        return program != null && GAMES.contains(program) ? program : "Sly2-Release";
+    }
 
     // The context that starts children: the visible activity, or the extractor service (which starts Sly 2's
     // converter, RunTool in File Extractor/pcbrx.h). Activities and services both reach startChild.
@@ -156,12 +172,13 @@ public final class NativeBridge {
         if (executable.startsWith("lib")) executable = executable.substring(3);
         if (executable.endsWith(".so")) executable = executable.substring(0, executable.length() - 3);
         final boolean extractor = executable.equals("cane-extractor");
-        // Sly 2's tools (the install's converter, the texture export, the PS3 HD import) run without a window.
+        // The games' tools (Sly 2's install converter, the texture export, the PS3 HD import; Sly 3's worlds for the
+        // install) run without a window.
         java.util.List<String> list = Arrays.asList(arguments);
         final boolean query = !extractor && (list.contains("--convert") || list.contains("--export-textures") ||
-            list.contains("--ps3-hd-textures") || list.contains("--version"));
-        if (!extractor && !executable.equals("Sly2-Release"))
-            throw new IOException("This Android package runs Sly 2 only (" + executable + ")");
+            list.contains("--ps3-hd-textures") || list.contains("--version") || list.contains("--convert-worlds"));
+        if (!extractor && !GAMES.contains(executable))
+            throw new IOException("This Android package runs Sly 2 and Sly 3 only (" + executable + ")");
         long handle = NEXT_CHILD.getAndIncrement();
         Child state = new Child(); CHILDREN.put(handle, state);
         ParcelFileDescriptor[] input = ParcelFileDescriptor.createPipe();
@@ -183,8 +200,10 @@ public final class NativeBridge {
                 }
             }
         };
-        Intent intent = new Intent(current, extractor ? ExtractorService.class : query ? RuntimeToolService.class : GameActivity.class);
+        if (!extractor && !query) gameActivity = gameActivityFor(executable);
+        Intent intent = new Intent(current, extractor ? ExtractorService.class : query ? RuntimeToolService.class : gameActivity);
         intent.putExtra("arguments", Arrays.copyOfRange(arguments, 1, arguments.length));
+        if (!extractor) intent.putExtra("program", executable);
         // Android rejects file descriptors in activity/service intents. A
         // private Binder transfers the two pipe ends after the child starts.
         Bundle channel = new Bundle(); channel.putBinder("pipes", state.pipes);
@@ -277,7 +296,7 @@ public final class NativeBridge {
                 if (entry.getValue().game && childRunning(entry.getKey())) running = true;
             if (!running || launcher.isFinishing() || launcher.isDestroyed()) return;
             if (!launcher.resumed) return;   // (left again in the meantime)
-            launcher.startActivity(new Intent(launcher, GameActivity.class)
+            launcher.startActivity(new Intent(launcher, gameActivity)
                 .addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT | Intent.FLAG_ACTIVITY_NEW_TASK));
         }, 300);
     }
@@ -285,7 +304,7 @@ public final class NativeBridge {
         GameActivity.visibleRequested = true;
         Activity current = activity;
         if (current == null) return;
-        UI.post(() -> current.startActivity(new Intent(current, GameActivity.class)
+        UI.post(() -> current.startActivity(new Intent(current, gameActivity)
             .addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT | Intent.FLAG_ACTIVITY_NEW_TASK)));
     }
     /** The device's vibrator (the game's rumble with the on-screen pad): amplitude 0..255, 0 stops it. */

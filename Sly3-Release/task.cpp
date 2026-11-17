@@ -1424,15 +1424,16 @@ void ApplyCheckpointTasks(SW* psw, LO* pchk, const std::vector<std::pair<OID, in
 }
 
 // orig 0x001651D8
-void RequestTaskStartByOid(SW* psw, const uint8_t* pchk, OID oidTask, OID oidWipe)
+void RequestTaskStartByOid(SW* psw, const uint8_t* pchk, OID oidTask, OID oidWipe, int grfExtra)
 {
-    // (Sly 3: orig3 0x189E70: the task keys queue it for the world start, game/task3.cpp; the world (re)loads)
+    // (Sly 3: orig3 0x189E70: the task keys queue it for the world start, game/task3.cpp; the world (re)loads, or is
+    // reset in place with TRANSF_INPLACE3 when it is the same world: transition.cpp)
     {
         FRequestTaskStartByOid3(oidTask);
         g_taskmgr.oidJob = -1;
         g_taskmgr.oidTask = -1;
         g_taskmgr.oidQueued = -1;
-        RequestTransition(psw, pchk, sly3::POINT_DEFAULT, -1, 8, oidWipe);
+        RequestTransition(psw, pchk, sly3::POINT_DEFAULT, -1, 8 | grfExtra, oidWipe);
         return;
     }
     s_psw = psw;

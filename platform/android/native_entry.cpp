@@ -12,8 +12,13 @@
 #include "android_app.h"
 
 #if defined(CANE_ANDROID_GAME_ENTRY)
-int cane_sly2_main(int, char**);
-#define CANE_ANDROID_ENTRY cane_sly2_main
+// (the game's main under another name: cane_sly2_main for libSly2-Release.so, cane_sly3_main for libSly3-Release.so;
+// Sly3-Release/CMakeLists.txt passes CANE_ANDROID_GAME_MAIN)
+#ifndef CANE_ANDROID_GAME_MAIN
+#define CANE_ANDROID_GAME_MAIN cane_sly2_main
+#endif
+int CANE_ANDROID_GAME_MAIN(int, char**);
+#define CANE_ANDROID_ENTRY CANE_ANDROID_GAME_MAIN
 #define CANE_ANDROID_ROLE "game"
 #elif defined(CANE_ANDROID_LAUNCHER_ENTRY)
 int cane_launcher_main(int, char**);
@@ -30,11 +35,12 @@ extern "C" __attribute__((visibility("default"))) int cane_extractor_main(int ar
 
 extern "C" __attribute__((visibility("default"))) int SDL_main(int argc, char** argv) {
 #if defined(CANE_ANDROID_GAME_ENTRY)
-    // Sly 2's tools (--convert, --export-textures, --ps3-hd-textures) run in the tool service without a window.
+    // The games' tools (--convert, --export-textures, --ps3-hd-textures; Sly 3's --convert-worlds) run in the tool
+    // service without a window.
     bool tool = false;
     for (int i = 1; i < argc; ++i)
         if (!std::strcmp(argv[i], "--convert") || !std::strcmp(argv[i], "--export-textures") ||
-            !std::strcmp(argv[i], "--ps3-hd-textures"))
+            !std::strcmp(argv[i], "--ps3-hd-textures") || !std::strcmp(argv[i], "--convert-worlds"))
             tool = true;
     setenv("SAFEHOUSE_ANDROID_ROLE", tool ? "tool" : CANE_ANDROID_ROLE, 1);
 #else

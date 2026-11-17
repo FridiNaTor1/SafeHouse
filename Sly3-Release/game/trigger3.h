@@ -28,11 +28,19 @@
 
 #include <functional>
 
+#include <cstdint>
+
 struct SW;
 struct LO;
 
+// (s3fix-ai2) orig3 0x257A70: a guard entered a class-0x17 trigger of kind k (+0x250), mask (+0x254), aware-of object
+// psource (+0x258) (aijobs.cpp: the reaction 21, job 0xEA)
+void OnTriggerGuardEnter3(LO* plo, LO* ptrig, int k, uint32_t mask, LO* psource);
+
 namespace sly3
 {
+inline constexpr int CID_TRIGGER17 = 0x17;   // NEW_VOLTRIGGER_17 (vt 0x369518): the guards' trigger reaction
+int NTriggerKind17(const LO* plo);   // a class-0x17 trigger's kind (+0x250, EOPID 1775; -1: not one)
 // What the game plugs in (game3.cpp / the player / the splice side)
 struct TRIGGERHOST3
 {
@@ -53,6 +61,7 @@ extern TRIGGERHOST3 g_trighost3;
 void StartTriggers3(SW* psw);
 // The old world's end (UnloadWorld)
 void ResetTriggers3();
+void ResetTriggersInPlace3();   // (orig3 slot 31 0x15D2A8: every trigger's state 0, the in-place world reset)
 // The UpdateSw pass over the active triggers (vt slot 55 0x15D510 each)
 void UpdateTriggers3(SW* psw);
 

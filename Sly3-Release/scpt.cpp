@@ -281,6 +281,8 @@ std::vector<DLI*>& Adli()
     return s_a;
 }
 
+// (Sly 3: this Sly 2 interpreter is not the scripts' (game/scptrun3.cpp is); what still calls into it (e.g. binoc.cpp's
+// PlayActorScriptAnim) passes Sly 2 class ids, given here through S3CID: every call below names Sly 2's id)
 bool IsA(const LO* plo, CID cid) { return plo && FCidDerivedFrom(plo->Cid(), cid); }
 
 float TScpt(const SCPT* ps) { return ps && ps->fRealTime ? g_clock.t3C : g_clock.t; }
@@ -312,7 +314,7 @@ LO* PloFind(RUN* p, int id)
 {
     if (id == -1 || !g_splicegame.pfnFindObject) return nullptr;
     LO* q = dynamic_cast<LO*>(g_splicegame.pfnFindObject(4, static_cast<SYMID>(id), p->ploCtx, nullptr));
-    if (q && IsA(q, 6))
+    if (q && IsA(q, S3CID(6)))
     {
         if (PFNOBJGETTER pfn = PfnObjectGetter(sly3::Eopid3FromEopid2(1176))) q = dynamic_cast<LO*>(pfn(q).m_pbasic);  // 0x1CB2E0
         else q = nullptr;
@@ -394,7 +396,7 @@ void SetRunPending(RUN* p, int ic, LO* plo)
 // orig: 0x001E51A0 (command 0x47: a PO's effects held (vt slot 83), at most 4 per runner, each object once)
 void HoldRunEffects(RUN* p, LO* plo, int grf, int f)
 {
-    if (!plo || !IsA(plo, 0x33)) return;
+    if (!plo || !IsA(plo, S3CID(0x33))) return;
     for (const RUN::HOLD& h : p->ahold)
         if (h.plo == plo) return;
     if (p->ahold.size() >= 4) return;
@@ -404,7 +406,7 @@ void HoldRunEffects(RUN* p, LO* plo, int grf, int f)
 // orig: 0x001E5280 (command 0x48 / the runner's end: released (vt slot 84))
 void ReleaseRunEffects(RUN* p, LO* plo, int grf, int f)
 {
-    if (!plo || !IsA(plo, 0x33)) return;
+    if (!plo || !IsA(plo, S3CID(0x33))) return;
     for (size_t i = 0; i < p->ahold.size(); ++i)
         if (p->ahold[i].plo == plo)
         {
@@ -651,7 +653,7 @@ void GetRunAim(RUN* p, LO* po, glm::vec3* ppos, float* prad)
     float rad = 0.0f;
     auto matOf = [](LO* plo) {
         // vt slot 31: an ALO's object record, a LOX's matrix in its record's frame
-        if (IsA(plo, 0x30)) return MatJtLo(plo);
+        if (IsA(plo, S3CID(0x30))) return MatJtLo(plo);
         const LOX* plox = static_cast<const LOX*>(plo);
         return plox->pxf ? plox->pxf->matWorld * plox->mat : plox->mat;
     };
@@ -661,30 +663,30 @@ void GetRunAim(RUN* p, LO* po, glm::vec3* ppos, float* prad)
     };
     if (po)
     {
-        if (IsA(po, 0xA))
+        if (IsA(po, S3CID(0xA)))
         {
             // a curve: its nearest point to the runner's object (0x1E6F60 over the whole curve), heading along it
             const CRV* pcrv = PcrvFromLo(po);
             if (pcrv && px)
             {
-                const glm::vec3 q = IsA(px, 0x30) ? PosAloCenter(static_cast<ALO*>(px)) : glm::vec3(matOf(px)[3]);  // 0x1A62E8
+                const glm::vec3 q = IsA(px, S3CID(0x30)) ? PosAloCenter(static_cast<ALO*>(px)) : glm::vec3(matOf(px)[3]);  // 0x1A62E8
                 glm::vec3 dir(1.0f, 0.0f, 0.0f);
                 NearestCrvAll(pcrv, q, &pos, &dir, nullptr, nullptr);
                 rad = std::atan2(dir.y, dir.x);
             }
         }
-        else if (IsA(po, 0x30))
+        else if (IsA(po, S3CID(0x30)))
         {
             pos = PosAloCenter(static_cast<ALO*>(po));
             rad = headingOf(po);
         }
-        else if (IsA(po, 3))
+        else if (IsA(po, S3CID(3)))
         {
             pos = glm::vec3(matOf(po)[3]);
             rad = headingOf(po);
         }
     }
-    else if (px && IsA(px, 0x30))
+    else if (px && IsA(px, S3CID(0x30)))
     {
         pos = PosAloCenter(static_cast<ALO*>(px));
         if (STEP* pstep = PstepFromLo(px))
@@ -727,13 +729,15 @@ void PlayActorScriptAnim(LO* ploActor, LO* plo, int oid, int grfapl, int kind)
         return;
     }
     if (!plo) return;
-    if (IsA(plo, 0x6D))
+    // (orig3 0x156578: ASEG 0x82 / SM 0x84, Sly 2's 0x6D / 0x6F by S3CID; the raw ids were Sly 3's BIRD / BREAKABLE, so
+    // the binocucom speaker's talk animation 1756 never played)
+    if (IsA(plo, S3CID(0x6D)))
     {
         NotifyActorJumpKind(pa, kind);  // vt slot 88 (5; 6 for the scripted walks: steered by the drive)
         ClearSmaHandle(&pa->psma);   // 0x1F15B8
         ApplyAsegCur(static_cast<ASEG*>(plo), pa->palo, 0.0f, 1.0f, grfapl, &pa->pasega);  // 0x1305B8
     }
-    else if (IsA(plo, 0x6F))
+    else if (IsA(plo, S3CID(0x6F)))
     {
         NotifyActorJumpKind(pa, kind);
         RetractAsegaPp(&pa->pasega);  // 0x130658
@@ -828,7 +832,7 @@ void ExecuteRun(const PRUN& prun)
     {
         const int n = kind == 5 ? pc->N(0x14) : pc->N(0x10);
         LO* plo = n == -1 ? p->pscptLo : PloFind(p, n);
-        if (plo && !IsA(plo, 0x72)) plo = nullptr;
+        if (plo && !IsA(plo, S3CID(0x72))) plo = nullptr;
         if (!plo) break;
         if (kind == 5)
         {
@@ -840,7 +844,7 @@ void ExecuteRun(const PRUN& prun)
     case 0x07:
     {
         LO* po = PloFind(p, pc->N(0x10));
-        if (!po || !IsA(po, 0x32)) break;
+        if (!po || !IsA(po, S3CID(0x32))) break;
         if (auto pfn = PfnVt<void (*)(LO*, int)>(po, 79)) pfn(po, 1);
         break;
     }
@@ -870,7 +874,7 @@ void ExecuteRun(const PRUN& prun)
         LO* s1 = PloFind(p, pc->N(0x14));
         if (s1)
         {
-            if (IsA(s1, 0x34))
+            if (IsA(s1, S3CID(0x34)))
             {
                 // 0x143EE0 (kind 5) finds the clip below the actor (0x15E938 kind 1), not around the script: Rajan's
                 // ASEG 423 was found for Sly's knocked-down clip 423, so Sly stood in the bind pose on the lily pad
@@ -878,10 +882,10 @@ void ExecuteRun(const PRUN& prun)
                 if (pc->b == 0) p->ploAnim = s1;
                 break;
             }
-            if (!IsA(s1, 0x30)) s1 = nullptr;
+            if (!IsA(s1, S3CID(0x30))) s1 = nullptr;
         }
         LO* po = PloFind(p, pc->N(0x10));
-        if (!po || !IsA(po, 0x6D)) break;
+        if (!po || !IsA(po, S3CID(0x6D))) break;
         ASEGA* pa = PasegaApplyAseg(static_cast<ASEG*>(po), static_cast<ALO*>(s1), 0.0f, 1.0f, pc->N(0x18));  // 0x130488
         if (pc->b != 0) break;
         p->pasega = pa;
@@ -894,7 +898,7 @@ void ExecuteRun(const PRUN& prun)
         // (vt slot 50)
         LO* plo = PloFind(p, pc->N(0x10));
         if (FPrint()) std::printf("scpt: screen %d found %d cid 0x%X\n", pc->N(0x10), plo ? 1 : 0, plo ? plo->Cid() : 0);
-        if (!plo || !IsA(plo, 0x7E)) break;
+        if (!plo || !IsA(plo, S3CID(0x7E))) break;
         if (kind == 0x0E)
         {
             ShowScreenObj(plo, pc->N(0x14));
@@ -907,7 +911,7 @@ void ExecuteRun(const PRUN& prun)
     case 0x0B:
     {
         LO* plo = PloFind(p, pc->N(0x10));
-        if (!plo || !IsA(plo, 0x72)) break;
+        if (!plo || !IsA(plo, S3CID(0x72))) break;
         StartScptImpl(plo, s0);
         if (pc->b == 0) p->pscptSub = plo;
         break;
@@ -927,14 +931,14 @@ void ExecuteRun(const PRUN& prun)
         {
             // (0x15E650's kind 0x200: an instance's alias too, 0x1A6290: natively LO::oidInstance)
             for (const auto& q : g_psw->aploAll)
-                if (q->oidInstance == pc->N(0x10) && IsA(q.get(), 0x30))
+                if (q->oidInstance == pc->N(0x10) && IsA(q.get(), S3CID(0x30)))
                 {
                     o = q.get();
                     break;
                 }
         }
-        if (FPrint() && !(o && IsA(o, 0x30))) std::fprintf(stderr, "scpt: 0xD object %d not found\n", pc->N(0x10));
-        if (o && IsA(o, 0x30))
+        if (FPrint() && !(o && IsA(o, S3CID(0x30)))) std::fprintf(stderr, "scpt: 0xD object %d not found\n", pc->N(0x10));
+        if (o && IsA(o, S3CID(0x30)))
         {
             SMA* y = nullptr;  // 0x1F67E0
             for (SMA* q : g_apsma)
@@ -968,7 +972,7 @@ void ExecuteRun(const PRUN& prun)
     case 0x1A:
     {
         // the climbing actor (+0xF54 set) to the point of its pipe (+0xF5C) nearest the object +0x10's aim (0x1E6F60)
-        ACTOR* pa = PactorFromLo(actorOf(0x34));
+        ACTOR* pa = PactorFromLo(actorOf(S3CID(0x34)));
         if (!pa || pa->nSubF54 == -1 || !pa->pcrvF50) break;
         glm::vec3 pos;
         GetRunAim(p, PloFind(p, pc->N(0x10)), &pos, nullptr);  // 0x1E4D40
@@ -979,8 +983,8 @@ void ExecuteRun(const PRUN& prun)
     case 0x29:
     {
         // a player in interaction kind 8 (+0x4C8): waited on while in it, the drive steering it to +0x10
-        LO* po = actorOf(0x34);
-        if (!po || !IsA(po, 0x34)) break;
+        LO* po = actorOf(S3CID(0x34));
+        if (!po || !IsA(po, S3CID(0x34))) break;
         ACTOR* pa = PactorFromLo(po);
         if (!pa || pa->nSub4CC == -1) break;  // (+0x4CC: no interaction state)
         if (pa->n4C8 != 8) break;             // (+0x4C8: another kind)
@@ -992,7 +996,7 @@ void ExecuteRun(const PRUN& prun)
         // the actor goes for a target (0x19F590): the object +0x10 (a hook / line of its: 0x184670, TODO(actors);
         // else its aim dropped onto the ground, 0x173610), none: where it stands; +0x14 1: the camera's own control
         // (+0x2E8), Sly's +0x18F0 = +0x18; waited on until its jump ends (+0x2DC -1)
-        ACTOR* pa = PactorFromLo(actorOf(0x34));
+        ACTOR* pa = PactorFromLo(actorOf(S3CID(0x34)));
         if (!pa) break;
         LO* s4 = PloFind(p, pc->N(0x10));
         SAFEGROUND::ENTRY e;
@@ -1037,10 +1041,10 @@ void ExecuteRun(const PRUN& prun)
     {
         // orig: 0x001E1E30: FollowPath pushes the original A8 controller; it does
         // not bind the actor to the runner's direct-input commands.
-        ACTOR* actor = PactorFromLo(actorOf(0x34));
+        ACTOR* actor = PactorFromLo(actorOf(S3CID(0x34)));
         if (!actor) break;
         LO* path = PloFind(p, pc->N(0x10));
-        if (!IsA(path, 0xA)) break;
+        if (!IsA(path, S3CID(0xA))) break;
         const CRV* curve = PcrvFromLo(path);
         if (!curve) break;
         if (pc->N(0x24) != -1)
@@ -1057,7 +1061,7 @@ void ExecuteRun(const PRUN& prun)
     {
         // orig: 0x001E1E30 / 0x00144E68: C1 owns the goal and creates an A8
         // follower with the authored arrival, walk/run and speed settings.
-        ACTOR* actor = PactorFromLo(actorOf(0x34));
+        ACTOR* actor = PactorFromLo(actorOf(S3CID(0x34)));
         if (!actor) break;
         glm::vec3 pos;
         GetRunAim(p, PloFind(p, pc->N(0x10)), &pos, nullptr);
@@ -1075,7 +1079,7 @@ void ExecuteRun(const PRUN& prun)
     case 0x24:
     {
         // the actor goes to the object +0x10 at the speed +0x14 (+0x24: walking), within +0x18
-        LO* s1 = actorOf(0x34);
+        LO* s1 = actorOf(S3CID(0x34));
         if (!s1) break;
         if (pc->N(0x20) != -1)  // 0x143EE0(actor, +0x20, 9, 6): the walk's own animation (the actor's kind 6 state)
             PlayActorScriptAnim(s1, PloFindSwChild(s1, pc->N(0x20)), pc->N(0x20), 9, 6);
@@ -1083,7 +1087,7 @@ void ExecuteRun(const PRUN& prun)
         // to an interaction's object: 0x1938C0 on the actor's +0x4C0 (its mask / target arguments unused there: the
         // first tracked target within 250 starts its interaction); natively only a warning (audit 2026-11 P9). (The
         // state-3 projection into +0x3C (sGoTo) has no reader.)
-        if (pt && (IsA(pt, 0x22) || IsA(pt, 0xC) || IsA(pt, 0x26) || IsA(pt, 0x58) || IsA(pt, 0xB) || IsA(pt, 0x13)))
+        if (pt && (IsA(pt, S3CID(0x22)) || IsA(pt, S3CID(0xC)) || IsA(pt, S3CID(0x26)) || IsA(pt, S3CID(0x58)) || IsA(pt, S3CID(0xB)) || IsA(pt, S3CID(0x13))))
             if (ACTOR* pa = PactorFromLo(s1)) FInteractCircle(pa);
         SetRunPending(p, ic, s1);
         break;
@@ -1122,18 +1126,18 @@ void ExecuteRun(const PRUN& prun)
     {
         // the object placed at another's position and heading
         LO* s1 = PloFind(p, pc->N(0x10));
-        if (s1 && IsA(s1, 0x29))
+        if (s1 && IsA(s1, S3CID(0x29)))
         {
             TriggerWarp(s1);  // 0x228170: the player put at the warp point
             break;
         }
         LO* po = p->plo24;
-        if (!po || !IsA(po, 0x30)) break;
-        if (s1 && IsA(s1, 0x1B))
+        if (!po || !IsA(po, S3CID(0x30))) break;
+        if (s1 && IsA(s1, S3CID(0x1B)))
         {
             // onto the hiding rail: a player (cid 0x34) enters interaction kind 8 on it in its state 9 (0x1928F8 /
             // 0x192BD8 on +0x4C0), no pending actor (e.g. world 10's boardroom start: Sly under the pool's edge)
-            if (IsA(po, 0x34))
+            if (IsA(po, S3CID(0x34)))
                 if (ACTOR* pa = PactorFromLo(po))
                 {
                     StartInteract(pa, 8, s1, JTL_Max);
@@ -1222,7 +1226,7 @@ void ExecuteRun(const PRUN& prun)
     case 0x17: CutCm(&g_cm); break;  // 0x14D8C0
     case 0x23:
         if (!PloFind(p, pc->N(0x14))) break;
-        if (!actorOf(0x34)) break;
+        if (!actorOf(S3CID(0x34))) break;
         SetRunPending(p, ic, p->plo24);
         break;
     case 0x22:
@@ -1230,7 +1234,7 @@ void ExecuteRun(const PRUN& prun)
         // orig 0x1E29D8: the actor's prize interaction (kind 12, 0x1424E0) with the object +0x14 (3: facing the camera
         // instead, 0x2046B0), its animation the ASEG +0x10 (0x15E938 kind 1 from the actor), +0x18 its +0x1318; waited
         // on until the interaction ends (0x142530)
-        ACTOR* pa = PactorFromLo(actorOf(0x34));
+        ACTOR* pa = PactorFromLo(actorOf(S3CID(0x34)));
         if (!pa) break;
         ASEG* paseg = dynamic_cast<ASEG*>(PloFindSwChild(pa->palo, pc->N(0x10)));
         if (!paseg) paseg = dynamic_cast<ASEG*>(PloFindSwNearest(pa->palo, pc->N(0x10)));
@@ -1248,14 +1252,14 @@ void ExecuteRun(const PRUN& prun)
         // the object +0x10 faded in (0x1F7C68, 0.25 s), held by the actor's throw controller +0x11B0, its target the
         // object +0x14's center (0x1A62E8), the arc (0x21FB70), the jump kind 7 (vt slot 88) and the throw (state 7);
         // waited on until the controller is back in state -1 (0x1424C0)
-        LO* s1 = actorOf(0x34);
+        LO* s1 = actorOf(S3CID(0x34));
         ACTOR* pa = PactorFromLo(s1);
         if (!pa) break;
         LO* pa1 = PloFind(p, pc->N(0x10));
         LO* pb = PloFind(p, pc->N(0x14));
         SwitchLoFaded(pa1, true, 0.25f);
         pa->jtthrow.selected = pa1;
-        if (pb) pa->jtthrow.targetWorld = IsA(pb, 0x30) ? PosAloCenter(static_cast<ALO*>(pb)) : PosLoWorld(pb);
+        if (pb) pa->jtthrow.targetWorld = IsA(pb, S3CID(0x30)) ? PosAloCenter(static_cast<ALO*>(pb)) : PosLoWorld(pb);
         UpdateJtThrowArc(pa, false);
         NotifyActorJumpKind(pa, 7);
         SetJtThrowState(pa, 7);
@@ -1266,7 +1270,7 @@ void ExecuteRun(const PRUN& prun)
     {
         // the actor's interaction with the object +0x10 (0x142140: kind 5, the reach; 0x142340: kind 9; 0x1421A0: the
         // reach let go (kind 5 ended), the +0x900 grab; 0x1421F8: kind 5 with the +0x900 reach), waited on (0x1E4EB8)
-        ACTOR* pa = PactorFromLo(actorOf(0x34));
+        ACTOR* pa = PactorFromLo(actorOf(S3CID(0x34)));
         if (!pa) break;
         LO* pt = PloFind(p, pc->N(0x10));
         switch (kind)
@@ -1299,7 +1303,7 @@ void ExecuteRun(const PRUN& prun)
         LO* plo = PloFind(p, pc->N(0x10));
         if (FPrint()) std::fprintf(stderr, "scpt: switch %d (cid 0x%X) %s\n", pc->N(0x10), plo ? plo->Cid() : -1, kind == 0x2C ? "on" : "off");
         SwitchLoFaded(plo, kind == 0x2C, pc->G(0x14));  // 0x210338
-        if (plo && pc->b == 0 && IsA(plo, 0x30)) p->ploFade = plo;
+        if (plo && pc->b == 0 && IsA(plo, S3CID(0x30))) p->ploFade = plo;
         break;
     }
     case 0x2E: case 0x2F: case 0x30: case 0x31:
@@ -1307,7 +1311,7 @@ void ExecuteRun(const PRUN& prun)
         // orig: 0x1E1E30 -> 0x210408 / 0x2104A0: mesh-group visibility
         // and collision flags, resolved from the runner's context (no default object).
         LO* plo = PloFindRunEvent(p, pc->N(0x10));
-        if (!plo || !IsA(plo, 0x30)) break;
+        if (!plo || !IsA(plo, S3CID(0x30))) break;
         const bool fOn = kind == 0x2E || kind == 0x30;
         if (kind <= 0x2F) ShowAloGlobs(static_cast<ALO*>(plo), pc->N(0x14), fOn);
         else SetAloSoesByTag(static_cast<ALO*>(plo), pc->N(0x14), fOn);
@@ -1381,7 +1385,7 @@ void ExecuteRun(const PRUN& prun)
     {
         // the actor launched toward the object +0x10's aim (0x141968: +0x14 the elevation's share, +0x18 the air
         // control's weight)
-        ACTOR* pa = PactorFromLo(actorOf(0x34));
+        ACTOR* pa = PactorFromLo(actorOf(S3CID(0x34)));
         if (!pa) break;
         glm::vec3 pos(0.0f);
         GetRunAim(p, PloFind(p, pc->N(0x10)), &pos, nullptr);  // 0x1E4D40
@@ -1414,7 +1418,7 @@ void ExecuteRun(const PRUN& prun)
     {
         // Murray holds an object up (a gate): his state 6 with its state machine +0x1520, his and the object's state
         // machines run to +0x1C (0x1B9C00)
-        MURRAY* pm = IsA(p->plo24, 0x36) ? PmurrayFromLo(p->plo24) : nullptr;
+        MURRAY* pm = IsA(p->plo24, S3CID(0x36)) ? PmurrayFromLo(p->plo24) : nullptr;
         if (!pm) break;
         LO* pt = PloFind(p, pc->N(0x14));  // 0x1E1DB8
         if (!pt) break;
@@ -1429,20 +1433,20 @@ void ExecuteRun(const PRUN& prun)
     case 0x54: HudPromptEnd(pc->N(0x10)); break;            // ClearHintBox: 0x1DA578 (ClearIfSlotId)
     case 0x50: case 0x51:
         // Bentley (cid 0x37) watched until his state is (0x50) / is not (0x51) 6 (0x1E3890)
-        if (LO* pb = actorOf(0x37)) SetRunPending(p, ic, pb);
+        if (LO* pb = actorOf(S3CID(0x37))) SetRunPending(p, ic, pb);
         break;
     case 0x57:
         // Murray (cid 0x36): the Bentley toss (0x1B9880: his state 15)
-        if (LO* pm = actorOf(0x36))
+        if (LO* pm = actorOf(S3CID(0x36)))
             if (MURRAY* pmur = PmurrayFromLo(pm)) SetMurrayState(pmur, 15);
         break;
     case 0x58:
     {
         // orig 0x1E1E30 case 0x58: Bentley (cid 0x37, +0x14) jumps (kind 3 from his state 0x11, else 1) and is driven
         // (0x1E46A0) until Murray (+0x10) holds him: the partner jump into Murray's hands (w32's 2343 at the battery)
-        BENTLEY* pb = PbentleyFromLo(actorOf(0x37));
+        BENTLEY* pb = PbentleyFromLo(actorOf(S3CID(0x37)));
         LO* plo = PloFind(p, pc->N(0x10));
-        if (pb && plo && IsA(plo, 0x36))
+        if (pb && plo && IsA(plo, S3CID(0x36)))
         {
             SetJumpKind(&pb->jump, pb->jump.state == 0x11 ? 3 : 1, 0, nullptr);  // 0x195A00
             SetRunPending(p, ic, pb->palo);                                      // SetJsgJt
@@ -1453,7 +1457,7 @@ void ExecuteRun(const PRUN& prun)
     {
         // orig case 0x59: Murray (+0x14) aiming the toss (+0x1910 in its states 4..6) turns toward the object +0x10
         // (0x220508); the wait (0x1E3890) is on the runner's actor
-        MURRAY* pm = PmurrayFromLo(actorOf(0x36));
+        MURRAY* pm = PmurrayFromLo(actorOf(S3CID(0x36)));
         if (pm && pm->jtthrow1910.state < 7 && pm->jtthrow1910.state >= 4)
             if (LO* plo = PloFind(p, pc->N(0x10))) SetJtThrowTarget(pm->jtthrow1910, plo);
         break;
@@ -1462,7 +1466,7 @@ void ExecuteRun(const PRUN& prun)
     {
         // orig case 0x5A: as 0x59, then Murray is driven (0x1E46A0: the throw pressed once his aim has arrived); the
         // controller's +0 kept for the wait (+0x18 here: armed)
-        MURRAY* pm = PmurrayFromLo(actorOf(0x36));
+        MURRAY* pm = PmurrayFromLo(actorOf(S3CID(0x36)));
         if (pm && pm->jtthrow1910.state < 7 && pm->jtthrow1910.state >= 4)
         {
             pc->N(0x18) = 1;
@@ -1565,7 +1569,7 @@ bool FCmdDone(RUN* p, SCPTCMD* pc)
     case 0x43:
         // orig 0x1E3890 case 0x43: an actor (cid 0x34) is done when its slot 89 kind is +0x10 (e.g. 8:2121's SCPT 2126
         // waits for Murray to be standing (0) again after a hit before its 0.5 s wait and the walk 2125); else at once
-        if (IsA(p->plo24, 0x34))
+        if (IsA(p->plo24, S3CID(0x34)))
         {
             ACTOR* pa = PactorFromLo(p->plo24);
             return !pa || ActorJumpKind(pa) == pc->N(0x10);
@@ -1782,7 +1786,7 @@ bool FCmdDone(RUN* p, SCPTCMD* pc)
     case 0x4F:
     {
         // Murray out of state 6, or his state machine at +0x1C
-        MURRAY* pm = IsA(p->plo24, 0x36) ? PmurrayFromLo(p->plo24) : nullptr;
+        MURRAY* pm = IsA(p->plo24, S3CID(0x36)) ? PmurrayFromLo(p->plo24) : nullptr;
         if (!pm) return false;
         if (pm->state != 6) return true;
         if (pc->N(0x1C) == -1) return false;

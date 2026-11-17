@@ -487,6 +487,33 @@ constexpr ROW s_arow[] = {
     // P: the display options' Monitor (settings v22; a monitor's own name is shown as the system gives it)
     {PTX_Monitor, {"Monitor", "Écran", "Monitor", "Monitor", "Monitor", "Monitor", "Monitor", "Skærm", "Näyttö", "Skjerm", "Skärm", "モニター"}},
     {PTX_Primary, {"Primary", "Principal", "Principale", "Primär", "Principal", "Primair", "Principal", "Primær", "Ensisijainen", "Primær", "Primär", "メイン"}},
+    // P: Sly 2's display options (its texts; the Japanese in kana, the font's)
+    {PTX_FastShadows, {"Fast Shadows", "Ombres rapides", "Ombre veloci", "Schnelle Schatten", "Sombras rápidas",
+        "Snelle schaduwen", "Sombras rápidas", "Hurtige skygger", "Nopeat varjot", "Raske skygger", "Snabba skuggor",
+        "こうそくなかげ"}},
+    {PTX_OutlineThickness, {"Outline Thickness", "Épaisseur des contours", "Spessore dei contorni", "Konturstärke",
+        "Grosor del contorno", "Dikte van de omlijning", "Espessura do contorno", "Konturtykkelse", "Ääriviivojen paksuus",
+        "Konturtykkelse", "Konturtjocklek", "りんかくせんのふとさ"}},
+    {PTX_Upscaling, {"Upscaling", "Mise à l'échelle", "Upscaling", "Hochskalierung", "Reescalado", "Opschaling",
+        "Aumento de resolução", "Opskalering", "Skaalaus", "Oppskalering", "Uppskalning", "アップスケール"}},
+    {PTX_UpscaleMethod, {"Method", "Méthode", "Metodo", "Methode", "Método", "Methode", "Método", "Metode", "Menetelmä",
+        "Metode", "Metod", "ほうしき"}},
+    {PTX_UpscalePreset, {"Preset", "Préréglage", "Preimpostazione", "Voreinstellung", "Ajuste", "Voorinstelling",
+        "Predefinição", "Niveau", "Esiasetus", "Nivå", "Nivå", "プリセット"}},
+    {PTX_UpscaleSharpness, {"Sharpness", "Netteté", "Nitidezza", "Schärfe", "Nitidez", "Scherpte", "Nitidez", "Skarphed",
+        "Terävyys", "Skarphet", "Skärpa", "シャープネス"}},
+    {PTX_UltraQuality, {"Ultra Quality", "Ultra qualité", "Qualità ultra", "Ultra-Qualität", "Calidad ultra",
+        "Ultrakwaliteit", "Qualidade ultra", "Ultrakvalitet", "Ultralaatu", "Ultrakvalitet", "Ultrakvalitet",
+        "ウルトラクオリティ"}},
+    {PTX_Quality, {"Quality", "Qualité", "Qualità", "Qualität", "Calidad", "Kwaliteit", "Qualidade", "Kvalitet", "Laatu",
+        "Kvalitet", "Kvalitet", "クオリティ"}},
+    {PTX_Balanced, {"Balanced", "Équilibré", "Bilanciato", "Ausgewogen", "Equilibrado", "Gebalanceerd", "Equilibrado",
+        "Balanceret", "Tasapainoinen", "Balansert", "Balanserad", "バランス"}},
+    {PTX_Performance, {"Performance", "Performance", "Prestazioni", "Leistung", "Rendimiento", "Prestaties", "Desempenho",
+        "Ydelse", "Suorituskyky", "Ytelse", "Prestanda", "パフォーマンス"}},
+    // P: the display options' HUD Placement (display.h hudPlacement) and its Match Screen (the picture's own shape)
+    {PTX_HudPlacement, {"HUD Placement", "Position du HUD", "Posizione HUD", "HUD-Position", "Posición del HUD", "HUD-positie", "Posição do HUD", "HUD-placering", "HUD:n sijoittelu", "HUD-plassering", "HUD-placering", "HUDのいち"}},
+    {PTX_MatchScreen, {"Match Screen", "Selon l'écran", "Come lo schermo", "Wie Bildschirm", "Igual que la pantalla", "Zoals scherm", "Igual ao ecrã", "Som skærmen", "Näytön mukaan", "Som skjermen", "Som skärmen", "画面に合わせる"}},
 };
 // clang-format on
 static_assert(std::size(s_arow) == PTX_Max, "one row per PTX");

@@ -1,11 +1,11 @@
 # SafeHouse for Android
 
-The Android app (application id `org.safehouse.android`) packages the SafeHouse launcher, the extractor and Sly 2
-as native libraries on SDL 2.30.11 and OpenGL ES 3.2. It is built from the same sources as the desktop programs
+The Android app (application id `org.safehouse.android`) packages the SafeHouse launcher, the extractor, Sly 2 and
+Sly 3 as native libraries on SDL 2.30.11 and OpenGL ES 3.2 (Sly 2 also on Vulkan). It is built from the same sources as the desktop programs
 (`cmake/android.cmake`); its Java side and the GLFW-on-SDL layer come from ThiefRush's Android port, without the chat
-key (SafeHouse is single-player). Sly 1 and Sly 3 are not packaged: the launcher shows them, but only Sly 2 plays.
+key (SafeHouse is single-player). Sly 1 is not packaged: the launcher shows it, but only Sly 2 and Sly 3 play.
 
-No game data is in the APK. The player picks their own Sly 2 disc image with Android's document picker (Install >
+No game data is in the APK. The player picks their own Sly 2 / Sly 3 disc image with Android's document picker (Install >
 Browse); the app copies it into its own storage (`files/imports`) and installs from there, as the desktop launcher
 does.
 
@@ -25,6 +25,7 @@ folder rules map onto (HOME and the XDG folders point into it):
 | --- | --- |
 | `config/SafeHouse/` | launcher.json, Settings.ini, saves, logs, mods |
 | `share/SafeHouse/installations/sly2/` | the installed (converted) game |
+| `share/SafeHouse/installations/sly3/` | Sly 3: the disc image copy and its world parts |
 | `imports/` | disc images copied in through the document picker |
 
 The **SafeHouse** entry in the Files app's sidebar (and other document pickers) shows these folders
@@ -120,5 +121,21 @@ through a pipe as on the desktop:
 | launcher (`libsafehouse.so`) | `LauncherActivity` | main |
 | launcher without its window (`--play GAME` from a shortcut, `--collection`) | `DirectActivity` | `:direct` |
 | Sly 2 (`libSly2-Release.so`) | `GameActivity` | `:game` |
+| Sly 3 (`libSly3-Release.so`) | `FlatGameActivity` (a flat window, also on the Quest) | `:game` |
 | extractor (`libcane-extractor.so`) | `ExtractorService` | `:extract` |
-| Sly 2's tools (`--convert`, `--export-textures`, `--ps3-hd-textures`) | `RuntimeToolService` | `:tool` |
+| the games' tools (Sly 2's `--convert`, `--export-textures`, `--ps3-hd-textures`; Sly 3's `--convert-worlds`) | `RuntimeToolService` | `:tool` |
+
+## Sly 3
+
+`libSly3-Release.so` is built from `Sly3-Release/` the same way as Sly 2's library (`cmake/android.cmake`,
+`-DCANE_BUILD_SLY3=OFF` leaves it out; +6.7 MB APK, +14 MB installed). The launcher starts it like Sly 2 (the intent's
+`program` names the library GameActivity / RuntimeToolService load). It renders on OpenGL ES 3.2; its Vulkan renderer
+on Android comes with the Sly 3 Vulkan work. It has the same on-screen pad (layouts from its menus, movies and
+scenes, hold the screen to skip a scene), vibration and controller prompts as Sly 2.
+
+On a Meta Quest Sly 3 is a flat 2D panel (`FlatGameActivity`, declared without the VR category), not the immersive
+part of the app, because its VR mode is not ready: it does not ask for an OpenXR session (`Sly3-Release/main.cpp`).
+VR for Sly 3 would need Sly 2's `vr.cpp` path checked against Sly 3's renderer and HUD (the eye passes, the Flat
+Screen / Immersive modes, the Touch layout and prompts), the Vulkan renderer for the Quest's performance, and then
+the start through `GameActivity` as Sly 2.
+

@@ -86,13 +86,18 @@ struct KIND3
         ASEG* paseg = nullptr;    // +0x4
         glm::vec4 vel{0.0f};      // +0x10 the root's mean velocity
         float s20 = 0;            // +0x20 its length
+        // (orig3 0x259330: the two switch windows, each {start, length} from the marker pairs 0x19B / 0x19C and
+        // 0x19D / 0x19E (0x2592A8; wrapped through the clip's length))
+        float aw24[2] = {0.0f, 0.0f};  // +0x24
+        float aw2C[2] = {0.0f, 0.0f};  // +0x2C
     };
     std::array<E, 4> ae;
     int fResolved = 0;            // +0xC0
 };
 
-// The directional player (orig 0x40 bytes, GUARD +0xE20). Marker pairs 0x17D..0x180 allow changing
-// between the four clips; the chosen clip's mean speed supplies the requested direction's velocity.
+// The directional player (orig 0x40 bytes, GUARD +0xE20). Sly 3 (0x259330 / 0x259678): the clip may change while
+// the current clip's phase is inside one of its two marker windows; the chosen clip's mean speed supplies the
+// requested direction's velocity. (Sly 2's ASEG-event gates 0x17D..0x180, f34 / f38, are not used.)
 struct K3PLAY : ASEGALISTENER
 {
     glm::vec4 vel{0.0f};          // +0x10
@@ -154,6 +159,20 @@ struct MOVEREF
     int fHeadingLocked = 0;       // +0x4 (0x2097C8 / 0x2097D8: messages 0x25 / 0x26)
     int n8 = 0;                   // +0x8
     GUARD* pguard = nullptr;      // +0xC
+};
+
+// Sly 3's trigger-reaction records (orig3 +0x11E8 count / +0x11EC, 0xA0 bytes each, at most 8; EOPID 372 (optid 499,
+// thunk 0x104B18 -> 0x2578D8): {kind, mask, two {skip, react} weight pairs}); 0x257B80 deals a shuffled bag of 32 draws
+// between the pairs by the suck (GSuck3), 0x257CB0 takes the next draw. A class-0x17 trigger the guard enters
+// (0x27F6A0 -> 0x257A70) whose kind / mask match a record and whose draw is 1 starts the reaction 21 (job 0xEA)
+struct VOLREACT3
+{
+    int k = 0;                    // +0x0 the trigger kind (0 / 1)
+    uint32_t mask = 0;            // +0x4
+    float aw8[2]{1.0f, 0.0f};     // +0x8 the weights at full suck
+    float aw10[2]{1.0f, 0.0f};    // +0x10 at none
+    std::vector<int> abag;        // +0x18 count / +0x1C the draws (0 skip, 1 react)
+    int ibag = 0;                 // +0x9C
 };
 
 struct GUARD
@@ -242,6 +261,8 @@ struct GUARD
     // passed check when it loses Sly) are field options, read live (GuardField3); these are the code's:
     int fPassed11BC = 0;          // +0x11BC Sly answered its password (job 0xE7 state 8): it lets the disguise pass
     float tLine11C4 = 0;          // +0x11C4 its last spotted line (0x19AF98: one each 5 s)
+    std::vector<VOLREACT3> avolreact3;  // +0x11E8 / +0x11EC (EOPID 372)
+    LO* ppeMode3 = nullptr;       // (Sly 3 +0x17C8: Bentley's effect +0x19C0 played on the guard in modes 0xC / 0xF (native 34 / 37))
     WATCHB watchB;                // +0x49C
     int f4A0 = 1, f4A4 = 0;       // +0x4A0 / +0x4A4
     glm::vec4 pos4B0{0.0f};       // +0x4B0

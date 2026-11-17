@@ -25,6 +25,7 @@
 #include "game/guru3.h"
 #include "game/task3.h"
 #include "jump.h"
+#include "jt.h"
 
 #include "actanim.h"
 #include "actor.h"
@@ -43,6 +44,10 @@
 #include "stepphys.h"
 #include "sw.h"
 #include "vecmat.h"
+#include "activate.h"
+#include "ainoise.h"
+#include "alo.h"
+#include "stepphys.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -149,6 +154,7 @@ struct CMBDEF3
     int nPrio = 0;              // +0x6C
     float dtPress = 0.35f;      // +0x70 (0x3EB33333)
     float sSteer = 800.0f;      // +0x74
+    int fNoisy = 0;             // +0x78 (option 1669: the actor is noisy while it runs, orig3 0x1530F8)
     int fJumpAnim = 0;          // +0x7C
     float g80 = 0.0f;           // +0x80
     ASEG* pclip = nullptr;      // +0x84
@@ -210,41 +216,12 @@ bool FAbilityOwned3(int id)
     return r.m_tagk == TAGK_Bool ? r.m_bool : r.m_tagk == TAGK_S32 ? r.m_n != 0 : false;
 }
 
-// Sly 2's states (the copied sly.cpp) -> Sly 3's (orig3 0x1ADDD0's numbers)
-int State3OfSly(const SLY* p)
-{
-    switch (p->state)
-    {
-    case 0: return 0;
-    case 12: return 1;
-    case 1: return 2;
-    case 2: return 3;
-    case 3: return 4;
-    case 4: return 5;
-    case 5: return 6;
-    case 6: return 7;
-    case 7: return 8;
-    case 8: return 9;
-    case 10: return 10;
-    case 11: return 11;
-    case 16: return 13;
-    case 18: return 14;
-    case 19: return 15;
-    case 20: return 16;
-    case 23: return 18;
-    default: return -1;
-    }
-}
+int State3OfSly(const SLY* p) { return p->jts; }   // (Sly's states are Sly 3's: sly.h jts::)
 
 // orig3 0x1AF200 (vt +0x324): the actor's generic state
 int NGeneric3(const CMBR3& c)
 {
     if (!c.psly) return ActorJumpKind(c.p);   // (the Guru: his vt +0x324 = slot 100, 0x22CFA8: the jump kind of his state)
-    // (the attack is Sly 3's state 23; natively Sly stands in 0 / 2 under it (SetGeneric3). Another state set since (a
-    // script's clip, kind 5: state 19; a jump; a hit) left 23 in the original: not the attack any more. s3-ai round 20:
-    // the boot intro's combo 7561 ended under ASEG 244 (state 19) and its end's SetGeneric3(0) retracted the clip at
-    // 0.55 s, before its 0x2A7 at 0.883 s let the elephant go)
-    if (c.fAttack && (c.psly->state == 0 || c.psly->state == 2)) return 9;
     switch (State3OfSly(c.psly))
     {
     case -1: return -1;
@@ -258,6 +235,7 @@ int NGeneric3(const CMBR3& c)
     case 15: return 5;
     case 16: return 6;
     case 18: return 7;
+    case 23: return 9;
     default: return 11;
     }
 }
@@ -272,28 +250,11 @@ void SetGeneric3(CMBR3& c, int g)
         NotifyActorJumpKind(c.p, g);
         return;
     }
+    // (0x1AF150's table: kind 9 -> state 23, kind 0 -> state 0; the combos set only these two)
     SLY* p = c.psly;
-    if (g == 9)
-    {
-        if (!c.fAttack)
-        {
-            // orig3 0x1AEDC0 (entering 23): the feet's velocity off; natively Sly stands (state 0) under the attack
-            if (p->state != 0 && p->state != 2) SetSlyState(p, 0, -1);
-            p->vecVel = glm::vec3(0.0f);
-            c.fAttack = true;
-        }
-    }
-    else if (g == 0)
-    {
-        // (orig3 0x1ADDD0 entering 0 from 23: the idle SM's state 0x197, the cane brought back)
-        if (c.fAttack && p->state == 0)
-        {
-            g_fSlyLeavingAttack3 = true;
-            SetSlyState(p, 0, -1);
-        }
-        c.fAttack = false;
-        if (p->state != 0 && p->state != 2) SetSlyState(p, 0, -1);
-    }
+    if (g == 9) SetSlyState(p, jts::Attack, -1);
+    else if (g == 0) SetSlyState(p, jts::Stand, -1);
+    c.fAttack = p->jts == jts::Attack;
 }
 
 // orig3 0x2503C8(actor, 0.1): off the floor for more than 0.1 s
@@ -375,6 +336,9 @@ void SetComboState(CMBR3& c, int n)
     {
     case -1:
         if (NGeneric3(c) == 9) SetGeneric3(c, 0);
+        // (PC safety: a clip cut before its event 0x41 leaves no heading lock behind)
+        if (c.p && c.p->palo)
+            if (STEPPHYS* ps = PstepPhysOf(c.p->palo)) ps->fHeadingLock3 = 0;
         c.pdef = nullptr;
         c.ptarget = nullptr;
         break;
@@ -501,6 +465,7 @@ CMBR3* PcmbrOf(ACTOR* p, bool fCreate)
                 case 0x6C: if (pv) pd->nPrio = pv->n; break;
                 case 0x70: if (pv) pd->dtPress = pv->ag[0]; break;
                 case 0x74: if (pv) pd->sSteer = pv->ag[0]; break;
+                case 0x78: if (pv) pd->fNoisy = pv->n; break;
                 default:
                     if (FComboDbg()) std::printf("combo3: def %d option %d not read\n", plo->oid, o.eopid);
                     break;
@@ -545,6 +510,13 @@ bool FDefAbilities(const CMBDEF3* pd)
 }
 }  // namespace
 
+// orig3 0x155CE0 (vt slot 102 of the actors, Sly 2's 91): the combo off (0x13ABC8(+0x10D0, -1)); Sly's 0x1AF120 adds
+// the reach off (0x208B20(+0x18F0, -1)), the Panda King's 0x1EA178 his fireworks (game/guru3.cpp ActorSlot102Sly3)
+void StopCombo3(ACTOR* p)
+{
+    if (CMBR3* pc = PcmbrOf(p, false)) SetComboState(*pc, -1);
+}
+
 PADCTL* PpadctlOfActor3(ACTOR* p)
 {
     PODATA* ppd = p ? PpodataFromLo(p->palo) : nullptr;
@@ -554,6 +526,7 @@ PADCTL* PpadctlOfSly3(SLY* p) { return PpadctlOfActor3(p); }
 
 bool FCombo3Attacking(ACTOR* p)
 {
+    if (SLY* psly = dynamic_cast<SLY*>(p)) return psly->jts == jts::Attack;   // (Sly's state 23)
     CMBR3* c = PcmbrOf(p, false);
     return c && c->fAttack;
 }
@@ -572,15 +545,46 @@ bool FLeaveCombo3Attack(SLY* p)
     PADCTL* ppad = PpadctlOfActor3(p);
     if (!ppad) return false;
     if (!(ppad->uJoy > 0.0f) && !GrfPadctlPressedWithin(ppad, 0x40, 0.1f)) return false;
-    pc->fAttack = false;
     if (FComboDbg()) std::printf("combo3: f %.3f the attack left for state 0 (moving)\n", g_clock.t);
     return true;
+}
+
+// orig3 0x13A9E0 (Sly's motion 0x1AA630 in state 23, the Guru's in his 7): in the air for over 0.1 s (0x2503C8) the
+// velocity steered toward the feet's (+0x1A0 in the world, 0x1C94E8; the floor object's +0x438 / +0x440 part: TODO,
+// none) at up to 2000 / s^2 (0x1205F0), its height kept; with the runner's +0x34 (event 0x2A2) gravity cancelled
+void UpdateCombo3Motion(ACTOR* p)
+{
+    if (!p || !p->palo || p->pxpFloor || !(0.1f < g_clock.t - p->tFloor)) return;
+    CMBR3* pc = PcmbrOf(p, false);
+    const glm::vec3 v = VelAloPos(p->palo);
+    glm::vec3 c = -VecJtConvert(p->palo, nullptr, p->vecVel);   // (+0x1A0 is the feet's velocity reversed)
+    if (pc && pc->f34)
+    {
+        if (SOST* ps = Psost(p->palo)) AccelAloPos(p->palo, -glm::vec3(ps->dvGravity));
+    }
+    else c.z = v.z;
+    if (g_clock.dt > 0.0f) AccelAloPos(p->palo, cmm::LimitVectorLength((c - v) * (1.0f / g_clock.dt), 2000.0f));
 }
 
 int NCombo3State(ACTOR* p)
 {
     CMBR3* c = PcmbrOf(p, false);
     return c ? c->state : -1;
+}
+
+// orig3 0x156388's combo branch: the runner in its state 0 or 2 (+0x10D4) on a definition whose cancel mask (+0x50) has
+// 0x20000 (the actor's contact kind 1 then)
+bool FCombo3StanceAir(ACTOR* p)
+{
+    CMBR3* c = PcmbrOf(p, false);
+    return c && (c->state == 0 || c->state == 2) && c->pdef && (c->pdef->grfCancel & 0x20000u);
+}
+
+// orig3 0x1530F8's second part: the runner runs (+0x10D4 != -1) a definition (+0x10DC) whose +0x78 is set
+bool FCombo3Noisy(ACTOR* p)
+{
+    CMBR3* c = PcmbrOf(p, false);
+    return c && c->state != -1 && c->pdef && c->pdef->fNoisy;
 }
 
 // orig3 0x139FE0 (Sly's vt +0x314) -> 0x13A178
@@ -591,7 +595,7 @@ void UpdateCombo3(ACTOR* p)
     if (!pc) return;
     CMBR3& c = *pc;
     PADCTL* ppad = PpadctlOfActor3(p);
-    if (c.fAttack && c.psly && c.psly->state != 0 && c.psly->state != 2) c.fAttack = false;   // (left state 23: NGeneric3)
+    if (c.psly) c.fAttack = c.psly->jts == jts::Attack;   // (state 23 left by another state change: NGeneric3)
     // TODO(player): 0x139FE0's takedown: a guard target within 400 whose job 0xDA is Sly's: square -> state 13
     const uint32_t grf = GrfNormalizeCombo(GrfComboConditions(c));
     const uint32_t grfHeld = ppad ? ppad->grfbtn : 0;
@@ -676,7 +680,10 @@ void UpdateCombo3(ACTOR* p)
 void HandleCombo3Event(ACTOR* p, const ASEGMSG9* pmsg)
 {
     CMBR3* pc = PcmbrOf(p, false);
-    if (!pc || !pmsg || pmsg->pasega != pc->pasega || !pmsg->pev || pmsg->pev->kind != 0xB) return;
+    if (!pc || !pmsg || pmsg->pasega != pc->pasega || !pmsg->pev) return;
+    // (Sly 3 takes the id of any event kind; natively the runner's own ids keep the kind-0xB test, the actor ones below
+    // (0x40 / 0x41 / 0xFB) come from any kind)
+    if (pmsg->pev->kind != 0xB && pmsg->n != 0x40 && pmsg->n != 0x41 && pmsg->n != 0xFB) return;
     CMBR3& c = *pc;
     switch (pmsg->n)
     {
@@ -701,7 +708,28 @@ void HandleCombo3Event(ACTOR* p, const ASEGMSG9* pmsg)
     case 0x18D: if (c.state == 1 && c.pasega) DemoteAsegaOnAlo(c.pasega, p->palo, {{0x30, -1}, {0x2B, -1}, {0x2D, -1}}); break;
     case 0x18E: if (c.state == 1 && c.pasega) DemoteAsegaOnAlo(c.pasega, p->palo, {{0x31, -1}, {0x2A, -1}, {0x2C, -1}}); break;
     case 0x18F: if (c.state == 1 && c.pasega) DemoteAsegaOnAlo(c.pasega, p->palo, {{0x38, -1}, {0x39, -1}}); break;
-    // 0x40 / 0x41: the actor's +0x1B4 on / off; 0xFB: 0x1B0650 (the booty, the noises)
+    // (s3fix-ai2 / ai3) 0x40 / 0x41: the actor's heading lock (STEP +0x1B4: SetStepHeading 0x24E878 does nothing while
+    // set; stepphys.cpp SetStepPhysHeading: every Sly 3 heading write is a 0x24E878 call, the PC's own placements are not)
+    case 0x40: if (STEPPHYS* ps = PstepPhysOf(p->palo)) ps->fHeadingLock3 = 1; break;
+    case 0x41: if (STEPPHYS* ps = PstepPhysOf(p->palo)) ps->fHeadingLock3 = 0; break;
+    // (s3fix-ai2) 0xFB: 0x1B0650: the smoke of Sly's part +0x1EC0 (oid 629: 0x1FBE30 acquires its proxy's object,
+    // 0x1C7A00(object, 0, 3) puts it in the world at the top), the alarms (noise kind 4) on the actor dropped, and the
+    // guards' alarms held 2 s (D_0047A3CC): as the Smoke Bomb's release (gadget.cpp) with its own part and time
+    case 0xFB:
+    {
+        if (SLY* psly = PslyGlobal(); psly && psly->palo)
+            for (const auto& [ib, proxy] : psly->palo->apart)
+                if (ib == (FN3_TAG | 0x1EC0) && proxy)
+                {
+                    if (LO* peffect = PloAcquireProxyObject(g_psw, proxy, false))
+                        SetAloParent(static_cast<ALO*>(peffect), nullptr, nullptr, 3);
+                    break;
+                }
+        const int c = RemoveActorAlarms(p->palo);
+        SetGuardAlarmResume(g_clock.t + 2.0f);
+        if (FComboDbg()) std::printf("combo3: f %.3f smoke: %d alarms dropped\n", g_clock.t, c);
+        break;
+    }
     default: break;
     }
     if (FComboDbg()) std::printf("combo3: f %.3f event 0x%X\n", g_clock.t, pmsg->n);
@@ -780,4 +808,19 @@ void StartAbilityCombo3(SLY* p, int ability)
     CMBDEF3* pd = ability == 31 ? pc->pdefAbility31 : ability == 25 ? pc->pdefAbility25 : nullptr;
     if (pd) StartCombo(*pc, pd);
 }
+// orig3 0x1AF200 / 0x1AF150 for Sly's slots 100 / 99 (jump.cpp ActorJumpKind / SetOwnerJumpState): the kind of his
+// state, and kind 9 (the attack) set
+int NSlyJumpKind3(SLY* p)
+{
+    if (CMBR3* pc = PcmbrOf(p, false)) return NGeneric3(*pc);
+    CMBR3 c;
+    c.p = p;
+    c.psly = p;
+    return NGeneric3(c);
+}
+void SetSlyAttack3(SLY* p)
+{
+    if (CMBR3* pc = PcmbrOf(p, true)) SetGeneric3(*pc, 9);
+}
+
 }  // namespace sly3

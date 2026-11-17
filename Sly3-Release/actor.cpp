@@ -22,6 +22,7 @@
 #include "worldaccess.h"
 #include "step.h"
 #include "po.h"
+#include "sly.h"
 
 #include <cmath>
 #include <cstdio>
@@ -182,11 +183,11 @@ glm::vec3 PosActorFocus(const ACTOR& a, const ACTORPOSE& pose, const ACTORCMCTX&
 // orig: 0x0018A350 (Sly's slot 97)
 glm::vec3 PosSlyFocus(const SLY& a, const ACTORPOSE& pose, const ACTORCMCTX& ctx)
 {
-    switch (a.state)
+    switch (a.jts)
     {
-    case 3: { glm::vec3 v = PosActorFocus(a, pose, ctx); v.z = ctx.zOther + -175.0f; return v; }
-    case 0x16: { glm::vec3 v = PosActorFocus(a, pose, ctx); v.z = ctx.zOther + -100.0f; return v; }
-    case 0x15: return pose.pos;
+    case jts::Hang: { glm::vec3 v = PosActorFocus(a, pose, ctx); v.z = ctx.zOther + -175.0f; return v; }
+    case jts::HangFollow: { glm::vec3 v = PosActorFocus(a, pose, ctx); v.z = ctx.zOther + -100.0f; return v; }
+    case jts::N2ClimbSurf: return pose.pos;
     default: return PosActorFocus(a, pose, ctx);
     }
 }
@@ -332,11 +333,11 @@ void GetActorCmTarget(ACTOR& a, const ACTORPOSE& pose, const ACTORCMCTX& ctx, CP
 // orig: 0x0018A428 (Sly's slot 50)
 void GetSlyCpdefi(SLY& a, const ACTORPOSE& pose, const ACTORCMCTX& ctx, CPDEFI* pc)
 {
-    if (a.state != 0 && a.state != 0x12 && a.nSub4CC != 0 && a.nSubF54 != 1) a.tActive = ctx.t;
+    if (a.jts != jts::Stand && a.jts != jts::ScriptSm && a.nSub4CC != 0 && a.nSubF54 != 1) a.tActive = ctx.t;
     GetActorCmTarget(a, pose, ctx, pc);
-    switch (a.state)
+    switch (a.jts)
     {
-    case 8:  // 0x19EA00: the velocity along sub-object 0xF50's curve (its direction times the speed +0xF64)
+    case jts::Climb:  // 0x19EA00: the velocity along sub-object 0xF50's curve (its direction times the speed +0xF64)
     {
         glm::vec3 dir(0.0f);
         if (a.pcrvF50) EvalCrvS(a.pcrvF50, a.sCrvF50, nullptr, &dir);
@@ -344,9 +345,9 @@ void GetSlyCpdefi(SLY& a, const ACTORPOSE& pose, const ACTORCMCTX& ctx, CPDEFI* 
         pc->vBase = glm::vec4(dir * a.gCrvF50, 0.0f);
         break;
     }
-    case 3:
-    case 5:
-    case 6: pc->grfcpd |= 1; break;
+    case jts::Hang:
+    case jts::Target:
+    case jts::Dodge: pc->grfcpd |= 1; break;
     default: break;
     }
 }
@@ -455,8 +456,13 @@ void TeleportAloMat(LO* plo, const glm::mat4& m, LO* plodest)
         // orig 0x1A6B88 -> 0x1A6BE8 for the other ALOs: slot 29 (0x1F40A0, the position record +0x58) at the
         // matrix's place, slot 30 (0x1F42E0, the rotation record +0x5C) to its rows (U18: world 14's 77184, put by its
         // SM's retract handler at 88149, took 88149's rotation in the reference)
-        SetAloPos(palo, glm::vec3(w[3]));
-        SetAloRotation(palo, glm::mat3(m));
+        // (through the class's slots when it has its own: e.g. Sly 3's rowboat 0x20F798 / 0x20F7D8, its idle hold moved)
+        using PFNSETV = void (*)(ALO*, const glm::vec3&);
+        using PFNSETR = void (*)(ALO*, const glm::mat3&);
+        PFNSETV pfnPos = reinterpret_cast<PFNSETV>(PvNativeVt(palo, 29));
+        PFNSETR pfnRot = reinterpret_cast<PFNSETR>(PvNativeVt(palo, 30));
+        (pfnPos ? pfnPos : SetAloPos)(palo, glm::vec3(w[3]));
+        (pfnRot ? pfnRot : SetAloRotation)(palo, glm::mat3(m));
         // then, with a physics state (+0xE8), slots 35 / 36 with the destination's slots 33 / 34 (its velocities; a
         // LOX's are zero): e.g. the Ep1 heist harpoon put on the sign's point 142374 stops there
         if (Psost(palo))

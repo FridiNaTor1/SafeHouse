@@ -32,6 +32,9 @@ extern GAMESAVE g_gamesave;
 void SetProgressLayout(const PROGRESS& progress);
 // orig 0x1D7C80: the save is kept when it has the layout's identity, else cleared and stamped
 void ValidateGameSave();
+// orig3 0x21D010: a game record reset (fRetain: the 7 settings keys kept when the block is valid; the language set)
+void ResetGameSave3(GAMESAVE& gs, bool fRetain);
+bool FGameSaveIdentityValid(const GAMESAVE& gs);   // orig3 0x21C198
 
 // orig 0x1D87C0 + 0x1D7ED8 (0x1D8A38): a progress value (Nil when the path does not resolve)
 CRef RefGetProgress(const std::vector<std::string>& apath);

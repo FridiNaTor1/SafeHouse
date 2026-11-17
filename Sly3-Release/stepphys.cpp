@@ -118,7 +118,7 @@ void SetStepPhysScale(ALO* palo, float g)
 }
 
 // orig: 0x00204660 (the heading +0x1A8 and its rotation +0x1B0: 0x11B500 about z)
-void SetStepPhysHeading(ALO* palo, float rad)
+void SetStepPhysHeadingUnlocked(ALO* palo, float rad)
 {
     STEPPHYS& s = StepPhysOf(palo);
     s.radHeading = rad;
@@ -127,6 +127,24 @@ void SetStepPhysHeading(ALO* palo, float rad)
     // further on): a resting record is woken so the turn runs; natively Sly held by a script never turned to the
     // binocucom's pan)
     if (XF* pxf = PxfRot(palo)) HoldXfMode(palo, pxf);
+}
+
+// orig3 0x24E878: nothing while the STEP's +0x1B4 is set (the combos' clip events 0x40 / 0x41, combo3.cpp). Every Sly 3
+// heading write goes through it (the decomp has no other store to +0x1BC): the native callers are its callers (0x24E8E8
+// FaceObject, 0x24E3A8 the rotation, the pads' turns, ...); the PC's own placements use SetStepPhysHeadingUnlocked.
+// SLY3_HEADINGLOCK=0: never locked (debug); SLY3_HEADINGLOCKPRINT: the writes made while locked.
+void SetStepPhysHeading(ALO* palo, float rad)
+{
+    STEPPHYS& s = StepPhysOf(palo);
+    if (s.fHeadingLock3)
+    {
+        static const bool s_fLock = !(std::getenv("SLY3_HEADINGLOCK") && std::getenv("SLY3_HEADINGLOCK")[0] == '0');
+        static const bool s_fPrint = std::getenv("SLY3_HEADINGLOCKPRINT") != nullptr;
+        if (s_fPrint)
+            std::printf("headinglock: oid %d rad %.4f kept %.4f%s\n", palo ? palo->oid : -1, rad, s.radHeading, s_fLock ? "" : " (not kept)");
+        if (s_fLock) return;
+    }
+    SetStepPhysHeadingUnlocked(palo, rad);
 }
 
 // orig: 0x002046B0
@@ -315,10 +333,24 @@ NATIVEFN(0x204250, OnStepXpNew);
 // separation springs toward the object's lowest point (the approach speed at least the smoothed one, the change
 // limited to +9000 / -4500 per second), sliding along the lead vector +0x190 by the gain +0x180; the separation follows the
 // low point's change)
+// (orig3 0x24E660: first, for the object's own end, the end's velocity without the rotation's part at the end's point
+// (slot 39's angular velocity across the point from the position, slot 36), as Sly 2 did only for Sly after the rest
+// (0x188E78); the approach speed is then taken without it. Opt-in, SLY3_XPUPDATE3=1: on its own it made the survey's
+// route-driven follows / chases worse (ep1_follow 2237 / 2241 / 2245, ep2_job2663 2673..2676, ep2_job2730 2756 forced)
+// and did not change m_ext's landing (s3fix-wave5); the Sly 2 order stays the default)
+glm::vec3 VelAngAt(ALO* palo, const glm::vec3& pos)
+{
+    using PFN = glm::vec3 (*)(ALO*);
+    PFN pfn = reinterpret_cast<PFN>(PvNativeVt(palo, 34));
+    const glm::vec3 w = pfn ? pfn(palo) : AngVelAlo(palo);
+    return glm::cross(w, pos - PosAloCenter(palo));
+}
+bool FOldXpUpdate() { static const bool s_f = std::getenv("SLY3_XPUPDATE3") == nullptr; return s_f; }
 void OnStepXpUpdate(ALO* palo, XP* q, int n)
 {
     XpNotifyBase(palo, q, n);
     if (q->xpk != 0xE) return;
+    if (!FOldXpUpdate() && q->axpd[n].palo == palo) q->axpd[n].vel -= VelAngAt(palo, q->axpd[n].pos);
     STEPPHYS& s = StepPhysOf(palo);
     const glm::vec3 c = q->normal;
     float h = Dot3(q->axpd[0].vel - q->axpd[1].vel, c);
@@ -520,16 +552,15 @@ NATIVEFN(0x204248, StepSlot63);
 
 // orig: 0x00188E78 (Sly's vt slot 57: the base 0x2044B0, then for its own end the velocity without the rotation's
 // part at the end's point (slot 34's angular velocity across the point from the object's position))
+// (orig3 0x1AA8D0: the base 0x24E660 (which already took it off a floor contact's end), then the same for a contact
+// that is not his floor +0x218 (Sly 3 +0x218 = Sly 2 +0x208): a floor contact's end is not corrected twice)
 void OnSlyXpUpdate(ALO* palo, XP* q, int i)
 {
     OnStepXpUpdate(palo, q, i);
     XPD& e = q->axpd[i];
     if (e.palo != palo) return;
-    using PFN = glm::vec3 (*)(ALO*);
-    PFN pfn = reinterpret_cast<PFN>(PvNativeVt(palo, 34));
-    const glm::vec3 w = pfn ? pfn(palo) : AngVelAlo(palo);
-    const glm::vec3 r = e.pos - PosAloCenter(palo);
-    e.vel = e.vel - glm::cross(w, r);
+    if (!FOldXpUpdate() && q == StepPhysOf(palo).pxpFloor) return;
+    e.vel = e.vel - VelAngAt(palo, e.pos);
 }
 NATIVEFN(0x188E78, OnSlyXpUpdate);
 

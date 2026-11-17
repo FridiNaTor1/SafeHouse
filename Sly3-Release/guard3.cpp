@@ -7,6 +7,7 @@
 #include "game/sly3.h"
 
 #include <array>
+#include <cstdlib>
 
 namespace
 {
@@ -24,21 +25,33 @@ namespace
 //   0x155560, class 0x3B's), 68 -> 24 (0x1353F0 / 0x1753D8). Left out (two Sly 3 states claim one Sly 2 state, a
 //   kind entry would overwrite the other's): 12 / 52 -> 32, 43 / 60 -> 43, 44 / 68 -> 24. Sly 3's JOBFOLLOW init
 //   0x1D8BA8 moves with state 14 (+0xB0), as Sly 2's 0x178E98 with 9.
-// Sly 3's indices 8..12, 15, 16, 22..34, 43..45, 48, 57..59, 62 and 64..66 have no Sly 2 state here (16:
+// Sly 3's indices 15, 16, 22..34, 43, 45, 48, 59, 62, 64..66 and 68 (8..12, 57, 58: below) have no Sly 2 state here (16:
 // Carmelita's chase run sets it next to 14; no Sly 3 code adds it by an immediate).
+// (audit4 AI-17, 2026-11-17: re-derived from the job classes' own Init (vt slot 7) in the decomp, not the fnmap twins:
+// JOBPROX is Sly 3's 0xD7 (its Update 0x163968 is the prox's), whose Init 0x1638C0 adds 55: 55 = Sly 2 37 (JOBPROX's),
+// not 39 (0x17CE68 is JOBLADDER's Init, a mispaired twin). JOBACT is 0xD1 (the message slot, the size 0x50), whose
+// Init 0x1A4C28 adds 44: 44 = Sly 2 24; 68 (0x1353F0) is class 0xF1's, a Sly 3 job with no native port. JOBB4 is 0xEB
+// (Init 0x133A58, Exit before Enter as Sly 2's 0x155560): 67 = 34 stands. Probable, not added: 45 = 25 (0xDC
+// JOBSURROUND 0x181F30), 58 = 39 (0xE2 JOBLADDER 0x1DA7A8), 62 (0xE5, the reaction's settle job).)
 // (s3-split, 2026-11-12) the playable Carmelita's states (her kind entries {66, n}: aicarm3.h): Sly 3's 15, 22..30
 // and 66 have no Sly 2 state; they take Sly 2 indices no native code sets (47..57), so her player entries load and
 // match only while her job 0xE9 has added 66 (-> 57). No other guard's state ever has those bits.
-constexpr std::array<std::pair<int, int>, 52> c_aistate32 = {{
+// (s3fix-ai2, 2026-11-17) the jobs' own Init (vt slot 7) again: 0xE0 JOBLADDER (op 6 with +0x10F0 1) adds 57 = Sly 2 39
+// (0xB9's), 0xE2 JOBHOLD (op 5 with +0x10F0 2) 58 = 41 (the hold on a class-0x25 object: 0xCB adds 58 for it, JOBUSE 0x29 = 41 for Sly 2's 0x27), 0xE4 JOBLINK (the go-to's state 3) 61 = 44. And Sly
+// 3's new states 8..12 (job 0xEA, the trigger reaction: 0xC with 8 / 9 / 0xA / 0xB) on Sly 2 indices no native code sets
+// (59..63, in Sly 3's order), so their kind entries load and the guard's +0x1144 flags 0x20..0x100 (guardstart.cpp) hold.
+constexpr std::array<std::pair<int, int>, 59> c_aistate32 = {{
     {0, 0}, {1, 1}, {2, 2}, {3, 3}, {4, 4}, {5, 5}, {6, 6}, {7, 7},
     {13, 8}, {14, 9},
     {17, 11}, {18, 12}, {19, 13}, {20, 14}, {21, 15},
     {35, 16}, {36, 17}, {37, 18}, {38, 19}, {39, 20}, {40, 21}, {41, 22}, {42, 23},
     {46, 26}, {47, 27}, {49, 29}, {51, 31}, {52, 32}, {53, 33}, {54, 36}, {56, 38},
     {60, 43}, {61, 44}, {63, 46},
-    {50, 30}, {55, 39}, {67, 34}, {68, 24},  // (orig3: the decomp's AddGuardState call sites, above)
+    {50, 30}, {55, 37}, {67, 34}, {44, 24},  // (orig3: the decomp's AddGuardState call sites, above; audit4 AI-17)
     {15, 47}, {22, 48}, {23, 49}, {24, 50}, {25, 51}, {26, 52}, {27, 53}, {28, 54}, {29, 55}, {30, 56}, {66, 57},
     {65, 58},   // (s3-ai) the ridden guard's state 0x41 (job 0xE8, airide3.h: its ride entries {65, n}); no native code sets 58
+    {57, 39}, {58, 41},   // (s3fix-ai2: 0xE0 / 0xE2's Init; 0xCB's ladder 0x39 / class-0x25 hold 0x3A = JOBUSE's 0x27 / 0x29)
+    {8, 59}, {9, 60}, {10, 61}, {11, 62}, {12, 63},   // (s3fix-ai2: job 0xEA's states)
     {-1, -1}, {-1, -1},
 }};
 }  // namespace
@@ -84,3 +97,22 @@ void FillGuardDzResponse3(ALO* p, DZ* pdz, DZENT* pent, int grf, int k)
 }
 }  // namespace
 NATIVEFN3(0x2557E0, FillGuardDzResponse3);
+
+// orig3: 0x24E3A8 (STEPGUARD vt slot 35, Sly 2's slot 30: a new orientation; the guard classes 0x3A.. and Carmelita):
+// the ALO's (0x23D338 = so.cpp SetAloRotation), then the step heading (0x24E878) from the object's x axis (vt slot 36,
+// atan2 0x2A3EE8). Natively the slot had no function ("[vt] no native function", audit3 F19): a guard turned by a
+// script or a placement kept walking by its old heading.
+#include "stepphys.h"
+namespace
+{
+void RotateStepGuard3(ALO* palo, const glm::mat3& basis)
+{
+    SetAloRotation(palo, basis);
+    if (XF* pxf = PxfObj(palo))
+    {
+        const glm::vec3 x = glm::vec3(pxf->matWorld[0]);
+        SetStepPhysHeading(palo, std::atan2(x.y, x.x));
+    }
+}
+}  // namespace
+NATIVEFN3(0x24E3A8, RotateStepGuard3);

@@ -291,11 +291,11 @@ int Irec(const OUTFIT& o, int id)
 void RestartPlayerAnim(LO* ploPlayer)
 {
     SLY* p = PslyFromLo(ploPlayer);
-    if (!p || (p->state != 0 && p->state != 12)) return;
+    if (!p || (p->jts != jts::Stand && p->jts != jts::Run)) return;
     if (!(0.0f < g_clock.t)) return;   // (a script's wear while the world loads: the first state comes with the start)
-    const int n = p->state;
-    p->state = -1;
-    p->substate = -1;
+    const int n = p->jts;
+    p->jts = -1;
+    p->jtbs = -1;
     SetSlyState(p, n, -1);
 }
 
@@ -356,7 +356,7 @@ void WearChange(LO* plo, OUTFIT& o, int id)
     SLY* p = PslyFromLo(o.ploPlayer);
     static const bool s_fNoAnim = std::getenv("SLY3_OUTFITNOANIM") != nullptr;
     if (o.mode == 0) { o.idPending = id; return; }
-    if (o.mode == 1 || i == o.icur || !p || s_fNoAnim || !p->pxpFloor || (p->state != 0 && p->state != 1 && p->state != 12))
+    if (o.mode == 1 || i == o.icur || !p || s_fNoAnim || !p->pxpFloor || (p->jts != jts::Stand && p->jts != jts::Walk && p->jts != jts::Run))
     {
         Apply(plo, o, i);
         return;
@@ -490,6 +490,30 @@ bool FWearOutfit3(LO* ploPlayer, int id)
     return true;
 }
 
+// orig3 0x173428 on +0x1108: a record worn (any episode; the scripts' control lock +0x64 not kept natively)
+bool FOutfitWorn3(LO* ploPlayer)
+{
+    for (auto& [plo, o] : s_mpoutfit)
+    {
+        if (o.psw != g_psw || (g_psw && o.serial != g_psw->serial) || o.ploPlayer != ploPlayer) continue;
+        if (o.icur >= 0 && o.fApplied) return true;
+    }
+    return false;
+}
+
+// orig3 0x1734E0 (the job's rewards 0x187270): each gang character's (D_00344050) outfit object +0x1108 wears nothing at
+// once (0x172D10(outfit, -1)): a disguise worn through a job ends with it
+void TakeOffOutfits3()
+{
+    if (std::getenv("SLY3_NOJOBOUTFITOFF")) return;
+    for (auto& [plo, o] : s_mpoutfit)
+    {
+        if (o.psw != g_psw || (g_psw && o.serial != g_psw->serial)) continue;
+        Resolve(plo, o);
+        if (o.ploPlayer && (o.icur >= 0 || o.mode != -1)) Wear(plo, o, -1);
+    }
+}
+
 bool FPlayerDisguised3(LO* ploPlayer)
 {
     // (natively a player may have more than one outfit object resolved to it: any with a record worn)
@@ -588,7 +612,7 @@ void UpdateOutfit3(LO* ploPlayer)
     {
         if (o.psw != g_psw || (g_psw && o.serial != g_psw->serial) || o.ploPlayer != ploPlayer || o.mode == -1) continue;
         SLY* p = PslyFromLo(ploPlayer);
-        const bool fOver = !p || (p->state != 2 && 0.1f < g_clock.t - o.tMode);
+        const bool fOver = !p || (p->jts != jts::Jump && 0.1f < g_clock.t - o.tMode);
         if (o.mode == 0 && (fOver || 0.6f < g_clock.t - o.tMode)) { Apply(ploO, o, Irec(o, o.idPending)); o.mode = 1; }
         if (o.mode == 1 && fOver)
         {

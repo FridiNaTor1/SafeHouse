@@ -31,5 +31,13 @@ bool FGpuMarks();
 // (Vulkan) the layer takes glEnable(GL_DEPTH_BOUNDS_TEST_EXT) / glDepthBoundsEXT (render.cpp DrawShadow2)
 bool FVulkanDepthBounds();
 void GpuMark(const char* label);
+// (game.cpp SLY2N_FPSLOG) the Vulkan submission worker's thread CPU time so far, ms (all, recording + submission); false
+// without one
+bool FVulkanWorkerCpuMs(double* pmsAll, double* pmsRecord);
+// True while the game renders on Vulkan on a tile-based GPU (CaneVk::TileGpu: Adreno / Mali / PowerVR / Apple; every
+// Android device; SLY2N_VKTILER overrides it): the tilers' paths (vertex pulling, the in-place shadow reads)
+bool FVulkanTileGpu();
+// Driver-specific fallback to attribute-based draws; SLY2N_VKPULL can override it.
+bool FVulkanAvoidVertexPulling();
 // (gl.cpp GLSHADER) a program compiled at build time for Vulkan; 0 when that variant does not exist.
 unsigned IdVulkanProgram(const char* vertexFile, const char* geometryFile, const char* fragmentFile, const char* prefix);

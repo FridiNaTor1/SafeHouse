@@ -330,7 +330,10 @@ void PostLoadGuard(LO* plo)
     pg->pcmdlistPatrol = dynamic_cast<CMDLIST*>(PloNear(plo, NField(plo, 0x2E8, -1)));
     StopK3(&pg->k3play);
     pg->akinde.clear();
-    pg->akinde.reserve(32);  // the original's fixed table keeps active entries' addresses stable
+    // the original's fixed table keeps active entries' addresses stable: reserved to PkindeOfMask's bound (64), so an entry
+    // added later (a copy's attach, a script's) never moves the ones the jobs point at (s3fix-ai2: with Sly 3's states
+    // 8..12 / 57 / 58 mapped, Holland's guards passed 32 entries and their moves' entries dangled: survey ep3 crashes)
+    pg->akinde.reserve(64);
     pg->akind3.clear();
     for (auto& a : pg->aakinde)
         for (KINDE& e : a)
@@ -494,13 +497,15 @@ void PostLoadGuard(LO* plo)
     // the watchers (0x20CE28 / 0x20D1B0)
     pg->watchA = WATCHA{pg, -1, 0.0f, 1};
     pg->watchB = WATCHB{pg, -1, 0.0f, nullptr, 1};
-    // the home's command list: a go-to {oid -1, n10 -1, g14 40} (0x13E3C8(0x71, 0, 0x2CB, -1), 0x170C90), out of the world
-    auto* pl = static_cast<CMDLIST*>(PloNew(S3CID(0x71), g_psw, nullptr, 0x2CB, -1));
+    // the home's command list: a go-to {oid -1, n10 -1, g14 40} (0x13E3C8(0x71, 0, 0x2CB, -1); orig3 0x150690(0x86, 0, 0x322, -1), 0x170C90), out of the world
+    auto* pl = static_cast<CMDLIST*>(PloNew(S3CID(0x71), g_psw, nullptr, 0x322, -1));
     if (pl)
     {
         CMD* pc = PcmdAppend(pl, 7, -1);
         pc->n10 = -1;
         pc->g14 = 40.0f;
+        // (s3fix-ai2) orig3 0x250BD8's 0x1975C8: then the op 16, the guard turned to its home heading
+        PcmdAppend(pl, 16, -1);
         pg->pcmdlistHome = pl;
         pg->pcmdHome = pc;
         RemoveLo(g_psw, pl);
@@ -520,8 +525,9 @@ void PostLoadGuard(LO* plo)
     // setter). The load reads it before the controller exists: applied here from the object's option.
     ApplyGuardScaleOption3(pg);
     // TODO(ai): 0x1A64E8(p, 1, 0x2C3CF8); the KIND2 / KIND3 objects
-    // orig: 0x0014B1D8 (class 0x3F, after 0x2061D8): +0x1010 = 0x13E3C8(3, 0, 0x62B, -1)
-    if (f3F) pg->plo1010 = PloNew(S3CID(0x03), g_psw, nullptr, 0x62B, -1);
+    // orig: 0x0014B1D8 (class 0x3F, after 0x2061D8): +0x1010 = 0x13E3C8(3, 0, 0x62B, -1); Sly 3's Carmelita (post-load
+    // 0x15F490): +0x17D0 = 0x150690(3, 0, 0x6FB, -1) (the chase's aim point, JOBCHASE::Aim 0x15E690; s3fix-ai3 AI-14)
+    if (f3F) pg->plo1010 = PloNew(S3CID(0x03), g_psw, nullptr, plo->pcls->PfnOrig(7) == (FN3_TAG | 0x15F3D8) ? 0x6FB : 0x62B, -1);
 }
 
 // QoL (Q1, a DELIBERATE DIFFERENCE from the original, the user's request): a reused guard instance starts clean.
@@ -706,6 +712,8 @@ void ResetGuard(LO* plo, LO* pproxy)
         pg->pdet->ploOwner = plo;  // +0xE0
         // (+0xE4 = the guard's +0xEC: TODO(ai))
     }
+    // (s3fix-ai2) orig3 0x250E38's end: the trigger-reaction records' bags dealt again (0x257B80, by the suck now)
+    for (VOLREACT3& r : pg->avolreact3) DealVolReact3(&r);
 }
 
 namespace
@@ -776,6 +784,33 @@ struct INITKINDMETHODS
         // 0x104090, registered below by its Sly 3 thunk). Sly 2's 0x103730 key is that clear, so it is not registered here.)
         // orig3: 0x104090 -> 0x2542E8 (option 411, EOPID 284, Sly 3 only): 0x170328 (the detector's targets cleared),
         // 0x2543F8 / 0x2544D8 (the looked-for and the immediate classes cleared), as Sly 2's 266 (0x2088E0)
+        // (s3fix-ai2) orig3: 0x104B18 -> 0x2578D8 (option 499, EOPID 372, a loader method of the guards in 31 worlds, e.g.
+        // m2_shaman's 119107, v_ext's 144809): a trigger-reaction record {kind, the two {skip, react} weight pairs (each
+        // normalized by 0x2577A0; none: {1, 0}), mask}, at most 8; its bag dealt at once (0x257B80) and again by the
+        // reset (0x250E38). Used by OnTriggerGuardEnter3 (aijobs.cpp: class-0x17 triggers, job 0xEA)
+        RegisterObjectMethod3(0x104B18, [](LO* plo, const std::vector<CRef>& a) {
+            GUARD* pg = PguardFromLo(plo);
+            if (!pg && FLoGuard(plo)) pg = PguardNew(static_cast<ALO*>(plo));   // (a loader method: before PostLoadGuard)
+            if (!pg || pg->avolreact3.size() >= 8) return CRef(TAGK_Void);
+            VOLREACT3 r;
+            r.k = NArg(a, 0);
+            r.mask = static_cast<uint32_t>(NArg(a, 3));
+            auto weights = [&](std::size_t i, float* pw) {
+                std::vector<int> an = AnArgList(a, i);
+                an.resize(2, 0);
+                const int sum = an[0] + an[1];
+                if (sum == 0) { pw[0] = 1.0f; pw[1] = 0.0f; }
+                else for (int j = 0; j < 2; ++j) pw[j] = float(an[std::size_t(j)]) / float(sum);
+            };
+            weights(1, r.aw8);
+            weights(2, r.aw10);
+            DealVolReact3(&r);
+            if (std::getenv("SLY3_TRIGREACTPRINT"))
+                std::printf("trigreact3: guard %d record kind %d mask 0x%X weights %.2f/%.2f %.2f/%.2f\n", plo->oid, r.k, r.mask,
+                            r.aw8[0], r.aw8[1], r.aw10[0], r.aw10[1]);
+            pg->avolreact3.push_back(std::move(r));
+            return CRef(TAGK_Void);
+        });
         RegisterObjectMethod3(0x104090, [](LO* plo, const std::vector<CRef>&) {
             if (GUARD* pg = PguardFromLo(plo))
             {
@@ -1186,6 +1221,11 @@ NATIVEFN(0x1BA0B8, ResetGuard3CSlot26);
 void ResetCarmelita3Slot31(LO* plo, LO* pproxy) { ResetGuard(plo, pproxy); }
 NATIVEFN3(0x15F528, ResetCarmelita3Slot31);
 NATIVEFN(0x206748, DetachGuardSlot27);
+// orig3: 0x0015F5A0 (Carmelita 0x3C's vt slot 32 = Sly 2 slot 27): the guards' 0x251000, her shot list +0x17F8 emptied
+// (none natively: aicarm3.cpp PloShotTarget) and 0x251A58(p, 0) (her navigation record: TODO(sly3 ai), as slot 31's).
+// Before, the slot had no function (audit3 F21: "[vt] no native function", 5 survey cases).
+void DetachCarmelita3Slot32(LO* plo, LO* pproxy) { DetachGuardSlot27(plo, pproxy); }
+NATIVEFN3(0x15F5A0, DetachCarmelita3Slot32);
 
 // The guards at the start: 0x2061D8 queues 0x206170 (slot 26 (0), then their splice message 0xE) unless the guard's
 // namespace node (+0x3C) has its +0x24 set (0x1CA500: an object of a group's spare instance, which a proxy gives

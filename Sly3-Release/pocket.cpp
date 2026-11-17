@@ -11,6 +11,7 @@
 #include "brx.h"
 #include "asega.h"
 #include "clock.h"
+#include "xf.h"
 #include "cls.h"
 #include "disc.h"
 #include "guard.h"
@@ -606,12 +607,23 @@ void UpdatePickpocketPose(SLY* p)
         }
         if (d < 120.0f)  // D_002BF3B8
         {
-            WarnOnce("0x18B460's arm joint controllers (0x12DA30)");
+            // (orig3 0x1ACE40: the arm's joint controllers by 0x12FE90 (SetCtrlSourceOffset): +0x19F8 (Sly 3 +0x1B00,
+            // aphandle[5]) the hand's turn, +0x19EC (+0x1AF4, [2]) what is left over, +0x19FC (+0x1B04, [6]) the slide along
+            // x; AUDIT4 PLAYER-17)
+            if (CTRLSOURCE* pc = p->slide.aphandle[5]) SetCtrlSourceOffset(pc, glm::vec4(0.0f, radYaw, 0.0f, 0.0f));
+            if (CTRLSOURCE* pc = p->slide.aphandle[2]) SetCtrlSourceOffset(pc, glm::vec4(vecResidual, 0.0f));
+            if (CTRLSOURCE* pc = p->slide.aphandle[6]) SetCtrlSourceOffset(pc, glm::vec4(dx, 0.0f, 0.0f, 0.0f));
             p->f1BD4 = 1;
             p->t1BDC = g_clock.t;
             return;
         }
     }
+    // (orig3 0x1ACE40's end: the three controllers relax to zero within 0.25 s of the last reach)
+    const float dtRem = p->t1BDC + 0.25f - g_clock.t;
+    const float dtAfter = dtRem - g_clock.dt;
+    const float gain = 0.0f < dtAfter ? dtAfter / dtRem : 0.0f;
+    for (int i : {5, 2, 6})
+        if (CTRLSOURCE* pc = p->slide.aphandle[i]) SetCtrlSourceOffset(pc, pc->ofs * gain);
     p->f1BD4 = 0;
 }
 

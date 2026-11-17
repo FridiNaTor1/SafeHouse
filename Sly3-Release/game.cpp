@@ -1315,6 +1315,7 @@ int RunGame(const GAMEOPTS& go)
                 DropPickups(glm::vec3(x, y, z), n, 0, nullptr);
             }
         }
+        DebugDeathAt3(frame);   // (debug: SLY3_DEATHAT, game/worldreset3.cpp)
         // (debug: SLY2N_PTELEPORT="X Y Z@tT[,H];..." puts the current player there at game time T, heading H)
         if (static const char* s_szPTele = std::getenv("SLY2N_PTELEPORT"); s_szPTele)
         {
@@ -1816,7 +1817,7 @@ int RunGame(const GAMEOPTS& go)
                         if (e.palo && e.paloRoot != pa->palo) oidFloor = e.palo->oid;
                 const glm::vec3 vel = VelAloPos(pa->palo);
                 std::printf("hz %d t %.3f hp %d state %d dmg %d at %.2f %.2f %.2f floor %d aware %d %.2f %d vel %.2f %.2f %.2f jump %d xfmode %d\n", frame, g_clock.t,
-                            DmgCounterOf(pa) ? *DmgCounterOf(pa) : -1, dynamic_cast<SLY*>(pa) ? static_cast<SLY*>(pa)->state : -1, pa->nSubDF4,
+                            DmgCounterOf(pa) ? *DmgCounterOf(pa) : -1, dynamic_cast<SLY*>(pa) ? static_cast<SLY*>(pa)->jts : -1, pa->nSubDF4,
                             pos.x, pos.y, pos.z, oidFloor, pa->n10C8, pa->g10CC, pa->n10EC, vel.x, vel.y, vel.z, pa->jump.state, PxfPos(pa->palo) ? PxfPos(pa->palo)->mode : -9);
             }
         // debug: SLY2N_NAVPATH="X Y Z>X Y Z@F": at frame F the nav regions at both points and, in one region, its path
@@ -2595,6 +2596,7 @@ int RunGame(const GAMEOPTS& go)
                     RenderHackCards(psw.get(), scene, opts);   // (hackmp3.h: the hackers' select's ships, in the page's cards)
                 }
                 else if (!fEyes) RenderScene(scene, cam, opts);
+                g_gl.BeginNativeUi(true);   // (upscaling, gl.h: the scene scaled up; the rest at the picture's size)
                 const double tHud = s_fFpsLog ? now() : 0.0;
                 if (FGpuMarks()) GpuMark("hud");
                 if (!fSplit) DrawHud(psw.get(), g_gl.renderWidth, g_gl.renderHeight);
@@ -2609,6 +2611,7 @@ int RunGame(const GAMEOPTS& go)
                 g_gl.RememberOverlaySourceFrame();
                 if (FGpuMarks()) GpuMark("animated overlay");
             }
+            g_gl.BeginNativeUi(false);   // (upscaling: the overlay's own frames at the picture's size too)
             DrawAnimatedOverlayFrame();  // orig: 0x1477D8, capture then clear/draw the exclusive surfaces
             if (!go.screenshot.empty() && frame + 1 == go.cframe)
             {
@@ -2638,6 +2641,7 @@ int RunGame(const GAMEOPTS& go)
             else if (s_fFpsLog && s_aqGpu[0]) glEndQuery(GL_TIME_ELAPSED), ++s_iqGpu;
             // (renderer.h: Vulkan ends its frame at the swap; a headless frame is submitted the same way, as an
             // OpenGL driver flushes on its own)
+            g_gl.EndNativeUi();   // (without a window: Present did not)
             if (!fWindow && FRendererVulkan()) cane::gl::SwapBuffers(g_gl.window);
         }
         else PrepareAnimatedOverlayFrame();  // same logical boundary for frames without a GL target
@@ -2647,6 +2651,12 @@ int RunGame(const GAMEOPTS& go)
         // scripts wait on) keep up with the frames)
         static const bool s_fRealtime = std::getenv("SLY2N_REALTIME") != nullptr;
         if (fWindow && vr::FActive()) {}   // (the headset paces: vr::BeginFrame)
+#if defined(CANE_IOS)
+        // (iOS: the display's own frames when the cap is its rate or a whole fraction of it (display.cpp); false: no
+        // display link (the app in the background), the timer)
+        else if (fWindow && g_display.fSwapPacesFrames && g_display.displayFps > 0 &&
+                 cane::gl_metal::WaitForDisplayFrame(g_display.displayFps)) {}
+#endif
         else if (fWindow && g_display.frameRate < DISP_FRAMERATE_UNCAPPED)   // the frame-rate cap (with or without VSync)
             pacer.Wait(g_display.frameRate, g_display.fSwapPacesFrames, g_display.swapGeneration);
         else if (s_fRealtime) pacer.Wait(60);

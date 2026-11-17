@@ -151,6 +151,8 @@ struct WRBG
     int iglob = -1;                  // its glob (+0x04)
     std::vector<glm::vec4> astate;   // per matrix, per strip vertex: [imat * cvtx + ivtx] (the batches' apvWarp)
     uint32_t nGen = 0;               // (native) bumped when astate changes
+    int stamp = 0;                   // +0x9C (Sly 3): the WR's stamp its state vectors were built at (0x2897B8)
+    bool fInside = false;            // +0x1C (Sly 3): its object under the WR's anchor (0x2896D0)
 };
 
 struct GLOB

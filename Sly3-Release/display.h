@@ -9,6 +9,7 @@
 // renders into an off-screen target of the picture's aspect (at the internal resolution when set); the 2D canvas
 // (the PS2 frame, 640 x 448 shown at 4:3) is centred in the picture, pillarboxed on wide pictures.
 
+#include "../platform/texture_options.h"
 #include <glm/glm.hpp>
 
 #include <filesystem>
@@ -63,10 +64,27 @@ struct DISPLAY
     // are the largest GPU fill of a frame (~36 screens of stencil samples in Paris): for tile GPUs (Quest, Steam Frame).
     // --fast-shadows 1 / SLY2N_FASTSHADOWS=1; the Switch always.
     bool fFastShadows = false;
+    // Settings.ini [Graphics] Outline Thickness (%): the cel outlines' width, 100 the original's (render.cpp)
+    int outlineThickness = 100;
+    // Upscaling (Settings.ini [Display] Upscaling, Upscaling Method / Preset / Sharpness; --upscale, fsr.h; default
+    // off = the current pictures): on, the scene renders at the preset's fraction of the picture (in place of the
+    // internal resolution) and the method (FSR 1: EASU + RCAS) scales it up; the HUD, menus and overlays then draw at
+    // the picture's own size (gl.h BeginNativeUi). Not where FSR cannot run.
+    bool fUpscale = false;
+    int upscaleMethod = 1;      // fsr.h METHOD
+    int upscalePreset = 1;      // fsr.h PRESET: 0 Ultra Quality (1.3x), 1 Quality (1.5x), 2 Balanced (1.7x), 3 Performance (2x)
+    int upscaleSharpness = 80;  // 0..100 %
+    // Settings.ini [Display] HUD Placement (settings::Sly2HudPlacement; --hud-placement): the box the corner / edge HUD
+    // widgets (the gauge, coins, counters, timers) are laid out in, centred in the picture: 0 4:3 (the original's canvas,
+    // the default), 1 16:9 (the PS3 HD version's), 2 16:10, 3 Match Screen (the picture's own shape, to the edges at 32:9).
+    // Never wider than the picture; 4:3 in VR and in the two-player bands. Centred things (menus, dialogs, subtitles,
+    // fades) keep the 4:3 canvas. (Replaces the original's Center Screen..., which moved the PS2's video signal.)
+    int hudPlacement = 0;
 
     // The swap (ApplyDisplaySettings): VSync gates the frames at the cap (the pacer then runs 1 % fast, so only the
     // swap gates: platform/frame_pacer.h), and a generation that changes with the swap's configuration
     bool fSwapPacesFrames = false;
+    int displayFps = 0;           // (iOS) the display link's rate while the display paces the frames (game.cpp)
     unsigned swapGeneration = 0;
 
     // Layout (LayoutDisplay)
@@ -78,6 +96,9 @@ struct DISPLAY
     glm::vec2 uiScale{1.0f}, uiOffset{0.0f};
 };
 extern DISPLAY g_display;
+// (HUD Placement) how far (canvas pixels, >= 0) the corner / edge HUD widgets move out to each side from where the 4:3
+// canvas has them: 0 at 4:3, in VR or with the picture no wider than 4:3 (screenrt.cpp DrawScreenObjs)
+float DxHudPlacement();
 // The refresh rate of the monitor holding most of the window (0: unknown)
 int DisplayRefreshRate(GLFWwindow* window);
 
@@ -98,9 +119,13 @@ struct SAVEOPTS
     // (flags "fUseHeadset": the sound manager's +0x10, sound.cpp UpdateMicNoise / spiop's headset tracks)
     std::string outputDevice, inputDevice, headsetOutputDevice;
     bool fHeadset = false;
-    bool fTextureCache = true;   // (texmod.h: Settings.ini [Graphics] Texture Cache)
+    // (texmod.h: Settings.ini [Graphics] Texture Cache / Texture Streaming)
+    bool fTextureCache = cane::settings::kTextureCacheDefault != 0;
+    bool fTextureStreaming = cane::settings::kTextureStreamingDefault != 0;
     // (Sly 3) the Camera Options per camera kind (flags joyLeft mpcamprefkfReverse*): [kind][0] Left/Right, [1] Up/Down
     bool afCamReverse[8][2] = {};
+    // (s3-3dtoggle) Settings.ini [Graphics] 3D Mode: the original's 3-D (anaglyph) mode offered (gauge3.h FAsk3d3)
+    bool f3dMode = false;
 };
 extern SAVEOPTS g_saveopts;
 

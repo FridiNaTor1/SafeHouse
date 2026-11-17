@@ -107,6 +107,9 @@ bool FPcMenuMode();
 // gadget grid, Job Help): the OS cursor is shown there, unless a controller was used last and the mouse has not
 // moved since. Everywhere else with the cursor free (cutscenes, talks, loads, movies) it is hidden.
 bool FMouseMenuUp();
+// The on-screen pad (Android / iOS) is the pad in use (promptglyph.cpp keeps the words START / SELECT, skipcut.cpp
+// leaves the hold to the pad's own view).
+bool FTouchPadActive();
 // The cursor in canvas units (640 x 448, y down: the 4:3 frame, wherever it sits in a wider picture) while it is
 // free and shown in such a menu with "Mouse in Menus" on; false otherwise (always false headless).
 bool FMenuCursor(float* pxCanvas, float* pyCanvas);

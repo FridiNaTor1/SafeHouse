@@ -13,6 +13,9 @@
 #include "game/sly3.h"
 #include "menu.h"
 #include "challenge3.h"
+#include "gauge3.h"
+#include "game/cond3.h"
+#include "game/task3.h"
 #include "remappage.h"
 #include "audio.h"
 #include "../platform/sly3_settings.h"
@@ -31,6 +34,7 @@
 #include "display.h"
 #include "frontend.h"
 #include "gl.h"
+#include "fsr.h"
 #include "hudwidget.h"
 #include "po.h"
 #include "ref.h"
@@ -60,6 +64,7 @@
 #include <filesystem>
 #include <vector>
 
+bool FJollyCannon3(LO* plo);   // game/rowboat3.cpp (the jolly boat's +0x284)
 namespace
 {
 int32_t NElf(uint32_t va) { return int32_t(g_disc.U32Elf(va)); }
@@ -140,6 +145,15 @@ enum NATIVEID : int
     NID_AudioPage, NID_AudioOutput, NID_AudioInput, NID_AudioHeadsetOutput,   // Audio Devices... (audio.h)
     // (settings v22, display.h monitor; platform/monitor_select.h) Monitor: after the window mode (desktop only)
     NID_Monitor,
+    // (upscaling, fsr.h; display.h fUpscale) Upscaling, then while it is on its method, preset and sharpness: on the display
+    // options' page after the internal resolution (Sly 2's rows)
+    NID_Upscale, NID_UpscaleMethod, NID_UpscalePreset, NID_UpscaleSharpness,
+    // (display.h fFastShadows) Fast Shadows and (display.h outlineThickness) Outline Thickness: on the display options' page
+    // after Long Shadows (Sly 2's rows)
+    NID_FastShadows, NID_OutlineThickness,
+    // (display.h hudPlacement) HUD Placement: after the aspect ratio (not in VR); 4:3, 16:9, 16:10, Match Screen. In place
+    // of the original's Center Screen... (the options page)
+    NID_HudPlacement,
 };
 constexpr uint32_t PFN_NativeDisplay = 0xFFFF0001;   // (a native select function)
 constexpr uint32_t PFN_NativeExit = 0xFFFF0002;
@@ -519,9 +533,38 @@ std::string StrNative(int id)
         return StrPortValue(PTX_WindowMode, StrPort(aptx[std::clamp(int(g_display.window), 0, 2)]));
     }
     case NID_Monitor: return StrPortValue(PTX_Monitor, StrMonitorChoice());
+    case NID_HudPlacement:
+    {
+        static const char* const asz[] = {"4:3", "16:9", "16:10"};
+        const int i = std::clamp(g_display.hudPlacement, 0, 3);
+        return StrPortValue(PTX_HudPlacement, i == 3 ? StrPort(PTX_MatchScreen) : std::string(asz[i]));
+    }
     case NID_Vsync: return onOff(PTX_VSync, g_display.fVsync);
     case NID_DrawDistance: return StrPortValue(PTX_DrawDistance, StrPortDecimal(g_display.drawDistance, 2) + "x");
     case NID_LongShadows: return onOff(PTX_LongShadows, g_display.fLongShadows);
+    case NID_FastShadows: return onOff(PTX_FastShadows, g_display.fFastShadows);
+    case NID_OutlineThickness:
+    {
+        char achPct[16];
+        std::snprintf(achPct, sizeof(achPct), "%d%%", g_display.outlineThickness);
+        return StrPortValue(PTX_OutlineThickness, achPct);
+    }
+    case NID_Upscale: return onOff(PTX_Upscaling, g_display.fUpscale);
+    case NID_UpscaleMethod: return StrPortValue(PTX_UpscaleMethod, "FSR 1");
+    case NID_UpscalePreset:
+    {
+        static const PTX aptx[] = {PTX_UltraQuality, PTX_Quality, PTX_Balanced, PTX_Performance};
+        const int i = std::clamp(g_display.upscalePreset, 0, 3);
+        char achPct[16];
+        std::snprintf(achPct, sizeof(achPct), " (%d%%)", int(std::lround(100.0 / fsr::RScalePreset(i))));
+        return StrPortValue(PTX_UpscalePreset, StrPort(aptx[i]) + achPct);
+    }
+    case NID_UpscaleSharpness:
+    {
+        char achPct[16];
+        std::snprintf(achPct, sizeof(achPct), "%d%%", g_display.upscaleSharpness);
+        return StrPortValue(PTX_UpscaleSharpness, achPct);
+    }
     case NID_ExitToDesktop: return StrPort(FQuitToLauncher() ? PTX_QuitToLauncher : PTX_ExitToDesktop);   // (the Collection launcher)
     case NID_DisplayPage: return StrPort(PTX_DisplayOptions);
     case NID_ControlsPage: return StrPort(PTX_ControlsAndPrompts);
@@ -641,6 +684,31 @@ void BindKey(int i, int key)
     FSaveDisplaySettings(cane::userDirectory());
 }
 
+// (upscaling) the rows shown where FSR 1 can run (fsr.h: not the Metal layer)
+bool FUpscaleRowsShown() { return g_gl.window && fsr::FAvailable(); }
+// Upscaling's rows (fSubOnly: only the method, preset and sharpness, those while it is on), with the page's select function
+void AppendUpscaleRows(std::vector<MENUENT>& a, uint32_t pfnSelect, bool fSubOnly)
+{
+    if (!FUpscaleRowsShown()) return;
+    for (int id = fSubOnly ? int(NID_UpscaleMethod) : int(NID_Upscale); id <= NID_UpscaleSharpness; ++id)
+    {
+        if (id != NID_Upscale && !g_display.fUpscale) break;
+        MENUENT e;
+        e.id = id;
+        e.pfnSelect = pfnSelect;
+        a.push_back(e);
+    }
+}
+// Outline Thickness: Cross steps up and wraps round, left / right step down / up and stop at the ends
+void StepOutlineThickness(int n, bool fWrap)
+{
+    namespace st = cane::settings;
+    int v = (g_display.outlineThickness / st::kOutlineThicknessStep + n) * st::kOutlineThicknessStep;
+    v = v > st::kOutlineThicknessMax ? (fWrap ? st::kOutlineThicknessMin : st::kOutlineThicknessMax)
+      : v < st::kOutlineThicknessMin ? (fWrap ? st::kOutlineThicknessMax : st::kOutlineThicknessMin) : v;
+    g_display.outlineThickness = v;
+}
+
 // a PC display option's next value
 void CycleNative(MENUENT& e)
 {
@@ -673,6 +741,8 @@ void CycleNative(MENUENT& e)
         std::vector<int> an = {30, 60, 120};   // (the Switch 2: 120 where the display allows it)
 #elif defined(__SWITCH__)
         std::vector<int> an = {30, 60};   // (the Switch: its display's 60 Hz and half of it)
+#elif defined(CANE_IOS)
+        std::vector<int> an = {30, 60};   // (iOS: and the display's own rate, 120 on ProMotion: the rates it paces, display.cpp)
 #else
         // (the launcher's list: these, the monitor's refresh rate, Uncapped)
         std::vector<int> an = {30, 60, 90, 120, 144, 240, DISP_FRAMERATE_UNCAPPED};
@@ -691,7 +761,31 @@ void CycleNative(MENUENT& e)
         std::printf("display: monitor %s\n", g_display.monitor.empty() ? "Primary" : g_display.monitor.c_str());
         break;
     case NID_Vsync: g_display.fVsync = !g_display.fVsync; break;
+    case NID_HudPlacement: g_display.hudPlacement = (std::clamp(g_display.hudPlacement, 0, 3) + 1) % 4; break;
     case NID_LongShadows: g_display.fLongShadows = !g_display.fLongShadows; break;
+    case NID_FastShadows: g_display.fFastShadows = !g_display.fFastShadows; break;
+    case NID_OutlineThickness: StepOutlineThickness(1, true); break;
+    case NID_Upscale:
+        g_display.fUpscale = !g_display.fUpscale;
+        // (the method, preset and sharpness rows exist only while it is on: right after it; the page keeps room for them)
+        if (PAGE* pg = PpageCur())
+        {
+            auto& a = pg->aent;
+            std::erase_if(a, [](const MENUENT& row) { return row.id >= NID_UpscaleMethod && row.id <= NID_UpscaleSharpness; });
+            if (g_display.fUpscale)
+                for (size_t i = 0; i < a.size(); ++i)
+                    if (a[i].id == NID_Upscale)
+                    {
+                        std::vector<MENUENT> arow;
+                        AppendUpscaleRows(arow, a[i].pfnSelect, true);
+                        a.insert(a.begin() + std::ptrdiff_t(i) + 1, arow.begin(), arow.end());
+                        break;
+                    }
+        }
+        break;
+    case NID_UpscaleMethod: break;   // (FSR 1 only, for now)
+    case NID_UpscalePreset: g_display.upscalePreset = (g_display.upscalePreset + 1) % 4; break;
+    case NID_UpscaleSharpness: g_display.upscaleSharpness = g_display.upscaleSharpness >= 100 ? 0 : (g_display.upscaleSharpness / 10 + 1) * 10; break;
     case NID_DrawDistance:
     {
         static const float ag[] = {0.75f, 1.0f, 1.5f, 2.0f, 3.0f};
@@ -875,33 +969,15 @@ void SaveToTarget()
 
 void SelectEntry(MENUENT& e);
 
-// a slot's record cleared, keeping its settings ("flags")
+// a slot's record cleared, keeping its settings (orig3 0x1D1470 / 0x1D1568 -> 0x21D010(block, 1): the 7 settings keys
+// when the block is valid, the language set; savedata.cpp ResetGameSave3)
 void ResetSlotKeepSettings(int islot)
 {
     ApplyVibrationSetting();
     SAVESLOT& sl = g_aslot[islot];
-    static const char* const aszFlag[] = {"lang", "nMixerMode", "uMusicVolume", "uEffectsVolume", "fUseHeadset", "dxScreenCenter",
-                                          "dyScreenCenter", "fAutosaveWarned"};
-    GAMESAVE saved = g_gamesave;
-    g_gamesave = sl.fFile ? sl.save : GAMESAVE{};
-    ValidateGameSave();
-    std::vector<std::pair<std::vector<std::string>, CRef>> akept;
-    for (const char* sz : aszFlag) akept.push_back({{"flags", sz}, RefGetProgress({"flags", sz})});
-    for (const char* szPad : {"joyLeft", "joyRight"})
-    {
-        akept.push_back({{"flags", szPad, "fNoVibration"}, RefGetProgress({"flags", szPad, "fNoVibration"})});
-        for (const char* szPref : {"mpcamprefkfReverseHorizontal", "mpcamprefkfReverseVertical"})
-            for (int k = 0; k < 7; ++k)
-            {
-                std::vector<std::string> apath = {"flags", szPad, szPref, std::to_string(k)};
-                akept.push_back({apath, RefGetProgress(apath)});
-            }
-    }
-    std::memset(g_gamesave.ab, 0, CB_PROGRESS);
-    for (const auto& [apath, r] : akept)
-        if (r.m_tagk != TAGK_Nil) FSetProgress(apath, r);
-    sl.save = g_gamesave;
-    g_gamesave = saved;
+    GAMESAVE gs = sl.fFile ? sl.save : GAMESAVE{};
+    ResetGameSave3(gs, true);
+    sl.save = gs;
 }
 
 // ------------------------------------------------------------ Control Help (0x1D5058)
@@ -918,6 +994,63 @@ int IdControlHelpText(LO* player, int k)
     if (FCidDerivedFrom(cid, sly3::CID_JT)) return s_aidSly[k];
     if (FCidDerivedFrom(cid, sly3::CID_BENTLEY)) return s_aidBentley[k];
     if (FCidDerivedFrom(cid, sly3::CID_MURRAY)) return s_aidMurray[k];
+    // (AUDIT4 PLAYER-01 / 23: the Guru 0x1F5470, the Panda King 0x1F54E0, Penelope 0x1F5648; -1 an empty line)
+    struct ROW { int k, id; };
+    auto find = [k](std::initializer_list<ROW> a) { for (const ROW& r : a) if (r.k == k) return r.id; return -1; };
+    if (FCidDerivedFrom(cid, sly3::CID_GURU)) return find({{12, 0x204}, {0, 0x251}, {1, 0x250}, {2, 0x200}, {5, 0x24D}, {7, 0x24E}, {8, 0x205}, {10, 0x24F}});
+    if (FCidDerivedFrom(cid, sly3::CID_PANDA_KING)) return find({{12, 0x204}, {0, 0x237}, {1, 0x238}, {2, 0x200}, {4, 0x235}, {5, 0x234}, {7, 0x236}, {10, 0x202}});
+    if (FCidDerivedFrom(cid, sly3::CID_PENELOPE)) return find({{12, 0x204}, {0, 0x23E}, {1, 0x23B}, {2, 0x23C}, {3, 0x239}, {4, 0x23A}, {7, 0x23D}});
+    // (s3fix-ai3, AUDIT4 AI-14) Carmelita's slot 91 (orig3 0x1F52F0); in the two-player frame mode (D_0036DBE0 == 2) 5 and 7
+    // are 0x206 / 0x21E, else 7 is 0x21D
+    if (FCidDerivedFrom(cid, sly3::CID_CARMELITA))
+    {
+        if (const int id = find({{12, 0x204}, {0, 0x220}, {1, 0x21B}, {2, 0x200}, {4, 0x21C}, {3, 0x21F}, {8, 0x21A}, {10, 0x203}}); id != -1) return id;
+        if (s_psw && s_psw->nScreenMode3 == 2) return find({{5, 0x206}, {7, 0x21E}});
+        return k == 7 ? 0x21D : -1;
+    }
+    // the vehicles' slot 91 (AUDIT4 MODES-25): the planes 0x52 (orig3 0x1F53A8), the rowboat 0x53 (0x1F57E0), the jolly
+    // boat 0x54 (0x1F5838), the diver 0x57 (0x1F5550), the ships 0x58 (0x1F56B0), the power-up SO 0x56 (0x1F5720)
+    if (k == 12 && (FCidDerivedFrom(cid, 0x52) || FCidDerivedFrom(cid, 0x53) || FCidDerivedFrom(cid, 0x57) || FCidDerivedFrom(cid, 0x58) ||
+                    FCidDerivedFrom(cid, 0x56)))
+        return 0x204;
+    if (FCidDerivedFrom(cid, 0x52))
+    {
+        static const int s_aid[13] = {0x20E, 0x20B, 0x20D, 0x20A, 0x207, -1, -1, 0x20C, 0x208, -1, -1, -1, 0x204};
+        if (k == 5)   // (D_0036DBE0 == 2: the two-player game; world 0x23 (35): the dogfight's)
+            return NChallengeMode3() == 2 ? 0x206 : WidCur3() == 0x23 ? 0x209 : -1;
+        return s_aid[k];
+    }
+    if (FCidDerivedFrom(cid, 0x53))
+    {
+        if (FCidDerivedFrom(cid, 0x54))
+        {
+            if (k == 0) return 0x264;
+            if (k == 8 && FJollyCannon3(player)) return 0x265;
+        }
+        switch (k) { case 0: return 0x260; case 2: return 0x261; case 4: return 0x262; case 7: return 0x263; default: return -1; }
+    }
+    if (FCidDerivedFrom(cid, 0x57))
+    {
+        static const int s_aid[13] = {0x22D, 0x22B, -1, -1, 0x229, 0x22A, -1, 0x22C, 0x227, -1, -1, -1, 0x204};
+        if (k == 2 || k == 3)
+        {
+            const int wid = WidCur3();
+            if (wid == 0x21) return k == 2 ? 0x225 : 0x228;
+            if (wid == 0x24) return k == 2 ? 0x226 : 0x22E;
+            return -1;
+        }
+        return s_aid[k];
+    }
+    if (FCidDerivedFrom(cid, 0x58))
+    {
+        static const int s_aid[13] = {0x24C, 0x246, 0x247, 0x247, 0x247, -1, 0x24A, 0x248, -1, 0x24B, 0x249, -1, 0x204};
+        return s_aid[k];
+    }
+    if (FCidDerivedFrom(cid, 0x56))
+    {
+        // (cases 5 / 6 / 8 / 9: the gadget-dependent lines 0x25E / 0x25F (0x140738 / 0x154798 on D_0036B250): not kept)
+        switch (k) { case 0: return 0x25A; case 2: return 0x25B; case 4: return 0x25C; case 1: return 0x25D; case 10: return 0x203; default: return -1; }
+    }
     return -1;
 }
 LO* PloMenuPlayer() { return s_psw ? PloPoCurrent(s_psw) : nullptr; }   // (orig3 the menu +0x18: the pad's player)
@@ -945,11 +1078,18 @@ std::vector<MENUENT> AentPause()
             break;
         case m3::TX_OTHERJOBS: f = false; break;                                       // (the original never offers it)
         // Job Help (0x7A): the job help widget 0x46FAA0's screen object 1389 (D_0046FAD4) outside dvd_menu (0x25E150)
-        // The 3-D resets (0x4794CC, 0x18AE00, GAME +0x14EC bit 1; 0x1D54A0 writes the 3-D answer 0x36DBA4) are never
-        // offered on the PC: no 3-D (anaglyph) mode (s3-3d, gauge3.h g_n3dChoice3)
         case m3::TX_JOBHELP: f = FJobHelpAvailable3(); break;
         case m3::TX_CTRLHELP: f = IdControlHelpText(PloMenuPlayer(), 12) != -1; break;   // (the player's slot 91(12))
-        case m3::TX_RESET3D: case m3::TX_RESET2D: f = false; break;
+        // The 3-D resets: with a checkpoint task (0x4794CC: SW +0x404C) and a game that can be 3-D (0x18AE00), Reset in
+        // 3-D while the picture is 2-D (GAME +0xC bit 1 clear), Reset in 2-D while it is 3-D. Only with the 3D Mode
+        // setting on (Settings.ini [Graphics] 3D Mode, the launcher's toggle; gauge3.h FAsk3d3): off, never offered
+        case m3::TX_RESET3D: case m3::TX_RESET2D:
+            f = FAsk3d3() && g_tasks3.ptaskCur && F3dChoosable3() && ((g_grfGame3 & 2) != 0) == (e.id == m3::TX_RESET2D);
+            if (std::getenv("SLY3_MENULOG"))
+                std::printf("menu: 0x%X ask %d checkpoint task %d job %d (mode %d) challenge 3-D %d picture 3-D %d: %d\n", e.id, FAsk3d3() ? 1 : 0,
+                            g_tasks3.ptaskCur ? g_tasks3.ptaskCur->oid : -1, g_tasks3.pjobCur ? g_tasks3.pjobCur->oid : -1,
+                            g_tasks3.pjobCur ? g_tasks3.pjobCur->n40 : -1, FChallenge3d3() ? 1 : 0, (g_grfGame3 & 2) ? 1 : 0, f ? 1 : 0);
+            break;
         default: break;
         }
         if (f) a.push_back(e);
@@ -963,6 +1103,12 @@ std::vector<MENUENT> AentPause()
     ex.id = NID_ExitToDesktop;
     ex.pfnSelect = PFN_NativeExit;
     a.insert(a.begin() + std::min<std::ptrdiff_t>(3, std::ptrdiff_t(a.size())), ex);
+    if (std::getenv("SLY3_MENULOG"))
+    {
+        std::printf("menu: pause entries");
+        for (const MENUENT& e : a) std::printf(" 0x%X", e.id);
+        std::printf("\n");
+    }
     return a;
 }
 
@@ -972,13 +1118,21 @@ std::vector<MENUENT> AentDisplayOptions()
     std::vector<MENUENT> a;
     for (int id = NID_Aspect; id <= NID_DrawDistance + 1; ++id)
     {
-#if defined(__SWITCH__) || defined(__ANDROID__)
-        if (id == NID_Window) continue;   // (the Switch / Android: the system places the window, DeX included)
+#if defined(__SWITCH__) || defined(__ANDROID__) || defined(CANE_IOS)
+        if (id == NID_Window) continue;   // (the Switch / Android / iOS: the system places the window, DeX included)
+#endif
+#if defined(CANE_IOS)
+        if (id == NID_Vsync) continue;   // (iOS: always in step with the display: display.cpp ApplyDisplaySettings)
 #endif
         MENUENT e;
         e.id = id <= NID_DrawDistance ? id : NID_LongShadows;
         e.pfnSelect = PFN_NativeDisplay;
         a.push_back(e);
+        if (id == NID_Aspect && !vr::FActive())   // (then HUD Placement: not in a headset, whose HUD panel keeps 4:3)
+        {
+            e.id = NID_HudPlacement;
+            a.push_back(e);
+        }
 #if !defined(__SWITCH__) && !defined(__ANDROID__) && !defined(CANE_IOS)
         if (id == NID_Window && !vr::FActive())   // (then Monitor, settings v22: a desktop's monitors; not in a headset)
         {
@@ -986,7 +1140,23 @@ std::vector<MENUENT> AentDisplayOptions()
             a.push_back(e);
         }
 #endif
+        if (id == NID_Resolution) AppendUpscaleRows(a, PFN_NativeDisplay, false);   // (upscaling: after the resolution)
     }
+#ifndef __SWITCH__
+    {
+        MENUENT e;   // (then Fast Shadows)
+        e.id = NID_FastShadows;
+        e.pfnSelect = PFN_NativeDisplay;
+        a.push_back(e);
+    }
+#endif
+    {
+        MENUENT e;   // (then Outline Thickness)
+        e.id = NID_OutlineThickness;
+        e.pfnSelect = PFN_NativeDisplay;
+        a.push_back(e);
+    }
+    a.reserve(a.size() + 4);   // (NID_Upscale's rows inserted in place: the rows do not move)
     return a;
 }
 
@@ -1001,6 +1171,7 @@ std::vector<MENUENT> AentOptions()
         if (e.id == m3::TX_NEW) f = fTitle;          // New Game... only at the title
         else if (e.id == m3::TX_SAVE) f = !fTitle;   // Save Game... only in a game (0x1CFDF8: the card usable)
         else if (e.id == m3::TX_TWOPLAYER) f = false;   // (0xAA at the title: the two-player game is not ported)
+        else if (e.id == m3::TX_CENTER) f = false;      // Center Screen... (the PS2's video position): HUD Placement instead (display options)
         if (f) a.push_back(e);
     }
     MENUENT e;
@@ -1205,6 +1376,28 @@ void SelectEntry(MENUENT& e)
             if (s_psw->tasks.pjobCur) EndJob(s_psw, s_psw->tasks.pjobCur);
         }
         break;
+    case m3::FN_RESET3D:                                                 // orig3 0x001D54A0 (n: 1 Reset in 3-D, 0 in 2-D)
+    {
+        // the 3-D answer (0x36DBA4): the choice, or -1 (the world's own mode) when it is the job's own and no 3-D game
+        // runs; then the checkpoint task again with a reload (0x189F38(+0x404C, 0x102))
+        int mode = e.n;
+        if (!FChallenge3d3())
+        {
+            const bool fJob3d = FJob3d3();
+            if ((mode == 1 && fJob3d) || (mode == 0 && !fJob3d)) mode = -1;
+        }
+        g_n3dChoice3 = mode;
+        std::printf("3d: the pause menu's Reset in %s (the 3-D answer %d)\n", e.n == 1 ? "3-D" : "2-D", mode);
+        if (TASK3* pt = g_tasks3.ptaskCur; pt && s_psw)
+        {
+            ChallengeRestart3();
+            RequestTaskStart(s_psw, pt->iworld >= 0 ? pt->iworld : g_transition.iwrecCur, pt->oid,
+                             pt->pjob && FIsJobCurrent(pt->pjob) ? 0x36B : -1, 0);
+        }
+        CloseMenu();
+        e.grf |= 2;
+        break;
+    }
     case m3::FN_YES_EXIT2P:                                              // orig3 0x001D5658: the two-player game ended (0x283F70)
         EndChallenge3(s_psw);
         e.grf |= 2;
@@ -1309,11 +1502,8 @@ void EraseTarget()
         // (the slot rewritten as a fresh record: the folder stays, as on the card)
         SAVESLOT& sl = g_aslot[s_islotTarget];
         std::string err;
-        const GAMESAVE saved = g_gamesave;
-        g_gamesave = GAMESAVE{};
-        ValidateGameSave();
-        sl.save = g_gamesave;
-        g_gamesave = saved;
+        sl.save = GAMESAVE{};
+        ResetGameSave3(sl.save, false);   // (orig3 0x1D0478 -> 0x21D010(block, 0))
         RemoveModSave(sl.path);   // (mod packages' custom tasks, modsave.h)
         if (FWriteGameSaveBlock(sl.path, sl.save, err))
         {
@@ -1555,7 +1745,19 @@ void UpdateMenu(SW* psw)
             s_ipageSlot = (s_ipageSlot + ((grf & 0x8) ? 1 : kSlotPages - 1)) % kSlotPages;
             return;
         }
-        if (!pe->aent.empty()) step(NStepUpDown());
+        if (!pe->aent.empty())
+        {
+            // (Outline Thickness: left / right step the value, as a slider)
+            MENUENT& e = pe->aent[size_t(pe->isel)];
+            if (e.id == NID_OutlineThickness)
+                if (const int n = NStepLeftRight())
+                {
+                    StepOutlineThickness(n, false);
+                    FSaveDisplaySettings(cane::userDirectory());
+                    return;
+                }
+            step(NStepUpDown());
+        }
         return;
     }
     case 8:

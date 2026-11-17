@@ -21,7 +21,7 @@
 // teleport X Y Z [H]: the current player put there (as SLY2N_TELEPORT: Z is the object's, H the heading, camera cut) at the
 // step's start (one frame); waittask OID STATE N [CSV]: until the task's state is >= STATE (after N frames it goes on), the CSV's
 // presses meanwhile (e.g. CROSS taps through a dialog); skipif OID STATE N: the next N steps skipped when the task's state is
-// >= STATE (native only: e.g. a fight's remaining rounds once it is won); taskreq OID STATE: a poke (as SLY2N_TASKREQ); intovol OID [DZ]: the player at a volume's center (its floor + DZ); tail CID OID DIST N [DZ] [CSV]: N frames (the CSV's presses every 60 frames), the player put DIST/2 behind the nearest such object whenever farther than DIST; onlo OID [DZ] [N] [DX DY [H]]: the player onto the N-th in-world copy of OID, DZ above, with its velocity (a moving train); giver OID [D]: as SLY2N_TELEGIVER (-1: the first guard with a prize, -N: the N-th); waitclock DT N: until the game clock ran DT (popups pause it); hackdock X Y: the hack ship put there once driven; warpworld N: world record N loaded in this process (the debug menu's warp); nojt OID[,OID..] N [CSV]: N frames (the CSV's presses meanwhile), failing once one of those objects is a tracked interaction target (a prompt); all independent of the game clock (pauses, scenes).
+// >= STATE (native only: e.g. a fight's remaining rounds once it is won); taskreq OID STATE: a poke (as SLY2N_TASKREQ); intovol OID [DZ]: the player at a volume's center (its floor + DZ); pocket OID N [DZ] [until=TASK]: N frames, the player kept in guard OID's pickpocket volume at its point nearest the pocket, CIRCLE once the pickpocket can start, until the pocket is taken; tail CID OID DIST N [DZ] [CSV]: N frames (the CSV's presses every 60 frames), the player put DIST/2 behind the nearest such object whenever farther than DIST; onlo OID [DZ] [N] [DX DY [H]]: the player onto the N-th in-world copy of OID, DZ above, with its velocity (a moving train); giver OID [D]: as SLY2N_TELEGIVER (-1: the first guard with a prize, -N: the N-th); waitclock DT N: until the game clock ran DT (popups pause it); hackdock X Y: the hack ship put there once driven; warpworld N: world record N loaded in this process (the debug menu's warp); nojt OID[,OID..] N [CSV]: N frames (the CSV's presses meanwhile), failing once one of those objects is a tracked interaction target (a prompt); all independent of the game clock (pauses, scenes).
 #include "activate.h"
 #include "gadget.h"
 #include "game/items3.h"
@@ -51,6 +51,10 @@
 #include "aipassword3.h"
 #include "outfit3.h"
 #include "photo.h"
+#include "sly.h"
+#include "pocket.h"
+static bool g_fRoutePocketPress = false;
+bool FPointInsideShape(LO* plo, const glm::vec3& pos);   // detect.cpp
 
 #include <algorithm>
 #include <cmath>
@@ -76,7 +80,7 @@ namespace
 struct PRESSR { int at = 1, c = 1, axis = -1; uint16_t grf = 0; uint8_t b = 0x80; };
 struct STEPR
 {
-    enum { Move, Wait, Input, Aim, WaitObj, Chase, Point, Teleport, WaitTask, TaskReq, WaitClock, Giver, IntoVol, SetPos, OnLo, Tail, SkipIf, SetPosLo, WaitScpt, HackDock, NoJt, WarpWorld, StartScpt, Wear, Password, Photo, Gadget, WaitPo, DrivePath, Dogfight, Row, Sail, Broadside, WaitCmd } kind = Wait;
+    enum { Move, Wait, Input, Aim, WaitObj, Chase, Point, Teleport, WaitTask, TaskReq, WaitClock, Giver, IntoVol, SetPos, OnLo, Tail, SkipIf, SetPosLo, WaitScpt, HackDock, NoJt, WarpWorld, StartScpt, Wear, Password, Photo, Gadget, WaitPo, DrivePath, Dogfight, Row, Sail, Broadside, WaitCmd, HoldBtn } kind = Wait;
     float h = 0; bool fH = false;
     int cid = 0, oid = 0;
     int frames = 0;
@@ -88,6 +92,7 @@ struct STEPR
     float behind = 0.0f;  // (chase behind=R: only objects held by a hack enemy (cid 0x4B, e.g. Sly 3's hack 4 claws' balls),
                           // reached from their holder's back: around the holder at R while on its front side)
     bool run = false;
+    bool fPocket = false;  // (pocket: a tail into the guard's pickpocket volume)
     int oidUntil = -1;  // (point until=OID: the step ends once script OID starts; its frames are then the budget)
     int every = 0;      // (point every=N: the CSV's presses repeat every N frames)
     float aimed = -1.0f;  // (point aimed=RAD: the CSV's button presses (not its stick values) held back while the aim is off by more)
@@ -117,6 +122,7 @@ struct ROUTE
     float tEpoch = -1.0f;
     std::vector<STEPR> astep;
     std::FILE* pfTrace = nullptr;
+    uint16_t grfHeld = 0;   // (holdbtn: buttons kept down from step to step)
 };
 ROUTE& Route()
 {
@@ -323,8 +329,11 @@ void Load()
         {
             // waitcmd OID IDX N (Sly 3): until command IDX of script OID runs again (after the step's start; N frames, then
             // on): e.g. the heist's double door, the guard's pull ([64] of SCPT 2434), the player's press right after it
+            // ("waitcmd OID IDX N ever": until it has run at all, a run before the step's start counts too; e.g. the
+            // script that adds a photo target, whose start depends on a guard's walk)
             s.kind = STEPR::WaitCmd;
             s.oid = std::atoi(f[1].c_str()); s.cid = std::atoi(f[2].c_str()); s.frames = std::atoi(f[3].c_str());
+            s.x = f.size() >= 5 && f[4] == "ever" ? 1.0f : 0.0f;
         }
         else if (f[0] == "waitscpt" && f.size() >= 3)
         {
@@ -351,6 +360,19 @@ void Load()
             s.near = std::strtof(f[3].c_str(), nullptr); s.frames = std::atoi(f[4].c_str());
             s.dz = f.size() >= 6 ? std::strtof(f[5].c_str(), nullptr) : 50.0f;
             if (f.size() >= 7) FParsePresses(f[6], s.apress);  // (repeated every 60 frames, e.g. CIRCLE for a pickpocket)
+        }
+        else if (f[0] == "pocket" && f.size() >= 3)
+        {
+            // pocket OID N [DZ] [CSV] [until=TASK]: for N frames (or until TASK is done) the player kept in guard OID's
+            // pickpocket volume (its +0x3F4, option 304, while it is in the world: its pocket glows), the CSV's presses
+            // every 60 frames (CIRCLE); the pickpocket's own conditions (target.cpp rank 3: the player inside that
+            // shape, the guard not alerted; sly.cpp: the pocket's mode 2) decide the catch
+            s.kind = STEPR::Tail; s.fPocket = true; s.cid = 0x3A;
+            for (size_t i = 3; i < f.size(); ++i)
+                if (f[i].rfind("until=", 0) == 0) { s.oidUntil = std::atoi(f[i].c_str() + 6); f.erase(f.begin() + long(i--)); }
+            s.oid = std::atoi(f[1].c_str()); s.frames = std::atoi(f[2].c_str());
+            s.dz = f.size() >= 4 ? std::strtof(f[3].c_str(), nullptr) : 20.0f;
+            if (f.size() >= 5) FParsePresses(f[4], s.apress);
         }
         else if (f[0] == "onlo" && f.size() >= 2)
         {
@@ -415,6 +437,14 @@ void Load()
             s.kind = STEPR::Gadget; s.frames = 1;
             s.oid = std::atoi(f[1].c_str());
             s.cid = f.size() >= 3 ? std::atoi(f[2].c_str()) : -1;
+        }
+        else if (f[0] == "holdbtn" && f.size() >= 2)
+        {
+            // holdbtn NAME|off: the button kept down from now on (until holdbtn off), e.g. the Treasure Map's gadget
+            // button, which Sly 3 needs held (orig3 0x1AC098 case 24)
+            s.kind = STEPR::HoldBtn; s.frames = 1;
+            std::vector<PRESSR> a;
+            s.cid = f[1] != "off" && FParsePresses(f[1] + "@1", a) && !a.empty() ? a[0].grf : 0;
         }
         else if (f[0] == "password" && f.size() >= 2)
         {
@@ -556,6 +586,10 @@ bool FRouteSample(int frame, uint16_t* pgrf, uint8_t abAxis[4])
         if (LO* ploH = PloPoCurrent(g_psw))
             if (ACTOR* pa = PactorFromLo(ploH))
                 if (int* pn = const_cast<int*>(DmgCounterOf(pa)); pn && *pn > 0 && *pn < std::atoi(s_szHold)) *pn = std::atoi(s_szHold);
+    // (and a hack ship's hit points, hack3.cpp: the bot's hack routes against Sly 3's enemy hit state 4 (AUDIT4 MODES-04))
+    if (static const char* s_szHold = std::getenv("SLY2N_HOLDHP"); s_szHold && g_psw)
+        if (LO* ploH = PloPoCurrent(g_psw); ploH && !PactorFromLo(ploH))
+            if (int n = 0; FHackHp3(ploH, false, &n) && n > 0 && n < std::atoi(s_szHold)) FSetHackHp3(ploH, false, std::atoi(s_szHold));
     if (s_fHp)
     {
         static int s_hp = -1000;
@@ -844,7 +878,7 @@ bool FRouteSample(int frame, uint16_t* pgrf, uint8_t abAxis[4])
         extern std::unordered_map<int64_t, int> g_mpcScptCmdExec3;  // game/scptgame3.cpp
         static int s_c0 = 0;
         const int c = g_mpcScptCmdExec3[(int64_t(s->oid) << 16) | s->cid];
-        if (rel == 1) s_c0 = c;
+        if (rel == 1) s_c0 = s->x != 0.0f ? 0 : c;
         else if (c > s_c0 || frame - r.frameStep >= s->frames)
         {
             std::printf("route: step %d's script %d command %d %s (frame %d t %.3f)\n", r.istep + 1, s->oid, s->cid, c > s_c0 ? "ran" : "timeout", frame, g_clock.t);
@@ -904,7 +938,70 @@ bool FRouteSample(int frame, uint16_t* pgrf, uint8_t abAxis[4])
             if (r.istep + 1 == static_cast<int>(r.astep.size())) { r.fDone = true; return false; }
             r.fAdvance = true;
         }
-    if (s->kind == STEPR::Tail && g_psw)
+    if (s->kind == STEPR::Tail && s->fPocket && g_psw)
+    {
+        static int s_framePut = -1000;
+        GUARD* pg = nullptr;
+        for (const auto& up : g_psw->aploAll)
+                if ((up->oid == s->oid || up->oidInstance == s->oid) && up->fInWorld && PguardFromLo(up.get())) { pg = PguardFromLo(up.get()); break; }
+        LO* pv = pg ? pg->plo3F4 : nullptr;
+        const LOXSHAPE* px = dynamic_cast<const LOXSHAPE*>(pv);
+        const LOXSHAPE* pgeom = px;
+        for (const LO* p = px; pgeom && pgeom->geom.apos.empty() && p && p->ploCloneOf; p = p->ploCloneOf)
+            if (const LOXSHAPE* q = dynamic_cast<const LOXSHAPE*>(p->ploCloneOf)) pgeom = q;
+        LO* pcur = PloPoCurrent(g_psw);
+        SLY* psly = pcur ? PslyFromLo(pcur) : nullptr;
+        const bool fPicking = psly && psly->jts == jts::Pickpocket;
+        // (the step ends once a pickpocket took the pocket (its mode no longer 2 after Sly's state 11): the prize flies
+        // out and the next steps pick it up)
+        static bool s_fWasPicking = false;
+        if (rel == 1) s_fWasPicking = false;
+        if (fPicking) s_fWasPicking = true;
+        if (s_fWasPicking && !fPicking && pg && PocketOf(pg->palo).nMode != 2)
+        {
+            std::printf("route: step %d pocket %d: taken (frame %d)\n", r.istep + 1, s->oid, frame);
+            g_fRoutePocketPress = false;
+            if (r.istep + 1 == static_cast<int>(r.astep.size())) { r.fDone = true; return false; }
+            r.fAdvance = true;
+            pv = nullptr;   // (no more puts)
+        }
+        if (s_fWasPicking && !fPicking) s_fWasPicking = false;
+        // (CIRCLE as soon as the pickpocket can start (sly.cpp: the target of rank 3 is this guard, its pocket in mode
+        // 2), 4 frames, at most every 12)
+        static int s_framePress = -1000;
+        const int jtsNow = psly ? int(psly->jts) : -1;
+        const bool fGround = jtsNow == jts::Stand || jtsNow == jts::Run || jtsNow == jts::Walk || jtsNow == jts::Sneak;
+        if (psly && pg && fGround && psly->n10E4 == 3 && psly->plo10DC == pg->palo && PocketOf(psly->plo10DC).nMode == 2 &&
+            frame - s_framePress >= 12)
+        {
+            s_framePress = frame;
+            std::printf("route: step %d pocket %d: CIRCLE (state %d, frame %d)\n", r.istep + 1, s->oid, jtsNow, frame);
+        }
+        g_fRoutePocketPress = frame - s_framePress < 4;
+        if (pv && px && pv->fInWorld && pgeom && !pgeom->geom.apos.empty() && !fPicking && frame - s_framePut >= 15 && !FPointInsideShape(pv, pos))
+        {
+            const glm::mat4 m = MatWorldLox(px);
+            glm::vec3 mn(1e30f), mx(-1e30f);
+            for (const glm::vec3& v : pgeom->geom.apos) { const glm::vec3 w = glm::vec3(m * glm::vec4(v, 1.0f)); mn = glm::min(mn, w); mx = glm::max(mx, w); }
+            const glm::vec3 c0 = (mn + mx) * 0.5f;
+            const glm::vec3 pgd = PosAloCenter(pg->palo);
+            // (the point of the shape nearest the pocket (on the line from the pocket to the shape's center): the arm
+            // reaches only within 120 of its joint (pocket.cpp UpdatePickpocketPose), the shape's center is ~300 away)
+            LO* ppocket = PloPocket(pg->palo);
+            const glm::vec3 pk = ppocket ? PosLoWorld(ppocket) : pgd;
+            glm::vec3 c = c0;
+            for (int i = 0; i <= 20; ++i)
+            {
+                glm::vec3 q = pk + (c0 - pk) * (float(i) / 20.0f);
+                q.z = c0.z;
+                if (FPointInsideShape(pv, q)) { c = q; break; }
+            }
+            g_routetele = {true, c.x, c.y, mn.z + s->dz, std::atan2(pgd.y - c.y, pgd.x - c.x), true};
+            s_framePut = frame;
+            std::printf("route: step %d pocket %d: player put in volume %d at %.0f %.0f %.0f (frame %d)\n", r.istep + 1, s->oid, pv->oid, c.x, c.y, mn.z + s->dz, frame);
+        }
+    }
+    if (s->kind == STEPR::Tail && !s->fPocket && g_psw)
     {
         static glm::vec3 s_posPrev(0.0f);
         glm::vec3 po;
@@ -991,6 +1088,12 @@ bool FRouteSample(int frame, uint16_t* pgrf, uint8_t abAxis[4])
         LO* pscpt = PloFindSwObjectByOid(g_psw, s->oid);
         std::printf("route: step %d startscpt %d%s (frame %d)\n", r.istep + 1, s->oid, pscpt ? "" : ": no such object", frame);
         if (pscpt) StartScptOfLo3(pscpt, PloPoCurrent(g_psw));
+        r.fAdvance = true;
+    }
+    if (s->kind == STEPR::HoldBtn && rel == 1)
+    {
+        r.grfHeld = static_cast<uint16_t>(s->cid);
+        std::printf("route: step %d holds buttons 0x%X (frame %d)\n", r.istep + 1, s->cid, frame);
         r.fAdvance = true;
     }
     if (s->kind == STEPR::Wear && rel == 1 && g_psw)
@@ -1189,6 +1292,7 @@ bool FRouteSample(int frame, uint16_t* pgrf, uint8_t abAxis[4])
     }
     const int relp = s->kind == STEPR::Point && s->every > 0 ? (rel - 1) % s->every + 1
                    : s->kind == STEPR::Tail || (s->kind == STEPR::Move && !s->apress.empty() && &r.astep[r.istep] != s) ? (rel - 1) % 60 + 1 : rel;
+    if (s->kind == STEPR::Tail && s->fPocket && g_fRoutePocketPress) grf |= BTN_Circle;
     for (const PRESSR& p : s->apress)
         if (relp >= p.at && relp - p.at < p.c)
         {
@@ -1214,7 +1318,9 @@ bool FRouteSample(int frame, uint16_t* pgrf, uint8_t abAxis[4])
             // (the view not as wanted yet (R3 is not taken during a dialog or a scene): pressed again, until the budget)
             ACTOR* pa = PloPoCurrent(g_psw) ? PactorFromLo(PloPoCurrent(g_psw)) : nullptr;
             const int n = pa ? NPhotoPromptState(pa->binoc.win.pprompt) : -1;
-            if (s_fPress && (n != -1) != (s->cid != 0) && rel < s->frames - 40) s_relPress = rel;
+            // (not while the binocucom is opening (+0xF04 0): a press seen once it is up closes it, orig3 0x1ACCA8)
+            if (s_fPress && pa && pa->nF04 == 0 && rel < s->frames - 40) {}
+            else if (s_fPress && (n != -1) != (s->cid != 0) && rel < s->frames - 40) s_relPress = rel;
             else r.fAdvance = true;
         }
     }
@@ -1270,6 +1376,7 @@ bool FRouteSample(int frame, uint16_t* pgrf, uint8_t abAxis[4])
             a[3] = BStick(std::cos(ang), 1.0);
         }
     }
+    grf |= r.grfHeld;
     *pgrf = grf;
     for (int i = 0; i < 4; ++i) abAxis[i] = a[i];
     if (r.pfTrace)
