@@ -43,7 +43,6 @@ namespace
 {
 constexpr float T_HOLD = 2.0f;          // seconds of Circle to skip
 constexpr float T_HINT = 4.0f;          // the hint stays this long after the last button
-constexpr float T_RING = 0.25f;         // Circle held this long: the hold's ring shows (a press is no hold)
 constexpr int CSTEP_MAX = 60 * 600;     // a skip's fast-forward stops after 10 minutes of game time (a stuck scene; Ep 8's Arpeggio / Clockwerk scene 3299 is 4 min)
 constexpr int CSTEP_CHAIN = 60;         // after the scene's end, the pad still locked: steps a following scene may take to start
 
@@ -75,10 +74,6 @@ bool FScptWaitsNow() { return g_frameJoy - s_skip.frameWait <= 2; }
 // The pad is still taken from the player (a script's pause: lock 2, a talk: 4), and no world loads (8): a scene that
 // starts now follows the one that ended with no moment of play between them, the same cutscene to the player.
 bool FPadStillLocked() { return (g_grfjoyLock & 6) != 0 && !(g_grfjoyLock & 8) && !g_transition.fPending && !FMenuShown(); }
-
-// A press of Circle skips (else only the hold does): not on the touch pad, where the whole screen is Circle and a
-// touch is no decision (the pad's ring shows the hold), unless Instant Skip asks for one touch.
-bool FPressSkips() { return g_pcinput.fInstantSkipCutscenes || !FTouchPadActive(); }
 
 // A skip goes on into the scene that follows the skipped one while the pad is still locked (a scene in several scripts,
 // a talk straight after a cinematic: the same cutscene to the player): straight on in the fast-forward when it takes
@@ -153,8 +148,6 @@ bool FUpdateHold(SKIPCUT& s, float dtReal, uint16_t grfHeld, uint16_t grfPressed
         s.tHold = 0.0f;
         return false;
     }
-    // (the hint already up before this press: a press of Circle now is the decision to skip)
-    const bool fHintBefore = s.fHint;
     if (grfPressed) { s.fHint = true; s.tHint = 0.0f; }
     else s.tHint += dtReal;
     if (s.fAwaitRelease)
@@ -165,9 +158,7 @@ bool FUpdateHold(SKIPCUT& s, float dtReal, uint16_t grfHeld, uint16_t grfPressed
     if (fCircle && s.fHint)
     {
         s.tHint = 0.0f;
-        // a press skips at once: the first one with Instant Skip, else one while the hint shows (the first press of
-        // any button only brings the hint up: a stray press never skips); holding Circle skips too
-        if ((grfPressed & BTN_Circle) && FPressSkips() && (g_pcinput.fInstantSkipCutscenes || fHintBefore)) return true;
+        if (g_pcinput.fInstantSkipCutscenes && (grfPressed & BTN_Circle)) return true;
         s.tHold += dtReal;
         if (s.tHold >= T_HOLD) return true;
     }
@@ -205,7 +196,7 @@ void DrawHint(const SKIPCUT& s)
     const FONTBRX* pfont = PfontHud();
     const FONTBRX* picons = PfontHudIcons();
     if (!pfont) return;
-    const std::string text = StrPort(picons ? PTX_PressToSkip : PTX_PressToSkipNoIcons);   // (the game's language: porttext.h)
+    const std::string text = StrPort(picons ? PTX_HoldToSkip : PTX_HoldToSkipNoIcons);   // (the game's language: porttext.h)
     const float k = 0.75f;   // (of the size it was tuned with)
     const float size = 24.0f * k;
     // (canvas pixels: the picture's right and bottom edges, the 4:3 canvas's or past them on a wider / taller picture)
@@ -226,7 +217,7 @@ void DrawHint(const SKIPCUT& s)
     g_hud.FillScreenRect(xRight - w - 10.0f * k, yTop - 5.0f * k, xRight + 6.0f * k, yTop + hText + 7.0f * k, glm::vec4(0, 0, 0, 72),
                          depth / 16777216.0f - 1e-4f);
     drawText(text, xRight - w, yTop, size, white, 100.0f);
-    if ((s.tHold > T_RING || s.fAck) && picons)
+    if ((s.tHold > 0.0f || s.fAck) && picons && (s.fAck || !g_pcinput.fInstantSkipCutscenes))
     {
         // the indicator: the Circle icon, a line circling it as the hold fills
         const float hIcon = 26.0f * k;

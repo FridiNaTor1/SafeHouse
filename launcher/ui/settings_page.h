@@ -1332,10 +1332,8 @@ private:
         describe(tr("Which buttons the game's prompts show. Automatic follows the controller or keyboard you used last."));
         toggle(tr("Original PlayStation icons"), m_settings.alwaysOriginalPsPrompts,
                tr("Every device shows the game's original PlayStation 2 button icons. Off: PS4 / PS5 pads show their own icons, other devices theirs."));
-        // (Sly 2: off, the first press shows the prompt and a second press of Circle skips; Sly 1 / Sly 3: off, a 2 s hold)
         toggle(tr("Instant skip cutscenes"), m_settings.instantSkipCutscenes,
-               m_game == GameId::Sly2 ? tr("One press of Circle skips a cutscene. Off: the first press shows the prompt, a second press of Circle skips.")
-                                      : tr("One press of Circle skips a cutscene. Off: hold Circle for 2 seconds."));
+               tr("One press of Circle skips a cutscene. Off: hold Circle for 2 seconds."));
         if (m_game == GameId::Sly1 || iniGame()) {
             const std::vector<std::string> cameraRotationLabels{ tr("Off"), tr("On") };
             int cameraRotation = m_settings.autoCameraRotation != 0 ? 1 : 0;

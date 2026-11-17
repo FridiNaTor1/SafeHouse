@@ -226,15 +226,6 @@ constexpr ROW s_arow[] = {
         "Kreis halten zum Überspringen", "Mantén Círculo para saltar", "Houd Rondje ingedrukt om over te slaan",
         "Mantém Círculo para saltar", "Hold Cirkel nede for at springe over", "Ohita pitämällä Ympyrää pohjassa",
         "Hold Sirkel inne for å hoppe over", "Håll Cirkel för att hoppa över", "丸ボタン長押しでスキップ", "동그라미 버튼을 길게 눌러 건너뛰기"}},
-    // P: the hint of the press to skip (the first press of a button in a scene brings it up, Circle then skips)
-    {P(PressToSkip), {"Press &2O&. to skip", "Appuie sur &2O&. pour passer", "Premi &2O&. per saltare",
-        "&2O&. drücken zum Überspringen", "Pulsa &2O&. para saltar", "Druk op &2O&. om over te slaan",
-        "Prime &2O&. para saltar", "Tryk på &2O&. for at springe over", "Ohita painamalla &2O&.",
-        "Trykk &2O&. for å hoppe over", "Tryck på &2O&. för att hoppa över", "&2O&.ボタンでスキップ", "&2O&. 버튼을 눌러 건너뛰기"}},
-    {P(PressToSkipNoIcons), {"Press Circle to skip", "Appuie sur Rond pour passer", "Premi Cerchio per saltare",
-        "Kreis drücken zum Überspringen", "Pulsa Círculo para saltar", "Druk op Rondje om over te slaan",
-        "Prime Círculo para saltar", "Tryk på Cirkel for at springe over", "Ohita painamalla Ympyrää",
-        "Trykk Sirkel for å hoppe over", "Tryck på Cirkel för att hoppa över", "丸ボタンでスキップ", "동그라미 버튼을 눌러 건너뛰기"}},
 
     // P: Replay Jobs (G: the word for a job: Abandon Job 0x6B, Jobs 0x138; the "Operation:" style of the game's
     // operation jobs, Operation: Wet Tiger 0x1BE; the Japanese names an operation "作戦" as its job names do not)
