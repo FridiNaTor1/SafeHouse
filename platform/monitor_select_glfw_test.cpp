@@ -67,7 +67,9 @@ void glfwSetWindowMonitor(GLFWwindow* w, GLFWmonitor* m, int x, int y, int width
 }
 GLFWmonitorfun glfwSetMonitorCallback(GLFWmonitorfun f) { GLFWmonitorfun old = g_monitorCallback; g_monitorCallback = f; return old; }
 void glfwGetVersion(int* major, int* minor, int* rev) { *major = 3, *minor = 4, *rev = 0; }
+#if defined(__linux__) && !defined(__ANDROID__)   // (only Linux asks which platform GLFW runs on: glfw_platform.h)
 int glfwGetPlatform(void) { return g_wayland ? GLFW_PLATFORM_WAYLAND : GLFW_PLATFORM_X11; }
+#endif
 }
 
 int main() {
@@ -133,6 +135,7 @@ int main() {
         // (the laptop is now listed second: still found by name)
         check(mo::chosen("eDP-1 | 1 | 0,0") == &g_laptop, "a monitor found by name in another order");
     }
+#if defined(__linux__) && !defined(__ANDROID__)
     {
         // Wayland: no positions; Borderless is a fullscreen surface on the output; Windowed is not moved
         g_wayland = true;
@@ -150,6 +153,7 @@ int main() {
         check(mo::refreshMonitor(&w, 0, tvW) == &g_tv, "Wayland, windowed: the chosen monitor's refresh rate");
         g_wayland = false;
     }
+#endif
     if (failures == 0) std::printf("monitor-select-glfw: all passed\n");
     return failures == 0 ? 0 : 1;
 }

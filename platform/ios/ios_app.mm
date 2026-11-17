@@ -540,6 +540,17 @@ void adoptWindow(void* uiWindow) {
     if (window.windowScene != scene) window.windowScene = scene;
     if (!CGRectEqualToRect(window.frame, scene.coordinateSpace.bounds)) window.frame = scene.coordinateSpace.bounds;
 }
+void forgetWindow(void* uiWindow) {
+    UIWindow* window = (__bridge UIWindow*)uiWindow;
+    UIViewController* controller = window.rootViewController;
+    Class sdlController = NSClassFromString(@"SDL_uikitviewcontroller");
+    if (!controller || !sdlController || ![controller isKindOfClass:sdlController]) return;
+    // (SDL_uikitviewcontroller.m initKeyboard: these four, with the controller as the observer, object nil)
+    NSNotificationCenter* center = NSNotificationCenter.defaultCenter;
+    for (NSNotificationName name in @[ UIKeyboardWillShowNotification, UIKeyboardDidShowNotification,
+                                       UIKeyboardWillHideNotification, UIKeyboardDidHideNotification ])
+        [center removeObserver:controller name:name object:nil];
+}
 std::array<float, 4> safeAreaInsets(void* uiWindow) {
     UIWindow* window = (__bridge UIWindow*)uiWindow;
     if (!window) return {0, 0, 0, 0};

@@ -124,6 +124,13 @@ void* uiWindowOf(SDL_Window* native) {
     return SDL_GetWindowWMInfo(native, &info) && info.subsystem == SDL_SYSWM_UIKIT ? (void*)info.info.uikit.window : nullptr;
 }
 void* uiWindow(GLFWwindow* w) { return w ? uiWindowOf(w->native) : nullptr; }
+// Every SDL window goes through here: its view controller stops hearing the on-screen keyboard first (ios_app.h
+// forgetWindow: UIKit may keep the controller after the SDL window is freed).
+void destroyNative(SDL_Window* native) {
+    if (!native) return;
+    cane::ios::forgetWindow(uiWindowOf(native));
+    SDL_DestroyWindow(native);
+}
 // A full-screen SDL window in the app's window scene (ios_app.h adoptWindow: SDL 2.30 knows no scenes): made hidden,
 // put into the scene, then shown.
 SDL_Window* makeWindow(const char* title, Uint32 api, bool visible) {
@@ -642,7 +649,7 @@ GLFWwindow* glfwCreateWindow(int, int, const char* title, GLFWmonitor*, GLFWwind
         // (in the log too: the game's own message is only "could not create a graphics context")
         cane::ios::log(std::string("iOS: ") + cane_ios_program_role() + " window failed: " + SDL_GetError());
         error(GLFW_VERSION_UNAVAILABLE, SDL_GetError());
-        if (w->native) SDL_DestroyWindow(w->native);
+        if (w->native) destroyNative(w->native);
         delete w;
         return nullptr;
     }
@@ -660,7 +667,7 @@ void glfwDestroyWindow(GLFWwindow* w) {
     if (w->metal) cane::ios::attachTouchOverlay(nullptr);
     if (w->metalView) SDL_Metal_DestroyView(w->metalView);
     if (w->context) SDL_GL_DeleteContext(w->context);
-    SDL_DestroyWindow(w->native);
+    destroyNative(w->native);
     if (current == w) current = nullptr;
     if (mainWindow == w) mainWindow = nullptr;
     delete w;
@@ -702,7 +709,7 @@ void glfwPollEvents() {
         // new window afterwards (SDL_GL_MakeCurrent attaches the context's view to the window it is given).
         if (w && w->native) {
             if (w->context) SDL_GL_MakeCurrent(w->native, nullptr);
-            SDL_DestroyWindow(w->native);
+            destroyNative(w->native);
             w->native = nullptr;
         }
         cane::ios::runPendingProgram();
@@ -711,7 +718,7 @@ void glfwPollEvents() {
         for (Uint32 id = 1; id < 1024; ++id)
             if (SDL_Window* other = SDL_GetWindowFromID(id)) {
                 cane::ios::log("iOS: a window the game left open is closed");
-                SDL_DestroyWindow(other);
+                destroyNative(other);
             }
         if (w) {
             w->native = makeWindow(w->title.c_str(), SDL_WINDOW_OPENGL, w->visible);

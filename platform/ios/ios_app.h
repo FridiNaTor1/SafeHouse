@@ -64,6 +64,12 @@ void attachTouchOverlay(void* uiWindow);
 // (main thread) Puts a window SDL made into the app's window scene (the UIScene life cycle; SDL 2.30 knows no scenes)
 // and sizes it to the scene. Waits up to 5 s for the scene to connect at the app's start.
 void adoptWindow(void* uiWindow);
+// (main thread, before SDL_DestroyWindow: glfw_sdl_ios.cpp) The window's SDL view controller stops listening for the
+// on-screen keyboard. SDL 2.30.11 removes those observers only when the controller is freed, and UIKit can keep it a
+// while after its SDL window is gone (the launcher's window, closed for the game's): a keyboard notification then
+// reached it (UIKit's keyboard tracking, as the game's window rotated to landscape on an iPhone, iOS 27) and
+// -[SDL_uikitviewcontroller updateKeyboard] read the freed SDL window.
+void forgetWindow(void* uiWindow);
 // (main thread) The window's safe area insets in points: left, top, right, bottom (the notch / Dynamic Island, the
 // home indicator, a foldable's hinge area). Zero without a window.
 std::array<float, 4> safeAreaInsets(void* uiWindow);
