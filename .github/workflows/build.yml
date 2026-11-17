@@ -379,7 +379,8 @@ jobs:
           set -eu
           docker pull -q devkitpro/devkita64:20260219
           id=$(docker create devkitpro/devkita64:20260219)
-          sudo docker cp "$id:/opt/devkitpro" /opt/devkitpro
+          # (docker cp refuses the image's pacman keyring symlink, which points outside /opt/devkitpro)
+          docker export "$id" | sudo tar -x -C / opt/devkitpro
           docker rm "$id" > /dev/null
           sudo chown -R "$(id -u):$(id -g)" /opt/devkitpro
           echo "/opt/devkitpro/tools/bin" >> "$GITHUB_PATH"
