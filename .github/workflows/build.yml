@@ -640,7 +640,7 @@ jobs:
       build-date: ${{ needs.version.outputs.date }}
       commit: ${{ needs.version.outputs.commit }}
 
-  # iOS / iPadOS (ios.yml): the .ipa (sideloaded; no App Store) and a simulator start. The release attaches the .ipa
+  # iOS / iPadOS (ios.yml): the .ipa (sideloaded; no App Store; the simulator start is opt-in). The release attaches the .ipa
   # when this job succeeded and is published without it otherwise.
   ios:
     name: iOS

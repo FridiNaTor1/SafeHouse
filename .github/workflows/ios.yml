@@ -2,6 +2,8 @@
 # an .ipa for iPhone and iPad, and a simulator build that starts on an iPhone and an iPad simulator (Sly 2's self
 # tests in the app, then the launcher with a screenshot). FFmpeg comes from scripts/ios/ffmpeg.sh (cached), SDL2 and
 # FAudio from their pinned sources through CMake (cmake/ios.cmake), the app from scripts/ios/package.py.
+# The simulator build and start are off by default (input `simulator`): GitHub's macOS runners lost or cancelled that
+# step too often, and testers try every build on real devices. Run this workflow by hand with it on when needed.
 #
 #   workflow_call       from build.yml, with the release version, its build date and commit
 #   workflow_dispatch   this workflow alone, by hand
@@ -27,14 +29,23 @@ on:
         description: Short commit hash
         type: string
         default: ''
+      simulator:
+        description: Also build for the simulator and start the app on an iPhone and an iPad simulator
+        type: boolean
+        default: false
   workflow_dispatch:
+    inputs:
+      simulator:
+        description: Also build for the simulator and start the app on an iPhone and an iPad simulator
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 jobs:
   ios:
-    name: iOS / iPadOS (arm64 .ipa + simulator, ${{ matrix.sdk }})
+    name: iOS / iPadOS (arm64 .ipa, ${{ matrix.sdk }})
     # Two builds of the same app: with the newest Xcode (the xcode-27 image: the iOS 27 SDK, which a new device class
     # such as a foldable's inner screen needs for its native size, and which requires the UIScene life cycle), and with
     # Xcode 16.4 / the iOS 18.5 SDK (macos-15's default; the build the first testers had) as the fallback. The first is
@@ -163,6 +174,7 @@ jobs:
           if-no-files-found: warn
 
       - name: Configure and build (simulator)
+        if: inputs.simulator
         run: |
           set -o pipefail
           cmake -G Ninja -S . -B build/ios-sim -DCMAKE_TOOLCHAIN_FILE=cmake/ios-toolchain.cmake \
@@ -173,12 +185,13 @@ jobs:
             --ffmpeg "$RUNNER_TEMP/ffmpeg-iphonesimulator"
 
       - name: The app starts on the simulators (self tests, launcher screenshot)
+        if: inputs.simulator
         # (each launch and boot is bounded in the script; this bounds the whole: a hang fails here, with the logs below)
         timeout-minutes: 75
         run: scripts/ios/simulator-smoke.sh dist/ios-sim/SafeHouse.app "$BUNDLE_ID" dist/ios-smoke
 
       - name: Pack the simulator app
-        if: always()
+        if: always() && inputs.simulator
         run: |
           if [ -d dist/ios-sim/SafeHouse.app ]; then (cd dist/ios-sim && zip -qry SafeHouse-iOS-Simulator.app.zip SafeHouse.app); fi
           mkdir -p dist/ios-smoke
@@ -186,7 +199,7 @@ jobs:
           cp ~/Library/Logs/DiagnosticReports/SafeHouse* dist/ios-smoke/ 2>/dev/null || true
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        if: always()
+        if: always() && inputs.simulator
         with:
           name: ${{ matrix.logs-artifact }}
           path: |
