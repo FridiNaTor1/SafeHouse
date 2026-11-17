@@ -9,6 +9,8 @@
 #include "sw.h"
 #include "langstore.h"
 #include "porttext.h"
+#include "sound.h"
+#include "audio.h"
 
 #include "../platform/platform.h"
 
@@ -167,33 +169,37 @@ int DumpTextCommand(const std::string& dir)
     s_fOff = true;
     InitClasses();
     // the worlds: the boot world, the front end, every world record (one file once)
-    struct WORLD { std::string name; FK fk; int filter; };
+    struct WORLD { std::string name; FK fk; int filter; int iwrec; };
     std::vector<WORLD> aworld;
     {
         std::set<uint32_t> aset;
-        auto add = [&](const std::string& w, const std::string& fallback) {
+        auto add = [&](const std::string& w, const std::string& fallback, int iwrec) {
             FK fk;
             int filter = 0;
             std::string err;
             if (!FResolveWorld(w, fk, filter, err) || !fk.cb || !aset.insert(fk.isector).second) return;
             std::string name = g_disc.SzWorldName(fk.isector);
             if (name.empty()) name = fallback;
-            aworld.push_back({name, fk, filter});
+            aworld.push_back({name, fk, filter, iwrec});
         };
-        add("boot", SzConvertWorldName(0) ? SzConvertWorldName(0) : "Boot");
-        add("frontend", "Front End");
+        add("boot", SzConvertWorldName(0) ? SzConvertWorldName(0) : "Boot", 0);
+        add("frontend", "Front End", 1);
         for (int i = 0; i < 64; ++i)
         {
             const char* sz = SzConvertWorldName(i);
-            add(std::to_string(i), sz ? sz : "World " + std::to_string(i));
+            add(std::to_string(i), sz ? sz : "World " + std::to_string(i), i);
         }
     }
     std::error_code ec;
     fs::create_directories(cane::path(dir), ec);
     const int langSave = g_nLang;
     // (usage.json: the worlds each string is in, by USA id as the languages folder numbers them: the localisation
-    // tool's context; the disc's first language)
+    // tool's context; the disc's first language. Version 2 adds each world's episode (the boot world's records' slot;
+    // the front end -1) and each dialog line's speaker (its stream's class id, -1 none) and headset flag (the lines the
+    // original's USB headset plays: the radio / binocucom talk), from the worlds' sound tables.)
     json usage = json::object();
+    std::vector<int> aepisode(aworld.size(), -1);
+    std::map<int, std::pair<int, int>> mpdialog;   // USA id -> (speaker class, headset)
     for (int k = 0; k < CLanguagesDisc(); ++k)
     {
         g_nLang = LanguageOfDiscIndex(k);
@@ -202,11 +208,23 @@ int DumpTextCommand(const std::string& dir)
         std::map<int, std::vector<int>> mpidaworld;
         for (std::size_t iw = 0; iw < aworld.size(); ++iw)
         {
-            const auto& [name, fk, filter] = aworld[iw];
+            const auto& [name, fk, filter, iwrecWorld] = aworld[iw];
             auto psw = std::make_unique<SW>();
             psw->filter = filter;
             std::size_t cbRead = 0, cbFile = 0;
+            if (k == 0) { std::lock_guard<std::recursive_mutex> lock(g_mtxSound); g_sound.adialog.clear(); }
             if (!FLoadWorldFile(psw.get(), fk, "", &cbRead, &cbFile)) { std::fprintf(stderr, "dump-text: %s did not load\n", name.c_str()); continue; }
+            if (k == 0)
+            {
+                // (the boot world's records hold the episodes; the front end is none)
+                static std::vector<WREC> s_awrec;
+                if (iw == 0) s_awrec = psw->awrec;
+                const int iwrec = iwrecWorld;
+                if (iwrec != 1 && iwrec >= 0 && iwrec < int(s_awrec.size())) aepisode[iw] = s_awrec[std::size_t(iwrec)].slot;
+                std::lock_guard<std::recursive_mutex> lock(g_mtxSound);
+                for (const SNDSTREAM& d : g_sound.adialog)
+                    if (const int idUsa = IdTextUsa(d.id); idUsa >= 0) mpdialog[idUsa] = {d.oidSpeaker, d.fNoHeadset == 0 ? 1 : 0};
+            }
             for (const auto& [id, str] : psw->atext)
             {
                 mp[id][Utf8OfLatin1(str)].push_back(name);
@@ -218,7 +236,9 @@ int DumpTextCommand(const std::string& dir)
             json names = json::array(), ids = json::object();
             for (const auto& w : aworld) names.push_back(w.name);
             for (const auto& [id, aw] : mpidaworld) ids[std::to_string(id)] = aw;
-            usage = {{"disc", g_disc.SzDisc()}, {"worlds", names}, {"strings", ids}};
+            json dialogs = json::object();
+            for (const auto& [id, d] : mpdialog) dialogs[std::to_string(id)] = {d.first, d.second};
+            usage = {{"version", 2}, {"disc", g_disc.SzDisc()}, {"worlds", names}, {"episodes", aepisode}, {"strings", ids}, {"dialogs", dialogs}};
         }
         // "strings": each id's most common string; "worlds": a world's string where it differs from that
         json strings = json::object(), worlds = json::object();

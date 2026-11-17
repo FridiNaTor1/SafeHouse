@@ -10,9 +10,11 @@
 // languages folder's (the game applies that file over the disc's own text too, and over the folder's).
 #include <algorithm>
 #include <cctype>
+#include <cstdlib>
 #include <cstdint>
 #include <cstdio>
 #include <filesystem>
+#include <functional>
 #include <fstream>
 #include <map>
 #include <set>
@@ -621,9 +623,17 @@ inline int importCsv(Translation& t, const std::string& csv) {
 }
 
 // ---- Where each string is used (Sly2-Release --dump-text DIR: DIR/usage.json)
+// Version 2 (2026-11-17) adds each world's episode and each dialog line's speaker and headset flag (textmod.cpp).
+struct DialogInfo {
+    int speaker = -1;        // the line's speaker: the class id of its stream (0x35 Sly, 0x36 Murray, ...), -1 none
+    bool headset = false;    // the game's USB headset plays it: the radio / binocucom talk
+};
 struct Usage {
+    int version = 0;
     std::vector<std::string> worlds;
+    std::vector<int> episodes;                       // per world (version 2): its episode, 0 the prologue, -1 the front end
     std::map<std::string, std::vector<int>> strings;
+    std::map<std::string, DialogInfo> dialogs;       // (version 2) by USA line id
     std::string disc;
     bool empty() const { return worlds.empty(); }
 };
@@ -631,16 +641,140 @@ inline Usage readUsage(const fs::path& file) {
     Usage u;
     const ojson j = readJson(file);
     if (!j.is_object()) return u;
+    u.version = j.value("version", 1);
     u.disc = j.value("disc", "");
     if (j.contains("worlds"))
         for (const auto& w : j["worlds"])
             if (w.is_string()) u.worlds.push_back(w.get<std::string>());
+    if (j.contains("episodes") && j["episodes"].is_array())
+        for (const auto& e : j["episodes"]) u.episodes.push_back(e.is_number_integer() ? e.get<int>() : -1);
     if (j.contains("strings") && j["strings"].is_object())
         for (const auto& [k, v] : j["strings"].items())
             if (v.is_array())
                 for (const auto& i : v)
                     if (i.is_number_integer()) u.strings[k].push_back(i.get<int>());
+    if (j.contains("dialogs") && j["dialogs"].is_object())
+        for (const auto& [k, v] : j["dialogs"].items())
+            if (v.is_array() && v.size() >= 2 && v[0].is_number_integer() && v[1].is_number_integer())
+                u.dialogs[k] = {v[0].get<int>(), v[1].get<int>() != 0};
     return u;
+}
+
+// ---- Levels: a string or voice line grouped by the episode whose worlds use it
+// The groups: 0 the prologue (Cairo), 1..8 the episodes, then the front end's alone, those of several, and of none.
+enum : int { kLevelMenus = 100, kLevelShared = 101, kLevelNone = 102 };
+// A world's episode: usage.json's (version 2), else by the world's name (the converter's names, every disc: the
+// boot world's records, Sly2-Release/convert.cpp s_aworldname); -1 the front end, -2 not known.
+inline int worldEpisode(const Usage& u, int w) {
+    if (w < 0 || w >= int(u.worlds.size())) return -2;
+    if (w < int(u.episodes.size())) return u.episodes[std::size_t(w)];
+    static const std::map<std::string, int> byName = {
+        {"Cairo Museum", 0}, {"Front End", -1}, {"Paris", 1}, {"Wine Cellar", 1}, {"Dimitri's Nightclub", 1},
+        {"Printing Press", 1}, {"Moulin Rouge", 1}, {"Waterpump Room", 1}, {"Rajan's Palace", 2}, {"Palace Guest Rooms", 2},
+        {"Palace Basement", 2}, {"Palace Ballroom", 2}, {"Jungle Temple", 3}, {"Spice Factory", 3}, {"Prague Prison", 4},
+        {"Prison Interior", 4}, {"Prison Vault", 4}, {"Contessa's Castle", 5}, {"Castle Water Rails", 5},
+        {"Castle Guard Break", 5}, {"The Crypt", 5}, {"Castle Heist", 5}, {"Crypt Training Room", 5}, {"Crypt Tomb", 5},
+        {"Crypt Hall", 5}, {"Crypt Water Room", 5}, {"Canada Train Station", 6}, {"Train Cabins", 6}, {"Train A", 6},
+        {"Train B", 6}, {"Train C", 6}, {"Sawmill", 7}, {"Sawmill Mulch Room", 7}, {"Sawmill Burn Room", 7},
+        {"Lighthouse", 7}, {"Bear Cave", 7}, {"Jean Bison Battle", 7}, {"Arpeggio's Blimp", 8}, {"Blimp Interior", 8},
+        {"Engine Room (Murray)", 8}, {"Engine Room (Bentley)", 8}, {"Engine Room (Sly)", 8}, {"Clock-La Battle", 8}};
+    const auto it = byName.find(u.worlds[std::size_t(w)]);
+    return it == byName.end() ? -2 : it->second;
+}
+// The level group of a string (by USA id): the one episode of every world that has it (the front end counts as its
+// own); several: shared (the HUD, the gadgets, the hub talk of more than one episode); none: not in any level.
+inline int levelOf(const Usage& u, const std::string& id) {
+    const auto it = u.strings.find(id);
+    if (it == u.strings.end() || it->second.empty()) return kLevelNone;
+    std::set<int> groups;
+    for (int w : it->second) {
+        const int e = worldEpisode(u, w);
+        if (e == -2) return kLevelShared;   // (a world not known: no guess)
+        groups.insert(e < 0 ? kLevelMenus : e);
+    }
+    return groups.size() == 1 ? *groups.begin() : kLevelShared;
+}
+// The episode's first world in usage.json's order (its hub: "Paris", "Rajan's Palace"); "" when none.
+inline std::string episodeHub(const Usage& u, int episode) {
+    for (int w = 0; w < int(u.worlds.size()); ++w)
+        if (worldEpisode(u, w) == episode) return u.worlds[std::size_t(w)];
+    return {};
+}
+
+// ---- Speakers: a dialog line's speaker class (usage.json "dialogs"), as a character's name
+// The classes the dialog tables name (measured on the USA disc: every speaker id there; the guards' classes speak as
+// "Guards"); others are "Other". The names are the game's own characters (not translated).
+inline const char* speakerName(int cid) {
+    switch (cid) {
+#include "loc_speakers.inc"
+    default: return nullptr;
+    }
+}
+// The speaker groups' order: Sly, Bentley, Murray, Carmelita, then the others by name; "Other" last
+inline int speakerRank(int cid) {
+    switch (cid) {
+    case 0x35: return 0;
+    case 0x37: return 1;
+    case 0x36: return 2;
+    case 0x3F: return 3;
+    default: return speakerName(cid) ? 10 : 100;
+    }
+}
+
+// ---- Dub takes: the dry take (as recorded / imported, before the radio effect) and the per-line choices, beside the
+// language's Dialog folder in Takes/ (the game reads only Dialog/ and Movies/): Takes/<id>.wav, Takes/takes.json
+// {"<id>": {"radio": true|false}} (a line not in it: the detected choice).
+inline fs::path takePath(const fs::path& dir, const std::string& id) { return dir / "Takes" / pathOf(id + ".wav"); }
+inline std::map<std::string, bool> readTakeChoices(const fs::path& dir) {
+    std::map<std::string, bool> out;
+    const ojson j = readJson(dir / "Takes" / "takes.json");
+    if (j.is_object())
+        for (const auto& [k, v] : j.items())
+            if (v.is_object() && v.contains("radio") && v["radio"].is_boolean()) out[k] = v["radio"].get<bool>();
+    return out;
+}
+inline bool saveTakeChoice(const fs::path& dir, const std::string& id, bool radio, std::string& error) {
+    ojson j = readJson(dir / "Takes" / "takes.json");
+    if (!j.is_object()) j = ojson::object();
+    j[id]["radio"] = radio;
+    return writeJson(dir / "Takes" / "takes.json", j, error);
+}
+
+// ---- Button codes as icons: a text cut into runs of text and icons ("&2X&." -> the X icon)
+struct Piece {
+    bool icon = false;
+    std::string text;    // the text, or the icon's character ("X", "O", "(" ...)
+};
+inline std::vector<Piece> pieces(const std::string& s) {
+    std::vector<Piece> out;
+    auto addText = [&](const std::string& t) {
+        if (t.empty()) return;
+        if (!out.empty() && !out.back().icon) out.back().text += t;
+        else out.push_back({false, t});
+    };
+    std::size_t i = 0;
+    bool inIcons = false;   // (after "&2": the characters up to "&." are icons, as the game's font does)
+    while (i < s.size()) {
+        if (s[i] == '&' && i + 1 < s.size() && s[i + 1] == '.') { inIcons = false; i += 2; continue; }
+        if (s[i] == '&' && i + 2 < s.size() && s[i + 1] >= '0' && s[i + 1] <= '9') {
+            inIcons = s[i + 1] == '2';
+            i += 2;
+            if (!inIcons) continue;
+        }
+        std::size_t n = 1;
+        const auto b = static_cast<unsigned char>(s[i]);
+        if (b >= 0xF0) n = 4; else if (b >= 0xE0) n = 3; else if (b >= 0xC0) n = 2;
+        const std::string ch = s.substr(i, n);
+        if (inIcons && ch != "\n") out.push_back({true, ch});
+        else addText(ch);
+        i += n;
+    }
+    return out;
+}
+// The icon codes the palette offers (the game's icon font: Sly2-Release/promptglyph.h), in its order.
+inline const std::vector<std::string>& iconCodes() {
+    static const std::vector<std::string> a = {"X", "O", "S", "T", "L", "R", "l", "r", "(", ")", "+", "!", "_"};
+    return a;
 }
 
 // ---- Voices: the dialog lines (Dialog/<any subfolders>/<USA line id>.wav|.flac|.vag: the line's subtitle is the text of
@@ -758,6 +892,44 @@ inline fs::path dubPath(const fs::path& dir, const VoiceRow& r, const std::strin
     return (r.group.empty() ? dir / "Dialog" : dir / "Dialog" / pathOf(r.group)) / pathOf(r.id + ext);
 }
 
+}  // namespace cane::loc
+#include "loc_audio.h"
+namespace cane::loc {
+
+// The disc check (SAFEHOUSE_LOC_DISC_CHECK="<usage.json>|<a language's Dialog folder>", --loc-selftest): the levels and
+// speakers of the real strings and lines, and the radio detector against the dialog tables' headset flag.
+inline void discCheck(const std::string& spec, const std::function<void(bool, const char*)>& expect) {
+    const auto bar = spec.find('|');
+    const Usage u = readUsage(pathOf(spec.substr(0, bar)));
+    expect(u.version >= 2 && !u.dialogs.empty(), "disc: usage.json version 2 with the dialog tables");
+    std::map<int, int> perLevel;
+    for (const auto& [id, w] : u.strings) perLevel[levelOf(u, id)]++;
+    std::printf("disc: strings per level:");
+    for (const auto& [l, n] : perLevel) std::printf(" %s=%d", l < 100 ? ("ep" + std::to_string(l)).c_str() : l == kLevelMenus ? "menus" : l == kLevelShared ? "shared" : "none", n);
+    std::printf("\n");
+    expect(perLevel.size() >= 10 && perLevel[1] > 100 && perLevel[kLevelShared] < int(u.strings.size()) / 3, "disc: every episode has its strings, shared is a minority");
+    std::map<std::string, int> perSpeaker;
+    for (const auto& [id, d] : u.dialogs) perSpeaker[speakerName(d.speaker) ? speakerName(d.speaker) : "Other"]++;
+    std::printf("disc: lines per speaker:");
+    for (const auto& [n, c] : perSpeaker) std::printf(" %s=%d", n.c_str(), c);
+    std::printf("\n");
+    expect(perSpeaker["Other"] * 20 < int(u.dialogs.size()), "disc: under 5% of the lines without a named speaker");
+    if (bar == std::string::npos) return;
+    const VoiceFiles v = scanVoices({pathOf(spec.substr(bar + 1)).parent_path()});
+    int flagged = 0, found = 0, others = 0, called = 0;
+    for (const auto& [id, file] : v.lines) {
+        const auto it = u.dialogs.find(id);
+        if (it == u.dialogs.end()) continue;
+        const audio::Mono m = audio::readWav(file.first);
+        if (m.empty()) continue;
+        const bool r = audio::radioLike(audio::spectrum(m));
+        if (it->second.headset) ++flagged, found += r;
+        else ++others, called += r;
+    }
+    std::printf("disc: radio detector: %d of %d flagged lines, %d of %d others\n", found, flagged, called, others);
+    expect(flagged > 0 && found * 100 >= flagged * 85 && called * 100 <= others * 20, "disc: the radio detector finds 85% of the flagged lines, under 20% of the others");
+}
+
 // The rules above on fixed cases (safehouse --loc-selftest): 0 when all pass.
 inline int selfTest() {
     int fails = 0, checks = 0;
@@ -832,6 +1004,34 @@ inline int selfTest() {
         expect(dubPath("/m", rows[1], ".wav") == fs::path("/m/Dialog/Train A/2565.wav") && dubPath("/m", rows[2], ".flac") == fs::path("/m/Movies/Ep1 Intro.flac"),
                "where a dub goes");
     }
+    {
+        // levels and speakers on a made-up usage.json: worlds of the prologue, episode 1 (two), the front end, episode 2
+        Usage u;
+        u.version = 2;
+        u.worlds = {"Cairo Museum", "Front End", "Paris", "Wine Cellar", "Rajan's Palace"};
+        u.episodes = {0, -1, 1, 1, 2};
+        u.strings = {{"1", {0}}, {"2", {2, 3}}, {"3", {1}}, {"4", {2, 4}}, {"5", {1, 2}}, {"6", {4}}};
+        u.dialogs = {{"2", {0x37, true}}, {"6", {0x3D, false}}, {"4", {0x99, false}}};
+        std::map<int, int> per;
+        for (const char* id : {"1", "2", "3", "4", "5", "6", "7"}) per[levelOf(u, id)]++;
+        expect(per[0] == 1 && per[1] == 1 && per[2] == 1 && per[kLevelMenus] == 1 && per[kLevelShared] == 2 && per[kLevelNone] == 1,
+               "the levels: one episode's worlds, the menus, shared, none");
+        Usage old = u;
+        old.episodes.clear();
+        expect(levelOf(old, "2") == 1 && levelOf(old, "6") == 2 && levelOf(old, "3") == kLevelMenus, "the levels of a version 1 usage.json: by the worlds' names");
+        expect(episodeHub(u, 1) == "Paris" && std::string(speakerName(0x37)) == "Bentley" && speakerName(0x99) == nullptr && speakerRank(0x35) < speakerRank(0x3D) &&
+                   speakerRank(0x3D) < speakerRank(0x99),
+               "the speakers: named, ordered, the unknown ones Other");
+    }
+    {
+        const auto p = pieces("Press &2X&. or &2O&. to jump.\nHold &2R&.");
+        expect(p.size() == 6 && p[0].text == "Press " && p[1].icon && p[1].text == "X" && p[3].icon && p[3].text == "O" && p[4].text == " to jump.\nHold " &&
+                   p[5].icon && p[5].text == "R",
+               "button codes as icons");
+        expect(pieces("Tom & Jerry 100%").size() == 1, "an ampersand is text");
+    }
+    audio::audioSelfTest([&](bool ok, const char* what) { expect(ok, what); });
+    if (const char* sz = std::getenv("SAFEHOUSE_LOC_DISC_CHECK"); sz && *sz) discCheck(sz, [&](bool ok, const char* what) { expect(ok, what); });
     std::printf("loc selftest: %d checks, %d failed\n", checks, fails);
     return fails ? 1 : 0;
 }

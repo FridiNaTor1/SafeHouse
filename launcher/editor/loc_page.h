@@ -6,17 +6,26 @@
 // length, the font's letters) and progress; saved to its Text.json, exported as a mod package or a CSV table. The model:
 // loc_core.h. The page speaks the launcher's languages (launcher/editor/lang). Docs: docs/MODDING.md "Translating".
 //
+// Round 3: the lists grouped by level (the episode whose worlds use a string) and by speaker (the dialog tables' speaker
+// of each line), the game's button codes drawn as icons (with a palette that types them), the radio effect for dubs of
+// the lines the game plays as radio talk (loc_audio.h), and recording a dub here: a microphone, a countdown, the
+// reference playing along, then trimming the take.
+//
 // It runs the game program twice, in the background, into the launcher's cache folder: --dump-port-text (the port's
 // built-in strings of the 12 languages: the PC strings' reference) and --dump-text (each string's levels: usage.json).
 #include "../backend.h"
 #include "../ui/widgets.h"
 
 #include "../collection/audio.h"
+#include "../ui/prompt_bar.h"
+#include "audio_devices_sdl.h"
 #include "core/spawn.h"
 #include "loc_core.h"
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
+#include <cstdio>
 #include <cctype>
 #include <cstdlib>
 #include <cstring>
@@ -33,6 +42,67 @@ namespace cane::ui {
 class LocalisationPage {
 public:
     explicit LocalisationPage(LauncherBackend& backend) : m_backend(backend) {}
+
+    // The recording path on the fake microphone (part of safehouse --loc-selftest): a made-up take as
+    // SAFEHOUSE_FAKE_MIC, recorded to the reference's length and the margin, trimmed to its speech, given the radio
+    // effect and written as a dub would be. 0 when all pass.
+    static int recordSelfTest() {
+        int fails = 0;
+        auto expect = [&](bool ok, const char* what) {
+            if (!ok) ++fails, std::printf("FAIL %s\n", what);
+        };
+        std::error_code ec;
+        const fs::path dir = fs::temp_directory_path(ec) / ("safehouse-loc-" + std::to_string(uint64_t(std::chrono::steady_clock::now().time_since_epoch().count())));
+        fs::create_directories(dir, ec);
+        loc::audio::Mono take;
+        take.rate = 22050;
+        take.s.assign(std::size_t(take.rate * 2), 0.0f);
+        for (std::size_t i = std::size_t(take.rate / 2); i < std::size_t(take.rate * 3 / 2); ++i)
+            take.s[i] = float(0.3 * std::sin(double(i) * 0.07) + 0.1 * std::sin(double(i) * 0.9));
+        std::string error;
+        expect(loc::audio::writeWav(dir / "take.wav", take, error), "the fake microphone's file written");
+        const char* before = std::getenv("SAFEHOUSE_FAKE_MIC");
+        const std::string keep = before ? before : "";
+#ifdef _WIN32
+        _putenv_s("SAFEHOUSE_FAKE_MIC", utf8(dir / "take.wav").c_str());
+#else
+        setenv("SAFEHOUSE_FAKE_MIC", utf8(dir / "take.wav").c_str(), 1);
+#endif
+        collection::Capture mic;
+        expect(mic.open("any device") && mic.fake() && mic.rate() == 22050, "the fake microphone opens at its file's rate");
+        loc::audio::Recorder rec;
+        rec.reset(mic.rate(), 1.2 + 1.0);   // (a reference of 1.2 s and the margin)
+        const auto first = mic.takeFake(0.25);
+        rec.push(first.data(), first.size());
+        expect(first.size() == std::size_t(22050 / 4), "the fake microphone gives its samples as the time passes");
+        const auto rest = mic.takeFake(3.0);
+        rec.push(rest.data(), rest.size());
+        expect(rec.full() && std::abs(rec.seconds() - 2.2) < 0.001, "the recording stops at the reference's length and the margin");
+        mic.close();
+        loc::audio::Mono got;
+        got.rate = rec.rate;
+        got.s = rec.s;
+        const auto span = loc::audio::speechSpan(got);
+        expect(span.first > 0.4 && span.first < 0.5 && span.second > 1.5 && span.second < 1.6, "the trim handles start around the speech");
+        const loc::audio::Mono cut = loc::audio::trimmed(got, span.first, span.second);
+        loc::audio::RadioFilter bp;
+        for (double c : loc::audio::bandCentres()) bp.gainDb.push_back(c < 400 ? -30 : c > 3150 ? -24 : 0);
+        const loc::audio::Mono radio = loc::audio::applyRadio(cut, bp);
+        const fs::path dub = dir / "Dialog" / "Cairo Museum" / "1179.wav";
+        expect(loc::audio::writeWav(dub, radio, error) && loc::audio::writeWav(loc::takePath(dir, "1179"), cut, error), "the dub and its dry take written");
+        const loc::audio::Mono back = loc::audio::readWav(dub);
+        expect(back.rate == 22050 && back.s.size() == cut.s.size() && std::abs(loc::audioSeconds(dub) - cut.seconds()) < 0.01, "the dub reads back: 16-bit mono, the trimmed length");
+        expect(loc::saveTakeChoice(dir, "1179", false, error) && loc::readTakeChoices(dir).at("1179") == false, "a line's radio choice kept in Takes/takes.json");
+#ifdef _WIN32
+        _putenv_s("SAFEHOUSE_FAKE_MIC", keep.c_str());
+#else
+        if (before) setenv("SAFEHOUSE_FAKE_MIC", keep.c_str(), 1);
+        else unsetenv("SAFEHOUSE_FAKE_MIC");
+#endif
+        fs::remove_all(dir, ec);
+        std::printf("loc record selftest: %d failed\n", fails);
+        return fails ? 1 : 0;
+    }
     ~LocalisationPage() { stopJob(); }
 
     void open() {
@@ -78,6 +148,8 @@ public:
         endCard();
         ImGui::SameLine(0, px(10));
         beginCard("loc-detail", {0, h}, 16, true);
+        // (screenshots: SAFEHOUSE_LOC_DETAIL_SCROLL=<pixels> holds the detail card scrolled there)
+        if (const char* sz = std::getenv("SAFEHOUSE_LOC_DETAIL_SCROLL"); sz && *sz) ImGui::SetScrollY(px(float(std::atof(sz))));
         if (m_section == 2) drawVoiceDetail();
         else drawDetail();
         endCard();
@@ -110,6 +182,111 @@ private:
     }
     fs::path runtime() const { return m_backend.binary(cane::game(GameId::Sly2).runtime); }
 
+    // ---------------------------------------------------------------- button codes drawn as icons
+    // The icons' family: the launcher's button icon setting when a style is chosen there (Settings > Button icons), else
+    // the PlayStation's, the buttons the game's text names.
+    static input::Family iconFamily() {
+        const auto& p = launcher::detail::promptPreferences();
+        if (p.alwaysOriginalPsPrompts || p.promptStyle == 0) return input::Family::PlayStation;
+        const input::Family f = input::promptFamily(p.promptStyle, 0);
+        return f == input::Family::Keyboard ? input::Family::PlayStation : f;
+    }
+    // An icon font character as a pad button (Sly2-Release/promptglyph.h), Button::Count for the others
+    static input::Button buttonOf(const std::string& c) {
+        using B = input::Button;
+        if (c.size() != 1) return B::Count;
+        switch (c[0]) {
+        case 'X': return B::South;
+        case 'O': return B::East;
+        case 'S': return B::West;
+        case 'T': return B::North;
+        case 'L': return B::LB;
+        case 'R': return B::RB;
+        case 'l': return B::LT;
+        case 'r': return B::RT;
+        case '(': return B::LS;
+        case ')': return B::RS;
+        case '+': return B::Dpad;
+        case '!': return B::Start;
+        case '_': return B::Back;
+        default: return B::Count;
+        }
+    }
+    // (the icon font's two pictures that are not buttons)
+    static const char* pictureName(const std::string& c) {
+        if (c == "a") return tr("save icon");
+        if (c == "w") return tr("exit door icon");
+        return nullptr;
+    }
+    static float iconWidth(const std::string& c, float h) {
+        const input::Button b = buttonOf(c);
+        if (b != input::Button::Count) return padButtonWidth(h, iconFamily(), b);
+        const char* name = pictureName(c);
+        return ImGui::CalcTextSize(name ? name : c.c_str()).x + px(10);
+    }
+    static void drawIcon(ImDrawList* dl, ImVec2 min, float h, const std::string& c) {
+        const input::Button b = buttonOf(c);
+        if (b != input::Button::Count) {
+            launcher::detail::launcherAtlas();
+            const float w = padButtonWidth(h, iconFamily(), b);
+            drawPadButton(dl, {min.x + w * 0.5f, min.y + h * 0.5f}, h, iconFamily(), b);
+            return;
+        }
+        const char* name = pictureName(c);
+        const std::string label = name ? name : c;
+        const ImVec2 t = ImGui::CalcTextSize(label.c_str());
+        const float w = t.x + px(10);
+        dl->AddRect(min, {min.x + w, min.y + h}, ink(color::borderStrong), px(4), 0, px(1));
+        dl->AddText({min.x + px(5), min.y + (h - t.y) * 0.5f}, ink(color::text2), label.c_str());
+    }
+    // A text with its button codes as icons, wrapped to the available width (an item, like TextWrapped)
+    static void richText(const std::string& s, uint32_t rgb, bool oneLine = false) {
+        const float lineH = ImGui::GetTextLineHeight(), iconH = std::round(lineH * (oneLine ? 1.0f : 1.25f));
+        const float rowH = std::max(lineH, iconH) + (oneLine ? 0 : px(2));
+        const float wrap = oneLine ? 1e9f : std::max(px(60), ImGui::GetContentRegionAvail().x);
+        struct Put { ImVec2 at; bool icon; std::string s; };
+        std::vector<Put> puts;
+        float x = 0, y = 0, widest = 0;
+        auto newline = [&] { widest = std::max(widest, x); x = 0; y += rowH; };
+        auto place = [&](float w, bool icon, const std::string& str) {
+            if (x > 0 && x + w > wrap && !(str.size() == 1 && str[0] == ' ')) newline();
+            if (x == 0 && !icon && str == " ") return;   // (no space at a wrapped line's start)
+            puts.push_back({{x, y + (icon ? (rowH - iconH) * 0.5f : (rowH - lineH) * 0.5f)}, icon, str});
+            x += w;
+        };
+        for (const loc::Piece& p : loc::pieces(s)) {
+            if (p.icon) {
+                place(iconWidth(p.text, iconH) + px(2), true, p.text);
+                continue;
+            }
+            // words (and the spaces between) so a line can wrap between them
+            std::string word;
+            auto flush = [&] {
+                if (!word.empty()) place(ImGui::CalcTextSize(word.c_str()).x, false, word), word.clear();
+            };
+            for (char c : p.text) {
+                if (c == '\n') {
+                    flush();
+                    if (oneLine) place(ImGui::CalcTextSize(" / ").x, false, " / ");
+                    else newline();
+                } else if (c == ' ') {
+                    flush();
+                    place(ImGui::CalcTextSize(" ").x, false, " ");
+                } else word += c;
+            }
+            flush();
+        }
+        widest = std::max(widest, x);
+        const ImVec2 origin = ImGui::GetCursorScreenPos();
+        ImGui::Dummy({std::min(std::max(widest, 1.0f), oneLine ? ImGui::GetContentRegionAvail().x : wrap), y + rowH});
+        auto* dl = ImGui::GetWindowDrawList();
+        for (const Put& put : puts) {
+            const ImVec2 at = {std::round(origin.x + put.at.x), std::round(origin.y + put.at.y)};
+            if (put.icon) drawIcon(dl, {at.x + px(1), at.y}, iconH, put.s);
+            else dl->AddText(at, ink(rgb), put.s.c_str());
+        }
+    }
+
     // ---------------------------------------------------------------- loading
     void load() {
         m_loaded = true;
@@ -119,7 +296,10 @@ private:
         const bool portReady = fs::is_regular_file(portDir() / "English.json", ec) && !runtimeNewer(portDir() / "English.json");
         const bool usageReady = fs::is_regular_file(usageDir() / "usage.json", ec);
         if (usageReady) m_usage = loc::readUsage(usageDir() / "usage.json");
-        if (!portReady || !usageReady) startJob(!portReady, !usageReady);
+        // (a usage.json from before round 3 has no episodes or speakers: made again once)
+        const bool usageOld = usageReady && m_usage.version < 2 && !m_usageRetried;
+        if (usageOld) m_usageRetried = true;
+        if (!portReady || !usageReady || usageOld) startJob(!portReady, !usageReady || usageOld);
         if (m_ref.empty()) m_ref = "English";
         if (m_current < 0 || !portReady) {
             // (development / screenshots: SAFEHOUSE_LOC_LANGUAGE=<folder> opens that one)
@@ -365,15 +545,17 @@ private:
         if (segmented("loc-section", &m_section, sections, px(420))) m_dirtyFilter = m_voiceDirty = true;
         ImGui::SameLine(0, px(10));
         if (m_section == 2) {
-            const char* const vf[] = {tr("All"), tr("Missing dub"), tr("Has a dub")};
+            const char* const vf[] = {tr("All"), tr("Missing dub"), tr("Has a dub"), tr("Radio lines")};
             pushComboStyle();
             ImGui::SetNextItemWidth(px(240));
             if (beginCombo("##loc-vfilter", (std::string(tr("Show:")) + " " + vf[m_voiceFilter]).c_str())) {
-                for (int k = 0; k < 3; ++k)
+                for (int k = 0; k < 4; ++k)
                     if (ImGui::Selectable(vf[k], k == m_voiceFilter)) m_voiceFilter = k, m_voiceDirty = true;
                 ImGui::EndCombo();
             }
             popComboStyle();
+            ImGui::SameLine(0, px(10));
+            drawGroupBy();
             ImGui::SameLine(0, px(10));
             if (inputField("##loc-search", m_search, sizeof(m_search), launcher::Charset::Free, tr("Search id or text"))) m_voiceDirty = m_dirtyFilter = true;
             return;
@@ -387,6 +569,10 @@ private:
             ImGui::EndCombo();
         }
         popComboStyle();
+        if (m_section == 0) {
+            ImGui::SameLine(0, px(10));
+            drawGroupBy();
+        }
         ImGui::SameLine(0, px(10));
         if (inputField("##loc-search", m_search, sizeof(m_search), launcher::Charset::Free, tr("Search id or text"))) m_dirtyFilter = m_voiceDirty = true;
     }
@@ -412,14 +598,132 @@ private:
     }
     void refilter() {
         m_dirtyFilter = false;
-        m_visible.clear();
+        std::vector<int> rows;
         for (std::size_t i = 0; i < m_t.rows.size(); ++i)
-            if (matches(m_t.rows[i]) || int(i) == m_selected) m_visible.push_back(int(i));
+            if (matches(m_t.rows[i]) || int(i) == m_selected) rows.push_back(int(i));
+        // (the PC strings are not in any level: never grouped)
+        m_lines = grouped(rows, m_section == 1 ? 0 : m_groupBy, false);
+        m_visible.clear();
+        for (const ListLine& l : m_lines)
+            if (l.row >= 0) m_visible.push_back(l.row);
+    }
+
+    // ---------------------------------------------------------------- groups: levels, then speakers
+    static constexpr int kLevelCutscenes = 103;
+    struct ListLine {
+        int row = -1;            // a row (of m_t.rows or m_voices), or -1: a group's heading
+        int depth = 0;           // (a heading) 0 the level, 1 the speaker
+        std::string key, label;
+        int count = 0, done = 0;
+        bool collapsed = false;
+    };
+    std::string levelLabel(int level) const {
+        if (level == loc::kLevelMenus) return tr("Menus");
+        if (level == loc::kLevelShared) return tr("Shared: in several levels");
+        if (level == loc::kLevelNone) return m_usage.empty() ? tr("Levels not known yet") : tr("Not in any level");
+        if (level == kLevelCutscenes) return tr("Cutscenes");
+        const std::string ep = level == 0 ? std::string(tr("Prologue")) : trf("Episode %d", level);
+        const std::string hub = loc::episodeHub(m_usage, level);
+        return hub.empty() ? ep : ep + ": " + hub;
+    }
+    // A row's speaker group (rank, name): the dialog tables' speaker; a string without a voice line is on-screen text
+    std::pair<int, std::string> speakerOf(const std::string& id, bool voices) const {
+        const auto it = m_usage.dialogs.find(id);
+        if (it == m_usage.dialogs.end()) return voices ? std::pair<int, std::string>{100, tr("Other")} : std::pair<int, std::string>{200, tr("On-screen text")};
+        const char* name = loc::speakerName(it->second.speaker);
+        return name ? std::pair<int, std::string>{loc::speakerRank(it->second.speaker), name} : std::pair<int, std::string>{100, tr("Other")};
+    }
+    // The rows (in their order) under their headings: by level (by = 1), by level and speaker (2), or none (0)
+    std::vector<ListLine> grouped(const std::vector<int>& rows, int by, bool voices) const {
+        std::vector<ListLine> out;
+        if (by == 0) {
+            for (int r : rows) out.push_back({r});
+            return out;
+        }
+        using Key = std::pair<int, std::pair<int, std::string>>;
+        std::map<Key, std::vector<int>> groups;
+        for (int r : rows) {
+            std::string id;
+            bool movie = false, done = false;
+            if (voices) id = m_voices[std::size_t(r)].id, movie = m_voices[std::size_t(r)].movie;
+            else id = m_t.rows[std::size_t(r)].id;
+            (void)done;
+            const int level = movie ? kLevelCutscenes : loc::levelOf(m_usage, id);
+            groups[{level, by == 2 && !movie ? speakerOf(id, voices) : std::pair<int, std::string>{0, ""}}].push_back(r);
+        }
+        auto isDone = [&](int r) {
+            return voices ? !m_voices[std::size_t(r)].dub.empty() : loc::Translation::status(m_t.rows[std::size_t(r)]) == loc::Status::Done;
+        };
+        int level = -999;
+        bool levelCollapsed = false;
+        for (const auto& [key, list] : groups) {
+            if (key.first != level) {
+                level = key.first;
+                ListLine h;
+                h.key = (voices ? "v" : "t") + std::to_string(level);
+                h.label = levelLabel(level);
+                for (const auto& [k2, l2] : groups)
+                    if (k2.first == level)
+                        for (int r : l2) ++h.count, h.done += isDone(r);
+                h.collapsed = levelCollapsed = m_collapsed.count(h.key) > 0;
+                out.push_back(h);
+            }
+            if (levelCollapsed) continue;
+            bool collapsed = false;
+            if (!key.second.second.empty()) {
+                ListLine h;
+                h.depth = 1;
+                h.key = (voices ? "v" : "t") + std::to_string(level) + "/" + key.second.second;
+                h.label = key.second.second;
+                for (int r : list) ++h.count, h.done += isDone(r);
+                h.collapsed = collapsed = m_collapsed.count(h.key) > 0;
+                out.push_back(h);
+            }
+            if (!collapsed)
+                for (int r : list) out.push_back({r});
+        }
+        return out;
+    }
+    // A heading's row of a table: its arrow, name and counts (done / all: translated or dubbed); a click folds it
+    bool drawHeading(const ListLine& l) {
+        ImGui::TableNextRow(0, ImGui::GetTextLineHeight() + px(8));
+        ImGui::TableSetBgColor(ImGuiTableBgTarget_RowBg0, ink(l.depth == 0 ? color::input : color::border, l.depth == 0 ? 1.0f : 0.45f));
+        ImGui::TableNextColumn();
+        ImGui::PushID(l.key.c_str());
+        const bool clicked = ImGui::Selectable("##heading", false, ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap,
+                                               {0, ImGui::GetTextLineHeight() + px(4)});
+        ImGui::PopID();
+        auto* dl = ImGui::GetWindowDrawList();
+        const ImVec2 at = ImGui::GetItemRectMin();
+        const float indent = px(4 + 16 * l.depth), h = ImGui::GetItemRectSize().y;
+        ImGui::RenderArrow(dl, {at.x + indent, at.y + (h - ImGui::GetFontSize()) * 0.5f}, ink(color::text2), l.collapsed ? ImGuiDir_Right : ImGuiDir_Down, 0.8f);
+        const std::string text = l.label + "   " + std::to_string(l.done) + " / " + std::to_string(l.count);
+        // (across the whole row, not only the first column)
+        const ImGuiTable* table = ImGui::GetCurrentTable();
+        dl->PushClipRect({table->InnerClipRect.Min.x, at.y}, {table->InnerClipRect.Max.x, at.y + h}, false);
+        dl->AddText({at.x + indent + px(18), at.y + (h - ImGui::GetTextLineHeight()) * 0.5f}, ink(l.depth == 0 ? color::text : color::text2), text.c_str());
+        dl->PopClipRect();
+        return clicked;
+    }
+    void toggleGroup(const std::string& key) {
+        if (!m_collapsed.erase(key)) m_collapsed.insert(key);
+        m_dirtyFilter = m_voiceDirty = true;
+    }
+    void drawGroupBy() {
+        const char* const by[] = {tr("No groups"), tr("By level"), tr("By level and character")};
+        pushComboStyle();
+        ImGui::SetNextItemWidth(px(250));
+        if (beginCombo("##loc-groupby", by[m_groupBy])) {
+            for (int k = 0; k < 3; ++k)
+                if (ImGui::Selectable(by[k], k == m_groupBy)) m_groupBy = k, m_dirtyFilter = m_voiceDirty = true;
+            ImGui::EndCombo();
+        }
+        popComboStyle();
     }
     static std::string oneLine(const std::string& s) {
         std::string out;
         out.reserve(std::min<std::size_t>(s.size(), 200));
-        for (std::size_t i = 0; i < s.size() && out.size() < 200; ++i) out += s[i] == '\n' ? std::string(" / ") : std::string(1, s[i]);
+        for (std::size_t i = 0; i < s.size() && out.size() < 200; ++i) out += s[i];
         return out;
     }
     void drawTable() {
@@ -434,14 +738,20 @@ private:
         ImGui::TableSetupColumn("##status", ImGuiTableColumnFlags_WidthFixed, px(24));
         ImGui::TableHeadersRow();
         ImGuiListClipper clipper;
-        clipper.Begin(int(m_visible.size()));
+        clipper.Begin(int(m_lines.size()));
         if (m_scrollToSelected) {
-            for (std::size_t v = 0; v < m_visible.size(); ++v)
-                if (m_visible[v] == m_selected) clipper.IncludeItemByIndex(int(v));
+            for (std::size_t v = 0; v < m_lines.size(); ++v)
+                if (m_lines[v].row == m_selected && m_selected >= 0) clipper.IncludeItemByIndex(int(v));
         }
+        std::string toggle;
         while (clipper.Step()) {
             for (int v = clipper.DisplayStart; v < clipper.DisplayEnd; ++v) {
-                const int i = m_visible[std::size_t(v)];
+                const ListLine& line = m_lines[std::size_t(v)];
+                if (line.row < 0) {
+                    if (drawHeading(line)) toggle = line.key;
+                    continue;
+                }
+                const int i = line.row;
                 const loc::Row& r = m_t.rows[std::size_t(i)];
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
@@ -453,11 +763,11 @@ private:
                 }
                 ImGui::PopID();
                 ImGui::TableNextColumn();
-                ImGui::TextColored(vec(color::text2), "%s", oneLine(r.ref).c_str());
+                richText(oneLine(r.ref), color::text2, true);
                 ImGui::TableNextColumn();
                 const loc::Status st = loc::Translation::status(r);
                 if (st == loc::Status::Untranslated) ImGui::TextColored(vec(color::muted), "%s", tr("(not translated)"));
-                else ImGui::TextUnformatted(oneLine(r.text).c_str());
+                else richText(oneLine(r.text), color::text, true);
                 ImGui::TableNextColumn();
                 const ImVec2 c = {ImGui::GetCursorScreenPos().x + px(8), ImGui::GetCursorScreenPos().y + ImGui::GetTextLineHeight() * 0.5f};
                 auto* dl = ImGui::GetWindowDrawList();
@@ -469,6 +779,7 @@ private:
             }
         }
         ImGui::EndTable();
+        if (!toggle.empty()) toggleGroup(toggle);
         // (keyboard: Ctrl+Up / Ctrl+Down: the previous / next string of the list)
         if (ImGui::GetIO().KeyCtrl && !m_visible.empty()) {
             const int dir = ImGui::IsKeyPressed(ImGuiKey_DownArrow) ? 1 : ImGui::IsKeyPressed(ImGuiKey_UpArrow) ? -1 : 0;
@@ -476,6 +787,7 @@ private:
         }
     }
     void select(int i) {
+        if (i != m_selected) m_cursor = -1;
         m_selected = i;
         m_scrollToSelected = true;
         m_addWorld = 0;
@@ -488,18 +800,59 @@ private:
     }
 
     // ---------------------------------------------------------------- the selected string
+    struct EditState {
+        std::string* s = nullptr;
+        int cursor = -1;   // the text cursor's byte offset, kept while the field is not focused (the palette types there)
+    };
     static int resize(ImGuiInputTextCallbackData* data) {
+        auto* e = static_cast<EditState*>(data->UserData);
         if (data->EventFlag == ImGuiInputTextFlags_CallbackResize) {
-            auto* s = static_cast<std::string*>(data->UserData);
-            s->resize(std::size_t(data->BufTextLen));
-            data->Buf = s->data();
-        }
+            e->s->resize(std::size_t(data->BufTextLen));
+            data->Buf = e->s->data();
+        } else if (data->EventFlag == ImGuiInputTextFlags_CallbackAlways) e->cursor = data->CursorPos;
         return 0;
     }
-    static bool inputText(const char* id, std::string& s, ImVec2 size) {
+    static bool inputText(const char* id, std::string& s, ImVec2 size, int* cursor = nullptr) {
         ImGui::PushStyleColor(ImGuiCol_FrameBg, vec(color::input));
-        const bool changed = ImGui::InputTextMultiline(id, s.data(), s.capacity() + 1, size, ImGuiInputTextFlags_CallbackResize, resize, &s);
+        EditState e{&s, cursor ? *cursor : -1};
+        const bool changed = ImGui::InputTextMultiline(id, s.data(), s.capacity() + 1, size,
+                                                       ImGuiInputTextFlags_CallbackResize | ImGuiInputTextFlags_CallbackAlways, resize, &e);
+        if (cursor) *cursor = e.cursor;
         ImGui::PopStyleColor();
+        return changed;
+    }
+    static void smallTag(const char* label, uint32_t rgb) {
+        const ImVec2 t = ImGui::CalcTextSize(label);
+        const ImVec2 at = ImGui::GetCursorScreenPos();
+        const float h = ImGui::GetTextLineHeight();
+        auto* dl = ImGui::GetWindowDrawList();
+        dl->AddRectFilled(at, {at.x + t.x + px(10), at.y + h}, ink(rgb, 0.18f), px(4));
+        dl->AddText({at.x + px(5), at.y}, ink(rgb), label);
+        ImGui::Dummy({t.x + px(10), h});
+    }
+    // The button icon palette: a click types the code ("&2X&.") at the field's cursor (else at its end)
+    bool iconPalette(std::string& text, int& cursor) {
+        bool changed = false;
+        const float h = px(26);
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextColored(vec(color::text2), "%s", tr("Insert:"));
+        for (const std::string& c : loc::iconCodes()) {
+            const float w = iconWidth(c, h - px(6)) + px(8);
+            ImGui::SameLine(0, px(4));
+            if (ImGui::GetContentRegionAvail().x < w) ImGui::NewLine();
+            ImGui::PushID(c.c_str());
+            const ImVec2 at = ImGui::GetCursorScreenPos();
+            if (ImGui::Button("##icon", {w, h})) {
+                const std::string code = "&2" + c + "&.";
+                const std::size_t at2 = cursor >= 0 && std::size_t(cursor) <= text.size() ? std::size_t(cursor) : text.size();
+                text.insert(at2, code);
+                cursor = int(at2 + code.size());
+                changed = true;
+            }
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("&2%s&.", c.c_str());
+            drawIcon(ImGui::GetWindowDrawList(), {at.x + px(4), at.y + px(3)}, h - px(6), c);
+            ImGui::PopID();
+        }
         return changed;
     }
     std::string problemText(const loc::Problem& p, const loc::Row& r) const {
@@ -524,6 +877,8 @@ private:
             caption(tr("&2X&. draws a button icon (X, O, S, T, L, R, ...) and &. ends it; %s and %d are filled in by the game. Keep them, "
                        "and keep a string's line breaks where the reference has them."),
                     color::text2);
+            gap(6);
+            caption(tr("The lists show the button codes as the buttons' icons; under the text field, a row of icons types their codes."), color::text2);
             return;
         }
         loc::Row& r = m_t.rows[std::size_t(m_selected)];
@@ -541,9 +896,8 @@ private:
         } else caption(tr("SafeHouse's own text: menus, options, hints and key names of the PC version."), color::text2);
         gap(6);
         text(m_ref.c_str(), fonts().label, color::text2);
-        ImGui::PushTextWrapPos(0);
-        ImGui::TextColored(vec(color::text), "%s", r.ref.empty() ? tr("(none)") : r.ref.c_str());
-        ImGui::PopTextWrapPos();
+        if (r.ref.empty()) ImGui::TextColored(vec(color::text), "%s", tr("(none)"));
+        else richText(r.ref, color::text);
         if (r.port && r.ref != r.english) {
             ImGui::PushTextWrapPos(0);
             ImGui::TextColored(vec(color::muted), "%s: %s", tr("English"), r.english.c_str());
@@ -552,8 +906,14 @@ private:
         gap(8);
         text(m_t.folder.key.c_str(), fonts().label, color::text2);
         const float boxH = px(110);
-        if (inputText("##loc-text", r.text, {-1, boxH})) {
+        if (inputText("##loc-text", r.text, {-1, boxH}, &m_cursor)) {
             m_t.recheck(r);
+        }
+        // the button icons: a palette that types their codes, and the text as the game shows it
+        if (iconPalette(r.text, m_cursor)) m_t.recheck(r);
+        if (!r.text.empty() && r.text.find('&') != std::string::npos) {
+            caption(tr("As the game shows it:"), color::muted);
+            richText(r.text, color::text);
         }
         if (button(tr("Copy the reference"), Tone::Quiet, {0, px(30)}, Icon::Copy)) {
             r.text = r.ref;
@@ -833,6 +1193,7 @@ private:
         std::vector<fs::path> dirs = m_t.folder.dirs;
         const loc::VoiceFiles mine = loc::scanVoices(dirs);
         m_lengths = mine.lengths;
+        m_takeChoices = loc::readTakeChoices(dubDir());
         const std::string keep = m_voiceSel >= 0 && m_voiceSel < int(m_voices.size()) ? m_voices[std::size_t(m_voiceSel)].id : std::string();
         m_voices = ref && ref->key == m_t.folder.key ? std::vector<loc::VoiceRow>() : loc::voiceRows(refFiles, mine);
         m_voiceSel = -1;
@@ -848,6 +1209,7 @@ private:
     bool voiceMatches(const loc::VoiceRow& v) const {
         if (m_voiceFilter == 1 && !v.dub.empty()) return false;
         if (m_voiceFilter == 2 && v.dub.empty()) return false;
+        if (m_voiceFilter == 3 && (v.movie || !radioChoice(v.id))) return false;
         if (m_search[0]) {
             const std::string q = lower(m_search);
             const loc::Row* r = subtitleRow(v);
@@ -860,9 +1222,13 @@ private:
     void drawVoiceTable() {
         if (m_voiceDirty) {
             m_voiceDirty = false;
-            m_voiceVisible.clear();
+            std::vector<int> rows;
             for (std::size_t i = 0; i < m_voices.size(); ++i)
-                if (voiceMatches(m_voices[i]) || int(i) == m_voiceSel) m_voiceVisible.push_back(int(i));
+                if (voiceMatches(m_voices[i]) || int(i) == m_voiceSel) rows.push_back(int(i));
+            m_voiceLines = grouped(rows, m_groupBy, true);
+            m_voiceVisible.clear();
+            for (const ListLine& l : m_voiceLines)
+                if (l.row >= 0) m_voiceVisible.push_back(l.row);
         }
         int lines = 0, dubbed = 0;
         for (const loc::VoiceRow& v : m_voices) lines += !v.movie, dubbed += !v.movie && !v.dub.empty();
@@ -882,26 +1248,34 @@ private:
         ImGui::TableSetupScrollFreeze(0, 1);
         ImGui::TableSetupColumn(tr("Line"), ImGuiTableColumnFlags_WidthFixed, px(130));
         ImGui::TableSetupColumn(tr("Subtitle"), ImGuiTableColumnFlags_WidthStretch, 1.0f);
-        ImGui::TableSetupColumn(tr("Place"), ImGuiTableColumnFlags_WidthFixed, px(130));
+        ImGui::TableSetupColumn(m_groupBy == 2 ? tr("Place") : tr("Speaker"), ImGuiTableColumnFlags_WidthFixed, px(130));
         ImGui::TableSetupColumn(tr("Dub"), ImGuiTableColumnFlags_WidthFixed, px(70));
         ImGui::TableHeadersRow();
         ImGuiListClipper clipper;
-        clipper.Begin(int(m_voiceVisible.size()));
+        clipper.Begin(int(m_voiceLines.size()));
         if (m_voiceScroll)
-            for (std::size_t k = 0; k < m_voiceVisible.size(); ++k)
-                if (m_voiceVisible[k] == m_voiceSel) clipper.IncludeItemByIndex(int(k));
+            for (std::size_t k = 0; k < m_voiceLines.size(); ++k)
+                if (m_voiceLines[k].row == m_voiceSel && m_voiceSel >= 0) clipper.IncludeItemByIndex(int(k));
+        std::string toggle;
         while (clipper.Step()) {
             for (int k = clipper.DisplayStart; k < clipper.DisplayEnd; ++k) {
-                const int i = m_voiceVisible[std::size_t(k)];
+                const ListLine& line = m_voiceLines[std::size_t(k)];
+                if (line.row < 0) {
+                    if (drawHeading(line)) toggle = line.key;
+                    continue;
+                }
+                const int i = line.row;
                 const loc::VoiceRow& v = m_voices[std::size_t(i)];
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
                 ImGui::PushID(i);
                 if (ImGui::Selectable(v.movie ? (std::string(tr("Movie")) + ": " + v.id).c_str() : v.id.c_str(), i == m_voiceSel,
                                       ImGuiSelectableFlags_SpanAllColumns | ImGuiSelectableFlags_AllowOverlap)) {
-                    m_voiceSel = i;
-                    m_dubFile[0] = 0;
-                    m_lengthEdit = 0;
+                    selectVoice(i);
+                }
+                if (!v.movie && radioChoice(v.id)) {
+                    ImGui::SameLine(0, px(6));
+                    smallTag(tr("radio"), color::accent);
                 }
                 if (i == m_voiceSel && m_voiceScroll) {
                     ImGui::SetScrollHereY(0.4f);
@@ -910,21 +1284,23 @@ private:
                 ImGui::PopID();
                 ImGui::TableNextColumn();
                 const loc::Row* r = subtitleRow(v);
-                if (r) ImGui::TextUnformatted(oneLine(r->text.empty() ? r->ref : r->text).c_str());
+                if (r) richText(oneLine(r->text.empty() ? r->ref : r->text), color::text, true);
                 else ImGui::TextColored(vec(color::muted), "%s", v.movie ? tr("(a cutscene's sound)") : tr("(no subtitle)"));
                 ImGui::TableNextColumn();
-                ImGui::TextColored(vec(color::text2), "%s", v.group.c_str());
+                if (m_groupBy == 2 || v.movie) ImGui::TextColored(vec(color::text2), "%s", v.group.c_str());
+                else ImGui::TextColored(vec(color::text2), "%s", speakerOf(v.id, true).second.c_str());
                 ImGui::TableNextColumn();
                 ImGui::TextColored(vec(v.dub.empty() ? color::muted : color::success), "%s", v.dub.empty() ? tr("missing") : tr("yes"));
             }
         }
         ImGui::EndTable();
+        if (!toggle.empty()) toggleGroup(toggle);
         if (ImGui::GetIO().KeyCtrl && !m_voiceVisible.empty()) {
             const int dir = ImGui::IsKeyPressed(ImGuiKey_DownArrow) ? 1 : ImGui::IsKeyPressed(ImGuiKey_UpArrow) ? -1 : 0;
             if (dir) {
                 auto it = std::find(m_voiceVisible.begin(), m_voiceVisible.end(), m_voiceSel);
                 const int k = it == m_voiceVisible.end() ? 0 : int(it - m_voiceVisible.begin()) + dir;
-                if (k >= 0 && k < int(m_voiceVisible.size())) m_voiceSel = m_voiceVisible[std::size_t(k)], m_voiceScroll = true, m_dubFile[0] = 0, m_lengthEdit = 0;
+                if (k >= 0 && k < int(m_voiceVisible.size())) selectVoice(m_voiceVisible[std::size_t(k)]), m_voiceScroll = true;
             }
         }
     }
@@ -934,50 +1310,345 @@ private:
         std::snprintf(b, sizeof(b), "%.2f s", s);
         return b;
     }
-    // Plays a voice file (WAV as it is; FLAC, VAG or other WAVs through the game program: --decode-audio).
-    void play(const fs::path& file) {
+    // ---------------------------------------------------------------- sound: decoding, playing
+    // A voice file as mono samples (WAV as it is; FLAC, VAG or other WAVs through the game program: --decode-audio).
+    std::shared_ptr<const loc::audio::Mono> loadMono(const fs::path& file) {
+        if (auto it = m_mono.find(utf8(file)); it != m_mono.end()) return it->second;
+        loc::audio::Mono m = loc::audio::readWav(file);
+        if (m.empty()) {
+            const fs::path tmp = cacheDir() / "decode.wav";
+            std::error_code ec;
+            fs::create_directories(tmp.parent_path(), ec);
+            std::atomic<bool> cancel{false};
+            try {
+                if (cane::runProcess({utf8(runtime()), "--decode-audio", utf8(file), utf8(tmp)}, runtime().parent_path(), cancel,
+                                     [](const std::string&) {}) == 0)
+                    m = loc::audio::readWav(tmp);
+            } catch (...) {
+            }
+        }
+        if (m.empty()) return nullptr;
+        auto p = std::make_shared<const loc::audio::Mono>(std::move(m));
+        if (m_mono.size() > 24) m_mono.clear();
+        m_mono[utf8(file)] = p;
+        return p;
+    }
+    bool ensureAudio() {
         if (!m_audio) {
             m_audio = std::make_unique<collection::Audio>();
             if (!m_audio->open()) m_status = tr("No sound output (SDL2 or an audio device is missing).");
         }
-        if (!m_audio->available()) return;
-        collection::PcmPtr pcm;
-        if (auto it = m_pcm.find(utf8(file)); it != m_pcm.end()) pcm = it->second;
-        else {
-            auto readAll = [](const fs::path& f) {
-                std::ifstream in(f, std::ios::binary);
-                return std::vector<uint8_t>((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-            };
-            collection::Pcm p = collection::decodeWav(readAll(file));
-            if (p.samples.empty()) {
-                const fs::path tmp = cacheDir() / "play.wav";
-                std::error_code ec;
-                fs::create_directories(tmp.parent_path(), ec);
-                std::atomic<bool> cancel{false};
-                try {
-                    if (cane::runProcess({utf8(runtime()), "--decode-audio", utf8(file), utf8(tmp)}, runtime().parent_path(), cancel,
-                                         [](const std::string&) {}) == 0)
-                        p = collection::decodeWav(readAll(tmp));
-                } catch (...) {
-                }
-            }
-            if (p.samples.empty()) {
-                m_status = trf("Cannot play %s", utf8(file).c_str());
-                return;
-            }
-            p.loops = false;
-            p.loopStart = 0;
-            p.loopEnd = p.frames();
-            pcm = std::make_shared<const collection::Pcm>(std::move(p));
-            if (m_pcm.size() > 32) m_pcm.clear();
-            m_pcm[utf8(file)] = pcm;
-        }
+        return m_audio->available();
+    }
+    void playMono(const loc::audio::Mono& m) {
+        if (!ensureAudio() || m.empty()) return;
+        collection::Pcm p;
+        p.rate = m.rate;
+        p.loops = false;
+        p.samples.resize(m.s.size() * 2);
+        for (std::size_t i = 0; i < m.s.size(); ++i) p.samples[i * 2] = p.samples[i * 2 + 1] = int16_t(std::clamp(m.s[i], -1.0f, 1.0f) * 32767.0f);
+        p.loopStart = 0;
+        p.loopEnd = p.frames();
         m_audio->playMusic(nullptr, 0.05f);
-        m_audio->playSound(pcm);
+        m_audio->playSound(std::make_shared<const collection::Pcm>(std::move(p)));
+    }
+    void play(const fs::path& file) {
+        const auto m = loadMono(file);
+        if (!m) {
+            m_status = trf("Cannot play %s", utf8(file).c_str());
+            return;
+        }
+        playMono(*m);
     }
     void stopSound() {
         if (m_audio) m_audio = nullptr;   // (closing the device stops every voice)
     }
+
+    // ---------------------------------------------------------------- the radio effect (loc_audio.h)
+    // Whether a line is radio talk: the dialog tables' headset flag; a line not in them: its reference's sound
+    // (measured when the line is chosen; until then not radio). The language's own choice (Takes/takes.json) wins.
+    struct RadioInfo {
+        bool known = false;        // the reference's sound measured
+        bool soundsRadio = false;  // band-limited like the radio lines
+        loc::audio::RadioFilter filter;
+    };
+    bool radioDetected(const std::string& id) const {
+        if (const auto it = m_usage.dialogs.find(id); it != m_usage.dialogs.end()) return it->second.headset;
+        const auto jt = m_radio.find(id);
+        return jt != m_radio.end() && jt->second.soundsRadio;
+    }
+    bool radioChoice(const std::string& id) const {
+        if (const auto it = m_takeChoices.find(id); it != m_takeChoices.end()) return it->second;
+        return radioDetected(id);
+    }
+    // the reference's filter (and its sound's verdict), measured once per line
+    const RadioInfo& radioInfo(const loc::VoiceRow& v) {
+        RadioInfo& info = m_radio[v.id];
+        if (!info.known && !v.ref.empty()) {
+            info.known = true;
+            if (const auto m = loadMono(v.ref)) {
+                const loc::audio::Spectrum sp = loc::audio::spectrum(*m);
+                info.soundsRadio = loc::audio::radioLike(sp);
+                info.filter = loc::audio::estimateFilter(sp);
+            }
+        }
+        return info;
+    }
+    loc::audio::Mono withRadio(const loc::VoiceRow& v, const loc::audio::Mono& dry) {
+        const RadioInfo& info = radioInfo(v);
+        if (!info.filter.valid()) return dry;
+        return loc::audio::applyRadio(dry, info.filter);
+    }
+    void setRadioChoice(loc::VoiceRow& v, bool on) {
+        std::string error;
+        if (!loc::saveTakeChoice(dubDir(), v.id, on, error)) {
+            m_status = error;
+            return;
+        }
+        m_takeChoices[v.id] = on;
+        m_voiceDirty = true;
+        // (the dub made again from its dry take; a dub without one becomes its dry take first)
+        const fs::path dry = loc::takePath(dubDir(), v.id);
+        std::error_code ec;
+        if (!fs::is_regular_file(dry, ec)) {
+            if (v.dub.empty()) return;
+            const auto m = loadMono(v.dub);
+            if (!m || !loc::audio::writeWav(dry, *m, error)) {
+                m_status = error.empty() ? trf("Cannot read %s", utf8(v.dub).c_str()) : error;
+                return;
+            }
+        }
+        m_mono.erase(utf8(dry));
+        const auto m = loadMono(dry);
+        if (m) writeDub(v, *m);
+    }
+    // The dub from a dry take: the radio effect on it when the line's choice is radio; a 16-bit WAV in the line's place
+    // (any other format's file of the line removed), the dry take kept in Takes/.
+    bool writeDub(loc::VoiceRow& v, const loc::audio::Mono& dry) {
+        std::string error;
+        if (!loc::audio::writeWav(loc::takePath(dubDir(), v.id), dry, error)) {
+            m_status = error;
+            return false;
+        }
+        const bool radio = !v.movie && radioChoice(v.id);
+        const loc::audio::Mono out = radio ? withRadio(v, dry) : dry;
+        const fs::path dest = loc::dubPath(dubDir(), v, ".wav");
+        std::error_code ec;
+        for (const char* other : {".flac", ".vag"}) fs::remove(loc::dubPath(dubDir(), v, other), ec);
+        if (!loc::audio::writeWav(dest, out, error)) {
+            m_status = error;
+            return false;
+        }
+        m_pcm.erase(utf8(dest));
+        m_mono.erase(utf8(dest));
+        m_mono.erase(utf8(loc::takePath(dubDir(), v.id)));
+        rescanAfterDub();
+        m_status = radio ? trf("Saved %s (with the radio effect; the dry take in Takes)", utf8(dest).c_str()) : trf("Saved %s", utf8(dest).c_str());
+        return true;
+    }
+    void rescanAfterDub() {
+        m_folders = loc::scanFolders(languagesDir(), modsLanguagesDir());
+        m_current = folderIndex(m_currentKey);
+        m_t.folder = m_folders[std::size_t(m_current)];
+        scanVoices();
+    }
+
+    // ---------------------------------------------------------------- recording a take
+    enum class Rec { Idle, Countdown, Recording, Review };
+    void selectVoice(int i) {
+        if (i != m_voiceSel && m_rec != Rec::Idle) stopRecording(false);
+        m_voiceSel = i;
+        m_dubFile[0] = 0;
+        m_lengthEdit = 0;
+    }
+    void startCountdown(const loc::VoiceRow& v) {
+        stopSound();
+        if (!m_capture.open(m_micName)) {
+            m_status = tr("No microphone could be opened (SDL2 or a recording device is missing).");
+            return;
+        }
+        m_recId = v.id;
+        m_rec = Rec::Countdown;
+        m_recT0 = ImGui::GetTime();
+    }
+    void startRecording(const loc::VoiceRow& v) {
+        m_capture.take();   // (what came during the countdown)
+        const double ref = v.refSeconds > 0 ? v.refSeconds : 20.0;
+        m_recorder.reset(m_capture.rate(), ref + kRecordMargin);
+        m_rec = Rec::Recording;
+        m_recT0 = ImGui::GetTime();
+        if (m_playAlong && !v.ref.empty()) play(v.ref);
+    }
+    void stopRecording(bool keep) {
+        m_capture.close();
+        if (keep && !m_recorder.s.empty()) {
+            m_take.rate = m_recorder.rate;
+            m_take.s = m_recorder.s;
+            const auto span = loc::audio::speechSpan(m_take);
+            m_trimA = span.first, m_trimB = span.second;
+            m_rec = Rec::Review;
+            if (m_playAlong) stopSound();
+        } else m_rec = Rec::Idle;
+    }
+    void pollRecording(const loc::VoiceRow& v) {
+        if (m_rec == Rec::Countdown && ImGui::GetTime() - m_recT0 >= kCountdown) startRecording(v);
+        if (m_rec == Rec::Recording) {
+            const std::vector<float> got = m_capture.take();
+            m_recorder.push(got.data(), got.size());
+            if (m_recorder.full()) stopRecording(true);
+        }
+    }
+    // The take's waveform with its two trim handles (dragged), the reference's length marked from the start handle
+    void drawWaveform(double refSeconds) {
+        const float w = ImGui::GetContentRegionAvail().x, h = px(90);
+        const ImVec2 a = ImGui::GetCursorScreenPos(), b = {a.x + w, a.y + h};
+        ImGui::InvisibleButton("##wave", {w, h});
+        auto* dl = ImGui::GetWindowDrawList();
+        dl->AddRectFilled(a, b, ink(color::input), px(6));
+        const double len = std::max(m_take.seconds(), 0.01);
+        auto xOf = [&](double t) { return a.x + float(t / len) * w; };
+        const auto cols = loc::audio::outline(m_take, int(w / px(2)));
+        const float mid = (a.y + b.y) * 0.5f;
+        float pk = 0.05f;
+        for (const auto& [lo, hi] : cols) pk = std::max({pk, -lo, hi});
+        for (std::size_t c = 0; c < cols.size(); ++c) {
+            const float x = a.x + (float(c) + 0.5f) * w / float(cols.size());
+            const double t = double(c) / double(cols.size()) * len;
+            const bool in = t >= m_trimA && t <= m_trimB;
+            dl->AddLine({x, mid - cols[c].second / pk * h * 0.45f}, {x, mid - cols[c].first / pk * h * 0.45f + 1}, ink(in ? color::accent : color::muted), px(1.5f));
+        }
+        // the parts cut away, dimmed; the reference's length from the start
+        dl->AddRectFilled(a, {xOf(m_trimA), b.y}, ink(0x000000, 0.35f), px(6));
+        dl->AddRectFilled({xOf(m_trimB), a.y}, b, ink(0x000000, 0.35f), px(6));
+        if (refSeconds > 0 && m_trimA + refSeconds < len) {
+            const float x = xOf(m_trimA + refSeconds);
+            for (float y = a.y; y < b.y; y += px(8)) dl->AddLine({x, y}, {x, std::min(b.y, y + px(4))}, ink(color::warning), px(1.5f));
+        }
+        for (int k = 0; k < 2; ++k) {
+            const float x = xOf(k ? m_trimB : m_trimA);
+            dl->AddLine({x, a.y}, {x, b.y}, ink(color::cta), px(2.5f));
+            dl->AddRectFilled({x - px(5), a.y}, {x + px(5), a.y + px(14)}, ink(color::cta), px(3));
+        }
+        // dragging: the nearer handle
+        if (ImGui::IsItemActivated()) {
+            const float mx = ImGui::GetIO().MousePos.x;
+            m_drag = std::abs(mx - xOf(m_trimA)) <= std::abs(mx - xOf(m_trimB)) ? 0 : 1;
+        }
+        if (ImGui::IsItemActive() && m_drag >= 0) {
+            const double t = std::clamp(double(ImGui::GetIO().MousePos.x - a.x) / w * len, 0.0, len);
+            if (m_drag == 0) m_trimA = std::min(t, m_trimB - 0.05);
+            else m_trimB = std::max(t, m_trimA + 0.05);
+        } else m_drag = -1;
+        if (ImGui::IsItemHovered()) ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+    }
+    // The next button on this row when it fits, else on the next row
+    static void flow(const char* label) {
+        const float w = ImGui::CalcTextSize(label).x + px(70);
+        ImGui::SameLine(0, px(6));
+        if (ImGui::GetContentRegionAvail().x < w) ImGui::NewLine();
+    }
+    void drawRecorder(loc::VoiceRow& v) {
+        pollRecording(v);
+        gap(10);
+        overline(tr("Record a dub"));
+        if (m_rec == Rec::Idle) {
+            // the microphone (the devices as Settings lists them for Sly 2's headset)
+            if (!m_micsListed) m_mics = cane::audio::listDevices().inputs, m_micsListed = true;
+            pushComboStyle();
+            ImGui::SetNextItemWidth(px(300));
+            if (beginCombo("##loc-mic", m_micName.empty() ? tr("System default microphone") : m_micName.c_str())) {
+                if (ImGui::Selectable(tr("System default microphone"), m_micName.empty())) m_micName.clear();
+                for (const std::string& n : m_mics)
+                    if (ImGui::Selectable(n.c_str(), n == m_micName)) m_micName = n;
+                ImGui::EndCombo();
+            }
+            popComboStyle();
+            ImGui::SameLine(0, px(8));
+            ImGui::Checkbox(tr("Play the reference along"), &m_playAlong);
+            caption(m_playAlong ? tr("Wear headphones: the reference line plays while you record, so you can follow its timing.")
+                                : tr("The reference does not play: listen to it first, then record."),
+                    color::muted);
+            const std::string limit = v.refSeconds > 0 ? trf("Stops by itself after %.1f s (the reference and %.1f s).", v.refSeconds + kRecordMargin, kRecordMargin)
+                                                       : std::string(tr("Stop it with the button."));
+            if (button(tr("Record"), Tone::Cta, {0, px(34)}, Icon::Headset)) startCountdown(v);
+            ImGui::SameLine(0, px(8));
+            ImGui::AlignTextToFramePadding();
+            ImGui::TextColored(vec(color::text2), "%s", limit.c_str());
+            return;
+        }
+        if (m_rec == Rec::Countdown || m_rec == Rec::Recording) {
+            const double t = ImGui::GetTime() - m_recT0;
+            auto* dl = ImGui::GetWindowDrawList();
+            const ImVec2 at = ImGui::GetCursorScreenPos();
+            const float w = ImGui::GetContentRegionAvail().x, h = px(90);
+            dl->AddRectFilled(at, {at.x + w, at.y + h}, ink(color::input), px(6));
+            if (m_rec == Rec::Countdown) {
+                const int n = std::max(1, int(std::ceil(kCountdown - t)));
+                const std::string big = std::to_string(n);
+                ImFont* f = fonts().heading;
+                const float fs = h * 0.8f;
+                const ImVec2 ts = f->CalcTextSizeA(fs, FLT_MAX, 0, big.c_str());
+                dl->AddText(f, fs, {at.x + (w - ts.x) * 0.5f, at.y + (h - ts.y) * 0.5f}, ink(color::cta), big.c_str());
+                dl->AddText({at.x + px(10), at.y + px(8)}, ink(color::text2), tr("Get ready..."));
+            } else {
+                const double limit = m_recorder.limitSeconds;
+                const float frac = limit > 0 ? float(std::min(1.0, m_recorder.seconds() / limit)) : 0.0f;
+                dl->AddRectFilled(at, {at.x + w * frac, at.y + h}, ink(color::danger, 0.15f), px(6));
+                // the take so far, on the whole length it may take
+                if (!m_recorder.s.empty() && frac > 0) {
+                    loc::audio::Mono so;
+                    so.rate = m_recorder.rate;
+                    so.s = m_recorder.s;
+                    const int columns = std::max(1, int(w * frac / px(2)));
+                    const auto cols = loc::audio::outline(so, columns);
+                    float pk = 0.05f;
+                    for (const auto& [lo, hi] : cols) pk = std::max({pk, -lo, hi});
+                    const float mid = at.y + h * 0.55f;
+                    for (std::size_t c = 0; c < cols.size(); ++c) {
+                        const float x = at.x + (float(c) + 0.5f) * px(2);
+                        dl->AddLine({x, mid - cols[c].second / pk * h * 0.3f}, {x, mid - cols[c].first / pk * h * 0.3f + 1}, ink(color::danger), px(1.5f));
+                    }
+                }
+                // the live level (the last 50 ms)
+                const std::size_t n = std::min<std::size_t>(m_recorder.s.size(), std::size_t(m_recorder.rate / 20));
+                const double level = n ? loc::audio::rms(m_recorder.s.data() + m_recorder.s.size() - n, n) : 0.0;
+                const float lw = float(std::min(1.0, level * 6)) * (w - px(20));
+                dl->AddRectFilled({at.x + px(10), at.y + h - px(18)}, {at.x + px(10) + lw, at.y + h - px(10)}, ink(color::success), px(3));
+                dl->AddCircleFilled({at.x + px(18), at.y + px(18)}, px(6), ink(color::danger));
+                const std::string label = limit > 0 ? trf("Recording %.1f s of %.1f s", m_recorder.seconds(), limit) : trf("Recording %.1f s", m_recorder.seconds());
+                dl->AddText({at.x + px(32), at.y + px(10)}, ink(color::text), label.c_str());
+            }
+            ImGui::Dummy({w, h});
+            if (button(m_rec == Rec::Countdown ? tr("Cancel") : tr("Stop"), Tone::Secondary, {0, px(32)}, Icon::Stop)) stopRecording(m_rec == Rec::Recording);
+            return;
+        }
+        // the take: trim it, listen, save
+        drawWaveform(v.refSeconds);
+        const double len = m_trimB - m_trimA;
+        const bool longer = v.refSeconds > 0 && len > v.refSeconds * 1.25 + 0.3;
+        ImGui::TextColored(vec(longer ? color::warning : color::text2), "%s",
+                           (trf("Trimmed take: %.2f s", len) + (v.refSeconds > 0 ? "   |   " + trf("reference: %.2f s", v.refSeconds) : std::string())).c_str());
+        caption(tr("Drag the handles to cut the start and the end; the dashed line is the reference's length from the start."), color::muted);
+        if (button(tr("Play the take"), Tone::Secondary, {0, px(32)}, Icon::Play)) playMono(loc::audio::trimmed(m_take, m_trimA, m_trimB));
+        const bool radio = !v.movie && radioChoice(v.id);
+        if (radio) {
+            flow(tr("Play with the radio effect"));
+            if (button(tr("Play with the radio effect"), Tone::Secondary, {0, px(32)}, Icon::Play)) playMono(withRadio(v, loc::audio::trimmed(m_take, m_trimA, m_trimB)));
+        }
+        flow(tr("Play the reference"));
+        ImGui::BeginDisabled(v.ref.empty());
+        if (button(tr("Play the reference"), Tone::Quiet, {0, px(32)}, Icon::Play)) play(v.ref);
+        ImGui::EndDisabled();
+        gap(4);
+        if (button(tr("Save as the dub"), Tone::Cta, {0, px(34)}, Icon::Check)) {
+            if (writeDub(v, loc::audio::trimmed(m_take, m_trimA, m_trimB))) m_rec = Rec::Idle;
+        }
+        flow(tr("Record again"));
+        if (button(tr("Record again"), Tone::Secondary, {0, px(34)}, Icon::Refresh)) startCountdown(v);
+        flow(tr("Discard"));
+        if (button(tr("Discard"), Tone::Quiet, {0, px(34)}, Icon::Trash)) m_rec = Rec::Idle;
+    }
+
     void drawVoiceDetail() {
         if (m_voiceSel < 0 || m_voiceSel >= int(m_voices.size())) {
             caption(tr("Choose a voice line. Each line is named by the number of its subtitle; a dub is a WAV or FLAC file of that name in the "
@@ -987,8 +1658,34 @@ private:
         loc::VoiceRow& v = m_voices[std::size_t(m_voiceSel)];
         if (v.refSeconds < -1 && !v.ref.empty()) v.refSeconds = loc::audioSeconds(v.ref);
         if (v.dubSeconds < -1 && !v.dub.empty()) v.dubSeconds = loc::audioSeconds(v.dub);
+        // (screenshots: SAFEHOUSE_LOC_RECORD=countdown|recording|review with SAFEHOUSE_FAKE_MIC, the fake microphone's file)
+        if (const char* sz = std::getenv("SAFEHOUSE_LOC_RECORD"); sz && *sz && !m_recordEnvDone) {
+            m_recordEnvDone = true;
+            const std::string want = sz;
+            if (want == "review") {
+                if (const char* f = std::getenv("SAFEHOUSE_FAKE_MIC")) m_take = loc::audio::readWav(cane::path(f));
+                const auto span = loc::audio::speechSpan(m_take);
+                m_trimA = span.first, m_trimB = span.second;
+                m_rec = m_take.empty() ? Rec::Idle : Rec::Review;
+            } else if (m_capture.open(m_micName)) {
+                m_recId = v.id;
+                m_playAlong = false;
+                m_rec = Rec::Countdown;
+                m_recT0 = ImGui::GetTime() - 0.6;
+                if (want == "recording") {
+                    // (two and a half seconds in)
+                    startRecording(v);
+                    const auto got = m_capture.takeFake(2.5);
+                    m_recorder.push(got.data(), got.size());
+                    m_recT0 -= 2.5;
+                }
+            }
+        }
         text(v.movie ? (std::string(tr("Movie")) + "  " + v.id).c_str() : trf("Line %s", v.id.c_str()).c_str(), fonts().tab);
-        if (!v.group.empty()) caption(v.group.c_str(), color::text2);
+        if (!v.movie) {
+            const std::string who = speakerOf(v.id, true).second + "   |   " + levelLabel(loc::levelOf(m_usage, v.id)) + (v.group.empty() ? "" : "   |   " + v.group);
+            caption(who.c_str(), color::text2);
+        } else if (!v.group.empty()) caption(v.group.c_str(), color::text2);
         gap(6);
         // the reference's line
         text(m_voiceRefKey.c_str(), fonts().label, color::text2);
@@ -998,11 +1695,7 @@ private:
         ImGui::SameLine(0, px(8));
         ImGui::AlignTextToFramePadding();
         ImGui::TextColored(vec(color::text2), "%s", v.ref.empty() ? tr("(none)") : seconds(v.refSeconds).c_str());
-        if (const loc::Row* r = subtitleRow(v)) {
-            ImGui::PushTextWrapPos(0);
-            ImGui::TextColored(vec(color::text), "%s", r->ref.c_str());
-            ImGui::PopTextWrapPos();
-        }
+        if (const loc::Row* r = subtitleRow(v)) richText(r->ref, color::text);
         gap(8);
         // the language's dub
         text(m_t.folder.key.c_str(), fonts().label, color::text2);
@@ -1020,10 +1713,8 @@ private:
             if (longer && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tr("Much longer than the reference's line: a cutscene may cut it off."));
         }
         if (const loc::Row* r = subtitleRow(v)) {
-            ImGui::PushTextWrapPos(0);
             if (r->text.empty()) ImGui::TextColored(vec(color::muted), "%s", tr("(not translated)"));
-            else ImGui::TextUnformatted(r->text.c_str());
-            ImGui::PopTextWrapPos();
+            else richText(r->text, color::text);
             if (button(tr("Edit the subtitle"), Tone::Quiet, {0, px(30)}, Icon::ChevronRight)) {
                 m_section = 0;
                 m_dirtyFilter = true;
@@ -1031,9 +1722,45 @@ private:
             }
         }
         if (!v.dub.empty()) caption(utf8(v.dub).c_str(), color::muted);
+        // the radio effect
+        if (!v.movie) {
+            gap(10);
+            overline(tr("Radio effect"));
+            const auto it = m_usage.dialogs.find(v.id);
+            const RadioInfo& info = radioInfo(v);
+            const bool detected = radioDetected(v.id);
+            caption(it != m_usage.dialogs.end() ? (detected ? tr("The game plays this line as radio talk (its dialog table marks it for the headset).")
+                                                            : tr("The game plays this line as normal speech."))
+                                                : (detected ? tr("The reference sounds like radio talk (no lows, few highs).") : tr("The reference sounds like normal speech.")),
+                    color::text2);
+            if (it != m_usage.dialogs.end() && !detected && info.soundsRadio)
+                caption(tr("Its reference still sounds band-limited (an announcement or talk heard through the binocucom): switch the effect on if the dub should too."),
+                        color::muted);
+            bool on = radioChoice(v.id);
+            if (ImGui::Checkbox(tr("Put the radio effect on this line's dub"), &on)) setRadioChoice(v, on);
+            if (on) {
+                caption(tr("Estimated from the reference line: its band-pass and tone, compression, crackle and noise. The dry take is kept in the "
+                           "language's Takes folder, so the effect can be switched off again."),
+                        color::muted);
+                const fs::path dry = loc::takePath(dubDir(), v.id);
+                std::error_code ec;
+                const bool hasDry = fs::is_regular_file(dry, ec);
+                ImGui::BeginDisabled(!hasDry && v.dub.empty());
+                if (button(tr("Preview the effect"), Tone::Secondary, {0, px(30)}, Icon::Play)) {
+                    if (const auto m = loadMono(hasDry ? dry : v.dub)) playMono(withRadio(v, *m));
+                }
+                ImGui::EndDisabled();
+                if (hasDry) {
+                    ImGui::SameLine(0, px(6));
+                    if (button(tr("Play the dry take"), Tone::Quiet, {0, px(30)}, Icon::Play)) play(dry);
+                }
+            }
+        }
+        // recording
+        drawRecorder(v);
         // a new dub: a file copied in under the line's name
         gap(10);
-        overline(v.dub.empty() ? tr("Add a dub") : tr("Replace the dub"));
+        overline(v.dub.empty() ? tr("Add a dub from a file") : tr("Replace the dub with a file"));
         inputField("##loc-dubfile", m_dubFile, sizeof(m_dubFile), launcher::Charset::Free, tr("Path of a WAV or FLAC file"));
         if (button(tr("Use this file"), Tone::Secondary, {0, 0}, Icon::Plus)) useDub(v);
         // the subtitle's time (Dialog/lengths.json)
@@ -1072,6 +1799,16 @@ private:
             m_status = tr("That file is not a WAV or FLAC sound.");
             return;
         }
+        // a radio line: the file is the dry take, the dub gets the effect
+        if (!v.movie && radioChoice(v.id)) {
+            const auto m = loadMono(file);
+            if (!m) {
+                m_status = trf("Cannot read %s", utf8(file).c_str());
+                return;
+            }
+            if (writeDub(v, *m)) m_dubFile[0] = 0;
+            return;
+        }
         const fs::path dest = loc::dubPath(dubDir(), v, ext);
         fs::create_directories(dest.parent_path(), ec);
         // (one file per line: the other format's copy here goes)
@@ -1083,11 +1820,9 @@ private:
             return;
         }
         m_pcm.erase(utf8(dest));
+        m_mono.erase(utf8(dest));
         m_dubFile[0] = 0;
-        m_folders = loc::scanFolders(languagesDir(), modsLanguagesDir());
-        m_current = folderIndex(m_currentKey);
-        m_t.folder = m_folders[std::size_t(m_current)];
-        scanVoices();
+        rescanAfterDub();
         m_status = trf("Copied to %s", utf8(dest).c_str());
     }
     void setLength(const std::string& id, float seconds) {
@@ -1116,11 +1851,15 @@ private:
     loc::Translation m_t;
     std::set<char32_t> m_fontChars;
     loc::Usage m_usage;
+    bool m_usageRetried = false;
     loc::ojson m_meta;
     // the list
     int m_section = 0, m_filter = 0, m_selected = -1, m_addWorld = 0;
     bool m_dirtyFilter = true, m_scrollToSelected = false;
     std::vector<int> m_visible;
+    std::vector<ListLine> m_lines, m_voiceLines;
+    int m_groupBy = 2, m_cursor = -1;
+    std::set<std::string> m_collapsed;
     char m_search[128] = "";
     // pages over the list
     bool m_settings = false, m_newLanguage = false;
@@ -1139,6 +1878,20 @@ private:
     float m_lengthEdit = 0;
     std::unique_ptr<collection::Audio> m_audio;
     std::map<std::string, collection::PcmPtr> m_pcm;
+    std::map<std::string, std::shared_ptr<const loc::audio::Mono>> m_mono;
+    std::map<std::string, RadioInfo> m_radio;
+    std::map<std::string, bool> m_takeChoices;
+    // recording
+    static constexpr double kCountdown = 3.0, kRecordMargin = 1.0;
+    collection::Capture m_capture;
+    loc::audio::Recorder m_recorder;
+    loc::audio::Mono m_take;
+    Rec m_rec = Rec::Idle;
+    double m_recT0 = 0, m_trimA = 0, m_trimB = 0;
+    int m_drag = -1;
+    bool m_playAlong = true, m_micsListed = false, m_recordEnvDone = false;
+    std::string m_recId, m_micName;
+    std::vector<std::string> m_mics;
     // the background job
     std::thread m_job;
     std::atomic<bool> m_jobCancel{false}, m_jobDone{false}, m_portDone{false};

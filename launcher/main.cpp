@@ -1241,7 +1241,7 @@ int main(int argc, char** argv) {
             if (early.size() == 1 && early[0] == "--l10n-check") return l10nCheck();
 #ifdef CANE_LAUNCHER_EDITOR
             // --loc-selftest: the translation tool's checks (launcher/editor/loc_core.h)
-            if (early.size() == 1 && early[0] == "--loc-selftest") return cane::loc::selfTest();
+            if (early.size() == 1 && early[0] == "--loc-selftest") return cane::loc::selfTest() | ui::LocalisationPage::recordSelfTest();
 #endif
         }
         cane::LauncherBackend backend;

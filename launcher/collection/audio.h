@@ -7,6 +7,10 @@
 // PCM WAV (the converted menu's music and sounds).
 #include <algorithm>
 #include <atomic>
+#include <chrono>
+#include <cstdlib>
+#include <fstream>
+#include <iterator>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -180,6 +184,45 @@ inline Pcm decodeWav(const std::vector<uint8_t>& d) {
     return out;
 }
 
+// ---------------------------------------------------------------- SDL2, loaded at run time
+namespace detail {
+// The SDL2 library (opened once, never closed) and a symbol of it; null without SDL2.
+inline void* sdlLibrary() {
+    static void* s_lib = [] () -> void* {
+#ifdef _WIN32
+        HMODULE lib = LoadLibraryW((executableDirectory() / L"SDL2.dll").c_str());
+        if (!lib) lib = LoadLibraryW(L"SDL2.dll");
+        return reinterpret_cast<void*>(lib);
+#else
+        void* lib = nullptr;
+#if defined(CANE_ANDROID) || defined(CANE_IOS)
+        // (the apps have SDL2 in the process already: Android's libSDL2.so, which the activity loads; iOS: the whole of
+        // SDL2 in SafeHouseCore.framework, which the launcher links)
+        if (dlsym(RTLD_DEFAULT, "SDL_OpenAudioDevice")) lib = RTLD_DEFAULT;
+#endif
+        // (Linux: beside the program or in the package's lib folder, then the system's; macOS: the app's Frameworks
+        // folder, where the package puts the games' libSDL2-2.0.0.dylib, then beside the program)
+        if (!lib)
+            for (const fs::path& p : {executableDirectory() / "libSDL2-2.0.so.0", executableDirectory().parent_path() / "lib" / "libSDL2-2.0.so.0",
+                                      executableDirectory().parent_path() / "Frameworks" / "libSDL2-2.0.0.dylib", executableDirectory() / "libSDL2-2.0.0.dylib",
+                                      fs::path("libSDL2-2.0.so.0"), fs::path("libSDL2-2.0.0.dylib"), fs::path("libSDL2.so")})
+                if ((lib = dlopen(utf8(p).c_str(), RTLD_NOW | RTLD_LOCAL))) break;
+        return lib;
+#endif
+    }();
+    return s_lib;
+}
+inline void* sdlSymbol(const char* name) {
+    void* lib = sdlLibrary();
+    if (!lib) return nullptr;
+#ifdef _WIN32
+    return reinterpret_cast<void*>(GetProcAddress(reinterpret_cast<HMODULE>(lib), name));
+#else
+    return dlsym(lib, name);
+#endif
+}
+}  // namespace detail
+
 // ---------------------------------------------------------------- output (SDL2, loaded at run time)
 class Audio {
 public:
@@ -270,28 +313,8 @@ private:
         float fade = 0;  // gain change per second (music)
     };
     bool load() {
-#ifdef _WIN32
-        HMODULE lib = LoadLibraryW((executableDirectory() / L"SDL2.dll").c_str());
-        if (!lib) lib = LoadLibraryW(L"SDL2.dll");
-        if (!lib) return false;
-        auto sym = [&](const char* n) { return reinterpret_cast<void*>(GetProcAddress(lib, n)); };
-#else
-        void* lib = nullptr;
-#if defined(CANE_ANDROID) || defined(CANE_IOS)
-        // (the apps have SDL2 in the process already: Android's libSDL2.so, which the activity loads; iOS: the whole of
-        // SDL2 in SafeHouseCore.framework, which the launcher links)
-        if (dlsym(RTLD_DEFAULT, "SDL_OpenAudioDevice")) lib = RTLD_DEFAULT;
-#endif
-        // (Linux: beside the program or in the package's lib folder, then the system's; macOS: the app's Frameworks
-        // folder, where the package puts the games' libSDL2-2.0.0.dylib, then beside the program)
-        if (!lib)
-            for (const fs::path& p : {executableDirectory() / "libSDL2-2.0.so.0", executableDirectory().parent_path() / "lib" / "libSDL2-2.0.so.0",
-                                      executableDirectory().parent_path() / "Frameworks" / "libSDL2-2.0.0.dylib", executableDirectory() / "libSDL2-2.0.0.dylib",
-                                      fs::path("libSDL2-2.0.so.0"), fs::path("libSDL2-2.0.0.dylib"), fs::path("libSDL2.so")})
-                if ((lib = dlopen(utf8(p).c_str(), RTLD_NOW | RTLD_LOCAL))) break;
-        if (!lib) return false;
-        auto sym = [&](const char* n) { return dlsym(lib, n); };
-#endif
+        if (!detail::sdlLibrary()) return false;
+        auto sym = [](const char* n) { return detail::sdlSymbol(n); };
         m_init = reinterpret_cast<int (*)(uint32_t)>(sym("SDL_InitSubSystem"));
         m_quit = reinterpret_cast<void (*)(uint32_t)>(sym("SDL_QuitSubSystem"));
         m_openDevice = reinterpret_cast<uint32_t (*)(const char*, int, const Spec*, Spec*, int)>(sym("SDL_OpenAudioDevice"));
@@ -353,5 +376,114 @@ private:
     std::vector<float> m_mix;
     std::atomic<float> m_musicVolume{0.7f}, m_soundVolume{0.8f};
     std::atomic<bool> m_muted{false};
+};
+
+// ---------------------------------------------------------------- input: a microphone (the Translate page's dub takes)
+// Mono float samples from a recording device (by name as SDL2 lists it, platform/audio_devices.h; "" the system
+// default), gathered on SDL's thread and taken by the caller. SAFEHOUSE_FAKE_MIC=<file.wav> records that file instead,
+// at real time from open() (tests, screenshots: no device is opened).
+class Capture {
+public:
+    Capture() = default;
+    Capture(const Capture&) = delete;
+    ~Capture() { close(); }
+    bool open(const std::string& deviceName = {}, int rate = 48000) {
+        close();
+        if (const char* f = std::getenv("SAFEHOUSE_FAKE_MIC"); f && *f) {
+            std::ifstream in(cane::path(f), std::ios::binary);
+            const Pcm p = decodeWav(std::vector<uint8_t>((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>()));
+            if (p.samples.empty()) return false;
+            m_fake.resize(p.frames());
+            for (size_t i = 0; i < p.frames(); ++i) m_fake[i] = (float(p.samples[i * 2]) + float(p.samples[i * 2 + 1])) / 65536.0f;
+            m_rate = p.rate;
+            m_fakePos = 0;
+            m_fakeStart = std::chrono::steady_clock::now();
+            m_isFake = m_open = true;
+            return true;
+        }
+        auto init = reinterpret_cast<int (*)(uint32_t)>(detail::sdlSymbol("SDL_InitSubSystem"));
+        m_quit = reinterpret_cast<void (*)(uint32_t)>(detail::sdlSymbol("SDL_QuitSubSystem"));
+        auto openDevice = reinterpret_cast<uint32_t (*)(const char*, int, const Spec*, Spec*, int)>(detail::sdlSymbol("SDL_OpenAudioDevice"));
+        m_pause = reinterpret_cast<void (*)(uint32_t, int)>(detail::sdlSymbol("SDL_PauseAudioDevice"));
+        m_closeDevice = reinterpret_cast<void (*)(uint32_t)>(detail::sdlSymbol("SDL_CloseAudioDevice"));
+        if (!init || !m_quit || !openDevice || !m_pause || !m_closeDevice || init(0x10) != 0) return false;
+        Spec want{};
+        want.freq = rate;
+        want.format = 0x8120;   // AUDIO_F32SYS
+        want.channels = 1;
+        want.samples = 1024;
+        want.callback = &Capture::callback;
+        want.userdata = this;
+        Spec have{};
+        if (!deviceName.empty()) m_device = openDevice(deviceName.c_str(), 1, &want, &have, 0);
+        if (!m_device) m_device = openDevice(nullptr, 1, &want, &have, 0);
+        if (!m_device) {
+            m_quit(0x10);
+            return false;
+        }
+        m_rate = have.freq > 0 ? have.freq : rate;
+        m_open = true;
+        m_pause(m_device, 0);
+        return true;
+    }
+    void close() {
+        if (m_device) {
+            m_closeDevice(m_device);
+            m_device = 0;
+            m_quit(0x10);
+        }
+        m_open = m_isFake = false;
+        std::lock_guard lock(m_mutex);
+        m_buffer.clear();
+    }
+    bool isOpen() const { return m_open; }
+    bool fake() const { return m_isFake; }
+    int rate() const { return m_rate; }
+    // The samples recorded since the last call.
+    std::vector<float> take() {
+        if (m_isFake) {
+            const double t = std::chrono::duration<double>(std::chrono::steady_clock::now() - m_fakeStart).count();
+            return takeFake(t);
+        }
+        std::lock_guard lock(m_mutex);
+        std::vector<float> out;
+        out.swap(m_buffer);
+        return out;
+    }
+    // (the fake device) the file's samples up to `seconds` after open(), silence after its end
+    std::vector<float> takeFake(double seconds) {
+        const size_t upTo = size_t(std::max(0.0, seconds) * m_rate);
+        std::vector<float> out;
+        for (; m_fakePos < upTo; ++m_fakePos) out.push_back(m_fakePos < m_fake.size() ? m_fake[m_fakePos] : 0.0f);
+        return out;
+    }
+
+private:
+    struct Spec {
+        int freq;
+        uint16_t format;
+        uint8_t channels, silence;
+        uint16_t samples, padding;
+        uint32_t size;
+        void (*callback)(void*, uint8_t*, int);
+        void* userdata;
+    };
+    static void callback(void* user, uint8_t* stream, int bytes) {
+        auto& c = *static_cast<Capture*>(user);
+        const auto* p = reinterpret_cast<const float*>(stream);
+        std::lock_guard lock(c.m_mutex);
+        c.m_buffer.insert(c.m_buffer.end(), p, p + bytes / 4);
+    }
+    void (*m_quit)(uint32_t) = nullptr;
+    void (*m_pause)(uint32_t, int) = nullptr;
+    void (*m_closeDevice)(uint32_t) = nullptr;
+    uint32_t m_device = 0;
+    int m_rate = 48000;
+    bool m_open = false, m_isFake = false;
+    std::mutex m_mutex;
+    std::vector<float> m_buffer;
+    std::vector<float> m_fake;
+    size_t m_fakePos = 0;
+    std::chrono::steady_clock::time_point m_fakeStart;
 };
 }  // namespace cane::collection

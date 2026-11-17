@@ -392,6 +392,26 @@ of the languages folder string by string, beside a reference language:
   to its text), **Show:** missing / dubbed lines and the dub progress. **Add a dub** copies a WAV or FLAC file in under
   the line's name (`Dialog/<the reference's subfolder>/<line>.wav`, `Movies/<name>.wav`; one of the game's own
   languages: under `Mods/Languages/<Language>/`), and **Subtitle time** sets the line's entry in `Dialog/lengths.json`.
+- **Groups:** both lists group by level (the episode whose worlds use a string or line: Prologue, Episode 1: Paris, ...;
+  **Menus** for the front end's alone, **Shared** for those in several episodes, such as the HUD and the gadgets) and by
+  character inside a level (the speaker the game's dialog tables give each line: Sly, Bentley, Murray, Carmelita,
+  Neyla, the villains; **Other** where the table has none; strings without a voice line are **On-screen text**). A
+  heading folds its group; **No groups** shows the plain list.
+- **Button icons:** the lists, the reference and the voices' subtitles draw the button codes (`&2X&.`, `&2O&.`, ...)
+  as the buttons' icons (PlayStation's, or the style chosen in Settings > Button icons). The text field keeps the
+  codes; a row of icons under it types a code at the cursor, and **As the game shows it** previews the text.
+- **Radio effect:** the lines the game plays as radio talk (the dialog tables mark them for the original's USB headset:
+  Bentley and the gang on the binocucom) are tagged **radio**; a line the tables do not list is judged by its
+  reference's sound (band-limited: no lows, few highs). A radio line's dub (recorded, or a file added) gets the effect
+  estimated from its reference line: its band-pass and tone against the disc's average dry voice, its compression, a
+  little saturation and its noise. Each line's checkbox switches it (saved in `Takes/takes.json`), **Preview the
+  effect** plays it; the dry take is kept as `Takes/<line>.wav` beside `Dialog/` (the game does not read `Takes/`), so
+  the effect can be switched off or redone.
+- **Record a dub:** choose the microphone, press **Record**: a three-second countdown, then the reference line plays
+  (wear headphones; **Play the reference along** turns it off) and the take stops by itself at the reference's length
+  and a second, or with **Stop**. Then drag the two handles on the waveform to cut the start and the end (the dashed
+  line is the reference's length), play the take (with the radio effect on a radio line) and **Save as the dub**: a
+  16-bit WAV in the line's place, as an added file would be.
 
 The page runs `Sly2-Release --dump-port-text` and `--dump-text` once in the background (into the launcher's cache
 folder) for the PC strings' English and each string's levels; `Sly2-Release --check-language <Name>` checks a
