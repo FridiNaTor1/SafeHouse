@@ -147,6 +147,21 @@ jobs:
           rm -f "$RUNNER_TEMP/cert.p12" "$RUNNER_TEMP/profile.mobileprovision"
           security delete-keychain "$RUNNER_TEMP/signing.keychain-db" 2>/dev/null || true
 
+      - name: Name the .ipa for this SDK
+        if: matrix.ipa != 'SafeHouse-iOS.ipa'
+        run: |
+          ipa="${{ matrix.ipa }}"
+          [ ! -f dist/ios/SafeHouse-iOS.ipa ] || mv dist/ios/SafeHouse-iOS.ipa "dist/ios/$ipa"
+          [ ! -f dist/ios/SafeHouse-iOS-signed.ipa ] || mv dist/ios/SafeHouse-iOS-signed.ipa "dist/ios/${ipa%.ipa}-signed.ipa"
+
+      # (uploaded before the simulator test: a lost or cancelled runner there no longer costs the release its .ipa)
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ matrix.release-artifact }}
+          path: |
+            dist/ios/*.ipa
+          if-no-files-found: warn
+
       - name: Configure and build (simulator)
         run: |
           set -o pipefail
@@ -159,7 +174,7 @@ jobs:
 
       - name: The app starts on the simulators (self tests, launcher screenshot)
         # (each launch and boot is bounded in the script; this bounds the whole: a hang fails here, with the logs below)
-        timeout-minutes: 45
+        timeout-minutes: 75
         run: scripts/ios/simulator-smoke.sh dist/ios-sim/SafeHouse.app "$BUNDLE_ID" dist/ios-smoke
 
       - name: Pack the simulator app
@@ -169,20 +184,6 @@ jobs:
           mkdir -p dist/ios-smoke
           cp build/ios-*-build.log dist/ios-smoke/ 2>/dev/null || true
           cp ~/Library/Logs/DiagnosticReports/SafeHouse* dist/ios-smoke/ 2>/dev/null || true
-
-      - name: Name the .ipa for this SDK
-        if: matrix.ipa != 'SafeHouse-iOS.ipa'
-        run: |
-          ipa="${{ matrix.ipa }}"
-          [ ! -f dist/ios/SafeHouse-iOS.ipa ] || mv dist/ios/SafeHouse-iOS.ipa "dist/ios/$ipa"
-          [ ! -f dist/ios/SafeHouse-iOS-signed.ipa ] || mv dist/ios/SafeHouse-iOS-signed.ipa "dist/ios/${ipa%.ipa}-signed.ipa"
-
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: ${{ matrix.release-artifact }}
-          path: |
-            dist/ios/*.ipa
-          if-no-files-found: warn
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: always()

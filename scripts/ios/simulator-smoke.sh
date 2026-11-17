@@ -46,9 +46,31 @@ launch() {
   wait "$pid" 2>/dev/null
 }
 
+# Runs a command for at most $1 seconds (macOS has no timeout(1)); 124 when it was stopped. A simctl call can hang
+# for good when CoreSimulatorService is stuck (seen on the newest Xcode image: the step printed nothing for 19 min).
+bounded() {
+  local seconds="$1"; shift
+  "$@" &
+  local pid=$!
+  for _ in $(seq 1 "$seconds"); do
+    kill -0 "$pid" 2>/dev/null || { wait "$pid"; return $?; }
+    sleep 1
+  done
+  kill "$pid" 2>/dev/null; sleep 1; kill -9 "$pid" 2>/dev/null
+  echo "  (stopped after ${seconds} s: $*)" >&2
+  return 124
+}
+
+# Restarts CoreSimulatorService (the next simctl call starts it again).
+restart_simulator_service() {
+  echo "  (restarting CoreSimulatorService)"
+  killall -9 com.apple.CoreSimulator.CoreSimulatorService 2>/dev/null
+  sleep 5
+}
+
 device_for() {
   # the newest available device whose name starts with $1 ("iPhone", "iPad")
-  xcrun simctl list devices available -j | python3 -c '
+  bounded 300 xcrun simctl list devices available -j | python3 -c '
 import json, sys
 prefix = sys.argv[1]
 best = None
@@ -75,11 +97,11 @@ wait_booted() {
   return 1
 }
 
-# Both simulators boot at once: the iPad's boot goes on while the iPhone runs the app.
-for kind in iPhone iPad; do
-  device="$(device_for "$kind" 2> "$OUT/$kind-name.txt")"
-  [ -z "$device" ] || xcrun simctl boot "$device" 2>/dev/null
-done
+# One simulator at a time (the free runners have about 3 cores and 7 GB; two booting simulators starved the newest
+# Xcode image until the runner was lost). Each boot is bounded and retried once after restarting the simulator service.
+echo "simulator service: listing runtimes"
+bounded 300 xcrun simctl list runtimes > "$OUT/runtimes.txt" 2>&1 || restart_simulator_service
+grep iOS "$OUT/runtimes.txt"
 
 for kind in iPhone iPad; do
   device="$(device_for "$kind" 2> "$OUT/$kind-name.txt")"
@@ -88,9 +110,17 @@ for kind in iPhone iPad; do
   dir="$OUT/$kind"; mkdir -p "$dir"
   echo "== $kind: $name ($device)"
   start=$SECONDS
-  wait_booted "$device" 600 || { echo "$kind: the simulator did not boot"; failures=$((failures + 1)); continue; }
+  booted=0
+  for attempt in 1 2; do
+    echo "  booting (attempt $attempt)"
+    bounded 300 xcrun simctl boot "$device" 2>/dev/null
+    if wait_booted "$device" 600; then booted=1; break; fi
+    bounded 60 xcrun simctl shutdown "$device" 2>/dev/null
+    restart_simulator_service
+  done
+  [ "$booted" = 1 ] || { echo "$kind: the simulator did not boot"; failures=$((failures + 1)); continue; }
   echo "  (booted in $((SECONDS - start)) s more)"
-  xcrun simctl install "$device" "$APP" || { echo "install failed"; failures=$((failures + 1)); continue; }
+  bounded 300 xcrun simctl install "$device" "$APP" || { echo "install failed"; failures=$((failures + 1)); continue; }
 
   echo "-- self tests"
   launch 240 "$dir/selftest-console.txt" "$device" --ios-selftest
@@ -154,7 +184,7 @@ SHOTS
   fi
   # (the game's window lines: on a phone the game must be landscape; Metal: an enum the layer did not translate)
   grep -E "gl-selftest|smoke:|window failed|game window|Metal: GL_|shader (compile|link) error" "$dir/smoke-ios.log" 2>/dev/null | head -n 30
-  xcrun simctl shutdown "$device" 2>/dev/null
+  bounded 120 xcrun simctl shutdown "$device" 2>/dev/null
   echo "  ($kind: $((SECONDS - start)) s)"
 done
 echo "simulator smoke: $failures problem(s)"
