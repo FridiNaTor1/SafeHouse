@@ -571,6 +571,7 @@ int main(int argc, char** argv)
         else if (!std::strcmp(argv[i], "--dump-text") && i + 1 < argc) { command = "dump-text"; arg = argv[++i]; }
         else if (!std::strcmp(argv[i], "--dump-port-text") && i + 1 < argc) { command = "dump-port-text"; arg = argv[++i]; }
         else if (!std::strcmp(argv[i], "--decode-audio") && i + 2 < argc) { command = "decode-audio"; arg = argv[++i]; arg2 = argv[++i]; }
+        else if (!std::strcmp(argv[i], "--encode-flac") && i + 1 < argc) { command = "encode-flac"; arg = argv[++i]; }
         // (languages, langstore.h) the shared languages folder; importing a disc's / an installation's languages into it
         else if (!std::strcmp(argv[i], "--languages-dir") && i + 1 < argc) { languagesDir = argv[++i]; fLanguagesGiven = true; }
         else if (!std::strcmp(argv[i], "--import-languages") && i + 1 < argc) { command = "import-languages"; limport.dirOut = argv[++i]; }
@@ -578,6 +579,7 @@ int main(int argc, char** argv)
         else if (!std::strcmp(argv[i], "--replace-languages")) limport.fReplace = true;
         else if (!std::strcmp(argv[i], "--only-language") && i + 1 < argc) limport.alangOnly.emplace_back(argv[++i]);
         else if (!std::strcmp(argv[i], "--list-languages")) command = "list-languages";
+        else if (!std::strcmp(argv[i], "--language-line") && i + 2 < argc) { command = "language-line"; arg = argv[++i]; arg2 = argv[++i]; }
         else if (!std::strcmp(argv[i], "--language-selftest")) command = "language-selftest";
         else if (!std::strcmp(argv[i], "--check-language") && i + 1 < argc) { command = "check-language"; arg = argv[++i]; }
         else if (!std::strcmp(argv[i], "--import-ps3-languages") && i + 2 < argc) { command = "import-ps3-languages"; arg = argv[++i]; arg2 = argv[++i]; }
@@ -623,6 +625,38 @@ int main(int argc, char** argv)
         const bool fOk = FLoadFlac(arg, rate, cch, asample, &err) || (FLoadWav(arg, info, asample, &err) && (rate = info.rate, cch = info.cch, true));
         if (!fOk || cch <= 0) { std::fprintf(stderr, "decode-audio: %s: %s\n", arg, err.c_str()); return 1; }
         return FWriteWavFile(arg2, AbWav(rate, cch, asample.data(), asample.size() / std::size_t(cch))) ? 0 : 1;
+    }
+    // (the Translate page's package export: WAV dubs as FLAC, lossless and about half the size) LIST: lines "IN<tab>OUT";
+    // "progress N M" after each, "encode-flac: IN: why" for one that failed (the others go on); 1 when any failed
+    if (command && !std::strcmp(command, "encode-flac"))
+    {
+        std::ifstream in(cane::path(arg), std::ios::binary);
+        if (!in) { std::fprintf(stderr, "encode-flac: cannot read %s\n", arg); return 1; }
+        std::vector<std::pair<std::string, std::string>> ajob;
+        for (std::string line; std::getline(in, line);)
+        {
+            if (!line.empty() && line.back() == '\r') line.pop_back();
+            const std::size_t tab = line.find('\t');
+            if (tab != std::string::npos) ajob.emplace_back(line.substr(0, tab), line.substr(tab + 1));
+        }
+        int cfail = 0;
+        for (std::size_t i = 0; i < ajob.size(); ++i)
+        {
+            WAVINFO info;
+            std::vector<int16_t> asample;
+            std::string err;
+            std::vector<uint8_t> ab;
+            if (FLoadWav(ajob[i].first, info, asample, &err) && info.cch > 0)
+                ab = AbFlac(info.rate, info.cch, asample.data(), asample.size() / std::size_t(info.cch), &err);
+            if (ab.empty() || !FWriteWavFile(ajob[i].second, ab))
+            {
+                std::printf("encode-flac: %s: %s\n", ajob[i].first.c_str(), err.empty() ? "cannot write" : err.c_str());
+                ++cfail;
+            }
+            std::printf("progress %zu %zu\n", i + 1, ajob.size());
+            std::fflush(stdout);
+        }
+        return cfail ? 1 : 0;
     }
     if (command && !std::strcmp(command, "dump-port-text")) { int DumpPortTextCommand(const std::string&); return DumpPortTextCommand(arg); }   // (textmod.cpp; no disc)
     // (audio.h, notes/AUDIO_2026-11-10.md) the devices by name, their fallback / recovery, the USB headset's microphone
@@ -674,6 +708,7 @@ int main(int argc, char** argv)
     InitLanguageStore();   // (langstore.h: the other regions' languages, imports, mods)
     InitLanguage();   // (region.h: the disc's languages, the PC's language)
     if (command && !std::strcmp(command, "list-languages")) return ListLanguagesCommand();
+    if (command && !std::strcmp(command, "language-line")) return LanguageLineCommand(arg, std::atoi(arg2));
     if (command && !std::strcmp(command, "check-language")) return CheckLanguageCommand(arg);
     if (command && !std::strcmp(command, "import-ps3-languages"))
     {

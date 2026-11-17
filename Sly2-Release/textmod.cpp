@@ -31,6 +31,36 @@ using json = nlohmann::ordered_json;
 uint32_t g_isectorWorldLoading = 0;
 WORLD_VALUE(g_isectorWorldLoading);   // (PC: moved aside while a kept world loads, worldglobals.h)
 
+// The USA / European discs' text bytes 0x80..0x9F are Windows-1252's typographic marks (the English text's 0x92
+// apostrophes and 0x85 ellipses, the French 0x9C oe): their characters (0: no character there).
+static const uint16_t s_acpCp1252[32] = {0x20AC, 0, 0x201A, 0x0192, 0x201E, 0x2026, 0x2020, 0x2021, 0x02C6, 0x2030, 0x0160,
+                                         0x2039, 0x0152, 0, 0x017D, 0, 0, 0x2018, 0x2019, 0x201C, 0x201D, 0x2022, 0x2013,
+                                         0x2014, 0x02DC, 0x2122, 0x0161, 0x203A, 0x0153, 0, 0x017E, 0x0178};
+uint32_t CpOfCp1252(uint8_t b)
+{
+    if (b < 0x80 || b >= 0xA0) return b;
+    return s_acpCp1252[b - 0x80] ? s_acpCp1252[b - 0x80] : b;
+}
+int ByteOfCp1252(uint32_t cp)
+{
+    if (cp < 0x100) return -1;
+    for (int i = 0; i < 32; ++i)
+        if (s_acpCp1252[i] == cp) return 0x80 + i;
+    return -1;
+}
+std::string Utf8OfCp1252(const std::string& s)
+{
+    std::string out;
+    for (unsigned char c : s)
+    {
+        const uint32_t cp = CpOfCp1252(c);
+        if (cp < 0x80) out += char(cp);
+        else if (cp < 0x800) { out += char(0xC0 | (cp >> 6)); out += char(0x80 | (cp & 0x3F)); }
+        else { out += char(0xE0 | (cp >> 12)); out += char(0x80 | ((cp >> 6) & 0x3F)); out += char(0x80 | (cp & 0x3F)); }
+    }
+    return out;
+}
+
 namespace
 {
 const char* const s_aszLanguage[LANG_Max] = {"English", "French", "Italian", "German", "Spanish", "Dutch", "Portuguese",
@@ -42,13 +72,7 @@ bool s_fOff = false;  // (--dump-text: the disc's own strings)
 std::string Utf8OfLatin1(const std::string& s)
 {
     if (FWideChars()) return s;
-    std::string out;
-    for (unsigned char c : s)
-    {
-        if (c < 0x80) out += char(c);
-        else { out += char(0xC0 | (c >> 6)); out += char(0x80 | (c & 0x3F)); }
-    }
-    return out;
+    return Utf8OfCp1252(s);
 }
 std::string Latin1OfUtf8(const std::string& s)
 {
@@ -64,9 +88,8 @@ std::string Latin1OfUtf8(const std::string& s)
         else if (c >= 0xC0) { cp = c & 0x1F; n = 1; }
         ++i;
         for (int k = 0; k < n && i < s.size(); ++k, ++i) cp = (cp << 6) | (static_cast<unsigned char>(s[i]) & 0x3F);
-        if (cp == 0x2018 || cp == 0x2019) cp = '\'';     // (typographic quotes the fonts have not)
-        else if (cp == 0x201C || cp == 0x201D) cp = '"';
-        else if (cp == 0x2026) { out += "..."; continue; }
+        // (the discs' own typographic marks, 0x80..0x9F as Windows-1252 has them: the fonts' glyphs there)
+        if (const int b = ByteOfCp1252(cp); b >= 0) { out += char(b); continue; }
         out += cp <= 0xFF ? char(cp) : '?';
     }
     return out;

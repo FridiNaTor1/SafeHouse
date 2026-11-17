@@ -59,6 +59,30 @@ inline std::string encode(char32_t c) {
     return out;
 }
 
+// ---- The discs' typographic marks. The USA / European discs' text bytes 0x80..0x9F are Windows-1252's (the English
+// text's ’ and …, the French œ: Sly2-Release/textmod.h); text files made before 2026-11-17 have them as the control
+// characters U+0080..U+009F (Latin-1 read plainly), which no font draws (the page showed "?"). Read as the marks they
+// are; the game turns both into the same byte.
+inline char32_t cp1252Mark(char32_t c) {
+    static const char16_t a[32] = {0x20AC, 0, 0x201A, 0x0192, 0x201E, 0x2026, 0x2020, 0x2021, 0x02C6, 0x2030, 0x0160,
+                                   0x2039, 0x0152, 0, 0x017D, 0, 0, 0x2018, 0x2019, 0x201C, 0x201D, 0x2022, 0x2013,
+                                   0x2014, 0x02DC, 0x2122, 0x0161, 0x203A, 0x0153, 0, 0x017E, 0x0178};
+    return c >= 0x80 && c < 0xA0 && a[c - 0x80] ? char32_t(a[c - 0x80]) : c;
+}
+inline std::string withMarks(const std::string& s) {
+    // (a C1 control is 0xC2 0x80..0x9F in UTF-8)
+    if (s.find('\xC2') == std::string::npos) return s;
+    std::string out;
+    for (std::size_t i = 0; i < s.size(); ++i) {
+        const auto b = static_cast<unsigned char>(s[i]);
+        if (b == 0xC2 && i + 1 < s.size() && static_cast<unsigned char>(s[i + 1]) >= 0x80 && static_cast<unsigned char>(s[i + 1]) < 0xA0) {
+            out += encode(cp1252Mark(static_cast<unsigned char>(s[i + 1])));
+            ++i;
+        } else out += s[i];
+    }
+    return out;
+}
+
 // ---- The game's languages (Sly2-Release/langstore.cpp: the folder names, codes; the port's 13 built-in columns)
 inline const std::vector<std::string>& gameLanguages() {
     static const std::vector<std::string> a = {"English", "French",  "Italian",   "German",  "Spanish",  "Dutch",  "Portuguese",
@@ -78,11 +102,13 @@ inline int gameLanguage(const std::string& key) {
 // ---- The fonts. The USA / European discs draw Latin-1 (their fonts' 224 glyphs, 0x20..0xFF); these slots hold the
 // fonts' placeholder box instead of a letter (measured on the USA and European v1.00 / v2.01 fonts: the same set):
 // no-break space, ¦ § ª « ¬ soft hyphen ¯ ± ² ³ ´ µ ¶ · ¸ ¹ º » ¼ ½ ¾ Þ þ (ð is drawn by the port since 2026-11-13).
-// Typographic quotes and the ellipsis are written plainly (textmod.h); everything else beyond Latin-1 shows as '?'.
+// The typographic marks the discs' text uses (‘ ’ “ ” … – — Œ œ, at 0x80..0x9F: textmod.h) are drawn; everything else
+// beyond Latin-1 shows as '?'.
 inline bool latinShowable(char32_t c) {
     if (c == '\n') return true;
     if (c < 0x20) return false;
-    if (c == 0x2018 || c == 0x2019 || c == 0x201C || c == 0x201D || c == 0x2026) return true;
+    // (the discs' typographic marks: their fonts' glyphs at 0x80..0x9F, those the discs' own text uses)
+    if (c == 0x2018 || c == 0x2019 || c == 0x201C || c == 0x201D || c == 0x2026 || c == 0x2013 || c == 0x2014 || c == 0x152 || c == 0x153) return true;
     if (c >= 0x7F && c < 0xA0) return false;
     if (c > 0xFF) return false;
     static const std::set<char32_t> box = {0xA0, 0xA6, 0xA7, 0xAA, 0xAB, 0xAC, 0xAD, 0xAF, 0xB1, 0xB2, 0xB3, 0xB4, 0xB5,
@@ -322,15 +348,15 @@ inline void readTexts(const ojson& j, Texts& t) {
     if (!j.is_object()) return;
     if (j.contains("strings") && j["strings"].is_object())
         for (const auto& [k, v] : j["strings"].items())
-            if (v.is_string()) t.strings[k] = v.get<std::string>();
+            if (v.is_string()) t.strings[k] = withMarks(v.get<std::string>());
     if (j.contains("port") && j["port"].is_object())
         for (const auto& [k, v] : j["port"].items())
-            if (v.is_string()) t.port[k] = v.get<std::string>();
+            if (v.is_string()) t.port[k] = withMarks(v.get<std::string>());
     if (j.contains("worlds") && j["worlds"].is_object())
         for (const auto& [w, o] : j["worlds"].items())
             if (o.is_object())
                 for (const auto& [k, v] : o.items())
-                    if (v.is_string()) t.worlds[w][k] = v.get<std::string>();
+                    if (v.is_string()) t.worlds[w][k] = withMarks(v.get<std::string>());
 }
 inline Texts folderTexts(const Folder& f, bool withMods = true) {
     Texts t;
@@ -522,7 +548,7 @@ inline bool save(Translation& t, std::string& error) {
     std::map<std::string, std::string> extra;
     if (j.contains("strings") && j["strings"].is_object())
         for (const auto& [k, v] : j["strings"].items())
-            if (v.is_string()) extra[k] = v.get<std::string>();
+            if (v.is_string()) extra[k] = withMarks(v.get<std::string>());
     for (const Row& r : t.rows) {
         if (r.port) continue;
         extra.erase(r.id);
@@ -953,7 +979,14 @@ inline int selfTest() {
     expect(issues(" On", "Á", latin).count(Issue::Spaces), "the leading space");
     expect(issues("Back", "Aftur til høvuðsvalmyndina", latin).count(Issue::Length), "much longer");
     expect(issues("x", "Þetta ½ €", latin).count(Issue::Glyphs) && unshowable("Þetta ½ €", latin) == "Þ½€", "the Latin fonts' missing letters");
-    expect(unshowable("“Fín” ð æ ø å … &2X&.", latin).empty(), "the Latin fonts' letters, quotes plain");
+    expect(unshowable("“Fín” ð æ ø å … – œ &2X&.", latin).empty(), "the Latin fonts' letters and the discs' typographic marks");
+    expect(withMarks("I don\u0092t get it Sly\u0085 \u0093ok\u0094 \u009C") == "I don’t get it Sly… “ok” œ" && withMarks("Føroyskt ok?") == "Føroyskt ok?",
+           "an older file's control characters read as the discs' marks (string 1212's ’ and …)");
+    {
+        Texts tx;
+        readTexts(ojson::parse(R"({"strings": {"1212": "I don\u0092t", "5": "Hví?"}, "worlds": {"Paris": {"7": "a\u0085"}}})"), tx);
+        expect(tx.strings["1212"] == "I don’t" && tx.strings["5"] == "Hví?" && tx.worlds["Paris"]["7"] == "a…", "Text.json read with the marks, real question marks kept");
+    }
     std::set<char32_t> kana = {U'あ', U'い', 'A'};
     const Font jp{true, &kana};
     expect(unshowable("あいA\n", jp).empty() && unshowable("あう", jp) == "う", "the Japanese font's characters");

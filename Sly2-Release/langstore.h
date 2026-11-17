@@ -126,6 +126,8 @@ struct LANGIMPORT
 int ImportLanguagesCommand(const LANGIMPORT& opts);
 // --list-languages: the available languages as JSON lines (the launcher's languages list).
 int ListLanguagesCommand();
+// --language-line KEY ID: the file the game plays for USA voice line ID in that voices' language, decoded (langstore.cpp)
+int LanguageLineCommand(const std::string& key, int idUsa);
 // --language-selftest (no disc), --check-language KEY (a disc / an installation and the languages folder): langstore.cpp
 int LanguageSelfTest();
 int CheckLanguageCommand(const std::string& key);

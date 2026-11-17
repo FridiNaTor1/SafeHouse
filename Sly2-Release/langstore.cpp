@@ -298,17 +298,8 @@ std::shared_ptr<SELEM> PfontFromFile(const fs::path& path)
     return pset;
 }
 
-// Latin-1 bytes as UTF-8 (the USA / European discs' own strings)
-std::string Utf8OfLatin1Bytes(const std::string& s)
-{
-    std::string out;
-    for (unsigned char c : s)
-    {
-        if (c < 0x80) out += char(c);
-        else { out += char(0xC0 | (c >> 6)); out += char(0x80 | (c & 0x3F)); }
-    }
-    return out;
-}
+// Latin-1 bytes as UTF-8 (the USA / European discs' own strings; 0x80..0x9F Windows-1252's marks: textmod.h)
+std::string Utf8OfLatin1Bytes(const std::string& s) { return Utf8OfCp1252(s); }
 
 // The menus' button lines (USA ids). The Japanese build confirms with Circle, goes back with Cross and erases a
 // slot with Square; the other builds with Cross, Triangle and Circle (region.h BtnMenuConfirm). A language taken from
@@ -817,6 +808,35 @@ int ListLanguagesCommand()
     return 0;
 }
 
+// --language-line KEY ID: the voice line the game plays for USA line ID with KEY as the voices' language (the same
+// lookup as a level's dialog: the languages folder, Mods/Languages, the packages' files/Languages, the fallbacks),
+// decoded as the game would: "language-line: <path> <seconds> s, <rate> Hz, <channels> ch, <frames> frames". 1: none.
+int LanguageLineCommand(const std::string& key, int idUsa)
+{
+    const LANGPACK* p = PpackOfKey(key);
+    if (!p) { std::printf("language-line: no language \"%s\"\n", key.c_str()); return 1; }
+    g_nLangVoice = p->lang;
+    int idDisc = -1;
+    for (int id = 0; id < 0x4000 && idDisc < 0; ++id)
+        if (IdTextUsa(id) == idUsa) idDisc = id;
+    FK fk;
+    float tLength = 0.0f;
+    if (idDisc < 0 || LangVoice() != p->lang || !FLanguageStoreDialog(idDisc, fk, tLength))
+    {
+        std::printf("language-line: %s has no line %d\n", key.c_str(), idUsa);
+        return 1;
+    }
+    const std::string path = g_disc.PathOf(fk.isector);
+    int rate = 0, cch = 0;
+    std::vector<int16_t> asample;
+    std::string err;
+    WAVINFO info;
+    const bool fOk = FLoadFlac(path, rate, cch, asample, &err) || (FLoadWav(path, info, asample, &err) && (rate = info.rate, cch = info.cch, true));
+    if (!fOk || cch <= 0) { std::printf("language-line: %s: %s\n", path.c_str(), err.c_str()); return 1; }
+    std::printf("language-line: %s %.2f s, %d Hz, %d ch, %zu frames\n", path.c_str(), tLength, rate, cch, asample.size() / std::size_t(cch));
+    return 0;
+}
+
 // ---------------------------------------------------------------------------------------------------------
 // --import-languages
 
@@ -1305,6 +1325,10 @@ int LanguageSelfTest()
               IdTextJapanOfUsa(0x135) == 0x282 && IdTextJapanOfUsa(0x136) == 0x139 && IdTextJapanOfUsa(0x27F) == 0x283,
           "the Japanese text ids");
     check(StrFoldLatin(Utf8OfLatin1Bytes("Caf\xE9 \xA9 \x93ok\x94")) == "Cafe (C) \"ok\"", "Latin-1 folded for the Japanese font");
+    // the discs' 0x80..0x9F (Windows-1252's marks) to UTF-8 and back; an older file's U+0092 gives the same byte
+    check(Utf8OfCp1252("don\x92t\x85 \x9C") == "don\u2019t\u2026 \u0153" && GameTextOfUtf8("don\u2019t\u2026 \u0153") == "don\x92t\x85 \x9C" &&
+              GameTextOfUtf8("don\xC2\x92t") == "don\x92t" && ByteOfCp1252(0x2014) == 0x97 && ByteOfCp1252(0x263A) == -1,
+          "the discs' typographic marks as Windows-1252");
     // the Korean disc (region.h): its text ids, a syllable's jamo, a jamo font's syllables and their advances, the breaks
     check(IdTextKoreaOfUsa(0x11) == 0x11 && IdTextKoreaOfUsa(0x12) == 0x13 && IdTextKoreaOfUsa(0x19) == 0x1B && IdTextKoreaOfUsa(0x6D) == 0x70 &&
               IdTextKoreaOfUsa(0x135) == 0x281 && IdTextKoreaOfUsa(0x136) == 0x138 && IdTextKoreaOfUsa(0x27F) == 0x282,

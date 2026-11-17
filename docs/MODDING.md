@@ -279,7 +279,9 @@ How the file works:
   only in that level and wins over `strings`.
 - **Keys** are the string numbers from the dump. You only need the strings you change. You can't add new numbers.
 - **Encoding:** write the file as UTF-8. The USA and European fonts have the Western European (Latin-1)
-  characters, such as é, ß, ñ and å; other characters show as `?`. On the Japanese disc (`Japanese.json`), only
+  characters, such as é, ß, ñ and å, and the discs' own typographic marks (’ ‘ “ ” … – — Œ œ); other characters
+  show as `?`. (Files made by versions before 2026-11-17 have those marks as control characters, U+0092 for ’ and
+  U+0085 for …: the game reads both the same.) On the Japanese disc (`Japanese.json`), only
   characters the game's Japanese font has can show.
 - **Button icons:** sequences like `&2X&.` (the X button), `&2T&.` (Triangle) and `&2S&.` (Square) draw the game's
   button icons. Keep them.
@@ -382,7 +384,7 @@ of the languages folder string by string, beside a reference language:
   French, ...) is saved as a change file instead, `Mods/Languages/<Language>/Text.json` with only the strings you
   changed: it applies on top of the disc's text and of the languages folder's.
 - **Test in game** saves and starts Sly 2 in that language. The menu (the arrow) has **Export as a mod package**
-  (`Mods/Packages/language-<name>/` with `files/Languages/<Name>/`: share that folder or a .zip of it), **Export a CSV
+  (below), **Export a CSV
   table** / **Import the CSV table** (`<Name>.csv` beside the `Text.json`, columns `id,reference,translation`; PC
   strings are `port:<name>`), and **Find where strings are used again**.
 
@@ -412,6 +414,18 @@ of the languages folder string by string, beside a reference language:
   and a second, or with **Stop**. Then drag the two handles on the waveform to cut the start and the end (the dashed
   line is the reference's length), play the take (with the radio effect on a radio line) and **Save as the dub**: a
   16-bit WAV in the line's place, as an added file would be.
+
+- **Export as a mod package** makes `Mods/Packages/language-<name>/` (its `mod.json` and
+  `files/Languages/<Name>/`) with everything the language needs to play: `Text.json`, `language.json`, a `Font.bin`,
+  every dub and cutscene sound under `Dialog/` and `Movies/`, and `Dialog/lengths.json`. A game language's package
+  holds only its changes (`Mods/Languages/<Language>/`). The dry takes (`Takes/`) stay out unless **Include the
+  original takes** is ticked. **Make the WAV dubs FLAC** (on by default) converts the WAV dubs to FLAC on the way
+  (lossless, about half the size; the game reads FLAC as it reads the European installations' lines; a file that
+  does not convert stays WAV), and **Also make a .zip** writes `Exports/language-<name>.zip` in Sly 2's save folder
+  (`mod.json` at its root, names in UTF-8 so `Føroyskt` arrives as it is). The page shows the progress and the sizes.
+  To install it elsewhere, copy the package folder (or the .zip unzipped as a folder) into `Mods/Packages/` in Sly 2's
+  save folder; `Sly2-Release --language-line <Name> <line>` prints the file the game plays for a voice line in that
+  language (and decodes it), to check an installed package.
 
 The page runs `Sly2-Release --dump-port-text` and `--dump-text` once in the background (into the launcher's cache
 folder) for the PC strings' English and each string's levels; `Sly2-Release --check-language <Name>` checks a

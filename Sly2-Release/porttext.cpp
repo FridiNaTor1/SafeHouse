@@ -631,7 +631,7 @@ std::string StrToGameText(const std::string& utf8)
         const int ilang = IlangTable();
         return ilang == LANG_Japanese || ilang == LANG_Korean || FStoreTextWide() ? utf8 : StrFoldLatinForWideFont(utf8);   // (langstore.h)
     }
-    // the other discs' text is Latin-1 (their fonts' glyphs 0x20..0xFF; typographic quotes plain, others '?': textmod.h)
+    // the other discs' text is Latin-1 (their fonts' glyphs 0x20..0xFF, typographic marks Windows-1252's, others '?': textmod.h)
     return GameTextOfUtf8(utf8);
 }
 

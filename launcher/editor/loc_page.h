@@ -11,6 +11,9 @@
 // the lines the game plays as radio talk (loc_audio.h), and recording a dub here: a microphone, a countdown, the
 // reference playing along, then trimming the take.
 //
+// Round 4: the mod package export takes the dubs too (WAV made FLAC, a .zip beside it, its progress and size:
+// loc_export.h); the older text files' typographic marks (U+0092 for ’) read as the marks (loc_core.h withMarks).
+//
 // It runs the game program twice, in the background, into the launcher's cache folder: --dump-port-text (the port's
 // built-in strings of the 12 languages: the PC strings' reference) and --dump-text (each string's levels: usage.json).
 #include "../backend.h"
@@ -21,6 +24,7 @@
 #include "audio_devices_sdl.h"
 #include "core/spawn.h"
 #include "loc_core.h"
+#include "loc_export.h"
 
 #include <algorithm>
 #include <atomic>
@@ -103,7 +107,10 @@ public:
         std::printf("loc record selftest: %d failed\n", fails);
         return fails ? 1 : 0;
     }
-    ~LocalisationPage() { stopJob(); }
+    ~LocalisationPage() {
+        stopJob();
+        stopExport();
+    }
 
     void open() {
         m_loaded = false;
@@ -136,6 +143,10 @@ public:
         }
         if (m_settings) {
             drawSettings();
+            return;
+        }
+        if (m_exportPage) {
+            drawExport();
             return;
         }
         drawFilters();
@@ -350,6 +361,15 @@ private:
             for (std::size_t k = 0; k < m_voices.size(); ++k)
                 if (m_voices[k].id == sz) m_voiceSel = int(k), m_voiceScroll = true;
         if (const char* sz = std::getenv("SAFEHOUSE_LOC_FILTER"); sz && *sz) m_filter = std::clamp(std::atoi(sz), 0, 4);
+        // (screenshots / the export check: SAFEHOUSE_LOC_EXPORT=page opens the export page, =done exports first)
+        if (const char* sz = std::getenv("SAFEHOUSE_LOC_EXPORT"); sz && *sz && !m_exportEnvDone) {
+            m_exportEnvDone = true;
+            exportPackage();
+            if (std::string(sz) == "done") {
+                startExport();
+                if (m_exportThread.joinable()) m_exportThread.join();
+            }
+        }
         if (m_selected >= 0 && m_section != 2) m_section = m_t.rows[std::size_t(m_selected)].port ? 1 : 0;
     }
     bool unsaved() const {
@@ -1113,32 +1133,136 @@ private:
         m_current = folderIndex(m_currentKey);
         return true;
     }
-    void exportPackage() {
-        if (unsaved() && !saveNow()) return;
-        const std::string id = cane::mods::idFromName("language-" + m_t.folder.key);
+    // ---------------------------------------------------------------- exporting a mod package (loc_export.h)
+    // the folders the package takes the language from: a game language's changes alone (Mods/Languages/<Name>), else
+    // every folder of it (later ones win, as in the game)
+    std::vector<fs::path> exportDirs() const {
+        if (m_t.gameLanguage) return {m_t.folder.modsDir};
+        return m_t.folder.dirs;
+    }
+    cane::mods::Manifest exportManifest() const {
         cane::mods::Manifest m;
-        m.id = id;
+        m.id = cane::mods::idFromName("language-" + m_t.folder.key);
         m.name = m_t.folder.displayName();
         m.description = trf("The %s translation of Sly 2.", m_t.folder.key.c_str());
         m.game = "sly2";
-        m.dir = m_backend.userDir(GameId::Sly2) / "Mods" / cane::mods::kPackagesFolder / loc::pathOf(id);
+        m.dir = m_backend.userDir(GameId::Sly2) / "Mods" / cane::mods::kPackagesFolder / loc::pathOf(m.id);
         std::string error;
         cane::mods::Manifest old;
         if (cane::mods::readManifest(m.dir, old, error)) m.version = old.version, m.author = old.author;
-        if (!cane::mods::writeManifest(m, error)) {
-            m_status = error;
-            return;
+        return m;
+    }
+    fs::path exportZip(const cane::mods::Manifest& m) const { return m_backend.userDir(GameId::Sly2) / "Exports" / loc::pathOf(m.id + ".zip"); }
+    void exportPackage() {
+        if (unsaved() && !saveNow()) return;
+        m_exportPage = true;
+        if (!m_exportRunning) m_export.reset();
+        refreshExportFiles();
+    }
+    void refreshExportFiles() {
+        m_exportFiles = loc::packageFiles(exportDirs(), m_exportOptions.takes);
+    }
+    void startExport() {
+        if (m_exportRunning) return;
+        stopExport();
+        m_export = std::make_unique<loc::ExportProgress>();
+        m_exportRunning = true;
+        const cane::mods::Manifest m = exportManifest();
+        const fs::path zip = exportZip(m);
+        loc::Encoder encode;
+        fs::path bin;
+        try {
+            bin = runtime();
+        } catch (...) {
         }
-        const fs::path dest = m.filesDir() / "Languages" / loc::pathOf(m_t.folder.key);
         std::error_code ec;
-        fs::create_directories(dest, ec);
-        for (const char* file : {"Text.json", "language.json"}) {
-            const fs::path src = m_t.target().parent_path() / file;
-            if (fs::is_regular_file(src, ec)) fs::copy_file(src, dest / file, fs::copy_options::overwrite_existing, ec);
-            if (ec) break;
+        if (!bin.empty() && fs::exists(bin, ec)) {
+            loc::ExportProgress* p = m_export.get();
+            encode = [bin, p](const fs::path& list, const std::function<void(const std::string&)>& line) {
+                return cane::runProcess({utf8(bin), "--encode-flac", utf8(list)}, bin.parent_path(), p->cancel, line);
+            };
         }
-        if (ec) m_status = ec.message();
-        else m_status = trf("Exported to %s (Mods/Packages: share the folder, or a .zip of it).", utf8(m.dir).c_str());
+        m_exportThread = std::thread([files = m_exportFiles, m, key = m_t.folder.key, o = m_exportOptions, zip, encode, p = m_export.get()] {
+            loc::exportLanguage(files, m, key, o, zip, encode, *p);
+        });
+    }
+    void stopExport() {
+        if (m_export) m_export->cancel = true;
+        if (m_exportThread.joinable()) m_exportThread.join();
+        m_exportRunning = false;
+    }
+    void drawExport() {
+        if (m_exportRunning && m_export && m_export->phase >= 4) {
+            if (m_exportThread.joinable()) m_exportThread.join();
+            m_exportRunning = false;
+        }
+        beginCard("loc-export", {0, 0}, 20);
+        text(tr("Export as a mod package"), fonts().heading);
+        const cane::mods::Manifest m = exportManifest();
+        caption(trf("A package of %s with its text and every dub, in Sly 2's Mods/Packages (%s). Copy that folder into Mods/Packages in Sly 2's "
+                    "save folder on another PC, a phone, the Quest or the Switch, or share the .zip (unzipped as a folder there): the game "
+                    "loads it the same way everywhere.",
+                    m_t.folder.key.c_str(), utf8(m.dir).c_str())
+                    .c_str());
+        gap(10);
+        ImGui::BeginDisabled(m_exportRunning);
+        if (ImGui::Checkbox(tr("Include the original takes (Takes: the dry recordings, which the game does not need)"), &m_exportOptions.takes)) refreshExportFiles();
+        ImGui::Checkbox(tr("Make the WAV dubs FLAC (lossless, about half the size)"), &m_exportOptions.flac);
+        ImGui::Checkbox(tr("Also make a .zip to share"), &m_exportOptions.zip);
+        ImGui::EndDisabled();
+        gap(6);
+        uint64_t bytes = 0;
+        int voices = 0, wavs = 0;
+        for (const loc::PackFile& f : m_exportFiles) {
+            bytes += f.bytes;
+            const bool voice = (f.rel.rfind("Dialog/", 0) == 0 || f.rel.rfind("Movies/", 0) == 0) && loc::audioFile(f.src);
+            voices += voice;
+            wavs += voice && loc::convertible(f);
+        }
+        caption(trf("%d files: the text, %d dubs and cutscene sounds (%d of them WAV); %s before converting.", int(m_exportFiles.size()), voices, wavs,
+                    loc::sizeText(bytes).c_str())
+                    .c_str(),
+                color::text2);
+        gap(8);
+        loc::ExportProgress* p = m_export.get();
+        if (p && m_exportRunning && p->phase < 4) {
+            const int ph = p->phase, done = p->done, total = std::max(1, int(p->total));
+            const std::string what = ph == 1   ? trf("Copying the files... %d of %d", done, total)
+                                     : ph == 2 ? trf("Converting the dubs to FLAC... %d of %d", done, total)
+                                               : trf("Making the .zip... %d of %d", done, total);
+            caption(what.c_str(), color::text2);
+            const float barW = ImGui::GetContentRegionAvail().x;
+            const ImVec2 at = ImGui::GetCursorScreenPos();
+            auto* dl = ImGui::GetWindowDrawList();
+            dl->AddRectFilled(at, {at.x + barW, at.y + px(6)}, ink(color::input), px(3));
+            dl->AddRectFilled(at, {at.x + barW * std::min(1.0f, float(done) / float(total)), at.y + px(6)}, ink(color::accent), px(3));
+            ImGui::Dummy({barW, px(6)});
+            gap(8);
+            if (button(tr("Cancel"), Tone::Secondary, {0, 0}, Icon::Stop)) p->cancel = true;
+        } else {
+            if (p && p->phase == 4) {
+                std::lock_guard<std::mutex> lock(p->m);
+                caption(trf("Package folder: %s (%s)", p->folder.c_str(), loc::sizeText(p->folderBytes).c_str()).c_str(), color::success);
+                if (!p->zip.empty()) caption(trf("Zip to share: %s (%s)", p->zip.c_str(), loc::sizeText(p->zipBytes).c_str()).c_str(), color::success);
+                if (m_exportOptions.flac && wavs > 0) caption(trf("%d of %d WAV dubs converted to FLAC.", int(p->converted), wavs).c_str(), color::text2);
+                gap(6);
+            } else if (p && p->phase == 5) {
+                std::lock_guard<std::mutex> lock(p->m);
+                caption(trf("The export failed: %s", p->error.c_str()).c_str(), color::warning);
+                gap(6);
+            }
+            if (button(tr("Export"), Tone::Cta, {0, 0}, Icon::Check)) startExport();
+            ImGui::SameLine(0, px(8));
+            if (p && p->phase == 4) {
+                if (button(tr("Open folder"), Tone::Secondary)) {
+                    std::lock_guard<std::mutex> lock(p->m);
+                    cane::openFolder(p->zip.empty() ? m.dir : loc::pathOf(p->zip).parent_path());
+                }
+                ImGui::SameLine(0, px(8));
+            }
+            if (button(tr("Back to the strings"), Tone::Secondary)) m_exportPage = false;
+        }
+        endCard();
     }
     fs::path csvPath() const { return m_t.target().parent_path() / loc::pathOf(m_t.folder.key + ".csv"); }
     void exportCsv() {
@@ -1593,21 +1717,25 @@ private:
             } else {
                 const double limit = m_recorder.limitSeconds;
                 const float frac = limit > 0 ? float(std::min(1.0, m_recorder.seconds() / limit)) : 0.0f;
-                dl->AddRectFilled(at, {at.x + w * frac, at.y + h}, ink(color::danger, 0.15f), px(6));
-                // the take so far, on the whole length it may take
-                if (!m_recorder.s.empty() && frac > 0) {
+                dl->AddRect(at, {at.x + w, at.y + h}, ink(color::danger, 0.6f), px(6), 0, px(1.5f));
+                // the take so far across the whole width (as the review's waveform), the time left as the bar under it
+                if (!m_recorder.s.empty()) {
                     loc::audio::Mono so;
                     so.rate = m_recorder.rate;
                     so.s = m_recorder.s;
-                    const int columns = std::max(1, int(w * frac / px(2)));
+                    const int columns = std::max(1, int(w / px(2)));
                     const auto cols = loc::audio::outline(so, columns);
                     float pk = 0.05f;
                     for (const auto& [lo, hi] : cols) pk = std::max({pk, -lo, hi});
                     const float mid = at.y + h * 0.55f;
                     for (std::size_t c = 0; c < cols.size(); ++c) {
-                        const float x = at.x + (float(c) + 0.5f) * px(2);
+                        const float x = at.x + (float(c) + 0.5f) * w / float(cols.size());
                         dl->AddLine({x, mid - cols[c].second / pk * h * 0.3f}, {x, mid - cols[c].first / pk * h * 0.3f + 1}, ink(color::danger), px(1.5f));
                     }
+                }
+                if (limit > 0) {
+                    dl->AddRectFilled({at.x + px(10), at.y + h - px(6)}, {at.x + w - px(10), at.y + h - px(3)}, ink(color::border), px(2));
+                    dl->AddRectFilled({at.x + px(10), at.y + h - px(6)}, {at.x + px(10) + (w - px(20)) * frac, at.y + h - px(3)}, ink(color::danger), px(2));
                 }
                 // the live level (the last 50 ms)
                 const std::size_t n = std::min<std::size_t>(m_recorder.s.size(), std::size_t(m_recorder.rate / 20));
@@ -1892,6 +2020,12 @@ private:
     bool m_playAlong = true, m_micsListed = false, m_recordEnvDone = false;
     std::string m_recId, m_micName;
     std::vector<std::string> m_mics;
+    // the export
+    bool m_exportPage = false, m_exportRunning = false, m_exportEnvDone = false;
+    loc::ExportOptions m_exportOptions;
+    std::vector<loc::PackFile> m_exportFiles;
+    std::unique_ptr<loc::ExportProgress> m_export;
+    std::thread m_exportThread;
     // the background job
     std::thread m_job;
     std::atomic<bool> m_jobCancel{false}, m_jobDone{false}, m_portDone{false};
