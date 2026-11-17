@@ -123,7 +123,9 @@ for kind in iPhone iPad; do
   bounded 300 xcrun simctl install "$device" "$APP" || { echo "install failed"; failures=$((failures + 1)); continue; }
 
   echo "-- self tests"
-  launch 240 "$dir/selftest-console.txt" "$device" --ios-selftest
+  # (600 s: the first launch right after a boot is slow; the iPad took over 240 s once it no longer had the iPhone's
+  # run to finish booting in the background)
+  launch 600 "$dir/selftest-console.txt" "$device" --ios-selftest
   tail -n 30 "$dir/selftest-console.txt"
 
   echo "-- extractor smoke"
