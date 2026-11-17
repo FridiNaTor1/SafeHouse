@@ -1,17 +1,25 @@
 #pragma once
 
 // Skip cutscenes (Phase 3 QoL, USER_BUGS Phase 3 item 8). Nothing shows until a button is pressed during a
-// cutscene; then a small "Hold (O) to skip" hint. Holding Circle (the bound button: B on Xbox / Steam, the dynamic
-// prompts of promptglyph.h) for 2 s skips, while an indicator (the button's icon with a line circling it) fills.
-// With "Instant Skip Cutscenes" (off by default) one press of Circle skips.
+// cutscene; then a small "Press (O) to skip" hint. A press of Circle (the bound button: B on Xbox / Steam, the dynamic
+// prompts of promptglyph.h) while the hint shows skips at once: the first press of any button only brings the hint up,
+// so a stray press never skips. Holding Circle for 2 s also skips (an indicator, the button's icon with a line circling
+// it, fills). With "Instant Skip Cutscenes" (off by default) the first press of Circle skips. On the touch pad (the
+// whole screen is Circle in a scene) only the hold skips, unless Instant Skip is on. A decided skip shows one frame
+// with the indicator full, then skips.
 //
 // A skip never cuts anything: the game itself runs to the cutscene's natural end, fast (its 60 Hz steps, sound
 // muted, its dialog lines timed by the frame clock instead of the audio device), so the tasks, positions, spawned
 // objects and music end exactly as at the natural end (tools/skipcheck.py compares them). The whole fast-forward runs
-// within one displayed frame (game.cpp, up to 5 s; about 1 s for a minute of scene): the last picture stays up, the
+// within one displayed frame (game.cpp, up to 5 s; about 0.5 to 1 s for a minute of scene on a PC): the last picture stays up, the
 // next one is the scene's end with the normal camera and HUD, with no blackout; only a longer one (a stuck scene)
-// goes on behind a fade. (Ending each line at once would be instant, but the world (guards' patrols and spawns) and
-// scripted walks then end elsewhere: skipcheck's DIFFs; so the lines play out.) Eligible scenes: binocucom
+// goes on behind a fade. A scene that starts while the pad is still locked after the skipped one (in the same step, or
+// within 60 steps with the pad locked all along: a scene in several scripts, a talk straight after a cinematic) is
+// skipped too, as the same cutscene (skipcut.cpp FChainScene). (The PS4 / PS5
+// classic's skip, andshrew/Sly2-Cutscene-Skip, ends the scripts' dialogue waits early instead (SCPT 0x3B / 0x45 /
+// 0x52 for 30 steps): instant, but the world and the scripted walks do not wait, hence its known softlocks (Ep 4's
+// train hack trigger not spawned, Ep 6's chopper out of place, job ends skipped on their first frame). Ending each
+// line at once here gave the same kind of differences in skipcheck: notes/SKIP.md.) Eligible scenes: binocucom
 // conversations, and the scenes of scripts that pause the game (SCPT 0x12) with a dialogue line or a binocucom talk
 // in them or in the scripts they start, or a cinematic of three or more camera shots (scpt.h SceneSkipKind). Pad
 // locks alone (doors, safehouse transitions, signs, job banners) and one- or two-shot camera moments (a gate shown

@@ -14,6 +14,8 @@
 #include "hud.h"
 #include "joy.h"
 #include "menu.h"
+#include "overlay.h"
+#include "photo.h"
 #include "pcinput.h"
 #include "porttext.h"
 #include "region.h"
@@ -23,6 +25,7 @@
 #include "sound.h"
 #include "sw.h"
 #include "task.h"
+#include "transition.h"
 #include "po.h"
 
 #include <algorithm>
@@ -40,7 +43,9 @@ namespace
 {
 constexpr float T_HOLD = 2.0f;          // seconds of Circle to skip
 constexpr float T_HINT = 4.0f;          // the hint stays this long after the last button
+constexpr float T_RING = 0.25f;         // Circle held this long: the hold's ring shows (a press is no hold)
 constexpr int CSTEP_MAX = 60 * 600;     // a skip's fast-forward stops after 10 minutes of game time (a stuck scene; Ep 8's Arpeggio / Clockwerk scene 3299 is 4 min)
+constexpr int CSTEP_CHAIN = 60;         // after the scene's end, the pad still locked: steps a following scene may take to start
 
 struct SKIPCUT
 {
@@ -53,15 +58,50 @@ struct SKIPCUT
     int frameWait = -100;       // the last step a script waited for a button
     uint64_t idScene = 0;       // the scene whose hold / fast-forward this belongs to
     bool fAwaitRelease = false; // a Circle held across a scene boundary cannot start another skip
-    int frameStop = -1;         // the step the last fast-forward ended at (the scene's end: the check's)
+    int frameStop = -1;         // the step the last fast-forward's last scene ended at (the check's scene end)
+    int cChain = 0;             // (fast-forward) the scenes it went on into
+    int frameArm = -1;          // a skip ended with the pad still locked at this step: a scene starting soon is skipped too
     uint16_t grfCarried = 0;    // buttons held into the scene (or that turn on in its first moments, e.g. a held movement
                                 // key becoming the d-pad once the scene takes the pad): no hint until released
     float tScene = 0.0f;        // since the scene started
+    bool fAck = false;          // the skip decided: this frame shows it taken (the ring full), the next one skips
+    uint64_t idAck = 0;         // (the scene it was decided in)
 };
 SKIPCUT s_skip;
 SKIPCUT s_skipMovie;
 
 bool FScptWaitsNow() { return g_frameJoy - s_skip.frameWait <= 2; }
+
+// The pad is still taken from the player (a script's pause: lock 2, a talk: 4), and no world loads (8): a scene that
+// starts now follows the one that ended with no moment of play between them, the same cutscene to the player.
+bool FPadStillLocked() { return (g_grfjoyLock & 6) != 0 && !(g_grfjoyLock & 8) && !g_transition.fPending && !FMenuShown(); }
+
+// A press of Circle skips (else only the hold does): not on the touch pad, where the whole screen is Circle and a
+// touch is no decision (the pad's ring shows the hold), unless Instant Skip asks for one touch.
+bool FPressSkips() { return g_pcinput.fInstantSkipCutscenes || !FTouchPadActive(); }
+
+// A skip goes on into the scene that follows the skipped one while the pad is still locked (a scene in several scripts,
+// a talk straight after a cinematic: the same cutscene to the player): straight on in the fast-forward when it takes
+// over in the same step, else (the scene ended, the pad still locked) the next scene that starts within CSTEP_CHAIN
+// steps, the pad locked all along, is skipped as soon as it starts (UpdateSkipCut, frameArm). The steps between them
+// are played as usual (the fast-forward does not run them: a script's pause can still let scripted moves and the
+// route's input through). FChainScene: the check's (SLY2N_SKIPCHECK) way to follow the same chain in a watched or a
+// skipped run, called once a frame: *pid the scene followed, *pframeEnd the step it ended at (-1: on). 0: on, 1: on
+// into a following scene, -1: over (its end: *pframeEnd).
+int FChainScene(uint64_t* pid, int* pframeEnd, uint64_t id)
+{
+    if (id == *pid)
+    {
+        *pframeEnd = -1;
+        return 0;
+    }
+    if (*pframeEnd < 0) *pframeEnd = g_frameJoy;   // (the scene ended this step: itself, or another took over)
+    if (!FPadStillLocked() || g_frameJoy - *pframeEnd > CSTEP_CHAIN) return -1;
+    if (id == 0) return 0;   // (the pad still locked: waiting for a following scene)
+    *pid = id;
+    *pframeEnd = -1;
+    return 1;
+}
 
 uint64_t IdCutscene()
 {
@@ -82,13 +122,17 @@ void StopFast()
     s_skip.frameStop = g_frameJoy;
     g_fSkipCutFast = false;
     SetOutputMute(false);
-    if (std::getenv("SLY2N_SKIPPRINT")) std::printf("skipcut: fast-forward over after %d steps\n", s_skip.cstep);
+    if (std::getenv("SLY2N_SKIPPRINT"))
+        std::printf("skipcut: fast-forward over after %d steps (%d following scenes; pad lock 0x%X, pauses %d %d)\n", s_skip.cstep,
+                    s_skip.cChain, g_grfjoyLock, g_gamepause.c78, g_gamepause.c7C);
 }
 
 void StartFast()
 {
     s_skip.fFast = true;
     s_skip.cstep = 0;
+    s_skip.frameArm = -1;
+    s_skip.cChain = 0;
     s_skip.fHint = false;
     s_skip.tHold = 0.0f;
     s_skip.fMaskCircle = true;
@@ -109,6 +153,8 @@ bool FUpdateHold(SKIPCUT& s, float dtReal, uint16_t grfHeld, uint16_t grfPressed
         s.tHold = 0.0f;
         return false;
     }
+    // (the hint already up before this press: a press of Circle now is the decision to skip)
+    const bool fHintBefore = s.fHint;
     if (grfPressed) { s.fHint = true; s.tHint = 0.0f; }
     else s.tHint += dtReal;
     if (s.fAwaitRelease)
@@ -119,7 +165,9 @@ bool FUpdateHold(SKIPCUT& s, float dtReal, uint16_t grfHeld, uint16_t grfPressed
     if (fCircle && s.fHint)
     {
         s.tHint = 0.0f;
-        if (g_pcinput.fInstantSkipCutscenes && (grfPressed & BTN_Circle)) return true;
+        // a press skips at once: the first one with Instant Skip, else one while the hint shows (the first press of
+        // any button only brings the hint up: a stray press never skips); holding Circle skips too
+        if ((grfPressed & BTN_Circle) && FPressSkips() && (g_pcinput.fInstantSkipCutscenes || fHintBefore)) return true;
         s.tHold += dtReal;
         if (s.tHold >= T_HOLD) return true;
     }
@@ -157,7 +205,7 @@ void DrawHint(const SKIPCUT& s)
     const FONTBRX* pfont = PfontHud();
     const FONTBRX* picons = PfontHudIcons();
     if (!pfont) return;
-    const std::string text = StrPort(picons ? PTX_HoldToSkip : PTX_HoldToSkipNoIcons);   // (the game's language: porttext.h)
+    const std::string text = StrPort(picons ? PTX_PressToSkip : PTX_PressToSkipNoIcons);   // (the game's language: porttext.h)
     const float k = 0.75f;   // (of the size it was tuned with)
     const float size = 24.0f * k;
     // (canvas pixels: the picture's right and bottom edges, the 4:3 canvas's or past them on a wider / taller picture)
@@ -178,7 +226,7 @@ void DrawHint(const SKIPCUT& s)
     g_hud.FillScreenRect(xRight - w - 10.0f * k, yTop - 5.0f * k, xRight + 6.0f * k, yTop + hText + 7.0f * k, glm::vec4(0, 0, 0, 72),
                          depth / 16777216.0f - 1e-4f);
     drawText(text, xRight - w, yTop, size, white, 100.0f);
-    if (s.tHold > 0.0f && picons && !g_pcinput.fInstantSkipCutscenes)
+    if ((s.tHold > T_RING || s.fAck) && picons)
     {
         // the indicator: the Circle icon, a line circling it as the hold fills
         const float hIcon = 26.0f * k;
@@ -186,7 +234,7 @@ void DrawHint(const SKIPCUT& s)
         g_hud.DrawIconGlyph(*picons, 'O', cx, cy, hIcon, depth + 200.0f);
         const float r = hIcon * 0.62f;
         g_hud.DrawRing(cx, cy, r + 3.5f * k, r, 1.0f, glm::vec4(0, 0, 0, 80), 0.99f);
-        g_hud.DrawRing(cx, cy, r + 3.0f * k, r + 0.5f * k, s.tHold / T_HOLD, glm::vec4(250, 250, 250, 128), 0.995f);
+        g_hud.DrawRing(cx, cy, r + 3.0f * k, r + 0.5f * k, s.fAck ? 1.0f : s.tHold / T_HOLD, glm::vec4(250, 250, 250, 128), 0.995f);
     }
 }
 
@@ -259,9 +307,13 @@ bool FUpdateSkipCheck(uint64_t id)
     }
     if (s_frameEnd < 0)
     {
-        if (id == s_idWatch) return false;
-        // (a skip's fast-forward ended the scene at its last step, before this frame's)
-        s_frameEnd = s_fSkip && s_skip.frameStop > s_frameStart ? s_skip.frameStop : frame;
+        // (the same cutscene in both runs: the scenes that follow with the pad still locked included. A skip's
+        // fast-forward ended its scene at its last step, before this frame's: that step is its end)
+        static int s_frameEndChain = -1;
+        if (s_fSkip && id != s_idWatch && s_frameEndChain < 0 && s_skip.frameStop > s_frameStart && !s_skip.fFast)
+            s_frameEndChain = s_skip.frameStop;
+        if (FChainScene(&s_idWatch, &s_frameEndChain, id) >= 0) return false;
+        s_frameEnd = s_frameEndChain;
         std::printf("skipcheck: scene over at frame %d t %.3f\n", s_frameEnd, g_clock.t);
     }
     if (s_cDump < 2 && frame >= s_frameEnd + s_cAfter + 30 * s_cDump)
@@ -292,8 +344,13 @@ void UpdateSkipCut(float dtReal, uint16_t grfHeld, uint16_t grfPressed)
     if (s_skip.fMaskCircle && !(grfHeld & BTN_Circle) && !s_skip.fFast) s_skip.fMaskCircle = false;
     if (s_skip.fFast) return;
     const uint64_t id = IdCutscene();
+    // (the scene after a skipped one, the pad locked all along since: skipped too, FChainScene)
+    if (s_skip.frameArm >= 0 && (!FPadStillLocked() || g_frameJoy - s_skip.frameArm > CSTEP_CHAIN)) s_skip.frameArm = -1;
+    bool fChainStart = false;
     if (s_skip.idScene != id)
     {
+        fChainStart = id && s_skip.frameArm >= 0;
+        if (id) s_skip.frameArm = -1;
         if (std::getenv("SLY2N_SKIPPRINT")) std::printf("skipcut: scene %llu at frame %d\n", static_cast<unsigned long long>(id), g_frameJoy);
         s_skip.idScene = id;
         s_skip.fHint = false;
@@ -321,6 +378,25 @@ void UpdateSkipCut(float dtReal, uint16_t grfHeld, uint16_t grfPressed)
         static int s_c = 0;
         if (s_c++ % 30 == 0) std::printf("skipcut: hint (hold %.2f)\n", s_skip.tHold);
     }
+    // (a skip decided by the player: one frame shows the hint's ring full, so the press is seen taken before the
+    // fast-forward's frame (a long scene's takes a moment); it starts at the next frame's update)
+    if (s_skip.fAck)
+    {
+        s_skip.fAck = false;
+        fStart = fSkippable && id == s_skip.idAck;
+    }
+    else if (fStart && !fCheckSkip && s_frameSkipAt < 0)
+    {
+        s_skip.fAck = true;
+        s_skip.idAck = id;
+        s_skip.fHint = true;
+        return;
+    }
+    if (fChainStart && fSkippable && !fStart && !fCheckSkip)
+    {
+        if (std::getenv("SLY2N_SKIPPRINT")) std::printf("skipcut: the following scene skipped too\n");
+        fStart = true;
+    }
     if (fStart || fCheckSkip) StartFast();
 }
 
@@ -330,9 +406,18 @@ bool FSkipCutStep()
 {
     if (!s_skip.fFast) return false;
     ++s_skip.cstep;
-    if (IdCutscene() != s_skip.idScene || FScptWaitsNow() || s_skip.cstep >= CSTEP_MAX)
+    const uint64_t id = IdCutscene();
+    if (id != s_skip.idScene && id && FPadStillLocked())
     {
+        // (another scene took over in this step, the pad still locked: the same cutscene)
+        s_skip.idScene = id;
+        ++s_skip.cChain;
+    }
+    if (id != s_skip.idScene || FScptWaitsNow() || s_skip.cstep >= CSTEP_MAX)
+    {
+        const bool fArm = id != s_skip.idScene && FPadStillLocked();
         StopFast();
+        s_skip.frameArm = fArm ? g_frameJoy : -1;   // (the scene over, the pad still locked: a following one is skipped too)
         return false;
     }
     return true;
@@ -344,7 +429,9 @@ void DrawSkipCut()
 {
     if (s_skip.fFast)
     {
-        g_hud.Fade(glm::vec4(0, 0, 0, 128));   // (a fast-forward longer than game.cpp's 5 s frame: not shown)
+        // (a fast-forward longer than game.cpp's 5 s frame: not shown; but a frame the game captures (an animated
+        // overlay's, game.cpp) is the game's own)
+        if (!FAnimatedOverlayNeedsFrame() && !FPhotoCapturePending()) g_hud.Fade(glm::vec4(0, 0, 0, 128));
         return;
     }
     DrawHint(s_skip);

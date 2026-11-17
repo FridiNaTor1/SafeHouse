@@ -2,6 +2,7 @@
 // round4low_animation.cpp (0x18E540): oracle-checked or register-level ports of the original's 0x188488..0x191090
 // and the actor's 0x13FF70..0x144E20.
 #include "sly.h"
+#include "envonce.h"
 #include "actioninput.h"
 #include "routetele.h"
 #include "climbsurf.h"
@@ -281,7 +282,7 @@ void UpdateActorLook(ACTOR* pa)
                 }
             }
         SetActorLookTarget(pa, nBest, psBest);
-        static const bool s_fDbg = std::getenv("SLY2N_ACTORLOOK") != nullptr;
+        static const bool s_fDbg = SLY2N_ENV("SLY2N_ACTORLOOK") != nullptr;
         if (s_fDbg)
             std::printf("actorlook %d: t %.3f look %d kind %d on %d next %.2f mask 0x%X\n", pa->palo->oid, g_clock.t,
                         pa->ploLook ? pa->ploLook->oid : -1, pa->nLookKind, pa->fLook, pa->tLookNext, GrfActorLookMask(pa));
@@ -734,13 +735,13 @@ void StartPlayerCounters(ACTOR* pa, bool fReset)
     if (int32_t* pn = PnProgressSlot({psz, "hpCur"})) SetDmgCounter(pa, pn);
     int32_t* pnMp = PnProgressSlot({psz, "mpCur"});
     int* pc = DmgCounterOf(pa);
-    if (std::getenv("SLY2N_HITDEBUG"))
+    if (SLY2N_ENV("SLY2N_HITDEBUG"))
         std::printf("players' start: %s health %d / %d power %d\n", psz, pc ? *pc : -1, DmgCapacityOf(pa), pnMp ? *pnMp : -1);
     if (!pc || !(*pc == 0 || fReset)) return;
     *pc = DmgCapacityOf(pa);                // 0x144188(capacity)
     const int nMpMax = pa->n1300;           // orig 0x1440D0 reads the actor's actual maximum
     if (pnMp) *pnMp = nMpMax;               // 0x1441C0(+0x1300)
-    if (std::getenv("SLY2N_HITDEBUG")) std::printf("players' start: %s refilled: health %d power %d\n", psz, *pc, pnMp ? *pnMp : -1);
+    if (SLY2N_ENV("SLY2N_HITDEBUG")) std::printf("players' start: %s refilled: health %d power %d\n", psz, *pc, pnMp ? *pnMp : -1);
 }
 
 // Debug (F7, not in the original): full health and power for the three players.
@@ -856,7 +857,7 @@ void SetSlyMode(SLY* p, int n)
     p->cq = 0;  // (+0x1880)
     p->tMode = g_clock.t;
     ApplyAsegCur(paseg, palo, tStart, svt, 1, &p->pasegaMode);  // 0x1305B8
-    if (std::getenv("SLY2N_MODEPRINT"))
+    if (SLY2N_ENV("SLY2N_MODEPRINT"))
         std::printf("sly mode %d -> %d: clip %d (%.3f s) t %.3f svt %.3f compatible %d\n", old, n, paseg ? paseg->oid : -1, GDuration(paseg),
                     tStart, svt, fCompatible ? 1 : 0);
     if (dtSeek != 0.0f && p->pasegaMode) SetAsegaSeekTime(p->pasegaMode, g_clock.t + dtSeek);  // 0x131A90
@@ -913,9 +914,9 @@ void SetSlyState(SLY* p, int n, int m)
     float tStart = 0.0f, svt = 1.0f;  // f22 / f23
     uint32_t grfHandles = 0;          // s6
     bool fKeepAnim = false;           // sp+0x60
-    if (static const bool s_fPrint = std::getenv("SLY2N_SLYSTATE") != nullptr; s_fPrint && n != p->state)  // (debug: Sly's state changes)
+    if (static const bool s_fPrint = SLY2N_ENV("SLY2N_SLYSTATE") != nullptr; s_fPrint && n != p->state)  // (debug: Sly's state changes)
         std::printf("slystate: %d -> %d (%d) frame %d t %.3f\n", p->state, n, m, g_iframeMain, g_clock.t);
-    if (std::getenv("SLY2N_XFDBG"))
+    if (SLY2N_ENV("SLY2N_XFDBG"))
         for (XF* x : {PxfPos(palo), PxfRot(palo)})
             if (x) std::printf("set state %d -> %d: xf kind %d mode %d local t %.1f %.1f %.1f world z %.1f\n", p->state, n, x->kind, x->mode, x->mat[3].x, x->mat[3].y, x->mat[3].z, x->matWorld[3].z);
     if (p->state == n)
@@ -1011,7 +1012,7 @@ void SetSlyState(SLY* p, int n, int m)
         case 11: p->grf10E0 &= ~2u; break;  // (the pickpocket)
         case 17:
             p->f1D30 = 0;
-            if (std::getenv("SLY2N_HYPNOPRINT")) std::printf("hypno: leave state 17 -> %d t %.3f\n", n, g_clock.t);
+            if (SLY2N_ENV("SLY2N_HYPNOPRINT")) std::printf("hypno: leave state 17 -> %d t %.3f\n", n, g_clock.t);
             BroadcastTaskEvent(g_psw, 0x38, palo);  // 0x1619A0: the hypnosis over
             break;
         case 21: LeaveSlyClimbSurf(p); break;  // (the climbing surface +0x1F18: climbsurf.cpp)
@@ -1157,8 +1158,8 @@ void SetSlyState(SLY* p, int n, int m)
         case 18: case 19: case 20:
             // the scripted states (18 the script's state machine +0x102C, e.g. the safe house's entry by the splice's
             // slot 88 (4); 19 / 20 a script's animation): the position / rotation records' modes, no velocity, no mode
-            if (n == 18 && !std::getenv("SLY2N_NO18SM")) psm = p->psm102C;
-            if (!std::getenv("SLY2N_NO18XF")) SetSlyXfModes(p, n == 20 ? 2 : 1);
+            if (n == 18 && !SLY2N_ENV("SLY2N_NO18SM")) psm = p->psm102C;
+            if (!SLY2N_ENV("SLY2N_NO18XF")) SetSlyXfModes(p, n == 20 ? 2 : 1);
             p->vecVel = glm::vec3(0.0f);
             SetSlyMode(p, -1);
             break;
@@ -1174,7 +1175,7 @@ void SetSlyState(SLY* p, int n, int m)
             // the hypnosis: its clip +0x1D34 (moving by its root), the tasks told (0x37)
             paseg = PPart<ASEG>(palo, 0x1D34);
             grfapl = 9;
-            if (std::getenv("SLY2N_HYPNOPRINT")) std::printf("hypno: enter state 17 from %d t %.3f clip %d at %.0f %.0f %.0f head %.2f\n", p->state, g_clock.t, paseg ? paseg->oid : -1, PosAloCenter(palo).x, PosAloCenter(palo).y, PosAloCenter(palo).z, p->radHeading);
+            if (SLY2N_ENV("SLY2N_HYPNOPRINT")) std::printf("hypno: enter state 17 from %d t %.3f clip %d at %.0f %.0f %.0f head %.2f\n", p->state, g_clock.t, paseg ? paseg->oid : -1, PosAloCenter(palo).x, PosAloCenter(palo).y, PosAloCenter(palo).z, p->radHeading);
             BroadcastTaskEvent(g_psw, 0x37, palo);  // 0x1619A0
             break;
         case 22:
@@ -1295,7 +1296,7 @@ void SetSlyState(SLY* p, int n, int m)
 void UpdateSlyTransitions(SLY* p)
 {
     int s2 = p->state;
-    if (std::getenv("SLY2N_PPDEBUG") && (GrfbtnHeld(p) & BTN_CIRCLE))
+    if (SLY2N_ENV("SLY2N_PPDEBUG") && (GrfbtnHeld(p) & BTN_CIRCLE))
         std::printf("ppdebug0: t %.3f state %d sub %d\n", g_clock.t, p->state, p->substate);
     for (int iter = 0; iter < 32; ++iter)
     {
@@ -1319,7 +1320,7 @@ void UpdateSlyTransitions(SLY* p)
             {
             case 0: case 1: case 10: case 12:
             {
-                if (std::getenv("SLY2N_PPDEBUG") && (GrfbtnHeld(p) & BTN_CIRCLE))
+                if (SLY2N_ENV("SLY2N_PPDEBUG") && (GrfbtnHeld(p) & BTN_CIRCLE))
                     std::printf("ppdebug: t %.3f state %d mode %d 10E4 %d 10DC %d reach %d\n", g_clock.t, p->state, p->mode, p->n10E4,
                                 p->plo10DC ? int(p->plo10DC->oid) : -1, int(FActorTargetInReach(p, false)));
                 if (p->f1D30) { n = 0x11; fSet = true; break; }
@@ -1356,7 +1357,7 @@ void UpdateSlyTransitions(SLY* p)
                 if (p->n10E4 == 3 && sly2actions::Take(PpadctlOf(p), sly2actions::Action::SlyPickpocket, BTN_CIRCLE, F32(0x3E19999A))) { n = 0xB; fSet = true; break; }
                 if (FBtnTake(p, BTN_CIRCLE, F32(0x3E4CCCCD))) { FInteractCircle(p); break; }
                 const float v = UJoy(p);
-                if (std::getenv("SLY2N_TRANS")) std::printf("  transitions: state %d u %.3f t %.3f\n", p->state, v, g_clock.t);
+                if (SLY2N_ENV("SLY2N_TRANS")) std::printf("  transitions: state %d u %.3f t %.3f\n", p->state, v, g_clock.t);
                 if (p->state != 0) { if (!(0.0f < v)) { n = 0; fSet = true; break; } }
                 else if (!(0.1f < v)) { n = 0; fSet = true; break; }
                 // (PC addition: Carmelita and the guards walk by default and run with R1 held, both in the run state 12: no
@@ -1633,7 +1634,7 @@ void UpdateSlyInput(SLY* p)
             const float radJoyDbg = RadJoy(p);
             p->vecVel = PcCarmStrafeVel(UJoy(p), RadJoy(p), (GrfbtnHeld(p) & BTN_R1) != 0);
             PcCarmFaceAim(p->palo);
-            if (std::getenv("SLY2N_STRAFEDBG"))
+            if (SLY2N_ENV("SLY2N_STRAFEDBG"))
                 std::printf("strafe: rad joy %.1f (before %.1f) aim %.1f vel %.0f %.0f actual %.0f %.0f heading %.1f\n", glm::degrees(RadJoy(p)), glm::degrees(radJoyDbg), glm::degrees(PcCarmAimHeading()),
                             p->vecVel.x, p->vecVel.y, VelAloPos(p->palo).x, VelAloPos(p->palo).y, glm::degrees(p->radHeading));
             break;
@@ -1683,7 +1684,7 @@ void UpdateSlyInput(SLY* p)
                 p->vecVel = -glm::vec3(v);
             }
         if (0.0f < UJoy(p)) SetStepPhysHeading(p->palo, RadJoy(p));
-        if (std::getenv("SLY2N_HYPNOPRINT"))
+        if (SLY2N_ENV("SLY2N_HYPNOPRINT"))
             std::printf("hypno: t %.3f clip %d at %.3f svt %.2f vel %.1f %.1f %.1f actual %.1f u %.2f rad %.2f head %.2f pan %.2f cam %.0f %.0f %.0f yrange %.2f\n", g_clock.t,
                         pasega && pasega->paseg ? pasega->paseg->oid : -1, pasega ? pasega->t : -1.f, pasega ? pasega->svt : 0.f, p->vecVel.x,
                         p->vecVel.y, p->vecVel.z, glm::length(VelAloPos(p->palo)), UJoy(p), RadJoy(p), p->radHeading, std::atan2(g_cm.mat[0].y, g_cm.mat[0].x), g_cm.pos.x, g_cm.pos.y, g_cm.pos.z, g_cm.yScreenRange);
@@ -1789,7 +1790,7 @@ void UpdateSlyStanding(SLY* p)
 // are reported as clip IDs and record indices, including events with no matching lane.
 void TraceSlyModeEvent(const SLY* p, const ASEGMSG9* pm, const char* phase)
 {
-    static const bool enabled = std::getenv("SLY2N_SLYMODEEVENT") != nullptr;
+    static const bool enabled = SLY2N_ENV("SLY2N_SLYMODEEVENT") != nullptr;
     if (!enabled) return;
     const auto clip = [](const ASEGA* a) { return a && a->paseg ? a->paseg->oid : -1; };
     const XF* hand = p->slide.aphandle[0] ? p->slide.aphandle[0]->pxf : nullptr;
@@ -2098,7 +2099,7 @@ int NActorPerceived(ACTOR* pa, NOISETMPL* ptmpl)
         if (FGuardAcceptsNoise(pg, pn))
         {
             r = 1;
-            if (std::getenv("SLY2N_ACTORNOISE")) std::printf("actornoise: guard %d (cid 0x%X) takes it\n", plo->oid, plo->Cid());
+            if (SLY2N_ENV("SLY2N_ACTORNOISE")) std::printf("actornoise: guard %d (cid 0x%X) takes it\n", plo->oid, plo->Cid());
             break;
         }
     }
@@ -2135,7 +2136,7 @@ void UpdateActorNoise(ACTOR* pa)
     case -1: case 2: pa->g10D0 = GClamp01(pa->g10D0 + -4.0f * dt); break;  // 0x2BCC78
     default: break;
     }
-    static const bool s_fDbg = std::getenv("SLY2N_ACTORNOISE") != nullptr;
+    static const bool s_fDbg = SLY2N_ENV("SLY2N_ACTORNOISE") != nullptr;
     if (s_fDbg)
         std::printf("actornoise %d: t %.3f cc %.3f c8 %d k %d d0 %.3f (tmpl %d r %.0f z %.0f..%.0f life %.2f kind %d)\n",
                     pa->palo->oid, g_clock.t, pa->g10CC, pa->n10C8, k, pa->g10D0, ptmpl->nType, ptmpl->sRadius, ptmpl->rz.x,
@@ -2153,7 +2154,7 @@ void UpdateActor(ACTOR* pa)
     // L3: the counters and the job markers (0x1C46C0(+0x150, 0, 0x200) -> 0x140338)
     if (PADCTL* pc = PpadctlOfActor(pa); pc && GrfPadctlTakePressed(pc, BTN_L3, 0.0f)) ShowWorldStats();
     // 0x1403D0: the top job's slot14 takes precedence over the script runner, after the actor-watch update.
-    if (std::getenv("SLY2N_DRIVEWHY") && dynamic_cast<SLY*>(pa))
+    if (SLY2N_ENV("SLY2N_DRIVEWHY") && dynamic_cast<SLY*>(pa))
         std::printf("drivewhy t %.3f df4 %d watch %d jobs %zu run %p\n", g_clock.t, pa->nSubDF4, pa->watch.fActive ? 1 : 0, pa->stack.ajob.size(), pa->prunScript);
     if (pa->nSubDF4 == -1)
     {
@@ -2164,7 +2165,7 @@ void UpdateActor(ACTOR* pa)
                 if (!pa->stack.ajob.empty()) pa->stack.ajob.back()->Drive(pc);
                 else if (pa->prunScript) DriveScptActor(pa->prunScript, pc);
             }
-        static const bool s_fDbg = std::getenv("SLY2N_DRIVEPRINT") != nullptr;
+        static const bool s_fDbg = SLY2N_ENV("SLY2N_DRIVEPRINT") != nullptr;
         if (s_fDbg && pa->prunScript)
         {
             PADCTL* pc = PpadctlOfActor(pa);
@@ -2233,7 +2234,7 @@ void UpdateSlyHook(SLY* p)
         for (glm::vec3& v : anp) v = PosJtLo(plo);
     }
     else return;
-    if (std::getenv("SLY2N_JTPRINT"))
+    if (SLY2N_ENV("SLY2N_JTPRINT"))
     {
         const glm::vec3 c = p->plo19A4 ? PosAloCenter(static_cast<ALO*>(p->plo19A4)) : glm::vec3(0.0f);
         const glm::vec3 w = p->plo19A4 ? glm::vec3(MatWorldOfAlo(static_cast<ALO*>(p->plo19A4))[3]) : glm::vec3(0.0f);
@@ -2243,13 +2244,13 @@ void UpdateSlyHook(SLY* p)
     for (int i = 1; i < p->cq; ++i)
     {
         const float d = DistSegments(glm::vec3(p->aq[i - 1]), glm::vec3(p->aq[i]), anp[i - 1], anp[i]);
-        if (std::getenv("SLY2N_JTPRINT")) std::printf("hook: segment %d d %.2f (np %.1f %.1f %.1f -> %.1f %.1f %.1f)\n", i, d, anp[i - 1].x, anp[i - 1].y, anp[i - 1].z, anp[i].x, anp[i].y, anp[i].z);
+        if (SLY2N_ENV("SLY2N_JTPRINT")) std::printf("hook: segment %d d %.2f (np %.1f %.1f %.1f -> %.1f %.1f %.1f)\n", i, d, anp[i - 1].x, anp[i - 1].y, anp[i - 1].z, anp[i].x, anp[i].y, anp[i].z);
         if (!(d < p->g19AC)) continue;
         if (pcrv)
         {
             p->ploF5C = plo;
             p->sCrvF50 = p->reach.sTarget;
-            if (std::getenv("SLY2N_JTPRINT")) std::printf("sly: the cane caught pipe %d at s %.2f (d %.2f)\n", plo->oid, p->reach.sTarget, d);
+            if (SLY2N_ENV("SLY2N_JTPRINT")) std::printf("sly: the cane caught pipe %d at s %.2f (d %.2f)\n", plo->oid, p->reach.sTarget, d);
             SetSlyState(p, 8, -1);
         }
         else
@@ -2267,7 +2268,7 @@ void UpdateSlyHook(SLY* p)
 // Observer only: match original 0x18BCE0 entry and retain the final update separately.
 static void TraceFeralFrame(SLY* p, const char* prefix)
 {
-    static const bool s_fFeral = std::getenv("SLY2N_FERALPRINT") != nullptr;
+    static const bool s_fFeral = SLY2N_ENV("SLY2N_FERALPRINT") != nullptr;
     if (s_fFeral)
     {
         const PADCTL* pad = PpadctlOf(p);
@@ -2389,7 +2390,7 @@ void UpdateSlyLean(SLY* p)
     const glm::vec3 half = lean * 0.5f;
     set(ah[2], p->jump.state == -1 ? half : glm::vec3(0.0f));
     set(ah[1], p->jump.state == -1 ? half : glm::vec3(0.0f));
-    if (static const bool s_f = std::getenv("SLY2N_LEANPRINT") != nullptr; s_f)
+    if (static const bool s_f = SLY2N_ENV("SLY2N_LEANPRINT") != nullptr; s_f)
         std::printf("lean t %.3f state %d obj %d v (%.1f %.1f %.1f) 19E4 (%.2f %.2f %.2f) feet %.2f %.2f\n", g_clock.t, p->state, plo->oid, v.x, v.y, v.z,
                     lean.x, lean.y, gFootR, ah[3] ? ah[3]->ofs.z : 0.0f, ah[4] ? ah[4]->ofs.z : 0.0f);
 }
@@ -2405,14 +2406,14 @@ void UpdateSly(LO* plo)
     // (debug: SLY2N_JTPRINT=1 at the first update, =N at Sly's N-th update: after the proxies' streaming)
     static int s_cJtUpdate = 0;
     ++s_cJtUpdate;
-    if (!s_fJtPrinted && std::getenv("SLY2N_JTPRINT") && s_cJtUpdate >= std::atoi(std::getenv("SLY2N_JTPRINT")))
+    if (!s_fJtPrinted && SLY2N_ENV("SLY2N_JTPRINT") && s_cJtUpdate >= std::atoi(SLY2N_ENV("SLY2N_JTPRINT")))
     {
         s_fJtPrinted = true;
         PrintJtLists(s_psw);
     }
     // (debug: SLY2N_TELEPORT="X Y Z@N[,H|,k]" or "X Y Z@tT[,H][/wN]" puts Sly there at his N-th update, heading H (",k": kept), as the reference's
     // --dev-teleport (the actors' slot 38 path: TeleportActor's slots 29 / 30 / 35 / 36))
-    static const char* s_szTele = std::getenv("SLY2N_TELEPORT");
+    static const char* s_szTele = SLY2N_ENV("SLY2N_TELEPORT");
     if (s_szTele)
     {
         // (several separated by ';', each "X Y Z@N[,H]")
@@ -2482,7 +2483,7 @@ void UpdateSly(LO* plo)
         CutCm(&g_cm);
     }
     // (debug: SLY2N_NEARLIST="N:R": at Sly's N-th update, every in-world object within R of him: oid, class, place)
-    if (static const char* s_szNear = std::getenv("SLY2N_NEARLIST"); s_szNear && s_psw)
+    if (static const char* s_szNear = SLY2N_ENV("SLY2N_NEARLIST"); s_szNear && s_psw)
     {
         static int s_c = 0;
         const char* q = std::strchr(s_szNear, ':');
@@ -2501,7 +2502,7 @@ void UpdateSly(LO* plo)
         }
     }
     // (debug: SLY2N_BRKLIST=N: at Sly's N-th update, every breakable (cid 0x62): its parent, world state, contacts' owner)
-    if (static const char* s_szBrk = std::getenv("SLY2N_BRKLIST"); s_szBrk && s_psw)
+    if (static const char* s_szBrk = SLY2N_ENV("SLY2N_BRKLIST"); s_szBrk && s_psw)
     {
         static int s_c = 0;
         if (s_c++ == std::atoi(s_szBrk))
@@ -2516,7 +2517,7 @@ void UpdateSly(LO* plo)
     }
     // (debug: SLY2N_TELEGIVER="OID@N[,D]" puts Sly D (default 150) behind the first guard OID in the world at his N-th
     // update, facing it: a pickpocket in the real game; OID -1: the first guard with a prize, -N the N-th (wrapping))
-    static const char* s_szGiver = std::getenv("SLY2N_TELEGIVER");
+    static const char* s_szGiver = SLY2N_ENV("SLY2N_TELEGIVER");
     // (the giver teleport: OID's guard / object; OID -1: the first guard with a prize; D behind it)
     const auto giver = [&](int oid, float d) {
         int cSkip = oid < 0 ? -oid - 1 : 0;  // (OID -N: the N-th such guard, wrapping)
@@ -2559,7 +2560,7 @@ void UpdateSly(LO* plo)
                     // (from the volume's center toward the guard: -D for D < 0, else min(80, half the way), so the
                     // pickpocket's arm reaches a guard walking away at the take: 0x18B460's test, R12)
                     pos += fwd * (d < 0.0f ? -d : std::min(80.0f, 0.5f * glm::length(glm::vec2(g - c))));
-                    if (std::getenv("SLY2N_POCKETPRINT")) std::printf("telegiver: volume center %.0f from the guard\n", glm::length(glm::vec2(g - c)));
+                    if (SLY2N_ENV("SLY2N_POCKETPRINT")) std::printf("telegiver: volume center %.0f from the guard\n", glm::length(glm::vec2(g - c)));
                 }
             }
             SetStepPos(p, pos - glm::vec3(p->vecBase));
@@ -2594,7 +2595,7 @@ void UpdateSly(LO* plo)
         giver(g_routetele.oidGiver, g_routetele.dGiver);
     }
     UpdateActor(p);
-    if (static const bool s_fFloor = std::getenv("SLY2N_FLOORPRINT") != nullptr; s_fFloor)  // (debug: Sly's floor contact)
+    if (static const bool s_fFloor = SLY2N_ENV("SLY2N_FLOORPRINT") != nullptr; s_fFloor)  // (debug: Sly's floor contact)
     {
         const XP* px = p->pxpFloor;
         const ALO* pr = px ? px->axpd[1].paloRoot : nullptr;
@@ -2636,7 +2637,7 @@ void UpdateSly(LO* plo)
     UpdateSlyLean(p);  // 0x189618
     UpdateActorDrawAlpha(p);  // orig: 0x1425B0 observes the final interaction state, after 0x18BCE0
     TraceFeralFrame(p, "FERAL_FRAME");
-    static const bool s_fShadow = std::getenv("SLY2N_SHADOWPRINT") != nullptr;
+    static const bool s_fShadow = SLY2N_ENV("SLY2N_SHADOWPRINT") != nullptr;
     if (s_fShadow)
     {
         const CSnd* sound = PslyGlobal() ? PslyGlobal()->snd2048.get() : nullptr;
@@ -2648,13 +2649,13 @@ void UpdateSly(LO* plo)
                      sound?unsigned(sound->m_grfDirty):0,pad?pad->grfbtn:0,pad?pad->uJoy:0,p->vecVel.x,p->vecVel.y,p->vecVel.z,p->radHeading);
     }
     if (g_pfnSlyUpdated) g_pfnSlyUpdated(p);
-    static const bool s_fCane = std::getenv("SLY2N_CANEPRINT") != nullptr;
+    static const bool s_fCane = SLY2N_ENV("SLY2N_CANEPRINT") != nullptr;
     if (s_fCane && p->mode != -1)
         for (const SOE& e : p->palo->asoe)
             if (e.id & 0x3E)
                 std::printf("cane t %.3f mode %d entry tag %d id 0x%X off %d state %d\n", g_clock.t, p->mode, e.tag, e.id, e.f50 ? 1 : 0, e.state);
     // (debug: SLY2N_HIDETRACE=1: per frame the jump's state, the interaction's kind / state, the position)
-    static const bool s_fHideTrace = std::getenv("SLY2N_HIDETRACE") != nullptr;
+    static const bool s_fHideTrace = SLY2N_ENV("SLY2N_HIDETRACE") != nullptr;
     if (s_fHideTrace)
     {
         const glm::vec3 pos = PosAloCenter(p->palo);
@@ -2663,14 +2664,14 @@ void UpdateSly(LO* plo)
         std::printf("hidetrace t %.4f jump %d kind %d sub %d state %d pos %.2f %.2f %.2f obj %.2f %.2f %.2f\n", g_clock.t, p->jump.state, p->n4C8,
                     p->nSub4CC, p->state, pos.x, pos.y, pos.z, posT.x, posT.y, posT.z);
     }
-    if (static const char* s_szHit = std::getenv("SLY2N_HIDEHIT"); s_szHit && p->n4C8 == 1 && std::atof(s_szHit) < g_clock.t)
+    if (static const char* s_szHit = SLY2N_ENV("SLY2N_HIDEHIT"); s_szHit && p->n4C8 == 1 && std::atof(s_szHit) < g_clock.t)
     {
         void DebugHitHide(LO* plo);  // hide.cpp
         DebugHitHide(p->inter.ploTarget);
     }
-    static const bool s_fPrint = std::getenv("SLY2N_SLYPRINT") != nullptr;
+    static const bool s_fPrint = SLY2N_ENV("SLY2N_SLYPRINT") != nullptr;
     static int s_c = 0;
-    if (s_fPrint && (s_c++ % (std::getenv("SLY2N_SLYPRINT")[0] == '1' ? 15 : 1)) == 0)
+    if (s_fPrint && (s_c++ % (SLY2N_ENV("SLY2N_SLYPRINT")[0] == '1' ? 15 : 1)) == 0)
     {
         const glm::vec3 pos = PosAloCenter(p->palo);
         const SOST* pst = Psost(p->palo);

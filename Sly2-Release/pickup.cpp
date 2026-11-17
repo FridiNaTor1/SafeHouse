@@ -1,6 +1,7 @@
 // pickup.cpp: the pickups (pickup.h). Ported from the decomp's src/hand func_001C4E50 / 001C6508 / 001C60B8 /
 // 001C65F8 / 001C5E48 / 001C6588 / 001C5D18 / 001C6BD0 and the asm (0x1C5148, 0x1C55E0).
 #include "pickup.h"
+#include "envonce.h"
 #include "worldglobals.h"
 
 #include "activate.h"
@@ -173,7 +174,7 @@ void WarnOnce(const std::string& what)
         s_mp[what] = true;
     }
 }
-bool FPrint() { static const bool s_f = std::getenv("SLY2N_PICKUPPRINT") != nullptr; return s_f; }
+bool FPrint() { static const bool s_f = SLY2N_ENV("SLY2N_PICKUPPRINT") != nullptr; return s_f; }
 
 struct PICKUP
 {
@@ -791,7 +792,7 @@ void UpdateCoin(LO* plo)
         if (PFNUPDATE pfn = PfnUpdateOrig(0x1F36E0)) pfn(plo);
         return;
     }
-    if (std::getenv("SLY2N_PICKUPMOVE")) std::printf("pickup %d: update state %d grf 0x%X t %.3f at %p\n", plo->oid, p->state, plo->iupd >= 0 ? g_psw->aupd[plo->iupd].grf : plo->grfUpd, g_clock.t, (void*)plo);
+    if (SLY2N_ENV("SLY2N_PICKUPMOVE")) std::printf("pickup %d: update state %d grf 0x%X t %.3f at %p\n", plo->oid, p->state, plo->iupd >= 0 ? g_psw->aupd[plo->iupd].grf : plo->grfUpd, g_clock.t, (void*)plo);
     UpdatePickupBase(plo, *p);
     if (p->state == 0)
     {
@@ -840,7 +841,7 @@ void UpdatePickupMotion(LO* plo)
         if (FPrint())
             std::printf("pickup %d (cid 0x%X): %s at (%.0f %.0f %.0f) state %d\n", plo->oid, plo->Cid(), p.fWritten ? "placed" : "first move", p.pos.x, p.pos.y, p.pos.z, p.state);
     }
-    if (std::getenv("SLY2N_PICKUPMOVE"))
+    if (SLY2N_ENV("SLY2N_PICKUPMOVE"))
         std::printf("pickup %d: move state %d pos (%.1f %.1f %.1f) vel z %.1f cam (%.0f %.0f %.0f) view (%.2f %.2f %.2f)\n", plo->oid, p.state, p.pos.x, p.pos.y, p.pos.z,
                     p.vel.z, g_cm.pos.x, g_cm.pos.y, g_cm.pos.z, g_cm.mat[0].x, g_cm.mat[0].y, g_cm.mat[0].z);
     const float k = (p.state == 0 || p.state == 5) ? -5.0f * dt + 1.0f : 1.0f;  // D_002C0D4C
@@ -880,7 +881,7 @@ void UpdatePickupMotion(LO* plo)
             else if (px && px == pxf5C) pchnRot = &chn;
             if (pchnPos && pchnRot) break;
         }
-        if (std::getenv("SLY2N_PICKUPMOVE"))
+        if (SLY2N_ENV("SLY2N_PICKUPMOVE"))
             for (const ASEGCHN& chn : PasegdOf(pa->paseg)->achn)
             {
                 XF* px = PxfFindAlo(palo, chn.isub);
@@ -891,13 +892,13 @@ void UpdatePickupMotion(LO* plo)
                             chn.ptrkp ? 1 : 0, px == PxfPos(palo) ? "pos" : px == PxfRot(palo) ? "rot" : px ? "other" : "none", px ? px->kind : -1, v.x, v.y, v.z);
             }
             }
-        if (std::getenv("SLY2N_PICKUPMOVE"))
+        if (SLY2N_ENV("SLY2N_PICKUPMOVE"))
             for (int isub = 0; isub < 4; isub++)
                 if (XF* px = PxfFindAlo(palo, isub))
                     std::printf("  xf %d kind %d world scale %.3f %.3f %.3f local scale %.3f %.3f %.3f\n", isub, px->kind, glm::length(glm::vec3(px->matWorld[0])),
                                 glm::length(glm::vec3(px->matWorld[1])), glm::length(glm::vec3(px->matWorld[2])), glm::length(glm::vec3(px->mat[0])),
                                 glm::length(glm::vec3(px->mat[1])), glm::length(glm::vec3(px->mat[2])));
-        if (std::getenv("SLY2N_PICKUPMOVE"))
+        if (SLY2N_ENV("SLY2N_PICKUPMOVE"))
             std::printf("pickup %d: sm state %d t %.3f chn pos %d rot %d (of %zu) sma cur %d next %d goal %d aseg %d tMax %.2f\n", plo->oid, p.state, pa->t, pchnPos ? 1 : 0, pchnRot ? 1 : 0,
                         PasegdOf(pa->paseg)->achn.size(), OidSmaCur(p.psma), p.psma->ismsNext, OidSmaGoal(p.psma), pa->paseg->oid, PasegdOf(pa->paseg)->tMax);
         if ((pchnPos || pchnRot) && pxf58)
@@ -1066,7 +1067,7 @@ bool FFindPickupFloor(const glm::vec3& pos, std::vector<SOE*>* papsoe, float gDo
     if (0.0f < gUp && PsoeHitTestLineObjects(0, pos, posUp, *papsoe, &lsg) && lsg.t0 == 0.0f)
     {
         if (FPrint()) std::printf("drops: up-cast from (%.3f %.3f %.3f) inside: t1 %g pos1 z %.3f\n", pos.x, pos.y, pos.z, lsg.t1, lsg.pos1.z);
-        if (std::getenv("SLY2N_PICKUPHEX"))
+        if (SLY2N_ENV("SLY2N_PICKUPHEX"))
             std::printf("drops hex: pos %a %a %a up %a %a %a t1 %a plane1 %a %a %a %a pos1 %a %a %a\n", pos.x, pos.y, pos.z, posUp.x, posUp.y,
                         posUp.z, lsg.t1, lsg.plane1.x, lsg.plane1.y, lsg.plane1.z, lsg.plane1.w, lsg.pos1.x, lsg.pos1.y, lsg.pos1.z);
         if (lsg.t1 == 1.0f || lsg.plane1.z < nzMin) return false;
@@ -1077,7 +1078,7 @@ bool FFindPickupFloor(const glm::vec3& pos, std::vector<SOE*>* papsoe, float gDo
     {
         if (!PsoeHitTestLineObjects(0, pos, posDown, *papsoe, &lsg)) return false;
         if (FPrint()) std::printf("drops: down-cast from (%.3f %.3f %.3f): t0 %g t1 %g pos0 z %.3f n0 z %.3f\n", pos.x, pos.y, pos.z, lsg.t0, lsg.t1, lsg.pos0.z, lsg.plane0.z);
-        if (std::getenv("SLY2N_PICKUPHEX"))
+        if (SLY2N_ENV("SLY2N_PICKUPHEX"))
             std::printf("drops hex: down pos %a %a %a t0 %a t1 %a plane0 %a %a %a %a plane1 %a %a %a %a\n", pos.x, pos.y, pos.z, lsg.t0, lsg.t1,
                         lsg.plane0.x, lsg.plane0.y, lsg.plane0.z, lsg.plane0.w, lsg.plane1.x, lsg.plane1.y, lsg.plane1.z, lsg.plane1.w);
         if (lsg.t0 == 0.0f || lsg.plane0.z < nzMin) return false;

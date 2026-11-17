@@ -1,4 +1,5 @@
 #include "po.h"
+#include "envonce.h"
 #include "actor.h"
 #include "booty.h"
 #include "task.h"
@@ -178,7 +179,7 @@ void ApplyTaskObjects(int n, const std::vector<TASKOBJE>& ae)
         if (e.iwrec != -1 && e.iwrec != g_transition.iwrecCur) continue;
         LO* ploOwner = PloFind(e.oidB);
         LO* plo = PloFind(e.oidA, ploOwner);
-        if (std::getenv("SLY2N_TASKDEBUG"))
+        if (SLY2N_ENV("SLY2N_TASKDEBUG"))
             std::fprintf(stderr, "    objects n %d: oid %d owner %d grf 0x%x world %d -> %s %s\n", n, e.oidA, e.oidB, e.grf,
                          e.iwrec, plo ? "found" : "none", plo && (e.grf & grfState) ? "add" : "remove");
         if (!plo) continue;
@@ -193,7 +194,7 @@ void ApplyTaskSms(int n, const std::vector<TASKSME>& ae, int nMode)
 {
     for (const TASKSME& e : ae)
     {
-        if (std::getenv("SLY2N_TASKDEBUG"))
+        if (SLY2N_ENV("SLY2N_TASKDEBUG"))
             std::fprintf(stderr, "    sme n %d mode %d: state %d object %d sm %d id %d instant %d world %d\n", n, nMode, e.nState,
                          e.oid, e.iSm, e.idState, e.fInstant, e.iwrec);
         if (e.nState != -1 && e.nState != n) continue;
@@ -204,7 +205,7 @@ void ApplyTaskSms(int n, const std::vector<TASKSME>& ae, int nMode)
         SMA* psma = nullptr;  // orig 0x1F67E0: the object's SMA (of the SM oid, -1: any)
         for (SMA* p : g_apsma)
             if (p->palo == plo && (e.iSm == -1 || (p->psm && p->psm->oid == e.iSm))) { psma = p; break; }
-        if (std::getenv("SLY2N_TASKDEBUG"))
+        if (SLY2N_ENV("SLY2N_TASKDEBUG"))
             std::fprintf(stderr, "    sm n %d: object %d sm %d state %d -> %s\n", n, e.oid, e.iSm, e.idState, psma ? "found" : "no sma");
         if (!psma) continue;
         int id = e.idState;
@@ -271,7 +272,7 @@ void JobTaskReached(JOB* pjob, TASK* ptask);
 void SetTaskState(TASK* p, int n)
 {
     if (p->nState == n) return;
-    if (n == 1 && std::getenv("SLY2N_TASKDEBUG")) std::printf("task %d: available (%d -> 1) t %.3f\n", p->oid, p->nState, g_clock.t);
+    if (n == 1 && SLY2N_ENV("SLY2N_TASKDEBUG")) std::printf("task %d: available (%d -> 1) t %.3f\n", p->oid, p->nState, g_clock.t);
     if (FTaskLive(p))
     {
         BroadcastTaskEvent(s_psw, 0x26, p);
@@ -411,7 +412,7 @@ void ChangeTaskState(TASK* p, int n)
             FSetProgress({"episode", s_aszEpisode[iep], "percent_complete"}, ref);
         }
     }
-    if (std::getenv("SLY2N_TASKDEBUG") && p->nState >= 2 && nOld < 2)
+    if (SLY2N_ENV("SLY2N_TASKDEBUG") && p->nState >= 2 && nOld < 2)
         std::printf("task %d: %d -> %d (live %d mission %d mode %d transition %d job %d) t %.3f\n", p->oid, nOld, p->nState, FTaskLive(p),
                     int(p->fMission), p->nMode, int(FTransitionBusy()), p->pjob ? p->pjob->oid : -1, g_clock.t);
     if (FTaskLive(p) && nOld != -1 && nOld < 2 && p->nState >= 2)
@@ -464,7 +465,7 @@ void DeactivateTaskCur(TASK* p)
 // orig 0x00163D18 / 0x00163C28: the task becomes the current one
 void ActivateTaskNow(TASK* p)
 {
-    if (std::getenv("SLY2N_TASKDEBUG")) std::printf("task %d: activated (t %.3f) exit %d state %d\n", p->oid, g_clock.t,
+    if (SLY2N_ENV("SLY2N_TASKDEBUG")) std::printf("task %d: activated (t %.3f) exit %d state %d\n", p->oid, g_clock.t,
                                                     p->ploC4 ? p->ploC4->oid : -1, p->ploC4 ? p->ploC4->nState : -9);
     SetTaskCur(p);
     if (p->idChk != -1) SetTaskChk(p);
@@ -505,7 +506,7 @@ void RequestTaskState(TASK* p, int n, LO* ploContext)
     CSAVE saveJob(p->pjob, p->nMode, ploContext);
     if (n == -1) n = 4;
     const int nCur = p->nState;
-    if (std::getenv("SLY2N_TASKDEBUG")) std::printf("task %d: state %d requested (now %d)\n", p->oid, n, nCur);
+    if (SLY2N_ENV("SLY2N_TASKDEBUG")) std::printf("task %d: state %d requested (now %d)\n", p->oid, n, nCur);
     if (nCur == -1) return;
     switch (n)
     {
@@ -740,7 +741,7 @@ void JobCompleteNext(JOB* p)
 void SetJobSeq(JOB* p, int n);
 void JobComplete(JOB* p)
 {
-    if (std::getenv("SLY2N_TASKDEBUG")) std::printf("job %d: complete (t %.3f, sprite %d)\n", p->oid, g_clock.t, p->ploB8 ? p->ploB8->oid : -1);
+    if (SLY2N_ENV("SLY2N_TASKDEBUG")) std::printf("job %d: complete (t %.3f, sprite %d)\n", p->oid, g_clock.t, p->ploB8 ? p->ploB8->oid : -1);
     if (p->ploB8)
     {
         SetJobSeq(p, 1);
@@ -768,7 +769,7 @@ void SetJobSeq(JOB* p, int n)
         grf |= 0x102;  // orig 0x163170: update the live entry on the real clock
         PauseGame(2);  // 0x20EFC0
     }
-    if (std::getenv("SLY2N_TASKDEBUG")) std::printf("job %d: closing sequence %d -> %d (t %.3f, real %.3f)\n", p->oid, p->nSeq, n, g_clock.t, g_clock.t3C);
+    if (SLY2N_ENV("SLY2N_TASKDEBUG")) std::printf("job %d: closing sequence %d -> %d (t %.3f, real %.3f)\n", p->oid, p->nSeq, n, g_clock.t, g_clock.t3C);
     p->nSeq = n;
     p->tSeq = g_clock.t;
     switch (n)
@@ -821,8 +822,8 @@ void JobOnEvent(JOB* p, int n, LO* plo)
 // orig 0x001D8B20 with "oidPoCurrent" (0x2A5238): the task's player character (+0xC0) into the progress
 void SetProgressPoCurrent(OID oid)
 {
-    if (std::getenv("SLY2_HUDDBG")) std::printf("task: oidPoCurrent 0x%X\n", oid);
-    if (oid == -1 || std::getenv("SLY2_NOPOCUR")) return;
+    if (SLY2N_ENV("SLY2_HUDDBG")) std::printf("task: oidPoCurrent 0x%X\n", oid);
+    if (oid == -1 || SLY2N_ENV("SLY2_NOPOCUR")) return;
     CRef ref;
     ref.SetS32(oid);
     FSetProgress({"oidPoCurrent"}, ref);
@@ -911,7 +912,7 @@ void TaskMgrOnEvent(int n)
             CSAVE save(p, 0, nullptr);
             SaveTask(p);
         }
-        if (std::getenv("SLY2N_TASKDEBUG"))
+        if (SLY2N_ENV("SLY2N_TASKDEBUG"))
         {
             std::fprintf(stderr, "tasks: %zu ordered of %zu; job %d task %d chk %d\n", a.size(), AptaskAll().size(),
                          g_taskmgr.oidJob, g_taskmgr.oidTask, g_taskmgr.oidQueued);
@@ -919,14 +920,14 @@ void TaskMgrOnEvent(int n)
                 std::fprintf(stderr, "  task %d state %d job %d prereq %zu next %zu objects %zu sms %zu mode %d prE0 %zu %s\n",
                              p->oid, p->nState, p->pjob ? p->pjob->oid : -1, p->aptaskPrereq.size(), p->aptaskNext.size(),
                              p->aobje.size(), p->asme.size(), p->nMode, p->prE0.akey.size(), StrProgressKey(p->prE0.akey).c_str());
-            if (std::getenv("SLY2N_TASKDEBUG")[0] == '2')  // (the tasks' prerequisites)
+            if (SLY2N_ENV("SLY2N_TASKDEBUG")[0] == '2')  // (the tasks' prerequisites)
                 for (TASK* p : AptaskAll())
                 {
                     std::string str;
                     for (TASK* px : p->aptaskPrereq) str += " " + std::to_string(px->oid) + "(" + std::to_string(px->nState) + ")";
                     std::fprintf(stderr, "    task %d prereqs%s\n", p->oid, str.c_str());
                 }
-            if (std::getenv("SLY2N_TASKDEBUG")[0] == '2')  // (the tasks' objects: oid, owner, flags, and where they are)
+            if (SLY2N_ENV("SLY2N_TASKDEBUG")[0] == '2')  // (the tasks' objects: oid, owner, flags, and where they are)
                 for (TASK* p : AptaskAll())
                     for (const TASKOBJE& e : p->aobje)
                     {
@@ -934,7 +935,7 @@ void TaskMgrOnEvent(int n)
                         const glm::vec3 pos = po ? PosAi(po) : glm::vec3(0.0f);
                         std::fprintf(stderr, "    task %d object %d owner %d grf 0x%X cid 0x%X at %.0f %.0f %.0f\n", p->oid, e.oidA, e.oidB, e.grf,
                                      po ? po->Cid() : 0, pos.x, pos.y, pos.z);
-            if (std::getenv("SLY2N_TASKDEBUG")[0] == '2')  // (each task's prerequisites and successors)
+            if (SLY2N_ENV("SLY2N_TASKDEBUG")[0] == '2')  // (each task's prerequisites and successors)
                 for (TASK* p : AptaskAll())
                 {
                     std::fprintf(stderr, "    task %d prereqs", p->oid);
@@ -1135,7 +1136,7 @@ void UpdateTask(LO* plo)
     }
     if (p->ploShown)
     {
-        if (std::getenv("SLY2N_TASKMARKERS") && p->nState == 1 && !p->ploShown->fInWorld)
+        if (SLY2N_ENV("SLY2N_TASKMARKERS") && p->nState == 1 && !p->ploShown->fInWorld)
         {
             const glm::vec3 pos = PosAi(p->ploShown);
             std::printf("taskmarker %d object %d at %.3f %.3f %.3f checkpoint %d world %d hero %d\n",
@@ -1151,17 +1152,17 @@ void UpdateJob(LO* plo)
 {
     JOB* p = static_cast<JOB*>(plo);
     if (p->tNextUpdate <= g_clock.t) HandleLoSpliceEvent(p, 1, true, 0, nullptr);
-    if (static const bool s_f = std::getenv("SLY2N_JOBSEQPRINT") != nullptr; s_f && p->nSeq)
+    if (static const bool s_f = SLY2N_ENV("SLY2N_JOBSEQPRINT") != nullptr; s_f && p->nSeq)
         std::printf("jobseq %d: seq %d t %.3f b8 %d busy %d bc %d next %d cc %d\n", p->oid, p->nSeq, g_clock.t, p->ploB8 ? p->ploB8->oid : -1,
                     p->ploB8 ? int(FScreenObjBusy(p->ploB8, p->nSeq == 1 ? p->nB0 : p->nB4)) : -1, p->ploBC ? p->ploBC->oid : -1,
                     p->ptaskNext ? p->ptaskNext->oid : -1, p->ploCC ? p->ploCC->oid : -1);
-    if (std::getenv("SLY2N_JOBSEQPRINT") && p->nSeq == 3 && p->ploBC) ::PrintScreenObjState(p->ploBC);
+    if (SLY2N_ENV("SLY2N_JOBSEQPRINT") && p->nSeq == 3 && p->ploBC) ::PrintScreenObjState(p->ploBC);
     // each step once its sprite's part has played (0x2121E8: the group of the part busy)
     switch (p->nSeq)
     {
     case 1:
         if (p->ploB8 && FScreenObjBusy(p->ploB8, p->nB0)) break;
-        if (std::getenv("SLY2N_TASKDEBUG"))
+        if (SLY2N_ENV("SLY2N_TASKDEBUG"))
             std::printf("job %d: sprite %d part 0x%X not busy (t %.3f)\n", p->oid, p->ploB8 ? p->ploB8->oid : -1, p->nB0, g_clock.t);
         JobCompleteClose(p);  // 0x162F60
         SetJobSeq(p, (p->ptaskNext || p->ploCC) ? 3 : 2);
@@ -1188,7 +1189,7 @@ struct INITTASKUPDATES
         // (debug: SLY2N_JOBCOMPLETE=job@frame completes that job's last task at that update: its closing sequence)
         RegisterSwPass(0x1F77C0, [](SW* psw) {
             static int s_c = 0;
-            const char* sz = std::getenv("SLY2N_JOBCOMPLETE");
+            const char* sz = SLY2N_ENV("SLY2N_JOBCOMPLETE");
             if (sz && !std::strcmp(sz, "list") && s_c++ == 2)
                 for (LO* plo : psw->mpcidaplo[0x84])
                     if (JOB* p = PjobFromLo(plo))
@@ -1196,7 +1197,7 @@ struct INITTASKUPDATES
             // (debug: SLY2N_TASKSET="task:state@frame[,task:state@frame...]" requests those task states at those updates,
             // as a script would)
             static int s_cSet = 0;
-            if (const char* szSet = std::getenv("SLY2N_TASKSET"))
+            if (const char* szSet = SLY2N_ENV("SLY2N_TASKSET"))
             {
                 ++s_cSet;
                 for (const char* q = szSet; q && *q; q = std::strchr(q, ',') ? std::strchr(q, ',') + 1 : nullptr)
@@ -1245,7 +1246,7 @@ void InitTasks(SW* psw)
         p->idChk = NField(p, 0xB8, -1);
         p->iwrec = NField(p, 0xBC, -1);
         p->oidPo = NField(p, 0xC0, -1);
-        if (std::getenv("SLY2N_TASKMARKERS") && p->ploShown)
+        if (SLY2N_ENV("SLY2N_TASKMARKERS") && p->ploShown)
         {
             const glm::vec3 pos = PosAi(p->ploShown);
             std::printf("taskentry %d object %d at %.3f %.3f %.3f checkpoint %d world %d hero %d\n",
@@ -1363,7 +1364,7 @@ float GSuck()
 // death / the job's restart (+0.1, +0x8)
 void SuckOnEvent(int n, LO* plo)
 {
-    static const bool s_fPrint = std::getenv("SLY2N_SUCKPRINT") != nullptr;  // (debug: the suck's changes)
+    static const bool s_fPrint = SLY2N_ENV("SLY2N_SUCKPRINT") != nullptr;  // (debug: the suck's changes)
     if (s_fPrint && (n == 0x10 || n == 0x1D || n == 0x22 || n == 0x25))
         std::printf("suck: event 0x%X t %.3f value %.3f\n", n, g_clock.t, GSuck());
     switch (n)
@@ -1395,7 +1396,7 @@ void BroadcastTaskEvent(SW* psw, int n, LO* plo)
     TaskMgrOnEvent(n);
     SuckOnEvent(n, plo);  // 0x154A90 (D_002DE578's handler)
     JOB* pjob = psw->tasks.pjobCur;
-    if ((std::getenv("SLY2N_TASKDEBUG") && n == 0x3B) || (std::getenv("SLY2N_TASKEVENTPRINT") && n == 0x1A))
+    if ((SLY2N_ENV("SLY2N_TASKDEBUG") && n == 0x3B) || (SLY2N_ENV("SLY2N_TASKEVENTPRINT") && n == 0x1A))
     {
         std::printf("task event 0x%X (object %d, job %d): active", n, plo ? plo->oid : -1, pjob ? pjob->oid : -1);
         for (TASK* p : psw->tasks.aptaskActive) std::printf(" %d(job %d live %d)", p->oid, p->pjob ? p->pjob->oid : -1, int(FTaskLive(p)));
@@ -1623,11 +1624,11 @@ std::vector<JOBINFO> AjobinfoOfLoadedWorld(SW* psw)
             if (pj->prD8.F()) it->aprFlag.push_back(pj->prD8);
         }
     }
-    if (const char* szf = std::getenv("SLY2N_STRFIND"))   // (debug: the localized strings containing the text)
+    if (const char* szf = SLY2N_ENV("SLY2N_STRFIND"))   // (debug: the localized strings containing the text)
         for (int id = 0; id < 4000; ++id)
             if (const std::string str = StrLocalized(psw, id); str.find(szf) != std::string::npos)
                 std::printf("strfind: %d '%s'\n", id, str.substr(0, 120).c_str());
-    if (std::getenv("SLY2N_REPLAYPRINT"))   // (debug: every job object of the world, its first / last task, its tasks)
+    if (SLY2N_ENV("SLY2N_REPLAYPRINT"))   // (debug: every job object of the world, its first / last task, its tasks)
         for (LO* plo : psw->mpcidaplo[0x84])
             if (JOB* pj = PjobFromLo(plo))
             {

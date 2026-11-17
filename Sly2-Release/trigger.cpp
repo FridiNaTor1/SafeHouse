@@ -7,6 +7,7 @@
 // The class 0x53 pad update is in pad.cpp; update.cpp owns the deferred-call queue.
 
 #include "activate.h"
+#include "envonce.h"
 #include "worldglobals.h"
 #include "animfind.h"
 #include "aseg.h"
@@ -121,7 +122,7 @@ void ApplyRsmg(LO* plo, const TRIGSTATE& t, bool fTrigger)
     {
         LO* po = nullptr;
         const int c = CploFindSwNearest(plo, e[0], &po);
-        if (std::getenv("SLY2N_RSMGDEBUG"))
+        if (SLY2N_ENV("SLY2N_RSMGDEBUG"))
         {
             std::printf("rsmg trigger %d (chain", plo->oid);
             for (const LO* p = plo->paloParent; p; p = p->paloParent) std::printf(" %d", p->oid);
@@ -155,7 +156,7 @@ void RunTriggerList(LO* plo, TRIGSTATE& t, int i)
         // with kind 4 and this owner, preserving each instance's script.
         if (LO* pscpt = PloFindRelative(plo, oidScpt); pscpt && FCidDerivedFrom(pscpt->Cid(), 0x72))
         {
-            if (std::getenv("SLY2N_TASKDEBUG")) std::printf("trigger %d: script %d started\n", plo->oid, oidScpt);
+            if (SLY2N_ENV("SLY2N_TASKDEBUG")) std::printf("trigger %d: script %d started\n", plo->oid, oidScpt);
             StartScpt(pscpt, t.ploFound);
         }
     if (!t.atask.empty()) ApplyCheckpointTasks(g_psw, plo, t.atask);
@@ -169,10 +170,10 @@ void SetTriggerState(LO* plo, TRIGSTATE& t, int n)
     const bool f1 = old == 0 && n == 1, f0 = old != -1 && n == 0;
     t.state = n;
     t.tState = g_clock.t;
-    if (const char* selected = std::getenv("SLY2N_TRIGGERSTATE"); selected && plo->oid == std::atoi(selected))
+    if (const char* selected = SLY2N_ENV("SLY2N_TRIGGERSTATE"); selected && plo->oid == std::atoi(selected))
         std::printf("TRIGGERSTATE,%.9g,%d,%d,%d,%d\n", g_clock.t, plo->oid,
                     plo->paloParent && plo->paloParent->paloParent ? plo->paloParent->paloParent->oid : -1, old, n);
-    if (std::getenv("SLY2N_TASKDEBUG")) std::printf("trigger %d: state %d -> %d\n", plo->oid, old, n);
+    if (SLY2N_ENV("SLY2N_TASKDEBUG")) std::printf("trigger %d: state %d -> %d\n", plo->oid, old, n);
     if (f1)
     {
         HandleLoSpliceEvent(plo, 5, false, 0, nullptr);
@@ -215,12 +216,12 @@ void UpdateVolumeTrigger(LO* plo)
     if (PFNUPDATE pfn = PfnUpdateOrig(0x1A5E28)) pfn(plo);
     s_psw = g_psw;
     TRIGSTATE& t = s_mptrig[plo];
-    if (std::getenv("SLY2N_TRIGDBG") && plo->oid == std::atoi(std::getenv("SLY2N_TRIGDBG")))
+    if (SLY2N_ENV("SLY2N_TRIGDBG") && plo->oid == std::atoi(SLY2N_ENV("SLY2N_TRIGDBG")))
         std::printf("trigdbg %d: update, state %d init %d\n", plo->oid, t.state, t.fInit);
     if (!t.fInit)
     {
         InitTrigger(plo, t);
-        if (std::getenv("SLY2N_TASKDEBUG"))
+        if (SLY2N_ENV("SLY2N_TASKDEBUG"))
         {
             std::string str;
             for (auto id : t.aidObj) str += " id " + std::to_string(int(id));
@@ -228,7 +229,7 @@ void UpdateVolumeTrigger(LO* plo)
             std::printf("trigger %d: first update: %zu ids, %zu classes, script %d:%s\n", plo->oid, t.aidObj.size(), t.acid.size(),
                         int(plo->U32Field(0, 0x1DC, uint32_t(-1))), str.c_str());
         }
-        if (std::getenv("SLY2N_TRIGDBG") && plo->oid == std::atoi(std::getenv("SLY2N_TRIGDBG")))
+        if (SLY2N_ENV("SLY2N_TRIGDBG") && plo->oid == std::atoi(SLY2N_ENV("SLY2N_TRIGDBG")))
             if (const LOXSHAPE* px = dynamic_cast<const LOXSHAPE*>(plo))
             {
                 glm::vec3 mn(1e30f), mx(-1e30f);
@@ -290,7 +291,7 @@ void UpdateVolumeTrigger(LO* plo)
     t.ploFound = nullptr;
     for (LO* po : apo)
     {
-        if (std::getenv("SLY2N_TRIGDBG") && plo->oid == std::atoi(std::getenv("SLY2N_TRIGDBG")))
+        if (SLY2N_ENV("SLY2N_TRIGDBG") && plo->oid == std::atoi(SLY2N_ENV("SLY2N_TRIGDBG")))
         {
             const LOXSHAPE* px = dynamic_cast<const LOXSHAPE*>(plo);
             const glm::vec3 pos = FCidDerivedFrom(po->Cid(), 0x30) ? PosAloCenter(static_cast<ALO*>(po)) : glm::vec3(0.0f);
@@ -312,7 +313,7 @@ void UpdateVolumeTrigger(LO* plo)
     if (fTrack && aploInside != t.aploInside)
     {
         t.aploInside = std::move(aploInside);
-        if (const char* selected = std::getenv("SLY2N_TRIGGERSTATE"); selected && plo->oid == std::atoi(selected))
+        if (const char* selected = SLY2N_ENV("SLY2N_TRIGGERSTATE"); selected && plo->oid == std::atoi(selected))
         {
             std::printf("TRIGGERSET,%.9g,%d,%d,%zu", g_clock.t, plo->oid,
                         plo->paloParent && plo->paloParent->paloParent ? plo->paloParent->paloParent->oid : -1, t.aploInside.size());
@@ -362,7 +363,7 @@ struct INITTRIGGERS
         RegisterObjectSetter(432, [](LO* plo, const CRef& r) {
             TRIGSTATE& t = s_mptrig[plo];
             LO* po = r.m_tagk == TAGK_Basic ? dynamic_cast<LO*>(r.m_pbasic) : nullptr;
-            if (std::getenv("SLY2N_TASKDEBUG"))
+            if (SLY2N_ENV("SLY2N_TASKDEBUG"))
                 std::printf("trigger %d: object %d added (%zu + %zu)\n", plo->oid, po ? po->oid : -1, t.aidObj.size(), t.aploObj.size());
             if (po && t.aidObj.size() + t.aploObj.size() < 8) t.aploObj.push_back(po);
         });
@@ -387,7 +388,7 @@ struct INITTRIGGERS
             // debug: SLY2N_STARTSCPT=oid@frame[:starter] starts a script
             static int s_cframe = 0;
             ++s_cframe;
-            if (const char* sz = std::getenv("SLY2N_STARTSCPT"); sz && std::strchr(sz, '@') && s_cframe == std::atoi(std::strchr(sz, '@') + 1))
+            if (const char* sz = SLY2N_ENV("SLY2N_STARTSCPT"); sz && std::strchr(sz, '@') && s_cframe == std::atoi(std::strchr(sz, '@') + 1))
                 if (LO* p = PloFindSwObjectByOid(psw, std::atoi(sz)))
                 {
                     // (":starter" an object oid or instance alias: the script's starter, as method 613 passes it)
@@ -397,8 +398,8 @@ struct INITTRIGGERS
                             if (up->oid == std::atoi(c + 1) || up->oidInstance == std::atoi(c + 1)) { ploStarter = up.get(); break; }
                     StartScpt(p, ploStarter);
                 }
-            if (std::getenv("SLY2N_TRIGDBG"))
-                if (LO* p = PloFindSwObjectByOid(psw, std::atoi(std::getenv("SLY2N_TRIGDBG"))))
+            if (SLY2N_ENV("SLY2N_TRIGDBG"))
+                if (LO* p = PloFindSwObjectByOid(psw, std::atoi(SLY2N_ENV("SLY2N_TRIGDBG"))))
                     std::printf("trigdbg %d: removed %d inworld %d iupd %d grfUpd 0x%x\n", p->oid, p->fRemoved, p->fInWorld, p->iupd,
                                 p->iupd >= 0 ? psw->aupd[size_t(p->iupd)].grf : p->grfUpd);
             static uint32_t s_serial = 0;
@@ -409,12 +410,12 @@ struct INITTRIGGERS
             for (const auto& up : psw->aploAll)
             {
                 LO* plo = up.get();
-                if (plo && plo->oid == 150310 && std::getenv("SLY2N_TASKDEBUG"))
+                if (plo && plo->oid == 150310 && SLY2N_ENV("SLY2N_TASKDEBUG"))
                     std::printf("trigger 150310: cid 0x%X slot 16 0x%X\n", plo->Cid(), plo->pcls ? plo->pcls->PfnOrig(16) : 0);
                 if (!plo || !plo->pcls || plo->pcls->PfnOrig(16) != 0x149440) continue;
                 if (plo->iupd >= 0) psw->aupd[static_cast<size_t>(plo->iupd)].grf |= GRFUPD_Update;
                 else plo->grfUpd |= GRFUPD_Update;
-                if (std::getenv("SLY2N_TASKDEBUG")) std::printf("trigger %d: a volume trigger (iupd %d)\n", plo->oid, plo->iupd);
+                if (SLY2N_ENV("SLY2N_TASKDEBUG")) std::printf("trigger %d: a volume trigger (iupd %d)\n", plo->oid, plo->iupd);
             }
         });
         // orig 0x104718 (EOPID 366, a shape's option 108): the point inside the shape (0x227C90), e.g. Paris' follow
@@ -448,7 +449,7 @@ struct INITTRIGGERS
         auto addTask = [](LO* plo, const std::vector<CRef>& a) {
             TRIGSTATE& t = s_mptrig[plo];
             if (t.atask.size() < 4) t.atask.emplace_back(NArg(a, 0, -1), NArg(a, 1, -1));
-            if (std::getenv("SLY2N_TASKREFS"))
+            if (SLY2N_ENV("SLY2N_TASKREFS"))
                 std::fprintf(stderr, "taskref trigger %d (cid 0x%X): task %d state %d\n", plo->oid, plo->Cid(), NArg(a, 0, -1), NArg(a, 1, -1));
             return CRef(TAGK_Void);
         };

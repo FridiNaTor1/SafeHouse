@@ -6,6 +6,7 @@
 // func_001880D8.c / func_00187E88.c (the pad's steps).
 
 #include "rumble.h"
+#include "envonce.h"
 #include "vr.h"
 #include "frontend.h"
 #include "cheat.h"
@@ -396,7 +397,7 @@ int IepEpMenuShown() { return s_epm.plo && s_epm.mode == 8 && s_epm.sub == -1 &&
 void SetExitState(LO* plo, int n)
 {
     if (n == plo->nState) return;
-    if (std::getenv("SLY2N_EXITPRINT")) std::printf("exit %d: state %d -> %d t %.3f\n", plo->oid, plo->nState, n, g_clock.t);
+    if (SLY2N_ENV("SLY2N_EXITPRINT")) std::printf("exit %d: state %d -> %d t %.3f\n", plo->oid, plo->nState, n, g_clock.t);
     if (n == 4)
     {
         SetLoSt(g_psw, plo, 1);  // 0x1A6CA8: keep updating through the exit's delay.
@@ -432,7 +433,7 @@ void TriggerExit(LO* plo)
     RevokeCmPolicy(&g_cm, 2, -1, &g_cmpolicies.cpfree, nullptr, nullptr);
     SetExitState(plo, 4);
     s_mptLoad[plo] = g_clock.t + GFieldLo(plo, 0x160, 0.0f);
-    if (std::getenv("SLY2N_EXITPRINT"))
+    if (SLY2N_ENV("SLY2N_EXITPRINT"))
         std::printf("exit %d: fired t %.3f delay %.3f point %d wipe %d\n", plo->oid, g_clock.t, GFieldLo(plo, 0x160, 0.0f),
                     int(plo->U32Field(0, 0x150, 0x189)), int(plo->U32Field(0, 0x154, uint32_t(-1))));
     HandleLoSpliceEvent(plo, 5, false, 0, nullptr);
@@ -490,7 +491,7 @@ void UpdateExit(LO* plo, SW* psw)
     for (size_t i = 1; i < px->aabKey.size(); ++i)
     {
         QueueMovie(px->aabKey[i].data());
-        if (std::getenv("SLY2N_EXITPRINT"))
+        if (SLY2N_ENV("SLY2N_EXITPRINT"))
         {
             const FK fk = FkFromRecord(px->aabKey[i].data());
             std::printf("exit %d: movie %u queued (%u bytes)\n", plo->oid, fk.id, fk.cb);
@@ -596,7 +597,7 @@ void ReadSaveSlots(const std::string& dirDev)
         const std::string name = "save" + std::to_string(i + 1);
         s.path = cane::utf8(dirUser / name);
         std::string pathRead = s.path;
-        static const bool s_fNoCard = std::getenv("SLY2N_NOCARD") != nullptr;   // (debug: no card: a new game, no card messages)
+        static const bool s_fNoCard = SLY2N_ENV("SLY2N_NOCARD") != nullptr;   // (debug: no card: a new game, no card messages)
         if (!fUser && !dirDev.empty() && !s_fNoCard && i < kSlotsCard) pathRead = dirDev + "/" + name;   // (the development card until the user has one)
         std::ifstream in(pathRead, std::ios::binary);
         if (!in) continue;
@@ -730,7 +731,7 @@ void StartBootSequence(bool fMovie)
         ReadSaveSlots(g_fDevCard ? SLY2N_DEV_ROOT "/build/saves/round4-user-card/memcard0/BASCUS-97316YAOTWTD!" : "");
         return (void)RequestTransition(nullptr, g_disc.PbElf(VA_FK_BOOT_WORLD, 64), 0x189, -1, 1, -1);
     }
-    if (g_ncardMode == 0) g_ncardMode = std::getenv("SLY2N_NOCARD") ? 2 : 1;
+    if (g_ncardMode == 0) g_ncardMode = SLY2N_ENV("SLY2N_NOCARD") ? 2 : 1;
     ReadSaveSlots(g_fDevCard ? SLY2N_DEV_ROOT "/build/saves/round4-user-card/memcard0/BASCUS-97316YAOTWTD!" : "");
     RequestTransition(nullptr, g_disc.PbElf(VA_FK_BOOT_WORLD, 64), 0x189, -1, 1, -1);
 }
@@ -757,10 +758,10 @@ void PlayQueuedMovies(bool fWindow)
     const auto aab = std::move(s_aabMovie);
     s_aabMovie.clear();
     // (test: SLY2N_MOVIESHEADLESS: played headless too, into the hidden window)
-    if (!fWindow && std::getenv("SLY2N_MOVIESHEADLESS")) fWindow = true;
+    if (!fWindow && SLY2N_ENV("SLY2N_MOVIESHEADLESS")) fWindow = true;
     if (!fWindow)   // (headless: skipped; SLY2N_TRANSLOG names them)
     {
-        if (std::getenv("SLY2N_TRANSLOG"))
+        if (SLY2N_ENV("SLY2N_TRANSLOG"))
             for (const auto& ab : aab) std::printf("movie %u (headless: skipped)\n", FkFromRecord(ab.data()).id);
         return;
     }
@@ -824,8 +825,8 @@ void StartFrontEnd(SW* psw, int grfReq)
     // runner's command 0x44 (ShowTitle) once the intro (or its skip) is over
     if (grfReq & 1) s_ploTitle = PloFindSwObjectByOid(psw, 0x5D2);
     // the episode menu (class 0x83) and the exits (class 0x1A, armed: state 3 when their option says so)
-    if (std::getenv("SLY2_DUMPOPTS"))
-        for (LO* plo : AploOfClass(psw, CID(std::strtol(std::getenv("SLY2_DUMPOPTS"), nullptr, 0))))
+    if (SLY2N_ENV("SLY2_DUMPOPTS"))
+        for (LO* plo : AploOfClass(psw, CID(std::strtol(SLY2N_ENV("SLY2_DUMPOPTS"), nullptr, 0))))
         {
             std::printf("opts of %d (cid 0x%X):", plo->oid, plo->Cid());
             for (const OPT& o : plo->aopt)
@@ -960,7 +961,7 @@ void UpdateFrontEnd(SW* psw)
             if (fLanguages && g_ncardMode == 0)
             {
                 // orig (Europe) 0x1DDDE8: the first Start turns the card on (0x1ACD20(0x2ED950, 1)): its slots are read
-                g_ncardMode = std::getenv("SLY2N_NOCARD") ? 2 : 1;
+                g_ncardMode = SLY2N_ENV("SLY2N_NOCARD") ? 2 : 1;
                 ReadSaveSlots(g_fDevCard ? SLY2N_DEV_ROOT "/build/saves/round4-user-card/memcard0/BASCUS-97316YAOTWTD!" : "");
                 ChooseNewestSlot();
                 s_fTitleCardWait = true;
@@ -974,7 +975,7 @@ void UpdateFrontEnd(SW* psw)
         }
     }
     if (s_epm.plo) UpdateEpMenu(s_epm, psw);
-    if (static SW* s_pswListed = nullptr; std::getenv("SLY2N_EXITPRINT") && psw && psw != s_pswListed)
+    if (static SW* s_pswListed = nullptr; SLY2N_ENV("SLY2N_EXITPRINT") && psw && psw != s_pswListed)
     {
         s_pswListed = psw;
         for (LO* plo : AploOfClass(psw, 0x1A))

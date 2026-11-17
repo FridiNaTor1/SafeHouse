@@ -6,6 +6,7 @@
 // build/hand_wip/func_001D6B00.cpp (readable C).
 
 #include "objmethod.h"
+#include "envonce.h"
 #include "worldglobals.h"
 #include <string>
 void PrintRef(const CRef& ref, std::string* ps);  // bif.cpp (debug)
@@ -120,7 +121,7 @@ LAUNCHER& Launcher(LO* plo)
     // e.g. world 8's turret launcher 9070 (natively only a script's seto! set them: its shots went to the origin)
     if (const OPTVAL* v = opt(460)) l.ptarget = v->pbasic ? dynamic_cast<LO*>(v->pbasic) : (v->n != -1 && v->n != 0 ? PloFindSwNearest(plo, v->n) : nullptr);
     if (const OPTVAL* v = opt(461)) l.offset = glm::vec3(v->ag[0], v->ag[1], v->ag[2]);
-    if (std::getenv("SLY2N_HITDEBUG"))
+    if (SLY2N_ENV("SLY2N_HITDEBUG"))
         std::printf("launcher %d: loaded target %d offset %.1f %.1f %.1f\n", plo->oid, l.ptarget ? l.ptarget->oid : -1, l.offset.x, l.offset.y, l.offset.z);
     if (const OPTVAL* v = opt(462)) l.polyPredict = glm::vec3(v->ag[0], v->ag[1], v->ag[2]);
     if (const OPTVAL* v = opt(463)) l.rangePredict = glm::vec2(v->ag[0], v->ag[1]);
@@ -168,10 +169,10 @@ void Launch(LO* plaunch, LO* po)
 {
     if (!po || !FCidDerivedFrom(po->Cid(), 0x30)) return;
     ALO* palo = static_cast<ALO*>(po);
-    if (std::getenv("SLY2N_PROJEND"))  // (debug: every launch's time)
+    if (SLY2N_ENV("SLY2N_PROJEND"))  // (debug: every launch's time)
         std::printf("launch t %.3f %d by %d\n", g_clock.t, po->oid, plaunch ? plaunch->oid : -1);
     // (debug: SLY2N_RANDATLAUNCH=oid:state: the random state set at this object's launch, e.g. a reference's at 0x1D6B00)
-    if (static const char* s_sz = std::getenv("SLY2N_RANDATLAUNCH"); s_sz && std::atoi(s_sz) == po->oid && std::strchr(s_sz, ':'))
+    if (static const char* s_sz = SLY2N_ENV("SLY2N_RANDATLAUNCH"); s_sz && std::atoi(s_sz) == po->oid && std::strchr(s_sz, ':'))
     {
         static bool s_fDone = false;
         if (!s_fDone) g_uRandState = static_cast<uint32_t>(std::strtoul(std::strchr(s_sz, ':') + 1, nullptr, 0));
@@ -208,7 +209,7 @@ void Launch(LO* plaunch, LO* po)
         for (const OPT& o : po->aopt)
             if (o.eopid == eopid && !o.aval.empty())
             {
-                if (std::getenv("SLY2N_HITDEBUG")) std::printf("  speed option tagk %d n %d g %.1f\n", o.aval[0].tagk, o.aval[0].n, o.aval[0].ag[0]);
+                if (SLY2N_ENV("SLY2N_HITDEBUG")) std::printf("  speed option tagk %d n %d g %.1f\n", o.aval[0].tagk, o.aval[0].n, o.aval[0].ag[0]);
                 gSpeed = o.aval[0].tagk == 0x15 ? static_cast<float>(o.aval[0].n) : o.aval[0].ag[0];
                 fSet = true;
             }
@@ -251,18 +252,18 @@ void Launch(LO* plaunch, LO* po)
     }
     g_paloLaunched = palo;
     g_cLaunchedFrames = 12;
-    if (std::getenv("SLY2N_HITDEBUG"))
+    if (SLY2N_ENV("SLY2N_HITDEBUG"))
         std::printf("launch: t %.3f %d (cid 0x%X) from %.1f %.1f %.1f to %.1f %.1f %.1f speed %.1f target %d lead %.3f vel %.1f %.1f %.1f pitch %.3f\n",
                     g_clock.t, po->oid, po->Cid(), posStart.x, posStart.y, posStart.z, posDest.x, posDest.y, posDest.z, gSpeed,
                     l.ptarget ? l.ptarget->oid : -1, tLead, VelAloPos(palo).x, VelAloPos(palo).y, VelAloPos(palo).z, l.gPitch);
-    if (std::getenv("SLY2N_HITDEBUG"))
+    if (SLY2N_ENV("SLY2N_HITDEBUG"))
         if (const GUARD* pgL = plaunch->paloParent ? PguardFromLo(plaunch->paloParent) : nullptr)
             std::printf("  the launcher's guard pursues %d (%p), target %p\n", pgL->plo38C ? pgL->plo38C->oid : -1, (void*)pgL->plo38C, (void*)l.ptarget);
-    if (std::getenv("SLY2N_HITDEBUG"))
+    if (SLY2N_ENV("SLY2N_HITDEBUG"))
         std::printf("  target cid 0x%X parent %d in %d; launcher %d parent %d\n", l.ptarget ? l.ptarget->Cid() : -1,
                     l.ptarget && l.ptarget->paloParent ? l.ptarget->paloParent->oid : -1, l.ptarget ? (int)l.ptarget->fInWorld : -1, plaunch->oid,
                     plaunch->paloParent ? plaunch->paloParent->oid : -1);
-    if (std::getenv("SLY2N_HITDEBUG"))
+    if (SLY2N_ENV("SLY2N_HITDEBUG"))
     {
         std::printf("  offset %.2f %.2f %.2f target pos %.1f %.1f %.1f predict %.4f %.4f %.4f\n", l.offset.x, l.offset.y, l.offset.z,
                     m[3][0], m[3][1], m[3][2], l.polyPredict.x, l.polyPredict.y, l.polyPredict.z);
@@ -298,14 +299,14 @@ static CRef FnAddGuardAction(LO* plo, const std::vector<CRef>& a)
     pg->aoidEB8.push_back(oid);
     if (!po) po = PloFindSwNearest(plo, oid);
     if (po && std::find(pg->aploEDC.begin(), pg->aploEDC.end(), po) == pg->aploEDC.end()) pg->aploEDC.push_back(po);
-    if (std::getenv("SLY2N_SELDEBUG")) std::fprintf(stderr, "ai: guard %d action %d (%s)\n", plo->oid, oid, po ? "found" : "missing");
+    if (SLY2N_ENV("SLY2N_SELDEBUG")) std::fprintf(stderr, "ai: guard %d action %d (%s)\n", plo->oid, oid, po ? "found" : "missing");
     return CRef(TAGK_Void);
 }
 
 // debug: SLY2N_FINDTEXT=text: the procs (the objects' frames and sidebags) whose code contains text, once
 void FindTextInProcs(SW*)
 {
-    if (const char* szE = std::getenv("SLY2N_OPTIDOF"))  // debug: the guards' optids of an EOPID
+    if (const char* szE = SLY2N_ENV("SLY2N_OPTIDOF"))  // debug: the guards' optids of an EOPID
     {
         static bool s_f = false;
         if (!s_f)
@@ -316,7 +317,7 @@ void FindTextInProcs(SW*)
                     std::printf("optidof: eopid %s is optid %d\n", szE, optid);
         }
     }
-    if (const char* szO = std::getenv("SLY2N_EOPIDOF"))  // debug: "optid:cid,optid:cid": their EOPIDs
+    if (const char* szO = SLY2N_ENV("SLY2N_EOPIDOF"))  // debug: "optid:cid,optid:cid": their EOPIDs
     {
         static bool s_f = false;
         if (!s_f)
@@ -331,7 +332,7 @@ void FindTextInProcs(SW*)
         }
     }
     static bool s_fDone = false;
-    const char* sz = std::getenv("SLY2N_FINDTEXT");
+    const char* sz = SLY2N_ENV("SLY2N_FINDTEXT");
     if (s_fDone || !sz || !g_psw) return;
     s_fDone = true;
     std::unordered_map<const CFrame*, bool> mpf;
@@ -367,7 +368,7 @@ void FindTextInProcs(SW*)
 void ListGuards(SW* psw)
 {
     static int s_c = 0;
-    const char* sz = std::getenv("SLY2N_GUARDLIST");
+    const char* sz = SLY2N_ENV("SLY2N_GUARDLIST");
     // ("*K": every K-th update, one line per guard in the world: place, stack, pocket mode)
     if (!sz || !psw) return;
     ++s_c;
@@ -427,7 +428,7 @@ struct INITLAUNCHER
         RegisterSwPass(0x147F40, FindTextInProcs);
         RegisterSwPass(0x147F40, ListGuards);
         RegisterObjectMethod(0x1058F0, [](LO* plo, const std::vector<CRef>& a) {  // 508: 0x1D6B00
-            if (std::getenv("SLY2N_HITDEBUG"))
+            if (SLY2N_ENV("SLY2N_HITDEBUG"))
             {
                 std::printf("launcher %d %p (parent %p): method 508 with %s", plo->oid, (void*)plo, (void*)plo->paloParent,
                             PloArg(a, 0) ? "an object" : "nothing");
@@ -465,7 +466,7 @@ struct INITLAUNCHER
                 pg->plo108C = PloArg(a, 0);
                 pg->n108C = pg->plo108C ? 1 : 0;
                 pg->saved1090 = SAVEDSCRIPT{};
-                if (std::getenv("SLY2N_SCPTPRINT"))
+                if (SLY2N_ENV("SLY2N_SCPTPRINT"))
                     std::fprintf(stderr, "ai: guard %d method 970 list %d\n", plo->oid, pg->plo108C ? pg->plo108C->oid : -1);
                 if (auto* pj = static_cast<JOBREACT*>(PjobFind(pg, 0x9C)))
                 {
@@ -565,7 +566,7 @@ struct INITLAUNCHER
                 glm::vec3 test = pos + cmm::SetVectorSphere(panT, tilt, s);
                 LSG lsg;
                 const bool fHit = !apsoe.empty() && PsoeHitTestLineObjects(0, pos, test, apsoe, &lsg);  // 0x14CC58
-                if (std::getenv("SLY2N_HITDEBUG"))
+                if (SLY2N_ENV("SLY2N_HITDEBUG"))
                     std::printf("  aim try %d pan %.3f: %zu occluders, hit %d at %.0f %.0f %.0f\n", i, panT, apsoe.size(), (int)fHit,
                                 lsg.pos0.x, lsg.pos0.y, lsg.pos0.z);
                 if (!fHit) { panBest = panT; break; }
@@ -574,7 +575,7 @@ struct INITLAUNCHER
                 if (gBest < g) { gBest = g; panBest = panT; }
             }
             r.SetVector(pos + cmm::SetVectorSphere(panBest, tilt, s));
-            if (std::getenv("SLY2N_HITDEBUG"))
+            if (SLY2N_ENV("SLY2N_HITDEBUG"))
                 std::printf("boss aim: from %.0f %.0f %.0f player %.0f %.0f %.0f facing %.2f %.2f vel %.0f -> %.0f %.0f %.0f\n", pos.x, pos.y, pos.z, posPlayer.x,
                             posPlayer.y, posPlayer.z, palo->apxfRef[2] ? palo->apxfRef[2]->matWorld[0].x : 9.0f,
                             palo->apxfRef[2] ? palo->apxfRef[2]->matWorld[0].y : 9.0f, glm::length(vel), r.GetVector().x, r.GetVector().y, r.GetVector().z);
@@ -613,7 +614,7 @@ struct INITLAUNCHER
             return r;
         });
         RegisterObjectSetter(21, [](LO* plo, const CRef& r) {
-            if (std::getenv("SLY2N_HITDEBUG") && plo->oid == 19728) std::printf("set 34 of %d tag %d\n", plo->oid, int(r.m_tagk));
+            if (SLY2N_ENV("SLY2N_HITDEBUG") && plo->oid == 19728) std::printf("set 34 of %d tag %d\n", plo->oid, int(r.m_tagk));
             if (r.m_tagk != TAGK_Vector) return;
             const glm::vec3 pos = r.GetVector();
             if (FCidDerivedFrom(plo->Cid(), 0x30))
@@ -641,7 +642,7 @@ struct INITLAUNCHER
             else if (LOX* plox = dynamic_cast<LOX*>(plo)) SetLoxRotation(plox, m);
         });
         RegisterObjectSetter(460, [](LO* plo, const CRef& r) {
-            if (std::getenv("SLY2N_HITDEBUG")) std::printf("launcher %d target tag %d\n", plo->oid, int(r.m_tagk));
+            if (SLY2N_ENV("SLY2N_HITDEBUG")) std::printf("launcher %d target tag %d\n", plo->oid, int(r.m_tagk));
             Launcher(plo).ptarget = r.m_tagk == TAGK_Basic ? dynamic_cast<LO*>(r.m_pbasic) : nullptr;
         });
         RegisterObjectSetter(461, [](LO* plo, const CRef& r) { Launcher(plo).offset = VecOfRef(r); });

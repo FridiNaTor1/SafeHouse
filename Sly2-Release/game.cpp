@@ -1787,6 +1787,9 @@ int RunGame(const GAMEOPTS& go)
             const double tEnd = tNowSkip + 5000.0;
             double tPoll = tNowSkip;
             bool fSkipped = false;
+            static const bool s_fSkipPrint = std::getenv("SLY2N_SKIPPRINT") != nullptr;
+            auto msSkipCpu = [] { timespec ts{}; clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts); return ts.tv_sec * 1e3 + ts.tv_nsec / 1e6; };
+            const double msCpuSkip0 = s_fSkipPrint && FSkipCutFastForward() ? msSkipCpu() : 0.0;
 #ifdef __SWITCH__
             // (the fast-forward draws nothing: the CPU's loading profile while it runs)
             const bool fBoostSkip = FSkipCutFastForward();
@@ -1794,6 +1797,11 @@ int RunGame(const GAMEOPTS& go)
 #endif
             while (FSkipCutFastForward() && (go.cframe < 0 || frame + 1 < go.cframe) && (!fWindow || now() < tEnd))
             {
+                // (a step that waits for a drawn frame: an animated overlay's capture (overlay.h: the job's end screen
+                // advances from its state 1 only at a frame's draw, its clock factor 8 at 0 meanwhile) or a photo's:
+                // the fast-forward goes on after this frame. Else a skip on a job-ending scene's first frame stopped
+                // the clock for good: the scene never ended, behind the fade)
+                if (FAnimatedOverlayNeedsFrame() || FPhotoCapturePending()) break;
                 ++frame;
                 fSkipped = true;
                 const float dtFixedSave = g_dtFixedStep;
@@ -1806,7 +1814,9 @@ int RunGame(const GAMEOPTS& go)
 #ifdef __SWITCH__
             if (fBoostSkip) CaneSwitch::EndLoadingBoost();
 #endif
-            if (fSkipped && std::getenv("SLY2N_SKIPPRINT")) std::printf("skipcut: %.1f ms of fast-forward this frame\n", now() - tNowSkip);
+            // (the thread's CPU time too: the wall time depends on the machine's other load)
+            if (fSkipped && s_fSkipPrint)
+                std::printf("skipcut: %.1f ms of fast-forward this frame (cpu %.1f ms)\n", now() - tNowSkip, msSkipCpu() - msCpuSkip0);
             if (fSkipped && accum.fActive && !accum.fpsVirtual)
                 accum.tLast = now() / 1000.0;   // (the skip's real time is no gameplay time to catch up)
             if (fSkipped && accum.fActive && fDraws)

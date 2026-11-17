@@ -549,6 +549,7 @@
   "On the desktop and in the applications / Start menu.": "Työpöydälle ja sovellus- / Käynnistä-valikkoon.",
   "One folder for every region. Add your own language there (or in Mods/Languages): a folder with Text.json, and Dialog / Movies for a dub. MODDING.md explains the files.": "Yksi kansio kaikille alueille. Lisää sinne oma kielesi (tai kansioon Mods/Languages): kansio, jossa on Text.json, ja Dialog / Movies jälkiäänitystä varten. MODDING.md selittää tiedostot.",
   "One press of Circle skips a cutscene. Off: hold Circle for 2 seconds.": "Yksi Ympyrän painallus ohittaa välivideon. Pois: pidä Ympyrää 2 sekuntia.",
+  "One press of Circle skips a cutscene. Off: the first press shows the prompt, a second press of Circle skips.": "Yksi Ympyrän painallus ohittaa välivideon. Pois: ensimmäinen painallus näyttää kehotteen, toinen Ympyrän painallus ohittaa.",
   "Only your installed disc's language is available.": "Vain asennetun levysi kieli on käytettävissä.",
   "Only your installed disc's language is available. Import other regions' languages in Settings > Games > Sly 2 > Languages.": "Vain asennetun levysi kieli on käytettävissä. Tuo muiden alueiden kieliä kohdassa Asetukset > Pelit > Sly 2 > Kielet.",
   "Open": "Avaa",

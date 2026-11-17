@@ -1,4 +1,5 @@
 #include "pickup.h"
+#include "envonce.h"
 #include "actor.h"
 #include "damage.h"
 #include "breakable.h"
@@ -317,7 +318,7 @@ void AddLo(SW* psw, LO* plo)
 {
     if (!plo->fRemoved) return;
     // (debug: SLY2N_ADDPRINT=oid prints the native call stack of that object's additions)
-    if (static const char* s_sz = std::getenv("SLY2N_ADDPRINT"); s_sz && std::atoi(s_sz) == plo->oid && g_clock.t > 0.0f)
+    if (static const char* s_sz = SLY2N_ENV("SLY2N_ADDPRINT"); s_sz && std::atoi(s_sz) == plo->oid && g_clock.t > 0.0f)
     {
         void* apv[24];
         std::fprintf(stderr, "add %d (alias %d, clone %d) t %.3f:\n", plo->oid, plo->oidInstance, plo->iclone, g_clock.t);
@@ -336,7 +337,7 @@ void RemoveLo(SW* psw, LO* plo)
 {
     if (plo->fRemoved) return;
     // (debug: SLY2N_REMOVEPRINT=oid prints the native call stack of that object's removals)
-    if (static const char* s_sz = std::getenv("SLY2N_REMOVEPRINT"); s_sz && std::atoi(s_sz) == plo->oid && g_clock.t > 0.0f)
+    if (static const char* s_sz = SLY2N_ENV("SLY2N_REMOVEPRINT"); s_sz && std::atoi(s_sz) == plo->oid && g_clock.t > 0.0f)
     {
         void* apv[24];
         std::fprintf(stderr, "remove %d (alias %d) t %.3f:\n", plo->oid, plo->oidInstance, g_clock.t);
@@ -431,7 +432,7 @@ void SetLoMask(SW* psw, LO* plo, uint32_t b)
 
 void UpdateSwActivation(SW* psw)
 {
-    if (static int s_c = 0; std::getenv("SLY2N_ACTLIST") && s_c++ == std::atoi(std::getenv("SLY2N_ACTLIST")))   // (debug: the radius-activated roots)
+    if (static int s_c = 0; SLY2N_ENV("SLY2N_ACTLIST") && s_c++ == std::atoi(SLY2N_ENV("SLY2N_ACTLIST")))   // (debug: the radius-activated roots)
         for (LO* plo : psw->lsplo20)
             std::printf("actroot %d cid 0x%X st %d r %.0f mask 0x%X active %d dist %.0f\n", plo->oid, int(plo->Cid()), plo->st, plo->sRadius, plo->bMask,
                         int(plo->fNodeActive), glm::distance(PosLoWorld(plo), plo->st == 0 ? g_actview.posCm : PosPlayer(g_actview.posCm)));
@@ -504,7 +505,7 @@ void SetLoVisible(SW* psw, LO* plo, bool f)
 int NDrawDistanceRoot(const ALO* palo)
 {
     const float rScale = g_display.drawDistance;
-    static const bool s_fOff = [] { const char* sz = std::getenv("SLY2N_DDACT"); return sz && sz[0] == '0'; }();   // (debug)
+    static const bool s_fOff = [] { const char* sz = SLY2N_ENV("SLY2N_DDACT"); return sz && sz[0] == '0'; }();   // (debug)
     if (rScale == 1.0f || s_fOff) return 0;
     const LO* proot = palo;
     while (proot->paloParent) proot = proot->paloParent;
@@ -662,7 +663,7 @@ void DetachProxy(SW* psw, LO* pproxy, int irow)
         if (FAlo(plo))
         {
             ALO* palo = static_cast<ALO*>(plo);
-            if (std::getenv("SLY2N_ACTDEBUG") && !palo->axf.empty())
+            if (SLY2N_ENV("SLY2N_ACTDEBUG") && !palo->axf.empty())
                 std::fprintf(stderr, "  detach proxy %d -> %d: ref %p proxy's %p parent %d\n", pproxy->oid, plo->oid, (void*)palo->axf[0]->pxfRef,
                              (void*)pxfProxy, palo->paloParent ? palo->paloParent->oid : -1);
             // (0x1CAA60's SetLoParent(plo, 0, 0): no parent and no channel. The first record may by now hang from
@@ -703,7 +704,7 @@ void DetachProxy(SW* psw, LO* pproxy, int irow)
                 SetAloRotation(palo, we.amatRest[j]);         // vt slot 30 (RotateToMat)
                 SetAloAngVelocityTo(palo, glm::vec3(0.0f));   // vt slot 36
             }
-            if (std::getenv("SLY2N_ACTDEBUG"))
+            if (SLY2N_ENV("SLY2N_ACTDEBUG"))
             {
                 const glm::vec3 v = PosAloCenter(palo);
                 std::fprintf(stderr, "  detach proxy %d -> %d: rest (%.1f %.1f %.1f) now (%.1f %.1f %.1f) base t (%.1f %.1f %.1f) ref %p\n", pproxy->oid, plo->oid,
@@ -797,7 +798,7 @@ int AttachProxy(SW* psw, LO* pproxy, int nMin)
         }
     }
     if (irow < 0) return -1;
-    if (std::getenv("SLY2N_ACTDEBUG"))
+    if (SLY2N_ENV("SLY2N_ACTDEBUG"))
         std::fprintf(stderr, "attach proxy %d group %d row %d (owner %d) objects %d\n", pproxy->oid, ps.iwe, irow,
                      we.aploRowOwner[irow] ? we.aploRowOwner[irow]->oid : -1, we.cloLoaded);
     if (LO* pOwner = we.aploRowOwner[irow]) DetachProxy(psw, pOwner, irow);
@@ -839,7 +840,7 @@ int AttachProxy(SW* psw, LO* pproxy, int nMin)
         SetLoParentActivation(psw, plo, pproxy->paloParent);  // vt slot 10 (the proxy's parent and channel)
         SetLoChannel(plo, pproxyx->pxf);
         SetLoMatrix(plo, pproxyx->mat);                 // vt slot 37
-        if (std::getenv("SLY2N_ACTDEBUG"))
+        if (SLY2N_ENV("SLY2N_ACTDEBUG"))
             std::fprintf(stderr, "  attach proxy %d -> %d (alias %d): mat t (%.1f %.1f %.1f) x (%.2f %.2f %.2f) pxf %p parent %d\n", pproxy->oid,
                          plo->oid, plo->oidInstance, pproxyx->mat[3][0], pproxyx->mat[3][1], pproxyx->mat[3][2], pproxyx->mat[0][0],
                          pproxyx->mat[0][1], pproxyx->mat[0][2], (void*)pproxyx->pxf, pproxy->paloParent ? pproxy->paloParent->oid : -1);
@@ -879,12 +880,12 @@ int AttachProxy(SW* psw, LO* pproxy, int nMin)
             refProxy.SetBasic(pproxy);
             HandleLoSpliceEvent(plo, 14, false, 1, &refProxy);
         }
-        if (std::getenv("SLY2N_ACTDEBUG") && FAlo(plo))
+        if (SLY2N_ENV("SLY2N_ACTDEBUG") && FAlo(plo))
         {
             const glm::vec3 v = PosAloCenter(static_cast<ALO*>(plo));
             std::fprintf(stderr, "  attached at (%.1f %.1f %.1f)\n", v.x, v.y, v.z);
         }
-        if (std::getenv("SLY2N_ACTDEBUG"))
+        if (SLY2N_ENV("SLY2N_ACTDEBUG"))
             std::fprintf(stderr, "  object cid 0x%X oid %d: removed %d inworld %d root %d active %d registered %d\n",
                          plo->Cid(), plo->oid, plo->fRemoved, plo->fInWorld, plo->paloParent == nullptr,
                          PloRoot(plo)->fNodeActive, plo->iupd >= 0);
@@ -936,7 +937,7 @@ struct INITPROXYMETHODS
         RegisterObjectMethod(0x10E2B8, [](LO* plo, const std::vector<CRef>&) {  // 1175: 0x1CB250(p, 0)
             SW* psw = PswOf(plo);
             LO* po = PloRowFirst(psw, plo, AttachProxy(psw, plo, 2));
-            if (std::getenv("SLY2N_HITDEBUG"))  // (debug: the proxies attached by scripts, e.g. a guard's strike)
+            if (SLY2N_ENV("SLY2N_HITDEBUG"))  // (debug: the proxies attached by scripts, e.g. a guard's strike)
                 std::printf("proxy 1175: t %.3f proxy %d -> %d (cid 0x%X) %p\n", g_clock.t, plo->oid, po ? po->oid : -1, po ? po->Cid() : 0, (void*)po);
             return RefLoOrNull(po);
         });
@@ -963,7 +964,7 @@ struct INITPROXYMETHODS
         // none). Ep2's boardroom battle (task 1591, s17 cases 23 / 24) counts a knocked-out guard only when its proxy is
         // one of the wave proxies 106722..106725; unanswered, no wave after the first was ever spawned.
         RegisterObjectGetter(18, [](LO* plo) {
-            if (std::getenv("SLY2N_HITDEBUG"))
+            if (SLY2N_ENV("SLY2N_HITDEBUG"))
                 std::printf("proxy of %d %p: %d (t %.3f)\n", plo->oid, (void*)plo, PproxyOfInstance(plo) ? PproxyOfInstance(plo)->oid : -1, g_clock.t);
             return RefLoOrNull(PproxyOfInstance(plo));
         });
@@ -1001,7 +1002,7 @@ struct INITPROXYMETHODS
 void PrintActivationDebug(SW* psw)
 {
     // debug: SLY2N_PROXYOID=oid: the streaming proxies of the groups with that object, once at frame 60
-    if (const char* psz = std::getenv("SLY2N_PROXYOID"))
+    if (const char* psz = SLY2N_ENV("SLY2N_PROXYOID"))
     {
         static int s_c = 0;
         if (++s_c == 60)
@@ -1022,7 +1023,7 @@ void PrintActivationDebug(SW* psw)
             }
         }
     }
-    if (std::getenv("SLY2N_TASKREFS"))  // (debug: the volume triggers once: their script and place)
+    if (SLY2N_ENV("SLY2N_TASKREFS"))  // (debug: the volume triggers once: their script and place)
     {
         static bool s_f = false;
         if (!s_f)
@@ -1037,7 +1038,7 @@ void PrintActivationDebug(SW* psw)
                 }
         }
     }
-    if (const char* psz = std::getenv("SLY2N_FRAMEPRINT"))  // (debug: "oid@frame": an object's splice frame bindings once)
+    if (const char* psz = SLY2N_ENV("SLY2N_FRAMEPRINT"))  // (debug: "oid@frame": an object's splice frame bindings once)
     {
         static int s_c = 0;
         int oid, n;
@@ -1062,7 +1063,7 @@ void PrintActivationDebug(SW* psw)
                         if (pf->m_fModule) break;
                     }
     }
-    if (const char* psz = std::getenv("SLY2N_FRAMEGREP"))  // (debug: "text@frame": the objects whose frame bindings print the text)
+    if (const char* psz = SLY2N_ENV("SLY2N_FRAMEGREP"))  // (debug: "text@frame": the objects whose frame bindings print the text)
     {
         static int s_c = 0;
         char ach[256] = {};
@@ -1086,13 +1087,13 @@ void PrintActivationDebug(SW* psw)
                             const glm::vec3 p = PosLoWorld(plo.get());
                             std::fprintf(stderr, "framegrep %d cid 0x%X inworld %d at %.0f %.0f %.0f: s%d\n", plo->oid, plo->Cid(), plo->fInWorld ? 1 : 0,
                                          p.x, p.y, p.z, static_cast<int>(v.symid));
-                            if (std::getenv("SLY2N_FRAMEGREPBODY")) std::fprintf(stderr, "  %s\n", str.substr(0, 3000).c_str());
+                            if (SLY2N_ENV("SLY2N_FRAMEGREPBODY")) std::fprintf(stderr, "  %s\n", str.substr(0, 3000).c_str());
                         }
                     }
                     if (pf->m_fModule) break;
                 }
     }
-    if (const char* psz = std::getenv("SLY2N_GLOBPRINT"))  // (debug: "oid@frame": an ALO's globs once)
+    if (const char* psz = SLY2N_ENV("SLY2N_GLOBPRINT"))  // (debug: "oid@frame": an ALO's globs once)
     {
         static int s_c = 0;
         int oid, n;
@@ -1115,7 +1116,7 @@ void PrintActivationDebug(SW* psw)
                                          FAloGlobShown(palo, g.n0, !(g.grfGroup & 0x800)), g.sRadius, g.posCenter.x, g.posCenter.y, g.posCenter.z, g.oidOwner);
                 }
     }
-    if (const char* psz = std::getenv("SLY2N_POSPRINT"))  // (debug: "oid,oid,...:N": their world position / heading every N calls)
+    if (const char* psz = SLY2N_ENV("SLY2N_POSPRINT"))  // (debug: "oid,oid,...:N": their world position / heading every N calls)
     {
         static int s_c = 0;
         const char* pszN = std::strchr(psz, ':');
@@ -1140,11 +1141,11 @@ void PrintActivationDebug(SW* psw)
                                          plox->mat[3].x, plox->mat[3].y, plox->mat[3].z);
                         }
                         std::fprintf(stderr, "\n");
-                        if (!std::getenv("SLY2N_POSPRINTALL")) break;
+                        if (!SLY2N_ENV("SLY2N_POSPRINTALL")) break;
                     }
             }
     }
-    if (const char* psz = std::getenv("SLY2N_NEARPRINT"))  // (debug: "x y z r@frame": every object near a point once)
+    if (const char* psz = SLY2N_ENV("SLY2N_NEARPRINT"))  // (debug: "x y z r@frame": every object near a point once)
     {
         static int s_c = 0;
         float x, y, z, r;
@@ -1159,7 +1160,7 @@ void PrintActivationDebug(SW* psw)
                                  PloRoot(plo.get())->fNodeActive);
             }
     }
-    if (const char* psz = std::getenv("SLY2N_LOOID"))  // (debug: an object's activation every 120 frames)
+    if (const char* psz = SLY2N_ENV("SLY2N_LOOID"))  // (debug: an object's activation every 120 frames)
     {
         static int s_c = 0;
         if (s_c++ % 120 == 0)

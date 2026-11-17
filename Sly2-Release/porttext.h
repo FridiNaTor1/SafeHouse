@@ -47,7 +47,7 @@ enum PTX : int
     PTX_KeyUnbound, PTX_KeySpace, PTX_KeyUp, PTX_KeyDown, PTX_KeyLeft, PTX_KeyRight, PTX_KeyLeftMod, PTX_KeyRightMod,
     PTX_MouseLeft, PTX_MouseRight, PTX_MouseMiddle, PTX_MouseN, PTX_WheelUp, PTX_WheelDown, PTX_Mouse,
     // the cutscene skip hint
-    PTX_HoldToSkip, PTX_HoldToSkipNoIcons,
+    PTX_HoldToSkip, PTX_HoldToSkipNoIcons, PTX_PressToSkip, PTX_PressToSkipNoIcons,
     // Replay Jobs (the episode menu)
     PTX_ReplayJobs, PTX_ReplayJob, PTX_OpHippoDrop, PTX_ReplayOperation,
     // the save / load pages' page indicator (Q4, saves-qol: "Page %d / %d", the page and the pages)

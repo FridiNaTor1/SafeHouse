@@ -2,6 +2,7 @@
 // 0x208E70; the nearest and the best kept by vt slot 95 0x140678 at +0x10DC / +0x10E4 and +0x10E8 / +0x10EC): target.h.
 
 #include "clock.h"
+#include "envonce.h"
 #include "target.h"
 #include "activate.h"
 
@@ -233,7 +234,7 @@ void StopNearestLaunchTracking(ACTOR* pa)
 void SetActorTargets(ACTOR* pa, int nNear, LO* ploNear, int nBest, LO* ploBest)
 {
     if (ploNear != pa->plo10DC) StopNearestLaunchTracking(pa);  // 0x1431D0
-    if (std::getenv("SLY2N_TARGETPRINT") && (nBest != pa->n10EC || ploBest != pa->plo10E8 || nNear != pa->n10E4 || ploNear != pa->plo10DC))
+    if (SLY2N_ENV("SLY2N_TARGETPRINT") && (nBest != pa->n10EC || ploBest != pa->plo10E8 || nNear != pa->n10E4 || ploNear != pa->plo10DC))
         std::printf("targets %d t %.3f: near %d (%d) best %d (%d)\n", pa->palo ? pa->palo->oid : -1, g_clock.t, ploNear ? ploNear->oid : -1, nNear,
                     ploBest ? ploBest->oid : -1, nBest);  // (debug: the actor's target changes)
     pa->n10EC = nBest;
@@ -254,7 +255,7 @@ void PickActorTargets(ACTOR* pa)
         LO* plo = pg->palo;
         float g = 0.0f;
         const int n = NRankGuard(pg, pa, &g);
-        static const bool s_fDbg = std::getenv("SLY2N_TARGETDEBUG") != nullptr;
+        static const bool s_fDbg = SLY2N_ENV("SLY2N_TARGETDEBUG") != nullptr;
         if (s_fDbg)
             std::printf("target: t %.4f guard %d %p rank %d dist %.1f pos %.1f %.1f %.1f state 0x%llX 38C %d 3F4 %d %p at %.0f %.0f %.0f in %d\n", g_clock.t, plo->oid, (void*)plo, n, g,
                         PosOf(plo).x, PosOf(plo).y, PosOf(plo).z, static_cast<unsigned long long>(pg->grfState),

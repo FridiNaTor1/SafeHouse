@@ -3,6 +3,7 @@
 // round4_paris_high_more.cpp (0x212880), the string table 0x2A8B90 (0x21AA60).
 
 #include "screenrt.h"
+#include "envonce.h"
 #include "worldglobals.h"
 #include "langstore.h"
 #include "region.h"
@@ -79,7 +80,7 @@ SCREENRT* Psrt(LO* plo)
     SPRITESET* pss = dynamic_cast<SPRITESET*>(plo);
     if (!pss || !pss->pso) return nullptr;
     auto& p = s_mpsrt[plo];
-    if (p && p->serialSw != SW::s_serialNext && std::getenv("SLY2N_SCREENLIFE"))
+    if (p && p->serialSw != SW::s_serialNext && SLY2N_ENV("SLY2N_SCREENLIFE"))
         std::fprintf(stderr, "screen lifetime: oid %d cached world %u current world %u\n",
                      plo->oid, p->serialSw, SW::s_serialNext);
     if (!p)
@@ -162,13 +163,13 @@ void SetState(SCREENRT* p, int s)
 {
     const int old = p->state;
     if (old == s) return;
-    if (static const bool s_f = std::getenv("SLY2N_SCREENPRINT") != nullptr; s_f)
+    if (static const bool s_f = SLY2N_ENV("SLY2N_SCREENPRINT") != nullptr; s_f)
         std::printf("screen %d: state %d -> %d pause cached %d field %u\n", p->pss->oid, old, s, p->fPause ? 1 : 0, p->pss->U32Field(0, 0xB0, 0));
     if (p->fPause)
     {
         if (old < 2 && s >= 2)
         {
-            if (std::getenv("SLY2N_TASKDEBUG"))
+            if (SLY2N_ENV("SLY2N_TASKDEBUG"))
                 for (const auto& [plo, up] : s_mpsrt)
                     if (up.get() == p) std::printf("screen %d: shown, the game paused (t %.3f)\n", plo->oid, g_clock.t);
             if (++s_cpause == 1) SetClockFactor(&g_clock, 7, 0.0f);
@@ -227,7 +228,7 @@ void Update(SCREENRT* p)
             }
         }
     }
-    if (static const bool s_f = std::getenv("SLY2N_SCREENPRINT") != nullptr; s_f && p->state >= 2 && p->fPause)
+    if (static const bool s_f = SLY2N_ENV("SLY2N_SCREENPRINT") != nullptr; s_f && p->state >= 2 && p->fPause)
         std::printf("screen update: state %d -> %d timers %d busy %d id7C %d ids %d %d %d dtMax %.2f tState %.2f t3C %.2f\n", p->state, s, p->timers,
                     FBusy(p, p->id7C) ? 1 : 0, p->id7C, p->id70, p->id74, p->id78, p->dtMax, p->tState, g_clock.t3C);
     SetState(p, s);
@@ -243,7 +244,7 @@ void Update(SCREENRT* p)
             const glm::vec3 screen = ConvertCmWorldToScreen(&g_cm, PosLoWorld(p->follow));
             p->player.mRoot[4] = screen.x * 320.0f + 320.0f;
             p->player.mRoot[5] = screen.y * -246.40000915527344f + 246.40000915527344f;
-            if (std::getenv("SLY2N_SCREENFOLLOW"))
+            if (SLY2N_ENV("SLY2N_SCREENFOLLOW"))
                 std::printf("screen follow: frame %lld screen %d target %d at %.9g %.9g\n",
                             static_cast<long long>(g_cframeScreen), p->pss->oid, p->follow->oid,
                             p->player.mRoot[4], p->player.mRoot[5]);
@@ -263,7 +264,7 @@ static void ShowScreenObjBase(LO* plo, int k)
 {
     SCREENRT* p = Psrt(plo);
     if (!p) return;
-    if (std::getenv("SLY2_SHOWDBG"))
+    if (SLY2N_ENV("SLY2_SHOWDBG"))
     {
         std::printf("show screen %d (k %d): args", plo->oid, k);
         for (int a : p->aarg) std::printf(" %d", a);
@@ -276,7 +277,7 @@ static void ShowScreenObjBase(LO* plo, int k)
         }
         std::printf("\n");
     }
-    if (const char* sz = std::getenv("SLY2_SOPARTS"); sz && std::strtol(sz, nullptr, 0) == plo->oid && p->pss && p->pss->pso)   // (debug: its parts)
+    if (const char* sz = SLY2N_ENV("SLY2_SOPARTS"); sz && std::strtol(sz, nullptr, 0) == plo->oid && p->pss && p->pss->pso)   // (debug: its parts)
     {
         const SCREENOBJ* pso = p->pss->pso.get();
         for (size_t g = 0; g < pso->agroup.size(); ++g)
@@ -284,7 +285,7 @@ static void ShowScreenObjBase(LO* plo, int k)
             std::printf("screen 0x%X group %zu (%d frames):", plo->oid, g, pso->agroup[g].cframe);
             for (const SPART& part : pso->agroup[g].apart) std::printf(" 0x%X(%zu keys)", part.id, part.akey.size());
             std::printf("\n");
-            if (std::getenv("SLY2_SOKEYS"))   // (and every key: its items' slot, piece, interpolation, colours)
+            if (SLY2N_ENV("SLY2_SOKEYS"))   // (and every key: its items' slot, piece, interpolation, colours)
                 for (const SPART& part : pso->agroup[g].apart)
                     for (const SKEY& key : part.akey)
                     {
@@ -621,7 +622,7 @@ void UpdateTaskCounter(SCREENRT* p)
 void UpdateScreenObjs(SW* psw)
 {
     // (debug: SLY2N_SCREENLOOPSCAN: once per world, every screen object's looping key sounds: splayer.cpp)
-    if (static const bool s_fScan = std::getenv("SLY2N_SCREENLOOPSCAN") != nullptr; s_fScan && psw)
+    if (static const bool s_fScan = SLY2N_ENV("SLY2N_SCREENLOOPSCAN") != nullptr; s_fScan && psw)
         if (static uint32_t s_serialScanned = 0; s_serialScanned != psw->serial)
         {
             s_serialScanned = psw->serial;
@@ -678,7 +679,7 @@ const FONTBRX* PfontHudIcons() { return s_afont.size() > 1 && s_afont[1].pso == 
 // (QoL) SLY2N_WIPEMASKFIX=0: the wipe's mask widened as before
 static bool NoWipeMaskFix()
 {
-    static const bool s_f = [] { const char* sz = std::getenv("SLY2N_WIPEMASKFIX"); return sz && sz[0] == '0'; }();
+    static const bool s_f = [] { const char* sz = SLY2N_ENV("SLY2N_WIPEMASKFIX"); return sz && sz[0] == '0'; }();
     return s_f;
 }
 
@@ -694,7 +695,7 @@ void DrawScreenObjs(SW* psw)
     {
         s_afont = FindFonts(aso);
         s_serialFonts = psw->serial;
-        if (std::getenv("SLY2N_FONTLIST"))
+        if (SLY2N_ENV("SLY2N_FONTLIST"))
             for (const FONTBRX& f : s_afont)
             {
                 std::printf("font obj 0x%X elem %d:", f.pso->oid, f.ifont);
@@ -733,7 +734,7 @@ void DrawScreenObjs(SW* psw)
     for (auto [plo, p] : adraw)
     {
         s_psrtDrawing = p;
-        static const bool s_fDbg = std::getenv("SLY2_HUDDBG") != nullptr;
+        static const bool s_fDbg = SLY2N_ENV("SLY2_HUDDBG") != nullptr;
         if (s_fDbg) std::printf("screen 0x%X: state %d part 0x%X a4 %d a8 %d ac %d b0 %d\n", plo->oid, p->state, p->id7C, int(plo->U32Field(0, 0xA4, 0x7777)),
                                 int(plo->U32Field(0, 0xA8, 0x7777)), int(plo->U32Field(0, 0xAC, 0x7777)), int(plo->U32Field(0, 0xB0, 0x7777)));
         g_zScreenBase = float(std::max(0, p->prio)) * 262144.0f;   // (+0xA4 << 18)
@@ -764,8 +765,8 @@ void DrawScreenObjs(SW* psw)
     DrawGadgetIcons(pfont, picons);   // (the gadget widget's draw, 0x1DAC58)
     DrawMarkerLabels(pfont, picons);  // (the job markers' names, 0x1CD780: marker.cpp)
     DrawDancePrompts(pfont, picons);  // (the dance director's buttons, 0x152C58: dance.cpp)
-    if (pfont && std::getenv("SLY2N_ICONSTRIP"))
-        g_hud.DrawText(*pfont, picons, std::getenv("SLY2N_ICONSTRIP"), -300.0f, -40.0f, 40.0f, 1.0f, 1.0f, 0, glm::vec4(102.0f), glm::vec4(1.0f), glm::vec4(0.0f));
+    if (pfont && SLY2N_ENV("SLY2N_ICONSTRIP"))
+        g_hud.DrawText(*pfont, picons, SLY2N_ENV("SLY2N_ICONSTRIP"), -300.0f, -40.0f, 40.0f, 1.0f, 1.0f, 0, glm::vec4(102.0f), glm::vec4(1.0f), glm::vec4(0.0f));
     g_zScreenBase = 0.0f;
     g_pfnScriptString = pfnOld;
 }
@@ -819,7 +820,7 @@ void ResetScreenObjs(SW* psw)
         }
         else ++it;
     }
-    if (std::getenv("SLY2N_SCREENLIFE"))
+    if (SLY2N_ENV("SLY2N_SCREENLIFE"))
         std::fprintf(stderr, "screen lifetime: reset world %u removed %zu remaining %zu pauses %d\n",
                      psw ? psw->serial : 0, cBefore - s_mpsrt.size(), s_mpsrt.size(), s_cpause);
 }
