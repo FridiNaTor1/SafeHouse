@@ -18,6 +18,7 @@
 #include <stb/stb_image_write.h>
 
 #include <algorithm>
+#include <cfloat>
 #include <cmath>
 #include <cstdio>
 #include "clock.h"
@@ -721,6 +722,27 @@ void CHud::Pillarbox(glm::vec4 rgba, float z)
     PictureExtent(x0, x1, y0, y1);
     if (x0 < 0.0f) FillScreenRect(x0, y0, 0.0f, y1, rgba, z);
     if (x1 > 640.0f) FillScreenRect(640.0f, y0, x1, y1, rgba, z);
+}
+
+bool CHud::FBoundsSince(const MARK& mark, glm::vec2& lo, glm::vec2& hi) const
+{
+    lo = glm::vec2(FLT_MAX);
+    hi = glm::vec2(-FLT_MAX);
+    auto add = [&](const VTX& v) { lo = glm::min(lo, v.pos); hi = glm::max(hi, v.pos); };
+    for (size_t i = mark.ctri; i < m_atri.size(); ++i) add(m_atri[i]);
+    for (size_t i = mark.cline; i < m_aline.size(); ++i) add(m_aline[i]);
+    for (size_t i = mark.cquad; i < m_aquad.size(); ++i)
+        for (const VTX& v : m_aquad[i].av) add(v);
+    return lo.x <= hi.x;
+}
+
+void CHud::ShiftSince(const MARK& mark, float dx)
+{
+    if (dx == 0.0f) return;
+    for (size_t i = mark.ctri; i < m_atri.size(); ++i) m_atri[i].pos.x += dx;
+    for (size_t i = mark.cline; i < m_aline.size(); ++i) m_aline[i].pos.x += dx;
+    for (size_t i = mark.cquad; i < m_aquad.size(); ++i)
+        for (VTX& v : m_aquad[i].av) v.pos.x += dx;
 }
 
 void CHud::Fade(glm::vec4 rgba)

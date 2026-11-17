@@ -111,6 +111,11 @@ inline constexpr float kVrWorldScaleMin = 0.5f, kVrWorldScaleMax = 3.0f;
 // [Graphics] Outline Thickness: the cel outlines' width in percent (Sly2-Release render.cpp): 100 the original's (one PS2
 // line of the flat picture; in VR the same apparent width as the flat picture's, matched to the eyes' field of view)
 inline constexpr int kOutlineThicknessMin = 25, kOutlineThicknessMax = 300, kOutlineThicknessStep = 25;
+// [Display] HUD Placement: the box the corner / edge HUD widgets (health, coins, counters, timers) are laid out in,
+// centred in the picture and never wider than it (Sly2-Release display.h hudPlacement). 4:3 the original's; 16:9 the
+// PS3 HD version's; Match Screen the picture's own shape (to the edges at 32:9). Replaces the original's Center Screen.
+enum Sly2HudPlacement : int { HudPlacement_4_3 = 0, HudPlacement_16_9 = 1, HudPlacement_16_10 = 2, HudPlacement_Match = 3 };
+inline constexpr int kHudPlacementCount = 4;
 
 struct Sly2Settings {
     SystemSettings system = sly2Defaults();
@@ -118,6 +123,7 @@ struct Sly2Settings {
     Sly2VrOptions vr;
     Sly2UpscaleOptions upscale;
     int outlineThickness = 100;   // [Graphics] Outline Thickness (%)
+    int hudPlacement = HudPlacement_4_3;   // [Display] HUD Placement (Sly2HudPlacement)
     // the save-kept options still to be taken from the newest save (migration; the schema's key names)
     std::vector<std::string> pendingSaveOptions;
     // keys and sections this build does not know, written back as they are
@@ -346,6 +352,21 @@ inline const std::vector<Sly2Key>& sly2Schema() {
                           if (!names::parseInt(v, n) || n < 30) return false;
                           s.system.frameRate = std::min(n, 1000);
                           return true;
+                      } });
+        k.push_back({ "Display", "HUD Placement",
+                      "4:3, 16:9, 16:10 or Match Screen: the box the health, coins, meters and counters sit in (4:3 the\n"
+                      "original's; 16:9 as the PS3 version; Match Screen the window's own shape, out to its edges)",
+                      [](const Sly2Settings& s) {
+                          static const char* const names[] = { "4:3", "16:9", "16:10", "Match Screen" };
+                          return std::string(names[std::clamp(s.hudPlacement, 0, kHudPlacementCount - 1)]);
+                      },
+                      [](Sly2Settings& s, const std::string& v) {
+                          const std::string f = ini::keyForm(v);
+                          static const char* const forms[] = { "4:3", "16:9", "16:10", "matchscreen" };
+                          for (int i = 0; i < kHudPlacementCount; ++i)
+                              if (f == forms[i]) return s.hudPlacement = i, true;
+                          if (f == "match" || f == "screen" || f == "fit" || f == "fittoscreen") return s.hudPlacement = HudPlacement_Match, true;
+                          return false;
                       } });
         // [Display] Upscaling (Sly2UpscaleOptions)
         k.push_back({ "Display", "Upscaling", "On or Off: the 3D scene drawn smaller and scaled up to the window (FSR 1)",

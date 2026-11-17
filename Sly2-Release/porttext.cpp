@@ -525,6 +525,14 @@ constexpr ROW s_arow[] = {
     {P(LangReloadLater), {"Next Area", "Zone suivante", "Prossima zona", "Nächstes Gebiet", "Próxima zona",
         "Volgend gebied", "Próxima zona", "Næste område", "Seuraava alue", "Neste område", "Nästa område", "つぎのエリア",
         "다음 지역부터"}},
+    // P: the display options' HUD Placement (display.h hudPlacement) and its Match Screen (the picture's own shape; the
+    // Japanese / Korean as Fit to Screen's)
+    {P(HudPlacement), {"HUD Placement", "Position du HUD", "Posizione HUD", "HUD-Position", "Posición del HUD",
+        "HUD-positie", "Posição do HUD", "HUD-placering", "HUD:n sijoittelu", "HUD-plassering", "HUD-placering",
+        "HUDのいち", "HUD 위치"}},
+    {P(MatchScreen), {"Match Screen", "Selon l'écran", "Come lo schermo", "Wie Bildschirm", "Igual que la pantalla",
+        "Zoals scherm", "Igual ao ecrã", "Som skærmen", "Näytön mukaan", "Som skjermen", "Som skärmen", "画面に合わせる",
+        "화면에 맞춤"}},
 };
 // clang-format on
 #undef P

@@ -186,6 +186,7 @@ bool FLoadDisplaySettings(const std::filesystem::path& userDir, std::string* pme
     FromVrOptions(s.vr);
     FromUpscaleOptions(s.upscale);
     g_display.outlineThickness = std::clamp(s.outlineThickness, st::kOutlineThicknessMin, st::kOutlineThicknessMax);
+    g_display.hudPlacement = std::clamp(s.hudPlacement, 0, st::kHudPlacementCount - 1);
     sly2actions::Load(userDir);
 #ifdef __SWITCH__
     // (the Switch: one screen, the swap paces the frames at 30 or 60, 120 on the Switch 2; the internal resolution
@@ -230,6 +231,7 @@ bool FSaveDisplaySettings(const std::filesystem::path& userDir)
     ToVrOptions(s.vr);
     ToUpscaleOptions(s.upscale);
     s.outlineThickness = g_display.outlineThickness;
+    s.hudPlacement = g_display.hudPlacement;
     return st::saveSly2(userDir, s);
 }
 
@@ -255,6 +257,16 @@ void MigrateSaveOptions(const st::SaveOptionValues& values)
     FromGameOptions(s.game);
     std::printf("settings: the save's options taken into %s%s\n", cane::utf8(st::sly2SettingsPath(userDir)).c_str(),
                 st::saveSly2(userDir, s) ? "" : " (not writable)");
+}
+
+float DxHudPlacement()
+{
+    const int n = g_display.hudPlacement;
+    if (n <= st::HudPlacement_4_3 || vr::FActive()) return 0.0f;   // (VR: the HUD panel keeps the 4:3 canvas)
+    // the picture's shape on the canvas's scale (the canvas is 4:3, uiScale.x its share of the picture's width)
+    const float rPicture = g_display.uiScale.x < 1.0f ? (4.0f / 3.0f) / g_display.uiScale.x : 4.0f / 3.0f;
+    const float rBox = std::min(rPicture, n == st::HudPlacement_16_9 ? 16.0f / 9.0f : n == st::HudPlacement_16_10 ? 16.0f / 10.0f : rPicture);
+    return std::max(0.0f, 320.0f * (rBox * 0.75f - 1.0f));
 }
 
 void LayoutDisplay(int outputWidth, int outputHeight)

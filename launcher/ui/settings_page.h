@@ -712,6 +712,7 @@ private:
             std::copy(std::begin(d.monitor), std::end(d.monitor), s.monitor);
             m_sly2.upscale = settings::Sly2UpscaleOptions{};
             if (m_game == GameId::Sly2) m_sly2.vr.worldScale = settings::Sly2VrOptions{}.worldScale;
+            if (m_game == GameId::Sly2) m_sly2.hudPlacement = settings::Sly2Settings{}.hudPlacement;
             break;
         case Graphics:
             s.internalResolutionHeight = d.internalResolutionHeight, s.msaaEnabled = d.msaaEnabled, s.msaaSamples = d.msaaSamples;
@@ -859,6 +860,15 @@ private:
         int aspect = m_settings.aspectMode;
         if (stepperRow(tr("Aspect ratio"), &aspect, aspects)) m_settings.aspectMode = aspect, commit();
         describe(tr("Fit to screen uses the whole window. The PS2 options match the original framing."));
+        // (Sly 2, Settings.ini [Display] HUD Placement: Sly2-Release display.h hudPlacement; the game's Display options
+        // have the same row. Replaces the original's Center Screen.)
+        if (m_game == GameId::Sly2) {
+            const std::vector<std::string> placements{ "4:3", "16:9", "16:10", tr("Match screen") };
+            int placement = std::clamp(m_sly2.hudPlacement, 0, settings::kHudPlacementCount - 1);
+            if (stepperRow(tr("HUD placement"), &placement, placements)) m_sly2.hudPlacement = placement, commit();
+            describe(tr("Where the health, coins, meters and counters sit on wide screens. 4:3 is the original's layout, 16:9 "
+                        "matches the PS3 version and Match screen moves them out to the edges of any window."));
+        }
         const auto rates = frameRates();
         std::vector<std::string> labels;
         for (int r : rates) labels.push_back(r >= kUncappedFrameRate ? std::string(tr("Uncapped")) : trf("%d FPS", r));

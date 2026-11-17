@@ -67,6 +67,12 @@ struct DISPLAY
     // Settings.ini [Graphics] Outline Thickness (%): the cel outlines' width, 100 the original's (render.cpp; in VR the flat
     // picture's apparent width for the eyes' field of view, times this)
     int outlineThickness = 100;
+    // Settings.ini [Display] HUD Placement (settings::Sly2HudPlacement; --hud-placement): the box the corner / edge HUD
+    // widgets (health, coins, counters, timers, prompts) are laid out in, centred in the picture: 0 4:3 (the original's
+    // canvas, the default), 1 16:9 (the PS3 HD version's), 2 16:10, 3 Match Screen (the picture's own shape, to the edges
+    // at 32:9). Never wider than the picture; 4:3 in VR. Centred things (menus, dialogs, subtitles, fades) keep the 4:3
+    // canvas. (Replaces the original's Center Screen..., which moved the PS2's video signal: nothing to move on PC.)
+    int hudPlacement = 0;
     // Upscaling (Settings.ini [Display] Upscaling, Upscaling Method / Preset / Sharpness; --upscale, fsr.h; default
     // off = the current pictures): on, the scene renders at the preset's fraction of the picture (in place of the
     // internal resolution) and the method (FSR 1: EASU + RCAS) scales it up; the HUD, menus and overlays then draw at
@@ -91,6 +97,9 @@ struct DISPLAY
     glm::vec2 uiScale{1.0f}, uiOffset{0.0f};
 };
 extern DISPLAY g_display;
+// (HUD Placement) how far (canvas pixels, >= 0) the corner / edge HUD widgets move out to each side from where the 4:3
+// canvas has them: 0 at 4:3, in VR or with the picture no wider than 4:3 (screenrt.cpp DrawScreenObjs)
+float DxHudPlacement();
 // The refresh rate of the monitor holding most of the window (0: unknown)
 int DisplayRefreshRate(GLFWwindow* window);
 

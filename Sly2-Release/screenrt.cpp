@@ -25,6 +25,7 @@
 #include "disc.h"
 #include "frontend.h"
 #include "hud.h"
+#include "display.h"
 #include "vr.h"
 #include "menu.h"
 #include "shop.h"
@@ -685,6 +686,46 @@ static bool NoWipeMaskFix()
 
 namespace { bool s_fBinocFrameDrawn = false; }
 bool FBinocFrameDrawn() { return s_fBinocFrameDrawn; }
+
+// (HUD Placement, display.h hudPlacement) a corner / edge widget moved out to its side of the HUD box: by the side of
+// the canvas its drawing is on (its box's centre left or right of the middle); one reaching across the middle (a
+// dialog, a menu, a title card) stays
+// (HUD Placement) the side a screen object moves to: -1 left, 1 right, 0 it stays. Corner / edge widgets only: a
+// drawing wholly on one side of the canvas's middle reaching into its outer quarter (the gauge 0x36B, the counters
+// 0x36D..0x36F, the save book 0x5D4, a job's own counters and meters). Centred ones stay (they reach across the middle:
+// the prompt ticker 0x371, dialogs, title cards, the job screens), and so do the pictures kept on the 4:3 canvas
+// (the binocucom's frames and everything drawn with them: its heads' windows 0x368..0x36A; the menus, the wipe).
+int DirHudPlacement(const LO* plo, glm::vec2 lo, glm::vec2 hi)
+{
+    switch (plo->oid)
+    {
+    case 0x30A:                         // the wipe
+    case 0x35F: case 0x360: case 0x361: // the binocucom frames
+    case 0x368: case 0x369: case 0x36A: // the binocucom heads' windows
+    case 0x370: case 0x4E0: case 0x5D2: // the menus (the pause menu, job help, the episode menu's)
+    case 0x373:                         // the subtitle box (its bars)
+    case 0x375: case 0x376: case 0x377: case 0x378:   // the gadget grid, the shop
+    case 0x52C: case 0x52D:             // the card's dialogs
+        return 0;
+    default: break;
+    }
+    if (s_fBinocFrameDrawn || g_hud.fWideEdgesObj || g_hud.fClipCanvasObj || FFourThreeMenuObj(plo)) return 0;
+    if (hi.x <= 320.0f && lo.x < 160.0f) return -1;
+    if (lo.x >= 320.0f && hi.x > 480.0f) return 1;
+    return 0;
+}
+
+void PlaceHudObj(const LO* plo, const CHud::MARK& mark, float dx)
+{
+    static const bool s_fDbg = SLY2N_ENV("SLY2N_HUDPLACEDBG") != nullptr;
+    if (dx <= 0.0f && !s_fDbg) return;
+    glm::vec2 lo, hi;
+    if (!g_hud.FBoundsSince(mark, lo, hi)) return;
+    const int side = DirHudPlacement(plo, lo, hi);
+    if (s_fDbg) std::printf("hudplace: 0x%X x %.0f..%.0f y %.0f..%.0f side %d\n", plo->oid, double(lo.x), double(hi.x), double(lo.y), double(hi.y), side);
+    g_hud.ShiftSince(mark, float(side) * dx);
+}
+
 void DrawScreenObjs(SW* psw)
 {
     if (!psw) return;
@@ -731,6 +772,7 @@ void DrawScreenObjs(SW* psw)
     std::reverse(adraw.begin(), adraw.end());
     s_fBinocFrameDrawn = std::any_of(adraw.begin(), adraw.end(), [](const auto& e) { return e.first->oid >= 0x35F && e.first->oid <= 0x361; });
     std::stable_sort(adraw.begin(), adraw.end(), [](const auto& a, const auto& b) { return a.second->prio < b.second->prio; });
+    const float dxPlace = DxHudPlacement();   // (HUD Placement: the corner / edge widgets out to the box's sides)
     for (auto [plo, p] : adraw)
     {
         s_psrtDrawing = p;
@@ -747,7 +789,9 @@ void DrawScreenObjs(SW* psw)
         // (VR, vr.h: in the Immersive view the subtitle box's letterbox bars (the scripted pauses: the safe house's door,
         // Ep1's arrival) would sit in front of the eyes as two black slabs; the Flat Screen view and flat play keep them)
         g_hud.fNoBarsObj = plo->oid == 0x373 && vr::FImmersiveView() && !vr::FTitleMoment();   // (the title keeps its bars)
+        const CHud::MARK mark = g_hud.Mark();
         p->player.Draw(pfont, picons, psw);
+        PlaceHudObj(plo, mark, dxPlace);
         g_hud.EndWideEdgesObj();
         if (fFourThree) g_hud.Pillarbox(glm::vec4(0, 0, 0, 128), (g_zScreenBase + 262000.0f) / 16777216.0f);   // (over the world, under higher priorities)
         g_hud.fWideRectsOnlyObj = false;

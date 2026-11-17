@@ -99,6 +99,8 @@ enum PTX : int
     // (menu.cpp, the Language... page left with a new language waiting) the prompt: restart from the last checkpoint now in
     // it, or keep playing and have it from the next area
     PTX_LangReloadQuestion, PTX_LangReloadNow, PTX_LangReloadLater,
+    // (display.h hudPlacement) the display options' HUD Placement (4:3 / 16:9 / 16:10 / Match Screen)
+    PTX_HudPlacement, PTX_MatchScreen,
     PTX_Max
 };
 

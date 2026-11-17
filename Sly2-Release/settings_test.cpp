@@ -159,6 +159,27 @@ int SettingsSelfTest()
         Check(bad.upscale.preset == st::UpscalePreset_Quality && bad.upscale.sharpness == 80 && invalid.size() == 2,
               "upscaling: unreadable values keep the defaults");
     }
+    // (HUD Placement) [Display] HUD Placement: 4:3 by default, each value and other spellings read and written back
+    {
+        const st::Sly2Settings d = st::sly2FromIni(st::sly2ToIni(st::Sly2Settings{}));
+        Check(d.hudPlacement == st::HudPlacement_4_3 && st::sly2ToIni(d).find("HUD Placement = 4:3") != std::string::npos,
+              "HUD placement: 4:3 by default");
+        static const char* const asz[] = {"4:3", "16:9", "16:10", "Match Screen"};
+        bool ok = true;
+        for (int i = 0; i < st::kHudPlacementCount; ++i)
+        {
+            std::vector<std::string> invalid;
+            const st::Sly2Settings h = st::sly2FromIni(std::string("[Display]\nHUD Placement = ") + asz[i] + "\n", &invalid);
+            const st::Sly2Settings h2 = st::sly2FromIni(st::sly2ToIni(h));
+            ok = ok && h.hudPlacement == i && h2.hudPlacement == i && invalid.empty();
+        }
+        Check(ok, "HUD placement: every value round trips");
+        Check(st::sly2FromIni("[Display]\nhud_placement = match screen\n").hudPlacement == st::HudPlacement_Match,
+              "HUD placement: other spellings");
+        std::vector<std::string> invalid;
+        Check(st::sly2FromIni("[Display]\nHUD Placement = 21:9\n", &invalid).hudPlacement == st::HudPlacement_4_3 && invalid.size() == 1,
+              "HUD placement: an unreadable value keeps 4:3");
+    }
     // the names: every key and button name reads back to its value
     {
         bool ok = true;

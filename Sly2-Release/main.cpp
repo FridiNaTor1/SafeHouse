@@ -387,7 +387,7 @@ int main(int argc, char** argv)
     EDITOROPTS eo;   // --editor W (editor.h: the map editor's 3D view, desktop builds)
     std::string cmRanges = "2DDED0+6A0,2DFBC0+2240,FB1580+1100,FB37E0+80,140C9F0+600,1486000+3400";
     bool fCmFree = false;
-    struct { bool fAspect = false; DISPASPECT aspect = DISPASPECT_Fit; int internalHeight = -1, frameRate = -1, vsync = -1, window = -1, wideBackgrounds = -1, hqLogo = -1, longShadows = -1, fastShadows = -1, msaa = -1, upscale = -1, upscalePreset = -1, upscaleSharpness = -1; float drawDistance = -1; } dispo;
+    struct { bool fAspect = false; DISPASPECT aspect = DISPASPECT_Fit; int internalHeight = -1, frameRate = -1, vsync = -1, window = -1, wideBackgrounds = -1, hqLogo = -1, longShadows = -1, fastShadows = -1, hudPlacement = -1, msaa = -1, upscale = -1, upscalePreset = -1, upscaleSharpness = -1; float drawDistance = -1; } dispo;
     std::vector<std::string> rest, physArgs;
     RENDERER rendererArg = RENDERER::Auto;
     bool fRendererArg = false;
@@ -426,6 +426,11 @@ int main(int argc, char** argv)
         else if (!std::strcmp(argv[i], "--hq-logo") && i + 1 < argc) dispo.hqLogo = std::atoi(argv[++i]);   // (QoL: the launcher's logo in the front end)
         else if (!std::strcmp(argv[i], "--long-shadows") && i + 1 < argc) dispo.longShadows = std::atoi(argv[++i]);   // (QoL: display.h fLongShadows)
         else if (!std::strcmp(argv[i], "--fast-shadows") && i + 1 < argc) dispo.fastShadows = std::atoi(argv[++i]);   // (low-end: display.h fFastShadows)
+        else if (!std::strcmp(argv[i], "--hud-placement") && i + 1 < argc)   // (display.h hudPlacement: 4:3 | 16:9 | 16:10 | match, or 0..3)
+        {
+            const std::string v = argv[++i];
+            dispo.hudPlacement = v == "16:9" ? 1 : v == "16:10" ? 2 : v == "match" || v == "Match Screen" ? 3 : v == "4:3" ? 0 : std::clamp(std::atoi(v.c_str()), 0, 3);
+        }
         else if (!std::strcmp(argv[i], "--window-mode") && i + 1 < argc) dispo.window = std::atoi(argv[++i]);
         // (display.h fUpscale: off or fsr1; the preset 0..3 or its name; the sharpness 0..100)
         else if (!std::strcmp(argv[i], "--upscale") && i + 1 < argc) dispo.upscale = !std::strcmp(argv[++i], "fsr1") || !std::strcmp(argv[i], "1") ? 1 : 0;
@@ -840,6 +845,7 @@ int main(int argc, char** argv)
         if (dispo.longShadows >= 0) g_display.fLongShadows = dispo.longShadows != 0;
         if (const char* psz = std::getenv("SLY2N_FASTSHADOWS")) g_display.fFastShadows = std::atoi(psz) != 0;
         if (dispo.fastShadows >= 0) g_display.fFastShadows = dispo.fastShadows != 0;
+        if (dispo.hudPlacement >= 0) g_display.hudPlacement = dispo.hudPlacement;
         if (dispo.upscale >= 0) g_display.fUpscale = dispo.upscale != 0;
         if (dispo.upscalePreset >= 0) g_display.upscalePreset = dispo.upscalePreset;
         if (dispo.upscaleSharpness >= 0) g_display.upscaleSharpness = dispo.upscaleSharpness;

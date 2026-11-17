@@ -25,6 +25,7 @@ inline bool sly3HasKey(std::string_view section, std::string_view key) {
     if (section == "Mouse" && key == "Mouse Aim In Hacking") return false;
     if (section == "Graphics" && key == "Texture Streaming") return false;   // (Sly 2's renderer only, for now)
     if (section == "Graphics" && key == "Outline Thickness") return false;   // (Sly 2's renderer only, for now)
+    if (section == "Display" && key == "HUD Placement") return false;   // (Sly 2's HUD only, for now)
     return true;
 }
 

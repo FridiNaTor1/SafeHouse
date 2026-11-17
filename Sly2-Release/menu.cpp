@@ -103,6 +103,9 @@ enum NATIVEID : int
     // (settings v22, display.h monitor; platform/monitor_select.h) Monitor: on the display options' page after the window
     // mode (desktop only, not in VR); Primary, then the connected monitors
     NID_Monitor,
+    // (display.h hudPlacement) HUD Placement: on the display options' page after the aspect ratio (not in VR: the HUD
+    // panel keeps 4:3); 4:3, 16:9, 16:10, Match Screen. In place of the original's Center Screen... (the options page)
+    NID_HudPlacement,
     // (VR, vr.h) the pause menu's VR Settings page (a headset in use)
     NID_Vr = NID_Base + 0x200,
     NID_VrPage = NID_Vr, NID_VrMode, NID_VrAutoCam, NID_VrVignette, NID_VrScreenSize, NID_VrRefresh, NID_VrEyeRes, NID_VrMsaa, NID_VrFoveation, NID_VrWorldScale,
@@ -538,6 +541,12 @@ std::string StrNative(int id)
         return StrPortValue(PTX_WindowMode, StrPort(aptx[std::clamp(int(g_display.window), 0, 2)]));
     }
     case NID_Monitor: return StrPortValue(PTX_Monitor, StrMonitorChoice());
+    case NID_HudPlacement:
+    {
+        static const char* const asz[] = {"4:3", "16:9", "16:10"};
+        const int i = std::clamp(g_display.hudPlacement, 0, 3);
+        return StrPortValue(PTX_HudPlacement, i == 3 ? StrPort(PTX_MatchScreen) : std::string(asz[i]));
+    }
     case NID_Vsync: return onOff(PTX_VSync, g_display.fVsync);
     case NID_DrawDistance: return StrPortValue(PTX_DrawDistance, StrPortDecimal(g_display.drawDistance, 2) + "x");
     case NID_LongShadows: return onOff(PTX_LongShadows, g_display.fLongShadows);
@@ -895,6 +904,7 @@ void CycleNative(MENUENT& e)
         std::printf("display: monitor %s\n", g_display.monitor.empty() ? "Primary" : g_display.monitor.c_str());
         break;
     case NID_Vsync: g_display.fVsync = !g_display.fVsync; break;
+    case NID_HudPlacement: g_display.hudPlacement = (std::clamp(g_display.hudPlacement, 0, 3) + 1) % 4; break;
     case NID_LongShadows: g_display.fLongShadows = !g_display.fLongShadows; break;
     case NID_FastShadows: g_display.fFastShadows = !g_display.fFastShadows; break;
     case NID_OutlineThickness: StepOutlineThickness(1, true); break;
@@ -1379,6 +1389,11 @@ std::vector<MENUENT> AentDisplayOptions()
             a.push_back(e);
         }
 #endif
+        if (id == NID_Aspect && !vr::FActive())   // (then HUD Placement: not in a headset, whose HUD panel keeps 4:3)
+        {
+            e.id = NID_HudPlacement;
+            a.push_back(e);
+        }
         if (id == NID_Resolution) AppendUpscaleRows(a, PFN_NativeDisplay, false);   // (upscaling: after the resolution)
     }
 #ifndef __SWITCH__
@@ -1410,6 +1425,7 @@ std::vector<MENUENT> AentOptions()
         bool f = true;
         if (e.id == 0x3C) f = fTitle;          // New Game... only at the title
         else if (e.id == 0x3E) f = !fTitle;    // Save Game... only in a game
+        else if (e.id == 0x3F) f = false;      // Center Screen... (the PS2's video position): HUD Placement instead (display options)
         if (f) a.push_back(e);
     }
     MENUENT e;
