@@ -147,6 +147,15 @@ void SetStepPhysHeading(ALO* palo, float rad)
     SetStepPhysHeadingUnlocked(palo, rad);
 }
 
+void SetStepMotionKind3(LO* plo, int n)
+{
+    if (!plo) return;
+    plo->SetField3(0, 0x1B8, uint32_t(n));
+    static const bool s_fOff = [] { const char* sz = std::getenv("SLY3_STEPMOTION260"); return sz && sz[0] == '0'; }();
+    if (s_fOff || !FCidDerivedFrom(plo->Cid(), S3CID(0x30)) || !PstepFromLo(static_cast<ALO*>(plo))) return;
+    StepPhysOf(static_cast<ALO*>(plo)).nMotion = n == 2 ? -1 : n;
+}
+
 // orig: 0x002046B0
 void SetStepPhysHeadingToward(ALO* palo, const glm::vec3& dir) { SetStepPhysHeading(palo, std::atan2(dir.y, dir.x)); }
 

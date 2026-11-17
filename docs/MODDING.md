@@ -405,6 +405,9 @@ of the languages folder string by string, beside a reference language:
   to its text), **Show:** missing / dubbed lines and the dub progress. **Add a dub** copies a WAV or FLAC file in under
   the line's name (`Dialog/<the reference's subfolder>/<line>.wav`, `Movies/<name>.wav`; one of the game's own
   languages: under `Mods/Languages/<Language>/`), and **Subtitle time** sets the line's entry in `Dialog/lengths.json`.
+- **Layout:** drag the gutter between the list and the line's panel to share the width between them, and on the voices
+  tab the gutter between the line (its reference text, the translation, the dubs) and the recorder below it, so the
+  line stays in view while recording. The sizes are kept (`launcher.json` `loc_layout`) and follow the window's size.
 - **Groups:** both lists group by level (the episode whose worlds use a string or line: Prologue, Episode 1: Paris, ...;
   **Menus** for the front end's alone, **Shared** for those in several episodes, such as the HUD and the gadgets) and by
   character inside a level (the speaker the game's dialog tables give each line: Sly, Bentley, Murray, Carmelita,
@@ -421,8 +424,9 @@ of the languages folder string by string, beside a reference language:
   effect** plays it; the dry take is kept as `Takes/<line>.wav` beside `Dialog/` (the game does not read `Takes/`), so
   the effect can be switched off or redone.
 - **Record a dub:** choose the microphone, press **Record**: a three-second countdown, then the reference line plays
-  (wear headphones; **Play the reference along** turns it off) and the take stops by itself at the reference's length
-  and a second, or with **Stop**. Then drag the two handles on the waveform to cut the start and the end (the dashed
+  quietly to follow (wear headphones; **Play the reference along** turns it off, **Reference volume while recording**
+  sets how loud: 20% by default; **Play the reference** always plays it at full volume) and the take stops by itself
+  at the reference's length and a second, or with **Stop**. Then drag the two handles on the waveform to cut the start and the end (the dashed
   line is the reference's length), play the take (with the radio effect on a radio line) and **Save as the dub**: a
   16-bit WAV in the line's place, as an added file would be.
 

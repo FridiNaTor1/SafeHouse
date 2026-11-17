@@ -99,6 +99,10 @@ struct LO : BASIC
     std::vector<std::pair<uint64_t, uint32_t>> afield;
     uint32_t U32Field(uint32_t pfnGetter, uint32_t ib, uint32_t uDefault = 0) const;
     void SetField(uint32_t pfnGetter, uint32_t ib, uint32_t u);
+    // The same at the original's (Sly 3's) offset and getter: the class's field option there is found where it is
+    // stored (brx.h OptionFieldKey: e.g. a guard's flinch clip, Sly 3 +0x368 = option 404, stored at Sly 2's +0x348)
+    uint32_t U32Field3(uint32_t pfnGetter3, uint32_t ib3, uint32_t uDefault = 0) const;
+    void SetField3(uint32_t pfnGetter3, uint32_t ib3, uint32_t u);
 
     CID Cid() const { return pcls ? pcls->cid : -1; }
     uint64_t nAdd = 0;                      // (native) OnAdd's serial of its last entry into the world (activate.cpp

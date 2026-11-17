@@ -218,8 +218,8 @@ void PostLoadPandaKing(GURU* p)
     p->ploMarkerTmpl = PloPart(palo, FN3_TAG | 0x16F4u);
     p->ploFwCount = PloInteractOidField(palo, 0x16F8);   // (EOPIDs 1881 / 1882: objects by oid; 1886 / 1888 the most charges, the keep time)
     p->ploFwGlow = PloInteractOidField(palo, 0x16FC);
-    p->cChargeMax = int(palo->U32Field(0, 0x16E8, uint32_t(p->cChargeMax)));
-    const uint32_t uKeep = palo->U32Field(0, 0x16F0, 0);
+    p->cChargeMax = int(palo->U32Field3(0, 0x16E8, uint32_t(p->cChargeMax)));
+    const uint32_t uKeep = palo->U32Field3(0, 0x16F0, 0);
     if (uKeep) std::memcpy(&p->dtTargetKeep, &uKeep, sizeof(float));
     AttachActorLook(p, 0x2E);   // 0x155190
     if (FDebug())
@@ -682,9 +682,9 @@ void RefreshPkFwTargets(GURU* p)
     for (LO* plo : g_psw->mpcidaplo[0x11])
     {
         if (!plo) continue;
-        uint32_t grf = plo->U32Field(0, 0xD8, 0);
+        uint32_t grf = plo->U32Field3(0, 0xD8, 0);
         float sRadius = 2000.0f;   // (Sly 2's +0xE8 default, natively the look's range: sly.cpp UpdateActorLook)
-        if (const uint32_t u = plo->U32Field(0, 0xE8, 0)) std::memcpy(&sRadius, &u, sizeof sRadius);
+        if (const uint32_t u = plo->U32Field3(0, 0xE8, 0)) std::memcpy(&sRadius, &u, sizeof sRadius);
         for (const OPT& o : plo->aopt)
         {
             if (o.eopid == 249 && !o.aval.empty()) grf = uint32_t(o.aval[0].n);
@@ -1107,7 +1107,7 @@ int NGuruNoisy3(ACTOR* pa)
 {
     GURU* p = pa ? PguruFromLo(pa->palo) : nullptr;
     if (!p) return -2;
-    if (FPlayersPausedSel3(int(p->palo->U32Field(0, 0x130, 0xFFFFFFFFu)))) return 0;
+    if (FPlayersPausedSel3(int(p->palo->U32Field3(0, 0x130, 0xFFFFFFFFu)))) return 0;
     if (FCombo3Noisy(p)) return 1;
     return p->state == 1 ? 1 : -1;
 }

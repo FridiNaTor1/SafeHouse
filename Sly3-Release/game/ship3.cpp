@@ -1222,7 +1222,7 @@ int NInterestGroup(LO* plo)
 {
     for (const OPT& o : plo->aopt)
         if (o.eopid == 252 && !o.aval.empty()) return o.aval[0].n;
-    return int(plo->U32Field(0, 0xF4, plo->U32Field(0, 0xE4, 0)));
+    return int(plo->U32Field3(0, 0xF4, plo->U32Field3(0, 0xE4, 0)));
 }
 // 0x218C00: the aim point of a side: the target objects (class 0x11, the list D_00479AD8) of the ship's target group
 // on that side within 55 degrees of the beam, the ships' first, the nearer first
@@ -1654,7 +1654,7 @@ bool FAcceptShipContact(ALO* palo, CTMSG* pctm)
     s.ploLastHit = pfrom;
     s.tLastHitSender = g_clock.t;
     SHIP3* pown = PshipOf(powner);
-    palo->SetField(0, 0x184, static_cast<uint32_t>(reinterpret_cast<uintptr_t>(pfrom) & 0xFFFFFFFFu));   // 0x1F4DD8
+    palo->SetField3(0, 0x184, static_cast<uint32_t>(reinterpret_cast<uintptr_t>(pfrom) & 0xFFFFFFFFu));   // 0x1F4DD8
     int damage = std::abs(pctm->nState);
     if (s.type == 0x3F) damage /= 2;
     if (s.phase == 2 && pown && pown->phase == s.phase) damage /= 4;
@@ -1996,8 +1996,8 @@ void TakePickupShip3(LO* pso, LO* ppickup)
     SHIP3* ps = Pship(pso);
     if (!ps) return;
     SHIP3& s = *ps;
-    auto g = [&](uint32_t ib) { return std::bit_cast<float>(ppickup->U32Field(0, ib, 0)); };
-    if (ppickup->U32Field(0, 0x1B0, 0))
+    auto g = [&](uint32_t ib) { return std::bit_cast<float>(ppickup->U32Field3(0, ib, 0)); };
+    if (ppickup->U32Field3(0, 0x1B0, 0))
     {
         int amount = static_cast<int>(GRandInRange(g(0x1A0), g(0x1A4)));
         const int first = s.hp[0], second = s.hp[1], diff = first - second;

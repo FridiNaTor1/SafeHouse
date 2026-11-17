@@ -422,6 +422,7 @@ void SetScptAlarm3(SCPT3* ps, int n, bool fSet);
 bool FScptAlarm3(const SCPT3* ps, int n);
 
 void StartScpt3(SCPT3* ps, void* ploStarter);  // orig3: 0x225EE8
+bool FRunFaceHeading3(RUN3* p, float* pang);    // orig3: 0x22A7F8 case 47 (the pending 0x2F's object heading)
 void StopScpt3(SCPT3* ps);                     // orig3: 0x226050
 void UpdateScpt3(SCPT3* ps, float dt);         // orig3: 0x225130 (dt: the frame's time, real or game)
 bool FScptRunning3(const SCPT3* ps);

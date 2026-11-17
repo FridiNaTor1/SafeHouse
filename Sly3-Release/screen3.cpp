@@ -130,8 +130,8 @@ std::string StrLootCard3(const SW* psw, bool fAmount)
     }
     else if (FCidDerivedFrom(py->Cid(), S3CID(0x5C)))
     {
-        idText = int(py->U32Field(0, 0x224, uint32_t(-1)));
-        n = int(py->U32Field(0, 0x1A4, 0));
+        idText = int(py->U32Field3(0, 0x224, uint32_t(-1)));
+        n = int(py->U32Field3(0, 0x1A4, 0));
         fN = n != 0;
     }
     else idText = pa->n1318;
@@ -220,7 +220,7 @@ std::string StrScreenScript3(const SW* psw, int id, const int* aarg, bool* pf)
     {
         const JOB3* pjob = g_tasks3.pjobCur;
         int idText = IdJobFailText3();   // (jobend3.h: the line JobEndFail3 was given)
-        if (idText == -1) idText = pjob && pjob->plo ? int(pjob->plo->U32Field(0, 0xC8, uint32_t(-1))) : -1;
+        if (idText == -1) idText = pjob && pjob->plo ? int(pjob->plo->U32Field3(0, 0xC8, uint32_t(-1))) : -1;
         return StrText3(psw, idText);
     }
     case STR_PROMPT: return StrText3(psw, s_idPrompt);   // 0x25F5E8
@@ -274,7 +274,7 @@ void InitScreens3(SW* psw)
         {
             const SPRITESET* pss = static_cast<const SPRITESET*>(plo);
             std::printf("screen3: oid %d (parent %d%s) cid 0x%X prio %d ext %d canvas %u x %u, %zu elements, %zu groups; root parts:", plo->oid,
-                        plo->paloParent ? plo->paloParent->oid : -1, plo->fInWorld ? "" : ", not in the world", plo->Cid(), int(plo->U32Field(0, 0x94, 0)), pss->pso ? pss->pso->fExternal : -1,
+                        plo->paloParent ? plo->paloParent->oid : -1, plo->fInWorld ? "" : ", not in the world", plo->Cid(), int(plo->U32Field3(0, 0x94, 0)), pss->pso ? pss->pso->fExternal : -1,
                         pss->pso ? pss->pso->ul94 : 0, pss->pso ? pss->pso->ul98 : 0, pss->pso ? pss->pso->aelem.size() : 0,
                         pss->pso ? pss->pso->agroup.size() : 0);
             if (pss->pso && !pss->pso->agroup.empty())

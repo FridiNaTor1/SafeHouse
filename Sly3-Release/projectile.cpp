@@ -99,7 +99,13 @@ uint32_t Ib3Projectile(const LO* plo, uint32_t ib)
     default: return ib;
     }
 }
-uint32_t UField(const LO* plo, uint32_t ib, uint32_t uDefault) { return plo->U32Field(0, Ib3Projectile(plo, ib), uDefault); }
+// (a translated offset is the original's: read where the option is stored, brx.h OptionFieldKey; natively the load
+// stored the Sly 2 twin's offset and only a script's set reached these reads)
+uint32_t UField(const LO* plo, uint32_t ib, uint32_t uDefault)
+{
+    const uint32_t ib3 = Ib3Projectile(plo, ib);
+    return ib3 != ib ? plo->U32Field3(0, ib3, uDefault) : plo->U32Field(0, ib, uDefault);
+}
 float GField(const LO* plo, uint32_t ib, float gDefault)
 {
     uint32_t u;
@@ -469,7 +475,7 @@ struct INITPROJECTILE
         // Sly 3's EOPID 439 (option 549, the hit's amount): its setter 0x14D228 stores +0x1D4 (Sly 2's +0x1F0 here, the
         // default 10 from 0x14BFB0), its getter reads the field. It was dropped: every projectile hit for 10 (e.g. the turf
         // war's wave guards' and Carmelita's shots, whose ammo sets its own amount)
-        RegisterObjectSetter3(439, [](LO* plo, const CRef& r) { plo->SetField(0, 0x1D4, static_cast<uint32_t>(r.m_tagk == TAGK_F32 ? static_cast<int>(r.m_g) : r.m_n)); });
+        RegisterObjectSetter3(439, [](LO* plo, const CRef& r) { plo->SetField3(0, 0x1D4, static_cast<uint32_t>(r.m_tagk == TAGK_F32 ? static_cast<int>(r.m_g) : r.m_n)); });
         RegisterObjectGetter3(439, [](LO* plo) {
             CRef r;
             r.SetS32(std::abs(static_cast<int>(UField(plo, 0x1F0, static_cast<uint32_t>(-10)))));

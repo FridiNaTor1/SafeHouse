@@ -1,6 +1,7 @@
 #pragma once
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <cstdio>
 #include <fstream>
 #include <map>
@@ -209,6 +210,20 @@ struct LauncherBackend {
     void hideSly3Notice() {
         config["sly3_notice_hidden"] = true;
         saveConfig();
+    }
+    // The Translate page's layout and recording preferences (launcher.json "loc_layout": {"list": the list's share of the
+    // width, "detail": the line's share of the detail panel's height, "ref_volume": the reference's volume while
+    // recording, 0..1}). Each value falls back to the page's default on its own.
+    double locLayout(const char* key, double fallback) const {
+        if (!config.contains("loc_layout") || !config.at("loc_layout").is_object()) return fallback;
+        const json& j = config.at("loc_layout");
+        return j.contains(key) && j.at(key).is_number() ? j.at(key).get<double>() : fallback;
+    }
+    void setLocLayout(const char* key, double value) {
+        if (!config.contains("loc_layout") || !config.at("loc_layout").is_object()) config["loc_layout"] = json::object();
+        config["loc_layout"][key] = std::round(value * 1000.0) / 1000.0;
+        try { saveConfig(); }
+        catch (...) {}
     }
     // Manifests are parsed again only when they change (Sly 1's lists every file: the pages ask every second).
     Installation cachedInstallation(const fs::path& dir, GameId game) const {

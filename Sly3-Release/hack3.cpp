@@ -170,7 +170,7 @@ HACK3& Hack3(LO* plo)
         // (a spawned instance gets its field options as stores only: +0x1E0 the strength)
         if (h3.gStrength == 0.0f)
             for (const LO* p = plo; p; p = p->ploCloneOf != p ? p->ploCloneOf : nullptr)
-                if (const uint32_t u = p->U32Field(0, 0x1E0, 0); u) { std::memcpy(&h3.gStrength, &u, 4); break; }
+                if (const uint32_t u = p->U32Field3(0, 0x1E0, 0); u) { std::memcpy(&h3.gStrength, &u, 4); break; }
         h3.fAccelPos = NOpt3(plo, 1565, 0);
         h3.cDirGun = NOpt3(plo, 1566, 0);
         if (FOpt3(plo, 1568, &v)) h3.lmCam = LM{v.ag[0], v.ag[1]};
@@ -245,7 +245,7 @@ bool FSetHackHp3(LO* plo, bool fMax, int n)
 LO* PloEnemyNav3(LO* plo)
 {
     for (const LO* p = plo; p; p = p->ploCloneOf != p ? p->ploCloneOf : nullptr)
-        if (const uint32_t oid = p->U32Field(0, 0x200, 0xFFFFFFFFu); oid != 0xFFFFFFFFu && oid != 0)
+        if (const uint32_t oid = p->U32Field3(0, 0x200, 0xFFFFFFFFu); oid != 0xFFFFFFFFu && oid != 0)
             return PloFindSwNearest(plo, static_cast<int>(oid));
     OPTVAL v;
     if (!FOpt3(plo, 1572, &v) || v.n == -1 || v.n == 0) return nullptr;

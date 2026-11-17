@@ -270,15 +270,15 @@ void Remove(LO* plo) { if (plo && plo->fInWorld) RemoveLo(g_psw, plo); }   // vt
 void Add(LO* plo) { if (plo && !plo->fInWorld) AddLo(g_psw, plo); }        // vt slot 8
 
 // the SO's hit points (+0x16C / +0x170, so EOPIDs 937 / 938 answer) and ammunition (+0x174 / +0x178)
-int Hp(const PLANE3& p) { return static_cast<int32_t>(p.palo->U32Field(0, 0x16C, 0)); }
-int HpMax(const PLANE3& p) { return static_cast<int32_t>(p.palo->U32Field(0, 0x170, 100)); }
-void SetHp(PLANE3& p, int n) { p.palo->SetField(0, 0x16C, static_cast<uint32_t>(std::clamp(n, 0, std::max(HpMax(p), 0)))); }   // 0x1F43D0
-void SetHpMax(PLANE3& p, int n) { p.palo->SetField(0, 0x170, static_cast<uint32_t>(n)); }                                 // 0x1F43F8 (part)
+int Hp(const PLANE3& p) { return static_cast<int32_t>(p.palo->U32Field3(0, 0x16C, 0)); }
+int HpMax(const PLANE3& p) { return static_cast<int32_t>(p.palo->U32Field3(0, 0x170, 100)); }
+void SetHp(PLANE3& p, int n) { p.palo->SetField3(0, 0x16C, static_cast<uint32_t>(std::clamp(n, 0, std::max(HpMax(p), 0)))); }   // 0x1F43D0
+void SetHpMax(PLANE3& p, int n) { p.palo->SetField3(0, 0x170, static_cast<uint32_t>(n)); }                                 // 0x1F43F8 (part)
 void SetAmmo(PLANE3& p, int n)   // 0x1F4438
 {
     p.ammo = std::clamp(n, 0, std::max(p.ammoMax, 0));
-    p.palo->SetField(0, 0x174, static_cast<uint32_t>(p.ammo));
-    p.palo->SetField(0, 0x178, static_cast<uint32_t>(p.ammoMax));
+    p.palo->SetField3(0, 0x174, static_cast<uint32_t>(p.ammo));
+    p.palo->SetField3(0, 0x178, static_cast<uint32_t>(p.ammoMax));
 }
 
 PADCTL* Ppad(PLANE3& p)
@@ -1962,7 +1962,7 @@ bool FAcceptPlaneContact(ALO* palo, CTMSG* pctm)
     }
     LO* pfrom = pctm->ploSender;
     if (pfrom && FIsLoDerivedFrom(pfrom, 0x59) && PloProjectileLauncher(pfrom) == palo && !pctm->nKill3) return false;   // its own shot
-    palo->SetField(0, 0x184, static_cast<uint32_t>(reinterpret_cast<uintptr_t>(pfrom) & 0xFFFFFFFFu));   // 0x1F4DD8 (the last hitter)
+    palo->SetField3(0, 0x184, static_cast<uint32_t>(reinterpret_cast<uintptr_t>(pfrom) & 0xFFFFFFFFu));   // 0x1F4DD8 (the last hitter)
     // (PC, duel3.h: the free-for-all scores a kill for its shooter: the plane that fired the projectile, or rammed)
     if (LO* pshooter = pfrom && FIsPlane(pfrom) ? pfrom : pfrom && FIsLoDerivedFrom(pfrom, 0x59) ? PloProjectileLauncher(pfrom) : nullptr;
         pshooter && pshooter != palo && FIsPlane(pshooter))
@@ -1995,7 +1995,7 @@ bool FAcceptPlaneContact(ALO* palo, CTMSG* pctm)
     // the damage is Sly 3's option 549 (EOPID 439, the setter of +0x1D4, which the copied code does not read): e.g. the
     // player's gun 95692: 25, the computer's 37428)
     int amount = std::abs(pctm->nState);
-    if (pfrom && FIsLoDerivedFrom(pfrom, 0x59) && pctm->nState == -10 && !pfrom->U32Field(0, 0x1D4, 0))
+    if (pfrom && FIsLoDerivedFrom(pfrom, 0x59) && pctm->nState == -10 && !pfrom->U32Field3(0, 0x1D4, 0))
         for (const OPT& o : pfrom->aopt)
             if (o.eopid == 439 && !o.aval.empty()) amount = std::abs(o.aval[0].n);
     // 0x172268 (0x240C78, every hit record): a hit on a player's object is scaled by the dynamic difficulty (D_0036BD20
@@ -2301,6 +2301,8 @@ struct INITPLANE3
         RegisterObjectMethod3(0x102F50, [](LO*, const std::vector<CRef>& a) {
             CRef r;
             r.SetBool(a.size() >= 2 && a[0].m_tagk == TAGK_Vector && FInsideAnyCm(a[0].GetVector(), GOf(a[1])));
+            if (static const bool s_f = std::getenv("SLY3_CMINSIDEPRINT") != nullptr; s_f && a.size() >= 2 && a[0].m_tagk == TAGK_Vector)   // (debug)
+                std::printf("cminside: %.0f %.0f %.0f r %.0f -> %d\n", a[0].GetVector().x, a[0].GetVector().y, a[0].GetVector().z, GOf(a[1]), int(r.m_bool));
             return r;
         });
         // the guns (1700: 0x10FF08 clears; 1701: 0x10FF80 adds by ids, resolved at the post-load / 0x110028 adds objects)
@@ -2375,7 +2377,7 @@ void TakePickupPlane3(LO* pso, LO* ppickup)
     if (!pso || !ppickup || pso->Cid() != 0x52 || !FIsLoDerivedFrom(ppickup, 0x6B)) return;
     PLANE3* p = Pplane(pso);
     if (!p) return;
-    const int n = static_cast<int32_t>(ppickup->U32Field(0, 0x1A8, 0));
+    const int n = static_cast<int32_t>(ppickup->U32Field3(0, 0x1A8, 0));
     SetAmmo(*p, p->ammo + n);
     if (NPrint()) std::printf("plane3: %d took pickup %d: ammunition +%d = %d\n", pso->oid, ppickup->oid, n, p->ammo);
 }

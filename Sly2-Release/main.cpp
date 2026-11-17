@@ -485,6 +485,21 @@ int main(int argc, char** argv)
         else if (!std::strcmp(argv[i], "--save") && i + 1 < argc) go.save = argv[++i];
         else if (!std::strcmp(argv[i], "--print-progress") && i + 1 < argc) { go.aprintProgress.push_back(argv[++i]); fGame = true; }
         else if (!std::strcmp(argv[i], "--frame-dump") && i + 1 < argc) { go.frameDump = argv[++i]; fGame = true; }
+        else if (!std::strcmp(argv[i], "--start-pos") && i + 1 < argc)
+        {
+            // X,Y,Z[,H]: Sly put there a second into the game (heading H in radians; the map editor's "play from here"),
+            // through the teleport the debug tools use (sly.cpp SLY2N_TELEPORT)
+            float a[4] = {0, 0, 0, 0};
+            const int c = std::sscanf(argv[++i], "%f,%f,%f,%f", &a[0], &a[1], &a[2], &a[3]);
+            if (c >= 3)
+            {
+                char sz[128];
+                std::snprintf(sz, sizeof(sz), "%.2f %.2f %.2f@t1,%.4f", a[0], a[1], a[2], a[3]);
+                setenv("SLY2N_TELEPORT", sz, 1);
+                extern bool g_fEditorStartPos;   // (transition.cpp: Sly, not the safe house, at the first world's start)
+                g_fEditorStartPos = true;
+            }
+        }
         else if (!std::strcmp(argv[i], "--sly-start") && i + 1 < argc) { go.slyStart = argv[++i]; fGame = true; }
         else if (!std::strcmp(argv[i], "--sly-ref") && i + 1 < argc) go.slyRef = argv[++i];
         else if (!std::strcmp(argv[i], "--gang-start") && i + 1 < argc) { go.gangStart = argv[++i]; fGame = true; }

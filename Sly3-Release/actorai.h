@@ -144,3 +144,4 @@ void SetActorWatchTarget(ACTOR* pa, const glm::vec3& pos);            // 0x1448F
 void UpdateActorWatch(ACTOR* pa);                                   // 0x144640
 // orig3: the script run driving the actor (+0x115C) and its pending command's op (run +0x48): -1 none (game/scptgame3.cpp)
 int IdActorRunCmd3(const ACTOR* pa);
+bool FActorRunFaceHeading3(const ACTOR* pa, float* prad);   // (scptgame3.cpp: orig3 0x22A7F8 case 47)

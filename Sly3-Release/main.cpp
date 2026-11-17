@@ -502,6 +502,7 @@ int main(int argc, char** argv)
         else if (!std::strcmp(argv[i], "--out") && i + 1 < argc) out = argv[++i];
         else if (!std::strcmp(argv[i], "--list-keys") || !std::strcmp(argv[i], "--list-files")) command = "list-keys";
         else if (!std::strcmp(argv[i], "--vt-dump") && i + 1 < argc) { command = "vt-dump"; arg = argv[++i]; }  // (vtaudit.cpp)
+        else if (!std::strcmp(argv[i], "--option-fields") && i + 1 < argc) { command = "option-fields"; arg = argv[++i]; }  // (brx.cpp)
         else if (!std::strcmp(argv[i], "--maps") && i + 1 < argc) dirMaps = argv[++i];
         else if (!std::strcmp(argv[i], "-v")) fVerbose = true;
         else if (!std::strcmp(argv[i], "--blends") || !std::strcmp(argv[i], "--ai") || !std::strcmp(argv[i], "--ai-carry")) {}  // (anim-ref)
@@ -795,6 +796,7 @@ int main(int argc, char** argv)
     if (command && !std::strcmp(command, "ps3-hd-textures")) return Ps3HdTexturesCommand(arg, arg2);
     int VtDumpCommand(const char*);  // vtaudit.cpp
     if (command && !std::strcmp(command, "vt-dump")) return VtDumpCommand(arg);
+    if (command && !std::strcmp(command, "option-fields")) return OptionFieldsCommand(arg);
     if (command && !std::strcmp(command, "phys-check")) return PhysCheckMain(physArgs);
     if (command && !std::strcmp(command, "actor-check")) { InitClasses(); return ActorCheck(arg, cmRanges, g_ramPath); }
     if (command && !std::strcmp(command, "crv-check"))

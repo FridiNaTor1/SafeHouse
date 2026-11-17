@@ -648,9 +648,15 @@ void ExecCmd(RUN3* p)
         case 0x15: s_phost->ScriptEvent(ps, A(c, 0)); return;
         case 0x1E: s_phost->ApplyCheckpointTasks(A(c, 0), A(c, 1), p->ploContext); return;
         case 0x23: s_phost->CutCm(); return;
-        case 0x2F:  // wait a random time in [min, max] (the actor (oid) idles meanwhile: not ported)
+        case 0x2F:  // wait a random time in [min, max]; with an object, the run's actor turns to it meanwhile
             p->gWait = s_phost->GRandInRange(F(A(c, 0)), F(A(c, 1)));
             Wait(p);
+            // (orig3 0x226D00 case 47: with an object (oid) and a cid 0x33 actor, the command is pending on the actor
+            // (0x22B028), whose drive 0x22A7F8 case 47 turns it to the object's heading every frame (FRunFaceHeading3).
+            // m_ext's beast intro SCPT 4318 [30] / [34]: Bentley turns to 15463 / 15464 after his walks and faces the
+            // camera in the bomb shot; natively he kept his walk's heading (87 degrees off). SLY3_SCPT2FFACE=0: as before)
+            if (static const bool s_fOff = [] { const char* sz = std::getenv("SLY3_SCPT2FFACE"); return sz && sz[0] == '0'; }(); !s_fOff)
+                if (PloFind(p, A(c, 2)) && p->plo28 && s_phost->FDerivedFrom(p->plo28, 0x33)) SetRunPending(p, icmd, p->plo28);
             return;
         case 0x46:  // OpenBinoc
         {
@@ -1620,6 +1626,20 @@ bool FScptAlarm3(const SCPT3* ps, int n) { return FHasAlarm(ps, n); }
 SCPTHOST3& ScptHost3() { return *s_phost; }
 
 bool FScptRunning3(const SCPT3* ps) { return ps->fRunning; }
+
+// orig3: 0x22A7F8 case 47 (the drive of an actor whose run's pending command is 0x2F with an object): the object's
+// heading (GetRunAim, 0x22AEC8), which the drive gives the actor (0x24E878) with the stick released
+bool FRunFaceHeading3(RUN3* p, float* pang)
+{
+    if (!p || !p->pscpt || p->icmdPending < 0) return false;
+    const SCPTCMD3* pc = Pcmd(p->pscpt, p->icmdPending);
+    if (!pc || pc->id != 0x2F) return false;
+    void* plo = PloFind(p, A(*pc, 2));
+    if (!plo) return false;
+    float pos[3];
+    GetRunAim(p, plo, pos, pang);
+    return true;
+}
 
 // orig3: 0x225EE8
 void StartScpt3(SCPT3* ps, void* ploStarter)

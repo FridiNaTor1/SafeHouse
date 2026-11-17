@@ -50,6 +50,7 @@
 #include "cm.h"
 
 #include "game/guru3.h"
+#include "animfind.h"
 
 #include <algorithm>
 #include <cfloat>
@@ -100,8 +101,21 @@ float F32(uint32_t u)
 DAMAGE& Dmg(ACTOR* pa) { return pa->dmg; }
 
 // the reaction n's clip (+0xA0 + 4 n: the actor's parts by their offset)
+// orig3: the clips are the +0xE40 sub-object's 14 records (+0x2C + 0x10 i: {oid, object}), set by option 812
+// (0x109BD0 / 0x109C88 -> 0x1C20D0, bound by oid at the post-load 0x1C2138: moves3.cpp keeps them in aslot3E40) and
+// read by 0x1C21F0 as p->anims[state]. Sly 3 numbers the reactions as Sly 2 up to 6, then its own 7 (an attached
+// sub-object), so Sly 2's 7..12 (the hit, the launches, water, ...) are Sly 3's 8..13. Natively the copied code read the
+// Sly 2 part offsets, which no Sly 3 part table fills: every reaction had no clip and ended the next frame (Murray's
+// knock-back cut to ~280 units). SLY3_REACT2=1: the Sly 2 parts only.
 ASEG* PasegReaction(ACTOR* pa, int n)
 {
+    static const bool s_fReact2 = std::getenv("SLY3_REACT2") != nullptr;
+    if (!s_fReact2 && n >= 0)
+    {
+        const int i3 = n <= 6 ? n : n + 1;
+        if (i3 < 14 && pa->aslot3E40[i3].oid != -1)
+            if (ASEG* p = dynamic_cast<ASEG*>(PloFindSwNearest(pa->palo, pa->aslot3E40[i3].oid))) return p;
+    }
     const uint32_t ib = 0xDF0 + 0xA0 + 4 * static_cast<uint32_t>(n);
     for (const auto& [ibPart, plo] : pa->palo->apart)
         if (ibPart == ib) return dynamic_cast<ASEG*>(plo);
@@ -664,11 +678,39 @@ void NextSpecial(ACTOR* pa)
 }
 
 // orig: 0x001A16C8 (the velocity of the hit by kind (vt slot 35), then the reaction 7)
+// orig3: 0x1C3008 first: a sender that is a step guard (0x3A) whose job stack (+0x29C) holds an action job (0xD1, native
+// 0xA4) whose action has a knock-back (+0x9C on, Sly 3's EOPID 409) throws the actor away from the guard in the plane at
+// +0xA0 and up at +0xA4 (normalize(self - guard) with z 0, else (1, 0, 0)); the kinds below otherwise
 void ApplyDamageVelocity(ACTOR* pa)
 {
     DAMAGE& d = Dmg(pa);
     glm::vec3 v = d.req.vec;
     LO* ps = d.req.ploSender;
+    static const bool s_fKnock2 = std::getenv("SLY3_KNOCK2") != nullptr;   // (debug: Sly 2's rule only, the action's knock-back not read)
+    if (ps && !s_fKnock2 && FIsLoDerivedFrom(ps, S3CID(0x38)))
+        if (GUARD* pg = PguardFromLo(ps))
+            if (auto* pj = dynamic_cast<JOBACT*>(PjobFind(pg, 0xA4)); pj && pj->paction && pj->paction->fKnock)
+            {
+                glm::vec3 dir = PosLoWorld(pa->palo) - PosLoWorld(ps);
+                dir.z = 0.0f;
+                const float l = glm::length(dir);
+                dir = l < 1.0e-4f ? glm::vec3(1.0f, 0.0f, 0.0f) : dir / l;   // (D_00317530)
+                v = dir * pj->paction->gKnockOut + glm::vec3(0.0f, 0.0f, 1.0f) * pj->paction->gKnockUp;   // (D_00317550)
+                if (std::getenv("SLY3_KNOCKPRINT"))
+                    std::printf("knock: %d by guard %d action %d: %.0f out %.0f up (hit vec %.0f %.0f %.0f)\n", pa->palo->oid, ps->oid,
+                                pj->paction->plo ? pj->paction->plo->oid : -1, pj->paction->gKnockOut, pj->paction->gKnockUp, d.req.vec.x,
+                                d.req.vec.y, d.req.vec.z);
+                SetAloVelocityTo(pa->palo, v);
+                SetDamageState(pa, 7);
+                return;
+            }
+    if (std::getenv("SLY3_KNOCKPRINT"))
+    {
+        GUARD* pg = ps ? PguardFromLo(ps) : nullptr;
+        auto* pj = pg ? dynamic_cast<JOBACT*>(PjobFind(pg, 0xA4)) : nullptr;
+        std::printf("knock: %d by %d filter 0x%X vec %.0f %.0f %.0f (guard %d act %p action %d)\n", pa->palo->oid, ps ? ps->oid : -1, d.req.grfFilter, v.x, v.y, v.z,
+                    ps && FIsLoDerivedFrom(ps, S3CID(0x38)), (void*)pj, pj && pj->paction && pj->paction->plo ? pj->paction->plo->oid : -1);
+    }
     switch (d.req.grfFilter)
     {
     case 0x200: case 0x8000:
@@ -694,14 +736,18 @@ void ApplyDamageVelocity(ACTOR* pa)
         }
         break;
     case 0x100:
-        if (ps && FIsLoDerivedFrom(ps, S3CID(0x4F)))
+    default:
+        // (orig3 0x1C3008: every other kind, whatever the sender's class (Sly 2 only the kind 0x100 from a 0x4F); natively
+        // the other kinds kept the hit's velocity: SLY3_KNOCK2=1)
+        if (s_fKnock2 && d.req.grfFilter != 0x100) break;
+        if (s_fKnock2 ? (ps && FIsLoDerivedFrom(ps, S3CID(0x4F))) : true)
         {
             glm::vec3 dir;
-            if (FIsLoDerivedFrom(ps, S3CID(0x51))) dir = MatSender(ps)[0];  // (glm column 0 = the original's first row)
+            if (ps && FIsLoDerivedFrom(ps, S3CID(0x51))) dir = MatSender(ps)[0];  // (glm column 0 = the original's first row)
             else
             {
                 const glm::vec3 a = FIsLoDerivedFrom(pa->palo, S3CID(0x30)) ? PosAloCenter(pa->palo) : glm::vec3(0.0f);
-                const glm::vec3 b = FIsLoDerivedFrom(ps, S3CID(0x30)) ? PosAloCenter(static_cast<ALO*>(ps)) : glm::vec3(0.0f);
+                const glm::vec3 b = ps && FIsLoDerivedFrom(ps, S3CID(0x30)) ? PosAloCenter(static_cast<ALO*>(ps)) : glm::vec3(0.0f);
                 dir = a - b;
             }
             dir.z = 0.0f;
@@ -710,7 +756,6 @@ void ApplyDamageVelocity(ACTOR* pa)
             v = dir * 600.0f + glm::vec3(0.0f, 0.0f, 1.0f) * 800.0f;            // (0x2BFB00 / 0x2BFB04)
         }
         break;
-    default: break;
     }
     SetAloVelocityTo(pa->palo, v);  // vt slot 35 (0x1F4488)
     SetDamageState(pa, 7);
@@ -922,7 +967,8 @@ void SetDamageState(ACTOR* pa, int n)
     }
     if (paseg) ApplyAseg(paseg, palo, 0.0f, 1.0f, grfapl, &pa->pasega);  // 0x1305B8
     if (std::getenv("SLY2N_HITDEBUG"))
-        std::printf("damage state: t %.3f %d -> %d clip %d (%.3f s)\n", g_clock.t, palo->oid, n, paseg ? paseg->oid : -1, paseg ? PasegdOf(paseg)->tMax : 0.0f);
+        std::printf("damage state: t %.3f %d -> %d clip %d (%.3f s) at %.0f %.0f %.0f\n", g_clock.t, palo->oid, n, paseg ? paseg->oid : -1,
+                    paseg ? PasegdOf(paseg)->tMax : 0.0f, PosLoWorld(palo).x, PosLoWorld(palo).y, PosLoWorld(palo).z);
     UpdateActorStepMesh(pa);  // vt slot 90 (the reaction's body mesh: 0x1A23F8)
 }
 
@@ -1014,7 +1060,17 @@ bool FAcceptDamage(ACTOR* pa, CTMSG* pctm)
         d.nFlash = 1;
         d.tFlash = g_clock.t;
     }
-    switch (req.grfFilter)
+    // (orig3 0x1C3470: an unlisted kind takes the 0x100 / 0x200 reaction (0x1C3008); 0x800000 (0x1C3CD0) is not ported;
+    // natively they did nothing: SLY3_KNOCK2=1)
+    static const bool s_fKnock2 = std::getenv("SLY3_KNOCK2") != nullptr;
+    int grfCase = req.grfFilter;
+    if (!s_fKnock2)
+        switch (grfCase)
+        {
+        case 0x100: case 0x200: case 0x40: case 0x800: case 0x1000: case 0x400: case 0x2000: case 0x4000: case 0x8000: case 0x800000: break;
+        default: grfCase = 0x200; break;
+        }
+    switch (grfCase)
     {
     case 0x100: case 0x200:
         ApplyDamageVelocity(pa);
@@ -1287,6 +1343,10 @@ void UpdateActorWater(ACTOR* pa)
     pos.z += pa->sWaterHeight;
     if (pa->nSubDF4 == 3 || pa->nSubDF4 == 10) pos.z -= 10.0f;
     if (!FAloContainsPoint(pw, pos)) return;  // vt slot 73
+    extern LO* g_ploStartPlaced3;
+    extern int g_iframeStartPlaced3;
+    extern int g_iframeMain;
+    if (pa->palo == g_ploStartPlaced3 && g_iframeMain - g_iframeStartPlaced3 <= 2) return;   // (player3.cpp's dev harness)
     const int nState = static_cast<int>(pw->U32Field(0, 0x184, static_cast<uint32_t>(-10)));
     if (nState)
     {

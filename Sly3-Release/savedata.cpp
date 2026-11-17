@@ -162,10 +162,14 @@ bool FGameSaveIdentityValid(const GAMESAVE& gs)
 // states re-applied (0x18AD58: the caller's ApplyVibrationSetting), then the language (SW +0x4194, "flags" "lang") set to
 // the running one (D_0036B120). The pads' camera / vibration keys are not kept (natively they were, menu.cpp before
 // audit 4 CORE-12). The block's identity (+0x6800) is left as it was, then stamped (ValidateGameSave).
+// (s3-bootfix) gs may be g_gamesave itself (the title's reset, frontend.cpp): the record is then not restored at the
+// end. Before, `gs = g_gamesave; g_gamesave = saved` put the old record back: the reset did nothing, the boot's m_ext
+// (and Quit Game's) ran with the played game's record (Saves/save1, read at the start): no intro, no title.
 void ResetGameSave3(GAMESAVE& gs, bool fRetain)
 {
     static const char* const s_asz[7] = {"fAutosaveWarned", "nMixerMode", "uMusicVolume", "uEffectsVolume",
                                          "fUseHeadset", "dxScreenCenter", "dyScreenCenter"};
+    const bool fSelf = &gs == &g_gamesave;
     const GAMESAVE saved = g_gamesave;
     g_gamesave = gs;
     CRef akept[7];
@@ -180,6 +184,7 @@ void ResetGameSave3(GAMESAVE& gs, bool fRetain)
     CRef rLang;
     rLang.SetS32(g_nLang);
     FSetProgress({"flags", "lang"}, rLang);
+    if (fSelf) return;
     gs = g_gamesave;
     g_gamesave = saved;
 }

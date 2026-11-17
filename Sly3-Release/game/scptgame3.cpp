@@ -1,5 +1,6 @@
 // Sly 3's scripts and tasks in the game (scptgame3.h).
 
+#include "stepphys.h"
 #include "../binoc3.h"
 #include "ai.h"
 #include "scptgame3.h"
@@ -1053,7 +1054,15 @@ struct GAMESCPTHOST3 : SCPTHOST3
         if (FPrint()) std::printf("scpt3: frame %d contact %d -> %d filter 0x%X amount %d kill %d\n", s_cframe, Plo(pfrom)->oid, Plo(pto)->oid, grf, nAmount, fKill);
         PaloAcceptContact(&ctm);
     }
-    void SetLoField3(void* pv, int ib, int n) override { Plo(pv)->SetField(0, uint32_t(ib), uint32_t(n)); }
+    // (SCPT 0x76's PO +0x1B8 is the step's rotation control (orig3 0x24E2B8 reads it), as EOPID 260's setter: m_ext's
+    // beast intro SCPT 4317 [6] sets 2 (none) on Bentley parented to the claw 15454, so he keeps the claw's turn (the
+    // reference's rotation record at the identity in the claw); natively the field alone left his rotation braked
+    // upright toward his world heading, and he hung level in the claw)
+    void SetLoField3(void* pv, int ib, int n) override
+    {
+        if (ib == 0x1B8 && !std::getenv("SLY3_CNSTRMOTION0")) SetStepMotionKind3(Plo(pv), n);
+        else Plo(pv)->SetField3(0, uint32_t(ib), uint32_t(n));   // (the original's offset: e.g. +0x2C4 = option 389's store, brx.h)
+    }
     void SetAloCnstr3(void* pv, int nLin, int nAng, bool fStop) override
     {
         ALO* palo = static_cast<ALO*>(Plo(pv));
@@ -1289,6 +1298,13 @@ int IdActorRunCmd3(const ACTOR* pa)
     const RUN3* p = it->second;
     if (!p->pscpt || p->icmdPending < 0 || std::size_t(p->icmdPending) >= p->pscpt->acmd.size()) return 0;
     return p->pscpt->acmd[std::size_t(p->icmdPending)].id;
+}
+
+// orig3 0x22A7F8 case 47: the heading the actor's run turns it to (its pending 0x2F with an object), else false
+bool FActorRunFaceHeading3(const ACTOR* pa, float* prad)
+{
+    auto it = s_host.mpactorrun.find(pa);
+    return it != s_host.mpactorrun.end() && it->second && FRunFaceHeading3(it->second, prad);
 }
 
 namespace

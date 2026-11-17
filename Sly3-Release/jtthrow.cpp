@@ -55,7 +55,7 @@ ASEG* Clip(const JTTHROW& t, uint32_t offset) { return dynamic_cast<ASEG*>(Part(
 
 float Field(const JTTHROW& t, uint32_t offset, float fallback)
 {
-    return std::bit_cast<float>(t.owner->palo->U32Field(0, t.ib + offset, std::bit_cast<uint32_t>(fallback)));
+    return std::bit_cast<float>(t.owner->palo->U32Field3(0, t.ib + offset, std::bit_cast<uint32_t>(fallback)));  // (the original's offsets: options 428 / 849 / 858 there)
 }
 
 glm::vec3 VectorField(const JTTHROW& t, uint32_t offset, const glm::vec3& fallback)
@@ -92,7 +92,7 @@ struct RegisterThrowParameters
             }
             if (!FIsLoDerivedFrom(object, S3CID(0x34)) || args.size() < 7) return CRef(TAGK_Void);
             auto store = [&](uint32_t offset, float value) {
-                object->SetField(0, IB + offset, std::bit_cast<uint32_t>(value));
+                object->SetField3(0, IB + offset, std::bit_cast<uint32_t>(value));
             };
             store(0x14, GArg(args, 0));
             store(0x18, GArg(args, 1));

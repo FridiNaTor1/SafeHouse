@@ -55,6 +55,7 @@ void ResetTriggers();
 
 TRANSITION g_transition;
 int g_cTransitionLoads = 0;
+bool g_fEditorStartPos = false;   // (main.cpp --start-pos: see the world start below)
 extern int g_iframeMain;  // (debug: world loads through the transition, for SLY2N_TELEPORT's "/wN")
 
 namespace
@@ -637,8 +638,12 @@ std::unique_ptr<SW> PswUpdateTransition(std::unique_ptr<SW> psw)
     // (request flags 8): the checkpoint task stays queued (SetTaskChk) after a job, and a story transition into the hub
     // (e.g. Ep8's briefing 3378's exit 3377 after the first job) must leave the safe house current, as the original
     // does.)
+    // (the map editor's "play from here", main.cpp --start-pos: the first world's safe house hands the pad to Sly too,
+    // who is then put at the point; never set in play)
+    const bool fEditorStart = g_fEditorStartPos;
+    g_fEditorStartPos = false;
     if (LO* pcur = PloPoCurrent(psw.get());
-        pcur && pcur->Cid() == 0x46 && (req.flags & 8) && g_taskmgr.oidQueued != -1 && !psw->mpcidaplo[0x35].empty() &&
+        pcur && pcur->Cid() == 0x46 && (fEditorStart || ((req.flags & 8) && g_taskmgr.oidQueued != -1)) && !psw->mpcidaplo[0x35].empty() &&
         !std::getenv("SLY2N_JOBSTARTSH"))
     {
         LO* psly = psw->mpcidaplo[0x35][0];

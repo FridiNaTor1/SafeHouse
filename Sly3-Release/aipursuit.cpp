@@ -247,10 +247,24 @@ ACTIONOBJ* PactionOf(LO* plo, GUARD* pg)
     }
     p = std::make_unique<ACTIONOBJ>();
     p->plo = plo;
+    if (std::getenv("SLY3_ACTIONOPTS"))   // (debug: an action's loaded options, Sly 3 EOPIDs)
+    {
+        std::printf("action %d of guard %d:", plo->oid, pg && pg->palo ? pg->palo->oid : -1);
+        for (const OPT& o : plo->aopt) std::printf(" %d(%zu)", o.eopid, o.aval.size());
+        std::printf("\n");
+    }
     for (const OPT& o : plo->aopt)
     {
         if (o.aval.empty()) continue;
         const OPTVAL& v = o.aval[0];
+        if (o.eopid == 409 && o.aval.size() >= 2)   // (Sly 3 only: 0x256C98, the hit's knock-back {away, up})
+        {
+            p->fKnock = 1;
+            auto g = [](const OPTVAL& x) { return x.tagk == 0x15 ? float(x.n) : x.ag[0]; };   // (0x24B2B8 schema {1, 1}: floats)
+            p->gKnockOut = g(o.aval[0]);
+            p->gKnockUp = g(o.aval[1]);
+            continue;
+        }
         switch (sly3::Eopid2FromEopid3(o.eopid))  // (Sly 2 EOPIDs)
         {
         case 353: p->r50 = glm::vec2(v.ag[0], v.ag[1]); break;

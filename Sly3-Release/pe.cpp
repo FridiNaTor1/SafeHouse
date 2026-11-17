@@ -22,6 +22,7 @@
 
 #include <glm/gtc/matrix_transform.hpp>
 
+#include <execinfo.h>
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -607,6 +608,7 @@ void EmitParticles(STREAM& s, int c, const glm::mat4& matFrame, const glm::vec3&
     }
 }
 
+int s_oidPeRun = -1;   // (debug, SLY3_PESND: the effect whose commands run)
 // orig3: 0x1FF100 (the runner: the current command; returns true when the list is over)
 bool FRunCommands(STREAM& s, float gScale, const glm::mat4& matFrame, const glm::vec3& velFrame, const glm::mat4* pmatSound = nullptr)
 {
@@ -646,7 +648,7 @@ bool FRunCommands(STREAM& s, float gScale, const glm::mat4& matFrame, const glm:
                 if (psnd->Kind() == 2) s.snd = CSndRef(psnd);
             }
             if (static const bool s_f = std::getenv("SLY3_PESND") != nullptr; s_f)   // (debug: the effects' sounds)
-                std::printf("pesnd sfx %d at %.0f %.0f %.0f falloff %g %g volume %g pitch %g %s\n", c.sfx, pos.x, pos.y, pos.z, c.sFalloff0,
+                std::printf("pesnd %d sfx %d at %.0f %.0f %.0f falloff %g %g volume %g pitch %g %s\n", s_oidPeRun, c.sfx, pos.x, pos.y, pos.z, c.sFalloff0,
                             c.sFalloff1, c.gVolume, c.gPitch, !psnd ? "(no sound)" : psnd->Kind() == 2 ? "(looping)" : "");
             break;
         }
@@ -860,6 +862,7 @@ void UpdatePes(SW* psw)
         else if (kind == 1)
             fEmit = FLoActive(ppe) && (!ppe->paloParent || FPeNearCamera(PosLoWorld(ppe), std::min(ppe->sRadius, 1e6f)));
         const glm::mat4 matEmit = kind == 2 ? glm::mat4(1.0f) : matFrame;
+        s_oidPeRun = ppe->oid;
         for (STREAM& st : inst.astream)
         {
             // (a kind-2 effect's RIPs are world objects: thrown at the nearest clone)
@@ -926,6 +929,7 @@ void UpdatePes(SW* psw)
         bool fAlive = false;
         GAMERANDKEEP keep(os.fOwnRandom);
         s_fPeOwnRandom = os.fOwnRandom;
+        s_oidPeRun = os.inst.ppe ? -os.inst.ppe->oid : -1;   // (debug: negative, a one-shot)
         for (STREAM& st : os.inst.astream)
         {
             FRunCommands(st, os.inst.gScale, os.matFrame, glm::vec3(0.0f));
@@ -965,6 +969,21 @@ void TriggerPe(LO* ppe, const LO* ploFrame, bool fOwnRandom)
     }
     const std::vector<PECOMP>* pacomp = PacompOf(ppe);
     if (!pacomp) { s_fPeOwnRandom = false; return; }
+    extern int g_iframeMain;
+    if (static const bool s_f = std::getenv("SLY3_PESND") != nullptr; s_f)   // (debug: the one-shots started)
+    {
+        std::printf("petrigger %d frame %d f %d\n", ppe->oid, ploFrame ? ploFrame->oid : -1, g_iframeMain);
+        if (static const char* s_sz = std::getenv("SLY3_PETRIGBT"); s_sz && std::atoi(s_sz) == ppe->oid)
+        {
+            static int s_c = 0;
+            if (s_c++ < 2)
+            {
+                void* a[12];
+                std::fflush(stdout);
+                backtrace_symbols_fd(a, backtrace(a, 12), 1);
+            }
+        }
+    }
     ONESHOT os;
     os.inst.ppe = ppe;
     os.inst.kind = 0;

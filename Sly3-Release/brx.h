@@ -39,6 +39,29 @@ void LoadOptionsFromBrx(std::vector<OPT>& aopt, LO* plo, CBinaryInputStream* pbi
 void LoadOptionFromBrx(OPT& opt, LO* plo, int eopid, int grf, CBinaryInputStream* pbis);
 // orig 0x13E690
 OPTVAL RefReadOption(int k, CBinaryInputStream* pbis);
+// PC: where a field option (EOPID grf 0x80 / 0x10) lives in LO::afield: (sub-object getter (0: the object), offset).
+// One key per (class, option) for the loader, the splice's seto! and the code (brx.cpp "where field options live"):
+// the Sly 2 twin's offset (the copied code's), else Sly 3's (FIELD_TAG3 apart where that would collide).
+struct OPTFIELDKEY
+{
+    bool fValid = false;
+    uint32_t pfnGet = 0;
+    uint32_t ib = 0;
+    bool operator==(const OPTFIELDKEY& o) const { return fValid == o.fValid && pfnGet == o.pfnGet && ib == o.ib; }
+};
+OPTFIELDKEY OptionFieldKey(int cid, int eopid3);
+// The original's key (the record's +0x24 getter, +0x18 ibFile / +0x10 ibSet)
+OPTFIELDKEY Sly3OptionFieldKey(int eopid3);
+// The store of a word at the original's offset (the class's field option there, else the offset unchanged)
+void FieldWordFromSly3(int cid, uint32_t pfnGet3, uint32_t ib3, uint32_t* ppfnGet, uint32_t* pib);
+// The key the loader stores an option's value at (0x13E818's ibFile, +0x18; invalid when it stores none)
+OPTFIELDKEY LoadFieldKey(int cid, int eopid3);
+// The key a splice's seto! stores it at (0x201110's ibSet, +0x10; spliceglue.cpp; invalid when it stores none)
+OPTFIELDKEY SetterFieldKey(int cid, int eopid3);
+// (debug) --option-fields PATH: every class's field options with both keys (a TSV), the mismatches on stdout.
+// SLY3_FIELDAUDIT=DIR: the native reads / writes of LO::afield (class, getter, offset, caller) written to
+// DIR/reads.PID.tsv at exit; tools/optfields3.py joins them with the table.
+int OptionFieldsCommand(const char* path);
 // orig 0x132B10 FIsBasicDerivedFrom
 void SetLoMatrix(LO* plo, const glm::mat4& m);  // vt slot 37 (loaders.cpp)
 void SetLoChannel(LO* plo, XF* pxf);            // vt slot 10's channel part (loaders.cpp)

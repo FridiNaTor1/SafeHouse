@@ -255,10 +255,63 @@ struct PLACE
     int iobjrec = -1;          // the record deleted / duplicated (the proxy's, or the object's top-level one)
 };
 
+// A convex piece of collision (a brush's): its points and its faces (counter-clockwise seen from outside)
+struct CONVEX
+{
+    std::vector<glm::vec3> apos;
+    std::vector<std::vector<int>> aface;
+};
+
+// A brush (editor_brush.inc): a shape the editor makes into an object's model and collision, kept in the project
+// (editor/brushes.json) so it can be changed and made again
+struct BRUSH
+{
+    int shape = 0;                 // 0 block, 1 ramp, 2 stairs, 3 cylinder, 4 floor
+    glm::vec3 size{256, 256, 256}; // width (x), depth (y), height (z)
+    int steps = 8, segments = 16;
+    float texScale = 256.0f;       // units per texture repeat
+    int texFrom = 0;               // the object whose first material's texture it takes (0: a grid in rgb)
+    uint32_t rgb = 0xB8B8B8;
+    int oid = 0;                   // the object it became
+};
+
 struct SCRIPTCMD
 {
     std::string verb, arg;
 };
+
+// The editor's own strings in the user's language (editor_lang.inc: editor/lang/<code>.json keyed by the English text;
+// English when the language has no entry). Every new UI string goes through it.
+const char* T(const char* szEnglish);
+// "Text###id": a translated label with a fixed ImGui id
+std::string TL(const char* szEnglish, const char* id);
+
+// ---- object types and vis groups (editor_types.inc)
+enum VISGROUP : int
+{
+    VG_Characters, VG_Gameplay, VG_Triggers, VG_Paths, VG_Cameras, VG_Lighting, VG_Sound, VG_Effects, VG_Missions, VG_Logic,
+    VG_World, VG_Other, VG_Max
+};
+enum OBJTYPE : int
+{
+    OT_Player, OT_Guard, OT_Swarmer, OT_Boss, OT_Npc, OT_Pickup, OT_Loot, OT_Vault, OT_Carryable, OT_HideSpot, OT_Trigger,
+    OT_Volume, OT_Button, OT_Sensor, OT_Turret, OT_Door, OT_Warp, OT_Checkpoint, OT_Spawner, OT_Path, OT_Traversal,
+    OT_NavMesh, OT_Camera, OT_CameraZone, OT_Light, OT_Sound, OT_Effect, OT_Water, OT_Sky, OT_Job, OT_Task, OT_JobMarker,
+    OT_Scene, OT_Logic, OT_Animation, OT_Interest, OT_Ui, OT_Mesh, OT_Prop, OT_Breakable, OT_Proxy, OT_Grouper, OT_Other,
+    OT_Max
+};
+struct OBJTYPEINFO
+{
+    const char* name;       // (English; T() at the drawing)
+    const char* plural;
+    VISGROUP vg;
+    uint32_t rgb;           // its marker / icon colour
+    char icon;              // its icon letter
+};
+const OBJTYPEINFO& InfoOfType(OBJTYPE ot);
+const char* SzVisGroup(VISGROUP vg);
+// a stable key for an object across reloads (its oid and the proxy that placed its instance)
+inline uint64_t KeyOfLo(const LO* plo) { return (uint64_t(uint32_t(plo->oid)) << 32) | uint32_t(plo->oidInstance); }
 
 class CEditor
 {
@@ -292,7 +345,13 @@ private:
     void Undo();
     void Redo();
     bool FSave();
-    void PlayTest();
+    void PlayTest() { PlayTestAt(-1, nullptr, 0.0f); }
+    // the game with the project: at a task (its job started there: --world W:TASK) and / or Sly at a point (--start-pos)
+    void PlayTestAt(int oidTask, const glm::vec3* ppos, float heading);
+    void PlayFromView();                 // Sly on the ground below the view's middle, facing the view's way
+    int TaskToPlay(LO* plo) const;       // a job's first task, a task's own oid (0: none)
+    void DrawPlayMenu();
+    bool m_fPlayDry = false, m_fOpenPlayMenu = false;             // (automation: the command printed, not started)
     void Reload(int oidSelect);
     // UI
     void DrawMenu();
@@ -310,6 +369,48 @@ private:
     void Select(LO* plo) { if (plo != m_plSel) { m_ipoint = -1; m_fCurveMode = false; } m_plSel = plo; m_fScrollTree = true; }
     bool FRunScript();
     void Status(const std::string& s) { m_status = s; std::printf("editor: %s\n", s.c_str()); }
+
+    // ---- editor_types.inc: object types, friendly names, visibility, the outliner
+    OBJTYPE TypeOfLo(const LO* plo) const;
+    std::string NameOfObject(const LO* plo) const;     // (hook: a better name source plugs in here)
+    std::string GroupNameOf(const LO* plo) const;      // its group's name (an instance: the shared group's)
+    bool FHidden(const LO* plo) const;                 // hidden by its type, vis group, own flag or the isolation
+    void InvalidateVis() { ++m_visVersion; }
+    void ApplyVisibility();                            // every frame, before the render
+    void DrawOutliner();
+    void DrawOutlinerRow(LO* plo, const char* idPrefix);
+    void OutlinerContextMenu(LO* plo);
+    void HideSelection(bool fHide);
+    void IsolateSelection();
+    void ShowAll();
+    void SaveViewState();                              // the project's editor/view.json: hidden types / groups, snapping
+    void LoadViewState();
+    // ---- selection (several objects; m_plSel is the primary: the last clicked, shown in Properties)
+    bool FSelected(const LO* plo) const { return std::find(m_asel.begin(), m_asel.end(), plo) != m_asel.end(); }
+    void SelectOnly(LO* plo) { Select(plo); m_asel.clear(); if (plo) m_asel.push_back(plo); }
+    void ToggleSelected(LO* plo);
+    void AddSelected(LO* plo);
+    void ClearSelection() { m_asel.clear(); Select(nullptr); }
+    void SyncSelection();                              // m_asel follows a direct change of m_plSel (the older code's)
+    void SelectWhere(const std::function<bool(LO*)>& f, bool fAdd);
+    bool FSelectable(LO* plo) const;                   // movable as a whole (its placement is its own) and shown
+    std::vector<PLACE> PlacesOfSelection() const;      // each placement once (an instance's proxy, an own matrix)
+    void BoxSelect(const ImVec2& a, const ImVec2& b, bool fAdd);
+    void DuplicateSelection();
+    void DeleteSelection();
+    void CopySelection();
+    void Paste(bool fInPlace);
+    std::vector<uint64_t> KeysOfSelection() const;
+    void SelectKeys(const std::vector<uint64_t>& akey);
+    LO* PloOfKey(uint64_t key) const;
+    // ---- snapping
+    float SnapMove(float v) const { return m_fGridSnap && m_gridSize > 0 ? std::round(v / m_gridSize) * m_gridSize : v; }
+    float SnapAngle(float deg) const { return m_fAngleSnap && m_angleSnap > 0 ? std::round(deg / m_angleSnap) * m_angleSnap : deg; }
+    float SnapScale(float s) const { return m_fScaleSnap && m_scaleSnap > 0 ? std::max(m_scaleSnap, std::round(s / m_scaleSnap) * m_scaleSnap) : s; }
+    void DrawToolStrip();
+    void DrawStatusBar();
+    // ---- editor_exist.inc: when an object exists (hook: the script names' plain words replace the body)
+    void DrawExistence(LO* plo, const EDOBJ* po);
     void Screenshot(const std::string& path);
 
     // ---- editor_data.cpp: options, validation
@@ -487,6 +588,97 @@ private:
     std::map<std::pair<const void*, const void*>, unsigned> m_mpthumb;
     int m_igrpCopyDest = -1;        // (CopyRecord -> RenumberCopy: the group a copy goes into, its scripts carried there)
     std::string m_noteCopy;   // material thumbnails (GL textures)
+    // ---- editor 2 (notes/EDITOR_PLAN.md)
+    std::vector<LO*> m_asel;                        // the selection (m_plSel: its primary)
+    mutable std::unordered_map<const LO*, OBJTYPE> m_mptype;
+    bool m_afTypeHidden[OT_Max] = {};
+    bool m_afVgHidden[VG_Max] = {};
+    std::set<uint64_t> m_setHidden;                 // objects hidden one by one (KeyOfLo)
+    std::set<uint64_t> m_setIsolate;                // isolated: only these (and their parts) shown
+    int m_visVersion = 1, m_visApplied = 0;
+    mutable std::unordered_map<const LO*, bool> m_mphidden;   // (FHidden's answers for m_visVersion)
+    mutable int m_visCached = 0;
+    std::vector<int> m_aiHiddenEntries;             // scene entries hidden at the last ApplyVisibility
+    char m_outFilter[96] = "";
+    int m_outType = -1;                             // the outliner's type filter (-1: all)
+    int m_outMode = 0;                              // 0 by type, 1 by group (hierarchy), 2 flat list
+    bool m_fOutScroll = false;
+    bool m_fBoxDrag = false, m_fClickPending = false;
+    ImVec2 m_mouseDown{};
+    std::vector<std::pair<PLACE, glm::mat4>> m_adragSel;   // the selection's placements at a drag's start
+    glm::mat4 m_matDragPivot{1.0f};
+    float m_gridSize = 64.0f, m_angleSnap = 15.0f, m_scaleSnap = 0.1f;
+    bool m_fGridSnap = true, m_fAngleSnap = true, m_fScaleSnap = false;
+    struct CLIP { uint64_t key; glm::vec3 pos; };
+    std::vector<CLIP> m_aclip;
+    bool m_fDockOpen = true;                        // the bottom dock (the world's tabs)
+    int m_tool = 1;                                 // the tool strip: 0 select (no gizmo), 1 the gizmo (m_gizmo)
+    std::string m_viewStateLoaded;
+    // objects whose live matrix is their stored one under another object's (attached at the load: a GROUPER's
+    // effects): the stored matrix is P^-1 x live, and they follow their parent live
+    struct LOADPARENT { LO* ploParent = nullptr; glm::mat4 P{1.0f}; };
+    std::unordered_map<const LO*, LOADPARENT> m_mpLoadParent;
+    std::unordered_map<const LO*, std::vector<LO*>> m_mpLoadKids;
+    void FindLoadParents();
+    // ---- editor_assets.inc: the asset browser
+    struct ASSET
+    {
+        std::string name, group;
+        int igrp = -1;
+        std::set<OBJTYPE> atype;
+        std::vector<int> aoidProxy;   // its instances' proxies in the map
+        bool fModel = false, fWanted = false, fTried = false;
+        unsigned tex = 0;
+    };
+    struct OTHERASSET { std::string group, name, types, thumb; int instances = 0; };
+    std::vector<int> EntriesOfGroup(int igrp) const;
+    bool FRenderThumb(const std::vector<int>& aentry, unsigned& tex, std::vector<uint8_t>* prgba);
+    void BuildAssets();
+    void RenderPendingThumbs();
+    void WriteThumbs(const std::string& dir);
+    void PlaceAsset(const ASSET& a);
+    std::string AssetsDirOf(int record) const;
+    void StartOtherLevelEditor(int record, const std::string& steps);
+    void LoadOtherLevel(int record);
+    void PollOtherLevel();
+    unsigned TexOfFile(const std::string& path);
+    void DrawAssets();
+    void ImportFromOtherLevel(const std::string& group);
+    void ForgetAssets();
+    std::vector<ASSET> m_aasset;
+    std::vector<OTHERASSET> m_aother;
+    int m_iasset = -1, m_assetSrc = 0, m_otherRecord = -1, m_pollFrame = 0;
+    bool m_fAssetsBuilt = false, m_fOtherPending = false;
+    char m_assetFilter[96] = "";
+    unsigned m_fboThumb = 0;
+    std::string m_importPending;
+    std::map<std::string, unsigned> m_mpfiletex;
+    // ---- editor_brush.inc: brushes (blocks, ramps, stairs, cylinders, floors) made into objects
+    std::vector<CONVEX> m_aconvexImport;   // (FImportModel: collision mode 3 writes these pieces)
+    std::vector<BRUSH> m_abrush;
+    BRUSH m_brushNew;
+    bool FBuildBrush(const BRUSH& b, cane::editor::model::Scene& sc, std::vector<CONVEX>& acv, std::string& error);
+    int CreateBrush(const BRUSH& b, const glm::vec3* ppos, std::string& error);   // the new object's oid (0: failed)
+    bool FRebuildBrush(BRUSH& b, std::string& error);
+    BRUSH* PbrushOf(const LO* plo);
+    void LoadBrushes();
+    void SaveBrushes();
+    void DrawBrushTools();          // the Create tab's brush section
+    void DrawBrushProperties(LO* plo);
+    // ---- editor_camera.inc: camera objects (preview, look through, pilot) and camera zones' names
+    const char* SzOptionOf(const LO* plo, int eopid) const;   // an option's name for this object (camera zones by field)
+    bool FOptionFloat(LO* plo, int eopid, float& g) const;
+    bool FCameraView(LO* plo, CAMERA& cam) const;
+    void RenderCameraPreview();
+    void DrawCameraFrusta();
+    void DrawCameraPanel();
+    void UpdateLookThrough();
+    void StorePilot();
+    bool m_fPreview = true, m_fPreviewShown = false, m_fLookThrough = false, m_fPilot = false, m_fPilotMoved = false;
+    CAMERA m_camBeforeLook;
+    unsigned m_fboPreview = 0, m_texPreview = 0;
+    int m_dxPreview = 0, m_dyPreview = 0;
+    float m_fovEdit = 57.3f, m_fovCameraDefault = 57.29578f;   // (CM's own: 1 radian)
 };
 
 }  // namespace edimpl

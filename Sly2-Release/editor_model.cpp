@@ -365,6 +365,66 @@ void WriteBoxSoe(WR& w, const SOEINFO& tmpl, const glm::vec3& mn, const glm::vec
     w.put<int8_t>(int8_t(tmpl.f50));
 }
 
+// A convex piece as one collision entry (as WriteBoxSoe: its faces' triangles with their edges and neighbours, a BSP
+// chain of one triangle per face: behind every face is inside)
+void WriteConvexSoe(WR& w, const SOEINFO& tmpl, const CONVEX& cv)
+{
+    glm::vec3 mn(FLT_MAX), mx(-FLT_MAX);
+    for (const glm::vec3& p : cv.apos) { mn = glm::min(mn, p); mx = glm::max(mx, p); }
+    w.put<int16_t>(int16_t(tmpl.ixf));
+    w.put<int32_t>(tmpl.tag);
+    w.put<int8_t>(int8_t(tmpl.f48));
+    w.put<int8_t>(int8_t(tmpl.f49));
+    w.put<float>(glm::length(mx - mn) * 0.5f);
+    w.put<uint16_t>(uint16_t(cv.apos.size()));
+    for (const glm::vec3& p : cv.apos) w.vec(p);
+    std::vector<std::array<int, 3>> atri;
+    std::vector<int> aitriFirst;
+    for (const std::vector<int>& f : cv.aface)
+    {
+        aitriFirst.push_back(int(atri.size()));
+        for (std::size_t k = 1; k + 1 < f.size(); ++k) atri.push_back({f[0], f[k], f[k + 1]});
+    }
+    auto other = [&](int t, int a, int b) {
+        for (int u = 0; u < int(atri.size()); ++u)
+        {
+            if (u == t) continue;
+            for (int k = 0; k < 3; ++k)
+                if (atri[std::size_t(u)][std::size_t(k)] == b && atri[std::size_t(u)][std::size_t((k + 1) % 3)] == a) return u;
+        }
+        return 0xFFFF;
+    };
+    w.put<uint16_t>(uint16_t(atri.size()));
+    w.put<uint16_t>(uint16_t(atri.size() * 3));
+    for (int t = 0; t < int(atri.size()); ++t)
+    {
+        for (int k = 0; k < 3; ++k) w.put<uint16_t>(uint16_t(atri[std::size_t(t)][std::size_t(k)]));
+        for (int k = 0; k < 4; ++k) w.put<float>(0.0f);
+        w.put<uint8_t>(3);
+        for (int k = 0; k < 3; ++k)
+        {
+            const int a = atri[std::size_t(t)][std::size_t(k)], b = atri[std::size_t(t)][std::size_t((k + 1) % 3)];
+            w.put<uint16_t>(uint16_t(a));
+            w.put<uint16_t>(uint16_t(b));
+            w.put<uint16_t>(uint16_t(other(t, a, b)));
+        }
+    }
+    const uint32_t cnode = uint32_t(cv.aface.size());
+    w.put<uint32_t>(cnode);
+    w.put<uint32_t>(cnode);
+    w.put<uint32_t>(tmpl.x8);
+    for (uint32_t f = 0; f < cnode; ++f)
+    {
+        w.put<uint16_t>(uint16_t(aitriFirst[f]));
+        w.put<uint32_t>(f + 1 < cnode ? f + 1 : 0xFFFFFFFFu);
+        w.put<uint32_t>(0xFFFFFFFFu);
+    }
+    w.put<uint32_t>(tmpl.id);
+    w.put<int16_t>(int16_t(tmpl.state));
+    w.put<int16_t>(int16_t(cv.apos.size()));
+    w.put<int8_t>(int8_t(tmpl.f50));
+}
+
 // ---- a group's Graphics part (shd.cpp LoadShadersFromBrx): CLUTs, BMPs, SAAs, shaders, Align(16), the bulk
 
 struct GFXCLUT { std::size_t ib = 0, ibData = 0; int id = 0, texk = 0, ccolor = 0; uint32_t ibBulk = 0; };
@@ -1413,8 +1473,17 @@ bool CEditor::FImportModel(const std::string& path, LO* plo, bool fNew, std::str
             SOEINFO tmpl;
             tmpl.tag = plo->oid; tmpl.state = -10; tmpl.pinned = 8; tmpl.x4 = 6; tmpl.ixf = 0;
             if (!si.asoe.empty()) { tmpl = si.asoe[0]; tmpl.pinned = 8; tmpl.x4 = 6; }
-            w.put<int16_t>(1);
-            WriteBoxSoe(w, tmpl, mn, mx);
+            if (m_importCollision == 3 && !m_aconvexImport.empty())
+            {
+                // a brush's convex pieces
+                w.put<int16_t>(int16_t(m_aconvexImport.size()));
+                for (const CONVEX& cv : m_aconvexImport) WriteConvexSoe(w, tmpl, cv);
+            }
+            else
+            {
+                w.put<int16_t>(1);
+                WriteBoxSoe(w, tmpl, mn, mx);
+            }
             w.put<float>(si.asoe.empty() ? 1.0f : si.gMass);
             const float aI[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
             for (int k = 0; k < 9; ++k) w.put<float>(si.asoe.empty() ? aI[k] : si.agInertia[k]);

@@ -208,9 +208,9 @@ PANEL3* PpanelOf(LO* plo)
             for (const LO* pc : plo->aploOwned) std::printf("panel3: %d owns %d cid 0x%X\n", plo->oid, pc->oid, pc->Cid());
             if (plo->paloParent) std::printf("panel3: parent %d cid 0x%X\n", static_cast<const LO*>(plo->paloParent)->oid, static_cast<const LO*>(plo->paloParent)->Cid());
         }
-        if (FPrint()) std::printf("panel3: %d: %zu dials, code %u, start %u, auto %u\n", plo->oid, p.aploDial.size(), plo->U32Field(0, 0x1C0, 0),
-                                  plo->U32Field(0, 0x1C8, 0), plo->U32Field(0, 0x1CC, 0));
-        SetPanelMode(plo, plo->U32Field(0, 0x1C8, 0) != 0 ? 1 : 0);
+        if (FPrint()) std::printf("panel3: %d: %zu dials, code %u, start %u, auto %u\n", plo->oid, p.aploDial.size(), plo->U32Field3(0, 0x1C0, 0),
+                                  plo->U32Field3(0, 0x1C8, 0), plo->U32Field3(0, 0x1CC, 0));
+        SetPanelMode(plo, plo->U32Field3(0, 0x1C8, 0) != 0 ? 1 : 0);
     }
     return &p;
 }
@@ -245,7 +245,7 @@ void SetPanelNav(LO* plo, PANEL3* p, int st)
 void SetPanelTargets(LO* plo, PANEL3* p)
 {
     int i = int(p->aploDial.size()) - 1;
-    for (int n = int(plo->U32Field(0, 0x1C0, 0)); n > 0; n /= 10)
+    for (int n = int(plo->U32Field3(0, 0x1C0, 0)); n > 0; n /= 10)
         if (i >= 0)
             if (DIAL3* d = PdialOf(p->aploDial[i--])) d->nTarget = n % 10;
 }
@@ -410,12 +410,12 @@ void UpdatePanel3(LO* plo)
             if (fAll) SetPanelMode(plo, 0);
             break;
         }
-        case 3: SetPanelMode(plo, plo->U32Field(0, 0x1C8, 0) != 0 ? 1 : 0); break;
+        case 3: SetPanelMode(plo, plo->U32Field3(0, 0x1C8, 0) != 0 ? 1 : 0); break;
         case 2:
             if (GrfTake(0x10)) SetPanelMode(plo, 3);
             else
             {
-                const bool fAuto = plo->U32Field(0, 0x1CC, 0) != 0;
+                const bool fAuto = plo->U32Field3(0, 0x1CC, 0) != 0;
                 const bool fConfirm = GrfTake(0x20) != 0;
                 if (fConfirm && !fAuto)
                 {

@@ -97,6 +97,19 @@ public:
         const loc::audio::Mono back = loc::audio::readWav(dub);
         expect(back.rate == 22050 && back.s.size() == cut.s.size() && std::abs(loc::audioSeconds(dub) - cut.seconds()) < 0.01, "the dub reads back: 16-bit mono, the trimmed length");
         expect(loc::saveTakeChoice(dir, "1179", false, error) && loc::readTakeChoices(dir).at("1179") == false, "a line's radio choice kept in Takes/takes.json");
+        // the reference while a take is recorded: 20% of its volume by default (the setting's share), else all of it
+        {
+            auto peak = [](const collection::Pcm& p) {
+                int m = 0;
+                for (int16_t x : p.samples) m = std::max(m, std::abs(int(x)));
+                return m;
+            };
+            const int full = peak(pcmOf(cut, referenceGain(false, kRefVolumeDefault)));
+            const int quiet = peak(pcmOf(cut, referenceGain(true, kRefVolumeDefault)));
+            expect(full > 3000 && std::abs(double(quiet) / full - 0.2) < 0.01, "the reference plays at 20% while recording");
+            expect(std::abs(peak(pcmOf(cut, referenceGain(true, 0.5f))) * 2 - full) <= 2 && referenceGain(true, 1.7f) == 1.0f && referenceGain(true, -1.0f) == 0.0f,
+                   "the recording volume setting is the reference's share, 0..100%");
+        }
 #ifdef _WIN32
         _putenv_s("SAFEHOUSE_FAKE_MIC", keep.c_str());
 #else
@@ -151,22 +164,71 @@ public:
         }
         drawFilters();
         gap(6);
+        // the list and the detail panel side by side, the splitter between them dragged (the share kept in launcher.json)
+        loadLayout();
         const float w = ImGui::GetContentRegionAvail().x;
         const float h = std::max(px(260), ImGui::GetContentRegionAvail().y - px(4));
-        beginCard("loc-table", {std::floor(w * 0.58f), h}, 10);
+        const float gutter = px(10);
+        const float listW = std::floor(std::clamp(w * m_listShare, std::min(px(260), w * 0.5f), std::max(w * 0.5f, w - gutter - px(320))));
+        beginCard("loc-table", {listW, h}, 10);
         if (m_section == 2) drawVoiceTable();
         else drawTable();
         endCard();
-        ImGui::SameLine(0, px(10));
+        ImGui::SameLine(0, 0);
+        if (splitter("##loc-split-list", false, {gutter, h}, listW, w, m_listShare)) saveLayout("list", m_listShare);
+        ImGui::SameLine(0, 0);
+        if (m_section == 2) {
+            drawVoicePanels(h);
+            return;
+        }
         beginCard("loc-detail", {0, h}, 16, true);
         // (screenshots: SAFEHOUSE_LOC_DETAIL_SCROLL=<pixels> holds the detail card scrolled there)
         if (const char* sz = std::getenv("SAFEHOUSE_LOC_DETAIL_SCROLL"); sz && *sz) ImGui::SetScrollY(px(float(std::atof(sz))));
-        if (m_section == 2) drawVoiceDetail();
-        else drawDetail();
+        drawDetail();
         endCard();
     }
 
 private:
+    // ---------------------------------------------------------------- the layout (launcher.json "loc_layout")
+    // The panels' shares: the list's of the width, the line's of the voice detail's height (the recorder below it).
+    // SAFEHOUSE_LOC_LAYOUT="<list>,<detail>" sets both for screenshots (not saved).
+    void loadLayout() {
+        if (m_layoutLoaded) return;
+        m_layoutLoaded = true;
+        m_listShare = float(std::clamp(m_backend.locLayout("list", 0.58), 0.2, 0.85));
+        m_detailShare = float(std::clamp(m_backend.locLayout("detail", 0.5), 0.15, 0.85));
+        m_refVolume = float(std::clamp(m_backend.locLayout("ref_volume", double(kRefVolumeDefault)), 0.0, 1.0));
+        if (const char* sz = std::getenv("SAFEHOUSE_LOC_LAYOUT"); sz && *sz) {
+            float a = 0, b = 0;
+            if (std::sscanf(sz, "%f,%f", &a, &b) >= 1 && a > 0) m_listShare = std::clamp(a, 0.2f, 0.85f);
+            if (b > 0) m_detailShare = std::clamp(b, 0.15f, 0.85f);
+            m_layoutFixed = true;
+        }
+    }
+    void saveLayout(const char* key, float value) {
+        if (!m_layoutFixed) m_backend.setLocLayout(key, value);
+    }
+    // A splitter between two panels (vertical: between a top and a bottom one): a gutter dragged with the mouse that
+    // moves the edge at `edge` (from the start of `whole`); the new share in `share`. True when a drag ends (to save).
+    static bool splitter(const char* id, bool vertical, ImVec2 size, float edge, float whole, float& share) {
+        const ImVec2 a = ImGui::GetCursorScreenPos();
+        ImGui::InvisibleButton(id, size);
+        const bool hot = ImGui::IsItemHovered() || ImGui::IsItemActive();
+        if (hot) ImGui::SetMouseCursor(vertical ? ImGuiMouseCursor_ResizeNS : ImGuiMouseCursor_ResizeEW);
+        if (ImGui::IsItemActive() && whole > 0) {
+            const float d = vertical ? ImGui::GetIO().MouseDelta.y : ImGui::GetIO().MouseDelta.x;
+            if (d != 0) share = std::clamp((edge + d) / whole, vertical ? 0.15f : 0.2f, 0.85f);
+        }
+        // the grip: three dots, brighter while hovered or dragged
+        auto* dl = ImGui::GetWindowDrawList();
+        const ImVec2 c = {a.x + size.x * 0.5f, a.y + size.y * 0.5f};
+        for (int k = -1; k <= 1; ++k) {
+            const ImVec2 at = vertical ? ImVec2{c.x + float(k) * px(8), c.y} : ImVec2{c.x, c.y + float(k) * px(8)};
+            dl->AddCircleFilled(at, px(hot ? 2.5f : 2.0f), ink(hot ? color::accent : color::border));
+        }
+        return ImGui::IsItemDeactivated();
+    }
+
     // ---------------------------------------------------------------- places
     fs::path languagesDir() const {
         if (const char* sz = std::getenv("SAFEHOUSE_LOC_LANGUAGES"); sz && *sz) return cane::path(sz);
@@ -1464,25 +1526,32 @@ private:
         }
         return m_audio->available();
     }
-    void playMono(const loc::audio::Mono& m) {
-        if (!ensureAudio() || m.empty()) return;
+    // A sound as the output plays it: stereo 16-bit at `gain` (the reference while recording: quieter)
+    static collection::Pcm pcmOf(const loc::audio::Mono& m, float gain = 1.0f) {
         collection::Pcm p;
         p.rate = m.rate;
         p.loops = false;
         p.samples.resize(m.s.size() * 2);
-        for (std::size_t i = 0; i < m.s.size(); ++i) p.samples[i * 2] = p.samples[i * 2 + 1] = int16_t(std::clamp(m.s[i], -1.0f, 1.0f) * 32767.0f);
+        for (std::size_t i = 0; i < m.s.size(); ++i) p.samples[i * 2] = p.samples[i * 2 + 1] = int16_t(std::clamp(m.s[i] * gain, -1.0f, 1.0f) * 32767.0f);
         p.loopStart = 0;
         p.loopEnd = p.frames();
-        m_audio->playMusic(nullptr, 0.05f);
-        m_audio->playSound(std::make_shared<const collection::Pcm>(std::move(p)));
+        return p;
     }
-    void play(const fs::path& file) {
+    // The reference's volume: all of it, but while a take is recorded the setting's share (20% by default)
+    static float referenceGain(bool recording, float setting) { return recording ? std::clamp(setting, 0.0f, 1.0f) : 1.0f; }
+    void playMono(const loc::audio::Mono& m, float gain = 1.0f) {
+        if (!ensureAudio() || m.empty()) return;
+        m_lastGain = gain;
+        m_audio->playMusic(nullptr, 0.05f);
+        m_audio->playSound(std::make_shared<const collection::Pcm>(pcmOf(m, gain)));
+    }
+    void play(const fs::path& file, float gain = 1.0f) {
         const auto m = loadMono(file);
         if (!m) {
             m_status = trf("Cannot play %s", utf8(file).c_str());
             return;
         }
-        playMono(*m);
+        playMono(*m, gain);
     }
     void stopSound() {
         if (m_audio) m_audio = nullptr;   // (closing the device stops every voice)
@@ -1594,6 +1663,7 @@ private:
         m_recId = v.id;
         m_rec = Rec::Countdown;
         m_recT0 = ImGui::GetTime();
+        m_lineToTop = true;   // (the line's texts in view above the recorder)
     }
     void startRecording(const loc::VoiceRow& v) {
         m_capture.take();   // (what came during the countdown)
@@ -1601,7 +1671,7 @@ private:
         m_recorder.reset(m_capture.rate(), ref + kRecordMargin);
         m_rec = Rec::Recording;
         m_recT0 = ImGui::GetTime();
-        if (m_playAlong && !v.ref.empty()) play(v.ref);
+        if (m_playAlong && !v.ref.empty()) play(v.ref, referenceGain(true, m_refVolume));
     }
     void stopRecording(bool keep) {
         m_capture.close();
@@ -1673,7 +1743,6 @@ private:
     }
     void drawRecorder(loc::VoiceRow& v) {
         pollRecording(v);
-        gap(10);
         overline(tr("Record a dub"));
         if (m_rec == Rec::Idle) {
             // the microphone (the devices as Settings lists them for Sly 2's headset)
@@ -1687,11 +1756,19 @@ private:
                 ImGui::EndCombo();
             }
             popComboStyle();
-            ImGui::SameLine(0, px(8));
+            flow(tr("Play the reference along"));   // (beside the microphone when it fits)
             ImGui::Checkbox(tr("Play the reference along"), &m_playAlong);
             caption(m_playAlong ? tr("Wear headphones: the reference line plays while you record, so you can follow its timing.")
                                 : tr("The reference does not play: listen to it first, then record."),
                     color::muted);
+            if (m_playAlong) {
+                // (its volume while recording; Play the reference stays at full volume)
+                if (sliderRow(tr("Reference volume while recording"), &m_refVolume, 0.05f, nullptr, "%.0f%%", 100.0f, px(44))) m_refVolumeChanged = true;
+                if (m_refVolumeChanged && !ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+                    m_refVolumeChanged = false;
+                    saveLayout("ref_volume", m_refVolume);
+                }
+            }
             const std::string limit = v.refSeconds > 0 ? trf("Stops by itself after %.1f s (the reference and %.1f s).", v.refSeconds + kRecordMargin, kRecordMargin)
                                                        : std::string(tr("Stop it with the button."));
             if (button(tr("Record"), Tone::Cta, {0, px(34)}, Icon::Headset)) startCountdown(v);
@@ -1777,13 +1854,41 @@ private:
         if (button(tr("Discard"), Tone::Quiet, {0, px(34)}, Icon::Trash)) m_rec = Rec::Idle;
     }
 
-    void drawVoiceDetail() {
+    // The voice line's detail as two panels, one above the other: the line (its texts, the dubs, the radio effect) and
+    // under the splitter the recorder, a dub from a file and the subtitle time. The line stays in view while recording.
+    void drawVoicePanels(float h) {
         if (m_voiceSel < 0 || m_voiceSel >= int(m_voices.size())) {
+            beginCard("loc-detail", {0, h}, 16, true);
             caption(tr("Choose a voice line. Each line is named by the number of its subtitle; a dub is a WAV or FLAC file of that name in the "
                        "language's Dialog folder (any subfolder), a cutscene's sound one in its Movies folder."));
+            endCard();
             return;
         }
         loc::VoiceRow& v = m_voices[std::size_t(m_voiceSel)];
+        const float gutter = px(10), w = ImGui::GetContentRegionAvail().x;
+        const float most = std::max(h * 0.4f, h - gutter - px(160));
+        float topH = std::floor(std::clamp(h * m_detailShare, std::min(px(120), h * 0.4f), most));
+        // (while recording, the line's two texts get the room they need when the recorder can spare it)
+        const bool recording = m_rec == Rec::Countdown || m_rec == Rec::Recording;
+        if (recording && m_lineNeed > topH) topH = std::floor(std::min(m_lineNeed, most));
+        const ImVec2 at = ImGui::GetCursorScreenPos();
+        ImGui::BeginGroup();
+        beginCard("loc-detail", {w, topH}, 16, true);
+        if (m_lineToTop) ImGui::SetScrollY(0), m_lineToTop = false;
+        drawVoiceLine(v);
+        m_lineNeed = ImGui::GetCursorPosY() + px(16);
+        endCard();
+        ImGui::SetCursorScreenPos({at.x, at.y + topH});
+        if (splitter("##loc-split-detail", true, {w, gutter}, topH, h, m_detailShare)) saveLayout("detail", m_detailShare);
+        ImGui::SetCursorScreenPos({at.x, at.y + topH + gutter});
+        beginCard("loc-detail-tools", {w, std::max(px(60), h - topH - gutter)}, 16, true);
+        // (screenshots: SAFEHOUSE_LOC_DETAIL_SCROLL=<pixels> holds the recorder's card scrolled there)
+        if (const char* sz = std::getenv("SAFEHOUSE_LOC_DETAIL_SCROLL"); sz && *sz) ImGui::SetScrollY(px(float(std::atof(sz))));
+        drawVoiceTools(v);
+        endCard();
+        ImGui::EndGroup();
+    }
+    void drawVoiceLine(loc::VoiceRow& v) {
         if (v.refSeconds < -1 && !v.ref.empty()) v.refSeconds = loc::audioSeconds(v.ref);
         if (v.dubSeconds < -1 && !v.dub.empty()) v.dubSeconds = loc::audioSeconds(v.dub);
         // (screenshots: SAFEHOUSE_LOC_RECORD=countdown|recording|review with SAFEHOUSE_FAKE_MIC, the fake microphone's file)
@@ -1815,6 +1920,17 @@ private:
             caption(who.c_str(), color::text2);
         } else if (!v.group.empty()) caption(v.group.c_str(), color::text2);
         gap(6);
+        // while a take is recorded: only the line's two texts, so they fit above the recorder
+        if (m_rec == Rec::Countdown || m_rec == Rec::Recording) {
+            const loc::Row* r = subtitleRow(v);
+            text(m_voiceRefKey.c_str(), fonts().label, color::text2);
+            if (r) richText(r->ref, color::text);
+            gap(8);
+            text(m_t.folder.key.c_str(), fonts().label, color::text2);
+            if (r && !r->text.empty()) richText(r->text, color::text);
+            else ImGui::TextColored(vec(color::muted), "%s", r ? tr("(not translated)") : tr("(no subtitle)"));
+            return;
+        }
         // the reference's line
         text(m_voiceRefKey.c_str(), fonts().label, color::text2);
         ImGui::BeginDisabled(v.ref.empty());
@@ -1884,6 +2000,8 @@ private:
                 }
             }
         }
+    }
+    void drawVoiceTools(loc::VoiceRow& v) {
         // recording
         drawRecorder(v);
         // a new dub: a file copied in under the line's name
@@ -2017,7 +2135,12 @@ private:
     Rec m_rec = Rec::Idle;
     double m_recT0 = 0, m_trimA = 0, m_trimB = 0;
     int m_drag = -1;
-    bool m_playAlong = true, m_micsListed = false, m_recordEnvDone = false;
+    bool m_playAlong = true, m_micsListed = false, m_recordEnvDone = false, m_lineToTop = false, m_refVolumeChanged = false;
+    static constexpr float kRefVolumeDefault = 0.2f;
+    float m_refVolume = kRefVolumeDefault, m_lastGain = 1.0f;
+    // the layout
+    float m_listShare = 0.58f, m_detailShare = 0.5f, m_lineNeed = 0;
+    bool m_layoutLoaded = false, m_layoutFixed = false;
     std::string m_recId, m_micName;
     std::vector<std::string> m_mics;
     // the export

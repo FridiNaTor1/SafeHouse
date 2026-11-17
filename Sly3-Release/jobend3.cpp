@@ -41,7 +41,7 @@ LO* PloFailed() { return s_psw ? PloScreen3(s_psw, OID_FAILED) : nullptr; }
 int GrfCharacter(const JOB3* p)
 {
     if (const char* sz = std::getenv("SLY3_JOBCHAR")) return int(std::strtol(sz, nullptr, 0));
-    return p && p->plo ? int(p->plo->U32Field(0, 0xB0, 0)) : 0;
+    return p && p->plo ? int(p->plo->U32Field3(0, 0xB0, 0)) : 0;
 }
 
 // orig3: 0x00186930 / 0x00186B68 (the job's character): the stamp's in / out part: a job's "JOB COMPLETE!" 0x42C + 2 k

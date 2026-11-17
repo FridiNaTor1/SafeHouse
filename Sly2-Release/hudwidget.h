@@ -1,5 +1,7 @@
 #pragma once
 
+#include <glm/vec4.hpp>
+
 // The in-game HUD's widgets (Sly 2 module 0x1D93D8..0x1DFAD8, their list at 0x3D9E70): the character gauge
 // (0x3D9E80 on screen object 0x36B: health and gadget power, 0x1D9968 / 0x1D9DF8 / 0x1D9B60) and the task prompt
 // (0x3DA0C0 on screen object 0x371: a string shown while a task is current, 0x1DA4B8 / 0x1DA578 / 0x1DA5C8 /
@@ -28,6 +30,10 @@ void InitHudWidgets(SW* psw);
 void UpdateHud(SW* psw);
 // The frame's 2D: the shown screen objects into g_hud and flushed into the scene target.
 void DrawHud(SW* psw, int width, int height);
+// (s3-lightning) the sky's fades (0x15DD48 kind +0x6C 0: render kind 1, after the sky, before the world): their colours
+// (GS units) for the scene pass (render.cpp), which sets g_fFadeSkyPass when it drew them (else the HUD draws them)
+int CFadesSky2(glm::vec4* argba, int cmax);
+extern bool g_fFadeSkyPass;
 
 // orig: 0x001DA4B8 on 0x3DA0C0: the prompt shows string id for g seconds (< 0: until ended; -1 id: ends it)
 void HudPrompt(int id, float g);

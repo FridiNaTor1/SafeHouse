@@ -131,7 +131,7 @@ namespace
 {
 LO* PscreenBox(LO* plo)
 {
-    LO* p = plo && g_psw ? PloFindSwObjectByOid(g_psw, OID(plo->U32Field(0, 0x1898, 0xFFFFFFFFu))) : nullptr;
+    LO* p = plo && g_psw ? PloFindSwObjectByOid(g_psw, OID(plo->U32Field3(0, 0x1898, 0xFFFFFFFFu))) : nullptr;
     return p && FCidDerivedFrom(p->Cid(), S3CID(0x7E)) ? p : nullptr;   // (a SCREENOBJ: Sly 3 0x9E)
 }
 
@@ -371,7 +371,7 @@ void JOBCARM3::Update()
     // (the aim zone's forced state, applied once the camera's cut has passed: SetAim below)
     if (nZonePending != -1 && pguard && g_psw && !g_cm.fCut)
     {
-        if (LO* pz = PloFindSwObjectByOid(g_psw, OID(pguard->palo->U32Field(0, 0x17E8, 0xFFFFFFFFu)))) SetZoneForced(pz, nZonePending);
+        if (LO* pz = PloFindSwObjectByOid(g_psw, OID(pguard->palo->U32Field3(0, 0x17E8, 0xFFFFFFFFu)))) SetZoneForced(pz, nZonePending);
         nZonePending = -1;
     }
     // 0x15FCF8: Triangle switches the aim mode
@@ -795,7 +795,7 @@ void JOBCARM3::SetState(int n)
         SetGun(-1);
         move(0x1C);
         posThrow = PosThrowTarget();
-        LO* ppe = g_psw ? PloFindSwObjectByOid(g_psw, OID(pguard->palo->U32Field(0, 0x18B4, 0xFFFFFFFFu))) : nullptr;
+        LO* ppe = g_psw ? PloFindSwObjectByOid(g_psw, OID(pguard->palo->U32Field3(0, 0x18B4, 0xFFFFFFFFu))) : nullptr;
         if (ppe && FCidDerivedFrom(ppe->Cid(), S3CID(0x30)))
         {
             ALO* pape = static_cast<ALO*>(ppe);
@@ -823,17 +823,17 @@ void JOBCARM3::SetState(int n)
 void JOBCARM3::SetAim(int n)
 {
     if (stAim == n) return;
-    LO* phud = pguard && g_psw ? PloFindSwObjectByOid(g_psw, OID(pguard->palo->U32Field(0, 0x17E4, 0xFFFFFFFFu))) : nullptr;
+    LO* phud = pguard && g_psw ? PloFindSwObjectByOid(g_psw, OID(pguard->palo->U32Field3(0, 0x17E4, 0xFFFFFFFFu))) : nullptr;
     if (phud && !FCidDerivedFrom(phud->Cid(), S3CID(0x7E))) phud = nullptr;   // (a SCREENOBJ: Sly 3 0x9E)
     // (debug: SLY3_CARMNOAIMZONE=1 the zone left alone, as before round 22)
     const bool fZone = pguard && g_psw && g_psw->nScreenMode3 != 2 && !std::getenv("SLY3_CARMNOAIMZONE") &&
-                       PloFindSwObjectByOid(g_psw, OID(pguard->palo->U32Field(0, 0x17E8, 0xFFFFFFFFu)));
+                       PloFindSwObjectByOid(g_psw, OID(pguard->palo->U32Field3(0, 0x17E8, 0xFFFFFFFFu)));
     if (FPrint()) std::printf("carm3: aim %d -> %d zone %d\n", stAim, n, fZone ? 1 : 0);
     if (stAim == 1 && fZone) nZonePending = 0;
     if (n == -1 && nZonePending != -1)
     {
         // (the job's exit: no update follows; at once)
-        if (fZone) SetZoneForced(PloFindSwObjectByOid(g_psw, OID(pguard->palo->U32Field(0, 0x17E8, 0xFFFFFFFFu))), 0);
+        if (fZone) SetZoneForced(PloFindSwObjectByOid(g_psw, OID(pguard->palo->U32Field3(0, 0x17E8, 0xFFFFFFFFu))), 0);
         nZonePending = -1;
     }
     if (stAim == 1 && phud)
@@ -985,7 +985,7 @@ void LaunchShot3(ALO* pp, const glm::vec3& posAim)
     {
         uint32_t bits;
         std::memcpy(&bits, &gSpeed, 4);
-        const uint32_t u = pp->U32Field(0, 0x260, bits);
+        const uint32_t u = pp->U32Field3(0, 0x260, bits);
         std::memcpy(&gSpeed, &u, 4);
     }
     if (FCidDerivedFrom(pp->Cid(), S3CID(0x52))) SetAloVelocity(pp, glm::vec3(gSpeed, 0.0f, 0.0f));
@@ -1018,8 +1018,8 @@ void JOBCARM3::Fire()
     if (!pguard || !g_psw) return;
     const uint32_t ib = stGun == 3 ? 0x17F0 : stGun == 4 ? 0x17F4 : 0x17EC;
     ALO* palo = pguard->palo;
-    LO* pproxy = PloFindSwObjectByOid(g_psw, OID(palo->U32Field(0, ib, 0xFFFFFFFFu)));
-    if (!pproxy && ib != 0x17EC) pproxy = PloFindSwObjectByOid(g_psw, OID(palo->U32Field(0, 0x17EC, 0xFFFFFFFFu)));
+    LO* pproxy = PloFindSwObjectByOid(g_psw, OID(palo->U32Field3(0, ib, 0xFFFFFFFFu)));
+    if (!pproxy && ib != 0x17EC) pproxy = PloFindSwObjectByOid(g_psw, OID(palo->U32Field3(0, 0x17EC, 0xFFFFFFFFu)));
     LO* po = pproxy ? PloAcquireProxyObject(g_psw, pproxy, false) : nullptr;
     if (!po || !FCidDerivedFrom(po->Cid(), S3CID(0x30)))
     {
@@ -1087,7 +1087,7 @@ LO* JOBCARM3::PloShotTarget()
             if (FCidDerivedFrom(p->Cid(), 0x3A))
             {
                 // (+0x2F0, option 264: 2 friendly; as set at run time, else as loaded)
-                bool fFriend = p->U32Field(0, 0x2F0, 0) == 2;
+                bool fFriend = p->U32Field3(0, 0x2F0, 0) == 2;
                 for (const OPT& o : p->aopt)
                     if (o.eopid == 264 && !o.aval.empty() && o.aval[0].n == 2) fFriend = true;
                 if (fFriend) continue;
@@ -1145,7 +1145,7 @@ void SetCarmPlayer3(LO* plo, int iplayer)
     // orig3 0x162810: the reaction told 0 (back to its AI) before the pad goes, 0x14 (this job: reaction kind 20) after
     // it comes
     // (+0x130: the player index the scripts read as the SO's option 313, Sly 3 EOPID 941; -1 none)
-    plo->SetField(0, 0x130, static_cast<uint32_t>(iplayer));
+    plo->SetField3(0, 0x130, static_cast<uint32_t>(iplayer));
     if (iplayer == -1)
     {
         s_mpiplayer.erase(plo);

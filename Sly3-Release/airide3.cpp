@@ -146,7 +146,7 @@ void JOBRIDE3::Init()
     ploRider = nullptr;
     if (!pguard) return;
     AddGuardState(pguard, IstateGuard2FromIstate3(0x41));
-    u164 = pguard->palo->U32Field(0, 0x164, 0);
+    u164 = pguard->palo->U32Field3(0, 0x164, 0);
 }
 
 // orig3: 0x1F5B28: the broadcast 0x1A (the guard), (the detector target +0x10D0: not ported), the rider's pad, state 0
@@ -170,7 +170,7 @@ void JOBRIDE3::Exit()
     SetState(-1);
     RiderOff();
     if (!pguard) return;
-    pguard->palo->SetField(0, 0x164, u164);
+    pguard->palo->SetField3(0, 0x164, u164);
     Broadcast3(0x1B, pguard->palo);
     RemoveGuardState(pguard, IstateGuard2FromIstate3(0x41));
     fSteer = fHeading = false;
@@ -182,7 +182,7 @@ void JOBRIDE3::GiveRiderPad()
 {
     if (!pguard || !ploRider || !g_psw) return;
     ALO* palo = pguard->palo;
-    palo->SetField(0, 0x130, ploRider->U32Field(0, 0x130, 0));
+    palo->SetField3(0, 0x130, ploRider->U32Field3(0, 0x130, 0));
     if (PloPoCurrent(g_psw) == ploRider) SetPoCurrent(g_psw, palo);
     if (NPoEnabled(palo) != 1) EnablePo(g_psw, palo, 1);
     ++pguard->watchA.cOff3;
@@ -218,7 +218,7 @@ void JOBRIDE3::Release()
         if (NPoEnabled(pr) != 1) EnablePo(g_psw, pr, 1);
         if (NPoEnabled(palo) == 1) EnablePo(g_psw, palo, 0);
     }
-    palo->SetField(0, 0x130, 0xFFFFFFFFu);
+    palo->SetField3(0, 0x130, 0xFFFFFFFFu);
     if (pguard->watchA.cOff3 > 0 && --pguard->watchA.cOff3 == 0) pguard->watchA.fOn = 1;
     if (NMode(pguard) == 2) SetState(-1);
     fSteer = fHeading = false;
@@ -448,7 +448,7 @@ void JOBRIDE3::Attack()
     LO* pact = PloRideAction(pg);
     ACTIONOBJ* pa = pact ? PactionOf(pact, pg) : nullptr;
     AddGuardState(pg, IstateGuard2FromIstate3(3));
-    pg->palo->SetField(0, 0x107C, 1);
+    pg->palo->SetField3(0, 0x107C, 1);
     fAttack107C = true;
     auto* o = static_cast<JOBMOVE*>(PjobPush(pg, 0x9D));
     o->pkinde = pa && pa->kinde.k >= 0 ? &pa->kinde : nullptr;
@@ -481,7 +481,7 @@ void JOBRIDE3::EndJumpAttack()
     if (fAttack107C)
     {
         fAttack107C = false;
-        pguard->palo->SetField(0, 0x107C, 0);
+        pguard->palo->SetField3(0, 0x107C, 0);
         RemoveGuardState(pguard, IstateGuard2FromIstate3(3));
     }
 }

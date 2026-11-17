@@ -160,8 +160,8 @@ void InitBoat(ROWBOAT3& b)
     // +0x1EC (the rower's seat) / +0x1F8 / +0x1FC (the oars' splash points of 0x20F508: the splashes not ported); its
     // registration 0x1F4670 is lookat.cpp's (PloNearestCharacter3)
     BindLoPartsTable3(palo, 3, 0x347FF0);
-    palo->SetField(0, 0x170, 100u);
-    palo->SetField(0, 0x16C, 100u);
+    palo->SetField3(0, 0x170, 100u);
+    palo->SetField3(0, 0x16C, 100u);
     for (const OPT& o : palo->aopt)
     {
         if (o.aval.empty() || o.eopid < 1778 || o.eopid > 1792 || o.eopid == 1786) continue;
@@ -186,14 +186,14 @@ void InitBoat(ROWBOAT3& b)
     for (const OPT& o : palo->aopt)
         if (!o.aval.empty() && o.eopid == 937)
         {
-            palo->SetField(0, 0x170, uint32_t(o.aval[0].n));
-            palo->SetField(0, 0x16C, uint32_t(o.aval[0].n));
+            palo->SetField3(0, 0x170, uint32_t(o.aval[0].n));
+            palo->SetField3(0, 0x16C, uint32_t(o.aval[0].n));
         }
     if (FPrint())
         std::printf("row3: %d init: amount %.0f shift %.2f restart %.2f water bias %.2f damp %.3f %.3f %.3f drag %.2f %.2f turn %.1f rope %d - %d limit %.0f "
                     "stiffness %.2f damping %.2f hp %d\n", palo->oid, b.amount, b.shift, b.restart, b.water.bias.x, b.water.damp.x, b.water.damp.y, b.water.damp.z,
                     b.water.dragBase, b.water.dragSpeed, b.water.turnGain, b.anchor ? b.anchor->oid : -1, b.follower ? b.follower->oid : -1, b.limit, b.stiffness,
-                    b.damping, int(palo->U32Field(0, 0x16C, 0)));
+                    b.damping, int(palo->U32Field3(0, 0x16C, 0)));
 }
 
 ROWBOAT3* Pboat(LO* plo)
@@ -332,7 +332,7 @@ void SplashOars(ROWBOAT3& b, int mode)
 {
     LO* ppe = b.wake;
     if (!ppe && b.ploWater)
-        if (const int oid = static_cast<int>(b.ploWater->U32Field(0, 0x150, 0)); oid > 0) ppe = PloFindSwNearest(b.ploWater, oid);
+        if (const int oid = static_cast<int>(b.ploWater->U32Field3(0, 0x150, 0)); oid > 0) ppe = PloFindSwNearest(b.ploWater, oid);
     if (!ppe || ppe->Cid() != 0x2D) return;
     static const int s_agrf[9] = {0, 1, 1, 2, 2, 3, 3, 3, 3};   // D_00348018
     const int grf = static_cast<unsigned>(mode) < 9 ? s_agrf[mode] : 0;
@@ -403,7 +403,7 @@ void UpdateBoat(LO* plo)
                 std::printf("row3: rope %d (cid 0x%X) at %.0f %.0f %.0f - %d (cid 0x%X) at %.0f %.0f %.0f\n", b.anchor->oid, unsigned(b.anchor->Cid()), PosOf(b.anchor).x, PosOf(b.anchor).y,
                             PosOf(b.anchor).z, b.follower->oid, unsigned(b.follower->Cid()), PosOf(b.follower).x, PosOf(b.follower).y, PosOf(b.follower).z);
             std::printf("row3: %d t %.2f state %d pos %.0f %.0f %.0f vel %.0f %.0f %.0f heading %.2f yaw %.2f hp %d rope %.0f\n", plo->oid, g_clock.t, b.state, p.x, p.y, p.z, v.x,
-                        v.y, v.z, b.heading, YawOf(b.palo), int(plo->U32Field(0, 0x16C, 0)), b.anchor && b.follower ? glm::length(PosOf(b.follower) - PosOf(b.anchor)) : 0.0f);
+                        v.y, v.z, b.heading, YawOf(b.palo), int(plo->U32Field3(0, 0x16C, 0)), b.anchor && b.follower ? glm::length(PosOf(b.follower) - PosOf(b.anchor)) : 0.0f);
         }
     }
 }
@@ -450,10 +450,10 @@ bool FAcceptBoatContact(ALO* palo, CTMSG* pctm)
     LO* pfrom = pctm->ploSender;
     if (pfrom && FIsLoDerivedFrom(pfrom, 0x59) && PloProjectileLauncher(pfrom) == palo) return false;
     if (!(pctm->grfAccepted & 2)) return false;
-    palo->SetField(0, 0x184, static_cast<uint32_t>(reinterpret_cast<uintptr_t>(pfrom) & 0xFFFFFFFFu));   // 0x1F4DD8
-    int hp = int(palo->U32Field(0, 0x16C, 0));
+    palo->SetField3(0, 0x184, static_cast<uint32_t>(reinterpret_cast<uintptr_t>(pfrom) & 0xFFFFFFFFu));   // 0x1F4DD8
+    int hp = int(palo->U32Field3(0, 0x16C, 0));
     hp = pctm->nKill3 || pctm->fKill3 ? 0 : std::max(0, hp - std::abs(pctm->nState));
-    palo->SetField(0, 0x16C, uint32_t(hp));
+    palo->SetField3(0, 0x16C, uint32_t(hp));
     if (FPrint()) std::printf("row3: %d hit by %d: %d left (t %.2f)\n", palo->oid, pfrom ? pfrom->oid : -1, hp, g_clock.t);
     if (hp <= 0) SetState(b, 3);
     else
@@ -469,7 +469,7 @@ void ResetBoat(LO* plo, LO*)
 {
     ROWBOAT3* pb = Pboat(plo);
     if (!pb) return;
-    plo->SetField(0, 0x16C, plo->U32Field(0, 0x170, 100));
+    plo->SetField3(0, 0x16C, plo->U32Field3(0, 0x170, 100));
     pb->cooldown = 0.0f;
     SetState(*pb, 1);
 }

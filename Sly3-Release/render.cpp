@@ -22,6 +22,7 @@ void CollectHackSwarmDraws(const SCENE& scene, std::vector<EXTRADRAW>& aextra); 
 #include "wr.h"
 #include "passhelpers.h"
 #include "gl_backend.h"
+#include "hudwidget.h"
 
 #include <stb/stb_image_write.h>
 
@@ -905,7 +906,7 @@ struct DSTATE
 static_assert(sizeof(DSTATE) == 32);
 bool operator==(const DSTATE& a, const DSTATE& b) { return std::memcmp(&a, &b, sizeof(DSTATE)) == 0; }
 
-enum CMDK : uint8_t { CMDK_Pass, CMDK_Volume, CMDK_Shadow, CMDK_Cel, CMDK_Particles, CMDK_Shadow2, CMDK_ShadowBegin, CMDK_ShadowKind8, CMDK_ShadowCombine, CMDK_FbaClear };
+enum CMDK : uint8_t { CMDK_Pass, CMDK_Volume, CMDK_Shadow, CMDK_Cel, CMDK_Particles, CMDK_Shadow2, CMDK_ShadowBegin, CMDK_ShadowKind8, CMDK_ShadowCombine, CMDK_FbaClear, CMDK_FadeSky };
 // Interned states: a command refers to its state by index.
 struct DSTATEHASH
 {
@@ -3016,6 +3017,69 @@ void ClearFbaBits()
     glStencilMask(0xFF);
 }
 
+// (s3-lightning) the sky's fades (FADE mode 0, orig3 0x17D270 at phase 5 + view, sub 0: the sky's handler, after the sky,
+// before the world; hudwidget.h FADEPH_Sky): each a full-frame quad of its colour, blended as the GS's (Cs - Cd) As / 128
+// + Cd, no depth / stencil, the frame's alpha kept; drawn with the HUD's program (hud.vert: canvas 0..640 x 0..448)
+void DrawSkyFades(const glm::vec4* argba, int c)
+{
+    struct VTXF { glm::vec2 pos; glm::vec4 rgba; float z; glm::vec2 uv; };
+    static GLuint s_vbo = 0, s_vao = 0;
+    if (!s_vao)
+    {
+        s_vbo = GlNewBuffer(GL_ARRAY_BUFFER, 0, nullptr, GL_STREAM_DRAW);
+        if (const cane::draw::Packets* pkv = PpacketsVao())
+        {
+            using namespace cane::draw;
+            const VertexAttrib aattr[] = {{0, 2, kAttribFloat, 0, 0, s_vbo, uint32_t(offsetof(VTXF, pos)), sizeof(VTXF), 0},
+                                          {1, 4, kAttribFloat, 0, 0, s_vbo, uint32_t(offsetof(VTXF, rgba)), sizeof(VTXF), 0},
+                                          {2, 1, kAttribFloat, 0, 0, s_vbo, uint32_t(offsetof(VTXF, z)), sizeof(VTXF), 0},
+                                          {3, 2, kAttribFloat, 0, 0, s_vbo, uint32_t(offsetof(VTXF, uv)), sizeof(VTXF), 0}};
+            s_vao = pkv->createVertexArray(aattr, 4, 0);
+        }
+        else
+        {
+            glGenVertexArrays(1, &s_vao);
+            glBindVertexArray(s_vao);
+            glBindBuffer(GL_ARRAY_BUFFER, s_vbo);
+            glEnableVertexAttribArray(0);
+            glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(VTXF), reinterpret_cast<void*>(offsetof(VTXF, pos)));
+            glEnableVertexAttribArray(1);
+            glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, sizeof(VTXF), reinterpret_cast<void*>(offsetof(VTXF, rgba)));
+            glEnableVertexAttribArray(2);
+            glVertexAttribPointer(2, 1, GL_FLOAT, GL_FALSE, sizeof(VTXF), reinterpret_cast<void*>(offsetof(VTXF, z)));
+            glEnableVertexAttribArray(3);
+            glVertexAttribPointer(3, 2, GL_FLOAT, GL_FALSE, sizeof(VTXF), reinterpret_cast<void*>(offsetof(VTXF, uv)));
+            glBindVertexArray(0);
+        }
+    }
+    std::vector<VTXF> av;
+    for (int i = 0; i < c; ++i)
+    {
+        const VTXF a{{0, 0}, argba[i], 0, {}}, b{{640, 0}, argba[i], 0, {}}, cc{{0, 448}, argba[i], 0, {}}, d{{640, 448}, argba[i], 0, {}};
+        av.insert(av.end(), {a, b, cc, cc, b, d});
+    }
+    glBindBuffer(GL_ARRAY_BUFFER, s_vbo);
+    glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(av.size() * sizeof(VTXF)), av.data(), GL_STREAM_DRAW);
+    glDisable(GL_DEPTH_TEST);
+    glDepthMask(GL_FALSE);
+    glDisable(GL_STENCIL_TEST);
+    glDisable(GL_CULL_FACE);
+    glEnable(GL_BLEND);
+    glBlendEquation(GL_FUNC_ADD);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_FALSE);
+    glHudShader.Use();
+    glUniform4f(glHudShader.Loc("uCanvas"), 1.0f, 1.0f, 0.0f, 0.0f);
+    if (const GLint loc = glHudShader.Loc("fTextured"); loc >= 0) glUniform1i(loc, 0);
+    if (const GLint loc = glHudShader.Loc("fAlphaNonZero"); loc >= 0) glUniform1i(loc, 0);
+    glBindVertexArray(s_vao);
+    glDrawArrays(GL_TRIANGLES, 0, GLsizei(av.size()));
+    glBindVertexArray(0);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glDepthMask(GL_TRUE);
+    glEnable(GL_DEPTH_TEST);
+}
+
 // (draw packets) ShadowCombine below: the unmarked pixels' alpha (a masked clear, or the in-place reset draw), the ramps,
 // the marks' clear; each GL state of the sequence a packet state made once per program and variant, the last one the
 // state its GL calls leave. False: a state the backend cannot take (the GL calls then; nothing done yet).
@@ -4634,6 +4698,26 @@ void RenderPass(const SCENE& scene, const PASSVIEW& pv, const RENDEROPTS& opts)
         s_acmd.push_back(cmd);
         endSegment(false);
     };
+    // (s3-lightning) the sky's fades after the sky (kind 1), before the rest of the world (hudwidget.h FADEPH_Sky): in the
+    // frame's main pass (each eye of the 3-D mode, each split view), not in the multiview pass (the HUD's program has no
+    // multiview variant: the HUD draws them then, g_fFadeSkyPass)
+    static glm::vec4 s_argbaFadeSky[8];
+    static int s_cFadeSky = 0;
+    bool fFadeSkyOpen = pv.irtgt < 0 && !pv.fForeground && !g_fMultiviewPass;
+    if (fFadeSkyOpen)
+    {
+        g_fFadeSkyPass = true;
+        s_cFadeSky = CFadesSky3(s_argbaFadeSky, 8);
+        fFadeSkyOpen = s_cFadeSky > 0;
+    }
+    auto addFadeSky = [&]() {
+        fFadeSkyOpen = false;
+        endSegment(!s_fNoRegroup && kindSeg >= 0 && !fSortedKind(kindSeg));
+        CMD cmd;
+        cmd.cmdk = CMDK_FadeSky;
+        s_acmd.push_back(cmd);
+        endSegment(false);
+    };
     // The type-2 shadows (render kind 7: the characters' cast shadows) mark with the kind-7 hulls; the frame's alpha
     // keeps the characters' own pixels out (DATE), as on the PS2.
     bool fShadow2 = false;
@@ -4783,6 +4867,7 @@ void RenderPass(const SCENE& scene, const PASSVIEW& pv, const RENDEROPTS& opts)
         if (s_grfSkipKinds && rec.kind >= 0 && rec.kind < 64 && ((s_grfSkipKinds >> rec.kind) & 1)) continue;
         const GLOB& glob = *rec.pglob;
         const GLOB& geom = *rec.pglobGeom;
+        if (fFadeSkyOpen && rec.kind > 1) addFadeSky();
         if (rec.kind != kindSeg) shadowPhase(rec.kind);
         if (rec.kind == 7 && icmdShPhase >= 0)
         {
@@ -4976,6 +5061,7 @@ void RenderPass(const SCENE& scene, const PASSVIEW& pv, const RENDEROPTS& opts)
             endSegment(false);
         }
     }
+    if (fFadeSkyOpen) addFadeSky();
     shadowPhase(-1);
     addParticles();
     endSegment(!s_fNoRegroup && kindSeg >= 0 && !fSortedKind(kindSeg));
@@ -5122,7 +5208,7 @@ void RenderPass(const SCENE& scene, const PASSVIEW& pv, const RENDEROPTS& opts)
                 else if (fZero && (s_astate[c.istate].colorMask & 2) && (fHead ? s_fStencilHead : s_fStencilTail))
                     c.istate = IstateNoStencil(c.istate);
                 break;
-            case CMDK_Cel: case CMDK_Particles: break;
+            case CMDK_Cel: case CMDK_Particles: case CMDK_FadeSky: break;
             case CMDK_Volume: if (!fZero) fRead = true; break;
             case CMDK_FbaClear: case CMDK_ShadowCombine:
                 if (!fZero) closeDirty(i);
@@ -5855,6 +5941,12 @@ void RenderPass(const SCENE& scene, const PASSVIEW& pv, const RENDEROPTS& opts)
         case CMDK_FbaClear:
             ClearFbaBits();
             sc.Invalidate();
+            break;
+        case CMDK_FadeSky:
+            DrawSkyFades(s_argbaFadeSky, s_cFadeSky);
+            otherProgram();
+            sc.Invalidate();
+            ++g_renderstats.cbatch;
             break;
         case CMDK_ShadowCombine:
             ShadowCombine(cmd.count & 1, cmd.count & 2);

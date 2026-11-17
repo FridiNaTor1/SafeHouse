@@ -547,6 +547,10 @@ void SetTaskState3(TASK3* p, int n)
 {
     if (p->nState == n) return;
     Log("state", p, n);
+    // (flow milestone, tools/smoke3.sh: the boot world's attract, m_ext task 4253 (its state 1 starts SCPT 4262, the
+    // intro cinematic; 3 when it ends or START skips it, then the title script 4268))
+    if (p->oid == 4253 && FTitleWorld() && (n == 1 || n == 3))
+        std::printf("flow: the attract (task 4253) %s\n", n == 1 ? "started" : "over");
     // live: the broadcast 0x2A and message 0x19
     if (FTaskLive(p))
     {
@@ -1588,12 +1592,12 @@ void PrintTasks3(FILE* pf)
             {
                 LO* plo = up.get();
                 if (!FCidDerivedFrom(plo->Cid(), S3CID(0x23))) continue;   // (Sly 3 USE 0x21 = Sly 2 0x23)
-                const int c = static_cast<int>(plo->U32Field(0, 0x15C, 0));
+                const int c = static_cast<int>(plo->U32Field3(0, 0x15C, 0));
                 if (c <= 0 || c > 8) continue;
                 const glm::vec3 pos = PosLoWorld(plo);
                 std::fprintf(pf, "usetasks %d cid 0x%X inworld %d at %.0f %.0f %.0f:", plo->oid, int(plo->Cid()), int(plo->fInWorld), pos.x, pos.y, pos.z);
                 for (int k = 0; k < c; ++k)
-                    std::fprintf(pf, " {%d %d}", static_cast<int>(plo->U32Field(0, 0x160 + 8 * k)), static_cast<int>(plo->U32Field(0, 0x164 + 8 * k)));
+                    std::fprintf(pf, " {%d %d}", static_cast<int>(plo->U32Field3(0, 0x160 + 8 * k)), static_cast<int>(plo->U32Field3(0, 0x164 + 8 * k)));
                 std::fprintf(pf, "\n");
             }
         // (s3-player, debug: SLY3_OPTDUMP=OID: that object's loaded options)

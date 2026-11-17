@@ -289,8 +289,8 @@ void ResolveGrapple(GRAPPLE3& g)
         }
     }
     if (g.hook && !FIsLoDerivedFrom(g.hook, sly3::CID_ALO)) g.hook = nullptr;
-    plo->SetField(0, 0x170, static_cast<uint32_t>(nMax));
-    plo->SetField(0, 0x16C, static_cast<uint32_t>(nMax));
+    plo->SetField3(0, 0x170, static_cast<uint32_t>(nMax));
+    plo->SetField3(0, 0x16C, static_cast<uint32_t>(nMax));
     g.hpShown = float(nMax);
     // the post-load 0x2855B8: no gravity, the SM 0x27D on the object (+0x2D8 / +0x2DC), the barrier +0x2E4 lets it
     // through (0x13BD00: natively the barriers' own list, barrier.cpp, by the object's oid)

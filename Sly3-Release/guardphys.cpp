@@ -248,10 +248,9 @@ bool FAcceptContactGuard(ALO* palo, CTMSG* pctm)
             if (!s_fOld)
             {
                 ASEG* paseg = pg->paseg348;
-                // (the field: a splice's set (spliceglue: Sly 3's offset +0x368, e.g. kind 13791's 9148) after the
-                // loaded one (Sly 2's +0x348 natively, e.g. Dr. M's 8891))
-                int oid = static_cast<int>(palo->U32Field(0, 0x368, 0xFFFFFFFFu));
-                if (oid <= 0) oid = static_cast<int>(palo->U32Field(0, 0x348, 0xFFFFFFFFu));
+                // (the field as loaded or as a splice set it last, e.g. Dr. M's 8891 then kind 13791's 9148: the original's
+                // +0x368, stored where the loader and the splice both store option 404, brx.h OptionFieldKey)
+                const int oid = static_cast<int>(palo->U32Field3(0, 0x368, 0xFFFFFFFFu));
                 if (LO* p = oid > 0 ? PloFindSwNearest(palo, oid) : nullptr; p && p->Cid() == S3CID(0x6D)) paseg = static_cast<ASEG*>(p);
                 if (paseg) ApplyAsegCur(paseg, palo, 0.0f, 1.0f, 1, &pg->pasega34C);
                 if (s_fDebug) std::printf("hit3: guard %d flinch clip %d (field %d), broadcast 0xF\n", palo->oid, paseg ? paseg->oid : -1, oid);

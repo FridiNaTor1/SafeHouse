@@ -508,15 +508,11 @@ struct PHYSPROPS
         // reference's local rotation stays the identity), natively he kept his load heading in the world and showed
         // the camera his back. SLY3_STEPMOTION260=0: not applied (the field only)
         RegisterObjectSetter3(260, [](LO* plo, const CRef& r) {
-            const int n = r.m_tagk == TAGK_F32 ? int(r.m_g) : r.RefCoerceS32().m_n;
-            plo->SetField(0, 0x1B8, uint32_t(n));
-            static const bool s_fOff = [] { const char* sz = std::getenv("SLY3_STEPMOTION260"); return sz && sz[0] == '0'; }();
-            if (s_fOff || !FCidDerivedFrom(plo->Cid(), S3CID(0x30)) || !PstepFromLo(static_cast<ALO*>(plo))) return;
-            StepPhysOf(static_cast<ALO*>(plo)).nMotion = n == 2 ? -1 : n;
+            SetStepMotionKind3(plo, r.m_tagk == TAGK_F32 ? int(r.m_g) : r.RefCoerceS32().m_n);
         });
         RegisterObjectGetter3(260, [](LO* plo) {
             CRef r;
-            r.SetS32(int(plo->U32Field(0, 0x1B8, 0)));
+            r.SetS32(int(plo->U32Field3(0, 0x1B8, 0)));
             return r;
         });
         RegisterObjectSetter3(77, [](LO* plo, const CRef& r) { if (ALO* p = PaloOf(plo)) SetAloVelocity(p, r.GetVector()); });

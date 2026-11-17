@@ -35,6 +35,7 @@
 #include "animfind.h"
 
 #include "brx.h"
+#include "booty.h"
 #include "disc.h"
 #include "lo.h"
 #include "sidebag.h"
@@ -366,6 +367,29 @@ OPTVAL OptvalFromRef(const CRef& ref)
     return v;
 }
 
+}  // namespace
+
+// (brx.h) the field a splice's seto! of a field EOPID (grf 0x90) stores its value at: where the loader stores it
+// (brx.h OptionFieldKey: the original's 0x201110 writes ibSet, the loader's ibFile, the same field). E.g. Bentley's dart
+// kind 774 at +0x16D8, which his 0x1357C0 reads; the Guru's 1800 (EOPID 2028, grf 0x12: no +0x18) that the guards'
+// detectors read for his invisibility. Natively the set wrote the Sly 3 record's offset while the load wrote the Sly 2
+// twin's: 362 options' sets were missed by the code (and some landed on another option's field, e.g. a guard's option
+// 437 on the flinch clip +0x348). A sub-object's field (grf 0x2000) is stored through its getter as the loader stores
+// it (0x201110: pv = pmfObj(1)); the guard's default attack (0x20A9C0) and the space warps' entries (0x22C4D8 /
+// 0x22C4F8) are built at the load only (none here).
+OPTFIELDKEY SetterFieldKey(int cid, int eopid3)
+{
+    OPTFIELDKEY key;
+    if (eopid3 < 0 || eopid3 >= sly3::CEOPID) return key;
+    const uint32_t grf = g_disc.U32Elf(S3VA(0x2AC880) + static_cast<uint32_t>(eopid3) * 0x28 + 4);
+    if (!(grf & 0x90) || (grf & 0x401)) return key;
+    key = OptionFieldKey(cid, eopid3);
+    if (key.pfnGet == 0x20A9C0 || key.pfnGet == 0x22C4D8 || key.pfnGet == 0x22C4F8) return OPTFIELDKEY{};
+    return key;
+}
+
+namespace
+{
 // orig 0x001FFCF8: an option id's property (EOPID) for the object's class (the sorted table D_00279AD0[cid]
 // of (optid, EOPID*)); -1 when the class has none
 int EopidFromOptid(CID cid, int optid)
@@ -1419,8 +1443,8 @@ CRef RefOptionImpl(int bifk, BASIC* pbasic, int optid, const CRef* pref)
             // an object field the code set at run time (no loaded option), e.g. a use's user +0x10C (EOPID 1068,
             // 0x184130 sets it): the stations of Ep4's hack job ask for it (block 28030's lambda) before starting
             // their script
-            const uint32_t ib = g_disc.U32Elf(vaEopid + 0x18);
-            const OID oid = static_cast<OID>(plo->U32Field(0, ib, 0xFFFFFFFFu));
+            const OPTFIELDKEY key = OptionFieldKey(plo->Cid(), eopid);
+            const OID oid = static_cast<OID>(plo->U32Field(key.pfnGet, key.ib, 0xFFFFFFFFu));
             if (oid != -1) ref.SetBasic(PloFindSwNearest(plo, oid));
         }
         else if (!popt && (grf & 0x80) && eopid != S3EOPID(15) && eopid != S3EOPID(13) && eopid != S3EOPID(14) && eopid != S3EOPID(255))
@@ -1447,14 +1471,26 @@ CRef RefOptionImpl(int bifk, BASIC* pbasic, int optid, const CRef* pref)
     popt->aval.assign(1, OptvalFromRef(*pref));
     // a field EOPID (grf 0x90): the value lands in the object's field at +0x18's offset, as the loader stores it
     // (brx.cpp; e.g. Bentley's dart kind 774 at +0x16D8, which his 0x1357C0 reads)
-    if (bifk == 110 && (grf & 0x90) && !(grf & 0x2000))
+    const OPTFIELDKEY keySet = bifk == 110 ? SetterFieldKey(plo->Cid(), eopid) : OPTFIELDKEY{};
+    if (keySet.fValid)
     {
         OPTVAL& v = popt->aval[0];
         const int k = static_cast<int>(g_disc.U32Elf(vaEopid));
-        // (the setter's field is +0x10 when grf has 0x10 (+0x18 is the loader's, 0 for a field no option loads: 55 Sly 3
-        // EOPIDs, e.g. the Guru's 1800 at +0x15F8 (EOPID 2028, grf 0x12), which landed in field 0, so the guards'
-        // detectors never read his invisibility); a load-only field (0x80) keeps +0x18)
-        const uint32_t ib = g_disc.U32Elf(vaEopid + ((grf & 0x10) ? 0x10 : 0x18));
+        const uint32_t ib = keySet.ib;
+        // (debug: SLY3_FIELDSETPRINT=1: the sets stored elsewhere than the Sly 3 record's offset, where they went natively
+        // before the one store: the options whose sets the code now sees)
+        if (static const bool s_f = std::getenv("SLY3_FIELDSETPRINT") != nullptr; s_f)
+            if (const OPTFIELDKEY k3 = Sly3OptionFieldKey(eopid); !(k3 == keySet))
+                std::fprintf(stderr, "fieldset: eopid %d optid %d of %d (cid 0x%X): stored (0x%X, 0x%X), Sly 3 (0x%X, 0x%X)\n", eopid, optid,
+                             plo->oid, plo->Cid(), keySet.pfnGet, keySet.ib, k3.pfnGet, k3.ib);
+        // (the sub-object: as the loader, brx.cpp: 0x1F7B98's 0x12 child holds its fields itself)
+        LO* pfield = plo;
+        uint32_t pfn = keySet.pfnGet;
+        if (pfn == 0x1F7B98 && FIsLoDerivedFrom(plo, S3CID(0x30)))
+        {
+            pfield = PloEnsureChild391(static_cast<ALO*>(plo));
+            pfn = 0;
+        }
         // the value converted to the field's type (0x201110: a float field takes RefCoerceF32 0x129DA8 of a
         // non-float, an int field RefCoerceS32 0x129D58 (a truncation) of a non-int), e.g. Elephant Rampage's crawl
         // trigger setting the rats' radii 886 / 887 to 1500 / 1000: integers into float fields, whose float word
@@ -1466,14 +1502,15 @@ CRef RefOptionImpl(int bifk, BASIC* pbasic, int optid, const CRef* pref)
             v.tagk = S3TAG(0x15);
         }
         const uint32_t cg = k == 1 ? 1 : k == 10 ? 2 : (k == 2 || k == 9 || k == 11) ? 3 : 0;
+        if (pfn == 0x13C4D8) SetBootyRecordField(plo, ib, v);   // (the booty's current record, booty.cpp, as the loader)
         if (cg)
             for (uint32_t i = 0; i < cg; ++i)
             {
                 uint32_t u;
                 std::memcpy(&u, &v.ag[i], 4);
-                plo->SetField(0, ib + 4 * i, u);
+                pfield->SetField(pfn, ib + 4 * i, u);
             }
-        else plo->SetField(0, ib, static_cast<uint32_t>(v.n));
+        else pfield->SetField(pfn, ib, static_cast<uint32_t>(v.n));
         // (a guard's health +0x33C is GUARD::n33C natively)
         if (eopid == S3EOPID(255))
             if (GUARD* pg = PguardFromLo(plo)) pg->n33C = v.n;

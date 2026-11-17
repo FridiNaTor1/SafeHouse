@@ -217,7 +217,7 @@ void RegisterList(SW* psw, LOLIST9D3* pl)
         if (std::getenv("SLY3_EPMLISTPRINT"))
             std::printf("epmenu3: list %d (episode %d mode %d) row %d -> %d (cid 0x%X) open %d job %d 3-D %d\n", pl->oid, pl->iep, pl->mode,
                         int(&r - pl->arow.data()), r.pnode ? r.pnode->oid : -1, r.pnode ? r.pnode->Cid() : 0, int(r.fAvail),
-                        r.pnode ? int(r.pnode->U32Field(0, 0x48, 0xFFFFFFFFu)) : -1, r.pnode ? int(r.pnode->U32Field(0, 0x54, 0)) : 0);
+                        r.pnode ? int(r.pnode->U32Field3(0, 0x48, 0xFFFFFFFFu)) : -1, r.pnode ? int(r.pnode->U32Field3(0, 0x54, 0)) : 0);
     }
     pl->isel = -1;
     for (int i = 0; i < int(pl->arow.size()); ++i)   // (0x17AF50: the next open row)
@@ -369,7 +369,7 @@ void SetEpState(EPMENU3& p, int s, int pending)
             s_plistCur = p.cur >= 0 && p.cur < 9 ? s_aplist[size_t(p.cur)][slot] : nullptr;
             p.plist = s_plistCur;
             if (s_plistCur)
-                if (LO* powner = PloFindSwObjectByOid(s_pswEpm, OID(s_plistCur->U32Field(0, 0x54, 0xFFFFFFFFu))))
+                if (LO* powner = PloFindSwObjectByOid(s_pswEpm, OID(s_plistCur->U32Field3(0, 0x54, 0xFFFFFFFFu))))
                     FStreamGroup97(s_plistCur->oid, powner);
         }
         else if (s_plistCur) ListStep(s_plistCur, s == 13 || s == 18 || s == 23 || s == 29 ? -1 : 1);
@@ -595,12 +595,12 @@ int OidEpisodeThumbnail3(int iep)
     if (s_aoid[size_t(iep)] != -2) return s_aoid[size_t(iep)];
     s_aoid[size_t(iep)] = -1;
     const LOLIST9D3* pl = s_aplist[size_t(iep)][0];
-    LO* powner = pl ? PloFindSwObjectByOid(s_pswEpm, OID(pl->U32Field(0, 0x54, 0xFFFFFFFFu))) : nullptr;
+    LO* powner = pl ? PloFindSwObjectByOid(s_pswEpm, OID(pl->U32Field3(0, 0x54, 0xFFFFFFFFu))) : nullptr;
     if (!powner || !FStreamGroup97(pl->oid, powner)) return -1;
     s_aoid[size_t(iep)] = OidStreamedShader97(pl->oid, 0);
     // (the list shown streamed again: its own pictures; the episode's picture's shader stays loaded)
     if (s_plistCur)
-        if (LO* pownerCur = PloFindSwObjectByOid(s_pswEpm, OID(s_plistCur->U32Field(0, 0x54, 0xFFFFFFFFu))))
+        if (LO* pownerCur = PloFindSwObjectByOid(s_pswEpm, OID(s_plistCur->U32Field3(0, 0x54, 0xFFFFFFFFu))))
             FStreamGroup97(s_plistCur->oid, pownerCur);
     return s_aoid[size_t(iep)];
 }
@@ -893,7 +893,7 @@ void UpdateEpMenu3(SW* psw)
         if (FAsk3d3() && TakeBtn(0x80))
         {
             LO* pnode = PnodeCur(p.cur);
-            if (!pnode || !pnode->U32Field(0, 0x54, 0)) break;
+            if (!pnode || !pnode->U32Field3(0, 0x54, 0)) break;
             s_ret = EPRETURN{16, p.cur, 0, s_plistCur ? s_plistCur->isel : 0};
             StartChallenge3(psw, pnode, 0, 1);
             break;
@@ -1001,16 +1001,16 @@ bool FStrEpMenu3(int id, std::string* pstr)
             pstr->clear();
             const LO* pnode = FEpMenu3Active() ? PnodeCur(p.cur) : nullptr;
             if (!pnode) return true;
-            const int mode = int(pnode->U32Field(0, 0x50, 0));
-            const bool fFlags = pnode->U32Field(0, 0x54, 0) != 0;
+            const int mode = int(pnode->U32Field3(0, 0x50, 0));
+            const bool fFlags = pnode->U32Field3(0, 0x54, 0) != 0;
             switch (id)
             {
             case 1484: case 1489:
-                if (const int idName = int(pnode->U32Field(0, 0x40, 0xFFFFFFFFu)); idName != -1) *pstr = text(idName);
+                if (const int idName = int(pnode->U32Field3(0, 0x40, 0xFFFFFFFFu)); idName != -1) *pstr = text(idName);
                 break;
             case 1485: case 1490:
                 if (duel3::FDescription(pnode, pstr)) break;   // (PC, duel3.h: the free-for-all's, its pilots "Player N")
-                *pstr = text(int(pnode->U32Field(0, 0x44, 0xFFFFFFFFu)));
+                *pstr = text(int(pnode->U32Field3(0, 0x44, 0xFFFFFFFFu)));
                 break;
             case 1486: case 1491:   // ("%s : &2X&." and, with the object's +0x54, "\n%s : &2S&.")
                 *pstr = text(mode == 1 ? 128 : 131) + " : " + SzMenuConfirmGlyph();

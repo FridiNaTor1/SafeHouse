@@ -231,8 +231,8 @@ DIVER3* Pdiver(LO* plo)
     for (const auto& [ib, p] : d.palo->apart)
         for (int i = 0; i < 13; ++i)
             if (ib == (FN3_TAG | (0x27Cu + 4u * uint32_t(i)))) d.aclip[i] = dynamic_cast<ASEG*>(p);
-    plo->SetField(0, 0x170, static_cast<uint32_t>(nMax));
-    plo->SetField(0, 0x16C, static_cast<uint32_t>(nMax));
+    plo->SetField3(0, 0x170, static_cast<uint32_t>(nMax));
+    plo->SetField3(0, 0x16C, static_cast<uint32_t>(nMax));
     d.hpShown = nMax;
     cmm::DecomposeRotateMatrixPanTilt(glm::mat3(MatWorld(d.palo)), &d.pan, &d.tilt);
     if (FPrint())

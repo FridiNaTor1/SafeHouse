@@ -962,14 +962,30 @@ void SetAloRotation(ALO* p, const glm::mat3& basis)
     }
     XF* obj = PxfRot(p);
     if (!obj) return;
+    // (orig3 0x23D338: Sly 3 inverts the parent's rotation as it is (0x11C6F8) and re-orthonormalizes the product
+    // (0x11C798); Sly 2's 0x1F42E0 normalized the parent first and kept the product. Under a scaled parent they differ:
+    // m_ext's beast intro teleports Bentley onto the claw 15454 that holds him (SCPT 4317 [5]'s splice, slot 38): Sly 3
+    // gives his rotation record the identity in it (the reference's RAM, vblank 2486 on), Sly 2's way left the claw's
+    // scale in it (rows 0.77 / 0.76 / 0.93, turned) and he hung tilted wrong. SLY3_SETROT2=1: Sly 2's way)
+    static const bool s_fRot2 = std::getenv("SLY3_SETROT2") != nullptr;
     glm::mat3 par(1.0f);
-    if (obj->pxfRef)
+    if (obj->pxfRef) par = Mat3Of(obj->pxfRef->matWorld);
+    // (the two ways agree to float noise for a parent without scale; Sly 2's arithmetic is kept there, so the routes'
+    // runs (chaotic: a lion's leap in ep1_follow turned on a 1e-7 difference) do not move; Sly 3's where the parent is scaled)
+    bool fScaled = false;
+    for (int i = 0; i < 3 && !s_fRot2; ++i) fScaled = fScaled || std::fabs(Dot3(par[i], par[i]) - 1.0f) > 1e-4f;
+    glm::mat3 m;
+    if (fScaled)
     {
-        par = Mat3Of(obj->pxfRef->matWorld);
-        NormalizeRotateMatrix3(&par);
+        m = InverseMatrix3(par) * basis;
+        NormalizeRotateMatrix3(&m);
     }
-    const glm::mat3 inv = InverseMatrix3(par);
-    SetMat3(&obj->mat, inv * basis);
+    else
+    {
+        if (obj->pxfRef) NormalizeRotateMatrix3(&par);
+        m = InverseMatrix3(par) * basis;
+    }
+    SetMat3(&obj->mat, m);
     obj->nStamp = ++g_cXfStamp;
     VtUpdateXfWorlds(p);
     DetachAloContacts(p);

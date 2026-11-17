@@ -114,6 +114,12 @@ float GField(const LO* plo, uint32_t pfn, uint32_t ib, float gDefault)
     std::memcpy(&g, &u, 4);
     return g;
 }
+// (the water's own fields at the original's offsets, brx.h OptionFieldKey: natively the flow was loaded at Sly 2's
+// +0x160 and this read +0x140, so no loaded flow ever moved anything)
+float GField3(const LO* plo, uint32_t ib3, float gDefault)
+{
+    return std::bit_cast<float>(plo->U32Field3(0, ib3, std::bit_cast<uint32_t>(gDefault)));
+}
 void SetGField(LO* plo, uint32_t pfn, uint32_t ib, float g)
 {
     uint32_t u;
@@ -126,11 +132,11 @@ float GDrag(const ALO* p) { return GField(p, PFN_SOST_GETTER, 0xD8, 0.0f); }
 // (Sly 3: the flow is +0x140 (EOPID 928; Sly 2's +0x160); +0x160..+0x170 are other fields, see the top)
 glm::vec3 VecFlow(const ALO* pw)
 {
-    return glm::vec3(GField(pw, 0, 0x140, 0.0f), GField(pw, 0, 0x144, 0.0f), GField(pw, 0, 0x148, 0.0f));
+    return glm::vec3(GField3(pw, 0x140, 0.0f), GField3(pw, 0x144, 0.0f), GField3(pw, 0x148, 0.0f));
 }
 LO* PloField(ALO* pw, uint32_t ib)
 {
-    const int oid = static_cast<int>(pw->U32Field(0, ib, 0));
+    const int oid = static_cast<int>(pw->U32Field3(0, ib, 0));   // (the original's offset)
     return oid > 0 ? PloFindSwNearest(pw, oid) : nullptr;
 }
 
@@ -290,7 +296,7 @@ void WakeAloWater(ALO* po, ALO* pw, const glm::vec3& vFlow, const glm::vec3& pos
     }
     float u = (s - 10.0f) * F32(0x3AA5E9F7);  // (/ 790)
     u = u < 0.0f ? 0.0f : (1.0f < u ? 1.0f : u);
-    if (pso && pw->U32Field(0, 0x15C, 1))   // (Sly 3 +0x15C, EOPID 933; Sly 2's +0x180)
+    if (pso && pw->U32Field3(0, 0x15C, 1))   // (Sly 3 +0x15C, EOPID 933; Sly 2's +0x180)
     {
         const float gVol = u * F32(0x3F666666) + F32(0x3DCCCCCD);  // 0.9 u + 0.1
         WAKE& wk = s_mpwake[pso];
@@ -542,8 +548,8 @@ void UpdateWater(LO* plo)
             int cox = 0;
             for (OX* pox = Poxa(pw) ? Poxa(pw)->pox : nullptr; pox; pox = pox->poxNext) ++cox;
             std::printf("[water] water %d sly3 fields: splash pe %d sfx %d ripple pe %d sound %u camera %d zones %zu flow %.1f %.1f %.1f\n", pw->oid,
-                        int(pw->U32Field(0, 0x150, 0)), int(pw->U32Field(0, 0x16C, uint32_t(-1))), int(pw->U32Field(0, 0x158, 0)),
-                        pw->U32Field(0, 0x15C, 1), int(pw->U32Field(0, 0x170, 0)), AzoneOf(pw).size(), VecFlow(pw).x, VecFlow(pw).y, VecFlow(pw).z);
+                        int(pw->U32Field3(0, 0x150, 0)), int(pw->U32Field3(0, 0x16C, uint32_t(-1))), int(pw->U32Field3(0, 0x158, 0)),
+                        pw->U32Field3(0, 0x15C, 1), int(pw->U32Field3(0, 0x170, 0)), AzoneOf(pw).size(), VecFlow(pw).x, VecFlow(pw).y, VecFlow(pw).z);
             std::printf("[water] t %.3f water %d: %zu entries, attachment %p (%d overlaps), flow %.1f %.1f %.1f box %.0f %.0f %.0f .. %.0f %.0f %.0f\n", g_clock.t,
                         pw->oid, pw->asoe.size(), (void*)Poxa(pw), cox, VecFlow(pw).x, VecFlow(pw).y, VecFlow(pw).z, Poxa(pw) ? Poxa(pw)->posMin.x : 0.f, Poxa(pw) ? Poxa(pw)->posMin.y : 0.f, Poxa(pw) ? Poxa(pw)->posMin.z : 0.f, Poxa(pw) ? Poxa(pw)->posMax.x : 0.f, Poxa(pw) ? Poxa(pw)->posMax.y : 0.f, Poxa(pw) ? Poxa(pw)->posMax.z : 0.f);
         }
@@ -595,7 +601,7 @@ void UpdateWater(LO* plo)
             // orig3 0x280BF8: the sound +0x16C (EOPID 934, -1 none) at the point (falloff 100..1000, volume the fall),
             // then the PE +0x150 (its frame +0xE0 cleared) moved there (slot 34) and started (0x1FE728(pe, 1))
             const glm::vec3 posSplash = alsg[0].pos0;
-            if (const int sfx = int(pw->U32Field(0, 0x16C, uint32_t(-1))); sfx != -1)
+            if (const int sfx = int(pw->U32Field3(0, 0x16C, uint32_t(-1))); sfx != -1)
                 if (CSnd* psnd = PsndStartSound(sfx, 1.0f, 0, nullptr, &posSplash))  // 0x2459F8 / 0x245000
                 {
                     psnd->SetFalloff(100.0f, 1000.0f);  // 0x245100
@@ -725,4 +731,8 @@ void ResetWater()
 glm::vec3 VelWaterAtPoint(ALO* pw, const glm::vec3& pos) { return VelWaterAt(pw, pos); }
 
 // (public, for the actors' splash points 0x1A2460: the water's object options by their oids, e.g. its effect +0x174)
-LO* PloWaterField(ALO* pw, uint32_t ib) { return PloField(pw, ib); }
+LO* PloWaterField(ALO* pw, uint32_t ib)   // (damage.cpp's: Sly 2's offsets, where the copied code's options are stored)
+{
+    const int oid = static_cast<int>(pw->U32Field(0, ib, 0));
+    return oid > 0 ? PloFindSwNearest(pw, oid) : nullptr;
+}

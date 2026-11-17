@@ -25,6 +25,8 @@ int NPlayerCamKind3(SW* psw);             // orig3 0x1A9260: the current player'
 void SetPosPlayer3(SW* psw, int frame);   // (game.cpp, before each frame's update)
 // SCPT 0x30's walk: the actor's stick toward the point while the command's done test refreshes it (sly.cpp UpdateActor)
 bool FDriveActorWalk30(ACTOR* pa, PADCTL* pc);
+// SCPT 0x2F with an object: the actor turned to its heading, the stick released (orig3 0x22A7F8 case 47; sly.cpp)
+bool FDriveActorFace2F(ACTOR* pa, PADCTL* pc);
 // SCPT 0x26's climb: the goal (distance along the pipe) while the command's done test polls it, and the drive (sly.cpp)
 void ActorClimbToward3(ACTOR* pa, float sGoal);
 bool FDriveActorClimb26(ACTOR* pa, PADCTL* pc);

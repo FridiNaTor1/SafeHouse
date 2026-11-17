@@ -65,6 +65,7 @@ int NRandInRange(int nLow, int nHigh);  // (util.h: 0x11D3F8)
 #include <string>
 #include <set>
 #include <cstdlib>
+#include <execinfo.h>
 #include <algorithm>
 #include <cstring>
 
@@ -355,6 +356,12 @@ void RequestTransition(SW* psw, const uint8_t* pchk, OID oidPoint, OID oidKey, i
     if (t.fHaveCur && FSameChk(req.abChk, t.abChkCur)) req.flags |= 2;
     static const bool s_fLog = std::getenv("SLY2N_TRANSLOG") != nullptr;
     if (s_fLog) std::printf("transition: requested (point %d, key %d, flags 0x%X, wipe %d)\n", oidPoint, oidKey, req.flags, oidWipe);
+    if (std::getenv("SLY3_TRANSBT"))   // (debug: who asked)
+    {
+        void* a[12];
+        std::fflush(stdout);
+        backtrace_symbols_fd(a, backtrace(a, 12), 1);
+    }
     // (the flow log: one line per world change, tools/progression3.py's milestones; notes/PLAN.md the world flow code)
     std::printf("flow: transition to world %d requested (point %d, key %d, flags 0x%X, wipe %d, frame %d)\n",
                 IworldOfChk(req.abChk), oidPoint, oidKey, req.flags, oidWipe, g_iframeMain);
@@ -563,6 +570,9 @@ std::unique_ptr<SW> PswUpdateTransition(std::unique_ptr<SW> psw)
     t.iwrecCur = iwrec;
     t.req = req;
     std::size_t cbRead = 0, cbFile = 0;
+    // orig3 0x25C2A8: 0x25AFD8 -> 0x184A08, the game record reset for the title (flags 1) / the pending save, before the
+    // file is read (0x14F440: the option sets' progress fallback 0x1500F0 and the tasks read the record; frontend.h)
+    OnGameRecordBeforeLoad3(req.flags);
     if (fk.cb && !FLoadWorldFile(psw.get(), fk, "", &cbRead, &cbFile))
         std::fprintf(stderr, "transition: world record %d did not load\n", iwrec);
     OnReplayWorldLoaded(iwrec, req.flags);   // (QoL Replay Jobs: the front end / the title end a replay)

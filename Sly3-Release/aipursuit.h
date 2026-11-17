@@ -58,6 +58,10 @@ struct ACTIONOBJ
     XF* pxfAim = nullptr;         // +0xA0: rotation record aimed while the action plays
     glm::vec3 vecAim{0.0f};       // +0x90: authored direction at the marker
     KINDE kinde;                  // +0xC0 what it plays (364 {oid, grf})
+    // (Sly 3 +0x9C / +0xA0 / +0xA4: the knock-back its hit gives, Sly 3's EOPID 409 (no Sly 2 twin; method 0x105418 ->
+    // 0x256C98: on, the speed away from the guard, the speed up), read by the hit's reaction 0x1C3008)
+    int fKnock = 0;
+    float gKnockOut = 0.0f, gKnockUp = 0.0f;
 };
 ACTIONOBJ* PactionOf(LO* plo, GUARD* pg);
 void PostLoadGuardAction(LO* plo); // orig: 0x0020AE18

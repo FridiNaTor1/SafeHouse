@@ -119,8 +119,8 @@ void Load9D3FromBrx(LO* plo, CBinaryInputStream* pbis)
     LOADFN(0x17AA08);
     LOLIST9D3* p = static_cast<LOLIST9D3*>(plo);
     LoadLoFromBrx(plo, pbis);
-    p->mode = int(plo->U32Field(0, 0x40, 0));
-    p->iep = int(plo->U32Field(0, 0x44, 0));
+    p->mode = int(plo->U32Field3(0, 0x40, 0));
+    p->iep = int(plo->U32Field3(0, 0x44, 0));
     p->arow.resize(pbis->U16Read());
     for (LOLIST9D3::ROW& r : p->arow)
     {

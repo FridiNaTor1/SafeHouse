@@ -472,7 +472,7 @@ void StepHubChosen(int d)
 bool FCopsNode(const LO* pnode)
 {
     // (Cops and Robbers' row: the class-0xAA object of job 2409, a two-player game)
-    return pnode && pnode->U32Field(0, 0x48, 0xFFFFFFFFu) == 2409u && pnode->U32Field(0, 0x50, 0) == 2u;
+    return pnode && pnode->U32Field3(0, 0x48, 0xFFFFFFFFu) == 2409u && pnode->U32Field3(0, 0x50, 0) == 2u;
 }
 
 bool FStartChosen(SW* psw, LO* pnode)
@@ -832,7 +832,7 @@ void Update(SW* psw)
                 // (the two-player game's stamp, as jobend3.cpp IdStampPart for the manager's mode 2: by job 2409's character
                 // (+0xB0): 0x450 / 0x452 / 0x454)
                 LO* pmission = PloKeptFind(kIwrecVenice, kOidJobCops);
-                const int grf = pmission ? int(pmission->U32Field(0, 0xB0, 0)) : 1;
+                const int grf = pmission ? int(pmission->U32Field3(0, 0xB0, 0)) : 1;
                 SelectScreenObjPart(pres, grf == 2 ? 0x452 : grf == 0x40 ? 0x454 : 0x450);
                 if (FPrint()) std::printf("cops3: round over (%d : %d) at frame %d, the stamp waits (Triangle: the chooser, Square: again)\n", r.ascore[0], r.ascore[1], g_iframeMain);
             }

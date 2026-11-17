@@ -370,6 +370,10 @@ void WriteXfDump(const SW* psw, int frame)
                              i, x.kind, x.mode, ix(x.pxfRef), x.mat[0].x, x.mat[0].y, x.mat[0].z, x.mat[3].x, x.mat[3].y,
                              x.mat[3].z, x.matWorld[0].x, x.matWorld[0].y, x.matWorld[0].z, x.matWorld[3].x,
                              x.matWorld[3].y, x.matWorld[3].z, x.vel.x, x.vel.y, x.vel.z);
+                if (static const bool s_fRows = std::getenv("SLY3_XFDUMPROWS") != nullptr; s_fRows)   // (the y / z rows too)
+                    std::fprintf(stderr, "    rows y %.3f %.3f %.3f z %.3f %.3f %.3f  wld y %.3f %.3f %.3f z %.3f %.3f %.3f\n", x.mat[1].x,
+                                 x.mat[1].y, x.mat[1].z, x.mat[2].x, x.mat[2].y, x.mat[2].z, x.matWorld[1].x, x.matWorld[1].y,
+                                 x.matWorld[1].z, x.matWorld[2].x, x.matWorld[2].y, x.matWorld[2].z);
             }
         }
 }
@@ -2511,7 +2515,9 @@ int RunGame(const GAMEOPTS& go)
                             MoveSkies(scene, apalo, camView.pos - posSkyCam);   // (s3-plane: from the last view's camera)
                             posSkyCam = camView.pos;
                         }
+                        g_iviewScene3 = iv;   // (hudwidget.h: the view's sky fades)
                         RenderScene(scene, camView, opts);
+                        g_iviewScene3 = -1;
                         if (fBox)
                         {
                             RenderSceneForeground(scene, camView, opts);
@@ -2606,9 +2612,10 @@ int RunGame(const GAMEOPTS& go)
                 g_gl.BeginNativeUi(true);   // (upscaling, gl.h: the scene scaled up; the rest at the picture's size)
                 const double tHud = s_fFpsLog ? now() : 0.0;
                 if (FGpuMarks()) GpuMark("hud");
-                if (!fSplit) DrawHud(psw.get(), g_gl.renderWidth, g_gl.renderHeight);
+                if (!fSplit) DrawHud(psw.get(), g_gl.renderWidth, g_gl.renderHeight, true);
                 if (s_fFpsLog) g_msHudFpsLog += now() - tHud;
                 if (!fEyes && !fSplit) RenderSceneForeground(scene, cam, opts);   // kinds 22..25 over the HUD (group 10, 0x157CF0)
+                if (!fSplit) DrawHudFadesOver(psw.get(), g_gl.renderWidth, g_gl.renderHeight);   // (FADE mode 2: phase 10's last)
                 cops3::DrawMenu(g_gl.renderWidth, g_gl.renderHeight);   // (copsmap3.h: the map select on the Two Player page)
                 duel3::DrawMenu(g_gl.renderWidth, g_gl.renderHeight);   // (duel3.h: the Biplane Duel's players row)
                 DrawRemapOverlay(g_gl.renderWidth, g_gl.renderHeight);   // (remappage.h: the Remap page over the pause menu)

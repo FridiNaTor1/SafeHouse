@@ -119,7 +119,7 @@ bool FFindTarget(VEHICLE& v, glm::vec3* ppos)
     for (LO* plo : g_psw->mpcidaplo[0x11])
     {
         if (!plo->fInWorld) continue;
-        uint32_t grf = plo->U32Field(0, 0xD8, 0);
+        uint32_t grf = plo->U32Field3(0, 0xD8, 0);
         for (const OPT& o : plo->aopt)
             if (o.eopid == 249 && !o.aval.empty()) grf = uint32_t(o.aval[0].n);
         if (!(grf & 0x100)) continue;
@@ -586,7 +586,7 @@ bool FAcceptRcCarContact(ALO* palo, CTMSG* pctm)
     if (!(pctm->grfAccepted & 2)) return false;
     LO* pfrom = pctm->ploSender;
     if (pfrom && FIsLoDerivedFrom(pfrom, 0x59) && PloProjectileLauncher(pfrom) == palo) return false;
-    palo->SetField(0, 0x184, static_cast<uint32_t>(reinterpret_cast<uintptr_t>(pfrom) & 0xFFFFFFFFu));   // 0x1F4DD8 (the last hit's source)
+    palo->SetField3(0, 0x184, static_cast<uint32_t>(reinterpret_cast<uintptr_t>(pfrom) & 0xFFFFFFFFu));   // 0x1F4DD8 (the last hit's source)
     const bool fHeavy = kind == 0x2000 || kind == 0x4000;
     if (pctm->nKill3 || pctm->fKill3 || (v.rc.mode != 1 && fHeavy)) SetSoHealth3(palo, 0);
     else
@@ -646,7 +646,7 @@ bool FIsRcCar3(const LO* plo) { return plo && plo->pcls && FIsLoDerivedFrom(plo,
 void TakePickupRcCar3(LO* pso, LO* ppickup)
 {
     if (!FIsRcCar3(pso) || !ppickup || !FIsLoDerivedFrom(ppickup, 0x69)) return;
-    SetSoHealth3(pso, NSoHealth3(pso) + static_cast<int32_t>(ppickup->U32Field(0, 0x1AC, 0)));
+    SetSoHealth3(pso, NSoHealth3(pso) + static_cast<int32_t>(ppickup->U32Field3(0, 0x1AC, 0)));
 }
 
 // orig3 0x203C18: the SO's init, then the tuning
@@ -674,8 +674,8 @@ void InitRcCar3(VEHICLE& v)
         int nMax = 100;
         for (const OPT& o : v.owner->aopt)
             if (o.eopid == 937 && !o.aval.empty()) nMax = o.aval[0].n;
-        v.owner->SetField(0, 0x170, static_cast<uint32_t>(nMax));
-        v.owner->SetField(0, 0x16C, static_cast<uint32_t>(nMax));
+        v.owner->SetField3(0, 0x170, static_cast<uint32_t>(nMax));
+        v.owner->SetField3(0, 0x16C, static_cast<uint32_t>(nMax));
     }
     // the four wheels (0x207568 with D_003256E0 = {-40, 20}): radius 50, parts 0x76D..0x770 (D_003256E8)
     v.wheels.assign(4, VEHICLEWHEEL{});

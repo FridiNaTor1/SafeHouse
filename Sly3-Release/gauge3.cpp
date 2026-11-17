@@ -86,10 +86,10 @@ bool FDefaultValues(LO* player, GAUGEVALUES3* pv)
     // points +0x16C / +0x170, the ammunition +0x174 / +0x178: the 2P duel's gauges 96161 / 96163)
     if (player && FPlane3(player))
     {
-        pv->cHit = int(player->U32Field(0, 0x16C, 0));
-        pv->cHitMax = int(player->U32Field(0, 0x170, 0));
-        pv->nPower = int(player->U32Field(0, 0x174, 0));
-        pv->nPowerMax = int(player->U32Field(0, 0x178, 0));
+        pv->cHit = int(player->U32Field3(0, 0x16C, 0));
+        pv->cHitMax = int(player->U32Field3(0, 0x170, 0));
+        pv->nPower = int(player->U32Field3(0, 0x174, 0));
+        pv->nPowerMax = int(player->U32Field3(0, 0x178, 0));
         return pv->cHitMax > 0;
     }
     ACTOR* actor = player ? PactorFromLo(player) : nullptr;
@@ -568,7 +568,7 @@ void UpdateGauges3(SW* psw, LO* player)
             for (int k = 0; k < cplayer; ++k)
                 if (aplayer[k] && g.player == aplayer[k] && (k < 2 || !fPlaced || FPlane3(g.player))) i = k;
             int prio = NScreenObjPrio(plo);
-            if (prio == 0) prio = int(plo->U32Field(0, 0xA4, 0));
+            if (prio == 0) prio = int(plo->U32Field3(0, 0xA4, 0));
             const bool fPrio = prio == 8 || prio == 9;
             if (i < 0 || fCard)
             {

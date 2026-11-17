@@ -159,7 +159,7 @@ void CEditor::DrawOptions(LO* plo, const EDOBJ* po)
         const OPTTYPE t = OptType(f.k);
         ImGui::TableNextRow();
         ImGui::TableNextColumn();
-        const char* szName = SzOptionName(f.eopid);
+        const char* szName = SzOptionOf(plo, f.eopid);
         ImGui::Text("%d", f.eopid);
         ImGui::TableNextColumn();
         if (szName) ImGui::TextWrapped("%s", szName);
@@ -216,31 +216,45 @@ void CEditor::DrawOptions(LO* plo, const EDOBJ* po)
         }
         ImGui::PopID();
     };
-    auto table = [&](const char* id, bool fKey, float h) {
+    // the area's key options, then the other options the editor knows by name, then (collapsed) the raw ones: no
+    // name known (their number and kind), and the list options
+    enum { K_Key, K_Named, K_Raw };
+    auto kindOf = [&](int ifield) {
+        const int eopid = m_rec.afield[ifield].eopid;
+        if (std::find(akey.begin(), akey.end(), eopid) != akey.end()) return int(K_Key);
+        return SzOptionOf(plo, eopid) ? int(K_Named) : int(K_Raw);
+    };
+    auto table = [&](const char* id, int k, float h) {
         if (!ImGui::BeginTable(id, 3, ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp | (h > 0 ? ImGuiTableFlags_ScrollY : 0), ImVec2(0, h))) return;
         ImGui::TableSetupColumn("#", ImGuiTableColumnFlags_WidthFixed, 40);
         ImGui::TableSetupColumn("Option", ImGuiTableColumnFlags_WidthStretch, 1.2f);
         ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch, 1.0f);
         for (int ifield : po->aiopt)
-        {
-            const bool fIsKey = std::find(akey.begin(), akey.end(), m_rec.afield[ifield].eopid) != akey.end();
-            if (fKey == fIsKey) row(ifield);
-        }
+            if (kindOf(ifield) == k) row(ifield);
         ImGui::EndTable();
     };
-    bool fAnyKey = false;
-    for (int ifield : po->aiopt) fAnyKey |= std::find(akey.begin(), akey.end(), m_rec.afield[ifield].eopid) != akey.end();
-    if (fAnyKey)
+    int ac[3] = {};
+    for (int ifield : po->aiopt) ++ac[kindOf(ifield)];
+    if (ac[K_Key])
     {
         ImGui::TextColored(st::vec(st::text2), "%s", SzArea(ga));
-        table("keyopts", true, 0);
+        table("keyopts", K_Key, 0);
     }
-    if (ImGui::TreeNodeEx("All options", fAnyKey ? 0 : ImGuiTreeNodeFlags_DefaultOpen))
+    if (ac[K_Named])
     {
-        table("opts", false, std::min(260.0f, 26.0f * float(po->aiopt.size() + 1)));
+        if (ac[K_Key]) ImGui::TextColored(st::vec(st::text2), "%s", T("Other known options"));
+        table("namedopts", K_Named, 0);
+    }
+    if (!ac[K_Key] && !ac[K_Named]) ImGui::TextDisabled("%s", T("(no option of this object has a known name yet)"));
+    char label[96];
+    std::snprintf(label, sizeof(label), "%s (%d)###rawopts", T("Raw fields"), ac[K_Raw] + int(po->aiarr.size()));
+    if (ImGui::TreeNodeEx(label, 0))
+    {
+        EdTip(T("Options the editor has no name for yet: their number, kind and value as stored"));
+        if (ac[K_Raw]) table("opts", K_Raw, std::min(260.0f, 26.0f * float(ac[K_Raw] + 1)));
+        lists();
         ImGui::TreePop();
     }
-    lists();
     if (!m_note.empty()) { ImGui::PushStyleColor(ImGuiCol_Text, st::vec(st::muted)); ImGui::TextWrapped("Last option edit: %s.", m_note.c_str()); ImGui::PopStyleColor(); }
 }
 

@@ -25,6 +25,9 @@
 #include "jump.h"
 
 #include "actor.h"
+LO* g_ploStartPlaced3 = nullptr;   // (dev harness SLY3_START: the actor it placed and the frame)
+int g_iframeStartPlaced3 = -100;
+extern int g_iframeMain;
 #include "activate.h"
 #include "alo.h"
 #include "clock.h"
@@ -553,6 +556,19 @@ bool ActorWalkToward3(LO* ploActor, const float pos[3], float gSpeed, bool fR1)
     return true;
 }
 
+// orig3 0x22A7F8 case 47: 0x24E878(actor, the object's heading), the actor's +0x110C (the stick's heading) the same, then
+// the stopped branch (no deflection; circle (+0x18 | 0x20) while the actor's interaction is on, +0x50C != -1)
+bool FDriveActorFace2F(ACTOR* pa, PADCTL* pc)
+{
+    float rad = 0.0f;
+    if (!pc || !pa->palo || !FActorRunFaceHeading3(pa, &rad)) return false;
+    SetStepPhysHeading(pa->palo, rad);
+    pc->radJoy = rad;
+    pc->uJoy = 0.0f;
+    if (pa->nSub4CC != -1) pc->grfbtn |= 0x20;
+    return true;
+}
+
 bool FDriveActorWalk30(ACTOR* pa, PADCTL* pc)
 {
     auto it = MpWalk30().find(pa);
@@ -737,6 +753,11 @@ bool FStartPlayer3(SW* psw)
         SetAloPos(palo, pos);
     }
     EnablePo(psw, palo, 1);
+    // (dev harness: the start actor is moved from its load place; the water overlaps of that place (m_ext's water 30387
+    // for Bentley) still hold at the first frame and gave it the water's contact (the reaction 3, its clip and the
+    // recovery): damage.cpp's UpdateActorWater skips it for 2 frames)
+    g_ploStartPlaced3 = palo;
+    g_iframeStartPlaced3 = g_iframeMain;
     // the camera as the reference's at that moment (its follow policy +0xA0 pan -2.1146, tilt 0.1974 over the beach
     // zone's entry): a cut to that pan (the follow's g_cm.fCut 2 path)
     {

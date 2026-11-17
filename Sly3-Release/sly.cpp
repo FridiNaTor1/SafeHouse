@@ -2363,6 +2363,7 @@ void UpdateActor(ACTOR* pa)
             {
                 if (!pa->stack.ajob.empty()) pa->stack.ajob.back()->Drive(pc);
                 else if (pa->prunScript) DriveScptActor(pa->prunScript, pc);
+                else if (sly3::FDriveActorFace2F(pa, pc)) {}    // (Sly 3: SCPT 0x2F's turn to an object, player3.cpp)
                 else if (sly3::FDriveActorWalk30(pa, pc)) {}   // (Sly 3: SCPT 0x30's walk, player3.cpp)
                 else if (sly3::FDriveActorClimb26(pa, pc)) {}   // (Sly 3: SCPT 0x26's climb, player3.cpp)
                 sly3::ApplyActorHold5D3(pa, pc);   // (Sly 3: SCPT 0x5D / 0x5E, player3.cpp)

@@ -64,6 +64,10 @@ bool CEditor::FLoad(std::string& error)
 
 void CEditor::IndexObjects()
 {
+    m_mptype.clear();
+    if (g_gl.window) ForgetAssets();   // (their scene entries are the old scene's)
+    m_aiHiddenEntries.clear();   // (a new scene: nothing hidden in it yet)
+    InvalidateVis();
     m_mpobj.clear();
     m_mpgroupRoots.clear();
     m_mpchildren.clear();
@@ -110,6 +114,55 @@ void CEditor::IndexObjects()
         if (plo->paloParent) m_mpchildren[plo->paloParent].push_back(plo);
         else m_mpgroupRoots[plo->igrp].push_back(plo);
     }
+    FindLoadParents();
+}
+
+// A LOX without a transform parent whose live matrix is not its stored one was put under another object at the load
+// (e.g. a GROUPER's effects: stored relative to the group, live in world space). Its parent: the placed object whose
+// world matrix is live x stored^-1. The editor keeps the relation: edits store P^-1 x live, and the parent's moves
+// carry it (as the game will at the next load).
+void CEditor::FindLoadParents()
+{
+    m_mpLoadParent.clear();
+    m_mpLoadKids.clear();
+    std::vector<std::pair<LO*, glm::mat4>> akid;
+    for (const auto& [plo, o] : m_mpobj)
+    {
+        if (o.imat < 0 || FIsLoDerivedFrom(const_cast<LO*>(plo), EDCID(0x30)) || !FIsLoDerivedFrom(const_cast<LO*>(plo), EDCID(3))) continue;
+        if (static_cast<const LOX*>(plo)->pxf) continue;
+        const LO* root = plo;
+        while (root->paloParent) root = root->paloParent;
+        if (root->oidInstance >= 0 && m_mpoidProxy.count(root->oidInstance)) continue;
+        std::string rel;
+        std::size_t ib = 0;
+        const std::vector<uint8_t>* pab = nullptr;
+        if (!FLocate(m_rec.afield[std::size_t(o.imat)].ib, 48, rel, ib) || !(pab = m_proj.partRef(rel)) || ib + 48 > pab->size()) continue;
+        const glm::mat4 stored = MatFromBytes(pab->data() + ib), live = MatLocal(plo);
+        float d = 0;
+        for (int i = 0; i < 4; ++i) d = std::max(d, glm::length(live[i] - stored[i]));
+        if (d < 0.01f || std::abs(glm::determinant(glm::mat3(stored))) < 1e-8f) continue;
+        akid.emplace_back(const_cast<LO*>(plo), live * glm::inverse(stored));
+    }
+    if (akid.empty()) return;
+    // the parent: an object stored in the world file whose world matrix is P (the nearest of the same group first)
+    for (const auto& [pkid, P] : akid)
+    {
+        LO* pbest = nullptr;
+        for (const auto& up : m_psw->aploAll)
+        {
+            LO* q = up.get();
+            if (q == pkid || !FHasMatrix(q) || m_mpLoadParent.count(q)) continue;
+            const glm::mat4 W = MatWorld(q);
+            float d = 0;
+            for (int i = 0; i < 4; ++i) d = std::max(d, glm::length(W[i] - P[i]));
+            if (d < 0.05f && (!pbest || (q->igrp == pkid->igrp && pbest->igrp != pkid->igrp))) pbest = q;
+        }
+        LOADPARENT lp;
+        lp.ploParent = pbest;
+        lp.P = P;
+        m_mpLoadParent[pkid] = lp;
+        if (pbest) m_mpLoadKids[pbest].push_back(pkid);
+    }
 }
 
 bool CEditor::FHasMatrix(const LO* plo) const
@@ -153,6 +206,18 @@ void CEditor::SetLocal(LO* plo, const glm::mat4& m)
         UpdateSceneFromSw(m_scene, m_apalo);
     }
     else if (FIsLoDerivedFrom(plo, EDCID(3))) static_cast<LOX*>(plo)->mat = m;
+    // the objects attached to it at the load follow (their stored matrices under its new world)
+    if (const auto it = m_mpLoadKids.find(plo); it != m_mpLoadKids.end())
+    {
+        const glm::mat4 W = MatWorld(plo);
+        for (LO* pk : it->second)
+        {
+            LOADPARENT& lp = m_mpLoadParent[pk];
+            const glm::mat4 stored = glm::inverse(lp.P) * MatLocal(pk);
+            lp.P = W;
+            SetLocal(pk, W * stored);
+        }
+    }
 }
 
 void CEditor::SetWorld(LO* plo, const glm::mat4& w)
@@ -215,7 +280,10 @@ bool CEditor::FRecordPlace(const PLACE& pl, const std::string& label)
     std::size_t ib = 0;
     if (!FLocate(pl.ibMat, 48, rel, ib)) { Status("this object's part is not a binary part"); return false; }
     float a[12];
-    if (!FBytesFromMat(MatPlace(pl), a)) { Status("rejected: the transform has invalid numbers"); return false; }
+    glm::mat4 mStore = MatPlace(pl);
+    if (!pl.fProxy)
+        if (const auto it = m_mpLoadParent.find(pl.ploLive); it != m_mpLoadParent.end()) mStore = glm::inverse(it->second.P) * mStore;
+    if (!FBytesFromMat(mStore, a)) { Status("rejected: the transform has invalid numbers"); return false; }
     m_proj.begin(label);
     const bool fOk = m_proj.patch(rel, ib, a, sizeof(a));
     m_proj.end();
@@ -251,6 +319,18 @@ void CEditor::ReapplyFromParts()
         glm::mat4 m(1.0f);
         for (int i = 0; i < 3; ++i) m[i] = glm::vec4(a[3 * i], a[3 * i + 1], a[3 * i + 2], 0.0f);
         m[3] = glm::vec4(a[9], a[10], a[11], 1.0f);
+        if (m_mpLoadParent.count(plo)) continue;   // (below, after their parents)
+        if (m != MatLocal(plo)) SetLocal(const_cast<LO*>(plo), m);
+    }
+    for (auto& [plo, lp] : m_mpLoadParent)
+    {
+        const auto ito = m_mpobj.find(plo);
+        std::string rel;
+        std::size_t ib = 0;
+        const std::vector<uint8_t>* pab = nullptr;
+        if (ito == m_mpobj.end() || !FLocate(m_rec.afield[std::size_t(ito->second.imat)].ib, 48, rel, ib) || !(pab = m_proj.partRef(rel)) || ib + 48 > pab->size()) continue;
+        if (lp.ploParent) lp.P = MatWorld(lp.ploParent);
+        const glm::mat4 m = lp.P * MatFromBytes(pab->data() + ib);
         if (m != MatLocal(plo)) SetLocal(const_cast<LO*>(plo), m);
     }
     for (const auto& [oid, iobj] : m_mpoidProxy)
@@ -279,6 +359,8 @@ void CEditor::Reload(int oidSelect)
 {
     std::string error;
     const CAMERA cam = m_cam;
+    const std::vector<uint64_t> akeySel = KeysOfSelection();
+    m_asel.clear();
     if (!FLoad(error))
     {
         // (a structural edit the loader refuses: undone, and the world as before; a half-loaded world is not drawn)
@@ -295,8 +377,16 @@ void CEditor::Reload(int oidSelect)
     m_cam = cam;
     m_plSel = nullptr;
     if (oidSelect)
+    {
         for (const auto& up : m_psw->aploAll)
             if (up->oid == oidSelect && (!m_plSel || FHasMatrix(up.get()))) m_plSel = up.get();
+        if (m_plSel) m_asel.push_back(m_plSel);
+    }
+    else
+    {
+        // (the selection as it was, by oid and instance, when its objects are still there)
+        SelectKeys(akeySel);
+    }
 }
 
 void CEditor::Duplicate()
@@ -455,7 +545,7 @@ bool CEditor::FSave()
     return true;
 }
 
-void CEditor::PlayTest()
+void CEditor::PlayTestAt(int oidTask, const glm::vec3* ppos, float heading)
 {
     if (!FSave()) return;
 #ifdef _WIN32
@@ -464,9 +554,82 @@ void CEditor::PlayTest()
     const auto exe = cane::executableDirectory() / EDGAME_EXE;
 #endif
     std::vector<std::string> args{"--data-dir", ce::utf8(m_inst.dir), "--user-dir", cane::utf8(cane::userDirectory()), "--mod-package",
-                                  ce::utf8(m_proj.dir), "--world", std::to_string(m_eo.record)};
+                                  ce::utf8(m_proj.dir), "--world", std::to_string(m_eo.record) + (oidTask > 0 ? ":" + std::to_string(oidTask) : std::string())};
+    if (ppos)
+    {
+        char sz[96];
+        std::snprintf(sz, sizeof(sz), "%.1f,%.1f,%.1f,%.4f", ppos->x, ppos->y, ppos->z, heading);
+        args.insert(args.end(), {"--start-pos", sz});
+    }
+    if (m_fPlayDry)
+    {
+        std::string line;
+        for (std::size_t i = 4; i < args.size(); ++i) line += (i > 4 ? " " : "") + args[i];
+        std::printf("editor: play: %s\n", line.c_str());
+        return;
+    }
     if (!ce::spawnDetached(exe, args)) Status("could not start " + ce::utf8(exe));
+    else if (oidTask > 0) Status(std::string(T("play test started at task")) + " " + std::to_string(oidTask));
     else Status("play test started (" + m_index.entry.name + " with this project loaded)");
+}
+
+int CEditor::TaskToPlay(LO* plo) const
+{
+    if (!plo) return 0;
+    int n = 0;
+    if (TypeOfLo(plo) == OT_Job && FOptionInt(plo, EDEOPID(1243), n) && n > 0) return n;
+    if (TypeOfLo(plo) == OT_Task) return plo->oid;
+    return 0;
+}
+
+void CEditor::PlayFromView()
+{
+    // the ground below the point 600 ahead of the view (else that point), Sly facing the view's way
+    glm::vec3 p = m_cam.pos + m_cam.Dir() * 600.0f, hit;
+    if (FSnapDown(p, hit)) p = hit + glm::vec3(0, 0, 5);
+    const glm::vec3 d = m_cam.Dir();
+    PlayTestAt(-1, &p, std::atan2(d.y, d.x));
+}
+
+void CEditor::DrawPlayMenu()
+{
+    if (!ImGui::BeginPopup("playmenu")) return;
+    if (ImGui::MenuItem(T("Play the world"))) PlayTest();
+    if (ImGui::MenuItem(T("Play from here (Sly in front of the view)"))) PlayFromView();
+    const int oidSel = TaskToPlay(m_plSel);
+    if (ImGui::MenuItem(T("Play the selected job / task"), nullptr, false, oidSel > 0)) PlayTestAt(oidSel, nullptr, 0.0f);
+    if (ImGui::BeginMenu(T("Play a job")))
+    {
+        for (const auto& up : m_psw->aploAll)
+            if (TypeOfLo(up.get()) == OT_Job)
+                if (const int t = TaskToPlay(up.get()); t > 0)
+                {
+                    char label[160];
+                    std::snprintf(label, sizeof(label), "%s  (%d)", NameOfObject(up.get()).c_str(), up->oid);
+                    if (ImGui::BeginMenu(label))
+                    {
+                        if (ImGui::MenuItem(T("From its start"))) PlayTestAt(t, nullptr, 0.0f);
+                        // its tasks in the chain order (next-task links from the first)
+                        std::set<int> setSeen;
+                        int oid = t;
+                        for (int k = 0; k < 64 && oid > 0 && setSeen.insert(oid).second; ++k)
+                        {
+                            LO* pt = PloOid(oid, EDCID(0x85));
+                            if (!pt) break;
+                            int idPrompt = 0;
+                            std::string s = std::string(T("From task")) + " " + std::to_string(oid);
+                            if (FOptionInt(pt, EDEOPID(1265), idPrompt) && idPrompt > 0)
+                                if (const std::string tx = StrText(idPrompt); !tx.empty()) s += ": " + tx.substr(0, 60);
+                            if (ImGui::MenuItem((s + "##t" + std::to_string(oid)).c_str())) PlayTestAt(oid, nullptr, 0.0f);
+                            TASKLINKS tl;
+                            oid = EDFEAT_MISSIONS && FTaskLinks(pt, tl) && !tl.aoidPost.empty() ? tl.aoidPost[0] : 0;
+                        }
+                        ImGui::EndMenu();
+                    }
+                }
+        ImGui::EndMenu();
+    }
+    ImGui::EndPopup();
 }
 
 // ---- view
@@ -507,7 +670,7 @@ void CEditor::Pick(float x, float y)
     {
         const SCENEGLOBSET& sgs = m_scene.aglobset[k];
         ALO* palo = m_apalo[k];
-        if (!palo || !sgs.pglobset) continue;
+        if (!palo || !sgs.pglobset || FHidden(palo)) continue;
         for (std::size_t i = 0; i < sgs.pglobset->aglob.size(); ++i)
         {
             const GLOB& g = sgs.pglobset->aglob[i];
@@ -521,17 +684,37 @@ void CEditor::Pick(float x, float y)
         for (const auto& up : m_psw->aploAll)
         {
             LO* plo = up.get();
-            if (FIsLoDerivedFrom(plo, EDCID(0x30)) || !FIsLoDerivedFrom(plo, EDCID(3))) continue;
+            if (FIsLoDerivedFrom(plo, EDCID(0x30)) || !FIsLoDerivedFrom(plo, EDCID(3)) || FHidden(plo)) continue;
             ImVec2 s;
             const glm::vec3 p = PosWorld(plo);
             if (glm::length(p) < 0.01f || glm::length(p - m_cam.pos) > 8000.0f || !FProject(p, s)) continue;
             if (std::hypot(s.x - x, s.y - y) < 12.0f) { pbest = plo; break; }
         }
-    Select(pbest);
+    // Ctrl: toggled in / out of the selection; Shift: added; else the selection is the picked object
+    const ImGuiIO& io = ImGui::GetIO();
+    if (io.KeyCtrl) { if (pbest) ToggleSelected(pbest); }
+    else if (io.KeyShift) { if (pbest) AddSelected(pbest); }
+    else SelectOnly(pbest);
+    m_fOutScroll = true;
 }
 
 void CEditor::FrameSelected()
 {
+    // several: their placed middle and spread (the shared groups' templates at the origin left out)
+    if (m_asel.size() > 1 && !m_fCurveMode)
+    {
+        glm::vec3 lo(1e30f), hi(-1e30f);
+        int c = 0;
+        for (LO* p : m_asel)
+            if (FHasMatrix(p))
+                if (const glm::vec3 q = PosWorld(p); glm::length(q) > 0.01f) { lo = glm::min(lo, q); hi = glm::max(hi, q); ++c; }
+        if (c > 1)
+        {
+            m_cam.pitch = -35.0f;
+            m_cam.pos = (lo + hi) * 0.5f - m_cam.Dir() * std::clamp(glm::length(hi - lo) * 1.2f + 600.0f, 600.0f, 30000.0f);
+            return;
+        }
+    }
     if (!m_plSel || !FHasMatrix(m_plSel)) return;
     if (PATHDATA pd; FPathRead(m_plSel, pd) && !pd.apos.empty())
     {
@@ -572,14 +755,24 @@ void CEditor::CameraInput(float dt)
     }
     else
     {
-        // W / E / R: move / rotate / scale (as other editors), F: frame, Delete, Ctrl+D / Z / Y / S
+        // Q / W / E / R: select / move / rotate / scale (as other editors), F: frame, H / Alt+H / I: hide / show all /
+        // isolate, Delete, Ctrl+A / C / V / D / Z / Y / S, [ / ]: the grid size
         const bool ctrl = io.KeyCtrl;
-        if (!ctrl && ImGui::IsKeyPressed(ImGuiKey_W)) m_gizmo = 0;
-        if (!ctrl && ImGui::IsKeyPressed(ImGuiKey_E)) m_gizmo = 1;
-        if (!ctrl && ImGui::IsKeyPressed(ImGuiKey_R)) m_gizmo = 2;
+        if (!ctrl && ImGui::IsKeyPressed(ImGuiKey_Q)) m_tool = 0;
+        if (!ctrl && ImGui::IsKeyPressed(ImGuiKey_W)) { m_tool = 1; m_gizmo = 0; }
+        if (!ctrl && ImGui::IsKeyPressed(ImGuiKey_E)) { m_tool = 1; m_gizmo = 1; }
+        if (!ctrl && ImGui::IsKeyPressed(ImGuiKey_R)) { m_tool = 1; m_gizmo = 2; }
         if (!ctrl && ImGui::IsKeyPressed(ImGuiKey_F)) FrameSelected();
-        if (ImGui::IsKeyPressed(ImGuiKey_Delete)) Delete();
-        if (ctrl && ImGui::IsKeyPressed(ImGuiKey_D)) Duplicate();
+        if (!ctrl && ImGui::IsKeyPressed(ImGuiKey_H)) { if (io.KeyAlt) ShowAll(); else HideSelection(true); }
+        if (!ctrl && !io.KeyAlt && ImGui::IsKeyPressed(ImGuiKey_I)) { if (m_setIsolate.empty()) IsolateSelection(); else { m_setIsolate.clear(); InvalidateVis(); } }
+        if (!ctrl && ImGui::IsKeyPressed(ImGuiKey_LeftBracket)) { m_gridSize = std::max(1.0f, m_gridSize * 0.5f); SaveViewState(); }
+        if (!ctrl && ImGui::IsKeyPressed(ImGuiKey_RightBracket)) { m_gridSize = std::min(1024.0f, m_gridSize * 2.0f); SaveViewState(); }
+        if (!ctrl && ImGui::IsKeyPressed(ImGuiKey_Escape)) ClearSelection();
+        if (ImGui::IsKeyPressed(ImGuiKey_Delete)) DeleteSelection();
+        if (ctrl && ImGui::IsKeyPressed(ImGuiKey_A)) SelectWhere([this](LO* p) { return FSelectable(p) && glm::length(PosWorld(p)) > 0.01f; }, false);
+        if (ctrl && ImGui::IsKeyPressed(ImGuiKey_C)) CopySelection();
+        if (ctrl && ImGui::IsKeyPressed(ImGuiKey_V)) Paste(io.KeyShift);
+        if (ctrl && ImGui::IsKeyPressed(ImGuiKey_D)) DuplicateSelection();
         if (ctrl && ImGui::IsKeyPressed(ImGuiKey_Z)) io.KeyShift ? Redo() : Undo();
         if (ctrl && ImGui::IsKeyPressed(ImGuiKey_Y)) Redo();
         if (ctrl && ImGui::IsKeyPressed(ImGuiKey_S)) FSave();
@@ -594,21 +787,31 @@ void CEditor::DrawMarkers()
     for (const auto& up : m_psw->aploAll)
     {
         LO* plo = up.get();
-        if (FIsLoDerivedFrom(plo, EDCID(0x30)) || !FIsLoDerivedFrom(plo, EDCID(3))) continue;
+        const bool fSelAny = FSelected(plo);
+        if ((FIsLoDerivedFrom(plo, EDCID(0x30)) && !fSelAny) || !FIsLoDerivedFrom(plo, EDCID(3)) || FHidden(plo)) continue;
         const glm::vec3 p = PosWorld(plo);
         // (the shared groups' unplaced templates sit at the origin: not shown)
-        if (glm::length(p) < 0.01f || glm::length(p - m_cam.pos) > 8000.0f) continue;
+        if (glm::length(p) < 0.01f || glm::length(p - m_cam.pos) > (fSelAny ? 60000.0f : 8000.0f)) continue;
         ImVec2 s;
         if (!FProject(p, s)) continue;
         const bool fSel = plo == m_plSel;
         const ImVec2 m = ImGui::GetIO().MousePos;
         const bool fHover = std::hypot(m.x - s.x, m.y - s.y) < 12.0f;
-        dl->AddCircleFilled(s, fSel ? 6.0f : 3.5f, st::u32(fSel ? st::cta : st::accent, fSel || fHover ? 1.0f : 0.55f));
+        const OBJTYPEINFO& ti = InfoOfType(TypeOfLo(plo));
+        // its type's letter in its colour (the selected ones ringed)
+        const float r = fSel ? 8.0f : fSelAny ? 7.0f : 5.5f;
+        dl->AddCircleFilled(s, r, st::u32(ti.rgb, fSelAny || fHover ? 0.95f : 0.6f));
+        if (r >= 7.0f || fHover)
+        {
+            const char icon[2] = {ti.icon, 0};
+            const ImVec2 ts = ImGui::CalcTextSize(icon);
+            dl->AddText(ImVec2(s.x - ts.x * 0.5f, s.y - ts.y * 0.5f), st::u32(0x0A0F1C), icon);
+        }
+        if (fSelAny) dl->AddCircle(s, r + 3.0f, st::u32(fSel ? st::cta : st::text), 0, 2.0f);
         if (fSel || fHover)
         {
-            char label[96];
-            std::snprintf(label, sizeof(label), "%s %d", SzClass(plo->Cid()), plo->oid);
-            dl->AddText(ImVec2(s.x + 9, s.y - 9), st::u32(st::text), label);
+            const std::string label = NameOfObject(plo);
+            dl->AddText(ImVec2(s.x + r + 5, s.y - 9), st::u32(st::text), label.c_str());
         }
     }
 }
@@ -619,8 +822,13 @@ void CEditor::DrawGizmo()
     // object's placement
     PLACE pl;
     PATHDATA pd;
+    if (m_tool == 0 && m_axisDrag < 0) return;   // (the select tool: no gizmo)
     const bool fCurve = m_fCurveMode && m_plSel && FPathLive(m_plSel, pd) && !pd.apos.empty();
-    if (!fCurve && !FPlace(m_plSel, pl)) return;
+    // several selected: one gizmo at their middle (each moved through its own placement)
+    std::vector<PLACE> aplSel;
+    if (!fCurve && m_asel.size() > 1) aplSel = PlacesOfSelection();
+    const bool fMulti = aplSel.size() > 1;
+    if (!fCurve && !fMulti && !FPlace(m_plSel, pl)) return;
     if (fCurve && m_ipoint >= int(pd.apos.size())) m_ipoint = -1;
     const glm::mat4 toWorld = fCurve ? MatPathSpace(m_plSel) : glm::mat4(1.0f);
     glm::mat4 w;
@@ -631,9 +839,19 @@ void CEditor::DrawGizmo()
         for (int i = 0; i < 3; ++i) w[i] = glm::vec4(glm::normalize(glm::vec3(toWorld[i]) + glm::vec3(1e-9f)), 0.0f);
         w[3] = toWorld * glm::vec4(pivot, 1.0f);
     }
+    else if (fMulti)
+    {
+        glm::vec3 mid(0.0f);
+        for (const PLACE& q : aplSel) mid += PosWorld(q.ploLive);
+        mid /= float(aplSel.size());
+        PLACE plPrimary;
+        w = m_fLocalAxes && FPlace(m_plSel, plPrimary) ? MatWorld(plPrimary.ploLive) : glm::mat4(1.0f);
+        for (int i = 0; i < 3; ++i) w[i] = glm::vec4(glm::normalize(glm::vec3(w[i]) + glm::vec3(1e-9f)), 0.0f);
+        w[3] = glm::vec4(mid, 1.0f);
+    }
     else w = MatWorld(pl.ploLive);
     if (m_axisDrag >= 0) w = m_matDragCur;
-    ImDrawList* dl = ImGui::GetForegroundDrawList();
+    ImDrawList* dl = ImGui::GetBackgroundDrawList();   // (under the panels)
     const glm::vec3 p = glm::vec3(w[3]);
     ImVec2 s0;
     if (!FProject(p, s0)) return;
@@ -680,6 +898,9 @@ void CEditor::DrawGizmo()
         m_matDragCur = w;
         m_mouseDragStart = io.MousePos;
         if (fCurve) m_pdDrag = pd;
+        m_adragSel.clear();
+        if (fMulti)
+            for (const PLACE& q : aplSel) m_adragSel.emplace_back(q, MatWorld(q.ploLive));
     }
     if (m_axisDrag >= 0)
     {
@@ -690,18 +911,35 @@ void CEditor::DrawGizmo()
         const float along = ((io.MousePos.x - m_mouseDragStart.x) * dir.x + (io.MousePos.y - m_mouseDragStart.y) * dir.y) / pxLen;
         glm::mat4 wNew = m_matDragStart;
         const glm::vec3 p0 = glm::vec3(m_matDragStart[3]);
-        if (gizmo == 0) wNew[3] += glm::vec4(axes[i] * (along / pxLen * len), 0.0f);
+        // snapping (the status bar's; Ctrl held turns the grid snap the other way while dragging)
+        const bool fGrid = m_fGridSnap != io.KeyCtrl;
+        auto snapGrid = [&](float v) { return fGrid && m_gridSize > 0 ? std::round(v / m_gridSize) * m_gridSize : v; };
+        if (gizmo == 0)
+        {
+            float d = along / pxLen * len;
+            // world axes: the coordinate itself on the grid; local axes: the distance moved
+            const bool fWorldAxis = std::abs(std::abs(axes[i][i]) - 1.0f) < 1e-4f;
+            if (fWorldAxis) d = snapGrid(p0[i] + d * axes[i][i]) * axes[i][i] - p0[i] * axes[i][i];
+            else d = snapGrid(d);
+            wNew[3] += glm::vec4(axes[i] * d, 0.0f);
+        }
         else if (gizmo == 1)
         {
-            const float ang = glm::radians(along * 0.5f);
+            const float ang = glm::radians(SnapAngle(along * 0.5f));
             wNew = glm::translate(glm::mat4(1.0f), p0) * glm::rotate(glm::mat4(1.0f), ang, axes[i]) * glm::translate(glm::mat4(1.0f), -p0) * m_matDragStart;
         }
         else
         {
             glm::vec3 sc(1.0f);
-            sc[i] = std::max(0.01f, 1.0f + along / pxLen);
+            sc[i] = SnapScale(std::max(0.01f, 1.0f + along / pxLen));
             if (io.KeyShift) sc = glm::vec3(sc[i]);
-            wNew = m_matDragStart * glm::scale(glm::mat4(1.0f), sc);
+            if (fMulti || !m_adragSel.empty())
+            {
+                // several: scaled about the middle along the gizmo's axes (their places spread, each one scaled too)
+                const glm::mat4 R(glm::vec4(glm::vec3(m_matDragStart[0]), 0), glm::vec4(glm::vec3(m_matDragStart[1]), 0), glm::vec4(glm::vec3(m_matDragStart[2]), 0), glm::vec4(0, 0, 0, 1));
+                wNew = glm::translate(glm::mat4(1.0f), p0) * R * glm::scale(glm::mat4(1.0f), sc) * glm::transpose(R) * glm::translate(glm::mat4(1.0f), -p0) * m_matDragStart;
+            }
+            else wNew = m_matDragStart * glm::scale(glm::mat4(1.0f), sc);
         }
         m_matDragCur = wNew;
         const bool fRelease = !ImGui::IsMouseDown(ImGuiMouseButton_Left);
@@ -725,6 +963,19 @@ void CEditor::DrawGizmo()
                 const std::string what = m_ipoint >= 0 ? "point " + std::to_string(m_ipoint) + " of path " : std::string("path ");
                 FPathWrite(m_plSel, pn, std::string(s_aname[gizmo]) + " " + what + std::to_string(m_plSel->oid));
                 if (m_fSnapCollision) FPathSnap(m_plSel, m_ipoint, "Snap " + what + std::to_string(m_plSel->oid));
+            }
+        }
+        else if (!m_adragSel.empty())
+        {
+            const glm::mat4 D = wNew * glm::inverse(m_matDragStart);
+            for (const auto& [q, mStart] : m_adragSel) SetPlaceWorld(q, D * mStart);
+            if (fRelease)
+            {
+                // one undo step for all of them
+                m_proj.begin(std::string(s_aname[gizmo]) + " " + std::to_string(m_adragSel.size()) + " " + T("objects"));
+                for (const auto& [q, mStart] : m_adragSel) FRecordPlace(q, "");
+                m_proj.end();
+                m_adragSel.clear();
             }
         }
         else
@@ -780,12 +1031,52 @@ void CEditor::DrawMenu()
         if (ImGui::MenuItem("Undo", "Ctrl+Z", false, m_proj.canUndo())) Undo();
         if (ImGui::MenuItem("Redo", "Ctrl+Y", false, m_proj.canRedo())) Redo();
         ImGui::Separator();
-        if (ImGui::MenuItem("Duplicate", "Ctrl+D", false, m_plSel != nullptr)) Duplicate();
-        if (ImGui::MenuItem("Delete", "Del", false, m_plSel != nullptr)) Delete();
+        if (ImGui::MenuItem(T("Copy"), "Ctrl+C", false, !m_asel.empty())) CopySelection();
+        if (ImGui::MenuItem(T("Paste in front of the camera"), "Ctrl+V", false, !m_aclip.empty())) Paste(false);
+        if (ImGui::MenuItem(T("Paste in place"), "Ctrl+Shift+V", false, !m_aclip.empty())) Paste(true);
+        if (ImGui::MenuItem("Duplicate", "Ctrl+D", false, m_plSel != nullptr)) DuplicateSelection();
+        if (ImGui::MenuItem("Delete", "Del", false, m_plSel != nullptr)) DeleteSelection();
+        ImGui::EndMenu();
+    }
+    if (ImGui::BeginMenu(TL("Select", "selectmenu").c_str()))
+    {
+        if (ImGui::MenuItem(T("All shown"), "Ctrl+A")) SelectWhere([this](LO* p) { return FSelectable(p) && glm::length(PosWorld(p)) > 0.01f; }, false);
+        if (ImGui::MenuItem(T("None"), "Esc")) ClearSelection();
+        if (ImGui::MenuItem(T("Same type as the selection"), nullptr, false, m_plSel != nullptr))
+        {
+            const OBJTYPE ot = TypeOfLo(m_plSel);
+            SelectWhere([this, ot](LO* p) { return TypeOfLo(p) == ot && FSelectable(p); }, false);
+        }
+        if (ImGui::MenuItem(T("Same class as the selection"), nullptr, false, m_plSel != nullptr))
+        {
+            const int cid = m_plSel->Cid();
+            SelectWhere([this, cid](LO* p) { return p->Cid() == cid && FSelectable(p); }, false);
+        }
+        if (ImGui::MenuItem(T("Same group as the selection"), nullptr, false, m_plSel != nullptr))
+        {
+            const int igrp = m_plSel->igrp;
+            SelectWhere([this, igrp](LO* p) { return p->igrp == igrp && FSelectable(p); }, false);
+        }
+        if (ImGui::BeginMenu(T("By type")))
+        {
+            for (int ot = 0; ot < OT_Max; ++ot)
+                if (ImGui::MenuItem(T(InfoOfType(OBJTYPE(ot)).plural)))
+                    SelectWhere([this, ot](LO* p) { return TypeOfLo(p) == ot && FSelectable(p); }, false);
+            ImGui::EndMenu();
+        }
         ImGui::EndMenu();
     }
     if (ImGui::BeginMenu("View"))
     {
+        if (ImGui::MenuItem(T("Hide the selection"), "H", false, !m_asel.empty())) HideSelection(true);
+        if (ImGui::MenuItem(T("Isolate the selection"), "I", false, !m_asel.empty())) IsolateSelection();
+        if (ImGui::MenuItem(T("Show all"), "Alt+H")) ShowAll();
+        ImGui::Separator();
+        if (ImGui::MenuItem(T("Bottom panel (missions, create, scripts...)"), nullptr, &m_fDockOpen)) SaveViewState();
+        ImGui::MenuItem(T("Grid snap"), nullptr, &m_fGridSnap);
+        ImGui::MenuItem(T("Angle snap"), nullptr, &m_fAngleSnap);
+        ImGui::MenuItem(T("Scale snap"), nullptr, &m_fScaleSnap);
+        ImGui::Separator();
         ImGui::MenuItem("Markers (objects without a model)", nullptr, &m_fShowMarkers);
         ImGui::MenuItem("Curves: the selected one", nullptr, &m_fShowPaths);
         ImGui::MenuItem("Curves: all near the camera", nullptr, &m_fShowAllPaths);
@@ -806,7 +1097,7 @@ void CEditor::DrawMenu()
     static const char* const s_atip[] = {"Move the selection along the gizmo's arrows", "Turn it about the gizmo's rings", "Scale it along an axis (or all at once from the middle)"};
     for (int i = 0; i < 3; ++i)
     {
-        if (ImGui::RadioButton(amode[i], m_gizmo == i)) m_gizmo = i;
+        if (ImGui::RadioButton(amode[i], m_tool != 0 && m_gizmo == i)) { m_gizmo = i; m_tool = 1; }
         EdTip(s_atip[i]);
     }
     ImGui::Separator();
@@ -815,8 +1106,12 @@ void CEditor::DrawMenu()
     ImGui::PushStyleColor(ImGuiCol_ButtonActive, st::vec(st::ctaActive));
     ImGui::PushStyleColor(ImGuiCol_Text, st::vec(st::ctaText));
     if (ImGui::SmallButton("  Play test  ")) PlayTest();
-    ImGui::PopStyleColor(4);
     EdTip("Starts the game in this world with the project loaded (saved first); the editor stays open.");
+    ImGui::SameLine(0, 2);
+    if (ImGui::SmallButton(" v ") || m_fOpenPlayMenu) { ImGui::OpenPopup("playmenu"); m_fOpenPlayMenu = false; }
+    ImGui::PopStyleColor(4);
+    EdTip(T("Play a job or one of its tasks, the selected job / task, or from the view's point"));
+    DrawPlayMenu();
     ImGui::TextColored(st::vec(st::muted), "  %s  |  %s%s", m_index.entry.name.c_str(), m_proj.manifest.name.c_str(), m_proj.dirty() ? " (unsaved)" : "");
     ImGui::EndMainMenuBar();
 }
@@ -825,19 +1120,28 @@ void CEditor::DrawTreeNode(LO* plo, int depth)
 {
     const auto itc = m_mpchildren.find(plo);
     const bool fLeaf = itc == m_mpchildren.end() || depth > 12;
-    char label[128];
-    std::snprintf(label, sizeof(label), "%s  %d##%p", SzClass(plo->Cid()), plo->oid, static_cast<void*>(plo));
+    char label[200];
+    const OBJTYPEINFO& ti = InfoOfType(TypeOfLo(plo));
+    std::snprintf(label, sizeof(label), "%c  %s  (%s %d)##%p", ti.icon, NameOfObject(plo).c_str(), SzClass(plo->Cid()), plo->oid, static_cast<void*>(plo));
     ImGuiTreeNodeFlags fl = ImGuiTreeNodeFlags_OpenOnArrow | ImGuiTreeNodeFlags_SpanAvailWidth;
     if (fLeaf) fl |= ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen;
-    if (plo == m_plSel) fl |= ImGuiTreeNodeFlags_Selected;
+    if (FSelected(plo)) fl |= ImGuiTreeNodeFlags_Selected;
+    ImGui::PushStyleColor(ImGuiCol_Text, st::vec(FHidden(plo) ? st::muted : st::text));
     // the selection's ancestors opened (a pick in the view)
     if (m_fScrollTree && m_plSel)
         for (LO* p = m_plSel->paloParent; p; p = p->paloParent)
             if (p == plo) ImGui::SetNextItemOpen(true);
     const bool fOpen = ImGui::TreeNodeEx(label, fl);
+    ImGui::PopStyleColor();
     if (plo == m_plSel && m_fScrollTree) { ImGui::SetScrollHereY(0.4f); m_fScrollTree = false; }
-    if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen()) m_plSel = plo;
-    if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) { m_plSel = plo; FrameSelected(); }
+    if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen())
+    {
+        if (ImGui::GetIO().KeyCtrl) ToggleSelected(plo);
+        else if (ImGui::GetIO().KeyShift) AddSelected(plo);
+        else SelectOnly(plo);
+    }
+    OutlinerContextMenu(plo);
+    if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) { SelectOnly(plo); FrameSelected(); }
     if (fOpen && !fLeaf)
     {
         for (LO* pc : itc->second) DrawTreeNode(pc, depth + 1);
@@ -845,16 +1149,9 @@ void CEditor::DrawTreeNode(LO* plo, int depth)
     }
 }
 
+// the outliner's "By group" view: the world's groups, each object's hierarchy
 void CEditor::DrawTree()
 {
-    const ImVec2 size = ImGui::GetIO().DisplaySize;
-    const float top = ImGui::GetFrameHeight();
-    ImGui::SetNextWindowPos(ImVec2(8, top + 8), ImGuiCond_Always);
-    ImGui::SetNextWindowSize(ImVec2(400, (size.y - top - 16) * 0.45f), ImGuiCond_Always);
-    ImGui::Begin("Scene", nullptr, ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse);
-    ImGui::SetNextItemWidth(-1);
-    ImGui::InputTextWithHint("##filter", "Filter: class or oid", m_filter, sizeof(m_filter));
-    ImGui::BeginChild("tree", ImVec2(0, 0), false);
     const std::string filter = m_filter;
     if (!filter.empty())
     {
@@ -896,31 +1193,94 @@ void CEditor::DrawTree()
                 ImGui::TreePop();
             }
         }
-    ImGui::EndChild();
-    ImGui::End();
 }
 
 void CEditor::DrawInspector()
 {
+    // the right column's lower half (the outliner above it)
     const ImVec2 size = ImGui::GetIO().DisplaySize;
     const float top = ImGui::GetFrameHeight();
-    ImGui::SetNextWindowPos(ImVec2(size.x - 408, top + 8), ImGuiCond_Always);
-    ImGui::SetNextWindowSize(ImVec2(400, size.y - top - 16 - 30), ImGuiCond_Always);
-    ImGui::Begin("Inspector", nullptr, ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse);
+    const float w = std::clamp(size.x * 0.25f, 330.0f, 470.0f);
+    const float y = top + 6 + (size.y - top - 36) * 0.5f + 6;
+    ImGui::SetNextWindowPos(ImVec2(size.x - w - 6, y), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(w, size.y - y - 36), ImGuiCond_Always);
+    ImGui::Begin(TL("Properties", "inspector").c_str(), nullptr, ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse);
     LO* plo = m_plSel;
     if (!plo)
     {
-        ImGui::TextWrapped("Click an object in the view or the scene list. Right mouse + WASD / Q / E flies; the wheel sets the speed; F frames the selection.");
+        ImGui::TextWrapped("%s", T("Click an object in the view or the outliner (Ctrl+click: several, drag in empty space with the select tool (Q): a box). Right mouse + WASD / Q / E flies; the wheel sets the speed; F frames the selection."));
         ImGui::End();
         return;
     }
+    // several selected: what they are, and what can be done to all of them
+    if (m_asel.size() > 1)
+    {
+        std::map<int, int> mpType;
+        for (LO* p : m_asel) ++mpType[TypeOfLo(p)];
+        ImGui::PushStyleColor(ImGuiCol_Text, st::vec(st::cta));
+        ImGui::Text("%zu %s", m_asel.size(), T("objects selected"));
+        ImGui::PopStyleColor();
+        std::string types;
+        for (const auto& [ot, n] : mpType) types += (types.empty() ? "" : ", ") + std::to_string(n) + " " + T(InfoOfType(OBJTYPE(ot)).plural);
+        ImGui::TextWrapped("%s", types.c_str());
+        static float s_off[3] = {0, 0, 0};
+        ImGui::SetNextItemWidth(-90);
+        ImGui::InputFloat3(T("Offset"), s_off, "%.1f");
+        ImGui::SameLine();
+        if (ImGui::Button(T("Move all")))
+        {
+            const std::vector<PLACE> apl = PlacesOfSelection();
+            m_proj.begin(std::string(T("Move")) + " " + std::to_string(apl.size()) + " " + T("objects"));
+            for (const PLACE& q : apl)
+            {
+                glm::mat4 wq = MatWorld(q.ploLive);
+                wq[3] += glm::vec4(s_off[0], s_off[1], s_off[2], 0.0f);
+                SetPlaceWorld(q, wq);
+                FRecordPlace(q, "");
+            }
+            m_proj.end();
+        }
+        if (ImGui::Button(T("Duplicate"))) DuplicateSelection();
+        ImGui::SameLine();
+        if (ImGui::Button(T("Hide"))) HideSelection(true);
+        ImGui::SameLine();
+        if (ImGui::Button(T("Isolate"))) IsolateSelection();
+        ImGui::SameLine();
+        ImGui::PushStyleColor(ImGuiCol_Button, st::vec(st::danger, 0.75f));
+        if (ImGui::Button(T("Delete"))) DeleteSelection();
+        ImGui::PopStyleColor();
+        ImGui::SeparatorText(T("Primary (the last clicked)"));
+    }
     const auto ito = m_mpobj.find(plo);
     const EDOBJ* po = ito == m_mpobj.end() ? nullptr : &ito->second;
-    ImGui::PushStyleColor(ImGuiCol_Text, st::vec(st::cta));
-    ImGui::Text("%s", SzClass(plo->Cid()));
-    ImGui::PopStyleColor();
-    ImGui::SameLine();
-    ImGui::TextColored(st::vec(st::muted), "class 0x%X  oid %d", plo->Cid(), plo->oid);
+    {
+        // the header: its type's icon, its name, its type, class and oid
+        const OBJTYPEINFO& ti = InfoOfType(TypeOfLo(plo));
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        const ImVec2 p0 = ImGui::GetCursorScreenPos();
+        const float hIcon = ImGui::GetTextLineHeight() * 2.0f + 4;
+        dl->AddRectFilled(p0, ImVec2(p0.x + hIcon, p0.y + hIcon), st::u32(ti.rgb, 0.9f), 6.0f);
+        const char icon[2] = {ti.icon, 0};
+        const ImVec2 ts = ImGui::CalcTextSize(icon);
+        dl->AddText(ImGui::GetFont(), ImGui::GetFontSize() * 1.6f, ImVec2(p0.x + hIcon * 0.5f - ts.x * 0.8f, p0.y + hIcon * 0.5f - ts.y * 0.8f), st::u32(0x0A0F1C), icon);
+        ImGui::SetCursorScreenPos(ImVec2(p0.x + hIcon + 10, p0.y));
+        ImGui::BeginGroup();
+        ImGui::PushStyleColor(ImGuiCol_Text, st::vec(st::cta));
+        ImGui::TextUnformatted(NameOfObject(plo).c_str());
+        ImGui::PopStyleColor();
+        ImGui::TextColored(st::vec(st::muted), "%s  -  %s 0x%X  -  oid %d", T(ti.name), SzClass(plo->Cid()), plo->Cid(), plo->oid);
+        ImGui::EndGroup();
+        ImGui::SetCursorScreenPos(ImVec2(p0.x, p0.y + hIcon + 6));
+    }
+    // a job / task: played from there; a camera: what it shows (the preview panel)
+    if (const int oidTask = TaskToPlay(plo); oidTask > 0)
+    {
+        ImGui::PushStyleColor(ImGuiCol_Button, st::vec(st::cta));
+        ImGui::PushStyleColor(ImGuiCol_Text, st::vec(st::ctaText));
+        if (ImGui::Button(TypeOfLo(plo) == OT_Job ? T("Play this job") : T("Play from this task"))) PlayTestAt(oidTask, nullptr, 0.0f);
+        ImGui::PopStyleColor(2);
+        EdTip(T("Starts the game with the project loaded, this job started at this task (saved first)"));
+    }
     if (ImGui::BeginTable("info", 2, ImGuiTableFlags_SizingStretchProp))
     {
         auto row = [](const char* k, const std::string& v) {
@@ -984,6 +1344,7 @@ void CEditor::DrawInspector()
         ImGui::TextColored(st::vec(st::muted), "World position  %.1f, %.1f, %.1f", pw.x, pw.y, pw.z);
         ImGui::TextColored(st::vec(st::danger), "Placed at run time: not stored in the world file.");
     }
+    DrawBrushProperties(plo);
 #if EDFEAT_CURVES
     if (po && po->ipath >= 0) DrawPathInspector(plo);
 #endif
@@ -1004,6 +1365,7 @@ void CEditor::DrawInspector()
 #if EDFEAT_MODELS
     DrawModelSection(plo);
 #endif
+    if (ImGui::CollapsingHeader(TL("When it exists", "exists").c_str())) DrawExistence(plo, po);
 #if EDFEAT_OPTIONS
     DrawLinks(plo, po);
     ImGui::SeparatorText("Options");
@@ -1045,14 +1407,26 @@ void CEditor::DrawInspector()
 
 void CEditor::DrawWorldPanel()
 {
+    // the bottom dock between the tool strip and the right column (taller while scripts or dialogue are shown)
     const ImVec2 size = ImGui::GetIO().DisplaySize;
     const float top = ImGui::GetFrameHeight();
-    const float y = top + 8 + (size.y - top - 16) * 0.45f + 8;
-    // (wider while scripts or dialogue are shown)
-    const float w = (m_tabCur == 3 || m_tabCur == 5) ? std::min(760.0f, size.x - 430.0f) : 400.0f;
-    ImGui::SetNextWindowPos(ImVec2(8, y), ImGuiCond_Always);
-    ImGui::SetNextWindowSize(ImVec2(w, size.y - y - 38), ImGuiCond_Always);
-    ImGui::Begin("World", nullptr, ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse);
+    const float wRight = std::clamp(size.x * 0.25f, 330.0f, 470.0f);
+    const float x = 64, w = std::min(1600.0f, std::max(300.0f, size.x - wRight - 12 - x - 6));
+    if (!m_fDockOpen)
+    {
+        ImGui::SetNextWindowPos(ImVec2(x, size.y - 36 - 34), ImGuiCond_Always);
+        ImGui::Begin("##dockclosed", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBackground);
+        if (ImGui::SmallButton(T("Show the bottom panel"))) { m_fDockOpen = true; SaveViewState(); }
+        ImGui::End();
+        return;
+    }
+    const float h = std::max(220.0f, (size.y - top) * ((m_tabCur == 3 || m_tabCur == 5) ? 0.5f : 0.36f));
+    const float y = size.y - 36 - h;
+    ImGui::SetNextWindowPos(ImVec2(x, y), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(w, h), ImGuiCond_Always);
+    bool fOpen = true;
+    ImGui::Begin(TL("World", "world").c_str(), &fOpen, ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse);
+    if (!fOpen) { m_fDockOpen = false; SaveViewState(); }
     if (ImGui::BeginTabBar("worldtabs", ImGuiTabBarFlags_FittingPolicyScroll))
     {
         auto tab = [&](const char* name, int i) {
@@ -1063,8 +1437,9 @@ void CEditor::DrawWorldPanel()
 #if EDFEAT_MISSIONS
         if (tab("Missions", 1)) { DrawMissions(); ImGui::EndTabItem(); }
 #endif
+        if (tab(T("Assets"), 9)) { DrawAssets(); ImGui::EndTabItem(); }
 #if EDFEAT_STRUCT
-        if (tab("Create", 6)) { DrawCreate(); ImGui::EndTabItem(); }
+        if (tab("Create", 6)) { DrawBrushTools(); ImGui::SeparatorText(T("Copies of the world's objects")); DrawCreate(); ImGui::EndTabItem(); }
 #endif
 #if EDFEAT_OPTIONS
         if (tab("Areas", 7))
@@ -1132,16 +1507,6 @@ void CEditor::DrawWorldPanel()
         ImGui::EndTabBar();
     }
     ImGui::End();
-    // the status line
-    ImGui::SetNextWindowPos(ImVec2(0, size.y - 28), ImGuiCond_Always);
-    ImGui::SetNextWindowSize(ImVec2(size.x, 28), ImGuiCond_Always);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(10, 5));
-    ImGui::Begin("##status", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings);
-    ImGui::TextColored(st::vec(st::text2), "%s", m_status.c_str());
-    ImGui::SameLine(size.x - 330);
-    ImGui::TextColored(st::vec(st::muted), "camera %.0f, %.0f, %.0f   speed %.0f", m_cam.pos.x, m_cam.pos.y, m_cam.pos.z, m_speed);
-    ImGui::End();
-    ImGui::PopStyleVar();
 }
 
 void CEditor::Screenshot(const std::string& path)
@@ -1215,13 +1580,272 @@ bool CEditor::FRunScript()
         for (const EDITOBJREC& r : m_rec.aobj) ++nrec[r.depth == 0 ? 0 : r.plo ? 1 : 2];
         std::printf("editor: records: %d top-level, %d inside, %d without object; %zu fields\n", nrec[0], nrec[1], nrec[2], m_rec.afield.size());
     }
+    else if (c.verb == "classes")   // classes: every class in the world (count, base chain, model / matrix counts, a few oids, options)
+    {
+        std::map<int, std::vector<LO*>> mp;
+        for (const auto& up : m_psw->aploAll) mp[up->Cid()].push_back(up.get());
+        for (const auto& [cid, a] : mp)
+        {
+            std::string chain;
+            for (int b = g_acls[cid].cidBase; b > 0 && b < CID_Max; b = g_acls[b].cidBase) chain += std::string(" < ") + SzClass(b);
+            int cModel = 0, cMat = 0;
+            std::map<int, int> mpopt;
+            for (LO* plo : a)
+            {
+                cModel += FIsLoDerivedFrom(plo, EDCID(0x30)) && static_cast<ALO*>(plo)->pglobset != nullptr;
+                cMat += FHasMatrix(plo);
+                if (const auto it = m_mpobj.find(plo); it != m_mpobj.end())
+                    for (int i : it->second.aiopt) ++mpopt[m_rec.afield[std::size_t(i)].eopid];
+            }
+            std::string ex, opts;
+            for (std::size_t i = 0; i < a.size() && i < 4; ++i) ex += " " + std::to_string(a[i]->oid);
+            for (const auto& [e, n] : mpopt) opts += " " + std::to_string(e) + "x" + std::to_string(n);
+            std::printf("editor: class 0x%02X %s%s: %zu (model %d, matrix %d) oids%s opts%s\n", cid, SzClass(cid), chain.c_str(), a.size(), cModel, cMat, ex.c_str(), opts.c_str());
+        }
+    }
+    // ---- editor 2: types, visibility, the selection of several, snapping, copy / paste
+    else if (c.verb == "types")   // types: the objects per type (shown / all) and a few names
+    {
+        std::map<int, std::vector<LO*>> mp;
+        for (const auto& up : m_psw->aploAll) mp[TypeOfLo(up.get())].push_back(up.get());
+        for (const auto& [ot, a] : mp)
+        {
+            int cShown = 0;
+            std::string ex;
+            std::set<std::string> setNames;
+            for (LO* p : a)
+            {
+                cShown += !FHidden(p);
+                if (setNames.size() < 4 && setNames.insert(NameOfObject(p)).second) ex += (ex.empty() ? "" : ", ") + NameOfObject(p);
+            }
+            std::printf("editor: type %s (%s): %zu, %d shown: %s\n", InfoOfType(OBJTYPE(ot)).name, SzVisGroup(InfoOfType(OBJTYPE(ot)).vg), a.size(), cShown, ex.c_str());
+        }
+    }
+    else if (c.verb == "selecttype" || c.verb == "addtype")   // selecttype:TYPE (its English name or plural)
+    {
+        int ot = -1;
+        for (int i = 0; i < OT_Max; ++i)
+            if (c.arg == InfoOfType(OBJTYPE(i)).name || c.arg == InfoOfType(OBJTYPE(i)).plural) ot = i;
+        if (ot < 0) Status("selecttype: no type " + c.arg);
+        else SelectWhere([this, ot](LO* p) { return TypeOfLo(p) == ot && FSelectable(p); }, c.verb == "addtype");
+    }
+    else if (c.verb == "selectadd" || c.verb == "selecttoggle")   // selectadd:OID / selecttoggle:OID (an instance's proxy oid too)
+    {
+        const int oid = std::atoi(c.arg.c_str());
+        LO* p = nullptr;
+        for (const auto& up : m_psw->aploAll)
+            if (up->oid == oid && (!p || (FHasMatrix(up.get()) && !FHasMatrix(p)))) p = up.get();
+        if (!p)
+            for (const auto& up : m_psw->aploAll)
+                if (!up->paloParent && up->oidInstance == oid) { p = up.get(); break; }
+        if (c.verb == "selectadd") AddSelected(p);
+        else ToggleSelected(p);
+    }
+    else if (c.verb == "boxselect")   // boxselect:x0,y0,x1,y1 (window pixels)
+    {
+        float a[4] = {};
+        if (floats(c.arg, a, 4) == 4) BoxSelect(ImVec2(a[0], a[1]), ImVec2(a[2], a[3]), false);
+    }
+    else if (c.verb == "selprint")   // the selection: name, type, class, oid, position
+    {
+        std::printf("editor: selection %zu\n", m_asel.size());
+        for (LO* p : m_asel)
+        {
+            const glm::vec3 q = FHasMatrix(p) ? PosWorld(p) : glm::vec3(0.0f);
+            std::printf("editor: sel %s | %s | %s %d | %.2f %.2f %.2f\n", NameOfObject(p).c_str(), InfoOfType(TypeOfLo(p)).name, SzClass(p->Cid()), p->oid, q.x, q.y, q.z);
+        }
+    }
+    else if (c.verb == "hide") HideSelection(true);
+    else if (c.verb == "isolate") IsolateSelection();
+    else if (c.verb == "showall") ShowAll();
+    else if (c.verb == "hidetype" || c.verb == "hidegroup")   // hidetype:TYPE / hidegroup:VISGROUP (English names)
+    {
+        for (int i = 0; i < OT_Max && c.verb == "hidetype"; ++i)
+            if (c.arg == InfoOfType(OBJTYPE(i)).name || c.arg == InfoOfType(OBJTYPE(i)).plural) m_afTypeHidden[i] = true;
+        for (int i = 0; i < VG_Max && c.verb == "hidegroup"; ++i)
+            if (c.arg == SzVisGroup(VISGROUP(i))) m_afVgHidden[i] = true;
+        InvalidateVis();
+        SaveViewState();
+    }
+    else if (c.verb == "copy") CopySelection();
+    else if (c.verb == "paste") Paste(false);
+    else if (c.verb == "pasteinplace") Paste(true);
+    else if (c.verb == "dupsel") DuplicateSelection();
+    else if (c.verb == "delsel") DeleteSelection();
+    else if (c.verb == "grid") { m_gridSize = float(std::atof(c.arg.c_str())); m_fGridSnap = m_gridSize > 0; }
+    else if (c.verb == "snap")   // snap:GRID,ANGLE,SCALE (1 on, 0 off)
+    {
+        float a[3] = {};
+        floats(c.arg, a, 3);
+        m_fGridSnap = a[0] != 0;
+        m_fAngleSnap = a[1] != 0;
+        m_fScaleSnap = a[2] != 0;
+    }
+    else if (c.verb == "movesel" || c.verb == "rotatesel" || c.verb == "scalesel")   // the selection as the gizmo moves it (with the snapping)
+    {
+        const std::vector<PLACE> apl = PlacesOfSelection();
+        if (apl.empty()) { Status(c.verb + ": nothing to move"); return true; }
+        float a[3] = {};
+        floats(c.arg, a, 3);
+        glm::vec3 mid(0.0f);
+        for (const PLACE& q : apl) mid += PosWorld(q.ploLive);
+        mid /= float(apl.size());
+        glm::mat4 D(1.0f);
+        if (c.verb == "movesel")
+        {
+            // as a drag along each world axis in turn: the middle's coordinates onto the grid
+            glm::vec3 d(a[0], a[1], a[2]);
+            for (int i = 0; i < 3; ++i)
+                if (d[i] != 0) d[i] = SnapMove(mid[i] + d[i]) - mid[i];
+            D = glm::translate(glm::mat4(1.0f), d);
+        }
+        else if (c.verb == "rotatesel") D = glm::translate(glm::mat4(1.0f), mid) * glm::rotate(glm::mat4(1.0f), glm::radians(SnapAngle(a[0])), glm::vec3(0, 0, 1)) * glm::translate(glm::mat4(1.0f), -mid);
+        else D = glm::translate(glm::mat4(1.0f), mid) * glm::scale(glm::mat4(1.0f), glm::vec3(SnapScale(a[0] > 0 ? a[0] : 1.0f))) * glm::translate(glm::mat4(1.0f), -mid);
+        m_proj.begin(c.verb + " " + std::to_string(apl.size()) + " objects");
+        for (const PLACE& q : apl)
+        {
+            SetPlaceWorld(q, D * MatWorld(q.ploLive));
+            FRecordPlace(q, "");
+        }
+        m_proj.end();
+    }
+    else if (c.verb == "tool") m_tool = std::atoi(c.arg.c_str());
+    else if (c.verb == "selectgrouproot")   // selectgrouproot:NAME: the group's first root (placed or not)
+    {
+        LO* p = nullptr;
+        for (const auto& [igrp, aplo] : m_mpgroupRoots)
+            if (igrp >= 0 && igrp < int(m_index.groups.size()) && m_index.groups[std::size_t(igrp)].name == c.arg)
+                for (LO* plo : aplo)
+                    if (!p || (FIsLoDerivedFrom(plo, EDCID(0x30)) && !FIsLoDerivedFrom(p, EDCID(0x30)))) p = plo;
+        SelectOnly(p);
+        if (!p) Status("selectgrouproot: no group " + c.arg);
+    }
+    else if (c.verb == "donefile") ce::writeFile(ce::pathOf(c.arg), std::vector<uint8_t>{'1'});
+    else if (c.verb == "thumbs") WriteThumbs(c.arg);   // thumbs:DIR: every asset's thumbnail (+ assets.json, done)
+    else if (c.verb == "assets")   // the asset browser's list (name, types, instances)
+    {
+        BuildAssets();
+        for (const ASSET& a : m_aasset)
+        {
+            std::string t;
+            for (OBJTYPE ot : a.atype) t += std::string(" ") + InfoOfType(ot).name;
+            std::printf("editor: asset %s (%s) used %zu types%s\n", a.name.c_str(), a.group.c_str(), a.aoidProxy.size(), t.c_str());
+        }
+    }
+    else if (c.verb == "placeasset")   // placeasset:GROUP
+    {
+        if (!m_fAssetsBuilt) BuildAssets();
+        for (const ASSET& a : m_aasset)
+            if (a.group == c.arg) { PlaceAsset(a); break; }
+    }
+    else if (c.verb == "otherlevel") LoadOtherLevel(std::atoi(c.arg.c_str()));   // otherlevel:RECORD
+    else if (c.verb == "othermake")
+    {
+        std::error_code ec;
+        cane::fs::create_directories(ce::pathOf(AssetsDirOf(m_otherRecord)), ec);
+        cane::fs::remove(ce::pathOf(AssetsDirOf(m_otherRecord)) / "done", ec);
+        StartOtherLevelEditor(m_otherRecord, "thumbs:" + AssetsDirOf(m_otherRecord) + ";quit");
+        m_fOtherPending = true;
+    }
+    else if (c.verb == "waitother") { if (m_fOtherPending) { m_iscript--; m_waitScript = 10; m_pollFrame = 29; } else std::printf("editor: other level: %zu assets\n", m_aother.size()); }
+#if EDFEAT_MODELS
+    else if (c.verb == "importother") ImportFromOtherLevel(c.arg);   // importother:GROUP (of otherlevel's level)
+    else if (c.verb == "waitimport") { if (!m_importPending.empty()) { m_iscript--; m_waitScript = 10; m_pollFrame = 29; } }   // (until the pending import is done)
+#endif
+    else if (c.verb == "assettab") { m_tab = 9; m_assetSrc = std::atoi(c.arg.c_str()); }
+#if EDFEAT_MODELS
+    else if (c.verb == "brush")   // brush:SHAPE:W,D,H[:N[:TEXOID]]: a brush made in front of the camera (SHAPE: block ramp stairs cylinder floor)
+    {
+        std::stringstream ss(c.arg);
+        std::string shape, size, n, tex;
+        std::getline(ss, shape, ':');
+        std::getline(ss, size, ':');
+        std::getline(ss, n, ':');
+        std::getline(ss, tex, ':');
+        BRUSH b;
+        static const char* const s_a[] = {"block", "ramp", "stairs", "cylinder", "floor"};
+        for (int i = 0; i < 5; ++i)
+            if (shape == s_a[i]) b.shape = i;
+        float a[3] = {b.size.x, b.size.y, b.size.z};
+        floats(size, a, 3);
+        b.size = glm::vec3(a[0], a[1], a[2]);
+        if (!n.empty()) b.steps = b.segments = std::atoi(n.c_str());
+        if (!tex.empty()) b.texFrom = std::atoi(tex.c_str());
+        std::string error;
+        const int oid = CreateBrush(b, nullptr, error);
+        if (!oid) Status("brush: " + error);
+        else std::printf("editor: brush %s oid %d\n", shape.c_str(), oid);
+    }
+    else if (c.verb == "brushset")   // brushset:W,D,H: the selected brush's size, made again
+    {
+        BRUSH* pb = PbrushOf(m_plSel);
+        float a[3] = {};
+        std::string error;
+        if (!pb || floats(c.arg, a, 3) != 3) Status("brushset: not a brush");
+        else { pb->size = glm::vec3(a[0], a[1], a[2]); if (!FRebuildBrush(*pb, error)) Status("brushset: " + error); }
+    }
+#endif
+    else if (c.verb == "brushes") { for (const BRUSH& b : m_abrush) std::printf("editor: brush oid %d shape %d size %.0f %.0f %.0f\n", b.oid, b.shape, b.size.x, b.size.y, b.size.z); }
+    else if (c.verb == "playdry") m_fPlayDry = c.arg != "0";
+    else if (c.verb == "playtask") PlayTestAt(std::atoi(c.arg.c_str()), nullptr, 0.0f);   // playtask:OID (a job's oid: its first task)
+    else if (c.verb == "playjob") { if (LO* pj = PloOid(std::atoi(c.arg.c_str()), EDCID(0x84))) PlayTestAt(TaskToPlay(pj), nullptr, 0.0f); }
+    else if (c.verb == "playhere") PlayFromView();
+    else if (c.verb == "playmenu") m_fOpenPlayMenu = true;
+    else if (c.verb == "lookthrough") { m_fLookThrough = c.arg != "0"; if (m_fLookThrough) m_camBeforeLook = m_cam; else m_cam = m_camBeforeLook; }
+    else if (c.verb == "camview")   // the selected camera's view printed
+    {
+        CAMERA cv;
+        if (FCameraView(m_plSel, cv)) std::printf("editor: camera %d at %.1f %.1f %.1f dir %.3f %.3f %.3f fov %.1f\n", m_plSel->oid, cv.pos.x, cv.pos.y, cv.pos.z, cv.mat[0].x, cv.mat[0].y, cv.mat[0].z, cv.fovY);
+        else Status("camview: not a camera");
+    }
+    else if (c.verb == "camfromview")   // the selected camera object put at the editor's view
+    {
+        const glm::vec3 d = m_cam.Dir();
+        glm::vec3 r = glm::cross(d, glm::vec3(0, 0, 1));
+        r = glm::length(r) < 1e-4f ? glm::vec3(1, 0, 0) : glm::normalize(r);
+        const glm::mat4 W(glm::vec4(r, 0), glm::vec4(glm::cross(r, d), 0), glm::vec4(-d, 0), glm::vec4(m_cam.pos, 1));
+        PLACE pl;
+        if (m_plSel && FPlace(m_plSel, pl)) { SetPlaceWorld(pl, W); FRecordPlace(pl, "Camera from the view"); }
+    }
+    else if (c.verb == "camfov")   // camfov:DEGREES (option 1054, added when the camera has none)
+    {
+        const float r = glm::radians(float(std::atof(c.arg.c_str())));
+        float g = 0;
+        if (!m_plSel) return true;
+        if (FOptionFloat(m_plSel, EDEOPID(1054), g)) FSetOption(IfieldOption(m_plSel, EDEOPID(1054)), &r, 4, "Field of view");
+        else { std::vector<uint8_t> ab(4); std::memcpy(ab.data(), &r, 4); FAddOption(m_plSel, EDEOPID(1054), ab, "Field of view"); }
+    }
+    else if (c.verb == "outmode") m_outMode = std::atoi(c.arg.c_str());
+    else if (c.verb == "outtype")
+    {
+        m_outType = -1;
+        for (int i = 0; i < OT_Max; ++i)
+            if (c.arg == InfoOfType(OBJTYPE(i)).name || c.arg == InfoOfType(OBJTYPE(i)).plural) m_outType = i;
+    }
+    else if (c.verb == "outfilter") std::snprintf(m_outFilter, sizeof(m_outFilter), "%s", c.arg.c_str());
+    else if (c.verb == "dock") m_fDockOpen = c.arg != "0";
+#if EDGAME_SLY2
+    else if (c.verb == "eopids")   // eopids:A-B: the option descriptors (kind word, flags, field offset, setter, getter)
+    {
+        int a = 0, b = 0;
+        if (std::sscanf(c.arg.c_str(), "%d-%d", &a, &b) == 2)
+            for (int e = a; e <= b; ++e)
+            {
+                const uint32_t va = 0x2AC880u + uint32_t(e) * 0x28u;
+                std::printf("editor: eopid %d: w0 %08X grf %08X w2 %08X w3 %08X w4 %08X w5 %08X ib %X set %X w8 %08X get %X\n", e, g_disc.U32Elf(va), g_disc.U32Elf(va + 4),
+                            g_disc.U32Elf(va + 8), g_disc.U32Elf(va + 12), g_disc.U32Elf(va + 16), g_disc.U32Elf(va + 20), g_disc.U32Elf(va + 0x18), g_disc.U32Elf(va + 0x1C),
+                            g_disc.U32Elf(va + 0x20), g_disc.U32Elf(va + 0x24));
+            }
+    }
+#endif
     else if (c.verb == "find")   // find:CLASS: the placed objects of a class (their oid and position)
     {
         for (const auto& up : m_psw->aploAll)
             if (c.arg == SzClass(up->Cid()) && FHasMatrix(up.get()))
             {
                 const glm::vec3 p = PosWorld(up.get());
-                std::printf("editor: find %s oid %d at %.0f %.0f %.0f\n", c.arg.c_str(), up->oid, p.x, p.y, p.z);
+                const std::string grp = up->igrp >= 0 && up->igrp < int(m_index.groups.size()) ? m_index.groups[up->igrp].name : "-";
+                std::printf("editor: find %s oid %d at %.0f %.0f %.0f group %s inst %d\n", c.arg.c_str(), up->oid, p.x, p.y, p.z, grp.c_str(), up->oidInstance);
             }
     }
     else if (c.verb == "selectnear")   // selectnear:x,y,z: the movable root object nearest that point
@@ -1662,6 +2286,8 @@ int CEditor::Run()
     }
     InitClasses();
     if (!FLoad(error)) { std::fprintf(stderr, "editor: %s\n", error.c_str()); return 1; }
+    LoadViewState();
+    LoadBrushes();
     std::printf("editor: %s (record %d): %zu objects, %zu groups, project %s\n", pe->name.c_str(), m_eo.record, m_psw->aploAll.size(),
                 m_index.groups.size(), ce::utf8(m_proj.dir).c_str());
 
@@ -1719,23 +2345,56 @@ int CEditor::Run()
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplGlfw_NewFrame();
         ImGui::NewFrame();
+        SyncSelection();
         CameraInput(dt);
+        UpdateLookThrough();
         DrawMenu();
-        DrawTree();
+        DrawToolStrip();
+        DrawOutliner();
         DrawInspector();
         DrawWorldPanel();
+        DrawStatusBar();
         DrawProblems();
         DrawFileDialogs();
         DrawHelp();
         DrawMarkers();
+        DrawCameraFrusta();
+        DrawCameraPanel();
         const int ipointBefore = m_ipoint;
         const bool fCurveBefore = m_fCurveMode;
         DrawPaths();
         const bool fPointPicked = m_ipoint != ipointBefore || m_fCurveMode != fCurveBefore;
         DrawGizmo();
-        if (m_axisDrag < 0 && !fPointPicked && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !io.WantCaptureMouse) Pick(io.MousePos.x, io.MousePos.y);
+        // a click picks (Ctrl / Shift: several); a drag from empty space draws a box (the select tool, or Alt+drag)
+        if (m_axisDrag < 0 && !fPointPicked && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && !io.WantCaptureMouse)
+        {
+            m_fClickPending = true;
+            m_mouseDown = io.MousePos;
+        }
+        if (m_fClickPending && m_axisDrag >= 0) m_fClickPending = false;
+        if (m_fClickPending)
+        {
+            const float d = std::hypot(io.MousePos.x - m_mouseDown.x, io.MousePos.y - m_mouseDown.y);
+            if (d > 6.0f && (m_tool == 0 || io.KeyAlt)) m_fBoxDrag = true;
+            if (m_fBoxDrag)
+            {
+                ImDrawList* dlb = ImGui::GetForegroundDrawList();
+                dlb->AddRectFilled(m_mouseDown, io.MousePos, st::u32(st::accent, 0.12f));
+                dlb->AddRect(m_mouseDown, io.MousePos, st::u32(st::accent, 0.9f), 0, 0, 1.5f);
+            }
+            if (!ImGui::IsMouseDown(ImGuiMouseButton_Left))
+            {
+                if (m_fBoxDrag) BoxSelect(m_mouseDown, io.MousePos, io.KeyShift || io.KeyCtrl);
+                else if (d <= 6.0f) Pick(m_mouseDown.x, m_mouseDown.y);
+                m_fClickPending = m_fBoxDrag = false;
+            }
+        }
+        ApplyVisibility();
         ImGui::Render();
         UpdateShaderAnimations(float(t), dt);
+        RenderPendingThumbs();
+        PollOtherLevel();
+        RenderCameraPreview();
         RenderScene(m_scene, m_cam, m_opts);
         g_gl.Present();
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
@@ -1759,6 +2418,13 @@ int CEditor::Run()
     return 0;
 }
 }  // namespace edimpl
+
+#include "editor_lang.inc"
+#include "editor_types.inc"
+#include "editor_exist.inc"
+#include "editor_camera.inc"
+#include "editor_brush.inc"
+#include "editor_assets.inc"
 
 using namespace edimpl;
 

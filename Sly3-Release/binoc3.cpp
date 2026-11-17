@@ -78,7 +78,7 @@ void SetWindowArgs(BINOCWIN3& w)
     auto nopt = [](const LO* plo, int eopid, uint32_t ib) {
         for (const OPT& o : plo->aopt)
             if (o.eopid == eopid && !o.aval.empty()) return o.aval[0].n;
-        return int(plo->U32Field(0, ib, uint32_t(-1)));
+        return int(plo->U32Field3(0, ib, uint32_t(-1)));
     };
     const int idName = nopt(pjob->plo, 1370, 0x60);
     if (idName == -1) return;

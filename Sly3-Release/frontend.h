@@ -91,6 +91,10 @@ bool FTitleWorld();
 void ShowTitle();
 // orig 0x00161A58 (3): the game record at a world's start (request flags 1: reset, 0x40: the pending save)
 void OnGameRecordEvent(int grfReq);
+// orig3 0x00184A08 (from 0x25AFD8, before the world's file is read by 0x14F440): the game record for the world being
+// loaded (request flags 1: reset for the title, 0x40 (Sly 3's 0x10, 0x18AC60): the pending save copied in). Sly 3's
+// load reads the record (the option sets 0x1500F0, the tasks), so this comes before it; transition.cpp
+void OnGameRecordBeforeLoad3(int grfReq);
 // the exits (class 0x1A): orig 0x00228358 / 0x002283D0
 void SetExitState(LO* plo, int n);
 void TriggerExit(LO* plo);

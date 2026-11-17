@@ -77,16 +77,16 @@ TALLY3& Tally(LO* plo)
     if (!t.fFields && plo)
     {
         // (the options' fields: natively stored as the loader read them)
-        t.from = int(plo->U32Field(0, 0x130, 0));
-        t.to = int(plo->U32Field(0, 0x134, 0));
-        t.total = int(plo->U32Field(0, 0x138, 0));
+        t.from = int(plo->U32Field3(0, 0x130, 0));
+        t.to = int(plo->U32Field3(0, 0x134, 0));
+        t.total = int(plo->U32Field3(0, 0x138, 0));
         t.fFields = true;
     }
     return t;
 }
 
-bool FRecordCheck(const LO* plo) { return plo->U32Field(0, 0x128, 0) != 0; }
-int IdTitle(const LO* plo) { return int(plo->U32Field(0, 0x12C, 0xFFFFFFFFu)); }
+bool FRecordCheck(const LO* plo) { return plo->U32Field3(0, 0x128, 0) != 0; }
+int IdTitle(const LO* plo) { return int(plo->U32Field3(0, 0x12C, 0xFFFFFFFFu)); }
 
 const std::vector<std::string> c_apathHigh = {"hack_multi", "nHighScore"};
 int NRefT(const CRef& r) { return r.m_tagk == TAGK_S32 ? r.m_n : r.m_tagk == TAGK_F32 ? int(r.m_g) : r.m_tagk == TAGK_Bool ? int(r.m_bool) : 0; }

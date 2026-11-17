@@ -809,7 +809,18 @@ void PlayQueuedMovies(bool fWindow)
 // ------------------------------------------------------------ the title, the game start
 // orig 0x00161A58 (3): the game record at the world's start: reset for the title (request flags 1), the pending
 // save (0x40, 0x166008)
-void OnGameRecordEvent(int grfReq)
+// (s3-bootfix) Sly 3 resets / restores the record in 0x25AFD8 -> 0x184A08, before 0x14F440 reads the world's file, not
+// after it as Sly 2's 0x20E3C0 broadcast does. Done after the load (as before), the world loaded with the previous
+// record: the boot's m_ext (and Quit Game's, 0x18AD90) with a played game's record, its option set (0x1500F0's progress
+// fallback) and task states those of the game: no intro, no title, Sly in play on the dock (the record that RunGame
+// reads from Saves/save1 at the start, or the game just quit). SLY3_RECORDAFTERLOAD=1: after the load, as before.
+static bool FRecordAfterLoad3()
+{
+    static const bool s_f = std::getenv("SLY3_RECORDAFTERLOAD") != nullptr;
+    return s_f;
+}
+
+static void ResetOrRestoreRecord(int grfReq)
 {
     if (grfReq & 1)
     {
@@ -828,6 +839,16 @@ void OnGameRecordEvent(int grfReq)
         ApplyGameSettings(g_gamesave);
     }
     s_fPending = false;
+}
+
+void OnGameRecordBeforeLoad3(int grfReq)
+{
+    if (!FRecordAfterLoad3()) ResetOrRestoreRecord(grfReq);
+}
+
+void OnGameRecordEvent(int grfReq)
+{
+    if (FRecordAfterLoad3()) ResetOrRestoreRecord(grfReq);
     ChooseNewestSlot();   // (orig 0x1AB630: the card's slots read at the world's start)
     // (0x161A58 case 3's end: outside an episode, the card in state 6 without a chosen slot, a record without a game:
     // the newest slot's settings, when it has a game)

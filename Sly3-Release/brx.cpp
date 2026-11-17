@@ -1,4 +1,11 @@
 #include <execinfo.h>
+#include <link.h>
+#include <unistd.h>
+#include <map>
+#include <tuple>
+#include <unordered_map>
+#include <memory>
+#include <set>
 #include "wr.h"
 #include "game/sly3.h"
 #include "worldglobals.h"
@@ -124,12 +131,174 @@ EOPID EopidFromIndex(int i)
         if (const EOPID2ROW* p2 = Peopid2(Eopid2FromEopid3(i)); p2 && (p2->grf & 0x90) && !(p2->grf & 0x401) &&
                                                                ((p2->grf ^ e.grf) & 0x2000) == 0)
         {
-            e.c18 = static_cast<int>(p2->c18);
+            // (a set-only Sly 2 twin (grf 0x10) has no +0x18 (0): its field is its +0x10, ibSet; 7 Sly 3 records were
+            // stored at offset 0 natively, e.g. EOPID 1622's LM at +0x40 of the twin 1402)
+            e.c18 = static_cast<int>((p2->grf & 0x80) ? p2->c18 : p2->pfnScript);
             e.pfnGet = p2->pfnGet;
         }
     return e;
 }
 
+}  // namespace
+
+// ---------------------------------------------------------------- PC: where field options live (LO::afield)
+// The original stores an option's value in the object at its record's offset: the loader at ibFile (+0x18, 0x150AE8),
+// a script's seto! at ibSet (+0x10, 0x201110; the same offset when both are set), the game's code reads the struct.
+// Natively the values live in LO::afield, keyed by (sub-object getter, offset), and the code copied from Sly 2 reads
+// Sly 2's offsets: an option with a Sly 2 twin (eopidmap.inc) is stored at the twin's offset and getter (EopidFromIndex),
+// one without at Sly 3's. This is the one place that decides it, for the loader, the splice's seto! / the field getter
+// (spliceglue.cpp) and the code written from Sly 3 (LO::U32Field3 / SetField3: the original's offsets, translated
+// here). Where a translated option's words would land on the words of an option stored at Sly 3's offset (21 pairs in
+// 14 classes, e.g. the water's flow (Sly 2's +0x160) on its Sly 3 field +0x168, EOPID 927), the second is stored apart
+// (FIELD_TAG3 | its Sly 3 offset: only U32Field3 reaches it), as no two such options share a word in the original.
+namespace
+{
+constexpr uint32_t FIELD_TAG3 = 0x40000000u;
+
+// the words an option's value fills (the loader's stores: kind 1 one float, 10 two, 2 / 9 / 11 three, else one word)
+int CwordField(int k) { return k == 1 ? 1 : k == 10 ? 2 : (k == 2 || k == 9 || k == 11) ? 3 : 1; }
+
+bool FFieldRecord(uint32_t grf) { return (grf & 0x90) && !(grf & 0x401); }
+
+// the original's key: (the record's sub-object getter (grf 0x2000), ibFile (grf 0x80) or ibSet (grf 0x10))
+OPTFIELDKEY Sly3FieldKey(int eopid)
+{
+    OPTFIELDKEY key;
+    if (eopid < 0 || eopid >= sly3::CEOPID) return key;
+    const uint32_t va = VA_AEOPID + static_cast<uint32_t>(eopid) * CB_EOPID;
+    const uint32_t grf = g_disc.U32Elf(va + 4);
+    if (!FFieldRecord(grf)) return key;
+    key.fValid = true;
+    key.pfnGet = (grf & 0x2000) ? g_disc.U32Elf(va + 0x24) : 0;
+    key.ib = g_disc.U32Elf(va + ((grf & 0x80) ? 0x18 : 0x10));
+    return key;
+}
+
+// the key without the class's collisions: the Sly 2 twin's (EopidFromIndex), else Sly 3's
+OPTFIELDKEY TranslatedFieldKey(int eopid)
+{
+    OPTFIELDKEY key = Sly3FieldKey(eopid);
+    if (!key.fValid) return key;
+    const uint32_t grf = g_disc.U32Elf(VA_AEOPID + static_cast<uint32_t>(eopid) * CB_EOPID + 4);
+    if (const EOPID2ROW* p2 = Peopid2(Eopid2FromEopid3(eopid)); p2 && FFieldRecord(p2->grf) && ((p2->grf ^ grf) & 0x2000) == 0)
+    {
+        key.ib = (p2->grf & 0x80) ? p2->c18 : p2->pfnScript;
+        key.pfnGet = (grf & 0x2000) ? p2->pfnGet : 0;
+    }
+    return key;
+}
+
+struct CLASSFIELDS
+{
+    std::unordered_map<int, OPTFIELDKEY> mpeopidkey;                                  // EOPID -> where it is stored
+    std::map<std::pair<uint32_t, uint32_t>, std::pair<uint32_t, uint32_t>> mpword3;   // the original's word -> its store
+};
+
+// the class's field options (its list D_00279AD0[cid], the splice's EopidFromOptid table: the inherited ones too)
+std::vector<int> AeopidFieldsOfClass(int cid)
+{
+    std::vector<int> a;
+    if (cid < 0 || cid >= sly3::CCLASS) return a;
+    const uint32_t vaTable = S3VA(0x279AD0);
+    const uint32_t c = g_disc.U32Elf(vaTable + uint32_t(cid) * 8), va = g_disc.U32Elf(vaTable + uint32_t(cid) * 8 + 4);
+    if (c == 0 || c > 4096 || !va) return a;
+    for (uint32_t i = 0; i < c; ++i)
+    {
+        const int eopid = static_cast<int>((g_disc.U32Elf(va + i * 8 + 4) - VA_AEOPID) / CB_EOPID);
+        if (eopid >= 0 && eopid < sly3::CEOPID && FFieldRecord(g_disc.U32Elf(VA_AEOPID + uint32_t(eopid) * CB_EOPID + 4)))
+            a.push_back(eopid);
+    }
+    std::sort(a.begin(), a.end());
+    a.erase(std::unique(a.begin(), a.end()), a.end());
+    return a;
+}
+
+const CLASSFIELDS* PclassFields(int cid)
+{
+    static std::vector<std::unique_ptr<CLASSFIELDS>> s_a(sly3::CCLASS);
+    if (cid < 0 || cid >= sly3::CCLASS) return nullptr;
+    if (s_a[size_t(cid)]) return s_a[size_t(cid)].get();
+    auto pcf = std::make_unique<CLASSFIELDS>();
+    const std::vector<int> aeopid = AeopidFieldsOfClass(cid);
+    using WORD = std::pair<uint32_t, uint32_t>;
+    auto words = [](const OPTFIELDKEY& k, int eopid) {
+        std::vector<WORD> a;
+        const int c = CwordField(static_cast<int>(g_disc.U32Elf(VA_AEOPID + uint32_t(eopid) * CB_EOPID)));
+        for (int i = 0; i < c; ++i) a.emplace_back(k.pfnGet, k.ib + 4u * uint32_t(i));
+        return a;
+    };
+    auto overlap3 = [&](int e1, int e2) {   // (the two share a word in the original too: an alias the game has)
+        const std::vector<WORD> a1 = words(Sly3FieldKey(e1), e1), a2 = words(Sly3FieldKey(e2), e2);
+        for (const WORD& w : a1)
+            if (std::find(a2.begin(), a2.end(), w) != a2.end()) return true;
+        return false;
+    };
+    std::map<WORD, int> mpwordeopid;   // the words the translated options fill
+    for (int eopid : aeopid)
+    {
+        const OPTFIELDKEY k = TranslatedFieldKey(eopid);
+        if (k == Sly3FieldKey(eopid)) continue;
+        pcf->mpeopidkey[eopid] = k;
+        for (const WORD& w : words(k, eopid)) mpwordeopid.emplace(w, eopid);
+    }
+    for (int eopid : aeopid)
+    {
+        OPTFIELDKEY k = TranslatedFieldKey(eopid);
+        if (!(k == Sly3FieldKey(eopid))) continue;
+        for (const WORD& w : words(k, eopid))
+            if (auto it = mpwordeopid.find(w); it != mpwordeopid.end() && !overlap3(it->second, eopid))
+            {
+                k.ib |= FIELD_TAG3;
+                break;
+            }
+        pcf->mpeopidkey[eopid] = k;
+    }
+    for (int eopid : aeopid)
+    {
+        const std::vector<WORD> a3 = words(Sly3FieldKey(eopid), eopid), a = words(pcf->mpeopidkey[eopid], eopid);
+        for (size_t i = 0; i < a3.size(); ++i) pcf->mpword3.emplace(a3[i], a[i]);
+    }
+    s_a[size_t(cid)] = std::move(pcf);
+    return s_a[size_t(cid)].get();
+}
+}
+
+OPTFIELDKEY OptionFieldKey(int cid, int eopid3)
+{
+    if (const CLASSFIELDS* pcf = PclassFields(cid))
+        if (auto it = pcf->mpeopidkey.find(eopid3); it != pcf->mpeopidkey.end()) return it->second;
+    return TranslatedFieldKey(eopid3);   // (an option outside the class's list: no collision to resolve)
+}
+
+OPTFIELDKEY Sly3OptionFieldKey(int eopid3) { return Sly3FieldKey(eopid3); }
+
+void FieldWordFromSly3(int cid, uint32_t pfnGet3, uint32_t ib3, uint32_t* ppfnGet, uint32_t* pib)
+{
+    *ppfnGet = pfnGet3;
+    *pib = ib3;
+    if (const CLASSFIELDS* pcf = PclassFields(cid))
+        if (auto it = pcf->mpword3.find({pfnGet3, ib3}); it != pcf->mpword3.end())
+        {
+            *ppfnGet = it->second.first;
+            *pib = it->second.second;
+        }
+}
+
+namespace
+{
+OPTFIELDKEY LoadFieldKeyImpl(int cid, int eopid)
+{
+    OPTFIELDKEY key;
+    if (eopid < 0 || eopid >= sly3::CEOPID) return key;
+    // (the loader masks the record's flags with 0x2580: a field is stored for grf 0x80 without 0x401)
+    const uint32_t grf = g_disc.U32Elf(VA_AEOPID + static_cast<uint32_t>(eopid) * CB_EOPID + 4);
+    if (!(grf & 0x80) || (grf & 0x401)) return key;
+    return OptionFieldKey(cid, eopid);
+}
+}
+
+namespace
+{
 // The value of an option of kind k read by the field (grf 0x80) and setter paths of 0x13E818 (the same reads).
 OPTVAL ReadOptionValue(int k, CBinaryInputStream* pbis)
 {
@@ -178,24 +347,93 @@ OPTVAL ReadOptionValue(int k, CBinaryInputStream* pbis)
 }
 }
 
-uint32_t LO::U32Field(uint32_t pfnGetter, uint32_t ib, uint32_t uDefault) const
+// (debug: SLY3_FIELDAUDIT=DIR, brx.h) the native reads of afield: (cid, getter, offset, caller) -> count
+namespace
+{
+struct FIELDAUDIT
+{
+    std::string dir;
+    std::map<std::tuple<int, uint32_t, uint32_t, uintptr_t, char>, uint64_t> mpcount;
+    ~FIELDAUDIT()
+    {
+        uintptr_t base = 0;
+        dl_iterate_phdr([](dl_phdr_info* pi, size_t, void* pv) { *static_cast<uintptr_t*>(pv) = pi->dlpi_addr; return 1; }, &base);
+        const std::string path = dir + "/reads." + std::to_string(getpid()) + ".tsv";
+        if (std::FILE* pf = std::fopen(path.c_str(), "w"))
+        {
+            for (const auto& [k, c] : mpcount)
+                std::fprintf(pf, "%d\t0x%X\t0x%X\t0x%lX\t%llu\t%c\n", std::get<0>(k), std::get<1>(k), std::get<2>(k),
+                             static_cast<unsigned long>(std::get<3>(k) - base), static_cast<unsigned long long>(c), std::get<4>(k));
+            std::fclose(pf);
+        }
+    }
+};
+FIELDAUDIT* PfieldAudit()
+{
+    static FIELDAUDIT* s_p = [] {
+        const char* sz = std::getenv("SLY3_FIELDAUDIT");
+        if (!sz || !*sz) return static_cast<FIELDAUDIT*>(nullptr);
+        static FIELDAUDIT s_audit;
+        s_audit.dir = sz;
+        return &s_audit;
+    }();
+    return s_p;
+}
+}
+
+namespace
+{
+uint32_t U32FieldRaw(const LO* plo, uint32_t pfnGetter, uint32_t ib, uint32_t uDefault)
 {
     const uint64_t key = (uint64_t(pfnGetter) << 32) | ib;
-    for (const auto& [k, u] : afield)
+    for (const auto& [k, u] : plo->afield)
         if (k == key) return u;
     return uDefault;
+}
+void SetFieldRaw(LO* plo, uint32_t pfnGetter, uint32_t ib, uint32_t u)
+{
+    const uint64_t key = (uint64_t(pfnGetter) << 32) | ib;
+    if (static const int s_ib = std::getenv("SLY2N_FIELDPRINT") ? int(std::strtol(std::getenv("SLY2N_FIELDPRINT"), nullptr, 0)) : -1; s_ib == int(ib))
+        std::printf("field %d +0x%X = %u (getter 0x%X)\n", plo->oid, ib, u, pfnGetter);  // (debug: a field's stores)
+    if (static const int s_oid = std::getenv("SLY2N_FIELDOID") ? std::atoi(std::getenv("SLY2N_FIELDOID")) : -1; s_oid == plo->oid)
+        std::printf("field %d +0x%X = 0x%X (getter 0x%X)\n", plo->oid, ib, u, pfnGetter);  // (debug: an object's stores)
+    for (auto& [k, uOld] : plo->afield)
+        if (k == key) { uOld = u; return; }
+    plo->afield.emplace_back(key, u);
+}
+inline void NoteFieldAccess(const LO* plo, uint32_t pfnGetter, uint32_t ib, char ch, void* pvCaller)
+{
+    if (FIELDAUDIT* pa = PfieldAudit()) [[unlikely]]
+        ++pa->mpcount[{plo->Cid(), pfnGetter, ib, reinterpret_cast<uintptr_t>(pvCaller), ch}];
+}
+}
+
+uint32_t LO::U32Field(uint32_t pfnGetter, uint32_t ib, uint32_t uDefault) const
+{
+    NoteFieldAccess(this, pfnGetter, ib, 'r', __builtin_return_address(0));
+    return U32FieldRaw(this, pfnGetter, ib, uDefault);
 }
 
 void LO::SetField(uint32_t pfnGetter, uint32_t ib, uint32_t u)
 {
-    const uint64_t key = (uint64_t(pfnGetter) << 32) | ib;
-    if (static const int s_ib = std::getenv("SLY2N_FIELDPRINT") ? int(std::strtol(std::getenv("SLY2N_FIELDPRINT"), nullptr, 0)) : -1; s_ib == int(ib))
-        std::printf("field %d +0x%X = %u (getter 0x%X)\n", oid, ib, u, pfnGetter);  // (debug: a field's stores)
-    if (static const int s_oid = std::getenv("SLY2N_FIELDOID") ? std::atoi(std::getenv("SLY2N_FIELDOID")) : -1; s_oid == oid)
-        std::printf("field %d +0x%X = 0x%X (getter 0x%X)\n", oid, ib, u, pfnGetter);  // (debug: an object's stores)
-    for (auto& [k, uOld] : afield)
-        if (k == key) { uOld = u; return; }
-    afield.emplace_back(key, u);
+    NoteFieldAccess(this, pfnGetter, ib, 'w', __builtin_return_address(0));
+    SetFieldRaw(this, pfnGetter, ib, u);
+}
+
+uint32_t LO::U32Field3(uint32_t pfnGetter3, uint32_t ib3, uint32_t uDefault) const
+{
+    uint32_t pfn, ib;
+    FieldWordFromSly3(Cid(), pfnGetter3, ib3, &pfn, &ib);
+    NoteFieldAccess(this, pfn, ib, 'R', __builtin_return_address(0));
+    return U32FieldRaw(this, pfn, ib, uDefault);
+}
+
+void LO::SetField3(uint32_t pfnGetter3, uint32_t ib3, uint32_t u)
+{
+    uint32_t pfn, ib;
+    FieldWordFromSly3(Cid(), pfnGetter3, ib3, &pfn, &ib);
+    NoteFieldAccess(this, pfn, ib, 'W', __builtin_return_address(0));
+    SetFieldRaw(this, pfn, ib, u);
 }
 
 // orig 0x0013E690 RefReadOption
@@ -354,7 +592,8 @@ void LoadOptionFromBrx(OPT& opt, LO* plo, int eopid, int grf, CBinaryInputStream
         // orig: 0x13E818 stores through the getter's returned object. A generated
         // target point is an actual child, so its authored flags belong to it.
         LO* pfield = pchildField ? pchildField : plo;
-        const uint32_t pfn = pchildField ? 0 : ((grf & 0x2000) ? e.pfnGet : 0);
+        const OPTFIELDKEY key = OptionFieldKey(plo->Cid(), eopid);   // (the twin's offset, as e.c18; brx.h)
+        const uint32_t pfn = pchildField ? 0 : key.pfnGet;
         // 0x13E818 stores both floats of kind 10 (e.g. a job marker's in/out radii), just as it stores vectors.
         const uint32_t cg = e.k == 1 ? 1 : e.k == 10 ? 2 : (e.k == 2 || e.k == 9 || e.k == 11) ? 3 : 0;
         if (cg)
@@ -362,9 +601,9 @@ void LoadOptionFromBrx(OPT& opt, LO* plo, int eopid, int grf, CBinaryInputStream
             {
                 uint32_t u;
                 std::memcpy(&u, &v.ag[i], 4);
-                pfield->SetField(pfn, static_cast<uint32_t>(e.c18) + 4 * i, u);
+                pfield->SetField(pfn, key.ib + 4 * i, u);
             }
-        else pfield->SetField(pfn, static_cast<uint32_t>(e.c18), static_cast<uint32_t>(v.n));
+        else pfield->SetField(pfn, key.ib, static_cast<uint32_t>(v.n));
     }
     // the setters (grf 0x100) the activation keeps: option 13 the radius (vt slot 42), 14 the kind (0x1A6CA8)
     if (plo && (grf & 0x100) && !(grf & 0x2000))  // (the attach's 0x20 is mapped to 0x100: activate.cpp)
@@ -925,3 +1164,75 @@ void LoadSwObjsFromBrx(SW* psw, ALO* paloParent, CBinaryInputStream* pbis, LOSIN
 }
 int OidOfLo(const LO* plo) { return plo ? plo->oid : -1; }
 int CidOfLo(const LO* plo) { return plo ? static_cast<int>(plo->Cid()) : -1; }
+
+OPTFIELDKEY LoadFieldKey(int cid, int eopid3) { return LoadFieldKeyImpl(cid, eopid3); }
+
+static std::string StrFieldIb(const OPTFIELDKEY& k)
+{
+    char b[16];
+    std::snprintf(b, sizeof b, "0x%X", k.ib);
+    return k.fValid ? b : "-";
+}
+
+// (debug, brx.h) --option-fields PATH: for every class (its option list D_00279AD0[cid], orig3: the splice's
+// EopidFromOptid table) and every field option (grf 0x80 / 0x10, no 0x401): the key the loader stores the value at and
+// the key the splice's seto! stores it at, beside the Sly 3 record's own offsets (+0x18 ibFile / +0x10 ibSet) and the
+// Sly 2 twin's. Writes the table; prints the mismatches (both stores exist and differ; one store missing).
+int OptionFieldsCommand(const char* path)
+{
+    std::FILE* pf = std::fopen(path, "w");
+    if (!pf)
+    {
+        std::fprintf(stderr, "option-fields: cannot write %s\n", path);
+        return 1;
+    }
+    std::fprintf(pf, "cid\tclass\teopid\toptid\tk\tgrf\tload_get\tload_ib\tset_get\tset_ib\ts3_file\ts3_set\ts3_get\teopid2\tgrf2\tib2_file\tib2_set\tstatus\n");
+    const uint32_t vaTable = S3VA(0x279AD0);
+    int crow = 0, cmismatch = 0, cnoset = 0, cnoload = 0, cmap3 = 0, ctag = 0;
+    std::set<int> seteopidMismatch, seteopidNoset;
+    for (int cid = 0; cid < sly3::CCLASS; ++cid)
+    {
+        const uint32_t c = g_disc.U32Elf(vaTable + uint32_t(cid) * 8);
+        const uint32_t a = g_disc.U32Elf(vaTable + uint32_t(cid) * 8 + 4);
+        if (c == 0 || c > 4096 || !a) continue;
+        const char* szClass = sly3::SzClassName(cid);
+        for (uint32_t i = 0; i < c; ++i)
+        {
+            const int optid = static_cast<int>(g_disc.U32Elf(a + i * 8));
+            const int eopid = static_cast<int>((g_disc.U32Elf(a + i * 8 + 4) - VA_AEOPID) / CB_EOPID);
+            if (eopid < 0 || eopid >= sly3::CEOPID) continue;
+            const uint32_t va = VA_AEOPID + uint32_t(eopid) * CB_EOPID;
+            const uint32_t grf = g_disc.U32Elf(va + 4);
+            if (!(grf & 0x90) || (grf & 0x401)) continue;
+            ++crow;
+            const OPTFIELDKEY kl = LoadFieldKey(cid, eopid), ks = SetterFieldKey(cid, eopid);
+            const int e2 = Eopid2FromEopid3(eopid);
+            const EOPID2ROW* p2 = Peopid2(e2);
+            const char* szStatus = "ok";
+            if (kl.fValid && ks.fValid && !(kl == ks)) { szStatus = "MISMATCH"; ++cmismatch; seteopidMismatch.insert(eopid); }
+            else if (kl.fValid && !ks.fValid && (grf & 0x10)) { szStatus = "NOSET"; ++cnoset; seteopidNoset.insert(eopid); }
+            else if (!kl.fValid && ks.fValid && (grf & 0x80)) { szStatus = "NOLOAD"; ++cnoload; }
+            // (the code's reads at the original's offset, LO::U32Field3, find the option where it is stored)
+            const OPTFIELDKEY k3 = Sly3FieldKey(eopid), kStore = OptionFieldKey(cid, eopid);
+            uint32_t pfn3, ib3;
+            FieldWordFromSly3(cid, k3.pfnGet, k3.ib, &pfn3, &ib3);
+            if (!std::strcmp(szStatus, "ok") && (pfn3 != kStore.pfnGet || ib3 != kStore.ib)) { szStatus = "SLY3MAP"; ++cmap3; }
+            std::fprintf(pf, "%d\t%s\t%d\t%d\t%d\t0x%X\t0x%X\t%s\t0x%X\t%s\t0x%X\t0x%X\t0x%X\t%d\t0x%X\t0x%X\t0x%X\t%s\n", cid,
+                         szClass ? szClass : "?", eopid, optid, static_cast<int>(g_disc.U32Elf(va)), grf, kl.pfnGet,
+                         StrFieldIb(kl).c_str(),
+                         ks.pfnGet,
+                         StrFieldIb(ks).c_str(),
+                         g_disc.U32Elf(va + 0x18), g_disc.U32Elf(va + 0x10), g_disc.U32Elf(va + 0x24), e2, p2 ? p2->grf : 0,
+                         p2 ? p2->c18 : 0, p2 ? p2->pfnScript : 0, szStatus);
+            if (kStore.ib & FIELD_TAG3) ++ctag;
+            if (std::strcmp(szStatus, "ok"))
+                std::printf("%-8s cid 0x%02X %-14s eopid %4d optid %4d grf 0x%04X: load %s(0x%X, 0x%X) set %s(0x%X, 0x%X) [Sly 3 +0x18 0x%X +0x10 0x%X; Sly 2 %d]\n",
+                            szStatus, cid, szClass ? szClass : "?", eopid, optid, grf, kl.fValid ? "" : "none ", kl.pfnGet, kl.ib,
+                            ks.fValid ? "" : "none ", ks.pfnGet, ks.ib, g_disc.U32Elf(va + 0x18), g_disc.U32Elf(va + 0x10), e2);
+        }
+    }
+    std::fclose(pf);
+    std::printf("option-fields: %d (class, field option) rows; %d MISMATCH (%zu EOPIDs), %d NOSET (%zu EOPIDs), %d NOLOAD, %d SLY3MAP; "
+                "%d stored apart (FIELD_TAG3)\n", crow, cmismatch, seteopidMismatch.size(), cnoset, seteopidNoset.size(), cnoload, cmap3, ctag);
+    return 0;
+}

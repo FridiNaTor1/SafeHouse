@@ -57,6 +57,7 @@ static bool g_fRoutePocketPress = false;
 bool FPointInsideShape(LO* plo, const glm::vec3& pos);   // detect.cpp
 
 #include <algorithm>
+#include <deque>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -94,6 +95,8 @@ struct STEPR
     bool run = false;
     bool fPocket = false;  // (pocket: a tail into the guard's pickpocket volume)
     bool f3d = false;      // (tail 3d: the distance in 3-D, e.g. a player who climbed above the tailed guard)
+    bool fLock = false;    // (tail lock: the object chosen at the first frame followed, not the nearest copy each frame)
+    int cTrail = 0;        // (tail trail=K: put where the object's origin was K frames before (ground it stood on), not behind it)
     int oidUntil = -1;  // (point until=OID: the step ends once script OID starts; its frames are then the budget)
     int every = 0;      // (point every=N: the CSV's presses repeat every N frames)
     float aimed = -1.0f;  // (point aimed=RAD: the CSV's button presses (not its stick values) held back while the aim is off by more)
@@ -350,7 +353,7 @@ void Load()
         }
         else if (f[0] == "tail" && f.size() >= 5)
         {
-            // tail CID OID DIST N [DZ] [CSV] [until=TASK] [min=R] [3d]: for N frames (or until TASK is done), whenever the player is farther than DIST (2D) from the nearest such
+            // tail CID OID DIST N [DZ] [CSV] [until=TASK] [min=R] [3d] [lock] [trail=K]: for N frames (or until TASK is done), whenever the player is farther than DIST (2D) from the nearest such
             // object, he is put DIST/2 behind it (along its motion), DZ above its position (a follow job by teleports)
             s.kind = STEPR::Tail;
             // (until=TASK anywhere after N: the step also ends once that task is done (state >= 2))
@@ -358,6 +361,8 @@ void Load()
                 if (f[i].rfind("until=", 0) == 0) { s.oidUntil = std::atoi(f[i].c_str() + 6); f.erase(f.begin() + long(i--)); }
                 else if (f[i].rfind("min=", 0) == 0) { s.within = std::strtof(f[i].c_str() + 4, nullptr); f.erase(f.begin() + long(i--)); }
                 else if (f[i] == "3d") { s.f3d = true; f.erase(f.begin() + long(i--)); }
+                else if (f[i] == "lock") { s.fLock = true; f.erase(f.begin() + long(i--)); }
+                else if (f[i].rfind("trail=", 0) == 0) { s.cTrail = std::atoi(f[i].c_str() + 6); s.fLock = true; f.erase(f.begin() + long(i--)); }
             s.cid = static_cast<int>(std::strtol(f[1].c_str(), nullptr, 0)); s.oid = std::atoi(f[2].c_str());
             s.near = std::strtof(f[3].c_str(), nullptr); s.frames = std::atoi(f[4].c_str());
             s.dz = f.size() >= 6 ? std::strtof(f[5].c_str(), nullptr) : 50.0f;
@@ -1006,18 +1011,45 @@ bool FRouteSample(int frame, uint16_t* pgrf, uint8_t abAxis[4])
     if (s->kind == STEPR::Tail && !s->fPocket && g_psw)
     {
         static glm::vec3 s_posPrev(0.0f);
+        static LO* s_ploLock = nullptr;
         glm::vec3 po;
-        if (FNearestObj(s->cid, s->oid, pos.x, pos.y, &po))
+        bool fFound;
+        if (s->fLock)
+        {
+            if (rel == 1 || !s_ploLock || !s_ploLock->fInWorld)
+            {
+                s_ploLock = nullptr;
+                fFound = FNearestObj(s->cid, s->oid, pos.x, pos.y, &po, nullptr, &s_ploLock);
+            }
+            else
+            {
+                po = PosAloCenter(static_cast<ALO*>(s_ploLock));
+                fFound = true;
+            }
+        }
+        else fFound = FNearestObj(s->cid, s->oid, pos.x, pos.y, &po);
+        if (fFound)
         {
             if (rel == 1) s_posPrev = po;
             glm::vec3 d = po - s_posPrev;
             d.z = 0.0f;
             // (min=R: also when nearer than R while it moves (a guard walking back past the player would see him))
             const float dd = s->f3d ? glm::length(po - glm::vec3(pos.x, pos.y, pos.z)) : std::hypot(po.x - pos.x, po.y - pos.y);
-            if (rel > 1 && (dd > s->near || (s->within > 0.0f && dd < s->within && glm::length(d) > 1.0f)))
+            // (trail: the locked object's origin each frame, the oldest K frames back used)
+            static std::deque<glm::vec3> s_aposTrail;
+            if (s->cTrail > 0)
+            {
+                if (rel == 1) s_aposTrail.clear();
+                // (only where it stands: not mid-jump, so the player is never put over a gap it leapt)
+                if (s_ploLock && std::fabs(VelAloPos(static_cast<ALO*>(s_ploLock)).z) < 30.0f) s_aposTrail.push_back(PosLoWorld(s_ploLock));
+                while (int(s_aposTrail.size()) > s->cTrail) s_aposTrail.pop_front();
+            }
+            if (rel > 1 && (dd > s->near || (s->within > 0.0f && dd < s->within && glm::length(d) > 1.0f)) &&
+                (s->cTrail == 0 || int(s_aposTrail.size()) >= s->cTrail))
             {
                 const glm::vec3 back = glm::length(d) > 1e-3f ? -glm::normalize(d) : glm::vec3(0.0f);
-                const glm::vec3 q = po + back * (s->near * 0.5f) + glm::vec3(0.0f, 0.0f, s->dz);
+                const glm::vec3 q = s->cTrail > 0 ? s_aposTrail.front() + glm::vec3(0.0f, 0.0f, s->dz)
+                                                  : po + back * (s->near * 0.5f) + glm::vec3(0.0f, 0.0f, s->dz);
                 g_routetele = {true, q.x, q.y, q.z, 0.0f, false};
                 std::printf("route: step %d tail %d: player put at %.0f %.0f %.0f (frame %d)\n", r.istep + 1, s->oid, q.x, q.y, q.z, frame);
             }

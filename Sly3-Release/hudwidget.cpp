@@ -591,52 +591,112 @@ int NLerpFade(float g, int a, int b)
     if (a < b) return a + int(g * ((float(b) + k) - float(a)));
     return b + int((1.0f - g) * ((float(a) + k) - float(b)));
 }
-void DrawFades(SW* psw)
+// (the fades' world changed: its objects dropped)
+void CheckFadeWorld(const SW* psw)
 {
-    if (s_serialFades != psw->serial)
+    if (psw && s_serialFades != psw->serial)
     {
         s_mpfadeStart.clear();
         s_mpfadeView.clear();
         s_serialFades = psw->serial;
     }
+}
+// orig3 0x17D270 (Sly 3's FADE, class 0x8A: the colours +0x40 / +0x44 / +0x48 (options 1065..1067), the phases
+// +0x4C / +0x50 / +0x54 (1068 / 1070 / 1069), the start +0x58; Sly 2's were 0x10 further: read there, a Sly 3
+// fade's colours were its phase lengths)
+float DtFadeTotal(const LO* plo)
+{
+    return std::bit_cast<float>(UFadeField(plo, 0x4C)) + std::bit_cast<float>(UFadeField(plo, 0x50)) +
+           std::bit_cast<float>(UFadeField(plo, 0x54));
+}
+glm::vec4 RgbaFade(const LO* plo, float dt)
+{
+    const float d5C = std::bit_cast<float>(UFadeField(plo, 0x4C)), d60 = std::bit_cast<float>(UFadeField(plo, 0x50)),
+                d64 = std::bit_cast<float>(UFadeField(plo, 0x54));
+    const uint32_t c50 = UFadeField(plo, 0x40), c54 = UFadeField(plo, 0x44), c58 = UFadeField(plo, 0x48);
+    uint32_t ca = c54, cb = c54;
+    float d = 1.0f;
+    if (dt < d5C) { ca = c50; cb = c54; d = d5C; }
+    else if ((dt -= d5C) < d60) { d = d60; }
+    else { dt -= d60; ca = c54; cb = c58; d = d64; }
+    const float g = d > 0.0f ? dt / d : 1.0f;
+    glm::vec4 rgba;
+    for (int i = 0; i < 4; ++i) rgba[i] = float(NLerpFade(g, int((ca >> (8 * i)) & 0xFF), int((cb >> (8 * i)) & 0xFF)));
+    return rgba;
+}
+// (s3-lightning) where in the frame a fade draws: orig3 0x17D270 queues it by its mode +0x5C (Sly 2's +0x6C, the
+// loader's layout) into the draw list (0x174FF8: slot = phase x 16 + sub, drawn in slot order, glob.h): mode 0 at
+// phase 5 + view, sub 0 (the sky's handler: after the sky (phase 1), before the world, which then covers it: m_ext's
+// lightning 32233 lights the sky only); mode 1 at phase 5 + view, sub 15 (the world's last: under the screen objects of
+// phase 9: the letterbox bars, the HUD, the binocucom); mode 2 at phase 10 + view, sub 15 (after the screen objects and
+// the foreground kinds: the whole picture tinted, the bars and the HUD under it but still drawn, m_ext's 32235) while
+// no big screen object shows (0x4797B8 = SW +0x4338, CBigScreenObjsShown), else as mode 1. The reference's frames at
+// a flash (vblank 2068 of the boot: the bars yellow-tinted, the sky yellow). Before, every fade was drawn first in the
+// HUD at depth 1 and the screen objects after it failed the depth test: the bars, the HUD, the binocucom vanished.
+FADEPH FadephOf(const LO* plo, const SW* psw)
+{
+    switch (UFadeField(plo, 0x5C))
+    {
+    case 1: return FADEPH_Under;
+    case 2: return psw && CBigScreenObjsShown(psw) != 0 ? FADEPH_Under : FADEPH_Over;
+    default: return FADEPH_Sky;
+    }
+}
+// The fades of that phase for that view (-1: the whole picture); fFallback: the sky's fades too (no scene pass drew them)
+int CFadesOf(const SW* psw, FADEPH ph, int iview, bool fSkyToo, glm::vec4* argba, int cmax)
+{
+    int c = 0;
+    for (const auto& [plo, tStart] : s_mpfadeStart)
+    {
+        const float dt = g_clock.t - tStart;
+        if (!plo->fInWorld || DtFadeTotal(plo) < dt) continue;
+        // (a fade on a player's camera (0x17D270's +0x60 rectangle): drawn in that player's view only)
+        if (auto iv = s_mpfadeView.find(plo); iv != s_mpfadeView.end() && iv->second >= 0 && iv->second != iview) continue;
+        const FADEPH phFade = FadephOf(plo, psw);
+        if (phFade != ph && !(fSkyToo && phFade == FADEPH_Sky)) continue;
+        if (c < cmax) argba[c++] = RgbaFade(plo, dt);
+    }
+    return c;
+}
+// (0x15DCD8: vt slot 9) the fades whose three phases are over removed
+void ExpireFades(SW* psw)
+{
+    CheckFadeWorld(psw);
     for (auto it = s_mpfadeStart.begin(); it != s_mpfadeStart.end();)
     {
         LO* plo = it->first;
-        // orig3 0x17D270 (Sly 3's FADE, class 0x8A: the colours +0x40 / +0x44 / +0x48 (options 1065..1067), the phases
-        // +0x4C / +0x50 / +0x54 (1068 / 1070 / 1069), the start +0x58; Sly 2's were 0x10 further: read there, a Sly 3
-        // fade's colours were its phase lengths)
-        const float d5C = std::bit_cast<float>(UFadeField(plo, 0x4C)), d60 = std::bit_cast<float>(UFadeField(plo, 0x50)),
-                    d64 = std::bit_cast<float>(UFadeField(plo, 0x54));
-        float dt = g_clock.t - it->second;
-        if (!plo->fInWorld || d5C + d60 + d64 < dt)
+        if (!plo->fInWorld || DtFadeTotal(plo) < g_clock.t - it->second)
         {
             if (plo->fInWorld) RemoveLo(psw, plo);   // (vt slot 9)
             s_mpfadeView.erase(plo);
             it = s_mpfadeStart.erase(it);
             continue;
         }
-        // (a fade on a player's camera (0x17D270's +0x60 rectangle): drawn in that player's view only)
-        if (auto iv = s_mpfadeView.find(plo); iv != s_mpfadeView.end() && iv->second >= 0 && iv->second != g_iviewHud3)
-        {
-            ++it;
-            continue;
-        }
-        const uint32_t c50 = UFadeField(plo, 0x40), c54 = UFadeField(plo, 0x44), c58 = UFadeField(plo, 0x48);
-        uint32_t ca = c54, cb = c54;
-        float d = 1.0f;
-        if (dt < d5C) { ca = c50; cb = c54; d = d5C; }
-        else if ((dt -= d5C) < d60) { d = d60; }
-        else { dt -= d60; ca = c54; cb = c58; d = d64; }
-        const float g = d > 0.0f ? dt / d : 1.0f;
-        glm::vec4 rgba;
-        for (int i = 0; i < 4; ++i) rgba[i] = float(NLerpFade(g, int((ca >> (8 * i)) & 0xFF), int((cb >> (8 * i)) & 0xFF)));
-        g_hud.Fade(rgba);
         ++it;
     }
+}
+// The fades of a phase drawn as a HUD layer of their own (its own depth: the screen objects after it are not hidden)
+void DrawFadesHud(SW* psw, FADEPH ph, bool fSkyToo, int width, int height)
+{
+    glm::vec4 argba[16];
+    const int c = CFadesOf(psw, ph, g_iviewHud3, fSkyToo, argba, 16);
+    if (c == 0) return;
+    g_hud.Begin();
+    for (int i = 0; i < c; ++i) g_hud.Fade(argba[i]);
+    g_hud.Flush(width, height);
 }
 }  // namespace
 
 int g_iviewHud3 = -1;
+int g_iviewScene3 = -1;
+bool g_fFadeSkyPass = false;
+
+int CFadesSky3(glm::vec4* argba, int cmax)
+{
+    if (!g_psw) return 0;
+    CheckFadeWorld(g_psw);
+    return CFadesOf(g_psw, FADEPH_Sky, g_iviewScene3, false, argba, cmax);
+}
 
 // orig: 0x0015E1D8 (a fade object (cid 0x74) started: its start time +0x68, added to the world unless in it)
 // (orig3 0x17D7D0: the start +0x58, unless in the world (bit 56))
@@ -646,6 +706,12 @@ void StartFadeLo(LO* plo)
     {
         if (g_psw && s_serialFades != g_psw->serial) { s_mpfadeStart.clear(); s_mpfadeView.clear(); s_serialFades = g_psw->serial; }
         s_mpfadeStart[plo] = g_clock.t;
+        if (static const bool s_f = std::getenv("SLY3_FADEFIELDS") != nullptr; s_f)
+        {
+            std::printf("fade start oid %d t %.2f:", plo->oid, g_clock.t);
+            for (uint32_t ib = 0x40; ib < 0x78; ib += 4) std::printf(" %X=%08X", ib, plo->U32Field(0, ib, 0xDEADBEEFu));
+            std::printf("\n");
+        }
         if (g_psw) AddLo(g_psw, plo);   // (vt slot 8)
     }
 }
@@ -675,10 +741,17 @@ struct INITFADE
 } s_initfade;
 }  // namespace
 
-void DrawHud(SW* psw, int width, int height)
+void DrawHud(SW* psw, int width, int height, bool fOverLater)
 {
+    const bool fFades = psw && !g_hud.fCenter2p && !g_hud.fWhole2p;
+    if (fFades)
+    {
+        // (the fades under the screen objects, each phase its own layer; the sky's here only when no scene pass drew them)
+        ExpireFades(psw);
+        DrawFadesHud(psw, FADEPH_Under, !g_fFadeSkyPass, width, height);
+        g_fFadeSkyPass = false;
+    }
     g_hud.Begin();
-    if (psw && !g_hud.fCenter2p && !g_hud.fWhole2p) DrawFades(psw);
     // (debugmenu.h: F11 hides the HUD for clean pictures; the game's own menus stay)
     if (!FDebugHudHidden() || FMenuShown()) DrawScreenObjs(psw);
     if (!g_hud.fCenter2p && !g_hud.fWhole2p)
@@ -687,6 +760,12 @@ void DrawHud(SW* psw, int width, int height)
         DrawSkipCut();   // (skipcut.h: the hint / the indicator over everything)
     }
     g_hud.Flush(width, height);
+    if (fFades && !fOverLater) DrawFadesHud(psw, FADEPH_Over, false, width, height);
+}
+
+void DrawHudFadesOver(SW* psw, int width, int height)
+{
+    if (psw && !g_hud.fCenter2p && !g_hud.fWhole2p) DrawFadesHud(psw, FADEPH_Over, false, width, height);
 }
 
 bool (*g_pfnWriteSave)() = nullptr;
