@@ -158,6 +158,8 @@ jobs:
             --ffmpeg "$RUNNER_TEMP/ffmpeg-iphonesimulator"
 
       - name: The app starts on the simulators (self tests, launcher screenshot)
+        # (each launch and boot is bounded in the script; this bounds the whole: a hang fails here, with the logs below)
+        timeout-minutes: 45
         run: scripts/ios/simulator-smoke.sh dist/ios-sim/SafeHouse.app "$BUNDLE_ID" dist/ios-smoke
 
       - name: Pack the simulator app
