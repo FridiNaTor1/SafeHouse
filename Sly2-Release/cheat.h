@@ -24,3 +24,6 @@ struct CHEATDESC { const char* pchzName; const uint32_t* an; bool fSave; };
 int CCheatCodes();
 CHEATDESC CheatCodeDesc(int i);
 void RunCheatCode(SW* psw, int i);
+// orig 0x001DAF38: the power-up n acquired (f) or not; when acquired, the task manager's +0xC = n and (with psw)
+// the task event 0x3B (also the vault's reward, vault.cpp)
+void SetItemAcquired(SW* psw, int n, bool f);

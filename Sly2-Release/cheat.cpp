@@ -63,7 +63,10 @@ int s_icheatLast = -1;
 
 bool FLog() { static const bool f = std::getenv("SLY2N_CHEATLOG") != nullptr; return f; }
 
+}  // namespace
+
 // orig 0x001DAF38: the power-up n acquired (f) or not, and when acquired the task manager's +0xC and the event 0x3B
+// (cheat.h)
 void SetItemAcquired(SW* psw, int n, bool f)
 {
     if (FLog())
@@ -77,6 +80,9 @@ void SetItemAcquired(SW* psw, int n, bool f)
         if (psw) BroadcastTaskEvent(psw, 0x3B, nullptr);
     }
 }
+
+namespace
+{
 
 // orig 0x1FBB90 + 0x1FB2F8(0): a plain sound without a source
 void StartPlainSound(int sfxid)
