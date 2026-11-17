@@ -25,6 +25,11 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.ByteArrayOutputStream;
+import java.net.HttpURLConnection;
+import java.net.SocketTimeoutException;
+import java.net.URL;
+import java.net.UnknownHostException;
 import java.nio.file.Files;
 import java.nio.file.StandardCopyOption;
 import java.util.Arrays;
@@ -496,6 +501,47 @@ public final class NativeBridge {
                                                                   : android.graphics.drawable.Icon.createWithBitmap(bitmap));
         try { return shortcuts.requestPinShortcut(info.build(), null); }
         catch (IllegalStateException error) { return false; }  // (the app is not in the foreground)
+    }
+    /**
+     * The launcher's update check (launcher/update.h): one HTTPS GET. status[0] is the HTTP status, or -1 the server
+     * name was not found, -2 no connection, -3 timed out, -4 the answer is larger than maxBytes, -5 another failure.
+     * The body when the status is 200, else null. Nothing but the User-Agent (and the API's Accept header) is sent.
+     */
+    public static byte[] httpGet(String address, boolean api, String userAgent, int maxBytes, int[] status) {
+        HttpURLConnection connection = null;
+        status[0] = -5;
+        try {
+            URL url = new URL(address);
+            if (!"https".equals(url.getProtocol())) return null;
+            connection = (HttpURLConnection) url.openConnection();
+            connection.setInstanceFollowRedirects(true);
+            connection.setConnectTimeout(10000);
+            connection.setReadTimeout(api ? 15000 : 30000);
+            connection.setRequestProperty("User-Agent", userAgent);
+            if (api) connection.setRequestProperty("Accept", "application/vnd.github+json");
+            status[0] = connection.getResponseCode();
+            if (status[0] != 200) return null;
+            ByteArrayOutputStream body = new ByteArrayOutputStream();
+            try (InputStream in = connection.getInputStream()) {
+                byte[] buffer = new byte[65536];
+                for (int n; (n = in.read(buffer)) > 0;) {
+                    if (body.size() + n > maxBytes) { status[0] = -4; return null; }
+                    body.write(buffer, 0, n);
+                }
+            }
+            return body.toByteArray();
+        } catch (UnknownHostException error) {
+            status[0] = -1;
+        } catch (SocketTimeoutException error) {
+            status[0] = -3;
+        } catch (IOException error) {
+            status[0] = -2;
+        } catch (Exception error) {
+            status[0] = -5;
+        } finally {
+            if (connection != null) connection.disconnect();
+        }
+        return null;
     }
     public static void openUrl(String url) {
         Activity current = activity;

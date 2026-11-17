@@ -590,6 +590,7 @@ int glfwInit() {
         error(GLFW_PLATFORM_ERROR, SDL_GetError());
         return 0;
     }
+    cane::ios::ignoreScreenDisconnects();
     refreshPads();
     return 1;
 }

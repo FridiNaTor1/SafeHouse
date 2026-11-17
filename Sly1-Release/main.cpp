@@ -927,6 +927,7 @@ int main(int cphzArgs, char* aphzArgs[])
             }
         }
 
+        UpdateMonitorConnections();   // (a monitor plugged in or unplugged: gl.h)
         if (s_fSwapIntervalStale)
         {
             s_fSwapIntervalStale = false;

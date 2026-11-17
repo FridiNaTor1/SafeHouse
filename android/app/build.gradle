@@ -6,9 +6,23 @@ if (providers.gradleProperty('safehouseAppBuildDir').isPresent()) {
 
 // Release signing: the keystore from the environment (CI: the repository's ANDROID_* secrets), else unsigned / debug.
 def safehouseKeystore = System.getenv('SAFEHOUSE_ANDROID_KEYSTORE')
-// The release version x.y.z (CI's SAFEHOUSE_VERSION) as versionName, and y * 10000 + z as the increasing versionCode.
+// Versions (scripts/android/build-package.py passes them): a release's x.y.z (CI's SAFEHOUSE_VERSION, the tag without
+// its "v") is the versionName. Development builds are x.y.<CI run number>-dev (pull requests: safehouseBuildNumber) or
+// x.y.0-dev (local builds), x.y from the CMake project version (safehouseBaseVersion). The versionCode is
+// x * 10000000 + y * 100000 + z, so it grows with every release and every CI run (releases and pull requests share
+// the run numbers): Android installs a newer APK over an older one only when its versionCode is higher. (Until
+// 2026-11-17 it was y * 10000 + z and 1 for development builds; every new code is higher than those.)
 def safehouseVersion = providers.gradleProperty('safehouseVersion').getOrElse('')
-def safehouseVersionParts = safehouseVersion ==~ /\d+\.\d+\.\d+/ ? safehouseVersion.tokenize('.')*.toInteger() : null
+def safehouseBase = providers.gradleProperty('safehouseBaseVersion').getOrElse('0.2')
+def safehouseBuildNumber = providers.gradleProperty('safehouseBuildNumber').getOrElse('0')
+def safehouseRelease = safehouseVersion ==~ /\d+\.\d+\.\d+/
+if (!safehouseRelease && !(safehouseBase ==~ /\d+\.\d+/ && safehouseBuildNumber ==~ /\d+/))
+    throw new GradleException("safehouseBaseVersion must be x.y and safehouseBuildNumber a number")
+def safehouseVersionName = safehouseRelease ? safehouseVersion : "${safehouseBase}.${safehouseBuildNumber.toInteger()}-dev"
+def safehouseVersionParts = (safehouseRelease ? safehouseVersion : "${safehouseBase}.${safehouseBuildNumber}").tokenize('.')*.toInteger()
+if (safehouseVersionParts[0] > 200 || safehouseVersionParts[1] > 99 || safehouseVersionParts[2] > 99999)
+    throw new GradleException("The version ${safehouseVersionName} does not fit the versionCode (x <= 200, y <= 99, z <= 99999)")
+def safehouseVersionCode = safehouseVersionParts[0] * 10000000 + safehouseVersionParts[1] * 100000 + safehouseVersionParts[2]
 
 android {
     namespace 'org.safehouse.android'
@@ -17,8 +31,8 @@ android {
         applicationId 'org.safehouse.android'
         minSdk providers.gradleProperty('safehouseMinSdk').getOrElse('26').toInteger()
         targetSdk 36
-        versionCode safehouseVersionParts ? safehouseVersionParts[1] * 10000 + safehouseVersionParts[2] : 1
-        versionName safehouseVersionParts ? safehouseVersion : '0.2.0-android-preview'
+        versionCode safehouseVersionCode
+        versionName safehouseVersionName
     }
     signingConfigs {
         if (safehouseKeystore) {

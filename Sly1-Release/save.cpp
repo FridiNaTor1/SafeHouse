@@ -21,6 +21,7 @@
 #include <string_view>
 #include <cstdlib>
 #include "../platform/platform.h"
+#include "../platform/monitor_select_glfw.h"
 #ifdef __SWITCH__
 #include "../platform/switch/file_io.h"
 #include "../platform/switch/io_worker.h"
@@ -100,6 +101,7 @@ VIDEOSAVESETTINGS CaptureVideoSettings()
     settings.internalResolutionHeight = g_internalResolutionHeight;
     settings.drawDistance = g_drawDistanceMultiplier;
     settings.windowMode = static_cast<int>(g_windowMode);
+    cane::monitor::store(settings.monitor, g_monitorId);   // (v22)
     settings.vsyncEnabled = g_fVsync ? 1 : 0;
     settings.aspectMode = static_cast<int>(g_gl.aspectMode);
     settings.guiScale = g_guiScale;
@@ -135,12 +137,7 @@ GLFWmonitor* CurrentMonitor()
         if (GLFWmonitor* monitor = glfwGetWindowMonitor(g_gl.window))
             return monitor;
     }
-
-	int count = 0;
-	GLFWmonitor** monitors = glfwGetMonitors(&count);
-	if (monitors != nullptr && count > 0)
-		return monitors[std::clamp(g_monitorIndex, 0, count - 1)];
-    return glfwGetPrimaryMonitor();
+    return cane::monitor::chosen(g_monitorId);   // (v22: the chosen monitor, else the primary one)
 }
 
 void ValidateVideoSettings(VIDEOSAVESETTINGS& settings)
@@ -163,6 +160,7 @@ void ValidateVideoSettings(VIDEOSAVESETTINGS& settings)
 
 void ApplySavedVideoSettings(VIDEOSAVESETTINGS settings)
 {
+	g_monitorId = cane::monitor::load(settings.monitor);   // (v22: before the checks and the window mode, which use it)
     ValidateVideoSettings(settings);
 
 	if (!ApplyWindowModeSettings(static_cast<WindowMode>(settings.windowMode)))
@@ -687,7 +685,7 @@ void TestSaveCompatibility(const std::filesystem::path& fixtures)
     static_assert(sizeof(GS)==6656 && alignof(GS)==4 && sizeof(WS)==1100 && sizeof(LS)==120);
     static_assert(offsetof(GS,aws)==16 && offsetof(GS,gameWorldCur)==6616);
     static_assert(sizeof(SaveFileHeader)==20 && sizeof(cane::settings::Header)==20);
-    static_assert(sizeof(cane::settings::legacy::V8)==196 && sizeof(VIDEOSAVESETTINGS)==348 && offsetof(VIDEOSAVESETTINGS,fastShadows)==340 && offsetof(VIDEOSAVESETTINGS,renderer)==344);
+    static_assert(sizeof(cane::settings::legacy::V8)==196 && sizeof(VIDEOSAVESETTINGS)==348+cane::settings::kMonitorIdSize && offsetof(VIDEOSAVESETTINGS,fastShadows)==340 && offsetof(VIDEOSAVESETTINGS,renderer)==344 && offsetof(VIDEOSAVESETTINGS,monitor)==348);
     static_assert(offsetof(VIDEOSAVESETTINGS,hackMouseAim)==288 && offsetof(VIDEOSAVESETTINGS,debugKeys)==292 && offsetof(VIDEOSAVESETTINGS,controllerVibration)==296 && offsetof(VIDEOSAVESETTINGS,longShadows)==300);
     static_assert(offsetof(VIDEOSAVESETTINGS,padInvertCameraX)==304 && offsetof(VIDEOSAVESETTINGS,mouseInvertTurretY)==324);
     static_assert(offsetof(VIDEOSAVESETTINGS,alwaysOriginalPsPrompts)==200 && offsetof(VIDEOSAVESETTINGS,instantSkipCutscenes)==284);
@@ -759,7 +757,9 @@ void TestSaveCompatibility(const std::filesystem::path& fixtures)
         g_fAlwaysOriginalPsLayout=true;g_promptStyle=cane::settings::Prompt_SteamController;g_fInstantSkipCutscenes=true;
         g_fAutoCameraRotation=false;
         g_mouseopt.aimSensitivity=320;g_mouseopt.fInvertY=true;g_cameraKeyBindings[3]=GLFW_KEY_KP_2;
+        const std::string monitorWas=g_monitorId;g_monitorId="Caf\xc3\xa9 Monitor | 2 | 1920,0";
         const bool written=SaveSystemSettings();
+        g_monitorId=monitorWas;
         g_fAlwaysOriginalPsLayout=originalPs;g_promptStyle=promptStyle;g_fInstantSkipCutscenes=instant;
         g_fAutoCameraRotation=autoCamera;
         g_mouseopt=mouse;g_cameraKeyBindings=cameraKeys;
@@ -770,6 +770,7 @@ void TestSaveCompatibility(const std::filesystem::path& fixtures)
                 current.instantSkipCutscenes==1,"Prompt settings lost");
         require(current.mouseAimSensitivity==320 && current.mouseInvertY==1 && current.cameraKeyBindings[3]==GLFW_KEY_KP_2,"Mouse settings lost");
         require(current.autoCameraRotation==0,"Camera rotation setting lost");
+        require(cane::monitor::load(current.monitor)=="Caf\xc3\xa9 Monitor | 2 | 1920,0","Monitor setting lost");
         require(current.fovPercent==35 && current.showFps==1 && current.streamerMode==1 && current.hackMouseAim==0 && current.debugKeys==1 && current.controllerVibration==0 && current.longShadows==0 &&
                 current.padInvertCameraX==1 && current.padInvertCameraY==1 && current.mouseInvertBinocX==1 && current.mouseInvertBinocY==1 &&
                 current.mouseInvertTurretX==1 && current.mouseInvertTurretY==1,"Other builds' settings not kept");

@@ -5,6 +5,7 @@
 // is started by its world's load, as --world W:TASK). Each action is printed ("autoplay: ..."); each autosave is
 // copied to $SLY2N_AUTOSAVEDIR. SLY2N_AUTOPLAY_JOBWAIT / _STEP (frames) tune the waits; SLY2N_AUTOPLAY_SKIP="oid,.."
 // jobs played by the harness only up to their start (the route / other tools then play them).
+#include "game/items3.h"
 #include "joy.h"
 #include "game/sly3.h"
 #include "worldglobals.h"
@@ -44,7 +45,7 @@ uint16_t g_grfAutoplay = 0;
 int OidSafeHouseShown(const LO* plo, std::vector<OID>* paoidAllowed);   // po.cpp
 bool FShopShown();   // shop.cpp
 int ShopItemSelected(int* pmsg);   // shop.cpp
-static bool FItemOwnedAutoplay(int i) { CRef r = RefGetProgress({"powerUps", "mppukfAcquired", std::to_string(i)}); return r.m_tagk == TAGK_Bool && r.m_bool; }
+static bool FItemOwnedAutoplay(int i) { CRef r = RefGetProgress({"powerUps", "mppukfAcquired", std::to_string(sly3::Item3FromItem2(i))}); return r.m_tagk == TAGK_Bool && r.m_bool; }
 int g_frameAutoplayFree = 0;
 std::unordered_map<int, int> g_mpoidiwrecTask;   // a filtered-out task's first world (brx.cpp)
 WORLD_TABLE(g_mpoidiwrecTask);   // (PC: moved aside while a kept world loads, worldglobals.h)

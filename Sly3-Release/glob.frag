@@ -1,6 +1,8 @@
 #version 430 core
 // Sly 2 glob fragments: the GS's texture function (MODULATE, TCC 1) and alpha test, for one pass of a shader.
 // The pass's ALPHA blend and depth test are GL state (render.cpp).
+// NOKILL: the variant without the alpha test and DATE (no discard), for the draws that use neither, so the GPU tests
+// depth and stencil before the fragments (render.cpp picks the program per run). The uniforms stay declared in both.
 
 uniform sampler2D tex;
 uniform int  fTextured;
@@ -15,6 +17,10 @@ uniform sampler2D texDate;   //   (texDate, 0x16DA48's copy) is below 0x80
 
 #ifdef BINDLESS
 flat in uvec2 vTexh;
+#endif
+#ifdef TEXARRAY
+uniform sampler2DArray texArr;   // (perf-5: the run's page of layers, unit 2; vLayer 0: the bound tex)
+flat in uint vLayer;
 #endif
 noperspective in vec4 vColor;
 in vec2 vUv;
@@ -39,24 +45,31 @@ bool AlphaPasses(float a)
 
 void main()
 {
+#ifndef NOKILL
     if (fDate != 0 && texelFetch(texDate, ivec2(gl_FragCoord.xy), 0).a > 254.0 / 255.0) discard;
+#endif
     vec4 c = vColor;
     if (fTextured != 0)
     {
 #ifdef BINDLESS
         // (the same texture and sampler as a bound one: handle 0 is the special draws', which bind tex)
         vec4 t = (vTexh != uvec2(0u) ? texture(sampler2D(vTexh), vUv) : texture(tex, vUv)) * 255.0;
+#elif defined(TEXARRAY)
+        // (the same texels and sampler as the bound 2D texture: the layer is its copy)
+        vec4 t = (vLayer != 0u ? texture(texArr, vec3(vUv, float(vLayer - 1u))) : texture(tex, vUv)) * 255.0;
 #else
         vec4 t = texture(tex, vUv) * 255.0;
 #endif
         c = floor(t * vColor / 128.0);
     }
     c = clamp(c, 0.0, 255.0);
+#ifndef NOKILL
     if (afailMode != 0 && ate != 0)
     {
         bool fPass = AlphaPasses(c.a);
         if ((afailMode == 1) != fPass) discard;
     }
+#endif
     vec3 rgb = c.rgb / 255.0;
     rgb = mix(rgb, fFogBlack != 0 ? vec3(0.0) : fogColor.rgb, vFog);
     // The GS blends with As / 128 (0x80 = 1.0).

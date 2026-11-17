@@ -2,6 +2,8 @@
 // 0x1DFAD8..0x1E5D80, the wrappers 0x106A80..0x10A438) and the reference's m_1DFB10_p3.cpp (0x1E3890) and
 // m_1E1E30_p3.cpp (0x1E1E30).
 #include "scpt.h"
+#include "game/scptgame3.h"
+#include "game/scptrun3.h"
 #include "game/sly3.h"
 #include "worldglobals.h"
 #include "transition.h"
@@ -256,7 +258,7 @@ void RUN::OnSmaState(const SMAMSG10& msg)
     }
 }
 
-// orig: 0x001E5410: remove the runner from the SMA's listeners, release its reference, clear the latch.
+// orig: 0x001E5410: remove the runner from the SMA's listeners, release its reference, clear the latch. (orig3: 0x22B718, the same C in the Sly 3 decomp)
 void RUN::ReleaseSmaWatch()
 {
     if (!psma) return;
@@ -1572,7 +1574,7 @@ bool FCmdDone(RUN* p, SCPTCMD* pc)
     case 0x50: case 0x51:
     {
         BENTLEY* pb = PbentleyFromLo(p->ploWatch);
-        return !pb || ((pb->state == 6) == (pc->kind == 0x50));
+        return !pb || ((pb->state == BS3_Hold) == (pc->kind == 0x50));
     }
     case 0x55:
         // a command 0x55 without its wait: until the guard's reactions no longer run the list (0x171DA8)
@@ -2454,6 +2456,13 @@ void StopScpt(LO* pscpt) { StopScptImpl(pscpt); }
 // orig: 0x001E0020 (an alarm set on the script, e.g. the vault's 0x655)
 void EnsureScptAlarm(LO* pscpt, int n)
 {
+    // (Sly 3: the scripts are game/scpt3's: the guards' command op 15 (0x1E0020) sets SCPT3's alarm, e.g. v_ext's turf
+    // war 2142 waits for alarm 139302 after guard 139253's list 2148, the follow job's 2243 for 139577)
+    if (FScripts3Active())
+    {
+        if (SCPT3* ps3 = PscptOfLo3(pscpt)) SetScptAlarm3(ps3, n, true);
+        return;
+    }
     if (SCPT* ps = PscptOf(pscpt)) EnsureAlarm(ps, n);
 }
 

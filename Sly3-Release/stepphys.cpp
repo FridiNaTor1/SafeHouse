@@ -3,6 +3,7 @@
 // reference's ps2_* operations round toward zero).
 
 #include "stepphys.h"
+#include "xf.h"
 #include "game/sly3.h"
 #include "actmesh.h"
 #include "activate.h"
@@ -122,6 +123,10 @@ void SetStepPhysHeading(ALO* palo, float rad)
     STEPPHYS& s = StepPhysOf(palo);
     s.radHeading = rad;
     s.matHeading = BuildRotateMatrixAxis(rad, NORMAL_Z);
+    // (orig3 0x24E878: then 0x28F260 on the rotation record +0x4C (Sly 2's HoldXfMode 0x230598, Sly 3's modes one
+    // further on): a resting record is woken so the turn runs; natively Sly held by a script never turned to the
+    // binocucom's pan)
+    if (XF* pxf = PxfRot(palo)) HoldXfMode(palo, pxf);
 }
 
 // orig: 0x002046B0
@@ -148,14 +153,31 @@ void LoadStepPhysBase(ALO* palo)
 {
     STEPPHYS& s = StepPhysOf(palo);
     glm::vec3 v(0.0f);
-    if (palo->paloParent && PxfObj(palo->paloParent)) v = XformPos(PxfObj(palo->paloParent)->matWorld, v);
-    else if (PxfPos(palo))
-        // a root: the original runs this at the load, before the object is placed (its position record still the
-        // identity), so the world origin is the position record's origin: natively that, in the object's frame
-        // (the position record's parent's origin: the world origin of the original's load; Murray's position record has
-        // its own offset (0, 0, 71.76), so the base is not the position record's origin)
-        v = PosOf(PxfPos(palo)->pxfRef ? PxfPos(palo)->pxfRef->matWorld : PxfPos(palo)->matWorld);
-    if (PxfObj(palo)) v = XformPos(InverseAffineMatrix4(PxfObj(palo)->matWorld), v);
+    if (palo->paloParent && PxfObj(palo->paloParent))
+    {
+        v = XformPos(PxfObj(palo->paloParent)->matWorld, v);
+        if (PxfObj(palo)) v = XformPos(InverseAffineMatrix4(PxfObj(palo)->matWorld), v);
+    }
+    else if (PxfPos(palo) && PxfPos(palo)->pxfRef && PxfObj(palo))
+    {
+        // a root: the original runs this at the load, before the object is placed (its records' world matrices relative
+        // to the world origin), so the base is the position record's parent's (the base record's) origin in the object's
+        // frame: the inverse of the loaded local matrices from the object record up to the base record (Murray's
+        // position record has its own offset (0, 0, 71.76), so the base is not the position record's origin).
+        // (s3-ai-4) Natively the world matrices at this point can be stale against a moved base record (the spawners'
+        // guards: v_ext's 19900 got (-294, -13, -100), the reference (0, 0, -90.03)), and the guards' floor probes and
+        // contact points went with it: they slid sideways, slowly. So the loaded local chain, not the world matrices.
+        const XF* pxfBase = PxfPos(palo)->pxfRef;
+        glm::mat4 m(1.0f);
+        int c = 0;
+        for (const XF* p = PxfObj(palo); p && p != pxfBase && c < 16; p = p->pxfRef, ++c) m = p->matLoad * m;
+        v = XformPos(InverseAffineMatrix4(m), v);
+    }
+    else
+    {
+        if (PxfPos(palo)) v = PosOf(PxfPos(palo)->matWorld);
+        if (PxfObj(palo)) v = XformPos(InverseAffineMatrix4(PxfObj(palo)->matWorld), v);
+    }
     s.vecBase = glm::vec4(v, 1.0f);
     // Sly's load 0x1885B8 after 0x2039C0: the base (0, 0, -75)
     if (FCidDerivedFrom(palo->Cid(), S3CID(0x35))) s.vecBase = glm::vec4(0.0f, 0.0f, -75.0f, s.vecBase.w);
@@ -489,7 +511,7 @@ NATIVEFN(0x2040F8, GrfStepXp);
 
 namespace
 {
-// orig: 0x00204248 (vt slot 63: 1)
+// orig: 0x00204248 (vt slot 63: 1) (orig3: 0x24E3F8, the same code in Sly 3)
 int StepSlot63(ALO*) { return 1; }
 }
 NATIVEFN(0x204248, StepSlot63);

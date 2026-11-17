@@ -14,6 +14,8 @@
         <intent><action android:name="org.khronos.openxr.OpenXRRuntimeService" /></intent>
         <intent><action android:name="org.khronos.openxr.OpenXRApiLayerService" /></intent>
     </queries>
+    <!-- the launcher's update check only (Settings > Launcher > Check for updates: GitHub's latest release) -->
+    <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.VIBRATE" />
     <!-- the USB Headset option's microphone (SDL asks at run time when the headset is turned on) -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />

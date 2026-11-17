@@ -50,6 +50,7 @@ struct SW;
 struct LO;
 struct ALO;
 struct SHDS;
+struct SHD;
 struct GLOBBONEBIND;
 using CID = int;
 
@@ -76,10 +77,20 @@ CSnd* PsndNewPcKept(int iwrec, int sfxid);
 
 // A live copy of a kept object (and its children) in the running world, started as a loaded object; fAdd: left in
 // the world, else taken out (RemoveLo) like a proxy's spare. Null if the template is null.
-LO* PloPcCloneIntoWorld(SW* psw, LO* ptmpl, bool fAdd);
+// (paloParent: the copy made under that object, as a loaded object's children are: its place relative to it)
+LO* PloPcCloneIntoWorld(SW* psw, LO* ptmpl, bool fAdd, ALO* paloParent = nullptr);
 // a copy's kept world (-1: not a copy). A copy's emitters draw with its kept world's shaders, and the objects their
 // options name are found among its own copies, then in its kept world near its template (emitter.h's hooks)
 int IwrecOfPcCopy(const LO* plo);
+// (Sly 3) any shader of the id in the kept world of a copy (a copied screen object's pictures: hud.cpp DrawQuad), null
+// when plo is no copy or its world has none
+const SHD* PshdPcKeptOfCopy(const LO* plo, int32_t id);
+// (Sly 3) the job / checkpoint keys a kept world is loaded with (its option block, sw.cpp: e.g. v_ext with Cops and
+// Robbers' 2409 / 2413 has the two-player HUD, the score board and the booty stands). Before RequestPcKeptWorld.
+void SetPcKeptWorldKeys(int iwrec, int oidJob, int oidChk);
+// (Sly 3) a kept world's dialog lines added to the running world's (their streams are disc files: they play as its own;
+// the lines it has already are left): Cops and Robbers' lines on another hub. Returns how many were added.
+int CImportPcKeptDialogs(int iwrec, const int* aid, int cid);
 
 // The game thread's part: a kept world whose file has been read is instantiated (between two steps; the debug menu's
 // step calls it). Also loads synchronously what is asked for while no world runs (inside a transition).

@@ -76,6 +76,13 @@ inline void setEnv(const char* key, const char* value) {
     else unsetenv(key);
 #endif
 }
+// iOS: one program at a time in the app's one process, so the SafeHouse launcher and this menu take turns in it: the
+// one closing names the next (spawnDetached below) and main.cpp opens it once the window is gone.
+enum class Handover { None, Launcher, Collection };
+inline Handover& pendingHandover() {
+    static Handover next = Handover::None;
+    return next;
+}
 // Starts a program on its own (not waited for): the SafeHouse launcher from here, or this menu from Settings.
 inline bool spawnDetached(const fs::path& program, const std::vector<std::string>& args) {
 #if defined(CANE_ANDROID)
@@ -83,10 +90,10 @@ inline bool spawnDetached(const fs::path& program, const std::vector<std::string
     (void)program;
     return android::startApp(args);
 #elif defined(CANE_IOS)
-    // iOS: one program at a time in the app; the Collection Style Launcher is not offered there yet
+    // iOS: no second process; the caller closes its window and main.cpp opens the other in this one
     (void)program;
-    (void)args;
-    return false;
+    pendingHandover() = !args.empty() && args[0] == "--collection" ? Handover::Collection : Handover::Launcher;
+    return true;
 #elif defined(_WIN32)
     std::wstring line = quoteWindows(program.wstring());
     for (const auto& a : args) line += L" " + quoteWindows(path(a).wstring());
@@ -151,14 +158,15 @@ public:
         bool active = false;
         std::array<bool, 3> installed{};  // Sly 1, Sly 2, Sly 3 (Sly 3: installed, runtime present)
         fs::path profile;                 // holds Collection/Menu (empty: the backend's)
-        std::string screen;               // "", "options", "extras", "credits", "launch", "developers", "confirm", "glide"
+        std::string screen;               // "", "options", "extras", "credits", "launch", "developers", "developers:N" (its Nth page),
+                                          // "developerN" (the Nth developer chosen), "confirm", "glide"
         bool scripted = false;            // presses are replayed a few frames apart: no input delay between pages
         int aspect = -1;                  // Sly 2's aspect ratio setting shown (-1: Fit; a live run reads Settings.ini)
         // the developers page's pictures (the launcher's own, launcher/assets/developers): each with its silhouette
         struct DeveloperPicture {
             ImTextureID picture = nullptr, silhouette = nullptr;
         };
-        std::array<DeveloperPicture, 5> developers{};
+        std::vector<DeveloperPicture> developers;  // (launcher/credits.h kDevelopers order)
     };
     // The profile whose imported menu a start would show.
     static fs::path profileOf(const LauncherBackend& backend, const Fixture& fixture) {
@@ -227,9 +235,14 @@ public:
         if (m_fixture.screen == "options") openOptions();
         else if (m_fixture.screen == "extras") m_page = indexOf(Page::Extras);
         else if (m_fixture.screen == "developers") m_page = indexOf(Page::Developers);
-        else if (m_fixture.screen.rfind("developer", 0) == 0 && m_fixture.screen.size() == 10) {  // "developer1" .. "developer5": that one chosen
+        else if (m_fixture.screen.rfind("developers:", 0) == 0) {  // "developers:2": the developers' second page, no one chosen
             m_page = indexOf(Page::Developers);
-            m_developer = std::clamp(m_fixture.screen[9] - '1', 0, 4);
+            m_devPage = std::clamp(std::atoi(m_fixture.screen.c_str() + 11) - 1, 0, credits::kDeveloperPages - 1);
+        } else if (m_fixture.screen.rfind("developer", 0) == 0 && m_fixture.screen.size() > 9 &&
+                   m_fixture.screen.find_first_not_of("0123456789", 9) == std::string::npos) {  // "developer1" ..: that one chosen (and its page)
+            m_page = indexOf(Page::Developers);
+            m_developer = std::clamp(std::atoi(m_fixture.screen.c_str() + 9) - 1, 0, credits::kDeveloperCount - 1);
+            m_devPage = credits::developerPage(m_developer);
         }
         else if (m_fixture.screen == "confirm") m_page = indexOf(Page::Sly3), m_confirm = true;
         else if (m_fixture.screen.rfind("credits", 0) == 0) {  // "credits" or "credits:<section id>" (launcher/credits.h)
@@ -513,6 +526,7 @@ private:
         m_extra = 0;
         // (with keys or a pad the first developer is chosen at once; a pointer chooses by hovering or tapping)
         m_developer = page() == Page::Developers && !m_touch && !input::tracker().lastWasMouse() ? 0 : -1;
+        m_devPage = 0, m_devPageFade = 1;
         sound(Sfx::Move);
         m_backend.config["collection_page"] = int(page());
     }
@@ -527,10 +541,12 @@ private:
         const bool back = ImGui::IsKeyPressed(ImGuiKey_Escape, false) || ImGui::IsKeyPressed(ImGuiKey_Backspace, false) ||
                           ImGui::IsKeyPressed(ImGuiKey_GamepadFaceRight, false);
         const bool options = pad.start || pad.y || ImGui::IsKeyPressed(ImGuiKey_Tab, false) || ImGui::IsKeyPressed(ImGuiKey_O, false);
+        // (the developers' pages: the shoulder buttons, Page Up / Page Down, Q / E)
+        const bool pagePrev = pad.lb || pressed(ImGuiKey_PageUp, ImGuiKey_Q), pageNext = pad.rb || pressed(ImGuiKey_PageDown, ImGuiKey_E);
         const ImVec2 mouse = ImGui::GetIO().MousePos;
         const bool click = ImGui::IsMouseClicked(ImGuiMouseButton_Left);
         if (click) m_touch = ImGui::GetIO().MouseSource == ImGuiMouseSource_TouchScreen;
-        if (left || right || up || down || confirm || back || options) m_touch = false;  // (keys or a pad again)
+        if (left || right || up || down || confirm || back || options || pagePrev || pageNext) m_touch = false;  // (keys or a pad again)
         // the panels' Back button (shown for a finger or the mouse)
         const bool backTapped = (m_options || m_credits) && ImGui::IsMouseReleased(ImGuiMouseButton_Left) && !m_dragged && m_hitBack.Contains(mouse) &&
                                 m_hitBack.Contains(ImGui::GetIO().MouseClickedPos[0]);
@@ -614,34 +630,7 @@ private:
             if (confirm) activateExtra(m_extra);
             if (back) turn(1);
         } else if (page() == Page::Developers) {
-            // the five circles: the first at the left, the others two by two
-            static constexpr int toLeft[5] = {-2, 0, 1, 0, 3}, toRight[5] = {1, 2, -1, 4, -1}, toUp[5] = {-1, -1, -1, 1, 2}, toDown[5] = {-1, 3, 4, -1, -1};
-            int next = m_developer;
-            if (m_developer < 0) {
-                if (left) turn(-1);
-                else if (right || up || down || confirm) next = 0;
-            } else if (left) {
-                if (toLeft[m_developer] == -2) turn(-1);
-                else next = toLeft[m_developer];
-            } else if (right && toRight[m_developer] >= 0) next = toRight[m_developer];
-            else if (up && toUp[m_developer] >= 0) next = toUp[m_developer];
-            else if (down && toDown[m_developer] >= 0) next = toDown[m_developer];
-            if (next != m_developer && page() == Page::Developers) m_developer = next, sound(Sfx::Move);
-            if (back) turn(-1);
-            // the mouse chooses by being over a circle; a tap chooses a circle, a tap elsewhere none
-            int over = -1;
-            for (int i = 0; i < 5; ++i) {
-                const ImVec2 c = m_hitDeveloper[size_t(i)].GetCenter();
-                const float r = m_hitDeveloper[size_t(i)].GetWidth() * 0.5f;
-                if (r > 0 && (mouse.x - c.x) * (mouse.x - c.x) + (mouse.y - c.y) * (mouse.y - c.y) <= r * r) over = i;
-            }
-            if (tap && !m_hitLeft.Contains(mouse)) {
-                if (over != m_developer && over >= 0) sound(Sfx::Move);
-                m_developer = over;
-            } else if (!m_touch && input::tracker().lastWasMouse() && !ImGui::IsMouseDown(ImGuiMouseButton_Left) && over != m_developer) {
-                if (over >= 0) sound(Sfx::Move);
-                m_developer = over;
-            }
+            developersInput(left, right, up, down, confirm, back, pagePrev, pageNext, tap, mouse);
         } else {
             if (left) turn(-1);
             if (right) turn(1);
@@ -653,6 +642,101 @@ private:
                     m_quit = true;
                 }
             }
+        }
+    }
+    // The developers page: its first page as it was made (one large circle at the left, four two by two), then pages of
+    // up to six (two rows of three, centred), launcher/credits.h. The pad moves between the circles and on to the next or
+    // the previous page at the edges; the shoulder buttons (Page Up / Page Down, Q / E) and the arrows under the banner
+    // turn the pages.
+    void showDeveloperPage(int next, int choose) {
+        next = std::clamp(next, 0, credits::kDeveloperPages - 1);
+        if (next == m_devPage) return;
+        m_devPage = next, m_devPageFade = 0;
+        for (float& r : m_reveal) r = 0;
+        m_developer = choose;
+        sound(Sfx::Move);
+    }
+    // The developer of a page in a row (0 top, 1 bottom) at its left or right end; -1 when the page has none there.
+    static int developerAtEdge(int page, int row, bool rightEnd) {
+        const int first = credits::firstDeveloperOf(page), n = credits::developersOn(page);
+        if (n <= 0) return -1;
+        if (page == 0) return rightEnd ? (row ? std::min(4, first + n - 1) : std::min(2, first + n - 1)) : 0;
+        const int rowFirst = row * 3, rowLast = std::min(rowFirst + 2, n - 1);
+        if (rowFirst >= n) return first + (rightEnd ? std::min(2, n - 1) : 0);  // (no such row: the top row's)
+        return first + (rightEnd ? rowLast : rowFirst);
+    }
+    void developersInput(bool left, bool right, bool up, bool down, bool confirm, bool back, bool pagePrev, bool pageNext, bool tap, ImVec2 mouse) {
+        const bool pages = credits::kDeveloperPages > 1;
+        const int first = credits::firstDeveloperOf(m_devPage), n = credits::developersOn(m_devPage);
+        // the row the chosen circle is in (0 top, 1 bottom), for the neighbouring page
+        auto rowOf = [&](int i) { return m_devPage == 0 ? (i == 3 || i == 4 ? 1 : 0) : (i - first) / 3; };
+        if (pages && pagePrev && m_devPage > 0) {
+            showDeveloperPage(m_devPage - 1, m_developer < 0 ? -1 : credits::firstDeveloperOf(m_devPage - 1));
+            return;
+        }
+        if (pages && pageNext && m_devPage + 1 < credits::kDeveloperPages) {
+            showDeveloperPage(m_devPage + 1, m_developer < 0 ? -1 : credits::firstDeveloperOf(m_devPage + 1));
+            return;
+        }
+        int next = m_developer;
+        if (m_developer < 0) {
+            if (left && m_devPage == 0) turn(-1);
+            else if (left) showDeveloperPage(m_devPage - 1, -1);
+            else if (right || up || down || confirm) next = first;
+        } else if (m_devPage == 0) {
+            // the five circles: the first at the left, the others two by two
+            static constexpr int toLeft[5] = {-2, 0, 1, 0, 3}, toRight[5] = {1, 2, -1, 4, -1}, toUp[5] = {-1, -1, -1, 1, 2}, toDown[5] = {-1, 3, 4, -1, -1};
+            const int i = std::clamp(m_developer, 0, 4);
+            if (left) {
+                if (toLeft[i] == -2) turn(-1);
+                else next = toLeft[i];
+            } else if (right && toRight[i] >= 0 && toRight[i] < n) next = toRight[i];
+            else if (right && pages) {
+                showDeveloperPage(1, developerAtEdge(1, rowOf(i), false));
+                return;
+            } else if (up && toUp[i] >= 0) next = toUp[i];
+            else if (down && toDown[i] >= 0 && toDown[i] < n) next = toDown[i];
+        } else {
+            // two rows of three
+            const int l = m_developer - first, col = l % 3, row = l / 3;
+            if (left && col > 0) next = m_developer - 1;
+            else if (left) {
+                showDeveloperPage(m_devPage - 1, developerAtEdge(m_devPage - 1, row, true));
+                return;
+            } else if (right && col < 2 && l + 1 < n) next = m_developer + 1;
+            else if (right && m_devPage + 1 < credits::kDeveloperPages) {
+                showDeveloperPage(m_devPage + 1, developerAtEdge(m_devPage + 1, row, false));
+                return;
+            } else if (up && row > 0) next = m_developer - 3;
+            else if (down && row == 0 && n > 3) next = first + std::min(l + 3, n - 1);
+        }
+        if (next != m_developer && page() == Page::Developers) m_developer = next, sound(Sfx::Move);
+        if (back) {
+            if (m_devPage > 0) showDeveloperPage(0, m_developer < 0 ? -1 : 0);  // (back to the first page, then the page before)
+            else turn(-1);
+        }
+        // the arrows under the banner
+        if (tap && m_hitDevPrev.Contains(mouse)) {
+            showDeveloperPage(m_devPage - 1, -1);
+            return;
+        }
+        if (tap && m_hitDevNext.Contains(mouse)) {
+            showDeveloperPage(m_devPage + 1, -1);
+            return;
+        }
+        // the mouse chooses by being over a circle; a tap chooses a circle, a tap elsewhere none
+        int over = -1;
+        for (int i = first; i < first + n; ++i) {
+            const ImVec2 c = m_hitDeveloper[size_t(i)].GetCenter();
+            const float r = m_hitDeveloper[size_t(i)].GetWidth() * 0.5f;
+            if (r > 0 && (mouse.x - c.x) * (mouse.x - c.x) + (mouse.y - c.y) * (mouse.y - c.y) <= r * r) over = i;
+        }
+        if (tap && !m_hitLeft.Contains(mouse)) {
+            if (over != m_developer && over >= 0) sound(Sfx::Move);
+            m_developer = over;
+        } else if (!m_touch && input::tracker().lastWasMouse() && !ImGui::IsMouseDown(ImGuiMouseButton_Left) && over != m_developer) {
+            if (over >= 0) sound(Sfx::Move);
+            m_developer = over;
         }
     }
     void activate() {
@@ -907,6 +991,7 @@ private:
         m_hitLeft = m_hitRight = m_hitLogo = {};
         for (auto& r : m_hitButton) r = {};
         for (auto& r : m_hitDeveloper) r = {};
+        m_hitDevPrev = m_hitDevNext = {};
         const bool settled = !m_options && !m_credits && !m_confirm;
         // the arrows of the page shown: the nearest swaying arrow on each side of the window's centre
         for (auto& n : m_scene.nodes()) {
@@ -992,13 +1077,24 @@ private:
     // A circle shows the developer's silhouette on a grey disc until it is chosen (the mouse over it, the pad's focus,
     // a tap); then the disc takes its colour, the silhouette gives way to the picture, and a bar says who and what.
     // The circle itself is the menu's own piece (a player circle's rim and shadow; its inside is covered).
+    // Its first page: the first developer large at the left, the next four where the PS3 page has its four circles; the
+    // pages after it (launcher/credits.h): up to six in two rows of three, centred, at the four's size and rows.
+    // A developer's circle on its page: the centre from the page's centre and the half size (the PS3 layout's units).
+    static std::array<float, 3> developerPlace(int i) {
+        static constexpr float first[5][3] = {{-322, -52, 146}, {110, -62, 104}, {334, -62, 104}, {110, 160, 104}, {334, 160, 104}};
+        const int page = credits::developerPage(i);
+        if (page == 0) return {first[i][0], first[i][1], first[i][2]};
+        const int l = i - credits::firstDeveloperOf(page);
+        return {float(l % 3 - 1) * 224.0f, l / 3 ? 160.0f : -62.0f, 104.0f};
+    }
     void drawDevelopers(ImDrawList* dl, float dt, float alpha) {
         const Page p = Page::Developers;
         const bool current = page() == p;
         banner(dl, overlay(p, 222, -262), 400 * m_s, tr("Developers"), alpha);
-        auto faded = [&](ImU32 c) { return (c & ~IM_COL32_A_MASK) | (ImU32(float(c >> IM_COL32_A_SHIFT) * alpha + 0.5f) << IM_COL32_A_SHIFT); };
-        // the first developer large at the left, the others where the PS3 page has its four circles
-        static constexpr float place[5][3] = {{-322, -52, 146}, {110, -62, 104}, {334, -62, 104}, {110, 160, 104}, {334, 160, 104}};
+        // (a page turned: its circles fade in)
+        m_devPageFade = std::min(1.0f, m_devPageFade + dt / 0.2f);
+        const float circles = alpha * m_devPageFade;
+        auto faded = [&](ImU32 c, float a) { return (c & ~IM_COL32_A_MASK) | (ImU32(float(c >> IM_COL32_A_SHIFT) * a + 0.5f) << IM_COL32_A_SHIFT); };
         const MenuScene::Mesh* rim = nullptr;
         const MenuScene::Mesh* shadow = nullptr;
         for (const char* name : {"STATIC_Player1", "STATIC_MinigameSly"})
@@ -1008,30 +1104,35 @@ private:
             if (!tex || mesh.v.size() < 36) return false;
             float u0 = 1e9f, v0 = 1e9f, u1 = -1e9f, v1 = -1e9f;
             for (size_t k = 0; k + 8 < mesh.v.size(); k += 9) u0 = std::min(u0, mesh.v[k + 3]), u1 = std::max(u1, mesh.v[k + 3]), v0 = std::min(v0, mesh.v[k + 4]), v1 = std::max(v1, mesh.v[k + 4]);
-            dl->AddImage(tex.im(), {c.x - half, c.y - half}, {c.x + half, c.y + half}, {u0, v0}, {u1, v1}, faded(colour));
+            dl->AddImage(tex.im(), {c.x - half, c.y - half}, {c.x + half, c.y + half}, {u0, v0}, {u1, v1}, faded(colour, circles));
             return true;
         };
-        for (int i = 0; i < 5; ++i) {
+        const int first = credits::firstDeveloperOf(m_devPage), end = first + credits::developersOn(m_devPage);
+        for (int i = first; i < end; ++i) {
             float& shown = m_reveal[size_t(i)];
             shown = std::clamp(shown + (current && m_developer == i ? dt : -dt) / 0.22f, 0.0f, 1.0f);
-            const ImVec2 c = overlay(p, place[i][0], place[i][1]);
-            const float half = place[i][2] * m_s * (1.0f + 0.05f * shown), inner = half * 0.868f;
+            const auto place = developerPlace(i);
+            const ImVec2 c = overlay(p, place[0], place[1]);
+            const float half = place[2] * m_s * (1.0f + 0.05f * shown), inner = half * 0.868f;
             if (current) m_hitDeveloper[size_t(i)] = ImRect({c.x - half, c.y - half}, {c.x + half, c.y + half});
             const bool drawn = rim && piece(*shadow, {c.x - half * 0.19f, c.y + half * 0.19f}, half, IM_COL32(0, 0, 0, 128)) && piece(*rim, c, half, IM_COL32(204, 204, 204, 255));
             if (!drawn) {  // (a menu without that piece: a plain rim)
-                dl->AddCircleFilled({c.x - half * 0.1f, c.y + half * 0.1f}, half * 0.93f, faded(IM_COL32(0, 0, 0, 128)), 64);
-                dl->AddCircleFilled(c, half * 0.93f, faded(IM_COL32(235, 235, 235, 255)), 64);
+                dl->AddCircleFilled({c.x - half * 0.1f, c.y + half * 0.1f}, half * 0.93f, faded(IM_COL32(0, 0, 0, 128), circles), 64);
+                dl->AddCircleFilled(c, half * 0.93f, faded(IM_COL32(235, 235, 235, 255), circles), 64);
             }
             // the disc: grey, the developer's colour when chosen
-            auto mix = [&](int grey, uint32_t colour, int shift) { return int(float(grey) + (float((colour >> shift) & 255) - float(grey)) * shown); };
-            dl->AddCircleFilled(c, inner, faded(IM_COL32(mix(150, kDevelopers[i].colour, 16), mix(150, kDevelopers[i].colour, 8), mix(150, kDevelopers[i].colour, 0), 255)), 96);
-            const auto& art = m_fixture.developers[size_t(i)];
+            const uint32_t colour = kDevelopers[i].colour;
+            auto mix = [&](int grey, int shift) { return int(float(grey) + (float((colour >> shift) & 255) - float(grey)) * shown); };
+            dl->AddCircleFilled(c, inner, faded(IM_COL32(mix(150, 16), mix(150, 8), mix(150, 0), 255), circles), 96);
+            const Fixture::DeveloperPicture art = size_t(i) < m_fixture.developers.size() ? m_fixture.developers[size_t(i)] : Fixture::DeveloperPicture{};
             const ImVec2 a{c.x - inner, c.y - inner}, b{c.x + inner, c.y + inner};
-            if (art.picture && shown > 0) dl->AddImageRounded(art.picture, a, b, {0, 0}, {1, 1}, faded(IM_COL32(255, 255, 255, int(255 * shown))), inner, ImDrawFlags_RoundCornersAll);
-            if (art.silhouette && shown < 1) dl->AddImage(art.silhouette, a, b, {0, 0}, {1, 1}, faded(IM_COL32(255, 255, 255, int(255 * (1 - shown)))));
+            if (art.picture && shown > 0) dl->AddImageRounded(art.picture, a, b, {0, 0}, {1, 1}, faded(IM_COL32(255, 255, 255, int(255 * shown)), circles), inner, ImDrawFlags_RoundCornersAll);
+            if (art.silhouette && shown < 1) dl->AddImage(art.silhouette, a, b, {0, 0}, {1, 1}, faded(IM_COL32(255, 255, 255, int(255 * (1 - shown))), circles));
+            ui::recordLayout((std::string("collection-developer ") + kDevelopers[i].name).c_str(), ImRect({c.x - half, c.y - half}, {c.x + half, c.y + half}));
         }
-        // the bar: who and what, over the first circle
-        if (!current || m_developer < 0) return;
+        drawDeveloperPages(dl, current, alpha);
+        // the bar: who and what, at the top left (over the first page's large circle)
+        if (!current || m_developer < first || m_developer >= end) return;
         const Developer& who = kDevelopers[m_developer];
         const float barAlpha = m_reveal[size_t(m_developer)] * alpha;
         ImVec2 c = overlay(p, -322, -272);
@@ -1040,6 +1141,29 @@ private:
         panel(dl, r, barAlpha);
         captionCentred(dl, 28 * m_s, {c.x, c.y - 30 * m_s}, 0xFFD21E, who.name, barAlpha);
         captionWrapped(dl, 16 * m_s, {c.x, c.y + 24 * m_s}, r.GetWidth() - 44 * m_s, 0xFFFFFF, tr(who.role), barAlpha);
+    }
+    // Under the banner: the page's number of all ("1 / 2") between the menu's bordered buttons with arrows, for a finger
+    // or the mouse (and to see where the pages go); a pad and keys turn the pages with the shoulder buttons too.
+    void drawDeveloperPages(ImDrawList* dl, bool current, float alpha) {
+        if (credits::kDeveloperPages < 2) return;
+        const Page p = Page::Developers;
+        const ImVec2 c = overlay(p, 222, -188);
+        char text[32];
+        std::snprintf(text, sizeof text, "%d / %d", m_devPage + 1, credits::kDeveloperPages);
+        captionCentred(dl, 22 * m_s, c, 0xFFFFFF, text, alpha);
+        const float w = 58 * m_s, h = 38 * m_s, apart = 92 * m_s;
+        for (int side = 0; side < 2; ++side) {
+            const bool enabled = side ? m_devPage + 1 < credits::kDeveloperPages : m_devPage > 0;
+            const ImVec2 b{c.x + (side ? apart : -apart), c.y};
+            const ImRect r({b.x - w * 0.5f, b.y - h * 0.5f}, {b.x + w * 0.5f, b.y + h * 0.5f});
+            const float a = alpha * (enabled ? 1.0f : 0.35f);
+            button(dl, r, a);
+            const float k = 8 * m_s, dir = side ? 1.0f : -1.0f;
+            dl->AddTriangleFilled({b.x + dir * k, b.y}, {b.x - dir * k * 0.7f, b.y - k}, {b.x - dir * k * 0.7f, b.y + k}, draw::rgba(enabled ? 0xFFD21E : 0xFFFFFF, a));
+            if (current && enabled) (side ? m_hitDevNext : m_hitDevPrev) = ImRect({r.Min.x - 8 * m_s, r.Min.y - 8 * m_s}, {r.Max.x + 8 * m_s, r.Max.y + 8 * m_s});
+            ui::recordLayout(side ? "collection-developers-next" : "collection-developers-previous", r);
+        }
+        ui::recordLayout("collection-developers-page", ImRect({c.x - 40 * m_s, c.y - 14 * m_s}, {c.x + 40 * m_s, c.y + 14 * m_s}));
     }
     // Sly 3: the SafeHouse launcher's question before it starts (its words; "Don't show again" is the same setting).
     void confirmInput(bool up, bool down, bool left, bool right, bool confirm, bool back) {
@@ -1133,6 +1257,8 @@ private:
             hints = {{Button::Dpad, GLFW_KEY_RIGHT, N_("Choose")}, {Button::Start, GLFW_KEY_TAB, N_("Options")},
                      {ui::backButton(), GLFW_KEY_ESCAPE, page() == Page::Title ? N_("Quit") : N_("Back")}};
             const State st = state(page());
+            if (page() == Page::Developers && m_devPage > 0) hints.push_back({Button::LB, GLFW_KEY_PAGE_UP, N_("Previous page")});
+            if (page() == Page::Developers && m_devPage + 1 < credits::kDeveloperPages) hints.push_back({Button::RB, GLFW_KEY_PAGE_DOWN, N_("Next page")});
             if (st == State::Playable || (st == State::InDevelopment && m_status[size_t(gameOf(page()))].runtime))
                 hints.push_back({ui::confirmButton(), GLFW_KEY_ENTER, N_("Play")});
             else if (page() == Page::Extras) hints.push_back({ui::confirmButton(), GLFW_KEY_ENTER, N_("Select")});
@@ -1322,7 +1448,7 @@ private:
                               saveSly2Settings();
                           },
                           {}, N_("The shape of this menu and of Sly 2's picture. Fit to screen uses the whole window. The PS2 options match the original framing.")});
-#ifndef CANE_ANDROID  // (Android: the app fills its window)
+#if !defined(CANE_ANDROID) && !defined(CANE_IOS)  // (the apps fill their window)
         m_rows.push_back({"", N_("Start in fullscreen"), [this] { return collectionConfig().value("fullscreen", true) ? std::string(N_("On")) : std::string(N_("Off")); },
                           [this](int) {
                               collectionConfig()["fullscreen"] = !collectionConfig().value("fullscreen", true);
@@ -1364,6 +1490,8 @@ private:
         m_rows.push_back({"", N_("Open the SafeHouse launcher"), {}, {}, [this] { openSafeHouse(); },
 #ifdef CANE_ANDROID
                           N_("Install games, more options and home screen shortcuts.")});
+#elif defined(CANE_IOS)
+                          N_("Install games and more options.")});
 #else
                           N_("Install games, more options, Steam and desktop shortcuts.")});
 #endif
@@ -1570,9 +1698,11 @@ private:
     std::atomic<bool> m_gameShown{false}, m_gameLeaving{false};  // (the hand-off's lines, from the job's thread)
     bool m_confirm = false, m_confirmHide = false, m_sly3Confirmed = false;
     std::array<ImRect, 3> m_hitConfirm{};
-    std::array<ImRect, 5> m_hitDeveloper{};
-    std::array<float, 5> m_reveal{};
-    int m_developer = -1;
+    std::vector<ImRect> m_hitDeveloper = std::vector<ImRect>(size_t(credits::kDeveloperCount));
+    std::vector<float> m_reveal = std::vector<float>(size_t(credits::kDeveloperCount));
+    int m_developer = -1, m_devPage = 0;  // (the chosen developer, launcher/credits.h order; the developers' page shown)
+    float m_devPageFade = 1;
+    ImRect m_hitDevPrev, m_hitDevNext;
     float m_dt = 0;
     ImRect m_hitLeft, m_hitRight, m_hitLogo;
     std::array<ImRect, 4> m_hitButton{};

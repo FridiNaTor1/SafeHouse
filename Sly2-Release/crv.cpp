@@ -153,6 +153,23 @@ glm::mat4 MatWorldLox(const LO* plo)
 
 void InvalidateCrvOfLo(const LO* plo) { s_mpcrv.erase(plo); }
 
+// PC addition (the map editor): a path's points changed in place: its cached curve (if built) takes them again
+void RefreshCrvOfLo(LO* plo)
+{
+    if (!plo || !FIsLoDerivedFrom(plo, 0x0A)) return;
+    const LOXPATH* ppath = static_cast<const LOXPATH*>(plo);
+    auto it = s_mpcrv.find(plo);
+    if (it == s_mpcrv.end() || !it->second) return;
+    CRV& c = *it->second;
+    c.ag.resize(ppath->an.size());
+    for (size_t i = 0; i < ppath->an.size(); ++i) std::memcpy(&c.ag[i], &ppath->an[i], 4);
+    c.apos = ppath->avecF4;
+    c.avIn = ppath->avec140;
+    c.avOut = ppath->avec144;
+    c.isegCached = -1;
+    RecalcCrv(&c, MatWorldLox(plo));
+}
+
 // orig: 0x001BC570's reversal (a clockwise blocking polygon at its post-load): the points swapped end for end, the
 // parameters mirrored on the last one (0x1E6630), the curve rebuilt
 void ReverseLoxPath(LO* plo)

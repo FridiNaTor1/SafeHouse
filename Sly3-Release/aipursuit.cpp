@@ -93,7 +93,7 @@ void ClearPlayerStatus77() { MpStatus77().clear(); }
 
 // ---- the target records ----
 
-// orig: 0x001F8278 (0x1F8240, else a new one 0x20A5F8)
+// orig: 0x001F8278 (0x1F8240, else a new one 0x20A5F8) (orig3: 0x241AD8, the same code in Sly 3)
 TARGETREC* PtargetrecOf(LO* plo)
 {
     auto& p = MpTarget()[plo];
@@ -124,7 +124,7 @@ void SetTargetrecTimer(TARGETREC* pt, int n)
 // orig: 0x0020A7E0
 bool FTargetrecExpired(const TARGETREC* pt) { return T_TARGET_LOST < g_clock.t - pt->t4; }
 
-// orig: 0x0020A730
+// orig: 0x0020A730 (orig3: 0x256410, the same code in Sly 3)
 void AddTargetrecGuard(TARGETREC* pt, GUARD* pg)
 {
     if (pt->apguard.empty())
@@ -656,6 +656,7 @@ void JOBPURSUE::Update()
     AIJOB::Update();
     GUARD* pg = pguard;
     int prior;
+    int cpass = 0;  // (PC safety net, not in the original: see the loop's end)
     do
     {
         prior = st;
@@ -704,6 +705,17 @@ void JOBPURSUE::Update()
             if (!FJobDone(this) && !FGuardStill(pg)) SetPursueState(3);
             break;
         default: break;
+        }
+        // (PC safety net, not in the original: with a close range +0x314 above the far range +0x318 (Sly 3's guard fields
+        // not all at their offsets yet: v_ext's chase, Carmelita 28 at ~600 units) states 0 and 3 alternate without
+        // end inside one frame and froze the game; after 16 passes the state stays for the next frame, noted once)
+        if (++cpass >= 16 && prior != st)
+        {
+            static bool s_fNoted = false;
+            if (!s_fNoted) std::fprintf(stderr, "sly3: guard %d's pursuit alternates states %d / %d (close %.0f, far %.0f): yielded\n",
+                                        pg->palo ? pg->palo->oid : -1, prior, st, pg->g314, pg->g318);
+            s_fNoted = true;
+            break;
         }
     } while (prior != st);
     // orig: 0x176098: per-guard repeat and the global Smoke deadline must both
@@ -846,9 +858,11 @@ int JOBSTRIKE::Message(int msg, void* pm)
         {
             switch (pev->n)
             {
-            case 0x2D: pguard->fF3C = 1; return 1;
-            case 0x2E: pguard->fF3C = 0; return 1;
-            case 0x30:
+            // (Sly 3's ids: 0x2D..0x30 + 0x1D, as 0x2F -> 0x4C in JOBMOVE (0x131850) and 0x31 / 0x32 -> 0x4E / 0x4F in
+            // the shot (0x1A5750); the strike's Sly 3 handler is not paired in the decomp's map)
+            case 0x4A: pguard->fF3C = 1; return 1;
+            case 0x4B: pguard->fF3C = 0; return 1;
+            case 0x4D:
                 f50 = 0;
                 if (pkinde->pvState) ReleaseK2Ballistic(static_cast<K2PLAY*>(pkinde->pvState));
                 return 1;
@@ -1178,7 +1192,7 @@ void JOBB2::Init()
     AddGuardState(pguard, 0x20);  // 0x209890
     st = -1;
 }
-// orig: 0x0017B840
+// orig: 0x0017B840 (orig3: 0x1A5900, the same code in Sly 3)
 void JOBB2::Enter()
 {
     AIJOB::Enter();
@@ -1500,13 +1514,13 @@ void JOBSHOOT::Init()
     AIJOB::Init();
     st = -1;
 }
-// orig: 0x0017B5C0
+// orig: 0x0017B5C0 (orig3: 0x1A5680, the same code in Sly 3)
 void JOBSHOOT::Enter()
 {
     AIJOB::Enter();
     SetShootState(0);
 }
-// orig: 0x0017B5F0
+// orig: 0x0017B5F0 (orig3: 0x1A56B0, the same code in Sly 3)
 void JOBSHOOT::Exit()
 {
     AIJOB::Exit();
@@ -1531,8 +1545,8 @@ int JOBSHOOT::Message(int msg, void* pm)
         const ASEGMSG9* pev = static_cast<const ASEGMSG9*>(pm);
         if (PasegaOfKinde(static_cast<JOBMOVE*>(pchild)->pkinde) == pev->pasega)
         {
-            if (pev->n == 0x31) { pguard->fF60 = 1; return 1; }
-            if (pev->n == 0x32) { pguard->fF60 = 0; return 1; }
+            if (pev->n == 0x4E) { pguard->fF60 = 1; return 1; }   // (orig3 0x1A5750: Sly 3's 0x4E / 0x4F, Sly 2's 0x31 / 0x32)
+            if (pev->n == 0x4F) { pguard->fF60 = 0; return 1; }
         }
     }
     return AIJOB::Message(msg, pm);

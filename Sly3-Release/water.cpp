@@ -21,6 +21,7 @@
 // 0x1F7BF0); the water's own are 1 (0x228BB0).
 #include "so.h"
 #include "game/sly3.h"
+#include "game/rowboat3.h"
 
 #include "alo.h"
 #include "animfind.h"
@@ -52,6 +53,7 @@
 glm::vec3 ProjectCnstr(const CNSTRS& c, const XF* pxfOwner, const glm::vec3& v);  // solve.cpp: 0x1FA810
 void AccelAloPos(ALO* p, const glm::vec3& v);                                      // solve.cpp: 0x1FAC30
 void UpdateAloBounds(ALO* p);                                                      // so.cpp: 0x1F50E0
+void VehicleAccelRotation(ALO* palo, const glm::vec3& v);                            // vehicle.cpp: 0x1FAC98 (orig3 0x244890)
 
 namespace
 {
@@ -135,7 +137,7 @@ glm::vec3 VtVelRot(ALO* p)  // vt slot 34
     return pfn ? pfn(p) : AngVelAlo(p);
 }
 
-// orig: 0x001F6838 (no attachment, or the attachment's flag bit 2)
+// orig: 0x001F6838 (no attachment, or the attachment's flag bit 2) (orig3: 0x23FC68, the same C in the Sly 3 decomp)
 bool FAloOutOfSweep(ALO* p)
 {
     OXA* poxa = Poxa(p);
@@ -145,7 +147,7 @@ bool FAloOutOfSweep(ALO* p)
 // orig: 0x00229D60 (an entry not turned off: flag 50)
 bool FWaterEntry(void*, SOE* psoe) { return !psoe->f50; }
 
-// orig: 0x0014CDB0 (the union of the segment a-b's pieces inside the entries, at most cMax)
+// orig: 0x0014CDB0 (the union of the segment a-b's pieces inside the entries, at most cMax) (orig3: 0x165130, the same C in the Sly 3 decomp)
 int CClipSegmentEntries(const glm::vec3& a, const glm::vec3& b, const std::vector<SOE*>& apsoe, int cMax, LSG* alsg)
 {
     int c = 0;
@@ -158,7 +160,7 @@ int CClipSegmentEntries(const glm::vec3& a, const glm::vec3& b, const std::vecto
     return c;
 }
 
-// orig: 0x0011E290 (a's part along the unit vector b and the rest; their dot product)
+// orig: 0x0011E290 (a's part along the unit vector b and the rest; their dot product) (orig3: 0x11FE60, the same code in Sly 3)
 float GSplitVector(const glm::vec3& a, const glm::vec3& b, glm::vec3* ppar, glm::vec3* pperp)
 {
     const float d = (a.x * b.x + a.y * b.y) + a.z * b.z;
@@ -366,6 +368,71 @@ void ApplyWaterToAlo(ALO* po, ALO* pw)
     if (FCidDerivedFrom(po->Cid(), S3CID(0x32))) ReleaseWake(po);
 }
 NATIVEFN(0x2297F8, ApplyWaterToAlo);
+
+// orig3: 0x00280F70 (Sly 3's water depth: the fraction of the segment a-b the water's entries cut, the surface point
+// where it leaves them and the plane's normal there)
+float GWaterDepthSegment3(ALO* pw, const glm::vec3& a, const glm::vec3& b, glm::vec3* ppos, glm::vec3* pnormal)
+{
+    std::vector<SOE*> apsoe;
+    CsoeCollect(pw, FWaterEntry, nullptr, &apsoe);
+    LSG alsg[0x10];
+    if (!CClipSegmentEntries(a, b, apsoe, 0x10, alsg))
+    {
+        *pnormal = glm::vec3(0.0f, 0.0f, 1.0f);
+        return 0.0f;
+    }
+    *ppos = alsg[0].pos1;
+    const glm::vec3 n(alsg[0].plane1);
+    *pnormal = FVecsNear(glm::vec3(0.0f), n) ? glm::vec3(0.0f, 0.0f, 1.0f) : n;
+    return alsg[0].t1 - alsg[0].t0;
+}
+
+// orig3: 0x0020EEF0 (the rowboat 0x53's vt slot 76, game/rowboat3.h): the boat's probe (its local z -100..100) in the
+// water: pushed up against gravity by both buoyancies and the depth (at most 1), righted toward the surface's normal
+// (+0x1B8), its turn slowed (-(|w| +0x1B4 + +0x1B0) w), its motion against the water's flow slowed per local axis
+// (+0x1A0 x |v| + the still water's +0x190); the wake while floating at an upward surface
+void ApplyWaterToBoat3(ALO* po, ALO* pw)
+{
+    BOATWATER3 bw;
+    XF* pxfObj = PxfObj(po);
+    if (!FBoatWater3(po, &bw) || !pxfObj)
+    {
+        ApplyWaterToAlo(po, pw);
+        return;
+    }
+    const glm::mat4 m = pxfObj->matWorld;
+    const glm::vec3 a(m * glm::vec4(0.0f, 0.0f, -100.0f, 1.0f)), b(m * glm::vec4(0.0f, 0.0f, 100.0f, 1.0f));   // D_00325B40 / 50
+    glm::vec3 pos(0.0f), normal(0.0f, 0.0f, 1.0f);
+    const float depth = GWaterDepthSegment3(pw, a, b, &pos, &normal);
+    if (FDbg())
+        std::printf("[water] t %.3f boat %d in %d: depth %.3f surface %.1f %.1f %.1f n.z %.2f\n", g_clock.t, po->oid, pw->oid, depth, pos.x, pos.y, pos.z, normal.z);
+    if (depth < F32(0x38D1B717)) return;
+    SOST* ps = Psost(po);
+    if (!ps) return;
+    AccelAloPos(po, ps->dvGravity * (-(GBuoyancy(po) * GBuoyancy(pw)) * std::min(depth, 1.0f)));
+    const glm::vec3 up = glm::normalize(glm::vec3(m[2]));   // (0x1C94E8: the local z in the world)
+    glm::vec3 axis = glm::cross(up, normal);
+    if (glm::dot(up, normal) < 0.0f) axis = glm::length(axis) < 1e-4f ? glm::vec3(1.0f, 0.0f, 0.0f) : glm::normalize(axis);
+    VehicleAccelRotation(po, axis * bw.turnGain);
+    const glm::vec3 w = VtVelRot(po);
+    VehicleAccelRotation(po, w * -(glm::length(w) * bw.dragSpeed + bw.dragBase));
+    const glm::vec3 vFlow = VelWaterAt(pw, glm::vec3(m[3]));
+    const glm::mat3 rot(m);
+    const glm::vec3 vLocal = glm::transpose(rot) * (VtVelPos(po) - vFlow);
+    const glm::vec3 bias = FVecsNear(glm::vec3(0.0f), vFlow) ? bw.bias : glm::vec3(0.0f);
+    const glm::vec3 drag((bw.damp.x * std::fabs(vLocal.x) + bias.x) * -vLocal.x, (bw.damp.y * std::fabs(vLocal.y) + bias.y) * -vLocal.y,
+                         (bw.damp.z * std::fabs(vLocal.z) + bias.z) * -vLocal.z);
+    AccelAloPos(po, rot * drag);
+    if (0.0f < depth && depth < 1.0f && F32(0x3F666666) < normal.z)
+    {
+        OXA* poxa = Poxa(po);
+        const float sRadius = poxa ? ((poxa->posMax.x - poxa->posMin.x) + (poxa->posMax.y - poxa->posMin.y)) * 0.25f : 0.0f;
+        WakeAloWater(po, pw, vFlow, pos, g_clock.dt, F32(0x3DCCCCCD), sRadius);
+        return;
+    }
+    ReleaseWake(po);
+}
+NATIVEFN3(0x20EEF0, ApplyWaterToBoat3);
 
 // orig: 0x002292D8 func_002292D8 (the water's vt slot 71: the node's object's slot 72 with the water)
 void NotifyWaterObject(ALO* pw, WNODE* pn)

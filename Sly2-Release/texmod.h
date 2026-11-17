@@ -16,6 +16,9 @@ std::string SzTextureModName(const std::vector<uint8_t>& rgba, int dx, int dy);
 // --texture-pack DIR: a texture pack (DIR/Textures.pak, else DIR/Textures; the same names) under the mods folder's own
 // textures, which win. The launcher passes the PS3 HD pack this way while it is turned on (ps3hd.cpp).
 void SetTexturePackDirectory(const std::string& dir);
+// (the map editor, nothing streaming) the replacement textures read again from these folders (lowest priority first)
+// instead of the mods folders, without the cache; the renderer's textures must be made again (ResetTextureCache).
+void ReloadTextureModsFrom(const std::vector<std::string>& adirMods);
 // The texture cache (platform/texture_cache.h, notes/TEXCACHE_2026-11-10.md): each replacement's texels, ready to
 // upload, kept in a pack file per folder under the user's cache folder (--cache-dir DIR: there), so a PNG is read and
 // decoded once; a new or changed PNG (by name, size and time) is added the first time it is used, by a worker thread,

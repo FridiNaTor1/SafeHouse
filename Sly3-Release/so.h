@@ -144,12 +144,25 @@ struct CTMSG
     LO* ploReceiver = nullptr;   // +0x8: where the offer starts (up its parents)
     uint32_t grfFilter = 0;      // +0xC: the contact bytes asked for
     int nState = 0;              // +0x10
+    int fKill3 = 0;              // (Sly 3 +0x28: the hit points to 0 at once, orig3 0x19B6E0; set by SCPT 0x6B's A3)
     glm::vec3 pos{0.0f};         // +0x20
     glm::vec3 vec{0.0f};         // +0x30
     uint32_t grfAccepted = 0;    // +0x44: the receiver's matching bytes
     ALO* paloAccepted = nullptr; // +0x48
     float t = 0.0f;              // +0x4C: when it was accepted
+    int nKill3 = 0;              // (Sly 3's hit record +0x28, 0x240CB0's sixth argument: a fatal hit, e.g. a ram into a plane)
 };
+
+// (Sly 3) the contact as a splice object: Sly 3's hit record is a BASIC (class 0xC4, 0x60 bytes, made by orig3 0x240CB0)
+// whose options the scripts read and write in their event 12 handler: 276 the sender (+0x14), 556 the receiver (+0x1C),
+// 123 the kind (+0x20 = grfFilter), 124 the amount (+0x24 = nState), 64 the direction (+0x40), 1495 the accepted bytes
+// (+0x50 = grfAccepted; 0 makes the receiver ignore it). Lives only while the event runs.
+struct CTMSGBASIC3 : BASIC
+{
+    CTMSG* pctm = nullptr;
+};
+// (Sly 3, orig3 0x240A28) event 12 with the contact to its sender and its receiver, before the receiver's slot 78
+extern void (*g_pfnLoHitEvent3)(CTMSG* pctm);
 
 // An entry of a sweep list (orig 0xC bytes).
 struct AOX
@@ -338,6 +351,18 @@ int ClipSegmentToSphere(const glm::vec3& center, const glm::vec3& a, const glm::
                         int countMax, LSG* result, float radius);
 SOE* PsoeHitTestLineObjects(int grf, const glm::vec3& a, const glm::vec3& b, const std::vector<SOE*>& apsoe, LSG* plsg);
 int CMergeAlsg(int c1, const LSG* alsg1, int c2, const LSG* alsg2, int cMax, LSG* alsgOut, int k);
+// orig3: 0x001269D8 (the splice's hit-test-objects 131 / hit-test-objects-first 132, Sly 2's 123 / 124): the segment a-b
+// against every collision entry of each listed object (entries off skipped: +0x18 bit 19; each entry's world
+// geometry refreshed first, 0x164A10 -> 0x18B1E0), one record per entry it crosses (the clip 0x164A98 with one record:
+// its first end's point / plane / parameter), in list order
+struct HITOBJ3
+{
+    LO* plo = nullptr;
+    glm::vec3 pos{0.0f};
+    glm::vec4 plane{0.0f};
+    float t = 0.0f;
+};
+void HitTestObjects3(const std::vector<LO*>& aplo, const glm::vec3& a, const glm::vec3& b, std::vector<HITOBJ3>* pahit);
 
 int CsbiSphereEntry(const glm::vec3& pos, const SOE* pso, const std::vector<BSPN>* pabsp, int csbiMax, float r,
                     std::vector<glm::vec3>* papos, std::vector<glm::vec4>* paplane, std::vector<int>* pakind,

@@ -4,6 +4,7 @@
 #include "game/sly3.h"
 #include "worldglobals.h"
 #include "carry.h"
+#include "game/items3.h"
 
 #include "ainoise.h"
 #include "activate.h"
@@ -283,7 +284,7 @@ void SetExtractorState(LO* plo, int n)
         if (GUARD* pg = PguardFromLo(pc->ploActor))
         {
             if (AIJOB* pj = PjobFind(pg, 0xB0)) pj->SetState(2);  // 0x17A8C8
-            if (pg->pscaleFC4) SetCtrlPos(pg->pscaleFC4, glm::vec4(1.0f, 1.0f, 1.0f, 0.0f));  // 0x12D108
+            if (pg->pscaleFC4) SetCtrlPos(pg->pscaleFC4, glm::vec4(pg->gScale3, pg->gScale3, pg->gScale3, 0.0f));  // 0x12D108 (Sly 3: its own scale, EOPID 370)
         }
         pc->ploActor = nullptr;
     }
@@ -368,6 +369,7 @@ void UpdateExtractor(LO* plo)
                 const float u = (g_clock.t - pc->t) / 3.0f;
                 float g = 1.2f + u * (0.0f + u * -1.0f);
                 g = g < 0.0f ? 0.0f : (1.0f < g ? 1.0f : g);
+                g *= pg->gScale3;   // (Sly 3: of the guard's own scale, EOPID 370)
                 SetCtrlPos(pg->pscaleFC4, glm::vec4(g, g, g, g));
             }
             if (3.0f < g_clock.t - pc->t)
@@ -406,6 +408,10 @@ void LandCarry(LO* plo, LO* q)
     CARRYRT* pc = Pcarry(plo);
     if (!pc) return;
     if (pc->kind == 0x1A || pc->kind == 0x29) { SetCarryState(plo, 3); return; }
+    // (s3-gadgets) orig3 0x277208: Bentley's Grapple-Cam (Sly 3's kind 13) places its camera here (0x1404D8: the placement
+    // 0x287890, an object of the proxy +0x19BC attached where it landed, 0x287080); when that fails it ends as the kinds
+    // above. The camera (class 0x56, 0x285458..0x287A00) is not ported: it always ends.
+    if (pc->kind == sly3::ITEM2_SLY3 + 13) { SetCarryState(plo, 3); return; }
     SetAloParent(static_cast<ALO*>(plo),
                  (q && q->oid != 1 && FCidDerivedFrom(q->Cid(), S3CID(0x30))) ? static_cast<ALO*>(q) : nullptr,
                  nullptr, 3);  // 0x1A58D0(p, q, 3): preserve world position and rotation.
@@ -421,6 +427,7 @@ bool FCarryLands(const CARRYRT& c)
     {
     case 4: return c.state == 1;
     case 5: case 7: case 9: case 11: case 13: case 26: case 37: case 41: return true;
+    case sly3::ITEM2_SLY3 + 13: return true;   // (s3-gadgets) orig3 0x277640: Sly 3's kind 13, the Grapple-Cam
     default: return false;
     }
 }

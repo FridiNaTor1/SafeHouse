@@ -1,3 +1,5 @@
+#include "actioninput.h"
+#include "promptglyph.h"
 // The dance minigame (Ep2's audition 11:2059 and the heist dance 11:1593): the director (cid 0x79, module
 // 0x1526D8..0x153800, D_002DE570) and its dancers (cid 0x44, a STEP: 0x152100..0x152390, 0x1524A0..0x152680), driven
 // by the dance script's commands 0x49 (the director's state and the beats' button prompts), 0x4A (a beat: the button
@@ -18,6 +20,7 @@
 // grf} x 3: good, bad, missed), +0x408 its ASEGA, +0x40C busy (messages 0x27 / 0x28).
 
 #include "dance.h"
+#include "game/director3.h"
 #include "game/sly3.h"
 #include "worldglobals.h"
 
@@ -185,6 +188,18 @@ LO* PloDanceAseg(LO* plo, OID oid)
     return po;
 }
 
+uint32_t DanceButtons(PADCTL* pad, uint32_t mask, bool take) {
+    if (!pad) return 0;
+    using sly2actions::Action;
+    const Action actions[] = {Action::DanceTriangle, Action::DanceCircle, Action::DanceCross, Action::DanceSquare};
+    uint32_t result = 0;
+    for (int i = 0; i < 4; ++i) {
+        const uint32_t bit = 0x10u << i;
+        if ((mask & bit) && (take ? sly2actions::Take(pad, actions[i], bit, 0) : sly2actions::Within(pad, actions[i], bit, 0))) result |= bit;
+    }
+    return result;
+}
+
 // orig: 0x00152390 (the dancer's move for the button id (-1: any pressed this frame, 0x1C4700), kind j (0 good,
 // 1 bad, 2 missed); idNew: the good move replaced first; the records to mode 2)
 void PlayDancerMove(LO* plo, int id, int idNew, int j)
@@ -193,7 +208,7 @@ void PlayDancerMove(LO* plo, int id, int idNew, int j)
     PADCTL* ppc = Ppadctl(plo);
     for (MOVE& m : r.amove)
     {
-        if (!((id == -1 && ppc && GrfPadctlTakePressed(ppc, static_cast<uint32_t>(m.k), 0.0f)) || m.k == id)) continue;
+        if (!((id == -1 && ppc && DanceButtons(ppc, static_cast<uint32_t>(m.k), true)) || m.k == id)) continue;
         if (idNew != -1)
             if (LO* po = PloDanceAseg(plo, idNew)) m.apaseg[0] = po;
         ALO* palo = static_cast<ALO*>(plo);
@@ -205,7 +220,7 @@ void PlayDancerMove(LO* plo, int id, int idNew, int j)
     }
 }
 
-// orig: 0x00153760 (the mean of the last +0x280 scores, in the range)
+// orig: 0x00153760 (the mean of the last +0x280 scores, in the range) (orig3: 0x20AD58, the same C in the Sly 3 decomp)
 float GScoreMean(const DANCE& d)
 {
     if (d.c280 <= 0) return 0.0f;
@@ -357,7 +372,7 @@ void UpdateDance(LO* plo)
 void CheckDancerBeat(LO* ploDance, DANCE& d, LO* po)
 {
     PADCTL* ppc = Ppadctl(po);
-    d.n230 = ppc ? static_cast<int>(GrfPadctlPressedWithin(ppc, 0xF0, 0.0f)) : 0;
+    d.n230 = ppc ? static_cast<int>(DanceButtons(ppc, 0xF0, false)) : 0;
     if (!d.n230) return;
     for (BEAT& b : d.abeat)
     {
@@ -377,7 +392,7 @@ void CheckDancerBeat(LO* ploDance, DANCE& d, LO* po)
             return;
         }
         b.n1C = 1;
-        if (ppc && GrfPadctlTakePressed(ppc, static_cast<uint32_t>(b.n4), 0.0f))
+        if (ppc && DanceButtons(ppc, static_cast<uint32_t>(b.n4), true))
         {
             if (FPrint()) std::printf("dance: beat 0x%X at %.3f hit (t %.3f)\n", b.n4, b.gC, TMusicTop());
             PlayDancerMove(po, b.n4, b.n8, 0);
@@ -459,7 +474,7 @@ void DrawIcon(const FONTBRX& font, const FONTBRX* picons, const std::string& sz,
 }  // namespace
 
 // orig: 0x001531A8 (command 0x49: the prompts (time, button) laid out along y 468.8 from x 100 over 440 units;
-// the hint at 10; then the state (0x153128))
+// the hint at 10; then the state (0x153128)) (orig3: 0x20A758 for command 0x57, Sly 3's layout below)
 void SetDancePrompts(int state, const std::vector<std::pair<float, int>>& aent)
 {
     if (!s_ploDance) return;
@@ -475,10 +490,12 @@ void SetDancePrompts(int state, const std::vector<std::pair<float, int>>& aent)
             PROMPT pr;
             pr.t = t;
             pr.k = k;
-            pr.pos = glm::vec3(100.0f + r * (t - x0), 468.80002f, 0.0f);
+            pr.pos = glm::vec3(100.0f + r * (t - x0), 456.0f, 0.0f);
             d.aprompt.push_back(pr);
         }
-        d.posHint = glm::vec3(10.0f, 468.80002f, 0.0f);
+        // (Sly 3's DIRECTOR 0x46, orig3 0x20A758 (command 0x57, up to 10 cues): y 456 (Sly 2 468.8) and the hint from
+        // the timeline's start (100, 456) (Sly 2 x 10); the draw 0x20A200 is Sly 2's 0x152C58 at Sly 3's offsets; s3-decomp)
+        d.posHint = glm::vec3(100.0f, 456.0f, 0.0f);
         d.stateHint = 0;
         d.iHint = 0;
     }
@@ -502,6 +519,7 @@ void AddDanceBeat(LO* ploDancer, int nButton, int nMove, float gTime)
 }
 
 bool FDanceDirector() { return s_ploDance != nullptr; }
+bool FDanceActive() { return s_ploDance && Dance(s_ploDance).state != 0; }
 
 // the director's init 0x1526D8 (the global director, its update flags 0xA) / post-load 0x1527C8 (its world pass)
 void PostLoadDance(LO* plo)
@@ -526,13 +544,68 @@ void PlayDancerDefault(LO* ploDancer, LO* ploAseg) { PlayDancerAseg(ploDancer, p
 // orig: 0x00152C58 (vt slot 19 of the director: while 1 / 2 with prompts, each prompt's four buttons in a diamond
 // (D_002BDB70: triangle up, circle right, cross down, square left; the asked one big (0.55), the others "o" (0.35))
 // until the dancer may press it (playing, not done, within the late window: "&2?&." at 1.2); the hint "&2m&." (0.6)
-// springs (0x117120) along to the next prompt from 0.4 s before it)
+// springs (0x117120) along to the next prompt from 0.4 s before it) (orig3: 0x20A200, the DIRECTOR 0x46's vt slot 21: the
+// same code at Sly 3's offsets (+0x190 state, +0x19C the late window, +0x1A0 / +0x1B0 the cues, +0x390 the hint), its
+// clock 0x2483D8 = TMusicTop; s3-decomp)
+namespace
+{
+void DrawPromptsOf(DANCE& d, float t, const FONTBRX* pfont, const FONTBRX* picons);
+// (Sly 3, s3-decomp) the DIRECTOR's state (game/director3.h, s3-script) as the draw's: the timeline laid out as
+// 0x20A758 does (440 units from x 100 at y 456, the hint from its start) whenever it changes, the cues' hits, the late
+// window; the hint's spring state is the draw's own (+0x390..)
+DANCE s_dance3;
+std::vector<std::pair<float, int>> s_aitem3;
+bool FDrawDirector3(const FONTBRX* pfont, const FONTBRX* picons)
+{
+    const DIRECTOR3* pd = PdirectorCur3();
+    if (!pd) return false;
+    std::vector<std::pair<float, int>> aitem;
+    for (const DIRECTOR3::ITEM& it : pd->aitem) aitem.emplace_back(it.t, it.btn);
+    DANCE& d = s_dance3;
+    if (aitem != s_aitem3)
+    {
+        s_aitem3 = aitem;
+        d.aprompt.clear();
+        if (!aitem.empty())
+        {
+            const float x0 = aitem.front().first, dx = aitem.back().first - x0;
+            const float r = dx != 0.0f ? 440.0f / dx : 0.0f;
+            for (const auto& [t, k] : aitem)
+            {
+                PROMPT pr;
+                pr.t = t;
+                pr.k = k;
+                pr.pos = glm::vec3(100.0f + r * (t - x0), 456.0f, 0.0f);
+                d.aprompt.push_back(pr);
+            }
+        }
+        d.posHint = glm::vec3(100.0f, 456.0f, 0.0f);
+        d.stateHint = 0;
+        d.iHint = 0;
+    }
+    d.state = pd->nMode;
+    d.g5C = pd->gLate;
+    for (size_t i = 0; i < d.aprompt.size() && i < pd->aitem.size(); ++i) d.aprompt[i].fDone = pd->aitem[i].fHit;
+    if (d.state < 1 || d.state > 2 || d.aprompt.empty()) return true;
+    DrawPromptsOf(d, TDirectorStream3(), pfont, picons);
+    return true;
+}
+}  // namespace
+
 void DrawDancePrompts(const FONTBRX* pfont, const FONTBRX* picons)
 {
-    if (!pfont || !s_ploDance || !s_ploDance->fInWorld) return;
+    if (!pfont) return;
+    if (FDrawDirector3(pfont, picons)) return;
+    if (!s_ploDance || !s_ploDance->fInWorld) return;
     DANCE& d = Dance(s_ploDance);
     if (d.state < 1 || d.state > 2 || d.aprompt.empty()) return;
-    const float t = TMusicTop();
+    DrawPromptsOf(d, TMusicTop(), pfont, picons);
+}
+
+namespace
+{
+void DrawPromptsOf(DANCE& d, float t, const FONTBRX* pfont, const FONTBRX* picons)
+{
     struct KEY { int id; char ch; float dx, dy; };
     static const KEY s_akey[4] = {{0x10, 'T', -0.5f, -3.0f}, {0x20, 'O', 0.5f, -2.0f}, {0x40, 'X', -0.5f, -1.0f}, {0x80, 'S', -1.5f, -2.0f}};
     const float sBig = 0.55f, sSmall = 0.35f, sA = 1.2f, sB = 0.6f;
@@ -555,7 +628,13 @@ void DrawDancePrompts(const FONTBRX* pfont, const FONTBRX* picons)
                     ch = k.ch;
                     scale = sBig;
                 }
-                DrawIcon(*pfont, picons, std::string("&2") + ch + "&.", scale, x, y);
+                if (sly2actions::profile.enabled) {
+                    using sly2actions::Action;
+                    const Action action = k.id == 0x80 ? Action::DanceSquare : k.id == 0x20 ? Action::DanceCircle :
+                                          k.id == 0x40 ? Action::DanceCross : Action::DanceTriangle;
+                    PROMPTKEYGLYPH binding(ch, sly2actions::profile.keyboard[size_t(action)], sly2actions::profile.gamepad[size_t(action)]);
+                    DrawIcon(*pfont, picons, std::string("&2") + ch + "&.", scale, x, y);
+                } else DrawIcon(*pfont, picons, std::string("&2") + ch + "&.", scale, x, y);
             }
         else DrawIcon(*pfont, picons, "&2?&.", sA, pr.pos.x - dxA * 0.5f, pr.pos.y - dyA);
     }
@@ -583,6 +662,7 @@ void DrawDancePrompts(const FONTBRX* pfont, const FONTBRX* picons)
     }
     DrawIcon(*pfont, picons, "&2m&.", sB, d.posHint.x - dxB * 0.5f, d.posHint.y - dySmall * 3.0f - dyB - 7.0f);
 }
+}  // namespace
 
 // (sw.cpp: a world's objects gone)
 void ResetDances()

@@ -13,6 +13,8 @@
 #include "sound.h"
 
 #include "../platform/sly2_settings.h"
+#include "../platform/monitor_select_glfw.h"
+#include "../platform/display_pacing.h"
 #include "audio.h"
 #include "rumble.h"
 
@@ -41,6 +43,7 @@ void FromSettings(const st::SystemSettings& s)
     g_display.frameRate = std::max(30, s.frameRate);
     g_display.drawDistance = s.drawDistance;
     g_display.window = DISPWINDOW(std::clamp(s.windowMode, 0, 2));
+    g_display.monitor = cane::monitor::load(s.monitor);   // (v22, platform/monitor_select.h)
     g_display.fVsync = s.vsyncEnabled != 0;
     g_display.fLongShadows = s.longShadows != 0;   // (v16, QoL: render.cpp FBuildShadow2)
     g_display.fFastShadows = s.fastShadows != 0;   // (v20, low-end: render.cpp FBuildShadow2 / DrawShadow2)
@@ -147,6 +150,7 @@ void ToSettings(st::SystemSettings& s)
     s.frameRate = g_display.frameRate;
     s.drawDistance = g_display.drawDistance;
     s.windowMode = int(g_display.window);
+    cane::monitor::store(s.monitor, g_display.monitor);
     s.vsyncEnabled = g_display.fVsync ? 1 : 0;
     s.longShadows = g_display.fLongShadows ? 1 : 0;
     s.fastShadows = g_display.fFastShadows ? 1 : 0;
@@ -157,32 +161,7 @@ void ToSettings(st::SystemSettings& s)
     s.dialogueVolume = g_saveopts.gDialog;
 }
 
-int s_xWindowed = 100, s_yWindowed = 100, s_dxWindowed = 1280, s_dyWindowed = 960;
-DISPWINDOW s_windowApplied = DISPWINDOW_Windowed;
-
-// The monitor holding most of the window (Sly1-Release MonitorForWindow), else the primary one.
-GLFWmonitor* MonitorForWindow(GLFWwindow* window)
-{
-    if (GLFWmonitor* pm = glfwGetWindowMonitor(window)) return pm;
-    int wx, wy, ww, wh;
-    glfwGetWindowPos(window, &wx, &wy);
-    glfwGetWindowSize(window, &ww, &wh);
-    int cmonitor = 0;
-    GLFWmonitor** apm = glfwGetMonitors(&cmonitor);
-    GLFWmonitor* best = glfwGetPrimaryMonitor();
-    long areaBest = -1;
-    for (int i = 0; i < cmonitor; ++i)
-    {
-        const GLFWvidmode* mode = glfwGetVideoMode(apm[i]);
-        if (!mode) continue;
-        int mx, my;
-        glfwGetMonitorPos(apm[i], &mx, &my);
-        const long dx = std::max(0, std::min(wx + ww, mx + mode->width) - std::max(wx, mx));
-        const long dy = std::max(0, std::min(wy + wh, my + mode->height) - std::max(wy, my));
-        if (dx * dy > areaBest) { areaBest = dx * dy; best = apm[i]; }
-    }
-    return best;
-}
+cane::monitor::Placement s_placement;   // (the window mode applied: platform/monitor_select_glfw.h)
 
 void FramebufferSizeCallback(GLFWwindow*, int width, int height)
 {
@@ -347,7 +326,8 @@ void LayoutDisplay(int outputWidth, int outputHeight)
 
 int DisplayRefreshRate(GLFWwindow* window)
 {
-    GLFWmonitor* monitor = window ? MonitorForWindow(window) : glfwGetPrimaryMonitor();
+    // (the window's monitor when fullscreen, the chosen one for Borderless, else the one holding the window)
+    GLFWmonitor* monitor = cane::monitor::refreshMonitor(window, int(g_display.window), g_display.monitor);
     const GLFWvidmode* mode = monitor ? glfwGetVideoMode(monitor) : nullptr;
     return mode ? mode->refreshRate : 0;
 }
@@ -356,45 +336,28 @@ void ApplyDisplaySettings(GLFWwindow* window)
 {
     if (!window) return;
     const DISPWINDOW mode = g_display.window;
-    if (mode != s_windowApplied)
-    {
-        if (GLFWmonitor* monitor = MonitorForWindow(window))
-        {
-            if (s_windowApplied == DISPWINDOW_Windowed)
-            {
-                glfwGetWindowPos(window, &s_xWindowed, &s_yWindowed);
-                glfwGetWindowSize(window, &s_dxWindowed, &s_dyWindowed);
-            }
-            if (mode == DISPWINDOW_Windowed)
-            {
-                glfwSetWindowAttrib(window, GLFW_DECORATED, GLFW_TRUE);
-                glfwSetWindowMonitor(window, nullptr, s_xWindowed, s_yWindowed, std::max(s_dxWindowed, 320),
-                                     std::max(s_dyWindowed, 240), GLFW_DONT_CARE);
-            }
-            else if (mode == DISPWINDOW_Borderless)
-            {
-                // the whole monitor, taskbar included (as Sly1-Release ApplyWindowModeSettings; on Windows the frames
-                // go through a DXGI swap chain, platform/gl_context.h, so focus changes do not blank the screen)
-                if (const GLFWvidmode* vm = glfwGetVideoMode(monitor))
-                {
-                    int x = 0, y = 0;
-                    glfwGetMonitorPos(monitor, &x, &y);
-                    glfwSetWindowAttrib(window, GLFW_DECORATED, GLFW_FALSE);
-                    glfwSetWindowMonitor(window, nullptr, x, y, vm->width, vm->height, GLFW_DONT_CARE);
-                }
-            }
-            else if (const GLFWvidmode* vm = glfwGetVideoMode(monitor))
-            {
-                glfwSetWindowAttrib(window, GLFW_DECORATED, GLFW_TRUE);
-                glfwSetWindowMonitor(window, monitor, 0, 0, vm->width, vm->height, vm->refreshRate);
-            }
-            s_windowApplied = mode;
-        }
-    }
+    // (the window mode on the chosen monitor, platform/monitor_select_glfw.h: Fullscreen / Borderless fill it, Windowed
+    // moves onto it when the choice changes; a chosen monitor that is unplugged: the primary one, UpdateDisplayMonitors)
+    cane::monitor::watchConnections();
+    cane::monitor::applyWindowMode(window, s_placement, int(mode), g_display.monitor);
     // The swap interval (Sly1-Release ApplySwapInterval): with VSync, 1 when the cap reaches the refresh rate (the swap
     // then paces), 2 for a cap of half of it; another cap is paced by the timer between the vblanks.
     int interval = 0, refreshRate = 0;
     bool fSwapPacesFrames = false;
+    g_display.displayFps = 0;
+#if defined(CANE_IOS)
+    // (iOS: a CAMetalLayer always presents at a vblank, VSync or not, so the setting does not apply (the menus hide it).
+    // The display paces whenever the cap is its rate or a whole fraction of it (display_pacing.h): 60 on a 120 Hz
+    // ProMotion screen every 2nd vblank, the game woken by a display link at 60 (game.cpp, platform/metal/display_link.mm),
+    // as the 60 Hz lock was; another cap is held by the timer, each frame at the next vblank)
+    {
+        refreshRate = DisplayRefreshRate(window);
+        const cane::pacing::SwapChoice choice = cane::pacing::ChooseLockedToVblank(g_display.frameRate, refreshRate);
+        interval = choice.interval;
+        fSwapPacesFrames = choice.fSwapPacesFrames;
+        g_display.displayFps = choice.displayFps;
+    }
+#else
     if (g_display.fVsync)
     {
         interval = 1;
@@ -408,20 +371,33 @@ void ApplyDisplaySettings(GLFWwindow* window)
             fSwapPacesFrames = true;
         }
     }
+#endif
 #ifdef __SWITCH__
     CaneSwitchSetFrameRate(g_display.frameRate);
 #endif
     cane::gl::SwapInterval(interval);
     g_display.fSwapPacesFrames = fSwapPacesFrames;
     static int s_interval = -1, s_refreshRate = -1, s_frameRate = -1, s_window = -1;
-    if (interval != s_interval || refreshRate != s_refreshRate || g_display.frameRate != s_frameRate || int(mode) != s_window)
+    static std::string s_monitor;   // (another monitor: the pacer checks the swap again)
+    if (interval != s_interval || refreshRate != s_refreshRate || g_display.frameRate != s_frameRate || int(mode) != s_window ||
+        g_display.monitor != s_monitor)
     {
         s_interval = interval, s_refreshRate = refreshRate, s_frameRate = g_display.frameRate, s_window = int(mode);
+        s_monitor = g_display.monitor;
         ++g_display.swapGeneration;
     }
     int fbw = 0, fbh = 0;
     glfwGetFramebufferSize(window, &fbw, &fbh);
     LayoutDisplay(fbw, fbh);
+}
+
+void UpdateDisplayMonitors(GLFWwindow* window)
+{
+    if (window && cane::monitor::connectionsChanged(s_placement))
+    {
+        std::printf("display: monitors changed (%s)\n", g_display.monitor.empty() ? "Primary" : g_display.monitor.c_str());
+        ApplyDisplaySettings(window);
+    }
 }
 
 void InstallDisplayCallbacks(GLFWwindow* window)

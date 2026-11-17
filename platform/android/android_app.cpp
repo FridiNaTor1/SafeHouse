@@ -227,6 +227,30 @@ void openUrl(const std::string& url) {
     e.env->CallStaticVoidMethod(bridge, e.method("openUrl", "(Ljava/lang/String;)V"), value);
     e.env->DeleteLocalRef(value); e.check();
 }
+std::string httpGet(const std::string& url, bool api, const std::string& userAgent, std::size_t maxBytes, int& status) {
+    Environment e;
+    status = -5;
+    auto address = javaString(e.env, url);
+    auto uaString = javaString(e.env, userAgent);
+    auto result = e.env->NewIntArray(1);
+    const jint limit = static_cast<jint>(std::min<std::size_t>(maxBytes, 0x7fffffff));
+    auto body = static_cast<jbyteArray>(e.env->CallStaticObjectMethod(bridge,
+        e.method("httpGet", "(Ljava/lang/String;ZLjava/lang/String;I[I)[B"), address, static_cast<jboolean>(api), uaString, limit, result));
+    e.env->DeleteLocalRef(address); e.env->DeleteLocalRef(uaString);
+    if (e.env->ExceptionCheck()) { e.env->DeleteLocalRef(result); e.check(); }
+    jint code = -5;
+    e.env->GetIntArrayRegion(result, 0, 1, &code);
+    e.env->DeleteLocalRef(result);
+    status = code;
+    std::string out;
+    if (body) {
+        const jsize size = e.env->GetArrayLength(body);
+        out.resize(static_cast<std::size_t>(size));
+        if (size) e.env->GetByteArrayRegion(body, 0, size, reinterpret_cast<jbyte*>(out.data()));
+        e.env->DeleteLocalRef(body);
+    }
+    return out;
+}
 namespace {
 jobjectArray javaStrings(JNIEnv* env, const std::vector<std::string>& values) {
     auto type = env->FindClass("java/lang/String");

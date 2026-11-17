@@ -101,6 +101,9 @@ struct LO : BASIC
     void SetField(uint32_t pfnGetter, uint32_t ib, uint32_t u);
 
     CID Cid() const { return pcls ? pcls->cid : -1; }
+    uint64_t nAdd = 0;                      // (native) OnAdd's serial of its last entry into the world (activate.cpp
+                                            // g_nLoAdd): tells a re-added object, or a new one at a reused address, from
+                                            // the one an earlier pass saw (pe.cpp's instances: the original's OnAdd / OnRemove)
     bool fLightOwned = false;               // a light's +0x15C / +0x160 both set by 0x1BEAD0 (option 1065 of a render-target
                                             // owner: the binocucom speaker's own light, out of the world's lights)
 };

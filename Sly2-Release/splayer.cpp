@@ -4,6 +4,7 @@
 #include "splayer.h"
 #include "shop.h"
 #include "region.h"
+#include "langstore.h"
 #include "porttext.h"
 
 #include "promptglyph.h"
@@ -778,7 +779,7 @@ namespace
 // el: the disc's text element; *pel: the element to draw with.
 bool FJapaneseTextBox(const SCREENOBJ* pso, const SELEM& el, SELEM* pel)
 {
-    if (!pso || !FWideChars() || FWideText()) return false;
+    if (!pso || !FWideChars() || FWideText() || ScriptOfTextShown() != SCRIPT_Japanese) return false;
     const bool fScript = el.ab3[1] == 1;                       // a script value, else a text id
     const int id = el.ab3[1] == 0 ? IdTextUsa(el.n3) : el.n3;
     float size = el.ag3[0], w = el.ag3[1], h = el.ag3[2];

@@ -128,6 +128,33 @@ if(SLY2_VULKAN)
   endif()
 endif()
 
+# The map editor's 3D view (editor.cpp, --editor W; notes/EDITOR_2026-11-12.md): desktop Linux / Windows only, started
+# from the launcher's Editor page. ImGui on OpenGL. Not in the Android / iOS / Switch builds (editor.cpp compiles its
+# stub there); macOS is left out until its Metal GL path is checked with ImGui. The mod-package loading
+# (platform/mod_package.h, disc.cpp) is in every build.
+if((WIN32 OR (UNIX AND NOT APPLE)) AND NOT ANDROID AND NOT CANE_IOS)
+  set(sly2n_editor_default ON)
+else()
+  set(sly2n_editor_default OFF)
+endif()
+option(SLY2_EDITOR "Sly 2's map editor (desktop)" ${sly2n_editor_default})
+if(SLY2_EDITOR)
+  if(NOT TARGET cane_editor_core)
+    add_subdirectory("${CANE_ROOT}/editor" "${CMAKE_CURRENT_BINARY_DIR}/editor")
+  endif()
+  set(sly2n_imgui "${CANE_ROOT}/Libraries/include/imgui")
+  target_sources(Sly2-Release PRIVATE ${sly2n_imgui}/imgui.cpp ${sly2n_imgui}/imgui_draw.cpp ${sly2n_imgui}/imgui_tables.cpp
+                 ${sly2n_imgui}/imgui_widgets.cpp ${sly2n_imgui}/imgui_impl_glfw.cpp ${sly2n_imgui}/imgui_impl_opengl3.cpp
+                 ${sly2n_imgui}/ImGuiFileDialog.cpp)
+  add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/generated/editor_font.h"
+    COMMAND ${CMAKE_COMMAND} -DSOURCE=${CANE_ROOT}/launcher/assets/AtkinsonHyperlegible-Regular.ttf
+            -DOUTPUT=${CMAKE_CURRENT_BINARY_DIR}/generated/editor_font.h -P ${CANE_ROOT}/cmake/embed-font.cmake
+    DEPENDS ${CANE_ROOT}/launcher/assets/AtkinsonHyperlegible-Regular.ttf ${CANE_ROOT}/cmake/embed-font.cmake VERBATIM)
+  target_sources(Sly2-Release PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated/editor_font.h")
+  target_link_libraries(Sly2-Release PRIVATE cane_editor_core cane_editor_model)
+  target_compile_definitions(Sly2-Release PRIVATE SLY2_EDITOR=1)
+endif()
+
 # QoL (qolview.cpp): the launcher's high-quality Sly 2 logo, embedded (it replaces the front end's logo texture)
 add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/generated/sly2n_logo.h"
   COMMAND ${CMAKE_COMMAND} -DSOURCE=${CANE_ROOT}/launcher/assets/games/sly2-logo.png -DOUTPUT=${CMAKE_CURRENT_BINARY_DIR}/generated/sly2n_logo.h -DSYMBOL=sly2n_logo_png -P ${CANE_ROOT}/cmake/embed-image.cmake

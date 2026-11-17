@@ -99,7 +99,7 @@ void StartK3(const KIND3* pk, ALO* palo, int grf, K3PLAY* p)
                     palo->oidInstance, p->pcur->paseg ? p->pcur->paseg->oid : -1, grf);
 }
 
-// orig: 0x0020CA48
+// orig: 0x0020CA48 (orig3: 0x2595D8, the same C in the Sly 3 decomp)
 void StopK3(K3PLAY* p)
 {
     if (!p || !p->pasega) return;

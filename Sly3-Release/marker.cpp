@@ -471,7 +471,8 @@ void ShowWorldStats()
     if (IepisodeCur() == 0) return;  // 0x210AE0
     ShowCoinCounter();
     if (g_psw && !g_psw->mpcidaplo[S3CID(0x5F)].empty()) ShowClueCounter();
-    if (CSnd* ps = PsndNewPlain(0x32)) ps->SetSource(nullptr);  // 0x1FBB90 / 0x1FB2F8
+    // (Sly 3: the sound 0x2A, orig3 0x1528E0 / 0x1600F0 / 0x2859F0; Sly 2's 0x32 is Sly 3's binocucom opening)
+    if (CSnd* ps = PsndNewPlain(0x2A)) ps->SetSource(nullptr);  // 0x1FBB90 / 0x1FB2F8
     s_tL3 = g_clock.t;
     g_cm.cFreeStarts++;  // CM +0x4A4
     if (FPrint())

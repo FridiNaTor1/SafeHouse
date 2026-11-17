@@ -1,6 +1,7 @@
 int IspliceBlockCur(struct SW* psw);
 #include <execinfo.h>
 #include "wr.h"
+#include "editrec.h"
 #include "clock.h"
 #include "breakable.h"
 #include "laser.h"
@@ -77,6 +78,7 @@ void LoadLoxBaseFromBrx(LO* plo, CBinaryInputStream* pbis)
     LOX* plox = static_cast<LOX*>(plo);
     plox->ixfRef = pbis->S16Read();
     plox->pxf = PxfFindLox(plox, plox->ixfRef);
+    if (g_peditrec) g_peditrec->afield.push_back({plo, EDITFK_LoxMatrix, 0, -1, -1, pbis->m_ib});   // (PC: the map editor)
     plox->mat = pbis->ReadMatrix4();
     // TODO(M3): 0x2313F0
     plox->grfLoad = pbis->U32Read();
@@ -210,9 +212,11 @@ void LoadPathFromBrx(LO* plo, CBinaryInputStream* pbis)
     LOADFN(0x1E5DF8);
     LOXPATH* p = static_cast<LOXPATH*>(plo);
     LoadLoxBaseFromBrx(p, pbis);
+    const std::size_t ibCrvEdit = pbis->m_ib;   // (PC: the map editor, editrec.h)
     p->fE0 = pbis->S8Read();
     p->nE4 = pbis->S8Read();
     const int c = pbis->U16Read();
+    if (g_peditrec) g_peditrec->afield.push_back({plo, EDITFK_Path, c, p->nE4, p->fE0, ibCrvEdit});
     p->an.resize(c);
     pbis->Read(static_cast<std::size_t>(c) * 4, p->an.data());
     for (int i = 0; i < c; ++i) p->avecF4.push_back(pbis->ReadVector());
@@ -391,6 +395,7 @@ void LoadTaskFromBrx(LO* plo, CBinaryInputStream* pbis)
     LOADFN(0x1635F8);
     LOLIST* p = static_cast<LOLIST*>(plo);
     LoadLoFromBrx(p, pbis);
+    if (g_peditrec) g_peditrec->afield.push_back({plo, EDITFK_TaskLinks, 0, -1, -1, pbis->m_ib});   // (PC: the map editor)
     const int c94 = pbis->U8Read();
     for (int i = 0; i < c94; ++i) p->an90.push_back(pbis->S32Read());
     const int cA0 = pbis->U8Read();
@@ -575,6 +580,8 @@ void LoadProxyFromBrx(SW* psw, ALO* paloParent, CID cid, OID oid, int iframe, CB
     const int32_t idGroup = pbis->S32Read();
     const int mode = pbis->S8Read();
     XF* pxf = PxfFromRef(pbis->S16Read(), paloParent, nullptr);
+    const std::size_t ibMatEdit = pbis->m_ib;   // (PC: the map editor, editrec.h)
+    if (g_peditrec) g_peditrec->ibProxyMatrix = ibMatEdit;
     const glm::mat4 mat = pbis->ReadMatrix4();
     const uint32_t grfLoad = pbis->U32Read();
     int iwe = -1;
@@ -586,6 +593,7 @@ void LoadProxyFromBrx(SW* psw, ALO* paloParent, CID cid, OID oid, int iframe, CB
     {
         LO* plo = PloNew(cid, psw, paloParent, oid, -1);
         LOX* plox = static_cast<LOX*>(plo);
+        if (g_peditrec) g_peditrec->afield.push_back({plo, EDITFK_LoxMatrix, 0, -1, -1, ibMatEdit});
         plox->pxf = pxf;
         plox->mat = mat;
         plox->grfLoad = grfLoad;

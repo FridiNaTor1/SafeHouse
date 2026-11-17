@@ -75,7 +75,7 @@ void Post(ALO* p)
     PostDeferredCall(p, 0x1DF260, [](void* object, int) { ApplyLaserContacts(static_cast<ALO*>(object)); });
 }
 
-// orig: 0x001DE5A8 (slot 53): the laser's endpoint bounds do not prune the other shape's BSP.
+// orig: 0x001DE5A8 (slot 53): the laser's endpoint bounds do not prune the other shape's BSP. (orig3: 0x223A78, the same code in Sly 3)
 OXA* AddLaserAttachment(ALO* p)
 {
     OXA* attachment = PoxaAddSw(p);  // 0x1F56F8's world allocation, native bbmark.cpp
@@ -279,7 +279,7 @@ void AddLaserContacts(ALO* p, SOE* other, int, const BSPREF&, int, XP**)
     }
 }
 
-// orig: 0x001DE2D8 (slot 61): enable overlap for listed object aliases and derived classes.
+// orig: 0x001DE2D8 (slot 61): enable overlap for listed object aliases and derived classes. (orig3: 0x223720, the same C in the Sly 3 decomp)
 int LaserOverlapKind(ALO* p, ALO* other)
 {
     const LASER& laser = Laser(p);
@@ -369,7 +369,7 @@ void LoadLaserFromBrx(LO* plo, CBinaryInputStream* pbis)
     Sort(p).grf148 = (Sort(p).grf148 | (uint64_t(1) << 34)) & ~(uint64_t(1) << 35);
 }
 
-// orig: 0x001DE568/0x001DE5D8: build the endpoint bounds as the sole sensor entry, then initialize lengths.
+// orig: 0x001DE568/0x001DE5D8: build the endpoint bounds as the sole sensor entry, then initialize lengths. (orig3: 0x223A08, the same code in Sly 3)
 void PostLoadLaser(LO* plo)
 {
     if (plo->Cid() != S3CID(0x55)) return;

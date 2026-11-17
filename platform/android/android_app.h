@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -44,6 +45,10 @@ ImportStatus isoSelection();
 ImportStatus modImport();
 void openFolder(const std::string& path);
 void openUrl(const std::string& url);
+// The launcher's update check (launcher/update.h): an HTTPS GET through Java (NativeBridge.httpGet). status: the HTTP
+// status, or -1 server name not found, -2 no connection, -3 timed out, -4 larger than maxBytes, -5 another failure.
+// The body when status is 200.
+std::string httpGet(const std::string& url, bool api, const std::string& userAgent, std::size_t maxBytes, int& status);
 // Starts another part of the app on its own (collection/collection.h spawnDetached): no arguments = the launcher, else
 // the direct activity with these launcher arguments (--collection, --play GAME). False when Android refused.
 bool startApp(const std::vector<std::string>& arguments);

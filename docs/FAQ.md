@@ -12,7 +12,7 @@ you own. The launcher installs the game from it.
 | Game | Discs |
 | --- | --- |
 | Sly Cooper and the Thievius Raccoonus | USA (`SCUS-97198`), Europe, Japan and Korea |
-| Sly 2: Band of Thieves | USA (`SCUS-97316`), Europe v1.00 and v2.01 (`SCES-52529`), Japan (`SCPS-15090`) |
+| Sly 2: Band of Thieves | USA (`SCUS-97316`), Europe v1.00 and v2.01 (`SCES-52529`), Japan (`SCPS-15090`), Korea (`SCKA-20044`) |
 | Sly 3: Honor Among Thieves | USA (`SCUS-97464`): installs, but the port is early in development and not fully playable |
 
 Use an uncompressed `.iso` of the whole disc. When an image is refused, the launcher says why: another game, an
@@ -20,7 +20,7 @@ unsupported region, an incomplete image or not enough free space.
 
 ## Is Sly 3 playable?
 
-Not yet. Sly 3 is early in development and not fully playable. It has been rebuilt on the finished Sly 2 port's engine, which carries most of the work over; for now it installs and plays its opening movies, and the rest is still being ported.
+Not yet. Sly 3 is early in development and not fully playable. It has been rebuilt on the finished Sly 2 port's engine, which carries most of the work over; it is being ported episode by episode, and much is still missing or unfinished.
 Follow progress on [Discord](https://discord.com/invite/SfvzvMg7Mk).
 
 ## Where are my files?
@@ -88,12 +88,12 @@ you downloaded it from this repository's Releases page.
 - Lower **Settings > Graphics > Internal resolution** and **MSAA**.
 - On weak integrated GPUs, **Fullscreen** usually performs better than **Borderless** or **Windowed**.
 - A frame-rate limit equal to your monitor's refresh rate (or half of it) with VSync on gives the smoothest result.
-- The games need OpenGL 4.3 (Metal on macOS). Sly 2 uses Vulkan 1.3 where the driver has it and OpenGL
+- The games need OpenGL 4.3 (Metal on macOS). Sly 2 and Sly 3 use Vulkan 1.3 where the driver has it and OpenGL
   otherwise; if one renderer runs badly on your GPU, try the other in **Settings > Graphics > Renderer**.
 
-## Sly 2 uses OpenGL instead of Vulkan
+## Sly 2 or Sly 3 uses OpenGL instead of Vulkan
 
-On Windows and Linux Sly 2 starts on Vulkan and switches to OpenGL by itself when the graphics driver cannot run
+On Windows and Linux the games start on Vulkan and switch to OpenGL by themselves when the graphics driver cannot run
 it (no Vulkan 1.3 driver, a missing feature, an error while starting). The game's log says why, in a line that starts
 with `Vulkan:` or `Renderer:`. After a Vulkan start that failed (a crash or a driver error while starting), **Auto**
 stays on OpenGL until a new version of the game: choose **Vulkan** in **Settings > Graphics > Renderer** to try again,

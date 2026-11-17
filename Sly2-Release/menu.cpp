@@ -30,6 +30,7 @@
 #include "po.h"
 #include "ref.h"
 #include "savedata.h"
+#include "modsave.h"
 #include "screenrt.h"
 #include "shop.h"
 #include "splayer.h"
@@ -37,6 +38,7 @@
 #include "task.h"
 #include "transition.h"
 #include "remappage.h"
+#include "promptglyph.h"
 #include "../platform/controller_family.h"
 #include "../platform/platform.h"
 #include "../platform/system_settings.h"
@@ -45,6 +47,7 @@
 #include "audio.h"
 
 #include <GLFW/glfw3.h>
+#include "../platform/monitor_select_glfw.h"
 
 #include <algorithm>
 #include <array>
@@ -91,9 +94,15 @@ enum NATIVEID : int
     // (upscaling, fsr.h; display.h fUpscale) Upscaling, then while it is on its method, preset and sharpness: on the display
     // options' page after the resolution, and in VR Settings on a PC headset (the same setting)
     NID_Upscale, NID_UpscaleMethod, NID_UpscalePreset, NID_UpscaleSharpness,
-    // (display.h outlineThickness) Outline Thickness: the cel outlines' width (%), on the display options' page after Long
+    // (display.h fFastShadows, settings v20) Fast Shadows: on the display options' page after Long Shadows (default off;
+    // not on the Switch, where they are always on). The renderer reads it each frame: it takes effect at once.
+    NID_FastShadows,
+    // (display.h outlineThickness) Outline Thickness: the cel outlines' width (%), on the display options' page after Fast
     // Shadows and in VR Settings (the same setting; in VR matched to the headset's field of view); left / right step it
     NID_OutlineThickness,
+    // (settings v22, display.h monitor; platform/monitor_select.h) Monitor: on the display options' page after the window
+    // mode (desktop only, not in VR); Primary, then the connected monitors
+    NID_Monitor,
     // (VR, vr.h) the pause menu's VR Settings page (a headset in use)
     NID_Vr = NID_Base + 0x200,
     NID_VrPage = NID_Vr, NID_VrMode, NID_VrAutoCam, NID_VrVignette, NID_VrScreenSize, NID_VrRefresh, NID_VrEyeRes, NID_VrMsaa, NID_VrFoveation, NID_VrWorldScale,
@@ -451,6 +460,43 @@ std::string StrLanguageName(int lang)
     return sCustom.empty() ? StrToGameText(SzLanguageModName(lang)) : sCustom;
 }
 
+// (display.h monitor) the Monitor row's value: Primary, the monitor (its name, a number for a second of the same name, its
+// resolution), "(not connected)" for a chosen one that is unplugged; shortened to fit the page as the audio devices are
+std::string StrMonitorChoice()
+{
+    namespace mo = cane::monitor;
+    if (g_display.monitor.empty()) return StrPort(PTX_Primary);
+    const mo::Connected c = mo::connected();
+    const int i = mo::find(c.list, g_display.monitor);
+    const std::string name = i >= 0 ? mo::shortLabel(c.list, i) : mo::storedName(g_display.monitor);
+    // (the row on one line: about 33 letters with its label at the selected row's font size; the resolution only when
+    // it fits; a missing monitor's name only when a few of its letters fit)
+    const std::string fmtMissing = StrPort(PTX_NotConnected);
+    const size_t cRoom = 33 - std::min<size_t>(22, StrPort(PTX_Monitor).size() + 2);
+    const size_t cSuffix = i >= 0 ? 0 : fmtMissing.size() - 2;
+    auto shorten = [](const std::string& s, size_t cmax) {
+        if (s.size() <= cmax) return s;
+        size_t cut = cmax > 3 ? cmax - 3 : 0;
+        while (cut > 0 && (static_cast<unsigned char>(s[cut]) & 0xC0) == 0x80) --cut;   // (not inside a UTF-8 letter)
+        while (cut > 0 && s[cut - 1] == ' ') --cut;
+        return s.substr(0, cut) + "...";
+    };
+    const size_t cName = cRoom > cSuffix ? cRoom - cSuffix : 0;
+    const std::string shown = shorten(name, std::max<size_t>(7, cName));
+    if (i < 0)
+    {
+        char ach[256];
+        std::snprintf(ach, sizeof(ach), fmtMissing.c_str(), cName >= 7 ? StrToGameText(shown).c_str() : "");
+        std::string v = ach;
+        while (!v.empty() && v.front() == ' ') v.erase(v.begin());
+        return v;
+    }
+    const mo::Info& m = c.list[size_t(i)];
+    char achMode[32] = "";
+    if (m.width > 0 && m.height > 0) std::snprintf(achMode, sizeof(achMode), " (%dx%d)", m.width, m.height);
+    return StrToGameText(shown.size() + std::strlen(achMode) <= cRoom ? shown + achMode : shown);
+}
+
 // (the port's own options: their text in the game's language, porttext.h; English on the USA disc)
 std::string StrNative(int id)
 {
@@ -491,9 +537,11 @@ std::string StrNative(int id)
         static const PTX aptx[] = {PTX_Windowed, PTX_Borderless, PTX_Fullscreen};
         return StrPortValue(PTX_WindowMode, StrPort(aptx[std::clamp(int(g_display.window), 0, 2)]));
     }
+    case NID_Monitor: return StrPortValue(PTX_Monitor, StrMonitorChoice());
     case NID_Vsync: return onOff(PTX_VSync, g_display.fVsync);
     case NID_DrawDistance: return StrPortValue(PTX_DrawDistance, StrPortDecimal(g_display.drawDistance, 2) + "x");
     case NID_LongShadows: return onOff(PTX_LongShadows, g_display.fLongShadows);
+    case NID_FastShadows: return onOff(PTX_FastShadows, g_display.fFastShadows);
     case NID_OutlineThickness:
         std::snprintf(ach, sizeof(ach), "%d%%", g_display.outlineThickness);
         return StrPortValue(PTX_OutlineThickness, ach);
@@ -633,7 +681,7 @@ std::string StrNative(int id)
             const size_t index = encoded % count;
             const int binding = controller ? sly2actions::profile.gamepad[index] : sly2actions::profile.keyboard[index];
             std::string value = binding < 0 ? StrPort(PTX_KeyUnbound) : controller
-                ? StrToGameText(cane::input::buttonLabel(cane::input::fromGlfwBinding(binding), cane::input::promptFamily(g_pcinput.promptStyle, 0)))
+                ? StrToGameText(PromptButtonName(cane::input::fromGlfwBinding(binding), cane::input::promptFamily(g_pcinput.promptStyle, 0)))
                 : StrPortKeyName(binding);
             if (s_iActionCapture == int(index) && s_fActionController == controller) return StrPort(PTX_CaptureAction);
             return StrPortActionName(sly2actions::Action(index)) + StrPort(PTX_Sep) + value;
@@ -827,6 +875,8 @@ void CycleNative(MENUENT& e)
         std::vector<int> an = {30, 60, 120};   // (the Switch 2: 120 where the display allows it)
 #elif defined(__SWITCH__)
         std::vector<int> an = {30, 60};   // (the Switch: its display's 60 Hz and half of it)
+#elif defined(CANE_IOS)
+        std::vector<int> an = {30, 60};   // (iOS: and the display's own rate, 120 on ProMotion: the rates it paces, display.cpp)
 #else
         // (the launcher's list: these, the monitor's refresh rate, Uncapped)
         std::vector<int> an = {30, 60, 90, 120, 144, 240, DISP_FRAMERATE_UNCAPPED};
@@ -839,8 +889,14 @@ void CycleNative(MENUENT& e)
         break;
     }
     case NID_Window: g_display.window = DISPWINDOW((int(g_display.window) + 1) % 3); break;
+    case NID_Monitor:
+        // (Primary, then each connected monitor; ApplyDisplay moves the window there: display.h)
+        g_display.monitor = cane::monitor::step(cane::monitor::connected().list, g_display.monitor, 1);
+        std::printf("display: monitor %s\n", g_display.monitor.empty() ? "Primary" : g_display.monitor.c_str());
+        break;
     case NID_Vsync: g_display.fVsync = !g_display.fVsync; break;
     case NID_LongShadows: g_display.fLongShadows = !g_display.fLongShadows; break;
+    case NID_FastShadows: g_display.fFastShadows = !g_display.fFastShadows; break;
     case NID_OutlineThickness: StepOutlineThickness(1, true); break;
     case NID_Upscale:
         g_display.fUpscale = !g_display.fUpscale;
@@ -1110,7 +1166,7 @@ std::vector<MENUENT> AentVr()
 {
     std::vector<MENUENT> a;
     // (Upscaling: the headset compositor's filter where the runtime has it (the Quest); elsewhere (PCVR) the Display
-    // options' upscaler belongs in its place, as the same setting)
+    // options' FSR rows belong in its place, the same setting: STATUS-VK.md "vrmv / fsr: Upscaling in VR Settings")
     const int idUpscaling = vr::FCompositorUpscaling() ? int(NID_VrUpscaling) : 0;
     for (int id : {int(NID_VrMode), int(NID_VrAutoCam), int(NID_VrCutscenes), int(NID_VrVignette), int(NID_VrScreenSize),
                    int(NID_VrRefresh), int(NID_VrEyeRes), int(NID_VrFoveation), idUpscaling, int(NID_VrMsaa), int(NID_VrMultiview), int(NID_VrWorldScale),
@@ -1245,6 +1301,61 @@ void CycleLanguage(const MENUENT& e)
     }
 }
 
+// (lang) a language chosen on the Language... page that changes what is read or heard (the text, or the voices as they
+// play: Same as Text follows the text) and waits for the next world
+bool FLanguageChangeWaiting()
+{
+    int langText = -2, langVoice = -2;
+    if (!FLanguagesPending(&langText, &langVoice)) return false;
+    const int textNext = langText != -2 ? langText : g_nLang;
+    const int voiceNext = langVoice != -2 ? langVoice : g_nLangVoice;
+    return textNext != g_nLang || (voiceNext < 0 ? textNext : voiceNext) != LangVoice();
+}
+
+// (lang) leaving the Language... page with a new language waiting: the card dialog asks whether to restart from the last
+// checkpoint now in it (as after a lost life, or a job's failure screen in a job: a world is read in a language as it
+// loads) or to keep playing and have it from the next area (region.h ApplyPendingLanguages at the next world's load).
+// Asked once for each choice (the pending pair answered); at the title nothing is lost: the title again in it at once,
+// as its own language menu does.
+constexpr int kMsgLangReload = 0x10001;   // (the card dialog's message: a native one, above the disc's text ids)
+int s_langAskedText = -3, s_langAskedVoice = -3;
+bool s_fLangCloseAfter = false;           // (the menu was being closed, not stepped back: closed after "Next Area")
+
+bool FLanguagePage(const PAGE& pg)
+{
+    return !pg.aent.empty() && (pg.aent[0].id == NID_TextLanguage || pg.aent[0].id == NID_VoiceLanguage);
+}
+
+void ReloadForLanguage()
+{
+    std::printf("language: restarting now in the new language\n");
+    CloseMenu();
+    if (FTitleShown() || !s_psw)
+        RequestTransition(s_psw, g_disc.PbElf(VA_FK_BOOT_WORLD, 64), 0x189, -1, 1, -1);   // (the title's world again)
+    else if (JOB* pjob = s_psw->tasks.pjobCur)
+        RestartJobAtCheckpoint(s_psw, pjob);   // (a job: its last checkpoint, as its failure screen's restart, screenrt.cpp)
+    else
+        RequestTransition(s_psw, nullptr, g_transition.oidPointCur, g_transition.oidKeyCur, 0, 0x30A);   // (as a lost life)
+}
+
+// true: the prompt took over the page's Back / close
+bool FAskLanguageReload(bool fClose)
+{
+    if (!FLanguageChangeWaiting()) return false;
+    int langText = -2, langVoice = -2;
+    FLanguagesPending(&langText, &langVoice);
+    if (langText == s_langAskedText && langVoice == s_langAskedVoice) return false;   // (answered: Next Area)
+    s_langAskedText = langText, s_langAskedVoice = langVoice;
+    if (FTitleShown())
+    {
+        ReloadForLanguage();
+        return true;
+    }
+    s_fLangCloseAfter = fClose;
+    ShowCardMessage(kMsgLangReload);
+    return true;
+}
+
 // (native) the PC display options' page
 std::vector<MENUENT> AentDisplayOptions()
 {
@@ -1254,12 +1365,30 @@ std::vector<MENUENT> AentDisplayOptions()
 #if defined(__SWITCH__) || defined(__ANDROID__) || defined(CANE_IOS)
         if (id == NID_Window) continue;   // (the Switch / Android / iOS: the system places the window, DeX included)
 #endif
+#if defined(CANE_IOS)
+        if (id == NID_Vsync) continue;   // (iOS: always in step with the display: display.cpp ApplyDisplaySettings)
+#endif
         MENUENT e;
         e.id = id <= NID_DrawDistance ? id : NID_LongShadows;   // (then Long Shadows, settings v16)
         e.pfnSelect = PFN_NativeDisplay;
         a.push_back(e);
+#if !defined(__SWITCH__) && !defined(__ANDROID__) && !defined(CANE_IOS)
+        if (id == NID_Window && !vr::FActive())   // (then Monitor, settings v22: a desktop's monitors; not in a headset)
+        {
+            e.id = NID_Monitor;
+            a.push_back(e);
+        }
+#endif
         if (id == NID_Resolution) AppendUpscaleRows(a, PFN_NativeDisplay, false);   // (upscaling: after the resolution)
     }
+#ifndef __SWITCH__
+    {
+        MENUENT e;   // (then Fast Shadows, settings v20)
+        e.id = NID_FastShadows;
+        e.pfnSelect = PFN_NativeDisplay;
+        a.push_back(e);
+    }
+#endif
     {
         MENUENT e;   // (then Outline Thickness)
         e.id = NID_OutlineThickness;
@@ -1721,6 +1850,7 @@ void CardYes()
             SAVESLOT& sl = g_aslot[s_islotTarget];
             std::error_code ec;
             std::filesystem::remove(cane::path(sl.path), ec);
+            RemoveModSave(sl.path);
             sl.save = GAMESAVE{};
             sl.fFile = false;
             sl.tWrite = 0;
@@ -1732,6 +1862,7 @@ void CardYes()
             SAVESLOT& sl = g_aslot[s_islotTarget];
             std::string err;
             sl.save = GAMESAVE{};
+            RemoveModSave(sl.path);
             if (FWriteGameSaveBlock(sl.path, sl.save, err))
             {
                 std::error_code ec;
@@ -1824,6 +1955,24 @@ void UpdateCard()
     if (!s_card.fShown) return;
     if (s_card.plo && NScreenObjState(s_card.plo) != 2) return;
     if (g_clock.tReal - s_card.tShown <= 0.1f) return;
+    if (s_card.msg == kMsgLangReload)
+    {
+        // (the menu's own buttons: the confirm restarts now, Back / Start keep playing with the language from the next area)
+        const uint32_t grf = GrfbtnTakePressed(BtnMenuConfirm() | BtnMenuBack() | 0x800);
+        if (grf & BtnMenuConfirm())
+        {
+            CloseCard();
+            ReloadForLanguage();
+        }
+        else if (grf & (BtnMenuBack() | 0x800))
+        {
+            CloseCard();
+            std::printf("language: from the next area\n");
+            if (s_fLangCloseAfter || (grf & 0x800)) CloseMenu();
+            else BackReplaced();
+        }
+        return;
+    }
     const int r = NCardPrompt(s_card.msg);
     if (r == 1 && GrfbtnTakePressed(0x80)) { CardNo(); return; }
     if (r == 2)
@@ -1933,10 +2082,10 @@ void OpenLanguageMenu(SW* psw, bool fCanCancel)
         e.n = lang;
         aent.push_back(e);
     }
-    // (PC: the Japanese title world's language screen 0x5D6 draws nothing (the build never shows it); the menu's own
+    // (PC: the Japanese / Korean title world's language screen 0x5D6 draws nothing (the build never shows it); the menu's own
     // wheel 0x370 with the options' animations instead)
     uint32_t vaAnim = 0x2C35F0;
-    if (g_disc.Region() == DISCREGION::Japan && s_menu.ploDefault) vaAnim = 0x2BFD38;
+    if (g_disc.FJapaneseBuild() && s_menu.ploDefault) vaAnim = 0x2BFD38;
     PushPage(std::move(aent), 0, plo, vaAnim);
     if (PAGE* pg = PpageCur()) pg->fCanCancel = fCanCancel;
 }
@@ -2064,6 +2213,8 @@ void UpdateMenu(SW* psw)
     {
         // (the Japanese build: Circle selects, Cross goes back, Square erases: region.h)
         const uint32_t grf = GrfbtnTakePressed(0x800 | BtnMenuBack() | BtnMenuConfirm() | BtnMenuErase() | (FDataAccess() ? 0xC : 0));
+        // (lang) the Language... page left with a new language waiting: restart now or from the next area (FAskLanguageReload)
+        if ((grf & (0x800 | BtnMenuBack())) && pe->fCanCancel && FLanguagePage(*pe) && FAskLanguageReload((grf & 0x800) != 0)) return;
         if (grf & 0x800) { if (pe->fCanCancel) CloseMenu(); return; }
         if (grf & BtnMenuBack()) { if (pe->fCanCancel) confirm(); return; }
         if (pe->aent.empty() && grf != 0) { confirm(); return; }
@@ -2221,8 +2372,13 @@ std::string StrMenuScript(int id)
         if (k == 0x1E || k == 0x1F) return StrLocalized(s_psw, IdText(0x44));
         return "";
     }
-    case 0x2F2: return s_card.msg >= 0 ? StrLocalized(s_psw, IdText(s_card.msg)) : "";   // orig 0x001AD7E0
+    case 0x2F2:   // orig 0x001AD7E0
+        if (s_card.msg == kMsgLangReload) return StrPort(PTX_LangReloadQuestion);
+        return s_card.msg >= 0 ? StrLocalized(s_psw, IdText(s_card.msg)) : "";
     case 0x2F3:
+        if (s_card.msg == kMsgLangReload)
+            return std::string(SzMenuConfirmGlyph()) + " : " + StrPort(PTX_LangReloadNow) + "       " + StrPort(PTX_LangReloadLater) +
+                   " : " + SzMenuBackGlyph();
         // orig 0x001AD820
         switch (NCardPrompt(s_card.msg))
         {

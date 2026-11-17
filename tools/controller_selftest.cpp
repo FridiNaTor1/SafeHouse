@@ -323,6 +323,17 @@ static void frameTests() {
               layoutOf(Controllers::Wmr) == Layout::Pads && realStartSelectOf(Controllers::Wmr) &&
               layoutOf(Controllers::Touch) == Layout::Touch && !realStartSelectOf(Controllers::Touch),
           "layouts: Frame Gamepad (real Start / Select), Index / Touch Touch (combos), WMR Pads");
+    check(controllersOf(kViveFocus3Profile) == Controllers::ViveFocus3 && controllersOf(kViveCosmosProfile) == Controllers::ViveCosmos &&
+              controllersOf(kHpProfile) == Controllers::HpReverb && controllersOf(kOdysseyProfile) == Controllers::Wmr &&
+              controllersOf(kPicoNeo3Profile) == Controllers::Pico &&
+              controllersOf("/interaction_profiles/facebook/touch_controller_pro") == Controllers::Touch &&
+              controllersOf("/interaction_profiles/meta/touch_controller_plus") == Controllers::Touch,
+          "the extension profiles: Vive Focus 3 / Cosmos, HP Reverb G2, Samsung Odyssey (WMR), Pico Neo 3, Touch Pro / Plus");
+    check(layoutOf(Controllers::HpReverb) == Layout::Touch && realStartSelectOf(Controllers::HpReverb) &&
+              layoutOf(Controllers::ViveFocus3) == Layout::Touch && !realStartSelectOf(Controllers::ViveFocus3) &&
+              layoutOf(Controllers::ViveCosmos) == Layout::Touch && !realStartSelectOf(Controllers::ViveCosmos) &&
+              int(Controllers::HpReverb) + 1 == kControllersCount,
+          "layouts: HP Reverb G2 Touch with real Start / Select (its menu buttons), Vive Focus 3 / Cosmos Touch (combos)");
     State s;
     Raw r;
     Pad p;

@@ -17,7 +17,9 @@
 #include "widgets.h"
 
 namespace cane::ui {
-enum class View { Game, Install, Settings, About };
+// Editor: the map editor (launcher/editor/editor_page.h), Localisation: the translation tool (launcher/editor/loc_page.h);
+// desktop builds with CANE_LAUNCHER_EDITOR only
+enum class View { Game, Install, Settings, About, Editor, Localisation };
 // The rail's Quit entry: the desktops (Linux incl. the Steam Deck's Game Mode and the Steam Frame, Windows, macOS), where
 // the launcher may run full screen from Steam Big Picture with no window buttons. Not on iOS (Apple's guidelines: apps do
 // not quit themselves) or Android / the Meta Quest (the system's Back / Home).
@@ -441,7 +443,7 @@ inline void developersCard(float width) {
         const bool hovered = ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows) && row.Contains(ImGui::GetIO().MousePos);
         const uint32_t ring = who.colour;
         dl->AddCircleFilled(c, r, ink(ring, hovered ? 0.55f : 0.22f), 64);
-        if (const ImTextureID picture = images().developers[i])
+        if (const ImTextureID picture = size_t(i) < images().developers.size() ? images().developers[size_t(i)] : ImTextureID{})
             dl->AddImageRounded(picture, { c.x - r, c.y - r }, { c.x + r, c.y + r }, { 0, 0 }, { 1, 1 }, IM_COL32_WHITE, r, ImDrawFlags_RoundCornersAll);
         dl->AddCircle(c, r, ink(hovered ? ring : color::borderStrong), 64, px(hovered ? 2.5f : 1.5f));
         const float ty = below ? p.y + d + px(8) : p.y + std::max(0.0f, (d - textH) * 0.5f);

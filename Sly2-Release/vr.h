@@ -209,6 +209,10 @@ float UnitsPerMetre();
 bool FPadState(GLFWgamepadstate* pstate);
 // The controllers' interaction profile ("/interaction_profiles/oculus/touch_controller"), empty when none.
 const std::string& StrInteractionProfile();
+// The controllers in use (platform/vr_pad_map.h cane::vrpad::Controllers, as int: None 0 without a session or a profile
+// bound). Tests: SLY2N_VR_PROFILE=<interaction profile path> stands for the bound one (also without a session: the pause
+// Controls page's VR pictures with a forced prompt family).
+int ControllersInUse();
 // Rumble on the controllers (0..1 each motor).
 void Rumble(float gLow, float gHigh);
 // VR Settings' refresh rate taken now.

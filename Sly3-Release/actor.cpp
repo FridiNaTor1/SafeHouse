@@ -220,7 +220,7 @@ void GetInteractCpdefi(ACTOR& a, const ACTORPOSE& pose, CPDEFI* pc)
                 if (pt->U32Field(0, 0xE4, 0) == 0)
                 {
                     float e = sLast(pcrv);
-                    if (pt->U32Field(0, 0x1CC, 0) & 2) e += 100.0f;
+                    if (pt->U32Field(0, 0x1BC, 0) & 2) e += 100.0f;
                     g = std::min(g, e);
                 }
             }
@@ -230,7 +230,7 @@ void GetInteractCpdefi(ACTOR& a, const ACTORPOSE& pose, CPDEFI* pc)
                 if (pt->U32Field(0, 0xE4, 0) == 0)
                 {
                     float e = sFirst(pcrv);
-                    if (pt->U32Field(0, 0x1CC, 0) & 1) e -= 100.0f;
+                    if (pt->U32Field(0, 0x1BC, 0) & 1) e -= 100.0f;
                     g = std::max(g, e);
                 }
             }
@@ -375,7 +375,15 @@ void GetLoCpdefi(LO* plo, CPDEFI* pc)
     }
     else
     {
-        if (pfn != 0x1F58F0) WarnOnce("a class's camera definition (slot 50)");
+        // (pfn 0: a Sly 3 class whose vtable has no slot 50 at all. Sly 3 has no virtual camera definition: its follow
+        // camera 0x274AC0 calls 0x1F3ED8(focus, cut, record) directly (cmfocus3.cpp); the copied Sly 2 camera world asks
+        // here at a world start and gets the base, which is what Sly 3's focus record starts from.)
+        if (pfn != 0x1F58F0 && pfn != 0)
+        {
+            char sz[96];
+            std::snprintf(sz, sizeof(sz), "a class's camera definition (slot 50: 0x%X, cid 0x%X, oid %d)", pfn, plo ? plo->Cid() : -1, plo ? plo->oid : -1);
+            WarnOnce(sz);
+        }
         GetSoCpdefiBase(pose, ctx.t, pc);
     }
 }
@@ -401,12 +409,21 @@ void TeleportActor(LO* plo, LO* plodest)
         const LOX* plox = static_cast<const LOX*>(plodest);
         m = plox->pxf ? plox->pxf->matWorld * plox->mat : plox->mat;
     }
+    TeleportAloMat(plo, m, plodest);
+}
+
+// (the body of slot 38 after the destination's matrix; also Sly 3's slot 43 (ALO 0x23DA68 -> 0x1C9008: slots 34 / 35
+// = Sly 2's 29 / 30, then with a physics state the velocities; a step's 0x24F6F8 first takes its base +0x260 off in
+// the matrix's frame), which SCPT 0x22 calls with the place's matrix (trigger3.cpp PlaceLo3))
+void TeleportAloMat(LO* plo, const glm::mat4& m, LO* plodest)
+{
+    if (!plo || !FIsLoDerivedFrom(plo, S3CID(0x30))) return;
     ALO* palo = static_cast<ALO*>(plo);
     ACTOR* pa = PactorFromLo(plo);
     const glm::vec3 vecBase = pa ? glm::vec3(pa->vecBase) : glm::vec3(0.0f);
     if (std::getenv("SLY2N_ACTORPRINT"))
         std::printf("teleport %d (cid 0x%X) to %d (cid 0x%X) at %.2f %.2f %.2f, base %.2f %.2f %.2f, parent %d\n", plo->oid,
-                    plo->Cid(), plodest->oid, plodest->Cid(), m[3].x, m[3].y, m[3].z, vecBase.x, vecBase.y, vecBase.z,
+                    plo->Cid(), plodest ? plodest->oid : -1, plodest ? plodest->Cid() : 0, m[3].x, m[3].y, m[3].z, vecBase.x, vecBase.y, vecBase.z,
                     plo->paloParent ? plo->paloParent->oid : -1);
     // slot 29 (the position: the matrix's, the +0x240 offset back), slot 30 (the rotation)
     glm::mat4 w = m;
@@ -444,7 +461,7 @@ void TeleportActor(LO* plo, LO* plodest)
         // LOX's are zero): e.g. the Ep1 heist harpoon put on the sign's point 142374 stops there
         if (Psost(palo))
         {
-            ALO* paloTo = FIsLoDerivedFrom(plodest, S3CID(0x30)) ? static_cast<ALO*>(plodest) : nullptr;
+            ALO* paloTo = plodest && FIsLoDerivedFrom(plodest, S3CID(0x30)) ? static_cast<ALO*>(plodest) : nullptr;
             SetAloVelocityTo(palo, paloTo ? VelAloPos(paloTo) : glm::vec3(0.0f));
             SetAloAngVelocityTo(palo, paloTo ? AngVelAlo(paloTo) : glm::vec3(0.0f));
         }

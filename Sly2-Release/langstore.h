@@ -11,7 +11,8 @@
 //     language.json             optional: {"name": "Français", "code": "fr", "script": "latin" | "japanese",
 //                               "text": "<folder>", "voice": "<folder>" (what is missing comes from there; default
 //                               English), "source": "Europe v2.01" (the disc it came from)}
-//     Text.json                 the strings by USA text id (the Mods/Text format: textmod.h)
+//     Text.json                 the strings by USA text id (the Mods/Text format: textmod.h; "worlds": a world's own),
+//                               "port": the port's own strings by name (porttext.h)
 //     Dialog/**/<line>.flac|wav|vag   dialog lines by USA line id (= the subtitle's text id); any subfolders
 //     Dialog/lengths.json       optional: {"<line>": seconds} (the world files' line lengths; default: the audio's)
 //     Movies/<Name>.flac|wav    a movie's sound by its name (CONVERTER.md: "Prologue", "Ep1 Intro", ...)
@@ -32,6 +33,7 @@
 struct SELEM;
 
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -54,7 +56,24 @@ int LangStoreTextFallback(int lang);
 bool FStoreTextShown();
 int LangStoreTextLanguage();
 bool FStoreTextWide();
-// A store language whose text this disc cannot show (Japanese script without its Font.bin on a USA / European disc):
+// (porttext.h) The port's own strings of the text shown, from a Text.json's "port" object (UTF-8, by row name:
+// "HoldToSkip", "Action.jump", "ActionGroup.Movement"): the text's store language's, or Mods/Languages/<the disc's
+// language>/Text.json over a disc language. nullptr: none. (The map stays valid while the store does.)
+const std::unordered_map<std::string, std::string>* PmpPortTextShown();
+// The port's built-in table column (LANG_English .. LANG_Japanese) a language's other port strings come from: a game
+// language its own; a custom one its language.json "code" when it is one of those, its folder's base name
+// ("English (UK)": English), its "text" language's; else English.
+int LangPortBase(int lang);
+// The scripts a language's text is drawn in (language.json "script": "latin", "japanese", "korean"): Latin text with
+// a disc's own font (folded to ASCII on the Japanese / Korean discs), Japanese and Korean text with the Japanese /
+// Korean disc's text font (16-bit characters: region.h FWideChars), or that font as the language's Font.bin on the
+// other discs. DiscScript: the disc's own font's; ScriptOfTextShown: the text shown now (a store language's, else
+// the disc's).
+enum { SCRIPT_Latin, SCRIPT_Japanese, SCRIPT_Korean };
+int DiscScript();
+int ScriptOfTextShown();
+// A store language whose text this disc cannot show (Japanese / Korean script without its Font.bin on a disc of
+// another script):
 // chosen, it plays its voices and movie sound over the disc's text. The language menu says so.
 bool FLangStoreVoicesOnly(int lang);
 // A store language with voice lines of its own (it can be chosen as the voices' language: region.h g_nLangVoice).

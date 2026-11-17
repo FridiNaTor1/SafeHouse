@@ -31,6 +31,8 @@ struct GLOBBONEBIND
     glm::mat4 matBind{1.0f};
 };
 const std::vector<std::vector<GLOBBONEBIND>>* PaabindOfAlo(const ALO* palo);
+// FGlobBoneMatrices with palo's bindings looked up once (PaabindOfAlo; null: not bound), for a run of groups
+bool FGlobBoneMatricesOf(const std::vector<std::vector<GLOBBONEBIND>>* paabind, int iglob, std::vector<glm::mat4>* pamat);
 void ResetBoneBindings();
 // (PC addition, pccharacter.h: the debug menu's guest characters / outfits) bindings made elsewhere: an object of a
 // character world kept loaded beside the current one, or a model put on the current Sly with its own world's binds

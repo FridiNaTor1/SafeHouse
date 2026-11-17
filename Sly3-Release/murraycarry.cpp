@@ -1,3 +1,4 @@
+#include "actioninput.h"
 #include "jtthrow.h"
 #include "game/sly3.h"
 // Murray's carried-object state machine and authored attachment poses.
@@ -61,7 +62,7 @@ void Modes(MURRAY* p, int k) {
     if (XF* x=PxfPos(p->palo)) SetXfMode(p->palo,x,k);
     if (XF* x=PxfRot(p->palo)) SetXfMode(p->palo,x,k);
 }
-// orig: 0x0022FF40: the complete matrix, expressed in the destination frame.
+// orig: 0x0022FF40: the complete matrix, expressed in the destination frame. (orig3: 0x28EC08, the same C in the Sly 3 decomp)
 glm::mat4 Convert(XF* from, XF* to, const glm::mat4& in) {
     glm::mat4 m = from ? MulMatrix4(from->matWorld,in) : in;
     return to ? MulMatrix4(InverseAffineMatrix4(to->matWorld),m) : m;
@@ -235,7 +236,7 @@ void SetMurrayCarryMove(MURRAY* p,int k) {
 }
 
 // orig: 0x001B5380: held-object validity and movement, including Atlas Strength's
-// carried jump (kind15) and R1 run. Alternate put-down and R3 remain unported.
+// carried jump (kind15), throw, slam and R1 run. Alternate put-down and R3 remain unported.
 void UpdateMurrayCarryHeld(MURRAY* p) {
     ALO* a=Owner(p);
     if (!a || !a->fInWorld) { Detach(p);p->plo13F0=nullptr;SetMurrayState(p,0);return; }
@@ -249,7 +250,10 @@ void UpdateMurrayCarryHeld(MURRAY* p) {
         SetJumpKind(&p->jump,15,0,0);
         return;
     }
-    if (GrfPadctlTakePressed(pc,0xA0,0.0f)) { SetMurrayState(p,7);return; }
+    if (sly2actions::Take(pc,sly2actions::Action::CarryThrow,0xA0,0.0f)) { SetMurrayState(p,7);return; }
+    // Triangle starts the regular slam when Murray has the authored animation.
+    if (sly2actions::Take(pc, sly2actions::Action::CarrySlam, 0x10, 0.0f) &&
+        FStartMurrayCarrySlam(p)) return;
     const float u=pc->uJoy;
     const bool moving=p->n1458==0?0.1f<u:0<u;
     // orig: 0x001B54FC..0x001B5594: the acquired passive selects the authored

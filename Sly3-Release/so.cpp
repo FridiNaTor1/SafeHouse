@@ -1,6 +1,7 @@
 #include <execinfo.h>
 #include "game/sly3.h"
 #include "worldglobals.h"
+#include "debugphys.h"
 // The ALO family's physics runtime (orig module 0x1F2108-0x1F8DD8; so.h). Ported from the reference's so_p3.cpp,
 // so_c.cpp (oracle-verified ports of the original's code) and the decomp; the order of operations is kept.
 
@@ -76,7 +77,7 @@ void VtUpdateXfWorlds(ALO* p)  // slot 18 (ALO: 0x22FBE0)
     else UpdateAloXfWorldsHierarchy(p);
 }
 
-// orig: 0x001F5988 func_001F5988 (ALO vt slot 54: nothing)
+// orig: 0x001F5988 func_001F5988 (ALO vt slot 54: nothing) (orig3: 0x23EDC8, the same code in Sly 3)
 void SetAloOverlapNothing(ALO*, ALO*) {}
 NATIVEFN(0x1F5988, SetAloOverlapNothing);
 // orig: 0x001F56F8 func_001F56F8 (ALO vt slot 53: a new attachment, 0x1336F0)
@@ -206,8 +207,8 @@ void OnAloLeaveWorldPhys(ALO* p)
 }
 
 // The physics part of the clone 0x1F6068 (vt slot 41) after the world's copy of the ALO's data: the runtime copied
-// (the copy keeps its own attachment), the entries' owner, mesh and stamps, the mass state; the records' actuators
-// are not copied (the actuators' owners re-add theirs: 0x12E3F0 / 0x230018); the entries into the attachment when
+// (the copy keeps its own attachment), the entries' owner, mesh and stamps, the mass state; the records' controller
+// lists cleared here (CloneAloData then copies them: 0x12E3F0 / 0x230018, xf.cpp CloneAloCtrls); the entries into the attachment when
 // the copy is in the world (0x1F2B20).
 void CloneAloPhys(const ALO* src, ALO* dst)
 {
@@ -435,6 +436,7 @@ void RestAloSost(ALO* p)
     SOST* ps = Psost(p);
     if (!ps) return;
     ps->dvGravity = glm::vec3(0.0f, 0.0f, -1750.0f);
+    if (const float g = GDebugGravityOf(p); g != 1.0f) ps->dvGravity *= g;   // (PC debug menu: debugphys.h)
     ps->cnstrLin.kind = 3;
     ps->cnstrAng.kind = 3;
 }
@@ -522,7 +524,7 @@ void MarkOxaDirty1(ALO* p)
     g_physw.apoxaDirty1.push_back(poxa);
 }
 
-// orig: 0x001F4BA8 func_001F4BA8
+// orig: 0x001F4BA8 func_001F4BA8 (orig3: 0x23DCF0, the same C in the Sly 3 decomp)
 void UnmarkOxaDirty1(ALO* p)
 {
     OXA* poxa = Poxa(p);
@@ -708,6 +710,7 @@ void SetAloGravity(ALO* p, const glm::vec3& dv)
     XF* o = PxfPos(p);
     if (o && !o->pctrlFirst && o->mode != 2) SetXfMode(p, o, 1);
     ps->dvGravity = dv;
+    if (const float g = GDebugGravityOf(p); g != 1.0f) ps->dvGravity *= g;   // (PC debug menu: debugphys.h)
     WakeAlo(p);
 }
 
@@ -776,7 +779,7 @@ glm::vec3 PosAloCenter(ALO* p)
     return pxf ? PosOf(pxf->matWorld) : glm::vec3(0.0f);
 }
 
-// orig: 0x001F4440 func_001F4440 (ALO vt slot 33: the position record's velocity at its world position (0x22D348))
+// orig: 0x001F4440 func_001F4440 (ALO vt slot 33: the position record's velocity at its world position (0x22D348)) (orig3: 0x23D480, the same C in the Sly 3 decomp)
 glm::vec3 VelAloPos(ALO* p)
 {
     XF* pt = PxfPos(p);
@@ -892,7 +895,7 @@ void SetAloAngVelocityToLoad(ALO* p, const glm::vec3& pos, bool fLoad)
 void SetAloAngVelocityTo(ALO* p, const glm::vec3& pos) { SetAloAngVelocityToLoad(p, pos, false); }
 NATIVEFN(0x1F46D8, SetAloAngVelocityTo);
 
-// orig: 0x001F4898 func_001F4898 (the position record's velocity v from the object's space; EOPID 75)
+// orig: 0x001F4898 func_001F4898 (the position record's velocity v from the object's space; EOPID 75) (orig3: 0x23D9D0, the same C in the Sly 3 decomp)
 void SetAloVelocity(ALO* p, const glm::vec3& v, bool fLoad)
 {
     XF* po = PxfPos(p);
@@ -905,7 +908,7 @@ void SetAloVelocity(ALO* p, const glm::vec3& v, bool fLoad)
     SetAloIced(p, false);
 }
 
-// orig: 0x001F4930 func_001F4930 (the rotation record's angular velocity w from the object's space)
+// orig: 0x001F4930 func_001F4930 (the rotation record's angular velocity w from the object's space) (orig3: 0x23D938, the same C in the Sly 3 decomp)
 void SetAloAngVelocity(ALO* p, const glm::vec3& w, bool fLoad)
 {
     XF* po = PxfRot(p);
@@ -1198,6 +1201,7 @@ void MoveAloPhys(ALO* p, ALO* pNew, ALO* pOld)
 CTMSG::CTMSG() = default;
 constinit void (*g_pfnLoNotify)(LO* plo, int msgk, void* pv) = nullptr;
 constinit void (*g_pfnLoEvent)(LO* plo, int n, int a, int b, void* pv, LO* plo2) = nullptr;
+constinit void (*g_pfnLoHitEvent3)(CTMSG* pctm) = nullptr;
 
 namespace
 {
@@ -1229,13 +1233,39 @@ ALO* PaloAcceptContact(CTMSG* pctm)
         std::fprintf(stderr, "[ctmsg] t %.3f from %d to %d filter 0x%X state %d pos %.1f %.1f %.1f vec %.1f %.1f %.1f\n", g_clock.t, pctm->ploSender ? pctm->ploSender->oid : -1,
                      pctm->ploReceiver ? pctm->ploReceiver->oid : -1, pctm->grfFilter, pctm->nState, pctm->pos.x, pctm->pos.y, pctm->pos.z, pctm->vec.x, pctm->vec.y, pctm->vec.z);
     ALO* pso = PaloOrParent(pctm->ploReceiver);
+    // orig3 0x240A28: a contact already held is dropped; else the receiver's bytes, then the splice event 12 with the
+    // contact to the sender and to the receiver, which may change the amount or clear the bytes (the Ep1 turf war's
+    // wave guards count their own health in their s12: block 157896 calls job 2139's option 2659, which zeroes 1495)
+    const ALO* psoFirst = pso;
+    // (Sly 3, orig3 0x25DD38 / 0x25DDB0: a contact is held (and kept 0.25 s) only by its other end's entry and its
+    // receiver; a contact without one (+0x18 nil: nearly every 0x240CB0 caller passes 0) is never held. Applied here
+    // to the projectiles' hits (0x14CF7C passes 0): the pool hands a bullet that hit straight back to the next shot,
+    // and Sly 2's rule (the same sender within 0.25 s) dropped every hit of a burst but one in three; the other
+    // senders keep Sly 2's rule until they are checked: TODO(sly3) the general rule)
+    const bool fHeldBySender = !(pctm->pvOther == nullptr && pctm->ploSender && FCidDerivedFrom(pctm->ploSender->Cid(), 0x59));
+    bool fScriptGrf = false;
+    uint32_t grfScript = 0;
+    if (g_pfnLoHitEvent3 && pso)
+    {
+        if (fHeldBySender)
+            for (const CTMSG& r : g_physw.actmRecent)
+                if (r.ploSender == pctm->ploSender && r.pvOther == pctm->pvOther && r.grfFilter == pctm->grfFilter &&
+                    r.paloAccepted == pso)
+                    return nullptr;
+        const uint32_t grf = GrfAloXpBytes(pso, pctm->grfFilter);
+        pctm->grfAccepted = grf;
+        g_pfnLoHitEvent3(pctm);
+        fScriptGrf = pctm->grfAccepted != grf;
+        grfScript = pctm->grfAccepted;
+    }
     while (pso)
     {
-        for (const CTMSG& r : g_physw.actmRecent)
-            if (r.ploSender == pctm->ploSender && r.pvOther == pctm->pvOther && r.grfFilter == pctm->grfFilter &&
-                r.paloAccepted == pso)
-                return nullptr;
-        pctm->grfAccepted = GrfAloXpBytes(pso, pctm->grfFilter);
+        if (fHeldBySender)
+            for (const CTMSG& r : g_physw.actmRecent)
+                if (r.ploSender == pctm->ploSender && r.pvOther == pctm->pvOther && r.grfFilter == pctm->grfFilter &&
+                    r.paloAccepted == pso)
+                    return nullptr;
+        pctm->grfAccepted = fScriptGrf && pso == psoFirst ? grfScript : GrfAloXpBytes(pso, pctm->grfFilter);
         static const bool s_fDbg = std::getenv("SLY2N_SENSDEBUG") != nullptr;
         if (s_fDbg)
             std::printf("contact offer to %d (cid 0x%X): filter 0x%X bytes 0x%X slot75 %p\n", pso->oid, pso->Cid(), pctm->grfFilter,
@@ -1245,8 +1275,11 @@ ALO* PaloAcceptContact(CTMSG* pctm)
             pctm->paloAccepted = pso;
             CTMSG r = *pctm;
             r.t = g_clock.t;
-            g_physw.actmRecent.push_back(r);
-            if (pctm->grfAccepted & 0xF8)
+            if (fHeldBySender) g_physw.actmRecent.push_back(r);
+            // (announced: Sly 3 tests the bytes against 0x3E (orig3 0x240A28: its bytes are Sly 2's shifted down by two, a
+            // hit is 2 where Sly 2's is 8); Sly 2's 0xF8 kept every hit unannounced: e.g. ThiefNet's boss 68945 never got
+            // its event 14, whose handler (block 74105 module 1) counts its death on the dock laser's node 74227)
+            if (pctm->grfAccepted & 0x3E)
             {
                 struct
                 {

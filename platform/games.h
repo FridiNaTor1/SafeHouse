@@ -222,6 +222,7 @@ inline constexpr KnownDisc kKnownDiscs[] = {
     { "SCUS_973.16", GameId::Sly2, "USA" },
     { "SCES_525.29", GameId::Sly2, "Europe", true },
     { "SCPS_150.90", GameId::Sly2, "Japan", true },
+    { "SCKA_200.44", GameId::Sly2, "Korea", true },
     { "SCUS_974.64", GameId::Sly3, "USA" },
 };
 // "BOOT2 = cdrom0:\SCUS_973.16;1" -> "SCUS_973.16".

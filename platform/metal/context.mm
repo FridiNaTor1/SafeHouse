@@ -215,9 +215,11 @@ void Context::SetSwapInterval(int interval) {
   swap_interval_ = interval;
 #if TARGET_OS_IPHONE
   // iOS always presents in step with the display (no displaySyncEnabled); three drawables keep the GPU fed. Interval 0
-  // and 1 present at the next vblank (the game's timer caps the rate below the display's). An interval of N (Sly 2's
-  // cap at half the refresh rate: 60 FPS on a 120 Hz ProMotion screen) keeps each frame up at least N vblanks
-  // (SwapBuffers: presentDrawable:afterMinimumDuration:), as glXSwapInterval(2) does on the desktop.
+  // and 1 present at the next vblank. An interval of N (Sly 2's cap at a whole fraction of the refresh rate: 60 FPS on a
+  // 120 Hz ProMotion screen is 2) keeps each frame up at least N vblanks (SwapBuffers: presentAfterMinimumDuration), as
+  // glXSwapInterval(2) does on the desktop; the game starts each frame on a display link's tick at the cap's rate
+  // (display_link.mm WaitForDisplayFrame), not on a timer of its own. (Sly 2 no longer asks for 0 on iOS: VSync does not
+  // apply there, display.cpp.)
   layer_.maximumDrawableCount = 3;
   if (interval != logged_interval_) {
     logged_interval_ = interval;

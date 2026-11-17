@@ -66,3 +66,7 @@ bool FWriteGameSaveBlock(const std::string& path, const GAMESAVE& gs, std::strin
 // each episode's higher "percent_complete"; the higher "episodeBest"; gsKeep's "widCurrent", "episodeCurrent" and
 // "oidPoCurrent" (where the game resumes). Everything else stays gs's (coins, items, times, settings).
 void MergeProgressKeepDone(GAMESAVE& gs, const GAMESAVE& gsKeep);
+
+// orig3: 0x21C860: every task's / job's progress cleared in gs (the entries focus_count, complete_count, state,
+// time_played, suck_value, is_complete, from_memcard zeroed; everything else kept): a challenge's fresh start
+void ClearProgressTaskFields(GAMESAVE& gs);

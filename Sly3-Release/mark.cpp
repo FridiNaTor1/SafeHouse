@@ -5,6 +5,8 @@
 // reference), m_14B1A0_p3.cpp (0x14C6A0 / 0x14C6D8 / 0x14C748).
 
 #include "so.h"
+#include "cls.h"
+#include "game/sly3.h"
 
 #include "mat.h"
 #include "vtnative.h"
@@ -874,7 +876,7 @@ void PrependXpList(XP* first, XP** phead)
     *phead = first;
 }
 
-// orig: 0x001AA020 func_001AA020 (a copy of a list from the pool)
+// orig: 0x001AA020 func_001AA020 (a copy of a list from the pool) (orig3: 0x1CDD78, the same C in the Sly 3 decomp)
 XP* PxpCloneList(XP* head)
 {
     XP* first = nullptr;
@@ -1138,6 +1140,27 @@ SOE* PsoeHitTestLineObjects(int grf, const glm::vec3& a, const glm::vec3& b, con
         if (plsg) *plsg = alsg[j];
     }
     return psoBest;
+}
+
+// orig3: 0x001269D8 (so.h)
+void HitTestObjects3(const std::vector<LO*>& aplo, const glm::vec3& a, const glm::vec3& b, std::vector<HITOBJ3>* pahit)
+{
+    for (LO* plo : aplo)
+    {
+        // (an object out of the world: the original resets its record to the origin (reference RAM, Ep3 hack 4 at vb
+        // 2400: the chaser pool's 78461 out of the world have state -1, their record at 0 0 0, the entry's geometry stale
+        // (+0xC0 -1) and so remade there by 0x18B1E0); natively it keeps its last place, where a dead enemy would be hit
+        // again: left out)
+        if (!plo || !plo->fInWorld || !FCidDerivedFrom(plo->Cid(), S3CID(0x30))) continue;
+        for (SOE& e : static_cast<ALO*>(plo)->asoe)
+        {
+            if (e.f50) continue;   // (+0x18 bit 19 (0x80000): the entry off, Sly 2's bit 50)
+            UpdateSoeWorld(&e);
+            LSG lsg;
+            if (ClipSegmentSoe(&e, a, b, 1, &lsg) <= 0) continue;
+            pahit->push_back(HITOBJ3{plo, lsg.pos0, lsg.plane0, lsg.t0});
+        }
+    }
 }
 
 // orig: 0x0014C9F8 func_0014C9F8 (two sorted segment lists merged into their union (k 0) or intersection (k 1), at most

@@ -15,7 +15,7 @@ void CGc::Startup()
     m_cpframeLive = 0;
 }
 
-// orig: 0x00259A88 (a frame made a root of the collector)
+// orig: 0x00259A88 (a frame made a root of the collector) (orig3: 0x2BE530, the same code in Sly 3)
 void CGc::AddRootFrame(CFrame* pframe)
 {
     if (pframe == nullptr)

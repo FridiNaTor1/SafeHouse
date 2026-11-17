@@ -33,7 +33,10 @@
 #include "shell.h"
 #include "system_settings.h"
 #include "sly2_settings.h"
+#include "sly3_settings.h"
+#include "sly3_action_bindings.h"
 #include "audio_devices_sdl.h"
+#include "monitor_select_glfw.h"
 #include "../collection/ps3menu.h"
 #include "update_dialog.h"
 #include "widgets.h"
@@ -159,7 +162,15 @@ public:
     }
     GameId game() const { return m_game; }
     // The games whose settings this page edits.
-    static bool hasSettings(GameId game) { return game == GameId::Sly1 || game == GameId::Sly2; }
+    static bool hasSettings(GameId game) { return game == GameId::Sly1 || game == GameId::Sly2 || game == GameId::Sly3; }
+    // Sly 2 and Sly 3 keep their options in Settings.ini (platform/sly2_settings.h, sly3_settings.h: each its own schema)
+    bool iniGame() const { return m_game == GameId::Sly2 || m_game == GameId::Sly3; }
+    settings::Sly2Load loadIni(settings::Sly2Settings& s) const {
+        return m_game == GameId::Sly3 ? settings::loadSly3(m_backend.userDir(m_game), s) : settings::loadSly2(m_backend.userDir(m_game), s);
+    }
+    bool saveIni(const settings::Sly2Settings& s) const {
+        return m_game == GameId::Sly3 ? settings::saveSly3(m_backend.userDir(m_game), s) : settings::saveSly2(m_backend.userDir(m_game), s);
+    }
     // Whether a category applies to the shown game.
     bool shown(int c) const {
         if (m_game == GameId::Sly1) return true;
@@ -295,31 +306,31 @@ private:
     filedialog::Async m_sourceDialog;
     // ------------------------------------------------------------ storage
     fs::path file() const {
-        return m_game == GameId::Sly2 ? settings::sly2SettingsPath(m_backend.userDir(m_game)) : settings::settingsPath(m_backend.userDir(m_game));
+        return iniGame() ? settings::sly2SettingsPath(m_backend.userDir(m_game)) : settings::settingsPath(m_backend.userDir(m_game));
     }
     // The shown game's defaults (Sly 2 has its own keyboard / mouse layout).
-    settings::SystemSettings gameDefaults() const { return m_game == GameId::Sly2 ? settings::sly2Defaults() : settings::defaults(); }
+    settings::SystemSettings gameDefaults() const { return iniGame() ? settings::sly2Defaults() : settings::defaults(); }
     void load() {
-        if (m_game == GameId::Sly2) {
+        if (iniGame()) {
             // (Settings.ini; made once from the old system_settings.dat, which the game would do at its next start too)
-            const auto result = settings::loadSly2(m_backend.userDir(m_game), m_sly2);
+            const auto result = loadIni(m_sly2);
             m_settings = m_sly2.system;
             m_version = 0;
             m_result = result == settings::Sly2Load::Ok         ? settings::LoadResult::Ok
                        : result == settings::Sly2Load::Migrated ? settings::LoadResult::Upgraded
                        : result == settings::Sly2Load::Missing  ? settings::LoadResult::Missing
                                                                 : settings::LoadResult::Corrupt;
-            if (result == settings::Sly2Load::Migrated && !m_fixture) settings::saveSly2(m_backend.userDir(m_game), m_sly2);
+            if (result == settings::Sly2Load::Migrated && !m_fixture) saveIni(m_sly2);
             m_sly2Saved = m_sly2.game;
         } else {
             m_result = settings::load(file(), m_settings, &m_version);
             if (!settings::loaded(m_result)) m_settings = gameDefaults();
         }
-        if (m_game == GameId::Sly2) m_actions = sly2input::load(m_backend.userDir(m_game));
+        if (iniGame()) m_actions = sly2input::load(m_backend.userDir(m_game));   // (Sly 3: the same file in its folder, sly3_action_bindings.h)
         std::error_code ec;
         m_mtime = fs::last_write_time(file(), ec);
         if (ec) m_mtime = {};
-        if (m_game == GameId::Sly2) {
+        if (iniGame()) {
             m_actionMtime = fs::last_write_time(sly2input::profilePath(m_backend.userDir(m_game)), ec);
             if (ec) m_actionMtime = {};
         }
@@ -332,7 +343,7 @@ private:
         std::error_code ec;
         const auto now = fs::last_write_time(file(), ec);
         if ((ec ? fs::file_time_type{} : now) != m_mtime) load();
-        if (m_game == GameId::Sly2) {
+        if (iniGame()) {
             const auto actionsNow = fs::last_write_time(sly2input::profilePath(m_backend.userDir(m_game)), ec);
             if ((ec ? fs::file_time_type{} : actionsNow) != m_actionMtime) load();
         }
@@ -349,8 +360,8 @@ private:
     void commit() {
         if (!writable()) return;
         settings::sanitizeStatic(m_settings, monitorHeight(), m_maxSamples,
-                                 m_game == GameId::Sly2 ? settings::kSly2DefaultKeyboardBindings : settings::kDefaultKeyboardBindings);
-        if (m_game == GameId::Sly2) {
+                                 iniGame() ? settings::kSly2DefaultKeyboardBindings : settings::kDefaultKeyboardBindings);
+        if (iniGame()) {
             // (a save-kept option changed here is the user's choice: no longer taken from the newest save)
             const auto& was = m_sly2.system;
             if (was.controllerVibration != m_settings.controllerVibration) settings::clearPending(m_sly2, settings::kSaveOptionVibration);
@@ -362,8 +373,8 @@ private:
             m_sly2.system = m_settings;
             // (the file read again first: keys added by hand or by another build since are kept)
             settings::Sly2Settings onDisk;
-            if (settings::loadSly2(m_backend.userDir(m_game), onDisk) == settings::Sly2Load::Ok) m_sly2.unknown = onDisk.unknown;
-            m_saveOk = settings::saveSly2(m_backend.userDir(m_game), m_sly2);
+            if (loadIni(onDisk) == settings::Sly2Load::Ok) m_sly2.unknown = onDisk.unknown;
+            m_saveOk = saveIni(m_sly2);
             if (m_saveOk) m_sly2Saved = m_sly2.game;
         } else
             m_saveOk = settings::save(file(), m_settings);
@@ -378,7 +389,14 @@ private:
         if (m_fixture) return;
         writeJson(m_backend.locations.config / "launcher.json", m_backend.config);
     }
+    // (settings v22: the game's monitor, platform/monitor_select.h, caps the internal resolution list; its modes give the
+    // frame rates: m_monitors, read by refreshMonitors)
     int monitorHeight() const {
+        // (the game's monitor when one is chosen: the list is that monitor's)
+        if (m_settings.monitor[0]) {
+            const int i = cane::monitor::resolve(m_monitors.list, cane::monitor::load(m_settings.monitor));
+            if (i >= 0 && m_monitors.list[size_t(i)].height > 0) return m_monitors.list[size_t(i)].height;
+        }
         // Wayland does not reveal window positions: use the primary monitor,
         // as the game does there.
         if (glfwGetPlatform() == GLFW_PLATFORM_WAYLAND) {
@@ -404,11 +422,20 @@ private:
     }
     static constexpr int kUncappedFrameRate = 1000;
     std::vector<int> frameRates() const {
+#if defined(CANE_IOS)
+        // (iOS: the rates the display paces, Sly2-Release display.cpp: 30, 60 and the screen's own, 120 on ProMotion)
+        std::vector<int> rates{ 30, 60 };
+#else
         std::vector<int> rates{ 30, 60, 90, 120, 240 };
         // Sly 2 runs 60 Hz steps drawn between them at any rate (Sly2-Release frameinterp.h): 144 and no limit too
         // (kUncappedFrameRate, an ordinary value of the shared field: Sly2-Release reads it as no limit)
-        if (m_game == GameId::Sly2) rates.insert(rates.end(), { 144, kUncappedFrameRate });
-        if (GLFWmonitor* m = glfwGetPrimaryMonitor()) {
+        if (iniGame()) rates.insert(rates.end(), { 144, kUncappedFrameRate });
+#endif
+        // (the game's monitor's highest refresh rate: settings v22's chosen one, else the primary one; m_monitors is read
+        // with the Display / Graphics rows)
+        const int i = cane::monitor::resolve(m_monitors.list, cane::monitor::load(m_settings.monitor));
+        if (i >= 0 && m_monitors.list[size_t(i)].maxRefreshRate >= 30) rates.push_back(m_monitors.list[size_t(i)].maxRefreshRate);
+        else if (GLFWmonitor* m = glfwGetPrimaryMonitor()) {
             int count = 0;
             const GLFWvidmode* modes = glfwGetVideoModes(m, &count);
             int maximum = 0;
@@ -682,6 +709,7 @@ private:
         switch (category) {
         case Display:
             s.windowMode = d.windowMode, s.vsyncEnabled = d.vsyncEnabled, s.aspectMode = d.aspectMode, s.frameRate = d.frameRate;
+            std::copy(std::begin(d.monitor), std::end(d.monitor), s.monitor);
             m_sly2.upscale = settings::Sly2UpscaleOptions{};
             if (m_game == GameId::Sly2) m_sly2.vr.worldScale = settings::Sly2VrOptions{}.worldScale;
             break;
@@ -698,7 +726,7 @@ private:
             m_sly2.game.usbHeadset = 0;
             break;
         case Controls:
-            if (m_game == GameId::Sly2 && m_actions.enabled) {
+            if (iniGame() && m_actions.enabled) {
                 m_actions = sly2input::defaults();
                 m_actions.enabled = true;
                 commitActions();
@@ -747,14 +775,15 @@ private:
     }
 
     // ------------------------------------------------------------ rows
-    // The game whose settings are shown (Sly 1 / Sly 2).
+    // The game whose settings are shown (Sly 1 / Sly 2 / Sly 3).
     void gameRow(bool locked) {
-        static const std::vector<std::string> games{ cane::game(GameId::Sly1).shortName, cane::game(GameId::Sly2).shortName };
-        int index = m_game == GameId::Sly2 ? 1 : 0;
+        static const std::vector<std::string> games{ cane::game(GameId::Sly1).shortName, cane::game(GameId::Sly2).shortName,
+                                                     cane::game(GameId::Sly3).shortName };
+        int index = m_game == GameId::Sly3 ? 2 : m_game == GameId::Sly2 ? 1 : 0;
         ImGui::BeginDisabled(locked);
         if (stepperRow(tr("Game"), &index, games)) {
             cancelCapture();
-            m_game = index == 1 ? GameId::Sly2 : GameId::Sly1;
+            m_game = index == 2 ? GameId::Sly3 : index == 1 ? GameId::Sly2 : GameId::Sly1;
             if (!shown(category)) category = Display;
             load();
         }
@@ -786,6 +815,33 @@ private:
         return changed;
     }
     static std::string percent(int v) { return std::to_string(v) + "%"; }
+    // (settings v22, platform/monitor_select.h) the connected monitors, read when the page is shown and every 2 seconds
+    cane::monitor::Connected m_monitors;
+    double m_monitorsListed = -1.0;
+    void refreshMonitors() {
+        if (m_monitorsListed >= 0 && ImGui::GetTime() - m_monitorsListed < 2.0) return;
+        m_monitors = cane::monitor::connected();
+        m_monitorsListed = ImGui::GetTime();
+    }
+    void monitorRow() {
+        namespace mo = cane::monitor;
+        refreshMonitors();
+        const std::string stored = mo::load(m_settings.monitor);
+        const std::vector<std::string> choices = mo::choices(m_monitors.list, stored);
+        std::vector<std::string> labels;
+        for (size_t i = 0; i < choices.size(); ++i) {
+            if (i == 0) labels.push_back(tr("Primary"));
+            else if (i <= m_monitors.list.size()) labels.push_back(mo::label(m_monitors.list, int(i) - 1));
+            else labels.push_back(trf("%s (not connected)", mo::storedName(choices[i]).c_str()));
+        }
+        int index = mo::choiceIndex(m_monitors.list, stored);
+        if (stepperRow(tr("Monitor"), &index, labels)) mo::store(m_settings.monitor, choices[size_t(index)]), commit();
+        describe(glfwGetPlatform() == GLFW_PLATFORM_WAYLAND
+                     ? tr("The monitor Fullscreen and Borderless fill. Primary is the system's main monitor. A monitor that is unplugged "
+                          "uses the primary one until it is back. On Wayland a window opens where the desktop puts it.")
+                     : tr("The monitor Fullscreen and Borderless fill and a window opens on. Primary is the system's main monitor. A "
+                          "monitor that is unplugged uses the primary one until it is back."));
+    }
     void displayRows() {
 #if !defined(CANE_ANDROID) && !defined(CANE_IOS)
         // (Android: the system places the window, in DeX too; nothing to choose. iOS: the app fills its window)
@@ -793,8 +849,12 @@ private:
         int mode = m_settings.windowMode;
         if (stepperRow(tr("Window mode"), &mode, modes)) m_settings.windowMode = mode, commit();
         describe(tr("Borderless fills the screen without changing its resolution."));
+        monitorRow();
 #endif
+#if !defined(CANE_IOS)
+        // (iOS: the game is always in step with the display, Sly2-Release display.cpp)
         toggle(tr("VSync"), m_settings.vsyncEnabled, tr("Matches the frame rate to the display to stop tearing."));
+#endif
         const std::vector<std::string> aspects{ tr("Fit to screen"), "4:3", "16:9", "16:10", tr("4:3 (PS2)"), tr("16:9 (PS2)") };
         int aspect = m_settings.aspectMode;
         if (stepperRow(tr("Aspect ratio"), &aspect, aspects)) m_settings.aspectMode = aspect, commit();
@@ -868,6 +928,7 @@ private:
         rangeRow(tr("Sharpness"), u.sharpness, 0, 100, 10, tr("How much the upscaled picture is sharpened."), percent);
     }
     void graphicsRows() {
+        refreshMonitors();
         const int monitor = monitorHeight();
         std::vector<int> heights;
         std::vector<std::string> labels;
@@ -902,15 +963,15 @@ private:
         std::snprintf(customDistance, sizeof(customDistance), "%.2fx", m_settings.drawDistance);
         if (stepperRow(tr("Draw distance"), &d, distanceLabels, nullptr, d < 0 ? customDistance : nullptr))
             m_settings.drawDistance = distances[static_cast<size_t>(d)], commit();
-        describe(m_game == GameId::Sly2 ? tr("How far away scenery, props and effects stay visible. Original matches the PS2; higher settings "
+        describe(iniGame() ? tr("How far away scenery, props and effects stay visible. Original matches the PS2; higher settings "
                                           "keep characters and gameplay at the PS2's distances.")
                                         : tr("How far away objects stay visible. Original matches the PS2."));
         // (settings v16 longShadows: Sly2-Release render.cpp FBuildShadow2, a PC improvement, not the original)
-        if (m_game == GameId::Sly2)
+        if (iniGame())
             toggle(tr("Long shadows"), m_settings.longShadows,
                    tr("Character shadows from low lights reach the floor in full. Off: they end at a fixed length, as on the PS2."));
         // (settings v20 fastShadows: Sly2-Release display.h fFastShadows, a low-end option)
-        if (m_game == GameId::Sly2)
+        if (iniGame())
             toggle(tr("Fast shadows"), m_settings.fastShadows,
                    tr("Character shadows with less GPU work, for low-end devices. The picture stays nearly the same."));
         // (Sly 2, Settings.ini [Graphics] Outline Thickness: Sly2-Release render.cpp; the game's display options and VR
@@ -921,9 +982,9 @@ private:
                      tr("The width of the characters' cartoon outlines, in percent of the original. In VR the outlines keep the flat "
                         "picture's look for the headset's wider view."), percent);
 #if defined(_WIN32) || (defined(__linux__) && !defined(__ANDROID__))
-        // (settings v21 renderer: Sly2-Release renderer.h, platform/renderer_choice.h: Auto is Vulkan with OpenGL the
-        // fallback; Linux and Windows, where the game has the Vulkan renderer)
-        if (m_game == GameId::Sly2) {
+        // (settings v21 renderer: Sly2-Release / Sly3-Release renderer.h, platform/renderer_choice.h: Auto is Vulkan with
+        // OpenGL the fallback; Linux and Windows, where the games have the Vulkan renderer)
+        if (iniGame()) {
             const std::vector<std::string> renderers{ tr("Auto (Vulkan)"), "Vulkan", "OpenGL" };
             int renderer = std::clamp(m_settings.renderer, 0, 2);
             if (stepperRow(tr("Renderer"), &renderer, renderers)) m_settings.renderer = renderer, commit();
@@ -934,7 +995,7 @@ private:
 #elif defined(__ANDROID__)
         // (Sly2-Release renderer.cpp on Android: Auto is Vulkan, OpenGL ES when it cannot start, for VR, or after a
         // start that stopped in its first frames)
-        if (m_game == GameId::Sly2) {
+        if (iniGame()) {
             const std::vector<std::string> renderers{ tr("Automatic"), "Vulkan", "OpenGL ES" };
             int renderer = std::clamp(m_settings.renderer, 0, 2);
             if (stepperRow(tr("Renderer"), &renderer, renderers)) m_settings.renderer = renderer, commit();
@@ -1001,7 +1062,7 @@ private:
             if (stepperRow(tr("Speakers"), &speaker, speakers)) m_settings.stereoEnabled = speaker == 0, commit();
             describe(tr("Mono mixes both channels together, for a single speaker or one ear."));
             sly1LanguageRow();
-        } else if (m_game == GameId::Sly2) {
+        } else if (iniGame()) {
             // (the original's Speakers option, Settings.ini; values settings::Sly2Speakers)
             const std::vector<std::string> speakers{ tr("Surround"), tr("Stereo"), tr("Mono") };
             static const int values[] = { settings::Speakers_Surround, settings::Speakers_Stereo, settings::Speakers_Mono };
@@ -1009,7 +1070,8 @@ private:
             if (stepperRow(tr("Speakers"), &speaker, speakers)) m_sly2.game.speakers = values[speaker], commit();
             describe(tr("Mono mixes both channels together, for a single speaker or one ear. Surround (the PS2's default) and "
                      "Stereo both play in stereo. The same as the in-game Speakers option."));
-            languageRow(), voiceLanguageRow();
+            if (m_game == GameId::Sly2) languageRow(), voiceLanguageRow();
+            if (m_game == GameId::Sly3) sly3LanguageRow();
             audioDeviceRows();
         }
         auto volume = [&](const char* label, float& value, const char* help) {
@@ -1017,7 +1079,7 @@ private:
             if (sliderRow(label, &v)) value = v, m_volumeDirty = true;
             describe(help);
         };
-        const bool sly2 = m_game == GameId::Sly2;
+        const bool sly2 = iniGame();
         volume(tr("Music"), m_settings.musicVolume, sly2 ? tr("Background music. The same as the in-game Music Volume.") : tr("Background music."));
         volume(tr("Sound effects"), m_settings.soundEffectsVolume,
                sly2 ? tr("Gadgets, footsteps, guards and the world around you. The same as the in-game Effects Volume.")
@@ -1161,6 +1223,7 @@ private:
         const bool forced = input::tracker().forced() && input::tracker().family() != input::Family::Keyboard;
         std::string name, detail;
         input::Family family = input::Family::Keyboard;
+        if (forced) pad = nullptr;   // (the forced family wins over a pad that happens to be connected)
         if (pad) {
             family = pad->family;
             name = !pad->gamepadName.empty() && pad->mapping == input::MappingSource::Builtin ? pad->gamepadName : pad->joystickName;
@@ -1186,7 +1249,9 @@ private:
         float textX = at.x + px(20);
         auto& atlas = input::promptAtlas();
         // (the original PlayStation family has no picture of its own: the DualShock 4's silhouette is the closest)
-        const auto* device = atlas.deviceTexture() ? atlas.device(family == input::Family::PlayStation ? input::Family::PS4 : family) : nullptr;
+        // (a VR family: its controllers, both hands in one picture)
+        const auto* device = atlas.deviceTexture()
+            ? atlas.device(input::devicePictureId(family == input::Family::PlayStation ? input::Family::PS4 : family)) : nullptr;
         if (device) {
             const float k = (h - px(20)) / float(std::max(device->under.w, device->under.h)) ;
             const float w = device->under.w * k, hh = device->under.h * k;
@@ -1212,11 +1277,11 @@ private:
                     nullptr, at.x + width - textX - px(16));
     }
     void controlsRows() {
-        const bool advanced = m_game == GameId::Sly2 && m_actions.enabled;
+        const bool advanced = iniGame() && m_actions.enabled;
         const auto family = input::promptFamily(promptStyle(), 0);
         section(tr("Controller in use"));
         controllerCard();
-        if (m_game == GameId::Sly2) {
+        if (iniGame()) {
             ImGui::BeginDisabled(m_actions.readOnly);
             bool enabled = m_actions.enabled;
             if (toggleRow(tr("Advanced Input Mapping"), &enabled)) {
@@ -1235,6 +1300,7 @@ private:
             std::vector<std::string> groups;
             for (size_t i = 0; i < sly2input::kActionCount; ++i) {
                 if (!m_debug && sly2input::isNoclipAction(sly2input::Action(i))) continue;
+                if (m_game == GameId::Sly3 && !sly3input::offered(sly2input::Action(i))) continue;   // (Sly 2's own minigames)
                 const auto& action = sly2input::kActions[i];
                 if (std::find(groups.begin(), groups.end(), action.group) == groups.end()) groups.emplace_back(action.group);
             }
@@ -1244,7 +1310,8 @@ private:
             stepperRow(tr("Action group"), &m_actionGroup, groupNames);
             ImGui::BeginDisabled(m_actions.readOnly);
             for (size_t i = 0; i < sly2input::kActionCount; ++i)
-                if (groups[size_t(m_actionGroup)] == sly2input::kActions[i].group)
+                if (groups[size_t(m_actionGroup)] == sly2input::kActions[i].group &&
+                    (m_game != GameId::Sly3 || sly3input::offered(sly2input::Action(i))))
                     bindingRow(kAdvancedCapture + int(i), m_actionDevice == 1, family);
             ImGui::EndDisabled();
             caption(tr("Bindings may be shared. Actions apply only in their gameplay context. Escape cancels capture. Delete clears a binding."));
@@ -1255,7 +1322,7 @@ private:
         if (m_game == GameId::Sly1)
             toggle(tr("Controller vibration"), m_settings.controllerVibration,
                    tr("The game's rumble on hits, explosions and scripted moments. The in-game Vibration option must also be on."));
-        else if (m_game == GameId::Sly2)
+        else if (iniGame())
             toggle(tr("Controller vibration"), m_settings.controllerVibration,
                    tr("The game's rumble on hits, explosions and scripted moments. The same as the in-game Vibrations option."));
         section(tr("Button prompts"));
@@ -1267,7 +1334,7 @@ private:
                tr("Every device shows the game's original PlayStation 2 button icons. Off: PS4 / PS5 pads show their own icons, other devices theirs."));
         toggle(tr("Instant skip cutscenes"), m_settings.instantSkipCutscenes,
                tr("One press of Circle skips a cutscene. Off: hold Circle for 2 seconds."));
-        if (m_game == GameId::Sly1 || m_game == GameId::Sly2) {
+        if (m_game == GameId::Sly1 || iniGame()) {
             const std::vector<std::string> cameraRotationLabels{ tr("Off"), tr("On") };
             int cameraRotation = m_settings.autoCameraRotation != 0 ? 1 : 0;
             if (stepperRow(tr("Automatic camera rotation"), &cameraRotation, cameraRotationLabels))
@@ -1276,16 +1343,32 @@ private:
         }
         section(tr("Controller"));
         // (settings v17: Sly 2's controller camera inversion; off = the original's orbit camera)
-        if (m_game == GameId::Sly2) {
+        if (iniGame()) {
             toggle(tr("Invert camera horizontal"), m_settings.padInvertCameraX,
                    tr("Off: the right stick orbits the camera as on the PS2 (right swings it around to the right, so the view turns left). On: right turns the view right."));
             toggle(tr("Invert camera vertical"), m_settings.padInvertCameraY,
                    tr("Off: as on the PS2, pushing the right stick up raises the camera to look down. On: up looks up."));
-            // (the original's own options, Settings.ini; the PS2 kept them in each save)
-            toggle(tr("Invert binocucom"), m_sly2.game.invertBinocucom,
-                   tr("The controller in the binocucom. The same as the in-game Invert Binocucom Controls."));
-            toggle(tr("Invert turret"), m_sly2.game.invertTurret,
-                   tr("The controller on turrets. The same as the in-game Invert Turret Controls."));
+            // (the original's own options, Settings.ini; the PS2 kept them in each save. Sly 3 keeps its per-camera options
+            //  in the save, as the original)
+            if (m_game == GameId::Sly2) {
+                toggle(tr("Invert binocucom"), m_sly2.game.invertBinocucom,
+                       tr("The controller in the binocucom. The same as the in-game Invert Binocucom Controls."));
+                toggle(tr("Invert turret"), m_sly2.game.invertTurret,
+                       tr("The controller on turrets. The same as the in-game Invert Turret Controls."));
+            }
+            if (m_game == GameId::Sly3) {
+                // (Sly 3's Camera Options per camera, Settings.ini; the PS2 kept them in each save: sly3_settings.h)
+                static const char* const kinds[7] = { N_("Camera"), N_("Binocucom"), N_("Grapple-Cam"), N_("Turret"), N_("Strafe"),
+                                                      N_("Swimming"), N_("Harpoon") };
+                const std::vector<std::string> values{ tr("Default"), tr("Reversed") };
+                for (int k = 0; k < 7; ++k)
+                    for (int a = 0; a < 2; ++a) {
+                        int v = m_sly2.game.camReverse[k][a] ? 1 : 0;
+                        const std::string label = a ? trf("%s up / down", tr(kinds[k])) : trf("%s left / right", tr(kinds[k]));
+                        if (stepperRow(label.c_str(), &v, values)) m_sly2.game.camReverse[k][a] = v, commit();
+                    }
+                describe(tr("The original's Camera Options for each kind of camera. The same as the in-game Camera Options."));
+            }
         }
         if (!advanced) for (int i = 0; i < settings::kBindingCount; ++i) bindingRow(i, true, family);
         section(tr("Keyboard"));
@@ -1299,7 +1382,7 @@ private:
                tr("While playing, the mouse turns the camera and aims the binocucom. Pause to free the cursor."));
         rangeRow(tr("Camera sensitivity"), m_settings.mouseSensitivity, 10, 500, 10, tr("How far the camera turns per mouse movement."), percent);
         rangeRow(tr("Aim sensitivity"), m_settings.mouseAimSensitivity, 10, 500, 10, tr("Binocucom aiming speed."), percent);
-        if (m_game == GameId::Sly2) {
+        if (iniGame()) {
             // (settings v17: each view's own mouse inversion; off = natural everywhere)
             toggle(tr("Invert camera horizontal"), m_settings.mouseInvertX, tr("Off: moving the mouse right turns the camera right. On: it turns left."));
             toggle(tr("Invert camera vertical"), m_settings.mouseInvertY, tr("Off: moving the mouse up looks up. On: it looks down."));
@@ -1312,7 +1395,7 @@ private:
             toggle(tr("Invert aim vertical"), m_settings.mouseInvertY, tr("Moving the mouse up aims down in the binocucom."));
         }
         toggle(tr("Raw input"), m_settings.mouseRawInput, tr("Uses unaccelerated mouse motion where the system supports it."));
-        if (m_game == GameId::Sly2)
+        if (iniGame())
             toggle(tr("Mouse wheel zoom"), m_settings.mouseWheelZoom, tr("Zoom the Binocucom and turrets with unassigned wheel inputs."));
         else
             toggle(tr("Wheel zooms binocucom"), m_settings.mouseWheelZoom, tr("When no action is bound to the wheel."));
@@ -1434,17 +1517,12 @@ private:
         });
     }
     void collectionRows() {
-#if defined(CANE_IOS)
-        // (iOS: the Collection Style Launcher is a program of its own that the app cannot start, and its rows are
-        // Steam / desktop shortcuts and a PS3 import for it: the section is left out)
-        return;
-#endif
         refreshCollection();
         const bool importing = m_job.busy && m_job.label == kCollectionImportLabel;
         section(tr("Collection Style Launcher"));
         if (m_collectionImported) {
             if (linkRow(tr("Start the Collection Style Launcher"), nullptr, nullptr, Icon::Play) && !m_fixture && startCollection) startCollection();
-#ifdef CANE_ANDROID
+#if defined(CANE_ANDROID) || defined(CANE_IOS)  // (the apps: no command line; iOS: it opens in place of this window, main.cpp takeTurns)
             describe(tr("The Sly Collection's (PS3) own menu, imported from your disc: turn the pages to a game and start it; quitting a game "
                         "brings you back to it."));
 #else
@@ -1507,6 +1585,8 @@ private:
             }
         }
         describe(m_collectionMessage.empty() ? tr("Starts the Collection Style Launcher directly.") : m_collectionMessage.c_str());
+#elif defined(CANE_IOS)
+        // (iOS: no Steam, no desktop, no home-screen shortcuts an app can add)
 #else
         if (linkRow(tr("Add the Collection Style Launcher to Steam"), nullptr, nullptr, Icon::Plus) && !m_fixture) {
             try {
@@ -1623,6 +1703,16 @@ private:
             ImGui::Unindent(px(16));
             if (LauncherBackend::ps3HdGame(g) && !installs.empty()) ps3HdRows(g, gameRunning);
             if (g == GameId::Sly2 && !installs.empty()) languagesRows(gameRunning);
+            if (g == GameId::Sly3 && !installs.empty()) {
+                // (Sly 3's French / Spanish: The Sly Collection's text, Sly3-Release ps3lang.cpp)
+                ImGui::BeginDisabled(gameRunning || m_job.busy);
+                if (linkRow(trf("Import %s from The Sly Collection (PS3)…", (std::string(tr("French")) + tr(" and ") + tr("Spanish")).c_str()).c_str(),
+                            tr(".iso / .zip"), nullptr, Icon::Disc))
+                    m_langGame = GameId::Sly3, startLanguagePick(LangPick::Ps3Image);
+                if (linkRow(tr("Import them from the extracted disc…"), tr("folder"), nullptr, Icon::Folder))
+                    m_langGame = GameId::Sly3, startLanguagePick(LangPick::Ps3Folder);
+                ImGui::EndDisabled();
+            }
             ImGui::PopID();
         }
     }
@@ -1916,10 +2006,13 @@ private:
         m_japaneseFontMissing = m_backend.japaneseFontMissing();
         m_japaneseFontInstalled = m_backend.japaneseFontSource().has_value();
     }
-    // How a language plays on the selected region's disc (its text needs that disc's fonts)
+    // How a language plays on the selected region's disc (its text needs that disc's fonts: the Japanese and the Korean
+    // discs draw Latin text without accents, a Japanese / Korean language elsewhere needs its Font.bin)
     std::string languageNote(const LauncherBackend::LanguageInfo& l) const {
-        if (l.wide && !l.font && m_langRegion != "japan") return tr("its voices, English text on this disc");
-        if (!l.wide && m_langRegion == "japan" && l.key != "English" && l.key.rfind("English", 0) != 0) return tr("text without accents on this disc");
+        const std::string discScript = m_langRegion == "japan" ? "japanese" : m_langRegion == "korea" ? "korean" : "latin";
+        if (l.wide && !l.font && l.script != discScript)
+            return discScript == "latin" ? tr("its voices, English text on this disc") : tr("voices only: the text stays in the disc's language");
+        if (!l.wide && discScript != "latin" && l.key != "English" && l.key.rfind("English", 0) != 0) return tr("text without accents on this disc");
         if (!l.voice) return tr("subtitles, English voices");
         return "";
     }
@@ -1955,6 +2048,20 @@ private:
                                         : tr("Only your installed disc's language is available."));
     }
     // Settings.ini [Language]: Automatic or one of the languages
+    // (Sly 3) English and the languages folder's (the PS3 import, Settings > Games > Sly 3), Settings.ini's Language
+    void sly3LanguageRow() {
+        const std::vector<std::string> langs = m_backend.sly3Languages();
+        std::vector<std::string> names{ tr("English") };
+        int index = 0;
+        for (const auto& k : langs) {
+            names.push_back(tr(k));
+            if (k == m_sly2.game.language) index = int(names.size()) - 1;
+        }
+        if (stepperRow(tr("Language"), &index, names)) {
+            m_sly2.game.language = index == 0 ? std::string() : langs[size_t(index) - 1];
+            commit();
+        }
+    }
     void languageRow() {
         refreshLanguages();
         std::vector<std::string> names{ tr("Automatic") };
@@ -2042,7 +2149,7 @@ private:
         if (linkRow(tr("Import languages from a disc image…"), ".iso", nullptr, Icon::Disc)) startLanguagePick(LangPick::Disc);
         describe(tr("Adds another region's languages without installing it: Europe has English (UK), French, German, Spanish, "
                  "Italian, Dutch, Portuguese, Danish, Finnish, Norwegian and Swedish (text, voices and cutscenes), Japan has "
-                 "Japanese. About 1 minute; Europe needs about 4.5 GB."));
+                 "Japanese, Korea has Korean. About 1 minute; Europe needs about 4.5 GB."));
         if (!m_ps3Missing.empty()) {
             std::string what;
             for (const auto& k : m_ps3Missing) what += (what.empty() ? std::string() : std::string(tr(" and "))) + tr(k);
@@ -2083,7 +2190,7 @@ private:
     void startLanguagePick(LangPick pick) {
         m_langPick = pick;
         if (m_langDialog.running()) return;
-        const char* title = pick == LangPick::Disc ? tr("Choose a Sly 2 disc image (Europe or Japan)")
+        const char* title = pick == LangPick::Disc ? tr("Choose a Sly 2 disc image (Europe, Japan or Korea)")
                             : pick == LangPick::Ps3Image ? tr("Choose The Sly Collection (PS3) disc image") : tr("Choose the extracted Sly Collection (PS3)");
         const auto kind = pick == LangPick::Disc ? filedialog::Kind::OpenIso : pick == LangPick::Ps3Image ? filedialog::Kind::OpenPs3 : filedialog::Kind::PickFolder;
         const fs::path start = filedialog::startFolder({ m_backend.config.value(pick == LangPick::Disc ? "browse_dir" : "ps3_browse_dir", std::string{}) });
@@ -2101,7 +2208,10 @@ private:
         if (m_langPick == LangPick::Disc)
             m_job.start("Languages (disc image)", [this, source](const auto& log) { m_backend.importLanguagesFromDisc(source, m_job.cancel, log); });
         else
-            m_job.start("Languages (The Sly Collection)", [this, source](const auto& log) { m_backend.importPs3Languages(source, m_job.cancel, log); });
+            m_job.start("Languages (The Sly Collection)", [this, source, game = m_langGame](const auto& log) {
+                m_backend.importPs3Languages(source, m_job.cancel, log, game);
+            });
+        m_langGame = GameId::Sly2;
     }
     void startPs3Pick(GameId g, bool folder, bool forCollection = false) {
         if (m_ps3Dialog.running()) return;
@@ -2281,6 +2391,7 @@ private:
     bool m_folderEntryFocus = false;
     char m_folderBuf[1024] = {};
     GameId m_ps3Game = GameId::Sly2;
+    GameId m_langGame = GameId::Sly2;   // (the PS3 language import's game: Sly 2's rows, or Sly 3's)
     bool m_ps3PickFolder = false;
 };
 } // namespace cane::ui

@@ -3,7 +3,9 @@
 #include "game/sly3.h"
 #include "worldglobals.h"
 #include "update.h"
+#include "pe.h"
 #include "game/scptgame3.h"
+#include "game/task3.h"
 #include "debugmenu.h"
 #include "rope.h"
 #include "dance.h"
@@ -131,6 +133,8 @@ void InsertDefev(DEFEV&& ev)
 // orig 0x001A5E28 (LO vt slot 16): the splice "update" event (symid 1), at most once per +0x30 time
 void UpdateLo(LO* plo)
 {
+    if (static const int s_oid = std::getenv("SLY3_UPDPRINT") ? std::atoi(std::getenv("SLY3_UPDPRINT")) : -2; plo->oid == s_oid)  // (debug)
+        std::printf("updatelo %d t %.3f next %.3f\n", plo->oid, g_clock.t, plo->tNextUpdate);
     if (plo->tNextUpdate <= g_clock.t) HandleLoSpliceEvent(plo, 1, true, 0, nullptr);
 }
 
@@ -330,7 +334,19 @@ void RemoveLoFromUpdateTable(SW* psw, LO* plo)
 }
 
 void PrintRef(const CRef& ref, std::string* ps);
+namespace { bool s_fDefevDispatch = false; }   // (a queued event run: its broadcast went out when it was queued)
+void HandleLoSpliceEventCore(LO* plo, uint32_t symid, bool fDeferred, int carg, CRef* aref, CRef* prefResult);
 void HandleLoSpliceEvent(LO* plo, uint32_t symid, bool fDeferred, int carg, CRef* aref, CRef* prefResult)
+{
+    HandleLoSpliceEventCore(plo, symid, fDeferred, carg, aref, prefResult);
+    // orig3: 0x1C86B8 (the objects' vt slot 3): after the object's own handler, message 5 / 6 is the task broadcast
+    // 0x1D / 0x1E with the object (e.g. m_ext's reminder 4272 closes on 0x1D with the rope 15174). Sly 2's base slot 3
+    // did it too (0x1A / 0x1B), but the copied callers sent it only here and there: in Sly 3 it is always sent here,
+    // and BroadcastTaskEvent drops the copied 0x1A / 0x1B (task.cpp).
+    if ((symid == 5 || symid == 6) && !s_fDefevDispatch && plo && FScripts3Active()) Broadcast3(symid == 5 ? 0x1D : 0x1E, plo);
+}
+
+void HandleLoSpliceEventCore(LO* plo, uint32_t symid, bool fDeferred, int carg, CRef* aref, CRef* prefResult)
 {
     // orig 0x1331F8: only when the object's module frame binds the event (0x127DB8, recursive)
     if (!plo->pframe) return;
@@ -469,7 +485,7 @@ void PostDeferredCall(void* object, uint32_t pfnOrig, PFNDEFERREDCALL pfn, int a
     s_adefcall.push_back({object, pfnOrig, pfn, arg});
 }
 
-// orig: 0x00149B58 with grf 1 (every pending call posted for the object removed)
+// orig: 0x00149B58 with grf 1 (every pending call posted for the object removed) (orig3: 0x15DD68, the same C in the Sly 3 decomp)
 void CancelDeferredCalls(void* object)
 {
     s_adefcall.erase(std::remove_if(s_adefcall.begin(), s_adefcall.end(), [object](const DEFCALL& c) { return c.object == object; }),
@@ -505,7 +521,14 @@ void RunDeferredSpliceEvents(SW* psw)
     {
         DEFEV ev = std::move(s_adefev.front());
         s_adefev.erase(s_adefev.begin());
-        if (ev.plo) HandleLoSpliceEvent(ev.plo, ev.symid, false, static_cast<int>(ev.aref.size()), ev.aref.data());
+        if (ev.plo)
+        {
+            if (static const bool s_f = std::getenv("SLY3_DEFEVPRINT") != nullptr; s_f)  // (debug: each queued event as it runs)
+                std::fprintf(stderr, "defev: %u of %d (cid 0x%X)\n", ev.symid, ev.plo->oid, ev.plo->Cid());
+            s_fDefevDispatch = true;
+            HandleLoSpliceEvent(ev.plo, ev.symid, false, static_cast<int>(ev.aref.size()), ev.aref.data());
+            s_fDefevDispatch = false;
+        }
         else
         {
             if (std::getenv("SLY2N_TASKDEBUG"))
@@ -521,7 +544,7 @@ void RunDeferredSpliceEvents(SW* psw)
                 if (ev.refProc.m_tagk == TAGK_Proc && ev.refProc.m_pproc && ev.refProc.m_pproc->m_pframe)
                     if (CRef* p1745 = ev.refProc.m_pproc->m_pframe->PrefFindBinding(1745, 1))
                     {
-                        LO* plo = dynamic_cast<LO*>(p1745->m_pbasic);
+                        LO* plo = p1745->m_tagk == TAGK_Basic ? dynamic_cast<LO*>(p1745->m_pbasic) : nullptr;  // (debug print: s1745 may hold any value)
                         std::fprintf(stderr, "   s1745 tag %d object %d\n", p1745->m_tagk, plo ? plo->oid : -1);
                         if (plo && plo->psidebag)
                         {
@@ -536,7 +559,8 @@ void RunDeferredSpliceEvents(SW* psw)
                         }
                     }
                     for (uint32_t sym : {3358u, 1754u})
-                        if (CRef* pr = ev.refProc.m_pproc->m_pframe->PrefFindBinding(sym, 1))
+                        if (CRef* pr = ev.refProc.m_tagk == TAGK_Proc && ev.refProc.m_pproc && ev.refProc.m_pproc->m_pframe
+                                           ? ev.refProc.m_pproc->m_pframe->PrefFindBinding(sym, 1) : nullptr)
                         {
                             std::string strFn;
                             if (pr->m_tagk == TAGK_Proc && pr->m_pproc)
@@ -619,6 +643,8 @@ void StartLoadedLo(SW* psw, LO* plo)
     // the world (LO +0x28 bit 52 set: removed). The PE's one-shots (0x1FE5E0) are the effects code's.)
     if (FCidDerivedFrom(plo->Cid(), sly3::CID_ASEG) || FCidDerivedFrom(plo->Cid(), sly3::CID_SM) || plo->Cid() == 0x94)
         RemoveLo(psw, plo);
+    // (s3-fx: the PE's start 0x1FE5E0 removes a one-shot (kind +0xD8 == 0) after the base start; TriggerPe plays it)
+    if (FPeOneShot(plo)) RemoveLo(psw, plo);
     if (std::getenv("SLY2N_TASKDEBUG") && plo->pframe && plo->pframe->PrefFindBinding(0, 1))
         std::fprintf(stderr, "start event: %d (cid 0x%X)\n", plo->oid, plo->Cid());
     if (plo->pframe && plo->pframe->PrefFindBinding(1, 1))
@@ -816,7 +842,8 @@ void StartSw(SW* psw, bool fInitHud, PFNSWPASS pfnPostLoadPlayers)
     // TODO(M3): 0x20E2B0 (the class 0x31 object with the largest +0xB8), 0x1FF828, 0x1CA500 (the unused
     // instances' keys), 0x20F710
     // orig 0x1569B8: seven 0x75 objects, oids 706..712 (in this order: 706, 707, 708, 709, 711, 710, 712), posted
-    for (OID oid : {0x2C2, 0x2C3, 0x2C4, 0x2C5, 0x2C7, 0x2C6, 0x2C8}) RemoveLo(psw, PloNew(S3CID(0x75), psw, nullptr, oid, -1));
+    for (OID oid : {0x319, 0x31A, 0x31B, 0x31C, 0x31E, 0x31D, 0x31F})  // (orig3 0x173C10: Sly 3's oids)
+        RemoveLo(psw, PloNew(S3CID(0x75), psw, nullptr, oid, -1));
     // orig 0x1A3260: a default light (oid 392) when no light of kind 0 (+0x160) exists (TODO: the kind; the
     // worlds' files carry their lights)
     InitSwNav(psw);  // orig 0x1C10C8: populate and bind the default navigation mesh when no group loaded a BSP
@@ -850,8 +877,6 @@ void StartSw(SW* psw, bool fInitHud, PFNSWPASS pfnPostLoadPlayers)
     if (fInitHud) InitHudWidgets(psw);
     for (LO* plo : aploLoad) StartLoadedLo(psw, plo);
     psw->aploLoad.clear();
-    // orig3: StartSw's RestoreTask 0x188CB0 per task (their vt slot 15; the reference: vblanks 1323..1329)
-    RestoreTasks3AtStart(psw);
     // orig: 0x001400B8 -> 0x001440D0 during 0x0020E740's slot-15 batch:
     // bind counters before deferred starts and broadcast 4 changes a pending
     // task request from 8 to 4. Native animation records must be ready first.
@@ -860,6 +885,12 @@ void StartSw(SW* psw, bool fInitHud, PFNSWPASS pfnPostLoadPlayers)
     // orig: 0x0020E828 (0x149C80 after the slot-15 batch): start scripts finish before broadcast 4 and the
     // transition's broadcast 5 activates tasks whose handlers use bindings installed by those scripts.
     RunDeferredSpliceEvents(psw);
+    // orig3: the transition 0x25C2A8 after the load: 0x184AA0 (the queued task) and 0x184B60 (every task restored, the
+    // keys' job / task activated) come after StartSw, so after the start splice events: a job's handler adds its
+    // procedures there (v_ext's job 2085 its option 2649, which the chase's script 2124 [1] calls at once to acquire
+    // Carmelita's proxy 139105; before, the warp's task activation ran 2124 [1] first and Carmelita stayed spare)
+    if (FScripts3Active()) SendStartEvents3(psw);   // orig3 0x1FC458, between 0x184AA0 and 0x184B60
+    RestoreTasks3AtStart(psw);
     // TODO(M3): 0x210940, 0x1957C0, 0x1D9520 (the HUD), 0x149C80, 0x1C1260, 0x14D470
     if (!FScripts3Active()) BroadcastTaskEvent(psw, 4, nullptr);  // orig 0x20E868 (TODO(sly3): 0x1854C8's broadcasts)
 }
@@ -901,13 +932,14 @@ void UpdateSw(SW* psw)
         }
         Pass(0x1C4468, psw);  // per SW +0x3EAC list entry
         Pass(0x1F77C0, psw);
+        static const bool s_fUpdMiss = std::getenv("SLY2N_UPDMISS") != nullptr;
         for (psw->iupdCur = 0; psw->iupdCur < static_cast<int>(psw->aupd.size()); ++psw->iupdCur)
         {
             const UPDENT& e = psw->aupd[psw->iupdCur];
             if (!(e.grf & GRFUPD_Update) || !e.plo) continue;
             if (FDebugSkipUpdate(psw, e.plo)) continue;   // (debugmenu.h: the noclip's player, placed by the menu)
             if (PFNUPDATE pfn = PfnUpdateForClass(e.plo->pcls)) pfn(e.plo);  // vt slot 16
-            else if (std::getenv("SLY2N_UPDMISS"))
+            else if (s_fUpdMiss)
             {
                 // (debug: the classes whose update (vt slot 16) is not native, once each)
                 static std::unordered_map<uint32_t, bool> s_mp;
@@ -950,10 +982,29 @@ void LoContactEvent(LO* plo, int n, int fDeferred, int carg, void* pv, LO* ploOt
     CRef aref[2];
     if (ploOther) aref[0].SetBasic(ploOther);
     aref[1].SetS32(static_cast<int>(pctm->grfFilter));
+    // (Sly 3 numbers these 0xD / 0xE: orig3 0x240A28 sends 0xC first. Its scripts bind s13 (self other filter) /
+    // s14 (self other filter), e.g. v_ext's; Sly 2's 0xA / 0xB are other events in Sly 3)
+    if (n == 0xA || n == 0xB) n += 3;
     HandleLoSpliceEvent(plo, static_cast<uint32_t>(n), fDeferred != 0, 2, aref);
+}
+// orig3 0x240A28: event 12 with the hit record (class 0xC4) to the sender, then to the receiver
+void LoHitEvent3(CTMSG* pctm)
+{
+    LO* aplo[2] = {pctm->ploSender, pctm->ploReceiver};
+    if (!(aplo[0] && aplo[0]->pframe) && !(aplo[1] && aplo[1]->pframe)) return;
+    CTMSGBASIC3 msg;
+    msg.pctm = pctm;
+    CRef arg;
+    arg.SetBasic(&msg);
+    for (LO* p : aplo)
+        if (p && p->pframe) HandleLoSpliceEvent(p, 12, false, 1, &arg);
 }
 struct INITCONTACTEVENT
 {
-    INITCONTACTEVENT() { g_pfnLoEvent = LoContactEvent; }
+    INITCONTACTEVENT()
+    {
+        g_pfnLoEvent = LoContactEvent;
+        g_pfnLoHitEvent3 = LoHitEvent3;
+    }
 } s_initcontactevent;
 }  // namespace

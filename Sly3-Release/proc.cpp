@@ -8,7 +8,7 @@ std::shared_ptr<CProc> PprocNew()
     return std::make_shared<CProc>();
 }
 
-// orig: 0x00128F70 CloneTo__5CProc
+// orig: 0x00128F70 CloneTo__5CProc (orig3: 0x12ACC8, the same code in Sly 3)
 void CProc::CloneTo(CProc* pprocClone, CFrame* pframeClone) const
 {
     pprocClone->m_pframe = pframeClone != nullptr ? pframeClone->shared_from_this() : m_pframe;

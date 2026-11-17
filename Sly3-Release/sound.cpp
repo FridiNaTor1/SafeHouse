@@ -15,6 +15,7 @@ extern int g_iframeMain;  // (game.cpp: debug prints)
 #include "loadtrace.h"
 #include "snd989.h"
 #include "spiop.h"
+#include "langstore.h"
 #include "splicetypes.h"
 
 #include <unordered_set>
@@ -111,7 +112,7 @@ CSndVoice* PvoiceTop()
     return g_sound.asndMusic.empty() ? nullptr : static_cast<CSndVoice*>(g_sound.asndMusic.back().get());
 }
 
-// orig: 0x1FD080 (where a stream is: 1 the music list, 0 the resident one, 2 a dialog line): spiop's track index
+// orig: 0x1FD080 (where a stream is: 1 the music list, 0 the resident one, 2 a dialog line): spiop's track index (orig3: 0x246EF0, the same C in the Sly 3 decomp)
 int ItrackFromStream(const SNDSTREAM* p)
 {
     for (const SNDSTREAM& m : g_sound.amusic)
@@ -123,6 +124,18 @@ int ItrackFromStream(const SNDSTREAM* p)
 // the pan in degrees (0 when inaudible).
 void Attenuate(const glm::vec3& pos, float sStart, float sEnd, float* pg, int* ppan)
 {
+    // orig3 0x245440's two-player branch (SW +0x4FA4): the louder of the two players' falloffs (their characters'
+    // positions); the pan centred when both hear it, else to the side of the one who does (player 1 -90, player 2 +90)
+    if (glm::vec3 apos[2]; g_sndhooks.pfnListeners2p)
+        if (bool afHave[2] = {false, false}; g_sndhooks.pfnListeners2p(apos, afHave))
+        {
+            float ag[2] = {0.0f, 0.0f};
+            for (int i = 0; i < 2; ++i)
+                if (afHave[i]) ag[i] = GLimit01((sEnd - glm::length(pos - apos[i])) / (sEnd - sStart));
+            if (pg) *pg = std::max(ag[0], ag[1]);
+            if (ppan) *ppan = ag[0] > 0.0f && ag[1] > 0.0f ? 0 : ag[0] > 0.0f ? -90 : ag[1] > 0.0f ? 90 : 0;
+            return;
+        }
     glm::vec3 posEar{};
     glm::mat3 mat(1.0f);
     if (!g_sndhooks.pfnListener || !g_sndhooks.pfnListener(&posEar, &mat))
@@ -191,13 +204,13 @@ void CSnd::Start()
     SetDirty(m, m);
 }
 
-// orig: 0x1FB018
+// orig: 0x1FB018 (orig3: 0x244C28, the same C in the Sly 3 decomp)
 void CSnd::Pause()
 {
     if (++m_cpause == 1) SetDirty(6, 2);
 }
 
-// orig: 0x1FB060
+// orig: 0x1FB060 (orig3: 0x244C70, the same C in the Sly 3 decomp)
 void CSnd::Resume()
 {
     if (--m_cpause == 0) SetDirty(6, 4);
@@ -210,7 +223,7 @@ void CSnd::Stop(float tFade)
     SetDirty(0x1FFF, 8);
 }
 
-// orig: 0x1FB1F8
+// orig: 0x1FB1F8 (orig3: 0x244E08, the same C in the Sly 3 decomp)
 void CSnd::SetVolume(float x)
 {
     const float g = GLimit01(x);
@@ -233,7 +246,7 @@ void CSnd::SetPan(int n)
     }
 }
 
-// orig: 0x1FB2C0
+// orig: 0x1FB2C0 (orig3: 0x244ED0, the same code in Sly 3)
 void CSnd::SetPitch(float g)
 {
     if (g == m_pitch) return;
@@ -253,7 +266,7 @@ void CSnd::SetSource(void* psrc)
     if (FNearOrigin(m_pos)) SetDirty(0x200, 0);
 }
 
-// orig: 0x1FB3F0
+// orig: 0x1FB3F0 (orig3: 0x245000, the same code in Sly 3)
 void CSnd::SetPosition(const glm::vec3& v)
 {
     m_pos = v;
@@ -261,7 +274,7 @@ void CSnd::SetPosition(const glm::vec3& v)
     else if (!m_psrc) SetDirty(0x200, 0);
 }
 
-// orig: 0x1FB4F0
+// orig: 0x1FB4F0 (orig3: 0x245100, the same C in the Sly 3 decomp)
 void CSnd::SetFalloff(float a, float b)
 {
     if (b <= a) b = a + 1.0f;
@@ -269,7 +282,7 @@ void CSnd::SetFalloff(float a, float b)
     m_sStart = a;
 }
 
-// orig: 0x1FB658 (+ 0x1FB6A8 / 0x1FB710: on the active list while any bit is set, holding a reference)
+// orig: 0x1FB658 (+ 0x1FB6A8 / 0x1FB710: on the active list while any bit is set, holding a reference) (orig3: 0x245320, the same C in the Sly 3 decomp)
 void CSnd::SetDirty(uint32_t m, uint32_t v)
 {
     m &= 0xFFFF;
@@ -292,7 +305,7 @@ void CSnd::SetDirty(uint32_t m, uint32_t v)
     }
 }
 
-// orig: 0x1FB710 (off the active list, its bits kept)
+// orig: 0x1FB710 (off the active list, its bits kept) (orig3: 0x2453D8, the same C in the Sly 3 decomp)
 void CSnd::RemoveActive()
 {
     auto& a = g_sound.apsndActive;
@@ -495,7 +508,7 @@ void CSndPlain::StartIop()
         StepSoundMood();
 }
 
-// orig: 0x1FBE80 (a fade over +0x48 s with AutoVol -4 in 240ths, or at once)
+// orig: 0x1FBE80 (a fade over +0x48 s with AutoVol -4 in 240ths, or at once) (orig3: 0x245D40, the same C in the Sly 3 decomp)
 void CSndPlain::StopIop()
 {
     if (m_tFade > 0.0f) snd_AutoVol(m_h, -4, CvtW(m_tFade * 240.0f), 2);
@@ -526,7 +539,7 @@ void CSndPlain::SendChanges()
     snd_SetSoundParams(m_h, m, vol, m_pan, pm, 0);
 }
 
-// orig: 0x1FBFB0 (poll "still playing": callback 0x1FBB30, at once here)
+// orig: 0x1FBFB0 (poll "still playing": callback 0x1FBB30, at once here) (orig3: 0x245E78, the same C in the Sly 3 decomp)
 void CSndPlain::Requests()
 {
     if (!(m_grfDirty & 0x400)) return;
@@ -538,7 +551,7 @@ void CSndPlain::Requests()
     else SetDirty(0x400, 0x400);
 }
 
-// orig: 0x1FC018 (audible again: start; inaudible: a looper stops but keeps its 3D update, others stop)
+// orig: 0x1FC018 (audible again: start; inaudible: a looper stops but keeps its 3D update, others stop) (orig3: 0x245EE0, the same code in Sly 3)
 void CSndPlain::OnAudible(int fInaudible)
 {
     if (!fInaudible)
@@ -562,7 +575,7 @@ CSndVoice::CSndVoice(SNDSTREAM* pstream, uint32_t flags) : m_pstream(pstream), m
     if (g_sound.fMusicPaused) Pause();
 }
 
-// orig: 0x1FC270
+// orig: 0x1FC270 (orig3: 0x246120, the same C in the Sly 3 decomp)
 void CSndVoice::Start()
 {
     if (FPlaying()) return;
@@ -571,7 +584,7 @@ void CSndVoice::Start()
     m_grfVoiceChanged = 0xF;
 }
 
-int CSndVoice::Kind() { return (m_flags & 4) ? 2 : 1; }  // orig: 0x1FC4F8
+int CSndVoice::Kind() { return (m_flags & 4) ? 2 : 1; }  // orig: 0x1FC4F8 (orig3: 0x2463A0, the same code in Sly 3)
 
 // orig: 0x1FC510 ('SUKR' 1 {sector, vol, pan, track, flags | 1 (paused), headset}; callback 0x1FCBA8)
 void CSndVoice::StartIop()
@@ -665,7 +678,7 @@ void CSndVoice::Requests()
     m_tPlay += g_sound.tClock - g_sound.tClockPrev;
 }
 
-// orig: 0x1FC2E0
+// orig: 0x1FC2E0 (orig3: 0x246190, the same C in the Sly 3 decomp)
 void CSndVoice::SetVoiceVolume(int k, float g)
 {
     if (k < 0 || k >= 6) return;
@@ -678,7 +691,7 @@ void CSndVoice::SetVoiceVolume(int k, float g)
     }
 }
 
-// orig: 0x1FC380
+// orig: 0x1FC380 (orig3: 0x246230, the same C in the Sly 3 decomp)
 void CSndVoice::SetVoicePan(int k, int deg)
 {
     if (k < 0 || k >= 6) return;
@@ -752,7 +765,7 @@ CSndPlain* PsndNewPlain(int sfxid)
     return new CSndPlain(sfxid);
 }
 
-// orig: 0x1FC138
+// orig: 0x1FC138 (orig3: 0x245FE8, the same C in the Sly 3 decomp)
 CSndVoice* PsndNewVoice(SNDSTREAM* pstream, uint32_t flags)
 {
     if (!pstream) return nullptr;
@@ -770,21 +783,21 @@ CSnd* PsndStartSound(int sfxid, float gVol, int pan, void* psrc, const glm::vec3
     return p;
 }
 
-SNDSTREAM* PstreamFindDialog(int id)  // orig: 0x1FCFA0 (newest first)
+SNDSTREAM* PstreamFindDialog(int id)  // orig: 0x1FCFA0 (newest first) (orig3: 0x246E10, the same code in Sly 3)
 {
     for (auto it = g_sound.adialog.rbegin(); it != g_sound.adialog.rend(); ++it)
         if (it->id == id) return &*it;
     return nullptr;
 }
 
-SNDSTREAM* PstreamFindMusic(int id)  // orig: 0x1FCFF8 (newest first)
+SNDSTREAM* PstreamFindMusic(int id)  // orig: 0x1FCFF8 (newest first) (orig3: 0x246E68, the same code in Sly 3)
 {
     for (auto it = g_sound.amusic.rbegin(); it != g_sound.amusic.rend(); ++it)
         if (it->id == id) return &*it;
     return nullptr;
 }
 
-// orig: 0x1FE990
+// orig: 0x1FE990 (orig3: 0x2489A0, the same C in the Sly 3 decomp)
 int IvoiceFromTarget(int id)
 {
     for (std::size_t i = 0; i < g_sound.aidTarget.size() && i < 6; ++i)
@@ -792,7 +805,7 @@ int IvoiceFromTarget(int id)
     return -1;
 }
 
-// orig: 0x1FD028
+// orig: 0x1FD028 (orig3: 0x246E98, the same code in Sly 3)
 int IsoundFromSfxid(int n)
 {
     if (n < 0 || n >= static_cast<int>(g_sound.aisoundFromId.size())) return -1;
@@ -858,6 +871,9 @@ void ResetSoundMgr()
     snd_StopAllSounds();
     SpiopStopAll();
     SOUNDMGR& s = g_sound;
+    // (0x1FD700: the microphone's held noise let go (0x156BE0 with no template))
+    if (s.pnoiseMic && g_sndhooks.pfnHoldMicNoise) g_sndhooks.pfnHoldMicNoise(&s.pnoiseMic, nullptr, glm::vec3(0.0f), 0.0f, 0.0f);
+    s.pnoiseMic = nullptr;
     s.aisoundFromId.clear();
     s.aidTarget.clear();
     s.fModeAlert = s.fModeSneak = 0;
@@ -948,13 +964,15 @@ void LoadMusicFromBrx(CBinaryInputStream* pbis)
     const int nl = pbis->U8Read();
     int sel = 0;
     s.alanguage.clear();
+    const int langWorld = LangWorld();   // (PC: a language the disc lacks: the one it falls back to; langstore.h)
     for (int i = 0; i < nl; ++i)
     {
         s.alanguage.push_back(pbis->U8Read());
-        if (s.alanguage.back() == g_nLang) sel = i;
+        if (s.alanguage.back() == langWorld) sel = i;
     }
     s.ilanguage = sel;
     const int ne = pbis->S32Read();
+    int cStore = 0;   // (the lines from the languages folder: langstore.h)
     for (int i = 0; i < ne; ++i)
     {
         SNDSTREAM e;
@@ -966,17 +984,25 @@ void LoadMusicFromBrx(CBinaryInputStream* pbis)
             pbis->ReadRecord64(k, KEYK_Dialog, e.id, s.alanguage[j]);  // 0x118458
             const int g = pbis->S8Read();
             const float f = pbis->F32Read();
+            if (g_plangcapture) g_plangcapture->Dialog(s.alanguage[j], e.id, FkFromRecord(k), f);   // (--import-languages)
             if (j != sel) continue;
             std::memcpy(e.key, k, sizeof(k));
             e.fk = FkFromRecord(k);
             e.fNoHeadset = g;
             e.tLength = f;
         }
+        // (PC) the chosen language's line from the languages folder when the disc lacks the language (langstore.h)
+        {
+            FK fk;
+            float tLength = 0.0f;
+            if (FLanguageStoreDialog(e.id, fk, tLength)) { e.fk = fk; e.tLength = tLength; ++cStore; }
+        }
         const int c = pbis->S32Read();
         e.aevent.resize(std::max(c, 0));
         pbis->Read(static_cast<std::size_t>(std::max(c, 0)) * 8, e.aevent.data());  // the original reads even 0 bytes
         s.adialog.push_back(std::move(e));
     }
+    if (cStore) std::printf("languages: %d of %d dialog lines in %s\n", cStore, ne, SzLanguage(g_nLang));
     const int no = pbis->S32Read();
     for (int i = 0; i < no; ++i)
     {
@@ -988,7 +1014,7 @@ void LoadMusicFromBrx(CBinaryInputStream* pbis)
     }
 }
 
-// orig: 0x1FD5E8 (the bank opened once from its key; the loopers among its sounds found)
+// orig: 0x1FD5E8 (the bank opened once from its key; the loopers among its sounds found) (orig3: 0x247470, the same C in the Sly 3 decomp)
 void LoadSoundBank()
 {
     std::lock_guard<std::recursive_mutex> lock(g_mtxSound);
@@ -1059,7 +1085,7 @@ void PopMusic(int n)
     }
 }
 
-// orig: 0x1FE3F8 (the top music's play time)
+// orig: 0x1FE3F8 (the top music's play time) (orig3: 0x2483D8, the same C in the Sly 3 decomp)
 float TMusicTop()
 {
     std::lock_guard<std::recursive_mutex> lock(g_mtxSound);
@@ -1078,7 +1104,7 @@ float TMusicTop()
     return p ? static_cast<float>(p->m_tPlay) : 0.0f;
 }
 
-// orig: 0x1FE0E8 (one event of the dialog line)
+// orig: 0x1FE0E8 (one event of the dialog line) (orig3: 0x2480C8, the same C in the Sly 3 decomp)
 static void FireDialogEvent(const SNDSTREAM::EVENT& e)
 {
     if (e.itarget == -1 || e.itarget < 0 || e.itarget >= 6) return;
@@ -1130,16 +1156,18 @@ CSndVoice* PsndStartDialog(int k, int fQuiet)
     return static_cast<CSndVoice*>(s.sndDialog.get());
 }
 
-// orig: 0x2275B8 (the speaker's colour)
+// orig: 0x2275B8 (the speaker's colour) (orig3 0x27EB50, by the speaker's Sly 3 class: 0x34 Sly blue (0x33, 0x66, 0x99),
+// 0x35 Murray (0x99, 0x33, 0x66), 0x36 Bentley green (0x33, 0x99, 0x33), 0x3C Carmelita red (0x99, 0x33, 0x33), else
+// grey 0x66; alpha 0x7F. Sly 2's table (0x35 Sly, 0x37 Bentley, 0x36 Murray, 0x3F, 0x3C) gave Sly 3's Sly grey and
+// Carmelita magenta: the reference's chase scene 2124 has Sly blue (49, 100, 150), Carmelita red (150, 49, 49))
 uint32_t RgbaDialogSpeaker(int k)
 {
     switch (k)
     {
-    case 0x35: return 0x7F996633u;
-    case 0x37: return 0x7F339933u;
-    case 0x36: return 0x7F663399u;
-    case 0x3F: return 0x7F333399u;
-    case 0x3C: return 0x7F993399u;
+    case 0x34: return 0x7F996633u;
+    case 0x35: return 0x7F663399u;
+    case 0x36: return 0x7F339933u;
+    case 0x3C: return 0x7F333399u;
     default: return 0x7F666666u;
     }
 }
@@ -1152,7 +1180,7 @@ void SetDialogSubtitle(int id, int oidSpeaker)
     g_dialogsub.rgba = RgbaDialogSpeaker(oidSpeaker);
 }
 
-// orig: 0x227788
+// orig: 0x227788 (orig3: 0x27ED18, the same code in Sly 3)
 void ResetDialogSubtitle() { g_dialogsub = DIALOGSUB{}; }
 
 // orig: 0x2277D0 (the line's text)
@@ -1212,7 +1240,7 @@ bool FDialogPlaying(int n)
     return p && (n == -1 || p->m_pstream->id == n);
 }
 
-// orig: 0x1FE888 (the dialog's play time, or the elapsed time while a stopped line's clock has not started)
+// orig: 0x1FE888 (the dialog's play time, or the elapsed time while a stopped line's clock has not started) (orig3: 0x248898, the same C in the Sly 3 decomp)
 float TDialog()
 {
     std::lock_guard<std::recursive_mutex> lock(g_mtxSound);
@@ -1222,7 +1250,7 @@ float TDialog()
     return static_cast<float>(p->m_tPlay);
 }
 
-// orig: 0x1FE5B8
+// orig: 0x1FE5B8 (orig3: 0x248598, the same C in the Sly 3 decomp)
 void SetSoundMgrFlags(uint32_t mask, int fSet)
 {
     std::lock_guard<std::recursive_mutex> lock(g_mtxSound);
@@ -1230,7 +1258,7 @@ void SetSoundMgrFlags(uint32_t mask, int fSet)
     else g_sound.grfState &= ~mask;
 }
 
-// orig: 0x1FE9C8 (989snd SetPlaybackMode, cmd 0xB: stereo / mono)
+// orig: 0x1FE9C8 (989snd SetPlaybackMode, cmd 0xB: stereo / mono) (orig3: 0x2489E0, the same code in Sly 3)
 void SetSoundPlaybackMode(int mode)
 {
     std::lock_guard<std::recursive_mutex> lock(g_mtxSound);
@@ -1461,6 +1489,41 @@ static void UpdateDialogEvents(float dtFrame)
 
 bool g_fSndFrameClock = false;
 
+// orig: 0x1FDA48 (the USB headset's microphone): with the headset in use (+0x10) its level is asked of spiop ('SUKR' 11,
+// the callback 0x1FCF70 keeps it at +0x70; PC: audio.h GMicLevel, the same computation on the chosen microphone, which
+// is recorded only while the headset is in use); otherwise the level is 0. Above 0.5 (a shout: RMS -6 dB of full
+// scale) with an actor as the current player, the fixed noise template 711 (SW +0x4034) gets the radius and height
+// range of the level (+0x80 / +0x90 evaluated: 500 / +-500 at 0.5, 3000 / +-1000 at 1) and a noise of it is held at
+// the player (0x156BE0, renewed every frame); else the held noise goes. Guards hear it as any noise (ainoise.h).
+void UpdateMicNoise(SOUNDMGR& s)
+{
+    // (tests, headless runs read no Settings.ini: SLY2N_HEADSET=1 the headset in use from the start; SLY2N_MICLEVEL="G[@T]"
+    //  the microphone's level G from the game's time T on, as the reference's SLY2_POKE of +0x10 / +0x6C / +0x70)
+    static const bool s_fHeadsetEnv = std::getenv("SLY2N_HEADSET") != nullptr;
+    static bool s_fHeadsetEnvSet = false;
+    if (s_fHeadsetEnv && !s_fHeadsetEnvSet) s.fEffect = 1, s_fHeadsetEnvSet = true;
+    static const char* s_szLevel = std::getenv("SLY2N_MICLEVEL");
+    SetMicCapture(s.fEffect != 0 && !s_szLevel);   // (PC: the microphone open only while the headset is in use)
+    PollAudioDevices();              // (PC: a chosen device unplugged / back, every 2 s; nothing while all are the default)
+    s.gMic = s.fEffect ? GMicLevel() : 0.0f;
+    if (s_szLevel && s.fEffect)
+    {
+        const char* at = std::strchr(s_szLevel, '@');
+        const float t = g_sndhooks.pfnTGame ? g_sndhooks.pfnTGame() : 0.0f;
+        s.gMic = !at || t >= std::strtof(at + 1, nullptr) ? std::strtof(s_szLevel, nullptr) : 0.0f;
+    }
+    glm::vec3 pos(0.0f);
+    void* pplayer = g_sndhooks.pfnMicPlayer ? g_sndhooks.pfnMicPlayer(&pos) : nullptr;
+    if (!g_sndhooks.pfnHoldMicNoise) return;
+    if (pplayer && 0.5f < s.gMic)
+    {
+        auto eval = [&](const std::array<float, 3>& c) { return c[0] + s.gMic * (c[1] + s.gMic * c[2]); };
+        g_sndhooks.pfnHoldMicNoise(&s.pnoiseMic, pplayer, pos, eval(s.clqMicRadius), eval(s.clqMicHeight));
+    }
+    else if (s.pnoiseMic)
+        g_sndhooks.pfnHoldMicNoise(&s.pnoiseMic, nullptr, pos, 0.0f, 0.0f);
+}
+
 // orig: 0x1FD830 (the manager's frame)
 void UpdateSoundMgr(float dt, float dtFrame)
 {
@@ -1483,7 +1546,8 @@ void UpdateSoundMgr(float dt, float dtFrame)
     if (g_fSkipCutFast && !(s_fFrameClockEnv || g_fSndFrameClock))
         s_dtClockOffset = s.tClock - static_cast<double>(TickNow()) / 294912000.0;
     LoadSoundBank();
-    // (0x1FDA48 / 0x1FDBA8: the USB headset's effect and microphone; no headset here)
+    UpdateMicNoise(s);   // 0x1FDA48 (the USB headset's microphone)
+    // (0x1FDBA8: 'SUKR' 12, the disc tray (UpdateCd's +0xA4); the PC has no tray)
     CSnd* top = PvoiceTop();
     const bool fRunning = !g_sndhooks.pfnFGameRunning || g_sndhooks.pfnFGameRunning();
     if (fRunning)

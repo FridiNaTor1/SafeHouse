@@ -368,6 +368,11 @@ void initialize(int argc, char** argv) {
         log(text);
     }
 }
+void ignoreScreenDisconnects() {
+    // (SDL_uikitmodes.m: SDL_DisplayWatch adds the class itself as the observer, UIKit_InitModes; again on each start)
+    if (Class watch = NSClassFromString(@"SDL_DisplayWatch"))
+        [NSNotificationCenter.defaultCenter removeObserver:watch name:UIScreenDidDisconnectNotification object:nil];
+}
 bool smokeTest() { return smoke; }
 void log(const std::string& line) {
     std::lock_guard lock(logMutex);

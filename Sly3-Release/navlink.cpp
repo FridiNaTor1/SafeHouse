@@ -117,7 +117,7 @@ void DeleteSwNavLinks(const SW* psw)
 // append to an empty list; kept, the list filled to 8 with earlier copies' regions and dropped the new ones)
 void ClearGuardRegions(const LO* plo) { MpaoidRegion().erase(plo); }
 
-// orig 0x001C2170 (the link's update after the load): its ends' points and regions
+// orig 0x001C2170 (the link's update after the load): its ends' points and regions (orig3: 0x1EEA28, the same C in the Sly 3 decomp)
 void ResolveNavLink(NAVLINK* pl)
 {
     // 0x1A5C48 -> 0x1A5D98: the run list (0x13E5E0: 0x15E938(G, 4, oid, link), then 0x1C20E8)

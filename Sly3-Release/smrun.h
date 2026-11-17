@@ -6,6 +6,8 @@
 #include "asega.h"
 
 struct SMA;
+// (PC) true: this SMA's random choices come from their own stream (pickup.cpp: the pickups' SMAs)
+extern bool (*g_pfnSmaOwnRandom)(const SMA* psma);
 
 // The state-change message (0x1F13A8: {the SMA, the old state's oid, the new one's}).
 struct SMAMSG10

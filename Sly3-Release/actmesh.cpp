@@ -13,6 +13,7 @@
 #include "lo.h"
 #include "disc.h"
 #include "gang.h"
+#include "game/guru3.h"
 #include "so.h"
 #include "stepphys.h"
 
@@ -165,6 +166,11 @@ void UpdateActorStepMesh(ACTOR* pa)
         default: isoe = IsoePart(palo, 0x1A58u + 4u * static_cast<uint32_t>(pm->state)); break;
         }
         if (isoe == -1) isoe = StepPhysOf(palo).isoeSource;  // +0x268
+    }
+    else if (sly3::GURU* pg = sly3::PguruFromLo(palo))
+    {
+        sly3::UpdateGuruStepMesh3(pg);   // (orig3 0x22D080: his parts by their Sly 3 offsets, game/guru3.cpp)
+        return;
     }
     else
         return;

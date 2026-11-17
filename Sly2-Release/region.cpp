@@ -87,7 +87,7 @@ int LanguageOfIso(const std::string& code)
         // (Windows locale names)
         {"English", LANG_English}, {"French", LANG_French}, {"Italian", LANG_Italian}, {"German", LANG_German},
         {"Spanish", LANG_Spanish}, {"Dutch", LANG_Dutch}, {"Portuguese", LANG_Portuguese}, {"Danish", LANG_Danish},
-        {"Finnish", LANG_Finnish}, {"Norwegian", LANG_Norwegian}, {"Swedish", LANG_Swedish}, {"Japanese", LANG_Japanese}};
+        {"Finnish", LANG_Finnish}, {"Norwegian", LANG_Norwegian}, {"Swedish", LANG_Swedish}, {"Japanese", LANG_Japanese}, {"Korean", LANG_Korean}};
     for (const auto& e : s_a)
         if (code == e.iso) return e.lang;
     return -1;
@@ -230,6 +230,9 @@ void InitLanguage()
     }
     if (lang < 0 && sz && *sz) lang = LangStoreOfKey(sz);   // (a store language by its folder name)
     SetLanguage(lang >= 0 && FLanguageAvailable(lang) ? lang : -1);
+    // (testing: SLY2_LANGUAGE_CHOSEN=1 as Settings.ini's Language would: the session's choice, no language menu on the
+    // title; headless runs do not read Settings.ini)
+    if (sz && *sz && lang >= 0 && FLanguageAvailable(lang) && std::getenv("SLY2_LANGUAGE_CHOSEN")) g_nLangChosen = lang;
     // (testing: SLY2_VOICE_LANGUAGE=<name> the voices' language, as Settings.ini's Voices)
     g_nLangVoice = -1;
     if (const char* szv = std::getenv("SLY2_VOICE_LANGUAGE"); szv && *szv)
@@ -285,7 +288,7 @@ bool g_fPs3World = false;
 
 bool FLaterWorldBlockOrder() { return g_fPs3World || g_disc.Region() != DISCREGION::Usa; }
 
-bool FWideText() { return g_fPs3World || g_disc.Region() == DISCREGION::Japan; }
+bool FWideText() { return g_fPs3World || g_disc.FJapaneseBuild(); }
 
 namespace
 {
@@ -306,6 +309,19 @@ constexpr TEXTIDRANGE s_aidrJapan[] = {
     {0x135, 0x282 - 0x135},   // "WE'LL BE RIGHT BACK!" (the Japanese build's 0x282)
     {0x136, 3},   // the jobs' names and goals
     {0x27F, 4},   // (0x282 added) the rest
+};
+// The Korean build's text: one memory card message more than the USA's (0x12, a second "no memory card") and one
+// more at 0x1A (a second "card full"), the European builds' Ratchet & Clank demo string (0x6F) and "WE'LL BE RIGHT
+// BACK!" moved as in the Japanese build (to 0x281): the Japanese ids less one from 0x12 on. (Found by aligning all
+// worlds' texts against the USA ones: the same untranslated slots, the same button codes but the menus' swapped ones.)
+constexpr TEXTIDRANGE s_aidrKorea[] = {
+    {0x000, 0},
+    {0x012, 1},
+    {0x019, 2},
+    {0x06D, 3},
+    {0x135, 0x281 - 0x135},
+    {0x136, 2},
+    {0x27F, 3},
 };
 // The European builds' text has one string more: "You have accessed the Ratchet & Clank 3 demo!" (0x6D, the disc's demo),
 // so the ids from the episode names on are the USA ids + 1. v2.01 also moved "WE'LL BE RIGHT BACK!" (USA 0x135) to
@@ -329,6 +345,7 @@ const TEXTIDRANGE* PidrDisc(size_t& c)
     switch (g_disc.Region())
     {
     case DISCREGION::Japan: c = std::size(s_aidrJapan); return s_aidrJapan;
+    case DISCREGION::Korea: c = std::size(s_aidrKorea); return s_aidrKorea;
     case DISCREGION::Europe:
         if (std::strncmp(g_disc.SzDisc(), "Europe v1.00", 12) == 0) { c = std::size(s_aidrEurope100); return s_aidrEurope100; }
         c = std::size(s_aidrEurope201);
@@ -338,11 +355,11 @@ const TEXTIDRANGE* PidrDisc(size_t& c)
 }
 }
 
-uint32_t BtnMenuConfirm() { return g_disc.Region() == DISCREGION::Japan ? 0x20 : 0x40; }
-uint32_t BtnMenuBack() { return g_disc.Region() == DISCREGION::Japan ? 0x40 : 0x10; }
-uint32_t BtnMenuErase() { return g_disc.Region() == DISCREGION::Japan ? 0x80 : 0x20; }
-const char* SzMenuBackGlyph() { return g_disc.Region() == DISCREGION::Japan ? "&2X&." : "&2T&."; }
-const char* SzMenuConfirmGlyph() { return g_disc.Region() == DISCREGION::Japan ? "&2O&." : "&2X&."; }
+uint32_t BtnMenuConfirm() { return g_disc.FJapaneseBuild() ? 0x20 : 0x40; }
+uint32_t BtnMenuBack() { return g_disc.FJapaneseBuild() ? 0x40 : 0x10; }
+uint32_t BtnMenuErase() { return g_disc.FJapaneseBuild() ? 0x80 : 0x20; }
+const char* SzMenuBackGlyph() { return g_disc.FJapaneseBuild() ? "&2X&." : "&2T&."; }
+const char* SzMenuConfirmGlyph() { return g_disc.FJapaneseBuild() ? "&2O&." : "&2X&."; }
 
 int IdText(int idUsa)
 {
@@ -359,6 +376,14 @@ int IdTextJapanOfUsa(int idUsa)
 {
     int did = 0;
     for (const TEXTIDRANGE& r : s_aidrJapan)
+        if (idUsa >= r.idUsa) did = r.did;
+    return idUsa < 0 ? idUsa : idUsa + did;
+}
+
+int IdTextKoreaOfUsa(int idUsa)
+{
+    int did = 0;
+    for (const TEXTIDRANGE& r : s_aidrKorea)
         if (idUsa >= r.idUsa) did = r.did;
     return idUsa < 0 ? idUsa : idUsa + did;
 }
@@ -449,6 +474,23 @@ bool FJapaneseNoBreakBefore(uint32_t ch)
         if (c && c == ch) return true;
     return false;
 }
+
+int CHangulJamo(uint32_t ch, uint32_t ajamo[3])
+{
+    if (ch < 0xAC00 || ch > 0xD7A3) return 0;
+    const uint32_t s = ch - 0xAC00;
+    ajamo[0] = 0x1100 + s / 588;
+    ajamo[1] = 0x1161 + (s % 588) / 28;
+    ajamo[2] = s % 28 ? 0x11A7 + s % 28 : 0;
+    return ajamo[2] ? 3 : 2;
+}
+
+bool FHangulHorizontalVowel(uint32_t v) { return v == 0x1169 || v == 0x116D || v == 0x116E || v == 0x1172 || v == 0x1173; }
+
+bool FKoreanLineBreaks() { return FWideChars() && ScriptOfTextShown() == SCRIPT_Korean; }
+
+// orig KR 0x220AE8 (with 0x220AB0: an ASCII space by the ctype table, or U+3000)
+bool FKoreanBreakAfter(uint32_t ch) { return ch == ' ' || ch == '\t' || ch == 0x3000 || ch == '-'; }
 
 bool FJapaneseNoBreakAfter(uint32_t ch)
 {

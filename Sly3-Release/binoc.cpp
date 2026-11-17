@@ -1,6 +1,10 @@
+#include "actioninput.h"
 // The binocucom (orig ACTOR +0xF00, module 0x19CBF8..0x19DE10; the reference's m_19D330_p3.cpp): binoc.h.
 
 #include "binoc.h"
+#include <execinfo.h>
+#include "binoc3.h"
+#include "game/scptgame3.h"
 #include "game/sly3.h"
 #include "worldglobals.h"
 #include "photo.h"
@@ -65,31 +69,49 @@ int s_nViewMode = -1;  // (0x2BF920: the window's last target kind)
 
 namespace
 {
-std::map<const LO*, std::array<int, 7>>& MpcHold()
+std::map<const LO*, std::array<int, 8>>& MpcHold()
 {
-    static std::map<const LO*, std::array<int, 7>> s_mpc;
+    static std::map<const LO*, std::array<int, 8>> s_mpc;
     WORLD_TABLE_LOCAL(s_mpc);   // (PC: moved aside while a kept world loads, worldglobals.h)
     return s_mpc;
 }
 }  // namespace
 // (at a world's load: the old world's objects are freed, and a new object at a freed one's address must not
 // inherit its record)
-void ResetActorEffectHolds() { MpcHold().clear(); }
+void ResetBinocHidden3();
+void ResetActorEffectHolds() { MpcHold().clear(); ResetBinocHidden3(); }
 
 // the actor's talk hold count (+0x12F4)
 int CActorTalkHold(const LO* plo)
 {
     auto it = MpcHold().find(plo);
-    return it == MpcHold().end() ? 0 : it->second[6];
+    return it == MpcHold().end() ? 0 : it->second[7];
 }
 
+// orig3 0x156900 / 0x156928 (Sly 2 0x143EE0(p, 0x60B, 9, 5) / 0x143FF8): the actor's talk animation 1756 (9, kind 5),
+// played by a binocucom talk's speaker (the hold below) and by the player in the window (0x1BDBB0 kind 1)
+void PlayActorTalkAnim(LO* plo, bool fOn)
+{
+    if (std::getenv("SLY2N_BINOCPRINT"))
+    {
+        LO* p = plo ? PloFindSwNearest(plo, 1756) : nullptr;
+        std::printf("binoc: talk anim %s on %d: 1756 -> %d cid 0x%X parent %d\n", fOn ? "on" : "off", plo ? plo->oid : -1, p ? p->oid : -1, p ? p->Cid() : 0,
+                    p && p->paloParent ? p->paloParent->oid : -1);
+    }
+    if (fOn) PlayActorScriptAnimLo(plo, PloFindSwNearest(plo, 1756), 1756, 9);
+    else PlayActorScriptAnimLo(plo, nullptr, -1, 0);
+}
+
+// orig3 0x156850 / 0x1568B0 (vt slots 94 / 95 of the actors; the PO's 0x24F7C8 / 0x24F8C0)
 void HoldActorEffects(LO* plo, bool fHold, bool f, uint32_t grf)
 {
     if (!plo || !FCidDerivedFrom(plo->Cid(), S3CID(0x30))) return;
     ALO* palo = static_cast<ALO*>(plo);
-    auto& ac = MpcHold()[plo];  // (+0x2A0 x 6, the actor's +0x12F4)
-    static const int s_aidEffect[6] = {1548, 1549, 1550, -1, 1551, 1552};  // D_002C3C40 (0x1FD0C0)
-    for (int i = 0; i < 6; i++)
+    auto& ac = MpcHold()[plo];  // (Sly 3: +0x2C8 x 7, the actor's +0x13EC)
+    // Sly 3's ids (orig3 0x24F7C8 / 0x24F8C0: 0x246F30's table D_00349850, seven flags; Sly 2's D_002C3C40 held
+    // 1548 / 1549 / 1550 / - / 1551 / 1552, which name other objects in Sly 3)
+    static const int s_aidEffect[7] = {1757, 1758, 1759, -1, 1760, 1761, -1};
+    for (int i = 0; i < 7; i++)
     {
         const int id = s_aidEffect[i];
         if (!(grf & (1u << i))) continue;
@@ -117,14 +139,14 @@ void HoldActorEffects(LO* plo, bool fHold, bool f, uint32_t grf)
     if (!f || !FCidDerivedFrom(plo->Cid(), S3CID(0x34))) return;  // (the PO's 0x205478 / 0x205588 have no f)
     if (fHold)
     {
-        if (++ac[6] == 1)
+        if (++ac[7] == 1)
         {
-            PlayActorScriptAnimLo(plo, PloFindSwNearest(plo, 0x60B), 0x60B, 9);  // 0x143EE0(p, 0x60B, 9, 5)
-            if (ACTOR* pa = PactorFromLo(plo)) SetBinocState(pa, -1);         // 0x19CD38(+0xF00, -1)
+            PlayActorTalkAnim(plo, true);                                // orig3 0x156900
+            if (ACTOR* pa = PactorFromLo(plo)) SetBinocState(pa, -1);    // 0x1BDBB0(+0xF60, -1)
         }
     }
-    else if (--ac[6] == 0)
-        PlayActorScriptAnimLo(plo, nullptr, -1, 0);  // 0x143FF8
+    else if (ac[7] > 0 && --ac[7] == 0)
+        PlayActorTalkAnim(plo, false);  // orig3 0x156928
 }
 
 namespace
@@ -197,6 +219,50 @@ void PostLoadBinoc(ACTOR* pa)
     w.pprompt = PostLoadPhotoPrompt(pa);  // orig0x201DC8 (Sly's photo helper)
 }
 
+
+// orig3 0x241FC0 / 0x242228 (Sly 3's 0x1BDBB0 state 1 of a view other than kind 2: the actor's model hidden while the
+// binocucom looks out from behind his head, shown again when it leaves 1): 0x242048 walks the tree: each visible ALO
+// (class 0x2F) hidden (vt slot 23 with 0), its children ALOs alike; the hidden ones recorded and restored. (Its effects
+// 0xAB faded to 0 and lights 0xC3 dimmed: not done natively.) Natively Bentley's cap and chair filled his view and his
+// own dart hit them. SLY3_BINOCSHOWACTOR=1: not hidden.
+namespace
+{
+std::map<LO*, std::vector<LO*>>& MpHidden()
+{
+    static std::map<LO*, std::vector<LO*>> s_mp;
+    WORLD_TABLE_LOCAL(s_mp);
+    return s_mp;
+}
+void HideTree(LO* plo, std::vector<LO*>& a)
+{
+    if (!plo || !FCidDerivedFrom(plo->Cid(), sly3::CID_ALO)) return;
+    if (GrfUpdLo(g_psw, plo) & 8u)
+    {
+        SetLoVisible(g_psw, plo, false);
+        a.push_back(plo);
+    }
+    for (LO* pc : std::vector<LO*>(static_cast<ALO*>(plo)->aploChild)) HideTree(pc, a);
+}
+}  // namespace
+void ResetBinocHidden3() { MpHidden().clear(); }
+void HideActorForBinoc3(ACTOR* pa, bool fHide)
+{
+    static const bool s_fOff = std::getenv("SLY3_BINOCSHOWACTOR") != nullptr;
+    if (s_fOff || !pa || !pa->palo || !g_psw) return;
+    auto& mp = MpHidden();
+    auto it = mp.find(pa->palo);
+    if (fHide)
+    {
+        if (it != mp.end()) return;   // (+0x128 & 0x40: hidden already)
+        HideTree(pa->palo, mp[pa->palo]);
+    }
+    else if (it != mp.end())
+    {
+        for (LO* plo : it->second) SetLoVisible(g_psw, plo, true);
+        mp.erase(it);
+    }
+}
+
 // orig: 0x0019CC50
 void OpenBinoc(ACTOR* pa, int nView, LO* ploSpeaker, LO* ploScreen)
 {
@@ -210,6 +276,8 @@ void OpenBinoc(ACTOR* pa, int nView, LO* ploSpeaker, LO* ploScreen)
     pa->binoc.ploSpeaker = ploSpeaker;
     pa->binoc.ploScreen = ploScreen;
     SetBinocState(pa, 0);
+    if (nView == 0)
+        if (PODATA* data = PpodataFromLo(pa->palo)) sly2actions::BeginRecon(data->ppadctl);
 }
 
 // orig: 0x0019CCE8 (the opening, shutter, acceptance and closing keep the viewer).
@@ -229,6 +297,13 @@ void SetBinocState(ACTOR* pa, int n)
     BINOC& b = pa->binoc;
     const int cur = pa->nF04;
     if (n == cur) return;
+    // (debug: SLY2N_BINOCSTACK=1: who changes a binocucom's state)
+    if (static const bool s_fStack = std::getenv("SLY2N_BINOCSTACK") != nullptr; s_fStack)
+    {
+        void* apv[16];
+        std::fprintf(stderr, "binoc %d state %d -> %d t %.3f:\n", pa->palo ? pa->palo->oid : -1, cur, n, g_clock.t);
+        backtrace_symbols_fd(apv, backtrace(apv, 16), 2);
+    }
     ALO* palo = pa->palo;
     if (cur == -1)
     {
@@ -260,15 +335,25 @@ void SetBinocState(ACTOR* pa, int n)
                 SetAloCnstrLin(static_cast<ALO*>(b.ploSpeaker), 0);  // 0x1F5720(0)
             }
             HoldActorEffects(palo, false, false);  // slot 84 (0x3F, 0)
+            if (FScripts3Active()) PlayActorTalkAnim(palo, false);   // orig3 0x1BDBB0 state 1's exit: 0x156928
             break;
         case 2: RevokeCmPolicy(&g_cm, 0xF, 7, &g_cmpolicies.cprecon, b.ploSpeaker, nullptr); break;
         default: break;
         }
         DuckSounds(1.0f);
         if (pa->nF20 != 2) ShowActorParts(pa, false);  // slot 87 (0)
+        if (pa->nF20 != 2 && FScripts3Active()) HideActorForBinoc3(pa, false);   // orig3 0x242228
     }
     pa->nF04 = n;
     if (n == -1) b.idSkipScene = 0;
+    // (s3-player round 21, the user's report: the binocucom in play showed nothing) Sly 3's OpenBinoc 0x1BDA88 of kind 0
+    // (the recon view: R3 in play) opens the panel (the frame 1038 with its compass / zoom dials, binoc3.cpp) as a talk's
+    // does; the copied Sly 2 window found none of its Sly 2 screen objects, so only the camera moved
+    if (FScripts3Active() && pa->nF20 == 0)
+    {
+        if (n == 1) OpenBinocPanel3(palo, 0, nullptr);
+        else if (n == 2 || n == -1) CloseBinocPanel3(palo);
+    }
     static const bool s_fPrint = std::getenv("SLY2N_BINOCPRINT") != nullptr;
     if (s_fPrint)
         std::printf("binoc %d: t %.2f state %d -> %d view %d (free pan %.3f tilt %.3f, recon pan %.3f) speaker %d screen %d window %d frame %d\n", palo->oid, g_clock.t, cur, n,
@@ -303,6 +388,7 @@ void SetBinocState(ACTOR* pa, int n)
             b.win.ploWindow = b.ploScreen ? b.ploScreen : b.win.ploWindowDefault;  // 0x19DCA0
             SetBinocWindowState(pa, 0);
             HoldActorEffects(palo, true, false);  // slot 83 (0x3F, 0)
+            if (FScripts3Active()) PlayActorTalkAnim(palo, true);    // orig3 0x1BDBB0 kind 1: 0x156900 (the player's talk pose)
             break;
         case 2:
             SetCmPolicy(&g_cm, 7, &g_cmpolicies.cprecon, b.ploSpeaker, nullptr);
@@ -315,6 +401,7 @@ void SetBinocState(ACTOR* pa, int n)
         SetAloAngVelocityTo(palo, glm::vec3(0.0f));
         DuckSounds(0.6f);
         if (pa->nF20 != 2) ShowActorParts(pa, true);  // slot 87 (1)
+        if (pa->nF20 != 2 && FScripts3Active()) HideActorForBinoc3(pa, true);    // orig3 0x241FC0
         break;
     case 2:
         SetBinocWindowState(pa, 2);
@@ -509,7 +596,8 @@ void UpdateActorBinoc(ACTOR* pa, uint32_t grfMask)
 {
     if (!(static_cast<unsigned>(pa->nF04) < 3)) return;  // 0x1443D8
     if (pa->nF04 == 1 && pa->nF20 == 0)
-        if (PODATA* ppd = PpodataFromLo(pa->palo); ppd && ppd->ppadctl && GrfPadctlTakePressed(ppd->ppadctl, NPhotoPromptState(pa->binoc.win.pprompt) == 7 ? 0x410 : grfMask, 0.25f))
+        if (PODATA* ppd = PpodataFromLo(pa->palo); ppd && sly2actions::Take(ppd->ppadctl, sly2actions::Action::ReconClose,
+            NPhotoPromptState(pa->binoc.win.pprompt) == 7 ? 0x410 : grfMask, 0.25f))
             CloseBinoc(pa);
     UpdateBinoc(pa);
 }

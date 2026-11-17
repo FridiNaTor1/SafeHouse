@@ -45,6 +45,9 @@ void RemoveSafeGroundReferences(LO* plo, SOE* psoe);
 glm::vec3 PosSafeGround(ACTOR* pa, const SAFEGROUND::ENTRY& e, float dt = 0.0f);
 // orig: 0x0019FC30 (Sly's: the floor of the states that stand)
 void UpdateSafeGround(ACTOR* pa, int state);
+// orig3: 0x1C0B70 with the flags 5: the cheapest floor place of the actor's safe ground, the actor himself in the crowd's
+// cost (not on top of him), taken off the list (Carmelita's power-up 0x34, aicarm3.cpp); false: none
+bool FTakeSafePlaceAway3(ACTOR* pa, glm::vec3* ppos);
 // orig: 0x0019F590 (back to the best safe ground: at once, or by the jump's kind 0xA)
 void RecoverActor(ACTOR* pa);
 // the same with the entry q given (SCPT 0x2A: an object or a point)

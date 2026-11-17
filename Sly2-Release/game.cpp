@@ -87,6 +87,7 @@ extern uint32_t g_uRandState;  // xfmath.cpp
 #include "sw.h"
 #include "update.h"
 #include "savedata.h"
+#include "modsave.h"
 #include "../platform/platform.h"
 #include "../platform/frame_pacer.h"
 #include "vr.h"
@@ -579,7 +580,11 @@ int RunGame(const GAMEOPTS& go)
             const std::string dev = SLY2N_DEV_ROOT "/build/saves/round4-user-card/memcard0/BASCUS-97316YAOTWTD!/save1";
             path = std::filesystem::exists(cane::path(user)) || !g_fDevCard ? user : dev;
         }
-        if (FLoadGameSave(path, error)) std::printf("save: %s\n", path.c_str());
+        if (FLoadGameSave(path, error))
+        {
+            std::printf("save: %s\n", path.c_str());
+            ReadModSave(path);   // (mod packages' custom tasks, modsave.h)
+        }
         else std::printf("save: none (%s)\n", error.c_str());
     }
 
@@ -646,6 +651,7 @@ int RunGame(const GAMEOPTS& go)
         std::string err;
         const bool f = FWriteGameSave(path, err);
         if (!f) std::printf("save: %s\n", err.c_str());
+        else WriteModSave(path);   // (mod packages' custom tasks, modsave.h)
         return f;
     };
     for (const std::string& p : go.aprintProgress)
@@ -1815,6 +1821,7 @@ int RunGame(const GAMEOPTS& go)
         if (fWindow)
         {
             glfwPollEvents();
+            UpdateDisplayMonitors(g_gl.window);   // (a monitor plugged in or unplugged: display.h)
             GLFWwindow* w = g_gl.window;
             const bool fF1 = FDebugKeyHeld(w, GLFW_KEY_F1);   // (debug keys only)
             if (fF1 && !fF1Last) fFreeCam = !fFreeCam;
@@ -2141,6 +2148,12 @@ int RunGame(const GAMEOPTS& go)
         // scripts wait on) keep up with the frames)
         static const bool s_fRealtime = std::getenv("SLY2N_REALTIME") != nullptr;
         if (fWindow && vr::FActive()) {}   // (the headset paces: vr::BeginFrame)
+#if defined(CANE_IOS)
+        // (iOS: the display's own frames when the cap is its rate or a whole fraction of it (display.cpp): a timer of
+        // the game's drifted against the vblanks; false: no display link (the app in the background), the timer)
+        else if (fWindow && g_display.fSwapPacesFrames && g_display.displayFps > 0 &&
+                 cane::gl_metal::WaitForDisplayFrame(g_display.displayFps)) {}
+#endif
         else if (fWindow && g_display.frameRate < DISP_FRAMERATE_UNCAPPED)   // the frame-rate cap (with or without VSync)
             pacer.Wait(g_display.frameRate, g_display.fSwapPacesFrames, g_display.swapGeneration);
         else if (s_fRealtime) pacer.Wait(60);
@@ -2220,6 +2233,7 @@ int RunGame(const GAMEOPTS& go)
     {
         std::string err;
         if (!FWriteGameSave(sz, err)) std::printf("save dump: %s\n", err.c_str());
+        else WriteModSave(sz);   // (mod packages' custom tasks, modsave.h: their side file with it)
     }
     if (const char* psz = std::getenv("SLY2N_POSECHECK"))
     {

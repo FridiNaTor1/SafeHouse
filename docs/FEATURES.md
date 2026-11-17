@@ -13,8 +13,8 @@ can be turned off where it changes how the game looks or plays.
 - **Install from your disc image:** pick or drag in an `.iso`. The launcher identifies the game and the region, checks
   the free space and that the image is complete, then installs and verifies it. An image of another game is refused
   with an explanation.
-- **Several regions:** Sly 1 from the USA, Europe, Japan and Korea; Sly 2 from the USA, Europe (v1.00 and v2.01) and
-  Japan. With more than one region installed you choose which one **Play** starts; saves are shared.
+- **Several regions:** Sly 1 from the USA, Europe, Japan and Korea; Sly 2 from the USA, Europe (v1.00 and v2.01),
+  Japan and Korea. With more than one region installed you choose which one **Play** starts; saves are shared.
 - **Languages:** the European discs' languages are offered in the game's own options.
 - **Add to Steam:** adds a shortcut that starts the game directly, with library artwork, to every Steam account on the
   computer (exit Steam first, or restart it afterwards). **Add desktop shortcut** does the same on the desktop.
@@ -38,8 +38,8 @@ can be turned off where it changes how the game looks or plays.
   floor in full instead of ending in a straight cut, which shows most at wide aspect ratios.
   **Settings > Graphics > Long shadows**; off gives the original's shadows exactly.
 - **Low-end GPUs:** weak integrated graphics start at a lower internal resolution on first launch.
-- **Vulkan (Sly 2):** on Windows and Linux (Steam Deck included) the game renders with Vulkan, and switches to
-  OpenGL by itself when the graphics driver cannot run Vulkan. **Settings > Graphics > Renderer** offers Auto,
+- **Vulkan (Sly 2, Sly 3):** on Windows and Linux (Steam Deck included) the games render with Vulkan, and switch to
+  OpenGL by themselves when the graphics driver cannot run Vulkan. **Settings > Graphics > Renderer** offers Auto,
   Vulkan and OpenGL. macOS renders through Metal, the Switch through deko3d.
 
 ## Controls

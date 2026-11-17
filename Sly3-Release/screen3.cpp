@@ -1,6 +1,7 @@
 // See screen3.h.
 
 #include "screen3.h"
+#include "pcloader.h"
 
 #include "menu.h"
 #include "epmenu3.h"
@@ -12,6 +13,18 @@
 #include "screenrt.h"
 #include "sound.h"
 #include "splayer.h"
+#include "actor.h"
+#include "challenge3.h"
+#include "cls.h"
+#include "cplcy.h"
+#include "disc.h"
+#include "photo.h"
+#include "po.h"
+#include "region.h"
+#include "shop.h"
+#include "savedata.h"
+#include "sw.h"
+#include "game/sly3.h"
 
 #include <algorithm>
 #include <map>
@@ -39,6 +52,7 @@ bool FSly3ScriptString(int id)
 }  // namespace
 
 void SetScreenDrawing3(const LO* plo) { s_ploDrawing3 = plo; }
+const LO* PloScreenDrawing3() { return s_ploDrawing3; }
 void SetPromptText3(int idText) { s_idPrompt = idText; }
 int IdPromptText3() { return s_idPrompt; }
 void SetCardMessage3(int idText, int kindPrompt)
@@ -53,12 +67,101 @@ void SetScriptString3(int id, std::function<std::string()> fn)
     else Mpidfn().erase(id);
 }
 
-std::string StrText3(const SW* psw, int id) { return id < 0 ? std::string() : StrLocalized(psw, id); }
+std::string StrText3(const SW* psw, int id)
+{
+    if (id < 0) return std::string();
+    std::string str = StrLocalized(psw, id);
+    // (PC, copsmap3.h: a screen object copied from a kept world (Cops and Robbers' score board on another hub) shows its
+    // own world's texts, e.g. "Sly Wins!")
+    if (str.empty() && s_ploDrawing3)
+        if (const int iwrec = IwrecOfPcCopy(s_ploDrawing3); iwrec >= 0)
+            if (const SW* pswKept = PswKeptWorld(iwrec)) str = StrLocalized(pswKept, id);
+    return str;
+}
+
+int IlootIndexOfPickup(LO* plo);   // pickup.cpp
+int CClueCollectedCur();           // vault.cpp
+int CClueNeededCur();
+namespace
+{
+// orig3: 0x0025F1D8: player 0's character (class 0x33) in the binocucom: its zoom (+0xF78 mode 0: the recon policy's
+// +0x3C, 1: the free policy's +0xC4, times +0xF94; natively the copied binocucom's g3C) as "x%d" (Sly, 0x34) or
+// "x%5.3f" (Bentley, 0x36; D_00327EE8 / D_00327EF0); Murray (Sly 2's Far / Near / YIKES) has none in Sly 3
+std::string StrBinocZoom3(const SW* psw)
+{
+    LO* plo = psw ? PloPoCurrent(const_cast<SW*>(psw)) : nullptr;
+    ACTOR* pa = plo && FCidDerivedFrom(plo->Cid(), S3CID(0x34)) ? PactorFromLo(plo) : nullptr;
+    if (!pa) return {};
+    float g = 0.0f;
+    switch (pa->nF20)
+    {
+    case 0: g = g_cmpolicies.cprecon.sZoom * pa->binoc.g3C; break;
+    case 1: g = g_cmpolicies.cpfree.sZoom * pa->binoc.g3C; break;
+    default: break;
+    }
+    char ach[32];
+    if (FCidDerivedFrom(plo->Cid(), S3CID(0x35))) std::snprintf(ach, sizeof(ach), "x%d", int(g));
+    else if (FCidDerivedFrom(plo->Cid(), S3CID(0x37))) std::snprintf(ach, sizeof(ach), "x%5.3f", double(g));
+    else return {};
+    return ach;
+}
+
+// orig3: 0x0025F628 / 0x0025F720: player 0's character in the interaction of kind 12 (+0x508, the pick / pickpocket
+// pose) with its object (+0x9E0): a LOOT (0x6A) by its kind's row of 0x349070 ({amount, text, -} x 12 bytes), a PRIZE
+// (0x68) by its own text (+0x19C; natively Sly 2's +0x224) and amount (+0x1A4), else the actor's text (+0x1404;
+// natively +0x1318) with no amount; the amount as "%d" (D_00327ED0), none when 0 for a prize
+std::string StrLootCard3(const SW* psw, bool fAmount)
+{
+    LO* plo = psw ? PloPoCurrent(const_cast<SW*>(psw)) : nullptr;
+    ACTOR* pa = plo && FCidDerivedFrom(plo->Cid(), S3CID(0x34)) ? PactorFromLo(plo) : nullptr;
+    if (!pa || pa->n4C8 != 0xC || !pa->inter.ploTarget) return {};
+    LO* py = pa->inter.ploTarget;
+    int idText = -1, n = 0;
+    bool fN = false;
+    if (FCidDerivedFrom(py->Cid(), S3CID(0x5E)))
+    {
+        const int iloot = IlootIndexOfPickup(py);
+        if (iloot >= 0)
+        {
+            n = int(g_disc.U32Elf(S3VA(0x2C3288) + 0xC * uint32_t(iloot)));
+            idText = int(g_disc.U32Elf(S3VA(0x2C3288) + 0xC * uint32_t(iloot) + 4));
+            fN = true;
+        }
+    }
+    else if (FCidDerivedFrom(py->Cid(), S3CID(0x5C)))
+    {
+        idText = int(py->U32Field(0, 0x224, uint32_t(-1)));
+        n = int(py->U32Field(0, 0x1A4, 0));
+        fN = n != 0;
+    }
+    else idText = pa->n1318;
+    if (!fAmount) return StrText3(psw, idText);
+    return fN ? std::to_string(n) : std::string();
+}
+}  // namespace
 
 std::string StrScreenScript3(const SW* psw, int id, const int* aarg, bool* pf)
 {
     *pf = FSly3ScriptString(id);
     if (!*pf) return {};
+    // 864..866 (0x25F540): the drawn object's own text by its vt slot 55: a task counter's (0x9F, 0x260558: its done /
+    // count / left), class 0xA0's (0x260640: +0x120 / +0x124 / their difference, EOPIDs 1244 / 1245, written by its
+    // update 0x2605B8 while 0x37B plays), else (the two-player score board 0xA4) the supplied ones; none: "Unknown"
+    if (id >= 864 && id <= 866 && s_ploDrawing3)
+    {
+        std::string str;
+        if (s_ploDrawing3->Cid() == S3CID(0x81) && FCounterText3(s_ploDrawing3, id - 864, &str)) return str;
+        if (s_ploDrawing3->Cid() == 0xA0)
+        {
+            auto opt = [&](int eopid) {
+                for (const OPT& o : s_ploDrawing3->aopt)
+                    if (o.eopid == eopid && !o.aval.empty()) return o.aval[0].n;
+                return 0;
+            };
+            const int a = opt(1244), b = opt(1245);
+            return std::to_string(id == 864 ? a : id == 865 ? b : b - a);
+        }
+    }
     if (auto it = Mpidfn().find(id); it != Mpidfn().end()) return it->second();
     using namespace sly3ui;
     // orig3: 0x0025F4F8 (834..843): the text of argument i (+0xBC + 4 i)
@@ -90,6 +193,29 @@ std::string StrScreenScript3(const SW* psw, int id, const int* aarg, bool* pf)
         std::snprintf(ach, sizeof(ach), "%d:%02d", n / 60, n % 60);
         return ach;
     }
+    case 813:   // 0x25F098: "%d/%d" the world's counted objects (SW +0x4F58 / +0x4F5C; Sly 2's clue bottles 0x2D0)
+    {
+        char ach[32];
+        std::snprintf(ach, sizeof(ach), "%d/%d", CClueCollectedCur(), CClueNeededCur());
+        return ach;
+    }
+    case 825:   // 0x25F1D8: the binocucom's zoom readout (player 0's character: Sly "x%d", Bentley "x%5.3f", else none)
+        return StrBinocZoom3(psw);
+    case 826: case 827: case 828: case 829: case 830: case 831: case 832: case 833:
+        // 0x25F2E8 (826 the subject chosen: 0x24C6A0 = +0xBC, 827 the feedback: 0x24C668 = +0xC0) and 0x25F398 (828..833:
+        // the listed targets' titles) of player 0's photo prompt (+0xF90): Sly 2's 0x2DD..0x2E4 (photo.cpp)
+        return StrPhotoScript(0x2DD + (id - 826));
+    case 849: case 850:   // 0x25F628 / 0x25F720: the loot being picked / pickpocketed: its name, its amount (card 7331)
+        return StrLootCard3(psw, id == 850);
+    case 1702:   // 0x222750: "%d%%" the game's percent (0x25E6D0 of the challenge's saved record while one runs, else the game)
+    {
+        char ach[16];
+        const GAMESAVE* pgs = PgsChallengeSaved3();
+        std::snprintf(ach, sizeof(ach), "%d%%", NGamePercent3(pgs ? *pgs : g_gamesave));
+        return ach;
+    }
+    case 1704:   // 0x2226F0: text 0x4F "Back" + " : " (D_003261B8) + the back glyph (D_003261C0 "&2T&.")
+        return StrText3(psw, 0x4F) + " : " + SzMenuBackGlyph();
     case 851:   // 0x186E28: the current job's failure line (SW +0x4044 +0xC8: the Job Failed screen 1067)
     {
         const JOB3* pjob = g_tasks3.pjobCur;
@@ -111,6 +237,7 @@ std::string StrScreenScript3(const SW* psw, int id, const int* aarg, bool* pf)
         std::string str;
         if (FStrMenuScript3(id, &str)) return str;   // (menu.cpp: the wheel, the slots' pages)
         if (FStrEpMenu3(id, &str)) return str;       // (epmenu3.cpp: the episode chooser)
+        if (id >= 1449 && id <= 1465) return StrJobHelpScript(id);   // (shop.cpp: the job help 0x222488..0x222690)
         return {};
     }
     }

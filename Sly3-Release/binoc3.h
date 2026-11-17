@@ -21,6 +21,15 @@ void CloseBinocPanel3(LO* ploActor);
 int NBinocPanelState3(LO* ploActor);                  // -1 closed .. 5 closing (see above)
 void SetBinocPanelSpeaker3(LO* ploActor, LO* ploSpeaker);
 LO* PloBinocPanelSpeaker3(LO* ploActor);              // the actor in the speaker's window (orig3 BINOC +0x40)
+// the speaker in the window held (orig3 0x1BE408, the camera's state 1 of a talk) / released (0x1BE4A8); a speaker
+// change then releases the old one and holds the new one (0x1BE3D0)
+void HoldBinocPanelSpeaker3(LO* ploActor, bool fHold);
 
 void InitBinocPanels3(SW* psw);   // a world's start (the HUD's init)
 void UpdateBinocPanels3(SW* psw); // every frame (the HUD's update)
+
+// (binoccam3.cpp) the binocucom's camera: sets the script hooks' binocucom entries (the panel above plus the camera;
+// called by InitBinocPanels3 before its own defaults)
+void InstallBinocCam3();
+void ResetBinocCam3();
+void UpdateBinocCam3();   // every frame (UpdateBinocPanels3)

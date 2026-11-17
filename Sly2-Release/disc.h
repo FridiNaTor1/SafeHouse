@@ -7,6 +7,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -33,6 +34,7 @@ enum class DISCREGION
     Usa,      // SCUS-97316 (the decomp's executable)
     Europe,   // SCES-52529 v1.00 and v2.01: 11 languages, 50 Hz
     Japan,    // SCPS-15090
+    Korea,    // SCKA-20044: the Japanese build's program (its class layouts, 16-bit text) with Korean text
 };
 
 struct REGIONRANGE
@@ -62,6 +64,27 @@ public:
     bool FOpen(const std::string& path, std::string& error);
     // The mods folder (before FOpen; empty: none).
     void SetModsDirectory(const std::string& dir) { m_dirMods = dir; }
+    // Mod packages (platform/mod_package.h, every platform; before FOpen): fDiscover: the fitting packages of
+    // <mods folder>/Packages in their load order, under the loose mods folder's files; adirExtra: packages (their
+    // folders, with mod.json) loaded last, over everything (the editor's play test: --mod-package DIR).
+    void SetModPackages(bool fDiscover, const std::vector<std::string>& adirExtra)
+    {
+        m_fDiscoverPackages = fDiscover;
+        m_adirPackagesExtra = adirExtra;
+    }
+    // (the map editor) The world parts read through pfn instead (rel relative to the installation; its project over
+    // the installation), no mods folder or package; null: as usual.
+    void SetPartReader(std::function<bool(const std::string& rel, std::vector<uint8_t>& ab)> pfn) { m_pfnPartRead = std::move(pfn); }
+    // The packages FOpen loaded (ids, in load order) and its messages (skipped packages).
+    [[nodiscard]] const std::vector<std::string>& AidPackages() const { return m_aidPackage; }
+    // The loaded packages' custom tasks (mod.json "custom_tasks", mod_package.h): the package that lists task oid of
+    // world (SzWorldName's name); "" when none does. FCustomTasks: any package lists one (else nothing to look up).
+    [[nodiscard]] bool FCustomTasks() const { return !m_mpCustomTask.empty(); }
+    [[nodiscard]] std::string IdPackageOfTask(const std::string& world, int oid) const
+    {
+        const auto it = m_mpCustomTask.find({world, oid});
+        return it != m_mpCustomTask.end() ? it->second : std::string();
+    }
     // The shared languages folder (langstore.h; before FOpen; empty: none): manifest paths "@languages/<rest>" are
     // <dir>/<rest> (the languages an installation keeps there, shared with the other regions' installations).
     void SetLanguagesDirectory(const std::string& dir) { m_dirLanguages = dir; }
@@ -80,6 +103,9 @@ public:
     // A file of the image's ISO 9660 root (the converter: the executable, SYSTEM.CNF); false with converted files.
     bool FReadRootFile(const std::string& name, std::vector<uint8_t>& ab) const;
     [[nodiscard]] DISCREGION Region() const { return m_region; }
+    // The Japanese build's program: the Japanese and the Korean discs (their class layouts, 16-bit text and fonts,
+    // the menus' Circle / Cross).
+    [[nodiscard]] bool FJapaneseBuild() const { return m_region == DISCREGION::Japan || m_region == DISCREGION::Korea; }
     [[nodiscard]] const char* SzDisc() const { return m_szDisc; }
     [[nodiscard]] bool FIsOpen() const { return !m_path.empty(); }
 
@@ -108,6 +134,10 @@ public:
     [[nodiscard]] bool FModded(uint32_t isector) const;
     [[nodiscard]] const std::string& Path() const { return m_path; }
     [[nodiscard]] const std::string& DirMods() const { return m_dirMods; }
+    // The folders mod files come from, lowest priority first (FOpen: the packages' files/ folders in load order, the
+    // loose mods folder, the command line's packages): texture mods (Textures/), Text/ and Languages/ are read from
+    // each of them (a later one's file or string winning).
+    [[nodiscard]] const std::vector<std::string>& AdirModRoots() const { return m_adirModRoots; }
     // The files the mods folder replaces.
     [[nodiscard]] int CModFiles() const { return m_cmod; }
     // The name of the world file at isector (the manifest's: "Paris", "Front End"); "" when unknown (a disc image).
@@ -170,6 +200,13 @@ private:
     std::unordered_map<std::string, uint32_t> m_mppathExternal;   // (IsectorExternal: path -> ISECTOR_EXTERNAL + index)
     std::map<uint32_t, std::string> m_mpsectorName;      // (SzFileName)
     std::set<std::string> m_setMod;   // the mods folder's files (relative, "/" separated)
+    std::map<std::string, std::string> m_mpModPath;   // each of them: its file (the loose folder's or a package's)
+    bool m_fDiscoverPackages = true;
+    std::vector<std::string> m_adirPackagesExtra;
+    std::vector<std::string> m_aidPackage;
+    std::map<std::pair<std::string, int>, std::string> m_mpCustomTask;   // (world, task oid) -> package id
+    std::vector<std::string> m_adirModRoots;
+    std::function<bool(const std::string& rel, std::vector<uint8_t>& ab)> m_pfnPartRead;
     int m_cmod = 0;
     std::map<uint32_t, std::string> m_mpsectorWorldName;  // (the world files' names, every copy's sector)
     std::vector<std::pair<uint32_t, FILEENT>> m_afile;  // sorted by sector

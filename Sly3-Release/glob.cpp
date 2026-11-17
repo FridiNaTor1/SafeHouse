@@ -4,6 +4,7 @@
 // is kept as vertex arrays (see glob.h). Reference ports: Sly2-Reference game/m_167310.cpp, m_16A000_p3.cpp,
 // m_16E1A8.cpp.
 
+#include "fastpaths.h"
 #include "glob.h"
 #include "worldglobals.h"
 
@@ -20,6 +21,7 @@
 
 GLOBSTATS g_globstats;
 WORLD_VALUE(g_globstats);   // (PC: kept across a kept world's load, worldglobals.h)
+
 
 namespace
 {
@@ -213,7 +215,10 @@ void LoadGlobMesh0FromBrx(GLOBSET* pglobset, int iglob, int csub, bool fDraw, CB
     const uint8_t g3 = pbis->U8Read();
     pglob->grfMesh3 = g3;
     // (flag 1 -> group 0x100 forward-lit, flag 2 -> group 0x200, as Sly 2's 0x16A000: the asm 0x18FFF4..0x190024)
-    pglob->grfMesh = uint8_t((g3 & 3) | ((g3 & 0x20) ? 4 : 0) | ((g3 & 0x80) ? 0x10 : 0));
+    // (Sly 3's 0x40 is Sly 2's 8, the history mesh: 0x192704 links the batches into the globset's history list +0x5C
+    // that the TRAIL's 0x26E268 samples; untranslated, every Sly 3 trail drew its authored mesh, the cane's swoosh a
+    // thin fan along the shaft)
+    pglob->grfMesh = uint8_t((g3 & 3) | ((g3 & 0x20) ? 4 : 0) | ((g3 & 0x40) ? 8 : 0) | ((g3 & 0x80) ? 0x10 : 0));
     if (g3 & 1) pglob->grfGroup |= 0x100;
     if (g3 & 2) pglob->grfGroup |= 0x200;
     {
@@ -524,6 +529,37 @@ void LoadGlobMeshFromBrx(GLOBSET* pglobset, int iglob, int csub, bool fDraw, CBi
 }
 }  // namespace
 
+// orig3: 0x18FE80 (s3-decomp): each glob whose n0 (+0 of Sly 3's glob) is key gets its mesh from the stream (the
+// dispatcher 0x18FD10 with no instances and no bounds record); it stays hidden (0x18D148 hid it): the outfits show it
+// by its tag (outfit3.cpp)
+int LoadGlobsetKeyedFromBrx(GLOBSET* pglobset, int key, CBinaryInputStream* pbis, std::vector<int>* paiglob)
+{
+    if (!pglobset) return 0;
+    int c = 0;
+    for (int i = 0; i < int(pglobset->aglob.size()); ++i)
+    {
+        GLOB& glob = pglobset->aglob[size_t(i)];
+        if (glob.n0 != key || glob.iglobTemplate >= 0) continue;
+        if (!glob.fNoMesh)
+        {
+            // (loaded already, by another group: the stream's copy read into a scratch set, the stream kept in step)
+            GLOBSET scratch = *pglobset;
+            scratch.aglob[size_t(i)] = GLOB{};
+            scratch.aglob[size_t(i)].meshk = glob.meshk;
+            scratch.aglob[size_t(i)].abone = glob.abone;
+            LoadGlobMeshFromBrx(&scratch, i, 0, glob.fDraw, pbis);
+            continue;
+        }
+        if (paiglob) paiglob->push_back(i);   // (before the load: the caller keeps the glob without its mesh for the unload)
+        LoadGlobMeshFromBrx(pglobset, i, 0, glob.fDraw, pbis);
+        pglobset->aglob[size_t(i)].fNoMesh = false;
+        if (static const bool s_f = std::getenv("SLY3_OUTFITPRINT") != nullptr; s_f)
+            std::printf("outfit: glob %d n0 %d: its mesh streamed (%zu vertices)\n", i, key, pglobset->aglob[size_t(i)].avtx.size());
+        ++c;
+    }
+    return c;
+}
+
 // orig3: 0x18D148 LoadGlobsetFromBrx (Sly 2 0x167320). Sly 3's stream: S8 (non-zero: sphere-culled, no draw
 // records), its bounds, S8 animations (Sly 2: U8), U8 ids, S16 globs; per glob U8 filters and U8 conditions (Sly 2:
 // S8 filters), their lists and an S32 size when either is non-zero (the glob is skipped by it unless both match), S8
@@ -540,7 +576,11 @@ void LoadGlobsetFromBrx(GLOBSET* pglobset, ALO* palo, CBinaryInputStream* pbis)
     pglobset->sRadius = pbis->F32Read();
     {
         const int c = pbis->S8Read();
-        for (int i = 0; i < c; ++i) pglobset->apsaa.push_back(PsaaLoadFromBrx(true, pbis));
+        for (int i = 0; i < c; ++i)
+        {
+            pglobset->apsaa.push_back(PsaaLoadFromBrx(true, pbis));
+            if (pglobset->apsaa.back()) pglobset->apsaa.back()->paloOwner = palo;   // (orig3 +0x50: the class 0xB5's owner)
+        }
     }
     {
         const int c = pbis->U8Read();
@@ -620,5 +660,9 @@ void LoadGlobsetFromBrx(GLOBSET* pglobset, ALO* palo, CBinaryInputStream* pbis)
         j += csub;
     }
     LoadGlobSpheresFromBrx(pglobset, mpiglob, pbis);
+#if SLY2_FASTPATHS
+    pglobset->afCelBorder.resize(pglobset->aglob.size());
+    for (size_t k = 0; k < pglobset->aglob.size(); ++k) pglobset->afCelBorder[k] = pglobset->aglob[k].meshk == MESHK_CelBorder ? 1 : 0;
+#endif
     ++g_globstats.cglobset;
 }

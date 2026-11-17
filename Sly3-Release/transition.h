@@ -58,7 +58,7 @@ extern int g_cTransitionLoads;
 void RequestTransition(SW* psw, const uint8_t* pchk, OID oidPoint, OID oidKey, int flags, OID oidWipe);
 // the reference's warp routes: world record iwrec at point oidPoint (default 393 = 0x189), or task oidTask
 void RequestWorldWarp(SW* psw, int iwrec, OID oidPoint = 0x189, OID oidWipe = 0x30A);
-void RequestTaskStart(SW* psw, int iwrec, OID oidTask);
+void RequestTaskStart(SW* psw, int iwrec, OID oidTask, OID oidWipe = -1);
 // the world records (the boot world's, loaded on first use)
 void EnsureWorldRecords();
 // orig 0x3E1C40.. (the loaded world's records), 0x210AE0 (the current world's episode), 0x210B98 (an episode's

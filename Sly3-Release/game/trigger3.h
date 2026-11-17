@@ -44,11 +44,15 @@ struct TRIGGERHOST3
     std::function<void(LO*, int msg)> pfnMessage;
     // a SCPT started by a trigger (0x225EE8 StartScpt(scpt, the first object inside))
     std::function<void(LO* pscpt, LO* ploArg)> pfnStartScpt;
+    // an object's SM to a goal (0x25D478 with flags 0 / 1: SetSmaGoal, no snap; oid -1 / goal -1: nothing)
+    std::function<void(int oid, int oidSm, int oidGoal, LO* ploOwner)> pfnSmGoal;
 };
 extern TRIGGERHOST3 g_trighost3;
 
 // The world's triggers (after the world load, before StartSw's RestoreTasks)
 void StartTriggers3(SW* psw);
+// The old world's end (UnloadWorld)
+void ResetTriggers3();
 // The UpdateSw pass over the active triggers (vt slot 55 0x15D510 each)
 void UpdateTriggers3(SW* psw);
 
@@ -56,11 +60,20 @@ void UpdateTriggers3(SW* psw);
 bool FLoInWorld3(const LO* plo);
 // An object's world position (the host's, else an ALO's first record, a LOX's matrix)
 glm::vec3 PosLoWorld3(const LO* plo);
+// the objects inside a trigger that keeps its list (EOPID 478; null: not a trigger). (EOPID 479 = optid 586 would read
+// it; not registered: v_gauntlet's 2323 loop then reads Bentley's option 940 (the health) == 2 while Sly is inside its
+// trigger 139787 and never ends natively; the original's actors' health is not natively there)
+const std::vector<LO*>* PaploTriggerInside3(const LO* plo);
 // The world matrix of a LOX (its matrix under its parent record) or an ALO (its first record)
 glm::mat4 MatLoWorld3(const LO* plo);
+void TeleportRootActor3(LO* plo, const glm::mat4& m);
+bool FScriptPlaced3(const LO* plo);   // (placed by a script since the world's load)
+void ResetScriptPlaced3();   // (a root actor's +0x48 record at m through its slots)
 // SCPT 0x22's place (0x22B... PlaceLo: the object's matrix rows mat and position pos): an ALO's first record moves so
 // its +0x48 record (MatLoWorld3) is at pos with the rows mat; a LOX's matrix is set
 void PlaceLo3(LO* plo, const float mat[9], const glm::vec3& pos);
+// SCPT 0x12 on a trigger (orig3 0x15BF28): its enter (message 5, the fire) without a state change; false: not one
+bool FActivateTrigger3(LO* plo);
 // (tests) a trigger's state (-1 none / not a trigger)
 int TriggerState3(const LO* plo);
 }  // namespace sly3

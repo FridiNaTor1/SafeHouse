@@ -53,6 +53,14 @@ def private_env(home):
     return env
 
 
+def credits_developers():
+    """The developers' names, in order, from launcher/credits.h kDevelopers."""
+    text = (ROOT / "launcher" / "credits.h").read_text(encoding="utf-8")
+    block = text[text.index("kDevelopers[] = {"):]
+    block = block[:block.index("};")]
+    return re.findall(r'^\s*\{"([^"]+)", N_\(', block, re.M)
+
+
 def name_hash(text):
     h = 0
     for c in text.upper().encode():
@@ -490,9 +498,9 @@ def main():
         # ---- the SafeHouse launcher's About page: the developers with their pictures, then the full credits
         # (launcher/credits.h, the same list as the menu's Credits panel); a window tall enough to show every link
         credit_ids, credit_links = shared_credits()
-        developers = ["FridiNaTor", "theclub654", "menaman123", "thematuu", "NaGaa95"]
+        developers = credits_developers()
         if have_display:
-            for size in ("1280x4000", "390x4300"):
+            for size in ("1280x4000", "480x4320"):  # (a phone-narrow page; the fixture window stops at 4320 lines)
                 out = shots / f"about-{size}.png"
                 r = run([copied, "--screenshot", out, "--screen", "about", "--size", size, "--dump-layout", layout], env=env)
                 assert r.returncode == 0 and out.is_file(), r
@@ -507,7 +515,7 @@ def main():
             entries = {e["label"]: e for e in json.loads(layout.read_text())["entries"]}
             assert r.returncode == 0 and 0 < entries["credits-decompilation"]["y"] < 200, entries.get("credits-decompilation")
             assert "credits-link https://github.com/NaGaa95/sly3-decomp" in entries, sorted(entries)
-            print(f"About page: {len(credit_ids)} credit sections, {len(credit_links)} links, the five developers")
+            print(f"About page: {len(credit_ids)} credit sections, {len(credit_links)} links, the {len(developers)} developers")
 
         # ---- the import from a synthetic Sly Collection folder (a made-up menu in the disc's formats)
         disc = work / "disc"
@@ -659,6 +667,28 @@ def main():
             assert not near(pixel(image, 318, 88), (0, 48, 128)), pixel(image, 318, 88)   # a tap elsewhere chooses none
             image = read_png(render("developers-end", games + ["--nav", "right,right,right,right,right,right,right,right"], plain))
             assert near(pixel(image, 318, 88), (0, 48, 128)), pixel(image, 318, 88)       # with keys: the first is chosen; Right stays on the page
+            # the developers' further pages (launcher/credits.h: five on the first, then up to six a page in two rows of
+            # three): the shoulder buttons, Right at the right edge and a tap on the arrow under the banner turn the page;
+            # Left at the left edge and B go back
+            later = developers[5:]
+            if later:
+                def on_page(extra):
+                    render("developer-pages", ps3 + ["--dump-layout", layout] + extra, plain)
+                    entries = {e["label"]: e for e in json.loads(layout.read_text())["entries"]}
+                    return {e[len("collection-developer "):] for e in entries if e.startswith("collection-developer ")}, entries
+                shown, entries = on_page(["--screen", "developers"])
+                assert shown == set(developers[:5]), shown
+                assert {"collection-developers-page", "collection-developers-next", "collection-developers-previous"} <= set(entries), sorted(entries)
+                for extra in (["--screen", "developers:2"], ["--screen", "developers", "--nav", "rb"], ["--screen", "developers", "--nav", "right,right,right,right"],
+                              ["--screen", "developers", "--pointer", "w " * 4 + "d%d,%d u" % (lambda e: (e["x"] + e["w"] / 2, e["y"] + e["h"] / 2))(entries["collection-developers-next"])]):
+                    shown, _ = on_page(extra)
+                    assert shown == set(later[:6]), (extra, shown)
+                for extra in (["--screen", "developers:2", "--nav", "lb"], ["--screen", "developer6", "--nav", "left"], ["--screen", "developer6", "--nav", "b"]):
+                    shown, _ = on_page(extra)
+                    assert shown == set(developers[:5]), (extra, shown)
+                image = read_png(render("developer-later", ps3 + ["--screen", "developer6"], plain))
+                assert near(pixel(image, 318, 88), (0, 48, 128)), pixel(image, 318, 88)   # its bar, where the first page's is
+                print(f"developers: {len(developers)} on {1 + (len(later) + 5) // 6} pages")
             # Sly's run (on the developers' page): the flipbook steps by the menu's time, not by frames drawn. Its offset runs
             # as a scroll does (U 9.6 widths a second in 8 steps, V 1.2 in 8 steps): 76.8 frames a second, the same frame
             # after the same time at 60 and at 120 frames per second

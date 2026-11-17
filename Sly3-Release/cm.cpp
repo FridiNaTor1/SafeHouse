@@ -155,7 +155,7 @@ void UpdateCm(CM* pcm)
 // orig: 0x0014D8C0 CutCm
 void CutCm(CM* pcm) { pcm->fCut = std::max(1, pcm->fCut); }
 
-// orig: 0x0014D8D8 SetCmCut
+// orig: 0x0014D8D8 SetCmCut (orig3: 0x166560, the same C in the Sly 3 decomp)
 void SetCmCut(CM* pcm, float radPan, float radTilt)
 {
     pcm->radCutTilt = radTilt;
@@ -163,7 +163,7 @@ void SetCmCut(CM* pcm, float radPan, float radTilt)
     pcm->fCut = std::max(2, pcm->fCut);
 }
 
-// orig: 0x0014D8F8 CombineEyeLookAtProj
+// orig: 0x0014D8F8 CombineEyeLookAtProj (orig3: 0x166580, the same C in the Sly 3 decomp)
 MATRIX4 CombineEyeLookAtProj(const MATRIX4& matCam, const MATRIX4& matProj)
 {
     MATRIX4 m;
@@ -174,7 +174,7 @@ MATRIX4 CombineEyeLookAtProj(const MATRIX4& matCam, const MATRIX4& matProj)
     return MulMatrix4(matProj, InverseAffineMatrix4(m));
 }
 
-// orig: 0x0014DA08 BuildFrustrum
+// orig: 0x0014DA08 BuildFrustrum (orig3: 0x166690, the same C in the Sly 3 decomp)
 void BuildFrustrum(const glm::mat3& mat, float rx, float ry, glm::vec4 anormal[4])
 {
     const glm::vec3 r0 = mat[0], r1 = mat[1], r2 = mat[2];
@@ -278,7 +278,7 @@ void SetCmLookAt(CM* pcm, const glm::vec3& pos, const glm::vec3& posTarget, floa
     UpdateCmMat4(pcm);
 }
 
-// orig: 0x0014E270 BuildCmFogRecip
+// orig: 0x0014E270 BuildCmFogRecip (orig3: 0x1692E8, the same C in the Sly 3 decomp)
 void BuildCmFogRecip(CM* pcm, float af[4], float g)
 {
     if (g == F32(0x7F7FFFFF)) g = 1.0f;  // 0x2A4FF8 FLT_MAX
@@ -373,7 +373,7 @@ void SpringCm(CM* pcm, glm::vec4* ppos, glm::vec4* pv, const glm::vec4& posTarge
 void AdjustCmCpdefi(CM* pcm, LO* psoFocus, CPDEFI* pcpdefi)
 {
     const glm::vec4 dposAdjust = CalcCmAdjust(pcm, pcpdefi);
-    const bool fJt = g_cmworld.pfnFIsLoDerivedFrom && g_cmworld.pfnFIsLoDerivedFrom(psoFocus, 0x34);
+    const bool fJt = g_cmworld.pfnFIsLoDerivedFrom && g_cmworld.pfnFIsLoDerivedFrom(psoFocus, S3CID(0x34));  // (Sly 2 0x34 PLAYER = Sly 3 0x33; the literal was Sly 3's JT)
     if (fJt)
     {
         const int jtfock = g_cmworld.pfnJtfock ? g_cmworld.pfnJtfock(psoFocus) : 0;
@@ -534,7 +534,7 @@ float GCmAvoidWeight(CM* pcm, const glm::vec3& pos, const glm::vec3& v, const CM
     return ((n.x * v.x + n.y * v.y) + n.z * v.z) - dg;
 }
 
-// orig: 0x00223A10 (the cut's weight: the point's distance from the hit's plane)
+// orig: 0x00223A10 (the cut's weight: the point's distance from the hit's plane) (orig3: 0x2768A0, the same C in the Sly 3 decomp)
 float GCmCutWeight(CM* pcm, const glm::vec3& pos, const glm::vec3& v, const CMHIT& hit)
 {
     (void)pcm; (void)v;
@@ -726,33 +726,23 @@ bool FInsideCmMrd(const CM* pcm, const glm::vec3& dpos, float sMRD, float* puAlp
     return true;
 }
 
-// The camera block of a world file: EOPIDs 161..173 (0x2AC880: their setters are the CM functions above).
+// The camera block of a world file: EOPIDs 161..173 (0x2AC880: their setters are the CM functions above). (Sly 3: the
+// fov / its target / the near clip are EOPIDs 172 / 173 / 175 (S3EOPID); the others are Sly 2's numbers, not Sly 3's
+// camera options: the fog / far clip come from the static camera's option block, game/cond3.h)
 void ApplyCmOptions(CM* pcm, const std::vector<OPT>& aopt)
 {
     for (const OPT& opt : aopt)
     {
         if (opt.aval.empty()) continue;
         const OPTVAL& v = opt.aval[0];
+        if (std::getenv("SLY3_CMOPTS")) std::printf("cm option %d: %d %g\n", opt.eopid, v.n, v.ag[0]);
         switch (opt.eopid)
         {
-        case 161: SetCmFov(pcm, v.ag[0]); break;           // 0x14F5A0
-        case 162: SetCmFovTarget(pcm, v.ag[0]); break;     // 0x14F5F8
-        case 164: SetCmNearClipAll(pcm, v.ag[0]); break;   // 0x14F630
-        case 165: SetCmFarClip(pcm, v.ag[0]); break;       // 0x14F670
-        case 166: SetCmNearFog(pcm, v.ag[0]); break;       // 0x14F690
-        case 167: SetCmFarFog(pcm, v.ag[0]); break;        // 0x14F6B0
-        case 168: pcm->rgbaFog = static_cast<uint32_t>(v.n); break;  // a field option (+0x24C), no setter call
-        case 169: SetCmUFogMax(pcm, v.ag[0]); break;       // 0x14F6D0
-        case 170: SetCmMrdRatio(pcm, v.ag[0]); break;      // 0x14F730
-        case 171:                                          // 0x14F3C8: the position
-            SetCmPosMat(pcm, glm::vec3(v.ag[0], v.ag[1], v.ag[2]), pcm->mat);
-            break;
-        case 173:                                          // 0x14F4E0: Euler angles in degrees
-        {
-            const float r = F32(0x3C8EFA36);
-            SetCmPosMat(pcm, pcm->pos, BuildEulerMatrix(glm::vec3(v.ag[0] * r, v.ag[1] * r, v.ag[2] * r)));
-            break;
-        }
+        case S3EOPID(161): SetCmFov(pcm, v.ag[0]); break;           // 0x14F5A0
+        case S3EOPID(162): SetCmFovTarget(pcm, v.ag[0]); break;     // 0x14F5F8
+        case S3EOPID(164): SetCmNearClipAll(pcm, v.ag[0]); break;   // 0x14F630
+        case 176: SetCmFarClip(pcm, v.ag[0]); break;                 // (Sly 3's row 176: orig3 0x167A50)
+        // (Sly 2's 165..173 have no Sly 3 camera option of the same number: Sly 3's 172 / 173 are the fov above)
         default: break;
         }
     }

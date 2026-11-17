@@ -10,6 +10,7 @@ Builds run at low priority (nice 19, idle I/O) with at most --parallel jobs, so 
 """
 import argparse
 import os
+import re
 from pathlib import Path
 import hashlib
 import shutil
@@ -74,10 +75,18 @@ def main():
         bootstrap += ['--cache', cache]
     run(bootstrap)
 
+    # The release version, its UTC build time and commit (CI's SAFEHOUSE_VERSION / SAFEHOUSE_BUILD_DATE /
+    # CANE_GIT_HASH) for the launcher (Settings > Launcher, the update check) and Sly 2's debug menu, as on the desktop.
+    # Always passed, so a development build after a release build in the same folder is a development build again.
+    version = os.environ.get('SAFEHOUSE_VERSION', '')
+    if version and not re.fullmatch(r'\d+\.\d+\.\d+', version):
+        parser.error('SAFEHOUSE_VERSION must be x.y.z, got ' + version)
     native = ROOT / 'build' / ('android-' + ('arm64' if args.abi == 'arm64-v8a' else 'x86_64'))
     run(['cmake', '-S', ROOT, '-B', native, '-G', 'Ninja', '-DCMAKE_BUILD_TYPE=Release',
          '-DCMAKE_TOOLCHAIN_FILE=' + str(ndk / 'build/cmake/android.toolchain.cmake'), '-DANDROID_ABI=' + args.abi,
-         '-DANDROID_PLATFORM=android-26', '-DANDROID_STL=c++_shared', '-DCANE_ANDROID_DEPENDENCY_ROOT=' + str(install)])
+         '-DANDROID_PLATFORM=android-26', '-DANDROID_STL=c++_shared', '-DCANE_ANDROID_DEPENDENCY_ROOT=' + str(install),
+         '-DSAFEHOUSE_VERSION=' + version, '-DSAFEHOUSE_BUILD_DATE=' + os.environ.get('SAFEHOUSE_BUILD_DATE', ''),
+         '-DCANE_GIT_HASH=' + os.environ.get('CANE_GIT_HASH', '')])
     run(['cmake', '--build', native, '--parallel', args.parallel])
 
     stage = ROOT / 'build/android-package' / args.abi
@@ -122,11 +131,16 @@ def main():
     # (SAFEHOUSE_ANDROID_KEYSTORE set: the release APK signed with the SafeHouse key; else the debug APK)
     release = bool(os.environ.get('SAFEHOUSE_ANDROID_KEYSTORE'))
     variant = 'release' if release else 'debug'
-    version = os.environ.get('SAFEHOUSE_VERSION', '')
+    # (the versionName / versionCode: android/app/build.gradle; SAFEHOUSE_BUILD_NUMBER: CI's run number)
+    base = re.search(r'^project\(ProjectCane VERSION (\d+\.\d+)\.\d+', (ROOT / 'CMakeLists.txt').read_text(), re.M)
+    build_number = os.environ.get('SAFEHOUSE_BUILD_NUMBER', '') or '0'
+    if not base or not build_number.isdigit():
+        parser.error('no project version in CMakeLists.txt, or SAFEHOUSE_BUILD_NUMBER is not a number')
     run([args.gradle, '-p', ROOT / 'android', 'assembleRelease' if release else 'assembleDebug', '--console=plain',
          '--max-workers=2', '--no-daemon', '--project-cache-dir', stage / 'gradle-project-cache',
          '-PsafehouseAppBuildDir=' + str(gradle_build), '-PsafehouseJniDir=' + str(stage / 'jniLibs'),
-         '-PsafehouseAssetsDir=' + str(assets)] + (['-PsafehouseVersion=' + version] if version else []), environment)
+         '-PsafehouseAssetsDir=' + str(assets), '-PsafehouseBaseVersion=' + base[1], '-PsafehouseBuildNumber=' + build_number]
+        + (['-PsafehouseVersion=' + version] if version else []), environment)
     apk = gradle_build / 'outputs/apk' / variant / ('app-' + variant + '.apk')
     dist = ROOT / 'dist/android'
     dist.mkdir(parents=True, exist_ok=True)

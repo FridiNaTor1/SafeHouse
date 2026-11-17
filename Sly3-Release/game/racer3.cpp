@@ -1,0 +1,240 @@
+// racer3.cpp: Sly 3's path racer (class 0x98, orig3 0x183D80..0x1847BC), from the Sly 3 decomp.
+//
+// Ep4 m4_rccar (c_ext, world 23): the racer 69422 runs Murray's side of the race against Bentley's RC car. It moves
+// its runner (+0x54, option 1852) along its path (+0x40, 1847) and measures the tracked object's progress on the same
+// path (+0x5C, 1855: the car). The update 0x183FA8: the tracked object's arc length +0x64 (0x22EA88); while running
+// (+0x6C), against the RC car with its pad (0x13B500 cid 0x55, 0x1A9478) the runner keeps ahead of it in the first two
+// thirds (the target the car's length + 2500 / + 350 (beyond one third), at least its own + 100 / + 8, smoothed by
+// 0x11E730 with D_00321890 / D_003218A0), then runs at the speed +0x58 x (1 - 0.3 g) (g: 0x171C98's fraction); else at
+// +0x58. At the path's end: stopped (0x184778) and message 5 to itself (the splice: Murray's win, or after the race his
+// arrival); else the runner is put at its point (0x184630, vt slot 34) and, inside the shape +0x68 (1857, 0x27F258):
+// stopped and message 6. The start 0x184728 (method 1858 = thunk 0x1104B8) adds the runner (its vt slot 8) and sets
+// +0x6C; the stop 0x184778 (1859 = 0x110530) removes it (slot 9). Option 1854: the runner's point (getter 0x184630);
+// its setter 0x1846C8 puts the racer's progress at the point's and starts it when short of the end. m4_rccar's SCPT
+// 3681: the race start (69441) starts it; after the car's win, 69480 sets 1854 to 69498 and the racer's message 5 there
+// sets 3681's alarm 69484 (the reference: alarm 0x10F6C from the splice, vblank 3130).
+// Natively: the fraction g is 0 (0x171C98 counts bits of a save field over 32: not read); 0x1A9478 (the car's pad
+// slot) is "the car is the current player"; the samples of the post-load 0x183E00 (the path every +0x50, their
+// matrices) and the window +0x80 / +0x84 over them are not kept (nothing native reads them); the ground snap of
+// 0x184630 (+0x44) is the scripts' ground drop.
+// Debug: SLY3_RACERPRINT=1.
+
+#include "../activate.h"
+#include "../brx.h"
+#include "../clock.h"
+#include "../crv.h"
+#include "../detect.h"
+#include "../lo.h"
+#include "../objmethod.h"
+#include "../po.h"
+#include "../ref.h"
+#include "../so.h"
+#include "../spliceglue.h"
+#include "../sw.h"
+#include "../update.h"
+#include "../vecmat.h"
+#include "../xf.h"
+#include "sly3.h"
+#include "trigger3.h"
+
+#include <algorithm>
+#include <cmath>
+#include <cstdio>
+#include <cstdlib>
+#include <unordered_map>
+
+namespace
+{
+bool FPrint()
+{
+    static const bool s_f = std::getenv("SLY3_RACERPRINT") != nullptr;
+    return s_f;
+}
+
+struct RACER3
+{
+    LO* plo = nullptr;
+    SW* psw = nullptr;
+    LO* path = nullptr;      // +0x40 (1847)
+    int fSnap = 0;           // +0x44 (1848)
+    float step = 50.0f;      // +0x50 (1851; the samples' spacing)
+    LO* runner = nullptr;    // +0x54 (1852)
+    float speed = 100.0f;    // +0x58 (1853)
+    LO* tracked = nullptr;   // +0x5C (1855)
+    float window = 2000.0f;  // +0x60 (1856)
+    float sTracked = 0.0f;   // +0x64
+    LO* shape = nullptr;     // +0x68 (1857)
+    int fOn = 0;             // +0x6C
+    float s = 0.0f;          // +0x70: the runner's arc length
+    float ds = 0.0f;         // +0x74: its rate (the smoothing's)
+};
+std::unordered_map<const LO*, RACER3> s_mpracer;
+
+LO* PloOptRacer(LO* plo, const OPTVAL& v)
+{
+    if (v.pbasic) return dynamic_cast<LO*>(v.pbasic);
+    return v.n == -1 || v.n == 0 ? nullptr : PloFindRelative(plo, v.n);
+}
+
+// orig3 0x183D80 (init: +0x50 50, +0x58 100, +0x60 2000) and the options (EOPIDs 1847..1857, fields 0x40..0x68)
+RACER3* Pracer(LO* plo)
+{
+    if (!plo || !g_psw) return nullptr;
+    auto it = s_mpracer.find(plo);
+    if (it != s_mpracer.end() && it->second.psw == g_psw) return &it->second;
+    RACER3& r = s_mpracer[plo];
+    r = RACER3{};
+    r.plo = plo;
+    r.psw = g_psw;
+    for (const OPT& o : plo->aopt)
+    {
+        if (o.aval.empty()) continue;
+        const OPTVAL& a = o.aval[0];
+        switch (o.eopid)
+        {
+        case 1847: r.path = PloOptRacer(plo, a); break;
+        case 1848: r.fSnap = a.n; break;
+        case 1851: r.step = a.ag[0]; break;
+        case 1852: r.runner = PloOptRacer(plo, a); break;
+        case 1853: r.speed = a.ag[0]; break;
+        case 1855: r.tracked = PloOptRacer(plo, a); break;
+        case 1856: r.window = a.ag[0]; break;
+        case 1857: r.shape = PloOptRacer(plo, a); break;
+        default: break;
+        }
+    }
+    if (FPrint())
+        std::printf("racer3: %d path %d runner %d (cid 0x%X) tracked %d shape %d speed %.0f snap %d\n", plo->oid, r.path ? r.path->oid : -1,
+                    r.runner ? r.runner->oid : -1, r.runner ? r.runner->Cid() : -1, r.tracked ? r.tracked->oid : -1, r.shape ? r.shape->oid : -1, r.speed,
+                    r.fSnap);
+    return &r;
+}
+
+const CRV* Pcrv(const RACER3& r) { return r.path ? PcrvFromLo(r.path) : nullptr; }
+float SLength(const RACER3& r) { const CRV* p = Pcrv(r); return p ? SLengthCrv(p) : 0.0f; }
+
+glm::vec3 PosLo(LO* plo)
+{
+    if (!plo) return glm::vec3(0.0f);
+    if (FIsLoDerivedFrom(plo, sly3::CID_ALO))
+        if (XF* pxf = PxfObj(static_cast<ALO*>(plo))) return glm::vec3(pxf->matWorld[3]);   // (vt slot 36)
+    return sly3::PosLoWorld3(plo);
+}
+
+// 0x22EA88 kind 0: the arc length of the path's point nearest to pos
+float SNearest(const RACER3& r, const glm::vec3& pos)
+{
+    float s = 0.0f;
+    if (const CRV* p = Pcrv(r)) NearestCrvAll(p, pos, nullptr, nullptr, nullptr, &s);
+    return s;
+}
+
+// orig3 0x184630: the runner's point
+glm::vec3 PosRunner(const RACER3& r)
+{
+    glm::vec3 pos(0.0f);
+    if (const CRV* p = Pcrv(r)) EvalCrvS(p, r.s, &pos, nullptr);
+    return pos;
+}
+
+// orig3 0x184728 / 0x184778: the runner added / removed (its vt slots 8 / 9)
+void StartRacer(RACER3& r)
+{
+    if (r.fOn) return;
+    if (r.runner) AddLo(g_psw, r.runner);
+    r.fOn = 1;
+    if (FPrint()) std::printf("racer3: %d start at s %.0f of %.0f (t %.3f) st %d inworld %d removed %d active %d iupd %d grf 0x%X parent %d\n", r.plo->oid, r.s, SLength(r), g_clock.t, r.plo->st, r.plo->fInWorld, r.plo->fRemoved, r.plo->fNodeActive, r.plo->iupd, r.plo->grfUpd, r.plo->paloParent ? r.plo->paloParent->oid : -1);
+}
+void StopRacer(RACER3& r)
+{
+    if (!r.fOn) return;
+    if (r.runner) RemoveLo(g_psw, r.runner);
+    r.fOn = 0;
+    if (FPrint()) std::printf("racer3: %d stop at s %.0f of %.0f (t %.3f)\n", r.plo->oid, r.s, SLength(r), g_clock.t);
+}
+
+void PlaceRunner(RACER3& r, const glm::vec3& pos)
+{
+    if (!r.runner || !FIsLoDerivedFrom(r.runner, sly3::CID_ALO)) return;
+    ALO* palo = static_cast<ALO*>(r.runner);
+    SetAloPos(palo, pos);   // (vt slot 34)
+}
+
+// orig3 0x183FA8
+void UpdateRacer(LO* plo)
+{
+    RACER3* pr = Pracer(plo);
+    if (!pr || !Pcrv(*pr)) return;
+    RACER3& r = *pr;
+    const float sMax = SLength(r);
+    if (r.tracked) r.sTracked = SNearest(r, PosLo(r.tracked));
+    if (!r.fOn) return;
+    const float dt = g_clock.dt;
+    const bool fCar = r.tracked && FIsLoDerivedFrom(r.tracked, 0x55) && PloPoCurrent(g_psw) == r.tracked;
+    if (fCar)
+    {
+        if (r.sTracked < sMax * 0.67f)
+        {
+            const bool fNear = r.sTracked < sMax * 0.33f;
+            static const cmm::SMPA s_smpaNear{1200.0f, 200.0f, 3.0f, 625.0f};   // D_00321890
+            static const cmm::SMPA s_smpaFar{2000.0f, 700.0f, 1.0f, 1000.0f};   // D_003218A0
+            const float sTarget = std::max(r.sTracked + (fNear ? 2500.0f : 350.0f), r.s + (fNear ? 100.0f : 8.0f));
+            r.s = cmm::GSmoothA(r.s, r.ds, sTarget, dt, fNear ? &s_smpaNear : &s_smpaFar, &r.ds);
+        }
+        else
+        {
+            const float g = 0.0f;   // (0x171C98(D_0036BD20): not read natively)
+            r.s += (1.0f + g * -0.3f) * r.speed * dt;   // D_003218B0 {1, -0.3, 0}
+        }
+    }
+    else r.s += r.speed * dt;
+    static int s_c = 0;
+    if (FPrint() && ++s_c % 60 == 0)
+        std::printf("racer3: %d s %.0f (tracked %.0f) of %.0f car %d\n", plo->oid, r.s, r.sTracked, sMax, fCar);
+    if (sMax <= r.s)
+    {
+        StopRacer(r);
+        if (FPrint()) std::printf("racer3: %d at the end: message 5\n", plo->oid);
+        HandleLoSpliceEvent(plo, 5, false, 0, nullptr);
+        return;
+    }
+    const glm::vec3 pos = PosRunner(r);
+    PlaceRunner(r, pos);
+    if (r.shape && sly3::FLoInWorld3(r.shape) && FPointInShape(r.shape, pos))
+    {
+        StopRacer(r);
+        if (FPrint()) std::printf("racer3: %d in its shape %d: message 6\n", plo->oid, r.shape->oid);
+        HandleLoSpliceEvent(plo, 6, false, 0, nullptr);
+    }
+}
+
+struct INITRACER3
+{
+    INITRACER3()
+    {
+        RegisterLoUpdate(FN3_TAG | 0x183FA8, UpdateRacer);
+        // 1854: the runner's point (getter 0x184630, setter 0x1846C8)
+        RegisterObjectGetter3(1854, [](LO* plo) {
+            CRef ref;
+            if (RACER3* r = Pracer(plo)) ref.SetVector(PosRunner(*r));
+            return ref;
+        });
+        RegisterObjectSetter3(1854, [](LO* plo, const CRef& ref) {
+            RACER3* r = Pracer(plo);
+            if (!r || ref.m_tagk != TAGK_Vector) return;
+            r->s = SNearest(*r, ref.GetVector());
+            if (FPrint()) std::printf("racer3: %d set to s %.0f\n", plo->oid, r->s);
+            if (r->s < SLength(*r)) StartRacer(*r);
+        });
+        // 1858 / 1859 (thunks 0x1104B8 / 0x110530): start / stop
+        RegisterObjectMethod3(0x1104B8, [](LO* plo, const std::vector<CRef>&) {
+            if (RACER3* r = Pracer(plo)) StartRacer(*r);
+            return CRef(TAGK_Void);
+        });
+        RegisterObjectMethod3(0x110530, [](LO* plo, const std::vector<CRef>&) {
+            if (RACER3* r = Pracer(plo)) StopRacer(*r);
+            return CRef(TAGK_Void);
+        });
+    }
+} s_initracer3;
+}  // namespace

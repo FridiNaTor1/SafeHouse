@@ -44,6 +44,10 @@ public:
     std::function<void(GameId)> openInstall, addRegion;
     // Re-extract the selected region from this disc image now (main.cpp: the install page, started).
     std::function<void(GameId, std::string)> reextract;
+    // Sly 2's map editor (desktop: launcher/editor/editor_page.h); null where the build has none.
+    std::function<void()> openEditor;
+    // Sly 2's translation tool (desktop: launcher/editor/loc_page.h); null where the build has none.
+    std::function<void()> openLocalisation;
     // The game the running job plays, or -1.
     int playingGame = -1;
     // Set while an install of this game runs, for the progress shortcut.
@@ -145,7 +149,7 @@ public:
         const float previewH = px(48) + previewHelpH + px(12);
         // Bottom block heights decide how much room the logo gets.
         const bool regionRow = hasActions && s.regions.size() > 1 && !playing && !installing;
-        const float actionsH = !hasActions ? 0.0f : px(58) + (regionRow ? controlHeight() + px(10) : 0.0f) + (secondaryCount(id, s, busy) ? gridHeight(s, installing) : 0.0f)
+        const float actionsH = !hasActions ? 0.0f : px(58) + (regionRow ? controlHeight() + px(10) : 0.0f) + (secondaryCount(id, s, busy) ? gridHeight(id, s, installing, actionsW) : 0.0f)
                                                           + (steamRow(s) ? px(4) + px(30) + (shortcutRow(id, s) && !shortcutBesideSteam(s, actionsW) ? px(4) + px(30) : 0.0f) : 0.0f)
                                                           + (showNativePreview ? previewH + px(8) : 0.0f);
         const float infoH = px(150);
@@ -302,10 +306,22 @@ public:
             ImGui::EndDisabled();
             if (!installing) {
                 gap(0);
-                if (button(tr("Open save folder"), Tone::Quiet, { 0, px(30) }, Icon::Folder)) openFolderSafe(m_backend.userDir(id));
-                if (s.assets || s.repair) {
-                    ImGui::SameLine(0, px(4));
-                    if (button(tr("Open game folder"), Tone::Quiet, { 0, px(30) }, Icon::Folder)) openFolderSafe(m_backend.dataDir(id));
+                // (the folder and tool links wrap to the panel's width: linkRows)
+                const float rowW = actionsW;
+                float x = 0;
+                for (const Link& l : links(id, s)) {
+                    const float w = linkWidth(l);
+                    if (x > 0 && x + px(4) + w <= rowW) ImGui::SameLine(0, px(4)), x += px(4);
+                    else if (x > 0) gap(-8), x = 0;   // (4 px between the rows: linkRows)
+                    x += w;
+                    if (button(tr(l.label), Tone::Quiet, { 0, px(30) }, l.icon)) {
+                        switch (l.action) {
+                        case 0: openFolderSafe(m_backend.userDir(id)); break;
+                        case 1: openFolderSafe(m_backend.dataDir(id)); break;
+                        case 2: openEditor(); break;
+                        case 3: openLocalisation(); break;
+                        }
+                    }
                 }
             }
         }
@@ -629,10 +645,40 @@ private:
         if (installing) return 1;
         return s.assets ? (4 + (s.texturesMissing ? 1 : 0) + 1) / 2 : 0;
     }
-    // The grid and, when not installing, the folder links under it.
-    static float gridHeight(const GameStatus& s, bool installing) {
+    // The links under the grid: the folders, then (Sly 2, desktop) the Map Editor and the translation tool.
+    struct Link {
+        const char* label;
+        Icon icon;
+        int action;
+    };
+    std::vector<Link> links(GameId id, const GameStatus& s) const {
+        std::vector<Link> out{{N_("Open save folder"), Icon::Folder, 0}};
+        if (s.assets || s.repair) out.push_back({N_("Open game folder"), Icon::Folder, 1});
+        if (id == GameId::Sly2 && s.assets && openEditor) out.push_back({N_("Map editor"), Icon::Cog, 2});
+        if (id == GameId::Sly2 && s.assets && openLocalisation) out.push_back({N_("Translate"), Icon::Chat, 3});
+        return out;
+    }
+    // (button(): a Quiet button's body text, its icon and gap, 12 px each side)
+    static float linkWidth(const Link& l) { return measure(fonts().body, tr(l.label)).x + px(18) + px(10) + px(12) * 2; }
+    // The rows the links take in a panel `width` wide (they wrap: a long translation or a narrow window).
+    int linkRows(GameId id, const GameStatus& s, float width) const {
+        int rows = 1;
+        float x = 0;
+        for (const Link& l : links(id, s)) {
+            const float w = linkWidth(l);
+            if (x > 0 && x + px(4) + w <= width) x += px(4) + w;
+            else {
+                if (x > 0) ++rows;
+                x = w;
+            }
+        }
+        return rows;
+    }
+    // The grid and, when not installing, the links under it.
+    float gridHeight(GameId id, const GameStatus& s, bool installing, float width) const {
         const int rows = gridRows(s, installing);
-        return px(12) + px(38) * rows + px(8) * std::max(rows - 1, 0) + (installing ? 0.0f : px(8) + px(30));
+        const int linkRowCount = installing ? 0 : linkRows(id, s, width);
+        return px(12) + px(38) * rows + px(8) * std::max(rows - 1, 0) + (installing ? 0.0f : px(8) + px(30) * linkRowCount + px(4) * (linkRowCount - 1));
     }
     void takeFocusNow() {
         if (ImGui::IsWindowAppearing()) setFocus(GImGui->LastItemData.ID, ImGui::GetCurrentWindow(), !input::tracker().lastWasMouse());

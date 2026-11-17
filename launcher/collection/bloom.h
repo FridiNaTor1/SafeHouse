@@ -1,6 +1,6 @@
 #pragma once
 // The glow of the Collection Style Launcher's scene, after the PS3 menu's own bloom (Levels.xmb: Bloom enable,
-// Intensity, threshold; the passes and their taps are the disc's shader files'): what is brighter than the
+// Intensity, threshold; the passes' names and taps are the disc's compiled programs'): what is brighter than the
 // threshold is copied at a quarter of the size, blurred with a three-tap Gaussian (0.25, 0.5, 0.25; one tap is 1/320
 // of the width, 1/180 of the height) and added back. How strongly the PS3 adds it is not known: see kStrength.
 //
@@ -67,7 +67,7 @@ private:
         return glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
     }
     static GLuint program(const char* fragment) {
-#if defined(CANE_ANDROID) || defined(__SWITCH__)
+#if defined(CANE_ANDROID) || defined(CANE_IOS) || defined(__SWITCH__)  // (OpenGL ES 3)
         static const char* head = "#version 300 es\nprecision highp float;\n";
 #else
         static const char* head = "#version 330 core\n";

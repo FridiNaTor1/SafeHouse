@@ -139,6 +139,7 @@ animated (multi-frame) textures and in particles.
   does it. `Sly2-Release --data-dir "<installation>" --build-texture-cache` (with `--texture-pack DIR` for a pack)
   fills it ahead of time. `Texture Cache = Off` under `[Graphics]` in `Settings.ini` turns it off; on the Nintendo
   Switch it is off unless you set it to `On` (it takes about two thirds of the pack's size on the SD card again).
+  (Sly 3 has the same cache, with `sly3` in place of `sly2`.)
 - **Texture streaming:** replacements load on the processor's other cores while the game goes on, so a texture can
   show its original for a moment when it first appears instead of the game pausing; a level starts with its
   replacements in place where the computer is fast enough. `Texture Streaming = Off` under `[Graphics]` in
@@ -286,6 +287,36 @@ How the file works:
 
 A translation is a full `<Language>.json` with every string changed.
 
+**SafeHouse's own PC strings** (the pause menu's Exit to Desktop, "Hold (O) to skip", the display, controls and
+keyboard options, Replay Jobs, key and mouse names, the Remap page's actions) are not in the disc's text. A language
+folder's `Text.json` (below: `Languages`, or `Mods/Languages/<Language>/Text.json`) can translate them too, in a
+`"port"` object keyed by name:
+
+```json
+{
+  "strings": { ... },
+  "port": {
+    "ExitToDesktop": "Far út á skriviborðið",
+    "HoldToSkip": "Halt &2O&. inni fyri at leypa um",
+    "KeyLeftMod": "Vinstri %s",
+    "Action.jump": "Loyp",
+    "ActionGroup.Movement": "Rørsla",
+    "DecimalMark": ","
+  }
+}
+```
+
+- The names are the strings' names in the game's table (Sly2-Release/porttext.h, `PTX_<name>`), `Action.<id>` and
+  `ActionGroup.<Words>` for the Remap page, and `DecimalMark` (`.` or `,`, the options' numbers).
+- `Sly2-Release --dump-port-text DIR` writes every name with its English text and the game's 11 other built-in
+  languages (`DIR/English.json`, `French.json`, ...; no disc needed). `--dump-text` puts the same `"port"` object in
+  each language's file.
+- Strings the object leaves out come from the built-in table: the language's own (one of the 12 the table has), else
+  the one its `language.json` `"text"` or `"code"` names (`"code": "nb"`: Norwegian), else English.
+- Keep each string's `%s` / `%d` in the English order: a string whose `%`-codes differ is not used (the game says so in
+  its log, and `--check-language` fails). Keep the `&2O&.` icons. The fonts' rules below apply as for the game's text.
+- `"worlds"` (a level's own text) works in the languages folder's `Text.json` too, as in `Mods/Text`.
+
 ### Languages (new languages, dubs and subtitles)
 
 Every Sly 2 installation (USA, Europe, Japan) shares one **languages folder**, `sly2-languages`, beside the game
@@ -301,7 +332,7 @@ A language folder holds any of these:
 
 | File | What |
 |---|---|
-| `Text.json` | the strings, in the `Mods/Text` format above, **numbered as on the USA disc** (the same numbers on every disc) |
+| `Text.json` | the strings, in the `Mods/Text` format above, **numbered as on the USA disc** (the same numbers on every disc), with `"worlds"` and the PC strings' `"port"` |
 | `Dialog/<anything>/<line>.wav` (or `.flac`) | the voice lines, named by the USA line number (the subfolders don't matter) |
 | `Dialog/lengths.json` | optional `{"<line>": seconds}`: how long each line's subtitle stays (else the file's length) |
 | `Movies/<name>.wav` (or `.flac`) | a cutscene's sound by its name: `Prologue`, `Ep1 Intro`, `Ep3 Briefing 2`, ... (stereo) |
@@ -328,6 +359,48 @@ European discs, Circle on the Japanese). A Japanese text of your own (`Mods/Lang
 `Font.bin` (a languages folder made by an older version: start the game from the launcher once with the Japan disc
 installed, or import the Japan disc image again) Japanese plays its voices over the disc's own text, and the title's
 language list says "voices only".
+
+### Translating (the launcher's Translate page)
+
+The launcher's **Sly 2** page has a **Translate** link (Windows and Linux, beside the Map editor). It edits a language
+of the languages folder string by string, beside a reference language:
+
+- **Language:** choose one, or **New language...** (a folder name such as `Føroyskt`, its code and letters: makes the
+  folder with its `language.json` and an empty `Text.json`). **Language settings** edits `language.json`: its name on
+  the title's list, its code, its letters (Latin or Japanese), the voices it plays and the language its untranslated
+  strings come from.
+- **Beside:** the reference shown next to each string (English by default; any language with text).
+- **Game text / PC strings:** the disc's strings by number, and SafeHouse's own strings (the `"port"` object above).
+- **Show:** all, untranslated, the same as the reference, problems, or changed since the last save; **Search** finds a
+  number, a name or text in either column. Ctrl+Up / Ctrl+Down go through the list, Ctrl+S saves.
+- Each string shows the levels it is in, and **Text per level** adds a level's own text (`"worlds"`).
+- **Checks:** the button icons (`&2X&.`) and `%s` / `%d` codes must match the reference (a PC string: the English, in
+  the same order), the line breaks, spaces at the ends and a much longer line are pointed out, and so are characters
+  the game's font cannot draw (the USA / European fonts: the Western European letters, without Þ þ ½ « » and a few
+  signs; Japanese: the characters of the Japanese font).
+- **Save** writes the language's `Text.json` (UTF-8; its other keys stay). One of the game's own languages (English,
+  French, ...) is saved as a change file instead, `Mods/Languages/<Language>/Text.json` with only the strings you
+  changed: it applies on top of the disc's text and of the languages folder's.
+- **Test in game** saves and starts Sly 2 in that language. The menu (the arrow) has **Export as a mod package**
+  (`Mods/Packages/language-<name>/` with `files/Languages/<Name>/`: share that folder or a .zip of it), **Export a CSV
+  table** / **Import the CSV table** (`<Name>.csv` beside the `Text.json`, columns `id,reference,translation`; PC
+  strings are `port:<name>`), and **Find where strings are used again**.
+
+- **Voices** (dubbing): every voice line by its number (the number of its subtitle) and every cutscene's sound, with
+  the reference's line (its own voices, else English) and the language's dub: **Play** each to compare (FLAC and other
+  formats are decoded by the game program), their lengths, the subtitle in both languages (**Edit the subtitle** goes
+  to its text), **Show:** missing / dubbed lines and the dub progress. **Add a dub** copies a WAV or FLAC file in under
+  the line's name (`Dialog/<the reference's subfolder>/<line>.wav`, `Movies/<name>.wav`; one of the game's own
+  languages: under `Mods/Languages/<Language>/`), and **Subtitle time** sets the line's entry in `Dialog/lengths.json`.
+
+The page runs `Sly2-Release --dump-port-text` and `--dump-text` once in the background (into the launcher's cache
+folder) for the PC strings' English and each string's levels; `Sly2-Release --check-language <Name>` checks a
+finished language on an installation (every level's strings, the font's letters, the PC strings' codes).
+
+The Translate page is in the desktop launcher only (Windows, Linux, macOS), like the map editor. What it makes plays
+everywhere: the game reads the languages folder and `Mods/Languages/`, and a package's `files/Languages/`, the same
+way on every platform (phones, Quest, Switch): copy the language's folder into the languages folder, or the exported
+package folder into `Mods/Packages/` in Sly 2's save folder.
 
 ### Movies
 
@@ -414,6 +487,119 @@ This is the advanced end of modding:
 
 Start from small changes, and test with a fresh save.
 
+### The map editor (desktop)
+
+The launcher's **Sly 2** page has a **Map editor** button (Windows and Linux; not in the phone, Quest, Switch or
+macOS builds yet). Its page lists the installed worlds and their groups, your projects and the installed mod
+packages. **Open in 3D editor** opens a world in its own window, drawn by the game's own renderer:
+
+- **Fly:** hold the right mouse button and use W A S D, Q / E (down / up), Shift (faster), the wheel (speed).
+- **Pick:** click an object in the view or in the **Scene** list (groups, then each object's children; the filter
+  takes a class name or an object number). Dots are objects without a model (volumes, paths, lights, markers).
+- **Move / rotate / scale:** W / E / R choose the tool; drag a handle; or type in the **Inspector**. An instance of a
+  shared prop (a chair, a trash can) moves as a whole: the editor changes the proxy that places it.
+- **Duplicate** (Ctrl+D) and **Delete** (Del) work on a group's top-level objects and on placed instances.
+- **Options:** the Inspector lists the options the object was loaded with; numbers and vectors can be changed (they
+  show after **Project > Reload world** or in a play test).
+- **Undo / Redo:** Ctrl+Z / Ctrl+Y. **Save:** Ctrl+S. **Play test:** starts Sly 2 in that world with the project.
+- **Missions / Text / Scripts / History** (the World panel): the world's jobs, tasks and markers, its text, each
+  group's scripts (read only for now), the edits made and the parts they changed.
+- **Help:** **Getting started** (F1; shown at the first starts) and the **Keyboard shortcuts** list.
+
+#### Models and textures
+
+- **Import a model** (glTF 2.0 `.glb` / `.gltf`, or `.fbx`): the Inspector's **Model and materials > Replace model...**
+  puts it in place of the selected object's model; **World > Models > As a new object...** (or **Project > Import model
+  as a new object...**) places it in front of the camera, on the ground below, in the level. Blender: export glTF with
+  +Y up (its default); 1 unit = 1 metre = 100 game units (**scale** in the Models tab). Each material's base colour
+  picture (and colour) becomes a texture in the game's format (an indexed bitmap and palette, at most 256x256 by
+  default) in the object's group; the full picture also goes into the package's `Textures/` (below), which the game
+  draws instead at its own size with mipmaps. **Lit** (default) lights the model by the level's lights like the game's
+  props; **cel outline** makes the black border along its silhouette; **collision** keeps the replaced object's, removes
+  it, or makes a box around the new model.
+- **Export GLB** (the Inspector, or the Models tab): the object (with its children), its whole group (a world part), or
+  a character with its skeleton and animations (each animation sampled at 30 frames a second). Textures are the
+  game's (or a texture pack's replacement, when there is one).
+- **Characters:** a character exported here keeps its joints' names (`MURRAY#9.31`: object 9, record 31) and each
+  part's name ends in `@<show id>,<draw order>,<hidden>`. Edit the mesh in Blender, keep the armature and the names,
+  import it back in place of the character's model: it stays skinned (up to four bones a triangle) and animated.
+- **Textures:** each material's **Texture...** puts a PNG / JPEG on it. **Texture pack** (default): the picture at its
+  own size under the texture's name in the package's `Textures/` (every model drawing that texture changes; the
+  game's own data is untouched). **Game data**: the picture re-encoded into the bitmap and its palettes at their
+  size. **PNG...** saves the texture as the game decodes it; **lit** switches a material between lit and flat.
+- Not carried by imported models: shader animations (blinks, scrolling textures), the game's baked vertex lighting
+  (imported models are lit at run time), more than four bones a triangle. A model of a shared group (a prop placed
+  many times) changes every instance; **Make unique** first to change one.
+
+A project lives in Sly 2's save folder, `Editor/Sly 2/<project>/`, and is already a mod package: **Install** copies it
+into `Mods/Packages/`, **Export .zip** makes a file to share.
+
+Deleting objects that scripts or other objects name can break jobs; test with a fresh save.
+
+### Mod packages
+
+A mod package is a folder (shared as a .zip of it) that Sly 2 loads on every platform from its save folder's
+`Mods/Packages/` (Windows, Linux, macOS, Android, Quest, iOS, Switch):
+
+```text
+Mods/Packages/paris-benches/
+  mod.json
+  files/
+    Worlds/1 The Black Chateau/Paris/World/258 f_nightclub_exterior_rig/Objects.bin
+```
+
+`files/` holds files at the same paths as the loose Mods folder (world parts, music, movies, ...). A package made by
+the map editor also has an `editor/` folder (its undo history, `history.bin`); the game ignores it and exported .zip
+files leave it out. `mod.json`:
+
+```json
+{"format": "safehouse-mod", "format_version": 1, "id": "paris-benches", "name": "Paris benches", "version": "1.0.0",
+ "author": "you", "description": "", "game": "sly2", "regions": ["USA"], "files_format": 3, "priority": 0,
+ "dependencies": [{"id": "other-mod", "version": ">=1.2"}],
+ "worlds": [{"path": "Worlds/1 The Black Chateau/Paris/Paris.world.json", "record": 2, "fnv64": "..."}]}
+```
+
+- `id`: letters, digits, `-`, `_`, `.`. `regions`: the installations it fits (`USA`, `Europe`, `Japan`; empty: any);
+  world parts differ between regions, so the editor fills in the one you edited. `files_format`: the installation
+  format (3: worlds as parts). `worlds`: the worlds it changes and their original hashes (information).
+- Load order: dependencies first, then `priority` (lower first), then the id; a later package's file wins. Loose
+  files in `Mods/` win over packages.
+- A package that does not fit (game, region, format) or misses a dependency is skipped; the game's log says why
+  (`mods: package ...`). Rename a package's folder to `<name>.disabled` (or untick it on the Editor page) to turn it off.
+- Command line: `--mod-package DIR` loads one more package over everything (the play test), `--no-mod-packages`
+  loads none.
+
+A package's `files/` can also hold replacement textures (`files/Textures/<W>x<H>_<hash>.png`, as `Mods/Textures/`),
+text (`files/Text/<Language>.json`, as `Mods/Text/`) and languages (`files/Languages/<Language>/`, as
+`Mods/Languages/`). Every package is read, in load order: a later package's texture or string wins, and the loose
+Mods folder's win over all.
+
+**Sly 3** (in development) reads packages the same way, with `"game": "sly3"`: its worlds are installed as parts
+beside the disc image (`Worlds/<world>/World/...`, made by the installer), so a package's
+`files/Worlds/m_ext/World/Text.json` replaces that part, and `files/Textures/`, `files/Text/` and `files/Languages/`
+work as for Sly 2. `Sly3-Release --mod-package DIR` and `--no-mod-packages` as above; `--world-check` checks the
+installed parts against the disc. A part that changes size (a group's objects added or removed) is fine: the game
+recomputes each group's size in the group table when it puts the parts together. The Editor page's **Sly 3** switch
+lists Sly 3's worlds and their gameplay objects by area, and **Open in 3D editor** edits them as for Sly 2 (projects in
+Sly 3's save folder, `Editor/Sly 3/`): options by Sly 3's own names, curves, duplicate / delete / create / make unique,
+jobs (a new job from an existing one), scripts, dialogue and text, and **buttons and what they trigger**: a use (a
+button, a switch, a gang member's ability spot) can set a task's state, start a script or run an object's state
+machine (the Inspector's Links). Model import and textures are Sly 2's only for now.
+
+**New jobs keep their progress.** A job made in the map editor has tasks the game's save has no place for (adding one
+would change the save's layout and clear every save). The editor lists them in `mod.json`:
+
+```json
+"custom_tasks": [{"world": "Paris", "tasks": [1001, 1002]}]
+```
+
+(Sly 3: the same, with Sly 3's world names, e.g. `"world": "v_ext"`.)
+
+and the game keeps their states in a file next to the save slot, `Saves/save1.mods.json` (beside `save1`, and so on
+for each slot); the save slot itself is never changed. When the world loads, those tasks get their states back after
+the save's own: a finished custom job stays finished. Removing the package leaves the save as it was (the side file's
+states are kept for when the package comes back); erasing the slot or starting a new game in it drops them.
+
 ### What is safe to change
 
 | Change | Safe? |
@@ -432,7 +618,8 @@ Start from small changes, and test with a fresh save.
 **Saves:**
 
 - Saves don't store anything from mods, so adding or removing a mod never harms a save. Level mods are the
-  exception if they change jobs or tasks.
+  exception if they change jobs or tasks. A package's new jobs keep their progress in a separate file next to the
+  slot (`save1.mods.json`, above), never in the save itself.
 - Saves are shared between regions, so the same Mods folder and saves work with USA and Europe.
 
 ---
@@ -709,6 +896,7 @@ exception.
 
 ## Sharing a mod
 
+- **Sly 2 levels:** share a mod package (the map editor's **Export .zip**); players unzip it into `Mods/Packages/`.
 - **Sly 2:** zip your Mods folder's contents. A player unzips them into their own Mods folder. Name music and movies
   by number (`Music/28.vpk`), so the mod works with any SafeHouse version.
 - **Sly 1:** zip your Mods folder's contents the same way. Players unzip them into their own Sly 1 Mods folder.

@@ -1,8 +1,8 @@
 #pragma once
 
 // The port's own UI text (the PC QoL: the pause menu's Exit to Desktop, the display / controls / keyboard options,
-// the hold-to-skip hint, Replay Jobs) in the game's language (g_nLang): the European discs' 11 languages and the
-// Japanese disc's Japanese. The USA disc (English) shows exactly the English strings. The debug menu stays English.
+// the hold-to-skip hint, Replay Jobs) in the game's language (g_nLang): the European discs' 11 languages, the
+// Japanese disc's Japanese and the Korean disc's Korean. The USA disc (English) shows exactly the English strings. The debug menu stays English.
 //
 // Where the game has the word itself, the table uses the game's (its menus' On / Off, the Binocucom's name, the
 // "Operation:" style and the word for a job in each language: porttext.cpp marks each row G (the game's words) or
@@ -10,9 +10,17 @@
 // Strings are returned in the game's text encoding: Latin-1 on the USA / European discs (their fonts' 224 glyphs),
 // the port's UTF-8 form of the 16-bit characters on the Japanese disc (region.h ChDecode). The Japanese strings use
 // only the Japanese font's 1028 glyphs (kana, ASCII and its kanji).
+//
+// A language of the languages folder (or Mods/Languages/<language>/) can have its own: its Text.json's "port" object,
+// by row name (PTX_<name> without "PTX_": "HoldToSkip", "ExitToDesktop"; "Action.<id>" and "ActionGroup.<Words>" for
+// the Remap page's actions and groups; "DecimalMark": "." or ","), UTF-8. The rows it lacks come from the built-in
+// column of the language it is based on (langstore.h LangPortBase), else English. A string whose %-codes differ from the
+// English one's is not used. --dump-port-text DIR writes every built-in column (MODDING.md "Text and subtitles").
 
 #include <string>
 #include <string_view>
+#include <utility>
+#include <vector>
 
 namespace cane::sly2input { enum class Action; }
 
@@ -48,6 +56,8 @@ enum PTX : int
     PTX_Uncapped,
     // the display options' Long Shadows (settings v16, render.cpp FBuildShadow2)
     PTX_LongShadows,
+    // the display options' Fast Shadows (settings v20, display.h fFastShadows; not on the Switch: always on there)
+    PTX_FastShadows,
     // Invert Controls... (settings v17): its page entry, the controller's camera (with the right stick's icon), the
     // mouse in each view (the controller's binocucom / turret rows are the game's own options 0x51 / 0x53)
     PTX_InvertControlsPage, PTX_PadInvertCameraX, PTX_PadInvertCameraY, PTX_MouseInvertCameraX, PTX_MouseInvertCameraY,
@@ -80,6 +90,15 @@ enum PTX : int
     PTX_Performance,
     // (display.h outlineThickness) the display options' and VR Settings' Outline Thickness
     PTX_OutlineThickness,
+    // (VR, controlspage.cpp) the Controls page's camera label in First Person: the right stick turns the body in steps
+    PTX_VrSnapTurn,
+    // (VR, promptglyph.cpp) the HP Reverb G2's menu buttons (Select / Start) by name
+    PTX_VrMenuLeft, PTX_VrMenuRight,
+    // (settings v22, display.h monitor) the display options' Monitor row and its default
+    PTX_Monitor, PTX_Primary,
+    // (menu.cpp, the Language... page left with a new language waiting) the prompt: restart from the last checkpoint now in
+    // it, or keep playing and have it from the next area
+    PTX_LangReloadQuestion, PTX_LangReloadNow, PTX_LangReloadLater,
     PTX_Max
 };
 
@@ -101,6 +120,11 @@ std::string StrPortActionName(cane::sly2input::Action action);
 std::string StrPortActionGroup(std::string_view group);
 // The language is the USA disc's English (the strings are the port's original ones).
 bool FPortEnglish();
+// The built-in columns: LANG_English .. LANG_Korean.
+constexpr int CLANG_PORT = 13;
+// Every port string of a built-in column (LANG_English .. LANG_Korean) by row name, UTF-8, in table order (the rows,
+// DecimalMark, the actions, the action groups): --dump-port-text, --check-language.
+std::vector<std::pair<std::string, std::string>> PortTextColumn(int lang);
 
 // The game's own PS2 messages said for a PC (the memory card's: the save data, "do not close the game"; the USB
 // headset option's "(for PlayStation 2)") in the current language, as UTF-8, or null when the string is not one of

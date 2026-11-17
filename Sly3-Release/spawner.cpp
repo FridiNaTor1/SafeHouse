@@ -18,6 +18,7 @@
 #include "nav.h"
 #include "objmethod.h"
 #include "po.h"
+#include "pickup.h"
 #include "so.h"
 #include "sw.h"
 #include "update.h"
@@ -54,6 +55,7 @@ struct SLOT  // orig 0x30 bytes at +0x60
     SOURCE* psrc = nullptr;  // +0x0C
     int k = 0;            // +0x10
     glm::vec3 pos{0.0f};  // +0x20
+    LO* pproxy = nullptr; // (native: the proxy whose row the guard is, at its spawn: CheckSlots)
 };
 struct SPAWNER
 {
@@ -64,6 +66,8 @@ struct SPAWNER
     std::vector<SLOT> aslot;       // +0x60 (+0x5C of them)
     int cUsed = 0;                 // +0x58
     float sPlanar = 5500.0f;       // +0x80
+    float sCameraMax = 3.4028235e38f;  // (Sly 3 +0xA8, option 1504: 0x198ED8's planar distance from the camera)
+    float dtDelay = 2.5f;          // (Sly 3 +0x98: the wait after a spawn)
     int fEdge = 1, fRange = 1, fOcclusion = 1;  // +0x84..+0x8C
     float dtWaitFar = 30.0f, dtUntilFar = 50.0f;  // +0xA0 / +0xA4
     float tNext = 0.0f;            // +0xA8
@@ -140,7 +144,7 @@ PATHREC& Pathrec(LO* plo, const CRV* pcrv)
     return rec;
 }
 
-// orig 0x001EA3B0: the span containing g, if any
+// orig 0x001EA3B0: the span containing g, if any (orig3: 0x2320A0, the same C in the Sly 3 decomp)
 bool FInPathSpan(const PATHREC& rec, float g)
 {
     for (const auto& seg : rec.aseg10)
@@ -167,7 +171,7 @@ glm::vec3 PosCenter()
     return g_cm.pos;
 }
 
-// orig 0x00173588 / 0x0014F308: the point in the camera's screen box of half-size r
+// orig 0x00173588 / 0x0014F308: the point in the camera's screen box of half-size r (orig3: 0x198CF0, the same code in Sly 3)
 bool FInScreen(const glm::vec3& v, float r) { return v.z > 0.0001f && -r < v.x && v.x < r && -r < v.y && v.y < r; }
 glm::vec3 PosScreen(const glm::vec3& pos)
 {
@@ -205,6 +209,9 @@ int NHiddenImpl(const SPAWNER& sp, const glm::vec3& pos, float sDistance)
 {
     const glm::vec3 d = pos - g_cm.pos;
     if (sDistance * 0.8f < glm::length(d)) return 0;
+    // (Sly 3, orig3 0x198ED8: option 1504 at +0xA8, FLT_MAX unless set: a point farther than that from the camera in
+    // the plane is never hidden; the turf war's hub spawners 93224 / 139448 have 4000, 93167 5000)
+    if (sp.sCameraMax < glm::length(glm::vec2(d))) return 0;
     const glm::vec3 s = PosScreen(pos);
     if (s.z < 500.0f) return 0;
     if (!FInScreen(s, 1.7f)) return 0;
@@ -242,6 +249,7 @@ void ReleaseSlot(SPAWNER& sp, SLOT& slot, int k, bool fKeep)
         if (!fKeep && slot.psrc) slot.psrc->tUntil = g_clock.t + sp.dtUntilFar;
     }
     slot.plo = nullptr;
+    slot.pproxy = nullptr;
     if (slot.psrc) slot.psrc->fBusy = false;
     slot.psrc = nullptr;
     --sp.cUsed;
@@ -276,11 +284,28 @@ void CheckSlots(SPAWNER& sp, const glm::vec3& pos)
                 slot.tWait = g_clock.t;
             }
         }
+        else if (slot.pproxy && PproxyOfInstance(slot.plo) != slot.pproxy)
+        {
+            // (native: the guard's row was taken by another proxy (AttachProxy's detach, then the new owner's attach in
+            // the same frame, so it never looked out of the world here): e.g. Ep5's scripted guard 46470 (proxy 50186,
+            // SCPT 3887's commands) is the instance spawner 46464 had spawned; taking the slot over later removed the
+            // scripted guard and 3885 never ended. The slot is let go without removing the guard.)
+            if (std::getenv("SLY2N_SPAWNDEBUG"))
+                std::fprintf(stderr, "spawner: slot's guard %d taken by proxy %d, t %.2f\n", slot.plo->oid,
+                             PproxyOfInstance(slot.plo) ? PproxyOfInstance(slot.plo)->oid : -1, g_clock.t);
+            slot.plo = nullptr;
+            ReleaseSlot(sp, slot, 0, false);
+        }
         else if (GUARD* pg = PguardFromLo(slot.plo); pg && pg->f330)
             ReleaseSlot(sp, slot, 1, false);  // (+0x330: knocked out, its place kept)
         else if (!slot.plo->fInWorld || !slot.psrc || !slot.psrc->plo || !slot.psrc->plo->fInWorld)
             ReleaseSlot(sp, slot, 0, false);
-        else slot.tTime = TGuardLastDrawn(slot.plo, slot.tTime);  // (orig: max with the guard's +0x84)
+        else
+        {
+            slot.tTime = TGuardLastDrawn(slot.plo, slot.tTime);  // (orig: max with the guard's +0x84)
+            // (Sly 3 orig3 0x1995B8: a guard not drawn for 8 s is taken back)
+            if (8.0f < g_clock.t - slot.tTime) ReleaseSlot(sp, slot, 0, false);
+        }
     }
 }
 
@@ -329,44 +354,23 @@ SOURCE* PsrcChoose(SPAWNER& sp, const glm::vec3& pos, glm::vec3* ppos, glm::mat3
         if (static const char* s_sz = std::getenv("SLY2N_SPAWNSKIP"); s_sz && std::strstr(s_sz, ("," + std::to_string(src.oid) + ",").c_str())) continue;
         if (src.kind == 1)
         {
-            // a path: its points every 200 (D_002BE5E8, offset at random by 0..1 of that) outside its off-region
-            // spans (0x1EA3B0), the nearest 1500 away whose spawn points are all hidden, facing along the path (away
-            // from the camera's view: flipped when the path runs towards it)
+            // a path: Sly 3's points (orig3 0x198A50 at the start: every 1000 along the path from 0, (int)(length * 0.001)
+            // of them, those outside its off-region spans 0x2320A0; each with the path's direction 0x22E330, the
+            // source's +0x14 / +0x18), the nearest 1500 away whose spawn points are all hidden, facing along the path
+            // (away from the camera's view: flipped when the path runs towards it). Sly 2 (0x173F18) drew a point
+            // every 200 at random; the turf war's hub spawner 93224 found spots Sly 3 never has.
             const CRV* pcrv = PcrvFromLo(src.plo);
             if (!pcrv) continue;
             const PATHREC& rec = Pathrec(src.plo, pcrv);
-            const int c = static_cast<int>(SLengthCrv(pcrv) / 200.0f);
-            // (test aid: SLY2N_SPAWNALONG="path oid:x,y": that path's only candidate is its point nearest (x, y), so a
-            // comparison with the reference can spawn its guard at the reference's place; the random draws still happen)
-            float sForced = -1.0f;
-            if (static const char* s_szAlong = std::getenv("SLY2N_SPAWNALONG"); s_szAlong)
-            {
-                int oidPath = 0;
-                float x = 0.0f, y = 0.0f;
-                if (std::sscanf(s_szAlong, "%d:%f,%f", &oidPath, &x, &y) == 3 && oidPath == src.plo->oid)
-                {
-                    float dBest = 3.4e38f;
-                    for (float sTry = 0.0f; sTry <= SLengthCrv(pcrv); sTry += 0.05f)
-                    {
-                        glm::vec3 posTry(0.0f), dirTry(1.0f, 0.0f, 0.0f);
-                        EvalCrvS(pcrv, sTry, &posTry, &dirTry);
-                        const float d = std::hypot(posTry.x - x, posTry.y - y);
-                        if (d < dBest) { dBest = d; sForced = sTry; }
-                    }
-                    std::fprintf(stderr, "spawnalong: path %d s %.3f (%.2f from the point)\n", oidPath, sForced, dBest);
-                }
-            }
+            const int c = static_cast<int>(SLengthCrv(pcrv) * 0.001f);
             for (int j = 0; j < c; ++j)
             {
-                float sAlong = 200.0f * (static_cast<float>(j) + GRandInRange(0.0f, 1.0f));
-                if (sForced >= 0.0f)
-                {
-                    if (j != static_cast<int>(sForced / 200.0f)) continue;
-                    sAlong = sForced;
-                }
+                const float sAlong = 1000.0f * static_cast<float>(j);
                 if (FInPathSpan(rec, sAlong)) continue;
                 glm::vec3 posCand(0.0f), dir(1.0f, 0.0f, 0.0f);
                 EvalCrvS(pcrv, sAlong, &posCand, &dir);
+                if (static const bool s_f4 = std::getenv("SLY2N_SPAWNDEBUG") && std::atoi(std::getenv("SLY2N_SPAWNDEBUG")) >= 4; s_f4)
+                    std::fprintf(stderr, "   path %d point %d at %.0f %.0f %.0f dir %.3f %.3f %.3f\n", src.oid, j, posCand.x, posCand.y, posCand.z, dir.x, dir.y, dir.z);
                 const float s = DistXY(pos, posCand);
                 if (s < 1500.0f || sBest < s) continue;
                 const bool fOpposite = glm::dot(g_cm.mat[0], dir) < 0.0f;
@@ -476,6 +480,14 @@ void UpdateSpawner(LO* p)
     if (g_fSpawnersPaused) return;
     if (p->tNextUpdate <= g_clock.t) HandleLoSpliceEvent(p, 1, true, 0, nullptr);
     SPAWNER& sp = Spawner(p);
+    // (Sly 3 orig3 0x1992D8: the current player of class 0x45 (Sly 3's id) lets every slot go (0x19A030) and
+    // spawns nothing)
+    if (LO* pme = PloPoCurrent(g_psw); pme && FCidDerivedFrom(pme->Cid(), 0x45))
+    {
+        for (SLOT& slot : sp.aslot)
+            if (slot.plo) ReleaseSlot(sp, slot, 0, false);
+        return;
+    }
     const glm::vec3 pos = PosCenter();
     CheckSlots(sp, pos);
     if (g_clock.t < sp.tNext) return;
@@ -489,7 +501,8 @@ void UpdateSpawner(LO* p)
     if (ptrec)
     {
         if (sp.nMode == 0) return;
-        if (sp.nMode == 1 && 10.0f < g_clock.t - ptrec->t0) return;
+        // (Sly 3 orig3 0x1992D8: mode 1 within 2 s of the pursuit (Sly 2: 10 s), mode 2 spawns on)
+        if (sp.nMode == 1 && 2.0f < g_clock.t - ptrec->t0) return;
     }
     // (a record with one guard: that guard's slot is not taken, 0x173E78's second argument)
     const LO* ploExcept = ptrec && ptrec->apguard.size() == 1 && ptrec->apguard[0] ? ptrec->apguard[0]->palo : nullptr;
@@ -534,11 +547,12 @@ void UpdateSpawner(LO* p)
                      plo->Cid(), psrc->oid, psrc->kind, posSpawn.x, posSpawn.y, posSpawn.z, g_clock.t, fFlip, matSpawn[0].x, matSpawn[0].y,
                      g_cm.mat[0].x, g_cm.mat[0].y, g_cm.mat[0].z);
     pslot->plo = plo;
+    pslot->pproxy = PproxyOfInstance(plo);
     pslot->tTime = g_clock.t;
     pslot->psrc = psrc;
     ++sp.cUsed;
     psrc->fBusy = true;
-    sp.tNext = g_clock.t + 2.5f;
+    sp.tNext = std::max(sp.tNext, g_clock.t + sp.dtDelay);  // (Sly 3: +0x98, 2.5 in the data seen)
     CRef ref;
     ref.SetBasic(plo);
     HandleLoSpliceEvent(p, 0x19, false, 1, &ref);  // its script: the new guard
@@ -576,6 +590,8 @@ void StartSpawner(SW* psw, LO* plo)
 {
     SPAWNER& sp = Spawner(plo);
     sp.sPlanar = G(plo, 0x80, 5500.0f);
+    sp.sCameraMax = G(plo, 0xA8, 3.4028235e38f);  // (Sly 3 option 1504, no Sly 2 twin: stored at Sly 3's offset)
+    sp.dtDelay = G(plo, 0x98, 2.5f);
     sp.fEdge = N(plo, 0x84, 1);
     sp.fRange = N(plo, 0x88, 1);
     sp.fOcclusion = N(plo, 0x8C, 1);
@@ -600,8 +616,8 @@ void StartSpawner(SW* psw, LO* plo)
         }
     }
     if (std::getenv("SLY2N_SPAWNDEBUG"))
-        std::fprintf(stderr, "spawner %d: %zu sources, %zu proxies, %zu points, %zu slots\n", plo->oid, sp.asrc.size(),
-                     sp.aoidProxy.size(), sp.apos.size(), sp.aslot.size());
+        std::fprintf(stderr, "spawner %d: %zu sources, %zu proxies, %zu points, %zu slots, mode %d, camera range %g, delay %g\n", plo->oid, sp.asrc.size(),
+                     sp.aoidProxy.size(), sp.apos.size(), sp.aslot.size(), sp.nMode, sp.sCameraMax, sp.dtDelay);
     sp.aproxy.clear();
     for (OID oid : sp.aoidProxy)
         if (std::getenv("SLY2N_SPAWNDEBUG") && !PloFindSwObjectByOid(psw, oid)) std::fprintf(stderr, "spawner %d: proxy %d not found\n", plo->oid, oid);

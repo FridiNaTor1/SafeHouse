@@ -55,6 +55,8 @@ enum PTX : int
     PTX_AutoCameraRotation, PTX_HelpAutoCameraRotation,
     // Exit to Desktop when started from SafeHouse's Collection Style Launcher (SAFEHOUSE_LAUNCHER=collection)
     PTX_QuitToLauncher,
+    // (settings v22, platform/monitor_select.h) the Video menu's Monitor, its default, a chosen monitor that is unplugged
+    PTX_Monitor, PTX_Primary, PTX_MonitorNotConnected,
     PTX_Max
 };
 // Started from SafeHouse's Collection Style Launcher: the pause menu says Quit to Launcher (quitting returns to it).

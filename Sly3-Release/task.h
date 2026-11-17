@@ -132,7 +132,7 @@ bool FDebugCompleteJob();  // (debug key F9: the current job completed through t
 float GSuck();  // orig 0x00154C90: the dynamic difficulty (0 .. 1), task.cpp
 void ApplyCheckpointTasks(SW* psw, LO* pchk, const std::vector<std::pair<OID, int>>& aent);  // orig 0x00161F48
 int NTaskStateOid(OID oid, bool* pfDone);  // a task's state +0x54 (-2: none) and done (0x164030)
-void RequestTaskStartByOid(SW* psw, const uint8_t* pchk, OID oidTask);  // orig 0x001651D8
+void RequestTaskStartByOid(SW* psw, const uint8_t* pchk, OID oidTask, OID oidWipe = -1);  // orig 0x001651D8 (Sly 3: 0x189F38's wipe)
 int NTasksPercentDone(SW* psw);              // orig 0x00161660
 void EndWorldTasks(SW* psw);
 void EndJob(SW* psw, JOB* pjob);             // orig 0x00162E38                 // orig 0x0020E068's part: the broadcast 1, an ended job restarted

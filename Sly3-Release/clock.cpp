@@ -3,6 +3,8 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdio>
+#include <cstdlib>
 
 CLOCK g_clock;
 float g_dtFixedStep = 0.0f;
@@ -26,7 +28,7 @@ void UpdateClockRate(CLOCK* pclock)
 }
 }
 
-// orig 0x0014D068 (the factors 0, 1, 2, 4, 5, 6, 7, 8 back to 1; factor 3 keeps its value)
+// orig 0x0014D068 (the factors 0, 1, 2, 4, 5, 6, 7, 8 back to 1; factor 3 keeps its value) (orig3: 0x1653E0, the same C in the Sly 3 decomp)
 void ResetClock(CLOCK* pclock)
 {
     pclock->t = 0.0f;
@@ -34,14 +36,16 @@ void ResetClock(CLOCK* pclock)
     UpdateClockRate(pclock);
 }
 
-// orig 0x0014D1D0
+// orig 0x0014D1D0 (orig3: 0x165548, the same C in the Sly 3 decomp)
 void SetClockFactor(CLOCK* pclock, int i, float g)
 {
+    if (static const bool s_f = std::getenv("SLY3_CLOCKPRINT") != nullptr; s_f && pclock->af[i] != g)
+        std::printf("clock: factor %d %.3f -> %.3f t %.3f\n", i, pclock->af[i], g, pclock->t);
     pclock->af[i] = g;
     UpdateClockRate(pclock);
 }
 
-// orig 0x0014D0B8 UpdateClock
+// orig 0x0014D0B8 UpdateClock (orig3: 0x165430, the same C in the Sly 3 decomp)
 void UpdateClock(CLOCK* pclock, bool fPaused)
 {
     const uint64_t tick = TickNow();
@@ -60,4 +64,6 @@ void UpdateClock(CLOCK* pclock, bool fPaused)
     }
     pclock->tick = tick;
     pclock->t3C += pclock->dt40;
+    if (static const bool s_f = std::getenv("SLY3_CLOCKPRINT") != nullptr; s_f)   // (debug)
+        std::printf("clock: t %.6f dt %.8f rDt %.6f af6 %.6f\n", pclock->t, pclock->dt, pclock->rDt, pclock->af[6]);
 }

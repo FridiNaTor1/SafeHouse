@@ -28,6 +28,15 @@ void InitGauges3(SW* psw);     // after a world load (the HUD's init)
 // every frame (the HUD's update): player the current one (hudwidget.cpp PloPlayerPo: none under the title)
 void UpdateGauges3(SW* psw, LO* player);
 void ResetGauges3();           // the world released
+// (s3-plane) a gauge's player (its parent actor, or the SO whose EOPID 948 names it: the planes), null none; the gauge of a
+// player (null none); a gauge given to another player (null: none; the player's other gauge released)
+LO* PloGaugePlayer3(LO* plo);
+LO* PloGaugeOf3(LO* player);
+void SetGaugeOwner3(LO* plo, LO* player);
+// (PC, split screen's teams: views 3 / 4 draw band 1 / 2 of the 2P HUD, whose gauges are players 1 / 2's) before view
+// iview's HUD pass: the band's gauge shows view iview's player (a copy of Sly / Carmelita: its own health / power,
+// smoothed as the gauge does); iview -1 after the pass: the gauges' own values again
+void ApplyViewGauges3(SW* psw, int iview);
 // the gauge shown for this player (its class-0xA3 child), none for null (orig3 0x1F4548: a pad took / left the player)
 void SetGaugePlayer3(LO* player);
 // (interim) true: the gauge follows the current player each frame (none under the title or the card dialog). The player
@@ -37,3 +46,25 @@ extern bool g_fGaugeFollowsPlayer3;
 // The coin counter (class 0xA7, vtable 0x366F48: m_ext's 1048, script string 812 "%d": orig3 0x26A1F8 / 0x25F0E8)
 void UpdateCoins3(SW* psw);           // every frame (the HUD's update)
 int CCoinsShown3(const LO* plo);      // the count it shows (+0x120); the save's coins for another object
+
+// The HUD notice (the script command 0x1C, orig3 widget D_0046FD00: gauge3.cpp): the script hooks and its update
+void InstallNotice3();
+void UpdateNotice3();
+bool FNoticeShown3();
+// The 3-D question (s3-3d, 2026-11-12): the notice n 1 is the "play with the red/blue 3-D glasses?" choice (text 151, its
+// answers 152 "No 3-D for me right now" (triangle: 0) / 153 "Yes, Bring on the 3-D!" (square: -1, the world's own mode)).
+// The answer, orig3 D_0036DBA4 (GAME 0x36C700 +0x14A4; also the pause menu's 3-D resets 0x1D54A0, -1 again at a job's
+// close 0x187270), is read only by the next world load (0x14FA38: 0 forces the normal view, -1 keeps the world's entry
+// table mode, 1 the 3-D (anaglyph) mode). The PC never asks: the notice is answered No at once and never shown, and the
+// anaglyph mode is never chosen (sw.cpp NScreenModeFromPrefix3). SLY3_ASK3D=1 shows the original question (testing:
+// either answer gives the normal view).
+extern int g_n3dChoice3;   // orig3: D_0036DBA4
+bool FAsk3d3();            // SLY3_ASK3D=1
+
+// (s3-hack) Sly 3 EOPID 948 (the SO's +0x168): the SO's gauge (h_hack's ships name theirs; the gauge's player then)
+void SetSoGauge3(LO* pso, LO* pgauge);
+LO* PloSoGauge3(const LO* pso);
+// (s3-hack, PC 3 / 4 player hacking game) the two-player gauges' players are split3's seats (up to 4); a gauge moved by
+// (u, v) canvas units from where it is authored (its root, SetScreenObjRootXY at scale 1) into its player's corner;
+// fOn false: where authored (the original's two players)
+void SetGaugeSlot3(LO* pgauge, bool fOn, float u, float v);

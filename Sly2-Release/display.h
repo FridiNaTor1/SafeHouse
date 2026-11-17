@@ -40,6 +40,9 @@ struct DISPLAY
     int frameRate = 60;         // the frame-rate cap (>= 30; DISP_FRAMERATE_UNCAPPED and above: none)
     float drawDistance = 1.0f;  // multiplies the distance limits (MRD), 0.75 .. 3; above 1x also drawdist.h (visual only)
     DISPWINDOW window = DISPWINDOW_Windowed;
+    // (settings v22, platform/monitor_select.h) the monitor Fullscreen / Borderless fill and Windowed opens on: "" Primary,
+    // else "<name> | <n> | <x>,<y>"; not connected: the primary one. Desktop only (the menus hide it elsewhere and in VR).
+    std::string monitor;
     bool fVsync = false;
     // Native QoL, always on (not in Settings.ini; the launcher dropped its toggle 2026-11-05; --wide-backgrounds 0 or
     // SLY2N_WIDEBG=0 turns it off): the 2D's full-screen backgrounds
@@ -76,6 +79,7 @@ struct DISPLAY
     // The swap (ApplyDisplaySettings): VSync gates the frames at the cap (the pacer then runs 1 % fast, so only the
     // swap gates: platform/frame_pacer.h), and a generation that changes with the swap's configuration
     bool fSwapPacesFrames = false;
+    int displayFps = 0;           // (iOS) the display link's rate while the display paces the frames (game.cpp)
     unsigned swapGeneration = 0;
 
     // Layout (LayoutDisplay)
@@ -131,6 +135,9 @@ void MigrateSaveOptions(const cane::settings::SaveOptionValues& values);
 void LayoutDisplay(int outputWidth, int outputHeight);
 // Window mode, swap interval and layout for the current options (call after the window exists).
 void ApplyDisplaySettings(GLFWwindow* window);
+// (every frame) a monitor connected or unplugged since the window mode was applied: applied again (the chosen monitor,
+// else the primary one; platform/monitor_select_glfw.h)
+void UpdateDisplayMonitors(GLFWwindow* window);
 // Installs the framebuffer-size callback (LayoutDisplay).
 void InstallDisplayCallbacks(GLFWwindow* window);
 

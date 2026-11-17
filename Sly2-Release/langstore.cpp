@@ -7,15 +7,19 @@
 #include "flacfile.h"
 #include "hud.h"
 #include "porttext.h"
+#include "../platform/sly2_action_bindings.h"
 #include "promptglyph.h"
 #include "region.h"
 #include "screenobj.h"
+#include "sm.h"
+#include "worldaccess.h"
 #include "sw.h"
 #include "textmod.h"
 #include "wavfile.h"
 
 #include "../platform/platform.h"
 #include "../platform/sly2_settings.h"
+#include "../platform/sly3_settings.h"
 
 #include <nlohmann/json.hpp>
 
@@ -56,7 +60,8 @@ struct LANGPACK
     std::string source;                 // "USA", "Europe v2.01", "Japan", "PS3", "" (user-made)
     std::string textFrom, voiceFrom;    // fallbacks (folder names)
     bool fTextFromExplicit = false;
-    bool fWide = false;                 // its text needs the Japanese font
+    bool fWide = false;                 // its text needs a 16-bit font (Japanese or Korean script)
+    int script = SCRIPT_Latin;          // (langstore.h) the font its text needs: the Japanese disc's or the Korean disc's
     std::vector<fs::path> adir;         // the store's folder, then the mods' (later ones win)
     bool fText = false;                 // has Text.json
     std::map<int, uint32_t> mpline;     // USA line id -> external sector
@@ -68,13 +73,22 @@ struct LANGPACK
     std::vector<fs::path> adirMod;
     bool fTextModLoaded = false;
     std::unordered_map<int, std::string> mptextMod;
+    std::unordered_map<std::string, std::unordered_map<int, std::string>> mpworldMod;
+    std::unordered_map<std::string, std::string> mpportMod;
     // the strings, loaded at first use
     bool fTextLoaded = false;
     std::unordered_map<int, std::string> mptext;  // USA id -> UTF-8
+    std::unordered_map<std::string, std::unordered_map<int, std::string>> mpworld;   // "worlds": a world's own
+    std::unordered_map<std::string, std::string> mpport;   // "port": the port's own strings (porttext.h) by row name
     // Font.bin, loaded at first use (s_mtxFont)
     bool fFontTried = false;
     std::shared_ptr<SELEM> pfont;
 };
+
+// the script of a language.json "script" ("" / unknown: latin)
+int ScriptOfName(const std::string& name) { return name == "japanese" ? SCRIPT_Japanese : name == "korean" ? SCRIPT_Korean : SCRIPT_Latin; }
+// a game language's script when its language.json does not say
+int ScriptOfLang(int lang) { return lang == LANG_Korean ? SCRIPT_Korean : lang == LANG_Japanese || lang == LANG_Chinese ? SCRIPT_Japanese : SCRIPT_Latin; }
 
 std::vector<LANGPACK> s_apack;
 std::vector<int> s_alangOffered;
@@ -300,7 +314,7 @@ std::string Utf8OfLatin1Bytes(const std::string& s)
 // slot with Square; the other builds with Cross, Triangle and Circle (region.h BtnMenuConfirm). A language taken from
 // a disc of the other convention names the buttons of the disc that is played. (Found by comparing the button
 // glyphs of every USA and Japanese string: these are the ones that differ by the convention.)
-constexpr int s_aidMenuButtons[] = {0x25, 0x26, 0x27, 0x28, 0x29, 0x2D, 0x31, 0x34, 0x6C, 0xDA, 0xDB, 0xE1, 0xE2,
+constexpr int s_aidMenuButtons[] = {0x25, 0x26, 0x27, 0x28, 0x29, 0x2D, 0x31, 0x34, 0x56, 0x6C, 0xDA, 0xDB, 0xE1, 0xE2,
                                     0x131, 0x132, 0x133, 0x134, 0x29F, 0xCAB};
 void MenuButtonGlyphs(int idUsa, std::string& str, bool fToJapan)
 {
@@ -333,14 +347,15 @@ std::string StrToDisc(const std::string& utf8, bool fWidePack)
     return StrFoldLatin(utf8);
 }
 
-// A Japanese-script pack's font: its own Font.bin (a mod's over the store's), else the "Japanese" folder's (a text
-// variant made for the same font). Loaded at first use; nullptr: none.
+// A Japanese- or Korean-script pack's font: its own Font.bin (a mod's over the store's), else the "Japanese" /
+// "Korean" folder's (a text variant made for the same font). Loaded at first use; nullptr: none.
 const SELEM* PfontOfPack(LANGPACK& p)
 {
     std::lock_guard<std::mutex> lock(s_mtxFont);
-    for (LANGPACK* pp : {&p, p.key == "Japanese" ? static_cast<LANGPACK*>(nullptr) : PpackOfKey("Japanese")})
+    const char* szBase = p.script == SCRIPT_Korean ? "Korean" : "Japanese";
+    for (LANGPACK* pp : {&p, p.key == szBase ? static_cast<LANGPACK*>(nullptr) : PpackOfKey(szBase)})
     {
-        if (!pp || !pp->fWide) continue;
+        if (!pp || !pp->fWide || pp->script != p.script) continue;
         if (!pp->fFontTried)
         {
             pp->fFontTried = true;
@@ -361,22 +376,45 @@ bool FTextHasWide(const std::unordered_map<int, std::string>& mp)
     return false;
 }
 
-void LoadPackText(LANGPACK& p)
+// A Text.json's "strings", "worlds" (a world's own, by its name as the installation's folders have it) and "port"
+// (the port's own strings by row name, porttext.h) over what the maps have (later folders win).
+void ReadTextJson(const fs::path& dir, std::unordered_map<int, std::string>& mptext,
+                  std::unordered_map<std::string, std::unordered_map<int, std::string>>& mpworld,
+                  std::unordered_map<std::string, std::string>& mpport)
 {
-    if (p.fTextLoaded) return;
-    p.fTextLoaded = true;
-    for (const fs::path& dir : p.adir)
-    {
-        const json j = JsonRead(dir / "Text.json");
-        if (!j.is_object() || !j.contains("strings")) continue;
-        for (const auto& [k, v] : j.at("strings").items())
+    const json j = JsonRead(dir / "Text.json");
+    if (!j.is_object()) return;
+    auto ids = [](const json& o, std::unordered_map<int, std::string>& mp) {
+        if (!o.is_object()) return;
+        for (const auto& [k, v] : o.items())
         {
             char* end = nullptr;
             const long id = std::strtol(k.c_str(), &end, 0);
             if (k.empty() || *end || !v.is_string()) continue;
-            p.mptext[int(id)] = v.get<std::string>();
+            mp[int(id)] = v.get<std::string>();
         }
-    }
+    };
+    if (j.contains("strings")) ids(j.at("strings"), mptext);
+    if (j.contains("worlds") && j.at("worlds").is_object())
+        for (const auto& [name, o] : j.at("worlds").items()) ids(o, mpworld[name]);
+    if (j.contains("port") && j.at("port").is_object())
+        for (const auto& [k, v] : j.at("port").items())
+            if (v.is_string()) mpport[k] = v.get<std::string>();
+}
+
+void LoadPackText(LANGPACK& p)
+{
+    if (p.fTextLoaded) return;
+    p.fTextLoaded = true;
+    for (const fs::path& dir : p.adir) ReadTextJson(dir, p.mptext, p.mpworld, p.mpport);
+}
+
+// The mods folder's Mods/Languages/<key>/Text.json of a disc language (over the disc's own)
+void LoadPackTextMod(LANGPACK& p)
+{
+    if (p.fTextModLoaded) return;
+    p.fTextModLoaded = true;
+    for (const fs::path& dir : p.adirMod) ReadTextJson(dir, p.mptextMod, p.mpworldMod, p.mpportMod);
 }
 
 // The pack a language's text / voice comes from, following the fallbacks (nullptr: the disc's own)
@@ -418,7 +456,8 @@ void InitLanguageStore()
             if (e.is_directory(ec) && cane::utf8(e.path().filename())[0] != '.') mpkeydir[cane::utf8(e.path().filename())].push_back(e.path());
     };
     if (!g_disc.DirLanguages().empty()) scan(cane::path(g_disc.DirLanguages()));
-    if (!g_disc.DirMods().empty()) scan(cane::path(g_disc.DirMods()) / "Languages");
+    // (every mod folder: the packages' files/, the loose folder; lowest priority first, so later ones win)
+    for (const std::string& root : g_disc.AdirModRoots()) scan(cane::path(root) / "Languages");
     int langCustom = LANG_Max;
     for (const auto& [key, adir] : mpkeydir)
     {
@@ -439,14 +478,17 @@ void InitLanguageStore()
                 p.source = j.value("source", p.source);
                 if (j.contains("text")) { p.textFrom = j.value("text", ""); p.fTextFromExplicit = true; }
                 p.voiceFrom = j.value("voice", p.voiceFrom);
-                if (j.contains("script")) p.fWide = j.value("script", "") == "japanese";
-                else if (p.lang == LANG_Japanese || p.lang == LANG_Korean || p.lang == LANG_Chinese) p.fWide = true;
+                if (j.contains("script")) p.script = ScriptOfName(j.value("script", ""));
+                else if (p.lang < LANG_Max) p.script = ScriptOfLang(p.lang);
             }
-            else if (p.lang == LANG_Japanese || p.lang == LANG_Korean || p.lang == LANG_Chinese) p.fWide = true;
+            else if (p.lang < LANG_Max) p.script = ScriptOfLang(p.lang);
+            p.fWide = p.script != SCRIPT_Latin;
             std::error_code ec;
             if (fs::is_regular_file(dir / "Text.json", ec)) p.fText = true;
             // the dialog lines: any file named by its line id under Dialog/ (later folders win)
-            const bool fMod = !g_disc.DirMods().empty() && cane::utf8(dir.parent_path().parent_path()) == cane::utf8(cane::path(g_disc.DirMods()));
+            bool fMod = false;
+            for (const std::string& root : g_disc.AdirModRoots())
+                if (cane::utf8(dir.parent_path().parent_path()) == cane::utf8(cane::path(root))) fMod = true;
             if (fMod) p.adirMod.push_back(dir);
             if (fs::is_directory(dir / "Dialog", ec))
                 for (auto it = fs::recursive_directory_iterator(dir / "Dialog", fs::directory_options::skip_permission_denied, ec);
@@ -543,8 +585,8 @@ LANGPACK* PpackTextShown()
     if (FLanguageOnDisc(g_nLang)) return nullptr;
     LANGPACK* p = PpackText(PpackOfLang(g_nLang));
     if (!p) return nullptr;
-    // (Japanese text: the Japanese disc's fonts have the glyphs; the other discs need the language's Font.bin)
-    if (p->fWide && !FWideText() && !PfontOfPack(*p)) return nullptr;
+    // (Japanese / Korean text: that disc's fonts have the glyphs; the other discs need the language's Font.bin)
+    if (p->fWide && p->script != DiscScript() && !PfontOfPack(*p)) return nullptr;
     return p;
 }
 }  // namespace
@@ -558,21 +600,29 @@ bool FLangStoreHasVoices(int lang)
 
 bool FLangStoreVoicesOnly(int lang)
 {
-    if (FWideText() || FLanguageOnDisc(lang)) return false;
+    if (FLanguageOnDisc(lang)) return false;
     LANGPACK* p = PpackText(PpackOfLang(lang));
-    return p && p->fWide && !PfontOfPack(*p);
+    return p && p->fWide && p->script != DiscScript() && !PfontOfPack(*p);
 }
 
 void LatchLanguageStoreText()
 {
     const SELEM* pset = nullptr;
-    if (!FWideText() && !g_plangcapture)
-        if (LANGPACK* p = PpackTextShown(); p && p->fWide) pset = PfontOfPack(*p);
+    if (!g_plangcapture)
+        if (LANGPACK* p = PpackTextShown(); p && p->fWide && p->script != DiscScript()) pset = PfontOfPack(*p);
     s_psetFontShown = pset;
     SetStoreWideChars(pset != nullptr);
 }
 
-const SELEM* PsetLanguageStoreFont() { return FWideText() ? nullptr : s_psetFontShown.load(); }
+const SELEM* PsetLanguageStoreFont() { return s_psetFontShown.load(); }
+
+int DiscScript() { return g_disc.Region() == DISCREGION::Japan ? SCRIPT_Japanese : g_disc.Region() == DISCREGION::Korea ? SCRIPT_Korean : SCRIPT_Latin; }
+
+int ScriptOfTextShown()
+{
+    if (const LANGPACK* p = PpackTextShown()) return p->script;
+    return FWideText() ? DiscScript() : SCRIPT_Latin;
+}
 
 bool FStoreTextShown() { return PpackTextShown() != nullptr; }
 int LangStoreTextLanguage()
@@ -586,6 +636,57 @@ bool FStoreTextWide()
     return p && p->fWide;
 }
 
+const std::unordered_map<std::string, std::string>* PmpPortTextShown()
+{
+    if (s_apack.empty()) return nullptr;
+    LANGPACK* p = nullptr;
+    const bool fDisc = FLanguageOnDisc(g_nLang);
+    if (fDisc) p = PpackOfLang(g_nLang);
+    else p = PpackTextShown();
+    if (!p) return nullptr;
+    std::lock_guard<std::mutex> lock(s_mtx);
+    if (fDisc)
+    {
+        if (p->adirMod.empty()) return nullptr;
+        LoadPackTextMod(*p);
+        return p->mpportMod.empty() ? nullptr : &p->mpportMod;
+    }
+    LoadPackText(*p);
+    return p->mpport.empty() ? nullptr : &p->mpport;
+}
+
+int LangPortBase(int lang)
+{
+    if (lang >= 0 && lang < CLANG_PORT) return lang;
+    const LANGPACK* p = PpackOfLang(lang);
+    for (int i = 0; p && i < 8; ++i)
+    {
+        if (p->lang >= 0 && p->lang < CLANG_PORT) return p->lang;
+        // (its language.json "text" (the language its text is based on), its "code", its folder's base name:
+        // "English (UK)", "French (Québec)")
+        if (p->fTextFromExplicit)
+            if (const int l = LangOfGameName(p->textFrom); l >= 0 && l < CLANG_PORT) return l;
+        for (int l = 0; l < CLANG_PORT; ++l)
+            if (!p->code.empty() && (p->code == s_aszIso[l] || (l == LANG_Norwegian && (p->code == "nb" || p->code == "nn")))) return l;
+        if (const int l = LangOfGameName(p->key.substr(0, p->key.find(" ("))); l >= 0 && l < CLANG_PORT) return l;
+        if (!p->fTextFromExplicit || p->textFrom.empty()) break;
+        p = PpackOfKey(p->textFrom);
+    }
+    return LANG_English;
+}
+
+namespace
+{
+// The "worlds" entry of the world being loaded (textmod.h g_isectorWorldLoading), nullptr: none
+const std::unordered_map<int, std::string>* PmpWorldOwn(const std::unordered_map<std::string, std::unordered_map<int, std::string>>& mpworld)
+{
+    if (mpworld.empty()) return nullptr;
+    const std::string world = g_disc.SzWorldName(g_isectorWorldLoading);
+    const auto it = world.empty() ? mpworld.end() : mpworld.find(world);
+    return it == mpworld.end() ? nullptr : &it->second;
+}
+}  // namespace
+
 void ApplyLanguageStoreText(std::vector<std::pair<int, std::string>>& atext, bool fDiscMods)
 {
     if (s_apack.empty() || fDiscMods != FLanguageOnDisc(g_nLang)) return;
@@ -595,24 +696,17 @@ void ApplyLanguageStoreText(std::vector<std::pair<int, std::string>>& atext, boo
         // (a disc language: only the mods folder's Mods/Languages/<key>/Text.json over the disc's own)
         LANGPACK* pm = PpackOfLang(g_nLang);
         if (!pm || pm->adirMod.empty()) return;
-        if (!pm->fTextModLoaded)
-        {
-            pm->fTextModLoaded = true;
-            for (const fs::path& dir : pm->adirMod)
-            {
-                const json j = JsonRead(dir / "Text.json");
-                if (!j.is_object() || !j.contains("strings")) continue;
-                for (const auto& [k, v] : j.at("strings").items())
-                {
-                    char* end = nullptr;
-                    const long id = std::strtol(k.c_str(), &end, 0);
-                    if (!k.empty() && !*end && v.is_string()) pm->mptextMod[int(id)] = v.get<std::string>();
-                }
-            }
-        }
-        const bool fWide = FWideText() && g_nLang == LANG_Japanese;
+        LoadPackTextMod(*pm);
+        const bool fWide = FWideText() && (g_nLang == LANG_Japanese || g_nLang == LANG_Korean);
+        const auto itWorld = PmpWorldOwn(pm->mpworldMod);
         for (auto& [id, str] : atext)
-            if (const auto it = pm->mptextMod.find(IdTextUsa(id)); IdTextUsa(id) >= 0 && it != pm->mptextMod.end()) str = StrToDisc(it->second, fWide);
+        {
+            const int idUsa = IdTextUsa(id);
+            if (idUsa < 0) continue;
+            if (itWorld)
+                if (const auto it = itWorld->find(idUsa); it != itWorld->end()) { str = StrToDisc(it->second, fWide); continue; }
+            if (const auto it = pm->mptextMod.find(idUsa); it != pm->mptextMod.end()) str = StrToDisc(it->second, fWide);
+        }
         return;
     }
     LANGPACK* p = PpackTextShown();
@@ -624,16 +718,24 @@ void ApplyLanguageStoreText(std::vector<std::pair<int, std::string>>& atext, boo
     const bool fFoldRest = FWideChars() && !FWideText();
     // (the menus' button lines of a language from a disc of the other button convention)
     const std::string familyPack = RegionFamily(p->source);
-    const bool fJapanDisc = g_disc.Region() == DISCREGION::Japan;
-    const bool fButtons = !familyPack.empty() && (familyPack == "Japan") != fJapanDisc &&
-                          (familyPack == "Japan" || familyPack == "USA" || familyPack == "Europe");
+    const bool fJapanDisc = g_disc.FJapaneseBuild();
+    const bool fJapanPack = familyPack == "Japan" || familyPack == "Korea";   // (the Korean build: the Japanese buttons)
+    const bool fButtons = !familyPack.empty() && fJapanPack != fJapanDisc &&
+                          (fJapanPack || familyPack == "USA" || familyPack == "Europe");
+    const auto* pmpWorld = PmpWorldOwn(p->mpworld);
     for (auto& [id, str] : atext)
     {
         const int idUsa = IdTextUsa(id);
-        const auto it = idUsa < 0 ? p->mptext.end() : p->mptext.find(idUsa);
-        if (it != p->mptext.end())
+        const std::string* pstr = nullptr;
+        if (idUsa >= 0)
         {
-            str = StrToDisc(it->second, fWide);
+            if (const auto it = p->mptext.find(idUsa); it != p->mptext.end()) pstr = &it->second;
+            if (pmpWorld)
+                if (const auto it = pmpWorld->find(idUsa); it != pmpWorld->end()) pstr = &it->second;
+        }
+        if (pstr)
+        {
+            str = StrToDisc(*pstr, fWide);
             if (fButtons) MenuButtonGlyphs(idUsa, str, fJapanDisc);
         }
         else if (fFoldRest) str = StrFoldLatin(Utf8OfLatin1Bytes(str));
@@ -703,7 +805,7 @@ int ListLanguagesCommand()
             j["text"] = p->fText;
             j["voice"] = !p->mpline.empty();
             j["movies"] = !p->mpmovie.empty();
-            // (Japanese script: its text shows on this disc; false: voices only, the Font.bin is missing)
+            // (Japanese / Korean script: its text shows on this disc; false: voices only, the Font.bin is missing)
             if (p->fWide) j["text_shown"] = !FLangStoreVoicesOnly(lang);
             if (!p->source.empty()) j["source"] = p->source;
         }
@@ -732,12 +834,14 @@ struct CAPTURE : LANGCAPTURE
         if (idUsa >= 0) mptext[lang].emplace(idUsa, str);
     }
     void Dialog(int lang, int id, const FK&, float tLength) override { mplength[lang].emplace(id, tLength); }
-    // the Japanese disc's text font: the worlds' font sets with the kana (not the button icons' set), every glyph once
+    // the Japanese disc's text font: the worlds' font sets with the kana (not the button icons' set), every glyph once;
+    // the Korean disc's: the sets with the jamo (U+1100: its syllables are drawn from them, region.h CHangulJamo)
     std::map<uint32_t, std::pair<float, SELEM>> mpglyph;
     int cglyphOther = 0;   // glyphs that are not vector sprites (none on the disc)
     void Font(const SELEM& set) override
     {
-        if (std::find(set.aul.begin(), set.aul.end(), 0x3042u) == set.aul.end()) return;   // (no "あ": not the text font)
+        if (std::find(set.aul.begin(), set.aul.end(), 0x3042u) == set.aul.end() && std::find(set.aul.begin(), set.aul.end(), 0x1100u) == set.aul.end())
+            return;   // (no "あ" / "ᄀ": not the text font)
         for (std::size_t i = 0; i < set.aul.size() && i < set.ag.size() && i + 1 < set.asub.size(); ++i)
         {
             if (mpglyph.count(set.aul[i])) continue;
@@ -918,17 +1022,18 @@ int ImportLanguagesCommand(const LANGIMPORT& o)
                 lj = json::object();
                 lj["name"] = d.keyText == d.key ? s_aszNative[d.lang] : d.keyText;
                 lj["code"] = s_aszIso[d.lang];
-                lj["script"] = d.lang == LANG_Japanese || d.lang == LANG_Korean || d.lang == LANG_Chinese ? "japanese" : "latin";
+                lj["script"] = ScriptOfLang(d.lang) == SCRIPT_Korean ? "korean" : ScriptOfLang(d.lang) == SCRIPT_Japanese ? "japanese" : "latin";
                 lj["source"] = disc;
                 if (d.keyText != d.key) lj["voice"] = d.key;
                 FWriteJson(dirText / "language.json", lj);
             }
         }
-        // the Japanese disc's text font (the USA / European discs show the language's text with it)
-        if (d.lang == LANG_Japanese && FWideText() && !cap.mpglyph.empty() && (o.fReplace || !fs::is_regular_file(dirText / "Font.bin", ec)))
+        // the Japanese / Korean disc's text font (the other discs show the language's text with it)
+        if ((d.lang == LANG_Japanese || d.lang == LANG_Korean) && ScriptOfLang(d.lang) == DiscScript() && !cap.mpglyph.empty() &&
+            (o.fReplace || !fs::is_regular_file(dirText / "Font.bin", ec)))
         {
             if (!FWriteBytes(dirText / "Font.bin", AbFontFile(cap.mpglyph))) { std::fprintf(stderr, "import-languages: cannot write %s\n", cane::utf8(dirText / "Font.bin").c_str()); return 1; }
-            std::printf("import-languages: the Japanese font: %zu characters%s\n", cap.mpglyph.size(), cap.cglyphOther ? " (some glyphs skipped)" : "");
+            std::printf("import-languages: the %s font: %zu characters%s\n", s_aszGameName[d.lang], cap.mpglyph.size(), cap.cglyphOther ? " (some glyphs skipped)" : "");
             ++cwritten;
         }
         // the dialog lines (by USA id) and their lengths
@@ -1200,6 +1305,33 @@ int LanguageSelfTest()
               IdTextJapanOfUsa(0x135) == 0x282 && IdTextJapanOfUsa(0x136) == 0x139 && IdTextJapanOfUsa(0x27F) == 0x283,
           "the Japanese text ids");
     check(StrFoldLatin(Utf8OfLatin1Bytes("Caf\xE9 \xA9 \x93ok\x94")) == "Cafe (C) \"ok\"", "Latin-1 folded for the Japanese font");
+    // the Korean disc (region.h): its text ids, a syllable's jamo, a jamo font's syllables and their advances, the breaks
+    check(IdTextKoreaOfUsa(0x11) == 0x11 && IdTextKoreaOfUsa(0x12) == 0x13 && IdTextKoreaOfUsa(0x19) == 0x1B && IdTextKoreaOfUsa(0x6D) == 0x70 &&
+              IdTextKoreaOfUsa(0x135) == 0x281 && IdTextKoreaOfUsa(0x136) == 0x138 && IdTextKoreaOfUsa(0x27F) == 0x282,
+          "the Korean text ids");
+    {
+        uint32_t aj[3] = {};
+        check(CHangulJamo(0xD55C, aj) == 3 && aj[0] == 0x1112 && aj[1] == 0x1161 && aj[2] == 0x11AB && CHangulJamo(0xAC00, aj) == 2 &&
+                  aj[0] == 0x1100 && aj[1] == 0x1161 && !CHangulJamo(0x41, aj) && FHangulHorizontalVowel(0x1169) && !FHangulHorizontalVowel(0x1161),
+              "a Hangul syllable's jamo");
+        SELEM set;
+        set.kind = SELEMK_Set;
+        set.asub.assign(1, SELEM{});
+        for (const auto& [ch, dx] : {std::pair<uint32_t, float>{0x20, 20.0f}, {0x1100, 40.0f}, {0x1161, 40.0f}, {0x1169, 40.0f}, {0x11AB, 40.0f}, {0x2009, 25.0f}})
+        {
+            set.aul.push_back(ch);
+            set.ag.push_back(dx);
+            SELEM g;
+            g.kind = SELEMK_Sprite;
+            set.asub.push_back(g);
+        }
+        FONTBRX font;
+        font.pset = &set;
+        check(font.DxFromCh(0xAC00) == 40.0f && font.DxFromCh(0xAC04) == 40.0f && font.DxFromCh(0xACE0) == 25.0f && font.DxFromCh(0xD55C) == 40.0f &&
+                  !font.PglyphFromCh(0xAC00),
+              "a jamo font's syllables: the cell's advance, the thin space's under a horizontal vowel");
+        check(FKoreanBreakAfter(' ') && FKoreanBreakAfter(0x3000) && FKoreanBreakAfter('-') && !FKoreanBreakAfter(0xAC00), "the Korean line breaks");
+    }
     // the text's and the voices' languages apart: Settings.ini [Language] (an old file's Language is both)
     {
         namespace st = cane::settings;
@@ -1212,6 +1344,9 @@ int LanguageSelfTest()
         const std::string ini = st::sly2ToIni(mixed);
         check(ini.find("Voices = Japanese") != std::string::npos && st::sly2FromIni(ini).game.voiceLanguage == "Japanese", "Voices written back");
         check(st::sly2ToIni(old).find("Voices = Same As Text") != std::string::npos, "Same As Text written");
+        bool fSly3 = false;
+        for (const auto& k : st::sly3Schema()) fSly3 |= std::string(k.section) == "Language" && std::string(k.key) == "Voices";
+        check(!fSly3, "Sly 3's file has no Voices");
     }
     // the title's language menu sets both (and drops a choice waiting for the next world)
     {
@@ -1230,6 +1365,23 @@ int LanguageSelfTest()
         g_nLangVoice = voiceSave;
         SetPendingLanguages(-2, -2);
     }
+    // the port's strings by name (porttext.h, a language's Text.json "port"): every column has every name once, no empty
+    {
+        const auto aen = PortTextColumn(LANG_English);
+        std::set<std::string> aset;
+        bool fNames = !aen.empty();
+        for (const auto& [name, str] : aen) fNames &= !name.empty() && !str.empty() && aset.insert(name).second;
+        check(fNames && aset.count("HoldToSkip") && aset.count("ExitToDesktop") && aset.count("Action.jump") && aset.count("ActionGroup.Movement"),
+              "the port strings' names");
+        bool fColumns = true;
+        for (int lang = 0; lang < CLANG_PORT; ++lang)
+        {
+            const auto a = PortTextColumn(lang);
+            fColumns &= a.size() == aen.size();
+            for (std::size_t i = 0; fColumns && i < a.size(); ++i) fColumns &= a[i].first == aen[i].first && (!a[i].second.empty() || a[i].first == "ListFirst");
+        }
+        check(fColumns, "every built-in language has every port string");
+    }
     std::printf("language selftest: %d checks, %d failed\n", ccheck, cfail);
     return cfail ? 1 : 0;
 }
@@ -1240,11 +1392,92 @@ int LanguageSelfTest()
 // not shown), when its strings are not the language's, or when a character has no glyph in the font it is drawn
 // with (a square or nothing on screen). Japanese on a USA / European installation: the Font.bin's glyphs.
 
+namespace
+{
+// a character the font can draw: its glyph, or (a jamo font, the Korean build) a Hangul syllable whose jamo it has
+bool FFontHasCh(const SELEM* psetFont, uint32_t ch)
+{
+    if (std::binary_search(psetFont->aul.begin(), psetFont->aul.end(), ch)) return true;
+    uint32_t ajamo[3];
+    const int c = CHangulJamo(ch, ajamo);
+    for (int i = 0; i < c; ++i)
+        if (!std::binary_search(psetFont->aul.begin(), psetFont->aul.end(), ajamo[i])) return false;
+    return c > 0;
+}
+
+// The port's own strings (porttext.h: the rows, the actions and their groups, the PC wording of the game's messages)
+// as the language shows them, each against the text font; the characters that have no glyph (cmissing: how many).
+int CMissingPortGlyphs(const SELEM* psetFont, std::set<uint32_t>& asetMissing, int& cstr)
+{
+    int cnoglyph = 0;
+    auto check = [&](const std::string& str, const char* what, int id) {
+        ++cstr;
+        bool fIcons = false;
+        for (std::size_t i = 0; i < str.size();)
+        {
+            if (str[i] == '&' && i + 1 < str.size() && str[i + 1] != '&') { fIcons = str[i + 1] != '.'; i += 2; continue; }
+            if (str[i] == '&') ++i;
+            std::size_t cb = 1;
+            const uint32_t ch = ChDecode(str, i, &cb);
+            i += cb;
+            if (fIcons || ch == '\n' || ch == '\r' || ch == '\t' || ch == '%') continue;
+            if (FFontHasCh(psetFont, ch)) continue;
+            if (asetMissing.insert(ch).second && asetMissing.size() <= 12)
+            {
+                std::string sz;
+                AppendCh16(sz, ch);
+                std::printf("check-language: no glyph for U+%04X %s (%s %d: %s)\n", ch, sz.c_str(), what, id, Utf8OfGameText(str).c_str());
+            }
+            ++cnoglyph;
+        }
+    };
+    for (int i = 0; i < PTX_Max; ++i) check(StrPort(PTX(i)), "the port's text", i);
+    for (std::size_t i = 0; i < cane::sly2input::kActionCount; ++i) check(StrPortActionName(cane::sly2input::Action(i)), "action", int(i));
+    for (std::size_t i = 0; i < cane::sly2input::kActionCount; ++i) check(StrPortActionGroup(cane::sly2input::kActions[i].group), "action group", int(i));
+    for (int id = 0; id < 0x100; ++id)
+        if (const char* sz = SzPcWording(IdText(id))) check(StrToGameText(sz), "the PC wording of text", id);
+    return cnoglyph;
+}
+}  // namespace
+
 int CheckLanguageCommand(const std::string& key)
 {
     int lang = LangStoreOfKey(key.c_str());
     if (lang < 0) lang = LangOfGameName(key);
     if (lang < 0 || !FLanguageAvailable(lang)) { std::printf("check-language: FAIL: %s is not offered on %s\n", key.c_str(), g_disc.SzDisc()); return 1; }
+    if (FLanguageOnDisc(lang) && FWideText())
+    {
+        // (the Japanese / Korean disc's own language: the world's text is the disc's; the port's own strings in it are
+        // checked against the disc's text font, the boot world's)
+        SetLanguage(lang);
+        InitClasses();
+        FK fk;
+        int filter = 0;
+        std::string err;
+        auto psw = std::make_unique<SW>();
+        std::size_t cbRead = 0, cbFile = 0;
+        if (!FResolveWorld("boot", fk, filter, err) || (psw->filter = filter, !FLoadWorldFile(psw.get(), fk, "", &cbRead, &cbFile)))
+        {
+            std::printf("check-language: FAIL: the boot world did not load\n");
+            return 1;
+        }
+        std::vector<std::shared_ptr<SCREENOBJ>> aso;
+        for (LO* plo : AploOfClass(psw.get(), 0x7E))
+            if (auto pso = static_cast<SPRITESET*>(plo)->pso) aso.push_back(pso);
+        const SELEM* psetFont = nullptr;
+        for (const FONTBRX& f : FindFonts(aso))
+            if (!psetFont || f.pset->aul.size() > psetFont->aul.size()) psetFont = f.pset;
+        if (!psetFont) { std::printf("check-language: FAIL: the boot world has no text font\n"); return 1; }
+        std::set<uint32_t> asetMissing;
+        int cstr = 0;
+        const int cnoglyph = CMissingPortGlyphs(psetFont, asetMissing, cstr);
+        std::printf("check-language: the pause menu's %s / %s reads \"%s\" (%s)\n", "ExitToDesktop", "HoldToSkip", Utf8OfGameText(StrPort(PTX_ExitToDesktop)).c_str(),
+                    Utf8OfGameText(StrPort(PTX_HoldToSkip)).c_str());
+        std::printf("check-language: %s on %s (the disc's own): %d port strings against its text font (%zu glyphs): %d characters without a glyph (%zu different)\n",
+                    key.c_str(), g_disc.SzDisc(), cstr, psetFont->aul.size(), cnoglyph, asetMissing.size());
+        std::printf("check-language: %s\n", cnoglyph == 0 ? "PASS" : "FAIL");
+        return cnoglyph == 0 ? 0 : 1;
+    }
     if (FLanguageOnDisc(lang)) { std::printf("check-language: %s is one of the disc's own languages: nothing to check\n", key.c_str()); return 0; }
     SetLanguage(lang);
     LANGPACK* p = PpackOfLang(lang);
@@ -1287,7 +1520,7 @@ int CheckLanguageCommand(const std::string& key)
             const uint32_t ch = ChDecode(str, i, &cb);
             i += cb;
             if (fIcons || ch == '\n' || ch == '\r' || ch == '\t') continue;
-            if (!std::binary_search(psetFont->aul.begin(), psetFont->aul.end(), ch))
+            if (!FFontHasCh(psetFont, ch))
             {
                 if (asetMissing.insert(ch).second && asetMissing.size() <= 12)
                 {
@@ -1307,9 +1540,9 @@ int CheckLanguageCommand(const std::string& key)
         if (!FLoadWorldFile(psw.get(), aworld[iw].second, "", &cbRead, &cbFile)) { std::printf("check-language: FAIL: world %s did not load\n", aworld[iw].first.c_str()); return 1; }
         ++cworld;
         const SELEM* psetFont = PsetLanguageStoreFont();
-        if (ptext->fWide && !FWideText() && (!FWideChars() || !psetFont))
+        if (ptext->fWide && ptext->script != DiscScript() && (!FWideChars() || !psetFont))
         {
-            std::printf("check-language: FAIL: world %s: the Japanese font is not in use\n", aworld[iw].first.c_str());
+            std::printf("check-language: FAIL: world %s: the language's font is not in use\n", aworld[iw].first.c_str());
             return 1;
         }
         for (const auto& [id, str] : psw->atext)
@@ -1317,10 +1550,14 @@ int CheckLanguageCommand(const std::string& key)
             const int idUsa = IdTextUsa(id);
             if (idUsa < 5) continue;   // (0..4: the builds' unused debug strings)
             ++cstr;
-            const auto it = idUsa < 0 ? ptext->mptext.end() : ptext->mptext.find(idUsa);
-            if (it == ptext->mptext.end()) { ++cfolded; continue; }
-            // (the language's own string: as stored, but for the menus' button icons)
-            std::string want = StrToDisc(it->second, ptext->fWide);
+            // (the language's own string: the world's own ("worlds") or "strings")
+            const std::string* pstrOwn = nullptr;
+            if (const auto it = ptext->mptext.find(idUsa); it != ptext->mptext.end()) pstrOwn = &it->second;
+            if (const auto itw = ptext->mpworld.find(g_disc.SzWorldName(aworld[iw].second.isector)); itw != ptext->mpworld.end())
+                if (const auto it = itw->second.find(idUsa); it != itw->second.end()) pstrOwn = &it->second;
+            if (!pstrOwn) { ++cfolded; continue; }
+            // (as stored, but for the menus' button icons)
+            std::string want = StrToDisc(*pstrOwn, ptext->fWide);
             std::string got = str;
             for (std::string* ps : {&want, &got})
                 for (std::size_t i = 0; i + 2 < ps->size(); ++i)
@@ -1330,8 +1567,8 @@ int CheckLanguageCommand(const std::string& key)
             checkGlyphs(str, psetFont, "text", id);
         }
     }
-    // the port's own text (porttext.h) in that language, with the same font
-    int cport = 0;
+    // the port's own text (porttext.h) in that language, with the same font; the language's own port strings ("port")
+    int cport = 0, cportOwn = 0, cportBad = 0;
     {
         const SELEM* psetFont = PsetLanguageStoreFont();
         for (int i = 0; i < PTX_Max; ++i)
@@ -1339,12 +1576,51 @@ int CheckLanguageCommand(const std::string& key)
             ++cport;
             checkGlyphs(StrPort(PTX(i)), psetFont, "the port's text", i);
         }
+        const auto aport = PortTextColumn(LANG_English);
+        if (const auto* pmp = PmpPortTextShown())
+            for (const auto& [name, str] : *pmp)
+            {
+                const auto itEn = std::find_if(aport.begin(), aport.end(), [&](const auto& e) { return e.first == name; });
+                if (itEn == aport.end()) { std::printf("check-language: port \"%s\" is not a port string's name (ignored)\n", name.c_str()); continue; }
+                ++cportOwn;
+                // (%-codes: porttext.cpp uses a string only with the English one's)
+                auto formats = [](const std::string& s) {
+                    std::string out;
+                    for (std::size_t i = 0; i < s.size(); ++i)
+                        if (s[i] == '%' && i + 1 < s.size()) { if (s[i + 1] != '%') out += s.substr(i, 2); ++i; }
+                    return out;
+                };
+                if (formats(str) != formats(itEn->second))
+                {
+                    ++cportBad;
+                    std::printf("check-language: FAIL: port \"%s\": %%-codes \"%s\", the English \"%s\" (not used)\n", name.c_str(), formats(str).c_str(),
+                                formats(itEn->second).c_str());
+                }
+                // (Latin text: the font's characters are Latin-1; others are drawn as '?')
+                if (!FWideChars())
+                    for (std::size_t i = 0; i < str.size();)
+                    {
+                        const uint8_t b = uint8_t(str[i]);
+                        const std::size_t cb = b < 0x80 ? 1 : b < 0xE0 ? 2 : b < 0xF0 ? 3 : 4;
+                        const bool fFolded = cb == 3 && i + 2 < str.size() && b == 0xE2 && uint8_t(str[i + 1]) == 0x80 &&
+                                             (uint8_t(str[i + 2]) == 0x98 || uint8_t(str[i + 2]) == 0x99 || uint8_t(str[i + 2]) == 0x9C ||
+                                              uint8_t(str[i + 2]) == 0x9D || uint8_t(str[i + 2]) == 0xA6);   // (quotes, ...: written plainly)
+                        if (b >= 0xC4 && !fFolded)
+                        {
+                            ++cnoglyph;
+                            std::printf("check-language: port \"%s\": a character beyond Latin-1 (drawn as '?')\n", name.c_str());
+                        }
+                        i += cb;
+                    }
+            }
     }
+    std::printf("check-language: the pause menu's %s / %s reads \"%s\" (%s)\n", "ExitToDesktop", "HoldToSkip", Utf8OfGameText(StrPort(PTX_ExitToDesktop)).c_str(),
+                Utf8OfGameText(StrPort(PTX_HoldToSkip)).c_str());
     const int cother = cstr - cown - cfolded;
     std::printf("check-language: %s on %s: %d worlds, %d strings: %d the language's, %d the disc's (not in the language), %d other; "
-                "%d port strings; %d characters without a glyph (%zu different)\n",
-                key.c_str(), g_disc.SzDisc(), cworld, cstr, cown, cfolded, cother, cport, cnoglyph, asetMissing.size());
-    const bool fOk = cworld > 0 && cstr > 0 && cother == 0 && cown * 100 >= cstr * 95 && cnoglyph == 0;
+                "%d port strings (%d the language's, %d unusable); %d characters without a glyph (%zu different)\n",
+                key.c_str(), g_disc.SzDisc(), cworld, cstr, cown, cfolded, cother, cport, cportOwn, cportBad, cnoglyph, asetMissing.size());
+    const bool fOk = cworld > 0 && cstr > 0 && cother == 0 && cown * 100 >= cstr * 95 && cnoglyph == 0 && cportBad == 0;
     std::printf("check-language: %s\n", fOk ? "PASS" : "FAIL");
     return fOk ? 0 : 1;
 }

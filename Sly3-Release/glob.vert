@@ -15,8 +15,45 @@ precise gl_Position;
 #define vUv gsUv
 #define vFog gsFog
 #define vTexh gsTexh
+#define vLayer gsLayer
 #endif
 
+#ifdef CANE_PULL
+// (OpenGL ES without EXT_base_instance, gl.cpp g_fDrawUniform: render.cpp draws a run of sub-draws as one draw of a
+// per-frame index list; each index holds the run's sub-draw (bits 22..31, from caneDrawBase) and the vertex (bits
+// 0..21, from caneVertexBase), and the vertex is read here from the arena's buffers (render.cpp GPUVTX / GPUCOL))
+layout (std430, binding = 6) readonly buffer PULLVTX { uint apullv[]; };   // GPUVTX: 12 words a vertex
+layout (std430, binding = 7) readonly buffer PULLCOL { uint apullc[]; };   // GPUCOL: 2 words a vertex
+layout (std430, binding = 10) readonly buffer PULLDRAWMAP { uint adrawmap[]; };   // the pass's segments' draw indices
+uniform uint caneDrawBase;
+uniform uint caneVertexBase;
+vec3 aPos;
+vec2 aUv;
+vec4 aRgbaA;
+vec4 aRgbaB;
+vec3 aNormal;
+uvec4 aBone;
+uint aDraw;
+vec4 aWeight;
+uint caneVertexId;
+uvec4 CaneBytes(uint w) { return uvec4(w & 255u, (w >> 8) & 255u, (w >> 16) & 255u, w >> 24); }
+void CanePull()
+{
+    uint id = uint(gl_VertexID);
+    caneVertexId = caneVertexBase + (id & 0x3FFFFFu);
+    aDraw = (caneDrawBase & 0x80000000u) != 0u ? (caneDrawBase & 0x7FFFFFFFu) : adrawmap[caneDrawBase + (id >> 22)];
+    uint o = caneVertexId * 12u;
+    aPos = vec3(uintBitsToFloat(apullv[o]), uintBitsToFloat(apullv[o + 1u]), uintBitsToFloat(apullv[o + 2u]));
+    aUv = vec2(uintBitsToFloat(apullv[o + 3u]), uintBitsToFloat(apullv[o + 4u]));
+    aNormal = vec3(uintBitsToFloat(apullv[o + 7u]), uintBitsToFloat(apullv[o + 8u]), uintBitsToFloat(apullv[o + 9u]));
+    aBone = CaneBytes(apullv[o + 10u]);
+    aWeight = unpackUnorm4x8(apullv[o + 11u]);
+    uint c = caneVertexId * 2u;
+    aRgbaA = vec4(CaneBytes(apullc[c]));
+    aRgbaB = vec4(CaneBytes(apullc[c + 1u]));
+}
+#define CANE_VERTEX_ID caneVertexId
+#else
 layout (location = 0) in vec3 aPos;
 layout (location = 1) in vec2 aUv;
 layout (location = 2) in vec4 aRgbaA;   // unnormalized bytes
@@ -25,6 +62,8 @@ layout (location = 4) in vec3 aNormal;
 layout (location = 5) in uvec4 aBone;   // skinning: the group's bone indices
 layout (location = 6) in uint aDraw;    // the draw index (instanced, from the command's baseInstance)
 layout (location = 7) in vec4 aWeight;  // and their weights (raw / 255, P_G 726)
+#define CANE_VERTEX_ID uint(gl_VertexID)
+#endif
 
 // Per-frame draw data (render.cpp RECGPU / DRAWGPU).
 struct REC
@@ -51,6 +90,11 @@ layout (std430, binding = 1) readonly buffer DRAWS { vec4 adraw[]; };   // SAA d
 layout (std430, binding = 5) readonly buffer TEXHANDLES { uvec2 atexh[]; };
 flat out uvec2 vTexh;
 #endif
+#ifdef TEXARRAY
+// (perf-5, no bindless: render.cpp g_fGlobArrays) each pass draw's layer + 1 in the bound array texture (0: the bound tex)
+layout (std430, binding = 5) readonly buffer TEXLAYERS { uvec2 alayer[]; };
+flat out uint vLayer;
+#endif
 
 uniform mat4 matWorldToClip;
 uniform int  icolor;         // 0: colour A, 1: colour B, 2: rgbaConst, 3: rgbaConst x vertex alpha
@@ -64,58 +108,70 @@ noperspective out float vFog;
 
 void main()
 {
+#ifdef CANE_PULL
+    CanePull();
+#endif
     vec4 d = adraw[aDraw];
 #ifdef BINDLESS
     vTexh = atexh[aDraw];
 #endif
-    REC rec = arec[floatBitsToUint(d.w)];
-    vec4 fogParams = rec.fog;
+#ifdef TEXARRAY
+    vLayer = alayer[aDraw].x;
+#endif
+    // (the record's fields read where they are used, not the whole record per vertex: a skinned vertex never reads the
+    // model matrix, and only the view-angle groups read the spec fields)
+    uint irec = floatBitsToUint(d.w);   // (no const: GLSL ES wants constant initializers there)
+    vec4 fogParams = arec[irec].fog;
+    uvec4 recBone = arec[irec].bone;
+    uvec4 recWarp = arec[irec].warp;
     vec4 posWorld;
-    if (rec.bone.y != 0u)
+    if (recBone.y != 0u)
     {
         vec4 p = vec4(aPos, 1.0);
-        posWorld = aWeight.x * (abone[rec.bone.x + min(aBone.x, rec.bone.y - 1u)] * p)
-                 + aWeight.y * (abone[rec.bone.x + min(aBone.y, rec.bone.y - 1u)] * p)
-                 + aWeight.z * (abone[rec.bone.x + min(aBone.z, rec.bone.y - 1u)] * p)
-                 + aWeight.w * (abone[rec.bone.x + min(aBone.w, rec.bone.y - 1u)] * p);
+        posWorld = aWeight.x * (abone[recBone.x + min(aBone.x, recBone.y - 1u)] * p)
+                 + aWeight.y * (abone[recBone.x + min(aBone.y, recBone.y - 1u)] * p)
+                 + aWeight.z * (abone[recBone.x + min(aBone.z, recBone.y - 1u)] * p)
+                 + aWeight.w * (abone[recBone.x + min(aBone.w, recBone.y - 1u)] * p);
         posWorld.w = 1.0;
     }
     else
-        posWorld = rec.model * vec4(aPos, 1.0);
+        posWorld = arec[irec].model * vec4(aPos, 1.0);
     vec2 duv = vec2(0.0);
-    if (rec.warp.x != 0u)
+    if (recWarp.x != 0u)
     {
-        uint ivtx = uint(gl_VertexID) - rec.bone.z;
-        uint cmat = rec.warp.w & 0xFFu;
+        uint ivtx = CANE_VERTEX_ID - recBone.z;
+        uint cmat = recWarp.w & 0xFFu;
         vec3 dpos = vec3(0.0);
         for (uint imat = 0u; imat < cmat; ++imat)
         {
-            vec4 st = awarp[rec.warp.x - 1u + imat * rec.warp.y + ivtx];
-            dpos += (amatWarp[rec.warp.z + imat] * st).xyz;
-            duv += (amatWarp[rec.warp.z + 4u + imat] * st).xy;
+            vec4 st = awarp[recWarp.x - 1u + imat * recWarp.y + ivtx];
+            dpos += (amatWarp[recWarp.z + imat] * st).xyz;
+            duv += (amatWarp[recWarp.z + 4u + imat] * st).xy;
         }
-        if ((rec.warp.w & 0x100u) != 0u) posWorld.xyz += dpos;
-        if ((rec.warp.w & 0x200u) == 0u) duv = vec2(0.0);
+        if ((recWarp.w & 0x100u) != 0u) posWorld.xyz += dpos;
+        if ((recWarp.w & 0x200u) == 0u) duv = vec2(0.0);
     }
     gl_Position = matWorldToClip * posWorld;
     vec4 c = icolor == 0 ? aRgbaA : (icolor == 1 ? aRgbaB : rgbaConst);
     float aA = aRgbaA.a;
-    if (rec.spec1.z != 0.0 && (icolor == 0 || icolor == 3))
+    if ((icolor == 0 || icolor == 3) && arec[irec].spec1.z != 0.0)
     {
         // P_G 638: the direction to the camera in the group's space (1909's matrix; 0: -view direction, 1: from the
         // point, 2: from the vertex), . the S8 normal (n x 127, truncated as 0x16A000 packs it), a quadratic gain
         // clamped, colour A's alpha x gain rounded (FTOI0 of a x g + 0.5)
-        mat3 mInv = inverse(mat3(rec.model));
+        mat4 model = arec[irec].model;
+        vec4 spec0 = arec[irec].spec0, spec1 = arec[irec].spec1;
+        mat3 mInv = inverse(mat3(model));
         vec3 v;
-        if (rec.spec0.w == 0.0) v = mInv * -dirCamera;
+        if (spec0.w == 0.0) v = mInv * -dirCamera;
         else
         {
-            vec3 cam = mInv * (posCamera - rec.model[3].xyz);
-            v = rec.spec0.w == 1.0 ? cam - rec.specPos.xyz : cam - aPos;
+            vec3 cam = mInv * (posCamera - model[3].xyz);
+            v = spec0.w == 1.0 ? cam - arec[irec].specPos.xyz : cam - aPos;
         }
         v = normalize(v);
         float x = dot(v, trunc(aNormal * 127.0));
-        float g = clamp(rec.spec0.x + rec.spec0.y * x + rec.spec0.z * x * x, rec.spec1.x, rec.spec1.y);
+        float g = clamp(spec0.x + spec0.y * x + spec0.z * x * x, spec1.x, spec1.y);
         aA = floor(aA * g + 0.5);
         if (icolor == 0) c.a = aA;
     }

@@ -23,6 +23,7 @@
 #include "gamepad_mappings.h"
 #include "gl_context.h"
 #include "glfw_platform.h"
+#include "monitor_select_glfw.h"
 #include "ui/face_buttons.h"
 #include "ui/fixtures.h"
 #include "ui/game_page.h"
@@ -33,22 +34,17 @@
 #include "ui/settings_page.h"
 #include "ui/shell.h"
 #include "ui/update_dialog.h"
+#ifdef CANE_LAUNCHER_EDITOR
+#include "editor/editor_page.h"
+#include "editor/loc_page.h"
+#endif
 #include "update.h"
 #include "launcher_game_sly1.h"
 #include "launcher_game_sly2.h"
 #include "launcher_game_sly3.h"
 #include "launcher_game_sly4.h"
 #include "launcher_game_hackpack.h"
-#include "launcher_developer_fridinator.h"
-#include "launcher_developer_fridinator-silhouette.h"
-#include "launcher_developer_theclub654.h"
-#include "launcher_developer_theclub654-silhouette.h"
-#include "launcher_developer_menaman123.h"
-#include "launcher_developer_menaman123-silhouette.h"
-#include "launcher_developer_thematuu.h"
-#include "launcher_developer_thematuu-silhouette.h"
-#include "launcher_developer_nagaa95.h"
-#include "launcher_developer_nagaa95-silhouette.h"
+#include "launcher_developers.h"
 #include "launcher_icon.h"
 #if defined(CANE_IOS)
 // (platform/ios/glfw_sdl_ios.cpp) the window's safe area insets in the launcher's logical units
@@ -74,13 +70,7 @@ const EmbeddedImage cane_game_logos[] = {{cane_game_sly1, sizeof(cane_game_sly1)
                                          {cane_game_sly4, sizeof(cane_game_sly4)},
                                          {cane_game_hackpack, sizeof(cane_game_hackpack)}};
 static_assert(std::size(cane_game_logos) == cane::kGameCount);
-// The Collection Style Launcher's developers page: each developer's picture, then its silhouette.
-const EmbeddedImage cane_developer_pictures[] = {
-    {cane_developer_fridinator, sizeof(cane_developer_fridinator)}, {cane_developer_fridinator_silhouette, sizeof(cane_developer_fridinator_silhouette)},
-    {cane_developer_theclub654, sizeof(cane_developer_theclub654)}, {cane_developer_theclub654_silhouette, sizeof(cane_developer_theclub654_silhouette)},
-    {cane_developer_menaman123, sizeof(cane_developer_menaman123)}, {cane_developer_menaman123_silhouette, sizeof(cane_developer_menaman123_silhouette)},
-    {cane_developer_thematuu, sizeof(cane_developer_thematuu)},     {cane_developer_thematuu_silhouette, sizeof(cane_developer_thematuu_silhouette)},
-    {cane_developer_nagaa95, sizeof(cane_developer_nagaa95)},       {cane_developer_nagaa95_silhouette, sizeof(cane_developer_nagaa95_silhouette)}};
+// The developers' pictures (launcher_developers.h, cmake/developers.cmake): each developer's picture, then its silhouette.
 static_assert(std::size(cane_developer_pictures) == 2 * std::size(cane::credits::kDevelopers));
 std::string fixtureIso(int index) { return cane::utf8(ui::fixtures::isos()[static_cast<size_t>(index)].path); }
 struct Texture {
@@ -132,7 +122,7 @@ void dumpLayout(const cane::fs::path& file, const ImRect& focus, const ui::Shell
     auto entries = cane::json::array();
     for (const auto& e : ui::layoutEntries())
         entries.push_back({{"label", e.label}, {"x", e.rect.Min.x}, {"y", e.rect.Min.y}, {"w", e.rect.GetWidth()}, {"h", e.rect.GetHeight()}});
-    static constexpr const char* views[] = {"game", "install", "settings", "about"};
+    static constexpr const char* views[] = {"game", "install", "settings", "about", "editor", "localisation"};
     cane::json out{{"entries", entries},
                    {"family", cane::input::familyId(cane::input::tracker().family())},
                    {"atlas", cane::input::promptAtlas().uploaded()},
@@ -257,6 +247,25 @@ void finishUpdate(const cane::LauncherBackend& backend) {
     pending.plan.reset();
 }
 
+// The launcher window's monitor (launcher.json "window_monitor": platform/monitor_select.h's identifier, absent for the
+// primary monitor): it opens there again, full screen or in the middle of it (where windows can be placed).
+GLFWmonitor* rememberedMonitor(const cane::LauncherBackend& backend) {
+    const auto it = backend.config.find("window_monitor");
+    return cane::monitor::chosen(it != backend.config.end() && it->is_string() ? it->get<std::string>() : std::string());
+}
+void rememberMonitor(cane::LauncherBackend& backend, GLFWwindow* window) {
+    GLFWmonitor* monitor = cane::monitor::holding(window);   // (null: unknown, Wayland's windows: the last one kept)
+    if (!monitor) return;
+    const cane::monitor::Connected c = cane::monitor::connected();
+    const int index = cane::monitor::indexOfHandle(c, monitor);
+    if (index < 0) return;
+    const std::string id = c.list[size_t(index)].primary ? std::string() : cane::monitor::idOf(c.list, index);
+    if (id == backend.config.value("window_monitor", std::string())) return;
+    if (id.empty()) backend.config.erase("window_monitor");
+    else backend.config["window_monitor"] = id;
+    try { backend.saveConfig(); } catch (...) {}
+}
+
 // `safehouse --collection` without the imported menu (there is no Collection style then): the SafeHouse launcher opens
 // instead, on the rows that import it.
 bool collectionMissing = false;
@@ -321,9 +330,10 @@ int desktop(cane::LauncherBackend& backend, const ui::fixtures::Options* fixture
     }
     // The developers' pictures (the About page; without their silhouettes).
     std::vector<std::unique_ptr<Texture>> developerPictures;
-    for (size_t i = 0; i < std::size(ui::images().developers); ++i) {
+    ui::images().developers.clear();
+    for (size_t i = 0; i < std::size(cane::credits::kDevelopers); ++i) {
         developerPictures.push_back(std::make_unique<Texture>(cane_developer_pictures[i * 2].data, cane_developer_pictures[i * 2].size, "developer picture"));
-        ui::images().developers[i] = developerPictures.back()->imgui();
+        ui::images().developers.push_back(developerPictures.back()->imgui());
     }
 
     // Declared before the job so its worker is joined before these go away.
@@ -371,6 +381,18 @@ int desktop(cane::LauncherBackend& backend, const ui::fixtures::Options* fixture
         shell.open(ui::View::Install);
     };
     page.openInstall = [&](GameId game) { openInstall(game); };
+#ifdef CANE_LAUNCHER_EDITOR
+    ui::EditorPage editorPage(backend);
+    page.openEditor = [&] {
+        editorPage.open();
+        shell.open(ui::View::Editor);
+    };
+    ui::LocalisationPage locPage(backend);
+    page.openLocalisation = [&] {
+        locPage.open();
+        shell.open(ui::View::Localisation);
+    };
+#endif
     // "Re-extract" with the remembered disc image: the install page, already installing.
     page.reextract = [&](GameId game, std::string iso) {
         openInstall(game, std::move(iso));
@@ -414,6 +436,8 @@ int desktop(cane::LauncherBackend& backend, const ui::fixtures::Options* fixture
         else if (s == "install-region") openInstall(shell.game, fixture->iso, true);
         else if (s == "reextract") page.showReextract(shell.game);
         else if (s == "desktop-shortcut") page.showDesktopShortcut(shell.game, false);
+        else if (s == "editor" && page.openEditor) page.openEditor();
+        else if (s == "localisation" && page.openLocalisation) page.openLocalisation();
         else if (s.rfind("settings", 0) == 0) {
             shell.open(ui::View::Settings);
             if (auto colon = s.find(':'); colon != std::string::npos) settings.selectCategory(s.substr(colon + 1));
@@ -457,6 +481,8 @@ int desktop(cane::LauncherBackend& backend, const ui::fixtures::Options* fixture
             if (auto colon = s.find(':'); colon != std::string::npos) ui::aboutScrollTarget() = s.substr(colon + 1);
         }
         else if (s == "sly3-notice") page.showSly3Notice();
+        else if (s == "editor" && page.openEditor) page.openEditor();
+        else if (s == "localisation" && page.openLocalisation) page.openLocalisation();
         else if (s == "quit-confirm") shell.askQuit();
         else if (s == "desktop-shortcut") page.showDesktopShortcut(shell.game, false);
         else if (s == "desktop-shortcut-done") page.showDesktopShortcut(shell.game, true);
@@ -466,9 +492,13 @@ int desktop(cane::LauncherBackend& backend, const ui::fixtures::Options* fixture
         }
         ui::layoutRecording() = !fixture->layoutPath.empty();
     } else if (backend.config.value("start_fullscreen", ui::SettingsPage::defaultFullscreen())) {
-        if (GLFWmonitor* monitor = glfwGetPrimaryMonitor())
+        // (on the monitor it was on when it last closed: launcher.json "window_monitor", platform/monitor_select.h; the
+        // primary one when that is not connected)
+        if (GLFWmonitor* monitor = rememberedMonitor(backend))
             if (const GLFWvidmode* mode = glfwGetVideoMode(monitor))
                 glfwSetWindowMonitor(window, monitor, 0, 0, mode->width, mode->height, mode->refreshRate);
+    } else if (!backend.config.value("window_monitor", std::string()).empty()) {
+        cane::monitor::centreWindowOn(window, rememberedMonitor(backend));   // (not on Wayland: the compositor places it)
     }
     if (collectionMissing) {
         shell.open(ui::View::Settings);
@@ -608,6 +638,8 @@ int desktop(cane::LauncherBackend& backend, const ui::fixtures::Options* fixture
                 if (showLogs) showLogs = false;
                 else if (shell.view == ui::View::Install) {
                     if (!install.back()) shell.open(ui::View::Game);
+                } else if (shell.view == ui::View::Editor || shell.view == ui::View::Localisation) {
+                    shell.open(ui::View::Game);
                 } else if (shell.view == ui::View::Settings && settings.back()) {
                 } else if (inPage)
                     shell.focusRail();
@@ -682,6 +714,10 @@ int desktop(cane::LauncherBackend& backend, const ui::fixtures::Options* fixture
             case ui::View::Install: install.draw(false); break;
             case ui::View::Settings: settings.draw(gameRunning || busy); break;
             case ui::View::About: ui::aboutPage(); break;
+#ifdef CANE_LAUNCHER_EDITOR
+            case ui::View::Editor: editorPage.draw(); break;
+            case ui::View::Localisation: locPage.draw(); break;
+#endif
             default: break;
             }
         }
@@ -716,7 +752,9 @@ int desktop(cane::LauncherBackend& backend, const ui::fixtures::Options* fixture
                 for (const auto& h : install.hints()) hints.push_back(h);
                 break;
             case ui::View::Settings: hints = settings.hints(); break;
-            case ui::View::About: hints = {{ui::backButton(), GLFW_KEY_ESCAPE, N_("Back")}, {ui::confirmButton(), GLFW_KEY_ENTER, N_("Select")}}; break;
+            case ui::View::About:
+            case ui::View::Localisation:
+            case ui::View::Editor: hints = {{ui::backButton(), GLFW_KEY_ESCAPE, N_("Back")}, {ui::confirmButton(), GLFW_KEY_ENTER, N_("Select")}}; break;
             }
         }
         const std::string captureStatus = shell.view == ui::View::Settings ? settings.captureStatus() : std::string{};
@@ -760,6 +798,7 @@ int desktop(cane::LauncherBackend& backend, const ui::fixtures::Options* fixture
         if (!fixture) glfwSwapBuffers(window);
     }
     dropHandler() = nullptr;
+    if (!fixture) rememberMonitor(backend, window);
     if (!fixture)
         if (auto plan = updates.pendingPlan()) pendingUpdate() = {plan, updates.restartAfterApply()};
     offscreen.reset();
@@ -828,6 +867,10 @@ int collectionDesktop(cane::LauncherBackend& backend, const ui::fixtures::Option
     glfwWindowHintString(GLFW_X11_CLASS_NAME, cane::brand::wmClass);
     glfwWindowHintString(GLFW_WAYLAND_APP_ID, cane::brand::appId);
     if (fixture) glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
+    // (full screen, the window would minimize itself when the game's window takes the focus (GLFW's auto-iconify):
+    // X11 window managers then keep it minimized when it is shown again after the game, and the player is left on the
+    // desktop)
+    glfwWindowHint(GLFW_AUTO_ICONIFY, GLFW_FALSE);
     const int width0 = fixture ? fixture->width : 1280, height0 = fixture ? fixture->height : 720;
     auto window = glfwCreateWindow(width0, height0, "SafeHouse Collection", nullptr, nullptr);
     if (!window) {
@@ -843,7 +886,7 @@ int collectionDesktop(cane::LauncherBackend& backend, const ui::fixtures::Option
                                 ? backend.config["collection"].value("fullscreen", true)
                                 : !fixture;
     if (fullscreen)
-        if (GLFWmonitor* monitor = glfwGetPrimaryMonitor())
+        if (GLFWmonitor* monitor = rememberedMonitor(backend))
             if (const GLFWvidmode* mode = glfwGetVideoMode(monitor))
                 glfwSetWindowMonitor(window, monitor, 0, 0, mode->width, mode->height, mode->refreshRate);
     ImGui::CreateContext();
@@ -882,6 +925,7 @@ int collectionDesktop(cane::LauncherBackend& backend, const ui::fixtures::Option
     std::vector<std::unique_ptr<Texture>> developerPictures;
     for (size_t i = 0; i < std::size(cane_developer_pictures); ++i) {
         developerPictures.push_back(std::make_unique<Texture>(cane_developer_pictures[i].data, cane_developer_pictures[i].size, "developer picture"));
+        if (data.developers.size() <= i / 2) data.developers.resize(i / 2 + 1);
         (i % 2 ? data.developers[i / 2].silhouette : data.developers[i / 2].picture) = developerPictures.back()->imgui();
     }
     ui::layoutRecording() = fixture && !fixture->layoutPath.empty();
@@ -890,6 +934,8 @@ int collectionDesktop(cane::LauncherBackend& backend, const ui::fixtures::Option
     if (fixture) offscreen = std::make_unique<Offscreen>(fixture->width, fixture->height);
     int frames = 0, languageGeneration = cane::l10n::generation();
     bool windowHidden = false, windowWasVisible = false;
+    GLFWmonitor* fullscreenMonitor = nullptr;  // (full screen before it stepped aside for a game: on which monitor, in which mode)
+    GLFWvidmode fullscreenMode{};
     double last = glfwGetTime();
     while (!glfwWindowShouldClose(window)) {
         // (--live: a scripted run whose game really starts, also steps aside and comes back as a real one)
@@ -901,8 +947,25 @@ int collectionDesktop(cane::LauncherBackend& backend, const ui::fixtures::Option
         // back when it quits.
         if (live && !windowHidden && menu->windowAway()) {
             menu->timeNote("the window steps aside");
-            windowWasVisible = glfwGetWindowAttrib(window, GLFW_VISIBLE);
-            if (windowWasVisible) glfwHideWindow(window);
+            // (a minimized window counts as shown: it comes back restored)
+            windowWasVisible = glfwGetWindowAttrib(window, GLFW_VISIBLE) || glfwGetWindowAttrib(window, GLFW_ICONIFIED);
+            if (windowWasVisible) {
+                // GLFW does not hide a full screen window (glfwHideWindow returns at once): it would stay mapped under
+                // the game, and a compositor that shows one window at a time (gamescope, Steam Deck's Game Mode) could
+                // keep showing it, the game heard but not seen. So it leaves full screen first (the game's window is
+                // already over it) and goes back to full screen when it comes back.
+                fullscreenMonitor = glfwGetWindowMonitor(window);
+                const GLFWvidmode* mode = fullscreenMonitor ? glfwGetVideoMode(fullscreenMonitor) : nullptr;
+                if (mode) {
+                    fullscreenMode = *mode;
+                    int x = 0, y = 0;
+                    glfwGetMonitorPos(fullscreenMonitor, &x, &y);
+                    glfwSetWindowMonitor(window, nullptr, x, y, mode->width, mode->height, GLFW_DONT_CARE);
+                } else {
+                    fullscreenMonitor = nullptr;
+                }
+                glfwHideWindow(window);
+            }
             windowHidden = true;
         }
         if (windowHidden) {
@@ -911,7 +974,10 @@ int collectionDesktop(cane::LauncherBackend& backend, const ui::fixtures::Option
                 continue;
             }
             if (windowWasVisible) {
+                if (glfwGetWindowAttrib(window, GLFW_ICONIFIED)) glfwRestoreWindow(window);
                 glfwShowWindow(window);
+                if (fullscreenMonitor) glfwSetWindowMonitor(window, fullscreenMonitor, 0, 0, fullscreenMode.width, fullscreenMode.height, fullscreenMode.refreshRate);
+                fullscreenMonitor = nullptr;
                 glfwFocusWindow(window);
             }
             windowHidden = false;
@@ -920,15 +986,27 @@ int collectionDesktop(cane::LauncherBackend& backend, const ui::fixtures::Option
         int windowWidth = width0, windowHeight = height0;
         if (!fixture) glfwGetWindowSize(window, &windowWidth, &windowHeight);
         // The menu's picture: the whole window, or Sly 2's aspect ratio (shared, Options) in its middle, black around it.
-        int width = windowWidth, height = windowHeight;
-        float offsetX = 0, offsetY = 0;
-        if (const float shape = menu->aspect(); shape > 0 && windowWidth > 0 && windowHeight > 0) {
-            if (static_cast<float>(windowWidth) > static_cast<float>(windowHeight) * shape + 1.0f)
-                width = static_cast<int>(std::lround(static_cast<float>(windowHeight) * shape));
-            else if (static_cast<float>(windowHeight) > static_cast<float>(windowWidth) / shape + 1.0f)
-                height = static_cast<int>(std::lround(static_cast<float>(windowWidth) / shape));
-            offsetX = std::floor(static_cast<float>(windowWidth - width) * 0.5f);
-            offsetY = std::floor(static_cast<float>(windowHeight - height) * 0.5f);
+        // (iPhone / iPad: inside the safe area; the notch / Dynamic Island, the home indicator and the rounded corners
+        // stay black)
+        int areaX = 0, areaY = 0, areaW = windowWidth, areaH = windowHeight;
+#if defined(CANE_IOS)
+        if (!fixture) {
+            float left = 0, top = 0, right = 0, bottom = 0;
+            cane_glfw_safe_area(window, &left, &top, &right, &bottom);
+            areaX = static_cast<int>(std::lround(left)), areaY = static_cast<int>(std::lround(top));
+            areaW = std::max(1, windowWidth - areaX - static_cast<int>(std::lround(right)));
+            areaH = std::max(1, windowHeight - areaY - static_cast<int>(std::lround(bottom)));
+        }
+#endif
+        int width = areaW, height = areaH;
+        float offsetX = static_cast<float>(areaX), offsetY = static_cast<float>(areaY);
+        if (const float shape = menu->aspect(); shape > 0 && areaW > 0 && areaH > 0) {
+            if (static_cast<float>(areaW) > static_cast<float>(areaH) * shape + 1.0f)
+                width = static_cast<int>(std::lround(static_cast<float>(areaH) * shape));
+            else if (static_cast<float>(areaH) > static_cast<float>(areaW) / shape + 1.0f)
+                height = static_cast<int>(std::lround(static_cast<float>(areaW) / shape));
+            offsetX += std::floor(static_cast<float>(areaW - width) * 0.5f);
+            offsetY += std::floor(static_cast<float>(areaH - height) * 0.5f);
         }
         if (const float wanted = scaleFor(height); std::fabs(wanted - scale) > 0.01f || cane::l10n::generation() != languageGeneration) {
             scale = wanted;
@@ -1012,6 +1090,7 @@ int collectionDesktop(cane::LauncherBackend& backend, const ui::fixtures::Option
         if (!fixture) glfwSwapBuffers(window);
     }
     try {
+        if (!fixture) rememberMonitor(backend, window);
         if (!fixture) backend.saveConfig();
     } catch (...) {
     }
@@ -1116,6 +1195,29 @@ std::optional<GameId> gameArgument(std::vector<std::string> args, std::string* r
     return std::nullopt;
 }
 }  // namespace
+// iOS: the SafeHouse launcher and the Collection Style Launcher take turns in the app's one process (collection.h
+// pendingHandover: the one that closed named the next). An iOS app does not quit itself: the collection's Quit leads
+// back to the SafeHouse launcher. Elsewhere each is a program of its own (spawnDetached) and this returns at once.
+int takeTurns(cane::LauncherBackend& backend, int code, bool fromCollection) {
+#if defined(CANE_IOS)
+    namespace col = cane::collection;
+    for (;;) {
+        // (no imported menu: collectionDesktop opened the SafeHouse launcher itself, which has closed)
+        if (fromCollection && collectionMissing) fromCollection = false, collectionMissing = false;
+        col::Handover next = col::pendingHandover();
+        col::pendingHandover() = col::Handover::None;
+        if (next == col::Handover::None && fromCollection) next = col::Handover::Launcher;
+        if (next == col::Handover::None) return code;
+        fromCollection = next == col::Handover::Collection;
+        code = fromCollection ? collectionDesktop(backend, nullptr, {}) : desktop(backend, nullptr, {});
+    }
+#else
+    (void)backend;
+    (void)fromCollection;
+    return code;
+#endif
+}
+
 int main(int argc, char** argv) {
     bool interactive = true;
     try {
@@ -1137,6 +1239,10 @@ int main(int argc, char** argv) {
                 return 0;
             }
             if (early.size() == 1 && early[0] == "--l10n-check") return l10nCheck();
+#ifdef CANE_LAUNCHER_EDITOR
+            // --loc-selftest: the translation tool's checks (launcher/editor/loc_core.h)
+            if (early.size() == 1 && early[0] == "--loc-selftest") return cane::loc::selfTest();
+#endif
         }
         cane::LauncherBackend backend;
         std::atomic<bool> cancel{false};
@@ -1446,7 +1552,7 @@ int main(int argc, char** argv) {
             }
             // --collection: the Collection Style Launcher (collection/collection.h); the SafeHouse launcher when the menu
             // is not imported.
-            if (args[0] == "--collection" && args.size() == 1) return collectionDesktop(backend, nullptr, {});
+            if (args[0] == "--collection" && args.size() == 1) return takeTurns(backend, collectionDesktop(backend, nullptr, {}), true);
             std::cout << "safehouse [--install ISO | --verify [GAME] [--region R] | --play [GAME] [--region R] | --play-vr sly2 | --installs |\n"
                          "           --add-to-steam GAME | --steam-status | --add-desktop-shortcut GAME [--menu] | --desktop-shortcut-status |\n"
                          "           --install-dir [FOLDER|default] | --move-install GAME FOLDER [--region R] |\n"
@@ -1459,7 +1565,7 @@ int main(int argc, char** argv) {
                          "GAME: sly1 (default), sly2 or sly3 (--add-to-steam / --add-desktop-shortcut: also collection). R: usa, europe, japan, korea (default: the region selected in the launcher)\n";
             return args[0] == "--help" ? 0 : 1;
         }
-        const int code = desktop(backend, nullptr, {});
+        const int code = takeTurns(backend, desktop(backend, nullptr, {}), false);
         finishUpdate(backend);
         return code;
     } catch (const std::exception& e) {

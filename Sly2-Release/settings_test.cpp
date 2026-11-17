@@ -124,6 +124,24 @@ int SettingsSelfTest()
         // every key the schema writes is read back (none lands in the unknown keys)
         Check(c2.unknown.sections.empty(), "custom: no unknown key");
     }
+    // (settings v22) [Display] Monitor: Primary by default; a monitor's identifier read and written back; spellings of Primary
+    {
+        const std::string td = st::sly2ToIni(st::Sly2Settings{});
+        Check(td.find("Monitor = Primary") != std::string::npos, "Monitor: Primary by default");
+        st::Sly2Settings m;
+        cane::monitor::store(m.system.monitor, "DELL U2720Q | 2 | 1920,0");
+        const std::string tm = st::sly2ToIni(m);
+        const st::Sly2Settings back = st::sly2FromIni(tm);
+        Check(tm.find("Monitor = DELL U2720Q | 2 | 1920,0") != std::string::npos, "Monitor written as its identifier");
+        Check(cane::monitor::load(back.system.monitor) == "DELL U2720Q | 2 | 1920,0", "Monitor round trip");
+        const st::Sly2Settings p = st::sly2FromIni("[Display]\nMonitor = primary\n");
+        Check(p.system.monitor[0] == '\0', "Monitor = primary: Primary");
+        const st::Sly2Settings n = st::sly2FromIni("[Display]\nMonitor =   Generic PnP Monitor  \n");
+        Check(cane::monitor::load(n.system.monitor) == "Generic PnP Monitor", "Monitor: a name alone, trimmed");
+        std::string longName(300, 'x');
+        const st::Sly2Settings l = st::sly2FromIni("[Display]\nMonitor = " + longName + "\n");
+        Check(cane::monitor::load(l.system.monitor).size() == size_t(st::kMonitorIdSize - 1), "Monitor: a long value cut to the field");
+    }
     // (upscaling) [Display] Upscaling's keys: off by default, a hand-written value of each read and written back
     {
         const st::Sly2Settings d = st::sly2FromIni(st::sly2ToIni(st::Sly2Settings{}));

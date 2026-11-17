@@ -41,7 +41,7 @@ const SM::SMG* PsmgFind(const SM* psm, uint32_t grf)
     return nullptr;
 }
 
-// orig 0x001F0498
+// orig 0x001F0498 (orig3: 0x239B20, the same C in the Sly 3 decomp)
 int CsmtDistance(const SM* psm, uint32_t grf, int is0, int is1)
 {
     const SM::SMG* pg = PsmgFind(psm, grf);
@@ -54,13 +54,36 @@ int CsmtDistance(const SM* psm, uint32_t grf, int is0, int is1)
     return pg->adist[static_cast<size_t>(i)];
 }
 
-// orig 0x001F0AD0: one of the candidates at random, weighted by gProbability
+// (PC: the pickups' SMAs (coins turning, bobbing; s3-prologue) draw from their own random stream, so that turning them on
+// did not shift the game's one stream that the survey's played routes were recorded against: the reference's stream is
+// not followed anyway (SM choices, guards' picks: "another random stream", s3-script))
+}  // namespace
+bool (*g_pfnSmaOwnRandom)(const SMA* psma) = nullptr;
+namespace
+{
+bool s_fOwnRandom = false;
+uint32_t s_uOwnRandom = 0x2545F491u;
+float GRandOwn(float lo, float hi)
+{
+    s_uOwnRandom ^= s_uOwnRandom << 13;
+    s_uOwnRandom ^= s_uOwnRandom >> 17;
+    s_uOwnRandom ^= s_uOwnRandom << 5;
+    return lo + (hi - lo) * float(s_uOwnRandom >> 8) * (1.0f / 16777216.0f);
+}
+struct OWNRANDOM
+{
+    bool fPrev;
+    explicit OWNRANDOM(const SMA* psma) : fPrev(s_fOwnRandom) { s_fOwnRandom = g_pfnSmaOwnRandom && psma && g_pfnSmaOwnRandom(psma); }
+    ~OWNRANDOM() { s_fOwnRandom = fPrev; }
+};
+
+// orig 0x001F0AD0: one of the candidates at random, weighted by gProbability (orig3: 0x23A168, the same C in the Sly 3 decomp)
 SM::SMT* PsmtChoose(const std::vector<SM::SMT*>& a)
 {
     float sum = 0.0f;
     for (SM::SMT* p : a) sum = sum + p->gProbability;
     const float sumAll = sum;
-    sum = GRandInRange(0.0f, sum);
+    sum = s_fOwnRandom ? GRandOwn(0.0f, sum) : GRandInRange(0.0f, sum);
     if (std::getenv("SLY2N_SMRANDPRINT"))  // (debug: each weighted choice)
         std::printf("sm choose t %.3f: %zu candidates, %.4f of %.4f\n", g_clock.t, a.size(), sum, sumAll);
     // (debug, test harness: SLY2N_SMFORCE="t=i,t=i..": the first multi-candidate choice within 0.01 s of each t takes
@@ -98,7 +121,7 @@ SM::SMT* PsmtChoose(const std::vector<SM::SMT*>& a)
     return nullptr;
 }
 
-// orig 0x001F0B80: a random first transition (under grf) of a shortest path from is0 to is1
+// orig 0x001F0B80: a random first transition (under grf) of a shortest path from is0 to is1 (orig3: 0x23A210, the same C in the Sly 3 decomp)
 SM::SMT* PsmtPath(SM* psm, uint32_t grf, int is0, int is1)
 {
     const int n = is0 == is1 ? 1 : CsmtDistance(psm, grf, is0, is1);
@@ -128,7 +151,7 @@ SM::SMT* PsmtLeaving(SM* psm, uint32_t grf, int is)
     return PsmtChoose(a);
 }
 
-// orig 0x001F0FA0: the transition ends: the pending state becomes the current one
+// orig 0x001F0FA0: the transition ends: the pending state becomes the current one (orig3: 0x23A640, the same code in Sly 3)
 void EndSmaTransition(SMA* psma)
 {
     if (psma->pasega)
@@ -173,7 +196,7 @@ void InitSm(SM* psm)
     for (size_t i = 0; i < psrc->anode.size(); ++i)
     {
         const int32_t v = psrc->anode[i].second;
-        psm->asms[i].inext = v == -1 ? -1 : (v == 0x20 ? -2 : IsmsFindSm(psm, v));
+        psm->asms[i].inext = v == -1 ? -1 : (v == 0x3B ? -2 : IsmsFindSm(psm, v));  // (Sly 3: the random next is 0x3B, orig3 0x238FF8; Sly 2 0x20)
     }
     uint32_t grfAll = 0;
     psm->asmt.clear();
@@ -327,7 +350,7 @@ SMA* PsmaFindSm(SM* psm, ALO* palo)
 // orig: 0x001F0638
 bool FSmaRetracted(const SMA* psma) { return psma->fRetracted; }
 
-// orig: 0x001F0598
+// orig: 0x001F0598 (orig3: 0x239C20, the same C in the Sly 3 decomp)
 void RetractSma(SMA* psma)
 {
     if (FSmaRetracted(psma)) return;
@@ -354,7 +377,7 @@ void SMA::OnAsegaMsg(ASEGA* p, int msgk)
     ChooseSmaTransition(this, false);
 }
 
-// orig: 0x001F0660
+// orig: 0x001F0660 (orig3: 0x239CE8, the same C in the Sly 3 decomp)
 void SetSmaGoal(SMA* psma, OID oid)
 {
     if (FSmaRetracted(psma)) return;
@@ -373,17 +396,18 @@ void SetSmaGoal(SMA* psma, OID oid)
         ChooseSmaTransition(psma, false);
 }
 
-// orig: 0x001F0730
+// orig: 0x001F0730 (orig3: 0x239DB8, the same C in the Sly 3 decomp)
 void SeekSma(SMA* psma, OID oid)
 {
     if (FSmaRetracted(psma) || oid == -1) return;
     const int isms = IsmsFindSm(psma->psm, oid);
     if (isms == -1) return;
     const int from = psma->pasega ? psma->ismsNext : psma->ismsCur;
+    const OWNRANDOM own(psma);
     if (PsmtPath(psma->psm, psma->grfMask, from, isms)) SetSmaGoal(psma, oid);
 }
 
-// orig: 0x001F09D8
+// orig: 0x001F09D8 (orig3: 0x23A070, the same C in the Sly 3 decomp)
 void SetSmaState(SMA* psma, OID oid)
 {
     if (FSmaRetracted(psma)) return;
@@ -404,7 +428,7 @@ void SetSmaState(SMA* psma, OID oid)
     ChooseSmaTransition(psma, false);
 }
 
-// orig: 0x001F0948
+// orig: 0x001F0948 (orig3: 0x239FE0, the same C in the Sly 3 decomp)
 void SnapSmaGoal(SMA* psma, OID oid)
 {
     if (FSmaRetracted(psma)) return;
@@ -429,7 +453,7 @@ void SnapSmaGoal(SMA* psma, OID oid)
                      psma->pasega != nullptr, (void*)psma->psmt, psma->psmt && psma->psmt->paseg ? psma->psmt->paseg->oid : -1);
 }
 
-// orig: 0x001F0850
+// orig: 0x001F0850 (orig3: 0x239ED8, the same C in the Sly 3 decomp)
 void SetSmaSpeed(SMA* psma, float svt)
 {
     if (FSmaRetracted(psma)) return;
@@ -437,7 +461,7 @@ void SetSmaSpeed(SMA* psma, float svt)
     if (psma->pasega) SetAsegaSpeed(psma->pasega, svt);
 }
 
-// orig: 0x001F1350
+// orig: 0x001F1350 (orig3: 0x23A9F0, the same code in Sly 3)
 void SetSmaMask(SMA* psma, uint32_t grf)
 {
     psma->grfMask = grf;
@@ -448,7 +472,7 @@ void SetSmaMask(SMA* psma, uint32_t grf)
     }
 }
 
-// orig: 0x001F07C8 / 0x001F07E8 / 0x001F0808
+// orig: 0x001F07C8 / 0x001F07E8 / 0x001F0808 (orig3: 0x239E50, the same code in Sly 3)
 OID OidSmaGoal(const SMA* psma) { return OidFromSmIsms(psma->psm, psma->ismsGoal); }
 OID OidSmaCur(const SMA* psma) { return OidFromSmIsms(psma->psm, psma->ismsCur); }
 OID OidSmaNextOrCur(const SMA* psma)
@@ -463,6 +487,7 @@ OID OidSmaNextOrCur(const SMA* psma)
 void ChooseSmaTransition(SMA* psma, bool fReverse)
 {
     if (FSmaRetracted(psma)) return;
+    const OWNRANDOM own(psma);
     bool s3 = fReverse;
     for (;;)
     {
@@ -578,7 +603,7 @@ void ReplaceSmaHandleMask(SM* psm, ALO* palo, OID oid, int grfapl, uint32_t grfM
     }
 }
 
-// orig: 0x001F15B8
+// orig: 0x001F15B8 (orig3: 0x23AC58, the same code in Sly 3)
 void ClearSmaHandle(SMA** ppsma)
 {
     if (!*ppsma) return;

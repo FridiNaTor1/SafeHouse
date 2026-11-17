@@ -33,3 +33,4 @@ void UpdateActorBinoc(ACTOR* pa, uint32_t grfMask);
 // released (retracted at the last); with f an actor also plays its talk animation 0x60B while held (0x143EE0 kind 5)
 int CActorTalkHold(const LO* plo);  // the actor's +0x12F4 (held for a talk)
 void HoldActorEffects(LO* plo, bool fHold, bool f, uint32_t grf = 0x3F);
+void PlayActorTalkAnim(LO* plo, bool fOn);   // orig3 0x156900 / 0x156928 (the talk animation 1756)

@@ -1,4 +1,5 @@
 #pragma once
+#include <unordered_map>
 
 // 2D drawing (Sly1-Release blot.cpp's role): the screen objects' vector sprites and the CFontBrx text, as the 2D
 // VU1 program P_K21 (0x25AFA0) draws them - quads/fans/strips/lines of GS 12.4 points through a 4x4 screen
@@ -37,6 +38,36 @@ public:
     bool fWideEdgesObj = false;
     // (QoL) the object being drawn is the episode menu: its pictures are cut at the 4:3 canvas's left / right border
     bool fClipCanvasObj = false;
+    int oidObj = -1;   // (the screen object being drawn: debug SLY3_HUDPOLYS=oid)
+    // (PC, splitscreen3.h) the original two-player HUD in one player's view of a wide picture (16:9 stacked, side by
+    // side): the HUD's band for that player (0 the top half of the canvas, 1 the bottom) is drawn alone, and the band's
+    // view box (an axis-aligned quad at least 300 x 150 canvas units: its frame and the hole the view shows through)
+    // grows by ex / ey canvas units on each side to the view's edges; the rest of the band (the portrait panel) moves
+    // ex toward its side; other HUD pieces inside the box keep to their nearest box corner. ex = ey = 0 (the band's own
+    // 8:3 aspect, a 4:3 picture stacked) changes nothing. The box's hole (unwidened canvas units, the smallest box quad)
+    // is recorded per band for the view's scene rectangle (splitscreen3.cpp RectScene).
+    struct BAND2P
+    {
+        bool f = false;
+        int band = 0;
+        float ex = 0.0f, ey = 0.0f;
+        int iview = 0;   // (the view: four players draw each band in two views, each keeps its own object extents)
+    };
+    BAND2P band2p;
+    // (band2p) the two-player games' banners (the score board, class 0xA4) between the bands: left out of the bands'
+    // passes, drawn over the whole picture once after them (fCenter2p: that pass draws only them)
+    bool fCenter2p = false;
+    // (band2p) the screens that cover the whole picture (the job's result stamp 1066, Job Failed 1067): left out of the
+    // bands' and the banner's passes, drawn once over the whole picture after them (fWhole2p: that pass draws only them)
+    bool fWhole2p = false;
+    static bool FWholeScreen2p(int oid) { return oid == 1066 || oid == 1067; }
+    // (band2p) the object being drawn is that board: its banner (the strip between the bands: the winner's text and its
+    // two lines) is drawn by the fCenter2p pass, its scores (each with its backing, beside the band's line) in their
+    // player's band pass like the rest of the band (FBanner2p)
+    bool fBoard2pObj = false;
+    struct BOX2P { glm::vec4 hole{0.0f}; float area = 0.0f; int frame = -1; int oid = -1; };
+    BOX2P abox2p[2];   // (the hole seen in the frame's draw; frame: g_iframeHarness of that draw)
+    int iframe2p = 0;   // (the frame being drawn, set by the caller)
     // (QoL) the object being drawn is the wipe (0x30A, the Sly mask transition): on a wide picture only its full-span
     // rectangles go to the picture's edges; the mask's strips, which overshoot the canvas as it grows, keep their shape
     bool fWideRectsOnlyObj = false;
@@ -107,9 +138,23 @@ private:
     struct VTX { glm::vec2 pos; glm::vec4 rgba; float z; glm::vec2 uv{0.0f}; };
     struct QUAD { unsigned tex = 0; int mode = 0; bool fReplace = false; bool fMip = false; bool fAlphaTest = false; bool fOnce = false; size_t ibatch = 0; std::vector<VTX> av; };
     bool m_fBreakBatch = false;   // the next draw starts a new batch (after a quad)
+    // (band2p) an element's adjustment: skip it, none, or a shift; box quads are stretched per polygon
+    struct ADJ2P { bool fSkip = false; glm::vec2 d{0.0f}; };
+    int m_iGroup2p = 0;   // (a text box: 1 its first glyph decides, 2 m_adjGroup2p for the rest)
+    ADJ2P m_adjGroup2p;
+    ADJ2P Adj2p(glm::vec2 lo, glm::vec2 hi);
+    // (fBoard2pObj) a polygon of the board's banner: a strip under 40 canvas units high centred between the bands
+    static bool FBanner2p(glm::vec2 lo, glm::vec2 hi) { const float c = 0.5f * (lo.y + hi.y); return hi.y - lo.y < 40.0f && c >= 200.0f && c <= 248.0f; }
+    // (band2p) each object's extent per band (unwidened), this frame's and the last drawn frame's: a gauge's pieces (its
+    // masked fills overshoot it) move as one
+    struct OBJBOX2P { glm::vec4 a[2]{}, prev[2]{}; int frame[2]{-9, -9}, framePrev[2]{-9, -9}; };
+    std::unordered_map<int, OBJBOX2P> m_mpobj2p;
+    bool FBoxQuad2p(const std::vector<VTX>& av, glm::vec4* prect) const;
+    void Stretch2p(std::vector<VTX>& av, const glm::vec4& rect) const;
     std::vector<QUAD> m_aquad;
     struct BATCH { int mode; size_t itri, ctri, iline, cline; };
     void CloseBatch();
+    bool FlushPackets(int width, int height);   // (draw packets: the Vulkan renderer)
     void ExtendEdgeTriangle(VTX a, VTX b, VTX c);   // (the binocucom frames on wide pictures)
     void ExtendEdgeLine(VTX v);
     bool FClipTriangleToCanvas(const VTX& a, const VTX& b, const VTX& c);
@@ -125,3 +170,11 @@ extern CHud g_hud;
 // colours from the packets, their geometry from the loaded screen objects (matched by object id, element index
 // and polygon count). Returns the number of sprites drawn.
 int CDrawHudFromRam(const std::string& ramPath, const std::vector<std::shared_ptr<SCREENOBJ>>& aso, std::string& log);
+
+// (Sly 3) a kind-7 screen element's texture id with no shader of its own: the shader id that stands in (-1 none)
+extern int (*g_pfnQuadShaderAlias)(int idTexture);
+// (Sly 3) a transform (2x3, canvas units 640 x 480) for the kind-7 element of a texture id (false: none)
+extern bool (*g_pfnQuadXf)(int idTexture, float a[6]);
+// (Sly 3, PC: s3-plane's duel3.h) a screen object's piece about to be drawn (its object, element index, element and draw
+// state): true = drawn by the hook instead (the free-for-all's per-player frames / portraits in the 2P HUD bands)
+extern bool (*g_pfnHudPiece3)(int oidObj, int ielem, const SELEM& el, const HUDSTATE& st);

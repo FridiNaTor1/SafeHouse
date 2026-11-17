@@ -34,6 +34,8 @@ const CRV* PcrvFromLo(LO* plo);
 void ReverseLoxPath(LO* plo);
 // (the cached curve of a PATH object dropped: its points changed, e.g. a merged nav polygon reused, nav.cpp)
 void InvalidateCrvOfLo(const LO* plo);
+// (PC, the map editor: the cached curve takes the path's edited points)
+void RefreshCrvOfLo(LO* plo);
 // orig 0x1E6180 (recomputes the distances for the matrix)
 void RecalcCrv(CRV* pcrv, const glm::mat4& mat);
 

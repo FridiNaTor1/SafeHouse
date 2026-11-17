@@ -12,20 +12,27 @@
 
 struct SW;
 struct JOB3;
+struct LO;
 
 struct JOBENDHOOKS3
 {
     void (*pfnRewards)(JOB3*) = nullptr;       // orig3 0x187270 (the job's rewards / progress save)
     void (*pfnCompleteClose)(JOB3*) = nullptr; // orig3 0x1874E8 JobCompleteClose (its exit task, the next job)
     void (*pfnRestart)(JOB3*) = nullptr;       // orig3 0x186FE8 (RequestTaskStartByOid 0x189F38 on its checkpoint)
+    // the failing script (state 4, +0xC4): started with the job (0x226010), running (its LO +0x60 bit 1)
+    void (*pfnStartScpt)(LO*, JOB3*) = nullptr;
+    bool (*pfnFScptRunning)(LO*) = nullptr;
 };
 extern constinit JOBENDHOOKS3 g_jobendhooks3;
 
 // orig3: 0x001871C0 JobComplete's screen half: with a character (+0xB0 non-zero) the stamp (state 1), else at once
 // (the rewards and the close). Call it after the broadcast 0x24.
 void JobEndComplete3(JOB3* pjob);
-// orig3: 0x00186EE0 / 0x00186F90 the job failed: its failure line (text id: +0xC8, string 851) and Job Failed (state 5)
-void JobEndFail3(JOB3* pjob, int idText);
+// orig3: 0x00186EE0 / 0x00186F90 the job failed: its failure line (text id: +0xC8, string 851) and Job Failed (state 5);
+// with a failing script (+0xC4, the MISSION methods 1355..1358's object) that script first (state 4)
+void JobEndFail3(JOB3* pjob, int idText, LO* pscpt = nullptr);
+// orig3: 0x187040's end: the job ended by its quit (state 8: waits for the world change)
+void JobEndQuit3(JOB3* pjob);
 // the job's end state (0: none) and its failure line
 int NJobEndState3(const JOB3* pjob);
 int IdJobFailText3();

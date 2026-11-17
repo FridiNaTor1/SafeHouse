@@ -1,7 +1,8 @@
 #pragma once
 // The Collection Style Launcher's sound: the menu's music and its short interface sounds, mixed in one SDL2 audio
 // callback. SDL2 is loaded at run time (SDL2.dll beside the games on Windows, the system's
-// libSDL2-2.0.so.0 on Linux): without it the collection runs silently, and the main launcher never needs it.
+// libSDL2-2.0.so.0 on Linux, the app's Frameworks/libSDL2-2.0.0.dylib on macOS, the SDL2 already in the process in the
+// Android and iOS apps): without it the collection runs silently, and the main launcher never needs it.
 // Decoders for the formats the menu reads: Xbox IMA ADPCM (The Sly Collection's FMOD banks, FSB4: at the import) and
 // PCM WAV (the converted menu's music and sounds).
 #include <algorithm>
@@ -276,9 +277,18 @@ private:
         auto sym = [&](const char* n) { return reinterpret_cast<void*>(GetProcAddress(lib, n)); };
 #else
         void* lib = nullptr;
-        for (const fs::path& p : {executableDirectory() / "libSDL2-2.0.so.0", executableDirectory().parent_path() / "lib" / "libSDL2-2.0.so.0",
-                                  fs::path("libSDL2-2.0.so.0"), fs::path("libSDL2-2.0.0.dylib"), fs::path("libSDL2.so")})
-            if ((lib = dlopen(utf8(p).c_str(), RTLD_NOW | RTLD_LOCAL))) break;
+#if defined(CANE_ANDROID) || defined(CANE_IOS)
+        // (the apps have SDL2 in the process already: Android's libSDL2.so, which the activity loads; iOS: the whole of
+        // SDL2 in SafeHouseCore.framework, which the launcher links)
+        if (dlsym(RTLD_DEFAULT, "SDL_OpenAudioDevice")) lib = RTLD_DEFAULT;
+#endif
+        // (Linux: beside the program or in the package's lib folder, then the system's; macOS: the app's Frameworks
+        // folder, where the package puts the games' libSDL2-2.0.0.dylib, then beside the program)
+        if (!lib)
+            for (const fs::path& p : {executableDirectory() / "libSDL2-2.0.so.0", executableDirectory().parent_path() / "lib" / "libSDL2-2.0.so.0",
+                                      executableDirectory().parent_path() / "Frameworks" / "libSDL2-2.0.0.dylib", executableDirectory() / "libSDL2-2.0.0.dylib",
+                                      fs::path("libSDL2-2.0.so.0"), fs::path("libSDL2-2.0.0.dylib"), fs::path("libSDL2.so")})
+                if ((lib = dlopen(utf8(p).c_str(), RTLD_NOW | RTLD_LOCAL))) break;
         if (!lib) return false;
         auto sym = [&](const char* n) { return dlsym(lib, n); };
 #endif

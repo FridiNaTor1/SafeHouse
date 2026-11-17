@@ -20,6 +20,8 @@ struct DETENTRY
     int st = 0;             // +0x4
     float t8 = 0;           // +0x8 the state's time
     float tC = 0;           // +0xC when it left 0
+    int n4 = 0;             // (Sly 3's entry is 0x14 bytes: {object, +4 its rank (0x170118's argument), +8 the state, ...};
+                            // the rank is not given natively: 0)
 };
 
 struct DETECTOR

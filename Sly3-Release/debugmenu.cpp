@@ -3,6 +3,9 @@
 // teleport slot 38, F9's job end, F6 / F7) and never write the save themselves except where marked "[save]".
 #include "debugmenu.h"
 #include "game/sly3.h"
+#include "cheat.h"
+#include "debugphys.h"
+#include "actioninput.h"
 #include "region.h"
 
 #include "activate.h"
@@ -70,7 +73,7 @@ extern std::unordered_map<int, int> g_mpoidiwrecTask;   // autoplay.cpp / brx.cp
 namespace
 {
 // ------------------------------------------------------------ state
-enum PAGEK { PK_Root, PK_Episodes, PK_Worlds, PK_Character, PK_Teleport, PK_Jobs, PK_JobList, PK_Player, PK_Speed, PK_Display,
+enum PAGEK { PK_Root, PK_Cheats, PK_Episodes, PK_Worlds, PK_Character, PK_Teleport, PK_Jobs, PK_JobList, PK_Player, PK_Speed, PK_Display,
              PK_Extras, PK_ExtrasChars, PK_ExtrasSly, PK_ExtrasCarm, PK_ExtrasGuardEps, PK_ExtrasGuards, PK_ExtrasBosses };
 struct PAGE
 {
@@ -85,6 +88,7 @@ struct ITEM
     bool fSave = false;         // changes the save (marked "[save]")
     bool fDim = false;          // informational / not available
     std::function<void()> pfn;  // null: nothing to do
+    std::function<void(int)> pfnAdjust;   // a slider: left / right step it (-1 / +1) instead of paging
 };
 
 bool s_fOpen = false;
@@ -209,6 +213,8 @@ std::string StrWorldKey(int iwrec, std::string* pstrEpisode = nullptr)
 
 std::string StrWorldName(int iwrec)
 {
+    // (Sly 3: the executable's world names, "m_ext"; the worlds are indexed 0..39, game/sly3.h)
+    if (const std::string name = g_disc.SzWorldElf(iwrec); !name.empty()) return name;
     const std::vector<WREC>& awrec = AwrecWorlds();
     if (iwrec < 0 || iwrec >= int(awrec.size())) return "?";
     if (iwrec == 0) return "Prologue (Cairo museum)";
@@ -223,6 +229,7 @@ std::string StrWorldName(int iwrec)
 
 std::string StrEpisodeName(int iep)
 {
+    return sly3::SzEpisode(iep);   // (Sly 3's episodes: MultiPlayer, Intro, Trainer, Venice .. Isle)
     if (iep == 0) return "Prologue";
     std::string s = s_psw ? StrLocalized(s_psw, IdText(0x6D + iep)) : std::string();
     char ach[32];
@@ -345,10 +352,14 @@ void StepNoclip(SW* psw)
     const JOYPS2& j = JoyFor(2);
     const float dt = g_clock.dt40 > 0.0f ? g_clock.dt40 : 1.0f / 60.0f;
     // (JOYPS2's buttons are in the game's layout: the libpad bits byte-swapped)
-    auto held = [&](uint32_t grfLibpad) { return (j.grfbtn & GrfbtnPs2FromLibpad(grfLibpad)) != 0; };
+    using sly2actions::Action;
+    const bool advanced = sly2actions::Active();
+    auto held = [&](Action action, uint32_t grfLibpad) {
+        return advanced ? sly2actions::Held(action) : (j.grfbtn & GrfbtnPs2FromLibpad(grfLibpad)) != 0;
+    };
     float speed = 1100.0f;
-    if (held(BTN_R1)) speed *= 4.0f;    // (Shift)
-    if (held(BTN_L1)) speed *= 0.25f;   // (1: slow, for framing)
+    if (held(Action::NoclipFast, BTN_R1)) speed *= 4.0f;
+    if (held(Action::NoclipSlow, BTN_L1)) speed *= 0.25f;
     // the stick moves level, relative to the camera's heading; the buttons up and down
     glm::vec3 fwd(g_cm.mat[0].x, g_cm.mat[0].y, 0.0f);
     if (glm::length(fwd) < 1e-3f) fwd = glm::vec3(g_cm.mat[2].x, g_cm.mat[2].y, 0.0f);   // (looking straight down)
@@ -356,8 +367,8 @@ void StepNoclip(SW* psw)
     const glm::vec3 left(-fwd.y, fwd.x, 0.0f);
     glm::vec3 v = fwd * j.y - left * j.x;
     float dz = 0.0f;
-    if (held(BTN_Cross) || held(BTN_R2)) dz += 1.0f;     // up: Cross (Space), R2 (3)
-    if (held(BTN_Circle) || held(BTN_L2)) dz -= 1.0f;    // down: Circle (E), L2 (2)
+    if (held(Action::NoclipAscend, BTN_Cross | BTN_R2)) dz += 1.0f;
+    if (held(Action::NoclipDescend, BTN_Circle | BTN_L2)) dz -= 1.0f;
     v.z += dz;
     if (glm::length(v) > 1.0f) v = glm::normalize(v);
     s_posNoclip += v * speed * dt;
@@ -373,7 +384,7 @@ void StepNoclip(SW* psw)
 }
 
 // ------------------------------------------------------------ the pages
-// ------------------------------------------------------------ PC Extras (pccharacter.h)
+// ------------------------------------------------------------ Extras (pccharacter.h)
 // a row's short label: "Carmelita (Prologue)" -> "Prologue", "Tango (Episode 2)" stays
 std::string StrShortName(int idef)
 {
@@ -472,6 +483,56 @@ void AddKindRows(std::vector<ITEM>& a, PCCHARK kind, int iep)
     }
 }
 
+// the sliders' stops (the original's values marked 1x)
+const float s_agGravity[] = {0.1f, 0.17f, 0.25f, 0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 2.0f, 3.0f, 5.0f};
+const float s_asScale[] = {0.05f, 0.1f, 0.2f, 0.33f, 0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 2.0f, 3.0f, 5.0f, 10.0f, 25.0f};
+
+template <size_t N>
+int IStop(const float (&ag)[N], float g)
+{
+    int ibest = 0;
+    for (int i = 0; i < int(N); ++i)
+        if (std::fabs(std::log(ag[i] / g)) < std::fabs(std::log(ag[ibest] / g))) ibest = i;
+    return ibest;
+}
+
+// "|----+-----|  0.5x" (the bar's notch at the value, 1x a tick)
+template <size_t N>
+std::string StrSlider(const float (&ag)[N], float g)
+{
+    const int i = IStop(ag, g);
+    std::string s = "<";
+    for (int k = 0; k < int(N); ++k) s += k == i ? "O" : ag[k] == 1.0f ? "|" : "-";
+    char ach[24];
+    std::snprintf(ach, sizeof ach, ">  %gx", g);
+    return s + ach;
+}
+
+template <size_t N>
+float GStep(const float (&ag)[N], float g, int dir) { return ag[std::clamp(IStop(ag, g) + dir, 0, int(N) - 1)]; }
+
+std::string StrButtons(const uint32_t* an, int c)
+{
+    std::string s;
+    for (int i = 0; i < c; ++i)
+    {
+        if (i) s += " ";
+        switch (an[i])
+        {
+        case 0x8000: s += "Left"; break;
+        case 0x4000: s += "Down"; break;
+        case 0x2000: s += "Right"; break;
+        case 0x1000: s += "Up"; break;
+        case 0x0008: s += "R1"; break;
+        case 0x0004: s += "L1"; break;
+        case 0x0002: s += "R2"; break;
+        case 0x0001: s += "L2"; break;
+        default: s += "?"; break;
+        }
+    }
+    return s;
+}
+
 std::vector<ITEM> AitemPage(const PAGE& page, std::string* pstrTitle)
 {
     std::vector<ITEM> a;
@@ -488,10 +549,12 @@ std::vector<ITEM> AitemPage(const PAGE& page, std::string* pstrTitle)
     switch (page.pagek)
     {
     case PK_Root:
-        *pstrTitle = std::string("Sly 2: Band of Thieves PC Port (") + PchzPortVersion() + ")";
+        *pstrTitle = std::string("Sly 3: Honor Among Thieves PC Port (") + PchzPortVersion() + ")";
         item("Warps...", [] { Push(PK_Episodes); });
         item("Character...", [] { Push(PK_Character); }, StrPlayer(PloPoCurrent(psw)));
-        item("PC Extras...", [] { Push(PK_Extras); }, StrExtrasSummary());
+        // (Extras: Sly 2's guest characters, guards and bosses (pccharacter.h: Sly 2's worlds and classes); not for
+        // Sly 3 yet)
+        if (ITEM* pit = item("Extras...", nullptr, "(not for Sly 3 yet)")) pit->fDim = true;
         item("Noclip", [] {
             s_fNoclipWant = !s_fNoclipWant;
             if (s_fNoclipWant) Close();
@@ -505,35 +568,47 @@ std::vector<ITEM> AitemPage(const PAGE& page, std::string* pstrTitle)
             item("Speed...", [] { Push(PK_Speed); }, ach);
         }
         item("Display...", [] { Push(PK_Display); });
+        item("Cheat Codes...", [] { Push(PK_Cheats); });
         item("Reset World", [psw] {
             const int iwrec = g_transition.iwrecCur;
             if (iwrec < 0) return;
-            RequestWorldWarp(psw, iwrec);
+            RequestWorldWarp(psw, iwrec, sly3::POINT_DEFAULT, -1);
             Status("reset: world " + std::to_string(iwrec) + " reloaded at its entrance");
             Close();
         }, StrWorldName(g_transition.iwrecCur));
         item("Close", [] { Close(); });
         break;
+    case PK_Cheats:
+        // the original's codes (cheat.h): entered on the episode menu (d-pad, shoulder buttons); here run at once
+        *pstrTitle = "Cheat Codes (enter on the episode menu)";
+        for (int i = 0; i < CCheatCodes(); ++i)
+        {
+            const CHEATDESC d = CheatCodeDesc(i);
+            item(d.pchzName, [i] { Defer([i](SW* p) { RunCheatCode(p, i); Status(std::string("cheat: ") + CheatCodeDesc(i).pchzName); }); },
+                 StrButtons(d.an, 6) + (i == IcheatLast() ? "  (last)" : ""), d.fSave);
+        }
+        break;
     case PK_Episodes:
         *pstrTitle = "Warps: Episode";
-        for (int iep = 0; iep <= 8; ++iep)
+        for (int iep = sly3::EP_Intro; iep < sly3::EP_Max; ++iep)
             item(StrEpisodeName(iep) + "...", [iep] { Push(PK_Worlds, iep); },
-                 iep == IepisodeCur() ? "(current)" : "");
+                 iep == g_disc.IepisodeOfWorld(g_transition.iwrecCur) ? "(current)" : "");
         break;
     case PK_Worlds:
     {
         *pstrTitle = "Warps: " + StrEpisodeName(page.arg);
-        const std::vector<WREC>& awrec = AwrecWorlds();
-        for (int i = 0; i < int(awrec.size()); ++i)
+        // (Sly 3's 40 worlds by their episode, 0x2EDF10; the Intro's page also lists the game menu and the
+        // MultiPlayer worlds)
+        for (int i = 0; i < sly3::CWORLD; ++i)
         {
-            if (awrec[size_t(i)].slot != page.arg) continue;
-            const bool fFile = awrec[size_t(i)].fk.cb != 0;
-            const std::string strFile = i < 44 ? s_apchzWorldFile[i] : "?";
+            const int iep = g_disc.IepisodeOfWorld(i);
+            if (iep != page.arg && !(page.arg == sly3::EP_Intro && iep == sly3::EP_MultiPlayer)) continue;
+            const bool fFile = g_disc.FkWorld(i).cb != 0;
             ITEM* pit = item(StrWorldName(i), fFile ? std::function<void()>([psw, i] {
-                RequestWorldWarp(psw, i);
+                RequestWorldWarp(psw, i, sly3::POINT_DEFAULT, -1);
                 Status("warp: world " + std::to_string(i) + " " + StrWorldName(i));
                 Close();
-            }) : std::function<void()>(), (i == g_transition.iwrecCur ? "(current) " : "") + strFile);
+            }) : std::function<void()>(), (i == g_transition.iwrecCur ? "(current) " : "") + std::string("world ") + std::to_string(i));
             pit->fDim = !fFile;
         }
         break;
@@ -543,7 +618,7 @@ std::vector<ITEM> AitemPage(const PAGE& page, std::string* pstrTitle)
         *pstrTitle = "Character";
         LO* pcur = PloPoCurrent(psw);
         std::vector<LO*> aplo;
-        for (CID cid : {0x35, 0x37, 0x36})
+        for (CID cid : {S3CID(0x35), S3CID(0x37), S3CID(0x36)})
             for (LO* plo : AploOfClass(psw, cid))
                 if (std::find(aplo.begin(), aplo.end(), plo) == aplo.end()) aplo.push_back(plo);
         const bool fSafeHouse = pcur && FIsLoDerivedFrom(pcur, S3CID(0x46));
@@ -567,14 +642,14 @@ std::vector<ITEM> AitemPage(const PAGE& page, std::string* pstrTitle)
     // PC addition (pccharacter.h, pcloader.h): guest characters, guards and bosses from other worlds' files, debug only.
     // A model whose world is not kept yet is loaded while this world runs (no reload); the choice applies when ready.
     case PK_Extras:
-        *pstrTitle = "PC Extras";
+        *pstrTitle = "Extras";
         item("Characters...", [] { Push(PK_ExtrasChars); }, StrCharsSummary());
         item("Guards...", [] { Push(PK_ExtrasGuardEps); }, StrKindSummary(PCCHARK_Guard));
         item("Bosses...", [] { Push(PK_ExtrasBosses); }, StrKindSummary(PCCHARK_Boss));
         break;
     case PK_ExtrasChars:
     {
-        *pstrTitle = "PC Extras: Characters";
+        *pstrTitle = "Extras: Characters";
         const int idefSly = IdefPcCharSlyOutfit(), idefSlyWant = IdefPcCharSlyOutfitWanted();
         item("Sly...", [] { Push(PK_ExtrasSly); },
              idefSlyWant >= 0 ? StrShortName(idefSlyWant) + " (loading)" : idefSly >= 0 ? StrShortName(idefSly) : std::string("Normal"));
@@ -593,7 +668,7 @@ std::vector<ITEM> AitemPage(const PAGE& page, std::string* pstrTitle)
     }
     case PK_ExtrasSly:
     {
-        *pstrTitle = "PC Extras: Sly";
+        *pstrTitle = "Extras: Sly";
         const int idefCur = IdefPcCharSlyOutfit(), idefWant = IdefPcCharSlyOutfitWanted();
         item("Normal", [] {
             Defer([](SW* p) {
@@ -615,7 +690,7 @@ std::vector<ITEM> AitemPage(const PAGE& page, std::string* pstrTitle)
     }
     case PK_ExtrasCarm:
     {
-        *pstrTitle = "PC Extras: Carmelita";
+        *pstrTitle = "Extras: Carmelita";
         const int idefCur = IdefPcCharPuppet(), idefWant = IdefPcCharPuppetWanted();
         item("Off (the player's own model)", [] {
             Defer([](SW* p) {
@@ -641,7 +716,7 @@ std::vector<ITEM> AitemPage(const PAGE& page, std::string* pstrTitle)
         break;
     }
     case PK_ExtrasGuardEps:
-        *pstrTitle = "PC Extras: Guards";
+        *pstrTitle = "Extras: Guards";
         for (int iep = 0; iep <= 8; ++iep)
         {
             const int c = CRowsOfKind(PCCHARK_Guard, iep);
@@ -652,17 +727,17 @@ std::vector<ITEM> AitemPage(const PAGE& page, std::string* pstrTitle)
         }
         break;
     case PK_ExtrasGuards:
-        *pstrTitle = page.arg == 0 ? std::string("PC Extras: Guards, Prologue") : "PC Extras: Guards, Episode " + std::to_string(page.arg);
+        *pstrTitle = page.arg == 0 ? std::string("Extras: Guards, Prologue") : "Extras: Guards, Episode " + std::to_string(page.arg);
         AddKindRows(a, PCCHARK_Guard, page.arg);
         break;
     case PK_ExtrasBosses:
-        *pstrTitle = "PC Extras: Bosses";
+        *pstrTitle = "Extras: Bosses";
         AddKindRows(a, PCCHARK_Boss, -1);
         break;
     case PK_Teleport:
     {
         *pstrTitle = "Teleport (in this world)";
-        for (CID cid : {0x2A, 0x29})
+        for (CID cid : {S3CID(0x2A), S3CID(0x29)})
             for (LO* plo : AploOfClass(psw, cid))
             {
                 const glm::vec3 pos = PosLoWorld(plo);
@@ -722,6 +797,21 @@ std::vector<ITEM> AitemPage(const PAGE& page, std::string* pstrTitle)
     case PK_Player:
         *pstrTitle = "Player";
         item("Infinite Health and Power (F7)", [] { g_fDebugInfinite = !g_fDebugInfinite; }, StrOnOff(g_fDebugInfinite));
+        // (debugphys.h) sliders: left / right; Cross back to 1x
+        item("Gravity", [] { SetDebugGravity(s_psw, 1.0f); Status("gravity 1x"); }, StrSlider(s_agGravity, GDebugGravity()))->pfnAdjust = [](int dir) {
+            const float g = GStep(s_agGravity, GDebugGravity(), dir);
+            SetDebugGravity(s_psw, g);
+            char ach[64];
+            std::snprintf(ach, sizeof ach, "gravity %gx (Sly, Bentley, Murray)", g);
+            Status(ach);
+        };
+        item("Character Scale", [] { SetDebugCharScale(1.0f); Status("character scale 1x"); }, StrSlider(s_asScale, SDebugCharScale()))->pfnAdjust = [](int dir) {
+            const float s = GStep(s_asScale, SDebugCharScale(), dir);
+            SetDebugCharScale(s);
+            char ach[64];
+            std::snprintf(ach, sizeof ach, "character scale %gx", s);
+            Status(ach);
+        };
         item("Refill Health and Power", [] {
             if (s_psw) CheatRefillPlayers(s_psw);
             Status("health and power refilled");
@@ -807,7 +897,7 @@ void DrawPerf(const FONTBRX& font, const FONTBRX* picons)
     if (s_fps > 0.5) std::snprintf(achFps, sizeof achFps, "%.0f", s_fps);
     else std::snprintf(achFps, sizeof achFps, "--");
     std::snprintf(ach, sizeof ach, "%s FPS   world %d %s   %s%s", achFps, g_transition.iwrecCur,
-                  g_transition.iwrecCur >= 0 && g_transition.iwrecCur < 44 ? s_apchzWorldFile[g_transition.iwrecCur] : "",
+                  StrWorldName(g_transition.iwrecCur).c_str(),
                   strPos.c_str(), s_ploNoclip ? "   noclip" : "");
     const float size = 15.0f;
     const float w = DxLine(font, picons, ach, size);
@@ -957,9 +1047,21 @@ void UpdateDebugMenu(SW* psw)
     else if (dir) ++s_cframeHeld;
     const bool fStep = dir && (s_cframeHeld == 0 || (s_cframeHeld >= 18 && (s_cframeHeld - 18) % 4 == 0));
     if (fStep) page.isel = (page.isel + dir + c) % c;
-    // left / right: a page down / up
-    if (grfPressed & BTN_Right) page.isel = std::min(c - 1, page.isel + CROW_SHOWN);
-    if (grfPressed & BTN_Left) page.isel = std::max(0, page.isel - CROW_SHOWN);
+    // left / right: a slider's step (repeating while held), else a page down / up
+    {
+        static int s_dirLR = 0, s_cframeLR = 0;
+        const int dirLR = (s_grfRaw & BTN_Right) || s_xStick > 0.5f ? 1 : (s_grfRaw & BTN_Left) || s_xStick < -0.5f ? -1 : 0;
+        if (dirLR != s_dirLR) s_dirLR = dirLR, s_cframeLR = 0;
+        else if (dirLR) ++s_cframeLR;
+        const bool fStepLR = dirLR && (s_cframeLR == 0 || (s_cframeLR >= 18 && (s_cframeLR - 18) % 6 == 0));
+        const ITEM& itSel = aitem[size_t(page.isel)];
+        if (itSel.pfnAdjust) { if (fStepLR) itSel.pfnAdjust(dirLR); }
+        else
+        {
+            if (grfPressed & BTN_Right) page.isel = std::min(c - 1, page.isel + CROW_SHOWN);
+            if (grfPressed & BTN_Left) page.isel = std::max(0, page.isel - CROW_SHOWN);
+        }
+    }
     // the mouse: the row under the cursor once it moves
     if (GLFWwindow* w = g_gl.window)
     {
@@ -1012,6 +1114,10 @@ void UpdateDebugTools(SW* psw)
     if (!g_pcinput.fDebugKeys)
     {
         if (s_ploNoclip) EndNoclip(psw, false);
+        // (the gravity and the character scale back to the original's)
+        if (GDebugGravity() != 1.0f) SetDebugGravity(psw, 1.0f);
+        if (SDebugCharScale() != 1.0f) SetDebugCharScale(1.0f);
+        UpdateDebugCharScale(psw);
         OnPcWorldStep(psw, false);   // (the guest characters / outfits / guards turned off: pcloader.h)
         return;
     }
@@ -1019,12 +1125,20 @@ void UpdateDebugTools(SW* psw)
     if (static const int s_frameNoclip = std::getenv("SLY2N_NOCLIPAT") ? std::atoi(std::getenv("SLY2N_NOCLIPAT")) : -1;
         s_frameNoclip >= 0 && g_frameJoy == s_frameNoclip)
         s_fNoclipWant = true;
+    // (test aids: SLY2N_CHARSCALE=s, SLY2N_GRAVITY=g: the sliders set from the start)
+    if (static bool s_fEnvPhys = false; !s_fEnvPhys)
+    {
+        s_fEnvPhys = true;
+        if (const char* psz = std::getenv("SLY2N_CHARSCALE")) SetDebugCharScale(float(std::atof(psz)));
+        if (const char* psz = std::getenv("SLY2N_GRAVITY")) SetDebugGravity(psw, float(std::atof(psz)));
+    }
     std::vector<std::function<void(SW*)>> apfn;
     apfn.swap(s_apfnDeferred);
     for (auto& pfn : apfn) pfn(psw);
     // the time scale (clock factor 4: none of the game's code sets it; a world load resets it to 1)
     if (g_clock.af[4] != s_rSpeed) SetClockFactor(&g_clock, 4, s_rSpeed);
     if (g_fDebugInfinite) CheatRefillPlayers(psw);
+    UpdateDebugCharScale(psw);   // (debugphys.h: the current player's hulls)
     // noclip: follows the current player (a character switch moves it to the new one)
     if (s_ploNoclip && (!s_fNoclipWant || PloPoCurrent(psw) != s_ploNoclip || s_ploNoclip->fRemoved)) EndNoclip(psw, false);
     if (s_fNoclipWant && !s_ploNoclip && !g_transition.fPending) BeginNoclip(psw);
@@ -1102,6 +1216,7 @@ void DrawDebugMenu()
     }
     std::string hint = strHint;
     if (fScroll) hint += "    " + std::to_string(page.isel + 1) + " / " + std::to_string(aitem.size());
+    if (page.isel >= 0 && page.isel < int(aitem.size()) && aitem[size_t(page.isel)].pfnAdjust) hint += "    Left / Right: adjust";
     DrawLine(*pfont, picons, hint, xText, yHint, sizeHint, offHint);
     if (fStatus) DrawLine(*pfont, picons, s_strStatus, xText, yStatus, sizeHint, offValue);
 }
@@ -1109,7 +1224,7 @@ void DrawDebugMenu()
 
 void DrawDebugOverlay(int width, int height)
 {
-    // (PC Extras: Carmelita's aim mode crosshair, pccharacter.h)
+    // (Extras: Carmelita's aim mode crosshair, pccharacter.h)
     const bool fCross = g_pcinput.fDebugKeys && FPcCarmCrosshair();
     if (!g_pcinput.fDebugKeys || !(s_fOpen || s_fPerf || fCross)) return;
     g_hud.Begin();

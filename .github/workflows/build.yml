@@ -7,16 +7,25 @@
 #
 # Releases are published only from FridiNaTor1/SafeHouse (any other repository, a fork or the development
 # repository, builds and tests only). Versions are <major>.<minor>.<run number>: <major>.<minor> from the CMake
-# project version, the run number of this workflow (monotonic). The tag is v<version>. Each package embeds its
-# version, commit and UTC build date (CMakeLists.txt SAFEHOUSE_VERSION / SAFEHOUSE_BUILD_DATE / CANE_GIT_HASH;
-# safehouse --version). Pull requests build development packages (no version: they never check for updates).
+# project version, the run number of this workflow (monotonic). The tag is v<version>; the release job refuses a
+# version that is not newer than the newest existing vX.Y.Z tag (the launchers compare x.y.z numerically: 0.2.95 is
+# newer than 0.1.94, 0.2.1 newer than 0.2). Every package carries it: the launcher (safehouse --version, Settings >
+# Launcher, the update check; CMakeLists.txt SAFEHOUSE_VERSION / SAFEHOUSE_BUILD_DATE / CANE_GIT_HASH), the Windows
+# file properties and the setup's Apps & features entry, the macOS / iOS bundle versions (CFBundleVersion of the
+# .ipa: the run number), the Switch / Switch 2 NACP, the Android versionName and versionCode
+# (x * 10000000 + y * 100000 + z, android/app/build.gradle). Pull requests build development packages: no version
+# (they never check for updates), except that the APK is x.y.<run number>-dev with the run number's versionCode, so
+# release and pull request APKs install over each other in run order. The asset names stay the same in every release
+# (the download links .../releases/latest/download/<name> and the update manifest rely on them).
 #
 # The packages are built the way the local packaging builds them: Linux on
 # Ubuntu 22.04 (glibc baseline), Release, LTO off, X11 and Wayland in GLFW, the pinned AppImage runtime and
 # appimagetool; Windows cross-built with LLVM/MinGW 20260616 (UCRT) and NSIS, then installed and started on a real
 # Windows (scripts/windows/smoke.ps1, including an update from a local fake release); macOS from macos.yml; the iOS
 # app from ios.yml (artifacts only).
-# Downloads are pinned by version and SHA-256; actions by commit. No secrets beyond GITHUB_TOKEN.
+# Downloads are pinned by version and SHA-256; actions by commit. Secrets, each optional: ANDROID_* (the APK's release
+# key), APPLE_* (ios.yml), WINDOWS_SIGNING_CERT_BASE64 / WINDOWS_SIGNING_CERT_PASSWORD (Authenticode for the Windows
+# programs and the setup, scripts/windows/sign.py; without them the Windows packages are unsigned).
 name: Build and release
 
 on:
@@ -44,6 +53,7 @@ jobs:
       date: ${{ steps.v.outputs.date }}
       commit: ${{ steps.v.outputs.commit }}
       publish: ${{ steps.v.outputs.publish }}
+      build-number: ${{ steps.v.outputs.build-number }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -72,6 +82,7 @@ jobs:
             echo "date=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
             echo "commit=${SHA:0:8}"
             echo "publish=$publish"
+            echo "build-number=$RUN_NUMBER"
           } | tee -a "$GITHUB_OUTPUT"
 
   linux:
@@ -186,8 +197,19 @@ jobs:
       CCACHE_MAXSIZE: 2G
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - name: Build tools (Ninja, NSIS, ccache)
-        run: sudo apt-get update && sudo apt-get install -y ninja-build nsis ccache nasm glslang-tools   # (glslang: Sly 2's Vulkan SPIR-V)
+      - name: Build tools (Ninja, NSIS, ccache, osslsigncode)
+        run: sudo apt-get update && sudo apt-get install -y ninja-build nsis ccache nasm glslang-tools osslsigncode   # (glslang: Sly 2's Vulkan SPIR-V)
+      - name: Code-signing certificate (when the secrets are available)
+        env:
+          CERT_BASE64: ${{ secrets.WINDOWS_SIGNING_CERT_BASE64 }}
+        run: |
+          set -eu
+          if [ -n "$CERT_BASE64" ]; then
+            printf '%s' "$CERT_BASE64" | base64 -d > "$RUNNER_TEMP/safehouse-signing.pfx"
+            echo "SAFEHOUSE_WINDOWS_SIGN_PFX=$RUNNER_TEMP/safehouse-signing.pfx" >> "$GITHUB_ENV"
+          else
+            echo "No signing secrets: the Windows packages are unsigned"
+          fi
       - name: LLVM/MinGW cache
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
@@ -224,10 +246,19 @@ jobs:
       - name: Build
         run: cmake --build build/windows-cross --parallel 4
       - name: Package (portable zip and offline setup)
+        env:
+          SAFEHOUSE_WINDOWS_SIGN_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERT_PASSWORD }}
         run: |
           python3 scripts/package.py --build build/windows-cross --output dist --windows --arch ${{ matrix.arch }}
           # (Sly 2's VR: the OpenXR loader beside the game, cmake/openxr-loader.cmake)
           test -f dist/SafeHouse-Launcher-Windows-${{ matrix.arch }}/bin/openxr_loader.dll || { echo "::error::the package has no openxr_loader.dll"; exit 1; }
+          if [ -n "${SAFEHOUSE_WINDOWS_SIGN_PFX:-}" ]; then
+            osslsigncode verify -in dist/SafeHouse-Launcher-Windows-${{ matrix.arch }}-Setup.exe \
+              || echo "::warning::the setup's signature does not verify against the runner's trust store (a self-signed test certificate?)"
+          fi
+      - name: Remove the signing certificate
+        if: always()
+        run: rm -f "$RUNNER_TEMP/safehouse-signing.pfx"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: windows-${{ matrix.arch }}-release
@@ -282,6 +313,9 @@ jobs:
     timeout-minutes: 120
     env:
       SAFEHOUSE_VERSION: ${{ needs.version.outputs.version }}
+      SAFEHOUSE_BUILD_DATE: ${{ needs.version.outputs.date }}
+      SAFEHOUSE_BUILD_NUMBER: ${{ needs.version.outputs.build-number }}
+      CANE_GIT_HASH: ${{ needs.version.outputs.commit }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: glslang (Sly 2's Vulkan SPIR-V)
@@ -487,6 +521,16 @@ jobs:
             --require windows-arm64-portable --require windows-arm64-setup --require macos-arm64 --require macos-x86_64 --require switch-nro --require switch2-nro --require android-apk
           # (the previous release: the newest tag of this scheme, vX.Y.Z)
           previous=$(git tag --list 'v*' --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sed -n 1p || true)
+          # A release must be newer than every earlier one, or installed launchers would never offer it (and Android
+          # would refuse its APK): a lower CMake project version or a reset run number stops here. (A re-run of the
+          # same workflow run finds its own tag: equal is allowed then.)
+          if [ -n "$previous" ] && [ "$previous" != "$TAG" ]; then
+            newest=$(printf '%s\n%s\n' "${previous#v}" "$VERSION" | sort -V | tail -n 1)
+            if [ "$newest" != "$VERSION" ]; then
+              echo "::error::Version $VERSION is not newer than the latest release $previous"
+              exit 1
+            fi
+          fi
           {
             printf 'SafeHouse %s, built %s from %s.\n\n## Changes\n\n' "$VERSION" "${DATE%%T*}" "$COMMIT"
             if [ -n "$previous" ]; then

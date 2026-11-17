@@ -20,6 +20,7 @@ void InitMenu(SW* psw);        // orig 0x001AE928 (+ the card dialogs' 0x1DA770)
 void UpdateMenu(SW* psw);      // orig 0x001AEEE0 and the card dialog's 0x1ACCC8, every frame
 bool FMenuShown();             // orig 0x001D9880 on 0x3D9ED0 / 0x2E6550 / 0x3DA4F0 (the episode menu waits)
 bool FMenuActive();            // the menu is in the HUD's list (the game paused under it)
+int NMenuState();              // the menu's state (MENU +0x1FC): 0 none; the cheat codes (cheat.h) read it
 bool FCardMessageActive();     // orig 0x001D9880 on the card widget 0x2E6550
 // orig3 0x001D48D0: the pause menu (false when it cannot open now)
 bool FOpenPauseMenu(SW* psw);
@@ -38,6 +39,7 @@ bool FCamReverse3(int kind, bool fVertical);
 
 // (Sly 2's script string ids: none in Sly 3)
 std::string StrMenuScript(int id);
+bool FMenuActionPrompt(int textId, int& binding, bool& controller);
 // the auto-save the episode menu runs when it starts (orig 0x1ABD98(g_save, 1))
 void HudAutoSaveFrontEnd();
 
@@ -46,9 +48,18 @@ void HudAutoSaveFrontEnd();
 extern int g_ncardMode;
 
 // orig (Europe) 0x001DDFB8: the title's language menu (a disc with two or more languages)
-void OpenLanguageMenu(SW* psw);
+void OpenLanguageMenu(SW* psw, bool fCanCancel = true);
 // the card's status known (the European title's first Start turns the card on: frontend.cpp)
 bool FCardSettled();
 
 // orig3 0x0021D360: a record's settings take effect (the mixer mode, the music and effects volumes)
 void ApplyGameSettings(const GAMESAVE& gs);
+// (PC, Settings.ini) the current record's option flags set to the options (display.h GAMEOPTS); nothing in headless
+// runs, where the record's flags are the options as in the original
+void SyncOptionsToRecord();
+
+// The current episode as the pause menu sees it (orig3 0x4798A0 / 0x25E160; the prologue in m_ext is the Intro)
+int IepisodeMenuCur3();
+// (shop.cpp: the job help widget 0x46FAA0) offered by the pause menu (0x1D48D0's 0x7A) / opened by it (0x1D5228)
+bool FJobHelpAvailable3();
+void OpenJobHelp3();

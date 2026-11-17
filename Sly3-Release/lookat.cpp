@@ -62,20 +62,20 @@ LO* PloNearestPo(const glm::vec3& pos)
     return pbest;
 }
 
-// orig 0x0022FCC8(0, pxf, v): a world direction in the record's space
+// orig 0x0022FCC8(0, pxf, v): a world direction in the record's space (orig3: 0x28E990, the same C in the Sly 3 decomp)
 glm::vec3 DirToLocal(const XF* pxf, const glm::vec3& v)
 {
     return pxf ? glm::inverse(glm::mat3(pxf->matWorld)) * v : v;
 }
 
-// orig 0x0011E958: pan = atan2(y, x), tilt = atan2(z, |xy|), normalized
+// orig 0x0011E958: pan = atan2(y, x), tilt = atan2(z, |xy|), normalized (orig3: 0x120528, the same C in the Sly 3 decomp)
 void PanTiltFromVector(const glm::vec3& v, float* ppan, float* ptilt)
 {
     *ppan = RadNormalize(std::atan2(v.y, v.x));
     *ptilt = RadNormalize(std::atan2(v.z, std::sqrt(v.x * v.x + v.y * v.y)));
 }
 
-// orig 0x0011E390
+// orig 0x0011E390 (orig3: 0x11FF60, the same C in the Sly 3 decomp)
 glm::vec3 PerpendicularVector(const glm::vec3& v)
 {
     const float ax = std::fabs(v.x), ay = std::fabs(v.y), az = std::fabs(v.z);

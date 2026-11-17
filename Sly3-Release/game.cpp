@@ -5,19 +5,27 @@
 //   Sly2-Release [--world W] [--frames N] [--headless] [--fixed-dt] [--press BTN@frame+n,...]
 //               [--frame-dump file] [--screenshot file]
 
+#include "texmod.h"
+#include "renderer.h"
+#include "fastpaths.h"
 #include <malloc.h>
 #include "game/sly3.h"
+#include "game/scptgame3.h"
 #include "player3.h"
 #include "so.h"
 #include "crv.h"
 #include "vtnative.h"
 #include "game.h"
+#include "binoc3.h"
+#include "hud.h"
 #include "pe.h"
 #include "breakable.h"
 #include "nav.h"
 #include "skipcut.h"
 #include "debugmenu.h"
+#include "remappage.h"
 #include "pccharacter.h"
+#include "outfit3.h"
 #include "glob.h"
 #include "pickup.h"
 #include "spiop.h"
@@ -47,6 +55,15 @@ int NRandom();  // xfmath.h (0x11D3C0)
 extern uint32_t g_uRandState;  // xfmath.cpp
 #include "task.h"
 #include "pcinput.h"
+#include "copsmap3.h"
+#include "duel3.h"
+#include "splitscreen3.h"
+#include "gauge3.h"
+#include "hackmp3.h"
+#include "hackgame3.h"
+#include "menu.h"
+#include "display.h"
+#include "../platform/controller_family.h"
 #include "stepphys.h"
 #include "cplcy.h"
 #include "sound.h"
@@ -61,6 +78,9 @@ extern uint32_t g_uRandState;  // xfmath.cpp
 #include "rtgt.h"
 
 #include "alo.h"
+#if SLY2_FASTPATHS
+#include "passhelpers.h"
+#endif
 #include "brx.h"
 #include "clock.h"
 #include "guard.h"
@@ -84,6 +104,10 @@ extern uint32_t g_uRandState;  // xfmath.cpp
 #include "savedata.h"
 #include "../platform/platform.h"
 #include "../platform/frame_pacer.h"
+#include "vr.h"
+#include "dance.h"
+#include "pcrc.h"
+#include "vehicle.h"
 #include "../platform/game_sched.h"
 #include "transition.h"
 #include "po.h"
@@ -95,6 +119,7 @@ extern uint32_t g_uRandState;  // xfmath.cpp
 #include "so.h"
 #include "xfphys.h"
 #include "cm.h"
+#include "modsave.h"
 
 #include <GLFW/glfw3.h>
 
@@ -169,6 +194,118 @@ void SetPeCameraOf(const CAMERA& cam)
     const float aspect = g_gl.renderHeight > 0 ? float(g_gl.renderWidth) / float(g_gl.renderHeight) : 4.0f / 3.0f;
     SetPeCamera(cam.pos, matRows, cam.MatWorldToClip(aspect));
 }
+
+// (PC, splitscreen3.h) the split screen: each player's view drawn into its own target at its rectangle's size (the
+// renderer's scene target swapped for it: the projection is Hor+ at the view's aspect, the HUD's canvas fits the view
+// and draws that player's prompts), then copied into the scene target at its rectangle. MSAA: each view its own
+// multisampled target, resolved before the copy (the scene target itself is single-sampled while the split is on).
+struct SPLITVIEWFB { GLuint fbo = 0, fbc = 0, rbo = 0, fboMsaa = 0, rboColorMsaa = 0, rboDepthMsaa = 0; int dx = 0, dy = 0, msaa = 0; };
+SPLITVIEWFB s_asplitfb[split3::kMaxSeats];
+SPLITVIEWFB s_asplitboxfb[split3::kMaxSeats];   // (the two-player HUD's view boxes: the scene's target per view, splitscreen3.h FRectScene; four players: four)
+GLuint s_fboMsaaSplitSaved = 0;
+void EnsureSplitViewFb(SPLITVIEWFB& f, int dx, int dy, int msaa)
+{
+    if (f.fbo && f.dx == dx && f.dy == dy && f.msaa == msaa) return;
+    if (f.fbo) { glDeleteFramebuffers(1, &f.fbo); glDeleteTextures(1, &f.fbc); glDeleteRenderbuffers(1, &f.rbo); }
+    if (f.fboMsaa) { glDeleteFramebuffers(1, &f.fboMsaa); glDeleteRenderbuffers(1, &f.rboColorMsaa); glDeleteRenderbuffers(1, &f.rboDepthMsaa); }
+    f = SPLITVIEWFB{};
+    f.dx = dx, f.dy = dy, f.msaa = msaa;
+    glGenFramebuffers(1, &f.fbo);
+    glBindFramebuffer(GL_FRAMEBUFFER, f.fbo);
+    glGenTextures(1, &f.fbc);
+    glBindTexture(GL_TEXTURE_2D, f.fbc);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, dx, dy, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, f.fbc, 0);
+    glGenRenderbuffers(1, &f.rbo);
+    glBindRenderbuffer(GL_RENDERBUFFER, f.rbo);
+    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH32F_STENCIL8, dx, dy);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, f.rbo);
+    if (msaa > 1)
+    {
+        glGenFramebuffers(1, &f.fboMsaa);
+        glBindFramebuffer(GL_FRAMEBUFFER, f.fboMsaa);
+        glGenRenderbuffers(1, &f.rboColorMsaa);
+        glBindRenderbuffer(GL_RENDERBUFFER, f.rboColorMsaa);
+        glRenderbufferStorageMultisample(GL_RENDERBUFFER, msaa, GL_RGBA8, dx, dy);
+        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, f.rboColorMsaa);
+        glGenRenderbuffers(1, &f.rboDepthMsaa);
+        glBindRenderbuffer(GL_RENDERBUFFER, f.rboDepthMsaa);
+        glRenderbufferStorageMultisample(GL_RENDERBUFFER, msaa, GL_DEPTH32F_STENCIL8, dx, dy);
+        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, f.rboDepthMsaa);
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+}
+// (PC, hackmp3.h) the hackers' select: each card's hacking ship (the world's model, the character's colour set) turning,
+// rendered into the card's own target and copied into the card's model box after the page is drawn (splitscreen3.cpp
+// DrawSelect leaves it for the model)
+SPLITVIEWFB s_ahackcardfb[split3::kMaxSeats];
+void RenderHackCards(SW* psw, const SCENE& scene, const RENDEROPTS& opts)
+{
+    const int dxAll = g_gl.renderWidth, dyAll = g_gl.renderHeight;
+    for (int i = 0; i < split3::CHackCards(); ++i)
+    {
+        split3::VIEWRECT r;
+        int ichar = 0;
+        if (!split3::FHackCardModel(i, dxAll, dyAll, &r, &ichar)) continue;
+        SCENE sceneShip;
+        glm::vec3 posCenter;
+        float sRadius = 1.0f;
+        const bool fShip = hackmp3::FShipScene(psw, scene, ichar, &sceneShip, &posCenter, &sRadius);
+        if (static const bool s_f = std::getenv("SLY3_HACKCARDPRINT") != nullptr; s_f)
+            std::printf("hackcard %d: rect %d %d %d %d char %d ship %d (%zu entries, centre %.0f %.0f %.0f radius %.0f)\n", i, r.x, r.y, r.dx, r.dy, ichar,
+                        int(fShip), sceneShip.aglobset.size(), posCenter.x, posCenter.y, posCenter.z, sRadius);
+        if (!fShip) continue;
+        SPLITVIEWFB& f = s_ahackcardfb[i];
+        const int msaa = std::max(g_display.msaaSamples, 4);
+        EnsureSplitViewFb(f, r.dx, r.dy, msaa);
+        // the camera turning slowly round the ship, a little above it (each card a quarter turn on)
+        CAMERA cam;
+        cam.fovY = 30.0f;
+        cam.yaw = float(std::fmod(double(g_clock.tReal) * 24.0 + 90.0 * i, 360.0));
+        cam.pitch = -58.0f;   // (the hack board's camera looks down on the ships)
+        const float rAspect = float(r.dx) / float(std::max(r.dy, 1));
+        const float radFit = std::min(glm::radians(cam.fovY) * 0.5f, std::atan(std::tan(glm::radians(cam.fovY) * 0.5f) * rAspect));
+        const float dist = sRadius / std::sin(radFit) * 0.8f;   // (the ring's spikes to the box's edges)
+        cam.pos = posCenter - cam.Dir() * dist;
+        cam.sNear = std::max(1.0f, dist - 2.0f * sRadius);
+        RENDEROPTS o = opts;
+        o.fFog = false;
+        o.fShadows = false;
+        o.rgbaClear = 0xFF1E0E0Cu;   // (the hack board's dark grid)
+        const DISPLAY dispAll = g_display;
+        const GLuint afbo[3] = {g_gl.fbo, g_gl.fbc, g_gl.rbo};
+        const GLuint fboMsaaAll = g_gl.fboMsaa;
+        g_gl.fbo = f.fbo, g_gl.fbc = f.fbc, g_gl.rbo = f.rbo, g_gl.fboMsaa = f.fboMsaa;
+        g_gl.renderWidth = r.dx, g_gl.renderHeight = r.dy;
+        g_display.renderWidth = r.dx, g_display.renderHeight = r.dy;
+        g_display.rAspectPicture = rAspect;
+        RenderScene(sceneShip, cam, o);
+        hackmp3::EndShipScene();
+        if (f.fboMsaa)
+        {
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, f.fboMsaa);
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, f.fbo);
+            glBlitFramebuffer(0, 0, r.dx, r.dy, 0, 0, r.dx, r.dy, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+        }
+        g_gl.fbo = afbo[0], g_gl.fbc = afbo[1], g_gl.rbo = afbo[2], g_gl.fboMsaa = fboMsaaAll;
+        g_gl.renderWidth = dxAll, g_gl.renderHeight = dyAll;
+        g_display = dispAll;
+        // into the card's model box (inside its frame lines)
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, f.fbo);
+        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, g_gl.FboScene());
+        const int b = std::max(1, dyAll / 360);
+        glBlitFramebuffer(b, b, r.dx - b, r.dy - b, r.x + b, r.y + b, r.x + r.dx - b, r.y + r.dy - b, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+        glBindFramebuffer(GL_FRAMEBUFFER, g_gl.FboScene());
+    }
+}
+// the scene target single-sampled while the split screen is on (the views are copied into it); restored after
+void SetSplitSceneTarget(bool fSplit)
+{
+    if (fSplit && g_gl.fboMsaa) { s_fboMsaaSplitSaved = g_gl.fboMsaa; g_gl.fboMsaa = 0; }
+    else if (!fSplit && s_fboMsaaSplitSaved && !g_gl.fboMsaa) { g_gl.fboMsaa = s_fboMsaaSplitSaved; s_fboMsaaSplitSaved = 0; }
+}
 }
 
 // One frame of objects' state, in the reference's SLY2_FRAMEDUMP format (Sly2-Reference runtime/interp.cpp).
@@ -184,11 +321,56 @@ void WriteFrameDump(FILE* pf, const SW* psw, int frame)
     for (int cid = 0; cid < CID_Max; ++cid)
         for (const LO* plo : psw->mpcidaplo[cid])
         {
+            // (debug: SLY3_DUMPOIDS=",oid,oid,": only those objects)
+            if (static const char* s_szOids = std::getenv("SLY3_DUMPOIDS");
+                s_szOids && !std::strstr(s_szOids, ("," + std::to_string(plo->oid) + ",").c_str()))
+                continue;
             glm::vec3 pos(0.0f);
             // (the object record's position, as the reference's +0x50 record: axf[0] can be another record)
             if (FCidDerivedFrom(cid, S3CID(0x30))) pos = PosLoWorld(plo);
             std::fprintf(pf, "%d %d %08x %.3f %.3f %.3f\n", cid, plo->oid, plo->iupd >= 0 ? 0u : plo->grfUpd, pos.x, pos.y,
                          pos.z);
+        }
+}
+
+// (s3-ai-4) SLY3_XFDUMP=oid[:every]: that object's transform records every N frames (default 30): each record's index,
+// kind, mode, its reference's index, its local x row / translation, its world x row / translation, its velocity; and
+// which records are the position / rotation / object records (apxfRef, the original's +0x48 / +0x4C / +0x50)
+void WriteXfDump(const SW* psw, int frame)
+{
+    static const char* s_spec = std::getenv("SLY3_XFDUMP");
+    if (!s_spec) return;
+    static const int s_oid = std::atoi(s_spec);
+    static const int s_every = std::strchr(s_spec, ':') ? std::max(1, std::atoi(std::strchr(s_spec, ':') + 1)) : 30;
+    if (frame % s_every) return;
+    for (int cid = 0; cid < CID_Max; ++cid)
+        for (const LO* plo : psw->mpcidaplo[cid])
+        {
+            if (plo->oid != s_oid || !FCidDerivedFrom(cid, S3CID(0x30))) continue;
+            const ALO* palo = static_cast<const ALO*>(plo);
+            auto ix = [&](const XF* p) {
+                for (size_t i = 0; i < palo->axf.size(); ++i)
+                    if (palo->axf[i].get() == p) return int(i);
+                return p ? -2 : -1;
+            };
+            std::fprintf(stderr, "xfdump f %d oid %d %p pos/rot/obj %d %d %d\n", frame, plo->oid, (const void*)plo,
+                         ix(palo->apxfRef[0]), ix(palo->apxfRef[1]), ix(palo->apxfRef[2]));
+            if (const STEPPHYS* ps = PstepPhysOf(const_cast<ALO*>(palo)))
+            {
+                std::fprintf(stderr, "  step base %.2f %.2f %.2f custom %d src %d floorTarget %.2f\n", ps->vecBase.x, ps->vecBase.y,
+                             ps->vecBase.z, ps->isoeCustom, ps->isoeSource, ps->sFloorTarget);
+                if (ps->isoeCustom >= 0 && size_t(ps->isoeCustom) < palo->asoe.size())
+                    for (const glm::vec3& v : palo->asoe[size_t(ps->isoeCustom)].geomLocal.apos)
+                        std::fprintf(stderr, "    custom pt %.1f %.1f %.1f\n", v.x, v.y, v.z);
+            }
+            for (size_t i = 0; i < palo->axf.size() && i < 6; ++i)
+            {
+                const XF& x = *palo->axf[i];
+                std::fprintf(stderr, "  xf %zu kind %d mode %d ref %d mat x %.3f %.3f %.3f t %.1f %.1f %.1f  wld x %.3f %.3f %.3f t %.1f %.1f %.1f  vel %.1f %.1f %.1f\n",
+                             i, x.kind, x.mode, ix(x.pxfRef), x.mat[0].x, x.mat[0].y, x.mat[0].z, x.mat[3].x, x.mat[3].y,
+                             x.mat[3].z, x.matWorld[0].x, x.matWorld[0].y, x.matWorld[0].z, x.matWorld[3].x,
+                             x.matWorld[3].y, x.matWorld[3].z, x.vel.x, x.vel.y, x.vel.z);
+            }
         }
 }
 
@@ -252,6 +434,7 @@ struct RTOWNER
     std::vector<LO*> aploLight;     // +0x104 / +0x108 (option 1065, 0x1BEAD0: the target's lights, out of the world;
                                     // TODO: light the target's objects with them)
     float radFov = 1.0f, sNear = 4.0f;
+    bool fCam3 = false;             // (Sly 3) a CAMERA_LOX_06: its matrix's x row looks, z is up
 };
 SW* s_pswRtgt = nullptr;
 uint32_t s_serialRtgt = 0;
@@ -267,6 +450,15 @@ RTOWNER* PrtownerOf(const void* powner)
 void BuildRtgtOwners(SW* psw)
 {
     s_mprtowner.clear();
+    if (std::getenv("SLY3_RTGTDUMP"))   // (debug: Sly 3's camera objects (class 5 / 6) and their options)
+        for (int cid : {5, 6})
+            for (LO* plo : CIDLIST(psw->mpcidaplo, cid))
+            {
+                std::printf("cam3 oid %d cid %d parent %d:", plo->oid, cid, plo->paloParent ? plo->paloParent->oid : -1);
+                for (const OPT& o : plo->aopt)
+                    for (const OPTVAL& v : o.aval) std::printf(" [%d k%d n%d g %.3f %.3f %.3f]", o.eopid, v.k, v.n, v.ag[0], v.ag[1], v.ag[2]);
+                std::printf("\n");
+            }
     for (LO* plo : CIDLIST(psw->mpcidaplo, S3CID(0x2D)))
     {
         RTOWNER& r = s_mprtowner[plo];
@@ -305,6 +497,62 @@ void BuildRtgtOwners(SW* psw)
                     for (const OPTVAL& v : o.aval) std::printf(" [%d k%d n%d g %.3f %.3f %.3f]", o.eopid, v.k, v.n, v.ag[0], v.ag[1], v.ag[2]);
                 std::printf("\n");
             }
+        }
+    }
+}
+
+// (Sly 3) the render-target owners are the characters' camera children of class 6 (CAMERA_LOX_06, Sly 2's LOX_2D
+// folded into the camera class): oid 0x304 (772: the binocucom speaker's monitor) and 0x305 (773: the player's), under
+// Sly 24, Bentley 25, Dimitri 27899, ... Their options: 172 the vertical fov (+0x118, Sly 2's 1060), 194 an object of
+// the list (Sly 2's 1064: the character and its parts), 195 the target's light (Sly 2's 1065, 0x2004: removed from the
+// world, set +0x15C / +0x160); the camera is the owner itself, placed by its LOX matrix under the character.
+void BuildRtgtOwners3(SW* psw)
+{
+    for (LO* plo : CIDLIST(psw->mpcidaplo, 6))
+    {
+        if (plo->oid != 0x304 && plo->oid != 0x305) continue;
+        RTOWNER& r = s_mprtowner[plo];
+        r.fCam3 = true;
+        for (const OPT& o : plo->aopt)
+            for (const OPTVAL& v : o.aval)
+                switch (o.eopid)
+                {
+                case 172: r.radFov = v.ag[0]; break;
+                case 194:
+                {
+                    // (the list's oids name the character and its parts: found under the camera's character first)
+                    LO* p = nullptr;
+                    if (LO* pchar = plo->paloParent)
+                    {
+                        if (pchar->oid == v.n) p = pchar;
+                        else
+                            for (const auto& up : psw->aploAll)
+                                if (up->oid == v.n)
+                                    for (const LO* q = up->paloParent; q && !p; q = q->paloParent)
+                                        if (q == pchar) p = up.get();
+                    }
+                    if (!p) p = PloFindSwObjectByOid(psw, v.n);
+                    if (p) r.aplo.push_back(p);
+                    break;
+                }
+                case 195:
+                    if (LO* p = PloFindSwObjectByOid(psw, v.n); p && !p->fLightOwned)
+                    {
+                        r.aploLight.push_back(p);
+                        p->fLightOwned = true;
+                        RemoveLo(psw, p);
+                    }
+                    else if (p) r.aploLight.push_back(p);
+                    break;
+                default: break;
+                }
+        r.agrf.assign(r.aplo.size(), 0);
+        if (std::getenv("SLY2_RTGTDUMP"))
+        {
+            std::printf("rtgt owner3 %d (parent %d): fov %.3f list", plo->oid, plo->paloParent ? plo->paloParent->oid : -1, r.radFov);
+            for (LO* p : r.aplo) std::printf(" %d", p->oid);
+            for (LO* p : r.aploLight) std::printf(" light %d", p->oid);
+            std::printf("\n");
         }
     }
 }
@@ -352,7 +600,10 @@ void GiveRtgt(const void* powner)
     if (!pr || !s_pswRtgt) return;
     for (size_t i = 0; i < pr->aplo.size(); ++i)
     {
-        if (pr->agrf[i] & 1) RemoveLo(s_pswRtgt, pr->aplo[i]);
+        // (not an object a script added while the target was held (SCPT 0x38): it is the scene's now. Ep4 3540: SCPT
+        // 3549 adds Bentley during the binocucom talk that had added him for its monitor; the talk's close removed him
+        // and he froze out of the world (s3-ai): 3550 / 3554 were forced)
+        if ((pr->agrf[i] & 1) && !(FScripts3Active() && FLoAddedByScript3(pr->aplo[i]))) RemoveLo(s_pswRtgt, pr->aplo[i]);
         pr->agrf[i] = 0;
     }
 }
@@ -387,6 +638,14 @@ const void* PvRtgtOwnerOfId(int id)
     };
     if (std::getenv("SLY2N_RTGTBIND") && id == 0x2AF && pp)
         for (LO* q = pp; q; q = q->paloParent) std::printf("rtgt player chain %d cid 0x%X\n", q->oid, int(q->Cid()));
+    // (Sly 3: orig3 0x1E8A38: 0x304 the binocucom speaker's (the player's BINOC +0x40, actor +0xFA0: binoc3.cpp's shown
+    // speaker; the player itself when none), 0x305 the player's; anything else by oid)
+    if (id == 0x305) return below(pp, 0x305);
+    if (id == 0x304)
+    {
+        LO* pspk = pp ? PloBinocPanelSpeaker3(pp) : nullptr;
+        return below(pspk ? pspk : pp, 0x304);
+    }
     if (id == 0x2AF) return below(pp, 0x2AF);
     if (id == 0x2AE)
     {
@@ -413,6 +672,8 @@ struct INITFOREGROUND
     {
         RegisterObjectSetter(69, [](LO* plo, const CRef& r) {
             const bool f = r.m_tagk == TAGK_Bool ? r.m_bool : r.m_n != 0;
+            if (static const bool s_fPrint = std::getenv("SLY3_FGPRINT") != nullptr; s_fPrint)
+                std::printf("foreground: %d (cid 0x%X) %d t %.3f\n", plo ? plo->oid : -1, plo ? unsigned(plo->Cid()) : 0u, int(f), g_clock.t);
             if (f) s_mpploForeground[plo] = g_psw ? g_psw->serial : 0;
             else s_mpploForeground.erase(plo);
         });
@@ -453,7 +714,10 @@ void ApplyRtgtOwners(SCENE& scene, const std::vector<ALO*>& apalo)
         {
             LO* ploCam = pr->ploCamera ? pr->ploCamera : const_cast<LO*>(static_cast<const LO*>(pt->powner));
             const glm::mat4 m = MatJtLo(ploCam);
-            if (static int s_c = 0; std::getenv("SLY2_RTGTDUMP") && s_c++ % 120 == 0)
+            // (debugging: SLY2_RTGTDUMP, every 120th frame)
+            static const bool s_fDump = std::getenv("SLY2_RTGTDUMP") != nullptr;
+            if (static int s_c = 0; s_fDump && s_c++ % 120 == 0)
+            {
                 if (const LOX* px = dynamic_cast<const LOX*>(ploCam))
                     std::printf("rtgt cam ref: ixf %d owner %d parent %d local pos %.1f %.1f %.1f r0 %.2f %.2f %.2f\n", px->ixfRef,
                                 px->pxf && px->pxf->palo ? px->pxf->palo->oid : -1, px->paloParent ? px->paloParent->oid : -1,
@@ -463,9 +727,12 @@ void ApplyRtgtOwners(SCENE& scene, const std::vector<ALO*>& apalo)
                                 rec.rgba.b, rec.rgba.a, rec.dirOrPos.x, rec.dirOrPos.y, rec.dirOrPos.z, rec.angularOffset, rec.angularScale);
                 std::printf("rtgt cam %d cid 0x%X: r0 %.2f %.2f %.2f r1 %.2f %.2f %.2f r2 %.2f %.2f %.2f\n", ploCam->oid, ploCam->Cid(),
                             m[0][0], m[0][1], m[0][2], m[1][0], m[1][1], m[1][2], m[2][0], m[2][1], m[2][2]);
+            }
             // 0x1BE6F0 hands CombineEyeLookAtProj (0x14D8F8) the rows (-r2, -r0, r1) of the object's 0x1A6318
             // matrix: forward -r2, up r1
-            SetRtgtCamera(i, glm::vec3(m[3]), glm::vec3(m[1]), -glm::vec3(m[2]), -glm::vec3(m[0]), pr->radFov, pr->sNear);
+            // (Sly 3's camera objects: forward their x row, left y, up z, as the world camera's)
+            if (pr->fCam3) SetRtgtCamera(i, glm::vec3(m[3]), glm::vec3(m[2]), glm::vec3(m[0]), glm::vec3(m[1]), pr->radFov, pr->sNear);
+            else SetRtgtCamera(i, glm::vec3(m[3]), glm::vec3(m[1]), -glm::vec3(m[2]), -glm::vec3(m[0]), pr->radFov, pr->sNear);
         }
     }
     if (static const bool s_f = std::getenv("SLY2_RTGTDUMP") != nullptr; s_f)
@@ -530,6 +797,24 @@ void ReportGangHarness();
 // card goes to build/saves/sly3-dev/memcard0/BASCUS-97464YAOTWTD! (SLY3_DEVCARD=1 uses it))
 bool g_fDevCard = std::getenv("SLY3_DEVCARD") != nullptr;
 
+// (VR, vr.h) the game's moment for the Immersive view: the cutscenes (the skippable scenes: the binocucom talks, the
+// scripted scenes with dialogue or three or more shots; not a door opening), the Ep2 dance and the RC chopper on the
+// Flat Screen; the binocucom's recon view; Ep7's RC Combat Club from the table (VR Settings, experimental)
+static int VrGameView(SW* psw)
+{
+    LO* po = psw ? PloPoCurrent(psw) : nullptr;
+    if (vr::g_vropts.fCutscenesFlat && (FCutsceneActive() || FDanceActive())) return vr::VRVIEW_Flat;
+    if (po && po->oid == kRcChopperOid && FCidDerivedFrom(po->Cid(), S3CID(0x32))) return vr::VRVIEW_Flat;
+    if (g_cm.ccpr > 0 && g_cm.acpr[0].pcplcy == &g_cmpolicies.cprecon) return vr::VRVIEW_Binoc;
+    if (vr::g_vropts.fRcTable && po)
+        if (const VEHICLE* pv = Pvehicle(po); pv && pv->mode == 2)
+        {
+            vr::SetRcArenaHeight(PosLoWorld(po).z);
+            return vr::VRVIEW_RcTable;
+        }
+    return vr::VRVIEW_Normal;
+}
+
 int RunGame(const GAMEOPTS& go)
 {
     // SLY2N_RTZ=1: the PS2's float rounding (toward zero) for the whole game (the differential harnesses: the
@@ -552,7 +837,11 @@ int RunGame(const GAMEOPTS& go)
             const std::string dev = SLY2N_DEV_ROOT "/build/saves/sly3-dev/memcard0/" SLY3_CARD_DIRECTORY "/save1";
             path = std::filesystem::exists(cane::path(user)) || !g_fDevCard ? user : dev;
         }
-        if (FLoadGameSave(path, error)) std::printf("save: %s\n", path.c_str());
+        if (FLoadGameSave(path, error))
+        {
+            std::printf("save: %s\n", path.c_str());
+            ReadModSave(path);   // (mod packages' custom tasks, modsave.h)
+        }
         else std::printf("save: none (%s)\n", error.c_str());
     }
 
@@ -572,15 +861,15 @@ int RunGame(const GAMEOPTS& go)
     }
     else if (go.task >= 0) RequestTaskStart(nullptr, std::atoi(go.world.c_str()), go.task);
     else RequestWorldWarp(nullptr, std::atoi(go.world.c_str()), sly3::POINT_DEFAULT, -1);
-    // Sly 3 (notes/STATUS.md): the boot's logos play; the world after them (m_ext and its title) does not run natively
-    // yet unless SLY3_WORLD=1 (development)
-    if (go.world == "boot" && !std::getenv("SLY3_WORLD"))
+    // Sly 3: the boot's logos play, then the world after them (m_ext and its title), as the launcher's Play does since
+    // 2026-11-12; SLY3_WORLD=0 stops after the logos as the early development builds did (a test of the logos alone)
+    if (go.world == "boot" && std::getenv("SLY3_WORLD") && std::atoi(std::getenv("SLY3_WORLD")) == 0)
     {
-#ifdef __SWITCH__
-        // (the Switch: the logos are drawn into the window, which otherwise opens only with the world below)
+        // (the logos are drawn into the window, which otherwise opens only with the world below: without it the movie
+        // drew with no OpenGL context, a crash for every windowed start on the PC)
         if (!go.fHeadless)
         {
-            if (!g_gl.FInit(go.width, go.height, true, "Sly2-Release", error))
+            if (!g_gl.FInit(go.width, go.height, !std::getenv("SLY2N_HIDDENWINDOW"), "Sly2-Release", error))
             {
                 std::fprintf(stderr, "%s\n", error.c_str());
                 return 1;
@@ -588,9 +877,8 @@ int RunGame(const GAMEOPTS& go)
             InstallDisplayCallbacks(g_gl.window);
             ApplyDisplaySettings(g_gl.window);
         }
-#endif
         PlayQueuedMovies(!go.fHeadless);
-        std::printf("Sly 3: the logos played; the world after them (m_ext, the title) is not ported yet\n");
+        std::printf("Sly 3: the logos played; stopped there (SLY3_WORLD=0)\n");
         return 0;
     }
     // (the window comes later: the boot's movie plays when the loop starts)
@@ -642,6 +930,7 @@ int RunGame(const GAMEOPTS& go)
         std::string err;
         const bool f = FWriteGameSave(path, err);
         if (!f) std::printf("save: %s\n", err.c_str());
+        else WriteModSave(path);   // (mod packages' custom tasks, modsave.h)
         return f;
     };
     for (const std::string& p : go.aprintProgress)
@@ -677,17 +966,22 @@ int RunGame(const GAMEOPTS& go)
         // (debug: SLY3_LIGHTCHECK=ram: the world's light records against a reference RAM dump's, lightsw.h)
         if (const char* sz = std::getenv("SLY3_LIGHTCHECK"); sz) CheckLightsAgainstRam(psw.get(), sz, std::getenv("SLY3_LIGHTCHECKV") != nullptr);
         else ApproximateBakeLighting(scene);
-        if (!g_gl.FInit(go.width, go.height, fWindow, "Sly2-Release", error))
+        // (test aid: SLY2N_HIDDENWINDOW=1: a windowed run (input, pacing, VR) with its window never shown)
+        static const bool s_fHidden = std::getenv("SLY2N_HIDDENWINDOW") != nullptr;
+        if (!g_gl.FInit(go.width, go.height, fWindow && !s_fHidden, "Sly2-Release", error))
         {
             std::fprintf(stderr, "%s\n", error.c_str());
             return 1;
         }
         BuildSceneGpu(scene);
+        PrewarmRenderer(g_transition.iwrecCur);
         if (fWindow)
         {
-            // the PC options (display.h; <user-dir>/Saves/system_settings.dat, loaded by main)
+            // the PC options (display.h; <user-dir>/Settings.ini, loaded by main)
             InstallDisplayCallbacks(g_gl.window);
             ApplyDisplaySettings(g_gl.window);
+            // (vr.h) a headset when asked for (--vr; Android): else the game as always
+            if (vr::FRequested()) vr::FStart();
         }
     }
 #ifdef __SWITCH__
@@ -724,6 +1018,7 @@ int RunGame(const GAMEOPTS& go)
     {
         const double t0 = now();
         if (fWindow && glfwWindowShouldClose(g_gl.window)) break;
+        if (vr::FExitRequested()) break;   // (the headset's system menu: Quit)
         // (debug: SLY2N_HEAPCHECK=N: every N frames the heap's free lists consolidated (glibc checks their links), with a
         // stderr mark: heap corruption shows near the frame that caused it instead of at exit)
         if (static const int s_cHeapCheck = std::getenv("SLY2N_HEAPCHECK") ? std::atoi(std::getenv("SLY2N_HEAPCHECK")) : 0;
@@ -734,6 +1029,7 @@ int RunGame(const GAMEOPTS& go)
         }
         auto stepSim = [&](int frame) {
         g_iframeMain = frame;  // (debug prints: SLY2N_TRANSLOG)
+        InvalidateSceneDrawnTests();   // (scenesw.h: the placement's FAloDrawn answers do not outlive a step)
         // orig 0x20E890: a pending world change
         // (a transition with a wipe is pending only once the wipe is out (0x22B220 -> WIPES_Loading): the queued
         // movies wait for it, as the original plays them inside the transition after its sound reset; played at
@@ -756,14 +1052,17 @@ int RunGame(const GAMEOPTS& go)
             apalo.clear();
             ResetStepSnapshots();
             (void)FPcCharTakeSceneRebuild();
+            (void)FTakeOutfitSceneRebuild3();   // (s3-decomp)
+            (void)hackgame3::FTakeSceneRebuild();   // (s3-hack)
             if (fDraws)
             {
                 CBuildSceneFromSw(psw.get(), scene, &apalo);
                 ApproximateBakeLighting(scene);
                 BuildSceneGpu(scene);
+                PrewarmRenderer(g_transition.iwrecCur);
             }
         }
-        else if (FPcCharTakeSceneRebuild() && fDraws)
+        else if ((FPcCharTakeSceneRebuild() | FTakeOutfitSceneRebuild3() | hackgame3::FTakeSceneRebuild()) && fDraws)   // (Sly 3: a disguise's streamed meshes, outfit3.h; s3-decomp)
         {
             // (PC addition, debug menu only: a guest character / outfit changed the meshes drawn, pccharacter.h; the
             // lookups into the old scene's glob sets dropped, as a world's unload does)
@@ -820,6 +1119,42 @@ int RunGame(const GAMEOPTS& go)
         UpdateClock(&g_clock, false);
         if (pfDump) WriteFrameDump(pfDump, psw.get(), frame);
         WriteMembDump(psw.get(), frame);
+        WriteXfDump(psw.get(), frame);
+        // debug: SLY3_CMTICK=N: every N frames the camera (position, pan / tilt, fov, near clip) and the current player
+        if (static const int s_cCm = std::getenv("SLY3_CMTICK") ? std::atoi(std::getenv("SLY3_CMTICK")) : 0; s_cCm > 0 && frame % s_cCm == 0)
+        {
+            LO* ppo = PloPoCurrent(psw.get());
+            const glm::vec3 p = ppo ? PosLoWorld(ppo) : glm::vec3(0.0f);
+            std::printf("cmtick f %d t %.3f cm %.1f %.1f %.1f pan %.4f tilt %.4f fov %.3f near %.1f po %d pos %.1f %.1f %.1f\n", frame, g_clock.t, g_cm.pos.x,
+                        g_cm.pos.y, g_cm.pos.z, std::atan2(g_cm.mat[0][1], g_cm.mat[0][0]), std::asin(std::clamp(g_cm.mat[0][2], -1.0f, 1.0f)), g_cm.radFOV,
+                        g_cm.sNearClip, ppo ? ppo->oid : -1, p.x, p.y, p.z);
+            if (ppo && FCidDerivedFrom(ppo->Cid(), S3CID(0x30)))
+            {
+                const glm::mat3 m = glm::mat3(PoseFromLo(ppo).mat);
+                if (g_cm.ccpr > 0)
+                {
+                    const CPR& r = g_cm.acpr[0];
+                    std::printf("cmtick   policy vt 0x%X cpp %d focus %d\n", r.pcplcy ? r.pcplcy->VtOrig() : 0u, r.cpp, r.psoFocus ? r.psoFocus->oid : -1);
+                    // (SLY3_CMTICK2=1: every entry of the stack, a zone's oid)
+                    if (static const bool s_fAll = std::getenv("SLY3_CMTICK2") != nullptr; s_fAll)
+                        for (int i = 0; i < g_cm.ccpr; ++i)
+                        {
+                            const CPR& e = g_cm.acpr[i];
+                            const ZONECM* pz = e.pcplcy == &g_cmpolicies.cpfollow ? static_cast<const ZONECM*>(e.pv) : nullptr;
+                            std::printf("cmtick   [%d] vt 0x%X cpp %d focus %d zone %d\n", i, e.pcplcy ? e.pcplcy->VtOrig() : 0u, e.cpp,
+                                        e.psoFocus ? e.psoFocus->oid : -1, pz && pz->pzone ? pz->pzone->oid : -1);
+                        }
+                }
+                std::printf("cmtick   heading %.4f step %.4f cut %d %.4f %.4f\n", std::atan2(m[0][1], m[0][0]), StepPhysOf(static_cast<ALO*>(ppo)).radHeading, g_cm.fCut, g_cm.radCutPan, g_cm.radCutTilt);
+            }
+        }
+        // (debug: SLY3_BRKHIT=F:X Y Z: at frame F the intact breakable nearest (X, Y, Z) hit by the player, as a cane hit)
+        if (static const char* s_szBrkHit = std::getenv("SLY3_BRKHIT"); s_szBrkHit)
+        {
+            int f = -1;
+            float x = 0, y = 0, z = 0;
+            if (std::sscanf(s_szBrkHit, "%d:%f %f %f", &f, &x, &y, &z) == 4 && f == frame) HitBreakableNear(glm::vec3(x, y, z), PloPoCurrent(psw.get()));
+        }
         // debug: SLY2N_FRAMETICK=N: every N frames "tick f F t T po OID pos X Y Z" (tools/progression.sh: the
         // timeline its stall / softlock checks put the task lines on)
         if (static const int s_cTick = std::getenv("SLY2N_FRAMETICK") ? std::atoi(std::getenv("SLY2N_FRAMETICK")) : 0;
@@ -828,6 +1163,17 @@ int RunGame(const GAMEOPTS& go)
             LO* ppo = PloPoCurrent(psw.get());
             const glm::vec3 p = ppo ? PosLoWorld(ppo) : glm::vec3(0.0f);
             std::printf("tick f %d t %.3f po %d pos %.0f %.0f %.0f\n", frame, g_clock.t, ppo ? ppo->oid : -1, p.x, p.y, p.z);
+            // (SLY3_TICKOID=oid: that object's world place at each tick)
+            if (static const int s_oidTick = std::getenv("SLY3_TICKOID") ? std::atoi(std::getenv("SLY3_TICKOID")) : -1; s_oidTick != -1)
+                for (LO* plo : AploOfOid(psw.get(), OID(s_oidTick)))
+                {
+                    const glm::vec3 q = PosLoWorld(plo);
+                    std::printf("tickoid %d %p cid 0x%X parent %d at %.1f %.1f %.1f inworld %d\n", s_oidTick, static_cast<void*>(plo), plo->Cid(),
+                                plo->paloParent ? plo->paloParent->oid : -1, q.x, q.y, q.z, int(plo->fInWorld));
+                }
+            // (SLY3_BRKNEAR=R: the intact breakables within R of the player at each tick)
+            if (static const float s_sBrk = std::getenv("SLY3_BRKNEAR") ? float(std::atof(std::getenv("SLY3_BRKNEAR"))) : 0.0f; s_sBrk > 0.0f && ppo)
+                PrintBreakablesNear(p, s_sBrk);
             // (SLY2N_CHAINTICK=1: the current player's chain segments (his tail, ears, ...): how many, how many their
             // chain drives (mode 16), how many hold a NaN)
             if (static const bool s_fChain = std::getenv("SLY2N_CHAINTICK") != nullptr; s_fChain && ppo && FCidDerivedFrom(ppo->Cid(), S3CID(0x30)))
@@ -885,6 +1231,7 @@ int RunGame(const GAMEOPTS& go)
             s_pswRtgt = psw.get();
             s_serialRtgt = psw->serial;
             BuildRtgtOwners(s_pswRtgt);
+            BuildRtgtOwners3(s_pswRtgt);
         }
         g_pfnRtgtOwnerOfId = PvRtgtOwnerOfId;
         g_pfnRtgtTaken = TakeRtgt;
@@ -892,6 +1239,15 @@ int RunGame(const GAMEOPTS& go)
         // the activation's viewpoint: the native camera's position (CM +0x90) and flags (CM +0x14, cm.h nCur)
         g_actview.posCm = g_cm.pos;
         g_actview.grfCm = static_cast<uint32_t>(g_cm.nCur);
+        // (PC split screen, orig3 0x15AF58: every view's camera activates; activate.h ACTVIEW cExtra)
+        g_actview.cExtra = std::min(split3::CViewExtra(), 3);
+        g_actview.grfExtra = 0;
+        for (int i = 0; i < g_actview.cExtra; ++i)
+        {
+            const CM& cmv = split3::CmView(i + 1);
+            g_actview.aposExtra[i] = cmv.pos;
+            g_actview.grfExtra |= static_cast<uint32_t>(cmv.nCur);
+        }
         // (--camera-ram: the picture's camera is the reference's, so is the activation's viewpoint (CM +0x90 / +0x14 of
         // that RAM); else the objects the reference camera activates are missing from the native picture)
         // Only for the last frames of the run (SLY2N_CAMRAMACT=N, default 60; -1 = every frame): from the start, the
@@ -916,6 +1272,13 @@ int RunGame(const GAMEOPTS& go)
             SetPeCameraOf(s_camPe);
         }
         else SetPeCameraOf(CameraFromCm(g_cm));
+        {
+            // (PC split screen: the other views' cameras for the emission tests, orig3 0x18E728 tests every view)
+            glm::vec3 apos[3];
+            const int c = std::min(split3::CViewExtra(), 3);
+            for (int i = 0; i < c; ++i) apos[i] = split3::CmView(i + 1).pos;
+            SetPeCamerasExtra(apos, c);
+        }
         // debug (the harness without the camera's differences): SLY2N_ACTVIEW=x,y,z,grf
         static const char* s_szActview = std::getenv("SLY2N_ACTVIEW");
         if (s_szActview)
@@ -1030,6 +1393,12 @@ int RunGame(const GAMEOPTS& go)
             for (const auto& up : psw->aploAll)
             {
                 if (!std::strstr(s_sz, (std::to_string(up->oid) + ",").c_str()) && !std::strstr(s_sz, (std::to_string(up->oid) + "@").c_str())) continue;
+                for (ALO* pp = up->paloParent; pp; pp = pp->paloParent)   // (the parent chain, with world positions)
+                {
+                    XF* pxf = PxfObj(pp);
+                    std::printf("loopts %d (cid 0x%X): parent %d (cid 0x%X) at %.1f %.1f %.1f\n", up->oid, up->Cid(), pp->oid, pp->Cid(),
+                                pxf ? pxf->matWorld[3].x : 0.0f, pxf ? pxf->matWorld[3].y : 0.0f, pxf ? pxf->matWorld[3].z : 0.0f);
+                }
                 for (const OPT& o : up->aopt)
                 {
                     std::printf("loopts %d (cid 0x%X): eopid %d", up->oid, up->Cid(), o.eopid);
@@ -1717,13 +2086,15 @@ int RunGame(const GAMEOPTS& go)
                     if (!plo->paloParent && FCidDerivedFrom(plo->Cid(), S3CID(0x30))) s_apaloRoot.push_back(static_cast<ALO*>(plo.get()));
                 s_serialRoot = psw->serial, s_cploRoot = psw->aploAll.size(), s_cParentRoot = g_cLoParentChanges;
             }
-            for (ALO* palo : s_apaloRoot) UpdateAloHierarchyWorlds(palo);
+            // (alo.cpp: the hierarchies on the pass helpers where that gives the serial walk's results, the others
+            // after them in order)
+            UpdateAloRootsWorlds(s_apaloRoot);
         }
         DrawSlys(psw.get());
         DebugHitHideHolders(psw.get());   // (debug: hide.h)   // orig 0x18A238: the draw's own placement (state 3's cane on the hook), each step as drawn
         };
         {
-            const bool fWant = s_szFrameInterp ? true : fWindow && !go.fFixedDt && g_display.frameRate > 60;
+            const bool fWant = s_szFrameInterp ? true : fWindow && !go.fFixedDt && (g_display.frameRate > 60 || vr::FActive());
             if (fWant != accum.fActive)
             {
                 accum = FRAMEACCUM{};
@@ -1807,6 +2178,7 @@ int RunGame(const GAMEOPTS& go)
         if (fWindow)
         {
             glfwPollEvents();
+            UpdateDisplayMonitors(g_gl.window);   // (a monitor plugged in or unplugged: display.h)
             GLFWwindow* w = g_gl.window;
             const bool fF1 = FDebugKeyHeld(w, GLFW_KEY_F1);   // (debug keys only)
             if (fF1 && !fF1Last) fFreeCam = !fFreeCam;
@@ -1907,10 +2279,9 @@ int RunGame(const GAMEOPTS& go)
             static const bool s_fRelightAll = std::getenv("SLY2N_RELIGHTALL") != nullptr;   // (debug: every drawn frame, as before)
             const bool fRelight = !accum.fActive || cstep > 0 || s_fRelightAll;
             // the light contexts' positions: each entry's root object (0x1F2500: the top without a parent)
-            for (size_t k = 0; k < scene.aglobset.size() && k < apalo.size(); ++k)
-            {
+            auto posLightOf = [&](size_t k) {
                 const ALO* proot = apalo[k];
-                if (!proot) continue;
+                if (!proot) return;
                 while (proot->paloParent) proot = proot->paloParent;
                 // (0x1F2500: pl +4 = the root's +0x60 record + 0x70, its world position: an actor's object record, which the
                 // actors' slot-29 teleport moves while the root record stays at the origin)
@@ -1933,6 +2304,50 @@ int RunGame(const GAMEOPTS& go)
                 sgs.fPosLightMoved = (!fRelight && sgs.fPosLightMoved) || !sgs.fPosLight || pos != sgs.posLight;
                 sgs.fPosLight = true;
                 sgs.posLight = pos;
+            };
+            const size_t cposLight = std::min(scene.aglobset.size(), apalo.size());
+#if SLY2_FASTPATHS
+            // (the Switch: on the pass helpers, each entry writing only its own fields; the roots' records it reads are
+            // scattered over the scene)
+            PassHelpers().ForBlocks(cposLight, 64, [&](size_t kFirst, size_t kLim) {
+                for (size_t k = kFirst; k < kLim; ++k) posLightOf(k);
+            });
+#else
+            for (size_t k = 0; k < cposLight; ++k) posLightOf(k);
+#endif
+            // the light contexts' radii (orig3 0x23B3A8, run by the ALO's load 0x23C0B8 and a streamed group's 0x23FA20: each
+            // lit ALO (glob set bit 32) grows its context's radius (+0x10) to its distance from the context's position plus its
+            // model radius; only then, so the poses at the load count). Natively per root, from the entries placed with it in
+            // the frame it is first seen (a root added again, or another at its address, starts over): Sly's 434.86 and
+            // Bentley's 467.04 at Ep1's roof as the reference's (RAM: the context +0x10 of ALO +0x10C)
+            {
+                struct CTXRADIUS { float sRadius = 0.0f; int frame = 0; uint64_t nAdd = 0; };
+                static std::unordered_map<const ALO*, CTXRADIUS> s_mpradius;
+                static uint32_t s_serial = 0;
+                if (s_serial != psw->serial) { s_mpradius.clear(); s_serial = psw->serial; }
+                static const bool s_fNoRadius = std::getenv("SLY3_NOCTXRADIUS") != nullptr;   // (debug: the radius 0, as before)
+                // (debug: SLY3_CTXRADIUS=oid: that root's entries as they set its radius)
+                static const int s_oidCtx = std::getenv("SLY3_CTXRADIUS") ? std::atoi(std::getenv("SLY3_CTXRADIUS")) : -2;
+                for (size_t k = 0; k < cposLight; ++k)
+                {
+                    const ALO* palo = apalo[k];
+                    if (!palo) continue;
+                    const ALO* proot = palo;
+                    while (proot->paloParent) proot = proot->paloParent;
+                    SCENEGLOBSET& sgs = scene.aglobset[k];
+                    CTXRADIUS& cr = s_mpradius[proot];
+                    if (cr.nAdd != proot->nAdd || cr.frame == 0) cr = CTXRADIUS{0.0f, frame + 1, proot->nAdd};
+                    if (cr.frame == frame + 1 && sgs.pglobset && (sgs.pglobset->grfglobset & (1ull << 32)))
+                    {
+                        // (the root at the context's own position: an actor's root record stays at the origin, posLightOf)
+                        const glm::vec3 pos = palo == proot || palo->axf.empty() ? sgs.posLight : glm::vec3(palo->axf[0]->matWorld[3]);
+                        cr.sRadius = std::max(cr.sRadius, glm::distance(pos, sgs.posLight) + sgs.pglobset->sRadius);
+                        if (proot->oid == s_oidCtx)
+                            std::printf("ctxradius %d frame %d: entry %d cid 0x%X at %.0f %.0f %.0f (context %.0f %.0f %.0f) radius %.1f -> %.2f\n", proot->oid, frame,
+                                        palo->oid, palo->Cid(), pos.x, pos.y, pos.z, sgs.posLight.x, sgs.posLight.y, sgs.posLight.z, sgs.pglobset->sRadius, cr.sRadius);
+                    }
+                    sgs.sRadiusLight = s_fNoRadius ? 0.0f : cr.sRadius;
+                }
             }
             static const bool s_fDrawAll = std::getenv("SLY2N_DRAWALL") != nullptr;  // debug: every glob set
             if (!s_fDrawAll) ApplyDrawPass(psw.get(), scene, apalo);  // orig RenderSw 0x1CDA80's selection
@@ -1940,6 +2355,12 @@ int RunGame(const GAMEOPTS& go)
             {
                 // the foreground globs (0x168638: bit 34 and G_GAME +0x3BEC == 0)
                 const bool fNoBig = CBigScreenObjsShown(psw.get()) == 0;
+                if (static const bool s_fPrint = std::getenv("SLY3_FGPRINT") != nullptr; s_fPrint && !s_mpploForeground.empty())
+                {
+                    int cIn = 0;
+                    for (size_t k = 0; k < scene.aglobset.size() && k < apalo.size(); ++k) cIn += int(s_mpploForeground.count(apalo[k]));
+                    std::printf("foreground: %zu objects (%d in the scene's %zu), big screens %d\n", s_mpploForeground.size(), cIn, apalo.size(), CBigScreenObjsShown(psw.get()));
+                }
                 const uint32_t serial = psw->serial;
                 for (auto it = s_mpploForeground.begin(); it != s_mpploForeground.end();)
                     it = it->second != serial ? s_mpploForeground.erase(it) : std::next(it);
@@ -2008,7 +2429,7 @@ int RunGame(const GAMEOPTS& go)
             static const bool s_fFpsLog = std::getenv("SLY2N_FPSLOG") != nullptr;
             static GLuint s_aqGpu[4] = {};
             static int s_iqGpu = 0;
-            if (s_fFpsLog && fWindow)
+            if (s_fFpsLog)   // (headless with SLY2N_RENDERALL too: the offscreen frame's GPU time)
             {
                 if (!s_aqGpu[0]) glGenQueries(4, s_aqGpu);
                 else if (s_iqGpu >= 4)
@@ -2019,14 +2440,174 @@ int RunGame(const GAMEOPTS& go)
                 }
                 glBeginQuery(GL_TIME_ELAPSED, s_aqGpu[s_iqGpu % 4]);
             }
+            // (vr.h) the headset's frame slot; Immersive: both eyes from the game camera, the game picture then holds
+            // only the HUD and menus (over transparency: the panel in front); the full-screen transitions stay flat
+            const bool fVr = fWindow && vr::FActive();
+            if (fVr)
+            {
+                vr::BeginFrame();
+                vr::SetGameView(VrGameView(psw.get()));
+            }
+            STEREOVIEW sv;
+            const bool fEyes = fVr && FAnimatedOverlayDrawNormal() && !FAnimatedOverlayNeedsFrame() && vr::FEyeViews(cam, &sv);
             if (FAnimatedOverlayDrawNormal()) {
-                RenderScene(scene, cam, opts);
+                if (fEyes)
+                {
+                    RenderSceneStereo(scene, cam, opts, sv);
+                    vr::FinishEyes();
+                    glBindFramebuffer(GL_FRAMEBUFFER, g_gl.FboScene());
+                    glViewport(0, 0, g_gl.renderWidth, g_gl.renderHeight);
+                    glDisable(GL_SCISSOR_TEST);
+                    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+                    glDepthMask(GL_TRUE);
+                    glStencilMask(0xFF);
+                    glClearColor(0, 0, 0, 0);
+                    glClearDepth(0.0);
+                    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+                    g_fHudAlphaLayer = true;
+                }
+                // (the hacking game: one shared view as the original's, the split path only for its binding / select pages)
+                const bool fSplit = !fEyes && split3::FActive() && (!split3::FSharedView() || split3::FBinding());
+                SetSplitSceneTarget(fSplit);
+                if (fSplit)
+                {
+                    // (PC, splitscreen3.h) each player's view, its HUD (no menu up: a menu takes the whole picture)
+                    const int dxAll = g_gl.renderWidth, dyAll = g_gl.renderHeight;
+                    const GLuint fboAll = g_gl.FboScene();
+                    const DISPLAY dispAll = g_display;
+                    const int msaa = s_fboMsaaSplitSaved ? std::max(g_display.msaaSamples, 2) : 0;
+                    const bool fHudViews = !FMenuShown();
+                    ++g_hud.iframe2p;   // (the drawn frames: the boxes seen in the last one)
+                    glm::vec3 posSkyCam = cam.pos;   // (the camera the skies are placed at: PlaceSkiesAtCamera above)
+                    for (int iv = 0; iv < split3::CView(); ++iv)
+                    {
+                        const split3::VIEWRECT r = split3::RectView(iv, dxAll, dyAll);
+                        // (the two-player HUD's view box, widened to the view's edges: the scene is drawn in the box only,
+                        // the rest of the view is the HUD's own frame; splitscreen3.h FRectScene)
+                        split3::VIEWRECT rs;
+                        const bool fBox = fHudViews && split3::FRectScene(iv, r.dx, r.dy, &rs);
+                        SPLITVIEWFB& f = s_asplitfb[iv];
+                        SPLITVIEWFB& fs = fBox ? s_asplitboxfb[iv] : f;
+                        if (fBox) EnsureSplitViewFb(f, r.dx, r.dy, 0);
+                        else rs = split3::VIEWRECT{0, 0, r.dx, r.dy};
+                        EnsureSplitViewFb(fs, rs.dx, rs.dy, msaa);
+                        CAMERA camView = iv == 0 ? cam : CameraFromCm(split3::CmView(iv));
+                        if (iv != 0) camView.grfChannels = cam.grfChannels;
+                        const GLuint afbo[3] = {g_gl.fbo, g_gl.fbc, g_gl.rbo};
+                        g_gl.fbo = fs.fbo, g_gl.fbc = fs.fbc, g_gl.rbo = fs.rbo, g_gl.fboMsaa = fs.fboMsaa;
+                        g_gl.renderWidth = rs.dx, g_gl.renderHeight = rs.dy;
+                        g_display.renderWidth = rs.dx, g_display.renderHeight = rs.dy;
+                        g_display.rAspectPicture = float(rs.dx) / float(rs.dy);
+                        {
+                            void MoveSkies(SCENE& scene, const std::vector<ALO*>& apalo, const glm::vec3& d);   // sky.cpp
+                            MoveSkies(scene, apalo, camView.pos - posSkyCam);   // (s3-plane: from the last view's camera)
+                            posSkyCam = camView.pos;
+                        }
+                        RenderScene(scene, camView, opts);
+                        if (fBox)
+                        {
+                            RenderSceneForeground(scene, camView, opts);
+                            if (fs.fboMsaa)
+                            {
+                                glBindFramebuffer(GL_READ_FRAMEBUFFER, fs.fboMsaa);
+                                glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fs.fbo);
+                                glBlitFramebuffer(0, 0, rs.dx, rs.dy, 0, 0, rs.dx, rs.dy, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+                            }
+                            // the view: black, the box's scene in it, then the HUD's band over the whole view
+                            glBindFramebuffer(GL_FRAMEBUFFER, f.fbo);
+                            glDisable(GL_SCISSOR_TEST);
+                            glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+                            glClearColor(0, 0, 0, 1);
+                            glClear(GL_COLOR_BUFFER_BIT);
+                            glBindFramebuffer(GL_READ_FRAMEBUFFER, fs.fbo);
+                            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, f.fbo);
+                            glBlitFramebuffer(0, 0, rs.dx, rs.dy, rs.x, rs.y, rs.x + rs.dx, rs.y + rs.dy, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+                            g_gl.fbo = f.fbo, g_gl.fbc = f.fbc, g_gl.rbo = f.rbo, g_gl.fboMsaa = 0;
+                            g_gl.renderWidth = r.dx, g_gl.renderHeight = r.dy;
+                            g_display.renderWidth = r.dx, g_display.renderHeight = r.dy;
+                            g_display.rAspectPicture = float(r.dx) / float(r.dy);
+                        }
+                        split3::VIEWRECT rClip;
+                        if (fHudViews && split3::FHudCanvasView(iv, g_display.rAspectPicture, r.dx, r.dy, &rClip))
+                        {
+                            cane::input::tracker().force(cane::input::Family(split3::FamilySeat(iv)));
+                            glBindFramebuffer(GL_FRAMEBUFFER, g_gl.FboScene());
+                            glEnable(GL_SCISSOR_TEST);
+                            glScissor(rClip.x, rClip.y, rClip.dx, rClip.dy);
+                            g_iviewHud3 = iv;
+                            ApplyViewGauges3(psw.get(), iv);   // (gauge3.h: views 3 / 4 show their players' gauges)
+                            DrawHud(psw.get(), r.dx, r.dy);
+                            ApplyViewGauges3(psw.get(), -1);
+                            g_iviewHud3 = -1;
+                            glDisable(GL_SCISSOR_TEST);
+                            g_hud.band2p.f = false;
+                            cane::input::tracker().force(cane::input::Family(split3::FamilySeat(0)));
+                        }
+                        if (!fBox)
+                        {
+                            RenderSceneForeground(scene, camView, opts);
+                            if (f.fboMsaa)
+                            {
+                                glBindFramebuffer(GL_READ_FRAMEBUFFER, f.fboMsaa);
+                                glBindFramebuffer(GL_DRAW_FRAMEBUFFER, f.fbo);
+                                glBlitFramebuffer(0, 0, r.dx, r.dy, 0, 0, r.dx, r.dy, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+                            }
+                        }
+                        g_gl.fbo = afbo[0], g_gl.fbc = afbo[1], g_gl.rbo = afbo[2], g_gl.fboMsaa = 0;
+                        g_gl.renderWidth = dxAll, g_gl.renderHeight = dyAll;
+                        g_display = dispAll;
+                        glBindFramebuffer(GL_READ_FRAMEBUFFER, f.fbo);
+                        glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fboAll);
+                        glBlitFramebuffer(0, 0, r.dx, r.dy, r.x, r.y, r.x + r.dx, r.y + r.dy, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+                    }
+                    glBindFramebuffer(GL_FRAMEBUFFER, fboAll);
+                    if (fHudViews && split3::FRectScene(0, split3::RectView(0, dxAll, dyAll).dx, split3::RectView(0, dxAll, dyAll).dy, nullptr))
+                    {
+                        // (the two-player HUD's banners between the bands: over the whole picture, hud.h fCenter2p)
+                        g_hud.fCenter2p = true;
+                        split3::VIEWRECT rBanner;
+                        glm::vec2 scaleBanner, offBanner;
+                        if (split3::FBannerArea(g_gl.renderWidth, g_gl.renderHeight, &rBanner, &scaleBanner, &offBanner))
+                        {
+                            // (Side by Side: under the gauges in the centre column, splitscreen3.h FBannerArea)
+                            const glm::vec2 scaleOld = g_display.uiScale, offOld = g_display.uiOffset;
+                            g_display.uiScale = scaleBanner, g_display.uiOffset = offBanner;
+                            glEnable(GL_SCISSOR_TEST);
+                            glScissor(rBanner.x, rBanner.y, rBanner.dx, rBanner.dy);
+                            DrawHud(psw.get(), g_gl.renderWidth, g_gl.renderHeight);
+                            glDisable(GL_SCISSOR_TEST);
+                            g_display.uiScale = scaleOld, g_display.uiOffset = offOld;
+                        }
+                        else DrawHud(psw.get(), g_gl.renderWidth, g_gl.renderHeight);
+                        g_hud.fCenter2p = false;
+                        // (the result stamp / Job Failed over the whole picture, not cut into the bands: hud.h fWhole2p)
+                        g_hud.fWhole2p = true;
+                        DrawHud(psw.get(), g_gl.renderWidth, g_gl.renderHeight);
+                        g_hud.fWhole2p = false;
+                    }
+                    SetPeCameraOf(cam);
+                    {
+                        void MoveSkies(SCENE& scene, const std::vector<ALO*>& apalo, const glm::vec3& d);   // sky.cpp
+                        MoveSkies(scene, apalo, cam.pos - posSkyCam);   // (back at the world camera)
+                    }
+                    if (!fHudViews) DrawHud(psw.get(), g_gl.renderWidth, g_gl.renderHeight);
+                    split3::DrawOverlay(g_gl.renderWidth, g_gl.renderHeight);
+                    RenderHackCards(psw.get(), scene, opts);   // (hackmp3.h: the hackers' select's ships, in the page's cards)
+                }
+                else if (!fEyes) RenderScene(scene, cam, opts);
                 const double tHud = s_fFpsLog ? now() : 0.0;
-                DrawHud(psw.get(), g_gl.renderWidth, g_gl.renderHeight);
+                if (FGpuMarks()) GpuMark("hud");
+                if (!fSplit) DrawHud(psw.get(), g_gl.renderWidth, g_gl.renderHeight);
                 if (s_fFpsLog) g_msHudFpsLog += now() - tHud;
-                RenderSceneForeground(scene, cam, opts);   // kinds 22..25 over the HUD (group 10, 0x157CF0)
+                if (!fEyes && !fSplit) RenderSceneForeground(scene, cam, opts);   // kinds 22..25 over the HUD (group 10, 0x157CF0)
+                cops3::DrawMenu(g_gl.renderWidth, g_gl.renderHeight);   // (copsmap3.h: the map select on the Two Player page)
+                duel3::DrawMenu(g_gl.renderWidth, g_gl.renderHeight);   // (duel3.h: the Biplane Duel's players row)
+                DrawRemapOverlay(g_gl.renderWidth, g_gl.renderHeight);   // (remappage.h: the Remap page over the pause menu)
                 DrawDebugOverlay(g_gl.renderWidth, g_gl.renderHeight);   // (debugmenu.h: the debug menu over all; Debug keys only)
+                g_fHudAlphaLayer = false;
+                if (FGpuMarks()) GpuMark("overlay capture");
                 g_gl.RememberOverlaySourceFrame();
+                if (FGpuMarks()) GpuMark("animated overlay");
             }
             DrawAnimatedOverlayFrame();  // orig: 0x1477D8, capture then clear/draw the exclusive surfaces
             if (!go.screenshot.empty() && frame + 1 == go.cframe)
@@ -2045,21 +2626,28 @@ int RunGame(const GAMEOPTS& go)
             t2 = now();
             if (fWindow)
             {
+                if (FGpuMarks()) GpuMark("present");
                 g_gl.Present();
                 if (s_fFpsLog && s_aqGpu[0]) glEndQuery(GL_TIME_ELAPSED), ++s_iqGpu;
 #ifdef __SWITCH__
                 // (SaltyNX's overlays: the scene's render size, which the internal resolution sets)
                 CaneDeko::SetFrameResolution(unsigned(g_gl.renderWidth), unsigned(g_gl.renderHeight));
 #endif
-                cane::gl::SwapBuffers(g_gl.window);
+                if (!vr::FSkipSwap()) cane::gl::SwapBuffers(g_gl.window);
             }
+            else if (s_fFpsLog && s_aqGpu[0]) glEndQuery(GL_TIME_ELAPSED), ++s_iqGpu;
+            // (renderer.h: Vulkan ends its frame at the swap; a headless frame is submitted the same way, as an
+            // OpenGL driver flushes on its own)
+            if (!fWindow && FRendererVulkan()) cane::gl::SwapBuffers(g_gl.window);
         }
         else PrepareAnimatedOverlayFrame();  // same logical boundary for frames without a GL target
         const double tSwapped = now();
+        TexStatsFrame(tSwapped - t0);   // (SLY2N_TEXSTATS: texmod.h)
         // (SLY2N_REALTIME: a headless run paced at 60 Hz too, so the audio thread's streams (dialog lines the
         // scripts wait on) keep up with the frames)
         static const bool s_fRealtime = std::getenv("SLY2N_REALTIME") != nullptr;
-        if (fWindow && g_display.frameRate < DISP_FRAMERATE_UNCAPPED)   // the frame-rate cap (with or without VSync)
+        if (fWindow && vr::FActive()) {}   // (the headset paces: vr::BeginFrame)
+        else if (fWindow && g_display.frameRate < DISP_FRAMERATE_UNCAPPED)   // the frame-rate cap (with or without VSync)
             pacer.Wait(g_display.frameRate, g_display.fSwapPacesFrames, g_display.swapGeneration);
         else if (s_fRealtime) pacer.Wait(60);
         msUpdate += t1 - t0;
@@ -2118,6 +2706,7 @@ int RunGame(const GAMEOPTS& go)
     {
         std::string err;
         if (!FWriteGameSave(sz, err)) std::printf("save dump: %s\n", err.c_str());
+        else WriteModSave(sz);   // (mod packages' custom tasks, modsave.h: their side file with it)
     }
     if (const char* psz = std::getenv("SLY2N_POSECHECK"))
     {
@@ -2140,6 +2729,7 @@ int RunGame(const GAMEOPTS& go)
     // the Ep7 boss run; and the sound thread was only joined by an atexit handler while the device's mixer ran on.)
     UnloadWorld(psw, false);
     ShutdownSound();
+    vr::Shutdown();
     if (fDraws) g_gl.Terminate();
     return 0;
 }

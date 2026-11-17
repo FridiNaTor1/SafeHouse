@@ -3,12 +3,14 @@
 
     tools/make-developer-pictures.py NAME=PICTURE ... [--out launcher/assets/developers]
 
-For each developer (fridinator, theclub654, menaman123, thematuu, nagaa95) and the picture its owner supplied:
+For each developer (fridinator, theclub654, menaman123, thematuu, nagaa95, cooperbooperscooper, fyrnas, maxigasparini)
+and the picture its owner supplied:
   <name>.png             the picture, square, 512 x 512
   <name>-silhouette.png  its subject as a black shape with alpha (cut out of the picture itself, so it lines up with
                          the picture when the page cross-fades between the two), with a few plain prop shapes around it
                          that hint at what the person did (drawn here: a gear and a spanner, stars, a laptop, a puzzle
-                         piece and a branch line, a handheld and a chip)
+                         piece and a branch line, a handheld and a chip, a VR headset, a chip and a spanner, a folder
+                         and a disc)
 
 How each subject is told from its background is written per picture below (a plain wall, a flat grey, the picture's
 own alpha, a starry sky, a pale square). Needs Pillow and NumPy.
@@ -98,6 +100,12 @@ def subject(name, picture):
     if name == "nagaa95":
         # a pattern of green squares on a pale square
         return (g > r + 25) & (g > b + 25)
+    if name == "cooperbooperscooper":
+        # a drawn figure with its own alpha (the cane and the figure apart): what is not see-through
+        return alpha > 128
+    if name in ("fyrnas", "maxigasparini"):
+        # a pattern of coloured squares on a pale grey square: what has colour
+        return spread > 40
     raise SystemExit(f"no rule for {name}")
 
 
@@ -171,6 +179,29 @@ def chip(d, x, y, s):
             d.rectangle(box, fill=255)
 
 
+def headset(d, x, y, w):
+    """A VR headset from the front: the visor with two lenses and a strap."""
+    h = w * 0.5
+    d.line((x - w * 0.12, y + h * 0.45, x + w * 1.12, y + h * 0.45), fill=255, width=int(h * 0.2))
+    d.rounded_rectangle((x, y, x + w, y + h), radius=h * 0.35, fill=255)
+    for cx in (x + w * 0.29, x + w * 0.71):
+        d.ellipse((cx - h * 0.26, y + h * 0.24, cx + h * 0.26, y + h * 0.76), fill=0)
+    d.polygon([(x + w * 0.42, y + h), (x + w * 0.58, y + h), (x + w * 0.54, y + h * 0.7), (x + w * 0.46, y + h * 0.7)], fill=0)
+
+
+def folder(d, x, y, w):
+    h = w * 0.72
+    d.rounded_rectangle((x, y, x + w * 0.42, y + h * 0.3), radius=h * 0.08, fill=255)
+    d.rounded_rectangle((x, y + h * 0.16, x + w, y + h), radius=h * 0.08, fill=255)
+    d.line((x + w * 0.08, y + h * 0.36, x + w * 0.92, y + h * 0.36), fill=0, width=max(1, int(h * 0.05)))
+
+
+def disc(d, cx, cy, radius):
+    d.ellipse((cx - radius, cy - radius, cx + radius, cy + radius), fill=255)
+    d.ellipse((cx - radius * 0.3, cy - radius * 0.3, cx + radius * 0.3, cy + radius * 0.3), fill=0)
+    d.arc((cx - radius * 0.72, cy - radius * 0.72, cx + radius * 0.72, cy + radius * 0.72), 200, 290, fill=0, width=max(1, int(radius * 0.08)))
+
+
 def props(name):
     """The prop shapes of a developer, as an 8-bit mask of the full square."""
     big = Image.new("L", (SIZE * SCALE, SIZE * SCALE), 0)
@@ -192,6 +223,14 @@ def props(name):
     elif name == "nagaa95":  # a handheld port and another processor: a handheld and a chip
         handheld(d, 3 * u, 80 * u, 36 * u)
         chip(d, 8 * u, 36 * u, 16 * u)
+    elif name == "cooperbooperscooper":  # the first person VR mode: a VR headset
+        headset(d, 64 * u, 82 * u, 30 * u)
+    elif name == "fyrnas":  # the Mali GPU shader fix: a chip and a spanner
+        chip(d, 80 * u, 6 * u, 14 * u)
+        spanner(d, 4 * u, 78 * u, 22 * u, 96 * u, 3.0 * u)
+    elif name == "maxigasparini":  # the game and disc image folders: a folder and a disc
+        folder(d, 4 * u, 80 * u, 24 * u)
+        disc(d, 88 * u, 12 * u, 10 * u)
     return big.resize((SIZE, SIZE), Image.LANCZOS)
 
 

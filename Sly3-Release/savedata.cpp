@@ -405,3 +405,23 @@ bool FSettingFlag(const char* name)
     const CRef r = RefGetProgress({"flags", name});
     return r.m_tagk == TAGK_Bool ? r.m_bool != 0 : r.m_tagk == TAGK_S32 ? r.m_n != 0 : false;
 }
+
+// orig3: 0x21C860 (the challenge start 0x283BB0's reset of the save: every entry named focus_count / complete_count /
+// state / time_played / suck_value (4 bytes) and is_complete / from_memcard (1 byte) zeroed; the rest kept)
+void ClearProgressTaskFields(GAMESAVE& gs)
+{
+    auto sym = [](const char* sz) {
+        const auto it = s_layout.mpnamesym.find(sz);
+        return it == s_layout.mpnamesym.end() ? -2 : it->second;
+    };
+    const int focus = sym("focus_count"), complete = sym("is_complete"), time = sym("time_played"), suck = sym("suck_value");
+    const int completions = sym("complete_count"), state = sym("state"), fromCard = sym("from_memcard");
+    for (const PENT& e : s_layout.aent)
+    {
+        if (e.ch == -1) continue;
+        const bool f4 = e.ch == focus || e.ch == completions || e.ch == state || e.ch == time || e.ch == suck;
+        const bool f1 = e.ch == complete || e.ch == fromCard;
+        if (f4 && e.ib + 4 <= CB_PROGRESS) std::memset(gs.ab + e.ib, 0, 4);
+        else if (f1 && e.ib < CB_PROGRESS) gs.ab[e.ib] = 0;
+    }
+}

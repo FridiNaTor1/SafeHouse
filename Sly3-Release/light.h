@@ -77,6 +77,9 @@ void BakeGlobLighting(GLOB& glob, const glm::mat4& matWorld, const glm::vec3& po
 // when that is certain (lights is WorldLights(), the changes since v are logged, none of them touches a light the key
 // takes there, then or now); false means: compute the key.
 bool FBakeLightsUnchangedSince(uint32_t v, const glm::vec3& posSphere, float sRadius, const LIGHTSET& lights);
+// The same for every sphere at once: true when no change since v is one any bake takes (then the function above is
+// true for every group checked at v; false: ask it per group).
+bool FBakeLightsUnchangedForAll(uint32_t v, const LIGHTSET& lights);
 
 // P_G forward lighting for a lit-flag group with the four lights the light context would hold for it.
 // pamatBone (a skinned group's bone matrices, the renderer's): the lights in world space and each vertex's normal
@@ -87,8 +90,10 @@ bool FBakeLightsUnchangedSince(uint32_t v, const glm::vec3& posSphere, float sRa
 void ForwardGlobLighting(GLOB& glob, const glm::mat4& matWorld, const glm::vec3& posCenter, const LIGHTSET& lights,
                          const std::vector<glm::mat4>* pamatBone = nullptr, const LIGHTREC* palSel = nullptr);
 
-// The four lights 0x1A4478 / 0x1A3F78 would choose at a point (strongest contribution first).
-void SelectLights(const LIGHTSET& lights, const glm::vec3& pos, LIGHTREC alight[4]);
+// The four lights 0x1A4478 / 0x1A3F78 would choose at a point (strongest contribution first). sRadius: the light
+// context's radius (Sly 3, orig3 0x1C5E98: a light's strength is taken at max(distance - radius, 0); the context's
+// +0x10, set up by 0x23B3A8 at the load: the largest distance + model radius of the lit objects sharing it)
+void SelectLights(const LIGHTSET& lights, const glm::vec3& pos, LIGHTREC alight[4], float sRadius = 0.0f);
 
 // The shadow part of 0x1A4478: from the chosen lights (those with +0x158) the shadow's direction and the
 // 5 quadwords VU1 gets at 0xE for an object's cast shadow (mesh type 2 / the light context's +0x24..+0x2C):

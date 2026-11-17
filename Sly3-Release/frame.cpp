@@ -25,7 +25,7 @@ CRef CFrame::RefSetBinding(SYMID symid, CRef* pref)
     return CRef(TAGK_Void);
 }
 
-// orig: 0x00127D78 FFindBinding__6CFrameUiiP4CRef
+// orig: 0x00127D78 FFindBinding__6CFrameUiiP4CRef (orig3: 0x129B18, the same code in Sly 3)
 int CFrame::FFindBinding(SYMID symid, int fRecursive, CRef* pref)
 {
     CRef* prefFound = PrefFindBinding(symid, fRecursive);

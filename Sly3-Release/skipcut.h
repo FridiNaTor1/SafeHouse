@@ -29,6 +29,9 @@ extern bool g_fSkipCutFast;
 bool FCutsceneActive();
 // Native QoL identity for each new authored scene. Never reused across world loads.
 uint64_t NewSkipCutScene();
+// (Sly 3, game/scptgame3.cpp) a script holds the camera (its camera keys' run): a skippable cinematic while it does
+// (not on the title, whose script waits for START)
+void SetScptCameraActive3(bool fActive);
 // Once per displayed frame, after the frame's steps: the hint, the hold, the skip's start and end. dtReal: the
 // real time since the last call; grfHeld / grfPressed: the native pad (joy.h BTN_* layout).
 void UpdateSkipCut(float dtReal, uint16_t grfHeld, uint16_t grfPressed);

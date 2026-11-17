@@ -115,7 +115,9 @@ enum RESPK : int
 	RESPK_LanguageItalian,
 
 	RESPK_AutoCameraRotation = 87,
-	RESPK_Max = 88
+	// (settings v22, platform/monitor_select.h) the Video menu's Monitor: Primary, then the connected monitors (desktop)
+	RESPK_Monitor = 88,
+	RESPK_Max = 89
 };
 
 // -----------------------------------------------------------------------------
@@ -404,6 +406,9 @@ inline RESPK s_arespkVideoMenu[] =
     // Not on the Switch: one screen, no window to place, and VSync always on (ApplySwapInterval).
 #ifndef __SWITCH__
     RESPK_WindowMode,
+#if !defined(CANE_ANDROID) && !defined(CANE_IOS)
+    RESPK_Monitor,
+#endif
     RESPK_Vsync,
 #endif
     RESPK_AspectRatio,
@@ -590,7 +595,8 @@ inline const char* s_mprespkachz[RESPK_Max] =
 	"Deutsch",              // 84 RESPK_LanguageGerman
 	"Espa\xC3\xB1""ol",    // 85 RESPK_LanguageSpanish
 	"Italiano",             // 86 RESPK_LanguageItalian
-	g_aachzRespkPc[RESPK_AutoCameraRotation - RESPK_PromptStyle]
+	g_aachzRespkPc[RESPK_AutoCameraRotation - RESPK_PromptStyle],
+	g_aachzRespkPc[RESPK_Monitor - RESPK_PromptStyle]   // 88 RESPK_Monitor
 };
 
 // -----------------------------------------------------------------------------
@@ -655,7 +661,8 @@ inline RESPD s_arespd[RESPK_Max] =
 	{ 0, nullptr }, { 0, nullptr }, { 0, nullptr }, { 0, nullptr },
 	{ 0, nullptr }, { 0, nullptr }, { 0, nullptr }, { 0, nullptr }, // 70-81
 	{ 0, nullptr }, { 0, nullptr }, { 0, nullptr }, { 0, nullptr }, { 0, nullptr }, // 82-86 languages
-	{ 0, nullptr } // 87 RESPK_AutoCameraRotation
+	{ 0, nullptr }, // 87 RESPK_AutoCameraRotation
+	{ 0, nullptr }  // 88 RESPK_Monitor
 };
 
 // -----------------------------------------------------------------------------

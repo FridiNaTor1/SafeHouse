@@ -19,6 +19,10 @@ noperspective in float gsFog[];
 flat in uvec2 gsTexh[];
 flat out uvec2 vTexh;
 #endif
+#ifdef TEXARRAY
+flat in uint gsLayer[];
+flat out uint vLayer;
+#endif
 
 noperspective out vec4 vColor;
 out vec2 vUv;
@@ -32,6 +36,9 @@ void EmitAt(int i, int j, float t)
     vFog = mix(gsFog[i], gsFog[j], t);
 #ifdef BINDLESS
     vTexh = gsTexh[0];
+#endif
+#ifdef TEXARRAY
+    vLayer = gsLayer[0];
 #endif
     EmitVertex();
 }
@@ -52,7 +59,7 @@ void main()
     int c = 0;
     for (int i = 0; i < 3; ++i)
     {
-        const int j = (i + 1) % 3;
+        int j = (i + 1) % 3;   // (not const: GLSL ES wants constant initializers there)
         if (d[i] >= 0.0) { aij[c] = ivec2(i, i); at[c] = 0.0; ++c; }
         if ((d[i] >= 0.0) != (d[j] >= 0.0)) { aij[c] = ivec2(i, j); at[c] = d[i] / (d[i] - d[j]); ++c; }
     }

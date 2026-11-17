@@ -85,4 +85,9 @@ int runProgramNow(const std::vector<std::string>& arguments);
 bool smokeTest();
 // A line for the app's own log (Documents/logs/ios.log) and the console.
 void log(const std::string& line);
+// (glfw_sdl_ios.cpp glfwInit, after SDL's video starts) SDL 2.30.11's UIScreenDidDisconnectNotification handler frees the
+// display's data twice (UIKit_DelDisplay's CFRelease, then SDL_DelVideoDisplay's SDL_free: fixed in SDL 2.32) and
+// crashed the app when iOS let go of the screen at exit; it also left SDL with no display for the launcher's next
+// window. The app has one screen: SDL no longer watches for its disconnection (connections still come in).
+void ignoreScreenDisconnects();
 }  // namespace cane::ios

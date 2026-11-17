@@ -11,6 +11,7 @@
 #include <algorithm>
 #include "worldglobals.h"
 #include "breakable.h"
+#include "projectile.h"
 #include "pickup.h"
 #include "xf.h"
 #include "worldaccess.h"
@@ -30,6 +31,9 @@
 #include "clock.h"
 #include "update.h"
 #include "vtnative.h"
+#include "cm.h"
+#include "jt.h"
+#include "pe.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -109,7 +113,7 @@ BRKEV* PevCurrent(BRK& b)
     if (!FValidEvent(b)) return nullptr;
     return b.icur == -1 ? &b.evAny : &b.aev[static_cast<size_t>(b.icur)];
 }
-// orig: 0x001BBDB0 (a new item in the current event, up to 0x40)
+// orig: 0x001BBDB0 (a new item in the current event, up to 0x40) (orig3: 0x1E5F60, the same C in the Sly 3 decomp)
 BRKITEM* PitemNew(LO* plo, int k)
 {
     BRKEV* pev = PevCurrent(Brk(plo));
@@ -192,7 +196,9 @@ void GotoEvent(LO* plo, int id)
     b.n158 = 0;
 }
 
-// orig: 0x001BB648 (an event's items)
+// orig: 0x001BB648 (an event's items) (orig3: 0x1E57A0: the objects of kinds 0 / 1 / 6 looked up (Sly 2's 0x1BB648 also
+// kind 7's); 7 starts the effect by oid (0x25D940: m_ext's boxes and crates play PE 4748, the wood breaking), 8 shakes
+// every camera (0x167D38), 10 drops at the object's world point (vt slot 36's matrix, not its centre))
 void RunItems(LO* plo, BRK& b, const BRKEV& ev)
 {
     LO* psPrev = nullptr;
@@ -201,7 +207,7 @@ void RunItems(LO* plo, BRK& b, const BRKEV& ev)
     {
         if ((b.n158 > 0 || ev.n <= 0) && ((0x3F >> it.k) & 1)) continue;
         LO* ps = nullptr;
-        if ((0xC3 >> it.k) & 1)
+        if ((0x43 >> it.k) & 1)
         {
             ps = PloFindAround(plo, it.v);
             if (!ps) continue;
@@ -216,28 +222,19 @@ void RunItems(LO* plo, BRK& b, const BRKEV& ev)
         case 4: SetAloSoesByTag(palo, it.v, true); break;  // 0x1F6AC8
         case 5: SetAloSoesByTag(palo, it.v, false); break; // 0x1F6B48
         case 7:
-            // the explosion object (class 0x1E): its slot 51 with {1, the source (the kind 6 object, else itself)}
-            if (FCidDerivedFrom(ps->Cid(), S3CID(0x1E)))
-            {
-                BURSTPARAMS bp;
-                bp.grf = 1;
-                bp.plo = psPrev ? psPrev : ps;
-                ExplodeLo(ps, &bp);
-            }
+            // orig3: 0x25D940(sw, effect, -1, the breakable, 1): a PE started, else an explosion's burst from itself
+            StartEffectByOid3(it.v, -1, 1.0f, plo, true);   // (PC: its particles on their own random stream, pe.cpp)
             break;
-        case 8: if (b.grf168 & 2) WarnOnce("the camera's shake 0x14F750 (item 8)"); break;
+        case 8: if (b.grf168 & 2) JoltCm(&g_cm, it.v); break;   // (orig3: 0x167D38 on each camera of SW +0x3EBC)
         case 9: if (b.grf168 & 4) TriggerJoyRumbleRumk(it.v, 0.3f, "breakable item 9"); break;   // 0x187E28
         case 10:
-            // the drops (pickup.cpp, the actors code's 0x154E10) at the kind 6 object's centre, else the breakable's
+            // the drops (pickup.cpp, 0x171E50) at the kind 6 object's world point, else the breakable's (vt slot 36)
             if (b.grf168 & 8)
             {
                 LO* pc = psPrev ? psPrev : plo;
-                const glm::vec3 pos = FCidDerivedFrom(pc->Cid(), S3CID(0x30)) ? PosAloCenter(static_cast<ALO*>(pc)) : PosLoWorld(pc);  // 0x1A62E8
+                const glm::vec3 pos = PosJtLo(pc);
                 if (std::getenv("SLY2N_BRKDEBUG"))
-                    std::printf("breakable %d: drops from %d (cid 0x%X) at (%.0f %.0f %.0f), the breakable at (%.0f %.0f %.0f) world (%.0f %.0f %.0f)\n", plo->oid,
-                                pc->oid, pc->Cid(), pos.x, pos.y, pos.z, palo ? PosAloCenter(palo).x : 0.f, palo ? PosAloCenter(palo).y : 0.f,
-                                palo ? PosAloCenter(palo).z : 0.f, palo ? MatWorldOfAlo(palo)[3].x : 0.f, palo ? MatWorldOfAlo(palo)[3].y : 0.f,
-                                palo ? MatWorldOfAlo(palo)[3].z : 0.f);
+                    std::printf("breakable %d: drops from %d (cid 0x%X) at (%.0f %.0f %.0f)\n", plo->oid, pc->oid, pc->Cid(), pos.x, pos.y, pos.z);
                 DropPickups(pos, it.v, -100, plo);
             }
             break;
@@ -258,33 +255,47 @@ void RunItems(LO* plo, BRK& b, const BRKEV& ev)
     }
 }
 
-// orig: 0x001BB400 (the deferred hit: the current event's items, the next event after its n hits)
+// orig: 0x001BB400 (the deferred hit: the current event's items, the next event after its n hits) (orig3: 0x1E5508:
+// the hit event (slot 3's 0x13: natively the splice symbol 0x10), the player's projectiles (0x59 whose owner is the player) count as the player's
+// drops (8: not kept natively, below), the noise unless a guard 0x3A hit it (Sly 2 excepted 0x3C), at the end the listeners' 0x17, event 5 and the broadcast 0xD)
 void RunHit(LO* plo)
 {
     BRK& b = Brk(plo);
     if (!FValidEvent(b)) return;
-    if (b.ploHit && b.ploHit == PloPoCurrent(g_psw)) b.grf168 = 0xE;
+    LO* ppo = PloPoCurrent(g_psw);
+    if (b.ploHit && b.ploHit == ppo) b.grf168 = 0xE;
     else
     {
         const int v = b.grfHit;
-        b.grf168 = (v == 0x100 || v == 0x10000 || v == 0x20000 || (b.ploHit && FIsLoDerivedFrom(b.ploHit, S3CID(0x3B)))) ? 8 : 0;
+        // orig3 also gives 8 to a projectile 0x59 whose +0x1E8 (its launcher) -> +0x14 (the launcher's instance record)
+        // -> +0 (that instance's root) is the player: natively the launcher (projectile.cpp +0x200) under the player
+        // (e.g. a box shot by Sly or the RC chopper drops its coins)
+        auto fPlayerShot = [&]() -> bool {
+            if (!b.ploHit || !ppo || !FIsLoDerivedFrom(b.ploHit, S3CID(0x4F))) return false;
+            for (const LO* p = PloProjectileLauncher(b.ploHit); p; p = p->paloParent)
+                if (p == ppo) return true;
+            return false;
+        };
+        b.grf168 = (v == 0x100 || v == 0x10000 || v == 0x20000 || (b.ploHit && FIsLoDerivedFrom(b.ploHit, S3CID(0x3B))) || fPlayerShot()) ? 8 : 0;
     }
-    Event(plo, 0x10);  // vt slot 3
+    // vt slot 3 (orig3 passes 0x13 to the slot; the slot's splice symbol is the one the copied code knows as 0x10: sent
+    // as 0x13 natively, Ep1's canal chase targets never told their task (ep1_canal stalled at 2341))
+    Event(plo, 0x10);
     if (b.grf168 & 1) return;
     if (b.icur < 0) return;  // (the event -1 alone: TODO when it is current)
     RunItems(plo, b, b.evAny);
     RunItems(plo, b, b.aev[static_cast<size_t>(b.icur)]);
-    // 0x156B98(G, 0, 0x1A62E8(the breakable), the hitter): the fixed noise 706 (SW +0x4020) the guards hear, unless a
-    // guard (0x38, not 0x3C) hit it. 17:2716's RC tank nudging breakable 9330 alerts the guards 59433 this way.
-    if (!b.ploHit || !FIsLoDerivedFrom(b.ploHit, S3CID(0x38)) || FIsLoDerivedFrom(b.ploHit, S3CID(0x3C)))
-        if (NOISETMPL* pt = PtmplNoiseFixed(0)) PnoiseNew(pt, PosLoWorld(plo), b.ploHit);
+    // 0x173E00(G, 0, the breakable's world point, the hitter): the fixed noise 706 (SW +0x4020) the guards hear, unless
+    // a guard 0x3A (Sly 2's 0x38 less 0x3C) hit it. 17:2716's RC tank nudging breakable 9330 alerts the guards 59433 this way.
+    if (!b.ploHit || !FIsLoDerivedFrom(b.ploHit, S3CID(0x38)))
+        if (NOISETMPL* pt = PtmplNoiseFixed(0)) PnoiseNew(pt, PosJtLo(plo), b.ploHit);
     const BRKEV& ev = b.aev[static_cast<size_t>(b.icur)];
     if (ev.n > 0 && ++b.n158 >= ev.n)
     {
         b.n158 = 0;
         if (++b.icur >= static_cast<int>(b.aev.size()))
         {
-            // vt slot 4 (0x10: the listeners), the script event 5, the tasks' broadcast 0x11
+            // vt slot 4 (0x17: the listeners), the script event 5, the tasks' broadcast 0xD (Sly 2's 0x11)
             Event(plo, 5);
             BroadcastTaskEvent(g_psw, 0x11, plo);
         }
@@ -314,8 +325,9 @@ bool FAcceptBreakableContact(ALO* p, CTMSG* pctm)
         std::printf("breakable %d %p contact from %d: valid %d event %d bytes 0x%llX filter 0x%X\n", p->oid, static_cast<void*>(p),
                     pctm->ploSender ? pctm->ploSender->oid : -1, int(FValidEvent(b)), b.icur, (unsigned long long)pctm->grfAccepted, pctm->grfFilter);
     if (!FValidEvent(b)) return false;
-    if (!pctm->grfAccepted) return false;
-    if ((pctm->grfAccepted & 0xC) != 0x8) return true;
+    // (orig3 0x1E4EE8 -> 0x1E4FC8: Sly 3's hit is bit 2 of the accepted bytes (its InitLo 0x1E4C68 sets 2 where Sly 2's
+    // 0x1BAB50 set 8); without it the message is refused. Sly 2 tested (bytes & 0xC) == 8 and accepted the rest unhit.)
+    if (!(pctm->grfAccepted & 2)) return false;
     if (!b.atrig.empty() && pctm->ploSender != p)
     {
         bool f = false;
@@ -475,8 +487,8 @@ struct INITBREAKABLE
 // orig: 0x001BAB50 (the init's contact bytes) and the end of 0x001BABA0 (the load: the first event current)
 void InitBreakableBytes(ALO* palo)
 {
-    SetAloXpBytes(palo, 0x03FFFFFF, 8);  // 0x1F7918
-    SetAloXpBytes(palo, 0x80001, 0);
+    SetAloXpBytes(palo, 0x03FFFFFF, 2);  // (orig3 0x1E4C68: 0x240E58(p, 0x3FFFFFF, 2); Sly 2's 0x1BAB50: 8)
+    SetAloXpBytes(palo, 0x88001, 0);     // (orig3: 0x88001; Sly 2's 0x80001)
 }
 void PrintBreakablesNear(const glm::vec3& pos, float sMax)
 {
@@ -493,6 +505,19 @@ void PrintBreakablesNear(const glm::vec3& pos, float sMax)
         const glm::vec3 c = PosAloCenter(const_cast<ALO*>(static_cast<const ALO*>(plo)));
         std::printf("breakable near: %d at (%.0f %.0f %.0f), %.0f away\n", plo->oid, c.x, c.y, c.z, s);
     }
+}
+// (debug, SLY3_BRKHIT: the nearest intact breakable to pos hit by plo as a cane's hit (filter 2): as 0x1E5070)
+void HitBreakableNear(const glm::vec3& pos, LO* ploHitter)
+{
+    const LO* pbest = nullptr;
+    float sBest = 1e30f;
+    for (const auto& [plo, b] : s_mpbrk)
+        if (plo->fInWorld && FCidDerivedFrom(plo->Cid(), S3CID(0x30)) && FValidEvent(b))
+        {
+            const float s = glm::length(PosAloCenter(const_cast<ALO*>(static_cast<const ALO*>(plo))) - pos);
+            if (s < sBest) { sBest = s; pbest = plo; }
+        }
+    if (pbest) PostHit(const_cast<LO*>(pbest), ploHitter, 2);
 }
 void PostLoadBreakable(LO* plo)
 {

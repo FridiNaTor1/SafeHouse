@@ -3,7 +3,7 @@
 // the profile (<profile>/Collection/Menu). Nothing of it ships with SafeHouse.
 //
 // From the disc (folder, .iso or .zip of the .iso: platform/ps3disc.h), relative to PS3_GAME/USRDIR:
-//   IMAGE.ZIP                   the menu's data. Used:            Levels/Frontend/Frontend_Art.san (the menu scene),
+//   IMAGE.ZIP                   the menu program's data. Used: Levels/Frontend/Frontend_Art.san (the menu scene),
 //                               Scripts/Levels.xmb and Scripts/Tuning.xmb (bloom, camera glide, input delay),
 //                               Gui/Font_MCGames_*.tga + .bmp (the comic font and its glyph map), Gui/Banner_*.tga,
 //                               Gui/Border_*.tga (the banner and the two frames), Gui/Screen_LoadingWide.tga

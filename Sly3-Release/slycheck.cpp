@@ -187,7 +187,7 @@ void ImportXf(XF* pxf, uint32_t a)
     const RAM& r = s_h.ram;
     pxf->mat = r.M4(a);
     pxf->matWorld = r.M4(a + 0x40);
-    pxf->mode = r.Rd<int16_t>(a + 0x98);
+    pxf->mode = static_cast<int16_t>(Xfm2FromXfm3(r.Rd<int16_t>(a + 0x98)));  // (Sly 3's modes, xf.h)
     pxf->state = r.Rd<int16_t>(a + 0x9A);
     pxf->vel = r.V4(a + 0xB0);
     for (int i = 0; i < 4; i++) pxf->aseg[i] = r.V4(a + 0xC0 + 16 * i);

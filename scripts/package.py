@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Create an offline release bundle from a completed native or cross build."""
-import argparse, hashlib, json, os, pathlib, platform, shutil, subprocess, tarfile, urllib.request, zipfile
+import argparse, hashlib, json, os, pathlib, platform, shutil, subprocess, sys, tarfile, urllib.request, zipfile
 p=argparse.ArgumentParser()
 p.add_argument('--build',required=True,type=pathlib.Path)
 p.add_argument('--output',default='dist',type=pathlib.Path)
@@ -45,6 +45,10 @@ if a.windows:
     if dll.exists():shutil.copy2(dll,stage/'bin'/dll.name)
  # SafeHouse.exe (launcher/start.c, installed at the top by CMake) opens bin\safehouse.exe.
  if not (stage/'SafeHouse.exe').is_file():raise RuntimeError('SafeHouse.exe is missing from the install: build the safehouse-start target')
+ # Authenticode for every program in the package when a certificate is configured (scripts/windows/sign.py; else
+ # nothing happens): signed before the zip and the setup take them.
+ from windows.sign import configured,sign
+ if configured():sign(sorted(str(f) for f in stage.rglob('*.exe')))
  if a.windows_package in ['both','portable']:
   portable_name=name+'-Portable'
   temporary=output/(portable_name+'.zip.building')

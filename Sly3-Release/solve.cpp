@@ -211,7 +211,7 @@ glm::vec3 ProjectCnstr(const CNSTRS& c, const XF* pxfOwner, const glm::vec3& v)
     return k == 2 ? pr : v - pr;
 }
 
-// orig: 0x001FA970 func_001FA970 (a constraint applied to v, the axis as it is)
+// orig: 0x001FA970 func_001FA970 (a constraint applied to v, the axis as it is) (orig3: 0x244558, the same code in Sly 3)
 glm::vec3 ProjectCnstrLocal(const CNSTRS& c, const glm::vec3& v)
 {
     const int k = c.kind;
@@ -297,7 +297,7 @@ glm::vec3 VelAloDzResponse(ALO* p, const glm::vec3& lin, const glm::vec3& ang, c
 }
 NATIVEFN(0x1FADD0, VelAloDzResponse);
 
-// orig: 0x001FA328 func_001FA328 (ALO vt slot 66: the pending changes into the records' velocities)
+// orig: 0x001FA328 func_001FA328 (ALO vt slot 66: the pending changes into the records' velocities) (orig3: 0x243F38, the same C in the Sly 3 decomp)
 void ApplyAloVelocityChanges(ALO* p)
 {
     if (!Psost(p)) return;
@@ -504,9 +504,13 @@ int CollectGroupXps(const std::vector<ALO*>& apx, int cMax, std::vector<XP*>* pa
 // target the normal speed; else the speed times 1 + the elasticity randomized 0.9..1.1), friction rows, applied at
 // twice the largest speed, 50; flag 1: slot 65 and, when nothing moves any more, the half-frame step back; else
 // slot 66)
+// (s3-gadgets) orig3 D_0036AEAC: the group being solved, for the objects' slot 66 / 70 (Murray's ball sums its contacts'
+// solutions: game/ball3.cpp)
+DZG* g_pdzgSolve = nullptr;
 void SolveGroup(int flags, int nobj, ALO** objs, int ncont, XP** conts)
 {
     DZG dzg;
+    struct CUR { DZG* pPrev; CUR(DZG* p) : pPrev(g_pdzgSolve) { g_pdzgSolve = p; } ~CUR() { g_pdzgSolve = pPrev; } } cur(&dzg);
     InitDzg(&dzg, ncont, conts, nobj, objs);
     const bool fl1 = (flags & 1) != 0;
     for (int i = 0; i < ncont; i++)

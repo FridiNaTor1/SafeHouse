@@ -16,7 +16,7 @@
 #define CANE_LAUNCHER_HAS_BOLD 1
 #endif
 // The languages' other letters (launcher/assets/l10n, scripts/make-launcher-l10n-fonts.py): Noto Sans CJK JP for
-// Japanese and Noto Sans for Cyrillic and the rest, subset to the characters launcher/lang uses, merged into each font
+// Japanese and Korean (its Hangul) and Noto Sans for Cyrillic and the rest, subset to the characters launcher/lang uses, merged into each font
 // for the glyphs Atkinson Hyperlegible lacks.
 #if __has_include("launcher_l10n_fonts.h")
 #include "launcher_l10n_fonts.h"

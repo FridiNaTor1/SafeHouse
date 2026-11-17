@@ -2,7 +2,16 @@
 
 #include "binoc3.h"
 
+#include "actor.h"
+#include "alo.h"
+#include "binoc.h"
+#include "brx.h"
+#include "game/sly3.h"
+#include "so.h"
+
 #include "cm.h"
+#include "cplcy.h"
+#include <algorithm>
 #include "game/scptgame3.h"
 #include "game/task3.h"
 #include "lo.h"
@@ -60,16 +69,24 @@ void SetWindowArgs(BINOCWIN3& w)
     SetScreenObjArg(w.ploFrame, 1, -1);
     JOB3* pjob = g_tasks3.pjobCur;
     if (!pjob || !pjob->plo) return;
-    const int idName = int(pjob->plo->U32Field(0, 0x60, uint32_t(-1)));
+    // (+0x60 is EOPID 1370's field and +0x4C EOPID 1392's (grf 0x92): natively the loaded options hold them, the
+    // fields were read as -1, so the frame's box stayed empty; the reference shows e.g. "Set off pinwheels")
+    auto nopt = [](const LO* plo, int eopid, uint32_t ib) {
+        for (const OPT& o : plo->aopt)
+            if (o.eopid == eopid && !o.aval.empty()) return o.aval[0].n;
+        return int(plo->U32Field(0, ib, uint32_t(-1)));
+    };
+    const int idName = nopt(pjob->plo, 1370, 0x60);
     if (idName == -1) return;
     SetScreenObjArg(w.ploFrame, 0, idName);
     // (the job's tasks in VisitTask's order: the first with a goal (+0x4C) that is not done, 0x188A38)
     for (const auto& pt : g_tasks3.atask)
     {
         if (pt->pjob != pjob || !pt->plo) continue;
-        const int idGoal = int(pt->plo->U32Field(0, 0x4C, uint32_t(-1)));
+        const int idGoal = nopt(pt->plo, 1392, 0x4C);
         if (idGoal == -1 || pt->nState == 2 || pt->nState == 3) continue;
         SetScreenObjArg(w.ploFrame, 1, idGoal);
+        if (FPrint()) std::printf("binoc3: frame args job %d name %d, task %d goal %d\n", pjob->oid, idName, pt->oid, idGoal);
         break;
     }
 }
@@ -80,13 +97,49 @@ void SetDials(BINOCWIN3& w)
     if (!w.ploFrame) return;
     const float heading = std::atan2(g_cm.mat[0][1], g_cm.mat[0][0]);   // (TODO(sly3): the binocucom camera's own heading +0x1BC)
     SetScreenObjFraction(w.ploFrame, PART_COMPASS, (heading + 3.14159274f) * 0.159154937f);
-    SetScreenObjFraction(w.ploFrame, PART_ZOOM, 0.0f);
+    // (orig3 0x1BEA30: BINOC +0x34, the binocucom camera's zoom: the arc's fill, all blue at the widest, purple as it
+    // zooms in (the reference's talk 4271: blue, purple while the camera closes on the lab, blue again). Natively from
+    // the camera's field of view between its policy's zoomed (near) and wide (far) ends; it was 0: always purple)
+    const bool fTalk = w.kind == 1;
+    const float radNear = fTalk ? g_cmpolicies.cpfree.radFOVNear : g_cmpolicies.cprecon.radFOVNear;
+    const float radFar = fTalk ? g_cmpolicies.cpfree.radFOVFar : g_cmpolicies.cprecon.radFOVFar;
+    const float u = radFar - radNear > 1e-5f ? std::clamp((g_cm.radFOV - radNear) / (radFar - radNear), 0.0f, 1.0f) : 1.0f;
+    SetScreenObjFraction(w.ploFrame, PART_ZOOM, std::getenv("SLY3_BINOCZOOM0") ? 0.0f : u);
+}
+
+bool s_fHeld = false;   // (the speaker in the window is held: the camera's state 1 of a talk)
+
+// orig3 0x001BE408: the speaker in the window held for the camera: its vt slot 94 (0x3F, 1) (its effects, its talk
+// animation 1756 and its own binocucom off: binoc.cpp HoldActorEffects), its linear constraint on (0x23EBF8(1)), its
+// acceleration and velocities zero (+0x1A0, slots 40 / 41)
+void HoldSpeaker(LO* plo)
+{
+    if (!plo || !FIsLoDerivedFrom(plo, S3CID(0x30))) return;
+    ALO* palo = static_cast<ALO*>(plo);
+    HoldActorEffects(plo, true, true);
+    SetAloCnstrLin(palo, 1);
+    if (ACTOR* pa = PactorFromLo(plo)) pa->vecVel = glm::vec3(0.0f);
+    SetAloVelocityTo(palo, glm::vec3(0.0f));
+    SetAloAngVelocityTo(palo, glm::vec3(0.0f));
+    if (FPrint()) std::printf("binoc3: speaker %d held\n", plo->oid);
+}
+
+// orig3 0x001BE4A8: its slot 95 (0x3F, 1) and the constraint off (0x23EBF8(0))
+void ReleaseSpeaker(LO* plo)
+{
+    if (!plo || !FIsLoDerivedFrom(plo, S3CID(0x30))) return;
+    HoldActorEffects(plo, false, true);
+    SetAloCnstrLin(static_cast<ALO*>(plo), 0);
+    if (FPrint()) std::printf("binoc3: speaker %d released\n", plo->oid);
 }
 
 void SetSpeakerShown(BINOCWIN3& w)
 {
-    // orig3 0x001BE3D0: the asked-for speaker takes the window (its head drawn there: the player code's render target)
+    // orig3 0x001BE3D0: the shown speaker released (0x1BE4A8), the asked-for one takes the window (its head drawn
+    // there: the player code's render target) and is held (0x1BE408)
+    if (s_fHeld) ReleaseSpeaker(w.ploShown);
     w.ploShown = w.ploSpeaker;
+    if (s_fHeld) HoldSpeaker(w.ploShown);
 }
 
 // orig3: 0x001BE5A8
@@ -215,12 +268,24 @@ void SetBinocPanelSpeaker3(LO* ploActor, LO* ploSpeaker)
 
 LO* PloBinocPanelSpeaker3(LO* ploActor) { return ploActor ? Win(ploActor).ploShown : nullptr; }
 
+void HoldBinocPanelSpeaker3(LO* ploActor, bool fHold)
+{
+    if (!ploActor || s_fHeld == fHold) return;
+    s_fHeld = fHold;
+    LO* plo = Win(ploActor).ploShown;
+    if (fHold) HoldSpeaker(plo);
+    else ReleaseSpeaker(plo);
+}
+
 void InitBinocPanels3(SW* psw)
 {
     s_mpwin.clear();
+    s_fHeld = false;
     s_psw = psw;
     s_serial = psw ? psw->serial : 0;
-    // (the script code's hooks, unless the binocucom's owner set its own: game/scptgame3.h)
+    // (the script code's hooks, unless the binocucom's owner set its own: game/scptgame3.h; the camera's: binoccam3.cpp)
+    ResetBinocCam3();
+    if (!g_scpthooks3.pfnOpenBinoc) InstallBinocCam3();
     if (!g_scpthooks3.pfnOpenBinoc)
         g_scpthooks3.pfnOpenBinoc = [](LO* ploActor, const BINOCOPEN3&, LO* ploSpeaker, LO*, LO*, LO*) {
             OpenBinocPanel3(ploActor, ploSpeaker ? 1 : 0, ploSpeaker);
@@ -233,5 +298,6 @@ void InitBinocPanels3(SW* psw)
 void UpdateBinocPanels3(SW* psw)
 {
     if (psw != s_psw || (psw && psw->serial != s_serial)) InitBinocPanels3(psw);
+    UpdateBinocCam3();
     for (auto& [plo, w] : s_mpwin) UpdateWindow(w);
 }

@@ -1,6 +1,13 @@
 // The game's math helpers used by animation and the transform records (Sly 1's mat.c / util.c, Sly 2 addresses;
 // specification: Sly2-Reference/Sly2-Release/game/mat.cpp, util.cpp, m_117030.cpp, all oracle-verified).
 
+#if defined(__linux__) && !defined(__ANDROID__)
+#include <execinfo.h>
+#else
+static int backtrace(void**, int) { return 0; }
+#endif
+#include <cstdio>
+#include <cstdlib>
 #include "xfmath.h"
 
 #include <algorithm>
@@ -42,6 +49,21 @@ uint64_t g_cRandLibc = 0;  // (debug: the draws so far)
 int RandLibc()
 {
     ++g_cRandLibc;
+    // debug: SLY2N_RANDBT=F0:F1: each draw of frames F0..F1 with its callers (the frames' draw-order differences)
+    if (static const char* s_sz = std::getenv("SLY2N_RANDBT"); s_sz)
+    {
+        extern int g_iframeMain;
+        static int s_f0 = -1, s_f1 = -1;
+        if (s_f0 < 0 && std::sscanf(s_sz, "%d:%d", &s_f0, &s_f1) != 2) s_f0 = s_f1 = 0x7FFFFFFF;
+        if (g_iframeMain >= s_f0 && g_iframeMain <= s_f1)
+        {
+            void* apv[8];
+            const int c = backtrace(apv, 8);
+            std::fprintf(stderr, "randbt frame %d draw %llu:", g_iframeMain, (unsigned long long)g_cRandLibc);
+            for (int i = 1; i < c; ++i) std::fprintf(stderr, " %p", apv[i]);
+            std::fprintf(stderr, "\n");
+        }
+    }
     g_uRandState = g_uRandState * 0x41C64E6Du + 0x3039u;
     return static_cast<int>(g_uRandState & 0x7FFFFFFFu);
 }
@@ -49,7 +71,7 @@ int RandLibc()
 // orig: 0x0011D3C0
 int NRandom() { return RandLibc() % 0x35F15E13; }
 
-// orig: 0x0011D448
+// orig: 0x0011D448 (orig3: 0x11E940, the same code in Sly 3)
 float GRandInRange(float gLow, float gHigh)
 {
     if (gLow == gHigh) return gLow;
@@ -91,7 +113,7 @@ void CalculateSinCos(float rad, float* pgSin, float* pgCos)
     if (pgSin) *pgSin = s;
 }
 
-// orig: 0x0011D898 GModPositive
+// orig: 0x0011D898 GModPositive (orig3: 0x11EDB8, the same C in the Sly 3 decomp)
 float GModPositive(float gDividend, float gDivisor)
 {
     float g = std::fmod(gDividend, gDivisor);
@@ -99,14 +121,14 @@ float GModPositive(float gDividend, float gDivisor)
     return g;
 }
 
-// orig: 0x0011CF60 RadNormalize
+// orig: 0x0011CF60 RadNormalize (orig3: 0x11E3B8, the same C in the Sly 3 decomp)
 float RadNormalize(float rad)
 {
     if (rad < -kPi || kPi < rad) rad = GModPositive(rad + kPi, kTwoPi) - kPi;
     return rad;
 }
 
-// orig: 0x0011CFE0 GLimitAbs
+// orig: 0x0011CFE0 GLimitAbs (orig3: 0x11E560, the same code in Sly 3)
 float GLimitAbs(float g, float gLimit)
 {
     if (gLimit < g) return gLimit;
@@ -114,7 +136,7 @@ float GLimitAbs(float g, float gLimit)
     return g;
 }
 
-// orig: 0x0011D4D0 FFloatsNear: |g1 - g2| / max(1, |g1|) < gEpsilon
+// orig: 0x0011D4D0 FFloatsNear: |g1 - g2| / max(1, |g1|) < gEpsilon (orig3: 0x11E9F0, the same code in Sly 3)
 bool FFloatsNear(float g1, float g2, float gEpsilon)
 {
     const float d = std::fabs(g1 - g2);
@@ -123,7 +145,7 @@ bool FFloatsNear(float g1, float g2, float gEpsilon)
     return d / m < gEpsilon;
 }
 
-// orig: 0x0011D508 CSolveQuadratic
+// orig: 0x0011D508 CSolveQuadratic (orig3: 0x11EA28, the same C in the Sly 3 decomp)
 int CSolveQuadratic(float a, float b, float c, float* ax)
 {
     const float d = b * b - a * (c * 4.0f);
@@ -147,7 +169,7 @@ int CSolveQuadratic(float a, float b, float c, float* ax)
     return 2;
 }
 
-// orig: 0x0011D018 GSmooth: gCur moved toward gTarget over dt at most at the fast speed, slowing down to the slow one
+// orig: 0x0011D018 GSmooth: gCur moved toward gTarget over dt at most at the fast speed, slowing down to the slow one (orig3: 0x11E598, the same C in the Sly 3 decomp)
 float GSmooth(float gCur, float gTarget, float dt, const SMP* psmp, float* pdgNext)
 {
     const float svFast = psmp->svFast;
@@ -220,7 +242,7 @@ float GSmooth(float gCur, float gTarget, float dt, const SMP* psmp, float* pdgNe
     return g;
 }
 
-// orig: 0x00117030 EvalHermite
+// orig: 0x00117030 EvalHermite (orig3: 0x118468, the same code in Sly 3)
 void EvalHermite(float* pg, float* pdg, float dt, float t, float dtScale, float g0, float dg0, float g1, float dg1)
 {
     const float u = t / dt;
@@ -293,7 +315,7 @@ glm::mat3 MatRotateAxis(float rad, const glm::vec3& n)
     return m;
 }
 
-// orig: 0x0011B570
+// orig: 0x0011B570 (orig3: 0x11C930, the same C in the Sly 3 decomp)
 glm::mat3 MatRotateVector(const glm::vec3& v)
 {
     const float g = std::sqrt(glm::dot(v, v));
@@ -301,7 +323,7 @@ glm::mat3 MatRotateVector(const glm::vec3& v)
     return MatRotateAxis(g, v * (1.0f / g));
 }
 
-// orig: 0x0011B628 BuildEulerMatrix
+// orig: 0x0011B628 BuildEulerMatrix (orig3: 0x11C9E8, the same C in the Sly 3 decomp)
 glm::mat3 MatEuler(const glm::vec3& e)
 {
     float sx, cx, sy, cy, sz, cz;
@@ -410,7 +432,7 @@ void DecomposeRotateMatrixRad(const glm::mat3& m, float* prad, glm::vec3* pvec)
     *pvec = v;
 }
 
-// orig: 0x0011BC00
+// orig: 0x0011BC00 (orig3: 0x11CFC0, the same code in Sly 3)
 glm::mat3 MulMatrix3TransposeA(const glm::mat3& a, const glm::mat3& b)
 {
     glm::mat3 o;

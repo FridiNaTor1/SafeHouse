@@ -243,17 +243,10 @@ if(CANE_BUILD_LAUNCHER)
   add_custom_command(OUTPUT "${image_header}" COMMAND ${CMAKE_COMMAND} -DSOURCE=${image_source} -DOUTPUT=${image_header} -DSYMBOL=cane_game_${game} -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed-image.cmake DEPENDS "${image_source}" cmake/embed-image.cmake VERBATIM)
   target_sources(cane-launcher PRIVATE "${image_header}")
  endforeach()
- # The developers' pictures and their silhouettes for the Collection Style Launcher's developers page
- # (launcher/assets/developers, made by tools/make-developer-pictures.py).
- foreach(developer fridinator theclub654 menaman123 thematuu nagaa95)
-  foreach(kind "" "-silhouette")
-   string(REPLACE "-" "_" symbol "cane_developer_${developer}${kind}")
-   set(image_header "${CMAKE_BINARY_DIR}/generated/launcher_developer_${developer}${kind}.h")
-   set(image_source "${CMAKE_CURRENT_SOURCE_DIR}/launcher/assets/developers/${developer}${kind}.png")
-   add_custom_command(OUTPUT "${image_header}" COMMAND ${CMAKE_COMMAND} -DSOURCE=${image_source} -DOUTPUT=${image_header} -DSYMBOL=${symbol} -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed-image.cmake DEPENDS "${image_source}" cmake/embed-image.cmake VERBATIM)
-   target_sources(cane-launcher PRIVATE "${image_header}")
-  endforeach()
- endforeach()
+ # The developers' pictures and their silhouettes (the About page, the Collection Style Launcher's developers page):
+ # launcher/assets/developers, made by tools/make-developer-pictures.py, listed in cmake/developers.cmake.
+ include(cmake/developers.cmake)
+ cane_embed_developers(cane-launcher)
  # Desktop shortcut icons (the game logos on a transparent square, scripts/make-shortcut-icons.py): the PNGs are
  # embedded for Linux .desktop shortcuts (launcher/desktop_shortcut.h installIcon); Windows embeds the .ico files
  # (cmake/launcher.rc.in) instead.
@@ -298,6 +291,21 @@ if(CANE_BUILD_LAUNCHER)
   # The update check and download (launcher/update.h): WinHTTP.
   target_link_libraries(cane-launcher PRIVATE winhttp)
  endif()
+ # Sly 2's map editor page (launcher/editor/editor_page.h, editor/core; notes: Sly2-Release/notes/EDITOR_2026-11-12.md):
+ # desktop only (the Android / iOS launchers are built by cmake/android.cmake / cmake/ios.cmake without it)
+ if(NOT TARGET cane_editor_core)
+  add_subdirectory(editor)
+ endif()
+ target_link_libraries(cane-launcher PRIVATE cane_editor_core)
+ target_compile_definitions(cane-launcher PRIVATE CANE_LAUNCHER_EDITOR=1)
+ # the page's strings in the launcher's languages (launcher/editor/lang/<code>.json, merged by launcher/l10n.h)
+ file(GLOB cane_editor_lang_files CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/launcher/editor/lang/*.json")
+ set(cane_editor_lang_header "${CMAKE_BINARY_DIR}/generated/launcher_editor_lang.h")
+ add_custom_command(OUTPUT "${cane_editor_lang_header}"
+  COMMAND ${CMAKE_COMMAND} -DDIR=${CMAKE_CURRENT_SOURCE_DIR}/launcher/editor/lang -DOUTPUT=${cane_editor_lang_header} -DPREFIX=cane_editor_lang
+          -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/embed-lang.cmake
+  DEPENDS ${cane_editor_lang_files} cmake/embed-lang.cmake VERBATIM)
+ target_sources(cane-launcher PRIVATE "${cane_editor_lang_header}")
  # miniz: the Windows update's portable zip, and the Collection Style Launcher's menu import (platform/ps3disc.h,
  # launcher/collection/ps3menu.h: a .zip of the disc image, the menu's IMAGE.ZIP).
  target_sources(cane-launcher PRIVATE Libraries/miniz/miniz.c)
@@ -373,12 +381,12 @@ if(CANE_BUILD_SLY2)
   # the renderer choice (platform/renderer_choice.h): Auto = Vulkan with OpenGL as the fallback, the explicit choices,
   # VR, builds without Vulkan, the start marker of a Vulkan start that did not finish (no GPU needed)
   add_test(NAME sly2-renderer COMMAND Sly2-Release --renderer-selftest)
-  # the texture cache (platform/texture_cache.h, texmod.cpp): a new / changed / removed PNG, cut and damaged cache
-  # files, the mods folder over a texture pack, on made-up PNGs in the build folder
-  add_test(NAME sly2-texcache COMMAND Sly2-Release --texcache-selftest "${CMAKE_BINARY_DIR}/texcache-selftest")
   # the languages folder (Sly2-Release/langstore.h): the Japanese font file, the menus' button lines, 16-bit text on
   # a USA / European disc (no game data)
   add_test(NAME sly2-language COMMAND Sly2-Release --language-selftest)
+  # the texture cache (platform/texture_cache.h, texmod.cpp): a new / changed / removed PNG, cut and damaged cache
+  # files, the mods folder over a texture pack, on made-up PNGs in the build folder
+  add_test(NAME sly2-texcache COMMAND Sly2-Release --texcache-selftest "${CMAKE_BINARY_DIR}/texcache-selftest")
   # the audio devices by name (fallback to the default when one is unplugged, taken again when back, the voices keep
   # playing), the USB headset's microphone level (spiop.irx's RMS) from SDL's disk capture; silent (disk driver)
   add_test(NAME sly2-audio COMMAND Sly2-Release --audio-selftest "${CMAKE_BINARY_DIR}/audio-selftest")
@@ -391,6 +399,16 @@ if(CANE_BUILD_SLY3)
  add_subdirectory(Sly3-Release)
  set_target_properties(Sly3-Release PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
  install(TARGETS Sly3-Release RUNTIME DESTINATION bin)
+ if(BUILD_TESTING)
+  # Sly 3's Settings.ini (platform/sly3_settings.h): its schema, round trip, hand-edited files, the migration
+  add_test(NAME sly3-settings COMMAND Sly3-Release --settings-selftest)
+  # the renderer choice, as Sly 2's (sly2-renderer)
+  add_test(NAME sly3-renderer COMMAND Sly3-Release --renderer-selftest)
+  # the texture cache, as Sly 2's (sly2-texcache)
+  add_test(NAME sly3-texcache COMMAND Sly3-Release --texcache-selftest "${CMAKE_BINARY_DIR}/texcache-selftest-sly3")
+  # the advanced input mapping on Sly 3's classes (actioninput_test.cpp)
+  add_test(NAME sly3-action-input COMMAND Sly3-Release --action-input-selftest)
+ endif()
 endif()
 if(WIN32)
  foreach(target Sly1-Release Sly2-Release Sly3-Release)
@@ -438,6 +456,23 @@ if(BUILD_TESTING AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/platform/touch_layout_t
  add_executable(cane-touch-layout-tests platform/touch_layout_test.cpp)
  target_link_libraries(cane-touch-layout-tests PRIVATE cane_platform)
  add_test(NAME touch-layout COMMAND cane-touch-layout-tests)
+endif()
+# The Monitor option's identifiers and fallback (platform/monitor_select.h)
+if(BUILD_TESTING AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/platform/monitor_select_test.cpp")
+ add_executable(cane-monitor-select-tests platform/monitor_select_test.cpp)
+ add_test(NAME monitor-select COMMAND cane-monitor-select-tests)
+ # (the window mode on the chosen monitor against a fake GLFW with monitors plugged in and out)
+ add_executable(cane-monitor-select-glfw-tests platform/monitor_select_glfw_test.cpp)
+ target_compile_definitions(cane-monitor-select-glfw-tests PRIVATE GLFW_INCLUDE_NONE)
+ target_include_directories(cane-monitor-select-glfw-tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Libraries/include"
+                            "${CMAKE_CURRENT_SOURCE_DIR}/platform")
+ add_test(NAME monitor-select-glfw COMMAND cane-monitor-select-glfw-tests)
+endif()
+# The frame pacing of a display locked to its vblanks (platform/display_pacing.h: iOS's swap interval and display link)
+if(BUILD_TESTING AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/platform/display_pacing_test.cpp")
+ add_executable(cane-display-pacing-tests platform/display_pacing_test.cpp)
+ target_link_libraries(cane-display-pacing-tests PRIVATE Threads::Threads)
+ add_test(NAME display-pacing COMMAND cane-display-pacing-tests)
 endif()
 if(BUILD_TESTING AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/install_tests.cpp")
  add_executable(cane-install-tests tests/install_tests.cpp)
@@ -594,6 +629,12 @@ if(WIN32)
   set(CANE_RC_DESCRIPTION "${description}")
   set(CANE_RC_MANIFEST "${CMAKE_CURRENT_SOURCE_DIR}/cmake/windows-utf8.manifest")
   set(CANE_RC_EXTRA "${icon_lines}")
+  if(SAFEHOUSE_VERSION)
+   set(CANE_RC_VERSION "${SAFEHOUSE_VERSION}")
+  else()
+   set(CANE_RC_VERSION "${PROJECT_VERSION}")
+  endif()
+  string(REPLACE "." "," CANE_RC_VERSION_COMMAS "${CANE_RC_VERSION},0")
   set(rc "${CMAKE_BINARY_DIR}/generated/${target}-resources.rc")
   configure_file(cmake/windows-version.rc.in "${rc}" @ONLY)
   set_source_files_properties("${rc}" PROPERTIES OBJECT_DEPENDS "${CANE_RC_MANIFEST};${ARGN}")

@@ -1,6 +1,7 @@
 // See lightsw.h. Ported from Sly2-Reference game/m_1A3260.cpp (0x1A3260..0x1A3B38), util.cpp (ConvertHsvToRgb
 // 0x11DD90, ConvertUserHsvToUserRgb 0x11DFA0) and m_20D9D0_p3.cpp (0x20F1C8), in plain IEEE float.
 
+#include "fastpaths.h"
 #include "jt.h"
 #include "game/sly3.h"
 #include "game/cond3.h"
@@ -35,7 +36,7 @@ uint32_t FieldOfOption(const OPT& opt)
     return (opt.grf & 0x100) ? g_disc.U32Elf(va + 8) : g_disc.U32Elf(va + 0x18);
 }
 
-// orig: 0x0011DD90 ConvertHsvToRgb (h 0..360, s and v 0..1)
+// orig: 0x0011DD90 ConvertHsvToRgb (h 0..360, s and v 0..1) (orig3: 0x11F4E0, the same C in the Sly 3 decomp)
 glm::vec3 RgbFromHsv(float h0, float s0, float v0)
 {
     float h = !(0.0f <= h0) ? -1.0f : (h0 > 360.0f ? 360.0f : h0);
@@ -58,14 +59,14 @@ glm::vec3 RgbFromHsv(float h0, float s0, float v0)
     }
 }
 
-// orig: 0x0011DFA0 ConvertUserHsvToUserRgb (s, v and the result 0..255)
+// orig: 0x0011DFA0 ConvertUserHsvToUserRgb (s, v and the result 0..255) (orig3: 0x11F6E8, the same code in Sly 3)
 glm::vec3 UserRgbFromUserHsv(const float hsv[3])
 {
     const float k = 1.0f / 255.0f;
     return RgbFromHsv(hsv[0], hsv[1] * k, hsv[2] * k) * 255.0f;
 }
 
-// orig: 0x001A3730 FitLinearFunction: du + ru x through (x0, y0), (x1, y1)
+// orig: 0x001A3730 FitLinearFunction: du + ru x through (x0, y0), (x1, y1) (orig3: 0x1C5630, the same code in Sly 3)
 void FitLinear(float x0, float y0, float x1, float y1, float& du, float& ru)
 {
     if (std::fabs(x0 - x1) < 0.0001f) { ru = 0.0f; du = y0; return; }
@@ -73,7 +74,7 @@ void FitLinear(float x0, float y0, float x1, float y1, float& du, float& ru)
     du = y0 - ru * x0;
 }
 
-// orig: 0x001A38A8 ConvertAngleStrength (over cos(half angle) + its cube)
+// orig: 0x001A38A8 ConvertAngleStrength (over cos(half angle) + its cube) (orig3: 0x1C57A8, the same C in the Sly 3 decomp)
 void ConvertAngleStrength(float deg0, float g0, float deg1, float g1, float& du, float& ru)
 {
     constexpr float kHalfRad = 0.008726647f;   // 0x3C0EFA36
@@ -172,6 +173,29 @@ int UpdateWorldLightsFromSw(const SW* psw)
     static const SW* s_psw = nullptr;
     static size_t s_clight = 0;
     const size_t clight = psw ? AploLights(psw).size() : 0;
+#if SLY2_FASTPATHS
+    // (the Switch: each light's parameters kept while its options are the same (they only grow, by a proxy's binds,
+    // activate.cpp: the light, its option count and their storage tell), its record and selection data computed again
+    // only when its world matrix changed. A light placed by a record (LOX, nearly all): the record and both matrices
+    // compared, not their product computed each frame.)
+    struct LIGHTKEPT
+    {
+        const LO* plo = nullptr;
+        const OPT* popt = nullptr;
+        size_t copt = 0;
+        bool fOwned = false, fRec = false;
+        LIGHTPARAMS lp;
+        const LOX* plox = nullptr;   // (dynamic_cast's answer for plo)
+        const XF* pxf = nullptr;     // its record when the matrix was computed, and the matrices then
+        glm::mat4 matXf{0.0f}, matLocal{0.0f};
+        glm::mat4 matWorld{0.0f};
+        LIGHTREC rec;
+        LIGHTSEL sel;
+    };
+    static std::vector<LIGHTKEPT> s_akept;
+    if (psw != s_psw || clight != s_clight) s_akept.clear();
+    size_t ilight = 0;
+#endif
     if (psw != s_psw || clight != s_clight) ResetWorldLights();
     s_psw = psw;
     s_clight = clight;
@@ -180,11 +204,66 @@ int UpdateWorldLightsFromSw(const SW* psw)
     bool fWorldLight = false;
     for (const LO* plo : AploLights(psw))
     {
+#if SLY2_FASTPATHS
+        // (the lights four ahead, as last frame had them, prefetched: their objects, records and matrices are
+        // scattered)
+        if (ilight + 4 < s_akept.size())
+        {
+            const LIGHTKEPT& kn = s_akept[ilight + 4];
+            if (kn.plo)
+            {
+                __builtin_prefetch(&kn.plo->aopt);
+                __builtin_prefetch(&kn.plo->fInWorld);
+                __builtin_prefetch(&kn.plo->fLightOwned);
+            }
+            if (kn.plox) __builtin_prefetch(&kn.plox->mat);
+            if (kn.pxf) __builtin_prefetch(&kn.pxf->matWorld);
+        }
+        if (ilight == s_akept.size()) s_akept.emplace_back();
+        LIGHTKEPT& k = s_akept[ilight++];
+        if (k.plo != plo || k.popt != plo->aopt.data() || k.copt != plo->aopt.size() || k.fOwned != plo->fLightOwned)
+        {
+            k = LIGHTKEPT{plo, plo->aopt.data(), plo->aopt.size(), plo->fLightOwned, false, LightParamsOfLo(plo)};
+            k.plox = dynamic_cast<const LOX*>(plo);
+        }
+        const LIGHTPARAMS& lp = k.lp;
+        if (lp.kind > 1) continue;
+        bool fSame = k.fRec;
+        if (fSame && k.plox)
+        {
+            const XF* pxf = k.plox->pxf;
+            fSame = pxf == k.pxf && std::memcmp(&k.plox->mat, &k.matLocal, sizeof(glm::mat4)) == 0 &&
+                    (!pxf || std::memcmp(&pxf->matWorld, &k.matXf, sizeof(glm::mat4)) == 0);
+        }
+        glm::mat4 matWorld = k.matWorld;
+        if (!k.plox || !fSame)
+        {
+            matWorld = MatWorldOfLight(plo);
+            if (k.plox)
+            {
+                k.pxf = k.plox->pxf;
+                k.matLocal = k.plox->mat;
+                if (k.pxf) k.matXf = k.pxf->matWorld;
+            }
+            else fSame = fSame && std::memcmp(&matWorld, &k.matWorld, sizeof(glm::mat4)) == 0;
+        }
+        if (!fSame)
+        {
+            k.rec = LIGHTREC{};
+            k.sel = LIGHTSEL{};
+            ComputeLight(lp, matWorld, k.rec, k.sel);
+            k.matWorld = matWorld;
+            k.fRec = true;
+        }
+        LIGHTREC rec = k.rec;
+        LIGHTSEL sel = k.sel;
+#else
         const LIGHTPARAMS lp = LightParamsOfLo(plo);
         LIGHTREC rec;
         LIGHTSEL sel;
         ComputeLight(lp, MatWorldOfLight(plo), rec, sel);
         if (lp.kind > 1) continue;
+#endif
         sel.fShadow = lp.n158;
         static const bool s_fDbg = std::getenv("SLY2_LIGHTDBG") != nullptr;
         static int s_cdbg = 0;

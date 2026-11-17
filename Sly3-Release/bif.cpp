@@ -1,4 +1,5 @@
 #include "bif.h"
+#include "challenge3.h"
 #include "game/sly3.h"
 #include "clock.h"
 #include "sw.h"
@@ -366,7 +367,7 @@ CRef RefOpIntEqual(int, CRef* aref, CFrame*)
         return RefBool(aref[0] == aref[1]);
     return RefBool(aref[0].m_n == aref[1].m_n);
 }
-// orig: 0x00120488 / 0x001204B8 / 0x001204E8 / 0x00120518 (numbers, compared as floats)
+// orig: 0x00120488 / 0x001204B8 / 0x001204E8 / 0x00120518 (numbers, compared as floats) (orig3: 0x1220F8, the same code in Sly 3)
 CRef RefOpL(int, CRef* aref, CFrame*) { return RefBool(G(aref[0]) < G(aref[1])); }
 CRef RefOpLE(int, CRef* aref, CFrame*) { return RefBool(G(aref[0]) <= G(aref[1])); }
 CRef RefOpG(int, CRef* aref, CFrame*) { return RefBool(G(aref[0]) > G(aref[1])); }
@@ -389,7 +390,7 @@ bool FEqual(const CRef& a, const CRef& b)
         return a.GetMatrix() == b.GetMatrix();
     return a == b;
 }
-// orig: 0x001207F0 RefOpEqual
+// orig: 0x001207F0 RefOpEqual (orig3: 0x122458, the same code in Sly 3)
 CRef RefOpEqual(int, CRef* aref, CFrame*) { return RefBool(FEqual(aref[0], aref[1])); }
 
 // ---- predicates (0x120820..0x120A20)
@@ -487,7 +488,7 @@ CRef RefOpIsMember(int, CRef* a, CFrame*)
             return RefBool(true);
     return RefBool(false);
 }
-// orig: 0x00120F80 RefOpList (the rest list itself)
+// orig: 0x00120F80 RefOpList (the rest list itself) (orig3: 0x122BA0, the same C in the Sly 3 decomp)
 CRef RefOpList(int, CRef* a, CFrame*) { return a[0]; }
 // orig: 0x00120FB0 (a shuffled copy of the list: each element moved to a random place)
 CRef RefOpShuffle(int, CRef* a, CFrame*)
@@ -695,7 +696,7 @@ CRef RefOpVectorDistanceSquared(int, CRef* a, CFrame*)
         v -= aref[0].GetVector();
     return RefF32(glm::dot(v, v));
 }
-// orig: 0x001229B8 (normalized, optionally to a length)
+// orig: 0x001229B8 (normalized, optionally to a length) (orig3: 0x124750, the same C in the Sly 3 decomp)
 CRef RefOpVectorNormalize(int, CRef* a, CFrame*)
 {
     std::vector<CRef> aref = AListElements(a[1]);
@@ -724,7 +725,7 @@ CRef RefOpVectorProjectTangent(int, CRef* a, CFrame*)
 const glm::vec3 s_vecX(1.0f, 0.0f, 0.0f);
 constexpr float kEpsilon = 1e-5f;  // (EPSILON in mat.cpp; 0x322BCC77 = 1e-8 for the cross products)
 
-// orig: 0x0011E390 PerpendicularVector
+// orig: 0x0011E390 PerpendicularVector (orig3: 0x11FF60, the same C in the Sly 3 decomp)
 glm::vec3 VecPerpendicular(const glm::vec3& v)
 {
     const float ax = std::fabs(v.x), ay = std::fabs(v.y), az = std::fabs(v.z);
@@ -873,7 +874,7 @@ CRef RefOpVectorRadianNormal(int, CRef* a, CFrame*)
     return RefPair2(RefF32(std::acos(c)), RefVector(n));
 }
 
-// orig: 0x00122DE0 (matrix-transpose: 0x11C1D8, all of the 4x4)
+// orig: 0x00122DE0 (matrix-transpose: 0x11C1D8, all of the 4x4) (orig3: 0x124B30, the same C in the Sly 3 decomp)
 CRef RefOpMatrixTranspose(int, CRef* a, CFrame*)
 {
     return RefMatrix(glm::transpose(a[0].GetMatrix()));
@@ -899,7 +900,7 @@ CRef RefOpMatrixInterpolateRotate(int, CRef* a, CFrame*)
     return RefMatrix(m);
 }
 
-// orig: 0x00123038 (matrix-decompose-to-translate: row 3)
+// orig: 0x00123038 (matrix-decompose-to-translate: row 3) (orig3: 0x124D80, the same code in Sly 3)
 CRef RefOpMatrixDecomposeToTranslate(int, CRef* a, CFrame*) { return RefVector(glm::vec3(a[0].GetMatrix()[3])); }
 // orig: 0x00123080 (matrix-decompose-to-rotate: 0x1292B0, a copy of the whole matrix, position included)
 CRef RefOpMatrixDecomposeToRotate(int, CRef* a, CFrame*) { return RefMatrix(a[0].GetMatrix()); }
@@ -1211,6 +1212,17 @@ CRef RefOpZero3(int, CRef*, CFrame*) { return RefS32(0); }
 // orig3: 0x125B70: S32 0x36BC20 = the static camera's (0x36BC10) +0x10, the id of the option block the world chose
 // (m_ext 13; condset3.h)
 CRef RefOpCondition3(int, CRef*, CFrame*) { return RefS32(g_condset3.cond); }
+// orig3: 0x125B90 (object, limit) -> 0x284828(D_004BC230, object, limit): the limit scaled by the router's current slot
+// (+0x14: its group +0x8C, factor +0x90; rounded, at most the limit, at least 1) when one is set and the object is in
+// its group (0x1C8768), else the limit. The reference keeps the slot null through v_canal's chase (RAM at vblanks 3000 /
+// 3400 / 4400), where the police boat's 17 refills SO 2003's health by it (block 139806). The router's slot is the
+// running challenge's node (challenge3.h CChallengeScaled3: its group +0x8C and factor +0x90).
+CRef RefOpScaledLimit3(int, CRef* a, CFrame*)
+{
+    const int c = a[1].m_tagk == TAGK_F32 ? static_cast<int>(a[1].m_g) : a[1].m_n;
+    const LO* plo = a[0].m_tagk == TAGK_Basic ? dynamic_cast<const LO*>(a[0].m_pbasic) : nullptr;
+    return RefS32(CChallengeScaled3(plo, c));
+}
 // orig3: 0x125BF0 schedule-callback (delay proc . args): (proc . args) on a timer (PtimerNewBasic 0x13B9E0(SW, 0,
 // list, T 0x36BB98 + delay)) called at the game time T + delay; its id (timer +0xC). update.cpp keeps the timers.
 CRef RefOpScheduleCallback3(int, CRef* a, CFrame*)
@@ -1229,15 +1241,25 @@ CRef RefOpCancelCallback3(int, CRef* a, CFrame*)
 // cameras StartSw makes, in their order)
 CRef RefOpFirstCm3(int, CRef*, CFrame*)
 {
-    if (g_psw && !g_psw->mpcidaplo[S3CID(0x05)].empty()) return RefBasic(g_psw->mpcidaplo[S3CID(0x05)].front());
+    // (s3-player: Sly 3's class 0x05 itself (CAMERA): S3CID(0x05) is Sly 2's VOLUME -> Sly 3 0x07, so this gave the first
+    // VOLUME and e.g. i_trainer's look tutorial read a volume's rotation as the camera's)
+    if (g_psw && !g_psw->mpcidaplo[CID(0x05)].empty()) return RefBasic(g_psw->mpcidaplo[CID(0x05)].front());
     return CRef();
 }
 // orig3: 0x127458 symbol-value (symbol): its binding in the calling frames (0x129B58(env, symbol, 1)), else the
 // built-in 0x8E (tag 0x17)
 CRef RefOpSymbolValue3(int, CRef* a, CFrame* pframe)
 {
+    // (the decomp: up the parents (+0x8) to the first frame with +0x14 set (the module's frame: m_fModule), then the
+    // binding searched from that frame's PARENT: an object's start handler `((symbol-value 's0) self)` calls the
+    // inherited start, not itself; searched from the calling frame it found itself and recursed without end: world 6's
+    // ALO 140992 at its start)
     CRef ref;
-    if (pframe && pframe->FFindBinding(a[0].GetSymid(), 1, &ref)) return ref;
+    CFrame* p = pframe;
+    while (p && p->m_cpframeParent > 0 && !p->m_fModule) p = p->m_apframeParent[0];
+    if (p && p->m_cpframeParent > 0)
+        for (int i = 0; i < p->m_cpframeParent; ++i)
+            if (CFrame* pp = p->m_apframeParent[i]; pp && pp->FFindBinding(a[0].GetSymid(), 1, &ref)) return ref;
     ref.SetBifk(static_cast<BIFK>(0x8E));
     return ref;
 }
@@ -1322,7 +1344,7 @@ BIF g_mpbifkbif[BIFK_Max] = {
     BIFN((RefOpGlobalObject<105, 101>), 0, 0, "object-4794C8"),
     BIFN((RefOpGlobalObject<106, 102>), 0, 0, "object-4794CC"),
     BIFG(107, 0, 0, "bif-107 (0x171C98)"), BIFN(RefOpZero3, 0, 0, "bif-108 (0x25E7A8: 0)"),    // Sly 2 103, 104
-    BIFN(RefOpCondition3, 0, 0, "world-condition"), BIFG(110, 2, 0, "bif-110 (0x284828)"),    // new
+    BIFN(RefOpCondition3, 0, 0, "world-condition"), BIFN(RefOpScaledLimit3, 2, 0, "scaled-limit"),    // new
     // 111 orig3 0x125BF0 (delay, proc, args...): (proc . args) on a timer PtimerNewBasic(SW, 0, list, T 0x36BB98 +
     // delay) 0x13B9E0, returns the timer's id (+0xC, S32); 112 orig3 0x125DC0 (id): 0x13BAC8(SW, id), returns void
     BIFN(RefOpScheduleCallback3, 2, 1, "schedule-callback"), BIFN(RefOpCancelCallback3, 1, 0, "cancel-callback"),        // Sly 2 105, 106

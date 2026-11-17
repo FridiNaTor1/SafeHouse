@@ -978,7 +978,7 @@ struct Images {
     ImTextureID logo = nullptr, icon = nullptr;
     float logoAspect = 1.04f; // width / height (launcher/assets/safehouse-logo.png)
     Image games[5];
-    ImTextureID developers[5] = {}; // launcher/credits.h kDevelopers order (launcher/assets/developers)
+    std::vector<ImTextureID> developers; // launcher/credits.h kDevelopers order (launcher/assets/developers)
 };
 inline Images& images() {
     static Images instance;

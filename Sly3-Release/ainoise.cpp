@@ -94,18 +94,20 @@ float FieldF(const LO* plo, uint32_t ib, float g)
     return r;
 }
 
-// the world's fixed templates, by oid (0x1569B8 with D_002BDD00..)
+// the world's fixed templates, by oid (0x1569B8 with D_002BDD00..; orig3 0x173C10: Sly 3's oids 793..799 (0x319..0x31F)
+// in GAME +0x47A8.., created in the order 793, 794, 795, 796, 798, 797, 799 as Sly 2's 706..712; the fifth (797, +0x47B8)
+// has radius 1500 where Sly 2's 710 had 4000; the sixth (798, +0x47BC) is the headset microphone's, 0x2479C8)
 void FixedOf(NOISETMPL* pt, OID oid)
 {
     switch (oid)
     {
-    case 0x2C2: break;
-    case 0x2C3: pt->nType = 1; pt->tLife = -1.0f; break;
-    case 0x2C4: pt->sRadius = 750.0f; break;
-    case 0x2C5: pt->sRadius = 2500.0f; pt->tLife = 0.35f; break;
-    case 0x2C7: pt->nKind = 3; pt->tLife = -1.0f; break;
-    case 0x2C6: pt->sRadius = 4000.0f; pt->tLife = 0.5f; break;
-    case 0x2C8: pt->sRadius = 1000.0f; break;
+    case 0x319: break;
+    case 0x31A: pt->nType = 1; pt->tLife = -1.0f; break;
+    case 0x31B: pt->sRadius = 750.0f; break;
+    case 0x31C: pt->sRadius = 2500.0f; pt->tLife = 0.35f; break;
+    case 0x31E: pt->nKind = 3; pt->tLife = -1.0f; break;
+    case 0x31D: pt->sRadius = 1500.0f; pt->tLife = 0.5f; break;
+    case 0x31F: pt->sRadius = 1000.0f; break;
     default: break;
     }
 }
@@ -157,7 +159,7 @@ NOISETMPL* PtmplNoise(LO* plo)
     if (p) return p.get();
     p = std::make_unique<NOISETMPL>();
     p->plo = plo;
-    if (plo->oid >= 0x2C2 && plo->oid <= 0x2C8 && plo->aopt.empty()) FixedOf(p.get(), plo->oid);
+    if (plo->oid >= 0x319 && plo->oid <= 0x31F && plo->aopt.empty()) FixedOf(p.get(), plo->oid);
     p->nType = static_cast<int>(plo->U32Field(0, 0x50, static_cast<uint32_t>(p->nType)));
     p->sRadius = FieldF(plo, 0x54, p->sRadius);
     p->tLife = FieldF(plo, 0x60, p->tLife);
@@ -169,7 +171,7 @@ NOISETMPL* PtmplNoise(LO* plo)
 
 NOISETMPL* PtmplNoiseFixed(int i)
 {
-    static const OID s_aoid[7] = {0x2C2, 0x2C3, 0x2C4, 0x2C5, 0x2C6, 0x2C7, 0x2C8};
+    static const OID s_aoid[7] = {0x319, 0x31A, 0x31B, 0x31C, 0x31D, 0x31E, 0x31F};  // (orig3 0x173C10)
     if (i < 0 || i >= 7 || !g_psw) return nullptr;
     for (const auto& plo : g_psw->aploAll)
         if (plo->oid == s_aoid[i] && plo->Cid() == S3CID(0x75)) return PtmplNoise(plo.get());
@@ -236,7 +238,7 @@ void RemoveNoise(NOISE* pn)
     ReleaseNoise(pn);
 }
 
-// orig: 0x001566B8
+// orig: 0x001566B8 (orig3: 0x1738E0, the same code in Sly 3)
 void AddRefNoise(NOISE* pn)
 {
     if (pn) ++pn->cRef;
@@ -251,7 +253,7 @@ void ReleaseNoise(NOISE* pn)
     ApnoiseFree().push_back(pn);
 }
 
-// orig: 0x00156BE0
+// orig: 0x00156BE0 (orig3: 0x173E48, the same code in Sly 3)
 void SetHeldNoise(NOISE** ppn, NOISETMPL* ptmpl, const glm::vec3& pos, LO* ploOwner)
 {
     if (NOISE* pold = *ppn)
@@ -267,6 +269,12 @@ void SetHeldNoise(NOISE** ppn, NOISETMPL* ptmpl, const glm::vec3& pos, LO* ploOw
 
 size_t CNoiseAllocated() { return AnoiseOwned().size(); }
 size_t CNoisePooled() { return ApnoiseFree().size(); }
+bool FNoiseAllocated(const NOISE* pn)
+{
+    for (const auto& p : AnoiseOwned())
+        if (p.get() == pn) return true;
+    return false;
+}
 // orig: 0x00140F90 event 0x27C walks the live DLI, including appended rows and
 // skipping rows removed by callbacks. New noises append; storage remains owned
 // until world teardown, so an already-visited object cannot be reused here.
@@ -310,7 +318,7 @@ float SRadiusNoise(const NOISE* pn)
     return pt->sRadius * (G_RADIUS_POLY[0] + u * (G_RADIUS_POLY[1] + u * G_RADIUS_POLY[2]));
 }
 
-// orig: 0x00156918
+// orig: 0x00156918 (orig3: 0x173B70, the same C in the Sly 3 decomp)
 bool FNoiseReaches(const NOISE* pn, const glm::vec3& pos)
 {
     const glm::vec3 d = pos - pn->pos20;
@@ -399,7 +407,10 @@ static bool FGuardFreeN(const GUARD* pg)
     uint64_t m = 0;
     for (int n : {0xB, 0x1D, 7, 5, 6, 0x10, 1, 0x16, 0x2A}) m |= GrfStateBit(n);
     if (m & pg->grfState) return false;
-    return pg->nE64 != 0;
+    // orig3: 0x254818 returns the object's field +0x1004 (EOPID 298 = Sly 2's 281 +0xE64) as it is now: a guard's
+    // loaded value can arrive after the post-load cached it (v_interpol's Dimitri: his 298 = 0 is read after
+    // PostLoadGuard, so he heard Sly and failed the job at once); the setter (option 425) writes the field too
+    return pg->palo->U32Field(0, 0xE64, uint32_t(pg->nE64)) != 0;
 }
 
 // orig: 0x00208BE0 (vt slot 89)
@@ -527,7 +538,7 @@ void JOBINVESTIGATE::Init()
     st = -1;
     t40 = tEnd = FLT_MAX;
 }
-// orig: 0x00171FA0
+// orig: 0x00171FA0 (orig3: 0x1A64F0, the same code in Sly 3)
 void JOBINVESTIGATE::Enter() { SetInvestigateState(0); }
 // orig: 0x00171FD0
 void JOBINVESTIGATE::Exit()
@@ -537,7 +548,7 @@ void JOBINVESTIGATE::Exit()
     RemoveGuardState(pguard, 0x1F);
     SetNoise(nullptr);
 }
-// orig: 0x001725E0
+// orig: 0x001725E0 (orig3: 0x1A6B00, the same code in Sly 3)
 void JOBINVESTIGATE::SetNoise(NOISE* pn)
 {
     if (pn == pnoise) return;

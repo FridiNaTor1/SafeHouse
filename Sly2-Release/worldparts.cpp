@@ -7,6 +7,7 @@
 #include "../platform/platform.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -17,6 +18,8 @@
 #include <set>
 #include <stdexcept>
 #include <unordered_map>
+
+std::vector<RAVELSEG>* g_paravelseg = nullptr;
 
 namespace fs = std::filesystem;
 using ojson = nlohmann::ordered_json;
@@ -1086,6 +1089,9 @@ bool FRavelWorldFrom(const nlohmann::json& index, const PFNPARTBYTES& pfnBytes, 
                 ab.insert(ab.end(), abPart.begin(), abPart.end());
                 continue;
             }
+            // (the map editor, g_paravelseg: where the binary part file's bytes land, {new offset, file offset, bytes})
+            std::vector<std::array<std::size_t, 3>> asegPart;
+            std::string relPart;
             if (p.contains("hex"))
             {
                 if (!FUnhex(p["hex"].get<std::string>(), abPart)) throw std::runtime_error("bad hex in a part");
@@ -1107,7 +1113,12 @@ bool FRavelWorldFrom(const nlohmann::json& index, const PFNPARTBYTES& pfnBytes, 
                 {
                     if (!FSpliceFromText(std::string(abFile.begin(), abFile.end()), abPart, err)) throw std::runtime_error(rel + ": " + err);
                 }
-                else abPart = std::move(abFile);
+                else
+                {
+                    abPart = std::move(abFile);
+                    relPart = rel;
+                    asegPart.push_back({0, 0, abPart.size()});
+                }
             }
             // (the loader's Align(16)s in the part, from its end: padded for where the part now lies; the original
             // padding bytes where it lies as on the disc)
@@ -1124,15 +1135,19 @@ bool FRavelWorldFrom(const nlohmann::json& index, const PFNPARTBYTES& pfnBytes, 
                 std::sort(apos.begin(), apos.end());
                 std::vector<uint8_t> abNew;
                 std::size_t cur = 0;
+                const bool fSeg = !asegPart.empty();
+                asegPart.clear();
                 for (const auto& [pos, pad] : apos)
                 {
                     if (pos < cur) throw std::runtime_error("overlapping alignments in a part");
+                    if (fSeg) asegPart.push_back({abNew.size(), cur, pos - cur});
                     abNew.insert(abNew.end(), abPart.begin() + std::ptrdiff_t(cur), abPart.begin() + std::ptrdiff_t(pos));
                     const std::size_t padNew = (16 - (ab.size() + abNew.size()) % 16) % 16;
                     if (padNew == pad) abNew.insert(abNew.end(), abPart.begin() + std::ptrdiff_t(pos), abPart.begin() + std::ptrdiff_t(pos + pad));
                     else abNew.insert(abNew.end(), padNew, 0);
                     cur = pos + pad;
                 }
+                if (fSeg) asegPart.push_back({abNew.size(), cur, abPart.size() - cur});
                 abNew.insert(abNew.end(), abPart.begin() + std::ptrdiff_t(cur), abPart.end());
                 abPart = std::move(abNew);
             }
@@ -1154,7 +1169,11 @@ bool FRavelWorldFrom(const nlohmann::json& index, const PFNPARTBYTES& pfnBytes, 
                 std::memcpy(abNew.data(), &c16, 2);
                 while ((ab.size() + abNew.size()) % 16) abNew.push_back(0);
                 abPart = std::move(abNew);
+                asegPart.clear();
             }
+            if (g_paravelseg)
+                for (const auto& seg : asegPart)
+                    if (seg[2]) g_paravelseg->push_back({relPart, ab.size() + seg[0], seg[1], seg[2]});
             ab.insert(ab.end(), abPart.begin(), abPart.end());
         }
         return true;

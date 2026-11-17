@@ -52,6 +52,11 @@ void UpdateEntries17()
     if (!psw) return;
     for (psw->iupdCur = 0; psw->iupdCur < static_cast<int>(psw->aupd.size()); ++psw->iupdCur)
     {
+#ifdef __SWITCH__
+        // (the Switch: the object four entries ahead fetched, its class pointer the first thing read of it)
+        if (size_t(psw->iupdCur) + 4 < psw->aupd.size())
+            if (const LO* pn = psw->aupd[size_t(psw->iupdCur) + 4].plo) __builtin_prefetch(&pn->pcls);
+#endif
         const UPDENT& e = psw->aupd[psw->iupdCur];
         if (!e.plo || (e.grf & 0x24) != 4) continue;
         LO* plo = e.plo;
@@ -489,6 +494,27 @@ struct PHYSPROPS
             ALO* p = PaloOf(plo);
             XF* po = p ? PxfPos(p) : nullptr;
             r.SetVector(po ? VecConvertXfs(po->pxfRef, PxfObj(p), glm::vec3(po->vel)) : g_vecZero);
+            return r;
+        });
+        // Sly 3's own rows (the generated map pairs Sly 2's 76, the angular velocity, with Sly 3's 77 and leaves Sly 2's
+        // 75 out): the descriptors (0x32CA80 + 0x28 x EOPID) give EOPID 77 (option 194) the getter / setter 0x23D888 /
+        // 0x23D938 on the position record (+0x48: Sly 2's 0x1F4848 / 0x1F4898, the velocity in the object's space) and
+        // EOPID 78 (option 195) 0x23D8E0 / 0x23D9D0 on the rotation record (+0x4C: Sly 2's 0x1F4930, the angular
+        // velocity). E.g. v_canal's police boat 139806 steers by option 194 each frame (block 139806 module 0's update).
+        RegisterObjectSetter3(77, [](LO* plo, const CRef& r) { if (ALO* p = PaloOf(plo)) SetAloVelocity(p, r.GetVector()); });
+        RegisterObjectSetter3(78, [](LO* plo, const CRef& r) { if (ALO* p = PaloOf(plo)) SetAloAngVelocity(p, r.GetVector()); });
+        RegisterObjectGetter3(77, [](LO* plo) {   // orig3: 0x23D888
+            CRef r;
+            ALO* p = PaloOf(plo);
+            XF* po = p ? PxfPos(p) : nullptr;
+            r.SetVector(po ? VecConvertXfs(po->pxfRef, PxfObj(p), glm::vec3(po->vel)) : g_vecZero);
+            return r;
+        });
+        RegisterObjectGetter3(78, [](LO* plo) {   // orig3: 0x23D8E0
+            CRef r;
+            ALO* p = PaloOf(plo);
+            XF* pr = p ? PxfRot(p) : nullptr;
+            r.SetVector(pr ? VecConvertXfs(pr->pxfRef, PxfObj(p), glm::vec3(pr->vel)) : g_vecZero);
             return r;
         });
         // orig: 0x001F5860 (EOPID 35's getter): the gravity (+0xE8's +0x80), zero without a physics state

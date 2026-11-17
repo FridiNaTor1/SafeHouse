@@ -445,7 +445,7 @@ void StepRopeSpring(ROPE& r)
     RefreshCrv(pc);
 }
 
-// orig: 0x001E6340 (vt slot 17 of the paths): the simulation by its mode, else the base's (0x1A5E80)
+// orig: 0x001E6340 (vt slot 17 of the paths): the simulation by its mode, else the base's (0x1A5E80) (orig3: 0x22DCC8, the same C in the Sly 3 decomp)
 void UpdatePath17(LO* plo)
 {
     auto it = s_mprope.find(plo);

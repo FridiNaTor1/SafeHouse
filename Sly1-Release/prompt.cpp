@@ -20,6 +20,7 @@
 #include "../platform/system_settings.h"
 #include "content.h"
 #include "porttext.h"
+#include "../platform/monitor_select_glfw.h"
 #include <cstring>
 #include <algorithm>
 #include <cmath>
@@ -432,6 +433,35 @@ void BuildPcLabel(RESPK respk)
 	case RESPK_MouseRawInput: std::snprintf(out, size, "%s", StrPortOnOff(PTX_RawInput, g_mouseopt.fRawInput).c_str()); break;
 	case RESPK_MouseWheelZoom: std::snprintf(out, size, "%s", StrPortOnOff(PTX_WheelZoomsBinocucom, g_mouseopt.fWheelZoom).c_str()); break;
 	case RESPK_MouseMenus: std::snprintf(out, size, "%s", StrPortOnOff(PTX_MouseInMenus, g_mouseopt.fMenus).c_str()); break;
+	case RESPK_Monitor:
+	{
+		// (settings v22) Primary, the monitor (its name, a number for a second of the same name, its resolution), or
+		// "(not connected)" for a chosen one that is unplugged; the name shortened so the row fits its buffer
+		namespace mo = cane::monitor;
+		std::string value;
+		if (g_monitorId.empty()) value = PchzPort(PTX_Primary);
+		else
+		{
+			const mo::Connected c = mo::connected();
+			const int i = mo::find(c.list, g_monitorId);
+			std::string shown = i >= 0 ? mo::shortLabel(c.list, i) : mo::storedName(g_monitorId);
+			if (shown.size() > 26)
+			{
+				size_t cut = 23;
+				while (cut > 0 && (static_cast<unsigned char>(shown[cut]) & 0xC0) == 0x80) --cut;
+				shown = shown.substr(0, cut) + "...";
+			}
+			if (i < 0) value = StrPortFormat(PTX_MonitorNotConnected, shown.c_str());
+			else
+			{
+				const mo::Info& m = c.list[static_cast<size_t>(i)];
+				value = shown;
+				if (m.width > 0 && m.height > 0) value += " (" + std::to_string(m.width) + "x" + std::to_string(m.height) + ")";
+			}
+		}
+		std::snprintf(out, size, "%s", StrPortValue(PTX_Monitor, value).c_str());
+		break;
+	}
 	case RESPK_CamKeyLeft:
 	case RESPK_CamKeyRight:
 	case RESPK_CamKeyUp:
@@ -495,6 +525,9 @@ GLFWmonitor* ActiveMonitor()
 {
     if (GLFWmonitor* monitor = glfwGetWindowMonitor(g_gl.window))
         return monitor;
+    // (settings v22) Borderless fills the chosen monitor; where a window's place is unknown (Wayland) the chosen one too
+    if (g_windowMode == WindowMode_Borderless || cane::monitor::cannotPlaceWindows())
+        return cane::monitor::chosen(g_monitorId);
 
     int windowX = 0;
     int windowY = 0;
@@ -522,7 +555,7 @@ GLFWmonitor* ActiveMonitor()
         }
     }
 
-    return glfwGetPrimaryMonitor();
+    return cane::monitor::chosen(g_monitorId);
 }
 
 std::vector<int> SupportedFrameRates()
@@ -1545,6 +1578,14 @@ void ExecutePrompt(PROMPT* pprompt)
             rebuildPromptKeepingSelection();
             return;
 
+            case RESPK_Monitor:
+            // (Primary, then each connected monitor: the window goes there, gl.h ApplyMonitorSettings)
+            ApplyMonitorSettings(cane::monitor::step(cane::monitor::connected().list, g_monitorId, 1));
+            ApplySwapInterval();
+            SaveSystemSettings();
+            rebuildPromptKeepingSelection();
+            return;
+
             case RESPK_Vsync:
             g_fVsync = !g_fVsync;
             ApplySwapInterval();
@@ -2109,7 +2150,8 @@ const char* AchzFromRespk(RESPK respk)
 	case RESPK_Mouse: return PchzPort(PTX_MouseEntry);
 	default: break;
 	}
-	if ((respk >= RESPK_PromptStyle && respk < RESPK_LanguageEnglish && respk != RESPK_Mouse) || respk == RESPK_AutoCameraRotation)
+	if ((respk >= RESPK_PromptStyle && respk < RESPK_LanguageEnglish && respk != RESPK_Mouse) || respk == RESPK_AutoCameraRotation ||
+		respk == RESPK_Monitor)
 		BuildPcLabel(respk);
     return s_mprespkachz[respk];
 }

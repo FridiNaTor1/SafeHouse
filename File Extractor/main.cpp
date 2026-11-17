@@ -1473,7 +1473,7 @@ static int ExtractDiscImage(const cane::DiscImageInstall& d,const fs::path& isoP
         // One pass: copy the image and hash what is written.
         std::ofstream image(out/d.imageName,std::ios::binary|std::ios::trunc);
         if(!image)throw std::runtime_error("Cannot create the disc image copy");
-        picosha2::hash256_one_by_one hash;
+        cane::Sha256 hash;   // (platform/sha256.h: the CPU's SHA extensions where it has them; picosha2 hashed ~130 MB/s)
         std::vector<char> buffer(4u<<20);
         const size_t totalMiB=static_cast<size_t>(imageSize>>20);
         uint64_t copied=0;size_t reported=0;
@@ -1485,15 +1485,14 @@ static int ExtractDiscImage(const cane::DiscImageInstall& d,const fs::path& isoP
             if(iso.gcount()!=static_cast<std::streamsize>(chunk))throw std::runtime_error("Failed reading the disc image");
             image.write(buffer.data(),static_cast<std::streamsize>(chunk));
             if(!image)throw std::runtime_error("Failed writing the disc image copy (is the drive full?)");
-            hash.process(buffer.begin(),buffer.begin()+static_cast<std::ptrdiff_t>(chunk));
+            hash.update(buffer.data(),chunk);
             copied+=chunk;
             const size_t mib=static_cast<size_t>(copied>>20);
             if(mib>=reported+32 || copied==imageSize)Progress("copy",reported=mib,totalMiB,d.imageName);
         }
         image.close();
         if(!image)throw std::runtime_error("Failed writing the disc image copy (is the drive full?)");
-        hash.finish();
-        files.push_back({{"path",d.imageName},{"size",imageSize},{"sha256",picosha2::get_hash_hex_string(hash)}});
+        files.push_back({{"path",d.imageName},{"size",imageSize},{"sha256",hash.hex()}});
     }
     for(size_t i=0;i<variant->systemFileCount;++i) {
         const char* name=variant->systemFiles[i];
@@ -1503,6 +1502,29 @@ static int ExtractDiscImage(const cane::DiscImageInstall& d,const fs::path& isoP
             throw std::runtime_error(std::string("Failed extracting ")+name);
         files.push_back({{"path",name},{"size",data.size()},{"sha256",picosha2::hash256_hex_string(data)}});
         Progress("extract",i+1,variant->systemFileCount,name);
+    }
+    if(d.worldsTool) {
+        // (Sly 3) the worlds as moddable parts beside the image: the game's tool unravels every world (a few seconds);
+        // without the tool the image alone plays (the disc's worlds)
+        const fs::path tool=pcbrx::Tool(d.worldsTool);
+        std::error_code ec;
+        if(fs::exists(tool,ec)) {
+            Progress("worlds",0,1,"");
+            pcbrx::RunTool({cane::utf8(tool),"--data-dir",cane::utf8(out),"--convert-worlds",cane::utf8(out)},
+                           [](const std::string& line) {
+                               size_t done=0,total=0;char item[512]={};
+                               if(std::sscanf(line.c_str(),"worlds %zu %zu %511[^\n]",&done,&total,item)>=2)Progress("worlds",done,total,item);
+                           });
+            if(!fs::is_regular_file(out/"Worlds"/"worlds.json"))throw std::runtime_error("The world conversion wrote no Worlds/worlds.json");
+            std::vector<fs::path> written;
+            for(const auto& e:fs::recursive_directory_iterator(out/"Worlds"))if(e.is_regular_file())written.push_back(e.path());
+            std::sort(written.begin(),written.end());
+            size_t n=0;
+            for(const fs::path& p:written) {
+                files.push_back({{"path",cane::utf8(fs::relative(p,out).generic_u8string())},{"size",fs::file_size(p)},{"sha256",cane::hashFile(p)}});
+                if(++n%200==0 || n==written.size())Progress("inventory",n,written.size(),"");
+            }
+        } else std::cerr<<"(no "<<d.worldsTool<<" beside the extractor: the worlds stay in the disc image)\n";
     }
     cane::json manifest={{"schema",1},{"game",g.key},{"asset_version",d.assetVersion},{"extractor_version","0.2.0"},
                          {"disc",variant->bootFile},{"serial",variant->serial},{"region",variant->region},

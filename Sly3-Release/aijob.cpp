@@ -24,13 +24,13 @@ AISTACK::~AISTACK() = default;
 
 // ---- the base job (0x1EEF68..0x1EF0D8) ----
 
-void AIJOB::Init() {}                                   // orig 0x1EEF68
-void AIJOB::Enter() {}                                  // orig 0x1EEF70
+void AIJOB::Init() {}                                   // orig 0x1EEF68 (orig3: 0x2389A8, the same code in Sly 3)
+void AIJOB::Enter() {}                                  // orig 0x1EEF70 (orig3: 0x2389A0, the same code in Sly 3)
 void AIJOB::Exit() { EndChildJob(&pchild); }            // orig 0x1EEF78
-void AIJOB::Update() {}                                 // orig 0x1EEF98
-void AIJOB::Steer() {}                                  // orig 0x1EEFB8
+void AIJOB::Update() {}                                 // orig 0x1EEF98 (orig3: 0x238978, the same code in Sly 3)
+void AIJOB::Steer() {}                                  // orig 0x1EEFB8 (orig3: 0x238970, the same code in Sly 3)
 int AIJOB::State() { return (pguard ? St(pguard).fNoContacts : pactor ? pactor->fNoContacts : 0) ? 0 : 7; }  // 0x1EEFA0
-int AIJOB::Message(int, void*) { return 0; }            // orig 0x1EF0B8
+int AIJOB::Message(int, void*) { return 0; }            // orig 0x1EF0B8 (orig3: 0x2389B8, the same code in Sly 3)
 void AIJOB::SetState(int) {}
 // orig: 0x001331F8 / 0x00132ED8 / 0x00133000
 void AIJOB::Script(int k, int n)
@@ -164,7 +164,7 @@ CID Cid2FromCid3Job(CID cid3)
     return cid2 >= 0x9B && cid2 <= 0xC6 ? CID(cid2) : CID(-1);
 }
 
-// orig: 0x001EEEE0
+// orig: 0x001EEEE0 (orig3: 0x2387A8, the same C in the Sly 3 decomp)
 AIJOB* PjobFind(GUARD* pg, CID cid)
 {
     for (const auto& p : pg->stack.ajob)
@@ -186,7 +186,7 @@ AIJOB* PjobPush(ACTOR* pa, CID cid)
     return p;
 }
 
-// orig: 0x001EEEE0 / 0x00205458
+// orig: 0x001EEEE0 / 0x00205458 (orig3: 0x2387A8, the same C in the Sly 3 decomp)
 AIJOB* PjobFind(ACTOR* pa, CID cid)
 {
     for (const auto& p : pa->stack.ajob)

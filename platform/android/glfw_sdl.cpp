@@ -650,6 +650,7 @@ void glfwSetWindowPos(GLFWwindow*,int,int){}
 GLFWmonitor* glfwGetWindowMonitor(GLFWwindow*){return &monitor;}
 GLFWmonitor* glfwGetPrimaryMonitor(){return &monitor;}
 GLFWmonitor** glfwGetMonitors(int* count){if(count)*count=1;return monitors;}
+const char* glfwGetMonitorName(GLFWmonitor*){return "Android display";}
 const GLFWvidmode* glfwGetVideoMode(GLFWmonitor*){static GLFWvidmode result;result=mode();return &result;}
 const GLFWvidmode* glfwGetVideoModes(GLFWmonitor* m,int* count){if(count)*count=1;return glfwGetVideoMode(m);}
 void glfwGetMonitorPos(GLFWmonitor*,int* x,int* y){if(x)*x=0;if(y)*y=0;}

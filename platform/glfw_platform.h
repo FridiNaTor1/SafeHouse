@@ -22,6 +22,7 @@
 #define GLFW_PLATFORM_WAYLAND 0x00060003
 #define GLFW_PLATFORM_X11 0x00060004
 extern "C" int glfwPlatformSupported(int platform);
+extern "C" int glfwGetPlatform(void);
 #endif
 namespace cane {
 inline bool initGlfw() {
@@ -42,5 +43,15 @@ inline bool initGlfw() {
     }
 #endif
     return glfwInit() == GLFW_TRUE;
+}
+// GLFW runs on native Wayland (a window cannot be placed there; platform/monitor_select_glfw.h)
+inline bool onWayland() {
+#if defined(__linux__) && !defined(__ANDROID__)
+    int major = 0, minor = 0, revision = 0;
+    glfwGetVersion(&major, &minor, &revision);
+    return (major > 3 || (major == 3 && minor >= 4)) && glfwGetPlatform() == GLFW_PLATFORM_WAYLAND;
+#else
+    return false;
+#endif
 }
 } // namespace cane

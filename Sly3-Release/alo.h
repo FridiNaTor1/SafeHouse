@@ -15,6 +15,9 @@ void LoadAloFromBrx(LO* plo, CBinaryInputStream* pbis);        // orig 0x1F31E0
 
 void UpdateXfWorlds(ALO* palo);
 void UpdateAloHierarchyWorlds(ALO* palo);
+// The roots' hierarchies in their order (the step's walk, game.cpp): on the pass helpers where that gives the serial
+// walk's results (alo.cpp)
+void UpdateAloRootsWorlds(const std::vector<ALO*>& apaloRoot);
 void SetAloMatrix(ALO* palo, const glm::mat4& mat);   // orig 0x1F4010 (vt slot 37)
 void SetAloParent(ALO* palo, ALO* paloNew, XF* pxfNew, int grf);  // orig 0x1F21B8 (vt slot 10)
 void CloneAloData(const ALO* paloSrc, ALO* paloDst);  // part of vt slot 40

@@ -16,6 +16,8 @@ void ResumeGame(int grf);  // ai.cpp: orig 0x20F030
 #include "cls.h"
 #include "objmethod.h"
 #include "savedata.h"
+#include "disc.h"
+#include "modsave.h"
 #include "smrun.h"
 #include "sw.h"
 #include "transition.h"
@@ -230,6 +232,8 @@ void SaveJob(JOB* p)
 void SaveTask(TASK* p)
 {
     if (p->nMode == 1 || p->nState == -1) return;
+    // (mod packages: a custom task without a save key of its own keeps its state in the slot's side file, modsave.h)
+    if (!p->prE0.F() && g_disc.FCustomTasks()) FSetModTaskState(p->oid, p->nState);
     SetProgressInt(p->prC8, p->cPlayed);
     SetProgressInt(p->prD0, p->cDone);
     SetProgressBool(p->prD8, FTaskDone(p));
@@ -242,6 +246,8 @@ void SaveTask(TASK* p)
 bool FTaskDone(TASK* p)
 {
     if (p->nState == -1 && p->prD8.F()) return NProgress(p->prD8) != 0;
+    if (p->nState == -1 && !p->prD8.F() && g_disc.FCustomTasks())
+        if (int n = -1; FModTaskState(p->oid, &n)) return n >= 2;   // (modsave.h)
     return p->nState >= 2;
 }
 
@@ -596,6 +602,9 @@ void RestoreTask(TASK* p)
 {
     int n = p->prE0.F() ? NProgress(p->prE0) : 0;
     const int f = p->prE8.F() ? NProgress(p->prE8) : 0;
+    // (mod packages: a custom task's state from the slot's side file, modsave.h; none kept: as a task without a key)
+    if (!p->prE0.F() && g_disc.FCustomTasks())
+        if (int nMod = -1; FModTaskState(p->oid, &nMod) && nMod > 0 && nMod <= 3) n = nMod;
     if (f && p->pjob && n < 3 && n > 0)
     {
         p->cPlayed = 0;

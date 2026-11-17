@@ -4,7 +4,10 @@
 // 0x1B4728, 0x1B50B0, 0x1B6078, checked against the disassembly) and the reference's m_134648_p3.cpp /
 // m_1B4438_p3.cpp.
 #include "gang.h"
+#include "game/guru3.h"
+#include "game/items3.h"
 #include "game/sly3.h"
+#include "actioninput.h"
 #include "climb.h"
 #include "routetele.h"
 #include "transition.h"
@@ -14,6 +17,8 @@
 #include "ai.h"
 #include "murraycarry.h"
 #include "gadget.h"
+#include "outfit3.h"
+#include "pocket.h"
 void SpawnPickups(int cid, const glm::vec3& pos, LO* psrc, int n);  // pickup.cpp (0x1C6FD8)
 #include "jt.h"
 #include "binoc.h"
@@ -236,6 +241,7 @@ STEP* PstepNewGang(ALO* palo)
 {
     if (FIsLoDerivedFrom(palo, S3CID(0x37))) return new BENTLEY();
     if (FIsLoDerivedFrom(palo, S3CID(0x36))) return new MURRAY();
+    if (STEP* p = sly3::PstepNewGuru3(palo)) return p;   // (the Guru, Sly 3's 0x37: game/guru3.cpp)
     return nullptr;
 }
 
@@ -261,7 +267,7 @@ void InitBentley(BENTLEY* p)
     // TODO(actors): +0x1040, +0x1098..+0x10B4 (the reach: -100 100 50 -10, 250 0 1 4500), the entries' ids
     // +0x1824..+0x1870 (5, 7, 9, 11, 13, 4)
     p->n1000 = 2;
-    p->n1870 = 5;
+    p->n1870 = 4;   // (s3-gadgets) orig3 0x13D2D0: +0x19A8 = 4
     // (D_002DD5BC = p: the players' globals are found by class here)
 }
 
@@ -306,15 +312,19 @@ void PostLoadBentley(BENTLEY* p)
     BindGaitParts(&p->gaitRun, palo, 0x1600);
     InitBentleySub(p);                             // 0x136D28
     {
-        static const int s_aid[6] = {5, 7, 9, 11, 13, 4};  // (0x134648: +0x1824 + 0xC i)
-        for (int i = 0; i < 6; ++i)
+        // (s3-gadgets) orig3 0x13D2D0: the entries' kinds +0x1950 + 0xC i = 4, 6, 10, 16, 13, 15, 8 (Sly 3's items), here
+        // by their Sly 2-side ids; each one's proxy is the part at +4 (table 0x342890 rows 71..77, under FN3_TAG). The
+        // parts' pairing with Sly 2's offsets had put the proxies under other ids (Sly 2's 5, 7, 9, 11, 13, 4).
+        static const int s_aid[7] = {4, 7, 11, 13, sly3::ITEM2_SLY3 + 13, 37, 26};
+        for (int i = 0; i < 7; ++i)
         {
             p->aabil[i].id = s_aid[i];
-            p->aabil[i].plo4 = PloPart(palo, 0x1828 + 0xC * i);
-            p->aabil[i].plo8 = PloPart(palo, 0x182C + 0xC * i);
+            p->aabil[i].plo4 = PloPart(palo, FN3_TAG | (0x1954u + 0xCu * i));
+            p->aabil[i].plo8 = nullptr;
         }
     }
-    AttachActorLook(p, 0x16);  // 0x1426E8 (the head's look controller +0x10F4)
+    AttachActorLook(p, 0x2E);  // 0x1426E8 (the head's look controller +0x10F4; Sly 3: the record of tag 0x2E, orig3 0x13D480 -> 0x155190)
+    sly3::InitFishing3(p);     // (s3-gadgets) orig3 0x13D480 -> 0x17E760: the Fishing Pole's parts
     SetBentleyState(p, 0);
 }
 
@@ -400,15 +410,21 @@ bool FBentleyCanDo(BENTLEY* p, int n)
 {
     if (p->f1818) return false;
     if (static_cast<unsigned>(p->nF04) < 3) return false;  // 0x1443D8
+    // (s3-gadgets) orig3 0x13FE50: +0x194C (EOPID 826, a field with no Sly 2 twin: stored at Sly 3's offset) lets the
+    // Fishing Pole through by the save's ownership alone (0x21F410(7): past the gadget lock +0x1274 of 0x154518, not
+    // kept natively) and while an outfit is worn (+0x1108, 0x173428), which refuses every other gadget but 3
+    if (n != 3 && IdOutfitWorn3(p->palo) != -1 &&
+        !(n == sly3::ITEM2_SLY3 + 7 && p->palo->U32Field(0, 0x194C) != 0))
+        return false;
     switch (p->state)
     {
-    case 0: case 1: case 5: case 7: break;
-    case 2:
+    case BS3_Idle: case BS3_Walk: case BS3_Push: case BS3_Run: break;
+    case BS3_Jump:
         // orig: 0x00136870 -> 0x0019C8D0: all airborne actions use the
         // jump controller's permission, including the Square swing (2).
         if (!FJumpCanDo(&p->jump, n)) return false;
         break;
-    case 3:
+    case BS3_Interact:
         if (n == 10 || n == 12) {
             // orig: 0x00194558 for Adrenaline Burst / Hover Pack; other abilities keep their own checks.
             switch (p->n4C8) {
@@ -418,14 +434,15 @@ bool FBentleyCanDo(BENTLEY* p, int n)
             break;
         }
         WarnOnce("0x194558 (+0x4C0's slot 99)"); return false;
-    case 13: WarnOnce("0x19EEF0 (+0xF50's slot 99)"); return false;
-    case 12:
+    case BS3_Climb: WarnOnce("0x19EEF0 (+0xF50's slot 99)"); return false;
+    case BS3_Throw:
         // orig: 0x00136870 case 12: aiming a carried gadget (+0x11B4 4..6) lets only the same kind's press through (the
         // throw)
         if (static_cast<unsigned>(p->jtthrow.state - 4) < 3)
             switch (n)
             {
-            case 4: case 7: case 9: case 11: case 13:
+            // (s3-gadgets) orig3 0x13FE50 case 14: Sly 3's 6, 8, 10, 13, 15, 16
+            case 7: case 26: case 11: case sly3::ITEM2_SLY3 + 13: case 37: case 13:
             {
                 const CARRY* pc = PcarryFromLo(p->jtthrow.selected);
                 return pc && pc->kind == n;
@@ -435,9 +452,19 @@ bool FBentleyCanDo(BENTLEY* p, int n)
         return false;
     default: return false;
     }
+    // (s3-gadgets) orig3 0x13FE50 case 7, the Fishing Pole (Sly 3's item 7): on the ground states above (never in the
+    // air: 0x1BD830 refuses it), with the rod part (+0x1868)
+    if (n == sly3::ITEM2_SLY3 + 7) return sly3::FFishingRod3(p);
+    // (s3-gadgets) orig3 0x13FE50 case 13, the Grapple-Cam: one placed (+0x19B8), else a free object of its proxy
+    if (n == sly3::ITEM2_SLY3 + 13)
+    {
+        if (p->ploGrappleCam) return true;
+        ABILITY* pa = PabilFind(p, n);
+        return pa && pa->plo4 && PloProxyFreeRow(g_psw, pa->plo4, 2) != nullptr;
+    }
     switch (n)
     {
-    case 4: case 5: case 7: case 9: case 11: case 13:
+    case 4: case 7: case 26: case 11: case 37: case 13:   // (s3-gadgets) orig3 0x13FE50: Sly 3's 4, 6, 8, 10, 15, 16
     {
         ABILITY* pa = PabilFind(p, n);
         if (!pa) return false;
@@ -452,7 +479,7 @@ bool FBentleyCanDo(BENTLEY* p, int n)
     }
     case 3:  // the binocucom: the pad the players' (G_GRFJOYT & 2) and no default camera on top (0x14FD50 on CM +0x3A0)
         return p->f12F0 != 0 && (g_grfjoyt & 2) && !FActiveCplcy(&g_cmpolicies.cpdefault);
-    case 1: case 2: case 8: case 10: case 12: case 14: return true;
+    case 1: case 2: case 8: case 10: case 12: case 14: return true;   // (Sly 3's 1, 2, 3, 9, 12, 14: 0x13FE50)
     default: return false;
     }
 }
@@ -588,13 +615,13 @@ void UpdateBentleyState2(BENTLEY* p)
                 SetBentleyState2(p, 2.0f < g_clock.t - p->t1700 ? 0 : 1);
             switch (p->state)
             {
-            case 0:
+            case BS3_Idle:
                 UpdateBentleySub(p, 0);
                 if (p->f181C && p->sub.state != -1 && p->psma && p->psmIdle && IsmsFindSm(p->psmIdle, 0x17B) >= 0)
                     SetSmaState(p->psma, 0x17B);  // 0x1F09D8
                 break;
-            case 1: case 2: case 3: case 7: UpdateBentleySub(p, 1); break;
-            case 5: UpdateBentleySub(p, 2); break;
+            case BS3_Walk: case BS3_Jump: case BS3_Interact: case BS3_Run: UpdateBentleySub(p, 1); break;
+            case BS3_Push: UpdateBentleySub(p, 2); break;
             default: UpdateBentleySub(p, -1); break;
             }
         }
@@ -605,7 +632,7 @@ void UpdateBentleyState2(BENTLEY* p)
             {
                 if (2.0f < g_clock.t - p->t1700) SetBentleyState2(p, 0);
             }
-            else if (!FPcCarm(p->palo) && FBtnTake(p, BTN_R1, 0.25f))   // (PC: R1 is Carmelita's run)
+            else if (!FPcCarm(p->palo) && sly2actions::Take(PpadctlOf(p), sly2actions::Action::BentleyDart, BTN_R1, 0.25f))   // (PC: R1 is Carmelita's run)
                 FireBentleyDart(p, 0x80000);  // 0x1357C0
         }
         const int s2 = p->n16BC;
@@ -649,7 +676,7 @@ void UpdateBentleyHold(BENTLEY* p)
             else if (0.1f < g_clock.t - p->tFloor) SetBentleyHold(p, 2);
             else SetBentleyHold(p, 1);
         }
-        if (p->n16B0 == s || p->state != 6) break;
+        if (p->n16B0 == s || p->state != BS3_Hold) break;
     }
 }
 
@@ -728,11 +755,18 @@ void UpdateBentleyTransitions(BENTLEY* p)
                         PpodataFromLo(p->palo) ? PpodataFromLo(p->palo)->grfbtnForced : 0u);
     for (int iter = 0; iter < 32; ++iter)
     {
+        // (s3-gadgets) orig3 0x13D518's first switch, in Sly 3's state numbers (the renumbering had left Sly 2's here: the
+        // run (9) never fell off a floor's end): no test in 2 / 4 / 8 / 10..13 / 15 / 16 (17: only with its effect done,
+        // not natively) nor in the interaction's kinds 1 / 12
         bool fTimed = true;
-        if (static_cast<unsigned>(s - 2) < 13)
+        switch (s)
         {
-            if (s == 3) fTimed = p->n4C8 != 1 && p->n4C8 != 12;
-            else fTimed = s == 5 || s == 7 || s == 12;
+        case BS3_Jump: case BS3_Damage: case BS3_Hold: case BS3_Carried: case BS3_ScriptSm: case BS3_ScriptAnim: case BS3_ScriptMove:
+        case BS3_Adrenaline: case BS3_Fish: case BS3_17: case BS3_Climb:
+            fTimed = false;
+            break;
+        case BS3_Interact: fTimed = p->n4C8 != 1 && p->n4C8 != 12; break;
+        default: break;
         }
         if (fTimed && 0.1f < g_clock.t - p->tFloor)
         {
@@ -747,16 +781,16 @@ void UpdateBentleyTransitions(BENTLEY* p)
             {
                 ForgetBtn(p, BTN_TRIANGLE);
                 p->pabil16B4 = PabilFind(p, p->n1870);  // 0x136A28
-                SetBentleyState(p, 6);
+                SetBentleyState(p, BS3_Hold);
                 return true;
             }
             return false;
         };
         switch (p->state)
         {
-        case 0: case 1: case 7:
-            if (FPcCarmGangGround(p, [p](int n) { SetBentleyState(p, n); }, 0, 7, FBentleyCanDo(p, 3))) break;   // (PC addition)
-            if (!(GrfbtnHeld(p) & BTN_R1) && FActorObjectAhead(p, 0)) SetBentleyState(p, 5);
+        case BS3_Idle: case BS3_Walk: case BS3_Run:
+            if (FPcCarmGangGround(p, [p](int n) { SetBentleyState(p, n); }, BS3_Idle, BS3_Run, FBentleyCanDo(p, 3))) break;   // (PC addition)
+            if (!(GrfbtnHeld(p) & BTN_R1) && FActorObjectAhead(p, 0)) SetBentleyState(p, BS3_Push);
             else if (FBtnTake(p, BTN_CROSS, 0.1f)) SetJumpKind(&p->jump, 1, 0, 0);
             else if (FBtnWithin(p, BTN_R3, F32(0x3E19999A)) && FBentleyCanDo(p, 3))
             {
@@ -769,16 +803,16 @@ void UpdateBentleyTransitions(BENTLEY* p)
             {
                 const float u = UJoy(p);
                 const bool fMove = p->state == 0 ? 0.1f < u : 0.0f < u;
-                if (fMove) SetBentleyState(p, (GrfbtnHeld(p) & BTN_R1) ? 1 : 7);
+                if (fMove) SetBentleyState(p, (GrfbtnHeld(p) & BTN_R1) ? BS3_Walk : BS3_Run);
                 else SetBentleyState(p, 0);
             }
             break;
-        case 2:
+        case BS3_Jump:
             UpdateJumpTransitions(&p->jump);  // 0x197500
             if (!FPcCarm(p->palo)) tryInteract();   // (PC addition: no gadget as Carmelita)
             break;
-        case 5:
-            // orig: 0x00134850 case 5: R1 or nothing ahead (wide) stands; else cross jumps, R3 the binocucom, circle
+        case BS3_Push:
+            // orig: 0x00134850 case BS3_Push: R1 or nothing ahead (wide) stands; else cross jumps, R3 the binocucom, circle
             // the interaction, triangle the gadget
             if ((GrfbtnHeld(p) & BTN_R1) || !FActorObjectAhead(p, 1)) SetBentleyState(p, 0);
             else if (FBtnTake(p, BTN_CROSS, 0.1f)) SetJumpKind(&p->jump, 1, 0, 0);
@@ -790,14 +824,15 @@ void UpdateBentleyTransitions(BENTLEY* p)
             else if (FBtnTake(p, BTN_CIRCLE, F32(0x3E4CCCCD))) FInteractCircle(p);  // 0x1938C0 (+0x4C0, 0xF8FE)
             else tryInteract();
             break;
-        case 14:
+        case BS3_Adrenaline:
             if (2.0f < g_clock.t - p->tState) SetBentleyState(p, 0);
             break;
-        case 4: UpdateDamageTransitions(p); break;  // 0x1A12F0 (+0xDF0)
-        case 3: UpdateInteractTransitions(p); break;  // 0x1911A8 (+0x4C0)
-        case 6: UpdateBentleyHold(p); break;  // 0x136118
-        case 12: UpdateJtThrow(p); break;  // 0x21F418 (+0x11B0)
-        case 8:
+        case BS3_Damage: UpdateDamageTransitions(p); break;  // 0x1A12F0 (+0xDF0)
+        case BS3_Interact: UpdateInteractTransitions(p); break;  // 0x1911A8 (+0x4C0)
+        case BS3_Hold: UpdateBentleyHold(p); break;  // 0x136118
+        case BS3_Fish: sly3::UpdateFishTransitions3(p); break;  // (s3-gadgets) orig3 0x17EBA0 (+0x1830)
+        case BS3_Throw: UpdateJtThrow(p); break;  // 0x21F418 (+0x11B0)
+        case BS3_Carried:
             // orig: 0x001367D8 (the carried controller: thrown (1) and on a floor again (+0x208): standing, the player)
             if (const char* sz = std::getenv("SLY2N_THROWPRINT"); sz && *sz == '2')
                 std::printf("bentley carried state %d floor %p t %.4f\n", p->n1800, static_cast<void*>(p->pxpFloor), g_clock.t);
@@ -807,8 +842,11 @@ void UpdateBentleyTransitions(BENTLEY* p)
                 EnablePo(g_psw, p->palo, 1);  // vt slot 79 (1)
             }
             break;
-        case 9: case 11: break;
-        case 10:
+        case BS3_ScriptSm: case BS3_ScriptMove: case BS3_17: case BS3_Push6: case BS3_Push7: break;
+        // (s3-gadgets) orig3 0x13D518 case 18: only while his Grapple-Cam (+0x19B8) is flown (its state +0x190 == 1); the
+        // camera's class 0x56 is not ported, so natively the state ends at once
+        case BS3_Idle18: SetBentleyState(p, BS3_Idle); break;
+        case BS3_ScriptAnim:
             // a script's animation (+0x1030) or state machine (+0x1034) over: standing (0x134850)
             if (p->pasega ? FAsegaRetracted(p->pasega) : (p->psma && FSmaRetracted(p->psma))) SetBentleyState(p, 0);
             break;
@@ -971,13 +1009,13 @@ void SetBentleyState(BENTLEY* p, int n)
     switch (cur)
     {
     case -1: break;
-    case 0:
+    case BS3_Idle: case BS3_Idle18:   // (orig3 0x13E510: 18 as 0; its Grapple-Cam gate (+0x19B8 mode 1 -> 2): with that port)
         SetXfModes(p, 2);
         ActorNextLookTime(p);  // 0x142880
         break;
-    case 9: case 10: case 11: SetXfModes(p, 2); break;
-    case 1: case 7: p->g1A0 = UGaitPhase(p, p->g1A0); break;
-    case 6:
+    case BS3_ScriptSm: case BS3_ScriptAnim: case BS3_ScriptMove: SetXfModes(p, 2); break;
+    case BS3_Walk: case BS3_Run: p->g1A0 = UGaitPhase(p, p->g1A0); break;
+    case BS3_Hold:
         if (p->ploCarried)
         {
             SetCarryState(p->ploCarried, 1);  // vt slot 76 (1)
@@ -985,7 +1023,8 @@ void SetBentleyState(BENTLEY* p, int n)
         }
         SetBentleyHold(p, -1);
         break;
-    case 2:
+    case BS3_Fish: sly3::SetFishState3(p, -1); break;   // (s3-gadgets) orig3 0x13E510 case 16: 0x17E850(+0x1830, -1)
+    case BS3_Jump:
         if (!p->ploWater)
         {
             LO* po = nullptr;
@@ -995,15 +1034,15 @@ void SetBentleyState(BENTLEY* p, int n)
         }
         SetJumpAnimState(&p->jump, -1, nullptr);  // 0x195FB8
         break;
-    case 4: SetDamageState(p, -1); break;  // 0x1A0B40 (+0xDF0)
-    case 3: SetInteractState(p, -1); break;  // 0x192BD8 (+0x4C0)
-    case 12: SetJtThrowState(p, -1); break;  // 0x2206C8 (+0x11B0)
-    case 8:
+    case BS3_Damage: SetDamageState(p, -1); break;  // 0x1A0B40 (+0xDF0)
+    case BS3_Interact: SetInteractState(p, -1); break;  // 0x192BD8 (+0x4C0)
+    case BS3_Throw: SetJtThrowState(p, -1); break;  // 0x2206C8 (+0x11B0)
+    case BS3_Carried:
         SetBentleyCarried(p, -1);       // 0x136530
         EnablePo(g_psw, p->palo, 1);    // vt slot 79 (1): the player again
         break;
-    case 13: SetClimbState(p, -1); break;  // 0x19EAB0 (+0xF50; audit 2026-11 G1)
-    case 5: case 14: break;  // (0x135248 has no leave actions for these: the old warning was spurious)
+    case BS3_Climb: SetClimbState(p, -1); break;  // 0x19EAB0 (+0xF50; audit 2026-11 G1)
+    case BS3_Push: case BS3_Push6: case BS3_Push7: case BS3_Adrenaline: case BS3_17: break;  // (0x135248 / 0x13E510 have no leave actions for these)
     default: WarnOnce("Bentley's SetState: leaving state " + std::to_string(cur)); break;
     }
     const int old = p->state;
@@ -1018,7 +1057,7 @@ void SetBentleyState(BENTLEY* p, int n)
     float t = 0.0f, svt = 1.0f;
     switch (n)
     {
-    case 0:
+    case BS3_Idle:
         SetXfModes(p, 1);
         if (p->f181C)
         {
@@ -1028,14 +1067,16 @@ void SetBentleyState(BENTLEY* p, int n)
         else
         {
             psm = p->psmIdle;
-            oid = old == 2 ? 0x178 : old != 7 ? 0x175 : 0x176;
+            // (orig3 0x13E510 case 0: the idle SM's entry by the state left: 0x193 after the run, 0x195 the jump, 0x197
+            // state 17, else 0x192; Sly 2's 0x176 / 0x178 / 0x175)
+            oid = old == BS3_Run ? 0x193 : old == BS3_Jump ? 0x195 : old == BS3_17 ? 0x197 : 0x192;
             if (!psm || IsmsFindSm(psm, oid) < 0) oid = -1;  // 0x1F0400
         }
         p->vecVel = glm::vec3(0.0f);
         grfMask = GrfActorLookMask(p);  // 0x1430C8
         ActorSetLookFlag(p, 1);         // 0x142868
         break;
-    case 1: case 7:
+    case BS3_Walk: case BS3_Run:
     {
         GAIT* pgait = n == 1 ? &p->gaitWalk : &p->gaitRun;
         paseg = pgait->pbl;
@@ -1044,14 +1085,29 @@ void SetBentleyState(BENTLEY* p, int n)
         ResetGaitFeet(pgait);  // 0x20BD68
         break;
     }
-    case 2: break;  // (the jump's animation: 0x195FB8 from 0x195A00)
-    case 6: SetBentleyHold(p, 0); return;  // 0x136040
-    case 9: case 10: case 11:
-        if (n == 9) psm = p->psm102C;
+    case BS3_Jump: break;  // (the jump's animation: 0x195FB8 from 0x195A00)
+    // (orig3 0x13E510, new in Sly 3: 6 / 7 the clips +0x1634 / +0x1638 looping; 17 no horizontal speed; 18 the idle on
+    // the clip +0x1944 (while his Grapple-Cam flies))
+    case BS3_Push6: case BS3_Push7:
+        paseg = PPart<ASEG>(p->palo, FN3_TAG | (n == BS3_Push6 ? 0x1634u : 0x1638u));
+        grfapl = 9;
+        break;
+    case BS3_17: p->vecVel = glm::vec3(0.0f); break;
+    case BS3_Idle18:
+        SetXfModes(p, 1);
+        paseg = PPart<ASEG>(p->palo, FN3_TAG | 0x1948u);   // (s3-gadgets) orig3 0x13E510 case 18: +0x1948 (+0x1944 is state 0's with +0x1940)
+        grfapl = 9;
+        p->vecVel = glm::vec3(0.0f);
+        ActorSetLookFlag(p, 1);
+        break;
+    case BS3_Hold: SetBentleyHold(p, 0); return;  // 0x136040
+    case BS3_Fish: sly3::SetFishState3(p, 0); return;   // (s3-gadgets) orig3 0x13E510 case 16: 0x17E850(+0x1830, 0)
+    case BS3_ScriptSm: case BS3_ScriptAnim: case BS3_ScriptMove:
+        if (n == BS3_ScriptSm) psm = p->psm102C;   // (orig3 0x13E510 case 11: +0x1138; Sly 2's state 9 was this test's number)
         SetXfModes(p, 1);
         p->vecVel = glm::vec3(0.0f);
         break;
-    case 14:
+    case BS3_Adrenaline:
         paseg = p->paseg1878;
         if (!paseg)
         {
@@ -1060,13 +1116,13 @@ void SetBentleyState(BENTLEY* p, int n)
         }
         grfapl = 9;
         break;
-    case 4:
+    case BS3_Damage:
         SetBinocState(p, -1);  // 0x19CD38 (+0xF00)
         break;
-    case 3: UpdateActorStepMesh(p); return;  // (the interaction's animation: 0x192BD8 after this)
-    case 12: return;  // (the throw controller's animations: 0x2206C8 after this)
-    case 8: SetBentleyCarried(p, 0); return;  // 0x136530 (held by Murray's +0x1910)
-    case 5:
+    case BS3_Interact: UpdateActorStepMesh(p); return;  // (the interaction's animation: 0x192BD8 after this)
+    case BS3_Throw: return;  // (the throw controller's animations: 0x2206C8 after this)
+    case BS3_Carried: SetBentleyCarried(p, 0); return;  // 0x136530 (held by Murray's +0x1910)
+    case BS3_Push:
         // against an object ahead (0x140AF8, R1 not held): the push blend +0x14E0 (the root blend +0x13E0), looping
         paseg = p->rb13E0.pbl;
         grfapl = 9;
@@ -1125,7 +1181,7 @@ void SteerRootBlend(ACTOR* p, ROOTBLEND* prb)
 
 // orig: 0x00134DA8's state 6 part (held, 16B0 1): the turn and the speed by the stick (D_002BC940 / 950 / 960), the
 // velocity from the root blend +0x14F0
-void UpdateBentleyHoldMotion(BENTLEY* p)
+void UpdateBentleyHoldMotion(BENTLEY* p, LO* ploFace = nullptr)
 {
     auto quad = [](float c0, float c1, float c2, float g) {
         const float f = c0 + g * (c1 + g * c2);
@@ -1134,7 +1190,8 @@ void UpdateBentleyHoldMotion(BENTLEY* p)
     const float u = UJoy(p);
     const float speed = quad(-1.0f, 2.0f, 0.0f, u);
     const float turn = quad(1.0f, 0.0f, 0.0f, u);
-    if (0.0f < u)
+    if (ploFace) FaceActorToward(p, ploFace);   // (s3-gadgets) orig3 0x17EF78: 0x24E920 toward the pocket to hook
+    else if (0.0f < u)
     {
         const float d = cmm::RadNormalize(RadJoy(p) - p->radHeading);
         const float lim = turn * 5.0f * g_clock.dt;
@@ -1149,6 +1206,13 @@ void UpdateBentleyHoldMotion(BENTLEY* p)
     SteerRootBlend(p, &p->rb14F0);  // 0x1A0450
 }
 
+}  // namespace
+// (s3-gadgets) the hold's walk for the Fishing Pole's states 1 / 4 (orig3 0x17EF78: the same code as 0x13DE58's case 8)
+void UpdateBentleyHoldWalk(BENTLEY* p, LO* ploFace) { UpdateBentleyHoldMotion(p, ploFace); }
+// (s3-gadgets) for game/ball3.cpp (orig3 0x1E2E88's end: the state machine dropped (0x23AC58), the clip from 0)
+void SetGangAnim(ACTOR* p, ASEG* paseg, int grfapl) { SetAnim(p, paseg, 0.0f, 1.0f, grfapl, nullptr, -1, 4, true); }
+namespace
+{
 // orig: 0x00134D30 (the +0xF00 sub-object while it is busy)
 void UpdateBentleyF00(BENTLEY* p)
 {
@@ -1353,6 +1417,7 @@ void UpdateBentley(LO* plo)
                 std::printf("btele: Bentley to (%.0f %.0f %.0f) at t %.3f\n", b.x, b.y, b.z, g_clock.t);
             }
     }
+    sly3::FishTestAid3(p, g_iframeHarness);   // (s3-gadgets, debug: SLY3_FISHTEST)
     UpdateActor(p);  // 0x1403D0
     if (!plo->fInWorld) return;
     // (debug: SLY2N_JTPRINTB=N: the interaction lists at Bentley's N-th update)
@@ -1362,34 +1427,35 @@ void UpdateBentley(LO* plo)
         if (++s_cJtB == std::atoi(s_szJtB)) PrintJtLists(g_psw);
     }
     // (PC addition, debug menu only: Carmelita's moveset, her aim mode and shot; only the objects to use rated)
-    const bool fCarmAim = PpadctlOf(p) && FPcCarmGangInput(p, 0, 7, 1);
+    const bool fCarmAim = PpadctlOf(p) && FPcCarmGangInput(p, BS3_Idle, BS3_Run, BS3_Walk);
     UpdateJtCandidates(p, FPcCarm(p->palo) ? 0x80 : 0xF8FE);  // 0x194A40 (the interaction targets, jt.cpp)
     UpdateBentleyF00(p);
     if (PpadctlOf(p)) UpdateBentleyTransitions(p);
     switch (p->state)
     {
-    case 0:
+    case BS3_Idle:
         PcCarmGangMotion(p, fCarmAim, false);   // (PC addition)
         if (p->f181C) SetStepPhysHeading(p->palo, 0.5f);  // (D_002BC934)
         else if (p->psma) SetSmaMask(p->psma, GrfActorLookMask(p));  // 0x1F1350
         break;
-    case 1:
+    case BS3_Walk:
         SetStepPhysHeading(p->palo, RadJoy(p));                     // 0x204660
         p->vecVel = glm::vec3(SetGaitMix(&p->gaitWalk, 1.0f));     // 0x20BB58
         UpdateGaitFeet(&p->gaitWalk);                               // 0x20BC08
         PcCarmGangMotion(p, fCarmAim, true);   // (PC addition)
         break;
-    case 7:
+    case BS3_Run:
         SetStepPhysHeading(p->palo, RadJoy(p));
         p->vecVel = glm::vec3(SetGaitMix(&p->gaitRun, UJoy(p)));
         UpdateGaitFeet(&p->gaitRun);
         PcCarmGangMotion(p, fCarmAim, true);   // (PC addition)
         break;
-    case 2: UpdateJumpInput(&p->jump); break;  // 0x197F98
-    case 6: if (p->n16B0 == 1) UpdateBentleyHoldMotion(p); break;
-    case 5:
+    case BS3_Jump: UpdateJumpInput(&p->jump); break;  // 0x197F98
+    case BS3_Hold: if (p->n16B0 == 1) UpdateBentleyHoldMotion(p); break;
+    case BS3_Fish: sly3::UpdateFish3(p); break;   // (s3-gadgets) orig3 0x13DE58 case 16: 0x17EF78(+0x1830)
+    case BS3_Push:
     {
-        // orig: 0x00134DA8 case 5: facing the object ahead (+0x10DC, 0x2046F0); the push blend's speed (+0x1410's xy
+        // orig: 0x00134DA8 case BS3_Push: facing the object ahead (+0x10DC, 0x2046F0); the push blend's speed (+0x1410's xy
         // length) by the stick and the clip's rate, away from the stick's direction, through the root blend
         if (p->plo10DC) FaceActorToward(p, p->plo10DC);
         const glm::vec4& v1 = p->rb13E0.avel[1];  // (+0x1410)
@@ -1399,23 +1465,23 @@ void UpdateBentley(LO* plo)
         SteerRootBlend(p, &p->rb13E0);  // 0x1A0450
         break;
     }
-    case 3: UpdateInteract(p); break;  // 0x191A10 (+0x4C0)
-    case 10: UpdateGangScriptAnim(p, false); break;
-    case 11: UpdateGangScriptAnim(p, true); break;
-    case 14:
-        // orig: 0x00134DA8 case 14: retain the authored animation speed.
+    case BS3_Interact: UpdateInteract(p); break;  // 0x191A10 (+0x4C0)
+    case BS3_ScriptAnim: UpdateGangScriptAnim(p, false); break;
+    case BS3_ScriptMove: UpdateGangScriptAnim(p, true); break;
+    case BS3_Adrenaline:
+        // orig: 0x00134DA8 case BS3_Adrenaline: retain the authored animation speed.
         p->vecVel = VelActorAnimRoot(p);
         SetStepPhysHeading(p->palo, RadJoy(p));
         break;
-    case 4: case 8: case 9: case 12: case 13: break;
+    case BS3_Damage: case BS3_Carried: case BS3_ScriptSm: case BS3_Throw: case BS3_Climb: case BS3_17: case BS3_Idle18: case BS3_Push6: case BS3_Push7: break;
     default: WarnOnce("Bentley's update of state " + std::to_string(p->state)); break;
     }
     // 0x135EB0
     switch (p->state)
     {
-    case 0: case 1: case 5: case 6: case 7: case 11: case 12: case 14: UpdateActorSupport(p); break;
-    case 3: UpdateSafeInteract(p); break;
-    case 13: UpdateSafePipe(p); break;
+    case BS3_Idle: case BS3_Walk: case BS3_Push: case BS3_Hold: case BS3_Run: case BS3_ScriptMove: case BS3_Throw: case BS3_Adrenaline: case BS3_Fish: UpdateActorSupport(p); break;
+    case BS3_Interact: UpdateSafeInteract(p); break;
+    case BS3_Climb: UpdateSafePipe(p); break;
     default: break;
     }
     UpdateDamage(p);  // 0x1A1358 (+0xDF0)
@@ -1427,14 +1493,14 @@ void UpdateBentleyMotion(ALO* palo)
 {
     BENTLEY* p = PbentleyFromLo(palo);
     if (!p) { UpdateStepPhysMotion(palo); return; }
-    if (p->state == 13) ApplyAloGravity(palo);  // 0x1F9B20
+    if (p->state == BS3_Climb) ApplyAloGravity(palo);  // 0x1F9B20
     else UpdateStepPhysMotion(palo);            // 0x204108
     switch (p->state)
     {
-    case 2: UpdateJumpMotion(&p->jump); break;  // 0x196DF8
-    case 4: UpdateDamageMotion(p); break;  // 0x1A1148
-    case 3: UpdateInteractMotion(p); break;  // 0x194170 (+0x4C0)
-    case 13: WarnOnce("Bentley's motion of state " + std::to_string(p->state)); break;
+    case BS3_Jump: UpdateJumpMotion(&p->jump); break;  // 0x196DF8
+    case BS3_Damage: UpdateDamageMotion(p); break;  // 0x1A1148
+    case BS3_Interact: UpdateInteractMotion(p); break;  // 0x194170 (+0x4C0)
+    case BS3_Climb: WarnOnce("Bentley's motion of state " + std::to_string(p->state)); break;
     case 6: if (p->n16B0 == 2) WarnOnce("Bentley's motion of state 6"); break;
     default: break;
     }
@@ -1447,7 +1513,7 @@ void OnBentleyXpNew(ALO* palo, XP* pxp, int i)
     const SOE* psoe = pxp->axpd[i].psoe;
     if (psoe && psoe->f48) return;
     if (p && p->state == 4) AdjustDamageXp(p, pxp);  // 0x1A2100
-    else if (p && p->state == 13) WarnOnce("0x19E9C8 (+0xF50's contact)");
+    else if (p && p->state == BS3_Climb) WarnOnce("0x19E9C8 (+0xF50's contact)");
     else OnStepXpNew(palo, pxp, i);  // 0x204250
 }
 
@@ -1456,9 +1522,9 @@ uint32_t GrfBentleyXp(ALO* palo)
 {
     BENTLEY* p = PbentleyFromLo(palo);
     if (!p || p->fNoContacts) return 0;
-    if (p->state == 13) return 0;
-    if (p->state == 8) return 5;
-    if (p->state == 14) return 0xF;
+    if (p->state == BS3_Climb) return 0;
+    if (p->state == BS3_Carried) return 5;
+    if (p->state == BS3_Adrenaline) return 0xF;
     return GrfActorStance(p);  // 0x143C78
 }
 
@@ -1467,16 +1533,35 @@ int BentleyJumpKind(LO* plo)
 {
     BENTLEY* p = PbentleyFromLo(plo);
     if (!p) return -1;
-    static const int s_ak[14] = {0, -1, 1, 2, 3, -1, -1, -1, -1, 4, 5, 6, 7, 8};
-    return static_cast<unsigned>(p->state) < 14 ? s_ak[p->state] : -1;
+    // orig3 0x13F128 (Sly 3's states; the native climb keeps Sly 2's kind 8)
+    switch (p->state)
+    {
+    case -1: return -1;
+    case BS3_Idle: return 0;
+    case BS3_Jump: return 1;
+    case BS3_Interact: return 2;
+    case BS3_Damage: return 3;
+    case BS3_ScriptSm: return 4;
+    case BS3_ScriptAnim: return 5;
+    case BS3_ScriptMove: return 6;
+    case BS3_Throw: return 7;
+    case BS3_Climb: return 8;
+    case BS3_17: return 9;
+    case BS3_Push: case BS3_Push6: case BS3_Push7: return 10;
+    default: return 11;
+    }
 }
 
 // orig: 0x00135C20 (vt slot 88: the state of the jump's kind n)
 void SetBentleyJumpState(LO* plo, int n)
 {
-    static const int s_ak[9] = {0, 2, 3, 4, 9, 10, 11, 12, 13};
+    // orig3 0x13F040 (kinds 9 / 10: state 17 / the push, new in Sly 3; the native climb keeps Sly 2's kind 8)
+    static const int s_ak[11] = {BS3_Idle, BS3_Jump, BS3_Interact, BS3_Damage, BS3_ScriptSm, BS3_ScriptAnim, BS3_ScriptMove, BS3_Throw, BS3_Climb, BS3_17, BS3_Push};
     if (BENTLEY* p = PbentleyFromLo(plo))
-        if (static_cast<unsigned>(n) < 9) SetBentleyState(p, s_ak[n]);
+    {
+        if (n == -1) SetBentleyState(p, -1);
+        else if (static_cast<unsigned>(n) < 11) SetBentleyState(p, s_ak[n]);
+    }
 }
 }  // namespace
 
@@ -1498,12 +1583,14 @@ void OnBentleyMessage(LO* plo, int msgk, void* pv)
     }
     if (!p || msgk != 9 || !pv) return;
     const ASEGMSG9* pm = static_cast<const ASEGMSG9*>(pv);
+    if (p->state == BS3_Fish) sly3::OnFishEvent3(p, pm);   // (s3-gadgets) orig3 0x13EE68: 0x17F788 in state 16
     if (pm->pasega == p->pasega)
     {
         if (std::getenv("SLY2N_GANGDEBUG") && pm->n == 0x216)
             std::printf("bentley: summon event t %.3f ability %p id %d proxy %d\n", g_clock.t, (void*)p->pabil16B4,
                         p->pabil16B4 ? p->pabil16B4->id : -1, p->pabil16B4 && p->pabil16B4->plo4 ? p->pabil16B4->plo4->oid : -1);
-        if (pm->n != 0x216 || !p->pabil16B4 || !p->pabil16B4->plo4) return;
+        // (s3-gadgets) orig3 0x13EE68: Sly 3's summon event is 0x264 (Sly 2's 0x216)
+        if ((pm->n != 0x216 && pm->n != 0x264) || !p->pabil16B4 || !p->pabil16B4->plo4) return;
         LO* po = PloAcquireProxyObject(g_psw, p->pabil16B4->plo4, false);  // 0x1CB250
         if (std::getenv("SLY2N_GANGDEBUG")) std::printf("bentley: summoned %d\n", po ? po->oid : -1);
         p->ploCarried = po;
@@ -1586,6 +1673,7 @@ void PostLoadMurray(MURRAY* p)
     ALO* palo = p->palo;
     PostLoadActorParts(p);  // 0x1400B8
     PostLoadActorMass(p);
+    sly3::InitBall3(p);   // (s3-gadgets) Be The Ball's parts (Sly 3 +0x1AE4..)
     p->psmIdle = PPart<SM>(palo, 0x1028);
     p->paseg13E0 = PPart<ASEG>(palo, 0x13E0);
     p->paseg1AE8 = PPart<ASEG>(palo, 0x1AE8);
@@ -1606,7 +1694,7 @@ void PostLoadMurray(MURRAY* p)
     p->psm16E0 = PPart<SM>(palo, 0x16E0);
     // TODO(actors): 0x20BD88 (+0x1850)
     PostLoadJtThrow(p->jtthrow1910);  // 0x21F388 (+0x1910)
-    AttachActorLook(p, 0x16);  // 0x1426E8
+    AttachActorLook(p, 0x2F);  // 0x1426E8 (Sly 3: the record of tag 0x2F, orig3 0x1DCD88 -> 0x155190)
     // orig: 0x1B49E0 -> 0x1F4C58 / 0x12DC18: optional scale, not a light.
     for (const auto& xf : palo->axf)
         if (xf->kind == 12 && xf->tag == palo->oid)
@@ -1624,9 +1712,13 @@ int FMurray1B84E0(MURRAY* p) { return (p->pasega190C || p->n1810 != -1) ? p->f18
 bool FMurrayCanDo(MURRAY* p, int n)
 {
     if (static_cast<unsigned>(p->nF04) < 3) return false;  // 0x1443D8 (the binocucom)
+    // (s3-gadgets) orig3 0x1E23F0: Be The Ball (Sly 3's item 17): in state 22 only its own button; else from the ground
+    // states with no ball, a floor since the last one and nothing carried
+    const bool fBall = n == sly3::Item2FromItem3(17);
+    if (p->state == 22) return fBall;
     switch (p->state)
     {
-    case 0: case 1: case 9: case 10: break;
+    case 0: case 1: case 9: case 10: if (fBall) return sly3::FBallCanStart3(p); break;
     case 2: if (!FJumpCanDo(&p->jump, n)) return false; break;      // 0x19C8D0 (+0x2C0)
     case 13: if (!FInteractCanDo(p, n)) return false; break;        // 0x194558 (+0x4C0)
     case 20: WarnOnce("0x19EEF0 (+0xF50's slot 99, Murray)"); return false;
@@ -1757,7 +1849,7 @@ void StartMurrayPunch(MURRAY* p, bool fTriangle)
     SetMurrayPunch(p, k);
 }
 
-// orig: 0x001B8938 (the punch left playing at +0x190C, demoted on the legs, the state 0)
+// orig: 0x001B8938 (the punch left playing at +0x190C, demoted on the legs, the state 0) (orig3: 0x1E1320, the same C in the Sly 3 decomp)
 void EndMurrayPunch(MURRAY* p)
 {
     if (p->pasega) DemoteAsegaOnAlo(p->pasega, p->palo, {{11, -1}, {17, -1}, {16, -1}, {21, -1}, {20, -1}});  // 0x131B60 (D_002C09F8)
@@ -1766,7 +1858,7 @@ void EndMurrayPunch(MURRAY* p)
     SetMurrayState(p, 0);
 }
 
-// orig: 0x001B8988 (state 11's transitions: the punch's end, the next punch, the stick ends it)
+// orig: 0x001B8988 (state 11's transitions: the punch's end, the next punch, the stick ends it) (orig3: 0x1E1370, the same C in the Sly 3 decomp)
 void UpdateMurrayPunchTransitions(MURRAY* p)
 {
     for (int iter = 0; iter < 8; ++iter)
@@ -1801,9 +1893,9 @@ void UpdateMurrayPunch(MURRAY* p)
         {
             float t0 = 0.0f, t2 = 0.0f;
             for (const ASEGEV& ev : PasegdOf(p->pasega->paseg)->aaev[1])
-                if (ev.kind == 11 && ev.an[0] == 0x240) { t0 = ev.t; break; }
+                if (ev.kind == 11 && ev.an[0] == 0x2A0) { t0 = ev.t; break; }
             for (const ASEGEV& ev : PasegdOf(p->pasega->paseg)->aaev[1])
-                if (ev.kind == 11 && ev.an[0] == 0x242) { t2 = ev.t; break; }
+                if (ev.kind == 11 && ev.an[0] == 0x2A2) { t2 = ev.t; break; }
             const float u = (p->pasega->t - t0) / (t2 - t0);
             float g = 0.5f + u * (0.5f + u * 0.0f);  // D_002C0A20, limited by D_002BBB60
             g = g < 0.0f ? 0.0f : (1.0f < g ? 1.0f : g);
@@ -2028,6 +2120,7 @@ void UpdateMurrayTransitions(MURRAY* p)
         bool fTimed = true;
         if (static_cast<unsigned>(s1 - 2) < 0x13)
             fTimed = s1 == 5 || s1 == 9 || s1 == 10 || s1 == 11 || s1 == 12 || s1 == 13 || s1 == 19;
+        if (s1 == 22) fTimed = false;   // (s3-gadgets) Be The Ball leaves the floor by itself (its end: 0x1E3488's mode 2)
         if (fTimed && 0.1f < g_clock.t - p->tFloor)
         {
             const int v = p->state;
@@ -2118,7 +2211,7 @@ void UpdateMurrayTransitions(MURRAY* p)
 void FaceActorToward(ACTOR* pa, LO* plo);         // interact.cpp: 0x2046F0
 LO* PloInteractOidField(LO* plo, uint32_t ib);    // interact.cpp
 
-// orig: 0x001B9C00
+// orig: 0x001B9C00 (orig3: 0x1E2848, the same C in the Sly 3 decomp)
 void StartMurrayHold(MURRAY* p, SMA* psmaObj, int oid, int k, int fSnap)
 {
     p->psma1530 = psmaObj;
@@ -2147,6 +2240,14 @@ void MurrayTakeObject(ACTOR* pa, LO* puse)
     p->n144C = 0;
     SetMurrayState(p, 4);  // 0x1B6078
     if (LO* po = PloInteractOidField(puse, 0x180)) FaceActorToward(p, po);  // 0x2046F0 (the object's owner)
+}
+
+bool FStartMurrayCarrySlam(MURRAY* p)
+{
+    if (!PPart<ASEG>(p->palo, 0x1438)) return false;
+    p->f143C = 0;
+    SetMurrayState(p, 8);
+    return true;
 }
 
 // orig: 0x001B8D30 (Berserker Charge's phase, state 12: 0 the wind-up +0x1848, 1 the charge +0x184C, 2 the bounce off a
@@ -2278,6 +2379,7 @@ void SetMurrayState(MURRAY* p, int n)
     case 5: SetMurrayCarryMove(p, -1); break; // 0x1B5658
     case 9: SetMurrayBehaviorAnim(p, -1); break;  // 0x1B5D30
     case 6: p->psma1530 = nullptr; break;
+    case 22: sly3::SetBallMode3(p, -1); p->ball.pxpHolder = nullptr; break;   // (s3-gadgets) orig3 0x1DE690: Be The Ball (0x1E2E88, +0x1B00 = 0)
     case 15:
         if (p->jtthrow1910.peer) RemoveLo(s_psw, p->jtthrow1910.peer);  // +0x191C's vt slot 9
         SetJtThrowState(p->jtthrow1910, -1);                            // 0x2206C8 (+0x1910)
@@ -2334,6 +2436,7 @@ void SetMurrayState(MURRAY* p, int n)
         SetStepPhysHeadingToward(p->palo, p->pos1420 - PosAloCenter(p->palo));
         break;
     case 9: SetMurrayBehaviorAnim(p, 0); UpdateActorStepMesh(p); return;
+    case 22: sly3::SetBallMode3(p, 0); UpdateActorStepMesh(p); return;   // (s3-gadgets) orig3 0x1DE690 case 22
     case 4:
         // the pickup: its clip by +0x144C (0 +0x1440, 1 +0x1444), still, the carry's state 0 (0x1B93E8)
         paseg = p->n144C == 0 ? p->paseg1440 : p->n144C == 1 ? p->paseg1444 : nullptr;
@@ -2371,7 +2474,7 @@ void SetMurrayState(MURRAY* p, int n)
 
 namespace
 {
-// orig: 0x001B5038 (the +0xF00 sub-object while it is busy)
+// orig: 0x001B5038 (the +0xF00 sub-object while it is busy) (orig3: 0x1DD520, the same C in the Sly 3 decomp)
 void UpdateMurrayF00(MURRAY* p)
 {
     UpdateActorBinoc(p, 0x4F0);  // (binoc.cpp)
@@ -2482,6 +2585,7 @@ void UpdateMurray(LO* plo)
     case 4: case 5: break; // original 0x2A71E0: no additional state4/5 update body
     case 17: UpdateGangScriptAnim(p, false); break;
     case 18: UpdateGangScriptAnim(p, true); break;
+    case 22: sly3::UpdateBall3(p); break;   // (s3-gadgets) orig3 0x1E3488
     default: WarnOnce("Murray's update of state " + std::to_string(p->state)); break;
     }
     // 0x1B82A0
@@ -2550,6 +2654,7 @@ void UpdateMurrayMotion(ALO* palo)
     case 14: UpdateDamageMotion(p); break;  // 0x1A1148
     case 13: UpdateInteractMotion(p); break;  // 0x194170 (+0x4C0)
     case 3: UpdateMurrayFlopMotion(p); break;
+    case 22: sly3::UpdateBallMotion3(p); break;   // (s3-gadgets) orig3 0x1DEF10 -> 0x1E4250
     case 20: WarnOnce("Murray's motion of state " + std::to_string(p->state)); break;
     default: break;
     }
@@ -2581,6 +2686,7 @@ void OnMurrayXpNew(ALO* palo, XP* pxp, int i)
             PrependXpList(PxpCloneList(pxp), &p->pxp13E4);
         break;
     case 20: WarnOnce("0x19E9C8 (+0xF50's contact)"); break;
+    case 22: sly3::OnBallXpNew3(p, pxp); break;   // (s3-gadgets) orig3 0x1E1A68 case 22
     default: break;
     }
 }
@@ -2606,8 +2712,8 @@ void OnMurrayMessage(LO* plo, int msgk, void* pv)
         if (pm->psma != p->psma || p->state != 6 || pm->oidNew == pm->oidOld) return;
         switch (pm->oidNew)
         {
-        case 0x1CA: case 0x1D0: SetMurrayState(p, 0); break;
-        case 0x1CB: case 0x1CC: case 0x1CD: case 0x1CE: case 0x1CF:
+        case 0x1F8: case 0x1FE: SetMurrayState(p, 0); break;   // (s3-gadgets) orig3 0x1DEFE8: Sly 2 0x1CA / 0x1D0
+        case 0x1F9: case 0x1FA: case 0x1FB: case 0x1FC: case 0x1FD:   // (Sly 2 0x1CB..0x1CF)
         {
             static const float s_at[3] = {1.5f, 1.5f, 1.5f};  // 0x2C0990
             const float t = s_at[std::clamp(p->n1534, 0, 2)];
@@ -2622,28 +2728,44 @@ void OnMurrayMessage(LO* plo, int msgk, void* pv)
     if (!p || msgk != 9 || !pv) return;
     const ASEGMSG9* pm = static_cast<const ASEGMSG9*>(pv);
     // Berserker Charge's bounce: its kind-2 player's take-off (the ASEGA's listener 0x20C290: the event 0x22)
-    if (p->pk2play1890 && pm->pasega && pm->pasega == p->pk2play1890->pasega && pm->n == 0x22) SetK2State(p->pk2play1890, 1);
+    if (p->pk2play1890 && pm->pasega && pm->pasega == p->pk2play1890->pasega && pm->n == EVK2_TAKEOFF) SetK2State(p->pk2play1890, 1);
     if (std::getenv("SLY2N_MURRAYPRINT"))
         std::fprintf(stderr, "murray-event: frame %d t %.4f state %d event 0x%X mine %d\n", g_iframeHarness, g_clock.t, p->state, pm->n,
                      pm->pasega == p->pasega || pm->pasega == p->pasega190C);
     if (pm->pasega != p->pasega && pm->pasega != p->pasega190C) return;
     switch (pm->n)
     {
-    case 0x1C6: p->n1448 = 1; break;
-    case 0x240: p->f1818 = 1; break;
-    case 0x241: p->f181C = 1; break;
-    case 0x242: p->f1820 = 1; break;
-    case 0x1A4: SetMurrayFlopPhase(p, 1); break;
-    case 0x1A5: PnoiseNew(PtmplNoiseFixed(0), PosAloCenter(p->palo), p->palo); break;
-    case 0x1EB:
+    // (s3-gadgets) orig3 0x1DEFE8: the events by Sly 3's ids (Sly 2's in brackets; the handler had no pair in
+    // vtmap3.cpp and tested Sly 2's ids, so none of his animation events did anything)
+    case 0x1F4: p->n1448 = 1; break;   // (0x1C6)
+    case 0x2A0: p->f1818 = 1; break;   // (0x240..0x242)
+    case 0x2A1: p->f181C = 1; break;
+    case 0x2A2: p->f1820 = 1; break;
+    case 0x1C5: SetMurrayFlopPhase(p, 1); break;   // (0x1A4; 0x1DF600)
+    case 0x1C6: PnoiseNew(PtmplNoiseFixed(0), PosAloCenter(p->palo), p->palo); break;
+    case 0x219:   // (0x1EB)
         if (p->state == 7) ReleaseMurrayThrow(p);
         else if (p->state == 8) PutDownMurrayCarry(p);  // 0x1B7AE8
         else if (p->state == 15) ReleaseJtThrow(p->jtthrow1910);  // 0x2205A8 (+0x1910)
         break;
-    case 0x1C8:
+    case 0x1F6:   // (0x1C8)
         if (p->n1450 == 0) { PnoiseNew(PtmplNoiseFixed(0), PosAloCenter(p->palo), p->palo); SetMurrayCarry(p, 1); }
         break;
-    case 0x1C7: if (p->n1450 == 1) SetMurrayCarry(p, 2); break;
+    case 0x1F5: if (p->n1450 == 1) SetMurrayCarry(p, 2); break;   // (0x1C7)
+    case 0x185:
+        // (new in Sly 3) a carried guard (the carry's use +0x1540, its owner +0x190 of class 0x3A) is shaken: his pocket
+        // is taken toward the point 450 ahead of Murray (0x156DC0 -> 0x1F1E18; a prize that is no coin / charm is held up)
+        if (p->plo13F0)
+            if (LO* ploOwner = PloInteractOidField(p->plo13F0, 0x180); ploOwner && FIsLoDerivedFrom(ploOwner, S3CID(0x38)) && p->plo10DC)
+            {
+                const glm::mat4 m = MatJtLo(p->palo);
+                LO* r = PloTakePocket(p->plo10DC, glm::vec3(m[3]) + 450.0f * glm::vec3(m[0]), false);
+                if (r && !FIsLoDerivedFrom(r, S3CID(0x5B)) && !FIsLoDerivedFrom(r, S3CID(0x5D)))
+                    if (ASEG* paseg = PPart<ASEG>(p->palo, FN3_TAG | 0x145Cu)) StartPrizeInteract(p, paseg, r, -1);   // (0x154EF0; the part stored under FN3_TAG)
+            }
+        break;
+    // (not ported: 0x21A (the toss controller +0x18E0 in its state 3: +0x19A8 = 1), 0x247 / 0x248 (state 23's object
+    // +0x1C90: its +0x1F0 = 1 / 0x20F508))
     default: break;
     }
 }
@@ -2708,7 +2830,8 @@ void GetMurrayCpdefi(MURRAY& a, const ACTORPOSE& pose, const ACTORCMCTX& ctx, CP
 void InitWorldGang(SW* psw)
 {
     s_psw = psw;
-    for (CID cid : {0x37, 0x36})
+    // (Sly 3: Bentley 0x36 / Murray 0x35; the raw Sly 2 ids missed Murray: he stayed in state -1, never controllable)
+    for (CID cid : {CID(S3CID(0x37)), CID(S3CID(0x36))})
         for (LO* plo : psw->mpcidaplo[cid])
         {
             ALO* palo = static_cast<ALO*>(plo);
@@ -2730,6 +2853,7 @@ void InitWorldGang(SW* psw)
                 PostLoadMurray(p);
             }
         }
+    sly3::InitWorldGuru3(psw);   // (the Guru 0x37: game/guru3.cpp)
 }
 
 void ReleaseMurrayScaleControllers(SW* psw)
@@ -2890,6 +3014,7 @@ bool StartMurrayAbility(ACTOR* pa, int k)
         SetMurrayState(p, 0x15);
         return true;
     default:
+        if (k == sly3::Item2FromItem3(17)) { sly3::StartBall3(p); return true; }   // (s3-gadgets) orig3 0x1E25B0 case 17
         return false;  // (0x141D38: nothing for Murray's other ids, e.g. 27)
     }
 }
@@ -2910,9 +3035,44 @@ bool StartBentleyAbility(ACTOR* pa, int k)
 {
     BENTLEY* p = dynamic_cast<BENTLEY*>(pa);
     if (!p) return false;
+    // (s3-gadgets) orig3 0x140128 case 7, the Fishing Pole: his state 16 (no power spent)
+    if (k == sly3::ITEM2_SLY3 + 7) { SetBentleyState(p, BS3_Fish); return true; }
+    // (s3-gadgets) orig3 0x140128 case 13, the Grapple-Cam: with none thrown (the entry's +8) and none placed (+0x19B8) an
+    // object of its proxy is aimed with the throw controller (state 14, the aim 4); a press while aiming throws it; where
+    // it lands the camera (class 0x56) is placed (carry.cpp LandCarry, orig3 0x277208 -> 0x1404D8) and a press with the
+    // camera at rest (its states +0x190 / +0x198 / +0x1A0 all 0) enters it (0x286D70 = 0x286360(camera, 1))
+    if (k == sly3::ITEM2_SLY3 + 13)
+    {
+        ABILITY* pe = PabilFind(p, k);   // 0x1400C0
+        if (!pe) return false;
+        if (!pe->plo8 && !p->ploGrappleCam)
+        {
+            p->pabil16B4 = pe;   // (+0x1824)
+            LO* po = pe->plo4 ? PloAcquireProxyObject(g_psw, pe->plo4, false) : nullptr;  // 0x1FBE30
+            if (!po) return true;
+            if (CARRY* pc = PcarryFromLo(po))
+            {
+                pc->kind = pe->id;       // +0x13C
+                pc->plo16C = p->palo;    // (0x277610: the kinds 6 / 10 / 13 keep their owner, +0x14C)
+            }
+            SetAbilityCarried(p, pe, po);  // 0x1AF2A8
+            p->jtthrow.selected = po;      // +0x12A0
+            SetBentleyState(p, BS3_Throw);
+            SetJtThrowState(p, 4);         // 0x2734E8(+0x1290, 4)
+            return true;
+        }
+        if (static_cast<unsigned>(p->jtthrow.state - 4) < 3)
+        {
+            SetJtThrowState(p, 7);
+            return true;
+        }
+        if (!p->ploGrappleCam) return true;
+        WarnOnce("0x286D70 (the Grapple-Cam's camera, class 0x56)");
+        return true;
+    }
     switch (k)
     {
-    case 4: case 5: case 7: case 9: case 11: case 13:
+    case 4: case 7: case 26: case 11: case 37: case 13:   // (s3-gadgets) orig3 0x140128: Sly 3's 4, 6, 8, 10, 15, 16
     {
         ABILITY* pe = PabilFind(p, k);   // 0x136A28
         if (!pe) return false;
@@ -2927,7 +3087,7 @@ bool StartBentleyAbility(ACTOR* pa, int k)
             return true;
         }
         p->pabil16B4 = pe;
-        if (k == 7 || k == 11)
+        if (k == 7 || k == 26 || k == 11 || k == 37)   // (s3-gadgets) orig3 0x140128: Sly 3's 6, 8, 10, 15 are thrown
         {
             LO* po = pe->plo4 ? PloAcquireProxyObject(g_psw, pe->plo4, false) : nullptr;  // 0x1CB250
             if (!po) return true;
@@ -2940,13 +3100,13 @@ bool StartBentleyAbility(ACTOR* pa, int k)
             }
             p->jtthrow.selected = po;  // +0x11C0
             (void)GrfAbilityButton(p, k);  // 0x141EA8 (a mask lookup)
-            SetBentleyState(p, 0xC);   // 0x135248
+            SetBentleyState(p, BS3_Throw);   // 0x135248
             SetJtThrowState(p, 4);     // 0x2206C8 (+0x11B0, 4): the aim
             return true;
         }
         p->pabil16B4 = pe;
         SpendActorPower(p, k);   // 0x141CD0
-        SetBentleyState(p, 6);   // 0x135248
+        SetBentleyState(p, BS3_Hold);   // 0x135248
         return true;
     }
     case 8:
@@ -2958,7 +3118,7 @@ bool StartBentleyAbility(ACTOR* pa, int k)
         return true;
     case 10:  // Adrenaline Burst (0x136A90): spend before entering its running animation.
         SpendActorPower(p, k);
-        SetBentleyState(p, 14);
+        SetBentleyState(p, BS3_Adrenaline);
         return true;
     case 12:
         // orig: 0x00141D38 (0x136A90's default): entry cost, then Hover Pack's jump kind.

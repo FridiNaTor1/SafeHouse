@@ -28,7 +28,7 @@ void RemoveFrom(std::vector<T>& a, const T& t)
 }
 }
 
-// orig: 0x001195E0 CroutDecomp__FiPfT1 (alu = the LU decomposition of aa; pivots below 1e-8 zero their column)
+// orig: 0x001195E0 CroutDecomp__FiPfT1 (alu = the LU decomposition of aa; pivots below 1e-8 zero their column) (orig3: 0x11A278, the same C in the Sly 3 decomp)
 void CroutDecomp(int n, const float* aa, float* alu)
 {
     if (n == 0) return;
@@ -63,7 +63,7 @@ void CroutDecomp(int n, const float* aa, float* alu)
     alu[nm1 * n + n - 1] = std::fabs(g) < CROUT_EPS ? 0.0f : g;
 }
 
-// orig: 0x001198F8 CroutSolve__FiPfN21 (forward then back substitution; a zero pivot gives 0 / skips the row)
+// orig: 0x001198F8 CroutSolve__FiPfN21 (forward then back substitution; a zero pivot gives 0 / skips the row) (orig3: 0x11A608, the same C in the Sly 3 decomp)
 void CroutSolve(int n, const float* alu, const float* ab, float* ax)
 {
     for (int i = 0; i < n; i++)
@@ -86,7 +86,7 @@ void CroutSolve(int n, const float* alu, const float* ab, float* ax)
     }
 }
 
-// orig: 0x0011A550 func_0011A550 (the rows, the four lists, the solver's arrays)
+// orig: 0x0011A550 func_0011A550 (the rows, the four lists, the solver's arrays) (orig3: 0x11B290, the same code in Sly 3)
 void InitDzgRows(DZG* p, int cdzMax)
 {
     p->cdzMax = cdzMax;

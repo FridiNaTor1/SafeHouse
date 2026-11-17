@@ -45,6 +45,12 @@ enum XFM : int16_t
     XFM_Hold21 = 21,
 };
 
+// Sly 3's record modes are these with one mode inserted at 6 (the case lists of UpdateAloXfs orig3 0x28CA78 / Sly 2
+// 0x22DE88, FXfmMoving 0x28EFD8, FXfmStatic 0x28F010, Hold / ReleaseXfMode 0x28F260 / 0x28F2E0: Sly 2's 0..5 stay,
+// 6.. are one further on). The native runtime keeps Sly 2's numbers; a mode read from Sly 3 data or a Sly 3 script
+// goes through this. Sly 3's own 6 is not ported (grouped with 0 in 0x28CA78's first switch): the static mode here.
+constexpr int Xfm2FromXfm3(int n3) { return n3 < 6 ? n3 : n3 == 6 ? XFM_Static : n3 - 1; }
+
 // A controller of a record (orig: 0x2C..0x80 bytes from the slot heap 0x3E123C, vtables 0x2CAF08.. by kind:
 // slot 1 Start (becomes the head), 2 End (no longer the head), 3 Refresh (the head stays), 4 Fetch (the record's
 // parameter left its segment: give it the next one), 6 Copy).
@@ -65,6 +71,11 @@ struct CTRL
     // current value, no velocity
     virtual void Query(glm::vec4* ppos, glm::vec4* pvel, float g = 0.0f);
     bool FFirst() const;     // orig 0x12CEE0
+    // slot 6 (Copy, through NewCtrlInit 0x12E3F0 from a clone 0x1F6068 / orig3 0x23F400): a new controller of this
+    // kind with this one's settings (null: not copied: an ASEGA's channel belongs to the source's ASEGA)
+    virtual CTRL* PctrlCopy() const { return nullptr; }
+    // the copy's references into the source object moved to the copy (the joint's pair, the mover record)
+    virtual void RemapCopy(const ALO* paloSrc, ALO* paloDst) { (void)paloSrc; (void)paloDst; }
 };
 
 // kind 1 (0x2CA820): the record rests at a value (the loaded one): orig 0x12D088 puts +0x20 into the segment.
@@ -74,6 +85,7 @@ struct CTRLPOS : CTRL
     glm::vec4 pos{0.0f};        // +0x20
     void Fetch() override;      // orig 0x12D088
     void Query(glm::vec4* ppos, glm::vec4* pvel, float g = 0.0f) override;  // orig 0x12D0D8
+    CTRL* PctrlCopy() const override { return new CTRLPOS(*this); }
 };
 
 // kind 0 (0x2CAF08): an ASEGA's channel driving the record (asega.cpp).
@@ -107,6 +119,7 @@ struct CTRLLOOKAT : CTRLJOB
     void End() override;        // orig 0x12D210
     void Fetch() override;      // orig 0x12D220
     void Query(glm::vec4* ppos, glm::vec4* pvel, float g = 0.0f) override;  // orig 0x12D4D8
+    CTRL* PctrlCopy() const override { auto* p = new CTRLLOOKAT(*this); p->fPrev = false; return p; }
 };
 
 // kind 4 (0x2CA7A0, 0x12D508): the record looks along the motion of the translation record up its chain
@@ -114,6 +127,8 @@ struct CTRLLOOKMOTION : CTRLJOB
 {
     XF* pxfMover = nullptr;     // +0x24
     void Fetch() override;      // orig 0x12D508
+    CTRL* PctrlCopy() const override { return new CTRLLOOKMOTION(*this); }
+    void RemapCopy(const ALO* paloSrc, ALO* paloDst) override;
 };
 
 // kind 8 (0x2CA6E0): a fixed target with velocity and an arrival time (0x12E010: the segment {+0x20, +0x30}, state 2,
@@ -125,6 +140,7 @@ struct CTRLTARGET : CTRL
     glm::vec4 vel{0.0f};        // +0x30
     void Fetch() override;      // orig 0x12E010
     void SetGoal(const glm::vec4& newPos, const glm::vec4& newVel);  // orig 0x12E0F0
+    CTRL* PctrlCopy() const override { return new CTRLTARGET(*this); }
 };
 
 // kind 5 (0x2CA760): forwards to a source controller (+0x10) and adds an offset (+0x20) to its segment
@@ -167,6 +183,11 @@ void RemoveXfCtrl(ALO* palo, XF* pxf, CTRL* pctrl);
 // orig: 0x002301D0: re-sorts the list by priority
 void SortXfCtrls(ALO* palo, XF* pxf);
 bool FXfHasCtrl(const XF* pxf, const CTRL* pctrl);  // orig 0x12D058
+
+// The clone's controllers (orig 0x1F6068 / orig3 0x23F400: each record's list copied by NewCtrlInit 0x12E3F0 and
+// added by priority, 0x230018): the source's records' controllers onto the copy's records of the same index, and
+// the joints (the IK limbs copied with their records remapped; their controllers point at the copy's).
+void CloneAloCtrls(const ALO* paloSrc, ALO* paloDst);
 
 // orig: 0x0022C818: the parameter defaults (+0x80 = 0, +0x84 = 1, pointers to them)
 void ResetXfParams(XF* pxf);

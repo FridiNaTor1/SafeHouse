@@ -175,6 +175,8 @@ void MarkWheel(VEHICLE& vehicle, VEHICLEWHEEL& wheel, SOE* entry, const BSPREF& 
     if (best>0) PxpAddSw(&owner->asoe.front(),entry,XformPos(frame,bestPoint),glm::vec3(plane),10,nullptr,nullptr,&wheel.contacts,best);
 }
 
+} // namespace
+
 // orig0x1D3E48: only support against a stationary other physics root (slot62).
 void VehicleOwnContacts(ALO* owner, SOE* entry, int, const BSPREF& tree, int root, XP**) {
     VEHICLE* vehicle=Pvehicle(owner);
@@ -186,6 +188,8 @@ void VehicleOwnContacts(ALO* owner, SOE* entry, int, const BSPREF& tree, int roo
     for (VEHICLEWHEEL& wheel:vehicle->wheels) MarkWheel(*vehicle,wheel,entry,tree,root);
 }
 NATIVEFN(0x1D3E48,VehicleOwnContacts);
+// orig3 0x206C10 (the RC car's slot 63): the same, its four wheels (0x206188 = MarkWheel with Sly 3's offsets)
+NATIVEFN3(0x206C10,VehicleOwnContacts);
 
 // orig0x1D3F30/0x1F4DA8: discard only this pair's per-wheel contacts.
 void VehicleRemoveContacts(ALO* owner, ALO* other) {
@@ -202,6 +206,7 @@ void VehicleRemoveContacts(ALO* owner, ALO* other) {
     }
 }
 NATIVEFN(0x1D3F30,VehicleRemoveContacts);
+NATIVEFN3(0x206CD8,VehicleRemoveContacts);   // orig3 0x206CD8 -> 0x23DEF8 per wheel
 
 // orig0x1D4178 ->0x1F50E0, then0x1F5480 for each wheel's lower position.
 void VehicleBounds(ALO* owner) {
@@ -216,6 +221,10 @@ void VehicleBounds(ALO* owner) {
     }
 }
 NATIVEFN(0x1D4178,VehicleBounds);
+NATIVEFN3(0x206F58,VehicleBounds);           // orig3 0x206F58 -> 0x23E940(point, radius) per wheel
+NATIVEFN3(0x27C278,VehicleBounds);           // orig3 0x27C278 (the dump truck's slot 54): the same
+
+namespace {
 
 // orig0x1FAB78 adds the linear/angular force response, without the velocity-mode
 // guard of the independent acceleration helpers.
@@ -305,9 +314,18 @@ void UpdateVehicle(LO* owner) {
 } // namespace
 
 VEHICLE* Pvehicle(LO* owner) {
-    if (!owner || !owner->pcls || owner->pcls->PfnOrig(16)!=0x1D19A8) return nullptr;
-    VEHICLE& v=s_vehicles[owner]; v.owner=static_cast<ALO*>(owner); return &v;
+    if (!owner || !owner->pcls) return nullptr;
+    const bool rc=FIsRcCar3(owner), truck=!rc && FIsTruck3(owner);
+    if (!rc && !truck && owner->pcls->PfnOrig(16)!=0x1D19A8) return nullptr;
+    auto [it,fNew]=s_vehicles.try_emplace(owner);
+    VEHICLE& v=it->second; v.owner=static_cast<ALO*>(owner);
+    if (fNew && rc) InitRcCar3(v);
+    if (fNew && truck) InitTruck3(v);
+    return &v;
 }
+XP* BestVehicleContact(const VEHICLEWHEEL& wheel) { return BestContact(wheel); }
+void VehicleForceAt(ALO* owner,const glm::vec3& point,const glm::vec3& force) { ForceAt(owner,point,force); }
+void VehicleAccelRotation(ALO* owner,const glm::vec3& acceleration) { AccelRotation(owner,acceleration); }
 // Native replacement for the original world arena lifetime: unlink controllers
 // while their owners' transform records still exist, then release wheel contacts.
 void ResetVehicles() {
@@ -315,6 +333,7 @@ void ResetVehicles() {
         for (auto& side:v.sides) { CTRL* control=side.controller; DeleteCtrl(&control); side.controller=nullptr; }
         for (auto& attachment:v.attachments) { CTRL* control=attachment->meshBinding; DeleteCtrl(&control); attachment->meshBinding=nullptr; }
         for (auto& wheel:v.wheels) { FreeSwXpList(wheel.contacts); wheel.contacts=nullptr; }
+        FreeSwXpList(v.truck.impacts); v.truck.impacts=nullptr;
     }
     s_vehicles.clear(); ResetVehicleBindings();
 }
@@ -335,6 +354,8 @@ void CloneVehicle(const LO* source,LO* destination) {
 void PostLoadVehicle(LO* owner) {
     VEHICLE* vehicle=Pvehicle(owner); if (!vehicle || vehicle->loaded) return;
     VEHICLE& v=*vehicle; ALO* p=v.owner;
+    if (v.truck.on) { PostLoadTruck3(v); v.loaded=true; return; }
+    if (v.rc.on) { PostLoadRcCar3(v); v.loaded=true; return; }
     auto object=[&](const OPTVAL& value)->LO* { return value.pbasic?dynamic_cast<LO*>(value.pbasic):value.n==-1?nullptr:PloFindRelative(owner,value.n); };
     for (const OPT& option:owner->aopt) {
         if (option.aval.empty()) continue;
@@ -386,7 +407,10 @@ void PostLoadVehicle(LO* owner) {
 // orig0x1D41F8: draw-time suspension heights and rolling/steering transforms.
 void DrawVehiclePose(ALO* owner) {
     VEHICLE* v=Pvehicle(owner); if (!v || !v->loaded) return;
-    const glm::vec3 velocity=VecConvertXfs(nullptr,PxfObj(owner),VelAloPos(owner));
+    // (orig3 0x206FD8, the RC car: no velocity in its jump (mode 4); the rear wheels add +0x394; no world update in
+    // the jump; the wheels' dust effects are not drawn natively)
+    const bool rc=v->rc.on, jumping=rc && v->rc.mode==4;
+    const glm::vec3 velocity=jumping?glm::vec3(0):VecConvertXfs(nullptr,PxfObj(owner),VelAloPos(owner));
     static const cmm::SMP heightCurve{1500,500,0.1f}, speedUp{20,5,0.2f}, speedDown{5,0,0.2f};
     for (size_t i=0;i<v->wheels.size();++i) {
         VEHICLEWHEEL& wheel=v->wheels[i];
@@ -399,17 +423,18 @@ void DrawVehiclePose(ALO* owner) {
         point=PosConvertXfs(PxfObj(owner),wheel.node->pxfRef,point);
         const float desired=i<2?0:v->drive/wheel.radius;
         if (hit) {
-            const float current=velocity.x/wheel.radius;
+            float current=velocity.x/wheel.radius;
+            if (rc && i>=2) current+=v->rc.rearSteer;
             if ((desired>0 && current<0.25f*desired) || (desired<0 && 0.25f*desired<current))
                 wheel.speed=cmm::GSmooth(wheel.speed,0.25f*desired,g_clock.dt,&speedUp,nullptr);
             else wheel.speed=current;
-        } else wheel.speed=cmm::GSmooth(wheel.speed,desired,g_clock.dt,std::fabs(wheel.speed)<std::fabs(desired)?&speedUp:&speedDown,nullptr);
+        } else wheel.speed=cmm::GSmooth(wheel.speed,desired+(rc && i>=2?v->rc.rearSteer:0.0f),g_clock.dt,std::fabs(wheel.speed)<std::fabs(desired)?&speedUp:&speedDown,nullptr);
         wheel.angle=cmm::RadNormalize(wheel.angle+wheel.speed*g_clock.dt);
         const glm::mat3 steering=BuildRotateMatrixAxis(wheel.tilt,g_normalZ), rolling=BuildRotateMatrixAxis(wheel.angle,g_normalY);
         SetMat3(&wheel.node->mat,steering*rolling); SetPos(&wheel.node->mat,point);
         wheel.node->nStamp=++g_cXfStamp;
     }
-    UpdateAloXfWorlds(owner);
+    if (!jumping) UpdateAloXfWorlds(owner);
     TraceVehicle(*v,"pose");
 }
 

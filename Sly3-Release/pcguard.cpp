@@ -89,7 +89,7 @@ void SurveyGuards(SW* psw, FILE* pf)
 {
     InitWorldAnimationRecords(psw);
     std::unordered_set<int> seen;
-    for (int cid = 0x38; cid <= 0x43; ++cid)
+    for (int cid = S3CID(0x38); cid <= 0x43; ++cid)  // (the guards: Sly 3 0x3A..0x43)
         for (LO* plo : psw->mpcidaplo[cid])
         {
             if (plo->iclone != 0 || !seen.insert(plo->oid).second || !FCidDerivedFrom(plo->Cid(), S3CID(0x30))) continue;

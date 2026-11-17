@@ -113,6 +113,15 @@ std::set<int> SetLevelGroups(const nlohmann::json& index);
 // Marks the level groups in an index (the converter): a group named the world's code or "<code>_...".
 void MarkLevelGroups(nlohmann::ordered_json& index, const std::string& code);
 
+// (the map editor, notes/EDITOR_2026-11-12.md) Set while a world is put together: where each binary part file's bytes
+// went in the world file (the loader's offsets back to a part: rel relative to the installation, as the part's path).
+struct RAVELSEG
+{
+    std::string rel;
+    std::size_t ibWorld = 0, ibFile = 0, cb = 0;
+};
+extern std::vector<RAVELSEG>* g_paravelseg;
+
 // The codecs (also the tools' --world-text / --world-scripts).
 bool FTextBlockToJson(const uint8_t* pb, std::size_t cb, bool fWide, nlohmann::ordered_json& j, std::string& error);
 bool FTextJsonToBlock(const nlohmann::json& j, std::vector<uint8_t>& ab, std::string& error);

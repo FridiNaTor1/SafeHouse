@@ -29,6 +29,7 @@
 #include "menu.h"
 #include "region.h"
 #include "joy.h"
+#include "modsave.h"
 #include "moviegl.h"
 #include "pcinput.h"
 #include "ref.h"
@@ -702,6 +703,7 @@ bool FWriteSaveSlot(int islot)
     MergeReplaySave(gs);   // (QoL Replay Jobs: a replay keeps the save's progress)
     std::string err;
     if (!FWriteGameSaveBlock(s.path, gs, err)) { std::printf("save: %s\n", err.c_str()); return false; }
+    WriteModSave(s.path);   // (mod packages' custom tasks: the side file, modsave.h; nothing without them)
     s.save = gs;
     s.fFile = true;
     s.tWrite = std::filesystem::last_write_time(cane::path(s.path), ec).time_since_epoch().count();
@@ -787,6 +789,7 @@ void OnGameRecordEvent(int grfReq)
     {
         g_gamesave = GAMESAVE{};
         ValidateGameSave();
+        ClearModSave();
         g_islotChosen = -1;
     }
     else if ((grfReq & 0x40) && s_fPending)
@@ -795,6 +798,7 @@ void OnGameRecordEvent(int grfReq)
         // settings applied (0x1D8FF8)
         g_gamesave = s_gsPending;
         ValidateGameSave();
+        ApplyPendingModSave();
         ApplyVibrationSetting();
         ApplyGameSettings(g_gamesave);
     }
@@ -893,6 +897,13 @@ void StartGameFromSave(SW* psw, const GAMESAVE* pgs)
     }
     s_gsPending = *pgs;
     s_fPending = true;
+    {
+        // (mod packages' custom tasks, modsave.h: the slot's side file with its save; a new game: none)
+        std::string pathSlot;
+        for (const SAVESLOT& sl : g_aslot)
+            if (pgs == &sl.save && dt != 0.0f) pathSlot = sl.path;
+        PendModSave(pathSlot);
+    }
     g_taskmgr.oidJob = -1;   // (taskmgr +0x10 / +0x14 / +0x18)
     g_taskmgr.oidTask = -1;
     if (dt == 0.0f)
@@ -998,7 +1009,11 @@ std::string StrFrontEndScript(int id)
             // (Japanese text from the languages folder on a European disc: the executable's labels are Latin-1 text
             // for the disc's own font, so the line is the text's, as on the USA disc)
             const bool fLabels = g_disc.VaLanguageLabels() && !(FWideChars() && !FWideText());
-            const std::string label = fLabels ? StrLanguageHelpLabel(g_clock.t - s_tTitleShown) : StrLocalized(s_pswText, IdText(0x56));
+            std::string label = fLabels ? StrLanguageHelpLabel(g_clock.t - s_tTitleShown) : StrLocalized(s_pswText, IdText(0x56));
+            // (the Japanese / Korean disc's text 0x56 names Cross, its menus' back button; the title's language menu
+            // opens with Triangle on every disc, above)
+            if (!fLabels && g_disc.FJapaneseBuild())
+                if (const auto at = label.find("&2X&."); at != std::string::npos) label.replace(at, 5, "&2T&.");
             if (!label.empty()) str += "\n" + label;
         }
         return str;

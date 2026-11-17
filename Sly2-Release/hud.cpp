@@ -785,8 +785,9 @@ std::string StrWrapped(const FONTBRX& fontBase, const FONTBRX* pfontOther, const
     float wAtSpace = 0.0f;
     // (the Japanese text: the line's characters so far: where each starts (its codes before it included), the
     // character and its width)
-    struct LCH { size_t ib; uint32_t ch; float dx; };
+    struct LCH { size_t ib; uint32_t ch; float dx; size_t ibCh; };
     std::vector<LCH> aline;
+    const bool fKorean = !FLatinLineBreaks() && FKoreanLineBreaks();
     size_t ibNext = 0;   // where the next character starts (after the last one)
     for (size_t i = 0; i < out.size(); ++i)
     {
@@ -805,17 +806,42 @@ std::string StrWrapped(const FONTBRX& fontBase, const FONTBRX* pfontOther, const
         std::size_t cb = 1;
         const uint32_t ch = ChDecode(out, i, &cb);
         const float dx = pfont->DxFromCh(ch) * k88;
-        if (!FLatinLineBreaks())   // (PC: Latin text on the Japanese disc, langstore.h: at spaces, below)
+        if (!FLatinLineBreaks())   // (PC: Latin text on the Japanese / Korean disc, langstore.h: at spaces, below)
         {
             // orig JP 0x217538: the character that passes the box goes to the next line, with the characters before
             // it back to the last place a line may break (JP 0x220840: not before a closing mark, not after an
             // opening one); without one the line breaks before that character. Nothing hangs past the box.
-            const LCH lch{ibNext, ch, dx};
+            const LCH lch{ibNext, ch, dx, i};
             if (w + dx > wBox && w > 0.0f)
             {
                 size_t j = aline.size();   // (break before aline[j], j == size: before this character)
-                while (j > 0 && (FJapaneseNoBreakBefore(j < aline.size() ? aline[j].ch : ch) || FJapaneseNoBreakAfter(aline[j - 1].ch)))
-                    --j;
+                if (fKorean)
+                {
+                    // orig KR 0x2176D8: back to the last space or hyphen of the line, the line breaking after it
+                    while (j > 0 && !FKoreanBreakAfter(aline[j - 1].ch)) --j;
+                    if (j > 0 && aline[j - 1].ch == ' ')
+                    {
+                        // (the space ends the line, its width not counted (KR 0x217714): it becomes the line break)
+                        out[aline[j - 1].ibCh] = '\n';
+                        std::vector<LCH> anext;
+                        w = 0.0f;
+                        for (size_t k = j; k < aline.size(); ++k)
+                        {
+                            anext.push_back(aline[k]);
+                            w += aline[k].dx;
+                        }
+                        aline = std::move(anext);
+                        iSpace = std::string::npos;
+                        aline.push_back(lch);
+                        w += dx;
+                        i += cb - 1;
+                        ibNext = i + 1;
+                        continue;
+                    }
+                }
+                else
+                    while (j > 0 && (FJapaneseNoBreakBefore(j < aline.size() ? aline[j].ch : ch) || FJapaneseNoBreakAfter(aline[j - 1].ch)))
+                        --j;
                 if (j == 0) j = aline.size();
                 if (static const bool s_fLog = std::getenv("SLY2N_WRAPLOG") != nullptr; s_fLog && j < aline.size())
                     std::printf("wrap: %zu moved down: %s\n", aline.size() - j, out.c_str());
@@ -825,13 +851,13 @@ std::string StrWrapped(const FONTBRX& fontBase, const FONTBRX* pfontOther, const
                 w = 0.0f;
                 for (size_t k = j; k < aline.size(); ++k)
                 {
-                    anext.push_back({aline[k].ib + 1, aline[k].ch, aline[k].dx});
+                    anext.push_back({aline[k].ib + 1, aline[k].ch, aline[k].dx, aline[k].ibCh + 1});
                     w += aline[k].dx;
                 }
                 aline = std::move(anext);
                 iSpace = std::string::npos;
                 ++i;
-                aline.push_back({lch.ib + 1, ch, dx});
+                aline.push_back({lch.ib + 1, ch, dx, lch.ibCh + 1});
             }
             else aline.push_back(lch);
             w += dx;
@@ -956,6 +982,31 @@ void CHud::DrawTextBox(const FONTBRX& fontBase, const FONTBRX* pfontOther, const
             else if (pg.kind == PROMPTGLYPH::Glyph && pfont->PglyphFromCh(uint8_t(pg.ch)))
                 DrawSprite(*pfont->PglyphFromCh(uint8_t(pg.ch)), st);
             else DrawSprite(*pglyph, st);
+        }
+        else if (uint32_t ajamo[3]; CHangulJamo(ch, ajamo) && pfont->PglyphFromCh(0x1100))
+        {
+            // orig KR 0x217F58 / 0x11B430: a Hangul syllable from the font's jamo, in a cell as wide as U+1100's
+            // advance and a line high whose bottom is the pen: the leading consonant and the vowel over the whole
+            // cell (KR table 0x2C41F0), the final consonant as its glyph is beside a side vowel, under a horizontal
+            // vowel 0.7 high, its centre moved by (-0.25, +0.19) of the cell (KR table 0x2C41D0). Each jamo is its
+            // glyph drawn at its box's left and bottom, scaled by the box against the cell (KR 0x217FD8).
+            const float wCell = pfont->DxFromCh(0x1100) * k88 * sx * UI_KX, hCell = dyLine;
+            const bool fUnder = FHangulHorizontalVowel(ajamo[1]);
+            for (int j = 0; j < 3; ++j)
+            {
+                const SELEM* pjamo = ajamo[j] ? pfont->PglyphFromCh(ajamo[j]) : nullptr;
+                if (!pjamo) continue;
+                const bool fSmall = j == 2 && fUnder;
+                const float rsy = fSmall ? 0.7f : 1.0f;
+                const float cx = tx + wCell * (0.5f + (fSmall ? -0.25f : 0.0f));
+                const float cy = ty - hCell * (0.5f - (fSmall ? 0.19f : 0.0f));
+                HUDSTATE stj = st;
+                stj.m[4] *= rsy;
+                stj.m[5] *= rsy;
+                stj.m[8] = cx - 0.5f * wCell;
+                stj.m[9] = cy + 0.5f * hCell * rsy;
+                DrawSprite(*pjamo, stj);
+            }
         }
         tx += pfont->DxFromCh(ch) * k88 * sx * UI_KX;
     }

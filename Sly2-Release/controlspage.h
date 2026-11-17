@@ -11,6 +11,11 @@
 // - Xbox / Nintendo / Steam Deck / Steam Controller / PS4 / PS5: Kenney's picture of that controller (CC0,
 //   prompts_devices.png) in the PS2 picture's place and the device's button icons, each label's line ending at the
 //   button its action is bound to; "R1 / L3 / R3 button" in the labels named for the bound buttons.
+// - VR controllers (the prompts' VR families): both hands in one picture (original drawings, tools/pack_prompts.py
+//   VR_DEVICES) of the controllers in use (the OpenXR interaction profile bound: Meta Quest Touch, Valve Index, the Steam
+//   Frame's, WMR, HTC Vive wands / Vive Focus 3 / Vive Cosmos, Pico, HP Reverb G2; promptglyph.h VrControllersFor), the
+//   buttons in the VR pad layout (platform/vr_pad_map.h) with those controllers' icons; in First Person the camera's
+//   label is the right stick's snap turn.
 // - Keyboard and mouse: a list of the same labels, each with the keycaps / mouse buttons bound to its action (the
 //   live bindings).
 // The title, the portrait, the background and the labels' font and colours stay the game's own. Drawn from

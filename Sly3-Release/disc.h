@@ -7,8 +7,11 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <map>
+#include <set>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 // A file on the disc: the decoded form of the game's 64-byte keyed record (the CHK/FK records of the original:
@@ -55,6 +58,46 @@ public:
     bool FOpen(const std::string& path, std::string& error);
     // The mods folder (before FOpen; empty: none).
     void SetModsDirectory(const std::string& dir) { m_dirMods = dir; }
+    // Mod packages (platform/mod_package.h, shared with Sly 2; before FOpen): fDiscover: the fitting packages of
+    // <mods folder>/Packages in their load order, under the loose mods folder's files; adirExtra: packages (their
+    // folders, with mod.json) loaded last, over everything (--mod-package DIR).
+    void SetModPackages(bool fDiscover, const std::vector<std::string>& adirExtra)
+    {
+        m_fDiscoverPackages = fDiscover;
+        m_adirPackagesExtra = adirExtra;
+    }
+    // (the map editor) The world parts read through pfn instead (rel relative to the installation; its project over
+    // the installation), no mods folder or package; null: as usual.
+    void SetPartReader(std::function<bool(const std::string& rel, std::vector<uint8_t>& ab)> pfn) { m_pfnPartRead = std::move(pfn); }
+    // The packages FOpen loaded (ids, in load order).
+    [[nodiscard]] const std::vector<std::string>& AidPackages() const { return m_aidPackage; }
+    // (PC: the map editor's new jobs) The loaded packages' custom tasks (mod.json "custom_tasks", mod_package.h): the
+    // package that lists task oid of world (SzWorldName's name); "" when none does. FCustomTasks: any package lists one.
+    [[nodiscard]] bool FCustomTasks() const { return !m_mpCustomTask.empty(); }
+    [[nodiscard]] std::string IdPackageOfTask(const std::string& world, int oid) const
+    {
+        const auto it = m_mpCustomTask.find({world, oid});
+        return it != m_mpCustomTask.end() ? it->second : std::string();
+    }
+    // The folders mod files come from, lowest priority first (the packages' files/ in load order, the loose mods
+    // folder, the command line's packages): world parts, Textures/, Text/ and Languages/ are read from each (a later
+    // one's file or string winning).
+    [[nodiscard]] const std::vector<std::string>& AdirModRoots() const { return m_adirModRoots; }
+    // (Sly 3) a disc-image installation's world parts (<dir>/Worlds/worlds.json, ConvertWorldsCommand): the worlds read
+    // from their parts, the mods folder's over them
+    void OpenWorldParts(const std::string& dir);
+    void DisableWorldParts() { m_fNoWorldParts = true; }
+    // The shared languages folder (langstore.h; before FOpen; empty: none): manifest paths "@languages/<rest>" are
+    // <dir>/<rest> (the languages an installation keeps there, shared with the other regions' installations).
+    void SetLanguagesDirectory(const std::string& dir) { m_dirLanguages = dir; }
+    [[nodiscard]] const std::string& DirLanguages() const { return m_dirLanguages; }
+    // (languages, langstore.h) a file outside the installation served at a sector of its own (from
+    // ISECTOR_EXTERNAL on), on converted files and disc images alike; the same path gets the same sector. Only while
+    // nothing streams (at start, before the game runs).
+    uint32_t IsectorExternal(const std::string& path);
+    static constexpr uint32_t ISECTOR_EXTERNAL = 0xE0000000u;
+    // The manifest's "name" of the file at isector ("2054 Prologue"; "" when none or on a disc image).
+    [[nodiscard]] std::string SzFileName(uint32_t isector) const;
     // True: the converted files; false: a disc image (the developer option).
     [[nodiscard]] bool FConverted() const { return m_fConverted; }
     // The boot executable's name (SCUS_973.16, SCES_525.29, SCPS_150.90).
@@ -69,6 +112,10 @@ public:
     std::vector<uint8_t> ReadFile(const FK& fk) const;
     // A world-format file's bytes, decompressed (worlds, screen files: LZSS on the disc, stored decompressed).
     std::vector<uint8_t> ReadWorld(const FK& fk) const;
+    // (PC: the guest characters' kept worlds, pcloader.h) the world without its level: the groups its index marks
+    // "level" loaded empty (worldparts.h). A world that is not in parts (an older installation, a mod's whole file, a
+    // disc image) or SLY2N_KEPTFULL=1: the whole world (ReadWorld).
+    std::vector<uint8_t> ReadWorldReduced(const FK& fk) const;
     // cb bytes at offset ib of the file that starts at sector isector (streams: banks, music, dialog, movies).
     // Converted files: the bytes past the file's end read as zeros; false when no file starts there. A disc image:
     // the image's bytes (past the file, the next sectors'), false past the image's end.
@@ -128,14 +175,37 @@ private:
         std::string pathInstalled;
         bool fDecompressed = false;  // a world-format file stored decompressed
         bool fMod = false;           // the mods folder's
+        bool fParts = false;         // (format 3) a world as its parts: path is its index (worldparts.h)
+        std::string rel;             // its path in the installation ("/" separated)
         std::map<std::string, std::string> mppart;  // its parts' files (PathPart)
     };
     const FILEENT* PentFind(uint32_t isector) const;
+    // PentFind on converted files, an external file on either (nullptr: a disc image's sector)
+    const FILEENT* PentFindAny(uint32_t isector) const;
+    mutable std::vector<FILEENT> m_aentExternal;
+    std::vector<uint8_t> ReadWorldParts(const FK& fk, bool fReduced) const;
 
     std::string m_path;
     bool m_fConverted = false;
     std::string m_szExe;
     std::string m_dirMods;
+    std::string m_dirLanguages;
+    std::unordered_map<std::string, uint32_t> m_mppathExternal;   // (IsectorExternal: path -> ISECTOR_EXTERNAL + index)
+    std::map<uint32_t, std::string> m_mpsectorName;      // (SzFileName)
+    std::set<std::string> m_setMod;   // the mods folder's files (relative, "/" separated)
+    // (mod packages, ResolveModFiles) every mod file (relative, "/" separated) -> its file: the packages' files/ in load
+    // order, then the loose mods folder, then the command line's packages (a later one winning)
+    void ResolveModFiles();
+    std::map<std::string, std::string> m_mpModPath;
+    std::function<bool(const std::string& rel, std::vector<uint8_t>& ab)> m_pfnPartRead;   // (SetPartReader)
+    bool m_fDiscoverPackages = true;
+    std::vector<std::string> m_adirPackagesExtra;
+    std::vector<std::string> m_aidPackage;
+    std::map<std::pair<std::string, int>, std::string> m_mpCustomTask;   // (FCustomTasks)
+    std::vector<std::string> m_adirModRoots;
+    std::map<uint32_t, FILEENT> m_mpsectorWorldParts;   // (Sly 3, OpenWorldParts) the worlds' indices by their sector
+    std::string m_dirWorldParts;                        // their installation folder
+    bool m_fNoWorldParts = false;
     int m_cmod = 0;
     std::map<uint32_t, std::string> m_mpsectorWorldName;  // (the world files' names, every copy's sector)
     std::vector<std::pair<uint32_t, FILEENT>> m_afile;  // sorted by sector

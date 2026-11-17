@@ -19,6 +19,8 @@
 #include "snd989.h"
 #include "sound.h"
 #include "ai.h"
+#include "ainoise.h"
+#include "guard.h"
 #include "sw.h"
 #include "screenrt.h"
 #include "sm.h"
@@ -29,6 +31,8 @@
 #include "worldaccess.h"
 #include "update.h"
 #include "xf.h"
+#include "activate.h"
+#include "splitscreen3.h"
 
 #include <glm/glm.hpp>
 
@@ -79,6 +83,19 @@ bool FListener(glm::vec3* ppos, glm::mat3* pmat)
     LO* player = g_psw ? PloPoCurrent(g_psw) : nullptr;
     *ppos = player ? PosAloCenter(static_cast<ALO*>(player)) : g_cm.pos;
     *pmat = glm::transpose(g_cm.mat);  // (mat * d = (forward . d, left . d, up . d))
+    return true;
+}
+
+// orig3 0x245440 (SW +0x4FA4: the world's two-player mode): each player's character (vt slot 36's position)
+bool FListeners2p(glm::vec3 apos[2], bool afHave[2])
+{
+    if (!g_psw || !split3::FActive() || !split3::FTwoCameras(g_psw)) return false;
+    for (int i = 0; i < 2; ++i)
+    {
+        LO* plo = split3::PloPlayer(g_psw, i);
+        afHave[i] = plo != nullptr;
+        if (plo) apos[i] = PosLoWorld(plo);
+    }
     return true;
 }
 
@@ -143,7 +160,7 @@ void AddAmbientFalloffs(LO* plo, struct AMBREC& r);
 namespace
 {
 
-// The subtitle box (screen object 0x373, found by the HUD's 0x1A3020 at each world start): the cut scenes' box
+// The subtitle box (Sly 3: screen object 1060 (Sly 2's 0x373), found by orig3 0x1C4F18 at each world start): the cut scenes' box
 // (its letterbox bars and the line 0x2EF), shown / hidden by the pause count with grf 1 (SW +0x3D80) going 0 -> 1 / back
 // to 0 (0x20F128 / 0x20F160: at once, before the scene's first line starts). Outside the pauses a line shows in the
 // binocucom windows 0x368..0x36A.
@@ -159,8 +176,10 @@ LO* PloSubtitleBox(SW* psw)
     {
         s_serialSub = psw->serial;
         s_ploSub = nullptr;
+        // (Sly 3: orig3 0x1C4F18 at the world start: D_00370AC8 = the global screen object 1060 (0x424, kind 1029; Sly 2's
+        // 0x373): the cut scenes' letterbox bars with the subtitle lines 844 / 845; its timers set to 1 (0x261050))
         for (LO* p : AploOfClass(psw, S3CID(0x7E)))
-            if (p->oid == 0x373) s_ploSub = p;
+            if (p->oid == 0x424) s_ploSub = p;
     }
     return s_ploSub;
 }
@@ -168,7 +187,7 @@ LO* PloSubtitleBox(SW* psw)
 void UpdateSubtitleBox(SW* psw) { PloSubtitleBox(psw); }
 }  // namespace
 
-// orig: 0x001A3078 (the subtitle reset, then vt slot 49 with -1)
+// orig: 0x001A3078 (the subtitle reset, then vt slot 49 with -1) (orig3 0x1C4F70: 0x27ED18 the line reset, vt slot 56)
 void ShowSubtitleBox()
 {
     if (std::getenv("SLY2N_SUBDBG")) std::printf("subtitle box: shown (id %d) t %.3f\n", g_dialogsub.id, g_clock.t);
@@ -178,7 +197,7 @@ void ShowSubtitleBox()
     ShowScreenObj(plo, -1);
 }
 
-// orig: 0x001A30D0 (vt slot 50)
+// orig: 0x001A30D0 (vt slot 50) (orig3 0x1C4FC0: vt slot 54)
 void HideSubtitleBox()
 {
     if (std::getenv("SLY2N_SUBDBG")) std::printf("subtitle box: hidden (id %d) t %.3f\n", g_dialogsub.id, g_clock.t);
@@ -191,10 +210,12 @@ struct SOUNDPASS
 {
     SOUNDPASS()
     {
-        // orig: 0x001251E8 (bif 129): create the sound, attach its source, and
-        // return a BASIC reference (0x1294C0 adds a reference). The active sound
-        // list owns its separate reference while playback is pending or active.
-        SetBifGameHook(static_cast<BIFK>(129), [](int, CRef* argv, CFrame*) {
+        // orig: 0x001251E8 (Sly 2 bif 129; Sly 3 bif 137, orig3 0x1270F8 -> 0x2459F8 / 0x244F08 / 0x12B218): create
+        // the sound, attach its source, and return a BASIC reference (0x1294C0 adds a reference). The active sound
+        // list owns its separate reference while playback is pending or active. (s3-plane: it was hooked at 129,
+        // which in Sly 3 is find-objects-in-bounding-box 0x126808 (gamebif.cpp): Sly 2's 120..139 are Sly 3's
+        // 128..147, bif.cpp Bifk3FromBif2)
+        SetBifGameHook(static_cast<BIFK>(137), [](int, CRef* argv, CFrame*) {
             CSndPlain* psnd = PsndNewPlain(argv[0].m_n);
             LO* source = dynamic_cast<LO*>(argv[1].m_pbasic);
             psnd->SetSource(source);
@@ -388,7 +409,7 @@ void OnAmbientRegistered(LO* plo)
     }
 }
 
-// orig 0x12EDE8 (slot 22: the sounds stopped and dropped)
+// orig 0x12EDE8 (slot 22: the sounds stopped and dropped) (orig3: 0x1312C8, the same C in the Sly 3 decomp)
 void OnAmbientUnregistered(LO* plo)
 {
     auto it = s_mpamb.find(plo);
@@ -458,7 +479,7 @@ void BindDialogTargets(int oidSpeaker)
                     (void*)s_apsmaDialog[2], (void*)s_apsmaDialog[4], (void*)s_apsmaDialog[5], g_clock.t);
 }
 
-// orig: 0x001FE0E8 (one event: target 3 the speaker's eyes 0x1F80D0, the others their SMA's goal 0x1F0660)
+// orig: 0x001FE0E8 (one event: target 3 the speaker's eyes 0x1F80D0, the others their SMA's goal 0x1F0660) (orig3: 0x2480C8, the same C in the Sly 3 decomp)
 void FireDialogTarget(int /*oidSpeaker*/, int itarget, int32_t value)
 {
     if (std::getenv("SLY2N_TALKPRINT")) std::printf("talk: target %d value %d (t %.2f)\n", itarget, value, g_clock.t);
@@ -524,6 +545,7 @@ void StartupGameSound()
     g_sndhooks.pfnDialogEvent = FireDialogTarget;
     g_sndhooks.pfnDialogUnbind = UnbindDialogTargets;
     g_sndhooks.pfnListener = FListener;
+    g_sndhooks.pfnListeners2p = FListeners2p;
     g_sndhooks.pfnFSourceAlive = FSourceAlive;
     g_sndhooks.pfnSourcePosWorld = PosSourceWorld;
     g_sndhooks.pfnMusicStem = MusicStem;
@@ -539,6 +561,29 @@ void StartupGameSound()
         };
     g_sndhooks.pfnText = [](int id) { return StrLocalized(g_psw, id); };
     g_sndhooks.pfnTGame = [] { return g_clock.t; };
+    // (orig3 0x2479C8, Sly 2's 0x1FDA48: the USB headset's microphone) the first pad's player (0x1F4AD0(game, 0)) when
+    // a PLAYER (0x13B500 class 0x33, Sly 2's 0x34), its position (its vt slot 36's matrix); the noise held at it of the
+    // fixed template (Sly 3: GAME +0x47BC = oid 798, the sixth of 0x173C10's, as Sly 2's 711 at SW +0x4034: checked in
+    // the decomp and the reference RAM) with the level's radius and height range, 0x173E48.
+    g_sndhooks.pfnMicPlayer = [](glm::vec3* ppos) -> void* {
+        LO* plo = g_psw ? PloPoCurrent(g_psw) : nullptr;
+        if (!plo || !FIsLoDerivedFrom(plo, S3CID(0x34))) return nullptr;
+        *ppos = PosAi(plo);
+        return plo;
+    };
+    g_sndhooks.pfnHoldMicNoise = [](void** ppnoise, void* pplayer, const glm::vec3& pos, float sRadius, float dz) {
+        NOISE** ppn = reinterpret_cast<NOISE**>(ppnoise);
+        if (*ppn && !FNoiseAllocated(*ppn)) *ppn = nullptr;   // (its world's noises already freed)
+        NOISETMPL* pt = pplayer ? PtmplNoiseFixed(5) : nullptr;
+        if (pt)
+        {
+            pt->sRadius = sRadius;
+            pt->rz = glm::vec2(-dz, dz);
+        }
+        if (std::getenv("SLY2N_MICPRINT") && pt)
+            std::printf("mic: t %.3f level %.3f noise r %.0f dz %.0f at (%.0f %.0f %.0f)\n", g_clock.t, g_sound.gMic, sRadius, dz, pos.x, pos.y, pos.z);
+        SetHeldNoise(ppn, pt, pos, static_cast<LO*>(pplayer));
+    };
     // the gait's footsteps (actanim.cpp, 0x1FBB90 + 0x1FB2F8 with the walker as the source)
     g_pfnGaitFootstep = [](int sfx, ALO* palo, float gVolume) {
         if (CSnd* p = PsndStartSound(sfx, gVolume, 0, palo)) p->SetFalloff(500.0f, 2000.0f);  // (0x20BC08)

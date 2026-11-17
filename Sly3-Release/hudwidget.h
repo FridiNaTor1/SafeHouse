@@ -33,6 +33,7 @@ void DrawHud(SW* psw, int width, int height);
 void HudPrompt(int id, float g);
 // orig: 0x001DA578 on 0x3DA0C0: the prompt's string id ends
 void HudPromptEnd(int id);
+int IdDisplayedHudPrompt();
 int IdHudPrompt();  // 0x1DA5B0
 
 // orig: 0x001ABD98 (the auto-save after a job / a saving task): into the slot the game is played from (frontend.h
@@ -43,3 +44,7 @@ extern bool (*g_pfnWriteSave)();
 
 // (Sly 3) orig3 0x001A9568: the current player has the pad (its pause menu, its gauge)
 bool FPadHasPlayer3(SW* psw);
+
+// (Sly 3 two-player: the view whose HUD is being drawn (game.cpp split block), -1 the whole picture; the fades on a
+// player's camera (FADE option 1063) are drawn in that view only)
+extern int g_iviewHud3;

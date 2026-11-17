@@ -26,6 +26,7 @@
 #include <string>
 #include <vector>
 #include "audio_devices.h"
+#include "monitor_select.h"
 #include "settings_ini.h"
 #include "system_settings.h"
 #include "texture_options.h"
@@ -60,6 +61,9 @@ struct Sly2GameOptions {
     // load on the other cores while the game goes on (the original texture drawn until a replacement is ready)
     int textureCache = kTextureCacheDefault;
     int textureStreaming = kTextureStreamingDefault;
+    // (Sly 3 only, sly3_settings.h) the original's Camera Options per camera kind (the save's flags joyLeft
+    // mpcamprefkfReverseHorizontal / Vertical [kind]): [kind][0] Left/Right, [kind][1] Up/Down reversed
+    int camReverse[8][2] = {};
 };
 
 // VR (Sly2-Release vr.h; only used with a headset): [VR] in the file.
@@ -317,6 +321,19 @@ inline const std::vector<Sly2Key>& sly2Schema() {
         k.push_back(choiceKey("Display", "Window Mode", "Windowed, Borderless or Fullscreen", &SS::windowMode,
                               { { Window_Windowed, "Windowed" }, { Window_Borderless, "Borderless" }, { Window_Fullscreen, "Fullscreen" } }));
         k.push_back(boolKey("Display", "VSync", "On or Off", &SS::vsyncEnabled));
+        // (settings v22, platform/monitor_select.h) the monitor Fullscreen / Borderless fill and Windowed opens on
+        k.push_back({ "Display", "Monitor",
+                      "Primary, or a monitor as the game or the launcher lists it (<name> | <n> | <x>,<y>: the n-th monitor with\n"
+                      "that name, at that desktop position); a monitor that is not connected uses the primary one",
+                      [](const Sly2Settings& s) {
+                          const std::string id = monitor::load(s.system.monitor);
+                          return id.empty() ? std::string("Primary") : id;
+                      },
+                      [](Sly2Settings& s, const std::string& v) {
+                          monitor::Parsed p;
+                          monitor::store(s.system.monitor, monitor::parse(v, p) ? monitor::trim(v) : std::string());
+                          return true;
+                      } });
         k.push_back(choiceKey("Display", "Aspect Ratio", "Fit (the whole window), 4:3, 16:9, 16:10, PS2 4:3 or PS2 16:9",
                               &SS::aspectMode,
                               { { Aspect_Fit, "Fit" }, { Aspect_4_3, "4:3" }, { Aspect_16_9, "16:9" }, { Aspect_16_10, "16:10" },
@@ -659,18 +676,31 @@ inline const std::vector<std::pair<const char*, const char*>>& sly2Sections() {
 
 inline constexpr const char* kSly2MetaSection = "SafeHouse";
 
+// A game's file: its keys, its sections in order, its first comment line and whether it carries the save-kept options'
+// migration (Sly 2's; Sly 3's file has the same format and a schema of its own: sly3_settings.h).
+struct GameIniLayout {
+    const std::vector<Sly2Key>& (*schema)();
+    const std::vector<std::pair<const char*, const char*>>& (*sections)();
+    const char* title;
+    bool saveOptions;
+};
+inline const GameIniLayout& sly2Layout() {
+    static const GameIniLayout layout{ sly2Schema, sly2Sections, "SafeHouse - Sly 2: Band of Thieves settings.", true };
+    return layout;
+}
+
 // ------------------------------------------------------------ text
-inline std::string sly2ToIni(const Sly2Settings& s) {
+inline std::string gameToIni(const Sly2Settings& s, const GameIniLayout& layout) {
     ini::Writer w;
-    w.comment("SafeHouse - Sly 2: Band of Thieves settings.");
+    w.comment(layout.title);
     w.comment("The game and the launcher both use this file. Lines starting with ; are comments.");
     w.comment("A value that cannot be read is replaced by its default.");
-    const auto& schema = sly2Schema();
+    const auto& schema = layout.schema();
     auto writeUnknown = [&](const char* sectionName) {
         if (const ini::Section* u = s.unknown.section(sectionName))
             for (const auto& e : u->entries) w.value(e.key, e.value);
     };
-    for (const auto& [section, about] : sly2Sections()) {
+    for (const auto& [section, about] : layout.sections()) {
         w.section(section);
         if (about) w.comment(about);
         for (const auto& key : schema) {
@@ -691,7 +721,7 @@ inline std::string sly2ToIni(const Sly2Settings& s) {
     for (const auto& u : s.unknown.sections) {
         if (u.entries.empty()) continue;
         bool known = ini::keyForm(u.name) == ini::keyForm(kSly2MetaSection);
-        for (const auto& [section, about] : sly2Sections()) known |= ini::keyForm(u.name) == ini::keyForm(section);
+        for (const auto& [section, about] : layout.sections()) known |= ini::keyForm(u.name) == ini::keyForm(section);
         if (known) continue;
         if (u.name.empty()) w.section("Other");
         else w.section(u.name);
@@ -699,20 +729,21 @@ inline std::string sly2ToIni(const Sly2Settings& s) {
     }
     return w.str();
 }
+inline std::string sly2ToIni(const Sly2Settings& s) { return gameToIni(s, sly2Layout()); }
 
 // Reads INI text over the defaults (a key missing or invalid keeps its default). invalidOut: the keys whose value
 // could not be read.
-inline Sly2Settings sly2FromIni(std::string_view text, std::vector<std::string>* invalidOut = nullptr) {
+inline Sly2Settings gameFromIni(std::string_view text, const GameIniLayout& layout, std::vector<std::string>* invalidOut = nullptr) {
     Sly2Settings s;
     const ini::Document doc = ini::parse(text);
-    const auto& schema = sly2Schema();
+    const auto& schema = layout.schema();
     for (const auto& section : doc.sections) {
         const std::string sectionForm = ini::keyForm(section.name);
         for (const auto& e : section.entries) {
             const std::string keyForm = ini::keyForm(e.key);
             if (sectionForm == ini::keyForm(kSly2MetaSection)) {
                 if (keyForm == "version") continue;
-                if (keyForm == "pendingsaveoptions") {
+                if (keyForm == "pendingsaveoptions" && layout.saveOptions) {
                     s.pendingSaveOptions.clear();
                     std::string item;
                     for (size_t i = 0; i <= e.value.size(); ++i) {
@@ -751,6 +782,9 @@ inline Sly2Settings sly2FromIni(std::string_view text, std::vector<std::string>*
     s.game.speakers = std::clamp(s.game.speakers, 0, 2);
     return s;
 }
+inline Sly2Settings sly2FromIni(std::string_view text, std::vector<std::string>* invalidOut = nullptr) {
+    return gameFromIni(text, sly2Layout(), invalidOut);
+}
 
 // ------------------------------------------------------------ the file
 // Ok: Settings.ini read. Migrated: no INI; Saves/system_settings.dat was read into it (the caller writes the INI).
@@ -758,31 +792,37 @@ inline Sly2Settings sly2FromIni(std::string_view text, std::vector<std::string>*
 // overwrite it).
 enum class Sly2Load { Ok, Migrated, Missing, Unreadable };
 
-inline Sly2Load loadSly2(const fs::path& userDir, Sly2Settings& out, std::vector<std::string>* invalidOut = nullptr) {
+inline Sly2Load loadGameIni(const fs::path& userDir, const GameIniLayout& layout, Sly2Settings& out,
+                            std::vector<std::string>* invalidOut = nullptr) {
     out = Sly2Settings{};
     const fs::path file = sly2SettingsPath(userDir);
     std::error_code ec;
     if (fs::exists(file, ec)) {
         std::string text;
         if (!ini::readFile(file, text)) return Sly2Load::Unreadable;
-        out = sly2FromIni(text, invalidOut);
+        out = gameFromIni(text, layout, invalidOut);
         return Sly2Load::Ok;
     }
     // the old binary file (any version: system_settings.h load)
     SystemSettings old{};
     const LoadResult result = load(settingsPath(userDir), old);
-    out.pendingSaveOptions = allSaveOptions();
+    if (layout.saveOptions) out.pendingSaveOptions = allSaveOptions();
     if (!loaded(result)) return Sly2Load::Missing;
     sanitizeStatic(old, 0, 0, kSly2DefaultKeyboardBindings);
     out.system = old;
     return Sly2Load::Migrated;
 }
 
-inline bool saveSly2(const fs::path& userDir, const Sly2Settings& s) {
+inline Sly2Load loadSly2(const fs::path& userDir, Sly2Settings& out, std::vector<std::string>* invalidOut = nullptr) {
+    return loadGameIni(userDir, sly2Layout(), out, invalidOut);
+}
+
+inline bool saveGameIni(const fs::path& userDir, const GameIniLayout& layout, const Sly2Settings& s) {
     Sly2Settings copy = s;
     sanitizeStatic(copy.system, 0, 0, kSly2DefaultKeyboardBindings);
-    return ini::writeFileAtomic(sly2SettingsPath(userDir), sly2ToIni(copy));
+    return ini::writeFileAtomic(sly2SettingsPath(userDir), gameToIni(copy, layout));
 }
+inline bool saveSly2(const fs::path& userDir, const Sly2Settings& s) { return saveGameIni(userDir, sly2Layout(), s); }
 
 // The save-kept options of the newest save, taken in once (the migration's pending ones): a save's own value wins over
 // the default; vibration needs both the old PC switch and the save's option on; the save's volumes (stored as 1 - the

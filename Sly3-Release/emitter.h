@@ -24,7 +24,10 @@ struct LO;
 struct RENDEROPTS;
 
 // The particle drawing for the frame pass (render.cpp calls it where kind 12 is drawn).
-void DrawParticles(const glm::mat4& matWorldToClip, const glm::vec3& posCamera, float aspect);
+// (VR, both eyes in one pass on Vulkan: pmatView1 / pposView1 the second eye's; the program's two-view stage draws it)
+// fStencilOff: the stencil test turned off first (glDisable(GL_STENCIL_TEST), or in the draw packets' states).
+void DrawParticles(const glm::mat4& matWorldToClip, const glm::vec3& posCamera, float aspect, const glm::mat4* pmatView1 = nullptr,
+                   const glm::vec3* pposView1 = nullptr, bool fStencilOff = false);
 
 // Statistics for tests.
 struct PARTICLESTATS
@@ -143,11 +146,15 @@ void SetPepsys(PEPSYS* pp, const PEPSYSDESC& d);
 void EmitPepsys(PEPSYS* pp, int c, const glm::vec3* apos, const glm::vec3* avel, const float* at0, const float* at1);
 int CParticlesPepsys(const PEPSYS* pp);
 void SetPepsysDraw(PEPSYS* pp, bool fHidden, const std::vector<glm::mat4>& amat);
+// orig3: 0x14A6D0 (the PSYS's draw, vt slot 21): each instance drawn only for a camera within the effect's radius
+// (+0xD0's +0x34 through 0x18E500 -> 0x168048, pe.cpp FPeNearCamera); 0: no test
+void SetPepsysCullRadius(PEPSYS* pp, float sRadius);
+bool FPeNearCamera3(const glm::vec3& c, float r);   // pe.cpp (its camera test, FPeNearCamera)
 void WrapPepsysInBox(PEPSYS* pp, const glm::mat4& mat, const glm::vec3& lo, const glm::vec3& hi);
 // A PE RIP stream's particle (orig3 0x202330, pe.cpp): a RIP of the model at pos (kind: the component's record +0x1C)
 struct PERIPDESC
 {
-    int kind = 3;
+    int kind = 6;                   // (Sly 3's numbering, RipKindOf3; the record template 0x347F38's default 6)
     const LO* pmodel = nullptr;     // +0x1C (the record's +0xC object)
     const LO* plo2 = nullptr;       // the record's +0x10 object (the kinds' second object)
     glm::vec3 pos{0.0f}, vel{0.0f}, accel{0.0f}, axisSpin{0, 0, 1};
@@ -155,5 +162,11 @@ struct PERIPDESC
     float size[3] = {1, 0, 0}, alpha[3] = {1, 0, 0};
     float gSpin = 0, gDrag = 0;
     glm::mat3 ori{1.0f};
+    uint32_t aw[3] = {};            // the record's +0 / +4 / +8 (EOPIDs 599..606: the kinds' slot 2 parameters)
 };
 void LaunchPeRip(const PERIPDESC& d);
+// Sly 3's RIP kinds (0x20B9C0's table 0x3259D0, vtables 0x361E30..0x3621A0) as the native (Sly 2 numbered) kinds:
+// Sly 3 0 drip -> 1, 2 along the velocity -> 3, 3 follow -> 4, 4 flutter -> 5, 5 -> 6, 6 plain -> 7, 7 shrapnel -> 8,
+// 8 screen space -> 9. Sly 2's 0 / 2 (the explosion trail) are gone; Sly 3's 1 (a RIP carrying a kind-0 PE, 0x20E3E8),
+// 9 (in a transform's space, 0x20CC20) and 10 (0x20E770) are new: drawn as plain RIPs (no goal-path data uses them).
+int RipKindOf3(int kind3);

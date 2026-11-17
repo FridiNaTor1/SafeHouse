@@ -12,6 +12,8 @@
 
 #include "actanim.h"
 #include "actor.h"
+#include "game/fishing3.h"   // (s3-gadgets: Bentley's Fishing Pole controller, Sly 3 +0x1830)
+#include "game/ball3.h"      // (s3-gadgets: Murray's Be The Ball, Sly 3 +0x1AD4..)
 
 #include <glm/glm.hpp>
 
@@ -70,9 +72,14 @@ struct BENTLEY : ACTOR
     int f1818 = 0;                 // +0x1818
     int f181C = 0;                 // +0x181C (the other idle: +0x1820)
     ASEG* paseg1820 = nullptr;     // +0x1820
-    ABILITY aabil[6];              // +0x1824.. (0x136A28)
-    int n1870 = 5;                 // +0x1870 (triangle's ability)
+    // (s3-gadgets) Sly 3's entries (orig3 0x13D2D0 / 0x1400C0: +0x1950 + 0xC i, kinds 4, 6, 10, 16, 13, 15, 8), by the
+    // gadget framework's Sly 2-side ids (game/items3.h: 4, 7 Trigger Bomb, 11 Health Extractor, 13 Reduction Bomb, 113
+    // Grapple-Cam, 37 Rage Bomb, 26 Alarm Clock)
+    ABILITY aabil[7];              // Sly 3 +0x1950.. (Sly 2 +0x1824.., 0x136A28)
+    int n1870 = 4;                 // Sly 3 +0x19A8 = 4 (Sly 2 +0x1870 = 5): triangle's ability
+    LO* ploGrappleCam = nullptr;   // (s3-gadgets) Sly 3 +0x19B8: the placed Grapple-Cam (class 0x56; orig3 0x1404D8)
     ASEG* paseg1878 = nullptr;     // +0x1878 (state 14's; else +0x1374 at 1.5)
+    sly3::FISH3 fish;              // (s3-gadgets) Sly 3 +0x1830: the Fishing Pole's controller (state 16, game/fishing3.cpp)
 };
 
 struct MURRAY : ACTOR
@@ -134,6 +141,7 @@ struct MURRAY : ACTOR
     int n1534 = 0;                 // +0x1534 the hold's kind (the rows of 0x2C0908 / 0x2C0948 / 0x2C0990)
     // the second throw controller (state 15: the Bentley toss; peer +0x191C, selected +0x1920 = the global Bentley)
     JTTHROW jtthrow1910;           // +0x1910
+    sly3::BALL3 ball;              // (s3-gadgets) Sly 3 +0x1AD4..: Be The Ball (state 22, game/ball3.cpp)
 };
 
 BENTLEY* PbentleyFromLo(LO* plo);  // null outside 0x37
@@ -158,6 +166,7 @@ void StartMurrayHold(MURRAY* p, SMA* psmaObj, int oid, int k, int fSnap);
 // orig 0x001B7000: Murray takes the used object (a cid 0x24 use, 0x184330): when he can carry (+0x13EC), it at +0x13F0,
 // the pickup kind 0, his state 4, facing the object's owner (+0x180)
 void MurrayTakeObject(ACTOR* pa, LO* puse);
+bool FStartMurrayCarrySlam(MURRAY* p);
 
 // orig: 0x00136530 (Bentley's carried controller +0x1800: -1 none, 0 held by Murray's +0x1910, 1 thrown)
 void SetBentleyCarried(BENTLEY* p, int k);

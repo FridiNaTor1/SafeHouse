@@ -240,9 +240,9 @@ target_sources(sly2_game PRIVATE "${gen}/sly2/embedded_shaders.h" "${gen}/sly2/s
 
 # ---- Sly 3 (forked from Sly 2: the same build, its numbers in game/)
 file(GLOB sly3_sources CONFIGURE_DEPENDS "${root}/Sly3-Release/*.cpp" "${root}/Sly3-Release/*.c" "${root}/Sly3-Release/game/*.cpp")
-add_library(sly3_game STATIC ${sly3_sources} "${root}/Libraries/miniz/miniz.c" "${root}/assets/prompts/prompt_data.cpp")
+add_library(sly3_game STATIC ${sly3_sources} "${root}/Libraries/miniz/miniz.c" "${root}/Libraries/lz4/lz4.c" "${root}/Libraries/lz4/lz4hc.c" "${root}/assets/prompts/prompt_data.cpp")
 cane_switch_game(sly3_game sly3)
-target_include_directories(sly3_game PRIVATE "${root}/Sly3-Release" "${root}/platform" "${root}/Libraries/miniz"
+target_include_directories(sly3_game PRIVATE "${root}/Sly3-Release" "${root}/platform" "${root}/Libraries/miniz" "${root}/Libraries/lz4"
   "${root}/assets/prompts" "${gen}/prompts" "${gen}/sly3")
 target_compile_definitions(sly3_game PRIVATE "SLY2N_DEV_ROOT=\"sdmc:/switch/SafeHouse\"" CANE_HAVE_PROMPT_ATLAS=1 CANE_HAVE_GAMECONTROLLERDB=1)
 file(MAKE_DIRECTORY "${gen}/sly3")

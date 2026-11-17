@@ -11,6 +11,7 @@
 
 #include "../platform/controller_family.h"
 
+#include <optional>
 #include <string>
 
 struct PROMPTGLYPH
@@ -29,26 +30,42 @@ cane::input::Family PromptFamily();
 bool PromptKeyboardActive();
 // How to draw icon-font glyph ch now.
 PROMPTGLYPH PromptGlyphFor(char ch);
+PROMPTGLYPH PromptGlyphForBinding(int binding, cane::input::Family family);
+
+// Use the action described by an authored prompt, even when it shares an original button.
+struct PROMPTTEXTGLYPHS
+{
+    explicit PROMPTTEXTGLYPHS(int textId);
+    ~PROMPTTEXTGLYPHS();
+    PROMPTTEXTGLYPHS(const PROMPTTEXTGLYPHS&) = delete;
+    PROMPTTEXTGLYPHS& operator=(const PROMPTTEXTGLYPHS&) = delete;
+private:
+    int previous;
+};
 // The icon of the bound Circle (skipcut.cpp's indicator): the same resolution as PromptGlyphFor('O').
 inline PROMPTGLYPH PromptGlyphCircle() { return PromptGlyphFor('O'); }
 // The short name of the button bound to the action an icon glyph names ("B", "Circle", "E").
 std::string PromptLabelFor(char ch);
+std::string StrPromptFallbackText(const std::string& text);
 
 // QoL (N39): the game's text names the Start and Select buttons by word ("Press START button for New Game", in the
 // European languages "Touche START :", "START-Taste", ...). With the prompts dynamic (not "Original PlayStation
 // Icons"), each whole upper-case word START / SELECT becomes the icon font's Start / Select glyph ("&2!&." /
 // "&2_&."), which PromptGlyphFor then draws for the device in use. Text without those words, and every text with
 // the option on, comes back unchanged. Only for text drawn with an icon font.
-std::string StrPromptButtonWords(const std::string& text);
+std::string StrPromptButtonWords(const std::string& text, int textId);
 
-// QoL (N40): an icon-font glyph drawn as a fixed keyboard key's keycap (a GLFW key) while the keyboard is in use,
-// for the PC's own hints that name a key (the debug menu's F10). Scoped: the override ends with the object.
+// An icon-font glyph drawn as a fixed keyboard key (e.g. the debug menu's F10).
+// Optionally override its controller binding for contextual action cues. Scoped to this object's lifetime.
 struct PROMPTKEYGLYPH
 {
-    PROMPTKEYGLYPH(char ch, int glfwKey);
+    PROMPTKEYGLYPH(char ch, int glfwKey, int controllerBinding = -2,
+                   std::optional<cane::input::Family> family = std::nullopt);
     ~PROMPTKEYGLYPH();
     PROMPTKEYGLYPH(const PROMPTKEYGLYPH&) = delete;
     PROMPTKEYGLYPH& operator=(const PROMPTKEYGLYPH&) = delete;
     char chPrev;
     int keyPrev;
+    int padPrev;
+    std::optional<cane::input::Family> familyPrev;
 };

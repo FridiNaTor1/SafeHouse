@@ -30,10 +30,32 @@ struct JOBACTORWALK : AIJOB
     int fWalk = 1;               // +0x38
     float uSpeed = 1.0f;         // +0x3C
     glm::vec3 posGoal{0.0f};     // +0x40
+    int fSly3 = 0;               // (Sly 3's 0xF4: 0x157970's region rule in SetGoal)
     void Init() override;
     void Enter() override;
     void SetGoal(const glm::vec3& pos);
     bool FAtGoal() const;
+};
+
+// Sly 3's 0xF3 JOBPATHSTEP (orig3 vt 0x354378: Init 0x157508, Enter 0x157538, Update 0x157648; the step 0x157688, done
+// 0x1577C0): a script's walk along a path (SCPT 0x33, 0x226D00 case 51) as steps of 200 along it, each walked by its child
+// 0xF4 (JOBACTORWALK, natively with its A8 follower); the next step once the child arrived. Natively 0x33 ran one A8 on
+// the whole curve (Sly 2's path step for actors is the follow job), which avoidance and the nav keep could hold off the path.
+constexpr CID CID_JOBPATHSTEP3 = 0x1F3;
+struct JOBPATHSTEP3 : AIJOB
+{
+    const CRV* pcrv = nullptr;   // +0x30 (the path object's curve)
+    int fForward = 0;            // +0x34 (the command's w[1]: toward the curve's end)
+    float s = -1.0f;             // +0x38 the step's place on the curve
+    glm::vec3 pos{0.0f};         // +0x40 the step's point
+    int fNoAvoid = 0;            // +0x58 (the run's +0x104)
+    int fWalk = 0;               // +0x5C (w[2])
+    float uSpeed = 1.0f;         // +0x60 (w[3])
+    void Init() override;
+    void Enter() override;
+    void Update() override;
+    void Step(bool fForce);
+    bool FDone() const;
 };
 
 struct JOBCOMPANION : AIJOB

@@ -129,13 +129,14 @@ struct MODSRC
 class CModStore
 {
 public:
-    // dirMods / dirPack: the folders holding Textures (the pack's: or Textures.pak; "": none). dirCache: the cache's
-    // folder ("": no cache). fSync: cache records are written before Load returns (the self test, the cache build
-    // command).
-    void Init(const std::string& dirMods, const std::string& dirPack, const std::string& dirCache, bool fSync, bool fQuiet = false)
+    // adirMods / dirPack: the folders holding Textures (adirMods: the mod folders, lowest priority first: the packages'
+    // files/, the loose mods folder; a later folder's PNG wins; the pack's: or Textures.pak; "": none). dirCache: the
+    // cache's folder ("": no cache). fSync: cache records are written before Load returns (the self test, the cache
+    // build command).
+    void Init(const std::vector<std::string>& adirMods, const std::string& dirPack, const std::string& dirCache, bool fSync, bool fQuiet = false)
     {
         const double t0 = MsTexStatsNow();
-        const std::string aroot[2] = {dirMods, dirPack};
+        const std::string aroot[2] = {adirMods.empty() ? std::string() : adirMods.back(), dirPack};
         size_t ac[2] = {};
         for (int isrc = 0; isrc < 2; ++isrc)
         {
@@ -156,13 +157,24 @@ public:
             }
             else
             {
-                const fs::path dir = cane::path(aroot[isrc]) / "Textures";
-                if (!fs::is_directory(dir, ec)) continue;
-                m_adir[isrc] = cane::utf8(dir);
-                for (const auto& e : fs::directory_iterator(dir, ec))
-                    if (e.is_regular_file(ec) && e.path().extension() == ".png" &&
-                        m_map.emplace(cane::utf8(e.path().filename()), MODSRC{cane::utf8(e.path()), isrc}).second)
-                        ++ac[isrc];
+                // (the mod folders: the highest priority first, the first of a name kept; the cache knows the source by
+                // the last folder's Textures path, each PNG by its name, size and time)
+                std::vector<std::string> adir;
+                if (isrc == 0) adir.assign(adirMods.rbegin(), adirMods.rend());
+                else adir.push_back(aroot[isrc]);
+                m_adir[isrc] = cane::utf8(cane::path(aroot[isrc]) / "Textures");
+                bool fAny = false;
+                for (const std::string& root : adir)
+                {
+                    const fs::path dir = cane::path(root) / "Textures";
+                    if (!fs::is_directory(dir, ec)) continue;
+                    fAny = true;
+                    for (const auto& e : fs::directory_iterator(dir, ec))
+                        if (e.is_regular_file(ec) && e.path().extension() == ".png" &&
+                            m_map.emplace(cane::utf8(e.path().filename()), MODSRC{cane::utf8(e.path()), isrc}).second)
+                            ++ac[isrc];
+                }
+                if (!fAny) { m_adir[isrc].clear(); continue; }
             }
             if (ac[isrc] && !fQuiet) std::printf("mods: %zu textures%s\n", ac[isrc], isrc ? " (texture pack)" : "");
         }
@@ -266,6 +278,16 @@ public:
         for (auto& ppack : m_appack)
             if (ppack) ppack->Flush();
     }
+    // (the map editor: the store emptied before an Init with other folders)
+    void Reset()
+    {
+        Flush();
+        m_map.clear();
+        m_pak.Close();
+        m_fPak = m_fPakStamp = false;
+        for (auto& dir : m_adir) dir.clear();
+        for (auto& ppack : m_appack) ppack.reset();
+    }
 
 private:
     std::unordered_map<std::string, MODSRC> m_map;
@@ -309,7 +331,7 @@ void QuitTexMods();
 void InitModState()
 {
     MODSTATE& st = ModState();
-    st.store.Init(g_disc.DirMods(), s_dirPack, FTextureCacheOn() ? DirTextureCache() : std::string(), false);
+    st.store.Init(g_disc.AdirModRoots(), s_dirPack, FTextureCacheOn() ? DirTextureCache() : std::string(), false);
 }
 void RegisterQuitTexMods()
 {
@@ -330,6 +352,12 @@ CModStore& Mods()
 }  // namespace
 
 void SetTexturePackDirectory(const std::string& dir) { s_dirPack = dir; }
+void ReloadTextureModsFrom(const std::vector<std::string>& adirMods)
+{
+    CModStore& store = Mods();
+    store.Reset();
+    store.Init(adirMods, s_dirPack, std::string(), true, true);
+}
 void SetTextureCacheDirectory(const std::string& dir) { s_dirCache = dir; }
 void SetTextureCacheEnabled(bool f) { s_fCacheSetting = f ? 1 : 0; }
 void StartTextureMods()
@@ -829,7 +857,7 @@ int BuildTextureCacheCommand()
     if (!FTextureCacheOn()) { std::printf("texture cache: turned off (Settings.ini [Graphics] Texture Cache, SLY2N_TEXCACHE)\n"); return 1; }
     const double t0 = MsTexStatsNow();
     CModStore store;
-    store.Init(g_disc.DirMods(), s_dirPack, DirTextureCache(), true);
+    store.Init(g_disc.AdirModRoots(), s_dirPack, DirTextureCache(), true);
     const size_t ctotal = store.Map().size();
     std::atomic<size_t> cdone{0}, cadded{0}, cfailed{0};
     std::mutex mtx;
@@ -900,7 +928,7 @@ int TextureCacheSelfTest(const std::string& dirIn)
     auto run = [&](const std::vector<std::string>& aname, bool fCache, size_t* pacentry = nullptr, fs::path* papath = nullptr) {
         std::map<std::string, RESULT> mp;
         CModStore store;
-        store.Init(cane::utf8(dirMods), cane::utf8(dirPack), fCache ? cane::utf8(dirCache) : std::string(), true, true);
+        store.Init({cane::utf8(dirMods)}, cane::utf8(dirPack), fCache ? cane::utf8(dirCache) : std::string(), true, true);
         for (const std::string& name : aname)
         {
             RESULT r;

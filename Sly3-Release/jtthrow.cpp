@@ -1,5 +1,6 @@
 #include "jtthrow.h"
 #include "game/sly3.h"
+#include "actioninput.h"
 
 #include "actmesh.h"
 #include "actor.h"
@@ -82,6 +83,12 @@ struct RegisterThrowParameters
     RegisterThrowParameters()
     {
         RegisterObjectMethod(0x10B230, [](LO* object, const std::vector<CRef>& args) {
+            if (std::getenv("SLY3_THROWDBG"))
+            {
+                std::printf("throw parameters: %d (cid 0x%X) %zu args:", object->oid, object->Cid(), args.size());
+                for (const CRef& a : args) std::printf(" [tag %d: %g | %g %g %g]", int(a.m_tagk), GArg({a}, 0), a.m_vector.x, a.m_vector.y, a.m_vector.z);
+                std::printf("\n");
+            }
             if (!FIsLoDerivedFrom(object, S3CID(0x34)) || args.size() < 7) return CRef(TAGK_Void);
             auto store = [&](uint32_t offset, float value) {
                 object->SetField(0, IB + offset, std::bit_cast<uint32_t>(value));
@@ -113,11 +120,6 @@ PADCTL* Pad(ACTOR* actor)
 {
     PODATA* data = PpodataFromLo(actor->palo);
     return data ? data->ppadctl : nullptr;
-}
-
-bool Take(PADCTL* pad, uint32_t buttons)
-{
-    return pad && GrfPadctlTakePressed(pad, buttons, 0.1f);
 }
 
 // The global Bentley is represented natively by the one initialized Bentley object.
@@ -181,7 +183,7 @@ void InitJtThrow(ACTOR* actor, JTTHROW& t, uint32_t ib)
 }
 void InitJtThrow(ACTOR* actor) { InitJtThrow(actor, actor->jtthrow, IB); }
 
-// orig: 0x0021F388, after 0x1400B8 has bound the actor's authored part table.
+// orig: 0x0021F388, after 0x1400B8 has bound the actor's authored part table. (orig3: 0x271EE8, the same C in the Sly 3 decomp)
 void PostLoadJtThrow(JTTHROW& t)
 {
     ACTOR* actor = t.owner;
@@ -472,7 +474,7 @@ void UpdateJtThrow(JTTHROW& t)
             if (!animation || FAsegaRetracted(animation))
             {
                 BENTLEY* bentley = SelectedBentley(t);
-                SetJtThrowState(t, bentley && bentley->state == 8 ? 4 : 0);
+                SetJtThrowState(t, bentley && bentley->state == BS3_Carried ? 4 : 0);
             }
             break;
         case 4: case 5: case 6:
@@ -481,16 +483,16 @@ void UpdateJtThrow(JTTHROW& t)
                 NotifyActorJumpKind(actor, 0);
                 break;
             }
-            if (Take(pad, 0xC0))
+            if (sly2actions::Take(pad, sly2actions::Action::ThrowRelease, 0xC0, 0.1f))
             {
                 SetJtThrowState(t, 7);
                 break;
             }
-            if (Take(pad, 0x30))
+            if (sly2actions::Take(pad, sly2actions::Action::ThrowCancel, 0x30, 0.1f))
             {
                 if (t.holdBlend) SetJtThrowState(t, 0);
                 else NotifyActorJumpKind(actor, 0);
-                if (BENTLEY* bentley = SelectedBentley(t); bentley && bentley->state == 8)
+                if (BENTLEY* bentley = SelectedBentley(t); bentley && bentley->state == BS3_Carried)
                     CancelBentleyThrow(actor, bentley);
                 RemoveMarker(t);
                 return;
@@ -505,6 +507,15 @@ void UpdateJtThrow(JTTHROW& t)
             }
             break;
         case 7:
+            if (std::getenv("SLY3_THROWDBG"))
+                std::printf("throw7: t %.3f anim %p clip %d at %.3f svt %.3f retracted %d hold %p\n", g_clock.t, (void*)animation,
+                            animation && animation->paseg ? animation->paseg->oid : -1, animation ? animation->t : -1.0f,
+                            animation ? animation->svt : 0.0f, animation ? int(FAsegaRetracted(animation)) : -1, (void*)t.holdBlend);
+            if (std::getenv("SLY3_THROWDBG"))
+                std::printf("throw7: weights %.3f %.3f turnAim %.3f aim %.1f..%.1f target %.1f %.1f %.1f flight %.3f tMax %.3f clips %d %d\n", Weight(t.throwBlend, 0),
+                            Weight(t.throwBlend, 1), t.radTurnAim, t.sAimMin, t.sAimMax, t.targetWorld.x, t.targetWorld.y, t.targetWorld.z, t.tFlight,
+                            animation && animation->paseg && PasegdOf(animation->paseg) ? PasegdOf(animation->paseg)->tMax : -1.0f,
+                            Clip(t, 0xA8) ? Clip(t, 0xA8)->oid : -1, Clip(t, 0xB4) ? Clip(t, 0xB4)->oid : -1);
             if (!animation || FAsegaRetracted(animation))
             {
                 if (t.holdBlend) SetJtThrowState(t, 0);
@@ -557,7 +568,7 @@ void ReleaseJtThrow(JTTHROW& t)
     if (!selected) return;
     bool release = true;
     if (BENTLEY* bentley = SelectedBentley(t))
-        release = bentley->state == 8 && SetThrownBentleyState(bentley, 1);
+        release = bentley->state == BS3_Carried && SetThrownBentleyState(bentley, 1);
     else
     {
         SetAloParent(selected, nullptr, nullptr, 3);

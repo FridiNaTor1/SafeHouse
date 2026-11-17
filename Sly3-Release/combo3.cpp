@@ -18,9 +18,13 @@
 // - the update 0x13A178 (Sly: 0x139FE0, vt +0x314, from UpdateActor 0x152A48 before the damage), the start 0x13A678,
 //   the state 0x13ABC8, the end 0x13AB30 (to the clip's event 0x2A8, else off), the messages 0x13A770 (the actor's
 //   handler 0x153738 passes them all on), the actor's condition mask 0x139E80 / 0x139BB0 (vt +0x34C).
+#include <algorithm>
 #include "combo3.h"
 
 #include "game/sly3.h"
+#include "game/guru3.h"
+#include "game/task3.h"
+#include "jump.h"
 
 #include "actanim.h"
 #include "actor.h"
@@ -32,12 +36,15 @@
 #include "clock.h"
 #include "guard.h"
 #include "po.h"
+#include "savedata.h"
 #include "sly.h"
+#include "so.h"
 #include "step.h"
 #include "stepphys.h"
 #include "sw.h"
 #include "vecmat.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <cmath>
 #include <cstdlib>
@@ -153,7 +160,8 @@ struct CMBDEF3
 
 struct CMBR3
 {
-    SLY* p = nullptr;
+    ACTOR* p = nullptr;   // the actor (orig3 runner +0)
+    SLY* psly = nullptr;  // (natively: Sly's copied Sly 2 states; null for the Guru, whose states are Sly 3's)
     int state = -1;
     float tState = 0.0f;
     CMBDEF3* pdef = nullptr;
@@ -169,7 +177,7 @@ struct CMBR3
     SW* psw = nullptr;
 };
 
-std::unordered_map<SLY*, std::unique_ptr<CMBR3>> s_mpcmbr;
+std::unordered_map<ACTOR*, std::unique_ptr<CMBR3>> s_mpcmbr;
 
 bool FComboDbg()
 {
@@ -194,7 +202,12 @@ bool FAbilityOwned3(int id)
     }();
     for (int n : s_a)
         if (n == id) return true;
-    return false;
+    // (s3-decomp) the progress: SW +0x4088's 0x43 keys are the power-ups' "powerUps mppukfAcquired <id>" (Sly 3's
+    // ids; written by 0x21F510 as a Bool, read by 0x2BC010); game/items3.h. (0x21F410's other branch, the current
+    // mission object's own id, is not ported.) SLY3_GADGETS owns them all (gadget.cpp).
+    if (id < 0 || id >= 0x43) return false;
+    const CRef r = RefGetProgress({"powerUps", "mppukfAcquired", std::to_string(id)});
+    return r.m_tagk == TAGK_Bool ? r.m_bool : r.m_tagk == TAGK_S32 ? r.m_n != 0 : false;
 }
 
 // Sly 2's states (the copied sly.cpp) -> Sly 3's (orig3 0x1ADDD0's numbers)
@@ -226,8 +239,13 @@ int State3OfSly(const SLY* p)
 // orig3 0x1AF200 (vt +0x324): the actor's generic state
 int NGeneric3(const CMBR3& c)
 {
-    if (c.fAttack) return 9;
-    switch (State3OfSly(c.p))
+    if (!c.psly) return ActorJumpKind(c.p);   // (the Guru: his vt +0x324 = slot 100, 0x22CFA8: the jump kind of his state)
+    // (the attack is Sly 3's state 23; natively Sly stands in 0 / 2 under it (SetGeneric3). Another state set since (a
+    // script's clip, kind 5: state 19; a jump; a hit) left 23 in the original: not the attack any more. s3-ai round 20:
+    // the boot intro's combo 7561 ended under ASEG 244 (state 19) and its end's SetGeneric3(0) retracted the clip at
+    // 0.55 s, before its 0x2A7 at 0.883 s let the elephant go)
+    if (c.fAttack && (c.psly->state == 0 || c.psly->state == 2)) return 9;
+    switch (State3OfSly(c.psly))
     {
     case -1: return -1;
     case 0: return 0;
@@ -247,7 +265,14 @@ int NGeneric3(const CMBR3& c)
 // orig3 0x1AF150 (vt +0x31C) for the two generic states the combos set: 9 (Sly's 23: the attack) and 0 (standing)
 void SetGeneric3(CMBR3& c, int g)
 {
-    SLY* p = c.p;
+    if (!c.psly)
+    {
+        // (the Guru: vt +0x31C = slot 99, 0x22CF00: kind 9 -> his state 7, 0 -> 0)
+        c.fAttack = g == 9;
+        NotifyActorJumpKind(c.p, g);
+        return;
+    }
+    SLY* p = c.psly;
     if (g == 9)
     {
         if (!c.fAttack)
@@ -260,19 +285,25 @@ void SetGeneric3(CMBR3& c, int g)
     }
     else if (g == 0)
     {
+        // (orig3 0x1ADDD0 entering 0 from 23: the idle SM's state 0x197, the cane brought back)
+        if (c.fAttack && p->state == 0)
+        {
+            g_fSlyLeavingAttack3 = true;
+            SetSlyState(p, 0, -1);
+        }
         c.fAttack = false;
         if (p->state != 0 && p->state != 2) SetSlyState(p, 0, -1);
     }
 }
 
 // orig3 0x2503C8(actor, 0.1): off the floor for more than 0.1 s
-bool FAirborne3(const SLY* p) { return !p->pxpFloor; }  // TODO(player): the 0.1 s (+0x21C the floor's last time)
+bool FAirborne3(const ACTOR* p) { return !p->pxpFloor; }  // TODO(player): the 0.1 s (+0x21C the floor's last time)
 
 // orig3 0x139BB0 / 0x139E80 (vt +0x34C): the conditions met now
 uint32_t GrfComboConditions(CMBR3& c)
 {
-    SLY* p = c.p;
-    PADCTL* pc = PpadctlOfSly3(p);
+    ACTOR* p = c.p;
+    PADCTL* pc = PpadctlOfActor3(p);
     uint32_t grf;
     const float u = pc ? pc->uJoy : 0.0f;
     if (u == 0.0f) grf = 0x1000;  // the stick at rest
@@ -317,8 +348,9 @@ uint32_t GrfComboConditions(CMBR3& c)
 // orig3 0x1AF308(actor, 2) (vt +0x38C): may Sly attack now (states 0, 1, 2, 6, 10, 23; the jump's 0x1BD830)
 bool FCanAttack3(const CMBR3& c)
 {
+    if (!c.psly) return FGuruCanDo3(c.p->palo, 2);   // (the Guru's vt +0x38C = slot 113, 0x22D1F8)
     if (c.fAttack) return true;
-    switch (State3OfSly(c.p))
+    switch (State3OfSly(c.psly))
     {
     case 0: case 1: case 2: case 3: case 6: case 10: return true;
     default: return false;
@@ -372,6 +404,9 @@ void ChooseComboState(CMBR3& c)
 // orig3 0x13A678
 void StartCombo(CMBR3& c, CMBDEF3* pdef)
 {
+    // orig3 0x13A678: 0x1854C8(GAME, 0x59, def): the tasks hear of the combo (e.g. m2_shaman's 2667 closes on the
+    // Guru's 34973, the disappearance; module 36)
+    if (pdef && pdef->plo) Broadcast3(0x59, pdef->plo);
     SetComboState(c, -1);
     c.pdef = pdef;
     c.gBlend = 1.0f;
@@ -400,25 +435,37 @@ void EndCombo(CMBR3& c)
     SetComboState(c, -1);
 }
 
-CMBR3* PcmbrOf(SLY* p, bool fCreate)
+CMBR3* PcmbrOf(ACTOR* p, bool fCreate)
 {
     auto it = s_mpcmbr.find(p);
     if (it != s_mpcmbr.end() && it->second->psw == g_psw) return it->second.get();
     if (!fCreate || !g_psw) return nullptr;
     auto pc = std::make_unique<CMBR3>();
     pc->p = p;
+    pc->psly = dynamic_cast<SLY*>(p);
     pc->psw = g_psw;
     // the definitions Sly owns, in their load order (the options' 1657 prepend them to the list)
+    // (PC, split screen's teams: a copy of Sly made while the world runs has no definitions of its own (class 0x94 leaves
+    // the world at its start, a copy skips removed children): its template's, their clips the template's)
+    LO* ploOwner = p->palo;
+    if (p->palo->ploCloneOf && std::none_of(g_psw->mpcidaplo[0x94].begin(), g_psw->mpcidaplo[0x94].end(),
+                                            [&](LO* plo) { return plo->paloParent == p->palo; }))
+        ploOwner = p->palo->ploCloneOf;
     for (LO* plo : g_psw->mpcidaplo[0x94])
     {
-        if (plo->paloParent != p->palo) continue;
+        if (plo->paloParent != ploOwner) continue;
         auto pd = std::make_unique<CMBDEF3>();
         pd->plo = plo;
         bool fList = false;
         for (const OPT& o : plo->aopt)
         {
             const OPTVAL* pv = o.aval.empty() ? nullptr : &o.aval[0];
-            auto clip = [&]() -> ASEG* { return pv ? dynamic_cast<ASEG*>(PloFindOwned3(p->palo, pv->n)) : nullptr; };
+            auto clip = [&]() -> ASEG* {
+                if (!pv) return nullptr;
+                LO* plo = PloFindOwned3(p->palo, pv->n);
+                if (!plo && ploOwner != p->palo) plo = PloFindOwned3(ploOwner, pv->n);
+                return dynamic_cast<ASEG*>(plo);
+            };
             switch (o.eopid)
             {
             case 1657: fList = true; break;
@@ -440,8 +487,24 @@ CMBR3* PcmbrOf(SLY* p, bool fCreate)
                     for (const OPTVAL& w : pv->alist) pd->aability.push_back(w.n);
                 break;
             default:
-                // (the others: their field by the descriptor; TODO(player) when a definition uses one)
-                if (FComboDbg()) std::printf("combo3: def %d option %d not read\n", plo->oid, o.eopid);
+                // (the others by their descriptor's field (0x32CA80 +0x18): e.g. the Guru's 1660 (+0x48, L1 held) and
+                // 1665 (+0x5C, cancelled when L1 is let go))
+                switch (Eopd3(o.eopid).c18)
+                {
+                case 0x44: if (pv) pd->btnPress = uint32_t(pv->n); break;
+                case 0x48: if (pv) pd->grfHeld = uint32_t(pv->n); break;
+                case 0x4C: if (pv) pd->grfNotHeld = uint32_t(pv->n); break;
+                case 0x50: if (pv) pd->grfCancel = uint32_t(pv->n); break;
+                case 0x54: if (pv) pd->btnCancel = uint32_t(pv->n); break;
+                case 0x58: if (pv) pd->grfCancelHeld = uint32_t(pv->n); break;
+                case 0x5C: if (pv) pd->grfCancelNotHeld = uint32_t(pv->n); break;
+                case 0x6C: if (pv) pd->nPrio = pv->n; break;
+                case 0x70: if (pv) pd->dtPress = pv->ag[0]; break;
+                case 0x74: if (pv) pd->sSteer = pv->ag[0]; break;
+                default:
+                    if (FComboDbg()) std::printf("combo3: def %d option %d not read\n", plo->oid, o.eopid);
+                    break;
+                }
                 break;
             }
         }
@@ -457,7 +520,16 @@ CMBR3* PcmbrOf(SLY* p, bool fCreate)
     };
     pc->pdefAbility31 = bypart(0x1F44);
     pc->pdefAbility25 = bypart(0x1F48);
-    if (FComboDbg()) std::printf("combo3: Sly %d: %zu definitions, %zu in the list\n", p->palo->oid, pc->adef.size(), pc->alist.size());
+    if (FComboDbg())
+    {
+        std::printf("combo3: actor %d: %zu definitions, %zu in the list\n", p->palo->oid, pc->adef.size(), pc->alist.size());
+        for (const auto& pd : pc->adef)
+            std::printf("combo3: def %d%s press 0x%X mask 0x%X held 0x%X notheld 0x%X cancel 0x%X/0x%X/0x%X/0x%X prio %d dt %.2f steer %.0f clips %d %d %d keep 0x%X abilities %zu\n",
+                        pd->plo->oid, std::find(pc->alist.begin(), pc->alist.end(), pd.get()) != pc->alist.end() ? " (listed)" : "",
+                        pd->btnPress, pd->grfMask, pd->grfHeld, pd->grfNotHeld, pd->grfCancel, pd->btnCancel, pd->grfCancelHeld,
+                        pd->grfCancelNotHeld, pd->nPrio, pd->dtPress, pd->sSteer, pd->pclip ? pd->pclip->oid : -1,
+                        pd->pclipMove ? pd->pclipMove->oid : -1, pd->pclipFollow ? pd->pclipFollow->oid : -1, pd->btnKeep, pd->aability.size());
+    }
     CMBR3* pr = pc.get();
     s_mpcmbr[p] = std::move(pc);
     return pr;
@@ -473,32 +545,53 @@ bool FDefAbilities(const CMBDEF3* pd)
 }
 }  // namespace
 
-PADCTL* PpadctlOfSly3(SLY* p)
+PADCTL* PpadctlOfActor3(ACTOR* p)
 {
     PODATA* ppd = p ? PpodataFromLo(p->palo) : nullptr;
     return ppd ? ppd->ppadctl : nullptr;
 }
+PADCTL* PpadctlOfSly3(SLY* p) { return PpadctlOfActor3(p); }
 
-bool FCombo3Attacking(SLY* p)
+bool FCombo3Attacking(ACTOR* p)
 {
     CMBR3* c = PcmbrOf(p, false);
     return c && c->fAttack;
 }
 
-int NCombo3State(SLY* p)
+// orig3 0x1AC098 (Sly's per-frame transitions) case 23: when the combo's definition has a clip while moving
+// (0x1398F0) and the stick is out (pad +0x134 +8 > 0) or cross was pressed within 0.1 s (0x40), Sly goes to state 0
+// (0x1ADDD0(p, 0, -1)) and the same frame's transitions go on from there (run, jump); the combo then sees a generic
+// state other than 0 / 9 and plays its overlay (state 1) from the attack's time (0x13ABC8). Natively the attack held
+// Sly until its clip ended (0.7 s for the standing swing): the reference runs within 2 vblanks of the stick
+// (build/ref/atk1: square at 6000, stick at 6008, state 1 / combo 1 at 6010, the combo off at 6034)
+bool FLeaveCombo3Attack(SLY* p)
+{
+    CMBR3* pc = PcmbrOf(p, false);
+    if (!pc || !pc->fAttack) return false;
+    if (!pc->pdef || !pc->pdef->pclipMove) return false;
+    PADCTL* ppad = PpadctlOfActor3(p);
+    if (!ppad) return false;
+    if (!(ppad->uJoy > 0.0f) && !GrfPadctlPressedWithin(ppad, 0x40, 0.1f)) return false;
+    pc->fAttack = false;
+    if (FComboDbg()) std::printf("combo3: f %.3f the attack left for state 0 (moving)\n", g_clock.t);
+    return true;
+}
+
+int NCombo3State(ACTOR* p)
 {
     CMBR3* c = PcmbrOf(p, false);
     return c ? c->state : -1;
 }
 
 // orig3 0x139FE0 (Sly's vt +0x314) -> 0x13A178
-void UpdateCombo3(SLY* p)
+void UpdateCombo3(ACTOR* p)
 {
     if (!p || !p->palo) return;
     CMBR3* pc = PcmbrOf(p, true);
     if (!pc) return;
     CMBR3& c = *pc;
-    PADCTL* ppad = PpadctlOfSly3(p);
+    PADCTL* ppad = PpadctlOfActor3(p);
+    if (c.fAttack && c.psly && c.psly->state != 0 && c.psly->state != 2) c.fAttack = false;   // (left state 23: NGeneric3)
     // TODO(player): 0x139FE0's takedown: a guard target within 400 whose job 0xDA is Sly's: square -> state 13
     const uint32_t grf = GrfNormalizeCombo(GrfComboConditions(c));
     const uint32_t grfHeld = ppad ? ppad->grfbtn : 0;
@@ -580,7 +673,7 @@ void UpdateCombo3(SLY* p)
 }
 
 // orig3 0x13A770 (Sly 3's message 10, Sly 2's 9: an event of an animation)
-void HandleCombo3Event(SLY* p, const ASEGMSG9* pmsg)
+void HandleCombo3Event(ACTOR* p, const ASEGMSG9* pmsg)
 {
     CMBR3* pc = PcmbrOf(p, false);
     if (!pc || !pmsg || pmsg->pasega != pc->pasega || !pmsg->pev || pmsg->pev->kind != 0xB) return;
@@ -592,18 +685,91 @@ void HandleCombo3Event(SLY* p, const ASEGMSG9* pmsg)
     case 0x2A2: c.fWindow = 1; break;
     case 0x2A3: c.f34 = 0; break;
     case 0x2A4: c.f34 = 1; break;
-    // 0x40 / 0x41: the actor's +0x1B4 on / off; 0xFB: 0x1B0650 (the booty, the noises); 0x18C..0x18F (state 1): the
-    // overlay leaves the legs (DemoteAsegaOnAlo / OnXf of the bones 0x2A..0x31) TODO(player)
+    // 0x18C..0x18F (state 1, the overlay while moving): the clip lets go of the root and the legs one group after the
+    // other so the run / walk animation under it shows there (0x138C70 on Sly's record +0x1190 = tag 0x159 kind 1
+    // (0x1AA2B0); 0x138CC8 with the pairs at 0x31FA40..: tags 0x30 / 0x2B / 0x2D, 0x31 / 0x2A / 0x2C, 0x38 / 0x39).
+    // Natively the overlay held the whole body: Sly slid along in the standing swing's pose
+    case 0x18C:
+        if (c.state == 1 && c.pasega)
+            for (const auto& up : p->palo->axf)
+                if (up->tag == 0x159 && up->kind == 1)
+                {
+                    DemoteAsegaOnXf(c.pasega, p->palo, up.get());
+                    break;
+                }
+        break;
+    case 0x18D: if (c.state == 1 && c.pasega) DemoteAsegaOnAlo(c.pasega, p->palo, {{0x30, -1}, {0x2B, -1}, {0x2D, -1}}); break;
+    case 0x18E: if (c.state == 1 && c.pasega) DemoteAsegaOnAlo(c.pasega, p->palo, {{0x31, -1}, {0x2A, -1}, {0x2C, -1}}); break;
+    case 0x18F: if (c.state == 1 && c.pasega) DemoteAsegaOnAlo(c.pasega, p->palo, {{0x38, -1}, {0x39, -1}}); break;
+    // 0x40 / 0x41: the actor's +0x1B4 on / off; 0xFB: 0x1B0650 (the booty, the noises)
     default: break;
     }
     if (FComboDbg()) std::printf("combo3: f %.3f event 0x%X\n", g_clock.t, pmsg->n);
 }
 
-// orig3 0x13A770 message 12 (Sly 2's 11: a contact accepted): the follow-up clip
-void HandleCombo3Contact(SLY* p)
+// orig3 0x13A770 message 12 (Sly 2's 11: a contact accepted): the follow-up clip, when the contact's accepted bytes
+// (the hit record's +0x50) have bit 0. (s3-ai round 20: the test was missing; the boot intro's combo 7561 on the
+// elephant (accepted bytes without it) went to its follow clip 8244 at the first contact and never hit again, where
+// the reference stays in the clip 242 and hits it once more a frame after SCPT [115]'s commands ended the first launch)
+void HandleCombo3Contact(ACTOR* p, const CTMSG* pctm)
 {
     CMBR3* pc = PcmbrOf(p, false);
+    if (pctm && !(pctm->grfAccepted & 1)) return;
     if (pc && pc->state != -1 && pc->pdef && pc->pdef->pclipFollow) SetComboState(*pc, 2);
+}
+
+// The ASEG events 25 / 26 (orig3 0x138270 -> 0x1399F0 / 0x1399A0): the actor's combo definition an[0] put first in
+// its list (+0x10EC) / taken out of it (e.g. the Guru's clip 34997: 34975 out at its start, 34973 in at 2.1 s)
+void SetCombo3Listed(ACTOR* p, int oidDef, bool fIn)
+{
+    CMBR3* pc = PcmbrOf(p, true);
+    if (!pc) return;
+    CMBDEF3* pd = nullptr;
+    for (const auto& up : pc->adef)
+        if (up->plo && up->plo->oid == oidDef) pd = up.get();
+    if (!pd) return;
+    auto it = std::find(pc->alist.begin(), pc->alist.end(), pd);
+    if (it != pc->alist.end()) pc->alist.erase(it);
+    if (fIn) pc->alist.insert(pc->alist.begin(), pd);
+    if (FComboDbg()) std::printf("combo3: f %.3f def %d %s the list\n", g_clock.t, oidDef, fIn ? "into" : "out of");
+}
+
+// orig3 0x1398F0 on the runner's definition (+0x10DC): its clip while moving (+0xA4 / +0xA8): the actor may move
+bool FCombo3DefMoves(ACTOR* p)
+{
+    CMBR3* pc = PcmbrOf(p, false);
+    return pc && pc->pdef && pc->pdef->pclipMove;
+}
+
+// orig3 0x1AF308's cases 31 / 25 (Sly's can-do): the combo definition exists (+0x1F44 / +0x1F48) and a combo may start
+// (0x13ADE0). (Smoke Bomb's other test, its proxy +0x1EC0 with a free row (0x1FBEA0), is not checked.)
+bool FAbilityCombo3Ready(SLY* p, int ability)
+{
+    CMBR3* pc = PcmbrOf(p, true);
+    if (!pc) return false;
+    CMBDEF3* pd = ability == 31 ? pc->pdefAbility31 : ability == 25 ? pc->pdefAbility25 : nullptr;
+    return pd && FCanStart(*pc);
+}
+
+// SCPT 0x28 (orig3 0x226D00 case 40: 0x13A678(actor +0x10D0, the definition, f)): the actor's combo definition started
+// by the script; f (the command's object, not null) keeps the target unset (no target search); the done test (0x229438
+// case 40) waits for the runner's state -1 (+0x10D4). E.g. the boot intro's SCPT 4262 [100]: Sly's 7561 at the elephant.
+bool StartScriptCombo3(ACTOR* p, LO* ploDef, bool fNoTarget)
+{
+    CMBR3* pc = PcmbrOf(p, true);
+    if (!pc || !ploDef) return false;
+    CMBDEF3* pd = nullptr;
+    for (const auto& up : pc->adef)
+        if (up->plo == ploDef) pd = up.get();
+    if (FComboDbg()) std::printf("combo3: f %.3f script combo %d (%s) no target %d\n", g_clock.t, ploDef->oid, pd ? "found" : "not a definition", int(fNoTarget));
+    if (!pd) return false;
+    Broadcast3(0x59, pd->plo);
+    SetComboState(*pc, -1);
+    pc->pdef = pd;
+    pc->gBlend = 1.0f;
+    pc->ptarget = fNoTarget ? nullptr : p->plo10DC;
+    ChooseComboState(*pc);
+    return true;
 }
 
 // The abilities 31 / 25 (orig3 0x1AF6C0): their combos

@@ -312,11 +312,174 @@ glm::vec3 VelBallistic(float g, const glm::vec3& pos, const glm::vec3& posTarget
     return l > 0.0f ? v * (speed / l) : glm::vec3(0.0f);
 }
 
+// ---- Sly 3's PAD (cid 0x5D, vt 0x354BC8): a new class (size 0x250), not Sly 2's 0x53 layout. Its trigger record at
+// +0x130 (0x15BDF8: state -1, re-arm time +0x138 1.0 (EOPID 468), stay +0x13C, remove-the-owner +0x140, the toucher
+// +0x144 (EOPID 474, optid 555)); no scan while +0x220 (EOPID 459); its filter (vt slot 80 0x15C9A8): the excluded
+// entries (+0x1B0), the object pairs (+0x148) and the classes (+0x18C: EOPID 464 adds one, 465 removes). E.g. the Ep3
+// hack's balls 74263 (class list 0x49 HACKSO): the ship touching one tows it (its script's event 5 -> the ship's 2309),
+// carried into a socket 74248 it is taken and the laser's node counts it (2313): Sly 2's pad update never ran on them.
+struct PAD3;
+void SetPad3State(LO* plo, PAD3& p, int n);
+struct PAD3 : TRIGGERSTATE
+{
+    bool fInit = false;
+    float dtRearm = 1.0f;     // +0x138
+    int fStay = 0;            // +0x13C
+    int fNoScan = 0;          // +0x220
+    std::vector<int> acid;    // +0x18C
+};
+std::unordered_map<LO*, PAD3>& MpPad3()
+{
+    static std::unordered_map<LO*, PAD3> s_mp;
+    WORLD_TABLE_LOCAL(s_mp);
+    return s_mp;
+}
+PAD3& Pad3(LO* plo)
+{
+    PAD3& p = MpPad3()[plo];
+    if (p.fInit) return p;
+    p.fInit = true;
+    p.owner = plo;
+    for (const LO* ps = plo; ps; ps = ps->ploCloneOf && ps->ploCloneOf != ps ? ps->ploCloneOf : nullptr)
+    {
+        for (const OPT& o : ps->aopt)
+        {
+            if (o.aval.empty()) continue;
+            const OPTVAL& v = o.aval.front();
+            const int n = v.k == 1 ? static_cast<int>(v.ag[0]) : v.n;
+            switch (o.eopid)
+            {
+            case 459: p.fNoScan = n; break;
+            case 468: p.dtRearm = v.k == 1 || v.k == 10 ? v.ag[0] : static_cast<float>(v.n); break;
+            case 464: if (p.acid.size() < 0x26) p.acid.push_back(n); break;
+            default: break;
+            }
+        }
+        if (!plo->aopt.empty()) break;  // (a copy's own options are the template's)
+    }
+    p.state = -1;
+    SetPad3State(plo, p, 0);  // slot 17 0x15C730 -> 0x15BE30 / slot 31 -> 0x15BE10: state 0
+    return p;
+}
+// orig3: 0x0015C9A8 (vt slot 80: the toucher accepted by the class list; the entry / pair lists are not used by the
+// levels ported so far)
+bool FPad3Accepts(const PAD3& p, LO* plo)
+{
+    if (!plo) return false;
+    if (p.acid.empty()) return true;
+    for (int cid : p.acid)
+        if (FCidDerivedFrom(plo->Cid(), static_cast<CID>(cid))) return true;  // 0x13B500
+    return false;
+}
+// orig3: 0x0015C178 (the trigger record's state: entering 1 from 0 runs the enter (event 5, the sound, the enter
+// lists, the owner's message 6) and 2 unless it stays; 0 from any but -1 the leave (event 6, the lists, message 7))
+void SetPad3State(LO* plo, PAD3& p, int n)
+{
+    const int old = p.state;
+    if (old == n) return;
+    const bool fEnter = old == 0 && n == 1, fLeave = old != -1 && n == 0;
+    p.state = n;
+    p.tState = g_clock.t;
+    if (std::getenv("SLY2N_PADDEBUG"))
+        std::printf("pad3 %d: state %d -> %d (toucher %d) t %.3f\n", plo->oid, old, n, p.ploFound ? p.ploFound->oid : -1, g_clock.t);
+    if (fEnter)
+    {
+        HandleLoSpliceEvent(plo, 5, false, 0, nullptr);
+        CSnd* ps = PsndNewPlain(2);
+        ps->SetSource(plo);
+        RunEmbeddedTriggerList(plo, 0, p.ploFound);
+        NotifyLo(plo, 6, static_cast<TRIGGERSTATE*>(&p));
+        if (!p.fStay) SetPad3State(plo, p, 2);
+    }
+    if (fLeave)
+    {
+        HandleLoSpliceEvent(plo, 6, false, 0, nullptr);
+        RunEmbeddedTriggerList(plo, 1, p.ploFound);
+        NotifyLo(plo, 7, static_cast<TRIGGERSTATE*>(&p));
+    }
+}
+// orig3: 0x0015CAD0 (the deferred touch: an actor in its jump state 0x12, or bounced (kind 3) within 0.15 s, is
+// dropped; else state 1)
+void DeferredPad3Touched(void* object, int)
+{
+    LO* plo = static_cast<LO*>(object);
+    PAD3& p = Pad3(plo);
+    if (ACTOR* pa = p.ploFound ? PactorFromLo(p.ploFound) : nullptr)
+        if (pa->jump.state == 0x12 || (pa->jump.kind == 3 && g_clock.t - pa->jump.t20 < 0.15f))
+        {
+            p.ploFound = nullptr;
+            return;
+        }
+    SetPad3State(plo, p, 1);
+}
+// orig3: 0x0015C790 (vt slot 18)
+void UpdatePad3(LO* plo)
+{
+    if (PFNUPDATE pfn = PfnUpdateOrig(0x1F36E0)) pfn(plo);  // the ALO's (0x23C660)
+    PAD3& p = Pad3(plo);
+    switch (p.state)
+    {
+    case 2:
+        if (p.dtRearm >= 0.0f && g_clock.t - p.tState > p.dtRearm) SetPad3State(plo, p, 4);
+        return;
+    case 4:
+        SetPad3State(plo, p, p.fNoScan ? 4 : 1);  // (with +0x220 the original reads an unset register: kept)
+        return;
+    case 0:
+    case 1:
+    {
+        int k = p.state;
+        if (!p.fNoScan)
+        {
+            // the attachment's overlaps (+0xDC), not of kind 10, whose own entry is the pad's: the other root
+            // accepted by slot 80 is the toucher (+0x144), the touch deferred (0x15CAD0); none: 0
+            ALO* palo = FCidDerivedFrom(plo->Cid(), S3CID(0x30)) ? static_cast<ALO*>(plo) : nullptr;
+            OXA* poxa = palo && palo->psort ? palo->psort->poxa : nullptr;
+            if (!poxa) break;
+            k = 0;
+            for (OX* pox = poxa->pox; pox; pox = pox->poxNext)
+                for (XP* pxp = pox->pxp; pxp; pxp = pxp->pxpNext)
+                {
+                    if (pxp->xpk == 10) continue;
+                    const int i = poxa->pso == pxp->axpd[0].paloRoot ? 0 : 1;
+                    if (pxp->axpd[i].palo != palo) continue;
+                    LO* po = pxp->axpd[1 - i].paloRoot;
+                    if (!FPad3Accepts(p, po)) continue;
+                    p.ploFound = po;
+                    if (std::getenv("SLY2N_PADDEBUG")) std::printf("pad3 %d: touched by %d t %.3f\n", plo->oid, po->oid, g_clock.t);
+                    PostDeferredCall(plo, FN3_TAG | 0x15CAD0, DeferredPad3Touched);
+                    return;
+                }
+        }
+        SetPad3State(plo, p, k);
+        return;
+    }
+    default: return;
+    }
+}
+
 struct INITPAD
 {
     INITPAD()
     {
         RegisterLoUpdate(0x148C98, UpdatePad);
+        RegisterLoUpdate(FN3_TAG | 0x15C790, UpdatePad3);
+        // Sly 3 PAD: EOPID 474 (optid 555) its toucher (+0x144); 247 / 583 (thunks 0x106238 / 0x1062C0) its enter /
+        // leave run by a script (Sly 2's 428 / 429)
+        RegisterObjectGetter3(474, [](LO* plo) {
+            CRef r;
+            PAD3* pp = MpPad3().count(plo) ? &MpPad3()[plo] : nullptr;
+            r.SetBasic(pp ? pp->ploFound : nullptr);
+            return r;
+        });
+        RegisterObjectMethod3(0x106238, [](LO* plo, const std::vector<CRef>&) {
+            if (plo && plo->Cid() == 0x5D) { PAD3& p = Pad3(plo); SetPad3State(plo, p, 0); SetPad3State(plo, p, 1); }
+            return CRef(TAGK_Void);
+        });
+        RegisterObjectMethod3(0x1062C0, [](LO* plo, const std::vector<CRef>&) {
+            if (plo && plo->Cid() == 0x5D) SetPad3State(plo, Pad3(plo), 0);
+            return CRef(TAGK_Void);
+        });
         // Direct embedded fields must also update the live pad cache when scripts
         // change them. Loading stores these fields before Pad's first update.
         RegisterObjectSetter(413, [](LO* plo, const CRef& r) { Pad(plo).kind = r.RefCoerceS32().m_n; });
@@ -377,5 +540,9 @@ struct INITPAD
 
 // (at a world's load: the old world's objects are freed, and a new object at a freed one's address must not
 // inherit its record)
-void ResetPads() { MpPad().clear(); }
+void ResetPads()
+{
+    MpPad().clear();
+    MpPad3().clear();
+}
 NATIVEFN(0x148F20, FAcceptPadContact);

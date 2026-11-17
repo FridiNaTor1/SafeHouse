@@ -5,6 +5,7 @@
 #include "disc.h"
 #include "lo.h"
 
+#include <atomic>
 #include <cstdio>
 #include <stdexcept>
 #include <unordered_map>

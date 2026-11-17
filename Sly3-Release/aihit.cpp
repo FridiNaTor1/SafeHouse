@@ -4,6 +4,7 @@
 // by the hit's kind), and the reaction after one (0x177BA0). See aihit.h.
 
 #include "aihit.h"
+#include "aicarm3.h"
 #include "game/sly3.h"
 #include "rumble.h"
 #include "step.h"
@@ -22,6 +23,7 @@
 #include "cls.h"
 #include "detect.h"
 #include "so.h"
+#include <algorithm>
 #include "sw.h"
 #include "task.h"
 #include "po.h"
@@ -42,7 +44,7 @@ namespace
 constexpr float T_AWARE = 0.2f;
 constexpr float T_SLEEP_MORE = 5.0f;  // D_002BE620    // D_002C3DAC (0x20A298: seen this long ago, the hit is not a surprise)
 
-// orig: 0x001F78A0: the index of the lowest bit
+// orig: 0x001F78A0: the index of the lowest bit (orig3: 0x240DD8, the same code in Sly 3)
 int IbitLow(uint32_t u)
 {
     for (int i = 0; i < 32; ++i)
@@ -90,7 +92,10 @@ bool FGuardLaunchAllowed(GUARD* pg, LO* psource, uint64_t mask)
     return FGuardSurprised(pg, psource, mask);
 }
 
-// orig: 0x00176B80
+// orig: 0x00176B80 (orig3 0x255AE0: 0x240CB0(the launcher, 0, the guard, 0x40000, 50, 1, ...): Sly 3's landing hit is
+// 50 with the record's +0x28 set, a fatal one (the guard's slot 97 0x251B40 -> 0x250290: knocked out at once). Sly 2's
+// -50 without it only staggered: the boot intro's elephant got up after Sly's takedown and chased him; the
+// reference's reaction is 11 (knocked out) at the landing)
 void JOBREACT::SendHit(int n, LO* ploSender)
 {
     CTMSG m;
@@ -98,6 +103,7 @@ void JOBREACT::SendHit(int n, LO* ploSender)
     m.ploReceiver = pguard->palo;
     m.grfFilter = 0x40000;
     m.nState = n;
+    m.nKill3 = 1;
     if (std::getenv("SLY2N_HITDEBUG"))
         std::printf("launch hit: t %.3f guard %d owner %d kind %X amount %d hp %d\n", g_clock.t,
                     pguard->palo->oid, ploSender ? ploSender->oid : -1, m.grfFilter, n, pguard->n33C);
@@ -295,35 +301,23 @@ int JOBREACT::Message(int nmsg, void* pv)
 // orig: 0x00177BA0: the reaction after a finished one
 void JOBREACT::NextReaction()
 {
+    // orig3: 0x0019AD90 (Sly 3's next reaction; native kinds: aijobs.cpp)
     GUARD* pg = pguard;
     AIMSG m;
     LO* pme = g_psw ? PloPoCurrent(g_psw) : nullptr;
-    if (FCidDerivedFrom(pg->palo->Cid(), S3CID(0x3B)) && pg->c1010 > 0)
-    {
-        m.k = 13;
-        m.plo = pme;
-    }
-    else if (pg->nMode == 21)
+    if (IPlayerCarm3(pg->palo) != -1 && FCidDerivedFrom(pg->palo->Cid(), S3CID(0x3F)))
+        m.k = 20;   // a playable Carmelita (+0x130 != -1): her job 0xE9 (aicarm3.h)
+    else if (pg->nMode == 21)  // (Sly 3's mode 0x14)
     {
         m.k = 18;
         m.plo = pme;
         m.g = FLT_MAX;
     }
-    else if (pg->fFA8 != 0 || pg->fF94 != 0)  // 0x177D20
+    else if (pg->fFA8 != 0 || pg->fF94 != 0)  // 0x177D20 (orig3 0x19AED0)
         m.k = 0xC;
-    else if (FCidDerivedFrom(pg->palo->Cid(), S3CID(0x3C)) && pg->n108C > 0)  // 0x177D70
+    else if (pg->n108C != 0 && pg->plo108C && pg->plo108C->fInWorld)  // orig3 0x19AF20 (any guard)
         m.k = 15;
-    else if (LO* ptarget = PloGuardTarget(pg))
-    {
-        m.plo = ptarget;
-        if (FTargetClass(pg->acid3C4, ptarget))  // 0x208B38
-        {
-            m.k = 18;
-            m.g = GRandInRange(5.0f, 7.0f);  // 0x208BB0
-        }
-        else
-            m.k = 4;
-    }
+    else if (FTargetReaction3(&m)) {}
     else if (msg.k >= 6 && msg.k < 11)
     {
         // 0x156B98: a noise (the fixed template 0) at the guard, investigated
@@ -685,7 +679,7 @@ int JOBB1::Message(int msg, void* pm)
     if (msg == 9)
     {
         const auto* pe = static_cast<const ASEGMSG9*>(pm);
-        if (pkinde && PasegaOfKinde(pkinde) == pe->pasega && pe->n == 0x3D) nLaunch = 0;
+        if (pkinde && PasegaOfKinde(pkinde) == pe->pasega && pe->n == 0x5A) nLaunch = 0;   // (orig3 0x16DEE8: Sly 3's 0x5A, Sly 2's 0x3D)
         return 0;
     }
     if (msg != 12) return 0;
@@ -701,7 +695,7 @@ int JOBB1::Message(int msg, void* pm)
     float t = 0.0f;
     while (index > 0)
     {
-        if (const ASEGEV* ev = PeventLaunch(pkinde, 0x37 + index))
+        if (const ASEGEV* ev = PeventLaunch(pkinde, 0x54 + index))   // (orig3 D_00321060: 0x54..0x58, Sly 2's 0x37..0x3B)
         {
             t = ev->t;
             break;
@@ -718,11 +712,21 @@ int JOBB1::Message(int msg, void* pm)
     return 1;
 }
 
-// orig: 0x0017B178
+// orig: 0x0017B178 (orig3: 0x21BBC0, the same code in Sly 3)
 void JOBB1::Exit()
 {
     SetState(-1);
     JOBMOVE::Exit();
+    // orig3 0x16E0D0 (Sly 3's exit of 0xDA, not Sly 2's 0x17B178): the contacts the guard holds are let go (0x240DB0 ->
+    // 0x25DEF8: the world's held records by this receiver), so the attacker's next touch hits again. E.g. the boot
+    // intro: SCPT [115]'s commands (message 5) end the elephant's launch a frame after the combo's first hit, and the
+    // cane, still in it, launches it again the frame after (the reference's RAM: message 7 at 42.912, 5 at 42.929, 7
+    // at 42.946)
+    if (pguard && pguard->palo)
+    {
+        auto& a = g_physw.actmRecent;
+        a.erase(std::remove_if(a.begin(), a.end(), [&](const CTMSG& r) { return r.paloAccepted == pguard->palo; }), a.end());
+    }
 }
 
 // orig: 0x0017B1A8
@@ -799,7 +803,7 @@ void JOBB1::SetState(int n)
     }
 }
 
-// orig: 0x0017B578
+// orig: 0x0017B578 (orig3: 0x16E588, the same code in Sly 3)
 int JOBB1::State() { return stLaunch == 3 ? 7 : 1; }
 
 // ---- 0xB0: held ----

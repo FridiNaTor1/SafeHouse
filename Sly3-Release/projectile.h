@@ -9,6 +9,8 @@ struct LO;
 
 // orig 0x13BC60: the launcher that threw it (+0x200)
 void SetProjectileLauncher(ALO* palo, LO* plaunch);
+// (Sly 3: +0x1E8, the owner 0x161610 sets: the guards' hit handler 0x251C08 ignores their own owner's) null: none
+LO* PloProjectileLauncher(LO* plo);
 // (Bentley's darts, 0x1357C0) the flight ends within g (0x13B5C8); the contact kind the end sends (0: its +0x1EC)
 void ExpireProjectileIn(ALO* palo, float g);
 void SetProjectileFilter(ALO* palo, unsigned grf);

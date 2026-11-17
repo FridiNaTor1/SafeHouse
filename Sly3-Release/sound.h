@@ -33,6 +33,9 @@ struct SNDHOOKS
     // 0x2DDF40 + 0x90) and its rotation world -> camera (the matrix at 0x2DDFA0, as 0x1A7348(0, mat, d) uses
     // it). False: no listener (sounds are heard at full volume, centered).
     bool (*pfnListener)(glm::vec3* ppos, glm::mat3* pmatWorldToCamera) = nullptr;
+    // (Sly 3's two-player mode, orig3 0x245440 with SW +0x4FA4) the two players' positions (each player's character,
+    // its pad record's 0x1A91D8; afHave false: none): true in that mode, the attenuation is then each player's.
+    bool (*pfnListeners2p)(glm::vec3 apos[2], bool afHave[2]) = nullptr;
     // A sound source (an ALO: bit 60 of +0x28 its "alive" flag, 0x1A6F00 a local point to world).
     bool (*pfnFSourceAlive)(void* psrc) = nullptr;
     glm::vec3 (*pfnSourcePosWorld)(void* psrc, const glm::vec3& posLocal) = nullptr;
@@ -65,6 +68,11 @@ struct SNDHOOKS
     int cReset = 0;
     // Finds apsrcMusic now (a music pushed by the new world's scripts before its first sound pass).
     void (*pfnFindMusicSources)() = nullptr;
+    // (orig 0x1FDA48, the USB headset's microphone) the current player (0x1C4840(g_game)) when it is an actor (cid
+    // 0x34), its world position (0x1A62E8); the noise held (0x156BE0: the old one removed and released; the template
+    // the world's fixed 711 (SW +0x4034) with the radius / height range given, null: none). Null hooks: no noise.
+    void* (*pfnMicPlayer)(glm::vec3* ppos) = nullptr;
+    void (*pfnHoldMicNoise)(void** ppnoise, void* pplayer, const glm::vec3& pos, float sRadius, float dz) = nullptr;
 };
 extern SNDHOOKS g_sndhooks;
 
@@ -245,12 +253,19 @@ struct SOUNDMGR
     std::vector<uint8_t> alanguage;   // the file's languages; ilanguage the one matching g_nLang (region.h)
     int ilanguage = 0;
     // state
-    int fEffect = 0;                  // +0x10
+    int fEffect = 0;                  // +0x10 the USB headset in use (flags "fUseHeadset", 0x1D8FF8; cheat row 10)
     int fMusicPaused = 0;             // +0x58
     int fModeAlert = 0, fModeSneak = 0;  // +0x5C / +0x60
     int istem = 1;                    // +0x64
     uint32_t grfState = 3;            // +0x68
     int playbackMode = 0;             // +0x104
+    // (the USB headset's microphone, 0x1FDA48) +0x70 its level ('SUKR' 11: spiop.irx's RMS of the last 1024 samples,
+    // 0..1), +0x74 the noise held at the player while it is above 0.5, +0x80 / +0x90 the noise's radius / height range
+    // by the level (0x1FCD38: quadratics through (0, 0), (0.5, 500), (1, 3000) and (0, 0), (0.5, 500), (1, 1000))
+    float gMic = 0.0f;
+    void* pnoiseMic = nullptr;
+    std::array<float, 3> clqMicRadius{0.0f, -1000.0f, 4000.0f};
+    std::array<float, 3> clqMicHeight{0.0f, 1000.0f, 0.0f};
     std::array<float, 3> agStem{};    // +0x108
     std::array<float, 9> asmpStem{3.0f, 0.0f, 0.25f, 1.0f, 0.0f, 0.25f, 1.0f, 0.0f, 0.25f};  // +0x114
     int mood = 0;                     // +0x138

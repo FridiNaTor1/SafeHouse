@@ -3,8 +3,11 @@
 // decomp's matching C (0x2219C8, 0x221A18, 0x221818, 0x220D40, 0x220DD8, 0x221CE8, 0x221408 / 0x2215C0 hand C)
 // and the reference's ports (0x2236E8 / 0x223A70 m_220D40_p3.cpp; 0x221DD8 round4_camera.cpp, a register-level
 // transcription: the structure below is re-derived from the asm).
+#include "game/scptgame3.h"
+#include "game/task3.h"
 #include "cplcy.h"
 #include "game/sly3.h"
+#include "vr.h"
 #include "pcinput.h"
 #include "marker.h"
 
@@ -23,6 +26,7 @@
 #include <cmath>
 
 float GRandInRange(float gLow, float gHigh);  // xfmath.h (orig 0x11D448)
+bool FCamReverse3(int kind, bool fVertical);  // menu.h (Camera Options...)
 
 CMPOLICIES g_cmpolicies;
 CMFOLLOWWORLD g_cmfollowworld;
@@ -161,7 +165,7 @@ glm::vec3 NormalizeOr(const glm::vec3& v, const glm::vec3& vDefault)
     return v * (1.0f / l);
 }
 
-// orig: 0x0011B830 BuildLookAtMatrix (x along vecX (x when too short), y = vecY x x normalized, z = x x y)
+// orig: 0x0011B830 BuildLookAtMatrix (x along vecX (x when too short), y = vecY x x normalized, z = x x y) (orig3: 0x11CBF0, the same code in Sly 3)
 glm::mat3 BuildLookAtMatrix(const glm::vec3& vecX, const glm::vec3& vecY)
 {
     const float g = glm::length(vecX);
@@ -269,7 +273,7 @@ uint32_t CmOffsetFromPcplcy(const CPLCY* p)
 
 namespace
 {
-// orig: 0x00220D40 (a fixed tilt from the entry's coefficients while its tilt limits are still the defaults)
+// orig: 0x00220D40 (a fixed tilt from the entry's coefficients while its tilt limits are still the defaults) (orig3: 0x273A18, the same C in the Sly 3 decomp)
 void InitCmeTilt(ZONECME* pcme)
 {
     if (pcme->lmTilt.gMin == -FLT_MAXF && pcme->lmTilt.gMax == FLT_MAXF)  // 0x2A96E0 / 0x2A96E4
@@ -528,12 +532,193 @@ void CPFOLLOW::Init()
     pcme = nullptr;
 }
 
-// orig: 0x00221A18
+// orig: 0x00221CC0
+void CPFOLLOW::Deactivate(LO* psoFocusOld, void* pv)
+{
+    pzone = nullptr;
+    pcme = nullptr;
+    CPLCY::Deactivate(psoFocusOld, pv);
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// (Sly 3) the follow camera is Sly 3's (orig3 0x2747D0 activate, 0x274AC0 update, 0x1F3ED8 the focus record,
+// 0x276510 the focus check, 0x273AB0 the focus point): the same plan as Sly 2's 0x221DD8, but the policy keeps its
+// own focus record (the floor's focus height held through jumps, the look-ahead along the facing, the offset's
+// spring), the tilt has its own rate and returns (the zone's return record +0x130), the samples carry the focus's
+// tilt / distance offsets, and the stick's turn has no return toward remembered angles.
+namespace
+{
+const LM s_lmUnit3{0.0f, 1.0f};                         // 0x341FF0
+const SMP s_smpOffset3{1500.0f, 0.0f, 0.5f};            // 0x325080
+const float s_aAhead3[3] = {1.5f, -0.5f, 0.0f};         // 0x325090 (of the focus's angular speed)
+const float s_aTiltRate3[3] = {-0.1f, F32(0x3AF04C76), 0.0f};  // 0x3290D0 (of the lead's speed)
+const SMP s_smpTilt3{0.75f, 0.0f, 2.0f};                // 0x329140 (x the rate)
+const ZONECM::RET3 s_aretDefault3[4] = {{0, 2.0f, 1.0f}, {0, 2.0f, 1.0f}, {1, 0.0f, 1.0f}, {0, 2.0f, 1.0f}};  // 0x34A040
+// the stick's turn table (0x345098, kind 0: the camera; {reversed by default: x, y}, the rates)
+constexpr float SW_PAN_STICK3 = 2.5f, SW_TILT_STICK3 = -1.0f;
+
+float Quad3(const float a[3], float x) { return a[0] + x * (a[1] + x * a[2]); }
+float Clamp3(float g, const LM& lm) { return g < lm.gMin ? lm.gMin : (lm.gMax < g ? lm.gMax : g); }
+
+// orig3: 0x001F3E48 (a damped spring toward the target: dt at most 0.1, the trapezoid on the position)
+void SpringFocus3(const glm::vec3& posTarget, glm::vec3* ppos, glm::vec3* pv, float kDamp, float kSpring, float dt)
+{
+    dt = std::min(dt, 0.1f);
+    const glm::vec3 a = (posTarget - *ppos) * kSpring + *pv * kDamp;
+    const glm::vec3 v = *pv + a * dt;
+    *ppos = *ppos + *pv * (dt * 0.5f) + v * (dt * 0.5f);
+    *pv = v;
+}
+
+// orig3: 0x001F3ED8 (the focus record of the policy +0x30: the CPDEFI the update reads; *pcpoint the focus's visibility
+// points (its raw +0x70))
+void GetFocusCpdefi3(CPFOLLOW* p, LO* pso, bool fFirst, CPDEFI3* pc, int* pcpoint)
+{
+    *pc = CPDEFI3{};
+    const float t = TCm();
+    const float dt = t - p->tRec3;
+    p->tRec3 = t;
+    CPDEFIRAW3 r;
+    if (g_cmfollowworld.pfnCpdefiRaw3) g_cmfollowworld.pfnCpdefiRaw3(pso, &r);
+    else
+    {
+        r.pos = PosLoCm(pso);
+        r.zObj = r.pos.z;
+        r.tMoveLast = t;
+        const glm::vec3 x = MatLoCm(pso)[0];
+        r.radHome = std::atan2(-x.y, -x.x);
+    }
+    if (fFirst) r.grf &= ~6u;
+    pc->cfk = r.cfk;
+    pc->radHome = r.radHome;
+    pc->tMoveLast = r.tMoveLast;
+    pc->dTilt = r.dTilt;
+    pc->dDist = r.dDist;
+    pc->grf = r.grf;
+    *pcpoint = r.n70;
+    if (!(r.grf & 2))
+    {
+        const float zObj = r.zObj;
+        if (!(r.grf & 4))
+        {
+            float z = (r.grf & 0x10) && !fFirst ? p->posRec3.z : r.pos.z;
+            if (z < zObj + r.lmZ.gMin) z = zObj + r.lmZ.gMin;
+            else if (zObj + r.lmZ.gMax < z) z = zObj + r.lmZ.gMax;
+            p->posRec3.z = fFirst ? z : GSmooth(p->posRec3.z, z, dt, &r.smpZ, nullptr);
+        }
+        p->posRec3.x = r.pos.x;
+        p->posRec3.y = r.pos.y;
+        if (p->posRec3.z < zObj + r.lmZ2.gMin) p->posRec3.z = zObj + r.lmZ2.gMin;
+        else if (zObj + r.lmZ2.gMax < p->posRec3.z) p->posRec3.z = zObj + r.lmZ2.gMax;
+    }
+    p->dposSmooth3 = fFirst ? glm::vec3(0.0f) : PosSmooth(p->dposSmooth3, glm::vec3(0.0f), dt, &s_smpOffset3, nullptr);
+    // the look-ahead: along the facing, shorter while the focus turns fast
+    const float sAhead = r.sAhead * Clamp3(Quad3(s_aAhead3, r.wAng), s_lmUnit3);
+    const glm::vec3 dposAheadT = SetVectorCylind(pc->radHome + PI, sAhead, 0.0f);
+    if (fFirst)
+    {
+        p->dposAhead3 = dposAheadT;
+        p->vAhead3 = glm::vec3(0.0f);
+        p->dposFocus3 = r.dposFocus;
+        p->vFocus3 = glm::vec3(0.0f);
+    }
+    else
+    {
+        SpringFocus3(dposAheadT, &p->dposAhead3, &p->vAhead3, r.kDamp, r.kSpring, dt);
+        SpringFocus3(r.dposFocus, &p->dposFocus3, &p->vFocus3, r.kDamp, r.kSpring, dt);
+    }
+    pc->pos = p->posRec3 + p->dposSmooth3 + p->dposAhead3;
+    pc->v = r.v;
+    pc->dposAhead = p->dposAhead3;
+    pc->dposFocus = p->dposFocus3;
+}
+
+// orig3: 0x00273AB0 (the focus point: the record less (1 - uFocus) of the look-ahead; with the zone, its coordinates
+// scaled by the entry's +0x70 in the zone's frame)
+glm::vec3 PosCmeFocus3(const ZONECME* pcme, const CPDEFI3& c, ZONECM* pzone)
+{
+    glm::vec3 pos = c.pos + c.dposAhead * (pcme->uFocus - 1.0f);
+    if (pzone)
+    {
+        std::array<glm::vec4, 3> acoef{};
+        acoef[0].y = pcme->vecCoefY.x;
+        acoef[1].y = pcme->vecCoefY.y;
+        acoef[2].y = pcme->vecCoefY.z;
+        const int fPolar = pzone->fPolar;
+        pzone->fPolar = 0;
+        glm::vec3 posZone, normal;
+        ConvertZonePos(pzone, pos, &posZone, &normal);
+        pos = PosZoneSample(pzone, posZone, acoef, pcme->alm, 1, pzone->sPath, 0.0f);
+        pzone->fPolar = fPolar;
+    }
+    return pos;
+}
+
+// orig3: 0x00276510 (the eye blocked for 0.5 s cuts; every 0.5 s the focus's points (cpoint of the five) are tested
+// against the world toward the camera; not seen for 1.5 s, the camera cuts)
+void CheckFocus3(CPFOLLOW* p, int cpoint)
+{
+    if (g_cmfollowworld.pfnVisibility && g_cmfollowworld.pfnVisibility(p)) return;
+    const float t = TCm();
+    if (g_cm.fCut)   // (and 0x1A9478: the game paused)
+    {
+        p->tVisible = p->tClear3 = t;
+        return;
+    }
+    if (p->pzone && p->pzone->fNoAvoid) return;
+    if (F_NO_AVOID) return;
+    if (0.5f < t - p->tClear3)
+    {
+        CutCm(&g_cm);
+        return;
+    }
+    if (t - p->tVisible < DT_VISIBLE_CHECK) return;
+    const glm::vec3 posFocus = PosLoCm(p->psoFocus);
+    const glm::vec3 z(0, 0, 1);
+    glm::vec3 r1 = glm::cross(z, posFocus - g_cm.pos);
+    const float l = glm::length(r1);
+    if (l < EPS_1E4)
+    {
+        p->tVisible = t;
+        return;
+    }
+    r1 *= 1.0f / l;
+    const glm::vec3 r0 = glm::cross(z, r1);
+    cpoint = std::clamp(cpoint, 0, 5);
+    glm::vec3 apt[5];
+    glm::vec3 mn = g_cm.pos, mx = g_cm.pos;
+    for (int i = 0; i < cpoint; ++i)
+    {
+        apt[i] = posFocus + r0 * s_adposVisible[i].x + r1 * s_adposVisible[i].y + z * s_adposVisible[i].z;
+        mn = glm::min(mn, apt[i]);
+        mx = glm::max(mn, apt[i]);  // (the maximum of the new minimum and the point, as the original)
+    }
+    const CMSOLIDS asolid = AsolidCm(mn, mx);
+    for (int i = 0; i < cpoint; ++i)
+    {
+        glm::vec3 posScreen = ConvertCmWorldToScreen(&g_cm, apt[i]);
+        posScreen.z = g_cm.sNearClip;
+        const glm::vec3 posNear = ConvertCmScreenToWorld(&g_cm, posScreen);
+        float uTo;
+        if (FFindCmClearInterval(0.0f, asolid, apt[i], posNear, nullptr, &uTo) && 1.0f <= uTo)
+        {
+            p->tVisible = t;
+            return;
+        }
+    }
+    if (1.5f < t - p->tVisible) CutCm(&g_cm);
+}
+}  // namespace
+
+// orig3: 0x002747D0 (the activation: the zone's entry for the focus, the eye's sphere about the focus from the
+// camera's place)
 void CPFOLLOW::Activate(LO* psoFocusNew, void* pv)
 {
     CPLCY::Activate(psoFocusNew, pv);
     pzone = static_cast<ZONECM*>(pv);
-    if (pzone && pzone->pacmeShared) pcme = pzone->pacmeShared;  // (a count of 1)
+    fFirst = 1;
+    tActivate3 = TCm();
+    if (pzone && pzone->pacmeShared) pcme = pzone->pacmeShared;
     else if (!pzone || pzone->acme.empty()) pcme = &CmeDefault();
     else
     {
@@ -545,21 +730,15 @@ void CPFOLLOW::Activate(LO* psoFocusNew, void* pv)
         }
         pcme = pe;
     }
-    fFirst = 1;
     InitCmeTilt(const_cast<ZONECME*>(pcme));
-    CPDEFI cpdefi;
-    GetCmCpdefi(&g_cm, psoFocusNew, &cpdefi);
-    glm::vec3 posFocus = PosCmeFocus(pcme, &cpdefi, nullptr);
-    if (pzone)
-    {
-        if (pzone->pcrv)
-        {
-            if (g_cmfollowworld.pfnCrvNearestAll) pzone->sPath = g_cmfollowworld.pfnCrvNearestAll(pzone->pcrv, posFocus, pzone->sPath);
-        }
-        else if (pzone->fArc) UpdateZonePath(this, &cpdefi);
-        posFocus = PosCmeFocus(pcme, &cpdefi, pzone);
-    }
-    const glm::vec3 a = posFocus + glm::vec3(g_cm.dposFocus);
+    CPDEFI3 c;
+    int cpoint = 0;
+    GetFocusCpdefi3(this, psoFocusNew, true, &c, &cpoint);
+    glm::vec3 posFocus = PosCmeFocus3(pcme, c, nullptr);
+    if (pzone && pzone->pcrv && g_cmfollowworld.pfnCrvNearestAll)
+        pzone->sPath = g_cmfollowworld.pfnCrvNearestAll(pzone->pcrv, posFocus, pzone->sPath);
+    posFocus = PosCmeFocus3(pcme, c, pzone);
+    const glm::vec3 a = posFocus + c.dposFocus;
     ConvertVectorToSphere(g_cm.pos - a, &radPan, &radTilt, &sDist);
     sDist = sDist - g_cm.sNearClip;
     posEye = glm::vec4(a + SetVectorSphere(radPan, radTilt, sDist), posEye.w);
@@ -567,71 +746,54 @@ void CPFOLLOW::Activate(LO* psoFocusNew, void* pv)
     cpmode = 0;
     if (pzone && pzone->fCutOnActivate) CutCm(&g_cm);
     if (std::getenv("SLY2_CMCUTPRINT"))
-        std::printf("follow activate t %.3f: zone %d cut-on-activate %d pan %.3f focus %.1f %.1f %.1f\n", TCm(), pzone ? 1 : 0,
+        std::printf("follow3 activate t %.3f: zone %d cut-on-activate %d pan %.3f focus %.1f %.1f %.1f\n", TCm(), pzone && pzone->pzone ? pzone->pzone->oid : -1,
                     pzone ? pzone->fCutOnActivate : -1, radPan, posFocus.x, posFocus.y, posFocus.z);
     tVisible = TCm();
+    tClear3 = TCm();
     tMoveLast = TCm();
-    tManual = TCm() - DT_MANUAL;
     fLeftSamples = 0;
+    fManual = 0;
+    tManual = TCm() - DT_MANUAL;
     if (pzone && pzone->radFOV != 0.0f) g_cm.radFOVTarget = pzone->radFOV;
 }
 
-// orig: 0x00221CC0
-void CPFOLLOW::Deactivate(LO* psoFocusOld, void* pv)
-{
-    pzone = nullptr;
-    pcme = nullptr;
-    CPLCY::Deactivate(psoFocusOld, pv);
-}
-
-// orig: 0x00221DD8 (the update: the samples of the zone, the player's turns, the passive pan toward the focus's
-// motion, the blend toward a sample, the eye's distance / screen offset springs, the world avoidance, the look-at)
+// orig3: 0x00274AC0
 LO* g_ploPcCmDist = nullptr;
 float g_uPcCmDist = 1.0f;
 constinit bool g_fPcCmHoldPan = false;
 
-void CPFOLLOW::Update(CPDEFI* pcpdefi, const CMJOY* pjoy)
+void CPFOLLOW::Update(CPDEFI* pcpdefiCm, const CMJOY* pjoy)
 {
+    (void)pcpdefiCm;   // (Sly 3's policy keeps its own record: 0x1F3ED8 below)
     LO* pso = psoFocus;
     ZONECM* pz = pzone;
-    const float dtReal = DtRealCm();
+    const float dtReal = DtRealCm();   // f21
     const float dt = DtCm();
     const float t = TCm();
-    LO* pjt = FIsLoDerivedFromCm(pso, 0x34) ? pso : nullptr;
+    CPDEFI3 c;   // sp
+    int cpoint = 0;
+    GetFocusCpdefi3(this, pso, g_cm.fCut != 0, &c, &cpoint);
+    LO* pjt = FIsLoDerivedFromCm(pso, 0x34) ? pso : nullptr;   // fp (the player base 0x33)
     const CMFOCUS focus = pjt ? FocusOf(pjt) : CMFOCUS{};
-    CheckFocusVisible(this);
-    int grf, fReturn1, fReturn2;
-    if (pz)
-    {
-        grf = pz->grf;
-        fReturn1 = pz->fReturn1;
-        fReturn2 = pz->fReturn2;
-    }
-    else
-    {
-        grf = 4;
-        fReturn1 = 0;
-        fReturn2 = 0;
-    }
-    UpdateZonePath(this, pcpdefi);
-    const glm::vec3 posFocus0 = PosCmeFocus(pcme, pcpdefi, pz);
-    if (pjt && focus.jtfock == 2)
-        SpringCm(&g_cm, &g_cm.dposFocus, &g_cm.vFocus, glm::vec4(focus.posFocus - posFocus0, 0.0f), 8.0f, -6.0f);
-    const glm::vec3 posFocus = posFocus0 + glm::vec3(g_cm.dposFocus);  // sp+0x10
-    if (pz && pz->ploLook) pcpdefi->grfcpd &= ~1u;
-    const bool fMoving = (pcpdefi->grfcpd & 1) != 0;
-    const SMP smpLead = s_smpLead;
-    uLead = GSmooth(uLead, fMoving ? 0.0f : pcme->uLead, dt, &smpLead, nullptr);
-    tMoveLast = std::max(pcpdefi->tMoveLast, tMoveLast);
+    CheckFocus3(this, cpoint);
+    const int grf = pz ? pz->grf : 4;   // s4
+    const ZONECM::RET3* aret = pz ? pz->aret3 : s_aretDefault3;   // s3
+    // (0x274A50: the zone path's parameter nearest to the focus)
+    if (pz && pz->pcrv && g_cmfollowworld.pfnCrvNearest)
+        pz->sPath = g_cmfollowworld.pfnCrvNearest(pz->pcrv, PosCmeFocus3(pcme, c, nullptr), pz->sPath);
+    const glm::vec3 posFocus0 = PosCmeFocus3(pcme, c, pz);   // sp+0x60
+    const glm::vec3 posFocus = posFocus0 + c.dposFocus;     // sp+0x70
+    if (pz && pz->ploLook) c.grf &= ~1u;
+    uLead = GSmooth(uLead, (c.grf & 1) ? 0.0f : pcme->uLead, dt, &s_smpLead, nullptr);
+    tMoveLast = std::max(c.tMoveLast, tMoveLast);
 
-    // The two samples (pan, tilt, distance) of the zone at the focus.
-    float s1[3] = {0, 0, 0}, s2[3] = {0, 0, 0};  // sp+0xF0, sp+0xFC
-    glm::vec3 normalPath(0.0f);                  // sp+0x20 (0x221408's)
+    // The two samples (pan, tilt, distance) of the zone at the focus, with the focus's tilt / distance offsets.
+    float s1[3] = {0, 0, 0}, s2[3] = {0, 0, 0};  // sp+0x140, sp+0x14C
+    glm::vec3 normalPath(0.0f);                  // sp+0x80
     if (pz && (grf & 3))
     {
-        glm::vec3 posZone;  // sp+0x30
-        glm::vec3& normal = normalPath;
-        ConvertZonePos(pz, posFocus0, &posZone, &normal);
+        glm::vec3 posZone;
+        ConvertZonePos(pz, posFocus0, &posZone, &normalPath);
         if (pz->fPolar)
         {
             ConvertVectorToCylind(posZone, &posZone.x, &posZone.y, &posZone.z);
@@ -642,11 +804,15 @@ void CPFOLLOW::Update(CPDEFI* pcpdefi, const CMJOY* pjoy)
         {
             const glm::vec3 pos = PosZoneSample(pz, posZone, pcme->acoef, pcme->alm, 1, pz->sPath, pcme->dtPath);
             ConvertVectorToSphere(pos - posFocus, &s1[0], &s1[1], &s1[2]);
+            s1[1] += c.dTilt;
+            s1[2] += c.dDist;
         }
         if (grf & 2)
         {
             const glm::vec3 pos = PosZoneSample(pz, posZone, pcme->acoef, pcme->alm, 2, pz->sPath, pcme->dtPath);
             ConvertVectorToSphere(pos - posFocus, &s2[0], &s2[1], &s2[2]);
+            s2[1] += c.dTilt;
+            s2[2] += c.dDist;
         }
     }
     if (fFirst) cpmode = 4;
@@ -656,257 +822,204 @@ void CPFOLLOW::Update(CPDEFI* pcpdefi, const CMJOY* pjoy)
         {
             cpmode = 4;
             radPan = g_cm.radCutPan;
-            const float f = std::atan(pcme->dyScreen * g_cm.yScreenRange);
-            radTilt = GLimitLm(&s_lmTilt, g_cm.radCutTilt - f);
+            radTilt = GLimitLm(&s_lmTilt, g_cm.radCutTilt - std::atan(pcme->dyScreen * g_cm.yScreenRange));
         }
         else if (!(grf & 3))
         {
             cpmode = 4;
-            radPan = pcpdefi->radHome;
-            radTilt = pcme->lmTilt.gMin;
+            radPan = c.radHome;
+            radTilt = pcme->lmTilt.gMin * 0.5f + pcme->lmTilt.gMax * 0.5f;
         }
         else if (!(grf & 2)) cpmode = 1;
         else if (!(grf & 1)) cpmode = 2;
         else
-        {
-            const float d1 = RadNormalize(s1[0] - pcpdefi->radHome);
-            const float d2 = RadNormalize(s2[0] - pcpdefi->radHome);
-            cpmode = std::fabs(d1) < std::fabs(d2) ? 1 : 2;
-        }
+            cpmode = std::fabs(RadNormalize(s1[0] - c.radHome)) < std::fabs(RadNormalize(s2[0] - c.radHome)) ? 1 : 2;
         tMoveLast = t;
         tManual = t - DT_MANUAL;
-        if (std::getenv("SLY2_CMCUTPRINT"))
-            std::printf("follow cut %d: zone %d grf %d mode %d s1 %.3f %.3f %.1f s2 %.3f %.3f %.1f home %.3f focus %.1f %.1f %.1f\n",
-                        g_cm.fCut, pz ? 1 : 0, grf, cpmode, s1[0], s1[1], s1[2], s2[0], s2[1], s2[2],
-                        pcpdefi->radHome, posFocus0.x, posFocus0.y, posFocus0.z);
-        if (std::getenv("SLY2_CMCUTPRINT"))
-            std::printf("  cpdefi base %.1f %.1f %.1f v %.1f %.1f %.1f joy %.2f %.2f manual %d\n", pcpdefi->posBase.x, pcpdefi->posBase.y,
-                        pcpdefi->posBase.z, pcpdefi->vBase.x, pcpdefi->vBase.y, pcpdefi->vBase.z, pjoy->x2, pjoy->y2, fManual);
-        if (std::getenv("SLY2_CMCUTPRINT"))
-            std::printf("  focus jt %d jtfock %d pos %.1f %.1f %.1f 4C8 %d 4CC %d 10E4 %d zonecur %p (mine %p) mat0 %.2f %.2f %.2f\n", focus.fJt, focus.jtfock, focus.posFocus.x,
-                        focus.posFocus.y, focus.posFocus.z, focus.n4C8, focus.n4CC, focus.n10E4, focus.pvZoneCur, (const void*)pz, focus.mat[0].x, focus.mat[0].y, focus.mat[0].z);
     }
     if (!(cpmode & grf) && cpmode > 0 && cpmode < 3) cpmode = 4;
 
-    // The lead: toward the zone's look object, else the focus's velocity (sp+0x30).
-    glm::vec3 vLead;
+    // The lead (sp+0x90): toward the zone's look object, else the focus's velocity.
+    glm::vec3 vLead = c.v;
     if (pz && pz->ploLook)
     {
-        glm::vec3 d = PosLoCm(pz->ploLook) - glm::vec3(pcpdefi->posBase);
+        glm::vec3 d = PosLoCm(pz->ploLook) - c.pos;
         d.z = 0.0f;
         const float l = glm::length(d);
-        const glm::vec3 n = l < EPS_1E4 ? glm::vec3(0.0f) : d * (1.0f / l);
-        float g = Quadratic(pz->alead, l);
-        if (g < pz->lmLead.gMin) g = pz->lmLead.gMin;
-        else if (pz->lmLead.gMax < g) g = pz->lmLead.gMax;
-        vLead = n * g;
+        const glm::vec3 n = l < EPS_1E4 ? glm::vec3(1, 0, 0) : d * (1.0f / l);
+        vLead = n * Clamp3(Quadratic(pz->alead, l), pz->lmLead);
     }
-    else vLead = glm::vec3(pcpdefi->vBase);
 
-    float pan = radPan, tilt = radTilt;  // f26 / f25
-    bool fDispatch = false;
-    if (grf & 4)
+    float pan = radPan, tilt = radTilt;  // f26 / f28
+    bool fTurned = false;
+    const bool fMouse = pjoy->dradMousePan != 0.0f || pjoy->dradMouseTilt != 0.0f;   // (PC)
+    if ((grf & 4) && !(c.grf & 8) && (0.0f < pjoy->uDeflect2 || dradPan != 0.0f || dradTilt != 0.0f || fMouse))
     {
-        // (PC) the mouse turns the camera like the stick, straight onto the angles (no acceleration)
-        const bool fMouse = pjoy->dradMousePan != 0.0f || pjoy->dradMouseTilt != 0.0f;
-        bool fTurn = fManual != 0 || pjoy->uDeflect2 > 0.0f || !(dradPan == 0.0f && dradTilt == 0.0f) || fMouse;
-        if (fTurn)
+        if (cpmode != 4 && g_cmfollowworld.pfnTurnSound) g_cmfollowworld.pfnTurnSound();
+        // 0x1A7B38: the stick's turn rates by the camera kind (zone +0x19C; 0 the camera), reversed by default and by
+        // Camera Options' setting (the pad's vt +0x20 / +0x28)
+        const float x2 = g_pcinput.fPadInvertCameraX ? -pjoy->x2 : pjoy->x2;
+        const float y2 = g_pcinput.fPadInvertCameraY ? -pjoy->y2 : pjoy->y2;
+        float dradPanTarget = -std::fabs(x2) * x2 * SW_PAN_STICK3;
+        float dradTiltTarget = std::fabs(y2) * y2 * SW_TILT_STICK3;
+        if (!FCamReverse3(0, false)) dradPanTarget = -dradPanTarget;
+        if (!FCamReverse3(0, true)) dradTiltTarget = -dradTiltTarget;
+        const float ddrad = DSW_STICK * dtReal;
+        dradPan = std::clamp(dradPanTarget, dradPan - ddrad, dradPan + ddrad);
         {
-            if (cpmode != 4 && g_cmfollowworld.pfnTurnSound) g_cmfollowworld.pfnTurnSound();
-            if (0.0f < pjoy->uDeflect2 || fMouse) fManual = 0;
-            if (fManual)
-            {
-                // Returning toward the remembered angles.
-                const SMPA* psmpa = (pjt && focus.n10E4 == 4) ? &s_smpaReturnFast : &s_smpaReturn;
-                pan = RadSmoothA(pan, dradPan, radPanReturn, dtReal, psmpa, &dradPan);
-                tilt = RadSmoothA(tilt, dradTilt, radTiltReturn, dtReal, psmpa, &dradTilt);
-                if (pan == radPanReturn && tilt == radTiltReturn) fManual = 0;
-            }
-            else
-            {
-                // The right stick turns the camera (accelerating at 15 / s^2).
-                const float ddrad = DSW_STICK * dtReal;
-                // (PC, settings v17) the controller's camera inversion: off is the original's orbit
-                const float x2 = g_pcinput.fPadInvertCameraX ? -pjoy->x2 : pjoy->x2;
-                const float y2 = g_pcinput.fPadInvertCameraY ? -pjoy->y2 : pjoy->y2;
-                const float dradPanTarget = x2 * std::fabs(x2) * SW_PAN_STICK;
-                const float dradTiltTarget = y2 * std::fabs(y2) * SW_TILT_STICK;
-                dradPan = std::clamp(dradPanTarget, dradPan - ddrad, dradPan + ddrad);
-                {
-                    const float lo = dradTilt - ddrad, hi = dradTilt + ddrad;
-                    if (dradTiltTarget < lo) dradTilt = lo;
-                    else dradTilt = hi < dradTiltTarget ? hi : dradTiltTarget;
-                }
-                const float ang = std::atan2(std::fabs(y2), std::fabs(x2));
-                if (ang < F32(0x3E860A92)) dradTilt = 0.0f;  // (15 degrees)
-                else if (F32(0x3FA78D36) < ang) dradPan = 0.0f;  // (75 degrees)
-                pan = RadNormalize(pan + dradPan * dtReal + MOUSE_PAN_SIGN * pjoy->dradMousePan);
-                // (the tilt is the camera's height: the mouse up looks up, the camera goes down)
-                tilt = GLimitLm(&s_lmTilt, RadNormalize(tilt + dradTilt * dtReal - pjoy->dradMouseTilt));
-                if (g_cmfollowworld.pfnCameraTurned) g_cmfollowworld.pfnCameraTurned();  // (the hook: at most every 5 s
-                                                                                         // of g_clock.tReal, as 0x2DEB30 +4)
-            }
-            cpmode = 4;
-            fLeftSamples = 1;
-            tManual = t;
-            fDispatch = true;
+            const float lo = dradTilt - ddrad, hi = dradTilt + ddrad;
+            dradTilt = dradTiltTarget < lo ? lo : (hi < dradTiltTarget ? hi : dradTiltTarget);
         }
+        const float ang = std::atan2(std::fabs(pjoy->y2), std::fabs(pjoy->x2));
+        if (ang < F32(0x3E860A92))
+        {
+            dradTilt = 0.0f;
+            fManual = 1;
+        }
+        else if (F32(0x3FA78D36) < ang) dradPan = 0.0f;
+        else fManual = 1;
+        fLeftSamples = 1;
+        pan = RadNormalize(pan + dradPan * dtReal + MOUSE_PAN_SIGN * pjoy->dradMousePan);
+        tilt = GLimitLm(&s_lmTilt, RadNormalize(tilt + dradTilt * dtReal - pjoy->dradMouseTilt));
+        if (g_cmfollowworld.pfnCameraTurned) g_cmfollowworld.pfnCameraTurned();   // (0x1854C8 every 5 s)
+        cpmode = 4;
+        tManual = t;
+        fTurned = true;
     }
-    if (!fDispatch && cpmode == 4)
+    // Hold the player's chosen angle when automatic rotation is off. Zones that disallow camera control,
+    // explicit look targets, camera cuts, and the other scripted camera policies keep their original behavior.
+    const bool fAutoRotate = vr::FAutoCameraRotation(g_pcinput.fAutoCameraRotation) || !(grf & 4) || (pz && pz->ploLook);
+    if (!fTurned && cpmode == 4 && fAutoRotate)
     {
-        // Passive: the pan follows the focus's motion across the view, the tilt its limits.
-        glm::vec3 dirStick(pjoy->x, pjoy->y, 0.0f);
-        dirStick = NormalizeOr(dirStick, glm::vec3(1, 0, 0));
+        // Passive: the pan follows the focus's motion across the view.
+        const glm::vec3 dirStick = (c.grf & 8) ? glm::vec3(1, 0, 0) : NormalizeOr(glm::vec3(pjoy->x, pjoy->y, 0.0f), glm::vec3(1, 0, 0));
         glm::vec3 dFocus = posFocus - g_cm.pos;
         dFocus.z *= F32(0x3E99999A);
         const float lFocus = glm::length(dFocus);
         dFocus = lFocus < EPS_1E4 ? glm::vec3(1, 0, 0) : dFocus * (1.0f / lFocus);
-        const int cfk = (!pz || pz->cfk == -1) ? pcpdefi->cfk : pz->cfk;
-        glm::vec3 dirSide(0.0f);  // sp+0x60 (stale for other kinds in the original)
+        const int cfk = (!pz || pz->cfk == -1) ? c.cfk : pz->cfk;
+        glm::vec3 dirSide(0.0f);   // sp+0xC0 (stale for other kinds in the original)
         if (cfk == 0) dirSide = glm::cross(glm::vec3(0, 0, 1), dFocus);
         else if (cfk == 1) dirSide = dFocus;
         dirSide = NormalizeOr(dirSide, glm::vec3(1, 0, 0));
         const float g0 = GLimitAbs(glm::dot(vLead, dirSide) / lFocus, G_LEAD_LIMIT);
-        float g5 = Quadratic(s_aLeadStick, dirStick.y);
-        g5 = std::clamp(g5, s_lmLeadStick.gMin, s_lmLeadStick.gMax);
-        float g3 = Quadratic(s_aLeadTime, t - tManual);
-        g3 = std::clamp(g3, s_lmUnit.gMin, s_lmUnit.gMax);
-        const float dradLead = g0 * uLead * g5 * g3;
-        const float panPassive = RadNormalize(pan + dradLead * dt);  // f29
-        const float uSpeed = std::min(1.0f, std::sqrt(vLead.x * vLead.x + vLead.y * vLead.y) * F32(0x3ADA740E));
-        float tiltPassive;  // f28
-        if (F32(0x3DCCCCCD) < uSpeed)
-        {
-            const SMP smp{s_smpTiltPassive.svFast * uSpeed, s_smpTiltPassive.svSlow * uSpeed, s_smpTiltPassive.dtFast};
-            tiltPassive = RadSmooth(tilt, GLimitLm(&pcme->lmTilt, tilt), dt, &smp, nullptr);
-        }
-        else tiltPassive = tilt;
-        if (!(grf & 3))
-        {
-            pan = panPassive;
-            tilt = tiltPassive;
-        }
+        const float g5 = Clamp3(Quadratic(s_aLeadStick, dirStick.y), s_lmLeadStick);
+        const float g3 = Clamp3(Quadratic(s_aLeadTime, t - tManual), s_lmUnit);
+        const float panPassive = RadNormalize(pan + g0 * uLead * g5 * g3 * dt);   // f29
+        float uSample = 0.0f, panTurn = panPassive, tiltTarget;                  // f25 / f21 / f27
+        if (!(grf & 3)) tiltTarget = GLimitLm(&pcme->lmTilt, tilt) + c.dTilt;
         else
         {
-            // Turning toward a sample: which one, and how much (f23 / f24, f27).
-            float panSample, tiltSample, uSample;
-            if (!pz->pcrv && !pz->fArc)
+            // Turning toward a sample: which one, and how much (f24 the pan, f27 the tilt, f22 the rate).
+            float panSample, uRate;
+            if (!pz->pcrv || cpmode == 1)
             {
-                uSample = 1.0f;
+                uSample = uRate = 1.0f;
                 panSample = s1[0];
-                tiltSample = s1[1];
+                tiltTarget = s1[1];
             }
             else if (pjt && focus.pvZoneCur == pz)
             {
-                uSample = 3.0f;
-                panSample = s1[0];
-                tiltSample = s1[1];
-            }
-            else if (cpmode == 1)
-            {
+                uRate = 3.0f;
                 uSample = 1.0f;
                 panSample = s1[0];
-                tiltSample = s1[1];
+                tiltTarget = s1[1];
             }
             else if (cpmode == 2)
             {
-                uSample = 1.0f;
+                uSample = uRate = 1.0f;
                 panSample = s2[0];
-                tiltSample = s2[1];
+                tiltTarget = s2[1];
             }
             else
             {
                 glm::vec3 dirFacing = MatLoCm(pso)[0];
                 dirFacing.z = 0.0f;
                 dirFacing = NormalizeOr(dirFacing, glm::vec3(1, 0, 0));
-                const glm::vec3 normalWorld = ConvertVec(pz->pzone, nullptr, normalPath);
-                const float d = glm::dot(dirFacing, normalWorld);
-                uSample = d * d * (3.0f - (std::fabs(d) + std::fabs(d)));
-                if ((grf & 2) && !(0.0f < d))
-                {
-                    panSample = s2[0];
-                    tiltSample = s2[1];
-                }
-                else
-                {
-                    panSample = s1[0];
-                    tiltSample = s1[1];
-                }
+                const float d = glm::dot(dirFacing, ConvertVec(pz->pzone, nullptr, normalPath));
+                uSample = uRate = d * d * (3.0f - (std::fabs(d) + std::fabs(d)));
+                if ((grf & 2) && !(0.0f < d)) panSample = s2[0], tiltTarget = s2[1];
+                else panSample = s1[0], tiltTarget = s1[1];
             }
-            float uRate;  // f21
             if (pjt)
             {
                 const float vxy = std::sqrt(vLead.x * vLead.x + vLead.y * vLead.y);
-                if (focus.n4CC != -1 && focus.n4C8 == 0) uRate = std::min(1.0f, vxy * F32(0x3BA3D70A));
-                else uRate = std::min(1.0f, vxy * F32(0x3ADA740E));
+                uRate *= std::min(1.0f, vxy * ((focus.n4CC != -1 && focus.n4C8 == 0) ? F32(0x3BA3D70A) : F32(0x3ADA740E)));
             }
             else uRate = 0.0f;
             uRate *= pcme->uSampleRate;
-            if (fReturn2)
+            // the pan's returns (the zone's return record: 2 after the last move / turn, then 1 until the samples are left)
+            const float dtMove = t - (tMoveLast + DT_MANUAL_HOLD), dtTurn = t - (tManual + DT_MANUAL);
+            if (aret[1].f)
             {
-                const float dt1 = t - (tMoveLast + DT_MANUAL_HOLD);
-                const float dt2 = t - (tManual + DT_MANUAL);
                 float u = 0.0f;
-                if (0.0f < pz->dtReturn2) u = GLimitLm(&s_lmUnit, dt1 / pz->dtReturn2) * GLimitLm(&s_lmUnit, dt2 / pz->dtReturn2);
-                else if (0.0f < dt1 && 0.0f < dt2) u = 1.0f;
-                u *= pz->uReturn2;
-                if (uRate * uSample < u)
-                {
-                    uSample = 1.0f;
-                    uRate = u;
-                }
+                if (0.0f < aret[1].dt) u = GLimitLm(&s_lmUnit, dtMove / aret[1].dt) * GLimitLm(&s_lmUnit, dtTurn / aret[1].dt);
+                else if (0.0f < dtMove && 0.0f < dtTurn) u = 1.0f;
+                u *= aret[1].u;
+                if (uRate < u) uSample = 1.0f, uRate = u;
             }
-            if (fReturn1 && !fLeftSamples)
+            if (aret[0].f && !fManual)
             {
-                const float u = (0.0f < pz->dtReturn1 ? GLimitLm(&s_lmUnit, (t - pz->tArc) / pz->dtReturn1) : 1.0f) * pz->uReturn1;
-                if (uRate * uSample < u)
-                {
-                    uSample = 1.0f;
-                    uRate = u;
-                }
+                float u = aret[0].u;
+                if (0.0f < aret[0].dt) u *= GLimitLm(&s_lmUnit, (t - tActivate3) / aret[0].dt);
+                if (uRate < u) uSample = 1.0f, uRate = u;
             }
-            const SMP smp{s_smpSample.svFast * uRate, s_smpSample.svSlow * uRate, s_smpSample.dtFast};
-            float panTurn = RadSmooth(pan, RadNormalize(pan + RadNormalize(panSample - pan)), dt, &smp, nullptr);   // f21
-            float tiltTurn = RadSmooth(tilt, RadNormalize(tilt + RadNormalize(tiltSample - tilt)), dt, &smp, nullptr);  // f22
+            // (the zone's own turn (vt +0x138's z) adds to the smoothing's speeds)
+            const float wz = 0.0f;
+            const SMP smp{s_smpSample.svFast * uRate + wz, s_smpSample.svSlow * uRate + wz, s_smpSample.dtFast};
+            panTurn = RadSmooth(pan, RadNormalize(pan + RadNormalize(panSample - pan)), dt, &smp, nullptr);
             if (std::fabs(RadNormalize(panSample - panPassive)) < std::fabs(RadNormalize(panSample - panTurn))) panTurn = panPassive;
-            if (std::fabs(RadNormalize(tiltSample - tiltPassive)) < std::fabs(RadNormalize(tiltSample - tiltTurn))) tiltTurn = tiltPassive;
-            const float panNew = RadNormalize(pan + (1.0f - uSample) * RadNormalize(panPassive - pan) + uSample * RadNormalize(panTurn - pan));
-            static const bool s_fFollowDbg = std::getenv("SLY2_CMFOLLOWDBG") != nullptr;
-            if (s_fFollowDbg)
-                std::printf("followdbg t %.3f pan %.3f passive %.3f turn %.3f sample %.3f uSample %.3f uRate %.4f cpmode %d fRet1 %d fRet2 %d left %d\n",
-                            t, pan, panPassive, panTurn, panSample, uSample, uRate, cpmode, fReturn1 ? 1 : 0, fReturn2 ? 1 : 0, fLeftSamples ? 1 : 0);
-            const float tiltNew = RadNormalize(tilt + (1.0f - uSample) * RadNormalize(tiltPassive - tilt) + uSample * RadNormalize(tiltTurn - tilt));
-            pan = panNew;
-            tilt = tiltNew;
-            // Reaching a sample: follow it from now on.
-            bool fCheck = !fFirst;
-            if (fCheck && pz->pcrv && pz->crvk == 0 && !(pz->ccrvPoint < 3)) fCheck = false;
-            auto fReached = [&](float angPrev, float angSamplePrev, float ang, float angSample) {
-                const float d = RadNormalize(angPrev - angSamplePrev) * RadNormalize(ang - angSample);
-                if (!(d <= 0.0f) && !(std::fabs(RadNormalize(ang - angSample)) < EPS_1E4)) return false;
-                return std::fabs(RadNormalize(ang - angSample)) < PI * 0.5f;
-            };
-            if (fCheck)
+        }
+        pan = RadNormalize(pan + (1.0f - uSample) * RadNormalize(panPassive - pan) + uSample * RadNormalize(panTurn - pan));
+        // The tilt: toward its target at the lead's speed's rate, or the returns' (tilt 2 after the last move / turn,
+        // tilt 1 until the samples are left: by default on at once)
+        float uTilt = Clamp3(Quad3(s_aTiltRate3, std::sqrt(vLead.x * vLead.x + vLead.y * vLead.y)), s_lmUnit3);   // f22 / f24
+        const float uTiltSpeed = uTilt;
+        if (aret[3].f)
+        {
+            const float dtMove = t - (tMoveLast + DT_MANUAL_HOLD), dtTurn = t - (tManual + DT_MANUAL);
+            float u = 0.0f;
+            if (0.0f < aret[3].dt) u = GLimitLm(&s_lmUnit, dtMove / aret[3].dt) * GLimitLm(&s_lmUnit, dtTurn / aret[3].dt);
+            else if (0.0f < dtMove && 0.0f < dtTurn) u = 1.0f;
+            u *= aret[3].u;
+            if (uTiltSpeed < u) uTilt = u;
+        }
+        if (aret[2].f && !fLeftSamples)
+        {
+            float u = aret[2].u;
+            if (0.0f < aret[2].dt) u *= GLimitLm(&s_lmUnit, (t - tActivate3) / aret[2].dt);
+            if (uTilt < u) uTilt = u;
+        }
+        const SMP smpTilt{s_smpTilt3.svFast * uTilt, s_smpTilt3.svSlow * uTilt, s_smpTilt3.dtFast};
+        tilt = RadSmooth(tilt, tiltTarget, dt, &smpTilt, nullptr);
+        static const bool s_fDbg = std::getenv("SLY3_CMFOLLOWDBG") != nullptr;
+        if (s_fDbg)
+            std::printf("follow3 t %.3f pan %.4f passive %.4f turn %.4f uSample %.3f tilt %.4f -> %.4f uTilt %.3f g0 %.3f uLead %.3f cpmode %d grf %d\n", t, pan,
+                        panPassive, panTurn, uSample, tilt, tiltTarget, uTilt, g0, uLead, cpmode, grf);
+        // Reaching a sample: follow it from now on (not on the first frame; on a linear path only of 3 points or more)
+        bool fCheck = (grf & 3) && !fFirst;
+        if (fCheck && pz->pcrv && pz->crvk == 0 && !(pz->ccrvPoint < 3)) fCheck = false;
+        auto fReached = [&](float angPrev, float angSamplePrev, float ang, float angSample) {
+            const float d = RadNormalize(angPrev - angSamplePrev) * RadNormalize(ang - angSample);
+            if (!(d <= 0.0f) && !(std::fabs(RadNormalize(ang - angSample)) < EPS_1E4)) return false;
+            return std::fabs(RadNormalize(ang - angSample)) < PI * 0.5f;
+        };
+        if (fCheck)
+        {
+            if ((grf & 1) && fReached(radPan, radPan1, pan, s1[0]) && fReached(radTilt, radTilt1, tilt, s1[1]))
+                fManual = cpmode = fLeftSamples = 1;
+            else if ((grf & 2) && fReached(radPan, radPan2, pan, s2[0]) && fReached(radTilt, radTilt2, tilt, s2[1]))
             {
-                if ((grf & 1) && fReached(radPan, radPan1, pan, s1[0]) && fReached(radTilt, radTilt1, tilt, s1[1]))
-                {
-                    fLeftSamples = 1;
-                    cpmode = 1;
-                }
-                else if ((grf & 2) && fReached(radPan, radPan2, pan, s2[0]) && fReached(radTilt, radTilt2, tilt, s2[1]))
-                {
-                    cpmode = 2;
-                    fLeftSamples = 1;
-                }
+                cpmode = 2;
+                fManual = fLeftSamples = 1;
             }
         }
     }
-    // (PC addition, debug menu only: a guest's aim mode holds the camera's pan unless the player turns it, so a strafe
-    // does not swing the view and her aim with it; pccharacter.cpp, false in normal play)
-    if (g_fPcCmHoldPan && !fDispatch && g_ploPcCmDist && psoFocus == g_ploPcCmDist) pan = radPan;
+    // (PC addition, debug menu only: a guest's aim mode holds the camera's pan unless the player turns it)
+    if (g_fPcCmHoldPan && !fTurned && g_ploPcCmDist && psoFocus == g_ploPcCmDist) pan = radPan;
 
     // The eye's target (pan, tilt, distance) and screen offsets (f31: x, f30: y) by the mode.
-    float aeye[3] = {0, 0, 0};  // sp+0x108
+    float aeye[3] = {0, 0, 0};  // sp+0x164
     float dxScreen = 0, dyScreenT = 0;
     if (cpmode == 1)
     {
@@ -924,11 +1037,11 @@ void CPFOLLOW::Update(CPDEFI* pcpdefi, const CMJOY* pjoy)
     {
         aeye[0] = pan;
         aeye[1] = tilt;
+        dyScreenT = pcme->dyScreen;
         if (!(grf & 3))
         {
-            dyScreenT = pcme->dyScreen;
             dxScreen = pcme->dxScreen;
-            aeye[2] = std::fabs(pcme->dtPath);
+            aeye[2] = std::fabs(pcme->dtPath) + c.dDist;
         }
         else
         {
@@ -937,7 +1050,6 @@ void CPFOLLOW::Update(CPDEFI* pcpdefi, const CMJOY* pjoy)
             else if (!(grf & 1)) u = 0.0f;
             else
             {
-                // Keep pan between the two samples' pans, then the smoothstep of its place between them.
                 if (radPan < s1[0])
                 {
                     if (radPan < s2[0])
@@ -954,40 +1066,44 @@ void CPFOLLOW::Update(CPDEFI* pcpdefi, const CMJOY* pjoy)
                 u = (radPan - s2[0]) / (s1[0] - s2[0]);
                 u = u * u * (3.0f - (u + u));
             }
-            const float ux = pcme->dxScreen;
-            dyScreenT = pcme->dyScreen;
             aeye[2] = u * s1[2] + (1.0f - u) * s2[2];
-            dxScreen = u * ux + (1.0f - u) * -ux;
+            dxScreen = u * pcme->dxScreen + (1.0f - u) * -pcme->dxScreen;
         }
     }
-    // (modes 0 / 3: the original reads its stack as left by earlier frames; zeros here)
-    // PC addition (debug menu only, pccharacter.cpp): a bigger / smaller guest character on the player, the zone's
-    // distance scaled by the guest's size (g_ploPcCmDist null in normal play: nothing changes)
-    if (g_ploPcCmDist && psoFocus == g_ploPcCmDist) aeye[2] *= g_uPcCmDist;
+    if (g_ploPcCmDist && psoFocus == g_ploPcCmDist) aeye[2] *= g_uPcCmDist;   // (PC addition, debug menu only)
 
+    bool fFar = false;   // s0
     if (g_cm.fCut)
     {
         dsDist = 0.0f;
         ddyScreen = 0.0f;
-        dyScreenT = dyScreenT;  // (snapped: the targets are used as they are)
     }
     else
     {
-        const float rDamp = 1.0f + pcme->rDamping * R_DIST_DAMPING * dt;
-        const float rSpring = pcme->rSpring * R_DIST_SPRING * dt;
+        fFar = 400.0f < sDist - aeye[2];
+        const float rDamp = 1.0f + pcme->rDamping * (dt * R_DIST_DAMPING);
+        const float rSpring = pcme->rSpring * (dt * R_DIST_SPRING);
         dsDist = rDamp * dsDist + (aeye[2] - sDist) * rSpring;
         ddyScreen = rDamp * ddyScreen + (dyScreenT - dyScreen) * rSpring;
         aeye[2] = sDist + dsDist * dt;
         dyScreenT = dyScreen + ddyScreen * dt;
     }
 
-    glm::vec3 dposEye = SetVectorSphere(aeye[0], aeye[1], aeye[2]);  // sp+0x40
-    glm::vec3 posEyeNew = posFocus + dposEye;                         // sp+0x50
+    glm::vec3 dposEye = SetVectorSphere(aeye[0], aeye[1], aeye[2]);
+    glm::vec3 posEyeNew = posFocus + dposEye;
+    bool fBlocked = false;   // sp+0x160
     if (!(pz && pz->fNoAvoid))
     {
         if (g_cm.fCut) posEyeNew = PosEyeCut(this, posFocus, posEyeNew);
-        else if (!F_NO_AVOID) posEyeNew = PosEyeMove(glm::vec3(posEye), posEyeNew);
+        else if (!F_NO_AVOID)
+        {
+            // 0x167660 (the eye's move avoiding the world; *pfBlocked when it was stopped)
+            const glm::vec3 posTo = posEyeNew;
+            posEyeNew = PosEyeMove(glm::vec3(posEye), posTo);
+            fBlocked = glm::length(posEyeNew - posTo) > 0.01f;
+        }
     }
+    if (!fBlocked || !fFar) tClear3 = t;
     dposEye = posEyeNew - posFocus;
     ConvertVectorToSphere(dposEye, &aeye[0], &aeye[1], &aeye[2]);
     posEye = glm::vec4(posEyeNew, posEye.w);
@@ -996,10 +1112,7 @@ void CPFOLLOW::Update(CPDEFI* pcpdefi, const CMJOY* pjoy)
     const float dradTiltScreen = -std::atan(dyScreenT * g_cm.yScreenRange);   // f22
     if (fFirst)
     {
-        if (g_cm.fCut)
-        {
-            dradPanOffset = dradTiltOffset = ddradPanOffset = ddradTiltOffset = 0.0f;
-        }
+        if (g_cm.fCut) dradPanOffset = dradTiltOffset = ddradPanOffset = ddradTiltOffset = 0.0f;
         else
         {
             float r, z;
@@ -1010,20 +1123,21 @@ void CPFOLLOW::Update(CPDEFI* pcpdefi, const CMJOY* pjoy)
             const float tiltLook = RadNormalize(std::atan2(-z, r) + dradTiltScreen);
             dradPanOffset = RadNormalize(panCm - panLook);
             dradTiltOffset = RadNormalize(tiltCm - tiltLook);
-            ddradPanOffset = 0.0f;
-            ddradTiltOffset = 0.0f;
+            ddradPanOffset = ddradTiltOffset = 0.0f;
         }
     }
     else
     {
-        const float a0 = R_OFFSET_SPRING * dradPanOffset + R_OFFSET_DAMPING * ddradPanOffset;
-        const float a1 = dradTiltOffset * R_OFFSET_SPRING + ddradTiltOffset * R_OFFSET_DAMPING;
-        ddradPanOffset += a0 * dt;
-        ddradTiltOffset += a1 * dt;
+        ddradPanOffset += (R_OFFSET_SPRING * dradPanOffset + R_OFFSET_DAMPING * ddradPanOffset) * dt;
+        ddradTiltOffset += (R_OFFSET_SPRING * dradTiltOffset + R_OFFSET_DAMPING * ddradTiltOffset) * dt;
         dradPanOffset += ddradPanOffset * dt;
         dradTiltOffset += ddradTiltOffset * dt;
     }
     SetCmLookAt(&g_cm, posEyeNew, posFocus, dradPanScreen + dradPanOffset, dradTiltScreen + dradTiltOffset);
+    static const bool s_fEyePrint = std::getenv("SLY3_CMEYEPRINT") != nullptr;   // (debug: the eye per frame)
+    if (s_fEyePrint)
+        std::printf("cmeye t %.3f focus %.1f %.1f %.1f pan %.4f tilt %.4f dist %.1f near %.1f cpmode %d grf %d dyScreen %.3f dDist %.1f dTilt %.3f\n", t, posFocus.x, posFocus.y,
+                    posFocus.z, aeye[0], aeye[1], aeye[2], g_cm.sNearClip, cpmode, grf, dyScreenT, c.dDist, c.dTilt);
     dyScreen = dyScreenT;
     radPan = aeye[0];
     radTilt = aeye[1];
@@ -1033,6 +1147,7 @@ void CPFOLLOW::Update(CPDEFI* pcpdefi, const CMJOY* pjoy)
     radPan2 = s2[0];
     radTilt2 = s2[1];
     fFirst = 0;
+    fReactivate3 = 0;
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -1066,13 +1181,9 @@ void CPLOOKAT::Update(CPDEFI* pcpdefi, const CMJOY* pjoy)
         SetCmLookAt(&g_cm, PosLoCm(pcmobj->plo), PosLoCm(pcmobj->ploTarget), 0.0f, 0.0f);
     else
     {
-        // The camera object looks along -z with x to its right: the camera's rows (-z, -x, y).
-        const glm::mat3 m = MatLoCm(pcmobj->plo);
-        glm::mat3 mat;
-        mat[0] = -m[2];
-        mat[1] = -m[0];
-        mat[2] = m[1];
-        SetCmPosMat(&g_cm, PosLoCm(pcmobj->plo), mat);
+        // (orig3 0x130DA8 -> 0x166DE8: Sly 3 gives the camera the object's world matrix as it is; Sly 2's camera
+        // object looked along -z with x to its right, the rows (-z, -x, y), which pointed v_ext's flyover at the ground)
+        SetCmPosMat(&g_cm, PosLoCm(pcmobj->plo), MatLoCm(pcmobj->plo));
     }
     if (!(pcmobj->cFocal > 0)) return;
     float rad = 2.0f * std::atan(F32(0x418FF79B) / pcmobj->sFocal);
@@ -1115,7 +1226,7 @@ glm::vec3 CPFREE::PosEye()
     return PosFocus() + m * s_dposFreeEye;
 }
 
-// orig: 0x00150EF0
+// orig: 0x00150EF0 (orig3: 0x16AE90, the same C in the Sly 3 decomp)
 void CPFREE::Snap()
 {
     posFocus = glm::vec4(PosFocus(), posFocus.w);
@@ -1315,7 +1426,7 @@ const float s_aReconRate[2] = {0.0f, F32(0x3FA66666)};   // 0x2BD9B0 (the turn's
 glm::vec3 CPRECON::PosFocus()
 {
     glm::vec3 pos = PosLoCm(psoFocus);
-    if (FIsLoDerivedFromCm(psoFocus, 0x34)) pos += glm::vec3(0, 0, 1) * 150.0f;
+    if (FIsLoDerivedFromCm(psoFocus, S3CID(0x34))) pos += glm::vec3(0, 0, 1) * 150.0f;
     return pos;
 }
 
@@ -1341,7 +1452,7 @@ void CPRECON::Activate(LO* psoFocusNew, void* pv)
     CPLCY::Activate(psoFocusNew, pv);
     StartZoomSounds(&sndZoom, &sndExtra);
     DecomposeRotateMatrixPanTilt(g_cm.mat, &radPan, &radTilt);
-    if (FIsLoDerivedFromCm(psoFocus, 0x34))
+    if (FIsLoDerivedFromCm(psoFocus, S3CID(0x34)))
     {
         lmPan = s_lmReconPanJt;
         lmTilt = s_lmReconTiltJt;
@@ -1376,7 +1487,7 @@ void CPRECON::Activate(LO* psoFocusNew, void* pv)
 void CPRECON::Deactivate(LO* psoFocusOld, void* pv)
 {
     StopZoomSounds(&sndZoom, &sndExtra);
-    if (FIsLoDerivedFromCm(psoFocus, 0x34)) SetCmCut(&g_cm, radPan + PI, -radTilt);
+    if (FIsLoDerivedFromCm(psoFocus, S3CID(0x34))) SetCmCut(&g_cm, radPan + PI, -radTilt);
     else SetCmCut(&g_cm, radPanStart + PI, -radTiltStart);
     CPLCY::Deactivate(psoFocusOld, pv);
 }
@@ -1416,6 +1527,14 @@ void CPRECON::Update(CPDEFI* pcpdefi, const CMJOY* pjoy)
     const float s = (1.0f - g_cm.radFOV) * s_aReconRate[0] + g_cm.radFOV * s_aReconRate[1];
     radPan = radPan + s * dradPan * dt;
     radTilt = radTilt + s * dradTilt * dt;
+    // (VR, vr.h: the binocucom in Immersive) the head's turn onto the angles, one to one, within the limits
+    if (float dPan = 0.0f, dTilt = 0.0f; vr::FHeadLook(&dPan, &dTilt))
+    {
+        radPan += dPan;
+        if (TWO_PI <= lmPan.gMax - lmPan.gMin) radPan = RadNormalize(radPan);
+        else radPan = std::clamp(radPan, lmPan.gMin, lmPan.gMax);
+        radTilt = std::clamp(radTilt + dTilt, lmTilt.gMin, lmTilt.gMax);
+    }
     // (PC) the mouse aims straight onto the angles, slower while zoomed in, within the limits
     if (pjoy->dradAimRight != 0.0f || pjoy->dradAimUp != 0.0f)
     {
@@ -1431,7 +1550,7 @@ void CPRECON::Update(CPDEFI* pcpdefi, const CMJOY* pjoy)
     if (TWO_PI <= lmPan.gMax - lmPan.gMin) radPan = RadNormalize(radPan);
     if (static const bool s_f = std::getenv("SLY2N_RECONTILT") != nullptr; s_f)
         std::printf("recon: t %.3f pan %.4f tilt %.4f joy %.2f %.2f mouse %.4f %.4f\n", g_clock.t, radPan, radTilt, pjoy->x, pjoy->y, pjoy->dradAimRight, pjoy->dradAimUp);
-    // (debug, a test aid: SLY2N_RECONAIM="oid|oid..,zoom@t;..." turns the view every frame from game time t on (the
+    // (debug, a test aid: SLY2N_RECONAIM="oid[:zoom]|oid..,zoom@t;..." turns the view every frame from game time t on (the
     // last entry started wins) at the first of those objects in the world (a recon subject (cid 0x2E) only while its
     // task +0xEC is not done), ignoring the limits, with that zoom)
     if (static const char* s_szAim = std::getenv("SLY2N_RECONAIM"); s_szAim && g_psw)
@@ -1450,7 +1569,10 @@ void CPRECON::Update(CPDEFI* pcpdefi, const CMJOY* pjoy)
         for (size_t i = 0; i < strOids.size() && !ploAim;)
         {
             const size_t j = std::min(strOids.find('|', i), strOids.size());
-            const int oid = std::atoi(strOids.substr(i, j - i).c_str());
+            const std::string tok = strOids.substr(i, j - i);
+            const int oid = std::atoi(tok.c_str());
+            // ("oid:zoom": that object's own zoom, e.g. a near large target)
+            const float uOid = tok.find(':') != std::string::npos ? std::strtof(tok.c_str() + tok.find(':') + 1, nullptr) : -1.0f;
             i = j + 1;
             // (of several in-world copies, the nearest to the view: e.g. Ep4's four spycam code targets 77142)
             float dBest = 3.4e38f;
@@ -1458,10 +1580,17 @@ void CPRECON::Update(CPDEFI* pcpdefi, const CMJOY* pjoy)
                 if (up->oid == oid && up->fInWorld)
                 {
                     if (FCidDerivedFrom(up->Cid(), S3CID(0x2E)))
-                        if (const TASK* ptask = dynamic_cast<const TASK*>(PloFindSwObjectByOid(g_psw, static_cast<int>(up->U32Field(0, 0xEC, uint32_t(-1))))))
+                    {
+                        const int oidTask = static_cast<int>(up->U32Field(0, 0xEC, uint32_t(-1)));
+                        if (const TASK3* p3 = FScripts3Active() ? PtaskFind3(oidTask) : nullptr)   // (Sly 3: task3's state)
+                        {
+                            if (p3->nState >= 2) continue;
+                        }
+                        else if (const TASK* ptask = dynamic_cast<const TASK*>(PloFindSwObjectByOid(g_psw, oidTask)))
                             if (ptask->nState >= 2) continue;
+                    }
                     const float d = glm::length(PosLoWorld(up.get()) - PosFocus());
-                    if (d < dBest) { dBest = d; ploAim = up.get(); }
+                    if (d < dBest) { dBest = d; ploAim = up.get(); if (uOid >= 0.0f) u = uOid; }
                 }
         }
         if (ploAim)

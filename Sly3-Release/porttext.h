@@ -12,6 +12,9 @@
 // only the Japanese font's 1028 glyphs (kana, ASCII and its kanji).
 
 #include <string>
+#include <string_view>
+
+namespace cane::sly2input { enum class Action; }
 
 enum PTX : int
 {
@@ -27,11 +30,11 @@ enum PTX : int
     PTX_ExitToDesktop, PTX_DisplayOptions, PTX_ControlsAndPrompts,
     // the controls options
     PTX_ButtonIcons, PTX_Auto, PTX_OriginalPsIcons, PTX_InstantSkip, PTX_MouseCamera, PTX_MouseSensitivity,
-    PTX_MouseAimSensitivity, PTX_WheelZoomsBinocucom, PTX_MouseInMenus,
+    PTX_MouseAimSensitivity, PTX_MouseWheelZoom, PTX_MouseInMenus,
     PTX_MouseAimInHacking, PTX_KeyboardMapping, PTX_ResetKeyboardMapping,
     // the keyboard mapping's rows
     PTX_MoveForward, PTX_MoveBack, PTX_MoveLeft, PTX_MoveRight, PTX_Square, PTX_Circle, PTX_Cross, PTX_Triangle,
-    PTX_Start, PTX_Select, PTX_CameraLeft, PTX_CameraRight, PTX_CameraUp, PTX_CameraDown, PTX_PressAKey,
+    PTX_Start, PTX_Select, PTX_CameraLeft, PTX_CameraRight, PTX_CameraUp, PTX_CameraDown, PTX_TankLeftTrack, PTX_TankRightTrack, PTX_PressAKey,
     // key and mouse names
     PTX_KeyUnbound, PTX_KeySpace, PTX_KeyUp, PTX_KeyDown, PTX_KeyLeft, PTX_KeyRight, PTX_KeyLeftMod, PTX_KeyRightMod,
     PTX_MouseLeft, PTX_MouseRight, PTX_MouseMiddle, PTX_MouseN, PTX_WheelUp, PTX_WheelDown, PTX_Mouse,
@@ -49,11 +52,46 @@ enum PTX : int
     // mouse in each view (the controller's binocucom / turret rows are the game's own options 0x51 / 0x53)
     PTX_InvertControlsPage, PTX_PadInvertCameraX, PTX_PadInvertCameraY, PTX_MouseInvertCameraX, PTX_MouseInvertCameraY,
     PTX_MouseInvertBinocX, PTX_MouseInvertBinocY, PTX_MouseInvertTurretX, PTX_MouseInvertTurretY,
+    PTX_AutoCameraRotation,
+    PTX_AdvancedBindings, PTX_ActionBindings, PTX_ActionKeyboard, PTX_ActionController,
+    PTX_ResetAdvancedBindings, PTX_CaptureAction,
+    // the Remap page (remappage.h): its entry, title, column heads, last rows, hints and capture lines
+    PTX_RemapPage, PTX_RemapTitle, PTX_RemapAction, PTX_RemapKeyboard, PTX_RemapController, PTX_RemapReset,
+    PTX_RemapBack, PTX_RemapChange, PTX_RemapClear, PTX_RemapPressKey, PTX_RemapPressButton, PTX_RemapFixed,
+    // (VR, vr.h) the pause menu's VR Settings page (shown with a headset only)
+    PTX_VrSettings, PTX_VrMode, PTX_VrImmersive, PTX_VrFlatScreen, PTX_VrVignette, PTX_VrLow, PTX_VrMedium, PTX_VrHigh,
+    PTX_VrScreenSize, PTX_VrSmall, PTX_VrLarge, PTX_VrRefreshRate, PTX_VrWorldScale, PTX_VrRecenter,
+    PTX_VrCutscenes, PTX_VrRcTable,
+    // the pause menu's Exit to Desktop when the game was started from SafeHouse's Collection Style Launcher
+    // (SAFEHOUSE_LAUNCHER=collection: quitting returns to it)
+    PTX_QuitToLauncher,
+    // (audio, notes/AUDIO_2026-11-10.md) the options' Audio Devices page: the game's output, the microphone (USB
+    // Headset), the headset's speaker; a device's values ("%s (not connected)": a chosen device that is missing)
+    PTX_AudioDevicesPage, PTX_OutputDevice, PTX_InputDevice, PTX_HeadsetOutputDevice, PTX_SystemDefault, PTX_SameAsOutput,
+    PTX_NotConnected,
+    // (splitscreen3.h) the split screen's binding screen and view tags: "Player %d", "Player %d, press (X) / %s" (%s the
+    // Space key's name), a lost pad, the devices, the options
+    PTX_SplitTitle, PTX_SplitPlayerN, PTX_SplitPress, PTX_SplitReconnect, PTX_SplitKeyboard, PTX_SplitWaiting,
+    PTX_SplitLayout, PTX_SplitLayoutAuto, PTX_SplitLayoutSide, PTX_SplitLayoutStacked, PTX_SplitFourPlayers,
+    // (copsmap3.h) Cops and Robbers on the other hubs: the map select, the round's messages
+    PTX_CopsMap, PTX_CopsMapOriginal, PTX_CopsMapNative, PTX_CopsFirstTo, PTX_CopsSlyLoot, PTX_CopsDelivered, PTX_CopsDropped,
+    PTX_CopsCaught, PTX_CopsKnockedOut, PTX_CopsPowerSly, PTX_CopsPowerCarm, PTX_CopsYouCarry, PTX_CopsSlyWins, PTX_CopsCarmWins,
+    // (hackmp3.h) the hacking multiplayer game's character select
+    PTX_HackCharNames, PTX_HackSelectTitle, PTX_HackSelectHint, PTX_HackReady, PTX_HackChoose,
+    // (duel3.h) the Biplane Duel's free-for-all (PC option): the menu row, the description, the round's messages ("%s":
+    // PTX_SplitPlayerN's "Player N")
+    PTX_DuelPlayers, PTX_DuelOriginal, PTX_DuelFreeForAll, PTX_DuelNPlayers, PTX_DuelDescFFA, PTX_DuelFirstTo,
+    PTX_DuelShotDown, PTX_DuelLeads, PTX_DuelWins, PTX_DuelCrashed,
+    // (settings v22, display.h monitor) the display options' Monitor row and its default
+    PTX_Monitor, PTX_Primary,
     PTX_Max
 };
 
 // The string in the current language, in the game's text encoding.
 std::string StrPort(PTX ptx);
+// Started from SafeHouse's Collection Style Launcher (SAFEHOUSE_LAUNCHER=collection): the pause menu's Exit to Desktop
+// says Quit to Launcher (PTX_QuitToLauncher; quitting returns to that launcher, which waits for the game).
+bool FQuitToLauncher();
 // "<label><sep><value>" ("Mouse Camera: On"); a value from the port's table or any text already encoded.
 std::string StrPortValue(PTX ptxLabel, const std::string& value);
 std::string StrPortOnOff(PTX ptxLabel, bool f);
@@ -63,6 +101,8 @@ std::string StrPortDecimal(float g, int cdigits);
 std::string StrToGameText(const std::string& utf8);
 // The key's or mouse button's name (pcinput.h PchzKeyName) in the current language where the table has it.
 std::string StrPortKeyName(int key);
+std::string StrPortActionName(cane::sly2input::Action action);
+std::string StrPortActionGroup(std::string_view group);
 // The language is the USA disc's English (the strings are the port's original ones).
 bool FPortEnglish();
 
@@ -72,3 +112,8 @@ bool FPortEnglish();
 // FPcWording(): the "Original PlayStation Icons" option shows the original wording.
 const char* SzPcWording(int idDisc);
 bool FPcWording();
+
+// The pause menu's "Exit to Episode Menu" in the languages whose text says "DVD menu" (Dutch, Portuguese, Danish,
+// Finnish, Norwegian, Swedish) named as the others name it (UTF-8; null: the game's own string). splayer.cpp
+// StrLocalized, always (not a PS2-for-PC wording: a naming fix), unless a text mod changed the string.
+const char* SzEpisodeMenuWording(int idDisc);

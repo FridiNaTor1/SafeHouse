@@ -1,6 +1,7 @@
 // See skipcut.h.
 
 #include "skipcut.h"
+#include "binoc3.h"
 #include "game/sly3.h"
 
 #include "audio.h"
@@ -15,6 +16,7 @@
 #include "hud.h"
 #include "joy.h"
 #include "menu.h"
+#include "frontend.h"
 #include "pcinput.h"
 #include "porttext.h"
 #include "region.h"
@@ -55,17 +57,46 @@ struct SKIPCUT
     uint64_t idScene = 0;       // the scene whose hold / fast-forward this belongs to
     bool fAwaitRelease = false; // a Circle held across a scene boundary cannot start another skip
     int frameStop = -1;         // the step the last fast-forward ended at (the scene's end: the check's)
+    uint16_t grfCarried = 0;    // buttons held into the scene (or that turn on in its first moments, e.g. a held movement
+                                // key becoming the d-pad once the scene takes the pad): no hint until released
+    float tScene = 0.0f;        // since the scene started
 };
 SKIPCUT s_skip;
 SKIPCUT s_skipMovie;
 
 bool FScptWaitsNow() { return g_frameJoy - s_skip.frameWait <= 2; }
 
+// (Sly 3: its scripts run in game/scptrun3.cpp, which marks no scenes yet: a binocucom talk (the player's binocucom
+// panel open, binoc3.h) is the skippable scene, one id per opening)
+uint64_t IdBinocTalk3()
+{
+    static uint64_t s_id = 0;
+    static bool s_fOpen = false;
+    bool fOpen = false;
+    for (LO* plo : g_psw->mpcidaplo[S3CID(0x35)])
+        if (NBinocPanelState3(plo) >= 0) fOpen = true;
+    if (fOpen && !s_fOpen) s_id = NewSkipCutScene();
+    s_fOpen = fOpen;
+    return fOpen ? s_id : 0;
+}
+
+bool s_fScptCamera3 = false;
+int s_frameScptCameraOff3 = -100;
+uint64_t s_idScptCamera3 = 0;
+
+uint64_t IdScptCamera3()
+{
+    if (!s_fScptCamera3 || FTitleShown()) return 0;
+    return s_idScptCamera3;
+}
+
 uint64_t IdCutscene()
 {
     if (FMenuShown() || !g_psw) return 0;
     uint64_t id = IdScptCutscene();
-    for (int cid : {0x35, 0x36, 0x37})
+    if (const uint64_t idCam = IdScptCamera3(); idCam && (!id || idCam < id)) id = idCam;
+    if (const uint64_t idTalk = IdBinocTalk3(); idTalk && (!id || idTalk < id)) id = idTalk;
+    for (int cid : {S3CID(0x35), S3CID(0x36), S3CID(0x37)})   // (Sly 3: the players' classes)
         for (LO* plo : g_psw->mpcidaplo[cid])
             if (ACTOR* pa = PactorFromLo(plo); pa && pa->nF04 != -1 && pa->nF20 == 1 &&
                 pa->binoc.idSkipScene && (!id || pa->binoc.idSkipScene < id))
@@ -159,18 +190,22 @@ void DrawHint(const SKIPCUT& s)
     // (canvas pixels: the picture's right and bottom edges, the 4:3 canvas's or past them on a wider / taller picture)
     const glm::vec2 ui = g_display.uiScale;
     const float xEdge = ui.x < 1.0f ? 320.0f + 320.0f / ui.x : 640.0f, yEdge = ui.y < 1.0f ? 224.0f + 224.0f / ui.y : 448.0f;
-    const float xRight = xEdge - 14.0f, yTop = yEdge - 10.0f - size * 0.909f;
+    // (Sly 3's text units: the canvas half-lines per text unit 7 / 15 (orig3 0x2666A0; Sly 2 5 / 11), so a text box's y
+    // is (canvas y - 224) x 15 / 14 and a size's glyph height size x 14 / 15; Sly 2's 1.1 / 10 / 11 put the text ~6
+    // units below its plate, its descenders cut by the picture's bottom edge)
+    constexpr float kY = 15.0f / 14.0f, kH = 14.0f / 15.0f;
+    const float xRight = xEdge - 14.0f, yTop = yEdge - 10.0f - size * kH;
     const float w = DxText(*pfont, picons, text, size);
     const float depth = 16000000.0f;   // (over every screen object)
     // (the colour offset leaves the glyphs' own alpha alone, as the game's HUD texts do (marker.cpp, dance.cpp): an
     // alpha offset made the whole glyph cells opaque, the letters' counters filled)
     const glm::vec4 white(200.0f, 200.0f, 200.0f, 0.0f);
     auto drawText = [&](const std::string& t, float px, float py, float sz, glm::vec4 off, float dz) {
-        g_hud.DrawTextBox(*pfont, picons, t, px - 320.0f, (py - 224.0f) * 1.1f, sz, 1.0f, 1.0f, 0.0f, 0.0f, 0, 0, off,
+        g_hud.DrawTextBox(*pfont, picons, t, px - 320.0f, (py - 224.0f) * kY, sz, 1.0f, 1.0f, 0.0f, 0.0f, 0, 0, off,
                           glm::vec4(1.0f), glm::vec4(0.0f), depth + dz, false);
     };
     // a dark plate under the text
-    const float hText = size * 0.909f;
+    const float hText = size * kH;
     g_hud.FillScreenRect(xRight - w - 10.0f * k, yTop - 5.0f * k, xRight + 6.0f * k, yTop + hText + 7.0f * k, glm::vec4(0, 0, 0, 72),
                          depth / 16777216.0f - 1e-4f);
     drawText(text, xRight - w, yTop, size, white, 100.0f);
@@ -282,6 +317,13 @@ uint64_t NewSkipCutScene()
 
 void NoteScptWaitsForButton() { s_skip.frameWait = g_frameJoy; }
 
+void SetScptCameraActive3(bool fActive)
+{
+    if (fActive && !s_fScptCamera3 && g_frameJoy - s_frameScptCameraOff3 > 2) s_idScptCamera3 = NewSkipCutScene();   // (shots back to back: one scene)
+    if (!fActive && s_fScptCamera3) s_frameScptCameraOff3 = g_frameJoy;
+    s_fScptCamera3 = fActive;
+}
+
 void UpdateSkipCut(float dtReal, uint16_t grfHeld, uint16_t grfPressed)
 {
     if (s_skip.fMaskCircle && !(grfHeld & BTN_Circle) && !s_skip.fFast) s_skip.fMaskCircle = false;
@@ -294,7 +336,14 @@ void UpdateSkipCut(float dtReal, uint16_t grfHeld, uint16_t grfPressed)
         s_skip.fHint = false;
         s_skip.tHint = s_skip.tHold = 0.0f;
         s_skip.fAwaitRelease = (grfHeld & BTN_Circle) && !(grfPressed & BTN_Circle);
+        s_skip.grfCarried = grfHeld;
+        s_skip.tScene = 0.0f;
     }
+    // (PC QoL) a button already held when the scene started shows no hint: only a fresh press does
+    s_skip.tScene += dtReal;
+    if (s_skip.tScene < 0.25f) s_skip.grfCarried |= grfHeld;
+    s_skip.grfCarried &= grfHeld;
+    grfPressed &= uint16_t(~s_skip.grfCarried);
     const bool fSkippable = id && !FScptWaitsNow();
     const bool fCheckSkip = FUpdateSkipCheck(id) && fSkippable;   // (test: SLY2N_SKIPCHECK)
     // (tests: SLY2N_SKIPAT=frame: the skip starts at that step, as after the hold)

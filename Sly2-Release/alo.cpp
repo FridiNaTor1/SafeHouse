@@ -1,4 +1,5 @@
 #include "fastpaths.h"
+#include "editrec.h"
 #include <execinfo.h>
 #include "simdmat.h"
 #include "clock.h"
@@ -203,6 +204,7 @@ void LoadAloXfsFromBrx(ALO* palo, CBinaryInputStream* pbis)
             break;
         }
         default:
+            if (g_peditrec) g_peditrec->afield.push_back({palo, EDITFK_XfMatrix, i, -1, -1, pbis->m_ib});   // (PC: the map editor)
             xf.mat = pbis->ReadMatrix4();
             break;
         }
@@ -225,7 +227,10 @@ void LoadAloFromBrx(LO* plo, CBinaryInputStream* pbis)
     LoadAloXfsFromBrx(palo, pbis);
     palo->uMeta = pbis->U32Read();
     palo->pglobset = std::make_shared<GLOBSET>();
+    const std::size_t ibGlobset = pbis->m_ib;   // (PC: the map editor)
     LoadGlobsetFromBrx(palo->pglobset.get(), palo, pbis);  // the renderer's (glob.cpp), orig LoadGlob(alo+0x80)
+    if (g_peditrec) g_peditrec->afield.push_back({palo, EDITFK_Globset, 0, -1, -1, ibGlobset, pbis->m_ib});
+    const std::size_t ibSoes = pbis->m_ib;
     // (vt slot 63: extra entries the class adds after the loaded ones; no reads)
     const int c = pbis->S16Read();
     palo->asoe.resize(c);
@@ -255,6 +260,7 @@ void LoadAloFromBrx(LO* plo, CBinaryInputStream* pbis)
         palo->matInertia = pbis->ReadMatrix();
         LoadAloPhysState(palo);  // (the physics port) 0x1F35F8, vt slot 64
     }
+    if (g_peditrec) g_peditrec->afield.push_back({palo, EDITFK_Soes, 0, -1, -1, ibSoes, pbis->m_ib});
     LoadOptionsFromBrx(palo->aopt, palo, pbis);
     // a glob set with globs (+0xB8) makes the object drawable (+0x40 bit 8; vt slot 21 changes it at run time)
     if (palo->pglobset && !palo->pglobset->aglob.empty()) palo->grfUpd |= 8;

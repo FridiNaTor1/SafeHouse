@@ -320,7 +320,7 @@ LOXPATH* PpathNewMerged()
     return p;
 }
 
-// orig: 0x001BD218 (a merged polygon dissolved: its members requeued, itself back to the pool)
+// orig: 0x001BD218 (a merged polygon dissolved: its members requeued, itself back to the pool) (orig3: 0x1E7410, the same C in the Sly 3 decomp)
 void DissolveMerged(LO* ploOwner)
 {
     std::vector<LO*> a;
@@ -437,7 +437,7 @@ bool FPolysOverlap(NAVPOLY* p, NAVPOLY* q)
     return !q->aposWorld.empty() && FPolyContains(p, glm::vec3(q->aposWorld[0]));
 }
 
-// orig: 0x001C1BA0 (into the region, or merged with the first polygon near it that it overlaps)
+// orig: 0x001C1BA0 (into the region, or merged with the first polygon near it that it overlaps) (orig3: 0x1EE448, the same C in the Sly 3 decomp)
 void AddPolyToRegion(NAVREGION* preg, NAVPOLY* pp)
 {
     static const bool s_fNoMerge = std::getenv("SLY2N_NOMERGE") != nullptr;  // (debug: the merges off)
@@ -630,7 +630,7 @@ int ItriNavFrom(const NAVREGION* preg, int inode, const glm::vec3& pos, int fl)
     return -1;
 }
 
-// orig: 0x001BFDB0
+// orig: 0x001BFDB0 (orig3: 0x1EC188, the same C in the Sly 3 decomp)
 glm::vec3 PosNearestTri(const NAVREGION* preg, int itri, const glm::vec3& p)
 {
     const auto& t = preg->atri[itri];
@@ -643,7 +643,7 @@ glm::vec3 PosNearestTri(const NAVREGION* preg, int itri, const glm::vec3& p)
     return p + AXIS_Z * g;
 }
 
-// orig: 0x001C0320 (from the root, side fl)
+// orig: 0x001C0320 (from the root, side fl) (orig3: 0x1ECBB8, the same code in Sly 3)
 bool FNavPoint(const NAVREGION* preg, const glm::vec3& pos, glm::vec3* pposOut, int fl)
 {
     // (no region: the original reads the null region's fields (PS2 low memory, 0x1BF1F8 finds no triangle); none here)
@@ -851,7 +851,7 @@ void AstarNav(const NAVREGION* preg, const std::vector<glm::vec3>& apos, const s
     for (int i = in; i >= 0; i = anode[i].iparent) (*paipath)[anode[i].depth - 1] = anode[i].iv;
 }
 
-// orig 0x1BFC18: the points the path can skip dropped (recursively)
+// orig 0x1BFC18: the points the path can skip dropped (recursively) (orig3: 0x1EBFE8, the same C in the Sly 3 decomp)
 void SmoothNav(const NAVREGION* preg, const std::vector<glm::vec3>& apos, std::vector<int>* pai)
 {
     std::vector<int>& ai = *pai;
@@ -1156,7 +1156,7 @@ int IsegCrvAt(const CRV* pcrv, float s)
     return i;
 }
 
-// orig 0x1BC530: an index wrapped into 0 .. c - 2 (the last point repeats the first)
+// orig 0x1BC530: an index wrapped into 0 .. c - 2 (the last point repeats the first) (orig3: 0x1E66D8, the same C in the Sly 3 decomp)
 int IpolyWrap(const NAVPOLY* pp, int n)
 {
     const int c = static_cast<int>(pp->aposWorld.size());
@@ -1238,7 +1238,7 @@ int NNavPathLeavesPoly(NAVPOLY* pp, const CRV* pcrv, bool fForward, float* ps, f
     return NPathLeavesPoly(pp, pcrv, fForward, nullptr, ps, s);
 }
 
-// orig: 0x001E9F50 (the polygon of the point's region containing it, null when none)
+// orig: 0x001E9F50 (the polygon of the point's region containing it, null when none) (orig3: 0x231C50, the same C in the Sly 3 decomp)
 NAVPOLY* PpolyAtPoint(const glm::vec3& pos)
 {
     NAVREGION* preg = PregionAt(pos, false);
@@ -1288,7 +1288,7 @@ void MarkNavPolyDirty(LO* plo)
     if (std::find(s_nav.aploDirty.begin(), s_nav.aploDirty.end(), plo) == s_nav.aploDirty.end()) s_nav.aploDirty.push_back(plo);
 }
 
-// orig: 0x001BC198 (out of the world: its merged polygon dissolved, out of its region and the queue)
+// orig: 0x001BC198 (out of the world: its merged polygon dissolved, out of its region and the queue) (orig3: 0x1E6348, the same C in the Sly 3 decomp)
 void RemoveNavPoly(LO* plo)
 {
     EnsureWorld();
@@ -1298,7 +1298,7 @@ void RemoveNavPoly(LO* plo)
     Dequeue(plo);
 }
 
-// orig: 0x001BE1E8 (until the queue is empty: merged polygons queued on the way are built in the same pass)
+// orig: 0x001BE1E8 (until the queue is empty: merged polygons queued on the way are built in the same pass) (orig3: 0x1E8288, the same C in the Sly 3 decomp)
 void UpdateNavPolys()
 {
     EnsureWorld();

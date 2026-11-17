@@ -9,8 +9,13 @@
 #include "pcinput.h"
 #include "shop.h"
 
+#include "vr.h"
+#include "porttext.h"
+#include "textmod.h"
+
 #include "../platform/button_prompts.h"
 #include "../platform/system_settings.h"
+#include "../platform/vr_pad_map.h"
 
 #include <GLFW/glfw3.h>
 
@@ -141,6 +146,8 @@ std::string StrVrCombos(const std::string& text)
     const Family family = PromptFamily();
     const bool fMenu = family == Family::MetaQuest || family == Family::Pico;
     if ((!fMenu && family != Family::ValveIndex) || text.find('&') == std::string::npos) return text;
+    // (controllers of these families with real Start / Select buttons: the HP Reverb G2's menu buttons)
+    if (cane::vrpad::realStartSelectOf(cane::vrpad::Controllers(VrControllersFor(family)))) return text;
     const bool fSelect = ButtonForGlyph('_') == Button::Back, fStart = ButtonForGlyph('!') == Button::Start;
     if (!fSelect && !fStart) return text;
     std::string out;
@@ -167,6 +174,11 @@ std::string StrVrCombos(const std::string& text)
 }
 std::string StrPromptButtonWordsBase(const std::string& text, int textId);
 }  // namespace
+
+std::string StrPromptComboIcons(char ch)
+{
+    return StrVrCombos(std::string("&2") + ch + "&.");
+}
 
 std::string StrPromptButtonWords(const std::string& text, int textId)
 {
@@ -239,8 +251,58 @@ Family PromptFamily()
 
 bool PromptKeyboardActive() { return cane::input::tracker().family() == Family::Keyboard; }
 
+Family VrPromptFamily(int controllers)
+{
+    using C = cane::vrpad::Controllers;
+    switch (C(controllers))
+    {
+    case C::Index: return Family::ValveIndex;
+    case C::Vive: case C::Wmr: return Family::ViveWand;
+    case C::Frame: return Family::SteamFrame;
+    case C::Pico: return Family::Pico;
+    default: return Family::MetaQuest;
+    }
+}
+
+int VrControllersFor(Family family)
+{
+    using C = cane::vrpad::Controllers;
+    if (!cane::input::isVrFamily(family)) return int(C::None);
+    const int ctl = vr::ControllersInUse();
+    if (ctl != int(C::None) && VrPromptFamily(ctl) == family) return ctl == int(C::Simple) ? int(C::Touch) : ctl;
+    switch (family)
+    {
+    case Family::ValveIndex: return int(C::Index);
+    case Family::SteamFrame: return int(C::Frame);
+    case Family::ViveWand: return int(C::Vive);
+    case Family::Pico: return int(C::Pico);
+    default: return int(C::Touch);
+    }
+}
+
+void VrButtonIcon(Button& button, Family& family)
+{
+    using C = cane::vrpad::Controllers;
+    const C ctl = C(VrControllersFor(family));
+    if (ctl == C::Wmr && (button == Button::LS || button == Button::RS || button == Button::LSPress || button == Button::RSPress))
+        family = Family::MetaQuest;   // (real sticks: Touch's art)
+    else if (ctl == C::HpReverb && button == Button::Back)
+        button = Button::Start;       // (its left menu button: the menu art)
+}
+
+std::string PromptButtonName(Button button, Family family)
+{
+    using C = cane::vrpad::Controllers;
+    const C ctl = C(VrControllersFor(family));
+    if (ctl == C::HpReverb && (button == Button::Back || button == Button::Start))
+        return Utf8OfGameText(StrPort(button == Button::Back ? PTX_VrMenuLeft : PTX_VrMenuRight));
+    VrButtonIcon(button, family);
+    return cane::input::buttonLabel(button, family);
+}
+
 static PROMPTGLYPH PromptGlyphForButton(Button button, Family family)
 {
+    if (cane::input::isVrFamily(family)) VrButtonIcon(button, family);
     PROMPTGLYPH glyph;
     const auto& atlas = cane::input::promptAtlas();
     const auto uv = atlas.uv(family, button);
@@ -308,7 +370,7 @@ std::string PromptLabelFor(char ch)
                                                     "Start", "Select", "L1", "R1", "L2", "R2", "L3", "R3"};
         return s_apsz[a];
     }
-    return cane::input::buttonLabel(ButtonForGlyph(ch), PromptFamily());
+    return PromptButtonName(ButtonForGlyph(ch), PromptFamily());
 }
 
 std::string StrPromptFallbackText(const std::string& text)

@@ -18,15 +18,28 @@ namespace
 //   the mapped functions (tools/s3maps/guardstates.py): 22 -> 41, 27 -> 47, 31 -> 51 (JOBINVESTIGATE 0x1A64A8),
 //   33 -> 53, 36 -> 54, 38 -> 56, 44 -> 61, 46 -> 63 (votes of one or two calls; 30 / 39 / 34 / 35 / 24 conflict:
 //   left out).
-// Sly 3's indices 8..12, 15, 16, 22..34, 43..45, 48, 50, 55, 57..59, 62 and 64.. have no Sly 2 state here.
-constexpr std::array<std::pair<int, int>, 41> c_aistate32 = {{
+// - (2026-11-10, the Sly 3 decomp) the immediates of every 0x252E40 / 0x252FC0 call site in the decomp's C, paired with
+//   the Sly 2 decomp's 0x209890 / 0x209970 call in the fnmap twin (scores 90..100): they confirm 41, 47, 51..54, 56,
+//   60, 61, 63 above and add 50 -> 30 (0x1EF838 / 0x179A58), 55 -> 39 (0x1638C0 / 0x17CE68), 67 -> 34 (0x133A58 /
+//   0x155560, class 0x3B's), 68 -> 24 (0x1353F0 / 0x1753D8). Left out (two Sly 3 states claim one Sly 2 state, a
+//   kind entry would overwrite the other's): 12 / 52 -> 32, 43 / 60 -> 43, 44 / 68 -> 24. Sly 3's JOBFOLLOW init
+//   0x1D8BA8 moves with state 14 (+0xB0), as Sly 2's 0x178E98 with 9.
+// Sly 3's indices 8..12, 15, 16, 22..34, 43..45, 48, 57..59, 62 and 64..66 have no Sly 2 state here (16:
+// Carmelita's chase run sets it next to 14; no Sly 3 code adds it by an immediate).
+// (s3-split, 2026-11-12) the playable Carmelita's states (her kind entries {66, n}: aicarm3.h): Sly 3's 15, 22..30
+// and 66 have no Sly 2 state; they take Sly 2 indices no native code sets (47..57), so her player entries load and
+// match only while her job 0xE9 has added 66 (-> 57). No other guard's state ever has those bits.
+constexpr std::array<std::pair<int, int>, 52> c_aistate32 = {{
     {0, 0}, {1, 1}, {2, 2}, {3, 3}, {4, 4}, {5, 5}, {6, 6}, {7, 7},
     {13, 8}, {14, 9},
     {17, 11}, {18, 12}, {19, 13}, {20, 14}, {21, 15},
     {35, 16}, {36, 17}, {37, 18}, {38, 19}, {39, 20}, {40, 21}, {41, 22}, {42, 23},
     {46, 26}, {47, 27}, {49, 29}, {51, 31}, {52, 32}, {53, 33}, {54, 36}, {56, 38},
     {60, 43}, {61, 44}, {63, 46},
-    {-1, -1}, {-1, -1}, {-1, -1}, {-1, -1}, {-1, -1}, {-1, -1}, {-1, -1},
+    {50, 30}, {55, 39}, {67, 34}, {68, 24},  // (orig3: the decomp's AddGuardState call sites, above)
+    {15, 47}, {22, 48}, {23, 49}, {24, 50}, {25, 51}, {26, 52}, {27, 53}, {28, 54}, {29, 55}, {30, 56}, {66, 57},
+    {65, 58},   // (s3-ai) the ridden guard's state 0x41 (job 0xE8, airide3.h: its ride entries {65, n}); no native code sets 58
+    {-1, -1}, {-1, -1},
 }};
 }  // namespace
 

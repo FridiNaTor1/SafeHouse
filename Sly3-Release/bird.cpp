@@ -123,7 +123,7 @@ float RadHeadingOf(ALO* palo)  // atan2 of the world matrix's x row (0x1B1868)
     return std::atan2(m[0].y, m[0].x);
 }
 
-// orig: 0x001B1818 (the heading kept and its rotation about z, for slot 70)
+// orig: 0x001B1818 (the heading kept and its rotation about z, for slot 70) (orig3: 0x1D6608, the same C in the Sly 3 decomp)
 void SetBirdHeading(BIRD& b, float rad)
 {
     b.radHeading = rad;
@@ -356,7 +356,7 @@ void StartBird(LO* plo)
     PlaceBird(plo, b);
 }
 
-// orig: 0x001B0E28 (vt slot 16)
+// orig: 0x001B0E28 (vt slot 16) (orig3: 0x1D5C30, the same C in the Sly 3 decomp)
 void UpdateBird(LO* plo)
 {
     if (PFNUPDATE pfn = PfnUpdateOrig(0x1F36E0)) pfn(plo);  // the ALO's

@@ -131,13 +131,8 @@ foreach(image logo icon)
  cane_ios_embed_image(cane-launcher "${CMAKE_CURRENT_SOURCE_DIR}/launcher/assets/safehouse-${image}.png" cane_${image}
   "${CMAKE_BINARY_DIR}/generated/launcher_${image}.h")
 endforeach()
-foreach(developer fridinator theclub654 menaman123 thematuu nagaa95)
- foreach(kind "" "-silhouette")
-  string(REPLACE "-" "_" symbol "cane_developer_${developer}${kind}")
-  cane_ios_embed_image(cane-launcher "${CMAKE_CURRENT_SOURCE_DIR}/launcher/assets/developers/${developer}${kind}.png" ${symbol}
-   "${CMAKE_BINARY_DIR}/generated/launcher_developer_${developer}${kind}.h")
- endforeach()
-endforeach()
+include(${CMAKE_CURRENT_LIST_DIR}/developers.cmake)
+cane_embed_developers(cane-launcher)
 foreach(game sly1 sly2 sly3 sly4 hackpack)
  cane_ios_embed_image(cane-launcher "${CMAKE_CURRENT_SOURCE_DIR}/launcher/assets/games/${game}-logo.png" cane_game_${game}
   "${CMAKE_BINARY_DIR}/generated/launcher_game_${game}.h")

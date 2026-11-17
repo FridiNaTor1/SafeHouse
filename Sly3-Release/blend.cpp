@@ -167,7 +167,7 @@ int ImrsgLookUp(const std::vector<MRSG>& amrsg, float* pdt, float t, float tMax)
     return i;
 }
 
-// orig: 0x001383F0
+// orig: 0x001383F0 (orig3: 0x148890, the same C in the Sly 3 decomp)
 void SetBlendDominant(ASEGBL* pbl, int ibl)
 {
     if (ibl == pbl->iblDominant) return;
@@ -312,7 +312,7 @@ void TRKPBL::Eval(glm::vec4* ppos, glm::vec4* pvel, float g, float dtScale) cons
     if (pvel) *pvel = b;
 }
 
-// orig: 0x00138BA0
+// orig: 0x00138BA0 (orig3: 0x149058, the same C in the Sly 3 decomp)
 void TRKGBL::Eval(float* pg, float* pdg, float t, float dtScale) const
 {
     int iseg;

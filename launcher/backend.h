@@ -795,7 +795,8 @@ struct LauncherBackend {
     void importPs3Hd(GameId game, const std::string& source, bool png, const std::atomic<bool>& cancel, const LogFunction& log) {
         if (!ps3HdGame(game)) throw std::runtime_error(tr("The PS3 HD textures are for Sly 1 and Sly 2"));
         if (!assetsInstalled(game)) throw std::runtime_error(trf("Install %s first: the HD textures replace its installed ones", cane::game(game).shortName));
-        if (!runtimeAvailable(game)) throw std::runtime_error(trf("%s is still in development", cane::game(game).title));
+        if (!runtimeAvailable(game))
+            throw std::runtime_error(game == GameId::Sly2 ? std::string(tr("Sly 2 is still in development")) : trf("%s is still in development", cane::game(game).title));
         std::error_code ec;
         fs::create_directories(userDir(game), ec);
         if (const auto space = fs::space(userDir(game), ec); !ec && space.available < (2ull << 30))
@@ -870,7 +871,8 @@ struct LauncherBackend {
         std::string key;            // the folder name ("French", "English (UK)"): Settings.ini's Language value
         std::string source;         // the disc it came from
         bool text = false, voice = false, movies = false;
-        bool wide = false;          // Japanese script: its text needs the Japanese font
+        bool wide = false;          // Japanese or Korean script: its text needs the Japanese / Korean disc's font
+        std::string script = "latin";   // "latin", "japanese", "korean" (language.json "script")
         bool font = false;          // (wide) the languages folder has that font (Font.bin): every disc shows its text
         bool disc = false;          // one of an installation's own (its world files)
     };
@@ -903,7 +905,8 @@ struct LauncherBackend {
                     auto& info = all[l.get<std::string>()];
                     info.key = l.get<std::string>();
                     info.disc = info.text = info.voice = info.movies = true;
-                    info.wide = info.key == "Japanese";
+                    info.wide = info.key == "Japanese" || info.key == "Korean";
+                    if (info.wide) info.script = info.key == "Korean" ? "korean" : "japanese";
                     if (info.source.empty()) info.source = in.name();
                 }
             } catch (...) {
@@ -926,16 +929,23 @@ struct LauncherBackend {
                     const json j = readJson(e.path() / "language.json");
                     if (info.source.empty()) info.source = j.value("source", std::string{});
                     if (j.contains("text") && !info.text) info.text = info.voice;  // (a dub that names its text)
-                    if (j.contains("script")) script = true, info.wide = info.wide || j.value("script", std::string{}) == "japanese";
+                    if (j.contains("script")) {
+                        script = true;
+                        const std::string sc = j.value("script", std::string{});
+                        if (sc == "japanese" || sc == "korean") info.wide = true, info.script = sc;
+                    }
                 } catch (...) {
                 }
-                if (!script && (key == "Japanese" || key == "Korean" || key == "Chinese")) info.wide = true;
+                if (!script && (key == "Japanese" || key == "Korean" || key == "Chinese"))
+                    info.wide = true, info.script = key == "Korean" ? "korean" : "japanese";
                 info.font = info.font || fs::is_regular_file(e.path() / "Font.bin", ec);
             }
         }
-        // (a Japanese text variant without a font of its own is drawn with the "Japanese" folder's: langstore.cpp)
-        if (const auto japanese = folder.find("Japanese"); japanese != folder.end() && japanese->second.font)
-            for (auto& [key, info] : folder) info.font = info.font || info.wide;
+        // (a Japanese / Korean text variant without a font of its own is drawn with the "Japanese" / "Korean" folder's:
+        // langstore.cpp)
+        for (const char* base : {"Japanese", "Korean"})
+            if (const auto it = folder.find(base); it != folder.end() && it->second.font)
+                for (auto& [key, info] : folder) info.font = info.font || (info.wide && info.script == it->second.script);
         for (auto& [key, info] : folder) {
             if (all.count(key)) {
                 // (a disc language the folder adds to: still the disc's)
@@ -1030,13 +1040,15 @@ struct LauncherBackend {
         return out;
     }
     // Runs the game program's language import (its "progress N M item" lines as the job's).
-    void runLanguageTool(std::vector<std::string> arguments, const char* stage, const std::atomic<bool>& cancel, const LogFunction& log) {
-        if (!runtimeAvailable(GameId::Sly2)) throw std::runtime_error(tr("Sly 2 is still in development"));
+    void runLanguageTool(std::vector<std::string> arguments, const char* stage, const std::atomic<bool>& cancel, const LogFunction& log,
+                         GameId game = GameId::Sly2) {
+        if (!runtimeAvailable(game))
+            throw std::runtime_error(game == GameId::Sly2 ? std::string(tr("Sly 2 is still in development")) : trf("%s is still in development", cane::game(game).title));
         std::error_code ec;
-        fs::create_directories(userDir(GameId::Sly2), ec);
-        fs::create_directories(languagesDir(GameId::Sly2), ec);
+        fs::create_directories(userDir(game), ec);
+        fs::create_directories(languagesDir(game), ec);
         std::string error;
-        arguments.insert(arguments.begin(), utf8(binary(cane::game(GameId::Sly2).runtime)));
+        arguments.insert(arguments.begin(), utf8(binary(cane::game(game).runtime)));
         const int code = runProcess(arguments, tools, cancel, [&](const std::string& line) {
             unsigned long long done = 0, total = 0;
             char item[256] = {};
@@ -1095,11 +1107,25 @@ struct LauncherBackend {
                         "languages", cancel, log);
     }
     // The Sly Collection's (PS3) French and Spanish (text: subtitles over the English voices), when missing.
-    void importPs3Languages(const std::string& source, const std::atomic<bool>& cancel, const LogFunction& log) {
-        if (!assetsInstalled(GameId::Sly2)) throw std::runtime_error(tr("Install Sly 2 first (the USA or a European disc)"));
-        runLanguageTool({"--data-dir", utf8(dataDir(GameId::Sly2)), "--user-dir", utf8(userDir(GameId::Sly2)), "--languages-dir",
-                         utf8(languagesDir(GameId::Sly2)), "--import-ps3-languages", source, utf8(languagesDir(GameId::Sly2))},
-                        "ps3-languages", cancel, log);
+    void importPs3Languages(const std::string& source, const std::atomic<bool>& cancel, const LogFunction& log, GameId game = GameId::Sly2) {
+        if (game == GameId::Sly2 && !assetsInstalled(game)) throw std::runtime_error(tr("Install Sly 2 first (the USA or a European disc)"));
+        if (game == GameId::Sly3 && !assetsInstalled(game)) throw std::runtime_error(trf("Install %s", cane::game(game).title));
+        runLanguageTool({"--data-dir", utf8(dataDir(game)), "--user-dir", utf8(userDir(game)), "--languages-dir",
+                         utf8(languagesDir(game)), "--import-ps3-languages", source, utf8(languagesDir(game))},
+                        "ps3-languages", cancel, log, game);
+    }
+    // Sly 3's languages besides the disc's English (Sly3-Release langstore.cpp): the languages folder's and
+    // Mods/Languages/'s that have text (the PS3 import's French / Spanish, a mod's)
+    std::vector<std::string> sly3Languages() const {
+        std::set<std::string> keys;
+        std::error_code ec;
+        for (const fs::path& dir : {languagesDir(GameId::Sly3), userDir(GameId::Sly3) / "Mods" / "Languages"}) {
+            if (!fs::is_directory(dir, ec)) continue;
+            for (const auto& e : fs::directory_iterator(dir, ec))
+                if (e.is_directory(ec) && fs::is_regular_file(e.path() / "Text.json", ec) && utf8(e.path().filename()) != "English")
+                    keys.insert(utf8(e.path().filename()));
+        }
+        return {keys.begin(), keys.end()};
     }
     // The game's --texture-pack argument while the pack is installed and on.
     std::vector<std::string> ps3HdArguments(GameId game) const {

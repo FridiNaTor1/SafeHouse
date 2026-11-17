@@ -34,6 +34,8 @@
 #include "transition.h"
 #include "update.h"
 #include "vtnative.h"
+#include "splitscreen3.h"
+#include "game/task3.h"
 #include "worldaccess.h"
 #include "xf.h"
 
@@ -208,7 +210,8 @@ LO* PloBootyProxy()
     // The native transition reuses the SW object. Its address therefore does
     // not identify a loaded world's proxy (orig SW +0x4638 is rebuilt by
     // 0x210940). Resolve from the current world after every transition.
-    return g_psw ? PloFindSwObjectByOid(g_psw, 0x620) : nullptr;
+    // (Sly 3: orig3 0x25DD00 keeps the proxy 0x6F1 at SW +0x4E4C; Sly 2's was 0x620)
+    return g_psw ? PloFindSwObjectByOid(g_psw, 0x6F1) : nullptr;
 }
 
 // ACTOR +0x11A4: the part the booty is held at
@@ -216,7 +219,7 @@ ALO* PaloHolder(const ACTOR* pa)
 {
     if (!pa || !pa->palo) return nullptr;
     for (const auto& [ib, plo] : pa->palo->apart)
-        if (ib == 0x11A4 && plo && FIsLoDerivedFrom(plo, S3CID(0x30))) return static_cast<ALO*>(plo);
+        if ((ib == 0x11A4 || ib == 0x1278 || ib == (FN3_TAG | 0x1278)) && plo && FIsLoDerivedFrom(plo, S3CID(0x30))) return static_cast<ALO*>(plo);   // (Sly 3: +0x1278, orig3 0x14DC98's pot->pr)
     return nullptr;
 }
 
@@ -371,6 +374,7 @@ void AttachStandBooty(LO* pstand)
     STAND* ps = Pstand(pstand);
     if (!ps || ps->pbooty) return;
     LO* pproxy = PloBootyProxy();
+    if (FPrint()) std::printf("booty: attach stand %d: proxy %d saved %d\n", pstand->oid, pproxy ? pproxy->oid : -1, IdStandSaved(pstand));
     if (!pproxy) return;
     const int id = IdStandSaved(pstand);
     if (id == -1) return;
@@ -501,7 +505,10 @@ void SetBootyState(LO* plo, int n)
         {
             SetHeldNoise(&ps->pnoise, PtmplNoiseFixed(1), PosAloCenter(static_cast<ALO*>(pstand)), pstand);  // 0x156BE0
         }
-        if (n == 2) BroadcastTaskEvent(g_psw, 0x2F, plo);  // 0x1619A0(0x2DEB30, 0x2F, p)
+        // (orig3 0x14DC98: the stand told 10 (its vt slot 3) as the booty leaves it; taken by a player: the broadcast 0x41,
+        // Sly 2's 0x2F)
+        if (pstand) HandleLoSpliceEvent(pstand, 10, false, 0, nullptr);
+        if (n == 2) Broadcast3(0x41, plo);
         if (ps) ps->pbooty = nullptr;
         b.pstand = nullptr;
         HandleLoSpliceEvent(plo, 5, false, 0, nullptr);  // vt slot 3 (5)
@@ -572,6 +579,10 @@ void SetBootyState(LO* plo, int n)
         }
         HandleLoSpliceEvent(plo, 6, false, 0, nullptr);  // vt slot 3 (6)
         BroadcastTaskEvent(g_psw, 0x1B, plo);
+        // (orig3 0x14DC98: the stand told 11; a booty put on a stand by its carrier (from the flight 3): the broadcast
+        // 0x42, e.g. Cops and Robbers' delivery)
+        if (pstand) HandleLoSpliceEvent(pstand, 11, false, 0, nullptr);
+        if (old == 3) Broadcast3(0x42, nullptr);
         return;
     }
     case 2:
@@ -636,7 +647,7 @@ void SetBootyState(LO* plo, int n)
         const float c = GRandInRange(-6.2831855f, 6.2831855f);
         SetAloAngVelocityTo(palo, glm::vec3(a, bb, c));
         SetAloGravity(palo, glm::vec3(0.0f, 0.0f, -2500.0f));  // D_002A4B60
-        BroadcastTaskEvent(g_psw, 0x30, plo);
+        Broadcast3(0x43, plo);   // (orig3: knocked out of the carrier's hands; Sly 2's 0x30)
         return;
     }
     default: return;
@@ -751,11 +762,40 @@ bool FAcceptBootyContact(ALO* palo, CTMSG* pctm)
     return true;
 }
 
+// orig3: 0x14E7E0 (BOOTYSTAND's vt slot 18, Sly 3 only): LO's update, then (not locked: Sly 3's +0x1A0, natively
+// FStand190) each of the two players' characters (0x1F4AD0(SW, i)) that is an actor, not hurt (vt slot 81),
+// may carry (vt slot 106 & 0x80: Sly 3's actors' +0x1110 0x2880 / 0x2080, or an outfit worn) and stands within 400
+// of the stand uses it (vt slot 55, 0x14EB40 = FUseBootyStand): Sly 3's stands are used by walking up to them
+void UpdateBootyStand3(LO* plo)
+{
+    if (PFNUPDATE pfn = PfnUpdateOrig(0x1A5E28)) pfn(plo);   // (0x1C8168: LO's update)
+    if (FStand190(plo)) return;
+    static const auto s_pfnDamage = reinterpret_cast<int (*)(LO*)>(PvNativeFn(0x140F70));   // (vt slot 81: NActorDamageStatus)
+    if (!g_psw) return;
+    const glm::vec3 pos = PosLoWorld(plo);
+    // (PC: four players in a two-player game (split screen's teams): the second Sly, player 3, uses them too)
+    const int cplayer = split3::FActive() ? split3::CView() : 1;
+    for (int i = 0; i < cplayer; ++i)
+    {
+        LO* pp = split3::PloPlayer(g_psw, i);
+        ACTOR* pa = pp ? PactorFromLo(pp) : nullptr;
+        if (!pa || (s_pfnDamage && s_pfnDamage(pp) != 0)) continue;
+        if (glm::length(pos - PosLoWorld(pp)) < 400.0f)
+        {
+            if (FPrint()) std::printf("booty: player %d (%d) at stand %d t %.3f\n", i, pp->oid, plo->oid, g_clock.t);
+            FUseBootyStand(plo, pa);   // (vt slot 55: 0x14EB40)
+            return;
+        }
+    }
+}
+
 struct INITBOOTY
 {
     INITBOOTY()
     {
         RegisterLoUpdate(0x13BF50, UpdateBooty);
+        RegisterLoUpdate(FN3_TAG | 0x14E7E0, UpdateBootyStand3);
+        RegisterLoUpdate(FN3_TAG | 0x14D4F8, UpdateBooty);   // (Sly 3's 0x14D4F8: the same states; the flight's end natively)
         // EOPID 1152 (0x10E008 -> 0x13C3B8: a record {id, n4, n14} added (32 at most), current)
         RegisterObjectMethod(0x10E008, [](LO* plo, const std::vector<CRef>& a) {
             if (BOOTY* pb = Pbooty(plo))
@@ -984,7 +1024,7 @@ bool FUseBootyStand(LO* pstand, ACTOR* pa)
                     pqa && Prec(pqa) ? Prec(pqa)->n14 : -1, NStand188(pstand), prp ? prp->c : 0, prp ? prp->n18 : -1);
     if (ppa && g_psw->tasks.pjobCur && !(prp && prp->f10))  // SW +0x3B0C: during a job
     {
-        HudPrompt(IdText(0x124), 15.0f);  // 0x1DA4B8(0x3DA0C0, 0x124, 15)
+        HudPrompt(IdText(0x1E5), 15.0f);  // orig3 0x14EB40: 0x21E870(0x46F770, 0x1E5, 15) (Sly 3's "You're on a job! Come back later for this loot."; Sly 2's 0x124)
         PsndStartSound(0x36);     // 0x1FBB90(0x36) / 0x1FB2F8
         return true;
     }
@@ -1017,14 +1057,14 @@ bool FUseBootyStand(LO* pstand, ACTOR* pa)
     return true;
 }
 
-// orig: 0x0013BF00 (vt slot 15: the base's 0x1F36A8, then out: state 0)
+// orig: 0x0013BF00 (vt slot 15: the base's 0x1F36A8, then out: state 0) (orig3: 0x14D498, the same code in Sly 3)
 void PostLoadBooty(LO* plo)
 {
     if (!Pbooty(plo)) return;
     SetBootyState(plo, 0);
 }
 
-// orig: 0x0013CEF8 (vt slot 15: the use's 0x183F50, the stand's index: the world's counter)
+// orig: 0x0013CEF8 (vt slot 15: the use's 0x183F50, the stand's index: the world's counter) (orig3: 0x14E9B0, the same C in the Sly 3 decomp)
 void PostLoadBootyStand(SW* psw, LO* plo)
 {
     if (STAND* ps = Pstand(plo)) ps->id = s_mpcstand[psw]++;
@@ -1035,7 +1075,7 @@ void PostLoadBootyStand(SW* psw, LO* plo)
     }
 }
 
-// orig: 0x0013CFD8 (vt slot 23: the use's 0x183FB8, then 0x13CF38 posted (0x149AB8, D_002A4BB0))
+// orig: 0x0013CFD8 (vt slot 23: the use's 0x183FB8, then 0x13CF38 posted (0x149AB8, D_002A4BB0)) (orig3: 0x14EAB0, the same C in the Sly 3 decomp)
 void OnBootyStandRegistered(LO* plo)
 {
     PostDeferredCall(plo, 0x13CF38, [](void* object, int) { AttachStandBooty(static_cast<LO*>(object)); });

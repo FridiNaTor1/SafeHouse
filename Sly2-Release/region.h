@@ -113,6 +113,8 @@ int IdText(int idUsa);
 int IdTextUsa(int id);
 // The Japanese disc's id for a USA id, on any disc (the port's Japanese wording of its messages is kept by them).
 int IdTextJapanOfUsa(int idUsa);
+// The Korean disc's id for a USA id, on any disc (the port's Korean wording of its messages is kept by them).
+int IdTextKoreaOfUsa(int idUsa);
 
 // The character at str[ib] (a byte, or a UTF-8 sequence of 16-bit text: FWideChars); *pcb its length.
 uint32_t ChDecode(const std::string& str, std::size_t ib, std::size_t* pcb = nullptr);
@@ -131,6 +133,18 @@ const char* SzMenuConfirmGlyph();
 // the closing marks, the small kana or the long vowel mark, and does not end with an opening mark.
 bool FJapaneseNoBreakBefore(uint32_t ch);
 bool FJapaneseNoBreakAfter(uint32_t ch);
+// The Korean build's line breaks (orig KR 0x217538..0x217888, its tests KR 0x220AE8 / 0x220AB0): Korean is written
+// with spaces between words, so a line breaks after the last space (ASCII or U+3000) or hyphen before the character
+// that passes the box; a line without one breaks before that character. FKoreanLineBreaks: the text shown is Korean
+// (the Korean disc's own, or a Korean language of the languages folder) and is drawn with 16-bit characters.
+bool FKoreanLineBreaks();
+bool FKoreanBreakAfter(uint32_t ch);
+// The Korean build's fonts have no Hangul syllables: they hold the conjoining jamo (U+1100..11C2), each drawn over a
+// whole cell, and a syllable (U+AC00..D7A3) is drawn from its 2 or 3 jamo (orig KR 0x11B1D0 splits it, 0x11B318 /
+// 0x11B430 lay it out, 0x217F58 draws it, 0x2183A0 measures it). CHangulJamo: the jamo of a syllable (0: not one);
+// FHangulHorizontalVowel: the vowel is drawn under the leading consonant (KR 0x11B260: o, yo, u, yu, eu).
+int CHangulJamo(uint32_t ch, uint32_t ajamo[3]);
+bool FHangulHorizontalVowel(uint32_t vowel);
 
 // The European build's title: the language menu needed (orig 0x1DDB68: two or more languages, none chosen yet this
 // session, no game on the card to continue, the title's input not yet taken).

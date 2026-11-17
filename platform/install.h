@@ -77,14 +77,18 @@ inline constexpr const char* sly2ImageName = "disc.iso";
 inline constexpr const char* sly2SystemFiles[] = {"SYSTEM.CNF", "SCUS_973.16", "IOPRP300.IMG"};
 // Sly 3: Honor Among Thieves (USA, SCUS-97464): installed the same way. Its game data is the ISO9660 file
 // SLY3.WAD (LBA 0xCA0), which the game reads by sector through the image.
+// (installs from this build also hold the worlds as parts beside the image, Worlds/; earlier ones play the disc's
+// worlds, so the version stays: a disc-image install keeps working, a re-extract adds the parts)
 inline constexpr int sly3AssetVersion = 1;
 inline constexpr const char* sly3ExecutableSha1 = "5941b7877e6bf5dfb8acb2d04a3c5059367f385b";
 inline constexpr uint32_t sly3VolumeBlocks = 1735232;
 inline constexpr const char* sly3SystemFiles[] = {"SYSTEM.CNF", "SCUS_974.64", "IOPRP300.IMG"};
 // Sly 2's other releases, installed the same way: the European discs (SCES-52529,
-// v1.00 and v2.01, 11 languages) and the Japanese one (SCPS-15090). The game recognizes its disc itself.
+// v1.00 and v2.01, 11 languages), the Japanese one (SCPS-15090) and the Korean one (SCKA-20044). The game recognizes
+// its disc itself.
 inline constexpr const char* sly2PalSystemFiles[] = {"SYSTEM.CNF", "SCES_525.29", "IOPRP300.IMG"};
 inline constexpr const char* sly2JapanSystemFiles[] = {"SYSTEM.CNF", "SCPS_150.90", "IOPRP300.IMG"};
+inline constexpr const char* sly2KoreaSystemFiles[] = {"SYSTEM.CNF", "SCKA_200.44", "IOPRP300.IMG"};
 // One accepted release of a disc-image game.
 struct DiscVariant {
     const char* bootFile;        // "SCUS_973.16"
@@ -100,7 +104,8 @@ struct DiscVariant {
 };
 // The Sly 2 conversions' sizes (asset version 4, 2026-11-10, CONVERTER.md "Sizes"; the Textures/ folder included):
 // USA 4,870,016,654 bytes (41,313 files), Europe v2.01 8,212,190,183 bytes (58,604 files: 11 languages of dialog and
-// movie sound, as FLAC), v1.00 8,212,190,604, Japan 4,384,013,926 bytes (41,345 files). (Version 3, the worlds as one
+// movie sound, as FLAC), v1.00 8,212,190,604, Japan 4,384,013,926 bytes (41,345 files), Korea 4,773,726,250 bytes
+// (41,310 files, 2026-11-17). (Version 3, the worlds as one
 // file each: 4,856,096,772 / 8,193,742,437 / 8,193,742,859 / 4,369,661,290. Version 2, the PS2 formats: 2.76 / 4.25 /
 // 2.37 GB.)
 inline constexpr DiscVariant sly2Variants[] = {
@@ -112,6 +117,8 @@ inline constexpr DiscVariant sly2Variants[] = {
      std::size(sly2PalSystemFiles), 8212190183ull},
     {"SCPS_150.90", "SCPS-15090", "Japan", "cabc5d0eedaa892bb4dc70408c9cd1418cbd3c60", 1213424, sly2JapanSystemFiles,
      std::size(sly2JapanSystemFiles), 4384013926ull},
+    {"SCKA_200.44", "SCKA-20044", "Korea", "1966d60483d3e5ab514018697104228da7194539", 1382480, sly2KoreaSystemFiles,
+     std::size(sly2KoreaSystemFiles), 4773726250ull},
 };
 inline constexpr DiscVariant sly3Variants[] = {
     {"SCUS_974.64", "SCUS-97464", "USA", sly3ExecutableSha1, sly3VolumeBlocks, sly3SystemFiles, std::size(sly3SystemFiles)},
@@ -140,6 +147,9 @@ struct DiscImageInstall {
     // The game's own converter (an executable beside cane-extractor, run as `<tool> --disc ISO --convert DIR`) writes
     // the installation instead of a copy of the image (Sly 2); nullptr: the image is kept (Sly 3).
     const char* converterTool = nullptr;
+    // (Sly 3) the image kept, then the game's tool writes the worlds as moddable parts beside it (`<tool> --data-dir DIR
+    // --convert-worlds DIR`: Worlds/, Sly3-Release/notes/QOL3_2026-11-10.md); nullptr: none
+    const char* worldsTool = nullptr;
     // the release whose executable has this SHA-1, or nullptr
     const DiscVariant* variantBySha1(const std::string& sha1) const {
         for (size_t i = 0; i < variantCount; ++i)
@@ -153,7 +163,7 @@ inline const DiscImageInstall* discImageInstall(GameId game) {
                                        sly2Variants, std::size(sly2Variants), "Sly2-Release"};
     static const DiscImageInstall sly3{GameId::Sly3, sly3AssetVersion, sly3ExecutableSha1, sly3VolumeBlocks,
                                        sly3SystemFiles, std::size(sly3SystemFiles), "SLY3.WAD", 0xCA0, sly2ImageName,
-                                       sly3Variants, std::size(sly3Variants)};
+                                       sly3Variants, std::size(sly3Variants), nullptr, "Sly3-Release"};
     return game == GameId::Sly2 ? &sly2 : game == GameId::Sly3 ? &sly3 : nullptr;
 }
 inline std::string hashFile(const fs::path& file, const std::function<bool()>& cancelled = {},

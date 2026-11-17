@@ -228,7 +228,11 @@ GLFWwindow* PwindowVulkan(int width, int height, bool fVisible, const char* titl
     // (VR: no window picture (the headset shows the frames), the instance / device through OpenXR; the runtime uses the
     // queue at its own calls: vr.cpp makes those on the submission worker or waits for it (SLY2N_VRVKTHREAD=0: no worker,
     // one thread as before))
-    options.visible = fVisible && !fVr;
+    // (a window that waits for its first frame, a launcher's hand-off (platform/gl_context.h HandoffVisible): created
+    // hidden but shown at its first swap, so it presents like a visible one. Without this its frames went nowhere: the
+    // game ran and was heard behind the Collection Style Launcher's loading screen, its window black.)
+    const bool fPresents = fVisible || (cane::gl::HandoffPending() && cane::gl::HandoffShow());
+    options.visible = fPresents && !fVr;
     options.external = pexternal;
     // (on everywhere: measured on the Quest 3S, Paris / Prague / train, 2x MSAA: the main thread 11.0 / 13.0 / 9.1 ->
     // 8.1 / 9.5 / 6.7 ms, 44.3 / 35.4 / 50.1 -> 44.8 / 36.1 / 51.3 fps; SLY2N_VRVKTHREAD=0 turns it off)

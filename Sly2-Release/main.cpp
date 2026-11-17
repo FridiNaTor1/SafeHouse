@@ -2,6 +2,7 @@
 // Development commands for now; the game loop comes with milestone M2/M3.
 
 #include "renderer.h"
+#include "editor.h"
 #include "renderer_choice_test.h"
 #include "audio.h"
 #include "../platform/audio_devices.h"
@@ -14,6 +15,8 @@
 #include "disc.h"
 #include "convert.h"
 #include "langstore.h"
+#include "wavfile.h"
+#include "flacfile.h"
 #include "worldparts.h"
 #include "texmod.h"
 #include "region.h"
@@ -369,6 +372,8 @@ int main(int argc, char** argv)
     double tSeconds = -1.0;  // (unset: 30 s for the sound commands, the whole movie)
     std::string modsDir, texturePack, languagesDir;
     bool fModsGiven = false, fLanguagesGiven = false;
+    std::vector<std::string> adirModPackage;   // --mod-package DIR (repeatable): loaded last (platform/mod_package.h)
+    bool fNoModPackages = false;               // --no-mod-packages: not the mods folder's Packages/
     LANGIMPORT limport;
     const char* command = nullptr;
     const char* arg = nullptr;
@@ -378,6 +383,7 @@ int main(int argc, char** argv)
     const char* arg2 = nullptr;
     int animRefB = 0;
     VIEWOPTS vo;
+    EDITOROPTS eo;   // --editor W (editor.h: the map editor's 3D view, desktop builds)
     std::string cmRanges = "2DDED0+6A0,2DFBC0+2240,FB1580+1100,FB37E0+80,140C9F0+600,1486000+3400";
     bool fCmFree = false;
     struct { bool fAspect = false; DISPASPECT aspect = DISPASPECT_Fit; int internalHeight = -1, frameRate = -1, vsync = -1, window = -1, wideBackgrounds = -1, hqLogo = -1, longShadows = -1, fastShadows = -1, msaa = -1, upscale = -1, upscalePreset = -1, upscaleSharpness = -1; float drawDistance = -1; } dispo;
@@ -394,6 +400,8 @@ int main(int argc, char** argv)
     {
         if (!std::strcmp(argv[i], "--disc") && i + 1 < argc) disc = argv[++i];
         else if (!std::strcmp(argv[i], "--mods") && i + 1 < argc) { modsDir = argv[++i]; fModsGiven = true; }
+        else if (!std::strcmp(argv[i], "--mod-package") && i + 1 < argc) adirModPackage.emplace_back(argv[++i]);
+        else if (!std::strcmp(argv[i], "--no-mod-packages")) fNoModPackages = true;
         else if (!std::strcmp(argv[i], "--texture-pack") && i + 1 < argc) texturePack = argv[++i];
         // (texmod.h: the texture cache's folder, else the user's cache folder; its commands)
         else if (!std::strcmp(argv[i], "--cache-dir") && i + 1 < argc) cane::cacheOverride = cane::absolutePath(cane::path(argv[++i]));
@@ -498,6 +506,11 @@ int main(int argc, char** argv)
         else if (!std::strcmp(argv[i], "--cm-free")) fCmFree = true;
         else if (!std::strcmp(argv[i], "--crv-check") && i + 1 < argc) { command = "crv-check"; arg = argv[++i]; }
         else if (!std::strcmp(argv[i], "--actor-check") && i + 1 < argc) { command = "actor-check"; arg = argv[++i]; }
+        else if (!std::strcmp(argv[i], "--editor") && i + 1 < argc) { command = "editor"; eo.record = std::atoi(argv[++i]); }
+        else if (!std::strcmp(argv[i], "--editor-project") && i + 1 < argc) eo.project = argv[++i];
+        else if (!std::strcmp(argv[i], "--editor-do") && i + 1 < argc) eo.script = argv[++i];
+        else if (!std::strcmp(argv[i], "--editor-hidden")) eo.fHidden = true;
+        else if (!std::strcmp(argv[i], "--editor-size") && i + 1 < argc) std::sscanf(argv[++i], "%dx%d", &eo.width, &eo.height);
         else if (!std::strcmp(argv[i], "--view-world") && i + 1 < argc) { command = "view-world"; vo.iworld = std::atoi(argv[++i]); }
         else if (!std::strcmp(argv[i], "--screenshot") && i + 1 < argc) vo.screenshot = argv[++i];
         else if (!std::strcmp(argv[i], "--camera") && i + 1 < argc) vo.camera = argv[++i];
@@ -556,6 +569,8 @@ int main(int argc, char** argv)
         else if (!std::strcmp(argv[i], "--export-textures")) { g_fConvertTextures = true; fExportTextures = true; }
         else if (!std::strcmp(argv[i], "--no-export-textures")) g_fConvertTextures = false;
         else if (!std::strcmp(argv[i], "--dump-text") && i + 1 < argc) { command = "dump-text"; arg = argv[++i]; }
+        else if (!std::strcmp(argv[i], "--dump-port-text") && i + 1 < argc) { command = "dump-port-text"; arg = argv[++i]; }
+        else if (!std::strcmp(argv[i], "--decode-audio") && i + 2 < argc) { command = "decode-audio"; arg = argv[++i]; arg2 = argv[++i]; }
         // (languages, langstore.h) the shared languages folder; importing a disc's / an installation's languages into it
         else if (!std::strcmp(argv[i], "--languages-dir") && i + 1 < argc) { languagesDir = argv[++i]; fLanguagesGiven = true; }
         else if (!std::strcmp(argv[i], "--import-languages") && i + 1 < argc) { command = "import-languages"; limport.dirOut = argv[++i]; }
@@ -598,6 +613,18 @@ int main(int argc, char** argv)
         return GlSelfTestCommand(out);
     }
     if (command && !std::strcmp(command, "language-selftest")) return LanguageSelfTest();
+    // (the launcher's Translate page plays a FLAC or 24-bit voice line through this: IN (.wav / .flac) as a 16-bit WAV)
+    if (command && !std::strcmp(command, "decode-audio"))
+    {
+        int rate = 0, cch = 0;
+        std::vector<int16_t> asample;
+        std::string err;
+        WAVINFO info;
+        const bool fOk = FLoadFlac(arg, rate, cch, asample, &err) || (FLoadWav(arg, info, asample, &err) && (rate = info.rate, cch = info.cch, true));
+        if (!fOk || cch <= 0) { std::fprintf(stderr, "decode-audio: %s: %s\n", arg, err.c_str()); return 1; }
+        return FWriteWavFile(arg2, AbWav(rate, cch, asample.data(), asample.size() / std::size_t(cch))) ? 0 : 1;
+    }
+    if (command && !std::strcmp(command, "dump-port-text")) { int DumpPortTextCommand(const std::string&); return DumpPortTextCommand(arg); }   // (textmod.cpp; no disc)
     // (audio.h, notes/AUDIO_2026-11-10.md) the devices by name, their fallback / recovery, the USB headset's microphone
     if (command && !std::strcmp(command, "audio-selftest")) { int AudioSelfTest(const char*); return AudioSelfTest(arg ? arg : ""); }
     if (command && !std::strcmp(command, "list-audio-devices"))
@@ -615,6 +642,9 @@ int main(int argc, char** argv)
         else modsDir = cane::utf8(cane::userDirectory() / "Mods");
     }
     g_disc.SetModsDirectory(modsDir);
+    // the mod packages: <mods>/Packages/* (platform/mod_package.h) and --mod-package DIR / SLY2_MOD_PACKAGE (the editor's play test)
+    if (const char* sz = std::getenv("SLY2_MOD_PACKAGE"); sz && *sz) adirModPackage.emplace_back(sz);
+    g_disc.SetModPackages(!fNoModPackages, adirModPackage);
     SetTexturePackDirectory(texturePack);
     if (command && !std::strcmp(command, "texcache-selftest")) return TextureCacheSelfTest(arg);
     if (command && !std::strcmp(command, "clear-texture-cache")) return ClearTextureCacheCommand();
@@ -745,6 +775,7 @@ int main(int argc, char** argv)
     };
     applyDisplayOverrides();
     if (command && !std::strcmp(command, "view-world")) return ViewWorld(vo);
+    if (command && !std::strcmp(command, "editor")) return EditorMain(eo);
     if (command && !std::strcmp(command, "anim-test")) return AnimTestCommand(arg, argc, argv);  // animtest.cpp
     if (command && !std::strcmp(command, "anim-pose")) return AnimPoseCommand(arg, arg2, argc, argv);  // animref.cpp
     int AiFreeCommand(const char*, const char*, const char*, int, char**);  // animref.cpp
@@ -878,7 +909,8 @@ int main(int argc, char** argv)
                  "       | --parse-splice W | --eval-splice W [--maps dir] [-v] | --splice-selftest | --rumble-selftest | --action-input-selftest | --settings-selftest | --renderer-selftest\n"
                  "       | --list-sounds W | --play-music W [--song ID] [--stem 0|1|2] | --play-sfx W [--song SOUNDID] | --play-dialog W [--song ID]\n"
                  "       | --list-movies | --play-movie ID [--out frames-dir] [--seconds T]   (W: boot, frontend, a world record 2..43, SECTOR:CB)\n"
-                 "       | --convert DIR [--no-export-textures] | --export-textures [--out DIR] | --dump-textures DIR W\n");
+                 "       | --convert DIR [--no-export-textures] | --export-textures [--out DIR] | --dump-textures DIR W\n"
+                 "       | --dump-text DIR | --dump-port-text DIR | --check-language NAME | --language-selftest\n");
     return 2;
 }
 

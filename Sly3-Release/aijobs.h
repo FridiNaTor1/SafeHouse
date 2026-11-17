@@ -77,6 +77,8 @@ struct JOBREACT : AIJOB
     void React(const AIMSG& m);   // orig 0x176750
     void NextReaction();          // orig 0x177BA0 (aihit.cpp)
     void SendHit(int n, LO* ploSender);  // orig 0x176B80
+    bool FChildDone() const;             // orig3 0x238AD0
+    bool FTargetReaction3(AIMSG* pm);    // orig3 0x19AF98
 };
 
 // 0x9D (0x50): a move: its animation index in the mask, its kind entry played (Init 0x174920, Enter 0x174950, Exit
@@ -181,6 +183,8 @@ struct JOBUSE : JOBMOVE
     int nExtra = 0;               // +0x68
     int fBasis = 0;               // +0x6C its orientation +0x70 is set
     glm::mat3 mat{1.0f};          // +0x70
+    int fDrop3 = -1;              // (Sly 3 job 0xCB +0xC8, from op 13's +0xC: a plain place dropped onto the ground (100 up ..
+                                  // 350 down) only when set; -1: a Sly 2 caller's use, dropped 100 .. 150 as Sly 2's 0x179FA0)
     void Init() override;
     void Enter() override;
     void Exit() override;
@@ -237,6 +241,27 @@ struct JOBNAVPOINT : AIJOB
     bool FDone() const;           // orig 0x17EAE8
 };
 
+// Sly 3's 0xE5 (orig3 vt 0x35D598: Init 0x1D9CA8, Enter 0x1D9CE0 -> 0x1D9E70, Update 0x1D9D58, SetMode 0x1D9EF0): the
+// goto's state 5 (its follower stuck): the guard taken to the point 50 further along its path (on its own floor height),
+// not jumped there as Sly 2's 0xBF / 0xAC did. A guard that walks (+0x1144 bit 1 = native grfFE8 bit 1) moves there
+// in at most 0.7 s (mode 0: Sly 3 pushes the move job 0xCB toward the point; natively a slide without its clip,
+// TODO(ai): 0xCB 0x131D78..0x1327F0), else it is put there (mode 1: vt slots 34 / 40 / 41); mode -1 done.
+constexpr CID CID_JOBSETTLE3 = 0x1E5;
+struct JOBSETTLE3 : AIJOB
+{
+    GOAL goal;                    // +0x30 / +0x40 (the point)
+    int mode = -1;                // +0x30
+    float tMode = 0;              // +0x34
+    glm::vec3 posFrom{0.0f};      // (the slide's start)
+    bool fStarted = false;        // (entered: mode -1 afterwards is done, 0x238AB8)
+    void Init() override;
+    void Enter() override;
+    void Exit() override;
+    void Update() override;
+    void SetMode(int n, const glm::vec3& pos);
+    bool FDone() const { return mode == -1 && fStarted; }
+};
+
 // 0xA7 (0xF0): the path follower (Init 0x178E98 (0x177E80), Enter 0x177EF0, Update 0x178EE0 (0x1789F8, steering
 // 0x177F78), SetState 0x1791C8)
 struct JOBFOLLOW : AIJOB
@@ -288,6 +313,13 @@ struct JOBSCRIPT : AIJOB
     float radFace = 0;            // +0x48
     int fFromReact = 0;           // +0x4C
     KINDE kinde50;               // +0x50 the command-14 entry; its move child keeps a pointer to this member
+    // (s3-ai-4) Sly 3's kind entry replaced while a command runs (0x1983A8; Sly 3's JOBSCRIPT +0x4C / +0x50 / +0x54):
+    // the replaced entry's state (Sly 2 index; -1 none), its oid and flags, put back by 0x198490
+    int istateKindSaved = -1;
+    OID oidKindSaved = -1;
+    int grfKindSaved = 0;
+    void OverrideKind3(int istate3, OID oid, int grf);  // orig3 0x1983A8
+    void RestoreKind3();                                 // orig3 0x198490
     void Init() override;
     void Exit() override;
     void Update() override;

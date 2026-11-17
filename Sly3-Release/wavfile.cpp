@@ -138,6 +138,27 @@ PFNWAVREAD PfnReadFile(const std::string& path)
 
 bool FLoadWav(const std::string& path, WAVINFO& info, std::vector<int16_t>& asample, std::string* perror)
 {
+#ifdef __SWITCH__
+    // (the Switch: the size from the opened file: a stat is two more SD card requests, and a sound effect's first play
+    // loads its sample here on the game thread)
+    std::vector<uint8_t> ab;
+    {
+        std::ifstream in(cane::path(path), std::ios::binary | std::ios::ate);
+        const std::streamoff cbFile = in ? std::streamoff(in.tellg()) : std::streamoff(-1);
+        if (cbFile >= 0)
+        {
+            ab.resize(std::size_t(cbFile));
+            in.seekg(0);
+            in.read(reinterpret_cast<char*>(ab.data()), std::streamsize(cbFile));
+        }
+        if (cbFile < 0 || std::size_t(in.gcount()) != ab.size())
+        {
+            if (perror) *perror = "cannot read";
+            return false;
+        }
+    }
+    const uint64_t cb = ab.size();
+#else
     std::error_code ec;
     const uint64_t cb = std::filesystem::file_size(cane::path(path), ec);
     if (ec)
@@ -155,6 +176,7 @@ bool FLoadWav(const std::string& path, WAVINFO& info, std::vector<int16_t>& asam
             return false;
         }
     }
+#endif
     const PFNWAVREAD pfn = [&](uint64_t ib, void* pv, std::size_t c) {
         if (ib + c > ab.size()) return false;
         std::memcpy(pv, ab.data() + ib, c);

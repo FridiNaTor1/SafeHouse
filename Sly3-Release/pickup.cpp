@@ -1,6 +1,7 @@
 // pickup.cpp: the pickups (pickup.h). Ported from the decomp's src/hand func_001C4E50 / 001C6508 / 001C60B8 /
 // 001C65F8 / 001C5E48 / 001C6588 / 001C5D18 / 001C6BD0 and the asm (0x1C5148, 0x1C55E0).
 #include "pickup.h"
+#include "worldaccess.h"
 #include "game/sly3.h"
 #include "worldglobals.h"
 
@@ -31,6 +32,7 @@
 #include "aseg.h"
 #include "alo.h"
 #include "cm.h"
+#include "pe.h"
 #include "animfind.h"
 #include "nav.h"
 #include "bsp.h"
@@ -50,6 +52,18 @@ float GRandInRange(float gLow, float gHigh);  // xfmath.h (0x11D448)
 glm::mat3 BuildLookAtMatrix(const glm::vec3& vecX, const glm::vec3& vecY);  // mat.h (0x11B830)
 int NRandInRange(int nLow, int nHigh);                     // util.h (0x11D3F8)
 inline int NRandInRangePk(int a, int b) { return NRandInRange(a, b); }
+// (PC, s3-prologue: the drops (the breakables', guards', birds' coins and charms, which never appeared natively before)
+// draw from their own random stream, so that turning them on did not shift the game's stream the survey's played routes
+// were recorded against; the reference's stream is not followed anyway)
+uint32_t s_uDropRand = 0x6C8E9CF5u;
+float GRandDrop(float lo, float hi)
+{
+    s_uDropRand ^= s_uDropRand << 13;
+    s_uDropRand ^= s_uDropRand >> 17;
+    s_uDropRand ^= s_uDropRand << 5;
+    return lo + (hi - lo) * float(s_uDropRand >> 8) * (1.0f / 16777216.0f);
+}
+int NRandDrop(int a, int b) { return a >= b ? a : a + std::min(b - a, int(GRandDrop(0.0f, float(b - a + 1)))); }
 float TJumpBallistic(const glm::vec3& d, const glm::vec3& vGravity, float vzMax, float vzMin, float sMax, float sMin);  // damage.cpp (0x196928)
 void RequestLoTaskState(LO* plo, int n, LO* ploContext);  // task.cpp (0x164640)
 
@@ -70,13 +84,28 @@ static void ShowCounter(OID oid)
     ShowScreenObj(plo, -1);
     RefreshScreenObj(plo);
 }
-void ShowCoinCounter() { ShowCounter(0x36D); }
+void ShowCoinCounter()
+{
+    // (Sly 3: the coin counter is the class 0xA7 screen object (m_ext's / v_ext's 1048, gauge3.cpp), Sly 2's oid 0x36D
+    // is none of Sly 3's: L3 and SCPT 0x69 (orig3 0x1528E0 -> 0x1853D8) showed no coins)
+    if (g_psw)
+        if (const std::vector<LO*> aplo = AploOfClass(g_psw, 0xA7); !aplo.empty())
+        {
+            for (LO* plo : aplo)
+            {
+                ShowScreenObj(plo, -1);
+                RefreshScreenObj(plo);
+            }
+            return;
+        }
+    ShowCounter(0x36D);
+}
 void ShowClueCounter() { ShowCounter(0x36E); }
 
 namespace
 {
 
-// orig 0x00161798 / 0x001617E0: the coins (as shop.cpp's); setting them shows the counter (0x161868)
+// orig 0x00161798 / 0x001617E0: the coins (as shop.cpp's); setting them shows the counter (0x161868) (orig3: 0x1852E0, the same C in the Sly 3 decomp)
 int CCoins() { CRef r = RefGetProgress({"loot", "ccoin"}); return r.m_tagk == TAGK_S32 ? r.m_n : r.m_tagk == TAGK_F32 ? int(r.m_g) : 0; }
 void SetCoins(int n)
 {
@@ -155,7 +184,7 @@ const RIPHUDDEF& RiphuddefCoin()
 
 namespace
 {
-// orig: 0x0011E290 (a's part along the unit vector b and the rest; their dot product: as water.cpp's)
+// orig: 0x0011E290 (a's part along the unit vector b and the rest; their dot product: as water.cpp's) (orig3: 0x11FE60, the same code in Sly 3)
 float GSplitVector(const glm::vec3& a, const glm::vec3& b, glm::vec3* ppar, glm::vec3* pperp)
 {
     const float d = (a.x * b.x + a.y * b.y) + a.z * b.z;
@@ -192,6 +221,7 @@ struct PICKUP
     glm::vec3 vel{0.0f};          // +0x180
     glm::vec3 acc{0.0f};          // +0x190
     float g1A0 = 0.25f;           // +0x1A0 the sparkle's chance
+    bool fDrop = false;           // (PC) a drop's instance: its random draws from the drops' stream (GRandDrop)
     int fLanded = 0;              // +0x1C4
     int fCollectTimed = 1;        // +0x1C8
     float tCollect = FLT_MAX;     // +0x1CC
@@ -208,6 +238,8 @@ struct PICKUP
     LO* ploGlintR = nullptr;      // +0x1B8 (+0x1B4: the other)
     LO* ploCollect = nullptr;     // +0x210 (+0x20C: collection's message receiver, usually an explosion)
     LO* ploExpire = nullptr;      // +0x218 (+0x214: timed expiry's message receiver)
+    LO* ppeCollect = nullptr;     // orig3 +0x194: the effect started on collection
+    LO* ppeExpire = nullptr;      // orig3 +0x198: the effect started at the timed expiry
     int fSidePrev = 0;            // +0x1BC
     float tGlint = -1e9f;         // +0x1C0
     bool fWritten = false;        // (natively: the record's local translation last written by the motion, to notice
@@ -220,7 +252,7 @@ WORLD_TABLE(s_mpclue);   // (PC: moved aside while a kept world loads, worldglob
 
 }  // namespace
 
-// orig: 0x001CB658 (the streaming proxy whose instance plo is: as activate.cpp's 0x1CB410)
+// orig: 0x001CB658 (orig3 0x1FC118; the streaming proxy whose instance plo is: as activate.cpp's 0x1CB410)
 LO* PproxyOfInstance(LO* plo)
 {
     for (auto& [pproxy, ps] : g_psw->mpproxy)
@@ -230,9 +262,11 @@ LO* PproxyOfInstance(LO* plo)
         if (we.cloLoaded != 1) continue;
         for (int i = we.cUsed; i < std::min(we.cinst, static_cast<int>(we.aplo.size())); ++i)
             if (we.aplo[static_cast<size_t>(i)] == plo)
-                // (the row's owner: the proxies of one group share its rows)
-                return i < static_cast<int>(we.aploRowOwner.size()) && we.aploRowOwner[static_cast<size_t>(i)] ? we.aploRowOwner[static_cast<size_t>(i)]
-                                                                                                               : pproxy;
+                // (the row's owner: the proxies of one group share its rows; a row given back has none, and the
+                // original's instance context is then cleared (0x1FC118: +0x24 null -> 0). Answered with another proxy
+                // of the group, the turf war's wave list (block 139035 s6086, its guards' option 33) never emptied and
+                // the second wave never came)
+                return i < static_cast<int>(we.aploRowOwner.size()) ? we.aploRowOwner[static_cast<size_t>(i)] : pproxy;
     }
     return nullptr;
 }
@@ -308,6 +342,17 @@ PICKUP& InitPickup(LO* plo)
     // instance's hierarchy, just as the glint parts above.
     p.ploCollect = find(static_cast<OID>(plo->U32Field(0, 0x20C, static_cast<uint32_t>(-1))));
     p.ploExpire = find(static_cast<OID>(plo->U32Field(0, 0x214, static_cast<uint32_t>(-1))));
+    // orig3: the effects started on collection (+0x194, EOPID 954) and at the timed expiry (+0x198, EOPID 955): PEs
+    // found from the pickup (e.g. m_ext's coins: 8494 / 8496, children of each coin), 0x1FE728(pe, 1) by 0x1F7A90 /
+    // 0x1F6830 and the other classes' collections (0x1F7F20, 0x1F80B8, 0x1F8F24, 0x1F9204, 0x1F9324)
+    auto findPe = [&](uint32_t ib) -> LO* {
+        LO* ppe = find(static_cast<OID>(plo->U32Field(0, ib, static_cast<uint32_t>(-1))));
+        return ppe && FCidDerivedFrom(ppe->Cid(), 0x2D) ? ppe : nullptr;   // (PE 0x2D, as pe.cpp)
+    };
+    p.ppeCollect = findPe(0x194);
+    p.ppeExpire = findPe(0x198);
+    if (FPrint())
+        std::printf("pickup %d: collect effect %d, expiry effect %d\n", plo->oid, p.ppeCollect ? p.ppeCollect->oid : -1, p.ppeExpire ? p.ppeExpire->oid : -1);
     if (FIsLoDerivedFrom(plo, S3CID(0x5E)))
     {
         // orig: 0x1C7988 / 0x1C7A08 / 0x1C7A10: retain the authored
@@ -358,6 +403,13 @@ void AdvanceSma(SMA* psma, float t)
 // orig: 0x001C60B8 (the base's state change: the motion's start from the record when coming from -1 / 2, the
 // acceleration by state, gone (2): removed and the proxy's row given back, the child 0x12 shown in 0 / 4 / 5, the SM's
 // goal 0x184 / 0x183 / 0x186 (TODO))
+// orig3 0x1FE728(pe, 1) on a pickup's effect (+0x194 / +0x198): played where the effect is (a child of the pickup); its
+// particles on their own random stream, as the breakables' (the survey's played routes keep the game's stream)
+void StartPickupPe(LO* ppe)
+{
+    if (ppe) TriggerPe(ppe, nullptr, true);
+}
+
 void SetPickupStateBase(LO* plo, PICKUP& p, int n)
 {
     if (p.state == n) return;
@@ -396,7 +448,11 @@ void SetPickupStateBase(LO* plo, PICKUP& p, int n)
         }
     // the SM +0x164 on +0x168 (0x1F0380 with the state's goal, its start advanced by +0x160 (0x1F10F0); then 0x1F0660;
     // no goal: retracted, released)
-    const int anim = n == 0 ? 0x184 : (n == 3 || n == 4) ? 0x183 : n == 5 ? 0x186 : -1;  // (+0x15C: TODO, 0x184 default)
+    // (orig3 0x1F7588: Sly 3 numbers the states one lower past 1 (-1 gone, 2 thrown: Sly 2's 2 / 3 / 4 / 5 are -1 / 2 / 3 / 4)
+    // and gives every state but -1 the SM goal D_00325548[state] = 0x99 + state (Sly 2: 0x184 / 0x183 / 0x186 for 0 / 3-4 / 5,
+    // none for 1))
+    const int n3 = n == 2 ? -1 : n >= 3 ? n - 1 : n;
+    const int anim = n3 == -1 || n == -1 ? -1 : 0x99 + n3;
     if (anim != -1)
     {
         if (!p.psma)
@@ -408,19 +464,20 @@ void SetPickupStateBase(LO* plo, PICKUP& p, int n)
             SM* psm = nullptr;
             for (const LO* pt = plo; pt && !psm; pt = pt->ploCloneOf)
                 for (const auto& [ib, pl] : static_cast<const ALO*>(pt)->apart)
-                    if (ib == 0x164 && pl) psm = dynamic_cast<SM*>(pl);
+                    if ((ib == 0x13C || ib == (FN3_TAG | 0x13Cu)) && pl) psm = dynamic_cast<SM*>(pl);   // (orig3 +0x13C: the table 0x346FC0's SM 0x1A5)
             if (psm)
             {
                 if (FPrint()) std::printf("pickup %d: sm %d parent %d (apart %zu)\n", plo->oid, psm->oid, psm->paloParent ? psm->paloParent->oid : -1, palo->apart.size());
                 p.psma = PsmaApplySm(psm, palo, anim, 0);  // 0x1F0380 (+ vt slot 1: kept)
                 if (p.psma && 0.0f < p.dtSm) AdvanceSma(p.psma, p.dtSm);  // 0x1F10F0
             }
-            else
+            else if (FPrint())
             {
+                // (orig3 0x1F7588: no SM at +0x13C (a class whose data has none, e.g. m_ext's clue bottles): no animation)
                 std::string str;
                 for (const auto& [ib, pl] : palo->apart) str += " +0x" + std::to_string(ib) + (pl ? "(" + std::to_string(pl->oid) + " cid " + std::to_string(pl->Cid()) + ")" : "()");
                 for (LO* pc : plo->aploOwned) str += " owned " + std::to_string(pc->oid) + " cid " + std::to_string(pc->Cid());
-                WarnOnce("a pickup without its SM (+0x164): cid " + std::to_string(plo->Cid()) + " parts" + str);
+                std::printf("pickup %d: no SM (+0x13C): cid %d parts%s\n", plo->oid, plo->Cid(), str.c_str());
             }
         }
         else SetSmaGoal(p.psma, anim);  // 0x1F0660
@@ -444,7 +501,7 @@ void SetCoinState(LO* plo, PICKUP& p, int n)
     if (p.state == n) return;
     switch (n)
     {
-    case 0: p.dtRest = GRandInRange(p.dtRestLow, p.dtRestHigh); break;  // 0x11D448
+    case 0: p.dtRest = p.fDrop ? GRandDrop(p.dtRestLow, p.dtRestHigh) : GRandInRange(p.dtRestLow, p.dtRestHigh); break;  // 0x11D448
     case 1:
     {
         // the flight to the counter (0x1CE888(G, 9, 0): +0xF0 D_002C0DA0, +0xF4 the coin, +0xF8 0; slot 1 at the coin's
@@ -456,6 +513,7 @@ void SetCoinState(LO* plo, PICKUP& p, int n)
         const glm::mat3 mat = pxfObj ? glm::mat3(pxfObj->matWorld) : glm::mat3(1.0f);
         if (!FLaunchHudRip(plo, PosLoWorld(plo), mat, RiphuddefCoin(), [] { AddCoin(); })) AddCoin();  // 0x1C67A0
         if (CSnd* ps = PsndNewPlain(0x29)) ps->SetSource(nullptr);  // 0x1FBB90 / 0x1FB2F8
+        StartPickupPe(p.ppeCollect);  // orig3 0x1F7BCC: after the sound, before event 5
         if (p.ploCollect)
         {
             BURSTPARAMS bp;
@@ -485,6 +543,7 @@ void SetPrizeState(LO* plo, PICKUP& p, int n)
     if (n == 1)
     {
         if (CSnd* ps = PsndNewPlain(0)) ps->SetSource(nullptr);  // 0x1FBB90 / 0x1FB2F8
+        StartPickupPe(p.ppeCollect);  // orig3 +0x194
         const OID oidTask = static_cast<OID>(plo->U32Field(0, 0x230, static_cast<uint32_t>(-1)));
         if (oidTask != static_cast<OID>(-1)) RequestTaskStateLo(PloFindSwObjectByOid(g_psw, oidTask), 2, plo);
         n = 2;
@@ -502,6 +561,7 @@ void SetClueState(LO* plo, PICKUP& p, int n)
     if (p.state == n) return;
     if (n == 1)
     {
+        StartPickupPe(p.ppeCollect);  // orig3 +0x194
         if (p.ploCollect)
         {
             // Slot 51's BURSTPARAMS {grf = 1, source = pickup}; an explosion
@@ -547,7 +607,7 @@ void SetOtherPickupState(LO* plo, PICKUP& p, int n)
     if (p.state == n) return;
     switch (n)
     {
-    case 0: p.dtRest = GRandInRange(p.dtRestLow, p.dtRestHigh); break;
+    case 0: p.dtRest = p.fDrop ? GRandDrop(p.dtRestLow, p.dtRestHigh) : GRandInRange(p.dtRestLow, p.dtRestHigh); break;
     case 1:
         if (FIsLoDerivedFrom(plo, S3CID(0x5D)))
         {
@@ -562,6 +622,7 @@ void SetOtherPickupState(LO* plo, PICKUP& p, int n)
             FLaunchHudRip(plo, PosLoWorld(plo), mat, RiphuddefCharm(), [] {});
             // slot 81 (0x144268): health +0x23C (10) and power +0x240 (20), each up to its maximum
             HealActor(pa, static_cast<int>(plo->U32Field(0, 0x23C, 10)), static_cast<int>(plo->U32Field(0, 0x240, 20)));
+            StartPickupPe(p.ppeCollect);  // orig3 +0x194
             if (p.ploCollect)
             {
                 BURSTPARAMS bp; bp.grf = 1; bp.plo = plo;
@@ -576,6 +637,7 @@ void SetOtherPickupState(LO* plo, PICKUP& p, int n)
             const CRef cur = RefGetProgress(path);
             CRef next; next.SetS32(cur.RefCoerceS32().m_n + 1);
             FSetProgress(path, next);  // orig: 0x1C77E8 / 0x1D8B20
+            StartPickupPe(p.ppeCollect);  // orig3 +0x194
             if (p.ploCollect)
             {
                 BURSTPARAMS bp; bp.grf = 1; bp.plo = plo;
@@ -733,7 +795,7 @@ void UpdatePickupGlint(LO* plo, PICKUP& p)
     const glm::vec3 dir = pxfObj ? glm::mat3(pxfObj->matWorld) * glm::vec3(1.0f, 1.0f, 0.0f) : glm::vec3(1.0f, 1.0f, 0.0f);
     const int fSide = glm::dot(dir, g_cm.mat[1]) < 0.0f;
     if (fSide == p.fSidePrev) return;
-    if (GRandInRange(0.0f, 1.0f) < p.g1A0 && 1.0f < g_clock.t - p.tGlint)
+    if ((p.fDrop ? GRandDrop(0.0f, 1.0f) : GRandInRange(0.0f, 1.0f)) < p.g1A0 && 1.0f < g_clock.t - p.tGlint)
     {
         LO* ploAt = glm::dot(dir, g_cm.mat[0]) < 0.0f ? p.ploGlintL : p.ploGlintR;
         if (ploAt)
@@ -1078,10 +1140,16 @@ bool FFindPickupFloor(const glm::vec3& pos, std::vector<SOE*>* papsoe, float gDo
     return true;
 }
 
-// orig: 0x001C6CE8 (n instances of the kind's proxy (0x5B coins 0x2B3, 0x5D charms 0x2B4): attached, put away (2), kept)
+// orig: 0x001C6CE8 (n instances of the kind's proxy (0x5B coins 0x2B3, 0x5D charms 0x2B4; Sly 3: 0x30A / 0x30B): attached, put away (2), kept)
 int CpickupInstances(int cid, int n, std::vector<LO*>* paplo)
 {
-    const OID oid = cid == S3CID(0x5B) ? 0x2B3 : cid == S3CID(0x5D) ? 0x2B4 : -1;
+    // orig3: 0x1F8280 (coins 0x67: the proxy 0x30A, none while the player is Carmelita 0x3C; charms 0x69: 0x30B; Sly 2's
+    // 0x2B3 / 0x2B4). The callers name the kinds by Sly 2's ids (0x5B / 0x5D) or Sly 3's: both are taken. (Before,
+    // the Sly 2 id was compared with its Sly 3 class and no breakable, guard or bird dropped anything.)
+    const bool fCoin = cid == 0x5B || cid == S3CID(0x5B), fCharm = cid == 0x5D || cid == S3CID(0x5D);
+    LO* ppo = PloPoCurrent(g_psw);
+    if (fCoin && ppo && FIsLoDerivedFrom(ppo, S3CID(0x3F))) return 0;
+    const OID oid = fCoin ? 0x30A : fCharm ? 0x30B : -1;
     if (!n || oid == -1) return 0;
     LO* pproxy = PloFindSwObjectByOid(g_psw, oid);  // 0x15E938 (5)
     if (!pproxy) return 0;
@@ -1090,10 +1158,13 @@ int CpickupInstances(int cid, int n, std::vector<LO*>* paplo)
         LO* plo = PloAcquireProxyObject(g_psw, pproxy, false);  // 0x1CB250(proxy, 0): one-object rows, score >= 2
         if (!plo) break;
         SetPickupState(plo, 2);                    // vt slot 76
-        if (PICKUP* p = Ppickup(plo)) p->pproxy = pproxy;
+        if (PICKUP* p = Ppickup(plo)) { p->pproxy = pproxy; p->fDrop = true; }
         LockProxyRowOf(g_psw, pproxy, plo, true);  // 0x1CB488
         paplo->push_back(plo);
     }
+    // orig3: 0x1F8280 locks each row while it takes the next (0x1FC060) and then gives every lock back (0x1FC090): the
+    // rows are not held locked while the pickups fly (Sly 2's 0x1C6CE8 kept them locked until the pickup's state 2)
+    for (LO* plo : *paplo) UnlockProxyRowOf(g_psw, pproxy, plo);
     if (FPrint())
         if (auto it = g_psw->mpproxy.find(pproxy); it != g_psw->mpproxy.end() && it->second.iwe >= 0)
         {
@@ -1136,7 +1207,7 @@ void SpawnPickups(int cid, const glm::vec3& pos, LO* psrc, int n)
     if (!c) return fail("no instances");
     std::vector<SOE*> apsoe = AsoeSolidsIn(posNav - glm::vec3(300.0f), posNav + glm::vec3(300.0f));
     const glm::vec3 up(0.0f, 0.0f, 1.0f), g(0.0f, 0.0f, -2250.0f);
-    float rad = GRandInRange(-3.1415927f, 3.1415927f);
+    float rad = GRandDrop(-3.1415927f, 3.1415927f);
     float s = 100.0f;  // D_002C0E8C
     int cPlaced = 0;
     for (int iTry = 0; iTry < 50 && cPlaced < c; iTry++)
@@ -1184,11 +1255,11 @@ void DropPickups(const glm::vec3& pos, int n, int dn, LO* psrc)
         return b + static_cast<int>((1.0f - g) * ((static_cast<float>(a) + 0.999f) - static_cast<float>(b)));
     };
     const float g = GSuck();  // 0x154C90 (task.cpp)
-    if (s_cCoin <= 0) s_cCoin = NRandInRangePk(nlerp(g, s_atbl[4], s_atbl[6]), nlerp(g, s_atbl[5], s_atbl[7]));
-    if (s_cCharm <= 0) s_cCharm = NRandInRangePk(nlerp(g, s_atbl[8], s_atbl[10]), nlerp(g, s_atbl[9], s_atbl[11]));
+    if (s_cCoin <= 0) s_cCoin = NRandDrop(nlerp(g, s_atbl[4], s_atbl[6]), nlerp(g, s_atbl[5], s_atbl[7]));
+    if (s_cCharm <= 0) s_cCharm = NRandDrop(nlerp(g, s_atbl[8], s_atbl[10]), nlerp(g, s_atbl[9], s_atbl[11]));
     s_cCoin += psrc && FIsLoDerivedFrom(psrc, S3CID(0x38)) ? -2 : -1;
     s_cCharm += dn;
-    if (n < 0) n = s_cCoin <= 0 ? NRandInRangePk(s_atbl[0], s_atbl[1]) : NRandInRangePk(s_atbl[2], s_atbl[3]);
+    if (n < 0) n = s_cCoin <= 0 ? NRandDrop(s_atbl[0], s_atbl[1]) : NRandDrop(s_atbl[2], s_atbl[3]);
     if (FPrint()) std::printf("drops: %d coins (counters %d / %d)\n", n, s_cCoin, s_cCharm);
     if (n > 0) SpawnPickups(0x5B, pos, psrc, n);
     if (s_cCharm <= 0) SpawnPickups(0x5D, pos, psrc, 1);
@@ -1248,7 +1319,8 @@ void OnPickupMessage(LO* plo, int msgk, void* pv)
     if (msgk != 10 || !pv) return;  // base 0x00133590 is empty
     PICKUP* p = Ppickup(plo);
     const SMAMSG10* pm = static_cast<const SMAMSG10*>(pv);
-    if (!p || pm->psma != p->psma || pm->oidNew != 0x186) return;
+    if (!p || pm->psma != p->psma || pm->oidNew != 0x9D) return;   // (orig3 0x1F6830: Sly 3's goal of its state 4; Sly 2's 0x186)
+    StartPickupPe(p->ppeExpire);  // orig3 0x1F6880: +0x198, then the state -1
     if (p->ploExpire)
     {
         BURSTPARAMS bp;
@@ -1265,6 +1337,7 @@ struct INITPICKUP
     INITPICKUP()
     {
         RegisterLoUpdate(0x1C6588, UpdateCoin);
+        g_pfnSmaOwnRandom = [](const SMA* psma) { return psma->palo && Ppickup(psma->palo) != nullptr; };
         for (uint32_t pfn : {0x1C5E48u, 0x1C6880u, 0x1C7778u}) RegisterLoUpdate(pfn, UpdatePickupOther);
         // orig: 0x200BA0 / 0x200C28, EOPID 897: +0x150 / vt slot 76.
         RegisterObjectGetter(897, [](LO* plo) { CRef r; PICKUP* p = Ppickup(plo); r.SetS32(p ? p->state : -1); return r; });
@@ -1283,6 +1356,7 @@ struct INITPICKUP
 }  // namespace
 NATIVEFN(0x1C5148, UpdatePickupMotion);
 NATIVEFN(0x1C5098, OnPickupMessage);
+NATIVEFN3(0x1F6830, OnPickupMessage);   // (orig3: the pickups' slot 5; its SMA state message is Sly 3's 11, natively 10 throughout)
 NATIVEFN(0x1C65F8, SetPickupStateVt);
 NATIVEFN(0x1C6B28, SetPickupStateVt);
 NATIVEFN(0x1C68F0, SetPickupStateVt);

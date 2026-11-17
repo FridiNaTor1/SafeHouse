@@ -300,8 +300,10 @@ void Cell(const FONTBRX& font, const FONTBRX* picons, const ROW& r, bool control
     const float h = 24.0f;
     if (binding == -2)
     {
-        const Button b = FixedButton(r);
-        Icon(atlas.texture(family), atlas.uv(family, b), cx - 30.0f, cy, h, 72.0f);
+        Button b = FixedButton(r);
+        Family fam = family;
+        if (cane::input::isVrFamily(fam)) VrButtonIcon(b, fam);
+        Icon(atlas.texture(fam), atlas.uv(fam, b), cx - 30.0f, cy, h, 72.0f);
         Text(font, picons, StrPort(PTX_RemapFixed), cx - 14.0f, cy - 9.0f, SIZE_HINT, Rgb(44, 44, 44));
         return;
     }
@@ -312,10 +314,13 @@ void Cell(const FONTBRX& font, const FONTBRX* picons, const ROW& r, bool control
     }
     if (controller)
     {
-        const Button b = cane::input::fromGlfwBinding(binding);
-        const auto uv = atlas.uv(family, b);
-        if (atlas.texture(family) && uv.valid) Icon(atlas.texture(family), uv, cx, cy, h + 4.0f);
-        else Text(font, picons, StrToGameText(cane::input::buttonLabel(b, family)), cx, cy - 10.0f, SIZE_ROW - 2.0f, off, 1, 0.0f);
+        const Button b0 = cane::input::fromGlfwBinding(binding);
+        Button b = b0;
+        Family fam = family;
+        if (cane::input::isVrFamily(fam)) VrButtonIcon(b, fam);
+        const auto uv = atlas.uv(fam, b);
+        if (atlas.texture(fam) && uv.valid) Icon(atlas.texture(fam), uv, cx, cy, h + 4.0f);
+        else Text(font, picons, StrToGameText(PromptButtonName(b0, family)), cx, cy - 10.0f, SIZE_ROW - 2.0f, off, 1, 0.0f);
         return;
     }
     const auto uv = atlas.keyUV(cane::input::promptKeyForBinding(binding));

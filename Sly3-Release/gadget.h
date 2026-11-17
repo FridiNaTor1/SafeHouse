@@ -12,12 +12,16 @@ struct ACTOR;
 
 void UpdateActorAbilities(ACTOR* pa);              // orig 0x00141A50 (from the actor's update, after 0x203FC0)
 void SetActorAbilitySlot(ACTOR* pa, int i, int id);  // orig 0x00141FC8 (the gadget menu's assignment)
-uint32_t GrfAbilityButton(ACTOR* pa, int id);       // orig 0x00141EA8: the button mask of the slot holding id (0 none)
+uint32_t GrfAbilityButton(ACTOR* pa, int id);
+int IdActorAbilitySlot(ACTOR* pa, int i);           // (the slot's item, Sly 2's id; -1 none)       // orig 0x00141EA8: the button mask of the slot holding id (0 none)
 int NActorPower(ACTOR* pa);                         // orig 0x001441A0
 void SetActorPower(ACTOR* pa, int n);               // orig 0x001441C0 (at most +0x1300)
 void SpendActorPower(ACTOR* pa, int id);            // orig 0x00141CD0 (the item's cost; +0x1304 the meter's flash)
 void DrainActorPower(ACTOR* pa, float gPerSecond);  // orig 0x001441E8 (+0x1308 the fraction kept)
-bool FPowerupOwned(int id);                         // orig 0x001DAEA8 (the progress "powerUps mppukfAcquired <id>")
+bool FPowerupOwned(int id);   // (a Sly 2-side id; the progress keeps Sly 3's: game/items3.h)
+void GrantPowerups3(int chr3);
+bool FShadowPower2(ACTOR* pa);
+bool FShieldBlocks3(ACTOR* pa, int kind);   // (Sly 3) the shield up: this damage blocked (damage.cpp FSlyImmune)  // (Sly 3) Shadow Power Level 2 held: unseen (detect.cpp) and faded (sly.cpp)  // debug / Extras: every named power-up of Sly 3's character chr3 (24 Sly, 25 Bentley, 26 Murray; -1 all) owned                         // orig 0x001DAEA8 (the progress "powerUps mppukfAcquired <id>")
 void StartActorAbility(ACTOR* pa, int id);          // the players' vt slot 100 (Sly 0x18DA48, Bentley 0x136A90, Murray 0x1B9A08)
 bool ReleaseSmokeBomb(ACTOR* pa);                   // orig 0x00140F90 event 0x27C; caller checks ASEGA owner
 bool ReleaseTimeLock(ACTOR* pa);                    // orig 0x00140F90 event 0x27C case 0xE (Temporal Lock)

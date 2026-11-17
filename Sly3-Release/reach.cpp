@@ -92,7 +92,7 @@ float GReachDist(REACH* p, const std::vector<glm::vec3>* apos, const glm::vec3& 
 LO* PloReachGrip(ACTOR* pa, LO* plo)
 {
     int c = 0;
-    for (int cid = 0x14; cid < CID_Max && FCidDerivedFrom(cid, S3CID(0x14)); ++cid)
+    for (int cid = S3CID(0x14); cid < CID_Max && FCidDerivedFrom(cid, S3CID(0x14)); ++cid)  // (Sly 3: from 0x12)
         for (LO* q : g_psw->mpcidaplo[cid])
         {
             const LO* a = q;
@@ -207,7 +207,7 @@ void AttachReachObject(REACH* p, LO* plo)
                     p->ploEnd->oid, p->pa->palo->oid, static_cast<void*>(pxfEnd), mat[3].x, mat[3].y, mat[3].z);
 }
 
-// orig: 0x001CD2C0
+// orig: 0x001CD2C0 (orig3: 0x209428, the same code in Sly 3)
 void ReleaseReachObject(REACH* p)
 {
     if (!p->ploHeld) return;

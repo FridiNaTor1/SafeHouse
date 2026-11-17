@@ -228,6 +228,27 @@ inline void httpGet(const Request& r) {
     if (total && done != total) throw std::runtime_error(tr("The download was interrupted"));
     if (out && std::fflush(out) != 0) throw std::runtime_error(trf("Cannot write %s", utf8(r.file).c_str()));
 }
+#elif defined(__ANDROID__)
+// Android: Java's HTTPS (platform/android/android_app.h httpGet); the update check only (an Android installation is
+// updated by installing the new APK over it, see detectInstall).
+inline void httpGet(const Request& r) {
+    if (!r.body || !r.file.empty()) throw std::runtime_error(tr("Cannot start the download"));
+    if (cancelled(r)) throw std::runtime_error(tr("Cancelled"));
+    int status = -5;
+    std::string body = android::httpGet(r.url, r.api, userAgent(), r.maxBody, status);
+    if (cancelled(r)) throw std::runtime_error(tr("Cancelled"));
+    if (status == 200) {
+        r.body->append(body);
+        if (r.progress) r.progress(body.size(), body.size());
+        return;
+    }
+    throw std::runtime_error(status == -1 ? std::string(tr("Cannot reach the update server: the server name was not found"))
+                             : status == -2 ? std::string(tr("Cannot reach the update server: no connection"))
+                             : status == -3 ? std::string(tr("The connection timed out"))
+                             : status == -4 ? std::string(tr("The update server's answer is too large"))
+                             : status > 0 ? trf("The update server answered %d", status)
+                                          : std::string(tr("Cannot reach the update server")));
+}
 #else
 // libcurl, loaded at run time from the system (every Linux distribution and macOS has it), so the packages bundle
 // no TLS library. Without it the curl program is used.
@@ -484,6 +505,12 @@ inline Install detectInstall() {
                                                                                                                : Kind::WindowsInstalled;
     in.target = root;
     in.staging = root / ".update";
+#elif defined(__ANDROID__) || defined(CANE_IOS)
+    // (the system installs apps: the new APK / .ipa is downloaded from the release page and installed over this one;
+    // Android keeps the app's data when the new APK has a higher versionCode and the same signature)
+    (void)exe;
+    (void)ec;
+    in.reason = tr("Download the new version from the release page and install it over this one. Your games, saves and settings are kept.");
 #elif defined(__APPLE__)
     const fs::path app = exe.parent_path().parent_path();
     if (exe.filename() != "MacOS" || app.extension() != ".app") {

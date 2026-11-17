@@ -73,6 +73,9 @@ target_sources(Sly3-Release PRIVATE "${CANE_ROOT}/Sly1-Release/glad.c")
 # miniz (MIT; Libraries/miniz): inflate for the PS3 HD import's .zip sources (platform/ps3disc.h, ps3hd.cpp)
 target_sources(Sly3-Release PRIVATE "${CANE_ROOT}/Libraries/miniz/miniz.c")
 target_include_directories(Sly3-Release PRIVATE "${CANE_ROOT}/Libraries/miniz")
+# LZ4 1.10.0 (BSD 2-Clause; Libraries/lz4): the texture cache's records (platform/texture_cache.h, texmod.cpp)
+target_sources(Sly3-Release PRIVATE "${CANE_ROOT}/Libraries/lz4/lz4.c" "${CANE_ROOT}/Libraries/lz4/lz4hc.c")
+target_include_directories(Sly3-Release PRIVATE "${CANE_ROOT}/Libraries/lz4")
 target_link_libraries(Sly3-Release PRIVATE glfw ${CMAKE_DL_LIBS})
 target_compile_definitions(Sly3-Release PRIVATE GLFW_INCLUDE_NONE)
 file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/generated")
@@ -81,6 +84,34 @@ add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/generated/embedded_shader
   COMMAND ${CMAKE_COMMAND} -DSOURCE=${CMAKE_CURRENT_SOURCE_DIR} -DOUTPUT=${CMAKE_CURRENT_BINARY_DIR}/generated/embedded_shaders.h -P ${CANE_ROOT}/cmake/embed-shaders.cmake
   DEPENDS ${sly2n_shaders} ${CANE_ROOT}/cmake/embed-shaders.cmake VERBATIM)
 target_sources(Sly3-Release PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated/embedded_shaders.h")
+# Vulkan renderer (platform/vulkan: the game's GL calls on Vulkan, chosen at run time, OpenGL the fallback; notes/
+# VULKAN_2026-11-10.md): Linux and Windows. The programs are compiled to SPIR-V at build time (cmake/vulkan_shaders.py,
+# glslangValidator); without glslangValidator or Python the game builds without it (OpenGL only).
+if(WIN32 OR (UNIX AND NOT APPLE AND NOT ANDROID))
+  set(sly3n_vulkan_default ON)
+else()
+  set(sly3n_vulkan_default OFF)
+endif()
+option(SLY3_VULKAN "Sly 3's Vulkan renderer (needs glslangValidator and Python 3 at build time)" ${sly3n_vulkan_default})
+if(SLY3_VULKAN)
+  find_program(SLY3N_GLSLANG NAMES glslangValidator glslang)
+  find_package(Python3 COMPONENTS Interpreter QUIET)
+  if(SLY3N_GLSLANG AND Python3_Interpreter_FOUND)
+    file(GLOB sly3n_vk_native_shaders CONFIGURE_DEPENDS "${CANE_ROOT}/platform/vulkan/shaders/*")
+    add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/generated/vk_shaders.cpp"
+      COMMAND ${Python3_EXECUTABLE} ${CANE_ROOT}/cmake/vulkan_shaders.py --source ${CANE_ROOT} --output ${CMAKE_CURRENT_BINARY_DIR}/generated
+              --glslang ${SLY3N_GLSLANG} --game Sly3-Release
+      DEPENDS ${sly2n_shaders} ${sly3n_vk_native_shaders} ${CANE_ROOT}/cmake/vulkan_shaders.py ${CANE_ROOT}/cmake/switch_shaders.py VERBATIM)
+    target_sources(Sly3-Release PRIVATE "${CANE_ROOT}/platform/vulkan/gl_vulkan.cpp" "${CANE_ROOT}/platform/vulkan/vk_loader.cpp"
+                   "${CMAKE_CURRENT_BINARY_DIR}/generated/vk_shaders.cpp")
+    target_include_directories(Sly3-Release PRIVATE "${CANE_ROOT}/platform/vulkan")
+    target_compile_definitions(Sly3-Release PRIVATE CANE_VULKAN=1)
+    message(STATUS "Sly 3: Vulkan renderer on (${SLY3N_GLSLANG})")
+  else()
+    message(WARNING "Sly 3: no glslangValidator or Python 3: built without the Vulkan renderer (OpenGL only)")
+  endif()
+endif()
+
 # QoL (qolview.cpp): the launcher's high-quality Sly 2 logo, embedded (it replaces the front end's logo texture)
 add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/generated/sly2n_logo.h"
   COMMAND ${CMAKE_COMMAND} -DSOURCE=${CANE_ROOT}/launcher/assets/games/sly3-logo.png -DOUTPUT=${CMAKE_CURRENT_BINARY_DIR}/generated/sly2n_logo.h -DSYMBOL=sly2n_logo_png -P ${CANE_ROOT}/cmake/embed-image.cmake
@@ -160,4 +191,29 @@ if(EXISTS "${sly2n_prompt_source}/prompt_atlas_rects.inc" AND EXISTS "${sly2n_ga
   target_sources(Sly3-Release PRIVATE "${sly2n_prompt_source}/prompt_data.cpp" ${sly2n_prompt_headers})
   target_include_directories(Sly3-Release PRIVATE "${sly2n_prompt_source}" "${sly2n_prompt_generated}")
   target_compile_definitions(Sly3-Release PRIVATE CANE_HAVE_PROMPT_ATLAS=1 CANE_HAVE_GAMECONTROLLERDB=1)
+endif()
+
+# The map editor's 3D view for Sly 3 (editor.cpp: the shell shared with Sly 2, editor/game/; --editor W; Sly2-Release/
+# notes/EDITOR_2026-11-12.md "Phase 5"): desktop Linux / Windows only, as Sly 2's. ImGui on OpenGL. Every other build
+# compiles the stubs. The mod-package loading (platform/mod_package.h, disc.cpp) is in every build.
+if((WIN32 OR (UNIX AND NOT APPLE)) AND NOT ANDROID AND NOT CANE_IOS)
+  set(sly3n_editor_default ON)
+else()
+  set(sly3n_editor_default OFF)
+endif()
+option(SLY3_EDITOR "Sly 3's map editor (desktop)" ${sly3n_editor_default})
+if(SLY3_EDITOR)
+  if(NOT TARGET cane_editor_core)
+    add_subdirectory("${CANE_ROOT}/editor" "${CMAKE_CURRENT_BINARY_DIR}/editor")
+  endif()
+  set(sly3n_imgui "${CANE_ROOT}/Libraries/include/imgui")
+  target_sources(Sly3-Release PRIVATE ${sly3n_imgui}/imgui.cpp ${sly3n_imgui}/imgui_draw.cpp ${sly3n_imgui}/imgui_tables.cpp
+                 ${sly3n_imgui}/imgui_widgets.cpp ${sly3n_imgui}/imgui_impl_glfw.cpp ${sly3n_imgui}/imgui_impl_opengl3.cpp)
+  add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/generated/editor_font.h"
+    COMMAND ${CMAKE_COMMAND} -DSOURCE=${CANE_ROOT}/launcher/assets/AtkinsonHyperlegible-Regular.ttf
+            -DOUTPUT=${CMAKE_CURRENT_BINARY_DIR}/generated/editor_font.h -P ${CANE_ROOT}/cmake/embed-font.cmake
+    DEPENDS ${CANE_ROOT}/launcher/assets/AtkinsonHyperlegible-Regular.ttf ${CANE_ROOT}/cmake/embed-font.cmake VERBATIM)
+  target_sources(Sly3-Release PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated/editor_font.h")
+  target_link_libraries(Sly3-Release PRIVATE cane_editor_core)
+  target_compile_definitions(Sly3-Release PRIVATE SLY3_EDITOR=1)
 endif()

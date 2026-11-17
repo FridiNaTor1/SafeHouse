@@ -16,20 +16,48 @@
 namespace cane::credits {
 // The developers (the Collection menu's Developers page and the About page): their own words for what they did; the
 // names stay as written. Pictures: launcher/assets/developers/<picture>.png (and <picture>-silhouette.png), made by
-// tools/make-developer-pictures.py from the pictures their owners supplied.
+// tools/make-developer-pictures.py from the pictures their owners supplied, and embedded by the name listed in
+// cmake/developers.cmake.
+//
+// Adding a developer: an entry at the end of kDevelopers, its two pictures and its name in cmake/developers.cmake; its
+// role in the launcher's languages (launcher/lang). The About page lists everyone; the Collection menu's Developers page
+// shows the first kFirstPageDevelopers on its first page (one large circle and four) and the others on further pages, six
+// to a page (two rows of three).
 struct Developer {
     const char* name;
     const char* role;
     const char* picture;
     uint32_t colour;  // the Collection menu's disc colour when chosen (the PS3 menu's four, Tuning.xmb Game.PlayerColor)
 };
-inline constexpr Developer kDevelopers[5] = {
+inline constexpr Developer kDevelopers[] = {
     {"FridiNaTor", N_("Main dev of the Sly 2 and Sly 3 ports and maintainer"), "fridinator", 0x4288FE},
     {"theclub654", N_("Main dev of Sly 1 via Project Cane. Special Thanks!"), "theclub654", 0x8E5E87},
     {"menaman123", N_("Contributor and macOS port"), "menaman123", 0x57A95F},
     {"thematuu", N_("Contributor"), "thematuu", 0xEBC113},
     {"NaGaa95", N_("Contributor and Switch and Windows for ARM port"), "nagaa95", 0x4288FE},
+    {"cooperbooperscooper", N_("Developer and contributor: First Person VR mode"), "cooperbooperscooper", 0xEBC113},
+    {"fyrnas", N_("Developer and contributor: fixed the Mali GPU shader crash on Android"), "fyrnas", 0x8E5E87},
+    {"maxigasparini", N_("Developer and contributor: configurable game and disc image folders"), "maxigasparini", 0x57A95F},
 };
+inline constexpr int kDeveloperCount = int(sizeof(kDevelopers) / sizeof(kDevelopers[0]));
+// The Collection menu's Developers page: its first page (as it was made for the first five), then pages of up to six.
+inline constexpr int kFirstPageDevelopers = 5;
+inline constexpr int kDevelopersPerPage = 6;
+inline constexpr int kDeveloperPages = 1 + (kDeveloperCount - kFirstPageDevelopers + kDevelopersPerPage - 1) / kDevelopersPerPage;
+// The page a developer is on, and the first developer of a page.
+inline constexpr int developerPage(int i) { return i < kFirstPageDevelopers ? 0 : 1 + (i - kFirstPageDevelopers) / kDevelopersPerPage; }
+inline constexpr int firstDeveloperOf(int page) { return page == 0 ? 0 : kFirstPageDevelopers + (page - 1) * kDevelopersPerPage; }
+inline constexpr int developersOn(int page) {
+    const int first = firstDeveloperOf(page), end = page == 0 ? kFirstPageDevelopers : first + kDevelopersPerPage;
+    return (end < kDeveloperCount ? end : kDeveloperCount) - first;
+}
+static_assert(kDeveloperCount >= kFirstPageDevelopers);
+// "FridiNaTor, theclub654, …." (the pictures' credit line)
+inline std::string developerNames() {
+    std::string names;
+    for (const Developer& d : kDevelopers) names += (names.empty() ? "" : ", ") + std::string(d.name);
+    return names + ".";
+}
 
 // The decompilations the Sly 2 and Sly 3 ports are built with.
 inline constexpr const char* sly2DecompUrl = "https://github.com/Komasia/sly2-decomp";
@@ -40,7 +68,7 @@ struct Line {
     enum Kind {
         Text,       // a paragraph
         Link,       // text = the label, url = where it goes (shown beside it, opened when chosen)
-        Developers, // the five developers (kDevelopers): pictures on the About page, "name: role" lines in the menu
+        Developers, // the developers (kDevelopers): pictures on the About page, "name: role" lines in the menu
     };
     Kind kind;
     const char* text = nullptr;
@@ -55,11 +83,12 @@ struct Section {
 };
 
 inline const std::vector<Section>& sections() {
+    static const std::string names = developerNames();
     static const std::vector<Section> all = {
         {"safehouse", "SafeHouse", {{Line::Text, brand::credit}}},
         {"developers", N_("Developers"), {{Line::Developers}}},
         {"pictures", N_("Developers' pictures"),
-         {{Line::Text, N_("Each developer's picture is courtesy of its owner.")}, {Line::Text, "FridiNaTor, theclub654, menaman123, thematuu, NaGaa95."}}},
+         {{Line::Text, N_("Each developer's picture is courtesy of its owner.")}, {Line::Text, names.c_str()}}},
         {"decompilation", N_("Decompilation projects"),
          {{Line::Text, N_("The Sly 2 and Sly 3 ports are built with the help of these decompilations of the original games.")},
           {Line::Link, N_("Sly 2 decompilation"), sly2DecompUrl},

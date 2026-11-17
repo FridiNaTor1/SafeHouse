@@ -135,6 +135,7 @@ struct SAA
     int cframe = 0;              // ab+0xA (-> +0x1C)
     int n20 = 0;                 // ab+8 (-> +0x20): 1 -> entry flag 0x10, 2 -> 8
     bool fOwned = false;         // created with an owner (glob SAAs: 0x1ED7A8(1, pbis))
+    struct ALO* paloOwner = nullptr;   // (orig3 +0x50 of the class 0xB5) the object whose glob set holds it
 
     // The state the VU receives (SAI: +0x24 du, +0x26 dv in 1/4096, +0x28 frame), see saa.cpp.
     int iframe = 0;
@@ -156,6 +157,7 @@ enum SAAK2
     SAAK2_Eyes = 0xB2,      // orig3: 0x237850 / 0x2379E8 (slot 10 0x237BE0)
     SAAK2_Scroller = 0xB3,  // orig3: 0x237C40 / 0x237CA0
     SAAK2_Circler = 0xB4,   // orig3: 0x237DE8 / 0x237E38
+    SAAK3_Follow = 0xB5,    // orig3: 0x237F10 / 0x237FA8 (Sly 3 only: the offsets follow the owner's place)
 };
 
 // orig: vtable slot 10, 0x1EDB80 (EYES 0x1EE420): the animation drives this shader (its id is the SAA's oid).

@@ -3,7 +3,11 @@
 // m_203948_p3.cpp / m_2040F8.cpp (STEP's update and heading), m_14F030_p3.cpp / m_153FF8_p3.cpp (the detector).
 
 #include "guard.h"
+#include "aicarm3.h"
+#include "airide3.h"
 #include "game/sly3.h"
+#include "game/task3.h"
+#include "game/scptgame3.h"
 #include "worldglobals.h"
 #include "pocket.h"
 #include "po.h"
@@ -32,6 +36,7 @@
 #include "jt.h"
 
 #include "cls.h"
+#include "outfit3.h"
 
 #include <cfloat>
 #include <algorithm>
@@ -126,6 +131,14 @@ void ResetGuards()
     for (auto& [object, guard] : Map()) DeleteCtrl(&guard->pctrlF0C);
     Map().clear();  // release jobs/listeners before their detectors
     ResetGuardDetectors();
+    ResetRide3();   // (the ride links' riders: airide3.h)
+    extern ALO* g_paloLaunched;  // launcher.cpp (debug): the old world's thrown object is gone with it
+    g_paloLaunched = nullptr;
+    // the playable Carmelitas' player indices (aicarm3.h), before the load: a world started at a task whose script makes
+    // her the character at once (SCPT 0x13 in the start's task activation, e.g. a turf war wave restarted from its
+    // checkpoint) registers her during the load, which a reset after it (split3's world hook, before s3-ai round 18) lost:
+    // her job ran with the pad but SteerCarm3 skipped her (no index), so she could aim and shoot but not walk
+    ResetCarm3();
 }
 std::vector<GUARD*> ApguardAll()
 {
@@ -339,7 +352,14 @@ void AddGuardState(GUARD* pg, int n)
     // Original 0x2C3D98: test the added bit after the script, even if it was already in the state mask.
     static constexpr int anStateEvent[2][2] = {{3, 20}, {12, 22}};
     for (const auto& entry : anStateEvent)
-        if (m & GrfStateBit(entry[0])) BroadcastTaskEvent(g_psw, entry[1], pg->palo);
+        if (m & GrfStateBit(entry[0]))
+        {
+            // orig3: 0x252E40's switch: Sly 3 state 3 (Sly 2's 3) broadcasts 0x14 and 0x12 (Sly 2's 12) 0x16 through
+            // 0x1854C8 with the guard: the task scripts' "a guard is alerted" (v_interpol's caught). Sly 3's codes are
+            // the same numbers; Code3FromCode2 has no row for them, so the copied call reached no Sly 3 task.
+            if (FScripts3Active()) Broadcast3(entry[1], pg->palo);
+            else BroadcastTaskEvent(g_psw, entry[1], pg->palo);
+        }
 }
 
 // orig: 0x00209970
@@ -356,7 +376,10 @@ void RemoveGuardState(GUARD* pg, int n)
 KINDE* PkindeBest(GUARD* pg, uint64_t mask)
 {
     uint64_t m = 0;
-    for (int k = 0; k < 0x30; ++k)
+    // (orig 0x30 indices; natively 64: Sly 3's playable Carmelita's states take Sly 2 indices 47..57 (guard3.cpp), which
+    // stand for Sly 3 indices below 0x30 (her moves) or above (0x42). No other guard sets an index above 46, so for them
+    // the lowest set index is the same.)
+    for (int k = 0; k < 64; ++k)
     {
         m = GrfStateBit(k);
         if (mask & m) break;
@@ -445,6 +468,14 @@ void ResolveKinde(KINDE* pe, GUARD* pg)
     if (pe->k == 3) { ResolveK3(pe->pk3, pg->palo); return; }  // 0x20C7E0
     if (pe->k == 2 && pe->pk2) return;
     LO* po = PloFindSwNearest(pg->palo, pe->oid);
+    // (PC, split screen's teams: a copy of a guard made while the world runs (a second Carmelita) lacks the template's
+    // ASEGs / SMs (they left the world at its start; a copy skips removed children): the template's, shared)
+    LO* const ptmpl = pg->palo ? pg->palo->ploCloneOf : nullptr;
+    if (ptmpl && (!po || (po != pg->palo && !FLoInParentChain(po, pg->palo) && FLoInParentChain(po, ptmpl) == false)))
+        if (LO* pt = PloFindSwNearest(ptmpl, pe->oid)) po = pt;
+    if (std::getenv("SLY3_KINDEPRINT") && ptmpl)
+        std::printf("kinde: copy %d oid %d -> %d (cid 0x%X)%s\n", pg->palo->oid, pe->oid, po ? po->oid : -1, po ? po->Cid() : 0,
+                    po && FLoInParentChain(po, ptmpl) ? " (template's)" : "");
     if (!po)
     {
         pe->k = -1;
@@ -454,7 +485,7 @@ void ResolveKinde(KINDE* pe, GUARD* pg)
     {
         bool f22 = false;
         for (const ASEGEV& ev : PasegdOf(static_cast<ASEG*>(po))->aaev[1])
-            if (ev.kind == 11 && ev.an[0] == 0x22) f22 = true;
+            if (ev.kind == 11 && ev.an[0] == EVK2_TAKEOFF) f22 = true;  // orig3: 0x254C00 (0x136880(aseg, 0x3D))
         if (f22)
         {
             pe->k = 2;  // the kind-2 object (0x20C010 / 0x20BD78 / 0x20BD88)
@@ -580,7 +611,8 @@ void SetGuardMode(GUARD* pg, int n)
     switch (old)
     {
     case 8: case 13:
-        if (pg->pscaleFC4) SetCtrlPos(pg->pscaleFC4, glm::vec4(1.0f, 1.0f, 1.0f, 0.0f));
+        // (orig3 0x2514D8: back to +0x11E0, the guard's own scale; Sly 2's 1)
+        if (pg->pscaleFC4) SetCtrlPos(pg->pscaleFC4, glm::vec4(pg->gScale3, pg->gScale3, pg->gScale3, 0.0f));
         break;
     case 34: case 37:
         RemoveTargetClass(pg->acid398, 0x38);  // 0x208728
@@ -714,6 +746,90 @@ LO* PloGuardTargetBase(GUARD* pg)
     return best;
 }
 }  // namespace
+
+int GuardField3(const GUARD* pg, uint32_t ib, int nDefault)
+{
+    return pg && pg->palo ? static_cast<int>(pg->palo->U32Field(0, ib, static_cast<uint32_t>(nDefault))) : nDefault;
+}
+
+namespace
+{
+// orig3 0x257F28: charmed (Sly 3's modes 0xC / 0xF = the native (Sly 2) 0x22 / 0x25: SetGuardMode 0x2514D8 / 0x207030)
+bool FGuardCharmed3(const GUARD* pg) { return pg->nMode == 0x22 || pg->nMode == 0x25; }
+}  // namespace
+
+// orig3: 0x002544E0
+int KGuardRelation3(GUARD* pg, LO* plo)
+{
+    if (!plo || plo == pg->palo) return -1;
+    if (FGuardCharmed3(pg))
+    {
+        // a charmed guard fights the other guards (class 0x3A) that are not 0x3B's (0x251368: the table 0x3498F8 = {0x3B})
+        if (FCidDerivedFrom(plo->Cid(), S3CID(0x38)) && !FCidDerivedFrom(plo->Cid(), S3CID(0x3B))) return 2;
+        return 0;
+    }
+    if (FTargetClass(pg->acid3AC, plo)) return 0;   // +0x3B4 / +0x3B8 (Sly 2's +0x3A8: the excluded classes)
+    if (FTargetClass(pg->acid3C4, plo)) return 3;   // +0x3CC / +0x3D0 (Sly 2's +0x3C0: the immediate ones)
+    if (GuardField3(pg, 0x11B8)) return 2;          // option 509 (EOPID 382): always hostile
+    if (!FCidDerivedFrom(plo->Cid(), S3CID(0x34))) return 2;
+    // a disguised player (0x156D48) whom no guard pursues (its target record's guards, +0x1160 +0x28)
+    if (FPlayerDisguised3(plo))
+    {
+        const TARGETREC* pt = PtargetrecFind(plo);
+        if (!pt || pt->apguard.empty())
+            return GuardField3(pg, 0x11C0) == -1 || pg->fPassed11BC == 1 ? 0 : 1;
+    }
+    return 2;
+}
+
+// orig3: 0x00253EE8
+LO* PloGuardTarget3(GUARD* pg, int* pk)
+{
+    LO* best = nullptr;
+    int kBest = -1;
+    if (pg->ploTarget && pg->ploTarget->fInWorld)  // +0x3B0 (Sly 2's +0x390)
+    {
+        best = pg->ploTarget;
+        kBest = 2;
+    }
+    else
+    {
+        struct E { LO* plo; int n4; };
+        std::vector<E> ae;
+        if (FGuardCharmed3(pg))
+        {
+            // every guard in the world (0x17E208(SW, 0x105, 0x3A, 0, 16)) but itself
+            BASIC* apb[16] = {};
+            const int c = g_splicegame.pfnFindObjectsByClass ? g_splicegame.pfnFindObjectsByClass(0x105, S3CID(0x38), nullptr, 16, apb) : 0;
+            for (int i = 0; i < c && i < 16; ++i)
+                if (LO* plo = dynamic_cast<LO*>(apb[i]); plo && plo != pg->palo) ae.push_back(E{plo, 0});
+        }
+        else if (pg->pdet)
+            for (const DETENTRY& e : pg->pdet->ae)
+                if (e.st && e.plo) ae.push_back(E{e.plo, e.n4});   // (the entry's +8 state on, its +4 rank)
+        float gBest = FLT_MAX;
+        int dBest = 999;
+        const glm::vec3 pos = PosOf(pg->palo);
+        for (const E& e : ae)
+        {
+            if (!e.plo->fInWorld) continue;
+            const int k = KGuardRelation3(pg, e.plo);
+            if (k < kBest) continue;
+            if (k == kBest && dBest < e.n4) continue;
+            float g = glm::length(pos - PosOf(e.plo));
+            if (e.plo == pg->plo38C) g = -400.0f + g * (0.8f + g * 0.0f);  // (0x327400; +0x3AC = Sly 2's +0x38C)
+            if (kBest < k || e.n4 < dBest || g < gBest)
+            {
+                best = e.plo;
+                dBest = e.n4;
+                kBest = k;
+                gBest = g;
+            }
+        }
+    }
+    if (pk) *pk = kBest;
+    return best;
+}
 
 // ---- the watchers (0x20B840 module) ----
 
@@ -937,9 +1053,24 @@ void UpdateGuard(GUARD* pg)
         {
             const glm::vec3 pos = PosOf(pg->palo);
             const glm::vec3 posT = pg->plo38C ? PosOf(pg->plo38C) : glm::vec3(0.0f);
-            std::printf("guardwatch: %d %p t %.3f at %.0f %.0f %.0f target %d mask %llx mode %d splice %d at %.0f %.0f %.0f det %zu\n", s_oid, static_cast<const void*>(pg), g_clock.t, pos.x, pos.y, pos.z,
+            const glm::vec3 vF = St(pg).vecVel, vA = VelAloPos(pg->palo);
+            std::printf("guardwatch: %d %p t %.3f at %.0f %.0f %.0f target %d mask %llx mode %d splice %d at %.0f %.0f %.0f det %zu kmove %d floor %d feet %.0f %.0f %.0f vel %.0f %.0f %.0f\n", s_oid, static_cast<const void*>(pg), g_clock.t, pos.x, pos.y, pos.z,
                         pg->ploTarget ? pg->ploTarget->oid : -1, static_cast<unsigned long long>(pg->grfState), pg->nMode,
-                        pg->plo38C ? pg->plo38C->oid : -1, posT.x, posT.y, posT.z, pg->pdet ? pg->pdet->ae.size() : 0);
+                        pg->plo38C ? pg->plo38C->oid : -1, posT.x, posT.y, posT.z, pg->pdet ? pg->pdet->ae.size() : 0, pg->kMove,
+                        int(FGuardFloor(pg)), vF.x, vF.y, vF.z, vA.x, vA.y, vA.z);
+        }
+    }
+    // (debug: SLY3_GUARDSTATE="T:OID:N": at the game time T the first guard OID found gets the Sly 2 state N once, e.g.
+    // 12 (Sly 3's 0x12, the investigation's start) to test the alert broadcast 0x16 and the job's caught path)
+    if (static const char* s_sz = std::getenv("SLY3_GUARDSTATE"); s_sz)
+    {
+        static bool s_fDone = false;
+        float t = 0; int oid = -1, n = -1;
+        if (!s_fDone && std::sscanf(s_sz, "%f:%d:%d", &t, &oid, &n) == 3 && pg->palo->oid == oid && g_clock.t >= t)
+        {
+            s_fDone = true;
+            std::printf("guardstate: t %.3f guard %d %p state %d added\n", g_clock.t, oid, (void*)pg, n);
+            AddGuardState(pg, n);
         }
     }
     UpdateGuardTimedMode(pg);
@@ -974,6 +1105,8 @@ void UpdateGuard(GUARD* pg)
         s_mp[pg] = s;
     }
     if (pg->move.pjob) pg->move.pjob->Steer();  // orig 0x2097E0 (vt slot 11)
+    SteerCarm3(pg);   // (Sly 3's playable Carmelita, aicarm3.h: her pad's feet and heading after the move's steering)
+    SteerRide3(pg);   // (Sly 3's ridden guard, airide3.h)
     if (pg->pasega34C && FAsegaRetracted(pg->pasega34C)) RetractAsegaPp(&pg->pasega34C);
     if (pg->f4A4 && FGuardFloor(pg)) pg->pos4B0 = glm::vec4(PosGuardProbe(pg), 1.0f);
     PrintStepDebug(&St(pg));
@@ -1033,7 +1166,7 @@ bool HandleGuardMessage(LO* plo, int msg, void* pv)
     if (msg == 9 && pv)
     {
         const ASEGMSG9* pev = static_cast<const ASEGMSG9*>(pv);
-        if (pev->pasega && pev->pasega == pg->k2play.pasega && pev->n == 0x22) SetK2State(&pg->k2play, 1);
+        if (pev->pasega && pev->pasega == pg->k2play.pasega && pev->n == EVK2_TAKEOFF) SetK2State(&pg->k2play, 1);
     }
     OfferJobMessage(pg, msg, pv);
     // Original ASEGA notification visits its owning guard before the directional player's listener.

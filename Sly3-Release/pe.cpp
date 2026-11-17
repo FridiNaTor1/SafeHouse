@@ -8,6 +8,7 @@
 #include "worldaccess.h"
 #include "bis.h"
 #include "brx.h"
+#include "cm.h"
 #include "clock.h"
 #include "emitter.h"
 #include "game/cond3.h"
@@ -67,7 +68,7 @@ void LoadPeFromBrx(LO* plo, CBinaryInputStream* pbis)
         PECOMP comp;
         comp.cid = pbis->S16Read();
         comp.oid = pbis->S32Read();
-        comp.n = pbis->S16Read();
+        pbis->S16Read();   // (0x1FE3C0: read, not kept; -1 in every world's data)
         const int32_t cb = pbis->S32Read();
         const bool fPass = mode != 1 || (FFilterMatches3(int(afilter.size()), afilter.data()) &&
                                          FConditionsMatch3(int(acond.size()), acond.data()));
@@ -98,6 +99,35 @@ void LoadPeFromBrx(LO* plo, CBinaryInputStream* pbis)
     }
     PopXfBase();
 }
+
+// (PC, s3-prologue) an effect a breakable started (StartEffectByOid3 from a breakable's item 7, which natively did nothing
+// before) draws its particles from its own random stream, so that turning those effects on did not shift the game's
+// stream the survey's played routes were recorded against (the reference's stream is not followed anyway)
+bool s_fPeOwnRandom = false;
+uint32_t s_uPeRandom = 0x1B873593u;
+}  // namespace
+void SetPeOwnRandom(bool f) { s_fPeOwnRandom = f; }
+// (PC) while an own-stream effect runs, whatever else it draws from the game's stream (its commands' sounds, the RIPs
+// it launches) is given back: the game's stream is kept as it was (the survey's routes: ep2_job2663 stalled when the
+// turrets' ASEG effects in o_ext moved it)
+struct GAMERANDKEEP
+{
+    bool f;
+    uint32_t u = 0;
+    uint64_t c = 0;
+    explicit GAMERANDKEEP(bool fKeep) : f(fKeep) { if (f) { u = g_uRandState; c = g_cRandLibc; } }
+    ~GAMERANDKEEP() { if (f) { g_uRandState = u; g_cRandLibc = c; } }
+};
+float GRandPe(float lo, float hi)
+{
+    if (!s_fPeOwnRandom) return GRandInRange(lo, hi);
+    s_uPeRandom ^= s_uPeRandom << 13;
+    s_uPeRandom ^= s_uPeRandom >> 17;
+    s_uPeRandom ^= s_uPeRandom << 5;
+    return lo + (hi - lo) * float(s_uPeRandom >> 8) * (1.0f / 16777216.0f);
+}
+namespace
+{
 
 // ------------------------------------------------------------ the records (from a component's options)
 // orig3: the getters 0x1FD540 (position, comp +0x10: 0x60 bytes), 0x1FD6A0 (velocity / life, +0x14: 0x90), 0x1FDC18
@@ -148,9 +178,11 @@ struct PEREC
     int cLoop = 0;                   // comp +8
     // 0xC0 (a RIP stream; its record 0x1FE0C0 / 0x1FDFD0): the RIPs' kind (594's setter, record +0x1C), the model
     // (596, +0xC: stream +0x5C), a second object (597, +0x10: stream +0x60), the size range (598, +0x14)
-    int kRip = 3;
+    int kRip = 6;                    // (Sly 3's numbering; the template 0x347F38's 6)
     int32_t oidModel = -1, oid2 = -1;
     float sizeLo = 1, sizeHi = 1;
+    uint32_t aw[3] = {};             // +0 / +4 / +8: the kinds' parameters (599 / 604 an int at +0, 600..602 floats,
+                                     // 605 / 606 ints at +4 / +8)
 };
 
 float G(const OPTVAL& v, int i = 0) { return v.ag[size_t(i)]; }
@@ -178,7 +210,7 @@ std::vector<float> ArgsOf(const OPT& o)
 PEREC RecOfComp(const PECOMP& comp)
 {
     PEREC r;
-    r.cLoop = comp.n;   // (the item header's S16; option 557 sets it)
+    r.cLoop = comp.n;   // (1 by default: once; option 557 sets it)
     PEPSYSDESC& d = r.desc;
     for (const OPT& o : comp.aopt)
     {
@@ -221,6 +253,10 @@ PEREC RecOfComp(const PECOMP& comp)
         case 596: r.oidModel = v.n; break;
         case 597: r.oid2 = v.n; break;
         case 598: r.sizeLo = G(v); r.sizeHi = G(v, 1); break;
+        case 599: case 604: r.aw[0] = uint32_t(v.n); break;
+        case 605: r.aw[1] = uint32_t(v.n); break;
+        case 606: r.aw[2] = uint32_t(v.n); break;
+        case 600: case 601: case 602: { const float g = G(v); std::memcpy(&r.aw[o.eopid - 600], &g, 4); break; }
         case 590: d.fSpinFixed = v.n != 0; break;    // (kind 2) shared +0
         case 591: d.fRoll = v.n != 0; break;         // shared +4
         case 592: d.spinLo = G(v); d.spinHi = G(v, 1); break;   // shared +8
@@ -280,11 +316,28 @@ glm::vec3 s_posCam{0.0f};
 glm::mat3 s_matCamRows{1.0f};
 glm::mat4 s_matClip{1.0f};
 bool s_fCam = false;
+glm::vec3 s_aposCamExtra[3];   // (the split screen's other views' cameras)
+int s_cCamExtra = 0;
 
-// orig3: 0x18E728 (a sphere against the camera's frustum; the PE's +0x34 radius)
-bool FSphereSeen(const glm::vec3& c, float r)
+// orig3: 0x18E728 -> 0x168048 per camera of the world's list (SW +0x3EBC, count +0x3EB8, those enabled): the PE within
+// its +0x34 radius of the camera (0x167FE8: the distance to the camera's position, times the camera's +0x114; 0x168098:
+// not beyond the radius). Natively a frustum test with that radius, so a PE far below the view (e.g. Ep3's windmill
+// ground under the hack boards, 24000 away, radius 4000) emitted and its drips showed on the board. (The camera's zoom
+// adjust as the emitters' 0x159C80, CM +0x1C)
+bool FPeNearCamera(const glm::vec3& c, float r)
 {
     if (!s_fCam) return true;
+    const float rr = r * std::max(g_cm.rMRDAdjust, 1.0f);
+    if (glm::dot(c - s_posCam, c - s_posCam) <= rr * rr) return true;
+    // (the split screen: every view's camera, as the original's loop over SW +0x3EBC)
+    for (int i = 0; i < s_cCamExtra; ++i)
+        if (glm::dot(c - s_aposCamExtra[i], c - s_aposCamExtra[i]) <= rr * rr) return true;
+    return false;
+}
+
+// (the frustum test the native PE code used before; kept for reference / debug)
+[[maybe_unused]] bool FSphereSeen(const glm::vec3& c, float r)
+{
     const glm::mat4 mt = glm::transpose(s_matClip);
     const glm::vec4 aplane[5] = {mt[3] + mt[0], mt[3] - mt[0], mt[3] + mt[1], mt[3] - mt[1], mt[3] - mt[2]};
     for (glm::vec4 p : aplane)
@@ -344,7 +397,10 @@ struct INST     // orig3: 0x202A88 (vt 0x361538)
     float gScale = 1.0f;             // +0x68
     std::vector<STREAM> astream;
     bool fSeen = false;
+    uint64_t nAdd = 0;               // (kinds 1 / 3) the object's OnAdd serial the instance was made for (LO::nAdd)
 };
+// (keyed by the object; an entry whose object was removed and added again since, or which is another object at a
+// reused address, is made anew: the original's OnRemove 0x1FE670 frees the instance, OnAdd 0x1FE6B0 makes one)
 std::map<const LO*, INST> s_mpinst;
 // kind 0 (one-shot) instances (0x1FE840: keyed by the frame object +0x14 and the particles' object +0x60)
 struct ONESHOT
@@ -352,6 +408,8 @@ struct ONESHOT
     INST inst;
     const LO* ploFrame = nullptr;
     glm::mat4 matFrame{1.0f};
+    bool fKeyed = false;   // (EmitPeParticles' instance: found again by its effect)
+    bool fOwnRandom = false;   // (a breakable's effect: its own random stream, GRandPe)
 };
 std::vector<ONESHOT> s_aoneshot;
 uint64_t s_gen = 0;
@@ -373,8 +431,8 @@ void NextCommand(STREAM& s)
     if (s.icmd < int(s.rec.acmd.size()))
     {
         const PECMD& c = s.rec.acmd[size_t(s.icmd)];
-        if (c.k == 1) { s.gAcc = 0; s.gRate = GRandInRange(c.lo, c.hi); }
-        else if (c.k == 4) s.gAcc = GRandInRange(c.lo, c.hi);
+        if (c.k == 1) { s.gAcc = 0; s.gRate = GRandPe(c.lo, c.hi); }
+        else if (c.k == 4) s.gAcc = GRandPe(c.lo, c.hi);
     }
 }
 
@@ -395,18 +453,18 @@ void EmitParticles(STREAM& s, int c, const glm::mat4& matFrame, const glm::vec3&
         glm::vec3& p = apos[size_t(i)];
         switch (rp.k)
         {
-        case 1: p = glm::vec3(GRandInRange(rp.v0.x, rp.v1.x), GRandInRange(rp.v0.y, rp.v1.y), GRandInRange(rp.v0.z, rp.v1.z)); break;
+        case 1: p = glm::vec3(GRandPe(rp.v0.x, rp.v1.x), GRandPe(rp.v0.y, rp.v1.y), GRandPe(rp.v0.z, rp.v1.z)); break;
         case 3:   // area-weighted triangle, a random point of it
             if (const LOXEMIT::EMITMESH* pm = s.pcomp->pmesh.get(); pm && !pm->atri.empty())
             {
                 float sTotal = 0;
                 for (const auto& t : pm->atri) sTotal += t.sArea;
-                float g = GRandInRange(0.0f, 1.0f) * sTotal;
+                float g = GRandPe(0.0f, 1.0f) * sTotal;
                 size_t it = 0;
                 for (; it + 1 < pm->atri.size(); ++it)
                     if ((g -= pm->atri[it].sArea) <= 0.0f) break;
                 const auto& t = pm->atri[it];
-                float u = GRandInRange(0.0f, 1.0f), v = GRandInRange(0.0f, 1.0f);
+                float u = GRandPe(0.0f, 1.0f), v = GRandPe(0.0f, 1.0f);
                 if (u + v > 1.0f) { u = 1.0f - u; v = 1.0f - v; }
                 auto P = [&](int k) { return size_t(t.aipos[k]) < pm->apos.size() ? pm->apos[size_t(t.aipos[k])] : glm::vec3(0.0f); };
                 p = P(0) * (1.0f - u - v) + P(1) * u + P(2) * v;
@@ -428,25 +486,25 @@ void EmitParticles(STREAM& s, int c, const glm::mat4& matFrame, const glm::vec3&
         case 5: if (rp.k != 3) n = glm::vec3(1, 0, 0); break;
         default: if (rp.k != 2) n = glm::vec3(1, 0, 0); break;
         }
-        if (rp.offLo != 0.0f || rp.offHi != 0.0f) apos[size_t(i)] += n * GRandInRange(rp.offLo, rp.offHi);
+        if (rp.offLo != 0.0f || rp.offHi != 0.0f) apos[size_t(i)] += n * GRandPe(rp.offLo, rp.offHi);
     }
     // the velocities: one ring of c around the normal, the tilt range's middle (+ pi / 2), jittered by +0x74
     {
         const float dPan = 2.0f * PI / float(c), dTilt = rv.tiltHi - rv.tiltLo;
-        float pan = GRandInRange(0.0f, 2.0f * PI);
+        float pan = GRandPe(0.0f, 2.0f * PI);
         const float tilt0 = rv.tiltLo + 0.5f * dTilt + PI * 0.5f;
         for (int i = 0; i < c; ++i)
         {
             float radPan = pan, radTilt = tilt0;
             if (rv.uJitter != 0.0f)
             {
-                radPan = pan + rv.uJitter * GRandInRange(-0.5f, 0.5f) * dPan;
-                radTilt = tilt0 + rv.uJitter * GRandInRange(-0.5f, 0.5f) * dTilt;
+                radPan = pan + rv.uJitter * GRandPe(-0.5f, 0.5f) * dPan;
+                radTilt = tilt0 + rv.uJitter * GRandPe(-0.5f, 0.5f) * dTilt;
             }
             radPan = RadNormalize(radPan);
             radTilt = RadNormalize(radTilt);
             pan += dPan;
-            const float sp = GRandInRange(rv.speedLo, rv.speedHi);
+            const float sp = GRandPe(rv.speedLo, rv.speedHi);
             glm::vec3 v(std::cos(radTilt) * std::cos(radPan) * sp, std::cos(radTilt) * std::sin(radPan) * sp, std::sin(radTilt) * sp);
             v.z *= rv.rSvz;
             const glm::vec3& n = anormal[size_t(i)];
@@ -459,13 +517,13 @@ void EmitParticles(STREAM& s, int c, const glm::mat4& matFrame, const glm::vec3&
     // the times; a head start along the velocity
     for (int i = 0; i < c; ++i)
     {
-        at0[size_t(i)] = g_clock.t - GRandInRange(rv.ageLo, rv.ageHi);
+        at0[size_t(i)] = g_clock.t - GRandPe(rv.ageLo, rv.ageHi);
         at1[size_t(i)] = at0[size_t(i)] + rv.life;
     }
     if (advLo != 0.0f || advHi != 0.0f)
         for (int i = 0; i < c; ++i)
         {
-            const float g = GRandInRange(advLo, advHi);
+            const float g = GRandPe(advLo, advHi);
             apos[size_t(i)] += avel[size_t(i)] * g;
             at0[size_t(i)] -= g;
             at1[size_t(i)] -= g;
@@ -496,7 +554,7 @@ void EmitParticles(STREAM& s, int c, const glm::mat4& matFrame, const glm::vec3&
         d.vel = avel[size_t(i)];
         d.tBirth = at0[size_t(i)];
         d.life = at1[size_t(i)] - at0[size_t(i)];
-        d.size[0] = GRandInRange(s.rec.sizeLo, s.rec.sizeHi);
+        d.size[0] = GRandPe(s.rec.sizeLo, s.rec.sizeHi);
         if (rv.clqScale[1] != 0.0f || rv.clqScale[2] != 0.0f) { d.size[1] = rv.clqScale[1]; d.size[2] = rv.clqScale[2]; }
         else d.size[1] = d.size[2] = 0.0f;
         for (int k = 0; k < 3; ++k) d.alpha[k] = rv.clqAlpha[k];
@@ -505,6 +563,7 @@ void EmitParticles(STREAM& s, int c, const glm::mat4& matFrame, const glm::vec3&
         d.gSpin = rv.gSpin;
         d.gDrag = rv.gDrag;
         d.ori = r3;
+        for (int k = 0; k < 3; ++k) d.aw[k] = s.rec.aw[k];
         LaunchPeRip(d);
     }
 }
@@ -520,7 +579,7 @@ bool FRunCommands(STREAM& s, float gScale, const glm::mat4& matFrame, const glm:
         switch (c.k)
         {
         case 0:   // a burst: rand(lo, hi) x the instance's scale at once
-            EmitParticles(s, int(GRandInRange(gScale * c.lo, gScale * c.hi)), matFrame, velFrame, s.rec.vel.advLo, s.rec.vel.advHi);
+            EmitParticles(s, int(GRandPe(gScale * c.lo, gScale * c.hi)), matFrame, velFrame, s.rec.vel.advLo, s.rec.vel.advHi);
             fNext = c.dur >= 0.0f && c.dur <= tIn;
             break;
         case 1:   // a rate: scale x rate x dt, the fraction kept
@@ -552,7 +611,10 @@ bool FRunCommands(STREAM& s, float gScale, const glm::mat4& matFrame, const glm:
                             c.sFalloff1, c.gVolume, c.gPitch, !psnd ? "(no sound)" : psnd->Kind() == 2 ? "(looping)" : "");
             break;
         }
-        case 3: s.fDone = true; break;   // the end
+        case 3:   // 0x1FF348: the looping sound of a command 2 stopped, then the next command
+            if (s.snd) { s.snd->Stop(0.0f); s.snd = CSndRef(); }
+            fNext = true;
+            break;
         case 4: fNext = s.gAcc <= tIn; break;
         default: fNext = true; break;
         }
@@ -579,9 +641,18 @@ STREAM StreamNew(const PECOMP& comp)
     if (comp.cid == 0xC0)
     {
         s.fRip = true;
+        // orig3 0x202278: 0x17E1B8(kind 4) from the effect: 0x17DC10's channel test keeps an object whose own channel
+        // field (+0x28 bits 44..47) is 0 only when its load group (+0x38's first entry >> 16) is on the context's chain.
+        // The RIP models (e.g. m_ext's three 9000s, none in a hierarchy) differ only by that: the box's effect takes its
+        // own group's 9000 (the reference's, small brown splinters), not the first one loaded (large dark wedges).
         LO* ploNear = s_ploNewFor;
-        s.pmodel = s.rec.oidModel != -1 && ploNear ? PloFindSwNearest(ploNear, s.rec.oidModel) : nullptr;
-        s.plo2 = s.rec.oid2 != -1 && ploNear ? PloFindSwNearest(ploNear, s.rec.oid2) : nullptr;
+        auto find = [ploNear](OID oid) -> const LO* {
+            if (oid == -1 || !ploNear) return nullptr;
+            if (LO* p = PloFindSwNearest(ploNear, oid, true)) return p;
+            return PloFindSwNearest(ploNear, oid);
+        };
+        s.pmodel = find(s.rec.oidModel);
+        s.plo2 = find(s.rec.oid2);
     }
     else s.ppsys = PpepsysNew(s.rec.desc);
     NextCommand(s);
@@ -609,6 +680,13 @@ const std::vector<PECOMP>* PacompOf(const LO* plo)
     return nullptr;
 }
 }  // namespace
+bool FPeNearCamera3(const glm::vec3& c, float r) { return FPeNearCamera(c, r); }
+
+void SetPeCamerasExtra(const glm::vec3* aposCam, int c)
+{
+    s_cCamExtra = std::clamp(c, 0, 3);
+    for (int i = 0; i < s_cCamExtra; ++i) s_aposCamExtra[i] = aposCam[i];
+}
 
 void SetPeCamera(const glm::vec3& pos, const glm::mat3& matRows, const glm::mat4& matWorldToClip)
 {
@@ -639,32 +717,33 @@ void UpdatePes(SW* psw)
     // clones in the world as its draw matrices (0x202E58: at most 0x20); kind 0 (one-shot, made by the scripts) none yet
     std::map<const LO*, std::vector<const LO*>> mpprotoaclone;
     std::map<const LO*, const LO*> mpinstlo;
+    // (the instances' update order: the world's PE list order (kind 2 at its first clone), as the original's instance
+    // list is in the order of their OnAdd; not mpinstlo's pointer order, which differs between runs after a world
+    // reload (the heap's reuse) and moved the shared random stream's draws: the turf war's checkpoint restarts played
+    // differently each run)
+    std::vector<const LO*> akeyOrder;
     // (kind 2's OnAdd 0x1FE6B0 appends the clone to its definition's list (+0xF4, AppendDlEntry), OnRemove 0x1FE670
-    // unlinks it: the list is in the order the clones went into the world; natively the order they are first seen in
-    // the world by this update, those of one update in the world's order)
-    static std::map<const LO*, uint64_t> s_mpcloneseq;
-    static uint64_t s_seqClone = 0;
-    static const SW* s_pswClone = nullptr;
-    if (s_pswClone != psw) { s_mpcloneseq.clear(); s_pswClone = psw; }
+    // unlinks it: the list is in the order the clones went into the world, the clones' OnAdd serials LO::nAdd)
     for (LO* plo : psw->mpcidaplo[CID_PE])
     {
-        if (!plo->fInWorld)
-        {
-            s_mpcloneseq.erase(plo);
-            continue;
-        }
+        if (!plo->fInWorld) continue;
         const int kind = NOpt(plo, 539, 0);
         if (kind == 2)
         {
-            mpprotoaclone[PloProto(plo)].push_back(plo);
-            s_mpcloneseq.try_emplace(plo, ++s_seqClone);
+            const LO* pproto = PloProto(plo);
+            if (!mpinstlo.count(pproto)) akeyOrder.push_back(pproto);
+            mpinstlo[pproto] = pproto;
+            mpprotoaclone[pproto].push_back(plo);
         }
-        else if (kind == 1 || kind == 3) mpinstlo[plo] = plo;
+        else if (kind == 1 || kind == 3)
+        {
+            if (!mpinstlo.count(plo)) akeyOrder.push_back(plo);
+            mpinstlo[plo] = plo;
+        }
     }
-    for (auto& [pproto, aclone] : mpprotoaclone) mpinstlo[pproto] = pproto;
     for (auto it = s_mpinst.begin(); it != s_mpinst.end();)
     {
-        if (!mpinstlo.count(it->first))
+        if (!mpinstlo.count(it->first) || (it->second.kind != 2 && it->second.nAdd != it->first->nAdd))
         {
             for (STREAM& st : it->second.astream)
             {
@@ -687,9 +766,9 @@ void UpdatePes(SW* psw)
             for (LO* plo : psw->mpcidaplo[CID_PE])
                 if (plo->oid == oidFire && !plo->ploCloneOf) { TriggerPe(plo, nullptr); break; }
     }
-    for (auto& [pkey, plo] : mpinstlo)
+    for (const LO* pkey : akeyOrder)
     {
-        LO* ppe = const_cast<LO*>(plo);
+        LO* ppe = const_cast<LO*>(mpinstlo[pkey]);
         const int kind = NOpt(ppe, 539, 0);
         // the emission frame (+0x14: +0xE0, option 541, default the object; kind 3: the camera) and its motion
         glm::mat4 matFrame(1.0f);
@@ -710,6 +789,7 @@ void UpdatePes(SW* psw)
         {
             inst.ppe = ppe;
             inst.kind = kind;
+            inst.nAdd = ppe->nAdd;
             s_ploNewFor = ppe;
             for (const PECOMP& comp : *pacomp)
                 if (comp.cid == 0xBF || comp.cid == 0xC0)
@@ -718,23 +798,27 @@ void UpdatePes(SW* psw)
                     PrewarmStream(inst.astream.back(), inst.gScale, matFrame, glm::vec3(0.0f));
                 }
         }
-        // 0x203170: may it emit? kind 1: its object seen (its +0x34 radius); kind 2: any clone seen; kind 3: always
+        // 0x203170: may it emit? kind 1: its object active (0x1C8610: in the world, its tree's node active), then
+        // without a parent (+0x10) always, else when the camera is within its +0x34 radius; kind 2: a clone without a parent, else any
+        // clone near the camera (0x18E728: within its radius); kind 3: always. (Natively the activity and the parent rule were missing: e.g. the windmill's
+        // ground effects (96407, 34880, 24000 below) kept emitting during the hacks and their smoke showed on the board)
         std::vector<glm::mat4> amatDraw;
         bool fEmit = true;
         if (kind == 2)
         {
             std::vector<const LO*> aclone = mpprotoaclone[pkey];
             // (0x202E58: the list's first 0x20 clones drawn)
-            std::stable_sort(aclone.begin(), aclone.end(), [](const LO* a, const LO* b) { return s_mpcloneseq[a] < s_mpcloneseq[b]; });
+            std::stable_sort(aclone.begin(), aclone.end(), [](const LO* a, const LO* b) { return a->nAdd < b->nAdd; });
             if (aclone.size() > 0x20) aclone.resize(0x20);
             fEmit = false;
             for (const LO* pc : aclone)
             {
                 amatDraw.push_back(MatWorldOfPe(pc));
-                fEmit = fEmit || FSphereSeen(PosLoWorld(pc), std::min(pc->sRadius, 1e6f));
+                fEmit = fEmit || !pc->paloParent || FPeNearCamera(PosLoWorld(pc), std::min(pc->sRadius, 1e6f));
             }
         }
-        else if (kind == 1) fEmit = FSphereSeen(PosLoWorld(ppe), std::min(ppe->sRadius, 1e6f));
+        else if (kind == 1)
+            fEmit = FLoActive(ppe) && (!ppe->paloParent || FPeNearCamera(PosLoWorld(ppe), std::min(ppe->sRadius, 1e6f)));
         const glm::mat4 matEmit = kind == 2 ? glm::mat4(1.0f) : matFrame;
         for (STREAM& st : inst.astream)
         {
@@ -744,10 +828,25 @@ void UpdatePes(SW* psw)
             // kind 3's box (0x201E18): the particles kept in the position record's box around the camera
             if (kind == 3 && st.rec.pos.k == 1) WrapPepsysInBox(st.ppsys, matFrame, st.rec.pos.v0, st.rec.pos.v1);
             SetPepsysDraw(st.ppsys, false, amatDraw);
+            SetPepsysCullRadius(st.ppsys, ppe->sRadius);   // (orig3 0x14A6D0: the effect's +0x34; kind 2: the prototype's)
             ++g_pestats.cstream;
             g_pestats.cparticle += CParticlesPepsys(st.ppsys);
         }
         ++g_pestats.cinst;
+        // debug: SLY3_PETRACE=F0:F1: each instance's state at the updates of frames F0..F1 (runs compared line by line)
+        if (static const char* s_szTr = std::getenv("SLY3_PETRACE"); s_szTr)
+        {
+            extern int g_iframeMain;
+            static int s_f0 = -1, s_f1 = -1;
+            if (s_f0 < 0 && std::sscanf(s_szTr, "%d:%d", &s_f0, &s_f1) != 2) s_f0 = s_f1 = 0x7FFFFFFF;
+            if (g_iframeMain >= s_f0 && g_iframeMain <= s_f1)
+            {
+                std::printf("petrace %d: %d k%d new %d emit %d add %llu clones %zu:", g_iframeMain, ppe->oid, kind, int(fNew), int(fEmit),
+                            (unsigned long long)ppe->nAdd, amatDraw.size());
+                for (const STREAM& st : inst.astream) std::printf(" [%d c%d l%d d%d n%d]", st.icmd, int(st.tCmd * 1000.0f), st.cLoop, int(st.fDone), CParticlesPepsys(st.ppsys));
+                std::printf("\n");
+            }
+        }
         if (static const bool s_fList = std::getenv("SLY3_PELIST") != nullptr; s_fList && s_cUpdate == 60)
         {
             const glm::vec3 p = PosLoWorld(ppe);
@@ -785,12 +884,15 @@ void UpdatePes(SW* psw)
         ONESHOT& os = *it;
         if (os.ploFrame) os.matFrame = dynamic_cast<const LOX*>(os.ploFrame) ? MatWorldOfPe(os.ploFrame) : MatWorldOfAlo(static_cast<const ALO*>(os.ploFrame));
         bool fAlive = false;
+        GAMERANDKEEP keep(os.fOwnRandom);
+        s_fPeOwnRandom = os.fOwnRandom;
         for (STREAM& st : os.inst.astream)
         {
             FRunCommands(st, os.inst.gScale, os.matFrame, glm::vec3(0.0f));
             SetPepsysDraw(st.ppsys, false, {});
             fAlive = fAlive || !st.fDone || CParticlesPepsys(st.ppsys) > 0;
         }
+        s_fPeOwnRandom = false;
         if (!fAlive)
         {
             for (STREAM& st : os.inst.astream) SetPepsysDraw(st.ppsys, true, {});
@@ -809,9 +911,11 @@ void UpdatePes(SW* psw)
 
 // orig3: 0x1FE840 (a kind-0 effect's instance for the frame object, made when there is none) + its start: the effect
 // plays once at the frame object (null: the effect object's own place). The scripts / damage code call it.
-void TriggerPe(LO* ppe, const LO* ploFrame)
+void TriggerPe(LO* ppe, const LO* ploFrame, bool fOwnRandom)
 {
-    if (!ppe || !g_psw) return;
+    s_fPeOwnRandom = fOwnRandom;
+    GAMERANDKEEP keep(fOwnRandom);
+    if (!ppe || !g_psw) { s_fPeOwnRandom = false; return; }
     if (s_gen != GenPeParticles() || s_psw != g_psw || s_serial != g_psw->serial)
     {
         ResetPes();
@@ -820,7 +924,7 @@ void TriggerPe(LO* ppe, const LO* ploFrame)
         s_serial = g_psw->serial;
     }
     const std::vector<PECOMP>* pacomp = PacompOf(ppe);
-    if (!pacomp) return;
+    if (!pacomp) { s_fPeOwnRandom = false; return; }
     ONESHOT os;
     os.inst.ppe = ppe;
     os.inst.kind = 0;
@@ -834,11 +938,122 @@ void TriggerPe(LO* ppe, const LO* ploFrame)
         const glm::vec3 p = glm::vec3(os.matFrame[3]);
         std::printf("pe trigger %d (kind %d) frame %d at %.0f %.0f %.0f:", ppe->oid, NOpt(ppe, 539, 0), ploFrame ? ploFrame->oid : -1, p.x, p.y, p.z);
         for (const STREAM& st : os.inst.astream)
-            std::printf(" [0x%X %d: rip kind %d model %d (%s) size %.0f..%.0f, %zu commands]", st.pcomp->cid, st.pcomp->oid, st.rec.kRip, st.rec.oidModel,
-                        st.pmodel ? "found" : "none", st.rec.sizeLo, st.rec.sizeHi, st.rec.acmd.size());
+            std::printf(" [0x%X %d: rip kind %d model %d (%s, parent %d) size %.2f..%.2f, %zu commands]", st.pcomp->cid, st.pcomp->oid, st.rec.kRip, st.rec.oidModel,
+                        st.pmodel ? "found" : "none", st.pmodel && st.pmodel->paloParent ? st.pmodel->paloParent->oid : -1, st.rec.sizeLo, st.rec.sizeHi, st.rec.acmd.size());
         std::printf("\n");
+        for (const STREAM& st : os.inst.astream)
+            if (st.fRip && st.rec.oidModel != -1)
+                for (LO* pm : AploOfOid(g_psw, st.rec.oidModel))
+                {
+                    std::printf("  model %d at %p ch %d (pe ch %d)%s world %d clone-of %p parents:", pm->oid, (void*)pm, pm->ichannel, ppe->ichannel, pm == st.pmodel ? " taken" : "", int(pm->fInWorld), (void*)pm->ploCloneOf);
+                    for (const LO* q = pm->paloParent; q; q = q->paloParent) std::printf(" %d", q->oid);
+                    std::printf("\n");
+                }
+        for (const STREAM& st : os.inst.astream)
+        {
+            std::printf("  comp %d: loop %d life %.2f speed %.0f..%.0f", st.pcomp->oid, st.rec.cLoop, st.rec.vel.life, st.rec.vel.speedLo, st.rec.vel.speedHi);
+            for (const PECMD& c : st.rec.acmd) std::printf(" [k%d %.2f %.2f dur %.2f]", c.k, c.lo, c.hi, c.dur);
+            std::printf("\n");
+        }
     }
+    os.fOwnRandom = fOwnRandom;
+    s_fPeOwnRandom = false;
     s_aoneshot.push_back(std::move(os));
+}
+
+bool FPeOneShot(const LO* plo) { return plo && plo->Cid() == CID_PE && NOpt(plo, 539, 0) == 0; }
+
+// orig3: 0x25D940 (an effect by oid near the context (0x17E1B8 kind 4): a PE started (0x1FE728(pe, 1)), else an
+// explosion's burst (vt slot 110) from the source (or itself), scaled when g != 1)
+void StartEffectByOid3(int oidEffect, int oidSource, float g, LO* ploContext, bool fOwnRandom)
+{
+    if (oidEffect == -1 || !g_psw) return;
+    auto find = [&](int oid) -> LO* {
+        if (ploContext)
+            if (LO* p = PloFindSwNearest(ploContext, oid)) return p;
+        return PloFindSwObjectByOid(g_psw, oid);
+    };
+    LO* plo = find(oidEffect);
+    if (!plo) return;
+    if (FCidDerivedFrom(plo->Cid(), CID_PE))
+    {
+        TriggerPe(plo, nullptr, fOwnRandom);
+        return;
+    }
+    BURSTPARAMS bp;
+    bp.grf = 1;
+    bp.plo = oidSource != -1 ? find(oidSource) : nullptr;
+    if (!bp.plo) bp.plo = plo;
+    if (g != 1.0f)
+    {
+        bp.g8 = g;
+        bp.grf |= 0x18;
+    }
+    ExplodeLo(plo, &bp);
+}
+
+// orig3: the velocity record (comp +0x14) of a kind-0 effect's first component, for code that throws its particles itself
+bool FPeVelParams(const LO* ppe, PEVELPARAMS* pp)
+{
+    const std::vector<PECOMP>* pacomp = ppe ? PacompOf(ppe) : nullptr;
+    if (!pacomp || pacomp->empty()) return false;
+    const PEREC r = RecOfComp((*pacomp)[0]);
+    pp->speedLo = r.vel.speedLo;
+    pp->speedHi = r.vel.speedHi;
+    pp->advLo = r.vel.advLo;
+    pp->advHi = r.vel.advHi;
+    pp->ageLo = r.vel.ageLo;
+    pp->ageHi = r.vel.ageHi;
+    pp->life = r.vel.life;
+    return true;
+}
+
+// orig3: 0x1FE840(ppe, ppe, mat, 1) (the kind-0 effect's instance for {parent, space}: the one there, else a new one
+// started as 0x1FE728(ppe, 1)) and its stream's slot 2 (+0x6C, the particles given: 0x200C10), the size curve of the
+// velocity record (+0x20) set first (0x1B6B10 writes it before each batch). The instance is dropped as a one-shot's is.
+void EmitPeParticles(LO* ppe, int c, const glm::vec3* apos, const glm::vec3* avel, const float* at0, const float* at1, const float* pclqScale)
+{
+    if (!ppe || !g_psw || c <= 0 || NOpt(ppe, 539, 0) != 0) return;
+    if (s_gen != GenPeParticles() || s_psw != g_psw || s_serial != g_psw->serial)
+    {
+        ResetPes();
+        s_gen = GenPeParticles();
+        s_psw = g_psw;
+        s_serial = g_psw->serial;
+    }
+    ONESHOT* pos = nullptr;
+    for (ONESHOT& os : s_aoneshot)
+        if (os.fKeyed && os.inst.ppe == ppe) { pos = &os; break; }
+    if (!pos)
+    {
+        const std::vector<PECOMP>* pacomp = PacompOf(ppe);
+        if (!pacomp) return;
+        ONESHOT os;
+        os.inst.ppe = ppe;
+        os.inst.kind = 0;
+        os.fKeyed = true;
+        os.fOwnRandom = true;
+        os.matFrame = glm::mat4(1.0f);   // (the particles are given in the world)
+        s_ploNewFor = ppe;
+        const bool fPrev = s_fPeOwnRandom;
+        s_fPeOwnRandom = true;
+        for (const PECOMP& comp : *pacomp)
+            if (comp.cid == 0xBF || comp.cid == 0xC0) os.inst.astream.push_back(StreamNew(comp));
+        s_fPeOwnRandom = fPrev;
+        s_aoneshot.push_back(std::move(os));
+        pos = &s_aoneshot.back();
+    }
+    for (STREAM& st : pos->inst.astream)
+    {
+        if (st.fRip || !st.ppsys) continue;
+        if (pclqScale && (st.rec.desc.clqScale[0] != pclqScale[0] || st.rec.desc.clqScale[1] != pclqScale[1] || st.rec.desc.clqScale[2] != pclqScale[2]))
+        {
+            for (int i = 0; i < 3; ++i) st.rec.desc.clqScale[i] = st.rec.vel.clqScale[i] = pclqScale[i];
+            SetPepsys(st.ppsys, st.rec.desc);
+        }
+        EmitPepsys(st.ppsys, c, apos, avel, at0, at1);
+        break;
+    }
 }
 
 // The loader's registration (loaders.cpp RegisterLoaders) and the native struct (PfnNewNativeForCid)

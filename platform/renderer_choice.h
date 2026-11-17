@@ -1,6 +1,6 @@
 #ifndef CANE_PLATFORM_RENDERER_CHOICE_H_
 #define CANE_PLATFORM_RENDERER_CHOICE_H_
-// Which renderer the game tries first (Sly 2, its renderer.cpp): Auto is Vulkan with OpenGL as the fallback,
+// Which renderer a game tries first (Sly 2 and Sly 3, their renderer.cpp): Auto is Vulkan with OpenGL as the fallback,
 // Vulkan and OpenGL are the explicit choices. No window or GPU code here, so the rules are tested without a GPU (the
 // games' --renderer-selftest, renderer_choice_test.h).
 //

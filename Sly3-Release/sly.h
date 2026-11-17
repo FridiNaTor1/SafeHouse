@@ -22,11 +22,16 @@ SLY* PslyGlobal();
 // The world's start (after the load, the animation's and the physics' post-loads, transition.cpp): every actor's init
 // (0x13FF70 and the class's: Sly 0x188488) and post-load (0x1400B8 and Sly's 0x188608).
 void InitWorldActors(SW* psw);
+// (PC, split screen's teams) a copy of Sly made while the world runs: its init and post-load; PslyGlobal() unchanged
+void InitSlyCopy3(LO* plo);
+// orig3 0x152488's mesh groups 0x306 (the 3-D glasses): shown only in the anaglyph mode (never on the PC)
+void ShowActorGlasses3(SW* psw);
 // Debug (F7): the players' health to capacity and power to 100, every frame while on.
 void CheatRefillPlayers(SW* psw);
 
 // orig: 0x0018C250 (the state n, substate m)
 void SetSlyState(SLY* psly, int n, int m);
+extern bool g_fSlyLeavingAttack3;   // (Sly 3) the next SetSlyState(0) leaves the attack: the idle SM's state 0x197
 // orig: 0x0018E540 (the attack mode; -1 none)
 void SetSlyMode(SLY* psly, int n);
 // Combat Dodge controller at +0x1FF0 (0x1371B8..0x1375D0).

@@ -142,7 +142,7 @@ void ImportXf(const RAM& ram, uint32_t a, XF* pxf)
     pxf->matWorld = ram.Mat4(a + 0x40);
     pxf->g0 = ram.F32(a + 0x80);
     pxf->g1 = ram.F32(a + 0x84);
-    pxf->mode = ram.S16(a + 0x98);
+    pxf->mode = static_cast<int16_t>(Xfm2FromXfm3(ram.S16(a + 0x98)));  // (Sly 3's modes, xf.h)
     pxf->state = ram.S16(a + 0x9A);
     pxf->nStamp = ram.S32(a + 0xA4);
     // (the change counter at least the imported stamps: the entries' world geometry follows a record's stamp, so the
@@ -643,7 +643,7 @@ FRAMESTATS StepAndCompare(REFRUN& rr, const RAM& ramA, const RAM& ramB)
         {
             const uint32_t axf = base + 0x100 * i;
             const XF* pxf = palo->axf[i].get();
-            const int modeB = ramB.S16(axf + 0x98);
+            const int modeB = Xfm2FromXfm3(ramB.S16(axf + 0x98));  // (Sly 3's modes, xf.h)
             if (modeB == 0 && pxf->mode == 0) continue;
             if (pxf->mode == 15 || pxf->mode == 16 || modeB == 15 || modeB == 16) continue;  // (physics' modes)
             {

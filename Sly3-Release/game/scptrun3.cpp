@@ -2,6 +2,7 @@
 // argument positions are those of the reader 0x225220 (scpt3.cpp SzArgs, the RAM offsets in the comments).
 
 #include "scptrun3.h"
+#include "director3.h"
 
 #include <algorithm>
 #include <bit>
@@ -50,6 +51,30 @@ int ISib(const SCPT3* ps, int i)
 
 // orig3: 0x226458 (the script's clock: real time when its flags +0x3C carry 0x200)
 float TScpt(const SCPT3* ps) { return s_phost->T((ps->grf & 0x200) != 0); }
+
+// orig3: 0x226828: the label command (0x20) with the key under icmd and its siblings (spawned blocks 0x00 skipped),
+// depth first; aicmd gets the open commands down to it (the run's stack +0x118 / +0x11C)
+int ILabel(const SCPT3* ps, int icmdRoot, int icmd, int key, std::vector<int>& aicmd)
+{
+    if (icmd == icmdRoot)
+    {
+        aicmd.assign(1, icmd);
+        icmd = IChild(ps, icmd);
+    }
+    for (; icmd >= 0; icmd = ISib(ps, icmd))
+    {
+        const SCPTCMD3* pc = Pcmd(ps, icmd);
+        if (!pc || pc->id == 0) continue;
+        if (pc->id == 0x20 && A(*pc, 0) == key) return icmd;
+        const int ichild = IChild(ps, icmd);
+        if (ichild < 0) continue;
+        aicmd.push_back(icmd);
+        const int i = ILabel(ps, icmdRoot, ichild, key, aicmd);
+        if (i >= 0) return i;
+        aicmd.pop_back();
+    }
+    return -1;
+}
 
 // orig3: 0x226770 PloFind (kind 4 from the run's context; a proxy (cid 8) gives its current instance: the host's job)
 void* PloFind(RUN3* p, int oid)
@@ -164,7 +189,11 @@ void GetRunAim(RUN3* p, void* plo, float pos[3], float* pang)
         }
         else
         {
-            s_phost->GetLoXf(plo, mat, pos);
+            // (the original takes the target's vt slot 36 matrix for every run; natively only for a run that is not an
+            // actor's (cid 0x33): the actors' placements keep s3-player's +0x48 record (their step heading's frame) until
+            // they are checked against the reference)
+            if (pa && s_phost->FDerivedFrom(pa, 0x33)) s_phost->GetLoXf(plo, mat, pos);
+            else s_phost->GetLoAimXf(plo, mat, pos);
             ang = std::atan2(mat[1], mat[0]);
         }
     }
@@ -248,7 +277,12 @@ void RetireRun(RUN3* p)
         s_phost->HideScreenObj(p->ploScreen);
         p->ploScreen = nullptr;
     }
-    // (0x22B7B8: run +0x16C (0x6C / 0x73)); 0x22B828: the held run effects (0x55 / 0x56) released
+    if (p->fChoice)  // 0x22B7B8: the choice menu (+0x16C, 0x6C / 0x73) hidden
+    {
+        s_phost->HideChoices();
+        p->fChoice = false;
+    }
+    // 0x22B828: the held run effects (0x55 / 0x56) released
     for (const RUN3::HOLD& h : p->ahold) s_phost->HoldActorEffects(h.plo, false, h.f != 0, h.grf);
     p->ahold.clear();
     if (p->ploBinoc)  // 0x22B7F0
@@ -273,7 +307,15 @@ void RetireRun(RUN3* p)
 bool FRunWaiting(RUN3* p) { return p->tWake != c_tNever && TScpt(p->pscpt) < p->tWake; }
 
 // orig3: 0x226950 (a condition: kind, param)
+bool FConditionCore(RUN3* p, int kind, int param);
 bool FCondition(RUN3* p, int kind, int param)
+{
+    const bool f = FConditionCore(p, kind, param);
+    if (static const bool s_fPrint = std::getenv("SLY3_CONDPRINT") != nullptr; s_fPrint)
+        std::printf("scpt3: condition 0x%X %d -> %d\n", kind, param, int(f));
+    return f;
+}
+bool FConditionCore(RUN3* p, int kind, int param)
 {
     switch (kind)
     {
@@ -308,6 +350,13 @@ void PrepareCmd(RUN3* p, const SCPTCMD3& c)
         break;
     default: break;
     }
+}
+
+// orig3 0x229438 case 23 (SCPT 0x17 with the wait flag): on unless SLY3_SCPT17WAIT=0 (see the done test)
+bool FScpt17Wait3()
+{
+    static const bool s_f = [] { const char* sz = std::getenv("SLY3_SCPT17WAIT"); return !sz || sz[0] != '0'; }();
+    return s_f;
 }
 
 // Advance to the next command (the executor's walk, 0x226D00 up to its dispatch): returns false when the run ends.
@@ -373,11 +422,19 @@ void TimeRamp(RUN3* p, const SCPTCMD3& c, float t)
     float g = F(A(c, 0)) + u * (F(A(c, 1)) + u * F(A(c, 2)));
     if (g < F(A(c, 3))) g = F(A(c, 3));
     else if (F(A(c, 4)) < g) g = F(A(c, 4));
+    if (static const bool s_f = std::getenv("SLY3_CLOCKPRINT") != nullptr; s_f) std::printf("scpt3: clock ramp %d: %.3f (t %.3f)\n", p->pscpt->oid, g, t);
     SetScptClockFactor(p->pscpt, g);
 }  // orig3: 0x2293DC (the waits; the done test does the work)
 
-// orig3: 0x226D00 the executor: the next command, executed
+// orig3: 0x226D00 the executor: the next command, executed; the run's time stamp (+0x38) is taken after every
+// command (0x226D00's end), which the done tests measure from (0x1D's clock curve, 0x2F, 0x3F)
+void ExecCmd(RUN3* p);
 void Exec(RUN3* p)
+{
+    ExecCmd(p);
+    Wait(p);
+}
+void ExecCmd(RUN3* p)
 {
     DEPTH depth;
     SCPT3* ps = p->pscpt;
@@ -388,6 +445,8 @@ void Exec(RUN3* p)
         const SCPTCMD3& c = *Pcmd(ps, icmd);
         PrepareCmd(p, c);
         s_phost->Executed(*p, icmd);
+        if (c.id > 0x03) p->f17Last = c.id == 0x17 && c.fFlag;   // (0x00..0x03: blocks and their ends)
+        if (p->f17Last) p->icmd17 = icmd;
         if (static const bool s_f = std::getenv("SLY3_SCPTTRACE") != nullptr; s_f)
             std::printf("scpt3: t %.3f exec oid %d [%d] %02X %s\n", TScpt(ps), ps->oid, icmd, c.id, SzScptCmd3(c.id));
         switch (c.id)
@@ -563,6 +622,7 @@ void Exec(RUN3* p)
                     cid = k;
                     break;
                 }
+            if (std::getenv("SLY3_SCPTTRACE")) std::printf("scpt3: 0x12 oid %d cid 0x%X actor %p\n", A(c, 0), cid, p->plo28);
             // (0x21 / 0x47 / 0x50 act on the run's actor: nothing without one of cid 0x33)
             if ((cid == 0x21 || cid == 0x47 || cid == 0x50) && !(p->plo28 && s_phost->FDerivedFrom(p->plo28, 0x33))) return;
             s_phost->ActivateLo(cid, plo, p->plo28);
@@ -584,7 +644,11 @@ void Exec(RUN3* p)
             void* paseg = PloFind(p, A(c, 0));
             if (!paseg || !s_phost->FDerivedFrom(paseg, 0x82)) return;
             void* pasega = s_phost->ApplyAseg(paseg, plo, A(c, 2));
-            if (c.fFlag && pasega) p->pasega = pasega;  // (retained: vt slot 1)
+            if (c.fFlag && pasega)
+            {
+                s_phost->AddRefAsega(pasega);  // (retained: vt slot 1)
+                p->pasega = pasega;
+            }
             return;
         }
         case 0x1A: case 0x1B:  // a screen object (cid 0x9E): shown with n / hidden
@@ -604,7 +668,9 @@ void Exec(RUN3* p)
         case 0x1F: PauseRun(p, A(c, 0) != 0, A(c, 1)); return;
         case 0x22:  // place the target on an object (its position and heading), or start an interact (cid 0x19)
         {
-            void* plo = PloFind(p, A(c, 0));
+            // (PC: a copy's part: Ep5's boarding SCPT 56582 [14] puts Sly on 45073, a part of each copy of the pirate ship
+            // 44989; the oid's first object is the template's, out of the world at the origin: the in-world copy's)
+            void* plo = s_phost->PloInWorldCopy(PloFind(p, A(c, 0)), p->plo28);
             void* pa = nullptr;
             if (p->plo28 && s_phost->FDerivedFrom(p->plo28, 0x33))
             {
@@ -726,7 +792,120 @@ void Exec(RUN3* p)
         case 0x43:
             p->psnd = s_phost->PlayAsegaSound(A(c, 0), A(c, 1), A(c, 2), A(c, 3), F(A(c, 4)), F(A(c, 5)), F(A(c, 6)),
                                               p->ploContext, ps);
+            p->idSnd = A(c, 0);
             return;
+        case 0x44:  // orig3 0x25DCA8: the run's sound stopped (0x244CA8(snd, 0)) and released, when it is the id's (-1 any)
+            if (p->psnd && (A(c, 0) == -1 || A(c, 0) == p->idSnd))
+            {
+                s_phost->StopSound(p->psnd);
+                p->psnd = nullptr;
+                p->idSnd = -1;
+            }
+            return;
+        case 0x21:  // orig3 0x22BF08: a goto: the label (0x20) with the key, searched from the run's root (0x226828)
+        {
+            std::vector<int> aicmd;
+            const int ilabel = ILabel(ps, p->icmdRoot, p->icmdRoot, A(c, 0), aicmd);
+            if (ilabel >= 0)
+            {
+                p->aicmdStack = aicmd;
+                p->icmdCur = ilabel;
+            }
+            return;
+        }
+        case 0x3A: case 0x3B: case 0x3C: case 0x3D:
+        {
+            // orig3 0x25D810 / 0x25D8A8: the object (oid, -1: the run's context when it is an ALO), an ALO: 0x3A / 0x3B
+            // its mesh groups with the tag shown / hidden, 0x3C / 0x3D its collision entries on / off
+            void* plo = A(c, 0) == -1 ? (p->ploContext && s_phost->FDerivedFrom(p->ploContext, 0x2F) ? p->ploContext : nullptr)
+                                      : PloFind(p, A(c, 0));
+            if (!plo || !s_phost->FDerivedFrom(plo, 0x2F)) return;
+            if (c.id < 0x3C) s_phost->ShowAloGlobs3(plo, A(c, 1), c.id == 0x3A);
+            else s_phost->SetAloSoes3(plo, A(c, 1), c.id == 0x3C);
+            return;
+        }
+        case 0x40: s_phost->Rumble(0, A(c, 1), F(A(c, 0))); return;  // orig3 0x1A9058(players, kind (S8), duration (F32))
+        case 0x76:  // orig3: an ALO's constraints (lin / ang, -1: unchanged); +0x1B8 of a cid 0x32 from the 4th byte, the
+                    // flags 1 / 2 SO +0x180 and 4 / 8 cid 0x32 +0x2C4, stored as the field options do (LO::SetField)); 0x10 velocities 0
+        {
+            void* plo = PloFind(p, A(c, 0));
+            if (!plo || !s_phost->FDerivedFrom(plo, 0x2F)) return;
+            s_phost->SetAloCnstr3(plo, A(c, 1), A(c, 2), (A(c, 4) & 0x10) != 0);
+            // the fields, stored where the options keep them (EOPIDs 260 PO +0x1B8 an object (kind 0x106C), 262 PO
+            // +0x2C4 a bool (Sly 2's EOPID 231 PO +0x298), 950 SO +0x180 a bool (new))
+            const bool fSo = s_phost->FDerivedFrom(plo, 0x31), fPo = s_phost->FDerivedFrom(plo, 0x32);
+            if (A(c, 3) != -1 && fPo) s_phost->SetLoField3(plo, 0x1B8, A(c, 3));
+            if ((A(c, 4) & 3) && fSo) s_phost->SetLoField3(plo, 0x180, (A(c, 4) & 1) ? 1 : 0);
+            if ((A(c, 4) & 0xC) && fPo) s_phost->SetLoField3(plo, 0x2C4, (A(c, 4) & 4) ? 1 : 0);
+            return;
+        }
+        case 0x1C:  // orig3: a notice on the HUD widget D_0046FD00 (0x222FF0(widget, n, 0, the screen object 0x9E)); n 1 not
+                    // while D_0036DBEC bit 1; the done test waits while the widget is busy (0x21DD30)
+        {
+            void* plo = s_phost->PloFind(0x405, A(c, 0), nullptr);
+            if (!plo || !s_phost->FDerivedFrom(plo, 0x9E)) return;
+            s_phost->ShowNotice(A(c, 1), plo);
+            return;
+        }
+        case 0x6B:  // orig3 0x241100: a contact message to the object (oid) from the 5th word's object (-1: the script):
+                    // A1 the kind (+0x20), A2 the amount (+0x24, through 0x172268 by 0x240C78), A3 the instant kill (+0x28)
+        {
+            void* pfrom = A(c, 4) == -1 ? ps->plo : PloFind(p, A(c, 4));
+            void* pto = PloFind(p, A(c, 0));
+            if (!pfrom || !pto) return;
+            s_phost->SendContact3(pto, pfrom, A(c, 1), A(c, 2), A(c, 3));
+            return;
+        }
+        case 0x57:  // orig3: the DIRECTOR (director3.cpp): its timeline from the 0x58 records after it (up to the next
+                    // 0x57, 10 at most) and its mode
+        {
+            std::vector<std::pair<float, int>> a;
+            for (int i = ISib(ps, icmd); i >= 0; i = ISib(ps, i))
+            {
+                const SCPTCMD3* pc = Pcmd(ps, i);
+                if (!pc || pc->id == 0x57) break;
+                if (pc->id == 0x58 && a.size() < 10) a.push_back({F(A(*pc, 0)), A(*pc, 1)});
+            }
+            DirectorCmd57_3(A(c, 0), a);
+            return;
+        }
+        case 0x58: DirectorCmd58_3(F(A(c, 0)), A(c, 1)); return;  // a cue queued; its done test waits for its time
+        case 0x69:  // orig3: the run's actor caught (0x1528E0 for cid 0x33, else 0x168670 on its job for cid 0x31)
+            if (p->plo28 && (s_phost->FDerivedFrom(p->plo28, 0x33) || s_phost->FDerivedFrom(p->plo28, 0x31))) s_phost->Caught(p->plo28);
+            return;
+        case 0x5D: case 0x5E:  // orig3: an actor (cid 0x36) pending: its state 8 entered / left (the done test)
+            if (p->plo28 && s_phost->FDerivedFrom(p->plo28, 0x36))
+            {
+                SetRunPending(p, icmd, p->plo28);
+                s_phost->SetActorHold5D(p->plo28, c.id == 0x5D);
+            }
+            return;
+        case 0x6C:  // orig3: the choice menu D_0036BB80 (none: nothing): up to 3 of the listed lines not chosen before at
+                    // this command (the run's list +0x15C), with the buttons 0x80 / 0x10 / 0x20 (0x1634F0)
+        {
+            if (!s_phost->FChoiceMenu()) return;
+            static const int s_agrf[3] = {0x80, 0x10, 0x20};
+            std::vector<int> aid, agrf;
+            for (int i = 0; i < A(c, 1) && aid.size() < 3; ++i)
+            {
+                const int id = A(c, std::size_t(2 + 2 * i));
+                if (std::find(p->achosen.begin(), p->achosen.end(), std::pair<int, int>{id, icmd}) != p->achosen.end()) continue;
+                agrf.push_back(s_agrf[aid.size()]);
+                aid.push_back(id);
+            }
+            p->fChoice = true;
+            s_phost->ShowChoices(A(c, 0), aid, agrf);
+            return;
+        }
+        case 0x75:  // orig3 0x1C7A00: the object's parent (an ALO, else none), vt slot 10 with the flags
+        {
+            void* plo = PloFind(p, A(c, 0));
+            if (!plo) return;
+            void* ploParent = PloFind(p, A(c, 1));
+            if (ploParent && !s_phost->FDerivedFrom(ploParent, 0x2F)) ploParent = nullptr;
+            s_phost->SetLoParent3(plo, ploParent, A(c, 2));
+            return;
+        }
         case 0x4E: s_phost->SetButtonPrompt(A(c, 0) & 0xF0); return;  // then the done test waits for the buttons
         case 0x60: s_phost->ShowHint(A(c, 0), F(A(c, 1))); return;
         case 0x61: s_phost->ClearHint(A(c, 0)); return;
@@ -739,19 +918,20 @@ void Exec(RUN3* p)
             {
                 if (!plo || !s_phost->FDerivedFrom(plo, 0x09)) return;
                 if (A(c, 4) != -1) { s_phost->PlayActorScriptAnim(pa, A(c, 4), 9, 6); p->ploAnim = pa; }
-                s_phost->ActorPathStep(pa, plo, A(c, 1), A(c, 2), F(A(c, 3)));
+                s_phost->ActorPathStep(pa, plo, A(c, 1), A(c, 2), F(A(c, 3)), p->f104);
             }
             else
             {
                 float pos[3] = {0, 0, 0};
                 GetRunAim(p, plo, pos, nullptr);
                 if (A(c, 4) != -1) { s_phost->PlayActorScriptAnim(pa, A(c, 4), 9, 6); p->ploAnim = pa; }
-                s_phost->ActorStepTo(pa, pos, F(A(c, 1)), A(c, 2), F(A(c, 3)));
+                s_phost->ActorStepTo(pa, pos, F(A(c, 1)), A(c, 2), F(A(c, 3)), p->f104);
             }
             p->ploJobActor = pa;
             return;
         }
         case 0x31: p->f104 = 1; return;
+        case 0x32: p->f104 = 0; return;  // orig3 case 50
         case 0x18:  // the run's context: the object (0x226AE8), else the script
         {
             void* plo = PloFind(p, A(c, 0));
@@ -760,6 +940,7 @@ void Exec(RUN3* p)
         }
         case 0x19:  // an object's SM to a goal (RunDockRsmgs 0x25D478: flags 3 (snap) when the byte is set, else 1)
             p->psma = s_phost->RunSmGoal(A(c, 0), A(c, 1), A(c, 2), A(c, 3) != 0, p->ploContext);
+            if (!c.fFlag) p->psma = nullptr;  // orig3 0x22B718: without the wait flag the SMA is released at once
             return;
         case 0x42: s_phost->SetEyesClosed(A(c, 0), A(c, 1), F(A(c, 2)), p->ploContext); return;
         case 0x55:  // the target actor's effects held (once per actor, at most 4)
@@ -785,8 +966,13 @@ void Exec(RUN3* p)
                 }
             return;
         }
-        case 0x29:  // the target actor's interact object
-            if (void* pa = p->plo28; pa && s_phost->FDerivedFrom(pa, 0x33)) s_phost->SetActorInteractObject(pa, PloFind(p, A(c, 0)));
+        case 0x29:  // the target actor's interact object (0x154B48), then the run drives it (0x22B028: its release resets a
+                    // kind-5 interaction, 0x156468)
+            if (void* pa = p->plo28; pa && s_phost->FDerivedFrom(pa, 0x33))
+            {
+                s_phost->SetActorInteractObject(pa, PloFind(p, A(c, 0)));
+                SetRunPending(p, icmd, pa);
+            }
             return;
         case 0x63:  // a guard's second command kind (0x1985A8)
             s_phost->GuardCommand63(PloFind(p, A(c, 0)), A(c, 1) == -1 ? nullptr : PloFind(p, A(c, 1)));
@@ -821,6 +1007,82 @@ void Exec(RUN3* p)
             s_phost->ReleaseProxyInstance(pproxy, plo);
             return;
         }
+        case 0x3E: s_phost->RemoveByClass(A(c, 0)); return;  // orig3 case 62
+        case 0x2A: case 0x2B: case 0x2C: case 0x2D: case 0x2E: case 0x35: case 0x37:
+        {
+            // orig3 0x226D00 cases 42..46, 53, 55: the run's actor (cid 0x33) only; the bodies are the actor's functions
+            // (the game's hook); 0x2A / 0x2B / 0x2D / 0x2E / 0x35 leave the run pending on the actor (their done tests)
+            void* pa = p->plo28;
+            if (!pa || !s_phost->FDerivedFrom(pa, 0x33)) return;
+            void* ploA = nullptr;
+            void* ploB = nullptr;
+            float pos[3] = {0, 0, 0};
+            int n = 0, n2 = 0;
+            switch (c.id)
+            {
+            case 0x2A:
+                ploA = PloFind(p, A(c, 0));
+                ploB = PloFind(p, A(c, 1));
+                GetRunAim(p, ploB, pos, nullptr);
+                break;
+            case 0x2B: case 0x2C: case 0x2D: ploA = PloFind(p, A(c, 0)); break;
+            case 0x2E:
+                ploA = s_phost->PloFind(1, A(c, 0), pa);
+                ploB = A(c, 1) == 3 ? p->ploContext : PloFind(p, A(c, 1));   // (3: 0x226B20, the run's context object)
+                n = A(c, 2);
+                break;
+            case 0x37:
+                ploA = PloFind(p, A(c, 0));
+                GetRunAim(p, ploA, pos, nullptr);
+                n = A(c, 1);
+                n2 = A(c, 2);
+                break;
+            default: break;
+            }
+            if (c.id != 0x35) s_phost->ActorCmd(c.id, pa, ploA, ploB, n, n2, pos);
+            if (c.id != 0x2C && c.id != 0x37) SetRunPending(p, icmd, pa);
+            return;
+        }
+        case 0x6A:  // orig3 case 106: the run's actor (cid 0x33): its +0x1108 object's entry n chosen (0x172C30 / 0x172AE8: the
+                    // actor's side, the game's hook); the done test: that object's +0x48 == -1
+            if (!p->plo28 || !s_phost->FDerivedFrom(p->plo28, 0x33)) return;
+            LockPlayer(p, false);   // (0x22B238(run, 0))
+            {
+                const float pos0[3] = {0, 0, 0};
+                s_phost->ActorCmd(0x6A, p->plo28, nullptr, nullptr, A(c, 0), 0, pos0);
+            }
+            return;
+        case 0x6D:  // orig3 case 109: the run's actor (cid 0x37, the Guru): off the object he rides (0x22D318; not waited on)
+            if (!p->plo28 || !s_phost->FDerivedFrom(p->plo28, 0x37)) return;
+            {
+                const float pos0[3] = {0, 0, 0};
+                s_phost->ActorCmd(0x6D, p->plo28, nullptr, nullptr, 0, 0, pos0);
+            }
+            return;
+        case 0x74:  // orig3 case 116: the run's actor (cid 0x36, Bentley): his held item (0xD) dropped, the object (oid) aimed
+                    // at (0x273030 on +0x1290) or put away: the actor's side (the game's hook)
+            if (!p->plo28 || !s_phost->FDerivedFrom(p->plo28, 0x36)) return;
+            {
+                const float pos0[3] = {0, 0, 0};
+                s_phost->ActorCmd(0x74, p->plo28, PloFind(p, A(c, 0)), nullptr, 0, 0, pos0);
+            }
+            return;
+        case 0x73:  // orig3 case 115: the choice menu (D_0036BB80) with its three buttons and no lines (0x1634F0(menu, -1, 3,
+                    // {-1, button})): a "press a button" prompt; the done test below
+            if (!s_phost->FChoiceMenu()) return;
+            p->fChoice = true;
+            s_phost->ShowChoices(-1, {-1, -1, -1}, {0x80, 0x10, 0x20});
+            return;
+        case 0x71: case 0x72:  // orig3: a proxy's current instance (0x1FBEC0): its row locked (0x1FC060) / unlocked (0x1FC090)
+        {
+            void* pproxy = s_phost->PloFind(4, A(c, 0), p->ploContext);
+            if (!pproxy || !s_phost->FDerivedFrom(pproxy, 0x08)) return;
+            void* plo = s_phost->PloProxyInstance(pproxy);
+            if (!plo) return;
+            if (c.id == 0x71) s_phost->LockProxyRow(pproxy, plo);
+            else s_phost->UnlockProxyRow(pproxy, plo);
+            return;
+        }
         case 0x77:  // the actor (cid 0x32) faces an object
             if (p->plo28 && s_phost->FDerivedFrom(p->plo28, 0x32))
                 if (void* plo = PloFind(p, A(c, 0))) s_phost->FaceObject(p->plo28, plo);
@@ -844,6 +1106,56 @@ bool FCmdDone(RUN3* p, int icmd)
     const SCPTCMD3& c = *Pcmd(ps, icmd);
     switch (c.id)
     {
+    case 0x2A: case 0x2B: case 0x2D: case 0x2E: case 0x35:  // orig3 FCmdDone 42 / 43 / 45 / 46 / 53: the actor's own test
+        return !p->ploPending || s_phost->FActorCmdDone(c.id, p->ploPending);
+    case 0x6A: return !p->plo28 || s_phost->FActorCmdDone(0x6A, p->plo28);   // orig3 FCmdDone 106
+    case 0x73:  // orig3 FCmdDone 115: while the menu shows: not done; then (flag 1: the menu hidden first) done
+    {
+        if (!p->fChoice) return true;
+        int id = -1;
+        if (s_phost->ChoiceState(&id) == 1) return false;
+        if (A(c, 0) & 1)
+        {
+            s_phost->HideChoices();
+            p->fChoice = false;
+        }
+        return true;
+    }
+    case 0x1C: return !s_phost->FNoticeBusy();  // orig3 FCmdDone 28
+    case 0x58: case 0x5B: return F(A(c, 0)) <= TDirectorStream3();  // orig3 FCmdDone 88 / 91: the song's time reached
+    case 0x5D: case 0x5E:  // orig3 FCmdDone 93 / 94: no actor, or its +0x1520 == 8 (0x5D) / != 8 (0x5E)
+    {
+        if (!p->ploPending) return true;
+        const int st = s_phost->ActorState36(p->ploPending);
+        if (st < 0) return true;
+        return c.id == 0x5D ? st == 8 : st != 8;
+    }
+    case 0x6C:  // the menu closed: a listed line chosen: remembered, the goto to its label (0x22BF08); none: done
+    {
+        if (!p->fChoice) return true;
+        int id = -1;
+        if (s_phost->ChoiceState(&id) == 1) return false;
+        if (id != -1)
+        {
+            int i = 0;
+            while (i < A(c, 1) && A(c, std::size_t(2 + 2 * i)) != id) ++i;
+            if (i == A(c, 1)) return false;
+            p->fChoice = false;
+            s_phost->HideChoices();
+            p->achosen.push_back({id, icmd});
+            std::vector<int> aicmd;
+            const int ilabel = ILabel(ps, p->icmdRoot, p->icmdRoot, A(c, std::size_t(3 + 2 * i)), aicmd);
+            if (ilabel >= 0)
+            {
+                p->aicmdStack = aicmd;
+                p->icmdCur = ilabel;
+            }
+            return true;
+        }
+        p->fChoice = false;
+        s_phost->HideChoices();
+        return true;
+    }
     case 0x0C:  // until none of the named runners is left
         for (int i = 0; i < A(c, 0); ++i)
             if (PrunFind(ps, A(c, 1 + std::size_t(i)), p)) return false;
@@ -922,7 +1234,7 @@ bool FCmdDone(RUN3* p, int icmd)
             s_phost->GetLoXf(pa, mat, t);
             const float dx = t[0] - pos[0], dy = t[1] - pos[1];
             fDone = std::sqrt(dx * dx + dy * dy) < F(A(c, 2));
-            s_phost->SetActorWatchTarget(pa, pos);
+            s_phost->SetActorWatchTarget(pa, pos, std::fabs(F(A(c, 1))), A(c, 4) != 0);   // (0x22A7F8 case 48: the speed |+4|, R1 (+0x18 | 8) with +0x14)
         }
         if (fDone)
         {
@@ -932,6 +1244,15 @@ bool FCmdDone(RUN3* p, int icmd)
         return fDone;
     }
     case 0x36: return !p->ploPending || s_phost->ActorMoveState(p->ploPending) == -1;
+    case 0x17:  // (orig3 0x229438 case 23: the started script with the wait flag, until it has stopped; natively the run
+                // went on at once and its retirement stopped the script: v_ext's title card SCPT 2081 never showed)
+        // (on by default since s3-hack round 11b: the wait shifts Ep3's hack rounds (3190 [18] waits for the title script
+        // 3167, the generators' chasers then meet the ship in hack 3's bar room: the route clears them at the door first).
+        // SLY3_SCPT17WAIT=0 (debug): the old run-on, v_ext's title card 2081 stopped at once; a run that ends right after
+        // the 0x17 still waits for the script there: see the run's end below.)
+        if (!FScpt17Wait3() && !p->f17WaitNow) return true;
+        if (p->pscptWait && !p->pscptWait->fRunning) p->pscptWait = nullptr;
+        return !p->pscptWait;
     case 0x38: case 0x39:
         if (p->ploAddRemove && s_phost->FAddRemoveDone(p->ploAddRemove, c.id == 0x38)) p->ploAddRemove = nullptr;
         return !p->ploAddRemove;
@@ -996,6 +1317,13 @@ bool FCmdDone(RUN3* p, int icmd)
     case 0x50: return !s_phost->FTitleShowing();
     case 0x52: return !s_phost->FDialogPlaying(A(c, 1));  // the first line
     case 0x5F: return !s_phost->FDialogPlaying(-1);
+    case 0x51:  // (s3-player, orig3 case 81) waits while the object (cid 0x31) is a player's character
+    {
+        if (A(c, 0) == -1) return true;
+        void* plo = PloFind(p, A(c, 0));
+        if (!plo || !s_phost->FDerivedFrom(plo, 0x31)) return true;
+        return !s_phost->FPlayerCharacter(plo);
+    }
     default: return true;
     }
 }
@@ -1018,14 +1346,26 @@ void FinishRunPending(RUN3* p)
 void RunRun(RUN3* p)
 {
     DEPTH depth;
+    int cstep = 0;
     if (p->icmdCur < 0 && p->tWake == c_tNever)
     {
         p->icmdCur = p->icmdRoot;
         goto exec;
     }
-    for (;;)
+    // (PC safety net, not in the original: a loop whose waits all end at once, e.g. an unported command's, spins
+    // inside one frame and froze the game (m_ext's SCPT 4321 before the ASEGs were ported); after this many commands
+    // in one update the run yields to the next frame, noted once per script)
+    for (;; ++cstep)
     {
         if (p->icmdCur < 0) break;
+        if (cstep >= 20000)
+        {
+            static std::set<int> s_setoid;
+            if (s_setoid.insert(p->pscpt->oid).second)
+                std::fprintf(stderr, "sly3: SCPT %d spins in one frame at command [%d] %02X (yielded)\n", p->pscpt->oid,
+                             p->icmdCur, Pcmd(p->pscpt, p->icmdCur)->id);
+            return;
+        }
         if (Pcmd(p->pscpt, p->icmdCur)->fFlag)
         {
             s_phost->Testing(*p, p->icmdCur);
@@ -1039,7 +1379,22 @@ void RunRun(RUN3* p)
         if (FRunRetired(p)) return;
     }
     FinishRunPending(p);
-    if (p->icmdCur < 0 && !FRunWaiting(p)) RetireRun(p);
+    // (with 0x17's wait off (SLY3_SCPT17WAIT=0, FScpt17Wait3): a run whose last command was that 0x17 goes back to it at its end and
+    // waits there for the script, as the original's run does before it ends with nothing more to do; retired meanwhile
+    // by another command, it stops the script (0x22B6E0). v_ext's safe house exit 44600 [1] starts the walk out 2061 and
+    // ended: 2061 was stopped at once and Sly stayed at the table. A run that went on past the 0x17 keeps the old way
+    // (the script stopped at the run's end, as the survey's recorded routes expect).)
+    if (p->icmdCur < 0 && !FRunWaiting(p))
+    {
+        if (!FScpt17Wait3() && p->f17Last && !p->f17WaitNow && p->icmd17 >= 0 && p->pscptWait && p->pscptWait->fRunning &&
+            !std::getenv("SLY3_RUNENDSTOPS17"))
+        {
+            p->f17WaitNow = true;
+            p->icmdCur = p->icmd17;
+            return;
+        }
+        RetireRun(p);
+    }
 }
 }  // namespace
 
@@ -1052,7 +1407,12 @@ void SCPTHOST3::Unported(RUN3&, const SCPTCMD3& cmd)
 
 void SetScptHost3(SCPTHOST3* phost) { s_phost = phost ? phost : &s_hostDefault; }
 
-void SetScptAlarm3(SCPT3* ps, int n, bool fSet) { (fSet ? EnsureAlarm : RemoveAlarm)(ps, n); }
+void SetScptAlarm3(SCPT3* ps, int n, bool fSet)
+{
+    if (static const bool s_f = std::getenv("SLY3_ALARMPRINT") != nullptr; s_f)   // (debug: the scripts' alarms)
+        std::printf("scpt3: alarm %d %s\n", n, fSet ? "set" : "cleared");
+    (fSet ? EnsureAlarm : RemoveAlarm)(ps, n);
+}
 bool FScptAlarm3(const SCPT3* ps, int n) { return FHasAlarm(ps, n); }
 SCPTHOST3& ScptHost3() { return *s_phost; }
 
@@ -1092,7 +1452,10 @@ void StopScpt3(SCPT3* ps)
     ps->tElapsed = 0;
     ps->fRunning = false;
     while (!ps->arun.empty()) RetireRun(ps->arun.front().get());
-    // (not ported: 0x2263B0(scpt, 1.0), 0x2262B0(scpt))
+    // 0x2263B0(scpt, 1.0): the clock factor 6 back to 1 (and the real-clock flag off): a script that stopped the game
+    // gives it back when it ends, e.g. the hold-up's card script 7333 whose last ramp of Sly's copy leaves 0 (s3-ui
+    // round 4: natively the game stayed stopped after the card); (not ported: 0x2262B0(scpt): +0x64 = 0)
+    SetScptClockFactor(ps, 1.0f);
     if (ps->fF2)
     {
         // 0x1C9118(scpt, 2)

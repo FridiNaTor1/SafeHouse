@@ -1,4 +1,5 @@
 #include "wr.h"
+#include "editrec.h"
 #include "worldglobals.h"
 #include "brx.h"
 #include "breakable.h"
@@ -204,8 +205,10 @@ void LoadOptionFromBrx(OPT& opt, LO* plo, int eopid, int grf, CBinaryInputStream
     // (option 25) is AddLo (vt slot 8)
     if (plo && (grf & 0x400) && e.pfnArray == 0x100B10) plo->fRemoveAtStart = true;
     if (plo && (grf & 0x400) && e.pfnArray == 0x100A90) AddLo(g_psw, plo);
+    const std::size_t ifieldEdit = g_peditrec && plo ? g_peditrec->afield.size() : std::size_t(-1);   // (PC: the map editor)
     if (grf & 0x401)
     {
+        if (ifieldEdit != std::size_t(-1)) g_peditrec->afield.push_back({plo, EDITFK_OptionArray, 0, eopid, e.k, pbis->m_ib});
         // c CRefs (each a value, or a list of U8 count values of one kind) handed to the EOPID's function
         for (int i = 0; i < e.c18; ++i)
         {
@@ -221,6 +224,7 @@ void LoadOptionFromBrx(OPT& opt, LO* plo, int eopid, int grf, CBinaryInputStream
             }
             else opt.aval.push_back(RefReadOption(w, pbis));
         }
+        if (ifieldEdit != std::size_t(-1)) g_peditrec->afield[ifieldEdit].ibEnd = pbis->m_ib;
         // a method the loader calls (grf 0x400: the EOPID's +0x08 thunk) with a native body (objmethod.h)
         if (plo && (grf & 0x400) && e.pfnArray != 0x100A90 && e.pfnArray != 0x100B10)
         {
@@ -280,7 +284,9 @@ void LoadOptionFromBrx(OPT& opt, LO* plo, int eopid, int grf, CBinaryInputStream
             plo->aopt.push_back(std::move(action));
         }
     }
+    if (g_peditrec && plo) g_peditrec->afield.push_back({plo, EDITFK_Option, 0, eopid, e.k, pbis->m_ib});   // (PC: the map editor, editrec.h)
     OPTVAL v = ReadOptionValue(e.k, pbis);
+    if (ifieldEdit != std::size_t(-1) && ifieldEdit < g_peditrec->afield.size()) g_peditrec->afield[ifieldEdit].ibEnd = pbis->m_ib;
     if (pchildField && e.pfnGet == 0x20A9C0 && eopid >= 235 && eopid <= 242)
     {
         // The same properties on an explicit action (353..359 / 363).
@@ -322,6 +328,51 @@ void LoadOptionFromBrx(OPT& opt, LO* plo, int eopid, int grf, CBinaryInputStream
         else if (PFNOBJSETTER pfnSet = PfnObjectSetter(eopid)) pfnSet(plo, RefFromOptionValue(v));
     }
     opt.aval.push_back(std::move(v));
+}
+
+// PC addition (the map editor, editrec.h)
+bool FEditorOptionInfo(int eopid, int& k, int& grf)
+{
+    if (eopid < 0 || eopid >= 4096) return false;
+    const EOPID e = EopidFromIndex(eopid);
+    k = e.k;
+    grf = e.grf;
+    return true;
+}
+
+bool FEditorApplyOption(LO* plo, int eopid, const void* pv, std::size_t cb, const char** pwhy)
+{
+    const char* why = nullptr;
+    int k = 0, grf = 0;
+    if (!plo || !FEditorOptionInfo(eopid, k, grf)) why = "no such option";
+    else
+    {
+        const EOPID e = EopidFromIndex(eopid);
+        grf &= 0x2580;
+        if (grf & 0x401) why = "a method or list option (applied at the load)";
+        else if (grf & 0x2000) why = "a sub-object's option (made at the load)";
+        else if (plo->Cid() == 0x73) why = "a space warp's entry (built at the load)";
+        else if (k == 22 || k == 3 || k == 4 || k == 12) why = "this kind is not applied live";
+        else if (!(grf & 0x190)) why = "read once at the load";
+        (void)e;
+    }
+    if (!why)
+    {
+        std::vector<std::uint8_t> ab(static_cast<const std::uint8_t*>(pv), static_cast<const std::uint8_t*>(pv) + cb);
+        CBinaryInputStream bis;
+        bis.OpenBuffer(std::move(ab));
+        EDITRECORDER* precSave = g_peditrec;
+        g_peditrec = nullptr;
+        OPT opt;
+        LoadOptionFromBrx(opt, plo, eopid, grf & 0x2580, &bis);
+        g_peditrec = precSave;
+        bool fReplaced = false;
+        for (OPT& o : plo->aopt)
+            if (o.eopid == eopid) { o = opt; fReplaced = true; break; }
+        if (!fReplaced) plo->aopt.push_back(std::move(opt));
+    }
+    if (pwhy) *pwhy = why;
+    return !why;
 }
 
 // orig 0x0013F810 LoadOptionsFromBrx
@@ -588,16 +639,20 @@ LO* PloCloneLo(LO* plo, SW* psw, ALO* paloParent)
     return ploNew;
 }
 
+EDITRECORDER* g_peditrec = nullptr;
+
 // orig 0x0013FB40 LoadSwObjsFromBrx
 void LoadSwObjsFromBrx(SW* psw, ALO* paloParent, CBinaryInputStream* pbis, LOSINK* psink)
 {
     LOADFN(0x13FB40);
     LOSINK sinkStack;
     sinkStack.fStack = true;
+    const std::size_t ibListEdit = pbis->m_ib;   // (PC: the map editor)
     int c = pbis->S16Read();
     if (c <= 0) return;
     do
     {
+        const std::size_t ibRecord = pbis->m_ib;   // (PC: the map editor, editrec.h)
         int16_t as[128];
         const int k = pbis->S8Read();
         if (k > 0 || k < -2)
@@ -622,11 +677,15 @@ void LoadSwObjsFromBrx(SW* psw, ALO* paloParent, CBinaryInputStream* pbis, LOSIN
                     ++g_brxstats.cmission;
                     extern std::unordered_map<int, int> g_mpoidiwrecTask;   // (debug harness: autoplay.cpp)
                     if (k > 0) g_mpoidiwrecTask[oid] = as[0];
+                    if (g_peditrec) g_peditrec->aobj.push_back({plo, cid, oid, g_peditrec->depth, ibRecord, pbis->m_ib, std::size_t(cb), 0, ibListEdit});
+                    if (g_peditrec) ++g_peditrec->depth;
                     LoadLoBody(plo, pbis);
+                    if (g_peditrec) --g_peditrec->depth;
                     if (psink) psink->Append(plo);
                 }
                 else
                 {
+                    if (g_peditrec) g_peditrec->aobj.push_back({nullptr, cid, oid, g_peditrec->depth, ibRecord, pbis->m_ib, std::size_t(cb), 0, ibListEdit});
                     pbis->Skip(cb);
                     ++g_brxstats.cskipFilter;
                 }
@@ -670,16 +729,35 @@ void LoadSwObjsFromBrx(SW* psw, ALO* paloParent, CBinaryInputStream* pbis, LOSIN
         {
             ++g_brxstats.cproxy;
             extern void LoadProxyFromBrx(SW*, ALO*, CID, OID, int, CBinaryInputStream*, LOSINK*);
+            std::size_t iobjEdit = 0;
+            if (g_peditrec)
+            {
+                iobjEdit = g_peditrec->aobj.size();
+                g_peditrec->aobj.push_back({nullptr, cid, oid, g_peditrec->depth, ibRecord, pbis->m_ib, std::size_t(cb), 0, ibListEdit});
+                ++g_peditrec->depth;
+            }
+            const std::size_t cploBefore = g_peditrec ? psw->aploAll.size() : 0;
             LoadProxyFromBrx(psw, paloParent, cid, oid, n, pbis, psinkCur);
+            if (g_peditrec)
+            {
+                --g_peditrec->depth;
+                g_peditrec->aobj[iobjEdit].ibMatrix = g_peditrec->ibProxyMatrix;
+                // (the proxy's own object, when it made one: the first made with its oid)
+                for (std::size_t i = cploBefore; i < psw->aploAll.size(); ++i)
+                    if (psw->aploAll[i]->oid == oid && psw->aploAll[i]->Cid() == cid) { g_peditrec->aobj[iobjEdit].plo = psw->aploAll[i].get(); break; }
+            }
         }
         else
         {
             const std::size_t ibStart = pbis->m_ib;
             LO* plo = PloNew(cid, psw, paloParent, oid, n);
+            if (g_peditrec) g_peditrec->aobj.push_back({plo, cid, oid, g_peditrec->depth, ibRecord, ibStart, std::size_t(cb), 0, ibListEdit});
+            if (g_peditrec) ++g_peditrec->depth;
             if (!plo->pcls->pfnLoad)
                 throw std::runtime_error("no native loader for " + StrClassName(cid) + " (orig 0x" +
                                          [&] { char a[16]; std::snprintf(a, sizeof(a), "%06X", plo->pcls->pfnLoadOrig); return std::string(a); }() + ")");
             LoadLoBody(plo, pbis);
+            if (g_peditrec) --g_peditrec->depth;
             if (pbis->m_ib - ibStart != static_cast<std::size_t>(cb) && ++g_brxstats.ccbMismatch <= 10)
                 std::fprintf(stderr, "note: %s oid %d read %zu bytes, record says %d\n", StrClassName(cid).c_str(), oid,
                              pbis->m_ib - ibStart, cb);

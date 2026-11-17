@@ -12,6 +12,11 @@
 #include "rumble.h"
 #include "game/sly3.h"
 #include "menu.h"
+#include "challenge3.h"
+#include "remappage.h"
+#include "audio.h"
+#include "../platform/sly3_settings.h"
+#include "../platform/audio_devices.h"
 #include "epmenu3.h"
 #include "card3.h"
 #include "pcinput.h"
@@ -40,8 +45,11 @@
 #include "../platform/controller_family.h"
 #include "../platform/platform.h"
 #include "../platform/system_settings.h"
+#include "modsave.h"
 
 #include <GLFW/glfw3.h>
+#include "../platform/monitor_select_glfw.h"
+#include "vr.h"
 
 #include <algorithm>
 #include <array>
@@ -127,7 +135,11 @@ enum NATIVEID : int
     // binocucom / turrets (NID_InvertX / NID_InvertY: the mouse's camera)
     NID_Pc2 = NID_Base + 0x100,
     NID_LongShadows = NID_Pc2, NID_InvertPage, NID_PadInvertX, NID_PadInvertY, NID_BinocInvertX, NID_BinocInvertY,
-    NID_TurretInvertX, NID_TurretInvertY,
+    NID_TurretInvertX, NID_TurretInvertY, NID_AutoCameraRotation,
+    NID_RemapPage,   // Remap Controls...: the Remap page (remappage.h)
+    NID_AudioPage, NID_AudioOutput, NID_AudioInput, NID_AudioHeadsetOutput,   // Audio Devices... (audio.h)
+    // (settings v22, display.h monitor; platform/monitor_select.h) Monitor: after the window mode (desktop only)
+    NID_Monitor,
 };
 constexpr uint32_t PFN_NativeDisplay = 0xFFFF0001;   // (a native select function)
 constexpr uint32_t PFN_NativeExit = 0xFFFF0002;
@@ -137,7 +149,9 @@ constexpr uint32_t PFN_NativeControlsPage = 0xFFFF0005;
 constexpr uint32_t PFN_NativeKeyboardPage = 0xFFFF0006;
 constexpr uint32_t PFN_NativeKey = 0xFFFF0007;           // (a key row: the next key pressed binds)
 constexpr uint32_t PFN_NativeInvertPage = 0xFFFF0009;    // (Invert Controls...)
-constexpr uint32_t VA_NativeInvertPage = 0xFFFF0109;     // (the invert page's identity: its rows show the controller's icons)
+constexpr uint32_t VA_NativeInvertPage = 0xFFFF0109;
+constexpr uint32_t PFN_RemapPage = 0xFFFF0014;           // (the Remap page over the menu)
+constexpr uint32_t PFN_NativeAudioPage = 0xFFFF0022, PFN_NativeAudio = 0xFFFF0023;   // (Audio Devices: its page, its rows)     // (the invert page's identity: its rows show the controller's icons)
 
 struct MENUENT
 {
@@ -309,12 +323,12 @@ void SetMenuState(int st)
         case m3::TX_MUSIC:
             SelectScreenObjPart(plo, m3::PART_MUSIC);
             SelectScreenObjPart(plo, m3::PART_FRACTION);
-            SetScreenObjFraction(plo, m3::PART_FRACTION, 1.0f - GRef(RefSetting("uMusicVolume")));
+            SetScreenObjFraction(plo, m3::PART_FRACTION, g_saveopts.fStore ? g_saveopts.gMusic : 1.0f - GRef(RefSetting("uMusicVolume")));
             break;
         case m3::TX_EFFECTS:
             SelectScreenObjPart(plo, m3::PART_EFFECTS);
             SelectScreenObjPart(plo, m3::PART_FRACTION);
-            SetScreenObjFraction(plo, m3::PART_FRACTION, 1.0f - GRef(RefSetting("uEffectsVolume")));
+            SetScreenObjFraction(plo, m3::PART_FRACTION, g_saveopts.fStore ? g_saveopts.gEffects : 1.0f - GRef(RefSetting("uEffectsVolume")));
             break;
         case m3::TX_CENTER: SelectScreenObjPart(plo, m3::PART_CENTER); break;
         default: break;
@@ -420,6 +434,63 @@ void StartSlider()
 }
 // ------------------------------------------------------------ the PC options (Sly 2's port's, unchanged)
 // (the port's own options: their text in the game's language, porttext.h; English on the USA disc)
+std::string StrAudioDevice(const std::string& name, bool fInput, PTX ptxDefault, PTX ptxLabel)
+{
+    const std::string n = cane::audio::cleanName(name);
+    if (n.empty()) return StrPort(ptxDefault);
+    std::string shown = n;
+    // (the row on one line: the label and the name within about 36 letters, the page's width at its font size)
+    const size_t cmax = std::max<size_t>(14, 36 - std::min<size_t>(22, StrPort(ptxLabel).size() + 2));
+    if (shown.size() > cmax)
+    {
+        size_t cut = cmax - 3;
+        while (cut > 0 && (static_cast<unsigned char>(shown[cut]) & 0xC0) == 0x80) --cut;   // (not inside a UTF-8 letter)
+        shown = shown.substr(0, cut) + "...";
+    }
+    const cane::audio::DeviceList list = ListAudioDevices();
+    if (cane::audio::findDevice(fInput ? list.inputs : list.outputs, n) >= 0) return StrToGameText(shown);
+    char ach[256];
+    std::snprintf(ach, sizeof(ach), StrPort(PTX_NotConnected).c_str(), StrToGameText(shown).c_str());
+    return ach;
+}
+
+// (display.h monitor) the Monitor row's value: Primary, the monitor (its name, a number for a second of the same name, its
+// resolution), "(not connected)" for a chosen one that is unplugged; shortened to fit the page as the audio devices are
+std::string StrMonitorChoice()
+{
+    namespace mo = cane::monitor;
+    if (g_display.monitor.empty()) return StrPort(PTX_Primary);
+    const mo::Connected c = mo::connected();
+    const int i = mo::find(c.list, g_display.monitor);
+    const std::string name = i >= 0 ? mo::shortLabel(c.list, i) : mo::storedName(g_display.monitor);
+    // (the row on one line: about 25 letters with its label at the selected row's font size; the resolution only when
+    // it fits; a missing monitor's name only when a few of its letters fit)
+    const std::string fmtMissing = StrPort(PTX_NotConnected);
+    const size_t cRoom = 25 - std::min<size_t>(14, StrPort(PTX_Monitor).size() + 2);
+    const size_t cSuffix = i >= 0 ? 0 : fmtMissing.size() - 2;
+    auto shorten = [](const std::string& s, size_t cmax) {
+        if (s.size() <= cmax) return s;
+        size_t cut = cmax > 3 ? cmax - 3 : 0;
+        while (cut > 0 && (static_cast<unsigned char>(s[cut]) & 0xC0) == 0x80) --cut;   // (not inside a UTF-8 letter)
+        while (cut > 0 && s[cut - 1] == ' ') --cut;
+        return s.substr(0, cut) + "...";
+    };
+    const size_t cName = cRoom > cSuffix ? cRoom - cSuffix : 0;
+    const std::string shown = shorten(name, std::max<size_t>(7, cName));
+    if (i < 0)
+    {
+        char ach[256];
+        std::snprintf(ach, sizeof(ach), fmtMissing.c_str(), cName >= 7 ? StrToGameText(shown).c_str() : "");
+        std::string v = ach;
+        while (!v.empty() && v.front() == ' ') v.erase(v.begin());
+        return v;
+    }
+    const mo::Info& m = c.list[size_t(i)];
+    char achMode[32] = "";
+    if (m.width > 0 && m.height > 0) std::snprintf(achMode, sizeof(achMode), " (%dx%d)", m.width, m.height);
+    return StrToGameText(shown.size() + std::strlen(achMode) <= cRoom ? shown + achMode : shown);
+}
+
 std::string StrNative(int id)
 {
     char ach[96];
@@ -447,10 +518,11 @@ std::string StrNative(int id)
         static const PTX aptx[] = {PTX_Windowed, PTX_Borderless, PTX_Fullscreen};
         return StrPortValue(PTX_WindowMode, StrPort(aptx[std::clamp(int(g_display.window), 0, 2)]));
     }
+    case NID_Monitor: return StrPortValue(PTX_Monitor, StrMonitorChoice());
     case NID_Vsync: return onOff(PTX_VSync, g_display.fVsync);
     case NID_DrawDistance: return StrPortValue(PTX_DrawDistance, StrPortDecimal(g_display.drawDistance, 2) + "x");
     case NID_LongShadows: return onOff(PTX_LongShadows, g_display.fLongShadows);
-    case NID_ExitToDesktop: return StrPort(PTX_ExitToDesktop);
+    case NID_ExitToDesktop: return StrPort(FQuitToLauncher() ? PTX_QuitToLauncher : PTX_ExitToDesktop);   // (the Collection launcher)
     case NID_DisplayPage: return StrPort(PTX_DisplayOptions);
     case NID_ControlsPage: return StrPort(PTX_ControlsAndPrompts);
     case NID_PromptStyle:
@@ -475,10 +547,17 @@ std::string StrNative(int id)
     case NID_BinocInvertY: return onOff(PTX_MouseInvertBinocY, g_pcinput.fMouseInvertBinocY);
     case NID_TurretInvertX: return onOff(PTX_MouseInvertTurretX, g_pcinput.fMouseInvertTurretX);
     case NID_TurretInvertY: return onOff(PTX_MouseInvertTurretY, g_pcinput.fMouseInvertTurretY);
-    case NID_WheelZoom: return onOff(PTX_WheelZoomsBinocucom, g_pcinput.fMouseWheelZoom);
+    case NID_WheelZoom: return onOff(PTX_MouseWheelZoom, g_pcinput.fMouseWheelZoom);
     case NID_MouseMenus: return onOff(PTX_MouseInMenus, g_pcinput.fMouseMenus);
     case NID_HackMouse: return onOff(PTX_MouseAimInHacking, g_pcinput.fHackMouseAim);
     case NID_KeyboardPage: return StrPort(PTX_KeyboardMapping);
+    case NID_AutoCameraRotation: return onOff(PTX_AutoCameraRotation, g_pcinput.fAutoCameraRotation);
+    case NID_RemapPage: return StrPort(PTX_RemapPage);
+    case NID_AudioPage: return StrPort(PTX_AudioDevicesPage);
+    case NID_AudioOutput: return StrPortValue(PTX_OutputDevice, StrAudioDevice(g_saveopts.outputDevice, false, PTX_SystemDefault, PTX_OutputDevice));
+    case NID_AudioInput: return StrPortValue(PTX_InputDevice, StrAudioDevice(g_saveopts.inputDevice, true, PTX_SystemDefault, PTX_InputDevice));
+    case NID_AudioHeadsetOutput:
+        return StrPortValue(PTX_HeadsetOutputDevice, StrAudioDevice(g_saveopts.headsetOutputDevice, false, PTX_SameAsOutput, PTX_HeadsetOutputDevice));
     case NID_ResetKeys: return StrPort(PTX_ResetKeyboardMapping);
     default:
         if (id >= NID_KeyFirst && id < NID_KeyFirst + PCA_Max + 4)
@@ -535,6 +614,7 @@ void CycleControls(MENUENT& e)
     case NID_WheelZoom: o.fMouseWheelZoom = !o.fMouseWheelZoom; break;
     case NID_MouseMenus: o.fMouseMenus = !o.fMouseMenus; break;
     case NID_HackMouse: o.fHackMouseAim = !o.fHackMouseAim; break;
+    case NID_AutoCameraRotation: o.fAutoCameraRotation = !o.fAutoCameraRotation; break;
     case NID_ResetKeys:
     {
         const PCINPUTOPT d = PcInputDefaults();
@@ -605,6 +685,11 @@ void CycleNative(MENUENT& e)
         break;
     }
     case NID_Window: g_display.window = DISPWINDOW((int(g_display.window) + 1) % 3); break;
+    case NID_Monitor:
+        // (Primary, then each connected monitor; the display applied after the switch moves the window there: display.h)
+        g_display.monitor = cane::monitor::step(cane::monitor::connected().list, g_display.monitor, 1);
+        std::printf("display: monitor %s\n", g_display.monitor.empty() ? "Primary" : g_display.monitor.c_str());
+        break;
     case NID_Vsync: g_display.fVsync = !g_display.fVsync; break;
     case NID_LongShadows: g_display.fLongShadows = !g_display.fLongShadows; break;
     case NID_DrawDistance:
@@ -621,8 +706,42 @@ void CycleNative(MENUENT& e)
 }
 
 // orig3 0x001D3DF0 (an option entry shows the setting's value)
+// (PC, Settings.ini: display.h SAVEOPTS) the save's option flags mirror the options: every record the game keeps or
+// writes carries them (the original, or an older build, that loads the save gets the same options). The values equal
+// to the defaults are the record's zero bytes, so a default run leaves records as the original's. (Sly 3's camera
+// options, 0x8F..0x92 per camera kind, stay in the save as in the original.)
+void SyncRecordOptions()
+{
+    if (!g_saveopts.fStore) return;
+    auto setB = [](const char* name, bool f) { if (const CRef r = RefSetting(name); r.m_tagk != TAGK_Nil && (NRef(r) != 0) != f) SetSettingB(name, f); };
+    setB("fNoVibration", !g_fControllerVibration);
+    if (const CRef r = RefSetting("nMixerMode"); r.m_tagk != TAGK_Nil && NRef(r) != g_saveopts.speakers) SetSettingN("nMixerMode", g_saveopts.speakers);
+    auto setVolume = [](const char* name, float g) {
+        const float u = cane::settings::saveComplement(g);
+        if (const CRef r = RefSetting(name); r.m_tagk != TAGK_Nil && GRef(r) != u) SetSettingF(name, u);
+    };
+    setVolume("uMusicVolume", g_saveopts.gMusic);
+    setVolume("uEffectsVolume", g_saveopts.gEffects);
+    setB("fUseHeadset", g_saveopts.fHeadset);
+    // the Camera Options of the seven camera kinds (0x345F90)
+    for (int kind = 0; kind < 7; ++kind)
+        for (int a = 0; a < 2; ++a)
+            if (const CRef r = RefCamPref(kind, a != 0); r.m_tagk != TAGK_Nil && (NRef(r) != 0) != g_saveopts.afCamReverse[kind][a])
+                SetCamPref(kind, a != 0, g_saveopts.afCamReverse[kind][a]);
+}
+
 void InitOptionText(MENUENT& e)
 {
+    if (g_saveopts.fStore)
+        switch (e.id)
+        {
+        case 0x5C: case 0x5D: case 0x5E: e.id = g_saveopts.speakers == 1 ? 0x5C : g_saveopts.speakers == 2 ? 0x5D : 0x5E; return;
+        case 0x5F: case 0x60: e.id = g_saveopts.fHeadset ? 0x5F : 0x60; return;
+        case 0x58: case 0x59: e.id = g_fControllerVibration ? 0x58 : 0x59; return;
+        case 0x8F: case 0x90: e.id = g_saveopts.afCamReverse[std::clamp(s_kindCamera, 0, 7)][0] ? 0x90 : 0x8F; return;
+        case 0x91: case 0x92: e.id = g_saveopts.afCamReverse[std::clamp(s_kindCamera, 0, 7)][1] ? 0x92 : 0x91; return;
+        default: break;
+        }
     switch (e.id)
     {
     case 0x5C: case 0x5D: case 0x5E:   // Speakers (nMixerMode 1 mono, 2 stereo, else surround)
@@ -656,6 +775,24 @@ void ApplyOption(const MENUENT& e)
     case 0x91: case 0x92: SetCamPref(s_kindCamera, true, e.id == 0x92); break;
     default: break;
     }
+    if (g_saveopts.fStore)
+    {
+        // (PC) the option into Settings.ini (display.h SAVEOPTS), which the launcher shows too
+        bool fSave = true;
+        switch (e.id)
+        {
+        case 0x5E: g_saveopts.speakers = cane::settings::Speakers_Surround; break;
+        case 0x5D: g_saveopts.speakers = cane::settings::Speakers_Stereo; break;
+        case 0x5C: g_saveopts.speakers = cane::settings::Speakers_Mono; break;
+        case 0x58: case 0x59: g_fControllerVibration = e.id == 0x58; break;
+        case 0x5F: case 0x60: g_saveopts.fHeadset = e.id == 0x5F; break;
+        case 0x8F: case 0x90: g_saveopts.afCamReverse[std::clamp(s_kindCamera, 0, 7)][0] = e.id == 0x90; break;
+        case 0x91: case 0x92: g_saveopts.afCamReverse[std::clamp(s_kindCamera, 0, 7)][1] = e.id == 0x92; break;
+        case m3::TX_MUSIC: case m3::TX_EFFECTS: break;
+        default: fSave = false; break;
+        }
+        if (fSave) FSaveDisplaySettings(cane::userDirectory());
+    }
     ApplyGameSettings(g_gamesave);   // orig3 0x21D360(the record): the settings take effect
 }
 
@@ -677,6 +814,17 @@ void UpdateSlider(PAGE& pg, MENUENT& e)
     const int n = NStepLeftRight();
     if (n == 0) return;
     if (e.id != m3::TX_MUSIC && e.id != m3::TX_EFFECTS) return;
+    if (g_saveopts.fStore)
+    {
+        // (PC) Settings.ini's music / effects volume (the launcher's sliders: the user's factor, sound.cpp), the record's
+        // mirror kept (SyncRecordOptions); saved when the slider is let go (ApplyOption)
+        float& gs = e.id == m3::TX_MUSIC ? g_saveopts.gMusic : g_saveopts.gEffects;
+        gs = std::clamp(std::round((gs + float(n) * 0.1f) * 100.0f) / 100.0f, 0.0f, 1.0f);
+        ApplySoundOptions();
+        SyncRecordOptions();
+        SetScreenObjFraction(pg.plo, m3::PART_FRACTION, gs);
+        return;
+    }
     // the channel's volume (music channel 1, effects 0 and 3); the record keeps its complement
     const char* name = e.id == m3::TX_MUSIC ? "uMusicVolume" : "uEffectsVolume";
     const float g = std::clamp(1.0f - GRef(RefSetting(name)) + float(n) * 0.1f, 0.0f, 1.0f);
@@ -787,25 +935,34 @@ std::vector<MENUENT> AentPause()
         bool f = true;
         switch (e.id)
         {
-        // (0x4BC244 +0x50, the two-player game's mode: none natively, -1)
-        case m3::TX_EXIT_2P: f = false; break;                                         // two player only
-        case m3::TX_EXIT_MENU: f = iep != sly3::EP_Intro; break;                       // not in the prologue
-        case m3::TX_ABANDON: f = fJob && iep != sly3::EP_Intro && iep != sly3::EP_Isle && wid != 24 && wid != 25; break;
+        // (0x4BC244 +0x50: the mode of the game the chooser's lists started (challenge3.h): 2 two players; -1 none)
+        case m3::TX_EXIT_2P: f = NChallengeMode3() == 2; break;                        // two player only
+        case m3::TX_EXIT_MENU:                                                         // not in the prologue / 2P
+            f = NChallengeMode3() == 2 ? false : NChallengeMode3() >= 0 ? true : iep != sly3::EP_Intro;
+            break;
+        case m3::TX_ABANDON:
+            f = NChallengeMode3() == -1 && fJob && iep != sly3::EP_Intro && iep != sly3::EP_Isle && wid != 24 && wid != 25;
+            break;
         case m3::TX_OTHERJOBS: f = false; break;                                       // (the original never offers it)
-        // TODO(sly3): Job Help (the job help widget 0x46FAA0's object, not in the dvd menu) and the 3-D resets
-        // (0x4794CC, 0x18AE00, GAME +0x14EC bit 1): their pages are not ported yet, so they are not offered
-        case m3::TX_JOBHELP: f = false; break;
+        // Job Help (0x7A): the job help widget 0x46FAA0's screen object 1389 (D_0046FAD4) outside dvd_menu (0x25E150)
+        // The 3-D resets (0x4794CC, 0x18AE00, GAME +0x14EC bit 1; 0x1D54A0 writes the 3-D answer 0x36DBA4) are never
+        // offered on the PC: no 3-D (anaglyph) mode (s3-3d, gauge3.h g_n3dChoice3)
+        case m3::TX_JOBHELP: f = FJobHelpAvailable3(); break;
         case m3::TX_CTRLHELP: f = IdControlHelpText(PloMenuPlayer(), 12) != -1; break;   // (the player's slot 91(12))
         case m3::TX_RESET3D: case m3::TX_RESET2D: f = false; break;
         default: break;
         }
         if (f) a.push_back(e);
     }
-    // (PC) Exit to Desktop, as Sly 2's port's pause menu
+    // (PC) Exit to Desktop, as Sly 2's port's pause menu. The wheel shows the selection with two entries above it and
+    // two below (the second below half behind the logo, as in the original: reference v_ext / m_ext pauses): the PC's
+    // entry goes fourth (after the original's first three, before its last two), so the wheel opens as the original's
+    // (e.g. v_ext: Options... / Job Help above Keep Playing, Quit Game / Exit to Game Menu below) and the extra entry
+    // scrolls in like the others
     MENUENT ex;
     ex.id = NID_ExitToDesktop;
     ex.pfnSelect = PFN_NativeExit;
-    a.push_back(ex);
+    a.insert(a.begin() + std::min<std::ptrdiff_t>(3, std::ptrdiff_t(a.size())), ex);
     return a;
 }
 
@@ -822,6 +979,13 @@ std::vector<MENUENT> AentDisplayOptions()
         e.id = id <= NID_DrawDistance ? id : NID_LongShadows;
         e.pfnSelect = PFN_NativeDisplay;
         a.push_back(e);
+#if !defined(__SWITCH__) && !defined(__ANDROID__) && !defined(CANE_IOS)
+        if (id == NID_Window && !vr::FActive())   // (then Monitor, settings v22: a desktop's monitors; not in a headset)
+        {
+            e.id = NID_Monitor;
+            a.push_back(e);
+        }
+#endif
     }
     return a;
 }
@@ -846,13 +1010,52 @@ std::vector<MENUENT> AentOptions()
     e.id = NID_ControlsPage;
     e.pfnSelect = PFN_NativeControlsPage;
     a.push_back(e);
+    // Audio Devices... (desktop builds, with Settings.ini; not on the Switch)
+    if (FAudioDeviceChoiceShown() && g_saveopts.fStore)
+    {
+        e.id = NID_AudioPage;
+        e.pfnSelect = PFN_NativeAudioPage;
+        a.push_back(e);
+    }
     return a;
 }
+std::vector<MENUENT> AentAudio()
+{
+    std::vector<MENUENT> a;
+    for (int id : {int(NID_AudioOutput), int(NID_AudioInput), int(NID_AudioHeadsetOutput)})
+    {
+        MENUENT e;
+        e.id = id;
+        e.pfnSelect = PFN_NativeAudio;
+        a.push_back(e);
+    }
+    return a;
+}
+void CycleAudio(const MENUENT& e)
+{
+    std::string* pname = e.id == NID_AudioOutput ? &g_saveopts.outputDevice
+                       : e.id == NID_AudioInput  ? &g_saveopts.inputDevice
+                       : e.id == NID_AudioHeadsetOutput ? &g_saveopts.headsetOutputDevice : nullptr;
+    if (!pname) return;
+    const cane::audio::DeviceList list = ListAudioDevices();
+    const std::vector<std::string> choices = cane::audio::deviceChoices(e.id == NID_AudioInput ? list.inputs : list.outputs, *pname);
+    size_t i = 0;
+    for (size_t k = 0; k < choices.size(); ++k)
+        if (choices[k] == cane::audio::cleanName(*pname)) i = k;
+    *pname = choices[(i + 1) % choices.size()];
+    ApplySoundOptions();   // (display.h: SetAudioDevices)
+    FSaveDisplaySettings(cane::userDirectory());
+}
+
 
 // (PC) the controls page and its keyboard mapping
 std::vector<MENUENT> AentControls()
 {
     std::vector<MENUENT> a;
+    MENUENT remap;   // (first: every binding on one roomy page, remappage.h)
+    remap.id = NID_RemapPage;
+    remap.pfnSelect = PFN_RemapPage;
+    a.push_back(remap);
     for (int id = NID_PromptStyle; id <= NID_KeyboardPage; ++id)
     {
         if (id == NID_InvertY || id == NID_HackMouse) continue;   // (no hacking minigame mouse aim in Sly 3 yet)
@@ -861,6 +1064,13 @@ std::vector<MENUENT> AentControls()
         e.id = id == NID_InvertX ? NID_InvertPage : id;
         e.pfnSelect = id == NID_KeyboardPage ? PFN_NativeKeyboardPage : id == NID_InvertX ? PFN_NativeInvertPage : PFN_NativeControls;
         a.push_back(e);
+        if (id == NID_InstantSkip)
+        {
+            MENUENT cam;   // (the follow camera's automatic rotation, pcinput.h)
+            cam.id = NID_AutoCameraRotation;
+            cam.pfnSelect = PFN_NativeControls;
+            a.push_back(cam);
+        }
     }
     return a;
 }
@@ -961,6 +1171,11 @@ void SelectEntry(MENUENT& e)
         PushPage({}, 0, nullptr, m3::VA_ANIM_CTRLHELP);   // (no entries: any button goes back; the lines are 917..929)
         e.grf |= 2;
         break;
+    case m3::FN_JOBHELP:                                                 // Job Help (0x1D5228): the job help widget 0x46FAA0
+        if (s_psw) BroadcastTaskEvent(s_psw, m3::EV_JOBHELP, nullptr);
+        CloseMenu();
+        OpenJobHelp3();
+        break;
     case m3::FN_CAMOPT:                                                  // Camera Options… (0x1D51D8)
         ReplacePage(AentFromElf(m3::VA_CAMOPT, 2), m3::VA_CAMOPT);
         e.grf |= 2;
@@ -989,6 +1204,10 @@ void SelectEntry(MENUENT& e)
             BroadcastTaskEvent(s_psw, m3::EV_ABANDON, nullptr);
             if (s_psw->tasks.pjobCur) EndJob(s_psw, s_psw->tasks.pjobCur);
         }
+        break;
+    case m3::FN_YES_EXIT2P:                                              // orig3 0x001D5658: the two-player game ended (0x283F70)
+        EndChallenge3(s_psw);
+        e.grf |= 2;
         break;
     case m3::FN_YES_EXIT:                                                // orig3 0x001D5598: the game menu (world 0, dvd_menu)
         SetEpMenuReturn3(IepisodeMenu3());   // (back on this episode's page: epmenu3.h)
@@ -1034,6 +1253,12 @@ void SelectEntry(MENUENT& e)
         break;
     case PFN_NativeDisplay: CycleNative(e); e.grf |= 2; break;
     case PFN_NativeControls: CycleControls(e); e.grf |= 2; break;
+    case PFN_NativeAudio: CycleAudio(e); e.grf |= 2; break;
+    case PFN_NativeAudioPage: ReplacePage(AentAudio(), 0); e.grf |= 2; break;
+    case PFN_RemapPage:
+        OpenRemapPage();
+        e.grf |= 2;
+        break;
     // (PC menus) the native pages swap in place of the current one, as Options... does
     case PFN_NativeControlsPage: ReplacePage(AentControls(), 0); e.grf |= 2; break;
     case PFN_NativeKeyboardPage: ReplacePage(AentKeyboard(), 0); e.grf |= 2; break;
@@ -1073,6 +1298,7 @@ void EraseTarget()
         SAVESLOT& sl = g_aslot[s_islotTarget];
         std::error_code ec;
         std::filesystem::remove(cane::path(sl.path), ec);
+        RemoveModSave(sl.path);   // (mod packages' custom tasks, modsave.h)
         sl.save = GAMESAVE{};
         sl.fFile = false;
         sl.tWrite = 0;
@@ -1088,6 +1314,7 @@ void EraseTarget()
         ValidateGameSave();
         sl.save = g_gamesave;
         g_gamesave = saved;
+        RemoveModSave(sl.path);   // (mod packages' custom tasks, modsave.h)
         if (FWriteGameSaveBlock(sl.path, sl.save, err))
         {
             std::error_code ec;
@@ -1167,6 +1394,10 @@ void InitMenu(SW* psw)
 int g_ncardMode = 0;
 
 bool FMenuShown() { return s_menu.fShown || FCardMessageShown3(); }
+int NMenuState() { return s_menu.state; }
+void SyncOptionsToRecord() { SyncRecordOptions(); }
+// (advanced input mapping's prompts in the menu's wheel: Sly 3's menu has no action rows; the Remap page shows them)
+bool FMenuActionPrompt(int, int&, bool&) { return false; }
 bool FMenuActive() { return s_menu.fShown; }
 bool FCardMessageActive() { return FCardMessageShown3(); }
 
@@ -1193,7 +1424,7 @@ void OpenDataAccessMenu(SW* psw)
 void HudAutoSaveFrontEnd() { HudAutoSave(true); }
 
 // (the European build's language menu: the Sly 3 USA disc has one language)
-void OpenLanguageMenu(SW* psw) { (void)psw; }
+void OpenLanguageMenu(SW* psw, bool) { (void)psw; }
 
 bool FCardSettled() { return FCardSettled3(); }
 
@@ -1202,9 +1433,17 @@ void UpdateMenu(SW* psw)
 {
     s_psw = psw;
     if (FCardMessageShown3()) UpdateMenuCard3(IdCardMessage3(), DtCardMessageShown3());
-    if (!s_menu.fShown || FCardMessageShown3()) { s_ikeyCapture = -1; return; }
+    if (!s_menu.fShown || FCardMessageShown3()) { s_ikeyCapture = -1; CloseRemapPage(); return; }
     PAGE* pe = PpageCur();
     if (!pe) return;
+    // (tests) SLY2N_REMAPPAGE=1: the Remap page opens with the menu
+    if (static bool s_fTestRemap = std::getenv("SLY2N_REMAPPAGE") != nullptr; s_fTestRemap && s_menu.state == 7)
+    {
+        s_fTestRemap = false;
+        OpenRemapPage();
+    }
+    // the Remap page over the menu takes the input while it is open
+    if (FRemapPageOpen()) { UpdateRemapPage(); return; }
     // (the keyboard mapping) a row waits for a key: the menu takes no input meanwhile
     if (s_ikeyCapture >= 0)
     {
@@ -1367,7 +1606,7 @@ bool FStrMenuScript3(int id, std::string* pstr)
     // the episode's name (0x222410) and the game's percent (0x25E6D0) of a record
     auto strStatus = [&](const GAMESAVE& gs, int iep) {
         static const int s_aid[9] = {0xAA, 0xA3, 0xAB, 0xA4, 0xA5, 0xA6, 0xA7, 0xA8, 0xA9};
-        std::snprintf(ach, sizeof(ach), "%d%%", NGamePercent(gs));
+        std::snprintf(ach, sizeof(ach), "%d%%", NGamePercent3(gs));
         return (iep >= 0 && iep < 9 ? text(s_aid[iep]) : std::string()) + " : " + ach;
     };
     if (id >= 815 && id <= 824)
@@ -1446,6 +1685,19 @@ void ApplyGameSettings(const GAMESAVE& gs)
     const CRef rMusic = RefSetting("uMusicVolume");
     const CRef rEffects = RefSetting("uEffectsVolume");
     g_gamesave = saved;
+    if (g_saveopts.fStore)
+    {
+        // (PC) the options are Settings.ini's (display.h SAVEOPTS), not a record's: the current record mirrors them
+        SyncOptionsToRecord();
+        SetSoundPlaybackMode(g_saveopts.speakers);
+        ApplySoundOptions();
+        g_sound.fEffect = g_saveopts.fHeadset ? 1 : 0;   // (orig3 0x475000: the headset option)
+        return;
+    }
+    // the headset (flags "fUseHeadset": sound.cpp UpdateMicNoise, spiop's headset tracks)
+    if (const CRef r = [&] { GAMESAVE s0 = g_gamesave; g_gamesave = gs; CRef rr = RefSetting("fUseHeadset"); g_gamesave = s0; return rr; }();
+        r.m_tagk != TAGK_Nil)
+        g_sound.fEffect = NRef(r);
     if (rMix.m_tagk != TAGK_Nil) SetSoundPlaybackMode(NRef(rMix));
     if (rMusic.m_tagk != TAGK_Nil) SetSoundChannelVolume(1, 1, 1.0f - GRef(rMusic));
     if (rEffects.m_tagk != TAGK_Nil)
@@ -1456,4 +1708,11 @@ void ApplyGameSettings(const GAMESAVE& gs)
 }
 
 // (the camera code) the Camera Options… page's setting of a camera kind: Left/Right (fVertical false) or Up/Down reversed
-bool FCamReverse3(int kind, bool fVertical) { return NRef(RefCamPref(kind, fVertical)) != 0; }
+bool FCamReverse3(int kind, bool fVertical)
+{
+    if (g_saveopts.fStore && kind >= 0 && kind < 8) return g_saveopts.afCamReverse[kind][fVertical ? 1 : 0];   // (PC: Settings.ini)
+    return NRef(RefCamPref(kind, fVertical)) != 0;
+}
+
+// (menu.h) the current episode as the pause menu sees it (orig3 0x4798A0, else the world's 0x25E160)
+int IepisodeMenuCur3() { return IepisodeMenu3(); }

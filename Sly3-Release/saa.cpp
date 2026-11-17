@@ -5,16 +5,21 @@
 // the decomp's inits (0x1EDD60) and Sly1-Release's updates.
 
 #include "shd.h"
+#include "so.h"
+#include "worldaccess.h"
+
+#include <glm/glm.hpp>
 
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <cstdio>
 #include <cstring>
 
 namespace
 {
 float F(const SAA* p, int ib) { float f; std::memcpy(&f, p->ab + ib, 4); return f; }
-// orig: 0x0011D448 GRandInRange
+// orig: 0x0011D448 GRandInRange (orig3: 0x11E940, the same code in Sly 3)
 float GRandInRange(float lo, float hi) { return lo + (hi - lo) * (float(std::rand()) / float(RAND_MAX)); }
 
 // orig: 0x001EDA68 SetSaiIframe (clamped to the frame count)
@@ -98,6 +103,17 @@ void InitSaa(SAA* p)
     case SAAK2_Circler:                                  // orig: 0x001EE688 InitCircler (speed, radius, centre)
         for (int i = 0; i < 4; ++i) p->aflt[i] = F(p, 0xC + 4 * i);
         break;
+    case SAAK3_Follow:
+    {
+        // orig3: 0x237F10 (the record's two axes +0xC / +0x18, the third their cross product; the inverse kept at +0x60:
+        // aflt[0..8], column-major: the owner's place in the axes' units)
+        const glm::vec3 a(F(p, 0xC), F(p, 0x10), F(p, 0x14)), b(F(p, 0x18), F(p, 0x1C), F(p, 0x20));
+        const glm::mat3 m(a, b, glm::cross(a, b));
+        const glm::mat3 inv = std::fabs(glm::determinant(m)) > 0.0f ? glm::inverse(m) : glm::mat3(0.0f);
+        for (int c = 0; c < 3; ++c)
+            for (int r = 0; r < 3; ++r) p->aflt[3 * c + r] = inv[c][r];
+        break;
+    }
     default:
         break;
     }
@@ -181,15 +197,46 @@ void UpdateSaa(SAA* p, float t, float dt)
     }
     case SAAK2_Scroller:  // orig: 0x001EE4E0 UpdateScroller
     {
-        const float u = float(p->du) / 4096.0f + p->aflt[0] * p->aflt[4] * dt;  // (x the master speeds: audit R1)
-        const float v = float(p->dv) / 4096.0f + p->aflt[1] * p->aflt[5] * dt;
-        SetDuDv(p, p->aflt[2] != 0 ? std::fmod(u, p->aflt[2]) : u, p->aflt[3] != 0 ? std::fmod(v, p->aflt[3]) : v);
+        // orig3: 0x237CA0: the offsets kept as floats (+0x2C / +0x30: aflt[6] / [7]), each advanced by speed x the
+        // master speed x dt and wrapped by its period (GModPositive 0x11EDB8), then quantized (0x237298). Sly 2 re-read
+        // the quantized 1/4096 offset each frame: a slow scroll's step rounded to 0 or 1/4096 every frame (stuck, or
+        // much faster than authored).
+        float u = p->aflt[6] + p->aflt[0] * p->aflt[4] * dt;
+        float v = p->aflt[7] + p->aflt[1] * p->aflt[5] * dt;
+        auto wrap = [](float g, float m) {
+            if (m == 0.0f) return g;   // (fmodf by 0: NaN)
+            float r = std::fmod(g, m);
+            if (r < 0.0f) r += m;
+            return r;
+        };
+        u = wrap(u, p->aflt[2]);
+        v = wrap(v, p->aflt[3]);
+        p->aflt[6] = u;
+        p->aflt[7] = v;
+        SetDuDv(p, u, v);
         break;
     }
     case SAAK2_Circler:  // orig: 0x001EE6D8 UpdateCircler
     {
         const float a = t * p->aflt[0];
         SetDuDv(p, std::sin(a) * p->aflt[1] + p->aflt[2], std::cos(a) * p->aflt[1] + p->aflt[3]);
+        break;
+    }
+    case SAAK3_Follow:
+    {
+        // orig3: 0x237FA8 (the owner's place (vt slot 36's matrix) in the axes, x / y wrapped to 0..1 (0x11EDB8) as the
+        // offsets (0x237298)): m_ext's sea 31490, moved with the camera in steps of its grid, keeps its texture still in the
+        // world (natively it jumped by a step's worth whenever the sea moved)
+        ALO* palo = p->paloOwner;
+        if (!palo) break;
+        const XF* pxf = PxfObj(palo);
+        const glm::vec3 pos(pxf ? pxf->matWorld[3] : MatWorldOfAlo(palo)[3]);
+        glm::mat3 inv;
+        for (int c = 0; c < 3; ++c)
+            for (int r = 0; r < 3; ++r) inv[c][r] = p->aflt[3 * c + r];
+        const glm::vec3 l = inv * pos;
+        auto wrap = [](float g) { float r = std::fmod(g, 1.0f); return r < 0.0f ? r + 1.0f : r; };
+        SetDuDv(p, wrap(l.x), wrap(l.y));
         break;
     }
     default:
@@ -211,7 +258,9 @@ void SetScrollerMasterSpeeds(SAA* p, float su, float sv)
 // orig: 0x001EDAD8 (the offsets set at once, in 1/4096)
 void SetSaaOffsets(SAA* p, float du, float dv)
 {
-    if (p) SetDuDv(p, du, dv);
+    if (!p) return;
+    if (p->cid == SAAK2_Scroller) { p->aflt[6] = du; p->aflt[7] = dv; }   // (orig3 0x237298 stores the floats)
+    SetDuDv(p, du, dv);
 }
 
 void SetSaaEyesClosed(SAA* p, float g, float t)
@@ -229,6 +278,14 @@ void SetSaaEyesClosed(SAA* p, float g, float t)
 
 void UpdateShaderAnimations(float t, float dt)
 {
+    // (debug: SLY3_SAAPRINT=1: every shader animation once: class, oid, frames, its description's floats)
+    if (static bool s_fPrinted = false; !s_fPrinted && std::getenv("SLY3_SAAPRINT"))
+    {
+        s_fPrinted = true;
+        for (auto& psaa : g_shds.asaa)
+            std::printf("saa cid 0x%X oid %d frames %d grf 0x%X floats %g %g %g %g\n", psaa->cid, psaa->oid, psaa->cframe, psaa->grf, F(psaa.get(), 0xC),
+                        F(psaa.get(), 0x10), F(psaa.get(), 0x14), F(psaa.get(), 0x18));
+    }
     for (auto& psaa : g_shds.asaa)
     {
         if (psaa->tUpdated == t) continue;   // FUpdatableSaa 0x1EDA20

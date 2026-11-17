@@ -10,6 +10,10 @@ every character it prints) and the system-language detection (LANG / LC_* / LANG
   test-launcher-l10n.py [LAUNCHER]       run the checks (the binary ones only with LAUNCHER)
   test-launcher-l10n.py --write-en       rewrite en.json from the sources (keeps nothing else)
   test-launcher-l10n.py --status         per language: missing and unused keys
+
+The Map Editor page (launcher/editor, desktop development builds) has its own string set, launcher/editor/lang/*.json
+(l10n.h merges it into each language): the same checks for the keys its sources use that the launcher's own set does
+not have (--write-en rewrites its en.json too). Without launcher/editor nothing of it is checked.
 """
 import json
 import os
@@ -23,6 +27,8 @@ ROOT = Path(__file__).resolve().parent.parent
 LANG = ROOT / "launcher" / "lang"
 SOURCES = [p for d in ("launcher", "launcher/ui", "launcher/collection") for p in sorted((ROOT / d).glob("*.h"))] + [
     ROOT / "launcher" / "main.cpp"]
+EDITOR_LANG = ROOT / "launcher" / "editor" / "lang"
+EDITOR_SOURCES = sorted((ROOT / "launcher" / "editor").glob("*.h"))
 FORMAT = re.compile(r"%(?:%|[-+ #0]*(?:\d+|\*)?(?:\.(?:\d+|\*))?(?:hh|h|ll|l|z|j|t|L)?[diouxXeEfFgGaAcspn])")
 
 
@@ -64,9 +70,9 @@ def strip_comments(text):
     return "".join(out)
 
 
-def extract():
+def extract(sources=None):
     keys = {}
-    for path in SOURCES:
+    for path in (SOURCES if sources is None else sources):
         text = strip_comments(path.read_text(encoding="utf-8"))
         for m in re.finditer(r"(?<![\w.>])(tr|trf|N_|trv)\(", text):
             if m.group(1) == "trv":
@@ -85,6 +91,9 @@ def extract():
             if "##" in value and not value.startswith("##"):
                 value = value[:value.index("##")]
             keys.setdefault(value, path.name)
+    if sources is not None:
+        keys.pop("", None)
+        return keys
     actions = (ROOT / "platform" / "sly2_action_bindings.h").read_text(encoding="utf-8")
     for m in re.finditer(r'X\(\w+, "[^"]*", "([^"]*)", "([^"]*)"', actions):
         keys.setdefault(m.group(1), "sly2_action_bindings.h")
@@ -105,9 +114,14 @@ def shape(s):
     return FORMAT.findall(s), s[:1].isspace(), s[-1:].isspace(), s.count("\n")
 
 
-def check_files(keys):
+def editor_keys(keys):
+    """The Map Editor page's own keys: those its sources use that the launcher's set does not have."""
+    return {k: v for k, v in extract(EDITOR_SOURCES).items() if k not in keys}
+
+
+def check_files(keys, lang=LANG):
     errors = []
-    en_meta, en = load(LANG / "en.json")
+    en_meta, en = load(lang / "en.json")
     for k in keys:
         if k not in en:
             errors.append(f"en.json: missing key used in {keys[k]}: {k!r}")
@@ -117,7 +131,7 @@ def check_files(keys):
         if en[k] != k:
             errors.append(f"en.json: text differs from its key: {k!r}")
     codes = set()
-    for path in sorted(LANG.glob("*.json")):
+    for path in sorted(lang.glob("*.json")):
         meta, strings = load(path)
         code = path.stem
         if meta.get("code") != code:
@@ -172,6 +186,7 @@ def check_binary(launcher, codes):
             ({"LANG": "nn_NO.UTF-8"}, "nb"),
             ({"LANG": "no_NO"}, "nb"),
             ({"LANG": "ja_JP.UTF-8"}, "ja"),
+            ({"LANG": "ko_KR.UTF-8"}, "ko"),
             ({"LANG": "sv_SE.UTF-8", "LC_MESSAGES": "fi_FI.UTF-8"}, "fi"),
             ({"LANG": "sv_SE.UTF-8", "LC_ALL": "da_DK.UTF-8"}, "da"),
             ({"LANG": "en_US.UTF-8", "LANGUAGE": "xx:it:fr"}, "it"),
@@ -207,11 +222,14 @@ def main():
     args = sys.argv[1:]
     keys = extract()
     if args[:1] == ["--write-en"]:
-        path = LANG / "en.json"
-        meta = load(path)[0] if path.exists() else {"code": "en", "name": "English", "english": "English", "script": "latin"}
-        path.write_text(json.dumps({"language": meta, "strings": {k: k for k in sorted(keys, key=str.casefold)}},
-                                   ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
-        print(f"en.json: {len(keys)} keys")
+        sets = [(LANG, keys)] + ([(EDITOR_LANG, editor_keys(keys))] if EDITOR_SOURCES else [])
+        for lang, ks in sets:
+            path = lang / "en.json"
+            meta = load(path)[0] if path.exists() else {"code": "en", "name": "English", "english": "English", "script": "latin"}
+            lang.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps({"language": meta, "strings": {k: k for k in sorted(ks, key=str.casefold)}},
+                                       ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
+            print(f"{path.relative_to(ROOT)}: {len(ks)} keys")
         return 0
     if args[:1] == ["--status"]:
         _, en = load(LANG / "en.json")
@@ -224,6 +242,16 @@ def main():
                 print("   missing", repr(k))
         return 0
     errors, codes = check_files(keys)
+    if EDITOR_SOURCES:
+        ekeys = editor_keys(keys)
+        if not (EDITOR_LANG / "en.json").exists():
+            errors.append("launcher/editor/lang/en.json missing (--write-en)")
+        else:
+            eerrors, ecodes = check_files(ekeys, EDITOR_LANG)
+            errors += ["launcher/editor/lang/" + e for e in eerrors]
+            if ecodes != codes:
+                errors.append(f"launcher/editor/lang has {sorted(ecodes)}, the launcher {sorted(codes)}")
+            print(f"Map Editor page: {len(ekeys)} keys of its own")
     if args:
         errors += check_binary(args[0], codes)
     for e in errors:

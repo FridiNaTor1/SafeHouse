@@ -139,7 +139,7 @@ void RemoveSwOxa(OXA* poxa)
     g_physw.aoxaOwned.erase(std::remove(g_physw.aoxaOwned.begin(), g_physw.aoxaOwned.end(), nullptr), g_physw.aoxaOwned.end());
 }
 
-// orig: 0x00133D08 func_00133D08 (the boxes overlap and the objects' overlap kinds allow it)
+// orig: 0x00133D08 func_00133D08 (the boxes overlap and the objects' overlap kinds allow it) (orig3: 0x13C658, the same C in the Sly 3 decomp)
 bool FOverlapOxa(OXA* poxa, OXA* poxaOther)
 {
     for (int i = 0; i < 3; i++)
@@ -367,7 +367,7 @@ void NotifyAloContacts(ALO* p)
 }
 NATIVEFN(0x1F4F10, NotifyAloContacts);
 
-// orig: 0x00134320 func_00134320 (RecalcSwOxfFilterForObject: the object's pairs with every other attachment retested)
+// orig: 0x00134320 func_00134320 (RecalcSwOxfFilterForObject: the object's pairs with every other attachment retested) (orig3: 0x13CD10, the same C in the Sly 3 decomp)
 void RecalcSwOxfFilterForObject(ALO* pso)
 {
     OXA* poxa = Poxa(pso);

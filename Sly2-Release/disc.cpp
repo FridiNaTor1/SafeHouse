@@ -5,6 +5,7 @@
 #include "convert.h"
 
 #include "../platform/brx_decompress.h"
+#include "../platform/mod_package.h"
 #include "../platform/platform.h"
 
 #include <algorithm>
@@ -130,6 +131,8 @@ const KNOWNDISC s_adisc[] = {
     {"Europe v1.00 (SCES-52529)", "SCES_525.29", 2626744, 0xEE0E8D27u, DISCREGION::Europe, s_amapPal100, std::size(s_amapPal100), nullptr, 0, 4, 0x2CAA08},
     {"Europe v2.01 (SCES-52529)", "SCES_525.29", 2626744, 0x61086863u, DISCREGION::Europe, s_amapPal201, std::size(s_amapPal201), nullptr, 0, 4, 0x2CAA08},
     {"Japan (SCPS-15090)", "SCPS_150.90", 2634552, 0xDA71B2AFu, DISCREGION::Japan, s_amapJapan, std::size(s_amapJapan), s_apatchJapan, std::size(s_apatchJapan), 5, 0},
+    // (the Korean build has the Japanese build's class layouts: tools/regionlayouts.py gives it the same 2146 patches)
+    {"Korea (SCKA-20044)", "SCKA_200.44", 2631992, 0xB984A000u, DISCREGION::Korea, s_amapKorea, std::size(s_amapKorea), s_apatchJapan, std::size(s_apatchJapan), 6, 0},
 };
 
 // A file of the image's root directory (ISO 9660): its sector and size.
@@ -261,16 +264,66 @@ bool CDisc::FOpenConverted(const std::string& dir, std::string& error)
             for (const auto& lang : m.at("languages")) m_aszLanguage.push_back(lang.get<std::string>());
         m_afile.clear();
         m_mpsectorWorldName.clear();
-        // the mods folder's files (relative paths as the manifest spells them, "/" separated)
+        // the mods folder's files (relative paths as the manifest spells them, "/" separated), each with its file: the
+        // packages' (platform/mod_package.h: <mods>/Packages/<id>/files/, in load order, a later one's file winning),
+        // then the loose folder's, then the command line's packages (the editor's play test)
         std::set<std::string> asetMod;
-        if (!m_dirMods.empty() && fs::is_directory(cane::path(m_dirMods)))
-            for (const auto& e : fs::recursive_directory_iterator(cane::path(m_dirMods), fs::directory_options::skip_permission_denied))
+        std::map<std::string, std::string> mpModPath;
+        m_adirModRoots.clear();
+        auto addRoot = [&](const fs::path& dirRoot) {
+            std::error_code ec;
+            if (dirRoot.empty() || !fs::is_directory(dirRoot, ec)) return;
+            m_adirModRoots.push_back(cane::utf8(dirRoot));
+            for (const auto& e : fs::recursive_directory_iterator(dirRoot, fs::directory_options::skip_permission_denied, ec))
+            {
+                if (!e.is_regular_file()) continue;
 #ifdef __SWITCH__
                 // (the Switch: no canonical paths on the SD card's file system)
-                if (e.is_regular_file()) asetMod.insert(cane::utf8(e.path().lexically_relative(cane::path(m_dirMods)).generic_u8string()));
+                const std::string rel = cane::utf8(e.path().lexically_relative(dirRoot).generic_u8string());
 #else
-                if (e.is_regular_file()) asetMod.insert(cane::utf8(fs::relative(e.path(), cane::path(m_dirMods)).generic_u8string()));
+                const std::string rel = cane::utf8(fs::relative(e.path(), dirRoot).generic_u8string());
 #endif
+                // (a package's own folder is not a mod of the installation: Packages/ in the loose folder)
+                if (rel.rfind(std::string(cane::mods::kPackagesFolder) + "/", 0) == 0) continue;
+                asetMod.insert(rel);
+                mpModPath[rel] = cane::utf8(e.path());
+            }
+        };
+        m_aidPackage.clear();
+        m_mpCustomTask.clear();
+        auto addTasks = [&](const cane::mods::Manifest& pkg) {
+            for (const cane::mods::CustomTasks& ct : cane::mods::customTasks(pkg))
+                for (int oid : ct.tasks) m_mpCustomTask[{ct.world, oid}] = pkg.id;   // (a later package's listing wins)
+        };
+        const std::string region = m.value("region", "");
+        const int filesFormat = m.value("format_version", 0);
+        if (m_fDiscoverPackages && !m_dirMods.empty())
+        {
+            const cane::mods::Resolved r = cane::mods::discover(cane::path(m_dirMods) / cane::mods::kPackagesFolder, "sly2", region, filesFormat);
+            for (const std::string& msg : r.messages) std::fprintf(stderr, "mods: package %s\n", msg.c_str());
+            for (const cane::mods::Manifest& pkg : r.packages)
+            {
+                addRoot(pkg.filesDir());
+                m_aidPackage.push_back(pkg.id);
+                addTasks(pkg);
+            }
+        }
+        if (!m_dirMods.empty()) addRoot(cane::path(m_dirMods));
+        for (const std::string& dirPkg : m_adirPackagesExtra)
+        {
+            cane::mods::Manifest pkg;
+            std::string err;
+            if (!cane::mods::readManifest(cane::path(dirPkg), pkg, err)) { std::fprintf(stderr, "mods: package %s\n", err.c_str()); continue; }
+            if (const std::string why = cane::mods::mismatch(pkg, "sly2", region, filesFormat); !why.empty())
+            {
+                std::fprintf(stderr, "mods: package %s: skipped, %s\n", pkg.id.c_str(), why.c_str());
+                continue;
+            }
+            addRoot(pkg.filesDir());
+            m_aidPackage.push_back(pkg.id);
+            addTasks(pkg);
+        }
+        for (const std::string& id : m_aidPackage) std::printf("mods: package %s\n", id.c_str());
         // Music/ and Movies/ files also match by their number: "Music/28.wav" or "Music/28 My Song.wav" replaces
         // "Music/28 Paris.wav" (the names may change between converter versions and differ between discs); a movie's
         // sound tracks too ("Movies/French/2062.wav")
@@ -353,7 +406,7 @@ bool CDisc::FOpenConverted(const std::string& dir, std::string& error)
                 }
             if (!relMod.empty())
             {
-                ent.path = cane::utf8(cane::path(m_dirMods) / cane::path(relMod));
+                ent.path = mpModPath.at(relMod);
                 ent.fMod = true;
                 ++m_cmod;
             }
@@ -372,7 +425,7 @@ bool CDisc::FOpenConverted(const std::string& dir, std::string& error)
                         if (relPartMod.empty() && !std::strcmp(prefix, "audio")) relPartMod = relModOf(withExt(relPart, ext));
                     if (!relPartMod.empty()) ++m_cmod;
                     ent.mppart[prefix + std::to_string(p.at(key).get<uint32_t>())] =
-                        relPartMod.empty() ? cane::utf8(pathInstalled(relPart)) : cane::utf8(cane::path(m_dirMods) / cane::path(relPartMod));
+                        relPartMod.empty() ? cane::utf8(pathInstalled(relPart)) : mpModPath.at(relPartMod);
                 }
             };
             addParts("audio", "track", "audio");
@@ -389,6 +442,7 @@ bool CDisc::FOpenConverted(const std::string& dir, std::string& error)
         }
         std::sort(m_afile.begin(), m_afile.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
         m_setMod = std::move(asetMod);
+        m_mpModPath = std::move(mpModPath);
     }
     catch (const std::exception& e)
     {
@@ -408,7 +462,7 @@ bool CDisc::FOpenConverted(const std::string& dir, std::string& error)
     if (!FRecognize(m_szExe, std::move(elf), dir, error)) return false;
     m_path = dir;
     m_fConverted = true;
-    if (m_cmod) std::printf("mods: %d files from %s\n", m_cmod, m_dirMods.c_str());
+    if (m_cmod) std::printf("mods: %d files from %s%s\n", m_cmod, m_dirMods.c_str(), m_aidPackage.empty() ? "" : " and the packages");
     return true;
 }
 
@@ -427,7 +481,7 @@ bool CDisc::FRecognize(const std::string& szBoot, std::vector<uint8_t>&& elf, co
         if (szBoot == d.szBoot && cb == d.cb && crc == d.crc) pdisc = &d;
     if (!pdisc || std::memcmp(elf.data(), "\x7F" "ELF", 4) != 0 || Le32(elf.data() + 0x18) != 0x100008)
     {
-        error = where + " is not a supported Sly 2 disc (USA SCUS-97316, Europe SCES-52529 v1.00 / v2.01, Japan SCPS-15090)";
+        error = where + " is not a supported Sly 2 disc (USA SCUS-97316, Europe SCES-52529 v1.00 / v2.01, Japan SCPS-15090, Korea SCKA-20044)";
         return false;
     }
     // the two loadable segments (the program; the IOP modules)
@@ -651,9 +705,16 @@ std::vector<uint8_t> CDisc::ReadWorldParts(const FK& fk, bool fReduced) const
         const std::filesystem::path root = cane::path(m_path);
         const std::set<int> setDrop = fReduced ? SetLevelGroups(index) : std::set<int>();
         const PFNKEEPOBJ pfnKeep = setDrop.empty() ? PFNKEEPOBJ() : PFNKEEPOBJ([](const WORLDOBJREC& r) { return FCidDerivedFrom(r.cid, 6); });
+        if (m_pfnPartRead)
+        {
+            if (!FRavelWorldFrom(index, m_pfnPartRead, ab, error, pfnKeep, setDrop.empty() ? nullptr : &setDrop, relDir))
+                throw std::runtime_error(pent->rel + ": " + error);
+            return ab;
+        }
         auto ravel = [&](bool fMods) {
             return FRavelWorld(index, relDir, [&](const std::string& rel) {
-                return fMods && m_setMod.count(rel) ? cane::utf8(cane::path(m_dirMods) / cane::path(rel)) : cane::utf8(root / cane::path(rel));
+                if (fMods) if (const auto it = m_mpModPath.find(rel); it != m_mpModPath.end()) return it->second;
+                return cane::utf8(root / cane::path(rel));
             }, ab, error, pfnKeep, setDrop.empty() ? nullptr : &setDrop);
         };
         if (!ravel(true))

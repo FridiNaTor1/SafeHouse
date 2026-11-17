@@ -142,7 +142,7 @@ void Msg(LO* plo, uint32_t symid, std::vector<CRef> aref = {})
     HandleLoSpliceEvent(plo, symid, false, static_cast<int>(aref.size()), aref.data());
 }
 
-// orig 0x00161FC8 / 0x00161FF0
+// orig 0x00161FC8 / 0x00161FF0 (orig3: 0x185980, the same code in Sly 3)
 uint32_t GrfState(int n) { return n == -1 ? 0u : (1u << n); }
 
 // orig 0x002581C0 / 0x00258200: a progress reference read / written in the save
@@ -248,7 +248,7 @@ bool FTaskDone(TASK* p)
     return p->nState >= 2;
 }
 
-// orig 0x001645D0: the prerequisites are done (or available and +0x6C)
+// orig 0x001645D0: the prerequisites are done (or available and +0x6C) (orig3: 0x189008, the same C in the Sly 3 decomp)
 bool FTaskPrereqs(TASK* p)
 {
     for (TASK* px : p->aptaskPrereq)
@@ -552,7 +552,8 @@ void ForceTaskState(TASK* p, int n, LO* ploContext)
     }
 }
 
-// orig 0x001649D0: the current job: the one whose first task is done and last not
+// orig 0x001649D0: the current job: the one whose first task is done and last not (orig3: 0x189640, the same
+// C with Sly 3's MISSION cid 0xA8 = S3CID(0x84))
 void ChooseJob()
 {
     JOB* pjobFound = nullptr;
@@ -612,7 +613,7 @@ void RestoreTask(TASK* p)
 
 // --- jobs ---
 
-// orig 0x001628B8: the job becomes the current one
+// orig 0x001628B8: the job becomes the current one (orig3: 0x186248, the same C in the Sly 3 decomp)
 void JobSwitch(JOB* p)
 {
     if (FJobCur(p)) return;
@@ -1387,6 +1388,8 @@ void BroadcastTaskEvent(SW* psw, int n, LO* plo)
     if (!psw) return;
     if (FScripts3Active())   // (Sly 3: game/task3.cpp's broadcast 0x1854C8, the code translated)
     {
+        // (0x1A / 0x1B: the objects' message 5 / 6, broadcast by HandleLoSpliceEvent as Sly 3's 0x1C86B8 does)
+        if (n == 0x1A || n == 0x1B) return;
         if (const int code3 = Code3FromCode2(n); code3 >= 0) Broadcast3(code3, plo);
         return;
     }
@@ -1421,7 +1424,7 @@ void ApplyCheckpointTasks(SW* psw, LO* pchk, const std::vector<std::pair<OID, in
 }
 
 // orig 0x001651D8
-void RequestTaskStartByOid(SW* psw, const uint8_t* pchk, OID oidTask)
+void RequestTaskStartByOid(SW* psw, const uint8_t* pchk, OID oidTask, OID oidWipe)
 {
     // (Sly 3: orig3 0x189E70: the task keys queue it for the world start, game/task3.cpp; the world (re)loads)
     {
@@ -1429,7 +1432,7 @@ void RequestTaskStartByOid(SW* psw, const uint8_t* pchk, OID oidTask)
         g_taskmgr.oidJob = -1;
         g_taskmgr.oidTask = -1;
         g_taskmgr.oidQueued = -1;
-        RequestTransition(psw, pchk, sly3::POINT_DEFAULT, -1, 8, -1);
+        RequestTransition(psw, pchk, sly3::POINT_DEFAULT, -1, 8, oidWipe);
         return;
     }
     s_psw = psw;
@@ -1501,6 +1504,12 @@ std::vector<TASK*> AptaskInOrder(SW* psw)
 // (for the pickups: a task object asked for the state n, as its method 1280 / 0x164640; pickup.cpp)
 void RequestLoTaskState(LO* plo, int n, LO* ploContext)
 {
+    // (Sly 3: the task request 0x189078 (kind 0, queued with the task's mode) on task3's record, as the splice method 1409)
+    if (FScripts3Active())
+    {
+        if (TASK3* p3 = plo ? PtaskFind3(plo->oid) : nullptr) TaskRequestMethod3(p3, 0, n, ploContext);
+        return;
+    }
     if (TASK* p = dynamic_cast<TASK*>(plo)) RequestTaskState(p, n, ploContext);
 }
 

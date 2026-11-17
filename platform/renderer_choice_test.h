@@ -1,7 +1,7 @@
 #ifndef CANE_PLATFORM_RENDERER_CHOICE_TEST_H_
 #define CANE_PLATFORM_RENDERER_CHOICE_TEST_H_
 // The renderer choice's rules and start marker (renderer_choice.h), without a GPU: the games' --renderer-selftest
-// (ctest sly2-renderer). parse: the game's FParseRenderer as Choice values (-1 not understood).
+// (ctest sly2-renderer / sly3-renderer). parse: the game's FParseRenderer as Choice values (-1 not understood).
 #include <cstdio>
 #include <filesystem>
 #include <string>

@@ -7,10 +7,11 @@
 //
 // The default layout (the user's, 2026-11-11, second version after playing; the prompts' VR families in
 // controller_family.h follow it):
-//   Touch layout (Meta Quest Touch, Valve Index, Pico: four face buttons):
+//   Touch layout (Meta Quest Touch, Valve Index, Pico, Vive Focus 3 / Cosmos, HP Reverb G2: four face buttons):
 //     right A Cross, right B Square, the left grip Circle, the right grip Triangle (pressed past half: no delay),
 //     left X L2, left Y R2 (Index: left A / B), the triggers L1 / R1 (pressed past half);
-//     Start = Touch's left menu button, or right grip + right stick click; Select = left grip + left stick click.
+//     Start = Touch's left menu button, or right grip + right stick click; Select = left grip + left stick click
+//     (the HP Reverb G2: its left / right menu buttons are Select / Start).
 //   Pad layout (Windows Mixed Reality, HTC Vive wands, the generic profile: one face button a hand, real Start /
 //   Select): the right trackpad's click Cross, the left one's Square (Sly's attack), the grips Circle / Triangle, the
 //   triggers L1 / R1 (no L2 / R2 buttons); the menu buttons Start / Select.
@@ -47,19 +48,45 @@ inline constexpr const char* kFrameProfile = "/interaction_profiles/valve/frame_
 inline constexpr const char* kFrameProfileOld = "/interaction_profiles/valve/frame_controller";
 
 // The controllers an interaction profile path names (XrPath string of xrGetCurrentInteractionProfile), the layout
-// they get and whether they have real Start / Select buttons (no grip + stick-click combos).
-enum class Controllers { None, Touch, Index, Frame, Wmr, Vive, Simple, Pico };
+// they get and whether they have real Start / Select buttons (no grip + stick-click combos). The values are kept (Sly 2's
+// Controls page pictures: prompt_atlas_rects.inc ids 64 + the value); new ones go at the end.
+//   Touch       Meta Quest Touch (Quest 2 / 3 / 3S / Pro, Rift S; Touch Plus / Touch Pro), and any profile not known here
+//   Index       Valve Index        Frame   the Steam Frame's controllers
+//   Wmr         Windows Mixed Reality motion controllers (also Samsung Odyssey)
+//   Vive        HTC Vive wands     Simple  the generic khr/simple_controller
+//   Pico        Pico 4 / 4 Ultra / Neo 3 (XR_BD_controller_interaction)
+//   ViveFocus3  HTC Vive Focus 3 / XR Elite (XR_HTC_vive_focus3_controller_interaction)
+//   ViveCosmos  HTC Vive Cosmos (XR_HTC_vive_cosmos_controller_interaction)
+//   HpReverb    HP Reverb G2 (XR_EXT_hp_mixed_reality_controller): A / B / X / Y like Touch, menu buttons on both hands
+enum class Controllers { None, Touch, Index, Frame, Wmr, Vive, Simple, Pico, ViveFocus3, ViveCosmos, HpReverb };
+inline constexpr int kControllersCount = 11;
 inline Controllers controllersOf(const char* profile) {
-    const auto has = [&](const char* sz) { return std::strstr(profile, sz) != nullptr; };
     if (!profile || !*profile) return Controllers::None;
+    const auto has = [&](const char* sz) { return std::strstr(profile, sz) != nullptr; };
     if (has("valve/frame_controller")) return Controllers::Frame;
     if (has("valve/index")) return Controllers::Index;
-    if (has("microsoft/motion_controller")) return Controllers::Wmr;
+    if (has("microsoft/motion_controller") || has("samsung/odyssey")) return Controllers::Wmr;
+    if (has("hp/mixed_reality")) return Controllers::HpReverb;
+    if (has("htc/vive_focus3")) return Controllers::ViveFocus3;
+    if (has("htc/vive_cosmos")) return Controllers::ViveCosmos;
     if (has("htc/vive_controller")) return Controllers::Vive;
     if (has("khr/simple")) return Controllers::Simple;
     if (has("pico") || has("bytedance")) return Controllers::Pico;
     return Controllers::Touch;
 }
+// The OpenXR extension a profile needs (nullptr: core) and the profiles the games suggest bindings for, besides the
+// core ones (oculus/touch, valve/index, microsoft/motion, htc/vive, khr/simple) and the Steam Frame's.
+inline constexpr const char* kViveFocus3Extension = "XR_HTC_vive_focus3_controller_interaction";
+inline constexpr const char* kViveFocus3Profile = "/interaction_profiles/htc/vive_focus3_controller";
+inline constexpr const char* kViveCosmosExtension = "XR_HTC_vive_cosmos_controller_interaction";
+inline constexpr const char* kViveCosmosProfile = "/interaction_profiles/htc/vive_cosmos_controller";
+inline constexpr const char* kHpExtension = "XR_EXT_hp_mixed_reality_controller";
+inline constexpr const char* kHpProfile = "/interaction_profiles/hp/mixed_reality_controller";
+inline constexpr const char* kOdysseyExtension = "XR_EXT_samsung_odyssey_controller";
+inline constexpr const char* kOdysseyProfile = "/interaction_profiles/samsung/odyssey_controller";
+inline constexpr const char* kPicoExtension = "XR_BD_controller_interaction";
+inline constexpr const char* kPico4Profile = "/interaction_profiles/bytedance/pico4_controller";
+inline constexpr const char* kPicoNeo3Profile = "/interaction_profiles/bytedance/pico_neo3_controller";
 inline Layout layoutOf(Controllers c) {
     switch (c) {
     case Controllers::Frame: return Layout::Gamepad;
@@ -68,7 +95,8 @@ inline Layout layoutOf(Controllers c) {
     }
 }
 inline bool realStartSelectOf(Controllers c) {
-    return c == Controllers::Frame || c == Controllers::Wmr || c == Controllers::Vive || c == Controllers::Simple;
+    return c == Controllers::Frame || c == Controllers::Wmr || c == Controllers::Vive || c == Controllers::Simple ||
+           c == Controllers::HpReverb;
 }
 
 // The actions' states this frame. Touch layout: a / b the right hand's lower / upper face button, x / y the left

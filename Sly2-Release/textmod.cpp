@@ -8,6 +8,7 @@
 #include "region.h"
 #include "sw.h"
 #include "langstore.h"
+#include "porttext.h"
 
 #include "../platform/platform.h"
 
@@ -97,38 +98,43 @@ const TEXTMOD* PtextmodForLanguage(int lang)
     const auto it = s_mp.find(lang);
     if (it != s_mp.end()) return it->second.get();
     std::unique_ptr<TEXTMOD> p;
-    if (!g_disc.DirMods().empty() && lang >= 0)
+    // every mod folder's Text/<Language>.json (the packages', the loose folder's, lowest priority first; a later
+    // file's string wins)
+    for (const std::string& root : g_disc.AdirModRoots())
     {
-        const fs::path path = cane::path(g_disc.DirMods()) / "Text" / (std::string(SzLanguageModName(lang)) + ".json");
+        if (lang < 0) break;
+        const fs::path path = cane::path(root) / "Text" / (std::string(SzLanguageModName(lang)) + ".json");
         std::error_code ec;
-        if (fs::is_regular_file(path, ec))
+        if (!fs::is_regular_file(path, ec)) continue;
+        auto pfile = std::make_unique<TEXTMOD>();
+        try
         {
-            p = std::make_unique<TEXTMOD>();
-            try
-            {
-                std::ifstream in(path);
-                const json j = json::parse(in, nullptr, true, true);   // (comments allowed)
-                int c = 0;
-                auto read = [&](const json& o, std::unordered_map<int, std::string>& mp) {
-                    for (const auto& [k, v] : o.items())
-                    {
-                        int id = 0;
-                        if (!v.is_string() || !FParseId(k, id)) { std::printf("mods: %s: skipped \"%s\" (not an id and a string)\n", cane::utf8(path).c_str(), k.c_str()); continue; }
-                        mp[id] = Latin1OfUtf8(v.get<std::string>());
-                        ++c;
-                    }
-                };
-                if (j.contains("strings")) read(j.at("strings"), p->mpstr);
-                if (j.contains("worlds"))
-                    for (const auto& [name, o] : j.at("worlds").items()) read(o, p->mpworld[name]);
-                std::printf("mods: %d strings from %s\n", c, cane::utf8(path).c_str());
-            }
-            catch (const std::exception& e)
-            {
-                std::printf("mods: %s: %s (the file is ignored)\n", cane::utf8(path).c_str(), e.what());
-                p.reset();
-            }
+            std::ifstream in(path);
+            const json j = json::parse(in, nullptr, true, true);   // (comments allowed)
+            int c = 0;
+            auto read = [&](const json& o, std::unordered_map<int, std::string>& mp) {
+                for (const auto& [k, v] : o.items())
+                {
+                    int id = 0;
+                    if (!v.is_string() || !FParseId(k, id)) { std::printf("mods: %s: skipped \"%s\" (not an id and a string)\n", cane::utf8(path).c_str(), k.c_str()); continue; }
+                    mp[id] = Latin1OfUtf8(v.get<std::string>());
+                    ++c;
+                }
+            };
+            if (j.contains("strings")) read(j.at("strings"), pfile->mpstr);
+            if (j.contains("worlds"))
+                for (const auto& [name, o] : j.at("worlds").items()) read(o, pfile->mpworld[name]);
+            std::printf("mods: %d strings from %s\n", c, cane::utf8(path).c_str());
         }
+        catch (const std::exception& e)
+        {
+            std::printf("mods: %s: %s (the file is ignored)\n", cane::utf8(path).c_str(), e.what());
+            continue;
+        }
+        if (!p) { p = std::move(pfile); continue; }
+        for (auto& [id, str] : pfile->mpstr) p->mpstr[id] = std::move(str);
+        for (auto& [name, mp] : pfile->mpworld)
+            for (auto& [id, str] : mp) p->mpworld[name][id] = std::move(str);
     }
     return (s_mp[lang] = std::move(p)).get();
 }
@@ -185,18 +191,34 @@ int DumpTextCommand(const std::string& dir)
     std::error_code ec;
     fs::create_directories(cane::path(dir), ec);
     const int langSave = g_nLang;
+    // (usage.json: the worlds each string is in, by USA id as the languages folder numbers them: the localisation
+    // tool's context; the disc's first language)
+    json usage = json::object();
     for (int k = 0; k < CLanguagesDisc(); ++k)
     {
         g_nLang = LanguageOfDiscIndex(k);
         // id -> (string -> the worlds that have it)
         std::map<int, std::map<std::string, std::vector<std::string>>> mp;
-        for (const auto& [name, fk, filter] : aworld)
+        std::map<int, std::vector<int>> mpidaworld;
+        for (std::size_t iw = 0; iw < aworld.size(); ++iw)
         {
+            const auto& [name, fk, filter] = aworld[iw];
             auto psw = std::make_unique<SW>();
             psw->filter = filter;
             std::size_t cbRead = 0, cbFile = 0;
             if (!FLoadWorldFile(psw.get(), fk, "", &cbRead, &cbFile)) { std::fprintf(stderr, "dump-text: %s did not load\n", name.c_str()); continue; }
-            for (const auto& [id, str] : psw->atext) mp[id][Utf8OfLatin1(str)].push_back(name);
+            for (const auto& [id, str] : psw->atext)
+            {
+                mp[id][Utf8OfLatin1(str)].push_back(name);
+                if (k == 0 && IdTextUsa(id) >= 0) mpidaworld[IdTextUsa(id)].push_back(int(iw));
+            }
+        }
+        if (k == 0)
+        {
+            json names = json::array(), ids = json::object();
+            for (const auto& w : aworld) names.push_back(w.name);
+            for (const auto& [id, aw] : mpidaworld) ids[std::to_string(id)] = aw;
+            usage = {{"disc", g_disc.SzDisc()}, {"worlds", names}, {"strings", ids}};
         }
         // "strings": each id's most common string; "worlds": a world's string where it differs from that
         json strings = json::object(), worlds = json::object();
@@ -213,7 +235,11 @@ int DumpTextCommand(const std::string& dir)
         }
         for (const auto& w : aworld)
             if (mpworld.count(w.name)) worlds[w.name] = mpworld[w.name];
-        const json j = {{"language", SzLanguageModName(g_nLang)}, {"strings", strings}, {"worlds", worlds}};
+        // (the port's own strings in that language, porttext.h: a language's Text.json "port")
+        json port = json::object();
+        if (g_nLang < CLANG_PORT)
+            for (const auto& [name, str] : PortTextColumn(g_nLang)) port[name] = str;
+        const json j = {{"language", SzLanguageModName(g_nLang)}, {"strings", strings}, {"worlds", worlds}, {"port", port}};
         const fs::path path = cane::path(dir) / (std::string(SzLanguageModName(g_nLang)) + ".json");
         std::ofstream out(path, std::ios::trunc);
         out << j.dump(1) << '\n';
@@ -221,5 +247,29 @@ int DumpTextCommand(const std::string& dir)
         std::printf("dump-text: %s: %zu strings, %zu worlds with their own\n", cane::utf8(path).c_str(), mp.size(), mpworld.size());
     }
     g_nLang = langSave;
+    {
+        const fs::path path = cane::path(dir) / "usage.json";
+        std::ofstream out(path, std::ios::trunc);
+        out << usage.dump() << '\n';
+        if (!out) { std::fprintf(stderr, "dump-text: cannot write %s\n", cane::utf8(path).c_str()); return 1; }
+    }
+    return 0;
+}
+
+int DumpPortTextCommand(const std::string& dir)
+{
+    std::error_code ec;
+    fs::create_directories(cane::path(dir), ec);
+    for (int lang = 0; lang < CLANG_PORT; ++lang)
+    {
+        json port = json::object();
+        for (const auto& [name, str] : PortTextColumn(lang)) port[name] = str;
+        const json j = {{"language", SzLanguageModName(lang)}, {"port", port}};
+        const fs::path path = cane::path(dir) / (std::string(SzLanguageModName(lang)) + ".json");
+        std::ofstream out(path, std::ios::trunc);
+        out << j.dump(1) << '\n';
+        if (!out) { std::fprintf(stderr, "dump-port-text: cannot write %s\n", cane::utf8(path).c_str()); return 1; }
+        std::printf("dump-port-text: %s: %zu strings\n", cane::utf8(path).c_str(), port.size());
+    }
     return 0;
 }

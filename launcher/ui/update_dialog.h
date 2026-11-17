@@ -382,10 +382,8 @@ private:
         }
     }
     void openPage() {
-        try {
-            openFolder(path(m_release.page.empty() ? update::releasesPage : m_release.page));
-        } catch (...) {
-        }
+        // (the browser; on Android it downloads the APK, which the system installs over this one)
+        openLink(m_release.page.empty() ? update::releasesPage : m_release.page.c_str());
     }
 
     LauncherBackend& m_backend;

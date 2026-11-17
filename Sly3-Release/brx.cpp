@@ -3,7 +3,11 @@
 #include "game/sly3.h"
 #include "worldglobals.h"
 #include "brx.h"
+#include "ai.h"
+#include "sm.h"
+#include <cstring>
 #include "game/cond3.h"
+#include "game/scpt3.h"
 #include "breakable.h"
 #include "hide.h"
 #include "vehiclehooks.h"
@@ -23,6 +27,7 @@
 
 #include "bis.h"
 #include "disc.h"
+#include "editrec.h"
 #include "readtrace.h"
 #include "sw.h"
 #include "shd.h"
@@ -180,6 +185,8 @@ void LO::SetField(uint32_t pfnGetter, uint32_t ib, uint32_t u)
     const uint64_t key = (uint64_t(pfnGetter) << 32) | ib;
     if (static const int s_ib = std::getenv("SLY2N_FIELDPRINT") ? int(std::strtol(std::getenv("SLY2N_FIELDPRINT"), nullptr, 0)) : -1; s_ib == int(ib))
         std::printf("field %d +0x%X = %u (getter 0x%X)\n", oid, ib, u, pfnGetter);  // (debug: a field's stores)
+    if (static const int s_oid = std::getenv("SLY2N_FIELDOID") ? std::atoi(std::getenv("SLY2N_FIELDOID")) : -1; s_oid == oid)
+        std::printf("field %d +0x%X = 0x%X (getter 0x%X)\n", oid, ib, u, pfnGetter);  // (debug: an object's stores)
     for (auto& [k, uOld] : afield)
         if (k == key) { uOld = u; return; }
     afield.emplace_back(key, u);
@@ -228,6 +235,8 @@ void LoadOptionFromBrx(OPT& opt, LO* plo, int eopid, int grf, CBinaryInputStream
     const EOPID e = EopidFromIndex(eopid);
     opt.eopid = eopid;
     opt.grf = grf;
+    if (static const char* s_sz = std::getenv("SLY3_OPTLOADOID"); s_sz && plo && (std::atoi(s_sz) == plo->oid || std::atoi(s_sz) == -1))  // (debug: an object's loaded options; -1 all)
+        std::fprintf(stderr, "optload %d: eopid %d grf 0x%X (descriptor grf 0x%X k %d c18 0x%X)\n", plo->oid, eopid, grf, e.grf, e.k, e.c18);
     // the methods called at the load: 0x100B10 (option 26) queues RemoveLo for the start (0x1A5D30); 0x100A90
     // (option 25) is AddLo (vt slot 8)
     if (plo && (grf & 0x400) && e.pfnArray == S3FN(0x100B10))
@@ -237,8 +246,10 @@ void LoadOptionFromBrx(OPT& opt, LO* plo, int eopid, int grf, CBinaryInputStream
             std::printf("load: %d (cid 0x%X) removed at the start by option eopid %d grf 0x%X\n", plo->oid, plo->Cid(), eopid, grf);
     }
     if (plo && (grf & 0x400) && e.pfnArray == S3FN(0x100A90)) AddLo(g_psw, plo);
+    const std::size_t ifieldEdit = g_peditrec && plo ? g_peditrec->afield.size() : std::size_t(-1);   // (PC: the map editor)
     if (grf & 0x401)
     {
+        if (ifieldEdit != std::size_t(-1)) g_peditrec->afield.push_back({plo, EDITFK_OptionArray, 0, eopid, e.k, pbis->m_ib});
         // c CRefs (each a value, or a list of U8 count values of one kind) handed to the EOPID's function
         for (int i = 0; i < e.c18; ++i)
         {
@@ -254,6 +265,7 @@ void LoadOptionFromBrx(OPT& opt, LO* plo, int eopid, int grf, CBinaryInputStream
             }
             else opt.aval.push_back(RefReadOption(w, pbis));
         }
+        if (ifieldEdit != std::size_t(-1)) g_peditrec->afield[ifieldEdit].ibEnd = pbis->m_ib;
         // a method the loader calls (grf 0x400: the EOPID's +0x08 thunk) with a native body (objmethod.h)
         if (plo && (grf & 0x400) && e.pfnArray != S3FN(0x100A90) && e.pfnArray != S3FN(0x100B10))
         {
@@ -313,7 +325,9 @@ void LoadOptionFromBrx(OPT& opt, LO* plo, int eopid, int grf, CBinaryInputStream
             plo->aopt.push_back(std::move(action));
         }
     }
+    if (g_peditrec && plo) g_peditrec->afield.push_back({plo, EDITFK_Option, 0, eopid, e.k, pbis->m_ib});   // (PC: the map editor, editrec.h)
     OPTVAL v = ReadOptionValue(e.k, pbis);
+    if (ifieldEdit != std::size_t(-1) && ifieldEdit < g_peditrec->afield.size()) g_peditrec->afield[ifieldEdit].ibEnd = pbis->m_ib;
     if (const int e2 = Eopid2FromEopid3(eopid); pchildField && e.pfnGet == 0x20A9C0 && e2 >= 235 && e2 <= 242)
     {
         // The same properties on an explicit action (353..359 / 363).
@@ -357,7 +371,58 @@ void LoadOptionFromBrx(OPT& opt, LO* plo, int eopid, int grf, CBinaryInputStream
     opt.aval.push_back(std::move(v));
 }
 
-// orig 0x0013F810 LoadOptionsFromBrx
+// PC addition (the map editor, editrec.h; Sly 2's, with Sly 3's table): an option's descriptor, and a new value applied
+// to the live object the way the loader applies it. Only the editor calls these.
+bool FEditorOptionInfo(int eopid, int& k, int& grf)
+{
+    if (eopid < 0 || eopid >= sly3::CEOPID) return false;
+    const EOPID e = EopidFromIndex(eopid);
+    k = e.k;
+    grf = e.grf;
+    return true;
+}
+
+int CEditorOptionRefs(int eopid)
+{
+    if (eopid < 0 || eopid >= sly3::CEOPID) return 0;
+    const EOPID e = EopidFromIndex(eopid);
+    return (e.grf & 0x400) ? e.c18 : 0;
+}
+
+bool FEditorApplyOption(LO* plo, int eopid, const void* pv, std::size_t cb, const char** pwhy)
+{
+    const char* why = nullptr;
+    int k = 0, grf = 0;
+    if (!plo || !FEditorOptionInfo(eopid, k, grf)) why = "no such option";
+    else
+    {
+        grf &= 0x2580;
+        if (grf & 0x401) why = "a method or list option (applied at the load)";
+        else if (grf & 0x2000) why = "a sub-object's option (made at the load)";
+        else if (plo->Cid() == S3CID(0x73)) why = "a space warp's entry (built at the load)";
+        else if (k == 22 || k == 3 || k == 4 || k == 12) why = "this kind is not applied live";
+        else if (!(grf & 0x190)) why = "read once at the load";
+    }
+    if (!why)
+    {
+        std::vector<std::uint8_t> ab(static_cast<const std::uint8_t*>(pv), static_cast<const std::uint8_t*>(pv) + cb);
+        CBinaryInputStream bis;
+        bis.OpenBuffer(std::move(ab));
+        EDITRECORDER* precSave = g_peditrec;
+        g_peditrec = nullptr;
+        OPT opt;
+        LoadOptionFromBrx(opt, plo, eopid, grf & 0x2580, &bis);
+        g_peditrec = precSave;
+        bool fReplaced = false;
+        for (OPT& o : plo->aopt)
+            if (o.eopid == eopid) { o = opt; fReplaced = true; break; }
+        if (!fReplaced) plo->aopt.push_back(std::move(opt));
+    }
+    if (pwhy) *pwhy = why;
+    return !why;
+}
+
+// orig 0x0013F810 LoadOptionsFromBrx (orig3: 0x1519C8, the same C in the Sly 3 decomp)
 void LoadOptionsFromBrx(std::vector<OPT>& aopt, LO* plo, CBinaryInputStream* pbis)
 {
     LOADFN(0x13F810);
@@ -470,6 +535,9 @@ LO* PloNew(CID cid, SW* psw, ALO* paloParent, OID oid, int iframe)
     if (FCidDerivedFrom(cid, S3CID(0x53))) plo->grfUpd |= 0x2;
     // class 0x60's InitLo 0x1B0B78 (bird.cpp): updated every frame (+0x40 |= 2)
     if (cid == S3CID(0x60)) plo->grfUpd |= 0x2;
+    // (Sly 3) the booty stands: USE's InitLo 0x1A1D70 (0x1C9118(p, 2): updated every frame), for their update 0x14E7E0
+    // (booty.cpp UpdateBootyStand3: a player walking up to one uses it)
+    if (cid == S3CID(0x25)) plo->grfUpd |= 0x2;
     // orig0x1D4E68: ammunition pickups update until the position record rests.
     if (cid == S3CID(0x6C)) plo->grfUpd |= 0x2;
     // InitLo bodies (vt slot 7) that make objects
@@ -507,6 +575,12 @@ LO* PloCloneLo(LO* plo, SW* psw, ALO* paloParent)
         CloneProjectileData(plo, ploNew);
         CloneBootyData(plo, ploNew);
     }
+    // (s3-plane) a command list's commands, appended by the load's methods (scptai.cpp): a copy's list was empty, so a
+    // copy's guard got no orders: Ep5's boarding captain (proxy 56246's 46470, told the list 45104 of the in-world copy
+    // of 44989) stayed where its proxy put him, 100000 above the sea, and fell
+    if (const CMDLIST* pl = dynamic_cast<const CMDLIST*>(plo))
+        if (CMDLIST* plNew = dynamic_cast<CMDLIST*>(ploNew); plNew && plNew->acmd.empty())
+            for (const auto& pc : pl->acmd) plNew->acmd.push_back(std::make_unique<CMD>(*pc));
     if (FIsLoDerivedFrom(plo, S3CID(0x16)))
     {
         // orig: 0x1A6730 copies these value fields with the shape; geometry remains shared.
@@ -559,6 +633,11 @@ LO* PloCloneLo(LO* plo, SW* psw, ALO* paloParent)
     {
         void CloneScptData(LO* ploSrc, LO* ploDst);  // scpt.cpp: orig 0x1DFBF8 (SCPT's vt slot 41)
         CloneScptData(plo, ploNew);
+        // orig3: 0x2250C0's record (+0x40 count, +0x44 commands) goes with the copy (the object's CloneLo copies it):
+        // a proxy instance's script (e.g. the Ep3 hack's spawners 78434: their SCPT 78440, started by their attach
+        // event 17) runs the template's commands; natively the copies had none and their enemies 78461 never came
+        if (const auto* ps = dynamic_cast<const LOSCPT3*>(plo))
+            if (auto* pd = dynamic_cast<LOSCPT3*>(ploNew)) pd->acmd = ps->acmd;
     }
     if (plo->Cid() == S3CID(0x73)) CloneWrData(plo, ploNew);  // 0x22B748
     CloneBreakableData(plo, ploNew);   // (the breakable's fields, copied with the object)
@@ -602,6 +681,20 @@ LO* PloCloneLo(LO* plo, SW* psw, ALO* paloParent)
                 if (pe->pemitmesh) qe->pemitmesh = std::make_unique<LOXEMIT::EMITMESH>(*pe->pemitmesh);
             }
     }
+    // a screen object (SPRITESET): its loaded state and its sprite data (shared, read only), as CloneLo copies the
+    // object (PC: v_ext's two-player HUD and score board copied onto another hub, copsmap3.h)
+    if (const SPRITESET* ps = dynamic_cast<const SPRITESET*>(plo))
+        if (SPRITESET* pd = dynamic_cast<SPRITESET*>(ploNew))
+        {
+            pd->f = ps->f;
+            pd->g90 = ps->g90;
+            pd->u94 = ps->u94, pd->u98 = ps->u98, pd->uBC = ps->uBC;
+            std::memcpy(pd->abKey, ps->abKey, sizeof pd->abKey);
+            pd->csprite = ps->csprite;
+            pd->cgroup = ps->cgroup;
+            pd->aanim = ps->aanim;
+            pd->pso = ps->pso;
+        }
     CloneVehicle(plo, ploNew);  // orig0x1D1410, independent attachment BASICs
     // the hierarchy: what the object loaded is cloned with it (an ALO's children under the copy)
     s_aploLoading.push_back(ploNew);
@@ -627,6 +720,8 @@ LO* PloCloneLo(LO* plo, SW* psw, ALO* paloParent)
     return ploNew;
 }
 
+EDITRECORDER* g_peditrec = nullptr;   // (PC: the map editor, editrec.h; null but while the editor loads a world)
+
 // orig3 0x151D80 LoadSwObjsFromBrx (Sly 2 0x13FB40). Sly 3's header: S8 mode; mode 1: U8 n1, U8 n2, S16 filters[n1]
 // (world indices), S32 conditions[n2] (0x151D10 against the static camera's); then S16 cid, S32 oid, S16 n (the
 // splice module), S32 cb (the body's size). Mode 1 objects that fail are skipped, except MISSIONs / TASKs (made and
@@ -637,6 +732,7 @@ void LoadSwObjsFromBrx(SW* psw, ALO* paloParent, CBinaryInputStream* pbis, LOSIN
     LOADFN(sly3::FN_LOAD_SW_OBJS);
     LOSINK sinkStack;
     sinkStack.fStack = true;
+    const std::size_t ibListEdit = pbis->m_ib;   // (PC: the map editor, editrec.h)
     int c = pbis->S16Read();
     if (c <= 0) return;
     do
@@ -658,7 +754,13 @@ void LoadSwObjsFromBrx(SW* psw, ALO* paloParent, CBinaryInputStream* pbis, LOSIN
         const CID cid = pbis->S16Read();
         const OID oid = pbis->S32Read();
         if (const char* sz = std::getenv("SLY3_NEWDBG"); sz && std::atoi(sz) == oid)
-            std::fprintf(stderr, "load %d mode %d iwe %d\n", oid, mode, psw->iwe);
+        {
+            std::fprintf(stderr, "load %d mode %d iwe %d filter", oid, mode, psw->iwe);
+            for (int i = 0; i < n1; ++i) std::fprintf(stderr, " %d", as[i]);
+            std::fprintf(stderr, " conds");
+            for (int i = 0; i < n2; ++i) std::fprintf(stderr, " %d", acond[i]);
+            std::fprintf(stderr, " (filter now %d, cond now %d)\n", g_nFilterCur3, g_condset3.cond);
+        }
         const int n = pbis->S16Read();
         const int cb = pbis->S32Read();
         if (cid < 0 || cid >= CID_Max) throw std::runtime_error("LoadSwObjsFromBrx: class " + std::to_string(cid) + " outside the class table");
@@ -693,16 +795,20 @@ void LoadSwObjsFromBrx(SW* psw, ALO* paloParent, CBinaryInputStream* pbis, LOSIN
                     ++g_brxstats.cmission;
                     extern std::unordered_map<int, int> g_mpoidiwrecTask;   // (debug harness: autoplay.cpp)
                     if (n1 > 0) g_mpoidiwrecTask[oid] = as[0];
+                    if (g_peditrec) g_peditrec->aobj.push_back({plo, cid, oid, g_peditrec->depth, ibHeader, pbis->m_ib, std::size_t(cb), 0, ibListEdit});
+                    if (g_peditrec) ++g_peditrec->depth;
                     if (plo->pcls->pfnLoad) LoadLoBody(plo, pbis);
                     else
                     {
                         pbis->Skip(cb);   // (TODO(sly3): the MISSION 0x185EB8 / TASK 0x187F08 loaders)
                         ++g_brxstats.mpcidcNoLoader[cid];
                     }
+                    if (g_peditrec) --g_peditrec->depth;
                     if (psink) psink->Append(plo);
                 }
                 else
                 {
+                    if (g_peditrec) g_peditrec->aobj.push_back({nullptr, cid, oid, g_peditrec->depth, ibHeader, pbis->m_ib, std::size_t(cb), 0, ibListEdit});
                     pbis->Skip(cb);
                     ++g_brxstats.cskipFilter;
                 }
@@ -747,17 +853,37 @@ void LoadSwObjsFromBrx(SW* psw, ALO* paloParent, CBinaryInputStream* pbis, LOSIN
         // counted per class (g_brxstats.mpcidcSkipped / mpcidcError; SLY3_LOADERR=1 prints each).)
         const std::size_t ibStart = pbis->m_ib;
         const std::size_t sLoading = s_aploLoading.size();
+        const int depthEdit = g_peditrec ? g_peditrec->depth : 0;   // (PC: the map editor; a failed read's depth restored)
         try
         {
             if (FCidDerivedFrom(cid, sly3::CID_PROXY))
             {
                 ++g_brxstats.cproxy;
                 extern void LoadProxyFromBrx(SW*, ALO*, CID, OID, int, CBinaryInputStream*, LOSINK*);
+                std::size_t iobjEdit = 0;
+                if (g_peditrec)
+                {
+                    iobjEdit = g_peditrec->aobj.size();
+                    g_peditrec->aobj.push_back({nullptr, cid, oid, g_peditrec->depth, ibHeader, ibStart, std::size_t(cb), 0, ibListEdit});
+                    g_peditrec->ibProxyMatrix = 0;
+                    ++g_peditrec->depth;
+                }
+                const std::size_t cploBefore = g_peditrec ? psw->aploAll.size() : 0;
                 LoadProxyFromBrx(psw, paloParent, cid, oid, n, pbis, psinkCur);
+                if (g_peditrec)
+                {
+                    --g_peditrec->depth;
+                    g_peditrec->aobj[iobjEdit].ibMatrix = g_peditrec->ibProxyMatrix;
+                    // (the proxy's own object, when it made one: the first made with its oid)
+                    for (std::size_t i = cploBefore; i < psw->aploAll.size(); ++i)
+                        if (psw->aploAll[i]->oid == oid && psw->aploAll[i]->Cid() == cid) { g_peditrec->aobj[iobjEdit].plo = psw->aploAll[i].get(); break; }
+                }
             }
             else
             {
                 LO* plo = PloNew(cid, psw, paloParent, oid, n);
+                if (g_peditrec) g_peditrec->aobj.push_back({plo, cid, oid, g_peditrec->depth, ibHeader, ibStart, std::size_t(cb), 0, ibListEdit});
+                if (g_peditrec) ++g_peditrec->depth;
                 if (plo->pcls->pfnLoad) LoadLoBody(plo, pbis);
                 else if (FCidDerivedFrom(cid, sly3::CID_ALO))
                 {
@@ -767,11 +893,13 @@ void LoadSwObjsFromBrx(SW* psw, ALO* paloParent, CBinaryInputStream* pbis, LOSIN
                     ++g_brxstats.mpcidcAloOnly[cid];
                 }
                 else ++g_brxstats.mpcidcNoLoader[cid];
+                if (g_peditrec) --g_peditrec->depth;
                 if (psinkCur) psinkCur->Append(plo);
             }
         }
         catch (const std::exception& e)
         {
+            if (g_peditrec) g_peditrec->depth = depthEdit;
             s_aploLoading.resize(std::min(s_aploLoading.size(), sLoading));
             ++g_brxstats.mpcidcError[cid];
             if (std::getenv("SLY3_LOADERR"))

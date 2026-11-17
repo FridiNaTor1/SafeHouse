@@ -3,11 +3,13 @@
 // round4_paris_high_more.cpp (0x212880), the string table 0x2A8B90 (0x21AA60).
 
 #include "screenrt.h"
+#include <array>
 #include "screen3.h"
 #include "game/sly3.h"
 #include "worldglobals.h"
 #include "region.h"
 #include "dance.h"
+#include "aipassword3.h"
 #include "actor.h"
 #include "po.h"
 #include "marker.h"
@@ -65,6 +67,8 @@ struct SCREENRT
     bool fListed = false;       // +0xAC (in the shown list 0x3E1060 while it plays)
     bool fInList = false;       // +0xA8 == 0
     LO* follow = nullptr;       // +0xF4 (the world object whose screen position anchors the root)
+    bool fXY = false;           // (Sly 3) +0xEC set (0x262848): the root scaled and moved (e.g. the 2P gauges, 0x21E588)
+    std::array<float, 6> mXY{1, 0, 0, 1, 0, 0};
     int aarg[10] = {-1, -1, -1, -1, -1, -1, -1, -1, -1, -1};   // +0xCC
 };
 
@@ -87,19 +91,33 @@ SCREENRT* Psrt(LO* plo)
         p = std::make_unique<SCREENRT>();
         p->pss = pss;
         p->serialSw = SW::s_serialNext;
-        // (Sly 3's SCREENOBJ fields are Sly 2's - 0x10: orig3 0x261070 / 0x260F18 against 0x212A70 / 0x2128E8)
-        p->prio = int(plo->U32Field(0, 0x94, 0));
-        p->fListed = plo->U32Field(0, 0x9C, 0) != 0;
+        // (Sly 3's SCREENOBJ fields are Sly 2's - 0x10: orig3 0x261070 / 0x260F18 against 0x212A70 / 0x2128E8. The
+        // options with a Sly 2 twin are stored at the twin's offset (brx.cpp EopidFromIndex): the priority (Sly 3 option
+        // 1211 -> +0x94, stored at Sly 2's +0xA4), "hides the lower ones" (1212 -> +0x9C, at +0xAC), the idle time (1214
+        // -> +0x7C, at +0x8C) and the arguments (1225..1234 -> +0xBC.., at +0xCC..); the pause (1213 -> +0xA0) has no
+        // twin and stays at Sly 3's offset. Reading Sly 3's offsets gave every screen priority 0: the job end screens
+        // drew under the HUD and no screen hid the lower ones (the reference's RAM: 1066 +0x94 0x1D, 1067 0x1C / +0x9C 1,
+        // the gauge 7465 8, the challenge HUD 1054 0xB))
+        p->prio = int(plo->U32Field(0, 0xA4, 0));
+        p->fListed = plo->U32Field(0, 0xAC, 0) != 0;
         p->fPause = plo->U32Field(0, 0xA0, 0) != 0;
-        // +0x7C: the longest the idle part shows (Sly 2 +0x8C)
-        const uint32_t u8C = plo->U32Field(0, 0x7C, 0);
+        // +0x7C: the longest the idle part shows (Sly 2 +0x8C, where it is stored)
+        const uint32_t u8C = plo->U32Field(0, 0x8C, 0);
         std::memcpy(&p->dtMax, &u8C, sizeof(float));
+        // (the two-player score board, class 0xA4 (Cops and Robbers' 140111): its idle part 0x377 has no hold key (7), so
+        // in the original it ends after its length and the board hides (the game script 2414 waits for that, op 0x1A);
+        // natively a part without a hold key stays busy: the board's idle time is its idle part's length)
+        if (plo->Cid() == 0xA4 && p->dtMax <= 0.0f && pss->pso)
+            for (const SGROUP& g : pss->pso->agroup)
+                for (const SPART& part : g.apart)
+                    if (part.id == sly3ui::PART_IDLE && part.dt > 0.0f && p->dtMax <= 0.0f) p->dtMax = part.dt;
         p->state = pss->pso->fExternal ? 0 : 1;   // (0x212298: +0x58 0 for the external ones)
         // the arguments (orig3 +0xBC..; Sly 2 +0xCC, options 1133..1142) as the world sets them
-        for (int i = 0; i < 10; ++i) p->aarg[i] = int(plo->U32Field(0, 0xBC + 4 * uint32_t(i), uint32_t(-1)));
+        for (int i = 0; i < 10; ++i) p->aarg[i] = int(plo->U32Field(0, 0xCC + 4 * uint32_t(i), uint32_t(-1)));
     }
     return p.get();
 }
+
 
 // the external file loaded on first use (0x2124F0's role), then the player
 bool FReady(SCREENRT* p)
@@ -238,7 +256,7 @@ void Update(SCREENRT* p)
         p->t88 += dt;
         // orig: 0x218220. Project the live world position every update, before the
         // root and nested slots advance through that transform (0x2183E8).
-        p->player.mRoot = {1, 0, 0, 1, 0, 0};
+        p->player.mRoot = p->fXY ? p->mXY : std::array<float, 6>{1, 0, 0, 1, 0, 0};
         if (p->follow)
         {
             const glm::vec3 screen = ConvertCmWorldToScreen(&g_cm, PosLoWorld(p->follow));
@@ -253,6 +271,26 @@ void Update(SCREENRT* p)
     }
 }
 }  // namespace
+
+// orig3: 0x262848 (SCREENOBJ +0xEC, the 0x20-byte {scale, -, -, level, u, v} record): the root scaled by `scale` and
+// moved to (u, v) (canvas units); the level (the 2P gauges' 0.75) is not applied natively. fOn false: the plain root.
+void SetScreenObjRootXY(LO* plo, bool fOn, float scale, float u, float v)
+{
+    if (SCREENRT* p = Psrt(plo))
+    {
+        p->fXY = fOn;
+        p->mXY = {scale, 0, 0, scale, u, v};
+    }
+}
+
+void SetScreenObjRootRect3(LO* plo, int x0, int y0, int x1, int y1)
+{
+    if (SCREENRT* p = Psrt(plo))
+    {
+        p->fXY = true;
+        p->mXY = {float(x1 - x0) * (1.0f / 640.0f), 0, 0, float(y1 - y0) * (1.0f / 480.0f), float(x0), float(y0)};
+    }
+}
 
 // orig: SCREENOBJ +0xF4 (0x202768 assigns the selected photo subject).
 void SetScreenObjFollow(LO* plo, LO* target)
@@ -376,6 +414,19 @@ void StopScreenObj(LO* plo)
     SetState(p, 1);
 }
 
+int NScreenObjPrio(LO* plo)
+{
+    const SCREENRT* p = Psrt(plo);
+    return p ? p->prio : 0;
+}
+
+bool (*g_pfnScreenObjSkip3)(LO* plo) = nullptr;
+
+void SetScreenObjPrio(LO* plo, int prio)
+{
+    if (SCREENRT* p = Psrt(plo)) p->prio = prio;
+}
+
 void SetScreenObjArg(LO* plo, int i, int n)
 {
     if (SCREENRT* p = Psrt(plo); p && i >= 0 && i < 10) p->aarg[i] = n;
@@ -467,7 +518,7 @@ void SetScreenObjPartMatrix(LO* plo, int k, const std::array<float, 6>& m)
     SCREENRT* p = Psrt(plo);
     if (p && FReady(p)) p->player.SetPartMatrix(k, m);
 }
-// orig: 0x00213DB0
+// orig: 0x00213DB0 (orig3: 0x262B60, the same code in Sly 3)
 void SelectScreenObjPartHandle(LO* plo, int k, int* pidHandle)
 {
     if (k == *pidHandle) return;
@@ -598,6 +649,8 @@ static void UpdateFailureScreen(SCREENRT* p, SW* psw)
 
 // The task counters' strings (orig 0x2C3EC0 + 0x30 i: script strings 0x2FF + i, read by 0x210EB0)
 char s_aachCounter[10][0x30];
+// (Sly 3) each task counter's own strings (orig3 +0x2A8 / +0x2AC / +0x2B0: its script strings 864..866)
+std::unordered_map<const LO*, std::array<std::string, 3>> s_mpcounter3;
 
 
 // orig: 0x00211F90 (class 0x81's update, the task counter: e.g. the satellite dishes, the spice plants): its two task
@@ -619,7 +672,9 @@ void UpdateTaskCounter(SCREENRT* p)
         if (a.size() > 15) a.resize(15);
         return a;
     };
-    const std::vector<OID> aA = list(1150), aB = list(1151);
+    // (Sly 3: TASKCOUNTER 0x9F, 0x260398: the lists are EOPIDs 1242 / 1243 (Sly 2's 1150 / 1151), the strings the
+    // object's own 864..866 (0x360..0x362 by its slot 55 0x260558: +0x2A8 / +0x2AC / +0x2B0))
+    const std::vector<OID> aA = list(S3EOPID(1150)), aB = list(S3EOPID(1151));
     int ready = 0, readyB = 0, loading = 0;
     for (OID oid : aB)
     {
@@ -640,7 +695,11 @@ void UpdateTaskCounter(SCREENRT* p)
         std::snprintf(s_aachCounter[0], sizeof(s_aachCounter[0]), "%d", readyB);
         std::snprintf(s_aachCounter[1], sizeof(s_aachCounter[1]), "%d", int(aB.size()));
         std::snprintf(s_aachCounter[2], sizeof(s_aachCounter[2]), "%d", int(aB.size()) - readyB);
+        std::array<std::string, 3>& a = s_mpcounter3[p->pss];
+        for (int i = 0; i < 3; ++i) a[size_t(i)] = s_aachCounter[i];
     }
+    if (static const bool s_fPrint = std::getenv("SLY3_COUNTERPRINT") != nullptr; s_fPrint)
+        std::printf("taskcounter %d: lists %zu / %zu (first %d), done %d (shown list %d), open %d\n", p->pss->oid, aA.size(), aB.size(), aB.empty() ? -1 : aB[0], ready, readyB, loading);
     if (ready == int(aA.size() + aB.size()) || !loading) HideScreenObj(p->pss);  // vt slot 50
     else if (loading > 0) ShowScreenObj(p->pss, -1);                          // vt slot 49
 }
@@ -739,12 +798,15 @@ void DrawScreenObjs(SW* psw)
     std::vector<std::pair<LO*, SCREENRT*>> adraw;
     for (LO* plo : AploOfClass(psw, S3CID(0x7E)))
     {
+        if (g_pfnScreenObjSkip3 && g_pfnScreenObjSkip3(plo)) continue;   // (screenrt.h: s3-plane's duel3)
         auto it = s_mpsrt.find(plo);
         if (static const char* s_szWhyOid = std::getenv("SLY3_SCREENWHY_OID"); s_szWhyOid && std::atoi(s_szWhyOid) == plo->oid)
             std::printf("screen %d (parent %d): runtime %d state %d player %d visible %d in world %d\n", plo->oid, plo->paloParent ? plo->paloParent->oid : -1,
                         int(it != s_mpsrt.end()), it != s_mpsrt.end() ? it->second->state : -1, it != s_mpsrt.end() ? int(it->second->fPlayer) : -1,
                         it != s_mpsrt.end() ? int(FVisible(it->second.get())) : -1, int(plo->fInWorld));
         if (it == s_mpsrt.end()) continue;
+        // (debug: SLY3_SCREENSKIP=oid: that screen object not drawn, the picture under it seen)
+        if (static const char* s_szSkip = std::getenv("SLY3_SCREENSKIP"); s_szSkip && std::atoi(s_szSkip) == plo->oid) continue;
         SCREENRT* p = it->second.get();
         if (static const bool s_fWhy = std::getenv("SLY3_SCREENWHY") != nullptr; s_fWhy && p->state >= 2 && (!p->fPlayer || !FVisible(p) || !plo->fInWorld))
             std::printf("screen %d: state %d player %d part %d in world %d not drawn\n", plo->oid, p->state, int(p->fPlayer), p->id7C, int(plo->fInWorld));
@@ -753,6 +815,11 @@ void DrawScreenObjs(SW* psw)
         // them: the binocucom's windows under a player who is not in the world yet)
         static const bool s_fAnyWorld = std::getenv("SLY3_SCREEN_ANYWORLD") != nullptr;
         if (!plo->fInWorld && !s_fAnyWorld) continue;
+        // (hud.h band2p / fCenter2p / fBoard2pObj: the two-player score board's banner over the whole picture, its scores
+        // and the rest in the players' bands)
+        if (g_hud.fCenter2p && plo->Cid() != 0xA4) continue;
+        // (the whole-picture screens: their own pass, not cut into the bands)
+        if ((g_hud.band2p.f || g_hud.fCenter2p || g_hud.fWhole2p) && CHud::FWholeScreen2p(plo->oid) != g_hud.fWhole2p) continue;
         adraw.emplace_back(plo, p);
     }
     // (DrawRpl sorts the kind-21 records with 0x157A98: ascending depth, equal depths in reverse record order. The slots
@@ -765,11 +832,13 @@ void DrawScreenObjs(SW* psw)
         s_psrtDrawing = p;
         SetScreenDrawing3(plo);
         static const bool s_fDbg = std::getenv("SLY2_HUDDBG") != nullptr;
-        if (s_fDbg) std::printf("screen 0x%X: state %d part 0x%X a4 %d a8 %d ac %d b0 %d\n", plo->oid, p->state, p->id7C, int(plo->U32Field(0, 0xA4, 0x7777)),
-                                int(plo->U32Field(0, 0xA8, 0x7777)), int(plo->U32Field(0, 0xAC, 0x7777)), int(plo->U32Field(0, 0xB0, 0x7777)));
+        if (s_fDbg) std::printf("screen %d cid 0x%X: state %d part 0x%X prio %d listed %d inlist %d pause %d\n", plo->oid, unsigned(plo->Cid()), p->state, p->id7C, p->prio,
+                                int(p->fListed), int(p->fInList), int(p->fPause));
         g_zScreenBase = float(std::max(0, p->prio)) * 262144.0f;   // (+0xA4 << 18)
         // (the binocucom's full-screen pieces: screen3.h FWideEdgesScreen3)
         g_hud.fWideEdgesObj = FWideEdgesScreen3(plo);
+        g_hud.oidObj = plo->oid;
+        g_hud.fBoard2pObj = plo->Cid() == 0xA4;
         const bool fFourThree = FFourThreeMenuObj(plo);   // (qolview.h: the gadget grid, Job Help)
         g_hud.fClipCanvasObj = FClipEpisodeMenuToCanvas(plo) || fFourThree;   // (frontend.h: the episode menu on a wide picture)
         g_hud.fWideRectsOnlyObj = plo->oid == 0x30A && !NoWipeMaskFix();   // (the wipe's Sly mask)
@@ -778,6 +847,8 @@ void DrawScreenObjs(SW* psw)
         g_hud.fWideRectsOnlyObj = false;
         g_hud.fWideEdgesObj = false;
         g_hud.fClipCanvasObj = false;
+        g_hud.fBoard2pObj = false;
+        g_hud.oidObj = -1;
     }
     s_psrtDrawing = nullptr;
     SetScreenDrawing3(nullptr);
@@ -786,9 +857,16 @@ void DrawScreenObjs(SW* psw)
         for (auto [plo, p] : adraw) prioMax = std::max(prioMax, p->prio);
         g_zScreenBase = float(prioMax + 1) * 262144.0f;
     }
+    if (g_hud.fCenter2p || g_hud.fWhole2p)
+    {
+        g_zScreenBase = 0.0f;
+        g_pfnScriptString = pfnOld;
+        return;
+    }
     DrawGadgetIcons(pfont, picons);   // (the gadget widget's draw, 0x1DAC58)
     DrawMarkerLabels(pfont, picons);  // (the job markers' names, 0x1CD780: marker.cpp)
     DrawDancePrompts(pfont, picons);  // (the dance director's buttons, 0x152C58: dance.cpp)
+    DrawPasswordButtons3(pfont, picons);  // (a guard's password check, orig3 0x18C510: aipassword3.cpp)
     if (pfont && std::getenv("SLY2N_ICONSTRIP"))
         g_hud.DrawText(*pfont, picons, std::getenv("SLY2N_ICONSTRIP"), -300.0f, -40.0f, 40.0f, 1.0f, 1.0f, 0, glm::vec4(102.0f), glm::vec4(1.0f), glm::vec4(0.0f));
     g_zScreenBase = 0.0f;
@@ -833,6 +911,7 @@ void ResetScreenObjs(SW* psw)
         s_tTimerEnd = 0.0f;
         s_nTimerTick = 0;
     }
+    s_mpcounter3.clear();
     // the states of the old worlds' objects dropped (the wipe started by the transition into this one kept)
     const size_t cBefore = s_mpsrt.size();
     for (auto it = s_mpsrt.begin(); it != s_mpsrt.end();)
@@ -850,6 +929,14 @@ void ResetScreenObjs(SW* psw)
 }
 
 std::string StrHudPromptText();   // hudwidget.cpp (0x2113E0's string)
+
+bool FCounterText3(const LO* plo, int i, std::string* pstr)
+{
+    const auto it = s_mpcounter3.find(plo);
+    if (it == s_mpcounter3.end() || i < 0 || i > 2) return false;
+    *pstr = it->second[size_t(i)];
+    return true;
+}
 
 std::string StrScreenScript(int id)
 {

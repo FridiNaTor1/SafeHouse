@@ -24,7 +24,7 @@ void OpenGadgetMenu(SW* psw, LO* ploPlayer);
 void SetGadgetMenu(int s);           // orig 0x001DB520: -1 closed, 0 Sly, 1 Bentley, 2 Murray
 void UpdateGadgetMenu(SW* psw, LO* ploPlayer);   // orig 0x001DAA90
 bool FGadgetMenuShown();
-std::string StrGadgetScript(int id); // 0x37A / 0x37B
+std::string StrGadgetScript(int id); // Sly 3 1114 / 1115 (Sly 2 0x37A / 0x37B)
 struct FONTBRX;
 void DrawGadgetIcons(const FONTBRX* pfont, const FONTBRX* picons);   // orig 0x001DAC58 (with the screen objects)
 

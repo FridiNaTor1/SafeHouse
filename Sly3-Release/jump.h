@@ -8,6 +8,11 @@ struct ACTOR;
 struct JUMP;
 struct LO;
 
+// Sly 3's jump state 17 (orig3 0x1B77F8 / 0x1B9020 / 0x1B9C48 / 0x1BD520): the leap onto a ride link (class 0x7A, a
+// guard's option 494) chosen by 0x1BBCA8's list 0x479BA4 for an actor whose target flags (vt slot 106, +0x1110) have
+// 0x1000 (the Guru's 0x3080). Natively the jump keeps Sly 2's state numbers (17 is the ledge hang), so it is 24.
+constexpr int c_jsRideLink = 24;
+
 #include <glm/glm.hpp>
 
 // orig: 0x00195950

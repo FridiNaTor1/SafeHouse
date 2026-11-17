@@ -35,6 +35,7 @@ bool FPresent() { return false; }
 bool FSkipSwap() { return false; }
 bool FPadState(GLFWgamepadstate*) { return false; }
 const std::string& StrInteractionProfile() { static const std::string s_str; return s_str; }
+int ControllersInUse() { return 0; }
 void Rumble(float, float) {}
 void ApplyRefreshRate() {}
 void Recenter() {}
@@ -73,6 +74,7 @@ float UnitsPerMetre() { return 100.0f; }
 #include "controller_family.h"
 #include "vr_pad_map.h"
 #include "display.h"
+#include "promptglyph.h"
 #include "gl.h"
 #include "gl_backend.h"
 #include "fsr.h"
@@ -281,6 +283,9 @@ bool s_fRunning = false;          // between xrBeginSession and xrEndSession
 XrSpace s_spaceLocal = XR_NULL_HANDLE, s_spaceView = XR_NULL_HANDLE;
 std::vector<std::string> s_aext;  // the runtime's extensions
 bool s_fExtFrame = false;   // XR_VALVE_frame_controller_interaction (the Steam Frame's controllers)
+// (the other controllers' own profiles where the runtime has them: vr_pad_map.h; without them a runtime presents its
+// controllers through a core profile, often Touch's)
+bool s_fExtViveFocus3 = false, s_fExtViveCosmos = false, s_fExtHp = false, s_fExtOdyssey = false, s_fExtPico = false;
 bool s_fExtRefresh = false, s_fExtFoveation = false, s_fExtPerf = false, s_fExtEglMndx = false, s_fExtThreads = false;
 // (Vulkan: the eyes drawn straight into the OpenXR images, with their clip space's Y flipped (the images are read top
 // row first); the images made with the tile MSAA flag or the input-attachment use (XR_META_vulkan_swapchain_create_info).
@@ -1540,6 +1545,60 @@ bool FCreateActions()
                 {ACT_DpadLeft, "/user/hand/left/input/dpad_left/click"}, {ACT_DpadRight, "/user/hand/left/input/dpad_right/click"},
                 {ACT_Select, "/user/hand/left/input/view/click"}, {ACT_Start, "/user/hand/right/input/menu/click"},
                 {ACT_HapticL, "/user/hand/left/output/haptic"}, {ACT_HapticR, "/user/hand/right/output/haptic"}});
+    // HTC Vive Focus 3 / XR Elite and Vive Cosmos: the Touch layout (X / Y left, A / B right, the left menu button Start)
+    if (s_fExtViveFocus3)
+        suggest(cane::vrpad::kViveFocus3Profile, {
+            {ACT_A, "/user/hand/right/input/a/click"}, {ACT_B, "/user/hand/right/input/b/click"},
+            {ACT_X, "/user/hand/left/input/x/click"}, {ACT_Y, "/user/hand/left/input/y/click"},
+            {ACT_GripL, "/user/hand/left/input/squeeze/click"}, {ACT_GripR, "/user/hand/right/input/squeeze/click"},
+            {ACT_TrigL, "/user/hand/left/input/trigger/value"}, {ACT_TrigR, "/user/hand/right/input/trigger/value"},
+            {ACT_StickL, "/user/hand/left/input/thumbstick"}, {ACT_StickR, "/user/hand/right/input/thumbstick"},
+            {ACT_ClickL, "/user/hand/left/input/thumbstick/click"}, {ACT_ClickR, "/user/hand/right/input/thumbstick/click"},
+            {ACT_Menu, "/user/hand/left/input/menu/click"},
+            {ACT_HapticL, "/user/hand/left/output/haptic"}, {ACT_HapticR, "/user/hand/right/output/haptic"}});
+    if (s_fExtViveCosmos)
+        suggest(cane::vrpad::kViveCosmosProfile, {
+            {ACT_A, "/user/hand/right/input/a/click"}, {ACT_B, "/user/hand/right/input/b/click"},
+            {ACT_X, "/user/hand/left/input/x/click"}, {ACT_Y, "/user/hand/left/input/y/click"},
+            {ACT_GripL, "/user/hand/left/input/squeeze/click"}, {ACT_GripR, "/user/hand/right/input/squeeze/click"},
+            {ACT_TrigL, "/user/hand/left/input/trigger/value"}, {ACT_TrigR, "/user/hand/right/input/trigger/value"},
+            {ACT_StickL, "/user/hand/left/input/thumbstick"}, {ACT_StickR, "/user/hand/right/input/thumbstick"},
+            {ACT_ClickL, "/user/hand/left/input/thumbstick/click"}, {ACT_ClickR, "/user/hand/right/input/thumbstick/click"},
+            {ACT_Menu, "/user/hand/left/input/menu/click"},
+            {ACT_HapticL, "/user/hand/left/output/haptic"}, {ACT_HapticR, "/user/hand/right/output/haptic"}});
+    // HP Reverb G2: the Touch layout, its menu buttons Select (left) / Start (right)
+    if (s_fExtHp)
+        suggest(cane::vrpad::kHpProfile, {
+            {ACT_A, "/user/hand/right/input/a/click"}, {ACT_B, "/user/hand/right/input/b/click"},
+            {ACT_X, "/user/hand/left/input/x/click"}, {ACT_Y, "/user/hand/left/input/y/click"},
+            {ACT_GripL, "/user/hand/left/input/squeeze/value"}, {ACT_GripR, "/user/hand/right/input/squeeze/value"},
+            {ACT_TrigL, "/user/hand/left/input/trigger/value"}, {ACT_TrigR, "/user/hand/right/input/trigger/value"},
+            {ACT_StickL, "/user/hand/left/input/thumbstick"}, {ACT_StickR, "/user/hand/right/input/thumbstick"},
+            {ACT_ClickL, "/user/hand/left/input/thumbstick/click"}, {ACT_ClickR, "/user/hand/right/input/thumbstick/click"},
+            {ACT_Select, "/user/hand/left/input/menu/click"}, {ACT_Start, "/user/hand/right/input/menu/click"},
+            {ACT_HapticL, "/user/hand/left/output/haptic"}, {ACT_HapticR, "/user/hand/right/output/haptic"}});
+    // Samsung Odyssey: the WMR controllers' layout
+    if (s_fExtOdyssey)
+        suggest(cane::vrpad::kOdysseyProfile, {
+            {ACT_A, "/user/hand/right/input/trackpad/click"}, {ACT_X, "/user/hand/left/input/trackpad/click"},
+            {ACT_GripL, "/user/hand/left/input/squeeze/click"}, {ACT_GripR, "/user/hand/right/input/squeeze/click"},
+            {ACT_TrigL, "/user/hand/left/input/trigger/value"}, {ACT_TrigR, "/user/hand/right/input/trigger/value"},
+            {ACT_StickL, "/user/hand/left/input/thumbstick"}, {ACT_StickR, "/user/hand/right/input/thumbstick"},
+            {ACT_ClickL, "/user/hand/left/input/thumbstick/click"}, {ACT_ClickR, "/user/hand/right/input/thumbstick/click"},
+            {ACT_Select, "/user/hand/left/input/menu/click"}, {ACT_Start, "/user/hand/right/input/menu/click"},
+            {ACT_HapticL, "/user/hand/left/output/haptic"}, {ACT_HapticR, "/user/hand/right/output/haptic"}});
+    // Pico 4 / Neo 3 (XR_BD_controller_interaction): the Touch layout, the left menu button Start
+    if (s_fExtPico)
+        for (const char* szProfile : {cane::vrpad::kPico4Profile, cane::vrpad::kPicoNeo3Profile})
+            suggest(szProfile, {
+                {ACT_A, "/user/hand/right/input/a/click"}, {ACT_B, "/user/hand/right/input/b/click"},
+                {ACT_X, "/user/hand/left/input/x/click"}, {ACT_Y, "/user/hand/left/input/y/click"},
+                {ACT_GripL, "/user/hand/left/input/squeeze/value"}, {ACT_GripR, "/user/hand/right/input/squeeze/value"},
+                {ACT_TrigL, "/user/hand/left/input/trigger/value"}, {ACT_TrigR, "/user/hand/right/input/trigger/value"},
+                {ACT_StickL, "/user/hand/left/input/thumbstick"}, {ACT_StickR, "/user/hand/right/input/thumbstick"},
+                {ACT_ClickL, "/user/hand/left/input/thumbstick/click"}, {ACT_ClickR, "/user/hand/right/input/thumbstick/click"},
+                {ACT_Menu, "/user/hand/left/input/menu/click"},
+                {ACT_HapticL, "/user/hand/left/output/haptic"}, {ACT_HapticR, "/user/hand/right/output/haptic"}});
     // the generic profile every runtime knows: confirm and Start
     suggest("/interaction_profiles/khr/simple_controller", {
         {ACT_A, "/user/hand/right/input/select/click"}, {ACT_X, "/user/hand/left/input/select/click"},
@@ -1571,6 +1630,8 @@ void UpdateProfile()
         uint32_t c = 0;
         if (XR_SUCCEEDED(pxrPathToString(s_inst, st.interactionProfile, sizeof ach, &c, ach))) { str = ach; break; }
     }
+    // (tests: SLY2N_VR_PROFILE names the profile, ControllersInUse)
+    if (const char* sz = std::getenv("SLY2N_VR_PROFILE"); sz && *sz && !str.empty()) str = sz;
     if (str != s_strProfile) Log("controllers: %s", str.empty() ? "none" : str.c_str());
     s_strProfile = str;
     s_fPad = !str.empty();
@@ -1579,11 +1640,8 @@ void UpdateProfile()
     const cane::vrpad::Controllers ctl = cane::vrpad::controllersOf(str.c_str());
     s_fRealStartSelect = cane::vrpad::realStartSelectOf(ctl);
     s_layoutPad = cane::vrpad::layoutOf(ctl);
-    // the prompts' family (controllers' controller_family.h VR families; the Steam Frame's: its gamepad layout)
-    using cane::input::Family;
-    using C = cane::vrpad::Controllers;
-    s_familyPrompt = ctl == C::Index ? Family::ValveIndex : ctl == C::Vive ? Family::ViveWand
-                   : ctl == C::Frame ? Family::SteamFrame : ctl == C::Pico ? Family::Pico : Family::MetaQuest;
+    // the prompts' family (controller_family.h's VR families: promptglyph.h VrPromptFamily)
+    s_familyPrompt = VrPromptFamily(int(ctl));
 }
 
 bool BoolOf(int act)
@@ -2034,6 +2092,13 @@ bool FActive() { return s_fStarted; }
 bool FMenuShown() { return s_fStarted; }
 bool FExitRequested() { return s_fExit; }
 const std::string& StrInteractionProfile() { return s_strProfile; }
+int ControllersInUse()
+{
+    // (tests: a profile named by SLY2N_VR_PROFILE, with or without a session)
+    static const char* s_szTest = std::getenv("SLY2N_VR_PROFILE");
+    if (s_szTest && *s_szTest) return int(cane::vrpad::controllersOf(s_szTest));
+    return s_fStarted ? int(cane::vrpad::controllersOf(s_strProfile.c_str())) : 0;
+}
 
 // The OpenXR instance and the headset (the renderer's graphics extension: Vulkan's or OpenGL's); false: no VR
 bool FCreateInstance(bool fVulkan)
@@ -2117,6 +2182,12 @@ bool FCreateInstance(bool fVulkan)
     if ((s_fExtPerf = FHasExt(XR_EXT_PERFORMANCE_SETTINGS_EXTENSION_NAME))) aextWant.push_back(XR_EXT_PERFORMANCE_SETTINGS_EXTENSION_NAME);
     // (the Steam Frame's controllers as themselves, not as Touch controllers: vr_pad_map.h Gamepad layout)
     if ((s_fExtFrame = FHasExt(cane::vrpad::kFrameExtension))) aextWant.push_back(cane::vrpad::kFrameExtension);
+    // (the other controllers as themselves where the runtime knows them: the right pictures and icons on the Controls
+    // page; their bindings are the Touch / Pads layout's as before)
+    for (auto [pf, sz] : {std::pair<bool*, const char*>{&s_fExtViveFocus3, cane::vrpad::kViveFocus3Extension},
+                          {&s_fExtViveCosmos, cane::vrpad::kViveCosmosExtension}, {&s_fExtHp, cane::vrpad::kHpExtension},
+                          {&s_fExtOdyssey, cane::vrpad::kOdysseyExtension}, {&s_fExtPico, cane::vrpad::kPicoExtension}})
+        if ((*pf = FHasExt(sz))) aextWant.push_back(sz);
     if ((s_fExtLayerSettings = FHasExt(XR_FB_COMPOSITION_LAYER_SETTINGS_EXTENSION_NAME))) aextWant.push_back(XR_FB_COMPOSITION_LAYER_SETTINGS_EXTENSION_NAME);
     if ((s_fExtAutoLayerFilter = s_fExtLayerSettings && FHasExt("XR_META_automatic_layer_filter"))) aextWant.push_back("XR_META_automatic_layer_filter");
     s_fExtVkSwapchainMeta = s_fVkDirect = false;
@@ -2257,9 +2328,58 @@ bool FStart()
     return true;
 }
 
+// The game quits by itself (the pause menu's Exit to Desktop): the session ended the way OpenXR asks for, before it is
+// destroyed: xrRequestExitSession, the frames kept coming (empty) until the runtime says STOPPING, xrEndSession there,
+// then IDLE / EXITING. (Before, a running session was destroyed outright: on the Quest 3S the game then never left the
+// headset (the last picture stayed, the process with it) until Quit in the Meta menu; the runtime's own Quit, which
+// ends the session first, always worked.) At most ~3 s; logged.
+void EndSessionForExit()
+{
+    if (!s_session || !s_fRunning) return;
+    if (s_frame.fBegun)
+    {
+        // (a frame begun and not ended: ended empty)
+        XrFrameEndInfo ei{XR_TYPE_FRAME_END_INFO};
+        ei.displayTime = s_frame.state.predictedDisplayTime;
+        ei.environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
+        pxrEndFrame(s_session, &ei);
+        s_frame.fBegun = false;
+    }
+    const XrResult r = pxrRequestExitSession(s_session);
+    Log("exit: xrRequestExitSession %d (state %d)", int(r), int(s_state));
+    if (XR_FAILED(r)) return;
+    const double t0 = MsNow();
+    while (MsNow() - t0 < 3000.0)
+    {
+        PollEvents();   // (STOPPING: xrEndSession, s_fRunning false)
+        if (!s_fRunning && (s_state == XR_SESSION_STATE_EXITING || s_state == XR_SESSION_STATE_IDLE ||
+                            s_state == XR_SESSION_STATE_LOSS_PENDING))
+            break;
+        if (s_fRunning && (s_state == XR_SESSION_STATE_SYNCHRONIZED || s_state == XR_SESSION_STATE_VISIBLE ||
+                           s_state == XR_SESSION_STATE_FOCUSED))
+        {
+            // (the runtime moves on from the frame loop: empty frames until STOPPING)
+            XrFrameState fs{XR_TYPE_FRAME_STATE};
+            XrFrameWaitInfo wi{XR_TYPE_FRAME_WAIT_INFO};
+            if (XR_FAILED(pxrWaitFrame(s_session, &wi, &fs))) break;
+            XrFrameBeginInfo bi{XR_TYPE_FRAME_BEGIN_INFO};
+            if (XR_FAILED(pxrBeginFrame(s_session, &bi))) break;
+            XrFrameEndInfo ei{XR_TYPE_FRAME_END_INFO};
+            ei.displayTime = fs.predictedDisplayTime;
+            ei.environmentBlendMode = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
+            if (XR_FAILED(pxrEndFrame(s_session, &ei))) break;
+        }
+        else
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    Log("exit: session %s after %.0f ms (state %d)", s_fRunning ? "still running" : "ended", MsNow() - t0, int(s_state));
+    if (s_fRunning) { pxrEndSession(s_session); s_fRunning = false; }
+}
+
 void Shutdown()
 {
     WaitVkSubmissions();
+    EndSessionForExit();
     s_fStarted = false;
     if (s_session)
     {

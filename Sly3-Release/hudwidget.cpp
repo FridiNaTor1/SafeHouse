@@ -2,13 +2,17 @@
 // m_1D93D8_c.cpp (0x1D9520, 0x1D9648, 0x1DA2E0, 0x1DA350), m_1D9DF8_p3.cpp (0x1D9968, 0x1D9DF8); the decomp's
 // func_001DA4B8.c / func_001DA578.c.
 
+#include "game/items3.h"
 #include "hudwidget.h"
+#include "splitscreen3.h"
 #include "gauge3.h"
 #include "binoc3.h"
 #include "game/scptgame3.h"
 #include "screen3.h"
 #include "screen3.h"
 #include "game/sly3.h"
+#include "cheat.h"
+#include "actioninput.h"
 #include "skipcut.h"
 #include "debugmenu.h"
 #include "joy.h"
@@ -98,18 +102,19 @@ bool FPlayerPowerGadget(LO* player)
 {
     uint32_t table = 0;
     int count = 0;
-    if (FCidDerivedFrom(player->Cid(), S3CID(0x35))) { table = S3VA(0x2C2DE8); count = 18; }
-    else if (FCidDerivedFrom(player->Cid(), S3CID(0x37))) { table = S3VA(0x2C3028); count = 9; }
-    else if (FCidDerivedFrom(player->Cid(), S3CID(0x36))) { table = S3VA(0x2C3148); count = 8; }
+    // (Sly 3: the Gadget Grid's tables, orig3 0x21FAE0: 0x348BE0 Sly 15, 0x348DC0 Bentley 11, 0x348F20 Murray 8; their
+    // ids are Sly 3's)
+    if (FCidDerivedFrom(player->Cid(), S3CID(0x35))) { table = 0x348BE0; count = 15; }
+    else if (FCidDerivedFrom(player->Cid(), S3CID(0x37))) { table = 0x348DC0; count = 11; }
+    else if (FCidDerivedFrom(player->Cid(), S3CID(0x36))) { table = 0x348F20; count = 8; }
     for (int i = 0; i < count; ++i)
     {
         int32_t id = -1, cost = 0;
         const uint8_t* entry = g_disc.PbElf(table + 0x20 * i, 4);
         if (!entry) continue;
         std::memcpy(&id, entry, 4);
-        if (!FPowerupOwned(id)) continue;
-        const uint8_t* itemCost = g_disc.PbElf(S3VA(0x2BCD00) + 0x20 * id + 0xC, 4);
-        if (itemCost) std::memcpy(&cost, itemCost, 4);
+        if (!FPowerupOwned(sly3::Item2FromItem3(id))) continue;
+        cost = sly3::Item3(id).cost;   // (Sly 3's table, game/items3.h)
         if (cost > 0) return true;
     }
     return false;
@@ -303,7 +308,7 @@ void SetPromptState(PROMPT& p, int n)
     SetPromptText3(n == 0 ? -1 : p.id);   // (orig3 the widget +0x18 = 0x46F788: script string 846)
 }
 
-// orig: 0x001DA350
+// orig: 0x001DA350 (orig3: 0x21E710: Sly 3 waits on part 0x379, here already)
 void UpdatePrompt(PROMPT& p)
 {
     if (!p.plo) return;
@@ -395,7 +400,8 @@ bool FHudPromptTicker(float* pt, float* pgEnd)
 }
 void EndHudPromptTicker() { SetPromptState(s_prompt, 3); }
 
-// orig: 0x001DA5B0 (the prompt asked for next, else the one shown)
+int IdDisplayedHudPrompt() { return s_prompt.id; }
+// orig: 0x001DA5B0 (the prompt asked for next, else the one shown) (orig3: 0x21E968, the same code in Sly 3)
 int IdHudPrompt() { return s_prompt.idNext != -1 ? s_prompt.idNext : s_prompt.id; }
 
 void HudPromptEnd(int id)
@@ -445,6 +451,7 @@ void InitHudWidgets(SW* psw)
     InitGauge(s_gauge, psw);
     // orig: 0x001DA320 (the reset) / 0x001DA2E0
     InitGauges3(psw);   // (Sly 3's character gauge, class 0xA3: gauge3.h)
+    InstallNotice3();   // (the script command 0x1C's HUD notice: gauge3.h)
     InitBinocPanels3(psw);   // (the binocucom's panel: binoc3.h)
     // orig3: 0x0021E6B8 (the reset) / 0x0021E678: Sly 3's prompt is the global screen object 1058 (0x422)
     s_prompt = PROMPT{};
@@ -485,11 +492,13 @@ void UpdateHud(SW* psw)
     ++g_cframeScreen;
     // orig 0x001D9648: Start opens the pause menu (0x1B0290; else the press is left for the title), then the
     // widgets: the menu 0x3D9ED0, the gauge, the prompt, the card dialog, the title
-    // the player's Select (0x1403D0: the pad's Select without R1): the gadget assignment of its character
-    if ((g_grfjoyt & 2) && !FTitleShown() && !FMenuShown() && !FShopShown() && !FGadgetMenuShown() && !FJobHelpShown() && GrfbtnPressed(0x100) &&
-        (GrfbtnHeld() & 0x108) == 0x100 && PloPlayerPo())
+    // The original Select shortcut requires R1 released. Advanced mode gives this menu its own action.
+    const bool advanced = sly2actions::Active();
+    if ((g_grfjoyt & 2) && !FTitleShown() && !FMenuShown() && !FShopShown() && !FGadgetMenuShown() && !FJobHelpShown() && PloPlayerPo() &&
+        (advanced ? sly2actions::Pressed(sly2actions::Action::GadgetMenu)
+                  : GrfbtnPressed(0x100) && (GrfbtnHeld() & 0x108) == 0x100))
     {
-        GrfbtnTakePressed(0x100);
+        GrfbtnTakePressed(advanced ? 0x107 : 0x100);
         OpenGadgetMenu(psw, PloPlayerPo());
     }
     // orig 0x1D9648 reads the gameplay pad (JoyFor(2)); a failure screen's
@@ -502,10 +511,19 @@ void UpdateHud(SW* psw)
     UpdateShop(psw);
     UpdateJobHelp(psw);
     UpdateGadgetMenu(psw, PloPlayerPo());
+    UpdateCheatCodes(psw);   // 0x14BFF8 on 0x2DDEC0 (cheat.h)
     UpdateGauge(s_gauge);
-    UpdateGauges3(psw, FPadHasPlayer3(psw) ? PloPlayerPo() : nullptr);   // (orig3 0x1F4548: the pad's player's gauge)
+    // (orig3 0x1F4548: the pad's player's gauge. Sly 3's menus pause the pad's player as they open (the gadget grid
+    // 0x21FAE0, the ThiefNet 0x220590, the pause menu: 0x1A93C8 -> 0x1A9630), so the gauge loses its player and hides
+    // while one is up: natively the same test on the menus)
+    const bool fMenuUp = FMenuShown() || FShopShown() || FGadgetMenuShown() || FJobHelpShown() || FNoticeShown3();
+    // (orig3 0x1F4548 is the PO's: any current PO with a gauge child shows it, e.g. the hack ship 68931's 74160 (Bentley's
+    // gauge on the ship's hit points, the reference's state 1 during Ep3's hacks); natively only a PLAYER (0x34) had one)
+    LO* ploGauge = !FTitleShown() && s_psw ? PloPoCurrent(s_psw) : nullptr;
+    UpdateGauges3(psw, FPadHasPlayer3(psw) && !fMenuUp ? ploGauge : nullptr);
     UpdateBinocPanels3(psw);   // (the binocucom's window: binoc3.h)
     UpdateCoins3(psw);         // (the coin counter: gauge3.h)
+    UpdateNotice3();           // (the HUD notice: gauge3.h)
     // Development-only semantic trace for comparisons with the original gauge.
     static const bool s_fMeter = std::getenv("SLY2N_HUDMETER") != nullptr;
     if (s_fMeter)
@@ -552,7 +570,18 @@ void UpdateHud(SW* psw)
 namespace
 {
 std::map<LO*, float> s_mpfadeStart;
+std::map<LO*, int> s_mpfadeView;   // (Sly 3 +0x60: the fade's camera (option 1063): natively the player's view index; none: all)
 uint32_t s_serialFades = 0;   // (the world the fades belong to: a new world drops the old one's objects)
+// (s3-prologue) a fade's field at its Sly 3 offset, else 0x10 further: the options reach the fields either way (Sly 3's
+// setters at +0x40.., the loader's translated EOPIDs 1074..1080 at Sly 2's +0x50..: m_ext's lightning fades 32233 /
+// 32235 had colour 0 and drew nothing)
+uint32_t UFadeField(const LO* plo, uint32_t ib3)
+{
+    // (by the object's layout, told by its first colour: Sly 3's +0x40 set, else all at Sly 2's offsets)
+    constexpr uint32_t c_uNone = 0xDEADBEEFu;
+    const bool fSly3 = plo->U32Field(0, 0x40, c_uNone) != c_uNone;
+    return plo->U32Field(0, fSly3 ? ib3 : ib3 + 0x10, 0);
+}
 int NLerpFade(float g, int a, int b)
 {
     const float k = 0.999f;   // 0x3F7FBE77
@@ -565,21 +594,32 @@ void DrawFades(SW* psw)
     if (s_serialFades != psw->serial)
     {
         s_mpfadeStart.clear();
+        s_mpfadeView.clear();
         s_serialFades = psw->serial;
     }
     for (auto it = s_mpfadeStart.begin(); it != s_mpfadeStart.end();)
     {
         LO* plo = it->first;
-        const float d5C = std::bit_cast<float>(plo->U32Field(0, 0x5C, 0)), d60 = std::bit_cast<float>(plo->U32Field(0, 0x60, 0)),
-                    d64 = std::bit_cast<float>(plo->U32Field(0, 0x64, 0));
+        // orig3 0x17D270 (Sly 3's FADE, class 0x8A: the colours +0x40 / +0x44 / +0x48 (options 1065..1067), the phases
+        // +0x4C / +0x50 / +0x54 (1068 / 1070 / 1069), the start +0x58; Sly 2's were 0x10 further: read there, a Sly 3
+        // fade's colours were its phase lengths)
+        const float d5C = std::bit_cast<float>(UFadeField(plo, 0x4C)), d60 = std::bit_cast<float>(UFadeField(plo, 0x50)),
+                    d64 = std::bit_cast<float>(UFadeField(plo, 0x54));
         float dt = g_clock.t - it->second;
         if (!plo->fInWorld || d5C + d60 + d64 < dt)
         {
             if (plo->fInWorld) RemoveLo(psw, plo);   // (vt slot 9)
+            s_mpfadeView.erase(plo);
             it = s_mpfadeStart.erase(it);
             continue;
         }
-        const uint32_t c50 = plo->U32Field(0, 0x50, 0), c54 = plo->U32Field(0, 0x54, 0), c58 = plo->U32Field(0, 0x58, 0);
+        // (a fade on a player's camera (0x17D270's +0x60 rectangle): drawn in that player's view only)
+        if (auto iv = s_mpfadeView.find(plo); iv != s_mpfadeView.end() && iv->second >= 0 && iv->second != g_iviewHud3)
+        {
+            ++it;
+            continue;
+        }
+        const uint32_t c50 = UFadeField(plo, 0x40), c54 = UFadeField(plo, 0x44), c58 = UFadeField(plo, 0x48);
         uint32_t ca = c54, cb = c54;
         float d = 1.0f;
         if (dt < d5C) { ca = c50; cb = c54; d = d5C; }
@@ -594,12 +634,15 @@ void DrawFades(SW* psw)
 }
 }  // namespace
 
+int g_iviewHud3 = -1;
+
 // orig: 0x0015E1D8 (a fade object (cid 0x74) started: its start time +0x68, added to the world unless in it)
+// (orig3 0x17D7D0: the start +0x58, unless in the world (bit 56))
 void StartFadeLo(LO* plo)
 {
     if (plo && !plo->fInWorld)
     {
-        if (g_psw && s_serialFades != g_psw->serial) { s_mpfadeStart.clear(); s_serialFades = g_psw->serial; }
+        if (g_psw && s_serialFades != g_psw->serial) { s_mpfadeStart.clear(); s_mpfadeView.clear(); s_serialFades = g_psw->serial; }
         s_mpfadeStart[plo] = g_clock.t;
         if (g_psw) AddLo(g_psw, plo);   // (vt slot 8)
     }
@@ -615,6 +658,17 @@ struct INITFADE
             StartFadeLo(plo);
             return CRef(TAGK_Void);
         });
+        // orig3 0x10B2F0 (FADE option 1063, 0x17D820): the camera +0x60 (the world's options 1005 / 1006: a player's
+        // view; natively the player character stands for it, spliceglue.cpp), then the start
+        RegisterObjectMethod3(0x10B2F0, [](LO* plo, const std::vector<CRef>& a) {
+            LO* pcam = a.empty() ? nullptr : dynamic_cast<LO*>(a[0].m_pbasic);
+            int iview = -1;
+            for (int i = 0; pcam && g_psw && i < 2; ++i)
+                if (split3::PloPlayer(g_psw, i) == pcam) iview = i;
+            if (plo && !plo->fInWorld) s_mpfadeView[plo] = iview;
+            StartFadeLo(plo);
+            return CRef(TAGK_Void);
+        });
     }
 } s_initfade;
 }  // namespace
@@ -622,11 +676,14 @@ struct INITFADE
 void DrawHud(SW* psw, int width, int height)
 {
     g_hud.Begin();
-    if (psw) DrawFades(psw);
+    if (psw && !g_hud.fCenter2p && !g_hud.fWhole2p) DrawFades(psw);
     // (debugmenu.h: F11 hides the HUD for clean pictures; the game's own menus stay)
     if (!FDebugHudHidden() || FMenuShown()) DrawScreenObjs(psw);
-    DrawHackCursor();   // (hackmouse.h: the hacking minigame's mouse cursor)
-    DrawSkipCut();   // (skipcut.h: the hint / the indicator over everything)
+    if (!g_hud.fCenter2p && !g_hud.fWhole2p)
+    {
+        DrawHackCursor();   // (hackmouse.h: the hacking minigame's mouse cursor)
+        DrawSkipCut();   // (skipcut.h: the hint / the indicator over everything)
+    }
     g_hud.Flush(width, height);
 }
 

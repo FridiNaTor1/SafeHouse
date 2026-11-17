@@ -2,7 +2,11 @@
 // made incremental (packets read from the disc as the movie plays); the decoder setup is Sly1-Release fmv.cpp's.
 
 #include "game/sly3.h"
+#if defined(__ANDROID__)
+#include "android/android_app.h"
+#endif
 #include "fmv.h"
+#include "langstore.h"
 #include "region.h"
 
 #include "audio.h"
@@ -43,7 +47,7 @@ uint32_t Be32(const uint8_t* p) { return (uint32_t(p[0]) << 24) | (uint32_t(p[1]
 uint32_t Be16(const uint8_t* p) { return (uint32_t(p[0]) << 8) | p[1]; }
 uint32_t Le32(const uint8_t* p) { uint32_t v; std::memcpy(&v, p, 4); return v; }
 
-// The PSS file read from the disc in pieces.
+// The PSS file read from the disc in pieces, or one already in memory (the converter's: it has the file's bytes).
 class CPssReader
 {
 public:
@@ -54,6 +58,11 @@ public:
         uint8_t h[4] = {};
         m_fElementary = g_disc.FReadFileBytes(m_isector, 0, h, 4) && Be32(h) == 0x000001B3;
     }
+    CPssReader(const uint8_t* pb, std::size_t cb) : m_isector(0), m_cbFile(cb), m_pbMemory(pb)
+    {
+        m_fElementary = cb >= 4 && Be32(pb) == 0x000001B3;
+    }
+    [[nodiscard]] std::size_t CbFile() const { return m_cbFile; }
     [[nodiscard]] bool FElementary() const { return m_fElementary; }
 
     // The next PES packet of the video (0xE0) or private stream 1 (0xBD); false at the end.
@@ -112,10 +121,11 @@ public:
     }
 
 private:
-    const uint8_t* Pb() const { return m_ab.data() + (m_ib - m_ibBuf); }
+    const uint8_t* Pb() const { return m_pbMemory ? m_pbMemory + m_ib : m_ab.data() + (m_ib - m_ibBuf); }
 
     bool FEnsure(std::size_t cb)
     {
+        if (m_pbMemory) return m_ib + cb <= m_cbFile;
         if (m_ib + cb <= m_ibBuf + m_ab.size()) return true;
         if (m_ib + cb > m_cbFile) return false;
         // Keep the unread tail, read the next 64 KB after it.
@@ -132,6 +142,7 @@ private:
 
     uint32_t m_isector;  // (the file: its key's sector)
     std::size_t m_cbFile;
+    const uint8_t* m_pbMemory = nullptr;   // (the file in memory: no reads)
     bool m_fElementary = false;
     std::vector<uint8_t> m_ab;
     std::size_t m_ibBuf = 0;  // file offset of m_ab[0]
@@ -298,10 +309,12 @@ std::string AvError(int error)
 }
 }  // namespace
 
-bool FDemuxMovie(const FK& fk, std::vector<uint8_t>& abVideo, std::map<int, MOVIEAUDIOTRACK>& mpaudio)
+namespace
 {
-    CPssReader reader(fk);
+bool FDemuxPss(CPssReader& reader, std::vector<uint8_t>& abVideo, std::map<int, MOVIEAUDIOTRACK>& mpaudio)
+{
     if (reader.FElementary()) return false;
+    abVideo.reserve(reader.CbFile());   // (the video is most of the file: no regrowth of a few hundred MB)
     std::map<int, CMovieAudio> mpdec;
     uint32_t id = 0;
     const uint8_t* pb = nullptr;
@@ -320,6 +333,19 @@ bool FDemuxMovie(const FK& fk, std::vector<uint8_t>& abVideo, std::map<int, MOVI
         t.asample.assign(dec.m_pcm.begin(), dec.m_pcm.end());
     }
     return !abVideo.empty();
+}
+}  // namespace
+
+bool FDemuxMovie(const FK& fk, std::vector<uint8_t>& abVideo, std::map<int, MOVIEAUDIOTRACK>& mpaudio)
+{
+    CPssReader reader(fk);
+    return FDemuxPss(reader, abVideo, mpaudio);
+}
+
+bool FDemuxMovie(const std::vector<uint8_t>& abFile, std::vector<uint8_t>& abVideo, std::map<int, MOVIEAUDIOTRACK>& mpaudio)
+{
+    CPssReader reader(abFile.data(), abFile.size());
+    return FDemuxPss(reader, abVideo, mpaudio);
 }
 
 std::vector<MOVIEINFO> MovieList()
@@ -368,6 +394,13 @@ bool FFindMovie(const std::string& arg, MOVIEINFO* pinfo)
 // fmv.cpp PlayCutscene (the FFmpeg decoder, the frame pacing)
 bool FPlayMovie(const FK& fk, PFNMOVIEPRESENT pfnPresent, void* pv, MOVIESTATS* pstats, double tMax)
 {
+#if defined(__ANDROID__)
+    // the on-screen pad shows only the skip / advance keys while a movie plays (pcinput.cpp)
+    extern bool g_fMovieTouchContext;
+    g_fMovieTouchContext = true;
+    cane::android::setTouchContext(cane::android::TouchContext::Cinematic);
+    struct MovieContextEnd { ~MovieContextEnd() { g_fMovieTouchContext = false; } } movieContextEnd;
+#endif
     MOVIESTATS stats;
     av_log_set_level(AV_LOG_ERROR);
     const AVCodec* codec = avcodec_find_decoder(AV_CODEC_ID_MPEG2VIDEO);
@@ -388,10 +421,13 @@ bool FPlayMovie(const FK& fk, PFNMOVIEPRESENT pfnPresent, void* pv, MOVIESTATS* 
     CPssReader reader(fk);
     CMovieAudio audio;
     // (PC) an M2V's sound: the WAV of track 0 (one sound track: the USA disc), else the language's (track + 1)
-    if (reader.FElementary())
+    // (PC: a language the disc lacks: its sound from the languages folder, langstore.h, over a PSS's own too)
+    const std::string pathStore = PathLanguageStoreMovieAudio(fk.isector);
+    if (!pathStore.empty()) audio.FOpenWav(pathStore);
+    else if (reader.FElementary())
     {
         std::string path = g_disc.PathPart(fk.isector, "audio0");
-        if (path.empty()) path = g_disc.PathPart(fk.isector, "audio" + std::to_string(g_nLang + 1));
+        if (path.empty()) path = g_disc.PathPart(fk.isector, "audio" + std::to_string(LangWorld() + 1));
         if (!path.empty()) audio.FOpenWav(path);
     }
     CPcmStream pcm;
@@ -480,7 +516,7 @@ bool FPlayMovie(const FK& fk, PFNMOVIEPRESENT pfnPresent, void* pv, MOVIESTATS* 
             if (id == 0xE0) feedVideo(pb, cb);
             // orig 0x1B3EC0: the sound streams with the id 0 (one sound track: the USA disc) or the language's + 1 (the
             // European discs: one track per language, 1..11; region.h)
-            else if (cb >= 4 && (pb[3] == 0 || pb[3] == g_nLang + 1)) audio.AddPacket(pb, cb);
+            else if (cb >= 4 && pathStore.empty() && (pb[3] == 0 || pb[3] == LangWorld() + 1)) audio.AddPacket(pb, cb);
             if (apicture.size() > 8) break;  // (sound far behind the pictures: show some first)
         }
     };

@@ -28,6 +28,7 @@ void CollectHackSwarmDraws(const SCENE& scene, std::vector<EXTRADRAW>& aextra); 
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <bit>
 #include <cmath>
 #include <cstdio>
@@ -1585,10 +1586,21 @@ std::vector<uint8_t> s_afClosedShadow2Caster; // (and whether each is a closed, 
 GLSHADER s_shShadowVol, s_shShadowVolNoKill;
 GLuint s_vaoShadowVol = 0, s_vboShadowVol = 0;
 
+// What FBuildShadow2 can tell about the volume it built, for the depth bounds test and the z-pass casters (DrawShadow2),
+// from the triangles' vertex numbers instead of their positions (much cheaper than FClosedOriented / ZRangeOfCaster
+// over every vertex, the same answers):
+// - fIds: within each piece, every vertex number (the record's vertex, near or projected) was written with the same
+//   position each time, so the volume is a function of the numbered surface. Else the two below are not filled.
+// - fClosed: the numbered surface is closed and consistently oriented (each directed edge met by its reverse as often,
+//   per piece). Then the positions are too (FClosedOriented is true); if not, the positions may still be: ask it.
+// - avDistinct: each piece's distinct vertex positions, so ZRangeOfCaster over them is the range over every vertex.
+struct SH2INFO { bool fIds = true, fClosed = true; std::vector<glm::vec3> avDistinct; };
+
 // (the volume's vertices appended to avtxOut, cmd's range in it; any thread: the scratch is the thread's own)
 bool FBuildShadow2(const SCENEGLOBSET& sgs, size_t iglob, const GLOB& glob, const glm::vec3& posCamera, float sNear,
-                   std::vector<glm::vec3>& avtxOut, CMD& cmd)
+                   std::vector<glm::vec3>& avtxOut, CMD& cmd, SH2INFO* pinfo = nullptr)
 {
+    if (pinfo) pinfo->fIds = pinfo->fClosed = true, pinfo->avDistinct.clear();
     static const bool s_fDbg = std::getenv("SLY2_SH2DBG") != nullptr;
     static const char* const s_szOnly = std::getenv("SLY2_SH2ONLY");
     if (s_fDbg)
@@ -1670,18 +1682,43 @@ bool FBuildShadow2(const SCENEGLOBSET& sgs, size_t iglob, const GLOB& glob, cons
     const uint32_t ivtxFirst = uint32_t(avtxOut.size());
     // (perf-3: a prism's 24 vertices written through one resize, not 24 push_backs)
     glm::vec3* pout = nullptr;
-    auto tri = [&](glm::vec3 a, glm::vec3 b, glm::vec3 c, const glm::vec3& outward) {
-        if (glm::dot(glm::cross(b - a, c - a), outward) < 0.0f) std::swap(b, c);
+    // (pinfo: per piece, each vertex number's position (number = record vertex << 1 | projected) and each unordered
+    // pair's count of one direction minus the other's)
+    static thread_local std::array<glm::vec3, 256> s_aposId;
+    static thread_local std::array<uint64_t, 4> s_abId;
+    static thread_local std::vector<int16_t> s_adEdge(size_t(1) << 16, 0);
+    static thread_local std::vector<uint16_t> s_akEdge;
+    auto noteVtx = [&](uint8_t id, const glm::vec3& v) {
+        uint64_t& b = s_abId[id >> 6];
+        const uint64_t m = uint64_t(1) << (id & 63);
+        if (!(b & m)) { b |= m; s_aposId[id] = v; }
+        else if (std::memcmp(&s_aposId[id], &v, sizeof(glm::vec3))) pinfo->fIds = false;
+    };
+    auto noteEdge = [&](uint8_t p, uint8_t q) {
+        if (p == q) return;   // (a degenerate edge is its own reverse)
+        const uint16_t k = p < q ? uint16_t(p << 8 | q) : uint16_t(q << 8 | p);
+        int16_t& d = s_adEdge[k];
+        if (!d) s_akEdge.push_back(k);
+        d = int16_t(d + (p < q ? 1 : -1));
+    };
+    auto tri = [&](glm::vec3 a, glm::vec3 b, glm::vec3 c, const glm::vec3& outward, uint8_t ia, uint8_t ib, uint8_t ic) {
+        if (glm::dot(glm::cross(b - a, c - a), outward) < 0.0f) std::swap(b, c), std::swap(ib, ic);
         pout[0] = a;
         pout[1] = b;
         pout[2] = c;
         pout += 3;
+        if (pinfo)
+        {
+            noteVtx(ia, a), noteVtx(ib, b), noteVtx(ic, c);
+            noteEdge(ia, ib), noteEdge(ib, ic), noteEdge(ic, ia);
+        }
     };
     for (size_t k = 0; k < glob.asubfx.size(); ++k)
     {
         const SUBFX& fx = glob.asubfx[k];
         const auto& av = s_aav[k];
         auto P = [&](uint8_t u) { const size_t i = u / 2; return i < av.size() ? av[i] : glm::vec3(0.0f); };
+        if (pinfo) s_abId.fill(0), s_akEdge.clear();
         auto lit = [&](const glm::vec3& a, const glm::vec3& b, const glm::vec3& c) {
             return glm::dot(glm::cross(b - a, c - a), dir) < 0.0f;
         };
@@ -1706,7 +1743,7 @@ bool FBuildShadow2(const SCENEGLOBSET& sgs, size_t iglob, const GLOB& glob, cons
         // (the Switch: the same prisms without the side walls two of them share from opposite sides: the same four
         // corners, one counting +1 where the other counts -1 in z-pass and z-fail alike, so the pair counts nothing.
         // Only a hairline along the wall's diagonal, which each prism split its own way, can count differently.)
-        struct PRISM { glm::vec3 av[6]; glm::vec3 m; uint8_t grfWall; };
+        struct PRISM { glm::vec3 av[6]; glm::vec3 m; uint8_t grfWall; uint8_t aid[6]; };
         static thread_local std::vector<PRISM> s_aprism;
         static thread_local std::vector<uint64_t> s_awall;   // (edge << 32 | prism << 3 | wall << 1 | facing)
         s_aprism.clear();
@@ -1723,7 +1760,8 @@ bool FBuildShadow2(const SCENEGLOBSET& sgs, size_t iglob, const GLOB& glob, cons
             s_akDone.push_back(k);
             const glm::vec3 a = P(ia), b = P(ib), c = P(ic);
             if (!lit(a, b, c) && !lit(a, c, b)) return;   // (edge-on)
-            PRISM p{{a, b, c, project(a), project(b), project(c)}, glm::vec3(0.0f), 7};
+            PRISM p{{a, b, c, project(a), project(b), project(c)}, glm::vec3(0.0f), 7,
+                    {uint8_t(ia & 0xFE), uint8_t(ib & 0xFE), uint8_t(ic & 0xFE), uint8_t(ia | 1), uint8_t(ib | 1), uint8_t(ic | 1)}};
             p.m = (a + b + c + p.av[3] + p.av[4] + p.av[5]) / 6.0f;
             const uint32_t iprism = uint32_t(s_aprism.size());
             const uint8_t ai[3] = {uint8_t(ia >> 1), uint8_t(ib >> 1), uint8_t(ic >> 1)};
@@ -1767,8 +1805,11 @@ bool FBuildShadow2(const SCENEGLOBSET& sgs, size_t iglob, const GLOB& glob, cons
         pout = avtxOut.data() + ivtxPiece;
         for (const PRISM& p : s_aprism)
         {
-            const glm::vec3 &a = p.av[0], &b = p.av[1], &c = p.av[2], &af = p.av[3], &bf = p.av[4], &cf = p.av[5];
-            auto side = [&](const glm::vec3& v0, const glm::vec3& v1, const glm::vec3& v2) { tri(v0, v1, v2, (v0 + v1 + v2) / 3.0f - p.m); };
+            auto side = [&](int i0, int i1, int i2) {
+                const glm::vec3 &v0 = p.av[i0], &v1 = p.av[i1], &v2 = p.av[i2];
+                tri(v0, v1, v2, (v0 + v1 + v2) / 3.0f - p.m, p.aid[i0], p.aid[i1], p.aid[i2]);
+            };
+            enum { a, b, c, af, bf, cf };
             side(a, b, c);
             side(af, bf, cf);
             if (p.grfWall & 1) { side(a, b, bf); side(a, bf, af); }
@@ -1796,12 +1837,15 @@ bool FBuildShadow2(const SCENEGLOBSET& sgs, size_t iglob, const GLOB& glob, cons
             const size_t ivtx = avtxOut.size();
             avtxOut.resize(ivtx + 24);
             pout = avtxOut.data() + ivtx;
-            auto side = [&](const glm::vec3& p, const glm::vec3& q, const glm::vec3& r) { tri(p, q, r, (p + q + r) / 3.0f - m); };
-            side(a, b, c);
-            side(af, bf, cf);
-            side(a, b, bf); side(a, bf, af);
-            side(b, c, cf); side(b, cf, bf);
-            side(c, a, af); side(c, af, cf);
+            const uint8_t na = ia & 0xFE, nb = ib & 0xFE, nc = ic & 0xFE, nfa = ia | 1, nfb = ib | 1, nfc = ic | 1;
+            auto side = [&](const glm::vec3& p, const glm::vec3& q, const glm::vec3& r, uint8_t ip, uint8_t iq, uint8_t ir) {
+                tri(p, q, r, (p + q + r) / 3.0f - m, ip, iq, ir);
+            };
+            side(a, b, c, na, nb, nc);
+            side(af, bf, cf, nfa, nfb, nfc);
+            side(a, b, bf, na, nb, nfb); side(a, bf, af, na, nfb, nfa);
+            side(b, c, cf, nb, nc, nfc); side(b, cf, bf, nb, nfc, nfb);
+            side(c, a, af, nc, na, nfa); side(c, af, cf, nc, nfa, nfc);
         };
         for (size_t r = 0; r + 3 < fx.arec.size(); r += 4)
         {
@@ -1809,6 +1853,17 @@ bool FBuildShadow2(const SCENEGLOBSET& sgs, size_t iglob, const GLOB& glob, cons
             prism(oa, e0, e1);
             prism(e1, e0, ob);
         }
+        }
+        if (pinfo)
+        {
+            for (uint16_t k : s_akEdge)
+            {
+                if (s_adEdge[k]) pinfo->fClosed = false;
+                s_adEdge[k] = 0;
+            }
+            for (uint32_t w = 0; w < 4; ++w)
+                for (uint64_t b = s_abId[w]; b; b &= b - 1)
+                    pinfo->avDistinct.push_back(s_aposId[w * 64 + uint32_t(std::countr_zero(b))]);
         }
     }
     cmd.firstIndex = ivtxFirst;
@@ -1902,6 +1957,25 @@ std::array<float, 2> ZRangeOfCaster(const glm::mat4& m, const glm::vec3* av, uin
     }
     if (!cvtx) return {0.0f, 1.0f};
     return {std::max(0.0f, zlo * (1.0f - 1e-4f) - 1e-6f), std::min(1.0f, zhi * (1.0f + 1e-4f) + 1e-6f)};
+}
+
+// (SLY2N_SHINFO=2: the vertex numbers' answers compared with FClosedOriented / ZRangeOfCaster over every vertex; any
+// difference printed, and a count every 2000 casters)
+void ShInfoCheck(const SH2INFO& info, bool fClosed, bool fRange, const std::array<float, 2>& zrange, const glm::mat4& m,
+                 const std::vector<glm::vec3>& avtx)
+{
+    static std::atomic<uint64_t> s_ccaster{0}, s_cids{0}, s_cidsClosed{0}, s_cdiff{0};
+    const bool fClosedRef = FClosedOriented(avtx.data(), uint32_t(avtx.size()));
+    const std::array<float, 2> zref = fRange ? ZRangeOfCaster(m, avtx.data(), uint32_t(avtx.size())) : zrange;
+    const bool fDiff = fClosed != fClosedRef || std::memcmp(zref.data(), zrange.data(), sizeof(zref));
+    if (info.fIds) ++s_cids;
+    if (info.fIds && info.fClosed) ++s_cidsClosed;
+    if (fDiff && s_cdiff++ < 20)
+        std::printf("shinfo: DIFF closed %d/%d range %.9g %.9g / %.9g %.9g ids %d\n", fClosed, fClosedRef, zrange[0], zrange[1], zref[0], zref[1], info.fIds);
+    const uint64_t n = ++s_ccaster;
+    if (n % 2000 == 0)
+        std::printf("shinfo: %llu casters, numbers consistent %llu, closed by numbers %llu, differences %llu\n", (unsigned long long)n,
+                    (unsigned long long)s_cids.load(), (unsigned long long)s_cidsClosed.load(), (unsigned long long)s_cdiff.load());
 }
 
 // pplaneNear (the Switch): the plane past which a vertex lies in front of the drawn near plane (n . p + d > 0).
@@ -4639,7 +4713,7 @@ void RenderPass(const SCENE& scene, const PASSVIEW& pv, const RENDEROPTS& opts)
         };
 #if SLY2_FASTPATHS
         // (the Switch: the volumes built on the frame's helpers, each caster's into its own vertices, joined in order)
-        struct CASTER { const DRAWREC* prec = nullptr; std::vector<glm::vec3> avtx; CMD cmd; bool f = false, fClosed = false; std::array<float, 2> zrange{}; };
+        struct CASTER { const DRAWREC* prec = nullptr; std::vector<glm::vec3> avtx; CMD cmd; bool f = false, fClosed = false; std::array<float, 2> zrange{}; SH2INFO info; };
         static std::vector<CASTER> s_acaster;
         size_t ccaster = 0;
         for (const DRAWREC& rec : arec)
@@ -4649,18 +4723,27 @@ void RenderPass(const SCENE& scene, const PASSVIEW& pv, const RENDEROPTS& opts)
                 s_acaster[ccaster++].prec = &rec;
             }
         const bool fShBoundsPass = !g_fMultiviewPass && FShadowDepthBounds();   // (asked here: it may query GL)
+        static const bool s_fShInfoOff = [] { const char* sz = std::getenv("SLY2N_SHINFO"); return sz && sz[0] == '0'; }();   // (debug: the old tests)
+        static const bool s_fShInfoCheck = [] { const char* sz = std::getenv("SLY2N_SHINFO"); return sz && sz[0] == '2'; }();   // (debug: both, compared)
         PassHelpers().ForBlocks(ccaster, 1, [&](size_t iFirst, size_t iLim) {
             for (size_t i = iFirst; i < iLim; ++i)
             {
                 CASTER& c = s_acaster[i];
                 c.avtx.clear();
                 c.cmd = CMD{};
-                c.f = FBuildShadow2(*c.prec->psgs, c.prec->iglob, *c.prec->pglobGeom, cam.pos, 52.0f, c.avtx, c.cmd);
                 // (Fast shadows: each caster's closed-surface test here, on the helpers and once for every eye, not
                 // on the main thread at each draw: it was a sixth of the Quest's main thread in VR)
                 // (and for the depth bounds test's near side: DrawShadow2)
-                c.fClosed = c.f && (FFastShadowsNow() || fShBoundsPass) && FClosedOriented(c.avtx.data(), uint32_t(c.avtx.size()));
-                if (c.f && fShBoundsPass) c.zrange = ZRangeOfCaster(pv.matWorldToClip, c.avtx.data(), uint32_t(c.avtx.size()));
+                // (both from the volume's vertex numbers (SH2INFO): the closed test over positions only when the
+                // numbers alone do not show it, the range over the distinct vertices, the same answers)
+                const bool fClosedNeeded = FFastShadowsNow() || fShBoundsPass;
+                c.f = FBuildShadow2(*c.prec->psgs, c.prec->iglob, *c.prec->pglobGeom, cam.pos, 52.0f, c.avtx, c.cmd, fClosedNeeded ? &c.info : nullptr);
+                const bool fIds = fClosedNeeded && c.info.fIds && !s_fShInfoOff;
+                c.fClosed = c.f && fClosedNeeded && ((fIds && c.info.fClosed) || FClosedOriented(c.avtx.data(), uint32_t(c.avtx.size())));
+                if (c.f && fShBoundsPass)
+                    c.zrange = fIds ? ZRangeOfCaster(pv.matWorldToClip, c.info.avDistinct.data(), uint32_t(c.info.avDistinct.size()))
+                                    : ZRangeOfCaster(pv.matWorldToClip, c.avtx.data(), uint32_t(c.avtx.size()));
+                if (s_fShInfoCheck && c.f && fClosedNeeded) ShInfoCheck(c.info, c.fClosed, fShBoundsPass, c.zrange, pv.matWorldToClip, c.avtx);
             }
         });
         s_acvtxShadow2Caster.clear();

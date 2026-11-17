@@ -18,7 +18,7 @@ namespace
 {
 std::unordered_map<SW*, std::unique_ptr<SWSPLICE>> s_mppswswsplice;
 
-// orig: 0x00118420 (a debug string: U16 length, the bytes skipped)
+// orig: 0x00118420 (a debug string: U16 length, the bytes skipped) (orig3: 0x119830, the same C in the Sly 3 decomp)
 std::string ReadDebugString(CBinaryInputStream* pbis)
 {
     return pbis->ReadSkippedStringSw();
@@ -140,6 +140,7 @@ void WalkSpliceFromBrx(SW* psw, int a, CBinaryInputStream* pbis)
 
 // orig: 0x001FFA40
 struct LO;
+void* g_pvModuleOf = nullptr;   // (debug: SLY2N_MODULEOF's frame)
 LO* PloLoading();  // brx.cpp
 int OidOfLo(const LO*); int CidOfLo(const LO*);
 std::shared_ptr<CFrame> PframeFromIsplice(int isplice, SW* psw)
@@ -151,7 +152,10 @@ std::shared_ptr<CFrame> PframeFromIsplice(int isplice, SW* psw)
     // (debug: SLY2N_MODULEOF="block:module": the objects bound to that world module, at their load)
     if (static const char* s_sz = std::getenv("SLY2N_MODULEOF"); s_sz && std::strchr(s_sz, ':') && pswsplice->psplctCur->a == std::atoi(s_sz) &&
                                                                   isplice == std::atoi(std::strchr(s_sz, ':') + 1))
+    {
         if (LO* plo = PloLoading()) std::printf("moduleof %s: loading %d (cid 0x%X)\n", s_sz, OidOfLo(plo), CidOfLo(plo));
+        g_pvModuleOf = pswsplice->psplctCur->asplc[static_cast<std::size_t>(isplice)].pframe.get();   // (activate.cpp lists its objects)
+    }
     if (static const bool s_f = std::getenv("SLY2N_FRAMEIDXPRINT") != nullptr; s_f)  // (debug: which block a frame index resolves in)
         std::printf("frame index %d in block %d\n", isplice, pswsplice->psplctCur->a);
     return pswsplice->psplctCur->asplc[static_cast<std::size_t>(isplice)].pframe;

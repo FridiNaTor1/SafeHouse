@@ -1,5 +1,6 @@
 // See light.h.
 
+#include "fastpaths.h"
 #include "light.h"
 
 #include "glob.h"
@@ -42,6 +43,9 @@ struct WORLDLIGHTS
     std::vector<std::pair<uint32_t, uint32_t>> alog;
     uint32_t vLogBase = 0, vReset = 0, vShader = 0, vUntracked = 0;
     size_t cBakeMax = 0;
+#if SLY2_FASTPATHS
+    size_t ieNext = 0;   // (SetWorldLight: the entry after the last one set)
+#endif
 } s_wl;
 
 void NoteBakeCount()
@@ -97,9 +101,19 @@ void SetWorldLight(const void* plight, const LIGHTREC& rec, bool fActive)
 void SetWorldLight(const void* plight, const LIGHTREC& rec, const LIGHTSEL& sel, bool fBake, bool fContext)
 {
     s_wl.fSet = true;
-    for (size_t ie = 0; ie < s_wl.a.size(); ++ie)
+#if SLY2_FASTPATHS
+    // (the Switch: the lights are set in the same order every frame (UpdateWorldLightsFromSw), so the entry after the
+    // last one set is usually this light's, found without a search; a light has one entry at most)
+    const size_t ieFirst = s_wl.ieNext < s_wl.a.size() && s_wl.a[s_wl.ieNext].plight == plight ? s_wl.ieNext : 0;
+#else
+    constexpr size_t ieFirst = 0;
+#endif
+    for (size_t ie = ieFirst; ie < s_wl.a.size(); ++ie)
         if (WORLDLIGHTENTRY& e = s_wl.a[ie]; e.plight == plight)
         {
+#if SLY2_FASTPATHS
+            s_wl.ieNext = ie + 1;
+#endif
             if (e.fSel && e.fBake == fBake && e.fContext == fContext && !std::memcmp(&e.rec, &rec, sizeof(LIGHTREC)) &&
                 !std::memcmp(&e.sel, &sel, sizeof(LIGHTSEL)))
                 return;   // unchanged
@@ -115,6 +129,9 @@ void SetWorldLight(const void* plight, const LIGHTREC& rec, const LIGHTSEL& sel,
     WORLDLIGHTENTRY e;
     e.plight = plight; e.rec = rec; e.sel = sel; e.fBake = fBake; e.fContext = fContext; e.fSel = true;
     s_wl.a.push_back(e);
+#if SLY2_FASTPATHS
+    s_wl.ieNext = s_wl.a.size();
+#endif
     LogEntryChange(s_wl.a.back(), s_wl.a.size() - 1);
 }
 
@@ -242,6 +259,24 @@ bool FBakeLightsUnchangedSince(uint32_t v, const glm::vec3& posSphere, float sRa
     return true;
 }
 
+bool FBakeLightsUnchangedForAll(uint32_t v, const LIGHTSET& lights)
+{
+    // (FBakeLightsUnchangedSince's tests without a sphere: true when every change since v is one no bake takes, which
+    // that function then answers true for at any sphere)
+    if (&lights != &s_wl.set || s_wl.fDirty || s_wl.cBakeMax > 256) return false;
+    if (v < s_wl.vReset || v < s_wl.vShader || v <= s_wl.vUntracked || v < s_wl.vLogBase || v > s_wl.version) return false;
+    auto it = std::upper_bound(s_wl.alog.begin(), s_wl.alog.end(), v, [](uint32_t x, const std::pair<uint32_t, uint32_t>& p) { return x < p.first; });
+    if (s_wl.alog.end() - it > 64) return false;
+    for (; it != s_wl.alog.end(); ++it)
+    {
+        const WORLDLIGHTENTRY& e = s_wl.a[it->second];
+        if (e.vChangedPrev > v) return false;
+        const bool fSameForBake = e.fBake == e.fBakeBefore && (!e.fBake || !std::memcmp(&e.rec, &e.recBefore, sizeof(LIGHTREC)));
+        if (!fSameForBake) return false;
+    }
+    return true;
+}
+
 uint64_t BakeKey(const glm::mat4& matWorld, const glm::vec3& posSphere, float sRadius, const LIGHTSET& lights)
 {
     // (a change key: compared only with the last one. Mixed 8 bytes at a time (every hashed record is a multiple of
@@ -276,7 +311,13 @@ void BakeGlobLighting(GLOB& glob, const glm::mat4& matWorld, const glm::vec3& po
 {
     const glm::mat3 matNormal = NormalMatrix(matWorld);
     // Point lights whose range does not reach the group's sphere are skipped for the whole group.
+#if SLY2_FASTPATHS
+    // (the Switch: each thread's list kept from one bake to the next, the game thread's and the pass helpers')
+    static thread_local std::vector<const LIGHTREC*> apl;
+    apl.clear();
+#else
     std::vector<const LIGHTREC*> apl;
+#endif
     for (size_t i = 0; i < lights.alight.size() && i < 256; ++i)
     {
         const LIGHTREC& l = lights.alight[i];
@@ -728,7 +769,7 @@ void ForwardGlobLighting(GLOB& glob, const glm::mat4& matWorld, const glm::vec3&
     };
     static const bool s_fScalar = std::getenv("SLY2N_FWDSCALAR") != nullptr;
     static const bool s_fCheck = std::getenv("SLY2N_FWDCHECK") != nullptr;
-    static std::vector<uint32_t> s_aA;
+    static thread_local std::vector<uint32_t> s_aA;   // (per thread: scene.cpp lights groups on the pass helpers)
     if (s_fCheck)
     {
         s_aA.resize(glob.avtx.size());
@@ -771,7 +812,7 @@ void ForwardGlobLighting(GLOB& glob, const glm::mat4& matWorld, const glm::vec3&
                     std::printf("fwdcheck: vertex %u: scalar %08X %08X, sse %08X %08X\n", sub.ivtxFirst + k, v.rgbaA, v.rgbaB, w.rgbaA, w.rgbaB);
             }
         }
-        static long s_cglob = 0, s_cdiff = 0;
+        static thread_local long s_cglob = 0, s_cdiff = 0;
         ++s_cglob;
         if (cdiff) ++s_cdiff;
         if ((s_cglob & 1023) == 0 || cdiff) std::printf("fwdcheck: %ld groups, %ld differ\n", s_cglob, s_cdiff);
@@ -779,13 +820,18 @@ void ForwardGlobLighting(GLOB& glob, const glm::mat4& matWorld, const glm::vec3&
 }
 
 // orig: 0x001A3F78: the four strongest candidates at pos (strength gConst + gSlope x distance), strongest first
-// (an equal strength before), never a negative one.
-static void SelectStrongest(const LIGHTSET& lights, const glm::vec3& pos, float ag[4], const LIGHTREC* apl[4], const LIGHTSEL* apsel[4])
+// (an equal strength before), never a negative one. (orig3 0x1C5E98: the distance less the context's radius, at
+// least 0 (SPHERE::Score): every light reaching the radius counts with its full strength there)
+static void SelectStrongest(const LIGHTSET& lights, const glm::vec3& pos, float ag[4], const LIGHTREC* apl[4], const LIGHTSEL* apsel[4],
+                            float sRadius)
 {
     constexpr int n = 4;
     for (const auto& [rec, sel] : lights.actx)
     {
-        const float g = sel.gConst + sel.gSlope * glm::length(pos - sel.pos);
+        // (a strength that can only fall with the distance (gSlope <= 0) is at most gConst: below the fourth kept, the
+        // test below fails without the distance's square root)
+        if (sel.gSlope <= 0.0f && sel.gConst < ag[n - 1]) continue;
+        const float g = sel.gConst + sel.gSlope * std::max(glm::length(pos - sel.pos) - sRadius, 0.0f);
         if (g < ag[n - 1]) continue;
         int k = n;
         while (k > 0)
@@ -803,7 +849,7 @@ static void SelectStrongest(const LIGHTSET& lights, const glm::vec3& pos, float 
 // The candidates in slot order, each with the strength gConst + gSlope x distance; the n strongest kept,
 // strongest first (an equal strength goes before), a negative strength never. (The world's BSP of lit volumes
 // 0x455C only limits which point lights are tried: those it leaves out are out of their range, so negative.)
-void SelectLights(const LIGHTSET& lights, const glm::vec3& pos, LIGHTREC alight[4])
+void SelectLights(const LIGHTSET& lights, const glm::vec3& pos, LIGHTREC alight[4], float sRadius)
 {
     static const bool s_fOld = std::getenv("SLY2_OLDSELECT") != nullptr;   // debugging: the old stand-in
     if (lights.fFixed)
@@ -825,7 +871,7 @@ void SelectLights(const LIGHTSET& lights, const glm::vec3& pos, LIGHTREC alight[
         float ag[n] = {};
         const LIGHTREC* apl[n] = {};
         const LIGHTSEL* apsel[n] = {};
-        SelectStrongest(lights, pos, ag, apl, apsel);
+        SelectStrongest(lights, pos, ag, apl, apsel, sRadius);
         for (int k = 0; k < n; ++k)
         {
             if (apl[k]) alight[k] = *apl[k];
@@ -861,7 +907,7 @@ SHADOWCTX ShadowOfLightContext(const LIGHTSET& lights, const glm::vec3& pos, flo
     float ag[4] = {};
     const LIGHTREC* apl[4] = {};
     const LIGHTSEL* apsel[4] = {};
-    SelectStrongest(lights, pos, ag, apl, apsel);
+    SelectStrongest(lights, pos, ag, apl, apsel, 0.0f);
     constexpr float gDirDist = 1000.0f;   // 0x2BFC90: how far a directional light is placed
     constexpr float gRangeK = 2.5f;       // 0x2BFC94
     float gSum = 0;

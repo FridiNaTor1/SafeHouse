@@ -487,7 +487,7 @@ int RelightForward(SCENE& scene, const LIGHTSET& lightsFrame, bool fUpload, cons
             // (the globs of an entry share its light-context position: chosen once per entry and position)
             if (!fAlSel || posCtx != posAlSel)
             {
-                SelectLights(lights, posCtx, alSel.data());
+                SelectLights(lights, posCtx, alSel.data(), irtgt >= 0 ? 0.0f : sgs.sRadiusLight);
                 fAlSel = true;
                 posAlSel = posCtx;
             }
@@ -497,6 +497,15 @@ int RelightForward(SCENE& scene, const LIGHTSET& lightsFrame, bool fUpload, cons
             if (fSamePlace && fSameLights) continue;
             sgs.aalLit[i] = al;
             if (pamatBone) sgs.aamatBoneLit[i] = *pamatBone;
+            // (PC debug menu's character scale: the bones' normals lit without the scale, debugphys.h)
+            std::vector<glm::mat4> amatUnscaled;
+            if (pamatBone && sgs.sDrawScale != 1.0f)
+            {
+                amatUnscaled = *pamatBone;
+                for (glm::mat4& mb : amatUnscaled)
+                    for (int c = 0; c < 3; ++c) mb[c] = glm::vec4(glm::vec3(mb[c]) / sgs.sDrawScale, mb[c].w);
+                pamatBone = &amatUnscaled;
+            }
             ForwardGlobLighting(glob, m, posCtx, lights, pamatBone, al.data());   // (the lights chosen above at posCtx)
             if (static const bool s_f = std::getenv("SLY2N_FWDDBG") != nullptr; s_f)   // debugging: the forward-lit groups lit
                 std::printf("fwd oid %d glob %zu ctx %.0f %.0f %.0f r %.0f A0 %08X B0 %08X\n", sgs.oid, i, posCtx.x, posCtx.y, posCtx.z, glob.sRadius,

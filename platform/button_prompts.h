@@ -38,6 +38,20 @@ inline int promptKeyForBinding(int binding) {
     default: return binding;
     }
 }
+// The VR controller pictures' ids in prompts_devices.png: kVrPictureBase + platform/vr_pad_map.h's Controllers value.
+inline constexpr int kVrPictureBase = 64;
+// A family's controller picture id: the family, or for a VR family its own controllers' picture (Meta Quest Touch, Valve
+// Index, the Steam Frame's, HTC Vive wands, Pico: vr_pad_map.h Controllers 1 / 2 / 3 / 5 / 7).
+inline constexpr int devicePictureId(Family family) {
+    switch (family) {
+    case Family::MetaQuest: return kVrPictureBase + 1;
+    case Family::ValveIndex: return kVrPictureBase + 2;
+    case Family::SteamFrame: return kVrPictureBase + 3;
+    case Family::ViveWand: return kVrPictureBase + 5;
+    case Family::Pico: return kVrPictureBase + 7;
+    default: return static_cast<int>(family);
+    }
+}
 struct IconUV {
     float u0 = 0, v0 = 0, u1 = 0, v1 = 0;
     bool valid = false;
@@ -57,6 +71,13 @@ struct PromptDeviceRect {
     int family;
     PromptRect body, under;
     float ux0, uy0;
+};
+// A VR controller picture's buttons (both hands in one picture, prompts_devices.png id 64 + vr_pad_map.h's
+// Controllers): each Button's icon centre in the picture's SVG units ({-1, -1}: no such button) and its size.
+struct PromptVrLayout {
+    int id;
+    float pos[kButtonCount][2];
+    float du[kButtonCount];
 };
 struct PromptBlobId {
     unsigned size;
@@ -333,10 +354,17 @@ public:
     // The controller picture of a family (Sly 2's pause Controls page): the texture (0 when none) and its cells.
     // uv as uv(): v0 the bottom edge.
     unsigned deviceTexture() const { return m_devices; }
-    const PromptDeviceRect* device(Family family) const {
+    const PromptDeviceRect* device(Family family) const { return device(static_cast<int>(family)); }
+    // (by the picture's id: a family, or kVrPictureBase + a VR controllers' value)
+    const PromptDeviceRect* device(int id) const {
         if (!m_devices) return nullptr;
         for (const PromptDeviceRect& d : prompt_atlas::kPromptDeviceRects)
-            if (d.family == static_cast<int>(family)) return &d;
+            if (d.family == id) return &d;
+        return nullptr;
+    }
+    static const PromptVrLayout* vrLayout(int id) {
+        for (const PromptVrLayout& l : prompt_atlas::kPromptVrLayouts)
+            if (l.id == id) return &l;
         return nullptr;
     }
     static IconUV deviceUV(const PromptRect& rect) {
@@ -363,6 +391,8 @@ public:
     IconUV keyUV(int) const { return {}; }
     unsigned deviceTexture() const { return 0; }
     const void* device(Family) const { return nullptr; }
+    const void* device(int) const { return nullptr; }
+    static const void* vrLayout(int) { return nullptr; }
 };
 #endif
 inline PromptAtlas& promptAtlas() {

@@ -50,6 +50,7 @@ GLOBALMAP(0x3E13CC, 0x479AE4, 10)  //  offset from 0x3E13A0
 GLOBALMAP(0x2DDED4, 0x36BB9C, 90)  // g_clock votes
 GLOBALMAP(0x2DEB50, 0x36DBA8, 10)  //  offset from 0x2DEB48
 GLOBALMAP(0x3E1110, 0x47989C, 65)  // g_nFilterCur votes
+GLOBALMAP(0x2DDEC0, 0x36BB80, 10)  // s_tRun offset from 0x2DDE84
 GLOBALMAP(0x2A3868, 0x317EB8, 65)  // g_disc votes
 GLOBALMAP(0x2DFBC4, 0x36E6E0, 10)  // g_grfjoyLock offset from 0x2DFB84
 GLOBALMAP(0x2A2DA0, 0x317530, 90)  //  votes
@@ -68,6 +69,8 @@ GLOBALMAP(0x2DDF10, 0x36BBDC, 90)  // g_clock votes
 GLOBALMAP(0x2DD2FC, 0x36AE94, 90)  // g_pdliFirst votes
 GLOBALMAP(0x2CAF08, 0x351CE8, 65)  //  votes
 GLOBALMAP(0x2BBAD0, 0x341CFC, 10)  //  offset from 0x2BBA60
+GLOBALMAP(0x2BD4E0, 0x3440E0, 65)  //  votes
+GLOBALMAP(0x3DA0B8, 0x46F74C, 65)  //  votes
 GLOBALMAP(0x2DE578, 0x36BD20, 90)  //  votes
 GLOBALMAP(0x2A6790, 0x323688, 65)  //  votes
 GLOBALMAP(0x2A2DD0, 0x317560, 90)  //  votes
@@ -90,6 +93,7 @@ GLOBALMAP(0x2BFDA8, 0x345990, 65)  //  votes
 GLOBALMAP(0x2BFE08, 0x3459F0, 65)  //  votes
 GLOBALMAP(0x2BFE68, 0x345AB0, 65)  //  votes
 GLOBALMAP(0x2C00E8, 0x3500E8, 10)  // s_menu offset from 0x2C001F
+GLOBALMAP(0x2BFD38, 0x3458B8, 10)  // s_menu offset from 0x2BFCA0
 GLOBALMAP(0x2C44E0, 0x34A150, 65)  // g_gXfParamNil votes
 GLOBALMAP(0x2E0CCC, 0x36BC48, 10)  // g_rumble offset from 0x2E0C20
 GLOBALMAP(0x3E1C34, 0x47A488, 65)  // g_fLoadDebugInfo votes
@@ -99,6 +103,7 @@ GLOBALMAP(0x2BF740, 0x322E60, 10)  //  offset from 0x2BF700
 GLOBALMAP(0x3E1450, 0x479B68, 10)  //  offset from 0x3E13A0
 GLOBALMAP(0x2CAF48, 0x351D28, 10)  //  offset from 0x2CAF08
 GLOBALMAP(0x3DD48C, 0x468D24, 65)  //  votes
+GLOBALMAP(0x3DD050, 0x475000, 65)  // g_sound votes
 GLOBALMAP(0x2BD850, 0x344450, 10)  //  offset from 0x2BD7F0
 GLOBALMAP(0x2BF670, 0x345710, 10)  // g_disc offset from 0x2BF664
 GLOBALMAP(0x2A5000, 0x321010, 65)  // s_dposFreeEye votes
@@ -139,7 +144,6 @@ GLOBALMAP(0x2C01D0, 0x3501D0, 10)  //  offset from 0x2C001F
 GLOBALMAP(0x2C01F0, 0x3501F0, 10)  //  offset from 0x2C001F
 GLOBALMAP(0x2C0210, 0x350210, 10)  //  offset from 0x2C001F
 GLOBALMAP(0x2A3928, 0x317F78, 10)  // s_psw offset from 0x2A38A8
-GLOBALMAP(0x2BFD38, 0x3458B8, 10)  // s_menu offset from 0x2BFCA0
 GLOBALMAP(0x2C35B8, 0x3493A0, 10)  //  offset from 0x2C35B4
 GLOBALMAP(0x2C3588, 0x349370, 65)  // g_disc votes
 GLOBALMAP(0x2E1E54, 0x36B120, 90)  //  votes

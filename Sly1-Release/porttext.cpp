@@ -298,6 +298,11 @@ constexpr ROW s_arow[] = {
         "이동할 때 카메라를 자동으로 회전합니다. 끄면 선택한 각도를 유지합니다. 지정된 카메라는 유지됩니다."}},
     {PTX_QuitToLauncher, {"Quit to Launcher", "Retour au lanceur", "Zurück zum Launcher", "Volver al lanzador",
         "Torna al launcher", "ランチャーに戻る", "런처로 돌아가기"}},
+    // P: the Video menu's Monitor (settings v22; a monitor's own name is shown as the system gives it)
+    {PTX_Monitor, {"Monitor", "Écran", "Monitor", "Monitor", "Monitor", "モニター", "모니터"}},
+    {PTX_Primary, {"Primary", "Principal", "Primär", "Principal", "principale", "メイン", "기본"}},
+    {PTX_MonitorNotConnected, {"%s (not connected)", "%s (non connecté)", "%s (nicht verbunden)", "%s (no conectado)",
+        "%s (non collegato)", "%s（なし）", "%s (연결 안 됨)"}},
 };
 // clang-format on
 static_assert(std::size(s_arow) == PTX_Max, "one row per PTX");

@@ -27,6 +27,11 @@
 #include <nlohmann/json.hpp>
 
 #include "launcher_lang.h"
+// (desktop builds with the Map Editor page: its strings, launcher/editor/lang, merged into each language's table)
+#if defined(CANE_LAUNCHER_EDITOR) && __has_include("launcher_editor_lang.h")
+#include "launcher_editor_lang.h"
+#define CANE_L10N_EDITOR_STRINGS 1
+#endif
 
 #if defined(_WIN32)
 #ifndef NOMINMAX
@@ -56,7 +61,7 @@ struct Table {
 };
 
 namespace detail {
-inline std::shared_ptr<const Table> parse(const CaneLangBlob& blob) {
+inline std::shared_ptr<Table> parse(const CaneLangBlob& blob) {
     auto table = std::make_shared<Table>();
     try {
         const auto j = nlohmann::json::parse(blob.data, blob.data + blob.size);
@@ -74,9 +79,17 @@ inline std::shared_ptr<const Table> parse(const CaneLangBlob& blob) {
 // Every embedded table, English first (parsed once; never freed, so the pointers tr() returns stay valid).
 inline const std::vector<std::shared_ptr<const Table>>& tables() {
     static const auto all = [] {
-        std::vector<std::shared_ptr<const Table>> out;
-        for (const auto& blob : cane_lang_blobs) out.push_back(parse(blob));
-        return out;
+        std::vector<std::shared_ptr<Table>> tables;
+        for (const auto& blob : cane_lang_blobs) tables.push_back(parse(blob));
+#ifdef CANE_L10N_EDITOR_STRINGS
+        for (const auto& blob : cane_editor_lang_blobs) {
+            const auto extra = parse(blob);
+            for (auto& t : tables)
+                if (t->language.code == extra->language.code)
+                    for (const auto& [key, value] : extra->strings) t->strings.emplace(key, value);
+        }
+#endif
+        return std::vector<std::shared_ptr<const Table>>(tables.begin(), tables.end());
     }();
     return all;
 }

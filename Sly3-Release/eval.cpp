@@ -49,7 +49,7 @@ void NoteMissing(const char* pchzForm)
 }
 }
 
-// orig: 0x00126438 (a symbol: its binding's value, Nil when unbound)
+// orig: 0x00126438 (a symbol: its binding's value, Nil when unbound) (orig3: 0x1283D0, the same C in the Sly 3 decomp)
 CRef RefEvalSymbol(CPair* ppair, CFrame* pframe)
 {
     CRef ref;

@@ -1057,7 +1057,7 @@ int ConvertCommand(const std::string& out)
         {"format", "sly2-files"},
         {"format_version", g_fConvertPs2 ? SLY2_FILES_FORMAT_PS2 : SLY2_FILES_FORMAT},
         {"disc", g_disc.SzDisc()},
-        {"region", g_disc.Region() == DISCREGION::Usa ? "USA" : g_disc.Region() == DISCREGION::Europe ? "Europe" : "Japan"},
+        {"region", g_disc.Region() == DISCREGION::Usa ? "USA" : g_disc.Region() == DISCREGION::Europe ? "Europe" : g_disc.Region() == DISCREGION::Korea ? "Korea" : "Japan"},
         {"executable", szExe},
         {"languages", langs},
         {"worlds", worlds},
