@@ -5,7 +5,8 @@
 //   <Mods>/Packages/<id>/            a package (a folder; "<id>.disabled" is skipped)
 //     mod.json                        the manifest (below)
 //     files/                          files at the installation's relative paths, as in the loose Mods folder
-//                                     (e.g. "Worlds/1 The Black Chateau/Paris/World/227 jt/Objects.bin": one world part)
+//                                     (e.g. "Worlds/1-Paris/World/227 jt/Objects.bin": one world part; the names from before
+//                                     2026-11-17, "Worlds/1 The Black Chateau/Paris/...", match too: Sly2 RelCanonical)
 //     editor/                         (optional) the editor's own project state; the games never read it
 //
 //   mod.json: {"format": "safehouse-mod", "format_version": 1, "id": "paris-benches", "name": "Paris benches",

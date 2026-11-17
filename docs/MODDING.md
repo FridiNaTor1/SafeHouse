@@ -54,7 +54,7 @@ voice lines and the movies' sound are **FLAC** instead (lossless, about 60 % of 
 open it): `Dialog/French/Paris/1259.flac`, `Movies/French/2062 Ep1 Intro.flac`. The game plays exactly the sound
 of the disc from these files.
 
-Examples: `Worlds/1 The Black Chateau/Paris/World/227 jt/Scripts.splice` (Sly's scripts in Paris), `Music/18 The Jungle.wav`,
+Examples: `Worlds/1-Paris/World/227 jt/Scripts.splice` (Sly's scripts in Paris), `Music/18 The Jungle.wav`,
 `Movies/2013 Ep2 Operation Hippo Drop.m2v`.
 
 **The rule: a file in Mods at the same path as a file of the installation replaces it.** For example,
@@ -67,6 +67,12 @@ Music and movies also match by their **number** alone:
 
 The PS2 formats of older SafeHouse versions still work in Mods: a `.vpk` replaces a music track, a `.vag` a voice
 line, a `.pss` a whole movie (picture and sound).
+
+**Short names (SafeHouse from 2026-11-17).** Installations made since then name a level's folder
+`Worlds/<episode>-<level>` (`Worlds/1-Paris`) and an object group's folder by its first 20 characters
+(`World/258 f_nightclub_exterior`), so the paths stay well below Windows' 260 characters. Installations made before
+keep their names (`Worlds/1 The Black Chateau/Paris`, `World/258 f_nightclub_exterior_rig`), and a mod made
+against either names works on both: the game matches the mods folder's files by the short names.
 
 Use the number when you share a mod: names can change between SafeHouse versions, numbers don't. Movie numbers
 differ between the USA and European discs: the European Ep 1 intro is 2062. Music numbers are the same on both.
@@ -467,7 +473,7 @@ The movie names say what each one is:
 
 ### Sound effects
 
-Every sound effect sample is a WAV in the level's `Sounds` folder: `Worlds/1 The Black Chateau/Paris/Sounds/Sound
+Every sound effect sample is a WAV in the level's `Sounds` folder: `Worlds/1-Paris/Sounds/Sound
 021.wav`. A WAV at the same path in Mods replaces that sample. The samples are named after the first sound of the
 level that plays them (`Sound 021.wav`; a sound with several samples has `Sound 021-2.wav`, `-3` ...).
 `extraction_manifest.json` lists, for each bank, every sample with the sounds that use it: one sample often serves
@@ -508,7 +514,7 @@ format each in a file of its own, so you can change one part without touching th
 Tools:
 
 ```sh
-Sly2-Release --world-pack "<installation>/Worlds/1 The Black Chateau/Paris/Paris.world.json" Paris.brx
+Sly2-Release --world-pack "<installation>/Worlds/1-Paris/Paris.world.json" Paris.brx
 Sly2-Release --disc "<installation>" --world-unpack 2 paris-parts     # a level (record 2) or a .brx file into parts
 Sly2-Release --disc "<installation>" --world-check                    # every level put back together and compared
 ```
@@ -579,7 +585,7 @@ A mod package is a folder (shared as a .zip of it) that Sly 2 loads on every pla
 Mods/Packages/paris-benches/
   mod.json
   files/
-    Worlds/1 The Black Chateau/Paris/World/258 f_nightclub_exterior_rig/Objects.bin
+    Worlds/1-Paris/World/258 f_nightclub_exterior/Objects.bin
 ```
 
 `files/` holds files at the same paths as the loose Mods folder (world parts, music, movies, ...). A package made by
@@ -590,7 +596,7 @@ files leave it out. `mod.json`:
 {"format": "safehouse-mod", "format_version": 1, "id": "paris-benches", "name": "Paris benches", "version": "1.0.0",
  "author": "you", "description": "", "game": "sly2", "regions": ["USA"], "files_format": 3, "priority": 0,
  "dependencies": [{"id": "other-mod", "version": ">=1.2"}],
- "worlds": [{"path": "Worlds/1 The Black Chateau/Paris/Paris.world.json", "record": 2, "fnv64": "..."}]}
+ "worlds": [{"path": "Worlds/1-Paris/Paris.world.json", "record": 2, "fnv64": "..."}]}
 ```
 
 - `id`: letters, digits, `-`, `_`, `.`. `regions`: the installations it fits (`USA`, `Europe`, `Japan`; empty: any);

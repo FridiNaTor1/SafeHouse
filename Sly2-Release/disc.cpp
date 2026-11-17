@@ -7,6 +7,7 @@
 #include "../platform/brx_decompress.h"
 #include "../platform/mod_package.h"
 #include "../platform/platform.h"
+#include "../platform/safe_paths.h"
 
 #include <algorithm>
 #include <cctype>
@@ -77,7 +78,7 @@ private:
                 return e;
             }
         auto e = std::make_shared<ENT>();
-        e->in.open(cane::path(path), std::ios::binary);
+        e->in.open(cane::paths::ioPath(cane::path(path)), std::ios::binary);
         if (!e->in) return nullptr;
         e->in.seekg(0, std::ios::end);
         e->cb = uint64_t(e->in.tellg());
@@ -240,7 +241,7 @@ bool CDisc::FOpenConverted(const std::string& dir, std::string& error)
     nlohmann::json m;
     try
     {
-        std::ifstream in(root / "extraction_manifest.json");
+        std::ifstream in(cane::paths::ioPath(root / "extraction_manifest.json"));
         if (!in)
         {
             error = dir + " has no extraction_manifest.json: install Sly 2 again from the launcher";
@@ -285,8 +286,11 @@ bool CDisc::FOpenConverted(const std::string& dir, std::string& error)
 #endif
                 // (a package's own folder is not a mod of the installation: Packages/ in the loose folder)
                 if (rel.rfind(std::string(cane::mods::kPackagesFolder) + "/", 0) == 0) continue;
-                asetMod.insert(rel);
-                mpModPath[rel] = cane::utf8(e.path());
+                // (by the short names: a mod made against an installation with the names from before 2026-11-17
+                // matches a new one, and the other way round: worldparts.h RelCanonical)
+                const std::string key = RelCanonical(rel);
+                asetMod.insert(key);
+                mpModPath[key] = cane::utf8(e.path());
             }
         };
         m_aidPackage.clear();
@@ -345,7 +349,7 @@ bool CDisc::FOpenConverted(const std::string& dir, std::string& error)
             if (const std::string k = keyOfNumber(rel); !k.empty()) mpnumberMod.emplace(k, rel);
         // the mods folder's file for an installed path: the same path, else the same number
         auto relModOf = [&](const std::string& relIn) -> std::string {
-            const std::string rel = relIn.rfind("@languages/", 0) == 0 ? "Languages/" + relIn.substr(11) : relIn;
+            const std::string rel = RelCanonical(relIn.rfind("@languages/", 0) == 0 ? "Languages/" + relIn.substr(11) : relIn);
             if (asetMod.count(rel)) return rel;
             if (const std::string k = keyOfNumber(rel); !k.empty())
                 if (const auto it = mpnumberMod.find(k); it != mpnumberMod.end()) return it->second;
@@ -387,7 +391,7 @@ bool CDisc::FOpenConverted(const std::string& dir, std::string& error)
                     }
                 if (ent.fParts)
                 {
-                    const std::string dirParts = rel.substr(0, rel.rfind('/') + 1) + "World/";
+                    const std::string dirParts = RelCanonical(rel.substr(0, rel.rfind('/') + 1) + "World/");
                     for (auto it = asetMod.lower_bound(dirParts); it != asetMod.end() && it->compare(0, dirParts.size(), dirParts) == 0; ++it) ++m_cmod;
                 }
             }
@@ -451,7 +455,7 @@ bool CDisc::FOpenConverted(const std::string& dir, std::string& error)
     }
     std::vector<uint8_t> elf;
     {
-        std::ifstream in(root / cane::path(m_szExe), std::ios::binary);
+        std::ifstream in(cane::paths::ioPath(root / cane::path(m_szExe)), std::ios::binary);
         if (!in)
         {
             error = dir + ": the executable " + m_szExe + " is missing";
@@ -606,7 +610,7 @@ std::vector<uint8_t> CDisc::ReadFile(const FK& fk) const
             throw std::runtime_error("cannot read " + pent->path);
         return ab;
 #else
-        std::ifstream in(cane::path(pent->path), std::ios::binary);
+        std::ifstream in(cane::paths::ioPath(cane::path(pent->path)), std::ios::binary);
         if (!in) throw std::runtime_error("cannot read " + pent->path);
         return std::vector<uint8_t>(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
 #endif
@@ -633,7 +637,7 @@ bool CDisc::FReadFileBytes(uint32_t isector, uint64_t ib, void* pv, std::size_t 
     if (!s_openfiles.FRead(pent->path, ib, pv, cb, &cbRead, &cbFile)) return false;
     return cbRead == std::size_t(std::min<uint64_t>(cb, ib < cbFile ? cbFile - ib : 0));
 #else
-    std::ifstream in(cane::path(pent->path), std::ios::binary);
+    std::ifstream in(cane::paths::ioPath(cane::path(pent->path)), std::ios::binary);
     if (!in) return false;
     in.seekg(0, std::ios::end);
     const uint64_t cbFile = uint64_t(in.tellg());
@@ -677,7 +681,7 @@ uint64_t CDisc::CbFile(uint32_t isector, uint64_t cbKey) const
     if (!m_fConverted && isector < ISECTOR_EXTERNAL) return cbKey;
     const FILEENT* pent = PentFindAny(isector);
     std::error_code ec;
-    const uint64_t cb = pent ? std::filesystem::file_size(cane::path(pent->path), ec) : 0;
+    const uint64_t cb = pent ? std::filesystem::file_size(cane::paths::ioPath(cane::path(pent->path)), ec) : 0;
     return ec ? 0 : cb;
 }
 
@@ -695,7 +699,7 @@ std::vector<uint8_t> CDisc::ReadWorldParts(const FK& fk, bool fReduced) const
     {
         nlohmann::json index;
         {
-            std::ifstream in(cane::path(pent->path));
+            std::ifstream in(cane::paths::ioPath(cane::path(pent->path)));
             if (!in) throw std::runtime_error("cannot read " + pent->path);
             in >> index;
         }
@@ -713,7 +717,7 @@ std::vector<uint8_t> CDisc::ReadWorldParts(const FK& fk, bool fReduced) const
         }
         auto ravel = [&](bool fMods) {
             return FRavelWorld(index, relDir, [&](const std::string& rel) {
-                if (fMods) if (const auto it = m_mpModPath.find(rel); it != m_mpModPath.end()) return it->second;
+                if (fMods) if (const auto it = m_mpModPath.find(RelCanonical(rel)); it != m_mpModPath.end()) return it->second;
                 return cane::utf8(root / cane::path(rel));
             }, ab, error, pfnKeep, setDrop.empty() ? nullptr : &setDrop);
         };

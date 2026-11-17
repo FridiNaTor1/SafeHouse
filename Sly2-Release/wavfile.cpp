@@ -2,6 +2,7 @@
 #include "wavfile.h"
 
 #include "../platform/platform.h"
+#include "../platform/safe_paths.h"
 
 #include <algorithm>
 #include <cmath>
@@ -128,7 +129,7 @@ bool FReadWavFrames(const PFNWAVREAD& pfnRead, const WAVINFO& info, uint64_t ifr
 PFNWAVREAD PfnReadFile(const std::string& path)
 {
     return [path](uint64_t ib, void* pv, std::size_t cb) {
-        std::ifstream in(cane::path(path), std::ios::binary);
+        std::ifstream in(cane::paths::ioPath(cane::path(path)), std::ios::binary);
         if (!in) return false;
         in.seekg(std::streamoff(ib));
         in.read(static_cast<char*>(pv), std::streamsize(cb));
@@ -143,7 +144,7 @@ bool FLoadWav(const std::string& path, WAVINFO& info, std::vector<int16_t>& asam
     // loads its sample here on the game thread)
     std::vector<uint8_t> ab;
     {
-        std::ifstream in(cane::path(path), std::ios::binary | std::ios::ate);
+        std::ifstream in(cane::paths::ioPath(cane::path(path)), std::ios::binary | std::ios::ate);
         const std::streamoff cbFile = in ? std::streamoff(in.tellg()) : std::streamoff(-1);
         if (cbFile >= 0)
         {
@@ -160,7 +161,7 @@ bool FLoadWav(const std::string& path, WAVINFO& info, std::vector<int16_t>& asam
     const uint64_t cb = ab.size();
 #else
     std::error_code ec;
-    const uint64_t cb = std::filesystem::file_size(cane::path(path), ec);
+    const uint64_t cb = std::filesystem::file_size(cane::paths::ioPath(cane::path(path)), ec);
     if (ec)
     {
         if (perror) *perror = "cannot read";
@@ -168,7 +169,7 @@ bool FLoadWav(const std::string& path, WAVINFO& info, std::vector<int16_t>& asam
     }
     std::vector<uint8_t> ab(cb);
     {
-        std::ifstream in(cane::path(path), std::ios::binary);
+        std::ifstream in(cane::paths::ioPath(cane::path(path)), std::ios::binary);
         in.read(reinterpret_cast<char*>(ab.data()), std::streamsize(cb));
         if (std::size_t(in.gcount()) != cb)
         {
@@ -261,8 +262,8 @@ std::vector<uint8_t> AbWav(int rate, int cch, const int16_t* asample, std::size_
 
 bool FWriteWavFile(const std::string& path, const std::vector<uint8_t>& ab)
 {
-    std::filesystem::create_directories(cane::path(path).parent_path());
-    std::ofstream out(cane::path(path), std::ios::binary | std::ios::trunc);
+    std::filesystem::create_directories(cane::paths::ioPath(cane::path(path)).parent_path());
+    std::ofstream out(cane::paths::ioPath(cane::path(path)), std::ios::binary | std::ios::trunc);
     out.write(reinterpret_cast<const char*>(ab.data()), std::streamsize(ab.size()));
     return bool(out);
 }

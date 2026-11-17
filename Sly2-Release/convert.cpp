@@ -22,6 +22,7 @@
 
 #include "../platform/brx_decompress.h"
 #include "../platform/platform.h"
+#include "../platform/safe_paths.h"
 
 #include <nlohmann/json.hpp>
 
@@ -178,14 +179,9 @@ const char* SzWorldName(int iwrec, const char** pcode)
     return nullptr;
 }
 
-// A file or folder name (no path separators, no characters Windows refuses).
-std::string SzSafe(std::string s)
-{
-    for (char& c : s)
-        if (std::strchr("<>:\"/\\|?*", c) || static_cast<unsigned char>(c) < 0x20) c = '_';
-    while (!s.empty() && (s.back() == ' ' || s.back() == '.')) s.pop_back();
-    return s.empty() ? "_" : s;
-}
+// A file or folder name (no path separators, no characters or device names Windows refuses: platform/safe_paths.h).
+// The manifest and the worlds' indexes record the names written, so the game reads back the same files.
+std::string SzSafe(std::string s) { return cane::paths::sanitizeName(std::move(s)); }
 
 const char* const s_aszLanguageName[LANG_Max] = {"English", "French", "Italian", "German", "Spanish", "Dutch",
                                                 "Portuguese", "Danish", "Finnish", "Norwegian", "Swedish",
@@ -200,7 +196,8 @@ struct WORLDINFO
     FK fk;
     int episode = -1;    // (the record's slot; -1 the front end)
     int kind = 0;
-    std::string code, name, dir;  // dir: Worlds/<episode>/<name>
+    std::string code, name, dir;  // dir: Worlds/<episode>-<name> (worldparts.h: the short names)
+    std::string episodeName;      // (the manifest's worlds "episode_name": the folder level the names had before)
     std::vector<std::pair<int, uint32_t>> amusic;   // (music id, sector)
     std::vector<std::string> agroup;
 };
@@ -414,9 +411,12 @@ bool FCrawl(std::string& error)
         if (i == 1) wi.dir = "Worlds/" + SzSafe(wi.name);
         else
         {
+            // ("<episode>-<World>": the short names, worldparts.h RelCanonical; the episode's name is in the manifest's
+            // worlds ("episode_name"))
             char szEp[16];
-            std::snprintf(szEp, sizeof(szEp), "%d ", wi.episode);
-            wi.dir = "Worlds/" + std::string(wi.episode == 0 ? "0 " : szEp) + SzSafe(StrEpisodeName(wi.episode, atextFrontend)) + "/" + SzSafe(wi.name);
+            std::snprintf(szEp, sizeof(szEp), "%d-", wi.episode);
+            wi.dir = "Worlds/" + std::string(szEp) + SzSafe(wi.name);
+            wi.episodeName = StrEpisodeName(wi.episode, atextFrontend);
         }
         s_aworld.push_back(wi);
     }
@@ -573,8 +573,11 @@ void AssignPaths()
 {
     MergeCopies();
     std::map<std::string, int> mpcPath;
+    // (case blind: Windows' and macOS' file systems take "A.bin" and "a.bin" for the same file)
     auto unique = [&](std::string p) {
-        const int c = mpcPath[p]++;
+        std::string key = p;
+        for (char& ch : key) ch = char(std::tolower(static_cast<unsigned char>(ch)));
+        const int c = mpcPath[key]++;
         if (c == 0) return p;
         const auto dot = p.rfind('.');
         return p.substr(0, dot) + " (" + std::to_string(c + 1) + ")" + p.substr(dot);
@@ -636,13 +639,13 @@ void AssignPaths()
     }
 }
 
-bool FWriteFile(const fs::path& p, const uint8_t* pb, std::size_t cb)
+// Writes a converted file: its folders made race-free (the worker threads make folders at the same time), \\?\ for a
+// path over Windows' MAX_PATH (a deep install folder: a portable copy on a OneDrive desktop), the short failures a virus
+// scanner or sync client causes retried; a failure's `*perror` has the full path, its length and the system's text
+// (platform/safe_paths.h).
+bool FWriteFile(const fs::path& p, const uint8_t* pb, std::size_t cb, std::string* perror = nullptr)
 {
-    std::error_code ec;   // (the worker threads create folders at the same time: a folder another made is fine)
-    fs::create_directories(p.parent_path(), ec);
-    std::ofstream out(p, std::ios::binary | std::ios::trunc);
-    out.write(reinterpret_cast<const char*>(pb), std::streamsize(cb));
-    return bool(out);
+    return cane::paths::writeFile(p, pb, cb, perror);
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -672,7 +675,8 @@ uint32_t Be32(const uint8_t* p) { return uint32_t(p[0]) << 24 | uint32_t(p[1]) <
 
 bool FWriteOut(const fs::path& root, const std::string& rel, const std::vector<uint8_t>& ab, uint64_t& cbOut, std::string& error)
 {
-    if (!FWriteFile(root / cane::path(rel), ab.data(), ab.size())) { error = "cannot write " + rel; return false; }
+    std::string why;
+    if (!FWriteFile(root / cane::path(rel), ab.data(), ab.size(), &why)) { error = "cannot write " + rel + ": " + why; return false; }
     cbOut += ab.size();
     return true;
 }
@@ -865,14 +869,17 @@ int ConvertCommand(const std::string& out)
     const auto t0 = std::chrono::steady_clock::now();
     auto tNow = [&] { return std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count(); };
     std::string error;
-    const fs::path root = cane::path(out);
-    fs::create_directories(root);
+    const fs::path root = fs::absolute(cane::path(out));
+    {
+        std::string why;
+        if (!cane::paths::createDirectories(root, &why)) { std::fprintf(stderr, "convert: %s\n", why.c_str()); return 1; }
+    }
     // the worker threads: the textures' PNGs while the crawl loads the worlds, then every file (CONVERTER.md "Speed")
     CWorkPool pool;
     if (g_fConvertTextures)
     {
         s_dirTextures = cane::utf8(root / "Textures");
-        fs::create_directories(cane::path(s_dirTextures));
+        cane::paths::createDirectories(cane::path(s_dirTextures));
         s_ppoolTextures = &pool;
     }
     const bool fCrawl = FCrawl(error);
@@ -892,9 +899,10 @@ int ConvertCommand(const std::string& out)
     for (const std::string& name : {szExe, std::string("SYSTEM.CNF")})
     {
         std::vector<uint8_t> ab;
-        if (!g_disc.FReadRootFile(name, ab) || !FWriteFile(root / name, ab.data(), ab.size()))
+        std::string why;
+        if (!g_disc.FReadRootFile(name, ab) || !FWriteFile(root / name, ab.data(), ab.size(), &why))
         {
-            std::fprintf(stderr, "convert: cannot copy %s\n", name.c_str());
+            std::fprintf(stderr, "convert: cannot copy %s%s%s\n", name.c_str(), why.empty() ? "" : ": ", why.c_str());
             return 1;
         }
     }
@@ -980,9 +988,10 @@ int ConvertCommand(const std::string& out)
             error = f.path + ": " + error;
             return;
         }
-        if (!FWriteFile(root / cane::path(f.path), ab.data(), ab.size()))
+        std::string why;
+        if (!FWriteFile(root / cane::path(f.path), ab.data(), ab.size(), &why))
         {
-            error = "cannot write " + f.path;
+            error = "cannot write " + f.path + ": " + why;
             return;
         }
         e["size"] = ab.size();
@@ -1043,6 +1052,7 @@ int ConvertCommand(const std::string& out)
     for (const WORLDINFO& w : s_aworld)
     {
         json e = {{"record", w.iwrec}, {"code", w.code}, {"name", w.name}, {"episode", w.episode}, {"kind", w.kind}};
+        if (!w.episodeName.empty()) e["episode_name"] = w.episodeName;
         if (w.fk.cb) e["path"] = PathOfSector(w.fk.isector);
         json am = json::array();
         for (const auto& [id, isector] : w.amusic) am.push_back({{"id", id}, {"path", PathOfSector(isector)}});
@@ -1064,9 +1074,13 @@ int ConvertCommand(const std::string& out)
         {"files", files},
     };
     {
-        std::ofstream o(root / "extraction_manifest.json", std::ios::trunc);
-        o << manifest.dump(1) << '\n';
-        if (!o) { std::fprintf(stderr, "convert: cannot write the manifest\n"); return 1; }
+        const std::string sManifest = manifest.dump(1) + "\n";
+        std::string why;
+        if (!FWriteFile(root / "extraction_manifest.json", reinterpret_cast<const uint8_t*>(sManifest.data()), sManifest.size(), &why))
+        {
+            std::fprintf(stderr, "convert: cannot write the manifest: %s\n", why.c_str());
+            return 1;
+        }
     }
     // the textures (on unless --no-export-textures): every world's textures as the PNGs Mods/Textures takes (texmod.cpp),
     // in Textures/ (one file per texture: the names are their contents' hashes, so a texture several worlds draw is

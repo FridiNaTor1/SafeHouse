@@ -981,6 +981,11 @@
   "The disc images folder is not available (a drive that is not connected?).": "Der Ordner mit Disc-Images ist nicht verfügbar (ein Laufwerk, das nicht angeschlossen ist?).",
   "Choose your disc images folder": "Deinen Ordner mit Disc-Images wählen",
   "Apply": "Übernehmen",
-  "Your disc images folder (%s) and the usual folders": "Dein Ordner mit Disc-Images (%s) und die üblichen Ordner"
+  "Your disc images folder (%s) and the usual folders": "Dein Ordner mit Disc-Images (%s) und die üblichen Ordner",
+  "The installation folder's path is too long for Windows. Choose a shorter installation folder (for example C:\\Games) in Settings > Games, or move the SafeHouse folder closer to the drive's root.": "Der Pfad des Installationsordners ist für Windows zu lang. Wähle unter Einstellungen > Spiele einen kürzeren Installationsordner (zum Beispiel C:\\Games) oder verschiebe den SafeHouse-Ordner näher an das Stammverzeichnis des Laufwerks.",
+  "Windows refused to write the file. Check that your antivirus or Windows Security's Controlled folder access is not blocking SafeHouse, and that the folder is not read-only, then try again.": "Windows hat das Schreiben der Datei verweigert. Prüfe, ob dein Virenschutz oder der überwachte Ordnerzugriff der Windows-Sicherheit SafeHouse blockiert und ob der Ordner schreibgeschützt ist, und versuche es dann erneut.",
+  "Another program kept a file open (an antivirus, OneDrive or the search indexer). Try again, or choose an installation folder outside OneDrive.": "Ein anderes Programm hielt eine Datei geöffnet (ein Virenschutz, OneDrive oder die Suchindizierung). Versuche es erneut oder wähle einen Installationsordner außerhalb von OneDrive.",
+  "The drive is full. Free some space or choose another installation folder.": "Das Laufwerk ist voll. Gib Speicherplatz frei oder wähle einen anderen Installationsordner.",
+  "The installation folder's path is long (%d characters): %s. If the installation fails, choose a shorter installation folder in Settings > Games, e.g. C:\\Games.": "Der Pfad des Installationsordners ist lang (%d Zeichen): %s. Falls die Installation fehlschlägt, wähle unter Einstellungen > Spiele einen kürzeren Installationsordner, z. B. C:\\Games."
  }
 }

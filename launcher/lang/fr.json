@@ -981,6 +981,11 @@
   "The disc images folder is not available (a drive that is not connected?).": "Le dossier d'images disque n'est pas disponible (un disque qui n'est pas branché ?).",
   "Choose your disc images folder": "Choisir votre dossier d'images disque",
   "Apply": "Appliquer",
-  "Your disc images folder (%s) and the usual folders": "Votre dossier d'images disque (%s) et les dossiers habituels"
+  "Your disc images folder (%s) and the usual folders": "Votre dossier d'images disque (%s) et les dossiers habituels",
+  "The installation folder's path is too long for Windows. Choose a shorter installation folder (for example C:\\Games) in Settings > Games, or move the SafeHouse folder closer to the drive's root.": "Le chemin du dossier d'installation est trop long pour Windows. Choisissez un dossier d'installation plus court (par exemple C:\\Games) dans Réglages > Jeux, ou rapprochez le dossier SafeHouse de la racine du disque.",
+  "Windows refused to write the file. Check that your antivirus or Windows Security's Controlled folder access is not blocking SafeHouse, and that the folder is not read-only, then try again.": "Windows a refusé d'écrire le fichier. Vérifiez que votre antivirus ou l'accès contrôlé aux dossiers de la Sécurité Windows ne bloque pas SafeHouse et que le dossier n'est pas en lecture seule, puis réessayez.",
+  "Another program kept a file open (an antivirus, OneDrive or the search indexer). Try again, or choose an installation folder outside OneDrive.": "Un autre programme gardait un fichier ouvert (un antivirus, OneDrive ou l'indexeur de recherche). Réessayez, ou choisissez un dossier d'installation en dehors de OneDrive.",
+  "The drive is full. Free some space or choose another installation folder.": "Le disque est plein. Libérez de l'espace ou choisissez un autre dossier d'installation.",
+  "The installation folder's path is long (%d characters): %s. If the installation fails, choose a shorter installation folder in Settings > Games, e.g. C:\\Games.": "Le chemin du dossier d'installation est long (%d caractères) : %s. Si l'installation échoue, choisissez un dossier d'installation plus court dans Réglages > Jeux, par ex. C:\\Games."
  }
 }

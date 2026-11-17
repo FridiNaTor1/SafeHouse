@@ -1424,8 +1424,10 @@ static int ExtractDiscImage(const cane::DiscImageInstall& d,const fs::path& isoP
         if(!fs::is_regular_file(out/"extraction_manifest.json"))throw std::runtime_error("The converter wrote no extraction_manifest.json");
         // Textures/ (the texture dump for modders, MODDING.md) is left out of the inventory: the game never reads it, so
         // deleting or editing it must not make "Verify files" ask for a repair.
+        // (\\?\ paths on Windows: the converted files can be deeper than MAX_PATH, platform/safe_paths.h)
+        const fs::path outIo=cane::paths::longPath(out);
         std::vector<fs::path> written;
-        for(auto e=fs::recursive_directory_iterator(out);e!=fs::recursive_directory_iterator();++e) {
+        for(auto e=fs::recursive_directory_iterator(outIo);e!=fs::recursive_directory_iterator();++e) {
             if(e.depth()==0 && e->is_directory() && e->path().filename()=="Textures") {e.disable_recursion_pending();continue;}
             if(e->is_regular_file())written.push_back(e->path());
         }
@@ -1443,7 +1445,7 @@ static int ExtractDiscImage(const cane::DiscImageInstall& d,const fs::path& isoP
                 const size_t n=++done;
                 if(n%100==0 || n==written.size()) {
                     std::lock_guard lock(progressMutex);
-                    Progress("inventory",n,written.size(),cane::utf8(fs::relative(written[i],out).generic_u8string()));
+                    Progress("inventory",n,written.size(),cane::utf8(written[i].lexically_relative(outIo).generic_u8string()));
                 }
             }
         };
@@ -1455,7 +1457,7 @@ static int ExtractDiscImage(const cane::DiscImageInstall& d,const fs::path& isoP
         }
         if(failure)std::rethrow_exception(failure);
         for(size_t i=0;i<written.size();++i) {
-            const std::string name=cane::utf8(fs::relative(written[i],out).generic_u8string());
+            const std::string name=cane::utf8(written[i].lexically_relative(outIo).generic_u8string());
             files.push_back({{"path",name},{"size",fs::file_size(written[i])},{"sha256",sha[i]}});
         }
         cane::json manifest={{"schema",1},{"game",g.key},{"asset_version",d.assetVersion},{"extractor_version","0.3.0"},
@@ -1516,12 +1518,13 @@ static int ExtractDiscImage(const cane::DiscImageInstall& d,const fs::path& isoP
                                if(std::sscanf(line.c_str(),"worlds %zu %zu %511[^\n]",&done,&total,item)>=2)Progress("worlds",done,total,item);
                            });
             if(!fs::is_regular_file(out/"Worlds"/"worlds.json"))throw std::runtime_error("The world conversion wrote no Worlds/worlds.json");
+            const fs::path outIo=cane::paths::longPath(out);   // (\\?\: deeper than MAX_PATH on Windows)
             std::vector<fs::path> written;
-            for(const auto& e:fs::recursive_directory_iterator(out/"Worlds"))if(e.is_regular_file())written.push_back(e.path());
+            for(const auto& e:fs::recursive_directory_iterator(outIo/"Worlds"))if(e.is_regular_file())written.push_back(e.path());
             std::sort(written.begin(),written.end());
             size_t n=0;
             for(const fs::path& p:written) {
-                files.push_back({{"path",cane::utf8(fs::relative(p,out).generic_u8string())},{"size",fs::file_size(p)},{"sha256",cane::hashFile(p)}});
+                files.push_back({{"path",cane::utf8(p.lexically_relative(outIo).generic_u8string())},{"size",fs::file_size(p)},{"sha256",cane::hashFile(p)}});
                 if(++n%200==0 || n==written.size())Progress("inventory",n,written.size(),"");
             }
         } else std::cerr<<"(no "<<d.worldsTool<<" beside the extractor: the worlds stay in the disc image)\n";

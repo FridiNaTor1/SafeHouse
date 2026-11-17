@@ -13,6 +13,7 @@
 #include "picosha2.h"
 #include "sha256.h"
 #include "platform.h"
+#include "safe_paths.h"
 #ifndef _WIN32
 #include <fcntl.h>
 #include <sys/file.h>
@@ -169,7 +170,8 @@ inline const DiscImageInstall* discImageInstall(GameId game) {
 inline std::string hashFile(const fs::path& file, const std::function<bool()>& cancelled = {},
                             const std::function<void(uint64_t)>& bytesRead = {}) {
     // (sha256.h: the CPU's SHA extensions when it has them, about 12x picosha2; 1 MiB reads)
-    std::ifstream in(file, std::ios::binary);
+    // (\\?\ for a file deeper than Windows' MAX_PATH: safe_paths.h)
+    std::ifstream in(paths::ioPath(file), std::ios::binary);
     if (!in) throw std::runtime_error("Cannot read: " + utf8(file));
     Sha256 hash;
     std::vector<char> buffer(size_t(1) << 20);
@@ -271,8 +273,9 @@ class InstallationTransaction {
         fs::create_directories(target_.parent_path());
         guard_ = std::make_unique<FileLock>(lock_);
         if (!fs::exists(target_) && fs::exists(previous_)) fs::rename(previous_, target_);
-        if (fs::exists(target_) && fs::exists(previous_)) fs::remove_all(previous_);
-        fs::remove_all(stage_);
+        // (\\?\: a converted installation's files can be deeper than Windows' MAX_PATH)
+        if (fs::exists(target_) && fs::exists(previous_)) fs::remove_all(paths::longPath(previous_));
+        fs::remove_all(paths::longPath(stage_));
         fs::create_directory(stage_);
     }
     InstallationTransaction(const InstallationTransaction&) = delete;
@@ -287,11 +290,11 @@ class InstallationTransaction {
         }
         committed_ = true;
         std::error_code ec;
-        fs::remove_all(previous_, ec);
+        fs::remove_all(paths::longPath(previous_), ec);
     }
     ~InstallationTransaction() {
         std::error_code ec;
-        if (!committed_) fs::remove_all(stage_, ec);
+        if (!committed_) fs::remove_all(paths::longPath(stage_), ec);
     }
 };
 inline fs::path safeAssetPath(const fs::path& root, const std::string& name) {
@@ -303,7 +306,7 @@ inline fs::path safeAssetPath(const fs::path& root, const std::string& name) {
     auto candidate = root;
     for (const auto& part : relative) {
         candidate /= part;
-        if (fs::is_symlink(candidate)) throw std::runtime_error("Symlink in installation: " + name);
+        if (fs::is_symlink(paths::ioPath(candidate))) throw std::runtime_error("Symlink in installation: " + name);
     }
     return candidate;
 }
@@ -358,7 +361,8 @@ inline void verifyInstallation(
                 const size_t mib = static_cast<size_t>(doneBytes >> 20);
                 if (mib >= last + 16) progress(last = mib, totalMiB, name);
             };
-        if (!fs::is_regular_file(file) || fs::file_size(file) != entry.at("size").get<uint64_t>() ||
+        const fs::path io = paths::ioPath(file);
+        if (!fs::is_regular_file(io) || fs::file_size(io) != entry.at("size").get<uint64_t>() ||
             hashFile(file, cancelled, bytes) != entry.at("sha256").get<std::string>())
             throw std::runtime_error("Missing or damaged asset: " + name);
         if (progress) {

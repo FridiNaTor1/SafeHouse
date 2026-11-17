@@ -55,6 +55,7 @@ public:
             m_outdated = m_backend.needsReextract(m_game);
             m_regions = m_backend.installations(m_game);
             m_region = m_backend.selectedRegion(m_game);
+            try { m_longPathNote = m_backend.longInstallPathNote(m_game); } catch (...) { m_longPathNote.clear(); }
             m_nextCheck = now + 1.0;
         }
         m_wasBusy = busy;
@@ -402,6 +403,8 @@ private:
             sub = trf("Choose your disc image below, then install. It needs %s of free space.", spaceRange(m_game).c_str());
         ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + width - px(48) - badge - px(18) - px(190));
         text(sub.c_str(), fonts().caption, color::text2);
+        // (a long install folder: Windows' 260-character limit, InstallPage::installed refreshes it)
+        if (!busy && !ready && !m_longPathNote.empty()) text(m_longPathNote.c_str(), fonts().caption, color::warning);
         ImGui::PopTextWrapPos();
         ImGui::EndGroup();
         if (ready && !busy) {
@@ -785,6 +788,7 @@ private:
     char m_pathBuf[1024] = {};
     filedialog::Async m_native;
     std::string m_pathNote;
+    std::string m_longPathNote;   // (LauncherBackend::longInstallPathNote)
     double m_nextCheck = 0;
     bool m_wasBusy = false;
     fs::path m_destination;

@@ -981,6 +981,11 @@
   "The disc images folder is not available (a drive that is not connected?).": "Levykuvakansio ei ole käytettävissä (asema, jota ei ole liitetty?).",
   "Choose your disc images folder": "Valitse levykuvakansiosi",
   "Apply": "Käytä",
-  "Your disc images folder (%s) and the usual folders": "Levykuvakansiosi (%s) ja tavalliset kansiot"
+  "Your disc images folder (%s) and the usual folders": "Levykuvakansiosi (%s) ja tavalliset kansiot",
+  "The installation folder's path is too long for Windows. Choose a shorter installation folder (for example C:\\Games) in Settings > Games, or move the SafeHouse folder closer to the drive's root.": "Asennuskansion polku on liian pitkä Windowsille. Valitse lyhyempi asennuskansio (esimerkiksi C:\\Games) kohdassa Asetukset > Pelit tai siirrä SafeHouse-kansio lähemmäs aseman juurta.",
+  "Windows refused to write the file. Check that your antivirus or Windows Security's Controlled folder access is not blocking SafeHouse, and that the folder is not read-only, then try again.": "Windows esti tiedoston kirjoittamisen. Tarkista, ettei virustorjunta tai Windowsin suojauksen hallittu kansioiden käyttö estä SafeHousea ja ettei kansio ole vain luku -tilassa, ja yritä sitten uudelleen.",
+  "Another program kept a file open (an antivirus, OneDrive or the search indexer). Try again, or choose an installation folder outside OneDrive.": "Toinen ohjelma piti tiedostoa auki (virustorjunta, OneDrive tai hakuindeksointi). Yritä uudelleen tai valitse asennuskansio OneDriven ulkopuolelta.",
+  "The drive is full. Free some space or choose another installation folder.": "Asema on täynnä. Vapauta tilaa tai valitse toinen asennuskansio.",
+  "The installation folder's path is long (%d characters): %s. If the installation fails, choose a shorter installation folder in Settings > Games, e.g. C:\\Games.": "Asennuskansion polku on pitkä (%d merkkiä): %s. Jos asennus epäonnistuu, valitse lyhyempi asennuskansio kohdassa Asetukset > Pelit, esim. C:\\Games."
  }
 }

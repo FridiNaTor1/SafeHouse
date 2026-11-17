@@ -199,7 +199,7 @@ private:
     std::string m_dirLanguages;
     std::unordered_map<std::string, uint32_t> m_mppathExternal;   // (IsectorExternal: path -> ISECTOR_EXTERNAL + index)
     std::map<uint32_t, std::string> m_mpsectorName;      // (SzFileName)
-    std::set<std::string> m_setMod;   // the mods folder's files (relative, "/" separated)
+    std::set<std::string> m_setMod;   // the mods folder's files (relative, "/" separated; by worldparts.h RelCanonical)
     std::map<std::string, std::string> m_mpModPath;   // each of them: its file (the loose folder's or a package's)
     bool m_fDiscoverPackages = true;
     std::vector<std::string> m_adirPackagesExtra;

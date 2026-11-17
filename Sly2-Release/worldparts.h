@@ -67,6 +67,17 @@ inline void MarkWorldPart(WPK wpk, int iwe, std::size_t ib)
 constexpr const char* SLY2_WORLD_PARTS_FORMAT = "sly2-world-parts";
 constexpr int SLY2_WORLD_PARTS_VERSION = 1;
 
+// The installation's short names (2026-11-17: an install's paths stay well below Windows' 260 characters, also in a
+// deep folder like a portable copy on a OneDrive desktop):
+//   a world's folder  "Worlds/<episode>-<World>"    (before: "Worlds/<episode> <Episode Name>/<World>"; the front
+//                                                    end "Worlds/Front End" both times)
+//   a group's folder  "World/<nnn> <name, first 20 characters>"   (before: the whole name)
+// Installations made before keep their names (the manifest and the indexes record every path), and a mod made against
+// either names matches both: RelCanonical maps a path of either layout to the short one, the key the mods are matched by.
+constexpr std::size_t c_cchGroupFolderName = 20;
+std::string SzGroupFolder(std::size_t igroup, const std::string& name);   // "World/227 jt"
+std::string RelCanonical(const std::string& rel);
+
 struct WORLDPARTFILE
 {
     std::string rel;              // relative to the world's folder ("World/Text.json")

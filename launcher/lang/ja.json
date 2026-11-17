@@ -981,6 +981,11 @@
   "The disc images folder is not available (a drive that is not connected?).": "ディスクイメージのフォルダーを使用できません（ドライブが接続されていませんか？）。",
   "Choose your disc images folder": "ディスクイメージのフォルダーを選択",
   "Apply": "適用",
-  "Your disc images folder (%s) and the usual folders": "ディスクイメージのフォルダー（%s）といつものフォルダー"
+  "Your disc images folder (%s) and the usual folders": "ディスクイメージのフォルダー（%s）といつものフォルダー",
+  "The installation folder's path is too long for Windows. Choose a shorter installation folder (for example C:\\Games) in Settings > Games, or move the SafeHouse folder closer to the drive's root.": "インストールフォルダーのパスが Windows には長すぎます。設定 > ゲーム で文字数の少ないインストールフォルダー（例: C:\\Games）を選ぶか、SafeHouse フォルダーをドライブのルートの近くへ移動してください。",
+  "Windows refused to write the file. Check that your antivirus or Windows Security's Controlled folder access is not blocking SafeHouse, and that the folder is not read-only, then try again.": "Windows がファイルの書き込みを拒否しました。セキュリティソフトや Windows セキュリティの「コントロールされたフォルダー アクセス」が SafeHouse をブロックしていないか、フォルダーが読み取り専用でないかを確認してから、もう一度お試しください。",
+  "Another program kept a file open (an antivirus, OneDrive or the search indexer). Try again, or choose an installation folder outside OneDrive.": "別のプログラム（セキュリティソフト、OneDrive、検索インデクサー）がファイルを開いたままにしていました。もう一度お試しいただくか、OneDrive の外にあるインストールフォルダーを選んでください。",
+  "The drive is full. Free some space or choose another installation folder.": "ドライブがいっぱいです。空き容量を増やすか、別のインストールフォルダーを選んでください。",
+  "The installation folder's path is long (%d characters): %s. If the installation fails, choose a shorter installation folder in Settings > Games, e.g. C:\\Games.": "インストールフォルダーのパスが長くなっています（%d 文字）: %s。インストールに失敗する場合は、設定 > ゲーム で文字数の少ないインストールフォルダー（例: C:\\Games）を選んでください。"
  }
 }

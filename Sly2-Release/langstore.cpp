@@ -18,6 +18,7 @@
 #include "wavfile.h"
 
 #include "../platform/platform.h"
+#include "../platform/safe_paths.h"
 #include "../platform/sly2_settings.h"
 #include "../platform/sly3_settings.h"
 
@@ -118,10 +119,10 @@ std::string StrLower(std::string s)
 json JsonRead(const fs::path& path)
 {
     std::error_code ec;
-    if (!fs::is_regular_file(path, ec)) return json();
+    if (!fs::is_regular_file(cane::paths::ioPath(path), ec)) return json();
     try
     {
-        std::ifstream in(path);
+        std::ifstream in(cane::paths::ioPath(path));
         return json::parse(in, nullptr, true, true);
     }
     catch (const std::exception& e)
@@ -149,7 +150,7 @@ bool FParseLine(const std::string& stem, int& id)
 // a WAV's or FLAC's length in seconds (0: unknown)
 float TAudioFile(const std::string& path)
 {
-    std::ifstream in(cane::path(path), std::ios::binary);
+    std::ifstream in(cane::paths::ioPath(cane::path(path)), std::ios::binary);
     uint8_t h[64] = {};
     in.read(reinterpret_cast<char*>(h), sizeof(h));
     if (in.gcount() < 42) return 0.0f;
@@ -161,7 +162,7 @@ float TAudioFile(const std::string& path)
         return rate ? float(double(c) / rate) : 0.0f;
     }
     std::error_code ec;
-    const uint64_t cb = fs::file_size(cane::path(path), ec);
+    const uint64_t cb = fs::file_size(cane::paths::ioPath(cane::path(path)), ec);
     WAVINFO wi;
     if (!ec && FParseWav(PfnReadFile(path), cb, wi) && wi.rate) return float(double(wi.cframe) / wi.rate);
     return 0.0f;
@@ -290,7 +291,7 @@ std::shared_ptr<SELEM> PfontFromBytes(const std::vector<uint8_t>& ab)
 
 std::shared_ptr<SELEM> PfontFromFile(const fs::path& path)
 {
-    std::ifstream in(path, std::ios::binary);
+    std::ifstream in(cane::paths::ioPath(path), std::ios::binary);
     if (!in) return nullptr;
     const std::vector<uint8_t> ab((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     std::shared_ptr<SELEM> pset = PfontFromBytes(ab);
@@ -751,7 +752,7 @@ bool FLanguageStoreDialog(int idLineDisc, FK& fk, float& tLength)
             fk.id = uint32_t(idUsa);
             const std::string path = g_disc.PathOf(fk.isector);
             std::error_code ec;
-            fk.cb = uint32_t(std::min<uint64_t>(fs::file_size(cane::path(path), ec), 0x7FFFFFFF));
+            fk.cb = uint32_t(std::min<uint64_t>(fs::file_size(cane::paths::ioPath(cane::path(path)), ec), 0x7FFFFFFF));
             if (ec || fk.cb == 0) return false;
             const auto itl = p->mplength.find(idUsa);
             tLength = itl != p->mplength.end() ? itl->second : TAudioFile(path);

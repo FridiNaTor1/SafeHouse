@@ -13,6 +13,7 @@
 #include "wavfile.h"
 
 #include "../platform/platform.h"
+#include "../platform/safe_paths.h"
 
 #include <algorithm>
 #include <chrono>
@@ -103,7 +104,7 @@ std::vector<int> AidFallback(uint32_t lsn, int cch)
         {
             std::error_code ec;
             WAVINFO wi;
-            if (FIsWav(h, sizeof(h)) && FParseWav(pfn, std::filesystem::file_size(cane::path(path), ec), wi))
+            if (FIsWav(h, sizeof(h)) && FParseWav(pfn, std::filesystem::file_size(cane::paths::ioPath(cane::path(path)), ec), wi))
             {
                 for (const WAVSTEM& st : wi.astem) aid.push_back(st.id);
                 if (wi.astem.empty() && wi.cch == 1) aid.push_back(0);  // (a dialog line)

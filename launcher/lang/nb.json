@@ -981,6 +981,11 @@
   "The disc images folder is not available (a drive that is not connected?).": "Mappen med plateavbildninger er ikke tilgjengelig (en stasjon som ikke er koblet til?).",
   "Choose your disc images folder": "Velg mappen med plateavbildninger",
   "Apply": "Bruk",
-  "Your disc images folder (%s) and the usual folders": "Mappen med plateavbildninger (%s) og de vanlige mappene"
+  "Your disc images folder (%s) and the usual folders": "Mappen med plateavbildninger (%s) og de vanlige mappene",
+  "The installation folder's path is too long for Windows. Choose a shorter installation folder (for example C:\\Games) in Settings > Games, or move the SafeHouse folder closer to the drive's root.": "Banen til installasjonsmappen er for lang for Windows. Velg en kortere installasjonsmappe (for eksempel C:\\Games) under Innstillinger > Spill, eller flytt SafeHouse-mappen nærmere roten av stasjonen.",
+  "Windows refused to write the file. Check that your antivirus or Windows Security's Controlled folder access is not blocking SafeHouse, and that the folder is not read-only, then try again.": "Windows nektet å skrive filen. Sjekk at antivirusprogrammet ditt eller kontrollert mappetilgang i Windows-sikkerhet ikke blokkerer SafeHouse, og at mappen ikke er skrivebeskyttet, og prøv igjen.",
+  "Another program kept a file open (an antivirus, OneDrive or the search indexer). Try again, or choose an installation folder outside OneDrive.": "Et annet program holdt en fil åpen (et antivirusprogram, OneDrive eller søkeindekseringen). Prøv igjen, eller velg en installasjonsmappe utenfor OneDrive.",
+  "The drive is full. Free some space or choose another installation folder.": "Stasjonen er full. Frigjør plass, eller velg en annen installasjonsmappe.",
+  "The installation folder's path is long (%d characters): %s. If the installation fails, choose a shorter installation folder in Settings > Games, e.g. C:\\Games.": "Banen til installasjonsmappen er lang (%d tegn): %s. Hvis installasjonen mislykkes, velg en kortere installasjonsmappe under Innstillinger > Spill, f.eks. C:\\Games."
  }
 }

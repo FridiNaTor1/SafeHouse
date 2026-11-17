@@ -981,6 +981,11 @@
   "The disc images folder is not available (a drive that is not connected?).": "디스크 이미지 폴더를 사용할 수 없습니다(연결되지 않은 드라이브인가요?).",
   "Choose your disc images folder": "디스크 이미지 폴더 선택",
   "Apply": "적용",
-  "Your disc images folder (%s) and the usual folders": "디스크 이미지 폴더(%s)와 평소 쓰는 폴더"
+  "Your disc images folder (%s) and the usual folders": "디스크 이미지 폴더(%s)와 평소 쓰는 폴더",
+  "The installation folder's path is too long for Windows. Choose a shorter installation folder (for example C:\\Games) in Settings > Games, or move the SafeHouse folder closer to the drive's root.": "설치 폴더 경로가 Windows에서 쓰기에는 너무 깁니다. 설정 > 게임에서 글자 수가 적은 설치 폴더(예: C:\\Games)를 고르거나 SafeHouse 폴더를 드라이브 루트 근처로 옮기세요.",
+  "Windows refused to write the file. Check that your antivirus or Windows Security's Controlled folder access is not blocking SafeHouse, and that the folder is not read-only, then try again.": "Windows가 파일 쓰기를 거부했습니다. 백신이나 Windows 보안의 제어된 폴더 접근이 SafeHouse를 차단하고 있는지, 폴더가 읽기 전용인지 확인한 뒤 다시 시도하세요.",
+  "Another program kept a file open (an antivirus, OneDrive or the search indexer). Try again, or choose an installation folder outside OneDrive.": "다른 프로그램(백신, OneDrive 또는 검색 색인)이 파일을 열어 두고 있었습니다. 다시 시도하거나 OneDrive 외부의 설치 폴더를 고르세요.",
+  "The drive is full. Free some space or choose another installation folder.": "드라이브가 가득 찼습니다. 공간을 확보하거나 다른 설치 폴더를 고르세요.",
+  "The installation folder's path is long (%d characters): %s. If the installation fails, choose a shorter installation folder in Settings > Games, e.g. C:\\Games.": "설치 폴더 경로가 깁니다(%d자): %s. 설치에 실패하면 설정 > 게임에서 글자 수가 적은 설치 폴더(예: C:\\Games)를 고르세요."
  }
 }

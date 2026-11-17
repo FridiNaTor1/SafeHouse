@@ -981,6 +981,11 @@
   "The disc images folder is not available (a drive that is not connected?).": "La cartella delle immagini disco non è disponibile (un'unità non collegata?).",
   "Choose your disc images folder": "Scegli la tua cartella delle immagini disco",
   "Apply": "Applica",
-  "Your disc images folder (%s) and the usual folders": "La tua cartella delle immagini disco (%s) e le cartelle abituali"
+  "Your disc images folder (%s) and the usual folders": "La tua cartella delle immagini disco (%s) e le cartelle abituali",
+  "The installation folder's path is too long for Windows. Choose a shorter installation folder (for example C:\\Games) in Settings > Games, or move the SafeHouse folder closer to the drive's root.": "Il percorso della cartella di installazione è troppo lungo per Windows. Scegli una cartella di installazione più corta (per esempio C:\\Games) in Impostazioni > Giochi, oppure sposta la cartella di SafeHouse più vicino alla radice dell'unità.",
+  "Windows refused to write the file. Check that your antivirus or Windows Security's Controlled folder access is not blocking SafeHouse, and that the folder is not read-only, then try again.": "Windows ha rifiutato di scrivere il file. Controlla che l'antivirus o l'accesso controllato alle cartelle di Sicurezza di Windows non blocchi SafeHouse e che la cartella non sia di sola lettura, poi riprova.",
+  "Another program kept a file open (an antivirus, OneDrive or the search indexer). Try again, or choose an installation folder outside OneDrive.": "Un altro programma teneva aperto un file (un antivirus, OneDrive o l'indicizzatore della ricerca). Riprova, oppure scegli una cartella di installazione fuori da OneDrive.",
+  "The drive is full. Free some space or choose another installation folder.": "L'unità è piena. Libera spazio o scegli un'altra cartella di installazione.",
+  "The installation folder's path is long (%d characters): %s. If the installation fails, choose a shorter installation folder in Settings > Games, e.g. C:\\Games.": "Il percorso della cartella di installazione è lungo (%d caratteri): %s. Se l'installazione non riesce, scegli una cartella di installazione più corta in Impostazioni > Giochi, ad es. C:\\Games."
  }
 }

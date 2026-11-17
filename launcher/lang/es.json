@@ -981,6 +981,11 @@
   "The disc images folder is not available (a drive that is not connected?).": "La carpeta de imágenes de disco no está disponible (¿una unidad que no está conectada?).",
   "Choose your disc images folder": "Elegir tu carpeta de imágenes de disco",
   "Apply": "Aplicar",
-  "Your disc images folder (%s) and the usual folders": "Tu carpeta de imágenes de disco (%s) y las carpetas habituales"
+  "Your disc images folder (%s) and the usual folders": "Tu carpeta de imágenes de disco (%s) y las carpetas habituales",
+  "The installation folder's path is too long for Windows. Choose a shorter installation folder (for example C:\\Games) in Settings > Games, or move the SafeHouse folder closer to the drive's root.": "La ruta de la carpeta de instalación es demasiado larga para Windows. Elige una carpeta de instalación más corta (por ejemplo C:\\Games) en Ajustes > Juegos, o mueve la carpeta de SafeHouse más cerca de la raíz de la unidad.",
+  "Windows refused to write the file. Check that your antivirus or Windows Security's Controlled folder access is not blocking SafeHouse, and that the folder is not read-only, then try again.": "Windows se negó a escribir el archivo. Comprueba que tu antivirus o el acceso controlado a carpetas de Seguridad de Windows no estén bloqueando SafeHouse y que la carpeta no sea de solo lectura, y vuelve a intentarlo.",
+  "Another program kept a file open (an antivirus, OneDrive or the search indexer). Try again, or choose an installation folder outside OneDrive.": "Otro programa mantenía un archivo abierto (un antivirus, OneDrive o el indexador de búsqueda). Vuelve a intentarlo o elige una carpeta de instalación fuera de OneDrive.",
+  "The drive is full. Free some space or choose another installation folder.": "La unidad está llena. Libera espacio o elige otra carpeta de instalación.",
+  "The installation folder's path is long (%d characters): %s. If the installation fails, choose a shorter installation folder in Settings > Games, e.g. C:\\Games.": "La ruta de la carpeta de instalación es larga (%d caracteres): %s. Si la instalación falla, elige una carpeta de instalación más corta en Ajustes > Juegos, p. ej. C:\\Games."
  }
 }

@@ -981,6 +981,11 @@
   "The disc images folder is not available (a drive that is not connected?).": "A pasta de imagens de disco não está disponível (uma unidade que não está ligada?).",
   "Choose your disc images folder": "Escolher a tua pasta de imagens de disco",
   "Apply": "Aplicar",
-  "Your disc images folder (%s) and the usual folders": "A tua pasta de imagens de disco (%s) e as pastas habituais"
+  "Your disc images folder (%s) and the usual folders": "A tua pasta de imagens de disco (%s) e as pastas habituais",
+  "The installation folder's path is too long for Windows. Choose a shorter installation folder (for example C:\\Games) in Settings > Games, or move the SafeHouse folder closer to the drive's root.": "O caminho da pasta de instalação é demasiado longo para o Windows. Escolhe uma pasta de instalação mais curta (por exemplo C:\\Games) em Definições > Jogos, ou move a pasta do SafeHouse para mais perto da raiz da unidade.",
+  "Windows refused to write the file. Check that your antivirus or Windows Security's Controlled folder access is not blocking SafeHouse, and that the folder is not read-only, then try again.": "O Windows recusou escrever o ficheiro. Verifica se o antivírus ou o acesso controlado a pastas da Segurança do Windows não está a bloquear o SafeHouse e se a pasta não é só de leitura, e tenta novamente.",
+  "Another program kept a file open (an antivirus, OneDrive or the search indexer). Try again, or choose an installation folder outside OneDrive.": "Outro programa manteve um ficheiro aberto (um antivírus, o OneDrive ou o indexador de pesquisa). Tenta novamente, ou escolhe uma pasta de instalação fora do OneDrive.",
+  "The drive is full. Free some space or choose another installation folder.": "A unidade está cheia. Liberta espaço ou escolhe outra pasta de instalação.",
+  "The installation folder's path is long (%d characters): %s. If the installation fails, choose a shorter installation folder in Settings > Games, e.g. C:\\Games.": "O caminho da pasta de instalação é longo (%d caracteres): %s. Se a instalação falhar, escolhe uma pasta de instalação mais curta em Definições > Jogos, p. ex. C:\\Games."
  }
 }

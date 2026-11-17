@@ -5,12 +5,14 @@
 #include "ref.h"
 
 #include "../platform/platform.h"
+#include "../platform/safe_paths.h"
 
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cctype>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -41,12 +43,21 @@ constexpr int c_lang = int(sizeof(s_aszLang) / sizeof(s_aszLang[0]));
 // Parts this small go into the index as hex (a group's bulk header: 8 bytes; an empty collision mesh: 4).
 constexpr std::size_t c_cbInline = 32;
 
-std::string SzSafe(std::string s)
+std::string SzSafe(std::string s) { return cane::paths::sanitizeName(std::move(s)); }   // (platform/safe_paths.h)
+
+// (the first n characters of UTF-8 text, never a character cut in two; trailing spaces / dots trimmed: SzSafe's rule)
+std::string SzCutUtf8(const std::string& s, std::size_t cch)
 {
-    for (char& c : s)
-        if (std::strchr("<>:\"/\\|?*", c) || static_cast<unsigned char>(c) < 0x20) c = '_';
-    while (!s.empty() && (s.back() == ' ' || s.back() == '.')) s.pop_back();
-    return s.empty() ? "_" : s;
+    std::size_t i = 0, n = 0;
+    while (i < s.size() && n < cch)
+    {
+        const unsigned char c = static_cast<unsigned char>(s[i]);
+        i += c < 0x80 ? 1 : c >= 0xF0 ? 4 : c >= 0xE0 ? 3 : c >= 0xC0 ? 2 : 1;
+        ++n;
+    }
+    std::string r = s.substr(0, std::min(i, s.size()));
+    while (!r.empty() && (r.back() == ' ' || r.back() == '.')) r.pop_back();
+    return r.empty() ? "_" : r;
 }
 
 std::string Hex(const uint8_t* pb, std::size_t cb)
@@ -616,7 +627,7 @@ struct SPLICEWRITER
 
 bool FReadFileBytes(const std::string& path, std::vector<uint8_t>& ab)
 {
-    std::ifstream in(cane::path(path), std::ios::binary);
+    std::ifstream in(cane::paths::ioPath(cane::path(path)), std::ios::binary);   // (\\?\ for a deep install folder on Windows)
     if (!in) return false;
     in.seekg(0, std::ios::end);
     const std::streamoff cb = in.tellg();
@@ -626,6 +637,46 @@ bool FReadFileBytes(const std::string& path, std::vector<uint8_t>& ab)
     return bool(in) || cb == 0;
 }
 }  // namespace
+
+std::string SzGroupFolder(std::size_t igroup, const std::string& name)
+{
+    char sz[16];
+    std::snprintf(sz, sizeof(sz), "%03zu ", igroup);
+    return "World/" + std::string(sz) + SzCutUtf8(SzSafe(name), c_cchGroupFolderName);
+}
+
+std::string RelCanonical(const std::string& rel)
+{
+    std::string r = rel;
+    // "Worlds/<n> <Episode Name>/<World>/..." -> "Worlds/<n>-<World>/..."
+    if (r.rfind("Worlds/", 0) == 0)
+    {
+        std::size_t i = 7, j = i;
+        while (j < r.size() && std::isdigit(static_cast<unsigned char>(r[j]))) ++j;
+        const std::size_t slash1 = r.find('/', i);
+        if (j > i && j < r.size() && r[j] == ' ' && slash1 != std::string::npos)
+        {
+            const std::size_t slash2 = r.find('/', slash1 + 1);
+            if (slash2 != std::string::npos)
+                r = r.substr(0, j) + "-" + r.substr(slash1 + 1);
+        }
+    }
+    // ".../World/<nnn> <whole name>/..." -> ".../World/<nnn> <first 20 characters>/..."
+    for (std::size_t at = 0; (at = r.find("World/", at)) != std::string::npos; at += 6)
+    {
+        if (at > 0 && r[at - 1] != '/') continue;
+        const std::size_t b = at + 6;
+        if (b + 4 > r.size() || !std::isdigit(static_cast<unsigned char>(r[b])) || !std::isdigit(static_cast<unsigned char>(r[b + 1])) ||
+            !std::isdigit(static_cast<unsigned char>(r[b + 2])) || r[b + 3] != ' ')
+            continue;
+        const std::size_t e = r.find('/', b + 4);
+        if (e == std::string::npos) break;
+        const std::string cut = SzCutUtf8(r.substr(b + 4, e - b - 4), c_cchGroupFolderName);
+        r = r.substr(0, b + 4) + cut + r.substr(e);
+        break;
+    }
+    return r;
+}
 
 std::string StrFnv64(const uint8_t* pb, std::size_t cb)
 {
@@ -877,12 +928,10 @@ bool FUnravelWorld(const std::vector<uint8_t>& ab, const std::vector<WPMARK>& am
     std::set<std::string> setDir;
     for (std::size_t i = 0; i < agroupName.size(); ++i)
     {
-        // ("<nnn> <name>": the groups' names are "FK$X<name>" (the original's tool prefix), shown without it)
-        char sz[16];
-        std::snprintf(sz, sizeof(sz), "%03zu ", i);
+        // ("<nnn> <name>": the groups' names are "FK$X<name>" (the original's tool prefix), shown without it; cut short:
+        // SzGroupFolder)
         const std::string& name = agroupName[i];
-        std::string dir = "World/" + std::string(sz) + SzSafe(name.rfind("FK$X", 0) == 0 ? name.substr(4) : name);
-        mpdirGroup[int(i)] = dir;
+        mpdirGroup[int(i)] = SzGroupFolder(i, name.rfind("FK$X", 0) == 0 ? name.substr(4) : name);
     }
     index = ojson::object();
     index["format"] = SLY2_WORLD_PARTS_FORMAT;
@@ -1200,11 +1249,10 @@ namespace
 {
 bool FWriteBytes(const fs::path& p, const void* pv, std::size_t cb)
 {
-    std::error_code ec;
-    fs::create_directories(p.parent_path(), ec);
-    std::ofstream out(p, std::ios::binary | std::ios::trunc);
-    out.write(static_cast<const char*>(pv), std::streamsize(cb));
-    return bool(out);
+    std::string why;
+    if (cane::paths::writeFile(p, pv, cb, &why)) return true;
+    std::fprintf(stderr, "%s\n", why.c_str());
+    return false;
 }
 }  // namespace
 
@@ -1262,7 +1310,7 @@ int WorldPackCommand(const std::string& indexPath, const std::string& out)
 {
     nlohmann::json index;
     {
-        std::ifstream in(cane::path(indexPath));
+        std::ifstream in(cane::paths::ioPath(cane::path(indexPath)));
         if (!in) { std::fprintf(stderr, "world-pack: cannot read %s\n", indexPath.c_str()); return 1; }
         try { in >> index; }
         catch (const std::exception& e) { std::fprintf(stderr, "world-pack: %s: %s\n", indexPath.c_str(), e.what()); return 1; }
@@ -1286,7 +1334,7 @@ int WorldCheckCommand(const std::string& dir)
     const fs::path root = cane::path(dir);
     nlohmann::json m;
     {
-        std::ifstream in(root / "extraction_manifest.json");
+        std::ifstream in(cane::paths::ioPath(root / "extraction_manifest.json"));
         if (!in) { std::fprintf(stderr, "world-check: %s has no extraction_manifest.json\n", dir.c_str()); return 1; }
         in >> m;
     }
@@ -1296,7 +1344,7 @@ int WorldCheckCommand(const std::string& dir)
         if (f.value("layout", "") != "parts") continue;
         const std::string rel = f.at("path").get<std::string>();
         nlohmann::json index;
-        std::ifstream in(root / cane::path(rel));
+        std::ifstream in(cane::paths::ioPath(root / cane::path(rel)));
         std::vector<uint8_t> ab;
         std::string error;
         const std::string relDir = rel.find('/') == std::string::npos ? "" : rel.substr(0, rel.rfind('/'));

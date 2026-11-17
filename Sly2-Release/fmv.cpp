@@ -14,6 +14,7 @@
 #include "wavfile.h"
 
 #include "../platform/platform.h"
+#include "../platform/safe_paths.h"
 
 extern "C"
 {
@@ -196,7 +197,7 @@ public:
         }
         m_pfnWav = PfnReadFile(path);
         std::error_code ec;
-        const uint64_t cb = std::filesystem::file_size(cane::path(path), ec);
+        const uint64_t cb = std::filesystem::file_size(cane::paths::ioPath(cane::path(path)), ec);
         std::string error;
         if (ec || !FParseWav(m_pfnWav, cb, m_wi, &error))
         {

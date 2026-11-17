@@ -1,11 +1,14 @@
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <!-- SafeHouse programs on Windows: the process code page is UTF-8 (Windows 10 1903+), so argv, getenv, fopen and
      the other narrow-string APIs take the UTF-8 paths the code uses everywhere (a user folder like C:\Users\Zoë or
-     a Japanese folder name works). Older Windows ignores the element. -->
+     a Japanese folder name works). Older Windows ignores the element.
+     longPathAware: paths over MAX_PATH (260) work in every file call where the system's LongPathsEnabled is on (Windows
+     10 1607+); where it is off, the installers' and the games' file helpers use \\?\ paths (platform/safe_paths.h). -->
 <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
   <application xmlns="urn:schemas-microsoft-com:asm.v3">
     <windowsSettings>
       <activeCodePage xmlns="http://schemas.microsoft.com/SMI/2019/WindowsSettings">UTF-8</activeCodePage>
+      <longPathAware xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">true</longPathAware>
     </windowsSettings>
   </application>
 </assembly>

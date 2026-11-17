@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -106,9 +107,28 @@ inline std::string RunTool(const std::vector<std::string>& arguments, const cane
         if (line) line(text);
     });
     if (code != 0) {
-        std::string tail = output.size() > 2000 ? output.substr(output.size() - 2000) : output;
+        // The tool's own messages (its error lines), without its progress lines ("progress 1850 1903 ..."), which
+        // would otherwise bury the reason; whole lines only, the last few.
+        std::vector<std::string> lines;
+        for (std::size_t at = 0; at < output.size();) {
+            std::size_t end = output.find('\n', at);
+            if (end == std::string::npos) end = output.size();
+            std::string l = output.substr(at, end - at);
+            at = end + 1;
+            if (!l.empty() && l.back() == '\r') l.pop_back();
+            bool progress = false;
+            for (const char* p : {"progress ", "languages ", "textures ", "worlds "})
+                if (l.rfind(p, 0) == 0) {
+                    unsigned long long a = 0, b = 0;
+                    progress = std::sscanf(l.c_str() + std::strlen(p), "%llu %llu", &a, &b) == 2;
+                }
+            if (!l.empty() && !progress) lines.push_back(l);
+        }
+        std::string text;
+        for (std::size_t i = lines.size() > 6 ? lines.size() - 6 : 0; i < lines.size(); ++i) text += (text.empty() ? "" : "\n") + lines[i];
+        if (text.size() > 2000) text = text.substr(text.size() - 2000);
         throw std::runtime_error(cane::utf8(fs::path(arguments[0]).filename()) + " failed (exit " +
-                                 std::to_string(code) + "): " + tail);
+                                 std::to_string(code) + ")" + (text.empty() ? std::string() : ": " + text));
     }
     return output;
 }

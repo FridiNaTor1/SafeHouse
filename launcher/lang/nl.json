@@ -981,6 +981,11 @@
   "The disc images folder is not available (a drive that is not connected?).": "De map met disc-images is niet beschikbaar (een schijf die niet is aangesloten?).",
   "Choose your disc images folder": "Je map met disc-images kiezen",
   "Apply": "Toepassen",
-  "Your disc images folder (%s) and the usual folders": "Je map met disc-images (%s) en de gebruikelijke mappen"
+  "Your disc images folder (%s) and the usual folders": "Je map met disc-images (%s) en de gebruikelijke mappen",
+  "The installation folder's path is too long for Windows. Choose a shorter installation folder (for example C:\\Games) in Settings > Games, or move the SafeHouse folder closer to the drive's root.": "Het pad van de installatiemap is te lang voor Windows. Kies een kortere installatiemap (bijvoorbeeld C:\\Games) in Instellingen > Games, of zet de SafeHouse-map dichter bij de hoofdmap van de schijf.",
+  "Windows refused to write the file. Check that your antivirus or Windows Security's Controlled folder access is not blocking SafeHouse, and that the folder is not read-only, then try again.": "Windows weigerde het bestand te schrijven. Controleer of je antivirus of Beheerde maptoegang van Windows-beveiliging SafeHouse niet blokkeert en of de map niet alleen-lezen is, en probeer het dan opnieuw.",
+  "Another program kept a file open (an antivirus, OneDrive or the search indexer). Try again, or choose an installation folder outside OneDrive.": "Een ander programma hield een bestand open (een antivirus, OneDrive of de zoekindexering). Probeer het opnieuw, of kies een installatiemap buiten OneDrive.",
+  "The drive is full. Free some space or choose another installation folder.": "De schijf is vol. Maak ruimte vrij of kies een andere installatiemap.",
+  "The installation folder's path is long (%d characters): %s. If the installation fails, choose a shorter installation folder in Settings > Games, e.g. C:\\Games.": "Het pad van de installatiemap is lang (%d tekens): %s. Als de installatie mislukt, kies dan een kortere installatiemap in Instellingen > Games, bijv. C:\\Games."
  }
 }

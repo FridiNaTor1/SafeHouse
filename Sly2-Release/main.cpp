@@ -31,6 +31,7 @@
 #include "splicecheck.h"
 #include "animtest.h"
 #include "../platform/platform.h"
+#include "../platform/safe_paths.h"
 
 #include <chrono>
 #include <cstdio>
@@ -449,6 +450,7 @@ int main(int argc, char** argv)
         else if (!std::strcmp(argv[i], "--blends") || !std::strcmp(argv[i], "--ai") || !std::strcmp(argv[i], "--ai-carry")) {}  // (anim-ref)
         else if (!std::strcmp(argv[i], "--splice-selftest")) command = "splice-selftest";
         else if (!std::strcmp(argv[i], "--action-input-selftest")) command = "action-input-selftest";
+        else if (!std::strcmp(argv[i], "--paths-selftest")) command = "paths-selftest";   // (platform/safe_paths.h)
         else if (!std::strcmp(argv[i], "--settings-selftest")) command = "settings-selftest";
         else if (!std::strcmp(argv[i], "--renderer-selftest")) command = "renderer-selftest";
         else if (!std::strcmp(argv[i], "--gl-selftest")) command = "gl-selftest";
@@ -604,6 +606,43 @@ int main(int argc, char** argv)
     // (worldparts.h: a world's parts packed into one file: no game data needed)
     if (command && !std::strcmp(command, "world-pack")) return WorldPackCommand(arg, arg2);
     if (command && !std::strcmp(command, "action-input-selftest")) return sly2actions::SelfTest();
+    if (command && !std::strcmp(command, "paths-selftest"))
+    {
+        // the file helpers (platform/safe_paths.h), then the short names' mapping (worldparts.h RelCanonical)
+        int failed = cane::paths::pathsSelfTest();
+        const std::pair<const char*, const char*> acase[] = {
+            {"Worlds/1 The Black Chateau/Paris/World/227 jt/Objects.bin", "Worlds/1-Paris/World/227 jt/Objects.bin"},
+            {"Worlds/1-Paris/World/227 jt/Objects.bin", "Worlds/1-Paris/World/227 jt/Objects.bin"},
+            {"Worlds/6 He Who Tames the Iron Horse/Canada Train Station/World/218 c_train_ext_kidnap_bearcubs/Scripts.splice",
+             "Worlds/6-Canada Train Station/World/218 c_train_ext_kidnap_b/Scripts.splice"},
+            {"Worlds/0 A Shadow From The Past/Cairo Museum/World/001 explode_whack_flash_small/Graphics.bin",
+             "Worlds/0-Cairo Museum/World/001 explode_whack_flash_/Graphics.bin"},
+            {"Worlds/8 Anatomy for Disaster/Engine Room (Bentley)/Engine Room (Bentley).world.json",
+             "Worlds/8-Engine Room (Bentley)/Engine Room (Bentley).world.json"},
+            {"Worlds/0 A Shadow From The Past/Cairo Museum/Sounds/Sound 019-12.wav", "Worlds/0-Cairo Museum/Sounds/Sound 019-12.wav"},
+            {"Worlds/Front End/World/003 a name longer than twenty/Objects.bin", "Worlds/Front End/World/003 a name longer than t/Objects.bin"},
+            {"Worlds/Front End/Front End.world.json", "Worlds/Front End/Front End.world.json"},
+            {"Music/18 The Jungle.wav", "Music/18 The Jungle.wav"},
+            {"Dialog/English/Rajan's Palace/1586.wav", "Dialog/English/Rajan's Palace/1586.wav"},
+            {"Worlds/7 Menace in the North, Eh_/Jean Bison Battle/Ambience.wav", "Worlds/7-Jean Bison Battle/Ambience.wav"},
+        };
+        for (const auto& [in, want] : acase)
+        {
+            const std::string got = RelCanonical(in);
+            if (got != want || RelCanonical(got) != got)
+            {
+                std::printf("paths-selftest: FAILED RelCanonical(\"%s\") = \"%s\", wanted \"%s\"\n", in, got.c_str(), want);
+                failed = 1;
+            }
+        }
+        if (SzGroupFolder(1, "explode_whack_flash_small") != "World/001 explode_whack_flash_")
+        {
+            std::printf("paths-selftest: FAILED SzGroupFolder: %s\n", SzGroupFolder(1, "explode_whack_flash_small").c_str());
+            failed = 1;
+        }
+        std::printf("paths-selftest: short names %s\n", failed ? "FAILED" : "passed");
+        return failed;
+    }
     if (command && !std::strcmp(command, "settings-selftest")) { int SettingsSelfTest(); return SettingsSelfTest(); }   // (settings_test.cpp)
     // (platform/renderer_choice.h: Auto / Vulkan / OpenGL, the fallback's start marker; no GPU needed)
     if (command && !std::strcmp(command, "renderer-selftest"))

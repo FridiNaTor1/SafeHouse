@@ -981,6 +981,11 @@
   "The disc images folder is not available (a drive that is not connected?).": "Папка с образами дисков недоступна (диск не подключён?).",
   "Choose your disc images folder": "Выбрать папку с образами дисков",
   "Apply": "Применить",
-  "Your disc images folder (%s) and the usual folders": "Ваша папка с образами дисков (%s) и обычные папки"
+  "Your disc images folder (%s) and the usual folders": "Ваша папка с образами дисков (%s) и обычные папки",
+  "The installation folder's path is too long for Windows. Choose a shorter installation folder (for example C:\\Games) in Settings > Games, or move the SafeHouse folder closer to the drive's root.": "Путь к папке установки слишком длинный для Windows. Выберите более короткую папку установки (например, C:\\Games) в разделе Настройки > Игры или переместите папку SafeHouse ближе к корню диска.",
+  "Windows refused to write the file. Check that your antivirus or Windows Security's Controlled folder access is not blocking SafeHouse, and that the folder is not read-only, then try again.": "Windows не разрешила записать файл. Проверьте, что антивирус или контролируемый доступ к папкам в Безопасности Windows не блокирует SafeHouse и что папка не доступна только для чтения, затем повторите попытку.",
+  "Another program kept a file open (an antivirus, OneDrive or the search indexer). Try again, or choose an installation folder outside OneDrive.": "Другая программа держала файл открытым (антивирус, OneDrive или служба индексирования). Повторите попытку или выберите папку установки вне OneDrive.",
+  "The drive is full. Free some space or choose another installation folder.": "Диск заполнен. Освободите место или выберите другую папку установки.",
+  "The installation folder's path is long (%d characters): %s. If the installation fails, choose a shorter installation folder in Settings > Games, e.g. C:\\Games.": "Путь к папке установки длинный (символов: %d): %s. Если установка не удастся, выберите более короткую папку установки в разделе Настройки > Игры, например C:\\Games."
  }
 }

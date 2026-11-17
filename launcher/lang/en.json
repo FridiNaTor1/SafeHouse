@@ -981,6 +981,11 @@
   "The disc images folder is not available (a drive that is not connected?).": "The disc images folder is not available (a drive that is not connected?).",
   "Choose your disc images folder": "Choose your disc images folder",
   "Apply": "Apply",
-  "Your disc images folder (%s) and the usual folders": "Your disc images folder (%s) and the usual folders"
+  "Your disc images folder (%s) and the usual folders": "Your disc images folder (%s) and the usual folders",
+  "The installation folder's path is too long for Windows. Choose a shorter installation folder (for example C:\\Games) in Settings > Games, or move the SafeHouse folder closer to the drive's root.": "The installation folder's path is too long for Windows. Choose a shorter installation folder (for example C:\\Games) in Settings > Games, or move the SafeHouse folder closer to the drive's root.",
+  "Windows refused to write the file. Check that your antivirus or Windows Security's Controlled folder access is not blocking SafeHouse, and that the folder is not read-only, then try again.": "Windows refused to write the file. Check that your antivirus or Windows Security's Controlled folder access is not blocking SafeHouse, and that the folder is not read-only, then try again.",
+  "Another program kept a file open (an antivirus, OneDrive or the search indexer). Try again, or choose an installation folder outside OneDrive.": "Another program kept a file open (an antivirus, OneDrive or the search indexer). Try again, or choose an installation folder outside OneDrive.",
+  "The drive is full. Free some space or choose another installation folder.": "The drive is full. Free some space or choose another installation folder.",
+  "The installation folder's path is long (%d characters): %s. If the installation fails, choose a shorter installation folder in Settings > Games, e.g. C:\\Games.": "The installation folder's path is long (%d characters): %s. If the installation fails, choose a shorter installation folder in Settings > Games, e.g. C:\\Games."
  }
 }

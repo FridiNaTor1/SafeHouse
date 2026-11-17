@@ -376,6 +376,7 @@ if(CANE_BUILD_SLY2)
   # the rumble scheduler's timing against the retail patterns and the PS2 -> SDL motor mapping (platform/pad_rumble.h)
   add_test(NAME sly2-rumble COMMAND Sly2-Release --rumble-selftest)
   add_test(NAME sly2-action-input COMMAND Sly2-Release --action-input-selftest)
+  add_test(NAME sly2-paths COMMAND Sly2-Release --paths-selftest)
   # Settings.ini (platform/sly2_settings.h): round trip, hand-edited files, the migration from system_settings.dat
   add_test(NAME sly2-settings COMMAND Sly2-Release --settings-selftest)
   # the renderer choice (platform/renderer_choice.h): Auto = Vulkan with OpenGL as the fallback, the explicit choices,
@@ -654,6 +655,8 @@ if(WIN32)
  cane_windows_resources(Sly1BrxRebuilder "SafeHouse Sly 1 world converter" "")
  cane_windows_resources(Sly1-Release "Sly Cooper and the Thievius Raccoonus (SafeHouse)"
   "GLFW_ICON ICON \"${cane_assets}/shortcut/sly1.ico\"" "${cane_assets}/shortcut/sly1.ico")
+ # (Sly 3: the UTF-8 / long-path manifest and file properties; no shortcut icon yet)
+ cane_windows_resources(Sly3-Release "Sly 3: Honor Among Thieves (SafeHouse)" "")
  cane_windows_resources(Sly2-Release "Sly 2: Band of Thieves (SafeHouse)"
   "GLFW_ICON ICON \"${cane_assets}/shortcut/sly2.ico\"" "${cane_assets}/shortcut/sly2.ico")
 endif()

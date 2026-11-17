@@ -981,6 +981,11 @@
   "The disc images folder is not available (a drive that is not connected?).": "Mappen med diskimages er ikke tilgængelig (et drev, der ikke er tilsluttet?).",
   "Choose your disc images folder": "Vælg din mappe med diskimages",
   "Apply": "Anvend",
-  "Your disc images folder (%s) and the usual folders": "Din mappe med diskimages (%s) og de sædvanlige mapper"
+  "Your disc images folder (%s) and the usual folders": "Din mappe med diskimages (%s) og de sædvanlige mapper",
+  "The installation folder's path is too long for Windows. Choose a shorter installation folder (for example C:\\Games) in Settings > Games, or move the SafeHouse folder closer to the drive's root.": "Installationsmappens sti er for lang til Windows. Vælg en kortere installationsmappe (for eksempel C:\\Games) under Indstillinger > Spil, eller flyt SafeHouse-mappen tættere på drevets rod.",
+  "Windows refused to write the file. Check that your antivirus or Windows Security's Controlled folder access is not blocking SafeHouse, and that the folder is not read-only, then try again.": "Windows nægtede at skrive filen. Kontrollér, at dit antivirusprogram eller Windows Sikkerheds Kontrolleret mappeadgang ikke blokerer SafeHouse, og at mappen ikke er skrivebeskyttet, og prøv så igen.",
+  "Another program kept a file open (an antivirus, OneDrive or the search indexer). Try again, or choose an installation folder outside OneDrive.": "Et andet program holdt en fil åben (et antivirusprogram, OneDrive eller søgeindekseringen). Prøv igen, eller vælg en installationsmappe uden for OneDrive.",
+  "The drive is full. Free some space or choose another installation folder.": "Drevet er fuldt. Frigør plads, eller vælg en anden installationsmappe.",
+  "The installation folder's path is long (%d characters): %s. If the installation fails, choose a shorter installation folder in Settings > Games, e.g. C:\\Games.": "Installationsmappens sti er lang (%d tegn): %s. Hvis installationen mislykkes, så vælg en kortere installationsmappe under Indstillinger > Spil, f.eks. C:\\Games."
  }
 }

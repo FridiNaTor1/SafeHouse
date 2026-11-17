@@ -7,6 +7,7 @@
 #include "sw.h"
 #include "workpool.h"
 #include "../platform/platform.h"
+#include "../platform/safe_paths.h"
 #include "../platform/job_pool.h"
 #include "../platform/texture_cache.h"
 #include "../platform/texture_pak.h"
@@ -719,7 +720,7 @@ int DumpLoadedWorldTextures(const std::string& dir, std::set<std::string>& setNa
                 const int dx = sel.pbmp->dx, dy = sel.pbmp->dy;
                 std::string name = SzTextureModName(rgba, dx, dy);
                 if (!setName.insert(name).second) continue;  // (the same texels under another CLUT / bitmap, or world)
-                auto write = [dx, dy, rgba = std::move(rgba), path = cane::utf8(cane::path(dir) / name)] {
+                auto write = [dx, dy, rgba = std::move(rgba), path = cane::path(dir) / name] {
                     std::vector<uint8_t> ab(rgba.size());
                     for (int y = 0; y < dy; ++y)
                         for (int x = 0; x < dx; ++x)
@@ -728,7 +729,15 @@ int DumpLoadedWorldTextures(const std::string& dir, std::set<std::string>& setNa
                                 const uint8_t v = rgba[(size_t(y) * dx + x) * 4 + k];
                                 ab[(size_t(dy - 1 - y) * dx + x) * 4 + k] = k < 3 ? v : uint8_t(std::min(255, v * 2));
                             }
-                    if (!stbi_write_png(path.c_str(), dx, dy, 4, ab.data(), dx * 4)) std::fprintf(stderr, "textures: cannot write %s\n", path.c_str());
+                    // (written by safe_paths.h: a deep install folder, a virus scanner's short lock)
+                    std::vector<uint8_t> png;
+                    std::string why;
+                    stbi_write_png_to_func([](void* pv, void* pb, int cb) {
+                        auto& out = *static_cast<std::vector<uint8_t>*>(pv);
+                        out.insert(out.end(), static_cast<const uint8_t*>(pb), static_cast<const uint8_t*>(pb) + cb);
+                    }, &png, dx, dy, 4, ab.data(), dx * 4);
+                    if (png.empty() || !cane::paths::writeFile(path, png.data(), png.size(), &why))
+                        std::fprintf(stderr, "textures: cannot write %s: %s\n", cane::utf8(path).c_str(), why.c_str());
                 };
                 if (ppool) ppool->Push(std::move(write), uint64_t(dx) * dy * 8);
                 else write();

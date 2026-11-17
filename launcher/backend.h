@@ -467,6 +467,37 @@ struct LauncherBackend {
     void install(const std::string& iso, const std::atomic<bool>& cancel, const LogFunction& log) {
         install(iso, GameId::Sly1, cancel, log);
     }
+    // A failure's hint (the tag platform/safe_paths.h puts into a converter / extractor error), the tag removed from
+    // `reason`: path too long -> a shorter folder; access denied -> antivirus / Controlled folder access / permissions;
+    // a file in use -> antivirus / OneDrive / try again; disk full -> space.
+    static std::string withInstallHint(std::string reason) {
+        struct HINT { const char* tag; const char* text; };
+        static const HINT s_ahint[] = {
+            {"[path-too-long]", N_("The installation folder's path is too long for Windows. Choose a shorter installation folder (for "
+                                   "example C:\\Games) in Settings > Games, or move the SafeHouse folder closer to the drive's root.")},
+            {"[access-denied]", N_("Windows refused to write the file. Check that your antivirus or Windows Security's Controlled folder "
+                                   "access is not blocking SafeHouse, and that the folder is not read-only, then try again.")},
+            {"[file-in-use]", N_("Another program kept a file open (an antivirus, OneDrive or the search indexer). Try again, or choose an "
+                                 "installation folder outside OneDrive.")},
+            {"[disk-full]", N_("The drive is full. Free some space or choose another installation folder.")},
+        };
+        std::string hint;
+        for (const HINT& h : s_ahint)
+            for (std::size_t at; (at = reason.find(h.tag)) != std::string::npos;) {
+                reason.erase(at > 0 && reason[at - 1] == ' ' ? at - 1 : at, std::strlen(h.tag) + (at > 0 && reason[at - 1] == ' ' ? 1 : 0));
+                if (hint.empty()) hint = tr(h.text);
+            }
+        return hint.empty() ? reason : reason + "\n\n" + hint;
+    }
+    // The install page's note when the folder a new install goes to has a long path (Windows' 260-character limit:
+    // a Sly 2 installation adds about 110 characters; SafeHouse handles longer paths, other tools may not). "" when short.
+    std::string longInstallPathNote(GameId game) const {
+        const fs::path dir = fs::absolute(regionDir(game, "usa"));
+        const std::size_t n = paths::pathUnits(dir);
+        if (n <= 150) return {};
+        return trf("The installation folder's path is long (%d characters): %s. If the installation fails, choose a shorter "
+                   "installation folder in Settings > Games, e.g. C:\\Games.", int(n), utf8(dir).c_str());
+    }
     // Installs a disc image into its region's folder (regionDir): the disc decides the region, so another region's
     // disc installs beside the existing ones and the same region's disc replaces (re-extracts) that one.
     void install(const std::string& iso, GameId game, const std::atomic<bool>& cancel, const LogFunction& log) {
@@ -522,7 +553,7 @@ struct LauncherBackend {
                 }
                 for (const auto& line : lastLines) reason += (reason.empty() ? "" : " ") + line;
             }
-            throw std::runtime_error(reason);
+            throw std::runtime_error(withInstallHint(reason));
         }
         if (target == baseDir(game)) config[isoKey(game)] = iso;
         rememberInstallPath(game, target);
@@ -560,7 +591,7 @@ struct LauncherBackend {
         for (const char* suffix : {"", ".previous", ".staging"}) {
             auto p = target;
             p += suffix;
-            fs::remove_all(p);
+            fs::remove_all(paths::longPath(p));   // (\\?\: the files can be deeper than Windows' MAX_PATH)
         }
         forgetInstallPath(game, target);
         saveConfig();
@@ -595,19 +626,22 @@ struct LauncherBackend {
         if (folders::detail::renameAllowed()) fs::rename(source, target, ec);
         else ec = std::make_error_code(std::errc::cross_device_link);  // (test hook: as if on another drive)
         if (ec) {
-            // another drive: copy, check, switch, then remove the original
+            // another drive: copy, check, switch, then remove the original (\\?\ paths: the files can be deeper than
+            // Windows' MAX_PATH, platform/safe_paths.h)
+            const fs::path sourceIo = paths::longPath(source);
             std::vector<std::pair<fs::path, uintmax_t>> files;
             uintmax_t total = 0;
-            for (fs::recursive_directory_iterator it(source), end; it != end; ++it)
+            for (fs::recursive_directory_iterator it(sourceIo), end; it != end; ++it)
                 if (it->is_regular_file()) files.emplace_back(it->path(), it->file_size()), total += files.back().second;
             if (const auto space = fs::space(root, ec); !ec && space.available < total + (256ull << 20))
                 throw std::runtime_error(trf("Not enough free space in %s: the installation needs %s", utf8(root).c_str(), aboutGb(total).c_str()));
             InstallationTransaction transaction(target);
             uintmax_t done = 0;
             size_t lastMiB = 0;
-            for (fs::recursive_directory_iterator it(source), end; it != end; ++it) {
+            const fs::path stageIo = paths::longPath(transaction.directory());
+            for (fs::recursive_directory_iterator it(sourceIo), end; it != end; ++it) {
                 if (cancel) throw std::runtime_error("Cancelled");
-                const fs::path to = transaction.directory() / it->path().lexically_relative(source);
+                const fs::path to = stageIo / it->path().lexically_relative(sourceIo);
                 if (it->is_directory()) fs::create_directories(to);
                 else if (it->is_regular_file()) {
                     fs::create_directories(to.parent_path());
@@ -616,15 +650,15 @@ struct LauncherBackend {
                     done += it->file_size();
                     if (const size_t mib = size_t(done >> 20); mib >= lastMiB + 16 || done == total)
                         log(json({{"stage", "move"}, {"completed", lastMiB = mib}, {"total", size_t(total >> 20)},
-                                  {"item", utf8(it->path().lexically_relative(source))}})
+                                  {"item", utf8(it->path().lexically_relative(sourceIo))}})
                                 .dump());
                 }
             }
             for (const auto& [file, size] : files)
-                if (fs::file_size(transaction.directory() / file.lexically_relative(source), ec) != size || ec)
+                if (fs::file_size(stageIo / file.lexically_relative(sourceIo), ec) != size || ec)
                     throw std::runtime_error(trf("Copy failed: %s", utf8(file).c_str()));
             transaction.commit();
-            fs::remove_all(source, ec);
+            fs::remove_all(sourceIo, ec);
             if (ec) log("The old folder could not be removed completely: " + utf8(source));
         }
         forgetInstallPath(game, source);
