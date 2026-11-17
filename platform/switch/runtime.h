@@ -8,7 +8,7 @@
 // when the game ends, SafeHouse.nro is started again by the Homebrew loader (a clean process: the launcher).
 //
 // The SD card (the folder of SafeHouse.nro, normally sdmc:/switch/SafeHouse):
-//   SafeHouse.nro          the program (the one the Homebrew Menu lists)
+//   SafeHouse.nro          the program (the one the Homebrew Menu lists; SafeHouse-NX2.nro on the Switch 2)
 //   sly1/, sly2/, sly3/    the installed games (the installers write them)
 //   user/sly1/, user/sly2/ saves and settings, and the PS3 HD textures (PS3 HD/, as in a PC profile)
 #include <string>
@@ -96,7 +96,7 @@ struct LoadingBoost
 };
 
 // The cores: the game thread on core 0; the audio mixer and the sound ticks on core 2, file work on core 1; the
-// other threads share 1 and 2.
+// other threads share the rest of the process's cores (1 and 2 on the Switch, 1 to 5 on the Switch 2).
 void PinGameThread();
 void PinSoundThread();
 // The calling thread below the game's threads' priority (background work: job_pool.h).
@@ -105,6 +105,6 @@ void LowerThreadPriority();
 void StopAudio();
 int MixerCore();
 int IoCore();
-// The console's mode: 1920x1080 docked, 1280x720 handheld.
+// The console's mode: 1920x1080 docked, 1280x720 handheld (the Switch 2: the TV's resolution, 1920x1080).
 bool Docked();
 }  // namespace CaneSwitch

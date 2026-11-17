@@ -5,12 +5,18 @@
 #   cmake --preset switch-release
 #   cmake --build --preset switch-release
 #
+# The Nintendo Switch 2 build (SafeHouse-NX2.nro) uses libounce, drako3d and uam2 in place of libnx, deko3d and uam:
+#
+#   cmake --preset switch2-release
+#   cmake --build --preset switch2-release
+#
 # The games share thousands of global names, so each game is first linked on its own into one relocatable object
 # whose only global symbol is its descriptor (cane_game_<key>, platform/switch/runtime.h). The launcher and the Switch
 # layer (cane_switch) are then linked with both objects.
 #
 # Requires devkitPro's switch-dev and switch-ffmpeg packages (dkp-pacman -S switch-dev switch-ffmpeg), Python 3 and Git
-# (libusbhsfs is fetched: cmake/usbhsfs.cmake).
+# (libusbhsfs is fetched: cmake/usbhsfs.cmake). The Switch 2 build also needs ouncebrew's ounce-devkit, drako3d and uam2
+# installed in devkitPro (https://github.com/ouncebrew).
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS ON)   # newlib hides some POSIX declarations in strict ISO mode
@@ -26,14 +32,39 @@ set(SAFEHOUSE_VERSION "" CACHE STRING "Release version of the packages (x.y.z); 
 if(SAFEHOUSE_VERSION AND NOT SAFEHOUSE_VERSION MATCHES "^[0-9]+\\.[0-9]+\\.[0-9]+$")
   message(FATAL_ERROR "SAFEHOUSE_VERSION must be x.y.z (got ${SAFEHOUSE_VERSION})")
 endif()
+if(NINTENDO_SWITCH2)
+  set(cane_program SafeHouse-NX2)
+else()
+  set(cane_program SafeHouse)
+endif()
+# The Homebrew Menu's version: the release's, else the checkout's newest vX.Y.Z tag, else the project's
+find_package(Git QUIET)
 set(nacp_version "${SAFEHOUSE_VERSION}")
+if(NOT nacp_version AND GIT_EXECUTABLE)
+  execute_process(COMMAND "${GIT_EXECUTABLE}" -C "${CMAKE_CURRENT_SOURCE_DIR}" tag --list "v[0-9]*.[0-9]*.[0-9]*" --sort=-v:refname
+                  OUTPUT_VARIABLE cane_release_tags OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+  if(cane_release_tags MATCHES "^v([0-9]+\\.[0-9]+\\.[0-9]+)")
+    set(nacp_version "${CMAKE_MATCH_1}")
+  endif()
+endif()
 if(NOT nacp_version)
-  set(nacp_version "dev")
+  set(nacp_version "${CMAKE_PROJECT_VERSION}")
 endif()
 option(CANE_SWITCH_LTO "Link-time optimization for the Switch build (slower link, faster game)" ON)
 
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
-find_program(CANE_UAM NAMES uam HINTS "${DEVKITPRO}/tools/bin" REQUIRED)
+if(NINTENDO_SWITCH2)
+  set(cane_deko_library drako3d)
+  set(cane_shader_gpu ampere)
+  find_program(CANE_UAM NAMES uam2 HINTS "${DEVKITPRO}/tools/bin" REQUIRED)
+  if(NOT EXISTS "${CANE_NX_ROOT}/lib/libdrako3d.a" OR NOT EXISTS "${CANE_NX_ROOT}/include/drako3d.h")
+    message(FATAL_ERROR "drako3d is not installed in ${CANE_NX_ROOT} (https://github.com/ouncebrew/drako3d)")
+  endif()
+else()
+  set(cane_deko_library deko3d)
+  set(cane_shader_gpu maxwell)
+  find_program(CANE_UAM NAMES uam HINTS "${DEVKITPRO}/tools/bin" REQUIRED)
+endif()
 find_program(CANE_ELF2NRO NAMES elf2nro HINTS "${DEVKITPRO}/tools/bin" REQUIRED)
 find_program(CANE_NACPTOOL NAMES nacptool HINTS "${DEVKITPRO}/tools/bin" REQUIRED)
 set(ffmpeg_libraries avformat avcodec swresample swscale avutil dav1d)
@@ -73,17 +104,20 @@ add_custom_command(OUTPUT "${gen}/launcher_assets.h"
           cane_cover_sly3 "${root}/launcher/assets/steam/sly3/grid.jpg"
   DEPENDS "${root}/launcher/assets/steam/sly1/grid.png" "${root}/launcher/assets/steam/sly2/grid.png"
           "${root}/launcher/assets/steam/sly3/grid.jpg" "${root}/cmake/switch_embed.py" VERBATIM)
-# the shaders, compiled offline for deko3d by uam: the shared GL layer's (launcher, Sly 2, Sly 3) and Sly 1's backend's
+# the shaders, compiled offline for deko3d by uam (uam2 on the Switch 2): the shared GL layer's (launcher, Sly 2, Sly 3)
+# and Sly 1's backend's
 file(GLOB deko_shader_sources CONFIGURE_DEPENDS "${root}/platform/switch/deko/shaders/*"
   "${root}/Sly2-Release/*.vert" "${root}/Sly2-Release/*.frag" "${root}/Sly2-Release/*.geom"
   "${root}/Sly3-Release/*.vert" "${root}/Sly3-Release/*.frag" "${root}/Sly3-Release/*.geom")
 add_custom_command(OUTPUT "${gen}/deko_shaders.cpp"
   COMMAND "${Python3_EXECUTABLE}" "${root}/cmake/switch_shaders.py" --source "${root}" --output "${gen}" --uam "${CANE_UAM}"
+          --gpu ${cane_shader_gpu}
   DEPENDS ${deko_shader_sources} "${root}/cmake/switch_shaders.py" VERBATIM)
 file(GLOB sly1_shader_sources CONFIGURE_DEPENDS "${root}/platform/switch/sly1/deko/shaders/*"
   "${root}/Sly1-Release/*.vert" "${root}/Sly1-Release/*.frag")
 add_custom_command(OUTPUT "${gen}/sly1/deko/deko_shaders.h"
   COMMAND "${Python3_EXECUTABLE}" "${root}/cmake/switch_shaders_sly1.py" --source "${root}" --output "${gen}/sly1/deko" --uam "${CANE_UAM}"
+          --gpu ${cane_shader_gpu}
   DEPENDS ${sly1_shader_sources} "${root}/cmake/switch_shaders_sly1.py" VERBATIM)
 
 # ---- the Switch layer, shared by the launcher and the games
@@ -284,7 +318,7 @@ target_precompile_headers(sly1_game PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:${sly1_pc
 set_source_files_properties(${cane_switch_game_objects} PROPERTIES EXTERNAL_OBJECT TRUE GENERATED TRUE)
 add_executable(safehouse "${root}/platform/switch/launcher/launcher.cpp" "${root}/platform/switch/launcher/update.cpp"
   "${gen}/launcher_assets.h" "${gen}/deko_shaders.cpp" ${cane_switch_game_objects})
-set_target_properties(safehouse PROPERTIES OUTPUT_NAME SafeHouse SUFFIX ".elf")
+set_target_properties(safehouse PROPERTIES OUTPUT_NAME ${cane_program} SUFFIX ".elf")
 target_link_libraries(safehouse PRIVATE cane_switch)
 target_compile_options(safehouse PRIVATE ${cane_switch_options})
 target_compile_definitions(safehouse PRIVATE "CANE_SWITCH_VERSION=\"${SAFEHOUSE_VERSION}\"")
@@ -293,18 +327,18 @@ set_property(TARGET safehouse PROPERTY CXX_LINKER_LAUNCHER "${link_launcher}")
 target_link_options(safehouse PRIVATE
   -Wl,--wrap=__syscall_thread_create -Wl,--wrap=getenv -Wl,--wrap=setenv -Wl,--wrap=unsetenv -Wl,--wrap=putenv)
 target_link_libraries(safehouse PRIVATE
-  -Wl,--start-group deko3d ${ffmpeg_libraries} z nx m stdc++ -Wl,--end-group)
+  -Wl,--start-group ${cane_deko_library} ${ffmpeg_libraries} z nx m stdc++ -Wl,--end-group)
 if(CANE_SWITCH_LTO)
   set_target_properties(safehouse PROPERTIES INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE INTERPROCEDURAL_OPTIMIZATION_RELWITHDEBINFO TRUE)
   target_link_options(safehouse PRIVATE -flto=auto)
 endif()
-set(nacp "${CMAKE_CURRENT_BINARY_DIR}/SafeHouse.nacp")
-set(nro "${CMAKE_CURRENT_BINARY_DIR}/nro/SafeHouse.nro")
+set(nacp "${CMAKE_CURRENT_BINARY_DIR}/${cane_program}.nacp")
+set(nro "${CMAKE_CURRENT_BINARY_DIR}/nro/${cane_program}.nro")
 # rewritten only when the author or version change
-file(CONFIGURE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/SafeHouse.nacp.txt" CONTENT "SafeHouse\n${CANE_SWITCH_AUTHOR}\n${nacp_version}\n")
+file(CONFIGURE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/${cane_program}.nacp.txt" CONTENT "SafeHouse\n${CANE_SWITCH_AUTHOR}\n${nacp_version}\n")
 add_custom_command(OUTPUT "${nacp}"
   COMMAND "${CANE_NACPTOOL}" --create "SafeHouse" "${CANE_SWITCH_AUTHOR}" "${nacp_version}" "${nacp}"
-  DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/SafeHouse.nacp.txt" VERBATIM)
+  DEPENDS "${CMAKE_CURRENT_BINARY_DIR}/${cane_program}.nacp.txt" VERBATIM)
 add_custom_command(OUTPUT "${nro}"
   COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/nro"
   COMMAND "${CANE_ELF2NRO}" "$<TARGET_FILE:safehouse>" "${nro}" "--nacp=${nacp}" "--icon=${root}/platform/switch/icons/safehouse.jpg"

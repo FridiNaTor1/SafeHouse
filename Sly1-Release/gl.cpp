@@ -9,6 +9,9 @@
 #include "prompt_glyphs.h"
 #include "runtime_error.h"
 #include "mouseinput.h"
+#if defined(__SWITCH2__)
+#include "clock.h"   // (g_targetFrameRate)
+#endif
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -1397,9 +1400,18 @@ void FrameBufferSizeCallBack(GLFWwindow* window, int width, int height)
 	int sceneW = presentW;
 	int sceneH = presentH;
 
+	g_fInternalResolutionCapped = false;
 	if (g_internalResolutionHeight > 0)
 	{
 		sceneH = g_internalResolutionHeight;
+#if defined(__SWITCH2__)
+		// (at 120 fps, at most the picture's height; the setting applies again at 60)
+		if (g_targetFrameRate > 60 && sceneH > presentH)
+		{
+			sceneH = presentH;
+			g_fInternalResolutionCapped = true;
+		}
+#endif
 		// The original PS2 raster is explicitly 640x448. Other internal
 		// resolutions preserve the selected presentation aspect ratio.
 		if (sceneH == 448)
@@ -1503,6 +1515,7 @@ GLuint g_sceneFbo = 0;
 int g_msaaSamples = 4;
 bool g_fMsaa = false;
 int g_internalResolutionHeight = 0;
+bool g_fInternalResolutionCapped = false;
 int g_resolutionScalePercent = 100;
 int g_monitorIndex = 0;
 int g_textureFiltering = 1;

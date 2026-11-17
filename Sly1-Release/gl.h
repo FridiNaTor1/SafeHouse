@@ -309,6 +309,7 @@ extern int g_msaaSamples;
 extern bool g_fMsaa;
 extern bool g_fVsync;
 extern int g_internalResolutionHeight;
+extern bool g_fInternalResolutionCapped;   // (the Switch 2 at 120 fps: rendered below the setting)
 extern int g_resolutionScalePercent;
 extern int g_monitorIndex;
 extern int g_textureFiltering;

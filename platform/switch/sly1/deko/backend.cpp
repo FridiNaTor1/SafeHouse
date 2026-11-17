@@ -1,12 +1,20 @@
 // Project Cane's deko3d backend (ProjectCane platform/switch/deko/backend.cpp, 3ec796a), linked into Sly 1's object only.
+//
+// The Switch 2 (drako3d): its VI2 swapchain cannot flip, so the window is an image of its own (WindowImage) that
+// Present copies upside down into the swapchain image, as in platform/switch/deko/gl_deko.cpp.
 #include "backend.h"
+#include "../../present_rate.h"
 #include "../../saltynx.h"
 #include "allocator.h"
 #include "dksh.h"
 #include "texture_decode.h"
 #include "deko_shaders.h"
 #include <switch.h>
+#if defined(__SWITCH2__)
+#include <drako3d.h>
+#else
 #include <deko3d.h>
+#endif
 #include <algorithm>
 #include <array>
 #include <bit>
@@ -30,6 +38,10 @@ DkQueue queue{};
 DkSwapchain swapchain{};
 DkMemBlock swapMemory{};
 std::array<DkImage, FrameCount> swapImages{};
+#if defined(__SWITCH2__)
+DkMemBlock windowMemory{};   // the window's own image (see the top)
+DkImage windowImage{};
+#endif
 unsigned outputWidth{}, outputHeight{}, frameIndex{};
 unsigned frameResolutionWidth{}, frameResolutionHeight{};
 uint64_t nextSerial = 1;
@@ -185,6 +197,17 @@ void AcquireSwapImage()
     Submit();
     frame.imageSlot = dkQueueAcquireImage(queue, swapchain);
     if (frame.imageSlot < 0) Fail("Swapchain acquire failed");
+}
+// Framebuffer 0's image: the swapchain image, or on the Switch 2 the window's own (see the top).
+const DkImage& WindowImage()
+{
+#if defined(__SWITCH2__)
+    EnsureFrame();
+    return windowImage;
+#else
+    AcquireSwapImage();
+    return swapImages[Current().imageSlot];
+#endif
 }
 
 struct Buffer
@@ -1113,8 +1136,7 @@ void ApplyTarget()
     const DkImageView* color=nullptr; const DkImageView* depth=nullptr;
     if (!drawFramebuffer)
     {
-        AcquireSwapImage();
-        dkImageViewDefaults(&colorView,&swapImages[Current().imageSlot]); color=&colorView;
+        dkImageViewDefaults(&colorView,&WindowImage()); color=&colorView;
         depthView=View(defaultDepth,0,0,true); depth=&depthView;
         targetWidth=outputWidth; targetHeight=outputHeight; targetSamples=1;
     }
@@ -1182,7 +1204,7 @@ void APIENTRY ClearBufferfv(GLenum buffer, GLint index, const GLfloat* value)
 }
 DkImageView FramebufferColorView(GLuint id)
 {
-    if (!id) { AcquireSwapImage(); DkImageView v; dkImageViewDefaults(&v,&swapImages[Current().imageSlot]);return v; }
+    if (!id) { DkImageView v; dkImageViewDefaults(&v,&WindowImage());return v; }
     const auto& f=framebuffers.at(id);return View(AttachmentImage(f.color),f.color.level,f.color.layer,true);
 }
 void APIENTRY BlitFramebuffer(GLint sx0, GLint sy0, GLint sx1, GLint sy1, GLint dx0, GLint dy0, GLint dx1, GLint dy1, GLbitfield mask, GLenum filter)
@@ -1230,7 +1252,8 @@ void ApplyResources()
         boundProgram=currentProgram;
         boundNoKill=noKill;
     }
-    unsigned uniformMask = (p->info->uniformMask[0] | p->info->uniformMask[1]) & 0x7fff;
+    // (the GLSL's own uniform blocks; the constants block, bound below, left out)
+    unsigned uniformMask = (p->info->uniformMask[0] | p->info->uniformMask[1]) & 0xffffu & ~(1u << ConstantBinding);
     while (uniformMask)
     {
         const unsigned index = std::countr_zero(uniformMask);
@@ -1268,8 +1291,9 @@ void ApplyResources()
             std::memset(upload.cpu+p->constants.size(),0,upload.size-p->constants.size());
             p->uploadedAddress=upload.gpu; p->uploadedSerial=Current().serial; p->uploadedVersion=p->version;
         }
-        const unsigned stages = (p->info->uniformMask[0]>>15) | ((p->info->uniformMask[1]>>15)<<1);
-        BindUniform(15,{p->uploadedAddress,uint32_t(p->constants.size())},stages);
+        // (the constants block)
+        const unsigned stages = ((p->info->uniformMask[0]>>ConstantBinding)&1) | (((p->info->uniformMask[1]>>ConstantBinding)&1)<<1);
+        BindUniform(ConstantBinding,{p->uploadedAddress,uint32_t(p->constants.size())},stages);
     }
     for (const auto sampler : p->samplers)
     {
@@ -1508,7 +1532,11 @@ void APIENTRY GetDoublev(GLenum parameter,GLdouble* value)
 }
 const GLubyte* APIENTRY GetString(GLenum parameter)
 {
+#if defined(__SWITCH2__)
+    const char* value=parameter==GL_VENDOR ? "ouncebrew" : parameter==GL_RENDERER ? "drako3d native Ampere" : parameter==GL_VERSION ? "4.3 drako3d; offline DKSH shaders" : "";
+#else
     const char* value=parameter==GL_VENDOR ? "devkitPro" : parameter==GL_RENDERER ? "Deko3D native Maxwell" : parameter==GL_VERSION ? "4.3 Deko3D; offline DKSH shaders" : "";
+#endif
     return reinterpret_cast<const GLubyte*>(value);
 }
 const GLubyte* APIENTRY GetStringi(GLenum parameter, GLuint index)
@@ -1523,6 +1551,16 @@ void CreateSwapchain(unsigned width, unsigned height)
     DkImageLayoutMaker lm;dkImageLayoutMakerDefaults(&lm,device);
     lm.format=DkImageFormat_RGBA8_Unorm;lm.dimensions[0]=width;lm.dimensions[1]=height;lm.dimensions[2]=1;
     lm.flags=DkImageFlags_UsageRender|DkImageFlags_UsagePresent|DkImageFlags_Usage2DEngine|DkImageFlags_HwCompression;
+#if defined(__SWITCH2__)
+    {
+        // the window's own image; the swapchain images only take Present's flipped copy
+        DkImageLayoutMaker wm=lm;wm.flags=DkImageFlags_UsageRender|DkImageFlags_Usage2DEngine|DkImageFlags_HwCompression;
+        DkImageLayout windowLayout;dkImageLayoutInitialize(&windowLayout,&wm);
+        windowMemory=MakeMemory(uint32_t(dkImageLayoutGetSize(&windowLayout)),DkMemBlockFlags_Image|DkMemBlockFlags_GpuCached);
+        dkImageInitialize(&windowImage,&windowLayout,windowMemory,0);
+        lm.flags=DkImageFlags_UsageRender|DkImageFlags_UsagePresent|DkImageFlags_Usage2DEngine;
+    }
+#endif
     dkImageLayoutInitialize(&layout,&lm);
     const auto stride=Align(dkImageLayoutGetSize(&layout),dkImageLayoutGetAlignment(&layout));
     swapMemory=MakeMemory(stride*FrameCount,DkMemBlockFlags_Image|DkMemBlockFlags_GpuCached);
@@ -1530,7 +1568,7 @@ void CreateSwapchain(unsigned width, unsigned height)
     for (unsigned i=0;i<FrameCount;++i) { dkImageInitialize(&swapImages[i],&layout,swapMemory,stride*i);images[i]=&swapImages[i]; }
     DkSwapchainMaker sm;dkSwapchainMakerDefaults(&sm,device,nwindowGetDefault(),images,FrameCount);
     swapchain=dkSwapchainCreate(&sm);if (!swapchain) Fail("Swapchain creation failed");
-    dkSwapchainSetSwapInterval(swapchain,swapInterval);
+    if (!CaneSwitch::ApplyHighRefresh()) dkSwapchainSetSwapInterval(swapchain,swapInterval);
     defaultDepth=MakeImage(width,height,1,1,1,DkImageFormat_Z24S8,false);
     outputWidth=width;outputHeight=height;
 }
@@ -1590,6 +1628,9 @@ void ResizeOutput(unsigned width,unsigned height)
     }
     dkSwapchainDestroy(swapchain);swapchain=nullptr;
     dkMemBlockDestroy(swapMemory);swapMemory=nullptr;
+#if defined(__SWITCH2__)
+    dkMemBlockDestroy(windowMemory);windowMemory=nullptr;
+#endif
     defaultDepth.reset();
     std::erase_if(imagePages,[](const auto& page) {
         return page.use_count()==1 && page->ranges.FreeBytes()==page->memory->Size();
@@ -1601,7 +1642,7 @@ void ResizeOutput(unsigned width,unsigned height)
 void SetSwapInterval(int interval)
 {
     swapInterval=std::clamp(interval,0,1);
-    if (swapchain) dkSwapchainSetSwapInterval(swapchain,swapInterval);
+    if (swapchain && !CaneSwitch::ApplyHighRefresh()) dkSwapchainSetSwapInterval(swapchain,swapInterval);
 }
 void SetFrameResolution(unsigned width,unsigned height)
 {
@@ -1614,6 +1655,16 @@ void Present()
 {
     AcquireSwapImage();
     auto& f=Current();
+#if defined(__SWITCH2__)
+    {
+        // the window into the swapchain image, flipped (see the top)
+        DkImageView window,swap;dkImageViewDefaults(&window,&windowImage);dkImageViewDefaults(&swap,&swapImages[f.imageSlot]);
+        const DkImageRect rect{0,0,0,outputWidth,outputHeight,1};
+        dkCmdBufBarrier(f.command,DkBarrier_Primitives,0);
+        dkCmdBufBlitImage(f.command,&window,&rect,&swap,&rect,DkBlitFlag_FilterNearest|DkBlitFlag_FlipY,0);
+        targetDirty=true;
+    }
+#endif
     dkCmdBufSignalFence(f.command,&f.fence,true);
     dkQueueSubmitCommands(queue,dkCmdBufFinishList(f.command));
     f.submitted=true;
@@ -1677,6 +1728,10 @@ void Shutdown()
     swapchain=nullptr;
     if (swapMemory) dkMemBlockDestroy(swapMemory);
     swapMemory=nullptr;
+#if defined(__SWITCH2__)
+    if (windowMemory) dkMemBlockDestroy(windowMemory);
+    windowMemory=nullptr;
+#endif
     if (queue) dkQueueDestroy(queue);
     queue=nullptr;dkDeviceDestroy(device);device=nullptr;
 }

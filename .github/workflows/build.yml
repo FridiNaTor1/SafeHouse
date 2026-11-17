@@ -360,6 +360,70 @@ jobs:
           path: dist/SafeHouse.nro
           if-no-files-found: error
 
+  # Nintendo Switch 2: SafeHouse-NX2.nro (the same program, for kaiHEN homebrew) with ouncebrew's toolchain: libounce,
+  # drako3d and uam2 in place of libnx, deko3d and uam (cmake/devkitA64-libounce.cmake, the switch2-release preset).
+  # devkitPro comes from the Switch job's image; scripts/switch2-toolchain.sh adds the Switch 2 parts at their pinned
+  # versions, built once and cached (uam2 is built on the runner: it needs a newer Meson, Rust and libclang).
+  switch2:
+    name: Nintendo Switch 2 (devkitPro + ouncebrew)
+    needs: version
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      SAFEHOUSE_VERSION: ${{ needs.version.outputs.version }}
+      DEVKITPRO: /opt/devkitpro
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: devkitPro (the Switch job's image, devkitpro/devkita64:20260219)
+        run: |
+          set -eu
+          docker pull -q devkitpro/devkita64:20260219
+          id=$(docker create devkitpro/devkita64:20260219)
+          # (docker cp refuses the image's pacman keyring symlink, which points outside /opt/devkitpro)
+          docker export "$id" | sudo tar -x -C / opt/devkitpro
+          docker rm "$id" > /dev/null
+          sudo chown -R "$(id -u):$(id -g)" /opt/devkitpro
+          echo "/opt/devkitpro/tools/bin" >> "$GITHUB_PATH"
+      - name: Switch 2 toolchain cache
+        id: switch2-cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ runner.temp }}/switch2-toolchain
+          key: switch2-toolchain-devkita64-20260219-${{ hashFiles('scripts/switch2-toolchain.sh') }}
+      - name: Build tools
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+      - name: Build tools for uam2 and drakotools (Meson, Rust, bindgen, libclang)
+        if: steps.switch2-cache.outputs.cache-hit != 'true'
+        run: |
+          set -eu
+          sudo apt-get install -y flex bison libclang-dev libzstd-dev zlib1g-dev libexpat1-dev libdrm-dev glslang-tools python3-venv
+          python3 -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/pip" install -q meson==1.9.1 Mako==1.3.10 PyYAML==6.0.2 packaging==25.0
+          echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
+          rustup toolchain install 1.100.0 --profile minimal
+          rustup default 1.100.0
+          cargo install --locked bindgen-cli --version 0.73.2
+          cargo install --locked cbindgen --version 0.29.0
+      - name: Switch 2 toolchain (scripts/switch2-toolchain.sh)
+        run: scripts/switch2-toolchain.sh "$RUNNER_TEMP/switch2-toolchain"
+      - name: Configure
+        run: cmake --preset switch2-release -DSAFEHOUSE_VERSION="$SAFEHOUSE_VERSION"
+      - name: Build
+        run: cmake --build --preset switch2-release --parallel 4
+      - name: Check the program
+        run: |
+          set -eu
+          nro=build/switch2-release/nro/SafeHouse-NX2.nro
+          test -s "$nro"
+          head -c 20 "$nro" | tail -c 4 | grep -q NRO0
+          mkdir -p dist && cp "$nro" dist/SafeHouse-NX2.nro
+          ls -l dist
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: switch2-release
+          path: dist/SafeHouse-NX2.nro
+          if-no-files-found: error
+
   macos:
     name: macOS
     needs: version
@@ -383,13 +447,14 @@ jobs:
 
   release:
     name: Publish the release
-    needs: [version, linux, windows, windows-smoke, macos, switch, android, ios]
+    needs: [version, linux, windows, windows-smoke, macos, switch, switch2, android, ios]
     # Only from the public repository's main branch, and only when every package built and the Windows ones started.
     # The iOS .ipa is attached when its job succeeded; its failure does not hold the release back.
     if: >-
       ${{ !cancelled() && github.repository == 'FridiNaTor1/SafeHouse' && needs.version.outputs.publish == 'true'
       && needs.linux.result == 'success' && needs.windows.result == 'success' && needs.windows-smoke.result == 'success'
-      && needs.macos.result == 'success' && needs.switch.result == 'success' && needs.android.result == 'success' }}
+      && needs.macos.result == 'success' && needs.switch.result == 'success' && needs.switch2.result == 'success'
+      && needs.android.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
@@ -419,7 +484,7 @@ jobs:
           rm -f release/*.sha256
           python3 scripts/release-manifest.py release --version "$VERSION" --tag "$TAG" --commit "$COMMIT" --date "$DATE" \
             --require linux-appimage --require linux-tar --require linux-aarch64-appimage --require linux-aarch64-tar --require windows-portable --require windows-setup \
-            --require windows-arm64-portable --require windows-arm64-setup --require macos-arm64 --require macos-x86_64 --require switch-nro --require android-apk
+            --require windows-arm64-portable --require windows-arm64-setup --require macos-arm64 --require macos-x86_64 --require switch-nro --require switch2-nro --require android-apk
           # (the previous release: the newest tag of this scheme, vX.Y.Z)
           previous=$(git tag --list 'v*' --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sed -n 1p || true)
           {
@@ -446,6 +511,7 @@ jobs:
           | macOS, Apple silicon | `SafeHouse-Launcher-macOS-arm64.dmg` |
           | macOS, Intel | `SafeHouse-Launcher-macOS-x86_64.dmg` |
           | Nintendo Switch (homebrew, copy to `sdmc:/switch/SafeHouse/`) | `SafeHouse.nro` |
+          | Nintendo Switch 2 (kaiHEN homebrew, copy to `sdmc:/switch/SafeHouse/`) | `SafeHouse-NX2.nro` |
           | Android and Meta Quest (preview) | `SafeHouse-Android-arm64-v8a.apk` |
           | iPhone and iPad (sideload with AltStore, SideStore or Sideloadly; in testing) | `SafeHouse-iOS.ipa` |
 

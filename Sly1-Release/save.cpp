@@ -153,7 +153,11 @@ void ValidateVideoSettings(VIDEOSAVESETTINGS& settings)
     cane::settings::sanitizeStatic(settings, mode != nullptr ? mode->height : 0,
         (std::max)(static_cast<int>(maxSamples), 1));
 #ifdef __SWITCH__
+#if defined(__SWITCH2__)
+    settings.frameRate = settings.frameRate > 60 ? 120 : settings.frameRate;   // (the Switch 2: 30, 60 or 120)
+#else
     settings.frameRate = (std::min)(settings.frameRate, 60);   // (the Switch: 30 or 60, SupportedFrameRates)
+#endif
 #endif
 }
 
@@ -210,7 +214,7 @@ void ApplySavedVideoSettings(VIDEOSAVESETTINGS settings)
 		ApplyInternalResolutionSettings();
 	}
     if (g_gl.renderHeight != g_internalResolutionHeight &&
-        g_internalResolutionHeight != 0)
+        g_internalResolutionHeight != 0 && !g_fInternalResolutionCapped)
     {
         // A saved supersampling mode may be valid on one GPU but too expensive
         // on another. Keep the working native-sized framebuffer in that case.

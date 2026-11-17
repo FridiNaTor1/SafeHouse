@@ -294,8 +294,9 @@ void SetSdlRumble(const JOY* pjoy, uint8_t highSpeedMotor, uint8_t lowSpeedMotor
         highSpeedMotor = lowSpeedMotor = 0;
     s_sdlRumble.set(guid, cane::rumble::MotorsFromDualShock(highSpeedMotor, lowSpeedMotor), glfwGetTime());
 #elif defined(__SWITCH__)
-    // HD rumble: the low-speed motor on the low band, the high-speed motor on the high band.
-    if (pjoy == nullptr || !pjoy->gamepadConnected)
+    // HD rumble: the low-speed motor on the low band, the high-speed motor on the high band. (A stop goes out even
+    // without a pad in use: it would leave the motors running.)
+    if (pjoy == nullptr || (!pjoy->gamepadConnected && (highSpeedMotor != 0 || lowSpeedMotor != 0)))
         return;
     if (!g_fControllerVibration)
         highSpeedMotor = lowSpeedMotor = 0;

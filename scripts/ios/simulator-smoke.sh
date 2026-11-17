@@ -12,13 +12,30 @@ APP="$1"; BUNDLE="$2"; OUT="$3"
 mkdir -p "$OUT"
 failures=0
 
-# Runs the app with these arguments for at most $1 seconds; its console output goes to $2.
+# True while the app runs on simulator $1 (its launchd job).
+app_running() {
+  xcrun simctl spawn "$1" launchctl list 2>/dev/null | grep -q "UIKitApplication:$BUNDLE"
+}
+
+# Runs the app with these arguments for at most $1 seconds; its console output goes to $2. The wait ends when the app
+# has quit, also when simctl's console stays open after it.
 launch() {
   local seconds="$1" log="$2" device="$3"; shift 3
   xcrun simctl launch --console-pty --terminate-running-process "$device" "$BUNDLE" "$@" > "$log" 2>&1 &
-  local pid=$!
-  for _ in $(seq 1 "$seconds"); do
+  local pid=$! seen=0 gone=0 end=$((SECONDS + seconds))
+  while [ "$SECONDS" -lt "$end" ]; do
     kill -0 "$pid" 2>/dev/null || break
+    if app_running "$device"; then
+      seen=1; gone=0
+    elif [ "$seen" = 1 ]; then
+      # (gone twice in a row: quit, not between two checks of a restart)
+      gone=$((gone + 1))
+      if [ "$gone" -ge 2 ]; then
+        sleep 2   # (the console's last lines)
+        kill "$pid" 2>/dev/null
+        break
+      fi
+    fi
     sleep 1
   done
   if kill -0 "$pid" 2>/dev/null; then
@@ -45,14 +62,34 @@ print(best[1] if best else "")
 print(best[2] if best else "", file=sys.stderr)' "$1"
 }
 
+# Waits at most $2 seconds for simulator $1 to finish booting.
+wait_booted() {
+  xcrun simctl bootstatus "$1" -b > /dev/null 2>&1 &
+  local pid=$!
+  for _ in $(seq 1 "$2"); do
+    kill -0 "$pid" 2>/dev/null || { wait "$pid"; return 0; }
+    sleep 1
+  done
+  kill "$pid" 2>/dev/null
+  echo "  (not booted after $2 s)"
+  return 1
+}
+
+# Both simulators boot at once: the iPad's boot goes on while the iPhone runs the app.
+for kind in iPhone iPad; do
+  device="$(device_for "$kind" 2> "$OUT/$kind-name.txt")"
+  [ -z "$device" ] || xcrun simctl boot "$device" 2>/dev/null
+done
+
 for kind in iPhone iPad; do
   device="$(device_for "$kind" 2> "$OUT/$kind-name.txt")"
   if [ -z "$device" ]; then echo "no $kind simulator"; failures=$((failures + 1)); continue; fi
   name="$(cat "$OUT/$kind-name.txt")"
   dir="$OUT/$kind"; mkdir -p "$dir"
   echo "== $kind: $name ($device)"
-  xcrun simctl boot "$device" 2>/dev/null
-  xcrun simctl bootstatus "$device" -b > /dev/null 2>&1
+  start=$SECONDS
+  wait_booted "$device" 600 || { echo "$kind: the simulator did not boot"; failures=$((failures + 1)); continue; }
+  echo "  (booted in $((SECONDS - start)) s more)"
   xcrun simctl install "$device" "$APP" || { echo "install failed"; failures=$((failures + 1)); continue; }
 
   echo "-- self tests"
@@ -118,6 +155,7 @@ SHOTS
   # (the game's window lines: on a phone the game must be landscape; Metal: an enum the layer did not translate)
   grep -E "gl-selftest|smoke:|window failed|game window|Metal: GL_|shader (compile|link) error" "$dir/smoke-ios.log" 2>/dev/null | head -n 30
   xcrun simctl shutdown "$device" 2>/dev/null
+  echo "  ($kind: $((SECONDS - start)) s)"
 done
 echo "simulator smoke: $failures problem(s)"
 exit $((failures > 0))

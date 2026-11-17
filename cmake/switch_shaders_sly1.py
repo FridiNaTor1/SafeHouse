@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Sly 1's deko3d shaders (Project Cane's cmake/switch_shaders.py).
 
-    switch_shaders_sly1.py --source REPO --output DIR --uam PATH/uam
+    switch_shaders_sly1.py --source REPO --output DIR --uam PATH/uam [--gpu maxwell|ampere]
+
+--gpu: maxwell (the Switch, uam) or ampere (the Switch 2, uam2).
 """
 
 import argparse
@@ -29,7 +31,7 @@ def align(value, alignment):
     return (value + alignment - 1) // alignment * alignment
 
 # uam's dual issue lets the second instruction of a pair skip its barrier wait, which faults glob.vert on the GPU:
-# every stall count of 0 becomes 1.
+# every stall count of 0 becomes 1. (Maxwell's control words only.)
 def no_dual_issue(data):
     data = bytearray(data)
     _, _, control_size, code_size, program_offset, _ = struct.unpack_from('<6I', data)
@@ -72,18 +74,24 @@ def native_source(source):
             output.append(line)
     return ''.join(output)
 
+# The constants block's binding, per GPU (as in cmake/switch_shaders.py)
+CONSTANT_BINDINGS = {'maxwell': 15, 'ampere': 12}
+CONSTANT_BINDING = CONSTANT_BINDINGS['maxwell']
+
 def resource_masks(source):
     uniform = storage = 0
     blocks = re.compile(r'layout\s*\(([^)]*)\)\s*'
                         r'(?:(?:readonly|writeonly|coherent|volatile|restrict)\s+)*'
-                        r'(uniform|buffer)\s+\w+\s*\{', re.S)
-    for qualifiers, kind in blocks.findall(strip_comments(source)):
+                        r'(uniform|buffer)\s+(\w+)\s*\{', re.S)
+    for qualifiers, kind, name in blocks.findall(strip_comments(source)):
         binding = re.search(r'\bbinding\s*=\s*(\d+)\b', qualifiers)
         if not binding:
             raise ValueError('Buffer block without an explicit binding')
         slot = int(binding.group(1))
         if slot >= 16:
             raise ValueError(f'Buffer block exceeds native slot limit: {slot}')
+        if kind == 'uniform' and name != 'CaneConstants' and slot >= CONSTANT_BINDING:
+            raise ValueError(f'Uniform block {name} binding {slot}: at or above the constants ({CONSTANT_BINDING})')
         if kind == 'uniform': uniform |= 1 << slot
         else: storage |= 1 << slot
     return dict(uniform_mask=uniform, storage_mask=storage)
@@ -162,7 +170,7 @@ def transform(source, stage, layout, samplers):
         for f in layout:
             suffix = f"[{f['count']}]" if f['count'] > 1 else ''
             fields.append(f"    layout(offset = {f['offset']}) {f['type']} {f['name']}{suffix};")
-        block = 'layout(std140, binding = 15) uniform CaneConstants\n{\n' + '\n'.join(fields) + '\n};\n\n'
+        block = f'layout(std140, binding = {CONSTANT_BINDING}) uniform CaneConstants\n{{\n' + '\n'.join(fields) + '\n};\n\n'
 
         function = re.search(r'^\s*(?:void|bool|float|int|vec[234]|mat[34]|MATERIAL)\s+\w+\s*\(', source, re.M)
         if not function:
@@ -209,10 +217,14 @@ def main():
     parser.add_argument('--source', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--uam', type=Path, required=True)
+    parser.add_argument('--gpu', choices=('maxwell', 'ampere'), default='maxwell')
     args = parser.parse_args()
+    global CONSTANT_BINDING
+    CONSTANT_BINDING = CONSTANT_BINDINGS[args.gpu]
     args.output.mkdir(parents=True, exist_ok=True)
     header = ['#pragma once', '#include <cstddef>', '#include <cstdint>',
               'namespace CaneDeko {',
+              f'inline constexpr unsigned ConstantBinding = {CONSTANT_BINDING};',
               'struct UniformInfo { const char* name; unsigned offset, size, count, stride; const char* type; };',
               'struct ProgramInfo { const char* name; const uint8_t* vertex; size_t vertexSize; const uint8_t* fragment; size_t fragmentSize; const UniformInfo* uniforms; size_t uniformCount; unsigned constantSize, samplerCount; uint16_t uniformMask[2], storageMask[2]; const uint8_t* fragmentNoKill; size_t fragmentNoKillSize; };']
     programs = []
@@ -231,7 +243,8 @@ def main():
         scratch=struct.unpack_from('<I',data,program_offset+20)[0]
         if scratch>65536:
             raise ValueError(f'Shader exceeds the native queue scratch limit: {binary}')
-        data = no_dual_issue(data)
+        if args.gpu == 'maxwell':
+            data = no_dual_issue(data)
         binary.write_bytes(data)
         return data
 
