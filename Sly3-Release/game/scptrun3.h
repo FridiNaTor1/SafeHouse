@@ -419,6 +419,8 @@ SCPTHOST3& ScptHost3();
 // a script's alarm set / cleared from outside (the splice callbacks a script's 0x15 registers: m_ext 4262's alarm
 // 15086 is set by its world code, 0x0E waits for it); orig3 0x2261A0 / 0x2261F0
 void SetScptAlarm3(SCPT3* ps, int n, bool fSet);
+// (PC, hackgame3: the Hackathon's 3 / 4 players) an alarm being set from outside is held back when this answers true
+extern bool (*g_pfnScptAlarmHold3)(SCPT3* ps, int n);
 bool FScptAlarm3(const SCPT3* ps, int n);
 
 void StartScpt3(SCPT3* ps, void* ploStarter);  // orig3: 0x225EE8

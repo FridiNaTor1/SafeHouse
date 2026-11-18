@@ -1367,6 +1367,8 @@
   "not a play session": "to nie jest sesja gry",
   "not a prefab file": "to nie plik prefabrykatu",
   "not measured:": "nie zmierzono:",
+  "not measured: the game crashed playing it": "nie zmierzono: gra uległa awarii podczas odtwarzania",
+  "not measured: the game did not finish": "nie zmierzono: gra nie skończyła",
   "nothing copied": "nic nie skopiowano",
   "nothing in the selection can be duplicated (top-level objects and instances only)": "nic z zaznaczenia nie da się zduplikować (tylko obiekty najwyższego poziomu i instancje)",
   "nothing in the selection is stored in the world file": "nic z zaznaczenia nie jest zapisane w pliku świata",

@@ -1367,6 +1367,8 @@
   "not a play session": "플레이 세션이 아닙니다",
   "not a prefab file": "프리팹 파일이 아님",
   "not measured:": "측정 안 됨:",
+  "not measured: the game crashed playing it": "측정 안 됨: 재생 중 게임이 충돌했습니다",
+  "not measured: the game did not finish": "측정 안 됨: 게임이 끝나지 않았습니다",
   "nothing copied": "복사한 것 없음",
   "nothing in the selection can be duplicated (top-level objects and instances only)": "선택에서 복제할 수 있는 것이 없습니다 (최상위 오브젝트와 인스턴스만)",
   "nothing in the selection is stored in the world file": "선택 중 월드 파일에 저장된 것이 없습니다",

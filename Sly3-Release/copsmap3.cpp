@@ -77,6 +77,7 @@ struct HUB
     std::vector<SITE> aloot;     // loot stands (three hold a loot at a time)
     std::vector<SITE> asafe;     // safe points (deliveries)
     std::vector<SITE> apower;    // power-up spots
+    float zOut = -1e9f;          // a player below it is out of the round's area (default: 2500 below the lowest site)
 };
 
 // The hubs (positions from the hubs' own checkpoints (class 0x28: places the game puts Sly back on, so on solid
@@ -126,6 +127,21 @@ const std::vector<HUB>& Hubs()
           {2880, -51, 1049}, {52, 6694, 4288}},
          {{-3391, -2817, 228}, {-5070, 4600, 1296}, {2106, 3765, 3096}, {-2852, 3444, 1896}},
          {{-3155, -5333, 228}, {-4221, 5892, 4041}, {3188, 6377, 2394}, {-5119, 2837, 3419}}},
+        // Kaine Island (m_ext): no Carmelita of its own (v_ext's copied in, as Pirate's). Its landmarks lie on cliffs and
+        // ledges up to 8000 units apart in height, so the sites are hand-picked from walks of the island in a round
+        // (notes/SPLIT3 "Round 10"): the west shore below the fortress wall (the beach, the rocks and the ruins between
+        // the lighthouse cliffs), the places Sly stood on in four random walks there, all in one region the walks went
+        // both ways between on foot (no one-way drop, not the field above it, not in the water). Robbers start at the
+        // west rocks, the cops by the east ruins (back from the cliff: a copied Carmelita has no water of her own); loot on the rocks, the ruins' steps and the shore; safe points at the
+        // north beach, the east ruins, the south rocks and the middle; power-ups between them.
+        {sly3::EP_Isle, 35,
+         {{-7730, 2477, -2719}, {-4985, 2585, -2386}, {-7378, 2207, -2740}, {-6293, 3717, -3075}, {-5824, 2569, -2629}},
+         {{-6190, 2191, -2726}, {-7370, 1521, -2882}, {-5588, 3007, -2478}, {-7350, 3322, -2652}, {-6640, 2926, -2429},
+          {-6188, 1425, -2805}, {-5529, 3766, -3168}},
+         {{-6977, 3761, -2925}, {-4645, 2954, -2430}, {-6952, 1413, -2949}, {-5419, 2188, -2375}},
+         {{-6985, 2266, -2797}, {-6551, 1816, -2831}, {-6138, 3013, -2719}, {-6973, 1825, -2871}},
+         // (the sea at ~-4200: a copied Sly in it has no safe ground to be put back on, its hits go on)
+         -3900.0f},
     };
     return s_ahub;
 }
@@ -133,6 +149,7 @@ const std::vector<HUB>& Hubs()
 constexpr int kWin = 5;
 constexpr int kLootsOut = 3;
 constexpr float kTakeRadius = 240.0f, kSafeRadius = 320.0f, kPowerRadius = 220.0f, kDz = 300.0f;
+constexpr float kFallBelow = 2500.0f;   // (below the hub's lowest site: out of the round's area)
 constexpr float kLootBack = 6.0f, kPowerEmpty = -1.0f, kSprint = 12.0f, kWinHold = 5.0f, kMsg = 3.0f;
 
 enum TEAM : int { TEAM_Sly, TEAM_Carm };
@@ -194,6 +211,7 @@ constexpr OID kOidHud2p = 3325, kOidBoard = 140111, kOidResult = 1066, kOidJobCo
 constexpr OID kOidStand = 159608, kOidSafe = 159616, kOidLoot = 9991;
 constexpr OID kOidPower = 159593;   // (Venice's power-up: a breakable with its glow, at the proxies 140842..140847)
 // the board's lines (the arguments script 2414 shows it with): Carmelita scores / wins, Sly scores / wins
+constexpr int kTxtSlyWinner = 5255, kTxtCarmWinner = 5254;   // (the end's lines: the stamp's title, script string 1110)
 constexpr int kTxtCarmScores = 5354, kTxtCarmWins = 5355, kTxtSlyScores = 5356, kTxtSlyWins = 5357;
 // the dialog lines script 2414 plays (the round's intro 2412: 4858 "Go for it!"): a point (Sly 4872, Carmelita 4879),
 // after the board three in a row (Sly 4807, Carmelita 4805) and four (4809), the winner (Sly 4833, Carmelita 4837)
@@ -321,6 +339,8 @@ void ShowBoard(int team, bool fWin)
 void Score(int team)
 {
     if (r.winner >= 0) return;
+    // (tests: SLY3_COPSNOSCORE=1 no points, e.g. a walk of a hub probing its ground: the falls into the sea are not Carmelita's)
+    if (static const bool s_fNo = std::getenv("SLY3_COPSNOSCORE") != nullptr; s_fNo) return;
     ++r.ascore[size_t(team)];
     r.cStreak = r.teamStreak == team ? r.cStreak + 1 : 1;
     r.teamStreak = team;
@@ -391,6 +411,8 @@ void PlacePlayer(PLAYER& p, const glm::vec3& pos)
         // (the rows: the local x axis toward h, y to its left, z up)
         const float mat[9] = {std::cos(h), std::sin(h), 0.0f, -std::sin(h), std::cos(h), 0.0f, 0.0f, 0.0f, 1.0f};
         sly3::PlaceLo3(p.plo, mat, pos + glm::vec3(0.0f, 0.0f, 20.0f));
+        // (no fall speed kept from before: a fall out of the area at full speed went through the floor again)
+        if (STEP* pst = PstepFromLo(p.plo)) SetAloVelocityTo(pst->palo, glm::vec3(0.0f));
         if (GUARD* pg = PguardFromLo(p.plo)) SetGuardHeading(pg, h);
         if (FPrint() && p.team == TEAM_Carm) std::printf("cops3: carm heading %.3f %.3f\n", std::cos(h), std::sin(h));
     }
@@ -743,7 +765,7 @@ int GivePowerupSly(LO* plo)
     if (const char* sz = std::getenv("SLY3_COPSSLYPOWER")) id = std::atoi(sz);   // (tests: this one every time)
     SetActorAbilitySlot(pa, 0, sly3::Item2FromItem3(id));
     SetActorPower(pa, pa->n1300);
-    if (FPrint()) std::printf("cops3: %d takes the power-up %d\n", plo->oid, id);
+    if (FPrint()) std::printf("cops3: %d (player %d) takes the power-up %d\n", plo->oid, split3::IExtraPlayerOf(plo) < 0 ? 1 : split3::IExtraPlayerOf(plo) + 1, id);
     return id;
 }
 
@@ -829,11 +851,14 @@ void Update(SW* psw)
                 r.fResult = true;
                 r.tResult = g_clock.tReal;
                 ShowScreenObj(pres, -1);
-                // (the two-player game's stamp, as jobend3.cpp IdStampPart for the manager's mode 2: by job 2409's character
-                // (+0xB0): 0x450 / 0x452 / 0x454)
-                LO* pmission = PloKeptFind(kIwrecVenice, kOidJobCops);
-                const int grf = pmission ? int(pmission->U32Field3(0, 0xB0, 0)) : 1;
-                SelectScreenObjPart(pres, grf == 2 ? 0x452 : grf == 0x40 ? 0x454 : 0x450);
+                // (the two-player game's stamp, as jobend3.cpp IdStampPart for the manager's mode 2: by the job's character
+                // (+0xB0: 1 Sly 0x450, 0x40 Carmelita 0x454), which Venice's script sets to the winner ("Carmelita is the
+                // Winner!" on her win); v_ext's kept job 2409 keeps its loaded value (Sly), so the winner's side here: the
+                // robbers' Sly stamp, the cops' Carmelita stamp, also for teams)
+                SelectScreenObjPart(pres, r.winner == TEAM_Carm ? 0x454 : 0x450);
+                // (its title, "Sly is the Winner!" / "Carmelita is the Winner!": the winner's line as Venice's job ends with it
+                // (the manager's command 11 with 5255 / 5254), the text from v_ext's when the hub has none)
+                SetChallengeEndLine3(r.winner == TEAM_Carm ? kTxtCarmWinner : kTxtSlyWinner, StrLineText);
                 if (FPrint()) std::printf("cops3: round over (%d : %d) at frame %d, the stamp waits (Triangle: the chooser, Square: again)\n", r.ascore[0], r.ascore[1], g_iframeMain);
             }
             if (!r.fResult) { r.fEnded = true; EndChallenge3(psw); return; }
@@ -872,11 +897,26 @@ void Update(SW* psw)
     static float s_tPrint = 0.0f;
     const bool fPrintNow = FPrint() && std::getenv("SLY3_COPSPOS") && t - s_tPrint > 1.0f;
     if (fPrintNow) s_tPrint = t;
+    // (the hub's out height (default: far below the lowest site): a player below it fell out of the round's area: Kaine Island's sea has no water volume for a
+    // Carmelita (she sank for ever), a fall through the world: placed again at a spawn, no point)
+    float zLow = 1e9f;
+    for (const auto* pa : {&ph->aspawn, &ph->aloot, &ph->asafe, &ph->apower})
+        for (const SITE& st : *pa) zLow = std::min(zLow, st.z);
+    const float zOut = ph->zOut > -1e8f ? ph->zOut : zLow - kFallBelow;
     for (int ip = 0; ip < r.cplayer; ++ip)
     {
         PLAYER& p = r.ap[size_t(ip)];
         if (!p.plo || p.fDown) continue;
         const glm::vec3 pos = PosLoWorld(p.plo);
+        if (pos.z < zOut)
+        {
+            if (FPrint()) std::printf("cops3: player %d fell out (z %.0f): placed again\n", ip + 1, pos.z);
+            if (p.fCarry) { p.fCarry = false; ScheduleLoot(); }
+            if (p.team == TEAM_Carm) SetCarmHealth(p.plo);
+            if (STEP* pst = PstepFromLo(p.plo)) SetAloVelocityTo(pst->palo, glm::vec3(0.0f));
+            PlacePlayer(p, PosSpawnFor(p));
+            continue;
+        }
         if (fPrintNow)
         {
             ACTOR* pa = PactorFromLo(p.plo);
@@ -894,7 +934,7 @@ void Update(SW* psw)
                     {
                         r.afLoot[i] = 0;
                         p.fCarry = true;
-                        if (FPrint()) std::printf("cops3: loot taken from stand %zu\n", i);
+                        if (FPrint()) std::printf("cops3: loot taken from stand %zu by player %d\n", i, ip + 1);
                         Message(PTX_CopsSlyLoot, TEAM_Sly);
                         break;
                     }
@@ -904,7 +944,7 @@ void Update(SW* psw)
                     {
                         p.fCarry = false;
                         ScheduleLoot();
-                        if (FPrint()) std::printf("cops3: loot delivered\n");
+                        if (FPrint()) std::printf("cops3: loot delivered by player %d\n", ip + 1);
                         Message(PTX_CopsDelivered, TEAM_Sly);
                         Score(TEAM_Sly);
                         break;
@@ -1061,6 +1101,7 @@ bool FOnBroadcast(int code, LO* plo)
             if (const int* pn = DmgCounterOf(pa); pn && *pn <= 0 && !p.fDown)
             {
                 p.fDown = true;
+                if (FPrint()) std::printf("cops3: player %d caught\n", int(pp - r.ap.data()) + 1);
                 Message(PTX_CopsCaught, TEAM_Carm);
                 Score(TEAM_Carm);
             }

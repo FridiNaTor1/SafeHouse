@@ -165,6 +165,7 @@ void EnableHackShip3(LO* plo, int n);
 void PostLoadHackShip3(LO* plo);
 void OnRemoveHackShip3(LO* plo);
 void SetHackShip3State(LO* plo, int n);
+bool FRestoreHackShip3(LO* plo);  // (orig3 0x10A520 on a ship: the respawn's events 18 / 17; false: not a ship)
 void OnHackShip3Moved(LO* plo);
 void ResetHacks3();
 int HackShip3State(const LO* plo);

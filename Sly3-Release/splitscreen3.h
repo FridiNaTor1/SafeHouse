@@ -74,6 +74,9 @@ void UpdateSeats(GLFWwindow* pwindow, int frame);
 // (tests, s3-hack) a scripted seat's stick / buttons after its presses (a[0] x right, a[1] y up, a[2] / a[3] the right
 // stick): hackgame3's SLY3_HACKGAMEPILOT steers players 2..4's ships by play
 extern void (*g_pfnScriptedSeatPilot)(int iseat, int frame, float a[4], uint16_t* pgrf);
+// (tests) a mode's pad bot: seat i's stick (a[0] x right, a[1] y up, a[2] / a[3] the right stick) and buttons, fed
+// through the pad as a player's (seat 0: joy.cpp UpdateJoy; seats 1..: scripted seats); false: that seat untouched
+extern bool (*g_pfnPadPilot3)(int iseat, int frame, float a[4], uint16_t* pgrf);
 // Seat 0's device restriction for pcinput.cpp's ReadPcInput (the last used device switching off): -2 any (not in
 // split screen), -1 the keyboard and mouse only, else that pad's joystick id only (no keyboard).
 int Seat0Device();
@@ -106,6 +109,11 @@ bool FHudCanvasView(int iview, float rAspectView, int dx, int dy, VIEWRECT* pcli
 // The two-player HUD's view box of view i in that view's pixels (y up; the box's hole widened as the HUD widens it):
 // the scene is drawn there only (the rest of the view is the HUD's own frame). false: the whole view (no box known).
 bool FRectScene(int iview, int dx, int dy, VIEWRECT* prect);
+// (a two-player mode whose HUD has no view box quads, e.g. the Galleon Duel: its gauges sit beside views the original
+// narrows) the view box hole of band 0 / 1 (640 x 448 canvas units, y down); false: none. game.cpp asks each drawn
+// frame (ProvideBoxes2p) and records it as the HUD's own box (hud.h abox2p)
+extern bool (*g_pfnHole2p3)(int band, float ahole[4]);
+void ProvideBoxes2p();
 // Side by Side (user feedback): the two-player board's banners (the winner's text, the announcements: the strip the
 // original draws between the stacked bands) go under the gauges in the centre column, sized to it, instead of a strip
 // across both views. *prect the area (pixels, y up: the scissor), *pscale / *poffset the canvas transform that puts

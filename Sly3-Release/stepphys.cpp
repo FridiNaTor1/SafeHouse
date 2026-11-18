@@ -102,7 +102,22 @@ void ResetStepPhysAll() { ResetSteps(); }
 void CloneStepPhys(ALO* palo, const ALO* paloSrc)
 {
     STEP* psrc = PstepFromLo(const_cast<ALO*>(paloSrc));
-    if (!psrc) return;
+    if (!psrc)
+    {
+        // (PC, pcloader.h: a copy of a kept world's object: that world's step records went with its load (worldglobals.h), so
+        // the template has none. The load's part is run for the copy (the base, the custom entry from the +0x264 entry, the
+        // probe points; a custom entry already among its entries (0x203AF0's: the same tag as its source) taken off first). Without it a copied Carmelita (Cops and Robbers on Pirate / Kaine Island: v_ext's) had no floor
+        // probe (+0x258 -1: the probe segment of no length), never found a floor on rock and stayed in her fall state.)
+        const uint32_t oidMesh = palo->U32Field(0, 0x264, 0xFFFFFFFFu);
+        if (oidMesh == 0xFFFFFFFFu || palo->asoe.empty()) return;
+        int c = 0;
+        for (const SOE& e : palo->asoe) c += uint32_t(e.tag) == oidMesh ? 1 : 0;
+        if (c == 0) return;
+        if (c >= 2 && uint32_t(palo->asoe.back().tag) == oidMesh) palo->asoe.pop_back();
+        LoadStepPhysBase(palo);
+        PostLoadStepPhys(palo);
+        return;
+    }
     CopyStep(palo, psrc);
 }
 
@@ -501,7 +516,8 @@ void AddStepFloorXps(ALO* palo, SOE* k, int, const BSPREF&, int, XP** ppxp)
     LSG lsg;
     if (ClipSegmentEntry(k, pos, v, 1, &lsg) <= 0)
     {
-        if (s_fDbg) std::fprintf(stderr, "floordbg:   no hit pos %.1f %.1f %.1f probe %.1f %.1f %.1f\n", pos.x, pos.y, pos.z, v.x, v.y, v.z);
+        if (s_fDbg) std::fprintf(stderr, "floordbg:   no hit pos %.1f %.1f %.1f probe %.1f %.1f %.1f (soe %d of %zu, apos %zu, probes %d / %d, clone %d)\n", pos.x, pos.y, pos.z, v.x, v.y, v.z,
+                                 s.isoeCustom, palo->asoe.size(), PsoeOf(palo, s.isoeCustom) ? PsoeOf(palo, s.isoeCustom)->geomWorld.apos.size() : 0u, s.iposProbe0, s.iposProbe1, palo->ploCloneOf ? 1 : 0);
         return;
     }
     if (!(0.0f < lsg.t0)) return;

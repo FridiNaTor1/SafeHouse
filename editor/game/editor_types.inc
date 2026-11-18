@@ -109,8 +109,9 @@ void CEditor::ApplyVisibility()
             if (m_plSel && !FSelected(m_plSel)) Select(m_asel.empty() ? nullptr : m_asel.back());
         }
     }
-    for (int k : m_aiHiddenEntries)
-        if (std::size_t(k) < m_scene.aglobset.size()) std::fill(m_scene.aglobset[std::size_t(k)].afVisible.begin(), m_scene.aglobset[std::size_t(k)].afVisible.end(), 0);
+    for (const auto* pai : {&m_aiHiddenEntries, &m_aiSceneHidden})
+        for (int k : *pai)
+            if (std::size_t(k) < m_scene.aglobset.size()) std::fill(m_scene.aglobset[std::size_t(k)].afVisible.begin(), m_scene.aglobset[std::size_t(k)].afVisible.end(), 0);
 }
 
 void CEditor::HideSelection(bool fHide)

@@ -73,6 +73,7 @@ void CEditor::IndexObjects()
     m_mptype.clear();
     if (g_gl.window) ForgetAssets();   // (their scene entries are the old scene's)
     m_aiHiddenEntries.clear();   // (a new scene: nothing hidden in it yet)
+    m_aiSceneHidden.clear();
     InvalidateVis();
     m_mpobj.clear();
     m_mpgroupRoots.clear();
@@ -2602,13 +2603,19 @@ int CEditor::Run()
         DrawCheckPanel();
         DrawFileDialogs();
         DrawHelp();
-        DrawMarkers();
-        DrawCameraFrusta();
-        DrawPatrols();
 #if EDGAME_SLY2
-        DrawEntries();
-        DrawGuests();
+        // (the cutscene timeline looking through the scene's camera: its picture as the game shows it, no markers)
+        if (!FCutsceneLooking())
 #endif
+        {
+            DrawMarkers();
+            DrawCameraFrusta();
+            DrawPatrols();
+#if EDGAME_SLY2
+            DrawEntries();
+            DrawGuests();
+#endif
+        }
         DrawBrushEdit();
         DrawCameraPanel();
         const int ipointBefore = m_ipoint;

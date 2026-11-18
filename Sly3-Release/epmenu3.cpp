@@ -2,6 +2,7 @@
 
 #include "epmenu3.h"
 #include "duel3.h"
+#include "galleon3.h"
 #include "clock.h"
 #include "joy.h"
 #include <cstring>
@@ -863,6 +864,22 @@ void UpdateEpMenu3(SW* psw)
                 PsndStartSound(0x35);
                 break;
             }
+        // (PC, galleon3.h: the Galleon Duel's players: Left / Right while it is shown; 2 = the original duel)
+        if (galleon3::FGalleonNode(PnodeCur(p.cur)))
+            if (const int d = NStepLeftRight(); d != 0)
+            {
+                galleon3::StepPlayersChosen(d);
+                PsndStartSound(0x35);
+                break;
+            }
+        // (PC, hackmp3.h: the Hackathon's players: Left / Right while it is shown; 2 = the original game)
+        if (hackmp3::FHackNode(PnodeCur(p.cur)))
+            if (const int d = NStepLeftRight(); d != 0)
+            {
+                hackmp3::StepPlayersChosen(d);
+                PsndStartSound(0x35);
+                break;
+            }
         // (PC, copsmap3.h: the map select: Left / Right while Cops and Robbers is shown)
         if (cops3::FCopsNode(PnodeCur(p.cur)))
             if (const int d = NStepLeftRight(); d != 0)
@@ -1010,6 +1027,7 @@ bool FStrEpMenu3(int id, std::string* pstr)
                 break;
             case 1485: case 1490:
                 if (duel3::FDescription(pnode, pstr)) break;   // (PC, duel3.h: the free-for-all's, its pilots "Player N")
+                if (galleon3::FDescription(pnode, pstr)) break;   // (PC, galleon3.h: the free-for-all's)
                 *pstr = text(int(pnode->U32Field3(0, 0x44, 0xFFFFFFFFu)));
                 break;
             case 1486: case 1491:   // ("%s : &2X&." and, with the object's +0x54, "\n%s : &2S&.")

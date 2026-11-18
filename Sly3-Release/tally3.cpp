@@ -28,6 +28,7 @@
 #include "ref.h"
 #include "savedata.h"
 #include "screen3.h"
+#include "update.h"
 #include "screenrt.h"
 #include "sound.h"
 #include "sw.h"
@@ -129,7 +130,11 @@ void SetTallyState(LO* plo, TALLY3& t, int k)
         break;
     }
     case 0: ResumeGame(2); break;   // (0x1A9420, 0x1A94F0)
-    default: break;   // (9: 0x13BC80 on the object: its base hide follows)
+    // 9: 0x13BC80 on the object (its vt slot 3: the splice event 5, the module's s5; its base hide follows). E.g. h_hack's
+    // tally 3335 (module 136 of block 93165): s5 sets SCPT 3338's alarm 94414, which the Hackathon's end waits for after
+    // the last round's tally ([168]); natively nothing was sent and the job never ended after round 6
+    case 9: HandleLoSpliceEvent(plo, 5, false, 0, nullptr); break;
+    default: break;
     }
 }
 

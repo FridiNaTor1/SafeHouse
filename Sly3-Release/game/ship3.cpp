@@ -211,6 +211,9 @@ struct SHIP3
     glm::mat4 matPrev{0.0f};                  // (the last frame's matrix: the deck's carry of a copy's character)
     unsigned grfAuto = 0;                     // (the harness: SLY3_GALLEONAUTO's steering for this ship's seat)
     bool fAuto = false;
+ bool fCannonsRow = false;                 // (UpdateShip: a copy's cannons resolved to its own row)
+    LO* ploHitBy = nullptr;                   // (galleon3.cpp's free-for-all: the ship whose ball hit it last, and when)
+    float tHitBy = -100.0f;
     float tAutoUse = -100.0f;
     LO* ploLastHit = nullptr;                 // (natively a ball's contacts with several of the hull's entries in one
     float tLastHitSender = -1.0f;             //  frame are one hit: the original's ball dies at its first)
@@ -441,6 +444,24 @@ void AddCannon(SHIP3& s, int side, int idCannon, int idMuzzle, int idAnim)   // 
     c.idMuzzle = idMuzzle;
     c.idAnim = idAnim;
 }
+bool FLoInTree(const LO* plo, const LO* root)
+{
+    for (const LO* p = plo; p; p = p->paloParent)
+        if (p == root) return true;
+    return false;
+}
+LO* PloInTree(LO* root, int oid)
+{
+    ALO* pa = dynamic_cast<ALO*>(root);
+    if (!pa) return nullptr;
+    for (LO* ch : pa->aploChild)
+    {
+        if (!ch) continue;
+        if (ch->oid == oid || ch->oidInstance == oid) return ch;
+        if (LO* q = PloInTree(ch, oid)) return q;
+    }
+    return nullptr;
+}
 // orig3 0x2181D0: a cannon's ids to objects (the cannon an ALO, the muzzle its child of class 3, the animation its
 // class 0x84 child): none: the slot cleared
 void ResolveCannons(SHIP3& s)
@@ -451,6 +472,13 @@ void ResolveCannons(SHIP3& s)
             CANNON3& c = s.acannon[size_t(side)][size_t(i)];
             if (c.cannon) continue;
             LO* pcannon = c.idCannon != -1 ? PloFindRelative(s.palo, c.idCannon) : nullptr;
+            // (a copied ship (the duel's 51380 / 51381: copies of 44092): the lookup can give the template's cannon or another
+            // copy's; the ship's own one of that id (in its tree) is its cannon, else the Galleon Duel's characters walked to
+            // and used the other ship's cannons)
+            if (pcannon && !FLoInTree(pcannon, s.palo))
+            {
+                if (LO* pown = PloInTree(s.palo, c.idCannon)) pcannon = pown;
+            }
             LO* pmuzzle = pcannon ? PloFindRelative(pcannon, c.idMuzzle) : nullptr;
             LO* panim = pcannon && c.idAnim != -1 ? PloFindRelative(pcannon, c.idAnim) : nullptr;
             if (pcannon && pmuzzle)
@@ -1383,8 +1411,8 @@ bool FFireCannon(SHIP3& s, CANNON3& c, int side)
     SetAloVelocityTo(pb, VelLaunch(PosOf(pball), world, grav, dt));
     if (NPrint() >= 3) g_aballTrace3.emplace_back(pb, g_clock.t);
     if (NPrint())
-        std::printf("ship3: %d (%p) fires side %d from %d at %d (parent %p) (%.0f %.0f %.0f) d %.0f dt %.2f t %.2f\n", s.palo->oid, (void*)s.palo, side, c.cannon->oid,
-                    ptgt ? ptgt->oid : -1, ptgt ? (void*)ptgt->paloParent : nullptr, world.x, world.y, world.z, d, dt, g_clock.t);
+        std::printf("ship3: %d/%d fires side %d from %d at %d (parent clone %d) (%.0f %.0f %.0f) d %.0f dt %.2f t %.2f\n", s.palo->oid, s.palo->iclone, side, c.cannon->oid,
+                    ptgt ? ptgt->oid : -1, ptgt && ptgt->paloParent ? ptgt->paloParent->iclone : -1, world.x, world.y, world.z, d, dt, g_clock.t);
     return true;
 }
 void UpdateCannons(SHIP3& s)   // orig3 0x217D90
@@ -1423,6 +1451,7 @@ struct SHIPGAUGE3
 };
 std::unordered_map<const LO*, SHIPGAUGE3> s_mpgaugeShip;
 bool Battle2P();
+std::unordered_map<const LO*, int> s_mpidFaceShip3;   // (SetShipGaugeFace3)
 void UpdateShipGauge(SHIP3& s)
 {
     LO* pg = s.child;
@@ -1443,7 +1472,8 @@ void UpdateShipGauge(SHIP3& s)
     if (iseat != g.iseat)
     {
         g.iseat = iseat;
-        static const float s_aofs[4][2] = {{470.0f, 136.0f}, {-6.0f, 373.0f}, {470.0f, 373.0f}, {-6.0f, 136.0f}};   // D_00325E.. (PC: 3 / 4)
+        // D_00325E.. (PC, galleon3.h: players 3 / 4 in the other corners of their views' bands: player 3 (band 0) left, 4 right)
+        static const float s_aofs[4][2] = {{470.0f, 136.0f}, {-6.0f, 373.0f}, {-6.0f, 136.0f}, {470.0f, 373.0f}};
         if (iseat >= 0) SetScreenObjRootXY(pg, true, 1.0f, s_aofs[iseat][0], s_aofs[iseat][1]);
         else SetScreenObjRootXY(pg, false, 1.0f, 0.0f, 0.0f);
     }
@@ -1463,6 +1493,7 @@ void UpdateShipGauge(SHIP3& s)
         int idFace = 0x7AF;
         for (const OPT& o : pg->aopt)
             if (o.eopid == 2023 && !o.aval.empty()) idFace = o.aval[0].n;
+        if (auto it = s_mpidFaceShip3.find(s.palo); it != s_mpidFaceShip3.end()) idFace = it->second;   // (galleon3.cpp: players 3 / 4)
         SelectScreenObjPartHandle(pg, idFace, &g.idFace);
         for (int i = 0; i < 2; ++i)
         {
@@ -1539,7 +1570,7 @@ void CarryDeck(SHIP3& s)
             SetAloVelocityTo(pa, vel);
         };
         carry(s.owner);
-        for (int oid : {26, 31, 29, 27})   // (the helmsmen: Murray, Penelope; PC: Dimitri, the Panda King's daughter)
+        for (int oid : {26, 31, 27899})   // (the helmsmen: Murray, Penelope; PC, galleon3.h: Dimitri)
             for (LO* p : AploOfOid(g_psw, oid))
                 if (p->oid == oid) carry(p);
     }
@@ -1568,6 +1599,28 @@ void UpdateShip(LO* plo)
     SHIP3* ps = Pship(plo);
     if (!ps) return;
     SHIP3& s = *ps;
+    // (a copied ship's gauge option can name the first instance's gauge (another ship's): its own of that id in its tree)
+    if (s.child && !FLoInTree(s.child, plo))
+        if (LO* pown = PloInTree(plo, s.child->oid))
+        {
+            if (NPrint()) std::printf("ship3: %d/%d gauge %d: its own\n", plo->oid, plo->iclone, pown->oid);
+            s.child = pown;
+        }
+    if (!s.fCannonsRow && NPrint())
+    {
+        s.fCannonsRow = true;
+        std::printf("ship3: %d/%d collide lists:", plo->oid, plo->iclone);
+        for (int c : s.acidCollide) std::printf(" cid 0x%X", c);
+        for (int o : s.aoidCollide) std::printf(" oid %d", o);
+        std::printf("\n");
+        std::printf("ship3: %d/%d (%p) gauge %p (%d, parent %d, in tree %d)\n", plo->oid, plo->iclone, (void*)plo, (void*)s.child, s.child ? s.child->oid : -1,
+                    s.child && s.child->paloParent ? s.child->paloParent->oid : -1, s.child ? int(FLoInTree(s.child, plo)) : -1);
+        for (int side = 0; side < 2; ++side)
+            for (int k = 0; k < s.ccannon[size_t(side)]; ++k)
+                if (const CANNON3& c = s.acannon[size_t(side)][size_t(k)]; c.cannon)
+                    std::printf("ship3: %d/%d cannon %d/%d: %d (instance %d) in its tree %d\n", plo->oid, plo->iclone, side, k, c.cannon->oid, c.cannon->oidInstance,
+                                int(FLoInTree(c.cannon, plo)));
+    }
     static float s_tBattle = -1.0f;
     if (g_clock.t != s_tBattle) { s_tBattle = g_clock.t; UpdateShipBattle3(); UpdateGalleonAuto3(); if (NPrint() >= 3) TraceBalls(); }
     UpdateMotion(s);
@@ -1639,7 +1692,7 @@ bool FAcceptShipContact(ALO* palo, CTMSG* pctm)
     SHIP3* ps = PshipFind(palo);
     if (!ps) return false;
     if (NPrint() >= 2)
-        std::printf("ship3: %d contact from %d (cid 0x%X) accepted 0x%X state %d mode %d\n", palo->oid, pctm->ploSender ? pctm->ploSender->oid : -1,
+        std::printf("ship3: %d/%d contact from %d (cid 0x%X) accepted 0x%X state %d mode %d\n", palo->oid, palo->iclone, pctm->ploSender ? pctm->ploSender->oid : -1,
                     pctm->ploSender ? unsigned(pctm->ploSender->Cid()) : 0u, unsigned(pctm->grfAccepted), pctm->nState, ps->mode);
     SHIP3& s = *ps;
     if (s.mode != 2 && s.mode != 4 && s.mode != 5) return false;
@@ -1653,11 +1706,14 @@ bool FAcceptShipContact(ALO* palo, CTMSG* pctm)
     if (pfrom == s.ploLastHit && g_clock.t - s.tLastHitSender < 0.05f) return true;
     s.ploLastHit = pfrom;
     s.tLastHitSender = g_clock.t;
+    if (powner != palo) s.ploHitBy = powner, s.tHitBy = g_clock.t;
     SHIP3* pown = PshipOf(powner);
     palo->SetField3(0, 0x184, static_cast<uint32_t>(reinterpret_cast<uintptr_t>(pfrom) & 0xFFFFFFFFu));   // 0x1F4DD8
     int damage = std::abs(pctm->nState);
     if (s.type == 0x3F) damage /= 2;
     if (s.phase == 2 && pown && pown->phase == s.phase) damage /= 4;
+    // (test, tools/galleon3.sh: SLY3_GALLEONDMG=k, every hit k times as strong: short rounds)
+    if (static const int s_k = std::getenv("SLY3_GALLEONDMG") ? std::atoi(std::getenv("SLY3_GALLEONDMG")) : 0; s_k > 1) damage *= s_k;
     if (pctm->nKill3 || pctm->fKill3) s.hp = {0, 0};
     else
     {
@@ -1691,7 +1747,7 @@ bool FAcceptShipContact(ALO* palo, CTMSG* pctm)
         }
     }
     if (NPrint())
-        std::printf("ship3: %d hit by %d (%d) side %d damage %d: %d / %d (t %.2f)\n", palo->oid, pfrom ? pfrom->oid : -1, powner->oid, s.side, damage, s.hp[0], s.hp[1], g_clock.t);
+        std::printf("ship3: %d/%d hit by %d (%d/%d) side %d damage %d: %d / %d (t %.2f)\n", palo->oid, palo->iclone, pfrom ? pfrom->oid : -1, powner->oid, powner->iclone, s.side, damage, s.hp[0], s.hp[1], g_clock.t);
     if (s.hp[0] <= 0 || s.hp[1] <= 0)
     {
         if (s.phase == 2 && s.mode == 4 && FShipInBattle3(palo))
@@ -1733,6 +1789,18 @@ void ResetShipRecord(SHIP3& s)
     s.height = PosOf(plo).z;
 }
 
+LO* s_ploLastUser = nullptr;   // (NoteShipUse3: the last character to use a deck cannon, and when)
+LO* s_puseLast = nullptr;
+// (the cannons all have the oid 44908: the one the use belongs to, else the one of the script's cannon's instance id)
+bool FCannonOfUse(LO* pc, LO* pkey)
+{
+    if (ALO* pa = dynamic_cast<ALO*>(pc); pa && s_puseLast)
+        for (LO* ch : pa->aploChild)
+            if (ch == s_puseLast) return true;
+    if (s_puseLast) return false;
+    return pc->oid == pkey->oid && pc->oidInstance == pkey->oidInstance;
+}
+float s_tLastUse = -100.0f;
 struct INITSHIP3
 {
     INITSHIP3()
@@ -1801,6 +1869,21 @@ struct INITSHIP3
             LO* pkey = !a.empty() ? dynamic_cast<LO*>(a[0].m_pbasic) : nullptr;
             if (!pkey && plo && !a.empty()) pkey = PloRef(plo, a[0]);
             if (!pkey || !g_psw) return CRef(TAGK_Void);
+            // (PC: a copied ship's deck cannon script names the template's cannon (the scripts' oids find the first instance):
+            // the cannon of that id on the ship its user (the use just made) sails, so each player fires its own ship's
+            // guns; in the free-for-all's extra copies the template's slot otherwise fired player 1's ship)
+            if (s_ploLastUser && g_clock.t - s_tLastUse < 2.0f)
+                for (LO* p : g_psw->mpcidaplo[CID_SHIP])
+                    if (SHIP3* s = PshipOf(p); s && s->owner == s_ploLastUser)
+                        for (int g = 0; g < 2; ++g)
+                            for (int i = 0; i < s->ccannon[size_t(g)]; ++i)
+                                if (LO* pc = s->acannon[size_t(g)][size_t(i)].cannon; pc && FCannonOfUse(pc, pkey))
+                                {
+                                    if (NPrint()) std::printf("ship3: %d/%d broadside %d by its user %d's cannon %d/%d (t %.2f)\n", p->oid, p->iclone, g, s_ploLastUser->oid, pc->oid, pc->iclone, g_clock.t);
+                                    s_ploLastUser = nullptr;
+                                    RestartSide(*s, &s->acannon[size_t(g)][size_t(i)], g);
+                                    return CRef(TAGK_Void);
+                                }
             // (the cannon's ship: the one whose slot holds this cannon; a copy's cannon names its template's ship in its
             // option 2149 natively, the template being out of the world: the Galleon Duel's two copies of 44092)
             for (LO* p : g_psw->mpcidaplo[CID_SHIP])
@@ -1809,7 +1892,7 @@ struct INITSHIP3
                         for (int i = 0; i < s->ccannon[size_t(g)]; ++i)
                             if (s->acannon[size_t(g)][size_t(i)].cannon == pkey)
                             {
-                                if (NPrint()) std::printf("ship3: %d broadside %d by cannon %d (t %.2f)\n", p->oid, g, pkey->oid, g_clock.t);
+                                if (NPrint()) std::printf("ship3: %d/%d broadside %d by cannon %d/%d (t %.2f)\n", p->oid, p->iclone, g, pkey->oid, pkey->iclone, g_clock.t);
                                 RestartSide(*s, &s->acannon[size_t(g)][size_t(i)], g);
                                 return CRef(TAGK_Void);
                             }
@@ -2189,6 +2272,13 @@ bool FShipBroadside3(LO* plo, glm::vec3* ppos, float* pheading, glm::vec3* pvel,
     const float want = LenXY(local) > ps->range * 0.75f ? 0.0f : (side == 0 ? kHalfPi : -kHalfPi);
     const float err = RadNormalize(bearing - want);
     *pgrf = err > 0.15f ? 1u : err < -0.15f ? 2u : 0u;   // (a left turn (L2) brings the bearing down)
+    if (static const bool s_f = std::getenv("SLY3_BROADSIDEDBG") != nullptr; s_f)
+    {
+        static std::unordered_map<const LO*, float> s_mpt;
+        if (g_clock.t - s_mpt[plo] > 2.0f)
+            s_mpt[plo] = g_clock.t, std::printf("ship3: broadside %d: target clone %d mode %d dist %.0f bearing %.2f want %.2f err %.2f grf %u rudder %.2f heading %.2f\n", plo->oid,
+                                                pt->palo->iclone, pt->mode, LenXY(local), bearing, want, err, *pgrf, ps->rudder, Heading(ps->palo));
+    }
     // (the guns reach only a few degrees around the beam (+0x3F0 / +0x3F4): the use only with the enemy abeam, in range)
     if (want == 0.0f || std::fabs(err) > ps->yawB + 0.05f) return true;
     for (int i = 0; i < ps->ccannon[size_t(side)]; ++i)
@@ -2563,6 +2653,37 @@ struct INITBATTLE3
 } s_initbattle3;
 }  // namespace
 
+// (galleon3.cpp, the Galleon Duel's free-for-all) the battle methods 2019 / 2020 / the flag 2021, natively
+void StartShipBattle3(LO* target, const std::vector<LO*>& aother, int fNoSave)
+{
+    BATTLE3& b = Battle();
+    if (b.state > 0 || !target) return;
+    b.aitem.clear();
+    for (LO* p : aother)
+        if (p && FShip3(p) && p != target && b.aitem.size() < 4) b.aitem.push_back(p);
+    b.aitem.push_back(target);
+    b.fNoSave = fNoSave;
+    if (NPrint()) std::printf("ship3: battle starts (PC): %d ships, the player's %d (t %.2f)\n", int(b.aitem.size()), target->oid, g_clock.t);
+    BeginBattle(b, target);
+}
+void EndShipBattle3()
+{
+    BATTLE3& b = Battle();
+    if (b.state > 0) SetBattleState(b, 0);
+}
+void SetShipBattleTwoPlayer3(int f) { Battle().fTwoPlayer = f; }
+int NShipBattleState3() { return Battle().state; }
+LO* PloShipHitBy3(LO* plo, float* pt)
+{
+    SHIP3* ps = PshipFind(plo);
+    if (!ps) return nullptr;
+    if (pt) *pt = ps->tHitBy;
+    return ps->ploHitBy;
+}
+void SinkShip3(LO* plo)
+{
+    if (SHIP3* ps = PshipFind(plo); ps && ps->mode != 7) SetMode(*ps, 7);
+}
 bool FShipInBattle3(const LO* plo)   // 0x21A4E8
 {
     BATTLE3& b = Battle();
@@ -2845,4 +2966,67 @@ void PostLoadShipSpawner3(LO* plo)
     SetLoSt(g_psw, plo, 1);
     if (plo->iupd >= 0) g_psw->aupd[static_cast<size_t>(plo->iupd)].grf |= GRFUPD_Update;
     else plo->grfUpd |= GRFUPD_Update;
+}
+
+// (interact.cpp UseObjectBase) a use (class 0x21) of a ship's deck cannon: its user, for the cannon script's broadside (1997)
+void NoteShipUse3(LO* puse, LO* puser)
+{
+    if (!puse || puse->Cid() != 0x21 || !puse->paloParent) return;
+    s_ploLastUser = puser;
+    s_puseLast = puse;
+    s_tLastUse = g_clock.t;
+}
+
+// (galleon3.cpp) the face part a ship's gauge selects when it is shown (instead of its option 2023); -1 the option's again
+void SetShipGaugeFace3(LO* ship, int idPart)
+{
+    if (idPart < 0) s_mpidFaceShip3.erase(ship);
+    else s_mpidFaceShip3[ship] = idPart;
+}
+LO* PloShipGauge3(LO* ship)
+{
+    SHIP3* ps = PshipFind(ship);
+    return ps ? ps->child : nullptr;
+}
+void SetShipGauge3(LO* ship, LO* pgauge)
+{
+    if (SHIP3* ps = PshipFind(ship)) ps->child = pgauge;
+}
+
+// (galleon3.cpp: the Galleon Duel's players other than Sly) Circle near a deck cannon's use of the character's own battling
+// ship uses it, as Sly's tracked prompt does (Bentley's / the Guru's / the Panda King's tracking of use targets is not
+// ported: their Circle took Sly's track, i.e. fired Sly's cannon)
+bool FUseDeckCannon3(LO* pchar)
+{
+    if (!pchar || !g_psw) return false;
+    SHIP3* ps = nullptr;
+    for (LO* p : g_psw->mpcidaplo[CID_SHIP])
+        if (SHIP3* q = PshipFind(p); q && q->phase == 1 && q->owner == pchar && q->mode == 4) ps = q;
+    PADCTL* ppad = PpadctlOfSo3(pchar);
+    if (static const bool s_f = std::getenv("SLY3_DECKUSEDBG") != nullptr; s_f)
+    {
+        static std::unordered_map<const LO*, float> s_mpt;
+        if (g_clock.t - s_mpt[pchar] > 2.0f)
+            s_mpt[pchar] = g_clock.t, std::printf("ship3: deck use %d: ship %p pad %p btn 0x%X\n", pchar->oid, (void*)ps, (void*)ppad, ppad ? unsigned(ppad->grfbtn) : 0u);
+    }
+    // (the press's edge on the held buttons: the character's own update has taken the press by then)
+    static std::unordered_map<const LO*, bool> s_mpfHeld;
+    const bool fHeld = ppad && (ppad->grfbtn & 0x20) != 0;
+    const bool fEdge = fHeld && !s_mpfHeld[pchar];
+    s_mpfHeld[pchar] = fHeld;
+    if (!ps || !fEdge) return false;
+    const glm::vec3 pos = PosLoWorld(pchar);
+    LO* puse = nullptr;
+    float best = 160.0f;
+    for (int side = 0; side < 2; ++side)
+        for (int k = 0; k < ps->ccannon[size_t(side)]; ++k)
+            if (ALO* pc = dynamic_cast<ALO*>(ps->acannon[size_t(side)][size_t(k)].cannon))
+                for (LO* ch : pc->aploChild)
+                    if (ch && ch->Cid() == 0x21)
+                        if (const float d = glm::length(PosLoWorld(ch) - pos); d < best) best = d, puse = ch;
+    ACTOR* pa = PactorFromLo(pchar);
+    if (!puse || !pa) return false;
+    if (NPrint()) std::printf("ship3: %d uses its deck cannon's %d (%.0f away, t %.2f)\n", pchar->oid, puse->oid, best, g_clock.t);
+    UseObjectBy(puse, pa);
+    return true;
 }

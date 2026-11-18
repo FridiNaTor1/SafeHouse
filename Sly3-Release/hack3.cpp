@@ -27,6 +27,7 @@
 #include "game/sly3.h"
 #include "game/task3.h"
 #include "gauge3.h"
+#include "guard.h"
 #include "hackgame3.h"
 #include "hackmouse.h"
 #include "actioninput.h"
@@ -700,6 +701,27 @@ void PostLoadHackShip3(LO* plo)
 void OnRemoveHackShip3(LO* plo)
 {
     if (FShip(plo)) OnRemoveShip3(plo);
+}
+
+// orig3: 0x10A520 (the SO's option 948, EOPID 947) -> 0x1C93A8 on a ship: vt slot 30 (0x1FC768: slot 32 0x19BED8 (no
+// longer dead, state -1), then the splice event 18 with one argument (none)), then vt slot 29 (0x1FC868: slot 31 0x19BE58
+// (the hit points full, state 1 with a controller, else 0), then the splice event 17 (none)). The Hackathon's respawn
+// (block 93165 module 135's s4981: the ship added (41), then 948, then the job's 2466): the ship's 18 (block 92992's s18:
+// its power-ups and gun level dropped) and 17 (s17: its collision entries tagged 92992 back on (114) and its parts
+// 74172 / 74183 shown). Natively 948 did nothing for the hack ship: the death's ASEG 9170 had switched those entries off
+// (event kind 16), so a respawned ship had no collision: it fell through the next level's floor at the round's drop
+// and never reached its dock (the round never ended)
+bool FRestoreHackShip3(LO* plo)
+{
+    if (!FShip(plo)) return false;
+    CRef refNone;
+    refNone.SetBasic(nullptr);
+    OnRemoveShip3(plo);
+    HandleLoSpliceEvent(plo, SPLICEEV3_RELEASE, false, 1, &refNone);
+    ResetShipSlot31_3(plo, nullptr);
+    HandleLoSpliceEvent(plo, SPLICEEV3_ATTACH, false, 1, &refNone);
+    if (FPrint3()) std::printf("hack3 ship %d: restored (948) at t %.3f state %d hp %d\n", plo->oid, g_clock.t, Hack(plo).state, Hack(plo).cHp);
+    return true;
 }
 
 void SetHackShip3State(LO* plo, int n)

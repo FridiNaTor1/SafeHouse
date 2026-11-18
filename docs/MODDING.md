@@ -1014,11 +1014,15 @@ The map editor's **View > Cutscene timeline** shows any script of the level as a
   (the characters placed as the game places them) and **at task** starts the level at a job's task. A scene that
   waits for gameplay (a guard reaching a spot) is shown as far as it got.
 - **Scrub** (drag the ruler or click an empty spot; Space plays, the arrows step a frame, Shift + drag on the ruler
-  sets a loop range): **Camera** looks through the cutscene's camera, **Scene** puts the characters and moved objects
-  where they are at that moment, **Poses** poses each character with the animation playing on it at that moment (as
-  the game poses it: its walk, run, idle or the scene's own animation), **Ghosts** draws each character's path with a
-  dot every half second and its pose (a skeleton) half a second and a second before (blue) and after (orange) the
-  playhead.
+  sets a loop range): **Camera** looks through the cutscene's camera: the game's 16:9 picture in the free part of the
+  view (the rest dark, the markers hidden; the letterbox, subtitles, fades and captions in it as the game shows them).
+  **Scene** shows the level as the game has it at that moment: the characters and objects where they are (the
+  proxies' instances and the characters brought in for the scene too, e.g. the Contessa and Neyla at the end of
+  Rajan's fight), what the game does not draw left out (hidden, out of the world, inactive) and the models' parts
+  shown or hidden as in the game. **Poses** poses each character with every animation playing on it at that moment,
+  layered as the game layers them (its walk, run, idle or the scene's own animation, the face's and the mouth's, its
+  parts' own), **Ghosts** draws each character's path with a dot every half second and its pose (a skeleton) half a
+  second and a second before (blue) and after (orange) the playhead.
 - **Edit:** select a clip to see its arguments by name (objects with **selection** to take the one selected in the 3D
   view, lines with their subtitle and length, tasks with their states). **Drag a clip** to move it later or earlier
   (the wait before it grows or shrinks; a wait is added when there is none); **drag its right edge** to change its own
@@ -1156,8 +1160,9 @@ Tick **Custom presentation (SafeHouse)** in the cutscene's **Add** tab (above **
 
 For tools: `Sly2-Release --data-dir D --world W[:TASK] --headless --fixed-dt --frames 40000 --cutscene-trace OID
 --cutscene-out F.json [--cutscene-focus OID2]` writes a measurement (`sly2-cutscene-trace`: each command's start per
-track, the camera each step, the objects' keys, lines, animations); `--play-scpt OID[@SECONDS]` plays a script from a
-time; `--record-session F.json` records a play session (the player's position, heading, speed, state, animation and
+track, the camera each step, the objects' keys, lines, animations, what the game draws and where);
+`Sly2-Release/tools/cutsurvey.sh OUT` checks the preview against the game in every cutscene of every level;
+`--play-scpt OID[@SECONDS]` plays a script from a time; `--record-session F.json` records a play session (the player's position, heading, speed, state, animation and
 pad each step).
 
 ### What is safe to change

@@ -1367,6 +1367,8 @@
   "not a play session": "geen speelsessie",
   "not a prefab file": "geen prefab-bestand",
   "not measured:": "niet gemeten:",
+  "not measured: the game crashed playing it": "niet gemeten: het spel crashte tijdens het afspelen",
+  "not measured: the game did not finish": "niet gemeten: het spel werd niet klaar",
   "nothing copied": "niets gekopieerd",
   "nothing in the selection can be duplicated (top-level objects and instances only)": "niets in de selectie kan gedupliceerd worden (alleen objecten op het hoogste niveau en instanties)",
   "nothing in the selection is stored in the world file": "niets in de selectie is in het wereldbestand opgeslagen",

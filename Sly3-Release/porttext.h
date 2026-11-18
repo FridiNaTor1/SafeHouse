@@ -78,10 +78,12 @@ enum PTX : int
     PTX_CopsCaught, PTX_CopsKnockedOut, PTX_CopsPowerSly, PTX_CopsPowerCarm, PTX_CopsYouCarry, PTX_CopsSlyWins, PTX_CopsCarmWins,
     // (hackmp3.h) the hacking multiplayer game's character select
     PTX_HackCharNames, PTX_HackSelectTitle, PTX_HackSelectHint, PTX_HackReady, PTX_HackChoose,
+    PTX_HackOriginal, PTX_HackTeam,
     // (duel3.h) the Biplane Duel's free-for-all (PC option): the menu row, the description, the round's messages ("%s":
     // PTX_SplitPlayerN's "Player N")
     PTX_DuelPlayers, PTX_DuelOriginal, PTX_DuelFreeForAll, PTX_DuelNPlayers, PTX_DuelDescFFA, PTX_DuelFirstTo,
     PTX_DuelShotDown, PTX_DuelLeads, PTX_DuelWins, PTX_DuelCrashed,
+    PTX_GalleonFreeForAll, PTX_GalleonDescFFA, PTX_GalleonFirstTo, PTX_GalleonSank, PTX_GalleonSunk, PTX_GalleonRound, PTX_GalleonNoneAfloat,
     // (settings v22, display.h monitor) the display options' Monitor row and its default
     PTX_Monitor, PTX_Primary,
     // (display.h fFastShadows, outlineThickness; upscaling, fsr.h) the display options' Fast Shadows, Outline Thickness and

@@ -110,6 +110,15 @@ struct CSSCENE
     int cCmd = 0, cLine = 0, cShot = 0, cPause = 0;
 };
 
+// An object in the trace: oid, class, rank among the world's objects of that oid and class in aploAll's order (oid -1:
+// none)
+using TRACEID = std::array<int, 3>;
+inline TRACEID TraceIdOf(const nlohmann::json& j)
+{
+    if (j.is_array() && j.size() >= 3) return {j[0].get<int>(), j[1].get<int>(), j[2].get<int>()};
+    return {-1, 0, 0};
+}
+
 // The traced scene (cutscene.h's trace JSON)
 struct CSTRACE
 {
@@ -118,11 +127,44 @@ struct CSTRACE
     struct CAMKEY { float t; glm::vec3 pos; glm::mat3 mat; float fov; };
     std::vector<CAMKEY> acam;
     struct OBJKEY { float t; glm::vec3 pos; glm::quat q; bool fIn; };
-    struct OBJ { int oid = 0, cid = 0; std::vector<OBJKEY> akey; };
+    // (depth > 0: a model under another object, its keys relative to its parent's record; fStill: it stood still in
+    // the scene, kept only where the editor's world has it elsewhere)
+    struct OBJ { int oid = 0, cid = 0, rank = 0, depth = 0; bool fStill = false; std::vector<OBJKEY> akey; TRACEID parent{{-1, 0, 0}}; };
     std::vector<OBJ> aobj;
+    // the models the game does not draw at some time (out of the world, inactive, faded out ...): when it does
+    struct DRAWN
+    {
+        int oid = 0, cid = 0, rank = 0;
+        std::vector<std::pair<float, bool>> akey;   // (t, drawn from t on)
+        bool FAt(float t) const
+        {
+            bool f = akey.empty() || akey[0].second;
+            for (const auto& [tk, fk] : akey)
+                if (tk <= t + 1e-4f) f = fk;
+            return f;
+        }
+    };
+    std::vector<DRAWN> adrawn;
+    // the models' parts the game shows / hides at run time (ALO aglobShown) from a time on
+    struct PARTS
+    {
+        int oid = 0, cid = 0, rank = 0;
+        std::vector<std::pair<float, std::vector<std::pair<int32_t, bool>>>> akey;
+        const std::vector<std::pair<int32_t, bool>>* PaAt(float t) const
+        {
+            const std::vector<std::pair<int32_t, bool>>* pa = akey.empty() ? nullptr : &akey[0].second;
+            for (const auto& k : akey)
+                if (k.first <= t + 1e-4f) pa = &k.second;
+            return pa;
+        }
+    };
+    std::vector<PARTS> aparts;
+    // where the game drew each model in the camera's view (every few seconds; cutsurvey's check)
+    struct SEEN { int oid = 0, cid = 0, rank = 0; std::vector<std::pair<float, glm::vec3>> at; };
+    std::vector<SEEN> aseen;
     struct SPAN
     {
-        int id = 0, on = -1;
+        int id = 0, on = -1, oncid = -1, onrank = 0;   // (the object it plays on: oid, class, rank among those)
         float t0 = 0, t1 = 0, length = 0;
         float at = 0;                                // the clip's time at t0
         bool fAmbient = false;                       // playing before the scene started (an idle)
@@ -160,6 +202,7 @@ public:
 
     void Draw();
     void Frame();
+    bool FLooking() const { return m_fLookActive; }
     bool FVerb(const std::string& verb, const std::string& arg);
     void Close();
 
@@ -179,6 +222,14 @@ private:
     std::string Label(const CSCMD& c) const;
     std::string NameOf(int oid) const;
     LO* PloOfOid(int oid) const;
+    // the trace's object: the rank-th of the world's objects of that oid and class (aploAll's order, as the game
+    // ranks them: the proxies' spare instances share their oid); RankOf an object's rank
+    LO* PloOf(int oid, int cid, int rank) const;
+    LO* PloOf(const TRACEID& id) const { return PloOf(id[0], id[1], id[2]); }
+    int RankOf(const LO* plo) const;
+    mutable std::map<std::pair<int, int>, std::vector<LO*>> m_mpoidcid;   // the world's objects by oid and class
+    mutable std::unordered_map<const LO*, int> m_mprank;
+    mutable const SW* m_pswRank = nullptr;
     float LineLength(int id) const;
     float AnimLength(int oid) const;
     void WhoStarts();
@@ -209,29 +260,51 @@ private:
     double m_tEdit = 0.0;
     std::size_t m_cHistory = 0, m_cRedo = 0;
     int m_pollTrace = 0, m_cReadFailed = 0;
+    double m_tTraceStart = 0.0;
     std::string m_tracePath, m_traceNote;
     // the playhead, scrubbing, the scene at the playhead
     void ApplyScene();
     void RestoreScene();
     bool FCameraAt(float t, CAMERA& cam) const;
     bool FObjectAt(const CSTRACE::OBJ& o, float t, glm::vec3& pos, glm::quat& q, bool& fIn) const;
+    bool FObjectWorld(ALO* palo, const TRACEID* pparent, glm::mat4& W, glm::mat4* pWparent = nullptr) const;
     void DrawGhosts();
     // characters posed at the playhead (step 3: the clip playing on each, as the game poses it)
     using POSE = std::vector<std::pair<XF*, glm::mat4>>;   // each record's world relative to its object record
     bool FAnimOn(int oid, float t, LO*& plAseg, float& tClip) const;
+    // every clip playing at t on the object or an object under it (its idle from before the scene too), in the order
+    // they started: (the object it plays on, the clip, its time); the game layers them (a body clip, a face's, the
+    // mouth's, a part's own ...)
+    bool FAnimsOn(const LO* plo, float t, std::vector<std::tuple<LO*, LO*, float>>& aclip) const;
+    std::vector<LO*> m_aploSpan;                           // (each animation's object, ForgetPoses)
+    std::vector<ALO*> m_apaloPoseRoot;                     // (the trees clips play in: posed whole)
+    const SW* m_pswPoseRoot = nullptr;
+    LO* PlAsegOf(LO* plo, int id) const;
     const POSE* PposeAt(ALO* palo, float t);
     void PoseCharacters();
     void ForgetPoses();
-    std::map<std::tuple<const ALO*, const LO*, int>, POSE> m_mppose;
+    std::map<std::pair<const ALO*, std::string>, POSE> m_mppose;   // (by the clips and their frames)
     std::set<ALO*> m_setPosed;
-    std::vector<int> m_aoidAnimated;                       // the trace's objects animations play on
+    std::vector<std::array<int, 3>> m_aoidAnimated;        // the trace's objects animations play on (oid, class, rank)
+    // the objects the game has out of the world at the playhead (shown / hidden by the scene, the proxies' spare
+    // instances ...): their scene entries are not drawn (CEditor::m_aiSceneHidden)
+    void HideOutOfWorld(const std::set<const LO*>& setTree, const std::set<const LO*>& setSelf);
+    // cutsurvey: every model the game drew in the camera's view against the preview at the same times (in the
+    // editor's world, a model in its scene, not left out, posed when a clip plays on it, at the game's place)
+    void Survey();
+    std::set<const LO*> m_setOutLast, m_setNotDrawnLast;   // (ApplyScene's last: what it left out and why)
     bool m_fPoses = true;
     float m_t = 0.0f, m_tApplied = -1.0f;
     bool m_fPlaying = false, m_fLoop = false, m_fLookThrough = true, m_fPreview = true, m_fGhosts = true;
     float m_tLoop0 = 0.0f, m_tLoop1 = 0.0f;
     bool m_fLookActive = false;
     CAMERA m_camSaved;
+    // the picture while looking through: the game's 16:9 frame fitted into the 3D view's free part (between the tool
+    // strip, the right column, the menu and the Timeline dock), as fractions of the window (fFraction) or pixels
+    glm::vec4 RcPicture(bool fFraction) const;
+    glm::vec4 m_rcLook{0.0f};
     std::unordered_map<XF*, std::pair<ALO*, glm::mat4>> m_mpOrig;   // the records the preview moved: their own local matrices
+    std::unordered_map<ALO*, std::vector<std::pair<int32_t, bool>>> m_mpPartsOrig;   // the models whose parts it set as the game had them: theirs
     // the view
     void DrawToolbar();
     void DrawTracks(float w, float h);
@@ -398,6 +471,39 @@ LO* CCutsceneEditor::PloOfOid(int oid) const
     }
     const auto it = m_mpoid.find(oid);
     return it == m_mpoid.end() ? nullptr : it->second;
+}
+
+LO* CCutsceneEditor::PloOf(int oid, int cid, int rank) const
+{
+    if (oid < 0) return nullptr;
+    RankOf(nullptr);   // (the index for this load)
+    if (cid >= 0)
+    {
+        const auto it = m_mpoidcid.find({oid, cid});
+        if (it != m_mpoidcid.end() && rank >= 0 && std::size_t(rank) < it->second.size()) return it->second[std::size_t(rank)];
+        if (it != m_mpoidcid.end() || rank > 0) return nullptr;   // (a clone the game made at run time: not in the editor's world)
+    }
+    // (an older trace without classes: the oid's object)
+    return rank == 0 ? PloOfOid(oid) : nullptr;
+}
+
+int CCutsceneEditor::RankOf(const LO* plo) const
+{
+    if (m_pswRank != e.m_psw.get())
+    {
+        m_mpoidcid.clear();
+        m_mprank.clear();
+        m_pswRank = e.m_psw.get();
+        for (const auto& up : e.m_psw->aploAll)
+        {
+            auto& a = m_mpoidcid[{up->oid, int(up->Cid())}];
+            m_mprank[up.get()] = int(a.size());
+            a.push_back(up.get());
+        }
+    }
+    if (!plo) return 0;
+    const auto it = m_mprank.find(plo);
+    return it == m_mprank.end() ? 0 : it->second;
 }
 
 std::string CCutsceneEditor::NameOf(int oid) const
@@ -999,6 +1105,7 @@ void CCutsceneEditor::StartTrace()
     }
     if (!ce::spawnDetached(exe, args)) { m_traceNote = "could not start " + ce::utf8(exe); return; }
     m_fTracePending = true;
+    m_tTraceStart = glfwGetTime();
     m_pollTrace = 0;
     m_traceNote = T("measuring in the game...");
 }
@@ -1007,7 +1114,20 @@ void CCutsceneEditor::PollTrace()
 {
     if (!m_fTracePending || ++m_pollTrace % 15 != 0) return;
     std::error_code ec;
-    if (!cane::fs::exists(ce::pathOf(m_tracePath), ec)) return;
+    if (!cane::fs::exists(ce::pathOf(m_tracePath), ec))
+    {
+        // (the game ended without a measurement: it crashed (its log says so) or it ran past any scene's length)
+        bool fCrashed = false;
+        if (std::ifstream f(ce::pathOf(m_tracePath + ".log")); f)
+            for (std::string line; !fCrashed && std::getline(f, line);) fCrashed = line.find("crashed, stack") != std::string::npos;
+        if (fCrashed || glfwGetTime() - m_tTraceStart > 600.0)
+        {
+            m_fTracePending = false;
+            m_traceNote = fCrashed ? T("not measured: the game crashed playing it") : T("not measured: the game did not finish");
+            e.Status(std::string("cutscene ") + std::to_string(m_oid) + ": " + m_traceNote);
+        }
+        return;
+    }
     if (!FReadTrace(m_tracePath))
     {
         // (a moment more: written by a game of before the rename)
@@ -1067,17 +1187,58 @@ bool CCutsceneEditor::FReadTrace(const std::string& path)
         CSTRACE::OBJ ob;
         ob.oid = o.value("oid", 0);
         ob.cid = o.value("cid", 0);
+        ob.rank = o.value("rank", 0);
+        ob.depth = o.value("depth", 0);
+        ob.fStill = o.value("still", 0) != 0;
+        if (o.contains("parent")) ob.parent = TraceIdOf(o["parent"]);
         for (const auto& k : o["keys"])
             if (k.is_array() && k.size() >= 9)
                 ob.akey.push_back({k[0].get<float>(), {k[1].get<float>(), k[2].get<float>(), k[3].get<float>()},
                                    glm::quat(k[7].get<float>(), k[4].get<float>(), k[5].get<float>(), k[6].get<float>()), k[8].get<int>() != 0});
         if (!ob.akey.empty()) t.aobj.push_back(std::move(ob));
     }
-    for (const auto& l : j["lines"]) t.aline.push_back({l.value("line", 0), -1, l.value("t0", 0.0f), l.value("t1", 0.0f), 0.0f});
+    if (j.contains("drawn"))
+        for (const auto& o : j["drawn"])
+            if (o.is_array() && o.size() >= 4 && o[3].is_array())
+            {
+                CSTRACE::DRAWN d{o[0].get<int>(), o[1].get<int>(), o[2].get<int>(), {}};
+                for (std::size_t k = 0; k + 1 < o[3].size(); k += 2) d.akey.push_back({o[3][k].get<float>(), o[3][k + 1].get<int>() != 0});
+                t.adrawn.push_back(std::move(d));
+            }
+    if (j.contains("parts"))
+        for (const auto& o : j["parts"])
+            if (o.is_array() && o.size() >= 4 && o[3].is_array())
+            {
+                CSTRACE::PARTS d{o[0].get<int>(), o[1].get<int>(), o[2].get<int>(), {}};
+                for (std::size_t k = 0; k + 1 < o[3].size(); k += 2)
+                {
+                    std::vector<std::pair<int32_t, bool>> a;
+                    for (const auto& p : o[3][k + 1])
+                        if (p.is_array() && p.size() >= 2) a.push_back({p[0].get<int32_t>(), p[1].get<int>() != 0});
+                    d.akey.push_back({o[3][k].get<float>(), std::move(a)});
+                }
+                t.aparts.push_back(std::move(d));
+            }
+    if (j.contains("seen"))
+        for (const auto& o : j["seen"])
+            if (o.is_array() && o.size() >= 4 && o[3].is_array())
+            {
+                CSTRACE::SEEN d{o[0].get<int>(), o[1].get<int>(), o[2].get<int>(), {}};
+                for (const auto& k : o[3])
+                    if (k.is_array() && k.size() >= 4) d.at.push_back({k[0].get<float>(), {k[1].get<float>(), k[2].get<float>(), k[3].get<float>()}});
+                t.aseen.push_back(std::move(d));
+            }
+    for (const auto& l : j["lines"])
+    {
+        CSTRACE::SPAN sp;
+        sp.id = l.value("line", 0), sp.t0 = l.value("t0", 0.0f), sp.t1 = l.value("t1", 0.0f);
+        t.aline.push_back(std::move(sp));
+    }
     for (const auto& a : j["anims"])
     {
         CSTRACE::SPAN sp;
         sp.id = a.value("aseg", 0), sp.on = a.value("on", -1), sp.t0 = a.value("t0", 0.0f), sp.t1 = a.value("t1", 0.0f), sp.length = a.value("length", 0.0f);
+        sp.oncid = a.value("oncid", -1), sp.onrank = a.value("onrank", 0);
         sp.at = a.value("at", 0.0f);
         sp.fAmbient = a.value("ambient", 0) != 0;
         if (a.contains("keys"))
@@ -1089,7 +1250,43 @@ bool CCutsceneEditor::FReadTrace(const std::string& path)
     for (const auto& c : j["cmds"])
         if (c.is_array() && c.size() >= 3) t.acmd.push_back({c[0].get<float>(), c[1].get<float>(), c[2].get<float>()});
     for (const auto& r : j["runs"]) t.arun.push_back({r.value("block", 0), r.value("parent", -1), r.value("t0", 0.0f), r.value("t1", -1.0f)});
+    // (the parents placed before their parts; the still ones kept only where the editor's world has them elsewhere:
+    // compared with the scene as loaded)
+    RestoreScene();
+    std::stable_sort(t.aobj.begin(), t.aobj.end(), [](const CSTRACE::OBJ& a, const CSTRACE::OBJ& b) { return a.depth < b.depth; });
+    t.aobj.erase(std::remove_if(t.aobj.begin(), t.aobj.end(), [&](const CSTRACE::OBJ& o) {
+        if (!o.fStill) return false;
+        LO* plo = PloOf(o.oid, o.cid, o.rank);
+        if (!plo || !FIsLoDerivedFrom(plo, EDCID(0x30)) || o.akey.empty()) return true;
+        // (a part under another object in the editor's world than in the game's: kept, it follows the game's one)
+        if (o.depth > 0)
+            if (LO* proot = PloOf(o.parent); proot && !FLoInParentChain(plo, proot)) return false;
+        glm::mat4 W(1.0f);
+        if (!FObjectWorld(static_cast<ALO*>(plo), o.depth > 0 ? &o.parent : nullptr, W)) return true;
+        glm::mat3 r(W);
+        for (int i = 0; i < 3; ++i)
+            if (const float l = glm::length(r[i]); l > 1e-6f) r[i] /= l;
+        const glm::quat q = glm::normalize(glm::quat_cast(r));
+        return glm::length(glm::vec3(W[3]) - o.akey[0].pos) <= 0.5f && std::fabs(glm::dot(q, o.akey[0].q)) >= 0.9999f;
+    }), t.aobj.end());
     m_trace = std::move(t);
+    return true;
+}
+
+// An object's place as the trace keys it: its record's world, or (a part) relative to the record of its root object in
+// the game (pparent; its world in pWparent)
+bool CCutsceneEditor::FObjectWorld(ALO* palo, const TRACEID* pparent, glm::mat4& W, glm::mat4* pWparent) const
+{
+    const XF* pxf = PxfObj(palo) ? PxfObj(palo) : palo->axf.empty() ? nullptr : palo->axf[0].get();
+    if (!pxf) return false;
+    W = pxf->matWorld;
+    if (!pparent) return true;
+    LO* plo = PloOf(*pparent);
+    ALO* par = plo && FIsLoDerivedFrom(plo, EDCID(0x30)) ? static_cast<ALO*>(plo) : nullptr;
+    const XF* pp = !par ? nullptr : PxfObj(par) ? PxfObj(par) : par->axf.empty() ? nullptr : par->axf[0].get();
+    if (!pp) return false;
+    W = glm::inverse(pp->matWorld) * W;
+    if (pWparent) *pWparent = pp->matWorld;
     return true;
 }
 
@@ -1142,9 +1339,12 @@ bool CCutsceneEditor::FObjectAt(const CSTRACE::OBJ& o, float t, glm::vec3& pos, 
     std::size_t i = 0;
     while (i + 1 < o.akey.size() && o.akey[i + 1].t <= t) ++i;
     const auto& k0 = o.akey[i];
-    // (keys are kept where the object changed: between two it moved smoothly when they are a step apart, else it
-    // stood until the later one)
-    if (i + 1 < o.akey.size() && o.akey[i + 1].t - k0.t < 0.05f)
+    // (keys are kept where the object changed: between two it moved smoothly when they are a step apart or the change
+    // is small (a slow turn: a key each few tenths of a second, far parts swing wide), else it stood until the later one)
+    const auto fSmooth = [&](const CSTRACE::OBJKEY& a, const CSTRACE::OBJKEY& b) {
+        return b.t - a.t < 0.05f || (b.t - a.t < 2.0f && glm::length(b.pos - a.pos) < 50.0f && std::fabs(glm::dot(a.q, b.q)) > 0.999f && a.fIn == b.fIn);
+    };
+    if (i + 1 < o.akey.size() && fSmooth(k0, o.akey[i + 1]))
     {
         const auto& k1 = o.akey[i + 1];
         const float u = std::clamp((t - k0.t) / std::max(1e-4f, k1.t - k0.t), 0.0f, 1.0f);
@@ -1191,19 +1391,69 @@ bool CCutsceneEditor::FAnimOn(int oid, float t, LO*& plAseg, float& tClip) const
     return false;
 }
 
-// An object's pose at t, relative to its object record (cached by clip and frame)
+// A clip by its id for an object: the ASEG under the character of that id, as the game finds it; else the world's
+LO* CCutsceneEditor::PlAsegOf(LO* plo, int id) const
+{
+    LO* pfound = nullptr;
+    std::function<void(LO*)> find = [&](LO* p) {
+        if (pfound) return;
+        if (p != plo && FIsLoDerivedFrom(p, EDCID(0x6D)) && p->oid == id) { pfound = p; return; }
+        if (const auto it = e.m_mpchildren.find(p); it != e.m_mpchildren.end())
+            for (LO* c : it->second) find(c);
+    };
+    if (plo) find(plo);
+    if (!pfound) pfound = PloOfOid(id);
+    return pfound && FIsLoDerivedFrom(pfound, EDCID(0x6D)) ? pfound : nullptr;
+}
+
+bool CCutsceneEditor::FAnimsOn(const LO* plo, float t, std::vector<std::tuple<LO*, LO*, float>>& aclip) const
+{
+    aclip.clear();
+    if (!plo || m_aploSpan.size() != m_trace.aanim.size()) return false;
+    std::vector<std::size_t> ai;
+    for (std::size_t i = 0; i < m_trace.aanim.size(); ++i)
+    {
+        const CSTRACE::SPAN& a = m_trace.aanim[i];
+        LO* pon = m_aploSpan[i];
+        if (pon && t >= a.t0 - 1e-4f && t <= a.t1 + c_dtFrame + 1e-4f && (pon == plo || FLoInParentChain(pon, plo))) ai.push_back(i);
+    }
+    // (the idles from before the scene first, then as they started)
+    std::stable_sort(ai.begin(), ai.end(), [&](std::size_t i, std::size_t j) {
+        const CSTRACE::SPAN &a = m_trace.aanim[i], &b = m_trace.aanim[j];
+        return a.fAmbient != b.fAmbient ? a.fAmbient : a.t0 < b.t0;
+    });
+    for (std::size_t i : ai)
+    {
+        const CSTRACE::SPAN& a = m_trace.aanim[i];
+        int id = -1;
+        const float tc = a.TClip(t, &id);
+        if (id < 0) continue;
+        LO* pl = PlAsegOf(m_aploSpan[i], id);
+        if (!pl) continue;
+        const ASEGD* pd = PasegdOf(static_cast<ASEG*>(pl));
+        aclip.push_back({m_aploSpan[i], pl, pd && pd->tMax > 0 ? std::clamp(tc, 0.0f, pd->tMax) : tc});
+    }
+    return !aclip.empty();
+}
+
+// An object's pose at t, relative to its object record (cached by its clips and their frames)
 const CCutsceneEditor::POSE* CCutsceneEditor::PposeAt(ALO* palo, float t)
 {
-    LO* plAseg = nullptr;
-    float tClip = 0.0f;
-    if (!palo || !FAnimOn(palo->oid, t, plAseg, tClip)) return nullptr;
-    const auto key = std::make_tuple(static_cast<const ALO*>(palo), static_cast<const LO*>(plAseg), int(std::lround(tClip * 60.0f)));
+    std::vector<std::tuple<LO*, LO*, float>> aclip;
+    if (!palo || !FAnimsOn(palo, t, aclip)) return nullptr;
+    std::string sig;
+    for (auto& [pon, pl, tc] : aclip)
+    {
+        tc = float(std::lround(tc * 60.0f)) / 60.0f;
+        sig += std::to_string(reinterpret_cast<std::uintptr_t>(pon)) + ":" + std::to_string(reinterpret_cast<std::uintptr_t>(pl)) + "@" + std::to_string(std::lround(tc * 60.0f)) + ";";
+    }
+    const auto key = std::make_pair(static_cast<const ALO*>(palo), sig);
     auto it = m_mppose.find(key);
     if (it == m_mppose.end())
     {
         POSE a;
         if (m_mppose.size() > 4000) m_mppose.clear();
-        e.FPoseCharacter(palo, plAseg, float(std::get<2>(key)) / 60.0f, a);
+        e.FPoseCharacter(palo, aclip, a);
         it = m_mppose.emplace(key, std::move(a)).first;
     }
     return it->second.empty() ? nullptr : &it->second;
@@ -1213,20 +1463,33 @@ void CCutsceneEditor::ForgetPoses()
 {
     m_mppose.clear();
     m_aoidAnimated.clear();
-    std::set<int> set;
+    m_aploSpan.clear();
+    m_pswPoseRoot = nullptr;
+    std::set<std::array<int, 3>> set;
     for (const CSTRACE::SPAN& a : m_trace.aanim)
-        if (a.on >= 0 && set.insert(a.on).second) m_aoidAnimated.push_back(a.on);
+        if (a.on >= 0 && set.insert({a.on, a.oncid, a.onrank}).second) m_aoidAnimated.push_back({a.on, a.oncid, a.onrank});
 }
 
-// The animated objects posed at the playhead: each record's world = its object record's (where the trace placed it)
-// x its pose (the renderer skins with them)
+// The animated objects posed at the playhead: each tree a clip plays in posed whole (its root's clips and its parts'),
+// each record's world = its root's object record's (where the trace placed it) x its pose (the renderer skins with them)
 void CCutsceneEditor::PoseCharacters()
 {
-    for (int oid : m_aoidAnimated)
+    if (m_pswPoseRoot != e.m_psw.get() || m_aploSpan.size() != m_trace.aanim.size())
     {
-        LO* plo = PloOfOid(oid);
-        if (!plo || !FIsLoDerivedFrom(plo, EDCID(0x30))) continue;
-        ALO* palo = static_cast<ALO*>(plo);
+        m_pswPoseRoot = e.m_psw.get();
+        m_aploSpan.clear();
+        for (const CSTRACE::SPAN& a : m_trace.aanim) m_aploSpan.push_back(a.on >= 0 ? PloOf(a.on, a.oncid, a.onrank) : nullptr);
+        m_apaloPoseRoot.clear();
+        std::set<LO*> set;
+        for (LO* p : m_aploSpan)
+        {
+            if (!p) continue;
+            while (p->paloParent) p = p->paloParent;
+            if (FIsLoDerivedFrom(p, EDCID(0x30)) && set.insert(p).second) m_apaloPoseRoot.push_back(static_cast<ALO*>(p));
+        }
+    }
+    for (ALO* palo : m_apaloPoseRoot)
+    {
         const POSE* pp = PposeAt(palo, m_t);
         if (!pp)
         {
@@ -1243,44 +1506,95 @@ void CCutsceneEditor::PoseCharacters()
     }
 }
 
+// The scene entries the game does not draw at the playhead left out: the objects out of the world with the objects
+// under them (setTree), the models it does not draw (setSelf)
+void CCutsceneEditor::HideOutOfWorld(const std::set<const LO*>& setTree, const std::set<const LO*>& setSelf)
+{
+    std::vector<int> ai;
+    if (!setTree.empty() || !setSelf.empty())
+        for (std::size_t k = 0; k < e.m_apalo.size() && k < e.m_scene.aglobset.size(); ++k)
+        {
+            if (setSelf.count(e.m_apalo[k])) { ai.push_back(int(k)); continue; }
+            for (const LO* p = e.m_apalo[k]; p && !setTree.empty(); p = p->paloParent)
+                if (setTree.count(p)) { ai.push_back(int(k)); break; }
+        }
+    if (ai == e.m_aiSceneHidden) return;
+    // (what shows again placed by the scene's own placement first)
+    const bool fShown = !std::includes(ai.begin(), ai.end(), e.m_aiSceneHidden.begin(), e.m_aiSceneHidden.end());
+    e.m_aiSceneHidden = std::move(ai);
+    if (fShown) UpdateSceneFromSw(e.m_scene, e.m_apalo);
+}
+
 void CCutsceneEditor::ApplyScene()
 {
     if (!m_trace.fOk || !m_fPreview) { RestoreScene(); return; }
-    if (m_tApplied == m_t) return;
+    // (the picture's part of the window: the 3D view's free part, the game's 16:9 in it)
+    const glm::vec4 rc = RcPicture(true);
+    if (m_tApplied == m_t && (!m_fLookActive || rc == m_rcLook)) return;
     m_tApplied = m_t;
-    for (const CSTRACE::OBJ& o : m_trace.aobj)
-    {
-        LO* plo = PloOfOid(o.oid);
-        if (!plo || !FIsLoDerivedFrom(plo, EDCID(0x30))) continue;
+    std::set<const LO*> setOut, setNotDrawn;
+    for (const CSTRACE::DRAWN& d : m_trace.adrawn)
+        if (!d.FAt(m_t))
+            if (LO* plo = PloOf(d.oid, d.cid, d.rank)) setNotDrawn.insert(plo);
+    // the objects at the trace's places: the root objects and characters, then (after the poses) the parts, relative to
+    // their root objects as the game had them
+    auto place = [&](const CSTRACE::OBJ& o) {
+        LO* plo = PloOf(o.oid, o.cid, o.rank);
+        if (!plo || !FIsLoDerivedFrom(plo, EDCID(0x30))) return;
         ALO* palo = static_cast<ALO*>(plo);
         // (the object's own record: an actor's moves under its root's, as the game moves it)
         XF* pxf = PxfObj(palo);
         if (!pxf) pxf = palo->axf.empty() ? nullptr : palo->axf[0].get();
-        if (!pxf) continue;
+        if (!pxf) return;
         glm::vec3 pos;
         glm::quat q;
         bool fIn = true;
-        if (!FObjectAt(o, m_t, pos, q, fIn)) continue;
+        if (!FObjectAt(o, m_t, pos, q, fIn)) return;
+        if (!fIn) setOut.insert(plo);
+        glm::mat4 Wk(1.0f), Wroot(1.0f);
+        if (!FObjectWorld(palo, o.depth > 0 ? &o.parent : nullptr, Wk, &Wroot)) return;
         if (!m_mpOrig.count(pxf)) m_mpOrig[pxf] = {palo, pxf->mat};
-        // the world matrix the trace saw (its scale the record's own), as the record's local one
+        // the world matrix the trace saw (its scale the record's own), as the record's local one (its records' worlds
+        // from their own matrices first: a pose set them directly; a part's parent may be posed)
+        UpdateXfWorlds(palo);
         const glm::mat4 W0 = pxf->matWorld;
-        glm::vec3 scale(glm::length(glm::vec3(W0[0])), glm::length(glm::vec3(W0[1])), glm::length(glm::vec3(W0[2])));
+        glm::vec3 scale(glm::length(glm::vec3(Wk[0])), glm::length(glm::vec3(Wk[1])), glm::length(glm::vec3(Wk[2])));
         for (int i = 0; i < 3; ++i) if (scale[i] < 1e-4f) scale[i] = 1.0f;
         glm::mat4 W = glm::mat4_cast(q);
         for (int i = 0; i < 3; ++i) W[i] *= scale[i];
         W[3] = glm::vec4(pos, 1.0f);
+        if (o.depth > 0) W = Wroot * W;   // (the root object's record's world x the part's place)
         const glm::mat4 parent = W0 * glm::inverse(pxf->mat);
         pxf->mat = glm::inverse(parent) * W;
         UpdateAloHierarchyWorlds(palo);
-    }
+    };
+    for (const CSTRACE::OBJ& o : m_trace.aobj)
+        if (o.depth == 0) place(o);
     if (m_fPoses) PoseCharacters();
-    if (!m_mpOrig.empty() || !m_setPosed.empty()) UpdateSceneFromSw(e.m_scene, e.m_apalo);
+    for (const CSTRACE::OBJ& o : m_trace.aobj)
+        if (o.depth > 0) place(o);
+    // the parts shown / hidden as the game had them (the scene's placement reads them)
+    for (const CSTRACE::PARTS& d : m_trace.aparts)
+    {
+        LO* plo = PloOf(d.oid, d.cid, d.rank);
+        const auto* pa = d.PaAt(m_t);
+        if (!plo || !pa || !FIsLoDerivedFrom(plo, EDCID(0x30))) continue;
+        ALO* palo = static_cast<ALO*>(plo);
+        if (!m_mpPartsOrig.count(palo)) m_mpPartsOrig[palo] = palo->aglobShown;
+        palo->aglobShown = *pa;
+    }
+    if (!m_mpOrig.empty() || !m_setPosed.empty() || !m_mpPartsOrig.empty()) UpdateSceneFromSw(e.m_scene, e.m_apalo);
+    HideOutOfWorld(setOut, setNotDrawn);
+    m_setOutLast = std::move(setOut);
+    m_setNotDrawnLast = std::move(setNotDrawn);
     CAMERA cam = e.m_cam;
     if (m_fLookThrough && FCameraAt(m_t, cam))
     {
         if (!m_fLookActive) { m_camSaved = e.m_cam; m_fLookActive = true; }
         cam.sNear = e.m_cam.sNear;
         cam.sFar = e.m_cam.sFar;
+        cam.rcPicture = rc;
+        m_rcLook = rc;
         e.m_cam = cam;
     }
     else if (m_fLookActive) { e.m_cam = m_camSaved; m_fLookActive = false; }
@@ -1288,24 +1602,106 @@ void CCutsceneEditor::ApplyScene()
 
 void CCutsceneEditor::RestoreScene()
 {
-    if ((!m_mpOrig.empty() || !m_setPosed.empty()) && m_pswSeen == e.m_psw.get())
+    if ((!m_mpOrig.empty() || !m_setPosed.empty() || !e.m_aiSceneHidden.empty() || !m_mpPartsOrig.empty()) && m_pswSeen == e.m_psw.get())
     {
         for (auto& [pxf, o] : m_mpOrig)
         {
             pxf->mat = o.second;
             UpdateAloHierarchyWorlds(o.first);
         }
+        for (auto& [palo, a] : m_mpPartsOrig) palo->aglobShown = a;
         for (ALO* palo : m_setPosed)
         {
             UpdateAloHierarchyWorlds(palo);
             e.UnbindPosed(palo);
         }
+        e.m_aiSceneHidden.clear();
         UpdateSceneFromSw(e.m_scene, e.m_apalo);
     }
+    e.m_aiSceneHidden.clear();
     m_setPosed.clear();
     m_mpOrig.clear();
+    m_mpPartsOrig.clear();
     if (m_fLookActive) { e.m_cam = m_camSaved; m_fLookActive = false; }
     m_tApplied = -1.0f;
+}
+
+static ALO* PaloRootOf(ALO* palo)
+{
+    while (palo && palo->paloParent) palo = palo->paloParent;
+    return palo;
+}
+
+void CCutsceneEditor::Survey()
+{
+    if (!m_trace.fOk) { std::printf("editor: cutsurvey %d: not measured (%s)\n", m_oid, m_traceNote.c_str()); return; }
+    std::unordered_map<const ALO*, int> mpentry;
+    for (std::size_t k = 0; k < e.m_apalo.size() && k < e.m_scene.aglobset.size(); ++k) mpentry[e.m_apalo[k]] = int(k);
+    std::set<const LO*> setAnimated;
+    for (const auto& k : m_aoidAnimated)
+        if (LO* p = PloOf(k[0], k[1], k[2])) setAnimated.insert(p);
+    // (the samples by time: the scene applied once per time)
+    std::map<float, std::vector<std::pair<const CSTRACE::SEEN*, glm::vec3>>> mpt;
+    for (const CSTRACE::SEEN& d : m_trace.aseen)
+        for (const auto& [t, pos] : d.at)
+            if (t >= 0.0f && t <= m_tEnd + 1e-3f) mpt[t].push_back({&d, pos});
+    const float tSaved = m_t;
+    const bool fPreviewSaved = m_fPreview;
+    m_fPreview = true;
+    int cSample = 0, cMiss = 0;
+    std::set<std::array<int, 3>> setModel, setMissed;
+    std::map<std::string, int> mpreason;
+    double dMax = 0.0;
+    for (const auto& [t, a] : mpt)
+    {
+        m_t = t;
+        m_tApplied = -1.0f;
+        ApplyScene();
+        const std::set<int> setHidden(e.m_aiSceneHidden.begin(), e.m_aiSceneHidden.end());
+        for (const auto& [pd, pos] : a)
+        {
+            ++cSample;
+            setModel.insert({pd->oid, pd->cid, pd->rank});
+            LO* plo = PloOf(pd->oid, pd->cid, pd->rank);
+            const char* szWhy = nullptr;
+            double dist = 0.0;
+            if (!plo || !FIsLoDerivedFrom(plo, EDCID(0x30))) szWhy = "not in the editor's world";
+            else
+            {
+                ALO* palo = static_cast<ALO*>(plo);
+                const auto it = mpentry.find(palo);
+                XF* pxf = PxfObj(palo) ? PxfObj(palo) : palo->axf.empty() ? nullptr : palo->axf[0].get();
+                std::vector<std::tuple<LO*, LO*, float>> aclip;
+                if (it == mpentry.end()) szWhy = "no model in the editor's scene";
+                else if (setHidden.count(it->second))
+                {
+                    szWhy = "left out by the preview";
+                    if (m_setNotDrawnLast.count(plo)) szWhy = "left out by the preview (the game's draw state)";
+                    for (const LO* p = plo; p; p = p->paloParent)
+                        if (m_setOutLast.count(p)) { szWhy = "left out by the preview (an object out of the world)"; break; }
+                }
+                else if (e.FHidden(plo)) szWhy = "hidden in the editor";
+                else if (setAnimated.count(plo) && m_fPoses && FAnimsOn(plo, t, aclip) && !PposeAt(PaloRootOf(palo), t)) szWhy = "not posed";
+                else if (!pxf) szWhy = "no record";
+                else if ((dist = glm::length(glm::vec3(pxf->matWorld[3]) - pos)) > 60.0) szWhy = "placed elsewhere";
+                dMax = std::max(dMax, dist <= 60.0 ? dist : 0.0);
+            }
+            if (!szWhy) continue;
+            ++cMiss;
+            ++mpreason[szWhy];
+            if (setMissed.insert({pd->oid, pd->cid, pd->rank}).second)
+                std::printf("editor: cutsurvey %d miss: %d (%s, rank %d) at %.2f: %s%s\n", m_oid, pd->oid, SzClass(pd->cid), pd->rank, t, szWhy,
+                            dist > 60.0 ? (" (" + std::to_string(int(dist)) + " away)").c_str() : "");
+        }
+    }
+    m_t = tSaved;
+    m_fPreview = fPreviewSaved;
+    m_tApplied = -1.0f;
+    ApplyScene();
+    std::string reasons;
+    for (const auto& [r, n] : mpreason) reasons += " " + r + ": " + std::to_string(n) + ";";
+    std::printf("editor: cutsurvey %d: %zu models drawn in view, %d samples, %d missed (%zu models)%s; within %.1f of the game's place\n", m_oid, setModel.size(), cSample, cMiss,
+                setMissed.size(), reasons.c_str(), dMax);
 }
 
 void CCutsceneEditor::Close()
@@ -1324,6 +1720,7 @@ void CCutsceneEditor::Frame()
     {
         // (the world was loaded again after an edit: the objects are new)
         m_mpOrig.clear();
+        m_mpPartsOrig.clear();
         m_setPosed.clear();
         m_mppose.clear();
         m_fLookActive = false;
@@ -1382,7 +1779,7 @@ void CCutsceneEditor::DrawGhosts()
         }
         // onion skin: the character posed as it is half a second, a second ... before (cool) and after (warm) the
         // playhead, as a skeleton (its skin's bones, each to the nearest bone above it)
-        LO* plo = PloOfOid(o.oid);
+        LO* plo = PloOf(o.oid, o.cid, o.rank);
         ALO* palo = plo && FIsLoDerivedFrom(plo, EDCID(0x30)) ? static_cast<ALO*>(plo) : nullptr;
         XF* pxfObj = palo ? (PxfObj(palo) ? PxfObj(palo) : palo->axf.empty() ? nullptr : palo->axf[0].get()) : nullptr;
         if (m_fPoses && pxfObj)
@@ -2699,15 +3096,44 @@ void CCutsceneEditor::DrawStarterPanel()
     for (const std::string& d : m_astarterDiag) ImGui::BulletText("%s", d.c_str());
 }
 
+glm::vec4 CCutsceneEditor::RcPicture(bool fFraction) const
+{
+    const ImVec2 size = ImGui::GetIO().DisplaySize;
+    const float top = ImGui::GetFrameHeight();
+    // (the Timeline dock's place, Draw())
+    const float wRight = std::clamp(size.x * 0.25f, 330.0f, 470.0f);
+    const float x0 = 64, x1 = x0 + std::max(300.0f, size.x - wRight - 12 - x0 - 6);
+    const float y0 = top + 4, y1 = size.y - 36 - std::max(260.0f, (size.y - top) * 0.42f) - 6;
+    const float wFree = std::max(16.0f, x1 - x0), hFree = std::max(9.0f, y1 - y0);
+    const float w = std::min(wFree, hFree * 16.0f / 9.0f), h = w * 9.0f / 16.0f;
+    const glm::vec4 rc(x0 + (wFree - w) * 0.5f, y0 + (hFree - h) * 0.5f, w, h);
+    if (!fFraction) return rc;
+    return {rc.x / std::max(1.0f, size.x), rc.y / std::max(1.0f, size.y), rc.z / std::max(1.0f, size.x), rc.w / std::max(1.0f, size.y)};
+}
+
 // The playhead's subtitle, the letterbox while the scene has the game paused with its bars, the title card (over the 3D
-// view, as the game shows them)
+// view, as the game shows them). Looking through: in the picture (the game's 16:9 frame in the view's free part, the
+// rest of the view dark, as a video editor's program monitor); else over the view's free part.
 void CCutsceneEditor::DrawPreviewOverlay()
 {
     if (!m_oid) return;
     ImDrawList* dl = ImGui::GetBackgroundDrawList();
     const ImVec2 size = ImGui::GetIO().DisplaySize;
     const float top = ImGui::GetFrameHeight();
-    const float yBottom = size.y - 36 - std::max(260.0f, (size.y - top) * 0.42f);   // (the timeline's top)
+    // the area: x0, y0 (its top), x1, y1 (its bottom: the timeline's top when not looking through)
+    float x0 = 0, x1 = size.x, y0 = top, y1 = size.y - 36 - std::max(260.0f, (size.y - top) * 0.42f);
+    if (m_fLookActive)
+    {
+        const glm::vec4 rc = RcPicture(false);
+        x0 = rc.x, y0 = rc.y, x1 = rc.x + rc.z, y1 = rc.y + rc.w;
+        // (around the picture: dark; the world spills past it otherwise)
+        const ImU32 colDark = IM_COL32(6, 8, 12, 255);
+        dl->AddRectFilled(ImVec2(0, 0), ImVec2(size.x, y0), colDark);
+        dl->AddRectFilled(ImVec2(0, y1), ImVec2(size.x, size.y), colDark);
+        dl->AddRectFilled(ImVec2(0, y0), ImVec2(x0, y1), colDark);
+        dl->AddRectFilled(ImVec2(x1, y0), ImVec2(size.x, y1), colDark);
+    }
+    const float wA = x1 - x0, hA = y1 - y0, xMid = (x0 + x1) * 0.5f;
     // the letterbox: from a "Pause game" with the subtitle box and its bars (what & 1, ai.cpp PauseGame) to its end
     bool fBars = false, fTitle = false;
     for (const CSCMD& c : m_acmd)
@@ -2721,16 +3147,18 @@ void CCutsceneEditor::DrawPreviewOverlay()
         if (c.kind == 0x44 && c.t0 <= m_t && m_t < c.t1) fTitle = true;
     }
     const bool fCustom = FCustomPresent();
-    if (fBars && m_fLookActive)
+    // (the game's cut-scene bars: about a seventh of the picture's height each)
+    const bool fBarsShown = fBars && m_fLookActive;
+    const float hBar = m_fLookActive ? hA * 0.142f : size.y * 0.1f;
+    if (fBarsShown)
     {
-        const float h = size.y * 0.1f;
-        dl->AddRectFilled(ImVec2(0, top), ImVec2(size.x, top + h), IM_COL32(0, 0, 0, 230));
-        dl->AddRectFilled(ImVec2(0, yBottom - h), ImVec2(size.x, yBottom), IM_COL32(0, 0, 0, 230));
+        dl->AddRectFilled(ImVec2(x0, y0), ImVec2(x1, y0 + hBar), IM_COL32(0, 0, 0, 255));
+        dl->AddRectFilled(ImVec2(x0, y1 - hBar), ImVec2(x1, y1), IM_COL32(0, 0, 0, 255));
     }
     // the fade at the playhead (as the game draws it: the whole frame in its colour)
     float rgbaFade[4];
     if (m_fLookActive && FFadeAt(m_t, rgbaFade))
-        dl->AddRectFilled(ImVec2(0, top), ImVec2(size.x, yBottom), ImGui::ColorConvertFloat4ToU32(ImVec4(rgbaFade[0], rgbaFade[1], rgbaFade[2], rgbaFade[3])));
+        dl->AddRectFilled(ImVec2(x0, y0), ImVec2(x1, y1), ImGui::ColorConvertFloat4ToU32(ImVec4(rgbaFade[0], rgbaFade[1], rgbaFade[2], rgbaFade[3])));
     // a caption (the game's hint box, its HUD ticker at the top) at the playhead: the game shows it only while the HUD is
     // up (not while the scene has the game paused)
     bool fPaused = false;
@@ -2745,17 +3173,17 @@ void CCutsceneEditor::DrawPreviewOverlay()
             if (text.empty()) continue;
             const bool fCard = FTitleCardClip(c);
             const float fs = ImGui::GetFontSize() * (fCard ? 2.0f : 1.0f);
-            const float wrap = std::min(size.x * 0.6f, 900.0f);
+            const float wrap = std::min(wA * 0.8f, 900.0f);
             const ImVec2 ts = ImGui::GetFont()->CalcTextSizeA(fs, FLT_MAX, wrap, text.c_str());
-            const ImVec2 p(size.x * 0.5f - ts.x * 0.5f, fCard ? (top + yBottom) * 0.5f - ts.y * 0.5f - (yBottom - top) * 0.08f
-                                                               : yBottom - (fBars && m_fLookActive ? size.y * 0.05f + ts.y * 0.5f : ts.y + 18.0f));
+            const ImVec2 p(xMid - ts.x * 0.5f, fCard ? (y0 + y1) * 0.5f - ts.y * 0.5f - hA * 0.08f
+                                                     : (fBarsShown ? y1 - hBar * 0.5f - ts.y * 0.5f : y1 - ts.y - 18.0f));
             if (fCard)
             {
-                dl->AddRectFilled(ImVec2(0, p.y - 14), ImVec2(size.x, p.y + ts.y + 14), IM_COL32(0, 0, 0, 150));
-                dl->AddRectFilled(ImVec2(0, p.y - 16), ImVec2(size.x, p.y - 14), IM_COL32(230, 180, 60, 200));
-                dl->AddRectFilled(ImVec2(0, p.y + ts.y + 14), ImVec2(size.x, p.y + ts.y + 16), IM_COL32(230, 180, 60, 200));
+                dl->AddRectFilled(ImVec2(x0, p.y - 14), ImVec2(x1, p.y + ts.y + 14), IM_COL32(0, 0, 0, 150));
+                dl->AddRectFilled(ImVec2(x0, p.y - 16), ImVec2(x1, p.y - 14), IM_COL32(230, 180, 60, 200));
+                dl->AddRectFilled(ImVec2(x0, p.y + ts.y + 14), ImVec2(x1, p.y + ts.y + 16), IM_COL32(230, 180, 60, 200));
             }
-            else if (!(fBars && m_fLookActive)) dl->AddRectFilled(ImVec2(p.x - 10, p.y - 6), ImVec2(p.x + ts.x + 10, p.y + ts.y + 6), IM_COL32(0, 0, 0, 160), 6.0f);
+            else if (!fBarsShown) dl->AddRectFilled(ImVec2(p.x - 10, p.y - 6), ImVec2(p.x + ts.x + 10, p.y + ts.y + 6), IM_COL32(0, 0, 0, 160), 6.0f);
             dl->AddText(nullptr, fs, p, fCard ? IM_COL32(250, 215, 120, 255) : IM_COL32(255, 255, 255, 255), text.c_str(), nullptr, wrap);
         }
     for (const CSCMD& c : m_acmd)
@@ -2763,9 +3191,9 @@ void CCutsceneEditor::DrawPreviewOverlay()
         {
             const std::string text = e.StrText(c.an[0]);
             if (text.empty()) continue;
-            const float wrap = std::min(size.x * 0.45f, 700.0f);
+            const float wrap = std::min(wA * 0.6f, 700.0f);
             const ImVec2 ts = ImGui::CalcTextSize(text.c_str(), nullptr, false, wrap);
-            const ImVec2 p(size.x * 0.5f - ts.x * 0.5f, top + (yBottom - top) * 0.08f);
+            const ImVec2 p(xMid - ts.x * 0.5f, y0 + hA * 0.08f);
             dl->AddRectFilled(ImVec2(p.x - 12, p.y - 8), ImVec2(p.x + ts.x + 12, p.y + ts.y + 8), IM_COL32(20, 30, 60, 210), 8.0f);
             dl->AddRect(ImVec2(p.x - 12, p.y - 8), ImVec2(p.x + ts.x + 12, p.y + ts.y + 8), IM_COL32(240, 200, 80, 255), 8.0f, 0, 2.0f);
             dl->AddText(nullptr, 0.0f, p, IM_COL32(255, 255, 255, 255), text.c_str(), nullptr, wrap);
@@ -2774,9 +3202,9 @@ void CCutsceneEditor::DrawPreviewOverlay()
     {
         const char* sz = T("(title card)");
         const ImVec2 ts = ImGui::CalcTextSize(sz);
-        dl->AddText(nullptr, ImGui::GetFontSize() * 2.0f, ImVec2(size.x * 0.5f - ts.x, (top + yBottom) * 0.5f - ts.y), st::u32(st::text), sz);
+        dl->AddText(nullptr, ImGui::GetFontSize() * 2.0f, ImVec2(xMid - ts.x, (y0 + y1) * 0.5f - ts.y), st::u32(st::text), sz);
     }
-    // the subtitle: the line playing at the playhead (as measured, else its clip)
+    // the subtitle: the line playing at the playhead (as measured, else its clip); in the bottom bar as the game's
     int idLine = -1;
     for (const auto& l : m_trace.aline)
         if (l.t0 <= m_t && m_t < l.t1) idLine = l.id;
@@ -2788,10 +3216,10 @@ void CCutsceneEditor::DrawPreviewOverlay()
         const std::string text = e.StrText(idLine);
         if (!text.empty())
         {
-            const float wrap = std::min(size.x * 0.6f, 900.0f);
+            const float wrap = std::min(wA * 0.8f, 900.0f);
             const ImVec2 ts = ImGui::CalcTextSize(text.c_str(), nullptr, false, wrap);
-            const ImVec2 p(size.x * 0.5f - ts.x * 0.5f, yBottom - (fBars && m_fLookActive ? size.y * 0.1f : 0.0f) - ts.y - 18);
-            dl->AddRectFilled(ImVec2(p.x - 10, p.y - 6), ImVec2(p.x + ts.x + 10, p.y + ts.y + 6), IM_COL32(0, 0, 0, 160), 6.0f);
+            const ImVec2 p(xMid - ts.x * 0.5f, fBarsShown ? y1 - hBar * 0.5f - ts.y * 0.5f : y1 - ts.y - 18);
+            if (!fBarsShown) dl->AddRectFilled(ImVec2(p.x - 10, p.y - 6), ImVec2(p.x + ts.x + 10, p.y + ts.y + 6), IM_COL32(0, 0, 0, 160), 6.0f);
             dl->AddText(nullptr, 0.0f, p, IM_COL32(255, 255, 255, 255), text.c_str(), nullptr, wrap);
         }
     }
@@ -3862,6 +4290,7 @@ bool CCutsceneEditor::FVerb(const std::string& verb, const std::string& arg)
         if (m_fByRun != (a[3] != 0)) { m_fByRun = a[3] != 0; BuildTracks(); }
         m_tApplied = -1.0f;
     }
+    else if (verb == "cutsurvey") Survey();   // the preview against what the game drew in view (notes/CUTSCENES)
     else if (verb == "cutscene")   // the scene at the playhead printed (the camera, the moved objects)
     {
         CAMERA cam;
@@ -3877,16 +4306,16 @@ bool CCutsceneEditor::FVerb(const std::string& verb, const std::string& arg)
         for (const auto& l : m_trace.aline)
             if (l.t0 <= m_t && m_t < l.t1) std::printf("editor: cut %d at %.2f: subtitle %d \"%s\"\n", m_oid, m_t, l.id, e.StrText(l.id).c_str());
         // the poses (the clip on each animated character at the playhead; its records' spread about its object record)
-        for (int oid : m_aoidAnimated)
+        for (const auto& k : m_aoidAnimated)
         {
-            LO* plo = PloOfOid(oid), *plAseg = nullptr;
+            LO* plo = PloOf(k[0], k[1], k[2]), *plAseg = nullptr;
             float tClip = 0.0f;
-            if (!plo || !FIsLoDerivedFrom(plo, EDCID(0x34)) || !FAnimOn(oid, m_t, plAseg, tClip)) continue;
+            if (!plo || !FIsLoDerivedFrom(plo, EDCID(0x34)) || !FAnimOn(k[0], m_t, plAseg, tClip)) continue;
             const POSE* pp = PposeAt(static_cast<ALO*>(plo), m_t);
             double sum = 0.0;
             if (pp)
                 for (const auto& [pxf, rel] : *pp) sum += glm::length(glm::vec3(rel[3]));
-            std::printf("editor: cut %d pose at %.2f: %s by clip %d at %.2f: %zu records, spread %.1f\n", m_oid, m_t, NameOf(oid).c_str(), plAseg->oid, tClip, pp ? pp->size() : 0, sum);
+            std::printf("editor: cut %d pose at %.2f: %s by clip %d at %.2f: %zu records, spread %.1f\n", m_oid, m_t, NameOf(k[0]).c_str(), plAseg->oid, tClip, pp ? pp->size() : 0, sum);
         }
     }
     else return false;
@@ -3910,6 +4339,7 @@ void CEditor::TimelineMenuItem()
 }
 
 bool CEditor::FTimelineOpen() const { return m_pcut && m_pcut->fOpen; }
+bool CEditor::FCutsceneLooking() const { return m_pcut && m_pcut->fOpen && m_pcut->FLooking(); }
 
 bool CEditor::FCutsceneVerb(const SCRIPTCMD& c)
 {

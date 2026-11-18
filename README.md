@@ -117,8 +117,8 @@ The full list is in **[docs/FEATURES.md](docs/FEATURES.md)**, the debug menu in
 ## Level editor (Sly 2)
 
 <p align="center">
-  <img src="docs/images/editor-cutscene.webp" alt="The cutscene editor playing the end of Rajan's boss fight on its timeline" width="800"><br>
-  <sub>The cutscene editor playing the end of Rajan's boss fight (Episode 3)</sub>
+  <img src="docs/images/editor-cutscene.webp" alt="The cutscene editor playing the end of Rajan's boss fight on its timeline: Neyla brings the Contessa" width="800"><br>
+  <sub>The cutscene editor playing the end of Rajan's boss fight: Neyla brings the Contessa (Episode 3)</sub>
 </p>
 
 The launcher comes with a level editor for Sly 2 (Windows and Linux): fly through any level, move and add objects,

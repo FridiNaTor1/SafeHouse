@@ -1367,6 +1367,8 @@
   "not a play session": "это не игровая сессия",
   "not a prefab file": "это не файл префаба",
   "not measured:": "не измерено:",
+  "not measured: the game crashed playing it": "не измерено: игра аварийно завершилась при воспроизведении",
+  "not measured: the game did not finish": "не измерено: игра не завершила воспроизведение",
   "nothing copied": "ничего не скопировано",
   "nothing in the selection can be duplicated (top-level objects and instances only)": "в выделении нечего дублировать (только объекты верхнего уровня и экземпляры)",
   "nothing in the selection is stored in the world file": "ничего из выделения не хранится в файле мира",

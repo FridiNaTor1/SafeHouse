@@ -33,6 +33,8 @@
 #include "smrun.h"
 #include "vecmat.h"
 #include "game/task3.h"
+#include "game/scptgame3.h"
+#include "game/scptrun3.h"
 
 #include <glm/glm.hpp>
 
@@ -41,11 +43,13 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <memory>
 #include <unordered_map>
 #include <vector>
 
 glm::mat3 BuildLookAtMatrixZ(const glm::vec3& vec);   // mat.h (orig3 0x11CBA0)
+void PrintRef(const CRef& ref, std::string* ps);       // bif.cpp (debug)
 
 namespace hackgame3
 {
@@ -481,7 +485,13 @@ void SyncChain()
         if (!FAlive(p)) continue;
         Wrap2479(p);
         LO* pnext = PloChainNext(i);
-        if (pnext && PloHackShipOther3(p) != pnext) SetHackShipOther3(p, pnext);
+        if (pnext && PloHackShipOther3(p) != pnext)
+        {
+            SetHackShipOther3(p, pnext);
+            if (FPrint())
+                for (int j = 0; j < s_g.cship; ++j)
+                    if (s_g.aship[size_t(j)] == pnext) std::printf("hackgame3: chain: player %d -> player %d\n", i + 1, j + 1);
+        }
     }
 }
 
@@ -496,12 +506,12 @@ void SyncChain()
 // (a second toucher is ignored), players 3 / 4's ships fire no alarm (313 = -1), and players 1 / 2's alarms wait until
 // every living player 3 / 4 is held in a dock, then fire in their docking order; the originals' 2399 / 2401 also open /
 // release their copies.
-struct EXITDOCK { LO* porig; LO* pcopy; };
+struct EXITDOCK { LO* porig; LO* pcopy; LO* ptrigger; bool fOpen; };   // (ptrigger: the copy's own trigger; fOpen: opened, not released)
 std::vector<EXITDOCK> s_aexit;
 std::unordered_map<const BASIC*, CRef> s_mpexit2399, s_mpexit2400, s_mpexit2401;
-std::vector<std::pair<LO*, int>> s_aalarmHeld;   // (player 1 / 2 docked while players 3 / 4 were out: ship, alarm)
 int s_cExitOpen = 0;                              // (original docks opened and not yet released)
 constexpr int kOidExitDock = 92941;
+constexpr float kDxExitCopy = 260.0f;   // (a copy beside its original, along the section's x)
 
 LO* PloDockHeld(LO* pdock) { CRef r = RefOpt(pdock, 2398); return r.m_tagk == TAGK_Basic ? dynamic_cast<LO*>(r.m_pbasic) : nullptr; }
 LO* PloCopyOfDock(LO* p)
@@ -520,6 +530,15 @@ CRef ThunkExit2399(BASIC* pbasic, int, CRef*)
     {
         ++s_cExitOpen;
         CallOpt(pcopy, 2399);
+        // (the open clip adds its dock's trigger by the original's oid: the copy's own trigger added here)
+        for (EXITDOCK& e : s_aexit)
+            if (e.pcopy == pcopy && e.ptrigger)
+            {
+                e.fOpen = true;
+                AddLo(g_psw, e.ptrigger);
+                if (FPrint()) std::printf("hackgame3: exit dock copy %p's trigger added (in the world %d, removed %d, the copy in %d)\n", (void*)pcopy, int(e.ptrigger->fInWorld),
+                                          int(e.ptrigger->fRemoved), int(pcopy->fInWorld));
+            }
         if (FPrint()) std::printf("hackgame3: exit dock %p open, its copy %p too\n", (void*)p, (void*)pcopy);
     }
     return CRef(TAGK_Void);
@@ -533,9 +552,16 @@ CRef ThunkExit2401(BASIC* pbasic, int, CRef*)
     {
         s_cExitOpen = std::max(0, s_cExitOpen - 1);
         CallOpt(pcopy, 2401);
+        for (EXITDOCK& e : s_aexit)
+            if (e.pcopy == pcopy && e.ptrigger)
+            {
+                e.fOpen = false;
+                RemoveLo(g_psw, e.ptrigger);
+            }
     }
     return CRef(TAGK_Void);
 }
+void FoldShots(int iplayer);
 CRef ThunkExit2400(BASIC* pbasic, int c, CRef* a)
 {
     auto it = s_mpexit2400.find(pbasic);
@@ -544,44 +570,36 @@ CRef ThunkExit2400(BASIC* pbasic, int c, CRef* a)
     LO* pship = a[0].m_tagk == TAGK_Basic ? dynamic_cast<LO*>(a[0].m_pbasic) : nullptr;
     // (one ship a dock)
     if (LO* pheld = PloDockHeld(pdock); pheld && pheld != pship) return CRef(TAGK_Void);
-    // (players 1 / 2 while a living player 3 / 4 is not held yet: the alarm held back)
     int iplayer = -1;
     for (int i = 0; i < s_g.cship; ++i)
         if (s_g.aship[size_t(i)] == pship) iplayer = i;
-    bool fHold = false;
-    if (iplayer == 0 || iplayer == 1)
-        for (int i = 2; i < s_g.cship; ++i)
-            if (LO* p = s_g.aship[size_t(i)]; FAlive(p) && HackShip3State(p) != 4) fHold = true;
     const int nAlarm = NOptRef(pship, 313, -1);
-    if (fHold && nAlarm != -1)
-    {
-        SetOptRef(pship, 313, RefN(-1));
-        CallRef(it->second, {a[0]});
-        SetOptRef(pship, 313, RefN(nAlarm));
-        s_aalarmHeld.push_back({pship, nAlarm});
-        if (FPrint()) std::printf("hackgame3: player %d docked, its alarm %d held for players 3 / 4\n", iplayer + 1, nAlarm);
-    }
-    else if (iplayer >= 2 && nAlarm != -1)
+    if (iplayer >= 2 && nAlarm != -1)
     {
         // (players 3 / 4 fire no alarm: the job's script knows two ships; their 313 is player 2's again once its splice
         // re-arms it at a round's start)
         SetOptRef(pship, 313, RefN(-1));
-        CallRef(it->second, {a[0]});
+        CallRef(it->second, {a[0], c > 1 ? a[1] : RefB(false)});
         SetOptRef(pship, 313, RefN(nAlarm));
         if (FPrint()) std::printf("hackgame3: player %d docked (no alarm)\n", iplayer + 1);
+        FoldShots(iplayer);
     }
     else
     {
-        CallRef(it->second, {a[0]});
+        CallRef(it->second, {a[0], c > 1 ? a[1] : RefB(false)});
         if (FPrint()) std::printf("hackgame3: player %d docked\n", iplayer + 1);
+        FoldShots(iplayer);
     }
     return CRef(TAGK_Void);
 }
+// (a method bound again by its module's start (an object's s0 runs when it enters the world: the exit docks at their
+// round) is wrapped again: called each step for the docks)
 void WrapProc(LO* p, int optid, std::unordered_map<const BASIC*, CRef>& mp, CRef (*pfn)(BASIC*, int, CRef*), int creq)
 {
-    if (!p || mp.count(p)) return;
+    if (!p) return;
     const CRef orig = RefOpt(p, optid);
     if (orig.m_tagk != TAGK_Proc) return;
+    if (FPrint() && mp.count(p)) std::printf("hackgame3: %d's method %d bound again: wrapped again\n", p->oid, optid);
     mp[p] = orig;
     auto pm = std::make_shared<CMethod>();
     pm->m_pbasic = p;
@@ -601,6 +619,55 @@ void RunModuleStart(LO* p)
         CallRef(*pref, {rself});
     }
 }
+void WrapExitDocks()
+{
+    // (a copy is in the world with its original: the sections' docks enter the world at their round)
+    for (const EXITDOCK& e : s_aexit)
+        if (e.porig->fInWorld != e.pcopy->fInWorld)
+        {
+            if (e.porig->fInWorld) AddLo(g_psw, e.pcopy);
+            else RemoveLo(g_psw, e.pcopy);
+            if (FPrint()) std::printf("hackgame3: exit dock copy %p %s the world with its original\n", (void*)e.pcopy, e.pcopy->fInWorld ? "in" : "out of");
+        }
+    // (the copy's trigger in the world while the copy is open and holds no ship: the open clip adds the original's by its
+    // oid and something takes the copy's own out again after it is added once)
+    for (const EXITDOCK& e : s_aexit)
+        if (e.ptrigger && e.pcopy->fInWorld)
+        {
+            const bool fWant = e.fOpen && !PloDockHeld(e.pcopy);
+            if (fWant && !e.ptrigger->fInWorld) AddLo(g_psw, e.ptrigger);
+            else if (!fWant && e.ptrigger->fInWorld) RemoveLo(g_psw, e.ptrigger);
+        }
+    for (const EXITDOCK& e : s_aexit)
+        for (LO* p : {e.porig, e.pcopy})
+        {
+            WrapProc(p, 2400, s_mpexit2400, ThunkExit2400, 2);
+            if (p == e.porig)
+            {
+                WrapProc(p, 2399, s_mpexit2399, ThunkExit2399, 0);
+                WrapProc(p, 2401, s_mpexit2401, ThunkExit2401, 0);
+            }
+        }
+}
+// The round's end alarms (94447 / 94448 on SCPT 3338: the exit docks' triggers' second handlers, block 94622, set them
+// when a ship first touches the dock; the script waits for both, then drops the ships): with three / four players held
+// back until every living player is held in a dock (state 4), then set in the order they came
+std::vector<int> s_anAlarmHeld;
+bool s_fAlarmRelease = false;
+bool FEveryoneDocked()
+{
+    for (int i = 0; i < s_g.cship; ++i)
+        if (LO* p = s_g.aship[size_t(i)]; FAlive(p) && HackShip3State(p) != 4) return false;
+    return true;
+}
+bool FHoldAlarm(SCPT3* ps, int n)
+{
+    if (s_fAlarmRelease || !ps || ps->oid != 3338 || (n != 94447 && n != 94448) || s_aexit.empty() || !FCurrent(g_psw)) return false;
+    if (FEveryoneDocked()) return false;
+    if (std::find(s_anAlarmHeld.begin(), s_anAlarmHeld.end(), n) == s_anAlarmHeld.end()) s_anAlarmHeld.push_back(n);
+    if (FPrint()) std::printf("hackgame3: alarm %d held until every player is docked\n", n);
+    return true;
+}
 // (OnWorldStart, three / four players: each original exit dock's copy beside it; players 3 / 4 fire no alarm)
 void MakeExitDocks(SW* psw)
 {
@@ -608,11 +675,12 @@ void MakeExitDocks(SW* psw)
     s_mpexit2399.clear();
     s_mpexit2400.clear();
     s_mpexit2401.clear();
-    s_aalarmHeld.clear();
+    s_anAlarmHeld.clear();
     s_cExitOpen = 0;
-    // (work in progress, s3-hack round 9: SLY3_HACKGAME4DOCKS=1; not on by default until a whole 4P round end docks by
-    // play: notes/HACK3_2026-11-12.md "Round 9")
-    if (s_g.cship < 3 || !std::getenv("SLY3_HACKGAME4DOCKS")) return;
+    // (three / four players only, by default since s3mp-hack (2026-11-18: every round's end docks by play with 3 and 4
+    // players); SLY3_HACKGAME4DOCKS=0: the old way (players 3 / 4 carried with players 1 / 2), for an A/B)
+    if (s_g.cship < 3) return;
+    if (const char* sz = std::getenv("SLY3_HACKGAME4DOCKS"); sz && !std::strcmp(sz, "0")) return;
     std::vector<LO*> aorig;
     for (const auto& up : psw->aploAll)
         if (up->oid == kOidExitDock && up->Cid() == S3CID(0x47) && up->paloParent) aorig.push_back(up.get());
@@ -621,66 +689,303 @@ void MakeExitDocks(SW* psw)
         ALO* pparent = porig->paloParent;
         LO* pcopy = PloPcCloneIntoWorld(psw, porig, porig->fInWorld, pparent);
         if (!pcopy) continue;
-        // (local (0, +-100) -> (0, +-300): 200 farther from the section's middle)
-        const glm::vec3 vp = PosLoWorld(pparent), vo = PosLoWorld(porig);
-        SetAloPos(static_cast<ALO*>(pcopy), vo + glm::vec3(0.0f, vo.y < vp.y ? -200.0f : 200.0f, 0.0f));
+        // (local (0, +-100) -> (260, +-100): beside the original, its mouth facing out the same way (the docks are C shapes
+        // open away from the section's middle, so a dock farther out would close the way into the original))
+        const glm::vec3 vo = PosLoWorld(porig);
+        SetAloPos(static_cast<ALO*>(pcopy), vo + glm::vec3(kDxExitCopy, 0.0f, 0.0f));
         // (the dock's trigger 92891 is out of the world until the open clip adds it (its option 27): the copy skips removed
         // children (brx.cpp PloCloneLo), so the copy had no trigger and its clip added the original's: cloned here, out of
         // the world as the original's)
+        LO* ptrigger = nullptr;
         for (LO* pc : std::vector<LO*>(porig->aploOwned))
             if (pc->fRemoved && pc->Cid() == sly3::CID_TRIGGER)
-                if (LO* pcNew = PloCloneLo(pc, psw, static_cast<ALO*>(pcopy))) RemoveLo(psw, pcNew);
+                if (LO* pcNew = PloCloneLo(pc, psw, static_cast<ALO*>(pcopy)))
+                {
+                    ptrigger = pcNew;
+                    // (where the original's is from its dock: 87 beyond it, away from the section's middle)
+                    SetAloPos(static_cast<ALO*>(pcNew), PosLoWorld(pcopy) + (PosLoWorld(pc) - PosLoWorld(porig)));
+                    RemoveLo(psw, pcNew);
+                    if (FPrint()) std::printf("hackgame3: exit dock copy's trigger at %.0f %.0f %.0f (the copy at %.0f %.0f)\n", PosLoWorld(pcNew).x, PosLoWorld(pcNew).y,
+                                              PosLoWorld(pcNew).z, PosLoWorld(pcopy).x, PosLoWorld(pcopy).y);
+                }
         RunModuleStart(pcopy);
         for (LO* pchild : pcopy->aploOwned) RunModuleStart(pchild);
-        // its state machines: the original's SMAs' SMs applied to the copy too (the SMs' post-load 0x1F00C8 ran at the
-        // world's start, before the copy was made; without the SMA the copy's 2399 found none ((dock 190) 92944) and its
-        // open clip never put its trigger 92891 in the world: s3-hack round 11)
-        {
-            std::vector<SMA*> aorigSma;
-            for (SMA* psma : g_apsma)
-                if (psma->palo == porig && psma->psm) aorigSma.push_back(psma);
-            for (SMA* psma : aorigSma)
-            {
-                bool fHas = false;
-                for (SMA* q : g_apsma) fHas = fHas || (q->palo == pcopy && q->psm == psma->psm);
-                if (!fHas) PsmaApplySm(psma->psm, static_cast<ALO*>(pcopy), psma->psm->oidStateInitial, psma->psm->grfaplInitial);
-                if (FPrint()) std::printf("hackgame3: exit dock copy %p: SM %d %s\n", (void*)pcopy, psma->psm->oid, fHas ? "had its SMA" : "applied");
-            }
-        }
-        s_aexit.push_back({porig, pcopy});
-        if (FPrint()) std::printf("hackgame3: exit dock %d (section %d) copied at %.0f %.0f %.0f\n", porig->oid, pparent->oid, vo.x, vo.y + (vo.y < vp.y ? -200.0f : 200.0f), vo.z);
+        // (no state machine for the copy: the dock's SM 92944 clips (open 93156, held, closed) find their trigger 92891 by oid
+        // and from a copy reached the original's, taking it out of the world at a copy's release (a later round's original
+        // could not be docked); the copy's own trigger is put in / out of the world here instead: WrapExitDocks)
+        s_aexit.push_back({porig, pcopy, ptrigger, false});
+        if (FPrint()) std::printf("hackgame3: exit dock %d (section %d) copied at %.0f %.0f %.0f\n", porig->oid, pparent->oid, vo.x + kDxExitCopy, vo.y, vo.z);
     }
-    for (const EXITDOCK& e : s_aexit)
-        for (LO* p : {e.porig, e.pcopy})
-        {
-            WrapProc(p, 2400, s_mpexit2400, ThunkExit2400, 1);
-            if (p == e.porig)
-            {
-                WrapProc(p, 2399, s_mpexit2399, ThunkExit2399, 0);
-                WrapProc(p, 2401, s_mpexit2401, ThunkExit2401, 0);
-            }
-        }
+    WrapExitDocks();
+    g_pfnScptAlarmHold3 = FHoldAlarm;
     for (int i = 2; i < s_g.cship; ++i) SetOptRef(s_g.aship[size_t(i)], 313, RefN(-1));
 }
+// ---- PC, three / four players: the tally counts every player. The job's stats (module 138's s5023 (ship, stat, n):
+// group 0 for player 1's ship 93052, else group 1; the stats 0 kills, 1 deaths, 2 power-ups, 3 shots, 4 docks, read by
+// the round's bonuses (94455: no deaths, power-ups, accuracy) and the tally 3335's 1807 / 1808) know two players: players
+// 3 / 4 are counted with players 1 / 2 (3 with 1, 4 with 2: the original's two columns), their kills credited as the job's
+// 1949 credits players 1 / 2's (a piece's ship (552), the laser both), their shots (2475, read at the round's end by
+// 94454) added to their partner's when they dock. Two players: nothing here (the original's).
+LO* s_pjob = nullptr;
+CRef s_ref5023;
+std::unordered_map<const BASIC*, CRef> s_mpjob1949;
+LO* PloStatShip(LO* p)
+{
+    for (int i = 2; i < s_g.cship; ++i)
+        if (p && p == s_g.aship[size_t(i)]) return s_g.aship[size_t(i - 2)];
+    return p;
+}
+CRef Thunk5023(BASIC*, int c, CRef* a)
+{
+    if (c < 3) return CRef(TAGK_Void);
+    CRef r0 = a[0];
+    if (LO* p = r0.m_tagk == TAGK_Basic ? dynamic_cast<LO*>(r0.m_pbasic) : nullptr; p && PloStatShip(p) != p)
+    {
+        if (FPrint()) std::printf("hackgame3: stat %d +%d of a player 3 / 4 counted with its partner\n", a[1].RefCoerceS32().m_n, a[2].RefCoerceS32().m_n);
+        r0.SetBasic(PloStatShip(p));
+    }
+    return CallRef(s_ref5023, {r0, a[1], a[2]});
+}
+CRef Thunk1949(BASIC* pbasic, int c, CRef* a)
+{
+    auto it = s_mpjob1949.find(pbasic);
+    if (it == s_mpjob1949.end() || c < 1) return CRef(TAGK_Void);
+    CallRef(it->second, {a[0]});
+    LO* pdead = a[0].m_tagk == TAGK_Basic ? dynamic_cast<LO*>(a[0].m_pbasic) : nullptr;
+    CRef rk = RefOpt(pdead, 1447);
+    LO* pkiller = rk.m_tagk == TAGK_Basic ? dynamic_cast<LO*>(rk.m_pbasic) : nullptr;
+    if (pkiller && FCidDerivedFrom(pkiller->Cid(), 0x4C))   // (a piece: its ship, 552)
+    {
+        CRef rs = RefOpt(pkiller, 552);
+        pkiller = rs.m_tagk == TAGK_Basic ? dynamic_cast<LO*>(rs.m_pbasic) : nullptr;
+    }
+    if (pkiller && PloStatShip(pkiller) != pkiller)
+    {
+        CRef rship;
+        rship.SetBasic(pkiller);
+        CRef aref[3] = {rship, RefN(0), RefN(1)};
+        Thunk5023(nullptr, 3, aref);
+    }
+    return CRef(TAGK_Void);
+}
+// The respawn (block 93165 module 135): a ship's death (event 12, s20) schedules s4981 2 s later through s4961, which keeps
+// the timer's id in s4952 for player 1's ship (s4970), else in s4953; s4981 adds the ship back (41), restores it (948),
+// hands it to the job (2466) and cancels / clears that slot (the game over test s4983 reads both). With three / four
+// players a copy took player 2's slot: two deaths close together overwrote each other's id and one respawn cancelled the
+// other's timer (a dead player never came back and the round's end waited for it forever). Players 3 / 4 keep the
+// original's code but not its slots: s4952 / s4953 saved around their calls, -1 while s4981 runs (no cancel of player 1 /
+// 2's timer). Two players: nothing wrapped.
+LO* s_pjobRespawn = nullptr;
+CRef s_ref4961, s_ref4981;
+CRef ThunkRespawn(const CRef& ref, int c, CRef* a, bool fClear)
+{
+    if (c < 2) return CRef(TAGK_Void);
+    LO* pship = a[1].m_tagk == TAGK_Basic ? dynamic_cast<LO*>(a[1].m_pbasic) : nullptr;
+    const bool fExtra = pship && PloStatShip(pship) != pship;
+    CRef* p52 = fExtra && s_pjobRespawn && s_pjobRespawn->pframe ? s_pjobRespawn->pframe->PrefFindBinding(SYMID(4952), 0) : nullptr;
+    CRef* p53 = fExtra && s_pjobRespawn && s_pjobRespawn->pframe ? s_pjobRespawn->pframe->PrefFindBinding(SYMID(4953), 0) : nullptr;
+    const CRef r52 = p52 ? *p52 : CRef(), r53 = p53 ? *p53 : CRef();
+    if (fClear && p52 && p53)
+    {
+        *p52 = RefN(-1);
+        *p53 = RefN(-1);
+    }
+    CRef r = CallRef(ref, {a[0], a[1]});
+    if (p52 && p53)
+    {
+        *p52 = r52;
+        *p53 = r53;
+        if (FPrint()) std::printf("hackgame3: %s of a player 3 / 4 (player 1 / 2's respawn slots kept)\n", fClear ? "respawn" : "respawn scheduled");
+    }
+    return r;
+}
+CRef Thunk4961(BASIC*, int c, CRef* a) { return ThunkRespawn(s_ref4961, c, a, false); }
+CRef Thunk4981(BASIC*, int c, CRef* a) { return ThunkRespawn(s_ref4981, c, a, true); }
+// The respawn's start dock (2466 on SCPT 3338, block 93165 module 138): player 1's ship to the round's start dock s5000[0],
+// any other to s5000[1]; the dock (block 92886) holds one ship (2398, its player's pad lock s4631) until its clip calls
+// 2401 (the release: state 1). With three / four players two ships respawning at that dock within its hold took each
+// other's place: the first was never released (held in state 4 for the rest of the game; the round's end waited for it).
+// A dock still holding another ship releases it (its own 2401) before it takes the next. Two players: not wrapped.
+std::unordered_map<const BASIC*, CRef> s_mpjob2466;
+CRef Thunk2466(BASIC* pbasic, int c, CRef* a)
+{
+    auto it = s_mpjob2466.find(pbasic);
+    if (it == s_mpjob2466.end() || c < 1) return CRef(TAGK_Void);
+    LO* pship = a[0].m_tagk == TAGK_Basic ? dynamic_cast<LO*>(a[0].m_pbasic) : nullptr;
+    LO* pjob = dynamic_cast<LO*>(pbasic);
+    if (pship && pjob && pjob->pframe && s_g.cship >= 3)
+        if (const CRef* p00 = pjob->pframe->PrefFindBinding(SYMID(5000), 0); p00 && p00->m_tagk == TAGK_Pair)
+        {
+            const CPair* pp = p00->m_ppair.get();
+            if (pp && pship != s_g.aship[0]) pp = pp->m_ppairNext.get();
+            LO* pdock = pp ? dynamic_cast<LO*>(pp->m_ref.m_pbasic) : nullptr;
+            const CRef rheld = pdock ? RefOpt(pdock, 2398) : CRef();
+            LO* pheld = rheld.m_tagk == TAGK_Basic ? dynamic_cast<LO*>(rheld.m_pbasic) : nullptr;
+            if (pheld && pheld != pship && HackShip3State(pheld) == 4)
+            {
+                if (FPrint()) std::printf("hackgame3: start dock %d still holds a ship: released before the next respawn\n", pdock->oid);
+                CallOpt(pdock, 2401, {});
+            }
+        }
+    return CallRef(it->second, {a[0]});
+}
+void WrapJobRespawn(SW* psw)
+{
+    s_pjobRespawn = nullptr;
+    s_ref4961 = s_ref4981 = CRef();
+    if (s_g.cship < 3) return;
+    for (const auto& up : psw->aploAll)
+    {
+        LO* p = up.get();
+        if (!p->pframe) continue;
+        CRef* p61 = p->pframe->PrefFindBinding(SYMID(4961), 0);
+        CRef* p81 = p->pframe->PrefFindBinding(SYMID(4981), 0);
+        if (!p61 || !p81 || p61->m_tagk != TAGK_Proc || p81->m_tagk != TAGK_Proc || !p->pframe->PrefFindBinding(SYMID(4953), 0)) continue;
+        s_pjobRespawn = p;
+        s_ref4961 = *p61;
+        s_ref4981 = *p81;
+        auto wrap = [&](CRef* pref, PFNTHUNK pfn) {
+            auto pm = std::make_shared<CMethod>();
+            pm->m_pbasic = p;
+            pm->m_crefReq = 2;
+            pm->m_pfnthunk = pfn;
+            pref->SetMethod(pm);
+        };
+        wrap(p61, Thunk4961);
+        wrap(p81, Thunk4981);
+        s_mpjob2466.clear();
+        for (const auto& uq : psw->aploAll)
+            if (RefOpt(uq.get(), 2466).m_tagk == TAGK_Proc) WrapProc(uq.get(), 2466, s_mpjob2466, Thunk2466, 1);
+        if (FPrint()) std::printf("hackgame3: the job's respawn (%d) keeps players 3 / 4 out of players 1 / 2's slots\n", p->oid);
+        break;
+    }
+}
+void WrapJobStats(SW* psw)
+{
+    s_pjob = nullptr;
+    s_ref5023 = CRef();
+    s_mpjob1949.clear();
+    if (s_g.cship < 3) return;
+    for (const auto& up : psw->aploAll)
+        if (LO* p = up.get(); p->pframe && RefOpt(p, 1949).m_tagk == TAGK_Proc)
+            if (CRef* pref = p->pframe->PrefFindBinding(SYMID(5023), 0); pref && pref->m_tagk == TAGK_Proc)
+            {
+                s_pjob = p;
+                s_ref5023 = *pref;
+                auto pm = std::make_shared<CMethod>();
+                pm->m_pbasic = p;
+                pm->m_crefReq = 3;
+                pm->m_pfnthunk = Thunk5023;
+                pref->SetMethod(pm);
+                WrapProc(p, 1949, s_mpjob1949, Thunk1949, 1);
+                if (FPrint()) std::printf("hackgame3: the job's stats (%d) count players 3 / 4 with players 1 / 2\n", p->oid);
+                break;
+            }
+}
+// (a player 3 / 4 docked: its shots this round to its partner's, read by the round's end (94454))
+void FoldShots(int iplayer)
+{
+    if (iplayer < 2 || iplayer >= s_g.cship) return;
+    LO* p = s_g.aship[size_t(iplayer)];
+    LO* pl = s_g.aship[size_t(iplayer - 2)];
+    const int n = NOptRef(p, 2475, 0);
+    if (n <= 0) return;
+    SetOptRef(pl, 2475, RefN(NOptRef(pl, 2475, 0) + n));
+    SetOptRef(p, 2475, RefN(0));
+    if (FPrint()) std::printf("hackgame3: player %d's %d shots counted with player %d\n", iplayer + 1, n, iplayer - 1);
+}
+
 // (each step: players 1 / 2's held alarms fired once every living player 3 / 4 is held in a dock)
 void SyncExitAlarms()
 {
-    if (s_aalarmHeld.empty()) return;
-    for (int i = 2; i < s_g.cship; ++i)
-        if (LO* p = s_g.aship[size_t(i)]; FAlive(p) && HackShip3State(p) != 4) return;
-    LO* pscpt = PloFindRelative(nullptr, 3338, 5);
-    for (const auto& [pship, nAlarm] : s_aalarmHeld)
+    WrapExitDocks();
+    if (s_anAlarmHeld.empty() || !FEveryoneDocked()) return;
+    if (SCPT3* ps = PscptOfLo3(PloFindRelative(nullptr, 3338, 5)))
     {
-        if (FPrint()) std::printf("hackgame3: players 3 / 4 docked: alarm %d fired\n", nAlarm);
-        if (pscpt) CallOpt(pscpt, 998, {RefN(nAlarm), RefN(0)});
+        s_fAlarmRelease = true;
+        for (int n : s_anAlarmHeld)
+        {
+            if (FPrint()) std::printf("hackgame3: every player docked: alarm %d set\n", n);
+            SetScptAlarm3(ps, n, true);
+        }
+        s_fAlarmRelease = false;
     }
-    s_aalarmHeld.clear();
+    s_anAlarmHeld.clear();
 }
 
 // (tests: SLY3_HACKGAMEPILOT="P:X Y@F;...": from frame F player P's (1..4, a scripted seat) left stick steers its ship
 // toward the world point (X, Y) through the camera's facing, as a route's "move" does for player 1: docking by play)
 struct PILOT { int iplayer, frame; float x, y; };
 std::vector<PILOT> s_apilot;
+// ("P:dock") player iseat's own open exit dock this round: players 1 / 3 the -y side, 2 / 4 the +y side (the ships'
+// sides at a round's start), players 1 / 2 the inner dock (the original's), 3 / 4 the outer one (the copy); the goal its
+// mouth (-x) first, then the dock
+// (a dock's trigger 92891: the original's child, the copy's own)
+LO* PloDockTrigger(LO* pdock)
+{
+    for (const EXITDOCK& e : s_aexit)
+        if (e.pcopy == pdock) return e.ptrigger;
+    for (LO* pc : pdock->aploOwned)
+        if (pc->Cid() == sly3::CID_TRIGGER) return pc;
+    return nullptr;
+}
+bool FDockGoal(int iseat, const glm::vec3& pos, glm::vec2* pgoal)
+{
+    // the open docks of the player's kind: players 1 / 2 the originals, 3 / 4 the copies beside them (two players: the
+    // originals); a dock another ship holds is not free
+    const bool fCopy = iseat >= 2;
+    std::vector<LO*> adock;
+    for (const auto& up : g_psw->aploAll)
+        if (up->oid == kOidExitDock && !fCopy) adock.push_back(up.get());
+    if (fCopy)
+        for (const EXITDOCK& e : s_aexit) adock.push_back(e.pcopy);
+    LO* pship = s_g.aship[size_t(iseat)];
+    std::vector<LO*> afree;
+    for (LO* p : adock)
+    {
+        if (p->Cid() != S3CID(0x47) || !p->paloParent || !p->fInWorld) continue;
+        if (!fCopy && PloCopyOfDock(p) == nullptr && !s_aexit.empty()) continue;   // (a copy listed by its oid)
+        LO* pt = PloDockTrigger(p);
+        if (!pt || !pt->fInWorld) continue;
+        if (LO* ph = PloDockHeld(p); ph && ph != pship) continue;
+        afree.push_back(p);
+    }
+    if (afree.empty()) return false;
+    // (the partner of the same kind (1 / 2, 3 / 4) still flying: the pair's docks by the shorter total way, so the two do
+    // not head for the same one)
+    auto dist = [](LO* pd, LO* ps) { return glm::length(glm::vec2(PosLoWorld(pd)) - glm::vec2(PosLoWorld(ps))); };
+    LO* pdock = afree[0];
+    for (LO* p : afree)
+        if (dist(p, pship) < dist(pdock, pship)) pdock = p;
+    const int ipartner = iseat ^ 1;
+    LO* ppartner = ipartner < s_g.cship ? s_g.aship[size_t(ipartner)] : nullptr;
+    if (afree.size() >= 2 && ppartner && FAlive(ppartner) && HackShip3State(ppartner) != 4)
+    {
+        float best = 1e30f;
+        for (LO* p : afree)
+            for (LO* q : afree)
+                if (p != q && dist(p, pship) + dist(q, ppartner) < best)
+                {
+                    best = dist(p, pship) + dist(q, ppartner);
+                    pdock = p;
+                }
+    }
+    // (the dock's trigger 92891 lies beyond the dock's body, 87 farther from the section's middle: the dock is entered
+    // from outside, toward the middle, along the trigger's line from 300 short of it)
+    const glm::vec3 vt = PosLoWorld(PloDockTrigger(pdock));
+    const glm::vec2 a(0.0f, vt.y > PosLoWorld(pdock).y ? -1.0f : 1.0f);   // (from outside, toward the section's middle)
+    const glm::vec2 t(vt.x, vt.y), p(pos.x, pos.y);
+    const float along = glm::dot(p - t, a);            // (< 0: short of the trigger)
+    const float off = glm::length((p - t) - along * a); // (from the line)
+    // (a ship already sitting in the trigger when the dock opened (it landed there) never enters it: out and in again)
+    static bool s_afBack[kMaxShips] = {};
+    bool& fBack = s_afBack[size_t(iseat)];
+    if (glm::length(p - t) < 40.0f) fBack = true;
+    if (fBack && along < -250.0f) fBack = false;
+    if (fBack || off > 80.0f || (off > 25.0f && along > -200.0f)) *pgoal = t - 300.0f * a;
+    else *pgoal = t + std::min(0.0f, along + 100.0f) * a;   // (a point ahead on the line: held on it)
+    return true;
+}
 void ScriptedSeatPilot(int iseat, int frame, float a[4], uint16_t*)
 {
     static const bool s_fParsed = [] {
@@ -690,18 +995,45 @@ void ScriptedSeatPilot(int iseat, int frame, float a[4], uint16_t*)
                 PILOT p{};
                 if (std::sscanf(q, "%d:%f %f@%d", &p.iplayer, &p.x, &p.y, &p.frame) == 4) s_apilot.push_back(p);
                 else if (std::sscanf(q, "%d:%f %f@open", &p.iplayer, &p.x, &p.y) == 3) { p.frame = -1; s_apilot.push_back(p); }   // (once the exit docks open)
+                else if (std::strncmp(std::strchr(q, ':') ? std::strchr(q, ':') : q, ":dock", 5) == 0 && std::sscanf(q, "%d", &p.iplayer) == 1)
+                {
+                    p.frame = -2;   // (every round: into its own open exit dock, FDockGoal)
+                    s_apilot.push_back(p);
+                }
             }
         return true;
     }();
     (void)s_fParsed;
     if (!FCurrent(g_psw) || iseat < 0 || iseat >= s_g.cship) return;   // (player 1 too when its seat is scripted)
     const PILOT* pcur = nullptr;
+    bool fDock = false;
     for (const PILOT& p : s_apilot)
-        if (p.iplayer == iseat + 1 && (p.frame < 0 ? s_cExitOpen > 0 : p.frame <= frame) && (!pcur || pcur->frame < p.frame)) pcur = &p;
+    {
+        if (p.iplayer != iseat + 1) continue;
+        if (p.frame == -2) fDock = true;
+        else if ((p.frame == -1 ? s_cExitOpen > 0 : p.frame <= frame) && (!pcur || pcur->frame < p.frame)) pcur = &p;
+    }
     LO* pship = s_g.aship[size_t(iseat)];
-    if (!pcur || !pship || !pship->fInWorld) return;
+    if (!pship || !pship->fInWorld || HackShip3State(pship) == 4) return;
     const glm::vec3 pos = PosAloCenter(static_cast<ALO*>(pship));
-    glm::vec2 d(pcur->x - pos.x, pcur->y - pos.y);
+    glm::vec2 goal(0.0f);
+    if (fDock && FDockGoal(iseat, pos, &goal)) {}
+    else if (pcur) goal = glm::vec2(pcur->x, pcur->y);
+    else return;
+    // (stuck against a dock's body or another ship for 2 s: half a second toward the section's middle, then on)
+    struct STUCK { glm::vec2 pos{1e9f}; int frame = 0, frameEscape = -1; };
+    static STUCK s_astuck[kMaxShips];
+    STUCK& st = s_astuck[size_t(iseat)];
+    if (frame - st.frame >= 120)
+    {
+        if (glm::length(glm::vec2(pos) - st.pos) < 20.0f && glm::length(goal - glm::vec2(pos)) > 60.0f) st.frameEscape = frame;
+        st.pos = glm::vec2(pos);
+        st.frame = frame;
+    }
+    if (st.frameEscape >= 0 && frame - st.frameEscape < 30) goal = glm::vec2(pos.x - 200.0f, pos.y);
+    // (to the other side of the section: round the docks' row (x 0 .. 260 at y +-100) on the -x side)
+    if (fDock && (goal.y < 0.0f) != (pos.y < 0.0f) && std::fabs(goal.y - pos.y) > 150.0f && pos.x > -250.0f) goal = glm::vec2(-350.0f, pos.y);
+    glm::vec2 d(goal.x - pos.x, goal.y - pos.y);
     const float l = glm::length(d);
     if (l < 30.0f) return;
     glm::vec2 f(g_cm.mat[0].x, g_cm.mat[0].y);
@@ -713,7 +1045,7 @@ void ScriptedSeatPilot(int iseat, int frame, float a[4], uint16_t*)
     a[1] = k * (d.x * f.x + d.y * f.y);   // (along it: stick up)
     if (static const bool s_f = [] { const char* sz = std::getenv("SLY3_HACKGAMEPRINT"); return sz && std::atoi(sz) >= 3; }(); s_f && frame % 60 == 0)
         std::printf("hackgame3: pilot %d frame %d at %.0f %.0f -> %.0f %.0f stick %.2f %.2f state %d\n", iseat + 1, frame, pos.x, pos.y,
-                    pcur->x, pcur->y, a[0], a[1], HackShip3State(pship));
+                    goal.x, goal.y, a[0], a[1], HackShip3State(pship));
 }
 
 // players 3 / 4 go through the rounds with players 1 / 2 (the job's script knows two ships): held / falling with them,
@@ -726,7 +1058,7 @@ void SyncExtraShips()
         LO* pl = s_g.aship[size_t(i - 2)];
         if (!p || !pl || !p->fInWorld || !pl->fInWorld) continue;
         const int sl = HackShip3State(pl), s = HackShip3State(p);
-        if (sl == 4 && s_cExitOpen > 0) continue;   // (a round's end: players 3 / 4 fly into their own exit docks)
+        if (s_cExitOpen > 0) continue;   // (a round's end: each player flies into its own exit dock, held there on its own)
         if ((sl == 4 || sl == 5) && s != sl && s != 6)
         {
             const glm::vec3 v = PosLoWorld(pl);
@@ -737,17 +1069,111 @@ void SyncExtraShips()
     }
 }
 
+// (log, SLY3_HACKGAMEPRINT) a round's end: every ship held in a dock (state 4), then dropped to the next level (5)
+int s_iround = 0;
+bool s_fAllHeld = false, s_fOpenSeen = false;
+void LogRounds()
+{
+    if (!FPrint()) return;
+    bool fAll = true, fAny = false, fFall = false;
+    for (int i = 0; i < s_g.cship; ++i)
+    {
+        LO* p = s_g.aship[size_t(i)];
+        if (!p || !p->fInWorld) continue;
+        const int st = HackShip3State(p);
+        fAny = true;
+        fAll = fAll && st == 4;
+        fFall = fFall || st == 5;
+    }
+    // (a round's end: its exit docks opened (their triggers in the world); at a round's start the ships are held too)
+    for (const auto& up : g_psw->aploAll)
+        if (up->oid == kOidExitDock && up->fInWorld)
+            for (LO* pc : up->aploOwned) s_fOpenSeen = s_fOpenSeen || (pc->Cid() == sly3::CID_TRIGGER && pc->fInWorld);
+    if (fAny && fAll && s_fOpenSeen && !s_fAllHeld)
+    {
+        s_fAllHeld = true;
+        std::printf("hackgame3: round %d over: every player docked (%d ships, t %.1f)\n", s_iround + 1, s_g.cship, g_clock.t);
+    }
+    if (s_fAllHeld && fFall)
+    {
+        s_fAllHeld = false;
+        s_fOpenSeen = false;
+        ++s_iround;
+        std::printf("hackgame3: round %d starts (t %.1f)\n", s_iround + 1, g_clock.t);
+    }
+}
+
+// the job's object (its splice frame holds the rounds' state: s1946 the round, s5011 / s4626 the entry, s5015 the boss,
+// s4997 the round's board): the object with the kill method 1949
+LO* PloJobScpt()
+{
+    static LO* s_pscpt = nullptr;
+    static uint32_t s_serialScpt = 0;
+    if (s_serialScpt != g_psw->serial)
+    {
+        s_pscpt = nullptr;
+        s_serialScpt = g_psw->serial;
+        // (three / four players: 1949 wrapped by WrapJobStats, a method)
+        for (const auto& up : g_psw->aploAll)
+            if (const TAGK k = RefOpt(up.get(), 1949).m_tagk; up->pframe && (k == TAGK_Proc || k == TAGK_Method) && up->pframe->PrefFindBinding(SYMID(5015), 0))
+                s_pscpt = up.get();
+    }
+    return s_pscpt && s_pscpt->pframe ? s_pscpt : nullptr;
+}
+
+// (debug) the boss of round 6 (92856, one under each of the boss level's boards) is in the world but the job has not
+// taken it as the round's boss yet: its entry (5 92856) is read after the first entry (4 -1), about 2 s after the boss
+// enters. A boss killed before that is not the job's s5015 when its kill (1949) comes, so the round's end (94444) never
+// comes (the original's script the same: in play no bomb can come that early, the power-ups being dropped by the round's
+// enemies). The test bombs wait for it.
+bool FBossNotTaken()
+{
+    LO* pjob = PloJobScpt();
+    if (!pjob) return false;
+    const CRef* pref = pjob->pframe->PrefFindBinding(SYMID(5015), 0);
+    const LO* pboss = pref ? dynamic_cast<const LO*>(pref->m_pbasic) : nullptr;
+    for (LO* q : g_psw->mpcidaplo[0x4B])   // (Sly 3's HACKENEMY)
+        if (q->oid == 92856 && q->fInWorld && q != pboss) return true;
+    return false;
+}
+
 // (debug / screenshots: SLY3_HACKGAMEPOWER="P:N@F;..." player P (1-based) takes power-up N at frame F of the game)
 void DebugPowerUps()
 {
-    static const char* s_sz = std::getenv("SLY3_HACKGAMEPOWER");
-    if (!s_sz) return;
     static int s_frame = 0;
     ++s_frame;
+    // (debug: SLY3_HACKGAMEKILL="P@F;..." player P's ship dies at frame F of the game: its hit points to 0, its dying state 6
+    // (the death's task event 0xC and the job's respawn follow as for a death by play))
+    // (only where play can kill it: driven, state 1 (hits are refused while hit / docked / held / falling / dying); a
+    // kill that comes in another state waits for it: e.g. one in a round's drop (state 5) respawned the ship at the old
+    // level's start dock, out of reach)
+    static std::vector<bool> s_afKillDone;
+    if (static const char* s_szKill = std::getenv("SLY3_HACKGAMEKILL"); s_szKill)
+        for (const char* q = s_szKill; q && *q; q = std::strchr(q, ';') ? std::strchr(q, ';') + 1 : nullptr)
+        {
+            int ip = 0, f = 0;
+            const size_t ik = size_t(std::count(s_szKill, q, ';'));
+            if (s_afKillDone.size() <= ik) s_afKillDone.resize(ik + 1, false);
+            if (std::sscanf(q, "%d@%d", &ip, &f) != 2 || f > s_frame || s_afKillDone[ik]) continue;
+            if (LO* p = PloShip(ip - 1); p && FAlive(p) && HackShip3State(p) == 1)
+            {
+                s_afKillDone[ik] = true;
+                std::printf("hackgame3: player %d dies (debug)\n", ip);
+                FSetHackHp3(p, false, 0);
+                SetHackShip3State(p, 6);
+            }
+        }
+    static const char* s_sz = std::getenv("SLY3_HACKGAMEPOWER");
+    if (!s_sz) return;
     for (const char* q = s_sz; q && *q; q = std::strchr(q, ';') ? std::strchr(q, ';') + 1 : nullptr)
     {
         int ip = 0, n = 0, f = 0;
         if (std::sscanf(q, "%d:%d@%d", &ip, &n, &f) != 3 || f != s_frame) continue;
+        if (n == 2 && FBossNotTaken())
+        {
+            std::printf("hackgame3: player %d's power-up %d held: the boss is not the round's yet (debug)\n", ip, n);
+            continue;
+        }
         if (LO* p = PloShip(ip - 1))
         {
             std::printf("hackgame3: player %d takes power-up %d (debug)\n", ip, n);
@@ -763,7 +1189,9 @@ void PrintState()
     static const bool s_f = [] { const char* sz = std::getenv("SLY3_HACKGAMEPRINT"); return sz && std::atoi(sz) >= 2; }();
     if (!s_f || int(g_clock.t * 60.0f) % 120 != 0) return;
     LO* pcount = PloFindRelative(nullptr, 3336, 5);
-    std::printf("hackgame3 t %.1f: core %d/%d", g_clock.t, NOptRef(pcount, 1177, -1), NOptRef(pcount, 1178, -1));
+    int cEnemy = 0;
+    for (LO* q : g_psw->mpcidaplo[0x4B]) cEnemy += q->fInWorld ? 1 : 0;
+    std::printf("hackgame3 t %.1f: core %d/%d enemies %d", g_clock.t, NOptRef(pcount, 1177, -1), NOptRef(pcount, 1178, -1), cEnemy);
     for (int i = 0; i < s_g.cship; ++i)
     {
         LO* p = s_g.aship[size_t(i)];
@@ -772,6 +1200,27 @@ void PrintState()
         auto inw = [&](int oid) { LO* q = PloFindRelative(p, oid, 4); return q ? int(q->fInWorld) : -1; };
         std::printf(" | ship %d hp %d st %d gun %d shots %d laser %d arrows %d glow %d", i + 1, hp, HackShip3State(p), NOptRef(p, 2474, -1),
                     NOptRef(p, 2475, -1), inw(6130), inw(93018), inw(74174));
+    }
+    // (the job's round state: the entry's kind s5011, the entry s4626, the round's boss s5015 and the board s4997)
+    if (LO* pjob = PloJobScpt())
+    {
+        auto str = [&](int sym) {
+            std::string r;
+            if (CRef* pref = pjob->pframe->PrefFindBinding(SYMID(sym), 0)) PrintRef(*pref, &r);
+            return r.substr(0, 120);
+        };
+        auto obj = [&](int sym) {
+            const CRef* pref = pjob->pframe->PrefFindBinding(SYMID(sym), 0);
+            const LO* p = pref ? dynamic_cast<const LO*>(pref->m_pbasic) : nullptr;
+            if (!p) return std::string("nil");
+            int hp = -1;
+            FHackHp3(const_cast<LO*>(p), false, &hp);
+            char sz[96];
+            std::snprintf(sz, sizeof sz, "%d<%d (in world %d hp %d)", p->oid, p->paloParent ? p->paloParent->oid : -1, int(p->fInWorld), hp);
+            return std::string(sz);
+        };
+        std::printf(" | job round %s kind %s entry %s boss %s board %s", str(1946).c_str(), str(5011).c_str(), str(4626).c_str(), obj(5015).c_str(),
+                    obj(4997).c_str());
     }
     std::printf("\n");
 }
@@ -881,6 +1330,8 @@ int CShips() { return s_g.cship; }
 void OnWorldStart(SW* psw)
 {
     s_g = GAME{};
+    s_iround = 0;
+    s_fAllHeld = s_fOpenSeen = false;
     s_pswCam = nullptr;
     s_agauge = {};
     s_aicharTinted.fill(-1);
@@ -905,7 +1356,7 @@ void OnWorldStart(SW* psw)
         {
             LO* p = up.get();
             static const int s_aoid[] = {92946, 92939, 92884, 92895, 92956, 92955, 92954, 92953, 92948, 92853, 92966, 92964, 92962, 92960, 92958,
-                                         92881, 92879, 92877, 92868, 92937, 92936, 92935, 92934, 92854};
+                                         92881, 92879, 92877, 92868, 92937, 92936, 92935, 92934, 92854, 92941, 92891, 92944};
             if (std::find(std::begin(s_aoid), std::end(s_aoid), p->oid) == std::end(s_aoid)) continue;
             const glm::vec3 v = PosLoWorld(p);
             std::printf("hackgame3 layout: %d inst %d cid 0x%X parent %d (inst %d) at %.0f %.0f %.0f in world %d\n", p->oid, p->oidInstance, p->Cid(),
@@ -979,6 +1430,8 @@ void OnWorldStart(SW* psw)
     }
     s_mp2479.clear();
     MakeExitDocks(psw);
+    WrapJobStats(psw);
+    WrapJobRespawn(psw);
     split3::g_pfnScriptedSeatPilot = ScriptedSeatPilot;
     if (FPrint())
         std::printf("hackgame3: players %d / %d (seats %d, shared view %d)\n", aship[0]->oid, aship[1]->oid, split3::CSeats(),
@@ -995,6 +1448,7 @@ void OnShipUpdate(LO* plo)
     SyncChain();
     SyncExtraShips();
     SyncExitAlarms();
+    LogRounds();
     DebugPowerUps();
     PrintState();
 }

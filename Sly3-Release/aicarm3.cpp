@@ -539,7 +539,7 @@ int GiveCarmPowerup3(LO* plo)
     CARMBAG& b = s_mpbag[plo];
     const int kind = NNextShuffled3(b.a, b.cursor);
     SetCarmPower3(plo, kind, 100);
-    if (FPrint()) std::printf("carm3: %d takes the power-up 0x%X\n", plo->oid, kind);
+    if (FPrint()) std::printf("carm3: %d (player %d) takes the power-up 0x%X\n", plo->oid, IPlayerCarm3(plo) + 1, kind);
     return kind;
 }
 

@@ -1,10 +1,12 @@
 // splitscreen3.cpp: Sly 3's split screen on PC (splitscreen3.h, notes/SPLIT3_2026-11-12.md).
 #include "splitscreen3.h"
+#include "actor.h"
 #include "game/biplane3.h"
 #include "aicarm3.h"
 #include "challenge3.h"
 #include "copsmap3.h"
 #include "duel3.h"
+#include "galleon3.h"
 #include "hackmp3.h"
 #include "guard.h"
 
@@ -134,6 +136,8 @@ void SaveOptions()
 int CviewWanted()
 {
     if (const int c = duel3::CViewsWanted()) return c;   // (s3-plane, duel3.h: the Biplane Duel's free-for-all, 3 / 4 players)
+    if (const int c = galleon3::CViewsWanted()) return c;   // (galleon3.h: the Galleon Duel's free-for-all, 3 / 4 players)
+    if (const int c = hackmp3::CViewsWanted(s.psw)) return c;   // (hackmp3.h: the Hackathon's players row, 3 / 4 players)
     if (s.cplayerForced) return s.cplayerForced;
     return s.fFour ? 4 : 2;
 }
@@ -274,6 +278,8 @@ void ChoosePlayers(SW* psw)
     if (LO* p = cops3::PloPlayerWanted(psw, 1)) acand.push_back(p);
     for (int k = 1; k < kMaxSeats; ++k)   // (s3-plane, duel3.h: the free-for-all's planes, players 2..4 in order)
         if (LO* p = duel3::PloPlayerWanted(psw, k)) acand.push_back(p);
+    for (int k = 1; k < kMaxSeats; ++k)   // (galleon3.h: the Galleon Duel's free-for-all: Bentley, the Guru, the Panda King)
+        if (LO* p = galleon3::PloPlayerWanted(psw, k)) acand.push_back(p);
     // (tests: SLY3_SPLITCHARS="28,25,..." players 2.. by oid first)
     if (const char* sz = std::getenv("SLY3_SPLITCHARS"))
         for (const char* p = sz; *p;)
@@ -519,6 +525,7 @@ void OnWorldLoaded(SW* psw)
     if (std::getenv("SLY3_COPSDUMP")) cops3::DumpLandmarks(psw);
     cops3::OnWorldLoaded(psw);   // (copsmap3.h: a native Cops and Robbers round's world: the screen mode 2)
     duel3::OnWorldLoaded(psw);   // (s3-plane, duel3.h: a Biplane Duel free-for-all round)
+    galleon3::OnWorldLoaded(psw);   // (galleon3.h: a Galleon Duel free-for-all round)
     s.psw = psw;
     const bool fWas = s.fActive;
     // (the test entry --mp, SLY3_SPLITSTART=1: a world started at a two-player game's later task, e.g. --world 3:2413,
@@ -540,6 +547,7 @@ void OnWorldLoaded(SW* psw)
     ChoosePlayers(psw);
     cops3::OnPlayersChosen(psw);   // (copsmap3.h: the round's spawns, the hub's guards out)
     duel3::OnPlayersChosen(psw);   // (s3-plane, duel3.h: players 3 / 4's planes configured and placed)
+    galleon3::OnPlayersChosen(psw);   // (galleon3.h: players 3 / 4's ships and characters)
     s.fSelectPending = hackmp3::FGame(psw);   // (hackmp3.h: the hackers' select once the seats are bound)
     s.fSelect = false;
     // (s3-hack) the hacking game is one picture in the original: its script never turns on the two players' cameras
@@ -755,6 +763,12 @@ void UpdateSeats(GLFWwindow* pwindow, int frame)
                 }
         }
         if (s.aseat[size_t(i)].dev == DEV_Scripted && g_pfnScriptedSeatPilot) g_pfnScriptedSeatPilot(i, frame, a, &grf);
+        if (s.aseat[size_t(i)].dev == DEV_Scripted && g_pfnPadPilot3)
+        {
+            uint16_t grfP = 0;
+            float aP[4] = {};
+            if (g_pfnPadPilot3(i, frame, aP, &grfP)) { grf |= grfP; for (int k = 0; k < 4; ++k) a[k] = aP[k]; }
+        }
         FeedJoy(&s.ajoy[size_t(i)], grf, a);
         s.ajoy[size_t(i)].grfbtnHandled = 0;
     }
@@ -771,6 +785,10 @@ void UpdateSeats(GLFWwindow* pwindow, int frame)
             if (std::sscanf(q, "%f %f %f@%d", &x, &y, &z, &f) != 4 || f != frame) continue;
             if (STEP* pst = PstepFromLo(static_cast<ALO*>(s.aplo[size_t(i)])))
             {
+                // (SLY2N_TELEPORTALIVE=1: not while a damage reaction runs, as SLY2N_TELEPORT: held in a cop's aim)
+                if (ACTOR* pa = PactorFromLo(s.aplo[size_t(i)]); pa && pa->nSubDF4 != -1 && std::getenv("SLY2N_TELEPORTALIVE")) continue;
+                // (a ledge's hang (jump state 17) holds him where he is: let go first, as SLY2N_TELEPORT)
+                if (ACTOR* pa = PactorFromLo(s.aplo[size_t(i)]); pa && pa->jump.state == 17) ReleaseActorForTeleport3(pa);
                 SetStepPos(pst, glm::vec3(x, y, z) - glm::vec3(pst->vecBase));
                 SetAloVelocityTo(pst->palo, glm::vec3(0.0f));
             }
@@ -779,6 +797,7 @@ void UpdateSeats(GLFWwindow* pwindow, int frame)
 }
 
 void (*g_pfnScriptedSeatPilot)(int iseat, int frame, float a[4], uint16_t* pgrf) = nullptr;
+bool (*g_pfnPadPilot3)(int iseat, int frame, float a[4], uint16_t* pgrf) = nullptr;
 
 LO* PloPlayer(SW* psw, int i)
 {
@@ -852,6 +871,7 @@ void UpdateCameras(SW* psw)
     if (!s.fActive || !psw) return;
     cops3::Update(psw);   // (copsmap3.h: a native Cops and Robbers round's rules)
     duel3::Update(psw);   // (s3-plane, duel3.h: the free-for-all's respawns, the end)
+    galleon3::Update(psw);   // (galleon3.h: the Galleon Duel's free-for-all rounds, the end)
     s.aplo[0] = PloPoCurrent(psw);
     // a copied Carmelita's scale follows her template's (EOPID 370, guard.h: the template's arrives by its setter once the
     // job's options are applied, after the copy was made)
@@ -947,6 +967,16 @@ void UpdateCameras(SW* psw)
         // follow policy under it had not been activated in this world (its zone entry +pcme still the last world's or
         // null): the hubs 3 / 4 Cops and Robbers rounds' first frame crashed in PosCmeFocus3)
         if (fActivate && g_cm.ccpr > 0 && g_cm.acpr[0].pcplcy) g_cm.acpr[0].pcplcy->Activate(g_cm.acpr[0].psoFocus, g_cm.acpr[0].pv);
+        // (a zone's camera copied from the world camera while it was on (the Galleon Duel's sailing zone, forced on while the
+        // ships sail before the battle): turned off with the world's, else player 2's view kept the sailing zone's steep
+        // close view over the deck for the whole battle)
+        // (the Galleon Duel only: elsewhere a view's zone camera is its player's own, the world's zones follow player 1)
+        for (int k = galleon3::FDuelRunning() ? g_cm.ccpr - 1 : -1; k >= 0; --k)
+            if (const CPR cpr = g_cm.acpr[size_t(k)]; cpr.pcplcy == &g_cmpolicies.cpfollow && cpr.pv && !FZonecmOn(cpr.pv))
+            {
+                RevokeCmPolicy(&g_cm, 8, -1, nullptr, nullptr, cpr.pv);
+                if (g_cm.ccpr > 0 && g_cm.acpr[0].pcplcy) g_cm.acpr[0].pcplcy->Activate(g_cm.acpr[0].psoFocus, g_cm.acpr[0].pv);
+            }
         SyncPlaneCameraView3(plo, &g_cm);   // (s3-plane, game/biplane3.h: a plane player's own camera; nothing for others)
         auto pfnPlo = g_cmworld.pfnPloPlayer;
         auto pfnJoy = g_cmworld.pfnPjoy;
@@ -961,9 +991,15 @@ void UpdateCameras(SW* psw)
         if (static int s_c = 0; FLog() && (++s_c % 120) == 0)
         {
             const glm::vec3 p = PosLoWorld(plo);
-            std::printf("split3: view %d camera %.0f %.0f %.0f (policies %d, follow %d) player %d at %.0f %.0f %.0f; world camera %.0f %.0f %.0f (policies %d, follow %d)\n",
+            std::printf("split3: view %d camera %.0f %.0f %.0f (policies %d, follow %d) player %d at %.0f %.0f %.0f; world camera %.0f %.0f %.0f (policies %d, follow %d) player 1 at %.0f %.0f %.0f\n",
                         i, pv->cm.pos.x, pv->cm.pos.y, pv->cm.pos.z, pv->cm.ccpr, int(fFollow(pv->cm)), plo->oid, p.x, p.y, p.z,
-                        g_cm.pos.x, g_cm.pos.y, g_cm.pos.z, g_cm.ccpr, int(fFollow(g_cm)));
+                        g_cm.pos.x, g_cm.pos.y, g_cm.pos.z, g_cm.ccpr, int(fFollow(g_cm)), s.aplo[0] ? PosLoWorld(s.aplo[0]).x : 0.0f,
+                        s.aplo[0] ? PosLoWorld(s.aplo[0]).y : 0.0f, s.aplo[0] ? PosLoWorld(s.aplo[0]).z : 0.0f);
+            if (std::getenv("SLY3_SPLITCAMDBG"))
+                std::printf("split3: follow view %d zone %p cme %p dist %.0f tilt %.2f mode %d | world zone %p cme %p dist %.0f tilt %.2f mode %d\n", i,
+                            (void*)pv->pol.cpfollow.pzone, (const void*)pv->pol.cpfollow.pcme, pv->pol.cpfollow.sDist, pv->pol.cpfollow.radTilt, pv->pol.cpfollow.cpmode,
+                            (void*)g_cmpolicies.cpfollow.pzone, (const void*)g_cmpolicies.cpfollow.pcme, g_cmpolicies.cpfollow.sDist, g_cmpolicies.cpfollow.radTilt,
+                            g_cmpolicies.cpfollow.cpmode);
         }
     }
 }
@@ -1039,6 +1075,22 @@ bool FHudCanvasView(int iview, float rAspectView, int dx, int dy, VIEWRECT* pcli
     g_hud.band2p.ex = 320.0f / sx - 320.0f;
     g_hud.band2p.ey = 112.0f / sy - 112.0f;
     return true;
+}
+
+bool (*g_pfnHole2p3)(int band, float ahole[4]) = nullptr;
+void ProvideBoxes2p()
+{
+    if (!g_pfnHole2p3 || !s.fActive || !(s.psw && s.psw->nScreenMode3 == 2)) return;
+    for (int band = 0; band < 2; ++band)
+    {
+        float a[4];
+        if (!g_pfnHole2p3(band, a)) continue;
+        CHud::BOX2P& b = g_hud.abox2p[band];
+        b.hole = glm::vec4(a[0], a[1], a[2], a[3]);
+        b.area = (a[2] - a[0]) * (a[3] - a[1]);
+        b.frame = g_hud.iframe2p;
+        b.oid = -2;   // (no object of the HUD is the box)
+    }
 }
 
 bool FRectScene(int iview, int dx, int dy, VIEWRECT* prect)
@@ -1138,6 +1190,7 @@ void DrawOverlay(int width, int height)
         // (four players in a two-player game: the teams' colours, the left column the robbers' blue, the right the cops')
         glm::vec4 off = s.cview >= 3 && fBox ? s_aoff[i & 1] : s_aoff[i];
         if (glm::vec4 offDuel; duel3::FTagOffset(i, &offDuel)) off = offDuel;   // (s3-plane, duel3.h: a free-for-all's player colours)
+        if (glm::vec4 offGal; galleon3::FTagOffset(i, &offGal)) off = offGal;   // (galleon3.h: the Galleon Duel's free-for-all)
         if (fBox) Text(*pfont, picons, ach, xCanvas(r.x + rs.x) + 14.0f, yCanvas(r.y + rs.y) - 30.0f, 18.0f, off, 0);
         else Text(*pfont, picons, ach, xCanvas(r.x) + 14.0f, yCanvas(r.y + r.dy) + 8.0f, 18.0f, s_aoff[i], 0);
     }
@@ -1195,6 +1248,7 @@ void DrawOverlay(int width, int height)
     if (s.fSelect) DrawSelect(xLeft, xRight, yTop, yBottom);
     if (!fWhole) cops3::DrawOverlay(width, height, xLeft, xRight, yTop, yBottom);   // (copsmap3.h: the native round's markers, scores)
     if (!fWhole) duel3::DrawOverlay(width, height, xLeft, xRight, yTop, yBottom);   // (s3-plane, duel3.h: the free-for-all's kills, messages)
+    if (!fWhole) galleon3::DrawOverlay(width, height, xLeft, xRight, yTop, yBottom);   // (galleon3.h: the free-for-all's rounds, messages)
     g_hud.Flush(width, height);
 }
 // orig3 SW +0x4FA4 (option 1003): per world

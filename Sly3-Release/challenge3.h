@@ -91,6 +91,9 @@ void SetScore3(LO* pboard, const LO* plo, int n);
 void ChallengeCommand3(int k, float g, int line);
 // the line the round ended with (the winner's: Cops and Robbers' 5255 / 5254), -1 none
 int LineChallengeEnd3();
+// (PC, copsmap3.h) a native round's end: the winner's line (+0x30, as command 11 sets it) and the two-player result (state
+// 5: the stamp's title, script string 1110); the line's text from pfnText when the running world has none (v_ext's)
+void SetChallengeEndLine3(int line, std::string (*pfnText)(int));
 
 // orig3: 0x002849A8: a broadcast's last receiver (game/task3.cpp Broadcast3)
 void ChallengeOnEvent3(int code, LO* plo);

@@ -57,6 +57,7 @@ extern uint32_t g_uRandState;  // xfmath.cpp
 #include "pcinput.h"
 #include "copsmap3.h"
 #include "duel3.h"
+#include "galleon3.h"
 #include "splitscreen3.h"
 #include "gauge3.h"
 #include "hackmp3.h"
@@ -2521,6 +2522,7 @@ int RunGame(const GAMEOPTS& go)
                     const int msaa = s_fboMsaaSplitSaved ? std::max(g_display.msaaSamples, 2) : 0;
                     const bool fHudViews = !FMenuShown();
                     ++g_hud.iframe2p;   // (the drawn frames: the boxes seen in the last one)
+                    split3::ProvideBoxes2p();   // (a mode's own view boxes: the Galleon Duel's)
                     glm::vec3 posSkyCam = cam.pos;   // (the camera the skies are placed at: PlaceSkiesAtCamera above)
                     for (int iv = 0; iv < split3::CView(); ++iv)
                     {
@@ -2649,6 +2651,8 @@ int RunGame(const GAMEOPTS& go)
                 if (!fSplit) DrawHudFadesOver(psw.get(), g_gl.renderWidth, g_gl.renderHeight);   // (FADE mode 2: phase 10's last)
                 cops3::DrawMenu(g_gl.renderWidth, g_gl.renderHeight);   // (copsmap3.h: the map select on the Two Player page)
                 duel3::DrawMenu(g_gl.renderWidth, g_gl.renderHeight);   // (duel3.h: the Biplane Duel's players row)
+                galleon3::DrawMenu(g_gl.renderWidth, g_gl.renderHeight);   // (galleon3.h: the Galleon Duel's players row)
+                hackmp3::DrawMenu(g_gl.renderWidth, g_gl.renderHeight);   // (hackmp3.h: the Hackathon's players row)
                 DrawRemapOverlay(g_gl.renderWidth, g_gl.renderHeight);   // (remappage.h: the Remap page over the pause menu)
                 DrawDebugOverlay(g_gl.renderWidth, g_gl.renderHeight);   // (debugmenu.h: the debug menu over all; Debug keys only)
                 g_fHudAlphaLayer = false;

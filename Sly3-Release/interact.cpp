@@ -6,6 +6,9 @@
 
 #include <bit>
 #include "interact.h"
+#include "game/ship3.h"
+#include "galleon3.h"
+#include "splitscreen3.h"
 #include "hide.h"
 #include "detect.h"
 #include "guard.h"
@@ -308,6 +311,7 @@ void UseObjectBase(LO* puse, ACTOR* pa)
     if (!puse) return;
     if (FPrint()) std::printf("interact t %.3f: %d uses %d (cid 0x%X)\n", g_clock.t, pa->palo->oid, puse->oid, puse->Cid());
     puse->SetField(0, 0x10C, static_cast<uint32_t>(pa->palo->oid));  // (+0x10C: the user)
+    NoteShipUse3(puse, pa->palo);   // (game/ship3.h: a deck cannon's use fires its user's ship)
     NotifyLo(puse, 6, puse);  // vt slot 4 (0x133508)
     // 0x20FF70 (the world, +0x118, +0x11C, the use, 1): each entry's state machine run to its trigger state (0x20FFF0)
     const int cRsmg = static_cast<int>(puse->U32Field(0, 0x118));
@@ -1328,6 +1332,9 @@ void ForgetGuardsInteract(ACTOR* pa)
 // orig: 0x001938C0
 bool FInteractCircle(ACTOR* pa)
 {
+    // (PC, galleon3.h: in the Galleon Duel another player's Circle (Bentley, the Guru, the Panda King: their tracking is
+    // not ported) took the current player's track (Sly's prompt): their deck cannons are used by galleon3's own test)
+    if (galleon3::FDuelRunning() && split3::IExtraPlayerOf(pa->palo) >= 0 && !g_fJtOtherPlayer3) return false;
     if (std::getenv("SLY2N_GANGDEBUG"))
     {
         std::printf("interact circle t %.3f: %d tracked:", g_clock.t, g_jttrack.c);

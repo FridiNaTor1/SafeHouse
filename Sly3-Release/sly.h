@@ -24,6 +24,10 @@ SLY* PslyGlobal();
 void InitWorldActors(SW* psw);
 // (PC, split screen's teams) a copy of Sly made while the world runs: its init and post-load; PslyGlobal() unchanged
 void InitSlyCopy3(LO* plo);
+// (PC tests: route.cpp's teleport step, SLY2N_TELEPORT, SLY3_SPLITTELEPORT2..4) the actor let go of what holds it (a ledge,
+// a target's flight, a ride) before it is put somewhere else
+struct ACTOR;
+void ReleaseActorForTeleport3(ACTOR* p);
 // orig3 0x152488's mesh groups 0x306 (the 3-D glasses): shown only in the anaglyph mode (never on the PC)
 void ShowActorGlasses3(SW* psw);
 // Debug (F7): the players' health to capacity and power to 100, every frame while on.

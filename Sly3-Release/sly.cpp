@@ -2691,6 +2691,8 @@ void UpdateSly(LO* plo)
         // (SLY2N_TELEPORTALIVE=1: none while a damage reaction runs, e.g. tools/cops2p.sh holding Sly in Carmelita's aim)
         else if (c >= 4 && fNow && !(p->nSubDF4 != -1 && std::getenv("SLY2N_TELEPORTALIVE")))
         {
+            // (a ledge's hang (jump state 17) would hold him where he was: let go first, as a route's teleport step)
+            if (p->jump.state == 17) ReleaseActorForTeleport3(p);
             SetStepPos(p, glm::vec3(x, y, z) - glm::vec3(p->vecBase));
             const float hh = c >= 5 ? h : 0.0f;
             glm::mat3 r(1.0f);

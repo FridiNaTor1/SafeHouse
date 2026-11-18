@@ -16,6 +16,7 @@
 #include "activate.h"
 #include "gang.h"
 #include "guard.h"
+#include "hack.h"
 #include "interact.h"
 #include "shd.h"
 
@@ -822,6 +823,7 @@ struct INITRESTORE3
             if (ACTOR* pa = PactorFromLo(plo)) RestoreActorDamage3(pa);
             else if (FPlane3(plo)) RestorePlane3(plo);   // (s3-plane: a plane's slot 31 0x1414D0, the 2P duel's respawn)
             else if (FShip3(plo)) RestoreShip3(plo);     // (s3-plane: a ship's slot 31 0x213F08, the Galleon Duel's next round)
+            else FRestoreHackShip3(plo);                  // (the Hackathon's ship, hack3.cpp)
             return CRef(TAGK_Void);
         });
     }

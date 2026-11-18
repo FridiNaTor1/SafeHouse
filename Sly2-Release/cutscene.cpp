@@ -281,10 +281,15 @@ namespace
 struct TRACEOBJ
 {
     int oid = 0, cid = 0;
+    int rank = 0;   // (the how-manieth object of its oid and class in aploAll: the proxies' spare instances share an oid)
+    int depth = 0;  // a part (a model under an object no clip plays on): its place relative to its parent's record
+    nlohmann::json parent;   // (a part: its root object in the game, Ident; its keys are relative to that one's record)
     glm::vec3 posLast{0.0f};
     glm::quat qLast{1, 0, 0, 0};
     bool fInLast = true, fKeyed = false;
-    nlohmann::json akey = nlohmann::json::array();
+    std::vector<std::array<float, 9>> akey;   // (t x y z qx qy qz qw in)
+    LO* proot = nullptr;   // (a part: the root object its keys are relative to, as when first seen: a part the game
+                           // moves under another object, or a root object it puts under one, keeps its first way)
 };
 struct TOOLS
 {
@@ -306,6 +311,26 @@ struct TOOLS
     nlohmann::json aruns = nlohmann::json::array(), acmds = nlohmann::json::array(), acam = nlohmann::json::array(), alines = nlohmann::json::array(),
                    aanims = nlohmann::json::array();
     std::map<int, TRACEOBJ> mpobj;   // (by the object's index in aploAll: a clone's oid repeats)
+    std::unordered_map<const LO*, int> mprank;   // an object's rank among the objects of its oid and class (RankOf)
+    size_t cRanked = 0;
+    // whether the game draws each model (an ALO with a model: the editor's scene entries) each step (FAloDrawn: in
+    // the world, active, its class drawn, the camera's channels, not faded out), by its index in aploAll; [t, 0 / 1]
+    // where it changed. The editor's view shows every object; the preview leaves out what the game does not draw.
+    // and its parts shown / hidden at run time (ALO aglobShown: the animations' events, the breakables ...), keyed
+    // [t, [[part, shown] ...]] where they changed
+    struct DRAWN
+    {
+        int oid = 0, cid = 0, rank = 0;
+        bool fLast = true, fEverHidden = false;
+        nlohmann::json akey = nlohmann::json::array();
+        std::vector<std::pair<int32_t, bool>> aglobLast;
+        nlohmann::json aglobkey = nlohmann::json::array();
+        // (the editor's check, cutsurvey: where the game drew it in the camera's view; [t, x, y, z] every few seconds)
+        nlohmann::json aseen = nlohmann::json::array();
+        float tSeen = -1e9f;
+    };
+    int cstep = 0;
+    std::map<int, DRAWN> mpdrawn;
     std::map<std::pair<const void*, const void*>, size_t> mpanim;   // the ASEGAs seen: (asega, aseg) -> aanims index
     struct ANIMKEY { float t = 0, at = 0, rate = 1; int id = -1; };
     std::map<size_t, ANIMKEY> mpanimLast;                            // an animation's last clip-time key
@@ -352,6 +377,28 @@ float Heading(LO* plo)
 }
 float R2(float g) { return std::round(g * 100.0f) / 100.0f; }
 float R4(float g) { return std::round(g * 10000.0f) / 10000.0f; }
+// An object's rank among the world's objects of its oid and class, in aploAll's order (0 for most; the proxies' spare
+// instances, the spawners' clones, the parts of each: 0, 1, 2 ...): the editor finds the same object by it (its world
+// loads in that order; a part the game moved under another object keeps its place in aploAll)
+int RankOf(SW* psw, const LO* plo)
+{
+    TOOLS& t = Tools();
+    if (t.cRanked != psw->aploAll.size())
+    {
+        t.mprank.clear();
+        std::map<std::pair<int, int>, int> mpc;
+        for (const auto& up : psw->aploAll) t.mprank[up.get()] = mpc[{up->oid, int(up->Cid())}]++;
+        t.cRanked = psw->aploAll.size();
+    }
+    const auto it = t.mprank.find(plo);
+    return it == t.mprank.end() ? 0 : it->second;
+}
+// an object as [oid, class, rank]
+nlohmann::json Ident(SW* psw, const LO* plo)
+{
+    if (!plo) return nullptr;
+    return {plo->oid, int(plo->Cid()), RankOf(psw, plo)};
+}
 
 void OnScptTrace(LO* pscpt, const void* prun, int ev, int ic, const void* prunParent)
 {
@@ -366,7 +413,14 @@ void OnScptTrace(LO* pscpt, const void* prun, int ev, int ic, const void* prunPa
         const float d = t.tFocus;
         for (auto& c : t.acam) c[0] = R4(c[0].get<float>() - d);
         for (auto& [i, o] : t.mpobj)
-            for (auto& k : o.akey) k[0] = R4(k[0].get<float>() - d);
+            for (auto& k : o.akey) k[0] = R4(k[0] - d);
+        for (auto& [i, dr] : t.mpdrawn)
+        {
+            for (size_t k = 0; k + 1 < dr.akey.size(); k += 2) dr.akey[k] = R4(dr.akey[k].get<float>() - d);
+            for (size_t k = 0; k + 1 < dr.aglobkey.size(); k += 2) dr.aglobkey[k] = R4(dr.aglobkey[k].get<float>() - d);
+            for (auto& k : dr.aseen) k[0] = R4(k[0].get<float>() - d);
+            dr.tSeen -= d;
+        }
         for (auto* pa : {&t.alines, &t.aanims})
             for (auto& l : *pa) { l["t0"] = R4(l["t0"].get<float>() - d); l["t1"] = R4(l["t1"].get<float>() - d); }
         for (auto& a : t.aanims)
@@ -407,20 +461,57 @@ void TraceStep(SW* psw)
         c.push_back(R4(g_cm.radFOV));
         t.acam.push_back(std::move(c));
     }
-    // the objects that moved or were shown / hidden (root objects and characters)
+    // the objects that moved or were shown / hidden (root objects and characters; and the models under them by their
+    // place relative to their root object's record: a turning wheel, a bird of a flock, a character's prop, written for
+    // the ones the camera saw)
     for (size_t i = 0; i < psw->aploAll.size(); ++i)
     {
         LO* plo = psw->aploAll[i].get();
-        if (!FIsLoDerivedFrom(plo, 0x30) || (plo->paloParent && !FIsLoDerivedFrom(plo, 0x34))) continue;
-        const glm::vec3 p = Pos(plo);
-        const glm::quat q = Rot(plo);
-        const bool fIn = plo->fInWorld;
-        auto key = [&]() { return nlohmann::json{tt, R2(p.x), R2(p.y), R2(p.z), R4(q.x), R4(q.y), R4(q.z), R4(q.w), fIn ? 1 : 0}; };
+        if (!FIsLoDerivedFrom(plo, 0x30)) continue;
+        glm::vec3 p(0.0f);
+        glm::quat q(1, 0, 0, 0);
+        int depth = 0;
+        const auto itSeen = t.mpobj.find(int(i));
+        const bool fPart = itSeen != t.mpobj.end() ? itSeen->second.depth > 0 : plo->paloParent && !FIsLoDerivedFrom(plo, 0x34);
+        if (fPart)
+        {
+            const ALO* pa = static_cast<const ALO*>(plo);
+            if (!pa->pglobset || pa->pglobset->aglob.empty()) continue;
+            LO* proot = plo;
+            if (itSeen != t.mpobj.end()) proot = itSeen->second.proot, depth = itSeen->second.depth;
+            else
+                for (; proot->paloParent; proot = proot->paloParent) ++depth;
+            const XF* pxfParent = PxfMoved(proot);
+            const XF* pxf = PxfMoved(plo);
+            if (!pxfParent || !pxf) continue;
+            const glm::mat4 rel = glm::inverse(pxfParent->matWorld) * pxf->matWorld;
+            p = glm::vec3(rel[3]);
+            glm::mat3 r(rel);
+            for (int k = 0; k < 3; ++k)
+                if (const float l = glm::length(r[k]); l > 1e-6f) r[k] /= l;
+            q = glm::normalize(glm::quat_cast(r));
+        }
+        else
+        {
+            p = Pos(plo);
+            q = Rot(plo);
+        }
+        const bool fIn = depth > 0 || plo->fInWorld;   // (a part's: "drawn" has it)
+        auto key = [&]() { return std::array<float, 9>{tt, R2(p.x), R2(p.y), R2(p.z), R4(q.x), R4(q.y), R4(q.z), R4(q.w), fIn ? 1.0f : 0.0f}; };
         auto [it, fNew] = t.mpobj.try_emplace(int(i));
         TRACEOBJ& o = it->second;
         if (fNew)
         {
             o.oid = plo->oid, o.cid = int(plo->Cid());
+            o.rank = RankOf(psw, plo);
+            o.depth = depth;
+            if (depth)
+            {
+                LO* proot = plo;
+                while (proot->paloParent) proot = proot->paloParent;
+                o.proot = proot;
+                o.parent = Ident(psw, proot);
+            }
             o.posLast = p, o.qLast = q, o.fInLast = fIn;
             o.akey.push_back(key());
             continue;
@@ -430,6 +521,59 @@ void TraceStep(SW* psw)
             o.posLast = p, o.qLast = q, o.fInLast = fIn;
             o.fKeyed = true;
             o.akey.push_back(key());
+        }
+    }
+    // the models the game draws
+    ++t.cstep;
+    for (size_t i = 0; i < psw->aploAll.size(); ++i)
+    {
+        LO* plo = psw->aploAll[i].get();
+        if (!FIsLoDerivedFrom(plo, 0x30)) continue;
+        const ALO* palo = static_cast<const ALO*>(plo);
+        if (!palo->pglobset || palo->pglobset->aglob.empty()) continue;
+        bool fIn = plo->fInWorld;
+        for (const LO* p = plo->paloParent; p && fIn; p = p->paloParent) fIn = p->fInWorld;
+        const bool f = fIn && FAloDrawn(psw, palo);
+        auto [it, fNew] = t.mpdrawn.try_emplace(int(i));
+        TOOLS::DRAWN& d = it->second;
+        if (fNew)
+        {
+            d.oid = plo->oid, d.cid = int(plo->Cid()), d.rank = RankOf(psw, plo);
+            d.fLast = f, d.fEverHidden = !f;
+            d.akey.push_back(tt);
+            d.akey.push_back(f ? 1 : 0);
+        }
+        else if (f != d.fLast)
+        {
+            d.fLast = f;
+            d.fEverHidden = d.fEverHidden || !f;
+            d.akey.push_back(tt);
+            d.akey.push_back(f ? 1 : 0);
+        }
+        if ((fNew && !palo->aglobShown.empty()) || (!fNew && palo->aglobShown != d.aglobLast))
+        {
+            d.aglobLast = palo->aglobShown;
+            nlohmann::json a = nlohmann::json::array();
+            for (const auto& [n, fShown] : palo->aglobShown) a.push_back({n, fShown ? 1 : 0});
+            d.aglobkey.push_back(tt);
+            d.aglobkey.push_back(std::move(a));
+        }
+        // (drawn in the camera's view: its place within the field of view (16:9), nearer than 12000)
+        if (f && t.cstep % 6 == 0)
+        {
+            const XF* pxf = PxfMoved(plo);
+            const glm::vec3 p = pxf ? glm::vec3(pxf->matWorld[3]) : Pos(plo);
+            const glm::vec3 dv = p - g_cm.pos;
+            const float fwd = glm::dot(dv, g_cm.mat[0]), th = std::tan(g_cm.radFOV * 0.5f), sMargin = 40.0f;
+            if (fwd > 20.0f && fwd < 12000.0f && std::fabs(glm::dot(dv, g_cm.mat[2])) < fwd * th + sMargin &&
+                std::fabs(glm::dot(dv, g_cm.mat[1])) < fwd * th * 16.0f / 9.0f + sMargin)
+            {
+                if (tt - d.tSeen >= 5.0f && d.aseen.size() < 48)
+                {
+                    d.tSeen = tt;
+                    d.aseen.push_back({tt, R2(p.x), R2(p.y), R2(p.z)});
+                }
+            }
         }
     }
     // the animations playing (their spans; the ones playing before the scene "ambient": its characters' idles), with
@@ -461,7 +605,7 @@ void TraceStep(SW* psw)
         {
             const size_t i = t.aanims.size();
             t.mpanim[key] = i;
-            t.aanims.push_back({{"aseg", pa->paseg->oid}, {"on", pa->palo ? pa->palo->oid : -1}, {"t0", tt}, {"t1", tt}, {"at", R2(pa->t)},
+            t.aanims.push_back({{"aseg", pa->paseg->oid}, {"on", pa->palo ? pa->palo->oid : -1}, {"oncid", pa->palo ? int(pa->palo->Cid()) : -1}, {"onrank", pa->palo ? RankOf(psw, pa->palo) : 0}, {"t0", tt}, {"t1", tt}, {"at", R2(pa->t)},
                                 {"length", R2(PasegdOf(pa->paseg) ? PasegdOf(pa->paseg)->tMax : 0.0f)},
                                 {"keys", nlohmann::json::array({nlohmann::json::array({tt, R4(tcl), 1.0f, idClip})})}});
             if (fAmbient) t.aanims[i]["ambient"] = 1;
@@ -515,9 +659,36 @@ void WriteTrace(SW* psw)
     j["lines"] = t.alines;
     j["anims"] = t.aanims;
     nlohmann::json ao = nlohmann::json::array();
+    // (and the ones that stood still: where they stood, "still"; the editor keeps those its world has elsewhere, e.g. the
+    // proxies' instances, which the game places as it loads the world, a water level the save lowered)
     for (auto& [i, o] : t.mpobj)
-        if (o.fKeyed) ao.push_back({{"oid", o.oid}, {"cid", o.cid}, {"keys", o.akey}});
+    {
+        if (o.akey.empty()) continue;
+        // (a part only where the camera saw it drawn: the rest the poses and its root place well enough)
+        if (o.depth)
+            if (const auto it = t.mpdrawn.find(i); it == t.mpdrawn.end() || it->second.aseen.empty()) continue;
+        nlohmann::json ak = nlohmann::json::array();
+        for (const auto& k : o.akey) ak.push_back({k[0], k[1], k[2], k[3], k[4], k[5], k[6], k[7], int(k[8])});
+        nlohmann::json jo = {{"oid", o.oid}, {"cid", o.cid}, {"rank", o.rank}, {"keys", std::move(ak)}};
+        if (o.depth) jo["depth"] = o.depth;
+        if (!o.parent.is_null()) jo["parent"] = o.parent;
+        if (!o.fKeyed) jo["still"] = 1;
+        ao.push_back(std::move(jo));
+    }
     j["objects"] = ao;
+    // (the models the game leaves out at some time: [oid, class, rank, [t, drawn, t, drawn ...]]; the rest it draws
+    // all along)
+    nlohmann::json ad = nlohmann::json::array(), ag = nlohmann::json::array(), as = nlohmann::json::array();
+    for (auto& [i, d] : t.mpdrawn)
+    {
+        if (d.fEverHidden) ad.push_back({d.oid, d.cid, d.rank, d.akey});
+        if (!d.aglobkey.empty()) ag.push_back({d.oid, d.cid, d.rank, d.aglobkey});
+        if (!d.aseen.empty()) as.push_back({d.oid, d.cid, d.rank, d.aseen});
+    }
+    j["seen"] = as;
+    j["drawn"] = ad;
+    // (the models' parts shown / hidden at run time: [oid, class, rank, [t, [[part, shown] ...], t, ...]])
+    j["parts"] = ag;
     if (psw)
         if (LO* pp = PloPoCurrent(psw)) j["player"] = pp->oid;
     {
@@ -528,7 +699,7 @@ void WriteTrace(SW* psw)
     std::remove(t.out.c_str());
     std::rename((t.out + ".part").c_str(), t.out.c_str());
     std::printf("cutscene: trace of %d written to %s (%.2f s, %zu commands, %zu objects moved)\n", t.oidTrace, t.out.c_str(), double(j["end"].get<float>()),
-                t.acmds.size(), ao.size());
+                t.acmds.size(), size_t(std::count_if(ao.begin(), ao.end(), [](const nlohmann::json& o) { return !o.contains("still"); })));
 }
 
 void RecordStep(SW* psw, int frame)

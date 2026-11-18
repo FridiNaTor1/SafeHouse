@@ -2,6 +2,7 @@
 
 #include "../copsmap3.h"
 #include "../duel3.h"
+#include "../galleon3.h"
 #include "task3.h"
 #include "suck3.h"
 #include "scptgame3.h"
@@ -1365,6 +1366,7 @@ void Broadcast3(int code, LO* plo)
     // a death itself: no world reload)
     if (cops3::FOnBroadcast(code, plo)) return;
     if (duel3::FOnBroadcast(code, plo)) return;   // (PC, duel3.h: the Biplane Duel's free-for-all scores / respawns its deaths)
+    if (galleon3::FOnBroadcast(code, plo)) return;   // (PC, galleon3.h: the Galleon Duel's free-for-all scores its sinks)
     static const bool s_fPrintB = std::getenv("SLY3_BCASTPRINT") != nullptr;
     if (s_fPrintB)
         std::printf("task3: broadcast 0x%X object %d %p (job %d)\n", code, plo ? plo->oid : -1, (void*)plo,

@@ -1367,6 +1367,8 @@
   "not a play session": "プレイセッションではありません",
   "not a prefab file": "プレハブファイルではありません",
   "not measured:": "未計測：",
+  "not measured: the game crashed playing it": "未計測: 再生中にゲームがクラッシュしました",
+  "not measured: the game did not finish": "未計測: ゲームが終了しませんでした",
   "nothing copied": "何もコピーしていません",
   "nothing in the selection can be duplicated (top-level objects and instances only)": "選択の中に複製できるものがありません（トップレベルのオブジェクトとインスタンスのみ）",
   "nothing in the selection is stored in the world file": "選択の中にワールドファイルへ保存されているものがありません",

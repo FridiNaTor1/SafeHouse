@@ -15,6 +15,7 @@
 
 struct SW;
 struct SCENE;
+struct LO;
 
 namespace hackmp3
 {
@@ -29,6 +30,14 @@ bool FGame(const SW* psw);
 // The choice: the players (2..4) and each one's character (the original's defaults until the page sets them).
 int CPlayers();
 int IcharPlayer(int iplayer);
+// (PC, the Two Player page's players row while the Hackathon is shown, as the Biplane Duel's: 2 the original game, 3 / 4
+// the PC option) the players chosen, Left / Right steps them; the split screen's seats for the game (0: the binding
+// page's own count, e.g. 2 or its 4 Players option)
+int CPlayersChosen();
+void StepPlayersChosen(int d);
+bool FHackNode(const LO* pnode);
+int CViewsWanted(const SW* psw);
+void DrawMenu(int width, int height);   // (game.cpp, after the HUD: the row on the Two Player page)
 // The episode chooser notes the save's progress before a game starts (the challenge clears it): the original's player
 // 2 is Penelope once Episode 3 (Holland) is complete.
 void NoteProgress(bool fEpisode3Done);

@@ -145,6 +145,36 @@ void UpdateJoy(JOY* pjoy, GLFWwindow* pwindow, int frame, const std::vector<JOYP
             for (int i = 0; i < 4; ++i) abAxis[i] = abR[i];
         }
     }
+    {
+        // (tests, splitscreen3.h g_pfnPadPilot3: a mode's pad bot plays player 1's pad, e.g. the Galleon Duel's)
+        uint16_t grfP = 0;
+        float aP[4] = {};
+        if (split3::g_pfnPadPilot3 && split3::g_pfnPadPilot3(0, frame, aP, &grfP))
+        {
+            fScripted = true;
+            grf |= grfP;
+            auto byteOf = [](float g, bool fInvert) {
+                const float u = fInvert ? (1.0f - g) * 0.5f : (g + 1.0f) * 0.5f;
+                return static_cast<uint8_t>(std::lround(std::fmin(std::fmax(u, 0.0f), 1.0f) * 255.0f));
+            };
+            abAxis[0] = byteOf(aP[0], false), abAxis[1] = byteOf(aP[1], true), abAxis[2] = byteOf(aP[2], false), abAxis[3] = byteOf(aP[3], true);
+        }
+    }
+    // (tests, s3-hack: SLY3_HACKGAMEPILOT for player 1 too, when seat 0 is scripted: its stick from the pilot)
+    if (split3::g_pfnScriptedSeatPilot && split3::Seat0Device() == -3)
+    {
+        float a[4] = {};
+        uint16_t grfP = 0;
+        split3::g_pfnScriptedSeatPilot(0, frame, a, &grfP);
+        if (a[0] != 0.0f || a[1] != 0.0f)
+        {
+            auto byteOf = [](float g, bool fInvert) { return static_cast<uint8_t>(std::lround(std::fmin(std::fmax(((fInvert ? -g : g) + 1.0f) * 0.5f, 0.0f), 1.0f) * 255.0f)); };
+            fScripted = true;
+            abAxis[0] = byteOf(a[0], false);
+            abAxis[1] = byteOf(a[1], true);
+        }
+        grf |= grfP;
+    }
     pjoy->fConnected = false;
     if (pwindow)
     {

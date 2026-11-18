@@ -157,7 +157,10 @@ CHud::ADJ2P CHud::Adj2p(glm::vec2 lo, glm::vec2 hi)
     const glm::vec4 r = fBox ? b.hole : glm::vec4(0.0f);
     const glm::vec2 c = 0.5f * (lo + hi);
     // the side of the band the box leaves free (the portrait panel's): the box on the left half -> the panel on the right
-    const float side = fBox ? (0.5f * (r.x + r.z) < 320.0f ? 1.0f : -1.0f) : (band == 0 ? 1.0f : -1.0f);
+    float side = fBox ? (0.5f * (r.x + r.z) < 320.0f ? 1.0f : -1.0f) : (band == 0 ? 1.0f : -1.0f);
+    // (no box: a piece well on the other side of the band goes to that side's edge (the Galleon Duel's four players: player 4's
+    // gauge at the right of band 1, player 3's at the left of band 0); the centred ones keep the band's side)
+    if (!fBox && std::fabs(c.x - 320.0f) > 160.0f) side = c.x < 320.0f ? -1.0f : 1.0f;
     if (fBox && oidObj != b.oid && c.x >= r.x && c.x <= r.z && c.y >= r.y && c.y <= r.w)
     {
         // a piece inside the box (a gauge): with its nearest corner

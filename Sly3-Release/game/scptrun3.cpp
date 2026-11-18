@@ -1623,8 +1623,10 @@ void SCPTHOST3::Unported(RUN3&, const SCPTCMD3& cmd)
 
 void SetScptHost3(SCPTHOST3* phost) { s_phost = phost ? phost : &s_hostDefault; }
 
+bool (*g_pfnScptAlarmHold3)(SCPT3* ps, int n) = nullptr;
 void SetScptAlarm3(SCPT3* ps, int n, bool fSet)
 {
+    if (fSet && g_pfnScptAlarmHold3 && g_pfnScptAlarmHold3(ps, n)) return;
     if (static const bool s_f = std::getenv("SLY3_ALARMPRINT") != nullptr; s_f)   // (debug: the scripts' alarms)
         std::printf("scpt3: alarm %d %s\n", n, fSet ? "set" : "cleared");
     (fSet ? EnsureAlarm : RemoveAlarm)(ps, n);

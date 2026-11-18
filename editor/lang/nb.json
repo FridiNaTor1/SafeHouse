@@ -1367,6 +1367,8 @@
   "not a play session": "ikke en spilløkt",
   "not a prefab file": "ikke en prefabrikkert-fil",
   "not measured:": "ikke målt:",
+  "not measured: the game crashed playing it": "ikke målt: spillet krasjet under avspillingen",
+  "not measured: the game did not finish": "ikke målt: spillet ble ikke ferdig",
   "nothing copied": "ingenting kopiert",
   "nothing in the selection can be duplicated (top-level objects and instances only)": "ingenting i utvalget kan dupliseres (bare objekter på toppnivå og instanser)",
   "nothing in the selection is stored in the world file": "ingenting i utvalget er lagret i verdensfilen",

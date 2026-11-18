@@ -22,6 +22,9 @@ struct CAMERA
     // The game's camera (cm.h): its rows (x view, y left, z up; roll included) instead of yaw / pitch.
     bool fMat = false;
     glm::mat3 mat{1.0f};
+    // (the map editor's cutscene preview) the picture in a part of the target: x, y (from the top left), width,
+    // height as fractions of it; the projection's aspect is that part's. The default: the whole target.
+    glm::vec4 rcPicture{0.0f, 0.0f, 1.0f, 1.0f};
 
     glm::vec3 Dir() const;
     glm::mat4 MatWorldToClip(float aspect) const;

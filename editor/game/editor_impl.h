@@ -525,6 +525,8 @@ private:
     void ExportAnimations(LO* plo, cane::editor::model::Scene& sc, const EXPORTRIG& rig);
     bool FPoseDump(LO* plo, int oidAseg, float t, bool fCycle, const std::string& path, std::string& error);
     bool FPoseCharacter(LO* plo, LO* plAseg, float tClip, std::vector<std::pair<struct XF*, glm::mat4>>& arel);   // (Sly 2: the cutscene editor's poses)
+    bool FPoseCharacter(LO* plo, const std::vector<std::pair<LO*, float>>& aclip, std::vector<std::pair<struct XF*, glm::mat4>>& arel);   // (layered clips)
+    bool FPoseCharacter(LO* plo, const std::vector<std::tuple<LO*, LO*, float>>& aclip, std::vector<std::pair<struct XF*, glm::mat4>>& arel);   // (on its parts too)
     void UnbindPosed(LO* plo);
     bool FSetCollision(LO* plo, int kind, std::string& error);
     void DrawModels();
@@ -640,6 +642,7 @@ private:
     mutable std::unordered_map<const LO*, bool> m_mphidden;   // (FHidden's answers for m_visVersion)
     mutable int m_visCached = 0;
     std::vector<int> m_aiHiddenEntries;             // scene entries hidden at the last ApplyVisibility
+    std::vector<int> m_aiSceneHidden;               // (Sly 2's cutscene preview) entries the game has out of the world at the playhead
     char m_outFilter[96] = "";
     int m_outType = -1;                             // the outliner's type filter (-1: all)
     int m_outMode = 0;                              // 0 by type, 1 by group (hierarchy), 2 flat list
@@ -912,6 +915,7 @@ private:
     void DrawTimeline();                       // every frame (the playhead's scene applied, the dock drawn when open)
     void TimelineMenuItem();                   // View > Cutscene timeline
     bool FTimelineOpen() const;
+    bool FCutsceneLooking() const;             // the timeline looks through the scene's camera (its picture: no markers)
     bool FCutsceneVerb(const SCRIPTCMD& c);    // --editor-do cut...
 };
 

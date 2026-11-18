@@ -7,6 +7,7 @@
 #include "copsmap3.h"
 #include "gauge3.h"
 #include "duel3.h"
+#include "galleon3.h"
 #include "game/task3.h"
 #include "worldparts.h"
 
@@ -435,6 +436,7 @@ void LoadOptionSetsFromBrx3(SW* psw, CBinaryInputStream* pbis)
         if (o.eopid == sly3::EOPID_GROUP_INSTANCES && o.aval.size() >= 2)
             for (WE& we : psw->awe)
                 if (we.x10 == o.aval[0].n) we.cinst = o.aval[1].n;
+    galleon3::AdjustGroupInstances(psw);   // (galleon3.h: the Galleon Duel's free-for-all: players 3 / 4's ships and characters)
     if (value != -1 && !FConditionMatches3(value)) g_condset3.acond.push_back(value);  // 0x1694D8
     // (debug: SLY3_CMOPTPRINT=1: the keys, the blocks and the chosen block's options with their descriptors, orig3 0x32CA80)
     if (std::getenv("SLY3_CMOPTPRINT"))

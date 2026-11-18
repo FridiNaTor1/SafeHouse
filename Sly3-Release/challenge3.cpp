@@ -626,7 +626,13 @@ int CChallengeScaled3(const LO* plo, int c)
 // 0x284F38 / 0x284FC8 / 0x285220), 1487 / 1498 (the chooser's record lines: 0x17CA18 / 0x17CDE0)
 namespace
 {
-std::string StrText(int id) { return id >= 0 ? StrText3(g_psw, id) : std::string(); }
+std::string (*s_pfnTextFallback)(int) = nullptr;   // (PC: SetChallengeEndLine3's)
+std::string StrText(int id)
+{
+    std::string str = id >= 0 ? StrText3(g_psw, id) : std::string();
+    if (str.empty() && id >= 0 && s_pfnTextFallback) str = s_pfnTextFallback(id);
+    return str;
+}
 // orig3 0x0017CDE0's / 0x0017CA18's line of a node: the hacking game's high score (mode 2, its task 1815), a done
 // challenge's record ("High Score :" / "Best Time :")
 std::string StrRecord(const NODE3& n, bool fChallenges)
@@ -714,6 +720,13 @@ struct INITCHALSTRINGS
 }  // namespace
 
 int LineChallengeEnd3() { return s_chal.fRunning ? s_chal.lineEnd : -1; }
+
+void SetChallengeEndLine3(int line, std::string (*pfnText)(int))
+{
+    s_chal.lineEnd = line;
+    s_pfnTextFallback = pfnText;
+    if (s_chal.fRunning && s_chal.mode == 2) SetChalState(5);
+}
 
 bool FChallengeEndTask3(const TASK3* ptask, int value)
 {

@@ -1367,6 +1367,8 @@
   "not a play session": "ei pelisessio",
   "not a prefab file": "ei esivalmistetiedosto",
   "not measured:": "ei mitattu:",
+  "not measured: the game crashed playing it": "ei mitattu: peli kaatui toistettaessa",
+  "not measured: the game did not finish": "ei mitattu: peli ei päässyt loppuun",
   "nothing copied": "mitään ei kopioitu",
   "nothing in the selection can be duplicated (top-level objects and instances only)": "valinnasta ei voi monistaa mitään (vain ylätason objekteja ja ilmentymiä)",
   "nothing in the selection is stored in the world file": "mitään valinnasta ei ole tallennettu maailmatiedostoon",

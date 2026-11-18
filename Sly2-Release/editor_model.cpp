@@ -1805,21 +1805,24 @@ public:
     }
     // the clip applied as the game applies it (snap, from its start; the tree in its start state), its events and
     // scripts muted, driven here only
-    ASEGA* Play(ASEG* paseg)
+    ASEGA* Play(ASEG* paseg, bool fFresh = true, ALO* ptarget = nullptr)
     {
-        RestoreTree(m_start);
+        // (fFresh: the tree in its start state first; else on top of the clips already playing, as the game layers
+        // them: a body clip, a face's, the mouth's; ptarget: the object in the tree it plays on, else the root)
+        if (fFresh) RestoreTree(m_start);
+        ALO* pon = ptarget ? ptarget : m_proot;
         // (the channels' records outside the tree, if any, are kept too: the apply snaps them)
         if (ASEGD* pd = PasegdOf(paseg))
             for (const ASEGCHN& chn : pd->achn)
             {
                 ALO* po = nullptr;
                 XF* pxf = nullptr;
-                GetAsegChannelTarget(paseg, m_proot, chn, &po, &pxf);
+                GetAsegChannelTarget(paseg, pon, chn, &po, &pxf);
                 if (pxf && !m_setxf.count(pxf)) { m_setxf.insert(pxf); m_orig.axf.push_back(SaveXf(pxf)); }
             }
         ASEGA* pasega = nullptr;
         g_fAsegaEventsMuted = true;
-        ApplyAseg(paseg, m_proot, 0.0f, 1.0f, 0, &pasega);
+        ApplyAseg(paseg, pon, 0.0f, 1.0f, 0, &pasega);
         g_fAsegaEventsMuted = false;
         if (auto it = std::find(g_apasega.begin(), g_apasega.end(), pasega); it != g_apasega.end()) g_apasega.erase(it);
         if (pasega) m_apasega.push_back(pasega);
@@ -1841,6 +1844,16 @@ public:
         g_clock.t = m_tClock;
         g_clock.dt = dt;
         if (pasega) pasega->t = t;
+        for (ALO* palo : m_apalo) UpdateAloXfs(palo, g_clock.t, dt);
+    }
+    // the same with several clips, each at its own time
+    void Step(const std::vector<std::pair<ASEGA*, float>>& a, float dt)
+    {
+        m_tClock += dt;
+        g_clock.t = m_tClock;
+        g_clock.dt = dt;
+        for (const auto& [pasega, t] : a)
+            if (pasega) pasega->t = t;
         for (ALO* palo : m_apalo) UpdateAloXfs(palo, g_clock.t, dt);
     }
     const std::vector<ALO*>& Apalo() const { return m_apalo; }
@@ -2606,10 +2619,34 @@ bool CEditor::FPoseDump(LO* plo, int oidAseg, float t, bool fCycle, const std::s
 // skins it with the records' worlds the caller sets. paseg null: its rest pose (the joints solved).
 bool CEditor::FPoseCharacter(LO* plo, LO* plAseg, float tClip, std::vector<std::pair<XF*, glm::mat4>>& arel)
 {
+    return FPoseCharacter(plo, std::vector<std::pair<LO*, float>>{{plAseg, tClip}}, arel);
+}
+
+// The same with the clips playing on it at once, in the order they started (the game's layers: a body clip, then a
+// face's, the mouth's ... each driving its own channels), each at its own time
+bool CEditor::FPoseCharacter(LO* plo, const std::vector<std::pair<LO*, float>>& aclip, std::vector<std::pair<XF*, glm::mat4>>& arel)
+{
+    std::vector<std::tuple<LO*, LO*, float>> a;
+    for (const auto& [pl, t] : aclip) a.push_back({plo, pl, t});
+    return FPoseCharacter(plo, a, arel);
+}
+
+// The same with each clip on an object of the tree (the target; a character's parts have clips of their own: a
+// guard's alert sign, a prop in its hand)
+bool CEditor::FPoseCharacter(LO* plo, const std::vector<std::tuple<LO*, LO*, float>>& aclip, std::vector<std::pair<XF*, glm::mat4>>& arel)
+{
     arel.clear();
     ALO* palo = dynamic_cast<ALO*>(plo);
     if (!palo || !m_psw) return false;
-    ASEG* paseg = plAseg && FCidDerivedFrom(plAseg->Cid(), 0x6D) ? static_cast<ASEG*>(plAseg) : nullptr;
+    struct CLIP { ALO* pon; ASEG* paseg; float t; };
+    std::vector<CLIP> aseg;
+    for (const auto& [pon, pl, t] : aclip)
+        if (pl && FCidDerivedFrom(pl->Cid(), 0x6D))
+        {
+            ASEG* p = static_cast<ASEG*>(pl);
+            ALO* pa = dynamic_cast<ALO*>(pon);
+            aseg.push_back({pa && FLoInParentChain(pa, palo) ? pa : palo, p, std::clamp(t, 0.0f, PasegdOf(p) ? PasegdOf(p)->tMax : t)});
+        }
     // (the tree's skins bound once, at the pose they stand in now: the editor's world is never animated)
     for (const auto& up : m_psw->aploAll)
         if (FCidDerivedFrom(up->Cid(), 0x30) && FLoInParentChain(up.get(), palo))
@@ -2621,11 +2658,13 @@ bool CEditor::FPoseCharacter(LO* plo, LO* plAseg, float tClip, std::vector<std::
     XF* pxfObj = PxfObj(palo) ? PxfObj(palo) : palo->axf.empty() ? nullptr : palo->axf[0].get();
     if (!pxfObj) return false;
     {
-        POSER poser(m_psw.get(), palo, paseg ? std::vector<ASEG*>{paseg} : std::vector<ASEG*>{}, true);
-        ASEGA* pasega = paseg ? poser.Play(paseg) : nullptr;
-        const float t = paseg ? std::clamp(tClip, 0.0f, PasegdOf(paseg) ? PasegdOf(paseg)->tMax : tClip) : 0.0f;
+        std::vector<ASEG*> apaseg;
+        for (const CLIP& c : aseg) apaseg.push_back(c.paseg);
+        POSER poser(m_psw.get(), palo, apaseg, true);
+        std::vector<std::pair<ASEGA*, float>> aplay;
+        for (std::size_t i = 0; i < aseg.size(); ++i) aplay.push_back({poser.Play(aseg[i].paseg, i == 0, aseg[i].pon == palo ? nullptr : aseg[i].pon), aseg[i].t});
         // (a few steps at that time: the joints and chains settle)
-        for (int i = 0; i < 4; ++i) poser.Step(pasega, t, 1.0f / 60.0f);
+        for (int i = 0; i < 4; ++i) poser.Step(aplay, 1.0f / 60.0f);
         const glm::mat4 inv = glm::inverse(pxfObj->matWorld);
         for (ALO* p : poser.Apalo())
             for (auto& up : p->axf) arel.push_back({up.get(), inv * up->matWorld});

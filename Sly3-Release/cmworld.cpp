@@ -582,6 +582,13 @@ ZONECME* PcmeFirstOfZone(LO* pzone)
 }
 
 // orig: 0x00221268 (the zone's forced state +0x13C: -1 by the player's position, 0 off, 1 on; then 0x221298)
+bool FZonecmOn(const void* pzcm)
+{
+    for (const auto& [plo, zs] : s_mpzone)
+        if (zs.pzcm.get() == pzcm) return zs.k != 0;
+    return true;   // (not a zone's: kept)
+}
+
 void SetZoneForced(LO* pzone, int n)
 {
     auto it = pzone ? s_mpzone.find(pzone) : s_mpzone.end();

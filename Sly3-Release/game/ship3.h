@@ -28,3 +28,24 @@ void ResetShips3();
 // the steering buttons the ship reads (orig3: the input's +0x18 bits 1 / 2: L2 turns to port, R2 to starboard; the
 // reference's RAM: the stick does not steer, on the deck it moves the character)
 unsigned GrfShipSteer3(LO* plo);
+// (the harness's helpers, ship3.cpp) the player plo on its ship's deck in a battle: the use point of a ready cannon of the
+// side facing the nearest enemy (or the crippled enemy's boarding use), *pgrf the steering that keeps it abeam (L2 0x1 /
+// R2 0x2); false: plo is no battling ship's character
+bool FShipBroadside3(LO* plo, glm::vec3* ppos, float* pheading, glm::vec3* pvel, unsigned* pgrf, bool* pfUse);
+// (galleon3.cpp, the Galleon Duel's free-for-all) the battle manager's methods natively: 2019 (target + the others, at most
+// five ships), 2020, the two-player flag 2021 (every ship counts), its state; the ship whose ball hit plo last (*pt when);
+// a ship sunk (mode 7, as its hit points' end)
+#include <vector>
+void StartShipBattle3(LO* target, const std::vector<LO*>& aother, int fNoSave);
+void EndShipBattle3();
+void SetShipBattleTwoPlayer3(int f);
+int NShipBattleState3();
+LO* PloShipHitBy3(LO* plo, float* pt);
+void SinkShip3(LO* plo);
+// (interact.cpp UseObjectBase) a use was made (a deck cannon's: its user, for the cannon script's broadside)
+void NoteShipUse3(LO* puse, LO* puser);
+// (galleon3.cpp) the face part a ship's gauge shows (selected when it is shown; -1: its option 2023's), the gauge object
+void SetShipGaugeFace3(LO* ship, int idPart);
+LO* PloShipGauge3(LO* ship);
+void SetShipGauge3(LO* ship, LO* pgauge);
+bool FUseDeckCannon3(LO* pchar);

@@ -3572,11 +3572,23 @@ glm::mat4 CAMERA::MatWorldToClip(float aspect) const
 {
     // Reversed-Z infinite-far perspective (clip control 0..1): depth = near / w, greater is nearer.
     const float f = 1.0f / std::tan(glm::radians(fovY) * 0.5f);
+    const bool fPart = rcPicture != glm::vec4(0.0f, 0.0f, 1.0f, 1.0f) && rcPicture.z > 0.0f && rcPicture.w > 0.0f;
+    if (fPart) aspect *= rcPicture.z / rcPicture.w;
     glm::mat4 proj(0.0f);
     proj[0][0] = f / aspect;
     proj[1][1] = f;
     proj[2][3] = -1.0f;
     proj[3][2] = sNear;
+    if (fPart)
+    {
+        // (the picture's part of the target: its clip x / y scaled into the part and moved to its centre; y up)
+        glm::mat4 part(1.0f);
+        part[0][0] = rcPicture.z;
+        part[1][1] = rcPicture.w;
+        part[3][0] = 2.0f * rcPicture.x + rcPicture.z - 1.0f;
+        part[3][1] = 1.0f - 2.0f * rcPicture.y - rcPicture.w;
+        proj = part * proj;
+    }
     if (fMat)
     {
         // GL eye axes from the camera's rows: right = -y, up = z, back = -x

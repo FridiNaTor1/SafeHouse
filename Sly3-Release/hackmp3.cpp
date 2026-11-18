@@ -2,6 +2,10 @@
 #include "hackmp3.h"
 
 #include "challenge3.h"
+#include "epmenu3.h"
+#include "hud.h"
+#include "porttext.h"
+#include "screenrt.h"
 #include "activate.h"
 #include "alo.h"
 #include "glob.h"
@@ -15,6 +19,9 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -61,6 +68,65 @@ bool FGame(const SW* psw)
 }
 
 int CPlayers() { return s.cplayers; }
+
+namespace
+{
+int s_cChosen = 0;   // (the players row; 0 until first read)
+int CChosenRaw()
+{
+    if (s_cChosen == 0)
+    {
+        s_cChosen = 2;
+        if (const char* sz = std::getenv("SLY3_HACKPLAYERS")) s_cChosen = std::clamp(std::atoi(sz), 2, 4);   // (tests)
+    }
+    return s_cChosen;
+}
+// (drawing: duel3.cpp's / copsmap3.cpp's style)
+constexpr float DEPTH = 16760000.0f;
+glm::vec4 Rgb(int r, int g, int b, int a = 128) { return glm::vec4(float(r), float(g), float(b), float(a)); }
+void Text(const std::string& text, float x, float y, float size, glm::vec4 off, int halign = 1)
+{
+    const FONTBRX* pfont = PfontHud();
+    if (!pfont) return;
+    g_hud.DrawTextBox(*pfont, PfontHudIcons(), text, x - 320.0f, (y - 224.0f) * 1.1f, size, 1.0f, 1.0f, 0.0f, 0.0f, halign, 0, off,
+                      glm::vec4(1.0f), glm::vec4(0.0f), DEPTH + 100.0f, false);
+}
+void Rect(float x0, float y0, float x1, float y1, glm::vec4 rgba, float dz) { g_hud.FillScreenRect(x0, y0, x1, y1, rgba, (DEPTH + dz) / 16777216.0f); }
+void Arrow(float cx, float cy, float ang, float sz, glm::vec4 rgba, float dz)
+{
+    constexpr float kXAspect = 640.0f / (448.0f * 4.0f / 3.0f);
+    const glm::vec2 d(std::cos(ang), std::sin(ang)), n(-d.y, d.x);
+    auto pt = [&](glm::vec2 v) { return glm::vec2(cx + v.x * kXAspect, cy + v.y); };
+    const glm::vec2 a[3] = {pt(d * sz), pt(-d * sz * 0.6f + n * sz * 0.7f), pt(-d * sz * 0.6f - n * sz * 0.7f)};
+    g_hud.FillScreenTris(a, 3, rgba, (DEPTH + dz) / 16777216.0f);
+}
+}  // namespace
+
+int CPlayersChosen() { return CChosenRaw(); }
+void StepPlayersChosen(int d) { s_cChosen = std::clamp(CChosenRaw() + d, 2, 4); }
+bool FHackNode(const LO* pnode) { return pnode && pnode->oid == 2025; }
+int CViewsWanted(const SW* psw) { return FGame(psw) && CChosenRaw() > 2 ? CChosenRaw() : 0; }
+
+void DrawMenu(int width, int height)
+{
+    if (!FHackNode(PnodeTwoPlayerShown3())) return;
+    g_hud.Begin();
+    // (the episode menu's 4:3 page: its right column, between the description and "Start Challenge", as the Biplane Duel's)
+    const int c = CChosenRaw();
+    const float xL = 255.0f, xR = 608.0f, y = 262.0f;
+    Rect(xL, y, xR, y + 46.0f, Rgb(0, 4, 24, 110), -10.0f);
+    Rect(xL, y + 44.0f, xR, y + 46.0f, Rgb(20, 40, 90, 128), -9.0f);
+    Text(StrPort(PTX_DuelPlayers), xL + 8.0f, y + 5.0f, 15.0f, glm::vec4(70, 90, 128, 0), 0);
+    Text("&2+&.", xL + 8.0f, y + 24.0f, 15.0f, glm::vec4(70, 90, 128, 0), 0);
+    const float xc = 0.5f * (xL + xR) + 30.0f;
+    if (c > 2) Arrow(xc - 118.0f, y + 15.0f, 3.14159f, 7.0f, Rgb(126, 104, 10), -8.0f);
+    if (c < 4) Arrow(xc + 118.0f, y + 15.0f, 0.0f, 7.0f, Rgb(126, 104, 10), -8.0f);
+    char ach[64];
+    std::snprintf(ach, sizeof ach, StrPort(PTX_DuelNPlayers).c_str(), c);
+    Text(ach, xc, y + 3.0f, 22.0f, glm::vec4(128, 106, 10, 0));
+    Text(StrPort(c == 2 ? PTX_HackOriginal : PTX_HackTeam), xc, y + 29.0f, 11.0f, glm::vec4(80, 80, 80, 0));
+    g_hud.Flush(width, height);
+}
 int IcharPlayer(int iplayer) { return iplayer >= 0 && iplayer < 4 ? s.aichar[size_t(iplayer)] : CHAR_Bentley; }
 void NoteProgress(bool fEpisode3Done) { s.fEp3Done = fEpisode3Done; }
 

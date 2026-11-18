@@ -1146,6 +1146,7 @@ template <int I>
 void SetArgOpt(LO* plo, const CRef& r)
 {
     if (SCREENRT* p = Psrt(plo)) p->aarg[I] = r.m_tagk == TAGK_F32 ? int(r.m_g) : r.m_n;
+    if (static const bool s_f = std::getenv("SLY3_SCREENHOOKPRINT") != nullptr; s_f) std::printf("screenrt: %d arg %d = %d (tag %d, rt %d)\n", plo ? plo->oid : -1, I, r.m_n, int(r.m_tagk), Psrt(plo) ? 1 : 0);
 }
 struct INITSCREENMETHODS
 {
