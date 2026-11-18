@@ -33,6 +33,7 @@
 #include "savedata.h"
 #include "sm.h"
 #include "splayer.h"
+#include "cutscene.h"
 #include "sw.h"
 #include "worldaccess.h"
 #include "vecmat.h"
@@ -806,6 +807,7 @@ void DrawScreenObjs(SW* psw)
         for (auto [plo, p] : adraw) prioMax = std::max(prioMax, p->prio);
         g_zScreenBase = float(prioMax + 1) * 262144.0f;
     }
+    cut::DrawCutPresent(pfont, picons);   // (SafeHouse addition: a mod cutscene's caption box / title card, cutscene.h)
     DrawGadgetIcons(pfont, picons);   // (the gadget widget's draw, 0x1DAC58)
     DrawMarkerLabels(pfont, picons);  // (the job markers' names, 0x1CD780: marker.cpp)
     DrawDancePrompts(pfont, picons);  // (the dance director's buttons, 0x152C58: dance.cpp)

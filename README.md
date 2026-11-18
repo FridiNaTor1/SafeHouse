@@ -74,10 +74,8 @@ On the Steam Deck, install in Desktop Mode, then use **Add to Steam** on the gam
 - **Controller button icons** for Xbox, Steam Controller, Steam Deck, Nintendo Switch, PS5, PS4 and PS3, or the
   original PS2 icons if you prefer them.
 - **Dynamic input icons** that switch instantly to whatever you're playing with.
-- **Windows, Linux, SteamOS and macOS** (x86-64 and ARM), **Android, the Meta Quest, the Nintendo Switch and Switch 2.**
-- **Vulkan (Sly 2, Sly 3)** with OpenGL as the fallback, Metal on macOS, and optional AMD FSR 1 upscaling.
-- **VR (Sly 2):** Immersive and Flat Screen modes through OpenXR (SteamVR, Monado, WiVRn, the Meta Quest), with an
-  experimental First Person mode and the VR controllers on the Controls page.
+- **Windows, Linux, SteamOS, macOS, Android, the Meta Quest, the Nintendo Switch and Switch 2.**
+- **VR (Sly 2)** on PC headsets and the Meta Quest.
 - **High refresh rates:** 30, 60, 90, 120, 144, 240 FPS, uncapped or your monitor's refresh rate; the game speed
   stays the same.
 - **Super ultrawide (up to 32:9):** the HUD stays at its original 4:3 proportions, with improvements to the
@@ -87,12 +85,8 @@ On the Steam Deck, install in Desktop Mode, then use **Add to Steam** on the gam
 - **Replay Jobs:** jump back into your favourite jobs.
 - **Every region:** USA (NTSC), both PAL versions in every language, the Japanese Kaitou Sly Cooper 2 and the Korean
   release.
-- **The launcher in 15 languages**, including Korean, and a **Collection Style Launcher** that draws the PS3 Sly
-  Collection's menu from your own disc.
 - **Mod support:** texture, music, dialog, text and movie replacements, texture packs, and a built-in import of the
   HD textures from the PS3 Sly Collection.
-- **Creator tools (desktop):** a map editor for Sly 2 with custom jobs and model import, and a translation and dubbing
-  tool for language mods.
 - **And more:** long shadows, 30 save slots, Add to Steam and desktop shortcuts.
 
 <table>
@@ -120,6 +114,18 @@ On the Steam Deck, install in Desktop Mode, then use **Add to Steam** on the gam
 
 The full list is in **[docs/FEATURES.md](docs/FEATURES.md)**, the debug menu in
 **[docs/DEBUG-MENU.md](docs/DEBUG-MENU.md)** and modding in **[docs/MODDING.md](docs/MODDING.md)**.
+
+## Level editor (Sly 2)
+
+<p align="center">
+  <img src="docs/images/editor-cutscene.webp" alt="The cutscene editor playing a Paris scene on its timeline" width="800"><br>
+  <sub>The cutscene editor playing a scene from Paris</sub>
+</p>
+
+The launcher comes with a level editor for Sly 2 (Windows and Linux): fly through any level, move and add objects,
+build with brushes, edit guards, jobs and map states, make new levels and edit cutscenes on a timeline. Your changes
+are saved as a mod package that plays on every platform. How to use it:
+**[docs/MODDING.md](docs/MODDING.md#the-map-editor-desktop)**.
 
 ## Community
 

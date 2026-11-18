@@ -230,10 +230,12 @@ inline void setCustomTasks(Manifest& m, const std::string& world, const std::vec
 
 // A package's cutscene rules (the map editor's cutscene editor), per world and script:
 //   "cutscenes": [{"world": "Paris", "script": 144037, "once": true, "task": 1001, "states": [1, 4],
-//                  "skip": "auto" | "always" | "never", "skip_to_label": -1}]
+//                  "skip": "auto" | "always" | "never", "skip_to_label": -1, "custom_presentation": true}]
 // once: the script starts only the first time (kept per save slot, "<slot>.mods.json"); task / states: it starts only
 // while the task is in one of the states; skip: the cutscene skip's choice (auto: the game's own, by what the scene
-// has); skip_to_label: a skip stops where the script reaches this label (the rest plays), -1 the scene's end.
+// has); skip_to_label: a skip stops where the script reaches this label (the rest plays), -1 the scene's end;
+// custom_presentation (SafeHouse addition, Sly 2 cutpresent.cpp): its captions shown in the scene's pause too and its
+// title cards with their own text.
 struct CutsceneRule {
     std::string world;
     int script = 0;
@@ -242,7 +244,8 @@ struct CutsceneRule {
     std::vector<int> states;
     std::string skip = "auto";
     int skipToLabel = -1;
-    bool empty() const { return !once && task < 0 && skip == "auto" && skipToLabel < 0; }
+    bool customPresentation = false;
+    bool empty() const { return !once && task < 0 && skip == "auto" && skipToLabel < 0 && !customPresentation; }
 };
 inline std::vector<CutsceneRule> cutsceneRules(const Manifest& m) {
     std::vector<CutsceneRule> a;
@@ -260,6 +263,7 @@ inline std::vector<CutsceneRule> cutsceneRules(const Manifest& m) {
                 if (s.is_number_integer()) r.states.push_back(s.get<int>());
         if (e.contains("skip") && e.at("skip").is_string()) r.skip = e.at("skip").get<std::string>();
         if (e.contains("skip_to_label") && e.at("skip_to_label").is_number_integer()) r.skipToLabel = e.at("skip_to_label").get<int>();
+        if (e.contains("custom_presentation") && e.at("custom_presentation").is_boolean()) r.customPresentation = e.at("custom_presentation").get<bool>();
         if (!r.world.empty()) a.push_back(std::move(r));
     }
     return a;
@@ -275,6 +279,7 @@ inline void setCutsceneRule(Manifest& m, const CutsceneRule& r) {
         if (r.task >= 0) { e["task"] = r.task; e["states"] = r.states; }
         if (r.skip != "auto") e["skip"] = r.skip;
         if (r.skipToLabel >= 0) e["skip_to_label"] = r.skipToLabel;
+        if (r.customPresentation) e["custom_presentation"] = true;
         a.push_back(e);
     }
     if (a.empty()) m.extra.erase("cutscenes");

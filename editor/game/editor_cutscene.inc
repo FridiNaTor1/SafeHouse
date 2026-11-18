@@ -304,6 +304,11 @@ private:
     bool FResizePresentation(int i, float dt);
     bool FPresentEdge(const CSCMD& c) const;
     bool FFadeAt(float t, float rgba[4]) const;
+    // (SafeHouse addition: the custom presentation, the rule's custom_presentation: captions in the scene's pause,
+    // title cards of their own text, Sly2-Release/cutpresent.cpp)
+    bool FCustomPresent() const { return RuleOf().customPresentation; }
+    void SetCustomPresent(bool f);
+    static bool FTitleCardClip(const CSCMD& c) { return c.kind == 0x53 && ((c.b & ~1) == cut::SCPTB_TITLECARD || c.N(0x18) == cut::SCPTB_TITLECARD); }
     int m_presentKind = 0;
     float m_presentLen = 2.0f, m_presentIn = 0.5f, m_presentOut = 0.5f, m_presentRgb[3] = {0, 0, 0};
     char m_presentText[256] = "";
@@ -938,7 +943,7 @@ std::string CCutsceneEditor::Label(const CSCMD& c) const
         return T(d.name);
     case 0x36: return std::string(T("Sound")) + " " + std::to_string(c.an[0]);
     case 0x4C: case 0x4D: return std::string(T(d.name)) + " " + std::to_string(c.an[0]);
-    case 0x53: return std::string(T("Caption")) + ": " + e.StrText(c.an[0]);
+    case 0x53: return std::string((FTitleCardClip(c) ? T("Title card") : T("Caption"))) + ": " + e.StrText(c.an[0]);
     case 0x13: case 0x14: case 0x15: case 0x04: case 0x05: return std::string(T(d.name)) + " " + std::to_string(c.an[0]);
     default: return T(d.name);
     }
@@ -1581,6 +1586,18 @@ bool CCutsceneEditor::FInsertCommand(int iBefore, int kind, int variant, const s
             if (as.ib == slot) icomp = 0;
             else if (as.otyp == 2 && slot > as.ib && slot < as.ib + 12) icomp = (slot - as.ib) / 4;
             if (icomp < 0 || akind[j] < 0) continue;
+            // (a bool value given another number than 0 / 1: stored as a 32-bit int (kind 6), which the loader hands to
+            // the builder as it is; the custom title card's "no waiting" word 0x21, editor_cutpresent.inc)
+            if (akind[j] == 0 && v0 != 0.0 && v0 != 1.0)
+            {
+                const std::size_t ibv = aibVal[j];
+                const uint16_t w6 = 6;
+                std::memcpy(abOpt.data() + ibv - 2, &w6, 2);
+                abOpt.insert(abOpt.begin() + std::ptrdiff_t(ibv) + 1, 3, uint8_t(0));
+                for (std::size_t q = 0; q < aibVal.size(); ++q)
+                    if (aibVal[q] > ibv) aibVal[q] += 3;
+                akind[j] = 6;
+            }
             const int k = akind[j];
             double v = v0;
             if (as.otyp == 2 && as.fRad) v /= 0.017453294;
@@ -2703,6 +2720,7 @@ void CCutsceneEditor::DrawPreviewOverlay()
         }
         if (c.kind == 0x44 && c.t0 <= m_t && m_t < c.t1) fTitle = true;
     }
+    const bool fCustom = FCustomPresent();
     if (fBars && m_fLookActive)
     {
         const float h = size.y * 0.1f;
@@ -2718,8 +2736,30 @@ void CCutsceneEditor::DrawPreviewOverlay()
     bool fPaused = false;
     for (const CSCMD& c : m_acmd)
         if (c.kind == 0x12 && c.an[0] && c.t0 <= m_t + 1e-4f && (c.icPair < 0 || m_t < m_acmd[std::size_t(c.icPair)].t0)) fPaused = true;
+    // (the custom presentation: the caption in the scene's pause too, at the bottom as the game's subtitle; a title
+    // card of its own text, large in the middle)
     for (const CSCMD& c : m_acmd)
-        if (c.kind == 0x53 && c.t0 <= m_t && m_t < c.t1 && !fPaused)
+        if (fCustom && c.kind == 0x53 && c.t0 <= m_t && m_t < c.t1 && (fPaused || FTitleCardClip(c)))
+        {
+            const std::string text = e.StrText(c.an[0]);
+            if (text.empty()) continue;
+            const bool fCard = FTitleCardClip(c);
+            const float fs = ImGui::GetFontSize() * (fCard ? 2.0f : 1.0f);
+            const float wrap = std::min(size.x * 0.6f, 900.0f);
+            const ImVec2 ts = ImGui::GetFont()->CalcTextSizeA(fs, FLT_MAX, wrap, text.c_str());
+            const ImVec2 p(size.x * 0.5f - ts.x * 0.5f, fCard ? (top + yBottom) * 0.5f - ts.y * 0.5f - (yBottom - top) * 0.08f
+                                                               : yBottom - (fBars && m_fLookActive ? size.y * 0.05f + ts.y * 0.5f : ts.y + 18.0f));
+            if (fCard)
+            {
+                dl->AddRectFilled(ImVec2(0, p.y - 14), ImVec2(size.x, p.y + ts.y + 14), IM_COL32(0, 0, 0, 150));
+                dl->AddRectFilled(ImVec2(0, p.y - 16), ImVec2(size.x, p.y - 14), IM_COL32(230, 180, 60, 200));
+                dl->AddRectFilled(ImVec2(0, p.y + ts.y + 14), ImVec2(size.x, p.y + ts.y + 16), IM_COL32(230, 180, 60, 200));
+            }
+            else if (!(fBars && m_fLookActive)) dl->AddRectFilled(ImVec2(p.x - 10, p.y - 6), ImVec2(p.x + ts.x + 10, p.y + ts.y + 6), IM_COL32(0, 0, 0, 160), 6.0f);
+            dl->AddText(nullptr, fs, p, fCard ? IM_COL32(250, 215, 120, 255) : IM_COL32(255, 255, 255, 255), text.c_str(), nullptr, wrap);
+        }
+    for (const CSCMD& c : m_acmd)
+        if (c.kind == 0x53 && c.t0 <= m_t && m_t < c.t1 && !fPaused && !(fCustom && FTitleCardClip(c)))
         {
             const std::string text = e.StrText(c.an[0]);
             if (text.empty()) continue;
@@ -3692,6 +3732,11 @@ bool CCutsceneEditor::FVerb(const std::string& verb, const std::string& arg)
             if (!FAddPresentation(std::atoi(ap[0].c_str()), float(std::atof(ap[1].c_str())), float(std::atof(ap[2].c_str())), ap.size() >= 4 ? ap[3] : std::string(), rgb, 0.5f, 0.5f, error))
                 std::printf("editor: cutpresent: %s\n", error.c_str());
         }
+    }
+    else if (verb == "cutcustom")   // cutcustom:0|1 (the custom presentation, SafeHouse)
+    {
+        SetCustomPresent(arg == "1");
+        std::printf("editor: cut %d custom presentation %d\n", m_oid, FCustomPresent() ? 1 : 0);
     }
     else if (verb == "cutpresize")   // cutpresize:COMMAND:DT (a presentation clip's end dragged)
     {

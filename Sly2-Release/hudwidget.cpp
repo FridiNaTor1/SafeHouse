@@ -4,6 +4,7 @@
 
 #include "vr.h"
 #include "hudwidget.h"
+#include "cutscene.h"
 #include "cheat.h"
 #include "actioninput.h"
 #include "skipcut.h"
@@ -410,6 +411,7 @@ static LO* s_ploSaveIcon = nullptr;  // (D_002E65A0 +0x24: the save icon's scree
 void ResetHudWidgets()
 {
     s_ploSaveIcon = nullptr;
+    cut::ResetCutPresent();   // (SafeHouse addition, cutscene.h)
     ResetScreenObjPauseCount();  // orig 0x1D9408: also releases a pending failure restart's count
     SetGaugeState(s_gauge, 0);
     s_gauge = GAUGE{};

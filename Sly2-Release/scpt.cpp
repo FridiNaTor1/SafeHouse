@@ -1432,8 +1432,20 @@ void ExecuteRun(const PRUN& prun)
         StartMurrayHold(pm, psmaObj, pc->N(0x1C), pc->N(0x18), pc->N(0x20));  // 0x1B9C00
         break;
     }
-    case 0x53: HudPrompt(pc->N(0x10), pc->G(0x14)); break;  // HintBox: 0x1DA4B8 (SetHintBoxText) on the HUD prompt 0x3DA0C0
-    case 0x54: HudPromptEnd(pc->N(0x10)); break;            // ClearHintBox: 0x1DA578 (ClearIfSlotId)
+    case 0x53:  // HintBox: 0x1DA4B8 (SetHintBoxText) on the HUD prompt 0x3DA0C0
+        // (SafeHouse addition: a mod's cutscene with the custom presentation, cutscene.h)
+        if (cut::FCustomPresentation(p->pscptLo))
+        {
+            if (pc->N(0x18) == cut::SCPTB_TITLECARD) cut::ShowCutTitle(pc->N(0x10), pc->G(0x14));
+            else cut::ShowCutCaption(pc->N(0x10), pc->G(0x14));
+            break;
+        }
+        HudPrompt(pc->N(0x10), pc->G(0x14));
+        break;
+    case 0x54:  // ClearHintBox: 0x1DA578 (ClearIfSlotId)
+        if (cut::FCustomPresentation(p->pscptLo)) cut::EndCutCaption(pc->N(0x10));
+        HudPromptEnd(pc->N(0x10));
+        break;
     case 0x50: case 0x51:
         // Bentley (cid 0x37) watched until his state is (0x50) / is not (0x51) 6 (0x1E3890)
         if (LO* pb = actorOf(0x37)) SetRunPending(p, ic, pb);
@@ -2250,7 +2262,16 @@ const std::vector<THUNK>& Athunk()
         {0x10A0A8, [](SCPT* ps, const ARGS& a) { B1(ps, 0x50, 0, {{0x10, I(a, 0)}}); }, {6}, {0}},  // 0x1E18E0
         {0x10A130, [](SCPT* ps, const ARGS& a) { B1(ps, 0x51, 0, {{0x10, I(a, 0)}}); }, {6}, {0}},  // 0x1E1910
         {0x10A1B8, [](SCPT* ps, const ARGS& a) { PcmdNew(ps, 0x52, 0)->G(0x10) = F(a, 0); }, {1}, {0}},  // 0x1E1940
-        {0x10A240, BIFb<0x53>, {16, 1, 0}, {0, 2, 1}},                   // 0x1E1970
+        {0x10A240, [](SCPT* ps, const ARGS& a) {                         // 0x1E1970 (BIFb)
+             // (SafeHouse addition, cutscene.h SCPTB_TITLECARD: the "no waiting" word 0x20 / 0x21 is a custom title
+             // card's, its bit kept in +0x18: the original's hints all have 1)
+             const int b = I(a, 1);
+             const bool fTitle = (b & ~1) == cut::SCPTB_TITLECARD;
+             SCPTCMD* p = PcmdNew(ps, 0x53, fTitle ? b & 1 : b);
+             p->N(0x10) = I(a, 0);
+             p->G(0x14) = F(a, 0);
+             if (fTitle) p->N(0x18) = cut::SCPTB_TITLECARD;
+         }, {16, 1, 0}, {0, 2, 1}},
         {0x10A2F8, [](SCPT* ps, const ARGS& a) { B1(ps, 0x54, 1, {{0x10, I(a, 0)}}); }, {0x10}, {0}},  // 0x1E19B0
         {0x10A380, BIIb<0x55>, {6, 6, 0}, {0, 1, 2}},                    // 0x1E19E0
         {0x10A438, BII1<0x56>, {6, 6}, {0, 1}},                          // 0x1E1A20

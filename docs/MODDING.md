@@ -1023,6 +1023,8 @@ The map editor's **View > Cutscene timeline** shows any script of the level as a
   with the subtitle box, the title card, a hint, a fade object that the script's own event starts, as the game's exit
   fades are), on a track of its own: drag it to move it, drag its end for its length; select it for its colour,
   text or fade times. Camera on shows the letterbox, the caption and the fade over the view.
+- **Custom presentation (SafeHouse)** (a checkbox above **Presentation at the playhead**, per cutscene, off by
+  default): see *Custom presentation (SafeHouse addition)* below.
 - **Camera keys** (no clip selected, **Camera key**): fly the view where the camera should be (Camera off to fly
   freely), set how long the **move** takes and its **easing** (linear, ease in, ease out, ease in / out), then **Camera
   key at the playhead from the view**: the camera moves there from wherever it is, arriving at the playhead, and stays
@@ -1075,6 +1077,27 @@ The map editor's **View > Cutscene timeline** shows any script of the level as a
 The edits are the level's own bytes (the script's record), so the game plays an edited or new cutscene exactly as it
 plays its own, on every platform. Scripts the editor cannot match to their record (built by splice code) are shown
 read only.
+
+#### Custom presentation (SafeHouse addition)
+
+> **SafeHouse addition, not in the original game.** The original game cannot show a caption while a scene has it
+> paused (its hint box is hidden under the scene's bars) and has no title card with your own text. With this option
+> on, SafeHouse can; the original game's cutscenes, and mod cutscenes with it off, play exactly as before.
+
+Tick **Custom presentation (SafeHouse)** in the cutscene's **Add** tab (above **Presentation at the playhead**):
+
+- **Captions** show while the scene has the game paused too: in the subtitle box, as the scene's own subtitles look
+  (its font, its place), when no line is being spoken; while a line is spoken, in a caption box of their own at the
+  top (the same font). Outside the scene's pause a caption is the game's hint box, as before.
+- **Title card** (in **Presentation at the playhead**) takes the text you type and a length: the text large in the
+  middle of the picture on a band with gold edges, faded in and out, for its length. Select it to change its text.
+- Every platform, both renderers, any aspect ratio and HUD Placement (the caption box and the title card stay
+  centred). The text is a string of the level's Text.json, so the package's language files translate it like any
+  other text of the game (see *Text and subtitles* and *Languages* above).
+- Kept in the package's `mod.json` as the cutscene's rule `"custom_presentation": true` (see *When it plays* above).
+  A title card is written as the game's hint command whose "no waiting" word is 0x21 (a 32-bit int; the original's
+  hints all have the bool 1); without the rule (the option off) the game shows it as a hint, as the original would.
+  The editor's preview (Camera on) shows both.
 
 #### Making a cutscene
 

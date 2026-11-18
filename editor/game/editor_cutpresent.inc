@@ -7,6 +7,10 @@
 //   - title card: the game's own (0x44: the job's name, as long as the game shows it)
 //   - caption: the game's hint box (0x53, the HUD's ticker) with a text of its own (a new string of the level's
 //     Text.json) for its seconds: the game shows it while the HUD is up, not while a scene has the game paused
+//   - (SafeHouse addition) the custom presentation, the cutscene's rule (mod.json "custom_presentation"): the game shows
+//     its captions in the scene's pause too (the subtitle box / a caption box of its own) and a title card is a hint
+//     whose "no waiting" word is 0x21 (cut::SCPTB_TITLECARD | 1): its own text, large on a band, for its seconds
+//     (Sly2-Release/cutpresent.cpp; the original's hints all have 1, its scripts no rules)
 //   - fade: a fade object (cid 0x74, a copy of the level's: its colours +0x50 -> +0x54 -> +0x58, fade in / hold / out
 //     options 983 / 985 / 984) started by the script's own event (0x09 with the fade's oid as its value; the script's
 //     on-event triggers it), as the game's exit fades are (Paris 27254's event 5 on 27256)
@@ -107,15 +111,18 @@ bool CCutsceneEditor::FAddPresentation(int kind, float t, float len, const std::
     switch (kind)
     {
     case 0: return FAddSpanAtTime(t, len, 0x12, {{0x10, 1}, {0x14, 1}}, 0x12, {{0x10, 0}, {0x14, 1}}, label) || (error = T("the commands could not be written"), false);
-    case 1: return FAddAtTime(t, 0x44, 0, {}, label) || (error = T("the commands could not be written"), false);
+    case 1:
+        if (!FCustomPresent()) return FAddAtTime(t, 0x44, 0, {}, label) || (error = T("the commands could not be written"), false);
+        [[fallthrough]];
     case 2:
     {
         // (a new string: the level's next text id)
         int id = 1;
         for (const ce::TextString& s : e.m_atext) id = std::max(id, s.id + 1);
         if (id > 32767) { error = T("no free text id"); return false; }
-        if (!e.FSetText(id, text.empty() ? std::string(T("Caption")) : text, error)) return false;
-        return FAddAtTime(t, 0x53, 0, {{0x10, id}, {0x14, std::max(c_dtFrame, len)}, {-2, 1}}, label) || (error = T("the commands could not be written"), false);
+        if (!e.FSetText(id, text.empty() ? std::string((kind == 1 ? T("Title card") : T("Caption"))) : text, error)) return false;
+        const int b = kind == 1 ? cut::SCPTB_TITLECARD | 1 : 1;   // (a custom title card: the hint's "no waiting" word 0x21)
+        return FAddAtTime(t, 0x53, 0, {{0x10, id}, {0x14, std::max(c_dtFrame, len)}, {-2, b}}, label) || (error = T("the commands could not be written"), false);
     }
     case 3:
     {
@@ -166,9 +173,20 @@ bool CCutsceneEditor::FAddPresentation(int kind, float t, float len, const std::
     }
 }
 
+void CCutsceneEditor::SetCustomPresent(bool f)
+{
+    cane::mods::CutsceneRule r = RuleOf();
+    if (r.customPresentation == f) return;
+    r.customPresentation = f;
+    SetRule(r);
+}
+
 void CCutsceneEditor::DrawPresentPanel()
 {
     ImGui::SeparatorText(T("Presentation at the playhead"));
+    bool fCustom = FCustomPresent();
+    if (ImGui::Checkbox(T("Custom presentation (SafeHouse)"), &fCustom)) SetCustomPresent(fCustom);
+    EdTip(T("A SafeHouse addition for this cutscene (off: the game's own presentation): its captions show while the scene has the game paused too (as its subtitle, or in a caption box of their own while a line is spoken), and a title card shows the text you type (large, on a band across the picture, for its length), translated with the level's text. Only SafeHouse plays it this way; saved in the package's mod.json."));
     ImGui::SetNextItemWidth(130);
     if (ImGui::BeginCombo("##prk", T(SzPresentKind(m_presentKind))))
     {
@@ -176,16 +194,16 @@ void CCutsceneEditor::DrawPresentPanel()
             if (ImGui::Selectable(T(SzPresentKind(k)), k == m_presentKind)) m_presentKind = k;
         ImGui::EndCombo();
     }
-    if (m_presentKind != 1)
+    if (m_presentKind != 1 || fCustom)
     {
         ImGui::SameLine();
         ImGui::SetNextItemWidth(70);
         ImGui::InputFloat(TL("length", "prlen").c_str(), &m_presentLen, 0, 0, "%.2f s");
     }
-    if (m_presentKind == 2)
+    if (m_presentKind == 2 || (m_presentKind == 1 && fCustom))
     {
         ImGui::SetNextItemWidth(-FLT_MIN);
-        ImGui::InputTextWithHint("##prtext", T("the caption's text"), m_presentText, sizeof m_presentText);
+        ImGui::InputTextWithHint("##prtext", (m_presentKind == 1 ? T("the title card's text") : T("the caption's text")), m_presentText, sizeof m_presentText);
     }
     if (m_presentKind == 3)
     {
@@ -203,7 +221,7 @@ void CCutsceneEditor::DrawPresentPanel()
         std::string error;
         if (!FAddPresentation(m_presentKind, m_t, m_presentLen, m_presentText, m_presentRgb, std::max(0.0f, m_presentIn), std::max(0.0f, m_presentOut), error)) e.Status(error);
     }
-    EdTip(T("Letterbox: the scene's bars (the game paused) for its length; title card: the game's (the job's name); caption: the game's hint box with your text (shown while the game is not paused: before / after the scene's pause); fade: the screen to a colour and back (a fade object the script starts). Each on a track of its own: drag it, drag its end for its length."));
+    EdTip((fCustom ? T("Letterbox: the scene's bars (the game paused) for its length; title card: your text, large on a band (custom presentation); caption: your text (in the scene's pause as its subtitle, else the game's hint box); fade: the screen to a colour and back (a fade object the script starts). Each on a track of its own: drag it, drag its end for its length.") : T("Letterbox: the scene's bars (the game paused) for its length; title card: the game's (the job's name); caption: the game's hint box with your text (shown while the game is not paused: before / after the scene's pause); fade: the screen to a colour and back (a fade object the script starts). Each on a track of its own: drag it, drag its end for its length.")));
 }
 
 // the selected presentation clip's own settings
@@ -221,6 +239,13 @@ void CCutsceneEditor::DrawPresentInspector(CSCMD& c)
     if (c.kind == 0x44) ImGui::TextWrapped("%s", T("The game's title card: the job's name, shown as long as the game shows it (the scene waits for it)."));
     if (c.kind == 0x53)
     {
+        const bool fCustom = FCustomPresent();
+        if (FTitleCardClip(c))
+            ImGui::TextWrapped("%s", (fCustom ? T("A title card of your text (custom presentation): large on a band across the picture for its length.") : T("A title card of your text: shown only with the custom presentation on (off: the game shows it as a hint).")));
+        else if (fCustom) ImGui::TextWrapped("%s", T("A caption (custom presentation): in the scene's pause as its subtitle (a caption box while a line is spoken), else the game's hint box."));
+    }
+    if (c.kind == 0x53)
+    {
         std::string s = e.StrText(c.an[0]);
         char buf[512];
         std::snprintf(buf, sizeof buf, "%s", s.c_str());
@@ -230,7 +255,7 @@ void CCutsceneEditor::DrawPresentInspector(CSCMD& c)
             std::string error;
             if (!e.FSetText(c.an[0], buf, error)) e.Status(error);
         }
-        EdTip(T("The caption's text (the level's string of this id: every hint with this id shows it)"));
+        EdTip((FTitleCardClip(c) ? T("The title card's text (the level's string of this id; translated in the package's language files)") : T("The caption's text (the level's string of this id: every hint with this id shows it)")));
     }
     FADEINFO fi;
     if (FFadeClip(c) && FFadeOf(c.an[0], fi))

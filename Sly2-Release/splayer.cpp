@@ -2,6 +2,7 @@
 // 0x218790, 0x215730, 0x2158C0, 0x2159E0, 0x2174C8, 0x216BC8), m_210E90_c.cpp (0x213300, 0x213830).
 
 #include "splayer.h"
+#include "cutscene.h"
 #include "shop.h"
 #include "region.h"
 #include "langstore.h"
@@ -854,14 +855,17 @@ void CScreenPlayer::Draw(const FONTBRX* pfont, const FONTBRX* pfontIcons, const 
             if (!pfont) break;
             std::string text;
             bool fWrap = true;
+            bool fCaption = false;   // (SafeHouse addition: a custom presentation's caption in the subtitle box, cutscene.h)
             if (el.ab3[1] == 1 && el.n3 == 0x2EF)
             {
                 // the subtitle (0x216BC8's 0x2EF): the line's whole text wrapped (0x215F40), typed by the line's time
                 // (0x227820), then only its last lines that fit the box (height +0x28 / size +0x20) kept
-                if (!FDialogSubtitleText(&text)) break;
+                fCaption = cut::FCutCaptionInSubtitleBox(&text);
+                if (!fCaption && !FDialogSubtitleText(&text)) break;
                 // (lang: the words L3 / R3 / START / SELECT as the device's icons in the subtitles too, promptglyph.h)
-                if (pfontIcons) text = StrPromptButtonWords(text, IdTextUsa(g_dialogsub.id));
-                text = StrDialogSubtitleTyped(StrWrapped(*pfont, pfontIcons, text, el.ag3[0] / 51.2f, el.ag3[1]));
+                if (pfontIcons && !fCaption) text = StrPromptButtonWords(text, IdTextUsa(g_dialogsub.id));
+                text = StrWrapped(*pfont, pfontIcons, text, el.ag3[0] / 51.2f, el.ag3[1]);
+                if (!fCaption) text = StrDialogSubtitleTyped(text);
                 int cline = 1;
                 for (char ch : text) cline += ch == '\n';
                 const int clineMax = el.ag3[0] != 0.0f ? static_cast<int>(el.ag3[2] / el.ag3[0]) : cline;
@@ -904,7 +908,7 @@ void CScreenPlayer::Draw(const FONTBRX* pfont, const FONTBRX* pfontIcons, const 
                 std::fprintf(stderr, "textelem kind %d id 0x%X: '%s'\n", int(el.ab3[1]), unsigned(el.n3), text.c_str());
             if (text.empty()) break;
             // (the subtitle 0x2EF in its speaker's colour: font_brx's 0x4435F4)
-            const uint32_t base = el.ab3[1] == 1 && el.n3 == 0x2EF && g_dialogsub.id != -1 ? g_dialogsub.rgba : el.aul3[1];
+            const uint32_t base = el.ab3[1] == 1 && el.n3 == 0x2EF && g_dialogsub.id != -1 && !fCaption ? g_dialogsub.rgba : el.aul3[1];
             glm::vec4 off, sc;
             for (int i = 0; i < 4; ++i)
             {

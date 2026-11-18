@@ -27,6 +27,7 @@
 
 struct LO;
 struct SW;
+struct FONTBRX;
 
 // ---- scpt.cpp's side
 
@@ -146,6 +147,25 @@ bool FCutsceneNeverSkip(LO* pscpt);
 void NoteScptLabel(LO* pscpt, int n);
 // skipcut.cpp: a skip should stop now (a rule's label reached within the last steps)
 bool FCutsceneSkipStops();
+
+// ---- (SafeHouse addition) the custom presentation (cutpresent.cpp): only for a script whose rule has
+// "custom_presentation" (the cutscene editor's toggle; the original game's scripts never have a rule)
+// a hint command's (0x53) "no waiting" word with this bit (0x20 / 0x21, stored as a 32-bit int: a bool value gives
+// only 0 / 1): a title card of the hint's text (the original's 212 hints all have the bool 1; scpt.cpp's builder keeps
+// the bit in the command's +0x18)
+constexpr int SCPTB_TITLECARD = 0x20;
+bool FCustomPresentation(LO* pscpt);
+// scpt.cpp 0x53 / 0x54 of such a script: a caption (in the scene's pause: the subtitle box or a caption box of its
+// own; else the game's hint box), its end, a title card of the text
+void ShowCutCaption(int idText, float dt);
+void EndCutCaption(int idText);
+void ShowCutTitle(int idText, float dt);
+// hudwidget.cpp: a world's HUD reset
+void ResetCutPresent();
+// splayer.cpp: the subtitle box's text is the caption (shown, the box up, no line speaking)
+bool FCutCaptionInSubtitleBox(std::string* pstr);
+// screenrt.cpp DrawScreenObjs: the caption box and the title card over the screen objects
+void DrawCutPresent(const FONTBRX* pfont, const FONTBRX* picons);
 
 // ---- the game-run tools (main.cpp / game.cpp)
 // main.cpp: the tools' flags (consumes argv[i] and its value: true when it was one of them)

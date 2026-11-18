@@ -623,6 +623,12 @@ void NoteScptLabel(LO* pscpt, int n)
     if (pr && pr->skipToLabel >= 0 && pr->skipToLabel == n) s_frameSkipStop = g_frameJoy;
 }
 
+bool FCustomPresentation(LO* pscpt)
+{
+    const cane::mods::CutsceneRule* pr = PruleOf(pscpt);
+    return pr && pr->customPresentation;
+}
+
 bool FCutsceneSkipStops() { return g_frameJoy - s_frameSkipStop <= 2; }
 
 bool FCutsceneArg(int argc, char** argv, int& i)
