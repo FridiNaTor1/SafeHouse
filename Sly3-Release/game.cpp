@@ -1034,8 +1034,10 @@ int RunGame(const GAMEOPTS& go)
         auto stepSim = [&](int frame) {
         g_iframeMain = frame;  // (debug prints: SLY2N_TRANSLOG)
         // (debug: SLY3_NANTRAP=F: floating-point invalid operations trap from frame F on (run under gdb for the culprit))
+#if defined(__GLIBC__)   // (feenableexcept is a glibc extension)
         if (static const int s_fNan = std::getenv("SLY3_NANTRAP") ? std::atoi(std::getenv("SLY3_NANTRAP")) : -1; s_fNan >= 0 && frame == s_fNan)
             feenableexcept(std::getenv("SLY3_NANTRAPALL") ? FE_INVALID | FE_DIVBYZERO | FE_OVERFLOW : FE_INVALID);
+#endif
         InvalidateSceneDrawnTests();   // (scenesw.h: the placement's FAloDrawn answers do not outlive a step)
         // orig 0x20E890: a pending world change
         // (a transition with a wipe is pending only once the wipe is out (0x22B220 -> WIPES_Loading): the queued
