@@ -89,6 +89,19 @@ LO* PloFindOwned3(LO* p, int oid)
 
 void DumpCombos3(SW* psw)
 {
+    // (debug) SLY3_FINDSFX=N: every ASEG with a sound event (kind 0) of sfx N, its owner and time; SLY3_FINDEV=N: an
+    // event of kind 11 (a message) with id N
+    const int kFind = std::getenv("SLY3_FINDEV") ? 11 : 0;
+    if (const char* sz = std::getenv(kFind ? "SLY3_FINDEV" : "SLY3_FINDSFX"); sz && psw)
+        for (const auto& apl : psw->mpcidaplo)
+            for (LO* plo : apl)
+                if (ASEG* pa = dynamic_cast<ASEG*>(plo))
+                    if (ASEGD* pd = PasegdOf(pa))
+                        for (const auto& aev : pd->aaev)
+                            for (const ASEGEV& ev : aev)
+                                if (ev.kind == kFind && ev.an[0] == std::atoi(sz))
+                                    std::printf("findsfx %d: aseg %d parent %d t %.3f source %d\n", ev.an[0], pa->oid,
+                                                pa->paloParent ? pa->paloParent->oid : -1, ev.t, ev.an[1]);
     if (!std::getenv("SLY3_COMBODBG") || !psw) return;
     for (LO* plo : psw->mpcidaplo[0x94])
     {
@@ -267,10 +280,16 @@ uint32_t GrfComboConditions(CMBR3& c)
     PADCTL* pc = PpadctlOfActor3(p);
     uint32_t grf;
     const float u = pc ? pc->uJoy : 0.0f;
+    // the model's facing: its position record's x axis (vt slot 36: atan2 of the matrix's first row), not the step's
+    // heading +0x1BC (they differ while Sly turns)
+    const XF* pxf = PxfRot(p->palo);
+    const float radFacing = pxf ? std::atan2(pxf->matWorld[0][1], pxf->matWorld[0][0]) : p->radHeading;
     if (u == 0.0f) grf = 0x1000;  // the stick at rest
     else
     {
-        const float d = cmm::RadNormalize(p->radHeading - pc->radJoy);
+        // (0x139BB0: the stick's direction +0x110C less the facing; the native had the difference the other way round,
+        // so a stick to the left picked the right-hand definitions (0x200 / 0x400) and the other way round)
+        const float d = cmm::RadNormalize(pc->radJoy - radFacing);
         const float ad = std::fabs(d);
         if (ad < 0.7853982f) grf = 0x100;          // ahead (0x3F490FDB)
         else if (2.3561945f < ad) grf = 0x800;     // behind (0x4016CBE4)
@@ -284,7 +303,7 @@ uint32_t GrfComboConditions(CMBR3& c)
         const glm::vec3 l = glm::transpose(p->matHeading) * d;
         grf |= 0.0f < l.y ? 0x4 : 0x8;
     }
-    else grf |= cmm::RadNormalize((pc && u != 0.0f ? pc->radJoy : p->radHeading) - p->radHeading) < 0.0f ? 0x4 : 0x8;
+    else grf |= cmm::RadNormalize(radFacing - p->radHeading) < 0.0f ? 0x4 : 0x8;   // (0x139BB0: the facing against the heading)
     // the target's kind: none / not a guard 0x10; a guard knocked down 0x80 (0x2533C0 6 / 0x2A), aware of Sly 0x40, else
     // 0x20. TODO(player): the guard's states 6 / 0x2A and its awareness (0x170500) from the AI code's guard
     if (!ptarget || !PguardFromLo(ptarget)) grf |= 0x10;
@@ -295,7 +314,7 @@ uint32_t GrfComboConditions(CMBR3& c)
     else if (g == 0 || g == 9) grf |= FAirborne3(p) ? 0x10000 : 0x20000;
     else if (g == 2) grf |= 0x20000;
     else grf |= 0x20000;
-    grf |= g == 10 ? 0x200000 : 0x100000;
+    grf |= g == 10 ? 0x100000 : 0x200000;   // (0x139BB0: 0x100000 in the target stance; the native had them swapped)
     // the cane's side (0x139E80: the middle of the cane +0x1AA4 and the hand (bone 0x24) in Sly's frame, y >= 0 1,
     // else 2). Natively: the idle pose holds it at 2 (the reference's first swing is 7581 / clip 316: its time runs to
     // 0.82 at the clip's speed 1.2, past 317's 0.667); a swing ends on the other side of the one it started from.
@@ -376,9 +395,10 @@ void StartCombo(CMBR3& c, CMBDEF3* pdef)
     c.gBlend = 1.0f;
     // the target: the actor's (+0x11B4), else the best in front (0x1B0898; TODO(player))
     c.ptarget = c.p->plo10DC;
-    // the jump's animation state 0x12 (0x1B7268). TODO(player): Sly 3's jump animation states
-    SetComboState(c, -1);  // (0x13A6B0 leaves it off; the def stays)
-    c.pdef = pdef;
+    // a definition with +0x7C (option 1670) starts the jump's kind 0x12 (0x1B7268(+0x320, 0x12, 0, 0, 1.0): the actor
+    // into its jump state, a launch of that kind) before the clip is chosen (the jump's generic state picks the clip
+    // while moving)
+    if (pdef && pdef->fJumpAnim) SetJumpKind(&c.p->jump, 0x12, 0, nullptr);
     ChooseComboState(c);
 }
 
@@ -489,8 +509,8 @@ CMBR3* PcmbrOf(ACTOR* p, bool fCreate)
     {
         std::printf("combo3: actor %d: %zu definitions, %zu in the list\n", p->palo->oid, pc->adef.size(), pc->alist.size());
         for (const auto& pd : pc->adef)
-            std::printf("combo3: def %d%s press 0x%X mask 0x%X held 0x%X notheld 0x%X cancel 0x%X/0x%X/0x%X/0x%X prio %d dt %.2f steer %.0f clips %d %d %d keep 0x%X abilities %zu\n",
-                        pd->plo->oid, std::find(pc->alist.begin(), pc->alist.end(), pd.get()) != pc->alist.end() ? " (listed)" : "",
+            std::printf("combo3: def %d%s jump %d press 0x%X mask 0x%X held 0x%X notheld 0x%X cancel 0x%X/0x%X/0x%X/0x%X prio %d dt %.2f steer %.0f clips %d %d %d keep 0x%X abilities %zu\n",
+                        pd->plo->oid, std::find(pc->alist.begin(), pc->alist.end(), pd.get()) != pc->alist.end() ? " (listed)" : "", pd->fJumpAnim,
                         pd->btnPress, pd->grfMask, pd->grfHeld, pd->grfNotHeld, pd->grfCancel, pd->btnCancel, pd->grfCancelHeld,
                         pd->grfCancelNotHeld, pd->nPrio, pd->dtPress, pd->sSteer, pd->pclip ? pd->pclip->oid : -1,
                         pd->pclipMove ? pd->pclipMove->oid : -1, pd->pclipFollow ? pd->pclipFollow->oid : -1, pd->btnKeep, pd->aability.size());
@@ -572,6 +592,12 @@ int NCombo3State(ACTOR* p)
     return c ? c->state : -1;
 }
 
+int NCombo3DefOid(ACTOR* p)
+{
+    CMBR3* c = PcmbrOf(p, false);
+    return c && c->pdef && c->pdef->plo ? c->pdef->plo->oid : -1;
+}
+
 // orig3 0x156388's combo branch: the runner in its state 0 or 2 (+0x10D4) on a definition whose cancel mask (+0x50) has
 // 0x20000 (the actor's contact kind 1 then)
 bool FCombo3StanceAir(ACTOR* p)
@@ -623,6 +649,14 @@ void UpdateCombo3(ACTOR* p)
         }
         if (pbest)
         {
+            if (FComboDbg())
+            {
+                const XF* pxf = PxfRot(p->palo);
+                const XF* pxo = PxfObj(p->palo);
+                std::printf("combo3: f %.3f start def %d grf 0x%X joy %.3f u %.2f heading %.3f facing %.3f obj %.3f\n", g_clock.t, pbest->plo ? pbest->plo->oid : -1, grf,
+                            ppad->radJoy, ppad->uJoy, p->radHeading, pxf ? std::atan2(pxf->matWorld[0][1], pxf->matWorld[0][0]) : -9.0f,
+                            pxo ? std::atan2(pxo->matWorld[0][1], pxo->matWorld[0][0]) : -9.0f);
+            }
             if (btnBest) GrfPadctlTakePressed(ppad, btnBest, pbest->dtPress);
             StartCombo(c, pbest);
         }
@@ -644,7 +678,7 @@ void UpdateCombo3(ACTOR* p)
     else if (c.state != -1 && c.pasega && FAsegaRetracted(c.pasega)) SetComboState(c, -1);
     if (c.state == 3 && c.pasega && FAsegaRetracted(c.pasega)) SetComboState(c, -1);
     // facing the target in the attack (unless Sly is +0x11C4 4: TODO)
-    if (c.state == 0 && c.ptarget)  // 0x24E920 (FaceObject: the step's heading toward it)
+    if (c.state == 0 && c.ptarget && p->n10EC == 4)  // 0x24E920 (FaceObject), only with a guard in reach (+0x11C4 4)
         SetStepPhysHeadingToward(p->palo, PosJtLo(c.ptarget) - PosAloCenter(p->palo));
     // the attack's motion: its clip's root velocity (0x24F278), steered by the stick from the events 0x2A0 / 0x2A1
     if ((c.state == 0 || c.state == 2) && c.pasega && !FAsegaRetracted(c.pasega))
@@ -655,9 +689,12 @@ void UpdateCombo3(ACTOR* p)
         p->vecVel = -glm::vec3(v);
         if ((c.fSteer || c.fSteerFull) && ppad && c.pdef)
         {
-            // TODO(player): 0x13A468's ramp between the events 0x2A0 and 0x2A2 by the curve 0x31FA30 (clamped
-            // by 0x341FF0); natively linear
-            float u = 1.0f;
+            // 0x13A178: the weight g: 1 with the event 0x2A1, else the curve 0x31FA30 (0.5 + 0.5 t, clamped to
+            // [0, 1] by 0x341FF0) of t, the time from the event 0x2A0 to 0x2A2; the stick's velocity (+0x110C at the
+            // stick's deflection times the definition's +0x74) in Sly's frame (0x1C94E8) blended in. +0x1A0 is the
+            // feet's velocity reversed: the stick's part goes in negated (the native added it as it is, so Sly
+            // swung away from the stick, and started the blend at 0 instead of 0.5)
+            float g = 1.0f;
             if (!c.fSteerFull)
             {
                 float t0 = 0.0f, t1 = 0.0f;
@@ -666,12 +703,13 @@ void UpdateCombo3(ACTOR* p)
                         for (const ASEGEV& ev : aev)
                             if (ev.kind == 0xB && ev.an[0] == 0x2A0) t0 = ev.t;
                             else if (ev.kind == 0xB && ev.an[0] == 0x2A2) t1 = ev.t;
-                u = t1 > t0 ? glm::clamp((c.pasega->t - t0) / (t1 - t0), 0.0f, 1.0f) : 1.0f;
+                const float t = t1 != t0 ? (c.pasega->t - t0) / (t1 - t0) : 1.0f;
+                g = glm::clamp(0.5f + t * 0.5f, 0.0f, 1.0f);
             }
             const float s = ppad->uJoy * c.pdef->sSteer;
             const glm::vec3 w(std::cos(ppad->radJoy) * s, std::sin(ppad->radJoy) * s, 0.0f);
-            const glm::vec3 l = glm::transpose(p->matHeading) * w;
-            p->vecVel = p->vecVel * (1.0f - u) + l * u;
+            const glm::vec3 l = VecJtConvert(nullptr, p->palo, w);   // (0x1C94E8(0, actor, v): the world into the actor's frame)
+            p->vecVel = p->vecVel * (1.0f - g) - l * g;
         }
     }
 }

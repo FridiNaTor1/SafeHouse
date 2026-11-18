@@ -37,6 +37,7 @@ bool FCombo3Attacking(ACTOR* p);                             // Sly 3's state 23
 bool FLeaveCombo3Attack(SLY* p);                             // orig3 0x1AC098 case 23: the attack left for state 0 (moving)
 void UpdateCombo3Motion(ACTOR* p);                           // orig3 0x13A9E0 (the attack's air steering: Sly's state 23)
 int NCombo3State(ACTOR* p);                                  // the runner's state (-1 off)
+int NCombo3DefOid(ACTOR* p);                                 // (trace) the running definition's oid, -1 none
 int NSlyJumpKind3(SLY* p);                                   // orig3 0x1AF200 (Sly's slot 100: 0..10, 11 others)
 void SetSlyAttack3(SLY* p);                                  // orig3 0x1AF150's kind 9 (state 23: the attack)
 bool FCombo3StanceAir(ACTOR* p);                             // orig3 0x156388's combo branch

@@ -782,13 +782,27 @@ void ApplyAseg(ASEG* paseg, ALO* palo, float t, float svt, int grfapl, ASEGA** p
     for (ASEGEV& ev : pasegd->aaev[0]) FireAsegaEvent(pasega, &ev);
     pasega->t = pasega->tEvent;
     SnapAsegaXfs(pasega, fSnapSeek);
-    if (fEventsFromStart)
+    // (orig3 0x136908: Sly 3 runs the start events only for a clip applied past its start in its direction (forward
+    // from t > 0, backward from t < tMax); one applied at its start takes the cursor (0x137EA0), so its events at t 0,
+    // the sounds among them, fire on the next update (Sly 2's 0x12F9B8 ran the start events for every grfapl & 2: they
+    // fire only the kinds that hold a state, and every sound at t 0 was skipped, e.g. the cane swings' sfx 11 (clips
+    // 316..325), heard in the reference at each swing's start)
+    if (fEventsFromStart && ((0.0f < pasega->svt && 0.0f < pasega->t) || (pasega->svt < 0.0f && pasega->t < pasegd->tMax)))
     {
         if (pasega->svt < 0.0f) pasega->iea = static_cast<int>(pasegd->aaev[1].size());
         FireAsegaStartEvents(pasega);
     }
     else
         UpdateAsegaIeaCur(pasega);
+    // (orig3 0x136908: a clip applied seeking (grfapl & 1) with an event 0x1CD arrives by that event's time (0x138BF8 on
+    // its first links in the seek mode: Sly 2's SetAsegaSeekTime); Sly 2 had no such call)
+    if (grfapl & 1)
+        for (const ASEGEV& ev : pasegd->aaev[1])
+            if (ev.kind == 11 && ev.an[0] == 0x1CD)
+            {
+                if (pasega->svt != 0.0f) SetAsegaSeekTime(pasega, g_clock.t + ev.t / pasega->svt);
+                break;
+            }
     Script(pasega, 2);
     ReleaseAsega(pasega);
 }

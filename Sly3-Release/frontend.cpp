@@ -917,6 +917,7 @@ void ShowTitle()
 {
     if (!s_ploTitle) return;
     s_fTitle = true;
+    SetTitleHasProgress3(g_islotCur >= 0 && GRef(RefProgressOfSlot(g_islotCur, {"dt"})) != 0.0f);   // (0x222140's text)
     std::printf("title: shown at t %.2f (newest slot %d: %s)\n", g_clock.t, g_islotCur + 1,
                 g_islotCur >= 0 && GRef(RefProgressOfSlot(g_islotCur, {"dt"})) != 0.0f ? "Resume Game" : "New Game");
     ShowScreenObj(s_ploTitle, -1);
@@ -974,6 +975,21 @@ void StartGameFromSave(SW* psw, const GAMESAVE* pgs)
         fDone = FEpisodeComplete3(iep);
         g_gamesave = saved;
     }
+    // (s3u-title) not complete: 0x289198(SW, episode, 0x12, the save), epmenu3.cpp StartEpisode3 on the save's record
+    // (the Intro not complete: its binocucom task 1798 in m_ext; else the episode's first world, China / Pirate / Isle
+    // as there). Before, the episode's main world record was loaded with no task: a Prelude save resumed into m_ext's
+    // boot flow, the attract over and the title shown again over the binocucom (START there resumed again: a loop).
+    // SLY3_RESUMEMAIN=1: as before.
+    static const bool s_fResumeMain = std::getenv("SLY3_RESUMEMAIN") != nullptr;
+    if (!fDone && !s_fResumeMain && !std::getenv("SLY3_RESUMEPCT") && iep >= 1 && iep < 9)
+    {
+        const GAMESAVE saved = g_gamesave;
+        g_gamesave = s_gsPending;
+        StartEpisode3(psw, iep, 0x40);
+        s_gsPending = g_gamesave;   // (0x289198 writes the Isle's episodeCurrent / episodeBest into the save)
+        g_gamesave = saved;
+        return;
+    }
     const WREC* pw = iep >= 0 && iep < 9 ? PwrecEpisodeMain(iep) : nullptr;
     // (the front end: Sly 3's world 0, dvd_menu (the key table's first record; Sly 2's 0x2A3828 is not Sly 3's))
     EnsureWorldRecords();
@@ -1025,6 +1041,10 @@ void UpdateFrontEnd(SW* psw)
     // the title, START in the game). Sly 2's episode menu / exits (below the title's input) are not
     // Sly 3's and are not run.
     UpdateCard3(psw);
+    // (s3u-title) the title's first line (0x222140): text 14 "Press START button to Resume Game" when the chosen slot
+    // (the card's +0x13954) has a game in progress, else 13 "... for New Game", as START does (UpdateTitle3); never set
+    // before: "New Game" over a START that resumed the save (the episode chooser for a finished episode)
+    if (s_fTitle) SetTitleHasProgress3(g_islotCur >= 0 && GRef(RefProgressOfSlot(g_islotCur, {"dt"})) != 0.0f);
     if (s_fTitle) UpdateTitle3(psw);
     UpdateExits3(psw);   // (the exits are Sly 3's too: class 0x18, their keys / movies / points; the world flow code)
     UpdateEpMenu3(psw);  // (dvd_menu's episode chooser, epmenu3.h)

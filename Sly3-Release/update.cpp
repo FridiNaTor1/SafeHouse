@@ -1,5 +1,6 @@
 #include <set>
 #include <cstring>
+#include "codepanel3.h"
 #include "game/sly3.h"
 #include "worldglobals.h"
 #include "update.h"
@@ -697,6 +698,7 @@ void StartLoadedLo(SW* psw, LO* plo)
         PostLoadRacer3(plo);
         void PostLoadShipSpawner3(LO * plo);   // Sly 3's ship spawner 0x9A (game/ship3.cpp)
         PostLoadShipSpawner3(plo);
+        sly3::PostLoadCodePanel3(psw, plo);   // Sly 3's code panel 0x50 / its dials 0x79 (codepanel3.cpp)
     }
     // the players' start (0x1400B8; the rest is the actors'): their objects 0x2AB removed (vt slot 9), then slot
     // 79 (0): registered as player objects, not current

@@ -39,6 +39,7 @@
 
 void NotifyActorJumpKind(ACTOR* pa, int n);  // jump.cpp (the owner's vt slot 88)
 extern SW* g_psw;
+extern int g_iframeHarness;   // (game.cpp: the frame being updated)
 int NRandom();   // xfmath.cpp (0x11E8B8)
 
 namespace sly3
@@ -105,6 +106,16 @@ void SetDialMode(LO* plo, int mode);
 void UpdateAlo(LO* plo)
 {
     if (PFNUPDATE pfn = PfnUpdateOrig(0x1F36E0)) pfn(plo);
+}
+
+// a descendant of p whose instance oid (or oid) is oid
+LO* PloFindInstance(LO* p, int oid)
+{
+    for (LO* pc : p->aploOwned)
+        if (pc->oidInstance == oid || pc->oid == oid) return pc;
+    for (LO* pc : p->aploOwned)
+        if (LO* q = PloFindInstance(pc, oid)) return q;
+    return nullptr;
 }
 
 // orig3: 0x170DF0 (init: mode -1) / 0x170E20 (post-load: the parts of table 0x344880, the digit 0, the SM applied at
@@ -188,12 +199,13 @@ PANEL3* PpanelOf(LO* plo)
                 for (const OPTVAL& v : o.aval)
                 {
                     const auto add = [&](int oid) {
-                        // (the dials are instances of one object: the option names their instance oids)
+                        // (the dials are instances of one object: the option names their instance oids, found from the
+                        // panel up through its parents, the nearest first: m_ext's panel owns its dials, v_apt's three
+                        // and h_hangar_b's two panels are siblings of theirs under each copy of their ALO 103290,
+                        // every copy with the same instance oids)
                         LO* pd = nullptr;
-                        for (LO* pc : plo->aploOwned)
-                            if (pc->oidInstance == oid) pd = pc;
-                        if (!pd) pd = PloFindOwned3(plo, oid);
-                        if (!pd && plo->paloParent) pd = PloFindOwned3(plo->paloParent, oid);
+                        for (LO* pctx = plo; pctx && !pd; pctx = pctx->paloParent)
+                            pd = PloFindInstance(pctx, oid);
                         if (!pd && g_psw) pd = PloFindSwObjectByOid(g_psw, oid);
                         if (pd && p.aploDial.size() < 6) p.aploDial.push_back(pd);
                     };
@@ -397,6 +409,27 @@ void UpdatePanel3(LO* plo)
 {
     UpdateAlo(plo);   // 0x23C660
     PANEL3* p = PpanelOf(plo);
+    // (debug: SLY3_PANELACTIVATE=F[,I]: at harness frame F the world's I-th code panel (0: the first in load order) is
+    // entered by the current player object as SCPT 0x12 enters it; tools/dial3.sh's panels that no route reaches)
+    if (static const char* s_sz = std::getenv("SLY3_PANELACTIVATE"); s_sz && g_psw && p->mode == 0)
+    {
+        int f = 0, i = 0;
+        std::sscanf(s_sz, "%d,%d", &f, &i);
+        if (g_iframeHarness == f)
+        {
+            int k = 0;
+            for (const auto& up : g_psw->aploAll)
+                if (up->Cid() == 0x50)
+                {
+                    if (up.get() == plo && k == i)
+                    {
+                        std::printf("panel3: panel %d of the world activated (%zu dials, code %u)\n", i, p->aploDial.size(), plo->U32Field3(0, 0x1C0, 0));
+                        ActivateCodePanel3(plo, PloPoCurrent(g_psw));
+                    }
+                    ++k;
+                }
+        }
+    }
     for (int guard = 0; guard < 8; ++guard)
     {
         const int mode = p->mode;
@@ -473,20 +506,20 @@ void ActivateCodePanel3(LO* ploPanel, LO* ploActivator)
     SetPanelMode(ploPanel, 2);
 }
 
-// The world start: the panels and dials take their update (the dial's post-load 0x170E20 sets its +0x3C bit 2; the
-// panel's comes with its SO base 0x1F3B50) and their start state.
-void StartCodePanels3(SW* psw)
+// Every world's start (update.cpp, the objects' post-loads): a panel or dial takes its update (the dial's post-load
+// 0x170E20 sets its +0x3C bit 2; the panel's comes with its SO base 0x1F3B50) and its start state. (Until 2026-11-18
+// this ran once per process, at frame 0 (player3.cpp): an m_ext loaded later, e.g. the Intro replayed from the
+// episode chooser or a save loaded at the title, had a panel that never updated: the camera went to it, but no dial
+// turned and Sly was never handed the reach, so he walked away with the pad.)
+void PostLoadCodePanel3(SW* psw, LO* plo)
 {
-    if (!psw) return;
-    for (const auto& up : psw->aploAll)
-    {
-        LO* plo = up.get();
-        if (plo->Cid() != 0x50 && plo->Cid() != 0x79) continue;
-        if (plo->iupd >= 0) psw->aupd[static_cast<size_t>(plo->iupd)].grf |= GRFUPD_Update;
-        else plo->grfUpd |= GRFUPD_Update;
-        if (plo->Cid() == 0x50) PpanelOf(plo);
-        else PdialOf(plo);
-    }
+    if (!psw || !plo || (plo->Cid() != 0x50 && plo->Cid() != 0x79)) return;
+    if (plo->iupd >= 0) psw->aupd[static_cast<size_t>(plo->iupd)].grf |= GRFUPD_Update;
+    else plo->grfUpd |= GRFUPD_Update;
+    // (the records of the world being started; made on first use when g_psw is still the previous world's)
+    if (psw != g_psw) return;
+    if (plo->Cid() == 0x50) PpanelOf(plo);
+    else PdialOf(plo);
 }
 
 // orig3: 0x171188 (the panel 0x50's vt slot 32): SO's release, then 0x171538(p, -1): its mode -1 (a panel in use

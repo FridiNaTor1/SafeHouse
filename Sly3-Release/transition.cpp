@@ -425,12 +425,12 @@ void EnsureWorldRecords()
     }
 }
 
-void RequestWorldWarp(SW* psw, int iwrec, OID oidPoint, OID oidWipe)
+void RequestWorldWarp(SW* psw, int iwrec, OID oidPoint, OID oidWipe, int grfExtra)
 {
     EnsureWorldRecords();
     // orig 0x210990: the world's record
     if (iwrec < 0 || iwrec >= static_cast<int>(s_awrec.size())) return;
-    RequestTransition(psw, s_awrec[iwrec].abRecord, oidPoint, -1, 0, oidWipe);
+    RequestTransition(psw, s_awrec[iwrec].abRecord, oidPoint, -1, grfExtra, oidWipe);
 }
 
 // (s3-player) the world start keeps the characters the splice's start events added (spliceglue.cpp FLoAddedBySplice3:

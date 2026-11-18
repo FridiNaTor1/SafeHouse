@@ -37,8 +37,9 @@ int NGamePercent3(const GAMESAVE& gs);
 // orig3: 0x0025E510: the challenges' percent (of 0x349B68's) of the current game (the Bonus Movies' 35 / 70 rows)
 int NChallengePercent3();
 // orig3: 0x00289198: start episode iep (the Intro's binocucom task 1798 while it is not complete, else the episode's
-// first world at the default point)
-void StartEpisode3(SW* psw, int iep);
+// first world at the default point). grfExtra: more transition flags (0x40: the pending save of a game started from
+// the title, frontend.cpp StartGameFromSave: 0x18AB08 calls 0x289198 with the save as its record)
+void StartEpisode3(SW* psw, int iep, int grfExtra = 0);
 // orig3: 0x0017C6C8: the chosen row's object of the list shown (null: none)
 LO* PnodeEpMenuCur3();
 // (PC, copsmap3.h) the Two Player page's shown game (its class-0xAA object; null: not on that page)

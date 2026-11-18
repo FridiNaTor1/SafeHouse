@@ -518,16 +518,16 @@ int NChallengePercent3()
     return std::max(1, std::min(99, count * 100 / total));
 }
 
-void StartEpisode3(SW* psw, int iep)
+void StartEpisode3(SW* psw, int iep, int grfExtra)
 {
     if (iep < 0 || iep >= 9) return;
-    std::printf("flow: episode %d %s started from the chooser\n", iep, SzEp(iep));
+    std::printf("flow: episode %d %s started from %s\n", iep, SzEp(iep), grfExtra & 0x40 ? "a save" : "the chooser");
     // orig3 0x289198: the Intro not complete: its binocucom task 1798 in m_ext (35); else the episode's first world
     // (0x2EDFB0) at the default point. (TODO(sly3): its progress "episodeCurrent" and the saved checkpoint task /
     // world it resumes at (SW +0x4074..+0x4080), the China / Pirate special cases.)
     if (iep == sly3::EP_Intro && !FEpisodeComplete3(iep))
     {
-        RequestTaskStart(psw, 35, 1798);
+        RequestTaskStart(psw, 35, 1798, -1, grfExtra);
         return;
     }
     int iworld = NElf(sly3::VA_EPISODE_WORLDS + 4u * uint32_t(iep));
@@ -558,12 +558,12 @@ void StartEpisode3(SW* psw, int iep)
             else iworld = nProg({"widCheckpointForce"});
             if (iworld < 0) return;
             std::printf("flow: the Isle resumes at task %d in world %d\n", oid, iworld);
-            RequestTaskStart(psw, iworld, oid);
+            RequestTaskStart(psw, iworld, oid, -1, grfExtra);
             return;
         }
     }
     if (iworld < 0) return;
-    RequestWorldWarp(psw, iworld, sly3::POINT_DEFAULT, -1);
+    RequestWorldWarp(psw, iworld, sly3::POINT_DEFAULT, -1, grfExtra);
 }
 
 // ------------------------------------------------------------ the chooser

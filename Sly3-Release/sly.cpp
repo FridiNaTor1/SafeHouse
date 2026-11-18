@@ -2079,7 +2079,16 @@ void HandleActorMessage(ACTOR* pa, int msg, void* pv)
         if (static const bool s_f = std::getenv("SLY3_SLYEVPRINT") != nullptr; s_f && psly)   // (debug: Sly's events)
             std::printf("slyev t %.3f n 0x%X own %d aseg %d target %d\n", g_clock.t, pmsg->n, int(fOwn),
                         pmsg->pasega && pmsg->pasega->paseg ? pmsg->pasega->paseg->oid : -1, psly->plo10DC ? psly->plo10DC->oid : -1);
-        if (!fOwn) break;
+        // (orig3 0x153738 message 10: the actor's own events are those of a clip applied on it (the ASEGA's +0x18 is the
+        // actor), whichever runner holds it: e.g. the combo runner's clips (combo3.cpp). The native test was Sly 2's
+        // current animation only, so a combo clip's 0x17F never set the velocity: the air slam (combo 7563, clip 239)
+        // hovered and then fell under gravity instead of plunging at its clip's speed (~1,600 / s in the reference))
+        const bool fOwn3 = pmsg->pasega && pmsg->pasega->palo == pa->palo;
+        switch (pmsg->n)
+        {
+        case 0x17F: case 0x182: case 0x183: case 0x1F6: case 0x1F5: case 0x32B: if (!fOwn3) return; break;
+        default: if (!fOwn) return; break;
+        }
         switch (pmsg->n)
         {
         case 0x17F:   // (orig3 0x153738: Sly 3's id; Sly 2's 0x15E)

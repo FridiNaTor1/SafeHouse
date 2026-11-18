@@ -66,7 +66,7 @@ extern int g_cTransitionLoads;
 // object oidWipe (-1: none)
 void RequestTransition(SW* psw, const uint8_t* pchk, OID oidPoint, OID oidKey, int flags, OID oidWipe);
 // the reference's warp routes: world record iwrec at point oidPoint (default 393 = 0x189), or task oidTask
-void RequestWorldWarp(SW* psw, int iwrec, OID oidPoint = 0x189, OID oidWipe = 0x30A);
+void RequestWorldWarp(SW* psw, int iwrec, OID oidPoint = 0x189, OID oidWipe = 0x30A, int grfExtra = 0);   // (grfExtra: e.g. 0x40, the pending save)
 void RequestTaskStart(SW* psw, int iwrec, OID oidTask, OID oidWipe = -1, int grfExtra = 0);   // (grfExtra: TRANSF_INPLACE3)
 // the world records (the boot world's, loaded on first use)
 void EnsureWorldRecords();

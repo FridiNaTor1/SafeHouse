@@ -696,7 +696,6 @@ void InstallPlayerHooks3()
 bool FStartPlayer3(SW* psw)
 {
     ::MpScriptAnimPo().clear();
-    StartCodePanels3(psw);
     InstallPlayerHooks3();
     const char* sz = std::getenv("SLY3_START");
     if (!sz || !*sz || *sz == '0') return false;
@@ -888,7 +887,7 @@ void TracePlayer3(SW* psw, int frame)
     {
         s_ptrace = std::fopen(s_szTrace, "w");
         if (!s_ptrace) return;
-        std::fprintf(s_ptrace, "f,t,state,substate,jstate,x,y,z,vx,vy,vz,heading,mode,cx,cy,cz,cmpol,u,oid\n");
+        std::fprintf(s_ptrace, "f,t,state,substate,jstate,x,y,z,vx,vy,vz,heading,mode,cx,cy,cz,cmpol,u,oid,cstate,cdef\n");
     }
     // the current player's character when it is an actor (Sly 24, Bentley 25, Murray 26, ..), else Sly; the column
     // "oid" says which. The state is the character's own (Sly +0x19E0; Bentley / Murray +0x1520).
@@ -913,9 +912,9 @@ void TracePlayer3(SW* psw, int frame)
                         pxf->matWorld[3].y, pxf->matWorld[3].z, pos.x, pos.y, pos.z, PxfPos(static_cast<ALO*>(plo)) ? PxfPos(static_cast<ALO*>(plo))->matWorld[3].z : -1.0f);
         }
     const PODATA* ppo = PpodataFromLo(plo);
-    std::fprintf(s_ptrace, "%d,%.4f,%d,%d,%d,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.5f,%d,%.2f,%.2f,%.2f,%d,%.3f,%d\n", frame, g_clock.t,
+    std::fprintf(s_ptrace, "%d,%.4f,%d,%d,%d,%.3f,%.3f,%.3f,%.3f,%.3f,%.3f,%.5f,%d,%.2f,%.2f,%.2f,%d,%.3f,%d,%d,%d\n", frame, g_clock.t,
                  state, substate, pa->jump.state, pos.x, pos.y, pos.z, v.x, v.y, v.z, pa->radHeading, mode, g_cm.pos.x, g_cm.pos.y,
-                 g_cm.pos.z, g_cm.nCur, ppo && ppo->ppadctl ? ppo->ppadctl->uJoy : -1.0f, plo->oid);
+                 g_cm.pos.z, g_cm.nCur, ppo && ppo->ppadctl ? ppo->ppadctl->uJoy : -1.0f, plo->oid, NCombo3State(pa), NCombo3DefOid(pa));
     std::fflush(s_ptrace);
 }
 }  // namespace sly3

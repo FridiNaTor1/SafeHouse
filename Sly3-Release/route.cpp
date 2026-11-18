@@ -21,7 +21,7 @@
 // teleport X Y Z [H]: the current player put there (as SLY2N_TELEPORT: Z is the object's, H the heading, camera cut) at the
 // step's start (one frame); waittask OID STATE N [CSV]: until the task's state is >= STATE (after N frames it goes on), the CSV's
 // presses meanwhile (e.g. CROSS taps through a dialog); skipif OID STATE N: the next N steps skipped when the task's state is
-// >= STATE (native only: e.g. a fight's remaining rounds once it is won); taskreq OID STATE: a poke (as SLY2N_TASKREQ); intovol OID [DZ]: the player at a volume's center (its floor + DZ); pocket OID N [DZ] [until=TASK]: N frames, the player kept in guard OID's pickpocket volume at its point nearest the pocket, CIRCLE once the pickpocket can start, until the pocket is taken; tail CID OID DIST N [DZ] [CSV]: N frames (the CSV's presses every 60 frames), the player put DIST/2 behind the nearest such object whenever farther than DIST; onlo OID [DZ] [N] [DX DY [H]]: the player onto the N-th in-world copy of OID, DZ above, with its velocity (a moving train); giver OID [D]: as SLY2N_TELEGIVER (-1: the first guard with a prize, -N: the N-th); waitclock DT N: until the game clock ran DT (popups pause it); hackdock X Y: the hack ship put there once driven; warpworld N: world record N loaded in this process (the debug menu's warp); nojt OID[,OID..] N [CSV]: N frames (the CSV's presses meanwhile), failing once one of those objects is a tracked interaction target (a prompt); all independent of the game clock (pauses, scenes).
+// >= STATE (native only: e.g. a fight's remaining rounds once it is won); taskreq OID STATE: a poke (as SLY2N_TASKREQ); intovol OID [DZ]: the player at a volume's center (its floor + DZ); pocket OID N [DZ] [until=TASK]: N frames, the player kept in guard OID's pickpocket volume at its point nearest the pocket, CIRCLE once the pickpocket can start, until the pocket is taken; tail CID OID DIST N [DZ] [CSV]: N frames (the CSV's presses every 60 frames), the player put DIST/2 behind the nearest such object whenever farther than DIST; onlo OID [DZ] [N] [DX DY [H]]: the player onto the N-th in-world copy of OID, DZ above, with its velocity (a moving train); giver OID [D]: as SLY2N_TELEGIVER (-1: the first guard with a prize, -N: the N-th); waitclock DT N: until the game clock ran DT (popups pause it); hackdock X Y: the hack ship put there once driven; warpworld N[:TASK]: world record N loaded in this process (the debug menu's warp; :TASK at that task's start, as the episode chooser); nojt OID[,OID..] N [CSV]: N frames (the CSV's presses meanwhile), failing once one of those objects is a tracked interaction target (a prompt); all independent of the game clock (pauses, scenes).
 #include "activate.h"
 #include "gadget.h"
 #include "game/items3.h"
@@ -417,9 +417,12 @@ void Load()
         else if (f[0] == "warpworld" && f.size() >= 2)
         {
             // warpworld N: the world record N loaded in this process (the debug menu's warp, RequestWorldWarp), its default
-            // point; the route goes on through the load (e.g. tools/spintripregress.py's trip)
+            // point; the route goes on through the load (e.g. tools/spintripregress.py's trip). warpworld N:TASK (Sly 3): the
+            // world loaded at that task's start (RequestTaskStart, as the episode chooser 0x289198 starts the Intro at
+            // 35:1798), e.g. m_ext loaded a second time in the process (tools/dial3.sh's code panel case)
             s.kind = STEPR::WarpWorld; s.frames = 1;
             s.oid = std::atoi(f[1].c_str());
+            s.cid = f[1].find(':') != std::string::npos ? std::atoi(f[1].c_str() + f[1].find(':') + 1) : -1;
         }
         else if (f[0] == "startscpt" && f.size() >= 2)
         {
@@ -1112,8 +1115,9 @@ bool FRouteSample(int frame, uint16_t* pgrf, uint8_t abAxis[4])
     }
     if (s->kind == STEPR::WarpWorld && rel == 1 && g_psw)
     {
-        std::printf("route: step %d warpworld %d (frame %d)\n", r.istep + 1, s->oid, frame);
-        RequestWorldWarp(g_psw, s->oid);  // (transition.h: as the debug menu)
+        std::printf("route: step %d warpworld %d:%d (frame %d)\n", r.istep + 1, s->oid, s->cid, frame);
+        if (s->cid >= 0) RequestTaskStart(g_psw, s->oid, s->cid);   // (transition.h: as the episode chooser)
+        else RequestWorldWarp(g_psw, s->oid);  // (transition.h: as the debug menu)
     }
     // (the task's state through NTaskStateOid (task.h): Sly 3's tasks (game/task3) when the scripts run, else the
     // copied TASK objects; -2: no such task)
