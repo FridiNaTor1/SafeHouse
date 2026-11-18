@@ -96,6 +96,8 @@ extern uint32_t g_uRandState;  // xfmath.cpp
 #include "pcrc.h"
 #include "vehicle.h"
 #include "../platform/game_sched.h"
+#include "mapstates.h"
+#include "modworld.h"
 #include "transition.h"
 #include "po.h"
 #include "shop.h"
@@ -689,7 +691,7 @@ int RunGame(const GAMEOPTS& go)
         else ApproximateBakeLighting(scene);
         // (test aid: SLY2N_HIDDENWINDOW=1: a windowed run (input, pacing, VR) with its window never shown)
         static const bool s_fHidden = std::getenv("SLY2N_HIDDENWINDOW") != nullptr;
-        if (!g_gl.FInit(go.width, go.height, fWindow && !s_fHidden, "Sly2-Release", error))
+        if (!g_gl.FInit(go.width, go.height, fWindow && !s_fHidden, "Sly 2: Band of Thieves", error))
         {
             std::fprintf(stderr, "%s\n", error.c_str());
             return 1;
@@ -1644,6 +1646,7 @@ int RunGame(const GAMEOPTS& go)
         PrepareGangFrame(frame);
         g_iframeHarness = frame;
         UpdateSw(psw.get());
+        UpdateModEntries(psw.get());   // (mod packages: a new world's entry walked into, modworld.h)
         // orig 0x1D9648 (the HUD's update, hudwidget.h; its wipe 0x22B198 here first)
         // (its start: the load's pad lock 8 lifted once the new world's clock passes 0.1 s at its rate)
         if ((g_grfjoyLock & 8) && g_clock.rDt != 0.0f && 0.1f < g_clock.t / g_clock.rDt) UnlockJoy(8);
@@ -2238,6 +2241,7 @@ int RunGame(const GAMEOPTS& go)
     }
     if (fWindow) cane::gl::HandoffLeaving();   // (the Collection Style Launcher comes back while the world unloads)
     if (pfDump) std::fclose(pfDump);
+    WritePresenceIfRequested(psw.get());   // (--dump-presence: mapstates.h)
     // debug: SLY2N_DUMPSAVE=file: the save block (orig 0x3D4A60) at the end (tools/savedump.py prints / diffs it)
     if (const char* sz = std::getenv("SLY2N_DUMPSAVE"))
     {

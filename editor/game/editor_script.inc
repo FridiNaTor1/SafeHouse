@@ -3,6 +3,9 @@
 // worldparts.h), edited and checked (syntax, module order, built-in names, and the literal oids the scripts look objects
 // up by). Sly 2 and Sly 3 (each game's own splice compiler).
 #include "editor_impl.h"
+#if EDGAME_SLY2
+#include "splicenames.h"   // (the readable names: editor_scriptnames.inc)
+#endif
 
 #if CANE_EDITOR_3D && EDFEAT_SCRIPTS
 
@@ -23,6 +26,10 @@ void CEditor::LoadScriptText(int igroup)
         std::vector<uint8_t> ab;
         m_proj.readPart(m_index.groups[igroup].scriptsPart, ab);
         m_scriptText.assign(ab.begin(), ab.end());
+#if EDGAME_SLY2
+        // (names: display only, editor_scriptnames.inc)
+        if (m_fScriptReadable) m_scriptText = ScriptReadable(igroup, m_scriptText);
+#endif
     }
     m_scriptEdit = m_scriptText;
     m_scriptError.clear();
@@ -156,16 +163,62 @@ void CEditor::DrawScripts()
     ImGui::SameLine();
     if (ImGui::Button("Revert")) LoadScriptText(m_igroupScript);
     ImGui::EndDisabled();
-    if (fCheck || fApply)
+    std::string textCheck = m_scriptEdit;
+#if EDGAME_SLY2
+    // the names switch: the text shown with names (display only) or as the converter prints it; an edit carried over
+    ImGui::SameLine();
+    bool fReadable = m_fScriptReadable;
+    if (ImGui::Checkbox(T("Names"), &fReadable))
+    {
+        std::string text, error;
+        if (fReadable) text = ScriptReadable(m_igroupScript, m_scriptEdit, &error);
+        else if (!FScriptToRaw(m_scriptEdit, text, error)) text.clear();
+        if (!text.empty() && error.empty())
+        {
+            const bool fDirty = m_fScriptDirty;
+            m_fScriptReadable = fReadable;
+            const int ig = m_igroupScript;
+            LoadScriptText(ig);
+            if (fDirty) { m_scriptEdit = text; m_fScriptDirty = true; }
+        }
+        else m_scriptError = error;
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("%s", T("Names for the scripts' numbers (display only: the game keeps the numbers).\n"
+                                  "self: the object the handler runs for; on-...: the engine's events; .name: an option;\n"
+                                  "$name: an object; <name>: a built-in. The \";=\" lines at the top map each name to its number;\n"
+                                  "a new name you write becomes a new symbol."));
+    std::vector<std::string> anew;
+    if ((fCheck || fApply) && FSpliceTextReadable(m_scriptEdit))
+    {
+        std::string error;
+        if (!FSpliceRaw(m_scriptEdit, textCheck, error, &anew)) { m_scriptError = error; textCheck.clear(); }
+    }
+#endif
+    if ((fCheck || fApply) && !textCheck.empty())
     {
         std::vector<PROBLEM> apb;
-        if (!FCheckScript(m_scriptEdit, m_scriptError, m_scriptErrorLine, &apb, m_igroupScript)) {}
+        if (!FCheckScript(textCheck, m_scriptError, m_scriptErrorLine, &apb, m_igroupScript)) {}
         else if (!apb.empty()) { m_scriptError = apb.front().text + (apb.size() > 1 ? " (+" + std::to_string(apb.size() - 1) + " more)" : ""); m_scriptErrorLine = 0; }
         else m_scriptError = "ok: compiles back to the game's format";
+#if EDGAME_SLY2
+        if (m_scriptError.rfind("ok", 0) == 0 && !anew.empty()) m_scriptError += " (new symbols: " + anew.front() + (anew.size() > 1 ? " +" + std::to_string(anew.size() - 1) : std::string()) + ")";
+#endif
         if (fApply && m_scriptError.rfind("line ", 0) != 0 && m_scriptError.find("scripts:") == std::string::npos)
         {
             std::string error;
-            if (FApplyScript(m_igroupScript, m_scriptEdit, error)) { Status("scripts of " + m_index.groups[m_igroupScript].name + " applied"); m_scriptText = m_scriptEdit; m_fScriptDirty = false; Reload(m_plSel ? m_plSel->oid : 0); }
+            std::string textApply = m_scriptEdit;
+#if EDGAME_SLY2
+            // (the converter's own print of what the text compiles to)
+            if (!FScriptToRaw(m_scriptEdit, textApply, error)) textApply.clear();
+#endif
+            if (!textApply.empty() && FApplyScript(m_igroupScript, textApply, error))
+            {
+                Status("scripts of " + m_index.groups[m_igroupScript].name + " applied");
+                const int ig = m_igroupScript;
+                Reload(m_plSel ? m_plSel->oid : 0);
+                LoadScriptText(ig);
+            }
             else m_scriptError = error;
         }
     }

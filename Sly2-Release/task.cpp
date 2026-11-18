@@ -3,6 +3,7 @@
 #include "actor.h"
 #include "booty.h"
 #include "task.h"
+#include "mapstates.h"
 #include "replay.h"
 #include "guard.h"
 #include "animfind.h"
@@ -309,6 +310,7 @@ void SetTaskState(TASK* p, int n)
         Msg(p, 0x15);
         // vt slot 4 (0x11, p): the BASIC notification (TODO)
     }
+    OnTaskStateMapStates(p);   // (mod packages' map states: mapstates.h)
     switch (p->nMode)
     {
     case 1:
@@ -888,6 +890,8 @@ void TaskMgrOnEvent(int n)
     case 4: StartQueuedTask(); break;
     case 5:
     {
+        // (mapstates.h --map-state: the requested state's task states into the save first)
+        ApplyMapStateRequest(s_psw);
         // the world's tasks from the save, the current job / task / checkpoint task again, then saved
         const std::vector<TASK*> a = AptaskOrdered();
         for (TASK* p : a)
@@ -912,6 +916,7 @@ void TaskMgrOnEvent(int n)
             CSAVE save(p, 0, nullptr);
             SaveTask(p);
         }
+        ApplyCustomMapStates(s_psw);   // (mod packages' map states: mapstates.h)
         if (SLY2N_ENV("SLY2N_TASKDEBUG"))
         {
             std::fprintf(stderr, "tasks: %zu ordered of %zu; job %d task %d chk %d\n", a.size(), AptaskAll().size(),

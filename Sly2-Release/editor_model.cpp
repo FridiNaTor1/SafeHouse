@@ -1221,7 +1221,8 @@ bool CEditor::FImportModel(const std::string& path, LO* plo, bool fNew, std::str
     {
         int iobjSrc = -1;
         auto fPlain = [&](const EDITOBJREC& r) {
-            if (r.depth != 0 || !r.plo || r.ibMatrix || !FIsLoDerivedFrom(r.plo, 0x30)) return false;
+            // (not one the world takes out at its start, option 26: the copy would start out of the world too)
+            if (r.depth != 0 || !r.plo || r.ibMatrix || !FIsLoDerivedFrom(r.plo, 0x30) || r.plo->fRemoveAtStart) return false;
             const auto it = m_mpobj.find(r.plo);
             return it != m_mpobj.end() && it->second.iglobset >= 0 && it->second.imat >= 0;
         };

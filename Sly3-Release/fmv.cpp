@@ -732,7 +732,7 @@ int PlayMovieCommand(const std::string& arg, const std::string& dirOut, double t
     if (!dirOut.empty()) std::filesystem::create_directories(dirOut);
     if (SDL_InitSubSystem(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER) == 0)
     {
-        s.pwindow = SDL_CreateWindow("Sly 2 movie", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 960, 720,
+        s.pwindow = SDL_CreateWindow("Sly 3: Honor Among Thieves", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 960, 720,
                                      SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
         if (s.pwindow) s.prenderer = SDL_CreateRenderer(s.pwindow, -1, SDL_RENDERER_PRESENTVSYNC);
         for (int i = 0; i < SDL_NumJoysticks(); ++i)

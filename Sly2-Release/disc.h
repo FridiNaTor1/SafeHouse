@@ -17,6 +17,7 @@
 #include <vector>
 
 #include "disc_image.h"
+#include "../platform/mod_worlds.h"
 
 // A file on the disc: the decoded form of the game's 64-byte keyed record (the CHK/FK records of the original:
 // isector = (w[0x00] ^ w[0x34]) + 0xCA0, cb = w[0x04] ^ w[0x3C], id = w[0x08] ^ w[0x38]).
@@ -85,6 +86,24 @@ public:
         const auto it = m_mpCustomTask.find({world, oid});
         return it != m_mpCustomTask.end() ? it->second : std::string();
     }
+    // (mod packages' worlds, platform/mod_worlds.h; docs/MODDING.md "Map states" / "New levels") The loaded packages'
+    // new worlds (each served at a sector of its own from ISECTOR_MODWORLD, its index a file of the package), map
+    // states and entries, in package load order.
+    struct MODWORLD
+    {
+        std::string package;
+        cane::mods::NewWorld w;
+        uint32_t isector = 0;
+    };
+    static constexpr uint32_t ISECTOR_MODWORLD = 0xD0000000u;
+    [[nodiscard]] const std::vector<MODWORLD>& AmodWorld() const { return m_amodworld; }
+    [[nodiscard]] const std::vector<std::pair<std::string, cane::mods::MapState>>& AmapState() const { return m_amapstate; }
+    [[nodiscard]] const std::vector<cane::mods::Entry>& Aentry() const { return m_aentry; }
+    // (the map editor) a project's worlds, states and entries (its manifest; its files/ folder holds the new worlds'
+    // indexes), as a loaded package's
+    void AddPackageWorlds(const cane::mods::Manifest& m);
+    // The sector of the world file named name (the manifest's names, a new world's name); 0: none.
+    [[nodiscard]] uint32_t IsectorOfWorldName(const std::string& name) const;
     // The shared languages folder (langstore.h; before FOpen; empty: none): manifest paths "@languages/<rest>" are
     // <dir>/<rest> (the languages an installation keeps there, shared with the other regions' installations).
     void SetLanguagesDirectory(const std::string& dir) { m_dirLanguages = dir; }
@@ -205,6 +224,9 @@ private:
     std::vector<std::string> m_adirPackagesExtra;
     std::vector<std::string> m_aidPackage;
     std::map<std::pair<std::string, int>, std::string> m_mpCustomTask;   // (world, task oid) -> package id
+    std::vector<MODWORLD> m_amodworld;
+    std::vector<std::pair<std::string, cane::mods::MapState>> m_amapstate;   // (package id, state)
+    std::vector<cane::mods::Entry> m_aentry;
     std::vector<std::string> m_adirModRoots;
     std::function<bool(const std::string& rel, std::vector<uint8_t>& ab)> m_pfnPartRead;
     int m_cmod = 0;

@@ -25,7 +25,8 @@ GAIT* PgaitOutfit3(LO* ploPlayer, int sfx);
 // orig3 0x156D48: the player wears an outfit (+0x1108: a record worn, 0x173428) that is a disguise in this episode (the
 // record's episode, 0x172CF8, from the table 0x321138: 0x759 Venice, 0x75A China, 0x75B the pirates; -1 any)
 bool FPlayerDisguised3(LO* ploPlayer);    // its gait (0x173408), null: the player's own
-bool FOutfitWorn3(LO* ploPlayer);        // orig3 0x173428 on +0x1108: a record worn (any episode)
+bool FOutfitWorn3(LO* ploPlayer);
+void HoldOutfit3(LO* ploPlayer, bool fHold);   // orig3 0x173448 / 0x173498: the scripts' hold (+0x64)        // orig3 0x173428 on +0x1108: a record worn (any episode)
 // orig3 0x16F2B0: group id of a class-0x97 object (ploOwner; null: the first of the world's that has it) streamed in,
 // the one it had before unloaded (false: none)
 bool FStreamGroup97(int id, LO* ploOwner = nullptr);

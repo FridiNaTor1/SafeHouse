@@ -873,7 +873,7 @@ int RunGame(const GAMEOPTS& go)
         // drew with no OpenGL context, a crash for every windowed start on the PC)
         if (!go.fHeadless)
         {
-            if (!g_gl.FInit(go.width, go.height, !std::getenv("SLY2N_HIDDENWINDOW"), "Sly2-Release", error))
+            if (!g_gl.FInit(go.width, go.height, !std::getenv("SLY2N_HIDDENWINDOW"), "Sly 3: Honor Among Thieves", error))
             {
                 std::fprintf(stderr, "%s\n", error.c_str());
                 return 1;
@@ -972,7 +972,7 @@ int RunGame(const GAMEOPTS& go)
         else ApproximateBakeLighting(scene);
         // (test aid: SLY2N_HIDDENWINDOW=1: a windowed run (input, pacing, VR) with its window never shown)
         static const bool s_fHidden = std::getenv("SLY2N_HIDDENWINDOW") != nullptr;
-        if (!g_gl.FInit(go.width, go.height, fWindow && !s_fHidden, "Sly2-Release", error))
+        if (!g_gl.FInit(go.width, go.height, fWindow && !s_fHidden, "Sly 3: Honor Among Thieves", error))
         {
             std::fprintf(stderr, "%s\n", error.c_str());
             return 1;
@@ -1033,6 +1033,9 @@ int RunGame(const GAMEOPTS& go)
         }
         auto stepSim = [&](int frame) {
         g_iframeMain = frame;  // (debug prints: SLY2N_TRANSLOG)
+        // (debug: SLY3_NANTRAP=F: floating-point invalid operations trap from frame F on (run under gdb for the culprit))
+        if (static const int s_fNan = std::getenv("SLY3_NANTRAP") ? std::atoi(std::getenv("SLY3_NANTRAP")) : -1; s_fNan >= 0 && frame == s_fNan)
+            feenableexcept(std::getenv("SLY3_NANTRAPALL") ? FE_INVALID | FE_DIVBYZERO | FE_OVERFLOW : FE_INVALID);
         InvalidateSceneDrawnTests();   // (scenesw.h: the placement's FAloDrawn answers do not outlive a step)
         // orig 0x20E890: a pending world change
         // (a transition with a wipe is pending only once the wipe is out (0x22B220 -> WIPES_Loading): the queued
@@ -2241,7 +2244,14 @@ int RunGame(const GAMEOPTS& go)
         static const int s_cShotEvery = s_pchzShotEvery && std::strchr(s_pchzShotEvery, ':') ? std::atoi(std::strchr(s_pchzShotEvery, ':') + 1) : 0;
         // (SLY2N_SHOTFROM=F: only from frame F on)
         static const int s_frameShotFrom = std::getenv("SLY2N_SHOTFROM") ? std::atoi(std::getenv("SLY2N_SHOTFROM")) : 0;
-        const bool fShotEvery = s_cShotEvery > 0 && (frame + 1) % s_cShotEvery == 0 && frame >= s_frameShotFrom;
+        // (SLY2N_SHOTAT=F,F,...: also those frames (as named), e.g. the frames whose camera matches a PCSX2 state's)
+        static const std::vector<int> s_aframeShotAt = [] {
+            std::vector<int> a;
+            for (const char* q = std::getenv("SLY2N_SHOTAT"); q && *q; q = std::strchr(q, ',') ? std::strchr(q, ',') + 1 : nullptr) a.push_back(std::atoi(q));
+            return a;
+        }();
+        const bool fShotEvery = (s_cShotEvery > 0 && (frame + 1) % s_cShotEvery == 0 && frame >= s_frameShotFrom) ||
+                                (!s_aframeShotAt.empty() && std::find(s_aframeShotAt.begin(), s_aframeShotAt.end(), frame + 1) != s_aframeShotAt.end());
         const bool fDrawFrame = fWindow || (!go.screenshot.empty() && frame + 1 == go.cframe) || fShotEvery ||
                                 (fDraws && (FPhotoCapturePending() || FAnimatedOverlayNeedsFrame() || std::getenv("SLY2N_RENDERALL")));
         if (fDrawFrame)
@@ -2426,6 +2436,25 @@ int RunGame(const GAMEOPTS& go)
                 PlaceSkiesAtCamera(scene, apalo, cam.pos);
                 SetPeCameraOf(cam);   // (pe.cpp: the drawn camera)
             }
+            // (debug: SLY3_DRAWMATPRINT=oid,oid...: each drawn frame's first glob matrix of those ALOs (the drawn pose;
+            // MatLoWorld3 is the POS record's, without an actor's heading) and the camera's rows / fov)
+            if (static const char* s_szDm = std::getenv("SLY3_DRAWMATPRINT"); s_szDm)
+            {
+                for (size_t k = 0; k < apalo.size(); ++k)
+                {
+                    if (!apalo[k] || scene.aglobset[k].amatGlob.empty()) continue;
+                    for (const char* q = s_szDm; q && *q; q = std::strchr(q, ',') ? std::strchr(q, ',') + 1 : nullptr)
+                        if (std::atoi(q) == apalo[k]->oid)
+                        {
+                            const glm::mat4& m = scene.aglobset[k].amatGlob[0];
+                            std::printf("drawmat %d oid %d: %.2f %.2f %.2f x %.3f %.3f %.3f z %.3f %.3f %.3f\n", cframeTimed, apalo[k]->oid, m[3].x, m[3].y,
+                                        m[3].z, m[0].x, m[0].y, m[0].z, m[2].x, m[2].y, m[2].z);
+                            break;
+                        }
+                }
+                const glm::vec3 d = cam.Dir();
+                std::printf("drawcam %d: %.2f %.2f %.2f dir %.3f %.3f %.3f fovy %.2f\n", cframeTimed, cam.pos.x, cam.pos.y, cam.pos.z, d.x, d.y, d.z, cam.fovY);
+            }
             if (std::getenv("SLY2N_CAMPRINT"))   // (debug: each drawn frame's camera and the player's drawn root)
             {
                 const glm::vec3 posSly = !apalo.empty() && PloPoCurrent(psw.get()) ? [&] {
@@ -2433,8 +2462,8 @@ int RunGame(const GAMEOPTS& go)
                         if (apalo[k] == PloPoCurrent(psw.get()) && !scene.aglobset[k].amatGlob.empty()) return glm::vec3(scene.aglobset[k].amatGlob[0][3]);
                     return glm::vec3(0.0f);
                 }() : glm::vec3(0.0f);
-                std::printf("campr %d step %d u %.3f cam %.2f %.2f %.2f sly %.2f %.2f %.2f\n", cframeTimed, frame, accum.fActive ? accum.U() : 1.0f, cam.pos.x, cam.pos.y, cam.pos.z,
-                            posSly.x, posSly.y, posSly.z);
+                std::printf("campr %d step %d u %.3f cam %.2f %.2f %.2f sly %.2f %.2f %.2f dir %.5f %.5f %.5f fov %.4f t %.4f faded %d mrd %d\n", cframeTimed, frame, accum.fActive ? accum.U() : 1.0f, cam.pos.x, cam.pos.y, cam.pos.z,
+                            posSly.x, posSly.y, posSly.z, cam.mat[0].x, cam.mat[0].y, cam.mat[0].z, cam.fovY, g_clock.t, g_cFadedRecs3.exchange(0), g_renderstats.cmrd);
             }
             // orig: 0x1A7518/0x1477B0: query before the overlay's state1 capture/transition.
             // (SLY2N_FPSLOG: the GPU's time per frame, a timer query read back a few frames later)

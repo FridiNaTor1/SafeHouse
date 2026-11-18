@@ -45,6 +45,8 @@ void ResetTriggers();
 #include "sw.h"
 #include "update.h"
 #include "savedata.h"
+#include "modworld.h"
+#include "mapstates.h"
 
 #include <cstdio>
 #include <string>
@@ -332,6 +334,13 @@ void EnsureWorldRecords()
     std::size_t cbRead = 0, cbFile = 0;
     if (FLoadWorldFile(pswBoot.get(), FkFromRecord(g_disc.PbElf(VA_FK_BOOT_WORLD, 0x40)), "", &cbRead, &cbFile))
         s_awrec = pswBoot->awrec;
+    AppendModWorldRecords(s_awrec);   // (mod packages' new worlds: modworld.h)
+}
+
+void RefreshWorldRecords()
+{
+    EnsureWorldRecords();
+    AppendModWorldRecords(s_awrec);
 }
 
 void RequestWorldWarp(SW* psw, int iwrec, OID oidPoint, OID oidWipe)
@@ -395,6 +404,7 @@ void PrintRef(const CRef& ref, std::string* ps)
 void UnloadWorld(std::unique_ptr<SW>& psw, bool fEndTasks)
 {
     if (psw && fEndTasks) EndWorldTasks(psw.get());
+    ResetMapStatesLive();   // (mod packages' map states: mapstates.h)
     ResetHudWidgets();  // orig 0x1D9408: release gauge/prompt bindings before the world's objects
     ResetSoundMgr();  // orig 0x1FD700 (from 0x20E068)
     ResetAmbientSounds();
@@ -438,7 +448,7 @@ std::unique_ptr<SW> PswUpdateTransition(std::unique_ptr<SW> psw)
     BuildReplayJobTables(iwrec);   // (QoL Replay Jobs, replay.h: before the front end, once; no world is current here)
     psw = std::make_unique<SW>();
     ResetPhysWorld();  // (the old world's attachments go with it, also when the new world has no file: world 18)
-    psw->filter = iwrec >= 0 ? iwrec : 0;
+    psw->filter = iwrec >= 0 ? IwrecFilterOf(iwrec) : 0;   // (a mod's new world: its template's filter, modworld.h)
     std::memcpy(t.abChkCur, req.abChk, 64);
     t.fHaveCur = true;
     t.iwrecCur = iwrec;
@@ -448,7 +458,11 @@ std::unique_ptr<SW> PswUpdateTransition(std::unique_ptr<SW> psw)
         std::fprintf(stderr, "transition: world record %d did not load\n", iwrec);
     OnReplayWorldLoaded(iwrec, req.flags);   // (QoL Replay Jobs: the front end / the title end a replay)
     LoadSoundBank();  // orig 0x1FD5E8 (the end of 0x13DA18)
-    if (!psw->awrec.empty()) s_awrec = psw->awrec;
+    if (!psw->awrec.empty())
+    {
+        s_awrec = psw->awrec;
+        AppendModWorldRecords(s_awrec);
+    }
     ++g_cTransitionLoads;
     if (std::getenv("SLY2N_TRANSLOG")) std::printf("transition: world record %d loaded (%zu objects, flags 0x%X, frame %d, load %d)\n", iwrec, psw->aploAll.size(), req.flags, g_iframeMain, g_cTransitionLoads);
     CmOnWorldLoad(psw.get());  // the camera: InitCm 0x14D6D8, the world's camera options, the player's (cmworld.h)
@@ -651,6 +665,7 @@ std::unique_ptr<SW> PswUpdateTransition(std::unique_ptr<SW> psw)
         EnablePo(psw.get(), psly, 1);
     }
     t.ploPlayer = PloPoCurrent(psw.get());
+    OnModWorldStarted(psw.get(), iwrec, pchk != nullptr);   // (mod packages: a new world's spawn, the entries: modworld.h)
     if (std::getenv("SLY2N_WRECLIST"))  // (debug: the world records: index, episode, main, progress key)
         for (size_t i = 0; i < s_awrec.size(); ++i)
         {

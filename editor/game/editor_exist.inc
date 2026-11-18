@@ -1,7 +1,8 @@
 // When an object exists (the Properties panel's "When it exists" section; notes/EDITOR_PLAN.md "Hooks for script
 // names"). This version lists the stored facts as they are: the record's world filters (the header's list: the object
 // is loaded only in those world variants), the options that add or remove it at the load, and the tasks / scripts that
-// name it. The plain-words version (which scripts show or hide it, in which missions it is there) replaces this body.
+// name it. Sly 2: the plain-words version (editor_scriptnames.inc ExistenceFacts: where it loads, which tasks / jobs /
+// scripts add or remove it, in which states and events, under which conditions).
 namespace edimpl
 {
 
@@ -37,10 +38,23 @@ void CEditor::DrawExistence(LO* plo, const EDOBJ* po)
 #endif
             }
     int n = 0;
+#if EDGAME_SLY2
+    // (Sly 2: the plain words, editor_scriptnames.inc: where it loads, the tasks / jobs / scripts that add or remove it)
+    alines.clear();
+    ExistenceFacts(plo, alines);
+    if (alines.size() <= 1 && (alines.empty() || alines[0].find(T("Loaded")) == 0))
+        alines.push_back(T("Always there once loaded: no task, job or script adds or removes it"));
+#else
     if (FOptionInt(plo, EDEOPID(25), n) && n) alines.push_back(T("Added to the world at the load (option 25)"));
     if (FOptionInt(plo, EDEOPID(26), n) && n) alines.push_back(T("Removed from the world at the start (option 26)"));
     if (alines.empty()) alines.push_back(T("Always there (no filters or load options; scripts may still add or remove it)"));
-    for (const std::string& s : alines) ImGui::BulletText("%s", s.c_str());
+#endif
+    for (const std::string& s : alines)
+    {
+        ImGui::Bullet();
+        ImGui::SameLine();
+        ImGui::TextWrapped("%s", s.c_str());
+    }
 }
 
 }  // namespace edimpl

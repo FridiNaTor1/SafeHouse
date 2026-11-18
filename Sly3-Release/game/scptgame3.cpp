@@ -1,5 +1,6 @@
 // Sly 3's scripts and tasks in the game (scptgame3.h).
 
+#include "outfit3.h"
 #include "stepphys.h"
 #include "../binoc3.h"
 #include "ai.h"
@@ -518,6 +519,8 @@ struct GAMESCPTHOST3 : SCPTHOST3
     {
         if (FPrint()) std::printf("scpt3: frame %d player control %s\n", s_cframe, fLock ? "locked" : "released");
         if (g_scpthooks3.pfnLockPlayerControl) g_scpthooks3.pfnLockPlayerControl(fLock);
+        // (orig3 0x22B238: the hold is the current player's outfit object's +0x64 (0x173448 / 0x173498))
+        if (g_psw) HoldOutfit3(PloPoCurrent(g_psw), fLock);
     }
     // orig3 0x226D00 case 54 (SCPT 0x36, the actor leaps to an object): the object's interaction component 0x1A2A40 (Sly 3's
     // classes HIDE 0x64, CRAWLHOOK 0x19, WALL 0x20, LEDGE 0x0B, USE 0x21, RESPONSE 0x26, PIPE 0x0A, RAIL 0x0C, SPIRE 0x25,
@@ -1640,6 +1643,13 @@ void StartupScripts3(SW* psw)
         ps->oid = plo->oid;
         ps->acmd = plos->acmd;
         ps->plo = plo;
+        // +0xA8: EOPID 758 (an enum, grf 0x82): how the commands that drive the player treat him (0x226BE0: 0 his
+        // control reset, 2 held: 0x22B238, his outfit's restrictions off). Natively never read before s3-intro (every
+        // script ran as 0). SLY3_SCPTMODE0=1: as before
+        static const bool s_fMode0 = std::getenv("SLY3_SCPTMODE0") != nullptr;
+        for (const OPT& o : plo->aopt)
+            if (o.eopid == 758 && !o.aval.empty() && !s_fMode0) ps->mode = o.aval[0].n;
+        if (FPrint() && ps->mode) std::printf("scpt3: SCPT %d mode %d\n", plo->oid, ps->mode);
         // (debug: SLY3_SCPTDUMP=oid[,oid..] | all: the script's commands at the world start)
         if (static const char* s_sz = std::getenv("SLY3_SCPTDUMP"); s_sz && (!std::strcmp(s_sz, "all") || (std::string(",") + s_sz + ",").find("," + std::to_string(plo->oid) + ",") != std::string::npos))
             for (std::size_t i = 0; i < ps->acmd.size(); ++i)

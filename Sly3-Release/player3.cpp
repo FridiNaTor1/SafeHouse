@@ -352,7 +352,7 @@ void FaceObject3(LO* ploActor, LO* plo)
 //   0x2D 0x154C00 = 0x1421F8 (interact kind 5, the held object put there);              done 0x154DA0 = 0x1423A0
 //   0x2E 0x154EF0 = 0x1424E0 (the prize interaction, kind 12);                          done 0x154F40 = 0x142530
 //   0x35 (pending only): done when the actor's interact kind 8 has ended
-//   0x37 0x153F68 = 0x141968 (the actor launched to a point; not waited on)
+//   0x37 0x153F68 = 0x141968 (the actor launched to a point);                         done: its jump's state -1 (+0x33C)
 //   0x6A 0x172C30 + 0x172AE8 on the actor's +0x1108 object (the outfits, outfit3.cpp): the outfit n worn with the
 //        change's animation; done when the change is over (+0x48 == -1)
 // TODO(s3-gadgets): 0x74 (orig3 0x226D00 case 116, Bentley only): his item 0xD (0x1400C0) lets go of its object
@@ -412,6 +412,7 @@ bool FActorCmdDone3(int id, LO* ploActor)
     case 0x2E: return pa->n4C8 != 12;
     case 0x35: return pa->n4C8 != 8;
     case 0x6A: return !FOutfitChanging3(ploActor);
+    case 0x37: return pa->jump.state == -1;   // (orig3 0x229438 case 55: +0x33C)
     default: return true;
     }
 }
@@ -829,6 +830,17 @@ void SetPosPlayer3(SW* psw, int frame)
                     const SOST* pst = FIsLoDerivedFrom(up.get(), S3CID(0x30)) ? Psost(static_cast<ALO*>(up.get())) : nullptr;
                     std::printf("oidpos %d f %d (oid %d cid 0x%X, removed %d, in world %d): %.2f %.2f %.2f x axis %.2f %.2f %.2f gravity %.0f\n", oid, frame, up->oid, up->Cid(),
                                 int(up->fRemoved), int(up->fInWorld), p.x, p.y, p.z, m[0].x, m[0].y, m[0].z, pst ? pst->dvGravity.z : 0.0f);
+                    static const bool s_fAllXf = std::getenv("SLY3_OIDPOSXF") != nullptr;   // (debug: every record's world position, orig3 +0x44 / +0x40)
+                    if (s_fAllXf && FIsLoDerivedFrom(up.get(), sly3::CID_ALO))
+                        for (size_t i = 0; i < static_cast<ALO*>(up.get())->axf.size(); ++i)
+                            if (const XF* pxf = static_cast<ALO*>(up.get())->axf[i].get())
+                                std::printf("oidxf %d f %d [%zu] tag %d: %.2f %.2f %.2f x %.3f %.3f %.3f\n", oid, frame, i, pxf->tag, pxf->matWorld[3].x, pxf->matWorld[3].y, pxf->matWorld[3].z, pxf->matWorld[0].x, pxf->matWorld[0].y, pxf->matWorld[0].z);
+                    if (FIsLoDerivedFrom(up.get(), sly3::CID_ALO))   // (its rotation / object records: orig3 +0x4C / +0x50)
+                        for (int i = 1; i < 3; ++i)
+                            if (const XF* pxf = static_cast<ALO*>(up.get())->apxfRef[i])
+                                std::printf("oidpos %d f %d ref %d: %.2f %.2f %.2f x axis %.3f %.3f %.3f z axis %.3f %.3f %.3f\n", oid, frame, i, pxf->matWorld[3].x,
+                                            pxf->matWorld[3].y, pxf->matWorld[3].z, pxf->matWorld[0].x, pxf->matWorld[0].y, pxf->matWorld[0].z,
+                                            pxf->matWorld[2].x, pxf->matWorld[2].y, pxf->matWorld[2].z);
                 }
             for (const auto& up : psw->aploAll)   // (and the records tagged with it: an ALO's points)
                 if (FIsLoDerivedFrom(up.get(), S3CID(0x30)))

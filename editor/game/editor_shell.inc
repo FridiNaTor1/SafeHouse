@@ -1345,6 +1345,8 @@ void CEditor::DrawInspector()
         ImGui::TextColored(st::vec(st::danger), "Placed at run time: not stored in the world file.");
     }
     DrawBrushProperties(plo);
+    DrawGuardSection(plo);
+    DrawBuildSection(plo);
 #if EDFEAT_CURVES
     if (po && po->ipath >= 0) DrawPathInspector(plo);
 #endif
@@ -1365,7 +1367,7 @@ void CEditor::DrawInspector()
 #if EDFEAT_MODELS
     DrawModelSection(plo);
 #endif
-    if (ImGui::CollapsingHeader(TL("When it exists", "exists").c_str())) DrawExistence(plo, po);
+    if (ImGui::CollapsingHeader(TL("When it exists", "exists").c_str(), ImGuiTreeNodeFlags_DefaultOpen)) DrawExistence(plo, po);
 #if EDFEAT_OPTIONS
     DrawLinks(plo, po);
     ImGui::SeparatorText("Options");
@@ -1439,7 +1441,7 @@ void CEditor::DrawWorldPanel()
 #endif
         if (tab(T("Assets"), 9)) { DrawAssets(); ImGui::EndTabItem(); }
 #if EDFEAT_STRUCT
-        if (tab("Create", 6)) { DrawBrushTools(); ImGui::SeparatorText(T("Copies of the world's objects")); DrawCreate(); ImGui::EndTabItem(); }
+        if (tab("Create", 6)) { DrawBrushTools(); DrawBuildPalette(); ImGui::SeparatorText(T("Copies of the world's objects")); DrawCreate(); ImGui::EndTabItem(); }
 #endif
 #if EDFEAT_OPTIONS
         if (tab("Areas", 7))
@@ -1710,6 +1712,36 @@ bool CEditor::FRunScript()
         m_proj.end();
     }
     else if (c.verb == "tool") m_tool = std::atoi(c.arg.c_str());
+    else if (c.verb == "patrol")   // the selection's patrols in words, and the paths they walk
+    {
+        for (LO* pg : m_asel)
+            if (LO* pl = PatrolOf(pg))
+            {
+                std::printf("editor: patrol of %s %d at %.0f,%.0f,%.0f: list %d\n", NameOfObject(pg).c_str(), pg->oid, PosWorld(pg).x, PosWorld(pg).y, PosWorld(pg).z, pl->oid);
+                for (const std::string& sc : PatrolWords(pg)) std::printf("editor: patrol  %s\n", sc.c_str());
+                for (LO* pp : PatrolPaths(pg)) std::printf("editor: patrol path %d\n", pp->oid);
+            }
+    }
+    else if (c.verb == "build")   // build:CID (Sly 2's class, hex): a copy of a working one in front of the camera (curves laid out)
+    {
+        const int cid = int(std::strtol(c.arg.c_str(), nullptr, 16));
+        const bool fCurve = cid == 0x0A || cid == 0x0B || cid == 0x0C || cid == 0x0D;
+        std::string error;
+        const int oid = BuildFromPalette(cid, fCurve, error);
+        if (!oid) Status("build: " + error);
+        else std::printf("editor: built %s oid %d\n", m_plSel ? NameOfObject(m_plSel).c_str() : "?", oid);
+    }
+    else if (c.verb == "whouses") { for (LO* p : m_asel) std::printf("editor: %s used by: %s\n", NameOfObject(p).c_str(), StrWhoUses(p).c_str()); }
+    else if (c.verb == "usedby")   // usedby:CLASS (hex 34 everyone, 35 Sly, 37 Bentley, 36 Murray): the selected use's option 1074
+    {
+        const int32_t v = int32_t(std::strtol(c.arg.c_str(), nullptr, 16));
+        if (m_plSel)
+        {
+            if (const int ifield = IfieldOption(m_plSel, EDEOPID(1074)); ifield >= 0) FSetOption(ifield, &v, 4, "Who uses");
+            else { std::vector<uint8_t> ab(4); std::memcpy(ab.data(), &v, 4); FAddOption(m_plSel, EDEOPID(1074), ab, "Who uses"); }
+        }
+    }
+    else if (c.verb == "allpatrols") m_fAllPatrols = c.arg != "0";
     else if (c.verb == "selectgrouproot")   // selectgrouproot:NAME: the group's first root (placed or not)
     {
         LO* p = nullptr;
@@ -1915,6 +1947,60 @@ bool CEditor::FRunScript()
     }
     else if (c.verb == "zip") { std::string e; if (!m_proj.exportZip(ce::pathOf(c.arg), e)) Status("zip: " + e); }
     else if (c.verb == "tab") m_tab = c.arg == "missions" ? 1 : c.arg == "text" ? 2 : c.arg == "scripts" ? 3 : c.arg == "history" ? 4 : c.arg == "dialogue" ? 5 : c.arg == "create" ? 6 : c.arg == "areas" ? 7 : c.arg == "models" ? 8 : 0;
+#if EDGAME_SLY2
+    else if (c.verb == "scriptnames") { m_fScriptReadable = c.arg != "0"; if (m_igroupScript >= 0) LoadScriptText(m_igroupScript); }   // scriptnames:0|1
+    else if (c.verb == "scriptroundtrip")   // every group's scripts with names, back to the converter's text: the same text
+    {
+        int cgrp = 0, cdiff = 0;
+        for (const ce::GroupInfo& g : m_index.groups)
+        {
+            if (g.scriptsPart.empty()) continue;
+            std::vector<uint8_t> ab;
+            if (!m_proj.readPart(g.scriptsPart, ab)) continue;
+            ++cgrp;
+            const std::string raw(ab.begin(), ab.end());
+            std::string err, back;
+            const std::string rd = ScriptReadable(g.index, raw, &err);
+            if (!err.empty() || !FScriptToRaw(rd, back, err) || back != raw)
+            {
+                if (++cdiff <= 5) std::printf("editor: scripts of %s do not round-trip: %s\n", g.name.c_str(), err.c_str());
+            }
+        }
+        std::printf("editor: scripts round trip: %d groups, %d differ\n", cgrp, cdiff);
+    }
+    else if (c.verb == "scriptedit")   // scriptedit:FROM|TO: the Scripts tab's shown text edited (the last FROM), applied as Apply does
+    {
+        const std::size_t bar = c.arg.find('|');
+        const std::string from = c.arg.substr(0, bar), to = bar == std::string::npos ? std::string() : c.arg.substr(bar + 1);
+        const std::size_t at = m_scriptEdit.rfind(from);
+        std::string raw, err;
+        if (m_igroupScript < 0 || from.empty() || at == std::string::npos) Status("scriptedit: not found");
+        else
+        {
+            m_scriptEdit.replace(at, from.size(), to);
+            std::vector<std::string> anew;
+            if (!FScriptToRaw(m_scriptEdit, raw, err, &anew) || !FApplyScript(m_igroupScript, raw, err)) Status("scriptedit failed: " + err);
+            else
+            {
+                for (const std::string& n : anew) Status("scriptedit: new symbol " + n);
+                Status("scripts of " + m_index.groups[std::size_t(m_igroupScript)].name + " applied");
+                const int ig = m_igroupScript;
+                Reload(m_plSel ? m_plSel->oid : 0);
+                LoadScriptText(ig);
+            }
+        }
+    }
+    else if (c.verb == "exist")   // exist:OID: "when it exists" of the object (its root of that oid first) printed
+    {
+        LO* p = nullptr;
+        for (const auto& up : m_psw->aploAll)
+            if (up->oid == std::atoi(c.arg.c_str()) && (!p || (p->paloParent && !up->paloParent))) p = up.get();
+        std::vector<std::string> a;
+        if (p) ExistenceFacts(p, a);
+        std::printf("editor: exist %s: %s\n", c.arg.c_str(), p ? NameOfObject(p).c_str() : "not found");
+        for (const std::string& l : a) std::printf("editor:   %s\n", l.c_str());
+    }
+#endif
     else if (c.verb == "script") { for (const ce::GroupInfo& g : m_index.groups) if (g.name == c.arg && !g.scriptsPart.empty()) LoadScriptText(g.index); m_tab = 3; }
     else if (c.verb == "scriptreplace")   // scriptreplace:GROUP|FROM|TO: the group's scripts edited (the last FROM), checked, applied
     {
@@ -1927,7 +2013,14 @@ bool CEditor::FRunScript()
         for (const ce::GroupInfo& g : m_index.groups)
             if (g.name == grp && !g.scriptsPart.empty()) ig = g.index;
         LoadScriptText(ig);
-        std::string text = m_scriptText, error;
+        // (the converter's text as stored: the Scripts tab may show it with names)
+        std::string text, error;
+        if (ig >= 0)
+        {
+            std::vector<uint8_t> abPart;
+            m_proj.readPart(m_index.groups[std::size_t(ig)].scriptsPart, abPart);
+            text.assign(abPart.begin(), abPart.end());
+        }
         const auto i = text.rfind(from);
         if (ig < 0 || from.empty() || i == std::string::npos) Status("scriptreplace: not found");
         else
@@ -2260,6 +2353,9 @@ int CEditor::Run()
 {
     std::string error;
     if (!m_inst.open(cane::path(g_disc.Path()), error)) { std::fprintf(stderr, "editor: %s\n", error.c_str()); return 1; }
+#if EDGAME_SLY2
+    RegisterProjectWorlds(m_inst, m_eo.project);   // (the project's new worlds: records 44.. (Sly2-Release/editor_newworld.h))
+#endif
     if (m_eo.record < 0) m_eo.record = EDGAME_DEFAULT_WORLD;
     const ce::WorldEntry* pe = m_inst.world(m_eo.record);
     if (!pe) { std::fprintf(stderr, "editor: no world record %d in this installation\n", m_eo.record); return 1; }
@@ -2294,6 +2390,9 @@ int CEditor::Run()
     g_gl.msaa = 4;
     g_display.msaaSamples = 4;
     if (!g_gl.FInit(m_eo.width, m_eo.height, !m_eo.fHidden, "SafeHouse Map Editor - " EDGAME_NAME, error)) { std::fprintf(stderr, "editor: %s\n", error.c_str()); return 1; }
+    // (a hidden window is never shown: a Wayland compositor sends it no frame callbacks, so a vsync'd swap would wait
+    // forever, e.g. while the screen is off; hidden runs swap without waiting)
+    if (m_eo.fHidden) cane::gl::SwapInterval(0);
 #if EDFEAT_MODELS
     AllowTextureModStreaming(false);   // (the project's textures are read again after each texture edit: nothing in flight)
 #endif
@@ -2359,6 +2458,7 @@ int CEditor::Run()
         DrawHelp();
         DrawMarkers();
         DrawCameraFrusta();
+        DrawPatrols();
         DrawCameraPanel();
         const int ipointBefore = m_ipoint;
         const bool fCurveBefore = m_fCurveMode;
@@ -2401,8 +2501,13 @@ int CEditor::Run()
         glViewport(0, 0, fbw, fbh);
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
         if (!m_shotPending.empty()) { glFinish(); Screenshot(m_shotPending); m_shotPending.clear(); }
-        cane::gl::SwapBuffers(g_gl.window);
+        // (a hidden window is never shown: no swap, which a Wayland compositor may hold back forever for an unmapped
+        // surface (seen with the screen off); screenshots read the drawn frame before this point)
+        if (!m_eo.fHidden) cane::gl::SwapBuffers(g_gl.window);
+        else glFinish();
         FRunScript();
+        if (static const bool s_fFrames = std::getenv("SLY2N_EDFRAMES") != nullptr; s_fFrames)   // (debug: each frame's time)
+            std::fprintf(stderr, "editor frame %.3f s, step %zu\n", glfwGetTime() - t, m_iscript);
     }
     if (m_proj.dirty()) std::printf("editor: closed with unsaved edits (not saved)\n");
     {
@@ -2425,6 +2530,8 @@ int CEditor::Run()
 #include "editor_camera.inc"
 #include "editor_brush.inc"
 #include "editor_assets.inc"
+#include "editor_guard.inc"
+#include "editor_build.inc"
 
 using namespace edimpl;
 

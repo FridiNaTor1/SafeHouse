@@ -3187,8 +3187,14 @@ struct INITSLY
             if (pa) HandleActorMessage(pa, msg, pv);
             return pa != nullptr;
         });
+        // (s3-cine2) the Panda King 0x38 and Penelope 0x39 run natively too (game/guru3.cpp, AUDIT4 PLAYER-01 / s3-player
+        // round 21): left out, the post-load gave them its stand-in constraints (index 3: kind 2 along their y axis, not
+        // fixed), so ep5_job4071's Panda King could only move along y and the contact solve stopped his fall with
+        // impulses of 1e6..1e11 whose friction rows slid him 340,000 units (later a NaN). SLY3_PKCNSTR=1: as before
+        static const bool s_fOldPk = std::getenv("SLY3_PKCNSTR") != nullptr;
         g_pfnFActorDrivesPhys = [](ALO* palo) {
             const CID cid = palo->Cid();
+            if (!s_fOldPk && (cid == sly3::CID_PANDA_KING || cid == sly3::CID_PENELOPE)) return true;
             return cid == S3CID(0x35) || cid == S3CID(0x36) || cid == S3CID(0x37) || cid == sly3::CID_GURU;   // (s3-player: the Guru, game/guru3.cpp)
         };
         RegisterSwPass(0x1C4468, [](SW*) { UpdateAllPadctls(); });  // (0x226550: each controller state)

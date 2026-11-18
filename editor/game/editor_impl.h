@@ -61,6 +61,7 @@
 
 bool FResolveWorld(const std::string& w, FK& fk, int& filter, std::string& error);   // sw.cpp
 namespace cane::editor::model { struct Scene; }
+struct CMDLIST;   // (Sly 2's command lists: editor_guard.inc)
 
 
 namespace edimpl
@@ -468,6 +469,16 @@ private:
     bool FCheckScript(const std::string& text, std::string& error, int& line, std::vector<PROBLEM>* papb, int igroup = -1);
     bool FApplyScript(int igroup, const std::string& text, std::string& error);
     int AppendScriptModule(int igroup, const std::string& body, std::string& error);   // its index (-1: failed)
+    // ---- editor_scriptnames.inc (Sly 2): the Scripts tab's names (display only), "when it exists" in plain words
+    bool m_fScriptReadable = true;
+    std::shared_ptr<struct EXISTCACHE> m_pexist;
+    const SW* m_pswExist = nullptr;
+    std::string ScriptObjectName(int oid) const;
+    std::string ScriptReadable(int igroup, const std::string& raw, std::string* perror = nullptr);
+    bool FScriptToRaw(const std::string& text, std::string& raw, std::string& error, std::vector<std::string>* panew = nullptr);
+    void BuildExistCache();
+    void EnsureExistCache();
+    void ExistenceFacts(LO* plo, std::vector<std::string>& alines);
     bool FParseDialogue(std::vector<DLGLINE>& a, std::vector<std::string>& alang, std::string& error) const;
     bool FSetText(int id, const std::string& text, std::string& error);
     bool FSetDialogueEvent(const DLGLINE& l, int k, int dt60, int itarget, int32_t value, std::string& error);
@@ -620,6 +631,27 @@ private:
     std::unordered_map<const LO*, LOADPARENT> m_mpLoadParent;
     std::unordered_map<const LO*, std::vector<LO*>> m_mpLoadKids;
     void FindLoadParents();
+    // ---- editor_build.inc: the traversal / interactive palette, who uses what
+    int IobjExampleOf(int cid) const;
+    void LayOutCurve(LO* plo, float length);
+    int BuildFromPalette(int cid2, bool fCurve, std::string& error);
+    void DrawBuildPalette();
+    std::string StrWhoUses(LO* plo) const;
+    void DrawBuildSection(LO* plo);
+    float m_buildLength = 800.0f;
+    bool m_fBuildVertical = false;
+    // ---- editor_guard.inc: guards' patrols
+    std::string StrCommand(const void* pcmd, LO** pploRef) const;
+    LO* PatrolOf(LO* plo) const;                    // its patrol's command list (null: none)
+    std::vector<LO*> PatrolPaths(LO* plo) const;   // the paths its patrol walks / goes to
+    void DrawCurve(LO* plo, uint32_t rgb, float thick);
+    void DrawPatrols();
+    std::vector<std::string> PatrolWords(LO* plo) const;
+    void DrawGuardSection(LO* plo);
+    bool m_fAllPatrols = false;
+#if EDGAME_SLY2
+    const ::CMDLIST* PcmdlistOfGuard(LO* plo) const;
+#endif
     // ---- editor_assets.inc: the asset browser
     struct ASSET
     {

@@ -295,6 +295,10 @@ bool CDisc::FOpenConverted(const std::string& dir, std::string& error)
         };
         m_aidPackage.clear();
         m_mpCustomTask.clear();
+        m_amodworld.clear();
+        m_amapstate.clear();
+        m_aentry.clear();
+        std::vector<cane::mods::Manifest> apkgWorlds;   // (their new worlds, map states and entries: after the files)
         auto addTasks = [&](const cane::mods::Manifest& pkg) {
             for (const cane::mods::CustomTasks& ct : cane::mods::customTasks(pkg))
                 for (int oid : ct.tasks) m_mpCustomTask[{ct.world, oid}] = pkg.id;   // (a later package's listing wins)
@@ -310,6 +314,7 @@ bool CDisc::FOpenConverted(const std::string& dir, std::string& error)
                 addRoot(pkg.filesDir());
                 m_aidPackage.push_back(pkg.id);
                 addTasks(pkg);
+                apkgWorlds.push_back(pkg);
             }
         }
         if (!m_dirMods.empty()) addRoot(cane::path(m_dirMods));
@@ -326,6 +331,7 @@ bool CDisc::FOpenConverted(const std::string& dir, std::string& error)
             addRoot(pkg.filesDir());
             m_aidPackage.push_back(pkg.id);
             addTasks(pkg);
+            apkgWorlds.push_back(pkg);
         }
         for (const std::string& id : m_aidPackage) std::printf("mods: package %s\n", id.c_str());
         // Music/ and Movies/ files also match by their number: "Music/28.wav" or "Music/28 My Song.wav" replaces
@@ -445,6 +451,7 @@ bool CDisc::FOpenConverted(const std::string& dir, std::string& error)
             m_afile.emplace_back(f.at("sector").get<uint32_t>(), std::move(ent));
         }
         std::sort(m_afile.begin(), m_afile.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+        for (const cane::mods::Manifest& pkg : apkgWorlds) AddPackageWorlds(pkg);
         m_setMod = std::move(asetMod);
         m_mpModPath = std::move(mpModPath);
     }
@@ -468,6 +475,43 @@ bool CDisc::FOpenConverted(const std::string& dir, std::string& error)
     m_fConverted = true;
     if (m_cmod) std::printf("mods: %d files from %s%s\n", m_cmod, m_dirMods.c_str(), m_aidPackage.empty() ? "" : " and the packages");
     return true;
+}
+
+void CDisc::AddPackageWorlds(const cane::mods::Manifest& m)
+{
+    std::vector<std::string> aerr;
+    for (const cane::mods::MapState& st : cane::mods::mapStates(m, &aerr)) m_amapstate.emplace_back(m.id, st);
+    for (const cane::mods::Entry& e : cane::mods::entries(m, &aerr)) m_aentry.push_back(e);
+    for (const cane::mods::NewWorld& w : cane::mods::newWorlds(m, &aerr))
+    {
+        if (IsectorOfWorldName(w.name))
+        {
+            aerr.push_back(m.id + ": the new world \"" + w.name + "\" has the name of a world already there: left out");
+            continue;
+        }
+        MODWORLD mw;
+        mw.package = m.id;
+        mw.w = w;
+        mw.isector = ISECTOR_MODWORLD + uint32_t(m_amodworld.size());
+        FILEENT ent;
+        ent.fParts = true;
+        ent.fMod = true;
+        ent.rel = w.index;
+        ent.path = ent.pathInstalled = cane::utf8(m.filesDir() / cane::path(w.index));
+        const auto it = std::lower_bound(m_afile.begin(), m_afile.end(), mw.isector, [](const auto& e, uint32_t s) { return e.first < s; });
+        m_afile.insert(it, {mw.isector, std::move(ent)});
+        m_mpsectorWorldName[mw.isector] = w.name;
+        std::printf("mods: package %s: new world \"%s\" (from %s)\n", m.id.c_str(), w.name.c_str(), w.templateWorld.empty() ? "its own parts" : w.templateWorld.c_str());
+        m_amodworld.push_back(std::move(mw));
+    }
+    for (const std::string& e : aerr) std::fprintf(stderr, "mods: package %s\n", e.c_str());
+}
+
+uint32_t CDisc::IsectorOfWorldName(const std::string& name) const
+{
+    for (const auto& [isector, n] : m_mpsectorWorldName)
+        if (n == name) return isector;
+    return 0;
 }
 
 std::string CDisc::SzWorldName(uint32_t isector) const
@@ -706,6 +750,18 @@ std::vector<uint8_t> CDisc::ReadWorldParts(const FK& fk, bool fReduced) const
         const std::string relDir = pent->rel.substr(0, pent->rel.rfind('/') == std::string::npos ? 0 : pent->rel.rfind('/'));
         std::vector<uint8_t> ab;
         std::string error;
+        // (a mod's new world, mod_worlds.h: its parts marked "template" are the template world's)
+        if (index.contains("template"))
+            if (!FResolveTemplateParts(index, [&](const std::string& name, nlohmann::json& tpl, std::string& relDirTpl) {
+                    const FILEENT* pt = PentFind(IsectorOfWorldName(name));
+                    if (!pt || !pt->fParts || pt == pent) return false;
+                    std::ifstream in(cane::paths::ioPath(cane::path(pt->path)));
+                    if (!in) return false;
+                    in >> tpl;
+                    relDirTpl = pt->rel.substr(0, pt->rel.rfind('/') == std::string::npos ? 0 : pt->rel.rfind('/'));
+                    return true;
+                }, error))
+                throw std::runtime_error(pent->rel + ": " + error);
         const std::filesystem::path root = cane::path(m_path);
         const std::set<int> setDrop = fReduced ? SetLevelGroups(index) : std::set<int>();
         const PFNKEEPOBJ pfnKeep = setDrop.empty() ? PFNKEEPOBJ() : PFNKEEPOBJ([](const WORLDOBJREC& r) { return FCidDerivedFrom(r.cid, 6); });

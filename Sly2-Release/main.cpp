@@ -1,6 +1,8 @@
 // Sly2-Release: Sly 2: Band of Thieves as a native PC port (see PLAN.md).
 // Development commands for now; the game loop comes with milestone M2/M3.
 
+#include "mapstates.h"
+#include "editor_newworld.h"
 #include "renderer.h"
 #include "editor.h"
 #include "renderer_choice_test.h"
@@ -29,6 +31,7 @@
 #include "fmv.h"
 #include "sound.h"
 #include "splicecheck.h"
+#include "splicedump.h"
 #include "animtest.h"
 #include "../platform/platform.h"
 #include "../platform/safe_paths.h"
@@ -380,6 +383,7 @@ int main(int argc, char** argv)
     const char* arg = nullptr;
     int filter = -2;
     bool fDumpObjects = false;
+    std::string dumpSplice;   // (--load-world W --dump-splice DIR: splicedump.h)
     bool fPs3HdPng = false;
     const char* arg2 = nullptr;
     int animRefB = 0;
@@ -467,6 +471,8 @@ int main(int argc, char** argv)
         else if (!std::strcmp(argv[i], "--dump-world") && i + 1 < argc) { command = "dump-world"; arg = argv[++i]; }
         else if (!std::strcmp(argv[i], "--load-world") && i + 1 < argc) { command = "load-world"; arg = argv[++i]; }
         else if (!std::strcmp(argv[i], "--load-trace") && i + 1 < argc) trace = argv[++i];
+        else if (!std::strcmp(argv[i], "--dump-splice") && i + 1 < argc) dumpSplice = argv[++i];
+        else if (!std::strcmp(argv[i], "--splice-names-check") && i + 1 < argc) { command = "splice-names-check"; arg = argv[++i]; }
         else if (!std::strcmp(argv[i], "--dump-xf") && i + 1 < argc) dumpXf = argv[++i];
         else if (!std::strcmp(argv[i], "--world") && i + 1 < argc)
         {
@@ -569,6 +575,20 @@ int main(int argc, char** argv)
         else if (!std::strcmp(argv[i], "--world-unpack") && i + 2 < argc) { command = "world-unpack"; arg = argv[++i]; arg2 = argv[++i]; }
         else if (!std::strcmp(argv[i], "--world-pack") && i + 2 < argc) { command = "world-pack"; arg = argv[++i]; arg2 = argv[++i]; }
         else if (!std::strcmp(argv[i], "--world-check")) command = "world-check";
+        // (mapstates.h: a world's map states; the game in one; what is in the world at the run's end)
+        else if (!std::strcmp(argv[i], "--list-map-states") && i + 1 < argc) { command = "list-map-states"; arg = argv[++i]; }
+        else if (!std::strcmp(argv[i], "--map-states-survey")) command = "map-states-survey";
+        else if (!std::strcmp(argv[i], "--map-states-selftest")) command = "map-states-selftest";
+        else if (!std::strcmp(argv[i], "--map-state") && i + 1 < argc) SetMapStateRequest(argv[++i]);
+        else if (!std::strcmp(argv[i], "--dump-presence") && i + 1 < argc) SetPresenceDump(argv[++i]);
+        // (editor_newworld.h: a new world in a project)
+        else if (!std::strcmp(argv[i], "--new-world") && i + 1 < argc) { command = "new-world"; g_newworldopts.project = argv[++i]; }
+        else if (!std::strcmp(argv[i], "--nw-name") && i + 1 < argc) g_newworldopts.name = argv[++i];
+        else if (!std::strcmp(argv[i], "--nw-template") && i + 1 < argc) g_newworldopts.templateRecord = std::atoi(argv[++i]);
+        else if (!std::strcmp(argv[i], "--nw-keep-level")) g_newworldopts.keepLevel = true;
+        else if (!std::strcmp(argv[i], "--nw-spawn") && i + 1 < argc) g_newworldopts.spawn = argv[++i];
+        else if (!std::strcmp(argv[i], "--nw-entry") && i + 1 < argc) g_newworldopts.entry = argv[++i];
+        else if (!std::strcmp(argv[i], "--nw-return") && i + 1 < argc) g_newworldopts.ret = argv[++i];
         else if (!std::strcmp(argv[i], "--ps2-formats")) g_fConvertPs2 = true;
         else if (!std::strcmp(argv[i], "--languages") && i + 1 < argc)
         {
@@ -623,6 +643,8 @@ int main(int argc, char** argv)
     cane::configureRuntime(rest);
     if (command && !std::strcmp(command, "test-load")) return TestLoad(arg, arg2, fVerbose);
     if (command && !std::strcmp(command, "splice-selftest")) return SpliceSelfTestCommand();
+    if (command && !std::strcmp(command, "map-states-selftest")) return MapStatesSelfTest();
+    if (command && !std::strcmp(command, "splice-names-check")) return SpliceNamesCheck(arg);
     // (worldparts.h: a world's parts packed into one file: no game data needed)
     if (command && !std::strcmp(command, "world-pack")) return WorldPackCommand(arg, arg2);
     if (command && !std::strcmp(command, "action-input-selftest")) return sly2actions::SelfTest();
@@ -905,6 +927,9 @@ int main(int argc, char** argv)
         else fk = FkFromRecord(g_disc.PbElf(static_cast<uint32_t>(std::strtoul(arg, nullptr, 0)), 0x40));
         return DumpWorld(fk, out);
     }
+    if (command && !std::strcmp(command, "list-map-states")) return ListMapStatesCommand(arg, out);
+    if (command && !std::strcmp(command, "new-world")) return NewWorldCommand();
+    if (command && !std::strcmp(command, "map-states-survey")) return MapStatesSurveyCommand(out);
     if (command && !std::strcmp(command, "load-world"))
     {
         InitClasses();
@@ -923,6 +948,8 @@ int main(int argc, char** argv)
         psw->filter = filter != -2 ? filter : filterDefault;
         std::size_t cbRead = 0, cbFile = 0;
         const auto t0 = std::chrono::steady_clock::now();
+        std::map<int, std::string> mpSpliceText;
+        if (!dumpSplice.empty()) InstallSpliceDumpReader(&mpSpliceText);
         const bool fOk = FLoadWorldFile(psw.get(), fk, trace, &cbRead, &cbFile);
         const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
         std::fprintf(stderr,
@@ -958,6 +985,7 @@ int main(int argc, char** argv)
             }
         }
         if (std::getenv("SLY2N_GUARDSURVEY")) SurveyGuards(psw.get(), stdout);   // (PC debug: pcguard.h)
+        if (!dumpSplice.empty() && fOk) return DumpSplice(psw.get(), mpSpliceText, dumpSplice);
         return fOk ? 0 : 1;
     }
     if (!command)
@@ -1000,8 +1028,8 @@ int main(int argc, char** argv)
     }
     std::fprintf(stderr,
                  "usage: Sly2-Release [--disc disc.iso | --data-dir dir] --list-keys | --dump-world VA|SECTOR:CB [--out file]\n"
-                 "       | --load-world W|boot|frontend [--filter N] [--load-trace map.txt] [--dump-objects [file]]\n"
-                 "       | --parse-splice W | --eval-splice W [--maps dir] [-v] | --splice-selftest | --rumble-selftest | --action-input-selftest | --settings-selftest | --renderer-selftest\n"
+                 "       | --load-world W|boot|frontend [--filter N] [--load-trace map.txt] [--dump-objects [file]] [--dump-splice DIR]\n"
+                 "       | --parse-splice W | --eval-splice W [--maps dir] [-v] | --splice-selftest | --splice-names-check DATA-DIR | --rumble-selftest | --action-input-selftest | --settings-selftest | --renderer-selftest\n"
                  "       | --list-sounds W | --play-music W [--song ID] [--stem 0|1|2] | --play-sfx W [--song SOUNDID] | --play-dialog W [--song ID]\n"
                  "       | --list-movies | --play-movie ID [--out frames-dir] [--seconds T]   (W: boot, frontend, a world record 2..43, SECTOR:CB)\n"
                  "       | --convert DIR [--no-export-textures] | --export-textures [--out DIR] | --dump-textures DIR W\n"

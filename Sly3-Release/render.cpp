@@ -45,6 +45,7 @@ void CollectHackSwarmDraws(const SCENE& scene, std::vector<EXTRADRAW>& aextra); 
 #include <string>
 
 RENDERSTATS g_renderstats;
+std::atomic<int> g_cFadedRecs3{0};
 constinit PFNEXTRADRAWS g_pfnExtraDraws = nullptr;
 
 struct GLGLOB
@@ -4336,6 +4337,7 @@ void RenderPass(const SCENE& scene, const PASSVIEW& pv, const RENDEROPTS& opts)
                             sgs.oid, i, posWorld.x, posWorld.y, posWorld.z, radius, glob.sMRD, int(fSkinned), int(fDistance), wholeFade,
                             groupFade, sgs.gAlpha * fade, sgs.gAlpha2 * fade);
             if (!fDistance) { ++blk.cmrd; continue; }
+            if (fade < 1.0f && pv.irtgt < 0) g_cFadedRecs3.fetch_add(1, std::memory_order_relaxed);   // (debug: SLY2N_CAMPRINT's faded count)
             const bool fGeomBounds = !fTree && !glob.fDraw && pgeom->pgl && pgeom->pgl->sRadius >= 0 && !fSkinned;
             if (pv.irtgt < 0 && !fTree && !s_fNoFrustum && pgeom->meshk != MESHK_Effect && ((glob.fDraw && !fSkinned) || fGeomBounds))
             {

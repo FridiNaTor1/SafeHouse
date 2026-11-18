@@ -3,6 +3,7 @@
 // The world loader (orig 0x13DA18) and the global blocks of a world file.
 
 #include "sw.h"
+#include "modworld.h"
 #include "worldparts.h"
 
 #include <algorithm>
@@ -531,13 +532,14 @@ bool FResolveWorld(const std::string& w, FK& fk, int& filter, std::string& error
         error = "the boot world (the world records) did not load";
         return false;
     }
+    AppendModWorldRecords(pswBoot->awrec);   // (mod packages' new worlds: 44, 45, ...; modworld.h)
     if (iwrec < 0 || iwrec >= static_cast<int>(pswBoot->awrec.size()))
     {
         error = "no world record " + w;
         return false;
     }
     fk = pswBoot->awrec[iwrec].fk;
-    filter = iwrec;
+    filter = IwrecFilterOf(iwrec);
     if (fk.cb == 0 || fk.id == 0)
     {
         error = "world " + w + ": the record has no file: nothing to load";

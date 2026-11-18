@@ -736,6 +736,11 @@ void ForwardGlobLighting(GLOB& glob, const glm::mat4& matWorld, const glm::vec3&
     // same order per lane (no FMA: -ffp-contract=off), so the same colours bit for bit. SLY2N_FWDSCALAR=1: this one
     // for every vertex; SLY2N_FWDCHECK=1: both, and prints any difference.
     const size_t cbone = fSkin ? pamatBone->size() : 0;
+    // (orig3 mesh_program.vsm mesh_shade_cubic: the self-illumination plus the world shader's w (VU 0xB) is doubled
+    // (add.w vf01, vf01, vf01) with the lights' colours (x 2: the forward groups' 2.0 range) before the A / B split;
+    // without it the characters' midtone (colour B, the texture's own colour) came out ~30 % short: Sly's suit and
+    // Dr. M's coat darker and greyer than PCSX2's in m_ext's vault scene. SLY3_LITW1=1: not doubled.)
+    static const float gWScale = std::getenv("SLY3_LITW1") ? 1.0f : 2.0f;
     auto litScalar = [&](VTXGLOB& v, uint32_t m, float shadow1212) {
         // 0x16A000's render items: normal x 127, intensity = the colour's largest channel / 255 x 127,
         // colour = vertex x material / 512 (alpha (a * m + 255) / 510).
@@ -760,7 +765,7 @@ void ForwardGlobLighting(GLOB& glob, const glm::mat4& matWorld, const glm::vec3&
             const float d = glm::dot(dirLocal[j], n);
             illum += respColor[j] * std::min(d + d * d * d, upper[j]);
         }
-        illum.w += shadow1212 + lights.worldShader.w;
+        illum.w += (shadow1212 + lights.worldShader.w) * gWScale;
         int32_t a[4], b[4];
         Decompose(illum, 2.0f, alphaOne, alphaScale, lights.worldShader, intensity, base, a, b);
         // B's alpha: (2 + e) * s - shadow * s
@@ -783,7 +788,7 @@ void ForwardGlobLighting(GLOB& glob, const glm::mat4& matWorld, const glm::vec3&
         uint32_t k = 0;
 #if FWD_SSE
         if (!s_fScalar)
-            k = FORWARD_LIT_4(glob, sub, m, shadow1212 + lights.worldShader.w, dirLocal, respColor, constant, upper, alphaOne, alphaScale,
+            k = FORWARD_LIT_4(glob, sub, m, (shadow1212 + lights.worldShader.w) * gWScale, dirLocal, respColor, constant, upper, alphaOne, alphaScale,
                               lights.worldShader, fSkin ? pamatBone : nullptr);
 #endif
         for (; k < sub.cvtx; ++k)

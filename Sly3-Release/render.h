@@ -123,3 +123,5 @@ struct RENDERSTATS
     int cmrd = 0;       // records beyond their MRD
 };
 extern RENDERSTATS g_renderstats;
+#include <atomic>
+extern std::atomic<int> g_cFadedRecs3;   // (debug) the records drawn faded (0 < alpha < 1 by their MRD) since the last read

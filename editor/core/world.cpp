@@ -142,7 +142,7 @@ bool parseObjects(const uint8_t* pb, std::size_t cb, std::vector<ObjRecord>& are
 bool WorldIndex::load(const Installation& inst, const WorldEntry& e, std::string& error) {
     entry = e;
     groups.clear();
-    std::ifstream in(inst.dir / pathOf(e.index));
+    std::ifstream in((e.indexBase.empty() ? inst.dir : e.indexBase) / pathOf(e.index));
     if (!in) { error = "cannot read " + e.index; return false; }
     try {
         in >> json;

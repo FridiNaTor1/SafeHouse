@@ -1193,7 +1193,7 @@ int AnimPoseCommand(const char* pszWorld, const char* pszRam, int argc, char** a
     else ApproximateBakeLighting(scene);
     RENDEROPTS opts;
     const CAMERA cam = CameraFromRamPose(ram, opts);
-    if (!g_gl.FInit(width, height, false, "Sly2-Release", err)) { std::fprintf(stderr, "%s\n", err.c_str()); return 1; }
+    if (!g_gl.FInit(width, height, false, "Sly 3: Honor Among Thieves", err)) { std::fprintf(stderr, "%s\n", err.c_str()); return 1; }
     BuildSceneGpu(scene);
     UpdateShaderAnimations(g_clock.t, 1.0f / 60.0f);
     RenderScene(scene, cam, opts);

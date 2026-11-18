@@ -1,7 +1,8 @@
 # The map editor's core (desktop only; notes: Sly2-Release/notes/EDITOR_2026-11-12.md). Linked by the launcher's
 # Editor page and by Sly2-Release's --editor (SLY2_EDITOR). The consumers compile miniz themselves (zip export).
 get_filename_component(cane_editor_root "${CMAKE_CURRENT_LIST_DIR}/.." ABSOLUTE)
-add_library(cane_editor_core STATIC "${CMAKE_CURRENT_LIST_DIR}/core/world.cpp" "${CMAKE_CURRENT_LIST_DIR}/core/project.cpp")
+add_library(cane_editor_core STATIC "${CMAKE_CURRENT_LIST_DIR}/core/world.cpp" "${CMAKE_CURRENT_LIST_DIR}/core/project.cpp"
+            "${CMAKE_CURRENT_LIST_DIR}/core/newworld.cpp")
 target_include_directories(cane_editor_core PUBLIC "${CMAKE_CURRENT_LIST_DIR}" PRIVATE "${cane_editor_root}/Libraries/include" "${cane_editor_root}/Libraries/miniz")
 target_include_directories(cane_editor_core PUBLIC "${cane_editor_root}/Libraries/include")
 set_target_properties(cane_editor_core PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON POSITION_INDEPENDENT_CODE ON)

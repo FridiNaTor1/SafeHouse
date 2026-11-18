@@ -506,17 +506,26 @@ int RelightForward(SCENE& scene, const LIGHTSET& lightsFrame, bool fUpload, cons
                     for (int c = 0; c < 3; ++c) mb[c] = glm::vec4(glm::vec3(mb[c]) / sgs.sDrawScale, mb[c].w);
                 pamatBone = &amatUnscaled;
             }
-            ForwardGlobLighting(glob, m, posCtx, lights, pamatBone, al.data());   // (the lights chosen above at posCtx)
+            // (orig3 mesh_program.vsm mesh_prepare_light_basis: a point light's direction and attenuation are taken from
+            // the packet's qword 3 (vf05): for a rigid group (no matrix list, vi07 0) the group's own matrix translation
+            // (PCSX2 RAM, m_ext's vault 15375: the light packet as here, each group's matrix row 3 its own origin), not
+            // the context's position the lights were chosen at; natively the root's, so a point light close to a large
+            // object lit every group as seen from the root (the vault door's ring dull, its face lit: PCSX2's ring gold,
+            // its face dark). Skinned groups keep the context's. SLY3_FWDPOSCTX=1: the context's for every group)
+            static const bool s_fPosCtxAll = std::getenv("SLY3_FWDPOSCTX") != nullptr;
+            const glm::vec3 posDir = !s_fPosCtxAll && !pamatBone ? glm::vec3(m[3]) : posCtx;
+            ForwardGlobLighting(glob, m, posDir, lights, pamatBone, al.data());   // (the lights chosen above at posCtx)
             if (static const bool s_f = std::getenv("SLY2N_FWDDBG") != nullptr; s_f)   // debugging: the forward-lit groups lit
                 std::printf("fwd oid %d glob %zu ctx %.0f %.0f %.0f r %.0f A0 %08X B0 %08X\n", sgs.oid, i, posCtx.x, posCtx.y, posCtx.z, glob.sRadius,
                             glob.avtx[0].rgbaA, glob.avtx[0].rgbaB);
             static const bool s_fDbg = std::getenv("SLY2_LIGHTDBG") != nullptr;   // debugging: the skinned groups' lights
-            if (s_fDbg && !glob.abone.empty())
+            static const int s_oidDbg = std::getenv("SLY2_LIGHTDBGOID") ? std::atoi(std::getenv("SLY2_LIGHTDBGOID")) : -1;   // (also this object's rigid groups)
+            if (s_fDbg && (!glob.abone.empty() || sgs.oid == s_oidDbg))
             {
-                const glm::vec3 pos = sgs.fPosLight ? sgs.posLight : glm::vec3(MulMat4Vec4(m, glm::vec4(glob.posCenter, 1.0f)));
-                LIGHTREC al[4];
-                SelectLights(lights, pos, al);
-                std::printf("relight oid %d ib %zu glob %zu pos %.0f %.0f %.0f A0 %08X B0 %08X\n", sgs.oid, sgs.ib, i, pos.x, pos.y, pos.z, glob.avtx[0].rgbaA, glob.avtx[0].rgbaB);
+                // (the lights chosen above at the context's place with its radius, as lit)
+                const glm::vec3 pos = posCtx;
+                std::printf("relight oid %d ib %zu glob %zu pos %.0f %.0f %.0f radius %.1f A0 %08X B0 %08X\n", sgs.oid, sgs.ib, i, pos.x, pos.y, pos.z,
+                            irtgt >= 0 ? 0.0f : sgs.sRadiusLight, glob.avtx[0].rgbaA, glob.avtx[0].rgbaB);
                 for (const LIGHTREC& l : al)
                     std::printf("   kind %d off %.3f scale %.3f doff %.3f dscale %.5f rgba %.3f %.3f %.3f %.3f dir %.1f %.1f %.1f\n", l.kind,
                                 l.angularOffset, l.angularScale, l.distanceOffset, l.distanceScale, l.rgba.r, l.rgba.g, l.rgba.b, l.rgba.a,
@@ -557,7 +566,14 @@ void ApplyLighting(SCENE& scene, const LIGHTSET& lights)
             float sRadiusLocal;
             LightSphereOfGlob(glob, posLocal, sRadiusLocal);
             const glm::vec3 pos = glm::vec3(MulMat4Vec4(m, glm::vec4(posLocal, 1.0f)));
-            if (glob.grfMesh & 1) ForwardGlobLighting(glob, m, sgs.fPosLight ? sgs.posLight : pos, lights);
+            if (glob.grfMesh & 1)
+            {
+                // (the lights chosen at the context's place, a point light's direction from the group's origin: as above)
+                const glm::vec3 posCtx = sgs.fPosLight ? sgs.posLight : pos;
+                LIGHTREC al[4];
+                SelectLights(lights, posCtx, al);
+                ForwardGlobLighting(glob, m, std::getenv("SLY3_FWDPOSCTX") ? posCtx : glm::vec3(m[3]), lights, nullptr, al);
+            }
             else BakeGlobLighting(glob, m, pos, sRadiusLocal, lights);
             static const int s_oidDbg = std::getenv("SLY2N_LIGHTOID") ? std::atoi(std::getenv("SLY2N_LIGHTOID")) : -2;   // debugging
             if (sgs.oid == s_oidDbg)

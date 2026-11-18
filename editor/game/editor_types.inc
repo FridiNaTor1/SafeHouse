@@ -202,6 +202,14 @@ std::string CEditor::NameOfObject(const LO* plo) const
             if (FIsLoDerivedFrom(const_cast<LO*>(plo), EDCID(0x30))) return PrettyGroupName(g);
             return std::string(T(InfoOfType(ot).name)) + " (" + PrettyGroupName(g) + ")";
         }
+    // the class's own name when the port knows it (Ledge, Pipe, Rail, Use, ...), else the type's
+    if (ot == OT_Traversal || ot == OT_Path || ot == OT_Sensor || ot == OT_Door || ot == OT_Button || ot == OT_Volume || ot == OT_Trigger)
+        if (const char* sz = SzClass(plo->Cid()); sz && std::strncmp(sz, "CID_", 4) != 0)
+        {
+            std::string n = sz;
+            for (std::size_t i = 1; i < n.size(); ++i) n[i] = char(std::tolower(static_cast<unsigned char>(n[i])));
+            return n + " " + std::to_string(plo->oid);
+        }
     return std::string(T(InfoOfType(ot).name)) + " " + std::to_string(plo->oid);
 }
 

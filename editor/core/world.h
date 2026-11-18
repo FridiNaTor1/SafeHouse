@@ -28,6 +28,8 @@ struct WorldEntry {
     std::string code, name;   // "f_nightclub_exterior", "Paris"
     int episode = 0, kind = 0;
     std::string index;        // the index's path relative to the installation (".../Paris.world.json")
+    fs::path indexBase;       // (a mod package's new world: newworld.h) the folder index is relative to; empty: the installation
+    std::string templateName; // (a new world) its template world's name
 };
 
 // An installation: Sly 2's converted files (extraction_manifest.json, format 3: the worlds as parts), or Sly 3's disc

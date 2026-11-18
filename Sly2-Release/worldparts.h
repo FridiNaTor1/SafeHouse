@@ -119,6 +119,12 @@ bool FRavelWorld(const nlohmann::json& index, const std::string& relDir, const P
 using PFNPARTBYTES = std::function<bool(const std::string& rel, std::vector<uint8_t>& ab)>;
 bool FRavelWorldFrom(const nlohmann::json& index, const PFNPARTBYTES& pfnBytes, std::vector<uint8_t>& ab, std::string& error,
                      const PFNKEEPOBJ& pfnKeep, const std::set<int>* psetDrop, const std::string& relDir);
+// (mod packages' new worlds, platform/mod_worlds.h) An index whose "template" names an installed world: each part
+// marked "template": true becomes that world's part of the same kind (and group), read from its folder (the part's
+// "dir": relative to the installation, which FRavelWorld uses instead of the index's folder). pfnTemplate: the
+// template's index and folder by its name (false: none).
+using PFNTEMPLATE = std::function<bool(const std::string& name, nlohmann::json& index, std::string& relDir)>;
+bool FResolveTemplateParts(nlohmann::json& index, const PFNTEMPLATE& pfnTemplate, std::string& error);
 // The groups the index marks "level" (the world's own: its code's groups, "<code>", "<code>_rig", ...).
 std::set<int> SetLevelGroups(const nlohmann::json& index);
 // Marks the level groups in an index (the converter): a group named the world's code or "<code>_...".
@@ -138,6 +144,8 @@ bool FTextBlockToJson(const uint8_t* pb, std::size_t cb, bool fWide, nlohmann::o
 bool FTextJsonToBlock(const nlohmann::json& j, std::vector<uint8_t>& ab, std::string& error);
 bool FSpliceToText(const uint8_t* pb, std::size_t cb, const std::string& title, std::string& text, std::string& error);
 bool FSpliceFromText(const std::string& text, std::vector<uint8_t>& ab, std::string& error);
+// the converter's name of built-in bifk (as <name>; null: it prints #bif:N), splicenames.cpp
+const char* SzSpliceBifRawName(uint32_t bifk);
 // A group's Objects part's records (false: not records end to end).
 bool FParseObjects(const uint8_t* pb, std::size_t cb, int iwe, std::vector<WORLDOBJREC>& arec, std::string& error);
 

@@ -638,6 +638,8 @@ bool FReadFileBytes(const std::string& path, std::vector<uint8_t>& ab)
 }
 }  // namespace
 
+const char* SzSpliceBifRawName(uint32_t bifk) { return SzBifName(bifk); }
+
 std::string SzGroupFolder(std::size_t igroup, const std::string& name)
 {
     char sz[16];
@@ -1072,6 +1074,39 @@ void MarkLevelGroups(ojson& index, const std::string& code)
     }
 }
 
+bool FResolveTemplateParts(nlohmann::json& index, const PFNTEMPLATE& pfnTemplate, std::string& error)
+{
+    try
+    {
+        const std::string name = index.value("template", std::string());
+        if (name.empty()) return true;
+        nlohmann::json tpl;
+        std::string relDirTpl;
+        if (!pfnTemplate || !pfnTemplate(name, tpl, relDirTpl)) { error = "its template world \"" + name + "\" is not installed"; return false; }
+        for (auto& p : index.at("parts"))
+        {
+            if (!p.value("template", false)) continue;
+            const std::string kind = p.value("kind", "");
+            const int group = p.value("group", -1);
+            const nlohmann::json* pt = nullptr;
+            for (const auto& q : tpl.at("parts"))
+                if (q.value("kind", "") == kind && q.value("group", -1) == group) { pt = &q; break; }
+            if (!pt) { error = "the template " + name + " has no " + kind + " part" + (group >= 0 ? " of group " + std::to_string(group) : std::string()); return false; }
+            nlohmann::json n = *pt;
+            if (n.contains("file") && !n.contains("dir")) n["dir"] = relDirTpl;
+            n.erase("objects");
+            p = std::move(n);
+        }
+        index.erase("template");
+        return true;
+    }
+    catch (const std::exception& e)
+    {
+        error = e.what();
+        return false;
+    }
+}
+
 bool FRavelWorld(const nlohmann::json& index, const std::string& relDir, const PFNPARTPATH& pfnPath, std::vector<uint8_t>& ab,
                  std::string& error, const PFNKEEPOBJ& pfnKeep, const std::set<int>* psetDrop)
 {
@@ -1116,7 +1151,7 @@ bool FRavelWorldFrom(const nlohmann::json& index, const PFNPARTBYTES& pfnBytes, 
                     // (pfnKeep: the dropped group's objects still wanted, its proxies: they place the other groups'
                     // instances, the guests' among them; their own data has no textures)
                     std::vector<uint8_t> abFile;
-                    const std::string rel = prefix + p.at("file").get<std::string>();
+                    const std::string rel = (p.contains("dir") ? p["dir"].get<std::string>() + "/" : prefix) + p.at("file").get<std::string>();
                     if (!pfnBytes(rel, abFile)) throw std::runtime_error("cannot read " + rel);
                     std::vector<WORLDOBJREC> arec;
                     std::string err;
@@ -1147,7 +1182,7 @@ bool FRavelWorldFrom(const nlohmann::json& index, const PFNPARTBYTES& pfnBytes, 
             }
             else
             {
-                const std::string rel = prefix + p.at("file").get<std::string>();
+                const std::string rel = (p.contains("dir") ? p["dir"].get<std::string>() + "/" : prefix) + p.at("file").get<std::string>();
                 if (rel.find("..") != std::string::npos) throw std::runtime_error("a part outside the world's folder");
                 std::vector<uint8_t> abFile;
                 if (!pfnBytes(rel, abFile)) throw std::runtime_error("cannot read " + rel);

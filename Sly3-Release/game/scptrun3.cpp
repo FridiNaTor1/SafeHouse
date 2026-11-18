@@ -301,6 +301,7 @@ void GetRunAim(RUN3* p, void* plo, float pos[3], float* pang)
     if (pang) *pang = ang;
 }
 
+
 // orig3: 0x22BF40 PrunNew
 RUN3* PrunNew(SCPT3* ps, int icmdRoot, RUN3* pParent)
 {
@@ -1278,6 +1279,12 @@ bool FCmdDone(RUN3* p, int icmd)
     case 0x2A: case 0x2B: case 0x2D: case 0x2E: case 0x35:  // orig3 FCmdDone 42 / 43 / 45 / 46 / 53: the actor's own test
         return !p->ploPending || s_phost->FActorCmdDone(c.id, p->ploPending);
     case 0x6A: return !p->plo28 || s_phost->FActorCmdDone(0x6A, p->plo28);   // orig3 FCmdDone 106
+    case 0x37:  // orig3 FCmdDone 55: the run's actor (cid 0x33) has landed: its jump's state (+0x320 +0x1C) is -1
+    {
+        static const bool s_fOld = std::getenv("SLY3_LAUNCHNOWAIT") != nullptr;   // (debug: the old port, not waited on)
+        if (s_fOld || !p->plo28 || !s_phost->FDerivedFrom(p->plo28, 0x33)) return true;
+        return s_phost->FActorCmdDone(0x37, p->plo28);
+    }
     case 0x73:  // orig3 FCmdDone 115: while the menu shows: not done; then (flag 1: the menu hidden first) done
     {
         if (!p->fChoice) return true;

@@ -601,6 +601,36 @@ void SolveGroup(int flags, int nobj, ALO** objs, int ncont, XP** conts)
     SolveDzgContacts(&dzg, flags);
     const float sq = std::sqrt(mx);
     ApplyDzg(&dzg, sq + sq, 50.0f);
+    // (debug: SLY3_DZGDUMP=F: from frame F, each velocity solve's contacts, rows and the objects' displacements)
+    if (static const int s_fDump = std::getenv("SLY3_DZGDUMP") ? std::atoi(std::getenv("SLY3_DZGDUMP")) : -1; s_fDump >= 0)
+    {
+        extern int g_iframeHarness;
+        if (g_iframeHarness >= s_fDump)
+        {
+            std::printf("dzg f %d flags %d nobj %d ncont %d cdz %d mx %g:", g_iframeHarness, flags, nobj, ncont, dzg.cdz, mx);
+            for (int i = 0; i < nobj; i++) std::printf(" %d", objs[i]->oid);
+            std::printf("\n");
+            for (int i = 0; i < dzg.cdz; i++)
+            {
+                const DZ& d = dzg.adz[i];
+                const DZENT& e = dzg.aent[i];
+                const XP* xp = e.pxp;
+                std::printf("  row %d kind %d lim %g %g g %g res %g pair %d", i, d.kind, d.gMin, d.gMax, d.g, d.gResidual, d.pdzPair ? dzg.Idz(d.pdzPair) : -1);
+                if (xp) std::printf(" xpk %d ends %d %d n %.3f %.3f %.3f dist %g mu %g dv %g %g %g", xp->xpk, xp->axpd[0].paloRoot ? xp->axpd[0].paloRoot->oid : -1,
+                                    xp->axpd[1].paloRoot ? xp->axpd[1].paloRoot->oid : -1, xp->normal.x, xp->normal.y, xp->normal.z, xp->gDist, xp->mu, xp->dv.x, xp->dv.y, xp->dv.z);
+                std::printf(" en %.3f %.3f %.3f lin0 %g %g %g\n", e.normal.x, e.normal.y, e.normal.z, e.advLin[0].x, e.advLin[0].y, e.advLin[0].z);
+            }
+            for (int i = 0; i < nobj; i++)
+            {
+                const SORT& s = Sort(objs[i]);
+                const SOST* ps = Psost(objs[i]);
+                std::printf("  obj %d cid 0x%X dpos %g %g %g drot %g %g %g lin %d (%.3f %.3f %.3f) ang %d (%.3f %.3f %.3f) m %g vt68 %p\n", objs[i]->oid, int(objs[i]->Cid()), s.dpos.x, s.dpos.y, s.dpos.z, s.drot.x, s.drot.y, s.drot.z,
+                            ps ? ps->cnstrLin.kind : -1, ps ? ps->cnstrLin.normal.x : 0.0f, ps ? ps->cnstrLin.normal.y : 0.0f, ps ? ps->cnstrLin.normal.z : 0.0f,
+                            ps ? ps->cnstrAng.kind : -1, ps ? ps->cnstrAng.normal.x : 0.0f, ps ? ps->cnstrAng.normal.y : 0.0f, ps ? ps->cnstrAng.normal.z : 0.0f, ps ? ps->m : 0.0f,
+                            PvNativeVt(objs[i], 68));
+            }
+        }
+    }
     if (!fl1)
     {
         for (int i = 0; i < nobj; i++) VtCall(objs[i], 66, 0x1FA328);

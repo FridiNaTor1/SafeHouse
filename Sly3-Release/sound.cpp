@@ -1239,13 +1239,40 @@ std::string StrDialogSubtitleTyped(const std::string& strWrapped)
     if (g_dialogsub.id == -1) return str;
     const SNDSTREAM* p = PstreamFindDialog(g_dialogsub.id);
     const float f = (p ? p->tLength : 0.0f) - 0.5f;
-    const int c = static_cast<int>(str.size());
+    // orig3 0x27EDA8: c and n count the reader's characters (0x264CB0 / 0x264D00 through 0x264BB0: a "&x" code is
+    // skipped, "&&" is one '&'), not the bytes; the typed text ends after its n-th character, and 0x264D00 counts a
+    // line (its start in the layout 0x265000: the first character after the break) only once that character is typed:
+    // a line break just typed does not open the next line yet (natively the box scrolled one character, ~4 frames,
+    // early). (SLY3_SUBTYPEBYTES=1: the bytes and the break, as before)
+    static const bool s_fBytes = std::getenv("SLY3_SUBTYPEBYTES") != nullptr;
+    std::vector<std::size_t> aibEnd;   // (the byte offset after each character)
+    if (s_fBytes)
+        for (std::size_t i = 0; i < str.size(); ++i) aibEnd.push_back(i + 1);
+    else
+        for (std::size_t i = 0; i < str.size();)
+        {
+            if (str[i] == '&' && i + 1 < str.size())
+            {
+                if (str[i + 1] != '&')
+                {
+                    i += 2;
+                    continue;
+                }
+                ++i;
+            }
+            std::size_t cb = 1;
+            ChDecode(str, i, &cb);
+            i += std::max<std::size_t>(cb, 1);
+            aibEnd.push_back(std::min(i, str.size()));
+        }
+    const int c = static_cast<int>(aibEnd.size());
     int n = c;
     if (!(f <= 0.0f) && FDialogPlaying(g_dialogsub.id)) n = static_cast<int>(TDialog() / f * static_cast<float>(c));
     bool fCursor;
     if (n < c)
     {
-        str.resize(static_cast<std::size_t>(std::max(n, 0)));
+        str.resize(n > 0 ? aibEnd[static_cast<std::size_t>(n) - 1] : 0);
+        if (!s_fBytes && !str.empty() && str.back() == '\n') str.pop_back();
         fCursor = true;
     }
     else
@@ -1286,6 +1313,12 @@ float TDialog()
     std::lock_guard<std::recursive_mutex> lock(g_mtxSound);
     const CSndVoice* p = static_cast<CSndVoice*>(g_sound.sndDialog.get());
     if (!p) return 0.0f;
+    // (SLY2N_FASTDIALOG / a skipped cutscene: the line runs by the frame clock (UpdateDialogEvents), so its time is that
+    // clock too; the voice's play time is the audio device's, which a fixed-dt run faster or slower than real time
+    // leaves behind or ahead: the subtitle's typing (0x27EDA8) then lagged the line in frame captures)
+    static const bool s_fFastEnv = std::getenv("SLY2N_FASTDIALOG") != nullptr;
+    extern bool g_fSkipCutFast;
+    if (s_fFastEnv || g_fSkipCutFast) return g_sound.tDialog;
     if (p->m_tPlay == 0.0 && p->m_h == 0 && !FBusy(p)) return g_sound.tDialog;
     return static_cast<float>(p->m_tPlay);
 }

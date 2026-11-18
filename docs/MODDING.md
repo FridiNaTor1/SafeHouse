@@ -542,18 +542,45 @@ The launcher's **Sly 2** page has a **Map editor** button (Windows and Linux; no
 macOS builds yet). Its page lists the installed worlds and their groups, your projects and the installed mod
 packages. **Open in 3D editor** opens a world in its own window, drawn by the game's own renderer:
 
+The window is laid out like other level editors: a tool strip on the left, the **Outliner** (top right), the
+**Properties** of the selection (bottom right), a bottom panel with the world's tabs and a status bar with the snapping.
+
 - **Fly:** hold the right mouse button and use W A S D, Q / E (down / up), Shift (faster), the wheel (speed).
-- **Pick:** click an object in the view or in the **Scene** list (groups, then each object's children; the filter
-  takes a class name or an object number). Dots are objects without a model (volumes, paths, lights, markers).
-- **Move / rotate / scale:** W / E / R choose the tool; drag a handle; or type in the **Inspector**. An instance of a
-  shared prop (a chair, a trash can) moves as a whole: the editor changes the proxy that places it.
-- **Duplicate** (Ctrl+D) and **Delete** (Del) work on a group's top-level objects and on placed instances.
-- **Options:** the Inspector lists the options the object was loaded with; numbers and vectors can be changed (they
-  show after **Project > Reload world** or in a play test).
-- **Undo / Redo:** Ctrl+Z / Ctrl+Y. **Save:** Ctrl+S. **Play test:** starts Sly 2 in that world with the project.
-- **Missions / Text / Scripts / History** (the World panel): the world's jobs, tasks and markers, its text, each
-  group's scripts (read only for now), the edits made and the parts they changed.
-- **Help:** **Getting started** (F1; shown at the first starts) and the **Keyboard shortcuts** list.
+- **Find things:** the Outliner groups every object by what it is (guards, bosses, NPCs, pickups, triggers, paths,
+  traversal, cameras, lights, sounds, effects, missions, world meshes, props ...) with friendly names (characters and
+  props by their group's name, jobs by their title). Search by name, class or number; list by type, by group or flat.
+- **Hide / show / isolate:** the check boxes hide a whole group or type; H hides the selection, I shows only the
+  selection, Alt+H shows everything again (kept with the project).
+- **Select:** click (Ctrl+click adds or removes, Shift+click adds), drag a box with the select tool (Q) or Alt+drag,
+  Ctrl+A, or Select > by type / class / group. The Properties show the last clicked one; several selected can be
+  moved by an offset, duplicated, hidden, isolated or deleted together.
+- **Move / rotate / scale:** W / E / R; the gizmo moves the whole selection about its middle in one undo step. The
+  status bar's Grid / Angle / Scale snapping ([ and ] change the grid; Ctrl while dragging turns the grid snap the
+  other way).
+- **Copy / paste / duplicate:** Ctrl+C, Ctrl+V (in front of the camera), Ctrl+Shift+V (in place), Ctrl+D, Del.
+- **Properties:** the object's known options by name first, the raw ones (no name yet) collapsed at the end, then
+  **When it exists** (in which places and by which tasks / scripts it is there) and its **Links**.
+- **Cameras:** select a camera object to see a live preview of what it shows; **Look through** makes the view the
+  camera's, **Pilot** flies the camera with the view, **Set from the view** puts it where you look; its field of view
+  is a slider. Camera zones' settings have names.
+- **Play test** (the yellow button): the world with your project. Its arrow: **Play from here** (Sly is put in front
+  of the view), **Play the selected job / task**, or any job of the world from its start or from one of its tasks.
+- **Brushes** (Create tab): blocks, ramps, stairs, cylinders and floors made into new objects with real collision
+  (Sly can stand on them, walk up the ramp and the stairs), with a grid texture of a colour or another object's
+  texture. Select one later to change its size: it is made again.
+- **Traversal and interactive objects** (Create tab): ledges, pipes and poles, rails / beams / wires, hang points,
+  spires, swing poles, ropes and paths; buttons / uses, Murray's heavy uses, exits, barriers, pads, vaults, loot,
+  hiding spots, breakables, coins, clue bottles, lasers, detectors, checkpoints, warps, job markers. Each is a copy of a
+  working one in the level (curves are laid out along the view; shape them with their points). The Properties say
+  who can use it (Sly's own target list; a use's character, which you can set to everyone / Sly / Bentley / Murray).
+- **Assets** tab: the level's props, characters and pickups as pictures, with how often each is used (select them in
+  the map) and **Place**; another level's assets (their pictures are made once by a hidden editor) can be imported
+  as models (characters come as statues: their behaviour needs their own level's data).
+- **Guards:** a guard's **Patrol** reads as words (waits, walk along a path, loop); the path is drawn in the view with
+  its direction; click it to move its points.
+- **Missions / Scripts / Dialogue / Text / History** (the bottom panel): the world's jobs, tasks and markers, each
+  group's scripts (readable names, editable), the dialogue, the text, the edits made and the parts they changed.
+- **Undo / Redo:** Ctrl+Z / Ctrl+Y. **Save:** Ctrl+S. **Help:** **Getting started** (F1) and the **Keyboard shortcuts**.
 
 #### Models and textures
 
@@ -648,6 +675,96 @@ and the game keeps their states in a file next to the save slot, `Saves/save1.mo
 for each slot); the save slot itself is never changed. When the world loads, those tasks get their states back after
 the save's own: a finished custom job stays finished. Removing the package leaves the save as it was (the side file's
 states are kept for when the package comes back); erasing the slot or starting a new game in it drops them.
+
+### Map states
+
+A level changes as the story goes on: after Operation: Thunder Beak the peacock sign in the middle of Paris is down
+and the fountain under it broken. The level file holds every object of every state; what decides which are there is
+the save's **task states** (each job is a chain of tasks: locked, available, done, done and closed):
+
+- **Tasks' and jobs' object lists:** a task lists objects that are in the level only in some of its states (a job's
+  marker while it is available, a door opened once a task is done). Paris's peacock sign is one: the last task of
+  Thunder Beak (`t1_heist_8_siege`) sends the sign's state machine (object 124165, state machine 124166) to the state
+  of its own task state, so once the task is done the sign has fallen.
+- **Scripts:** a group's scripts add, remove or move objects by the tasks' states (`.state`, `.done?`, `.current?`),
+  the level (`<world-index>`) and progress values.
+- **World filters:** an object with a filter list loads only in the listed world records.
+- **Taken out at the start:** objects with option 26 start out of the level; a task, job or script brings them in.
+
+So a level's states are its episode's progress points: **the start** (no task done), **after each job**, **the
+episode complete**, and **a job being played** (the game started at its first task).
+
+```sh
+Sly2-Release --data-dir "<installation>" --list-map-states 2 --out paris-states.json
+Sly2-Release --data-dir "<installation>" --map-states-survey            # every level: what decides its states
+Sly2-Release --data-dir "<installation>" --world 2 --map-state after:1889 # Paris after Operation: Thunder Beak
+Sly2-Release --data-dir "<installation>" --world 2:1890 --map-state before:1889   # Thunder Beak played from its start
+```
+
+`--list-map-states` prints the states (`start`, `before:<job>`, `after:<job>`, `complete`, `during:<job>`, and the
+packages' own states, `custom:<id>`), each with what triggers it in words and the task states it sets, then what
+decides them in the level: each task's object and state machine lists, the scripts acting on objects under task / job /
+progress conditions, the filtered objects. `--map-state` starts the game in a state (several, comma separated: a
+progress state and custom states); such a run never writes a save, so your slots stay as they are.
+`--dump-presence FILE` writes, at the end of the run (`--frames N`), every object with its number, class, position
+and whether it is in the level.
+
+**Your own states** live in a package's `mod.json`. A state has a trigger and the objects it changes:
+
+```json
+"map_states": [{"world": "Paris", "id": "fountain-fixed", "name": "Fountain fixed",
+                "when": [{"job": 1915, "done": true}],
+                "add": [62734], "remove": [33735],
+                "sm": [{"object": 124165, "sm": 124166, "state": 1554}]}]
+```
+
+- `when`: every condition holds (none: always). `{"task": OID, "states": [2, 3]}` (the task in one of those states:
+  0 locked, 1 available, 2 done, 3 done and closed), `{"job": OID, "done": true}` (the job's last task done, or not
+  done with `false`), `{"progress": "a.b.c", "equals": 1}` (a save value).
+- `add`: objects that exist only while the state holds (make them in the map editor; they are taken out otherwise).
+- `remove`: objects taken out while the state holds (left to the game otherwise).
+- `sm`: an object's state machine sent to a state while the state holds.
+
+The game checks the states when a level starts (after the save's task states) and whenever a task changes state, so
+a state can turn on in the middle of play. `--map-state custom:<id>` forces one on to look at it.
+
+### New levels
+
+A package can add **levels of its own**. A new level is a level file in the package's `files/` (the parts format of
+"Levels") listed in `mod.json`:
+
+```json
+"new_worlds": [{"id": "test-floor", "name": "Test Floor", "index": "Worlds/Mods/test-floor/Test Floor.world.json",
+                "template": "Prison Vault", "episode": 1, "spawn": [0, 0, 200, 0]}],
+"entries": [{"world": "Paris", "at": [-2098, -3226, 567], "radius": 120, "to": "Test Floor"},
+            {"world": "Test Floor", "at": [0, 1500, 100], "radius": 150, "to": "Paris"}]
+```
+
+- The level gets a world record after the disc's (44, 45, ... in the packages' load order): `--world 44` starts in
+  it, `--editor 44 --editor-project <package>` opens it in the map editor.
+- `template`: an installed level whose parts the new one uses where its index says `"template": true` (nothing is
+  copied: only the parts the new level changes are files of the package). It loads with the template's world filter.
+- `episode`: the episode it belongs to (the HUD, where a job's end and a fall outside a job lead).
+- `spawn`: where the player starts (x, y, z, heading in radians) when the level has no checkpoint for the way in.
+- `entries`: the ways in. A sphere (`at`, `radius`) in a level: walking in takes the player to the level `to` (a new
+  level, or an installed one's name, at its checkpoint `point`, default its start). Or `"exit": OID`: an exit object
+  of that level (a door the map editor copied, for example) leads there instead.
+
+Make one with the map editor's command:
+
+```sh
+Sly2-Release --data-dir "<installation>" --new-world "Editor/Sly 2/Test Floor" --nw-name "Test Floor" --nw-template 16 \
+  --nw-spawn 0,0,200,0 --nw-entry "Paris:-2098,-3226,567,120" --nw-return "0,1500,100,150:Paris"
+```
+
+`--nw-template` takes the template's world record. The new level starts **empty**: the template's own groups (its
+geometry, props, guards, jobs and collision) are left out, the characters, effects and HUD stay, and the main level
+group keeps its textures for the editor's brushes and models (`--nw-keep-level` keeps the whole template instead, a
+copy to change). Open it in the map editor (`--editor 44 --editor-project ...`) and build: a floor brush gives the
+player ground to stand on. The smallest level is just that: the template's characters, a floor and a spawn point.
+
+New levels load on every platform. Not there yet: the episode menu does not list them (they are reached by an entry or
+`--world`), and a save made in a new level does not bring the player back to it (the game resumes in the episode's own levels).
 
 ### What is safe to change
 

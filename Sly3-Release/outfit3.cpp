@@ -39,6 +39,7 @@
 #include "disc.h"
 #include "glob.h"
 #include "shd.h"
+#include "game/aseg3.h"
 #include "game/loaders3.h"
 #include "game/sly3.h"
 #include "transition.h"
@@ -75,10 +76,12 @@ struct OUTFIT
     int mode = -1;           // +0x48 (0x173280): -1 none, 0 the change's animation plays (the record pending), 1 changed
     int idPending = -1;      // +0x54 the record waiting for the animation's event 0x757
     float tMode = 0.0f;      // (native) the change's start
+    int cHold = 0;           // +0x64 the scripts' hold (0x173448 / 0x173498): the outfit's restrictions off while > 0
 };
 std::unordered_map<LO*, OUTFIT> s_mpoutfit;
 
 bool FPrint() { static const bool s_f = std::getenv("SLY3_OUTFITPRINT") != nullptr; return s_f; }
+bool FOldOutfitHold() { static const bool s_f = std::getenv("SLY3_OUTFITHOLD0") != nullptr; return s_f; }
 
 // the class-0x97 object's group streamed in this world (+0x698: one at a time) with its globs as they were without
 // their meshes (the unload puts them back); the scene to rebuild (game.cpp)
@@ -106,6 +109,23 @@ void UnloadGroup97(LO* plo)
 // header and the shaders (0x25C930 / 0x234EA0) as a world group's, then each link of the group's range: kind 0 / 1 the
 // object's keyed meshes (vt slot 15: 0x18FE80 with -1 / the link's key), the shader group ended (0x235DE0)). The group
 // loaded before is unloaded first (0x16F120).
+// orig3 0x135F48 (ASEG vt slot 15: the deferred segment (+0xA4) read from the group's stream once, +0xA8) / 0x2395E8 (SM
+// vt slot 15: each transition's object's slot 15); the segments streamed
+int CStreamDeferredAsegs(LO* plo, CBinaryInputStream* pbis)
+{
+    if (ASEG* paseg = dynamic_cast<ASEG*>(plo))
+    {
+        if (!paseg->pasegd3 || !paseg->pasegd3->fDeferred) return 0;
+        LoadAsegFromBrx3(paseg, pbis);
+        return 1;
+    }
+    int c = 0;
+    if (SM* psm = dynamic_cast<SM*>(plo))
+        for (const SM::SMT& t : psm->asmt)
+            if (t.paseg) c += CStreamDeferredAsegs(t.paseg, pbis);
+    return c;
+}
+
 bool FStreamGroup97(int id, LO* ploOwner)
 {
     if (!g_psw || id == -1) return false;
@@ -151,6 +171,18 @@ bool FStreamGroup97(int id, LO* ploOwner)
                 if (FPrint()) std::printf("outfit: group %d item %d kind %d a %d b %d\n", id, j, it.kind, it.a, it.b);
                 if (it.kind != 0 && it.kind != 1) continue;
                 LO* ploLink = PloFindSwNearest(plo, it.a);   // (0x16F090: 0x17E1B8(game, 4, oid))
+                // (vt slot 15 of the other classes: an ASEG's 0x135F48 loads its deferred segment (+0xA4) from the stream
+                // once (+0xA8); an SM's 0x2395E8 does that for each of its transitions' ASEGs. E.g. Sly's silhouette
+                // outfit 1885 (m_ext's attract): its run 7951 / 7949, its idle SM 7941 and 7939, natively left empty
+                // before s3-intro: the outfit's gait / idle could not be used (Sly ran at his own 510 a second where
+                // the reference's silhouette runs 833). SLY3_OUTFITNOASEG=1: as before)
+                static const bool s_fNoAseg = std::getenv("SLY3_OUTFITNOASEG") != nullptr;
+                if (ploLink && !s_fNoAseg && !FCidDerivedFrom(ploLink->Cid(), S3CID(0x30)))
+                {
+                    const int c = CStreamDeferredAsegs(ploLink, &bis);
+                    if (FPrint()) std::printf("outfit: group %d item %d kind %d link %d (cid 0x%X): %d segments streamed\n", id, j, it.kind, it.a, ploLink->Cid(), c);
+                    continue;
+                }
                 if (!ploLink || !FCidDerivedFrom(ploLink->Cid(), S3CID(0x30)))
                 {
                     if (FPrint()) std::printf("outfit: group %d item %d kind %d link %d (cid 0x%X) arg %d: not a model, skipped\n", id, j, it.kind, it.a,
@@ -496,9 +528,29 @@ bool FOutfitWorn3(LO* ploPlayer)
     for (auto& [plo, o] : s_mpoutfit)
     {
         if (o.psw != g_psw || (g_psw && o.serial != g_psw->serial) || o.ploPlayer != ploPlayer) continue;
-        if (o.icur >= 0 && o.fApplied) return true;
+        if (o.icur >= 0 && o.fApplied && (o.cHold == 0 || FOldOutfitHold())) return true;
     }
     return false;
+}
+
+// orig3 0x173448 / 0x173498 (from 0x22B238: a script run driving the current player (0x226BE0: the commands of the table
+// 0x326480 in a script of mode 2) holds his outfit object +0x1108's count +0x64 while it does): with the count up,
+// 0x173428 says no outfit, so the R1 walk, the sneak and his own gait are his again; the animation restarted when it
+// changes between the outfit's and his own (0x1731B0 -> 0x173228). E.g. m_ext's attract 4262 [89]: Sly in the
+// silhouette walks (R1) to 15109 at the reference's 833 a second, natively he ran at 510 and every later beat of his
+// came ~27 frames late (the title card froze him before his leap). SLY3_OUTFITHOLD0=1: no hold (as before s3-intro)
+void HoldOutfit3(LO* ploPlayer, bool fHold)
+{
+    if (!ploPlayer || FOldOutfitHold()) return;
+    for (auto& [plo, o] : s_mpoutfit)
+    {
+        if (o.psw != g_psw || (g_psw && o.serial != g_psw->serial) || o.ploPlayer != ploPlayer) continue;
+        const bool fBefore = o.icur >= 0 && o.fApplied && o.cHold == 0;
+        o.cHold = std::max(0, o.cHold + (fHold ? 1 : -1));
+        const bool fAfter = o.icur >= 0 && o.fApplied && o.cHold == 0;
+        if (FPrint()) std::printf("outfit %d: hold %d (player %d)\n", plo->oid, o.cHold, ploPlayer->oid);
+        if (fBefore != fAfter && std::getenv("SLY3_OUTFITGAIT")) RestartPlayerAnim(ploPlayer);   // (the outfit gait natively off: nothing to switch)
+    }
 }
 
 // orig3 0x1734E0 (the job's rewards 0x187270): each gang character's (D_00344050) outfit object +0x1108 wears nothing at
@@ -521,7 +573,7 @@ bool FPlayerDisguised3(LO* ploPlayer)
     {
         if (o.psw != g_psw || (g_psw && o.serial != g_psw->serial) || o.ploPlayer != ploPlayer) continue;
         // 0x173428: a record worn (+0x50) and the scripts' control lock (+0x64) not taken (not kept natively: 0)
-        if (o.icur < 0 || !o.fApplied) continue;
+        if (o.icur < 0 || !o.fApplied || (o.cHold != 0 && !FOldOutfitHold())) continue;
         const int a = IepisodeCur(), b = o.arec[size_t(o.icur)].value;   // 0x25E188 / 0x172CF8
         if (a == b || a == -1 || b == -1) return true;
     }
@@ -653,6 +705,24 @@ GAIT* PgaitOutfit3(LO* ploPlayer, int sfx)
         r.pgait->apaseg[0] = r.apair[1].paseg;
         r.pgait->apaseg[1] = r.apair[2].paseg;
         BindGait(r.pgait.get());
+        if (FPrint())
+        {
+            const GAIT& g = *r.pgait;
+            std::printf("outfit gait %d: clips %d %d vel %.1f %.1f %.1f / %.1f %.1f %.1f bl %d", o.arec[size_t(o.icur)].id, g.apaseg[0] ? g.apaseg[0]->oid : -1,
+                        g.apaseg[1] ? g.apaseg[1]->oid : -1, g.avel[0].x, g.avel[0].y, g.avel[0].z, g.avel[1].x, g.avel[1].y, g.avel[1].z, g.pbl ? 1 : 0);
+            if (g.pbl)
+                for (const BLENDBL& bl : g.pbl->abl)
+                    for (const auto& am : bl.aamrsg)
+                        for (const MRSG& m : am) std::printf(" [%.3f %.3f]", m.t, m.dt);
+            std::printf("\n");
+            for (int i = 0; i < 2; ++i)
+                if (const ASEGD* pd = g.apaseg[i] ? PasegdOf(g.apaseg[i]) : nullptr)
+                {
+                    std::printf("  clip %d: tMax %.3f chn %zu chg %zu ev %zu/%zu/%zu:", g.apaseg[i]->oid, pd->tMax, pd->achn.size(), pd->achg.size(), pd->aaev[0].size(), pd->aaev[1].size(), pd->aaev[2].size());
+                    for (const ASEGEV& ev : pd->aaev[1]) std::printf(" (k%d %d t%.3f)", ev.kind, ev.an[0], ev.t);
+                    std::printf("\n");
+                }
+        }
     }
     return r.pgait && r.pgait->pbl ? r.pgait.get() : nullptr;
 }

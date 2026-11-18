@@ -21,3 +21,4 @@
 #define EDFEAT_SCRIPTS 1            // splice scripts: edit, check, compile back
 #define EDFEAT_DIALOGUE 1           // dialogue lines and text
 #define EDFEAT_MODELS 1             // GLB / FBX import, GLB export, textures, materials
+#include "editor_newworld.h"   // (a project's new worlds in the world list: RegisterProjectWorlds)
