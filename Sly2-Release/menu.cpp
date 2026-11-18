@@ -812,7 +812,7 @@ void BindKey(int i, int key)
 }
 
 // (upscaling) the rows shown: not where the headset's compositor upscales (the Quest: VR Settings' own Upscaling), nor
-// where FSR 1 cannot run (fsr.h: the Metal layer)
+// where FSR 1 cannot run (fsr.h FAvailable)
 bool FUpscaleRowsShown()
 {
     if (vr::FActive() && vr::FCompositorUpscaling()) return false;

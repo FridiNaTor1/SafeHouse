@@ -917,9 +917,6 @@ private:
 #endif
     }
     void upscalingRows() {
-#if defined(__APPLE__)
-        return;   // (macOS: the game's Metal layer has no FSR 1 programs yet; the game keeps the bilinear scale)
-#endif
         if (!iniGame() || vrHeadsetDevice()) return;
         settings::Sly2UpscaleOptions& u = m_sly2.upscale;
         toggle(tr("Upscaling"), u.enabled,

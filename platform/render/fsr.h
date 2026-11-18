@@ -6,9 +6,9 @@
 // Upscaling (Settings.ini [Graphics] Upscaling; notes/FSR_2026-11-11.md): the scene drawn below the picture's size and
 // scaled up to it by AMD FidelityFX Super Resolution 1.0 (spatial: EASU, then RCAS sharpening; fsreasu.frag,
 // fsrrcas.frag) instead of the bilinear stretch. A self-contained pass of two full-screen fragment draws through the
-// GL calls every renderer layer takes (OpenGL, OpenGL ES, the Vulkan and deko3d layers' offline programs); where the
-// programs cannot be built (the Metal layer has no Metal versions of them) FAvailable is false and the callers keep
-// the bilinear scale.
+// GL calls every renderer layer takes (OpenGL, OpenGL ES, the Vulkan and deko3d layers' offline programs, the Metal
+// layer's ports: platform/metal/shaders/fsreasu.metal, fsrrcas.metal); where the programs cannot be built FAvailable
+// is false and the callers keep the bilinear scale.
 //
 // Flat (gl.h GL::BeginNativeUi): the scene upscaled into a picture-sized target, the HUD, menus and overlays drawn into
 // that at the window's resolution. VR (vr.cpp): each eye upscaled into its swapchain image.

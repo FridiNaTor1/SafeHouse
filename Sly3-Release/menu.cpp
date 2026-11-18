@@ -704,7 +704,7 @@ void BindKey(int i, int key)
     FSaveDisplaySettings(cane::userDirectory());
 }
 
-// (upscaling) the rows shown where FSR 1 can run (fsr.h: not the Metal layer)
+// (upscaling) the rows shown where FSR 1 can run (fsr.h FAvailable)
 bool FUpscaleRowsShown() { return g_gl.window && fsr::FAvailable(); }
 // Upscaling's rows (fSubOnly: only the method, preset and sharpness, those while it is on), with the page's select function
 void AppendUpscaleRows(std::vector<MENUENT>& a, uint32_t pfnSelect, bool fSubOnly)
