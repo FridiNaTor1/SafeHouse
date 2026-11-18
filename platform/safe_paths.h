@@ -134,6 +134,41 @@ S longPathPrefixed(const S& absolute) {
     return out;
 }
 
+// The folders CreateDirectoryW must make, root first, for the absolute Windows folder `dir` ("C:\a\b" -> "C:\a",
+// "C:\a\b"); the drive, the \\server\share or the \\?\ head is never in it. Without \\?\ Windows takes "/" as a
+// separator too (a relative path joined with "/", "Worlds/1-Paris", stays so in the native string), so it is made "\"
+// first: a chain split at "\" only would ask for "...\Worlds/1-Paris" before "...\Worlds" exists, and Windows answers
+// ERROR_PATH_NOT_FOUND. (With \\?\ "/" is a literal character; longPathPrefixed already made it "\".)
+template <class S>
+std::vector<S> directoryChain(const S& dir) {
+    using C = typename S::value_type;
+    S w = dir;
+    const bool prefixed = w.size() >= 4 && w[0] == C('\\') && w[1] == C('\\') && w[2] == C('?') && w[3] == C('\\');
+    if (!prefixed)
+        for (auto& c : w)
+            if (c == C('/')) c = C('\\');
+    while (w.size() > 1 && w.back() == C('\\')) w.pop_back();
+    auto find = [&](std::size_t from) { const auto at = w.find(C('\\'), from); return at == S::npos ? w.size() : at; };
+    auto starts = [&](const char* head) {
+        std::size_t k = 0;
+        for (; head[k]; ++k)
+            if (k >= w.size() || w[k] != C(head[k])) return false;
+        return true;
+    };
+    std::size_t start;   // (the end of the head: the separator after it, or the end)
+    if (starts("\\\\?\\UNC\\")) start = find(find(8) + 1);
+    else if (prefixed) start = find(4);                                      // \\?\C:
+    else if (w.size() >= 2 && w[1] == C(':')) start = 2;                     // C:
+    else if (starts("\\\\")) start = find(find(2) + 1);                    // \\server\share
+    else start = 0;                                                         // (relative: from the first name)
+    std::vector<S> out;
+    for (std::size_t i = start + 1; i <= w.size(); ++i) {
+        if (i < w.size() && w[i] != C('\\')) continue;
+        if (i > start + 1 && w[i - 1] != C('\\')) out.push_back(w.substr(0, i));
+    }
+    return out;
+}
+
 // The path to open / create / list with: on Windows an absolute one that may be too long for MAX_PATH (or a relative one
 // that becomes so) with \\?\; short paths unchanged, so nothing changes where the limit is far away. Elsewhere `p`.
 inline fs::path ioPath(const fs::path& p) {
@@ -203,9 +238,10 @@ inline OsError lastOsError() {
     e.text += " (Windows error " + std::to_string(code) + ")";
     switch (code) {
         case ERROR_FILENAME_EXCED_RANGE:
-        case ERROR_PATH_NOT_FOUND:   // (what CreateFileW says for a path over MAX_PATH whose folder could not be made)
             e.kind = Failure::TooLong;
             break;
+        // (ERROR_PATH_NOT_FOUND is not "too long" by itself: a missing or malformed folder says the same. describeFailure
+        // calls it too long only when the path really is over MAX_PATH and the system has no long paths.)
         case ERROR_ACCESS_DENIED:
         case ERROR_WRITE_PROTECT:
         case ERROR_VIRUS_INFECTED:
@@ -253,14 +289,24 @@ inline std::string utf8Of(const fs::path& p) {
     return {u.begin(), u.end()};
 }
 
+// A failure's kind given the path's length (UTF-16 units, without a \\?\ head) and whether the system takes long paths:
+// an unclassified error (a missing folder: ERROR_PATH_NOT_FOUND) on a path over MAX_PATH without long paths is the
+// length; a short path, or a system with long paths, keeps the OS's own error. (Pure: tested on every platform.)
+inline Failure classifyFailure(Failure kind, std::size_t units, bool longPathsOn) {
+    if (kind == Failure::Other && units > kMaxFile && !longPathsOn) return Failure::TooLong;
+    return kind;
+}
+
 // "<path> (N characters): <OS text> [tag]"; a path over the limit on a system without long paths is called too long
-// whatever the error code said.
+// when the OS gave no clearer reason (classifyFailure).
 inline std::string describeFailure(const fs::path& p, OsError e) {
     std::error_code ec;
     const fs::path a = p.is_absolute() ? p : fs::absolute(p, ec);
-    const std::size_t n = pathUnits(a);
+    std::size_t n = pathUnits(a);
 #ifdef _WIN32
-    if (n > kMaxFile && e.kind != Failure::AccessDenied && e.kind != Failure::InUse) e.kind = Failure::TooLong;
+    if (a.native().rfind(L"\\\\?\\UNC\\", 0) == 0) n -= 6;   // (counted as \\server\share)
+    else if (a.native().rfind(L"\\\\?\\", 0) == 0) n -= 4;
+    e.kind = classifyFailure(e.kind, n, longPathsEnabled());
 #endif
     std::string s = utf8Of(a) + " (" + std::to_string(n) + " characters): " + e.text;
     if (*failureTag(e.kind)) s += std::string(" ") + failureTag(e.kind);
@@ -276,17 +322,8 @@ inline bool createDirectories(const fs::path& dir, std::string* error = nullptr)
     const std::wstring& w = a.native();
     DWORD attr = GetFileAttributesW(w.c_str());
     if (attr != INVALID_FILE_ATTRIBUTES && (attr & FILE_ATTRIBUTE_DIRECTORY)) return true;
-    // each component from the root (the drive / share / \\?\ head is never created)
-    std::size_t start = 0;
-    if (w.rfind(L"\\\\?\\UNC\\", 0) == 0) start = w.find(L'\\', w.find(L'\\', 8) + 1);
-    else if (w.rfind(L"\\\\?\\", 0) == 0) start = 6;
-    else if (w.size() >= 2 && w[1] == L':') start = 2;
-    else if (w.rfind(L"\\\\", 0) == 0) start = w.find(L'\\', w.find(L'\\', 2) + 1);
-    if (start == std::wstring::npos) start = w.size();
-    for (std::size_t i = start + 1; i <= w.size(); ++i) {
-        if (i < w.size() && w[i] != L'\\') continue;
-        const std::wstring part = w.substr(0, i);
-        if (part.size() <= start + 1) continue;
+    // each folder from the root (the drive / share / \\?\ head is never created; "/" taken as "\": directoryChain)
+    for (const std::wstring& part : directoryChain(w)) {
         for (int attempt = 0;; ++attempt) {
             if (CreateDirectoryW(part.c_str(), nullptr)) break;
             const DWORD code = GetLastError();
@@ -407,6 +444,40 @@ inline int pathsSelfTest() {
         const std::string pre = longPathPrefixed(deep);
         check(pre.rfind("\\\\?\\C:\\", 0) == 0 && pre.size() == deep.size() + 4, "deep path prefixed whole");
     }
+    // directoryChain: the folders CreateDirectoryW makes (the user's report 2026-11-18: the folder
+    // "C:\Games\SafeHouse\sly2.staging\Movies/English" was asked for whole, before Movies existed: Windows error 3, called "too long" at 46 characters)
+    {
+        auto chain = [](const std::string& d) {
+            std::string s;
+            for (const std::string& c : directoryChain(d)) s += (s.empty() ? "" : " | ") + c;
+            return s;
+        };
+        eqs(chain("C:\\Games\\SafeHouse\\sly2.staging\\Movies/English"),
+            "C:\\Games | C:\\Games\\SafeHouse | C:\\Games\\SafeHouse\\sly2.staging | C:\\Games\\SafeHouse\\sly2.staging\\Movies | "
+            "C:\\Games\\SafeHouse\\sly2.staging\\Movies\\English",
+            "chain: forward slashes are separators");
+        eqs(chain("C:/a/b/"), "C:\\a | C:\\a\\b", "chain: forward slashes only, trailing separator");
+        eqs(chain("C:\\a\\\\b"), "C:\\a | C:\\a\\\\b", "chain: a doubled separator makes no empty folder");
+        eqs(chain("C:\\"), "", "chain: the drive root makes nothing");
+        eqs(chain("C:"), "", "chain: a bare drive makes nothing");
+        eqs(chain("D:\\x"), "D:\\x", "chain: another drive");
+        eqs(chain("\\\\?\\C:\\a\\b"), "\\\\?\\C:\\a | \\\\?\\C:\\a\\b", "chain: \\\\?\\ drive");
+        eqs(chain("\\\\?\\C:\\a/b"), "\\\\?\\C:\\a/b", "chain: with \\\\?\\ a slash is a character");
+        eqs(chain("\\\\?\\UNC\\srv\\share\\a\\b"), "\\\\?\\UNC\\srv\\share\\a | \\\\?\\UNC\\srv\\share\\a\\b", "chain: \\\\?\\UNC");
+        eqs(chain("\\\\?\\UNC\\srv\\share"), "", "chain: \\\\?\\UNC share root");
+        eqs(chain("\\\\srv\\share\\a/b"), "\\\\srv\\share\\a | \\\\srv\\share\\a\\b", "chain: UNC");
+        eqs(chain("//srv/share/a"), "\\\\srv\\share\\a", "chain: UNC with slashes");
+        eqs(chain(longPathPrefixed(std::string("C:\\x\\Movies/English"))), "\\\\?\\C:\\x | \\\\?\\C:\\x\\Movies | \\\\?\\C:\\x\\Movies\\English",
+            "chain: a long path prefixed");
+        check(directoryChain(std::wstring(L"C:\\a/b")).size() == 2, "chain: wide strings");
+    }
+    // classifyFailure: "too long" only when it is
+    check(classifyFailure(Failure::Other, 46, false) == Failure::Other, "classify: error 3 at 46 characters is no length problem");
+    check(classifyFailure(Failure::Other, 300, true) == Failure::Other, "classify: long paths on: the OS's error");
+    check(classifyFailure(Failure::Other, 300, false) == Failure::TooLong, "classify: over MAX_PATH without long paths");
+    check(classifyFailure(Failure::AccessDenied, 300, false) == Failure::AccessDenied, "classify: access denied kept");
+    check(classifyFailure(Failure::NoSpace, 300, false) == Failure::NoSpace, "classify: disk full kept");
+    check(classifyFailure(Failure::TooLong, 100, true) == Failure::TooLong, "classify: the OS's own too long kept");
 #ifndef _WIN32
     check(ioPath(fs::path("/a/b")) == fs::path("/a/b"), "ioPath unchanged off Windows");
 #endif
@@ -432,6 +503,12 @@ inline int pathsSelfTest() {
             });
         for (auto& th : at) th.join();
         for (int t = 0; t < 8; ++t) check(okAll[t], "deep write " + std::to_string(t) + ": " + errors[t]);
+        {
+            // a short path joined with "/" (the converter's "Movies/English/2097 Prologue.flac"), its folders new
+            std::string why;
+            const fs::path p = base / fs::path(u8"Movies/English/2097 Prologue.flac");
+            check(writeFile(p, "x", 1, &why) && fs::is_regular_file(ioPath(p), ec), "short write joined with / (" + why + ")");
+        }
         std::string err;
         check(!writeFile(base / "missing" / "\x01:bad" / std::string(300, 'x'), "x", 1, &err) && err.find("characters)") != std::string::npos,
               "a failure names the path and its length (" + err + ")");
