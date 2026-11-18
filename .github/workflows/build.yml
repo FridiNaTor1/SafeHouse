@@ -709,12 +709,24 @@ jobs:
               exit 1
             fi
           fi
+          # The release before this one (a re-run finds its own tag first): its version series decides the notes below.
+          before=$(git tag --list 'v*' --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | grep -vxF "$TAG" | sed -n 1p || true)
+          # The first release of a new series (e.g. the first 0.2.x after 0.1.x) uses the written notes in
+          # docs/release-notes/<series>.md when they exist; every other release lists the commits since the last one.
+          series=${VERSION%.*}
+          before_series=${before#v}; before_series=${before_series%.*}
+          notes_file="docs/release-notes/$series.md"
           {
-            printf 'SafeHouse %s, built %s from %s.\n\n## Changes\n\n' "$VERSION" "${DATE%%T*}" "$COMMIT"
-            if [ -n "$previous" ]; then
-              git log --no-merges --format='- %s' -n 40 "$previous..HEAD"
+            if [ -f "$notes_file" ] && [ "$before_series" != "$series" ]; then
+              printf 'SafeHouse %s, built %s from %s.\n\n' "$VERSION" "${DATE%%T*}" "$COMMIT"
+              cat "$notes_file"
             else
-              git log --no-merges --format='- %s' -n 20
+              printf 'SafeHouse %s, built %s from %s.\n\n## Changes\n\n' "$VERSION" "${DATE%%T*}" "$COMMIT"
+              if [ -n "$before" ]; then
+                git log --no-merges --format='- %s' -n 40 "$before..HEAD"
+              else
+                git log --no-merges --format='- %s' -n 20
+              fi
             fi
             cat <<'EOF'
 
