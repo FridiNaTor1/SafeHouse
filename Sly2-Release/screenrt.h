@@ -67,6 +67,8 @@ void SetScreenObjPauses(LO* plo, bool f);
 void UpdateScreenObjs(SW* psw);
 // Draws the shown ones into g_hud (between g_hud.Begin and Flush).
 void DrawScreenObjs(SW* psw);
+// (VR: game.cpp's binocucom talks) the last DrawScreenObjs drew a binocucom frame (0x35F..0x361: Sly's, Bentley's, Murray's)
+bool FBinocFrameDrawn();
 // A world loaded: the run-time states of the objects not in it dropped.
 void ResetScreenObjs(SW* psw);
 // orig: 0x001D9408: clear the shown-screen count, including the restart hold.

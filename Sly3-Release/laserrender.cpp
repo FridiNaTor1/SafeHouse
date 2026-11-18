@@ -1,5 +1,11 @@
 // The laser's authored models (CID 0x55, original slot 19 0x1DF5B0), drawn through the native 0x1A5EE8 path.
 #include "laserrender.h"
+#include "actanim.h"
+#include "brx.h"
+#include "asega.h"
+#include "aseg.h"
+#include "sm.h"
+#include "worldglobals.h"
 #include "game/sly3.h"
 
 #include "activate.h"
@@ -45,7 +51,48 @@ void AppendLaserLine(const SCENE& scene, ALO* model, const glm::vec3& a, const g
     mat[3] = glm::vec4(a, 1.0f);
     AppendAloExtraDraws(scene, model, mat, 1.0f, aextra);
 }
+// orig3 +0x180 / +0x190 (the endpoints' {model, the ASEG, the ASEGA, the scale channel}): the ASEG and its channel
+struct ENDASEG3 { ASEG* paseg = nullptr; const ASEGCHN* pchn = nullptr; };
+std::unordered_map<const ALO*, std::array<ENDASEG3, 2>> s_mpendaseg;
+WORLD_TABLE(s_mpendaseg);   // (PC: moved aside while a kept world loads, worldglobals.h)
+
+// the ASEG's ASEGA playing on the model (orig3 0x23FAE8 by the ASEG's oid)
+ASEGA* PasegaOn(ASEG* paseg, ALO* palo)
+{
+    for (ASEGA* pasega : paseg->apasega)
+        if (pasega && pasega->palo == palo) return pasega;
+    return nullptr;
+}
 }  // namespace
+
+void BindLaserModelAsegs3(ALO* p)
+{
+    std::array<ENDASEG3, 2> a{};
+    const uint32_t aib[2] = {0x1A0, 0x1B0};
+    for (int i = 0; i < 2; ++i)
+    {
+        ALO* model = PaloLaserModel(p, aib[i]);
+        if (!model || !g_psw) continue;
+        // 0x17E208(SW, 2, 0x82, model, 1): its first child of class 0x82
+        ASEG* paseg = nullptr;
+        for (const auto& up : g_psw->aploAll)
+            if (LO* plo = up.get(); plo && plo->paloParent == model && FIsLoDerivedFrom(plo, S3CID(sly3::CID_ASEG)))
+            {
+                paseg = static_cast<ASEG*>(plo);
+                break;
+            }
+        if (std::getenv("SLY2N_LASERDRAW") && !paseg) std::fprintf(stderr, "laser %d end %d model %d: no ASEG child\n", p->oid, i, model->oid);
+        if (!paseg) continue;
+        if (!PasegaOn(paseg, model)) PasegaApplyAseg(paseg, model, 0.0f, 1.0f, 8);   // 0x137428(q, o, 8, 0, 1)
+        a[size_t(i)] = {paseg, PchnFindAseg(paseg, model, 0xC, true)};                // 0x136EE0(q, o, 0xC, 1)
+        if (std::getenv("SLY2N_LASERDRAW"))
+            std::fprintf(stderr, "laser %d end %d model %d aseg %d scale channel %s\n", p->oid, i, model->oid, paseg->oid,
+                         a[size_t(i)].pchn ? "yes" : "no");
+    }
+    if (a[0].paseg || a[1].paseg) s_mpendaseg[p] = a;
+}
+
+void ResetLaserModelAsegs3() { s_mpendaseg.clear(); }
 
 // orig: 0x001DF5B0: after the base ALO draw, cull the laser's attachment and place its four authored models.
 void CollectLaserDraws(const SCENE& scene, const glm::vec3& posCamera, std::vector<EXTRADRAW>& aextra)
@@ -83,12 +130,22 @@ void CollectLaserDraws(const SCENE& scene, const glm::vec3& posCamera, std::vect
                     AppendAloExtraDraws(scene, stretch, mat, 1.0f, aextra);
                 }
             }
+            const auto itAseg = s_mpendaseg.find(p);
             for (int i = 0; i < 2; ++i)
             {
                 if (!ends[i]) continue;
                 glm::mat4 mat(basis);
+                // orig3 0x224B18: the endpoint's scale channel (+0x18C / +0x19C, vt slot 3 at its ASEGA's time and
+                // speed +0x1C / +0x40) scales the basis' rows (0x11D660)
+                if (itAseg != s_mpendaseg.end())
+                    if (const ENDASEG3& e = itAseg->second[size_t(i)]; e.pchn && e.pchn->ptrkp)
+                        if (const ASEGA* pasega = PasegaOn(e.paseg, ends[i]))
+                        {
+                            glm::vec4 scale(1.0f);
+                            e.pchn->ptrkp->Eval(&scale, nullptr, pasega->t, pasega->svt);
+                            for (int k = 0; k < 3; ++k) mat[k] *= scale[k];
+                        }
                 mat[3] = glm::vec4(i == 0 ? beam.a : beam.b, 1.0f);
-                // TODO: 0x1DEDB0's optional endpoint ASEG scale track (+0x1AC/+0x1BC). The authored model/basis draw.
                 AppendAloExtraDraws(scene, ends[i], mat, 1.0f, aextra);
             }
         }

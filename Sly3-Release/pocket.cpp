@@ -11,7 +11,9 @@
 #include "brx.h"
 #include "asega.h"
 #include "clock.h"
+#include "xf.h"
 #include "cls.h"
+#include "disc.h"
 #include "guard.h"
 #include "emitter.h"
 #include "interact.h"
@@ -73,6 +75,12 @@ WORLD_TABLE(s_mpreward);   // (PC: moved aside while a kept world loads, worldgl
 std::unordered_map<LO*, SMA*> s_mppsma;
 WORLD_TABLE(s_mppsma);   // (PC: moved aside while a kept world loads, worldglobals.h)
 bool FPrint() { static const bool s_f = std::getenv("SLY2N_POCKETPRINT") != nullptr; return s_f; }
+// (Sly 3, orig3 0x1F1738.. / 0x1F29A0: the givers' prize oids moved: Sly 2's 0x2B0 / 0x2B1 / 0x2B3 / 0x2B5)
+constexpr int OID_POINT = 0x307;        // the pocket's launch point record (kind 0xD)
+constexpr int OID_POINT_CARRY = 0x308;  // the same for a carryable prize whose task is waiting
+constexpr int OID_COINS = 0x30A;        // the coins entry
+constexpr int OID_PRIZE = 0x30C;        // a drawn prize (its kind +0x8: 1258..1284)
+constexpr uint32_t IB_TASK = 0x230;     // the carryable prize's task: Sly 3 EOPID 968 (+0x1A0), the field kept where the loader stores it (Sly 2's +0x230, as pickup.cpp reads it)
 }  // namespace
 
 POCKET& PocketOf(LO* plo) { return s_mppocket[plo]; }
@@ -115,13 +123,13 @@ void AddPocketPrize(LO* plo, int oid)
     }
 }
 
-// orig: 0x001F1768 (c coins, the prize 0x2B3, when +0x490 allows)
+// orig3: 0x001F1738 (c coins, the prize 0x30A, when +0x4A0 allows)
 void AddPocketCoins(LO* plo, int c)
 {
     POCKET& p = PocketOf(plo);
     if (!FPocketMore(plo) || p.c >= 8) return;
     POCKETENT& e = p.ae[p.c++];
-    e.oid = 0x2B3;
+    e.oid = OID_COINS;
     e.n8 = -1;
     e.n4 = 0;
     e.c = c;
@@ -140,10 +148,10 @@ SMA** PpsmaPocket(LO* ppocket)
     SM* psm = nullptr;
     for (LO* p = ppocket; p && !psm; p = p->ploCloneOf)
         for (LO* pch : p->aploOwned)
-            if (pch->oid == 0x2B2)
+            if (pch->oid == 0x309)  // (Sly 3: the parts table 0x346F70 {0x309, +0x1A0}; Sly 2's 0x2B2)
                 if ((psm = dynamic_cast<SM*>(pch))) break;
     if (psm) ReplaceSmaHandle(psm, static_cast<ALO*>(ppocket), -1, 0, &psma);  // 0x1F1448
-    else WarnOnce("the pocket object's SM 0x2B2 (not found)");
+    else WarnOnce("the pocket object's SM 0x309 (not found)");
     if (FPrint()) std::printf("pocket object %d %p: sm %p sma %p\n", ppocket->oid, static_cast<void*>(ppocket), static_cast<void*>(psm), static_cast<void*>(psma));
     if (FPrint() && psm)
     {
@@ -201,98 +209,75 @@ void SetPocketMode(LO* plo, int k)
         if (SMA** ppsma = PpsmaPocket(ppocket); ppsma && *ppsma)
         {
             psma = *ppsma;
-            static const OID s_aoid[] = {92, 101, 102, 105};
+            static const OID s_aoid[] = {122, 131, 132, 135};  // (orig3: 0x346B20; Sly 2's 92 / 101 / 102 / 105)
             SeekSma(psma, s_aoid[k + 1]);  // 0x1F0730
         }
     if (FPrint())
         std::printf("pocket %d: mode %d t %.3f sma %p goal %d\n", plo->oid, k, g_clock.t, static_cast<void*>(psma), psma ? OidSmaGoal(psma) : -1);
 }
 
-// orig: 0x001F1900 (the mode by the giver's state: -1 without a readied reward (the pocket's +0x158), 0 while
-// alerted (states 0x1D / 0x20 / 5 / 6 / 7 / 0x17 / 0x16), 1 for coins or none or another player, 2 a prize for Sly)
+// orig3: 0x001F18D0 (Sly 2's 0x1F1900, changed: the mode by the giver's state: 0 while alerted (the guard's state
+// bits +0x2F4 under the mask 0x467B80: natively the copied guard's Sly 2 states 0x1D / 0x20 / 5 / 6 / 7 / 0x17 / 0x16),
+// else 2 with a readied reward (the pocket's +0x19C) and a gang member in control (0x370AC0 / 0x36B250 / 0x38AE90:
+// Sly, Bentley, Murray), else 1. Sly 2 had -1 without a reward and 1 for coins; in Sly 3 coins glow too (the
+// reference's v_ext guards: mode 2 with coins only).)
 void UpdatePocketMode(LO* plo)
 {
     LO* ppocket = PloPocket(plo);
     if (!ppocket) return;
-    POCKET& p = PocketOf(plo);
-    if (!s_mpreward[ppocket].plo)
-    {
-        SetPocketMode(plo, -1);
-        return;
-    }
-    int k = 1;
+    LO* pcur = g_psw ? PloPoCurrent(g_psw) : nullptr;  // 0x1F4AD0
     if (GUARD* pg = PguardFromLo(plo))
     {
         uint64_t m = 0;
         for (int n : {0x1D, 0x20, 5, 6, 7, 0x17, 0x16}) m |= GrfStateBit(n);  // 0x207A20
-        if (pg->grfState & m) k = 0;
+        if (pg->grfState & m)
+        {
+            SetPocketMode(plo, 0);
+            return;
+        }
     }
-    if (k != 0)
-    {
-        LO* pcur = g_psw ? PloPoCurrent(g_psw) : nullptr;  // 0x1C4840
-        const bool fSly = pcur && FIsLoDerivedFrom(pcur, S3CID(0x35));  // (D_002E1E40: Sly)
-        k = (!p.c || p.ae[p.c - 1].oid == 0x2B3 || !pcur || !fSly) ? 1 : 2;
-    }
-    SetPocketMode(plo, k);
+    const bool fGang = pcur && (FIsLoDerivedFrom(pcur, sly3::CID_JT) || FIsLoDerivedFrom(pcur, sly3::CID_BENTLEY) ||
+                                FIsLoDerivedFrom(pcur, sly3::CID_MURRAY));
+    const auto it = s_mpreward.find(ppocket);
+    SetPocketMode(plo, it != s_mpreward.end() && it->second.plo && fGang ? 2 : 1);
 }
 
-namespace
+// orig3: 0x001F1A08 (the giver can be pickpocketed: a glow (mode 1 / 2, or below -1) and no planted object +0x4A4)
+bool FPocketPickable(LO* plo)
 {
-// The pockets' contents by episode (0x2C3748: the givers; 0x2C3968: class 0x3A's): coins in [nLow, nHigh] in 2 or 3
-// entries, a prize (0x2B5, its kind +0x8 by the weights) with the chance gPrize
-struct POCKETTBL
-{
-    int nLow, nHigh;
-    float gPrize;
-    int aw[6][2];  // {weight, the prize's kind}
-};
-#define POCKET_ROWS(a, b, c, d, e, f) {{30, a}, {30, b}, {15, c}, {15, d}, {5, e}, {5, f}}
-const POCKETTBL s_atblPocket[9] = {
-    {0, 0, 0.0f, {{0, -1}}},
-    {4, 8, 0.2f, POCKET_ROWS(1114, 1115, 1120, 1121, 1117, 1118)},
-    {4, 8, 0.2f, POCKET_ROWS(1117, 1118, 1123, 1124, 1126, 1127)},
-    {4, 8, 0.2f, POCKET_ROWS(1117, 1118, 1123, 1124, 1126, 1127)},
-    {4, 8, 0.2f, POCKET_ROWS(1126, 1127, 1129, 1130, 1135, 1136)},
-    {4, 8, 0.2f, POCKET_ROWS(1126, 1127, 1129, 1130, 1135, 1136)},
-    {4, 8, 0.2f, POCKET_ROWS(1135, 1136, 1132, 1133, 1141, 1142)},
-    {4, 8, 0.2f, POCKET_ROWS(1135, 1136, 1132, 1133, 1141, 1142)},
-    {4, 8, 0.2f, POCKET_ROWS(1132, 1133, 1141, 1142, 1138, 1139)},
-};
-const POCKETTBL s_atblPocket3A[9] = {
-    {0, 0, 0.0f, {{0, -1}}},
-    {6, 12, 0.4f, POCKET_ROWS(1116, 1115, 1122, 1121, 1119, 1118)},
-    {6, 12, 0.4f, POCKET_ROWS(1119, 1118, 1125, 1124, 1128, 1127)},
-    {6, 12, 0.4f, POCKET_ROWS(1119, 1118, 1125, 1124, 1128, 1127)},
-    {6, 12, 0.4f, POCKET_ROWS(1128, 1127, 1131, 1130, 1137, 1136)},
-    {6, 12, 0.4f, POCKET_ROWS(1128, 1127, 1131, 1130, 1137, 1136)},
-    {6, 12, 0.4f, POCKET_ROWS(1137, 1136, 1134, 1133, 1143, 1142)},
-    {6, 12, 0.4f, POCKET_ROWS(1137, 1136, 1134, 1133, 1143, 1142)},
-    {6, 12, 0.4f, POCKET_ROWS(1134, 1133, 1143, 1142, 1140, 1139)},
-};
-#undef POCKET_ROWS
-}  // namespace
+    const POCKET& p = PocketOf(plo);
+    return (p.nMode < -1 || 0 < p.nMode) && !p.fPlanted;
+}
 
-// orig: 0x001F1A40 (the giver's start, unless +0x490: the pocket object's reward cleared (0x1C2DB8); a prize set before
-// (a carryable 0x5C whose task is done is dropped) is kept, else one is drawn (0x2B5 with the chance, its kind by the
-// weights; -1 none); then the coins (NRandInRange(nLow, nHigh) over 2..3 entries), the prize last)
+// orig3: 0x001F1A30 (Sly 2's FillPocket 0x1F1A40: the giver's start, unless +0x4A0: the planted flag +0x4A4 and the
+// pocket object's reward cleared (0x1F2950); a prize set before (a carryable 0x68 whose task is done is dropped) is
+// kept, else one is drawn (0x30C with the chance, its kind by the weights; -1 none); then the coins (NRandInRange(nLow,
+// nHigh) over 2..3 entries of 0x30A), the prize last. The table: the episode's row (0x25E188: 0x4798A0, -1 -> 3) of
+// 0x346D50 for a giver whose option 264 (+0x2F0, the setter 0x250B58) is 1 or 2, else of 0x346B30 (0x3C bytes:
+// nLow, nHigh, the prize's chance, 6 x {weight, kind}); read from the executable.)
 void FillPocket(LO* plo)
 {
     POCKET& p = PocketOf(plo);
     LO* ppocket = PloPocket(plo);
-    if (ppocket) ClearReward(ppocket);  // 0x1C2DB8
+    p.fPlanted = 0;
+    if (ppocket) ClearReward(ppocket);  // 0x1F2950
     if (FPocketMore(plo)) return;
-    int iep = IepisodeCur();  // 0x210AE0
-    if (iep == -1) iep = 1;
-    if (iep < 0 || iep > 8) iep = 1;
-    const POCKETTBL& tbl = FIsLoDerivedFrom(plo, S3CID(0x3A)) ? s_atblPocket3A[iep] : s_atblPocket[iep];
+    int iep = IepisodeCur();  // 0x25E188
+    if (iep == -1) iep = 3;
+    if (iep < 0 || iep > 8) iep = 3;
+    const int nKind = static_cast<int>(plo->U32Field(0, 0x2F0, 0));  // option 264
+    const uint32_t vaTbl = ((0 < nKind && nKind < 3) ? 0x346D50u : 0x346B30u) + 0x3Cu * static_cast<uint32_t>(iep);
+    const auto u = [&](uint32_t ib) { return g_disc.U32Elf(vaTbl + ib); };
+    const int nLow = static_cast<int>(u(0)), nHigh = static_cast<int>(u(4));
+    const float gPrize = cmm::F32(u(8));
     POCKETENT e{0, 0, 0, 0};  // (the memset)
     if (p.c > 0)
     {
-        LO* po = ppocket ? PloFindSwNearest(ppocket, p.ae[0].oid) : PloFindSwAny(p.ae[0].oid);  // 0x15E938 (4)
-        // a carryable prize (0x5C) whose task (+0x230) is done is dropped
+        LO* po = ppocket ? PloFindSwNearest(ppocket, p.ae[0].oid) : PloFindSwAny(p.ae[0].oid);  // 0x17E1B8 (4)
+        // a carryable prize (0x68) whose task (+0x230 as loaded) is done is dropped
         if (po && FIsLoDerivedFrom(po, S3CID(0x5C)))
         {
-            const OID oidTask = static_cast<OID>(po->U32Field(0, 0x230, static_cast<uint32_t>(-1)));
+            const OID oidTask = static_cast<OID>(po->U32Field(0, IB_TASK, static_cast<uint32_t>(-1)));
             bool fDone = false;
             const int nState = oidTask != static_cast<OID>(-1) ? NTaskStateOid(oidTask, &fDone) : -2;
             if (FPrint()) std::printf("pocket %d: prize %d's task %d state %d done %d\n", plo->oid, p.ae[0].oid, oidTask, nState, int(fDone));
@@ -306,7 +291,7 @@ void FillPocket(LO* plo)
     }
     else
     {
-        if (tbl.gPrize < GRandInRange(0.0f, 1.0f))  // 0x11D448
+        if (gPrize < GRandInRange(0.0f, 1.0f))  // 0x11E940
         {
             e.oid = -1;
             e.n8 = -1;
@@ -314,26 +299,28 @@ void FillPocket(LO* plo)
         else
         {
             int cw = 0;
-            for (const auto& w : tbl.aw) cw += w[0];
-            int n = NRandInRange(0, cw - 1);  // 0x11D3F8
-            for (const auto& w : tbl.aw)
+            for (uint32_t k = 0; k < 6; ++k) cw += static_cast<int>(u(0xC + 8 * k));
+            int n = NRandInRange(0, cw - 1);  // 0x11E8F0
+            for (uint32_t k = 0; k < 6; ++k)
             {
-                if (n < w[0]) { e.n8 = w[1]; break; }
-                n -= w[0];
+                const int w = static_cast<int>(u(0xC + 8 * k));
+                if (n < w) { e.n8 = static_cast<int>(u(0x10 + 8 * k)); break; }
+                n -= w;
             }
             e.c = 1;
-            e.oid = 0x2B5;
+            e.oid = OID_PRIZE;
         }
         p.c = 0;
     }
-    int cCoin = NRandInRange(tbl.nLow, tbl.nHigh);
+    int cCoin = NRandInRange(nLow, nHigh);
     const int cEnt = NRandInRange(2, 3);
     for (int i = 0; i < cEnt && p.c < 8; i++)
     {
         const int k = cCoin / (cEnt - i);
         POCKETENT& pe = p.ae[p.c++];
-        pe.oid = 0x2B3;
+        pe.oid = OID_COINS;
         pe.n4 = 0;
+        pe.n8 = 0;
         const int c = 0 < k ? k : 1;
         cCoin -= c;
         pe.c = c;
@@ -343,14 +330,14 @@ void FillPocket(LO* plo)
     if (FPrint())
     {
         const glm::vec3 pos = FCidDerivedFrom(plo->Cid(), S3CID(0x30)) ? PosAloCenter(static_cast<ALO*>(plo)) : glm::vec3(0.0f);
-        std::printf("pocket %d (%p, copy of %p): filled (episode %d) at (%.0f %.0f %.0f) t %.3f", plo->oid, static_cast<void*>(plo), static_cast<void*>(plo->ploCloneOf), iep, pos.x, pos.y, pos.z, g_clock.t);
+        std::printf("pocket %d (%p, copy of %p): filled (episode %d kind %d) at (%.0f %.0f %.0f) t %.3f", plo->oid, static_cast<void*>(plo), static_cast<void*>(plo->ploCloneOf), iep, nKind, pos.x, pos.y, pos.z, g_clock.t);
         for (int i = 0; i < p.c; i++) std::printf(" {%d %d %d x%d}", p.ae[i].oid, p.ae[i].n4, p.ae[i].n8, p.ae[i].c);
         std::printf("\n");
     }
 }
 
-// orig: 0x001F1CF8 (the next prize whose object is there (0x15E938 kind 4 from the pocket): ready (+0x48C) when it is
-// a carryable (0x5C) whose +0x230's +0x54 is -1 / 0, or 0x1C2DC8 (the reward's instance, 0x2B0 / 0x2B1) answers 1)
+// orig3: 0x001F1CF8 (the next prize whose object is there (0x17E1B8 kind 4 from the pocket): ready (+0x49C) when it
+// is a carryable (0x68) whose +0x1A0's +0x44 is -1 / 0, or 0x1F29A0 (the reward's instance, 0x307 / 0x308) answers 1)
 void NextPocketPrize(LO* plo)
 {
     POCKET& p = PocketOf(plo);
@@ -363,11 +350,11 @@ void NextPocketPrize(LO* plo)
         if (!po) continue;
         if (FPrint()) std::printf("pocket %d: next %d prize %d -> oid %d cid 0x%X (%s)\n", plo->oid, p.i, e.oid, po->oid, po->Cid(),
                                   g_acls[po->Cid()].name);
-        int oidPoint = 0x2B0;
+        int oidPoint = OID_POINT;
         if (FIsLoDerivedFrom(po, S3CID(0x5C)))
         {
-            // (+0x230's task +0x54: -1 / 0 ready at once, 1 the point 0x2B1, else the next entry)
-            const OID oidTask = static_cast<OID>(po->U32Field(0, 0x230, static_cast<uint32_t>(-1)));
+            // (+0x230's task +0x44: -1 / 0 ready at once, 1 the point 0x308, else the next entry)
+            const OID oidTask = static_cast<OID>(po->U32Field(0, IB_TASK, static_cast<uint32_t>(-1)));
             bool fDone = false;
             const int n = oidTask != static_cast<OID>(-1) ? NTaskStateOid(oidTask, &fDone) : -2;
             if (n != -2)
@@ -379,9 +366,9 @@ void NextPocketPrize(LO* plo)
                 }
                 if (n != 1) continue;
             }
-            oidPoint = 0x2B1;
+            oidPoint = OID_POINT_CARRY;
         }
-        if (NReadyReward(ppocket, po, e.n8, oidPoint) == 1) p.fReady = 1;  // 0x1C2DC8
+        if (NReadyReward(ppocket, po, e.n8, oidPoint) == 1) p.fReady = 1;  // 0x1F29A0
         break;
     }
     UpdatePocketMode(plo);
@@ -427,9 +414,12 @@ void CollectPocketDraws(const SCENE& scene, std::vector<EXTRADRAW>& draws)
     }
 }
 
-// orig: 0x001C2DC8 (the reward readied in the pocket object: a proxy's instance attached (1 when there is none) or the
-// object itself (an ALO; 2 otherwise); a pickup is put away (state 2), other objects removed; the launch point is the
-// pocket's record oidPoint of kind 0xD; 3; 0 when one is readied already)
+// orig3: 0x001F29A0 (Sly 2's 0x1C2DC8, changed: the reward readied in the pocket object (+0x19C): a proxy's
+// instance (+0x198 the proxy, its row locked 0x1FC060; 1 when there is none) or the object itself (an ALO; 2
+// otherwise); a PICKUP_5E (0x6A) gets the kind; a carryable (0x71) gets the guard (+0x188, 0x17E5D8 kind 3 class 0x3A)
+// and its state 6 (slot 80); the launch point (+0x194) is the pocket's record oidPoint of kind 0xD. The reward is then
+// out of the world (slot 9) and parented to the pocket at the point (slots 10 / 43: natively drawn at the point by
+// CollectPocketDraws); a carryable flies there over 0.5 s (+0x130..+0x190: TODO). 3; 0 when one is readied already.)
 int NReadyReward(LO* ppocket, LO* plo, int id, int oidPoint)
 {
     if (!ppocket) return 2;
@@ -439,7 +429,7 @@ int NReadyReward(LO* ppocket, LO* plo, int id, int oidPoint)
     if (FIsLoDerivedFrom(plo, S3CID(6)))
     {
         r.pproxy = plo;
-        r.plo = PloAttachProxy(g_psw, plo, 0);  // 0x1CB250
+        r.plo = PloAttachProxy(g_psw, plo, 0);  // 0x1FBE30
         if (!r.plo)
         {
             r.pproxy = nullptr;
@@ -450,24 +440,31 @@ int NReadyReward(LO* ppocket, LO* plo, int id, int oidPoint)
         r.plo = plo;
     else
         return 2;
-    if (FIsLoDerivedFrom(r.plo, S3CID(0x5E))) SetPickupLootKind(r.plo, id);  // 0x1C7A58
-    if (FIsLoDerivedFrom(r.plo, S3CID(0x5A))) SetPickupState(r.plo, 2);  // vt slot 76
-    else RemoveLo(g_psw, r.plo);  // vt slot 9
+    if (FIsLoDerivedFrom(r.plo, S3CID(0x5E))) SetPickupLootKind(r.plo, id);  // 0x1F9078
+    else if (FIsLoDerivedFrom(r.plo, S3CID(0x64)))
+    {
+        WarnOnce("0x1F29A0's carryable reward (+0x188 the guard, its state 6)");
+    }
+    // (the native pickups keep their put-away state 2 out of the draw pass; the original draws the reward as the
+    // pocket's child instead)
+    if (FIsLoDerivedFrom(r.plo, S3CID(0x5A))) SetPickupState(r.plo, 2);
+    RemoveLo(g_psw, r.plo);  // vt slot 9
     r.pxf = nullptr;
     if (FCidDerivedFrom(ppocket->Cid(), S3CID(0x30)))
-        for (const auto& pxf : static_cast<ALO*>(ppocket)->axf)  // 0x1F4C58
+        for (const auto& pxf : static_cast<ALO*>(ppocket)->axf)  // 0x23DDA0
             if (pxf && pxf->tag == oidPoint && pxf->kind == 0xD) { r.pxf = pxf.get(); break; }
     if (FPrint()) std::printf("reward %d: readied %d (cid 0x%X) proxy %d point %s\n", ppocket->oid, r.plo->oid, r.plo->Cid(),
                               r.pproxy ? r.pproxy->oid : -1, r.pxf ? "yes" : "no");
     return 3;
 }
 
-// orig: 0x001C2EF0 (the reward launched c times from the launch point toward the current player: each to a point
-// around him (SetVectorCylind(GRandInRange(-1.5, 1.5), GRandInRange(100, 150), -75) in his frame facing from the
-// source) in GRandInRange(0.75, 1.2) under the gravity (0x1D69F0); pickups by 0x1C6BD0 (the SM's delay i 0.05, coins
-// collected after i 0.15), other objects by slots 8 / 39 / 35; the more copies from the proxy (0x1CB250, put away);
-// the first returned; the reward cleared)
-LO* PloLaunchReward(LO* ppocket, int c)
+// orig3: 0x001F2C00 (Sly 2's 0x1C2EF0, changed: the reward launched c times from the launch point (+0x194) toward
+// posTarget (the taker's position; Sly 2: the current player's): each to a point around it (SetVectorCylind(GRandInRange(-1.5, 1.5), GRandInRange(100, 150), -75) in his frame facing from the
+// source) in GRandInRange(0.75, 1.2) (0x325038..: the same constants) under the gravity (0x346FD0, 0x212628); pickups
+// by 0x1F8138 (the SM's delay i 0.05; coins / charms collected after i 0.15 when fCoinDelay, else never by time),
+// other objects by slots 8 / 43 / 40; the more copies from the proxy (0x1FBE30); the first returned; the reward
+// cleared)
+LO* PloLaunchReward(LO* ppocket, int c, const glm::vec3& posTarget, bool fCoinDelay)
 {
     if (!ppocket) return nullptr;
     REWARD& r = s_mpreward[ppocket];
@@ -485,8 +482,7 @@ LO* PloLaunchReward(LO* ppocket, int c)
         if (!plo) break;
         if (!ploFirst) ploFirst = plo;
         const glm::vec3 pos0 = r.pxf ? glm::vec3(r.pxf->matWorld[3]) : PosAloCenter(static_cast<ALO*>(ppocket));
-        LO* pcur = PloPoCurrent(g_psw);  // 0x1C4840
-        const glm::vec3 posCur = pcur && FCidDerivedFrom(pcur->Cid(), S3CID(0x30)) ? PosAloCenter(static_cast<ALO*>(pcur)) : pos0;
+        const glm::vec3 posCur = posTarget;
         const float rad = GRandInRange(-1.5f, 1.5f);   // D_002C0CF0
         const float s = GRandInRange(100.0f, 150.0f);  // D_002C0CF8
         const glm::vec3 off = cmm::SetVectorCylind(rad, s, -75.0f);  // 0x11E1A0
@@ -505,14 +501,14 @@ LO* PloLaunchReward(LO* ppocket, int c)
         const glm::vec3 vel = flat * (1.0f / dt) + glm::vec3(0.0f, 0.0f, 1.0f) * (z / dt);
         if (FIsLoDerivedFrom(plo, S3CID(0x5A)))
         {
-            const bool fCoin = FIsLoDerivedFrom(plo, S3CID(0x5B)) || FIsLoDerivedFrom(plo, S3CID(0x5D));
+            const bool fCoin = fCoinDelay && (FIsLoDerivedFrom(plo, S3CID(0x5B)) || FIsLoDerivedFrom(plo, S3CID(0x5D)));
             const float fi = static_cast<float>(i);
             LaunchPickup(plo, pos0, vel, fi * 0.05f, fCoin ? fi * 0.15f : FLT_MAX, r.pproxy);  // 0x1C6BD0
         }
         else
         {
             AddLo(g_psw, plo);  // vt slot 8
-            WarnOnce("0x1C2EF0's launch of an object that is not a pickup (vt slots 39 / 35)");
+            WarnOnce("0x1F2C00's launch of an object that is not a pickup (vt slots 43 / 40)");
         }
         i++;
     }
@@ -520,17 +516,26 @@ LO* PloLaunchReward(LO* ppocket, int c)
     return ploFirst;
 }
 
-// orig: 0x001F1E20 (the take: the task event 0x19, the reward 0x1C2EF0 at the pocket with the entry's count, the
-// glow off, the next prize)
-LO* PloTakePocket(LO* plo)
+// orig3: 0x001F1E18 (Sly 2's 0x1F1E20, changed: the take (while i < c, 0x1F1F78): unless a planted object is readied
+// (+0x4A4), the task event 0x11 (0x1854C8; Sly 2's 0x19), which can refuse it (+0x4A8); the reward 0x1F2C00 at the
+// pocket toward posTarget with the entry's count (1 for a planted one); the glow off; the next prize (a planted one is
+// not counted))
+LO* PloTakePocket(LO* plo, const glm::vec3& posTarget, bool fCoinDelay)
 {
     POCKET& p = PocketOf(plo);
     if (p.i >= p.c) return nullptr;
-    BroadcastTaskEvent(g_psw, 0x19, plo);  // 0x1619A0
-    LO* r = PloLaunchReward(PloPocket(plo), p.ae[p.i].c);  // 0x1C2EF0
-    if (FPrint()) std::printf("pocket %d: take %d (prize %d x %d) t %.3f\n", plo->oid, p.i, p.ae[p.i].oid, p.ae[p.i].c, g_clock.t);
+    if (!p.fPlanted)
+    {
+        p.fTakeCancel = 0;
+        BroadcastTaskEvent(g_psw, 0x19, plo);  // 0x1854C8 (0x11)
+        if (p.fTakeCancel) return nullptr;
+    }
+    const int c = p.fPlanted ? 1 : p.ae[p.i].c;
+    LO* r = PloLaunchReward(PloPocket(plo), c, posTarget, fCoinDelay);  // 0x1F2C00
+    if (FPrint()) std::printf("pocket %d: take %d (prize %d x %d) t %.3f\n", plo->oid, p.i, p.ae[p.i].oid, c, g_clock.t);
     SetPocketMode(plo, -1);
-    p.i++;
+    if (p.fPlanted) p.fPlanted = 0;
+    else p.i++;
     NextPocketPrize(plo);
     return r;
 }
@@ -541,7 +546,7 @@ LO* PloTakePocket(LO* plo)
 void LoadPickpocket(SLY* p, ASEG* paseg)
 {
     if (!paseg) return;
-    p->g1BD8 = GEventAseg11(paseg, 0x167);  // 0x12F990
+    p->g1BD8 = GEventAseg11(paseg, 0x185);  // 0x12F990 (orig3 0x1ACD28: Sly 3's event 0x185, Sly 2's 0x167)
     ALO* palo = p->palo;
     XF* pxfTo = palo ? PxfObj(palo) : nullptr;
     ALO* pcane = p->plo19A4 && FIsLoDerivedFrom(p->plo19A4, S3CID(0x30)) ? static_cast<ALO*>(p->plo19A4) : nullptr;
@@ -602,25 +607,42 @@ void UpdatePickpocketPose(SLY* p)
         }
         if (d < 120.0f)  // D_002BF3B8
         {
-            WarnOnce("0x18B460's arm joint controllers (0x12DA30)");
+            // (orig3 0x1ACE40: the arm's joint controllers by 0x12FE90 (SetCtrlSourceOffset): +0x19F8 (Sly 3 +0x1B00,
+            // aphandle[5]) the hand's turn, +0x19EC (+0x1AF4, [2]) what is left over, +0x19FC (+0x1B04, [6]) the slide along
+            // x; AUDIT4 PLAYER-17)
+            if (CTRLSOURCE* pc = p->slide.aphandle[5]) SetCtrlSourceOffset(pc, glm::vec4(0.0f, radYaw, 0.0f, 0.0f));
+            if (CTRLSOURCE* pc = p->slide.aphandle[2]) SetCtrlSourceOffset(pc, glm::vec4(vecResidual, 0.0f));
+            if (CTRLSOURCE* pc = p->slide.aphandle[6]) SetCtrlSourceOffset(pc, glm::vec4(dx, 0.0f, 0.0f, 0.0f));
             p->f1BD4 = 1;
             p->t1BDC = g_clock.t;
             return;
         }
     }
+    // (orig3 0x1ACE40's end: the three controllers relax to zero within 0.25 s of the last reach)
+    const float dtRem = p->t1BDC + 0.25f - g_clock.t;
+    const float dtAfter = dtRem - g_clock.dt;
+    const float gain = 0.0f < dtAfter ? dtAfter / dtRem : 0.0f;
+    for (int i : {5, 2, 6})
+        if (CTRLSOURCE* pc = p->slide.aphandle[i]) SetCtrlSourceOffset(pc, pc->ofs * gain);
     p->f1BD4 = 0;
 }
 
-// The clip's event 0x167 (0x188F20): with a target and the hand set, the take (0x1F1E20); a prize that is not a coin
-// (0x5B / 0x5D) is held up: +0x1BCC, 0x1424E0 (the interaction kind 12 on it at Sly's object 0x282)
+// orig3: 0x001AA988's event 0x185 (Sly 2's 0x167 in 0x188F20): with a STEPGUARD target (0x3A) and the hand set
+// (+0x1C2C), the take 0x156DC0: PloTakePocket(target, Sly's position, 1); a prize that is not a coin / charm (0x67 /
+// 0x69) is held up when Sly has the prize clip (+0x145C): +0x1458, 0x154EF0 (the interaction kind 12)
 void PickpocketTake(SLY* p)
 {
-    if (!p->plo10DC || !p->f1BD4) return;
-    LO* r = PloTakePocket(p->plo10DC);
+    if (!p->plo10DC || !FIsLoDerivedFrom(p->plo10DC, S3CID(0x38)) || !p->f1BD4) return;
+    LO* r = PloTakePocket(p->plo10DC, PosLoWorld(p->palo), true);
     if (!r || FIsLoDerivedFrom(r, S3CID(0x5B)) || FIsLoDerivedFrom(r, S3CID(0x5D))) return;
-    ASEG* paseg = dynamic_cast<ASEG*>(PloFindSwChild(p->palo, 0x282));  // 0x15E938(G, 1, 0x282, Sly)
+    // (Sly 3: the actor's part +0x145C, oid 751: table 0x342DD0 entry 58, stored at FN3_TAG | 0x145C)
+    LO* ploClip = nullptr;
+    for (const auto& [ib, plo] : p->palo->apart)
+        if (ib == (FN3_TAG | 0x145Cu)) ploClip = plo;
+    ASEG* paseg = dynamic_cast<ASEG*>(ploClip);
+    if (!paseg) return;
     p->plo1BCC = r;
-    StartPrizeInteract(p, paseg, r, -1);  // 0x1424E0
+    StartPrizeInteract(p, paseg, r, -1);  // 0x154EF0
 }
 
 namespace

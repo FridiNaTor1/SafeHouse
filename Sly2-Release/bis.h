@@ -41,6 +41,9 @@ enum BISK
     BISK_Mem = 1
 };
 
+// (PC: set while the converter loads a world, worldparts.h) each Align's position and the bytes it skipped
+extern std::vector<std::pair<std::size_t, std::size_t>>* g_paalignRecord;
+
 class CBinaryInputStream
 {
 public:

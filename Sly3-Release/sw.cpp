@@ -4,6 +4,12 @@
 // The world loader (orig3 0x14F440; Sly 2 0x13DA18) and the global blocks of a world file.
 
 #include "sw.h"
+#include "copsmap3.h"
+#include "gauge3.h"
+#include "duel3.h"
+#include "galleon3.h"
+#include "game/task3.h"
+#include "worldparts.h"
 
 #include "game/cond3.h"
 #include "game/sly3.h"
@@ -36,6 +42,7 @@
 #include "shd.h"
 #include "sound.h"
 #include "region.h"
+#include "langstore.h"
 #include "gc.h"
 #include "serialize.h"
 #include "splicemap.h"
@@ -167,6 +174,21 @@ LO* PloFindSwObjectByOid(SW* psw, OID oid)
     return ploFirst;
 }
 
+// A task's players (option 1402: GAME +0x10 / +0x14) by oid, as the world start 0x25B9C0 finds them (0x17E1B8 kind 5).
+// The 2P biplane duel (task 1814) names two immediate PROXIES (94392 / 94393, class 0x08): the reference's players are
+// their instances (copies of the plane 95691: pad rows +0x130 0 / 1 after the warp, build/ref planes.py), which carry the
+// proxy's oid as their alias (loaders.cpp, oidInstance). Natively PloFindSwObjectByOid finds no object of that oid.
+LO* PloFindSwPlayerByOid3(SW* psw, OID oid)
+{
+    if (!psw || oid == -1) return nullptr;
+    LO* plo = PloFindSwObjectByOid(psw, oid);
+    static const bool s_fOld = std::getenv("SLY3_NOPROXYPLAYER") != nullptr;   // (debug: the round-2 lookup, the "before" shots)
+    if (!s_fOld && (!plo || FCidDerivedFrom(plo->Cid(), sly3::CID_PROXY)))
+        for (LO* p : AploOfOid(psw, oid))
+            if (p != plo && p->oidInstance == oid && FCidDerivedFrom(p->Cid(), sly3::CID_SO)) return p;
+    return plo;
+}
+
 // orig 0x001D7B88: the progress names (a hash table name -> value) and the progress records
 void LoadProgressFromBrx(SW* psw, CBinaryInputStream* pbis)
 {
@@ -183,6 +205,8 @@ void LoadProgressFromBrx(SW* psw, CBinaryInputStream* pbis)
     // orig 0x1D7C80: the save data at 0x3D4A60 checked against this layout
     SetProgressLayout(psw->progress);
     ValidateGameSave();
+    void SyncOptionsToRecord();   // (menu.h; PC: the record's option flags mirror Settings.ini)
+    SyncOptionsToRecord();
 }
 
 // orig 0x0020F318: the world records (the game's levels: file key, episode, kind)
@@ -212,8 +236,11 @@ void LoadTextFromBrx(SW* psw, CBinaryInputStream* pbis)
     LOADFN(0x13DF80);
     const int clang = pbis->U8Read();
     int ilang = 0;
+    int alang[256];
+    // (PC: a language the disc lacks reads the world's text of the one it falls back to, region.h LangWorld)
+    const int langWorld = LangWorld();
     for (int j = 0; j < clang; ++j)
-        if (pbis->U8Read() == g_nLang) ilang = j;
+        if ((alang[j] = pbis->U8Read()) == langWorld) ilang = j;
     const int c = pbis->S16Read();
     for (int i = 0; i < c; ++i)
     {
@@ -221,7 +248,13 @@ void LoadTextFromBrx(SW* psw, CBinaryInputStream* pbis)
         std::string str;
         for (int j = 0; j < clang; ++j)
         {
-            if (FWideText()) { if (j == ilang) str = pbis->ReadWideStringSw(); else pbis->SkipWideStringSw(); }
+            if (g_plangcapture)   // (--import-languages: every language's string)
+            {
+                std::string s = FWideText() ? pbis->ReadWideStringSw() : pbis->ReadStringSw();
+                g_plangcapture->Text(alang[j], id, s);
+                if (j == ilang) str = std::move(s);
+            }
+            else if (FWideText()) { if (j == ilang) str = pbis->ReadWideStringSw(); else pbis->SkipWideStringSw(); }
             else if (j == ilang) str = pbis->ReadStringSw();
             else pbis->SkipStringSw();
         }
@@ -239,7 +272,9 @@ void LoadTextFromBrx(SW* psw, CBinaryInputStream* pbis)
         }
     {
         // (native: the mods folder's strings, textmod.h; the ids they change keep them over the PC wording, porttext.h)
+        ApplyLanguageStoreText(psw->atext, false);   // (a language the disc lacks: its strings, langstore.h; not a mod)
         const std::vector<std::pair<int, std::string>> atextDisc = psw->atext;
+        ApplyLanguageStoreText(psw->atext, true);    // (Mods/Languages/<the disc's language>/Text.json)
         ApplyTextMods(psw->atext);
         psw->aidTextModded.clear();
         for (size_t i = 0; i < psw->atext.size() && i < atextDisc.size(); ++i)
@@ -294,6 +329,38 @@ void LoadPrefixFromBrx3(std::vector<SW::PREFIX3>& a, CBinaryInputStream* pbis)
     }
 }
 
+// orig3 0x14FA38's choice: table A's value whose key is the current job (0x36C700 +0x1498), else table B's whose key
+// is the checkpoint task (+0x14A0), each only for an entry listing the world (or listing none). A value other than 2
+// (the two-player split screen) is replaced by the 3-D answer (0x36DBA4, gauge3.h g_n3dChoice3: 0 -> 0, 1 -> 1, -1 the
+// table's). The result goes to 0x196228 (the screen record 0x36DBE0: the frame table 0x345060 + kind: 0 512 x 448, 1
+// 384 x 448 with flag 2 = the red/blue 3-D (anaglyph) mode: GAME +0x14EC bit 1, read by the colour / draw / camera
+// stereo code; 2 the two-player games' 512 x 448 frame mode, flag 1). The 3-D worlds (mode 1 for their jobs' tasks):
+// v_gauntlet 6, o_cave_a 11, the Ep3 blimp / dogfight world 21, the Ep4 world 26, the dive 33, the Ep6 gauntlet 38.
+// (s3fix-ai3, AUDIT4 RENDER-10) mode 1 is the 3-D mode: LoadSwFromBrx sets GAME +0xC bit 1 (g_grfGame3) for it, the
+// renderer draws the two eyes (render.cpp), the colours are desaturated (shd.cpp AdjustRgba).
+int NScreenModeFromPrefix3(const SW* psw, int32_t keyJob, int32_t keyTask)
+{
+    int mode = -1;
+    auto pick = [&](const std::vector<SW::PREFIX3>& a, int32_t key) {
+        if (key == -1) return;
+        for (const SW::PREFIX3& p : a)
+        {
+            bool fRelevant = p.alist.empty();
+            for (int32_t w : p.alist) fRelevant = fRelevant || w == psw->filter;
+            if (fRelevant && p.key == key) mode = p.value;
+        }
+    };
+    pick(psw->aprefixA, keyJob);
+    if (mode == -1) pick(psw->aprefixB, keyTask);
+    if (mode != 2)   // (0x14FA38's end)
+    {
+        if (g_n3dChoice3 == 0) mode = 0;
+        else if (g_n3dChoice3 == 1) mode = 1;
+    }
+    if (mode == 1) std::printf("3d: world %d in 3-D (anaglyph)\n", psw->filter);
+    return mode == 1 || mode == 2 ? mode : 0;
+}
+
 // orig3 0x1500F0 (new in Sly 3): the option sets. U8 x {U32 key, U32 value}; U8 x {U16 array (0x119968), U32 key,
 // U32 value}; U8 n blocks: n U32 ids, then n x {S32 cb, options}. The block chosen: the value of table A's entry whose
 // key is the current job (0x36C700 +0x1498), else table B's whose key is the current task (+0x14A0), else the last
@@ -323,12 +390,21 @@ void LoadOptionSetsFromBrx3(SW* psw, CBinaryInputStream* pbis)
         psw->aoptsetB.push_back(k);
     }
     int32_t value = -1;
+    // the keys: GAME 0x36C700 +0x1498 (the current job) and +0x14A0 (the checkpoint task), kept across worlds (task3's
+    // g_gametasks3); before, they were never set and every world loaded its first option block: v_ext's turf war
+    // (task 2141) needs condition 15, its proxy 139253 is in that block (s3-ai, AI3 round 8)
+    psw->keyJob = g_gametasks3.oidJob;
+    psw->keyTask = g_gametasks3.oidChk;
     if (psw->keyJob != -1)
         for (const SW::OPTSETKEY3& k : psw->aoptsetA)
             if (int32_t(k.key) == psw->keyJob) { value = int32_t(k.value); break; }
     if (value == -1 && psw->keyTask != -1)
         for (const SW::OPTSETKEY3& k : psw->aoptsetB)
             if (int32_t(k.key) == psw->keyTask) { value = int32_t(k.value); break; }
+    // orig3: else the last table B entry whose progress path holds a value > 0
+    if (value == -1)
+        for (const SW::OPTSETKEY3& k : psw->aoptsetB)
+            if (NProgressPath3(k.aprogress) > 0) value = int32_t(k.value);
     if (value == 12) value = -1;
     const int n3 = pbis->U8Read();
     psw->aidOptset.resize(std::size_t(n3));
@@ -360,8 +436,23 @@ void LoadOptionSetsFromBrx3(SW* psw, CBinaryInputStream* pbis)
         if (o.eopid == sly3::EOPID_GROUP_INSTANCES && o.aval.size() >= 2)
             for (WE& we : psw->awe)
                 if (we.x10 == o.aval[0].n) we.cinst = o.aval[1].n;
+    galleon3::AdjustGroupInstances(psw);   // (galleon3.h: the Galleon Duel's free-for-all: players 3 / 4's ships and characters)
     if (value != -1 && !FConditionMatches3(value)) g_condset3.acond.push_back(value);  // 0x1694D8
-    // (debug: SLY3_CMOPTPRINT=1: the chosen block's options with their descriptors, orig3 0x32CA80)
+    // (debug: SLY3_CMOPTPRINT=1: the keys, the blocks and the chosen block's options with their descriptors, orig3 0x32CA80)
+    if (std::getenv("SLY3_CMOPTPRINT"))
+    {
+        std::printf("cmopt keys job %d task %d -> value %d, block %d of %zu (cond %d):", psw->keyJob, psw->keyTask, value, psw->ioptsetChosen,
+                    psw->aidOptset.size(), g_condset3.cond);
+        for (uint32_t id : psw->aidOptset) std::printf(" %d", int32_t(id));
+        std::printf(" | A:");
+        for (const SW::OPTSETKEY3& k : psw->aoptsetA) std::printf(" %d->%d", int32_t(k.key), int32_t(k.value));
+        std::printf(" | B:");
+        for (const SW::OPTSETKEY3& k : psw->aoptsetB) std::printf(" %d->%d", int32_t(k.key), int32_t(k.value));
+        std::printf("\n");
+        const CONDSET3& c = g_condset3;
+        std::printf("cmopt fields: fog %g %g %g rgba %08X hsv %g %g %g scale %g ambient %g lcs %g %g %g\n", c.fogNear, c.fogFar, c.fogMax, c.rgbaFog,
+                    c.hsvWorld[0], c.hsvWorld[1], c.hsvWorld[2], c.gWorldScale, c.gWorldAmbient, c.gLightness, c.gContrast, c.gSaturation);
+    }
     if (std::getenv("SLY3_CMOPTPRINT"))
         for (const OPT& o : psw->aoptCm)
         {
@@ -374,7 +465,7 @@ void LoadOptionSetsFromBrx3(SW* psw, CBinaryInputStream* pbis)
         }
 }
 
-// orig 0x001C0EC0 / 0x001C0F30: a group's collision mesh
+// orig 0x001C0EC0 / 0x001C0F30: a group's collision mesh (orig3: 0x1ED7B0, the same C in the Sly 3 decomp)
 void LoadCmeshFromBrx(SW* psw, CBinaryInputStream* pbis)
 {
     LOADFN(0x1C0EC0);
@@ -408,10 +499,44 @@ void LoadSwFromBrx(SW* psw, CBinaryInputStream* pbis)
     g_nFilterCur = psw->filter;
     g_nFilterCur3 = psw->filter;  // (orig3 0x47989C: the world's index)
     InstallSpliceHooks(psw);
+    // (PC: the converter's world parts, worldparts.h, in Sly 3's own block order: the prefixes and the group table, the
+    // progress, the sound, the text, the options and option sets, the nodes; per group its bulk, scripts, graphics,
+    // collision, objects (a group without instances: one part); the tail)
+    MarkWorldPart(WPK_Groups, -1, pbis->m_ib);
     {
         LOADFN(sly3::FN_LOAD_PREFIX);
         LoadPrefixFromBrx3(psw->aprefixA, pbis);
         LoadPrefixFromBrx3(psw->aprefixB, pbis);
+        psw->nScreenMode3 = NScreenModeFromPrefix3(psw, g_gametasks3.oidJob != -1 ? g_gametasks3.oidJob : g_gametasks3.oidJobKept,
+                                                   g_gametasks3.oidChk);
+        g_gametasks3.oidJobKept = -1;
+        // (0x196228: GAME +0xC = the frame table entry's flags (0x345060 + kind): 2 for mode 1, the 3-D mode, read by the
+        // CLUT / colour loaders below (0x234500's texture pass, 0x236908), the camera's eyes and the draw; 1 for mode 2,
+        // the two-player games' frame mode: the texture pass 0 (shd.cpp ItexPass3: (flags & 3) == 0 -> pass 1), the
+        // other set of textures and CLUTs the world files carry. The PC's Cops and Robbers on another hub (copsmap3.h:
+        // the round's world, whose mode 2 is set after the load) reads it as the original's two-player path would.
+        // SLY3_2PTEXPASS1=1: the two-player games keep pass 1 (as before)
+        {
+            static uint32_t s_grfLast = 0;
+            static const bool s_fPass1 = std::getenv("SLY3_2PTEXPASS1") != nullptr;
+            const bool f2p = !s_fPass1 && (psw->nScreenMode3 == 2 || cops3::FRoundLoading(psw->filter));
+            g_grfGame3 = (g_grfGame3 & ~3u) | (psw->nScreenMode3 == 1 ? 2u : 0u) | (f2p ? 1u : 0u);
+            if (f2p) std::printf("2p: world %d reads the two-player texture set (pass 0)\n", psw->filter);
+            void ResetTextureCache();   // render.cpp
+            if ((g_grfGame3 ^ s_grfLast) & 3) ResetTextureCache();   // (a kept world's GPU textures: the other mode's colours)
+            s_grfLast = g_grfGame3;
+        }
+        if (std::getenv("SLY3_PREFIXPRINT"))
+        {
+            for (int t = 0; t < 2; ++t)
+                for (const SW::PREFIX3& p : t ? psw->aprefixB : psw->aprefixA)
+                {
+                    std::printf("prefix3 world %d table %c key %d mode %d worlds", psw->filter, 'A' + t, p.key, p.value);
+                    for (int32_t w : p.alist) std::printf(" %d", w);
+                    std::printf("\n");
+                }
+            std::printf("prefix3 world %d job %d chk %d -> screen mode %d\n", psw->filter, g_gametasks3.oidJob, g_gametasks3.oidChk, psw->nScreenMode3);
+        }
     }
     const int cwe = pbis->S16Read();
     psw->awe.assign(cwe > 0 ? cwe : 0, WE{});
@@ -425,14 +550,19 @@ void LoadSwFromBrx(SW* psw, CBinaryInputStream* pbis)
         we.cinst = pbis->S32Read();
         we.cb = pbis->U32Read();   // (new in Sly 3)
     }
+    MarkWorldPart(WPK_Progress, -1, pbis->m_ib);
     LoadProgressFromBrx(psw, pbis);
     // TODO(sly3): 0x25B1B8 (no reads: progress names resolved into SW +0x406C..), 0x1CF640 (no reads: the save slot,
     // the game settings)
+    MarkWorldPart(WPK_Sound, -1, pbis->m_ib);
     LoadMusicFromBrx(pbis);  // orig3 0x246F58 (Sly 2's reads)
+    MarkWorldPart(WPK_Text, -1, pbis->m_ib);
     LoadTextFromBrx(psw, pbis);  // orig3 0x14FD20 (UTF-16, plus one more string per language)
+    MarkWorldPart(WPK_Options, -1, pbis->m_ib);
     LoadOptionsFromBrx(psw->aoptSw, nullptr, pbis);  // orig3 0x1519C8: one block (Sly 2 had the camera's second)
     LoadOptionSetsFromBrx3(psw, pbis);
     // TODO(sly3): 0x25EB00 (no reads)
+    MarkWorldPart(WPK_Nodes, -1, pbis->m_ib);
     LoadNodesFromBrx(psw, pbis);
     pbis->Align(16);
     // TODO(sly3): StartupSwSplice 0x249980, 0x25B6B8 / 0x169398 (no reads), the load heaps
@@ -443,13 +573,16 @@ void LoadSwFromBrx(SW* psw, CBinaryInputStream* pbis)
         if (we.cinst == 0)
         {
             // a group without instances: its data is skipped by the size in its record
+            MarkWorldPart(WPK_Bulk, i, pbis->m_ib);
             pbis->Skip(we.cb);
             continue;
         }
         const std::size_t ibGroup = pbis->m_ib;
         psw->iwe = we.x5C ? -1 : i;
         psw->iweChannel = i;
+        MarkWorldPart(WPK_Bulk, i, pbis->m_ib);
         LoadBulkHeaderFromBrx(psw, pbis, true);  // orig3 0x25C930 (shd.cpp)
+        MarkWorldPart(WPK_Scripts, i, pbis->m_ib);
         {
             LOADFN(sly3::FN_LOAD_SW);
             psw->fScriptDebug = pbis->S32Read();
@@ -457,8 +590,11 @@ void LoadSwFromBrx(SW* psw, CBinaryInputStream* pbis)
         g_fLoadDebugInfo = psw->fScriptDebug;
         if (g_walk.fOn) WalkSpliceFromBrx(psw, we.x10, pbis);
         else LoadSwSpliceFromBrx(psw, we.x10, pbis);  // orig3 0x2499F0: parse + module init
+        MarkWorldPart(WPK_Graphics, i, pbis->m_ib);
         LoadShadersFromBrx(psw, pbis);  // orig3 0x234EA0 (shd.cpp), incl. the bulk block 0x25C9A0
+        MarkWorldPart(WPK_Collision, i, pbis->m_ib);
         LoadCmeshFromBrx(psw, pbis);    // orig3 0x1ED7B0 (Sly 2's reads)
+        MarkWorldPart(WPK_Objects, i, pbis->m_ib);
         std::vector<LO*> aplo;
         LOSINK sink;
         sink.papo = &aplo;
@@ -473,7 +609,9 @@ void LoadSwFromBrx(SW* psw, CBinaryInputStream* pbis)
         we.cloLoaded = static_cast<int>(aplo.size());
         we.aplo = aplo;
         if (g_walk.fOn) continue;
-        for (int copy = 1; copy < we.cinst; ++copy)
+        // (PC, duel3.h: the Biplane Duel's four-player free-for-all: one more copy of the player plane's group)
+        const int cinstMade = we.cinst + duel3::CExtraCopies(psw, aplo);
+        for (int copy = 1; copy < cinstMade; ++copy)
             for (int j = 0; j < we.cloLoaded; ++j)
             {
                 LO* plo = PloCloneLo(aplo[j], psw, nullptr);
@@ -490,6 +628,7 @@ void LoadSwFromBrx(SW* psw, CBinaryInputStream* pbis)
                                  we.x60, we.cinst, plo->oid, plo->iclone, plo->fRemoved);
     }
     // TODO(sly3): 0x236B80, LoadSoundBank 0x247470
+    MarkWorldPart(WPK_Tail, -1, pbis->m_ib);   // (the file's tail: not read)
     psw->iwe = -2;
     psw->iweChannel = -1;
     if (g_walk.fOn) return;

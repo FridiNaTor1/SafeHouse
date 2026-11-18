@@ -2,7 +2,8 @@
 // gamepad_mappings.h, glfw_platform.h), over the console's own services.
 //
 // - The window is the screen: its framebuffer is the deko3d swapchain (gl_deko.h), 1280x720 handheld, 1920x1080 docked;
-//   a mode change resizes it and reports through the framebuffer-size callback.
+//   a mode change resizes it and reports through the framebuffer-size callback. The Switch 2's is 1920x1080 handheld
+//   and the TV's resolution docked.
 // - Every connected controller (the handheld Joy-Cons, a Pro Controller, Joy-Con pairs) reads as one gamepad, jid 0,
 //   identified as a Nintendo pad (controller_family.h: Nintendo prompts). Its buttons are positional like GLFW's and
 //   SDL's: GLFW_GAMEPAD_BUTTON_A is the south button, which Nintendo labels B (the PS2's Cross).
@@ -57,7 +58,11 @@ GLFWwindow* g_window = nullptr;
 int g_windowUsers = 0;
 GLFWmonitor g_monitor{};
 GLFWmonitor* g_monitors[] = {&g_monitor};
+#if defined(__SWITCH2__)
+GLFWvidmode g_mode{1920, 1080, 8, 8, 8, 60};
+#else
 GLFWvidmode g_mode{1280, 720, 8, 8, 8, 60};
+#endif
 PadState g_pad;
 bool g_padReady = false;
 HidKeyboardState g_keyboard{};
@@ -69,6 +74,8 @@ std::string g_clipboard;
 const auto g_epoch = std::chrono::steady_clock::now();
 bool g_padConnected = false;
 std::string g_padName = "Nintendo Switch Controller";
+// The cursor's space: the framebuffer's pixels, or a UI's layout size (CaneSwitchSetCursorSpace).
+int g_cursorSpaceWidth = 0, g_cursorSpaceHeight = 0;
 
 // GUID in SDL's layout: bus, CRC, vendor (LE), 0000, product (LE), 0000, version: the Nintendo vendor id 057e makes
 // controller_family.h pick the Nintendo prompts; the product says which controller.
@@ -87,10 +94,54 @@ void Error(int code, const char* message)
     if (g_errorCallback) g_errorCallback(code, message);
 }
 
+#if defined(__SWITCH2__)
+// The game's frame rate (CaneSwitchSetFrameRate): above 60 the window asks for 120 Hz and docked draws at most 1440
+// lines, the console's 120 Hz TV modes being 1440p and 1080p.
+int g_frameRate = 60;
+int g_swapInterval = 1;
+// The TV's resolution (AM's default display resolution), reread when AM signals a change.
+bool g_tvEventOpen = false, g_tvRead = false;
+Event g_tvEvent;
+s32 g_tvWidth = 3840, g_tvHeight = 2160;
+
+void ReadTvResolution()
+{
+    if (!g_tvEventOpen && R_SUCCEEDED(appletGetDefaultDisplayResolutionChangeEvent(&g_tvEvent))) g_tvEventOpen = true;
+    const bool changed = g_tvEventOpen && R_SUCCEEDED(eventWait(&g_tvEvent, 0));
+    if (g_tvRead && !changed) return;
+    if (changed) eventClear(&g_tvEvent);
+    s32 width = 0, height = 0;
+    if (R_SUCCEEDED(appletGetDefaultDisplayResolution(&width, &height)) && width > 0 && height > 0)
+    {
+        g_tvWidth = width;
+        g_tvHeight = height;
+    }
+    g_tvRead = true;
+}
+
+void DockedSize(int& width, int& height)
+{
+    ReadTvResolution();
+    width = g_tvWidth;
+    height = g_tvHeight;
+    const int maxHeight = g_frameRate > 60 ? 1440 : 2160;
+    if (height > maxHeight)
+    {
+        width = width * maxHeight / height;
+        height = maxHeight;
+    }
+}
+#endif
+
 void UpdateMode()
 {
     const bool docked = CaneSwitch::Docked();
+#if defined(__SWITCH2__)
+    int width = 1920, height = 1080;
+    if (docked) DockedSize(width, height);
+#else
     const int width = docked ? 1920 : 1280, height = docked ? 1080 : 720;
+#endif
     if (g_mode.width == width && g_mode.height == height) return;
     g_mode.width = width;
     g_mode.height = height;
@@ -139,7 +190,10 @@ void EnsurePad()
     padInitializeAny(&g_pad);
     padUpdate(&g_pad);
     hidInitializeTouchScreen();
+#if !defined(__SWITCH2__)
+    // (not on the Switch 2: libounce ends the program when HID refuses the keyboard)
     hidInitializeKeyboard();
+#endif
     g_padReady = true;
 }
 
@@ -155,6 +209,15 @@ void PollPad()
 }
 }  // namespace
 
+namespace
+{
+// The pads hold a vibration until the next value, so one not written again within a second stops (pad_rumble.h's
+// kHoldMs): a game that stops writing, in a load or a stall, would leave them running.
+constexpr u64 kRumbleHoldNs = 1000000000ull;
+u64 g_rumbleWritten = 0;
+bool g_rumbleOn = false;
+}  // namespace
+
 // HD rumble on the controllers the game reads (the handheld Joy-Cons and the first player's): low = the big motor.
 void CaneSwitchRumble(float low, float high)
 {
@@ -163,9 +226,11 @@ void CaneSwitchRumble(float low, float high)
     static bool s_init[2] = {};
     static const HidNpadIdType ids[2] = {HidNpadIdType_Handheld, HidNpadIdType_No1};
     static float s_low = -1, s_high = -1;
+    g_rumbleWritten = armGetSystemTick();
     if (low == s_low && high == s_high) return;
     s_low = low;
     s_high = high;
+    g_rumbleOn = low > 0.0f || high > 0.0f;
     for (int i = 0; i < 2; ++i)
     {
         const u32 styles = hidGetNpadStyleSet(ids[i]);
@@ -189,9 +254,48 @@ void CaneSwitchRumble(float low, float high)
     }
 }
 
-// The installer's window handed over to the game (the next glfwCreateWindow).
+namespace
+{
+void CheckRumbleHold()
+{
+    if (!g_rumbleOn || armTicksToNs(armGetSystemTick() - g_rumbleWritten) < kRumbleHoldNs) return;
+    CaneSwitchRumble(0.0f, 0.0f);
+}
+}  // namespace
+
+// The cursor in a UI's layout size (width x height) in place of the framebuffer's pixels; 0, 0: the pixels again.
+void CaneSwitchSetCursorSpace(int width, int height)
+{
+    g_cursorSpaceWidth = width > 0 && height > 0 ? width : 0;
+    g_cursorSpaceHeight = width > 0 && height > 0 ? height : 0;
+}
+
+// The game's frame rate, set before its swap interval: on the Switch 2, above 60 asks for 120 Hz.
+void CaneSwitchSetFrameRate(int fps)
+{
+#if defined(__SWITCH2__)
+    const bool high = fps > 60, wasHigh = g_frameRate > 60;
+    g_frameRate = fps;
+    if (high == wasHigh) return;
+    UpdateMode();
+    if (g_graphicsReady) g_graphics->setSwapInterval(g_swapInterval);
+#else
+    (void)fps;
+#endif
+}
+bool CaneSwitchHighRefresh()
+{
+#if defined(__SWITCH2__)
+    return g_frameRate > 60;
+#else
+    return false;
+#endif
+}
+
+// The installer's window handed over to the game (the next glfwCreateWindow), its cursor back in pixels.
 void CaneSwitchReleaseWindow()
 {
+    CaneSwitchSetCursorSpace(0, 0);
     if (!g_window) return;
     g_windowUsers = 0;
     if (g_graphics->resetState) g_graphics->resetState();
@@ -201,6 +305,7 @@ namespace CaneSwitch
 {
 void ReleaseGraphics()
 {
+    CaneSwitchSetCursorSpace(0, 0);
     if (g_window)
     {
         CaneSwitchRumble(0.0f, 0.0f);
@@ -280,9 +385,16 @@ int glfwExtensionSupported(const char* name)
         return g_graphics->procAddress("glBufferStorage") ? GLFW_TRUE : GLFW_FALSE;
     return GLFW_FALSE;
 }
-void glfwSwapInterval(int interval) { g_graphics->setSwapInterval(interval); }
+void glfwSwapInterval(int interval)
+{
+#if defined(__SWITCH2__)
+    g_swapInterval = interval;   // (CaneSwitchSetFrameRate applies it again)
+#endif
+    g_graphics->setSwapInterval(interval);
+}
 void glfwSwapBuffers(GLFWwindow* w)
 {
+    CheckRumbleHold();   // (a loading screen presents without polling)
     if (w) g_graphics->present();
 }
 int glfwWindowShouldClose(GLFWwindow* w) { return !w || w->close; }
@@ -298,6 +410,7 @@ void glfwPollEvents(void)
     EnsurePad();
     UpdateMode();
     PollPad();
+    CheckRumbleHold();
     if (!g_window) return;
     const bool focused = appletGetFocusState() == AppletFocusState_InFocus;
     if (focused != g_window->focused)
@@ -307,7 +420,11 @@ void glfwPollEvents(void)
         if (g_window->focus) g_window->focus(g_window, focused);
     }
     const HidKeyboardState previous = g_keyboard;
+#if defined(__SWITCH2__)
+    g_keyboard = {};
+#else
     if (!hidGetKeyboardStates(&g_keyboard, 1)) g_keyboard = {};
+#endif
     if (g_window->key || g_window->character)
         for (int key = GLFW_KEY_SPACE; key <= GLFW_KEY_LAST; ++key)
         {
@@ -325,9 +442,11 @@ void glfwPollEvents(void)
     const bool touching = hidGetTouchScreenStates(&touch, 1) && touch.count > 0;
     if (touching)
     {
-        // (the touch screen is 1280x720 in either mode: scaled to the framebuffer)
-        g_window->x = touch.touches[0].x * (g_mode.width / 1280.0);
-        g_window->y = touch.touches[0].y * (g_mode.height / 720.0);
+        // (the touch screen is 1280x720 in either mode: scaled to the cursor's space)
+        const double width = g_cursorSpaceWidth ? g_cursorSpaceWidth : g_mode.width;
+        const double height = g_cursorSpaceHeight ? g_cursorSpaceHeight : g_mode.height;
+        g_window->x = touch.touches[0].x * (width / 1280.0);
+        g_window->y = touch.touches[0].y * (height / 720.0);
         if (g_window->cursor) g_window->cursor(g_window, g_window->x, g_window->y);
     }
     if (touching != g_window->touching && g_window->mouse)

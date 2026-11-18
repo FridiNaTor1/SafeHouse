@@ -13,7 +13,7 @@ CRef CSidebag::RefAddBinding(int n, CRef* pref)
     return CRef(TAGK_Void);
 }
 
-// orig: 0x0012AB28 FFindBinding__8CSidebagiP4CRef
+// orig: 0x0012AB28 FFindBinding__8CSidebagiP4CRef (orig3: 0x12C7D0, the same code in Sly 3)
 int CSidebag::FFindBinding(int n, CRef* pref)
 {
     for (auto it = m_asbb.rbegin(); it != m_asbb.rend(); ++it)
@@ -42,7 +42,7 @@ CRef CSidebag::RefSetBinding(int n, CRef* pref)
     return CRef(TAGK_Void);
 }
 
-// orig: 0x0012AB78 CloneTo__8CSidebag (0x12B0E8 clones each binding's value)
+// orig: 0x0012AB78 CloneTo__8CSidebag (0x12B0E8 clones each binding's value) (orig3: 0x12C820, the same C in the Sly 3 decomp)
 void CSidebag::CloneTo(CSidebag* psidebagClone, CFrame* pframeClone)
 {
     psidebagClone->m_asbb.clear();

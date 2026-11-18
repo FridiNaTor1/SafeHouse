@@ -1,14 +1,17 @@
 // See porttext.h.
 
 #include "porttext.h"
+#include "langstore.h"
 #include "region.h"
 
 #include "pcinput.h"
+#include "../platform/sly2_action_bindings.h"
 #include "../platform/system_settings.h"
 
 #include <GLFW/glfw3.h>
 
 #include <cstdint>
+#include <cstdlib>
 #include <cstdio>
 #include <cstring>
 #include <iterator>
@@ -106,10 +109,10 @@ constexpr ROW s_arow[] = {
         "Zielempfindlichkeit (Maus)", "Sensibilidad de mira (ratón)", "Muisgevoeligheid bij richten",
         "Sensibilidade de mira (rato)", "Musens følsomhed ved sigte", "Hiiren herkkyys tähdätessä",
         "Musefølsomhet ved sikting", "Muskänslighet vid sikte", "ねらう時のマウス感度"}},
-    {PTX_WheelZoomsBinocucom, {"Wheel Zooms Binocucom", "Zoom Binocom à la molette", "Zoom Binocom con la rotellina",
-        "Mausrad zoomt S.-Kom.", "Zoom del bino-com con la rueda", "Scrollwiel zoomt Contactkijker",
-        "Zoom do Binocucom com a roda", "Rullehjul zoomer binocucom", "Rulla zoomaa radiokiikaria",
-        "Musehjul zoomer kikkertwalkie", "Mushjul zoomar binokucom", "ホイールでゴーグルをズーム"}},
+    {PTX_MouseWheelZoom, {"Mouse Wheel Zoom", "Zoom à la molette", "Zoom con la rotellina",
+        "Zoom mit Mausrad", "Zoom con la rueda", "Zoomen met scrollwiel",
+        "Zoom com a roda do rato", "Zoom med rullehjul", "Zoomaus hiiren rullalla",
+        "Zoom med musehjul", "Zooma med mushjulet", "ホイールでズーム"}},
     {PTX_MouseInMenus, {"Mouse in Menus", "Souris dans les menus", "Mouse nei menu", "Maus in Menüs",
         "Ratón en los menús", "Muis in menu's", "Rato nos menus", "Mus i menuer", "Hiiri valikoissa", "Mus i menyer",
         "Mus i menyer", "メニューでマウスを使う"}},
@@ -157,6 +160,12 @@ constexpr ROW s_arow[] = {
         "Camera omhoog", "Câmara cima", "Kamera op", "Kamera ylös", "Kamera opp", "Kamera upp", "カメラ上"}},
     {PTX_CameraDown, {"Camera Down", "Caméra bas", "Visuale giù", "Kamera runter", "Cámara abajo",
         "Camera omlaag", "Câmara baixo", "Kamera ned", "Kamera alas", "Kamera ned", "Kamera ner", "カメラ下"}},
+    {PTX_TankLeftTrack, {"Tank: Left Track", "Char : chenille gauche", "Carro: cingolo sinistro", "Panzer: linke Kette",
+        "Tanque: oruga izquierda", "Tank: linkerrups", "Tanque: lagarta esquerda", "Tank: venstre bælte",
+        "Panssari: vasen tela", "Stridsvogn: venstre belte", "Stridsvagn: vänster band", "戦車：左キャタピラ"}},
+    {PTX_TankRightTrack, {"Tank: Right Track", "Char : chenille droite", "Carro: cingolo destro", "Panzer: rechte Kette",
+        "Tanque: oruga derecha", "Tank: rechterrups", "Tanque: lagarta direita", "Tank: højre bælte",
+        "Panssari: oikea tela", "Stridsvogn: høyre belte", "Stridsvagn: höger band", "戦車：右キャタピラ"}},
     {PTX_PressAKey, {"press a key (Esc cancels)", "appuie sur une touche (Échap : annuler)",
         "premi un tasto (Esc annulla)", "Taste drücken (Esc bricht ab)", "pulsa una tecla (Esc cancela)",
         "druk op een toets (Esc annuleert)", "prime uma tecla (Esc cancela)", "tryk på en tast (Esc annullerer)",
@@ -278,6 +287,242 @@ constexpr ROW s_arow[] = {
         "Maus-Y umkehren (Geschütz)", "Invertir Y ratón (torretas)", "Y-as muis omkeren (geschut)",
         "Inverter Y do rato (Torre)", "Spejl musens Y (skydetårn)", "Käänteinen hiiren Y (tykki)",
         "Vend musens Y (tårn)", "Invertera musens Y (stridstorn)", "マウス上下反転(砲台)"}},
+    {PTX_AutoCameraRotation, {"Automatic Camera Rotation", "Rotation auto caméra", "Rotazione auto telecamera",
+        "Automatische Kameradrehung", "Giro automático de cámara", "Automatische camerarotatie",
+        "Rotação automática da câmara", "Automatisk kamerarotation", "Kameran automaattikääntö",
+        "Automatisk kamerarotasjon", "Automatisk kamerarotation", "カメラ自動回転"}},
+    {PTX_AdvancedBindings, {"Advanced Input Mapping", "Attribution avancée des commandes", "Assegnazione avanzata comandi",
+        "Erweiterte Tastenbelegung", "Asignación avanzada de controles", "Geavanceerde knoptoewijzing",
+        "Mapeamento avançado de controlos", "Avanceret knaptildeling", "Laajennettu näppäinkartoitus",
+        "Avansert knappetilordning", "Avancerad knapptilldelning", "くわしい操作のわりあて"}},
+    {PTX_ActionBindings, {"Action Bindings...", "Attribuer les commandes...", "Assegna comandi...",
+        "Aktionen belegen...", "Asignar acciones...", "Acties toewijzen...", "Atribuir ações...",
+        "Tildel handlinger...", "Määritä toiminnot...", "Tilordne handlinger...", "Tilldela åtgärder...", "操作をわりあてる"}},
+    {PTX_ActionKeyboard, {"Keyboard and Mouse...", "Clavier et souris...", "Tastiera e mouse...",
+        "Tastatur und Maus...", "Teclado y ratón...", "Toetsenbord en muis...", "Teclado e rato...",
+        "Tastatur og mus...", "Näppäimistö ja hiiri...", "Tastatur og mus...", "Tangentbord och mus...", "キーボードとマウス"}},
+    {PTX_ActionController, {"Controller...", "Manette...", "Controller...", "Controller...", "Mando...", "Controller...",
+        "Comando...", "Controller...", "Peliohjain...", "Kontroller...", "Handkontroll...", "コントローラ"}},
+    {PTX_ResetAdvancedBindings, {"Reset Advanced Input Mapping", "Réinitialiser les commandes", "Ripristina comandi avanzati",
+        "Belegung zurücksetzen", "Restablecer controles avanzados", "Standaardbesturing herstellen",
+        "Repor controlos avançados", "Nulstil avanceret styring", "Palauta toimintojen oletukset",
+        "Tilbakestill avanserte kontroller", "Återställ avancerade kontroller", "わりあてをもどす"}},
+    {PTX_CaptureAction, {"Press input (Esc: cancel, Del: clear)", "Appuie (Échap : annuler, Suppr : effacer)",
+        "Premi un comando (Esc: annulla, Canc: cancella)", "Eingabe (Esc: Abbruch, Entf: löschen)",
+        "Pulsa (Esc: cancelar, Supr: borrar)", "Druk (Esc: annuleren, Del: wissen)",
+        "Prime (Esc: cancelar, Del: limpar)", "Tryk (Esc: annuller, Del: ryd)", "Paina (Esc: peruuta, Del: poista)",
+        "Trykk (Esc: avbryt, Del: fjern)", "Tryck (Esc: avbryt, Del: rensa)", "ボタンをおす (Esc:やめる、Del:けす)"}},
+    // P: the Remap page (remappage.h; 2026-11-10)
+    {PTX_RemapPage, {"Remap Controls...", "Réattribuer les commandes...", "Riassegna i comandi...", "Steuerung belegen...",
+        "Reasignar controles...", "Besturing toewijzen...", "Reatribuir controlos...", "Tildel styring...",
+        "Määritä ohjaimet...", "Tilordne kontroller...", "Tilldela kontroller...", "操作のわりあて"}},
+    {PTX_RemapTitle, {"Remap Controls", "Réattribuer les commandes", "Riassegna i comandi", "Steuerung belegen",
+        "Reasignar controles", "Besturing toewijzen", "Reatribuir controlos", "Tildel styring", "Määritä ohjaimet",
+        "Tilordne kontroller", "Tilldela kontroller", "操作のわりあて"}},
+    {PTX_RemapAction, {"Action", "Action", "Azione", "Aktion", "Acción", "Actie", "Ação", "Handling", "Toiminto",
+        "Handling", "Åtgärd", "アクション"}},
+    {PTX_RemapKeyboard, {"Keyboard / Mouse", "Clavier / souris", "Tastiera / mouse", "Tastatur / Maus", "Teclado / ratón",
+        "Toetsenbord / muis", "Teclado / rato", "Tastatur / mus", "Näppäimistö / hiiri", "Tastatur / mus",
+        "Tangentbord / mus", "キーボード/マウス"}},
+    {PTX_RemapController, {"Controller", "Manette", "Controller", "Controller", "Mando", "Controller", "Comando",
+        "Controller", "Peliohjain", "Kontroller", "Handkontroll", "コントローラ"}},
+    {PTX_RemapReset, {"Reset to Defaults", "Valeurs par défaut", "Ripristina predefiniti", "Standard wiederherstellen",
+        "Restablecer valores", "Standaard herstellen", "Repor predefinições", "Nulstil til standard", "Palauta oletukset",
+        "Tilbakestill til standard", "Återställ standard", "しょきせっていにもどす"}},
+    {PTX_RemapBack, {"Back", "Retour", "Indietro", "Zurück", "Atrás", "Terug", "Voltar", "Tilbage", "Takaisin", "Tilbake",
+        "Tillbaka", "もどる"}},
+    {PTX_RemapChange, {"Change", "Changer", "Cambia", "Ändern", "Cambiar", "Wijzigen", "Mudar", "Skift", "Vaihda", "Endre",
+        "Ändra", "かえる"}},
+    {PTX_RemapClear, {"Clear", "Effacer", "Cancella", "Löschen", "Borrar", "Wissen", "Limpar", "Ryd", "Poista", "Fjern",
+        "Rensa", "けす"}},
+    {PTX_RemapPressKey, {"Press a key or mouse button (Esc: cancel, Del: clear)",
+        "Appuie sur une touche ou un bouton de souris (Échap : annuler, Suppr : effacer)",
+        "Premi un tasto o un pulsante del mouse (Esc: annulla, Canc: cancella)",
+        "Taste oder Maustaste drücken (Esc: Abbruch, Entf: löschen)",
+        "Pulsa una tecla o un botón del ratón (Esc: cancelar, Supr: borrar)",
+        "Druk op een toets of muisknop (Esc: annuleren, Del: wissen)",
+        "Prime uma tecla ou um botão do rato (Esc: cancelar, Del: limpar)",
+        "Tryk på en tast eller museknap (Esc: annuller, Del: ryd)",
+        "Paina näppäintä tai hiiren painiketta (Esc: peruuta, Del: poista)",
+        "Trykk en tast eller museknapp (Esc: avbryt, Del: fjern)",
+        "Tryck på en tangent eller musknapp (Esc: avbryt, Del: rensa)", "キーかマウスボタンをおす (Esc:やめる、Del:けす)"}},
+    {PTX_RemapPressButton, {"Press a controller button (Esc or wait: cancel, Del: clear)",
+        "Appuie sur un bouton de la manette (Échap ou attendre : annuler, Suppr : effacer)",
+        "Premi un pulsante del controller (Esc o attendi: annulla, Canc: cancella)",
+        "Controllertaste drücken (Esc oder warten: Abbruch, Entf: löschen)",
+        "Pulsa un botón del mando (Esc o espera: cancelar, Supr: borrar)",
+        "Druk op een controllerknop (Esc of wachten: annuleren, Del: wissen)",
+        "Prime um botão do comando (Esc ou esperar: cancelar, Del: limpar)",
+        "Tryk på en knap på controlleren (Esc eller vent: annuller, Del: ryd)",
+        "Paina ohjaimen painiketta (Esc tai odota: peruuta, Del: poista)",
+        "Trykk en knapp på kontrolleren (Esc eller vent: avbryt, Del: fjern)",
+        "Tryck på en knapp på handkontrollen (Esc eller vänta: avbryt, Del: rensa)",
+        "コントローラのボタンをおす (Escかまつ:やめる、Del:けす)"}},
+    {PTX_RemapFixed, {"fixed", "fixe", "fisso", "fest", "fijo", "vast", "fixo", "fast", "kiinteä", "fast", "fast", "こてい"}},
+    // P: VR Settings (vr.h)
+    {PTX_VrSettings, {"VR Settings", "Réglages VR", "Impostazioni VR", "VR-Einstellungen", "Ajustes de RV",
+        "VR-instellingen", "Definições de RV", "VR-indstillinger", "VR-asetukset", "VR-innstillinger", "VR-inställningar", "VR設定"}},
+    {PTX_VrMode, {"VR Mode", "Mode VR", "Modalità VR", "VR-Modus", "Modo RV", "VR-modus", "Modo RV", "VR-tilstand",
+        "VR-tila", "VR-modus", "VR-läge", "VRモード"}},
+    {PTX_VrImmersive, {"Immersive", "Immersif", "Immersiva", "Immersiv", "Inmersivo", "Immersief", "Imersivo", "Immersiv",
+        "Immersiivinen", "Immersiv", "Immersiv", "イマーシブ"}},
+    {PTX_VrFlatScreen, {"Flat Screen", "Écran plat", "Schermo piatto", "Flacher Bildschirm", "Pantalla plana",
+        "Plat scherm", "Ecrã plano", "Flad skærm", "Litteä näyttö", "Flat skjerm", "Platt skärm", "フラット画面"}},
+    {PTX_VrVignette, {"Comfort Vignette", "Vignette de confort", "Vignettatura comfort", "Komfort-Vignette",
+        "Viñeta de confort", "Comfortvignet", "Vinheta de conforto", "Komfortvignet", "Mukavuusvinjetti",
+        "Komfortvignett", "Komfortvinjett", "ビネット"}},
+    {PTX_VrLow, {"Low", "Faible", "Bassa", "Schwach", "Baja", "Laag", "Baixa", "Lav", "Matala", "Lav", "Låg", "よわい"}},
+    {PTX_VrMedium, {"Medium", "Moyenne", "Media", "Mittel", "Media", "Middel", "Média", "Middel", "Keskitaso", "Middels",
+        "Medel", "ふつう"}},
+    {PTX_VrHigh, {"High", "Forte", "Alta", "Stark", "Alta", "Hoog", "Alta", "Høj", "Korkea", "Høy", "Hög", "つよい"}},
+    {PTX_VrScreenSize, {"Screen Size", "Taille de l'écran", "Dimensione schermo", "Bildschirmgröße", "Tamaño de pantalla",
+        "Schermgrootte", "Tamanho do ecrã", "Skærmstørrelse", "Näytön koko", "Skjermstørrelse", "Skärmstorlek", "画面サイズ"}},
+    {PTX_VrSmall, {"Small", "Petit", "Piccolo", "Klein", "Pequeña", "Klein", "Pequeno", "Lille", "Pieni", "Liten", "Liten",
+        "ちいさい"}},
+    {PTX_VrLarge, {"Large", "Grand", "Grande", "Groß", "Grande", "Groot", "Grande", "Stor", "Suuri", "Stor", "Stor", "おおきい"}},
+    {PTX_VrRefreshRate, {"Refresh Rate", "Fréquence d'affichage", "Frequenza di aggiornamento", "Bildwiederholrate",
+        "Frecuencia de actualización", "Verversingssnelheid", "Taxa de atualização", "Opdateringshastighed",
+        "Virkistystaajuus", "Oppdateringsfrekvens", "Uppdateringsfrekvens", "リフレッシュレート"}},
+    {PTX_VrWorldScale, {"World Scale", "Échelle du monde", "Scala del mondo", "Weltgröße", "Escala del mundo",
+        "Wereldschaal", "Escala do mundo", "Verdensskala", "Maailman mittakaava", "Verdensskala", "Världsskala",
+        "ワールドスケール"}},
+    {PTX_VrRecenter, {"Recenter View", "Recentrer la vue", "Ricentra la visuale", "Ansicht zentrieren", "Recentrar la vista",
+        "Beeld centreren", "Recentrar a vista", "Centrer visningen", "Keskitä näkymä", "Sentrer visningen",
+        "Centrera vyn", "ビューをもどす"}},
+    {PTX_VrCutscenes, {"Cutscenes", "Cinématiques", "Filmati", "Zwischensequenzen", "Escenas", "Tussenfilmpjes",
+        "Cenas", "Mellemsekvenser", "Välivideot", "Mellomsekvenser", "Mellansekvenser", "ムービー"}},
+    {PTX_VrRcTable, {"RC Car Table View (Beta)", "Voiture RC vue de la table (bêta)", "Auto RC dal tavolo (beta)",
+        "RC-Auto vom Tisch (Beta)", "Coche RC desde la mesa (beta)", "RC-auto vanaf de tafel (bèta)",
+        "Carro RC da mesa (beta)", "RC-bil fra bordet (beta)", "RC-auto pöydältä (beta)", "RC-bil fra bordet (beta)",
+        "RC-bil från bordet (beta)", "RCカー テーブルビュー"}},
+    {PTX_QuitToLauncher, {"Quit to Launcher", "Retour au lanceur", "Torna al launcher", "Zurück zum Launcher",
+        "Volver al lanzador", "Terug naar de launcher", "Voltar ao launcher", "Tilbage til launcheren",
+        "Palaa käynnistimeen", "Tilbake til startprogrammet", "Tillbaka till startprogrammet", "ランチャーに戻る"}},
+    // P: (audio) the options' Audio Devices page (menu.cpp AentAudio)
+    {PTX_AudioDevicesPage, {"Audio Devices...", "Périphériques audio...", "Dispositivi audio...", "Audiogeräte...",
+        "Dispositivos de audio...", "Audioapparaten...", "Dispositivos de áudio...", "Lydenheder...", "Äänilaitteet...",
+        "Lydenheter...", "Ljudenheter...", "オーディオデバイス"}},
+    {PTX_OutputDevice, {"Output", "Sortie", "Uscita", "Ausgabe", "Salida", "Uitvoer", "Saída", "Udgang", "Ulostulo",
+        "Utgang", "Utgång", "スピーカー"}},
+    {PTX_InputDevice, {"Microphone", "Microphone", "Microfono", "Mikrofon", "Micrófono", "Microfoon", "Microfone",
+        "Mikrofon", "Mikrofoni", "Mikrofon", "Mikrofon", "マイク"}},
+    {PTX_HeadsetOutputDevice, {"Headset Output", "Sortie du casque", "Uscita cuffie", "Headset-Ausgabe",
+        "Salida de auriculares", "Headsetuitvoer", "Saída dos auscultadores", "Headsetudgang", "Kuulokkeiden ulostulo",
+        "Hodesettutgang", "Headsetutgång", "ヘッドセット"}},
+    {PTX_SystemDefault, {"System Default", "Par défaut", "Predefinito", "Systemstandard", "Predeterminado",
+        "Systeemstandaard", "Predefinição", "Systemstandard", "Järjestelmän oletus", "Systemstandard", "Systemstandard",
+        "オート"}},
+    {PTX_SameAsOutput, {"Same as Output", "Comme la sortie", "Come l'uscita", "Wie Ausgabe", "Igual que la salida",
+        "Zelfde als uitvoer", "Igual à saída", "Samme som udgang", "Sama kuin ulostulo", "Samme som utgang",
+        "Samma som utgång", "スピーカーとおなじ"}},
+    {PTX_NotConnected, {"%s (not connected)", "%s (non connecté)", "%s (non collegato)", "%s (nicht verbunden)",
+        "%s (no conectado)", "%s (niet verbonden)", "%s (não ligado)", "%s (ikke tilsluttet)", "%s (ei yhdistetty)",
+        "%s (ikke tilkoblet)", "%s (inte ansluten)", "%s (なし)"}},
+    // P: (splitscreen3.h) the split screen's binding screen (the Japanese: kana and ASCII only)
+    {PTX_SplitTitle, {"Split Screen", "Écran partagé", "Schermo condiviso", "Geteilter Bildschirm", "Pantalla dividida",
+        "Gedeeld scherm", "Ecrã dividido", "Delt skærm", "Jaettu näyttö", "Delt skjerm", "Delad skärm", "2プレイヤー"}},
+    {PTX_SplitPlayerN, {"Player %d", "Joueur %d", "Giocatore %d", "Spieler %d", "Jugador %d", "Speler %d", "Jogador %d",
+        "Spiller %d", "Pelaaja %d", "Spiller %d", "Spelare %d", "プレイヤー%d"}},
+    {PTX_SplitPress, {"Player %d, press &2X&. / %s", "Joueur %d, appuyez sur &2X&. / %s", "Giocatore %d, premi &2X&. / %s",
+        "Spieler %d, drücke &2X&. / %s", "Jugador %d, pulsa &2X&. / %s", "Speler %d, druk op &2X&. / %s",
+        "Jogador %d, prime &2X&. / %s", "Spiller %d, tryk på &2X&. / %s", "Pelaaja %d, paina &2X&. / %s",
+        "Spiller %d, trykk &2X&. / %s", "Spelare %d, tryck på &2X&. / %s", "プレイヤー%d: &2X&. / %s"}},
+    {PTX_SplitReconnect, {"Player %d's controller was disconnected: press &2X&. / %s",
+        "Manette du joueur %d déconnectée : appuyez sur &2X&. / %s", "Controller del giocatore %d scollegato: premi &2X&. / %s",
+        "Controller von Spieler %d getrennt: drücke &2X&. / %s", "Mando del jugador %d desconectado: pulsa &2X&. / %s",
+        "Controller van speler %d losgekoppeld: druk op &2X&. / %s", "Comando do jogador %d desligado: prime &2X&. / %s",
+        "Spiller %ds controller er afbrudt: tryk på &2X&. / %s", "Pelaajan %d ohjain irrotettu: paina &2X&. / %s",
+        "Spiller %ds kontroller er frakoblet: trykk &2X&. / %s", "Spelare %ds handkontroll har kopplats från: tryck på &2X&. / %s",
+        "プレイヤー%dのコントローラーがない: &2X&. / %s"}},
+    {PTX_SplitKeyboard, {"Keyboard and Mouse", "Clavier et souris", "Tastiera e mouse", "Tastatur und Maus",
+        "Teclado y ratón", "Toetsenbord en muis", "Teclado e rato", "Tastatur og mus", "Näppäimistö ja hiiri",
+        "Tastatur og mus", "Tangentbord och mus", "キーボード"}},
+    {PTX_SplitWaiting, {"waiting", "en attente", "in attesa", "wartet", "esperando", "wacht", "à espera", "venter",
+        "odottaa", "venter", "väntar", "まって"}},
+    {PTX_SplitLayout, {"Layout", "Disposition", "Disposizione", "Aufteilung", "Disposición", "Indeling", "Disposição",
+        "Opdeling", "Asettelu", "Oppsett", "Layout", "レイアウト"}},
+    {PTX_SplitLayoutAuto, {"Auto", "Auto", "Auto", "Auto", "Auto", "Auto", "Auto", "Auto", "Auto", "Auto", "Auto", "オート"}},
+    {PTX_SplitLayoutSide, {"Side by Side", "Côte à côte", "Affiancati", "Nebeneinander", "Lado a lado", "Naast elkaar",
+        "Lado a lado", "Side om side", "Rinnakkain", "Side om side", "Sida vid sida", "よこならび"}},
+    {PTX_SplitLayoutStacked, {"Stacked (Original)", "Superposés (original)", "Sovrapposti (originale)",
+        "Übereinander (Original)", "Apiladas (original)", "Boven elkaar (origineel)", "Empilhados (original)",
+        "Over hinanden (original)", "Päällekkäin (alkuperäinen)", "Over hverandre (original)", "Över varandra (original)",
+        "たてならび (オリジナル)"}},
+    {PTX_SplitFourPlayers, {"4 Players (Experimental)", "4 joueurs (expérimental)", "4 giocatori (sperimentale)",
+        "4 Spieler (experimentell)", "4 jugadores (experimental)", "4 spelers (experimenteel)", "4 jogadores (experimental)",
+        "4 spillere (eksperimentel)", "4 pelaajaa (kokeellinen)", "4 spillere (eksperimentell)", "4 spelare (experimentell)",
+        "4プレイヤー (テスト)"}},
+    // P: (copsmap3.h) Cops and Robbers on the other hubs (the Japanese: kana and ASCII only)
+    {PTX_CopsMap, {"Map", "Carte", "Mappa", "Karte", "Mapa", "Kaart", "Mapa", "Kort", "Kartta", "Kart", "Karta", "マップ"}},
+    {PTX_CopsMapOriginal, {"The original game", "Le jeu original", "Il gioco originale", "Das Originalspiel", "El juego original", "Het originele spel", "O jogo original", "Det originale spil", "Alkuperäinen peli", "Det originale spillet", "Originalspelet", "オリジナル"}},
+    {PTX_CopsMapNative, {"New map: loot, safe points, power-ups", "Nouvelle carte : butin, points sûrs, bonus", "Nuova mappa: bottino, punti sicuri, potenziamenti", "Neue Karte: Beute, sichere Orte, Power-ups", "Mapa nuevo: botín, puntos seguros, potenciadores", "Nieuwe kaart: buit, veilige plekken, power-ups", "Novo mapa: saque, pontos seguros, power-ups", "Nyt kort: bytte, sikre steder, power-ups", "Uusi kartta: saalis, turvapaikat, tehosteet", "Nytt kart: bytte, trygge steder, power-ups", "Ny karta: byte, säkra platser, power-ups", "あたらしいマップ"}},
+    {PTX_CopsFirstTo, {"First to 5 points wins!", "Le premier à 5 points gagne !", "Vince chi arriva a 5 punti!", "Wer zuerst 5 Punkte hat, gewinnt!", "¡Gana el primero en llegar a 5 puntos!", "Wie het eerst 5 punten heeft, wint!", "Ganha quem chegar primeiro a 5 pontos!", "Først til 5 point vinder!", "Ensimmäinen 5 pisteeseen voittaa!", "Først til 5 poeng vinner!", "Först till 5 poäng vinner!", "5ポイントでかち!"}},
+    {PTX_CopsSlyLoot, {"Sly has the loot!", "Sly a le butin !", "Sly ha il bottino!", "Sly hat die Beute!", "¡Sly tiene el botín!", "Sly heeft de buit!", "O Sly tem o saque!", "Sly har byttet!", "Slyllä on saalis!", "Sly har byttet!", "Sly har bytet!", "スライがおたからをゲット!"}},
+    {PTX_CopsDelivered, {"Loot delivered!", "Butin livré !", "Bottino consegnato!", "Beute abgeliefert!", "¡Botín entregado!", "Buit afgeleverd!", "Saque entregue!", "Byttet er afleveret!", "Saalis toimitettu!", "Byttet er levert!", "Bytet levererat!", "おたからをとどけた!"}},
+    {PTX_CopsDropped, {"Sly dropped the loot!", "Sly a lâché le butin !", "Sly ha perso il bottino!", "Sly hat die Beute fallen lassen!", "¡Sly ha soltado el botín!", "Sly heeft de buit laten vallen!", "O Sly deixou cair o saque!", "Sly tabte byttet!", "Sly pudotti saaliin!", "Sly mistet byttet!", "Sly tappade bytet!", "スライがおたからをおとした!"}},
+    {PTX_CopsCaught, {"Carmelita caught Sly!", "Carmelita a attrapé Sly !", "Carmelita ha preso Sly!", "Carmelita hat Sly erwischt!", "¡Carmelita ha atrapado a Sly!", "Carmelita heeft Sly gepakt!", "A Carmelita apanhou o Sly!", "Carmelita fangede Sly!", "Carmelita nappasi Slyn!", "Carmelita tok Sly!", "Carmelita fångade Sly!", "カルメリータがスライをつかまえた!"}},
+    {PTX_CopsKnockedOut, {"Sly knocked Carmelita out!", "Sly a assommé Carmelita !", "Sly ha messo KO Carmelita!", "Sly hat Carmelita ausgeknockt!", "¡Sly ha noqueado a Carmelita!", "Sly heeft Carmelita uitgeschakeld!", "O Sly pôs a Carmelita KO!", "Sly slog Carmelita ud!", "Sly tyrmäsi Carmelitan!", "Sly slo ut Carmelita!", "Sly slog ut Carmelita!", "スライがカルメリータをたおした!"}},
+    {PTX_CopsPowerSly, {"Smoke Bombs: &2L&.", "Bombes fumigènes : &2L&.", "Bombe fumogene: &2L&.", "Rauchbomben: &2L&.", "Bombas de humo: &2L&.", "Rookbommen: &2L&.", "Bombas de fumo: &2L&.", "Røgbomber: &2L&.", "Savupommit: &2L&.", "Røykbomber: &2L&.", "Rökbomber: &2L&.", "スモークボム: &2L&."}},
+    {PTX_CopsPowerCarm, {"Power-up: &2L&.", "Bonus : &2L&.", "Potenziamento: &2L&.", "Power-up: &2L&.", "Potenciador: &2L&.", "Power-up: &2L&.", "Poder: &2L&.", "Power-up: &2L&.", "Tehoste: &2L&.", "Power-up: &2L&.", "Power-up: &2L&.", "パワーアップ: &2L&."}},
+    {PTX_CopsYouCarry, {"You have the loot: get it to a safe point!", "Vous avez le butin : apportez-le à un point sûr !", "Hai il bottino: portalo a un punto sicuro!", "Du hast die Beute: bring sie zu einem sicheren Ort!", "¡Tienes el botín: llévalo a un punto seguro!", "Je hebt de buit: breng hem naar een veilige plek!", "Tens o saque: leva-o para um ponto seguro!", "Du har byttet: bring det til et sikkert sted!", "Saalis on sinulla: vie se turvapaikkaan!", "Du har byttet: få det til et trygt sted!", "Du har bytet: ta det till en säker plats!", "おたからをセーフポイントへ!"}},
+    {PTX_CopsSlyWins, {"Sly Wins!", "Sly gagne !", "Vince Sly!", "Sly gewinnt!", "¡Gana Sly!", "Sly wint!", "O Sly ganha!", "Sly vinder!", "Sly voittaa!", "Sly vinner!", "Sly vinner!", "スライのかち!"}},
+    {PTX_CopsCarmWins, {"Carmelita Wins!", "Carmelita gagne !", "Vince Carmelita!", "Carmelita gewinnt!", "¡Gana Carmelita!", "Carmelita wint!", "A Carmelita ganha!", "Carmelita vinder!", "Carmelita voittaa!", "Carmelita vinner!", "Carmelita vinner!", "カルメリータのかち!"}},
+    // P: (hackmp3.h) the hackers' select (the names: the Japanese disc's katakana)
+    {PTX_HackCharNames, {"Bentley|Sly|Penelope|Carmelita|Murray|Panda King", "Bentley|Sly|Penelope|Carmelita|Murray|Roi Panda", "Bentley|Sly|Penelope|Carmelita|Murray|Re Panda", "Bentley|Sly|Penelope|Carmelita|Murray|Panda-König", "Bentley|Sly|Penelope|Carmelita|Murray|Rey Panda", "Bentley|Sly|Penelope|Carmelita|Murray|Pandakoning", "Bentley|Sly|Penelope|Carmelita|Murray|Rei Panda", "Bentley|Sly|Penelope|Carmelita|Murray|Pandakongen", "Bentley|Sly|Penelope|Carmelita|Murray|Pandakuningas", "Bentley|Sly|Penelope|Carmelita|Murray|Pandakongen", "Bentley|Sly|Penelope|Carmelita|Murray|Pandakungen", "ベントレー|スライ|ペネロペ|カルメリータ|マーレイ|パンダキング"}},
+    {PTX_HackSelectTitle, {"Choose your hacker", "Choisissez votre hacker", "Scegli il tuo hacker", "Wähle deinen Hacker", "Elige tu hacker", "Kies je hacker", "Escolhe o teu hacker", "Vælg din hacker", "Valitse hakkerisi", "Velg hackeren din", "Välj din hackare", "ハッカーをえらぼう"}},
+    {PTX_HackSelectHint, {"&2+&. Choose   &2X&. Ready   &2O&. Back", "&2+&. Choisir   &2X&. Prêt   &2O&. Retour", "&2+&. Scegli   &2X&. Pronto   &2O&. Indietro", "&2+&. Wählen   &2X&. Bereit   &2O&. Zurück", "&2+&. Elegir   &2X&. Listo   &2O&. Atrás", "&2+&. Kiezen   &2X&. Klaar   &2O&. Terug", "&2+&. Escolher   &2X&. Pronto   &2O&. Voltar", "&2+&. Vælg   &2X&. Klar   &2O&. Tilbage", "&2+&. Valitse   &2X&. Valmis   &2O&. Takaisin", "&2+&. Velg   &2X&. Klar   &2O&. Tilbake", "&2+&. Välj   &2X&. Redo   &2O&. Tillbaka", "&2+&. えらぶ   &2X&. OK   &2O&. もどる"}},
+    {PTX_HackReady, {"Ready!", "Prêt !", "Pronto!", "Bereit!", "¡Listo!", "Klaar!", "Pronto!", "Klar!", "Valmis!", "Klar!", "Redo!", "OK!"}},
+    {PTX_HackChoose, {"Choose", "Choisir", "Scegli", "Wählen", "Elegir", "Kiezen", "Escolher", "Vælg", "Valitse", "Velg", "Välj", "えらぶ"}},
+    {PTX_HackOriginal, {"The original Hackathon", "Le Hackathon original", "L'Hackathon originale", "Der Original-Hackathon", "El Hackathon original", "De originele Hackathon", "O Hackathon original", "Det originale Hackathon", "Alkuperäinen Hackathon", "Det originale Hackathon", "Det ursprungliga Hackathon", "オリジナル"}},
+    {PTX_HackTeam, {"One team: every hacker docks to clear a level", "Une équipe : chaque hacker s'amarre pour finir le niveau", "Una squadra: ogni hacker attracca per finire il livello", "Ein Team: jeder Hacker dockt an, um das Level zu schaffen", "Un equipo: cada hacker atraca para superar el nivel", "Eén team: elke hacker koppelt aan om het level te halen", "Uma equipa: cada hacker atraca para passar o nível", "Ét hold: hver hacker lægger til for at klare banen", "Yksi joukkue: jokainen hakkeri telakoituu läpäistäkseen tason", "Ett lag: hver hacker legger til for å klare brettet", "Ett lag: varje hackare dockar för att klara banan", "チームプレイ: みんなでドックへ"}},
+    // P: (duel3.h) the Biplane Duel's free-for-all (the pilots are "Player N" there; the original duel keeps its texts)
+    {PTX_DuelPlayers, {"Players", "Joueurs", "Giocatori", "Spieler", "Jugadores", "Spelers", "Jogadores", "Spillere", "Pelaajat", "Spillere", "Spelare", "プレイヤー"}},
+    {PTX_DuelOriginal, {"The original duel", "Le duel original", "Il duello originale", "Das Originalduell", "El duelo original", "Het originele duel", "O duelo original", "Den originale duel", "Alkuperäinen kaksintaistelu", "Den originale duellen", "Den ursprungliga duellen", "オリジナル"}},
+    {PTX_DuelFreeForAll, {"Free-for-all: each kill counts for its shooter", "Chacun pour soi : chaque avion abattu compte pour le tireur", "Tutti contro tutti: ogni abbattimento conta per chi spara", "Jeder gegen jeden: jeder Abschuss zählt für den Schützen", "Todos contra todos: cada derribo cuenta para quien dispara", "Ieder voor zich: elke treffer telt voor de schutter", "Todos contra todos: cada abate conta para quem dispara", "Alle mod alle: hvert nedskud tæller for skytten", "Kaikki kaikkia vastaan: pudotus lasketaan ampujalle", "Alle mot alle: hver nedskyting teller for skytteren", "Alla mot alla: varje nedskjutning räknas för skytten", "バトルロイヤル: うちおとすとポイント"}},
+    {PTX_DuelNPlayers, {"%d Players", "%d joueurs", "%d giocatori", "%d Spieler", "%d jugadores", "%d spelers", "%d jogadores", "%d spillere", "%d pelaajaa", "%d spillere", "%d spelare", "%dプレイヤー"}},
+    {PTX_DuelDescFFA, {"Up to four pilots dogfight over Holland. Every plane shot down counts for its shooter: the first to 10 wins!", "Jusqu'à quatre pilotes s'affrontent au-dessus de la Hollande. Chaque avion abattu compte pour le tireur : le premier à 10 gagne !", "Fino a quattro piloti si sfidano sull'Olanda. Ogni aereo abbattuto conta per chi spara: vince il primo a 10!", "Bis zu vier Piloten kämpfen über Holland. Jedes abgeschossene Flugzeug zählt für den Schützen: Wer zuerst 10 hat, gewinnt!", "Hasta cuatro pilotos combaten sobre Holanda. Cada avión derribado cuenta para quien dispara: ¡gana el primero en llegar a 10!", "Tot vier piloten vechten boven Holland. Elk neergeschoten vliegtuig telt voor de schutter: wie het eerst 10 heeft, wint!", "Até quatro pilotos combatem sobre a Holanda. Cada avião abatido conta para quem dispara: ganha o primeiro a chegar a 10!", "Op til fire piloter kæmper over Holland. Hvert nedskudt fly tæller for skytten: først til 10 vinder!", "Jopa neljä lentäjää taistelee Hollannin yllä. Jokainen pudotettu kone lasketaan ampujalle: ensimmäinen 10:een voittaa!", "Opptil fire piloter kjemper over Holland. Hvert nedskutt fly teller for skytteren: først til 10 vinner!", "Upp till fyra piloter strider över Holland. Varje nedskjutet plan räknas för skytten: först till 10 vinner!", "4にんまでのパイロットがたたかう! うちおとすと1ポイント 10ポイントでかち!"}},
+    {PTX_DuelFirstTo, {"First to %d kills wins!", "Le premier à %d avions abattus gagne !", "Vince chi arriva a %d abbattimenti!", "Wer zuerst %d Abschüsse hat, gewinnt!", "¡Gana el primero en llegar a %d derribos!", "Wie het eerst %d treffers heeft, wint!", "Ganha quem chegar primeiro a %d abates!", "Først til %d nedskydninger vinder!", "Ensimmäinen %d pudotukseen voittaa!", "Først til %d nedskytinger vinner!", "Först till %d nedskjutningar vinner!", "%dポイントでかち!"}},
+    {PTX_DuelShotDown, {"%s shot down %s!", "%s a abattu %s !", "%s ha abbattuto %s!", "%s hat %s abgeschossen!", "¡%s derribó a %s!", "%s heeft %s neergeschoten!", "%s abateu %s!", "%s skød %s ned!", "%s pudotti: %s!", "%s skjøt ned %s!", "%s sköt ned %s!", "%sが%sをうちおとした!"}},
+    {PTX_DuelLeads, {"%s leads!", "%s mène !", "%s è in testa!", "%s führt!", "¡%s va en cabeza!", "%s staat voor!", "%s está na frente!", "%s fører!", "%s johtaa!", "%s leder!", "%s leder!", "%sがリード!"}},
+    {PTX_DuelWins, {"%s Wins!", "%s gagne !", "Vince %s!", "%s gewinnt!", "¡Gana %s!", "%s wint!", "%s ganha!", "%s vinder!", "%s voittaa!", "%s vinner!", "%s vinner!", "%sのかち!"}},
+    {PTX_DuelCrashed, {"%s crashed!", "%s s'est écrasé !", "%s si è schiantato!", "%s ist abgestürzt!", "¡%s se estrelló!", "%s is neergestort!", "%s caiu!", "%s styrtede ned!", "%s syöksyi maahan!", "%s styrtet!", "%s störtade!", "%sがついらく!"}},
+    {PTX_GalleonFreeForAll, {"Free-for-all: the last ship afloat wins the round", "Chacun pour soi : le dernier navire à flot gagne la manche", "Tutti contro tutti: l'ultima nave a galla vince il round", "Jeder gegen jeden: Das letzte Schiff über Wasser gewinnt die Runde", "Todos contra todos: el último barco a flote gana la ronda", "Ieder voor zich: het laatste schip dat blijft drijven wint de ronde", "Todos contra todos: o último navio a flutuar ganha a ronda", "Alle mod alle: det sidste skib oven vande vinder runden", "Kaikki kaikkia vastaan: viimeinen pinnalla oleva laiva voittaa erän", "Alle mot alle: det siste skipet flytende vinner runden", "Alla mot alla: det sista fartyget flytande vinner rundan", "バトルロイヤル: さいごまでのこったふねがかち"}},
+    {PTX_GalleonDescFFA, {"Up to four captains battle at sea: the Guru with Dimitri at the helm, the Panda King with his daughter. The last ship afloat wins the round: three rounds win!", "Jusqu'à quatre capitaines s'affrontent en mer : le Gourou avec Dimitri à la barre, le Roi Panda avec sa fille. Le dernier navire à flot gagne la manche : trois manches pour gagner !", "Fino a quattro capitani si sfidano in mare: il Guru con Dimitri al timone, il Re Panda con sua figlia. L'ultima nave a galla vince il round: vince chi ne conquista tre!", "Bis zu vier Kapitäne kämpfen auf See: der Guru mit Dimitri am Steuer, der Panda-König mit seiner Tochter. Das letzte Schiff über Wasser gewinnt die Runde: drei Runden gewinnen!", "Hasta cuatro capitanes combaten en el mar: el Gurú con Dimitri al timón, el Rey Panda con su hija. El último barco a flote gana la ronda: ¡tres rondas para ganar!", "Tot vier kapiteins vechten op zee: de Goeroe met Dimitri aan het roer, de Pandakoning met zijn dochter. Het laatste schip dat blijft drijven wint de ronde: drie rondes winnen!", "Até quatro capitães combatem no mar: o Guru com o Dimitri ao leme, o Rei Panda com a filha. O último navio a flutuar ganha a ronda: três rondas para ganhar!", "Op til fire kaptajner kæmper til søs: Guruen med Dimitri ved roret, Pandakongen med sin datter. Det sidste skib oven vande vinder runden: tre runder vinder!", "Jopa neljä kapteenia taistelee merellä: Guru Dimitri ruorissa, Pandakuningas tyttärensä kanssa. Viimeinen pinnalla oleva laiva voittaa erän: kolme erää voittaa!", "Opptil fire kapteiner kjemper til sjøs: Guruen med Dimitri ved roret, Pandakongen med datteren sin. Det siste skipet flytende vinner runden: tre runder vinner!", "Upp till fyra kaptener strider till sjöss: gurun med Dimitri vid rodret, pandakungen med sin dotter. Det sista fartyget flytande vinner rundan: tre rundor vinner!", "4にんまでのせんちょうがうみでたたかう! さいごまでのこったふねがラウンドのかち 3ラウンドでかち!"}},
+    {PTX_GalleonFirstTo, {"First to %d rounds wins!", "Le premier à %d manches gagne !", "Vince chi arriva a %d round!", "Wer zuerst %d Runden gewinnt, siegt!", "¡Gana el primero en llegar a %d rondas!", "Wie het eerst %d rondes wint, wint!", "Ganha quem chegar primeiro a %d rondas!", "Først til %d runder vinder!", "Ensimmäinen %d erään voittaa!", "Først til %d runder vinner!", "Först till %d rundor vinner!", "%dラウンドでかち!"}},
+    {PTX_GalleonSank, {"%s sank %s!", "%s a coulé %s !", "%s ha affondato %s!", "%s hat %s versenkt!", "¡%s hundió a %s!", "%s heeft %s laten zinken!", "%s afundou %s!", "%s sænkede %s!", "%s upotti: %s!", "%s senket %s!", "%s sänkte %s!", "%sが%sをしずめた!"}},
+    {PTX_GalleonSunk, {"%s went down!", "%s a sombré !", "%s è affondato!", "%s ist gesunken!", "¡%s se hundió!", "%s is gezonken!", "%s afundou!", "%s gik ned!", "%s upposi!", "%s sank!", "%s sjönk!", "%sがしずんだ!"}},
+    {PTX_GalleonRound, {"%s wins the round!", "%s gagne la manche !", "%s vince il round!", "%s gewinnt die Runde!", "¡%s gana la ronda!", "%s wint de ronde!", "%s ganha a ronda!", "%s vinder runden!", "%s voittaa erän!", "%s vinner runden!", "%s vinner rundan!", "%sがラウンドのかち!"}},
+    {PTX_GalleonNoneAfloat, {"No ship left afloat!", "Plus aucun navire à flot !", "Nessuna nave è rimasta a galla!", "Kein Schiff mehr über Wasser!", "¡No queda ningún barco a flote!", "Geen schip blijft drijven!", "Nenhum navio ficou a flutuar!", "Intet skib er oven vande!", "Yksikään laiva ei jäänyt pinnalle!", "Ingen skip flyter lenger!", "Inget fartyg flyter längre!", "のこったふねはない!"}},
+    // P: the display options' Monitor (settings v22; a monitor's own name is shown as the system gives it)
+    {PTX_Monitor, {"Monitor", "Écran", "Monitor", "Monitor", "Monitor", "Monitor", "Monitor", "Skærm", "Näyttö", "Skjerm", "Skärm", "モニター"}},
+    {PTX_Primary, {"Primary", "Principal", "Principale", "Primär", "Principal", "Primair", "Principal", "Primær", "Ensisijainen", "Primær", "Primär", "メイン"}},
+    // P: Sly 2's display options (its texts; the Japanese in kana, the font's)
+    {PTX_FastShadows, {"Fast Shadows", "Ombres rapides", "Ombre veloci", "Schnelle Schatten", "Sombras rápidas",
+        "Snelle schaduwen", "Sombras rápidas", "Hurtige skygger", "Nopeat varjot", "Raske skygger", "Snabba skuggor",
+        "こうそくなかげ"}},
+    {PTX_OutlineThickness, {"Outline Thickness", "Épaisseur des contours", "Spessore dei contorni", "Konturstärke",
+        "Grosor del contorno", "Dikte van de omlijning", "Espessura do contorno", "Konturtykkelse", "Ääriviivojen paksuus",
+        "Konturtykkelse", "Konturtjocklek", "りんかくせんのふとさ"}},
+    {PTX_Upscaling, {"Upscaling", "Mise à l'échelle", "Upscaling", "Hochskalierung", "Reescalado", "Opschaling",
+        "Aumento de resolução", "Opskalering", "Skaalaus", "Oppskalering", "Uppskalning", "アップスケール"}},
+    {PTX_UpscaleMethod, {"Method", "Méthode", "Metodo", "Methode", "Método", "Methode", "Método", "Metode", "Menetelmä",
+        "Metode", "Metod", "ほうしき"}},
+    {PTX_UpscalePreset, {"Preset", "Préréglage", "Preimpostazione", "Voreinstellung", "Ajuste", "Voorinstelling",
+        "Predefinição", "Niveau", "Esiasetus", "Nivå", "Nivå", "プリセット"}},
+    {PTX_UpscaleSharpness, {"Sharpness", "Netteté", "Nitidezza", "Schärfe", "Nitidez", "Scherpte", "Nitidez", "Skarphed",
+        "Terävyys", "Skarphet", "Skärpa", "シャープネス"}},
+    {PTX_UltraQuality, {"Ultra Quality", "Ultra qualité", "Qualità ultra", "Ultra-Qualität", "Calidad ultra",
+        "Ultrakwaliteit", "Qualidade ultra", "Ultrakvalitet", "Ultralaatu", "Ultrakvalitet", "Ultrakvalitet",
+        "ウルトラクオリティ"}},
+    {PTX_Quality, {"Quality", "Qualité", "Qualità", "Qualität", "Calidad", "Kwaliteit", "Qualidade", "Kvalitet", "Laatu",
+        "Kvalitet", "Kvalitet", "クオリティ"}},
+    {PTX_Balanced, {"Balanced", "Équilibré", "Bilanciato", "Ausgewogen", "Equilibrado", "Gebalanceerd", "Equilibrado",
+        "Balanceret", "Tasapainoinen", "Balansert", "Balanserad", "バランス"}},
+    {PTX_Performance, {"Performance", "Performance", "Prestazioni", "Leistung", "Rendimiento", "Prestaties", "Desempenho",
+        "Ydelse", "Suorituskyky", "Ytelse", "Prestanda", "パフォーマンス"}},
+    // P: the display options' HUD Placement (display.h hudPlacement) and its Match Screen (the picture's own shape)
+    {PTX_HudPlacement, {"HUD Placement", "Position du HUD", "Posizione HUD", "HUD-Position", "Posición del HUD", "HUD-positie", "Posição do HUD", "HUD-placering", "HUD:n sijoittelu", "HUD-plassering", "HUD-placering", "HUDのいち"}},
+    {PTX_MatchScreen, {"Match Screen", "Selon l'écran", "Come lo schermo", "Wie Bildschirm", "Igual que la pantalla", "Zoals scherm", "Igual ao ecrã", "Som skærmen", "Näytön mukaan", "Som skjermen", "Som skärmen", "画面に合わせる"}},
 };
 // clang-format on
 static_assert(std::size(s_arow) == PTX_Max, "one row per PTX");
@@ -292,10 +537,19 @@ static_assert(FRowsInOrder(), "the rows in PTX order");
 
 int IlangTable()
 {
-    return g_nLang >= 0 && g_nLang < CLANG ? g_nLang : LANG_English;
+    // (the text's language: a store language's own, or the disc's that it falls back to; region.h LangText)
+    // (test: SLY2N_PORTTEXTLANG=N the PC texts' column N (0..11) whatever the game's language: their layouts' screenshots)
+    static const int s_langTest = std::getenv("SLY2N_PORTTEXTLANG") ? std::atoi(std::getenv("SLY2N_PORTTEXTLANG")) : -1;
+    const int lang = s_langTest >= 0 ? s_langTest : LangText();
+    const int ilang = lang >= 0 && lang < CLANG ? lang : LANG_English;
+    // (the Japanese column needs a font with kana: Sly 3's (USA) has none (SLY2N_FONTLIST), its text would draw blank, so
+    // English; the Latin columns are folded to the font's letters: StrToGameText)
+    return ilang == LANG_Japanese ? LANG_English : ilang;
 }
 
 const char* SzRow(PTX ptx) { return s_arow[ptx].asz[IlangTable()]; }
+
+#include "porttext_actions.inc"
 
 // the language writes decimals with a comma
 bool FDecimalComma()
@@ -311,7 +565,7 @@ bool FDecimalComma()
 std::string StrToGameText(const std::string& utf8)
 {
     // the Japanese disc's text keeps characters >= 0x80 as UTF-8 already (region.h)
-    if (FWideText()) return utf8;
+    if (FWideText()) return IlangTable() == LANG_Japanese ? utf8 : StrFoldLatinForWideFont(utf8, IlangTable());   // (langstore.h)
     // the other discs' text is Latin-1 (their fonts' glyphs 0x20..0xFF)
     std::string out;
     out.reserve(utf8.size());
@@ -329,10 +583,36 @@ std::string StrToGameText(const std::string& utf8)
     return out;
 }
 
+bool FQuitToLauncher()
+{
+    static const bool s_f = [] {
+        const char* sz = std::getenv("SAFEHOUSE_LAUNCHER");
+        return sz && std::string(sz) == "collection";
+    }();
+    return s_f;
+}
+
 std::string StrPort(PTX ptx)
 {
     if (ptx < 0 || ptx >= PTX_Max) return "";
     return StrToGameText(SzRow(ptx));
+}
+
+std::string StrPortActionName(cane::sly2input::Action action)
+{
+    const size_t index = size_t(action);
+    if (index >= cane::sly2input::kActionCount) return {};
+    const int lang = IlangTable();
+    return StrToGameText(lang == LANG_English ? cane::sly2input::kActions[index].label : s_actionNames[index].text[lang - 1]);
+}
+
+std::string StrPortActionGroup(std::string_view group)
+{
+    const int lang = IlangTable();
+    if (lang != LANG_English)
+        for (const auto& row : s_actionGroups)
+            if (row.group == group) return StrToGameText(row.text[lang - 1]);
+    return StrToGameText(std::string(group));
 }
 
 std::string StrPortValue(PTX ptxLabel, const std::string& value) { return StrPort(ptxLabel) + StrPort(PTX_Sep) + value; }
@@ -650,6 +930,12 @@ struct PCROWJP
 };
 // clang-format on
 }  // namespace
+
+const char* SzEpisodeMenuWording(int)
+{
+    // (Sly 2's DVD-menu renaming: its European translations. Sly 3's USA disc is English only: nothing to rename)
+    return nullptr;
+}
 
 // Sly 3 (the USA disc: English only, one language in its text): its memory card messages said for a PC, in the spirit of
 // Sly 2's rows above (the save folder, the Sly 3 Save File, "Please do not close the game"; the game's own "Sly 3 Save

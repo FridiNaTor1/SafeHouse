@@ -5,12 +5,12 @@
   trimmed to its visible pixels and centred on a transparent square (the logos are wide: padded, never squashed).
   The PNG (256x256) is embedded in the launcher, which installs it into the user's hicolor icon folder for a Linux
   .desktop shortcut; the .ico (16-256 px) is embedded in safehouse.exe for a Windows .lnk (cmake/launcher.rc.in).
-<game>.ico: the Windows icon of Sly1-Release.exe / Sly2-Release.exe (their window and taskbar icon), from the
+<game>.ico: the Windows icon of Sly1-Release.exe / Sly2-Release.exe / Sly3-Release.exe (their window and taskbar icon), from the
   SteamGridDB icon bundled for "Add to Steam" (launcher/assets/steam/<game>/icon.png; authors in
   launcher/assets/steam/CREDITS.md), 16-128 px.
 
 The outputs are committed, so building needs no Python. Run again after changing a logo or an icon.
-Usage: make-shortcut-icons.py [GAME ...]   (default: sly1 sly2)
+Usage: make-shortcut-icons.py [GAME ...]   (default: sly1 sly2 sly3)
 """
 import pathlib, sys
 from PIL import Image
@@ -23,7 +23,7 @@ SIDE, MARGIN = 256, 4  # the square, and the transparent margin left and right o
 def report(path, size):
     print(path.relative_to(root), f'{size} px max,', path.stat().st_size, 'bytes')
 
-for game in sys.argv[1:] or ['sly1', 'sly2']:
+for game in sys.argv[1:] or ['sly1', 'sly2', 'sly3']:
     # The shortcut icon: the logo, padded to a square.
     logo = Image.open(root / 'launcher/assets/games' / f'{game}-logo.png').convert('RGBA')
     logo = logo.crop(logo.getchannel('A').getbbox())

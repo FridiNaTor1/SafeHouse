@@ -1,3 +1,4 @@
+#include "actioninput.h"
 // Sly's state 3: the swing on a hook (cid 0x13) of kind 0 / 1 / 2 (+0x124; kind 3 is state 22, climbsurf.cpp).
 // Ported from the decomp: the entry / exit parts of 0x18C250 (JTS_Hang), the input 0x190520 (the substates 0..3: 0 the
 // push forward, 2 the push back, 1 the free swing, 3 hanging still: its SM +0x1950), the pendulum 0x18FC60 (the
@@ -126,7 +127,7 @@ void CalculateSlyHangAccel(SLY* p)
     const glm::vec3 angularSecond = secondAxis * (glm::length(projected) / distance);
     float drag = 1.5f + ratio * (-0.35f + ratio * 0.0f);  // D_002BF4F0
     drag = drag < -5.0f ? -5.0f : (-0.25f < drag ? -0.25f : drag);  // D_002BF500
-    const bool fPush = p->substate == 0 || p->substate == 2;
+    const bool fPush = p->jtbs == 0 || p->jtbs == 2;
     const float bias = fPush ? -2.5f : -1.0f;  // D_002BF508 / D_002BF50C
     glm::vec3 angular = angularFirst + angularSecond * dt;
     const glm::vec3 hookY = glm::vec3(basis[1]);
@@ -135,7 +136,7 @@ void CalculateSlyHangAccel(SLY* p)
     if (fPush && g_clock.t - p->tSubstate < 0.25f)  // D_002BF510
     {
         float amount = dt * 5.0f;  // D_002BF514
-        if (p->substate == 0) amount = -amount;
+        if (p->jtbs == 0) amount = -amount;
         if (p->fHangBack) amount = -amount;
         const float down = -grav.z;
         const float speed = glm::length(perpendicular);
@@ -156,7 +157,7 @@ void CalculateSlyHangAccel(SLY* p)
     const glm::vec3 vFinal = velocity + glm::cross(angular, radius) + direction * speedOut;
     p->vecHangAccel = (vFinal - VelAloPos(palo)) * (1.0f / dt) - grav;
     if (FHangPrint())
-        std::printf("hang: t %.3f sub %d d %.2f next %.2f pos %.1f %.1f %.1f v %.1f %.1f %.1f\n", g_clock.t, p->substate, distance, next,
+        std::printf("hang: t %.3f sub %d d %.2f next %.2f pos %.1f %.1f %.1f v %.1f %.1f %.1f\n", g_clock.t, p->jtbs, distance, next,
                     PosLoWorld(palo).x, PosLoWorld(palo).y, PosLoWorld(palo).z, VelAloPos(palo).x, VelAloPos(palo).y, VelAloPos(palo).z);
 }
 
@@ -244,7 +245,7 @@ void UpdateSlyHangInput(SLY* p)
     const glm::mat3 m = MatRotateAxis(p->radHeading, glm::vec3(0.0f, 0.0f, 1.0f));  // 0x11B500
     const glm::vec3 local = glm::transpose(m) * dir;
     const float angle = RadNormalize(std::atan2(local.z, local.x) - 1.57079637f);  // 0x2458F0
-    int next = p->substate;
+    int next = p->jtbs;
     const float t = g_clock.t;
     const auto speed = [&]() { return glm::length(VelAloPos(palo)); };
     switch (next)
@@ -271,9 +272,9 @@ void UpdateSlyHangInput(SLY* p)
         break;
     default: break;
     }
-    if (FHangPrint()) std::printf("hang: input t %.3f heading %.3f joy %.3f u %.3f near %d far %d angle %.3f sub %d -> %d\n", g_clock.t, p->radHeading, RadJoy(p), UJoy(p), fNear, fFar, angle, p->substate, next);
-    SetSlyState(p, 3, next);  // 0x18C250
-    if (p->state != 3) return;
+    if (FHangPrint()) std::printf("hang: input t %.3f heading %.3f joy %.3f u %.3f near %d far %d angle %.3f sub %d -> %d\n", g_clock.t, p->radHeading, RadJoy(p), UJoy(p), fNear, fFar, angle, p->jtbs, next);
+    SetSlyState(p, jts::Hang, next);  // 0x1ADDD0
+    if (p->jts != jts::Hang) return;
     CalculateSlyHangAccel(p);  // 0x18FC60
     // (+0x1900: 0x1F5078 on the moving object: TODO)
     if (FBtnWithin(p, BTN_R3, 0.15f))
@@ -282,9 +283,9 @@ void UpdateSlyHangInput(SLY* p)
         ForgetPadctlPresses(PpadctlOf(p), BTN_R3);  // 0x1C4738
         OpenBinoc(p, 0, nullptr, nullptr);         // 0x19CC50
     }
-    if (p->substate == 3) return;
+    if (p->jtbs == 3) return;
     float activeTarget = 1.0f, speedTarget = 1.0f;
-    switch (p->substate)
+    switch (p->jtbs)
     {
     case 0: activeTarget = 1.0f; speedTarget = 1.0f; break;
     case 2: activeTarget = 1.0f; speedTarget = 0.0f; break;
@@ -322,11 +323,11 @@ void UpdateSlyHangMotion(SLY* p)
     BrakeAloRotation(palo, m1 * m2, s_ac);  // 0x1F59A0 (the original's m2 m1, rows)
 }
 
-// orig: 0x0018A8C8 (state 3's transitions: CROSS after 0.25 s lets go: the jump kind 2)
+// orig: part of 0x0018A8C8 (state 3's transitions: CROSS after 0.25 s lets go: the jump kind 2)
 bool FSlyHangRelease(SLY* p)
 {
     if (!(g_clock.t - p->tState > 0.25f)) return false;
-    if (!FBtnTake(p, BTN_CROSS, 0.25f)) return false;
+    if (!sly2actions::Take(PpadctlOf(p), sly2actions::Action::HangJump, BTN_CROSS, 0.25f)) return false;
     if (FHangPrint()) std::printf("hang: release t %.3f\n", g_clock.t);
     SetJumpKind(&p->jump, 2, 0, nullptr);
     return true;
@@ -435,7 +436,7 @@ void DrawSlys(SW* psw)
         for (LO* plo : psw->mpcidaplo[cid])
         {
             SLY* p = PslyFromLo(plo);
-            if (!p || p->state != 3 || !FAloDrawn(psw, p->palo)) continue;
+            if (!p || p->jts != jts::Hang || !FAloDrawn(psw, p->palo)) continue;
             DrawSlyHangPlace(p);
         }
 }

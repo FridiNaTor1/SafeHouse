@@ -140,8 +140,11 @@ void CBinaryInputStream::Align(int n)
     if (padding > m_cb - m_ib)
         throw std::runtime_error("Binary memory stream alignment exceeded buffer size");
 
+    if (g_paalignRecord) g_paalignRecord->emplace_back(m_ib, padding);   // (PC: the converter's world parts, worldparts.h)
     m_ib += padding;
 }
+
+std::vector<std::pair<std::size_t, std::size_t>>* g_paalignRecord = nullptr;
 
 void CBinaryInputStream::RawRead(void* pv, std::size_t cb)
 {

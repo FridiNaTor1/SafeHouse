@@ -32,6 +32,9 @@ extern GAMESAVE g_gamesave;
 void SetProgressLayout(const PROGRESS& progress);
 // orig 0x1D7C80: the save is kept when it has the layout's identity, else cleared and stamped
 void ValidateGameSave();
+// orig3 0x21D010: a game record reset (fRetain: the 7 settings keys kept when the block is valid; the language set)
+void ResetGameSave3(GAMESAVE& gs, bool fRetain);
+bool FGameSaveIdentityValid(const GAMESAVE& gs);   // orig3 0x21C198
 
 // orig 0x1D87C0 + 0x1D7ED8 (0x1D8A38): a progress value (Nil when the path does not resolve)
 CRef RefGetProgress(const std::vector<std::string>& apath);
@@ -66,3 +69,7 @@ bool FWriteGameSaveBlock(const std::string& path, const GAMESAVE& gs, std::strin
 // each episode's higher "percent_complete"; the higher "episodeBest"; gsKeep's "widCurrent", "episodeCurrent" and
 // "oidPoCurrent" (where the game resumes). Everything else stays gs's (coins, items, times, settings).
 void MergeProgressKeepDone(GAMESAVE& gs, const GAMESAVE& gsKeep);
+
+// orig3: 0x21C860: every task's / job's progress cleared in gs (the entries focus_count, complete_count, state,
+// time_played, suck_value, is_complete, from_memcard zeroed; everything else kept): a challenge's fresh start
+void ClearProgressTaskFields(GAMESAVE& gs);

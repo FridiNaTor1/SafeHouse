@@ -67,7 +67,10 @@ int CploFindSwNearest(LO* ploCtx, OID oid, LO** pplo, bool fSameChannel)
             continue;
         }
         if (ipsBest != INT_MAX || p) continue;  // (farther than the best, or no common ancestor after one with)
-        if (c == 0) ploBest = plo;
+        // (PC: with no common ancestor, the first object in the world before the first out of it: the copies of a template
+        // (Ep5's pirate ships 44989 and their parts, the boarding's proxies 56246 / 56248) list the template first, out of
+        // the world at the origin; the original's lookup 0x17DEC0 tells them apart by their scope (+0x38), not kept here)
+        if (c == 0 || (!ploBest->fInWorld && plo->fInWorld)) ploBest = plo;
         ++c;
     }
     *pplo = ploBest;

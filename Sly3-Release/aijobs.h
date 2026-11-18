@@ -77,6 +77,8 @@ struct JOBREACT : AIJOB
     void React(const AIMSG& m);   // orig 0x176750
     void NextReaction();          // orig 0x177BA0 (aihit.cpp)
     void SendHit(int n, LO* ploSender);  // orig 0x176B80
+    bool FChildDone() const;             // orig3 0x238AD0
+    bool FTargetReaction3(AIMSG* pm);    // orig3 0x19AF98
 };
 
 // 0x9D (0x50): a move: its animation index in the mask, its kind entry played (Init 0x174920, Enter 0x174950, Exit
@@ -181,6 +183,8 @@ struct JOBUSE : JOBMOVE
     int nExtra = 0;               // +0x68
     int fBasis = 0;               // +0x6C its orientation +0x70 is set
     glm::mat3 mat{1.0f};          // +0x70
+    int fDrop3 = -1;              // (Sly 3 job 0xCB +0xC8, from op 13's +0xC: a plain place dropped onto the ground (100 up ..
+                                  // 350 down) only when set; -1: a Sly 2 caller's use, dropped 100 .. 150 as Sly 2's 0x179FA0)
     void Init() override;
     void Enter() override;
     void Exit() override;
@@ -195,7 +199,8 @@ struct JOBPROX : AIJOB
 {
     int st = -1;                  // +0x30
     float tSt = 0;                // +0x34
-    LO* plist = nullptr;          // +0x38 the command list (the guard's +0x108C)
+    LO* plist = nullptr;          // +0x38 the command list (orig3: the guard's +0x1164; native n108C / plo108C)
+    LO* ploTarget = nullptr;      // +0x3C the object measured (orig3: the guard's +0x1190, set with the list)
     void Init() override;
     void Enter() override;
     void Exit() override;
@@ -237,6 +242,69 @@ struct JOBNAVPOINT : AIJOB
     bool FDone() const;           // orig 0x17EAE8
 };
 
+// Sly 3's 0xE5 (orig3 vt 0x35D598: Init 0x1D9CA8, Enter 0x1D9CE0 -> 0x1D9E70, Update 0x1D9D58, SetMode 0x1D9EF0): the
+// goto's state 5 (its follower stuck): the guard taken to the point 50 further along its path (on its own floor height),
+// not jumped there as Sly 2's 0xBF / 0xAC did. A guard that walks (+0x1144 bit 1 = native grfFE8 bit 1) moves there
+// in at most 0.7 s (mode 0: Sly 3 pushes the move job 0xCB toward the point; natively a slide without its clip,
+// TODO(ai): 0xCB 0x131D78..0x1327F0), else it is put there (mode 1: vt slots 34 / 40 / 41); mode -1 done.
+constexpr CID CID_JOBSETTLE3 = 0x1E5;
+struct JOBSETTLE3 : AIJOB
+{
+    GOAL goal;                    // +0x30 / +0x40 (the point)
+    int mode = -1;                // +0x30
+    float tMode = 0;              // +0x34
+    glm::vec3 posFrom{0.0f};      // (the slide's start)
+    bool fStarted = false;        // (entered: mode -1 afterwards is done, 0x238AB8)
+    void Init() override;
+    void Enter() override;
+    void Exit() override;
+    void Update() override;
+    void SetMode(int n, const glm::vec3& pos);
+    bool FDone() const { return mode == -1 && fStarted; }
+};
+
+// Sly 3's 0xEA (vt 0x355DB8: Init 0x16E5A0, Enter 0x16E5D8, Exit 0x16E610, Update 0x16E650, SetState 0x16E6C0, the side
+// 0x16E8D8): the trigger reaction (the reaction 21 / the pursuit's state 9, from 0x257A70: a guard entering a class-0x17
+// trigger). Sly 3 state 0xC meanwhile; the side by the trigger's kind (+0x250) and the guard's +0x1144 flags (0x20 / 0x40
+// for kind 0, 0x80 / 0x100 for kind 1; both: the side of the trigger's z (kind 0) or y (kind 1) plane the guard is on,
+// kind 1 flipped by the guard's facing): 0..3 -> Sly 3 states 8..11; the state's kind entry played by a move (0xC9; a
+// kind-2 entry: Sly 3's 0xCB mode 7 toward the point the entry's distance behind the guard, natively the kind-2 player's
+// target there); no entry: done (-1)
+constexpr CID CID_JOBTRIGREACT3 = 0x1EA;
+constexpr int MSG_TRIGREACT3 = 0x1013;   // (Sly 3's job message 0x13 with the trigger; a native id clear of the LO messages)
+void DealVolReact3(struct VOLREACT3* pr);   // orig3 0x257B80 (guard.h VOLREACT3)
+struct JOBTRIGREACT3 : AIJOB
+{
+    int st = -1;                  // +0x30
+    float tSt = 0;                // +0x34
+    LO* ptrig = nullptr;          // +0x38 the trigger
+    bool fStarted = false;
+    void Init() override;
+    void Enter() override;
+    void Exit() override;
+    void Update() override;
+    void SetState(int n) override;
+    int NSide() const;            // orig3 0x16E8D8
+    bool FDone() const { return st == -1 && fStarted; }
+};
+
+// Sly 3's 0xF2 (vt 0x35B770: Init 0x1A58D0, Enter 0x1A5900, Exit 0x1A5930, Update 0x1A5960, SetState 0x1A59C8): the
+// pursuit's state 4 (the target lost; natively Sly 2's inline move 0x9D): the lost move (Sly 3 state 0x13; a Guru target
+// with +0x15F8 set: the entry of 0x41 | 0x13), the detector's entry of the target back to 0 (0x1703C8), nothing pursued,
+// the job locked until the move ends (then unlocked, -1)
+constexpr CID CID_JOBLOST3 = 0x1F2;
+struct JOBLOST3 : AIJOB
+{
+    LO* ptarget = nullptr;        // +0x30
+    int st = -1;                  // +0x34
+    float tSt = 0;                // +0x38
+    void Init() override;
+    void Enter() override;
+    void Exit() override;
+    void Update() override;
+    void SetState(int n) override;
+};
+
 // 0xA7 (0xF0): the path follower (Init 0x178E98 (0x177E80), Enter 0x177EF0, Update 0x178EE0 (0x1789F8, steering
 // 0x177F78), SetState 0x1791C8)
 struct JOBFOLLOW : AIJOB
@@ -265,12 +333,15 @@ struct JOBFOLLOW : AIJOB
     LO* ploArg = nullptr;         // +0xC8 (the go-to's +0xA8: faced at the end)
     glm::vec4 posMoved{0.0f};     // +0xD0
     float tLeft = 1.5f;           // +0xE0
+    int fFree = 0;                // (orig3 follower +0xA0: a free run: the step neither stops at the arrival nor clamps
+                                  // at the path's end, 0x1D8140; set by the walk 0x157A80 / the go-to 0x1D77E0)
     void Init() override;
     void Enter() override;
     void Update() override;
     void SetState(int n) override;
     void Steer177F78();           // orig 0x177F78
     void Update1789F8();          // orig 0x1789F8
+    void Update89B0();            // orig3 0x1D89B0 (Sly 3's: the step, the state by the radius; no nav-way states)
     bool FArrived() const;        // orig 0x178D00
     void Follow(const CRV* pcrv, int fReverse);  // orig 0x178D90
     bool FStuck() const;          // orig 0x1792E8
@@ -288,6 +359,13 @@ struct JOBSCRIPT : AIJOB
     float radFace = 0;            // +0x48
     int fFromReact = 0;           // +0x4C
     KINDE kinde50;               // +0x50 the command-14 entry; its move child keeps a pointer to this member
+    // (s3-ai-4) Sly 3's kind entry replaced while a command runs (0x1983A8; Sly 3's JOBSCRIPT +0x4C / +0x50 / +0x54):
+    // the replaced entry's state (Sly 2 index; -1 none), its oid and flags, put back by 0x198490
+    int istateKindSaved = -1;
+    OID oidKindSaved = -1;
+    int grfKindSaved = 0;
+    void OverrideKind3(int istate3, OID oid, int grf);  // orig3 0x1983A8
+    void RestoreKind3();                                 // orig3 0x198490
     void Init() override;
     void Exit() override;
     void Update() override;
@@ -333,6 +411,8 @@ struct JOBGOTO : AIJOB
     std::vector<void*> anode;     // +0xB4 / +0xB8 the found path's nodes (0x1C21D8)
     int fDirect = 0;              // +0xBC
     int fC0 = 0;                  // +0xC0
+    int fFree = 0;                // (orig3 +0x94: the path step's goal was not clamped at the curve's end (0x1D9500);
+                                  // the follower of state 1 runs free, 0x1D77E0)
     void Init() override;
     void Enter() override;
     void Exit() override;
@@ -408,3 +488,5 @@ std::unique_ptr<AIJOB> PjobNewKind(CID cid);
 // orig 0x173610: pos dropped onto the still solid entries under it (the line +gHigh .. +gLow up; unless fAny, not
 // steeper than 0.7): false when nothing is hit
 bool FDropOnGround(glm::vec3* ppos, float gHigh, float gLow, bool fAny);
+
+bool FSnapPosToSurfaceAbove(glm::vec3* ppos);   // orig 0x17D608 (orig3 0x1DA038)

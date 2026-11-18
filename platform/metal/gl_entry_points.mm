@@ -41,11 +41,11 @@ const GLubyte* APIENTRY mtl_glGetStringi(GLenum name, GLuint index) {
 }
 
 void APIENTRY mtl_glGetIntegerv(GLenum pname, GLint* data) {
-  if (!Ctx()->GetInteger(pname, data)) Ctx()->SetError(GL_INVALID_ENUM);
+  if (!Ctx()->GetInteger(pname, data)) Ctx()->SetError(GL_INVALID_ENUM, "GetInteger", pname);
 }
 
 void APIENTRY mtl_glGetFloatv(GLenum pname, GLfloat* data) {
-  if (!Ctx()->GetFloat(pname, data)) Ctx()->SetError(GL_INVALID_ENUM);
+  if (!Ctx()->GetFloat(pname, data)) Ctx()->SetError(GL_INVALID_ENUM, "GetFloat", pname);
 }
 
 void APIENTRY mtl_glEnable(GLenum cap) { Ctx()->SetCapability(cap, true); }
@@ -311,7 +311,7 @@ void APIENTRY mtl_glShaderSource(GLuint shader, GLsizei count, const GLchar* con
 void APIENTRY mtl_glCompileShader(GLuint shader) { Ctx()->CompileShader(shader); }
 
 void APIENTRY mtl_glGetShaderiv(GLuint shader, GLenum pname, GLint* params) {
-  if (!Ctx()->GetShaderInt(shader, pname, params)) Ctx()->SetError(GL_INVALID_ENUM);
+  if (!Ctx()->GetShaderInt(shader, pname, params)) Ctx()->SetError(GL_INVALID_ENUM, "GetShaderInt", pname);
 }
 
 void APIENTRY mtl_glGetShaderInfoLog(GLuint shader, GLsizei bufSize, GLsizei* length,
@@ -329,7 +329,7 @@ void APIENTRY mtl_glAttachShader(GLuint program, GLuint shader) {
 void APIENTRY mtl_glLinkProgram(GLuint program) { Ctx()->LinkProgram(program); }
 
 void APIENTRY mtl_glGetProgramiv(GLuint program, GLenum pname, GLint* params) {
-  if (!Ctx()->GetProgramInt(program, pname, params)) Ctx()->SetError(GL_INVALID_ENUM);
+  if (!Ctx()->GetProgramInt(program, pname, params)) Ctx()->SetError(GL_INVALID_ENUM, "GetProgramInt", pname);
 }
 
 void APIENTRY mtl_glGetProgramInfoLog(GLuint program, GLsizei bufSize, GLsizei* length,
@@ -347,6 +347,13 @@ void APIENTRY mtl_glUniform1i(GLint location, GLint v0) { Ctx()->UniformInts(loc
 
 void APIENTRY mtl_glUniform1iv(GLint location, GLsizei count, const GLint* value) {
   Ctx()->UniformInts(location, count, value);
+}
+
+// (platform/render/fsr.cpp: FSR 1's ivec2 source rectangle; without it the upscaling's first frame called a null
+// pointer)
+void APIENTRY mtl_glUniform2i(GLint location, GLint v0, GLint v1) {
+  const GLint v[2] = {v0, v1};
+  Ctx()->UniformInts(location, 2, v);
 }
 
 void APIENTRY mtl_glUniform1f(GLint location, GLfloat v0) {
@@ -531,6 +538,7 @@ CANE_CHECK(glUseProgram, PFNGLUSEPROGRAMPROC);
 CANE_CHECK(glGetUniformLocation, PFNGLGETUNIFORMLOCATIONPROC);
 CANE_CHECK(glUniform1i, PFNGLUNIFORM1IPROC);
 CANE_CHECK(glUniform1iv, PFNGLUNIFORM1IVPROC);
+CANE_CHECK(glUniform2i, PFNGLUNIFORM2IPROC);
 CANE_CHECK(glUniform1f, PFNGLUNIFORM1FPROC);
 CANE_CHECK(glUniform2f, PFNGLUNIFORM2FPROC);
 CANE_CHECK(glUniform3f, PFNGLUNIFORM3FPROC);
@@ -659,6 +667,7 @@ const ProcEntry kProcTable[] = {
     CANE_PROC(glGetUniformLocation),
     CANE_PROC(glUniform1i),
     CANE_PROC(glUniform1iv),
+    CANE_PROC(glUniform2i),
     CANE_PROC(glUniform1f),
     CANE_PROC(glUniform2f),
     CANE_PROC(glUniform3f),

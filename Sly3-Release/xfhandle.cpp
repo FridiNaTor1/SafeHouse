@@ -36,7 +36,7 @@ bool FLive(const XFBASIC* p)
     return false;
 }
 
-// orig: 0x0022FC48 (0, the record's parent record, v): a world point into the parent record's frame
+// orig: 0x0022FC48 (0, the record's parent record, v): a world point into the parent record's frame (orig3: 0x28E910, the same C in the Sly 3 decomp)
 glm::vec4 PosToParent(const XF* pxf, const glm::vec3& pos)
 {
     const XF* ppar = pxf->pxfRef;
@@ -73,7 +73,7 @@ CTRL* PctrlFindXfh(XFBASIC* p, int k, int n, int m)
     return nullptr;
 }
 
-// orig: 0x001F89E0: the position controller (kind 1) of mode n, priority m at the value q (in the record's frame)
+// orig: 0x001F89E0: the position controller (kind 1) of mode n, priority m at the value q (in the record's frame) (orig3: 0x2425D0, the same C in the Sly 3 decomp)
 void SetXfhPos(XFBASIC* p, int n, int m, const glm::vec4& q)
 {
     if (CTRL* r = PctrlFindXfh(p, 1, n, m))
@@ -92,7 +92,7 @@ CRef RefXfhMovePos(BASIC* pb, int c, CRef* a)
 {
     auto* p = dynamic_cast<XFBASIC*>(pb);
     if (!p || !FLive(p) || c < 3) return RefVoid();
-    const int n = a[0].RefCoerceS32().m_n, m = a[1].RefCoerceS32().m_n;
+    const int n = Xfm2FromXfm3(a[0].RefCoerceS32().m_n), m = a[1].RefCoerceS32().m_n;  // (a Sly 3 script's mode)
     const glm::vec4 q = PosToParent(p->pxf, a[2].GetVector());
     if (FPrint())
         std::printf("xfh t %.3f: %d record kind %d pos mode %d prio %d -> %.1f %.1f %.1f\n", g_clock.t, p->palo->oid, p->pxf->kind, n, m,
@@ -110,7 +110,7 @@ CRef RefXfhMoveRot(BASIC* pb, int c, CRef* a)
 {
     auto* p = dynamic_cast<XFBASIC*>(pb);
     if (!p || !FLive(p) || c < 3) return RefVoid();
-    const int n = a[0].RefCoerceS32().m_n, m = a[1].RefCoerceS32().m_n;
+    const int n = Xfm2FromXfm3(a[0].RefCoerceS32().m_n), m = a[1].RefCoerceS32().m_n;  // (a Sly 3 script's mode)
     glm::mat3 mat = a[2].m_tagk == TAGK_Matrix ? glm::mat3(a[2].GetMatrix()) : glm::mat3(1.0f);
     if (const XF* ppar = p->pxf->pxfRef) mat = glm::transpose(glm::mat3(ppar->matWorld)) * mat;
     const glm::vec3 e = EulerFromMat(mat);
@@ -127,7 +127,7 @@ CRef RefXfhLook(BASIC* pb, int c, CRef* a)
 {
     auto* p = dynamic_cast<XFBASIC*>(pb);
     if (!p || !FLive(p) || c < 4) return RefVoid();
-    const int n = a[0].RefCoerceS32().m_n, m = a[1].RefCoerceS32().m_n;
+    const int n = Xfm2FromXfm3(a[0].RefCoerceS32().m_n), m = a[1].RefCoerceS32().m_n;  // (a Sly 3 script's mode)
     const float f = a[2].GAsFloat(), g = a[3].GAsFloat();
     if (FPrint()) std::printf("xfh t %.3f: %d record kind %d look mode %d prio %d (%g %g)\n", g_clock.t, p->palo->oid, p->pxf->kind, n, m, f, g);
     if (CTRL* r = PctrlFindXfh(p, 4, n, m))

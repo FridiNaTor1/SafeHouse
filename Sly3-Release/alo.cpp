@@ -1,3 +1,4 @@
+#include "fastpaths.h"
 #include <execinfo.h>
 #include "game/sly3.h"
 #include "simdmat.h"
@@ -10,6 +11,7 @@
 #include "trail.h"
 
 #include "bis.h"
+#include "editrec.h"
 #include "brx.h"
 #include "readtrace.h"
 #include "glob.h"
@@ -18,7 +20,13 @@
 #include "xfphys.h"
 #include "objmethod.h"
 #include "vtnative.h"
+#include "passhelpers.h"
 
+#include <atomic>
+#include <vector>
+#include <unordered_map>
+#include <cstring>
+#include <algorithm>
 #include <stdexcept>
 #include <cstdio>
 #include <cstdlib>
@@ -29,7 +37,7 @@ namespace
 std::vector<XF*> s_apxfBase;  // orig 0x4437A0/0x4437A8: the base stack of reference kind 0x2000
 }
 
-// orig 0x0022D670 / 0x0022D698: push / pop a base for references of kind 0x2000
+// orig 0x0022D670 / 0x0022D698: push / pop a base for references of kind 0x2000 (orig3: 0x28C210, the same code in Sly 3)
 void PushXfBase(XF* pxf) { s_apxfBase.push_back(pxf); }
 void PopXfBase()
 {
@@ -51,9 +59,9 @@ XF* PxfFromRef(int ref, ALO* paloParent, ALO* paloSelf)
     return nullptr;
 }
 
-// orig 0x0022D778 (ALO vt slot 51): own records or the parent's
+// orig 0x0022D778 (ALO vt slot 51): own records or the parent's (orig3: 0x28C310, the same code in Sly 3)
 XF* PxfFindAlo(ALO* palo, int ref) { return PxfFromRef(ref, palo->paloParent, palo); }
-// orig 0x0022D750 (LOX vt slot 49): the parent's records only
+// orig 0x0022D750 (LOX vt slot 49): the parent's records only (orig3: 0x28C2E8, the same code in Sly 3)
 XF* PxfFindLox(LO* plo, int ref) { return PxfFromRef(ref, plo->paloParent, nullptr); }
 
 // orig 0x00186670
@@ -148,14 +156,14 @@ void LoadAloXfsFromBrx(ALO* palo, CBinaryInputStream* pbis)
         {
             XFJOB j;
             j.kind = 1;
-            j.id = pbis->S8Read();
+            j.id = Xfm2FromXfm3(pbis->S8Read());  // (a Sly 3 record mode, xf.h: orig3 0x28C338 stores it as read)
             xf.ajob.push_back(j);
         }
         if (grf & 8)
         {
             XFJOB j;
             j.kind = 2;
-            j.id = pbis->S8Read();
+            j.id = Xfm2FromXfm3(pbis->S8Read());  // (a Sly 3 record mode, xf.h: orig3 0x28C338 stores it as read)
             j.g = pbis->F32Read();
             pbis->ReadCb12(j.agBegin);
             pbis->ReadCb8(j.agTimingBegin);
@@ -170,7 +178,7 @@ void LoadAloXfsFromBrx(ALO* palo, CBinaryInputStream* pbis)
         {
             XFJOB j;
             j.kind = 4;
-            j.id = pbis->S8Read();
+            j.id = Xfm2FromXfm3(pbis->S8Read());  // (a Sly 3 record mode, xf.h: orig3 0x28C338 stores it as read)
             j.gLo = pbis->F32Read();
             j.gHi = pbis->F32Read();
             xf.ajob.push_back(j);
@@ -197,6 +205,7 @@ void LoadAloXfsFromBrx(ALO* palo, CBinaryInputStream* pbis)
             break;
         }
         default:
+            if (g_peditrec) g_peditrec->afield.push_back({palo, EDITFK_XfMatrix, i, -1, -1, pbis->m_ib});   // (PC: the map editor)
             xf.mat = pbis->ReadMatrix4();
             break;
         }
@@ -221,7 +230,10 @@ void LoadAloFromBrx(LO* plo, CBinaryInputStream* pbis)
     LoadAloXfsFromBrx(palo, pbis);
     palo->uMeta = pbis->U32Read();
     palo->pglobset = std::make_shared<GLOBSET>();
+    const std::size_t ibGlobset = pbis->m_ib;   // (PC: the map editor)
     LoadGlobsetFromBrx(palo->pglobset.get(), palo, pbis);  // the renderer's (glob.cpp), orig LoadGlob(alo+0x80)
+    if (g_peditrec) g_peditrec->afield.push_back({palo, EDITFK_Globset, 0, -1, -1, ibGlobset, pbis->m_ib});
+    const std::size_t ibSoes = pbis->m_ib;
     // (vt slot 63: extra entries the class adds after the loaded ones; no reads)
     const int c = pbis->S16Read();
     palo->asoe.resize(c);
@@ -253,6 +265,7 @@ void LoadAloFromBrx(LO* plo, CBinaryInputStream* pbis)
         palo->matInertia = pbis->ReadMatrix();
         LoadAloPhysState(palo);  // (the physics port) 0x1F35F8, vt slot 64
     }
+    if (g_peditrec) g_peditrec->afield.push_back({palo, EDITFK_Soes, 0, -1, -1, ibSoes, pbis->m_ib});
     LoadOptionsFromBrx(palo->aopt, palo, pbis);
     // a glob set with globs (+0xB8) makes the object drawable (+0x40 bit 8; vt slot 21 changes it at run time)
     if (palo->pglobset && !palo->pglobset->aglob.empty()) palo->grfUpd |= 8;
@@ -268,7 +281,9 @@ void LoadAloFromBrx(LO* plo, CBinaryInputStream* pbis)
 // index search. A reference inside the object is done first; records of other objects are taken as they are.)
 namespace
 {
-uint64_t s_genXfWorld = 0;
+// (atomic: UpdateAloRootsWorlds takes stamps on several threads at once)
+std::atomic<uint64_t> s_genXfWorld{0};
+uint64_t NextGenXfWorld() { return s_genXfWorld.fetch_add(1, std::memory_order_relaxed) + 1; }   // (64 bits: never wraps)
 void UpdateXfWorld(ALO* palo, XF* pxf, uint64_t gen)
 {
     if (pxf->genWorld == 2 * gen + 1) return;
@@ -284,7 +299,7 @@ void UpdateXfWorld(ALO* palo, XF* pxf, uint64_t gen)
 void UpdateXfWorlds(ALO* palo)
 {
     if (palo->axf.empty()) return;
-    const uint64_t gen = ++s_genXfWorld;   // (64 bits: never wraps)
+    const uint64_t gen = NextGenXfWorld();
     for (auto& pxf : palo->axf) UpdateXfWorld(palo, pxf.get(), gen);
 }
 
@@ -294,6 +309,140 @@ void UpdateAloHierarchyWorlds(ALO* palo)
     UpdateXfWorlds(palo);
     for (LO* pc : palo->aploChild)
         if (FCidDerivedFrom(pc->Cid(), S3CID(0x30))) UpdateAloHierarchyWorlds(static_cast<ALO*>(pc));
+}
+
+// The step's walk over the roots' hierarchies (game.cpp) on the pass helpers, with the serial walk's results. In the
+// serial walk (UpdateAloHierarchyWorlds of each root in turn) a record referring into another root's hierarchy reads
+// that root's world of this step when the root comes earlier, of the last step when it comes later. So:
+//  1. each hierarchy is looked over (on the helpers, nothing written): the roots its records refer into and the
+//     roots of children walked here that are another root's (a child list and parent links that disagree);
+//  2. a hierarchy that refers outside itself is walked after the others, in the roots' order, on this thread; so is
+//     a self-contained hierarchy that such a walk earlier in the order reads (it must still hold the last step's);
+//  3. the other self-contained hierarchies first, on the helpers: they read and write only their own records.
+// A record referring to one of no hierarchy walked here, or to one without an owner, makes its hierarchy go in
+// order too (nothing writes those meanwhile; this keeps the rule simple). SLY2N_HIERSERIAL=1: the serial walk;
+// SLY2N_HIERCHECK=1: each step also walks serially from the same start and compares every record (debug).
+namespace
+{
+const ALO* PaloTopOf(const ALO* p)
+{
+    while (p->paloParent) p = p->paloParent;
+    return p;
+}
+struct HIERDEP
+{
+    bool fOut = false;              // refers outside its hierarchy (or walks another root's child)
+    std::vector<uint32_t> airoot;   // the walked roots it refers into
+};
+void NoteHierarchyRef(const ALO* paloTop, const ALO* paloRoot, const std::unordered_map<const ALO*, uint32_t>& mpiroot, HIERDEP& dep)
+{
+    if (paloTop == paloRoot) return;
+    dep.fOut = true;
+    if (!paloTop) return;
+    const auto it = mpiroot.find(paloTop);
+    if (it != mpiroot.end() && std::find(dep.airoot.begin(), dep.airoot.end(), it->second) == dep.airoot.end()) dep.airoot.push_back(it->second);
+}
+// (the walk of UpdateAloHierarchyWorlds: the same objects, the same records)
+void ClassifyHierarchy(const ALO* palo, const ALO* paloRoot, const std::unordered_map<const ALO*, uint32_t>& mpiroot, HIERDEP& dep)
+{
+    for (const auto& pxf : palo->axf)
+    {
+        const XF* pxfRef = pxf->pxfRef;
+        if (!pxfRef || pxfRef->palo == palo) continue;
+        NoteHierarchyRef(pxfRef->palo ? PaloTopOf(pxfRef->palo) : nullptr, paloRoot, mpiroot, dep);
+    }
+    for (const LO* pc : palo->aploChild)
+    {
+        if (!FCidDerivedFrom(pc->Cid(), S3CID(0x30))) continue;
+        const ALO* pac = static_cast<const ALO*>(pc);
+        if (pac->paloParent != palo) NoteHierarchyRef(PaloTopOf(pac), paloRoot, mpiroot, dep);
+        ClassifyHierarchy(pac, paloRoot, mpiroot, dep);
+    }
+}
+void CollectHierarchyXfs(ALO* palo, std::vector<XF*>& apxf)
+{
+    for (auto& pxf : palo->axf) apxf.push_back(pxf.get());
+    for (LO* pc : palo->aploChild)
+        if (FCidDerivedFrom(pc->Cid(), S3CID(0x30))) CollectHierarchyXfs(static_cast<ALO*>(pc), apxf);
+}
+void UpdateAloRootsWorldsParallel(const std::vector<ALO*>& apaloRoot)
+{
+    static std::unordered_map<const ALO*, uint32_t> s_mpiroot;
+    static std::vector<ALO*> s_apaloKey;
+    if (s_apaloKey != apaloRoot)
+    {
+        s_apaloKey = apaloRoot;
+        s_mpiroot.clear();
+        for (size_t i = 0; i < apaloRoot.size(); ++i) s_mpiroot.emplace(apaloRoot[i], uint32_t(i));
+    }
+    const size_t c = apaloRoot.size();
+    static std::vector<HIERDEP> s_adep;
+    static std::vector<uint8_t> s_afSerial;
+    if (s_adep.size() < c) s_adep.resize(c);
+    PassHelpers().ForBlocks(c, 16, [&](size_t iFirst, size_t iLim) {
+        for (size_t i = iFirst; i < iLim; ++i)
+        {
+            HIERDEP& dep = s_adep[i];
+            dep.fOut = false;
+            dep.airoot.clear();
+            ClassifyHierarchy(apaloRoot[i], apaloRoot[i], s_mpiroot, dep);
+        }
+    });
+    s_afSerial.assign(c, 0);
+    for (size_t i = 0; i < c; ++i)
+    {
+        if (!s_adep[i].fOut) continue;
+        s_afSerial[i] = 1;
+        for (uint32_t j : s_adep[i].airoot)
+            if (j > i) s_afSerial[j] = 1;
+    }
+    PassHelpers().ForBlocks(c, 8, [&](size_t iFirst, size_t iLim) {
+        for (size_t i = iFirst; i < iLim; ++i)
+            if (!s_afSerial[i]) UpdateAloHierarchyWorlds(apaloRoot[i]);
+    });
+    for (size_t i = 0; i < c; ++i)
+        if (s_afSerial[i]) UpdateAloHierarchyWorlds(apaloRoot[i]);
+    if (static const bool s_fStats = std::getenv("SLY2N_HIERSTATS") != nullptr; s_fStats)
+    {
+        static int s_cstep = 0;
+        if (++s_cstep % 300 == 0)
+        {
+            size_t cOut = 0, cSerial = 0;
+            for (size_t i = 0; i < c; ++i) cOut += s_adep[i].fOut, cSerial += s_afSerial[i];
+            std::printf("hierstats: %zu roots, %zu refer outside, %zu walked in order\n", c, cOut, cSerial);
+        }
+    }
+}
+}  // namespace
+
+void UpdateAloRootsWorlds(const std::vector<ALO*>& apaloRoot)
+{
+    static const bool s_fSerial = std::getenv("SLY2N_HIERSERIAL") && std::atoi(std::getenv("SLY2N_HIERSERIAL")) != 0;
+    static const bool s_fCheck = std::getenv("SLY2N_HIERCHECK") && std::atoi(std::getenv("SLY2N_HIERCHECK")) != 0;
+    if (s_fSerial)
+    {
+        for (ALO* palo : apaloRoot) UpdateAloHierarchyWorlds(palo);
+        return;
+    }
+    if (!s_fCheck)
+    {
+        UpdateAloRootsWorldsParallel(apaloRoot);
+        return;
+    }
+    // (debug) the serial walk's results from the same start, compared bit for bit with the parallel walk's
+    std::vector<XF*> apxf;
+    for (ALO* palo : apaloRoot) CollectHierarchyXfs(palo, apxf);
+    std::vector<glm::mat4> amatStart(apxf.size()), amatSerial(apxf.size());
+    for (size_t i = 0; i < apxf.size(); ++i) amatStart[i] = apxf[i]->matWorld;
+    for (ALO* palo : apaloRoot) UpdateAloHierarchyWorlds(palo);
+    for (size_t i = 0; i < apxf.size(); ++i) amatSerial[i] = apxf[i]->matWorld, apxf[i]->matWorld = amatStart[i];
+    UpdateAloRootsWorldsParallel(apaloRoot);
+    static int s_cstep = 0, s_cbad = 0;
+    ++s_cstep;
+    for (size_t i = 0; i < apxf.size(); ++i)
+        if (std::memcmp(&amatSerial[i], &apxf[i]->matWorld, sizeof(glm::mat4)) != 0 && ++s_cbad <= 20)
+            std::printf("hiercheck: step %d: a record of object %d differs from the serial walk\n", s_cstep, apxf[i]->palo ? apxf[i]->palo->oid : -1);
+    if (s_cstep % 600 == 0) std::printf("hiercheck: %d steps, %d records differed, %zu records\n", s_cstep, s_cbad, apxf.size());
 }
 
 // orig 0x001F4010 (ALO vt slot 37 SetMatrix): the first record's local = m * local (the original's 0x11C168(m,
@@ -385,7 +534,8 @@ void CloneAloData(const ALO* paloSrc, ALO* paloDst)
     paloDst->fHasState = paloSrc->fHasState;
     paloDst->gMass = paloSrc->gMass;
     paloDst->matInertia = paloSrc->matInertia;
-    CloneAloPhys(paloSrc, paloDst);  // (the physics port)
+    CloneAloPhys(paloSrc, paloDst);  // (the physics port: the copy's controller lists cleared)
+    CloneAloCtrls(paloSrc, paloDst); // orig 0x1F6068's controller copies (NewCtrlInit 0x12E3F0) and IK limbs (xf.cpp)
     CloneLaser(paloSrc, paloDst);    // orig 0x1DE518: the laser's independent endpoint storage
     CloneTrail(paloSrc, paloDst);    // authored vertices for the copy's independent history
 }
@@ -408,7 +558,7 @@ bool FAloGlobShown(const ALO* palo, int32_t n0, bool fDefault)
         if (n == n0) return fShown;
     return fDefault;
 }
-// orig: 0x001F6AC8 / 0x001F6B48
+// orig: 0x001F6AC8 / 0x001F6B48 (orig3: 0x240000, the same C in the Sly 3 decomp)
 void SetAloSoesByTag(ALO* palo, int32_t k, bool fOn)
 {
     if (!palo) return;
@@ -428,6 +578,15 @@ struct INITALOSETTERS
 {
     INITALOSETTERS()
     {
+        // orig3: 0x00100C00 (optid 44, EOPID 29: the method (object) -> whether the object is in this one's parent
+        // chain, 0x1C8F20 = FLoInParentChain). E.g. the Ep3 hack ship's script (block 68931) asks its last towed ball
+        // whether it still hangs on the ship before it tows another: unregistered, the call's void counted as true
+        // and the room's second ball was never picked up
+        RegisterObjectMethod3(0x100C00, [](LO* plo, const std::vector<CRef>& a) {
+            CRef r;
+            r.SetBool(FLoInParentChain(plo, PloArg(a, 0)));
+            return r;
+        });
         // orig: 0x00100958 -> 0x001A58D0 (option 33: parent, preservation flags; original slot 10)
         RegisterObjectMethod(0x100958, [](LO* plo, const std::vector<CRef>& a) {
             LO* ploNew = PloArg(a, 0);
@@ -471,7 +630,7 @@ struct INITALOSETTERS
 } s_initalosetters;
 }  // namespace
 
-// orig 0x001A6AF8
+// orig 0x001A6AF8 (orig3: 0x1C8F20, the same code in Sly 3)
 bool FLoInParentChain(const LO* plo, const LO* ploAncestor)
 {
     while (plo && plo != ploAncestor) plo = plo->paloParent;

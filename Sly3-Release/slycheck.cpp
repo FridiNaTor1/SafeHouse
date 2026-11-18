@@ -187,7 +187,7 @@ void ImportXf(XF* pxf, uint32_t a)
     const RAM& r = s_h.ram;
     pxf->mat = r.M4(a);
     pxf->matWorld = r.M4(a + 0x40);
-    pxf->mode = r.Rd<int16_t>(a + 0x98);
+    pxf->mode = static_cast<int16_t>(Xfm2FromXfm3(r.Rd<int16_t>(a + 0x98)));  // (Sly 3's modes, xf.h)
     pxf->state = r.Rd<int16_t>(a + 0x9A);
     pxf->vel = r.V4(a + 0xB0);
     for (int i = 0; i < 4; i++) pxf->aseg[i] = r.V4(a + 0xC0 + 16 * i);
@@ -321,7 +321,7 @@ bool FImportSlyStart(SW* psw, const std::string& pathRam, const std::string& pat
         if (std::fabs(ps->m - r.G(a + 0xD0)) > 1e-6f) std::printf("sly-start: mass native %.6f ref %.6f\n", ps->m, r.G(a + 0xD0));
     }
     // the STEP fields
-    SetStepPhysHeading(palo, r.G(A_SLY + 0x1A8));
+    SetStepPhysHeadingUnlocked(palo, r.G(A_SLY + 0x1A8));
     p->posFloor = r.V4(A_SLY + 0x230);  // (the floor point: a script's placement before the take-over moved it)
     p->uTurn = r.G(A_SLY + 0x180);
     p->vecVel = glm::vec3(r.V4(A_SLY + 0x190));
@@ -333,9 +333,9 @@ bool FImportSlyStart(SW* psw, const std::string& pathRam, const std::string& pat
     // the state, entered natively (its animation)
     // the jump sub-object (a script's placement before the take-over may have left it falling: 0x195A00 kind 0xB)
     if (r.S32(A_SLY + 0x2DC) == -1 && p->jump.state != -1) SetJumpAnimState(&p->jump, -1, nullptr);
-    const int state = r.S32(A_SLY + 0x18C8);
-    p->state = -1;
-    SetSlyState(p, state, r.S32(A_SLY + 0x18D0));
+    const int state = r.S32(A_SLY + 0x18C8);   // (Sly 2's RAM: its numbers)
+    p->jts = -1;
+    SetSlyState(p, jts::FromSly2(state), jts::SubFromSly2(r.S32(A_SLY + 0x18D0)));
     // the jump (its kind, its animation state and fields as the reference has them in the air)
     if (state == 2 && r.S32(A_SLY + 0x2DC) != -1)
     {
@@ -551,7 +551,7 @@ void CompareSlyFrame(SW* psw, int frame)
     const glm::vec3 pos = PosAloCenter(p->palo);
     const float d = glm::length(pos - r.pos);
     s_h.posLast = pos;
-    const bool fState = p->state == r.state && p->jump.state == r.jump && p->mode == r.mode;
+    const bool fState = p->jts == jts::FromSly2(r.state) && p->jump.state == r.jump && p->mode == r.mode;
     ++s_h.c;
     if (d < 0.5f && fState) ++s_h.cOk;
     if (!fState) ++s_h.cStateDiff;
@@ -567,10 +567,10 @@ void CompareSlyFrame(SW* psw, int frame)
         std::printf("frame %4d vb %u: mode native %d ref %d (window %d, mode t %.3f)\n", frame, vb, p->mode, r.mode, p->f18E4,
                     p->pasegaMode ? p->pasegaMode->t : -1.0f);
     s_f18E4Last = p->f18E4;
-    if (s_fAll || frame < 5 || frame % 30 == 0 || p->state != s_stateLast || r.state != s_refLast || (d >= 0.5f && s_h.c - s_h.cOk < 20))
+    if (s_fAll || frame < 5 || frame % 30 == 0 || p->jts != s_stateLast || r.state != s_refLast || (d >= 0.5f && s_h.c - s_h.cOk < 20))
         std::printf("frame %4d vb %u t %.3f/%.3f: native state %2d/%2d jump %2d pos %9.2f %9.2f %8.2f h %7.4f | ref state %2d/%2d "
                     "jump %2d pos %9.2f %9.2f %8.2f h %7.4f | d %.3f\n",
-                    frame, vb, g_clock.t, r.t, p->state, p->substate, p->jump.state, pos.x, pos.y, pos.z, p->radHeading, r.state,
+                    frame, vb, g_clock.t, r.t, p->jts, p->jtbs, p->jump.state, pos.x, pos.y, pos.z, p->radHeading, r.state,
                     r.substate, r.jump, r.pos.x, r.pos.y, r.pos.z, r.radHeading, d);
     if (std::getenv("SLY2N_HARNESS_NATIVECM") && !r.abCm.empty() && (s_fAll || frame % 10 == 0))
     {
@@ -620,7 +620,7 @@ void CompareSlyFrame(SW* psw, int frame)
                                 x->axpd[1].pos.z);
         }
     }
-    s_stateLast = p->state;
+    s_stateLast = p->jts;
     s_refLast = r.state;
 }
 

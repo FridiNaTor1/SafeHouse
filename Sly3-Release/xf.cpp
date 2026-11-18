@@ -3,6 +3,7 @@
 // m_22DE88_p3.cpp, m_12B3B0_p3.cpp (oracle-verified) and the decomp's func_00230018/00230100/002303A0/00230598/
 // 00230630/0022C840 (matching C). Matrices are glm with columns = the original's rows (lo.h).
 
+#include "fastpaths.h"
 #include "xf.h"
 
 #include "anim.h"
@@ -12,6 +13,10 @@
 #include "clock.h"
 
 #include <algorithm>
+#include <cstdlib>
+#include <cstdio>
+#include <cstring>
+#include <unordered_map>
 #include <cfloat>
 #include <cmath>
 
@@ -41,7 +46,7 @@ bool FXfmMoving(int n)
 }
 // orig 0x00230348: the modes at rest
 bool FXfmStatic(int n) { return n == 0 || n == 3 || n == 10 || n == 12 || n == 19; }
-// orig 0x00230380
+// orig 0x00230380 (orig3: 0x28F048, the same code in Sly 3)
 bool FXfmVelocity(int n) { return n == 1 || n == 2 || n == 3; }
 
 bool FKindTranslation(int k) { return k == 1 || k == 4 || k == 5 || k == 9 || k == 10; }
@@ -65,7 +70,7 @@ void Bump(XF* pxf) { pxf->nStamp = ++g_cXfStamp; }
 // orig 0x00256D18 (SetPos: xyz) + the original's store of 1.0 into the row's w
 void SetTranslation(XF* pxf, const glm::vec4& pos) { pxf->mat[3] = glm::vec4(glm::vec3(pos), 1.0f); }
 
-// orig 0x0022CAD0: b rotated by the angles a.y (tilt) and a.z (pan)
+// orig 0x0022CAD0: b rotated by the angles a.y (tilt) and a.z (pan) (orig3: 0x28B440, the same code in Sly 3)
 glm::vec4 VecRotateTiltPan(const glm::vec4& a, const glm::vec4& b)
 {
     float s0, c0, s1, c1;
@@ -83,7 +88,7 @@ glm::mat4 DmatSkew(const glm::mat4& pm, const glm::vec4& v)
     return o;
 }
 
-// orig 0x0022CC00: v put by the kind in a zero matrix
+// orig 0x0022CC00: v put by the kind in a zero matrix (orig3: 0x28B570, the same C in the Sly 3 decomp)
 glm::mat4 DmatOfValue(const XF* pxf, const glm::vec4& v)
 {
     glm::mat4 m(0.0f);
@@ -429,7 +434,7 @@ void CTRL::Start()
     InvalidateXfParams(palo, pxf);
 }
 
-// orig: 0x0012CEE0 (the head, or forwarded to by a kind-5 head)
+// orig: 0x0012CEE0 (the head, or forwarded to by a kind-5 head) (orig3: 0x12F2D0, the same code in Sly 3)
 bool CTRL::FFirst() const
 {
     if (!pxf) return false;
@@ -439,7 +444,7 @@ bool CTRL::FFirst() const
     return static_cast<const CTRLSOURCE*>(q)->psrcCur == this;
 }
 
-// orig: 0x0012CF30
+// orig: 0x0012CF30 (orig3: 0x12F320, the same C in the Sly 3 decomp)
 void CTRL::Query(glm::vec4* ppos, glm::vec4* pvel, float g)
 {
     (void)g;
@@ -447,7 +452,7 @@ void CTRL::Query(glm::vec4* ppos, glm::vec4* pvel, float g)
     if (pvel) *pvel = glm::vec4(0.0f, 0.0f, 0.0f, pvel->w);
 }
 
-// orig: 0x0012D0D8
+// orig: 0x0012D0D8 (orig3: 0x12F4C8, the same code in Sly 3)
 void CTRLPOS::Query(glm::vec4* ppos, glm::vec4* pvel, float g)
 {
     (void)g;
@@ -464,7 +469,7 @@ void CTRLPOS::Fetch()
     ResetXfParams(pxf);
 }
 
-// orig: 0x0012D058
+// orig: 0x0012D058 (orig3: 0x12F448, the same code in Sly 3)
 bool FXfHasCtrl(const XF* pxf, const CTRL* pctrl)
 {
     for (const CTRL* q = pxf->pctrlFirst; q; q = q->pnext)
@@ -472,7 +477,7 @@ bool FXfHasCtrl(const XF* pxf, const CTRL* pctrl)
     return false;
 }
 
-// orig: 0x00230018
+// orig: 0x00230018 (orig3: 0x28ECE0, the same code in Sly 3)
 void AddXfCtrl(ALO* palo, XF* pxf, CTRL* pctrl)
 {
     CTRL* phead = pxf->pctrlFirst;
@@ -490,7 +495,57 @@ void AddXfCtrl(ALO* palo, XF* pxf, CTRL* pctrl)
         phead->Refresh();
 }
 
-// orig: 0x00230100
+void CTRLLOOKMOTION::RemapCopy(const ALO* paloSrc, ALO* paloDst)
+{
+    for (size_t i = 0; i < paloSrc->axf.size() && i < paloDst->axf.size(); ++i)
+        if (paloSrc->axf[i].get() == pxfMover) { pxfMover = paloDst->axf[i].get(); return; }
+}
+
+// (orig 0x1F6068 / orig3 0x23F400: the records' controller lists copied, from the last to the first, each added by
+// priority (0x230018: the head started); the IK limbs (records of role 13 / Sly 3 14) copied with their records
+// remapped. Natively a copy's records had no controllers: the cloned prologue elephants' arms and legs (their
+// joints) never solved, and the copies' look-at / spin / chain records stood at the load's values.)
+void CloneAloCtrls(const ALO* paloSrc, ALO* paloDst)
+{
+    if (static const bool s_fOff = std::getenv("SLY3_NOCLONECTRL") != nullptr; s_fOff) return;  // (debug: the old copies)
+    auto remap = [&](XF* pxf) -> XF* {
+        for (size_t i = 0; pxf && i < paloSrc->axf.size() && i < paloDst->axf.size(); ++i)
+            if (paloSrc->axf[i].get() == pxf) return paloDst->axf[i].get();
+        return pxf;
+    };
+    paloDst->apair = paloSrc->apair;
+    for (ALOPAIR& q : paloDst->apair)
+    {
+        for (XF*& pxf : q.apxf) pxf = remap(pxf);
+        q.ptrkgWeight = nullptr;  // (an ASEGA of the source's: the copy's own ASEGAs set theirs, asega.cpp)
+        q.ptWeight = nullptr;
+    }
+    for (size_t i = 0; i < paloSrc->axf.size() && i < paloDst->axf.size(); ++i)
+    {
+        XF* pxf = paloDst->axf[i].get();
+        // (the record's +0xA8 of a joint still names the source's limb: the copy's, as 0x1F6068's role 13)
+        if (pxf->mode == XFM_Joint || pxf->mode == XFM_Joint14)
+        {
+            pxf->pvA8 = nullptr;
+            for (size_t j = 0; j < paloSrc->apair.size(); ++j)
+                if (paloSrc->axf[i]->pvA8 == &paloSrc->apair[j]) pxf->pvA8 = &paloDst->apair[j];
+        }
+        std::vector<const CTRL*> actrl;
+        for (const CTRL* pc = paloSrc->axf[i]->pctrlFirst; pc; pc = pc->pnext) actrl.push_back(pc);
+        for (auto it = actrl.rbegin(); it != actrl.rend(); ++it)
+        {
+            CTRL* pc = (*it)->PctrlCopy();
+            if (!pc) continue;
+            pc->palo = paloDst;
+            pc->pxf = pxf;
+            pc->pnext = nullptr;
+            pc->RemapCopy(paloSrc, paloDst);
+            AddXfCtrl(paloDst, pxf, pc);  // (the controllers live as long as the world, as InitAloXfs')
+        }
+    }
+}
+
+// orig: 0x00230100 (orig3: 0x28EDC8, the same C in the Sly 3 decomp)
 void RemoveXfCtrl(ALO* palo, XF* pxf, CTRL* pctrl)
 {
     CTRL* phead = pxf->pctrlFirst;
@@ -514,7 +569,7 @@ void RemoveXfCtrl(ALO* palo, XF* pxf, CTRL* pctrl)
     }
 }
 
-// orig: 0x002301D0 (insertion of each controller, last first, by priority)
+// orig: 0x002301D0 (insertion of each controller, last first, by priority) (orig3: 0x28EE98, the same C in the Sly 3 decomp)
 void SortXfCtrls(ALO* palo, XF* pxf)
 {
     std::vector<CTRL*> a;
@@ -539,7 +594,7 @@ void SortXfCtrls(ALO* palo, XF* pxf)
         phead->Refresh();
 }
 
-// orig: 0x0022C818
+// orig: 0x0022C818 (orig3: 0x28B188, the same C in the Sly 3 decomp)
 void ResetXfParams(XF* pxf)
 {
     pxf->pg = nullptr;        // &+0x80
@@ -670,7 +725,7 @@ void RefreshXf(ALO* palo, XF* pxf)
     }
 }
 
-// orig: 0x0022C8C0
+// orig: 0x0022C8C0 (orig3: 0x28B230, the same C in the Sly 3 decomp)
 glm::mat4 MatXfWithValue(const XF* pxf, const glm::vec4& v)
 {
     glm::mat4 m = pxf->mat;
@@ -695,7 +750,7 @@ glm::mat4 MatXfWithValue(const XF* pxf, const glm::vec4& v)
     return m;
 }
 
-// orig: 0x0022CA18
+// orig: 0x0022CA18 (orig3: 0x28B388, the same C in the Sly 3 decomp)
 glm::vec4 VecXfValue(const XF* pxf, const glm::mat4& m, const glm::vec4& vDefault)
 {
     switch (pxf->kind)
@@ -794,6 +849,18 @@ void UpdateAloXfs(ALO* palo, float t, float dt)
     const bool fSnap = (GrfUpdOfLo(palo) & 0x10u) != 0;
     for (auto& up : palo->axf)
     {
+#if SLY2_FASTPATHS
+        // (the Switch: the record two ahead fetched, the parts of it the update reads: each record is a heap block of
+        // its own)
+        if (const size_t i = size_t(&up - palo->axf.data()); i + 2 < palo->axf.size())
+        {
+            const XF* p = palo->axf[i + 2].get();
+            __builtin_prefetch(&p->mat);
+            __builtin_prefetch(&p->kind);
+            __builtin_prefetch(&p->pctrlFirst);
+            __builtin_prefetch(&p->pvA8);
+        }
+#endif
         XF* r = up.get();
         UPD u{palo, r, fp};
         u.fSnap = fSnap;
@@ -852,6 +919,34 @@ void UpdateAloXfs(ALO* palo, float t, float dt)
     if (fp) SetGrfUpdOfLo(palo, GrfUpdOfLo(palo) & ~4u);
     if (fSnap) SetGrfUpdOfLo(palo, GrfUpdOfLo(palo) & ~0x10u);
     PostUpdateAloXfs(palo);  // 0x22FA20 (xfphys.cpp)
+    // (debug: SLY3_XFREC=oid:T0[:N]: the object's records at the first update at or after the time T0 (and N more
+    // every 0.5 s), in Sly 3's mode numbers as the reference's RAM shows them; the instances by their address)
+    if (static const char* s_sz = std::getenv("SLY3_XFREC"); s_sz)
+    {
+        static const int s_oid = std::atoi(s_sz);
+        static const char* s_pt = std::strchr(s_sz, ':');
+        static const float s_t0 = s_pt ? static_cast<float>(std::atof(s_pt + 1)) : 0.0f;
+        static const char* s_pn = s_pt ? std::strchr(s_pt + 1, ':') : nullptr;
+        static const int s_n = s_pn ? std::atoi(s_pn + 1) : 0;
+        static std::unordered_map<const ALO*, std::pair<int, float>> s_mpc;
+        auto& [c, tNext] = s_mpc.try_emplace(palo, 0, s_t0).first->second;
+        if (palo->oid == s_oid && c <= s_n && t >= tNext)
+        {
+            ++c;
+            tNext = t + 0.5f;
+            std::printf("xfrec %d %p t %.4f\n", s_oid, static_cast<const void*>(palo), t);
+            for (size_t i = 0; i < palo->axf.size(); ++i)
+            {
+                const XF* r = palo->axf[i].get();
+                const int m3 = r->mode < 6 ? r->mode : r->mode + 1;
+                std::printf("%2zu k%2d m%2d s%d pos (%.2f, %.2f, %.2f) vel (%.2f, %.2f, %.2f) g %.3f %.3f at %.3f wpos (%.1f, %.1f, %.1f)\n", i, r->kind, m3, r->state,
+                            r->mat[3].x, r->mat[3].y, r->mat[3].z, r->vel.x, r->vel.y, r->vel.z, r->g0, r->g1, r->G(),
+                            r->matWorld[3].x, r->matWorld[3].y, r->matWorld[3].z);
+                if (std::getenv("SLY3_XFRECCTRL"))
+                    for (const CTRL* pc = r->pctrlFirst; pc; pc = pc->pnext) std::printf("     ctrl kind %d prio %d mode %d\n", pc->kind, pc->prio, pc->mode);
+            }
+        }
+    }
 }
 
 // orig: 0x0022FAA0
@@ -886,6 +981,7 @@ struct CTRLSPIN : CTRLJOB
         pxf->aseg[1].x = g;
         pxf->aseg[2].x = 0.0f;
     }
+    CTRL* PctrlCopy() const override { return new CTRLSPIN(*this); }
 };
 }
 
@@ -896,7 +992,11 @@ void InitAloXfs(ALO* palo)
     {
         XF* e = up.get();
         e->pctrlFirst = nullptr;
-        e->mode = 0;
+        // (Sly 3: the original reads the records (0x22D7A0) before the object's options, so a record the options
+        // put into velocity mode (EOPID cnstr / gravity / velocity: SetAloCnstrLin 0x1F5720 ..) keeps it; this
+        // pass runs after the options natively. An SO that nothing teleports or pushes (m4_rccar's car on its
+        // path, not the player) otherwise stays static and never moves.)
+        e->mode = e->mode == XFM_Moving ? XFM_Moving : 0;
         e->state = 0;
         const int kind = e->kind;
         if (!(kind == 0 || kind == 13 || kind == 15 || kind == 8 || kind == 14))
@@ -951,7 +1051,7 @@ void InitAloXfs(ALO* palo)
             }
             if (!pctrl) continue;
             pctrl->kind = job.kind;
-            pctrl->mode = job.id;  // +0x14: the S8 read (kind 9: 20)
+            pctrl->mode = job.id;  // +0x14: the S8 read, in Sly 2's numbering (kind 9: 20 = Sly 3's 21)
             pctrl->palo = palo;
             pctrl->pxf = e;
             AddXfCtrl(palo, e, pctrl);  // (the controllers live as long as the world: TODO(anim) free at unload)
@@ -969,7 +1069,7 @@ void InitAloXfs(ALO* palo)
 
 // ---- the controllers other code makes (0x12DB50..0x12E460) ----
 
-// orig: 0x0012E010
+// orig: 0x0012E010 (orig3: 0x1304E8, the same code in Sly 3)
 void CTRLTARGET::Fetch()
 {
     pxf->tTarget = tArrive;
@@ -979,7 +1079,7 @@ void CTRLTARGET::Fetch()
     ResetXfParams(pxf);
 }
 
-// orig: 0x0012E0F0 (refresh the live segment only when this controller is at the head)
+// orig: 0x0012E0F0 (refresh the live segment only when this controller is at the head) (orig3: 0x1305C8, the same code in Sly 3)
 void CTRLTARGET::SetGoal(const glm::vec4& newPos, const glm::vec4& newVel)
 {
     pos = newPos;
@@ -998,7 +1098,7 @@ void CTRLSOURCE::Start()
     if (psrcCur) psrcCur->Start();
 }
 
-// orig: 0x0012D890
+// orig: 0x0012D890 (orig3: 0x12FCF0, the same C in the Sly 3 decomp)
 void CTRLSOURCE::End()
 {
     if (psrcCur)
@@ -1008,7 +1108,7 @@ void CTRLSOURCE::End()
     }
 }
 
-// orig: 0x0012D8D8
+// orig: 0x0012D8D8 (orig3: 0x12FD38, the same C in the Sly 3 decomp)
 void CTRLSOURCE::Refresh()
 {
     if (psrcCur == pnext) return;
@@ -1041,7 +1141,7 @@ void CTRLSOURCE::Query(glm::vec4* ppos, glm::vec4* pvel, float g)
     if (ppos) *ppos += ofs;
 }
 
-// orig: 0x0012DC18
+// orig: 0x0012DC18 (orig3: 0x130078, the same code in Sly 3)
 CTRLPOS* PctrlNewPos(ALO* palo, XF* pxf, int prio, int mode, int state, const glm::vec4& pos)
 {
     auto* p = new CTRLPOS();
@@ -1096,7 +1196,7 @@ void SetCtrlPos(CTRLPOS* pctrl, const glm::vec4& pos)
     HoldXfMode(pctrl->palo, pctrl->pxf);
 }
 
-// orig: 0x0012DA30
+// orig: 0x0012DA30 (orig3: 0x12FE90, the same code in Sly 3)
 void SetCtrlSourceOffset(CTRLSOURCE* pctrl, const glm::vec4& ofs)
 {
     const glm::vec4 d = ofs - pctrl->ofs;
@@ -1108,19 +1208,19 @@ void SetCtrlSourceOffset(CTRLSOURCE* pctrl, const glm::vec4& ofs)
     HoldXfMode(pctrl->palo, pctrl->pxf);
 }
 
-// orig: 0x0012CFE0
+// orig: 0x0012CFE0 (orig3: 0x12F3D0, the same C in the Sly 3 decomp)
 void EnsureCtrlAdded(CTRL* pctrl)
 {
     if (!FXfHasCtrl(pctrl->pxf, pctrl)) AddXfCtrl(pctrl->palo, pctrl->pxf, pctrl);
 }
 
-// orig: 0x0012D020
+// orig: 0x0012D020 (orig3: 0x12F410, the same code in Sly 3)
 void EnsureCtrlRemoved(CTRL* pctrl)
 {
     if (FXfHasCtrl(pctrl->pxf, pctrl)) RemoveXfCtrl(pctrl->palo, pctrl->pxf, pctrl);
 }
 
-// orig: 0x0012E460
+// orig: 0x0012E460 (orig3: 0x1309D8, the same code in Sly 3)
 void DeleteCtrl(CTRL** ppctrl)
 {
     if (!*ppctrl) return;

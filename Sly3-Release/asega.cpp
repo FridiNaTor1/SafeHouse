@@ -1,5 +1,6 @@
 #include <execinfo.h>
 #include "game/sly3.h"
+#include "game/suck3.h"
 #include "worldglobals.h"
 // ASEG evaluation and ASEGA (Sly 2 0x12B3B0-0x131E18 and 0x230CF0). Specification: Sly2-Reference/Sly2-Release/game/aseg.cpp,
 // asega.cpp, m_12B3B0_p3.cpp (oracle-verified) and the decomp's func_00130D30, 00131100, 00131A90, 00230CF0
@@ -174,7 +175,7 @@ void TRKPC::Setup(XF* pxf) const
     SetXyz(pxf->aseg[3], glm::vec3(0.0f));
 }
 
-// orig: 0x0012B590
+// orig: 0x0012B590 (orig3: 0x12D2B0, the same C in the Sly 3 decomp)
 void TRKPC::Eval(glm::vec4* ppos, glm::vec4* pvel, float, float) const
 {
     if (ppos) SetXyz(*ppos, pos);
@@ -283,7 +284,7 @@ void TRKPA::Eval(glm::vec4* ppos, glm::vec4* pvel, float g, float dtScale) const
     }
 }
 
-// orig: 0x0012CC98
+// orig: 0x0012CC98 (orig3: 0x12F010, the same code in Sly 3)
 void TRKGC::Eval(float* pg, float* pdg, float, float) const
 {
     if (pg) *pg = g;
@@ -332,7 +333,7 @@ void CTRLASEG::End()
         }
 }
 
-// orig: 0x00131CD8
+// orig: 0x00131CD8 (orig3: 0x138E38, the same code in Sly 3)
 void CTRLASEG::Fetch()
 {
     if (ptrkp)
@@ -347,7 +348,7 @@ void CTRLASEG::Fetch()
     ResetXfParams(pxf);
 }
 
-// orig: 0x00131D68 (the track at the ASEGA's time + g x its speed (the caller's $f12: a lead time), wrapped)
+// orig: 0x00131D68 (the track at the ASEGA's time + g x its speed (the caller's $f12: a lead time), wrapped) (orig3: 0x138EC8, the same C in the Sly 3 decomp)
 void CTRLASEG::Query(glm::vec4* ppos, glm::vec4* pvel, float g)
 {
     if (!ptrkp)
@@ -376,7 +377,7 @@ void SetAsegaSpeed(ASEGA* pasega, float svt)
         std::fprintf(stderr, "applyobj %d: aseg %d speed %.3f clock %.3f\n", pasega->palo->oid, pasega->paseg ? pasega->paseg->oid : -1, svt, g_clock.t);
 }
 
-// orig: 0x00131A20
+// orig: 0x00131A20 (orig3: 0x138B88, the same C in the Sly 3 decomp)
 void SetAsegaAsegSpeed(ASEGA* pasega, float svt)
 {
     pasega->svtAseg = svt;
@@ -396,7 +397,7 @@ void SetAsegaSeekTime(ASEGA* pasega, float g)
     }
 }
 
-// orig: 0x00130EB0
+// orig: 0x00130EB0 (orig3: 0x137EA0, the same C in the Sly 3 decomp)
 void UpdateAsegaIeaCur(ASEGA* pasega)
 {
     const std::vector<ASEGEV>& aev = PasegdOf(pasega->paseg)->aaev[1];
@@ -416,7 +417,7 @@ void UpdateAsegaIeaCur(ASEGA* pasega)
     }
 }
 
-// orig: 0x001317D8
+// orig: 0x001317D8 (orig3: 0x138938, the same C in the Sly 3 decomp)
 bool FWrapAsegaTime(ASEGA* pasega, float* pt, float* psvt)
 {
     const float tMax = PasegdOf(pasega->paseg)->tMax;
@@ -688,7 +689,7 @@ void ApplyAseg(ASEG* paseg, ALO* palo, float t, float svt, int grfapl, ASEGA** p
     pasega->t = t;
     pasega->grfapl = grfapl;
     pasega->svtAseg = paseg->svt;
-    const float x = GSuck();  // 0x154C90 (task.cpp)
+    const float x = GSuck3();  // orig3 0x136908: 0x171C98, Sly 3's dynamic difficulty (Sly 2: 0x154C90)
     float g = paseg->gSuck0 + x * (paseg->gSuck1 + x * paseg->gSuck2);
     if (g < paseg->gSuckMin) g = paseg->gSuckMin;
     else if (paseg->gSuckMax < g) g = paseg->gSuckMax;
@@ -781,18 +782,32 @@ void ApplyAseg(ASEG* paseg, ALO* palo, float t, float svt, int grfapl, ASEGA** p
     for (ASEGEV& ev : pasegd->aaev[0]) FireAsegaEvent(pasega, &ev);
     pasega->t = pasega->tEvent;
     SnapAsegaXfs(pasega, fSnapSeek);
-    if (fEventsFromStart)
+    // (orig3 0x136908: Sly 3 runs the start events only for a clip applied past its start in its direction (forward
+    // from t > 0, backward from t < tMax); one applied at its start takes the cursor (0x137EA0), so its events at t 0,
+    // the sounds among them, fire on the next update (Sly 2's 0x12F9B8 ran the start events for every grfapl & 2: they
+    // fire only the kinds that hold a state, and every sound at t 0 was skipped, e.g. the cane swings' sfx 11 (clips
+    // 316..325), heard in the reference at each swing's start)
+    if (fEventsFromStart && ((0.0f < pasega->svt && 0.0f < pasega->t) || (pasega->svt < 0.0f && pasega->t < pasegd->tMax)))
     {
         if (pasega->svt < 0.0f) pasega->iea = static_cast<int>(pasegd->aaev[1].size());
         FireAsegaStartEvents(pasega);
     }
     else
         UpdateAsegaIeaCur(pasega);
+    // (orig3 0x136908: a clip applied seeking (grfapl & 1) with an event 0x1CD arrives by that event's time (0x138BF8 on
+    // its first links in the seek mode: Sly 2's SetAsegaSeekTime); Sly 2 had no such call)
+    if (grfapl & 1)
+        for (const ASEGEV& ev : pasegd->aaev[1])
+            if (ev.kind == 11 && ev.an[0] == 0x1CD)
+            {
+                if (pasega->svt != 0.0f) SetAsegaSeekTime(pasega, g_clock.t + ev.t / pasega->svt);
+                break;
+            }
     Script(pasega, 2);
     ReleaseAsega(pasega);
 }
 
-// orig: 0x00130488
+// orig: 0x00130488 (orig3: 0x137428, the same code in Sly 3)
 ASEGA* PasegaApplyAseg(ASEG* paseg, ALO* palo, float t, float svt, int grfapl)
 {
     ASEGA* pasega = nullptr;
@@ -828,7 +843,7 @@ void EnsureAseg(ASEG* paseg, ALO* palo, int k, float t, float svt, int grfapl, A
     SetAsegaTime(*pp, k, t, svt);
 }
 
-// orig: 0x00130598
+// orig: 0x00130598 (orig3: 0x137568, the same code in Sly 3)
 ASEGA* PasegaEnsureAseg(ASEG* paseg, ALO* palo, int k, float t, float svt, int grfapl)
 {
     ASEGA* pasega = nullptr;
@@ -846,7 +861,7 @@ void SetAsegaPriority(ASEGA* pasega, int prio)
     }
 }
 
-// orig: 0x00131B10
+// orig: 0x00131B10 (orig3: 0x138C70, the same C in the Sly 3 decomp)
 void DemoteAsegaOnXf(ASEGA* pasega, ALO* palo, XF* pxf)
 {
     for (CTRL* p = pxf->pctrlFirst; p; p = p->pnext)
@@ -858,7 +873,7 @@ void DemoteAsegaOnXf(ASEGA* pasega, ALO* palo, XF* pxf)
         }
 }
 
-// orig: 0x00131B60
+// orig: 0x00131B60 (orig3: 0x138CC8, the same C in the Sly 3 decomp)
 void DemoteAsegaOnAlo(ASEGA* pasega, ALO* palo, const std::vector<std::pair<int, int>>& apair)
 {
     for (auto& up : palo->axf)
@@ -1109,5 +1124,5 @@ void ResetAsegas()
     g_apasega.clear();
 }
 
-void AddRefAsega(ASEGA* p) { ++p->cref; }  // orig 0x1308A8
+void AddRefAsega(ASEGA* p) { ++p->cref; }  // orig 0x1308A8 (orig3: 0x137890, the same code in Sly 3)
 void ReleaseAsega(ASEGA* p) { --p->cref; }  // orig 0x1308B8 (freed by CollectAsegas)

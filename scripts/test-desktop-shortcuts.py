@@ -121,8 +121,16 @@ def main():
               and entry(f1)['Name'] == 'Sly Cooper and the Thievius Raccoonus', 'sly1: name and window class')
         check(not (menu / 'safehouse-sly1.desktop').exists(), 'sly1: no menu entry without --menu')
 
-        r = run('--add-desktop-shortcut', 'sly3')
-        check(r.returncode != 0 and 'not available for Sly 3' in r.stderr and not (desk / 'safehouse-sly3.desktop').exists(), 'sly3 refused')
+        # (Sly 3 since 2026-11-17: its logo, its window class)
+        r = run('--add-desktop-shortcut', 'sly3'); print(r.stdout.strip(), r.stderr.strip())
+        f3 = desk / 'safehouse-sly3.desktop'
+        check(r.returncode == 0 and f3.is_file() and entry(f3)['StartupWMClass'] == 'Sly3-Release'
+              and entry(f3)['Name'] == 'Sly 3: Honor Among Thieves' and exec_argv(entry(f3)['Exec'])[1:] == ['--play', 'sly3'],
+              'sly3: name, window class and command')
+        icon3 = home / '.local/share/icons/hicolor/256x256/apps/safehouse-sly3.png'
+        logo3 = pathlib.Path(__file__).resolve().parent.parent / 'launcher/assets/shortcut/sly3-logo.png'
+        check(icon3.is_file() and icon3.read_bytes() == logo3.read_bytes(), 'sly3: the logo icon installed')
+        f3.unlink()
 
         # Folder choice: XDG_DESKTOP_DIR from the environment without user-dirs.dirs; ~/Desktop (created) without either,
         # or when user-dirs.dirs says $HOME (no desktop folder).

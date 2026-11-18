@@ -31,7 +31,13 @@ void ResetStepPhysAll();                // the world's unload
 void CloneStepPhys(ALO* palo, const ALO* paloSrc);
 
 void SetStepPhysScale(ALO* palo, float g);     // 0x204D48
-void SetStepPhysHeading(ALO* palo, float rad);      // 0x204660
+void SetStepPhysHeading(ALO* palo, float rad);      // 0x204660 (orig3 0x24E878: nothing while the combos' lock +0x1B4 is set)
+// (PC) the heading written past the combos' lock: the PC's own placements (the checkpoint refresh, the RAM harnesses), which
+// the original does not do through 0x24E878
+void SetStepPhysHeadingUnlocked(ALO* palo, float rad);
+// Sly 3's step rotation control (PO +0x1B8: EOPID 260 / SCPT 0x76's 4th word): the field, and a step's nMotion
+// (0 / 1 as is, 2 none = Sly 2's -1); SLY3_STEPMOTION260=0: the field only
+void SetStepMotionKind3(LO* plo, int n);
 void SetStepPhysHeadingToward(ALO* palo, const glm::vec3& dir);  // 0x2046B0
 void SetStepPhysSize(ALO* palo, float s);           // 0x204DA8
 

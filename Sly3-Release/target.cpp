@@ -230,7 +230,7 @@ void StopNearestLaunchTracking(ACTOR* pa)
         if (auto* pj = dynamic_cast<JOBB1*>(PjobFind(pg, 0xB1)); pj && pj->ploOwner == pa->palo) pj->fTrack = 0;
 }
 
-// orig: 0x00140678 (vt slot 95: the nearest (+0x10DC, its rank +0x10E4) and the best (+0x10E8, +0x10EC))
+// orig: 0x00140678 (vt slot 95: the nearest (+0x10DC, its rank +0x10E4) and the best (+0x10E8, +0x10EC)) (orig3: 0x152D50, the same C in the Sly 3 decomp)
 void SetActorTargets(ACTOR* pa, int nNear, LO* ploNear, int nBest, LO* ploBest)
 {
     if (ploNear != pa->plo10DC) StopNearestLaunchTracking(pa);  // 0x1431D0

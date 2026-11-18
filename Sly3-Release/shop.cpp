@@ -3,8 +3,16 @@
 // func_001DC9C0.c / func_001DCA30.c / func_001DCAB0.c / func_001DAE58.c / func_001DAEA8.c / func_00161798.c /
 // func_001617E0.cpp, m_1DAC58_p3.cpp's 0x1DB870 / 0x1DAF38, m_1D93D8.cpp's 0x1DA950 / 0x1DA7D0 (Sly2-Reference).
 
+#include "screen3.h"
+#include "challenge3.h"
+#include "menu.h"
+#include "game/task3.h"
+#include <functional>
+#include <unordered_map>
+#include "game/items3.h"
 #include "shop.h"
 #include "game/sly3.h"
+#include "actioninput.h"
 #include "region.h"
 #include "sound.h"
 #include "ai.h"
@@ -43,33 +51,64 @@ namespace
 int32_t NElf(uint32_t va) { return int32_t(g_disc.U32Elf(va)); }  // (an address comes back as the USA one: disc.h)
 int NRef(const CRef& r) { return r.m_tagk == TAGK_S32 ? r.m_n : r.m_tagk == TAGK_F32 ? int(r.m_g) : r.m_tagk == TAGK_Bool ? int(r.m_bool) : 0; }
 
-// the items (0x2BCD00: 0x2B of 0x20 bytes): +4 the kind (7 / 8 / 9: the character), +8 the cost, +0x10 the
-// episode it opens in, +0x14 its name, +0x18 its description
-int ItemKind(int i) { return NElf(S3VA(0x2BCD00) + 0x20 * uint32_t(i) + 4); }
-int ItemCost(int i) { return NElf(S3VA(0x2BCD00) + 0x20 * uint32_t(i) + 8); }
-int ItemEpisode(int i) { return NElf(S3VA(0x2BCD00) + 0x20 * uint32_t(i) + 0x10); }
-int ItemName(int i) { return NElf(S3VA(0x2BCD00) + 0x20 * uint32_t(i) + 0x14); }
-int ItemDesc(int i) { return NElf(S3VA(0x2BCD00) + 0x20 * uint32_t(i) + 0x18); }
+// the items: Sly 3's table 0x343098 (67 of 0x3C bytes, game/items3.h) through Sly 2's ids (Sly 2's 0x2BCD00 had 0x2B
+// of 0x20: +4 the kind 7 / 8 / 9, +8 the cost, +0x10 the episode, +0x14 the name, +0x18 the description)
+int ItemKind(int i) { return sly3::Kind2FromChr3(sly3::Item3(sly3::Item3FromItem2(i)).chr); }
+int ItemCost(int i) { return sly3::Item3(sly3::Item3FromItem2(i)).price; }
+int ItemEpisode(int i) { return sly3::Item3(sly3::Item3FromItem2(i)).episode; }
+int ItemName(int i) { return sly3::Item3(sly3::Item3FromItem2(i)).name; }
+int ItemDesc(int i) { return sly3::Item3(sly3::Item3FromItem2(i)).desc; }
 // the loot (0x2C3288: 0x40 of 0xC bytes): +0 its value, +4 its name
 int LootValue(int i) { return NElf(S3VA(0x2C3288) + 0xC * uint32_t(i)); }
 int LootName(int i) { return NElf(S3VA(0x2C3288) + 0xC * uint32_t(i) + 4); }
 
-constexpr int CROW = 6;                 // orig D_002C35B4
-constexpr float DY_ROW = 40.0f;         // orig D_002C35B0
+// (orig3 0x220080 / 0x2202A0: Sly 3's rows D_0034939C, their spacing D_00349398, their slots D_00349370)
+int CRowShop() { const int n = int(g_disc.U32Elf(0x34939C)); return n > 0 ? n : 6; }   // orig D_002C35B4
+float DyRowShop() { const uint32_t u = g_disc.U32Elf(0x349398); float g; std::memcpy(&g, &u, 4); return g; }   // D_002C35B0
 
-// orig 0x00161798 / 0x001617E0: the coins
+// orig 0x00161798 / 0x001617E0: the coins (orig3: 0x1852E0, the same C in the Sly 3 decomp)
 int CCoins() { return NRef(RefGetProgress({"loot", "ccoin"})); }
 void SetCoins(int n) { CRef r; r.SetS32(n); FSetProgress({"loot", "ccoin"}, r); }
 // orig 0x001DAE58 / 0x001DAEA8 / 0x001DAF38: an item open, owned, bought
-bool FItemOpen(int i) { return ItemEpisode(i) != -1 && NRef(RefGetProgress({"episodeBest"})) >= ItemEpisode(i); }
-bool FItemOwned(int i) { return NRef(RefGetProgress({"powerUps", "mppukfAcquired", std::to_string(i)})) != 0; }
+bool FItemOwned(int i) { return NRef(RefGetProgress({"powerUps", "mppukfAcquired", std::to_string(sly3::Item3FromItem2(i))})) != 0; }
+// orig3 0x21F350: open when its episode (+0x14) is before the progress's episode (taken here as "episodeBest"); in
+// that episode once its task (+0x18) is done (below); the
+// attack levels 2 / 3 (0x2A.. 0x31) need the level before, Shadow Power 2 (0x22) Shadow Power 1 (0x20)
+bool FItemOpen(int i)
+{
+    const int id3 = sly3::Item3FromItem2(i);
+    const sly3::ITEM3 it = sly3::Item3(id3);
+    if (it.episode == -1) return false;
+    switch (id3)
+    {
+    case 0x2A: case 0x2B: case 0x2D: case 0x2E: case 0x30: case 0x31:
+        if (!FItemOwned(sly3::Item2FromItem3(id3 - 1))) return false;
+        break;
+    case 0x22:
+        if (!FItemOwned(sly3::Item2FromItem3(0x20))) return false;
+        break;
+    default: break;
+    }
+    const int cur = NRef(RefGetProgress({"episodeBest"}));
+    if (it.episode != cur) return it.episode < cur;
+    // orig3 0x25EBC0 / 0x25EB00: in its own episode, once the task its (episode, +0x18) pair names (D_00349BD8: 3 / 14
+    // t1_intro, 3 / 15 t1_chalktalk2, 4 / 14 t2_intro, 4 / 15 t2_chalktalk_2, ... 8 / 14 t6_intro) has its progress
+    // "<name> state" at 2 or more
+    static const struct { int ep, page; const char* sz; } s_a[] = {
+        {3, 14, "t1_intro"}, {3, 15, "t1_chalktalk2"}, {4, 14, "t2_intro"}, {4, 15, "t2_chalktalk_2"},
+        {5, 14, "t3_intro"}, {5, 15, "t3_chalktalk_2"}, {6, 14, "t4_intro"}, {6, 15, "t4_chalktalk_3"},
+        {7, 14, "t5_intro"}, {7, 15, "t5_chalktalk_2"}, {8, 14, "t6_intro"}};
+    for (const auto& e : s_a)
+        if (e.ep == it.episode && e.page == it.page) return NRef(RefGetProgress({e.sz, "state"})) >= 2;
+    return false;
+}
 int CLoot(int i) { return NRef(RefGetProgress({"loot", "mplootkc", std::to_string(i)})); }
 
 // orig 0x003DA150
 struct SHOP
 {
     SW* psw = nullptr;
-    LO* plo = nullptr;          // +0x24 (0x378)
+    LO* plo = nullptr;          // +0x24 (Sly 3's 0x429; Sly 2's 0x378)
     int dir = -1;               // +0x28 the stick's direction (vt slot 14: 0x1DC4B0)
     float tDir = 0;             // +0x2C
     int msg = -1;               // +0x30 (0 a question, 1 a message)
@@ -86,7 +125,7 @@ struct SHOP
 };
 SHOP s_shop;
 
-// orig 0x001DA950: the message (0 a question until answered, -1 none, else for 5 seconds)
+// orig 0x001DA950: the message (0 a question until answered, -1 none, else for 5 seconds) (orig3: 0x21ED28, the same C in the Sly 3 decomp)
 void SetShopMsg(int n, int id)
 {
     s_shop.idMsg = id;
@@ -104,7 +143,7 @@ void SetShopMsg(int n, int id)
     }
 }
 
-int IRowEnd() { return s_shop.first + CROW; }   // orig 0x001DBBA0 (D_003DA570 0)
+int IRowEnd() { return s_shop.first + CRowShop(); }   // orig 0x001DBBA0 (D_003DA570 0) (orig3: 0x220080, the same C in the Sly 3 decomp)
 
 // orig 0x001DBBE0
 void SelectShopRow(int i)
@@ -119,7 +158,7 @@ void SelectShopRow(int i)
     }
     i = std::clamp(i, 0, p.c - 1);
     p.isel = i;
-    p.first = std::clamp(p.first, std::max(i - CROW + 1, 0), i);
+    p.first = std::clamp(p.first, std::max(i - CRowShop() + 1, 0), i);
     p.itemBuy = p.itemSell = p.aent[i].id;
 }
 
@@ -131,8 +170,12 @@ void BuildShopList()
     p.c = 0;
     if (p.page == 0)
     {
-        for (int i = 7; i < 0x2B && p.c < 0x40; ++i)
-            if (FItemOpen(i) && !FItemOwned(i)) p.aent[p.c++].id = i;
+        // (Sly 3: every priced item of its table, in its order, by the Sly 2-side id)
+        for (int i3 = 0; i3 < sly3::C_ITEM && p.c < 0x40; ++i3)
+        {
+            const int i = sly3::Item2FromItem3(i3);
+            if (sly3::Item3(i3).price > 0 && FItemOpen(i) && !FItemOwned(i)) p.aent[p.c++].id = i;
+        }
     }
     else if (p.page == 1)
     {
@@ -148,46 +191,47 @@ void UpdateShopLook()
     SHOP& p = s_shop;
     if (!p.plo || NScreenObjState(p.plo) != 2) return;
     const int end = IRowEnd();
-    SelectScreenObjPartHandle(p.plo, p.first > 0 ? (p.page == 0 ? 0x4DA : 0x4A1) : -1, &p.idUp);
+    // (orig3 0x2202A0: Sly 3's parts; Sly 2's 0x4DA / 0x4A1, 0x455, 0x456..0x458, 0x437, 0x4DD / 0x4A4, 0x43B / 0x439)
+    SelectScreenObjPartHandle(p.plo, p.first > 0 ? (p.page == 0 ? 0x567 : 0x52E) : -1, &p.idUp);
     for (int i = p.first; i < end && i < 0x40; ++i)
     {
         SHOP::ENT& e = p.aent[i];
-        const int k = NElf(S3VA(0x2C3588) + 4 * uint32_t(i - p.first));
+        const int k = NElf(0x349370 + 4 * uint32_t(i - p.first));
         if (p.page == 0)
         {
             if (e.id != -1)
             {
                 switch (ItemKind(e.id))
                 {
-                case 7: e.idIcon = 0x456; break;
-                case 9: e.idIcon = 0x458; break;
-                case 8: e.idIcon = 0x457; break;
+                case 7: e.idIcon = 0x4E3; break;   // (Sly 3's character 0x18 Sly)
+                case 8: e.idIcon = 0x4E4; break;   // (0x19 Bentley)
+                case 9: e.idIcon = 0x4E5; break;   // (0x1A Murray)
                 default: break;
                 }
-                SelectScreenObjPartAt(p.plo, 0x455, k);
+                SelectScreenObjPartAt(p.plo, 0x4E2, k);
                 SelectScreenObjPartAt(p.plo, e.idIcon, k);
             }
             else
             {
-                ResetScreenObjPartAt(p.plo, 0x455, k);
+                ResetScreenObjPartAt(p.plo, 0x4E2, k);
                 ResetScreenObjPartAt(p.plo, e.idIcon, k);
                 e.idIcon = -1;
             }
         }
         else if (p.page == 1)
         {
-            if (e.id != -1) SelectScreenObjPartAt(p.plo, 0x455, k);
-            else ResetScreenObjPartAt(p.plo, 0x455, k);
+            if (e.id != -1) SelectScreenObjPartAt(p.plo, 0x4E2, k);
+            else ResetScreenObjPartAt(p.plo, 0x4E2, k);
         }
     }
     if (p.isel >= 0)
     {
-        SelectScreenObjPart(p.plo, 0x437);
-        SetScreenObjPartMatrix(p.plo, 0x437, {1, 0, 0, 1, 0, DY_ROW * float(p.isel - p.first)});
+        SelectScreenObjPart(p.plo, 0x4C4);
+        SetScreenObjPartMatrix(p.plo, 0x4C4, {1, 0, 0, 1, 0, DyRowShop() * float(p.isel - p.first)});
     }
-    else ResetScreenObjPart(p.plo, 0x437);
-    SelectScreenObjPartHandle(p.plo, end < p.c ? (p.page == 0 ? 0x4DD : 0x4A4) : -1, &p.idDown);
-    SelectScreenObjPartHandle(p.plo, p.msg != -1 ? 0x43B : 0x439, &p.idPrompt);
+    else ResetScreenObjPart(p.plo, 0x4C4);
+    SelectScreenObjPartHandle(p.plo, end < p.c ? (p.page == 0 ? 0x56A : 0x531) : -1, &p.idDown);
+    SelectScreenObjPartHandle(p.plo, p.msg != -1 ? 0x4C8 : 0x4C6, &p.idPrompt);
 }
 
 // orig 0x001DC4B0 (vt slot 14: a direction of the stick)
@@ -199,8 +243,7 @@ void SetShopDir(int n)
     p.tDir = g_clock.tReal;
     switch (n)
     {
-    case 0: SetShopPage(1); break;
-    case 4: SetShopPage(0); break;
+    case 0: case 4: break;   // (Sly 3: no loot page to switch to, orig3 0x220730)
     case 1: case 2: case 3:
         if (p.isel > 0)
         {
@@ -221,7 +264,7 @@ void SetShopDir(int n)
     }
 }
 
-// orig 0x001DA858: the stick's direction (eight, from 0.8 out; released under 0.5); the d-pad as the stick
+// orig 0x001DA858: the stick's direction (eight, from 0.8 out; released under 0.5); the d-pad as the stick (orig3: 0x21EC30, the same C in the Sly 3 decomp)
 void UpdateShopStick()
 {
     float x = g_joy.xLeft, y = g_joy.yLeft;
@@ -239,25 +282,57 @@ void UpdateShopStick()
 }
 }  // namespace
 
-// orig 0x0019F0A8: every player (class 0x34, at most 8) gets vt slot 104 (0x141E30): its event 0x1A (vt slot 3 =
-// 0x1A61E0: the splice event 0x1A only, the tasks' broadcast being for 5 / 6)
+// orig 0x0019F0A8. orig3 0x1C0130: every player (class 0x33 = Sly 2's 0x34, at most 16) gets vt slot 118 (Sly 2's 104):
+// 0x1546B8 sends its vt slot 3 the splice event 0x1D (Sly 3's number of Sly 2's 0x1A, as the task broadcasts' 0x1A ->
+// 0x1D), then empties (item 0, 0x1548E8(i, 0)) each of its three gadget slots whose power-up is not owned (0x21F410).
+// Bentley's 0x1405D8 also sets his +0x4B0 to 3 with power-up 11 (Hover Pack), else 1: a dead store in Sly 3 (the
+// executable's only word access to a BENTLEY +0x4B0 is that sw at 0x140600; the other 0x4B0 operands are the guards'
+// ground watcher), so nothing to port. 0x21F410's mission branch (a power-up the current job lends): FPowerupOwned.
 void NotifyPlayersPowerups(SW* psw)
 {
     if (!psw) return;
     std::vector<LO*> aplo = AploOfClass(psw, S3CID(0x34));
-    if (aplo.size() > 8) aplo.resize(8);
-    for (LO* plo : aplo) HandleLoSpliceEvent(plo, 0x1A, false, 0, nullptr);
+    if (aplo.size() > 16) aplo.resize(16);
+    for (LO* plo : aplo)
+    {
+        HandleLoSpliceEvent(plo, 0x1D, false, 0, nullptr);
+        if (ACTOR* pa = PactorFromLo(plo))
+            for (int i = 0; i < 3; ++i)
+                if (!FPowerupOwned(IdActorAbilitySlot(pa, i))) SetActorAbilitySlot(pa, i, sly3::Item2FromItem3(0));
+    }
 }
 
 void InitShop(SW* psw)
 {
     s_shop = SHOP{};
     s_shop.psw = psw;
-    s_shop.plo = psw ? PloFindSwObjectByOid(psw, 0x378) : nullptr;
-    if (psw && std::getenv("SLY2N_ITEMPRINT"))   // debug: the powerup table (0x2BCD00)
-        for (int i = 0; i < 0x2B; ++i)
-            std::printf("item %2d kind %d cost %4d power %2d episode %2d assign %2d %s: %s\n", i, ItemKind(i), ItemCost(i),
-                        NElf(S3VA(0x2BCD00) + 0x20 * uint32_t(i) + 0xC), ItemEpisode(i), NElf(S3VA(0x2BCD00) + 0x20 * uint32_t(i)),
+    s_shop.plo = psw ? PloFindSwObjectByOid(psw, 0x429) : nullptr;   // (Sly 3's 1065; Sly 2's 0x378, as 0x375.. -> 0x426..)
+    // Sly 3's screens ask their own script strings (screen3.cpp): orig3 0x2209E8.. (1218..1248) = Sly 2's 0x435..0x453
+    static const bool s_fReg = [] {
+        auto reg = [](int id3, int id2) { SetScriptString3(id3, [id2] { return StrShopScript(id2); }); };
+        for (int i = 0; i < 6; ++i)
+        {
+            reg(1225 + i, 0x43C + i);   // the rows' names
+            reg(1231 + i, 0x442 + i);   // their costs
+            reg(1237 + i, 0x448 + i);   // the loot's names
+            reg(1243 + i, 0x44E + i);   // their values
+        }
+        reg(1219, 0x436);
+        reg(1218, 0x435);
+        return true;
+    }();
+    (void)s_fReg;
+    if (psw && std::getenv("SLY2N_ITEMPRINT"))
+    {
+        const CRef r = RefGetProgress({"t1_intro", "state"});
+        std::printf("shop: episodeBest %d, t1_intro state tag %d value %d\n", NRef(RefGetProgress({"episodeBest"})),
+                    int(r.m_tagk), NRef(r));
+    }
+    if (psw && std::getenv("SLY2N_ITEMPRINT"))   // debug: the powerup table (Sly 3's 0x343098)
+        for (int i3 = 0; i3 < sly3::C_ITEM; ++i3)
+            if (const int i = sly3::Item2FromItem3(i3); i >= 0)
+            std::printf("item %2d (Sly 3 %2d) kind %d cost %4d power %2d episode %2d use %2d %s: %s\n", i, i3, ItemKind(i),
+                        ItemCost(i), sly3::Item3(i3).cost, ItemEpisode(i), sly3::Item3(i3).use,
                         ItemName(i) > 0 ? StrLocalized(psw, ItemName(i)).c_str() : "-", ItemDesc(i) > 0 ? StrLocalized(psw, ItemDesc(i)).c_str() : "-");
 }
 
@@ -268,6 +343,7 @@ void SetShopPage(int s)
     SHOP& p = s_shop;
     if (!p.plo) s = -1;
     if (s == p.page) return;
+    if (std::getenv("SLY2N_GADGETPRINT")) std::printf("shop: page %d -> %d (screen %p)\n", p.page, s, static_cast<void*>(p.plo));
     if (p.page == -1)
     {
         SetClockFactor(&g_clock, 0, 0.0f);   // (0x14D1D0: the game paused; vt slot 10: in the HUD's list)
@@ -289,7 +365,8 @@ void SetShopPage(int s)
         break;
     case 0:
     case 1:
-        if (s == 0) SetScreenObjParts(p.plo, 0x4D4, 0x4D5, 0x4D6);
+        // (orig3 0x220590: Sly 3's ThiefNet has the one page, its parts 0x561 / 0x562 / 0x563; Sly 2's 0x4D4.. / 0x49B..)
+        if (s == 0) SetScreenObjParts(p.plo, 0x561, 0x562, 0x563);
         else SetScreenObjParts(p.plo, 0x49B, 0x49C, 0x49D);
         if (old == (s == 0 ? 1 : 0))
         {
@@ -337,8 +414,8 @@ void UpdateShop(SW* psw)
                     PsndStartSound(0x29);  // (0x1FBB90 + 0x1FB2F8)
                     NotifyPlayersPowerups(psw);  // 0x19F0A8
                 }
-                else if (have < cost) SetShopMsg(1, 0x35);
-                else SetShopMsg(0, 0x34);
+                else if (have < cost) SetShopMsg(1, 0x44);   // (orig3 0x21FE98: Sly 3's texts; Sly 2's 0x35 / 0x34)
+                else SetShopMsg(0, 0x43);
             }
             else PsndStartSound(0x36);
         }
@@ -379,12 +456,12 @@ std::string StrShopScript(int id)
     if (id >= 0x43C && id <= 0x441)
     {
         const int n = p.aent[std::min(p.first + id - 0x43C, 0x3F)].id;
-        return n >= 0 && n < 0x2B && ItemName(n) != -1 ? StrLocalized(psw, ItemName(n)) : "";
+        return sly3::FItem2Valid(n) && ItemName(n) != -1 ? StrLocalized(psw, ItemName(n)) : "";
     }
     if (id >= 0x442 && id <= 0x447)
     {
         const int n = p.aent[std::min(p.first + id - 0x442, 0x3F)].id;
-        if (n < 0 || n >= 0x2B) return "";
+        if (!sly3::FItem2Valid(n)) return "";
         std::snprintf(ach, sizeof(ach), "%d", ItemCost(n));
         return ach;
     }
@@ -410,26 +487,26 @@ std::string StrShopScript(int id)
         // orig 0x001DCA30
         switch (p.msg)
         {
-        case -1: return StrLocalized(psw, IdText(0xDE));
-        case 0: return StrLocalized(psw, IdText(0xDF));
-        case 1: return StrLocalized(psw, IdText(0xE0));
+        case -1: return StrLocalized(psw, IdText(0x133));   // (orig3 0x220BF0; Sly 2's 0xDE / 0xDF / 0xE0)
+        case 0: return StrLocalized(psw, IdText(0x134));
+        case 1: return StrLocalized(psw, IdText(0x135));
         default: return "";
         }
     }
     if (id == 0x435)
     {
         // orig 0x001DCAB0: the message, else the selected item's name, description and whether it is affordable
-        if (p.msg != -1) return StrLocalized(psw, IdText(p.idMsg));   // (USA ids: 0x34 / 0x35)
+        if (p.msg != -1) return StrLocalized(psw, IdText(p.idMsg));   // (USA ids: 0x43 / 0x44)
         if (p.page == 0)
         {
             const int i = p.itemBuy;
-            if (i >= 0 && i < 0x2B && ItemDesc(i) != p.msg)
+            if (sly3::FItem2Valid(i) && ItemDesc(i) != p.msg)
             {
                 std::snprintf(ach, sizeof(ach), "%s: %s. %s", StrLocalized(psw, ItemName(i)).c_str(), StrLocalized(psw, ItemDesc(i)).c_str(),
-                              StrLocalized(psw, IdText(CCoins() < ItemCost(i) ? 0xD9 : 0xDA)).c_str());
+                              StrLocalized(psw, IdText(CCoins() < ItemCost(i) ? 0x12E : 0x12F)).c_str());   // (orig3 0x220C68)
                 return ach;
             }
-            return StrLocalized(psw, IdText(0xDC));
+            return StrLocalized(psw, IdText(0x131));   // ("All available power-ups have been purchased."; Sly 2's 0xDC)
         }
         if (p.page == 1)
         {
@@ -494,7 +571,7 @@ int IslotAssigned(int key)
     return -1;
 }
 
-// orig 0x001DB390
+// orig 0x001DB390 (orig3: 0x21F948, the same C in the Sly 3 decomp)
 void SelectGadget(int key)
 {
     GADGETMENU& p = s_gm;
@@ -571,19 +648,21 @@ void SetGadgetMenu(int s)
         p.plo = nullptr;
         p.oid = -1;
         return;
-    case 0: p.oid = 0x375; break;
-    case 1: p.oid = 0x376; break;
-    case 2: p.oid = 0x377; break;
+    // (orig3 0x21FAE0: Sly 3's screen objects 0x426..0x428 and entry tables 0x348BE0 / 0x348DC0 / 0x348F20 of 15 /
+    // 11 / 8, the same 0x20-byte entries with Sly 3's item ids)
+    case 0: p.oid = 0x426; break;
+    case 1: p.oid = 0x427; break;
+    case 2: p.oid = 0x428; break;
     default: return;
     }
-    static const uint32_t s_ava[3] = {S3VA(0x2C2DE8), S3VA(0x2C3028), S3VA(0x2C3148)};
-    static const int s_ac[3] = {0x12, 9, 8};
+    static const uint32_t s_ava[3] = {0x348BE0, 0x348DC0, 0x348F20};
+    static const int s_ac[3] = {15, 11, 8};
     p.aent.clear();
     for (int i = 0; i < s_ac[s]; ++i)
     {
         const uint32_t v = s_ava[s] + 0x20 * uint32_t(i);
         GADGETENT e;
-        e.key = NElf(v); e.idOpen = NElf(v + 4); e.idOwned = NElf(v + 8); e.idSel = NElf(v + 0xC); e.cur = -1;
+        e.key = sly3::Item2FromItem3(NElf(v)); e.idOpen = NElf(v + 4); e.idOwned = NElf(v + 8); e.idSel = NElf(v + 0xC); e.cur = -1;
         int32_t n;
         n = NElf(v + 0x14); std::memcpy(&e.x, &n, 4);
         n = NElf(v + 0x18); std::memcpy(&e.y, &n, 4);
@@ -591,11 +670,18 @@ void SetGadgetMenu(int s)
         p.aent.push_back(e);
     }
     UpdateGadgetFlags();
+    // Sly 3's screens ask their own script strings (screen3.cpp): 1114 / 1115 the menu's text (orig3 0x2207E8)
+    static const bool s_fReg = [] {
+        SetScriptString3(1114, [] { return StrGadgetScript(1114); });
+        SetScriptString3(1115, [] { return StrGadgetScript(1115); });
+        return true;
+    }();
+    (void)s_fReg;
     if (std::getenv("SLY2N_GADGETPRINT"))
         for (const GADGETENT& e : p.aent) std::printf("gadget: key %d at %.1f %.1f grf %u\n", e.key, e.x, e.y, e.grf);
     p.plo = p.psw ? PloFindSwObjectByOid(p.psw, p.oid) : nullptr;
     if (!p.plo) { SetGadgetMenu(-1); return; }
-    ShowScreenObj(p.plo, 0x318);
+    ShowScreenObj(p.plo, 0x37F);   // (orig3 0x21FAE0; Sly 2's 0x318)
     // the owned one nearest the top left
     float best = FLT_MAX;
     int key = -1;
@@ -624,11 +710,13 @@ void UpdateGadgetMenu(SW* psw, LO* ploPlayer)
     p.psw = psw;
     if (p.tMsg <= g_clock.tReal) SetGmMsg(-1, -1);
     if (!p.plo || p.ichar == -1) return;
-    if (p.msg != 0 && GrfbtnTakePressed(BtnMenuBack())) { SetGadgetMenu(-1); return; }
+    // If a mapped slot shares a navigation button, equip the selected gadget.
+    const bool fAssign = sly2actions::profile.enabled && GrfbtnPressed(0x7);
+    if (!fAssign && p.msg != 0 && GrfbtnTakePressed(BtnMenuBack())) { SetGadgetMenu(-1); return; }
     if (!ploPlayer || !FCidDerivedFrom(ploPlayer->Cid(), S3CID(0x34))) { SetGadgetMenu(-1); return; }
     UpdateGadgetFlags();
     // orig 0x001DA858 with the d-pad as the stick
-    {
+    if (!fAssign) {
         float x = g_joy.xLeft, y = g_joy.yLeft;
         const uint32_t grf = GrfbtnHeld();
         if (grf & 0x1000) y = 1;
@@ -642,7 +730,7 @@ void UpdateGadgetMenu(SW* psw, LO* ploPlayer)
     // (PC menus) the mouse: an owned gadget under the cursor is selected when the cursor moves onto it or it is
     // clicked (a click on the selected one confirms, as Cross) (its cell: 80 x 80 grid units around (x + 26.5, y - 8), the grid's y in the HUD's 1.1 scale); the wheel
     // steps as the d-pad (pcinput.cpp)
-    if (float xc = 0, yc = 0; FMenuCursor(&xc, &yc))
+    if (float xc = 0, yc = 0; !fAssign && FMenuCursor(&xc, &yc))
         for (const GADGETENT& e : p.aent)
         {
             if (!(e.grf & 4) || std::fabs(xc - (e.x + 26.5f)) >= 40.0f || std::fabs(yc - (e.y - 8.0f) / 1.1f) >= 40.0f / 1.1f) continue;
@@ -655,18 +743,18 @@ void UpdateGadgetMenu(SW* psw, LO* ploPlayer)
             }
             break;
         }
-    if (GrfbtnTakePressed(0x7E8))
+    if (!fAssign && GrfbtnTakePressed(0x7E8))
     {
         const GADGETENT* r = PgeFind(p.key);
-        SetGmMsg(1, r && (r->grf & 1) ? 0x31 : 0xE2);
+        SetGmMsg(1, r && (r->grf & 1) ? 0x40 : 0x137);   // (orig3 0x21EEF8: Sly 3's texts; Sly 2's 0x31 / 0xE2)
     }
     static const uint32_t s_agrfSlot[3] = {4, 1, 2};   // (0x2C3258: L1, L2, R2)
     for (int i = 0; i < 3; ++i)
     {
         if (!GrfbtnTakePressed(s_agrfSlot[i])) continue;
         const GADGETENT* r = PgeFind(p.key);
-        if (!r || !(r->grf & 4)) SetGmMsg(1, 0x32);
-        else if (!(r->grf & 1)) SetGmMsg(1, 0x33);
+        if (!r || !(r->grf & 4)) SetGmMsg(1, 0x41);       // (Sly 3: "Must purchase a powerup ..."; Sly 2's 0x32)
+        else if (!(r->grf & 1)) SetGmMsg(1, 0x42);  // ("This powerup does not need to be assigned ..."; 0x33)
         else
         {
             // orig 0x00141FC8 on the player (gadget.cpp): slot i takes it (another slot holding it emptied), the
@@ -681,8 +769,8 @@ void UpdateGadgetMenu(SW* psw, LO* ploPlayer)
             {
                 const std::vector<std::string> apath{s_aszChar[p.ichar], "apukCur", std::to_string(j)};
                 CRef ref;
-                if (j == i) ref.SetS32(p.key);
-                else if (NRef(RefGetProgress(apath)) == p.key) ref.SetS32(-1);
+                if (j == i) ref.SetS32(sly3::Item3FromItem2(p.key));   // (the progress keeps Sly 3's ids)
+                else if (NRef(RefGetProgress(apath)) == sly3::Item3FromItem2(p.key)) ref.SetS32(-1);
                 else continue;
                 FSetProgress(apath, ref);
             }
@@ -694,19 +782,21 @@ void UpdateGadgetMenu(SW* psw, LO* ploPlayer)
 std::string StrGadgetScript(int id)
 {
     // orig 0x001DC598 (0x37A / 0x37B): the message, else the selected gadget's name, description and its button
-    if ((id != 0x37A && id != 0x37B) || s_gm.ichar == -1) return "";
+    // (orig3 0x2207E8: Sly 3's script strings 1114 / 1115, the callback table 0x26A310's init)
+    if ((id != 1114 && id != 1115) || s_gm.ichar == -1) return "";
     const SW* psw = s_gm.psw;
-    if (s_gm.msg != -1) return StrLocalized(psw, IdText(s_gm.idMsg));   // (USA ids: 0x31..0x33, 0xE2)
-    if (s_gm.key == -1) return StrLocalized(psw, IdText(0xDD));
+    if (s_gm.msg != -1) return StrLocalized(psw, IdText(s_gm.idMsg));   // (USA ids: 0x40..0x42, 0x137)
+    if (s_gm.key == -1) return StrLocalized(psw, IdText(0x132));   // (orig3 0x2207E8; Sly 2's 0xDD)
     const GADGETENT* po = PgeFind(s_gm.key);
     const int v = IslotAssigned(s_gm.key);
     static const char* const s_aszIcon[3] = {"&2L&.", "&2l&.", "&2r&."};
     std::string buf;
     std::string desc;
-    if (po && (po->grf & 1) && v < 0) buf = StrLocalized(psw, IdText(0xE1));
+    if (po && (po->grf & 1) && v < 0) buf = StrLocalized(psw, IdText(0x136));   // (Sly 2's 0xE1)
     else
     {
-        const std::string fmt = StrLocalized(psw, NElf(S3VA(0x2BCD00) + 0x20 * uint32_t(s_gm.key) + 0x1C));
+        // the button line's format text: Sly 3's table +0x24 (orig3 0x2207E8; Sly 2's +0x1C)
+        const std::string fmt = StrLocalized(psw, sly3::Item3(sly3::Item3FromItem2(s_gm.key)).fmt);
         const char* sz = v >= 0 ? s_aszIcon[v] : "";
         for (size_t i = 0; i < fmt.size(); ++i)
         {
@@ -736,47 +826,84 @@ void DrawGadgetIcons(const FONTBRX* pfont, const FONTBRX* picons)
     }
 }
 
-// ------------------------------------------------------------ the job help (orig 0x3DA3C0 on 0x4E0: func_001DD300.c /
-// func_001DCED8.cpp / func_001DCE90.c / func_001DD1F8.c / func_001DD558.c / func_001DDDB8..func_001DDF00.c /
-// func_00163400.c / func_00164030.c / func_00163430.c / func_00165C28.c, m_1DAC58_p3.cpp's 0x1DCD30)
-std::vector<TASK*> AptaskInOrder(SW* psw);
+// ------------------------------------------------------------ the job help (Sly 3: the widget 0x46FAA0 on screen 1389
+// (0x56D); orig3 0x220DE0 / 0x220E58 (start), 0x220E80 (update), 0x2214F0 (the state), 0x221108 (the rows), 0x221400 (the
+// rows' look), 0x21EC30 (the stick), 0x1D5228 (the pause menu's Job Help), the strings 0x222488..0x222690 (1449..1465).
+// Sly 2's 0x3DA3C0 on 0x4E0 with Sly 3's numbers: the parts +0x8D (the rows' +0x8E), the jobs / tasks of task3.h)
 namespace
 {
 struct JOBHELP
 {
     SW* psw = nullptr;
-    LO* plo = nullptr;          // +0x24 (0x4E0)
-    int dir = -1;               // +0x28
-    int page = -1;              // +0x40 (0 the jobs, 1 the job's goals)
-    float tPage = 0;
-    struct ENT { LO* plo = nullptr; int idA = -1, idB = -1; };
-    std::vector<ENT> aent;      // +0x48 / +0x4C
-    int cMax = 10;              // +0x10C
-    JOB* pjob = nullptr;        // +0x110 the job shown on page 1
-    bool fFromJobs = false;     // +0x114
-    int isel = 0;               // +0x118
-    int idA = -1, idB = -1, idC = -1;
+    LO* plo = nullptr;          // +0x34 (1389)
+    int dir = -1;               // +0x38
+    int page = -1;              // +0x50 (0 the jobs, 1 the job's goals, 2 a challenge's)
+    float tPage = 0;            // +0x54
+    struct ENT { const void* p = nullptr; int idA = -1, idB = -1; };
+    std::vector<ENT> aent;      // +0x58 / +0x5C (0x10 at most)
+    int cMax = 10;              // +0x11C
+    const JOB3* pjob = nullptr; // +0x120 the job shown on page 1 (D_0046FBC0)
+    bool fFromJobs = false;     // +0x124
+    int isel = 0;               // +0x128
 };
 JOBHELP s_jh;
 // (PC menus) the rows' text as last drawn (NoteJobHelpText: HUD units, x from the canvas centre, y x 1.1 from it)
 struct JHROW { float x = 0, y = 0, size = 0; int frame = -100; };
 JHROW s_ajhrow[10];
+constexpr int OID_JOBHELP3 = 0x56D;
+constexpr int STR_ROW0 = 1452, STR_GOAL0 = 1462;   // (Sly 2's 0x51E / 0x528)
 
-// orig 0x00164030: a task done (or its progress "closed" value while it has no state)
-bool FTaskDoneJh(const TASK* p)
+int NOptJh(const LO* plo, int eopid, int nDefault)
 {
-    if (p->nState == -1 && p->prD8.F()) return NRef(RefGetProgressKey(p->prD8.akey)) != 0;
-    return p->nState >= 2;
+    if (plo)
+        for (const OPT& o : plo->aopt)
+            if (o.eopid == eopid && !o.aval.empty()) return o.aval[0].n;
+    return nDefault;
 }
-// orig 0x00163430: a job open (its first task's state, else its last's, at least 1)
-int NJobOpen(const JOB* p)
+// the texts: a job's name (+0x60, EOPID 1370) / description (+0x64, 1371); a task's goal (+0x60, 1399) and its hint
+// (+0x4C, 1392)
+int IdJobName3(const JOB3* p) { return p ? NOptJh(p->plo, 1370, -1) : -1; }
+int IdJobDesc3(const JOB3* p) { return p ? NOptJh(p->plo, 1371, -1) : -1; }
+int IdTaskGoal3(const TASK3* p) { return p ? NOptJh(p->plo, 1399, -1) : -1; }
+int IdTaskHint3(const TASK3* p) { return p ? NOptJh(p->plo, 1392, -1) : -1; }
+
+// orig3: 0x00187D00: a job open (its first task's state, else its last's, at least 1)
+int NJobOpen3(const JOB3* p)
 {
-    if (!p->ptaskFirst) return 0;
+    if (!p || !p->ptaskFirst) return 0;
     const int n = p->ptaskFirst->nState;
     return n < 2 ? n : std::max(p->ptaskLast ? p->ptaskLast->nState : 1, 1);
 }
 
-// orig 0x001DCED8: the page's rows
+// orig3: 0x0018A900 + 0x00165C28: the world's tasks in order (by their job's depth and oid, then their own depth and
+// oid; the depth: the longest chain of prerequisites)
+std::vector<const TASK3*> AptaskInOrder3()
+{
+    std::vector<const TASK3*> a;
+    std::unordered_map<const TASK3*, int> mpdepth;
+    std::function<int(const TASK3*, int)> depth = [&](const TASK3* p, int guard) -> int {
+        if (auto it = mpdepth.find(p); it != mpdepth.end()) return it->second;
+        int d = 0;
+        if (guard < 64)
+            for (const TASK3* q : p->aprereq) d = std::max(d, depth(q, guard + 1) + 1);
+        mpdepth[p] = d;
+        return d;
+    };
+    for (const auto& pt : g_tasks3.atask) a.push_back(pt.get());
+    auto jdepth = [&](const TASK3* p) { return p->pjob && p->pjob->ptaskFirst ? depth(p->pjob->ptaskFirst, 0) : 0; };
+    std::stable_sort(a.begin(), a.end(), [&](const TASK3* x, const TASK3* y) {
+        const int jx = jdepth(x), jy = jdepth(y);
+        if (jx != jy) return jx < jy;
+        const int n1 = x->pjob ? x->pjob->oid : -1, n2 = y->pjob ? y->pjob->oid : -1;
+        if (n1 != n2) return n1 < n2;
+        const int dx = depth(x, 0), dy = depth(y, 0);
+        if (dx != dy) return dx < dy;
+        return x->oid < y->oid;
+    });
+    return a;
+}
+
+// orig3: 0x00221108: the page's rows
 void BuildJobHelp()
 {
     JOBHELP& p = s_jh;
@@ -787,23 +914,16 @@ void BuildJobHelp()
     }
     p.aent.clear();
     p.isel = 0;
-    std::vector<TASK*> a = AptaskInOrder(p.psw);
-    std::stable_sort(a.begin(), a.end(), [](const TASK* x, const TASK* y) {
-        if (x->nJobDepth != y->nJobDepth) return x->nJobDepth < y->nJobDepth;
-        const int n1 = x->pjob ? x->pjob->oid : -1, n2 = y->pjob ? y->pjob->oid : -1;
-        if (n1 != n2) return n1 < n2;
-        if (x->nDepth != y->nDepth) return x->nDepth < y->nDepth;
-        return x->oid < y->oid;
-    });
+    const std::vector<const TASK3*> a = AptaskInOrder3();
     if (p.page == 0)
     {
-        JOB* plast = nullptr;
-        for (TASK* pt : a)
+        const JOB3* plast = nullptr;
+        for (const TASK3* pt : a)
         {
-            JOB* pj = pt->pjob;
+            const JOB3* pj = pt->pjob;
             if (!pj || pj == plast) continue;
             plast = pj;
-            if (NJobOpen(pj) > 0 && pj->n6c != -1)
+            if (NJobOpen3(pj) > 0 && IdJobName3(pj) != -1)
             {
                 if (p.pjob == pj) p.isel = int(p.aent.size());
                 p.aent.push_back({pj});
@@ -813,9 +933,9 @@ void BuildJobHelp()
     else if (p.page == 1)
     {
         bool f = false;
-        for (TASK* pt : a)
+        for (const TASK3* pt : a)
         {
-            if (pt->pjob != p.pjob || pt->idDialog5C == -1) continue;
+            if (pt->pjob != p.pjob || IdTaskHint3(pt) == -1) continue;
             if (f && pt->nState == 0) break;
             p.aent.push_back({pt});
             if (pt->nState == 1) f = true;
@@ -828,10 +948,16 @@ void BuildJobHelp()
         p.aent.erase(p.aent.begin(), p.aent.begin() + d);
         p.isel = d < p.isel ? p.isel - d : 0;
     }
-    p.isel = p.aent.empty() ? -1 : std::clamp(p.isel, 0, int(p.aent.size()) - 1);
+    p.isel = p.aent.empty() ? -1 : std::clamp(p.isel, 0, int(p.aent.size()) - 1);   // (0x2210C0)
+    if (std::getenv("SLY3_JHPRINT"))
+        for (const JOBHELP::ENT& e : p.aent)
+            std::printf("jobhelp3: page %d row %s %d text %d / %d\n", p.page, p.page == 0 ? "job" : "task",
+                        p.page == 0 ? static_cast<const JOB3*>(e.p)->oid : static_cast<const TASK3*>(e.p)->oid,
+                        p.page == 0 ? IdJobName3(static_cast<const JOB3*>(e.p)) : IdTaskGoal3(static_cast<const TASK3*>(e.p)),
+                        p.page == 0 ? -1 : IdTaskHint3(static_cast<const TASK3*>(e.p)));
 }
 
-// orig 0x001DD1F8
+// orig3: 0x00221400: the rows' bars (selected 0x58B + i, else 0x577 + i) and checks (0x595 + i when done)
 void UpdateJobHelpLook()
 {
     JOBHELP& p = s_jh;
@@ -839,49 +965,59 @@ void UpdateJobHelpLook()
     for (size_t i = 0; i < p.aent.size(); ++i)
     {
         JOBHELP::ENT& e = p.aent[i];
-        SelectScreenObjPartHandle(p.plo, int(i) == p.isel ? int(i) + 0x4FD : int(i) + 0x4E9, &e.idA);
+        SelectScreenObjPartHandle(p.plo, int(i) == p.isel ? int(i) + 0x58B : int(i) + 0x577, &e.idA);
         bool f = false;
         if (p.page == 0)
         {
-            const JOB* pj = static_cast<const JOB*>(e.plo);
-            f = pj->ptaskLast && FTaskDoneJh(pj->ptaskLast);
+            const JOB3* pj = static_cast<const JOB3*>(e.p);
+            f = pj->ptaskLast && FTaskDone3(pj->ptaskLast);   // (0x187CD0)
         }
-        else f = FTaskDoneJh(static_cast<const TASK*>(e.plo));
-        SelectScreenObjPartHandle(p.plo, f ? int(i) + 0x507 : -1, &e.idB);
+        else if (p.page == 1) f = FTaskDone3(static_cast<const TASK3*>(e.p));   // (0x188A38)
+        SelectScreenObjPartHandle(p.plo, f ? int(i) + 0x595 : -1, &e.idB);
     }
 }
 }  // namespace
 
-// orig 0x001DD300
+// orig3: 0x002214F0
 void SetJobHelpPage(int s)
 {
     JOBHELP& p = s_jh;
     if (!p.plo) s = -1;
     if (s == p.page) return;
     const int old = p.page;
-    if (old == -1) PauseGame(0);  // orig: 0x001DD300, acquire the gameplay-input pause on entry.
+    if (old == -1) PauseGame(0);   // (0x1A93C8(GAME, -1, 0))
     p.page = s;
     p.tPage = g_clock.tReal;
     switch (s)
     {
     case -1:
-        ResumeGame(0);  // orig: 0x001DD300, release only when the help closes.
+        ResumeGame(0);   // (0x1A9420)
         if (p.plo && NScreenObjState(p.plo) > 0) SetScreenObjTimers(p.plo, 1);
         if (p.plo) HideScreenObj(p.plo);
-        p.idA = p.idB = p.idC = -1;
         break;
     case 0:
         p.cMax = 10;
-        SetScreenObjParts(p.plo, old == 1 ? 0x4E8 : 0x4E1, 0x4E3, 0x4E2);
+        SetScreenObjParts(p.plo, old == 1 ? 0x575 : 0x56E, 0x570, 0x56F);
         SetScreenObjState(p.plo, 1);
         SetScreenObjTimers(p.plo, 2);
         break;
     case 1:
-        if (p.isel >= 0 && p.isel < int(p.aent.size())) p.pjob = static_cast<JOB*>(p.aent[size_t(p.isel)].plo);
-        else p.pjob = p.psw ? p.psw->tasks.pjobCur : nullptr;
+        // (+0x128 the row chosen on the jobs page (its rows are still the jobs), else the current job SW +0x4044)
+        if (old == 0 && p.isel >= 0 && p.isel < int(p.aent.size())) p.pjob = static_cast<const JOB3*>(p.aent[size_t(p.isel)].p);
+        else p.pjob = g_tasks3.pjobCur;
         p.fFromJobs = old == 0;
         p.cMax = 4;
-        SetScreenObjParts(p.plo, old == 0 ? 0x4E7 : 0x4E4, 0x4E6, 0x4E5);
+        SetScreenObjParts(p.plo, old == 0 ? 0x574 : 0x571, 0x573, 0x572);
+        SetScreenObjState(p.plo, 1);
+        SetScreenObjTimers(p.plo, 2);
+        // (no challenge runs: the part 0x576, "Back" / "more jobs" on the page)
+        if (!FChallengeRunning3() && NScreenObjState(p.plo) > 0) SelectScreenObjPart(p.plo, 0x576);
+        break;
+    case 2:   // (a challenge's page: its rules 0x4BC230 are not ported (challenge3.h); the page shows its texts)
+        p.pjob = nullptr;
+        p.fFromJobs = false;
+        p.cMax = 0;
+        SetScreenObjParts(p.plo, 0x639, 0x63A, 0x63B);
         SetScreenObjState(p.plo, 1);
         SetScreenObjTimers(p.plo, 2);
         break;
@@ -895,8 +1031,8 @@ void InitJobHelp(SW* psw)
 {
     s_jh = JOBHELP{};
     s_jh.psw = psw;
-    s_jh.plo = psw ? PloFindSwObjectByOid(psw, 0x4E0) : nullptr;
-    // orig: 0x001DCCA0: Job Help's screen pauses the world while its panel is shown.
+    // (orig3 0x220DE0: +0x20 0x56D, the world's screen object found by the widget list's start 0x21D770)
+    s_jh.plo = psw ? PloFindSwObjectByOid(psw, OID_JOBHELP3) : nullptr;
     if (s_jh.plo)
     {
         s_jh.plo->SetField(0, 0xB0, 1);
@@ -904,23 +1040,37 @@ void InitJobHelp(SW* psw)
     }
 }
 bool FJobHelpShown() { return s_jh.page != -1; }
+// orig3: 0x001D48D0's 0x7A: offered with the widget's screen object outside dvd_menu (0x25E150: the world)
+bool FJobHelpAvailable3() { return s_jh.plo && s_jh.psw && g_transition.iwrecCur != 0; }
+// orig3: 0x001D5228 (the pause menu's Job Help): the event 0x3D, then a job's goals (a challenge's page while one runs),
+// else the jobs
+void OpenJobHelp3()
+{
+    if (g_tasks3.pjobCur) SetJobHelpPage(FChallengeRunning3() ? 2 : 1);
+    else SetJobHelpPage(0);
+}
 
-// orig 0x001DCD30
+// orig3: 0x00220E80
 void UpdateJobHelp(SW* psw)
 {
     JOBHELP& p = s_jh;
     p.psw = psw;
     if (p.page == -1 || !p.plo) return;
     if (GrfbtnTakePressed(0x800)) { SetJobHelpPage(-1); return; }
-    if (p.page == 0)
+    switch (p.page)
     {
+    case 0:
         if (GrfbtnTakePressed(BtnMenuBack())) { SetJobHelpPage(-1); return; }
-        if (!p.aent.empty() && GrfbtnTakePressed(0xE0)) { SetJobHelpPage(1); return; }
-    }
-    else if (p.page == 1)
-    {
+        if (!p.aent.empty() && GrfbtnTakePressed(0xF0 & ~BtnMenuBack())) { SetJobHelpPage(1); return; }
+        break;
+    case 1:
         if (!p.fFromJobs && GrfbtnTakePressed(BtnMenuBack())) { SetJobHelpPage(-1); return; }
-        if (GrfbtnTakePressed(0xF0)) { SetJobHelpPage(0); return; }
+        if (!FChallengeRunning3() && GrfbtnTakePressed(0xF0)) { SetJobHelpPage(0); return; }
+        break;
+    case 2:
+        if (GrfbtnTakePressed(BtnMenuBack())) { SetJobHelpPage(-1); return; }
+        break;
+    default: break;
     }
     // (PC menus) the mouse: on the jobs page the row under the cursor is selected when the cursor moves onto it,
     // and a click opens it (as Cross / right); on a job's page a click on "< more jobs" goes back to the jobs (as
@@ -933,8 +1083,6 @@ void UpdateJobHelp(SW* psw)
             {
                 const JHROW& r = s_ajhrow[i];
                 if (g_frameJoy - r.frame > 8) continue;   // (not drawn lately)
-                // (the row's band, as the selected row's bar: from 6 units above its text's top, the rows 35 / 1.1
-                // canvas units apart; from the check mark to the panel's end)
                 const float yTop = r.y / 1.1f + 224.0f - 6.0f, xLeft = r.x + 320.0f - 45.0f;
                 if (xc < xLeft || xc >= 600.0f || yc < yTop || yc >= yTop + 35.0f / 1.1f) continue;
                 SetMenuMouseTarget();
@@ -953,7 +1101,7 @@ void UpdateJobHelp(SW* psw)
             if (FMenuClick()) { SetJobHelpPage(0); return; }
         }
     }
-    // orig 0x001DA858 / 0x001DD558: the stick (the d-pad as it)
+    // orig3 0x0021EC30 / the stick's slot 14 (the d-pad as the stick)
     float x = g_joy.xLeft, y = g_joy.yLeft;
     const uint32_t grf = GrfbtnHeld();
     if (grf & 0x1000) y = 1;
@@ -969,9 +1117,9 @@ void UpdateJobHelp(SW* psw)
         p.dir = n;
         switch (n)
         {
-        case 0: if (!p.aent.empty()) SetJobHelpPage(1); break;
-        case 4: SetJobHelpPage(0); break;
-        case 1: case 2: case 3: if (p.isel > 0) { --p.isel; PsndStartSound(0x35); } break;  // (0x1DD558)
+        case 0: if (p.page == 0 && !p.aent.empty()) SetJobHelpPage(1); break;
+        case 4: if (p.page == 1 && !FChallengeRunning3()) SetJobHelpPage(0); break;
+        case 1: case 2: case 3: if (p.isel > 0) { --p.isel; PsndStartSound(0x35); } break;
         case 5: case 6: case 7: if (p.isel < int(p.aent.size()) - 1) { ++p.isel; PsndStartSound(0x35); } break;
         default: break;
         }
@@ -981,34 +1129,40 @@ void UpdateJobHelp(SW* psw)
 
 void NoteJobHelpText(int kind, int id, float x, float y, float size)
 {
-    if (s_jh.page == -1 || kind != 1 || id < 0x51E || id > 0x527) return;
-    JHROW& r = s_ajhrow[id - 0x51E];
-    if (std::getenv("SLY2N_JHPRINT") && r.frame != g_frameJoy) std::printf("jobhelp: row %d at %.1f %.1f size %.1f\n", id - 0x51E, x, y, size);
+    if (s_jh.page == -1 || kind != 1 || id < STR_ROW0 || id > STR_ROW0 + 9) return;
+    JHROW& r = s_ajhrow[id - STR_ROW0];
+    if (std::getenv("SLY2N_JHPRINT") && r.frame != g_frameJoy) std::printf("jobhelp: row %d at %.1f %.1f size %.1f\n", id - STR_ROW0, x, y, size);
     r = JHROW{x, y, size, g_frameJoy};
 }
 
+// orig3: 0x00222488 (1449 the episode's name: 0x222410 of the current episode 0x4798A0), 0x00222588 / 0x002224E0 (1450 /
+// 1451 the job shown's name / description), 0x00222630 (1452..1461 the rows' texts), 0x00222690 (1462..1465 the goals'
+// hints)
 std::string StrJobHelpScript(int id)
 {
     const JOBHELP& p = s_jh;
     const SW* psw = p.psw;
-    if (p.page == -1) return "";
-    if (id == 0x51B) return StrLocalized(psw, IdText(0x6D + std::clamp(IepisodeCur(), 0, 8)));   // orig 0x001DDDB8
-    if (id == 0x51C) return p.pjob ? StrLocalized(psw, p.pjob->n6c) : "";                 // orig 0x001DDE58
-    if (id == 0x51D) return p.pjob ? StrLocalized(psw, p.pjob->n70) : "";                 // orig 0x001DDE10
-    if (id >= 0x51E && id <= 0x527)
+    if (id == 1449)
     {
-        // orig 0x001DDEA0: row i (a job's +0x6C)
-        const size_t i = size_t(id - 0x51E);
-        if (i >= p.aent.size()) return "";
-        if (p.page == 0) return StrLocalized(psw, static_cast<const JOB*>(p.aent[i].plo)->n6c);
-        return StrLocalized(psw, static_cast<const TASK*>(p.aent[i].plo)->f6c);
+        static const int s_aid[9] = {0xAA, 0xA3, 0xAB, 0xA4, 0xA5, 0xA6, 0xA7, 0xA8, 0xA9};
+        const int iep = IepisodeMenuCur3();
+        return iep >= 0 && iep < 9 ? StrText3(psw, s_aid[iep]) : std::string();
     }
-    if (id >= 0x528 && id <= 0x52B)
+    if (p.page == -1) return "";
+    if (id == 1450) return p.pjob ? StrText3(psw, IdJobName3(p.pjob)) : "";
+    if (id == 1451) return p.pjob ? StrText3(psw, IdJobDesc3(p.pjob)) : "";
+    if (id >= STR_ROW0 && id <= STR_ROW0 + 9)
     {
-        // orig 0x001DDF00: row i (a task's +0x5C)
-        const size_t i = size_t(id - 0x528);
+        const size_t i = size_t(id - STR_ROW0);
+        if (i >= p.aent.size()) return "";
+        if (p.page == 0) return StrText3(psw, IdJobName3(static_cast<const JOB3*>(p.aent[i].p)));
+        return StrText3(psw, IdTaskGoal3(static_cast<const TASK3*>(p.aent[i].p)));
+    }
+    if (id >= STR_GOAL0 && id <= STR_GOAL0 + 3)
+    {
+        const size_t i = size_t(id - STR_GOAL0);
         if (i >= p.aent.size() || p.page != 1) return "";
-        return StrLocalized(psw, static_cast<const TASK*>(p.aent[i].plo)->idDialog5C);
+        return StrText3(psw, IdTaskHint3(static_cast<const TASK3*>(p.aent[i].p)));
     }
     return "";
 }

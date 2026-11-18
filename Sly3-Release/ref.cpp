@@ -25,7 +25,7 @@ void CRef::SetTag(TAGK tagk)
         m_pmatrix = std::make_shared<glm::mat4>(0.0f);
 }
 
-// orig: 0x00129518 __as__4CRefi
+// orig: 0x00129518 __as__4CRefi (orig3: 0x12B2F0, the same C in the Sly 3 decomp)
 void CRef::SetS32(s32 n)
 {
     SetTag(TAGK_S32);
@@ -39,7 +39,7 @@ void CRef::SetF32(f32 g)
     m_g = g;
 }
 
-// orig: 0x00129598 __as__4CRefb
+// orig: 0x00129598 __as__4CRefb (orig3: 0x12B370, the same C in the Sly 3 decomp)
 void CRef::SetBool(int fBool)
 {
     SetTag(TAGK_Bool);
@@ -67,7 +67,7 @@ void CRef::SetPair(std::shared_ptr<CPair> ppair)
     m_ppair = std::move(ppair);
 }
 
-// orig: 0x001299C0 (tag 0x20)
+// orig: 0x001299C0 (tag 0x20) (orig3: 0x12B7C8, the same C in the Sly 3 decomp)
 void CRef::SetProc(std::shared_ptr<CProc> pproc)
 {
     SetTag(TAGK_Proc);

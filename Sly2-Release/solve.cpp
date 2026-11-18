@@ -4,6 +4,7 @@
 // m_1F8DD8_p3.cpp (oracle-verified ports of the original's code).
 
 #include "dzg.h"
+#include "envonce.h"
 #include "mat.h"
 #include "so.h"
 #include "util.h"
@@ -61,7 +62,7 @@ struct CONTACTTRACE
 
     CONTACTTRACE()
     {
-        const char* text = std::getenv("SLY2N_CONTACTPRINT");
+        const char* text = SLY2N_ENV("SLY2N_CONTACTPRINT");
         if (!text) return;
         const char* end = text + std::strlen(text);
         int values[3]{};
@@ -481,7 +482,7 @@ int CollectGroupXps(const std::vector<ALO*>& apx, int cMax, std::vector<XP*>* pa
                     ALO* pr = ps->axpd[0].paloRoot;
                     using PFN = uint32_t (*)(ALO*);
                     PFN pfn = pr ? reinterpret_cast<PFN>(PvNativeVt(pr, 85)) : nullptr;
-                    if (std::getenv("PHYS_XPDUMP"))
+                    if (SLY2N_ENV("PHYS_XPDUMP"))
                         std::printf("  kind-14 contact of %d: slot 85 -> 0x%X\n", pr ? pr->oid : -1, pfn ? pfn(pr) : 0u);
                     if (!pfn || !(pfn(pr) & 4)) continue;
                 }
@@ -702,7 +703,7 @@ void UpdateSwPhys()
 {
     // (debug: SLY2N_RANDATPHYS="n:state[;n:state..]": the random state set at the n-th physics frame's start (counted
     // from 0 at the process start), e.g. a reference's at its 0x1F8DD8 entries (SLY2_DUMP_CALL))
-    if (static const char* s_sz = std::getenv("SLY2N_RANDATPHYS"); s_sz)
+    if (static const char* s_sz = SLY2N_ENV("SLY2N_RANDATPHYS"); s_sz)
     {
         static uint64_t s_c = 0;
         for (const char* q = s_sz; q && *q; q = std::strchr(q, ';') ? std::strchr(q, ';') + 1 : nullptr)

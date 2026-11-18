@@ -41,6 +41,8 @@ void ShowScreenObjParts3(LO* plo, int idShow, int idIdle, int idHide);
 
 // (screenrt.cpp) the screen object whose texts are drawn now (its own script strings: 812 a coin counter's count)
 void SetScreenDrawing3(const LO* plo);
+// the screen object being drawn (null: none)
+const LO* PloScreenDrawing3();
 // The prompt's text id (orig3 0x46F788; -1 none): script string 846
 void SetPromptText3(int idText);
 int IdPromptText3();

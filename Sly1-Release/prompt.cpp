@@ -20,12 +20,17 @@
 #include "../platform/system_settings.h"
 #include "content.h"
 #include "porttext.h"
+#include "../platform/monitor_select_glfw.h"
 #include <cstring>
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <iterator>
 #include <vector>
+
+#ifdef __SWITCH__
+void CaneSwitchSetFrameRate(int fps);   // platform/switch/glfw_switch.cpp
+#endif
 
 namespace
 {
@@ -403,7 +408,7 @@ void BuildPcLabel(RESPK respk)
 	{
 		// (the controllers keep their names in every language)
 		static constexpr const char* s_apchzStyles[] =
-			{ nullptr, "PlayStation", "Xbox", "Nintendo", "Steam Deck", "Steam Controller", "PlayStation 4", "PlayStation 5", "Steam Controller (2026)" };
+			{ nullptr, "PlayStation", "Xbox", "Nintendo", "Steam Deck", "Steam Controller", "PlayStation 4", "PlayStation 5", "Steam Controller (2026)", "Nintendo GameCube", "Nintendo Switch 2", "Wii Classic Controller", "Wii U Pro Controller", "Meta Quest Touch", "Valve Index", "Steam Frame", "HTC Vive", "Pico" };
 		const int style = std::clamp(g_promptStyle, 0, static_cast<int>(std::size(s_apchzStyles)) - 1);
 		std::snprintf(out, size, "%s", StrPortValue(PTX_ButtonIcons,
 			style == 0 ? PchzPort(PTX_Automatic) : s_apchzStyles[style]).c_str());
@@ -428,6 +433,35 @@ void BuildPcLabel(RESPK respk)
 	case RESPK_MouseRawInput: std::snprintf(out, size, "%s", StrPortOnOff(PTX_RawInput, g_mouseopt.fRawInput).c_str()); break;
 	case RESPK_MouseWheelZoom: std::snprintf(out, size, "%s", StrPortOnOff(PTX_WheelZoomsBinocucom, g_mouseopt.fWheelZoom).c_str()); break;
 	case RESPK_MouseMenus: std::snprintf(out, size, "%s", StrPortOnOff(PTX_MouseInMenus, g_mouseopt.fMenus).c_str()); break;
+	case RESPK_Monitor:
+	{
+		// (settings v22) Primary, the monitor (its name, a number for a second of the same name, its resolution), or
+		// "(not connected)" for a chosen one that is unplugged; the name shortened so the row fits its buffer
+		namespace mo = cane::monitor;
+		std::string value;
+		if (g_monitorId.empty()) value = PchzPort(PTX_Primary);
+		else
+		{
+			const mo::Connected c = mo::connected();
+			const int i = mo::find(c.list, g_monitorId);
+			std::string shown = i >= 0 ? mo::shortLabel(c.list, i) : mo::storedName(g_monitorId);
+			if (shown.size() > 26)
+			{
+				size_t cut = 23;
+				while (cut > 0 && (static_cast<unsigned char>(shown[cut]) & 0xC0) == 0x80) --cut;
+				shown = shown.substr(0, cut) + "...";
+			}
+			if (i < 0) value = StrPortFormat(PTX_MonitorNotConnected, shown.c_str());
+			else
+			{
+				const mo::Info& m = c.list[static_cast<size_t>(i)];
+				value = shown;
+				if (m.width > 0 && m.height > 0) value += " (" + std::to_string(m.width) + "x" + std::to_string(m.height) + ")";
+			}
+		}
+		std::snprintf(out, size, "%s", StrPortValue(PTX_Monitor, value).c_str());
+		break;
+	}
 	case RESPK_CamKeyLeft:
 	case RESPK_CamKeyRight:
 	case RESPK_CamKeyUp:
@@ -491,6 +525,9 @@ GLFWmonitor* ActiveMonitor()
 {
     if (GLFWmonitor* monitor = glfwGetWindowMonitor(g_gl.window))
         return monitor;
+    // (settings v22) Borderless fills the chosen monitor; where a window's place is unknown (Wayland) the chosen one too
+    if (g_windowMode == WindowMode_Borderless || cane::monitor::cannotPlaceWindows())
+        return cane::monitor::chosen(g_monitorId);
 
     int windowX = 0;
     int windowY = 0;
@@ -518,12 +555,15 @@ GLFWmonitor* ActiveMonitor()
         }
     }
 
-    return glfwGetPrimaryMonitor();
+    return cane::monitor::chosen(g_monitorId);
 }
 
 std::vector<int> SupportedFrameRates()
 {
-#ifdef __SWITCH__
+#if defined(__SWITCH2__)
+    // The Switch 2's display runs at 60 Hz, or 120 where the system and the display allow it.
+    return {30, 60, 120};
+#elif defined(__SWITCH__)
     // The Switch's display runs at 60 Hz: 60 or half of it.
     return {30, 60};
 #else
@@ -664,9 +704,10 @@ void ApplySwapInterval()
     bool fSwapPacesFrames = false;
 
 #ifdef __SWITCH__
-    // The Switch always swaps with VSync: the swap paces 60 FPS, the frame pacer 30.
+    // The Switch always swaps with VSync: the swap paces 60 FPS (the Switch 2's 120 at 120 Hz), the frame pacer 30.
     interval = 1;
-    fSwapPacesFrames = g_targetFrameRate == 60;
+    fSwapPacesFrames = g_targetFrameRate >= 60;
+    CaneSwitchSetFrameRate(g_targetFrameRate);
 #else
     if (g_fVsync)
     {
@@ -1499,6 +1540,9 @@ void ExecutePrompt(PROMPT* pprompt)
             case RESPK_FrameRate:
             SelectNextSupportedFrameRate();
             ApplySwapInterval();
+#if defined(__SWITCH2__)
+            ApplyInternalResolutionSettings();   // (the 120 fps render cap)
+#endif
             SaveSystemSettings();
             rebuildPromptKeepingSelection();
             return;
@@ -1529,6 +1573,14 @@ void ExecutePrompt(PROMPT* pprompt)
 
             case RESPK_WindowMode:
             SelectNextWindowMode();
+            ApplySwapInterval();
+            SaveSystemSettings();
+            rebuildPromptKeepingSelection();
+            return;
+
+            case RESPK_Monitor:
+            // (Primary, then each connected monitor: the window goes there, gl.h ApplyMonitorSettings)
+            ApplyMonitorSettings(cane::monitor::step(cane::monitor::connected().list, g_monitorId, 1));
             ApplySwapInterval();
             SaveSystemSettings();
             rebuildPromptKeepingSelection();
@@ -2090,7 +2142,7 @@ const char* AchzFromRespk(RESPK respk)
 	// The port's menu entries (porttext.h).
 	switch (respk)
 	{
-	case RESPK_ExitToDesktop: return PchzPort(PTX_ExitToDesktop);
+	case RESPK_ExitToDesktop: return PchzPort(FQuitToLauncher() ? PTX_QuitToLauncher : PTX_ExitToDesktop);
 	case RESPK_Video: return PchzPort(PTX_VideoEntry);
 	case RESPK_Sound: return PchzPort(PTX_SoundEntry);
 	case RESPK_KeyboardMapping: return PchzPort(PTX_KeyboardMappingEntry);
@@ -2098,7 +2150,8 @@ const char* AchzFromRespk(RESPK respk)
 	case RESPK_Mouse: return PchzPort(PTX_MouseEntry);
 	default: break;
 	}
-	if ((respk >= RESPK_PromptStyle && respk < RESPK_LanguageEnglish && respk != RESPK_Mouse) || respk == RESPK_AutoCameraRotation)
+	if ((respk >= RESPK_PromptStyle && respk < RESPK_LanguageEnglish && respk != RESPK_Mouse) || respk == RESPK_AutoCameraRotation ||
+		respk == RESPK_Monitor)
 		BuildPcLabel(respk);
     return s_mprespkachz[respk];
 }

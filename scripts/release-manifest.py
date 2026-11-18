@@ -29,6 +29,9 @@ PACKAGES = {
     'macos-arm64-dmg': 'SafeHouse-Launcher-macOS-arm64.dmg',
     'macos-x86_64': 'SafeHouse-Launcher-macOS-x86_64.zip',
     'switch-nro': 'SafeHouse.nro',
+    'switch2-nro': 'SafeHouse-NX2.nro',
+    'android-apk': 'SafeHouse-Android-arm64-v8a.apk',
+    'ios-ipa': 'SafeHouse-iOS.ipa',
     'macos-x86_64-dmg': 'SafeHouse-Launcher-macOS-x86_64.dmg',
 }
 # installation kind (launcher/update.h kindKey) -> package key

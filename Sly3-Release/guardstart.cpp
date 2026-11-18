@@ -6,7 +6,10 @@
 // PostLoadSwPhys.
 
 #include "guard.h"
+#include "frame.h"
+#include "aipassword3.h"
 #include "game/sly3.h"
+#include "game/scptgame3.h"
 #include "worldglobals.h"
 #include "pair.h"
 void TellGuardCommands(LO* pguard, LO* pcmds, bool fRun);  // scptai.cpp: 0x171CF8 / 0x171D58
@@ -39,6 +42,49 @@ bool FGuardRunsCommands(LO* pguard, LO* pcmds);             // scptai.cpp: 0x171
 #include <unordered_map>
 
 void BindLoPartsTable(ALO* palo, int c, uint32_t vaTable);  // loaders.cpp: orig 0x1A64E8
+// orig3: 0x002575F8 (EOPID 370's setter): +0x11E0 = g; the scale controller (+0x11D8, the kind-12 record of the guard's
+// oid) at (g, g, g) unless the guard is shrunk (modes 14 / 16: Sly 3's size destabilizer, natively 8 / 13); +0x260 = +0x250
+// x g (TODO(sly3): the scaled base +0x260 has no native field; the record's scale alone is applied)
+void ApplyGuardScaleOption3(GUARD* pg)
+{
+    if (!pg || !pg->palo) return;
+    // (a copy made while the world runs (split screen's teams, a Carmelita copied onto another hub) gets the controller
+    // its start would have made: 0x250BD8's, the kind-12 record of its oid)
+    // (a copy's guard data may still name its template's controller: its own then)
+    if (pg->pscaleFC4 && pg->pscaleFC4->pxf && pg->pscaleFC4->pxf->palo != pg->palo) pg->pscaleFC4 = nullptr;
+    if (!pg->pscaleFC4)
+        for (const auto& pxf : pg->palo->axf)
+            if (pxf->kind == 12 && pxf->tag == pg->palo->oid)
+            {
+                pg->pscaleFC4 = PctrlNewPos(pg->palo, pxf.get(), 0, 7, 2, glm::vec4(1.0f, 1.0f, 1.0f, 0.0f));
+                break;
+            }
+    // (its own option, else its template's: a copy's options can lack it)
+    for (const LO* plo : {static_cast<const LO*>(pg->palo), static_cast<const LO*>(pg->palo->ploCloneOf)})
+    {
+        if (!plo) continue;
+        for (const OPT& o : plo->aopt)
+            if (o.eopid == 370 && !o.aval.empty())
+            {
+                if (std::getenv("SLY3_GUARDSCALEPRINT"))
+                    std::printf("guard scale: %d %p %.3f (from %s, controller %p)\n", pg->palo->oid, static_cast<void*>(pg->palo), o.aval[0].ag[0],
+                                plo == pg->palo ? "its option" : "its template's", static_cast<void*>(pg->pscaleFC4));
+                ApplyGuardScale3(pg, o.aval[0].ag[0]);
+                return;
+            }
+    }
+    // (none in the options read so far: the template's applied scale (its setter ran))
+    if (const GUARD* pt = pg->palo->ploCloneOf ? PguardFromLo(pg->palo->ploCloneOf) : nullptr; pt && pt->gScale3 != 1.0f) ApplyGuardScale3(pg, pt->gScale3);
+}
+
+void ApplyGuardScale3(GUARD* pg, float g)
+{
+    if (!pg || !(g > 0.0f)) return;
+    if (static const bool s_fOff = std::getenv("SLY3_NOGUARDSCALE") != nullptr; s_fOff) return;   // (debug: the round-7 size)
+    pg->gScale3 = g;
+    if (pg->pscaleFC4 && pg->nMode != 8 && pg->nMode != 13) SetCtrlPos(pg->pscaleFC4, glm::vec4(g, g, g, 0.0f));
+}
+
 namespace
 {
 std::unordered_map<const LO*, LO*>& MpDetector()
@@ -78,7 +124,8 @@ KINDE* PkindeOfMask(GUARD* pg, uint64_t mask)
         if (e.mask == mask) pe = &e;
     if (!pe)
     {
-        if (pg->akinde.size() >= 32) return nullptr;
+        // (Sly 2 keeps up to 32; Sly 3's 0x2554C0 has no bound: v_ext's Carmelita has 36, her player moves last)
+        if (pg->akinde.size() >= 64) return nullptr;
         pg->akinde.emplace_back();
         pe = &pg->akinde.back();
         pe->mask = mask;
@@ -105,7 +152,7 @@ void SetGuardKinde(GUARD* pg, uint64_t mask, OID oid, int grf, bool fResolve)
                     (void*)pg->palo, static_cast<unsigned long long>(mask), oid, grf, fResolve, pe->k);
 }
 
-// orig 0x207EB8: the array entries of the mask's indices
+// orig 0x207EB8: the array entries of the mask's indices (orig3: 0x253690, the same code in Sly 3)
 void SetArrayKindes(std::array<KINDE, 26>& a, uint32_t mask, OID oid, int grf)
 {
     for (int i = 0; i < 26; ++i)
@@ -132,6 +179,9 @@ float GField(const LO* plo, uint32_t ib, float g)
 int NField(const LO* plo, uint32_t ib, int n) { return static_cast<int>(plo->U32Field(0, ib, static_cast<uint32_t>(n))); }
 }  // namespace
 
+// (s3-ai-4) for the job script's Sly 3 kind replacement (aijobs.cpp JOBSCRIPT::OverrideKind3)
+void SetGuardKindeResolved(GUARD* pg, uint64_t mask, OID oid, int grf) { SetGuardKinde(pg, mask, oid, grf, true); }
+
 // brx.cpp (the guards' InitLo 0x205EB8): the detector object made for the guard
 void OnGuardInitLo(LO* pguard, LO* ploDetector) { MpDetector()[pguard] = ploDetector; }
 
@@ -143,6 +193,7 @@ void ResetGuardDetectors()
 {
     MpDetector().clear();
     ResetDetectors();
+    ResetPassword3();
 }
 
 GUARD* g_pguard3F = nullptr;
@@ -279,7 +330,10 @@ void PostLoadGuard(LO* plo)
     pg->pcmdlistPatrol = dynamic_cast<CMDLIST*>(PloNear(plo, NField(plo, 0x2E8, -1)));
     StopK3(&pg->k3play);
     pg->akinde.clear();
-    pg->akinde.reserve(32);  // the original's fixed table keeps active entries' addresses stable
+    // the original's fixed table keeps active entries' addresses stable: reserved to PkindeOfMask's bound (64), so an entry
+    // added later (a copy's attach, a script's) never moves the ones the jobs point at (s3fix-ai2: with Sly 3's states
+    // 8..12 / 57 / 58 mapped, Holland's guards passed 32 entries and their moves' entries dangled: survey ep3 crashes)
+    pg->akinde.reserve(64);
     pg->akind3.clear();
     for (auto& a : pg->aakinde)
         for (KINDE& e : a)
@@ -443,13 +497,15 @@ void PostLoadGuard(LO* plo)
     // the watchers (0x20CE28 / 0x20D1B0)
     pg->watchA = WATCHA{pg, -1, 0.0f, 1};
     pg->watchB = WATCHB{pg, -1, 0.0f, nullptr, 1};
-    // the home's command list: a go-to {oid -1, n10 -1, g14 40} (0x13E3C8(0x71, 0, 0x2CB, -1), 0x170C90), out of the world
-    auto* pl = static_cast<CMDLIST*>(PloNew(S3CID(0x71), g_psw, nullptr, 0x2CB, -1));
+    // the home's command list: a go-to {oid -1, n10 -1, g14 40} (0x13E3C8(0x71, 0, 0x2CB, -1); orig3 0x150690(0x86, 0, 0x322, -1), 0x170C90), out of the world
+    auto* pl = static_cast<CMDLIST*>(PloNew(S3CID(0x71), g_psw, nullptr, 0x322, -1));
     if (pl)
     {
         CMD* pc = PcmdAppend(pl, 7, -1);
         pc->n10 = -1;
         pc->g14 = 40.0f;
+        // (s3fix-ai2) orig3 0x250BD8's 0x1975C8: then the op 16, the guard turned to its home heading
+        PcmdAppend(pl, 16, -1);
         pg->pcmdlistHome = pl;
         pg->pcmdHome = pc;
         RemoveLo(g_psw, pl);
@@ -464,9 +520,14 @@ void PostLoadGuard(LO* plo)
             pg->pscaleFC4 = PctrlNewPos(pg->palo, pxf.get(), 0, 7, 2, glm::vec4(1.0f, 1.0f, 1.0f, 0.0f));
             break;
         }
+    // (Sly 3) the guard's scale, EOPID 370 (orig3 0x2575F8 on the controller orig3 0x250BD8 made: +0x11E0 = g, the record
+    // at (g, g, g)): e.g. Carmelita's 0.75 (v_ext 28; natively she was drawn a third too large: the option had no Sly 3
+    // setter). The load reads it before the controller exists: applied here from the object's option.
+    ApplyGuardScaleOption3(pg);
     // TODO(ai): 0x1A64E8(p, 1, 0x2C3CF8); the KIND2 / KIND3 objects
-    // orig: 0x0014B1D8 (class 0x3F, after 0x2061D8): +0x1010 = 0x13E3C8(3, 0, 0x62B, -1)
-    if (f3F) pg->plo1010 = PloNew(S3CID(0x03), g_psw, nullptr, 0x62B, -1);
+    // orig: 0x0014B1D8 (class 0x3F, after 0x2061D8): +0x1010 = 0x13E3C8(3, 0, 0x62B, -1); Sly 3's Carmelita (post-load
+    // 0x15F490): +0x17D0 = 0x150690(3, 0, 0x6FB, -1) (the chase's aim point, JOBCHASE::Aim 0x15E690; s3fix-ai3 AI-14)
+    if (f3F) pg->plo1010 = PloNew(S3CID(0x03), g_psw, nullptr, plo->pcls->PfnOrig(7) == (FN3_TAG | 0x15F3D8) ? 0x6FB : 0x62B, -1);
 }
 
 // QoL (Q1, a DELIBERATE DIFFERENCE from the original, the user's request): a reused guard instance starts clean.
@@ -517,6 +578,16 @@ void ResetGuardReactionEffects(GUARD* pg)
 }
 }  // namespace
 
+// Sly 3's EOPID 937 (option 939, the health's maximum) as loaded or bound: the last value (0: none)
+int NGuardHealthOption3(const LO* plo)
+{
+    int n = 0;
+    for (const OPT& opt : plo->aopt)
+        if (opt.eopid == 937 && !opt.aval.empty())
+            n = opt.aval[0].k == 1 ? static_cast<int>(opt.aval[0].ag[0]) : opt.aval[0].n;
+    return n;
+}
+
 // orig: 0x00206518 (vt slot 26 of the guard classes; the base 0x1CB518's mask part is the activation's)
 void ResetGuard(LO* plo, LO* pproxy)
 {
@@ -536,7 +607,13 @@ void ResetGuard(LO* plo, LO* pproxy)
     SetAloEntryMode(pg->palo, 0);
     pg->n344 = pg->n340;
     pg->nE88 = pg->nE84;
+    // orig3: 0x250E38's 0x1F43D0(p, 0x1F43F0(p)): Sly 3 keeps a guard's health in the SO's +0x16C / +0x170 (EOPIDs 938 /
+    // 937, the options 940 / 939; no class default: InitLo 0x24D8A8 / 0x1F3B50 set none). Natively n33C / n338. Sly 2's
+    // EOPID 254 (+0x338) has no Sly 3 field twin (275 is not a field), so every guard reset with 0 / 0 and the first hit
+    // that mattered knocked it out. The max is the loaded option 937 (a proxy's bind adds it to aopt as well).
+    if (const int nMax = NGuardHealthOption3(plo); nMax > 0) pg->n338 = nMax;
     pg->n33C = pg->n338;
+    if (std::getenv("SLY2N_GUARDHP")) std::printf("guard hp: reset guard %d hp %d/%d\n", plo->oid, pg->n33C, pg->n338);
     ClearJobs(pg);
     pg->move = MOVEREF{nullptr, 0, 0, pg};  // 0x209778
     SetGuardStateMask(pg, 0);               // 0x209870
@@ -561,8 +638,37 @@ void ResetGuard(LO* plo, LO* pproxy)
     if (PkindeBest(pg, GrfStateBit(8))) pg->grfFE8 |= 4;
     if (PkindeBest(pg, GrfStateBit(0xF))) pg->grfFE8 |= 1;
     if (PkindeBest(pg, GrfStateBit(0x11))) pg->grfFE8 |= 8;
+    // orig3 0x253AE0 (the same reset's Sly 3 flags +0x1144, beside Sly 2's +0xFE8 above): by the kind entries the guard has
+    // for Sly 3's states: 0xE -> 2, 0xD -> 4, 0x15 -> 1 (and +0x11E4 the (0x15 | 0x3D) entry's word 4: not kept), 0x24 ->
+    // 8, 0x41 | 0x15 -> 0x10 (the ride's jump: airide3.cpp), 0xC with 0xA / 0xB / 8 / 9 -> 0x20 / 0x40 / 0x80 / 0x100 (job
+    // 0xEA's sides); natively stored in the guard's field storage (GuardField3 +0x1144). E.g. m2_shaman's ridden guards
+    // 119107: 0x1BF in the reference (refguru r19 RAM at vblank 5300), 0 natively before (no jump on the ride)
+    {
+        // (0x255130's rule in Sly 3's order: an entry of a kind (not -1) whose states all are in the mask and include the
+        // mask's lowest Sly 3 state; the native PkindeBest tests the lowest in Sly 2's numbering)
+        auto bit3 = [](int n3) { const int n2 = IstateGuard2FromIstate3(n3); return n2 >= 0 ? GrfStateBit(n2) : 0ull; };
+        auto has = [&](int a3, int b3) {
+            const uint64_t lo = bit3(std::min(a3, b3 < 0 ? a3 : b3));
+            const uint64_t m = bit3(a3) | (b3 >= 0 ? bit3(b3) : 0ull);
+            if (!lo || (b3 >= 0 && !bit3(b3))) return false;
+            for (const KINDE& e : pg->akinde)
+                if (e.k != -1 && e.mask && (e.mask & m) == e.mask && (e.mask & lo)) return true;
+            return false;
+        };
+        uint32_t grf = 0;
+        if (has(0xE, -1)) grf |= 2;
+        if (has(0xD, -1)) grf |= 4;
+        if (has(0x15, -1)) grf |= 1;
+        if (has(0x24, -1)) grf |= 8;
+        if (has(0x41, 0x15)) grf |= 0x10;
+        if (has(0xC, 0xA)) grf |= 0x20;
+        if (has(0xC, 0xB)) grf |= 0x40;
+        if (has(0xC, 8)) grf |= 0x80;
+        if (has(0xC, 9)) grf |= 0x100;
+        plo->SetField(0, 0x1144, grf);
+    }
     if (static const bool s_f = std::getenv("SLY2N_SHOOTDEBUG") != nullptr; s_f)
-        std::fprintf(stderr, "guard start %d cid 0x%X FE8 %x\n", plo->oid, plo->Cid(), pg->grfFE8);
+        std::fprintf(stderr, "guard start %d cid 0x%X FE8 %x 1144 %x\n", plo->oid, plo->Cid(), pg->grfFE8, plo->U32Field(0, 0x1144, 0));
     // the players watched (0x153EF8 with SW's Sly / Bentley / Murray (0x2E1E40 / 0x2F7900 / 0x2DD5BC) and 0x2DD648)
     if (pg->pdet && g_psw)
     {
@@ -598,10 +704,16 @@ void ResetGuard(LO* plo, LO* pproxy)
     PjobPush(pg, 0x9C)->Enter();
     if (pg->pdet)
     {
-        // (0x1A58D0(det, p, 0xF): the detector's parent (vt slot 10, TODO(ai)))
+        // 0x1A58D0(det, p, 0xF): the detector's parent (vt slot 10). orig3: 0x250E38's 0x1C7A00(+0x10D0, guard, 0xF).
+        // Before, a proxy instance's detector (v_interpol's police) stayed outside its guard's activation and was never
+        // updated, so the police never looked at Sly (Dimitri's / Carmelita's, loaded in place, were)
+        if (pg->pdet->plo && g_psw && FCidDerivedFrom(plo->Cid(), S3CID(0x30)) && pg->pdet->plo->paloParent != plo)
+            SetLoParentActivation(g_psw, pg->pdet->plo, static_cast<ALO*>(plo));
         pg->pdet->ploOwner = plo;  // +0xE0
         // (+0xE4 = the guard's +0xEC: TODO(ai))
     }
+    // (s3fix-ai2) orig3 0x250E38's end: the trigger-reaction records' bags dealt again (0x257B80, by the suck now)
+    for (VOLREACT3& r : pg->avolreact3) DealVolReact3(&r);
 }
 
 namespace
@@ -639,6 +751,8 @@ void DetachGuardSlot27(LO* plo, LO*)
     pocket.fMore = 0;
     plo->SetField(0, 0x490, 0);
     pg->n1000 = 0;  // 0x206748: restore D_002C3CF0 before the next proxy reuse
+    pg->fPassed11BC = 0;  // orig3 0x251000: +0x11B8 / +0x11BC / +0x11C0 cleared, +0x11C4 = now (the disguise's)
+    pg->tLine11C4 = g_clock.t;
     SetPocketMode(plo, -1);
     pg->f330 = 0;  // 0x2067E0: the one-time knockout notification (0x179898) re-armed for the instance's next use
     pg->ploF68 = nullptr;           // +0xF68 (its station)
@@ -664,9 +778,58 @@ struct INITKINDMETHODS
             if (GUARD* pg = PguardFromLo(plo)) pg->acid3C4.clear();
             return CRef(TAGK_Void);
         });
-        // 0x103730 -> 0x2088E0 (EOPID 266): the detector's targets (+0xFC), the looked-for classes (+0x394 / +0x3A4),
-        // the excluded (0x2089E8) and the immediate ones (0x208B30) cleared
-        RegisterObjectMethod(0x103730, [](LO* plo, const std::vector<CRef>&) {
+        // (s3-decomp, round 3: the thunk map now pairs the detector methods by their callees (eopidmap.py): Sly 2 261
+        // add = Sly 3 option 409 (EOPID 282, thunk 0x103F60 -> 0x2542A8 -> 0x170018), 265 remove = 410 (283, 0x104008 ->
+        // 0x2542C8 -> 0x1701B0: out of the added list, into the removed one, its entry dropped), 266 clear = 411 (284,
+        // 0x104090, registered below by its Sly 3 thunk). Sly 2's 0x103730 key is that clear, so it is not registered here.)
+        // orig3: 0x104090 -> 0x2542E8 (option 411, EOPID 284, Sly 3 only): 0x170328 (the detector's targets cleared),
+        // 0x2543F8 / 0x2544D8 (the looked-for and the immediate classes cleared), as Sly 2's 266 (0x2088E0)
+        // (s3fix-ai2) orig3: 0x104B18 -> 0x2578D8 (option 499, EOPID 372, a loader method of the guards in 31 worlds, e.g.
+        // m2_shaman's 119107, v_ext's 144809): a trigger-reaction record {kind, the two {skip, react} weight pairs (each
+        // normalized by 0x2577A0; none: {1, 0}), mask}, at most 8; its bag dealt at once (0x257B80) and again by the
+        // reset (0x250E38). Used by OnTriggerGuardEnter3 (aijobs.cpp: class-0x17 triggers, job 0xEA)
+        RegisterObjectMethod3(0x104B18, [](LO* plo, const std::vector<CRef>& a) {
+            GUARD* pg = PguardFromLo(plo);
+            if (!pg && FLoGuard(plo)) pg = PguardNew(static_cast<ALO*>(plo));   // (a loader method: before PostLoadGuard)
+            if (!pg || pg->avolreact3.size() >= 8) return CRef(TAGK_Void);
+            VOLREACT3 r;
+            r.k = NArg(a, 0);
+            r.mask = static_cast<uint32_t>(NArg(a, 3));
+            auto weights = [&](std::size_t i, float* pw) {
+                std::vector<int> an = AnArgList(a, i);
+                an.resize(2, 0);
+                const int sum = an[0] + an[1];
+                if (sum == 0) { pw[0] = 1.0f; pw[1] = 0.0f; }
+                else for (int j = 0; j < 2; ++j) pw[j] = float(an[std::size_t(j)]) / float(sum);
+            };
+            weights(1, r.aw8);
+            weights(2, r.aw10);
+            DealVolReact3(&r);
+            if (std::getenv("SLY3_TRIGREACTPRINT"))
+                std::printf("trigreact3: guard %d record kind %d mask 0x%X weights %.2f/%.2f %.2f/%.2f\n", plo->oid, r.k, r.mask,
+                            r.aw8[0], r.aw8[1], r.aw10[0], r.aw10[1]);
+            pg->avolreact3.push_back(std::move(r));
+            return CRef(TAGK_Void);
+        });
+        // orig3: 0x104A70 -> 0x163D30 (STEPGUARD option 485, EOPID 358; arguments a CMDLIST (0x2086) and an object
+        // (0x2002)): the prox job's list +0x1164 and the object it measures +0x1190, the list's place +0x1168 reset; the
+        // reaction picks it up when idle (0x19AF20: kind 18 = native 15, JOBPROX). Sly 2's class-0x3C method 970
+        // (0x10DA68: the list only, measured against Sly) has no Sly 3 thunk.
+        RegisterObjectMethod3(0x104A70, [](LO* plo, const std::vector<CRef>& a) {
+            if (GUARD* pg = PguardFromLo(plo))
+            {
+                pg->plo108C = PloArg(a, 0);
+                pg->n108C = pg->plo108C ? 1 : 0;
+                pg->plo1190 = PloArg(a, 1);
+                pg->saved1090 = SAVEDSCRIPT{};
+                if (std::getenv("SLY2N_PROXPRINT"))
+                    std::fprintf(stderr, "prox %d (%p world %d at %.0f %.0f %.0f): list %d object %d\n", plo->oid, (void*)plo, int(plo->fInWorld),
+                                 PosLoWorld(plo).x, PosLoWorld(plo).y, PosLoWorld(plo).z, pg->plo108C ? pg->plo108C->oid : -1,
+                                 pg->plo1190 ? pg->plo1190->oid : -1);
+            }
+            return CRef(TAGK_Void);
+        });
+        RegisterObjectMethod3(0x104090, [](LO* plo, const std::vector<CRef>&) {
             if (GUARD* pg = PguardFromLo(plo))
             {
                 if (std::getenv("SLY2N_DETSTATE"))
@@ -802,8 +965,46 @@ struct INITKINDMETHODS
         // kind it takes, 0x208BE0; -1 any) and +0xE74. Ep7's judges (task 3258, module 155 s2101) let only the first
         // judge of the list hear Sly's alarm clock: it gets 447 (323) -1, the others 4; natively the sets never reached
         // the guards, so all three judges went for the clock and one fell in the water (R43c)
+        // orig3: STEPGUARD option 435 (EOPID 308, Sly 3 only): getter 0x257578 (+0x4C0 == 0) and setter 0x257588: when
+        // the inverted value differs from +0x4C0, +0x4C0 = 1 and the ground watcher (+0x4B0, Sly 2's WATCHA) is disabled
+        // once more (0x259D10: its counter +0xC, the first disable puts it in state 0). (The original sets +0x4C0 to 1
+        // in either direction.) Carmelita's chase modes set it off; v_interpol's police too.
+        RegisterObjectGetter3(308, [](LO* plo) {
+            CRef r;
+            const GUARD* pg = PguardFromLo(plo);
+            r.SetBool(pg && pg->fWatchOff3 == 0);
+            return r;
+        });
+        // (Sly 3) EOPID 370: the guard's scale (orig3 0x2575F8)
+        RegisterObjectSetter3(370, [](LO* plo, const CRef& r) {
+            if (GUARD* pg = PguardFromLo(plo)) ApplyGuardScale3(pg, r.m_tagk == TAGK_F32 ? r.m_g : float(r.RefCoerceS32().m_n));
+        });
+        RegisterObjectGetter3(370, [](LO* plo) {
+            CRef r;
+            const GUARD* pg = PguardFromLo(plo);
+            r.SetF32(pg ? pg->gScale3 : 1.0f);
+            return r;
+        });
+        RegisterObjectSetter3(308, [](LO* plo, const CRef& r) {
+            GUARD* pg = PguardFromLo(plo);
+            if (!pg) return;
+            const bool fOn = r.m_tagk == TAGK_Bool ? r.m_bool : r.RefCoerceS32().m_n != 0;
+            if (int(!fOn) == pg->fWatchOff3) return;
+            pg->fWatchOff3 = 1;
+            if (pg->watchA.cOff3 == 0 && pg->watchA.st != 0)  // 0x259D10 -> 0x259CA8(watch, 0) (SetWatchA, state 0)
+            {
+                pg->watchA.st = 0;
+                pg->watchA.t = g_clock.t;
+            }
+            ++pg->watchA.cOff3;
+            pg->watchA.fOn = 0;
+        });
         RegisterObjectSetter(281, [](LO* plo, const CRef& r) {
-            if (GUARD* pg = PguardFromLo(plo)) pg->nE64 = r.m_tagk == TAGK_Bool ? r.m_bool : r.RefCoerceS32().m_n;
+            if (GUARD* pg = PguardFromLo(plo))
+            {
+                pg->nE64 = r.m_tagk == TAGK_Bool ? r.m_bool : r.RefCoerceS32().m_n;
+                plo->SetField(0, 0xE64, uint32_t(pg->nE64));  // (the field the original's 0x254818 reads; FGuardFreeN)
+            }
         });
         RegisterObjectGetter(281, [](LO* plo) {
             CRef r; const GUARD* pg = PguardFromLo(plo); r.SetS32(pg ? pg->nE64 : 0); return r;
@@ -854,6 +1055,14 @@ struct INITKINDMETHODS
         });
         // orig: 0x102A88 -> 0x207B70 (loader), 0x102B60 -> 0x207BC8 (live splice method).
         static auto setKinde = [](LO* plo, const std::vector<CRef>& a, bool fResolve) {
+            if (std::getenv("SLY2N_KINDESET"))
+            {
+                std::printf("kindeset call: t %.3f obj %d %p cid 0x%X guard %d live %d args %zu: states", g_clock.t, plo ? plo->oid : -1,
+                            (void*)plo, plo ? plo->Cid() : 0, PguardFromLo(plo) != nullptr, int(fResolve), a.size());
+                if (a.size() >= 3 && a[0].m_tagk != TAGK_None)
+                    for (int n : AnArgList(a, 0)) std::printf(" %d", n);
+                std::printf(" oid %d grf %d\n", NArg(a, 1), NArg(a, 2));
+            }
             if (GUARD* pg = PguardFromLo(plo); pg && a.size() >= 3)
             {
                 uint64_t mask = 0;
@@ -1023,7 +1232,18 @@ NATIVEFN(0x20B3D0, NGuardStatus77);
 // guard was not reset at all (its slot 26 was not registered).
 void ResetGuard3CSlot26(LO* plo, LO* pproxy) { ResetGuard(plo, pproxy); }
 NATIVEFN(0x1BA0B8, ResetGuard3CSlot26);
+// orig3: 0x0015F528 (Sly 3's Carmelita 0x3C, vt slot 31 = Sly 2 slot 26; no Sly 2 twin): the guards' reset 0x250E38,
+// her hit points full (0x1F4438(p, 0x1F4458(p)): +0x174 = +0x178, as ResetGuard's n33C), 0x251A58(p, 1) (her 0x420-byte
+// navigation record, made once: TODO(sly3 ai)), her child's vt slot 9 and her marker's state 4 (TODO(sly3 ai)). Before,
+// it was not registered: her acquired instance in v_ext's chase got no reset (no reaction job 0x9C, no detector targets)
+void ResetCarmelita3Slot31(LO* plo, LO* pproxy) { ResetGuard(plo, pproxy); }
+NATIVEFN3(0x15F528, ResetCarmelita3Slot31);
 NATIVEFN(0x206748, DetachGuardSlot27);
+// orig3: 0x0015F5A0 (Carmelita 0x3C's vt slot 32 = Sly 2 slot 27): the guards' 0x251000, her shot list +0x17F8 emptied
+// (none natively: aicarm3.cpp PloShotTarget) and 0x251A58(p, 0) (her navigation record: TODO(sly3 ai), as slot 31's).
+// Before, the slot had no function (audit3 F21: "[vt] no native function", 5 survey cases).
+void DetachCarmelita3Slot32(LO* plo, LO* pproxy) { DetachGuardSlot27(plo, pproxy); }
+NATIVEFN3(0x15F5A0, DetachCarmelita3Slot32);
 
 // The guards at the start: 0x2061D8 queues 0x206170 (slot 26 (0), then their splice message 0xE) unless the guard's
 // namespace node (+0x3C) has its +0x24 set (0x1CA500: an object of a group's spare instance, which a proxy gives
@@ -1036,7 +1256,10 @@ void ResetGuardsAtStart(SW* psw)
     {
         // (0x206170 calls the class's slot 26: the guards' 0x206518, class 0x3C's 0x1BA0B8, whose post-load 0x1BA018
         // also starts with 0x2061D8)
-        if (!plo->pcls || (plo->pcls->PfnOrig(26) != 0x206518 && plo->pcls->PfnOrig(26) != 0x1BA0B8) || !PguardFromLo(plo.get())) continue;
+        if (!plo->pcls ||
+            (plo->pcls->PfnOrig(26) != 0x206518 && plo->pcls->PfnOrig(26) != 0x1BA0B8 && plo->pcls->PfnOrig(26) != (FN3_TAG | 0x15F528)) ||
+            !PguardFromLo(plo.get()))
+            continue;
         const WE* pwe = plo->igrp >= 0 && plo->igrp < static_cast<int>(psw->awe.size()) ? &psw->awe[plo->igrp] : nullptr;
         if (std::getenv("SLY2N_GUARDSTART"))
             std::fprintf(stderr, "guard start %d (alias %d) cid 0x%X: inworld %d removed %d clone %d group %d (proxied %d spare %d)\n", plo->oid, plo->oidInstance,
@@ -1045,6 +1268,44 @@ void ResetGuardsAtStart(SW* psw)
         // Carmelita 12712, whose pocket would be filled with coins before her job's keys come)
         if (plo->fSpareNs) continue;
         ResetGuard(plo.get(), nullptr);
-        HandleLoSpliceEvent(plo.get(), 14, false, 0, nullptr);  // (0x206170's splice message 0xE)
+        // (0x206170's splice message 0xE; Sly 3: the transition's 0x1FC458 -> 0x1FC868 per collected object: slot 31,
+        // then the event 17 with one argument, the context (none at the start))
+        CRef refNone;
+        HandleLoSpliceEvent(plo.get(), SPLICEEV3_ATTACH, false, 1, &refNone);
+    }
+}
+
+// orig3: 0x1FC458 (the transition 0x25C2A8 after the queued task 0x184AA0): every object of the world's tree (vt slot 28:
+// 0x1FC248 / 0x1FC290 with its children) that is not a proxy row's object (0x1FC1F0: its +0x38 node's +0x24, natively
+// fSpareNs) gets 0x1FC868: slot 31, then vt slot 3 with 17 (one argument: the context, none here). The guards had theirs
+// above (ResetGuardsAtStart). E.g. v_canal's police boat 139806 refills SO 2003's health in its 17 (block 139806 module
+// 0), the reference at the load's 4th vblank. Not ported: slot 31 (the ALOs' saved pose 0x1FC968, SO 0x1F3C48).
+// The walk follows the SW's child lists, not the world's update list: an object out of the world at the start (its
+// chain not added yet) gets its 17 too (s3-hack round 6: the Ep4 webcam's chaser spawners 78434 under the hack board
+// 70227, which the hack task adds later: the reference sends them 17 at the load's last vblank (0x1FC868 from 0x1FC458,
+// their grf without the in-world bit 0x01000000); their 17 starts their SCPT 78440, whose event 4 acquires the chasers
+// 78461 from proxy 78459. Natively only the objects in the world got it and the webcam's big room had no chasers).
+// (s3-plane) The planes (class 0x52) need it out of the world too: the reference configures all three copies of
+// h_dogfight's player plane 95691 by their event 17 (the option 2150 procedures with the pilot +1823: the body, guns,
+// hit points), two of which are out of the world.
+// SLY3_NOSTARTEV=1: the guards only (as before).
+void SendStartEvents3(SW* psw)
+{
+    if (std::getenv("SLY3_NOSTARTEV")) return;
+    std::vector<LO*> aplo;
+    for (const auto& plo : psw->aploAll)
+    {
+        // (debug: SLY3_STARTEVOID=oid: that object's state at the start events)
+        if (static const int s_oid = std::getenv("SLY3_STARTEVOID") ? std::atoi(std::getenv("SLY3_STARTEVOID")) : -2; plo->oid == s_oid)
+            std::printf("start event: %d cid 0x%X inworld %d removed %d spare %d frame %d bound17 %d\n", plo->oid, plo->Cid(), plo->fInWorld, plo->fRemoved, plo->fSpareNs,
+                        plo->pframe != nullptr, plo->pframe && plo->pframe->PrefFindBinding(SPLICEEV3_ATTACH, 1) != nullptr);
+        if (!plo->fSpareNs && !PguardFromLo(plo.get())) aplo.push_back(plo.get());
+    }
+    CRef refNone;
+    void StartHackSo3(LO * plo);   // (hack3.cpp: the hack objects' slot 31 0x19B668)
+    for (LO* plo : aplo)
+    {
+        StartHackSo3(plo);
+        HandleLoSpliceEvent(plo, SPLICEEV3_ATTACH, false, 1, &refNone);
     }
 }

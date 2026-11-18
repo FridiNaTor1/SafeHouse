@@ -1,5 +1,6 @@
 int IspliceBlockCur(struct SW* psw);
 #include <execinfo.h>
+#include "shd.h"
 #include "game/sly3.h"
 #include "wr.h"
 #include "clock.h"
@@ -13,6 +14,7 @@ int IspliceBlockCur(struct SW* psw);
 // marked TODO(M3/M4) with the original function they call, for when the class's behaviour is ported.
 
 #include "activate.h"
+#include "editrec.h"
 #include "task.h"
 #include "scpt.h"
 #include "alo.h"
@@ -78,6 +80,7 @@ void LoadLoxBaseFromBrx(LO* plo, CBinaryInputStream* pbis)
     LOX* plox = static_cast<LOX*>(plo);
     plox->ixfRef = pbis->S16Read();
     plox->pxf = PxfFindLox(plox, plox->ixfRef);
+    if (g_peditrec) g_peditrec->afield.push_back({plo, EDITFK_LoxMatrix, 0, -1, -1, pbis->m_ib});   // (PC: the map editor)
     plox->mat = pbis->ReadMatrix4();
     // TODO(M3): 0x2313F0
     plox->grfLoad = pbis->U32Read();
@@ -105,7 +108,7 @@ void LoadLoxChildrenFromBrx(LOX* plox, CBinaryInputStream* pbis, std::vector<LO*
         for (LO* plo : *papo) SetLoMatrix(plo, plox->mat);  // vt slot 37
 }
 
-// orig 0x00227380 (cid 5)
+// orig 0x00227380 (cid 5) (orig3: 0x27E918, the same C in the Sly 3 decomp)
 void LoadVolumeFromBrx(LO* plo, CBinaryInputStream* pbis)
 {
     LOADFN(0x227380);
@@ -205,15 +208,17 @@ void LoadLox2035A8FromBrx(LO* plo, CBinaryInputStream* pbis)
     LoadLoxFromBrx(plo, pbis);  // (defaults set before: +0xE0 75, +0xE8 0.25, +0x104 5000)
 }
 
-// orig 0x001E5DF8 (cid 0x0A family)
+// orig 0x001E5DF8 (cid 0x0A family) (orig3: 0x22D780, the same C in the Sly 3 decomp)
 void LoadPathFromBrx(LO* plo, CBinaryInputStream* pbis)
 {
     LOADFN(0x1E5DF8);
     LOXPATH* p = static_cast<LOXPATH*>(plo);
     LoadLoxBaseFromBrx(p, pbis);
+    const std::size_t ibCrvEdit = pbis->m_ib;   // (PC: the map editor, editrec.h)
     p->fE0 = pbis->S8Read();
     p->nE4 = pbis->S8Read();
     const int c = pbis->U16Read();
+    if (g_peditrec) g_peditrec->afield.push_back({plo, EDITFK_Path, c, p->nE4, p->fE0, ibCrvEdit});
     p->an.resize(c);
     pbis->Read(static_cast<std::size_t>(c) * 4, p->an.data());
     for (int i = 0; i < c; ++i) p->avecF4.push_back(pbis->ReadVector());
@@ -311,7 +316,7 @@ void LoadGrouperFromBrx(LO* plo, CBinaryInputStream* pbis)
         if (!FIsLoDerivedFrom(pc, S3CID(0x1E))) RemoveLo(g_psw, pc);
 }
 
-// orig 0x00159240 LoadEmitmeshFromBrx
+// orig 0x00159240 LoadEmitmeshFromBrx (orig3: 0x1775B8, the same C in the Sly 3 decomp)
 void LoadEmitmeshFromBrx(LOXEMIT::EMITMESH* pem, CBinaryInputStream* pbis)
 {
     LOADFN(0x159240);
@@ -325,7 +330,21 @@ void LoadEmitmeshFromBrx(LOXEMIT::EMITMESH* pem, CBinaryInputStream* pbis)
         pem->atri[t].sArea = pbis->F32Read();
     }
     pem->v20 = pbis->ReadVector();
-    // TODO(M4): the vertex normals
+    // orig3 0x1775B8: the vertex normals (each face's (P1 - P0) x (P2 - P0) added to its corners, then normalized; below
+    // 1e-4 the default D_00317550 (0, 0, 1)), read by the vertex-normal direction (kind 5) of the emitters / effects
+    pem->anormal.assign(pem->apos.size(), glm::vec3(0.0f));
+    for (const auto& t : pem->atri)
+    {
+        auto P = [&](int k) { return size_t(t.aipos[k]) < pem->apos.size() ? pem->apos[size_t(t.aipos[k])] : glm::vec3(0.0f); };
+        const glm::vec3 n = glm::cross(P(1) - P(0), P(2) - P(0));
+        for (int k = 0; k < 3; ++k)
+            if (size_t(t.aipos[k]) < pem->anormal.size()) pem->anormal[size_t(t.aipos[k])] += n;
+    }
+    for (glm::vec3& n : pem->anormal)
+    {
+        const float g = glm::length(n);
+        n = g < 1e-4f ? glm::vec3(0.0f, 0.0f, 1.0f) : n / g;
+    }
 }
 
 // The emitter's kind (its emitter record +0x10): set by the setter option 483 (emitters, 0x258A00) / 536
@@ -338,7 +357,7 @@ int EmitterKind(const LO* plo, int eopidSetter, uint32_t pfnGetter)
     return kind;
 }
 
-// orig 0x002584A8 / 0x00258F40: the emitter's colours
+// orig 0x002584A8 / 0x00258F40: the emitter's colours (orig3: 0x2BC928, the same C in the Sly 3 decomp)
 void LoadEmitColorsFromBrx(uint32_t fn, LOXEMIT* p, CBinaryInputStream* pbis)
 {
     LoadScope scope(fn);
@@ -347,7 +366,8 @@ void LoadEmitColorsFromBrx(uint32_t fn, LOXEMIT* p, CBinaryInputStream* pbis)
     p->nColors = pbis->U8Read();
     for (int i = 0; i < n; ++i)
     {
-        const uint32_t u = pbis->U32Read();
+        uint32_t u = pbis->U32Read();
+        if (fn == 0x2BC928 || fn == 0x2BD398) AdjustRgba(&u);   // (Sly 3's: each colour through 0x236908, the 3-D mode's)
         if (i < 32) p->argba.push_back(u);
     }
 }
@@ -420,6 +440,7 @@ void LoadTaskFromBrx(LO* plo, CBinaryInputStream* pbis)
     LOADFN(0x1635F8);
     LOLIST* p = static_cast<LOLIST*>(plo);
     LoadLoFromBrx(p, pbis);
+    if (g_peditrec) g_peditrec->afield.push_back({plo, EDITFK_TaskLinks, 0, -1, -1, pbis->m_ib});   // (PC: the map editor)
     const int c94 = pbis->U8Read();
     for (int i = 0; i < c94; ++i) p->an90.push_back(pbis->S32Read());
     const int cA0 = pbis->U8Read();
@@ -431,6 +452,8 @@ void LoadTaskFromBrx(LO* plo, CBinaryInputStream* pbis)
 void LoadLo1731B8FromBrx(LO* plo, CBinaryInputStream* pbis) { LOADFN(0x1731B8); LoadLoFromBrx(plo, pbis); }
 void LoadLo1DFB10FromBrx(LO* plo, CBinaryInputStream* pbis) { LOADFN(0x1DFB10); BeginScptLoad(plo); LoadLoFromBrx(plo, pbis); EndScptLoad(plo); }  // (scpt.cpp)
 void LoadLo14A008FromBrx(LO* plo, CBinaryInputStream* pbis) { LOADFN(0x14A008); LoadLoFromBrx(plo, pbis); }
+// orig3 0x21A928 (the ship spawner 0x9A: its two arrays around the LO's load; the options kept, game/ship3.cpp)
+void LoadLo21A928FromBrx(LO* plo, CBinaryInputStream* pbis) { LOADFN(0x21A928); LoadLoFromBrx(plo, pbis); }
 
 // orig 0x00153B08 (cid 0x7A)
 void LoadLo153B08FromBrx(LO* plo, CBinaryInputStream* pbis)
@@ -451,7 +474,7 @@ void LoadLo153B08FromBrx(LO* plo, CBinaryInputStream* pbis)
     }
 }
 
-// orig 0x001C3DC8 LoadSoFromBrx: ALO + a skipped string
+// orig 0x001C3DC8 LoadSoFromBrx: ALO + a skipped string (orig3: 0x1F3BC8, the same C in the Sly 3 decomp)
 void LoadSoFromBrx(LO* plo, CBinaryInputStream* pbis)
 {
     LOADFN(0x1C3DC8);
@@ -480,6 +503,159 @@ constexpr PARTROW c_apartrow[] = {
 #define PARTMAP(va, i, ib3, ib2) {va, i, ib3, ib2},
 #include "game/gen/parts.inc"
 #undef PARTMAP
+    // (s3-player) the Guru's table 0x349460 (his loader 0x22C260; not in parts.inc): the base sub-objects' parts at the
+    // Sly 2 offsets Murray's / Bentley's rows give the same oid at the same Sly 3 offset (the jump +0x320, the
+    // interaction +0x500, the safe ground, the binocucom); his own (the gaits +0x1494.., +0x15EC) at FN3_TAG | ib3 only
+    {0x349460, 0, 0x1494, -1},
+    {0x349460, 1, 0x14D4, -1},
+    {0x349460, 2, 0x1544, -1},
+    {0x349460, 3, 0x1584, -1},
+    {0x349460, 4, 0x1134, 0x1028},
+    {0x349460, 5, 0x15EC, -1},
+    {0x349460, 6, 0x0390, 0x0380},
+    {0x349460, 7, 0x0394, 0x0384},
+    {0x349460, 8, 0x03E0, 0x03E0},
+    {0x349460, 9, 0x03EC, 0x03EC},
+    {0x349460, 10, 0x03F0, 0x03F0},
+    {0x349460, 11, 0x03E8, 0x03E8},
+    {0x349460, 12, 0x03E4, 0x03E4},
+    {0x349460, 13, 0x03F4, 0x03F4},
+    {0x349460, 14, 0x0400, 0x0400},
+    {0x349460, 15, 0x0404, 0x0404},
+    {0x349460, 16, 0x03FC, 0x03FC},
+    {0x349460, 17, 0x03F8, 0x03F8},
+    {0x349460, 18, 0x041C, 0x0414},
+    {0x349460, 19, 0x0420, 0x0418},
+    {0x349460, 20, 0x0424, 0x041C},
+    {0x349460, 21, 0x042C, -1},
+    {0x349460, 22, 0x0554, 0x0514},
+    {0x349460, 23, 0x0558, 0x0518},
+    {0x349460, 24, 0x055C, 0x051C},
+    {0x349460, 25, 0x0560, 0x0520},
+    {0x349460, 26, 0x0574, 0x0534},
+    {0x349460, 27, 0x0594, 0x0554},
+    {0x349460, 28, 0x05B4, 0x0574},
+    {0x349460, 29, 0x05D4, 0x0594},
+    {0x349460, 30, 0x05F4, 0x05B4},
+    {0x349460, 31, 0x0614, 0x05D4},
+    {0x349460, 32, 0x0634, 0x05F4},
+    {0x349460, 33, 0x0654, 0x0614},
+    {0x349460, 34, 0x0674, 0x0634},
+    {0x349460, 35, 0x0678, 0x0638},
+    {0x349460, 36, 0x067C, 0x063C},
+    {0x349460, 37, 0x0A10, 0x09D0},
+    {0x349460, 38, 0x09F0, 0x09B0},
+    {0x349460, 39, 0x09F4, 0x09B4},
+    {0x349460, 40, 0x0A04, 0x09C4},
+    {0x349460, 41, 0x0F6C, 0x0F0C},
+    {0x349460, 42, 0x0F70, 0x0F10},
+    // (s3-player round 21) Penelope's table 0x3468A0 (her loader 0x1EFF30): the Guru's entries at the same Sly 3 offsets
+    // (the same oids) with his Sly 2 offsets; her own (+0x15E0, the state 3/4 records +0x15F4.., +0x16F4 / +0x16F8) at FN3_TAG | ib3
+    {0x3468A0, 0, 0x1494, -1},
+    {0x3468A0, 1, 0x14D4, -1},
+    {0x3468A0, 2, 0x1544, -1},
+    {0x3468A0, 3, 0x1584, -1},
+    {0x3468A0, 4, 0x1134, 0x1028},
+    {0x3468A0, 5, 0x0390, 0x0380},
+    {0x3468A0, 6, 0x0394, 0x0384},
+    {0x3468A0, 7, 0x03E0, 0x03E0},
+    {0x3468A0, 8, 0x03EC, 0x03EC},
+    {0x3468A0, 9, 0x03F0, 0x03F0},
+    {0x3468A0, 10, 0x03E8, 0x03E8},
+    {0x3468A0, 11, 0x03E4, 0x03E4},
+    {0x3468A0, 12, 0x03F4, 0x03F4},
+    {0x3468A0, 13, 0x0400, 0x0400},
+    {0x3468A0, 14, 0x0404, 0x0404},
+    {0x3468A0, 15, 0x03FC, 0x03FC},
+    {0x3468A0, 16, 0x03F8, 0x03F8},
+    {0x3468A0, 17, 0x041C, 0x0414},
+    {0x3468A0, 18, 0x0420, 0x0418},
+    {0x3468A0, 19, 0x0424, 0x041C},
+    {0x3468A0, 20, 0x042C, -1},
+    {0x3468A0, 21, 0x0554, 0x0514},
+    {0x3468A0, 22, 0x0558, 0x0518},
+    {0x3468A0, 23, 0x055C, 0x051C},
+    {0x3468A0, 24, 0x0560, 0x0520},
+    {0x3468A0, 25, 0x0574, 0x0534},
+    {0x3468A0, 26, 0x0594, 0x0554},
+    {0x3468A0, 27, 0x05B4, 0x0574},
+    {0x3468A0, 28, 0x05D4, 0x0594},
+    {0x3468A0, 29, 0x05F4, 0x05B4},
+    {0x3468A0, 30, 0x0614, 0x05D4},
+    {0x3468A0, 31, 0x0634, 0x05F4},
+    {0x3468A0, 32, 0x0654, 0x0614},
+    {0x3468A0, 33, 0x0674, 0x0634},
+    {0x3468A0, 34, 0x0678, 0x0638},
+    {0x3468A0, 35, 0x067C, 0x063C},
+    {0x3468A0, 36, 0x0A10, 0x09D0},
+    {0x3468A0, 37, 0x09F0, 0x09B0},
+    {0x3468A0, 38, 0x09F4, 0x09B4},
+    {0x3468A0, 39, 0x0A04, 0x09C4},
+    {0x3468A0, 40, 0x15E0, -1},
+    {0x3468A0, 41, 0x15F4, -1},
+    {0x3468A0, 42, 0x1614, -1},
+    {0x3468A0, 43, 0x1634, -1},
+    {0x3468A0, 44, 0x1654, -1},
+    {0x3468A0, 45, 0x1674, -1},
+    {0x3468A0, 46, 0x1694, -1},
+    {0x3468A0, 47, 0x16B4, -1},
+    {0x3468A0, 48, 0x16D4, -1},
+    {0x3468A0, 49, 0x0F6C, 0x0F0C},
+    {0x3468A0, 50, 0x0F70, 0x0F10},
+    {0x3468A0, 51, 0x16F4, -1},
+    {0x3468A0, 52, 0x16F8, -1},
+    // (AUDIT4 PLAYER-01) the Panda King's table 0x346650 (his loader 0x1E9438, 49 entries): the Guru's entries at the same
+    // Sly 3 offsets (the same oids) with his Sly 2 offsets; his own (the third gait +0x15F4 / +0x1634, the fireworks' clips
+    // +0x1690.., the marker +0x16F4) at FN3_TAG | ib3
+    {0x346650, 0, 0x1494, -1},
+    {0x346650, 1, 0x14D4, -1},
+    {0x346650, 2, 0x1544, -1},
+    {0x346650, 3, 0x1584, -1},
+    {0x346650, 4, 0x15F4, -1},
+    {0x346650, 5, 0x1634, -1},
+    {0x346650, 6, 0x1134, 0x1028},
+    {0x346650, 7, 0x0390, 0x0380},
+    {0x346650, 8, 0x0394, 0x0384},
+    {0x346650, 9, 0x03E0, 0x03E0},
+    {0x346650, 10, 0x03EC, 0x03EC},
+    {0x346650, 11, 0x03F0, 0x03F0},
+    {0x346650, 12, 0x03E8, 0x03E8},
+    {0x346650, 13, 0x03E4, 0x03E4},
+    {0x346650, 14, 0x03F4, 0x03F4},
+    {0x346650, 15, 0x0400, 0x0400},
+    {0x346650, 16, 0x0404, 0x0404},
+    {0x346650, 17, 0x03FC, 0x03FC},
+    {0x346650, 18, 0x03F8, 0x03F8},
+    {0x346650, 19, 0x041C, 0x0414},
+    {0x346650, 20, 0x0420, 0x0418},
+    {0x346650, 21, 0x0424, 0x041C},
+    {0x346650, 22, 0x042C, -1},
+    {0x346650, 23, 0x0554, 0x0514},
+    {0x346650, 24, 0x0558, 0x0518},
+    {0x346650, 25, 0x055C, 0x051C},
+    {0x346650, 26, 0x0560, 0x0520},
+    {0x346650, 27, 0x0574, 0x0534},
+    {0x346650, 28, 0x0594, 0x0554},
+    {0x346650, 29, 0x05B4, 0x0574},
+    {0x346650, 30, 0x05D4, 0x0594},
+    {0x346650, 31, 0x05F4, 0x05B4},
+    {0x346650, 32, 0x0614, 0x05D4},
+    {0x346650, 33, 0x0634, 0x05F4},
+    {0x346650, 34, 0x0654, 0x0614},
+    {0x346650, 35, 0x0674, 0x0634},
+    {0x346650, 36, 0x0678, 0x0638},
+    {0x346650, 37, 0x067C, 0x063C},
+    {0x346650, 38, 0x0A10, 0x09D0},
+    {0x346650, 39, 0x09F0, 0x09B0},
+    {0x346650, 40, 0x09F4, 0x09B4},
+    {0x346650, 41, 0x0A04, 0x09C4},
+    {0x346650, 42, 0x0F6C, 0x0F0C},
+    {0x346650, 43, 0x0F70, 0x0F10},
+    {0x346650, 44, 0x1690, -1},
+    {0x346650, 45, 0x1694, -1},
+    {0x346650, 46, 0x1698, -1},
+    {0x346650, 47, 0x169C, -1},
+    {0x346650, 48, 0x16F4, -1},
 };
 // the Sly 2 offset of entry i of a listed table (-1: none; -2: the table is not listed)
 int Ib2OfPart(uint32_t vaTable, int i)
@@ -495,6 +671,8 @@ int Ib2OfPart(uint32_t vaTable, int i)
 }
 }  // namespace
 
+static bool s_fTag3Unlisted = false;   // (s3-gadgets: BindLoPartsTable3)
+static bool s_fPartsFromTemplate = false;   // (SetBindPartsFromTemplate3)
 void BindLoParts(ALO* palo, int c, uint32_t vaTable)
 {
     for (int i = 0; i < c; ++i)
@@ -511,6 +689,7 @@ void BindLoParts(ALO* palo, int c, uint32_t vaTable)
             aib[0] = FN3_TAG | ib3;
             if (ib2 >= 0) aib[cib++] = uint32_t(ib2);
         }
+        else if (s_fTag3Unlisted) aib[0] = FN3_TAG | ib3;
         for (int k = 0; k < cib; ++k)
         {
         const uint32_t ib = aib[k];
@@ -555,9 +734,19 @@ void BindLoParts(ALO* palo, int c, uint32_t vaTable)
                 return nullptr;
             };
             plo = find(palo);
+            // (PC, SetBindPartsFromTemplate3: a copy made while the world runs lacks the template's children that had left the
+            // world (its ASEGs / SMs, PloCloneLo skips removed ones): those parts are the template's, shared (an ASEG / SM
+            // plays on the object it is applied to))
+            if (!plo && s_fPartsFromTemplate && palo->ploCloneOf)
+            {
+                plo = find(palo->ploCloneOf);
+                if (plo && !plo->fRemoved) plo = nullptr;   // (the template's own live objects stay its own)
+            }
         }
+        if (s_fPartsFromTemplate && std::getenv("SLY3_COPYPARTDEBUG"))
+            std::printf("copypart: grf 0x%X id %d ib 0x%X -> %p (owned %zu, template %p)\n", grf, int(id), ib, static_cast<void*>(plo), palo->aploOwned.size(), static_cast<void*>(palo->ploCloneOf));
         if (!plo) continue;
-        if (fFirst && (grf & 0x200)) RemoveLo(g_psw, plo);  // vt slot 9 (TODO: the classes' overrides)
+        if (fFirst && (grf & 0x200) && !(s_fPartsFromTemplate && plo->fRemoved)) RemoveLo(g_psw, plo);  // vt slot 9 (TODO: the classes' overrides)
         // (the entry stores the object at the actor's offset ib: a later entry for the same offset overwrites it, e.g.
         // Murray's damage reaction 0 +0xE90: 422 then 649, the original keeps 649)
         auto itPart = std::find_if(palo->apart.begin(), palo->apart.end(), [ib](const auto& e) { return e.first == ib; });
@@ -652,6 +841,8 @@ void LoadProxyFromBrx(SW* psw, ALO* paloParent, CID cid, OID oid, int iframe, CB
     const int32_t idGroup = pbis->S32Read();
     const int mode = pbis->S8Read();
     XF* pxf = PxfFromRef(pbis->S16Read(), paloParent, nullptr);
+    const std::size_t ibMatEdit = pbis->m_ib;   // (PC: the map editor, editrec.h)
+    if (g_peditrec) g_peditrec->ibProxyMatrix = ibMatEdit;
     const glm::mat4 mat = pbis->ReadMatrix4();
     const uint32_t grfLoad = pbis->U32Read();
     int iwe = -1;
@@ -671,6 +862,7 @@ void LoadProxyFromBrx(SW* psw, ALO* paloParent, CID cid, OID oid, int iframe, CB
     {
         LO* plo = PloNew(cid, psw, paloParent, oid, -1);
         LOX* plox = static_cast<LOX*>(plo);
+        if (g_peditrec) g_peditrec->afield.push_back({plo, EDITFK_LoxMatrix, 0, -1, -1, ibMatEdit});
         plox->pxf = pxf;
         plox->mat = mat;
         plox->grfLoad = grfLoad;
@@ -840,6 +1032,10 @@ void LoadProxyFromBrx(SW* psw, ALO* paloParent, CID cid, OID oid, int iframe, CB
 void LoadPlayer3FromBrx(LO* plo, CBinaryInputStream* pbis);
 void LoadJt3FromBrx(LO* plo, CBinaryInputStream* pbis);
 void LoadBentley3FromBrx(LO* plo, CBinaryInputStream* pbis);
+void LoadMurray3FromBrx(LO* plo, CBinaryInputStream* pbis);
+void LoadGuru3FromBrx(LO* plo, CBinaryInputStream* pbis);
+void LoadPenelope3FromBrx(LO* plo, CBinaryInputStream* pbis);
+void LoadPandaKing3FromBrx(LO* plo, CBinaryInputStream* pbis);
 void Load1D6C003FromBrx(LO* plo, CBinaryInputStream* pbis);
 void RegisterPeLoaders(std::unordered_map<uint32_t, PFNLOAD>& m);   // pe.cpp
 #include "game/loaders3.h"
@@ -850,6 +1046,8 @@ void RegisterLoaders(std::unordered_map<uint32_t, PFNLOAD>& m)
     m[0x28FDE0] = LoadLoxFromBrx;             // LOX (0x231170)
     m[0x1C5300] = LoadLoxFromBrx;             // 0x04: LoadLoxFromBrx, ComputeLight
     m[0x131050] = LoadLoxFromBrx;             // 0x29 (0x12EB78)
+    m[0x24D4F8] = LoadLox2035A8FromBrx;       // RECONTARGET 0x2B (0x2035A8; its defaults: photo.cpp Target). Before, its
+                                              // body was skipped: the photo targets had no place, task or titles
     m[0x27E918] = LoadVolumeFromBrx;          // VOLUME 0x07 (0x227380)
     m[0x27F158] = LoadShapeFromBrx;           // SHAPE 0x13 (0x227BB8)
     m[0x15CCB0] = LoadShapeFromBrx;           // 0x15, 0x17
@@ -861,13 +1059,32 @@ void RegisterLoaders(std::unordered_map<uint32_t, PFNLOAD>& m)
     m[0x1ECC58] = LoadMeshZoneFromBrx;        // MESHZONE 0x10 (0x1C03C0)
     m[0x23C0B8] = LoadAloFromBrx;             // ALO (0x1F31E0; Sly 3's collision entries)
     m[0x1F3BC8] = LoadSoFromBrx;              // SO 0x31, 0x50, 0x56 (0x1C3DC8)
+    m[0x213BE8] = LoadSoFromBrx;              // the ships 0x58 (orig3 0x213BE8: the SO's 0x1F3BC8 between the two record
+                                              // allocations, then +0x1DC = 0 (0x215198), the ship3.cpp record's). Before, a
+                                              // ship read its ALO part only and skipped the rest by size (MODES-15)
     m[0x24D920] = LoadPoFromBrx;              // PO 0x32, guards 0x3A / 0x3B / 0x43 (0x2039C0)
     m[0x152448] = LoadPlayer3FromBrx;         // the players' common part
     m[0x1AA250] = LoadJt3FromBrx;             // Sly 0x34 (0x1885B8)
     m[0x13D400] = LoadBentley3FromBrx;        // Bentley 0x36
-    for (uint32_t a : {0x14D3F0u, 0x1DC6F8u, 0x276E80u, 0x223918u, 0x1E4CB8u, 0x281888u, 0x1D5AB8u, 0x1F6668u, 0x1F8D58u})
+    m[0x1DCB90] = LoadMurray3FromBrx;         // Murray 0x35 (0x1B4888)
+    m[0x22C260] = LoadGuru3FromBrx;           // the Guru 0x37 (no Sly 2 twin)
+    m[0x1EFF30] = LoadPenelope3FromBrx;       // Penelope 0x39 (no Sly 2 twin; s3-player round 21)
+    m[0x1E9438] = LoadPandaKing3FromBrx;      // the Panda King 0x38 (no Sly 2 twin; AUDIT4 PLAYER-01)
+    // BREAKABLE 0x6F (orig3 0x1E4CB8, Sly 2's 0x1BABA0: the ALO, then the first event current; its InitLo 0x1E4C68 sets
+    // the contact bytes). With the plain ALO loader no breakable had a current event or accepted a hit.
+    m[0x1E4CB8] = Load_1BABA0;
+    // the pickups 0x67..0x6C (orig3 0x1F6668: the ALO, then BindLoParts(1, 0x346FC0): the SM 0x1A5 at +0x13C, their bob /
+    // turn / landing animation; before, read as a plain ALO, no coin had its SM)
+    // (the loot 0x6A's 0x1F8D58 runs 0x1F6668 between its definition table's allocations)
+    m[0x1F6668] = m[0x1F8D58] = [](LO* plo, CBinaryInputStream* pbis) { LoadAloFromBrx(plo, pbis); BindLoParts(static_cast<ALO*>(plo), 1, 0x346FC0); };
+    for (uint32_t a : {0x14D3F0u, 0x1DC6F8u, 0x276E80u, 0x223918u, 0x281888u, 0x1D5AB8u})
         m[a] = LoadAloFromBrx;                // ALO loaders whose own setup does not read (TODO(sly3): their setup)
     m[0x1D6C00] = Load1D6C003FromBrx;         // 0x5A..0x5C (0x1B1E00)
+    // orig3: 0x15E1D0 (CHASEGRAPH 0x90, Sly 2's 0x14A008): a 0x100-entry scratch (+0x58), the LO's options (0x1C7D98: the
+    // entries by EOPID 1551's builder 0x10F090), then the array trimmed to its count (+0x54). Without it the graph was a
+    // shell (no entries): Carmelita's chase job in v_ext (graph 2127) had nowhere to go after the scene
+    m[0x15E1D0] = LoadLo14A008FromBrx;
+    m[0x21A928] = LoadLo21A928FromBrx;        // the ship spawner 0x9A (AUDIT5 MODES5-01)
     m[0x198810] = LoadLo1731B8FromBrx;        // SPAWNER 0x8D (0x1731B8: its source records grew 0x1C -> 0x24; reads the LO only)
     // (the effects code) the world effects: ZONE 0x0E (0x220FD0), GROUPER 0x1D (0x15C1E8), EMITTER 0x1B, EXPLO 0x1F, PE 0x2D (pe.cpp)
     m[0x273CF8] = LoadZoneFromBrx;
@@ -894,6 +1111,7 @@ PFNNEW PfnNewNativeForCid(CID cid)
         {S3CID(0x85), PloNewT<TASK>},     {S3CID(0x7A), PloNewT<LOLIST>},   {S3CID(0x84), PloNewT<JOB>},     {S3CID(0x2A), PloNewT<CHKPNT>},
         {0x2D, PfnNewPe()},               /* (the effects code: Sly 3's PE, pe.cpp) */
         {S3CID(0x71), PloNewCmdlist},     {S3CID(0x69), PloNewT<TRAIL>},    {S3CID(0x7B), PloNewChasegraph}, {S3CID(0x73), PloNewT<WR>},
+        {0x89, PloNewT<WR89>},            /* (Sly 3's scripted-warp WR, wr.h) */
     };
     if (PFNNEW pfn = PfnNewScript3(cid)) return pfn;   // (game/loaders3.cpp)
     for (CID c = cid; c >= 0; c = g_acls[c].cidBase)
@@ -911,8 +1129,29 @@ void LoadPlayer3FromBrx(LO* plo, CBinaryInputStream* pbis) { LOADFN(0x152448); L
 void LoadJt3FromBrx(LO* plo, CBinaryInputStream* pbis) { LOADFN(0x1AA250); LoadPlayer3FromBrx(plo, pbis); BindLoParts(static_cast<ALO*>(plo), 0x6A, 0x345140); }
 // orig3 0x13D400 (Bentley): 0x152448, BindLoParts(0x54, 0x342890)
 void LoadBentley3FromBrx(LO* plo, CBinaryInputStream* pbis) { LOADFN(0x13D400); LoadPlayer3FromBrx(plo, pbis); BindLoParts(static_cast<ALO*>(plo), 0x54, 0x342890); }
+// orig3 0x1DCB90 (Murray; Sly 2 0x1B4888): 0x152448, BindLoParts(0x7F, 0x345FD8) (then his two carry frames of
+// records 0x24C..0x251: the copied post-load finds them)
+void LoadMurray3FromBrx(LO* plo, CBinaryInputStream* pbis) { LOADFN(0x1DCB90); LoadPlayer3FromBrx(plo, pbis); BindLoParts(static_cast<ALO*>(plo), 0x7F, 0x345FD8); }
+// orig3 0x22C260 (the Guru 0x37, Episode 2's o_ext / o_quarry; from the decomp): 0x152448, BindLoParts(43, 0x349460)
+// (then +0x15EC = +0x1134 when unset: his fields, the player code's). Before: "ALO part only", the rest skipped by size.
+void LoadGuru3FromBrx(LO* plo, CBinaryInputStream* pbis) { LOADFN(0x22C260); LoadPlayer3FromBrx(plo, pbis); BindLoParts(static_cast<ALO*>(plo), 43, 0x349460); }
+// orig3 0x1EFF30 (Penelope 0x39, from the decomp): 0x152448, BindLoParts(0x35, 0x3468A0). Before: no loader (a shell), so no
+// player fields, parts or states: her scripted walks (SCPT 0x30, c_intro) never moved her
+void LoadPenelope3FromBrx(LO* plo, CBinaryInputStream* pbis) { LOADFN(0x1EFF30); LoadPlayer3FromBrx(plo, pbis); BindLoParts(static_cast<ALO*>(plo), 0x35, 0x3468A0); }
+// orig3 0x1E9438 (the Panda King 0x38, from the decomp): 0x152448, BindLoParts(0x31, 0x346650). Before: no loader
+void LoadPandaKing3FromBrx(LO* plo, CBinaryInputStream* pbis) { LOADFN(0x1E9438); LoadPlayer3FromBrx(plo, pbis); BindLoParts(static_cast<ALO*>(plo), 0x31, 0x346650); }
 // orig3 0x1D6C00 (Sly 2 0x1B1E00): the ALO, BindLoParts(1, 0x345FB0)
 void Load1D6C003FromBrx(LO* plo, CBinaryInputStream* pbis) { LOADFN(0x1D6C00); LoadAloFromBrx(plo, pbis); BindLoParts(static_cast<ALO*>(plo), 1, 0x345FB0); }
 
 // orig 0x001A64E8 for the classes' post-loads (the actors' 0x1400B8 / 0x188608: sly.cpp)
 void BindLoPartsTable(ALO* palo, int c, uint32_t vaTable) { BindLoParts(palo, c, vaTable); }
+void SetBindPartsFromTemplate3(bool f) { s_fPartsFromTemplate = f; }
+// (s3-gadgets) a Sly 3 table outside parts.inc bound under FN3_TAG | its Sly 3 offsets: on an actor whose native fields
+// are Sly 2's, a bare Sly 3 offset can be another part's Sly 2 offset (Bentley's fishing parts +0x184C.. are his Sly 2
+// ability entries)
+void BindLoPartsTable3(ALO* palo, int c, uint32_t vaTable)
+{
+    s_fTag3Unlisted = true;
+    BindLoParts(palo, c, vaTable);
+    s_fTag3Unlisted = false;
+}

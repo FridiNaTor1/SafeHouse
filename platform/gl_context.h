@@ -3,10 +3,17 @@
 
 #include <GLFW/glfw3.h>
 
+#include <cstdio>
+#include <cstdlib>
 #include <string>
+
+#include "gl_backend.h"
 
 #if defined(__APPLE__)
 #include "metal/gl_metal.h"
+#endif
+#if defined(__ANDROID__)
+#include "android/gles_sly2.h"
 #endif
 
 #if defined(_WIN32)
@@ -45,7 +52,7 @@ inline void ApplyWindowHints(int major, int minor) {
 #endif
 }
 
-#if defined(__linux__)
+#if defined(__linux__) && !defined(__ANDROID__)
 // After a context could not be created: GLFW's reason and what the system's OpenGL does offer, for the log.
 inline std::string DescribeContextFailure() {
   const char* message = nullptr;
@@ -74,6 +81,7 @@ inline std::string DescribeContextFailure() {
 #endif
 
 inline bool CreateContext(GLFWwindow* window, std::string* error) {
+  if (const Backend* b = ActiveBackend()) return b->createContext(window, error);
 #if defined(__APPLE__)
   return gl_metal::CreateContext(window, error);
 #elif defined(__SWITCH__)
@@ -91,6 +99,11 @@ inline bool CreateContext(GLFWwindow* window, std::string* error) {
 }
 
 inline void DestroyContext(GLFWwindow* window) {
+  if (const Backend* b = ActiveBackend()) {
+    b->destroyContext(window);
+    ActiveBackend() = nullptr;
+    return;
+  }
   (void)window;
 #if defined(__APPLE__)
   gl_metal::DestroyContext();
@@ -100,17 +113,22 @@ inline void DestroyContext(GLFWwindow* window) {
 }
 
 inline GLFWglproc ProcAddress(const char* name) {
+  if (const Backend* b = ActiveBackend()) return b->procAddress(name);
 #if defined(__APPLE__)
   return reinterpret_cast<GLFWglproc>(gl_metal::ProcAddress(name));
 #else
 #if defined(_WIN32)
   if (GLFWglproc wrapper = dxgi::ProcAddress(name)) return wrapper;
 #endif
+#if defined(__ANDROID__)
+  return reinterpret_cast<GLFWglproc>(gles::ProcAddress(name));
+#endif
   return glfwGetProcAddress(name);
 #endif
 }
 
 inline void SwapInterval(int interval) {
+  if (const Backend* b = ActiveBackend()) return b->swapInterval(interval);
 #if defined(__APPLE__)
   gl_metal::SetSwapInterval(interval);
 #else
@@ -121,16 +139,71 @@ inline void SwapInterval(int interval) {
 #endif
 }
 
+// The hand-off from a launcher that keeps its own loading picture on screen until the game's first frame is up (the
+// Collection Style Launcher sets SAFEHOUSE_HANDOFF=1 for the games it starts): the game creates its window hidden
+// (HandoffVisible), shows it with its first frame (SwapBuffers below) and then writes the line {"event":"first-frame"}
+// to its output, which tells the launcher to step aside. So there is no empty window while the game starts and no gap
+// between the launcher's picture and the game's. Without the variable nothing changes.
+inline bool HandoffWanted() {
+  static const bool wanted = [] {
+    const char* e = std::getenv("SAFEHOUSE_HANDOFF");
+    return e && *e == '1';
+  }();
+  return wanted;
+}
+inline bool& HandoffPending() {
+  static bool pending = false;
+  return pending;
+}
+inline bool& HandoffShow() {
+  static bool show = false;
+  return show;
+}
+// A game window's visibility at creation: a window waits for its first frame when a launcher hands off (a window
+// that is never shown, a test's, still announces its first frame).
+inline bool HandoffVisible(bool visible) {
+  if (!HandoffWanted()) return visible;
+  HandoffPending() = true;
+  HandoffShow() = visible;
+  return false;
+}
+inline void HandoffBeforeSwap(GLFWwindow* window) {
+  if (!HandoffPending() || !HandoffShow() || !window) return;
+  if (!glfwGetWindowAttrib(window, GLFW_VISIBLE)) glfwShowWindow(window);
+}
+inline void HandoffAfterSwap() {
+  if (!HandoffPending()) return;
+  HandoffPending() = false;
+  std::printf("{\"event\":\"first-frame\"}\n");
+  std::fflush(stdout);
+}
+// The game is closing (its world and window go in a moment): the launcher comes back now, over its last frame.
+inline void HandoffLeaving() {
+  if (!HandoffWanted()) return;
+  std::printf("{\"event\":\"leaving\"}\n");
+  std::fflush(stdout);
+}
+
 inline void SwapBuffers(GLFWwindow* window) {
+  HandoffBeforeSwap(window);
+  if (const Backend* b = ActiveBackend()) {
+    b->swapBuffers(window);
+    HandoffAfterSwap();
+    return;
+  }
 #if defined(__APPLE__)
   (void)window;
   gl_metal::SwapBuffers();
 #else
 #if defined(_WIN32)
-  if (dxgi::SwapBuffers(window)) return;
+  if (dxgi::SwapBuffers(window)) {
+    HandoffAfterSwap();
+    return;
+  }
 #endif
   glfwSwapBuffers(window);
 #endif
+  HandoffAfterSwap();
 }
 
 }  // namespace cane::gl

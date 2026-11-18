@@ -74,7 +74,7 @@ void InitAnimationRecordsOf(const std::vector<LO*>& aploList)
     // the records (0x22D7A0's run-time parts) and the bone bindings (PostLoad 0x1F36A8), parents first
     for (LO* plo : aploList)
         if (FCidDerivedFrom(plo->Cid(), S3CID(0x30))) InitAloXfs(static_cast<ALO*>(plo));
-    // the loader's velocity options (EOPIDs 29 / 30: vt slots 35 / 36; 75 / 76: 0x1F4898 / 0x1F4930, e.g. world 41's
+    // the loader's velocity options (EOPIDs 29 / 30: vt slots 35 / 36; Sly 3 EOPIDs 77 / 78 (options 194 / 195, orig3 0x23D938 / 0x23D9D0; Sly 2's 75 / 76): 0x1F4898 / 0x1F4930, e.g. world 41's
     // spinning rings 20684 ..) set the records' modes after 0x22D7A0 read
     // them; natively the records' init runs here, after the options, so they are applied again (and so for every
     // copy, whose options are its template's), e.g. the rooftop vents' turbines 139218
@@ -83,21 +83,21 @@ void InitAnimationRecordsOf(const std::vector<LO*>& aploList)
             for (const OPT& opt : plo->aopt)
                 // Vehicle/pickup constraints and gravity also select velocity modes
                 // (0x1F5720/0x1F57C0/0x1F5880), after the original record initialization.
-                if ((opt.eopid == S3EOPID(29) || opt.eopid == S3EOPID(30) || opt.eopid == S3EOPID(75) || opt.eopid == S3EOPID(76) ||
+                if ((opt.eopid == S3EOPID(29) || opt.eopid == S3EOPID(30) || opt.eopid == 77 || opt.eopid == 78 ||
                     ((plo->Cid() == S3CID(0x4D) || plo->Cid() == S3CID(0x6C)) && opt.eopid >= 33 && opt.eopid <= 35)) && !opt.aval.empty())
                 {
                     // (29 / 30 / 75 / 76 as the loader applies them: no conversion through the not yet placed records, so.h)
                     if (opt.eopid == S3EOPID(29)) SetAloVelocityToLoad(static_cast<ALO*>(plo), RefFromOptionValue(opt.aval[0]).GetVector(), true);
                     else if (opt.eopid == S3EOPID(30)) SetAloAngVelocityToLoad(static_cast<ALO*>(plo), RefFromOptionValue(opt.aval[0]).GetVector(), true);
-                    else if (opt.eopid == S3EOPID(75)) SetAloVelocity(static_cast<ALO*>(plo), RefFromOptionValue(opt.aval[0]).GetVector(), true);
-                    else if (opt.eopid == S3EOPID(76)) SetAloAngVelocity(static_cast<ALO*>(plo), RefFromOptionValue(opt.aval[0]).GetVector(), true);
+                    else if (opt.eopid == 77) SetAloVelocity(static_cast<ALO*>(plo), RefFromOptionValue(opt.aval[0]).GetVector(), true);
+                    else if (opt.eopid == 78) SetAloAngVelocity(static_cast<ALO*>(plo), RefFromOptionValue(opt.aval[0]).GetVector(), true);
                     else if (PFNOBJSETTER pfn = PfnObjectSetter(opt.eopid)) pfn(plo, RefFromOptionValue(opt.aval[0]));
                     // (debug: SLY2N_VELOPTPRINT: each option, the vector and the record velocity it gave)
                     if (std::getenv("SLY2N_VELOPTPRINT"))
                     {
                         const glm::vec3 v = RefFromOptionValue(opt.aval[0]).GetVector();
                         const glm::vec3 c = PosAloCenter(static_cast<ALO*>(plo));
-                        const XF* pxf = (opt.eopid == S3EOPID(29) || opt.eopid == S3EOPID(75)) ? PxfPos(static_cast<ALO*>(plo)) : PxfRot(static_cast<ALO*>(plo));
+                        const XF* pxf = (opt.eopid == S3EOPID(29) || opt.eopid == 77) ? PxfPos(static_cast<ALO*>(plo)) : PxfRot(static_cast<ALO*>(plo));
                         const glm::vec4 r = pxf ? pxf->vel : glm::vec4(0.0f);
                         std::printf("velopt %d cid 0x%X eopid %d v %.3f %.3f %.3f -> %.3f %.3f %.3f parent %d pos %.0f %.0f %.0f\n", plo->oid,
                                     plo->Cid(), opt.eopid, v.x, v.y, v.z, r.x, r.y, r.z, plo->paloParent ? plo->paloParent->oid : -1, c.x, c.y, c.z);

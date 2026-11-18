@@ -6,6 +6,7 @@
 // build/hand_wip/func_001D6B00.cpp (readable C).
 
 #include "objmethod.h"
+#include "pair.h"
 #include "game/sly3.h"
 #include "worldglobals.h"
 #include <string>
@@ -54,7 +55,7 @@ ALO* g_paloLaunched = nullptr;  // (debug: the latest thrown object)
 int g_cLaunchedFrames = 0;
 namespace
 {
-// orig 0x001FFCF8 (as spliceglue.cpp's): an option id's EOPID index for the class
+// orig 0x001FFCF8 (as spliceglue.cpp's): an option id's EOPID index for the class (orig3: 0x249CF8, the same C in the Sly 3 decomp)
 int EopidFromOptid(CID cid, int optid)
 {
     if (cid < 0) return -1;
@@ -170,7 +171,12 @@ void Launch(LO* plaunch, LO* po)
     if (!po || !FCidDerivedFrom(po->Cid(), S3CID(0x30))) return;
     ALO* palo = static_cast<ALO*>(po);
     if (std::getenv("SLY2N_PROJEND"))  // (debug: every launch's time)
-        std::printf("launch t %.3f %d by %d\n", g_clock.t, po->oid, plaunch ? plaunch->oid : -1);
+    {
+        // (the launcher's parents)
+        const LO* p1 = plaunch ? plaunch->paloParent : nullptr;
+        const LO* p2 = p1 ? p1->paloParent : nullptr;
+        std::printf("launch t %.3f %d by %d (parents %d %d)\n", g_clock.t, po->oid, plaunch ? plaunch->oid : -1, p1 ? p1->oid : -1, p2 ? p2->oid : -1);
+    }
     // (debug: SLY2N_RANDATLAUNCH=oid:state: the random state set at this object's launch, e.g. a reference's at 0x1D6B00)
     if (static const char* s_sz = std::getenv("SLY2N_RANDATLAUNCH"); s_sz && std::atoi(s_sz) == po->oid && std::strchr(s_sz, ':'))
     {
@@ -492,7 +498,8 @@ struct INITLAUNCHER
             return CRef(TAGK_Void);
         });
         // the guards' method 454 (0x103FE8 -> 0x206820): the full reset (slot 27 (0): TODO(ai), message 0xF, slot 26,
-        // message 0xE)
+        // message 0xE). Sly 2 only (audit4 AI-24 / F30): its EOPID 330 has no Sly 3 option and 0x206820 no Sly 3 twin,
+        // so no Sly 3 data reaches it; kept for the copied table.
         RegisterObjectMethod(0x103FE8, [](LO* plo, const std::vector<CRef>&) {
             if (!PguardFromLo(plo)) return CRef(TAGK_Void);
             HandleLoSpliceEvent(plo, 15, false, 0, nullptr);
@@ -629,6 +636,29 @@ struct INITLAUNCHER
             }
             else if (LOX* plox = dynamic_cast<LOX*>(plo)) SetLoxPos(plox, pos);
         });
+        // orig3: 0x2416B8 (Sly 3 EOPID 87, the ALO's option 211; Sly 3 only): the list of its children (+0x54, LO +0x24 next),
+        // added ones before removed ones as the parent keeps them. E.g. the turf war's rooftop thrower 36093 (block 139035
+        // module 31, event 4 / 139343) picks its next perch among 139227's children within 1500 of its target and moves
+        // locator 139342 there (option 39) before its use (op 13). Natively the list was void, the locator was never moved
+        // off the throw point it is set to after each throw (option 36 = the launcher's place), and every use launched the
+        // guard ~100 higher at the same place
+        RegisterObjectGetter3(87, [](LO* plo) {
+            CRef r;
+            std::shared_ptr<CPair> ppairHead;
+            CPair* ppairTail = nullptr;
+            if (FCidDerivedFrom(plo->Cid(), S3CID(0x30)))
+                for (LO* pc : static_cast<ALO*>(plo)->aploChild)
+                {
+                    auto ppair = PpairNew();
+                    ppair->m_ref.SetBasic(pc);
+                    if (ppairTail) ppairTail->m_ppairNext = ppair;
+                    else ppairHead = ppair;
+                    ppairTail = ppair.get();
+                }
+            if (ppairHead) r.SetPair(std::move(ppairHead));
+            else r.SetTag(TAGK_None);
+            return r;
+        });
         RegisterObjectSetter(22, [](LO* plo, const CRef& r) {
             if (r.m_tagk != TAGK_Matrix) return;
             const glm::mat3 m(r.GetMatrix());
@@ -657,6 +687,12 @@ struct INITLAUNCHER
     }
 } s_initlauncher;
 }  // namespace
+
+// (for aicarm3.cpp: Carmelita's shot, orig3 0x212D50's 0x212480)
+glm::vec3 VelBallisticLaunch(float gPitch, const glm::vec3& posStart, const glm::vec3& pos, const glm::vec3& accel)
+{
+    return VelBallistic(gPitch, posStart, pos, accel);
+}
 
 // (at a world's load: the old world's objects are freed, and a new object at a freed one's address must not
 // inherit its record)

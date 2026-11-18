@@ -196,8 +196,9 @@ struct INITGAMEBIFS
                 for (const CPair* p = argv[0].m_ppair.get(); p; p = p->m_ppairNext.get()) n |= p->m_ref.m_n;
             return RefS32(n);
         });
-        // 103 a float of 0x2DE578 (0x154C90; TODO(M4): that system)
-        SetBifGameHook(static_cast<BIFK>(103), [](int, CRef*, CFrame*) { return RefF32(0.0f); });
+        // 103 (0x123B60): the suck, the game's dynamic difficulty 0 .. 1 (0x154C90 on D_002DE578: task.cpp GSuck);
+        // 16 groups' scripts read it (Dimitri's blend, the guards' near distance ...: notes/SCRIPTNAMES3_2026-11-18.md)
+        SetBifGameHook(static_cast<BIFK>(103), [](int, CRef*, CFrame*) { return RefF32(GSuck()); });
         // 137 (0x125690): the HUD prompt widget 0x3DA0C0 (spliceglue.cpp's PbasicGlobal)
         SetBifGameHook(static_cast<BIFK>(137), [](int, CRef*, CFrame*) {
             CRef r;

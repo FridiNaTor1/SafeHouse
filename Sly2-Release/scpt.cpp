@@ -2,6 +2,7 @@
 // 0x1DFAD8..0x1E5D80, the wrappers 0x106A80..0x10A438) and the reference's m_1DFB10_p3.cpp (0x1E3890) and
 // m_1E1E30_p3.cpp (0x1E1E30).
 #include "scpt.h"
+#include "cutscene.h"
 #include "worldglobals.h"
 #include "transition.h"
 #include "rumble.h"
@@ -78,6 +79,9 @@ bool FFloatsNear(float g1, float g2, float gEpsilon);  // xfmath.h (0x11D4D0; it
 #include <vector>
 
 std::unordered_map<int, int> g_mpoidcScptStart;   // (debug, route.cpp waitscpt: each script's starts)
+// (PC addition, the map editor's cutscene trace, cutscene.h: ev 0 a runner made (ic: its block), 1 a command executed,
+// 2 a runner retired)
+void (*g_pfnScptTrace)(LO* pscpt, const void* prun, int ev, int ic, const void* prunParent) = nullptr;
 
 
 void PrintRef(const CRef& ref, std::string* ps);  // bif.cpp (debug)
@@ -228,6 +232,7 @@ struct SCPT
     bool fRealTime = false;  // (the flags' 0x100: the real clock, command 0x10)
     uint64_t idSkipScene = 0;  // native QoL: this particular start of a skippable scene (skipcut.h)
     int nSkipKind = -1;        // native QoL: SceneSkipKind's class, computed at the first start
+    bool fNeverSkip = false;   // (PC: a mod's cutscene rule "never skippable": its own or the script's that started it)
 };
 
 std::unordered_map<LO*, SCPT>& MpScpt()
@@ -442,6 +447,7 @@ PRUN PrunNew(LO* pscptLo, int ic, RUN* pParent)
     ps->arun.insert(ps->arun.begin(), p);
     for (DLI* pdli : Adli())
         if (pdli->pscpt == ps && pdli->i > 0) ++pdli->i;
+    if (g_pfnScptTrace) g_pfnScptTrace(pscptLo, p.get(), 0, ic, pParent);
     return p;
 }
 
@@ -464,6 +470,7 @@ void RetireRun(const PRUN& prun)
                 break;
             }
     p->fRetired = true;
+    if (g_pfnScptTrace) g_pfnScptTrace(p->pscptLo, p, 2, p->icCur, nullptr);
     // 0x1E5370: the animation (+0x4C), and the actor's script animation of a command 0xA (+0x54) ended (0x143FF8:
     // e.g. SCPT 1674's runner 152631 retired by command 55 lets Bentley out of clip 7627 for his walk)
     if (p->pasega)
@@ -760,6 +767,7 @@ void ExecuteRun(const PRUN& prun)
     SCPT* ps = PscptOf(p->pscptLo);
     const int ic = ++p->icCur;
     if (p->icLast < ic) return;
+    if (g_pfnScptTrace) g_pfnScptTrace(p->pscptLo, p, 1, ic, nullptr);
     PRUN lock = prun;
     SCPTCMD* pc = &ps->acmd[static_cast<size_t>(ic)];
     const int kind = pc->kind;
@@ -812,7 +820,8 @@ void ExecuteRun(const PRUN& prun)
         RunRun(r);
         break;
     }
-    case 0x01: case 0x13: break;
+    case 0x01: break;
+    case 0x13: cut::NoteScptLabel(p->pscptLo, pc->N(0x10)); break;   // (PC addition: a rule's skip stops here, cutscene.h)
     case 0x02:
     {
         const int n = pc->N(0x10);
@@ -906,6 +915,7 @@ void ExecuteRun(const PRUN& prun)
         LO* plo = PloFind(p, pc->N(0x10));
         if (!plo || !IsA(plo, 0x72)) break;
         StartScptImpl(plo, s0);
+        if (SCPT* pss = PscptOf(plo)) pss->fNeverSkip = pss->fNeverSkip || ps->fNeverSkip;   // (PC: the rule carries on)
         if (pc->b == 0) p->pscptSub = plo;
         break;
     }
@@ -1422,8 +1432,20 @@ void ExecuteRun(const PRUN& prun)
         StartMurrayHold(pm, psmaObj, pc->N(0x1C), pc->N(0x18), pc->N(0x20));  // 0x1B9C00
         break;
     }
-    case 0x53: HudPrompt(pc->N(0x10), pc->G(0x14)); break;  // HintBox: 0x1DA4B8 (SetHintBoxText) on the HUD prompt 0x3DA0C0
-    case 0x54: HudPromptEnd(pc->N(0x10)); break;            // ClearHintBox: 0x1DA578 (ClearIfSlotId)
+    case 0x53:  // HintBox: 0x1DA4B8 (SetHintBoxText) on the HUD prompt 0x3DA0C0
+        // (SafeHouse addition: a mod's cutscene with the custom presentation, cutscene.h)
+        if (cut::FCustomPresentation(p->pscptLo))
+        {
+            if (pc->N(0x18) == cut::SCPTB_TITLECARD) cut::ShowCutTitle(pc->N(0x10), pc->G(0x14));
+            else cut::ShowCutCaption(pc->N(0x10), pc->G(0x14));
+            break;
+        }
+        HudPrompt(pc->N(0x10), pc->G(0x14));
+        break;
+    case 0x54:  // ClearHintBox: 0x1DA578 (ClearIfSlotId)
+        if (cut::FCustomPresentation(p->pscptLo)) cut::EndCutCaption(pc->N(0x10));
+        HudPromptEnd(pc->N(0x10));
+        break;
     case 0x50: case 0x51:
         // Bentley (cid 0x37) watched until his state is (0x50) / is not (0x51) 6 (0x1E3890)
         if (LO* pb = actorOf(0x37)) SetRunPending(p, ic, pb);
@@ -1843,8 +1865,9 @@ int SceneSkipKind(LO* pscpt)
                 }
         }
     }
-    if (cDialog || cBinoc) return SKIPK_Dialog;
-    return cCamera >= 3 ? SKIPK_Cinematic : SKIPK_None;
+    // (PC addition: a mod package's cutscene rule may choose, cutscene.h)
+    if (cDialog || cBinoc) return cut::SkipKindByRule(pscpt, SKIPK_Dialog);
+    return cut::SkipKindByRule(pscpt, cCamera >= 3 ? SKIPK_Cinematic : SKIPK_None);
 }
 namespace
 {
@@ -1854,6 +1877,7 @@ void StartScptImpl(LO* pscpt, LO* ploStarter)
 {
     SCPT* ps = PscptOf(pscpt);
     if (!ps || ps->fRunning) return;
+    if (!cut::FCutsceneMayStart(pscpt)) return;   // (PC addition: a mod package's cutscene rule, cutscene.h)
     static const bool s_fOff = std::getenv("SLY2N_NOSCPT") != nullptr;  // (debug: no script runs)
     if (s_fOff) return;
     if (std::getenv("SLY2N_SCPTDIALOG"))  // (debug: the scripts with dialog lines as they start)
@@ -1865,6 +1889,7 @@ void StartScptImpl(LO* pscpt, LO* ploStarter)
     }
     ps->ploStarter = ploStarter;
     ps->fRunning = 1;
+    ps->fNeverSkip = cut::FCutsceneNeverSkip(pscpt);
     if (ps->nSkipKind < 0) ps->nSkipKind = SceneSkipKind(pscpt);
     ps->idSkipScene = ps->nSkipKind == SKIPK_Dialog || ps->nSkipKind == SKIPK_Cinematic ? NewSkipCutScene() : 0;
     ps->f78 = 0;
@@ -2237,7 +2262,16 @@ const std::vector<THUNK>& Athunk()
         {0x10A0A8, [](SCPT* ps, const ARGS& a) { B1(ps, 0x50, 0, {{0x10, I(a, 0)}}); }, {6}, {0}},  // 0x1E18E0
         {0x10A130, [](SCPT* ps, const ARGS& a) { B1(ps, 0x51, 0, {{0x10, I(a, 0)}}); }, {6}, {0}},  // 0x1E1910
         {0x10A1B8, [](SCPT* ps, const ARGS& a) { PcmdNew(ps, 0x52, 0)->G(0x10) = F(a, 0); }, {1}, {0}},  // 0x1E1940
-        {0x10A240, BIFb<0x53>, {16, 1, 0}, {0, 2, 1}},                   // 0x1E1970
+        {0x10A240, [](SCPT* ps, const ARGS& a) {                         // 0x1E1970 (BIFb)
+             // (SafeHouse addition, cutscene.h SCPTB_TITLECARD: the "no waiting" word 0x20 / 0x21 is a custom title
+             // card's, its bit kept in +0x18: the original's hints all have 1)
+             const int b = I(a, 1);
+             const bool fTitle = (b & ~1) == cut::SCPTB_TITLECARD;
+             SCPTCMD* p = PcmdNew(ps, 0x53, fTitle ? b & 1 : b);
+             p->N(0x10) = I(a, 0);
+             p->G(0x14) = F(a, 0);
+             if (fTitle) p->N(0x18) = cut::SCPTB_TITLECARD;
+         }, {16, 1, 0}, {0, 2, 1}},
         {0x10A2F8, [](SCPT* ps, const ARGS& a) { B1(ps, 0x54, 1, {{0x10, I(a, 0)}}); }, {0x10}, {0}},  // 0x1E19B0
         {0x10A380, BIIb<0x55>, {6, 6, 0}, {0, 1, 2}},                    // 0x1E19E0
         {0x10A438, BII1<0x56>, {6, 6}, {0, 1}},                          // 0x1E1A20
@@ -2373,9 +2407,88 @@ struct INITSCPT
         });
     }
 } s_initscpt;
+// (PC addition, the map editor's cutscene editor, cutscene.h) Where a builder puts its arguments: each argument's
+// command slot, found by building one command with marked arguments on a scratch script.
+bool FScptBuilderLayoutImpl(uint32_t pfnThunk, int& kind, std::vector<SCPTARGSLOT>& a)
+{
+    a.clear();
+    for (const THUNK& t : Athunk())
+    {
+        if (t.pfn != pfnThunk) continue;
+        SCPT s;
+        s.cMax = 4;
+        ARGS args;
+        // (the marks: argument j's int 7000 + 16 j, its float 7000.5 + 16 j, a vector's components 7000 + 16 j + 1..3)
+        auto mark = [](size_t j) { return 7000 + 16 * int(j); };
+        for (int i : t.aorder)
+        {
+            const size_t j = size_t(i);
+            const int otyp = t.aotyp[j];
+            if (otyp == 1) args.ag.push_back(float(mark(j)) + 0.5f);
+            else if (otyp == 2)
+            {
+                args.aq.push_back(glm::vec4(float(mark(j) + 1), float(mark(j) + 2), float(mark(j) + 3), 0.0f));
+                args.ai.push_back(SLOT{0});
+            }
+            else if (otyp == 0x8006) args.an = {mark(j), mark(j) + 1, mark(j) + 2, mark(j) + 3};
+            else args.ai.push_back(SLOT{mark(j)});
+        }
+        t.pfnBuild(&s, args);
+        if (s.acmd.empty()) return false;
+        const SCPTCMD& c = s.acmd.back();
+        kind = c.kind;
+        a.resize(t.aotyp.size());
+        for (size_t j = 0; j < t.aotyp.size(); ++j)
+        {
+            SCPTARGSLOT& as = a[j];
+            as.otyp = t.aotyp[j];
+            const int m = mark(j);
+            if (c.b == m) as.ib = -2;   // (the command's "no waiting" word)
+            for (int k = 0; k < 18 && as.ib == -1; ++k)
+            {
+                const int ib = 0x10 + 4 * k;
+                if (as.otyp == 1) { if (c.a[k].g == float(m) + 0.5f) as.ib = ib; }
+                else if (as.otyp == 2)
+                {
+                    // a vector: three floats (a camera's angles stored in radians)
+                    if (c.a[k].g == float(m + 1)) as.ib = ib;
+                    else if (std::fabs(c.a[k].g - float(m + 1) * c_degToRad) < 1e-2f) { as.ib = ib; as.fRad = true; }
+                }
+                else if (c.a[k].n == m) as.ib = ib;
+            }
+        }
+        return true;
+    }
+    return false;
+}
+
 }  // namespace
 
+// (PC addition, cutscene.h: the map editor's cutscene editor reads the scripts' commands and builders)
+bool FScptBuilderLayout(uint32_t pfnThunk, int& kind, std::vector<SCPTARGSLOT>& a) { return FScptBuilderLayoutImpl(pfnThunk, kind, a); }
+int CScptCommands(LO* pscpt)
+{
+    SCPT* ps = PscptOf(pscpt);
+    return ps ? int(ps->acmd.size()) : -1;
+}
+bool FScptCommand(LO* pscpt, int ic, int& kind, int& b, int32_t an[18])
+{
+    SCPT* ps = PscptOf(pscpt);
+    if (!ps || ic < 0 || ic >= int(ps->acmd.size())) return false;
+    const SCPTCMD& c = ps->acmd[size_t(ic)];
+    kind = c.kind;
+    b = c.b;
+    for (int k = 0; k < 18; ++k) an[k] = c.a[k].n;
+    return true;
+}
+float TScptOf(LO* pscpt)
+{
+    SCPT* ps = PscptOf(pscpt);
+    return ps && ps->fRunning ? ps->t : -1.0f;
+}
+
 // orig: 0x001DFB10 (and 0x001DFAD8's -1 capacity): the buffer, the opening command (-1: no object)
+
 void BeginScptLoad(LO* plo)
 {
     SCPT& s = MpScpt()[plo];
@@ -2464,13 +2577,23 @@ bool FScptRunning(LO* pscpt)
 
 void ResetScpts() { MpScpt().clear(); }
 
+bool FScptNeverSkipRunning()
+{
+    for (const auto& [plo, s] : MpScpt())
+        if (s.fRunning && s.fNeverSkip) return true;
+    return false;
+}
+
 uint64_t IdScptCutscene()
 {
     uint64_t id = 0;
     for (const auto& [plo, s] : MpScpt())
+    {
+        // (PC addition: a running script a mod's rule makes "never skippable" keeps the scenes it starts unskippable)
         if (s.fRunning && s.idSkipScene && (!id || s.idSkipScene < id) &&
             std::any_of(s.arun.begin(), s.arun.end(), [](const PRUN& r) { return !r->fRetired && r->fPause; }))
             id = s.idSkipScene;
+    }
     return id;
 }
 

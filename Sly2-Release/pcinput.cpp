@@ -2,6 +2,12 @@
 // the camera keys, the device tracker) and mouseinput.cpp (capture, motion, bindings, menu buttons).
 
 #include "pcinput.h"
+#include "skipcut.h"
+#if defined(__ANDROID__) || defined(CANE_IOS)
+#include "mobile_app.h"
+bool g_fMovieTouchContext = false;   // (fmv.cpp: a movie plays; its layout stays)
+#endif
+#include "vr.h"
 #include "actioninput.h"
 #include "rumble.h"
 
@@ -502,6 +508,7 @@ constexpr uint16_t s_abtnAction[PCA_Max] = {
 
 float Deadzone(float g) { return std::fabs(g) < 0.15f ? 0.0f : g; }
 int s_jidPad = -1;
+bool s_fVrPadLast = false;   // (the VR controllers were the pad last step)
 uint64_t s_grfKeyboardPrev = 0;
 }  // namespace
 
@@ -517,6 +524,17 @@ void ReadPcInput(GLFWwindow* window, uint16_t* pgrf, float* pxl, float* pyl, flo
     UpdateMouse(window);
     const bool fFocused = glfwGetWindowAttrib(window, GLFW_FOCUSED) == GLFW_TRUE;
     const bool fMenu = FPcMenuMode();
+#if defined(__ANDROID__) || defined(CANE_IOS)
+    // the on-screen pad's layout (platform/android TouchLayout; iOS: platform/touch_layout.h): the D-pad and menu keys in menus, the stick in play
+    // (movies set the cinematic layout themselves, fmv.cpp); Java is told only when it changes
+    // a skippable scene (a binocucom talk, a cinematic): the pad is hidden and holding the screen skips; a scene
+    // that waits for a button keeps the pad
+    if (!g_fMovieTouchContext)
+        cane::mobile::setTouchContext(FCutsceneActive() && !FSkipCutWaitsForButton() && !FMouseMenuUp()
+                                          ? cane::mobile::TouchContext::Cinematic   // (a talk also locks the pad: before fMenu)
+                                      : fMenu ? cane::mobile::TouchContext::Menu
+                                      : cane::mobile::TouchContext::Gameplay);
+#endif
     const bool fGadgetMenuBindings = sly2actions::profile.enabled && FGadgetMenuShown();
     auto isMenuGadgetSlot = [&](int button) {
         return fGadgetMenuBindings && cane::sly2input::isGadgetSlot(cane::sly2input::legacyButtonAction(button));
@@ -542,7 +560,25 @@ void ReadPcInput(GLFWwindow* window, uint16_t* pgrf, float* pxl, float* pyl, flo
     {
         s_jidPad = cane::input::selectActivePad(s_jidPad, &gp);
         cane::input::tracker().pollGamepads();
-        if (s_jidPad >= 0)
+        // (vr.h) the headset's controllers as the pad: when no other pad is in use, or when they are used more than it
+        // (an idle pad, e.g. a handheld PC's built-in one, kept them out; the VR pad is preferred on a tie once in use);
+        // the on-screen touch pad (Android / iOS: jid GLFW_JOYSTICK_LAST, present while it is shown) never counts: it
+        // cannot be seen or touched in the headset (the Quest's title took no button at all)
+#if defined(__ANDROID__) || defined(CANE_IOS)
+        const bool fTouchPad = s_jidPad == GLFW_JOYSTICK_LAST;
+#else
+        const bool fTouchPad = false;
+#endif
+        GLFWgamepadstate gpVr{};
+        bool fVrPad = vr::FPadState(&gpVr);
+        if (fVrPad && s_jidPad >= 0 && !fTouchPad)
+        {
+            const float gVr = cane::input::gamepadActivity(gpVr), gPad = cane::input::gamepadActivity(gp, s_jidPad);
+            fVrPad = s_fVrPadLast ? gVr + 0.01f >= gPad : gVr > gPad + 0.01f;
+        }
+        s_fVrPadLast = fVrPad;
+        if (fVrPad) s_jidPad = -1, gp = gpVr;
+        if (s_jidPad >= 0 || fVrPad)
         {
             *pfPad = true;
             for (int a = 0; a < PCA_Max; ++a)
@@ -891,7 +927,7 @@ int KeyBindingPressed(GLFWwindow* window)
     int found = -1;
     for (int k = GLFW_KEY_SPACE; k <= GLFW_KEY_LAST; ++k)
     {
-        const bool f = glfwGetKey(window, k) == GLFW_PRESS;
+        const bool f = glfwGetKey(window, k) == GLFW_PRESS || FTestKeyHeld(k);   // (tests: SLY2N_TESTKEYS too)
         if (f && !s_afPrev[k] && found < 0) found = k;
         s_afPrev[k] = f;
     }
@@ -911,4 +947,14 @@ bool FDebugKeyHeld(GLFWwindow* window, int key)
 {
     if (!g_pcinput.fDebugKeys) return false;
     return FTestKeyHeld(key) || (window && glfwGetKey(window, key) == GLFW_PRESS);
+}
+
+bool FTouchPadActive()
+{
+#if defined(__ANDROID__) || defined(CANE_IOS)
+    // (VR: never: the headset has no touch screen, its controllers' prompts are shown)
+    return s_jidPad == GLFW_JOYSTICK_LAST && !vr::FActive();
+#else
+    return false;
+#endif
 }

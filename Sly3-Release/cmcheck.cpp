@@ -943,6 +943,7 @@ int CmCheck(const std::string& pathTrace, const std::string& pathRam, const std:
 // ---- native curves for the checks: the reference's curve (a RAM address) -> the native PATH placed alike
 #include "crv.h"
 #include "sw.h"
+#include "sly.h"
 bool FResolveWorld(const std::string& w, FK& fk, int& filter, std::string& err);
 namespace
 {
@@ -1120,7 +1121,7 @@ int ActorCheck(const std::string& pathTrace, const std::string& ranges, const st
         act.zFocusSmooth = rvE.F32(a + 0x1050);
         act.posCmTarget = rvE.V4(a + 0x1060);
         act.vecOffset = rvE.V3(a + 0x1070);
-        act.state = rvE.S32(a + 0x18C8);
+        act.jts = jts::FromSly2(rvE.S32(a + 0x18C8));   // (Sly 2's RAM)
         act.tActive = rvE.F32(a + 0x1AA4);
         ACTORPOSE pose;
         const uint32_t xf = rvE.U32(a + 0x60);
@@ -1150,12 +1151,12 @@ int ActorCheck(const std::string& pathTrace, const std::string& ranges, const st
                                   glm::length(act.vecOffset - rvX.V3(a + 0x1070)), std::fabs(act.tActive - rvX.F32(a + 0x1AA4))});
         const bool fOk = d < 1e-3f && cp.grfcpd == ref.grfcpd && cp.cfk == ref.cfk;
         ++c;
-        ++mpstate[act.state];
+        ++mpstate[act.jts];
         if (fOk) ++cOk;
         else if (c - cOk <= 8)
             std::printf("  call %u (vb %u) state %d sub %d/%d/%d/%d ground %d cut %d focus %d: native pos (%.3f %.3f %.3f) v (%.2f %.2f %.2f) "
                         "rad %.4f s %.3f grf %X; ref pos (%.3f %.3f %.3f) v (%.2f %.2f %.2f) rad %.4f s %.3f grf %X; d %.4f\n",
-                        e.icall, e.vb, act.state, act.jump.state, act.nSub4CC, act.nSubDF4, act.nSubF54, act.pxpFloor ? 1 : 0, ctx.fCut, ctx.fFocus,
+                        e.icall, e.vb, act.jts, act.jump.state, act.nSub4CC, act.nSubDF4, act.nSubF54, act.pxpFloor ? 1 : 0, ctx.fCut, ctx.fFocus,
                         cp.posBase.x, cp.posBase.y, cp.posBase.z, cp.vBase.x, cp.vBase.y, cp.vBase.z, cp.radHome, cp.sAdjust, cp.grfcpd,
                         ref.posBase.x, ref.posBase.y, ref.posBase.z, ref.vBase.x, ref.vBase.y, ref.vBase.z, ref.radHome, ref.sAdjust,
                         ref.grfcpd, d);

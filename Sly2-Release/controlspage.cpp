@@ -9,9 +9,11 @@
 #include "promptglyph.h"
 #include "screenobj.h"
 #include "splayer.h"
+#include "vr.h"
 
 #include "../platform/button_prompts.h"
 #include "../platform/system_settings.h"
+#include "../platform/vr_pad_map.h"
 
 #include <GLFW/glfw3.h>
 
@@ -133,6 +135,9 @@ struct DEVLAYOUT
     float faceSpread;   // (the face buttons drawn spread out from their centre when the holes are tiny)
     // icon sizes (SVG units): face buttons, sticks, shoulders, View / Menu (Back / Start), the d-pad
     float duFace, duStick, duShoulder, duMenu, duDpad;
+    // (the VR pictures, prompt_atlas_rects.inc kPromptVrLayouts) each button's own icon size; 0 everywhere: by kind. A
+    // button placed at x < 0 has no icon (a control those controllers do not have).
+    float aDu[cane::input::kButtonCount] = {};
 };
 // South East West North LB RB LT RT Back Start LS RS LSPress RSPress DpadUp DpadDown DpadLeft DpadRight Dpad Guide
 const DEVLAYOUT s_adevlayout[] = {
@@ -168,16 +173,67 @@ const DEVLAYOUT s_adevlayout[] = {
                                    {25.2f, 26.0f}, {38.8f, 26.0f}, {25.2f, 26.0f}, {38.8f, 26.0f}, {16.0f, 22.6f},
                                    {16.0f, 27.4f}, {13.6f, 25.0f}, {18.4f, 25.0f}, {16.0f, 25.0f}, {32.0f, 24.0f}},
      1.0f, 3.4f, 5.6f, 4.4f, 4.4f, 7.8f},
+    // (Kenney's GameCube silhouette: the stick top left, A with B at its lower left, the d-pad and the C-stick below;
+    // its X / Y have no holes, so their icons sit right of / above A. Z is the right bumper (outboard of R, clear of Y),
+    // L / R the triggers on the shoulders; the
+    // left bumper (the Switch Online pad's ZL), Select and Home have no icon.)
+    {Family::GameCube, {{46.0f, 24.0f}, {51.6f, 22.4f}, {39.5f, 26.6f}, {44.5f, 19.6f}, {17.5f, 17.6f}, {50.0f, 16.6f},
+                        {18.0f, 12.4f}, {46.0f, 12.4f}, {28.0f, 26.0f}, {32.0f, 26.0f}, {18.0f, 25.0f}, {40.0f, 37.0f},
+                        {18.0f, 25.0f}, {40.0f, 37.0f}, {24.0f, 34.8f}, {24.0f, 39.2f}, {21.8f, 37.0f}, {26.2f, 37.0f},
+                        {24.0f, 37.0f}, {32.0f, 30.0f}}, 1.0f, 4.4f, 6.6f, 5.0f, 3.6f, 5.6f},
+    // (the Switch 2 Pro Controller: the Switch Pro's holes, its body one unit taller at the top)
+    {Family::Switch2, {{44.9f, 27.9f}, {48.9f, 24.9f}, {40.9f, 24.9f}, {44.9f, 21.9f}, {17.5f, 15.1f}, {46.5f, 15.1f},
+                       {17.5f, 10.7f}, {46.5f, 10.7f}, {28.0f, 21.5f}, {36.0f, 21.5f}, {18.9f, 23.9f}, {37.9f, 31.9f},
+                       {18.9f, 23.9f}, {37.9f, 31.9f}, {24.9f, 29.5f}, {24.9f, 34.3f}, {22.5f, 31.9f}, {27.3f, 31.9f},
+                       {24.9f, 31.9f}, {32.0f, 25.0f}}, 1.0f, 4.4f, 6.2f, 5.0f, 3.6f, 5.6f},
+    // (the Wii Classic Controller Pro: the d-pad top left, both sticks below, - / Home / + between)
+    {Family::Wii, {{45.0f, 29.0f}, {49.0f, 25.0f}, {41.0f, 25.0f}, {45.0f, 21.0f}, {17.5f, 16.1f}, {46.5f, 16.1f},
+                   {17.5f, 11.7f}, {46.5f, 11.7f}, {27.6f, 23.0f}, {36.4f, 23.0f}, {26.0f, 33.0f}, {38.0f, 33.0f},
+                   {26.0f, 33.0f}, {38.0f, 33.0f}, {19.0f, 21.0f}, {19.0f, 27.0f}, {16.0f, 24.0f}, {22.0f, 24.0f},
+                   {19.0f, 24.0f}, {32.0f, 23.0f}}, 1.0f, 4.4f, 6.2f, 5.0f, 3.6f, 8.0f},
+    // (the Wii U Pro Controller: both sticks on top, the d-pad and the small face buttons below them, Home between)
+    {Family::WiiU, {{40.5f, 33.5f}, {43.5f, 30.5f}, {37.5f, 30.5f}, {40.5f, 27.5f}, {17.5f, 17.1f}, {46.5f, 17.1f},
+                    {17.5f, 12.7f}, {46.5f, 12.7f}, {27.4f, 26.0f}, {36.6f, 26.0f}, {18.0f, 23.0f}, {46.0f, 23.0f},
+                    {18.0f, 23.0f}, {46.0f, 23.0f}, {23.0f, 28.8f}, {23.0f, 33.2f}, {20.8f, 31.0f}, {25.2f, 31.0f},
+                    {23.0f, 31.0f}, {32.0f, 26.0f}}, 1.3f, 3.4f, 6.2f, 5.0f, 3.6f, 5.6f},
 };
-const DEVLAYOUT* PdevlayoutOf(Family f)
+// A picture's layout by its id (prompts_devices.png: a family, or cane::input::kVrPictureBase + the VR controllers'
+// vr_pad_map.h value: both hands in one picture, the buttons in the VR pad layout)
+const DEVLAYOUT* PdevlayoutOf(int picture)
 {
-    for (const DEVLAYOUT& d : s_adevlayout)
-        if (d.family == f) return &d;
-    return nullptr;
+    if (picture < cane::input::kVrPictureBase)
+    {
+        for (const DEVLAYOUT& d : s_adevlayout)
+            if (int(d.family) == picture) return &d;
+        return nullptr;
+    }
+    static DEVLAYOUT s_adevVr[cane::vrpad::kControllersCount];
+    static bool s_afVr[cane::vrpad::kControllersCount] = {};
+    const int i = picture - cane::input::kVrPictureBase;
+    if (i < 0 || i >= cane::vrpad::kControllersCount) return nullptr;
+    if (!s_afVr[i])
+    {
+        const cane::input::PromptVrLayout* pl = cane::input::PromptAtlas::vrLayout(picture);
+        if (!pl) return nullptr;
+        DEVLAYOUT& d = s_adevVr[i];
+        d.family = VrPromptFamily(i);
+        for (int b = 0; b < cane::input::kButtonCount; ++b)
+        {
+            d.aPos[b][0] = pl->pos[b][0], d.aPos[b][1] = pl->pos[b][1];
+            d.aDu[b] = pl->du[b];
+        }
+        // (the Steam Frame's A / B / X / Y sit close: spread out as the Steam Deck's)
+        d.faceSpread = i == int(cane::vrpad::Controllers::Frame) ? 1.3f : 1.0f;
+        d.duFace = 3.4f, d.duStick = 5.4f, d.duShoulder = 4.2f, d.duMenu = 3.0f, d.duDpad = 5.0f;
+        s_afVr[i] = true;
+    }
+    return &s_adevVr[i];
 }
+bool FHasButton(const DEVLAYOUT& lay, Button b) { return lay.aPos[int(b)][0] >= 0.0f; }
 // an icon's size (SVG units) by button
 float DuIcon(const DEVLAYOUT& lay, Button b)
 {
+    if (lay.aDu[int(b)] > 0.0f) return lay.aDu[int(b)];
     switch (b)
     {
     case Button::LS: case Button::RS: case Button::LSPress: case Button::RSPress: return lay.duStick;
@@ -216,6 +272,7 @@ struct PAGE
 {
     MODE mode = MODE_Off;
     Family family = Family::PlayStation;
+    int picture = 0;                     // the device picture (PdevlayoutOf): the family, or a VR controllers' picture
     bool fDrawn = false;                 // (the replacement drawn at the line sprite)
     const SELEM* plineSprite = nullptr;
     std::vector<LINE> aline;
@@ -230,6 +287,10 @@ struct PAGE
     std::vector<SLOT> aslot;             // the labels' slots
     std::vector<int> aislotTarget;       // (device pages) the slot each slot's label is drawn in (re-laid so lines do not cross)
     std::vector<std::pair<TEXTDRAW, std::string>> amoved;   // labels drawn at another slot (at ControlsPageEnd)
+    // (VR pictures: LayoutVrLabels) each label's own place in a column beside its controller, its text (a combo's icons
+    // first) and whether it has a line (the line in dev.aleg)
+    struct VRLABEL { int id = -1; SLOT slot; std::string prefix; };   // (prefix: a combo's icons)
+    std::vector<VRLABEL> avrlabel;
     DEVDRAW dev;
 };
 PAGE s_page;
@@ -286,7 +347,7 @@ std::string StrWithBoundNamesOther(std::string text, MODE mode, Family family, i
             }
         }
         const std::string name = mode == MODE_Keyboard ? StrBindingName(ControlBinding(c.action, false))
-                                                       : StrToGameText(cane::input::buttonLabel(BoundButton(c.action), family));
+                                                       : StrToGameText(PromptButtonName(BoundButton(c.action), family));
         text.replace(at, 2, name);
     }
     return text;
@@ -319,12 +380,27 @@ std::string StrWithBoundNames(std::string text, MODE mode, Family family, int ac
         else
         {
             // ("RB button", but "Stick click" without it)
-            name = cane::input::buttonLabel(BoundButton(t.action), family);
+            name = PromptButtonName(BoundButton(t.action), family);
             if (name.find(' ') == std::string::npos) name += " button";
         }
         text.replace(at, std::strlen(t.sz), name);
     }
     return text;
+}
+
+// (VR First Person) the right stick turns the body in steps there (vr.cpp SyncActions), not the camera: the camera's
+// label says so
+bool FFirstPersonControls(Family family)
+{
+    return cane::input::isVrFamily(family) && vr::g_vropts.mode == vr::VRMODE_FirstPerson &&
+           (vr::FActive() || vr::ControllersInUse() != 0);
+}
+// A label's text for the page: the bound buttons named (StrWithBoundNames), First Person's camera label
+std::string StrLabel(std::string text, MODE mode, Family family, int actionLabel)
+{
+    if (actionLabel == ACT_CAMERA && mode == MODE_Device && FFirstPersonControls(family))
+        return StrToGameText(PromptButtonName(Button::RS, family)) + StrPort(PTX_Sep) + StrPort(PTX_VrSnapTurn);
+    return StrWithBoundNames(std::move(text), mode, family, actionLabel);
 }
 
 // the frame-pixel width of an icon h pixels high (a canvas pixel is 448 / 480 as wide as high)
@@ -553,13 +629,14 @@ float AreaOverlap(glm::vec4 a, glm::vec4 b)
 
 // The device's picture in the PS2 picture's place, its icons, the labels' slots (a label may move to another label's
 // slot when that untangles the lines) and the leader lines' routes.
+bool FVrComboButton(Button b);
 void LayoutDevice(const FONTBRX* pfont, const FONTBRX* pfontIcons)
 {
     DEVDRAW& dev = s_page.dev;
     dev = DEVDRAW{};
     const auto& atlas = cane::input::promptAtlas();
-    const cane::input::PromptDeviceRect* pdev = atlas.device(s_page.family);
-    const DEVLAYOUT* play = PdevlayoutOf(s_page.family);
+    const cane::input::PromptDeviceRect* pdev = atlas.device(s_page.picture);
+    const DEVLAYOUT* play = PdevlayoutOf(s_page.picture);
     if (!pdev || !play) return;
     const float kpx = cane::input::PromptAtlas::devicePxPerUnit();
     dev.uw = float(pdev->body.w) / kpx;
@@ -568,9 +645,12 @@ void LayoutDevice(const FONTBRX* pfont, const FONTBRX* pfontIcons)
     const glm::vec2 boxLo = s_page.lo, boxHi = s_page.hi;
     dev.sx = (boxHi.x - boxLo.x) * 0.92f / dev.uw;               // frame px per unit across
     dev.sy = dev.sx * (448.0f / 480.0f);                         // and down (square on screen)
-    const float hMax = (boxHi.y - boxLo.y) * 0.88f;
+    // (the VR pictures, two upright controllers, are taller than a pad: they may fill the box's height and reach a little
+    // below it, where the PS2 picture's handles end)
+    const bool fVr = s_page.picture >= cane::input::kVrPictureBase;
+    const float hMax = (boxHi.y - boxLo.y) * (fVr ? 1.12f : 0.88f);
     if (dev.uh * dev.sy > hMax) { dev.sy = hMax / dev.uh; dev.sx = dev.sy * (480.0f / 448.0f); }
-    const glm::vec2 c(0.5f * (boxLo.x + boxHi.x), boxLo.y + 0.56f * (boxHi.y - boxLo.y));
+    const glm::vec2 c(0.5f * (boxLo.x + boxHi.x), boxLo.y + (fVr ? 0.62f : 0.56f) * (boxHi.y - boxLo.y));
     dev.o = glm::vec2(c.x - 0.5f * dev.uw * dev.sx, c.y - 0.5f * dev.uh * dev.sy);
     auto pos = [&](float ux, float uy) { return glm::vec2(dev.o.x + (ux - pdev->ux0) * dev.sx, dev.o.y + (uy - pdev->uy0) * dev.sy); };
     const glm::vec2 face(0.25f * (play->aPos[0][0] + play->aPos[1][0] + play->aPos[2][0] + play->aPos[3][0]),
@@ -578,6 +658,8 @@ void LayoutDevice(const FONTBRX* pfont, const FONTBRX* pfontIcons)
     std::vector<OBSTACLE> aobs;
     for (Button b : s_abShown)
     {
+        // (a control the VR controllers do not have: no icon, nothing to keep clear)
+        if (!FHasButton(*play, b) || (fVr && FVrComboButton(b))) { aobs.push_back({glm::vec2(-1e4f), 0.0f, 0.0f, 0.0f}); continue; }
         const float* pu = play->aPos[int(b)];
         glm::vec2 u(pu[0], pu[1]);
         if (int(b) <= int(Button::North)) u = face + (u - face) * play->faceSpread;
@@ -588,6 +670,14 @@ void LayoutDevice(const FONTBRX* pfont, const FONTBRX* pfontIcons)
         aobs.push_back({glm::vec2(p.x * kSq, p.y), 0.5f * h + 3.0f, 0.44f * h, 0.36f * h});
     }
     dev.fValid = true;
+    if (fVr)
+    {
+        void LayoutVrLabels(const DEVLAYOUT& lay, const std::vector<OBSTACLE>& aobs, const FONTBRX* pfont,
+                            const FONTBRX* pfontIcons, glm::vec4 boxPicture);
+        LayoutVrLabels(*play, aobs, pfont, pfontIcons,
+                       glm::vec4(pos(pdev->ux0, pdev->uy0), pos(pdev->ux0 + dev.uw, pdev->uy0 + dev.uh)));
+        return;
+    }
 
     // the lines' buttons (an unbound action: no line)
     std::vector<int> aiobsOfLine(s_page.aline.size(), -1);
@@ -597,7 +687,7 @@ void LayoutDevice(const FONTBRX* pfont, const FONTBRX* pfontIcons)
         if (b == Button::LSPress) b = Button::LS;
         if (b == Button::RSPress) b = Button::RS;
         for (size_t k = 0; k < std::size(s_abShown); ++k)
-            if (s_abShown[k] == b) aiobsOfLine[i] = int(k);
+            if (s_abShown[k] == b && FHasButton(*play, b)) aiobsOfLine[i] = int(k);
     }
 
     // the labels' slots: the right-hand and bottom slots (Run, the face buttons, the camera) may trade labels; every
@@ -705,15 +795,206 @@ void LayoutDevice(const FONTBRX* pfont, const FONTBRX* pfontIcons)
     }
 }
 
+// (VR pictures) The labels laid out anew beside the two controllers, as the pad pages' labels sit around their pad: a
+// label goes in the column on its button's side (the left controller's buttons left of the picture, the right one's right
+// of it), the column's labels in their buttons' order from the top (each as near its button's height as the others allow),
+// one straight line from the label to its button; where two lines of a column would still cross, those two labels trade
+// places. A grip + stick-click combo (Select / Start on controllers without those buttons) has no button to point at: its
+// two icons lead the label's text instead, the label at the bottom of its hand's column, no line.
+bool FVrComboButton(Button b)
+{
+    const auto ctl = cane::vrpad::Controllers(s_page.picture - cane::input::kVrPictureBase);
+    if (cane::vrpad::realStartSelectOf(ctl)) return false;
+    return b == Button::Back || (b == Button::Start && ctl == cane::vrpad::Controllers::Index);
+}
+void LayoutVrLabels(const DEVLAYOUT& lay, const std::vector<OBSTACLE>& aobs, const FONTBRX* pfont, const FONTBRX* pfontIcons,
+                    glm::vec4 boxPicture)
+{
+    DEVDRAW& dev = s_page.dev;
+    s_page.avrlabel.clear();
+    const float xMid = 0.5f * (boxPicture.x + boxPicture.z);
+    // the columns: their inner edges a little off the picture, as wide as the canvas allows (at most 170 px)
+    const float xLeftIn = boxPicture.x - 8.0f, xRightIn = boxPicture.z + 8.0f;
+    const float wLeft = std::min(170.0f, xLeftIn - 8.0f), wRight = std::min(170.0f, 632.0f - xRightIn);
+    const float yTop = std::max(74.0f, s_page.lo.y - 40.0f), yBottom = 440.0f;
+    struct ITEM { size_t islot; Button b; bool fCombo; int side; glm::vec2 anchor; float rim; float h; float yc; std::string text;
+                  std::string prefix; int iobs; };
+    std::vector<ITEM> aitem;
+    for (size_t i = 0; i < s_page.aslot.size(); ++i)
+    {
+        const SLOT& sl = s_page.aslot[i];
+        Button b = BoundButton(sl.action);
+        if (b == Button::LSPress) b = Button::LS;
+        if (b == Button::RSPress) b = Button::RS;
+        ITEM it{i, b, false, 0, glm::vec2(0.0f), 0.0f, 0.0f, 0.0f, sl.text, std::string(), -1};
+        for (size_t k = 0; k < std::size(s_abShown); ++k)
+            if (s_abShown[k] == b && aobs[k].r > 0.0f) it.iobs = int(k);
+        bool fFound = false;
+        for (const auto& [bi, p] : dev.aicon)
+            if (bi == b) { it.anchor = p; it.rim = 0.36f * DuIcon(lay, b) * dev.sy; fFound = true; }
+        if (FVrComboButton(b))
+        {
+            // (the combo's icons, promptglyph.h StrPromptComboIcons, then the label)
+            it.fCombo = true;
+            it.prefix = StrPromptComboIcons(b == Button::Back ? '_' : '!') + StrPort(PTX_GlyphSep);
+            it.text = it.prefix + sl.text;
+            it.side = b == Button::Back ? 0 : 1;
+            // (under the label of its stick, whose click it is)
+            it.anchor = glm::vec2(it.side ? boxPicture.z : boxPicture.x, 1e4f);
+            for (const auto& [bi, p] : dev.aicon)
+                if (bi == (it.side ? Button::RS : Button::LS)) it.anchor.y = p.y + 30.0f;
+        }
+        else if (!fFound || it.iobs < 0) it.fCombo = true, it.side = 0, it.anchor = glm::vec2(boxPicture.x, 1e4f);   // (no line)
+        else it.side = it.anchor.x >= xMid ? 1 : 0;
+        SLOT tmp = sl;
+        tmp.w = it.side ? wRight : wLeft;
+        const glm::vec4 box = BoxOfLabelIn(tmp, it.text, pfont, pfontIcons);
+        it.h = box.w - box.y;
+        aitem.push_back(it);
+    }
+    const float dyLine = 16.0f / 1.1f;   // (a text line: the labels' size 16 in text units)
+    for (int side = 0; side < 2; ++side)
+    {
+        std::vector<size_t> aorder;
+        for (size_t k = 0; k < aitem.size(); ++k)
+            if (aitem[k].side == side) aorder.push_back(k);
+        std::stable_sort(aorder.begin(), aorder.end(), [&](size_t a, size_t b) { return aitem[a].anchor.y < aitem[b].anchor.y; });
+        const float xIn = side ? xRightIn : xLeftIn;
+        // the boxes stacked in this order, each as near its button's height as the boxes above / below allow
+        auto place = [&] {
+            float yNext = yTop;
+            for (size_t k : aorder)
+            {
+                ITEM& it = aitem[k];
+                const float yWant = (it.anchor.y < 1e3f ? it.anchor.y : yBottom) - 0.5f * dyLine;   // (combos: anchor = wanted)   // (the first line on the button)
+                it.yc = std::max(yWant, yNext);
+                yNext = it.yc + it.h + 6.0f;
+            }
+            float yLimit = yBottom;
+            for (size_t j = aorder.size(); j-- > 0;)
+            {
+                ITEM& it = aitem[aorder[j]];
+                it.yc = std::min(it.yc, yLimit - it.h);
+                yLimit = it.yc - 6.0f;
+            }
+        };
+        auto seg = [&](const ITEM& it, glm::vec2* pa, glm::vec2* pb) {
+            *pa = glm::vec2(xIn + (side ? -2.0f : 2.0f), it.yc + 0.5f * dyLine);
+            glm::vec2 d = *pa - it.anchor;
+            const float l = glm::length(d);
+            *pb = l > it.rim ? it.anchor + d * (it.rim / l) : it.anchor;
+        };
+        // the column's order: every order tried (up to 7 labels), the cheapest kept: crossing lines, lines through another
+        // button's icon or another label, the lines' length and the labels' distance from their buttons' height
+        auto cost = [&] {
+            float c = 0.0f;
+            std::vector<std::pair<glm::vec2, glm::vec2>> aseg;
+            std::vector<int> aiob;
+            for (size_t k : aorder)
+            {
+                const ITEM& it = aitem[k];
+                if (it.fCombo) { c += 0.5f * std::fabs(it.yc - it.anchor.y); continue; }
+                glm::vec2 a, b;
+                seg(it, &a, &b);
+                a.x *= kSq, b.x *= kSq;
+                c += glm::length(b - a) + 0.3f * std::fabs(it.yc + 0.5f * dyLine - it.anchor.y);
+                for (size_t o = 0; o < aobs.size(); ++o)
+                    if (int(o) != it.iobs && aobs[o].r > 0.0f && DistToSeg(aobs[o].c, a, b) < aobs[o].rArt + 1.0f) c += 1200.0f;
+                aseg.push_back({a, b});
+                aiob.push_back(it.iobs);
+            }
+            for (size_t i = 0; i < aseg.size(); ++i)
+                for (size_t j = i + 1; j < aseg.size(); ++j)
+                    if (aiob[i] != aiob[j] && FSegsCross(aseg[i].first, aseg[i].second, aseg[j].first, aseg[j].second)) c += 2000.0f;
+            return c;
+        };
+        place();
+        if (aorder.size() >= 2 && aorder.size() <= 7)
+        {
+            std::vector<size_t> aperm = aorder, abest = aorder;
+            std::sort(aperm.begin(), aperm.end());
+            float costBest = cost();
+            do
+            {
+                aorder = aperm;
+                place();
+                const float c = cost();
+                if (c < costBest - 0.01f) costBest = c, abest = aperm;
+            } while (std::next_permutation(aperm.begin(), aperm.end()));
+            aorder = abest;
+            place();
+        }
+        for (size_t k : aorder)
+        {
+            const ITEM& it = aitem[k];
+            PAGE::VRLABEL vl;
+            vl.id = s_page.aslot[it.islot].id;
+            vl.slot = s_page.aslot[it.islot];
+            vl.slot.w = side ? wRight : wLeft;
+            vl.slot.m4 = side ? xIn : xIn - vl.slot.w;
+            vl.slot.m5 = it.yc * 1.1f;
+            vl.slot.align = side ? 0 : 2;
+            vl.prefix = it.prefix;
+            s_page.avrlabel.push_back(vl);
+        }
+    }
+    // the lines: from each label's first line to its button, straight or with one bend where a straight line would cross
+    // another or run through another button's icon or a label (RouteLines, as the pad pages)
+    s_aboxRoute.clear();
+    std::vector<glm::vec2> alabel;
+    std::vector<int> aiobs;
+    std::vector<size_t> ailine;
+    for (const ITEM& it : aitem)
+    {
+        const float x0 = it.side ? xRightIn : xLeftIn - (it.side ? wRight : wLeft);
+        const float wCol = it.side ? wRight : wLeft;
+        s_aboxRoute.push_back(glm::vec4((it.side ? xRightIn : x0) * kSq + 2.0f, it.yc + 2.0f,
+                                        (it.side ? xRightIn + wCol : xLeftIn) * kSq - 2.0f, it.yc + it.h - 2.0f));
+        if (it.fCombo || s_page.aslot[it.islot].iline < 0) continue;
+        const float xIn = it.side ? xRightIn - 2.0f : xLeftIn + 2.0f;
+        alabel.push_back(glm::vec2(xIn * kSq, it.yc + 0.5f * dyLine));
+        aiobs.push_back(it.iobs);
+        ailine.push_back(size_t(s_page.aslot[it.islot].iline));
+    }
+    std::vector<glm::vec2> abend;
+    for (int j = 0; j <= 16; ++j)
+        for (int i = 0; i <= 24; ++i)
+            abend.push_back(glm::vec2((boxPicture.x + (boxPicture.z - boxPicture.x) * float(i) / 24.0f) * kSq,
+                                      boxPicture.y + (boxPicture.w - boxPicture.y) * float(j) / 16.0f));
+    const std::vector<ROUTE> aroute = RouteLines(alabel, aiobs, aobs, abend);
+    auto frame = [](glm::vec2 p) { return glm::vec2(p.x / kSq, p.y); };
+    for (size_t k = 0; k < aroute.size(); ++k)
+        dev.aleg.push_back({frame(aroute[k].a), frame(aroute[k].bend), frame(aroute[k].b), aroute[k].fBend, ailine[k]});
+    if (std::getenv("SLY2N_CTLPAGEDBG"))
+    {
+        // (the check: crossings between lines, lines through other buttons' icons)
+        int ccross = 0, chit = 0;
+        for (size_t i = 0; i < aroute.size(); ++i)
+        {
+            glm::vec2 a[2][2], b[2][2];
+            const int ca = CSegs(aroute[i], a);
+            for (size_t j = i + 1; j < aroute.size(); ++j)
+            {
+                const int cb = CSegs(aroute[j], b);
+                for (int x = 0; x < ca; ++x)
+                    for (int y = 0; y < cb; ++y) ccross += FSegsCross(a[x][0], a[x][1], b[y][0], b[y][1]);
+            }
+            for (size_t o = 0; o < aobs.size(); ++o)
+                if (int(o) != aiobs[i] && aobs[o].r > 0.0f)
+                    for (int x = 0; x < ca; ++x) chit += DistToSeg(aobs[o].c, a[x][0], a[x][1]) < aobs[o].rArt;
+        }
+        std::printf("vr controls page: %zu lines, %d crossings, %d through icons\n", aroute.size(), ccross, chit);
+    }
+}
+
 // Draws the device page's picture (LayoutDevice).
 void DrawDevice()
 {
     const DEVDRAW& dev = s_page.dev;
     if (!dev.fValid) return;
     const auto& atlas = cane::input::promptAtlas();
-    const cane::input::PromptDeviceRect* pdev = atlas.device(s_page.family);
-    const DEVLAYOUT* play = PdevlayoutOf(s_page.family);
-    const unsigned texIcons = atlas.texture(s_page.family);
+    const cane::input::PromptDeviceRect* pdev = atlas.device(s_page.picture);
+    const DEVLAYOUT* play = PdevlayoutOf(s_page.picture);
     const float z = s_page.zPicture, a = s_page.alpha;
     const unsigned tex = atlas.deviceTexture();
     auto quad = [&](const cane::input::PromptRect& r, glm::vec4 rgba) {
@@ -724,7 +1005,14 @@ void DrawDevice()
     // the PS2 picture's colours: a black outline, a dark slate body
     quad(pdev->under, glm::vec4(4.0f, 4.0f, 6.0f, 128.0f * a));
     quad(pdev->body, glm::vec4(24.0f, 25.0f, 31.0f, 128.0f * a));
-    for (const auto& [b, p] : dev.aicon) DrawIcon(texIcons, atlas.uv(s_page.family, b), p, DuIcon(*play, b) * dev.sy, a, z);
+    for (const auto& [b, p] : dev.aicon)
+    {
+        // (VR: a few buttons drawn with another family's art, promptglyph.h VrButtonIcon)
+        Button bIcon = b;
+        Family famIcon = s_page.family;
+        if (cane::input::isVrFamily(famIcon)) VrButtonIcon(bIcon, famIcon);
+        DrawIcon(atlas.texture(famIcon), atlas.uv(famIcon, bIcon), p, DuIcon(*play, b) * dev.sy, a, z);
+    }
     // the leader lines (a bend: the first leg overshoots it by half the width, a closed corner), then their dots
     for (const DEVDRAW::LEG& leg : dev.aleg)
     {
@@ -770,12 +1058,16 @@ bool FControlsPageBegin(const SCREENOBJ* pso, const std::vector<CTLPIECE>& apiec
         for (int a : {PCA_Cross, PCA_Circle, PCA_Square, PCA_Triangle, PCA_R1, PCA_Select, PCA_Start})
             if (BoundButton(a) != DefaultButton(a)) mode = MODE_PsRemap;
     }
-    else mode = cane::input::promptAtlas().device(family) && PdevlayoutOf(family) ? MODE_Device : MODE_Off;
+    // (VR: the controllers in use, both hands in one picture; promptglyph.h VrControllersFor)
+    const int picture = cane::input::isVrFamily(family) ? cane::input::kVrPictureBase + VrControllersFor(family) : int(family);
+    if (mode == MODE_Off && family != Family::Keyboard && family != Family::PlayStation)
+        mode = cane::input::promptAtlas().device(picture) && PdevlayoutOf(picture) ? MODE_Device : MODE_Off;
     if (static const char* s_sz = std::getenv("SLY2N_CTLPAGEDBG"); s_sz)
-        std::printf("controls page: family %s mode %d\n", cane::input::familyId(family), int(mode));
+        std::printf("controls page: family %s picture %d mode %d\n", cane::input::familyId(family), picture, int(mode));
     if (mode == MODE_Off) return false;
     s_page.mode = mode;
     s_page.family = family;
+    s_page.picture = picture;
 
     // the picture's box and depth, the dots, the line sprite's lines
     bool fBox = false;
@@ -828,7 +1120,7 @@ bool FControlsPageBegin(const SCREENOBJ* pso, const std::vector<CTLPIECE>& apiec
                 slot.w = p.pelem->ag3[1];
                 slot.h = p.pelem->ag3[2];
                 slot.align = p.pelem->ab3[0];
-                slot.text = StrWithBoundNames(StrLocalized(psw, p.pelem->n3), mode, family, pl->action);
+                slot.text = StrLabel(StrLocalized(psw, p.pelem->n3), mode, family, pl->action);
                 s_page.aslot.push_back(slot);
             }
     // each line: the end at a dot (a PS2 button) and the label's end
@@ -932,10 +1224,27 @@ bool FControlsPageText(const TEXTDRAW& td, std::string& text)
     if (s_page.mode == MODE_Off || td.kind != 0) return false;
     const LABEL* pl = PlabelOf(td.id);
     if (!pl) return false;
-    text = StrWithBoundNames(text, s_page.mode, s_page.family, pl->action);
+    text = StrLabel(text, s_page.mode, s_page.family, pl->action);
     if (static const char* s_sz = std::getenv("SLY2N_CTLPAGEDBG"); s_sz)
         std::printf("  label 0x%X action %d x %.1f y %.1f w %.1f h %.1f size %.1f sx %.2f sy %.2f align %d '%s'\n", td.id,
                     pl->action, td.x, td.y, td.wBox, td.hBox, td.size, td.sx, td.sy, td.halign, text.c_str());
+    if (s_page.mode == MODE_Device && s_page.picture >= cane::input::kVrPictureBase && s_page.dev.fValid)
+    {
+        // (VR: every label at its own place, LayoutVrLabels)
+        for (const PAGE::VRLABEL& vl : s_page.avrlabel)
+            if (vl.id == td.id)
+            {
+                TEXTDRAW tdTo = td;
+                tdTo.x = vl.slot.m4 - 320.0f;
+                tdTo.y = vl.slot.m5 - 246.4f;
+                tdTo.wBox = vl.slot.w;
+                tdTo.hBox = 200.0f;
+                tdTo.halign = vl.slot.align;
+                s_page.amoved.push_back({tdTo, vl.prefix + text});
+                return true;
+            }
+        return false;
+    }
     if (s_page.mode == MODE_Device)
     {
         // (a label re-laid into another label's slot: drawn there at the end)

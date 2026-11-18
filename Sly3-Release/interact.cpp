@@ -1,10 +1,14 @@
 // interact.cpp: the players' interaction sub-object ACTOR +0x4C0 (interact.h). Ported from the original's code (see
 // interact.h); the parts each function warns about once ("interact: ... not ported") are left out.
 #include "booty.h"
+#include "game/scptgame3.h"
 #include "game/sly3.h"
 
 #include <bit>
 #include "interact.h"
+#include "game/ship3.h"
+#include "galleon3.h"
+#include "splitscreen3.h"
 #include "hide.h"
 #include "detect.h"
 #include "guard.h"
@@ -31,6 +35,9 @@
 #include "joy.h"
 #include "jt.h"
 #include "jump.h"
+#include "reach.h"
+#include "slyfeet.h"
+#include "xf.h"
 #include "lo.h"
 #include "po.h"
 #include "scpt.h"
@@ -51,6 +58,9 @@
 #include <cfloat>
 #include <climits>
 #include <cmath>
+
+struct SLY;
+void PlantInteractFeet3(SLY* p, INTERACT& i);   // (below)
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -114,8 +124,15 @@ bool FTake(PADCTL* pc, uint32_t grf, float dt) { return pc && GrfPadctlTakePress
 bool FWithin(PADCTL* pc, uint32_t grf, float dt) { return pc && GrfPadctlPressedWithin(pc, grf, dt); }  // 0x1C4660
 bool FMainSly(ACTOR* pa) { return PslyFromLo(pa->palo) != nullptr; }  // (the actor == 0x2E1E40, the game's Sly)
 
-// the actor's vt slot 99 (n 3: the binocucom allowed; Sly 0x18D760, Bentley / Murray their abilities)
-bool FActorCanDo(ACTOR*, int) { return true; }  // TODO(actors): slot 99's checks (sly.cpp's ground states skip them too)
+// the actor's vt slot 99 / Sly 3's 113 (n 3: the binocucom allowed; orig3 Sly 0x1AF308, Bentley 0x13FE50, Murray
+// 0x1E23F0), as called here: inside the interaction (Sly 3's state 8 / Bentley's 3 / Murray's 13), so the base's busy
+// test (0x154518: the binocucom's state below 3) and the interaction's own say (0x1B5D08: FInteractCanDo); the action 3
+// skips the outfit test. AUDIT4 PLAYER-20 (before: always true)
+bool FActorCanDo(ACTOR* pa, int n)
+{
+    if (!pa || static_cast<unsigned>(pa->nF04) < 3) return false;
+    return FInteractCanDo(pa, n);
+}
 
 // an object's vt slot 3 (the base 0x1A61E0: its splice event n, then the game's event 0x1A (5) / 0x1B (6))
 void LoEvent(LO* plo, int n)
@@ -194,7 +211,7 @@ LO* PloOidResolve(LO* plo, OID oid)
     return PloFindSwObjectByOid(g_psw, oid);
 }
 
-// orig: 0x0020FAA0 (the overlapping active entries, filtered by 0x20F948, at most 256)
+// orig: 0x0020FAA0 (the overlapping active entries, filtered by 0x20F948, at most 256) (orig3: 0x25CF18, the same C in the Sly 3 decomp)
 std::vector<SOE*> AsoeInteractBox(ACTOR* pa, const glm::vec3& a, const glm::vec3& b)
 {
     const glm::vec3 mn = glm::min(a, b), mx = glm::max(a, b);
@@ -216,7 +233,7 @@ std::vector<SOE*> AsoeInteractBox(ACTOR* pa, const glm::vec3& a, const glm::vec3
     return apsoe;
 }
 
-// orig: 0x001911A8 (kind 8: an entry within 200 above the feet, cut not at the segment's start)
+// orig: part of 0x001911A8 (kind 8: an entry within 200 above the feet, cut not at the segment's start)
 bool FInteractCovered(ACTOR* pa)
 {
     const glm::vec3 a = PosAloCenter(pa->palo) + glm::vec3(pa->vecBase);
@@ -231,7 +248,7 @@ bool FInteractCovered(ACTOR* pa)
     return false;
 }
 
-// orig: 0x001911A8 (0x19148C..0x191688: keep crawling while the standing mesh has any contacts)
+// orig: part of 0x001911A8 (0x19148C..0x191688: keep crawling while the standing mesh has any contacts)
 bool FInteractRoomBlocked(ACTOR* pa)
 {
     ALO* palo = pa->palo;
@@ -294,6 +311,7 @@ void UseObjectBase(LO* puse, ACTOR* pa)
     if (!puse) return;
     if (FPrint()) std::printf("interact t %.3f: %d uses %d (cid 0x%X)\n", g_clock.t, pa->palo->oid, puse->oid, puse->Cid());
     puse->SetField(0, 0x10C, static_cast<uint32_t>(pa->palo->oid));  // (+0x10C: the user)
+    NoteShipUse3(puse, pa->palo);   // (game/ship3.h: a deck cannon's use fires its user's ship)
     NotifyLo(puse, 6, puse);  // vt slot 4 (0x133508)
     // 0x20FF70 (the world, +0x118, +0x11C, the use, 1): each entry's state machine run to its trigger state (0x20FFF0)
     const int cRsmg = static_cast<int>(puse->U32Field(0, 0x118));
@@ -323,7 +341,11 @@ void UseObjectBase(LO* puse, ACTOR* pa)
     if (FPrint())
         std::printf("interact: the use %d's script +0x114 oid %d: %d (cid 0x%X), %d machines, %d tasks\n", puse->oid, static_cast<int>(puse->U32Field(0, 0x114, 0)),
                     pscpt ? pscpt->oid : -1, pscpt ? pscpt->Cid() : 0, cRsmg, cTask);
-    if (pscpt) StartScpt(pscpt, pa->palo);  // 0x1DFD58
+    // (s3-plane, Sly 3: the use's script +0x124 (EOPID 1164) is a Sly 3 SCPT (class 0x87): StartScpt 0x225EE8 with the
+    // user (orig3 0x1A20F8); Sly 2's runner did not run it: e.g. Ep5's deck cannons (44938 -> SCPT 44936, whose s4 fires
+    // the ship's side, method 1997))
+    if (pscpt && FScripts3Active() && !std::getenv("SLY3_USESLY2SCPT")) StartScptOfLo3(pscpt, pa->palo);
+    else if (pscpt) StartScpt(pscpt, pa->palo);  // 0x1DFD58
     if (FIsLoDerivedFrom(puse, S3CID(0x24)) && PmurrayFromLo(pa->palo)) MurrayTakeObject(pa, puse);  // 0x184330 -> 0x1B7000
 }
 // the use's vt slot 51: the booty's stands (cid 0x25: 0x13D020, booty.cpp, which ends with the base), else the base
@@ -384,7 +406,7 @@ void UseObjectBy(LO* puse, ACTOR* pa) { UseObject(puse, pa); }
 void UseObjectBaseBy(LO* puse, ACTOR* pa) { UseObjectBase(puse, pa); }  // (booty.cpp: 0x184130)  // (interactsplice.cpp: the use's method 0x10D5D0)
 LO* PloInteractOidField(LO* plo, uint32_t ib) { return PloOidField(plo, ib); }
 
-// orig: 0x00191090
+// orig: 0x00191090 (orig3: 0x1B26B8, the same C in the Sly 3 decomp)
 void InitInteract(ACTOR* pa)
 {
     INTERACT& i = pa->inter;
@@ -679,7 +701,7 @@ void SetInteractState(ACTOR* pa, int n)
         case 1: psm = i.psm230; grfapl = 1; break;
         case 4: paseg = i.paseg234; grfapl = 9; grfHandles = 7; break;
         case 3:
-            if (i.ploTarget && i.ploTarget->U32Field(0, 0x1CC, 0))
+            if (i.ploTarget && i.ploTarget->U32Field(0, 0x1BC, 0))
             {
                 paseg = i.pbl314;
                 if (i.pbl314) { i.g318 = 0.0f; i.g31C = 0.0f; }
@@ -753,7 +775,7 @@ void SetInteractState(ACTOR* pa, int n)
                     {
                         pzcm->fArc = 1;
                         pzcm->posArc = PosJtLo(pt);  // 0x1A6F00(0, zone, 0x1A62E8(target)): the zone has no frame
-                        pzcm->sArcRadius = std::bit_cast<float>(pt->U32Field(0, 0x11C, 0));
+                        pzcm->sArcRadius = std::bit_cast<float>(pt->U32Field(0, 0x10C, 0));
                     }
                     SetActorZone(pa, i.ploZone);
                 }
@@ -902,7 +924,7 @@ void UpdateInteractTransitions(ACTOR* pa)
             const glm::vec3 d = a - b;
             if (std::sqrt((d.x * d.x + d.y * d.y) + d.z * d.z) < 25.0f)  // 0x2BF5B4
             {
-                WarnOnce("kind 9's grab 0x1CD098");
+                AttachReachObject(&i.reach, i.ploTarget);   // (orig3 0x1B27D8 action 9: 0x2091B0 on +0x940; AUDIT4 PLAYER-18)
                 toGround(0);
             }
             break;
@@ -1026,7 +1048,7 @@ void UpdateInteract(ACTOR* pa)
             LO* pt = i.ploTarget;
             if (pt && FIsLoDerivedFrom(pt, S3CID(0x0C)))
             {
-                const uint32_t ends = pt->U32Field(0, 0x1CC, 0);
+                const uint32_t ends = pt->U32Field(0, 0x1BC, 0);
                 if (f21 < -25.0f && (ends & 1)) { if (pa->n4C8 == 0) s = pa->n1040 ? 2 : 3; else s = 2; }
                 else if (25.0f < f21 && (ends & 2)) { if (pa->n4C8 == 0) s = pa->n1040 ? 3 : 2; else s = 3; }
             }
@@ -1075,7 +1097,7 @@ void UpdateInteract(ACTOR* pa)
         if (!pcrv) break;
         glm::vec3 pos(0.0f), dir(0.0f);
         NearestCrv(pcrv, PosActorProbe0(pa), i.g1C, &pos, &dir, &i.g1C, &i.s20);
-        const bool fSlide = prail->U32Field(0, 0x1CC, 0) != 0;
+        const bool fSlide = prail->U32Field(0, 0x1BC, 0) != 0;
         if (fSlide && !pcrv->fClosed && !pcrv->ag.empty())
             if (i.g1C < pcrv->ag.front() + F32(0x3C23D70A) || pcrv->ag.back() - F32(0x3C23D70A) < i.g1C)
             {
@@ -1210,7 +1232,46 @@ void UpdateInteract(ACTOR* pa)
             i.g50 = std::max(i.g50, WeightRb(i.rb70, i.hfdk == 1 ? 1 : 0));  // (+0x90 / +0x70: the entries' weights)
     }
     else if (st == 0 && pa->n4C8 == 3)
-        WarnOnce("kind 3's arms (0x189C40 / 0x193C98)");
+        if (SLY* psly = dynamic_cast<SLY*>(pa)) PlantInteractFeet3(psly, i);   // (AUDIT4 PLAYER-16)
+}
+
+// orig3: 0x1B30E8 step 0 with action 3 (a curve: kind 3): the feet's probes (0x1AB308 = Sly 2's 0x189C40, radius 5, the
+// records +0x1AE0 / +0x1AE8 and +0x1ADC / +0x1AE4 = Sly 2's tags 0x13 / 0x18 and 0x12 / 0x19) and 0x1B55A0 for each: the
+// curve's point at the interaction's distance (+0x520, against it when +0x524) plus the foot's local x (the curve's range,
+// or around a closed one), in Sly's space, clipped to the foot's sphere from the foot's point (0x164B08): the foot's
+// controller (+0x1AF8 / +0x1AFC = aphandle[3] / [4]) offset to it; an invalid probe sets 0. (Before: "kind 3's arms" not
+// ported: the feet did not plant on the curve.)
+void PlantInteractFeet3(SLY* p, INTERACT& i)
+{
+    if (!p->slide.aphandle[3]) return;
+    auto rec = [p](int tag, int kind) -> XF* {
+        for (const auto& xf : p->palo->axf)
+            if (xf->tag == tag && xf->kind == kind) return xf.get();
+        return nullptr;
+    };
+    RebuildSlyFootProbe(p, rec(0x13, 1), 5.0f, rec(0x18, 6), &p->slide.afoot[0]);
+    RebuildSlyFootProbe(p, rec(0x12, 1), 5.0f, rec(0x19, 6), &p->slide.afoot[1]);
+    const CRV* pcrv = i.ploTarget ? PcrvFromLo(i.ploTarget) : nullptr;
+    XF* root = PxfObj(p->palo);
+    for (int k = 0; k < 2; ++k)
+    {
+        SLYFOOTPROBE& probe = p->slide.afoot[k];
+        CTRLSOURCE* handle = p->slide.aphandle[3 + k];
+        if (!handle) continue;
+        if (!probe.valid) { SetCtrlSourceOffset(handle, glm::vec4(0.0f)); continue; }
+        if (!pcrv || pcrv->as.empty() || !root) continue;
+        const float delta = i.f24 ? -probe.posExtrem.x : probe.posExtrem.x;
+        const float sFirst = pcrv->as.front(), sLast = pcrv->as.back();   // 0x22DFB0 / 0x22DFD8
+        float s = i.s20 + delta;
+        if (pcrv->fClosed && sLast > 0.0f) { s = std::fmod(s, sLast); if (s < 0.0f) s += sLast; }   // 0x11EDB8
+        else s = std::clamp(s, sFirst, sLast);
+        glm::vec3 pos(0.0f);
+        EvalCrvS(pcrv, s, &pos, nullptr);   // 0x22E330
+        pos = PosConvertXfs(nullptr, root, pos);   // 0x1C9428 (into Sly's space)
+        LSG hit;
+        if (ClipSegmentToSphere(probe.posSphere, probe.posExtrem, pos, 1, &hit, probe.sSphere) > 0)
+            SetCtrlSourceOffset(handle, glm::vec4(hit.pos1 - probe.posExtrem, 0.0f));
+    }
 }
 
 // orig: 0x00192A28
@@ -1271,6 +1332,9 @@ void ForgetGuardsInteract(ACTOR* pa)
 // orig: 0x001938C0
 bool FInteractCircle(ACTOR* pa)
 {
+    // (PC, galleon3.h: in the Galleon Duel another player's Circle (Bentley, the Guru, the Panda King: their tracking is
+    // not ported) took the current player's track (Sly's prompt): their deck cannons are used by galleon3's own test)
+    if (galleon3::FDuelRunning() && split3::IExtraPlayerOf(pa->palo) >= 0 && !g_fJtOtherPlayer3) return false;
     if (std::getenv("SLY2N_GANGDEBUG"))
     {
         std::printf("interact circle t %.3f: %d tracked:", g_clock.t, g_jttrack.c);
@@ -1287,7 +1351,7 @@ bool FInteractCircle(ACTOR* pa)
         else if (FIsLoDerivedFrom(plo, S3CID(0x1B))) n = 8;
         else if (FIsLoDerivedFrom(plo, S3CID(0x0C))) n = 0;
         else if (FIsLoDerivedFrom(plo, S3CID(0x22))) n = 0;
-        else if (FIsLoDerivedFrom(plo, S3CID(0x26))) n = static_cast<int>(plo->U32Field(0, 0x11C, 0));
+        else if (FIsLoDerivedFrom(plo, S3CID(0x26))) n = static_cast<int>(plo->U32Field(0, 0x10C, 0));
         else if (FIsLoDerivedFrom(plo, S3CID(0x23))) n = 7;
         if (n != -1)
         {
@@ -1333,7 +1397,7 @@ void AddInteractContacts(ACTOR* pa)
     glm::vec3 pos(0.0f), dir(0.0f);
     NearestCrv(pcrv, PosActorProbe0(pa), i.g1C, &pos, &dir, &i.g1C, &i.s20);  // 0x1E6ED8
     int grf = 0x22;
-    if (!prail->U32Field(0, 0x1CC, 0) && !pcrv->fClosed)
+    if (!prail->U32Field(0, 0x1BC, 0) && !pcrv->fClosed)
     {
         const glm::vec3 v = VelAloPos(pa->palo);  // vt slot 33
         const float vAlong = (v.x * dir.x + v.y * dir.y) + v.z * dir.z;
@@ -1353,12 +1417,12 @@ void AddInteractContacts(ACTOR* pa)
 void AccelAloPos(ALO* p, const glm::vec3& v);  // solve.cpp: orig 0x1FAC30
 void UpdateInteractMotion(ACTOR* pa)
 {
-    // a sliding rail (+0x1BC; Sly 3 +0x1CC, its options +0x10 on: maps/eopids.tsv 912..915): along its direction at the parameter +0x1C, the gravity's part along it scaled by the
+    // a sliding rail (+0x1BC; Sly 3 +0x1CC, its options 924 / 925 / 381 stored at their Sly 2 twins +0x1BC / +0x1C0 / +0x1C4, brx.cpp EopidFromIndex): along its direction at the parameter +0x1C, the gravity's part along it scaled by the
     // rail's +0x1C4, the result kept between the accelerations that smooth the speed along toward +-(+0x1C0) (SMP
     // D_002BF700 {2500, 0, 1}), less that gravity part (the gravity itself is applied elsewhere), as an acceleration
     if (pa->n4C8 != 3) return;
     LO* prail = pa->inter.ploTarget;
-    if (!prail || !prail->U32Field(0, 0x1CC, 0)) return;
+    if (!prail || !prail->U32Field(0, 0x1BC, 0)) return;
     const CRV* pcrv = PcrvFromLo(prail);
     if (!pcrv) return;
     ALO* palo = pa->palo;
@@ -1378,7 +1442,7 @@ void UpdateInteractMotion(ACTOR* pa)
         std::memcpy(&g, &u, 4);
         return g;
     };
-    const float sMax = field(0x1D0, 1000.0f), rGrav = field(0x1D4, 1.0f);
+    const float sMax = field(0x1C0, 1000.0f), rGrav = field(0x1C4, 1.0f);
     static const SMP s_smp{2500.0f, 0.0f, 1.0f};  // D_002BF700
     float a = 0.0f, b = 0.0f;
     GSmooth(d1, sMax, g_clock.dt, &s_smp, &a);   // 0x11D018
@@ -1424,7 +1488,7 @@ bool FActorPoseDone(ACTOR* pa)
     return !(g_clock.t < pa->inter.reach.t94);
 }
 
-// orig 0x001840B8 (FAddRsmg 0x20FEC0 with the trigger flag)
+// orig 0x001840B8 (FAddRsmg 0x20FEC0 with the trigger flag) (orig3: 0x1A2080, the same C in the Sly 3 decomp)
 void AddUseRsmg(LO* puse, OID oidRoot, OID oidSm, OID oidState)
 {
     const int c = static_cast<int>(puse->U32Field(0, 0x118));

@@ -6,7 +6,8 @@
 
 <p align="center">
   A launcher and native PC ports of the <b>Sly Cooper</b> games.<br>
-  Play from your own disc images, on Windows, Linux (including the Steam Deck), macOS and the Nintendo Switch.
+  Play from your own disc images, on Windows, Linux (including the Steam Deck), macOS, Android (including the Meta Quest),<br>
+  the Nintendo Switch and the Nintendo Switch 2.
 </p>
 
 <p align="center">
@@ -31,10 +32,10 @@ SafeHouse installs each game from **your own PlayStation 2 disc image** and runs
 | --- | --- |
 | **Sly Cooper and the Thievius Raccoonus** | Playable. Built on [ProjectCane](https://github.com/theclub654/ProjectCane) by **theclub654**, the native PC port of Sly 1 that made SafeHouse possible. |
 | **Sly 2: Band of Thieves** | A native port, fully playable from start to finish. |
-| **Sly 3: Honor Among Thieves** | **Early in development, not fully playable.** Now rebuilt on the finished Sly 2 port's engine. It installs and plays its opening movies; the rest of the game is still being ported. |
+| **Sly 3: Honor Among Thieves** | **Early in development, not fully playable.** Rebuilt on the finished Sly 2 port's engine and being ported episode by episode. Expect missing features, visual and audio problems, and crashes; progress may stop at points the port cannot handle yet. |
 
-Supported discs: Sly 1 from the USA, Europe, Japan and Korea; Sly 2 from the USA, Europe (v1.00 and v2.01) and
-Japan. On macOS the packages carry the launcher, Sly 2 and Sly 3.
+Supported discs: Sly 1 from the USA, Europe, Japan and Korea; Sly 2 from the USA, Europe (v1.00 and v2.01), Japan and
+Korea. On macOS the packages carry the launcher, Sly 2 and Sly 3; on Android and the Meta Quest, the launcher and Sly 2.
 
 ## Download and play
 
@@ -43,8 +44,13 @@ Japan. On macOS the packages carry the launcher, Sly 2 and Sly 3.
    | System | Package |
    | --- | --- |
    | Windows | `SafeHouse-Launcher-Windows-x86_64-Setup.exe` (installer) or `...-Portable.zip` (unzip and open `SafeHouse.exe`) |
+   | Windows on ARM | `SafeHouse-Launcher-Windows-arm64-Setup.exe` or `...-Portable.zip` |
    | Linux / Steam Deck | `SafeHouse-Launcher-Linux-x86_64.AppImage` (make it executable and open it) or `...-Linux-x86_64.tar.gz` |
-   | macOS | `SafeHouse.app` in a `.dmg` or `.zip` (Apple Silicon and Intel) |
+   | Linux on ARM (Steam Frame) | `SafeHouse-Launcher-Linux-aarch64.AppImage` or `...-Linux-aarch64.tar.gz` |
+   | macOS | `SafeHouse-Launcher-macOS-arm64.dmg` (Apple Silicon) or `...-macOS-x86_64.dmg` (Intel) |
+   | Android / Meta Quest (preview) | `SafeHouse-Android-arm64-v8a.apk` |
+   | Nintendo Switch (homebrew) | `SafeHouse.nro`, copied to `sdmc:/switch/SafeHouse/` |
+   | Nintendo Switch 2 (kaiHEN homebrew) | `SafeHouse-NX2.nro`, copied to `sdmc:/switch/SafeHouse/` |
 
 2. Open **SafeHouse**, pick a game, choose **Install** and select (or drag in) your disc image (`.iso` or `.chd`).
    The image is checked first: the game, the region, the free space and whether the image is complete.
@@ -58,9 +64,8 @@ On the Steam Deck, install in Desktop Mode, then use **Add to Steam** on the gam
 ## PC features
 
 <p align="center">
-  <img src="docs/images/ultrawide-reveal-binocucom.webp" alt="The intro's binocucom shot widening from 4:3 to 32:9" width="900"><br>
-  <img src="docs/images/ultrawide-reveal-paris.webp" alt="Paris rooftops widening from 4:3 to 32:9" width="900"><br>
-  <sub>Super ultrawide: the full 32:9 picture, with the HUD kept at its original 4:3 proportions.</sub>
+  <img src="docs/images/ultrawide-hud-placement.webp" alt="Paris at 32:9 with the HUD placed at 4:3, 16:9, 16:10 and Match Screen" width="900"><br>
+  <sub>Super ultrawide at 32:9, with the HUD at 4:3 (default), 16:9, 16:10 or out to the edges.</sub>
 </p>
 
 - **Full keyboard and mouse support:** remappable keys and buttons, mouse camera and aim, and separate invert
@@ -68,15 +73,17 @@ On the Steam Deck, install in Desktop Mode, then use **Add to Steam** on the gam
 - **Controller button icons** for Xbox, Steam Controller, Steam Deck, Nintendo Switch, PS5, PS4 and PS3, or the
   original PS2 icons if you prefer them.
 - **Dynamic input icons** that switch instantly to whatever you're playing with.
-- **Windows, Linux, SteamOS and macOS.**
+- **Windows, Linux, SteamOS, macOS, Android, the Meta Quest, the Nintendo Switch and Switch 2.**
+- **VR (Sly 2)** on PC headsets and the Meta Quest.
 - **High refresh rates:** 30, 60, 90, 120, 144, 240 FPS, uncapped or your monitor's refresh rate; the game speed
   stays the same.
-- **Super ultrawide (up to 32:9):** the HUD stays at its original 4:3 proportions, with improvements to the
-  binocucom, effects and cutscene bars at wider aspect ratios.
+- **Super ultrawide (up to 32:9):** the HUD can sit at 4:3 (default), 16:9, 16:10 or match your screen, with
+  improvements to the binocucom, effects and cutscene bars at wider aspect ratios.
 - **A debug menu with PC extras:** play as Carmelita, guards and bosses, fly Bentley's RC chopper anywhere, noclip,
   a free camera and warps.
 - **Replay Jobs:** jump back into your favourite jobs.
-- **Every region:** USA (NTSC), both PAL versions in every language, and the Japanese Kaitou Sly Cooper 2.
+- **Every region:** USA (NTSC), both PAL versions in every language, the Japanese Kaitou Sly Cooper 2 and the Korean
+  release.
 - **Mod support:** texture, music, dialog, text and movie replacements, texture packs, and a built-in import of the
   HD textures from the PS3 Sly Collection.
 - **And more:** long shadows, 30 save slots, Add to Steam and desktop shortcuts.
@@ -91,7 +98,7 @@ On the Steam Deck, install in Desktop Mode, then use **Add to Steam** on the gam
     <td><img src="docs/images/high-refresh.jpg" alt="Frame-rate choices"><br><sub>High refresh rates, up to uncapped</sub></td>
   </tr>
   <tr>
-    <td><img src="docs/images/pc-extras-carmelita-aim.webp" alt="Playing as Carmelita in aim mode"><br><sub>PC Extras: play as Carmelita</sub></td>
+    <td><img src="docs/images/pc-extras-carmelita-aim.webp" alt="Playing as Carmelita in aim mode"><br><sub>Extras: play as Carmelita</sub></td>
     <td><img src="docs/images/debug-menu.jpg" alt="The debug menu"><br><sub>The debug menu (F10)</sub></td>
   </tr>
   <tr>
@@ -106,6 +113,18 @@ On the Steam Deck, install in Desktop Mode, then use **Add to Steam** on the gam
 
 The full list is in **[docs/FEATURES.md](docs/FEATURES.md)**, the debug menu in
 **[docs/DEBUG-MENU.md](docs/DEBUG-MENU.md)** and modding in **[docs/MODDING.md](docs/MODDING.md)**.
+
+## Level editor (Sly 2)
+
+<p align="center">
+  <img src="docs/images/editor-cutscene.webp" alt="The cutscene editor playing the end of Rajan's boss fight on its timeline: Neyla brings the Contessa" width="800"><br>
+  <sub>The cutscene editor playing the end of Rajan's boss fight: Neyla brings the Contessa (Episode 3)</sub>
+</p>
+
+The launcher comes with a level editor for Sly 2 (Windows and Linux): fly through any level, move and add objects,
+build with brushes, edit guards, jobs and map states, make new levels and edit cutscenes on a timeline. Your changes
+are saved as a mod package that plays on every platform. How to use it:
+**[docs/MODDING.md](docs/MODDING.md#the-map-editor-desktop)**.
 
 ## Community
 
@@ -130,7 +149,11 @@ cmake --build --preset linux-release --parallel 4
 - **[ProjectCane](https://github.com/theclub654/ProjectCane) by theclub654:** the native PC port of Sly 1. SafeHouse
   grew out of it; without it none of this would exist.
 - **Antonio Mena:** work on the Sly 2 port and the macOS port.
-- **NaGaa95:** Sly 2 - 3 decompilation, Switch and Windows ARM port.
+- **NaGaa95:** Sly 2 - 3 decompilation, the Switch, Switch 2 and Windows ARM ports.
+- **thematuu:** Sly 2 fixes.
+- **cooperbooperscooper:** the First Person VR mode.
+- **fyrnas:** the Mali GPU shader fix on Android.
+- **maxigasparini:** configurable game and disc image folders.
 - **HoshiYumeHime** (DeviantArt): the SafeHouse logo and the app icon.
 - **SteamGridDB artists** (ctwoafiveb, Benuno, AnimeFan69, Spaghetti Overlord, Pedrogon18, RealSayakaMaizono, Nuke,
   simenfje, FrostWolf): the Steam library artwork (`launcher/assets/steam/CREDITS.md`).
@@ -138,9 +161,12 @@ cmake --build --preset linux-release --parallel 4
 - **SDL_GameControllerDB:** the controller mappings.
 - **The Braille Institute:** the Atkinson Hyperlegible typeface.
 - **The libraries** SafeHouse uses: GLFW, SDL2, FAudio, Dear ImGui, GLAD, GLM, stb, nlohmann/json, miniz, PicoSHA2,
-  libchdr and FFmpeg. Their licences are in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) and [`licenses/`](licenses).
+  libchdr, LZ4, FFmpeg, and the Vulkan and OpenXR headers and the OpenXR loader.
+  Their licences are in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) and [`licenses/`](licenses).
 
 And at the root of the Sly 2 port: the **[Sly 2 decompilation](https://github.com/Komasia/sly2-decomp)**.
+The Sly 3 port is built with the help of the **[Sly 3 decompilation](https://github.com/NaGaa95/sly3-decomp)**.
+Thanks to everyone who contributed to these projects.
 
 ## Legal
 

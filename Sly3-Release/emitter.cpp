@@ -4,7 +4,9 @@
 // has no port (the option getters / setters 0x258658..0x258EC8, 0x2584A8, 0x2586D8, disassembled), in plain
 // IEEE float.
 
+#include "fastpaths.h"
 #include "emitter.h"
+#include "pe.h"
 #include "game/sly3.h"
 #include "worldglobals.h"
 #include "texmod.h"
@@ -17,6 +19,7 @@
 #include "disc.h"
 #include "display.h"
 #include "gl.h"
+#include "gl_backend.h"
 #include "lo.h"
 #include "render.h"
 #include "scene.h"
@@ -56,6 +59,7 @@ PARTICLESTATS g_particlestats;
 constinit const SHD* (*g_pfnPcShdOfLo)(const LO* plo, int32_t id) = nullptr;
 constinit LO* (*g_pfnPcFindOid)(const LO* ploNear, int32_t oid) = nullptr;
 
+extern int g_iframeMain;   // game.cpp (debug prints)
 namespace
 {
 constexpr float PI = 3.14159265f;
@@ -64,7 +68,7 @@ constexpr uint32_t VA_AEOPID = S3VA(0x2AC880);
 
 // ------------------------------------------------------------ helpers of util.c / vec.c
 // (NRandom / GRandInRange: xfmath.h, the game's shared C library rand)
-// orig: 0x0011D3F8 NRandInRange
+// orig: 0x0011D3F8 NRandInRange (orig3: 0x11E8F0, the same C in the Sly 3 decomp)
 int32_t NRandInRange(int32_t nLow, int32_t nHigh)
 {
     const int32_t d = nHigh - (nLow - 1);
@@ -76,13 +80,13 @@ float GModPositive(float g, float d)
     if (m < 0) m += d;
     return m;
 }
-// orig: 0x0011CF60 RadNormalize
+// orig: 0x0011CF60 RadNormalize (orig3: 0x11E3B8, the same C in the Sly 3 decomp)
 float RadNormalize(float rad)
 {
     if (rad < -PI || PI < rad) rad = GModPositive(rad + PI, 2.0f * PI) - PI;
     return rad;
 }
-// orig: 0x0011E208 SetVectorSphere
+// orig: 0x0011E208 SetVectorSphere (orig3: 0x11FDD8, the same code in Sly 3)
 glm::vec3 SetVectorSphere(float radPan, float radTilt, float s)
 {
     return glm::vec3(std::cos(radTilt) * std::cos(radPan) * s, std::cos(radTilt) * std::sin(radPan) * s, std::sin(radTilt) * s);
@@ -92,7 +96,7 @@ glm::vec3 NormalizeOr(const glm::vec3& v, const glm::vec3& vZero)
     const float l = glm::length(v);
     return l < 0.0001f ? vZero : v / l;
 }
-// orig: 0x0011E2D8 BuildOrthonormalVectors (across = up x dir (upAlt when along dir), dir x across)
+// orig: 0x0011E2D8 BuildOrthonormalVectors (across = up x dir (upAlt when along dir), dir x across) (orig3: 0x11FEA8, the same code in Sly 3)
 void BuildOrthonormalVectors(const glm::vec3& dir, const glm::vec3& up, const glm::vec3& upAlt, glm::vec3& a0, glm::vec3& a1)
 {
     glm::vec3 across = glm::cross(up, dir);
@@ -100,7 +104,7 @@ void BuildOrthonormalVectors(const glm::vec3& dir, const glm::vec3& up, const gl
     a0 = NormalizeOr(across, glm::vec3(0.0f));
     a1 = NormalizeOr(glm::cross(dir, a0), glm::vec3(0.0f));
 }
-// orig: 0x0011D5B0 PrescaleClq (src, dst, ru, du): dst(x) = src(du + ru x)
+// orig: 0x0011D5B0 PrescaleClq (src, dst, ru, du): dst(x) = src(du + ru x) (orig3: 0x11EAD0, the same code in Sly 3)
 void PrescaleClq(const float src[3], float dst[3], float ru, float du)
 {
     dst[0] = src[0] + du * (src[1] + src[2] * du);
@@ -208,6 +212,8 @@ struct PSYS
     // (Sly 3's particle effects, pe.cpp: a PE stream (orig3 0x200868) is this particle system; drawn once per matrix of
     // amatPe (0x201390's instances: a kind-2 effect's clones), none: untransformed; fPeHidden: not drawn)
     bool fPe = false, fPeHidden = false;
+    float sPeCull = 0.0f;              // (Sly 3 PE: the effect's radius, the draw's camera test; 0: none)
+    bool fPeDepthPrepass = false;      // (Sly 3 PE option 588, the shape's +0x18: 0x201390's passes 0xC then 0xD)
     std::vector<glm::mat4> amatPe;
     bool fPeRandTex = false, fPeSpinFixed = false, fPeRoll = false;
     float peSpinLo = 0, peSpinHi = 0;
@@ -570,7 +576,7 @@ void ApplyEmitterOptions(EMITTERN* pe)
     }
 }
 
-// orig: 0x00159118 InitEmitb + 0x0015CAD8 (the default EMITO / EMITV, 0x2DE5B0 / 0x2DE5F0)
+// orig: 0x00159118 InitEmitb + 0x0015CAD8 (the default EMITO / EMITV, 0x2DE5B0 / 0x2DE5F0) (orig3: 0x177488, the same code in Sly 3)
 void InitEmitb(IMG& b)
 {
     std::fill(b.ab.begin(), b.ab.end(), 0);
@@ -732,7 +738,8 @@ glm::vec3 ChooseEmitVelocity(const EMITVX& vx, float uRandom, float rSvz, float 
     return a0 * v.x + a1 * v.y + normal * v.z;
 }
 
-// orig: 0x0015A808 ChooseEmitPosition (kinds 0 a point, 1 a box, 2 a surface (TODO), 3 a mesh)
+// orig: 0x0015A808 ChooseEmitPosition (kinds 0 a point, 1 a box, 2 points along a curve by length, 3 a mesh; orig3
+// 0x1785E8 the same, with the vertex normals for kind 3's direction 5)
 void ChooseEmitPosition(EMITTERN* pe, int i, int c, glm::vec3& pos, glm::vec3& normal)
 {
     const IMG& b = pe->b;
@@ -791,7 +798,12 @@ void ChooseEmitPosition(EMITTERN* pe, int i, int c, glm::vec3& pos, glm::vec3& n
         pos = P(0) * u + P(1) * v + P(2) * w;
         if (kVel == 5)
         {
-            const glm::vec3 n = glm::cross(P(1) - P(0), P(2) - P(0));   // (the vertex normals: the face's)
+            // (orig3 0x1785E8: the corners' vertex normals by the same weights)
+            auto N = [&](int j) {
+                const int ip = tri.aipos[j];
+                return ip >= 0 && size_t(ip) < pe->pmesh->anormal.size() ? pe->pmesh->anormal[size_t(ip)] : glm::vec3(0.0f);
+            };
+            const glm::vec3 n = pe->pmesh->anormal.empty() ? glm::cross(P(1) - P(0), P(2) - P(0)) : N(0) * u + N(1) * v + N(2) * w;
             normal = n;
             fVelocity = false;
             fNormalize = true;
@@ -888,7 +900,7 @@ RIPG* PripgNew(int mode)
     return pg;
 }
 
-// orig: 0x0011B830 BuildLookAtMatrix (rows: the direction, left = up x dir, up again)
+// orig: 0x0011B830 BuildLookAtMatrix (rows: the direction, left = up x dir, up again) (orig3: 0x11CBF0, the same code in Sly 3)
 glm::mat3 LookAt(const glm::vec3& dir, const glm::vec3& up)
 {
     const glm::vec3 x = NormalizeOr(dir, glm::vec3(1, 0, 0));
@@ -896,6 +908,14 @@ glm::mat3 LookAt(const glm::vec3& dir, const glm::vec3& up)
     if (glm::dot(y, y) < 1e-12f) y = glm::cross(glm::vec3(0, 1, 0), x);
     y = glm::normalize(y);
     return glm::mat3(x, y, glm::cross(x, y));
+}
+
+// orig3: 0x20BC78 (Sly 2 0x1CFAB8's part: a spin from the speed, table 0x325A10 {0, 0.001, 0} limited to 0x341FF0 [0, 1], x 10)
+void SpinRipFromSpeed(RIPN& r)
+{
+    const float v = glm::length(r.vel);
+    const float f = std::clamp(0.0f + v * (0.001f + v * 0.0f), 0.0f, 1.0f) * 10.0f;
+    for (int k = 0; k < 3; ++k) r.w[k] = GRandInRange(-f, f);
 }
 
 // orig: 0x0015B1B0 (c particles as RIPs of the emitter's group)
@@ -908,7 +928,7 @@ void EmitParticleObjects(EMITTERN* pe, int c, const glm::vec3* apos, const glm::
         pe->pripg->g158 = b.F(0xD4);   // SetRipgEmitb
     }
     RIPG* pg = pe->pripg;
-    const int kind = b.I(0xC0);
+    const int kind = RipKindOf3(b.I(0xC0));   // (the data's kinds are Sly 3's)
     const LO* psrc = pe->s.aplo[0];
     const glm::mat3 oriSrc = psrc ? glm::mat3(MatWorldOfLo(psrc)) : glm::mat3(1.0f);
     for (int i = 0; i < c; ++i)
@@ -941,10 +961,8 @@ void EmitParticleObjects(EMITTERN* pe, int c, const glm::vec3* apos, const glm::
         else if (kind == 8)
         {
             // 0x1CFAB8 PostShrapnelEmit: a life of 0.75..1.25 times, a spin from the speed (0x2C1F80, limited, x 10)
-            r.life *= GRandInRange(0.75f, 1.25f);
-            const float v = glm::length(r.vel);
-            const float f = std::clamp(0.0f + v * (0.001f + v * 0.0f), 0.0f, 1.0f) * 10.0f;
-            for (int k = 0; k < 3; ++k) r.w[k] = GRandInRange(-f, f);
+            r.life *= GRandPe(0.75f, 1.25f);
+            SpinRipFromSpeed(r);
             r.gF0 = b.F(0xF0);
             for (int k = 0; k < 3; ++k) r.agShrapnel[k] = b.F(0xF0 + 4 * k);   // (the EMITB's +0xF0 vector)
         }
@@ -958,7 +976,7 @@ void EmitParticleObjects(EMITTERN* pe, int c, const glm::vec3* apos, const glm::
         else if (kind == 5)
         {
             // 0x1D08D8: a random tilt (the vector (-1..1, -1..1, 0.1..0.9 + 0.1) as a rotation, 0x11B7E0)
-            const glm::vec3 vt(GRandInRange(-1.0f, 1.0f), GRandInRange(-1.0f, 1.0f), GRandInRange(0.1f, 0.9f) + 0.1f);
+            const glm::vec3 vt(GRandPe(-1.0f, 1.0f), GRandPe(-1.0f, 1.0f), GRandPe(0.1f, 0.9f) + 0.1f);
             r.ori = LookAt(vt, glm::vec3(0, 0, 1));  // 0x11B7E0(vt): x along the tilt, z up (not x fixed)
         }
         if (std::getenv("SLY2N_RIPPRINT") && i == 0)
@@ -1099,7 +1117,7 @@ bool FRipDebug()
 
 float GRipPoly(const float* ag, float u) { return ag[0] + u * (ag[1] + u * ag[2]); }
 
-// orig: 0x001CEAA8 ForceRipFade (the rest of its life cut to dt, keeping the fraction of it lived)
+// orig: 0x001CEAA8 ForceRipFade (the rest of its life cut to dt, keeping the fraction of it lived) (orig3: 0x20BE68, the same code in Sly 3)
 void ForceRipFade(RIPN& r, float dt)
 {
     const float t = r.life - (g_clock.t - r.tBirth);
@@ -1233,10 +1251,34 @@ bool FRipHit(RIPG* pg, RIPN& r, const SOE* psoe, const glm::vec3& pos, const glm
     if (FRipDebug())
         std::fprintf(stderr, "RIPHIT hit kind %d t %.3f at %.0f %.0f %.0f owner %d cid 0x%x sensor %d model %d second %d\n", r.kind, g_clock.t, pos.x, pos.y, pos.z,
                      powner ? powner->oid : -1, powner ? unsigned(powner->Cid()) : 0u, int(psoe->f48), r.pmodel ? r.pmodel->oid : -1, r.plo2 ? r.plo2->oid : -1);
+    // Sly 3's hit responses (RIP vt slot 7 of the kind vtables 0x361E30..0x3621A0; the default 0x20BEC8 only returns 1:
+    // the RIP goes on unchanged, no bounce)
+    const bool fWaterOwner = powner && FCidDerivedFrom(powner->Cid(), S3CID(0x59));
     switch (r.kind)
     {
+    case 1:
+        // orig3 0x20E320 (Sly 3 kind 0, the drip): into water a plain RIP (kind 6, native 7) of its +0xF4 model at the
+        // hit point: size 40 growing by 30, 0.75 s; removed whatever it hit
+        if (fWaterOwner && r.plo2)
+        {
+            RIPN d;
+            d.kind = 7;
+            d.tBirth = g_clock.t;
+            d.pos = d.posPrev = pos;
+            d.life = 0.75f;
+            d.size[0] = 40.0f;
+            d.size[1] = 30.0f;
+            d.pmodel = r.plo2;
+            if (FRipDebug()) std::fprintf(stderr, "RIPHIT drip ripple (hit) t %.3f at %.0f %.0f %.0f model %d\n", g_clock.t, pos.x, pos.y, pos.z, r.plo2->oid);
+            s_aripPending.push_back(std::move(d));
+        }
+        r.fRemoved = true;
+        return true;
+    case 4: case 6: case 7: case 9:
+        return true;   // orig3 0x20BEC8
     case 3:
         // 0x1CF968: not into actors (D_002C1F70 {0x32}); a decal of its +0xF0 unless water; removed
+        // (orig3 0x20CB98, Sly 3 kind 2: the same, 0x20C8E8 the decal)
         if (powner && FCidDerivedFrom(powner->Cid(), S3CID(0x32))) return false;
         if (!powner || !FCidDerivedFrom(powner->Cid(), S3CID(0x59))) PripDecal(r, pg, r.plo2, psoe->pxf, pos, normal);
         r.fRemoved = true;
@@ -1244,7 +1286,7 @@ bool FRipHit(RIPG* pg, RIPN& r, const SOE* psoe, const glm::vec3& pos, const glm
     case 5:
     {
         // 0x1D0BF8: not into class 0x33; a decal of its own model, its orientation into the owner's frame (0x1A7050);
-        // removed
+        // removed (orig3 0x20E210, Sly 3 kind 4: the same through 0x20C8E8 / 0x1C9598)
         if (powner && FCidDerivedFrom(powner->Cid(), S3CID(0x33))) return false;
         if (RIPN* pd = PripDecal(r, pg, r.pmodel, psoe->pxf, pos, normal); pd && powner)
             pd->ori = InverseMatrix3(glm::mat3(MatWorldOfAlo(powner))) * pd->ori;
@@ -1253,15 +1295,12 @@ bool FRipHit(RIPG* pg, RIPN& r, const SOE* psoe, const glm::vec3& pos, const glm
     }
     case 8:
     {
-        // 0x1CFBE0: through actors (the entry's attachment's root of class 0x32); removed in water; else the bounce
+        // 0x1CFBE0: through actors (the entry's attachment's root of class 0x32); else the bounce. (orig3 0x20CD88, Sly 3
+        // kind 7: in water not removed as Sly 2's but pulled halfway to the water's velocity and faded: FBounceRip's
+        // water branch)
         const OXA* poxa = powner ? Poxa(powner) : nullptr;
         const ALO* proot = poxa ? poxa->pso : powner;
         if (proot && FCidDerivedFrom(proot->Cid(), S3CID(0x32))) return false;
-        if (proot && FCidDerivedFrom(proot->Cid(), S3CID(0x59)))
-        {
-            r.fRemoved = true;
-            return true;
-        }
         return FBounceRip(r, psoe, pos, normal);
     }
     default: return FBounceRip(r, psoe, pos, normal);
@@ -1712,7 +1751,7 @@ EMITTERN* PemitterOf(LO* plo);
 
 void InsertPsysParticles(EMITTERN* pe, int c, const glm::vec3* apos, const glm::vec3* avel, const float* at0, const float* at1,
                          const glm::vec3* aposEnd, const glm::vec3* avelEnd);
-// orig: 0x0015BD20 (+ 0x15B9F0 the spline ends, + 0x15B428 into the particle system's blocks, or 0x15B1B0)
+// orig: 0x0015BD20 (+ 0x15B9F0 the spline ends, + 0x15B428 into the particle system's blocks, or 0x15B1B0) (orig3: 0x179B20, the same code in Sly 3)
 void EmitParticles(EMITTERN* pe, int c)
 {
     if (c <= 0) return;
@@ -1940,7 +1979,9 @@ void UpdateEmitter(EMITTERN* pe)
     }
     else if (k == 0)
     {
-        float f = pe->e.F(0x144) + pe->e.F(0x130) * pe->e.F(0x13C) * g_clock.dt;
+        // (orig3 0x177E78: Sly 3's kind 1 (native 0) is the carry + rate x dt alone; Sly 2's volume factor +0x13C (a box
+        // emitter's density, set when +0x100 is on) has no Sly 3 counterpart)
+        float f = pe->e.F(0x144) + pe->e.F(0x130) * g_clock.dt;
         c = int(f);
         pe->e.Wr<float>(0x144, f - float(c));
         if (c != 0) c = take(c);  // (the rate refresh below runs either way: audit E1)
@@ -2133,7 +2174,8 @@ std::pair<GLuint, int> TexArrayOf(const SHD* pshd)
 {
     if (!s_atexarrayFreed.empty())
     {
-        glDeleteTextures(static_cast<GLsizei>(s_atexarrayFreed.size()), s_atexarrayFreed.data());
+        if (const cane::draw::Packets* pk = PpacketsTex()) pk->deleteTextures(uint32_t(s_atexarrayFreed.size()), s_atexarrayFreed.data());
+        else glDeleteTextures(static_cast<GLsizei>(s_atexarrayFreed.size()), s_atexarrayFreed.data());
         s_atexarrayFreed.clear();
     }
     auto it = s_mptexarray.find(pshd);
@@ -2181,10 +2223,28 @@ std::pair<GLuint, int> TexArrayOf(const SHD* pshd)
         int clevel = 1;
         if (fMod)
             for (int d = std::max(dx, dy); d > 1; d >>= 1) ++clevel;
-        glGenTextures(1, &r.first);
-        glBindTexture(GL_TEXTURE_2D_ARRAY, r.first);
-        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-        glTexStorage3D(GL_TEXTURE_2D_ARRAY, clevel, GL_RGBA8, dx, dy, c);
+        // (native: no binding point touched; TEX1 0x60 (bilinear; a texture mod's mip chain trilinear), CLAMP of the
+        // record, as the GL calls' parameters below)
+        const cane::draw::Packets* pk = PpacketsTex();
+        if (pk)
+        {
+            cane::draw::TextureDesc d;
+            d.width = uint32_t(dx), d.height = uint32_t(dy), d.layers = uint32_t(c), d.levels = uint32_t(clevel);
+            d.minFilter = clevel > 1 ? cane::draw::kFilterLinearMipLinear : cane::draw::kFilterLinear, d.magFilter = cane::draw::kFilterLinear;
+            d.wrapS = d.wrapT = cane::draw::kWrapClampToEdge;
+            r.first = pk->createTexture(d);
+        }
+        else
+        {
+            glGenTextures(1, &r.first);
+            glBindTexture(GL_TEXTURE_2D_ARRAY, r.first);
+            glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+            glTexStorage3D(GL_TEXTURE_2D_ARRAY, clevel, GL_RGBA8, dx, dy, c);
+        }
+        auto upload = [&](int i, const void* p) {
+            if (pk) pk->uploadTexture(r.first, 0, uint32_t(i), 0, 0, uint32_t(dx), uint32_t(dy), p);
+            else glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0, i, dx, dy, 1, GL_RGBA, GL_UNSIGNED_BYTE, p);
+        };
         for (int i = 0; i < c; ++i)
         {
             const std::vector<uint8_t>* p = nullptr;
@@ -2194,7 +2254,7 @@ std::pair<GLuint, int> TexArrayOf(const SHD* pshd)
             if (!p) continue;
             if (dxFrame == dx && dyFrame == dy)
             {
-                glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0, i, dx, dy, 1, GL_RGBA, GL_UNSIGNED_BYTE, p->data());
+                upload(i, p->data());
                 continue;
             }
             // (a frame of another size: scaled to the array's, nearest texel)
@@ -2202,14 +2262,18 @@ std::pair<GLuint, int> TexArrayOf(const SHD* pshd)
             for (int y = 0; y < dy; ++y)
                 for (int x = 0; x < dx; ++x)
                     std::memcpy(&ab[(size_t(y) * dx + x) * 4], &(*p)[(size_t(y * dyFrame / dy) * dxFrame + size_t(x * dxFrame / dx)) * 4], 4);
-            glTexSubImage3D(GL_TEXTURE_2D_ARRAY, 0, 0, 0, i, dx, dy, 1, GL_RGBA, GL_UNSIGNED_BYTE, ab.data());
+            upload(i, ab.data());
         }
-        if (clevel > 1) glGenerateMipmap(GL_TEXTURE_2D_ARRAY);
+        if (pk && clevel > 1) pk->generateMipmaps(r.first);
+        if (!pk && clevel > 1) glGenerateMipmap(GL_TEXTURE_2D_ARRAY);
         // TEX1 0x60 (bilinear; a texture mod's mip chain trilinear), CLAMP of the record
-        glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, clevel > 1 ? GL_LINEAR_MIPMAP_LINEAR : GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        if (!pk)
+        {
+            glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MIN_FILTER, clevel > 1 ? GL_LINEAR_MIPMAP_LINEAR : GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+            glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+            glTexParameteri(GL_TEXTURE_2D_ARRAY, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        }
         r.second = c;
     }
     s_mptexarray[pshd] = r;
@@ -2220,7 +2284,10 @@ float Curve(const float c[3], float age) { return c[0] + c[1] * age + c[2] * (ag
 float Unit(float x) { return std::clamp(x, 0.0f, 1.0f); }
 
 // The VU1 programs (native_blip_geometry.cpp's reconstruction): per particle a quad in clip space.
-void ExpandParticles(const PSYS* pp, const glm::mat4& matModel, const glm::mat4& matWorldToClip, std::vector<PVTX>& av)
+// uAlpha: the instance's alpha-curve scale (orig3 0x201390's packet word as[3] = w * 4096, the camera's MRD fade);
+// fAlphaOne: the alpha curve replaced by 1 (0x201C18's pass 0xC: D_00341FE0)
+void ExpandParticles(const PSYS* pp, const glm::mat4& matModel, const glm::mat4& matWorldToClip, std::vector<PVTX>& av,
+                     float uAlpha = 1.0f, bool fAlphaOne = false)
 {
     const float t = g_clock.t;
     const glm::vec4 forward(matWorldToClip[0][3], matWorldToClip[1][3], matWorldToClip[2][3], 0.0f);
@@ -2244,7 +2311,7 @@ void ExpandParticles(const PSYS* pp, const glm::mat4& matModel, const glm::mat4&
                 std::printf("psys shd 0x%X age %.2f scale %.1f alpha %.2f color n %zu rgba0 %d %d %d %d tex %zu add %d kdraw %d at %.0f %.0f %.0f\n",
                             pp->pshd ? pp->pshd->id : 0, age, scale, Unit(Curve(pp->clqAlpha, age)), pp->argba.size(), pp->argba[0][0],
                             pp->argba[0][1], pp->argba[0][2], pp->argba[0][3], pp->aitex.size(), int(pp->fAdditive), pp->kDraw, pc.x, pc.y, pc.z);
-            const float alpha = Unit(Curve(pp->clqAlpha, age)), color = Unit(Curve(pp->clqColor, age));
+            const float alpha = (fAlphaOne ? 1.0f : Unit(Curve(pp->clqAlpha, age))) * uAlpha, color = Unit(Curve(pp->clqColor, age));
             const float texture = Curve(pp->clqTex, age);
             const int ntab = std::max<int>(1, int(pp->aitex.size()));
             const uint32_t itab = (uTex + uint32_t(int32_t(texture))) & uint32_t(ntab - 1);
@@ -2382,8 +2449,12 @@ void SetPepsys(PEPSYS* ph, const PEPSYSDESC& d)
     const float life = d.life != 0.0f ? d.life : 1.0f;
     std::fill(std::begin(pp->clqTex), std::end(pp->clqTex), 0.0f);
     if (n >= 2) pp->clqTex[1] = float(n) / (d.dTex == 0.0f ? life : d.dTex);
-    static const float s_clqOne[3] = {1.0f, 0.0f, 0.0f};   // 0x341FE0: shared +0x18's subs (0xC / 0xD) draw at alpha 1
-    PrescaleClq(d.fAlphaOne ? s_clqOne : d.clqAlpha, pp->clqAlpha, d.fAlphaOne ? 1.0f : 1.0f / life, 0.0f);
+    // (orig3 0x201390 / 0x201C18: a shape with +0x18 (option 588) is drawn twice: pass 0xC with the alpha curve 1
+    // (0x341FE0) and the GS template 0x36B260 (TEST alpha >= 126 else KEEP, ZTST GREATER, the colour unchanged: a depth
+    // prepass), then pass 0xD with its own alpha curve (alpha >= 128 else FB_ONLY, ZTST GEQUAL). The curve was replaced
+    // by 1 for the only draw: these effects never faded in or out)
+    PrescaleClq(d.clqAlpha, pp->clqAlpha, 1.0f / life, 0.0f);
+    pp->fPeDepthPrepass = d.fAlphaOne;
     PrescaleClq(d.clqScale, pp->clqScale, 1.0f / life, 0.0f);
     {
         auto at = [&](float t) { return pp->clqScale[0] + t * (pp->clqScale[1] + t * pp->clqScale[2]); };
@@ -2463,6 +2534,10 @@ void SetPepsysDraw(PEPSYS* ph, bool fHidden, const std::vector<glm::mat4>& amat)
     pp->fPeHidden = fHidden;
     pp->amatPe = amat;
 }
+void SetPepsysCullRadius(PEPSYS* ph, float sRadius)
+{
+    if (PSYS* pp = reinterpret_cast<PSYS*>(ph)) pp->sPeCull = sRadius;
+}
 
 // orig3: 0x201E18 (a kind-3 effect's box: each particle brought back into the box [lo, hi] of the frame mat, by the
 // box's size per axis)
@@ -2488,13 +2563,19 @@ void WrapPepsysInBox(PEPSYS* ph, const glm::mat4& mat, const glm::vec3& lo, cons
 
 // orig3: 0x202330 (a PE RIP stream's particle: a RIP of the shared group (0x20B9C0, kind from the component's record
 // +0x1C), its model, size, alpha, motion and orientation; pe.cpp fills the descriptor)
+int RipKindOf3(int kind3)
+{
+    static constexpr int s_akind[11] = {1, 7, 3, 4, 5, 6, 7, 8, 9, 7, 7};
+    return kind3 >= 0 && kind3 < 11 ? s_akind[kind3] : 7;
+}
+
 void LaunchPeRip(const PERIPDESC& d)
 {
     if (!d.pmodel) return;
     if (FOtherSw(g_psw)) InitEmittersOfSw(g_psw);
     RIPG* pg = PripgNew(0);
     RIPN r;
-    r.kind = d.kind;
+    r.kind = RipKindOf3(d.kind);
     r.tBirth = d.tBirth;
     r.life = d.life > 0.0f ? d.life : 1.0f;
     r.pmodel = d.pmodel;
@@ -2506,7 +2587,29 @@ void LaunchPeRip(const PERIPDESC& d)
     r.axisSpin = NormalizeOr(d.axisSpin, glm::vec3(0, 0, 1));
     r.gSpin = d.gSpin;
     r.gDrag = d.gDrag;
-    r.plo2 = d.plo2;
+    // the kind's slot 2 (0x202330 -> vt +0x10: the record and its second object +0x60)
+    auto fw = [&](int i) { float g; std::memcpy(&g, &d.aw[i], 4); return g; };
+    switch (r.kind)
+    {
+    case 1: r.plo2 = d.plo2; break;   // Sly 3 kind 0, 0x20E2E8: +0xF4 the ripple model
+    case 3:                           // Sly 3 kind 2, 0x20C718: +0xF0 the decal, +0xF4 the record's +0 (face the camera)
+        r.plo2 = d.plo2;
+        r.fFaceCamera = d.aw[0];
+        break;
+    case 5:                           // Sly 3 kind 4, 0x20DEF8: a random tilt (BuildLookAtMatrixZ)
+    {
+        const glm::vec3 vt(GRandPe(-1.0f, 1.0f), GRandPe(-1.0f, 1.0f), GRandPe(0.1f, 0.9f) + 0.1f);
+        r.ori = LookAt(vt, glm::vec3(0, 0, 1));
+        break;
+    }
+    case 8:                           // Sly 3 kind 7, 0x20CD18: life x 0.75..1.25 (0x325A20), +0xF0..+0xF8 the record's floats
+        r.life *= GRandPe(0.75f, 1.25f);
+        for (int k = 0; k < 3; ++k) r.agShrapnel[k] = fw(k);
+        r.gF0 = fw(0);
+        SpinRipFromSpeed(r);
+        break;
+    default: break;
+    }
     pg->arip.push_back(std::move(r));
 }
 
@@ -2891,16 +2994,32 @@ void StepParticles(SW* psw, int cframe, float dt)
     (void)dtSave;
 }
 
-void DrawParticles(const glm::mat4& matWorldToClip, const glm::vec3& posCamera, float aspect)
+void DrawParticles(const glm::mat4& matWorldToClip, const glm::vec3& posCamera, float aspect, const glm::mat4* pmatView1,
+                   const glm::vec3* pposView1, bool fStencilOff)
 {
     (void)aspect;
     s_posCamera = posCamera;
-    if (s_apsys.empty()) return;
+    if (s_apsys.empty())
+    {
+        if (fStencilOff) glDisable(GL_STENCIL_TEST);
+        return;
+    }
     if (!s_shParticle.ID)
     {
         s_shParticle.Init("particle.vert", "particle.frag");
+        s_vbo = GlNewBuffer(GL_ARRAY_BUFFER, 0, nullptr, GL_STREAM_DRAW);
+        if (const cane::draw::Packets* pkv = PpacketsVao())
+        {
+            using namespace cane::draw;
+            const VertexAttrib aattr[] = {{0, 4, kAttribFloat, 0, 0, s_vbo, uint32_t(offsetof(PVTX, clip)), sizeof(PVTX), 0},
+                                          {1, 2, kAttribFloat, 0, 0, s_vbo, uint32_t(offsetof(PVTX, uv)), sizeof(PVTX), 0},
+                                          {2, 1, kAttribFloat, 0, 0, s_vbo, uint32_t(offsetof(PVTX, layer)), sizeof(PVTX), 0},
+                                          {3, 4, kAttribFloat, 0, 0, s_vbo, uint32_t(offsetof(PVTX, rgba)), sizeof(PVTX), 0}};
+            s_vao = pkv->createVertexArray(aattr, 4, 0);
+        }
+        else
+        {
         glGenVertexArrays(1, &s_vao);
-        glGenBuffers(1, &s_vbo);
         glBindVertexArray(s_vao);
         glBindBuffer(GL_ARRAY_BUFFER, s_vbo);
         glEnableVertexAttribArray(0);
@@ -2912,6 +3031,7 @@ void DrawParticles(const glm::mat4& matWorldToClip, const glm::vec3& posCamera, 
         glEnableVertexAttribArray(3);
         glVertexAttribPointer(3, 4, GL_FLOAT, GL_FALSE, sizeof(PVTX), reinterpret_cast<void*>(offsetof(PVTX, rgba)));
         glBindVertexArray(0);
+        }
     }
     g_particlestats.cdrawn = 0;
     g_particlestats.cpsys = int(s_apsys.size());
@@ -2927,25 +3047,87 @@ void DrawParticles(const glm::mat4& matWorldToClip, const glm::vec3& posCamera, 
             if (glm::dot(glm::vec3(p), c) + p.w < -r) return false;
         return true;
     };
+    // (draw packets, platform/draw_packet.h: per blend and Z write a state made once per program, the state the GL calls
+    // leave afterwards one more; the texture, the storage buffer and the per-draw values through the entries)
+    struct PKLOCS { GLuint prog = 0; GLint tex = -1, fTextured = -1, afail = -1; uint32_t aid[10] = {}; };
+    static PKLOCS s_pkl;
+    const cane::draw::Packets* pk = cane::gl::ActiveBackend() ? cane::gl::ActiveBackend()->packets : nullptr;
+    if (!(fStencilOff && pk && pk->drawArrays && pk->applyState && pk->bindTexture && pk->bindStorage)) pk = nullptr;
+    if (pk && s_pkl.prog != s_shParticle.ID)
+    {
+        using namespace cane::draw;
+        s_pkl = {};
+        s_pkl.prog = s_shParticle.ID;
+        s_pkl.tex = s_shParticle.Loc("tex"), s_pkl.fTextured = s_shParticle.Loc("fTextured"), s_pkl.afail = s_shParticle.Loc("afailMode");
+        for (int k = 0; k < 10; ++k)
+        {
+            // k 0..3: additive (bit 0), Z write (bit 1); 4: afterwards (blend on, its factors left, all written);
+            // 5: option 588's depth prepass (no colour, Z written, ZTST GREATER); 6..9: 0..3 with ZTST GEQUAL (pass 0xD)
+            const int kb = k >= 6 ? k - 6 : k;
+            State ps;
+            ps.program = s_shParticle.ID;
+            ps.keep = kKeepStencil | (k == 4 ? kKeepBlendFactors : 0);
+            ps.blend = k == 5 ? 0 : 1;
+            ps.srcColor = ps.srcAlpha = kFactorSrcAlpha;
+            ps.dstColor = ps.dstAlpha = (kb & 1) ? kFactorOne : kFactorOneMinusSrcAlpha;
+            ps.colorMask = k == 4 ? 0xF : k == 5 ? 0x0 : 0x7;
+            ps.depthTest = 1, ps.depthWrite = k == 4 || k == 5 || (kb & 2) ? 1 : 0, ps.depthCompare = k >= 6 ? kGreaterEqual : kGreater;
+            if (s_pkl.tex >= 0) ps.aconst[ps.cconst++] = {s_pkl.tex, 0};
+            s_pkl.aid[k] = pk->createState(ps);
+        }
+    }
+    if (pk && !std::all_of(std::begin(s_pkl.aid), std::end(s_pkl.aid), [](uint32_t id) { return id != 0; })) pk = nullptr;
+    bool fSamplerBound = false;
+    const GLint locAfail = pk ? s_pkl.afail : s_shParticle.Loc("afailMode");
+    const cane::draw::Packets* const pkb = pk ? PpacketsBuf() : nullptr;   // (native buffers: the uploads by name, no binding)
+    if (pk) { if (!pkb) glBindBuffer(GL_ARRAY_BUFFER, s_vbo); }   // (the uploads below)
+    else
+    {
+    if (fStencilOff) glDisable(GL_STENCIL_TEST);
     s_shParticle.Use();
     glBindVertexArray(s_vao);
     glBindBuffer(GL_ARRAY_BUFFER, s_vbo);
     glActiveTexture(GL_TEXTURE0);
     glBindSampler(0, 0);
     glUniform1i(s_shParticle.Loc("tex"), 0);
-    const GLint locAfail = s_shParticle.Loc("afailMode");
     glDisable(GL_CULL_FACE);
     glEnable(GL_DEPTH_TEST);
     glDepthFunc(GL_GREATER);   // TEST 0x7180B: ZTST GREATER
     glEnable(GL_BLEND);
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_FALSE);
+    }
+#if SLY2_FASTPATHS
+    // (the Switch: the vertices and the matrices kept from one system and frame to the next, not allocated anew for
+    // every particle system every frame)
+    static std::vector<PVTX> av;
+    static std::vector<glm::mat4> amat;
+#else
     std::vector<PVTX> av;
+#endif
     for (const auto& pp : s_apsys)
     {
         if (pp->cparticle <= 0) continue;
         // 0x13A1E8: once per visible member instance of the group, or once untransformed
+#if SLY2_FASTPATHS
+        amat.clear();
+#else
         std::vector<glm::mat4> amat;
+#endif
         const EMITTERN* par = pp->pemitterPar;
+        // (debug: SLY3_PSYSPRINTSHD=id: who draws the particles of that shader, once a second)
+        if (static const int s_idPrint = std::getenv("SLY3_PSYSPRINTSHD") ? std::atoi(std::getenv("SLY3_PSYSPRINTSHD")) : -1;
+            s_idPrint >= 0 && pp->pshd && int(pp->pshd->id) == s_idPrint && g_iframeMain % 60 == 0)
+        {
+            std::printf("psysprint f %d shd %d pe %d prepass %d additive %d n %d par %d kdraw %d rgba", g_iframeMain, s_idPrint, int(pp->fPe), int(pp->fPeDepthPrepass),
+                        int(pp->fAdditive), pp->cparticle, par && par->plo ? par->plo->oid : -1, pp->kDraw);
+            for (const auto& c : pp->argba) std::printf(" %02X%02X%02X%02X", c[0], c[1], c[2], c[3]);
+            std::printf(" alpha %.2f %.2f %.2f:", pp->clqAlpha[0], pp->clqAlpha[1], pp->clqAlpha[2]);
+            if (par)
+                for (const EMITTERN* pm : par->amember)
+                    if (pm->plo) { const glm::vec3 q = PosLoWorld(pm->plo); std::printf(" [%d %.0f %.0f %.0f]", pm->plo->oid, q.x, q.y, q.z); }
+            std::printf("\n");
+        }
+        std::vector<float> aw;   // (the PE instances' MRD fade weights, parallel to amat)
         // (QoL draw distance below 1x: the particles of an emitter beyond its scaled range are not drawn; it still runs
         // as the original's, UpdateEmitter)
         auto fHiddenDd = [&](const EMITTERN* p) {
@@ -2958,10 +3140,26 @@ void DrawParticles(const glm::mat4& matWorldToClip, const glm::vec3& posCamera, 
         if (pp->fPe)
         {
             if (pp->fPeHidden) continue;
-            if (pp->amatPe.empty()) { if (fVisible(pp->posCenter, pp->sRadius)) amat.push_back(glm::mat4(1.0f)); }
+            // (debug: SLY3_PESKIPSHD=id: the effects drawn with that shader left out)
+            if (static const int s_idSkip = std::getenv("SLY3_PESKIPSHD") ? std::atoi(std::getenv("SLY3_PESKIPSHD")) : -1;
+                s_idSkip >= 0 && pp->pshd && int(pp->pshd->id) == s_idSkip)
+                continue;
+            // orig3 0x14A6D0: an instance whose effect has no camera within its radius (0x18E500) is not drawn (s3-hack
+            // round 6: the windmill ground's sparkles 106632 (radius 3000) seen 26600 below the hack boards as orange
+            // dots; the reference draws none). The QoL draw distance (pe.cpp's camera test) scales it as the MRD adjust
+            // (orig3 0x18E500 -> 0x168098 also gives the instance a weight, 1 out to 400 units short of the radius, then
+            // falling linearly to 0 at it: 0x201390 scales the particles' alpha curve by it (as[3] = w * 4096), so an
+            // effect fades out at its draw distance instead of popping)
+            auto wNear = [&](const glm::vec3& c) { return pp->sPeCull <= 0.0f ? 1.0f : WPeNearCamera3(c, std::min(pp->sPeCull, 1e6f)); };
+            if (pp->amatPe.empty())
+            {
+                if (fVisible(pp->posCenter, pp->sRadius))
+                    if (const float w = wNear(pp->posCenter); w > 0.0f) { amat.push_back(glm::mat4(1.0f)); aw.push_back(w); }
+            }
             else
                 for (const glm::mat4& m : pp->amatPe)
-                    if (fVisible(glm::vec3(m * glm::vec4(pp->posCenter, 1.0f)), pp->sRadius)) amat.push_back(m);
+                    if (const glm::vec3 c(m * glm::vec4(pp->posCenter, 1.0f)); fVisible(c, pp->sRadius))
+                        if (const float w = wNear(c); w > 0.0f) { amat.push_back(m); aw.push_back(w); }
         }
         else if (par && !par->amember.empty())
         {
@@ -2990,21 +3188,75 @@ void DrawParticles(const glm::mat4& matWorldToClip, const glm::vec3& posCamera, 
         else if (fVisible(pp->posCenter, pp->sRadius) && !fHiddenDd(par)) amat.push_back(glm::mat4(1.0f));
         if (amat.empty()) continue;
         av.clear();
-        for (const glm::mat4& m : amat) ExpandParticles(pp.get(), m, matWorldToClip, av);
+        for (size_t im = 0; im < amat.size(); ++im) ExpandParticles(pp.get(), amat[im], matWorldToClip, av, im < aw.size() ? aw[im] : 1.0f);
         if (av.empty()) continue;
+        // (option 588: pass 0xC's vertices, the alpha curve 1; drawn first into the depth only)
+        static const bool s_fNoPrepass = std::getenv("SLY3_NO588PREPASS") != nullptr;   // (debug: as before)
+        const bool fPrepass = pp->fPeDepthPrepass && !s_fNoPrepass;
+        size_t cPrepass = 0;
+        if (fPrepass)
+        {
+            const size_t c0 = av.size();
+            for (size_t im = 0; im < amat.size(); ++im) ExpandParticles(pp.get(), amat[im], matWorldToClip, av, im < aw.size() ? aw[im] : 1.0f, true);
+            cPrepass = av.size() - c0;
+        }
+        const size_t cMain = av.size() - cPrepass;
         const auto [tex, ctex] = TexArrayOf(pp->pshd);
+        if (pk)
+        {
+            pk->bindTexture(0, tex, 1, fSamplerBound ? cane::draw::kSamplerKept : 0u);
+            fSamplerBound = true;
+        }
+        else
+        {
         glBindTexture(GL_TEXTURE_2D_ARRAY, tex);
         glUniform1i(s_shParticle.Loc("fTextured"), tex ? 1 : 0);
         glBlendEquation(GL_FUNC_ADD);
         glBlendFunc(GL_SRC_ALPHA, pp->fAdditive ? GL_ONE : GL_ONE_MINUS_SRC_ALPHA);
-        glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(av.size() * sizeof(PVTX)), av.data(), GL_STREAM_DRAW);
+        }
+        if (void* p = pk && pk->mapStream ? pk->mapStream(s_vbo, av.size() * sizeof(PVTX)) : nullptr) std::memcpy(p, av.data(), av.size() * sizeof(PVTX));
+        else if (pkb) pkb->bufferData(s_vbo, av.size() * sizeof(PVTX), av.data(), cane::draw::kBufferStream);
+        else glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(av.size() * sizeof(PVTX)), av.data(), GL_STREAM_DRAW);
+        if (pk)
+        {
+            const int a = pp->fAdditive ? 1 : 0;
+            const int g = fPrepass ? 6 : 0;   // (pass 0xD after the prepass: ZTST GEQUAL)
+            cane::draw::Constant ac[2];
+            uint32_t cc = 0;
+            if (s_pkl.fTextured >= 0) ac[cc++] = {s_pkl.fTextured, tex ? 1u : 0u};
+            const uint32_t iafail = cc;
+            if (locAfail >= 0) ac[cc++] = {locAfail, 3u};
+            if (fPrepass) pk->drawArrays(s_pkl.aid[5], s_vao, uint32_t(cMain), uint32_t(cPrepass), ac, cc);
+            if (locAfail >= 0) ac[iafail].bits = 1;
+            pk->drawArrays(s_pkl.aid[g + (a | 2)], s_vao, 0, uint32_t(cMain), ac, cc);
+            if (locAfail >= 0) ac[iafail].bits = 2;
+            pk->drawArrays(s_pkl.aid[g + a], s_vao, 0, uint32_t(cMain), ac, cc);
+            continue;
+        }
+        if (fPrepass)
+        {
+            // pass 0xC: alpha >= 126 writes Z only (ZTST GREATER), the colour unchanged
+            glUniform1i(locAfail, 3);
+            glDepthMask(GL_TRUE);
+            glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+            glDrawArrays(GL_TRIANGLES, GLint(cMain), GLsizei(cPrepass));
+            glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_FALSE);
+            glDepthFunc(GL_GEQUAL);
+        }
         // ATE GEQUAL 0x80 with AFAIL FB_ONLY: the opaque part writes Z, the rest only colour
         glUniform1i(locAfail, 1);
         glDepthMask(GL_TRUE);
-        glDrawArrays(GL_TRIANGLES, 0, GLsizei(av.size()));
+        glDrawArrays(GL_TRIANGLES, 0, GLsizei(cMain));
         glUniform1i(locAfail, 2);
         glDepthMask(GL_FALSE);
-        glDrawArrays(GL_TRIANGLES, 0, GLsizei(av.size()));
+        glDrawArrays(GL_TRIANGLES, 0, GLsizei(cMain));
+        if (fPrepass) glDepthFunc(GL_GREATER);
+    }
+    if (pk)
+    {
+        if (!fSamplerBound) glBindSampler(0, 0);
+        pk->drawArrays(s_pkl.aid[4], 0, 0, 0, nullptr, 0);   // (the state and vertex array the GL calls leave)
+        return;
     }
     glDepthMask(GL_TRUE);
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);

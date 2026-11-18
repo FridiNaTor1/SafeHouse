@@ -144,6 +144,12 @@ struct CMD
     int n10 = 0;                  // +0x10
     float g14 = 0.0f;             // +0x14
     // (ops 1 / 2: g8 / gC the range)
+    // (s3-ai-4) Sly 3's extra words of ops 6 / 7 (builders 0x1973B8 / 0x197420): the move's clip for the guard's state
+    // 14 while the command runs (op 6 +0x10, op 7 +0x14; -1 none), and the inverted fifth argument (op 6 +0x14: the path
+    // job's "from the reactions" +0x58; op 7 +0x18: the go-to's direct flag +0xA0). -1: a Sly 2 builder's command (the
+    // job script's own flag, as Sly 2).
+    OID oidKind3 = -1;
+    int fDirect3 = -1;
 };
 struct CMDLIST : LO  // cid 0x71 (0x60 bytes)
 {

@@ -1,14 +1,22 @@
 // The actors' damage controller (orig ACTOR +0xDF0, module 0x1A0B18..0x1A245C): damage.h.
 
+#include "gadget.h"
 #include "aipursuit.h"
 #include "game/sly3.h"
 #include "objmethod.h"
 #include "booty.h"
 #include "damage.h"
+#include "splitscreen3.h"
+#include "game/suck3.h"
+#include "game/biplane3.h"
+#include "game/ship3.h"
+#include "game/scptgame3.h"
+#include "game/task3.h"
 #include "sound.h"
 #include "activate.h"
 #include "gang.h"
 #include "guard.h"
+#include "hack.h"
 #include "interact.h"
 #include "shd.h"
 
@@ -41,6 +49,9 @@
 #include "worldaccess.h"
 #include "update.h"
 #include "cm.h"
+
+#include "game/guru3.h"
+#include "animfind.h"
 
 #include <algorithm>
 #include <cfloat>
@@ -91,8 +102,21 @@ float F32(uint32_t u)
 DAMAGE& Dmg(ACTOR* pa) { return pa->dmg; }
 
 // the reaction n's clip (+0xA0 + 4 n: the actor's parts by their offset)
+// orig3: the clips are the +0xE40 sub-object's 14 records (+0x2C + 0x10 i: {oid, object}), set by option 812
+// (0x109BD0 / 0x109C88 -> 0x1C20D0, bound by oid at the post-load 0x1C2138: moves3.cpp keeps them in aslot3E40) and
+// read by 0x1C21F0 as p->anims[state]. Sly 3 numbers the reactions as Sly 2 up to 6, then its own 7 (an attached
+// sub-object), so Sly 2's 7..12 (the hit, the launches, water, ...) are Sly 3's 8..13. Natively the copied code read the
+// Sly 2 part offsets, which no Sly 3 part table fills: every reaction had no clip and ended the next frame (Murray's
+// knock-back cut to ~280 units). SLY3_REACT2=1: the Sly 2 parts only.
 ASEG* PasegReaction(ACTOR* pa, int n)
 {
+    static const bool s_fReact2 = std::getenv("SLY3_REACT2") != nullptr;
+    if (!s_fReact2 && n >= 0)
+    {
+        const int i3 = n <= 6 ? n : n + 1;
+        if (i3 < 14 && pa->aslot3E40[i3].oid != -1)
+            if (ASEG* p = dynamic_cast<ASEG*>(PloFindSwNearest(pa->palo, pa->aslot3E40[i3].oid))) return p;
+    }
     const uint32_t ib = 0xDF0 + 0xA0 + 4 * static_cast<uint32_t>(n);
     for (const auto& [ibPart, plo] : pa->palo->apart)
         if (ibPart == ib) return dynamic_cast<ASEG*>(plo);
@@ -111,17 +135,43 @@ glm::mat3 MatSender(LO* plo)
 
 // orig: 0x00155228 (the counter's change scaled by the game's suck: 0x154C90 on 0x2DE578's history between its
 // limits, D_002BDC00 +0x20 / +0x24)
-int NScaleDamage(int n)
+// orig3: 0x172268 at the hit's creation (0x240CB0 -> 0x240C78, with the receiver): only a receiver of class 0x31 that a
+// player controls (0x1F4350(o, -1): player 0's or player 1's character) is scaled, by Sly 3's suck (game/suck3.h,
+// 0x171C98) on the row 1 / 0.5, and a positive amount (a hit; Sly 3's heals are negative) stays at least 1. Here at the
+// receiver on the native delta (a loss negative): an AI partner's hits are not scaled, a 1-point hit at full suck stays
+// 1 (AUDIT5 PLAYER5-07; natively every actor was scaled and truncated to 0)
+int NScaleDamage(LO* plo, int delta)
 {
-    const float g = GSuck();  // 0x154C90 (task.cpp); D_002BDC00 +0x20 / +0x24: 1 / 0.5
-    return static_cast<int>(((1.0f - g) * 1.0f + g * 0.5f) * static_cast<float>(n));
+    bool fPlayer = false;
+    if (g_psw && plo)
+        for (int i = 0; i < 2 && !fPlayer; ++i) fPlayer = split3::PloPlayer(g_psw, i) == plo;
+    if (plo && !fPlayer && split3::IExtraPlayerOf(plo) > 0) fPlayer = true;   // (PC: the extra players of the four-player games)
+    if (!fPlayer) return delta;
+    const int amount = -delta;   // (Sly 3's sign)
+    const float g = GSuck3();
+    int v = static_cast<int>(((1.0f - g) * 1.0f + g * 0.5f) * static_cast<float>(amount));
+    if (amount > 0 && v <= 1) v = 1;
+    return -v;
 }
 
 // orig: 0x00144418 (vt slot 86 of the actors: the hit takes at least the capacity and is not a touch (0 / 1),
 // 0x80000 or healing (0x100000): fatal)
+// (RENDER-15: Sly 3's hit records carry a positive damage (0x240CB0's amount, e.g. the lasers' 10 from 0x224600, the
+// scripts' SCPT 0x6B, the hack ships'), the copied Sly 2 senders a negative one; orig3 0x1C3470 subtracts the amount
+// (health - delta) and a heal (0x100000) is health - delta as well. The player side takes the magnitude: a loss for
+// every kind but the heal, a gain for the heal, so either sign reaches the counter the same way. Natively a positive
+// Sly 3 amount healed the player and a laser hit on a hack ship (hack.cpp, Sly 3's sign) healed it.)
+int NDamageDelta3(const CTMSG* pctm)
+{
+    const int n = std::abs(pctm->nState);
+    return pctm->grfFilter == 0x100000 ? n : -n;
+}
+
 bool FDamageFatal(ACTOR* pa, const CTMSG* pctm)
 {
-    if (-pctm->nState < Dmg(pa).cCapacity) return false;
+    // (Sly 3's +0x28 instant kill (0x19B6E0's hit points to 0, e.g. SCPT 0x6B's A3): fatal for a hit kind)
+    const bool fKill3 = pctm->nKill3 || pctm->fKill3;
+    if (!fKill3 && -NDamageDelta3(pctm) < Dmg(pa).cCapacity) return false;
     switch (pctm->grfFilter)
     {
     case 0: case 1: case 0x80000: case 0x100000: return false;
@@ -165,12 +215,13 @@ bool FSlyImmune(ACTOR* pa, int kind)
 {
     if (SLY* p = dynamic_cast<SLY*>(pa))
     {
-        switch (p->state)
+        if (FShieldBlocks3(pa, kind)) return true;   // (Sly 3: the shield, orig3 0x1C3DB8; s3-decomp)
+        switch (p->jts)
         {
-        case 3: case 8: case 21: case 22:
+        case jts::Hang: case jts::Climb: case jts::N2ClimbSurf: case jts::HangFollow:
             if (kind == 0x4000) return true;
             break;
-        case 7:
+        case jts::Interact:
             // orig: 0x00194640: a prize pose, or the two protected phases
             // of a carried-object interaction, rejects every damage kind.
             if (p->n4C8 == 12 ||
@@ -326,7 +377,7 @@ void UpdateSafePipe(ACTOR* pa)
     if (pipe && !pipe->U32Field(0, 0x19C, 0)) RecordSafeTarget(pa, pipe, JTL_Pipe, pa->sCrvF50);
 }
 
-// orig: 0x001A0048 / 0x001A00D0. Only histories are pruned: the active return-jump entry remains a value copy.
+// orig: 0x001A0048 / 0x001A00D0. Only histories are pruned: the active return-jump entry remains a value copy. (orig3: 0x1C10A0, the same code in Sly 3)
 void RemoveSafeGroundReferences(LO* plo, SOE* psoe)
 {
     ACTOR* heroes[] = {PslyGlobal(), PbentleyGlobal(), PmurrayGlobal()};
@@ -352,13 +403,14 @@ void RemoveSafeGroundReferences(LO* plo, SOE* psoe)
     if (psoe) psoe->f51 = false;
 }
 
-// orig: 0x0019FC30 (the Sly states that retain a floor or an interaction description)
+// orig: 0x0019FC30 (the Sly states that retain a floor or an interaction description) (orig3: 0x1C0CB8, Sly 3's
+// states: sly.h jts::)
 void UpdateSafeGround(ACTOR* pa, int state)
 {
     switch (state)
     {
-    case 0: case 1: case 5: case 6: case 9: case 10: case 11: case 12:
-    case 15: case 16: case 17: case 20: case 23: case 24:
+    case 0: case 1: case 2: case 6: case 7: case 10: case 11: case 12:
+    case 13: case 16: case 18: case 19: case 21: case 22: case 23: case 24:
     {
         XP* pxp = pa->pxpFloor;
         if (!pxp || !(0.7f < pxp->normal.z) || pa->ploWater) break;
@@ -367,12 +419,12 @@ void UpdateSafeGround(ACTOR* pa, int state)
         RecordSafeGround(pa, pxp->axpd[1].psoe, pxp->axpd[1].posLocal);
         break;
     }
-    case 3: case 22:
+    case 4: case 17:
         if (SLY* sly = dynamic_cast<SLY*>(pa); sly && sly->ploOther && !sly->ploOther->U32Field(0, 0x10C, 0))
             RecordSafeTarget(pa, sly->ploOther, JTL_Point, 0.0f);
         break;
-    case 7: UpdateSafeInteract(pa); break;
-    case 8: UpdateSafePipe(pa); break;
+    case 8: UpdateSafeInteract(pa); break;
+    case 9: UpdateSafePipe(pa); break;
     default: break;
     }
 }
@@ -410,7 +462,7 @@ glm::vec3 PosSafeEntry(ACTOR* pa, const SAFEGROUND::ENTRY& e, float dt = 0.0f)
 
 // orig: 0x0019F7D0 (the entry's cost: 2000 without a flat floor under it or with no room above, 1500 at an edge (one of
 // eight points 40 around without floor), and near another player up to 400 - its distance)
-float GCostSafeEntry(ACTOR* pa, const SAFEGROUND::ENTRY& e, const std::vector<ALO*>& apaloPlayers)
+float GCostSafeEntry(ACTOR* pa, const SAFEGROUND::ENTRY& e, const std::vector<ALO*>& apaloPlayers, bool fSelf = false)
 {
     float g = 0.0f;
     glm::vec3 pos = PosSafeEntry(pa, e);
@@ -449,7 +501,7 @@ float GCostSafeEntry(ACTOR* pa, const SAFEGROUND::ENTRY& e, const std::vector<AL
     }
     for (ALO* palo : apaloPlayers)
     {
-        if (palo == pa->palo) continue;
+        if (palo == pa->palo && !fSelf) continue;   // (orig3 0x1C07E8's flag 4: the owner counts too)
         ACTOR* pq = PactorFromLo(palo);
         const glm::vec3 posQ = pq ? PosActorProbe0(pq) : PosAloCenter(palo);
         const float d = glm::length(posQ - pos);
@@ -487,6 +539,18 @@ SAFEGROUND::ENTRY EntryBestSafe(ACTOR* pa)
     return best;
 }
 
+// the players (0x15E9C8(g_game, 0x505, 0x33, 0, 16): the class-0x33 objects in the world, at most 16)
+std::vector<ALO*> ApaloSafePlayers()
+{
+    std::vector<ALO*> apaloPlayers;
+    if (g_psw)
+        for (CID cid = 0; cid < CID_Max; ++cid)
+            if (FCidDerivedFrom(cid, S3CID(0x33)))
+                for (LO* plo : g_psw->mpcidaplo[cid])
+                    if (plo && plo->fInWorld && apaloPlayers.size() < 16) apaloPlayers.push_back(static_cast<ALO*>(plo));
+    return apaloPlayers;
+}
+
 // orig: 0x00196928 (the time a jump with a vertical speed within [vzMin, vzMax] and a horizontal one within the limits
 // needs to cover d under the gravity: the longest of the quadratics' last roots)
 float TJumpTo(const glm::vec3& d, const glm::vec3& vGravity, float vzMax, float vzMin, float sMax, float sMin)
@@ -506,6 +570,36 @@ float TJumpTo(const glm::vec3& d, const glm::vec3& vGravity, float vzMax, float 
 }  // namespace
 
 glm::vec3 PosSafeGround(ACTOR* pa, const SAFEGROUND::ENTRY& e, float dt) { return PosSafeEntry(pa, e, dt); }
+
+// orig3: 0x1C0B70(list, out, 5) -> 0x1C07E8 with the flags 5 (Carmelita's power-up 0x34, 0x15FB28: a place near the
+// robber): of the actor's safe places the cheapest one that is not an interaction's (flag 1: +4 set, natively jtl), the
+// actor itself in the crowd's cost (flag 4: 400 - its distance, so not on top of him); the entry taken off the list (the
+// original's move of the rest), its place resolved (0x1C03A0 with 0: PosSafeEntry). false: no entry.
+bool FTakeSafePlaceAway3(ACTOR* pa, glm::vec3* ppos)
+{
+    if (!pa) return false;
+    const std::vector<ALO*> apaloPlayers = ApaloSafePlayers();
+    SAFEGROUND& sg = pa->safe;
+    int iBest = -1;
+    float gBest = FLT_MAX;
+    for (int i = 0; i < sg.c; ++i)
+    {
+        if (sg.ae[i].jtl != JTL_Max) continue;   // (flag 1: the cost 3.4e38, never chosen)
+        const float g = GCostSafeEntry(pa, sg.ae[i], apaloPlayers, true);
+        if (g < gBest)
+        {
+            gBest = g;
+            iBest = i;
+            if (g == 0.0f) break;
+        }
+    }
+    if (iBest < 0) return false;
+    const SAFEGROUND::ENTRY e = sg.ae[iBest];
+    std::memmove(&sg.ae[iBest], &sg.ae[iBest + 1], sizeof(SAFEGROUND::ENTRY) * static_cast<size_t>(sg.c - iBest - 1));
+    --sg.c;
+    if (ppos) *ppos = PosSafeEntry(pa, e, 0.0f);
+    return true;
+}
 float TJumpBallistic(const glm::vec3& d, const glm::vec3& vGravity, float vzMax, float vzMin, float sMax, float sMin)
 {
     return TJumpTo(d, vGravity, vzMax, vzMin, sMax, sMin);
@@ -559,7 +653,7 @@ namespace
 {
 // orig: 0x001A1F68 (counter left: get up (0), else 8)
 void NextGetUp(ACTOR* pa) { SetDamageState(pa, *Dmg(pa).pcount > 0 ? 0 : 8); }
-// orig: 0x001A16A8 (0x19F590(actor, 0): the +0x9E0 sub-object)
+// orig: 0x001A16A8 (0x19F590(actor, 0): the +0x9E0 sub-object) (orig3: 0x1C2FE8, the same code in Sly 3)
 void NextRecover(ACTOR* pa) { RecoverActor(pa); }
 // orig: 0x001A1FA8 (counter left: the sender's bit 33 recovers, else the jump's kind 11; else 8)
 void NextStunned(ACTOR* pa)
@@ -585,11 +679,39 @@ void NextSpecial(ACTOR* pa)
 }
 
 // orig: 0x001A16C8 (the velocity of the hit by kind (vt slot 35), then the reaction 7)
+// orig3: 0x1C3008 first: a sender that is a step guard (0x3A) whose job stack (+0x29C) holds an action job (0xD1, native
+// 0xA4) whose action has a knock-back (+0x9C on, Sly 3's EOPID 409) throws the actor away from the guard in the plane at
+// +0xA0 and up at +0xA4 (normalize(self - guard) with z 0, else (1, 0, 0)); the kinds below otherwise
 void ApplyDamageVelocity(ACTOR* pa)
 {
     DAMAGE& d = Dmg(pa);
     glm::vec3 v = d.req.vec;
     LO* ps = d.req.ploSender;
+    static const bool s_fKnock2 = std::getenv("SLY3_KNOCK2") != nullptr;   // (debug: Sly 2's rule only, the action's knock-back not read)
+    if (ps && !s_fKnock2 && FIsLoDerivedFrom(ps, S3CID(0x38)))
+        if (GUARD* pg = PguardFromLo(ps))
+            if (auto* pj = dynamic_cast<JOBACT*>(PjobFind(pg, 0xA4)); pj && pj->paction && pj->paction->fKnock)
+            {
+                glm::vec3 dir = PosLoWorld(pa->palo) - PosLoWorld(ps);
+                dir.z = 0.0f;
+                const float l = glm::length(dir);
+                dir = l < 1.0e-4f ? glm::vec3(1.0f, 0.0f, 0.0f) : dir / l;   // (D_00317530)
+                v = dir * pj->paction->gKnockOut + glm::vec3(0.0f, 0.0f, 1.0f) * pj->paction->gKnockUp;   // (D_00317550)
+                if (std::getenv("SLY3_KNOCKPRINT"))
+                    std::printf("knock: %d by guard %d action %d: %.0f out %.0f up (hit vec %.0f %.0f %.0f)\n", pa->palo->oid, ps->oid,
+                                pj->paction->plo ? pj->paction->plo->oid : -1, pj->paction->gKnockOut, pj->paction->gKnockUp, d.req.vec.x,
+                                d.req.vec.y, d.req.vec.z);
+                SetAloVelocityTo(pa->palo, v);
+                SetDamageState(pa, 7);
+                return;
+            }
+    if (std::getenv("SLY3_KNOCKPRINT"))
+    {
+        GUARD* pg = ps ? PguardFromLo(ps) : nullptr;
+        auto* pj = pg ? dynamic_cast<JOBACT*>(PjobFind(pg, 0xA4)) : nullptr;
+        std::printf("knock: %d by %d filter 0x%X vec %.0f %.0f %.0f (guard %d act %p action %d)\n", pa->palo->oid, ps ? ps->oid : -1, d.req.grfFilter, v.x, v.y, v.z,
+                    ps && FIsLoDerivedFrom(ps, S3CID(0x38)), (void*)pj, pj && pj->paction && pj->paction->plo ? pj->paction->plo->oid : -1);
+    }
     switch (d.req.grfFilter)
     {
     case 0x200: case 0x8000:
@@ -615,14 +737,18 @@ void ApplyDamageVelocity(ACTOR* pa)
         }
         break;
     case 0x100:
-        if (ps && FIsLoDerivedFrom(ps, S3CID(0x4F)))
+    default:
+        // (orig3 0x1C3008: every other kind, whatever the sender's class (Sly 2 only the kind 0x100 from a 0x4F); natively
+        // the other kinds kept the hit's velocity: SLY3_KNOCK2=1)
+        if (s_fKnock2 && d.req.grfFilter != 0x100) break;
+        if (s_fKnock2 ? (ps && FIsLoDerivedFrom(ps, S3CID(0x4F))) : true)
         {
             glm::vec3 dir;
-            if (FIsLoDerivedFrom(ps, S3CID(0x51))) dir = MatSender(ps)[0];  // (glm column 0 = the original's first row)
+            if (ps && FIsLoDerivedFrom(ps, S3CID(0x51))) dir = MatSender(ps)[0];  // (glm column 0 = the original's first row)
             else
             {
                 const glm::vec3 a = FIsLoDerivedFrom(pa->palo, S3CID(0x30)) ? PosAloCenter(pa->palo) : glm::vec3(0.0f);
-                const glm::vec3 b = FIsLoDerivedFrom(ps, S3CID(0x30)) ? PosAloCenter(static_cast<ALO*>(ps)) : glm::vec3(0.0f);
+                const glm::vec3 b = ps && FIsLoDerivedFrom(ps, S3CID(0x30)) ? PosAloCenter(static_cast<ALO*>(ps)) : glm::vec3(0.0f);
                 dir = a - b;
             }
             dir.z = 0.0f;
@@ -631,7 +757,6 @@ void ApplyDamageVelocity(ACTOR* pa)
             v = dir * 600.0f + glm::vec3(0.0f, 0.0f, 1.0f) * 800.0f;            // (0x2BFB00 / 0x2BFB04)
         }
         break;
-    default: break;
     }
     SetAloVelocityTo(pa->palo, v);  // vt slot 35 (0x1F4488)
     SetDamageState(pa, 7);
@@ -666,6 +791,44 @@ void InitDamage(ACTOR* pa)
 }
 
 int* DmgCounterOf(ACTOR* pa) { return Dmg(pa).pcount; }
+
+// orig3: 0x10A520 (the SO's option 948, EOPID 947): the object removed and restored (0x1C93A8: vt slots 30 / 29 -> 31;
+// an actor's 0x152720 / JT's 0x1AA5C0 re-run its post-load: its health full (0x24DA88), its reaction state none). Ported
+// for the actors' damage only: the counter full, no flashing, the eyes open, the death's broadcast armed again, the
+// reaction left for the stand (the jump's kind 11, as a stun's end). E.g. Cops and Robbers' respawn s6319.
+void RestoreActorDamage3(ACTOR* pa)
+{
+    if (!pa || !pa->palo) return;
+    DAMAGE& d = Dmg(pa);
+    const bool fDead = pa->nSubDF4 != -1 && d.pcount && *d.pcount <= 0;
+    if (d.pcount) *d.pcount = d.cCapacity;
+    d.nFlash = -1;
+    d.gFlash = 0.0f;
+    d.pfnNext = nullptr;
+    d.fDeathSent = false;
+    SetAloEyesClosed(pa->palo, 0.0f);
+    if (pa->nSubDF4 != -1) SetJumpKind(&pa->jump, 11, 0, 0);
+    MarkAloDirty(pa->palo);
+    if (std::getenv("SLY3_DEATHPRINT") || std::getenv("SLY3_CHALPRINT"))
+        std::printf("restore: actor %d health %d (dead %d) sub %d t %.3f\n", pa->palo->oid, d.pcount ? *d.pcount : -1, int(fDead), pa->nSubDF4, g_clock.t);
+}
+
+namespace
+{
+struct INITRESTORE3
+{
+    INITRESTORE3()
+    {
+        RegisterObjectMethod3(0x10A520, [](LO* plo, const std::vector<CRef>&) {
+            if (ACTOR* pa = PactorFromLo(plo)) RestoreActorDamage3(pa);
+            else if (FPlane3(plo)) RestorePlane3(plo);   // (s3-plane: a plane's slot 31 0x1414D0, the 2P duel's respawn)
+            else if (FShip3(plo)) RestoreShip3(plo);     // (s3-plane: a ship's slot 31 0x213F08, the Galleon Duel's next round)
+            else FRestoreHackShip3(plo);                  // (the Hackathon's ship, hack3.cpp)
+            return CRef(TAGK_Void);
+        });
+    }
+} s_initrestore3;
+}  // namespace
 int DmgCapacityOf(ACTOR* pa) { return Dmg(pa).cCapacity; }
 void SetDmgCounter(ACTOR* pa, int* pn) { Dmg(pa).pcount = pn; }
 void SetDmgCapacity(ACTOR* pa, int c) { Dmg(pa).cCapacity = c; }
@@ -710,7 +873,8 @@ void SetDamageState(ACTOR* pa, int n)
             SetSlyPartGravity(palo, 0x19B8, glm::vec3(0.0f, 0.0f, -750.0f));
             SetSlyPartGravity(palo, 0x19BC, glm::vec3(0.0f, 0.0f, -750.0f));
         }
-        if (SLY* psly = dynamic_cast<SLY*>(pa)) SetSlyMode(psly, -1);  // vt slot 91 (Sly 0x18D548; TODO(actors) the others')
+        if (SLY* psly = dynamic_cast<SLY*>(pa)) SetSlyMode(psly, -1);  // vt slot 91 (Sly 0x18D548)
+        sly3::ActorSlot102Sly3(pa);   // (orig3 0x1C21F0 from -1: vt slot 102, the combo off; the Panda King's fireworks 0x1EA178)
         pa->vecVel = glm::vec3(0.0f);
         if (PODATA* ppd = PpodataFromLo(palo)) ppd->n15C = 0;
         d.tFlashFade = FLT_MAX;
@@ -805,7 +969,8 @@ void SetDamageState(ACTOR* pa, int n)
     }
     if (paseg) ApplyAseg(paseg, palo, 0.0f, 1.0f, grfapl, &pa->pasega);  // 0x1305B8
     if (std::getenv("SLY2N_HITDEBUG"))
-        std::printf("damage state: t %.3f %d -> %d clip %d (%.3f s)\n", g_clock.t, palo->oid, n, paseg ? paseg->oid : -1, paseg ? PasegdOf(paseg)->tMax : 0.0f);
+        std::printf("damage state: t %.3f %d -> %d clip %d (%.3f s) at %.0f %.0f %.0f\n", g_clock.t, palo->oid, n, paseg ? paseg->oid : -1,
+                    paseg ? PasegdOf(paseg)->tMax : 0.0f, PosLoWorld(palo).x, PosLoWorld(palo).y, PosLoWorld(palo).z);
     UpdateActorStepMesh(pa);  // vt slot 90 (the reaction's body mesh: 0x1A23F8)
 }
 
@@ -822,6 +987,12 @@ bool FAcceptDamage(ACTOR* pa, CTMSG* pctm)
         const glm::vec3 posR = pa->palo ? PosLoWorld(pa->palo) : glm::vec3(0.0f);
         std::printf("  sender instance %d cid 0x%X at %.1f %.1f %.1f; receiver at %.1f %.1f %.1f\n", pctm->ploSender->oidInstance,
                     pctm->ploSender->Cid(), posS.x, posS.y, posS.z, posR.x, posR.y, posR.z);
+    }
+    // orig3: 0x1C3470: no hit while the scripts pause the actor's player's pad (game/scptgame3.h FActorHitsPaused3)
+    if (FScripts3Active() && pa->palo && FActorHitsPaused3(int(pa->palo->U32Field(0, 0x130, 0xFFFFFFFFu))))
+    {
+        if (std::getenv("SLY2N_HITDEBUG")) std::printf("damage: rejected (the pads paused)\n");
+        return false;
     }
     CTMSG req = *pctm;
     int delta = 0;
@@ -846,7 +1017,7 @@ bool FAcceptDamage(ACTOR* pa, CTMSG* pctm)
         // the change: none with the actor's authored +0x29C (EOPID 232: e.g. Sly, the AI partner of Boardroom
         // Brawl's battle 10:1591, option 358) or while flashing, else scaled
         if (pa->palo && pa->palo->U32Field(0, 0x29C)) delta = 0;
-        else if (d.nFlash != 1) delta = NScaleDamage(req.nState);
+        else if (d.nFlash != 1) delta = NScaleDamage(pa->palo, NDamageDelta3(&req));
         if (req.grfFilter == 0x100000)
         {
             // healing
@@ -880,7 +1051,8 @@ bool FAcceptDamage(ACTOR* pa, CTMSG* pctm)
     // (+0x11A8's +0x158 +8, or the counter out: 0x143380 the interaction cleared)
     // (the carried booty +0x11A8: fragile (its record +8) or the counter out: dropped, 0x143380 (booty.cpp))
     if (PlootCarriedBy(pa) && (FActorBootyFragile(pa) || *d.pcount + delta <= 0)) DropActorBooty(pa);
-    BroadcastTaskEvent(g_psw, 15, req.ploSender);  // 0x1619A0(0x2DEB30, 15, sender)
+    // (Sly 2: 0x1619A0(0x2DEB30, 15, sender) here; Sly 3's 0x1C3470 broadcasts 10 with the hurt actor at its end instead)
+    if (!FScripts3Active()) BroadcastTaskEvent(g_psw, 15, req.ploSender);
     d.req = req;
     d.req.nState = delta;
     d.pfnNext = nullptr;  // (0x2A6768)
@@ -890,7 +1062,17 @@ bool FAcceptDamage(ACTOR* pa, CTMSG* pctm)
         d.nFlash = 1;
         d.tFlash = g_clock.t;
     }
-    switch (req.grfFilter)
+    // (orig3 0x1C3470: an unlisted kind takes the 0x100 / 0x200 reaction (0x1C3008); 0x800000 (0x1C3CD0) is not ported;
+    // natively they did nothing: SLY3_KNOCK2=1)
+    static const bool s_fKnock2 = std::getenv("SLY3_KNOCK2") != nullptr;
+    int grfCase = req.grfFilter;
+    if (!s_fKnock2)
+        switch (grfCase)
+        {
+        case 0x100: case 0x200: case 0x40: case 0x800: case 0x1000: case 0x400: case 0x2000: case 0x4000: case 0x8000: case 0x800000: break;
+        default: grfCase = 0x200; break;
+        }
+    switch (grfCase)
     {
     case 0x100: case 0x200:
         ApplyDamageVelocity(pa);
@@ -942,6 +1124,9 @@ bool FAcceptDamage(ACTOR* pa, CTMSG* pctm)
     }
     // the hit's noise (0x156698(g_game +0x4038: the fixed template 712, the actor's position, the actor))
     if (NOISETMPL* pt = PtmplNoiseFixed(6)) PnoiseNew(pt, PosAloCenter(pa->palo), pa->palo);
+    // orig3: 0x1C3470's 0x1854C8(10, the actor), after its health changed: e.g. Cops and Robbers' job 2409 scores Carmelita
+    // when Sly's health (option 940) is out
+    if (FScripts3Active()) Broadcast3(0x0A, pa->palo);
     return true;
 }
 
@@ -983,6 +1168,26 @@ void UpdateDamage(ACTOR* pa)
     }
 }
 
+// orig3: 0x1C3FE0 (the actors' vt slot 103; Murray / Bentley 0x1535E0 without the eyes): called by the damage's end
+// (0x1C2E78, sub-states 9..13; native 8..12) and by the clip event 0x32B (0x153738, sub-state >= 9)
+void ActorDeathSlot103(ACTOR* pa, bool fEvent)
+{
+    DAMAGE& d = Dmg(pa);
+    if (fEvent && (d.fDeathSent || !FScripts3Active())) return;   // (one broadcast, as 0x1535E0's +0xE68)
+    // vt slot 93 (the actors' 0x1A2388): the eyes shut (0x1F80D0(1): the class 0x8E children's 0x1EE3B0 over the
+    // hierarchy: TODO, cosmetic), then the task event 0x10 (0x140EB0): the job restarts at its checkpoint
+    // (task.cpp's JobOnEvent, once no transition is busy)
+    SetAloEyesClosed(pa->palo, 1.0f);  // 0x1F80D0
+    if (static const bool s_f = std::getenv("SLY3_DEATHPRINT") != nullptr; s_f)  // (debug: who died, its damage sub-state and count)
+        std::printf("death: actor %d (cid 0x%X) sub %d count %d current player %d t %.3f\n", pa->palo->oid, pa->palo->Cid(), pa->nSubDF4, d.pcount ? *d.pcount : -99, PloPoCurrent(g_psw) ? PloPoCurrent(g_psw)->oid : -1, g_clock.t);
+    // (Sly 3: the actor's slot 103 0x1C3FE0 -> 0x1535E0 broadcasts 0xC once (+0xE68) until the actor is restored
+    // (option 948, 0x10A520: e.g. Cops and Robbers' respawn s6319); Sly 2 broadcast it at each end)
+    // (the flag set first: the job's handler may restore the actor within the broadcast)
+    const bool fSend = !FScripts3Active() || !d.fDeathSent;
+    d.fDeathSent = true;
+    if (fSend) BroadcastTaskEvent(g_psw, 0x10, pa->palo);
+}
+
 // orig: 0x001A15D0
 void EndDamageReaction(ACTOR* pa)
 {
@@ -990,14 +1195,7 @@ void EndDamageReaction(ACTOR* pa)
     void (*pfn)(ACTOR*) = d.pfnNext;
     d.pfnNext = nullptr;
     if (pfn) pfn(pa);
-    else if (static_cast<unsigned>(pa->nSubDF4 - 8) < 5)
-    {
-        // vt slot 93 (the actors' 0x1A2388): the eyes shut (0x1F80D0(1): the class 0x8E children's 0x1EE3B0 over the
-        // hierarchy: TODO, cosmetic), then the task event 0x10 (0x140EB0): the job restarts at its checkpoint
-        // (task.cpp's JobOnEvent, once no transition is busy)
-        SetAloEyesClosed(pa->palo, 1.0f);  // 0x1F80D0
-        BroadcastTaskEvent(g_psw, 0x10, pa->palo);
-    }
+    else if (static_cast<unsigned>(pa->nSubDF4 - 8) < 5) ActorDeathSlot103(pa);   // (orig3 0x1C2E78: vt slot 0x67)
     else
     {
         ALO* ps = d.req.ploSender && FIsLoDerivedFrom(d.req.ploSender, S3CID(0x30)) ? static_cast<ALO*>(d.req.ploSender) : nullptr;
@@ -1147,6 +1345,10 @@ void UpdateActorWater(ACTOR* pa)
     pos.z += pa->sWaterHeight;
     if (pa->nSubDF4 == 3 || pa->nSubDF4 == 10) pos.z -= 10.0f;
     if (!FAloContainsPoint(pw, pos)) return;  // vt slot 73
+    extern LO* g_ploStartPlaced3;
+    extern int g_iframeStartPlaced3;
+    extern int g_iframeMain;
+    if (pa->palo == g_ploStartPlaced3 && g_iframeMain - g_iframeStartPlaced3 <= 2) return;   // (player3.cpp's dev harness)
     const int nState = static_cast<int>(pw->U32Field(0, 0x184, static_cast<uint32_t>(-10)));
     if (nState)
     {

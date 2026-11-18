@@ -15,6 +15,7 @@
 #include "stepphys.h"
 #include "vtnative.h"
 #include "util.h"
+#include "xf.h"
 #include "anim.h"
 #include "clock.h"
 #include "xfphys.h"
@@ -151,7 +152,7 @@ struct IMPORT
             p->pctrlFirst = aact.back().get();
         }
         p->kind = ram.S32(a + 0x94);
-        p->mode = ram.S16(a + 0x98);
+        p->mode = static_cast<int16_t>(Xfm2FromXfm3(ram.S16(a + 0x98)));  // (Sly 3's modes, xf.h)
         p->state = ram.S16(a + 0x9A);
         p->tag = ram.S32(a + 0x9C);
         p->nStamp = ram.S32(a + 0xA4);
@@ -684,7 +685,7 @@ int CheckUpdateXfs(const std::string& prefix, int ccall)
             c.M("mat", x->mat, out.M4(r));
             c.M("matWorld", x->matWorld, out.M4(r + 0x40), 1e-3);
             c.V("v", glm::vec3(x->vel), out.V3(r + 0xB0), 1e-3);
-            c.I("mode", x->mode, out.S16(r + 0x98));
+            c.I("mode", x->mode, Xfm2FromXfm3(out.S16(r + 0x98)));
             c.I("state", x->state, out.S16(r + 0x9A));
             c.I("nStamp", x->nStamp, out.S32(r + 0xA4));
             c.V("aseg[0]..F0", glm::vec3(x->aseg[0]), out.V3(r + 0xC0));
@@ -740,7 +741,7 @@ void CompareXfs(CHECKER& c, const ALO* palo, const RAMIMG& in, const RAMIMG& out
                         palo->oid, i, palo->apxfRef[0] == x ? "pos" : "rot", x->vel.x, x->vel.y, x->vel.z, out.G(r + 0xB0),
                         out.G(r + 0xB4), out.G(r + 0xB8), in.G(r + 0xB0), in.G(r + 0xB4), in.G(r + 0xB8), x->mat[3].x, x->mat[3].y,
                         x->mat[3].z, out.G(r + 0x30), out.G(r + 0x34), out.G(r + 0x38));
-        c.I("xf mode/state", x->mode, out.S16(r + 0x98));
+        c.I("xf mode/state", x->mode, Xfm2FromXfm3(out.S16(r + 0x98)));
         c.I("xf mode/state", x->state, out.S16(r + 0x9A));
         c.I("xf nStamp", x->nStamp, out.S32(r + 0xA4));
         c.V("xf aseg[0]..F0", glm::vec3(x->aseg[3]), out.V3(r + 0xF0));
@@ -1806,7 +1807,7 @@ int CheckStep(const std::string& fn, const std::string& prefix, int ccall)
                                 palo->oid, palo->Cid(), s.nMotion, i, x->aseg[3].x, x->aseg[3].y, x->aseg[3].z, out.G(ax + 0xF0),
                                 out.G(ax + 0xF4), out.G(ax + 0xF8), in.G(ax + 0xF0), in.G(ax + 0xF4), in.G(ax + 0xF8), x->vel.x, x->vel.y,
                                 x->vel.z);
-                chk.I("record mode", x->mode, out.S16(ax + 0x98));
+                chk.I("record mode", x->mode, Xfm2FromXfm3(out.S16(ax + 0x98)));
             }
             mpcid[2000 + s.nMotion]++;
         }

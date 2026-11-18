@@ -1,5 +1,7 @@
 #pragma once
 
+#include <glm/vec4.hpp>
+
 // The in-game HUD's widgets (Sly 2 module 0x1D93D8..0x1DFAD8, their list at 0x3D9E70): the character gauge
 // (0x3D9E80 on screen object 0x36B: health and gadget power, 0x1D9968 / 0x1D9DF8 / 0x1D9B60) and the task prompt
 // (0x3DA0C0 on screen object 0x371: a string shown while a task is current, 0x1DA4B8 / 0x1DA578 / 0x1DA5C8 /
@@ -27,12 +29,15 @@ void InitHudWidgets(SW* psw);
 // orig: 0x001D9648 (every frame), then the screen objects' updates (screenrt.h)
 void UpdateHud(SW* psw);
 // The frame's 2D: the shown screen objects into g_hud and flushed into the scene target.
-void DrawHud(SW* psw, int width, int height);
+// fOverLater: the fades over everything (FADE mode 2) left to DrawHudFadesOver (after the foreground kinds)
+void DrawHud(SW* psw, int width, int height, bool fOverLater = false);
+void DrawHudFadesOver(SW* psw, int width, int height);
 
 // orig: 0x001DA4B8 on 0x3DA0C0: the prompt shows string id for g seconds (< 0: until ended; -1 id: ends it)
 void HudPrompt(int id, float g);
 // orig: 0x001DA578 on 0x3DA0C0: the prompt's string id ends
 void HudPromptEnd(int id);
+int IdDisplayedHudPrompt();
 int IdHudPrompt();  // 0x1DA5B0
 
 // orig: 0x001ABD98 (the auto-save after a job / a saving task): into the slot the game is played from (frontend.h
@@ -43,3 +48,16 @@ extern bool (*g_pfnWriteSave)();
 
 // (Sly 3) orig3 0x001A9568: the current player has the pad (its pause menu, its gauge)
 bool FPadHasPlayer3(SW* psw);
+
+// (Sly 3 two-player: the view whose HUD is being drawn (game.cpp split block), -1 the whole picture; the fades on a
+// player's camera (FADE option 1063) are drawn in that view only)
+extern int g_iviewHud3;
+
+// (s3-lightning) where a fade (FADE, orig3 0x17D270) draws in the frame, by its mode (hudwidget.cpp FadephOf): the sky's
+// (in the scene pass, after the sky: render.cpp), under the screen objects, over everything
+enum FADEPH { FADEPH_Sky, FADEPH_Under, FADEPH_Over };
+// the sky's fades' colours (GS units) for the scene view g_iviewScene3 (-1: the whole picture; the split screen's view)
+int CFadesSky3(glm::vec4* argba, int cmax);
+extern int g_iviewScene3;
+// set by a scene pass that drew the sky's fades this frame (else the HUD draws them under the screen objects)
+extern bool g_fFadeSkyPass;

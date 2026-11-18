@@ -1,3 +1,6 @@
+#include <execinfo.h>
+#include <cstdio>
+#include <cstdlib>
 // Located objects: their world-space setters and original virtual parent change.
 #include "lox.h"
 #include "activate.h"
@@ -24,6 +27,14 @@ void SetLoxPos(LOX* plox, const glm::vec3& pos)
 {
     plox->mat[3] = glm::vec4(PosConvertXfs(nullptr, plox->pxf, pos), 1.0f);
     TouchLox(plox);
+    // (debug: SLY3_LOXWATCH=oid: that locator's moves, with a backtrace)
+    if (static const int s_oid = std::getenv("SLY3_LOXWATCH") ? std::atoi(std::getenv("SLY3_LOXWATCH")) : 0; s_oid && plox->oid == s_oid)
+    {
+        std::fprintf(stderr, "loxwatch: %d to %.0f %.0f %.0f\n", plox->oid, pos.x, pos.y, pos.z);
+        void* a[12];
+        const int c = backtrace(a, 12);
+        backtrace_symbols_fd(a, c, 2);
+    }
 }
 NATIVEFN(0x2312A0, SetLoxPos);
 

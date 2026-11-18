@@ -38,6 +38,8 @@ void SetCmobjTarget(LO* plo, LO* ploTarget);
 struct ZONECM;
 void InitZoneCamera(LO* pzone);
 ZONECM* PzonecmFromLo(LO* pzone);  // (null: not a zone)
+// (splitscreen3.cpp) a zone's camera record is on in the world camera (true for a pointer that is no zone's record)
+bool FZonecmOn(const void* pzcm);
 // orig: 0x00221268 (the zone's forced state +0x13C (-1 by the player's position, 0 off, 1 on), then 0x221298)
 void SetZoneForced(LO* pzone, int n);
 int NZoneForced(LO* pzone);  // +0x13C

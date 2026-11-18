@@ -65,7 +65,7 @@ void Context::SetCapability(GLenum cap, bool enabled) {
     case gl::kDither:
       break;
     default:
-      SetError(gl::kInvalidEnum);
+      SetError(gl::kInvalidEnum, __func__, cap);
       break;
   }
 }
@@ -552,7 +552,7 @@ void Context::BlitFramebuffer(int sx0, int sy0, int sx1, int sy1, int dx0, int d
 void Context::ReadPixels(int x, int y, int width, int height, GLenum format, GLenum type,
                          void* data) {
   if (format != gl::kRgba || type != gl::kUnsignedByte || width <= 0 || height <= 0) {
-    SetError(gl::kInvalidEnum);
+    SetError(gl::kInvalidEnum, __func__, format != gl::kRgba ? format : type);
     return;
   }
   RenderTarget source;
@@ -697,8 +697,10 @@ bool Context::BuildPipeline(ProgramRecord* program, const VertexArrayRecord* vao
 }
 
 bool Context::BindUniforms(ProgramRecord* program) {
+  // (w: the drawable's height, for gl_FragCoord's rows on it: prelude.metal CANE_FRAG_COORD; offscreen targets 0)
   float clip[4] = {ClipFlip(), state_.clip_zero_to_one ? 1.0f : 0.5f,
-                   state_.clip_zero_to_one ? 0.0f : 0.5f, 0.0f};
+                   state_.clip_zero_to_one ? 0.0f : 0.5f,
+                   encoder_target_.is_default ? static_cast<float>(encoder_target_.height) : 0.0f};
   if (std::memcmp(program->uniforms.data(), clip, sizeof(clip)) != 0) {
     std::memcpy(program->uniforms.data(), clip, sizeof(clip));
     program->uniforms_dirty = true;

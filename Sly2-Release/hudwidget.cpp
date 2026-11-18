@@ -2,7 +2,10 @@
 // m_1D93D8_c.cpp (0x1D9520, 0x1D9648, 0x1DA2E0, 0x1DA350), m_1D9DF8_p3.cpp (0x1D9968, 0x1D9DF8); the decomp's
 // func_001DA4B8.c / func_001DA578.c.
 
+#include "vr.h"
 #include "hudwidget.h"
+#include "cutscene.h"
+#include "cheat.h"
 #include "actioninput.h"
 #include "skipcut.h"
 #include "debugmenu.h"
@@ -408,6 +411,7 @@ static LO* s_ploSaveIcon = nullptr;  // (D_002E65A0 +0x24: the save icon's scree
 void ResetHudWidgets()
 {
     s_ploSaveIcon = nullptr;
+    cut::ResetCutPresent();   // (SafeHouse addition, cutscene.h)
     ResetScreenObjPauseCount();  // orig 0x1D9408: also releases a pending failure restart's count
     SetGaugeState(s_gauge, 0);
     s_gauge = GAUGE{};
@@ -484,10 +488,19 @@ void UpdateHud(SW* psw)
     // orig 0x1D9648 reads the gameplay pad (JoyFor(2)); a failure screen's
     // PauseGame(0) leaves confirmation available but prevents opening this menu.
     if ((g_grfjoyt & 2) && !FTitleShown() && !FMenuShown() && !FShopShown() && !FGadgetMenuShown() && !FJobHelpShown() && GrfbtnPressed(0x800) && FOpenPauseMenu(psw)) GrfbtnTakePressed(0x800);
+    // (VR: the headset's focus lost (its system menu, the guardian): the pause menu, as soon as Start could open it; already
+    // open (or open by Start): nothing more)
+    if (vr::FPauseForFocus())
+    {
+        if (FPauseMenuShown()) vr::TakePauseForFocus();
+        else if ((g_grfjoyt & 2) && !FTitleShown() && !FMenuShown() && !FShopShown() && !FGadgetMenuShown() && !FJobHelpShown() && FOpenPauseMenu(psw))
+            vr::TakePauseForFocus();
+    }
     UpdateMenu(psw);
     UpdateShop(psw);
     UpdateJobHelp(psw);
     UpdateGadgetMenu(psw, PloPlayerPo());
+    UpdateCheatCodes(psw);   // 0x14BFF8 on 0x2DDEC0 (cheat.h)
     UpdateGauge(s_gauge);
     // Development-only semantic trace for comparisons with the original gauge.
     static const bool s_fMeter = std::getenv("SLY2N_HUDMETER") != nullptr;
@@ -543,35 +556,65 @@ int NLerpFade(float g, int a, int b)
     if (a < b) return a + int(g * ((float(b) + k) - float(a)));
     return b + int((1.0f - g) * ((float(a) + k) - float(b)));
 }
-void DrawFades(SW* psw)
+void CheckFadeWorld(const SW* psw)
 {
-    if (s_serialFades != psw->serial)
+    if (psw && s_serialFades != psw->serial)
     {
         s_mpfadeStart.clear();
         s_serialFades = psw->serial;
     }
+}
+float DtFadeTotal(const LO* plo)
+{
+    return std::bit_cast<float>(plo->U32Field(0, 0x5C, 0)) + std::bit_cast<float>(plo->U32Field(0, 0x60, 0)) +
+           std::bit_cast<float>(plo->U32Field(0, 0x64, 0));
+}
+glm::vec4 RgbaFade(const LO* plo, float dt)
+{
+    const float d5C = std::bit_cast<float>(plo->U32Field(0, 0x5C, 0)), d60 = std::bit_cast<float>(plo->U32Field(0, 0x60, 0)),
+                d64 = std::bit_cast<float>(plo->U32Field(0, 0x64, 0));
+    const uint32_t c50 = plo->U32Field(0, 0x50, 0), c54 = plo->U32Field(0, 0x54, 0), c58 = plo->U32Field(0, 0x58, 0);
+    uint32_t ca = c54, cb = c54;
+    float d = 1.0f;
+    if (dt < d5C) { ca = c50; cb = c54; d = d5C; }
+    else if ((dt -= d5C) < d60) { d = d60; }
+    else { dt -= d60; ca = c54; cb = c58; d = d64; }
+    const float g = d > 0.0f ? dt / d : 1.0f;
+    glm::vec4 rgba;
+    for (int i = 0; i < 4; ++i) rgba[i] = float(NLerpFade(g, int((ca >> (8 * i)) & 0xFF), int((cb >> (8 * i)) & 0xFF)));
+    return rgba;
+}
+// (s3-lightning) where in the frame a fade draws: 0x15DD48 queues it by its kind +0x6C: 0 as render kind 1 (the sky's,
+// sorted far to near at distance -1: after the sky's layers, before the world, which then covers it), 1 as kind 14
+// (after the world's kinds, under the kind-21 screen objects). Before, every fade was drawn first in the HUD at depth 1
+// and the screen objects after it failed the depth test (the HUD, the bars hidden while a fade showed).
+bool FFadeSky(const LO* plo) { return plo->U32Field(0, 0x6C, 0) == 0; }
+int CFadesOf(bool fSky, bool fSkyToo, glm::vec4* argba, int cmax)
+{
+    int c = 0;
+    for (const auto& [plo, tStart] : s_mpfadeStart)
+    {
+        const float dt = g_clock.t - tStart;
+        if (!plo->fInWorld || DtFadeTotal(plo) < dt) continue;
+        const bool fSkyFade = FFadeSky(plo);
+        if (fSkyFade != fSky && !(fSkyToo && fSkyFade)) continue;
+        if (c < cmax) argba[c++] = RgbaFade(plo, dt);
+    }
+    return c;
+}
+// (0x15DCD8: vt slot 9) the fades whose three phases are over removed
+void ExpireFades(SW* psw)
+{
+    CheckFadeWorld(psw);
     for (auto it = s_mpfadeStart.begin(); it != s_mpfadeStart.end();)
     {
         LO* plo = it->first;
-        const float d5C = std::bit_cast<float>(plo->U32Field(0, 0x5C, 0)), d60 = std::bit_cast<float>(plo->U32Field(0, 0x60, 0)),
-                    d64 = std::bit_cast<float>(plo->U32Field(0, 0x64, 0));
-        float dt = g_clock.t - it->second;
-        if (!plo->fInWorld || d5C + d60 + d64 < dt)
+        if (!plo->fInWorld || DtFadeTotal(plo) < g_clock.t - it->second)
         {
             if (plo->fInWorld) RemoveLo(psw, plo);   // (vt slot 9)
             it = s_mpfadeStart.erase(it);
             continue;
         }
-        const uint32_t c50 = plo->U32Field(0, 0x50, 0), c54 = plo->U32Field(0, 0x54, 0), c58 = plo->U32Field(0, 0x58, 0);
-        uint32_t ca = c54, cb = c54;
-        float d = 1.0f;
-        if (dt < d5C) { ca = c50; cb = c54; d = d5C; }
-        else if ((dt -= d5C) < d60) { d = d60; }
-        else { dt -= d60; ca = c54; cb = c58; d = d64; }
-        const float g = d > 0.0f ? dt / d : 1.0f;
-        glm::vec4 rgba;
-        for (int i = 0; i < 4; ++i) rgba[i] = float(NLerpFade(g, int((ca >> (8 * i)) & 0xFF), int((cb >> (8 * i)) & 0xFF)));
-        g_hud.Fade(rgba);
         ++it;
     }
 }
@@ -602,10 +645,32 @@ struct INITFADE
 } s_initfade;
 }  // namespace
 
+bool g_fFadeSkyPass = false;
+
+int CFadesSky2(glm::vec4* argba, int cmax)
+{
+    if (!g_psw) return 0;
+    CheckFadeWorld(g_psw);
+    return CFadesOf(true, false, argba, cmax);
+}
+
 void DrawHud(SW* psw, int width, int height)
 {
+    if (psw)
+    {
+        // (the kind-14 fades as a HUD layer of their own, under the screen objects; the sky's here only when no scene
+        // pass drew them)
+        ExpireFades(psw);
+        glm::vec4 argba[16];
+        if (const int c = CFadesOf(false, !g_fFadeSkyPass, argba, 16))
+        {
+            g_hud.Begin();
+            for (int i = 0; i < c; ++i) g_hud.Fade(argba[i]);
+            g_hud.Flush(width, height);
+        }
+        g_fFadeSkyPass = false;
+    }
     g_hud.Begin();
-    if (psw) DrawFades(psw);
     // (debugmenu.h: F11 hides the HUD for clean pictures; the game's own menus stay)
     if (!FDebugHudHidden() || FMenuShown()) DrawScreenObjs(psw);
     DrawHackCursor();   // (hackmouse.h: the hacking minigame's mouse cursor)

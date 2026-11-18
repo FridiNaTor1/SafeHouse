@@ -1,11 +1,12 @@
 // Windows file properties (Details tab) and the UTF-8 manifest of a SafeHouse program (cane_windows_resources in
-// CMakeLists.txt); the program's icons follow the manifest.
+// CMakeLists.txt); the program's icons follow the manifest. The version: the release's (SAFEHOUSE_VERSION), else the
+// CMake project version.
 #include <winver.h>
 1 24 "@CANE_RC_MANIFEST@"
 @CANE_RC_EXTRA@
 1 VERSIONINFO
-FILEVERSION @PROJECT_VERSION_MAJOR@,@PROJECT_VERSION_MINOR@,@PROJECT_VERSION_PATCH@,0
-PRODUCTVERSION @PROJECT_VERSION_MAJOR@,@PROJECT_VERSION_MINOR@,@PROJECT_VERSION_PATCH@,0
+FILEVERSION @CANE_RC_VERSION_COMMAS@
+PRODUCTVERSION @CANE_RC_VERSION_COMMAS@
 FILEOS VOS_NT_WINDOWS32
 FILETYPE VFT_APP
 BEGIN
@@ -15,11 +16,11 @@ BEGIN
     BEGIN
       VALUE "CompanyName", "SafeHouse contributors"
       VALUE "FileDescription", "@CANE_RC_DESCRIPTION@"
-      VALUE "FileVersion", "@PROJECT_VERSION@"
+      VALUE "FileVersion", "@CANE_RC_VERSION@"
       VALUE "InternalName", "@CANE_RC_NAME@"
       VALUE "OriginalFilename", "@CANE_RC_NAME@.exe"
       VALUE "ProductName", "SafeHouse"
-      VALUE "ProductVersion", "@PROJECT_VERSION@"
+      VALUE "ProductVersion", "@CANE_RC_VERSION@"
       VALUE "LegalCopyright", "SafeHouse contributors"
     END
   END

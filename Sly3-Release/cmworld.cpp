@@ -1,12 +1,15 @@
 #include "game/cond3.h"
 // The camera in the native game (see cmworld.h).
+#include "debugphys.h"
 #include "turret.h"
 #include "game/sly3.h"
 #include "vehiclehooks.h"
 #include "cmworld.h"
+#include "splitscreen3.h"
 bool FSettingFlag(const char* name);   // (savedata.h; its header clashes with this file's LM)
 #include "animfind.h"
 #include "pcinput.h"
+#include "actioninput.h"
 
 #include "actor.h"
 #include "activate.h"
@@ -39,6 +42,8 @@ bool FSettingFlag(const char* name);   // (savedata.h; its header clashes with t
 #include <memory>
 
 using namespace cmm;
+
+void GetLoCpdefiRaw3(LO* plo, CPDEFIRAW3* praw);   // cmfocus3.cpp
 
 namespace
 {
@@ -94,6 +99,7 @@ const CMJOY* PjoyNative()
     {
         MouseOrbitDelta(&s_joy.dradMousePan, &s_joy.dradMouseTilt);
         MouseAimDelta(MOUSEAIM_Binocucom, &s_joy.dradAimRight, &s_joy.dradAimUp);
+        if (const int zoom = sly2actions::ZoomDirection()) s_joy.y2 = float(zoom);
         s_joy.cwheelZoom = MouseWheelZoom();
     }
     return &s_joy;
@@ -133,7 +139,7 @@ std::map<LO*, ZONESTATE> s_mpzone;
 
 bool FocusNative(LO* plo, CMFOCUS* pf)
 {
-    pf->fJt = FIsLoDerivedFrom(plo, S3CID(0x34));
+    pf->fJt = FIsLoDerivedFrom(plo, sly3::CID_PLAYER);   // (orig3 0x274AC0: any player 0x33 has the focus record)
     pf->mat = MatLoNative(plo);
     // the player's interaction sub-object (+0x4C0): +0x4F4 jtfock, +0x500 its focus point, +0x4C8 / +0x4CC its kind and
     // state, +0x528 its own camera zone; +0x10E4
@@ -292,7 +298,22 @@ void BuildZonecm(LO* pzone, ZONESTATE& zs, bool fPrint)
             if (pcme) SetCmeField(pcme, ib, v);
         }
         else if (pfnGet == 0) SetZoneField(zs, Ib2OfZoneField3(ib), v);
-        else if (pfnGet == 0x2746B0) SetZoneField(zs, Ib2OfZoneReturn3(ib), v);
+        else if (pfnGet == 0x2746B0)
+        {
+            SetZoneField(zs, Ib2OfZoneReturn3(ib), v);
+            // (orig3: the zone's own return record +0x130, the follow camera 0x274AC0 reads: {on, dt, u} at 0x0 / 0xC)
+            if (ib < 0x30)
+            {
+                ZONECM::RET3& r = pz->aret3[ib / 0xC];
+                switch (ib % 0xC)
+                {
+                case 0: r.f = v.n; break;
+                case 4: r.dt = GOpt(v); break;
+                case 8: r.u = GOpt(v); break;
+                default: break;
+                }
+            }
+        }
     }
     // the path: a PATH child (0x2317E0's message); without one the grf's bit 2 is cleared
     pz->pcrv = nullptr;
@@ -561,6 +582,13 @@ ZONECME* PcmeFirstOfZone(LO* pzone)
 }
 
 // orig: 0x00221268 (the zone's forced state +0x13C: -1 by the player's position, 0 off, 1 on; then 0x221298)
+bool FZonecmOn(const void* pzcm)
+{
+    for (const auto& [plo, zs] : s_mpzone)
+        if (zs.pzcm.get() == pzcm) return zs.k != 0;
+    return true;   // (not a zone's: kept)
+}
+
 void SetZoneForced(LO* pzone, int n)
 {
     auto it = pzone ? s_mpzone.find(pzone) : s_mpzone.end();
@@ -760,6 +788,7 @@ void CmOnWorldLoad(SW* psw)
         RegisterSwPass(0x14D478, [](SW*) {
             EvaluateZones();
             if (0.0f < g_clock.dtReal) UpdateCm(&g_cm);
+            split3::UpdateCameras(s_psw);   // (PC, splitscreen3.h: the other players' cameras; none in single player)
             TraceCmFrame();
             static const bool s_fPrint = std::getenv("SLY2_CMPRINT") != nullptr;
             if (s_fPrint)
@@ -808,6 +837,7 @@ void CmOnWorldLoad(SW* psw)
     };
     g_cmfollowworld = CMFOLLOWWORLD{};
     g_cmfollowworld.pfnFocus = FocusNative;
+    g_cmfollowworld.pfnCpdefiRaw3 = GetLoCpdefiRaw3;   // (Sly 3: the focus's vt slot 85, cmfocus3.cpp)
     g_cmfollowworld.pfnAttach = FTurretAttach;  // (the attach policy's mount: cid 0x45, turret.cpp)
     // the binocucom's "Invert Binocucom Controls" (0x150160: 0x2581C0 of the SVPATH at G_GAME +0x3B4C, the save's
     // flags.fReverseLookAround, the options' entries 0x51 / 0x52)
@@ -832,6 +862,15 @@ void CmOnWorldLoad(SW* psw)
     ResetCm(&g_cm);
     InitCm(&g_cm);
     ApplyCmOptions(&g_cm, psw->aoptCm);
+    // (Sly 3: the world camera is the class 0x05 object (CAMERA: g_cm is its runtime); its own options load straight
+    // into it (orig3 0x32CA80's rows 172 / 173 fov 0x167960 / 0x1679C8, 175 the near clip 0x167A10, 176 the far clip
+    // 0x167A50): m_ext's 5756 sets the near clip to 50 (the reference's CM +0x144 at the title and in play; natively the
+    // InitCm default 100 was left, so the follow camera stood 50 units further back))
+    for (LO* plo : AploOfClass(psw, CID(0x05)))
+    {
+        ApplyCmOptions(&g_cm, plo->aopt);
+        break;
+    }
     // (Sly 3: the fog is the static camera's 0x36BC10 +0x14 / +0x18 / +0x1C / +0x20 (BuildCmFogRecip 0x1692E8, FOGCOL),
     // set by the chosen option block: game/cond3.h; Sly 2's CM fog options 166..169 are not Sly 3's)
     g_cm.sNearFog = g_condset3.fogNear;
@@ -935,6 +974,13 @@ CAMERA CameraFromCm(const CM& cm)
     cam.sFar = cm.sFarClip;
     cam.rMRDAdjust = cm.rMRDAdjust;
     cam.grfChannels = static_cast<uint32_t>(cm.nCur);
+    // (the 3-D mode's eyes, cm.cpp UpdateCmEyes3; 0 out of the mode)
+    if ((g_grfGame3 >> 1) & 1)
+    {
+        cam.sEyeShift3 = cm.sEyeShift3;
+        cam.sConverge3 = cm.sConverge3;
+    }
+    ApplyDebugCharScaleCamera(&cam);   // (PC debug menu's character scale: debugphys.h)
     return cam;
 }
 
@@ -945,6 +991,7 @@ void ApplyCmFog(const CM& cm, RENDEROPTS* popts)
     popts->uFogMax = cm.uFogMax;
     // FOGCOL (0x2DE18C, the world shaders' 0x3D register: 0x1EB960) is the camera's colour (+0x24C, SetCmRgbaFog 0x14F6F0)
     popts->rgbaFog = cm.rgbaFog;
+    ApplyDebugCharScaleFog(popts);   // (PC debug menu's character scale: debugphys.h)
     popts->fFog = popts->sFogNear > 0 && popts->sFogFar > popts->sFogNear;
 }
 

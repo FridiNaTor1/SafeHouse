@@ -17,6 +17,7 @@ add_library(cane_gl_metal STATIC
   context_programs.mm
   context_render.mm
   context_resources.mm
+  display_link.mm
   enum_translation.mm
   gl_entry_points.mm
   glsl_interface.mm
@@ -30,5 +31,10 @@ target_include_directories(cane_gl_metal
   PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}" "${generated}" "${CANE_ROOT}/Libraries/include")
 target_compile_options(cane_gl_metal PRIVATE -fobjc-arc -Wall -Wextra)
 target_compile_definitions(cane_gl_metal PRIVATE GLFW_INCLUDE_NONE)
-target_link_libraries(cane_gl_metal
-  PUBLIC glfw "-framework Metal" "-framework QuartzCore" "-framework Cocoa")
+if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
+  # (cmake/ios.cmake: the window and its Metal view come from SDL, platform/ios/glfw_sdl_ios.cpp)
+  target_link_libraries(cane_gl_metal PUBLIC glfw "-framework Metal" "-framework QuartzCore" "-framework UIKit")
+else()
+  target_link_libraries(cane_gl_metal
+    PUBLIC glfw "-framework Metal" "-framework QuartzCore" "-framework Cocoa")
+endif()

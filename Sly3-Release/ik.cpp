@@ -15,7 +15,7 @@ namespace
 {
 constexpr float kEpsilon = 1e-4f;  // 0x38D1B717
 
-// orig 0x0011E390: a unit vector perpendicular to v
+// orig 0x0011E390: a unit vector perpendicular to v (orig3: 0x11FF60, the same C in the Sly 3 decomp)
 glm::vec3 PerpendicularVector(const glm::vec3& v)
 {
     const float ax = std::fabs(v.x), ay = std::fabs(v.y), az = std::fabs(v.z);
@@ -26,7 +26,7 @@ glm::vec3 PerpendicularVector(const glm::vec3& v)
     return c * (1.0f / std::sqrt(glm::dot(c, c)));
 }
 
-// orig 0x0011E4B0 RadBetweenVectors (the axis: the unit cross product, x when either is too short)
+// orig 0x0011E4B0 RadBetweenVectors (the axis: the unit cross product, x when either is too short) (orig3: 0x120080, the same C in the Sly 3 decomp)
 float RadBetweenVectors(const glm::vec3& a, const glm::vec3& b, glm::vec3* paxis)
 {
     const float la = std::sqrt(glm::dot(a, a)), lb = std::sqrt(glm::dot(b, b));
@@ -48,7 +48,7 @@ float RadBetweenVectors(const glm::vec3& a, const glm::vec3& b, glm::vec3* paxis
     return std::acos(std::clamp(glm::dot(a, b) / (la * lb), -1.0f, 1.0f));
 }
 
-// orig 0x0022FCC8(0, pxf, v): a world direction in the record's space (its world 3x3 inverted)
+// orig 0x0022FCC8(0, pxf, v): a world direction in the record's space (its world 3x3 inverted) (orig3: 0x28E990, the same C in the Sly 3 decomp)
 glm::vec3 DirToLocal(const XF* pxf, const glm::vec3& v)
 {
     if (!pxf) return v;
@@ -69,6 +69,13 @@ struct CTRLJOINT : CTRL
     {
         CTRL::Start();
         pxf->pvA8 = ppair;
+    }
+    CTRL* PctrlCopy() const override { return new CTRLJOINT(*this); }  // (orig 0x2D2E58 slot 6)
+    void RemapCopy(const ALO* paloSrc, ALO* paloDst) override  // (the copy's limb of the same index)
+    {
+        for (size_t i = 0; i < paloSrc->apair.size() && i < paloDst->apair.size(); ++i)
+            if (&paloSrc->apair[i] == ppair) { ppair = &paloDst->apair[i]; return; }
+        ppair = nullptr;
     }
 };
 }  // namespace

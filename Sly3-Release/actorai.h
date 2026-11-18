@@ -8,6 +8,13 @@
 struct ACTOR;
 struct PADCTL;
 
+// Sly 3's 0xEF (vt 0x35D730, base 0xEE NEW_JOB_EE vt 0x35D850): Init 0x1D9010 (0x1D8008), Enter 0x1D9040 (0x1D8070: the
+// ranges, state 0; the watch's next check reset 0x1573A0, its target 0x1572A0), Exit 0x1D8110 (the path let go), Update
+// 0x1D9080 (0x1D89B0: the step 0x1D8140, then the state by the near / far radius: 0 moving, 1 near the steered point
+// (natively st 2); no nav-way states), the drive 0x1D90B8 (state 0 only), arrived 0x1D8AC0 (no open-curve test), Follow
+// 0x1D8B40 (the path from its start: s 0). The step 0x1D8140 is Sly 2's 0x177F78 line for line for the actor's own path
+// (the same constants: look-ahead 100, {200, -0.5} in [0, 150], 500, springs 7.5 / 30, the push 200 / 10000, the turn
+// 350 / 6000 with {0.5, -1} in [0, 1], the keep 1; the turn's side never flipped on an own path): Steer177F78.
 struct JOBACTORFOLLOW : JOBFOLLOW
 {
     PADCTL* pcCopy = nullptr;      // +0xC0 the followed player's controller
@@ -20,6 +27,7 @@ struct JOBACTORFOLLOW : JOBFOLLOW
     void Update() override;
     void SetState(int n) override;
     void Drive(PADCTL* pc) override;
+    void Follow(const CRV* pcrv, int fReverse);  // orig3 0x1D8B40
 };
 
 // 0xC1: a scripted walk goal, followed by an A8 on the actor's own curve.
@@ -30,10 +38,34 @@ struct JOBACTORWALK : AIJOB
     int fWalk = 1;               // +0x38
     float uSpeed = 1.0f;         // +0x3C
     glm::vec3 posGoal{0.0f};     // +0x40
+    int fFree = 0;               // +0x50 (orig3 0x157A80: the step was not clamped at the curve's end: the follower's
+                                 // free run, copied into its +0xA0 by 0x1578C8 / 0x157A80)
+    int fSly3 = 0;               // (Sly 3's 0xF4: 0x157970's region rule in SetGoal)
     void Init() override;
     void Enter() override;
     void SetGoal(const glm::vec3& pos);
     bool FAtGoal() const;
+};
+
+// Sly 3's 0xF3 JOBPATHSTEP (orig3 vt 0x354378: Init 0x157508, Enter 0x157538, Update 0x157648; the step 0x157688, done
+// 0x1577C0): a script's walk along a path (SCPT 0x33, 0x226D00 case 51) as steps of 200 along it, each walked by its child
+// 0xF4 (JOBACTORWALK, natively with its A8 follower); the next step once the child arrived. Natively 0x33 ran one A8 on
+// the whole curve (Sly 2's path step for actors is the follow job), which avoidance and the nav keep could hold off the path.
+constexpr CID CID_JOBPATHSTEP3 = 0x1F3;
+struct JOBPATHSTEP3 : AIJOB
+{
+    const CRV* pcrv = nullptr;   // +0x30 (the path object's curve)
+    int fForward = 0;            // +0x34 (the command's w[1]: toward the curve's end)
+    float s = -1.0f;             // +0x38 the step's place on the curve
+    glm::vec3 pos{0.0f};         // +0x40 the step's point
+    int fNoAvoid = 0;            // +0x58 (the run's +0x104)
+    int fWalk = 0;               // +0x5C (w[2])
+    float uSpeed = 1.0f;         // +0x60 (w[3])
+    void Init() override;
+    void Enter() override;
+    void Update() override;
+    void Step(bool fForce);
+    bool FDone() const;
 };
 
 struct JOBCOMPANION : AIJOB
@@ -110,3 +142,6 @@ std::unique_ptr<AIJOB> PjobNewActor(CID cid);
 void SetActorFollow(ACTOR* pa, LO* target, const glm::vec3& offset);  // 0x142540
 void SetActorWatchTarget(ACTOR* pa, const glm::vec3& pos);            // 0x1448F0
 void UpdateActorWatch(ACTOR* pa);                                   // 0x144640
+// orig3: the script run driving the actor (+0x115C) and its pending command's op (run +0x48): -1 none (game/scptgame3.cpp)
+int IdActorRunCmd3(const ACTOR* pa);
+bool FActorRunFaceHeading3(const ACTOR* pa, float* prad);   // (scptgame3.cpp: orig3 0x22A7F8 case 47)

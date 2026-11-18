@@ -25,3 +25,10 @@ void UpdateSceneFromSw(SCENE& scene, const std::vector<ALO*>& apalo, const SW* p
 // One entry placed at its ALO's current transforms (whether or not the frame draws it: a render target's list).
 void PlaceSceneEntry(ALO* palo, SCENEGLOBSET& sgs);
 void ApplyDrawPass(const SW* psw, SCENE& scene, const std::vector<ALO*>& apalo);
+// ApplyDrawPass takes UpdateSceneFromSw's FAloDrawn answers of the same frame; a game step between them (the world
+// changed) drops them: called at each step's start
+void InvalidateSceneDrawnTests();
+// (PC modes) a matrix put in front of an object's own groups' placement (true: *pdmat set), as the booty's draw delta:
+// galleon3.cpp draws a kept world's copy, left at its place there, at the Panda King's helm. Null: none.
+#include <glm/glm.hpp>
+extern bool (*g_pfnPlaceDelta3)(const ALO* palo, glm::mat4* pdmat);

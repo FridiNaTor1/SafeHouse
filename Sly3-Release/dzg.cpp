@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <cfloat>
 #include <cmath>
+#include <cstdlib>
 
 
 namespace
@@ -28,7 +29,7 @@ void RemoveFrom(std::vector<T>& a, const T& t)
 }
 }
 
-// orig: 0x001195E0 CroutDecomp__FiPfT1 (alu = the LU decomposition of aa; pivots below 1e-8 zero their column)
+// orig: 0x001195E0 CroutDecomp__FiPfT1 (alu = the LU decomposition of aa; pivots below 1e-8 zero their column) (orig3: 0x11A278, the same C in the Sly 3 decomp)
 void CroutDecomp(int n, const float* aa, float* alu)
 {
     if (n == 0) return;
@@ -63,7 +64,7 @@ void CroutDecomp(int n, const float* aa, float* alu)
     alu[nm1 * n + n - 1] = std::fabs(g) < CROUT_EPS ? 0.0f : g;
 }
 
-// orig: 0x001198F8 CroutSolve__FiPfN21 (forward then back substitution; a zero pivot gives 0 / skips the row)
+// orig: 0x001198F8 CroutSolve__FiPfN21 (forward then back substitution; a zero pivot gives 0 / skips the row) (orig3: 0x11A608, the same C in the Sly 3 decomp)
 void CroutSolve(int n, const float* alu, const float* ab, float* ax)
 {
     for (int i = 0; i < n; i++)
@@ -86,7 +87,7 @@ void CroutSolve(int n, const float* alu, const float* ab, float* ax)
     }
 }
 
-// orig: 0x0011A550 func_0011A550 (the rows, the four lists, the solver's arrays)
+// orig: 0x0011A550 func_0011A550 (the rows, the four lists, the solver's arrays) (orig3: 0x11B290, the same code in Sly 3)
 void InitDzgRows(DZG* p, int cdzMax)
 {
     p->cdzMax = cdzMax;
@@ -145,14 +146,17 @@ inline float W(const DZ* pdz, int i) { return (i >= 0 && i < int(pdz->agW.size()
 // orig: 0x0011A770 EnforceDzgDz__FP3DZGP2DZ (pdz into the system, then at most 10 pivots: the clamped rows' system
 // solved for the change cancelling their residuals, the largest step (at most 1) keeping every row in its limits,
 // the limiting row moved between the lists)
+// (orig3 0x11B4B0, Sly 3's version: 20 pivots, not 10, and a lower / upper list row's step max(t, 0) (max.s), so a
+// row already past its limit stops the step at 0 instead of stepping back; SLY3_DZGSLY2=1: Sly 2's 0x11A770)
 void EnforceDzgDz(DZG* p, DZ* pdz)
 {
+    static const bool s_fSly2 = std::getenv("SLY3_DZGSLY2") != nullptr;
     if (pdz)
     {
         MoveDz(p, pdz, 0);
         p->cA++;
     }
-    for (int iter = 0; iter < 10; iter++)
+    for (int iter = 0, cIter = s_fSly2 ? 10 : 20; iter < cIter; iter++)
     {
         const int n = p->cA;
         size_t im = 0;
@@ -209,7 +213,8 @@ void EnforceDzgDz(DZG* p, DZ* pdz)
         {
             const float d = pb->dResidual;
             if (-EPS < d) continue;
-            const float t = -pb->gResidual / d;
+            float t = -pb->gResidual / d;
+            if (!s_fSly2) t = std::max(t, 0.0f);
             if (t < s)
             {
                 s = t;
@@ -221,7 +226,8 @@ void EnforceDzgDz(DZG* p, DZ* pdz)
         {
             const float d = pc->dResidual;
             if (d < EPS) continue;
-            const float t = -pc->gResidual / d;
+            float t = -pc->gResidual / d;
+            if (!s_fSly2) t = std::max(t, 0.0f);
             if (t < s)
             {
                 s = t;
@@ -466,8 +472,19 @@ void ApplyDzg(DZG* p, float gMax, float gMaxAngular)
             s.drot = s.drot + e.advAng[k] * d.g;
         }
     }
+    // (0x1205F0 limits the length. The PS2's FPU / VU saturate at +-FLT_MAX and make no inf / NaN, so the original
+    // limits even a blown-up displacement to gMax; natively an inf / NaN passed the test (gMax / inf * inf = NaN) and
+    // reached the object's position. A non-finite one is saturated as the PS2 would, then limited)
     auto limit = [](glm::vec3 v, float gMaxL) {
-        const float l = std::sqrt(std::fabs(Dot3(v, v)));
+        float l = std::sqrt(std::fabs(Dot3(v, v)));
+        if (!std::isfinite(l) || !std::isfinite(gMaxL))
+        {
+            for (int i = 0; i < 3; i++) v[i] = std::isnan(v[i]) ? 0.0f : std::clamp(v[i], -FLT_MAX, FLT_MAX);
+            gMaxL = std::isnan(gMaxL) ? 0.0f : std::min(gMaxL, FLT_MAX);
+            const double dl = std::sqrt(double(v.x) * v.x + double(v.y) * v.y + double(v.z) * v.z);
+            if (double(gMaxL) < dl) v = glm::vec3(glm::dvec3(v) * (double(gMaxL) / dl));
+            return v;
+        }
         if (gMaxL < l) v = v * (gMaxL / l);
         return v;
     };

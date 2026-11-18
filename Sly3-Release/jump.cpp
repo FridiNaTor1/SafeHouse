@@ -1,3 +1,4 @@
+#include "actioninput.h"
 // jump.cpp: the actors' jump (the sub-object at +0x2C0, actor.h JUMP; module 0x195950..0x19CBF8). Ported from the
 // reference's m_195950_p3.cpp (0x195950, 0x195A00, 0x195FB8, 0x196AA8, 0x196DF8, 0x197500), m_197F98_p3.cpp
 // (0x197F98), m_1991A0_p3.cpp (0x19A750) and round4low_extra.cpp (0x197370, 0x143D20).
@@ -6,7 +7,9 @@
 // jumptgt.cpp / jumpledge.cpp implement the targeted-jump and ledge sub-objects. Remaining incomplete paths
 // retain focused warnings at their call sites (including the long-fall recovery test 0x19A098).
 #include "jump.h"
+#include "game/guru3.h"
 #include "game/sly3.h"
+#include "combo3.h"
 #include "pccharacter.h"   // (PC addition, debug menu only: Carmelita's moveset)
 #include "activate.h"
 #include "gang.h"
@@ -112,8 +115,13 @@ void SetOwnerJumpState(ACTOR* pa, int n)
 {
     if (SLY* p = dynamic_cast<SLY*>(pa))
     {
-        static const int s_mpkindState[9] = {0, 2, 7, 4, 0x12, 0x13, 0x14, 0x17, 8};
-        if (n >= 0 && n < 9) SetSlyState(p, s_mpkindState[n], -1);
+        // (orig3 0x1AF150: Sly 3's 11 kinds -> his states (sly.h jts::); 9 the combo attack, state 23 (combo3.cpp keeps
+        // its runner in step), 10 the guard's stance 6: AUDIT4 PLAYER-11 / 12)
+        static const int s_mpkindState[11] = {jts::Stand, jts::Jump, jts::Interact, jts::Damage, jts::ScriptSm, jts::ScriptAnim,
+                                              jts::ScriptDrive, jts::Throw, jts::Climb, jts::Attack, jts::Target};
+        if (n == 9) sly3::SetSlyAttack3(p);
+        else if (n == -1) SetSlyState(p, -1, -1);   // (orig3 0x1AF150 case -1, AUDIT5 PLAYER5-06)
+        else if (n >= 0 && n < 11) SetSlyState(p, s_mpkindState[n], -1);
         return;
     }
     // the other players' slot 88 (Bentley 0x135C20, Murray 0x1B7E40: gang.cpp)
@@ -187,7 +195,7 @@ bool FJumpCanDo(const JUMP* pj, int k)
         switch (pj->state)
         {
         case 6: case 9: case 10: case 11: case 12: case 13: case 14: case 15: case 16:
-        case 17: case 18: case 19: case 20: case 21: case 22:
+        case 17: case 18: case 19: case 20: case 21: case 22: case c_jsRideLink:
             return false;
         default: return true;
         }
@@ -218,12 +226,13 @@ glm::vec3 VelJumpLaunch(JUMP* pj, int k)
     case 2: f0 = F32(0x442F0000); break;   // 700
     case 18: f0 = F32(0x44610000); break;  // 900
     case 3: f0 = F32(0x44480000); break;   // 800
-    case 1: case 7: case 9: case 13: case 14: case 15:
+    case 1: case 7: case 9: case 13: case 14: case 15: case c_jkOutfit3:
     {
         float h = 215.0f;                   // 0x2BF738
         if (k == 13) h = 500.0f;
         else if (k == 9) h = 1200.0f;
         else if (k == 14) h = 250.0f;
+        else if (k == c_jkOutfit3) h = 150.0f;   // (orig3 0x1BB4E8 kinds 16 / 17)
         const float d = (PosProbe0(pa).z - pa->posFloor.z) - h;
         f0 = std::sqrt(std::fmax(0.0f, (g + g) * d));
         break;
@@ -317,9 +326,9 @@ int ActorJumpKind(ACTOR* pa)
 {
     if (SLY* p = dynamic_cast<SLY*>(pa))
     {
-        // orig: 0x0018D620 (slot 88's table inverted)
-        static const int s_ak[24] = {0, -1, 1, -1, 3, -1, -1, 2, 8, -1, -1, -1, -1, -1, -1, -1, -1, -1, 4, 5, 6, -1, -1, 7};
-        return static_cast<unsigned>(p->state) < 24 ? s_ak[p->state] : -1;
+        // orig: 0x0018D620 (slot 88's table inverted); orig3 0x1AF200: Sly 3's kinds 9 (the attack) / 10 and 11 (not -1)
+        // for a state outside the table (AUDIT4 PLAYER-12; combo3.cpp NGeneric3)
+        return sly3::NSlyJumpKind3(p);
     }
     using PFN89 = int (*)(LO*);
     if (auto pfn = reinterpret_cast<PFN89>(PvNativeVt(pa->palo, 89))) return pfn(pa->palo);
@@ -412,9 +421,9 @@ void SetJumpAnimState(JUMP* pj, int n, LO* plo)
         break;
     case 17: LeaveJumpLedge(pj); break;
     case 19: case 20:
-        // the paraglider closed (unless 19 -> 20): its SM to 0x5F8, the camera zone off
+        // the paraglider closed (unless 19 -> 20): its SM to 0x6C9 (orig3 0x1B77F8; Sly 2's 0x5F8), the camera zone off
         if (n < 21 && n >= 19) break;
-        if (SLY* p = dynamic_cast<SLY*>(pa); p && p->psma1D28) SetSmaGoal(p->psma1D28, 0x5F8);  // 0x1F0660
+        if (SLY* p = dynamic_cast<SLY*>(pa); p && p->psma1D28) SetSmaGoal(p->psma1D28, 0x6C9);  // 0x1F0660
         SetActorZone(pa, nullptr);  // 0x140C88(actor, 0)
         break;
     case 7:
@@ -440,7 +449,7 @@ void SetJumpAnimState(JUMP* pj, int n, LO* plo)
         pa->vecVel = glm::vec3(0.0f);
         break;
     }
-    case 8: case 9: case 10: case 11: case 12: case 13: case 14: case 15: case 16: case 18:
+    case 8: case 9: case 10: case 11: case 12: case 13: case 14: case 15: case 16: case 18: case c_jsRideLink:
         if (XF* pxf = PxfPos(palo)) SetXfMode(palo, pxf, 2);
         pa->vecVel = glm::vec3(0.0f);
         if (old >= 14 && old < 16)
@@ -518,6 +527,17 @@ void SetJumpAnimState(JUMP* pj, int n, LO* plo)
         pa->vecVel = glm::vec3(0.0f);
         paseg = pasegaCur ? pasegaCur->paseg : nullptr;
         break;
+    case c_jsRideLink:
+        // orig3 0x1B77F8 entering 17 (as 10 / 11 / 19): the record driven (Sly 3's mode 0x12), no velocity, the launch
+        // of kind 4 (0x1BB4E8), +0x8 0; the clip +0x10C (the Guru's part 0x42C), else +0xF4
+        if (XF* pxf = PxfPos(palo)) SetXfMode(palo, pxf, 0x11);
+        pa->vecVel = glm::vec3(0.0f);
+        pj->f28 = 0;
+        SetAloVelocityTo(palo, VelJumpLaunch(pj, 4));
+        pj->n8 = 0;
+        paseg = pj->pasegRide ? pj->pasegRide : pj->pasegLand14C;
+        pasegaCur = nullptr;
+        break;
     case 9: case 10: case 16: case 18:
         if (XF* pxf = PxfPos(palo)) SetXfMode(palo, pxf, 0x11);
         pa->vecVel = glm::vec3(0.0f);
@@ -570,7 +590,7 @@ void SetJumpAnimState(JUMP* pj, int n, LO* plo)
         SetActorZone(pa, pj->ploGlider);  // 0x140C88
         // (its zone's first entry +0x114: the path offset +4 = the mean of D_002BF798 {-250, -500})
         if (ZONECME* pcme = PcmeFirstOfZone(pj->ploGlider)) pcme->dtPath = F32(0xC3FA0000) * 0.5f + F32(0xC37A0000) * 0.5f;
-        if (SLY* p = dynamic_cast<SLY*>(pa); p && p->psma1D28) SetSmaGoal(p->psma1D28, 0x5F7);  // 0x1F0660
+        if (SLY* p = dynamic_cast<SLY*>(pa); p && p->psma1D28) SetSmaGoal(p->psma1D28, 0x6C8);  // 0x1F0660 (orig3 0x1B77F8: 0x6C8; Sly 2's 0x5F7)
         break;
     }
     case 20:
@@ -651,6 +671,11 @@ void SetJumpKind(JUMP* pj, int n, int a2, LO* plo)
     }
     pa->t131C = g_clock.t;
     if (n != 6) pj->t18 = g_clock.t;
+    // (Sly 3, orig3 0x1B7268's kinds: +0x28 0 for 0..3, 7..9, 12, 13, 16, 18; +1 for the double jump 6; +0x190 for the
+    // others (kept here). The copied code keeps Sly 2's kinds: Sly 3's 13 (Feral Pounce) is Sly 2's 14 (s3-decomp's
+    // notes); 16 / 18 have no checked pairing and are left as Sly 3's)
+    if (n == 6) ++pj->n28Sly3;
+    else if (n <= 3 || (n >= 7 && n <= 9) || n == 12 || n == 14 || n == 16 || n == 18) pj->n28Sly3 = 0;
     float g34 = 1.0f;
     bool fSetG34 = false;
     auto jumpDir = [&](int kAnim) { SetJumpAnimState(pj, kAnim, plo); };
@@ -736,6 +761,7 @@ void SetJumpKind(JUMP* pj, int n, int a2, LO* plo)
     case 12: jumpDir(1); pj->n40 = 3; pj->f28 = 1; pj->g38 = 1.0f; pj->f24 = 0; fSetG34 = true; break;
     case 16: jumpDir(4); pj->f24 = 0; pj->g38 = 1.0f; pj->f28 = 0; fSetG34 = true; break;
     case 15: jumpDir(0); pj->f24 = 0; pj->g38 = 1.0f; pj->f28 = 0; fSetG34 = true; break;
+    case c_jkOutfit3: jumpDir(0); pj->f24 = 0; pj->g38 = 1.0f; pj->f28 = 0; fSetG34 = true; break;   // (orig3 0x1B7268 case 17)
     case 17:
         // orig: 0x00195A00 (Hover Pack). Ground takeoff is vertical at 400;
         // the original's incidental planar carrier is zero in the compared
@@ -773,11 +799,11 @@ void UpdateJumpTransitions(JUMP* pj)
         const int s5 = pj->state;
         if (pj->ploC && !pj->ploC->fInWorld) WarnOnce("0x19C828 (the jump's object left)");
         // (PC addition, debug menu only: Carmelita's moveset has no air targets or paraglider; her double jump below)
-        if (!(pj->state < 23 && pj->state >= 9) && !FPcCarm(pa->palo))
+        if (!((pj->state < 23 && pj->state >= 9) || pj->state == c_jsRideLink) && !FPcCarm(pa->palo))
         {
-            if (pj->f28 && FBtnWithin(pa, BTN_CROSS, 0.0f) && !FActorBelowFloorSoon(pa, F32(0x3D99999A)))
+            if (pj->f28 && sly2actions::Within(PpadctlOf(pa), sly2actions::Action::DoubleJump, BTN_CROSS, 0.0f) && !FActorBelowFloorSoon(pa, F32(0x3D99999A)))
             {
-                ForgetBtn(pa, BTN_CROSS);
+                sly2actions::Take(PpadctlOf(pa), sly2actions::Action::DoubleJump, BTN_CROSS, 0.0f);
                 SetJumpKind(pj, 6, pj->n8, 0);  // the double jump
             }
             if (FBtnWithin(pa, BTN_CIRCLE, 0.0f))
@@ -788,19 +814,19 @@ void UpdateJumpTransitions(JUMP* pj)
                 if (pj->state != st) ForgetBtn(pa, BTN_CIRCLE);
             }
             // R1 in the air: the paraglider (27) when owned, not about to land (0.3 s), for the current player
-            if (FBtnWithin(pa, BTN_R1, 0.0f) && pa->palo == PloPoCurrent(g_psw) && FPowerupOwned(0x1B) &&
+            if (sly2actions::Within(PpadctlOf(pa), sly2actions::Action::Paraglider, BTN_R1, 0.0f) && pa->palo == PloPoCurrent(g_psw) && FPowerupOwned(0x1B) &&
                 !FActorBelowFloorSoon(pa, F32(0x3E99999A)))
             {
                 SpendActorPower(pa, 0x1B);  // 0x141CD0 (costs 0)
-                ForgetBtn(pa, BTN_R1);      // 0x1C4738
+                sly2actions::Take(PpadctlOf(pa), sly2actions::Action::Paraglider, BTN_R1, 0.0f);
                 StartActorAbility(pa, 0x1B);  // the current player's vt slot 100 (Sly: 0x18DA48 -> state 19)
             }
         }
         // (PC addition, debug menu only: Carmelita's own double jump at her height, pccharacter.h; not the guards')
-        else if (!(pj->state < 23 && pj->state >= 9) && pj->f28 && FPcCarmDoubleJump(pa->palo) && FBtnWithin(pa, BTN_CROSS, 0.0f) &&
+        else if (!((pj->state < 23 && pj->state >= 9) || pj->state == c_jsRideLink) && pj->f28 && FPcCarmDoubleJump(pa->palo) && sly2actions::Within(PpadctlOf(pa), sly2actions::Action::DoubleJump, BTN_CROSS, 0.0f) &&
                  !FActorBelowFloorSoon(pa, F32(0x3D99999A)))
         {
-            ForgetBtn(pa, BTN_CROSS);
+            sly2actions::Take(PpadctlOf(pa), sly2actions::Action::DoubleJump, BTN_CROSS, 0.0f);
             // (on Bentley / Murray: no kind 6, their jumps have no double jump's animation state; once only)
             if (dynamic_cast<SLY*>(pa)) SetJumpKind(pj, 6, pj->n8, 0);
             else pj->f28 = 0;
@@ -899,6 +925,12 @@ void UpdateJumpTransitions(JUMP* pj)
             // the flight to the target: its time over (the record's +0xA8), its action (0x19C688)
             if (XF* pxf = PxfPos(pa->palo); pxf && pxf->tTarget < g_clock.t) ArriveJumpTarget(pj);
             break;
+        case c_jsRideLink:
+            // orig3 0x1B9020 case 17: the link taken by another rider meanwhile (0x1A29B0: +0x178): falling (0x1BD6C8);
+            // else at the end of the flight 0x1BD520 (kind 17: the Guru rides it)
+            if (pj->ploC && sly3::PloLinkRider3(pj->ploC)) SetJumpAnimState(pj, 4, nullptr);
+            else if (XF* pxf = PxfPos(pa->palo); pxf && pxf->tTarget < g_clock.t) ArriveJumpTarget(pj);
+            break;
         case 18:
         {
             // the flight onto Murray's hands (Bentley): Murray's +0x1910 picks him up (its state 3) when the flight's
@@ -924,7 +956,7 @@ void UpdateJumpTransitions(JUMP* pj)
             const OXA* poxa = Poxa(pa->palo);
             bool fContact = false;
             for (const OX* pox = poxa ? poxa->pox : nullptr; pox && !fContact; pox = pox->poxNext) fContact = pox->pxp != nullptr;
-            if (fContact || !(GrfbtnHeld(pa) & (GrfAbilityButton(pa, 0x1B) | BTN_R1)))
+            if (fContact || !(sly2actions::Held(PpadctlOf(pa), sly2actions::Action::Paraglider, BTN_R1) || (GrfbtnHeld(pa) & GrfAbilityButton(pa, 0x1B))))
             {
                 SetJumpAnimState(pj, 4, nullptr);
                 break;
@@ -993,7 +1025,7 @@ void UpdateJumpInput(JUMP* pj)
     const glm::vec3 pos = PosActor(pa);
     const glm::vec3 v = VelActor(pa);
     const unsigned st = static_cast<unsigned>(pj->state);
-    if ((st >= 23 || st == 1 || st == 3 || st == 4 || st == 5 || st == 17) && !FPcCarm(pa->palo)) FindJumpHideTarget(pj);  // (jumptgt.cpp; PC: not Carmelita)
+    if (((st >= 23 && st != c_jsRideLink) || st == 1 || st == 3 || st == 4 || st == 5 || st == 17) && !FPcCarm(pa->palo)) FindJumpHideTarget(pj);  // (jumptgt.cpp; PC: not Carmelita)
     const float headingSample = UpdateJumpTargetPath(pj);
     // the facing
     const float f21 = c_agTurnByDir[pj->n8 >= 0 && pj->n8 < 5 ? pj->n8 : 0];
@@ -1004,7 +1036,7 @@ void UpdateJumpInput(JUMP* pj)
         if (F32(0x3E4CCCCD) < u) f20 = RadJoy(pa) + f21;
         break;
     case 11: case 12: case 13: f20 = headingSample; break;
-    case 17: case 19: break;
+    case 17: case 19: case c_jsRideLink: break;
     case 14: case 15:
     {
         // toward the target: the pipe's point at +0x10 (state 15), else the object's position; then the heading kept
@@ -1134,6 +1166,7 @@ void UpdateJumpMotion(JUMP* pj)
     const int st = pj->state;
     const unsigned k = static_cast<unsigned>(st - 6);
     if (k < 17 && k != 1 && k != 14 && k != 16) return;
+    if (st == c_jsRideLink) return;   // (the record driven, as the other target flights)
     if (k == 14)
     {
         // the glide (state 20): the velocity in the actor's frame of the next step (its angular velocity applied)

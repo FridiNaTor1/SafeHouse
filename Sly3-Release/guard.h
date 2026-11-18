@@ -65,6 +65,10 @@ struct K2PLAY
     struct CTRL* pctrl = nullptr;   // +0x68 the ballistic flight's target controller (0x12DE58)
 };
 void StartK2(const KIND2* ptuning, ALO* palo, int grf, K2PLAY* pk);   // orig 0x20BF80
+// Sly 3's splice events of an object's (re)start / proxy attach and release (orig3 0x1FC868 / 0x1FC768: Sly 2's 14 / 15)
+constexpr uint32_t SPLICEEV3_ATTACH = 17, SPLICEEV3_RELEASE = 18;
+// Sly 3's kind-2 marker events (orig3 0x254C00 / 0x258FD0: the take-off 0x3D, then 0x3E / 0x3F; Sly 2's 0x22 / 0x23 / 0x24)
+constexpr int EVK2_TAKEOFF = 0x3D, EVK2_MID = 0x3E, EVK2_LAND = 0x3F;
 void SetK2State(K2PLAY* pk, int st);                                  // orig 0x20C2F8
 void UpdateK2(K2PLAY* pk);                                            // orig 0x20C0E8
 void StopK2(K2PLAY* pk);                                              // orig 0x20C080
@@ -82,13 +86,18 @@ struct KIND3
         ASEG* paseg = nullptr;    // +0x4
         glm::vec4 vel{0.0f};      // +0x10 the root's mean velocity
         float s20 = 0;            // +0x20 its length
+        // (orig3 0x259330: the two switch windows, each {start, length} from the marker pairs 0x19B / 0x19C and
+        // 0x19D / 0x19E (0x2592A8; wrapped through the clip's length))
+        float aw24[2] = {0.0f, 0.0f};  // +0x24
+        float aw2C[2] = {0.0f, 0.0f};  // +0x2C
     };
     std::array<E, 4> ae;
     int fResolved = 0;            // +0xC0
 };
 
-// The directional player (orig 0x40 bytes, GUARD +0xE20). Marker pairs 0x17D..0x180 allow changing
-// between the four clips; the chosen clip's mean speed supplies the requested direction's velocity.
+// The directional player (orig 0x40 bytes, GUARD +0xE20). Sly 3 (0x259330 / 0x259678): the clip may change while
+// the current clip's phase is inside one of its two marker windows; the chosen clip's mean speed supplies the
+// requested direction's velocity. (Sly 2's ASEG-event gates 0x17D..0x180, f34 / f38, are not used.)
 struct K3PLAY : ASEGALISTENER
 {
     glm::vec4 vel{0.0f};          // +0x10
@@ -108,6 +117,7 @@ bool FK3Done(const K3PLAY* p);                                    // orig 0x20CA
 void OnK3Event(K3PLAY* p, const ASEGMSG9* pm);                     // orig 0x20CAA8
 void SelectK3(K3PLAY* p, const glm::vec3& vel);                    // orig 0x20CB28
 void SetGuardKind3(GUARD* pg, uint64_t mask, const std::array<OID, 4>& aoid, bool fResolve);
+void SetGuardKindeResolved(GUARD* pg, uint64_t mask, OID oid, int grf);  // (guardstart.cpp) orig 0x207BC8 (Sly 3 0x2534C0)
 
 // A kind entry (orig 0x20 bytes in the table +0x4D0 (the mask at +0x10), 0x10 in the three arrays +0x8D0..)
 struct KINDE
@@ -130,7 +140,8 @@ struct WATCHA
     GUARD* pguard = nullptr;      // +0x0
     int st = -1;                  // +0x4
     float t = 0;                  // +0x8
-    int fOn = 1;                  // +0xC
+    int fOn = 1;                  // +0xC (Sly 3: a counter of the disables, 0x259D10 / 0x259D50; fOn = count == 0)
+    int cOff3 = 0;                // (Sly 3's count at +0xC, kept beside the copied flag)
 };
 struct WATCHB
 {
@@ -148,6 +159,20 @@ struct MOVEREF
     int fHeadingLocked = 0;       // +0x4 (0x2097C8 / 0x2097D8: messages 0x25 / 0x26)
     int n8 = 0;                   // +0x8
     GUARD* pguard = nullptr;      // +0xC
+};
+
+// Sly 3's trigger-reaction records (orig3 +0x11E8 count / +0x11EC, 0xA0 bytes each, at most 8; EOPID 372 (optid 499,
+// thunk 0x104B18 -> 0x2578D8): {kind, mask, two {skip, react} weight pairs}); 0x257B80 deals a shuffled bag of 32 draws
+// between the pairs by the suck (GSuck3), 0x257CB0 takes the next draw. A class-0x17 trigger the guard enters
+// (0x27F6A0 -> 0x257A70) whose kind / mask match a record and whose draw is 1 starts the reaction 21 (job 0xEA)
+struct VOLREACT3
+{
+    int k = 0;                    // +0x0 the trigger kind (0 / 1)
+    uint32_t mask = 0;            // +0x4
+    float aw8[2]{1.0f, 0.0f};     // +0x8 the weights at full suck
+    float aw10[2]{1.0f, 0.0f};    // +0x10 at none
+    std::vector<int> abag;        // +0x18 count / +0x1C the draws (0 skip, 1 react)
+    int ibag = 0;                 // +0x9C
 };
 
 struct GUARD
@@ -203,7 +228,8 @@ struct GUARD
     int n1018 = 0;                // +0x1018 (class 0x3B: the hit points at the last escape; 0x7FFFFFFF at the init 0x1553F0)
     LO* plo1010 = nullptr;        // +0x1010 (class 0x3F: its aim point, a class 3 object oid 0x62B: 0x14B1D8)
     int n108C = 0;                // +0x108C (class 0x3C: non-zero while it has a command list to run, method 970)
-    LO* plo108C = nullptr;        //   that command list (CMDLIST)
+    LO* plo108C = nullptr;        //   that command list (CMDLIST) (orig3: any guard's +0x1164, option 485)
+    LO* plo1190 = nullptr;        // (orig3 +0x1190: the object the prox job measures, option 485's second argument)
     int n1000 = 0;                // +0x1000 placed by a spawner (0x174490)
     K2PLAY k2play;                // +0xDB0 (the kind-2 entries' player)
     K3PLAY k3play;                // +0xE20 (the directional entries' player)
@@ -230,10 +256,18 @@ struct GUARD
     int f48C = 0;                 // +0x48C
     LO* plo494 = nullptr;         // +0x494 (option 306)
     WATCHA watchA;                // +0x498
+    int fWatchOff3 = 0;           // (Sly 3 +0x4C0: option 435's "disabled" flag, 0x257578 / 0x257588)
+    // Sly 3's disguise fields (orig3 0x2544E0 / 0x19AF98 / 0x18BB20; cleared by the reset 0x251000). +0x11B8 (option
+    // 509, EOPID 382: always hostile) and +0x11C0 (option 493, EOPID 366: -1 never checks a disguise, 1 forgets the
+    // passed check when it loses Sly) are field options, read live (GuardField3); these are the code's:
+    int fPassed11BC = 0;          // +0x11BC Sly answered its password (job 0xE7 state 8): it lets the disguise pass
+    float tLine11C4 = 0;          // +0x11C4 its last spotted line (0x19AF98: one each 5 s)
+    std::vector<VOLREACT3> avolreact3;  // +0x11E8 / +0x11EC (EOPID 372)
+    LO* ppeMode3 = nullptr;       // (Sly 3 +0x17C8: Bentley's effect +0x19C0 played on the guard in modes 0xC / 0xF (native 34 / 37))
     WATCHB watchB;                // +0x49C
     int f4A0 = 1, f4A4 = 0;       // +0x4A0 / +0x4A4
     glm::vec4 pos4B0{0.0f};       // +0x4B0
-    std::vector<KINDE> akinde;    // +0x4C0 count, +0x4D0 (up to 32)
+    std::vector<KINDE> akinde;    // +0x4C0 count, +0x4D0 (Sly 2: up to 32; Sly 3 +0x4D0 / +0x4E0, unbounded: 64 here)
     std::vector<std::unique_ptr<KIND3>> akind3;  // owns the entries' stable kind-3 tuning objects
     std::array<std::array<KINDE, 26>, 3> aakinde;  // +0x8D0 / +0xA70 / +0xC10
     float g260 = 1.5f;            // +0x260 the size it starts with (0x205EB8)
@@ -270,6 +304,7 @@ struct GUARD
     int nMode = -1;               // +0xFBC (0x207030)
     float tMode = 0;              // +0xFC0
     CTRLPOS* pscaleFC4 = nullptr; // +0xFC4 the guard's kind-12 scale controller
+    float gScale3 = 1.0f;         // (Sly 3 +0x11E0) its scale, EOPID 370 (orig3 0x2575F8; e.g. Carmelita 0.75)
     int fFC8 = 0;                 // +0xFC8
     LO* ploFCC = nullptr;         // +0xFCC (the stand job faces it)
     MOVEREF move;                 // +0xFD0
@@ -355,6 +390,14 @@ void UpdateGuardTimedMode(GUARD* pg);
 void RefreshGuardTargets(GUARD* pg);
 // orig: 0x002082D0: the target (the detector's entries, the current one while alive)
 LO* PloGuardTarget(GUARD* pg);
+// orig3: 0x002544E0: how plo stands to the guard: -1 itself, 0 ignored (a friend, an excluded class, a disguise that
+// passes), 1 a disguised player to check (job 0xE7), 2 hostile, 3 one of its immediate target classes
+int KGuardRelation3(GUARD* pg, LO* plo);
+// orig3: 0x00253EE8: the reaction's target and its relation (k -1: none): the asked target (+0x3B0) when in the world,
+// else the best of the detector's live entries (or, charmed, every guard) by relation, then distance
+LO* PloGuardTarget3(GUARD* pg, int* pk);
+// A Sly 3 guard field option's value (by its Sly 3 offset)
+int GuardField3(const GUARD* pg, uint32_t ib, int nDefault = 0);
 // orig: 0x002087E8 / 0x002089F0 / 0x00208B38: plo of one of the classes (or derived)
 bool FTargetClass(const std::vector<int>& classes, const LO* plo);
 // orig: 0x0020A408: the best object of the 0x3E148C list for the guard (0: none)
@@ -375,5 +418,11 @@ void OnGuardInitLo(LO* pguard, LO* ploDetector);
 void PostLoadGuard(LO* plo);
 void SyncGuardOption(GUARD* pg, const LO* plo, int eopid);  // guardstart.cpp: a loaded field option into the guard
 void ResetGuard(LO* plo, LO* pproxy);
+// (Sly 3) EOPID 370, orig3 0x2575F8: the guard's scale on its kind-12 record
+void ApplyGuardScale3(GUARD* pg, float g);
+// (Sly 3) the scale controller (if missing: a copy) and EOPID 370 from the guard's options
+void ApplyGuardScaleOption3(GUARD* pg);
+int NGuardHealthOption3(const LO* plo);  // Sly 3 EOPID 937 (the health maximum) as loaded / bound; 0: none
 void ResetGuardsAtStart(SW* psw);
+void SendStartEvents3(SW* psw);   // orig3 0x1FC458: the start event 17 to the other objects
 

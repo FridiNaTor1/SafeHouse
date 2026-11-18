@@ -15,6 +15,7 @@
 // Instances ("sub-meshes", 0x169AC8) are GLOBs that share their template's geometry with their own matrix and
 // colours.
 
+#include "fastpaths.h"
 #include "bis.h"
 #include "shd.h"
 
@@ -150,6 +151,8 @@ struct WRBG
     int iglob = -1;                  // its glob (+0x04)
     std::vector<glm::vec4> astate;   // per matrix, per strip vertex: [imat * cvtx + ivtx] (the batches' apvWarp)
     uint32_t nGen = 0;               // (native) bumped when astate changes
+    int stamp = 0;                   // +0x9C (Sly 3): the WR's stamp its state vectors were built at (0x2897B8)
+    bool fInside = false;            // +0x1C (Sly 3): its object under the WR's anchor (0x2896D0)
 };
 
 struct GLOB
@@ -159,7 +162,7 @@ struct GLOB
     int8_t rp3 = 0;                 // Sly 3's rp as loaded (group word bits 3..7: the draw list sub-kind, orig3 0x18F4B0)
     int8_t cbone = 0;               // hdr+1
     uint8_t grfMesh = 0;            // native (Sly 2 meanings, see above): 1 forward-lit, 4 warp block, 8, 0x10 double-sided
-    uint8_t grfMesh3 = 0;           // hdr+2 (type 0), Sly 3's: 1 forward-lit (group 0x100), 2 group 0x200 (as Sly 2), 8 a box (0x195028), 0x10, 0x20 warp, 0x40, 0x80 two-sided
+    uint8_t grfMesh3 = 0;           // hdr+2 (type 0), Sly 3's: 1 forward-lit (group 0x100), 2 group 0x200 (as Sly 2), 8 a box (0x195028), 0x10, 0x20 warp, 0x40 history (Sly 2 8), 0x80 two-sided
     bool fNoMesh = false;           // the S8 after the bones: no mesh data follows (group flag 0x1000)
     uint32_t rgbaCel = 0;           // type 1: the U32 the cel-border loader reads first (its colour, GIFS PackRGBA)
     float gZOrder = 0;              // hdr+4 (g * |g|, or the "none" value)
@@ -215,7 +218,28 @@ struct GLOB
     // Renderer cache (gl objects; owned by render.cpp).
     struct GLGLOB* pgl = nullptr;
     bool fHistoryWorld = false;   // CID 0x69: positions and live material alpha come from its history
+
+    // FGlobLit's answer and the vertex array it was found for
+    mutable const VTXGLOB* pvtxLitKey = nullptr;
+    mutable size_t cvtxLitKey = 0;
+    mutable bool fLitKey = false;
 };
+
+// Whether any of the glob's vertices is lit at run time (VTXGLOB::fUnbaked), kept per vertex array: the flags are set
+// at load (a bake only turns 1 into 2) and the array is only ever replaced whole (ApplyLighting's template copy).
+inline bool FGlobLit(const GLOB& glob)
+{
+    if (glob.pvtxLitKey != glob.avtx.data() || glob.cvtxLitKey != glob.avtx.size())
+    {
+        bool f = false;
+        for (const VTXGLOB& v : glob.avtx)
+            if (v.fUnbaked) { f = true; break; }
+        glob.fLitKey = f;
+        glob.pvtxLitKey = glob.avtx.data();
+        glob.cvtxLitKey = glob.avtx.size();
+    }
+    return glob.fLitKey;
+}
 
 // A sphere of a sphere set (0x167870): kind -1 end, 0 a group's bounds, 1 a link to another set.
 struct GLOBSPHERE
@@ -240,11 +264,19 @@ struct GLOBSET
     std::vector<GLOB> aglob;            // +0x38 groups (templates and their instances)
     std::vector<std::array<GLOBSPHERE, 4>> asphereset;  // +0x48
     uint64_t grfglobset = 0;            // +0x50: bit 32 lit, bit 33 type-2 mesh
+#if SLY2_FASTPATHS
+    // (the Switch: per group whether it is a cel border, set at the load (glob.cpp), for the volume tree's walk
+    // (render.cpp) instead of each group's large record)
+    std::vector<uint8_t> afCelBorder;
+#endif
 };
 
 // orig3: 0x18D148 LoadGlobsetFromBrx (entry point for the object loaders: an ALO's mesh, LoadAloFromBrx 0x23C0B8
 // calls it after the U32 that follows the transforms, with the glob set at ALO +0x80 (Sly 3 offset to check))
 void LoadGlobsetFromBrx(GLOBSET* pglobset, ALO* palo, CBinaryInputStream* pbis);
+// orig3: 0x18FE80 (the ALOs' vt slot 15 0x23FDA8: a streamed group's meshes, Sly 3's class-0x97 streaming 0x16F2B0):
+// the meshes of the globs whose n0 is key (loaded without one), from the stream; the count loaded (s3-decomp)
+int LoadGlobsetKeyedFromBrx(GLOBSET* pglobset, int key, CBinaryInputStream* pbis, std::vector<int>* paiglob = nullptr);
 
 // Statistics for the load test.
 struct GLOBSTATS

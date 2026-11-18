@@ -178,7 +178,7 @@ void ImportXf(XF* pxf, uint32_t a)
     const GANGRAM& r = s_h.ram;
     pxf->mat = r.M4(a);
     pxf->matWorld = r.M4(a + 0x40);
-    pxf->mode = r.Rd<int16_t>(a + 0x98);
+    pxf->mode = static_cast<int16_t>(Xfm2FromXfm3(r.Rd<int16_t>(a + 0x98)));  // (Sly 3's modes, xf.h)
     pxf->state = r.Rd<int16_t>(a + 0x9A);
     pxf->vel = r.V4(a + 0xB0);
     for (int i = 0; i < 4; i++) pxf->aseg[i] = r.V4(a + 0xC0 + 16 * i);
@@ -392,7 +392,7 @@ bool FImportGangStart(SW* psw, const std::string& pathRam, const std::string& pa
         SetAloGravity(palo, glm::vec3(r.V4(a + 0x80)));
         if (std::fabs(ps->m - r.G(a + 0xD0)) > 1e-6f) std::printf("gang-start: mass native %.6f ref %.6f\n", ps->m, r.G(a + 0xD0));
     }
-    SetStepPhysHeading(palo, r.G(A + 0x1A8));
+    SetStepPhysHeadingUnlocked(palo, r.G(A + 0x1A8));
     p->posFloor = r.V4(A + 0x230);  // (the floor point: a script's placement before the take-over moved it)
     p->uTurn = r.G(A + 0x180);
     p->vecVel = glm::vec3(r.V4(A + 0x190));
@@ -407,7 +407,8 @@ bool FImportGangStart(SW* psw, const std::string& pathRam, const std::string& pa
     if (BENTLEY* pb = dynamic_cast<BENTLEY*>(p))
     {
         pb->state = -1;
-        SetBentleyState(pb, state);
+        static const int s_mp[15] = {0, 1, 2, 3, 4, 5, 8, 9, 10, 11, 12, 13, 14, 20, 15};   // (Sly 2's state -> the native's Sly 3 numbers)
+        SetBentleyState(pb, static_cast<unsigned>(state) < 15 ? s_mp[state] : state);
         pb->tState = r.G(A + 0x13D4);
     }
     else if (MURRAY* pm = dynamic_cast<MURRAY*>(p))
@@ -479,7 +480,7 @@ bool FImportGangStart(SW* psw, const std::string& pathRam, const std::string& pa
             }
             if (!q->fInWorld) AddLo(psw, q);
             SetStepPos(pq, glm::vec3(r.V4(aq + 0x230)) - glm::vec3(pq->vecBase));
-            SetStepPhysHeading(static_cast<ALO*>(q), r.G(aq + 0x1A8));
+            SetStepPhysHeadingUnlocked(static_cast<ALO*>(q), r.G(aq + 0x1A8));
             SetAloVelocityTo(static_cast<ALO*>(q), glm::vec3(0.0f));
             ImportCompanion(psw, pq, aq);
             std::printf("gang-start: player %d placed at its reference floor point %.2f %.2f %.2f\n", q->oid, r.G(aq + 0x230),

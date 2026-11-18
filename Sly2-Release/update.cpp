@@ -1,7 +1,9 @@
 #include <cstring>
+#include "envonce.h"
 #include "worldglobals.h"
 #include "update.h"
 #include "debugmenu.h"
+#include "debugvis.h"
 #include "rope.h"
 #include "dance.h"
 #include "turret.h"
@@ -330,11 +332,12 @@ void HandleLoSpliceEvent(LO* plo, uint32_t symid, bool fDeferred, int carg, CRef
     if (!plo->pframe) return;
     CRef* pref = plo->pframe->PrefFindBinding(symid, 1);
     if (!pref) return;
-    static const bool s_fPrint = std::getenv("SLY2N_EVENTPRINT") != nullptr;  // (debug: the bound events fired)
+    if (g_pfnDebugVisSpliceEvent) g_pfnDebugVisSpliceEvent(plo, symid, fDeferred);   // (debugvis.h: the Mission overlay; reads only)
+    static const bool s_fPrint = SLY2N_ENV("SLY2N_EVENTPRINT") != nullptr;  // (debug: the bound events fired)
     if (s_fPrint && symid != 1)
     {
         std::string str;
-        if (std::getenv("SLY2N_EVENTPRINT")[0] == '2')
+        if (SLY2N_ENV("SLY2N_EVENTPRINT")[0] == '2')
         {
             if (pref->m_tagk == TAGK_Proc && pref->m_pproc)
             {
@@ -390,14 +393,14 @@ namespace
 {
 void SmaScript(SMA* psma, int symid, int nA, int nB)
 {
-    if (std::getenv("SLY2N_POPRINT"))
+    if (SLY2N_ENV("SLY2N_POPRINT"))
         std::printf("sma script: sm %d symid %d (%d -> %d) frame %d binding %d\n", psma && psma->psm ? psma->psm->oid : -1, symid, nA, nB,
                     psma && psma->psm && psma->psm->pframe ? 1 : 0,
                     psma && psma->psm && psma->psm->pframe && psma->psm->pframe->PrefFindBinding(static_cast<uint32_t>(symid), 1) ? 1 : 0);
     if (!psma || !psma->psm || !psma->psm->pframe) return;
     CRef* pref = psma->psm->pframe->PrefFindBinding(static_cast<uint32_t>(symid), 1);
     if (!pref) return;
-    if (std::getenv("SLY2N_POPRINT") && pref->m_tagk == TAGK_Proc && pref->m_pproc)
+    if (SLY2N_ENV("SLY2N_POPRINT") && pref->m_tagk == TAGK_Proc && pref->m_pproc)
     {
         std::string str;
         CRef body;
@@ -423,7 +426,7 @@ void AsegaScript(ASEGA* pasega, int symid, int n)
     ASEG* paseg = pasega ? pasega->paseg : nullptr;
     if (!paseg || !paseg->pframe) return;
     CRef* pref = paseg->pframe->PrefFindBinding(static_cast<uint32_t>(symid), 1);
-    if (std::getenv("SLY2N_EVENTPRINT") || std::getenv("SLY2N_POPRINT"))
+    if (SLY2N_ENV("SLY2N_EVENTPRINT") || SLY2N_ENV("SLY2N_POPRINT"))
     {
         std::string str;
         if (pref && pref->m_tagk == TAGK_Proc && pref->m_pproc)
@@ -488,7 +491,7 @@ void RunDeferredSpliceEvents(SW* psw)
         batch.swap(s_adefcall);
         for (const DEFCALL& c : batch)
         {
-            if (std::getenv("SLY2N_POSTPRINT"))
+            if (SLY2N_ENV("SLY2N_POSTPRINT"))
                 std::fprintf(stderr, "posted-call: t %.9g function %06X object %p arg %d\n", g_clock.t, c.pfnOrig, c.object, c.arg);
             if (c.pfnPointer) c.pfnPointer(c.object, c.pointerArg);
             else c.pfn(c.object, c.arg);
@@ -502,7 +505,7 @@ void RunDeferredSpliceEvents(SW* psw)
         if (ev.plo) HandleLoSpliceEvent(ev.plo, ev.symid, false, static_cast<int>(ev.aref.size()), ev.aref.data());
         else
         {
-            if (std::getenv("SLY2N_TASKDEBUG"))
+            if (SLY2N_ENV("SLY2N_TASKDEBUG"))
             {
                 std::string str;
                 if (ev.refProc.m_tagk == TAGK_Proc && ev.refProc.m_pproc)
@@ -553,7 +556,7 @@ void RunDeferredSpliceEvents(SW* psw)
 int IdScheduleCallback(float dt, const CRef& refProc, std::vector<CRef> aref)
 {
     DEFEV ev{nullptr, 0, g_clock.t + dt, std::move(aref), refProc, ++s_idDefevLast};
-    if (std::getenv("SLY2N_TASKDEBUG"))
+    if (SLY2N_ENV("SLY2N_TASKDEBUG"))
         std::fprintf(stderr, "schedule-callback %d: dt %.3f proc tag %d, %zu args\n", ev.id, dt, refProc.m_tagk, ev.aref.size());
     const int id = ev.id;
     InsertDefev(std::move(ev));
@@ -569,7 +572,7 @@ void CancelScheduledCallback(int id)
 
 void ClearDeferredSpliceEvents()
 {
-    if (std::getenv("SLY2N_POSTPRINT"))
+    if (SLY2N_ENV("SLY2N_POSTPRINT"))
         std::fprintf(stderr, "posted-clear: t %.9g calls %zu events %zu\n", g_clock.t, s_adefcall.size(), s_adefev.size());
     s_adefev.clear();
     s_adefcall.clear();
@@ -591,9 +594,9 @@ void StartLoadedLo(SW* psw, LO* plo)
     // orig: 0x001A5C48's vt slot 3 (0, a2 = 1): 0x1331F8 queues it (0x133040, at the clock's t). The batch is
     // drained below, after every object's remove-at-start (a parent's start that adds one of its children
     // back, e.g. the boot world's pumps 145035 choosing 145053 / 145074 / 145077, must survive that removal).
-    if (const char* e = std::getenv("SLY2N_HASBIND"); e && plo->pframe && plo->pframe->PrefFindBinding(static_cast<SYMID>(std::atoi(e)), 1))
+    if (const char* e = SLY2N_ENV("SLY2N_HASBIND"); e && plo->pframe && plo->pframe->PrefFindBinding(static_cast<SYMID>(std::atoi(e)), 1))
         std::fprintf(stderr, "hasbind %s: %d (cid 0x%X)\n", e, plo->oid, plo->Cid());  // (debug: the objects binding an event)
-    if (const char* e = std::getenv("SLY2N_STARTPRINT"); e && std::atoi(e) == plo->oid && plo->pframe)
+    if (const char* e = SLY2N_ENV("SLY2N_STARTPRINT"); e && std::atoi(e) == plo->oid && plo->pframe)
         if (CRef* pr = plo->pframe->PrefFindBinding(0, 1))
         {
             std::string str;
@@ -603,7 +606,7 @@ void StartLoadedLo(SW* psw, LO* plo)
             std::fprintf(stderr, "start of %d: %s\n", plo->oid, str.c_str());
         }
     HandleLoSpliceEvent(plo, 0, true, 0, nullptr);
-    if (std::getenv("SLY2N_TASKDEBUG") && plo->pframe && plo->pframe->PrefFindBinding(0, 1))
+    if (SLY2N_ENV("SLY2N_TASKDEBUG") && plo->pframe && plo->pframe->PrefFindBinding(0, 1))
         std::fprintf(stderr, "start event: %d (cid 0x%X)\n", plo->oid, plo->Cid());
     if (plo->pframe && plo->pframe->PrefFindBinding(1, 1))
     {
@@ -663,8 +666,8 @@ void StartLoadedLo(SW* psw, LO* plo)
             akey.push_back(static_cast<int16_t>(n));
             const CRef r = RefGetProgressKey(akey);
             // (debug: SLY2N_CLUEKEEP keeps the collected ones: a bottle to collect with the 100% card)
-            if (((r.m_tagk == TAGK_Bool && r.m_bool) || (r.m_tagk == TAGK_S32 && r.m_n)) && !std::getenv("SLY2N_CLUEKEEP")) RemoveLo(psw, plo);
-            if (std::getenv("SLY2N_PICKUPPRINT"))
+            if (((r.m_tagk == TAGK_Bool && r.m_bool) || (r.m_tagk == TAGK_S32 && r.m_n)) && !SLY2N_ENV("SLY2N_CLUEKEEP")) RemoveLo(psw, plo);
+            if (SLY2N_ENV("SLY2N_PICKUPPRINT"))
                 std::printf("clue %d: proxy %d collected %d removed %d inworld %d\n", n, plo->oid, int(r.m_tagk == TAGK_Bool ? r.m_bool : r.m_n), plo->fRemoved,
                             plo->fInWorld);
         }
@@ -852,7 +855,7 @@ void UpdateSw(SW* psw)
     else
     {
         // (debug: SLY2N_UPDORDER=oid,oid..: those objects' update-table places when they change)
-        if (static const char* s_szUo = std::getenv("SLY2N_UPDORDER"); s_szUo)
+        if (static const char* s_szUo = SLY2N_ENV("SLY2N_UPDORDER"); s_szUo)
         {
             static std::string s_strLast;
             std::string str;
@@ -864,7 +867,7 @@ void UpdateSw(SW* psw)
         }
         Pass(0x1C4468, psw);  // per SW +0x3EAC list entry
         Pass(0x1F77C0, psw);
-        static const bool s_fUpdMiss = std::getenv("SLY2N_UPDMISS") != nullptr;
+        static const bool s_fUpdMiss = SLY2N_ENV("SLY2N_UPDMISS") != nullptr;
         for (psw->iupdCur = 0; psw->iupdCur < static_cast<int>(psw->aupd.size()); ++psw->iupdCur)
         {
             const UPDENT& e = psw->aupd[psw->iupdCur];

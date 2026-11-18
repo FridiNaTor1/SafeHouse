@@ -30,6 +30,8 @@ void StopScpt(LO* pscpt);
 bool FScptRunning(LO* pscpt);
 // Native skip QoL: the oldest running, paused script whose scene is skippable (SceneSkipKind), or zero.
 uint64_t IdScptCutscene();
+// (PC: a mod's cutscene rule) a script made never skippable (or started by one) is running: no skip now
+bool FScptNeverSkipRunning();
 // (native QoL, skipcut.h) a pausing script's scene class: SKIPK_*
 enum { SKIPK_None = 0, SKIPK_Dialog = 1, SKIPK_Cinematic = 2 };
 int SceneSkipKind(LO* pscpt);

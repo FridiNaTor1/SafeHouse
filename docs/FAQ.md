@@ -12,7 +12,7 @@ you own. The launcher installs the game from it.
 | Game | Discs |
 | --- | --- |
 | Sly Cooper and the Thievius Raccoonus | USA (`SCUS-97198`), Europe, Japan and Korea |
-| Sly 2: Band of Thieves | USA (`SCUS-97316`), Europe v1.00 and v2.01 (`SCES-52529`), Japan (`SCPS-15090`) |
+| Sly 2: Band of Thieves | USA (`SCUS-97316`), Europe v1.00 and v2.01 (`SCES-52529`), Japan (`SCPS-15090`), Korea (`SCKA-20044`) |
 | Sly 3: Honor Among Thieves | USA (`SCUS-97464`): installs, but the port is early in development and not fully playable |
 
 Use an uncompressed `.iso` of the whole disc. When an image is refused, the launcher says why: another game, an
@@ -20,20 +20,37 @@ unsupported region, an incomplete image or not enough free space.
 
 ## Is Sly 3 playable?
 
-Not yet. Sly 3 is early in development and not fully playable. It has been rebuilt on the finished Sly 2 port's engine, which carries most of the work over; for now it installs and plays its opening movies, and the rest is still being ported.
+Not yet. Sly 3 is early in development and not fully playable. It has been rebuilt on the finished Sly 2 port's engine, which carries most of the work over; it is being ported episode by episode, and much is still missing or unfinished.
 Follow progress on [Discord](https://discord.com/invite/SfvzvMg7Mk).
 
 ## Where are my files?
 
 | | Installed games | Saves, settings and mods |
 | --- | --- | --- |
-| Linux | `~/.local/share/projectcane/installations` | `~/.config/projectcane` (Sly 2: `sly2/`) |
-| Windows setup | `%LOCALAPPDATA%\ProjectCane\installations` | `%LOCALAPPDATA%\ProjectCane\user` (Sly 2: `sly2\`) |
+| Linux | `~/.local/share/SafeHouse/installations` | `~/.config/SafeHouse` (Sly 2: `sly2/`) |
+| Windows setup | `%LOCALAPPDATA%\SafeHouse\installations` | `%LOCALAPPDATA%\SafeHouse\user` (Sly 2: `sly2\`) |
 | Windows portable | `data\installations` beside `bin` | `data\user` beside `bin` |
 
-The folders keep the project's old name (ProjectCane) on purpose, so games, saves and settings from earlier versions
-carry over. The game page's **Open save folder** and **Open game folder** buttons open them. Re-extracting or
+Until 2026-11-10 these folders had the project's old name (`projectcane` on Linux, `ProjectCane` on Windows). The first start of a newer launcher moves them to `SafeHouse` once: games, saves, settings, mods and logs carry over, and paths stored in the launcher's settings are updated. If both folders exist, files the new folder already has win and differing old versions are kept in `ProjectCane leftovers` inside it; nothing is deleted before it is in the new place. **Settings > Games > Install games to** puts new installations in another folder or on another drive (they go to a `SafeHouse` folder there); **Move…** moves an installed game. The game page's **Open save folder** and **Open game folder** buttons open them. Re-extracting or
 uninstalling a game never touches your saves.
+
+### Can I choose where games are installed?
+
+Yes. **Settings > Games > Install games to** picks the default folder or another drive; **Choose a folder…** picks any
+folder (with a controller you type the path). New installations go to a `SafeHouse` folder there, as `sly1`, `sly2` and
+so on, with other disc regions beside them (`sly1-europe`). The install page shows the exact destination and its free
+space under the disc image list; its **Change…** button opens this setting. Installations elsewhere are remembered, so
+games installed before the change stay where they are and keep working; changing the setting never moves or deletes game
+files. **Move … to the install folder** under a game moves it, and **Use the default folder** goes back to the profile
+folder. Saves, settings and logs stay in the profile folders listed above.
+
+### Can SafeHouse find disc images in my own games folder?
+
+Yes. Choose the folder that holds your own `.iso` or `.chd` files in **Settings > Games > Disc images folder** (desktop
+versions; on Android and iOS disc images are picked with the system's file picker). The install page then searches it
+and its subfolders (up to two levels deep) before the usual folders, and recognizes the supported games and regions. The
+search stops after 200 disc images or 20,000 folder entries. Finding a disc does **not** install it; you choose which
+one to install. **Stop searching this folder** goes back to the usual folders only.
 
 ## How do I update?
 
@@ -71,7 +88,16 @@ you downloaded it from this repository's Releases page.
 - Lower **Settings > Graphics > Internal resolution** and **MSAA**.
 - On weak integrated GPUs, **Fullscreen** usually performs better than **Borderless** or **Windowed**.
 - A frame-rate limit equal to your monitor's refresh rate (or half of it) with VSync on gives the smoothest result.
-- The games need OpenGL 4.3 (Metal on macOS).
+- The games need OpenGL 4.3 (Metal on macOS). Sly 2 and Sly 3 use Vulkan 1.3 where the driver has it and OpenGL
+  otherwise; if one renderer runs badly on your GPU, try the other in **Settings > Graphics > Renderer**.
+
+## Sly 2 or Sly 3 uses OpenGL instead of Vulkan
+
+On Windows and Linux the games start on Vulkan and switch to OpenGL by themselves when the graphics driver cannot run
+it (no Vulkan 1.3 driver, a missing feature, an error while starting). The game's log says why, in a line that starts
+with `Vulkan:` or `Renderer:`. After a Vulkan start that failed (a crash or a driver error while starting), **Auto**
+stays on OpenGL until a new version of the game: choose **Vulkan** in **Settings > Graphics > Renderer** to try again,
+then **Auto** once it works. Deleting `vulkan-start.txt` from the game's folder in your profile does the same.
 
 ## The controller does not work, or shows the wrong buttons
 

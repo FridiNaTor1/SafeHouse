@@ -55,6 +55,8 @@ void UpdateGameTimers(float dt);
 // the slot files
 bool FLoadGameSave(const std::string& path, std::string& error);
 bool FWriteGameSave(const std::string& path, std::string& error);
+// (mapstates.h --map-state) the run's saves are not written: the user's slots stay as they were
+extern bool g_fSavesReadOnly;
 // orig 0x1D84B0: the record as a card slot holds it (every "from_memcard" set)
 void CopyGameSaveForSlot(GAMESAVE& gs);
 bool FWriteGameSaveBlock(const std::string& path, const GAMESAVE& gs, std::string& error);

@@ -9,6 +9,10 @@
 // shadow combine's darkness) to 0. Here the near plane is w - z >= 0 (render.cpp: reversed-Z, z = near); a triangle
 // wholly in front is passed through unchanged.
 
+#if defined(CANE_BLEND1) && defined(BINDLESS)
+#define CANE_DRAWSTATE 1   // (glob.vert)
+#endif
+
 layout (triangles) in;
 layout (triangle_strip, max_vertices = 4) out;
 
@@ -18,6 +22,14 @@ noperspective in float gsFog[];
 #ifdef BINDLESS
 flat in uvec2 gsTexh[];
 flat out uvec2 vTexh;
+#endif
+#ifdef CANE_DRAWSTATE
+flat in uint gsDrawState[];
+flat out uint vDrawState;
+#endif
+#ifdef TEXARRAY
+flat in uint gsLayer[];
+flat out uint vLayer;
 #endif
 
 noperspective out vec4 vColor;
@@ -33,6 +45,12 @@ void EmitAt(int i, int j, float t)
 #ifdef BINDLESS
     vTexh = gsTexh[0];
 #endif
+#ifdef CANE_DRAWSTATE
+    vDrawState = gsDrawState[0];
+#endif
+#ifdef TEXARRAY
+    vLayer = gsLayer[0];
+#endif
     EmitVertex();
 }
 
@@ -40,27 +58,37 @@ void main()
 {
     float d[3];
     for (int i = 0; i < 3; ++i) d[i] = gl_in[i].gl_Position.w - gl_in[i].gl_Position.z;
-    if (d[0] >= 0.0 && d[1] >= 0.0 && d[2] >= 0.0)
-    {
-        for (int i = 0; i < 3; ++i) EmitAt(i, i, 0.0);
-        EndPrimitive();
-        return;
-    }
     // Sutherland-Hodgman against the one plane: up to four vertices, each (i, j, t), in the triangle's order
     ivec2 aij[4];
     float at[4];
     int c = 0;
-    for (int i = 0; i < 3; ++i)
+    if (d[0] >= 0.0 && d[1] >= 0.0 && d[2] >= 0.0)
     {
-        const int j = (i + 1) % 3;
-        if (d[i] >= 0.0) { aij[c] = ivec2(i, i); at[c] = 0.0; ++c; }
-        if ((d[i] >= 0.0) != (d[j] >= 0.0)) { aij[c] = ivec2(i, j); at[c] = d[i] / (d[i] - d[j]); ++c; }
+        aij[0] = ivec2(0);
+        aij[1] = ivec2(1);
+        aij[2] = ivec2(2);
+        at[0] = 0.0;
+        at[1] = 0.0;
+        at[2] = 0.0;
+        c = 3;
+    }
+    else
+    {
+        for (int i = 0; i < 3; ++i)
+        {
+            int j = (i + 1) % 3;   // (not const: GLSL ES wants constant initializers there)
+            if (d[i] >= 0.0) { aij[c] = ivec2(i, i); at[c] = 0.0; ++c; }
+            if ((d[i] >= 0.0) != (d[j] >= 0.0)) { aij[c] = ivec2(i, j); at[c] = d[i] / (d[i] - d[j]); ++c; }
+        }
     }
     if (c < 3) return;
-    // (a strip of the polygon a b c [d]: a b d c)
-    EmitAt(aij[0].x, aij[0].y, at[0]);
-    EmitAt(aij[1].x, aij[1].y, at[1]);
-    if (c == 4) EmitAt(aij[3].x, aij[3].y, at[3]);
-    EmitAt(aij[2].x, aij[2].y, at[2]);
+    // One emission call site for both paths: Mali r44p1's Vulkan compiler crashes when
+    // noperspective outputs are emitted from separate unclipped/clipped paths.
+    // A polygon a b c [d] becomes the same triangle strip a b [d] c as before.
+    for (int k = 0; k < c; ++k)
+    {
+        int n = c == 4 && k >= 2 ? 5 - k : k;
+        EmitAt(aij[n].x, aij[n].y, at[n]);
+    }
     EndPrimitive();
 }

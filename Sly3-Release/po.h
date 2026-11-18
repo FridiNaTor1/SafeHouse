@@ -47,6 +47,10 @@ struct PODATA
 };
 
 PODATA* PpodataFromLo(LO* plo);   // null for objects outside cid 0x32
+PADCTL* PpadctlOfSo3(const LO* plo);   // Sly 3: any SO's controller state once enabled (null: none)
+int NSoHealth3(const LO* plo);         // Sly 3: a plain SO's hit points (+0x16C, orig3 0x1F43C8)
+int NSoHealthMax3(const LO* plo);      // (+0x170, 0x1F43F0)
+void SetSoHealth3(LO* plo, int n);     // (0x1F43D0: clamped to 0..max)
 void ResetPlayerObjects();        // a new world
 
 // orig 0x001C4280 / 0x001C42E8 / 0x001C4330 / 0x001C4468 / 0x001C45A8 / 0x001C4640 / 0x001C4660 / 0x001C46C0 /
@@ -61,11 +65,27 @@ void ForgetPadctlPresses(PADCTL* ppc, uint32_t grf);
 // The world update's pass: each controller state (SW +0x3EAC), 0x1C4468
 void UpdateAllPadctls();
 
+// Sly 3: any SO can take a pad (orig3 0x1F4548, SO vt slot 82: the player index +0x130, and slot 83 0x1A9878: the
+// input interface +0x134, 0x36E6D0 when none). Its option 943 (EOPID 942, orig3 0x1F4900) gives the splice a 0x30-byte
+// class 0xBB object over the owner (+0x20) whose options read the owner's input interface (0x2B58D8: +0x20 -> +0x134):
+// 1072..1077 the sticks' x / y / deflection (left, then right; INPUT_INTERFACE_DATA +0x0..+0x14), 1078 (mask, dt) the
+// buttons pressed within dt, taken (0x10B400 -> 0x1A7A80), 1079 (mask) the buttons down (0x10B4C8: +0x18 & mask).
+// Natively the owner's PADCTL (none: zeros, as 0x36E6D0).
+struct PADWRAP3 : BASIC
+{
+    LO* plo = nullptr;
+};
+class CRef;
+CRef RefPadwrap3Option(int bifk, PADWRAP3* pw, int optid3);
+
 // the current player object and the enable (the world code's interface)
 LO* PloPoCurrent(SW* psw);                   // orig 0x001C4840 (0x1C4A48 with the override)
 void SetPoCurrent(SW* psw, LO* plo);         // orig 0x001C4940
 void SetPoForced(SW* psw, LO* plo);          // orig 0x001C4A60 (SW +0x3F00; TODO(splice): the world's EOPIDs 927 / 928)
-void EnablePo(SW* psw, LO* plo, int n);      // vt slot 79 (0x1C3ED8; players 0x1406E8; the safe house 0x1D7418)
+void EnablePo(SW* psw, LO* plo, int n);
+// (PC, splitscreen3.h) another player's character takes its seat's pad: its controller state made and on (control 1)
+// without it becoming the current player (the original: each player's +0x130 index, 0x1F4548)
+void EnablePoExtra3(SW* psw, LO* plo);      // vt slot 79 (0x1C3ED8; players 0x1406E8; the safe house 0x1D7418)
 int NPoEnabled(const LO* plo);               // orig 0x001C4080 (-1: never)
 void ResetPos(SW* psw);                      // a new world's
 int CpoRegistered();                         // orig SW +0x3EB8 (the objects slot 79 ever enabled or disabled)

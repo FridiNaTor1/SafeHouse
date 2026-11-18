@@ -181,6 +181,12 @@ def folder_tests(launcher, work):
 
     code, out = run(binary, ['--check-update'], {**env, 'SAFEHOUSE_UPDATE_TEST_VERSION': '0.1.57'})
     check(code == 0 and 'up to date' in out, 'check: the same version is up to date')
+    # x.y.z numerically, missing parts 0: an install of an older scheme ("0.2", "0.1.94") sees 0.1.57's successors;
+    # 0.1.100 is newer than 0.1.57 (not a string comparison) and a newer build is not offered the older release
+    for current, expected in (('0.1', 'newer'), ('0.1.9', 'newer'), ('0.1.57.0', 'up to date'), ('0.1.100', 'up to date'),
+                              ('0.2', 'up to date'), ('0.2.1', 'up to date'), ('0.0.999', 'newer')):
+        code, out = run(binary, ['--check-update'], {**env, 'SAFEHOUSE_UPDATE_TEST_VERSION': current})
+        check(code == 0 and '\n' + expected + ',' in out, f'check: 0.1.57 against {current}: {expected}')
 
     code, out = run(binary, ['--check-update'], {**env, 'SAFEHOUSE_UPDATE_URL': 'http://127.0.0.1:9/releases/latest'}, timeout=60)
     check(code == 1 and 'no connection' in out, 'offline: a short error, exit 1')
@@ -213,8 +219,8 @@ def folder_tests(launcher, work):
     check(os.path.islink(old / 'SafeHouse') and os.path.islink(old / 'bin' / 'cane-launcher'), 'update: links kept as links')
     check(os.access(old / 'bin' / 'safehouse', os.X_OK), 'update: the launcher is executable')
     check((old / '.update' / 'previous' / 'share' / 'version.txt').read_text() == 'old\n', 'update: the old files are kept aside')
-    result = json.loads((work / 'profile' / 'config' / 'projectcane' / 'update-result.json').read_text()) \
-        if (work / 'profile' / 'config' / 'projectcane' / 'update-result.json').is_file() else {}
+    result = json.loads((work / 'profile' / 'config' / 'SafeHouse' / 'update-result.json').read_text()) \
+        if (work / 'profile' / 'config' / 'SafeHouse' / 'update-result.json').is_file() else {}
     if not result:  # portable.txt: the profile is the folder's data/
         result_file = old / 'data' / 'config' / 'update-result.json'
         result = json.loads(result_file.read_text()) if result_file.is_file() else {}

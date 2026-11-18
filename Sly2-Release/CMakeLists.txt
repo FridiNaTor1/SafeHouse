@@ -8,6 +8,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 get_filename_component(CANE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/.." ABSOLUTE)
 
 file(GLOB sly2n_sources CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/*.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/*.c")
+# (platform/render: the renderer pieces Sly 2 and Sly 3 share, built against each game's own headers: FSR 1, texture mods)
+list(APPEND sly2n_sources "${CANE_ROOT}/platform/render/fsr.cpp" "${CANE_ROOT}/platform/render/texmod.cpp")
 # (test build: the files' static constructors in reverse order, as MinGW runs them on Windows: its CRT walks the .ctors
 # list backwards. A Linux run of it shows a Windows-only static initialization order dependency; PACKAGING.md section 7)
 option(SLY2_REVERSE_INIT_ORDER "Link Sly2-Release's sources in reverse order (init-order test build)" OFF)
@@ -15,8 +17,26 @@ if(SLY2_REVERSE_INIT_ORDER)
   list(SORT sly2n_sources)
   list(REVERSE sly2n_sources)
 endif()
-add_executable(Sly2-Release ${sly2n_sources})
+if(ANDROID)
+  # (cmake/android.cmake) a JNI library: the game activity calls SDL_main (platform/android/native_entry.cpp), which
+  # runs main.cpp's main under another name; the tool service runs the same entry for --convert and the other tools.
+  add_library(Sly2-Release SHARED ${sly2n_sources} "${CANE_ROOT}/platform/android/native_entry.cpp")
+  set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/main.cpp" PROPERTIES COMPILE_DEFINITIONS main=cane_sly2_main)
+  target_compile_definitions(Sly2-Release PRIVATE CANE_ANDROID_GAME_ENTRY)
+  target_compile_options(Sly2-Release PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:SHELL:-include ${CANE_ROOT}/platform/android/sly_android_compat.h>"
+                         -Wno-error=format-security)
+elseif(CANE_IOS)
+  # (cmake/ios.cmake) Sly2Release.framework: the app's bridge runs main.cpp's main under another name in the app's
+  # own process (platform/ios/program_entry.cpp, ios_app.mm), the game on the main thread, the tools on a worker
+  add_library(Sly2-Release SHARED ${sly2n_sources} "${CANE_ROOT}/platform/ios/program_entry.cpp")
+  set_source_files_properties("${CMAKE_CURRENT_SOURCE_DIR}/main.cpp" PROPERTIES COMPILE_DEFINITIONS main=cane_sly2_main)
+  target_compile_definitions(Sly2-Release PRIVATE CANE_IOS_ENTRY=cane_sly2_main "CANE_IOS_ROLE=\"game\"")
+  target_link_libraries(Sly2-Release PRIVATE cane_platform)
+else()
+  add_executable(Sly2-Release ${sly2n_sources})
+endif()
 target_include_directories(Sly2-Release PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}" "${CANE_ROOT}/Libraries/include" "${CANE_ROOT}/platform"
+                           "${CANE_ROOT}/platform/render"
                            "${CMAKE_CURRENT_BINARY_DIR}/generated")
 target_compile_definitions(Sly2-Release PRIVATE _CRT_SECURE_NO_WARNINGS)
 # Development data: the checkout's build/ folder (the reference's RAM maps, the test memory card), used only by the
@@ -35,8 +55,8 @@ if(NOT SLY2N_DEV_ROOT)
   endif()
 endif()
 target_compile_definitions(Sly2-Release PRIVATE "SLY2N_DEV_ROOT=\"${SLY2N_DEV_ROOT}\"")
-# The debug menu's title line (debugmenu.cpp): the top-level project version (CMakeLists.txt's project(ProjectCane
-# VERSION ...)) and the checkout's short git hash, regenerated at every build (cmake/sly2-version.cmake).
+# The debug menu's title line (debugmenu.cpp): the release version (SAFEHOUSE_VERSION, the one the launcher shows; CI
+# passes it) and the checkout's short git hash, regenerated at every build (cmake/sly2-version.cmake).
 file(STRINGS "${CANE_ROOT}/CMakeLists.txt" sly2n_project_line REGEX "^project\\(ProjectCane VERSION")
 string(REGEX MATCH "VERSION ([0-9.]+)" sly2n_version_match "${sly2n_project_line}")
 set(SLY2N_PORT_VERSION "${CMAKE_MATCH_1}")
@@ -47,7 +67,7 @@ endif()
 # variable CANE_GIT_HASH at build time; empty: git)
 set(CANE_GIT_HASH "" CACHE STRING "The git hash for the Sly 2 port's version string (empty: ask git)")
 add_custom_target(sly2_version
-  COMMAND ${CMAKE_COMMAND} -DROOT=${CANE_ROOT} -DVERSION=${SLY2N_PORT_VERSION} -DHASH=${CANE_GIT_HASH}
+  COMMAND ${CMAKE_COMMAND} -DROOT=${CANE_ROOT} -DVERSION=${SLY2N_PORT_VERSION} -DRELEASE=${SAFEHOUSE_VERSION} -DHASH=${CANE_GIT_HASH}
           -DOUTPUT=${CMAKE_CURRENT_BINARY_DIR}/generated/sly2_version.h -P ${CANE_ROOT}/cmake/sly2-version.cmake
   BYPRODUCTS "${CMAKE_CURRENT_BINARY_DIR}/generated/sly2_version.h" VERBATIM)
 add_dependencies(Sly2-Release sly2_version)
@@ -72,6 +92,9 @@ target_sources(Sly2-Release PRIVATE "${CANE_ROOT}/Sly1-Release/glad.c")
 # miniz (MIT; Libraries/miniz): inflate for the PS3 HD import's .zip sources (platform/ps3disc.h, ps3hd.cpp)
 target_sources(Sly2-Release PRIVATE "${CANE_ROOT}/Libraries/miniz/miniz.c")
 target_include_directories(Sly2-Release PRIVATE "${CANE_ROOT}/Libraries/miniz")
+# LZ4 1.10.0 (BSD 2-Clause; Libraries/lz4): the texture cache's records (platform/texture_cache.h, texmod.cpp)
+target_sources(Sly2-Release PRIVATE "${CANE_ROOT}/Libraries/lz4/lz4.c" "${CANE_ROOT}/Libraries/lz4/lz4hc.c")
+target_include_directories(Sly2-Release PRIVATE "${CANE_ROOT}/Libraries/lz4")
 target_link_libraries(Sly2-Release PRIVATE glfw ${CMAKE_DL_LIBS})
 target_compile_definitions(Sly2-Release PRIVATE GLFW_INCLUDE_NONE)
 file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/generated")
@@ -80,6 +103,75 @@ add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/generated/embedded_shader
   COMMAND ${CMAKE_COMMAND} -DSOURCE=${CMAKE_CURRENT_SOURCE_DIR} -DOUTPUT=${CMAKE_CURRENT_BINARY_DIR}/generated/embedded_shaders.h -P ${CANE_ROOT}/cmake/embed-shaders.cmake
   DEPENDS ${sly2n_shaders} ${CANE_ROOT}/cmake/embed-shaders.cmake VERBATIM)
 target_sources(Sly2-Release PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated/embedded_shaders.h")
+# Vulkan renderer (platform/vulkan: the game's GL calls on Vulkan, chosen at run time, OpenGL the fallback; notes/
+# VULKAN_2026-11-10.md): Linux, Windows and Android (the Quest's VR and phones, with GLES as the fallback). The programs are compiled to SPIR-V at build time (cmake/vulkan_shaders.py,
+# glslangValidator); without glslangValidator or Python the game builds without it (OpenGL only).
+if(WIN32 OR ANDROID OR (UNIX AND NOT APPLE))
+  set(sly2n_vulkan_default ON)
+else()
+  set(sly2n_vulkan_default OFF)
+endif()
+option(SLY2_VULKAN "Sly 2's Vulkan renderer (needs glslangValidator and Python 3 at build time)" ${sly2n_vulkan_default})
+if(SLY2_VULKAN)
+  find_program(SLY2N_GLSLANG NAMES glslangValidator glslang)
+  find_package(Python3 COMPONENTS Interpreter QUIET)
+  if(SLY2N_GLSLANG AND Python3_Interpreter_FOUND)
+    file(GLOB sly2n_vk_native_shaders CONFIGURE_DEPENDS "${CANE_ROOT}/platform/vulkan/shaders/*")
+    add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/generated/vk_shaders.cpp"
+      COMMAND ${Python3_EXECUTABLE} ${CANE_ROOT}/cmake/vulkan_shaders.py --source ${CANE_ROOT} --output ${CMAKE_CURRENT_BINARY_DIR}/generated
+              --glslang ${SLY2N_GLSLANG}
+      DEPENDS ${sly2n_shaders} ${sly2n_vk_native_shaders} ${CANE_ROOT}/cmake/vulkan_shaders.py ${CANE_ROOT}/cmake/switch_shaders.py VERBATIM)
+    target_sources(Sly2-Release PRIVATE "${CANE_ROOT}/platform/vulkan/gl_vulkan.cpp" "${CANE_ROOT}/platform/vulkan/vk_loader.cpp"
+                   "${CMAKE_CURRENT_BINARY_DIR}/generated/vk_shaders.cpp")
+    target_include_directories(Sly2-Release PRIVATE "${CANE_ROOT}/platform/vulkan")
+    target_compile_definitions(Sly2-Release PRIVATE CANE_VULKAN=1)
+    message(STATUS "Sly 2: Vulkan renderer on (${SLY2N_GLSLANG})")
+  else()
+    message(WARNING "Sly 2: no glslangValidator or Python 3: built without the Vulkan renderer (OpenGL only)")
+  endif()
+endif()
+
+# The map editor's 3D view (editor.cpp, --editor W; notes/EDITOR_2026-11-12.md): desktop Linux / Windows only, started
+# from the launcher's Editor page. ImGui on OpenGL. Not in the Android / iOS / Switch builds (editor.cpp compiles its
+# stub there); macOS is left out until its Metal GL path is checked with ImGui. The mod-package loading
+# (platform/mod_package.h, disc.cpp) is in every build.
+if((WIN32 OR (UNIX AND NOT APPLE)) AND NOT ANDROID AND NOT CANE_IOS)
+  set(sly2n_editor_default ON)
+else()
+  set(sly2n_editor_default OFF)
+endif()
+option(SLY2_EDITOR "Sly 2's map editor (desktop)" ${sly2n_editor_default})
+if(SLY2_EDITOR)
+  if(NOT TARGET cane_editor_core)
+    add_subdirectory("${CANE_ROOT}/editor" "${CMAKE_CURRENT_BINARY_DIR}/editor")
+  endif()
+  set(sly2n_imgui "${CANE_ROOT}/Libraries/include/imgui")
+  target_sources(Sly2-Release PRIVATE ${sly2n_imgui}/imgui.cpp ${sly2n_imgui}/imgui_draw.cpp ${sly2n_imgui}/imgui_tables.cpp
+                 ${sly2n_imgui}/imgui_widgets.cpp ${sly2n_imgui}/imgui_impl_glfw.cpp ${sly2n_imgui}/imgui_impl_opengl3.cpp
+                 ${sly2n_imgui}/ImGuiFileDialog.cpp)
+  add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/generated/editor_font.h"
+    COMMAND ${CMAKE_COMMAND} -DSOURCE=${CANE_ROOT}/launcher/assets/AtkinsonHyperlegible-Regular.ttf
+            -DOUTPUT=${CMAKE_CURRENT_BINARY_DIR}/generated/editor_font.h -P ${CANE_ROOT}/cmake/embed-font.cmake
+    DEPENDS ${CANE_ROOT}/launcher/assets/AtkinsonHyperlegible-Regular.ttf ${CANE_ROOT}/cmake/embed-font.cmake VERBATIM)
+  target_sources(Sly2-Release PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated/editor_font.h")
+  # the 3D editor's strings in the launcher's languages (editor/lang/<code>.json, editor_lang.inc) and the Noto letters
+  # Atkinson Hyperlegible lacks (Cyrillic, kana, kanji, Hangul: the launcher's subsets, scripts/make-launcher-l10n-fonts.py)
+  file(GLOB sly2n_editor_lang_files CONFIGURE_DEPENDS "${CANE_ROOT}/editor/lang/*.json")
+  add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/generated/editor3d_lang.h"
+    COMMAND ${CMAKE_COMMAND} -DDIR=${CANE_ROOT}/editor/lang -DPREFIX=cane_editor3d_lang
+            -DOUTPUT=${CMAKE_CURRENT_BINARY_DIR}/generated/editor3d_lang.h -P ${CANE_ROOT}/cmake/embed-lang.cmake
+    DEPENDS ${sly2n_editor_lang_files} ${CANE_ROOT}/cmake/embed-lang.cmake VERBATIM)
+  set(sly2n_l10n_fonts "${CANE_ROOT}/launcher/assets/l10n/NotoSans-Regular.subset.ttf;${CANE_ROOT}/launcher/assets/l10n/NotoSansCJKjp-Regular.subset.otf")
+  add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/generated/editor3d_l10n_fonts.h"
+    COMMAND ${CMAKE_COMMAND} "-DFILES=${sly2n_l10n_fonts}" "-DSYMBOLS=cane_editor3d_noto;cane_editor3d_cjk"
+            -DOUTPUT=${CMAKE_CURRENT_BINARY_DIR}/generated/editor3d_l10n_fonts.h -P ${CANE_ROOT}/cmake/embed-files.cmake
+    DEPENDS ${sly2n_l10n_fonts} ${CANE_ROOT}/cmake/embed-files.cmake VERBATIM)
+  target_sources(Sly2-Release PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated/editor3d_lang.h" "${CMAKE_CURRENT_BINARY_DIR}/generated/editor3d_l10n_fonts.h")
+  target_compile_definitions(Sly2-Release PRIVATE CANE_EDITOR3D_L10N=1)
+  target_link_libraries(Sly2-Release PRIVATE cane_editor_core cane_editor_model)
+  target_compile_definitions(Sly2-Release PRIVATE SLY2_EDITOR=1)
+endif()
+
 # QoL (qolview.cpp): the launcher's high-quality Sly 2 logo, embedded (it replaces the front end's logo texture)
 add_custom_command(OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/generated/sly2n_logo.h"
   COMMAND ${CMAKE_COMMAND} -DSOURCE=${CANE_ROOT}/launcher/assets/games/sly2-logo.png -DOUTPUT=${CMAKE_CURRENT_BINARY_DIR}/generated/sly2n_logo.h -DSYMBOL=sly2n_logo_png -P ${CANE_ROOT}/cmake/embed-image.cmake
@@ -88,7 +180,9 @@ target_sources(Sly2-Release PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated/sly2n
 
 # Sound and movies (sound.cpp, snd989.cpp, spiop.cpp, fmv.cpp): FAudio (XAudio2 on SDL2, as Sly1-Release on Linux),
 # FFmpeg's MPEG-2 decoder for the PSS movies, SDL2 for the stand-alone movie window (--play-movie).
-if(WIN32)
+if(ANDROID)
+  target_link_libraries(Sly2-Release PRIVATE cane_android_ffmpeg)
+elseif(WIN32)
   if(NOT CANE_FFMPEG_ROOT)
     set(CANE_FFMPEG_ROOT "${CANE_ROOT}/Libraries/ffmpeg/ffmpeg-master-latest-win64-lgpl-shared")
   endif()
@@ -102,6 +196,11 @@ endif()
 if(APPLE)
   target_link_libraries(Sly2-Release PRIVATE cane_gl_metal)
 endif()
+# Disc images (disc.cpp, platform/disc_image.h): the converter reads an .iso, a CHD or a split .iso as it is.
+if(NOT TARGET cane_chd)
+  include("${CANE_ROOT}/cmake/chd.cmake")
+endif()
+target_link_libraries(Sly2-Release PRIVATE cane_chd)
 if(NOT TARGET SDL2::SDL2)
   find_package(SDL2 2.24 CONFIG QUIET)
 endif()
@@ -125,7 +224,11 @@ if(TARGET FAudio-shared)
 else()
   target_link_libraries(Sly2-Release PRIVATE FAudio-static)
 endif()
-if(TARGET SDL2::SDL2)
+if(CANE_IOS)
+  # (cmake/ios.cmake: SDL is linked whole into SafeHouseCore, which every program shares; SDL2::SDL2 there is SDL's
+  # own static library)
+  target_link_libraries(Sly2-Release PRIVATE cane_sdl)
+elseif(TARGET SDL2::SDL2)
   target_link_libraries(Sly2-Release PRIVATE SDL2::SDL2)
 else()
   target_include_directories(Sly2-Release PRIVATE ${SDL2_INCLUDE_DIRS})
@@ -145,7 +248,7 @@ if(EXISTS "${sly2n_prompt_source}/prompt_atlas_rects.inc" AND EXISTS "${sly2n_ga
   set(sly2n_prompt_generated "${CMAKE_CURRENT_BINARY_DIR}/generated/prompts")
   file(MAKE_DIRECTORY "${sly2n_prompt_generated}")
   set(sly2n_prompt_headers "")
-  foreach(family keyboard playstation xbox nintendo steamdeck steamcontroller ps4 ps5 steamcontroller2026 devices)
+  foreach(family keyboard playstation xbox nintendo steamdeck steamcontroller ps4 ps5 steamcontroller2026 gamecube switch2 wii wiiu metaquest valveindex steamframe vivewand pico devices)
     set(image "${sly2n_prompt_source}/prompts_${family}.png")
     set(header "${sly2n_prompt_generated}/prompts_${family}_png.h")
     add_custom_command(OUTPUT "${header}" COMMAND ${CMAKE_COMMAND} -DSOURCE=${image} -DOUTPUT=${header} -DSYMBOL=cane_prompts_${family}

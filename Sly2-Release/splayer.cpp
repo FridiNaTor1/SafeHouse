@@ -2,8 +2,10 @@
 // 0x218790, 0x215730, 0x2158C0, 0x2159E0, 0x2174C8, 0x216BC8), m_210E90_c.cpp (0x213300, 0x213830).
 
 #include "splayer.h"
+#include "cutscene.h"
 #include "shop.h"
 #include "region.h"
+#include "langstore.h"
 #include "porttext.h"
 
 #include "promptglyph.h"
@@ -101,6 +103,8 @@ std::string StrLocalized(const SW* psw, int id)
         {
             // (native: the PS2's memory card messages said for a PC, porttext.h; not a text mod's string, not with
             // the "Original PlayStation Icons" option)
+            const bool fModded = std::find(psw->aidTextModded.begin(), psw->aidTextModded.end(), id) != psw->aidTextModded.end();
+            if (const char* sz = SzEpisodeMenuWording(id); sz && !fModded) return StrToGameText(sz);
             if (FPcWording())
                 if (const char* sz = SzPcWording(id);
                     sz && std::find(psw->aidTextModded.begin(), psw->aidTextModded.end(), id) == psw->aidTextModded.end())
@@ -768,6 +772,43 @@ float DxTextUi(const FONTBRX& fontBase, const FONTBRX* pfontOther, const std::st
 bool FHudPromptTicker(float* pt, float* pgEnd);   // hudwidget.cpp (0x3DA0C0 in state 2: its time, its +0x1C)
 void EndHudPromptTicker();                         // (0x1DA5C8(0x3DA0C0, 3))
 
+namespace
+{
+// (PC, langstore.h) Japanese text from the languages folder on a USA / European disc: the text boxes the Japanese
+// build's screens size differently, so that its strings fit as on its own disc. (Found by comparing every screen
+// object of the USA and the Japanese world files: all other text elements have the same size, box and alignment.)
+// el: the disc's text element; *pel: the element to draw with.
+bool FJapaneseTextBox(const SCREENOBJ* pso, const SELEM& el, SELEM* pel)
+{
+    if (!pso || !FWideChars() || FWideText() || ScriptOfTextShown() != SCRIPT_Japanese) return false;
+    const bool fScript = el.ab3[1] == 1;                       // a script value, else a text id
+    const int id = el.ab3[1] == 0 ? IdTextUsa(el.n3) : el.n3;
+    float size = el.ag3[0], w = el.ag3[1], h = el.ag3[2];
+    int align = el.ab3[0];
+    auto near = [](float a, float b) { return std::fabs(a - b) < 0.2f; };
+    if (pso->oid == 0x52C && fScript && id == 0x2F2) size = 26.0f;                        // the card dialog's message
+    else if (pso->oid == 0x378 && fScript && ((id >= 0x442 && id <= 0x447) || (id >= 0x44E && id <= 0x453)) && near(w, 55.0f))
+        w = 82.4f;                                                                        // the shop's prices
+    else if (pso->oid == 0x190C && el.ab3[1] == -1 && near(h, 92.3f)) h = 102.0f;
+    else if (pso->oid == 0x360 && fScript && id == 0x2E5) { w = 176.6f; h = 41.8f; align = 0; }   // the binocucom's task
+    else if (pso->oid == 0x360 && fScript && id == 0x2E6) { w = 191.5f; h = 41.8f; }
+    else if (((!fScript && id == 0x6C) || (fScript && (id == 0x52F || id == 0x530))) && near(size, 24.0f) && near(w, 230.9f))
+    {
+        // the episode menu's "Start Episode", completion and time
+        size = 22.0f;
+        w = 369.5f;
+        h = 26.4f;
+    }
+    else return false;
+    *pel = el;
+    pel->ag3[0] = size;
+    pel->ag3[1] = w;
+    pel->ag3[2] = h;
+    pel->ab3[0] = int8_t(align);
+    return true;
+}
+}  // namespace
+
 void CScreenPlayer::Draw(const FONTBRX* pfont, const FONTBRX* pfontIcons, const SW* psw)
 {
     if (agroup.empty() || agroup[0].aentry.empty()) return;
@@ -800,7 +841,8 @@ void CScreenPlayer::Draw(const FONTBRX* pfont, const FONTBRX* pfontIcons, const 
         fCtlPage = FControlsPageBegin(pso, apiece, pfont, pfontIcons, psw);
     }
     auto drawPiece = [&](const SSLOT& y, const HUDSTATE& st) {
-        const SELEM& el = *y.pelem;
+        SELEM elJapanese;
+        const SELEM& el = y.pelem->kind == SELEMK_Sound && FJapaneseTextBox(pso, *y.pelem, &elJapanese) ? elJapanese : *y.pelem;
         switch (el.kind)
         {
         case SELEMK_Sprite: g_hud.DrawSprite(el, st); break;
@@ -813,12 +855,17 @@ void CScreenPlayer::Draw(const FONTBRX* pfont, const FONTBRX* pfontIcons, const 
             if (!pfont) break;
             std::string text;
             bool fWrap = true;
+            bool fCaption = false;   // (SafeHouse addition: a custom presentation's caption in the subtitle box, cutscene.h)
             if (el.ab3[1] == 1 && el.n3 == 0x2EF)
             {
                 // the subtitle (0x216BC8's 0x2EF): the line's whole text wrapped (0x215F40), typed by the line's time
                 // (0x227820), then only its last lines that fit the box (height +0x28 / size +0x20) kept
-                if (!FDialogSubtitleText(&text)) break;
-                text = StrDialogSubtitleTyped(StrWrapped(*pfont, pfontIcons, text, el.ag3[0] / 51.2f, el.ag3[1]));
+                fCaption = cut::FCutCaptionInSubtitleBox(&text);
+                if (!fCaption && !FDialogSubtitleText(&text)) break;
+                // (lang: the words L3 / R3 / START / SELECT as the device's icons in the subtitles too, promptglyph.h)
+                if (pfontIcons && !fCaption) text = StrPromptButtonWords(text, IdTextUsa(g_dialogsub.id));
+                text = StrWrapped(*pfont, pfontIcons, text, el.ag3[0] / 51.2f, el.ag3[1]);
+                if (!fCaption) text = StrDialogSubtitleTyped(text);
                 int cline = 1;
                 for (char ch : text) cline += ch == '\n';
                 const int clineMax = el.ag3[0] != 0.0f ? static_cast<int>(el.ag3[2] / el.ag3[0]) : cline;
@@ -861,7 +908,7 @@ void CScreenPlayer::Draw(const FONTBRX* pfont, const FONTBRX* pfontIcons, const 
                 std::fprintf(stderr, "textelem kind %d id 0x%X: '%s'\n", int(el.ab3[1]), unsigned(el.n3), text.c_str());
             if (text.empty()) break;
             // (the subtitle 0x2EF in its speaker's colour: font_brx's 0x4435F4)
-            const uint32_t base = el.ab3[1] == 1 && el.n3 == 0x2EF && g_dialogsub.id != -1 ? g_dialogsub.rgba : el.aul3[1];
+            const uint32_t base = el.ab3[1] == 1 && el.n3 == 0x2EF && g_dialogsub.id != -1 && !fCaption ? g_dialogsub.rgba : el.aul3[1];
             glm::vec4 off, sc;
             for (int i = 0; i < 4; ++i)
             {

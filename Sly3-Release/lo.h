@@ -99,8 +99,15 @@ struct LO : BASIC
     std::vector<std::pair<uint64_t, uint32_t>> afield;
     uint32_t U32Field(uint32_t pfnGetter, uint32_t ib, uint32_t uDefault = 0) const;
     void SetField(uint32_t pfnGetter, uint32_t ib, uint32_t u);
+    // The same at the original's (Sly 3's) offset and getter: the class's field option there is found where it is
+    // stored (brx.h OptionFieldKey: e.g. a guard's flinch clip, Sly 3 +0x368 = option 404, stored at Sly 2's +0x348)
+    uint32_t U32Field3(uint32_t pfnGetter3, uint32_t ib3, uint32_t uDefault = 0) const;
+    void SetField3(uint32_t pfnGetter3, uint32_t ib3, uint32_t u);
 
     CID Cid() const { return pcls ? pcls->cid : -1; }
+    uint64_t nAdd = 0;                      // (native) OnAdd's serial of its last entry into the world (activate.cpp
+                                            // g_nLoAdd): tells a re-added object, or a new one at a reused address, from
+                                            // the one an earlier pass saw (pe.cpp's instances: the original's OnAdd / OnRemove)
     bool fLightOwned = false;               // a light's +0x15C / +0x160 both set by 0x1BEAD0 (option 1065 of a render-target
                                             // owner: the binocucom speaker's own light, out of the world's lights)
 };
@@ -297,7 +304,8 @@ struct LOXPTS : LOX    // 0x185150 (cid 8/9)
 };
 struct LOXEMIT : LOX   // 0x258598 / 0x259030 (cid 0x1D, 0x20/0x21)
 {
-    struct EMITMESH { std::vector<glm::vec3> apos; struct TRI { int aipos[3]; float sArea; }; std::vector<TRI> atri; glm::vec3 v20{0.0f}; };
+    // (anormal: orig3 0x1775B8's vertex normals, the normalized sum of the faces' cross products, (0, 0, 1) when 0)
+    struct EMITMESH { std::vector<glm::vec3> apos; struct TRI { int aipos[3]; float sArea; }; std::vector<TRI> atri; glm::vec3 v20{0.0f}; std::vector<glm::vec3> anormal; };
     std::unique_ptr<EMITMESH> pemitmesh;
     int nColors = 0;
     std::vector<uint32_t> argba;

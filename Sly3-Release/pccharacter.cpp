@@ -1447,7 +1447,7 @@ bool PcCarmAimInput(ALO* palo, bool fTriangle, int state)
     // (PcCarmJumped), in any state she does not aim in (an interaction, damage, a cutscene's ...), when her player's
     // input did not run the step before (a pause, a world change, a cutscene), and with the guest or her moves off.
     const bool fCan = FPcCarm(palo) && !FPcGuardMoves() && g_psw;
-    const bool fState = state == 0 || state == 1 || state == 2 || state == 10 || state == 12;
+    const bool fState = state == 0 || state == 2 || state == 3 || state == 10 || state == 1;   // (Sly's states: sly.h jts::)
     const bool fWas = s_fAimOn;
     if (!fCan || !fState || s_iframeAim != g_iframeMain - 1) s_fAimOn = false;
     if (fTriangle && !s_fTrianglePrev && fCan && fState) s_fAimOn = !fWas;

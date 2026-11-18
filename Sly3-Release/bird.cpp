@@ -45,6 +45,8 @@
 glm::mat3 MatRotateAxis(float rad, const glm::vec3& axis);    // xfmath.h (0x11B500)
 float GRandInRange(float gLow, float gHigh);                  // xfmath.h (0x11D448)
 
+LO* PloNearestCharacter3(const glm::vec3& pos);   // lookat.cpp (orig3 0x1F4C40)
+
 namespace
 {
 // a float field option (the loader's options by offset, as anim.cpp's)
@@ -123,7 +125,7 @@ float RadHeadingOf(ALO* palo)  // atan2 of the world matrix's x row (0x1B1868)
     return std::atan2(m[0].y, m[0].x);
 }
 
-// orig: 0x001B1818 (the heading kept and its rotation about z, for slot 70)
+// orig: 0x001B1818 (the heading kept and its rotation about z, for slot 70) (orig3: 0x1D6608, the same C in the Sly 3 decomp)
 void SetBirdHeading(BIRD& b, float rad)
 {
     b.radHeading = rad;
@@ -147,8 +149,15 @@ float DgStepCrv(const CRV* p)  // 0x1E77E8: the parameter's span over 10 x the p
     return p->ag.empty() ? 0.0f : (GMaxCrv(p) - GMinCrv(p)) / (static_cast<float>(p->ag.size()) * 10.0f);
 }
 
-// orig: 0x001C4AF8 (the nearest player object in the world; the original's list SW +0x3EB8, no range)
+
+// orig: 0x001C4AF8 (the nearest player object in the world; the original's list SW +0x3EB8, no range); Sly 3's birds
+// (0x1D66D0 / 0x1D6110) take the world's characters (0x1F4C40: the actors, Carmelita, the vehicles' classes)
 LO* PloNearestPlayer(const glm::vec3& pos)
+{
+    return PloNearestCharacter3(pos);
+}
+
+[[maybe_unused]] LO* PloNearestPlayerSly2(const glm::vec3& pos)
 {
     LO* pbest = nullptr;
     float s2Best = FLT_MAX;
@@ -356,7 +365,7 @@ void StartBird(LO* plo)
     PlaceBird(plo, b);
 }
 
-// orig: 0x001B0E28 (vt slot 16)
+// orig: 0x001B0E28 (vt slot 16) (orig3: 0x1D5C30, the same C in the Sly 3 decomp)
 void UpdateBird(LO* plo)
 {
     if (PFNUPDATE pfn = PfnUpdateOrig(0x1F36E0)) pfn(plo);  // the ALO's

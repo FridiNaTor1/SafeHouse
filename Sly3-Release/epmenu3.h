@@ -31,6 +31,21 @@ bool FEpisodeComplete3(int iep);
 float DtEpisode3(int iep);
 // orig3: 0x0025E5E8: its percent (jobs 0x349B20 and challenges 0x349B68 done of all: 0, 1..99, 100)
 int NEpisodePercent3(int iep);
+// orig3: 0x0025E6D0: the game's percent of a record (the episodes' percents weighted by 0x349BB0: 0, 1..99, 100)
+struct GAMESAVE;
+int NGamePercent3(const GAMESAVE& gs);
+// orig3: 0x0025E510: the challenges' percent (of 0x349B68's) of the current game (the Bonus Movies' 35 / 70 rows)
+int NChallengePercent3();
 // orig3: 0x00289198: start episode iep (the Intro's binocucom task 1798 while it is not complete, else the episode's
-// first world at the default point)
-void StartEpisode3(SW* psw, int iep);
+// first world at the default point). grfExtra: more transition flags (0x40: the pending save of a game started from
+// the title, frontend.cpp StartGameFromSave: 0x18AB08 calls 0x289198 with the save as its record)
+void StartEpisode3(SW* psw, int iep, int grfExtra = 0);
+// orig3: 0x0017C6C8: the chosen row's object of the list shown (null: none)
+LO* PnodeEpMenuCur3();
+// (PC, copsmap3.h) the Two Player page's shown game (its class-0xAA object; null: not on that page)
+LO* PnodeTwoPlayerShown3();
+// (PC) an episode's name as the chooser shows it (the disc's text; the dvd_menu world's)
+std::string StrEpisodeName3(int iep);
+// (PC, copsmap3.h) the picture of episode iep's first Jobs && Challenges row (its list's streamed group, 0x16F2B0: the
+// group streamed once for it, then the list shown streamed again), -1 none: the map select's hub picture
+int OidEpisodeThumbnail3(int iep);

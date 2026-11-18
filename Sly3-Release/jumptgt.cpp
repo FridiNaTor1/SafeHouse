@@ -10,6 +10,7 @@
 // the jump's state 11 -> the interaction kind 0) are ported
 // when one of their objects is a candidate and are skipped.
 #include "jump.h"
+#include "game/guru3.h"
 #include "game/sly3.h"
 
 #include "actor.h"
@@ -528,11 +529,13 @@ void ChooseJumpTarget(JUMP* pj, LO* ploPrev)
                                 posHit.x, posHit.y, posHit.z, vHit.x, vHit.y, vHit.z);
             }
     }
-    // the partner (Bentley only): Murray in his state 15 with his +0x1910 controller holding (state 0): its holding
-    // frame +0x191C's point (0x19A4A0, at rest), the end's z velocity the launch's plus g t; under 2500, Murray's score
-    // with the bias -500 (0x2BF904), its path clear of all but the two of them (0x19AE00 with 0x19B0A8): the state 18
-    if (FIsLoDerivedFrom(pa->palo, S3CID(0x37)))
-        if (MURRAY* pm = PmurrayGlobal(); pm && pm->state == 15 && pm->jtthrow1910.state == 0 && pm->jtthrow1910.peer)
+    // the partner (orig3 0x1BBCA8 flag 0x800): Murray in his state 15 (Sly 3's 16) with his +0x1910 controller (Sly 3's
+    // +0x18E0) holding (state 0) and selecting this player (+0x18F0: always Bentley, 0x1E2358): its holding frame
+    // +0x191C's point (0x19A4A0, at rest), the end's z velocity the launch's plus g t; under 2500, not more than 650
+    // above it (new in Sly 3), Murray's score with the bias -500 (0x2BF904), its path clear of all but the two of them
+    // (0x19AE00 with 0x19B0A8): the state 18 (Sly 3's kind 19)
+    if (MURRAY* pm = PmurrayGlobal(); pm && pm->state == 15 && pm->jtthrow1910.state == 0 && pm->jtthrow1910.peer &&
+                                      pm->jtthrow1910.selected == pa->palo)
         {
             LO* peer = pm->jtthrow1910.peer;
             const glm::vec3 posP = PosJtLo(peer);  // 0x1A62E8
@@ -543,7 +546,7 @@ void ChooseJumpTarget(JUMP* pj, LO* ploPrev)
             bool f = true;
             if (peer != ploPrev)
             {
-                if (!(sc < 2500.0f)) f = false;
+                if (!(sc < 2500.0f) || 650.0f < pos.z - posP.z) f = false;
                 else
                 {
                     sc = GTargetScore(pj, pm->palo, sc, -500.0f);  // (0x2BF904)
@@ -619,7 +622,7 @@ void ChooseJumpTarget(JUMP* pj, LO* ploPrev)
         if (!(desc.mask & grfMask)) continue;
         const glm::vec3 center = PosJtLo(wall);
         if (desc.height < pos.z - center.z) continue;
-        const uint32_t uRadius = wall->U32Field(0, 0x11C, 0);
+        const uint32_t uRadius = wall->U32Field(0, 0x10C, 0);
         float radius;
         std::memcpy(&radius, &uRadius, sizeof(radius));
         const glm::vec3 d = pos - center;
@@ -723,6 +726,50 @@ void ChooseJumpTarget(JUMP* pj, LO* ploPrev)
         gBest = std::min(gBest, value);
         tBest = time;
     }
+    // Sly 3's ride links (orig3 0x1BBCA8, flag 0x1000 of vt slot 106: the Guru; the list 0x479BA4, class 0x7A): no rider
+    // (0x1A29B0); its description +0x130 (height +0x138, default FLT_MAX; players +0x150, default 0xFF: 0x1A0708) AND
+    // the actor's +0x164; its point the link's world position (0x1A29B8); the jump's time / score / end (0x1BB228) with
+    // the end's z velocity the launch's plus g t; under 2500, the bias -250 (0x1BBC00), its path clear (0x1BB918); the
+    // jump state 17 (natively c_jsRideLink)
+    if (sly3::FActorTargetsRideLinks3(pa))
+        for (LO* plink : sly3::AploRideLinks3(psw))
+        {
+            const uint32_t grfDesc = plink->U32Field(0, 0x150, 0xFF);
+            if (!(grfDesc & grfMask)) continue;
+            if (sly3::PloLinkRider3(plink)) continue;
+            const uint32_t uHeight = plink->U32Field(0, 0x138, 0x7F7FFFFFu);
+            float height;
+            std::memcpy(&height, &uHeight, 4);
+            const glm::vec3 posL = PosJtLo(plink);
+            if (plink != ploPrev && height < pos.z - posL.z) continue;
+            float t = 0.0f, sc = 0.0f;
+            glm::vec3 posT(0.0f), velT(0.0f);
+            FitJumpToPoint(pj, vLaunch, plink, posL, glm::vec3(0.0f), &t, &sc, &posT, &velT);
+            velT.z = vLaunch.z + t * GravActor(pa).z;
+            if (FPrint() || std::getenv("SLY3_GURUPRINT"))
+            {
+                XF* pxfL = PxfSlot32(plink);
+                const glm::vec3 vT = pxfL ? VelXfPoint(pxfL, nullptr, posL) : glm::vec3(0.0f);
+                for (XF* q = pxfL; q && std::getenv("SLY3_GURUPRINT") && std::atoi(std::getenv("SLY3_GURUPRINT")) >= 3; q = q->pxfRef)
+                    std::printf("   xf %p owner %d kind %d mode %d vel %.1f %.1f %.1f pos %.1f %.1f %.1f\n", (void*)q, q->palo ? q->palo->oid : -1, q->kind, q->mode,
+                                q->vel.x, q->vel.y, q->vel.z, q->matWorld[3].x, q->matWorld[3].y, q->matWorld[3].z);
+                std::printf("jumptgt: ride link %d candidate score %.2f t %.3f point %.1f %.1f %.1f from %.1f %.1f %.1f launch %.1f %.1f %.1f link vel %.1f %.1f %.1f g %.1f\n",
+                            plink->oid, sc, t, posL.x, posL.y, posL.z, pos.x, pos.y, pos.z, vLaunch.x, vLaunch.y, vLaunch.z, vT.x, vT.y, vT.z, GravActor(pa).z);
+            }
+            if (plink != ploPrev)
+            {
+                if (!(sc < 2500.0f)) continue;
+                sc = GTargetScore(pj, plink, sc, -250.0f);
+                if (gBest <= sc) continue;
+                if (FJumpPathBlocked(pa, t, pos, vLaunch, posT, velT, nullptr)) continue;
+            }
+            stBest = c_jsRideLink;
+            ploBest = plink;
+            posEnd = posT;
+            velEnd = velT;
+            gBest = std::min(gBest, sc);
+            tBest = t;
+        }
     if (stBest == -1) return;
     // the record (+0x58) driven to the end by the time: +0xA8, +0xC0 (less +0x240), +0xD0; then the jump's state
     if (XF* pxf = PxfPos(pa->palo))
@@ -763,7 +810,7 @@ void ArriveJumpTarget(JUMP* pj)
         if (SLY* p = dynamic_cast<SLY*>(pa))
         {
             p->ploSurface = pj->ploC;
-            SetSlyState(p, 0x15, 0xA);
+            SetSlyState(p, jts::N2ClimbSurf, jts::SubN2SurfHeld);
         }
         break;
     case 14:
@@ -772,16 +819,20 @@ void ArriveJumpTarget(JUMP* pj)
         if (SLY* p = dynamic_cast<SLY*>(pa))
         {
             p->ploOther = pj->ploC;
-            if (pj->ploC && pj->ploC->U32Field(0, 0x124, 0) == 3) SetSlyState(p, 0x16, -1);
-            else SetSlyState(p, 3, 1);
+            if (pj->ploC && pj->ploC->U32Field(0, 0x124, 0) == 3) SetSlyState(p, jts::HangFollow, -1);
+            else SetSlyState(p, jts::Hang, jts::SubSwingStill);
         }
         break;
+    case c_jsRideLink: sly3::ArriveRideLink3(pj->ploC); break;   // orig3 0x1BD520 case 17
     case 18:
-        SetBentleyState(PbentleyGlobal(), 8);  // 0x135248(D_002DD5BC, 8): held by Murray (0x136530)
+        // orig3 0x1BD520 case 19: Bentley held by Murray (0x13E510(D_0036B250, 0xA); native 0x135248(8) -> 0x136530),
+        // anyone else Sly on Murray (0x1ADDD0(D_00370AC0, 0x14, -1))
+        if (BENTLEY* pb = PbentleyGlobal(); pb && pa == static_cast<ACTOR*>(pb)) SetBentleyState(pb, BS3_Carried);
+        else if (SLY* p = PslyGlobal()) SetSlyState(p, jts::Carried, -1);
         break;
     case 11: StartInteract(pa, 0, pj->ploC, JTL_Ledge); break;  // the ledge: kind 0 (its description +0x190)
     case 12: StartInteract(pa, 0, pj->ploC, JTL_Wall); break;
-    case 13: StartInteract(pa, static_cast<int>(pj->ploC->U32Field(0, 0x11C, 0)), pj->ploC, JTL_Swing); break;
+    case 13: StartInteract(pa, static_cast<int>(pj->ploC->U32Field(0, 0x10C, 0)), pj->ploC, JTL_Swing); break;
     default:
         SetJumpAnimState(pj, 4, nullptr);  // 0x195FB8(4, 0)
         break;
@@ -807,7 +858,7 @@ void NearestOnSegment(const glm::vec3& pos, const glm::vec3& p0, const glm::vec3
 }
 }  // namespace
 
-// orig: 0x00197F98's target search (see jump.h)
+// orig: part of 0x00197F98 (its target search; see jump.h)
 void FindJumpHideTarget(JUMP* pj)
 {
     ACTOR* pa = pj->pactor;
@@ -907,7 +958,7 @@ float UpdateJumpTargetPath(JUMP* pj)
     XF* pxf = PxfPos(pa->palo);
     if (!pxf) return heading;
     const int k = pj->state;
-    if ((k == 6 || (k >= 8 && k <= 13) || k == 18) && pj->ploC)
+    if ((k == 6 || (k >= 8 && k <= 13) || k == 18 || k == c_jsRideLink) && pj->ploC)
     {
         // The state's sampled point where the owner's record will be when the jump ends
         // (0x2309E8); end velocity Z is the actor's current Z velocity plus gravity times dt.
@@ -921,6 +972,8 @@ float UpdateJumpTargetPath(JUMP* pj)
         case 12: rel = PosJtDesc(pj->ploC, JTL_Wall, pa, pj->s14, &heading); break;
         case 13: rel = PosJtDesc(pj->ploC, JTL_Swing, pa, pj->s14, &heading); break;
         case 18: rel = PosJtLo(pj->ploC); break;
+        // (orig3 0x1B9C48 case 17: the link's sample 0x1A29B8, its world position, with no base taken off)
+        case c_jsRideLink: rel = PosJtLo(pj->ploC); break;
         default: rel = PosJtLo(pj->ploC) - glm::vec3(pa->vecBase); break;  // states 6 / 8
         }
         const float f20 = pxf->tTarget - g_clock.t;
@@ -937,7 +990,7 @@ float UpdateJumpTargetPath(JUMP* pj)
             pxf->aseg[1] = glm::vec4(VecConvertXfs(nullptr, pxf->pxfRef, r2), pxf->aseg[1].w);
         }
     }
-    if (k == 6 || (k >= 8 && k < 17) || k == 18)
+    if (k == 6 || (k >= 8 && k < 17) || k == 18 || k == c_jsRideLink)
     {
         // too fast a path (its accelerations at both ends over half the time left, more than 10000): given up
         const float f = (pxf->tTarget - g_clock.t) + g_clock.dt;

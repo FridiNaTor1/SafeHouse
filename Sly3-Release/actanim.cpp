@@ -58,7 +58,7 @@ bool FAsegRootVelocity(ASEG* paseg, ALO* palo, glm::vec4* pvel)
     return true;
 }
 
-// orig: 0x0020B840
+// orig: 0x0020B840 (orig3: 0x258930, the same code in Sly 3)
 void InitGait(GAIT* pgait, ALO* palo, int sfx)
 {
     pgait->palo = palo;
@@ -115,7 +115,7 @@ glm::vec4 VecGaitVelocity(const GAIT* pgait)
     return v;
 }
 
-// orig: 0x0020BB58
+// orig: 0x0020BB58 (orig3: 0x258CF0, the same C in the Sly 3 decomp)
 glm::vec4 SetGaitMix(GAIT* pgait, float g)
 {
     if (!pgait->pbl) return glm::vec4(0.0f);
@@ -241,7 +241,7 @@ void PlayGait(ACTANIM* pact, GAIT* pgait)
     SetActorAnim(pact, pgait->palo, pgait->pbl, t, 1.0f, 9);
 }
 
-// orig: 0x001B1B18
+// orig: 0x001B1B18 (orig3: 0x1D6900, the same C in the Sly 3 decomp)
 void SetStepSeg(STEPSEGS* pss, int n, OID oid, int grf)
 {
     if (n < 0 || n >= 6 || n == 2 || n == 5) return;

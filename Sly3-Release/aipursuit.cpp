@@ -4,7 +4,11 @@
 // records (0x1F8278 / 0x20A5F8: one per pursued object, the guards on it, its timer). See aipursuit.h.
 
 #include "aipursuit.h"
+#include "projectile.h"
+#include "brx.h"
 #include "game/sly3.h"
+#include "game/scptgame3.h"
+#include "game/task3.h"
 #include "worldglobals.h"
 #include "actor.h"
 #include "vecmat.h"
@@ -32,6 +36,7 @@
 #include "xf.h"
 #include "xfphys.h"
 #include "mat.h"
+#include "sly.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -93,7 +98,7 @@ void ClearPlayerStatus77() { MpStatus77().clear(); }
 
 // ---- the target records ----
 
-// orig: 0x001F8278 (0x1F8240, else a new one 0x20A5F8)
+// orig: 0x001F8278 (0x1F8240, else a new one 0x20A5F8) (orig3: 0x241AD8, the same code in Sly 3)
 TARGETREC* PtargetrecOf(LO* plo)
 {
     auto& p = MpTarget()[plo];
@@ -124,7 +129,7 @@ void SetTargetrecTimer(TARGETREC* pt, int n)
 // orig: 0x0020A7E0
 bool FTargetrecExpired(const TARGETREC* pt) { return T_TARGET_LOST < g_clock.t - pt->t4; }
 
-// orig: 0x0020A730
+// orig: 0x0020A730 (orig3: 0x256410, the same code in Sly 3)
 void AddTargetrecGuard(TARGETREC* pt, GUARD* pg)
 {
     if (pt->apguard.empty())
@@ -242,10 +247,24 @@ ACTIONOBJ* PactionOf(LO* plo, GUARD* pg)
     }
     p = std::make_unique<ACTIONOBJ>();
     p->plo = plo;
+    if (std::getenv("SLY3_ACTIONOPTS"))   // (debug: an action's loaded options, Sly 3 EOPIDs)
+    {
+        std::printf("action %d of guard %d:", plo->oid, pg && pg->palo ? pg->palo->oid : -1);
+        for (const OPT& o : plo->aopt) std::printf(" %d(%zu)", o.eopid, o.aval.size());
+        std::printf("\n");
+    }
     for (const OPT& o : plo->aopt)
     {
         if (o.aval.empty()) continue;
         const OPTVAL& v = o.aval[0];
+        if (o.eopid == 409 && o.aval.size() >= 2)   // (Sly 3 only: 0x256C98, the hit's knock-back {away, up})
+        {
+            p->fKnock = 1;
+            auto g = [](const OPTVAL& x) { return x.tagk == 0x15 ? float(x.n) : x.ag[0]; };   // (0x24B2B8 schema {1, 1}: floats)
+            p->gKnockOut = g(o.aval[0]);
+            p->gKnockUp = g(o.aval[1]);
+            continue;
+        }
         switch (sly3::Eopid2FromEopid3(o.eopid))  // (Sly 2 EOPIDs)
         {
         case 353: p->r50 = glm::vec2(v.ag[0], v.ag[1]); break;
@@ -426,11 +445,12 @@ ACTIONOBJ* PactionSelect(GUARD* pg, LO* ptarget, TARGETREC* pgate)
             if (!apsoe.empty() && PsoeHitTestLineObjects(0, posG, posT, apsoe, &lsg))
                 if (glm::length(posG - lsg.pos0) < pa->g6C) continue;
         }
-        // the guard's splice event 0x18 (vt slot 3 with a result: 0x1331F8 / 0x133000) with the action's oid (type 6,
-        // the entry's +0x18): a bound handler's value replaces the true CRef; anything but true refuses the action
-        if (!FLoSpliceEventTrue(pg->palo, 0x18, plo->oid))
+        // the guard's splice event 0x1B (orig3 0x1A3BA8; Sly 2's 0x18) (vt slot 3 with a result: 0x1331F8 / 0x133000)
+        // with the action's oid (type 6, the entry's +0x18): a bound handler's value replaces the true CRef; anything
+        // but true refuses the action
+        if (!FLoSpliceEventTrue(pg->palo, 0x1B, plo->oid))
         {
-            if (s_fDebug) std::fprintf(stderr, "   splice event 0x18 refuses action %d\n", plo->oid);
+            if (s_fDebug) std::fprintf(stderr, "   splice event 0x1B refuses action %d\n", plo->oid);
             continue;
         }
         if (pa->f78)
@@ -461,17 +481,21 @@ void JOBPURSUE::Init()
     st = -1;
 }
 // orig: 0x00175790
+// orig3: 0x001A3A80 (Sly 3's pursue, class 0xD2): then the task broadcast 0x1C with the guard (a chase starts)
 void JOBPURSUE::Enter()
 {
     SetPursueState(3);
     SetGuardPursued(pguard, ptarget);
+    if (FScripts3Active()) Broadcast3(0x1C, pguard->palo);
 }
 // orig: 0x001757D0
+// orig3: 0x001A3AD8: the pursued target is let go too (0x2541F8(guard, 0))
 void JOBPURSUE::Exit()
 {
     AIJOB::Exit();
     SetPursueState(-1);
     RemoveGuardState(pguard, 0x1D);
+    SetGuardPursued(pguard, nullptr);
 }
 
 namespace
@@ -505,7 +529,7 @@ bool JOBPURSUE::FCanShoot()
             if (pt->nSubF54 != -1) k = true;
             if (FCidDerivedFrom(ptarget->Cid(), S3CID(0x35)))
                 if (SLY* psly = PslyFromLo(ptarget))
-                    if (psly->state == 3 || psly->state == 0x15 || psly->state == 0x16) k = true;
+                    if (psly->jts == jts::Hang || psly->jts == jts::N2ClimbSurf || psly->jts == jts::HangFollow) k = true;
         }
     const glm::vec3 pa = PosAi(pg->palo), pb = PosAi(ptarget);
     const glm::vec3 d = pb - pa;
@@ -581,7 +605,7 @@ bool JOBPURSUE::FLost()
 // orig: 0x00176458
 void JOBPURSUE::SetPursueState(int n)
 {
-    if (st == n) return;
+    if (st == n && n != 9) return;   // (orig3 0x1A4800: 6..9 restart)
     EndChildJob(&pchild);
     GUARD* pg = pguard;
     if (st == 1 && paction)
@@ -630,13 +654,19 @@ void JOBPURSUE::SetPursueState(int n)
     }
     case 4:
     {
-        auto* o = static_cast<JOBMOVE*>(PjobPush(pg, 0x9D));
-        o->nAnim = 0xD;
+        // orig3 0x1A4800 case 4: Sly 3's job 0xF2 with the target (Sly 2's inline move 0xD, the detector's entry back
+        // to 0, nothing pursued; Sly 3 also locks the job while the move plays: aijobs.cpp JOBLOST3)
+        auto* o = static_cast<JOBLOST3*>(PjobPush(pg, CID_JOBLOST3));
+        o->ptarget = ptarget;
         o->Enter();
-        // (0x154038: the detector forgets it: its entry's state 0)
-        if (pg->pdet)
-            if (DETENTRY* pe = PdetentryFind(pg->pdet, ptarget)) SetDetentryState(pg->pdet, pe, 0);
-        SetGuardPursued(pg, nullptr);
+        break;
+    }
+    case 9:
+    {
+        // orig3 0x1A4800 case 9: the trigger reaction 0xEA with the message's trigger; its end: back to state 3
+        auto* o = static_cast<JOBTRIGREACT3*>(PjobPush(pg, CID_JOBTRIGREACT3));
+        o->ptrig = ptrig9;
+        o->Enter();
         break;
     }
     case 5:
@@ -650,12 +680,27 @@ void JOBPURSUE::SetPursueState(int n)
     }
 }
 
+// orig3: 0x001A4B28: the message 0x13 (a class-0x17 trigger's reaction, natively MSG_TRIGREACT3): state 9 unless the
+// job is held; taken either way. (0xE / 0xF / 0x11 -> 7 / 6 / 8 are Sly 3's hit pipeline 0x251C08, which natively runs
+// through the reactions: aihit.cpp)
+int JOBPURSUE::Message(int msg, void* pm)
+{
+    if (msg != MSG_TRIGREACT3) return AIJOB::Message(msg, pm);
+    if (!FJobDone(this))
+    {
+        ptrig9 = static_cast<LO*>(pm);
+        SetPursueState(9);
+    }
+    return 1;
+}
+
 // orig: 0x00176098
 void JOBPURSUE::Update()
 {
     AIJOB::Update();
     GUARD* pg = pguard;
     int prior;
+    int cpass = 0;  // (PC safety net, not in the original: see the loop's end)
     do
     {
         prior = st;
@@ -698,12 +743,27 @@ void JOBPURSUE::Update()
             if (!FJobDone(this) && pchild && static_cast<JOBSHOOT*>(pchild)->st == -1) SetPursueState(0);
             break;
         case 4:
-            if (!FJobDone(this) && pchild && static_cast<JOBMOVE*>(pchild)->st == 1) SetPursueState(-1);
+            // (orig3 0x1A4400 case 4: the child's end, locked or not)
+            if (auto* pj = dynamic_cast<JOBLOST3*>(pchild); pj && pj->st == -1) SetPursueState(-1);
+            break;
+        case 9:
+            if (auto* pj = dynamic_cast<JOBTRIGREACT3*>(pchild); !pj || pj->FDone()) SetPursueState(3);
             break;
         case 5:
             if (!FJobDone(this) && !FGuardStill(pg)) SetPursueState(3);
             break;
         default: break;
+        }
+        // (PC safety net, not in the original: with a close range +0x314 above the far range +0x318 (Sly 3's guard fields
+        // not all at their offsets yet: v_ext's chase, Carmelita 28 at ~600 units) states 0 and 3 alternate without
+        // end inside one frame and froze the game; after 16 passes the state stays for the next frame, noted once)
+        if (++cpass >= 16 && prior != st)
+        {
+            static bool s_fNoted = false;
+            if (!s_fNoted) std::fprintf(stderr, "sly3: guard %d's pursuit alternates states %d / %d (close %.0f, far %.0f): yielded\n",
+                                        pg->palo ? pg->palo->oid : -1, prior, st, pg->g314, pg->g318);
+            s_fNoted = true;
+            break;
         }
     } while (prior != st);
     // orig: 0x176098: per-guard repeat and the global Smoke deadline must both
@@ -737,10 +797,12 @@ void JOBACT::Exit()
 void JOBACT::SetActState(int n)
 {
     if (st == n) return;
+    static const bool s_fNoHit = std::getenv("SLY3_ACTNOHIT") != nullptr;   // (debug: the old way, the hit never heard)
     if (st == 0)
     {
-        // (0x133448: no longer the target's listener; 0x20AC28(p, 0, 0, 0): the held attachment cleared)
-        ptarget = ptarget;
+        // (0x133448 / orig3 0x13BD88: no longer the target's listener; 0x20AC28(p, 0, 0, 0): the held attachment cleared)
+        if (plistened) RemoveLoListener(plistened, this);
+        plistened = nullptr;
     }
     EndChildJob(&pchild);
     st = n;
@@ -748,7 +810,13 @@ void JOBACT::SetActState(int n)
     GUARD* pg = pguard;
     if (n == 0)
     {
-        // (0x1333C0: the guard listens to the target (its message 0xB: the hit landed, Message))
+        // (0x1333C0 / orig3 0x13BD00: the guard listens to the target: a contact it accepted whose sender is this guard
+        // (orig3 0x257CF0: the sender's root a step guard, or a projectile's launcher's) is the hit landed, Message)
+        if (ptarget && !s_fNoHit)
+        {
+            plistened = ptarget;
+            AddLoListener(ptarget, this, [this](int msgk, void* pv) { OnTargetMessage(msgk, pv); });
+        }
         auto* o = static_cast<JOBMOVE*>(PjobPush(pg, 0x9F));
         o->ploFace = ptarget;
         // orig 0x20AE18 leaves the generated default action's +0xC0 null;
@@ -796,11 +864,27 @@ void JOBACT::Update()
             SetActState(-1);
     } while (prior != st);
 }
-// orig: 0x001756C0 (message 0xB from the target: its hit by this guard)
+// orig: 0x001756C0 (orig3 0x1A4F08: message 0xC (native 0xB) from the listened target: the contact's receiver the target and
+// 0x257CF0 of its sender this guard: +0x40 (fHit), which Update turns into state 1 (the strike ends, the recoil 4))
 int JOBACT::Message(int msg, void* pm)
 {
-    // TODO(ai): kind 0xB whose +4 is the target and 0x174898 of it this guard: +0x40 (fHit)
     return AIJOB::Message(msg, pm);
+}
+void JOBACT::OnTargetMessage(int msgk, void* pv)
+{
+    if (msgk != 0xB || !pv || !pguard || !pguard->palo) return;
+    struct MSG { ALO* pso; LO* ploSender; CTMSG* pctm; };
+    const MSG* pm = static_cast<const MSG*>(pv);
+    if (pm->pso != ptarget || !pm->ploSender) return;
+    // orig3 0x257CF0: the sender's root if a step guard (0x3A), else a projectile's (0x59) launcher's root if one
+    LO* pguardOf = nullptr;
+    if (LO* proot = PloRoot(pm->ploSender); FCidDerivedFrom(proot->Cid(), S3CID(0x38))) pguardOf = proot;
+    else if (FIsLoDerivedFrom(pm->ploSender, 0x59))
+        if (LO* pl = PloProjectileLauncher(pm->ploSender))
+            if (LO* proot2 = PloRoot(pl); FCidDerivedFrom(proot2->Cid(), S3CID(0x38))) pguardOf = proot2;
+    if (pguardOf != pguard->palo) return;
+    if (std::getenv("SLY2N_ACTDEBUG")) std::fprintf(stderr, "act: t %.3f guard %d: its hit on %d landed\n", g_clock.t, pguard->palo->oid, ptarget->oid);
+    fHit = 1;
 }
 
 // ---- 0x9F: the strike (a move with the action's entry) ----
@@ -842,13 +926,17 @@ int JOBSTRIKE::Message(int msg, void* pm)
     if (msg == 9 && pkinde)
     {
         const ASEGMSG9* pev = static_cast<const ASEGMSG9*>(pm);
+        if (std::getenv("SLY3_STRIKEPRINT"))
+            std::printf("strike: guard %d event 0x%X (own %d) t %.3f k2 %d\n", pguard->palo->oid, pev->n, int(PasegaOfKinde(pkinde) == pev->pasega), g_clock.t, f50);
         if (PasegaOfKinde(pkinde) == pev->pasega)
         {
             switch (pev->n)
             {
-            case 0x2D: pguard->fF3C = 1; return 1;
-            case 0x2E: pguard->fF3C = 0; return 1;
-            case 0x30:
+            // (Sly 3's ids: 0x2D..0x30 + 0x1D, as 0x2F -> 0x4C in JOBMOVE (0x131850) and 0x31 / 0x32 -> 0x4E / 0x4F in
+            // the shot (0x1A5750); the strike's Sly 3 handler is not paired in the decomp's map)
+            case 0x4A: pguard->fF3C = 1; return 1;
+            case 0x4B: pguard->fF3C = 0; return 1;
+            case 0x4D:
                 f50 = 0;
                 if (pkinde->pvState) ReleaseK2Ballistic(static_cast<K2PLAY*>(pkinde->pvState));
                 return 1;
@@ -924,6 +1012,8 @@ glm::vec3 PosSurroundPlace(GUARD* pg, NAVREGION* preg, const glm::vec3& posOrigi
     const glm::vec3 posG = PosOf(pg);
     const glm::vec3 d = posG - posOrigin;
     const float radG = std::atan2(d.y, d.x), sG = std::sqrt(d.x * d.x + d.y * d.y);
+    if (std::getenv("SLY2N_SURRDEBUG"))
+        std::printf("surround place: ranges %.0f..%.0f / %.0f..%.0f narrow %.2f wide %.2f override %d radG %.2f sG %.0f\n", lm1.x, lm1.y, lm2.x, lm2.y, gNarrow, gWide, nOverride, radG, sG);
     const float rad = radHeading + GClampAbs(RadNorm(radG - radHeading), gNarrow);
     const float s = GClampLm(lm1, sG);
     glm::vec3 posKept(0.0f);
@@ -992,7 +1082,7 @@ void JOBSURROUND::Enter()
         // The original reads the region through SOST +0xDC's area record (+0x10); native area membership is
         // currently queried from the same actual position (SOST::pvArea is not populated).
         NAVREGION* preg = PregionAt(pos, false);
-        if (preg) FNavPathCrv(preg, pos, pos, &pg->crv294);  // 0x17BF78 -> 0x1C02D0
+        NavPathCrv3(preg, pos, pos, &pg->crv294);  // (orig3 0x181F68 -> 0x1EF038; none: straight)
         SetSurroundState(1);
     }
     else SetSurroundState(0);
@@ -1055,7 +1145,7 @@ void JOBSURROUND::Update()
             std::printf("surround: t %.3f guard %d at %.0f %.0f target %.0f %.0f heading %.2f mode %d -> place %.0f %.0f (%.0f from the target)\n",
                         g_clock.t, pg->palo->oid, posG.x, posG.y, posT.x, posT.y, rad, pt->nMode, pos.x, pos.y,
                         glm::length(glm::vec2(pos - posT)));
-        if (preg) FNavPathCrv(preg, posG, pos, pcrv);  // 0x17C510: a failed query retains the old path
+        NavPathCrv3(preg, posG, pos, pcrv);  // (orig3 0x182450 -> 0x1EF038: routed in the region, none: straight)
         if (std::getenv("SLY2N_SURRDEBUG"))
         {
             std::printf("surround path (%zu):", pcrv->apos.size());
@@ -1178,7 +1268,7 @@ void JOBB2::Init()
     AddGuardState(pguard, 0x20);  // 0x209890
     st = -1;
 }
-// orig: 0x0017B840
+// orig: 0x0017B840 (orig3: 0x1A5900, the same code in Sly 3)
 void JOBB2::Enter()
 {
     AIJOB::Enter();
@@ -1500,13 +1590,13 @@ void JOBSHOOT::Init()
     AIJOB::Init();
     st = -1;
 }
-// orig: 0x0017B5C0
+// orig: 0x0017B5C0 (orig3: 0x1A5680, the same code in Sly 3)
 void JOBSHOOT::Enter()
 {
     AIJOB::Enter();
     SetShootState(0);
 }
-// orig: 0x0017B5F0
+// orig: 0x0017B5F0 (orig3: 0x1A56B0, the same code in Sly 3)
 void JOBSHOOT::Exit()
 {
     AIJOB::Exit();
@@ -1531,8 +1621,8 @@ int JOBSHOOT::Message(int msg, void* pm)
         const ASEGMSG9* pev = static_cast<const ASEGMSG9*>(pm);
         if (PasegaOfKinde(static_cast<JOBMOVE*>(pchild)->pkinde) == pev->pasega)
         {
-            if (pev->n == 0x31) { pguard->fF60 = 1; return 1; }
-            if (pev->n == 0x32) { pguard->fF60 = 0; return 1; }
+            if (pev->n == 0x4E) { pguard->fF60 = 1; return 1; }   // (orig3 0x1A5750: Sly 3's 0x4E / 0x4F, Sly 2's 0x31 / 0x32)
+            if (pev->n == 0x4F) { pguard->fF60 = 0; return 1; }
         }
     }
     return AIJOB::Message(msg, pm);

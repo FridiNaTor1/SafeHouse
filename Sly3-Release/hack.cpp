@@ -1,3 +1,5 @@
+#include "game/suck3.h"
+#include "actioninput.h"
 // hack.cpp: Bentley's hacking minigame (module 0x17F090..0x182CC0): the hack objects, classes 0x47..0x4C, all
 // derived from PO (cid 0x32). 0x47 is their base (hit points +0x180 / +0x184, the knock-back of a hit +0x1A0.., the
 // death 0x17F5F8 / reset 0x17F6B0, vt slots 82 / 83 of its own); 0x48 is the ship Bentley drives (one per hack
@@ -15,6 +17,7 @@
 // them), the bursts at the base's death (0x15C150).
 #include "activate.h"
 #include "game/sly3.h"
+#include "game/task3.h"
 #include "worldglobals.h"
 #include "alo.h"
 #include "cls.h"
@@ -70,115 +73,12 @@ glm::vec3 EulerFromMat(const glm::mat3& m);                   // xfmath.h (0x11B
 float GRandInRange(float gLow, float gHigh);                  // xfmath.h (0x11D448)
 glm::mat3 BuildLookAtMatrix(const glm::vec3& vecX, const glm::vec3& vecY);  // mat.h (0x11B830)
 
-namespace
-{
-float FloatField(const LO* plo, uint32_t ib, float gDefault)
-{
-    uint32_t uDefault;
-    std::memcpy(&uDefault, &gDefault, 4);
-    const uint32_t u = plo->U32Field(0, ib, uDefault);
-    float g;
-    std::memcpy(&g, &u, 4);
-    return g;
-}
+void ActivateHackDock(LO* plo);   // (below: SCPT 0x12 and the method 235)
 
-// A gun of the ship (orig +0x234, 0x18 bytes, up to 4: method 0x10FD00 -> 0x1800A0)
-struct HACKGUN
-{
-    OID oidPart = -1;          // +0x0: the record (tag oid, kind 6) the right stick turns
-    OID oidSm = -1;            // +0x4: the state machine run on the ship (0x68 firing, 0x66 not)
-    XF* pxf = nullptr;         // +0x8 (0x1F4C58)
-    CTRLPOS* pctrl = nullptr;  // +0xC (0x12DC18: priority 0, mode 7, state 2)
-    SM* psm = nullptr;         // +0x10 (0x15E938 kind 4)
-    SMA* psma = nullptr;       // +0x14 (0x1F0380)
-};
+#include "hack.h"
 
-// A state's segment (orig 0x10 bytes: the ship's +0x1C8 x 5 (optid 369 -> 0x1800D8), the enemies' +0x220 x 5
-// (optid 369 -> 0x181308), the docks' +0x1D0 x 3 (0x110140)): {oid, its ASEG (0x6D) or SM (0x6F) found from the object (0x17F408), grfapl}
-struct HACKSEG
+namespace hack
 {
-    OID oid = -1;
-    ASEG* paseg = nullptr;
-    SM* psm = nullptr;
-    int grf = 0;
-};
-
-// An enemy's rule for a state (orig +0x270, 0x28 bytes x 5: methods 0x181330 / 0x181378): the distance / the angle
-// ranges to enter it and to stay in it
-struct HACKRULE
-{
-    int fDistance = 0, fAngle = 0;
-    LM lmEnterDistance{0, 0}, lmStayDistance{0, 0}, lmEnterAngle{0, 0}, lmStayAngle{0, 0};
-};
-
-struct POLY3
-{
-    float a = 0, b = 0, c = 0;
-    float Eval(float t) const { return a + t * (b + t * c); }
-};
-
-// The hack object (cid 0x47 fields +0x180..+0x1C0, the ship's 0x48 fields +0x1C0..+0x2B0)
-struct HACKSO
-{
-    int cHpMax = 10;            // +0x180 (EOPID 1363; 0x17F090: 10)
-    int cHp = 0;                // +0x184 (EOPID 1364)
-    int nPoints = 0;            // +0x188 (EOPID 1365: given at the death, 0x17F5F8)
-    int fDead = 0;              // +0x18C (0x17F5B0 / 0x17F110)
-    LO* ploBurst = nullptr;     // +0x190 (EOPID 1366: burst at the death)
-    float agKnock[4] = {300.0f, 50.0f, 0.0f, 0.0f};  // +0x1A0 (EOPID 1369; D_002BE7D0): g0 + t (g1 + t g2)
-    LM lmKnock{0.0f, 800.0f};   // +0x1B0 (EOPID 1370; D_002BE7E0)
-    // the ship (0x48)
-    int state = -1;             // +0x1C0
-    float tState = 0.0f;        // +0x1C4
-    float radHeading = 0.0f;    // +0x218
-    glm::vec3 vTarget{0.0f};    // +0x220
-    int cgun = 0;               // +0x230
-    HACKGUN agun[4];            // +0x234
-    LO* ploHud = nullptr;       // +0x2A0 (EOPID 1373)
-    CSndRef sndEngine;          // +0x2A4: the engine's loop (0x1FBB90 of +0x2A8)
-    int idSound = -1;           // +0x2A8 (EOPID 1374)
-    float uSound = 0.0f;        // +0x2AC: its volume
-    bool fPostLoaded = false;
-    HACKSEG aseg[5];            // the ship's +0x1C8 / the enemies' +0x220
-    ASEGA* pasegaSeg = nullptr; // +0x194
-    SMA* psmaSeg = nullptr;     // +0x198
-    // the enemies (0x49): +0x1C8 the cool-down flag, +0x1CC busy (their segments' events 0x25..0x28), +0x1D0 the
-    // nav mesh (EOPID 1378), +0x1D4 the target (EOPID 1379), +0x1D8 the path (0x1E94B0(0x2C9, 16)), +0x1DC its place,
-    // +0x1E0 / +0x1F0 the last self / target, +0x200 their time, +0x204 the heading, +0x210 the push, the rules +0x270,
-    // +0x338 the speed scale (EOPID 1382), +0x340 / +0x350 / +0x360 the polynomials (1383..1385), +0x370 the heading's
-    // clamp (1386), +0x378 the turn's {25, 0, 0.25} x r (0x1813C0), +0x384 the push gain 5 x r (0x1813F0)
-    int fCooldown = 0, fBusy = 0;
-    LO* ploNav = nullptr;
-    LO* ploEnemyTarget = nullptr;
-    CRV crvPath;
-    float sPath = 0.0f;
-    glm::vec3 posLastSelf{0.0f}, posLastTarget{0.0f};
-    float tPath = 0.0f;
-    float radEnemyHeading = 0.0f;
-    glm::vec3 vPush{0.0f};
-    HACKRULE arule[5];
-    float gScale = 250.0f;
-    POLY3 polyRemaining{1.0f, 0, 0}, polyAngle{1.0f, 0, 0}, polySimple{0.0f, 1.0f, 0};  // (0x180500: +0x340, +0x350, +0x364 = 1)
-    LM lmSimple{-FLT_MAX, FLT_MAX};
-    float acTurnEnemy[3] = {25.0f, 0.0f, 0.25f};
-    float gPush = 5.0f;
-    int cMove = 0;  // (debug: the slot 70 calls)
-    LO* ploKiller = nullptr;  // (the posted death's argument)
-    LO* ploDock = nullptr;    // the ship's +0x294: its dock point
-    CTRL* pctrlDockPos = nullptr;  // +0x298: the docked ship's position controller (0x12DC18)
-    CTRL* pctrlDockRot = nullptr;  // +0x29C: its rotation's
-    // the docks' state machines to run (+0x200 count, +0x204 x 4 {root oid, SM oid, state on 1, state on 0}: method 526)
-    struct RSMG { OID oidRoot = -1, oidSm = -1, oidOn = -1, oidOff = -1; };
-    std::vector<RSMG> arsmg;
-    // the pieces (0x4A): +0x1C0 the end, +0x1C4 the life (EOPID 1389), +0x1C8 the shooter (method 508), +0x1CC
-    // piercing (EOPID 1388), +0x1D0 the target (EOPID 1390), +0x1D4 the turn rate (EOPID 1391)
-    float tEnd = FLT_MAX;
-    float dtLife = 0.0f;
-    LO* ploShooter = nullptr;
-    int fPierce = 0;
-    LO* ploTarget = nullptr;
-    float radTurnRate = 0.0f;
-};
 std::unordered_map<const LO*, HACKSO> s_mphack;
 WORLD_TABLE(s_mphack);   // (PC: moved aside while a kept world loads, worldglobals.h)
 LO* s_ploShip = nullptr;  // D_002DFB80: the ship (0x17F6F8)
@@ -215,9 +115,35 @@ void SetEnemyTurnScale(HACKSO& h, float r)
     h.acTurnEnemy[2] = 0.25f;
 }
 
+// (the instance's own stores first: a clone copies its template's fields (brx.cpp PloCloneLo) and then takes its own
+// options, e.g. the Ep4 webcam's cage carriers 78381: the template's scale +0x338 (Sly 3 +0x3A0, EOPID 1576) is 0 (it
+// stays put), the instances' 250 (they chase), as the reference's +0x3A0; reading the template's only kept every cage
+// still. Fields the instance never stored come from its template)
+struct HACKFIELDS
+{
+    const LO* plo;
+    const LO* pfrom;
+    uint32_t U32Field(uint32_t pfn, uint32_t ib, uint32_t uDefault) const
+    {
+        constexpr uint32_t uNone = 0xDEADBEEFu;
+        if (const uint32_t u = plo->U32Field(pfn, ib, uNone); u != uNone) return u;
+        return pfrom->U32Field(pfn, ib, uDefault);
+    }
+};
+float FloatField(const HACKFIELDS* pf, uint32_t ib, float gDefault)
+{
+    uint32_t uDefault;
+    std::memcpy(&uDefault, &gDefault, 4);
+    const uint32_t u = pf->U32Field(0, ib, uDefault);
+    float g;
+    std::memcpy(&g, &u, 4);
+    return g;
+}
+
 void LoadHackFields(LO* plo, HACKSO& h)
 {
-    const LO* pfrom = plo->ploCloneOf ? plo->ploCloneOf : plo;
+    const HACKFIELDS fields{plo, plo->ploCloneOf ? plo->ploCloneOf : plo};
+    const HACKFIELDS* pfrom = &fields;
     h.cHpMax = static_cast<int>(pfrom->U32Field(0, 0x180, 10));
     h.cHp = static_cast<int>(pfrom->U32Field(0, 0x184, 0));
     h.nPoints = static_cast<int>(pfrom->U32Field(0, 0x188, 0));
@@ -225,6 +151,13 @@ void LoadHackFields(LO* plo, HACKSO& h)
     h.lmKnock.gMin = FloatField(pfrom, 0x1B0, 0.0f);
     h.lmKnock.gMax = FloatField(pfrom, 0x1B4, 800.0f);
     h.idSound = static_cast<int>(pfrom->U32Field(0, 0x2A8, static_cast<uint32_t>(-1)));
+    // orig3: every hack object's hit points (the base's init 0x19B420: 10, then EOPID 937, the SO's maximum 0x1F43F8),
+    // not only the enemies' / the ship's: e.g. the Ep4 webcam's cage rings 78385 have 25 (the reference's +0x16C: 3
+    // shots a ring); natively the rings started with Sly 2's field +0x184 (0: Sly 3's base has no post-load reset)
+    // and broke at one shot. Full here; the world start's slot 31 (0x19B668, hack3.cpp StartHackSo3) fills them again
+    // once the loader's later options (an instance's own 937) are in
+    h.cHpMax = NHackHpMax3(plo, h.cHpMax);
+    h.cHp = h.cHpMax;
     if (plo->Cid() == S3CID(0x4A))
     {
         h.nPoints = static_cast<int>(pfrom->U32Field(0, 0x188, 10));  // (0x180188: 10)
@@ -247,12 +180,14 @@ void LoadHackFields(LO* plo, HACKSO& h)
         // EOPIDs 1376 / 1377 are setters (0x1813C0: +0x378 = D_002BE870 {25, 0, 0.25} x r but +0x380 unscaled;
         // 0x1813F0: +0x384 = D_002BE87C 5 x r): the loaded option's value is r, not the field (UH3: world 15's chasers
         // 27921 have 1377 = 0.5, so they accelerate at half the default)
-        for (const OPT& o : pfrom->aopt)
-        {
-            if (o.aval.empty()) continue;
-            if (o.eopid == S3EOPID(1376)) SetEnemyTurnScale(h, o.aval[0].ag[0]);
-            if (o.eopid == S3EOPID(1377)) h.gPush = 5.0f * o.aval[0].ag[0];
-        }
+        // (the template's options, then the instance's own)
+        for (const LO* po : {fields.pfrom, fields.pfrom != plo ? static_cast<const LO*>(plo) : nullptr})
+            for (const OPT& o : po ? po->aopt : std::vector<OPT>{})
+            {
+                if (o.aval.empty()) continue;
+                if (o.eopid == S3EOPID(1376)) SetEnemyTurnScale(h, o.aval[0].ag[0]);
+                if (o.eopid == S3EOPID(1377)) h.gPush = 5.0f * o.aval[0].ag[0];
+            }
     }
     for (const auto& [ib, p] : static_cast<ALO*>(plo)->apart)
     {
@@ -273,6 +208,22 @@ HACKSO& Hack(LO* plo)
     HACKSO& h = s_mphack[plo];
     const LO* pfrom = plo->ploCloneOf ? plo->ploCloneOf : plo;
     LoadHackFields(plo, h);
+    if (FPrint2() && plo->Cid() == S3CID(0x47))  // (debug: a base hack object's record made: its hit points, options, fields)
+    {
+        std::printf("hack %d (cid 0x%X): made, hp %d/%d:", plo->oid, plo->Cid(), h.cHp, h.cHpMax);
+        for (const LO* p = plo; p; p = p->ploCloneOf != p ? p->ploCloneOf : nullptr)
+        {
+            for (const OPT& o : p->aopt)
+            {
+                std::printf(" {e%d", o.eopid);
+                for (const OPTVAL& v : o.aval) std::printf(" k%d %g/%d", v.k, double(v.ag[0]), v.n);
+                std::printf("}");
+            }
+            for (const auto& [k, u] : p->afield) std::printf(" +0x%X=%08X", static_cast<unsigned>(k & 0xFFFFFFFFu), u);
+            std::printf(" |");
+        }
+        std::printf("\n");
+    }
     if (auto itSrc = s_mphack.find(pfrom); pfrom != plo && itSrc != s_mphack.end())
     {
         h.cgun = itSrc->second.cgun;
@@ -281,7 +232,7 @@ HACKSO& Hack(LO* plo)
             h.agun[i].oidPart = itSrc->second.agun[i].oidPart;
             h.agun[i].oidSm = itSrc->second.agun[i].oidSm;
         }
-        for (int i = 0; i < 5; ++i)
+        for (int i = 0; i < 6; ++i)
         {
             h.aseg[i].oid = itSrc->second.aseg[i].oid;
             h.aseg[i].grf = itSrc->second.aseg[i].grf;
@@ -316,6 +267,11 @@ void PlayHackSeg(LO* plo, HACKSO& h, const HACKSEG* pe);
 // orig: 0x0017FD08 (the ship's state: -1 out, 0 idle, 1 driven, 2 hit, 3 docked, 4 destroyed)
 void SetShipState(LO* plo, int n)
 {
+    if (FHackShip3(plo))  // (Sly 3's ship: its own states 0x19C570, hack3.cpp)
+    {
+        SetHackShip3State(plo, n);
+        return;
+    }
     HACKSO& h = Hack(plo);
     const int old = h.state;
     if (n == old) return;
@@ -425,7 +381,7 @@ void SetShipState(LO* plo, int n)
             }
 }
 
-// orig: 0x0017F550 (the state's segment done: the ASEGA retracted, else the SMA at its goal, else true)
+// orig: 0x0017F550 (the state's segment done: the ASEGA retracted, else the SMA at its goal, else true) (orig3: 0x19BAA0, the same C in the Sly 3 decomp)
 bool FShipSegmentDone(LO* plo)
 {
     HACKSO& h = Hack(plo);
@@ -492,6 +448,78 @@ void BindShipGuns(LO* plo, HACKSO& h)
     }
 }
 
+// (debug: SLY2N_HACKMAP=file: once driven, the in-world collision edges near the ship's height (x0 y0 x1 y1 oid per
+// line) and the hack objects (o oid cid x y); hack3.cpp's ship too)
+void DumpHackMapOnce(LO* plo, int state)
+{
+    HACKSO& h = Hack(plo);
+    (void)h;
+    // (debug: SLY2N_HACKMAP=file: once driven, the in-world collision edges near the ship's height (x0 y0 x1 y1 oid
+    // per line) and the hack objects (o oid cid x y))
+    // (after the deferred proxy attachments of the load's first frames: the level's instances, e.g. the enemies)
+    if (static const char* s_szMap = std::getenv("SLY2N_HACKMAP"); s_szMap && state == 1 && g_clock.t > (std::getenv("SLY2N_HACKMAPT") ? std::atof(std::getenv("SLY2N_HACKMAPT")) : 0.5f))
+        if (static bool s_fDone = false; !s_fDone)
+        {
+            s_fDone = true;
+            if (FILE* pf = std::fopen(s_szMap, "w"))
+            {
+                const float z = PosAloCenter(Palo(plo)).z;
+                for (const auto& up : g_psw->aploAll)
+                {
+                    LO* p = up.get();
+                    if (static const int s_oid = std::getenv("SLY2N_HACKMAPOID") ? std::atoi(std::getenv("SLY2N_HACKMAPOID")) : -2; p->oid == s_oid)
+                    {
+                        if (FCidDerivedFrom(p->Cid(), S3CID(0x30))) std::printf("hackmap: pos %.0f %.0f %.0f parent %d\n", PosAloCenter(Palo(p)).x, PosAloCenter(Palo(p)).y, PosAloCenter(Palo(p)).z, p->paloParent ? p->paloParent->oid : -1);
+                        std::printf("hackmap: %d cid 0x%X inworld %d alo %d soes %zu geom %zu %zu %zu world %zu %zu\n", p->oid, p->Cid(), p->fInWorld, FCidDerivedFrom(p->Cid(), S3CID(0x30)),
+                                    Palo(p)->asoe.size(), Palo(p)->asoe.empty() ? 0 : Palo(p)->asoe[0].geomLocal.apos.size(), Palo(p)->asoe.empty() ? 0 : Palo(p)->asoe[0].geomLocal.asurf.size(), Palo(p)->asoe.empty() ? 0 : Palo(p)->asoe[0].geomLocal.aedge.size(), Palo(p)->asoe.empty() ? 0 : Palo(p)->asoe[0].geomWorld.apos.size(), Palo(p)->asoe.empty() ? 0 : Palo(p)->asoe[0].geomWorld.aedge.size());
+                    }
+                    if (std::getenv("SLY2N_HACKMAPOID") && p->oid == std::atoi(std::getenv("SLY2N_HACKMAPOID")) && FCidDerivedFrom(p->Cid(), S3CID(0x30)))
+                        for (LO* pc : Palo(p)->aploChild) std::printf("hackmap:   child %d cid 0x%X inworld %d soes %zu\n", pc->oid, pc->Cid(), pc->fInWorld, FCidDerivedFrom(pc->Cid(), S3CID(0x30)) ? Palo(pc)->asoe.size() : size_t(0));
+                    if ((!p->fInWorld && !std::getenv("SLY2N_HACKMAPALL")) || !FCidDerivedFrom(p->Cid(), S3CID(0x30))) continue;
+                    if (FCidDerivedFrom(p->Cid(), S3CID(0x47)) || p->Cid() == 0x5D)
+                    {
+                        const glm::vec3 v = PosAloCenter(Palo(p));
+                        std::fprintf(pf, "o %d %x %.1f %.1f\n", p->oid, p->Cid(), v.x, v.y);
+                    }
+                    for (const SOE& e : Palo(p)->asoe)
+                    {
+                        // (the world geometry, else the local one by the entry's record: a still object's world copy
+                        // is made only once it moves)
+                        const bool fWorld = !e.geomWorld.aedge.empty();
+                        const GEOM& g = fWorld ? e.geomWorld : e.geomLocal;
+                        XF* pxfE = e.pxf ? e.pxf : PxfObj(Palo(p));
+                        const glm::mat4 m = fWorld || !pxfE ? glm::mat4(1.0f) : pxfE->matWorld;
+                        for (const EDGE& ed : g.aedge)
+                        {
+                            if (ed.ipos0 >= g.apos.size() || ed.ipos1 >= g.apos.size()) continue;
+                            const glm::vec3 a = glm::vec3(m * glm::vec4(g.apos[ed.ipos0], 1.0f)), b = glm::vec3(m * glm::vec4(g.apos[ed.ipos1], 1.0f));
+                            if (std::fabs(a.z - z) > 3000.0f && std::fabs(b.z - z) > 3000.0f && !std::getenv("SLY2N_HACKMAPALL")) continue;
+                            std::fprintf(pf, "%.1f %.1f %.1f %.1f %d %.0f %.0f\n", a.x, a.y, b.x, b.y, p->oid, a.z, b.z);
+                        }
+                        // (the vertical surfaces as wall segments: their edges' points' xy extent, "w x0 y0 x1 y1 oid")
+                        for (size_t is = 0; is < g.asurf.size(); ++is)
+                        {
+                            std::vector<glm::vec3> av;
+                            const SURF& su = g.asurf[is];
+                            if (std::fabs(su.normal.z) > 0.3f) continue;
+                            for (const glm::vec3& q : g.apos)
+                                if (std::fabs(glm::dot(su.normal, q) - su.gDot) < 2.0f) av.push_back(glm::vec3(m * glm::vec4(q, 1.0f)));
+                            if (av.size() < 2) continue;
+                            glm::vec3 vA = av[0], vB = av[0];
+                            float dMax = -1.0f;
+                            for (const glm::vec3& u : av)
+                                for (const glm::vec3& w : av)
+                                    if (const float dd = glm::length(glm::vec2(u - w)); dd > dMax) { dMax = dd; vA = u; vB = w; }
+                            if (dMax < 1.0f || (std::fabs(vA.z - z) > 3000.0f && !std::getenv("SLY2N_HACKMAPALL"))) continue;
+                            std::fprintf(pf, "w %.1f %.1f %.1f %.1f %d\n", vA.x, vA.y, vB.x, vB.y, p->oid);
+                        }
+                    }
+                }
+                std::fclose(pf);
+            }
+        }
+}
+
 // orig: 0x0017F930 (vt slot 16)
 void UpdateShip(LO* plo)
 {
@@ -530,7 +558,7 @@ void UpdateShip(LO* plo)
         // the guns: the right stick's heading, firing while it is deflected (QoL, hackmouse.h: with the keyboard /
         // mouse the cursor's heading, firing while left click is held; the stick (camera keys) still fires unclicked)
         float radAim = ppc->radJoy2;
-        bool fFire = 0.0f < ppc->uJoy2;
+        bool fFire = sly2actions::Applies(ppc) ? sly2actions::Held(sly2actions::Action::HackFire) : 0.0f < ppc->uJoy2;
         float radMouse = 0.0f;
         bool fMouse = false;
         if (FHackMouseAim(plo, &radMouse, &fMouse) && (fMouse || !fFire))
@@ -592,36 +620,7 @@ void UpdateShip(LO* plo)
             h.cHp = std::atoi(s_szHp);
             s_t = FLT_MAX;
         }
-    // (debug: SLY2N_HACKMAP=file: once driven, the in-world collision edges near the ship's height (x0 y0 x1 y1 oid
-    // per line) and the hack objects (o oid cid x y))
-    if (static const char* s_szMap = std::getenv("SLY2N_HACKMAP"); s_szMap && h.state == 1)
-        if (static bool s_fDone = false; !s_fDone)
-        {
-            s_fDone = true;
-            if (FILE* pf = std::fopen(s_szMap, "w"))
-            {
-                const float z = PosAloCenter(Palo(plo)).z;
-                for (const auto& up : g_psw->aploAll)
-                {
-                    LO* p = up.get();
-                    if (!p->fInWorld || !FCidDerivedFrom(p->Cid(), S3CID(0x30))) continue;
-                    if (FCidDerivedFrom(p->Cid(), S3CID(0x47)))
-                    {
-                        const glm::vec3 v = PosAloCenter(Palo(p));
-                        std::fprintf(pf, "o %d %x %.1f %.1f\n", p->oid, p->Cid(), v.x, v.y);
-                    }
-                    for (const SOE& e : Palo(p)->asoe)
-                        for (const EDGE& ed : e.geomWorld.aedge)
-                        {
-                            if (ed.ipos0 >= e.geomWorld.apos.size() || ed.ipos1 >= e.geomWorld.apos.size()) continue;
-                            const glm::vec3 a = e.geomWorld.apos[ed.ipos0], b = e.geomWorld.apos[ed.ipos1];
-                            if (std::fabs(a.z - z) > 3000.0f && std::fabs(b.z - z) > 3000.0f) continue;
-                            std::fprintf(pf, "%.1f %.1f %.1f %.1f %d\n", a.x, a.y, b.x, b.y, p->oid);
-                        }
-                }
-                std::fclose(pf);
-            }
-        }
+    DumpHackMapOnce(plo, h.state);
     // the engine's loop: its volume smoothed toward the stick's deflection while driven (0x11D018 D_002BE7F0 {1, 0,
     // 0.5}), set (0x1FB1F8); heard while above 0 (0x1FB060 resume / 0x1FB018 pause)
     if (h.sndEngine)
@@ -663,11 +662,16 @@ void MoveShip(ALO* palo)
 
 // orig: 0x0017F5F8 (vt slot 82: dead: the points given to the killer (0x1F7598: {p, 0, killer, filter 0x100, -points,
 // the position, the velocity}), the burst +0x190 (0x15C150), removed (vt slot 9))
+void SetEnemyState(LO* plo, int n);
 void KillHackSo(LO* plo, LO* ploKiller)
 {
     HACKSO& h = Hack(plo);
-    if (FPrint()) std::printf("hack %d (cid 0x%X): killed by %d (points %d) at t %.3f\n", plo->oid, plo->Cid(),
-                              ploKiller ? ploKiller->oid : -1, h.nPoints, g_clock.t);
+    if (FPrint())
+    {
+        const glm::vec3 pos = PosAloCenter(Palo(plo)), v = VelAloPos(Palo(plo));
+        std::printf("hack %d (cid 0x%X): killed by %d (points %d, shooter %d) at t %.3f pos %.0f %.0f %.0f v %.0f %.0f %.0f\n", plo->oid, plo->Cid(),
+                    ploKiller ? ploKiller->oid : -1, h.nPoints, h.ploShooter ? h.ploShooter->oid : -1, g_clock.t, pos.x, pos.y, pos.z, v.x, v.y, v.z);
+    }
     if (ploKiller && h.nPoints)
     {
         CTMSG m;
@@ -676,11 +680,15 @@ void KillHackSo(LO* plo, LO* ploKiller)
         m.pos = PosAloCenter(Palo(plo));
         m.vec = VelAloPos(Palo(plo));  // vt slot 33
         m.grfFilter = 0x100;
-        m.nState = -h.nPoints;
+        m.nState = h.nPoints;  // (Sly 3's sign: 0x240CB0's amount is the points, positive: damage)
         PaloAcceptContact(&m);
     }
     if (h.ploBurst) ExplodeLo(h.ploBurst, nullptr);  // 0x15C150 (slot 51 with empty parameters; audit 2026-11 H4)
-    RemoveLo(g_psw, plo);  // vt slot 9
+    // (Sly 3's 0x19BB78 ends with vt slot 93: the base's 0x19BC38 removes it (vt slot 9), the ship's 0x19C550 starts its
+    // dying state 6, hack3.cpp)
+    if (FHackShip3(plo)) SetHackShip3State(plo, 6);
+    else if (plo->Cid() == S3CID(0x49)) SetEnemyState(plo, 5);  // (orig3 0x19CF40: the enemies' dying state)
+    else RemoveLo(g_psw, plo);  // vt slot 9
 }
 
 void KillSwarm(LO* plo, LO* ploOther);  // (below: the swarms' vt slot 82)
@@ -702,12 +710,38 @@ void PostKillHackSo(LO* plo, LO* ploKiller)
 // orig: 0x0017F1D0 (a hit: contact bytes 8: the hit points by the message's +0x10; none left: dead (vt slot 82);
 // else knocked away from the contact's point in the plane (the speed g0 + t (g1 + t g2), t = -damage, in
 // [gMin, gMax]), the velocity clamped to gMax and constrained (0x1FA810) unless the linear constraint is fixed)
+// Sly 3 (orig3: 0x0019B6E0, vt slot 78 of the base): the receiver's contact bytes 2 (Sly 2's 8: Sly 3's hack objects
+// answer filter 0x100 with 2, so no hit ever landed natively: the ship's hit points never dropped, its shots hurt
+// nothing); the hit points less the amount (Sly 3's sign: positive is damage, as the sensors' SOE amounts and the death's
+// 0x240CB0 message, whose amount is the sender's +0x190 points, 10 for a piece), in [0, max] (0x1F43D0); the amount
+// scaled by 0x172268 when the receiver is a player's (D_0036BD20's row: 1 .. 0.5 by the suck; the reference's ship
+// loses 10 a hit, peeked at +0x16C)
+int NScaleHackDamage3(LO* plo, int n)
+{
+    if (!g_psw || plo != PloPoCurrent(g_psw)) return n;  // 0x1F4350(receiver, -1)
+    const float g = GSuck3();                              // 0x171C98: Sly 3's suck (game/suck3.h; Sly 2's GSuck read Sly 2's value)
+    int v = static_cast<int>(((1.0f - g) * 1.0f + g * 0.5f) * static_cast<float>(n));
+    if (n > 0 && v <= 1) v = 1;
+    return v;
+}
+
 bool FHackSoHit(LO* plo, CTMSG* pctm)
 {
-    if (!(pctm->grfAccepted & 8)) return false;
+    if (!(pctm->grfAccepted & 2)) return false;
     HACKSO& h = Hack(plo);
-    h.cHp += pctm->nState;
-    if (FPrint()) std::printf("hack %d: hit %d -> hp %d at t %.3f\n", plo->oid, pctm->nState, h.cHp, g_clock.t);
+    if (pctm->fKill3) h.cHp = 0;  // (+0x28: the instant kill, e.g. SCPT 0x6B's A3)
+    else h.cHp = std::clamp(h.cHp - NScaleHackDamage3(plo, pctm->nState), 0, std::max(h.cHpMax, 0));  // 0x1F43D0: in [0, max]
+    // (debug: SLY2N_HACKNODIE=1: a ship's hits counted (printed) but its last one refills it: a route's cost measured)
+    if (static const bool s_fNoDie = std::getenv("SLY2N_HACKNODIE") != nullptr; s_fNoDie && h.cHp <= 0 && FShip(plo)) h.cHp = h.cHpMax;
+    if (FPrint())
+    {
+        LO* ploShooter = pctm->ploSender && FHackSo(pctm->ploSender) ? Hack(pctm->ploSender).ploShooter : nullptr;
+        const glm::vec3 posShooter = ploShooter && FCidDerivedFrom(ploShooter->Cid(), S3CID(0x30)) ? PosAloCenter(Palo(ploShooter)) : glm::vec3(0.0f);
+        const glm::vec3 posSelf = PosAloCenter(Palo(plo));
+        std::printf("hack %d: hit %d -> hp %d at t %.3f (from %d cid 0x%X, shooter %d at %.0f %.0f; self at %.0f %.0f)\n", plo->oid, pctm->nState, h.cHp, g_clock.t,
+                    pctm->ploSender ? pctm->ploSender->oid : -1, pctm->ploSender ? pctm->ploSender->Cid() : 0, ploShooter ? ploShooter->oid : -1, posShooter.x,
+                    posShooter.y, posSelf.x, posSelf.y);
+    }
     if (h.cHp <= 0)
     {
         KillHackSo(plo, nullptr);  // vt slot 82 with no killer: no points message (audit 2026-11 H3)
@@ -720,7 +754,7 @@ bool FHackSoHit(LO* plo, CTMSG* pctm)
     d -= glm::vec3(0.0f, 0.0f, 1.0f) * d.z;  // the plane normal to D_002A2DC0 (z)
     const float len = std::sqrt(d.x * d.x + d.y * d.y + d.z * d.z);
     const glm::vec3 dir = len < 0.0001f ? glm::vec3(1.0f, 0.0f, 0.0f) : d / len;  // (else D_002A2DA0)
-    const float t = static_cast<float>(-pctm->nState);
+    const float t = static_cast<float>(pctm->nState);  // (0x19B6E0: the amount)
     const float g = std::clamp(h.agKnock[0] + t * (h.agKnock[1] + t * h.agKnock[2]), h.lmKnock.gMin, h.lmKnock.gMax);
     glm::vec3 v = VelAloPos(palo) + dir * g;  // vt slot 33
     const float sv = std::sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
@@ -816,10 +850,17 @@ void SetEnemyState(LO* plo, int n)
     HACKSO& h = Hack(plo);
     if (h.state == n) return;
     if (h.state == -1) h.cHp = h.cHpMax;
-    if (FPrint()) std::printf("hack enemy %d: state %d -> %d at t %.3f\n", plo->oid, h.state, n, g_clock.t);
+    if (FPrint())
+    {
+        const glm::mat4 mw = MatWorldOfAlo(Palo(plo));
+        std::printf("hack enemy %d: state %d -> %d at t %.3f (pos %.0f %.0f heading %.2f world x %.2f %.2f)\n", plo->oid, h.state, n, g_clock.t,
+                    PosAloCenter(Palo(plo)).x, PosAloCenter(Palo(plo)).y, h.radEnemyHeading, mw[0].x, mw[0].y);
+    }
     h.state = n;
     h.tState = g_clock.t;
     if (n != 3) h.vPush = glm::vec3(0.0f);  // (+0x210's first 3 words)
+    // orig3: 0x19DC10: state 5 (dying, Sly 3's) is the task event 0x10 with the enemy (0x1854C8(D_0036C700, 0x10, p))
+    if (n == 5) Broadcast3(0x10, plo);  // (Sly 3's code 0x10 as is: BroadcastTaskEvent would translate Sly 2's 0x10, the player's death, and reload the checkpoint)
     PlayHackSeg(plo, h, n == -1 ? nullptr : &h.aseg[n]);
 }
 
@@ -840,6 +881,25 @@ void ResetEnemySlot26(LO* plo, LO* pproxy)
     if (FHackSo(plo)) SetEnemyState(plo, 0);
 }
 NATIVEFN(0x180638, ResetEnemySlot26);
+// orig3: 0x0019B668 (HACKSO's vt slot 31, a pool row taken again: the base's 0x1F3C48, the hit points to the maximum,
+// out of the weight list 0x19BB00(p, 0, 0)). Its fnmap pair with 0x17F170 scores 49 (below the dispatch's 50), so the
+// slot fell back to the base's and a reused hack object kept the hit points of its death (MODES-24)
+NATIVEFN3(0x19B668, ResetHackSoSlot26);
+// orig3: 0x0019CED8 (the enemies' vt slot 31): 0x19B668, state 0 (0x19DC10), the last hitter +0x3F8 cleared. The fnmap
+// paired it with the wrong twin 0x1AE970 (score 49): a reused enemy kept its old state (-1 / 5) (MODES-05)
+void ResetEnemySlot31_3(LO* plo, LO* pproxy)
+{
+    ResetEnemySlot26(plo, pproxy);
+    SetHackEnemyHitBy3(plo, nullptr);
+}
+NATIVEFN3(0x19CED8, ResetEnemySlot31_3);
+// orig3: 0x0019CA28 (the pieces' vt slot 31): 0x19B668, then the end time +0x1F0 = FLT_MAX (D_00321FD0) (MODES-23)
+void ResetPieceSlot31_3(LO* plo, LO* pproxy)
+{
+    ResetHackSoSlot26(plo, pproxy);
+    if (FHackSo(plo)) Hack(plo).tEnd = FLT_MAX;
+}
+NATIVEFN3(0x19CA28, ResetPieceSlot31_3);
 
 LM LmArg(const std::vector<CRef>& a, size_t i)  // (an LM argument: the CRef's vector x / y)
 {
@@ -866,19 +926,71 @@ glm::vec3 VecToObject(ALO* palo, const glm::vec3& v)  // 0x1A6FC0(0, p, v): a wo
     return glm::transpose(glm::mat3(m)) * v;
 }
 
-// orig: 0x00180668 (vt slot 16)
+// orig: 0x00180668 (vt slot 16) / orig3: 0x0019CF60 (vt slot 18: Sly 3's: the dying state 5 (out of the world when
+// its segment ends), the target chosen by the enemy itself (0x19BC68), 6 rules)
+LO* PloEnemyTarget3(LO* plo, HACKSO& h)  // orig3: 0x0019BC68 (the nearest ship (0x4A) of another side; the current one
+{                                          // counts 500 nearer)
+    (void)h;
+    LO* pBest = nullptr;
+    float gBest = FLT_MAX;
+    const glm::vec3 pos = PosAloCenter(Palo(plo));
+    for (LO* po : AploOfClass(g_psw, S3CID(0x48)))
+    {
+        if (!po->fInWorld || !FHackSo(po) || HackSide3(po) == HackSide3(plo)) continue;
+        const glm::vec3 d = PosAloCenter(Palo(po)) - pos;
+        float g = std::sqrt(d.x * d.x + d.y * d.y + d.z * d.z);
+        if (po == h.ploEnemyTarget) g -= 500.0f;
+        if (g < gBest)
+        {
+            gBest = g;
+            pBest = po;
+        }
+    }
+    return pBest;
+}
 void UpdateEnemy(LO* plo)
 {
     if (FPrint2() && static_cast<int>(g_clock.t * 60.0f) % 60 == 0)
-        std::printf("hack enemy %d t %.2f: next update %.3f in world %d\n", plo->oid, g_clock.t, plo->tNextUpdate, plo->fInWorld);
+        std::printf("hack enemy %d t %.2f: next update %.3f in world %d busy %d keep %d target %d\n", plo->oid, g_clock.t, plo->tNextUpdate, plo->fInWorld,
+                    Hack(plo).fBusy, Hack(plo).fKeepTarget, Hack(plo).ploEnemyTarget ? Hack(plo).ploEnemyTarget->oid : -1);
     if (PFNUPDATE pfn = PfnUpdateOrig(0x1F36E0)) pfn(plo);
     HACKSO& h = Hack(plo);
     ALO* palo = Palo(plo);
+    // (debug: SLY2N_HACKWATCH=oid: that enemy's state / hit points / place every 30 frames)
+    if (static const int s_oidWatch = std::getenv("SLY2N_HACKWATCH") ? std::atoi(std::getenv("SLY2N_HACKWATCH")) : 0; s_oidWatch == plo->oid)
+        if (static int s_c = 0; s_c++ % 30 == 0)
+        {
+            const glm::vec3 v = PosAloCenter(palo);
+            std::printf("hackwatch %d t %.2f: state %d hp %d at %.0f %.0f target %d\n", plo->oid, g_clock.t, h.state, h.cHp, v.x, v.y,
+                        h.ploEnemyTarget ? h.ploEnemyTarget->oid : -1);
+            for (const HACKRULE& r : h.arule)
+                std::printf("   [%d %d e%.0f..%.0f s%.0f..%.0f a%.2f..%.2f sa%.2f..%.2f]\n", r.fDistance, r.fAngle, r.lmEnterDistance.gMin, r.lmEnterDistance.gMax,
+                            r.lmStayDistance.gMin, r.lmStayDistance.gMax, r.lmEnterAngle.gMin, r.lmEnterAngle.gMax, r.lmStayAngle.gMin, r.lmStayAngle.gMax);
+        }
     if (h.state == 2 || h.state == 4)
+    {
         if (FShipSegmentDone(plo)) SetEnemyState(plo, 0);
+    }
+    else if (h.state == 5)
+    {
+        if (FShipSegmentDone(plo))
+        {
+            RemoveLo(g_psw, plo);  // vt slot 9
+            return;
+        }
+    }
+    if (!h.fBusy && !h.fKeepTarget)
+    {
+        LO* pt = PloEnemyTarget3(plo, h);
+        if (pt != h.ploEnemyTarget)
+        {
+            SetEnemyState(plo, 0);
+            h.ploEnemyTarget = pt;
+        }
+    }
     LO* pt = h.ploEnemyTarget;
     const bool fAlive = pt && pt->fInWorld;  // ((flags >> 60) & 1)
-    if (h.state != 0 && h.state != 4 && !fAlive) SetEnemyState(plo, 0);
+    if (h.state != 0 && h.state != 4 && h.state != 5 && !fAlive) SetEnemyState(plo, 0);
     if (!h.fBusy && fAlive && FCidDerivedFrom(pt->Cid(), S3CID(0x30)))
     {
         const glm::vec3 d = PosAloCenter(static_cast<ALO*>(pt)) - PosAloCenter(palo);
@@ -886,16 +998,15 @@ void UpdateEnemy(LO* plo)
         const glm::vec3 dl = VecToObject(palo, d);
         const float rad = RadNormalize(std::atan2(dl.y, dl.x));
         if (FPrint() && static_cast<int>(g_clock.t * 60.0f) % 60 == 0)
-            std::printf("hack enemy %d t %.2f: state %d dist %.0f rad %.2f pos %.0f %.0f heading %.2f moves %d recs %d %d sost %d\n", plo->oid,
-                        g_clock.t, h.state, dist, rad, PosAloCenter(palo).x, PosAloCenter(palo).y, h.radEnemyHeading, h.cMove,
-                        PxfPos(palo) ? PxfPos(palo)->mode : -9, PxfRot(palo) ? PxfRot(palo)->mode : -9, Psost(palo) ? Psost(palo)->cnstrAng.kind * 10 + Psost(palo)->cnstrLin.kind : -1);
-        const HACKRULE* pr = &h.arule[std::clamp(h.state, 0, 4)];
+            std::printf("hack enemy %d t %.2f: state %d dist %.0f rad %.2f pos %.0f %.0f heading %.2f\n", plo->oid,
+                        g_clock.t, h.state, dist, rad, PosAloCenter(palo).x, PosAloCenter(palo).y, h.radEnemyHeading);
+        const HACKRULE* pr = &h.arule[std::clamp(h.state, 0, 5)];
         bool fStay = pr->fDistance ? FInLm(pr->lmStayDistance, dist) : pr->fAngle;
         if (fStay && pr->fAngle) fStay = FInLm(pr->lmStayAngle, rad);
         if (!fStay)
         {
             int st;
-            for (st = 4; st > 0; --st)
+            for (st = 5; st > 0; --st)
             {
                 pr = &h.arule[st];
                 bool f = pr->fDistance ? FInLm(pr->lmEnterDistance, dist) : pr->fAngle;
@@ -927,6 +1038,8 @@ void UpdateEnemy(LO* plo)
         if (100.0f < len(posT - h.posLastTarget) || 100.0f < len(posS - h.posLastSelf) || 5.0f < g_clock.t - h.tPath)
         {
             // 0x1C02D0: the nav path into the curve (+0x1D0 the mesh's region)
+            // (Sly 3: a spawned instance's mesh field (+0x200) is stored when it is acquired, after its post-load)
+            if (!h.ploNav) h.ploNav = PloEnemyNav3(plo);
             NAVREGION* preg = h.ploNav ? PregionOfMesh(dynamic_cast<LOXMESH*>(h.ploNav)) : nullptr;
             if (preg) FNavPathCrv(preg, posS, posT, &h.crvPath);
             h.sPath = 0.0f;
@@ -945,7 +1058,7 @@ void UpdateEnemy(LO* plo)
         auto lim01 = [](float g) { return std::clamp(g, 0.0f, 1.0f); };  // (D_002BBB60)
         const POLY3 polySuck{1.0f, -0.5f, 0.0f};  // (D_002BE830)
         const float sv = lim01(h.polyRemaining.Eval(sRemaining)) * lim01(h.polyAngle.Eval(radTurn)) *
-                         lim01(polySuck.Eval(GSuck())) * h.gScale;
+                         lim01(polySuck.Eval(GSuck3())) * h.gScale;  // (orig3 0x19D534: 0x171C98)
         glm::vec3 v = u * sv;
         // the other enemies (0x15E9C8 class 0x49) of other attachments push it away in the plane
         for (LO* po : AploOfClass(g_psw, S3CID(0x49)))
@@ -966,7 +1079,7 @@ void UpdateEnemy(LO* plo)
         if (static const bool s_f = std::getenv("SLY2N_HACKCHASEPRINT") != nullptr; s_f)  // (debug: the chasers per frame)
         {
             std::printf("hack chase %p t %.3f: pos %.2f %.2f s %.1f rem %.1f sv %.1f v %.1f %.1f suck %.3f push %.3f opts %zu\n", (void*)plo, g_clock.t, posS.x, posS.y,
-                        h.sPath, sRemaining, sv, h.vPush.x, h.vPush.y, GSuck(), h.gPush, (plo->ploCloneOf ? plo->ploCloneOf : plo)->aopt.size());
+                        h.sPath, sRemaining, sv, h.vPush.x, h.vPush.y, GSuck3(), h.gPush, (plo->ploCloneOf ? plo->ploCloneOf : plo)->aopt.size());
             if (s_f && h.sPath == 0.0f) for (const OPT& o : (plo->ploCloneOf ? plo->ploCloneOf : plo)->aopt) std::printf("  opt eopid %d n %zu g %g\n", o.eopid, o.aval.size(), o.aval.empty() ? 0.0 : double(o.aval[0].ag[0]));
         }
         break;
@@ -981,7 +1094,9 @@ void MoveEnemy(ALO* palo)
 {
     HACKSO& h = Hack(palo);
     ++h.cMove;
-    if (h.state != 4)
+    // orig3: 0x19D898: the separation 0x19F6D8 first; not turned while hit or dying (4 / 5)
+    SeparateEnemy3(palo);
+    if (h.state != 4 && h.state != 5)
     {
         glm::mat3 m = MatRotateAxis(h.radEnemyHeading, glm::vec3(0.0f, 0.0f, 1.0f));
         if (h.state != 3)
@@ -1003,12 +1118,15 @@ void MoveEnemy(ALO* palo)
 // orig: 0x001811B8 (vt slot 75 of the enemies: not while dying; a hit: none left: the task event 0x18; state 4)
 bool FAcceptEnemyContact(ALO* palo, CTMSG* pctm)
 {
+    // orig3: 0x19DBA8 (vt slot 78): not while hit or dying (4 / 5); a hit leaving hit points: state 4 (none left: the
+    // death 0x19BB78 -> vt slot 93 0x19CF40: state 5); Sly 2's task event 0x18 is gone
+    // (registered by its Sly 3 address too: the fnmap pair scores 49, below the dispatch's 50, so slot 78 fell back to
+    // HACKSO's base hit and the enemies never entered state 4 (MODES-04)); +0x3F8 the hit's sender (EOPID 1584)
     HACKSO& h = Hack(palo);
-    if (h.state == 4) return false;
+    if (h.state == 4 || h.state == 5) return false;
+    SetHackEnemyHitBy3(palo, pctm->ploSender);
     if (!FHackSoHit(palo, pctm)) return false;
-    if (h.cHp < 0) return true;
-    if (h.cHp <= 0) BroadcastTaskEvent(g_psw, 0x18, palo);  // 0x1619A0(D_002DEB30, 0x18, p)
-    SetEnemyState(palo, 4);
+    if (h.cHp > 0) SetEnemyState(palo, 4);
     return true;
 }
 
@@ -1019,6 +1137,19 @@ void OnEnemyXpNew(ALO* palo, XP* pxp, int i)
     HACKSO& h = Hack(palo);
     ALO* pOther = pxp->axpd[1 - i].palo;
     if (h.nPoints && pOther && FShip(pOther)) PostKillHackSo(palo, pOther);
+}
+// orig3: 0x0019D9B0 (the enemies' vt slot 59; the fnmap pairs it with 0x180FF0 at 65): the base's (0x19B6B0), then with
+// points (+0x190, Sly 2's +0x188) touching any hack object (0x49) that is not a piece (0x4C) of another side (+0x1D0):
+// the last hitter +0x3F8 that object and the death posted with it (0x19BB00(p, 1, other), Sly 2's PostKillHackSo).
+// Sly 2's tested the ship only
+void OnEnemyXpNew3(ALO* palo, XP* pxp, int i)
+{
+    OnHackXpNew(palo, pxp, i);
+    HACKSO& h = Hack(palo);
+    LO* pOther = pxp->axpd[1 - i].palo;
+    if (!h.nPoints || !pOther || !FHackSo(pOther) || pOther->Cid() == S3CID(0x4A) || HackSide3(pOther) == HackSide3(palo)) return;
+    SetHackEnemyHitBy3(palo, pOther);
+    PostKillHackSo(palo, pOther);
 }
 
 // orig: 0x00181060 (vt slot 5 of the enemies, after the PO's 0x1C3E20: an event (message 9) of its segment's
@@ -1032,7 +1163,9 @@ bool OnEnemyMessage(LO* plo, int msgk, void* pv)
     if (!pm->pasega || !(pm->pasega == h.pasegaSeg || (h.psmaSeg && pm->pasega == h.psmaSeg->pasega))) return false;
     switch (pm->n)
     {
-    case 0x15E:
+    // (s3-gadgets) orig3 0x19DA50: Sly 3's event ids: 0x17F the push (Sly 2 0x15E), 0x40 / 0x41 the cool-down (0x25 /
+    // 0x26), 0x42 / 0x43 busy (0x27 / 0x28)
+    case 0x17F:
     {
         glm::vec4 v(0.0f);
         if (!FAsegaRetracted(pm->pasega))
@@ -1042,17 +1175,17 @@ bool OnEnemyMessage(LO* plo, int msgk, void* pv)
         SetAloVelocityTo(Palo(plo), h.vPush);  // vt slot 35
         break;
     }
-    case 0x25: h.fCooldown = 1; break;
-    case 0x26: h.fCooldown = 0; break;
-    case 0x27: h.fBusy = 1; break;
-    case 0x28: h.fBusy = 0; break;
+    case 0x40: h.fCooldown = 1; break;
+    case 0x41: h.fCooldown = 0; break;
+    case 0x42: h.fBusy = 1; break;
+    case 0x43: h.fBusy = 0; break;
     default: break;
     }
     if (FPrint()) std::printf("hack enemy %d: segment event 0x%X at t %.3f\n", plo->oid, pm->n, g_clock.t);
     return false;  // (the PO's handlers too)
 }
 
-// orig: 0x00181238 (vt slot 83: the base's reset, state 0)
+// orig: 0x00181238 (vt slot 83: the base's reset, state 0) (orig3: 0x19E030, the same code in Sly 3)
 void ResetEnemy(LO* plo)
 {
     HACKSO& h = Hack(plo);
@@ -1130,15 +1263,24 @@ void UpdateDock(LO* plo)
         switch (s)
         {
         case 0:
-            if (s_ploShip && h.ploEnemyTarget)
+            // orig3: 0x0019DE80 (Sly 3: every ship 0x4A in the world, at most 4 (0x17E208(SW, 0x105, 0x4A, 0, 4)), not
+            // only the current one (Sly 2's D_002DFB80): the two-player game's second ship docks too; a later ship within
+            // 50 in the same pass is the dock's +0x1F8 as in the original)
+            if (h.ploEnemyTarget)
             {
-                const glm::vec3 d = PosAloCenter(Palo(s_ploShip)) - PosLoWorld(h.ploEnemyTarget);  // (its slot 31)
-                if (FPrint() && s_ploShip->fInWorld && d.x * d.x + d.y * d.y + d.z * d.z < 200.0f * 200.0f)
-                    std::printf("hack dock %d t %.2f: ship distance %.0f\n", plo->oid, g_clock.t, std::sqrt(d.x * d.x + d.y * d.y + d.z * d.z));
-                if (std::sqrt(d.x * d.x + d.y * d.y + d.z * d.z) < 50.0f)
+                int cShip = 0;
+                for (LO* pship : AploOfClass(g_psw, S3CID(0x48)))
                 {
-                    h.ploShooter = s_ploShip;  // (+0x1C8)
-                    SetDockState(plo, 1);
+                    if (!pship->fInWorld || cShip >= 4) continue;
+                    ++cShip;
+                    const glm::vec3 d = PosAloCenter(Palo(pship)) - PosLoWorld(h.ploEnemyTarget);  // (its slot 36's position)
+                    if (FPrint() && d.x * d.x + d.y * d.y + d.z * d.z < 200.0f * 200.0f)
+                        std::printf("hack dock %d t %.2f: ship %d distance %.0f\n", plo->oid, g_clock.t, pship->oid, std::sqrt(d.x * d.x + d.y * d.y + d.z * d.z));
+                    if (std::sqrt(d.x * d.x + d.y * d.y + d.z * d.z) < 50.0f)
+                    {
+                        h.ploShooter = pship;  // (+0x1F8 in Sly 3, Sly 2's +0x1C8)
+                        SetDockState(plo, 1);
+                    }
                 }
             }
             break;
@@ -1150,7 +1292,7 @@ void UpdateDock(LO* plo)
     } while (h.state != s);
 }
 
-// orig: 0x00181598 (the docks' vt slot 83: the base's reset (0x17F6B0), waiting (state 0), its entries "off" (0x20FF70))
+// orig: 0x00181598 (the docks' vt slot 83: the base's reset (0x17F6B0), waiting (state 0), its entries "off" (0x20FF70)) (orig3: 0x19DFE0, the same C in the Sly 3 decomp)
 void ResetDock(LO* plo)
 {
     HACKSO& h = Hack(plo);
@@ -1306,7 +1448,7 @@ void SetSwarmQState(LO* plo, SWQ* q, int n)
     LayoutSwarmEnt(e);
 }
 
-// orig: 0x00181A90 (an entry's particles placed evenly along the path, alive, full hit points)
+// orig: 0x00181A90 (an entry's particles placed evenly along the path, alive, full hit points) (orig3: 0x19E4F8, the same C in the Sly 3 decomp)
 void ResetSwarmEnt(LO* plo, SWENT& e)
 {
     LayoutSwarmEnt(e);
@@ -1374,9 +1516,36 @@ void UpdateSwarm(LO* plo)
 {
     if (PFNUPDATE pfn = PfnUpdateOrig(0x1F36E0)) pfn(plo);
     SWARM& w = Swarm(plo);
+    // orig3: 0x0019E9C0 (Sly 3: the update picks its target itself: unless kept (+0x1CC), the nearest ship of another
+    // side (0x19BC68: the current one +0x1C8 counts 500 nearer); a new one restarts every entry's search (+0x2C); the
+    // paths follow the target's place (its slot 36), not the current ship's. Natively Sly 2's update ran with no
+    // target (Sly 2's scripts set +0x1C0): the swarms never moved nor took a hit, so ThiefNet's swarm 74351 never died)
+    if (!Hack(plo).fKeepTarget)
+    {
+        LO* pBest = nullptr;
+        float gBest = FLT_MAX;
+        const glm::vec3 pos = PosAloCenter(Palo(plo));
+        for (LO* po : AploOfClass(g_psw, S3CID(0x48)))
+        {
+            if (!po->fInWorld || !FHackSo(po) || HackSide3(po) == HackSide3(plo)) continue;
+            const glm::vec3 d = PosAloCenter(Palo(po)) - pos;
+            float g = std::sqrt(d.x * d.x + d.y * d.y + d.z * d.z);
+            if (po == w.ploTarget) g -= 500.0f;
+            if (g < gBest)
+            {
+                gBest = g;
+                pBest = po;
+            }
+        }
+        if (pBest != w.ploTarget)
+        {
+            w.ploTarget = pBest;
+            for (SWENT& e : w.ae) e.tSearch = -1.0f;   // (D_00322078)
+        }
+    }
     if (!w.ploTarget) return;
     struct DUMPATEND { LO* p; ~DUMPATEND() { DumpSwarm(p); } } dumpAtEnd{plo};
-    const glm::vec3 posShip = s_ploShip ? PosAloCenter(Palo(s_ploShip)) : glm::vec3(0.0f);  // 0x1A62E8(D_002DFB80)
+    const glm::vec3 posShip = PosAloCenter(Palo(w.ploTarget));   // (orig3: the target's slot 36; Sly 2: 0x1A62E8(D_002DFB80))
     static const cmm::SMPA s_smpa{1500.0f, 0.0f, 0.5f, 4500.0f};  // D_002BE888
     for (size_t ie = 0; ie < w.ae.size(); ++ie)
     {
@@ -1423,12 +1592,12 @@ void UpdateSwarm(LO* plo)
 void DumpSwarm(LO* plo)
 {
     static const char* s_sz = std::getenv("SLY2N_SWARMDUMP");
-    if (!s_sz || std::atoi(s_sz) != plo->oid) return;
-    static std::vector<float> s_at;
-    static bool s_fParsed = false;
+    if (!s_sz || (s_sz[0] != '*' && std::atoi(s_sz) != plo->oid)) return;   // ("*@T": every swarm)
+    static std::unordered_map<const LO*, std::vector<float>> s_mpat;
+    std::vector<float>& s_at = s_mpat[plo];
+    bool s_fParsed = !s_at.empty();
     if (!s_fParsed)
     {
-        s_fParsed = true;
         for (const char* pch = std::strchr(s_sz, '@'); pch; pch = std::strchr(pch + 1, ','))
             s_at.push_back(static_cast<float>(std::atof(pch + 1)));
     }
@@ -1494,7 +1663,7 @@ void KillSwarm(LO* plo, LO* ploOther)
             m.ploReceiver = ploOther;
             m.pos = q->pos;
             m.grfFilter = 0x100;
-            m.nState = -h.nPoints;
+            m.nState = h.nPoints;  // (Sly 3's sign: 0x240CB0's amount is the points, positive: damage)
             if (PaloAcceptContact(&m))
             {
                 if (FPrint()) std::printf("hack swarm %d: a particle hit %d (%d) at t %.3f\n", plo->oid, ploOther->oid, -h.nPoints, g_clock.t);
@@ -1510,10 +1679,11 @@ void KillSwarm(LO* plo, LO* ploOther)
 // bursts and dies)
 bool FAcceptSwarmContact(ALO* palo, CTMSG* pctm)
 {
-    if (!(pctm->grfAccepted & 8)) return false;
+    // orig3: 0x0019F370 (Sly 3 tests the event's +0x50 bit 2, Sly 2's +0x44 bit 8: natively every hit was refused)
+    if (!(pctm->grfAccepted & 2)) return false;
     if (SWQ* q = PqNearestSwarm(palo, pctm->pos))
     {
-        q->cHp += pctm->nState;
+        q->cHp -= pctm->nState;  // (Sly 3's sign)
         if (FPrint()) std::printf("hack swarm %d: particle hit %d -> hp %d at t %.3f\n", palo->oid, pctm->nState, q->cHp, g_clock.t);
         if (q->cHp > 0)
         {
@@ -1624,8 +1794,10 @@ struct INITHACK
         RegisterLoUpdate(0x17F930, UpdateShip);
         RegisterLoUpdate(0x1801B8, UpdatePiece);
         RegisterLoUpdate(0x180668, UpdateEnemy);
+        RegisterLoUpdate(FN3_TAG | 0x19CF60, UpdateEnemy);
         RegisterLoUpdate(0x181478, UpdateDock);
         RegisterLoUpdate(0x181F60, UpdateSwarm);
+        RegisterLoUpdate(FN3_TAG | 0x19E9C0, UpdateSwarm);   // (orig3: Sly 3's swarm update, its own target)
         RegisterLoMessageHandler(OnEnemyMessage);
         // optid 526 (0x1101F8 -> 0x1816E8 -> 0x20FEC0, FAddRsmg): a dock's state machine entry
         RegisterObjectMethod(0x1101F8, [](LO* plo, const std::vector<CRef>& a) {
@@ -1651,20 +1823,17 @@ struct INITHACK
         // splice event 5, the game's 0x1A
         RegisterObjectMethod(0x110338, [](LO* plo, const std::vector<CRef>&) {
             if (FPrint()) std::printf("hack dock %d: method 235 at t %.3f\n", plo ? plo->oid : -1, g_clock.t);
-            if (plo && plo->Cid() == S3CID(0x4B))
-            {
-                RunDockRsmgs(plo, Hack(plo), 1);
-                HandleLoSpliceEvent(plo, 5, false, 0, nullptr);
-                BroadcastTaskEvent(g_psw, 0x1A, plo);
-            }
+            ActivateHackDock(plo);
             return CRef(TAGK_Void);
         });
         // optid 369: a state's segment {state, oid, grfapl} (the ship 0x10FDA8 -> 0x1800D8, the enemies 0x10FE60 ->
         // 0x181308)
+        // (Sly 3: the ship's 7 (orig3 0x19C9D0, i < 7), the enemies' 6 (0x19DD10, i < 6: state 5's, the dying segment,
+        // e.g. hack 4's claws' 78415: the dead claw stays until it ends, its ball dropped), the docks' 3 (0x19E138))
         for (uint32_t pfn : {0x10FDA8u, 0x10FE60u, 0x110140u})
             RegisterObjectMethod(pfn, [](LO* plo, const std::vector<CRef>& a) {
                 const int i = NArg(a, 0, -1);
-                if (FHackSo(plo) && i >= 0 && i < 5)
+                if (FHackSo(plo) && i >= 0 && i < (FShip(plo) ? HACKSO::CSEG : plo->Cid() == S3CID(0x49) ? 6 : 3))
                 {
                     Hack(plo).aseg[i].oid = NArg(a, 1, -1);
                     Hack(plo).aseg[i].grf = NArg(a, 2, 0);
@@ -1675,7 +1844,7 @@ struct INITHACK
         // {state, enter LM, stay LM}
         RegisterObjectMethod(0x10FF18, [](LO* plo, const std::vector<CRef>& a) {
             const int i = NArg(a, 0, -1);
-            if (plo && plo->Cid() == S3CID(0x49) && i >= 0 && i < 5)
+            if (plo && plo->Cid() == S3CID(0x49) && i >= 0 && i < 6)
             {
                 HACKRULE& r = Hack(plo).arule[i];
                 r.fDistance = 1;
@@ -1686,7 +1855,7 @@ struct INITHACK
         });
         RegisterObjectMethod(0x10FFE8, [](LO* plo, const std::vector<CRef>& a) {
             const int i = NArg(a, 0, -1);
-            if (plo && plo->Cid() == S3CID(0x49) && i >= 0 && i < 5)
+            if (plo && plo->Cid() == S3CID(0x49) && i >= 0 && i < 6)
             {
                 HACKRULE& r = Hack(plo).arule[i];
                 r.fAngle = 1;
@@ -1715,18 +1884,14 @@ struct INITHACK
         RegisterObjectMethod(0x10FC80, [](LO* plo, const std::vector<CRef>&) {
             if (FPrint() && plo) std::printf("hack %d (cid 0x%X): reset (method 1368) at t %.3f\n", plo->oid, plo->Cid(), g_clock.t);
             if (!FHackSo(plo)) return CRef(TAGK_Void);
-            switch (plo->Cid())
-            {
-            case 0x48: ResetShip(plo); break;
-            case 0x49: ResetEnemy(plo); break;
-            case 0x4B: ResetDock(plo); break;
-            case 0x4C: ResetSwarm(plo); break;
-            default:
-            {
-                ResetHackSoBase(plo, Hack(plo));  // 0x17F6B0
-                break;
-            }
-            }
+            // (by Sly 3's cids: the switch on Sly 2's raw 0x48.. sent the enemies (Sly 3 0x4B) to the docks' reset, the
+            // rings (0x49) to the enemies' and the pieces (0x4C) to the swarms')
+            const int cid = plo->Cid();
+            if (cid == S3CID(0x48)) ResetShip(plo);
+            else if (cid == S3CID(0x49)) ResetEnemy(plo);
+            else if (cid == S3CID(0x4B)) ResetDock(plo);
+            else if (cid == S3CID(0x4C)) ResetSwarm(plo);
+            else ResetHackSoBase(plo, Hack(plo));  // 0x17F6B0
             return CRef(TAGK_Void);
         });
         // EOPID 1367 (0x10FBF0): vt slot 82 with an object, the death (the swarms 0x1829D8, else the base's 0x17F5F8)
@@ -1778,13 +1943,30 @@ struct INITHACK
         });
     }
 } s_inithack;
-}  // namespace
+}  // namespace hack
+using namespace hack;
+
+// orig: 0x181780 (Sly 3 0x19E1F8, also SCPT 0x12 on a dock): the dock's entries run "on" (0x20FF70(.., 1)), its vt slot 3
+// (5): its splice event 5, the game's 0x1A
+void ActivateHackDock(LO* plo)
+{
+    if (!plo || plo->Cid() != S3CID(0x4B)) return;
+    RunDockRsmgs(plo, Hack(plo), 1);
+    HandleLoSpliceEvent(plo, 5, false, 0, nullptr);
+    BroadcastTaskEvent(g_psw, 0x1A, plo);
+}
+
 
 // orig: 0x0017F850 (the ship's post-load: the base's 0x17F138 (0x1F36A8, then vt slot 83 0x17FCB0), not controlled
 // (vt slot 79 (0)), the docking records' reset (0x2303A0 on +0x58 / +0x5C), the guns (0x17F770), the segments
 // (0x17F408))
 void PostLoadHackShip(LO* plo)
 {
+    if (FHackShip3(plo))  // (Sly 3's 0x19C048, hack3.cpp)
+    {
+        PostLoadHackShip3(plo);
+        return;
+    }
     if (!FShip(plo)) return;
     HACKSO& h = Hack(plo);
     if (h.fPostLoaded) return;
@@ -1824,6 +2006,7 @@ void PostLoadHackEnemy(LO* plo)
     if (h.fPostLoaded) return;
     h.fPostLoaded = true;
     LoadHackFields(plo, h);
+    h.cHpMax = NHackHpMax3(plo, h.cHpMax);  // (Sly 3: EOPID 937)
     if (plo->iupd >= 0) g_psw->aupd[static_cast<size_t>(plo->iupd)].grf |= GRFUPD_Update;  // (0x17F090: +0x40 | 2)
     else plo->grfUpd |= GRFUPD_Update;
     BindHackSegs(plo, h);
@@ -1832,6 +2015,7 @@ void PostLoadHackEnemy(LO* plo)
         if (const int oid = static_cast<int>(plo->U32Field(0, 0x1D4, 0xFFFFFFFFu)); oid != -1) h.ploEnemyTarget = PloFindSwNearest(plo, oid);
     if (!h.ploNav)
         if (const int oid = static_cast<int>(plo->U32Field(0, 0x1D0, 0xFFFFFFFFu)); oid != -1) h.ploNav = PloFindSwNearest(plo, oid);
+    if (!h.ploNav) h.ploNav = PloEnemyNav3(plo);  // (Sly 3: +0x200, EOPID 1572)
     ResetEnemy(plo);
     if (XF* p58 = PxfPos(Palo(plo))) SetXfMode(Palo(plo), p58, 2);
     if (XF* p5C = PxfRot(Palo(plo))) SetXfMode(Palo(plo), p5C, 2);
@@ -1840,6 +2024,9 @@ void PostLoadHackEnemy(LO* plo)
         std::printf("hack enemy %d: post-load hp %d target %d nav %d scale %.0f segs", plo->oid, h.cHp,
                     h.ploEnemyTarget ? h.ploEnemyTarget->oid : -1, h.ploNav ? h.ploNav->oid : -1, h.gScale);
         for (const HACKSEG& e : h.aseg) std::printf(" %d%s", e.oid, e.paseg ? "a" : e.psm ? "s" : "");
+        if (FPrint2())  // (the field stores of the object / its template)
+            for (const LO* p = plo; p; p = p->ploCloneOf != p ? p->ploCloneOf : nullptr)
+                for (const auto& [k, u] : p->afield) std::printf(" +0x%X=%08X", static_cast<unsigned>(k & 0xFFFFFFFFu), u);
         std::printf(" rules");
         for (const HACKRULE& r : h.arule)
             std::printf(" [%d %d %.0f..%.0f %.2f..%.2f]", r.fDistance, r.fAngle, r.lmEnterDistance.gMin, r.lmEnterDistance.gMax,
@@ -1869,9 +2056,28 @@ void OnRemoveHackSo(LO* plo)
     HACKSO& h = Hack(plo);
     h.fDead = 0;
     if (!plo->pcls) return;
+    // (Sly 3: vt slot 32, the ship's 0x19BED8 (state -1), the enemies' 0x19CF10 (state -1), the docks' 0x19E030 (state 0))
+    if (FHackShip3(plo)) { OnRemoveHackShip3(plo); return; }
+    if (plo->pcls->PfnOrig3(32) == 0x19CF10) { SetEnemyState(plo, -1); return; }
+    if (plo->pcls->PfnOrig3(32) == 0x19E030) { SetDockState(plo, 0); return; }
     if (plo->pcls->PfnOrig(12) == 0x17F740) SetShipState(plo, -1);
     else if (plo->pcls->PfnOrig(12) == 0x180598) SetEnemyState(plo, -1);  // 0x181268(p, -1)
 }
+
+// orig3: 0x19BED8 / 0x19CF10 / 0x19E030 (the ship's / the enemies' / the docks' vt slot 32: SO's 0x1F3C80, then their
+// state as above), e.g. on an in-place world reset (0x1FC6A0); natively they fell back to SO's ("[vt]" lines)
+void DetachSoBase32(LO* plo, LO* pproxy);   // (activate.cpp: orig3 0x1F3C80)
+namespace
+{
+void DetachHackSo3Slot32(LO* plo, LO* pproxy)
+{
+    DetachSoBase32(plo, pproxy);
+    OnRemoveHackSo(plo);
+}
+NATIVEFN3(0x19BED8, DetachHackSo3Slot32);
+NATIVEFN3(0x19CF10, DetachHackSo3Slot32);
+NATIVEFN3(0x19E030, DetachHackSo3Slot32);
+}  // namespace
 
 // orig: 0x00181840 (the swarm's post-load: each entry's path (none: the entries from it dropped) and its particles
 // (0x1AE2A0(0x70, 0x10)); the base's (0x17F138: 0x1F36A8, slot 83 0x1819E0); one more collision entry (+0xE4's
@@ -1969,6 +2175,7 @@ void ResetHacks()
     s_mphack.clear();
     s_mpswarm.clear();
     s_ploShip = nullptr;
+    ResetHacks3();
 }
 
 NATIVEFN(0x17FB50, MoveShip);
@@ -1977,6 +2184,7 @@ NATIVEFN(0x1803E0, OnPieceXpNew);
 NATIVEFN(0x1803A8, OverlapKindPiece);
 NATIVEFN(0x180EE8, MoveEnemy);
 NATIVEFN(0x1811B8, FAcceptEnemyContact);
+NATIVEFN3(0x19DBA8, FAcceptEnemyContact);
 // orig: 0x0017F1D0 (vt slot 75 of the base, inherited by the pieces 0x4A and the docks 0x4B: the hit; audit H2)
 bool FAcceptHackSoContact(ALO* palo, CTMSG* pctm) { return FHackSoHit(palo, pctm); }
 NATIVEFN(0x17F1D0, FAcceptHackSoContact);
@@ -1988,6 +2196,7 @@ void PostLoadHackSoBase(LO* plo)
     ResetHackSoBase(plo, Hack(plo));
 }
 NATIVEFN(0x180FF0, OnEnemyXpNew);
+NATIVEFN3(0x19D9B0, OnEnemyXpNew3);
 NATIVEFN(0x17FBE8, FAcceptShipContact);
 NATIVEFN(0x1823C8, AddSwarmXps);
 NATIVEFN(0x182780, UpdateSwarmBounds);
@@ -1998,4 +2207,14 @@ int HackShipState(LO* plo)
 {
     if (!plo || !FCidDerivedFrom(plo->Cid(), S3CID(0x48))) return -2;
     return Hack(plo).state;
+}
+
+// (tests: a route's fire= at a swarm aims at its live particle nearest to pos; false: none left)
+bool FHackSwarmNearestParticle(LO* plo, const glm::vec3& pos, glm::vec3* pposOut)
+{
+    if (!plo || plo->Cid() != S3CID(0x4C)) return false;
+    SWQ* q = PqNearestSwarm(plo, pos);
+    if (!q) return false;
+    *pposOut = q->pos;
+    return true;
 }

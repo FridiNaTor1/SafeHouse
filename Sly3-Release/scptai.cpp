@@ -17,8 +17,8 @@ void TellGuardCommands(LO* pguard, LO* pcmds, bool fRun)
     GUARD* pg = pguard ? PguardFromLo(pguard) : nullptr;
     JOBREACT* pj = pg ? static_cast<JOBREACT*>(PjobFind(pg, 0x9C)) : nullptr;
     if (std::getenv("SLY2N_SCPTPRINT"))
-        std::fprintf(stderr, "scpt: guard %d (cid 0x%X, guard %p, job 0x9C %p, inworld %d) commands %d (cid 0x%X)\n", pguard ? pguard->oid : -1,
-                     pguard ? pguard->Cid() : 0, static_cast<void*>(pg), static_cast<void*>(pj), pguard ? pguard->fInWorld : 0,
+        std::fprintf(stderr, "scpt: guard %d (cid 0x%X, guard %p, lo %p, job 0x9C %p, inworld %d) commands %d (cid 0x%X)\n", pguard ? pguard->oid : -1,
+                     pguard ? pguard->Cid() : 0, static_cast<void*>(pg), static_cast<void*>(pguard), static_cast<void*>(pj), pguard ? pguard->fInWorld : 0,
                      pcmds ? pcmds->oid : -1, pcmds ? pcmds->Cid() : 0);
     if (std::getenv("SLY2N_SCPTPRINT"))
         if (CMDLIST* pl = dynamic_cast<CMDLIST*>(pcmds))
@@ -146,6 +146,12 @@ struct INITCMDLOADERS
         // op 5 (wait): (g -> +0x8, oid): Sly 3 names an object too
         RegisterObjectMethod3(0x108110, [](LO* p, const std::vector<CRef>& a) {
             if (CMD* c = Append(p, 5, NArg(a, 1, -1))) c->g8 = GArg(a, 0);
+            if (std::getenv("SLY3_CMDARGS"))
+            {
+                std::fprintf(stderr, "cmdargs op 5 list %d:", p->oid);
+                for (const CRef& r : a) std::fprintf(stderr, " [tag %d n %d g %g]", int(r.m_tagk), NArg({r}, 0, -99), GArg({r}, 0, -99));
+                std::fprintf(stderr, "\n");
+            }
             return Void();
         });
         // op 6 (along a path): (oid, +0x8, +0xC, +0x10, !arg4 -> +0x14): Sly 2's +0x8 / +0xC first
@@ -154,6 +160,14 @@ struct INITCMDLOADERS
             {
                 c->n8 = NArg(a, 1);
                 c->nC = NArg(a, 2);
+                c->oidKind3 = NArg(a, 3, -1);         // (s3-ai-4) +0x10
+                c->fDirect3 = NArg(a, 4, 0) == 0;     // +0x14
+                if (std::getenv("SLY3_CMDARGS"))
+                {
+                    std::fprintf(stderr, "cmdargs op 6 list %d:", p->oid);
+                    for (const CRef& r : a) std::fprintf(stderr, " [tag %d n %d]", int(r.m_tagk), NArg({r}, 0, -99));
+                    std::fprintf(stderr, "\n");
+                }
             }
             return Void();
         });
@@ -164,12 +178,26 @@ struct INITCMDLOADERS
             {
                 c->g14 = GArg(a, 1);
                 c->n10 = NArg(a, 2, -1);
+                c->oidKind3 = NArg(a, 3, -1);         // (s3-ai-4) +0x14
+                c->fDirect3 = NArg(a, 4, 0) == 0;     // +0x18
+                if (std::getenv("SLY3_CMDARGS"))
+                {
+                    std::fprintf(stderr, "cmdargs op 7 list %d:", p->oid);
+                    for (const CRef& r : a) std::fprintf(stderr, " [tag %d n %d]", int(r.m_tagk), NArg({r}, 0, -99));
+                    std::fprintf(stderr, "\n");
+                }
             }
             return Void();
         });
-        // op 13 (use an object): (oid, +0x8, +0xC)
+        // op 13 (use an object): (oid, bool -> +0x8, bool -> +0xC) (0x108510 -> 0x197528): +0x8 the reverse (job 0xCB's
+        // +0xC4), +0xC the drop of a plain place onto the ground (+0xC8)
         RegisterObjectMethod3(0x108510, [](LO* p, const std::vector<CRef>& a) {
-            if (CMD* c = Append(p, 13, NArg(a, 0))) c->n8 = NArg(a, 1);
+            if (CMD* c = Append(p, 13, NArg(a, 0)))
+            {
+                c->n8 = NArg(a, 1);
+                c->nC = NArg(a, 2, 0) != 0;
+                c->fDirect3 = 1;   // (marks a Sly 3 builder's command: nC is the drop flag)
+            }
             return Void();
         });
     }

@@ -16,6 +16,8 @@
 #include <algorithm>
 #include <bit>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <limits>
 #include <stdexcept>
 
@@ -60,7 +62,7 @@ void SetCenters(TRAIL* p, const glm::vec3& pos)
         if (!p->samples[i].empty()) p->pglobset->aglob[i].posCenter = pos;
 }
 
-// orig: 0x21C0D8. Keep older visible samples after the object's gain reaches zero.
+// orig: 0x21C0D8. Keep older visible samples after the object's gain reaches zero. (orig3: 0x26E6F8, the same C in the Sly 3 decomp)
 void Update(LO* lo)
 {
     TRAIL* p = Trail(lo);
@@ -76,7 +78,7 @@ void Update(LO* lo)
     if (p->gFade <= 0.0f && p->dgFade <= 0.0f && p->idle >= int(p->frames.size())) RemoveLo(g_psw, p);
 }
 
-// orig: 0x21C1C8. Sample after the base ALO transform/physics pass.
+// orig: 0x21C1C8. Sample after the base ALO transform/physics pass. (orig3 0x26E7E8: the same with a 1/60 s timer)
 void UpdatePhysics(LO* lo)
 {
     TRAIL* p = Trail(lo);
@@ -84,6 +86,10 @@ void UpdatePhysics(LO* lo)
     PostLoadTrail(p);
     UpdateAloPhys(p);
     if (p->U32Field(0, 0x154) || p->frames.empty()) return;
+    // (orig3 0x26E7E8: Sly 3 takes a sample once 1/60 s has passed, whatever the frame rate; Sly 2 every frame)
+    p->tSample += g_clock.dt;
+    if (p->tSample < 0.016666668f) { SetCenters(p, PosLoWorld(p)); return; }
+    p->tSample = 0.0f;
     TRAILFRAME& f = p->frames[p->next];
     p->next = (p->next + 1) % p->frames.size();
     f.t = g_clock.t;
@@ -91,6 +97,8 @@ void UpdatePhysics(LO* lo)
     f.mat = p->apxfRef[2] ? p->apxfRef[2]->matWorld : glm::mat4(1.0f);
     if (p->gFade <= 0.0f) ++p->idle;
     else p->idle = 0;
+    if (static const char* s = std::getenv("SLY3_TRAILPRINT"); s && (std::atoi(s) == p->oid || std::atoi(s) == -1))  // (debug)
+        std::printf("trail %d t %.3f gain %.3f dg %.3f at %.1f %.1f %.1f\n", p->oid, g_clock.t, p->gFade, p->dgFade, f.mat[3].x, f.mat[3].y, f.mat[3].z);
     if (p->follow)
     {
         if (p->gFade == 0.0f) p->distance = -4.0f;
@@ -164,6 +172,9 @@ void PostLoadTrail(LO* lo)
         const OPTVAL& v = opt.aval[0];
         p->follow = v.pbasic ? dynamic_cast<LO*>(v.pbasic) : PloFindSwChild(p, v.n);
     }
+    if (static const char* s = std::getenv("SLY3_TRAILPRINT"); s && (std::atoi(s) == p->oid || std::atoi(s) == -1))  // (debug)
+        std::printf("trail %d: fade %.3f count %d history groups %zu\n", p->oid, Field(p, 0x150), int(p->U32Field(0, 0x158)),
+                    size_t(std::count_if(p->samples.begin(), p->samples.end(), [](const auto& a) { return !a.empty(); })));
     Reset(p);
     if (!p->U32Field(0, 0x154))
     {
@@ -173,7 +184,7 @@ void PostLoadTrail(LO* lo)
     p->ready = true;
 }
 
-// orig: 0x21BBD0 after 0x1F2C30.
+// orig: 0x21BBD0 after 0x1F2C30. (orig3: 0x26E118, the same C in the Sly 3 decomp)
 void OnAddTrail(LO* lo) { if (TRAIL* p = Trail(lo)) Reset(p); }
 
 void CloneTrail(const ALO* from, ALO* to)

@@ -71,6 +71,7 @@ struct STREAM
 struct TRACK
 {
     int state = -1;  // -1 free, 3 playing, 4 the data's end pushed (draining)
+    uint32_t gen = 0;  // (native) counts its starts and frees: a refill read made meanwhile (SpiopUpdate) is not used
     uint32_t id = 0;
     int vol = 0, pan = 0;
     uint32_t flags = 0;
@@ -81,7 +82,6 @@ struct TRACK
     std::vector<CHANNEL> ch;
     std::vector<STREAM> streams;
     uint32_t pos = 0;  // per channel byte position of the next refill
-    std::vector<uint8_t> abChunk;
     std::vector<int16_t> aPcm;
     std::vector<int> aspu;  // its channels' SPU2 voices in 989snd's table (one a channel, 0x10DE0)
 };
@@ -233,6 +233,18 @@ void ApplyStream(const TRACK& t, int itrack, STREAM& s)
 {
     if (!s.pcm) return;
     float m[4] = {0, 0, 0, 0};
+    if (t.headset)
+    {
+        // (the USB headset's speaker, 0x19A4 / 0xD80: lgaud's volume from the track's (vol x 80 >> 10), no pan, no pitch,
+        //  the channels' volumes ignored (0x1B38); PC: the track's level as a centred stream, the user's dialogue
+        //  volume included; paused by stopping the voice, 0x1834 / 0x18EC lgaud 14 / 15)
+        float gLeft = 0.0f, gRight = 0.0f;
+        if (!t.paused && !t.groupPaused) snd_StreamLevels(StreamVolOf(t.vol), 0, 0, itrack, &gLeft, &gRight);
+        const float g = std::max(gLeft, gRight) * kStreamGain;
+        const float mh[4] = {g, 0.0f, g, 0.0f};
+        s.pcm->SetMatrix(mh);
+        return;
+    }
     if (!t.paused && !t.groupPaused)
     {
         if (s.ich1 < 0)
@@ -262,64 +274,35 @@ void ApplyTrack(TRACK& t, int itrack)
     for (STREAM& s : t.streams) ApplyStream(t, itrack, s);
 }
 
-// Decodes the next stretch (to the next 0x1000 boundary of the channels' data) into every stream; at the end
-// a looping track goes back to its loop start (the ADPCM history carries on, as the SPU2's does), else the
-// streams get their end. orig: (IOP) spiop 0x2794 (the interleaved read) + the SPU2 decoding
-bool FRefillWav(TRACK& t);
-
-bool FRefill(TRACK& t)
+// A refill: the next stretch (to the next 0x1000 boundary of the channels' data) decoded into every stream; at the
+// end a looping track goes back to its loop start (the ADPCM history carries on, as the SPU2's does), else the
+// streams get their end. orig: (IOP) spiop 0x2794 (the interleaved read) + the SPU2 decoding. (PC) A WAV's: the same
+// stretches in frames (to the next 7168-frame boundary, which is the ADPCM's 0x1000 bytes), so every stream is pushed
+// the same frames in the same pieces as from the VPK / VAG it was converted from.
+// In three parts, so the disc read needs no track state (SpiopUpdate can make it without the sound lock): the read
+// prepared (the lock held), made, then decoded and pushed (the lock held, the track as it was prepared).
+struct REFILL
 {
-    const TRACKFILE& f = t.file;
-    if (f.wav) return FRefillWav(t);
-    if (t.pos >= f.size)
-    {
-        if ((t.flags & SPIOPF_Loop) && f.loopStart < f.size) t.pos = f.loopStart;
-        else
-        {
-            for (STREAM& s : t.streams) s.pcm->FPush(nullptr, 0, true);
-            t.state = 4;
-            return false;
-        }
-    }
-    const uint32_t chunkStart = t.pos & ~(kChunk - 1);
-    const uint32_t cbChunk = std::min(kChunk, f.size - chunkStart);
-    const uint32_t cbRead = f.vag ? cbChunk : kChunk * f.nch;  // (a VPK's last chunk is padded to the interleave)
-    const uint64_t ib = f.data + uint64_t(chunkStart) * f.nch;
-    t.abChunk.assign(cbRead, 0);
-    if (!g_disc.FReadFileBytes(f.lsn, ib, t.abChunk.data(), cbRead))
-    {
-        for (STREAM& s : t.streams) s.pcm->FPush(nullptr, 0, true);
-        t.state = 4;
-        return false;
-    }
-    const uint32_t ibFrom = t.pos - chunkStart;
-    const uint32_t cblock = (cbChunk - ibFrom) / 16;
-    t.pos = chunkStart + cbChunk;
-    if (cblock == 0) return true;
-    std::vector<int16_t> mono(cblock * 28);
-    for (STREAM& s : t.streams)
-    {
-        const int cch = s.ich1 < 0 ? 1 : 2;
-        t.aPcm.assign(std::size_t(cblock) * 28 * cch, 0);
-        for (int k = 0; k < cch; ++k)
-        {
-            CHANNEL& c = t.ch[k == 0 ? s.ich0 : s.ich1];
-            const uint8_t* pb = t.abChunk.data() + (f.vag ? 0 : kChunk * (k == 0 ? s.ich0 : s.ich1)) + ibFrom;
-            for (uint32_t b = 0; b < cblock; ++b) DecodeAdpcmBlock(pb + b * 16, &mono[b * 28], &c.h1, &c.h2);
-            for (std::size_t i = 0; i < mono.size(); ++i) t.aPcm[i * cch + k] = mono[i];
-        }
-        s.pcm->FPush(t.aPcm.data(), mono.size());
-    }
-    return true;
-}
+    uint32_t gen = 0, pos = 0;   // the track's start and position it was prepared for
+    bool wav = false;
+    uint32_t lsn = 0;
+    // a VPK / VAG: the chunk read
+    uint64_t ib = 0;
+    uint32_t cbRead = 0, chunkStart = 0, cbChunk = 0;
+    std::vector<uint8_t> ab;
+    // a WAV: the frames read (a FLAC's from its decoded frames)
+    WAVINFO wi;
+    std::shared_ptr<const std::vector<int16_t>> pmem;
+    uint32_t nch = 1, chunkEnd = 0, cframe = 0;
+    std::vector<int16_t> aframe;
+};
 
-// (PC) FRefill of a WAV: the same stretches in frames (to the next 7168-frame boundary, which is the ADPCM's 0x1000
-// bytes), so every stream is pushed the same frames in the same pieces as from the VPK / VAG it was converted from.
-bool FRefillWav(TRACK& t)
+// The loop's restart, or the data's end (the streams' end pushed, state 4: false, nothing to read); else the read.
+bool FPrepareRefill(TRACK& t, REFILL& r)
 {
     const TRACKFILE& f = t.file;
     const bool fLoop = (t.flags & SPIOPF_Loop) != 0;
-    const uint32_t end = fLoop ? f.sizeLoop : f.size;
+    const uint32_t end = f.wav && fLoop ? f.sizeLoop : f.size;
     if (t.pos >= end)
     {
         if (fLoop && f.loopStart < end) t.pos = f.loopStart;
@@ -330,33 +313,98 @@ bool FRefillWav(TRACK& t)
             return false;
         }
     }
-    const uint32_t chunkStart = t.pos / kChunkFrames * kChunkFrames;
-    const uint32_t chunkEnd = std::min(chunkStart + kChunkFrames, end);
-    const uint32_t cframe = chunkEnd - t.pos;
-    const PFNWAVREAD pfn = [lsn = f.lsn](uint64_t ib, void* pv, std::size_t cb) { return g_disc.FReadFileBytes(lsn, ib, pv, cb); };
-    std::vector<int16_t> aframe(std::size_t(cframe) * f.nch);
-    if (f.pmem && cframe)
-        std::copy_n(f.pmem->data() + std::size_t(t.pos) * f.nch, std::size_t(cframe) * f.nch, aframe.data());
-    else if (cframe && !FReadWavFrames(pfn, f.wi, t.pos, cframe, aframe.data()))
+    r.gen = t.gen;
+    r.pos = t.pos;
+    r.wav = f.wav;
+    r.lsn = f.lsn;
+    if (f.wav)
+    {
+        r.chunkStart = t.pos / kChunkFrames * kChunkFrames;
+        r.chunkEnd = std::min(r.chunkStart + kChunkFrames, end);
+        r.cframe = r.chunkEnd - t.pos;
+        r.nch = f.nch;
+        r.wi = f.wi;
+        r.pmem = f.pmem;
+        return true;
+    }
+    r.chunkStart = t.pos & ~(kChunk - 1);
+    r.cbChunk = std::min(kChunk, f.size - r.chunkStart);
+    r.cbRead = f.vag ? r.cbChunk : kChunk * f.nch;  // (a VPK's last chunk is padded to the interleave)
+    r.ib = f.data + uint64_t(r.chunkStart) * f.nch;
+    return true;
+}
+
+// The read (no track state: safe without the sound lock).
+bool FReadRefill(REFILL& r)
+{
+    if (!r.wav)
+    {
+        r.ab.assign(r.cbRead, 0);
+        return g_disc.FReadFileBytes(r.lsn, r.ib, r.ab.data(), r.cbRead);
+    }
+    r.aframe.assign(std::size_t(r.cframe) * r.nch, 0);
+    if (!r.cframe) return true;
+    if (r.pmem)
+    {
+        std::copy_n(r.pmem->data() + std::size_t(r.pos) * r.nch, std::size_t(r.cframe) * r.nch, r.aframe.data());
+        return true;
+    }
+    const PFNWAVREAD pfn = [lsn = r.lsn](uint64_t ib, void* pv, std::size_t cb) { return g_disc.FReadFileBytes(lsn, ib, pv, cb); };
+    return FReadWavFrames(pfn, r.wi, r.pos, r.cframe, r.aframe.data());
+}
+
+// The data decoded and pushed into every stream (a failed read: the streams' end, state 4).
+void ApplyRefill(TRACK& t, const REFILL& r, bool fRead)
+{
+    if (!fRead)
     {
         for (STREAM& s : t.streams) s.pcm->FPush(nullptr, 0, true);
         t.state = 4;
-        return false;
+        return;
     }
-    t.pos = chunkEnd;
-    if (cframe == 0) return true;
+    if (r.wav)
+    {
+        t.pos = r.chunkEnd;
+        if (r.cframe == 0) return;
+        for (STREAM& s : t.streams)
+        {
+            const int cch = s.ich1 < 0 ? 1 : 2;
+            t.aPcm.assign(std::size_t(r.cframe) * cch, 0);
+            for (int k = 0; k < cch; ++k)
+            {
+                const int ich = k == 0 ? s.ich0 : s.ich1;
+                for (uint32_t i = 0; i < r.cframe; ++i) t.aPcm[std::size_t(i) * cch + k] = r.aframe[std::size_t(i) * r.nch + ich];
+            }
+            s.pcm->FPush(t.aPcm.data(), r.cframe);
+        }
+        return;
+    }
+    const uint32_t ibFrom = r.pos - r.chunkStart;
+    const uint32_t cblock = (r.cbChunk - ibFrom) / 16;
+    t.pos = r.chunkStart + r.cbChunk;
+    if (cblock == 0) return;
+    const bool fVag = t.file.vag;
+    std::vector<int16_t> mono(cblock * 28);
     for (STREAM& s : t.streams)
     {
         const int cch = s.ich1 < 0 ? 1 : 2;
-        t.aPcm.assign(std::size_t(cframe) * cch, 0);
+        t.aPcm.assign(std::size_t(cblock) * 28 * cch, 0);
         for (int k = 0; k < cch; ++k)
         {
-            const int ich = k == 0 ? s.ich0 : s.ich1;
-            for (uint32_t i = 0; i < cframe; ++i) t.aPcm[std::size_t(i) * cch + k] = aframe[std::size_t(i) * f.nch + ich];
+            CHANNEL& c = t.ch[k == 0 ? s.ich0 : s.ich1];
+            const uint8_t* pb = r.ab.data() + (fVag ? 0 : kChunk * (k == 0 ? s.ich0 : s.ich1)) + ibFrom;
+            for (uint32_t b = 0; b < cblock; ++b) DecodeAdpcmBlock(pb + b * 16, &mono[b * 28], &c.h1, &c.h2);
+            for (std::size_t i = 0; i < mono.size(); ++i) t.aPcm[i * cch + k] = mono[i];
         }
-        s.pcm->FPush(t.aPcm.data(), cframe);
+        s.pcm->FPush(t.aPcm.data(), mono.size());
     }
-    return true;
+}
+
+// A whole refill (the sound lock held).
+void Refill(TRACK& t)
+{
+    REFILL r;
+    if (FPrepareRefill(t, r)) ApplyRefill(t, r, FReadRefill(r));
 }
 
 void FreeTrack(TRACK& t)
@@ -369,6 +417,7 @@ void FreeTrack(TRACK& t)
     t.ch.clear();
     t.state = -1;
     t.id = 0;
+    ++t.gen;
 }
 
 // States 1 and 2 (0x2410, 0x2560): the channels as streams (two channels with the same id: one stereo stream),
@@ -376,6 +425,28 @@ void FreeTrack(TRACK& t)
 bool FStartStreams(TRACK& t, int itrack)
 {
     const int n = static_cast<int>(t.ch.size());
+    // (0x2410 -> 0xD80: a USB headset track plays on the headset when the headset's device is open and the file has one
+    // channel (the IRX: a 22050 Hz VAGp; PC: any mono line, the installed WAV / FLAC ones too), with no SPU2 voice (so
+    // no ducking of the other groups); else its headset flag is cleared (0x2474) and it plays as any track)
+    if (t.headset && !(n == 1 && FHeadsetOutputReady())) t.headset = false;
+    if (t.headset)
+    {
+        STREAM s;
+        s.vol = StreamVolOf(t.vol);
+        s.pcm = std::make_unique<CPcmStream>();
+        if (s.pcm->FOpen(1, static_cast<int>(t.file.rate), 4.0f, true)) t.streams.push_back(std::move(s));
+        else t.headset = false;
+    }
+    if (t.headset)
+    {
+        if (std::getenv("SLY2N_SNDLOG")) std::printf("spiop: track %d id %u on the USB headset\n", itrack, t.id);
+        t.pos = 0;
+        for (int i = 0; i < CPcmStream::kcBuffer - 1 && t.state == 3; ++i) Refill(t);
+        t.groupPaused = snd_FGroupPaused(itrack);
+        ApplyTrack(t, itrack);
+        if (!t.paused && !t.groupPaused) t.streams[0].pcm->Start();
+        return true;
+    }
     for (int i = 0; i < n; ++i) t.aspu.push_back(snd_AllocStreamVoice(itrack));
     for (int i = 0; i < n; ++i)
     {
@@ -389,7 +460,7 @@ bool FStartStreams(TRACK& t, int itrack)
         t.streams.push_back(std::move(s));
     }
     t.pos = 0;
-    for (int i = 0; i < CPcmStream::kcBuffer - 1 && t.state == 3; ++i) FRefill(t);
+    for (int i = 0; i < CPcmStream::kcBuffer - 1 && t.state == 3; ++i) Refill(t);
     t.groupPaused = snd_FGroupPaused(itrack);
     ApplyTrack(t, itrack);
     if (!t.paused && !t.groupPaused)
@@ -434,7 +505,7 @@ uint32_t SpiopActiveGroups()
     for (int i = 0; i < kTracks; ++i)
     {
         const TRACK& t = s_atrack[i];
-        if ((t.state == 3 || t.state == 4) && !t.paused && !t.groupPaused) grf |= 1u << i;
+        if ((t.state == 3 || t.state == 4) && !t.paused && !t.groupPaused && !t.headset) grf |= 1u << i;   // (a headset track: no SPU2 voice)
     }
     return grf;
 }
@@ -453,6 +524,7 @@ uint32_t SpiopStart(uint32_t isector, int vol, int pan, int itrack, uint32_t fla
     t.paused = (flags & SPIOPF_Paused) != 0;
     t.id = ++s_idCounter;
     t.state = 3;
+    ++t.gen;
     if (!FOpenFile(t, isector))
     {
         std::fprintf(stderr, "spiop: no VAGp / VPK at sector %u\n", isector);
@@ -577,27 +649,36 @@ void SpiopStopAll()
     for (TRACK& t : s_atrack) FreeTrack(t);
 }
 
-// orig: (IOP) spiop's track thread, state 3 (refills) and 4 (0x26f0: the track freed once its streams ended)
+// orig: (IOP) spiop's track thread, state 3 (refills) and 4 (0x26f0: the track freed once its streams ended).
+// Each refill's disc read is made with the sound lock let go (the game thread waits on that lock): the track is
+// checked again after the read, which is not used if the track stopped, restarted or moved meanwhile. Called with the
+// lock already held (TickAll, except on the Switch), the read keeps it.
 void SpiopUpdate()
 {
-    std::lock_guard<std::recursive_mutex> lock(g_mtxSound);
+    static REFILL s_r;   // (the sound thread's: its buffers kept)
     for (TRACK& t : s_atrack)
     {
-        if (t.state == 3)
+        for (int guard = 0; guard < CPcmStream::kcBuffer; ++guard)
         {
-            for (int guard = 0; guard < CPcmStream::kcBuffer && t.state == 3; ++guard)
             {
+                std::lock_guard<std::recursive_mutex> lock(g_mtxSound);
+                if (t.state == 4)
+                {
+                    bool fDone = true;
+                    for (const STREAM& s : t.streams) fDone = fDone && s.pcm->CBufferQueued() == 0;
+                    if (fDone) FreeTrack(t);
+                    break;
+                }
+                if (t.state != 3) break;
                 bool fRoom = true;
                 for (const STREAM& s : t.streams) fRoom = fRoom && s.pcm->CBufferQueued() < CPcmStream::kcBuffer - 1;
-                if (!fRoom) break;
-                FRefill(t);
+                if (!fRoom || !FPrepareRefill(t, s_r)) break;
             }
-        }
-        else if (t.state == 4)
-        {
-            bool fDone = true;
-            for (const STREAM& s : t.streams) fDone = fDone && s.pcm->CBufferQueued() == 0;
-            if (fDone) FreeTrack(t);
+            const bool fRead = FReadRefill(s_r);
+            std::lock_guard<std::recursive_mutex> lock(g_mtxSound);
+            if (t.state != 3 || t.gen != s_r.gen || t.pos != s_r.pos) break;
+            ApplyRefill(t, s_r, fRead);
+            if (t.state != 3) break;   // (a failed read: the end pushed, freed at a later call once drained)
         }
     }
 }

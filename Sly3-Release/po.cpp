@@ -1,9 +1,21 @@
 #include <execinfo.h>
 #include "game/sly3.h"
+#include "game/rowboat3.h"
+#include "game/ship3.h"
 // po.cpp: the player objects (po.h): the controller states (ported from the reference's m_1C3D70.cpp, oracle-checked
 // ports of the original's 0x1C3D70..0x1C4B00), the enable / current player (the world code) and the safe house's
 // slot 79 (0x1D7418 / 0x1D7480).
 #include "po.h"
+#include "damage.h"
+#include "actor.h"
+#include "guard.h"
+#include "hack.h"
+#include "splitscreen3.h"
+#include "vehicle.h"
+#include "aipassword3.h"
+#include "game/task3.h"
+#include "game/scptgame3.h"
+#include "actioninput.h"
 #include "rope.h"
 #include "turret.h"
 #include "vehiclehooks.h"
@@ -38,6 +50,7 @@ void PrintRef(const CRef& ref, std::string* ps);  // bif.cpp (debug)
 #include "sw.h"
 #include "task.h"
 #include "transition.h"
+#include "game/treasuremap3.h"
 #include "update.h"
 #include "vecmat.h"
 #include "vtnative.h"
@@ -259,13 +272,18 @@ void SetSafeHouseState(SW* psw, LO* plo, int n)
         for (LO* p : std::vector<LO*>(psw->mpcidaplo[cid])) RemoveLo(psw, p);
     // its state machine at the state of the progress "oidPoCurrent" (else its first)
     OID oidSm = static_cast<OID>(plo->U32Field(0, 0x184, static_cast<uint32_t>(-1)));
+    // (Sly 3 +0x194: the option 1516 (Sly 2's 1337) as the loader keeps it)
+    if (oidSm == -1)
+        for (const OPT& o : plo->aopt)
+            if (o.eopid == S3EOPID(1337) && !o.aval.empty()) oidSm = static_cast<OID>(o.aval[0].n);
     LO* plosm = oidSm != -1 ? PloFindSwObjectByOid(psw, oidSm) : nullptr;
     SM* psm = dynamic_cast<SM*>(plosm);
     OID oidState = -1;
     if (psm)
     {
+        // (Sly 3 0x213418: GAME +0x10, the player 0 character 0x185700)
         const CRef ref = RefGetProgress({"oidPoCurrent"});
-        const int v = ref.m_tagk == TAGK_S32 ? ref.m_n : -1;
+        const int v = g_gametasks3.aoidPlayer[0] != -1 ? int(g_gametasks3.aoidPlayer[0]) : ref.m_tagk == TAGK_S32 ? ref.m_n : -1;
         oidState = IsmsFindSm(psm, v) == -1 ? OidFromSmIsms(psm, 0) : v;
     }
     if (std::getenv("SLY2N_POPRINT"))
@@ -283,6 +301,13 @@ PODATA* PpodataFromLo(LO* plo)
     auto [it, fNew] = s_mppodata.try_emplace(plo);
     if (fNew) it->second.grfbtnForced = plo->U32Field(0, 0x154, 0);
     return &it->second;
+}
+
+// Sly 3: any SO's controller state (its +0x134, made by its enable; null: none, the empty interface 0x36E6D0)
+PADCTL* PpadctlOfSo3(const LO* plo)
+{
+    auto it = s_mppodata.find(const_cast<LO*>(plo));
+    return it == s_mppodata.end() ? nullptr : it->second.ppadctl;
 }
 
 // orig: 0x001C42E8 (the sticks, the buttons and their times cleared)
@@ -303,7 +328,10 @@ void UpdatePadctl(PADCTL* ppc)
     else if (ppc->nControl == 1)
     {
         // (G_GRFJOYT & 2 ? the first pad : the second: the lock of 0x1870D0)
-        const JOYPS2& j = JoyFor(2);
+        // (PC, splitscreen3.h) another player's character reads its seat's pad, its stick in its own view's camera
+        const CM* pcmView = &g_cm;
+        const JOYPS2* pjoySeat = split3::PjoyForPadctl(ppc, &pcmView);
+        const JOYPS2& j = pjoySeat ? *pjoySeat : JoyFor(2);
         ppc->x = j.x;
         ppc->y = j.y;
         ppc->x2 = j.x2;
@@ -313,7 +341,8 @@ void UpdatePadctl(PADCTL* ppc)
         // sets the option, e.g. Bentley's R1 (8) in Ep7's boss world 37, which keeps him from the target stance)
         if (ppd) const_cast<PODATA*>(ppd)->grfbtnForced = ppc->plo->U32Field(0, 0x154, ppd->grfbtnForced);
         ppc->grfbtn = (j.grfbtn & ~j.grfbtnHandled) | (ppd ? ppd->grfbtnForced : 0);
-        cmm::DecomposeRotateMatrixPanTilt(g_cm.mat, &radPan, &radTilt);
+        ppc->grfbtn = sly2actions::HeldButtons(ppc, ppc->grfbtn, ppd ? ppd->grfbtnForced : 0);
+        cmm::DecomposeRotateMatrixPanTilt(pcmView->mat, &radPan, &radTilt);
     }
     ppc->matCam = cmm::BuildPanTiltMatrix(radPan, radTilt);
     TurnPadctlStick(radPan, &ppc->x, &ppc->y, &ppc->radJoy, &ppc->uJoy, &ppc->uJoyDecay);
@@ -333,6 +362,32 @@ void UpdatePadctl(PADCTL* ppc)
             break;
         }
     StampPadctl(ppc);
+    // (Sly 3) a guard's password check holds the player (orig3 Sly's states 0x15 / 0x16, 0x1AD1D0 case 22: the face
+    // buttons pressed within 0.15 s go to the check, aipassword3.cpp): it stands, nothing else reaches it
+    if (ppc->nControl == 1 && ppc->plo && PloPasswordGuard3(ppc->plo))
+    {
+        FTakePadForPassword3(ppc->plo, GrfPadctlTakePressed(ppc, 0xF0, 0.15f));
+        ClearPadctl(ppc);
+    }
+    // (Sly 3) the treasure map held (Sly's state 0x18 (sly.cpp jts::Map), orig3 0x1B0070 / 0x1AD1D0 case 24): the face
+    // buttons and the stick go to the map mode (game/treasuremap3.cpp), nothing else reaches the player
+    else if (ppc->nControl == 1 && ppc->plo && PloMapHolder3() == ppc->plo)
+    {
+        SetMapButtonsHeld3(ppc->grfbtn);   // (Sly's state 0x18 leaves when the gadget's button is up: sly.cpp)
+        TakePadForMap3(ppc->plo, GrfPadctlTakePressed(ppc, 0xF0, 0.15f), ppc->radJoy, ppc->uJoy);
+        ClearPadctl(ppc);
+    }
+    // (Sly 3, s3-player round 21, the user's report: Sly moved during cut scenes) a script's pause (SCPT 0x1F, orig3
+    // 0x1A93C8 -> 0x1A9630) raises the player record's +0x1180, and 0x1A97B8 then hands the character the empty
+    // controller (D_0036E6D0) until it is released: nothing of the seat's pad reaches the player (the scripted walks
+    // 0x30 still drive its stick after this). SLY3_NOPADPAUSE=1: the old way
+    else if (ppc->nControl == 1 && ppc->plo && FScripts3Active() && !std::getenv("SLY3_NOPADPAUSE"))
+    {
+        int seat = 0;
+        for (int k = 1; k < split3::kMaxSeats; ++k)
+            if (g_psw && split3::PloPlayer(g_psw, k) == ppc->plo) seat = k;
+        if (seat < 2 && FPlayerSeatPaused3(seat)) ClearPadctl(ppc);
+    }
 }
 
 // orig: 0x001C4640
@@ -345,6 +400,7 @@ void SetPadctlControl(PADCTL* ppc, int n)
 // orig: 0x001C4660 (the buttons of grf pressed within dt)
 uint32_t GrfPadctlPressedWithin(const PADCTL* ppc, uint32_t grf, float dt)
 {
+    if (sly2actions::Applies(ppc)) return sly2actions::PressedButtons(ppc, grf, dt);
     uint32_t grfRet = 0;
     const float t = g_clock.t;
     for (int i = 0; grf; ++i, grf >>= 1)
@@ -363,6 +419,7 @@ uint32_t GrfPadctlTakePressed(PADCTL* ppc, uint32_t grf, float dt)
 // orig: 0x001C4738
 void ForgetPadctlPresses(PADCTL* ppc, uint32_t grf)
 {
+    if (sly2actions::Applies(ppc)) sly2actions::ForgetButtons(ppc, grf);
     for (int i = 0; grf; ++i, grf >>= 1)
         if (grf & 1) ppc->atPressed[i] = G_NEG_FLT_MAX;
 }
@@ -409,6 +466,11 @@ void SetPoCurrent(SW* psw, LO* plo)
         ref.SetS32(plo->oid);
         FSetProgress({"oidPoCurrent"}, ref);  // 0x1D8B20
     }
+    // orig3: 0x1F4B38 (a player's character set): an actor (cid 0x33) that becomes player 0's character while no world
+    // change is under way (0x25AE28) is the game's value (0x1856E0(GAME, 0, its oid): GAME +0x10), which the next world
+    // start's player selection takes (0x25B9C0, transition.cpp). SLY3_NOPLAYERWRITE=1: only a task's start sets it.
+    if (plo && FCidDerivedFrom(plo->Cid(), S3CID(0x34)) && !g_transition.fPending && !std::getenv("SLY3_NOPLAYERWRITE"))
+        g_gametasks3.aoidPlayer[0] = plo->oid;
     // 0x194F70(psw, 0, 0, 0): the tracked interaction targets dropped (R58: the safe house's door kept the previous
     // player's aura, e.g. Murray's emblem with Bentley at the door, because it stayed tracked across the switch)
     DropJtTrack();
@@ -478,8 +540,11 @@ void EnablePo(SW* psw, LO* plo, int n)
         }
         SetPadctlControl(pd.ppadctl, n);
     }
+    // the hack ship's vt slot 83 (orig3 0x19BE90): after the PO's enable, its state (1 with the pad, else 0; hack3.cpp)
+    if (FHackShip3(plo)) EnableHackShip3(plo, n);
     // the safe house's slot 79 (0x1D7418): its state with it
-    if (plo->pcls && plo->pcls->PfnOrig(79) == 0x1D7418 && (n == 0 || n == 1)) SetSafeHouseState(psw, plo, n);
+    // (Sly 3's safe house (class 0x45): its vt slot 83 0x213390 after 0x1F4548: shown (1) with a player's pad, else left)
+    if (plo->pcls && (plo->pcls->PfnOrig(79) == 0x1D7418 || FCidDerivedFrom(plo->Cid(), S3CID(0x46))) && (n == 0 || n == 1)) SetSafeHouseState(psw, plo, n);
     // the actors' slot 79 (0x1406E8, every caller here is the original's vt slot 79): after 0x1C3ED8 the pursued
     // record's mode (0x1F82B8: 0 = the guards place themselves by the camera's heading while it is the player, else
     // -1) and, when it takes the pad, its job list cleared (0x1EECD0)
@@ -489,6 +554,15 @@ void EnablePo(SW* psw, LO* plo, int n)
         if (n == 1)
             if (ACTOR* pa = PactorFromLo(plo)) ClearJobs(pa);
     }
+    // Sly 3's RC car (class 0x55, vt slot 83 0x207E18): the pad's drive (mode 1) while it has the pad, else idle
+    if (FIsRcCar3(plo) && (n == 0 || n == 1)) OnRcCarEnable3(plo, n);
+    // Sly 3's rowboat (class 0x53, vt slot 83 0x20F738, game/rowboat3.h): rowed while it has the pad, else idle
+    if (FRowboat3(plo) && (n == 0 || n == 1)) OnRowboatEnable3(plo, n);
+    // Sly 3's ships (class 0x58, vt slot 83 0x2147B0, game/ship3.h): a pad sails it, released: idle
+    if (FShip3(plo) && (n == 0 || n == 1)) OnShipEnable3(plo, n == 1 ? 0 : -1);
+    // Sly 3's swimmer (class 0x57, vt slot 83 0x26C8F8, game/diver3.cpp): swimming while it has the pad, else off
+    void OnDiverEnable3(LO* plo, int n);
+    if (plo->pcls && FCidDerivedFrom(plo->Cid(), 0x57) && (n == 0 || n == 1)) OnDiverEnable3(plo, n);
 }
 
 int CpoRegistered() { return static_cast<int>(s_apo.size()); }
@@ -505,6 +579,16 @@ void UpdateSafeHouse(LO* plo)
     auto it = s_mpsh.find(plo);
     if (it == s_mpsh.end()) return;
     SAFEHOUSE& sh = it->second;
+    if (static const bool s_fDbg = std::getenv("SLY3_SHDBG") != nullptr; s_fDbg)
+    {
+        static int s_c = 0;
+        if (s_c++ % 60 == 0)
+        {
+            std::printf("shdbg: state %d sma %p cur %d opts", sh.nState, (void*)sh.psma, sh.psma ? OidSmaCur(sh.psma) : -9);
+            for (const OPT& o : plo->aopt) { std::printf(" [%d:", o.eopid); for (const OPTVAL& v : o.aval) std::printf(" %d", v.n); std::printf("]"); }
+            std::printf("\n");
+        }
+    }
     if (sh.nState != 1 || !sh.psma) return;
     if (FShopShown() || FMenuShown()) return;   // (0x14FD50: the camera's own; the shop / menus take the pad)
     if (const int n = NStepLeftRight())
@@ -528,14 +612,16 @@ void UpdateSafeHouse(LO* plo)
         if (!GrfbtnTakePressed(uint32_t(o.aval[1].n))) continue;
         const OID oidTarget = o.aval[2].n;
         if (oidTarget == -1) continue;
-        if (oidTarget == 0x378) SetShopPage(0);
+        if (oidTarget == 0x429 || oidTarget == 0x378) SetShopPage(0);   // (Sly 3's ThiefNet 0x429 = 1065; Sly 2's 0x378)
         else
         {
             // the target found from the safe house (0x15E938 kind 4), a script started (0x1DFD58: scpt.cpp)
             LO* pscpt = g_splicegame.pfnFindObject ? dynamic_cast<LO*>(g_splicegame.pfnFindObject(4, static_cast<SYMID>(oidTarget), plo, nullptr)) : nullptr;
             if (!pscpt) continue;
             if (std::getenv("SLY2N_POPRINT")) std::printf("safe house %d: action %d (state %d)\n", plo->oid, oidTarget, oidCur);
-            StartScpt(pscpt, nullptr);
+            // (Sly 3 0x213250: 0x225EE8(object, 0), the Sly 3 runner: Sly 2's StartScpt runs no Sly 3 SCPT)
+            if (FScripts3Active()) StartScptOfLo3(pscpt, nullptr);
+            else StartScpt(pscpt, nullptr);
         }
         return;
     }
@@ -559,8 +645,11 @@ struct INITSAFEHOUSE
 } s_initsafehouse;
 }  // namespace
 
+void ResetPlanes3();   // game/biplane3.cpp
+
 void ResetPos(SW*)
 {
+    ResetPlanes3();
     s_mppodata.clear();
     s_lpadctl.clear();
     s_apo.clear();
@@ -574,6 +663,24 @@ void ResetPos(SW*)
 
 namespace
 {
+// (Sly 3's SO health, below: the plain SOs only)
+bool FPlainSo(const LO* plo) { return plo && FCidDerivedFrom(plo->Cid(), sly3::CID_SO) && !FCidDerivedFrom(plo->Cid(), sly3::CID_PO); }
+int NOfRef(const CRef& ref) { return ref.m_tagk == TAGK_F32 ? static_cast<int>(ref.m_g) : ref.m_n; }
+// the field as set at run time, else the world's option (the loader keeps it as an OPT), else 0 (InitLo 0x1F3B50 sets none)
+int NSoHealthField(const LO* plo, uint32_t ib, int eopid)
+{
+    constexpr uint32_t UNSET = 0x80000000u;
+    if (const uint32_t u = plo->U32Field(0, ib, UNSET); u != UNSET) return static_cast<int32_t>(u);
+    for (const OPT& opt : plo->aopt)
+        if (opt.eopid == eopid && !opt.aval.empty()) return NOfRef(RefFromOptionValue(opt.aval[0]));
+    return 0;
+}
+void SetSoHealth(LO* plo, int n)   // orig3: 0x1F43D0 (clamped to 0..max)
+{
+    n = std::max(std::min(n, NSoHealthField(plo, 0x170, 937)), 0);
+    plo->SetField(0, 0x16C, static_cast<uint32_t>(n));
+}
+
 struct INITPOSETTERS
 {
     INITPOSETTERS()
@@ -609,8 +716,120 @@ struct INITPOSETTERS
             r.SetS32(ppd ? static_cast<int32_t>(ppd->grfbtnForced) : 0);
             return r;
         });
+        // orig3: 0x1F4900 (Sly 3 EOPID 942, the SO's option 943): a new class 0xBB object over the owner (po.h PADWRAP3)
+        RegisterObjectGetter3(942, [](LO* plo) {
+            auto pw = std::make_shared<PADWRAP3>();
+            pw->plo = plo;
+            CRef r;
+            r.SetOwnedBasic(std::move(pw));
+            return r;
+        });
+        // Sly 3's SO health: EOPID 937 (option 939) the maximum +0x170 (getter 0x1F43F0, setter 0x1F43F8: then the health
+        // set again, clamped), EOPID 938 (option 940) the health +0x16C (getter 0x1F43C8, setter 0x1F43D0: clamped to
+        // 0..max). E.g. v_canal's police boat SO 2003 (the reference: 100 / 100 at the chase's start, less per hit): its
+        // splice (block 139806) refills it at the start and sinks the boat at 0. Natively only for the plain SOs (the
+        // POs, actors and guards keep their health in their own code: unchanged, no value).
+        // (s3-ai) A guard's (Carmelita's too: the turf war's alarm waits for her 940 > 0) are its n338 / n33C (guardstart.cpp)
+        RegisterObjectGetter3(937, [](LO* plo) {
+            CRef r;
+            if (int n; FHackHp3(plo, true, &n)) r.SetS32(n);  // (s3-hack: the hack objects' record, hack3.cpp)
+            else if (FPlainSo(plo)) r.SetS32(NSoHealthField(plo, 0x170, 937));
+            else if (const GUARD* pg = PguardFromLo(plo)) r.SetS32(pg->n338);
+            return r;
+        });
+        RegisterObjectGetter3(938, [](LO* plo) {
+            CRef r;
+            if (int n; FHackHp3(plo, false, &n)) r.SetS32(n);
+            else if (FPlainSo(plo)) r.SetS32(NSoHealthField(plo, 0x16C, 938));
+            else if (const GUARD* pg = PguardFromLo(plo)) r.SetS32(pg->n33C);
+            // (s3-split) an actor's (Sly's: Cops and Robbers' job 2409 scores Carmelita on a hit when his 940 is out) is its
+            // damage counter (damage.cpp: Sly's the save's health)
+            else if (ACTOR* pa = PactorFromLo(plo); pa && DmgCounterOf(pa)) r.SetS32(*DmgCounterOf(pa));
+            return r;
+        });
+        RegisterObjectSetter3(938, [](LO* plo, const CRef& ref) {   // orig3: 0x1F43D0
+            // (s3-hack: a hack object's, e.g. Ep3's windmill job refilling the ship at each hack's activation)
+            if (FSetHackHp3(plo, false, NOfRef(ref))) return;
+            if (FPlainSo(plo)) SetSoHealth(plo, NOfRef(ref));
+            else if (GUARD* pg = PguardFromLo(plo)) pg->n33C = std::max(std::min(NOfRef(ref), pg->n338), 0);
+            else if (ACTOR* pa = PactorFromLo(plo); pa && DmgCounterOf(pa)) *DmgCounterOf(pa) = std::max(NOfRef(ref), 0);
+        });
+        RegisterObjectSetter3(937, [](LO* plo, const CRef& ref) {   // orig3: 0x1F43F8
+            if (FSetHackHp3(plo, true, NOfRef(ref))) return;
+            if (GUARD* pg = !FPlainSo(plo) ? PguardFromLo(plo) : nullptr)
+            {
+                pg->n338 = NOfRef(ref);
+                pg->n33C = std::max(std::min(pg->n33C, pg->n338), 0);
+                return;
+            }
+            if (!FPlainSo(plo)) return;
+            plo->SetField(0, 0x170, static_cast<uint32_t>(NOfRef(ref)));
+            SetSoHealth(plo, NSoHealthField(plo, 0x16C, 938));
+        });
     }
 } s_initposetters;
+
+// the owner's controller state (its +0x134; null: the empty interface 0x36E6D0)
+PADCTL* PpadctlOfOwner(const PADWRAP3* pw)
+{
+    if (!pw || !pw->plo) return nullptr;
+    auto it = s_mppodata.find(pw->plo);
+    return it == s_mppodata.end() ? nullptr : it->second.ppadctl;
+}
+}
+
+CRef RefPadwrap3Option(int bifk, PADWRAP3* pw, int optid3)
+{
+    CRef r;
+    // (debug: SLY3_PADPRINT=1: the pad object's options asked, its owner and whether it has a controller state)
+    if (static const bool s_f = std::getenv("SLY3_PADPRINT") != nullptr; s_f)
+    {
+        const PADCTL* ppc = PpadctlOfOwner(pw);
+        std::printf("pad3: option %d of %d (bif %d): padctl %s control %d buttons 0x%X x %.2f paused %d joy 0x%X\n", optid3, pw && pw->plo ? pw->plo->oid : -1,
+                    bifk, ppc ? "yes" : "no", ppc ? ppc->nControl : -2, ppc ? ppc->grfbtn : 0, ppc ? ppc->x : 0.0f, g_gamepause.c78, g_joyps2.grfbtn);
+    }
+    if (bifk != 111) return r;
+    if (optid3 >= 1072 && optid3 <= 1077)
+    {
+        // orig3: 0x2B58D8 + the descriptor's offset: INPUT_INTERFACE_DATA {leftX, leftY, leftAmount, rightX, rightY,
+        // rightAmount} = the PADCTL's x, y, uJoy, x2, y2, uJoy2
+        const PADCTL* ppc = PpadctlOfOwner(pw);
+        const float ag[] = {ppc ? ppc->x : 0.0f, ppc ? ppc->y : 0.0f, ppc ? ppc->uJoy : 0.0f,
+                            ppc ? ppc->x2 : 0.0f, ppc ? ppc->y2 : 0.0f, ppc ? ppc->uJoy2 : 0.0f};
+        r.SetF32(ag[optid3 - 1072]);
+        return r;
+    }
+    if (optid3 == 1078 || optid3 == 1079)
+    {
+        auto pm = std::make_shared<CMethod>();
+        pm->m_pbasic = pw;
+        if (optid3 == 1078)
+        {
+            // orig3: 0x10B400 (int mask, float dt) -> 0x1A7A80: the buttons pressed within dt, taken
+            pm->m_crefReq = 2;
+            pm->m_pfnthunk = [](BASIC* pb, int c, CRef* a) {
+                CRef rr;
+                PADCTL* ppc = PpadctlOfOwner(static_cast<PADWRAP3*>(pb));
+                const uint32_t grf = c > 0 ? uint32_t(a[0].RefCoerceS32().m_n) : 0;
+                const float dt = c > 1 ? a[1].GAsFloat() : 0.0f;
+                rr.SetBool(ppc && GrfPadctlTakePressed(ppc, grf, dt) != 0);
+                return rr;
+            };
+        }
+        else
+        {
+            // orig3: 0x10B4C8 (int mask): the interface's +0x18 (the buttons down) & mask
+            pm->m_crefReq = 1;
+            pm->m_pfnthunk = [](BASIC* pb, int c, CRef* a) {
+                CRef rr;
+                const PADCTL* ppc = PpadctlOfOwner(static_cast<PADWRAP3*>(pb));
+                rr.SetBool(ppc && c > 0 && (ppc->grfbtn & uint32_t(a[0].RefCoerceS32().m_n)) != 0);
+                return rr;
+            };
+        }
+        r.SetMethod(pm);
+    }
+    return r;
 }
 
 namespace
@@ -619,6 +838,26 @@ namespace
 // so the title's camera follows it and the gauge has no actor)
 void EnablePoVt(LO* plo, int n) { EnablePo(g_psw, plo, n); }
 NATIVEFN(0x1C3ED8, EnablePoVt);
+}
+
+// (PC, splitscreen3.h)
+void EnablePoExtra3(SW* psw, LO* plo)
+{
+    (void)psw;
+    if (!plo || plo == s_ploCur) return;
+    PODATA& pd = s_mppodata[plo];
+    if (!pd.ppadctl)
+    {
+        if (s_apo.size() >= 16) return;
+        s_apo.push_back(plo);
+        auto ppc = std::make_unique<PADCTL>();
+        ClearPadctl(ppc.get());
+        ppc->plo = plo;
+        ppc->nControl = -1;
+        pd.ppadctl = ppc.get();
+        s_lpadctl.push_back(std::move(ppc));
+    }
+    SetPadctlControl(pd.ppadctl, 1);
 }
 
 // Debug (F6, temporary): every character selectable at the safe house from now on (the states of its option 1339
@@ -647,4 +886,12 @@ int OidSafeHouseShown(const LO* plo, std::vector<OID>* paoidAllowed)
     if (it == s_mpsh.end() || !it->second.psma) return -1;
     if (paoidAllowed) *paoidAllowed = AoidAllowed(plo);
     return OidSmaCur(it->second.psma);
+}
+
+// (Sly 3) a plain SO's hit points (orig3 0x1F43C8 / 0x1F43F0 / 0x1F43D0: +0x16C, its maximum +0x170, clamped to 0..max)
+int NSoHealth3(const LO* plo) { return plo ? NSoHealthField(plo, 0x16C, 938) : 0; }
+int NSoHealthMax3(const LO* plo) { return plo ? NSoHealthField(plo, 0x170, 937) : 0; }
+void SetSoHealth3(LO* plo, int n)
+{
+    if (plo) SetSoHealth(plo, n);
 }

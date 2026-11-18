@@ -21,7 +21,7 @@ inline float Div(float a, float b) { return b == 0.0f ? (std::signbit(a) != std:
 
 
 
-// orig: 0x0011D3F8 NRandInRange (into [nLow, nHigh])
+// orig: 0x0011D3F8 NRandInRange (into [nLow, nHigh]) (orig3: 0x11E8F0, the same C in the Sly 3 decomp)
 int NRandInRange(int nLow, int nHigh)
 {
     const int n = NRandom();
@@ -32,7 +32,7 @@ int NRandInRange(int nLow, int nHigh)
 
 
 
-// orig: 0x0011D5B0 PrescaleClq__FP3CLQffT0 (the quadratic of g(ru t + du))
+// orig: 0x0011D5B0 PrescaleClq__FP3CLQffT0 (the quadratic of g(ru t + du)) (orig3: 0x11EAD0, the same code in Sly 3)
 void PrescaleClq(const CLQ* s, float ru, float du, CLQ* d)
 {
     const CLQ c = *s;
@@ -53,7 +53,7 @@ void FitClq(float g0, float g1, float u, float gU, CLQ* pclq)
     pclq->u1 = d1 - u2;
 }
 
-// orig: 0x0011D948 GLimitLm__FP2LMf
+// orig: 0x0011D948 GLimitLm__FP2LMf (orig3: 0x11EE68, the same code in Sly 3)
 float GLimitLm(const LM* plm, float g)
 {
     if (g < plm->gMin) return plm->gMin;

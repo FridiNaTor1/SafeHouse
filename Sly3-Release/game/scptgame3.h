@@ -21,6 +21,10 @@ struct LO;
 struct SCPT3;
 struct BINOCOPEN3;
 
+// orig3 0x1F4B38 for player 0 (SCPT 0x13, the world's option 983 with player 0): the object becomes the current
+// player and takes the pad (a plain SO by its enable, e.g. the safe house 15065 after v_ext's flyover)
+void SetPlayer0Character3(SW* psw, LO* plo);
+
 struct SCPTHOOKS3
 {
     // ---- the title (the screen code; orig3 0x221AC8 ShowTitle / 0x21DD30 the title still up). Interim: shown until START.
@@ -51,6 +55,12 @@ struct SCPTHOOKS3
     void (*pfnShowHint)(int id, float g) = nullptr;
     void (*pfnClearHint)(int id) = nullptr;
     void (*pfnSetButtonPrompt)(int grf) = nullptr;
+    // s3-ui: the choice menu of 0x6C (orig3 D_0036BB80, shown by 0x1634F0(menu, title, c, {id, button}), hidden by
+    // 0x1636B0; +0x190 == 1 while it shows, +0x198 the chosen line's id, -1 none): up to 3 lines with the buttons 0x80 /
+    // 0x10 / 0x20 (square / triangle / circle). Interim (null): no menu drawn, the first line chosen after 1 s.
+    void (*pfnShowChoices)(int idTitle, int c, const int* aid, const int* agrfBtn) = nullptr;
+    void (*pfnHideChoices)() = nullptr;
+    int (*pfnChoiceState)(int* pidChosen) = nullptr;   // 1 showing, else done (*pidChosen the line, -1 none)
 
     // ---- the actors (the player code). Interim: none play / move (their waits end at once).
     // PlayActorScriptAnim 0x156578(actor, anim oid, grf, n) / EndActorScriptAnim 0x156690 / FActorInScriptAnim 0x1566D0
@@ -75,11 +85,37 @@ struct SCPTHOOKS3
     // with g1 / b2 / g3 (job +0x34 / +0x38 / +0x3C). Both after ClearJobs on the actor's job stack (+0x29C); the
     // script animation (if any) is already started. The wait: pfnFActorJobDone(actor, 0xF3 / 0xF4) (no job left, or
     // its FDone 0x1577C0 / 0x157950); returning true, the hook clears the actor's jobs (the original's ClearJobs).
-    void (*pfnActorPathStep)(LO* ploActor, LO* pcrv, int b1, int b2, float g3) = nullptr;
-    void (*pfnActorStepTo)(LO* ploActor, const float pos[3], float g1, int b2, float g3) = nullptr;
+    void (*pfnActorPathStep)(LO* ploActor, LO* pcrv, int b1, int b2, float g3, int f104) = nullptr;   // (f104: the run's +0x104, set by 0x31: the job's +0x58)
+    void (*pfnActorStepTo)(LO* ploActor, const float pos[3], float g1, int b2, float g3, int f104) = nullptr;   // (the job's +0x30)
+    // (s3-player) SCPT 0x30's walk toward a point (its done test's every frame): true when a native actor walks there itself
+    bool (*pfnActorWalkToward)(LO* ploActor, const float pos[3], float gSpeed, bool fR1) = nullptr;
     bool (*pfnFActorJobDone)(LO* ploActor, int kind) = nullptr;
     // 0x63: 0x1985A8(guard, plo) (plo may be null)
     void (*pfnGuardCommand63)(LO* ploGuard, LO* plo) = nullptr;
+    // s3-player / s3-ai (round 3): 0x69 the run's actor caught: an actor (cid 0x33: 0x1528E0: unless the Intro's world
+    // 35 or 0x1569B8, the game's 0x1853D8 (+0x4FA4 clear), the sound 0x2A, then 0x168670 on its player) or a cid 0x31
+    // (0x168670(0x1F4A80(actor), 0)); null: nothing.
+    // s3-player: the actor commands whose bodies are the actor's (cid 0x33) own functions; the executor resolves the
+    // arguments and keeps the run pending on the actor (SetRunPending) as the original; null: nothing, done at once.
+    //   0x2A (0x154C80(actor, a, the position of b)): a target object and point (the actor's +0x... controller, kind 7)
+    //   0x2B (0x154D40(actor, a)): the interact context's message 9 (a: null ends it)
+    //   0x2C (0x154BA8(actor, a)): the carried object set / dropped (+0x940)
+    //   0x2D (0x154C00(actor, a)): the interact kind 5 on a (a: null ends it)
+    //   0x2E (0x154EF0(actor, a = the object named by the 1st word near the actor, b, n)): the interact kind 0xC
+    //   0x35 (pending only): done when the actor's interact (+0x508 == 8) has ended
+    //   0x37 (0x153F68(actor, the position of a, g = F(n), limit = F(n2))): a launch toward a point
+    //   0x6A (0x172C30 / 0x172AE8 on the actor's +0x1108 object with n; done: its +0x48 == -1)
+    //   0x74 (Bentley 0x36: his item 0xD dropped; a: the object aimed at (0x273030 on +0x1290), null: put away)
+    // pos: the position of the object the command names (0x2A: of b; 0x37: of a)
+    void (*pfnActorCmd)(int id, LO* ploActor, LO* ploA, LO* ploB, int n, int n2, const float pos[3]) = nullptr;
+    bool (*pfnFActorCmdDone)(int id, LO* ploActor) = nullptr;   // (0x154ED0 / 0x154EE0 / 0x154DA0 / 0x154F40 / 0x35's)
+    void (*pfnCaught)(LO* plo) = nullptr;
+    // s3-ui: 0x1C's notice (D_0046FD00, 0x222FF0: shown with n and the screen object (cid 0x9E); null: nothing) and its
+    // busy test (0x21DD30; null: not busy)
+    void (*pfnShowNotice)(int n, LO* ploScreen) = nullptr;
+    bool (*pfnFNoticeBusy)() = nullptr;
+    // 0x5D / 0x5E: the run waits until the actor (cid 0x36) is in / out of its state 8 (+0x1520 == 8); null: no wait
+    int (*pfnActorState36)(LO* ploActor) = nullptr;
 
     // ---- the world (the world flow code; 0x67 BeginActorTransition, 0x68 TriggerExit 0x27FCC8)
     void (*pfnTriggerExit)(LO* ploExit) = nullptr;
@@ -92,8 +128,23 @@ void StartupScripts3(SW* psw);
 void RestoreTasks3AtStart(SW* psw);
 // The scripts' records of the world left (a new world)
 void ResetScripts3();
+// orig3: 0x25BD68 (the in-place world reset 0x25BDD0): every SCPT object (class 0x87) stopped (0x226050); their
+// records stay (the world is not reloaded)
+void StopScripts3();
 // True when the world's tasks / scripts are Sly 3's (StartupScripts3 ran): the copied Sly 2 task code stands aside
 bool FScripts3Active();
+// an object a script added (SCPT 0x38) since the world started (transition.cpp's world start keeps it in the world)
+bool FLoAddedByScript3(const LO* plo);
+// orig3: 0x1C3470's first test (0x1A9478 && !0x1A9600): an actor of player index sel (-1: either) takes no hit while
+// the scripts pause the players' pads (+0x1180) without the kind-4 pause (+0x1190), e.g. Ep1 2141's scene: Murray in the
+// canal under the wave guard 19900's shots (the reference: +0x1180 1, Murray unhurt)
+bool FActorHitsPaused3(int sel);
+bool FPlayersPausedSel3(int sel);   // orig3 0x1A9478 (the selected players' pads paused)
+// orig3: 0x1A9478(SW, -1): either player's record paused (+0x1180, the scripts' pauses): the challenge timer's stop
+bool FPlayersPaused3();
+// orig3 0x1A9630 -> 0x1A97B8: a player record whose +0x1180 count is up (a script's pause 0x1F, 0x1A93C8) hands its
+// character the empty controller D_0036E6D0: the seat's pad reaches nothing (po.cpp UpdatePadctl)
+bool FPlayerSeatPaused3(int seat);
 
 // The record of a SCPT object (null: not one)
 SCPT3* PscptOfLo3(LO* plo);
@@ -108,7 +159,8 @@ bool FScriptCameraActive3();
 // with the last one). Read by the guards' spotted lines (0x19AF98: entry 5, the first list or the second by the
 // player (+0x2F0)): IdWorldDialog3(i, fSecond) gives the next id (-1: none); the AI code's.
 void SetWorldDialogTable3(int i, const std::vector<int>& aid0, const std::vector<int>& aid1);
-int IdWorldDialog3(int i, bool fSecond);
+int IdWorldDialog3(int i, bool fSecond, int* pindex = nullptr);   // (pindex: the bag's index drawn)
+bool FWorldDialogTable3();   // the world has a dialog table (SW +0x4FB0 non-null)
 
 // (debug / harness) a task state request as the game makes it (RequestTaskState 0x189300 through the queue 0x189240):
 // SLY3_TASKREQ="FRAME:OID=STATE;..." does this at those frames

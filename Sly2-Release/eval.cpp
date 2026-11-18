@@ -1,4 +1,5 @@
 #include "eval.h"
+#include "envonce.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -59,6 +60,10 @@ CRef RefEvalSymbol(CPair* ppair, CFrame* pframe)
         char ach[64];
         std::snprintf(ach, sizeof(ach), "unbound symbol %u", ppair->m_ref.m_symid);
         g_splicediag.Note(ach);
+        // (debug: SLY2N_SPLICEUNBOUND=1: each evaluation of a symbol no frame binds, e.g. the original's two undefined
+        // calls: the aim managers' sym1533, the blimp's sym1407; notes/SCRIPTNAMES3_2026-11-18.md)
+        static const bool s_fPrint = SLY2N_ENV("SLY2N_SPLICEUNBOUND") != nullptr;
+        if (s_fPrint) std::fprintf(stderr, "splice: unbound symbol %u evaluated (nothing defines it: its value is nothing)\n", ppair->m_ref.m_symid);
     }
     return ref;
 }
@@ -73,7 +78,7 @@ CRef RefEvalSet(CPair* ppair, CFrame* pframe)
         return RefVoid();
     }
     CRef ref = RefEval(ppairSym->m_ppairNext.get(), pframe);
-    if (const char* e = std::getenv("SLY2N_SETPRINT"); e && std::atoi(e) == int(ppairSym->m_ref.m_symid))  // (debug)
+    if (const char* e = SLY2N_ENV("SLY2N_SETPRINT"); e && std::atoi(e) == int(ppairSym->m_ref.m_symid))  // (debug)
     {
         CFrame* pfOwner = pframe;  // the frame that holds the binding
         while (pfOwner && !pfOwner->PrefFindBinding(ppairSym->m_ref.m_symid, 0)) pfOwner = pfOwner->m_cpframeParent ? pfOwner->m_apframeParent[0] : nullptr;
@@ -309,8 +314,8 @@ CRef RefEvalWhile(CPair* ppair, CFrame* pframe)
             r.SetPair(std::shared_ptr<CPair>(ppair, [](CPair*) {}));
             std::string str;
             PrintRef(r, &str);
-            std::fprintf(stderr, "splice: a while loop cut after 1000000 rounds%s%s\n", std::getenv("SLY2N_WHILEGUARD") ? ": " : "",
-                         std::getenv("SLY2N_WHILEGUARD") ? str.substr(0, 4000).c_str() : "");
+            std::fprintf(stderr, "splice: a while loop cut after 1000000 rounds%s%s\n", SLY2N_ENV("SLY2N_WHILEGUARD") ? ": " : "",
+                         SLY2N_ENV("SLY2N_WHILEGUARD") ? str.substr(0, 4000).c_str() : "");
             break;
         }
     }
@@ -355,7 +360,7 @@ CRef RefEvalLambdaBody(CProc* pproc, CFrame* pframe)
 {
     static int s_cDepth = 0;
     struct DEPTH { DEPTH() { ++s_cDepth; } ~DEPTH() { --s_cDepth; } } depth;
-    static const bool s_fDeep = std::getenv("SLY2N_DEEPLAMBDA") != nullptr;
+    static const bool s_fDeep = SLY2N_ENV("SLY2N_DEEPLAMBDA") != nullptr;
     if (s_fDeep && s_cDepth == 400)
     {
         std::string str;

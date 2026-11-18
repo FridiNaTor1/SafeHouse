@@ -3,6 +3,7 @@
 // m_22DE88_p3.cpp, m_12B3B0_p3.cpp (oracle-verified) and the decomp's func_00230018/00230100/002303A0/00230598/
 // 00230630/0022C840 (matching C). Matrices are glm with columns = the original's rows (lo.h).
 
+#include "fastpaths.h"
 #include "xf.h"
 
 #include "anim.h"
@@ -794,7 +795,7 @@ void UpdateAloXfs(ALO* palo, float t, float dt)
     const bool fSnap = (GrfUpdOfLo(palo) & 0x10u) != 0;
     for (auto& up : palo->axf)
     {
-#ifdef __SWITCH__
+#if SLY2_FASTPATHS
         // (the Switch: the record two ahead fetched, the parts of it the update reads: each record is a heap block of
         // its own)
         if (const size_t i = size_t(&up - palo->axf.data()); i + 2 < palo->axf.size())

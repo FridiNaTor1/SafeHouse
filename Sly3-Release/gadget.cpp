@@ -2,7 +2,14 @@
 // func_001B9A08.c (sly2-decomp), the code of 0x141C08 / 0x141CD0 / 0x141DD0 / 0x1441A0 / 0x1441C0 / 0x1441E8 and
 // Sly2-Reference's m_13FF70.cpp (ActorUpdateAbilities), m_188488.cpp (0x18D760).
 
+#include "outfit3.h"
+#include "sm.h"
+#include "smrun.h"
+#include "combo3.h"
+#include "game/items3.h"
+#include "game/task3.h"
 #include "gadget.h"
+#include "game/treasuremap3.h"
 #include "game/sly3.h"
 #include "worldglobals.h"
 #include "pccharacter.h"   // (PC addition, debug menu only: Carmelita's moveset)
@@ -62,8 +69,9 @@ PADCTL* PpadctlOfActor(ACTOR* p)
 }
 int32_t NElf(uint32_t va) { return int32_t(g_disc.U32Elf(va)); }  // (an address comes back as the USA one: disc.h)
 float GElf(uint32_t va) { int32_t n = NElf(va); float g; std::memcpy(&g, &n, 4); return g; }
-int ItemUse(int id) { return id >= 0 && id < 0x2B ? NElf(S3VA(0x2BCD00) + 0x20 * uint32_t(id)) : -1; }
-int ItemPower(int id) { return id >= 0 && id < 0x2B ? NElf(S3VA(0x2BCD00) + 0x20 * uint32_t(id) + 0xC) : 0; }
+// (Sly 3's table 0x343098, 0x3C bytes: game/items3.h; the code here keeps Sly 2's ids)
+int ItemUse(int id) { return sly3::Item3(sly3::Item3FromItem2(id)).use; }
+int ItemPower(int id) { return sly3::Item3(sly3::Item3FromItem2(id)).cost; }
 
 constexpr uint32_t s_agrfSlot[3] = {4, 1, 2};   // D_002C3258: L1, L2, R2 (the pad's layout)
 
@@ -79,6 +87,9 @@ struct ABILITIES
     ABSLOT a[3];      // +0x1180
     float g1308 = 0;  // +0x1308 the drained power's fraction
     CSndRef snd2044;  // Sly's +0x2044 (the time gadgets' loop)
+    bool fShadow2 = false;   // (Sly 3) Shadow Power Level 2 held: Sly's +0x1F1C
+    SMA* psmaShield = nullptr;   // (Sly 3) the shield's SMA (+0x1F2C)
+    float tShieldFlash = -10.0f; // (Sly 3) +0x1F34
 };
 std::unordered_map<ACTOR*, ABILITIES> s_mpab;
 WORLD_TABLE(s_mpab);   // (PC: moved aside while a kept world loads, worldglobals.h)
@@ -106,16 +117,57 @@ ABILITIES& AbOf(ACTOR* pa)
     {
         ab = ABILITIES{};
         ab.psw = g_psw;
+        static const bool s_fGrant = std::getenv("SLY3_GADGETS") != nullptr;   // debug: every power-up owned
+        if (s_fGrant) GrantPowerups3(-1);
+        // debug (the reference's pokes): SLY3_PROGOFS=1 prints where the save (0x6808 bytes, the original's 0x468D30)
+        // keeps each power-up's owned bit and the players' slots
+        static bool s_fOfs = std::getenv("SLY3_PROGOFS") != nullptr;
+        if (s_fOfs)
+        {
+            s_fOfs = false;
+            for (int id3 = 0; id3 < sly3::C_ITEM; ++id3)
+            {
+                GAMESAVE before = g_gamesave;
+                CRef r;
+                r.SetBool(true);
+                if (!FSetProgress({"powerUps", "mppukfAcquired", std::to_string(id3)}, r)) continue;
+                for (int i = 0; i < CB_GAMESAVE; ++i)
+                    if (before.ab[i] != g_gamesave.ab[i])
+                        std::printf("progofs: powerUps mppukfAcquired %d: byte 0x%X bits 0x%02X\n", id3, i,
+                                    unsigned(before.ab[i] ^ g_gamesave.ab[i]));
+                g_gamesave = before;
+            }
+            for (const char* szp : {"sly", "bentley", "murray"})
+                for (int i = 0; i < 3; ++i)
+                    if (int32_t* pn = PnProgressSlot({szp, "apukCur", std::to_string(i)}))
+                        std::printf("progofs: %s apukCur %d: byte 0x%X\n", szp, i,
+                                    unsigned(reinterpret_cast<uint8_t*>(pn) - g_gamesave.ab));
+        }
         if (const char* sz = SzPlayer(pa))
             for (int i = 0; i < 3; ++i)
             {
                 const CRef r = RefGetProgress({sz, "apukCur", std::to_string(i)});
-                ab.a[i].id = r.m_tagk == TAGK_S32 ? r.m_n : -1;
+                ab.a[i].id = r.m_tagk == TAGK_S32 && r.m_n >= 0 ? sly3::Item2FromItem3(r.m_n) : -1;  // (Sly 3's ids)
+            }
+        // debug: SLY3_GADGETSLOTS=a,b,c puts Sly 3 items a / b / c on L1 / L2 / R2 (of the character they belong to)
+        if (const char* sz = std::getenv("SLY3_GADGETSLOTS"))
+            for (int i = 0; i < 3 && *sz; ++i)
+            {
+                const int id3 = std::atoi(sz);
+                const int chr = sly3::Item3(id3).chr;
+                const char* szp = SzPlayer(pa);
+                const bool fMine = szp && ((chr == sly3::CHR3_SLY && !std::strcmp(szp, "sly")) ||
+                                           (chr == sly3::CHR3_BENTLEY && !std::strcmp(szp, "bentley")) ||
+                                           (chr == sly3::CHR3_MURRAY && !std::strcmp(szp, "murray")));
+                if (fMine) ab.a[i].id = sly3::Item2FromItem3(id3);
+                while (*sz && *sz != ',') ++sz;
+                if (*sz == ',') ++sz;
             }
         UpdateAbilityDisplay(pa);  // 0x141EF8's end: vt slot 105
     }
     return ab;
 }
+
 
 // orig: vt slot 105 (0x141E70 nothing; Bentley 0x00136C50): Bentley shows his Hover Pack (glob group 0x24D on his
 // back) while he is the current player (0x1C40C0) and Hover Pack 12 is on one of his buttons (0x141EA8), else hides
@@ -149,20 +201,39 @@ SLY::POCKET* PpocketSly(SLY* p, int id)
 bool FSlyCanDo(SLY* p, int n)
 {
     if (static_cast<unsigned>(p->nF04) < 3) return false;  // 0x1443D8 (the binocucom)
-    const int st = p->state;
+    const int st = p->jts;
+    // orig3 0x1AF308 case 0x22 (Shadow Power Level 2): not in Sly 3's state 5 (the native's 4, as Thief Reflexes)
+    // orig3 0x1AF308: a worn disguise (+0x1108 busy) allows only the disguises (and the action 3)
+    const bool fDisguise = n >= sly3::ITEM2_SLY3 + 38 && n <= sly3::ITEM2_SLY3 + 40;
+    // (0x173428: any outfit worn, not only the three disguises. The development start's gadget tests (SLY3_GADGETS, in
+    // the attract's world block where a script wears 0x75D) keep to the disguises.)
+    static const bool s_fTest = std::getenv("SLY3_GADGETS") != nullptr;
+    if (const int idWorn = IdOutfitWorn3(p->palo); !fDisguise && n != 3 && idWorn != -1 && (!s_fTest || (idWorn >= 0x759 && idWorn <= 0x75B)))
+        return false;
+    if (fDisguise) return st < 0x18;
+    // orig3 0x1AF308 case 0x24 (Treasure Map): 0x279C28 finds the world's class-0x99 treasure object (game/treasuremap3.cpp)
+    if (n == sly3::ITEM2_SLY3 + 36 && (!PloTreasureMap3() || PloMapHolder3())) return false;
+    // orig3 0x1AF308 case 0x23 (Rocket Boots): held in Sly 3's state 19 (the native 24), else not airborne (0x2503C8)
+    if (n == sly3::ITEM2_SLY3 + 35)
+        return st == jts::Boots || (p->pxpFloor && (st == jts::Stand || st == jts::Walk || st == jts::Target || st == jts::Sneak || st == jts::Run));
+    if (n == sly3::ITEM2_SLY3 + 34 || n == sly3::ITEM2_SLY3 + 37) return st != jts::Damage;   // (0x22 / 0x25)
+    // orig3 0x1AF308: Smoke Bomb / Knockout Dive are combos in Sly 3 (their definition there and none playing)
+    if (n == 23 || n == 33) return st < 0x18 && sly3::FAbilityCombo3Ready(p, sly3::Item3FromItem2(n));
     if (n == 0x1D || n == 0x2A)
     {
-        if (st == 4) return false;
+        if (st == jts::Damage) return false;
         const float g = g_clock.af[1];   // (the clock's factor 1, +0x1C)
         if (g == 1.0f) return true;
-        return g == GElf(n == 0x1D ? S3VA(0x2BF3EC) : S3VA(0x2BF3F0));
+        // (orig3 0x1AF308 case 0x21 / 0x1AF6C0: Thief Reflexes' factor is the literal 0.25; the mapped Sly 2 constant
+        // was another value, which ended the gadget in the frame it started; s3-decomp)
+        return g == (n == 0x1D ? 0.25f : GElf(S3VA(0x2BF3F0)));
     }
     if (static_cast<unsigned>(st) >= 0x18) return false;
     switch (st)
     {
-    case 0: case 1: case 5: case 10: case 12: break;
-    case 2: WarnOnce("0x19C8D0 (the jump's slot 99, a gadget in the air)"); return false;
-    case 7:
+    case jts::Stand: case jts::Walk: case jts::Target: case jts::Sneak: case jts::Run: break;
+    case jts::Jump: WarnOnce("0x19C8D0 (the jump's slot 99, a gadget in the air)"); return false;
+    case jts::Interact:
         // orig: 0x194558: interaction permissions precede the item's own state gates.
         // Binocucom (3) is not an assignable gadget; its camera permission remains with that subsystem.
         if (n == 3) return false;
@@ -173,9 +244,9 @@ bool FSlyCanDo(SLY* p, int n)
         default: break;
         }
         break;
-    case 8: WarnOnce("0x19EEF0 (+0xF50's slot 99, a gadget)"); return false;
-    case 3: if (n != 3) return false; break;
-    case 23:
+    case jts::Climb: WarnOnce("0x19EEF0 (+0xF50's slot 99, a gadget)"); return false;
+    case jts::Hang: if (n != 3) return false; break;
+    case jts::Throw:
         // orig: 0x18D760: aiming permits only the currently selected item.
         if ((n == 26 || n == 37 || n == 38 || n == 41) && static_cast<unsigned>(p->jtthrow.state - 4) < 3)
             if (const CARRY* carry = PcarryFromLo(p->jtthrow.selected)) return carry->kind == n;
@@ -188,8 +259,8 @@ bool FSlyCanDo(SLY* p, int n)
     case 23:  // orig: 0x18D760 / 0x1CB2C0, retained/free proxy row at threshold 2
         if (LO* proxy = PloSlyPart(p, 0x2010)) return PloProxyFreeRow(g_psw, proxy, 2) != nullptr;
         return false;
-    case 24: return st == 5;
-    case 27: return st == 2;
+    case 24: return st == jts::Target;
+    case 27: return st == jts::Jump;
     case 26: case 37: case 38: case 41:  // orig: 0x18D760 (0x1A / 0x25 / 0x26 / 0x29: the pockets)
     {
         SLY::POCKET* pocket = PpocketSly(p, n);
@@ -203,7 +274,7 @@ bool FSlyCanDo(SLY* p, int n)
     }
     case 40:
         if (p->f1D30 || p->n10EC == 4 || p->mode != -1) return false;
-        return st == 0 || st == 1 || st == 10 || st == 12;
+        return st == jts::Stand || st == jts::Walk || st == jts::Sneak || st == jts::Run;
     default: return false;
     }
 }
@@ -220,9 +291,84 @@ bool FCanDo(ACTOR* pa, int n)
 void StartAbility(ACTOR* pa, int n)
 {
     if (g_psw) BroadcastTaskEvent(g_psw, 0x3C, pa->palo);   // (taskmgr +0xC = n: not kept natively)
-    if (FPrint()) std::printf("gadget: %s starts %d (power %d)\n", SzPlayer(pa), n, NActorPower(pa));
+    if (FPrint()) std::printf("gadget: %s starts %d (power %d, t %.3f)\n", SzPlayer(pa), n, NActorPower(pa), g_clock.t);
+    if (n == sly3::ITEM2_SLY3 + 34 && dynamic_cast<SLY*>(pa))
+    {
+        // orig3 0x1AF6C0 case 0x22, Shadow Power Level 2: the power spent, +0x1F1C set: Sly unseen (vt slot 120
+        // 0x1B0620 answers 1 before 0x156B98) and drawn faded (0x154FD8) until the end (0x1AF990 clears it)
+        SpendActorPower(pa, n);
+        AbOf(pa).fShadow2 = true;
+        return;
+    }
+    if (n == sly3::ITEM2_SLY3 + 37 && dynamic_cast<SLY*>(pa))
+    {
+        // orig3 0x1AF6C0 case 0x25, the shield: the power spent, Sly's shield state machine (+0x1F2C: the SM part +0x1F28,
+        // oid 415, applied to Sly by his init 0x1AA118 through 0x2399C8 = PsmaApplySm) sent to its state 0x1A1 (0x239CE8 =
+        // SetSmaGoal). Natively the SMA is applied at the first use.
+        SpendActorPower(pa, n);
+        ABILITIES& ab = AbOf(pa);
+        if (!ab.psmaShield)
+            for (const auto& [ib, plo] : pa->palo->apart)
+                if (ib == (FN3_TAG | 0x1F28u))
+                    if (SM* psm = dynamic_cast<SM*>(plo)) ab.psmaShield = PsmaApplySm(psm, pa->palo, -1, 1);
+        if (ab.psmaShield) SetSmaGoal(ab.psmaShield, 0x1A1);
+        else WarnOnce("Sly 3's shield: no SM part +0x1F28 on Sly");
+        return;
+    }
+    if (n == sly3::ITEM2_SLY3 + 36 && dynamic_cast<SLY*>(pa))
+    {
+        // orig3 0x1AF890 case 0x24, the Treasure Map: JT +0x1F20 = 0x279C28(), Sly's state 0x18 substate 8 (0x1ADDD0),
+        // whose entry holds the map up (0x279120; game/treasuremap3.cpp: natively the map mode holds Sly's pad)
+        if (!PloTreasureMap3()) { WarnOnce("Sly 3's treasure map: no usable class-0x99 object here"); return; }
+        // (s3fix-modes3: Sly's own state 0x18 substate 8, entered as 0x1ADDD0 does: its entry 0x279120 holds the map up)
+        SetSlyState(static_cast<SLY*>(dynamic_cast<SLY*>(pa)), jts::Map, jts::SubMapUp);
+        return;
+    }
+    if (n == sly3::ITEM2_SLY3 + 35)
+        if (SLY* p = dynamic_cast<SLY*>(pa))
+        {
+            // orig3 0x1AF6C0 case 0x23, Rocket Boots: the power spent, Sly's state 19 substate 6 (0x1ADDD0): natively
+            // Sly 2's Stealth Slide state 24 / 12, its Sly 3 changes marked in sly.cpp
+            SpendActorPower(pa, n);
+            SetSlyState(p, jts::Boots, jts::SubBootsCharge);
+            return;
+        }
+    if (n >= sly3::ITEM2_SLY3 + 38 && n <= sly3::ITEM2_SLY3 + 40 && dynamic_cast<SLY*>(pa))
+    {
+        // orig3 0x1AF6C0 cases 0x26..0x28, the disguises: worn (the outfit object +0x1108 busy, 0x173428) -> taken off
+        // (0x172AE8 with -1), else the power spent and the outfit 0x759 / 0x75A / 0x75B (0x173560) worn (outfit3.cpp)
+        const int idWorn = IdOutfitWorn3(pa->palo);
+        if (idWorn != -1 && (!std::getenv("SLY3_GADGETS") || (idWorn >= 0x759 && idWorn <= 0x75B))) FWearOutfit3(pa->palo, -1);   // (0x173428: an outfit worn; +0x64, the suspend count, not natively)
+        else
+        {
+            SpendActorPower(pa, n);
+            if (!FWearOutfit3(pa->palo, 0x759 + (n - sly3::ITEM2_SLY3 - 38)))
+                WarnOnce("Sly 3's disguise " + std::to_string(n - sly3::ITEM2_SLY3) + ": no outfit object for Sly here");
+        }
+        return;
+    }
+    // orig3 0x140128 cases 7 / 13: Bentley's Fishing Pole (gang.cpp, game/fishing3.cpp) and Grapple-Cam (gang.cpp)
+    if ((n == sly3::ITEM2_SLY3 + 7 || n == sly3::ITEM2_SLY3 + 13) && FIsLoDerivedFrom(pa->palo, S3CID(0x37))) { StartBentleyAbility(pa, n); return; }
+    // orig3 0x1E25B0 case 17: Murray's Be The Ball (gang.cpp, game/ball3.cpp)
+    if (n == sly3::ITEM2_SLY3 + 17 && FIsLoDerivedFrom(pa->palo, S3CID(0x36))) { StartMurrayAbility(pa, n); return; }
+    if (n >= sly3::ITEM2_SLY3)
+    {
+        // a Sly 3 item with no Sly 2 twin (game/items3.h): Sly 3's start functions are Sly 0x1AF6C0, Bentley
+        // 0x140128, Murray 0x1E25B0 (vt slot 114); not ported yet (notes/DECOMP3_2026-11-10.md "Gadgets")
+        const int id3 = n - sly3::ITEM2_SLY3;
+        WarnOnce("Sly 3 gadget " + std::to_string(id3) + " (vt slot 114) not ported");
+        return;
+    }
     if (SLY* p = dynamic_cast<SLY*>(pa))
     {
+        // orig3 0x1AF6C0 (Sly's vt slot 114): Smoke Bomb (Sly 3 25, Sly 2 23) and Knockout Dive (31, Sly 2 33) spend
+        // their power (0x154460) and start their combo definition (0x13A678 on +0x1F48 / +0x1F44: combo3.cpp)
+        if (n == 23 || n == 33)
+        {
+            SpendActorPower(p, n);
+            sly3::StartAbilityCombo3(p, sly3::Item3FromItem2(n));
+            return;
+        }
         switch (n)
         {
         case 26: case 37: case 38: case 41:  // orig: 0x18DA48, pocket/throw branch (0x1A / 0x25 / 0x26 / 0x29)
@@ -246,7 +392,7 @@ void StartAbility(ACTOR* pa, int n)
             // 0x224610's persistent carrier/listener path is for kinds7/11 only.
             p->jtthrow.selected = selected;
             (void)GrfAbilityButton(p, n);  // 0x141EA8 is a pure mask lookup
-            SetSlyState(p, 23, -1);
+            SetSlyState(p, jts::Throw, -1);
             SetJtThrowState(p, 4);
             return;
         }
@@ -256,7 +402,7 @@ void StartAbility(ACTOR* pa, int n)
             return;
         case 33:  // orig: 0x18DA48, Knockout Dive
             SpendActorPower(p, n);
-            SetSlyState(p, 9, -1);
+            SetSlyState(p, jts::N2Rush, -1);
             return;
         case 34: case 35:  // orig: 0x18DA48; activation waits for event 0x27C
             p->n9BC = n;
@@ -265,15 +411,15 @@ void StartAbility(ACTOR* pa, int n)
             return;
         case 24:  // Combat Dodge, original 0x18DA48
             SpendActorPower(p, n);
-            SetSlyState(p, 6, -1);
+            SetSlyState(p, jts::Dodge, -1);
             return;
         case 39:  // Lightning Spin, original 0x18DA48 (case 0x27): the charged strike's substate 9 (clip +0x1FE8)
             SpendActorPower(p, n);
-            SetSlyState(p, 5, 9);
+            SetSlyState(p, jts::Target, jts::SubN2StrikeUp);
             return;
         case 25:  // Stealth Slide, original 0x18DA48 (case 0x18DC88)
             SpendActorPower(p, n);
-            SetSlyState(p, 24, 12);
+            SetSlyState(p, jts::Boots, jts::SubBootsCharge);
             return;
         case 40:  // Shadow Power, original 0x18DA48
             SpendActorPower(p, n);
@@ -283,7 +429,7 @@ void StartAbility(ACTOR* pa, int n)
         case 0x2A:   // Time Rush: 1.35, sound 0x66
         {
             SpendActorPower(p, n);
-            SetClockFactor(&g_clock, 1, GElf(n == 0x1D ? S3VA(0x2BF3EC) : S3VA(0x2BF3F0)));
+            SetClockFactor(&g_clock, 1, n == 0x1D ? 0.25f : GElf(S3VA(0x2BF3F0)));   // (orig3 0x1AF6C0 case 0x21: 0.25)
             // TODO: D_003E1BEC = -1 / 0.7 (read elsewhere: the screen's effect, not found yet)
             AbOf(p).snd2044 = CSndRef(PsndStartSound(n == 0x1D ? 0x67 : 0x66));
             return;
@@ -314,7 +460,13 @@ void StartAbility(ACTOR* pa, int n)
 // out), the others 0x141E28 (nothing)
 void EndAbility(ACTOR* pa, int n)
 {
-    if (FPrint()) std::printf("gadget: %s ends %d (power %d)\n", SzPlayer(pa), n, NActorPower(pa));
+    if (FPrint()) std::printf("gadget: %s ends %d (power %d, t %.3f)\n", SzPlayer(pa), n, NActorPower(pa), g_clock.t);
+    if (n == sly3::ITEM2_SLY3 + 34) { AbOf(pa).fShadow2 = false; return; }   // orig3 0x1AF990 case 0x22
+    if (n == sly3::ITEM2_SLY3 + 35)   // orig3 0x1AF990 case 0x23: still in state 19 (the native 24): the jump kind 11
+    {
+        if (SLY* p = dynamic_cast<SLY*>(pa); p && p->jts == 19) SetJumpKind(&p->jump, 11, 0, 0);
+        return;
+    }
     if (!dynamic_cast<SLY*>(pa) || (n != 0x1D && n != 0x2A)) return;
     SetClockFactor(&g_clock, 1, 1.0f);
     ABILITIES& ab = AbOf(pa);
@@ -338,15 +490,56 @@ void SetAbilityState(ACTOR* pa, ABSLOT& e, int s)
 }
 }  // namespace
 
+// (s3-decomp) debug / the debug menu's Extras: every named power-up of the character (Sly 3's chr 24 / 25 / 26, -1
+// all) marked owned in the progress "powerUps mppukfAcquired <Sly 3 id>"
+void GrantPowerups3(int chr3)
+{
+    for (int id3 = 0; id3 < sly3::C_ITEM; ++id3)
+    {
+        const sly3::ITEM3 it = sly3::Item3(id3);
+        if (it.name <= 0 || it.chr < 0 || (chr3 >= 0 && it.chr != chr3)) continue;
+        CRef r;
+        r.SetBool(true);
+        FSetProgress({"powerUps", "mppukfAcquired", std::to_string(id3)}, r);
+    }
+}
+
+// (Sly 3) Shadow Power Level 2 held (orig3 +0x1F1C): the detectors' hiding test and the draw's fade use it
+bool FShadowPower2(ACTOR* pa)
+{
+    auto it = pa ? s_mpab.find(pa) : s_mpab.end();
+    return it != s_mpab.end() && it->second.psw == g_psw && it->second.fShadow2;
+}
+
+// (Sly 3) the shield up (orig3 0x1C3DB8, Sly's vt slot 80: the SMA +0x1F2C not in its state 0x1A0): immune to every
+// damage but kinds 0x2000 / 0x4000; a hit flashes the part +0x1F30 (oid 418: 0x1FE728 with 1) at most every 0.5 s
+bool FShieldBlocks3(ACTOR* pa, int kind)
+{
+    auto it = pa ? s_mpab.find(pa) : s_mpab.end();
+    if (it == s_mpab.end() || it->second.psw != g_psw || !it->second.psmaShield) return false;
+    if (OidSmaCur(it->second.psmaShield) == 0x1A0 || kind == 0x2000 || kind == 0x4000) return false;
+    if (g_clock.t - it->second.tShieldFlash > 0.5f)
+    {
+        it->second.tShieldFlash = g_clock.t;
+        for (const auto& [ib, plo] : pa->palo->apart)
+            if (ib == (FN3_TAG | 0x1F30u)) ExplodeLo(plo, nullptr);
+    }
+    return true;
+}
+
+// orig3: 0x21F410 (ids >= 0x43 never; a power-up the current job lends: its task's state, task3.h NJobLentPowerup3)
 bool FPowerupOwned(int id)
 {
-    const CRef r = RefGetProgress({"powerUps", "mppukfAcquired", std::to_string(id)});
+    const int id3 = sly3::Item3FromItem2(id);   // (the progress keeps Sly 3's ids)
+    if (id3 < 0 || id3 >= 0x43) return false;
+    if (const int n = NJobLentPowerup3(id3); n != -1) return n != 0;   // (the job's lent power-up: its task done)
+    const CRef r = RefGetProgress({"powerUps", "mppukfAcquired", std::to_string(id3)});
     return r.m_tagk == TAGK_S32 ? r.m_n != 0 : r.m_tagk == TAGK_Bool ? r.m_bool != 0 : false;
 }
 
 void StartActorAbility(ACTOR* pa, int id) { StartAbility(pa, id); }
 
-// orig: 0x140F90 event 0x27C, cane ability branch. The caller checks the ASEGA owner.
+// orig: part of 0x140F90 (event 0x27C), cane ability branch. The caller checks the ASEGA owner.
 bool ReleaseCaneAbility(ACTOR* pa)
 {
     if (pa->n4C8 != 11) return false;
@@ -411,7 +604,7 @@ struct INITTIMELOCK
 } s_inittimelock;
 }
 
-// orig: 0x140F90 event 0x27C, Temporal Lock branch (case 0xE: 0x141CD0 spend, then 0x19F170(G, 1)). The caller checks
+// orig: part of 0x140F90 (event 0x27C), Temporal Lock branch (case 0xE: 0x141CD0 spend, then 0x19F170(G, 1)). The caller checks
 // the ASEGA owner.
 bool ReleaseTimeLock(ACTOR* pa)
 {
@@ -424,7 +617,7 @@ bool ReleaseTimeLock(ACTOR* pa)
     return true;
 }
 
-// orig: 0x140F90 event 0x27C, Guttural Roar branch (case 0x15: 0x141CD0 spend, then 0x19F220(G, 0x15): every guard
+// orig: part of 0x140F90 (event 0x27C), Guttural Roar branch (case 0x15: 0x141CD0 spend, then 0x19F220(G, 0x15): every guard
 // (0x15E9C8 kind 0x105, class 0x38) put in mode 0x15 by 0x207030). The caller checks the ASEGA owner.
 bool ReleaseRoar(ACTOR* pa)
 {
@@ -440,14 +633,16 @@ bool ReleaseRoar(ACTOR* pa)
     return true;
 }
 
-// orig: 0x140F90 event 0x27C, Smoke Bomb branch. The caller checks the ASEGA owner.
+// orig: part of 0x140F90 (event 0x27C), Smoke Bomb branch. The caller checks the ASEGA owner.
 bool ReleaseSmokeBomb(ACTOR* pa)
 {
     if (pa->n4C8 != 11 || pa->pasegAbility || pa->n9BC != 23) return false;
     const int powerBefore = NActorPower(pa);
     SpendActorPower(pa, pa->n9BC);
     LO* effect = nullptr;
-    if (SLY* sly = PslyGlobal())
+    // (PC, split screen's teams: a second Sly's own bomb, at him)
+    SLY* const pslyOwn = dynamic_cast<SLY*>(pa);
+    if (SLY* sly = pslyOwn ? pslyOwn : PslyGlobal())
         if (LO* proxy = PloSlyPart(sly, 0x2010))
             effect = PloAcquireProxyObject(g_psw, proxy, false);
     if (effect) SetAloParent(static_cast<ALO*>(effect), nullptr, nullptr, 3);
@@ -465,20 +660,27 @@ int NActorPower(ACTOR* pa)
 {
     const char* sz = SzPlayer(pa);
     if (int32_t* pn = sz ? PnProgressSlot({sz, "mpCur"}) : nullptr) return *pn;   // (+0x12FC)
-    return pa->n1300;
+    // (Sly 3 has no "mpCur" in its progress: the actor keeps it, orig3 0x1F4430 +0x174)
+    return pa->nPower3;
 }
 
 void SetActorPower(ACTOR* pa, int n)
 {
     const char* sz = SzPlayer(pa);
     if (int32_t* pn = sz ? PnProgressSlot({sz, "mpCur"}) : nullptr) *pn = n < pa->n1300 ? n : pa->n1300;
+    else pa->nPower3 = n < pa->n1300 ? (n > 0 ? n : 0) : pa->n1300;   // orig3 0x1F4438: clamped to [0, the max]
 }
 
+// orig3: 0x154460: the item's cost (D_00343098 +0xC); in the two-player games (GAME 0x36DBE0 == 2) Smoke Bomb (Sly 3 0x19)
+// costs 0x1A, and the power spent the first slot is set to item 0 (0x1548E8(0, 0): the power-up gone)
 void SpendActorPower(ACTOR* pa, int id)
 {
     if (id == -1) return;
-    SetActorPower(pa, NActorPower(pa) - ItemPower(id));
+    const bool f2p = g_psw && g_psw->nScreenMode3 == 2;
+    const int cost = f2p && sly3::Item3FromItem2(id) == 0x19 ? 0x1A : ItemPower(id);
+    SetActorPower(pa, NActorPower(pa) - cost);
     pa->g1304 = g_clock.t;
+    if (f2p && NActorPower(pa) <= 0) SetActorAbilitySlot(pa, 0, sly3::Item2FromItem3(0));
 }
 
 void DrainActorPower(ACTOR* pa, float g)
@@ -507,7 +709,31 @@ void UpdateActorAbilities(ACTOR* pa)
     PADCTL* pc = PpadctlOfActor(pa);
     if (!pc) return;   // (+0x150)
     if (FPcCarm(pa->palo)) return;   // (PC addition, debug menu only: Carmelita's moveset has no gadgets)
+    UpdateOutfit3(pa->palo);   // (Sly 3: a disguise's change, outfit3.h)
+    // (debug, tests) SLY3_HURTAT=frame[,frame..]: the player offered a damage message (kind 0x100, from behind) at those
+    // frames through the game's own acceptance (FAcceptDamage: the immunities, the shield), the result printed
+    extern int g_iframeMain;
+    if (static const char* s_sz = std::getenv("SLY3_HURTAT"); s_sz)
+        for (const char* pch = s_sz; pch && *pch; pch = std::strchr(pch, ',') ? std::strchr(pch, ',') + 1 : nullptr)
+            if (std::atoi(pch) == g_iframeMain)
+            {
+                CTMSG ctm;
+                ctm.ploReceiver = pa->palo;
+                ctm.grfFilter = 0x100;
+                ctm.pos = PosAloCenter(pa->palo);
+                ctm.vec = glm::vec3(1.0f, 0.0f, 0.0f);
+                const int cBefore = DmgCounterOf(pa) ? *DmgCounterOf(pa) : -1;
+                const bool f = FAcceptDamage(pa, &ctm);
+                std::printf("hurt: frame %d %s: accepted %d, health %d -> %d\n", g_iframeMain, SzPlayer(pa), f, cBefore, DmgCounterOf(pa) ? *DmgCounterOf(pa) : -1);
+            }
     ABILITIES& ab = AbOf(pa);
+    if (ab.psmaShield && FPrint())
+    {
+        static OID s_oidLast = -2;
+        if (OidSmaCur(ab.psmaShield) != s_oidLast)
+            std::printf("gadget: shield state %d (blocks damage kind 1: %d)\n", s_oidLast = OidSmaCur(ab.psmaShield),
+                        FShieldBlocks3(pa, 1) ? 1 : 0);
+    }
     for (int i = 0; i < 3; ++i)
     {
         const uint32_t grf = s_agrfSlot[i];
@@ -520,7 +746,13 @@ void UpdateActorAbilities(ACTOR* pa)
                 if (FPrint()) std::printf("gadget: %s can't use %d now\n", SzPlayer(pa), e.id);
                 PsndStartSound(0x2E);
             }
-            else if (NActorPower(pa) < ItemPower(e.id))
+            // orig3 0x1540E8: Sly 3 refuses only an empty meter (power <= 0 for an item that costs; the spend clamps at 0:
+            // Sly 2's 0x141A50 wanted the whole cost); Shadow Power 1 / 2 are refused and Combat Dodge only allowed
+            // with a guard in reach (+0x11C4 == 4 = the native's n10EC, the target's kind from 0x194A40's pick: 4 a
+            // guard in reach, as FActorTargetInReach)
+            else if ((NActorPower(pa) <= 0 && ItemPower(e.id) > 0) ||
+                     ((sly3::Item3FromItem2(e.id) == 0x20 || sly3::Item3FromItem2(e.id) == 0x22) && pa->n10EC == 4) ||
+                     (sly3::Item3FromItem2(e.id) == 0x1A && pa->n10EC != 4))
             {
                 // too little power: the refusal's sound and the meter's flash (+0x1304)
                 if (FPrint()) std::printf("gadget: %s too little power for %d (%d < %d)\n", SzPlayer(pa), e.id, NActorPower(pa), ItemPower(e.id));
@@ -534,12 +766,28 @@ void UpdateActorAbilities(ACTOR* pa)
             if (!(pc->grfbtn & grf) || !FCanDo(pa, e.id)) SetAbilityState(pa, e, 0);
             else
             {
-                // vt slot 101 (0x141DD0): the time gadgets drain 2 / 1 power a second (D_002BD260 / D_002BD264)
-                if (e.id == 0x1D) DrainActorPower(pa, GElf(0x2BD260));
-                else if (e.id == 0x2A) DrainActorPower(pa, GElf(0x2BD264));
+                // orig3 0x154608 (vt slot 115): the held item drains its table's +0x10 power a second (Thief Reflexes 2,
+                // Shadow Power 3 / 3, Rocket Boots 5); an empty meter ends it (0x154350 with 0). (Sly 2's 0x141DD0 had
+                // D_002BD260 / D_002BD264 for its two time gadgets.) In the two-player games (0x36DBE0 == 2) the empty
+                // meter also takes the power-up away (0x1548E8(0, 0): Cops and Robbers' Rocket Boots)
+                DrainActorPower(pa, float(sly3::Item3(sly3::Item3FromItem2(e.id)).drain));
+                if (NActorPower(pa) <= 0)
+                {
+                    SetAbilityState(pa, e, 0);
+                    if (g_psw && g_psw->nScreenMode3 == 2) SetActorAbilitySlot(pa, 0, sly3::Item2FromItem3(0));
+                }
             }
         }
     }
+}
+
+// orig3 0x152828's loop over the three slots (0x154350(p, slot, 0)), on an in-place reset (the actors' vt slot 32):
+// each slot's held item ended (e.g. a power drained while held), the slots kept
+void EndActorAbilitySlots(ACTOR* pa)
+{
+    if (!pa) return;
+    ABILITIES& ab = AbOf(pa);
+    for (ABSLOT& e : ab.a) SetAbilityState(pa, e, 0);
 }
 
 // orig 0x00141FC8: slot i takes id (its held action ended first), another slot holding id emptied (ended), then the
@@ -552,7 +800,9 @@ void SetActorAbilitySlot(ACTOR* pa, int i, int id)
     ab.a[i].id = id;
     ab.a[i].state = 0;
     ab.a[i].t = g_clock.t;
-    const char* sz = SzPlayer(pa);
+    // (orig3 0x1548E8: the slots' progress "apukCur" is not written in the two-player games (0x36DBE0 == 2): Cops and
+    // Robbers' power-ups stay out of the save)
+    const char* sz = g_psw && g_psw->nScreenMode3 == 2 ? nullptr : SzPlayer(pa);
     for (int j = 0; j < 3; ++j)
     {
         if (j != i && ab.a[j].id == id)
@@ -563,7 +813,7 @@ void SetActorAbilitySlot(ACTOR* pa, int i, int id)
         if (sz)
         {
             CRef r;
-            r.SetS32(ab.a[j].id);
+            r.SetS32(ab.a[j].id < 0 ? ab.a[j].id : sly3::Item3FromItem2(ab.a[j].id));  // (Sly 3's ids)
             FSetProgress({sz, "apukCur", std::to_string(j)}, r);
         }
     }
@@ -585,7 +835,7 @@ void RemoveMegaJump(SW* psw)
         }
     CRef r;   // 0x1DAF38(0x1F, 0)
     r.SetBool(false);
-    FSetProgress({"powerUps", "mppukfAcquired", "31"}, r);
+    FSetProgress({"powerUps", "mppukfAcquired", std::to_string(sly3::Item3FromItem2(0x1F))}, r);  // (Sly 3's 30)
 }
 
 namespace
@@ -688,3 +938,5 @@ struct INITGADGETMETHODS
     }
 } s_initgadgetmethods;
 }  // namespace
+
+int IdActorAbilitySlot(ACTOR* pa, int i) { return pa && i >= 0 && i < 3 ? AbOf(pa).a[i].id : -1; }

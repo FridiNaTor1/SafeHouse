@@ -9,6 +9,11 @@ using namespace metal;
 #define CANE_FINISH_POSITION(u, p) \
   float4((p).x, (p).y * (u).cane_clip.x, (p).z, (p).w)
 
+// GLSL's gl_FragCoord.xy from Metal's [[position]]: an offscreen target's rows are OpenGL's already; the drawable's
+// count from the top, so they are flipped by its height (cane_clip.w, context_render.mm BindUniforms).
+#define CANE_FRAG_COORD(u, p) \
+  float2((p).x, (u).cane_clip.x > 0.0 ? (u).cane_clip.w - (p).y : (p).y)
+
 struct RasterTarget {
   float4 position [[position]];
 };

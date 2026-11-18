@@ -5,6 +5,9 @@
 //   Sly2-Release [--world W] [--frames N] [--headless] [--fixed-dt] [--press BTN@frame+n,...]
 //               [--frame-dump file] [--screenshot file]
 
+#include "texmod.h"
+#include "renderer.h"
+#include "fastpaths.h"
 #include <malloc.h>
 #include "so.h"
 #include "crv.h"
@@ -13,7 +16,12 @@
 #include "breakable.h"
 #include "nav.h"
 #include "skipcut.h"
+#include "cutscene.h"
+#include "menu.h"
 #include "debugmenu.h"
+#include "debugvis.h"
+#include "modnotice.h"
+#include "remappage.h"
 #include "pccharacter.h"
 #include "glob.h"
 #include "pickup.h"
@@ -58,7 +66,7 @@ extern uint32_t g_uRandState;  // xfmath.cpp
 #include "rtgt.h"
 
 #include "alo.h"
-#ifdef __SWITCH__
+#if SLY2_FASTPATHS
 #include "passhelpers.h"
 #endif
 #include "brx.h"
@@ -82,9 +90,17 @@ extern uint32_t g_uRandState;  // xfmath.cpp
 #include "sw.h"
 #include "update.h"
 #include "savedata.h"
+#include "modsave.h"
 #include "../platform/platform.h"
 #include "../platform/frame_pacer.h"
+#include "vr.h"
+#include "vrfirstperson.h"
+#include "dance.h"
+#include "pcrc.h"
+#include "vehicle.h"
 #include "../platform/game_sched.h"
+#include "mapstates.h"
+#include "modworld.h"
 #include "transition.h"
 #include "po.h"
 #include "shop.h"
@@ -114,6 +130,7 @@ extern uint32_t g_uRandState;  // xfmath.cpp
 #endif
 
 double g_msGpuFpsLog = 0, g_msHudFpsLog = 0;   // (SLY2N_FPSLOG)
+double g_msEyesCpuFpsLog = 0;   // (SLY2N_FPSLOG, VR: the game thread's CPU time drawing the eyes: RenderSceneStereo + FinishEyes)
 
 namespace
 {
@@ -519,8 +536,36 @@ void ReportGangHarness();
 
 bool g_fDevCard = true;
 
-int RunGame(const GAMEOPTS& go)
+// (VR, vr.h) the game's moment for the Immersive view: everything before the title on the Flat Screen; the cutscenes (the skippable scenes: the binocucom talks, the
+// scripted scenes with dialogue or three or more shots; not a door opening), the Ep2 dance and the RC chopper on the
+// Flat Screen; the binocucom's recon view; Ep7's RC Combat Club from the table (VR Settings, experimental)
+static int VrGameView(SW* psw)
 {
+    LO* po = psw ? PloPoCurrent(psw) : nullptr;
+    // the boot's intro scene before the title (its title card is framed for the screen; not a skippable cutscene)
+    // (test: SLY2N_VR_PRETITLE=1: the intro Immersive too, its title card's look in the Immersive view)
+    static const bool s_fPretitleTest = std::getenv("SLY2N_VR_PRETITLE") != nullptr;
+    if (FBeforeTitle() && !s_fPretitleTest) return vr::VRVIEW_Flat;
+    // (the Ep2 dance is Immersive whatever the cutscenes' setting: its prompts as the Touch buttons, vr.h FDanceLayout)
+    if (vr::g_vropts.fCutscenesFlat && FCutsceneActive() && !FDanceActive()) return vr::VRVIEW_Flat;
+    // (a scripted binocucom talk: a cutscene with the binocucom's frame up (the player's own recon view is no cutscene))
+    if (FCutsceneActive() && FBinocFrameDrawn()) return vr::VRVIEW_BinocTalk;
+    if (po && po->oid == kRcChopperOid && FCidDerivedFrom(po->Cid(), 0x32)) return vr::VRVIEW_Flat;
+    if (g_cm.ccpr > 0 && g_cm.acpr[0].pcplcy == &g_cmpolicies.cprecon) return vr::VRVIEW_Binoc;
+    // (Bentley's hack: the player is the hack ship)
+    if (po && FCidDerivedFrom(po->Cid(), 0x48)) return vr::VRVIEW_Hack;
+    if (vr::g_vropts.fRcTable && po)
+        if (const VEHICLE* pv = Pvehicle(po); pv && pv->mode == 2)
+        {
+            vr::SetRcArenaHeight(PosLoWorld(po).z);
+            return vr::VRVIEW_RcTable;
+        }
+    return vr::VRVIEW_Normal;
+}
+
+int RunGame(const GAMEOPTS& goIn)
+{
+    GAMEOPTS go = goIn;   // (go.world: a world named on the command line becomes its record)
     // SLY2N_RTZ=1: the PS2's float rounding (toward zero) for the whole game (the differential harnesses: the
     // reference's interpreter rounds its FPU / VU arithmetic that way)
     if (const char* e = std::getenv("SLY2N_RTZ"); e && *e == '1') std::fesetround(FE_TOWARDZERO);
@@ -541,7 +586,11 @@ int RunGame(const GAMEOPTS& go)
             const std::string dev = SLY2N_DEV_ROOT "/build/saves/round4-user-card/memcard0/BASCUS-97316YAOTWTD!/save1";
             path = std::filesystem::exists(cane::path(user)) || !g_fDevCard ? user : dev;
         }
-        if (FLoadGameSave(path, error)) std::printf("save: %s\n", path.c_str());
+        if (FLoadGameSave(path, error))
+        {
+            std::printf("save: %s\n", path.c_str());
+            ReadModSave(path);   // (mod packages' custom tasks, modsave.h)
+        }
         else std::printf("save: none (%s)\n", error.c_str());
     }
 
@@ -550,6 +599,15 @@ int RunGame(const GAMEOPTS& go)
     std::unique_ptr<SW> psw;
     // boot: the disc's boot sequence (0x1A4E08: the logo movie, the slots, the title); frontend: the front end world
     // (test: SLY2N_READSLOTS=1: a world run reads <user-dir>/Saves's slots too, so the data access pages show them)
+    // (a world by its name, e.g. a mod package's new world: its record depends on the packages loaded, modworld.h)
+    if (go.world != "boot" && go.world != "frontend" && !go.world.empty() && go.world.find_first_not_of("0123456789") != std::string::npos)
+    {
+        EnsureWorldRecords();
+        const int iwrec = IwrecOfWorldArg(go.world);
+        if (iwrec < 0) { std::fprintf(stderr, "--world: no world named \"%s\"\n", go.world.c_str()); return 1; }
+        std::printf("world \"%s\" is record %d\n", go.world.c_str(), iwrec);
+        go.world = std::to_string(iwrec);
+    }
     if (go.world != "boot" && go.world != "frontend" && std::getenv("SLY2N_READSLOTS")) ReadSaveSlots("");
     if (go.world == "boot") StartBootSequence(!go.fHeadless && !std::getenv("SLY2_NOMOVIE"));
     else if (go.world == "frontend")
@@ -608,6 +666,7 @@ int RunGame(const GAMEOPTS& go)
         std::string err;
         const bool f = FWriteGameSave(path, err);
         if (!f) std::printf("save: %s\n", err.c_str());
+        else WriteModSave(path);   // (mod packages' custom tasks, modsave.h)
         return f;
     };
     for (const std::string& p : go.aprintProgress)
@@ -635,23 +694,30 @@ int RunGame(const GAMEOPTS& go)
     // (a headless run draws for --screenshot or SLY2N_SHOTEVERY's frames: the scene and GL then exist)
     const bool fDraws = fWindow || !go.screenshot.empty() || std::getenv("SLY2N_SHOTEVERY") != nullptr ||
                         std::getenv("SLY2N_RENDERALL") != nullptr;
+    // (texmod.h: a run in a window streams its texture mods; a headless run's frames stay those of a load at first draw)
+    AllowTextureModStreaming(fWindow);
     if (fDraws)
     {
         CBuildSceneFromSw(psw.get(), scene, &apalo);
         // the world's lights natively (lightsw.h: the lights' records from their options and transforms)
         if (UpdateWorldLightsFromSw(psw.get()) > 0) ApplyLighting(scene, WorldLights());
         else ApproximateBakeLighting(scene);
-        if (!g_gl.FInit(go.width, go.height, fWindow, "Sly2-Release", error))
+        // (test aid: SLY2N_HIDDENWINDOW=1: a windowed run (input, pacing, VR) with its window never shown)
+        static const bool s_fHidden = std::getenv("SLY2N_HIDDENWINDOW") != nullptr;
+        if (!g_gl.FInit(go.width, go.height, fWindow && !s_fHidden, "Sly 2: Band of Thieves", error))
         {
             std::fprintf(stderr, "%s\n", error.c_str());
             return 1;
         }
         BuildSceneGpu(scene);
+        PrewarmRenderer(g_transition.iwrecCur);
         if (fWindow)
         {
-            // the PC options (display.h; <user-dir>/Saves/system_settings.dat, loaded by main)
+            // the PC options (display.h; <user-dir>/Settings.ini, loaded by main)
             InstallDisplayCallbacks(g_gl.window);
             ApplyDisplaySettings(g_gl.window);
+            // (vr.h) a headset when asked for (--vr; Android): else the game as always
+            if (vr::FRequested()) vr::FStart();
         }
     }
 #ifdef __SWITCH__
@@ -688,6 +754,8 @@ int RunGame(const GAMEOPTS& go)
     {
         const double t0 = now();
         if (fWindow && glfwWindowShouldClose(g_gl.window)) break;
+        if (cut::FCutsceneToolsDone()) break;   // (cutscene.h: the trace written)
+        if (vr::FExitRequested()) break;   // (the headset's system menu: Quit)
         // (debug: SLY2N_HEAPCHECK=N: every N frames the heap's free lists consolidated (glibc checks their links), with a
         // stderr mark: heap corruption shows near the frame that caused it instead of at exit)
         if (static const int s_cHeapCheck = std::getenv("SLY2N_HEAPCHECK") ? std::atoi(std::getenv("SLY2N_HEAPCHECK")) : 0;
@@ -726,6 +794,7 @@ int RunGame(const GAMEOPTS& go)
                 CBuildSceneFromSw(psw.get(), scene, &apalo);
                 ApproximateBakeLighting(scene);
                 BuildSceneGpu(scene);
+                PrewarmRenderer(g_transition.iwrecCur);
             }
         }
         else if (FPcCharTakeSceneRebuild() && fDraws)
@@ -1591,6 +1660,8 @@ int RunGame(const GAMEOPTS& go)
         PrepareGangFrame(frame);
         g_iframeHarness = frame;
         UpdateSw(psw.get());
+        UpdateModEntries(psw.get());   // (mod packages: a new world's entry walked into, modworld.h)
+        cut::UpdateCutsceneTools(psw.get(), frame);   // (the map editor's cutscene trace / play / recording, cutscene.h)
         // orig 0x1D9648 (the HUD's update, hudwidget.h; its wipe 0x22B198 here first)
         // (its start: the load's pad lock 8 lifted once the new world's clock passes 0.1 s at its rate)
         if ((g_grfjoyLock & 8) && g_clock.rDt != 0.0f && 0.1f < g_clock.t / g_clock.rDt) UnlockJoy(8);
@@ -1605,6 +1676,11 @@ int RunGame(const GAMEOPTS& go)
         if (static const char* s_szF9 = std::getenv("SLY2N_COMPLETEJOBAT"); s_szF9)
             for (const char* q = s_szF9; q && *q; q = std::strchr(q, ',') ? std::strchr(q, ',') + 1 : nullptr)
                 if (std::atoi(q) == frame) FDebugCompleteJob();
+        // debug: SLY2N_WIPEAT=frame: the current world again at its checkpoint with the Sly-mask wipe (as a lost life,
+        // task.cpp event 16), headless: the wipe and the load in a test (VR: the whole-view wipe)
+        if (static const int s_iframeWipe = std::getenv("SLY2N_WIPEAT") ? std::atoi(std::getenv("SLY2N_WIPEAT")) : -1;
+            frame == s_iframeWipe && !g_transition.fPending && g_transition.wipes == WIPES_Idle)
+            RequestTransition(psw.get(), nullptr, g_transition.oidPointCur, g_transition.oidKeyCur, 0, 0x30A);
         // debug keys (only with the launcher's Settings > Advanced > Debug mode on, Debug Mode.ini; README.md):
         // F2 the Paris hub, F3 the next world record (with the wipe)
         if (g_pcinput.fDebugKeys && !g_transition.fPending && g_transition.wipes == WIPES_Idle)
@@ -1668,27 +1744,15 @@ int RunGame(const GAMEOPTS& go)
                     if (!plo->paloParent && FCidDerivedFrom(plo->Cid(), 0x30)) s_apaloRoot.push_back(static_cast<ALO*>(plo.get()));
                 s_serialRoot = psw->serial, s_cploRoot = psw->aploAll.size(), s_cParentRoot = g_cLoParentChanges;
             }
-#ifdef __SWITCH__
-            // (the Switch: the hierarchies on the pass helpers, the walk being memory bound. A hierarchy whose records
-            // refer outside it stops before reading there and is redone here after the others, in order: it then reads
-            // every root's world of this frame, where the serial walk read the later roots' previous ones.)
-            static std::vector<uint8_t> s_afRedo;
-            s_afRedo.assign(s_apaloRoot.size(), 0);
-            PassHelpers().ForBlocks(s_apaloRoot.size(), 8, [&](size_t iFirst, size_t iLim) {
-                for (size_t i = iFirst; i < iLim; ++i)
-                    if (!FUpdateAloHierarchyWorldsIsolated(s_apaloRoot[i], s_apaloRoot[i])) s_afRedo[i] = 1;
-            });
-            for (size_t i = 0; i < s_apaloRoot.size(); ++i)
-                if (s_afRedo[i]) UpdateAloHierarchyWorlds(s_apaloRoot[i]);
-#else
-            for (ALO* palo : s_apaloRoot) UpdateAloHierarchyWorlds(palo);
-#endif
+            // (alo.cpp: the hierarchies on the pass helpers where that gives the serial walk's results, the others
+            // after them in order)
+            UpdateAloRootsWorlds(s_apaloRoot);
         }
         DrawSlys(psw.get());
         DebugHitHideHolders(psw.get());   // (debug: hide.h)   // orig 0x18A238: the draw's own placement (state 3's cane on the hook), each step as drawn
         };
         {
-            const bool fWant = s_szFrameInterp ? true : fWindow && !go.fFixedDt && g_display.frameRate > 60;
+            const bool fWant = s_szFrameInterp ? true : fWindow && !go.fFixedDt && (g_display.frameRate > 60 || vr::FActive());
             if (fWant != accum.fActive)
             {
                 accum = FRAMEACCUM{};
@@ -1704,6 +1768,7 @@ int RunGame(const GAMEOPTS& go)
             if (!accum.fActive)
             {
                 stepSim(frame);
+                vrfp::NoteStep(psw.get());   // (VR First Person: the player's place; --fixed-dt draws each step as it is)
                 continue;
             }
             const float dtFixedSave = g_dtFixedStep;
@@ -1717,6 +1782,7 @@ int RunGame(const GAMEOPTS& go)
                 if (CAddNewAlosToScene(psw.get(), scene, &apalo) > 0) BuildSceneGpu(scene);
                 UpdateSceneFromSw(scene, apalo, s_fDrawAllStep ? nullptr : psw.get());
                 SnapshotStep(scene, CameraFromCm(g_cm));
+                vrfp::NoteStep(psw.get());   // (VR First Person: the player's place, for the eyes between steps)
             }
         }
         // (skipcut.h) a skipped cutscene: the game runs on to its natural end, many steps a frame (up to ~25 ms)
@@ -1739,13 +1805,32 @@ int RunGame(const GAMEOPTS& go)
             const double tEnd = tNowSkip + 5000.0;
             double tPoll = tNowSkip;
             bool fSkipped = false;
+            static const bool s_fSkipPrint = std::getenv("SLY2N_SKIPPRINT") != nullptr;
+            auto msSkipCpu = [] { timespec ts{}; clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts); return ts.tv_sec * 1e3 + ts.tv_nsec / 1e6; };
+            const double msCpuSkip0 = s_fSkipPrint && FSkipCutFastForward() ? msSkipCpu() : 0.0;
 #ifdef __SWITCH__
             // (the fast-forward draws nothing: the CPU's loading profile while it runs)
             const bool fBoostSkip = FSkipCutFastForward();
             if (fBoostSkip) CaneSwitch::BeginLoadingBoost();
 #endif
+            // (cutscene.h --play-scpt: the script fast-forwarded to the map editor's playhead, as a skip runs it)
+            while (cut::FCutsceneSeeking() && (go.cframe < 0 || frame + 1 < go.cframe))
+            {
+                ++frame;
+                fSkipped = true;
+                const float dtFixedSave = g_dtFixedStep;
+                g_dtFixedStep = DT_FRAME_NTSC;
+                stepSim(frame);
+                g_dtFixedStep = dtFixedSave;
+                if (fWindow && now() - tPoll > 50.0) { glfwPollEvents(); tPoll = now(); }
+            }
             while (FSkipCutFastForward() && (go.cframe < 0 || frame + 1 < go.cframe) && (!fWindow || now() < tEnd))
             {
+                // (a step that waits for a drawn frame: an animated overlay's capture (overlay.h: the job's end screen
+                // advances from its state 1 only at a frame's draw, its clock factor 8 at 0 meanwhile) or a photo's:
+                // the fast-forward goes on after this frame. Else a skip on a job-ending scene's first frame stopped
+                // the clock for good: the scene never ended, behind the fade)
+                if (FAnimatedOverlayNeedsFrame() || FPhotoCapturePending()) break;
                 ++frame;
                 fSkipped = true;
                 const float dtFixedSave = g_dtFixedStep;
@@ -1758,7 +1843,9 @@ int RunGame(const GAMEOPTS& go)
 #ifdef __SWITCH__
             if (fBoostSkip) CaneSwitch::EndLoadingBoost();
 #endif
-            if (fSkipped && std::getenv("SLY2N_SKIPPRINT")) std::printf("skipcut: %.1f ms of fast-forward this frame\n", now() - tNowSkip);
+            // (the thread's CPU time too: the wall time depends on the machine's other load)
+            if (fSkipped && s_fSkipPrint)
+                std::printf("skipcut: %.1f ms of fast-forward this frame (cpu %.1f ms)\n", now() - tNowSkip, msSkipCpu() - msCpuSkip0);
             if (fSkipped && accum.fActive && !accum.fpsVirtual)
                 accum.tLast = now() / 1000.0;   // (the skip's real time is no gameplay time to catch up)
             if (fSkipped && accum.fActive && fDraws)
@@ -1767,11 +1854,13 @@ int RunGame(const GAMEOPTS& go)
                 if (CAddNewAlosToScene(psw.get(), scene, &apalo) > 0) BuildSceneGpu(scene);
                 UpdateSceneFromSw(scene, apalo, psw.get());
                 SnapshotStep(scene, CameraFromCm(g_cm));
+                vrfp::NoteStep(psw.get());   // (VR First Person: the player's place, for the eyes between steps)
             }
         }
         if (fWindow)
         {
             glfwPollEvents();
+            UpdateDisplayMonitors(g_gl.window);   // (a monitor plugged in or unplugged: display.h)
             GLFWwindow* w = g_gl.window;
             const bool fF1 = FDebugKeyHeld(w, GLFW_KEY_F1);   // (debug keys only)
             if (fF1 && !fF1Last) fFreeCam = !fFreeCam;
@@ -1899,7 +1988,7 @@ int RunGame(const GAMEOPTS& go)
                 sgs.posLight = pos;
             };
             const size_t cposLight = std::min(scene.aglobset.size(), apalo.size());
-#ifdef __SWITCH__
+#if SLY2_FASTPATHS
             // (the Switch: on the pass helpers, each entry writing only its own fields; the roots' records it reads are
             // scattered over the scene)
             PassHelpers().ForBlocks(cposLight, 64, [&](size_t kFirst, size_t kLim) {
@@ -1971,7 +2060,7 @@ int RunGame(const GAMEOPTS& go)
             static const bool s_fFpsLog = std::getenv("SLY2N_FPSLOG") != nullptr;
             static GLuint s_aqGpu[4] = {};
             static int s_iqGpu = 0;
-            if (s_fFpsLog && fWindow)
+            if (s_fFpsLog)   // (headless with SLY2N_RENDERALL too: the offscreen frame's GPU time)
             {
                 if (!s_aqGpu[0]) glGenQueries(4, s_aqGpu);
                 else if (s_iqGpu >= 4)
@@ -1982,15 +2071,84 @@ int RunGame(const GAMEOPTS& go)
                 }
                 glBeginQuery(GL_TIME_ELAPSED, s_aqGpu[s_iqGpu % 4]);
             }
+            // (vr.h) the headset's frame slot; Immersive: both eyes from the game camera, the game picture then holds
+            // only the HUD and menus (over transparency: the panel in front); the full-screen transitions stay flat
+            const bool fVr = fWindow && vr::FActive();
+            if (fVr)
+            {
+                vr::BeginFrame();
+                const int view = VrGameView(psw.get());
+                // (the binocucom's zoom: the camera's field now against the recon view's unzoomed one, CPRECON::Update)
+                if (view == vr::VRVIEW_Binoc)
+                {
+                    const float radFar = g_cmpolicies.cprecon.radFOVFar;
+                    vr::SetBinocZoom(radFar > 1e-4f && g_cm.radFOV > 1e-4f ? std::tan(0.5f * g_cm.radFOV) / std::tan(0.5f * radFar) : 1.0f);
+                }
+                vr::SetGameView(view);
+                vr::VRMOMENT m;
+                m.fCutscene = FCutsceneActive();
+                m.fPause = FPauseMenuShown();
+                m.fWipe = g_transition.wipes != WIPES_Idle;
+                m.fDance = FDanceActive();
+                m.fTitle = FTitleShown();
+                vr::SetMoment(m);
+                vrfp::PrepareFrame(psw.get(), accum.U(), accum.fActive);   // (First Person: the eyes' place this frame)
+            }
+            STEREOVIEW sv;
+            const bool fEyes = fVr && !vr::FUnfocused() && FAnimatedOverlayDrawNormal() && !FAnimatedOverlayNeedsFrame() && vr::FEyeViews(cam, &sv);
             if (FAnimatedOverlayDrawNormal()) {
-                RenderScene(scene, cam, opts);
+                if (fEyes)
+                {
+                    auto msThreadCpu = [] { timespec ts{}; clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts); return ts.tv_sec * 1e3 + ts.tv_nsec / 1e6; };
+                    const double msEyes0 = s_fFpsLog ? msThreadCpu() : 0.0;
+                    // (VR First Person: the player drawn as its hands on the controllers, for the eyes only)
+                    if (vr::FFirstPersonFrame()) vrfp::ApplyHands(scene, apalo, psw.get());
+                    RenderSceneStereo(scene, cam, opts, sv);
+                    vrfp::RestoreHands(scene);
+                    vr::FinishEyes();
+                    if (s_fFpsLog) g_msEyesCpuFpsLog += msThreadCpu() - msEyes0;
+                    glBindFramebuffer(GL_FRAMEBUFFER, g_gl.FboScene());
+                    glViewport(0, 0, g_gl.renderWidth, g_gl.renderHeight);
+                    glDisable(GL_SCISSOR_TEST);
+                    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+                    glDepthMask(GL_TRUE);
+                    glStencilMask(0xFF);
+                    glClearColor(0, 0, 0, 0);
+                    glClearDepth(0.0);
+                    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+                    g_fHudAlphaLayer = true;
+                }
+                else if (fVr && vr::FUnfocused())
+                {
+                    // (VR, the headset's focus lost: no world (the system menu is in front; the least GPU work), only the
+                    // game picture: the pause menu on the screen)
+                    glBindFramebuffer(GL_FRAMEBUFFER, g_gl.FboScene());
+                    glViewport(0, 0, g_gl.renderWidth, g_gl.renderHeight);
+                    glDisable(GL_SCISSOR_TEST);
+                    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+                    glDepthMask(GL_TRUE);
+                    glStencilMask(0xFF);
+                    glClearColor(0, 0, 0, 1);
+                    glClearDepth(0.0);
+                    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+                }
+                else RenderScene(scene, cam, opts);
+                g_gl.BeginNativeUi(true);   // (upscaling, gl.h: the scene scaled up; the rest at the picture's size)
                 const double tHud = s_fFpsLog ? now() : 0.0;
+                if (FGpuMarks()) GpuMark("hud");
                 DrawHud(psw.get(), g_gl.renderWidth, g_gl.renderHeight);
                 if (s_fFpsLog) g_msHudFpsLog += now() - tHud;
-                RenderSceneForeground(scene, cam, opts);   // kinds 22..25 over the HUD (group 10, 0x157CF0)
+                if (!fEyes && !(fVr && vr::FUnfocused())) RenderSceneForeground(scene, cam, opts);   // kinds 22..25 over the HUD (group 10, 0x157CF0)
+                DrawRemapOverlay(g_gl.renderWidth, g_gl.renderHeight);   // (remappage.h: the Remap page over the pause menu)
+                NoteDebugVisCamera(cam, !fEyes && !fVr);   // (debugvis.h: the overlays' projection, this frame's camera)
                 DrawDebugOverlay(g_gl.renderWidth, g_gl.renderHeight);   // (debugmenu.h: the debug menu over all; Debug keys only)
+                DrawModNotices(g_gl.renderWidth, g_gl.renderHeight);     // (modnotice.h: a mod that could not be used, a few seconds)
+                g_fHudAlphaLayer = false;
+                if (FGpuMarks()) GpuMark("overlay capture");
                 g_gl.RememberOverlaySourceFrame();
+                if (FGpuMarks()) GpuMark("animated overlay");
             }
+            g_gl.BeginNativeUi(false);   // (upscaling: the overlay's own frames at the picture's size too)
             DrawAnimatedOverlayFrame();  // orig: 0x1477D8, capture then clear/draw the exclusive surfaces
             if (!go.screenshot.empty() && frame + 1 == go.cframe)
             {
@@ -2008,26 +2166,48 @@ int RunGame(const GAMEOPTS& go)
             t2 = now();
             if (fWindow)
             {
+                if (FGpuMarks()) GpuMark("present");
                 g_gl.Present();
                 if (s_fFpsLog && s_aqGpu[0]) glEndQuery(GL_TIME_ELAPSED), ++s_iqGpu;
 #ifdef __SWITCH__
                 // (SaltyNX's overlays: the scene's render size, which the internal resolution sets)
                 CaneDeko::SetFrameResolution(unsigned(g_gl.renderWidth), unsigned(g_gl.renderHeight));
 #endif
-                cane::gl::SwapBuffers(g_gl.window);
+                if (!vr::FSkipSwap()) cane::gl::SwapBuffers(g_gl.window);
+                else RendererFrameShown();   // (VR on Vulkan: the start marker cleared after its first frames too)
             }
+            else if (s_fFpsLog && s_aqGpu[0]) glEndQuery(GL_TIME_ELAPSED), ++s_iqGpu;
+            // (renderer.h: Vulkan ends its frame at the swap; a headless frame is submitted the same way, as an
+            // OpenGL driver flushes on its own)
+            g_gl.EndNativeUi();   // (without a window: Present did not)
+            if (!fWindow && FRendererVulkan()) cane::gl::SwapBuffers(g_gl.window);
         }
         else PrepareAnimatedOverlayFrame();  // same logical boundary for frames without a GL target
         const double tSwapped = now();
+        TexStatsFrame(tSwapped - t0);   // (SLY2N_TEXSTATS: texmod.h)
         // (SLY2N_REALTIME: a headless run paced at 60 Hz too, so the audio thread's streams (dialog lines the
         // scripts wait on) keep up with the frames)
         static const bool s_fRealtime = std::getenv("SLY2N_REALTIME") != nullptr;
-        if (fWindow && g_display.frameRate < DISP_FRAMERATE_UNCAPPED)   // the frame-rate cap (with or without VSync)
+        if (fWindow && vr::FActive()) {}   // (the headset paces: vr::BeginFrame)
+#if defined(CANE_IOS)
+        // (iOS: the display's own frames when the cap is its rate or a whole fraction of it (display.cpp): a timer of
+        // the game's drifted against the vblanks; false: no display link (the app in the background), the timer)
+        else if (fWindow && g_display.fSwapPacesFrames && g_display.displayFps > 0 &&
+                 cane::gl_metal::WaitForDisplayFrame(g_display.displayFps)) {}
+#endif
+        else if (fWindow && g_display.frameRate < DISP_FRAMERATE_UNCAPPED)   // the frame-rate cap (with or without VSync)
             pacer.Wait(g_display.frameRate, g_display.fSwapPacesFrames, g_display.swapGeneration);
         else if (s_fRealtime) pacer.Wait(60);
         msUpdate += t1 - t0;
         msRender += t2 - t1;
         msSwap += now() - t2;
+        NoteDebugVisFrameTimes(t1 - t0, t2 - t1, now() - t2);   // (debugvis.h: the Stats overlay)
+        if (fWindow && vr::FActive())
+        {
+            static double s_msScenePrev = 0;
+            vr::NoteFrameTimes(t1 - t0, std::max(0.0, msScene - s_msScenePrev), t2 - t1, now() - t2);
+            s_msScenePrev = msScene;
+        }
         ++cframeTimed;
         // (SLY2N_FRAMETIMES=file: one CSV line a frame, for a tester's machine: where each frame's time went. update: the
         // steps (game logic); draw: the scene's CPU side and its GL calls; swap: the present and the swap; wait: the
@@ -2057,17 +2237,30 @@ int RunGame(const GAMEOPTS& go)
             static int s_c = 0;
             const double tEnd = now();
             s_aMs[0] += t1 - t0, s_aMs[1] += t2 - t1, s_aMs[2] += msScene - s_aMs[3], s_aMs[3] = msScene;
-            static double s_msGpu0 = 0, s_msHud0 = 0;
+            static double s_msGpu0 = 0, s_msHud0 = 0, s_msEyes0 = 0;
             auto msCpu = [] { timespec ts{}; clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts); return ts.tv_sec * 1e3 + ts.tv_nsec / 1e6; };
             static double s_msCpu0 = msCpu();
+            static double s_msWorker0 = 0, s_msWorkerRec0 = 0;
+            if (static bool s_fWorker0 = false; !s_fWorker0) s_fWorker0 = true, FVulkanWorkerCpuMs(&s_msWorker0, &s_msWorkerRec0);
             ++s_c;
             if (tEnd - s_t0 >= s_sFpsLog * 1000.0)
             {
                 const double msFrame = (tEnd - s_t0) / s_c;
-                std::printf("fps %.1f step %d t %.2f: %.3f ms/frame: update %.3f, draw %.3f (scene %.3f, hud %.3f), present+wait %.3f; gpu %.3f; main thread cpu %.3f\n",
+                // (the Vulkan submission worker's share, where there is one: its recording + submission, and all of it)
+                double msWorker = 0, msWorkerRec = 0;
+                char achWorker[128] = "";
+                if (FVulkanWorkerCpuMs(&msWorker, &msWorkerRec))
+                    std::snprintf(achWorker, sizeof(achWorker), "; vulkan worker cpu %.3f (recording + submission %.3f)",
+                                  (msWorker - s_msWorker0) / s_c, (msWorkerRec - s_msWorkerRec0) / s_c);
+                if (g_msEyesCpuFpsLog > s_msEyes0)
+                    std::snprintf(achWorker + std::strlen(achWorker), sizeof(achWorker) - std::strlen(achWorker), "; eyes cpu %.3f",
+                                  (g_msEyesCpuFpsLog - s_msEyes0) / s_c);
+                s_msEyes0 = g_msEyesCpuFpsLog;
+                s_msWorker0 = msWorker, s_msWorkerRec0 = msWorkerRec;
+                std::printf("fps %.1f step %d t %.2f: %.3f ms/frame: update %.3f, draw %.3f (scene %.3f, hud %.3f), present+wait %.3f; gpu %.3f; main thread cpu %.3f%s\n",
                             1000.0 / msFrame, frame, g_clock.t, msFrame, s_aMs[0] / s_c, s_aMs[1] / s_c, s_aMs[2] / s_c,
                             (g_msHudFpsLog - s_msHud0) / s_c, msFrame - (s_aMs[0] + s_aMs[1]) / s_c, (g_msGpuFpsLog - s_msGpu0) / s_c,
-                            (msCpu() - s_msCpu0) / s_c);
+                            (msCpu() - s_msCpu0) / s_c, achWorker);
                 s_msCpu0 = msCpu();
                 s_msGpu0 = g_msGpuFpsLog, s_msHud0 = g_msHudFpsLog;
                 s_t0 = tEnd, s_c = 0, s_aMs[0] = s_aMs[1] = s_aMs[2] = 0;
@@ -2075,12 +2268,16 @@ int RunGame(const GAMEOPTS& go)
         }
         if (cstep > 0) ++frame;
     }
+    if (fWindow) cane::gl::HandoffLeaving();   // (the Collection Style Launcher comes back while the world unloads)
     if (pfDump) std::fclose(pfDump);
+    WritePresenceIfRequested(psw.get());   // (--dump-presence: mapstates.h)
+    cut::FinishCutsceneTools(psw.get());     // (cutscene.h: the trace / the play session written)
     // debug: SLY2N_DUMPSAVE=file: the save block (orig 0x3D4A60) at the end (tools/savedump.py prints / diffs it)
     if (const char* sz = std::getenv("SLY2N_DUMPSAVE"))
     {
         std::string err;
         if (!FWriteGameSave(sz, err)) std::printf("save dump: %s\n", err.c_str());
+        else WriteModSave(sz);   // (mod packages' custom tasks, modsave.h: their side file with it)
     }
     if (const char* psz = std::getenv("SLY2N_POSECHECK"))
     {
@@ -2103,6 +2300,7 @@ int RunGame(const GAMEOPTS& go)
     // the Ep7 boss run; and the sound thread was only joined by an atexit handler while the device's mixer ran on.)
     UnloadWorld(psw, false);
     ShutdownSound();
+    vr::Shutdown();
     if (fDraws) g_gl.Terminate();
     return 0;
 }

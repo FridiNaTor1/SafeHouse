@@ -31,6 +31,11 @@
 #include <thread>
 #include <unordered_map>
 #include <vector>
+#ifdef __SWITCH__
+#include <condition_variable>
+#include <deque>
+#include <mutex>
+#endif
 
 namespace
 {
@@ -1170,18 +1175,11 @@ void PlayEffectTone(BLOCKSOUND& bs, const TONE& tone)
     v.startNote = bs.note;
     v.startFine = bs.fine;
     if (static const char* s_sz = std::getenv("SLY2N_SNDPARAMS"); s_sz && (std::atoi(s_sz) == bs.isoundOrig || std::atoi(s_sz) == -1))
-        std::printf("sndtone: sound %d tone flags 0x%X center %d/%d note %d/%d pb %d pm %d vol %d adsr %04X %04X sample 0x%X\n", bs.isoundOrig,
-                    tone.flags, tone.centerNote, tone.centerFine, bs.note, bs.fine, bs.curPb, bs.curPm, v.gVol, tone.adsr1, tone.adsr2,
-                    tone.sampleOffset);
+        std::printf("sndtone: sound %d tone flags 0x%X pri %d (%d) center %d/%d note %d/%d pb %d pm %d vol %d adsr %04X %04X sample 0x%X (%zu, loop %d) spu %d\n",
+                    bs.isoundOrig, tone.flags, tone.priority, priority, tone.centerNote, tone.centerFine, bs.note, bs.fine, bs.curPb, bs.curPm,
+                    v.gVol, tone.adsr1, tone.adsr2, tone.sampleOffset, decoded ? decoded->pcm.size() : size_t(0), decoded ? int(decoded->loop) : 0, spu);
 
-    WAVEFORMATEX format{};
-    format.wFormatTag = WAVE_FORMAT_PCM;
-    format.nChannels = 1;
-    format.nSamplesPerSec = 48000;
-    format.wBitsPerSample = 16;
-    format.nBlockAlign = 2;
-    format.nAvgBytesPerSec = format.nSamplesPerSec * format.nBlockAlign;
-    if (SUCCEEDED(g_pxaudio2->CreateSourceVoice(&v.voice, &format, 0, kSpuMaximumFrequencyRatio)) && v.voice) ++s_cHostVoiceCreated;
+    if (FCreateGameSourceVoice(&v.voice, 1, 48000, kSpuMaximumFrequencyRatio)) ++s_cHostVoiceCreated;   // (audio.h: into the output bus)
     else
     {
         v.voice = nullptr;
@@ -1356,6 +1354,77 @@ void ConfigureEffectLfo(BLOCKSOUND& bs, const LFOPARAMS& p)
 std::unique_ptr<BLOCKSOUND> PbsNew(EFFECTBANK* pbank, int isound, int sfxVol, int sfxPan, const SNDPLAYPARAMS& params,
                                    uint64_t startTick);
 
+void StopBlockSound(BLOCKSOUND& bs);
+
+// orig: (IOP) 989snd.irx 0x4114 -> 0xEF90: a "solo" sound (SFX flag 2) about to start (snd_PlaySoundEx or a
+// START_CHILD_SOUND grain, both through 0x4000) first stops every playing instance of itself: 0xEF90 walks the handler
+// list (0x1F1E8: every block sound, children included, 0xE3A8) for the ones whose sound (+4) is this one and stops
+// each (0xE910 -> 0xEDA0, as the instance limit does). So one instance plays, the newest. (Sly 2's ambient wind, bank
+// sound 208 on a dozen ambient objects in the Episode 8 blimp, is solo: without this every audible copy played its
+// gusts, ~7 voices of priority 126 each, filling the 48 voices so the one-shots got none.)
+void StopSoloInstances(const EFFECTBANK* pbank, int isound)
+{
+    if (!(pbank->sounds[size_t(isound)].flags & 2)) return;
+    std::vector<BLOCKSOUND*> stack;
+    for (auto& [h, pbs] : s_mpsound) stack.push_back(pbs.get());
+    while (!stack.empty())
+    {
+        BLOCKSOUND* p = stack.back();
+        stack.pop_back();
+        for (auto& c : p->children) stack.push_back(c.get());
+        if (p->pbank == pbank && p->isound == isound) StopBlockSound(*p);
+    }
+}
+
+// orig: (IOP) 989snd.irx 0xEDA0 -> 0xE44C (Sly 3: 0xF1D0 -> 0xE87C): a stopped sound's handler is unlinked from the
+// handler list (0x1F1E8) at once unless an on-stop marker keeps the sound running; its keyed-off voices play their
+// release on their own. Here the BLOCKSOUND stays until those voices end (lfoStopped marks it), but the handle is gone:
+// the EE's calls (stop, params, still playing) and the instance limit no longer see it.
+bool FHandlerFreed(const BLOCKSOUND& bs) { return bs.lfoStopped; }
+
+// CheckInstanceLimit (orig: 989snd.irx 0xE334 -> 0xE1F8; Sly 3: 0xE764 -> 0xE614): flags 8 limit, 0x10 the quietest
+// goes, 0x20 the oldest goes. It walks the whole handler list (children included) for live block sounds of this
+// sound; a stopped sound's freed handler is not in it (FHandlerFreed: counting those let the limit keep picking an
+// already stopped instance at volume 0, so the limit never held: Sly 3's v_ext, bank sound 313, 9..11 instances
+// of 3). Sly 3's 989snd also skips a handler stopped once (+0x16 flag 4: one an on-stop marker keeps running).
+// Both paths that start a sound run it (0x4000 -> 0xE334: snd_PlaySoundEx with fOrig, a START_CHILD_SOUND grain
+// without: its mask has bit 31 set, so only the handler's current sound (+4) is matched, not the one it started as
+// (+0x120)); vol is the new sound's volume (a child's: its parent's volume * original volume / 127, 0x6048).
+// false: the new sound is refused.
+bool FInstanceLimitAllows(EFFECTBANK* pbank, int isound, int vol, bool fOrig)
+{
+    const SOUND& sfx = pbank->sounds[size_t(isound)];
+    if (!sfx.instanceLimit || !(sfx.flags & 8)) return true;
+    BLOCKSOUND* weakest = nullptr;
+    int inst = 0;
+    std::vector<BLOCKSOUND*> stack;
+    for (auto& [h, pbs] : s_mpsound) stack.push_back(pbs.get());
+    while (!stack.empty())
+    {
+        BLOCKSOUND* p = stack.back();
+        stack.pop_back();
+        for (auto& c : p->children) stack.push_back(c.get());
+        if (FHandlerFreed(*p) || p->stopping) continue;   // (Sly 3 only: 0xE690)
+        if (p->pbank != pbank || (!(fOrig && p->isoundOrig == isound) && p->isound != isound)) continue;
+        inst++;
+        if (!weakest || ((sfx.flags & 0x10) && p->appVolume < weakest->appVolume) ||
+            ((sfx.flags & 0x20) && p->startTick < weakest->startTick))
+            weakest = p;
+    }
+    if (static const char* s_sz = std::getenv("SLY2N_SNDLIMIT"); s_sz && (std::atoi(s_sz) == isound || std::atoi(s_sz) == -1))   // (debug)
+        std::printf("sndlimit: sound %d%s vol %d: %d live of %d, weakest vol %d (sound %d, %s)\n", isound, fOrig ? "" : " (child)", vol, inst,
+                    int(sfx.instanceLimit), weakest ? weakest->appVolume : -1, weakest ? weakest->isound : -1,
+                    weakest ? (weakest->stopping ? "stopping" : "playing") : "-");
+    if (sfx.instanceLimit - 1 < inst)
+    {
+        if (weakest && (((sfx.flags & 0x10) && weakest->appVolume < vol) || (sfx.flags & 0x20)))
+            StopBlockSound(*weakest);
+        else
+            return false;
+    }
+    return true;
+}
+
 // orig: (IOP) 989snd snd_SFX_GRAIN_TYPE_STARTCHILDSOUND; Sly1-Release StartEffectChild
 void StartEffectChild(BLOCKSOUND& parent, const PLAYSOUNDPARAMS& psp)
 {
@@ -1377,12 +1446,13 @@ void StartEffectChild(BLOCKSOUND& parent, const PLAYSOUNDPARAMS& psp)
     params.pm = parent.appPm;
     params.pb = parent.appPb;
     params.areg = parent.registers;
+    if (!parent.pbank->sounds[size_t(psp.soundId)].grains.empty()) StopSoloInstances(parent.pbank, psp.soundId);   // (0x4000)
+    if (!FInstanceLimitAllows(parent.pbank, psp.soundId, params.vol, false)) return;   // (0x4000 -> 0xE334)
     auto child = PbsNew(parent.pbank, psp.soundId, vol, pan, params, parent.startTick);
     if (child) parent.children.push_back(std::move(child));
 }
 
 void ExecuteEffectGrain(BLOCKSOUND& bs);
-void StopBlockSound(BLOCKSOUND& bs);
 
 // One grain (989snd's grain functions; Sly1-Release ExecuteEffectGrain), then the next one's countdown.
 void ExecuteEffectGrain(BLOCKSOUND& bs)
@@ -1716,7 +1786,7 @@ void AutoVolBlockSound(BLOCKSOUND& bs, int vol, int ticks)
 BLOCKSOUND* PbsFind(uint32_t h)
 {
     const auto it = s_mpsound.find(h);
-    return it == s_mpsound.end() ? nullptr : it->second.get();
+    return it == s_mpsound.end() || FHandlerFreed(*it->second) ? nullptr : it->second.get();
 }
 
 EFFECTBANK* PbankFind(uint32_t h)
@@ -1800,7 +1870,9 @@ void TickAll()
         else
             ++it;
     }
+#ifndef __SWITCH__
     SpiopUpdate();
+#endif
 }
 
 void ThreadMain()
@@ -1829,9 +1901,97 @@ void ThreadMain()
             }
             if (clock::now() >= next) next = clock::now() + period;
         }
+#ifdef __SWITCH__
+        // (the Switch: the streams' refills once the lock is let go, so their SD card reads wait without it: SpiopUpdate)
+        SpiopUpdate();
+#endif
         std::this_thread::sleep_until(next);
     }
 }
+
+#ifdef __SWITCH__
+// (the Switch) An installed bank's effect samples read ahead, after the bank's load, on a thread of their own, so a
+// sample's first play does not read its WAV from the SD card with the sound lock held. The reader holds the lock only
+// to look at the bank and to file what it read; a tone played before its sample is read loads it as before
+// (EffectToneSample), and the reader then passes it by.
+struct SAMPLEJOB
+{
+    uint32_t hbank = 0, isector = 0, sampleOffset = 0;
+};
+std::mutex s_mtxSampleJobs;
+std::condition_variable s_cvSampleJobs;
+std::deque<SAMPLEJOB> s_asamplejob;
+std::thread s_threadSamples;
+bool s_fSamplesStop = false;
+
+// (the bank looked up again under the lock: it may have been unloaded since the job was queued)
+EFFECTBANK* PbankOfSampleJob(const SAMPLEJOB& job)
+{
+    EFFECTBANK* pbank = PbankFind(job.hbank);
+    return pbank && pbank->isector == job.isector && !pbank->decodedSamples.count(job.sampleOffset) ? pbank : nullptr;
+}
+
+void SampleReaderMain()
+{
+    for (;;)
+    {
+        SAMPLEJOB job;
+        {
+            std::unique_lock<std::mutex> lock(s_mtxSampleJobs);
+            s_cvSampleJobs.wait(lock, [] { return s_fSamplesStop || !s_asamplejob.empty(); });
+            if (s_fSamplesStop) return;
+            job = s_asamplejob.front();
+            s_asamplejob.pop_front();
+        }
+        {
+            std::lock_guard<std::recursive_mutex> lock(g_mtxSound);
+            if (!PbankOfSampleJob(job)) continue;
+        }
+        const std::string path = g_disc.PathPart(job.isector, "sample" + std::to_string(job.sampleOffset));
+        DecodedEffectSample d;
+        if (path.empty() || !FLoadEffectWav(path, d)) continue;
+        std::lock_guard<std::recursive_mutex> lock(g_mtxSound);
+        EFFECTBANK* pbank = PbankOfSampleJob(job);
+        if (!pbank) continue;
+        TapEffectSample(*pbank, job.sampleOffset, d);
+        pbank->decodedSamples.emplace(job.sampleOffset, std::make_shared<const DecodedEffectSample>(std::move(d)));
+    }
+}
+
+// The samples every tone of a bank just filed plays (g_mtxSound held)
+void QueueBankSamples(const EFFECTBANK& bank)
+{
+    if (!bank.fWavSamples) return;
+    std::vector<uint32_t> aoffset;
+    for (const SOUND& sound : bank.sounds)
+        for (const GRAIN& g : sound.grains)
+            if ((g.type == GRAINK_Tone || g.type == GRAINK_Tone2) && !(g.tone.flags & 8)) aoffset.push_back(g.tone.sampleOffset);
+    std::sort(aoffset.begin(), aoffset.end());
+    aoffset.erase(std::unique(aoffset.begin(), aoffset.end()), aoffset.end());
+    if (aoffset.empty()) return;
+    {
+        std::lock_guard<std::mutex> lock(s_mtxSampleJobs);
+        if (!s_threadSamples.joinable())
+        {
+            s_fSamplesStop = false;
+            s_threadSamples = std::thread(SampleReaderMain);
+        }
+        for (uint32_t offset : aoffset) s_asamplejob.push_back({bank.hbank, bank.isector, offset});
+    }
+    s_cvSampleJobs.notify_one();
+}
+
+void StopSampleReader()
+{
+    {
+        std::lock_guard<std::mutex> lock(s_mtxSampleJobs);
+        s_fSamplesStop = true;
+        s_asamplejob.clear();
+    }
+    s_cvSampleJobs.notify_all();
+    if (s_threadSamples.joinable()) s_threadSamples.join();
+}
+#endif
 }  // namespace
 
 void snd_StartSoundSystem()
@@ -1847,6 +2007,9 @@ void snd_StartSoundSystem()
 void snd_StopSoundSystem()
 {
     if (s_fThread.exchange(false) && s_thread.joinable()) s_thread.join();
+#ifdef __SWITCH__
+    StopSampleReader();   // (before the lock: the reader may be waiting for it to file a sample)
+#endif
     std::lock_guard<std::recursive_mutex> lock(g_mtxSound);
     SpiopStopAll();
     for (auto& [h, pbs] : s_mpsound) DestroyBlockSound(*pbs);
@@ -1889,9 +2052,17 @@ uint32_t snd_BankLoadByLoc(uint32_t isector, uint32_t ib)
     bank->hbank = 0x00010000u | (s_hbankNext++ & 0xFFu) << 8;
     const uint32_t h = bank->hbank;
     if (std::getenv("SLY2N_SNDLOG"))
-        std::printf("snd: bank %08x loaded from sector 0x%x (%zu bytes, %zu sounds)\n", h, isector, bank->bytes.size(),
-                    bank->sounds.size());
+    {
+        std::string strSolo;   // (the solo sounds: StopSoloInstances)
+        for (std::size_t i = 0; i < bank->sounds.size(); ++i)
+            if (bank->sounds[i].flags & 2) strSolo += " " + std::to_string(i);
+        std::printf("snd: bank %08x loaded from sector 0x%x (%zu bytes, %zu sounds), solo:%s\n", h, isector, bank->bytes.size(),
+                    bank->sounds.size(), strSolo.empty() ? " none" : strSolo.c_str());
+    }
     s_mpbank[h] = std::move(bank);
+#ifdef __SWITCH__
+    QueueBankSamples(*s_mpbank[h]);   // (its samples read ahead, off the sound lock)
+#endif
     return h;
 }
 
@@ -1982,7 +2153,7 @@ uint32_t snd_PlaySoundEx(const SNDPLAYPARAMS& params)
     if (static const char* s_sz = std::getenv("SLY2N_SNDPARAMS"); s_sz && (std::atoi(s_sz) == params.isound || std::atoi(s_sz) == -1))   // (debug: one sound's plays)
     {
         int c = 0;
-        for (auto& [h, pbs] : s_mpsound) c += pbs->pbank == pbank && pbs->isound == params.isound;
+        for (auto& [h, pbs] : s_mpsound) c += pbs->pbank == pbank && pbs->isound == params.isound && !FHandlerFreed(*pbs);
         std::printf("sndparams: sound %d mask 0x%X vol %d pan %d pm %d pb %d (sound vol %d group %d limit %d flags 0x%X grains %zu) playing %d\n",
                     params.isound, params.mask, params.vol, params.pan, params.pm, params.pb, sfx.volume, sfx.volumeGroup,
                     sfx.instanceLimit, sfx.flags, sfx.grains.size(), c);
@@ -1996,27 +2167,8 @@ uint32_t snd_PlaySoundEx(const SNDPLAYPARAMS& params)
                             int(g.lfo.shape), int(g.lfo.target), int(g.lfo.depth));
         }
     }
-    // CheckInstanceLimit: flags 8 limit, 0x10 the quietest goes, 0x20 the oldest goes.
-    if (sfx.instanceLimit && (sfx.flags & 8))
-    {
-        BLOCKSOUND* weakest = nullptr;
-        int inst = 0;
-        for (auto& [h, pbs] : s_mpsound)
-        {
-            if (pbs->pbank != pbank || (pbs->isoundOrig != params.isound && pbs->isound != params.isound)) continue;
-            inst++;
-            if (!weakest || ((sfx.flags & 0x10) && pbs->appVolume < weakest->appVolume) ||
-                ((sfx.flags & 0x20) && pbs->startTick < weakest->startTick))
-                weakest = pbs.get();
-        }
-        if (sfx.instanceLimit - 1 < inst)
-        {
-            if (weakest && (((sfx.flags & 0x10) && weakest->appVolume < vol) || (sfx.flags & 0x20)))
-                StopBlockSound(*weakest);
-            else
-                return 0;
-        }
-    }
+    if (!sfx.grains.empty()) StopSoloInstances(pbank, params.isound);   // (0x4000: a sound without grains starts nothing)
+    if (!FInstanceLimitAllows(pbank, params.isound, vol, true)) return 0;
     auto pbs = PbsNew(pbank, params.isound, -1, -1, params, s_tick);
     if (!pbs) return 0;
     const uint32_t h = 0x01000000u | (++s_hsoundSerial & 0xFFFFFFu);

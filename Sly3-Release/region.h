@@ -28,13 +28,29 @@ extern int g_nLang;
 extern int g_nLangChosen;
 
 // orig 0x1A2C48: the disc's languages (its region's list in the executable); orig 0x1A2C98: their count.
+int CLanguagesDisc();
+int LanguageOfDiscIndex(int i);
+bool FLanguageOnDisc(int lang);
+// (PC) The languages the player can choose: the disc's, then the ones the shared languages folder and the mods
+// folder add (langstore.h: other regions' languages, imports, user-made dubs and subtitles). With two or more, the
+// title offers the language menu on every disc, as the European build does with its own. Custom languages (not one
+// of the game's 14) have ids from LANG_Max on.
 int CLanguages();
 int LanguageOfIndex(int i);
-bool FLanguageOnDisc(int lang);
+bool FLanguageAvailable(int lang);
+// The language whose world-file data is read (the text block's strings, the dialog lines' keys): g_nLang when the
+// disc has it, else the disc's language that the chosen one falls back to (English, else the disc's first).
+int LangWorld();
+// The language the text is shown in (the port's own text's column, porttext.h): g_nLang, or LangWorld() when the
+// chosen language's text cannot be shown with this disc's fonts (Japanese text on the USA / European discs).
+int LangText();
 
 // The starting language, after the disc is open (orig: the European / Japanese builds' boot 0x1613D0: the region
 // set, then 0x1A2DA0 with the console's language). The PC's language stands in for the console's.
 void InitLanguage();
+// (PC, Settings.ini "Language") a language set in the settings: chosen for the session (no language menu at the
+// title, it wins over a save's); "" or one not installed: nothing changes.
+void ApplyLanguageSetting(const std::string& key);
 // orig 0x1A2BD0: the language set (-1: the region's first).
 void SetLanguage(int lang);
 const char* SzLanguage(int lang);
@@ -81,6 +97,8 @@ bool FJapaneseNoBreakAfter(uint32_t ch);
 // The European build's title: the language menu needed (orig 0x1DDB68: two or more languages, none chosen yet this
 // session, no game on the card to continue, the title's input not yet taken).
 bool FTitleNeedsLanguage(bool fTitleInputTaken, bool fContinueSlot);
+// The text shown with Latin line breaks (at spaces): every disc's text but Japanese text on the Japanese disc.
+bool FLatinLineBreaks();
 // The European title's help line: the "Triangle: Language" label in each language, cycling (orig 0x1DE1F8's end,
 // the table at 0x2CAA08); empty without one.
 std::string StrLanguageHelpLabel(float tSinceShown);

@@ -3,6 +3,7 @@
 #include "screenobj.h"
 
 #include "loadtrace.h"
+#include "shd.h"
 #include "region.h"
 
 #include <algorithm>
@@ -48,6 +49,7 @@ void LoadElemBodyFromBrx(SELEM& e, CBinaryInputStream* pbis, int depth)
             for (uint32_t j = 0; j < cv; ++j)
             {
                 poly.rgba = pbis->U32Read();   // (the last vertex's word, as Sly 2's loader keeps it)
+                GrayRgba3(&poly.rgba);
                 poly.ab[j] = pbis->U8Read();
                 poly.axy[j][0] = pbis->S16Read();
                 poly.axy[j][1] = pbis->S16Read();
@@ -59,6 +61,7 @@ void LoadElemBodyFromBrx(SELEM& e, CBinaryInputStream* pbis, int depth)
                           // +0x24, S8 kind +0xC (0 localized, 1 a script string), S8 the font element +0x2C, then the
                           // S32 id +0x10 when the kind is 0 or 1
         e.aul3[1] = pbis->U32Read();
+        GrayRgba3(&e.aul3[1]);   // (0x236970: the 3-D mode's grey)
         e.ag3[0] = pbis->F32Read();
         e.ag3[2] = pbis->F32Read();
         e.ag3[1] = pbis->F32Read();
@@ -169,7 +172,13 @@ void LoadGroupsFromBrx(std::vector<SGROUP>& agroup, CBinaryInputStream* pbis)
                     it.n34 = pbis->S32Read();
                     it.mat = Mat3x2FromBrx(pbis);
                 }
-                for (auto& c : key.acolor) { c[1] = pbis->U32Read(); c[0] = pbis->U32Read(); }
+                for (auto& c : key.acolor)
+                {
+                    c[1] = pbis->U32Read();
+                    c[0] = pbis->U32Read();
+                    GrayRgba3(&c[1]);   // (0x236970: the 3-D mode's grey)
+                    GrayRgba3(&c[0]);
+                }
                 for (uint16_t& w : key.aw) w = pbis->U8Read();
             }
         }
@@ -204,7 +213,8 @@ void LoadScreenObjFromBrx(SCREENOBJ* pso, CBinaryInputStream* pbis)
 const SELEM* FONTBRX::PglyphFromCh(uint32_t ch) const
 {
     // orig: 0x00215A50 CFontBrx::PglyffFromCh (binary search; 1-based)
-    const auto it = std::lower_bound(pset->aul.begin(), pset->aul.end(), uint32_t(ch));
+    auto it = std::lower_bound(pset->aul.begin(), pset->aul.end(), uint32_t(ch));
+    if ((it == pset->aul.end() || *it != ch) && (ch == '{' || ch == '}')) return PglyphFromCh(ch == '{' ? '(' : ')');   // (PC: L3 / R3, promptglyph.cpp)
     if (it == pset->aul.end() || *it != ch) return nullptr;
     const size_t i = size_t(it - pset->aul.begin()) + 1;
     return i < pset->asub.size() ? &pset->asub[i] : nullptr;
@@ -213,6 +223,7 @@ const SELEM* FONTBRX::PglyphFromCh(uint32_t ch) const
 float FONTBRX::DxFromCh(uint32_t ch) const
 {
     const auto it = std::lower_bound(pset->aul.begin(), pset->aul.end(), uint32_t(ch));
+    if ((it == pset->aul.end() || *it != ch) && (ch == '{' || ch == '}')) return DxFromCh(ch == '{' ? '(' : ')');   // (PC: L3 / R3)
     if (it == pset->aul.end() || *it != ch) return 0.0f;
     const size_t i = size_t(it - pset->aul.begin());
     return i < pset->ag.size() ? pset->ag[i] : 0.0f;

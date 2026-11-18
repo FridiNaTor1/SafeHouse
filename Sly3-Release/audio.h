@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <mutex>
+#include <string>
 #include <vector>
 
 struct IXAudio2;
@@ -22,6 +23,9 @@ bool FEnsureAudio();
 void SetOutputVolume(float g);
 // (PC: the cutscene skip's fast-forward) the whole mix silenced, or back at its volume
 void SetOutputMute(bool fMute);
+// (PC: the original's Speakers: Mono, Settings.ini) every voice's left and right mixed together, from the next level
+// change of each voice on (SetVoiceLevels); off (Surround / Stereo, the default): the voices' own stereo
+void SetMonoOutput(bool fMono);
 // The output level of the SPU2 mix relative to 989snd's register volumes (0x3FFF = 1.0): the banked effects
 // match the reference port's 989snd at 1.0 (a front-end menu sound in its SLY2_AUDIO_WAV: gain 0.96..1.0 against
 // the same sound rendered alone by its 989snd).
@@ -39,6 +43,28 @@ extern IXAudio2MasteringVoice* g_pmastervoice;
 // thread both take it.
 extern std::recursive_mutex g_mtxSound;
 
+// (PC) a game voice (989snd's, a stream's; 16-bit PCM): it feeds the output bus, which feeds the mastering voice (the
+// device can then change while it plays)
+bool FCreateGameSourceVoice(IXAudio2SourceVoice** ppvoice, int cch, int rate, float frqMax);
+
+// ---- (PC) the audio devices by name (notes/AUDIO_2026-11-10.md; platform/audio_devices.h): "" the system default.
+// A chosen device that is missing plays on (records from) the default, and is taken again when it is back.
+namespace cane::audio { struct DeviceList; }
+void SetAudioDevices(const std::string& output, const std::string& input, const std::string& headsetOutput);
+// From the game loop (every 2 s; fNow: at once): follows unplugged / returning devices; no work while every device is
+// the default and the USB headset is off
+void PollAudioDevices(bool fNow = false);
+// The devices to choose from (desktop builds; ListAudioDevices().available false elsewhere) and whether the choice
+// is shown at all (not on the Switch or Android)
+cane::audio::DeviceList ListAudioDevices();
+bool FAudioDeviceChoiceShown();
+std::string SzAudioOutputOpen();   // the output device open ("" the default)
+// The USB headset (the original's option; sound.cpp): its microphone recorded while on, and its level as spiop.irx
+// computes it (the RMS of the last 1024 samples, 0..1); its speaker (the Headset Output Device) open
+void SetMicCapture(bool fOn);
+float GMicLevel();
+bool FHeadsetOutputReady();
+
 // A mono voice's (or a stereo voice's two channels') levels into the stereo mix; 1.0 is the SPU2's 0x3FFF.
 void SetVoiceLevels(IXAudio2SourceVoice* pvoice, int cchSource, float gLeft, float gRight);
 
@@ -52,7 +78,8 @@ public:
     CPcmStream& operator=(const CPcmStream&) = delete;
     ~CPcmStream() { Close(); }
 
-    bool FOpen(int cch, int rate, float frqMax = 4.0f);
+    // (fHeadset: on the USB headset's speaker, the Headset Output Device (FHeadsetOutputReady); false when it is not open)
+    bool FOpen(int cch, int rate, float frqMax = 4.0f, bool fHeadset = false);
     void Close();
     [[nodiscard]] bool FIsOpen() const { return m_pvoice != nullptr; }
 
@@ -77,6 +104,7 @@ public:
 
 private:
     IXAudio2SourceVoice* m_pvoice = nullptr;
+    bool m_fHeadset = false;
     std::FILE* m_pfTap = nullptr;  // (test: SLY2N_PCMTAP=dir: every frame pushed, one raw file per stream)
     std::vector<int16_t> m_aab[kcBuffer];
     int m_iab = 0;

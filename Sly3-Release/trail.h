@@ -20,6 +20,7 @@ struct TRAIL : ALO
     std::vector<TRAILFRAME> frames;              // orig +0x158/+0x15C
     size_t next = 0;                            // orig +0x160
     int idle = 0;                              // orig +0x164
+    float tSample = 0.0f;                      // orig3 +0x138: Sly 3 samples once per 1/60 s (0x26E7E8)
     LO* follow = nullptr;                      // orig +0x180
     float distance = 0.0f;                     // orig +0x188
     glm::vec3 previous{0.0f};                   // orig +0x190

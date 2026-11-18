@@ -57,6 +57,8 @@ void RequestWorldWarp(SW* psw, int iwrec, OID oidPoint = 0x189, OID oidWipe = 0x
 void RequestTaskStart(SW* psw, int iwrec, OID oidTask);
 // the world records (the boot world's, loaded on first use)
 void EnsureWorldRecords();
+// (mod packages' new worlds, modworld.h: the list again after a package was added: the map editor's project)
+void RefreshWorldRecords();
 // orig 0x3E1C40.. (the loaded world's records), 0x210AE0 (the current world's episode), 0x210B98 (an episode's
 // main world record, null when none)
 const std::vector<WREC>& AwrecWorlds();

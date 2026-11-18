@@ -5,7 +5,8 @@
 // off nothing here reads or swallows any input and the game runs exactly as without this file.
 //
 // F10, or R1 + Select on a pad, opens it: the game freezes (no world update at all) and a translucent panel lists
-// Warps / Character / Noclip / Teleport / Jobs / Player / Speed / Display / Reset World / Save. D-pad or stick (or the
+// Warps / Character / Noclip / Teleport / Jobs / Player / Speed / Display / Overlays / Reset World / Save (Overlays:
+// debugvis.h, the views of what the game keeps hidden). D-pad or stick (or the
 // arrow keys / W S / mouse wheel) move, Cross (Enter / Space / left click) selects, Circle / Triangle / Start (Esc /
 // E / Q / right click) go back. F11 toggles the HUD.
 //
@@ -52,6 +53,9 @@ bool FUpdateDebugFreeCamPad(CAMERA& cam, int frame);
 // game.cpp: the F1 free camera's flag (the menu's Display page toggles it too) and F7's infinite health.
 extern bool g_fDebugFreeCam;
 extern bool g_fDebugInfinite;
+
+// A world record's file name ("f_nightclub_exterior"; "" when not known): the menus' and the overlays' (debugvis.h)
+const char* PchzDebugWorldFile(int iwrec);
 
 // The build's version for the title line: the top-level CMake project version and the short git hash.
 const char* PchzPortVersion();

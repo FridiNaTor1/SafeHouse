@@ -1,3 +1,5 @@
+#include <unordered_set>
+#include <execinfo.h>
 #if defined(__SANITIZE_ADDRESS__)
 #include <set>
 #include "game/sly3.h"
@@ -9,9 +11,14 @@
 #include "game/scptgame3.h"
 #include <set>
 #include "proc.h"
+#include "pcinput.h"
 #include "actor.h"
 #include "cls.h"
 #include "spliceglue.h"
+#include "splitscreen3.h"
+#include "game/ship3.h"
+#include "aicarm3.h"
+#include "challenge3.h"
 #include "cmworld.h"
 #include "shd.h"
 #include "glob.h"
@@ -28,6 +35,7 @@
 #include "animfind.h"
 
 #include "brx.h"
+#include "booty.h"
 #include "disc.h"
 #include "lo.h"
 #include "sidebag.h"
@@ -305,11 +313,12 @@ CRef RefFromOptval(const OPTVAL& v)
     CRef ref;
     switch (v.tagk)
     {
-    case 0x15: ref.SetS32(v.n); return ref;
-    case 0x16: ref.SetF32(v.ag[0]); return ref;
-    case 0x17: ref.SetBool(v.n); return ref;
-    case 0x1A: case 0x1C: ref.SetVector(glm::vec3(v.ag[0], v.ag[1], v.ag[2])); return ref;
-    case 0x21: ref.SetBasic(v.pbasic); return ref;
+    // (s3-gadgets) by the tags' names (the raw numbers were Sly 2's: other tags in Sly 3; objmethod.cpp RefFromOptionValue)
+    case TAGK_S32: ref.SetS32(v.n); return ref;
+    case TAGK_F32: ref.SetF32(v.ag[0]); return ref;
+    case TAGK_Bool: ref.SetBool(v.n); return ref;
+    case TAGK_Vector: case TAGK_Clq: ref.SetVector(glm::vec3(v.ag[0], v.ag[1], v.ag[2])); return ref;
+    case TAGK_Basic: ref.SetBasic(v.pbasic); return ref;
     default: break;
     }
     // a field / setter option: by its kind
@@ -338,6 +347,15 @@ OPTVAL OptvalFromRef(const CRef& ref)
         v.ag = {vec.x, vec.y, vec.z, 0.0f};
         break;
     }
+    case TAGK_Clq: case TAGK_Lm: case TAGK_Smp:
+    {
+        // (s3fix5-ai) a CLQ / LM / SMP value (its floats in order): a splice's seto! of such a field option kept nothing,
+        // e.g. m5_recon's SCPT 3887 module setting the prox job's cylinders' z ranges (STEPGUARD options 488 / 490)
+        v.tagk = ref.m_tagk;
+        const glm::vec3 vec = ref.GetVector();
+        v.ag = {vec.x, vec.y, vec.z, 0.0f};
+        break;
+    }
     case TAGK_Basic:
         // an object (e.g. the job markers' seto! of their task +0x160 at the start, read back at the player's entry)
         v.tagk = S3TAG(0x21);
@@ -349,6 +367,29 @@ OPTVAL OptvalFromRef(const CRef& ref)
     return v;
 }
 
+}  // namespace
+
+// (brx.h) the field a splice's seto! of a field EOPID (grf 0x90) stores its value at: where the loader stores it
+// (brx.h OptionFieldKey: the original's 0x201110 writes ibSet, the loader's ibFile, the same field). E.g. Bentley's dart
+// kind 774 at +0x16D8, which his 0x1357C0 reads; the Guru's 1800 (EOPID 2028, grf 0x12: no +0x18) that the guards'
+// detectors read for his invisibility. Natively the set wrote the Sly 3 record's offset while the load wrote the Sly 2
+// twin's: 362 options' sets were missed by the code (and some landed on another option's field, e.g. a guard's option
+// 437 on the flinch clip +0x348). A sub-object's field (grf 0x2000) is stored through its getter as the loader stores
+// it (0x201110: pv = pmfObj(1)); the guard's default attack (0x20A9C0) and the space warps' entries (0x22C4D8 /
+// 0x22C4F8) are built at the load only (none here).
+OPTFIELDKEY SetterFieldKey(int cid, int eopid3)
+{
+    OPTFIELDKEY key;
+    if (eopid3 < 0 || eopid3 >= sly3::CEOPID) return key;
+    const uint32_t grf = g_disc.U32Elf(S3VA(0x2AC880) + static_cast<uint32_t>(eopid3) * 0x28 + 4);
+    if (!(grf & 0x90) || (grf & 0x401)) return key;
+    key = OptionFieldKey(cid, eopid3);
+    if (key.pfnGet == 0x20A9C0 || key.pfnGet == 0x22C4D8 || key.pfnGet == 0x22C4F8) return OPTFIELDKEY{};
+    return key;
+}
+
+namespace
+{
 // orig 0x001FFCF8: an option id's property (EOPID) for the object's class (the sorted table D_00279AD0[cid]
 // of (optid, EOPID*)); -1 when the class has none
 int EopidFromOptid(CID cid, int optid)
@@ -370,10 +411,16 @@ int EopidFromOptid(CID cid, int optid)
 
 // The methods (properties with flags & 1: geto gives a function of the object, 0x1FFD98) the game has
 // natively: 0x100A90 AddLo (vt slot 8), 0x100B88 RemoveLo (vt slot 9), 0x100A00 slot 38 (for the actors); the others do nothing yet.
+// (s3-player) the objects the splice's add put in this world (orig3: the world start's 0x25B9C0 removes the characters
+// that are no player before the splice's start events run (the reference's o_bar at 13:2756: 0x25BAA0, then the
+// splice's adds 0x100ADC of Sly 24 / Bentley 25 / Murray 26 at the same vblank); natively the start events run during
+// the load, before transition.cpp's removal, which then must keep them; a removal by the splice ends that)
+static std::unordered_set<const LO*> s_setploSpliceAdd;
 CRef RefMethodAdd(BASIC* pbasic, int, CRef*)
 {
     if (LO* plo = PloFromBasic(pbasic))
     {
+        s_setploSpliceAdd.insert(plo);
         AddLo(s_psw, plo);
         if (std::getenv("SLY2N_METHODPRINT"))
             std::printf("add: %d %p parent %d %p: inworld %d removed %d\n", plo->oid, (void*)plo, plo->paloParent ? plo->paloParent->oid : -1,
@@ -383,7 +430,11 @@ CRef RefMethodAdd(BASIC* pbasic, int, CRef*)
 }
 CRef RefMethodRemove(BASIC* pbasic, int, CRef*)
 {
-    if (LO* plo = PloFromBasic(pbasic)) RemoveLo(s_psw, plo);
+    if (LO* plo = PloFromBasic(pbasic))
+    {
+        s_setploSpliceAdd.erase(plo);
+        RemoveLo(s_psw, plo);
+    }
     return CRef(TAGK_Void);
 }
 // orig 0x100A00: vt slot 38 with an object argument (placed at the object; actor.h)
@@ -423,7 +474,7 @@ struct SOEBASIC : BASIC
     uint32_t worldSerial = 0;
 };
 
-// orig: 0x00101588 -> 0x001F85E0 / 0x001F6030 (option 195: the first entry with this tag).
+// orig: 0x00101588 -> 0x001F85E0 / 0x001F6030 (option 195: the first entry with this tag). (orig3: 0x101710, the same C in the Sly 3 decomp)
 CRef RefSoeHandle(LO* plo, const std::vector<CRef>& args)
 {
     CRef result;
@@ -572,6 +623,8 @@ CRef RefCmCut(BASIC*, int, CRef*)
     CutCm(&g_cm);  // 0x14D8C0
     return CRef(TAGK_Void);
 }
+int s_optid3Cur = -1;
+
 CRef RefCameraOption(int bifk, int optid, const CRef* value)
 {
     if (bifk == 111 && (optid == 233 || optid == 292))
@@ -641,9 +694,30 @@ CRef RefCameraOption(int bifk, int optid, const CRef* value)
             std::printf("CAMERA_OPTION bif=%d option=%d tag=%d t=%.9g pos=%.9g,%.9g,%.9g mrd=%.9g\n", bifk, optid, int(result.m_tagk), g_clock.t, g_cm.pos.x, g_cm.pos.y, g_cm.pos.z, g_cm.rMRD);
         return result;
     }
+    // (audit 4 CORE-08) a Sly 3-only option (no Sly 2 id): a method of its EOPID's thunk (flag 1, as the world's
+    // 0x200BA0), else its value as a script set it (keyed by the Sly 3 id), else void
+    static std::map<int, CRef> s_mpCameraOption3;
+    if (optid < 0)
+    {
+        if (const int eopid = EopidFromOptid(0x05, s_optid3Cur); eopid >= 0 && bifk == 111)
+        {
+            const uint32_t vaEopid = S3VA(0x2AC880) + static_cast<uint32_t>(eopid) * 0x28;
+            CRef rm;
+            if ((g_disc.U32Elf(vaEopid + 4) & 1) &&
+                FMakeObjectMethod(g_disc.U32Elf(vaEopid + 0x10), &s_cmbasic, static_cast<int>(g_disc.U32Elf(vaEopid + 0x18)), &rm))
+                return rm;
+        }
+        if (bifk == 110 && value)
+        {
+            s_mpCameraOption3[s_optid3Cur] = *value;
+            return CRef(TAGK_Void);
+        }
+        if (auto it = s_mpCameraOption3.find(s_optid3Cur); bifk == 111 && it != s_mpCameraOption3.end()) return it->second;
+    }
     static std::map<int, bool> s_mpWarned;
-    if (!s_mpWarned[optid]) std::fprintf(stderr, "splice: the camera's option %d (bif %d) not ported\n", optid, bifk);
-    s_mpWarned[optid] = true;
+    const int key = optid < 0 ? 0x10000 + s_optid3Cur : optid;
+    if (!s_mpWarned[key]) std::fprintf(stderr, "splice: the camera's option %d / Sly 3 %d (bif %d) not ported\n", optid, s_optid3Cur, bifk);
+    s_mpWarned[key] = true;
     return CRef(TAGK_Void);
 }
 
@@ -671,10 +745,14 @@ struct SNDBASIC : LO
 {
 } s_sndbasic;
 
+// (the Sly 3 option id of the option being read: EopidFromOptid searches Sly 3's class tables, the handlers below get
+// Sly 2's ids; before, the world's / the sound object's methods were looked up by the Sly 2 id and not found, e.g. the
+// world's 984 (Sly 2 847: player n's character) that most worlds' scripts read at their load)
+
 CRef RefSoundOption(int bifk, int optid, const CRef* pref)
 {
     CRef ref;
-    const int eopid = EopidFromOptid(S3CID(0x98), optid);
+    const int eopid = EopidFromOptid(0xC2, s_optid3Cur);   // (Sly 3: the sound object is class 0xC2 (Sly 2 0x98 has no mapped twin) and the table takes the Sly 3 id)
     if (bifk == 111 && eopid == S3EOPID(140))  // (a getter: 0x1FE888)
     {
         ref.SetF32(TDialog());
@@ -749,7 +827,34 @@ struct SNDMETHODS
     }
 } s_sndmethods;
 
-std::map<int, CRef> s_mpWorldOption;  // (the world's other options: kept as set, TODO(world): their fields' uses)
+// (the world's other options as the scripts set them, keyed by the Sly 3 option id (s_optid3Cur): the Sly 3-only ones
+// have no Sly 2 id (-1), and keyed by that they all shared one slot (audit 4 CORE-06))
+std::map<int, CRef> s_mpWorldOption;
+
+// The SW field options the engine reads (Sly 3 ids; their EOPID = id + 1): 988 the light falloff c / l / q (+0x4E00),
+// 989 its min / max (+0x4E10, default max 1: 0x25A628), 990 the low flight band (+0x4E18 / +0x4E1C), 1007 the ceiling
+// (+0x4FF0, default 5500: 0x25A628)
+bool FWorldOptionFieldRead3(int optid3) { return optid3 == 988 || optid3 == 989 || optid3 == 990 || optid3 == 1007; }
+float GWorldOptionField3(int optid3, int i, float gDefault)
+{
+    if (auto it = s_mpWorldOption.find(optid3); it != s_mpWorldOption.end())
+    {
+        const CRef& r = it->second;
+        if (r.m_tagk == TAGK_F32 && i == 0) return r.m_g;
+        if (r.m_tagk == TAGK_S32 && i == 0) return float(r.m_n);
+        if (r.m_tagk == TAGK_Pair)
+        {
+            int j = 0;
+            for (const CPair* pp = r.m_ppair.get(); pp; pp = pp->m_ppairNext.get(), ++j)
+                if (j == i) return pp->m_ref.m_tagk == TAGK_F32 ? pp->m_ref.m_g : float(pp->m_ref.m_n);
+        }
+        if ((r.m_tagk == TAGK_Vector || r.m_tagk == TAGK_Clq || r.m_tagk == TAGK_Lm) && i < 4) return r.m_vector[i];
+    }
+    if (s_psw)
+        for (const OPT& o : s_psw->aoptSw)
+            if (o.eopid == optid3 + 1 && !o.aval.empty() && i < 4) return o.aval[0].ag[std::size_t(i)];
+    return gDefault;
+}
 
 CRef RefWorldOption(int bifk, int optid, const CRef* pref)
 {
@@ -758,7 +863,7 @@ CRef RefWorldOption(int bifk, int optid, const CRef* pref)
     if (bifk == 110 && optid == 846 && pref)  // EOPID 928: the forced player (0x1C4A60, SW +0x3F00)
     {
         SetPoForced(s_psw, dynamic_cast<LO*>(pref->m_pbasic));
-        s_mpWorldOption[optid] = *pref;
+        s_mpWorldOption[s_optid3Cur] = *pref;
         return CRef(TAGK_Void);
     }
     // EOPIDs 937 / 938 (options 855 / 856, grf 0x12, otype 6): SW +0x3C88 / +0x3C8C, the current checkpoint's
@@ -778,9 +883,10 @@ CRef RefWorldOption(int bifk, int optid, const CRef* pref)
     if (bifk != 111)
     {
         static std::map<int, bool> s_mpWarned;
-        if (!s_mpWarned[optid]) std::fprintf(stderr, "splice: the world's option %d (bif %d) kept, its use not ported\n", optid, bifk);
-        s_mpWarned[optid] = true;
-        if (pref) s_mpWorldOption[optid] = *pref;
+        if (!s_mpWarned[s_optid3Cur] && !FWorldOptionFieldRead3(s_optid3Cur))
+            std::fprintf(stderr, "splice: the world's option %d / Sly 3 %d (bif %d) kept, its use not ported\n", optid, s_optid3Cur, bifk);
+        s_mpWarned[s_optid3Cur] = true;
+        if (pref) s_mpWorldOption[s_optid3Cur] = *pref;
         return CRef(TAGK_Void);
     }
     // (Sly 3) option 508 (Sly 2 id 454; EOPID 1007, thunk 0x10AEC0 -> 0x25ED20): a method (index, ids, ids) that
@@ -821,16 +927,27 @@ CRef RefWorldOption(int bifk, int optid, const CRef* pref)
     }
     default:
     {
-        auto it = s_mpWorldOption.find(optid);
-        if (it != s_mpWorldOption.end()) return it->second;
         // the world's methods (0x200BA0: an EOPID with flag 1 gives a method object of its thunk), e.g. 861
         // (EOPID 942, thunk 0x10C2E8: 0x195608, the abandon icon on a tracked target: the safe house door in a job)
-        if (const int eopid = EopidFromOptid(S3CID(0x01), optid); eopid >= 0)
+        if (const int eopid = EopidFromOptid(S3CID(0x01), s_optid3Cur); eopid >= 0)   // (the Sly 3 id: the table is Sly 3's)
         {
             const uint32_t vaEopid = S3VA(0x2AC880) + static_cast<uint32_t>(eopid) * 0x28;
             if ((g_disc.U32Elf(vaEopid + 4) & 1) &&
                 FMakeObjectMethod(g_disc.U32Elf(vaEopid + 0x10), &s_swbasic, static_cast<int>(g_disc.U32Elf(vaEopid + 0x18)), &ref))
                 return ref;
+        }
+        // a field option: as a script set it, else the world file's value (SW's option block), else its default
+        if (auto it = s_mpWorldOption.find(s_optid3Cur); it != s_mpWorldOption.end()) return it->second;
+        if (FWorldOptionFieldRead3(s_optid3Cur))
+        {
+            auto g = [](int i, float gDef) { return GWorldOptionField3(s_optid3Cur, i, gDef); };
+            // (988 / 989: the SW's defaults of its init 0x25A628, +0x4E00 {0.7, 0.0002, 0} / +0x4E10 {1.0, 1.5}, as
+            // scenesw.cpp reads them; audit 5 CORE5-09)
+            if (s_optid3Cur == 988) ref.SetClq({g(0, 0.7f), g(1, 0.0002f), g(2, 0.0f), 0.0f});
+            else if (s_optid3Cur == 989) ref.SetLm({g(0, 1.0f), g(1, 1.5f)});
+            else if (s_optid3Cur == 990) ref.SetLm({g(0, 0.0f), g(1, 0.0f)});
+            else ref.SetF32(g(0, 5500.0f));
+            return ref;
         }
         static std::map<int, bool> s_mpWarned;
         if (!s_mpWarned[optid]) std::fprintf(stderr, "splice: the world's option %d not ported\n", optid);
@@ -890,8 +1007,38 @@ CRef RefOptionImpl(int bifk, BASIC* pbasic, int optid, const CRef* pref)
     }
     // (Sly 3: the handlers below compare Sly 2 option ids: the Sly 3 id converted at their entry, game/optid3.h; an
     // object's options (the LO path after them) are Sly 3's)
+    // (Sly 3's pad object over an SO, class 0xBB: its options are Sly 3's own, po.cpp)
+    if (PADWRAP3* pw = dynamic_cast<PADWRAP3*>(pbasic)) return RefPadwrap3Option(bifk, pw, optid);
+    // (Sly 3's hit record, class 0xC4: so.h CTMSGBASIC3; options by the Sly 3 descriptor 0x32CA80 rows 1644..1651)
+    if (CTMSGBASIC3* pm = dynamic_cast<CTMSGBASIC3*>(pbasic))
+    {
+        CTMSG* pc = pm->pctm;
+        CRef r;
+        if (!pc) return r;
+        auto n = [&]() { return pref ? (pref->m_tagk == TAGK_F32 ? static_cast<int>(pref->m_g) : pref->RefCoerceS32().m_n) : 0; };
+        switch (optid)
+        {
+        case 276: if (bifk == 111) r.SetBasic(pc->ploSender); break;  // +0x14
+        case 556: if (bifk == 111) r.SetBasic(pc->ploReceiver); break;  // +0x1C
+        case 123: if (bifk == 111) r.SetS32(static_cast<int>(pc->grfFilter)); else if (bifk == 110) pc->grfFilter = static_cast<uint32_t>(n()); break;
+        // (124, the amount: positive in Sly 3's records; the copied Sly 2 senders (the projectiles' explosions, -10) keep
+        // Sly 2's negative count delta, so it is read as its size and written back with the sender's sign. E.g. the
+        // turf war's wave guards lower their own health (940) by it in their s12 (job 2139's 2659): with -10 a hit
+        // healed them)
+        case 124:
+            if (bifk == 111) r.SetS32(std::abs(pc->nState));
+            else if (bifk == 110) pc->nState = pc->nState < 0 ? -n() : n();
+            break;
+        case 1495: if (bifk == 111) r.SetS32(static_cast<int>(pc->grfAccepted)); else if (bifk == 110) pc->grfAccepted = static_cast<uint32_t>(n()); break;
+        default:
+            if (std::getenv("SLY2N_OPTIONPRINT")) std::fprintf(stderr, "option bif %d id %d of a hit record: not ported\n", bifk, optid);
+            break;
+        }
+        return r;
+    }
     const int optid2 = sly3::Optid2FromOptid3(optid);
-    if (optid2 < 0 && pbasic && !dynamic_cast<LO*>(pbasic))
+    s_optid3Cur = optid;
+    if (optid2 < 0 && pbasic && !dynamic_cast<LO*>(pbasic) && optid != 983 && optid != 1003 && optid != 1005 && optid != 1006 && optid != 759 && optid != 1344)
     {
         static std::set<int> s_aoptid;
         if (s_aoptid.insert(optid).second)
@@ -901,8 +1048,124 @@ CRef RefOptionImpl(int bifk, BASIC* pbasic, int optid, const CRef* pref)
     if (XFBASIC* handle = dynamic_cast<XFBASIC*>(pbasic)) return RefXfHandleOption(bifk, handle, optid2, pref);
     if (CSnd* psnd = dynamic_cast<CSnd*>(pbasic)) return RefSoundObjectOption(psnd, bifk, optid2, pref);
     if (auto* attachment = dynamic_cast<VEHICLEATTACH*>(pbasic)) return RefVehicleAttachmentOption(attachment, bifk, optid2, pref);
+    // (Sly 3's bif 125: the challenge manager 0x4BC230; audit 4 CORE-08) option 1344 (EOPID 1458, kind 0x20AA, field
+    // +0x14): the running game's node (a class 0xAA object), read by the jobs' end scripts (e.g. ep3 job 3202's)
+    if (pbasic == &s_cmbasic && bifk == 111 && optid == 1344)
+    {
+        CRef r;
+        if (LO* p = PloChallengeNode3()) r.SetBasic(p);
+        else r.SetBasic(nullptr);
+        return r;
+    }
+    if (pbasic == &s_cmbasic && bifk == 111 && optid == 759)
+    {
+        // (Sly 3's bif 125 is the challenge manager 0x4BC230 (class 0xC6), natively the camera's basic) orig3: 0x10E940
+        // (EOPID 1465, option 759: a method (kind, value, line)) -> 0x284A90: the challenge's timer / counter by kind;
+        // 11 / 12 the job complete (0x1871C0: Cops and Robbers' end, splice 51407 with the winner's line 5255 / 5254)
+        auto pm = std::make_shared<CMethod>();
+        pm->m_pbasic = pbasic;
+        pm->m_crefReq = 3;
+        pm->m_pfnthunk = [](BASIC*, int c, CRef* a) {
+            const int k = c > 0 ? a[0].RefCoerceS32().m_n : -1;
+            const int line = c > 2 ? a[2].RefCoerceS32().m_n : -1;
+            ChallengeCommand3(k, c > 1 ? a[1].RefCoerceF32().m_g : 0.0f, line);
+            return CRef(TAGK_Void);
+        };
+        CRef r;
+        r.SetMethod(pm);
+        return r;
+    }
+    if (pbasic == &s_swbasic && bifk == 111 && optid == 983)
+    {
+        // orig3: 0x10A9D8 (Sly 3 EOPID 985, the world's option 983, a method (int player, object)) -> 0x1F4B00: player
+        // i's pad record (0x36E740 + i * 0x11C0) +0x110C set to the object: the old one's vt slot 83 told -1, the new
+        // one's its index (a Carmelita-class guard takes the pad: aicarm3.h), GAME +0x10 / +0x14 the character. The two-
+        // player games give player 2's pad to Carmelita (Cops and Robbers' start) and take a player's pad while it is
+        // placed again (its respawn). Natively: split3::SetPlayerCharacter (player 1 stays the current player).
+        auto pm = std::make_shared<CMethod>();
+        pm->m_pbasic = pbasic;
+        pm->m_crefReq = 2;
+        pm->m_pfnthunk = [](BASIC*, int c, CRef* a) {
+            const int i = c > 0 ? a[0].RefCoerceS32().m_n : -1;
+            LO* plo = c > 1 && a[1].m_tagk == TAGK_Basic ? dynamic_cast<LO*>(a[1].m_pbasic) : nullptr;
+            // (s3-plane: 0x1F4B38 tells the new object its index by its vt slot 83: a ship (0x2147B0) sails (mode 2), its
+            // machine reaches the sailing state 1947 (the character at the helm, SCPT 44238), as the Galleon Duel's rounds
+            // need before the battle's state 1949 puts him on the deck)
+            if (plo && FShip3(plo) && i >= 0) OnShipEnable3(plo, i);
+            // (player 0: the current player, as SCPT 0x13 (scptgame3.cpp): v_ext's checkpoint 424 gives the pad to the
+            // safe house 15065 after the arrival's flyover, whose enable shows the chooser (po.cpp SetSafeHouseState))
+            if (i == 0 && plo) SetPlayer0Character3(g_psw, plo);
+            split3::SetPlayerCharacter(g_psw, i, plo);
+            return CRef(TAGK_Void);
+        };
+        CRef r;
+        r.SetMethod(pm);
+        return r;
+    }
+    if (pbasic == &s_swbasic && (optid == 1003 || optid == 1005 || optid == 1006))
+    {
+        // orig3: Sly 3 EOPIDs 1003 (SW +0x4FA4, set by 0x25E8C0: the two players' cameras +0x4640 / +0x4644 on instead of
+        // the one +0x463C, each player's vt slot 89 told) and 1005 / 1006 (the players' cameras, read: a FADE's camera,
+        // option 1063). Natively the split screen has its own cameras (splitscreen3.h): the mode is kept for its reads,
+        // the cameras read as nothing (the fades then cover the whole picture's camera: player 1's)
+        // (the mode: per world, splitscreen3.h FTwoCameras: the sounds' 2P attenuation reads it)
+        if (optid == 1003 && bifk == 110 && pref) split3::SetTwoCameras(g_psw, pref->FTrue());
+        if (optid == 1003 && bifk == 111)
+        {
+            CRef r;
+            r.SetBool(split3::FTwoCameras(g_psw));
+            return r;
+        }
+        // (1005 / 1006 read: the player's character stands for its camera; a FADE's option 1063 takes it as that view)
+        if ((optid == 1005 || optid == 1006) && bifk == 111 && g_psw && split3::FActive())
+            if (LO* plo = split3::PloPlayer(g_psw, optid - 1005))
+            {
+                CRef r;
+                r.SetBasic(plo);
+                return r;
+            }
+        return CRef(TAGK_Void);
+    }
+    if (bifk == 111 && optid == 313)
+        if (LO* plo = dynamic_cast<LO*>(pbasic); plo && g_psw)
+        {
+            // Sly 3 EOPID 941 (an SO's +0x130, set by its vt slot 83 0x1F4B38): the player index whose pad drives it, -1
+            // none (natively: the current player 0, a split screen's player characters, a Carmelita with a pad)
+            int i = -1;
+            for (int k = 0; k < split3::kMaxSeats && i < 0; ++k)
+                if (split3::PloPlayer(g_psw, k) == plo) i = k;
+            if (i < 0 && IPlayerCarm3(plo) >= 0) i = IPlayerCarm3(plo);
+            CRef r;
+            r.SetS32(i);
+            return r;
+        }
+    if (pbasic == &s_swbasic && bifk == 111 && optid == 1000)
+    {
+        // orig3: 0x10ADB8 (Sly 3 EOPID 1001, the world's option 1000, a method (int selection)) -> 0x1A9478: whether the
+        // selected players' pads are paused (selection 0 / 1 / -1 both: the player records' +0x1180 counts, raised by
+        // PauseGame 0x1A93C8 -> 0x1A9630); natively the one pause count (ai.cpp PauseGame, SW +0x3D78). E.g. v_canal's
+        // police boat (block 139806 module 0) fires and jumps only while it is false.
+        auto pm = std::make_shared<CMethod>();
+        pm->m_pbasic = pbasic;
+        pm->m_crefReq = 1;
+        pm->m_pfnthunk = [](BASIC*, int c, CRef* a) {
+            const int sel = c > 0 ? a[0].RefCoerceS32().m_n : -1;
+            CRef rr;
+            rr.SetBool(sel != 1 && g_gamepause.c78 > 0);
+            return rr;
+        };
+        CRef r;
+        r.SetMethod(pm);
+        return r;
+    }
     if (pbasic == &s_swbasic) return RefWorldOption(bifk, optid2, pref);
     if (pbasic == &s_cmbasic) return RefCameraOption(bifk, optid2, pref);
+    // (Sly 3, s3-player: the camera is the class 0x05 object (bif 127 gives the first one: orig3 0x126708 / 0x165B28);
+    // natively it is a static LOX and g_cm is its runtime, so its position / rotation reads (Sly 3 options 36 / 37 / 38
+    // = Sly 2's 34 / 35 / 36) are the live camera's. E.g. i_trainer's look tutorial (LO 4581) compares option 38 with the
+    // direction to its target: with the LOX's load rotation it never matched.)
+    if (bifk == 111 && optid2 >= 34 && optid2 <= 36)
+        if (LO* ploCm = dynamic_cast<LO*>(pbasic); ploCm && ploCm->Cid() == 0x05) return RefCameraOption(bifk, optid2, pref);
     if (pbasic == &s_promptbasic)
     {
         if (bifk != 111 || (optid2 != 979 && optid2 != 980)) return CRef(TAGK_Void);
@@ -977,6 +1240,7 @@ CRef RefOptionImpl(int bifk, BASIC* pbasic, int optid, const CRef* pref)
         if (bifk != 111) return r;
         const float* ag[] = {&ppc->x, &ppc->y, &ppc->radJoy, &ppc->uJoy, &ppc->x2, &ppc->y2, &ppc->radJoy2, &ppc->uJoy2};
         if (optid2 >= 900 && optid2 <= 907) r.SetF32(*ag[optid2 - 900]);
+        if (optid2 == 901 || optid2 == 905) NoteScriptStickRead(optid2);   // (pcinput.h: the tank's keys)
         if (optid2 >= 900 && optid2 <= 907 && std::getenv("SLY2N_OPTPRINT")) std::printf("  -> %g\n", *ag[optid2 - 900]);
         else if (optid2 == 908 || optid2 == 909)
         {
@@ -1179,8 +1443,8 @@ CRef RefOptionImpl(int bifk, BASIC* pbasic, int optid, const CRef* pref)
             // an object field the code set at run time (no loaded option), e.g. a use's user +0x10C (EOPID 1068,
             // 0x184130 sets it): the stations of Ep4's hack job ask for it (block 28030's lambda) before starting
             // their script
-            const uint32_t ib = g_disc.U32Elf(vaEopid + 0x18);
-            const OID oid = static_cast<OID>(plo->U32Field(0, ib, 0xFFFFFFFFu));
+            const OPTFIELDKEY key = OptionFieldKey(plo->Cid(), eopid);
+            const OID oid = static_cast<OID>(plo->U32Field(key.pfnGet, key.ib, 0xFFFFFFFFu));
             if (oid != -1) ref.SetBasic(PloFindSwNearest(plo, oid));
         }
         else if (!popt && (grf & 0x80) && eopid != S3EOPID(15) && eopid != S3EOPID(13) && eopid != S3EOPID(14) && eopid != S3EOPID(255))
@@ -1207,11 +1471,26 @@ CRef RefOptionImpl(int bifk, BASIC* pbasic, int optid, const CRef* pref)
     popt->aval.assign(1, OptvalFromRef(*pref));
     // a field EOPID (grf 0x90): the value lands in the object's field at +0x18's offset, as the loader stores it
     // (brx.cpp; e.g. Bentley's dart kind 774 at +0x16D8, which his 0x1357C0 reads)
-    if (bifk == 110 && (grf & 0x90) && !(grf & 0x2000))
+    const OPTFIELDKEY keySet = bifk == 110 ? SetterFieldKey(plo->Cid(), eopid) : OPTFIELDKEY{};
+    if (keySet.fValid)
     {
         OPTVAL& v = popt->aval[0];
         const int k = static_cast<int>(g_disc.U32Elf(vaEopid));
-        const uint32_t ib = g_disc.U32Elf(vaEopid + 0x18);
+        const uint32_t ib = keySet.ib;
+        // (debug: SLY3_FIELDSETPRINT=1: the sets stored elsewhere than the Sly 3 record's offset, where they went natively
+        // before the one store: the options whose sets the code now sees)
+        if (static const bool s_f = std::getenv("SLY3_FIELDSETPRINT") != nullptr; s_f)
+            if (const OPTFIELDKEY k3 = Sly3OptionFieldKey(eopid); !(k3 == keySet))
+                std::fprintf(stderr, "fieldset: eopid %d optid %d of %d (cid 0x%X): stored (0x%X, 0x%X), Sly 3 (0x%X, 0x%X)\n", eopid, optid,
+                             plo->oid, plo->Cid(), keySet.pfnGet, keySet.ib, k3.pfnGet, k3.ib);
+        // (the sub-object: as the loader, brx.cpp: 0x1F7B98's 0x12 child holds its fields itself)
+        LO* pfield = plo;
+        uint32_t pfn = keySet.pfnGet;
+        if (pfn == 0x1F7B98 && FIsLoDerivedFrom(plo, S3CID(0x30)))
+        {
+            pfield = PloEnsureChild391(static_cast<ALO*>(plo));
+            pfn = 0;
+        }
         // the value converted to the field's type (0x201110: a float field takes RefCoerceF32 0x129DA8 of a
         // non-float, an int field RefCoerceS32 0x129D58 (a truncation) of a non-int), e.g. Elephant Rampage's crawl
         // trigger setting the rats' radii 886 / 887 to 1500 / 1000: integers into float fields, whose float word
@@ -1223,14 +1502,15 @@ CRef RefOptionImpl(int bifk, BASIC* pbasic, int optid, const CRef* pref)
             v.tagk = S3TAG(0x15);
         }
         const uint32_t cg = k == 1 ? 1 : k == 10 ? 2 : (k == 2 || k == 9 || k == 11) ? 3 : 0;
+        if (pfn == 0x13C4D8) SetBootyRecordField(plo, ib, v);   // (the booty's current record, booty.cpp, as the loader)
         if (cg)
             for (uint32_t i = 0; i < cg; ++i)
             {
                 uint32_t u;
                 std::memcpy(&u, &v.ag[i], 4);
-                plo->SetField(0, ib + 4 * i, u);
+                pfield->SetField(pfn, ib + 4 * i, u);
             }
-        else plo->SetField(0, ib, static_cast<uint32_t>(v.n));
+        else pfield->SetField(pfn, ib, static_cast<uint32_t>(v.n));
         // (a guard's health +0x33C is GUARD::n33C natively)
         if (eopid == S3EOPID(255))
             if (GUARD* pg = PguardFromLo(plo)) pg->n33C = v.n;
@@ -1263,6 +1543,9 @@ BASIC* PbasicGlobal(int bifk)
     // 139105 among them).)
     if (FScripts3Active() && bifk >= 100 && bifk <= 102)
     {
+        if (static const bool s_f = std::getenv("SLY3_BIFPRINT") != nullptr; s_f)  // (debug: the globals the scripts ask)
+            std::fprintf(stderr, "bif %d: job %d task %d chk %d\n", bifk, g_tasks3.pjobCur ? g_tasks3.pjobCur->oid : -1,
+                         g_tasks3.ptaskActive ? g_tasks3.ptaskActive->oid : -1, g_tasks3.ptaskCur ? g_tasks3.ptaskCur->oid : -1);
         if (bifk == 100) return g_tasks3.pjobCur ? g_tasks3.pjobCur->plo : nullptr;
         if (bifk == 101) return g_tasks3.ptaskActive ? g_tasks3.ptaskActive->plo : nullptr;
         return g_tasks3.ptaskCur ? g_tasks3.ptaskCur->plo : nullptr;
@@ -1279,9 +1562,12 @@ BASIC* PbasicGlobal(int bifk)
 }
 }
 
+float GSwOptionField3(int optid3, int i, float gDefault) { return GWorldOptionField3(optid3, i, gDefault); }
+
 void InstallSpliceHooks(SW* psw)
 {
     s_psw = psw;
+    s_setploSpliceAdd.clear();
     s_mpWorldOption.clear();
     g_splicegame.pfnFindObject = PbasicFindObject;
     g_splicegame.pfnFindObjects = CFindObjects;
@@ -1298,7 +1584,17 @@ namespace
 {
 CRef RefEnsureSidebag(LO* plo, const std::vector<CRef>& aref, int tagk)
 {
-    if (!plo || aref.size() < 2) return CRef(TAGK_Void);
+    if (!plo || aref.empty()) return CRef(TAGK_Void);
+    // (a declaration without a value: an object option, bound to no object. E.g. the Ep1 turf war's wave proxies
+    // 139222 / 139234 declare 2669..2675, 2664 and 2406 this way; dropped, every seto! of them by the wave code
+    // (block 139035 s6117: the entry clip, the spawn point 2406) did nothing and the wave's guard was parented to nil)
+    if (aref.size() < 2)
+    {
+        CRef v;
+        v.SetBasic(nullptr);
+        RefOption(109, plo, NArg(aref, 0), &v);
+        return CRef(TAGK_Void);
+    }
     if (static const char* s_sz = std::getenv("SLY2N_BAGPRINT"); s_sz && plo->oid == std::atoi(s_sz))
         std::printf("sidebag %d: option %d = %d (tag %d)\n", plo->oid, NArg(aref, 0), NArg(aref, 1), tagk);
     CRef v = aref[1];
@@ -1463,3 +1759,5 @@ LO* PloFindRelative(LO* context, int oid, int kind)
 {
     return dynamic_cast<LO*>(PbasicFindObject(kind, oid, context, nullptr));
 }
+
+bool FLoAddedBySplice3(const LO* plo) { return s_setploSpliceAdd.count(plo) != 0; }   // (transition.cpp's world start)

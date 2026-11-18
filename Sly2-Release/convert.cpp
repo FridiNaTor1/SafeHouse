@@ -17,14 +17,18 @@
 #include "snd989.h"
 #include "sw.h"
 #include "wavfile.h"
+#include "worldparts.h"
+#include "workpool.h"
 
 #include "../platform/brx_decompress.h"
 #include "../platform/platform.h"
+#include "../platform/safe_paths.h"
 
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
@@ -58,8 +62,10 @@ bool FProgress(size_t done, size_t total, const char* stage, const char* file)
     if (!(*s_pprogress)(done, total, stage, file)) s_fCancelled = true;
     return !s_fCancelled;
 }
+bool FConvertCancelled() { return s_fCancelled; }
 #else
 inline bool FProgress(size_t, size_t, const char*, const char*) { return true; }
+inline bool FConvertCancelled() { return false; }
 #endif
 
 // ---------------------------------------------------------------------------------------------------------
@@ -173,14 +179,9 @@ const char* SzWorldName(int iwrec, const char** pcode)
     return nullptr;
 }
 
-// A file or folder name (no path separators, no characters Windows refuses).
-std::string SzSafe(std::string s)
-{
-    for (char& c : s)
-        if (std::strchr("<>:\"/\\|?*", c) || static_cast<unsigned char>(c) < 0x20) c = '_';
-    while (!s.empty() && (s.back() == ' ' || s.back() == '.')) s.pop_back();
-    return s.empty() ? "_" : s;
-}
+// A file or folder name (no path separators, no characters or device names Windows refuses: platform/safe_paths.h).
+// The manifest and the worlds' indexes record the names written, so the game reads back the same files.
+std::string SzSafe(std::string s) { return cane::paths::sanitizeName(std::move(s)); }
 
 const char* const s_aszLanguageName[LANG_Max] = {"English", "French", "Italian", "German", "Spanish", "Dutch",
                                                 "Portuguese", "Danish", "Finnish", "Norwegian", "Swedish",
@@ -195,7 +196,8 @@ struct WORLDINFO
     FK fk;
     int episode = -1;    // (the record's slot; -1 the front end)
     int kind = 0;
-    std::string code, name, dir;  // dir: Worlds/<episode>/<name>
+    std::string code, name, dir;  // dir: Worlds/<episode>-<name> (worldparts.h: the short names)
+    std::string episodeName;      // (the manifest's worlds "episode_name": the folder level the names had before)
     std::vector<std::pair<int, uint32_t>> amusic;   // (music id, sector)
     std::vector<std::string> agroup;
 };
@@ -214,10 +216,23 @@ struct FILEINFO
 };
 
 std::vector<WORLDINFO> s_aworld;
+// (the textures written during the crawl: ConvertCommand sets these)
+CWorkPool* s_ppoolTextures = nullptr;
+std::string s_dirTextures;
+std::set<std::string> s_setTextureName;
+std::map<uint32_t, std::vector<WPMARK>> s_mpamark;   // a world file's part marks (worldparts.h), by its sector
+std::map<uint32_t, std::vector<std::string>> s_mpagroup;   // and its groups' names
+std::map<uint32_t, std::vector<std::pair<std::size_t, std::size_t>>> s_mpaalign;   // and its Align(16)s (bis.h)
+bool FUnravel(uint32_t isector) { return !g_fConvertWholeWorlds && s_mpamark.count(isector) != 0; }
 
 // The language tracks (dialog lines, movie sound) as FLAC: --flac / --no-flac, else when the disc has more than one
 // language (the European discs: 11 languages of dialog and movie sound would be 7.8 GB as WAV, 4.9 GB as FLAC)
-bool FConvertFlac() { return g_nConvertFlac >= 0 ? g_nConvertFlac > 0 : CLanguages() > 1; }
+bool FConvertFlac() { return g_nConvertFlac >= 0 ? g_nConvertFlac > 0 : CLanguagesDisc() > 1; }
+// A language the conversion keeps (--languages, the Switch installer's choice)
+bool FKeepLanguage(int lang)
+{
+    return g_alangConvert.empty() || std::find(g_alangConvert.begin(), g_alangConvert.end(), lang) != g_alangConvert.end();
+}
 std::map<uint32_t, FILEINFO> s_mpfile;  // by sector
 std::map<uint32_t, uint32_t> s_mpsectorCopy;  // a merged copy's sector -> its file's
 
@@ -305,13 +320,12 @@ double TStream(const FK& fk)
     return 0;
 }
 
-bool FLoadWorldForCrawl(const std::string& w, int iworld)
+// (the record's key and filter as FResolveWorld gives them, without loading the boot world again for each record)
+bool FLoadWorldForCrawl(const WREC& wrec, int iworld)
 {
-    FK fk;
-    int filter = 0;
-    std::string err;
-    g_pfnNoteKeyRecord = nullptr;  // (FResolveWorld loads the boot world for its table)
-    if (!FResolveWorld(w, fk, filter, err)) return false;
+    const FK fk = wrec.fk;
+    const int filter = iworld;
+    if (fk.cb == 0 || fk.id == 0) return false;
     g_pfnNoteKeyRecord = NoteRecord;
     s_iworldCur = iworld;
     s_aworld[iworld].fk = fk;
@@ -319,11 +333,25 @@ bool FLoadWorldForCrawl(const std::string& w, int iworld)
     auto psw = std::make_unique<SW>();
     psw->filter = filter;
     std::size_t cbRead = 0, cbFile = 0;
+    std::vector<WPMARK> amark;   // (where the loader starts each block: the world's parts)
+    std::vector<std::pair<std::size_t, std::size_t>> aalign;
+    g_pawpmark = &amark;
+    g_paalignRecord = &aalign;
     const bool f = FLoadWorldFile(psw.get(), fk, "", &cbRead, &cbFile);
+    g_pawpmark = nullptr;
+    g_paalignRecord = nullptr;
     for (const WE& we : psw->awe) s_aworld[iworld].agroup.emplace_back(we.achName, strnlen(we.achName, sizeof(we.achName)));
+    if (f && !s_mpamark.count(fk.isector))
+    {
+        s_mpamark[fk.isector] = std::move(amark);
+        s_mpagroup[fk.isector] = s_aworld[iworld].agroup;
+        s_mpaalign[fk.isector] = std::move(aalign);
+    }
     s_iworldCur = -1;
     g_pfnNoteKeyRecord = nullptr;
-    if (!f) s_awarning.push_back("world " + w + " did not load");
+    if (!f) s_awarning.push_back("world " + std::to_string(iworld) + " did not load");
+    // (the converter: its textures written now, while the renderer's tables hold them: CONVERTER.md "Textures")
+    if (f && s_ppoolTextures) DumpLoadedWorldTextures(s_dirTextures, s_setTextureName, s_ppoolTextures);
     return f;
 }
 
@@ -337,6 +365,15 @@ std::string StrEpisodeName(int episode, const std::vector<std::pair<int, std::st
 
 bool FCrawl(std::string& error)
 {
+    // (a second crawl in the same run, --convert --languages-dir: the installation's languages crawl the converted
+    // folder after the disc image's crawl; its sectors are the installed files', so nothing of the first one may stay)
+    s_aworld.clear();
+    s_mpfile.clear();
+    s_mpsectorCopy.clear();
+    s_mpamark.clear();
+    s_mpagroup.clear();
+    s_mpaalign.clear();
+    s_awarning.clear();
     g_disc.SetModsDirectory("");   // (the disc's own data: no text mods in the names)
     InitClasses();
     // the boot world's table: the world records (and the episodes' names from the front end's text)
@@ -374,9 +411,12 @@ bool FCrawl(std::string& error)
         if (i == 1) wi.dir = "Worlds/" + SzSafe(wi.name);
         else
         {
+            // ("<episode>-<World>": the short names, worldparts.h RelCanonical; the episode's name is in the manifest's
+            // worlds ("episode_name"))
             char szEp[16];
-            std::snprintf(szEp, sizeof(szEp), "%d ", wi.episode);
-            wi.dir = "Worlds/" + std::string(wi.episode == 0 ? "0 " : szEp) + SzSafe(StrEpisodeName(wi.episode, atextFrontend)) + "/" + SzSafe(wi.name);
+            std::snprintf(szEp, sizeof(szEp), "%d-", wi.episode);
+            wi.dir = "Worlds/" + std::string(szEp) + SzSafe(wi.name);
+            wi.episodeName = StrEpisodeName(wi.episode, atextFrontend);
         }
         s_aworld.push_back(wi);
     }
@@ -399,7 +439,12 @@ bool FCrawl(std::string& error)
             error = "cancelled";
             return false;
         }
-        FLoadWorldForCrawl(std::to_string(i), int(i));
+        FLoadWorldForCrawl(awrec[i], int(i));
+        if (s_ppoolTextures)
+        {
+            std::printf("textures %zu %zu %zu\n", i + 1, s_aworld.size(), i);
+            std::fflush(stdout);
+        }
     }
     // the kinds by content where the key's place did not say (exits, task lists, the executable's keys)
     for (auto& [isector, f] : s_mpfile)
@@ -528,8 +573,11 @@ void AssignPaths()
 {
     MergeCopies();
     std::map<std::string, int> mpcPath;
+    // (case blind: Windows' and macOS' file systems take "A.bin" and "a.bin" for the same file)
     auto unique = [&](std::string p) {
-        const int c = mpcPath[p]++;
+        std::string key = p;
+        for (char& ch : key) ch = char(std::tolower(static_cast<unsigned char>(ch)));
+        const int c = mpcPath[key]++;
         if (c == 0) return p;
         const auto dot = p.rfind('.');
         return p.substr(0, dot) + " (" + std::to_string(c + 1) + ")" + p.substr(dot);
@@ -548,7 +596,7 @@ void AssignPaths()
             if (pwSelf)
             {
                 f.name = pwSelf->name;
-                f.path = pwSelf->dir + "/" + SzSafe(pwSelf->name) + ".brx";
+                f.path = pwSelf->dir + "/" + SzSafe(pwSelf->name) + (FUnravel(isector) ? ".world.json" : ".brx");
             }
             else f.path = "Worlds/Unlisted/" + std::to_string(f.fk.id) + ".brx";
         }
@@ -591,12 +639,13 @@ void AssignPaths()
     }
 }
 
-bool FWriteFile(const fs::path& p, const uint8_t* pb, std::size_t cb)
+// Writes a converted file: its folders made race-free (the worker threads make folders at the same time), \\?\ for a
+// path over Windows' MAX_PATH (a deep install folder: a portable copy on a OneDrive desktop), the short failures a virus
+// scanner or sync client causes retried; a failure's `*perror` has the full path, its length and the system's text
+// (platform/safe_paths.h).
+bool FWriteFile(const fs::path& p, const uint8_t* pb, std::size_t cb, std::string* perror = nullptr)
 {
-    fs::create_directories(p.parent_path());
-    std::ofstream out(p, std::ios::binary | std::ios::trunc);
-    out.write(reinterpret_cast<const char*>(pb), std::streamsize(cb));
-    return bool(out);
+    return cane::paths::writeFile(p, pb, cb, perror);
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -626,7 +675,8 @@ uint32_t Be32(const uint8_t* p) { return uint32_t(p[0]) << 24 | uint32_t(p[1]) <
 
 bool FWriteOut(const fs::path& root, const std::string& rel, const std::vector<uint8_t>& ab, uint64_t& cbOut, std::string& error)
 {
-    if (!FWriteFile(root / cane::path(rel), ab.data(), ab.size())) { error = "cannot write " + rel; return false; }
+    std::string why;
+    if (!FWriteFile(root / cane::path(rel), ab.data(), ab.size(), &why)) { error = "cannot write " + rel + ": " + why; return false; }
     cbOut += ab.size();
     return true;
 }
@@ -719,6 +769,7 @@ bool FConvertAudio(FILEINFO& f, std::vector<uint8_t>& ab, const fs::path& root, 
         json aaudio = json::array();
         for (const auto& [track, t] : mpaudio)
         {
+            if (track > 0 && !FKeepLanguage(track - 1)) continue;
             std::string rel = WithExt(f.path, FConvertFlac() ? ".flac" : ".wav");
             json ea = {{"track", track}};
             if (track > 0)
@@ -772,6 +823,21 @@ bool FConvertAudio(FILEINFO& f, std::vector<uint8_t>& ab, const fs::path& root, 
 bool g_fConvertPs2 = false;
 int g_nConvertFlac = -1;
 bool g_fConvertTextures = true;
+bool g_fConvertWholeWorlds = false;
+std::vector<int> g_alangConvert;
+
+int LanguageOfConvertName(const std::string& name)
+{
+    for (int lang = 0; lang < LANG_Max; ++lang)
+    {
+        const char* sz = s_aszLanguageName[lang];
+        if (name.size() == std::strlen(sz) && std::equal(name.begin(), name.end(), sz, [](char a, char b) {
+                return std::tolower(static_cast<unsigned char>(a)) == std::tolower(static_cast<unsigned char>(b));
+            }))
+            return lang;
+    }
+    return -1;
+}
 
 const char* SzConvertWorldName(int iwrec) { return SzWorldName(iwrec, nullptr); }
 
@@ -801,48 +867,76 @@ int ConvertListCommand()
 int ConvertCommand(const std::string& out)
 {
     const auto t0 = std::chrono::steady_clock::now();
+    auto tNow = [&] { return std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count(); };
     std::string error;
-    if (!FCrawl(error)) { std::fprintf(stderr, "convert: %s\n", error.c_str()); return 1; }
+    const fs::path root = fs::absolute(cane::path(out));
+    {
+        std::string why;
+        if (!cane::paths::createDirectories(root, &why)) { std::fprintf(stderr, "convert: %s\n", why.c_str()); return 1; }
+    }
+    // the worker threads: the textures' PNGs while the crawl loads the worlds, then every file (CONVERTER.md "Speed")
+    CWorkPool pool;
+    if (g_fConvertTextures)
+    {
+        s_dirTextures = cane::utf8(root / "Textures");
+        cane::paths::createDirectories(cane::path(s_dirTextures));
+        s_ppoolTextures = &pool;
+    }
+    const bool fCrawl = FCrawl(error);
+    s_ppoolTextures = nullptr;
+    if (!fCrawl) { std::fprintf(stderr, "convert: %s\n", error.c_str()); return 1; }
+    const double tCrawl = tNow();
     CheckWorldCodes();
     AssignPaths();
-    const fs::path root = cane::path(out);
-    fs::create_directories(root);
+    if (!g_alangConvert.empty())
+    {
+        bool fAny = false;
+        for (int k = 0; k < CLanguagesDisc(); ++k) fAny = fAny || FKeepLanguage(LanguageOfDiscIndex(k));
+        if (!fAny) { std::fprintf(stderr, "convert: none of those languages is on this disc\n"); return 1; }
+    }
     // the executable and SYSTEM.CNF (the game's data tables; what the disc is)
     const std::string szExe = g_disc.SzExecutable();
     for (const std::string& name : {szExe, std::string("SYSTEM.CNF")})
     {
         std::vector<uint8_t> ab;
-        if (!g_disc.FReadRootFile(name, ab) || !FWriteFile(root / name, ab.data(), ab.size()))
+        std::string why;
+        if (!g_disc.FReadRootFile(name, ab) || !FWriteFile(root / name, ab.data(), ab.size(), &why))
         {
-            std::fprintf(stderr, "convert: cannot copy %s\n", name.c_str());
+            std::fprintf(stderr, "convert: cannot copy %s%s%s\n", name.c_str(), why.empty() ? "" : ": ", why.c_str());
             return 1;
         }
     }
-    // The files, converted on worker threads: each one read, decompressed, its audio converted and written on its own
-    // (the decoders keep no shared state; the disc's reads are thread-safe). A memory budget keeps a few large files
-    // (the movies: their bytes, their video and their sound at once) from being in flight together. The manifest keeps
-    // the disc's order.
-    std::vector<std::pair<uint32_t, FILEINFO*>> afile;
-    for (auto& [isector, f] : s_mpfile) afile.emplace_back(isector, &f);
-    const std::size_t cfile = afile.size();
-    std::vector<json> ae(cfile);
-    std::atomic<std::size_t> inext{0}, cdone{0}, ilast{0};
-    std::atomic<uint64_t> cbDiscAll{0}, cbOutAll{0};
-    std::atomic<bool> fStop{false};
-    std::mutex mtx;
-    std::condition_variable cv;
-    uint64_t cbInFlight = 0;
-    constexpr uint64_t kcbBudget = 768ull << 20;
-    std::string errorFirst;
-    // one file: false and the error (what follows "convert: ") on a failure
-    auto convertOne = [&](uint32_t isector, FILEINFO& f, json& e, std::string& error) -> bool {
+    // every file a job: read, converted, written; its manifest entry kept in the files' order (the manifest is the same
+    // whatever the order the jobs finish in). The largest first, so the long ones (movies) do not end the run alone.
+    struct JOBOUT
+    {
+        json e;
+        std::string error;
+        uint64_t cbOut = 0;
+    };
+    std::vector<std::pair<const uint32_t, FILEINFO>*> ajob;
+    for (auto& kv : s_mpfile)   // (the dialog lines of the languages kept: --languages)
+        if (kv.second.kind != "dialog" || FKeepLanguage(kv.second.lang)) ajob.push_back(&kv);
+    std::vector<JOBOUT> aout(ajob.size());
+    std::vector<std::size_t> aorder(ajob.size());
+    for (std::size_t k = 0; k < aorder.size(); ++k) aorder[k] = k;
+    std::stable_sort(aorder.begin(), aorder.end(), [&](std::size_t a, std::size_t b) { return ajob[a]->second.fk.cb > ajob[b]->second.fk.cb; });
+    std::mutex mtx;   // (the warnings, the progress lines)
+    std::size_t cdone = 0;
+    auto convertOne = [&](std::size_t i) {
+        const uint32_t isector = ajob[i]->first;
+        FILEINFO& f = ajob[i]->second;
+        JOBOUT& o = aout[i];
+        std::string& error = o.error;
+        uint64_t& cbOut = o.cbOut;
+        if (FConvertCancelled()) { error = "cancelled"; return; }   // (the Switch installer's Cancel: the jobs not started)
         std::vector<uint8_t> ab(f.fk.cb);
         if (!FReadDisc(isector, 0, ab.data(), ab.size()))
         {
-            char sz[48];
+            char sz[64];
             std::snprintf(sz, sizeof(sz), "cannot read sector 0x%X", isector);
             error = sz;
-            return false;
+            return;
         }
         const bool fCompressed = f.kind == "world" || f.kind == "screen";
         if (fCompressed)
@@ -851,25 +945,57 @@ int ConvertCommand(const std::string& out)
             catch (const std::exception& x)
             {
                 error = f.path + ": " + x.what();
-                return false;
+                return;
             }
         }
-        e = {{"path", f.path}, {"kind", f.kind}, {"sector", isector}, {"disc_size", f.fk.cb}, {"id", f.fk.id}};
+        // (format 1) a movie without the sound tracks of the languages left out
+        if (g_fConvertPs2 && f.kind == "movie" && !g_alangConvert.empty())
+            ab = AbPssKeepTracks(ab, [](int track) { return track == 0 || FKeepLanguage(track - 1); });
+        json e = {{"path", f.path}, {"kind", f.kind}, {"sector", isector}, {"disc_size", f.fk.cb}, {"id", f.fk.id}};
+        // (format 3) a world as its parts (worldparts.h): the files beside the index, the index at f.path
+        if (f.kind == "world" && FUnravel(isector))
+        {
+            json index;
+            std::vector<WORLDPARTFILE> afile;
+            std::vector<std::string> awarning;
+            if (!FUnravelWorld(ab, s_mpamark.at(isector), s_mpaalign.at(isector), s_mpagroup.at(isector), FWideText(), index, afile, awarning, error))
+            {
+                error = f.path + ": " + error;
+                return;
+            }
+            {
+                std::lock_guard<std::mutex> lock(mtx);
+                for (const std::string& w : awarning) s_awarning.push_back(f.path + ": " + w);
+            }
+            const std::string dir = f.path.substr(0, f.path.rfind('/') + 1);
+            for (const WORLDPARTFILE& part : afile)
+                if (!FWriteOut(root, dir + part.rel, part.ab, cbOut, error)) return;
+            index["world"] = f.name;
+            for (const WORLDINFO& w : s_aworld)   // (the level's groups: a guest's kept world leaves them out, pcloader.h)
+                if (w.fk.isector == isector && w.fk.cb && !w.code.empty() && w.code != "frontend")
+                {
+                    MarkLevelGroups(index, w.code);
+                    break;
+                }
+            const std::string sIndex = index.dump(1) + "\n";
+            ab.assign(sIndex.begin(), sIndex.end());
+            e["layout"] = "parts";
+            e["world_size"] = index["size"];
+        }
         // (format 2) the audio as WAV, the movies as M2V + WAV, the banks' samples as WAV beside them
-        uint64_t cbOut = 0;
         if (!g_fConvertPs2 && !FConvertAudio(f, ab, root, e, cbOut, error))
         {
             error = f.path + ": " + error;
-            return false;
+            return;
         }
-        if (!FWriteFile(root / cane::path(f.path), ab.data(), ab.size()))
+        std::string why;
+        if (!FWriteFile(root / cane::path(f.path), ab.data(), ab.size(), &why))
         {
-            error = "cannot write " + f.path;
-            return false;
+            error = "cannot write " + f.path + ": " + why;
+            return;
         }
         e["size"] = ab.size();
-        cbDiscAll += f.fk.cb;
-        cbOutAll += cbOut + ab.size();
+        cbOut += ab.size();
         if (!f.asectorCopy.empty()) e["copies"] = f.asectorCopy;
         if (fCompressed) e["decompressed"] = true;
         if (!f.name.empty()) e["name"] = f.name;
@@ -888,88 +1014,45 @@ int ConvertCommand(const std::string& out)
             for (uint32_t va : f.ava) { char sz[16]; std::snprintf(sz, sizeof(sz), "0x%06X", va); av.push_back(sz); }
             e["executable_keys"] = av;
         }
-        return true;
-    };
-    auto worker = [&] {
-        for (;;)
+        o.e = std::move(e);
+        std::lock_guard<std::mutex> lock(mtx);
+        if (++cdone % 50 == 0 || cdone == ajob.size())
         {
-            const std::size_t k = inext.fetch_add(1);
-            if (k >= cfile || fStop) return;
-            auto& [isector, pf] = afile[k];
-            // (the file's bytes about three times over at most: read, converted, its parts)
-            const uint64_t cbNeed = uint64_t(pf->fk.cb) * 3 + (1u << 20);
-            {
-                std::unique_lock<std::mutex> lock(mtx);
-                cv.wait(lock, [&] { return fStop || cbInFlight == 0 || cbInFlight + cbNeed <= kcbBudget; });
-                if (fStop) return;
-                cbInFlight += cbNeed;
-            }
-            std::string error;
-            bool ok = false;
-            try { ok = convertOne(isector, *pf, ae[k], error); }
-            catch (const std::exception& x) { error = pf->path + ": " + x.what(); }
-            {
-                std::lock_guard<std::mutex> lock(mtx);
-                cbInFlight -= cbNeed;
-                if (!ok && errorFirst.empty()) errorFirst = error;
-            }
-            cv.notify_all();
-            if (!ok)
-            {
-                fStop = true;
-                return;
-            }
-            ilast = k;
-            ++cdone;
-        }
-    };
-#ifdef __SWITCH__
-    const unsigned cworker = 3;   // (cores 1 and 2, the reads' and writes' waits overlapped)
-#else
-    const unsigned cworker = 1;   // (desktop: the files one at a time, in the disc's order)
-#endif
-    std::vector<std::thread> athread;
-    for (unsigned k = 0; k < cworker; ++k) athread.emplace_back(worker);
-    // the progress from this thread (the Switch installer's callback; the "progress" lines every 50 files)
-    bool fCancelled = false;
-    std::size_t creported = 0;
-    while (!fStop)
-    {
-        const std::size_t c = cdone.load();
-        if (!FProgress(c, cfile, "Writing the game files", afile[std::min(ilast.load(), cfile - 1)].second->path.c_str()))
-        {
-            fCancelled = true;
-            fStop = true;
-            break;
-        }
-        for (; creported + 50 <= c || (c == cfile && creported < c); creported = std::min(creported + 50, cfile))
-        {
-            std::printf("progress %zu %zu %s\n", std::min(creported + 50, cfile), cfile, afile[std::min(ilast.load(), cfile - 1)].second->path.c_str());
+            std::printf("progress %zu %zu %s\n", cdone, ajob.size(), f.path.c_str());
+            FProgress(cdone, ajob.size(), "Converting the files", f.path.c_str());   // (the Switch installer's progress)
             std::fflush(stdout);
         }
-        if (c == cfile) break;
-        std::unique_lock<std::mutex> lock(mtx);
-        cv.wait_for(lock, std::chrono::milliseconds(50));
-    }
-    cv.notify_all();
-    for (std::thread& t : athread) t.join();
-    if (fCancelled)
+    };
+    auto ajobPath = [&](std::size_t i) { return ajob[i]->second.path; };
+    for (std::size_t i : aorder)
     {
-        std::fprintf(stderr, "convert: cancelled\n");
-        return 1;
+        // (the memory a job holds: its disc bytes and its decoded PCM, about 4x; a world's parts 2x)
+        const uint64_t cbWeight = uint64_t(ajob[i]->second.fk.cb) * 4;
+        pool.Push([&convertOne, &aout, &ajobPath, i] {
+            try { convertOne(i); }
+            catch (const std::exception& e) { aout[i].error = ajobPath(i) + ": " + e.what(); }
+        }, cbWeight);
     }
-    if (!errorFirst.empty())
-    {
-        std::fprintf(stderr, "convert: %s\n", errorFirst.c_str());
-        return 1;
-    }
-    const uint64_t cbDisc = cbDiscAll, cbOut = cbOutAll;
+    pool.Wait();
     json files = json::array();
-    for (json& e : ae) files.push_back(std::move(e));
+    uint64_t cbDisc = 0, cbOut = 0;
+    for (std::size_t i = 0; i < ajob.size(); ++i)
+    {
+        if (!aout[i].error.empty())
+        {
+            std::fprintf(stderr, "convert: %s\n", aout[i].error.c_str());
+            return 1;
+        }
+        files.push_back(std::move(aout[i].e));
+        cbDisc += ajob[i]->second.fk.cb;
+        cbOut += aout[i].cbOut;
+    }
+    const double tFiles = tNow();
     json worlds = json::array();
     for (const WORLDINFO& w : s_aworld)
     {
         json e = {{"record", w.iwrec}, {"code", w.code}, {"name", w.name}, {"episode", w.episode}, {"kind", w.kind}};
+        if (!w.episodeName.empty()) e["episode_name"] = w.episodeName;
         if (w.fk.cb) e["path"] = PathOfSector(w.fk.isector);
         json am = json::array();
         for (const auto& [id, isector] : w.amusic) am.push_back({{"id", id}, {"path", PathOfSector(isector)}});
@@ -977,38 +1060,77 @@ int ConvertCommand(const std::string& out)
         worlds.push_back(e);
     }
     json langs = json::array();
-    for (int k = 0; k < CLanguages(); ++k) langs.push_back(s_aszLanguageName[LanguageOfIndex(k)]);
+    for (int k = 0; k < CLanguagesDisc(); ++k)
+        if (FKeepLanguage(LanguageOfDiscIndex(k))) langs.push_back(s_aszLanguageName[LanguageOfDiscIndex(k)]);
     json manifest = {
         {"game", "sly2"},
         {"format", "sly2-files"},
         {"format_version", g_fConvertPs2 ? SLY2_FILES_FORMAT_PS2 : SLY2_FILES_FORMAT},
         {"disc", g_disc.SzDisc()},
-        {"region", g_disc.Region() == DISCREGION::Usa ? "USA" : g_disc.Region() == DISCREGION::Europe ? "Europe" : "Japan"},
+        {"region", g_disc.Region() == DISCREGION::Usa ? "USA" : g_disc.Region() == DISCREGION::Europe ? "Europe" : g_disc.Region() == DISCREGION::Korea ? "Korea" : "Japan"},
         {"executable", szExe},
         {"languages", langs},
         {"worlds", worlds},
         {"files", files},
     };
     {
-        std::ofstream o(root / "extraction_manifest.json", std::ios::trunc);
-        o << manifest.dump(1) << '\n';
-        if (!o) { std::fprintf(stderr, "convert: cannot write the manifest\n"); return 1; }
+        const std::string sManifest = manifest.dump(1) + "\n";
+        std::string why;
+        if (!FWriteFile(root / "extraction_manifest.json", reinterpret_cast<const uint8_t*>(sManifest.data()), sManifest.size(), &why))
+        {
+            std::fprintf(stderr, "convert: cannot write the manifest: %s\n", why.c_str());
+            return 1;
+        }
     }
     // the textures (on unless --no-export-textures): every world's textures as the PNGs Mods/Textures takes (texmod.cpp),
     // in Textures/ (one file per texture: the names are their contents' hashes, so a texture several worlds draw is
     // written once). Not in the manifest: the game never reads them (cane-extractor leaves them out of the inventory).
-    if (g_fConvertTextures) ExportAllTextures(cane::utf8(root / "Textures"), true);
+    // (written during the crawl: CONVERTER.md "Textures")
+    if (g_fConvertTextures) std::printf("%zu textures written to %s\n", s_setTextureName.size(), s_dirTextures.c_str());
     for (const std::string& s : s_awarning) std::printf("warning: %s\n", s.c_str());
-    const double s = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
-    std::printf("converted %zu files: %.1f MB on the disc, %.1f MB written, %.0f s\n", s_mpfile.size(), cbDisc / 1048576.0,
-                cbOut / 1048576.0, s);
+    std::printf("converted %zu files: %.1f MB on the disc, %.1f MB written, %.1f s (crawl and textures %.1f s, files %.1f s, %d threads)\n",
+                ajob.size(), cbDisc / 1048576.0, cbOut / 1048576.0, tNow(), tCrawl, tFiles - tCrawl, pool.Cthread());
     return 0;
 }
 
+// (languages, langstore.h)
+bool FConvertLanguageFiles(std::vector<CONVLANGFILE>& afile, std::string& error)
+{
+    if (!FCrawl(error)) return false;
+    AssignPaths();
+    for (const auto& [isector, f] : s_mpfile)
+    {
+        if (f.kind != "dialog" && f.kind != "movie") continue;
+        CONVLANGFILE c;
+        c.kind = f.kind;
+        c.isector = isector;
+        c.cb = f.fk.cb;
+        c.lang = f.lang;
+        c.id = f.id;
+        if (f.kind == "movie" && !f.name.empty())
+        {
+            const auto sp = f.name.find(' ');
+            c.name = sp == std::string::npos ? std::string() : f.name.substr(sp + 1);
+        }
+        for (int iw : f.aiworld) c.aiwrec.push_back(s_aworld[iw].iwrec);
+        afile.push_back(std::move(c));
+    }
+    return true;
+}
+
+std::vector<uint8_t> AbConvertDialogVag(const std::vector<uint8_t>& abVag, bool fFlac, std::size_t* pcframe, std::string& error)
+{
+    if (abVag.size() < 0x30 || std::memcmp(abVag.data(), "VAGp", 4)) { error = "not a VAG"; return {}; }
+    const uint32_t cb = Be32(abVag.data() + 0xC), rate = Be32(abVag.data() + 0x10);
+    const std::vector<int16_t> as = AsDecodeStream(abVag, 0x30, cb, 1, 0, true);
+    if (pcframe) *pcframe = as.size();
+    return fFlac ? AbFlac(int(rate), 1, as.data(), as.size(), &error) : AbWav(int(rate), 1, as.data(), as.size());
+}
 #ifdef __SWITCH__
 // The Switch installer's conversion (platform/switch/installer.cpp): the disc image opened and checked, its files
 // converted into out. The textures' PNG dump (for modders) is left out: minutes of the console's CPU, ~80 MB.
-std::string CaneConvertDisc(const std::string& iso, const std::string& out, const CaneConvertProgress& progress)
+std::string CaneConvertDisc(const std::string& iso, const std::string& out, const std::vector<std::string>& languages,
+                            const CaneConvertProgress& progress)
 {
     s_pprogress = &progress;
     s_fCancelled = false;
@@ -1018,12 +1140,36 @@ std::string CaneConvertDisc(const std::string& iso, const std::string& out, cons
     if (!g_disc.FOpen(iso, error)) return error;
     InitLanguage();
     g_fConvertTextures = false;
-    // (WAV, never FLAC: encoding the European discs' dialog in five languages would take the console's CPU a long
-    // time, and the game then decodes no FLAC while playing; it costs some SD space)
-    g_nConvertFlac = 0;
+    // (the disc's formats: the game decodes the PS2's ADPCM as it plays, for almost no CPU; WAV would take three times
+    // the space, and FLAC the console's CPU a long time to encode)
+    g_fConvertPs2 = true;
+    g_alangConvert.clear();
+    for (const std::string& name : languages)
+        if (const int lang = LanguageOfConvertName(name); lang >= 0) g_alangConvert.push_back(lang);
     const int rc = ConvertCommand(out);
+    g_alangConvert.clear();
     if (s_fCancelled) return "cancelled";
     if (rc != 0) return "The conversion stopped with an error.";
     return "";
+}
+
+std::vector<CaneLanguage> CaneDiscLanguages(const std::string& iso, std::size_t* preferred)
+{
+    static const char* const s_aszOwnName[LANG_Max] = {"English", "Fran\u00e7ais", "Italiano", "Deutsch", "Espa\u00f1ol",
+                                                       "Nederlands", "Portugu\u00eas", "Dansk", "Suomi", "Norsk", "Svenska",
+                                                       "Japanese", "Korean", "Chinese"};
+    std::vector<CaneLanguage> alang;
+    std::string error;
+    if (!g_disc.FOpen(iso, error)) return alang;
+    InitLanguage();
+    if (CLanguagesDisc() < 2) return alang;
+    for (int k = 0; k < CLanguagesDisc(); ++k)
+    {
+        const int lang = LanguageOfDiscIndex(k);
+        if (lang < 0 || lang >= LANG_Max) continue;
+        if (lang == g_nLang && preferred) *preferred = alang.size();
+        alang.push_back({s_aszLanguageName[lang], s_aszOwnName[lang]});
+    }
+    return alang;
 }
 #endif

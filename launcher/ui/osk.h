@@ -217,7 +217,7 @@ inline void openOnScreenKeyboard(ImGuiID owner, const char* label, const char* t
     auto& osk = oskState();
     osk.owner = owner;
     osk.title = visibleLabel(label);
-    if (osk.title.empty()) osk.title = charset == Charset::Password ? "Password" : "Enter text";
+    if (osk.title.empty()) osk.title = charset == Charset::Password ? tr("Password") : tr("Enter text");
     osk.editor.reset(text ? text : "", capacity, charset, flags);
     osk.password = charset == Charset::Password || (flags & ImGuiInputTextFlags_Password);
     osk.symbols = false;
@@ -249,8 +249,7 @@ inline void cancelOnScreenKeyboard() {
 }
 inline bool showSteamKeyboardHint() {
     const input::Family family = launcherPromptFamily();
-    return family == input::Family::SteamDeck || family == input::Family::SteamController ||
-           family == input::Family::SteamController2026 ||
+    return input::isSteamFamily(family) ||
            std::getenv("SteamDeck") || std::getenv("SteamAppId") || std::getenv("SteamGameId") ||
            std::getenv("SteamVirtualGamepadInfo");
 }
@@ -417,12 +416,12 @@ inline void runKeyboard() {
         Action actions[6];
         int count = 0;
         if (oskPaged(layout)) {
-            actions[count++] = { osk.symbols ? "Shift" : osk.shift == 2 ? "Caps" : "Shift", 1.5f, Shift };
-            actions[count++] = { osk.symbols ? "ABC" : "&123", 1.5f, Page };
-            if (editor.accepts(' ')) actions[count++] = { "Space", 3.0f, Space };
+            actions[count++] = { osk.symbols ? tr("Shift") : osk.shift == 2 ? tr("Caps") : tr("Shift"), 1.5f, Shift };
+            actions[count++] = { osk.symbols ? tr("ABC") : "&123", 1.5f, Page };
+            if (editor.accepts(' ')) actions[count++] = { tr("Space"), 3.0f, Space };
         }
-        actions[count++] = { "Delete", 2.0f, Delete };
-        actions[count++] = { "Done", 2.0f, Done };
+        actions[count++] = { tr("Delete"), 2.0f, Delete };
+        actions[count++] = { tr("Done"), 2.0f, Done };
         float units = 0;
         for (int i = 0; i < count; ++i) units += actions[i].units;
         const float unit = (width - pad * 2 - gap * (count - 1)) / units;
@@ -493,21 +492,21 @@ inline void runKeyboard() {
         const float right = ImGui::GetWindowPos().x + width - pad;
         const bool space = editor.accepts(' ');
         const Hint hints[] = {
-            { ui::confirmButton(), 0, "Type" },
-            { input::Button::West, 0, "Delete" },
-            { space ? input::Button::North : input::Button::Count, 0, "Space" },
+            { ui::confirmButton(), 0, N_("Type") },
+            { input::Button::West, 0, N_("Delete") },
+            { space ? input::Button::North : input::Button::Count, 0, N_("Space") },
             { input::Button::LB, 0, "" },
-            { input::Button::RB, 0, "Move" },
-            { layout.letters ? input::Button::LSPress : input::Button::Count, 0, "Shift" },
-            { input::Button::Start, 0, "Done" },
-            { ui::backButton(), 0, "Cancel" },
+            { input::Button::RB, 0, N_("Move") },
+            { layout.letters ? input::Button::LSPress : input::Button::Count, 0, N_("Shift") },
+            { input::Button::Start, 0, N_("Done") },
+            { ui::backButton(), 0, N_("Cancel") },
         };
         drawPromptHints(drawList, { right, top + iconPx * 0.5f }, iconPx, hints, ImGui::GetColorU32(ImGuiCol_Text),
                         ImGui::GetColorU32(ImGuiCol_TextDisabled), launcherPromptFamily());
         ImGui::Dummy({ 1.0f, iconPx + gap });
         if (showSteamKeyboardHint()) {
             ImGui::PushStyleColor(ImGuiCol_Text, style.Colors[ImGuiCol_TextDisabled]);
-            ImGui::TextUnformatted("Steam + X also opens Steam's keyboard");
+            ImGui::TextUnformatted(tr("Steam + X also opens Steam's keyboard"));
             ImGui::PopStyleColor();
         }
     }

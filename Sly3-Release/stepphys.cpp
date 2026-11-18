@@ -3,6 +3,7 @@
 // reference's ps2_* operations round toward zero).
 
 #include "stepphys.h"
+#include "xf.h"
 #include "game/sly3.h"
 #include "actmesh.h"
 #include "activate.h"
@@ -101,7 +102,22 @@ void ResetStepPhysAll() { ResetSteps(); }
 void CloneStepPhys(ALO* palo, const ALO* paloSrc)
 {
     STEP* psrc = PstepFromLo(const_cast<ALO*>(paloSrc));
-    if (!psrc) return;
+    if (!psrc)
+    {
+        // (PC, pcloader.h: a copy of a kept world's object: that world's step records went with its load (worldglobals.h), so
+        // the template has none. The load's part is run for the copy (the base, the custom entry from the +0x264 entry, the
+        // probe points; a custom entry already among its entries (0x203AF0's: the same tag as its source) taken off first). Without it a copied Carmelita (Cops and Robbers on Pirate / Kaine Island: v_ext's) had no floor
+        // probe (+0x258 -1: the probe segment of no length), never found a floor on rock and stayed in her fall state.)
+        const uint32_t oidMesh = palo->U32Field(0, 0x264, 0xFFFFFFFFu);
+        if (oidMesh == 0xFFFFFFFFu || palo->asoe.empty()) return;
+        int c = 0;
+        for (const SOE& e : palo->asoe) c += uint32_t(e.tag) == oidMesh ? 1 : 0;
+        if (c == 0) return;
+        if (c >= 2 && uint32_t(palo->asoe.back().tag) == oidMesh) palo->asoe.pop_back();
+        LoadStepPhysBase(palo);
+        PostLoadStepPhys(palo);
+        return;
+    }
     CopyStep(palo, psrc);
 }
 
@@ -117,11 +133,42 @@ void SetStepPhysScale(ALO* palo, float g)
 }
 
 // orig: 0x00204660 (the heading +0x1A8 and its rotation +0x1B0: 0x11B500 about z)
-void SetStepPhysHeading(ALO* palo, float rad)
+void SetStepPhysHeadingUnlocked(ALO* palo, float rad)
 {
     STEPPHYS& s = StepPhysOf(palo);
     s.radHeading = rad;
     s.matHeading = BuildRotateMatrixAxis(rad, NORMAL_Z);
+    // (orig3 0x24E878: then 0x28F260 on the rotation record +0x4C (Sly 2's HoldXfMode 0x230598, Sly 3's modes one
+    // further on): a resting record is woken so the turn runs; natively Sly held by a script never turned to the
+    // binocucom's pan)
+    if (XF* pxf = PxfRot(palo)) HoldXfMode(palo, pxf);
+}
+
+// orig3 0x24E878: nothing while the STEP's +0x1B4 is set (the combos' clip events 0x40 / 0x41, combo3.cpp). Every Sly 3
+// heading write goes through it (the decomp has no other store to +0x1BC): the native callers are its callers (0x24E8E8
+// FaceObject, 0x24E3A8 the rotation, the pads' turns, ...); the PC's own placements use SetStepPhysHeadingUnlocked.
+// SLY3_HEADINGLOCK=0: never locked (debug); SLY3_HEADINGLOCKPRINT: the writes made while locked.
+void SetStepPhysHeading(ALO* palo, float rad)
+{
+    STEPPHYS& s = StepPhysOf(palo);
+    if (s.fHeadingLock3)
+    {
+        static const bool s_fLock = !(std::getenv("SLY3_HEADINGLOCK") && std::getenv("SLY3_HEADINGLOCK")[0] == '0');
+        static const bool s_fPrint = std::getenv("SLY3_HEADINGLOCKPRINT") != nullptr;
+        if (s_fPrint)
+            std::printf("headinglock: oid %d rad %.4f kept %.4f%s\n", palo ? palo->oid : -1, rad, s.radHeading, s_fLock ? "" : " (not kept)");
+        if (s_fLock) return;
+    }
+    SetStepPhysHeadingUnlocked(palo, rad);
+}
+
+void SetStepMotionKind3(LO* plo, int n)
+{
+    if (!plo) return;
+    plo->SetField3(0, 0x1B8, uint32_t(n));
+    static const bool s_fOff = [] { const char* sz = std::getenv("SLY3_STEPMOTION260"); return sz && sz[0] == '0'; }();
+    if (s_fOff || !FCidDerivedFrom(plo->Cid(), S3CID(0x30)) || !PstepFromLo(static_cast<ALO*>(plo))) return;
+    StepPhysOf(static_cast<ALO*>(plo)).nMotion = n == 2 ? -1 : n;
 }
 
 // orig: 0x002046B0
@@ -148,14 +195,31 @@ void LoadStepPhysBase(ALO* palo)
 {
     STEPPHYS& s = StepPhysOf(palo);
     glm::vec3 v(0.0f);
-    if (palo->paloParent && PxfObj(palo->paloParent)) v = XformPos(PxfObj(palo->paloParent)->matWorld, v);
-    else if (PxfPos(palo))
-        // a root: the original runs this at the load, before the object is placed (its position record still the
-        // identity), so the world origin is the position record's origin: natively that, in the object's frame
-        // (the position record's parent's origin: the world origin of the original's load; Murray's position record has
-        // its own offset (0, 0, 71.76), so the base is not the position record's origin)
-        v = PosOf(PxfPos(palo)->pxfRef ? PxfPos(palo)->pxfRef->matWorld : PxfPos(palo)->matWorld);
-    if (PxfObj(palo)) v = XformPos(InverseAffineMatrix4(PxfObj(palo)->matWorld), v);
+    if (palo->paloParent && PxfObj(palo->paloParent))
+    {
+        v = XformPos(PxfObj(palo->paloParent)->matWorld, v);
+        if (PxfObj(palo)) v = XformPos(InverseAffineMatrix4(PxfObj(palo)->matWorld), v);
+    }
+    else if (PxfPos(palo) && PxfPos(palo)->pxfRef && PxfObj(palo))
+    {
+        // a root: the original runs this at the load, before the object is placed (its records' world matrices relative
+        // to the world origin), so the base is the position record's parent's (the base record's) origin in the object's
+        // frame: the inverse of the loaded local matrices from the object record up to the base record (Murray's
+        // position record has its own offset (0, 0, 71.76), so the base is not the position record's origin).
+        // (s3-ai-4) Natively the world matrices at this point can be stale against a moved base record (the spawners'
+        // guards: v_ext's 19900 got (-294, -13, -100), the reference (0, 0, -90.03)), and the guards' floor probes and
+        // contact points went with it: they slid sideways, slowly. So the loaded local chain, not the world matrices.
+        const XF* pxfBase = PxfPos(palo)->pxfRef;
+        glm::mat4 m(1.0f);
+        int c = 0;
+        for (const XF* p = PxfObj(palo); p && p != pxfBase && c < 16; p = p->pxfRef, ++c) m = p->matLoad * m;
+        v = XformPos(InverseAffineMatrix4(m), v);
+    }
+    else
+    {
+        if (PxfPos(palo)) v = PosOf(PxfPos(palo)->matWorld);
+        if (PxfObj(palo)) v = XformPos(InverseAffineMatrix4(PxfObj(palo)->matWorld), v);
+    }
     s.vecBase = glm::vec4(v, 1.0f);
     // Sly's load 0x1885B8 after 0x2039C0: the base (0, 0, -75)
     if (FCidDerivedFrom(palo->Cid(), S3CID(0x35))) s.vecBase = glm::vec4(0.0f, 0.0f, -75.0f, s.vecBase.w);
@@ -293,10 +357,24 @@ NATIVEFN(0x204250, OnStepXpNew);
 // separation springs toward the object's lowest point (the approach speed at least the smoothed one, the change
 // limited to +9000 / -4500 per second), sliding along the lead vector +0x190 by the gain +0x180; the separation follows the
 // low point's change)
+// (orig3 0x24E660: first, for the object's own end, the end's velocity without the rotation's part at the end's point
+// (slot 39's angular velocity across the point from the position, slot 36), as Sly 2 did only for Sly after the rest
+// (0x188E78); the approach speed is then taken without it. Opt-in, SLY3_XPUPDATE3=1: on its own it made the survey's
+// route-driven follows / chases worse (ep1_follow 2237 / 2241 / 2245, ep2_job2663 2673..2676, ep2_job2730 2756 forced)
+// and did not change m_ext's landing (s3fix-wave5); the Sly 2 order stays the default)
+glm::vec3 VelAngAt(ALO* palo, const glm::vec3& pos)
+{
+    using PFN = glm::vec3 (*)(ALO*);
+    PFN pfn = reinterpret_cast<PFN>(PvNativeVt(palo, 34));
+    const glm::vec3 w = pfn ? pfn(palo) : AngVelAlo(palo);
+    return glm::cross(w, pos - PosAloCenter(palo));
+}
+bool FOldXpUpdate() { static const bool s_f = std::getenv("SLY3_XPUPDATE3") == nullptr; return s_f; }
 void OnStepXpUpdate(ALO* palo, XP* q, int n)
 {
     XpNotifyBase(palo, q, n);
     if (q->xpk != 0xE) return;
+    if (!FOldXpUpdate() && q->axpd[n].palo == palo) q->axpd[n].vel -= VelAngAt(palo, q->axpd[n].pos);
     STEPPHYS& s = StepPhysOf(palo);
     const glm::vec3 c = q->normal;
     float h = Dot3(q->axpd[0].vel - q->axpd[1].vel, c);
@@ -438,7 +516,8 @@ void AddStepFloorXps(ALO* palo, SOE* k, int, const BSPREF&, int, XP** ppxp)
     LSG lsg;
     if (ClipSegmentEntry(k, pos, v, 1, &lsg) <= 0)
     {
-        if (s_fDbg) std::fprintf(stderr, "floordbg:   no hit pos %.1f %.1f %.1f probe %.1f %.1f %.1f\n", pos.x, pos.y, pos.z, v.x, v.y, v.z);
+        if (s_fDbg) std::fprintf(stderr, "floordbg:   no hit pos %.1f %.1f %.1f probe %.1f %.1f %.1f (soe %d of %zu, apos %zu, probes %d / %d, clone %d)\n", pos.x, pos.y, pos.z, v.x, v.y, v.z,
+                                 s.isoeCustom, palo->asoe.size(), PsoeOf(palo, s.isoeCustom) ? PsoeOf(palo, s.isoeCustom)->geomWorld.apos.size() : 0u, s.iposProbe0, s.iposProbe1, palo->ploCloneOf ? 1 : 0);
         return;
     }
     if (!(0.0f < lsg.t0)) return;
@@ -489,7 +568,7 @@ NATIVEFN(0x2040F8, GrfStepXp);
 
 namespace
 {
-// orig: 0x00204248 (vt slot 63: 1)
+// orig: 0x00204248 (vt slot 63: 1) (orig3: 0x24E3F8, the same code in Sly 3)
 int StepSlot63(ALO*) { return 1; }
 }
 NATIVEFN(0x204248, StepSlot63);
@@ -498,16 +577,15 @@ NATIVEFN(0x204248, StepSlot63);
 
 // orig: 0x00188E78 (Sly's vt slot 57: the base 0x2044B0, then for its own end the velocity without the rotation's
 // part at the end's point (slot 34's angular velocity across the point from the object's position))
+// (orig3 0x1AA8D0: the base 0x24E660 (which already took it off a floor contact's end), then the same for a contact
+// that is not his floor +0x218 (Sly 3 +0x218 = Sly 2 +0x208): a floor contact's end is not corrected twice)
 void OnSlyXpUpdate(ALO* palo, XP* q, int i)
 {
     OnStepXpUpdate(palo, q, i);
     XPD& e = q->axpd[i];
     if (e.palo != palo) return;
-    using PFN = glm::vec3 (*)(ALO*);
-    PFN pfn = reinterpret_cast<PFN>(PvNativeVt(palo, 34));
-    const glm::vec3 w = pfn ? pfn(palo) : AngVelAlo(palo);
-    const glm::vec3 r = e.pos - PosAloCenter(palo);
-    e.vel = e.vel - glm::cross(w, r);
+    if (!FOldXpUpdate() && q == StepPhysOf(palo).pxpFloor) return;
+    e.vel = e.vel - VelAngAt(palo, e.pos);
 }
 NATIVEFN(0x188E78, OnSlyXpUpdate);
 

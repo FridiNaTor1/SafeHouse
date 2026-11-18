@@ -100,6 +100,15 @@ public:
         m_entries.clear();
     }
     const std::vector<std::string>& Names() const { return m_names; }
+    // Where a PNG is in the file (the texture cache's stamp of it: Sly2-Release texmod.cpp); false: no such name.
+    bool Find(const std::string& name, uint64_t* offset, uint32_t* size) const
+    {
+        const auto it = m_entries.find(name);
+        if (it == m_entries.end()) return false;
+        *offset = it->second.offset;
+        *size = it->second.size;
+        return true;
+    }
     // A PNG's bytes by its name (thread-safe).
     bool Read(const std::string& name, std::vector<uint8_t>& out) const
     {

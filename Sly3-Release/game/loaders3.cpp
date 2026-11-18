@@ -112,6 +112,24 @@ void Load973FromBrx(LO* plo, CBinaryInputStream* pbis)
     }
 }
 
+// orig3: 0x17AA08 (0x9D): LoadLoFromBrx (the mode +0x40 / episode +0x44 among the options), U16 count, then per row
+// S32 kind and (modes 0 / 1) an S32 or (mode 2) a 64-byte key (0x119948)
+void Load9D3FromBrx(LO* plo, CBinaryInputStream* pbis)
+{
+    LOADFN(0x17AA08);
+    LOLIST9D3* p = static_cast<LOLIST9D3*>(plo);
+    LoadLoFromBrx(plo, pbis);
+    p->mode = int(plo->U32Field3(0, 0x40, 0));
+    p->iep = int(plo->U32Field3(0, 0x44, 0));
+    p->arow.resize(pbis->U16Read());
+    for (LOLIST9D3::ROW& r : p->arow)
+    {
+        r.kind = pbis->S32Read();
+        if (p->mode == 2) pbis->ReadRecord64(r.abKey.data());
+        else if (p->mode == 0 || p->mode == 1) r.n = pbis->S32Read();
+    }
+}
+
 template <class T> LO* PloNewT() { return new T(); }
 }  // namespace
 
@@ -126,6 +144,7 @@ void RegisterScriptLoaders3(std::unordered_map<uint32_t, PFNLOAD>& m)
     m[0x16F768] = Load8F3FromBrx;       // 0x8F
     m[0x172608] = Load963FromBrx;       // 0x96
     m[0x16EE98] = Load973FromBrx;       // 0x97
+    m[0x17AA08] = Load9D3FromBrx;       // 0x9D (the episode chooser's lists)
 }
 
 PFNNEW PfnNewScript3(CID cid)
@@ -135,6 +154,7 @@ PFNNEW PfnNewScript3(CID cid)
     case 0x87: return PloNewT<LOSCPT3>;
     case 0x8F: return PloNewT<LO8F3>;
     case 0x97: return PloNewT<LO97>;
+    case 0x9D: return PloNewT<LOLIST9D3>;
     default: return nullptr;
     }
 }

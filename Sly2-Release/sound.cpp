@@ -4,6 +4,7 @@
 // The 989snd / spiop commands are direct calls (snd989.h, spiop.h); their asynchronous callbacks run at once.
 
 #include "sound.h"
+#include "envonce.h"
 #include "region.h"
 #include <execinfo.h>
 extern int g_iframeMain;  // (game.cpp: debug prints)
@@ -14,6 +15,7 @@ extern int g_iframeMain;  // (game.cpp: debug prints)
 #include "loadtrace.h"
 #include "snd989.h"
 #include "spiop.h"
+#include "langstore.h"
 #include "splicetypes.h"
 
 #include <unordered_set>
@@ -314,7 +316,7 @@ void CSnd::Update3D()
     int pan = 0;
     Attenuate(v, m_sStart, m_sEnd, &g, &pan);
     const float r = m_gVol * g;
-    if (const char* selected = std::getenv("SLY2N_SNDSCRIPT"); selected && (m_grfDirty & 1))
+    if (const char* selected = SLY2N_ENV("SLY2N_SNDSCRIPT"); selected && (m_grfDirty & 1))
         if (auto* plain = dynamic_cast<CSndPlain*>(this); plain && plain->m_sfxid == std::atoi(selected))
         {
             glm::vec3 listener(0.0f);
@@ -441,10 +443,10 @@ void CSndPlain::StartIop()
     const bool fPc = FResolve(&hbankPc, &isoundPc, &kindPc);   // (PC addition: a kept world's bank)
     const int isound = fPc ? isoundPc : IsoundFromSfxid(m_sfxid);
     const uint32_t hbank = fPc ? hbankPc : g_sound.hbank;
-    if (static const char* s_sz = std::getenv("SLY2N_SNDSTART"); s_sz && std::atoi(s_sz) == m_sfxid)   // (debug: why a sound starts or not)
+    if (static const char* s_sz = SLY2N_ENV("SLY2N_SNDSTART"); s_sz && std::atoi(s_sz) == m_sfxid)   // (debug: why a sound starts or not)
         std::printf("sndstart: sfx %d isound %d bank %u dirty 0x%X vol %.3f kind %d frame %d\n", m_sfxid, isound, hbank, m_grfDirty, m_gVolCur,
                     fPc ? kindPc : isound >= 0 && isound < int(g_sound.aflagsSound.size()) ? g_sound.aflagsSound[isound] : -1, g_iframeMain);
-    if (static const bool s_fSrc = std::getenv("SLY2N_SNDSRC") != nullptr; s_fSrc)   // (debug: the bank each start resolves to)
+    if (static const bool s_fSrc = SLY2N_ENV("SLY2N_SNDSRC") != nullptr; s_fSrc)   // (debug: the bank each start resolves to)
         std::printf("sndsrc: sfx %d -> %s bank sound %d src %p frame %d\n", m_sfxid, fPc ? "kept" : "running", isound, m_psrc, g_iframeMain);
     if (isound < 0 || !hbank)
     {
@@ -736,9 +738,9 @@ void CSndVoice::Update3D()
 
 CSndPlain* PsndNewPlain(int sfxid)
 {
-    static const bool s_fLog = std::getenv("SLY2N_SNDLOG") != nullptr;
+    static const bool s_fLog = SLY2N_ENV("SLY2N_SNDLOG") != nullptr;
     if (s_fLog) std::printf("sound: sfx %d (bank sound %d) frame %d\n", sfxid, IsoundFromSfxid(sfxid), g_iframeMain);
-    if (static const char* s_sz = std::getenv("SLY2N_SNDBT"); s_sz && std::atoi(s_sz) == sfxid)   // (debug: who makes the sound)
+    if (static const char* s_sz = SLY2N_ENV("SLY2N_SNDBT"); s_sz && std::atoi(s_sz) == sfxid)   // (debug: who makes the sound)
     {
         static int s_c = 0;
         if (s_c++ < 3)
@@ -857,6 +859,9 @@ void ResetSoundMgr()
     snd_StopAllSounds();
     SpiopStopAll();
     SOUNDMGR& s = g_sound;
+    // (0x1FD700: the microphone's held noise let go (0x156BE0 with no template))
+    if (s.pnoiseMic && g_sndhooks.pfnHoldMicNoise) g_sndhooks.pfnHoldMicNoise(&s.pnoiseMic, nullptr, glm::vec3(0.0f), 0.0f, 0.0f);
+    s.pnoiseMic = nullptr;
     s.aisoundFromId.clear();
     s.aidTarget.clear();
     s.fModeAlert = s.fModeSneak = 0;
@@ -947,13 +952,16 @@ void LoadMusicFromBrx(CBinaryInputStream* pbis)
     const int nl = pbis->U8Read();
     int sel = 0;
     s.alanguage.clear();
+    // (PC: the voices' language, region.h LangVoice; a language the disc lacks: the one it falls back to, langstore.h)
+    const int langWorld = LangWorldVoice();
     for (int i = 0; i < nl; ++i)
     {
         s.alanguage.push_back(pbis->U8Read());
-        if (s.alanguage.back() == g_nLang) sel = i;
+        if (s.alanguage.back() == langWorld) sel = i;
     }
     s.ilanguage = sel;
     const int ne = pbis->S32Read();
+    int cStore = 0;   // (the lines from the languages folder: langstore.h)
     for (int i = 0; i < ne; ++i)
     {
         SNDSTREAM e;
@@ -965,17 +973,26 @@ void LoadMusicFromBrx(CBinaryInputStream* pbis)
             pbis->ReadRecord64(k, KEYK_Dialog, e.id, s.alanguage[j]);  // 0x118458
             const int g = pbis->S8Read();
             const float f = pbis->F32Read();
+            if (g_plangcapture) g_plangcapture->Dialog(s.alanguage[j], e.id, FkFromRecord(k), f);   // (--import-languages)
             if (j != sel) continue;
             std::memcpy(e.key, k, sizeof(k));
             e.fk = FkFromRecord(k);
             e.fNoHeadset = g;
             e.tLength = f;
         }
+        // (PC) the chosen language's line from the languages folder when the disc lacks the language (langstore.h)
+        {
+            FK fk;
+            float tLength = 0.0f;
+            if (FLanguageStoreDialog(e.id, fk, tLength)) { e.fk = fk; e.tLength = tLength; ++cStore; }
+        }
         const int c = pbis->S32Read();
         e.aevent.resize(std::max(c, 0));
         pbis->Read(static_cast<std::size_t>(std::max(c, 0)) * 8, e.aevent.data());  // the original reads even 0 bytes
         s.adialog.push_back(std::move(e));
     }
+    if (cStore) std::printf("languages: %d of %d dialog lines in %s\n", cStore, ne, SzLanguage(LangVoice()));
+    else if (LangVoice() != g_nLang) std::printf("languages: %d dialog lines in %s (the disc's)\n", ne, SzLanguage(LangVoice()));
     const int no = pbis->S32Read();
     for (int i = 0; i < no; ++i)
     {
@@ -1025,7 +1042,7 @@ static CSndRef RefTakeMusic(int n)
 CSndVoice* PsndPushMusic(int n)
 {
     std::lock_guard<std::recursive_mutex> lock(g_mtxSound);
-    if (std::getenv("SLY2N_SNDLOG")) std::printf("sound: push music %d\n", n);
+    if (SLY2N_ENV("SLY2N_SNDLOG")) std::printf("sound: push music %d\n", n);
     CSndRef r = RefTakeMusic(n);
     if (CSndVoice* top = PvoiceTop()) top->Stop(0.0f);
     if (r) r->Start();
@@ -1048,7 +1065,7 @@ CSndVoice* PsndPushMusic(int n)
 void PopMusic(int n)
 {
     std::lock_guard<std::recursive_mutex> lock(g_mtxSound);
-    if (std::getenv("SLY2N_SNDLOG")) std::printf("sound: pop music %d\n", n);
+    if (SLY2N_ENV("SLY2N_SNDLOG")) std::printf("sound: pop music %d\n", n);
     CSndRef r = RefTakeMusic(n);
     if (r)
     {
@@ -1063,7 +1080,7 @@ float TMusicTop()
 {
     std::lock_guard<std::recursive_mutex> lock(g_mtxSound);
     const CSndVoice* p = PvoiceTop();
-    if (static const bool s_fLat = std::getenv("SLY2N_MUSICLAT") != nullptr; s_fLat && p && g_iframeMain % 60 == 0)   // (debug: the clock against the device)
+    if (static const bool s_fLat = SLY2N_ENV("SLY2N_MUSICLAT") != nullptr; s_fLat && p && g_iframeMain % 60 == 0)   // (debug: the clock against the device)
     {
         static int s_iframe = -1;
         if (s_iframe != g_iframeMain)
@@ -1109,8 +1126,8 @@ CSndVoice* PsndStartDialog(int k, int fQuiet)
 {
     std::lock_guard<std::recursive_mutex> lock(g_mtxSound);
     StopDialog();
-    if (std::getenv("SLY2N_SNDLOG")) std::printf("sound: dialog %d%s\n", k, fQuiet ? " (quiet)" : "");
-    static const bool s_fSubPrint = std::getenv("SLY2N_SUBPRINT") != nullptr;   // (debug: each line's text)
+    if (SLY2N_ENV("SLY2N_SNDLOG")) std::printf("sound: dialog %d%s\n", k, fQuiet ? " (quiet)" : "");
+    static const bool s_fSubPrint = SLY2N_ENV("SLY2N_SUBPRINT") != nullptr;   // (debug: each line's text)
     if (s_fSubPrint && g_sndhooks.pfnText) std::printf("subtitle %d: %s\n", k, g_sndhooks.pfnText(k).c_str());
     SNDSTREAM* pd = PstreamFindDialog(k);
     if (!pd) return nullptr;
@@ -1301,7 +1318,7 @@ void SendSoundChannelVolume(int ichan)
     const int n = CvtW(gChan * 1024.0f);
     if (CvtW(s.agChannel[ichan] * 1024.0f) == n) return;
     s.agChannel[ichan] = gChan;
-    if (static const bool s_f = std::getenv("SLY2N_CHANVOLLOG") != nullptr; s_f)   // (debug: a channel's volume and its factors)
+    if (static const bool s_f = SLY2N_ENV("SLY2N_CHANVOLLOG") != nullptr; s_f)   // (debug: a channel's volume and its factors)
         std::printf("chanvol %d: %.3f = %.2f %.2f %.2f %.2f %.2f %.2f %.2f %.2f x user %.2f (frame %d)\n", ichan, gChan, s.agVol[0][ichan],
                     s.agVol[1][ichan], s.agVol[2][ichan], s.agVol[3][ichan], s.agVol[4][ichan], s.agVol[5][ichan], s.agVol[6][ichan],
                     s.agVol[7][ichan], s_agUser[size_t(ichan)], g_iframeMain);
@@ -1345,7 +1362,7 @@ void StepSoundMood()
     const int irow = std::clamp(s.mood + 12, 0, 24);  // (the original indexes unchecked; the steps keep it in -12..12)
     s.mood += asteps[std::clamp(r + arows[irow] * 6, 0, 41)];
     const int isound = IsoundFromSfxid(0x28);
-    static const bool s_fLog = std::getenv("SLY2N_SNDLOG") != nullptr;
+    static const bool s_fLog = SLY2N_ENV("SLY2N_SNDLOG") != nullptr;
     if (s_fLog) std::printf("sound: mood step %d -> sfx 40 (bank sound %d) pitch %d frame %d\n", r, isound, s.mood * 127, g_iframeMain);
     if (isound < 0 || !s.hbank) return;
     SNDPLAYPARAMS m;
@@ -1370,7 +1387,7 @@ static void UpdateStemWeights(float dtFrame)
     }
     // (test: SLY2N_STEMCYCLE=N: the stem goes normal, alert, sneak, normal, ... every N updates, so a run switches
     // the music's stems on a fixed schedule: the audio identity check)
-    if (static const int s_c = std::getenv("SLY2N_STEMCYCLE") ? std::atoi(std::getenv("SLY2N_STEMCYCLE")) : 0; s_c > 0)
+    if (static const int s_c = SLY2N_ENV("SLY2N_STEMCYCLE") ? std::atoi(SLY2N_ENV("SLY2N_STEMCYCLE")) : 0; s_c > 0)
     {
         static int s_cupdate = 0;
         static const int s_aistem[3] = {1, 2, 0};
@@ -1398,7 +1415,7 @@ static void UpdateStemWeights(float dtFrame)
     }
     // (debug: SLY2N_STEMPRINT=N: every N-th update the stem chosen and the three weights, as the reference's
     // g_sndmgr 0x3DD040 +0x64 / +0x108)
-    if (static const char* s_sz = std::getenv("SLY2N_STEMPRINT"); s_sz)
+    if (static const char* s_sz = SLY2N_ENV("SLY2N_STEMPRINT"); s_sz)
     {
         static int s_c = 0;
         if (s_c++ % std::max(1, std::atoi(s_sz)) == 0)
@@ -1415,10 +1432,10 @@ static void UpdateDialogEvents(float dtFrame)
     CSndVoice* x = static_cast<CSndVoice*>(s.sndDialog.get());
     // (debug: SLY2N_FASTDIALOG ends a line after its length in frame time, for fixed-dt runs faster than real time;
     // the line's events fire by the same frame time)
-    static const bool s_fFastEnv = std::getenv("SLY2N_FASTDIALOG") != nullptr;
+    static const bool s_fFastEnv = SLY2N_ENV("SLY2N_FASTDIALOG") != nullptr;
     extern bool g_fSkipCutFast;   // (skipcut.h: a skipped cutscene runs its lines by the frame clock)
     const bool s_fFast = s_fFastEnv || g_fSkipCutFast;
-    static const bool s_fState = std::getenv("SLY2N_DLGSTATE") != nullptr;  // (debug: the line's state every second)
+    static const bool s_fState = SLY2N_ENV("SLY2N_DLGSTATE") != nullptr;  // (debug: the line's state every second)
     static int s_cState = 0;
     if (s_fState && x && s_cState++ % 60 == 0)
         std::printf("dialog %d: pause %d t %.2f / %.2f play %.2f h %d busy %d\n", x->m_pstream->id, x->m_cpause, s.tDialog, x->m_pstream->tLength,
@@ -1460,6 +1477,41 @@ static void UpdateDialogEvents(float dtFrame)
 
 bool g_fSndFrameClock = false;
 
+// orig: 0x1FDA48 (the USB headset's microphone): with the headset in use (+0x10) its level is asked of spiop ('SUKR' 11,
+// the callback 0x1FCF70 keeps it at +0x70; PC: audio.h GMicLevel, the same computation on the chosen microphone, which
+// is recorded only while the headset is in use); otherwise the level is 0. Above 0.5 (a shout: RMS -6 dB of full
+// scale) with an actor as the current player, the fixed noise template 711 (SW +0x4034) gets the radius and height
+// range of the level (+0x80 / +0x90 evaluated: 500 / +-500 at 0.5, 3000 / +-1000 at 1) and a noise of it is held at
+// the player (0x156BE0, renewed every frame); else the held noise goes. Guards hear it as any noise (ainoise.h).
+void UpdateMicNoise(SOUNDMGR& s)
+{
+    // (tests, headless runs read no Settings.ini: SLY2N_HEADSET=1 the headset in use from the start; SLY2N_MICLEVEL="G[@T]"
+    //  the microphone's level G from the game's time T on, as the reference's SLY2_POKE of +0x10 / +0x6C / +0x70)
+    static const bool s_fHeadsetEnv = SLY2N_ENV("SLY2N_HEADSET") != nullptr;
+    static bool s_fHeadsetEnvSet = false;
+    if (s_fHeadsetEnv && !s_fHeadsetEnvSet) s.fEffect = 1, s_fHeadsetEnvSet = true;
+    static const char* s_szLevel = SLY2N_ENV("SLY2N_MICLEVEL");
+    SetMicCapture(s.fEffect != 0 && !s_szLevel);   // (PC: the microphone open only while the headset is in use)
+    PollAudioDevices();              // (PC: a chosen device unplugged / back, every 2 s; nothing while all are the default)
+    s.gMic = s.fEffect ? GMicLevel() : 0.0f;
+    if (s_szLevel && s.fEffect)
+    {
+        const char* at = std::strchr(s_szLevel, '@');
+        const float t = g_sndhooks.pfnTGame ? g_sndhooks.pfnTGame() : 0.0f;
+        s.gMic = !at || t >= std::strtof(at + 1, nullptr) ? std::strtof(s_szLevel, nullptr) : 0.0f;
+    }
+    glm::vec3 pos(0.0f);
+    void* pplayer = g_sndhooks.pfnMicPlayer ? g_sndhooks.pfnMicPlayer(&pos) : nullptr;
+    if (!g_sndhooks.pfnHoldMicNoise) return;
+    if (pplayer && 0.5f < s.gMic)
+    {
+        auto eval = [&](const std::array<float, 3>& c) { return c[0] + s.gMic * (c[1] + s.gMic * c[2]); };
+        g_sndhooks.pfnHoldMicNoise(&s.pnoiseMic, pplayer, pos, eval(s.clqMicRadius), eval(s.clqMicHeight));
+    }
+    else if (s.pnoiseMic)
+        g_sndhooks.pfnHoldMicNoise(&s.pnoiseMic, nullptr, pos, 0.0f, 0.0f);
+}
+
 // orig: 0x1FD830 (the manager's frame)
 void UpdateSoundMgr(float dt, float dtFrame)
 {
@@ -1472,7 +1524,7 @@ void UpdateSoundMgr(float dt, float dtFrame)
     // step instead of the host's, so runs faster than real time (or slowed by a loaded machine) keep the music's play
     // time (0x1FE3F8, the dances' beats) in step with the game; real-time play keeps the host clock, as the original's
     // EE counter: both advance 1001/60000 s per NTSC frame)
-    static const bool s_fFrameClockEnv = std::getenv("SLY2N_SNDFRAMECLOCK") != nullptr;
+    static const bool s_fFrameClockEnv = SLY2N_ENV("SLY2N_SNDFRAMECLOCK") != nullptr;
     // (a skipped cutscene's fast-forward (skipcut.h) runs it by the frame too; the host's clock then continues
     // from there, offset, so it never goes back)
     extern bool g_fSkipCutFast;
@@ -1482,7 +1534,8 @@ void UpdateSoundMgr(float dt, float dtFrame)
     if (g_fSkipCutFast && !(s_fFrameClockEnv || g_fSndFrameClock))
         s_dtClockOffset = s.tClock - static_cast<double>(TickNow()) / 294912000.0;
     LoadSoundBank();
-    // (0x1FDA48 / 0x1FDBA8: the USB headset's effect and microphone; no headset here)
+    UpdateMicNoise(s);   // 0x1FDA48 (the USB headset's microphone)
+    // (0x1FDBA8: 'SUKR' 12, the disc tray (UpdateCd's +0xA4); the PC has no tray)
     CSnd* top = PvoiceTop();
     const bool fRunning = !g_sndhooks.pfnFGameRunning || g_sndhooks.pfnFGameRunning();
     if (fRunning)
@@ -1505,7 +1558,7 @@ void UpdateSoundMgr(float dt, float dtFrame)
     float g = 1.0f;
     UpdateStemWeights(dtFrame);
     // (debug: SLY2N_SNDCOUNT=N prints the live 989snd sounds / voices, the game's active sounds and the duck every N frames)
-    if (static const int s_cCount = std::getenv("SLY2N_SNDCOUNT") ? std::atoi(std::getenv("SLY2N_SNDCOUNT")) : 0; s_cCount > 0)
+    if (static const int s_cCount = SLY2N_ENV("SLY2N_SNDCOUNT") ? std::atoi(SLY2N_ENV("SLY2N_SNDCOUNT")) : 0; s_cCount > 0)
     {
         static int s_cFrame = 0;
         if (++s_cFrame % s_cCount == 0)

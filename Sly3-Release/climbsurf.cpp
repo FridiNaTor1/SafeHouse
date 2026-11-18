@@ -350,13 +350,13 @@ void UpdateSlyClimbSurf(SLY* p)
     else if (speed != 0.0f) fActive = true;
     if (fActive)
     {
-        SetSlyState(p, 21, 11);
+        SetSlyState(p, jts::N2ClimbSurf, jts::SubN2SurfMove);
         SteerActorRootBlend(p, &p->rb1E10);  // 0x1A0450
         SetAloVelocityTo(palo, linear + p->matHeading * (p->vecVel * -1.0f));  // vt slot 35
     }
     else
     {
-        SetSlyState(p, 21, 10);
+        SetSlyState(p, jts::N2ClimbSurf, jts::SubN2SurfHeld);
         SetAloVelocityTo(palo, linear);
     }
     static const bool s_fPrint = std::getenv("SLY2N_CLIMBPRINT") != nullptr;
@@ -364,7 +364,7 @@ void UpdateSlyClimbSurf(SLY* p)
         std::printf("climbsurf t %.3f: %d tri %d (%.3f %.3f) pos %.1f %.1f %.1f target %.1f %.1f %.1f normal %.3f %.3f %.3f "
                     "vel %.1f %.1f %.1f planes %zu sub %d\n",
                     g_clock.t, pmesh->oid, sl.itri, sl.u, sl.v, position.x, position.y, position.z, target.x, target.y, target.z,
-                    unit.x, unit.y, unit.z, p->vecVel.x, p->vecVel.y, p->vecVel.z, aplane.size(), p->substate);
+                    unit.x, unit.y, unit.z, p->vecVel.x, p->vecVel.y, p->vecVel.z, aplane.size(), p->jtbs);
     if (s_fPrint && pc)
         std::printf("   stick %.3f %.3f u %.3f cam x %.3f %.3f %.3f y %.3f %.3f %.3f z %.3f %.3f %.3f svt %.3f/%.3f\n", pc->x, pc->y, pc->uJoy,
                     g_cm.mat[0].x, g_cm.mat[0].y, g_cm.mat[0].z, g_cm.mat[1].x, g_cm.mat[1].y, g_cm.mat[1].z, g_cm.mat[2].x,

@@ -1,6 +1,16 @@
 // See epmenu3.h. Ported from the Sly 3 asm (orig3 addresses in the comments).
 
 #include "epmenu3.h"
+#include "duel3.h"
+#include "galleon3.h"
+#include "clock.h"
+#include "joy.h"
+#include <cstring>
+#include "hud.h"
+#include "copsmap3.h"
+#include "hackmp3.h"
+#include "gauge3.h"
+#include "cheat.h"
 
 #include "card3.h"
 #include "cls.h"
@@ -18,6 +28,10 @@
 int NRandInRange(int nLow, int nHigh);   // (util.h: 0x11D3F8)
 #include "worldaccess.h"
 #include "game/sly3.h"
+#include "game/loaders3.h"
+#include "animfind.h"
+#include "outfit3.h"
+#include "challenge3.h"
 
 #include <algorithm>
 #include <array>
@@ -44,9 +58,9 @@ constexpr uint32_t VA_PART_PAGE_OUT = 0x344ED8;// state 10's
 constexpr uint32_t VA_NAMES = 0x344F00;        // S32[9]: the episodes' names (text ids)
 constexpr uint32_t VA_JOBS = 0x349B20;         // 9 x {count, char**}: an episode's jobs (its completion)
 constexpr uint32_t VA_CHALLENGES = 0x349B68;   // 9 x {count, char**}: its challenges (the percent)
+constexpr uint32_t VA_MOVIE_KEYS0 = 0x3179F8;  // the movies' 64-byte keys (the Bonus Movies' first five rules)
 // the parts (Sly 2's 0x3xx + 103)
 constexpr int PART_LIST_SHOW = 0x382, PART_UP = 0x384, PART_DOWN = 0x383;
-constexpr int PART_PREV_ON = 0x64F, PART_PREV_OFF = 0x650, PART_NEXT_ON = 0x651, PART_NEXT_OFF = 0x652;
 constexpr int SND_REFUSED = 0x36;   // (PsndNewPlain(0x36): an end of the wheel / a closed entry)
 
 // an entry of an episode's page (0x18 bytes)
@@ -117,6 +131,126 @@ EPRETURN s_ret;
 
 const char* SzEp(int iep) { return sly3::SzEpisode(iep); }
 
+// the development flag 0x3448E0 (every episode and list row open; debug SLY3_EPMALLOPEN=1 as the reference's poke of it)
+bool FAllOpen()
+{
+    static const bool s_fEnv = std::getenv("SLY3_EPMALLOPEN") != nullptr;
+    return s_fEnv || UElf(VA_ALL_OPEN);
+}
+
+// ------------------------------------------------------------ the lists (class 0x9D, game/loaders3.h LOLIST9D3)
+// orig3: SW +0x148: 9 episodes x 3 slots (0 the Two Player / Jobs && Challenges list (mode 0), 1 the Gallery (mode
+// 1), 2 the Bonus Movies (mode 2)), registered by each list's post-load 0x17AB08; +0x130 the list shown
+std::array<std::array<LOLIST9D3*, 3>, 9> s_aplist{};
+LOLIST9D3* s_plistCur = nullptr;
+
+int NProgressInt(const std::vector<int16_t>& akey)
+{
+    const CRef r = RefGetProgressKey(akey);
+    return r.m_tagk == TAGK_Bool ? (r.m_bool ? 1 : 0) : r.m_tagk == TAGK_S32 ? r.m_n : r.m_tagk == TAGK_F32 ? int(r.m_g) : 0;
+}
+// a class-0xAA game object's key option (kind 22: 1454 +0x70 the key that opens it, 1456 +0xA8, 1457 +0xB0 its
+// "done" key); empty: none
+std::vector<int16_t> AkeyNode(const LO* pnode, int eopid)
+{
+    for (const OPT& o : pnode->aopt)
+        if (o.eopid == eopid && !o.aval.empty()) return o.aval[0].an;
+    return {};
+}
+// orig3: 0x002835D0: the game's "done" key (+0xB0) read (0 none)
+int NNodeDone(const LO* pnode) { const auto akey = AkeyNode(pnode, 1457); return akey.empty() ? 0 : NProgressInt(akey); }
+// orig3: 0x002833C8: a game of a list open: always with the development flag or once done, else its key (+0x70; none:
+// open). (The key's context: the challenge's saved progress while one runs (0x2852B0: +0x38); the three card slots for
+// a mode-2 game with the card state 6: TODO(sly3), the chooser runs with no challenge.)
+bool FNodeOpen(const LO* pnode)
+{
+    if (FAllOpen() || NNodeDone(pnode)) return true;
+    const auto akey = AkeyNode(pnode, 1454);
+    if (akey.empty()) return true;
+    return NProgressInt(akey) != 0;
+}
+
+// orig3: 0x0017AB08 (the list's post-load, slot 17): registered in its episode's slot, each row's object found and
+// its open state, the first open row chosen
+void RegisterList(SW* psw, LOLIST9D3* pl)
+{
+    if (pl->mode >= 0 && pl->mode < 3 && pl->iep >= 0 && pl->iep < 9) s_aplist[size_t(pl->iep)][size_t(pl->mode)] = pl;
+    pl->fEnabled = false;
+    for (LOLIST9D3::ROW& r : pl->arow)
+    {
+        r.fAvail = false;
+        switch (pl->mode)
+        {
+        case 0:
+            r.pnode = PloFindSwObjectByOid(psw, r.n);   // (0x17E1B8 kind 0x105: global)
+            if (r.pnode) r.fAvail = FNodeOpen(r.pnode);
+            break;
+        case 1: r.fAvail = FEpisodeComplete3(pl->iep); break;   // (0x25E4A0: the episode's gallery)
+        case 2:
+        {
+            // the movie's key against the executable's first five (0x3179F8 + 0x40 k, compared by +8 ^ +0x38; a key with
+            // +4 ^ +0x3C zero is none): always, 35 / 70 % of the challenges (0x25E510), the game at 100 % (0x25E6D0),
+            // the last episode complete
+            auto w = [](const uint8_t* pb, int ib) { uint32_t u; std::memcpy(&u, pb + ib, 4); return u; };
+            const uint8_t* pk = r.abKey.data();
+            if ((w(pk, 4) ^ w(pk, 0x3C)) == 0) break;
+            const uint32_t idKey = w(pk, 8) ^ w(pk, 0x38);
+            for (int k = 0; k < 5; ++k)
+            {
+                const uint8_t* pe = g_disc.PbElf(VA_MOVIE_KEYS0 + 0x40u * uint32_t(k), 0x40);
+                if (!pe || (w(pe, 8) ^ w(pe, 0x38)) != idKey) continue;
+                switch (k)
+                {
+                case 0: r.fAvail = true; break;
+                case 1: r.fAvail = NChallengePercent3() >= 35; break;
+                case 2: r.fAvail = NChallengePercent3() >= 70; break;
+                case 3: r.fAvail = NGamePercent3(g_gamesave) >= 100; break;
+                default: r.fAvail = FEpisodeComplete3(8); break;
+                }
+                break;
+            }
+            break;
+        }
+        default: break;
+        }
+        if (FAllOpen()) r.fAvail = true;
+        if (r.fAvail) pl->fEnabled = true;
+        if (std::getenv("SLY3_EPMLISTPRINT"))
+            std::printf("epmenu3: list %d (episode %d mode %d) row %d -> %d (cid 0x%X) open %d job %d 3-D %d\n", pl->oid, pl->iep, pl->mode,
+                        int(&r - pl->arow.data()), r.pnode ? r.pnode->oid : -1, r.pnode ? r.pnode->Cid() : 0, int(r.fAvail),
+                        r.pnode ? int(r.pnode->U32Field3(0, 0x48, 0xFFFFFFFFu)) : -1, r.pnode ? int(r.pnode->U32Field3(0, 0x54, 0)) : 0);
+    }
+    pl->isel = -1;
+    for (int i = 0; i < int(pl->arow.size()); ++i)   // (0x17AF50: the next open row)
+        if (pl->arow[size_t(i)].fAvail) { pl->isel = i; break; }
+}
+// orig3: 0x0017AE78 / 0x0017AEB8: an open row before / after the chosen one
+bool FListPrev(const LOLIST9D3* pl)
+{
+    for (int i = pl->isel - 1; i >= 0; --i) if (pl->arow[size_t(i)].fAvail) return true;
+    return false;
+}
+bool FListNext(const LOLIST9D3* pl)
+{
+    for (int i = pl->isel + 1; i < int(pl->arow.size()); ++i) if (pl->arow[size_t(i)].fAvail) return true;
+    return false;
+}
+// orig3: 0x0017AF08 / 0x0017AF50
+void ListStep(LOLIST9D3* pl, int d)
+{
+    for (int i = pl->isel + d; i >= 0 && i < int(pl->arow.size()); i += d)
+        if (pl->arow[size_t(i)].fAvail) { pl->isel = i; return; }
+}
+// orig3: 0x0017C6C8: the chosen row's object of the list shown (a mode-0 list of the episode shown)
+LO* PnodeCur(int iepCur)
+{
+    const LOLIST9D3* pl = s_plistCur;
+    if (!pl || pl->mode != 0 || pl->iep != iepCur || pl->isel < 0 || pl->isel >= int(pl->arow.size())) return nullptr;
+    return pl->arow[size_t(pl->isel)].pnode;
+}
+// the parts of the list's arrows (1615 / 1616 previous on / off, 1617 / 1618 next)
+constexpr int PART_LPREV_ON = 1615, PART_LPREV_OFF = 1616, PART_LNEXT_ON = 1617, PART_LNEXT_OFF = 1618;
+
 int CEntries(int iep) { return iep >= 0 && iep < 9 ? NElf(VA_PAGES + 8 * uint32_t(iep)) : 0; }
 EPENT Ent(int iep, int i) { return EntAt(UElf(VA_PAGES + 8 * uint32_t(iep) + 4) + 0x18 * uint32_t(i)); }
 
@@ -132,7 +266,7 @@ bool FCurEntry(const EPMENU3& p, EPENT* pe)
 // orig3: 0x0017C1C0: the entry can be chosen
 bool FEntryOpen(const EPMENU3& p, const EPENT& e)
 {
-    if (UElf(VA_ALL_OPEN)) return true;
+    if (FAllOpen() || FCheatAllEpisodes()) return true;   // (0x3448E0: the cheat code R1 U U R1 R1 D, cheat.h)
     switch (e.kind)
     {
     case 0:   // the Intro and the last episode cannot be started again once complete
@@ -146,7 +280,11 @@ bool FEntryOpen(const EPMENU3& p, const EPENT& e)
         return r.m_tagk == TAGK_Bool ? r.m_bool : r.m_tagk == TAGK_S32 ? r.m_n != 0 : r.m_tagk == TAGK_F32 ? r.m_g != 0.0f : false;
     }
     case 2: case 3: case 4:
-        return p.plist != nullptr;   // (the list's +0x5C: TODO(sly3): the lists are not loaded)
+    {
+        // the episode's list of slot kind - 2 (Jobs && Challenges, the Gallery, the Bonus Movies) with an open row (+0x5C)
+        const LOLIST9D3* pl = p.cur >= 0 && p.cur < 9 ? s_aplist[size_t(p.cur)][size_t(e.kind - 2)] : nullptr;
+        return pl && pl->fEnabled;
+    }
     default: return true;
     }
 }
@@ -195,8 +333,8 @@ void SetEpState(EPMENU3& p, int s, int pending)
             NextEntry(p, 1);   // (the first open one)
         }
         break;
-    case 15: case 20: case 31: p.plist = nullptr; break;
-    case 25: if (s != 26) p.plist = nullptr; break;
+    case 15: case 20: case 31: p.plist = nullptr; s_plistCur = nullptr; break;
+    case 25: if (s != 26) { p.plist = nullptr; s_plistCur = nullptr; } break;
     case 26: p.zoom = 1.0f; break;   // (0x262990(0x64E, the identity))
     default: break;
     }
@@ -223,11 +361,24 @@ void SetEpState(EPMENU3& p, int s, int pending)
     case 11: case 16: case 21: case 27:
     case 13: case 18: case 23: case 29:
     case 14: case 19: case 24: case 30:
-        // the lists (two player 0x148, challenges 0x148, gallery 0x14C, movies 0x150 of the episode): their arrows
-        // (TODO(sly3): the list objects; none natively: no previous / next)
-        SelectScreenObjPart(p.plo, PART_PREV_OFF);
-        SelectScreenObjPart(p.plo, PART_NEXT_OFF);
+    {
+        // the lists (Two Player / Jobs && Challenges: slot 0, Gallery 1, Bonus Movies 2 of the episode): the list
+        // shown taken (its text group streamed: 0x16F2B0(+0x54, its oid)), the row stepped, the arrows
+        if (s == 11 || s == 16 || s == 21 || s == 27)
+        {
+            const size_t slot = s == 27 ? 2 : s == 21 ? 1 : 0;
+            s_plistCur = p.cur >= 0 && p.cur < 9 ? s_aplist[size_t(p.cur)][slot] : nullptr;
+            p.plist = s_plistCur;
+            if (s_plistCur)
+                if (LO* powner = PloFindSwObjectByOid(s_pswEpm, OID(s_plistCur->U32Field3(0, 0x54, 0xFFFFFFFFu))))
+                    FStreamGroup97(s_plistCur->oid, powner);
+        }
+        else if (s_plistCur) ListStep(s_plistCur, s == 13 || s == 18 || s == 23 || s == 29 ? -1 : 1);
+        const bool fPrev = s_plistCur && FListPrev(s_plistCur), fNext = s_plistCur && FListNext(s_plistCur);
+        SelectScreenObjPart(p.plo, fPrev ? PART_LPREV_ON : PART_LPREV_OFF);
+        SelectScreenObjPart(p.plo, fNext ? PART_LNEXT_ON : PART_LNEXT_OFF);
         break;
+    }
     default: break;
     }
     p.xPan = p.yPan = 0.0f;
@@ -329,21 +480,90 @@ int NEpisodePercent3(int iep)
     return std::max(1, std::min(99, cDone * 100 / c));
 }
 
-void StartEpisode3(SW* psw, int iep)
+int NGamePercent3(const GAMESAVE& gs)
+{
+    constexpr uint32_t VA_WEIGHTS = 0x349BB0;   // S32[9]
+    const GAMESAVE saved = g_gamesave;
+    g_gamesave = gs;
+    int total = 0, count = 0;
+    for (int i = 0; i < 9; ++i)
+    {
+        const int w = NElf(VA_WEIGHTS + 4 * uint32_t(i));
+        count += NEpisodePercent3(i) * w;
+        total += w * 100;
+    }
+    g_gamesave = saved;
+    if (total == 0 || count == 0) return 0;
+    if (count == total) return 100;
+    return std::max(1, std::min(99, count * 100 / total));
+}
+
+int NChallengePercent3()
+{
+    // (0x25E348 per episode: the challenges of 0x349B68 and how many are complete)
+    int total = 0, count = 0;
+    for (int iep = 0; iep < 9; ++iep)
+    {
+        const int n = NElf(VA_CHALLENGES + 8 * uint32_t(iep));
+        const uint32_t va = UElf(VA_CHALLENGES + 8 * uint32_t(iep) + 4);
+        for (int i = 0; i < n; ++i)
+        {
+            ++total;
+            const CRef r = RefGetProgress({g_disc.StrElf(UElf(va + 4 * uint32_t(i))), "is_complete"});
+            if (r.m_tagk == TAGK_Bool && r.m_bool) ++count;
+        }
+    }
+    if (total == 0 || count == 0) return 0;
+    if (count == total) return 100;
+    return std::max(1, std::min(99, count * 100 / total));
+}
+
+void StartEpisode3(SW* psw, int iep, int grfExtra)
 {
     if (iep < 0 || iep >= 9) return;
-    std::printf("flow: episode %d %s started from the chooser\n", iep, SzEp(iep));
+    std::printf("flow: episode %d %s started from %s\n", iep, SzEp(iep), grfExtra & 0x40 ? "a save" : "the chooser");
     // orig3 0x289198: the Intro not complete: its binocucom task 1798 in m_ext (35); else the episode's first world
     // (0x2EDFB0) at the default point. (TODO(sly3): its progress "episodeCurrent" and the saved checkpoint task /
     // world it resumes at (SW +0x4074..+0x4080), the China / Pirate special cases.)
     if (iep == sly3::EP_Intro && !FEpisodeComplete3(iep))
     {
-        RequestTaskStart(psw, 35, 1798);
+        RequestTaskStart(psw, 35, 1798, -1, grfExtra);
         return;
     }
-    const int iworld = NElf(sly3::VA_EPISODE_WORLDS + 4u * uint32_t(iep));
+    int iworld = NElf(sly3::VA_EPISODE_WORLDS + 4u * uint32_t(iep));
+    // (audit 4 CORE-18) 0x289198's special cases: China (6) starts in world 0x18 until "t4_recon_complete" is; the
+    // Pirate episode (7) in world 0x20 once "t5_treasure_complete" is and while "t5_heist_complete" is not; the Isle (8)
+    // sets episodeCurrent / episodeBest to 8 and resumes at the checkpoint-force task "oidCheckpointForce" in world
+    // "widCheckpointForce" (written by the jobs' activations / rewards, game/task3.cpp), task 0x731 when it is 0 / -1.
+    // SLY3_EPSTART2=1: the episode's first world always, as before.
+    static const bool s_fOld = std::getenv("SLY3_EPSTART2") != nullptr;
+    auto nProg = [](std::initializer_list<const char*> a) {
+        std::vector<std::string> as(a.begin(), a.end());
+        const CRef r = RefGetProgress(as);
+        return r.m_tagk == TAGK_Bool ? int(r.m_bool) : r.m_tagk == TAGK_S32 ? r.m_n : 0;
+    };
+    if (!s_fOld)
+    {
+        if (iep == sly3::EP_China && !nProg({"t4_recon_complete", "is_complete"})) iworld = 0x18;
+        else if (iep == sly3::EP_Pirate && nProg({"t5_treasure_complete", "is_complete"}) && !nProg({"t5_heist_complete", "is_complete"}))
+            iworld = 0x20;
+        else if (iep == sly3::EP_Isle)
+        {
+            CRef r;
+            r.SetS32(iep);
+            FSetProgress({"episodeCurrent"}, r);
+            FSetProgress({"episodeBest"}, r);
+            int oid = nProg({"oidCheckpointForce"});
+            if (oid == -1 || oid == 0) oid = 0x731;
+            else iworld = nProg({"widCheckpointForce"});
+            if (iworld < 0) return;
+            std::printf("flow: the Isle resumes at task %d in world %d\n", oid, iworld);
+            RequestTaskStart(psw, iworld, oid, -1, grfExtra);
+            return;
+        }
+    }
     if (iworld < 0) return;
-    RequestWorldWarp(psw, iworld, sly3::POINT_DEFAULT, -1);
+    RequestWorldWarp(psw, iworld, sly3::POINT_DEFAULT, -1, grfExtra);
 }
 
 // ------------------------------------------------------------ the chooser
@@ -353,8 +573,69 @@ void SetEpMenuReturn3(int iep)
     s_ret = EPRETURN{iep == sly3::EP_Trainer ? 1 : 6, iep, 0, 0};
 }
 
+// (hud.h) the list pages' picture slots (dvd_menu's kind-7 elements 0x649..0x64E): the chosen row's picture, the kind-2
+// item of the list's streamed group (0x16F2B0 of the text owner +0x54: one shader per row, in the rows' order)
+// (hud.h) the Gallery's picture (state 26: the element 0x64E zoomed by +0x134 about the panned point +0x138 / +0x13C:
+// 0x262990 with D_00317FC0 scaled, the point at the canvas centre)
+bool FQuadXf3(int idTexture, float a[6])
+{
+    if (!FEpMenu3Active() || idTexture != 0x64E || s_epm3.state != 26) return false;
+    const EPMENU3& p = s_epm3;
+    const float px = p.xPan * 320.0f + 320.0f, py = p.yPan * -240.0f + 240.0f;
+    a[0] = p.zoom; a[1] = 0.0f; a[2] = 0.0f; a[3] = p.zoom;
+    a[4] = -px * p.zoom + 320.0f; a[5] = -py * p.zoom + 240.0f;
+    return true;
+}
+
+int OidEpisodeThumbnail3(int iep)
+{
+    static std::array<int, 9> s_aoid{};
+    static uint32_t s_serial = 0;
+    if (!s_pswEpm || iep < 0 || iep >= 9) return -1;
+    if (s_serial != s_pswEpm->serial) { s_aoid.fill(-2); s_serial = s_pswEpm->serial; }
+    if (s_aoid[size_t(iep)] != -2) return s_aoid[size_t(iep)];
+    s_aoid[size_t(iep)] = -1;
+    const LOLIST9D3* pl = s_aplist[size_t(iep)][0];
+    LO* powner = pl ? PloFindSwObjectByOid(s_pswEpm, OID(pl->U32Field3(0, 0x54, 0xFFFFFFFFu))) : nullptr;
+    if (!powner || !FStreamGroup97(pl->oid, powner)) return -1;
+    s_aoid[size_t(iep)] = OidStreamedShader97(pl->oid, 0);
+    // (the list shown streamed again: its own pictures; the episode's picture's shader stays loaded)
+    if (s_plistCur)
+        if (LO* pownerCur = PloFindSwObjectByOid(s_pswEpm, OID(s_plistCur->U32Field3(0, 0x54, 0xFFFFFFFFu))))
+            FStreamGroup97(s_plistCur->oid, pownerCur);
+    return s_aoid[size_t(iep)];
+}
+
+int IdQuadShaderAlias3(int idTexture)
+{
+    // (PC, copsmap3.h: the map select's hub on the Two Player page: Cops and Robbers' picture slot shows the hub's
+    // episode's first replay picture; Venice (the original game) keeps the original picture)
+    if (idTexture == 0x64B && cops3::FCopsNode(PnodeTwoPlayerShown3()) && cops3::IHubChosen() > 0)
+        if (const int oid = OidEpisodeThumbnail3(cops3::IepHub(cops3::IHubChosen())); oid != -1) return oid;
+    if (!FEpMenu3Active() || !s_plistCur || idTexture < 0x649 || idTexture > 0x64E) return -1;
+    const LOLIST9D3* pl = s_plistCur;
+    if (pl->isel < 0) return -1;
+    // (the slots' binding is not in the decomp's C; inferred from what the pages draw: the chosen row in 0x64B (and the
+    // Gallery's full view 0x64E), the open rows before it in 0x64A / 0x649, after it in 0x64C / 0x64D: the vertical
+    // lists slide 0x64A / 0x64C in, the film strips show 0x64A | 0x64B | 0x64C)
+    static const int s_ad[6] = {-2, -1, 0, 1, 2, 0};
+    const int d = s_ad[idTexture - 0x649];
+    int i = pl->isel;
+    for (int k = 0; k != d;)
+    {
+        const int step = d < 0 ? -1 : 1;
+        do i += step;
+        while (i >= 0 && i < int(pl->arow.size()) && !pl->arow[size_t(i)].fAvail);
+        if (i < 0 || i >= int(pl->arow.size())) return -1;
+        k += step;
+    }
+    return OidStreamedShader97(pl->oid, i);
+}
+
 void StartEpMenu3(SW* psw)
 {
+    g_pfnQuadShaderAlias = IdQuadShaderAlias3;
+    g_pfnQuadXf = FQuadXf3;
     s_fActive = false;
     s_epm3 = EPMENU3{};
     s_pswEpm = psw;
@@ -380,11 +661,42 @@ void StartEpMenu3(SW* psw)
             i = j + 1;
         }
     }
+    // (debug) SLY3_EPMPROGRESS=a.b=n,..: progress paths set to n, e.g. t3_biplane_multi_sentinel.state=1 (the 2P biplane
+    // dogfight's row 2026 is open once that Ep3 sentinel task (3322) has a state: it becomes available when the Ep3 hub
+    // h_ext first loads)
+    if (const char* sz = std::getenv("SLY3_EPMPROGRESS"))
+    {
+        std::string str = sz;
+        for (std::size_t i = 0; i <= str.size();)
+        {
+            const std::size_t j = std::min(str.find(',', i), str.size());
+            const std::string e = str.substr(i, j - i);
+            const std::size_t k = e.find('=');
+            if (k != std::string::npos)
+            {
+                std::vector<std::string> apath;
+                for (std::size_t a = 0; a <= k;)
+                {
+                    const std::size_t b = std::min(e.find('.', a), k);
+                    apath.push_back(e.substr(a, b - a));
+                    a = b + 1;
+                }
+                CRef r;
+                r.SetS32(std::atoi(e.c_str() + k + 1));
+                FSetProgress(apath, r);
+            }
+            i = j + 1;
+        }
+    }
     s_fActive = true;
     ClearJoySteps();   // (0x1A99D0 on +0x1F0 with the pad)
+    // the lists registered (their post-load 0x17AB08, run when dvd_menu loads: the open rows read the progress then)
+    s_aplist = {};
+    s_plistCur = nullptr;
+    for (LO* q : AploOfClass(psw, 0x9D)) RegisterList(psw, static_cast<LOLIST9D3*>(q));
     // the backdrop's groups: up to the one of the last complete episode
     int iepDone = 8;
-    while (iepDone >= 2 && !UElf(VA_ALL_OPEN) && !FEpisodeComplete3(iepDone)) --iepDone;
+    while (iepDone >= 2 && !FAllOpen() && !FCheatAllEpisodes() && !FEpisodeComplete3(iepDone)) --iepDone;
     const int cgroup = NElf(VA_BG_GROUP + 4 * uint32_t(std::max(0, iepDone)));
     for (int i = 0; i <= cgroup && i < 8; ++i)
     {
@@ -399,15 +711,51 @@ void StartEpMenu3(SW* psw)
     p.bagGroups.i = p.bagGroups.a.size();
     // the last episode open: one played, or whose previous one is complete
     p.max = 8;
-    while (p.max >= 2 && !UElf(VA_ALL_OPEN) && DtEpisode3(p.max) == 0.0f && !FEpisodeComplete3(p.max - 1)) --p.max;
+    while (p.max >= 2 && !FAllOpen() && !FCheatAllEpisodes() && DtEpisode3(p.max) == 0.0f && !FEpisodeComplete3(p.max - 1)) --p.max;
     switch (s_ret.state)
     {
     case 1: p.cur = s_ret.cur; SetEpState(p, 1, -1); break;
     case 6: p.cur = s_ret.cur; p.isel = s_ret.isel; SetEpState(p, 6, -1); break;
-    case 11: case 16: case 21: case 26: p.cur = s_ret.cur; SetEpState(p, s_ret.state, -1); break;
+    case 11: case 16: case 21: case 27:
+    {
+        // (the list's chosen row back: slot 0 for 11 / 16, 1 for 21, 2 for 27)
+        p.cur = s_ret.cur;
+        const size_t slot = s_ret.state == 27 ? 2 : s_ret.state == 21 ? 1 : 0;
+        if (p.cur >= 0 && p.cur < 9 && s_aplist[size_t(p.cur)][slot]) s_aplist[size_t(p.cur)][slot]->isel = s_ret.item;
+        SetEpState(p, s_ret.state, -1);
+        break;
+    }
     default: p.cur = p.max; SetEpState(p, 0, -1); break;
     }
     s_ret = EPRETURN{};   // (0x185638)
+    if (std::getenv("SLY3_EPMLISTPRINT"))
+    {
+        auto opts = [](LO* q) {
+            for (const OPT& o : q->aopt)
+            {
+                std::printf("   opt %d grf 0x%X:", o.eopid, o.grf);
+                for (const OPTVAL& v : o.aval) std::printf(" (k %d tag 0x%X n %d g %g)", v.k, v.tagk, v.n, v.ag[0]);
+                std::printf("\n");
+            }
+            for (const auto& [k, u] : q->afield) std::printf("   field 0x%llX = %u\n", (unsigned long long)k, u);
+        };
+        for (uint32_t va : {0x321730u, 0x321738u, 0x321740u, 0x321748u, 0x321750u, 0x321758u, 0x321760u})
+            std::printf("elfstr 0x%X '%s'\n", va, g_disc.StrElf(va).c_str());
+        for (int id : {127, 128, 129, 130, 131, 132, 494, 498, 5596, 5595})
+            std::printf("text %d '%s'\n", id, StrText3(psw, id).c_str());
+        for (LO* q : AploOfClass(psw, 0x9D))
+        {
+            LOLIST9D3* pl = static_cast<LOLIST9D3*>(q);
+            std::printf("list9D oid %d mode %d ep %d rows %zu\n", q->oid, pl->mode, pl->iep, pl->arow.size());
+            opts(q);
+            for (auto& r : pl->arow)
+            {
+                LO* pn = pl->mode == 0 ? PloFindSwNearest(q, r.n) : nullptr;
+                std::printf("  row kind %d n %d node %p cid %d\n", r.kind, r.n, (void*)pn, pn ? pn->Cid() : -1);
+                if (pn) opts(pn);
+            }
+        }
+    }
     if (std::getenv("SLY3_EPMPRINT"))
         std::printf("epmenu3: oid %d, episode %d of %d (Intro complete %d, Trainer %d, Venice time %.0f)\n", plo->oid,
                     p.cur, p.max, FEpisodeComplete3(1), FEpisodeComplete3(2), DtEpisode3(3));
@@ -489,17 +837,135 @@ void UpdateEpMenu3(SW* psw)
         if (n != 0) SetEpState(p, n < 0 ? 8 : 9, -1);
         break;
     }
-    // the lists (Two Player 11..15, Jobs && Challenges 16..20, Gallery 21..26, Bonus Movies 27..31): no list object
-    // natively yet (TODO(sly3): 0x148 + 12 cur), so nothing to choose; back goes back
+    // the lists (Two Player 11..15, Jobs && Challenges 16..20, Gallery 21..26, Bonus Movies 27..31). Natively the Two
+    // Player list (episode 0's slot 0) is ported; the others are closed on the page (FEntryOpen) and only go back.
     case 11: case 13: case 14: if (!busy(idPart)) SetEpState(p, 12, -1); break;
     case 16: case 18: case 19: if (!busy(idPart)) SetEpState(p, 17, -1); break;
     case 21: case 23: case 24: if (!busy(idPart)) SetEpState(p, 22, -1); break;
     case 27: case 29: case 30: if (!busy(idPart)) SetEpState(p, 28, -1); break;
-    case 12: if (TakeBtn(BtnMenuBack())) SetEpState(p, 15, 1); break;
-    case 17: if (TakeBtn(BtnMenuBack())) SetEpState(p, 20, 6); break;
-    case 22: if (TakeBtn(BtnMenuBack())) SetEpState(p, 25, 6); break;
-    case 26: if (TakeBtn(BtnMenuBack())) SetEpState(p, 21, -1); break;
-    case 28: if (TakeBtn(BtnMenuBack())) SetEpState(p, 31, 6); break;
+    case 12:   // the Two Player list: X starts the game shown, back to the wheel, up / down the open games
+    {
+        if (TakeBtn(BtnMenuConfirm()))
+        {
+            LO* pnode = PnodeCur(p.cur);
+            if (!pnode) break;
+            s_ret = EPRETURN{11, p.cur, 0, s_plistCur ? s_plistCur->isel : 0};
+            hackmp3::NoteProgress(FEpisodeComplete3(sly3::EP_Holland));   // (hackmp3.h: the original's player 2 after Episode 3)
+            // (PC, copsmap3.h: Cops and Robbers on the hub chosen in the map select; Venice: the original)
+            if (!cops3::FStartChosen(psw, pnode)) StartChallenge3(psw, pnode, 0, -1);   // (0x283BB0(0x4BC230, node, 0, -1))
+            break;
+        }
+        if (TakeBtn(BtnMenuBack())) { SetEpState(p, 15, 1); break; }
+        // (PC, duel3.h: the Biplane Duel's players: Left / Right while it is shown; 2 = the original duel)
+        if (duel3::FDuelNode(PnodeCur(p.cur)))
+            if (const int d = NStepLeftRight(); d != 0)
+            {
+                duel3::StepPlayersChosen(d);
+                PsndStartSound(0x35);
+                break;
+            }
+        // (PC, galleon3.h: the Galleon Duel's players: Left / Right while it is shown; 2 = the original duel)
+        if (galleon3::FGalleonNode(PnodeCur(p.cur)))
+            if (const int d = NStepLeftRight(); d != 0)
+            {
+                galleon3::StepPlayersChosen(d);
+                PsndStartSound(0x35);
+                break;
+            }
+        // (PC, hackmp3.h: the Hackathon's players: Left / Right while it is shown; 2 = the original game)
+        if (hackmp3::FHackNode(PnodeCur(p.cur)))
+            if (const int d = NStepLeftRight(); d != 0)
+            {
+                hackmp3::StepPlayersChosen(d);
+                PsndStartSound(0x35);
+                break;
+            }
+        // (PC, copsmap3.h: the map select: Left / Right while Cops and Robbers is shown)
+        if (cops3::FCopsNode(PnodeCur(p.cur)))
+            if (const int d = NStepLeftRight(); d != 0)
+            {
+                cops3::StepHubChosen(d);
+                PsndStartSound(0x35);
+                break;
+            }
+        if (!s_plistCur) break;
+        const int n = NStepUpDown();
+        if (n == 0) break;
+        if ((n < 0 && FListPrev(s_plistCur)) || (n > 0 && FListNext(s_plistCur))) SetEpState(p, n < 0 ? 13 : 14, -1);
+        else Refused();
+        break;
+    }
+    case 17:   // Jobs && Challenges: X replays the job / starts the challenge shown, up / down the open rows
+    {
+        if (TakeBtn(BtnMenuConfirm()))
+        {
+            LO* pnode = PnodeCur(p.cur);
+            if (!pnode) break;
+            s_ret = EPRETURN{16, p.cur, 0, s_plistCur ? s_plistCur->isel : 0};
+            StartChallenge3(psw, pnode, 0, 0);   // (0x283BB0(0x4BC230, node, 0, 0))
+            break;
+        }
+        // (Square: the "... in 3-D" start, 0x283BB0(.., 1) for a row with +0x54: the 3-D answer 1 (GAME +0x14A4), the job's
+        // worlds in the 3-D mode; offered only with the 3D Mode setting on: gauge3.h FAsk3d3)
+        if (FAsk3d3() && TakeBtn(0x80))
+        {
+            LO* pnode = PnodeCur(p.cur);
+            if (!pnode || !pnode->U32Field3(0, 0x54, 0)) break;
+            s_ret = EPRETURN{16, p.cur, 0, s_plistCur ? s_plistCur->isel : 0};
+            StartChallenge3(psw, pnode, 0, 1);
+            break;
+        }
+        if (TakeBtn(BtnMenuBack())) { SetEpState(p, 20, 6); break; }
+        if (!s_plistCur) break;
+        const int n = NStepUpDown();
+        if (n == 0) break;
+        if ((n < 0 && FListPrev(s_plistCur)) || (n > 0 && FListNext(s_plistCur))) SetEpState(p, n < 0 ? 18 : 19, -1);
+        else Refused();
+        break;
+    }
+    case 22:   // the Gallery: X the picture full screen, left / right the open pictures
+    {
+        if (TakeBtn(BtnMenuConfirm())) { SetEpState(p, 25, 26); break; }
+        if (TakeBtn(BtnMenuBack())) { SetEpState(p, 25, 6); break; }
+        if (!s_plistCur) break;
+        const int n = NStepLeftRight();
+        if (n == 0) break;
+        if ((n < 0 && FListPrev(s_plistCur)) || (n > 0 && FListNext(s_plistCur))) SetEpState(p, n < 0 ? 23 : 24, -1);
+        else Refused();
+        break;
+    }
+    case 26:   // the picture: Triangle back, X / Square held zoom in / out (1..2), the left stick pans (0x262990 on 0x64E)
+    {
+        if (TakeBtn(BtnMenuBack())) { SetEpState(p, 21, -1); break; }
+        const uint32_t grf = GrfbtnHeld();
+        const float dt = g_clock.dtReal;
+        if (grf & BtnMenuConfirm()) p.zoom += dt * 0.5f;
+        else if (grf & 0x80) p.zoom -= dt * 0.5f;
+        p.zoom = std::clamp(p.zoom, 1.0f, 2.0f);
+        const float lim = 1.0f - 1.0f / p.zoom;
+        p.xPan = std::clamp(p.xPan + g_joy.xLeft * dt * 0.5f, -lim, lim);
+        p.yPan = std::clamp(p.yPan + g_joy.yLeft * dt * 0.5f, -lim, lim);
+        break;
+    }
+    case 28:   // the Bonus Movies: X plays the movie shown (then the chooser again on it), left / right the movies
+    {
+        if (TakeBtn(BtnMenuConfirm()))
+        {
+            const LOLIST9D3* pl = s_plistCur;
+            if (!pl || pl->isel < 0 || pl->isel >= int(pl->arow.size()) || !pl->arow[size_t(pl->isel)].fAvail) { Refused(); break; }
+            s_ret = EPRETURN{27, p.cur, 0, pl->isel};
+            QueueMovie(pl->arow[size_t(pl->isel)].abKey.data());   // (0x1DBD08 with the row's key)
+            RequestWorldWarp(psw, 0, sly3::POINT_DEFAULT, -1);       // (0x289070(GAME, 0, 0x1A8, 0, -1))
+            break;
+        }
+        if (TakeBtn(BtnMenuBack())) { SetEpState(p, 31, 6); break; }
+        if (!s_plistCur) break;
+        const int n = NStepLeftRight();
+        if (n == 0) break;
+        if ((n < 0 && FListPrev(s_plistCur)) || (n > 0 && FListNext(s_plistCur))) SetEpState(p, n < 0 ? 29 : 30, -1);
+        else Refused();
+        break;
+    }
     default: break;
     }
     if (std::getenv("SLY3_EPMPRINT") && p.state != sOld)
@@ -543,7 +1009,54 @@ bool FStrEpMenu3(int id, std::string* pstr)
         *pstr = FEpMenu3Active() && p.cur >= 0 && p.cur < 9 ? text(NElf(VA_NAMES + 4 * uint32_t(p.cur))) : "";
         return true;
     default:
-        if (id >= 1481 && id <= 1498) { pstr->clear(); return true; }   // (the lists' strings: TODO(sly3))
+        if (id >= 1481 && id <= 1498)
+        {
+            // the lists' strings (orig3 0x17C9B0..0x17CDE0 on the chosen row's object, 0x17C6C8): 1484 / 1489 its name
+            // (+0x40), 1485 / 1490 its description (+0x44), 1486 / 1491 what X (and Square) do, 1488 its kind (1 a
+            // completed job, 0 a challenge). (1487 / 1498: the high score / best time of a done challenge or of the
+            // hacking game 1815: challenge3.cpp's strings.)
+            pstr->clear();
+            const LO* pnode = FEpMenu3Active() ? PnodeCur(p.cur) : nullptr;
+            if (!pnode) return true;
+            const int mode = int(pnode->U32Field3(0, 0x50, 0));
+            const bool fFlags = pnode->U32Field3(0, 0x54, 0) != 0;
+            switch (id)
+            {
+            case 1484: case 1489:
+                if (const int idName = int(pnode->U32Field3(0, 0x40, 0xFFFFFFFFu)); idName != -1) *pstr = text(idName);
+                break;
+            case 1485: case 1490:
+                if (duel3::FDescription(pnode, pstr)) break;   // (PC, duel3.h: the free-for-all's, its pilots "Player N")
+                if (galleon3::FDescription(pnode, pstr)) break;   // (PC, galleon3.h: the free-for-all's)
+                *pstr = text(int(pnode->U32Field3(0, 0x44, 0xFFFFFFFFu)));
+                break;
+            case 1486: case 1491:   // ("%s : &2X&." and, with the object's +0x54, "\n%s : &2S&.")
+                *pstr = text(mode == 1 ? 128 : 131) + " : " + SzMenuConfirmGlyph();
+                // (the "... in 3-D : Square" line of a 3-D job; only with the 3D Mode setting on: gauge3.h FAsk3d3)
+                if (fFlags && FAsk3d3()) *pstr += "\n" + text(mode == 1 ? 129 : 132) + " : &2S&.";
+                break;
+            case 1488:
+                if (mode == 1) *pstr = text(127);
+                else if (mode == 0) *pstr = text(130);
+                break;
+            default: break;
+            }
+            return true;
+        }
         return false;
     }
+}
+
+LO* PnodeEpMenuCur3() { return FEpMenu3Active() ? PnodeCur(s_epm3.cur) : nullptr; }
+
+LO* PnodeTwoPlayerShown3()
+{
+    // (the Two Player list's page: state 12 of episode 0)
+    if (!FEpMenu3Active() || s_epm3.state != 12 || s_epm3.cur != 0) return nullptr;
+    return PnodeCur(s_epm3.cur);
+}
+
+std::string StrEpisodeName3(int iep)
+{
+    return iep >= 0 && iep < 9 && s_pswEpm ? StrText3(s_pswEpm, NElf(VA_NAMES + 4 * uint32_t(iep))) : std::string(sly3::SzEpisode(iep));
 }

@@ -20,6 +20,7 @@
 #include "update.h"
 #include "worldaccess.h"
 #include "worldglobals.h"
+#include "game/task3.h"
 
 #include <algorithm>
 #include <chrono>
@@ -49,6 +50,7 @@ struct KEPT
     uint32_t hbank = 0;
 };
 std::vector<KEPT*> s_akept;
+std::unordered_map<int, std::pair<int, int>> s_mpkeys;   // (Sly 3: SetPcKeptWorldKeys)
 bool s_fWorldStarting = false;
 std::unordered_map<const void*, int> s_mpcopyiwrec;   // the running world's copies' objects -> their kept world (sounds)   // between a world's load and its start (copies start with the world)
 
@@ -82,7 +84,11 @@ void Instantiate(KEPT* pk, std::vector<uint8_t> ab)
     std::size_t cbRead = 0, cbFile = 0;
     g_psoundKeptLoad = &pk->sound;   // (its music block read aside: the running world's bank and streams untouched)
     g_fKeptWorldLoad = true;
+    // (Sly 3: its option block chosen by the keys asked for, sw.cpp; the running game's keys back after)
+    const OID oidJobRun = g_gametasks3.oidJob, oidChkRun = g_gametasks3.oidChk;
+    if (auto it = s_mpkeys.find(pk->iwrec); it != s_mpkeys.end()) g_gametasks3.oidJob = it->second.first, g_gametasks3.oidChk = it->second.second;
     const bool fOk = FLoadWorldBytes(psw, pk->fk, std::move(ab), "", &cbRead, &cbFile);
+    g_gametasks3.oidJob = oidJobRun, g_gametasks3.oidChk = oidChkRun;
     g_psoundKeptLoad = nullptr;
     g_psw = psw;
     // the records' run-time parts, the ASEG / SM fields and the bone bindings, as a world start makes them (no object's
@@ -133,8 +139,8 @@ void Instantiate(KEPT* pk, std::vector<uint8_t> ab)
                 std::printf("pc loader:   sound id %d: bank sound %d (running world: %d)\n", id, pk->sound.aisoundFromId[size_t(id)], g_sound.aisoundFromId[size_t(id)]);
     }
     const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
-    std::printf("pc loader: world %d kept (%zu objects, %.0f ms on the game thread%s)%s\n", pk->iwrec, psw->aploAll.size(), ms,
-                pswRun ? ", the world running" : "", fOk ? "" : " FAILED");
+    std::printf("pc loader: world %d kept (%zu objects, %zu bytes of its file, %.0f ms on the game thread%s)%s\n", pk->iwrec, psw->aploAll.size(),
+                cbFile, ms, pswRun ? ", the world running" : "", fOk ? "" : " FAILED");
 }
 // A kept world's sound id in its own bank (false: its bank is the running world's, or not loaded).
 bool FKeptSound(int iwrec, int sfxid, uint32_t* phbank, int* pisound, int* pkind)
@@ -250,6 +256,34 @@ int IwrecOfPcCopy(const LO* plo)
     return it != s_mpcopyiwrec.end() ? it->second : -1;
 }
 
+const SHD* PshdPcKeptOfCopy(const LO* plo, int32_t id)
+{
+    if (!plo || s_mpcopyiwrec.empty()) return nullptr;
+    const auto it = s_mpcopyiwrec.find(plo);
+    const KEPT* pk = it != s_mpcopyiwrec.end() ? PkFind(it->second) : nullptr;
+    if (!pk || pk->pckws != PCKWS_Ready) return nullptr;
+    for (auto itS = pk->shds.ashd.rbegin(); itS != pk->shds.ashd.rend(); ++itS)
+        if ((*itS)->id == id) return itS->get();
+    return nullptr;
+}
+
+void SetPcKeptWorldKeys(int iwrec, int oidJob, int oidChk) { s_mpkeys[iwrec] = {oidJob, oidChk}; }
+
+int CImportPcKeptDialogs(int iwrec, const int* aid, int cid)
+{
+    const KEPT* pk = PkFind(iwrec);
+    if (!pk || pk->pckws != PCKWS_Ready) return 0;
+    std::lock_guard<std::recursive_mutex> lock(g_mtxSound);
+    int c = 0;
+    for (int i = 0; i < cid; ++i)
+    {
+        if (PstreamFindDialog(aid[i])) continue;
+        for (const SNDSTREAM& st : pk->sound.adialog)
+            if (st.id == aid[i]) { g_sound.adialog.push_back(st); ++c; break; }
+    }
+    return c;
+}
+
 CSnd* PsndNewPcKept(int iwrec, int sfxid)
 {
     uint32_t hbank = 0;
@@ -278,7 +312,9 @@ void RequestPcKeptWorld(int iwrec)
     pk->fut = std::async(std::launch::async, [fk] {
         try
         {
-            return g_disc.ReadWorld(fk);
+            // (format 3: the world without its level, the groups its index marks "level": the guests, guards and
+            // bosses are in groups of their own; disc.h ReadWorldReduced)
+            return g_disc.ReadWorldReduced(fk);
         }
         catch (const std::exception& e)
         {
@@ -329,11 +365,11 @@ SHDS* PshdsKept(int iwrec)
     return pk && pk->pckws == PCKWS_Ready ? &pk->shds : nullptr;
 }
 
-LO* PloPcCloneIntoWorld(SW* psw, LO* ptmpl, bool fAdd)
+LO* PloPcCloneIntoWorld(SW* psw, LO* ptmpl, bool fAdd, ALO* paloParent)
 {
     if (!psw || !ptmpl) return nullptr;
     const std::size_t i0 = psw->aploLoad.size();
-    LO* plo = PloCloneLo(ptmpl, psw, nullptr);
+    LO* plo = PloCloneLo(ptmpl, psw, paloParent);
     if (!plo) return nullptr;
     if (!fAdd) RemoveLo(psw, plo);   // (as a proxy's spare: out of the world until used)
     std::vector<LO*> anew(psw->aploLoad.begin() + std::ptrdiff_t(i0), psw->aploLoad.end());

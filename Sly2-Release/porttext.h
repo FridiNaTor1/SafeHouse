@@ -1,8 +1,8 @@
 #pragma once
 
 // The port's own UI text (the PC QoL: the pause menu's Exit to Desktop, the display / controls / keyboard options,
-// the hold-to-skip hint, Replay Jobs) in the game's language (g_nLang): the European discs' 11 languages and the
-// Japanese disc's Japanese. The USA disc (English) shows exactly the English strings. The debug menu stays English.
+// the hold-to-skip hint, Replay Jobs) in the game's language (g_nLang): the European discs' 11 languages, the
+// Japanese disc's Japanese and the Korean disc's Korean. The USA disc (English) shows exactly the English strings. The debug menu stays English.
 //
 // Where the game has the word itself, the table uses the game's (its menus' On / Off, the Binocucom's name, the
 // "Operation:" style and the word for a job in each language: porttext.cpp marks each row G (the game's words) or
@@ -10,9 +10,17 @@
 // Strings are returned in the game's text encoding: Latin-1 on the USA / European discs (their fonts' 224 glyphs),
 // the port's UTF-8 form of the 16-bit characters on the Japanese disc (region.h ChDecode). The Japanese strings use
 // only the Japanese font's 1028 glyphs (kana, ASCII and its kanji).
+//
+// A language of the languages folder (or Mods/Languages/<language>/) can have its own: its Text.json's "port" object,
+// by row name (PTX_<name> without "PTX_": "HoldToSkip", "ExitToDesktop"; "Action.<id>" and "ActionGroup.<Words>" for
+// the Remap page's actions and groups; "DecimalMark": "." or ","), UTF-8. The rows it lacks come from the built-in
+// column of the language it is based on (langstore.h LangPortBase), else English. A string whose %-codes differ from the
+// English one's is not used. --dump-port-text DIR writes every built-in column (MODDING.md "Text and subtitles").
 
 #include <string>
 #include <string_view>
+#include <utility>
+#include <vector>
 
 namespace cane::sly2input { enum class Action; }
 
@@ -48,6 +56,8 @@ enum PTX : int
     PTX_Uncapped,
     // the display options' Long Shadows (settings v16, render.cpp FBuildShadow2)
     PTX_LongShadows,
+    // the display options' Fast Shadows (settings v20, display.h fFastShadows; not on the Switch: always on there)
+    PTX_FastShadows,
     // Invert Controls... (settings v17): its page entry, the controller's camera (with the right stick's icon), the
     // mouse in each view (the controller's binocucom / turret rows are the game's own options 0x51 / 0x53)
     PTX_InvertControlsPage, PTX_PadInvertCameraX, PTX_PadInvertCameraY, PTX_MouseInvertCameraX, PTX_MouseInvertCameraY,
@@ -55,11 +65,50 @@ enum PTX : int
     PTX_AutoCameraRotation,
     PTX_AdvancedBindings, PTX_ActionBindings, PTX_ActionKeyboard, PTX_ActionController,
     PTX_ResetAdvancedBindings, PTX_CaptureAction,
+    // the Remap page (remappage.h): its entry, title, column heads, last rows, hints and capture lines
+    PTX_RemapPage, PTX_RemapTitle, PTX_RemapAction, PTX_RemapKeyboard, PTX_RemapController, PTX_RemapReset,
+    PTX_RemapBack, PTX_RemapChange, PTX_RemapClear, PTX_RemapPressKey, PTX_RemapPressButton, PTX_RemapFixed,
+    // (VR, vr.h) the pause menu's VR Settings page (shown with a headset only)
+    PTX_VrSettings, PTX_VrMode, PTX_VrImmersive, PTX_VrFlatScreen, PTX_VrFirstPerson, PTX_VrVignette, PTX_VrLow, PTX_VrMedium, PTX_VrHigh,
+    PTX_VrScreenSize, PTX_VrSmall, PTX_VrLarge, PTX_VrRefreshRate, PTX_VrEyeResolution, PTX_VrFoveation, PTX_VrMultiview, PTX_VrUpscaling, PTX_VrSharpen, PTX_VrSuperResolution, PTX_VrDynamic, PTX_VrWorldScale, PTX_VrRecenter,
+    PTX_VrCutscenes, PTX_VrRcTable,
+    // the pause menu's Exit to Desktop when the game was started from SafeHouse's Collection Style Launcher
+    // (SAFEHOUSE_LAUNCHER=collection: quitting returns to it)
+    PTX_QuitToLauncher,
+    // (audio, notes/AUDIO_2026-11-10.md) the options' Audio Devices page: the game's output, the microphone (USB
+    // Headset), the headset's speaker; a device's values ("%s (not connected)": a chosen device that is missing)
+    PTX_AudioDevicesPage, PTX_OutputDevice, PTX_InputDevice, PTX_HeadsetOutputDevice, PTX_SystemDefault, PTX_SameAsOutput,
+    PTX_NotConnected,
+    // (langstore.h) the language menu's entry of a language whose text this disc cannot show: "Japanese (voices only)"
+    PTX_LanguageVoicesOnly,
+    // (the options' Language... page, region.h g_nLangVoice) its entry, its two rows, the voices' default, a choice
+    // that takes effect when the next world loads
+    PTX_LanguagePage, PTX_TextLanguage, PTX_VoiceLanguage, PTX_SameAsText, PTX_FromNextArea,
+    // (upscaling, fsr.h) the display options' Upscaling rows (also in VR Settings on a PC headset): the option, its
+    // method, preset and sharpness rows, AMD's preset names
+    PTX_Upscaling, PTX_UpscaleMethod, PTX_UpscalePreset, PTX_UpscaleSharpness, PTX_UltraQuality, PTX_Quality, PTX_Balanced,
+    PTX_Performance,
+    // (display.h outlineThickness) the display options' and VR Settings' Outline Thickness
+    PTX_OutlineThickness,
+    // (VR, controlspage.cpp) the Controls page's camera label in First Person: the right stick turns the body in steps
+    PTX_VrSnapTurn,
+    // (VR, promptglyph.cpp) the HP Reverb G2's menu buttons (Select / Start) by name
+    PTX_VrMenuLeft, PTX_VrMenuRight,
+    // (settings v22, display.h monitor) the display options' Monitor row and its default
+    PTX_Monitor, PTX_Primary,
+    // (menu.cpp, the Language... page left with a new language waiting) the prompt: restart from the last checkpoint now in
+    // it, or keep playing and have it from the next area
+    PTX_LangReloadQuestion, PTX_LangReloadNow, PTX_LangReloadLater,
+    // (display.h hudPlacement) the display options' HUD Placement (4:3 / 16:9 / 16:10 / Match Screen)
+    PTX_HudPlacement, PTX_MatchScreen,
     PTX_Max
 };
 
 // The string in the current language, in the game's text encoding.
 std::string StrPort(PTX ptx);
+// Started from SafeHouse's Collection Style Launcher (SAFEHOUSE_LAUNCHER=collection): the pause menu's Exit to Desktop
+// says Quit to Launcher (PTX_QuitToLauncher; quitting returns to that launcher, which waits for the game).
+bool FQuitToLauncher();
 // "<label><sep><value>" ("Mouse Camera: On"); a value from the port's table or any text already encoded.
 std::string StrPortValue(PTX ptxLabel, const std::string& value);
 std::string StrPortOnOff(PTX ptxLabel, bool f);
@@ -73,6 +122,11 @@ std::string StrPortActionName(cane::sly2input::Action action);
 std::string StrPortActionGroup(std::string_view group);
 // The language is the USA disc's English (the strings are the port's original ones).
 bool FPortEnglish();
+// The built-in columns: LANG_English .. LANG_Korean.
+constexpr int CLANG_PORT = 13;
+// Every port string of a built-in column (LANG_English .. LANG_Korean) by row name, UTF-8, in table order (the rows,
+// DecimalMark, the actions, the action groups): --dump-port-text, --check-language.
+std::vector<std::pair<std::string, std::string>> PortTextColumn(int lang);
 
 // The game's own PS2 messages said for a PC (the memory card's: the save data, "do not close the game"; the USB
 // headset option's "(for PlayStation 2)") in the current language, as UTF-8, or null when the string is not one of
@@ -80,3 +134,8 @@ bool FPortEnglish();
 // FPcWording(): the "Original PlayStation Icons" option shows the original wording.
 const char* SzPcWording(int idDisc);
 bool FPcWording();
+
+// The pause menu's "Exit to Episode Menu" in the languages whose text says "DVD menu" (Dutch, Portuguese, Danish,
+// Finnish, Norwegian, Swedish) named as the others name it (UTF-8; null: the game's own string). splayer.cpp
+// StrLocalized, always (not a PS2-for-PC wording: a naming fix), unless a text mod changed the string.
+const char* SzEpisodeMenuWording(int idDisc);

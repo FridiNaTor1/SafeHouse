@@ -63,6 +63,11 @@ public:
         std::vector<fs::path> general;
         if (home && *home) {
             const fs::path h(home);
+#ifdef CANE_ANDROID
+            result.push_back(h / "imports");  // (the disc images copied in through the document picker, native_dialog.h)
+#elif defined(CANE_IOS)
+            result.push_back(h / "Documents" / "imports");  // (the document picker's copies; Documents: the Files app's folder)
+#endif
             for (auto name : romFolders) result.push_back(h / name);
             for (auto name : { "Games", "Downloads", "Desktop", "Documents" }) general.push_back(h / name);
         }
@@ -108,7 +113,7 @@ private:
     // Compares on the native string: path::string() throws on Windows for
     // names that the ANSI code page cannot represent.
     static bool hidden(const std::filesystem::path& entry) {
-        const auto& name = entry.filename().native();
+        const auto name = entry.filename().native();
         return name.empty() || name.front() == '.';
     }
     void visit(const std::filesystem::path& folder, int depth, std::vector<IsoCandidate>& found, size_t& entries) {

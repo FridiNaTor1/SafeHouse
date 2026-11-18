@@ -13,9 +13,11 @@ struct CLOCK
     float rDtReal = 1.0f;   // +0x0C factor 8 (the real clock's rate)
     float dtReal = 0.0f;    // +0x10
     float tReal = 0.0f;     // +0x14
-    float af[9] = {1, 1, 1, 1, 1, 1, 1, 1, 1};  // +0x18: rate factors (af[3] also scales the frame step)
-    float t3C = 0.0f;       // +0x3C
-    float dt40 = 0.0f;      // +0x40 the frame step before the factors' product
+    // +0x18: rate factors (af[3] also scales the frame step). Sly 3 has ten (orig3 0x165570; t3C / dt40 at +0x40 /
+    // +0x44): factor 9 is the HUD notice's (0x222D38 / 0x222DC8, audit 5 CORE5-08)
+    float af[10] = {1, 1, 1, 1, 1, 1, 1, 1, 1, 1};
+    float t3C = 0.0f;       // +0x3C (Sly 3 +0x40)
+    float dt40 = 0.0f;      // +0x40 (Sly 3 +0x44) the frame step before the factors' product
     uint64_t tick = 0;      // +0x48 the host tick of the last update (294.912 MHz units)
 };
 

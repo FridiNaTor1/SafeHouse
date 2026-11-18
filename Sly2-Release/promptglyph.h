@@ -55,6 +55,25 @@ std::string StrPromptFallbackText(const std::string& text);
 // the option on, comes back unchanged. Only for text drawn with an icon font.
 std::string StrPromptButtonWords(const std::string& text, int textId);
 
+// (VR) The prompts' family for the VR controllers in use (platform/vr_pad_map.h Controllers, as int): Index ValveIndex,
+// the Vive wands and WMR ViveWand (the Pads layout: each trackpad's click a face button), the Steam Frame SteamFrame, Pico
+// Pico, the others (Touch, Vive Focus 3 / Cosmos, HP Reverb G2, the generic profile) MetaQuest.
+cane::input::Family VrPromptFamily(int controllers);
+// The VR controllers the prompts of a VR family show: those in use (vr::ControllersInUse) when that is their family,
+// else the family's own (MetaQuest Touch, ValveIndex Index, SteamFrame Frame, ViveWand Vive, Pico Pico); 0 (None) for a
+// family that is not a VR one. (The generic profile shows as Touch.)
+int VrControllersFor(cane::input::Family family);
+// A button's icon for a VR family where the controllers in use differ from the family's art: WMR's sticks (the Vive
+// wand art has trackpads), the HP Reverb G2's Select (its left menu button; the Touch art's Select is the grip + stick
+// click combo). Unchanged otherwise.
+void VrButtonIcon(cane::input::Button& button, cane::input::Family& family);
+// cane::input::buttonLabel with the same differences ("Left stick" on WMR, "Menu (Left)" on the HP Reverb G2).
+std::string PromptButtonName(cane::input::Button button, cane::input::Family family);
+
+// (VR) The icons of the Select ('_') / Start ('!') glyph as an icon run ("&2...&."), the grip + stick-click combo's two
+// icons with "+" between where the controllers in use make them so (the Controls page's combo labels).
+std::string StrPromptComboIcons(char ch);
+
 // An icon-font glyph drawn as a fixed keyboard key (e.g. the debug menu's F10).
 // Optionally override its controller binding for contextual action cues. Scoped to this object's lifetime.
 struct PROMPTKEYGLYPH

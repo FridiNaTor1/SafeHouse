@@ -7,6 +7,7 @@
 #include "disc.h"
 #include "region.h"
 #include "sw.h"
+#include "langstore.h"
 
 #include "../platform/platform.h"
 
@@ -68,6 +69,13 @@ std::string Latin1OfUtf8(const std::string& s)
     return out;
 }
 
+}  // namespace
+
+std::string Utf8OfGameText(const std::string& s) { return Utf8OfLatin1(s); }
+std::string GameTextOfUtf8(const std::string& s) { return Latin1OfUtf8(s); }
+
+namespace
+{
 bool FParseId(const std::string& key, int& id)
 {
     char* end = nullptr;
@@ -89,44 +97,54 @@ const TEXTMOD* PtextmodForLanguage(int lang)
     const auto it = s_mp.find(lang);
     if (it != s_mp.end()) return it->second.get();
     std::unique_ptr<TEXTMOD> p;
-    if (!g_disc.DirMods().empty() && lang >= 0 && lang < LANG_Max)
+    // every mod folder's Text/<Language>.json (the packages', the loose folder's, lowest priority first; a later
+    // file's string wins)
+    for (const std::string& root : g_disc.AdirModRoots())
     {
-        const fs::path path = cane::path(g_disc.DirMods()) / "Text" / (std::string(s_aszLanguage[lang]) + ".json");
+        if (lang < 0) break;
+        const fs::path path = cane::path(root) / "Text" / (std::string(SzLanguageModName(lang)) + ".json");
         std::error_code ec;
-        if (fs::is_regular_file(path, ec))
+        if (!fs::is_regular_file(path, ec)) continue;
+        auto pfile = std::make_unique<TEXTMOD>();
+        try
         {
-            p = std::make_unique<TEXTMOD>();
-            try
-            {
-                std::ifstream in(path);
-                const json j = json::parse(in, nullptr, true, true);   // (comments allowed)
-                int c = 0;
-                auto read = [&](const json& o, std::unordered_map<int, std::string>& mp) {
-                    for (const auto& [k, v] : o.items())
-                    {
-                        int id = 0;
-                        if (!v.is_string() || !FParseId(k, id)) { std::printf("mods: %s: skipped \"%s\" (not an id and a string)\n", cane::utf8(path).c_str(), k.c_str()); continue; }
-                        mp[id] = Latin1OfUtf8(v.get<std::string>());
-                        ++c;
-                    }
-                };
-                if (j.contains("strings")) read(j.at("strings"), p->mpstr);
-                if (j.contains("worlds"))
-                    for (const auto& [name, o] : j.at("worlds").items()) read(o, p->mpworld[name]);
-                std::printf("mods: %d strings from %s\n", c, cane::utf8(path).c_str());
-            }
-            catch (const std::exception& e)
-            {
-                std::printf("mods: %s: %s (the file is ignored)\n", cane::utf8(path).c_str(), e.what());
-                p.reset();
-            }
+            std::ifstream in(path);
+            const json j = json::parse(in, nullptr, true, true);   // (comments allowed)
+            int c = 0;
+            auto read = [&](const json& o, std::unordered_map<int, std::string>& mp) {
+                for (const auto& [k, v] : o.items())
+                {
+                    int id = 0;
+                    if (!v.is_string() || !FParseId(k, id)) { std::printf("mods: %s: skipped \"%s\" (not an id and a string)\n", cane::utf8(path).c_str(), k.c_str()); continue; }
+                    mp[id] = Latin1OfUtf8(v.get<std::string>());
+                    ++c;
+                }
+            };
+            if (j.contains("strings")) read(j.at("strings"), pfile->mpstr);
+            if (j.contains("worlds"))
+                for (const auto& [name, o] : j.at("worlds").items()) read(o, pfile->mpworld[name]);
+            std::printf("mods: %d strings from %s\n", c, cane::utf8(path).c_str());
         }
+        catch (const std::exception& e)
+        {
+            std::printf("mods: %s: %s (the file is ignored)\n", cane::utf8(path).c_str(), e.what());
+            continue;
+        }
+        if (!p) { p = std::move(pfile); continue; }
+        for (auto& [id, str] : pfile->mpstr) p->mpstr[id] = std::move(str);
+        for (auto& [name, mp] : pfile->mpworld)
+            for (auto& [id, str] : mp) p->mpworld[name][id] = std::move(str);
     }
     return (s_mp[lang] = std::move(p)).get();
 }
 }  // namespace
 
-const char* SzLanguageModName(int lang) { return lang >= 0 && lang < LANG_Max ? s_aszLanguage[lang] : "Unknown"; }
+const char* SzLanguageModName(int lang)
+{
+    if (lang >= 0 && lang < LANG_Max) return s_aszLanguage[lang];
+    const char* sz = SzLangStoreKey(lang);   // (a custom language: its folder name, langstore.h)
+    return sz ? sz : "Unknown";
+}
 
 void ApplyTextMods(std::vector<std::pair<int, std::string>>& atext)
 {
@@ -172,9 +190,9 @@ int DumpTextCommand(const std::string& dir)
     std::error_code ec;
     fs::create_directories(cane::path(dir), ec);
     const int langSave = g_nLang;
-    for (int k = 0; k < CLanguages(); ++k)
+    for (int k = 0; k < CLanguagesDisc(); ++k)
     {
-        g_nLang = LanguageOfIndex(k);
+        g_nLang = LanguageOfDiscIndex(k);
         // id -> (string -> the worlds that have it)
         std::map<int, std::map<std::string, std::vector<std::string>>> mp;
         for (const auto& [name, fk, filter] : aworld)

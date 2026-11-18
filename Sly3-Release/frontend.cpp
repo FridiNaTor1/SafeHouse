@@ -8,10 +8,17 @@
 #include "rumble.h"
 #include "game/sly3.h"
 #include "frontend.h"
+#include "game/scptgame3.h"
+#include "challenge3.h"
+#include "tally3.h"
 #include "epmenu3.h"
 #include "jobend3.h"
 #include "card3.h"
 #include "screen3.h"
+#include "cheat.h"
+#include "../platform/sly3_settings.h"
+#include "display.h"
+#include <type_traits>
 #include "replay.h"
 #include "game.h"
 
@@ -43,7 +50,9 @@
 #include "transition.h"
 #include "update.h"
 #include "worldaccess.h"
+#include "actor.h"
 #include "../platform/platform.h"
+#include "modsave.h"
 
 #include <algorithm>
 #include <cmath>
@@ -107,6 +116,8 @@ const char* const s_aszEpisode[9] = {"intro", "nightclub", "palace", "temple", "
 
 // orig 0x2BE080.. (the episode menu's tables in the executable)
 int32_t NElf(uint32_t va) { return int32_t(g_disc.U32Elf(va)); }  // (an address comes back as the USA one: disc.h)
+// orig 0x2BE26C: every episode and movie open (0 in the executable; the cheat code R R1 D R1 D D sets it: cheat.h)
+bool FAllEpisodesOpen() { return NElf(0x2BE26C) != 0 || FCheatAllEpisodes(); }
 
 GAMESAVE s_gsPending;   // orig taskmgr +0x1C (0x2DEB4C): the save the next load starts from
 bool s_fPending = false;
@@ -193,7 +204,7 @@ void SetEpMode(EPMENU& p, int mode, int sub)
 // orig 0x0015D798: the movies open for the current episode's list
 int CmovieOpen(const EPMENU& p)
 {
-    if (NElf(0x2BE26C)) return 0x10;
+    if (FAllEpisodesOpen()) return 0x10;
     int n = NElf(0x2BE2D0 + 4 * uint32_t(p.max));
     if (GRef(RefGetProgress({"episode", s_aszEpisode[p.max], "dt"})) == 0.0f) n -= 2;
     else if (NRef(RefGetProgress({"episode", s_aszEpisode[p.max], "percent_complete"})) <= 99) n -= 1;
@@ -208,7 +219,7 @@ void StartEpMenu(EPMENU& p, LO* plo)
     p = EPMENU{};
     p.plo = plo;
     p.max = 8;
-    while (!NElf(0x2BE26C))
+    while (!FAllEpisodesOpen())
     {
         if (GRef(RefGetProgress({"episode", s_aszEpisode[p.max], "dt"})) != 0.0f) break;
         if (NRef(RefGetProgress({"episode", s_aszEpisode[p.max - 1], "percent_complete"})) >= 100) break;
@@ -273,7 +284,7 @@ void UpdateEpMenu(EPMENU& p, SW* psw)
         if (p.hint == 0)
         {
             const int32_t va = NElf(0x2BE248 + 4 * uint32_t(p.cur));
-            const bool fOpen = FPercentDone(p.cur) || NElf(0x2BE26C) != 0;
+            const bool fOpen = FPercentDone(p.cur) || FAllEpisodesOpen();
             if (va && fOpen && g_clock.tReal - p.t130 > 10.0f) SetHint(p, 1);
         }
         else if (p.hint == 1)
@@ -489,6 +500,11 @@ void UpdateExit(LO* plo, SW* psw)
         return;
     }
     if (plo->nState != 4) return;
+    // (PC: a fired exit waits while a card message is up: the job end's first autosave shows its one-time warning
+    // (0x1CFE08 -> message 0x2F) in the frame the job's exit fires (0x187270 then 0x1874E8); the world changed under the
+    // message, whose screen object is the old world's, and the next world (the episode chooser) waited behind it. The
+    // original's card widget pauses the game (the exit's time does not come); natively the exit's delay can be 0.)
+    if (FCardMessageShown3()) return;
     float& tLoad = s_mptLoad[plo];
     if (!(0.0f < tLoad && tLoad <= g_clock.t)) return;
     const LOXSHAPE* px = dynamic_cast<const LOXSHAPE*>(plo);
@@ -502,7 +518,8 @@ void UpdateExit(LO* plo, SW* psw)
             std::printf("exit %d: movie %u queued (%u bytes)\n", plo->oid, fk.id, fk.cb);
         }
     }
-    RequestTransition(psw, px->aabKey[0].data(), OID(plo->U32Field(0, OFF_EXIT_POINT, sly3::POINT_DEFAULT)), -1, 0,
+    // (orig3 0x27FDE8: flags 0, so an exit into its own world resets it in place (TRANSF_INPLACE3) unless it queued movies)
+    RequestTransition(psw, px->aabKey[0].data(), OID(plo->U32Field(0, OFF_EXIT_POINT, sly3::POINT_DEFAULT)), -1, TRANSF_INPLACE3,
                       OID(plo->U32Field(0, OFF_EXIT_WIPE, uint32_t(-1))));
     tLoad = 0.0f;
     SetExitState(plo, 5);
@@ -615,6 +632,37 @@ void ReadSaveSlots(const std::string& dirDev)
     s_fSlotsChosen = false;
 }
 
+// (PC, migration once: display.h MigrateSaveOptions) the option flags of the newest slot with a game into Settings.ini
+// while it marks them pending (the first run after the options moved out of the saves); a card with slots but no
+// game: nothing to take (no longer pending)
+void MigrateSaveOptionsFromNewestSlot()
+{
+    if (!FSaveOptionsPending()) return;
+    cane::settings::SaveOptionValues v;
+    if (g_islotCur >= 0 && g_aslot[g_islotCur].fFile && GRef(RefProgressOfSlot(g_islotCur, {"dt"})) != 0.0f)
+    {
+        auto flag = [](int islot, const char* name, bool& has, auto& value) {
+            const CRef r = RefProgressOfSlot(islot, {"flags", name});
+            has = r.m_tagk != TAGK_Nil;
+            if (!has) return;
+            using T = std::decay_t<decltype(value)>;
+            if constexpr (std::is_same_v<T, float>) value = GRef(r);
+            else if constexpr (std::is_same_v<T, int>) value = NRef(r);
+            else value = NRef(r) != 0;
+        };
+        flag(g_islotCur, "fNoVibration", v.hasVibration, v.noVibration);
+        flag(g_islotCur, "uMusicVolume", v.hasMusic, v.musicComplement);
+        flag(g_islotCur, "uEffectsVolume", v.hasEffects, v.effectsComplement);
+        flag(g_islotCur, "nMixerMode", v.hasSpeakers, v.speakers);
+        flag(g_islotCur, "fReverseLookAround", v.hasInvertBinocucom, v.invertBinocucom);
+        flag(g_islotCur, "fReverseAim", v.hasInvertTurret, v.invertTurret);
+        std::printf("settings: the options of save %d (vibration %s, music %.2f, effects %.2f, speakers %d, invert binocucom %d, "
+                    "turret %d)\n", g_islotCur + 1, v.noVibration ? "off" : "on", 1.0f - v.musicComplement,
+                    1.0f - v.effectsComplement, v.speakers, int(v.invertBinocucom), int(v.invertTurret));
+    }
+    MigrateSaveOptions(v);
+}
+
 // orig 0x001AB418 (6): the newest of the slots with a game (time played +0x3B1C not 0); at a world's start (the
 // progress layout is the world's)
 void ChooseNewestSlot()
@@ -644,6 +692,7 @@ void ChooseNewestSlot()
         if (GRef(RefProgressOfSave(g_aslot[i].save, {"dt"})) == 0.0f) continue;
         if (g_aslot[g_islotCur].tWrite < g_aslot[i].tWrite || !g_aslot[g_islotCur].fFile) g_islotCur = i;
     }
+    MigrateSaveOptionsFromNewestSlot();
 }
 
 void RechooseSaveSlots()
@@ -668,11 +717,16 @@ bool FWriteSaveSlot(int islot)
     // orig 0x1ABCE8 / 0x1ABD40: 0x1D54B8 (the vibration choice into the record), 0x1D84B0 (the record into the slot),
     // then the card thread writes it
     ApplyVibrationSetting();
+    // (PC) the record's option flags as Settings.ini's (menu.h); a save written by this build carries them, so the
+    // options are no longer pending a migration from the saves (display.h)
+    SyncOptionsToRecord();
+    if (FSaveOptionsPending()) MigrateSaveOptions(cane::settings::SaveOptionValues{});
     GAMESAVE gs;
     CopyGameSaveForSlot(gs);
     MergeReplaySave(gs);   // (QoL Replay Jobs: a replay keeps the save's progress)
     std::string err;
     if (!FWriteGameSaveBlock(s.path, gs, err)) { std::printf("save: %s\n", err.c_str()); return false; }
+    WriteModSave(s.path);   // (mod packages' custom tasks: the side file, modsave.h; nothing without them)
     s.save = gs;
     s.fFile = true;
     s.tWrite = std::filesystem::last_write_time(cane::path(s.path), ec).time_since_epoch().count();
@@ -715,6 +769,8 @@ void QueueMovie(const uint8_t* pbKey)
 }
 
 bool FMoviesQueued() { return !s_aabMovie.empty(); }
+// (orig3 D_00389AC0: a movie batch since the last world load forces the next same-world request to reload, 0x25C2A8)
+bool g_fMovieSinceLoad3 = false;
 
 bool g_fMoviePlaying = false;
 extern int g_iframeMain;   // (game.cpp: the flow log's frame)
@@ -723,6 +779,7 @@ void PlayQueuedMovies(bool fWindow)
 {
     const auto aab = std::move(s_aabMovie);
     s_aabMovie.clear();
+    if (!aab.empty()) g_fMovieSinceLoad3 = true;
     // (test: SLY2N_MOVIESHEADLESS: played headless too, into the hidden window)
     if (!fWindow && std::getenv("SLY2N_MOVIESHEADLESS")) fWindow = true;
     if (!fWindow)   // (headless: skipped; SLY2N_TRANSLOG names them)
@@ -752,12 +809,23 @@ void PlayQueuedMovies(bool fWindow)
 // ------------------------------------------------------------ the title, the game start
 // orig 0x00161A58 (3): the game record at the world's start: reset for the title (request flags 1), the pending
 // save (0x40, 0x166008)
-void OnGameRecordEvent(int grfReq)
+// (s3-bootfix) Sly 3 resets / restores the record in 0x25AFD8 -> 0x184A08, before 0x14F440 reads the world's file, not
+// after it as Sly 2's 0x20E3C0 broadcast does. Done after the load (as before), the world loaded with the previous
+// record: the boot's m_ext (and Quit Game's, 0x18AD90) with a played game's record, its option set (0x1500F0's progress
+// fallback) and task states those of the game: no intro, no title, Sly in play on the dock (the record that RunGame
+// reads from Saves/save1 at the start, or the game just quit). SLY3_RECORDAFTERLOAD=1: after the load, as before.
+static bool FRecordAfterLoad3()
+{
+    static const bool s_f = std::getenv("SLY3_RECORDAFTERLOAD") != nullptr;
+    return s_f;
+}
+
+static void ResetOrRestoreRecord(int grfReq)
 {
     if (grfReq & 1)
     {
-        g_gamesave = GAMESAVE{};
-        ValidateGameSave();
+        ResetGameSave3(g_gamesave, false);   // orig3 0x184968 -> 0x21D010(block, 0): cleared, the language set
+        ClearModSave();   // (mod packages' custom tasks, modsave.h)
         g_islotChosen = -1;
     }
     else if ((grfReq & 0x40) && s_fPending)
@@ -766,16 +834,28 @@ void OnGameRecordEvent(int grfReq)
         // settings applied (0x1D8FF8)
         g_gamesave = s_gsPending;
         ValidateGameSave();
+        ApplyPendingModSave();   // (mod packages' custom tasks, modsave.h)
         ApplyVibrationSetting();
         ApplyGameSettings(g_gamesave);
     }
     s_fPending = false;
+}
+
+void OnGameRecordBeforeLoad3(int grfReq)
+{
+    if (!FRecordAfterLoad3()) ResetOrRestoreRecord(grfReq);
+}
+
+void OnGameRecordEvent(int grfReq)
+{
+    if (FRecordAfterLoad3()) ResetOrRestoreRecord(grfReq);
     ChooseNewestSlot();   // (orig 0x1AB630: the card's slots read at the world's start)
     // (0x161A58 case 3's end: outside an episode, the card in state 6 without a chosen slot, a record without a game:
     // the newest slot's settings, when it has a game)
     if (IepisodeCur() == 0 && g_islotChosen < 0 && g_islotCur >= 0 && GRef(RefGetProgress({"dt"})) == 0.0f &&
         GRef(RefProgressOfSlot(g_islotCur, {"dt"})) != 0.0f)
         ApplyGameSettings(g_aslot[g_islotCur].save);
+    SyncOptionsToRecord();   // (PC: the record's option flags mirror Settings.ini, menu.h)
 }
 
 void StartFrontEnd(SW* psw, int grfReq)
@@ -837,13 +917,14 @@ void ShowTitle()
 {
     if (!s_ploTitle) return;
     s_fTitle = true;
+    SetTitleHasProgress3(g_islotCur >= 0 && GRef(RefProgressOfSlot(g_islotCur, {"dt"})) != 0.0f);   // (0x222140's text)
     std::printf("title: shown at t %.2f (newest slot %d: %s)\n", g_clock.t, g_islotCur + 1,
                 g_islotCur >= 0 && GRef(RefProgressOfSlot(g_islotCur, {"dt"})) != 0.0f ? "Resume Game" : "New Game");
     ShowScreenObj(s_ploTitle, -1);
     EnableVibration();   // 0x1D5498
     s_tTitleShown = g_clock.t;
     // orig (Europe) 0x1DDBD0: the language menu when the title needs one (0x1DDB68)
-    if (FTitleNeedsLanguage(s_fTitleInputTaken, g_islotCur >= 0)) OpenLanguageMenu(g_psw);
+    if (FTitleNeedsLanguage(s_fTitleInputTaken, g_islotCur >= 0)) OpenLanguageMenu(g_psw, false);
 }
 
 // orig: 0x00165E38 func_00165E38
@@ -861,6 +942,13 @@ void StartGameFromSave(SW* psw, const GAMESAVE* pgs)
     }
     s_gsPending = *pgs;
     s_fPending = true;
+    {
+        // (mod packages' custom tasks, modsave.h: the slot's side file with its save; a new game: none)
+        std::string pathSlot;
+        for (const SAVESLOT& sl : g_aslot)
+            if (pgs == &sl.save && dt != 0.0f) pathSlot = sl.path;
+        PendModSave(pathSlot);
+    }
     g_taskmgr.oidJob = -1;   // (taskmgr +0x10 / +0x14 / +0x18)
     g_taskmgr.oidTask = -1;
     if (dt == 0.0f)
@@ -871,10 +959,41 @@ void StartGameFromSave(SW* psw, const GAMESAVE* pgs)
         return;
     }
     g_taskmgr.oidQueued = -1;
-    const int iep = NRef(RefProgressOfSave(*pgs, {"episodeCurrent"}));
+    // (orig3 0x18AB08: the save's "episodeCurrent" (1 when 0); its jobs all complete (0x25E4A0, epmenu3.cpp
+    // FEpisodeComplete3, on the save being started): the episode chooser (world 0, flags 0x12), else the episode
+    // (0x289198). Before s3fix-core2 the test read Sly 2's "episode <nightclub..> percent_complete", which Sly 3's layout
+    // does not have: a finished episode's save resumed in its world instead of the chooser. SLY3_RESUMEPCT=1: as before.)
+    int iep = NRef(RefProgressOfSave(*pgs, {"episodeCurrent"}));
+    bool fDone;
+    if (std::getenv("SLY3_RESUMEPCT"))
+        fDone = !(iep >= 0 && iep < 9) || NRef(RefProgressOfSave(*pgs, {"episode", s_aszEpisode[iep], "percent_complete"})) >= 100;
+    else
+    {
+        if (iep == 0) iep = 1;
+        const GAMESAVE saved = g_gamesave;
+        g_gamesave = *pgs;
+        fDone = FEpisodeComplete3(iep);
+        g_gamesave = saved;
+    }
+    // (s3u-title) not complete: 0x289198(SW, episode, 0x12, the save), epmenu3.cpp StartEpisode3 on the save's record
+    // (the Intro not complete: its binocucom task 1798 in m_ext; else the episode's first world, China / Pirate / Isle
+    // as there). Before, the episode's main world record was loaded with no task: a Prelude save resumed into m_ext's
+    // boot flow, the attract over and the title shown again over the binocucom (START there resumed again: a loop).
+    // SLY3_RESUMEMAIN=1: as before.
+    static const bool s_fResumeMain = std::getenv("SLY3_RESUMEMAIN") != nullptr;
+    if (!fDone && !s_fResumeMain && !std::getenv("SLY3_RESUMEPCT") && iep >= 1 && iep < 9)
+    {
+        const GAMESAVE saved = g_gamesave;
+        g_gamesave = s_gsPending;
+        StartEpisode3(psw, iep, 0x40);
+        s_gsPending = g_gamesave;   // (0x289198 writes the Isle's episodeCurrent / episodeBest into the save)
+        g_gamesave = saved;
+        return;
+    }
     const WREC* pw = iep >= 0 && iep < 9 ? PwrecEpisodeMain(iep) : nullptr;
-    const int pct = iep >= 0 && iep < 9 ? NRef(RefProgressOfSave(*pgs, {"episode", s_aszEpisode[iep], "percent_complete"})) : 100;
-    const uint8_t* pb = pw && pct < 100 ? pw->abRecord : g_disc.PbElf(0x2A3828, 64);   // (else the front end)
+    // (the front end: Sly 3's world 0, dvd_menu (the key table's first record; Sly 2's 0x2A3828 is not Sly 3's))
+    EnsureWorldRecords();
+    const uint8_t* pb = pw && !fDone ? pw->abRecord : !AwrecWorlds().empty() ? AwrecWorlds()[0].abRecord : nullptr;
     RequestTransition(psw, pb, sly3::POINT_DEFAULT, -1, 0x40, -1);
 }
 
@@ -899,12 +1018,18 @@ void UpdateTitle3(SW* psw)
     }
 }
 
-// orig 0x001DDB08: a new game (dt 0) from the current record. TODO: 0x1440D0(po, 1) on Sly / Bentley / Murray
+// orig3 0x00221EC0 (Sly 2 0x1DDB08): a new game (dt 0) from the current record; each gang character (D_00344050) gets
+// its counters started with force (0x156768(actor, 1): its health to the capacity (the challenge manager's
+// 0x284828), its power to the maximum: sly.cpp StartPlayerCounters), then StartGameFromSave 0x18AB08
+void StartPlayerCounters(ACTOR* pa, bool fReset);   // sly.cpp (orig 0x1440D0 / orig3 0x156768)
 void StartNewGameFromTitle(SW* psw)
 {
     CRef r;
     r.SetF32(0.0f);
     FSetProgress({"dt"}, r);
+    if (psw)
+        for (LO* p : AploOfClass(psw, S3CID(0x34)))
+            if (ACTOR* pa = PactorFromLo(p)) StartPlayerCounters(pa, true);
     StartGameFromSave(psw, &g_gamesave);
 }
 
@@ -916,10 +1041,18 @@ void UpdateFrontEnd(SW* psw)
     // the title, START in the game). Sly 2's episode menu / exits (below the title's input) are not
     // Sly 3's and are not run.
     UpdateCard3(psw);
+    // (s3u-title) the title's first line (0x222140): text 14 "Press START button to Resume Game" when the chosen slot
+    // (the card's +0x13954) has a game in progress, else 13 "... for New Game", as START does (UpdateTitle3); never set
+    // before: "New Game" over a START that resumed the save (the episode chooser for a finished episode)
+    if (s_fTitle) SetTitleHasProgress3(g_islotCur >= 0 && GRef(RefProgressOfSlot(g_islotCur, {"dt"})) != 0.0f);
     if (s_fTitle) UpdateTitle3(psw);
     UpdateExits3(psw);   // (the exits are Sly 3's too: class 0x18, their keys / movies / points; the world flow code)
     UpdateEpMenu3(psw);  // (dvd_menu's episode chooser, epmenu3.h)
     UpdateJobEnd3(psw);  // (the job's end screens 1066 / 1067, jobend3.h)
+    // the challenge manager's update (orig3 0x2848D0, challenge3.h): not while the players are paused (0x1A9478: the
+    // scripts' pauses, a job's end, a talk)
+    UpdateChallenge3(psw, g_gamepause.c78 > 0 || FPlayersPaused3());
+    UpdateTallies3(psw);   // (the score tallies, class 0xA5: tally3.h)
     return;
     // orig 0x001DD920 (the European build's 0x1DDCF0): the title's input
     auto startFromTitle = [psw]
@@ -1027,7 +1160,9 @@ std::string StrFrontEndScript(int id)
         if (!s_epm.plo || s_epm.cur < 0 || s_epm.cur > 8) return "";
         int n = NRef(RefGetProgress({"episode", s_aszEpisode[s_epm.cur], "percent_complete"}));
         n = n * 95 / 100;
-        const int idPowerup = NElf(0x2BE2F8 + 4 * uint32_t(s_epm.cur));
+        // (Sly 2's per-episode bonus power-ups 0x2BE2F8 were read at a raw Sly 2 address; Sly 3's episode chooser is
+        // epmenu3.cpp and its table is not mapped: no bonus here)
+        const int idPowerup = -1;
         if (idPowerup != -1 && NRef(RefGetProgress({"powerUps", "mppukfAcquired", std::to_string(idPowerup)})))
             n += 5;
         std::snprintf(ach, sizeof(ach), "%d%%", n);

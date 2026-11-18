@@ -54,7 +54,7 @@ bool FMarkerTime(ASEG* paseg, int n, float* pt)
     return false;
 }
 
-// orig 0x0011D508: the real roots of a x^2 + b x + c, ascending
+// orig 0x0011D508: the real roots of a x^2 + b x + c, ascending (orig3: 0x11EA28, the same C in the Sly 3 decomp)
 int CSolveQuadratic(float a, float b, float c, float* ax)
 {
     const float d = b * b - a * (c * 4.0f);
@@ -106,7 +106,8 @@ KIND2* Pk2ResolveAlo(ALO* palo, LO* po)
     KIND2 k;
     k.n0 = po->oid;
     k.paseg = paseg;
-    if (!FMarkerTime(paseg, 0x22, &k.t22) || !FMarkerTime(paseg, 0x23, &k.t23) || !FMarkerTime(paseg, 0x24, &k.t24))
+    // orig3: 0x258FD0 (Sly 3's markers 0x3D / 0x3E / 0x3F)
+    if (!FMarkerTime(paseg, EVK2_TAKEOFF, &k.t22) || !FMarkerTime(paseg, EVK2_MID, &k.t23) || !FMarkerTime(paseg, EVK2_LAND, &k.t24))
         return nullptr;
     k.dt18 = k.t24 - k.t23;
     k.dt14 = k.t24 - k.t22;

@@ -132,8 +132,8 @@ void Instantiate(KEPT* pk, std::vector<uint8_t> ab)
                 std::printf("pc loader:   sound id %d: bank sound %d (running world: %d)\n", id, pk->sound.aisoundFromId[size_t(id)], g_sound.aisoundFromId[size_t(id)]);
     }
     const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
-    std::printf("pc loader: world %d kept (%zu objects, %.0f ms on the game thread%s)%s\n", pk->iwrec, psw->aploAll.size(), ms,
-                pswRun ? ", the world running" : "", fOk ? "" : " FAILED");
+    std::printf("pc loader: world %d kept (%zu objects, %zu bytes of its file, %.0f ms on the game thread%s)%s\n", pk->iwrec, psw->aploAll.size(),
+                cbFile, ms, pswRun ? ", the world running" : "", fOk ? "" : " FAILED");
 }
 // A kept world's sound id in its own bank (false: its bank is the running world's, or not loaded).
 bool FKeptSound(int iwrec, int sfxid, uint32_t* phbank, int* pisound, int* pkind)
@@ -277,7 +277,9 @@ void RequestPcKeptWorld(int iwrec)
     pk->fut = std::async(std::launch::async, [fk] {
         try
         {
-            return g_disc.ReadWorld(fk);
+            // (format 3: the world without its level, the groups its index marks "level": the guests, guards and
+            // bosses are in groups of their own; disc.h ReadWorldReduced)
+            return g_disc.ReadWorldReduced(fk);
         }
         catch (const std::exception& e)
         {

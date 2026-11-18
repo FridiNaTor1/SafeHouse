@@ -58,6 +58,10 @@ struct ACTIONOBJ
     XF* pxfAim = nullptr;         // +0xA0: rotation record aimed while the action plays
     glm::vec3 vecAim{0.0f};       // +0x90: authored direction at the marker
     KINDE kinde;                  // +0xC0 what it plays (364 {oid, grf})
+    // (Sly 3 +0x9C / +0xA0 / +0xA4: the knock-back its hit gives, Sly 3's EOPID 409 (no Sly 2 twin; method 0x105418 ->
+    // 0x256C98: on, the speed away from the guard, the speed up), read by the hit's reaction 0x1C3008)
+    int fKnock = 0;
+    float gKnockOut = 0.0f, gKnockUp = 0.0f;
 };
 ACTIONOBJ* PactionOf(LO* plo, GUARD* pg);
 void PostLoadGuardAction(LO* plo); // orig: 0x0020AE18
@@ -78,10 +82,12 @@ struct JOBPURSUE : AIJOB
     int f40 = 0;                  // +0x40
     NAVREGION* pregionGoal = nullptr;  // +0x44
     glm::vec4 posGoal{0.0f};      // +0x50
+    LO* ptrig9 = nullptr;         // (orig3 0x1A4800's argument for state 9: the trigger of the reaction 0xEA)
     void Init() override;
     void Enter() override;
     void Exit() override;
     void Update() override;
+    int Message(int msg, void* pm) override;   // orig3 0x1A4B28 (the message 0x13 only: states 6..8 are the hits')
     void SetPursueState(int n);   // orig 0x176458
     bool FCanShoot();             // orig 0x175D00
     bool FTryAction();            // orig 0x175FF0
@@ -95,6 +101,8 @@ struct JOBACT : AIJOB
     float tSt = 0;                // +0x38
     ACTIONOBJ* paction = nullptr; // +0x3C
     int fHit = 0;                 // +0x40
+    LO* plistened = nullptr;      // (native: the target listened to in state 0, 0x1333C0)
+    void OnTargetMessage(int msgk, void* pv);
     void Init() override;
     void Enter() override;
     void Exit() override;

@@ -4,6 +4,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 
 
 def nsis_string(value):
@@ -66,6 +67,12 @@ def build_setup(source, payload, build, output, compiler=None, arch='x86_64'):
     temporary.unlink(missing_ok=True)
     defines.update(VERSION=version[1], OUTPUT_EXE=nsis_string(temporary), ARCH=arch,
                    APP_ICON=nsis_string(source / 'launcher/assets/safehouse.ico'))
+    # Authenticode for the uninstaller and the setup (scripts/windows/sign.py) when a certificate is configured
+    if os.environ.get('SAFEHOUSE_WINDOWS_SIGN_PFX'):
+        sign = source / 'scripts/windows/sign.py'
+        if any(c in str(p) for p in (sys.executable, sign) for c in '"$\'\n'):
+            raise RuntimeError('The Python or sign.py path cannot be passed to NSIS: ' + sys.executable)
+        defines['SIGN_COMMAND'] = f'"{sys.executable}" "{sign}"'
     prefix = '/' if os.name == 'nt' else '-'
     env = dict(os.environ)
     # A relocated NSIS (for example an extracted Debian package: <root>/bin/makensis, <root>/share/nsis) needs NSISDIR.

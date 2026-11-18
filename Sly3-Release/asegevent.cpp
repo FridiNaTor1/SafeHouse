@@ -25,9 +25,12 @@
 #include "guard.h"
 #include "xf.h"
 #include "pccharacter.h"
+#include "combo3.h"
+#include "game/scptgame3.h"
 #include "pe.h"
 #include "update.h"   // (PC addition, debug menu only: Carmelita's moveset)
 #include <algorithm>
+#include <bit>
 
 #include <cstdio>
 #include <cstring>
@@ -80,7 +83,7 @@ void SetFadeRate(ALO* palo, float dg)
     palo->dgFade = dg;
 }
 
-// orig: 0x001F7BF8 (the authored fade-out duration, also exposed by splice method 127)
+// orig: 0x001F7BF8 (the authored fade-out duration, also exposed by splice method 127) (orig3: 0x2412C8, the same C in the Sly 3 decomp)
 void FadeAloOut(ALO* palo, float dt)
 {
     if (dt <= 0.0f) SetFade(palo, 0.0f, true, 0.0f);
@@ -127,15 +130,22 @@ std::unordered_map<const ASEGA*, CSndRef>& MpSndAsega()
     return s_mp;
 }
 }  // namespace
-// orig: 0x00210740's pitch terms: a guard source (cid 0x38) with its scale controller (+0xFC4: the size
-// destabilizer) adds clamp(2 - 2 x its value, 0, 1) (D_002C3EA0 {2, -2, 0}, D_002C3EB0 {0, 1}): a shrunk guard sounds
-// higher; then the game's +0x475C (no writer in the matched code: 0). Natively omitted (audit 2026-11 S2)
+// orig3: 0x25DB38's pitch terms (Sly 2's 0x210740 used the shrink controller's value instead): a STEPGUARD source
+// (Sly 3 cid 0x3A) adds its option 498's field +0x11DC (EOPID 371, a per-guard pitch) and 1.0 while it is shrunk (its
+// mode +0x112C 14 / 16: the native modes 8 / 13, guard.cpp SetGuardMode); then SW +0x4F50 (no writer in the executable:
+// 0). SLY3_ASEGPITCH2=1: Sly 2's rule (clamp(2 - 2 x scale, 0, 1)), as before
 float GSoundPitchOffset(LO* pso)
 {
     float g = 0.0f;
-    if (pso && FCidDerivedFrom(pso->Cid(), S3CID(0x38)))
-        if (const GUARD* pg = PguardFromLo(pso); pg && pg->pscaleFC4)
-            g += std::clamp(2.0f - 2.0f * pg->pscaleFC4->pos.x, 0.0f, 1.0f);
+    if (!pso || !FCidDerivedFrom(pso->Cid(), S3CID(0x38))) return g;
+    const GUARD* pg = PguardFromLo(pso);
+    if (static const bool s_fSly2 = std::getenv("SLY3_ASEGPITCH2") != nullptr; s_fSly2)
+    {
+        if (pg && pg->pscaleFC4) g += std::clamp(2.0f - 2.0f * pg->pscaleFC4->pos.x / pg->gScale3, 0.0f, 1.0f);
+        return g;
+    }
+    g += std::bit_cast<float>(pso->U32Field(0, 0x11DC, 0));
+    if (pg && (pg->nMode == 8 || pg->nMode == 13)) g += 1.0f;
     return g;
 }
 
@@ -165,10 +175,11 @@ void PlayAsegaSound(ASEGA* pasega, LO* ploOwner, const ASEGEV* pev)
     psnd->SetFalloff(static_cast<float>(pev->an[2]), static_cast<float>(pev->an[3]));
     psnd->SetVolume(pev->ag[2]);
     psnd->SetPitch(pev->ag[0] + GSoundPitchOffset(pso));
+    psnd->SetDoppler(pev->ag[1]);   // orig3 0x25DB38: 0x245130(snd, the event's second float)
     if (psnd->Kind() == 2) MpSndAsega()[pasega] = CSndRef(psnd);
 }
 
-// orig 0x002108E8 (event kind 1: the kept sound stopped when it is id (-1: any))
+// orig 0x002108E8 (event kind 1: the kept sound stopped when it is id (-1: any)) (orig3: 0x25DCA8, the same code in Sly 3)
 void StopAsegaSound(ASEGA* pasega, int id)
 {
     auto it = MpSndAsega().find(pasega);
@@ -200,7 +211,18 @@ void OnAsegaEvent(ASEGA* pasega, ASEGEV* pev)
         // an ASEG played (0x12F9B8 from 0), a script object (cid 0x72) started (0x1DFD58: the actors' SCPT)
         if (LO* plo = PloAround(ploOwner, pev->an[0]))
         {
+            if (static const bool s_f = std::getenv("SLY3_ASEG4PRINT") != nullptr; s_f)
+                std::printf("aseg4: aseg %d object %d -> %d cid 0x%X scripts %d\n", pasega->paseg ? pasega->paseg->oid : -1, ploOwner ? ploOwner->oid : -1, plo->oid, unsigned(plo->Cid()), int(FScripts3Active()));
             if (FCidDerivedFrom(plo->Cid(), S3CID(0x6D))) ApplyAseg(static_cast<ASEG*>(plo), nullptr, 0.0f, 1.0f, 0, nullptr);
+            // (Sly 3: 0x138270 case 4 starts a SCPT (0x87) with 0x225EE8(scpt, 0): the Sly 3 runner (scptgame3); the copied
+            // Sly 2 starter found no Sly 2 script and nothing ran, e.g. the prize / loot hold-up clip 751's title card
+            // script 7333 (card 7331, strings 849 / 850), s3-ui round 4)
+            else if (FCidDerivedFrom(plo->Cid(), S3CID(0x72)) && FScripts3Active())
+            {
+                if (static const bool s_f = std::getenv("SLY3_SCPTPRINT") != nullptr; s_f)
+                    std::printf("scpt3: aseg %d (object %d) starts SCPT %d\n", pasega->paseg ? pasega->paseg->oid : -1, ploOwner ? ploOwner->oid : -1, plo->oid);
+                StartScptOfLo3(plo, nullptr);
+            }
             else if (FCidDerivedFrom(plo->Cid(), S3CID(0x72)) && g_pfnStartScpt) g_pfnStartScpt(plo, 0);
             // (Sly 3's 0x138270 case 4 adds: a fade object (0x8A, StartFadeLo 0x17D7D0) and a projectile (0x59, 0x14CE20))
             else if (FCidDerivedFrom(plo->Cid(), S3CID(0x74))) StartFadeLo(plo);
@@ -233,12 +255,12 @@ void OnAsegaEvent(ASEGA* pasega, ASEGEV* pev)
         // (Sly 3: 0x25D940 starts a particle effect (PE 0x2D) instead: 0x1FE728, the effects code's TriggerPe)
         if (FCidDerivedFrom(ploEffect->Cid(), sly3::CID_PE))
         {
-            // (interim, off unless SLY3_ASEGPE=1: m_ext's turrets play ASEG 42872, whose event launches 16965's kind-2
-            // RIPs with trails; emitter.cpp's trail bursts relaunch them without end (57,600 RIPs by frame 200, 1.1
-            // million by frame 1000, 128 ms a frame): the effects code's to fix. The reference calls 0x1FE728 80 times between
-            // vblanks 1605 and 2200 (tools: SLY2_FNTRACE=1FE728).)
-            static const bool s_fOn = std::getenv("SLY3_ASEGPE") != nullptr;
-            if (s_fOn && (!pasega->palo || pasega->palo->fInWorld)) TriggerPe(ploEffect, nullptr);
+            // (m_ext's turrets play ASEG 42872, whose event launches 16965's kind-2 RIPs: once relaunched without end by
+            // the trails, now bounded (s3-prologue round 4: 0..96 RIPs along prologue_rope, as main's own count). The
+            // particles draw from their own random stream (the survey's played routes keep the game's stream);
+            // SLY3_ASEGPE=0 turns these effects off (debug).)
+            static const bool s_fOn = [] { const char* psz = std::getenv("SLY3_ASEGPE"); return !psz || std::atoi(psz) != 0; }();
+            if (s_fOn && (!pasega->palo || pasega->palo->fInWorld)) TriggerPe(ploEffect, nullptr, true);
             break;
         }
         BURSTPARAMS bp;
@@ -282,8 +304,15 @@ void OnAsegaEvent(ASEGA* pasega, ASEGEV* pev)
     // 18 / 19: the HUD timer (0x1618F8 / 0x161958; Sly 3 0x185420 at the ASEGA's time / 0x185480)
     case 18: StartHudTimer(pasega->t, g_psw); break;
     case 19: StopHudTimer(); break;
-    // 22 / 23: 0x241A38 (the object's +0xA4 picked from its list +0xA0 by id, -1 none); 25 / 26: the found object
-    // (kind 1) on / off the world's list +0x10EC (0x1399F0 / 0x1399A0): TODO(sly3)
+    // 25 / 26 (orig3 0x138270): the actor's combo definition an[0] (found by kind 1) put first in its combo list
+    // +0x10EC (0x1399F0) / taken out (0x1399A0); reversed backwards. The Guru's disappearance (clip 34997) chains its
+    // definitions so.
+    case 25: case 26:
+        if (FScripts3Active() && pasega->palo && FCidDerivedFrom(pasega->palo->Cid(), S3CID(0x34)))
+            if (ACTOR* pa = PactorFromLo(pasega->palo))
+                sly3::SetCombo3Listed(pa, pev->an[0], (pev->kind == 25) != fReverse);
+        break;
+    // 22 / 23: 0x241A38 (the object's +0xA4 picked from its list +0xA0 by id, -1 none)
     default: ++g_cAsegaEventDropped; break;
     }
 }

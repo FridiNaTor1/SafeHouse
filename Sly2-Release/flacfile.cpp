@@ -2,6 +2,7 @@
 #include "flacfile.h"
 
 #include "../platform/platform.h"
+#include "../platform/safe_paths.h"
 
 extern "C"
 {
@@ -144,7 +145,7 @@ bool FDecodeFlac(const std::vector<uint8_t>& ab, int& rate, int& cch, std::vecto
 
 bool FLoadFlac(const std::string& path, int& rate, int& cch, std::vector<int16_t>& asample, std::string* perror)
 {
-    std::ifstream in(cane::path(path), std::ios::binary);
+    std::ifstream in(cane::paths::ioPath(cane::path(path)), std::ios::binary);
     if (!in)
     {
         if (perror) *perror = "cannot read";

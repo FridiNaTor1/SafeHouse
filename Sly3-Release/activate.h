@@ -16,6 +16,7 @@
 // removals (option 26), the start scripts (which add and remove objects through the "add"/"remove" methods,
 // EOPIDs 25/26) and sets kind 0 on the objects with an update script.
 
+#include <algorithm>
 #include <cstdint>
 #include <glm/glm.hpp>
 
@@ -30,6 +31,20 @@ struct ACTVIEW
 {
     glm::vec3 posCm{0.0f};
     uint32_t grfCm = 0;
+    // (PC split screen, orig3 0x15AF58 / 0x15B068: every view's camera) the other views' positions and the OR of their
+    // flags: a kind-0 root is active within its radius of any view (the nearest one), when its mask meets any view's
+    // flags. cExtra 0: one view (single player: unchanged).
+    int cExtra = 0;
+    glm::vec3 aposExtra[3]{};
+    uint32_t grfExtra = 0;
+    uint32_t Grf() const { return grfCm | (cExtra ? grfExtra : 0u); }
+    // the distance of pos to the nearest view's camera (posMain: the first view's, as the caller has it)
+    float Dist(const glm::vec3& pos, const glm::vec3& posMain) const
+    {
+        float d = glm::distance(pos, posMain);
+        for (int i = 0; i < cExtra; ++i) d = std::min(d, glm::distance(pos, aposExtra[i]));
+        return d;
+    }
 };
 extern ACTVIEW g_actview;
 
@@ -75,6 +90,7 @@ LO* PloAttachProxy(SW* psw, LO* pproxy, int nMin);
 // orig 0x001CB250: require one object before attaching; false uses minimum score 2,
 // true also permits score 1 (an active row). A retained own row still needs score 3.
 LO* PloAcquireProxyObject(SW* psw, LO* pproxy, bool allowActive = false);
+bool FProxyHasFreeInstance(SW* psw, LO* pproxy);   // orig 0x1CB2C0 (orig3 0x1FBEA0)
 // orig 0x001CADE0: the row the proxy would use (its first object; null: none free)
 LO* PloProxyFreeRow(SW* psw, LO* pproxy, int nMin);
 // orig 0x001CB488 / 0x001CB4B8: the row of the proxy's instance plo kept / given back
@@ -87,3 +103,4 @@ extern void (*g_pfnStartScpt)(LO* plo, int n);
 // orig 0x00210338's part after the find: plo added / removed (an ALO faded over g seconds, 0x1F7C68 / 0x1F7BF8)
 void SwitchLoFaded(LO* plo, bool fOn, float g);
 void DetachAloBase27(LO* plo, LO* pproxy);  // orig 0x1CB5D0 (the ALO slot 27: the children told)
+void DetachSoBase32(LO* plo, LO* pproxy);   // orig3 0x1F3C80 (SO slot 32: the ALO base, then the hitter record cleared)

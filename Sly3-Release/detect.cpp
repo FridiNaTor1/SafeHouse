@@ -1,8 +1,12 @@
 // The guards' detectors. See detect.h. Reference: Sly2-Reference/Sly2-Release/game/m_14F030_p3.cpp (0x153DE0, 0x153EF8),
 // m_153FF8_p3.cpp (0x154080, 0x154180, 0x1541D8), m_227BB8.cpp (0x227C90) and the original's code for 0x153E60.
 
+#include "gadget.h"
 #include "detect.h"
+#include "game/task3.h"
+#include "game/scptgame3.h"
 #include "game/sly3.h"
+#include "game/guru3.h"
 #include "worldglobals.h"
 #include "worldaccess.h"
 #include "guard.h"
@@ -128,6 +132,8 @@ bool FBlocks(const DETECTOR* pdet, const SOE* psoe)
 // orig: 0x001545F0: something solid between the eye and the target's point (0x20FAA0 + 0x14CC58)
 bool FSightBlocked(const DETECTOR* pdet, LO* pso)
 {
+    // orig3: 0x170A50 starts with "+0x3D8 & 0x10: always blocked" (Sly 3's flags word, Sly 2's +0xF8 = pdet->grf)
+    if (FScripts3Active() && (pdet->grf & 0x10)) return true;
     const glm::vec3 eye = PosDetectorEye(pdet);
     const glm::vec3 pt = PosAi(pso);  // (D_2BDBF0 (0, 0, 0) in the target's frame, 0x1A6F00)
     const glm::vec3 mn = glm::min(eye, pt), mx = glm::max(eye, pt);
@@ -181,6 +187,7 @@ namespace
 bool FTargetHidden(const DETECTOR* pdet, LO* pso)
 {
     ACTOR* pa = FCidDerivedFrom(pso->Cid(), S3CID(0x34)) ? PactorFromLo(pso) : nullptr;
+    if (pa && FShadowPower2(pa)) return true;   // (Sly 3: Shadow Power Level 2, vt slot 120 0x1B0620; s3-decomp)
     if (!pa || pa->nSub4CC == -1) return false;
     switch (pa->n4C8)
     {
@@ -261,6 +268,11 @@ int NDetectState(DETECTOR* pdet, LO* pso, int k)
     // flashlight guard there does not see him (R16: natively the option had no setter and he was seen)
     if (FCidDerivedFrom(pso->Cid(), S3CID(0x34)))
         if (const ACTOR* pa = PactorFromLo(pso); pa && pa->n11AC) return 0;
+    // orig3 0x170580: the Guru (class 0x37) is unseen while his +0x15F8 is set (option 1800, EOPID 2028): his own splice
+    // (block 29 module 0) sets it on his "disappear" combo 34973's start (message 2) and clears it at its end (3). Without
+    // it the guards kept seeing him invisible, so m2_shaman's hint tasks 2673..2676 (a guard's detector event 0x13 about
+    // the Guru while 1800 holds: the guard losing sight of him) never came
+    if (sly3::FIsGuru3(pso) && pso->U32Field(0, 0x15F8, 0) != 0) return 0;
     // (debug: SLY2N_UNSEEN=1 sets it for every player, another value only for the player with that oid, e.g. 7 Sly,
     // as the reference's SLY2_POKE of 2E1E40@+11AC=1 does, for tests near guards without a job failure)
     static const int s_nUnseen = std::getenv("SLY2N_UNSEEN") ? std::atoi(std::getenv("SLY2N_UNSEEN")) : 0;
@@ -323,7 +335,14 @@ int NDetectState(DETECTOR* pdet, LO* pso, int k)
         return FSightBlocked(pdet, pso) ? 0 : 1;
     case 1:
         if (pdet->ploVolume2 && !FInsideShape(pdet->ploVolume2, pos)) return 0;
-        if (!FInsideShape(pdet->ploVolume, pos)) return 2;
+        // (s3fix-ai2) orig3 0x170580 case 1: leaving the view volume keeps the target as "lost but near" (2) only for a
+        // guard's detector that is hostile to it (0x2544E0 == 2); a disguised player (1), a passed one (0), or another
+        // owner's target is forgotten at once (0). Sly 2 kept 2 for everyone
+        if (!FInsideShape(pdet->ploVolume, pos))
+        {
+            GUARD* pg = pdet->ploOwner ? PguardFromLo(pdet->ploOwner) : nullptr;
+            return pg && KGuardRelation3(pg, pso) == 2 ? 2 : 0;
+        }
         break;
     case 2:
         if (pdet->ploVolume2 && !FInsideShape(pdet->ploVolume2, pos)) return 0;
@@ -354,7 +373,8 @@ void SetDetentryState(DETECTOR* pdet, DETENTRY* pe, int n)
     args[0].SetBasic(pe->plo);
     args[1].SetS32(pe->st);
     args[2].SetS32(n);
-    HandleLoSpliceEvent(pdet->plo, 28, false, 3, args);
+    // (orig3: 0x170410 sends the event 0x1F with the same three arguments: Sly 3's number)
+    HandleLoSpliceEvent(pdet->plo, FScripts3Active() ? 0x1F : 28, false, 3, args);
     // Event handlers may remove entries, which shifts the original inline slots.
     // A removed final slot is no longer observable in the active table.
     if (index < pdet->ae.size())
@@ -364,7 +384,14 @@ void SetDetentryState(DETECTOR* pdet, DETENTRY* pe, int n)
         pe->t8 = g_clock.t;
     }
     // at 1 the tasks hear of the detector's guard (its parent, 0x1A58D0 at the reset) seeing it (0x13)
-    if (n == 1 && pdet->ploOwner && FCidDerivedFrom(pdet->ploOwner->Cid(), S3CID(0x33)) && g_psw)
+    if (FScripts3Active())
+    {
+        // orig3: 0x170410: a guard's (class 0x32, the detector's parent +0x10) detector broadcasts 0x12 to the tasks when
+        // an entry becomes 1 (seen) and 0x13 on any other change, with the guard: the job's "spotted" (v_interpol's
+        // caught). The copied Sly 2 code sent 0x13 at 1, which no Sly 3 code pairs with: no task heard of a sighting.
+        if (pdet->ploOwner && FCidDerivedFrom(pdet->ploOwner->Cid(), S3CID(0x33))) Broadcast3(n == 1 ? 0x12 : 0x13, pdet->ploOwner);
+    }
+    else if (n == 1 && pdet->ploOwner && FCidDerivedFrom(pdet->ploOwner->Cid(), S3CID(0x33)) && g_psw)
         BroadcastTaskEvent(g_psw, 0x13, pdet->ploOwner);
 }
 
@@ -429,9 +456,15 @@ void RemoveDetectorTarget(DETECTOR* detector, LO* target)
         }
 }
 
-// orig: 0x00153DB0: standalone detectors also run their base splice update.
+// orig: 0x00153DB0: standalone detectors also run their base splice update. (orig3: 0x1414D0, the same C in the Sly 3 decomp)
 void UpdateDetectorObject(LO* object)
 {
+    if (static const bool s_f = std::getenv("SLY3_DETUPD") != nullptr; s_f)  // (debug: the detectors updated)
+    {
+        const DETECTOR* pd = PdetectorFromLo(object);
+        std::fprintf(stderr, "detupd %d %p owner %d %p parent %d\n", object->oid, (void*)object, pd && pd->ploOwner ? pd->ploOwner->oid : -1,
+                     pd ? (void*)pd->ploOwner : nullptr, object->paloParent ? object->paloParent->oid : -1);
+    }
     PostLoadDetector(object);
     if (PFNUPDATE update = PfnUpdateOrig(0x1A5E28)) update(object);
     UpdateDetector(PdetectorEnsure(object));
@@ -502,6 +535,43 @@ struct INITDETECTOR
         RegisterObjectSetter(350, [](LO* object, const CRef& value) {
             DETECTOR* detector = PdetectorEnsure(object);
             if (detector->fOptionsBound) RemoveDetectorTarget(detector, PloDetectorOption(object, value));
+        });
+        // (audit 4 CORE-17) Sly 3 made Sly 2's add / remove target setters (EOPIDs 349 / 350) methods of the DETECTOR (class
+        // 0x0F, options 407..411, EOPIDs 383..387): thunks 0x104E10 -> 0x16FE30 (a class's objects added, the class kept;
+        // at most 8 classes), 0x104EB8 -> 0x16FF08 (those taken out), 0x104F40 -> 0x170018 (an object added; out of the
+        // removed list), 0x104FE8 -> 0x1701B0 (an object taken out), 0x105070 -> 0x170328 (every target cleared). The
+        // rank argument (0x170118's) is not kept natively (DETENTRY::n4).
+        RegisterObjectMethod3(0x104E10, [](LO* plo, const std::vector<CRef>& a) {
+            DETECTOR* d = PdetectorEnsure(plo);
+            const int cid = a.empty() ? -1 : a[0].RefCoerceS32().m_n;
+            if (d && cid >= 0 && g_psw)
+                for (LO* po : AploOfClass(g_psw, static_cast<CID>(cid)))
+                    if (po != d->ploOwner) AddDetectorTarget(d, po);
+            return CRef(TAGK_Void);
+        });
+        RegisterObjectMethod3(0x104EB8, [](LO* plo, const std::vector<CRef>& a) {
+            DETECTOR* d = PdetectorEnsure(plo);
+            const int cid = a.empty() ? -1 : a[0].RefCoerceS32().m_n;
+            if (d && cid >= 0)
+                for (int i = int(d->ae.size()) - 1; i >= 0; --i)
+                    if (LO* po = d->ae[size_t(i)].plo; po && FCidDerivedFrom(po->Cid(), static_cast<CID>(cid))) RemoveDetectorTarget(d, po);
+            return CRef(TAGK_Void);
+        });
+        RegisterObjectMethod3(0x104F40, [](LO* plo, const std::vector<CRef>& a) {
+            DETECTOR* d = PdetectorEnsure(plo);
+            LO* po = a.empty() ? nullptr : PloDetectorOption(plo, a[0]);
+            if (d && po && po != d->ploOwner) AddDetectorTarget(d, po);
+            return CRef(TAGK_Void);
+        });
+        RegisterObjectMethod3(0x104FE8, [](LO* plo, const std::vector<CRef>& a) {
+            DETECTOR* d = PdetectorEnsure(plo);
+            LO* po = a.empty() ? nullptr : PloDetectorOption(plo, a[0]);
+            if (d && po) RemoveDetectorTarget(d, po);
+            return CRef(TAGK_Void);
+        });
+        RegisterObjectMethod3(0x105070, [](LO* plo, const std::vector<CRef>&) {
+            if (DETECTOR* d = PdetectorEnsure(plo)) d->ae.clear();
+            return CRef(TAGK_Void);
         });
         // EOPID 758 (an actor's option 741, the field +0x11AC both ways): unseen by the detectors (NDetectState)
         RegisterObjectSetter(758, [](LO* object, const CRef& value) {

@@ -2,6 +2,9 @@
 // functions (the world transition 0x210990, the task start 0x1651D8, the players' enable vt slot 79, the actors'
 // teleport slot 38, F9's job end, F6 / F7) and never write the save themselves except where marked "[save]".
 #include "debugmenu.h"
+#include "cheat.h"
+#include "debugphys.h"
+#include "debugvis.h"
 #include "actioninput.h"
 #include "region.h"
 
@@ -70,8 +73,8 @@ extern std::unordered_map<int, int> g_mpoidiwrecTask;   // autoplay.cpp / brx.cp
 namespace
 {
 // ------------------------------------------------------------ state
-enum PAGEK { PK_Root, PK_Episodes, PK_Worlds, PK_Character, PK_Teleport, PK_Jobs, PK_JobList, PK_Player, PK_Speed, PK_Display,
-             PK_Extras, PK_ExtrasChars, PK_ExtrasSly, PK_ExtrasCarm, PK_ExtrasGuardEps, PK_ExtrasGuards, PK_ExtrasBosses };
+enum PAGEK { PK_Root, PK_Cheats, PK_Episodes, PK_Worlds, PK_Character, PK_Teleport, PK_Jobs, PK_JobList, PK_Player, PK_Speed, PK_Display,
+             PK_Overlays, PK_Extras, PK_ExtrasChars, PK_ExtrasSly, PK_ExtrasCarm, PK_ExtrasGuardEps, PK_ExtrasGuards, PK_ExtrasBosses };
 struct PAGE
 {
     PAGEK pagek = PK_Root;
@@ -85,6 +88,7 @@ struct ITEM
     bool fSave = false;         // changes the save (marked "[save]")
     bool fDim = false;          // informational / not available
     std::function<void()> pfn;  // null: nothing to do
+    std::function<void(int)> pfnAdjust;   // a slider: left / right step it (-1 / +1) instead of paging
 };
 
 bool s_fOpen = false;
@@ -189,6 +193,12 @@ const char* const s_apchzWorldFile[44] = {
     "c_sawmill_lighthouse", "c_sawmill_bearcave", "c_sawmill_boss", "a_blimp_ext", "a_blimp_int",
     "a_blimp_engine_room_murray", "a_blimp_engine_room_bentley", "a_blimp_engine_room_jt", "a_blimp_boss_final"};
 
+}  // namespace
+
+const char* PchzDebugWorldFile(int iwrec) { return iwrec >= 0 && iwrec < 44 ? s_apchzWorldFile[iwrec] : ""; }
+
+namespace
+{
 // a world record's place in the game's progress ("episode.nightclub.level.cellar"): its last part
 std::string StrWorldKey(int iwrec, std::string* pstrEpisode = nullptr)
 {
@@ -377,7 +387,7 @@ void StepNoclip(SW* psw)
 }
 
 // ------------------------------------------------------------ the pages
-// ------------------------------------------------------------ PC Extras (pccharacter.h)
+// ------------------------------------------------------------ Extras (pccharacter.h)
 // a row's short label: "Carmelita (Prologue)" -> "Prologue", "Tango (Episode 2)" stays
 std::string StrShortName(int idef)
 {
@@ -476,6 +486,53 @@ void AddKindRows(std::vector<ITEM>& a, PCCHARK kind, int iep)
     }
 }
 
+// the sliders' stops (the original's values marked 1x)
+const float s_agGravity[] = {0.1f, 0.17f, 0.25f, 0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 2.0f, 3.0f, 5.0f};
+const float s_asScale[] = {0.05f, 0.1f, 0.2f, 0.33f, 0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 2.0f, 3.0f, 5.0f, 10.0f, 25.0f};
+
+template <size_t N>
+int IStop(const float (&ag)[N], float g)
+{
+    int ibest = 0;
+    for (int i = 0; i < int(N); ++i)
+        if (std::fabs(std::log(ag[i] / g)) < std::fabs(std::log(ag[ibest] / g))) ibest = i;
+    return ibest;
+}
+
+// "|----+-----|  0.5x" (the bar's notch at the value, 1x a tick)
+template <size_t N>
+std::string StrSlider(const float (&ag)[N], float g)
+{
+    const int i = IStop(ag, g);
+    std::string s = "<";
+    for (int k = 0; k < int(N); ++k) s += k == i ? "O" : ag[k] == 1.0f ? "|" : "-";
+    char ach[24];
+    std::snprintf(ach, sizeof ach, ">  %gx", g);
+    return s + ach;
+}
+
+template <size_t N>
+float GStep(const float (&ag)[N], float g, int dir) { return ag[std::clamp(IStop(ag, g) + dir, 0, int(N) - 1)]; }
+
+std::string StrButtons(const uint32_t* an, int c)
+{
+    std::string s;
+    for (int i = 0; i < c; ++i)
+    {
+        if (i) s += " ";
+        switch (an[i])
+        {
+        case 0x8000: s += "Left"; break;
+        case 0x4000: s += "Down"; break;
+        case 0x2000: s += "Right"; break;
+        case 0x1000: s += "Up"; break;
+        case 0x0008: s += "R1"; break;
+        default: s += "?"; break;
+        }
+    }
+    return s;
+}
+
 std::vector<ITEM> AitemPage(const PAGE& page, std::string* pstrTitle)
 {
     std::vector<ITEM> a;
@@ -495,7 +552,7 @@ std::vector<ITEM> AitemPage(const PAGE& page, std::string* pstrTitle)
         *pstrTitle = std::string("Sly 2: Band of Thieves PC Port (") + PchzPortVersion() + ")";
         item("Warps...", [] { Push(PK_Episodes); });
         item("Character...", [] { Push(PK_Character); }, StrPlayer(PloPoCurrent(psw)));
-        item("PC Extras...", [] { Push(PK_Extras); }, StrExtrasSummary());
+        item("Extras...", [] { Push(PK_Extras); }, StrExtrasSummary());
         item("Noclip", [] {
             s_fNoclipWant = !s_fNoclipWant;
             if (s_fNoclipWant) Close();
@@ -509,6 +566,12 @@ std::vector<ITEM> AitemPage(const PAGE& page, std::string* pstrTitle)
             item("Speed...", [] { Push(PK_Speed); }, ach);
         }
         item("Display...", [] { Push(PK_Display); });
+        {
+            int c = 0;
+            for (int k = 0; k < DV_Max; ++k) c += FDebugVisWant(DEBUGVIS(k));
+            item("Overlays...", [] { Push(PK_Overlays); }, c ? std::to_string(c) + " on" : std::string("Off"));
+        }
+        item("Cheat Codes...", [] { Push(PK_Cheats); });
         item("Reset World", [psw] {
             const int iwrec = g_transition.iwrecCur;
             if (iwrec < 0) return;
@@ -517,6 +580,16 @@ std::vector<ITEM> AitemPage(const PAGE& page, std::string* pstrTitle)
             Close();
         }, StrWorldName(g_transition.iwrecCur));
         item("Close", [] { Close(); });
+        break;
+    case PK_Cheats:
+        // the original's codes (cheat.h): entered on the pause menu (d-pad, R1); here run at once
+        *pstrTitle = "Cheat Codes (enter on the pause menu)";
+        for (int i = 0; i < CCheatCodes(); ++i)
+        {
+            const CHEATDESC d = CheatCodeDesc(i);
+            item(d.pchzName, [i] { Defer([i](SW* p) { RunCheatCode(p, i); Status(std::string("cheat: ") + CheatCodeDesc(i).pchzName); }); },
+                 StrButtons(d.an, 6) + (i == IcheatLast() ? "  (last)" : ""), d.fSave);
+        }
         break;
     case PK_Episodes:
         *pstrTitle = "Warps: Episode";
@@ -571,14 +644,14 @@ std::vector<ITEM> AitemPage(const PAGE& page, std::string* pstrTitle)
     // PC addition (pccharacter.h, pcloader.h): guest characters, guards and bosses from other worlds' files, debug only.
     // A model whose world is not kept yet is loaded while this world runs (no reload); the choice applies when ready.
     case PK_Extras:
-        *pstrTitle = "PC Extras";
+        *pstrTitle = "Extras";
         item("Characters...", [] { Push(PK_ExtrasChars); }, StrCharsSummary());
         item("Guards...", [] { Push(PK_ExtrasGuardEps); }, StrKindSummary(PCCHARK_Guard));
         item("Bosses...", [] { Push(PK_ExtrasBosses); }, StrKindSummary(PCCHARK_Boss));
         break;
     case PK_ExtrasChars:
     {
-        *pstrTitle = "PC Extras: Characters";
+        *pstrTitle = "Extras: Characters";
         const int idefSly = IdefPcCharSlyOutfit(), idefSlyWant = IdefPcCharSlyOutfitWanted();
         item("Sly...", [] { Push(PK_ExtrasSly); },
              idefSlyWant >= 0 ? StrShortName(idefSlyWant) + " (loading)" : idefSly >= 0 ? StrShortName(idefSly) : std::string("Normal"));
@@ -597,7 +670,7 @@ std::vector<ITEM> AitemPage(const PAGE& page, std::string* pstrTitle)
     }
     case PK_ExtrasSly:
     {
-        *pstrTitle = "PC Extras: Sly";
+        *pstrTitle = "Extras: Sly";
         const int idefCur = IdefPcCharSlyOutfit(), idefWant = IdefPcCharSlyOutfitWanted();
         item("Normal", [] {
             Defer([](SW* p) {
@@ -619,7 +692,7 @@ std::vector<ITEM> AitemPage(const PAGE& page, std::string* pstrTitle)
     }
     case PK_ExtrasCarm:
     {
-        *pstrTitle = "PC Extras: Carmelita";
+        *pstrTitle = "Extras: Carmelita";
         const int idefCur = IdefPcCharPuppet(), idefWant = IdefPcCharPuppetWanted();
         item("Off (the player's own model)", [] {
             Defer([](SW* p) {
@@ -645,7 +718,7 @@ std::vector<ITEM> AitemPage(const PAGE& page, std::string* pstrTitle)
         break;
     }
     case PK_ExtrasGuardEps:
-        *pstrTitle = "PC Extras: Guards";
+        *pstrTitle = "Extras: Guards";
         for (int iep = 0; iep <= 8; ++iep)
         {
             const int c = CRowsOfKind(PCCHARK_Guard, iep);
@@ -656,11 +729,11 @@ std::vector<ITEM> AitemPage(const PAGE& page, std::string* pstrTitle)
         }
         break;
     case PK_ExtrasGuards:
-        *pstrTitle = page.arg == 0 ? std::string("PC Extras: Guards, Prologue") : "PC Extras: Guards, Episode " + std::to_string(page.arg);
+        *pstrTitle = page.arg == 0 ? std::string("Extras: Guards, Prologue") : "Extras: Guards, Episode " + std::to_string(page.arg);
         AddKindRows(a, PCCHARK_Guard, page.arg);
         break;
     case PK_ExtrasBosses:
-        *pstrTitle = "PC Extras: Bosses";
+        *pstrTitle = "Extras: Bosses";
         AddKindRows(a, PCCHARK_Boss, -1);
         break;
     case PK_Teleport:
@@ -726,6 +799,21 @@ std::vector<ITEM> AitemPage(const PAGE& page, std::string* pstrTitle)
     case PK_Player:
         *pstrTitle = "Player";
         item("Infinite Health and Power (F7)", [] { g_fDebugInfinite = !g_fDebugInfinite; }, StrOnOff(g_fDebugInfinite));
+        // (debugphys.h) sliders: left / right; Cross back to 1x
+        item("Gravity", [] { SetDebugGravity(s_psw, 1.0f); Status("gravity 1x"); }, StrSlider(s_agGravity, GDebugGravity()))->pfnAdjust = [](int dir) {
+            const float g = GStep(s_agGravity, GDebugGravity(), dir);
+            SetDebugGravity(s_psw, g);
+            char ach[64];
+            std::snprintf(ach, sizeof ach, "gravity %gx (Sly, Bentley, Murray)", g);
+            Status(ach);
+        };
+        item("Character Scale", [] { SetDebugCharScale(1.0f); Status("character scale 1x"); }, StrSlider(s_asScale, SDebugCharScale()))->pfnAdjust = [](int dir) {
+            const float s = GStep(s_asScale, SDebugCharScale(), dir);
+            SetDebugCharScale(s);
+            char ach[64];
+            std::snprintf(ach, sizeof ach, "character scale %gx", s);
+            Status(ach);
+        };
         item("Refill Health and Power", [] {
             if (s_psw) CheatRefillPlayers(s_psw);
             Status("health and power refilled");
@@ -760,6 +848,36 @@ std::vector<ITEM> AitemPage(const PAGE& page, std::string* pstrTitle)
             g_fDebugFreeCam = !g_fDebugFreeCam;
             if (g_fDebugFreeCam) Close();
         }, StrOnOff(g_fDebugFreeCam) + "  (W A S D, Q E, right mouse; pad: sticks, R2 / L2, Select)");
+        break;
+    // (debugvis.h) what the game keeps hidden, drawn over the picture: each its own toggle, remembered
+    case PK_Overlays:
+        *pstrTitle = "Overlays (shown over the game; remembered)";
+        for (int k = 0; k < DV_Max; ++k)
+        {
+            const DEBUGVIS dv = DEBUGVIS(k);
+            item(SzDebugVis(dv), [dv] {
+                SetDebugVis(dv, !FDebugVisWant(dv));
+                Status(std::string(SzDebugVis(dv)) + ": " + StrOnOff(FDebugVisWant(dv)));
+            }, StrOnOff(FDebugVisWant(dv)));
+            if (dv == DV_Collision)
+                item("  Collision Distance", [] {}, "<  " + StrDebugVisCollisionRange() + "  >")->pfnAdjust = [](int dir) {
+                    StepDebugVisCollisionRange(dir);
+                    Status("collision wireframe within " + StrDebugVisCollisionRange());
+                };
+            if (dv == DV_Labels)
+            {
+                item("  Label Distance", [] {}, "<  " + StrDebugVisLabelRange() + "  >")->pfnAdjust = [](int dir) {
+                    StepDebugVisLabelRange(dir);
+                    Status("labels within " + StrDebugVisLabelRange());
+                };
+                item("  Labels Only Under Cursor / Crosshair", [] { SetDebugVisLabelsCursor(!FDebugVisLabelsCursor()); },
+                     StrOnOff(FDebugVisLabelsCursor()));
+            }
+        }
+        item("All Off", [] {
+            SetAllDebugVis(false);
+            Status("overlays off");
+        });
         break;
     }
     return a;
@@ -961,9 +1079,21 @@ void UpdateDebugMenu(SW* psw)
     else if (dir) ++s_cframeHeld;
     const bool fStep = dir && (s_cframeHeld == 0 || (s_cframeHeld >= 18 && (s_cframeHeld - 18) % 4 == 0));
     if (fStep) page.isel = (page.isel + dir + c) % c;
-    // left / right: a page down / up
-    if (grfPressed & BTN_Right) page.isel = std::min(c - 1, page.isel + CROW_SHOWN);
-    if (grfPressed & BTN_Left) page.isel = std::max(0, page.isel - CROW_SHOWN);
+    // left / right: a slider's step (repeating while held), else a page down / up
+    {
+        static int s_dirLR = 0, s_cframeLR = 0;
+        const int dirLR = (s_grfRaw & BTN_Right) || s_xStick > 0.5f ? 1 : (s_grfRaw & BTN_Left) || s_xStick < -0.5f ? -1 : 0;
+        if (dirLR != s_dirLR) s_dirLR = dirLR, s_cframeLR = 0;
+        else if (dirLR) ++s_cframeLR;
+        const bool fStepLR = dirLR && (s_cframeLR == 0 || (s_cframeLR >= 18 && (s_cframeLR - 18) % 6 == 0));
+        const ITEM& itSel = aitem[size_t(page.isel)];
+        if (itSel.pfnAdjust) { if (fStepLR) itSel.pfnAdjust(dirLR); }
+        else
+        {
+            if (grfPressed & BTN_Right) page.isel = std::min(c - 1, page.isel + CROW_SHOWN);
+            if (grfPressed & BTN_Left) page.isel = std::max(0, page.isel - CROW_SHOWN);
+        }
+    }
     // the mouse: the row under the cursor once it moves
     if (GLFWwindow* w = g_gl.window)
     {
@@ -1007,6 +1137,7 @@ void UpdateDebugMenu(SW* psw)
 void UpdateDebugTools(SW* psw)
 {
     s_psw = psw;
+    UpdateDebugVis(psw);   // (debugvis.h: the event log; reads only)
     // the noclip's player gone with its world (the objects are freed): nothing of it is touched
     if (s_ploNoclip && s_serialNoclip != psw->serial)
     {
@@ -1016,6 +1147,10 @@ void UpdateDebugTools(SW* psw)
     if (!g_pcinput.fDebugKeys)
     {
         if (s_ploNoclip) EndNoclip(psw, false);
+        // (the gravity and the character scale back to the original's)
+        if (GDebugGravity() != 1.0f) SetDebugGravity(psw, 1.0f);
+        if (SDebugCharScale() != 1.0f) SetDebugCharScale(1.0f);
+        UpdateDebugCharScale(psw);
         OnPcWorldStep(psw, false);   // (the guest characters / outfits / guards turned off: pcloader.h)
         return;
     }
@@ -1023,12 +1158,20 @@ void UpdateDebugTools(SW* psw)
     if (static const int s_frameNoclip = std::getenv("SLY2N_NOCLIPAT") ? std::atoi(std::getenv("SLY2N_NOCLIPAT")) : -1;
         s_frameNoclip >= 0 && g_frameJoy == s_frameNoclip)
         s_fNoclipWant = true;
+    // (test aids: SLY2N_CHARSCALE=s, SLY2N_GRAVITY=g: the sliders set from the start)
+    if (static bool s_fEnvPhys = false; !s_fEnvPhys)
+    {
+        s_fEnvPhys = true;
+        if (const char* psz = std::getenv("SLY2N_CHARSCALE")) SetDebugCharScale(float(std::atof(psz)));
+        if (const char* psz = std::getenv("SLY2N_GRAVITY")) SetDebugGravity(psw, float(std::atof(psz)));
+    }
     std::vector<std::function<void(SW*)>> apfn;
     apfn.swap(s_apfnDeferred);
     for (auto& pfn : apfn) pfn(psw);
     // the time scale (clock factor 4: none of the game's code sets it; a world load resets it to 1)
     if (g_clock.af[4] != s_rSpeed) SetClockFactor(&g_clock, 4, s_rSpeed);
     if (g_fDebugInfinite) CheatRefillPlayers(psw);
+    UpdateDebugCharScale(psw);   // (debugphys.h: the current player's hulls)
     // noclip: follows the current player (a character switch moves it to the new one)
     if (s_ploNoclip && (!s_fNoclipWant || PloPoCurrent(psw) != s_ploNoclip || s_ploNoclip->fRemoved)) EndNoclip(psw, false);
     if (s_fNoclipWant && !s_ploNoclip && !g_transition.fPending) BeginNoclip(psw);
@@ -1106,6 +1249,7 @@ void DrawDebugMenu()
     }
     std::string hint = strHint;
     if (fScroll) hint += "    " + std::to_string(page.isel + 1) + " / " + std::to_string(aitem.size());
+    if (page.isel >= 0 && page.isel < int(aitem.size()) && aitem[size_t(page.isel)].pfnAdjust) hint += "    Left / Right: adjust";
     DrawLine(*pfont, picons, hint, xText, yHint, sizeHint, offHint);
     if (fStatus) DrawLine(*pfont, picons, s_strStatus, xText, yStatus, sizeHint, offValue);
 }
@@ -1113,11 +1257,13 @@ void DrawDebugMenu()
 
 void DrawDebugOverlay(int width, int height)
 {
-    // (PC Extras: Carmelita's aim mode crosshair, pccharacter.h)
+    // (Extras: Carmelita's aim mode crosshair, pccharacter.h)
     const bool fCross = g_pcinput.fDebugKeys && FPcCarmCrosshair();
-    if (!g_pcinput.fDebugKeys || !(s_fOpen || s_fPerf || fCross)) return;
+    const bool fVis = FDebugVisAny();   // (debugvis.h; the test aid SLY2N_DEBUGVIS without Debug mode too)
+    if (!fVis && (!g_pcinput.fDebugKeys || !(s_fOpen || s_fPerf || fCross))) return;
     g_hud.Begin();
+    if (fVis) DrawDebugVis(g_psw);
     if (fCross) DrawPcCarmCrosshair();
-    DrawDebugMenu();
+    if (g_pcinput.fDebugKeys) DrawDebugMenu();
     g_hud.Flush(width, height);
 }

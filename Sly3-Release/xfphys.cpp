@@ -32,7 +32,7 @@ bool FXfModeMoving(int n)
 }
 // orig: 0x00230348
 bool FXfModeStill(int n) { return n == 0 || n == 3 || n == 10 || n == 12 || n == 19; }
-// orig: 0x00230380
+// orig: 0x00230380 (orig3: 0x28F048, the same code in Sly 3)
 bool FXfModeVelocity(int n) { return n == 1 || n == 2 || n == 3; }
 
 // orig: 0x001A66C8 (LO vt slot 47: the object's flags)
@@ -132,11 +132,11 @@ void UpdateAloXfWorldsHierarchy(ALO* p)
     }
 }
 NATIVEFN(0x22FBE0, UpdateAloXfWorldsHierarchy);
-// orig: 0x0022FBD8 (LO vt slot 18: nothing)
+// orig: 0x0022FBD8 (LO vt slot 18: nothing) (orig3: 0x28E8A0, the same code in Sly 3)
 void UpdateLoXfWorldsNothing(LO*) {}
 NATIVEFN(0x22FBD8, UpdateLoXfWorldsNothing);
 
-// orig: 0x0022FC48 (the point from a's space to world, then into b's)
+// orig: 0x0022FC48 (the point from a's space to world, then into b's) (orig3: 0x28E910, the same C in the Sly 3 decomp)
 glm::vec3 PosConvertXfs(XF* a, XF* b, const glm::vec3& vin)
 {
     glm::vec3 v = vin;
@@ -145,7 +145,7 @@ glm::vec3 PosConvertXfs(XF* a, XF* b, const glm::vec3& vin)
     return v;
 }
 
-// orig: 0x0022FCC8 (the direction from a's space to world, then into b's)
+// orig: 0x0022FCC8 (the direction from a's space to world, then into b's) (orig3: 0x28E990, the same C in the Sly 3 decomp)
 glm::vec3 VecConvertXfs(XF* a, XF* b, const glm::vec3& vin)
 {
     glm::vec3 v = vin;
@@ -154,7 +154,7 @@ glm::vec3 VecConvertXfs(XF* a, XF* b, const glm::vec3& vin)
     return v;
 }
 
-// orig: 0x0022FD38 (the 3x3 m from a's space into b's: inverse(b) a m in row terms)
+// orig: 0x0022FD38 (the 3x3 m from a's space into b's: inverse(b) a m in row terms) (orig3: 0x28EA00, the same C in the Sly 3 decomp)
 glm::mat3 MatConvertXfs(XF* pa, XF* pb, const glm::mat3& m)
 {
     if (pa)
@@ -200,7 +200,7 @@ void UpdateXfLink(ALO* palo, void* pv)
 
 namespace
 {
-// orig 0x0022CAD0: b rotated by the angles a.y (tilt) and a.z (pan) (the Euler rates' angular velocity)
+// orig 0x0022CAD0: b rotated by the angles a.y (tilt) and a.z (pan) (the Euler rates' angular velocity) (orig3: 0x28B440, the same code in Sly 3)
 glm::vec3 VecRotateTiltPanPhys(const glm::vec3& a, const glm::vec3& b)
 {
     float s0, c0, s1, c1;
@@ -215,7 +215,7 @@ glm::mat4 DmatSkewPhys(const glm::mat4& m, const glm::vec3& w)
     for (int i = 0; i < 3; ++i) o[i] = glm::vec4(glm::cross(w, glm::vec3(m[i])), 0.0f);
     return o;
 }
-// orig 0x0022CC00: v put by the kind in a zero matrix
+// orig 0x0022CC00: v put by the kind in a zero matrix (orig3: 0x28B570, the same C in the Sly 3 decomp)
 glm::mat4 DmatOfValuePhys(const XF* pxf, const glm::vec3& v)
 {
     glm::mat4 m(0.0f);
@@ -227,7 +227,7 @@ glm::mat4 DmatOfValuePhys(const XF* pxf, const glm::vec3& v)
 }
 }
 
-// orig: 0x00230710 (see xfphys.h)
+// orig: 0x00230710 (see xfphys.h) (orig3: 0x28F3A8, the same code in Sly 3)
 void PredictXf(XF* p, float dt, glm::mat4* pmat, glm::mat4* pdmat)
 {
     if (CTRL* pc = p->pctrlFirst)
@@ -265,7 +265,7 @@ void PredictXf(XF* p, float dt, glm::mat4* pmat, glm::mat4* pdmat)
     *pdmat = glm::mat4(0.0f);
 }
 
-// orig: 0x00230A98 (see xfphys.h)
+// orig: 0x00230A98 (see xfphys.h) (orig3: 0x28F730, the same C in the Sly 3 decomp)
 void PredictXfChain(XF* pxf, XF* pxfStop, float dt, glm::mat4* pmat, glm::mat4* pdmat)
 {
     glm::mat4 b = pdmat ? *pdmat : glm::mat4(0.0f);

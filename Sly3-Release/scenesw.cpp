@@ -1,6 +1,9 @@
+#include "fastpaths.h"
 #include "scenesw.h"
 #include "game/sly3.h"
+#include "debugphys.h"
 #include "simdmat.h"
+#include "passhelpers.h"
 #include "drawdist.h"
 #include "display.h"
 #include "pccharacter.h"
@@ -19,7 +22,12 @@
 #include "worldaccess.h"
 #include "sw.h"
 #include "trail.h"
+#include "splitscreen3.h"
 #include "vehiclehooks.h"
+#include "cplcy.h"
+#include "spliceglue.h"
+#include <cmath>
+#include <unordered_map>
 
 #include <algorithm>
 #include <cstdio>
@@ -28,22 +36,96 @@
 #include <string>
 #include <unordered_set>
 
+bool (*g_pfnPlaceDelta3)(const ALO* palo, glm::mat4* pdmat) = nullptr;
+
 namespace
 {
-void PlaceGlobset(ALO* palo, SCENEGLOBSET& sgs)
+// An entry's placement in parts: PlaceGlobsetPrepare and PlaceGlobsetFinish on the game thread (what writes shared
+// state or GL: the owner records' first lookup, the draw distance's tree cache, the trails' vertex uploads, the ropes'
+// bent vertices, the debug prints); PlaceGlobsetRange (a run of groups) and PlaceGlobsetEntry (the entry's own part,
+// with its first run) anywhere: they read the world and write only the entry, so UpdateSceneFromSw runs them on the
+// pass helpers (passhelpers.h), a big entry's groups in several runs. Prepare sizes the entry's arrays and asks for
+// the carried booty's draw delta, which every run applies to its groups.
+struct PLACEDELTA
+{
+    bool f = false;
+    glm::mat4 dmat{1.0f};
+};
+// orig3: 0x232710 (class 0x7E's draw, vt slot 21) / 0x252508 (STEPGUARD 0x3A's): seen by a camera whose policy is of
+// kind 2 (the follow camera) or 13 (the swimmer's first-person one), the object's own groups are drawn scaled by
+// clamp(clq(distance to the camera)) (SW +0x4E00 c / l / q, option 988; +0x4E10 min / max, 989; the world start's
+// 0x25AC20: 0.7 / 0.0002 / 0 and 1 / 1.5: far ones a little larger), about its origin (0x7E) or, for the guards,
+// x / y by lo and z by hi about their base in their frame, lo / hi pulsing for 0.85 s after a flinch (+0x380: sin(80 t)
+// between -0.08 and 0.05, faded by clamp(1 - 2u + u^2), u = t / 0.85). Their children draw as they are.
+namespace
+{
+std::unordered_map<const LO*, float> s_mptFlinch3;   // (STEPGUARD +0x380)
+bool FFalloffScaleDelta3(const ALO* palo, glm::mat4* pdmat)
+{
+    if (!palo || palo->axf.empty()) return false;
+    const int cid = palo->Cid();
+    // orig3: 0x1479A0 (class 0x7B's draw, vt slot 21; 2 each in h_ext / h_dogfight): for every camera seeing it, its own
+    // groups scaled about its origin by clamp(0.7 + 0.0004 d, 1, 10), d its distance to that camera (AUDIT5 RENDER5-02)
+    if (cid == 0x7B)
+    {
+        static const bool s_fOff7B = std::getenv("SLY3_NODISTSCALE7B") != nullptr;
+        if (s_fOff7B) return false;
+        const glm::mat4& w = palo->axf[0]->matWorld;
+        const float s = std::clamp(0.7f + 0.0004f * glm::distance(glm::vec3(w[3]), g_cm.pos), 1.0f, 10.0f);
+        static const bool s_fPrint7B = std::getenv("SLY3_DISTSCALEPRINT") != nullptr;
+        static int s_cPrint7B = 0;
+        if (s_fPrint7B && ++s_cPrint7B % 60 == 1)
+            std::printf("distscale7b: %d at (%.0f %.0f %.0f) scale %.2f\n", palo->oid, w[3].x, w[3].y, w[3].z, s);
+        if (s == 1.0f) return false;
+        glm::mat4 m(1.0f);
+        m[0][0] = m[1][1] = m[2][2] = s;
+        *pdmat = w * m * glm::inverse(w);
+        return true;
+    }
+    if (g_cm.ccpr <= 0 || !g_cm.acpr[0].pcplcy) return false;
+    const bool fGuard = FCidDerivedFrom(cid, 0x3A), fCreature = cid == 0x7E;
+    if (!fGuard && !fCreature) return false;
+    const CPLCY* pcp = g_cm.acpr[0].pcplcy;
+    if (pcp != &g_cmpolicies.cpfollow && pcp->VtOrig() != 0x367990) return false;
+    static const bool s_fOff = std::getenv("SLY3_NOFALLOFFSCALE") != nullptr;
+    if (s_fOff) return false;
+    const glm::mat4& w = palo->axf[0]->matWorld;
+    const float d = glm::distance(glm::vec3(w[3]), g_cm.pos);
+    const float c = GSwOptionField3(988, 0, 0.7f), l = GSwOptionField3(988, 1, 0.0002f), q = GSwOptionField3(988, 2, 0.0f);
+    const float gMin = GSwOptionField3(989, 0, 1.0f), gMax = GSwOptionField3(989, 1, 1.5f);
+    const float g0 = c + d * (l + d * q);
+    const float s = g0 < gMin ? gMin : (gMax < g0 ? gMax : g0);
+    float lo = s, hi = s;
+    glm::vec3 pivot(0.0f);
+    if (fGuard)
+    {
+        if (const STEP* pstep = PstepFromLo(const_cast<ALO*>(palo))) pivot = glm::vec3(pstep->vecBase);
+        auto it = s_mptFlinch3.find(palo);
+        const float t = it == s_mptFlinch3.end() ? 1e9f : g_clock.t - it->second;
+        if (t >= 0.0f && t < 0.85f)
+        {
+            const float sn = (std::sin(t * 80.0f) + 1.0f) * 0.5f;
+            const float u = t * 1.17647052f;
+            const float env = std::clamp(1.0f + u * (-2.0f + u), 0.0f, 1.0f);
+            const float wob = ((1.0f - sn) * -0.08f + sn * 0.05f) * env;
+            lo = s - wob;
+            hi = s + wob;
+        }
+    }
+    if (lo == 1.0f && hi == 1.0f) return false;
+    glm::mat4 m(1.0f);
+    m[0][0] = lo;
+    m[1][1] = lo;
+    m[2][2] = hi;
+    m[3] = glm::vec4((1.0f - lo) * pivot.x, (1.0f - lo) * pivot.y, (1.0f - hi) * pivot.z, 1.0f);
+    *pdmat = w * m * glm::inverse(w);
+    return true;
+}
+}  // namespace
+
+PLACEDELTA PlaceGlobsetPrepare(ALO* palo, SCENEGLOBSET& sgs)
 {
     const GLOBSET& gs = *sgs.pglobset;
-    sgs.oid = palo->oid;
-    sgs.amatGlob.resize(gs.aglob.size(), glm::mat4(1.0f));
-    sgs.afVisible.resize(gs.aglob.size(), 1);
-    const glm::mat4 matAlo = palo->axf.empty() ? glm::mat4(1.0f) : palo->axf[0]->matWorld;
-    // orig: 0x1686AC: the whole sphere uses ALO +0x60 (the object record).
-    // Actors move this record independently of record zero; group placement below is separate.
-    const glm::mat4 matBounds = palo->apxfRef[2] ? palo->apxfRef[2]->matWorld : glm::mat4(1.0f);
-    sgs.fBounds = true;
-    sgs.posBounds = glm::vec3(matBounds * glm::vec4(gs.posCenter, 1.0f));
-    sgs.sBoundsRadius = gs.sRadius;
-    sgs.sMRD = palo->sRadius;
     // (QoL draw distance above 1x: a tree with a character appears at the original's activation radius (activate.cpp
     // NDrawDistanceRoot), so it fades in there as the original's, not at the radius x the option)
     sgs.fMrdOriginal = g_display.drawDistance > 1.0f && [&] {
@@ -59,41 +141,87 @@ void PlaceGlobset(ALO* palo, SCENEGLOBSET& sgs)
             sgs.apxfOwner[i] = gs.aglob[i].oidOwner >= 0 ? PxfFindAlo(palo, gs.aglob[i].oidOwner) : nullptr;
         sgs.fOwners = true;
     }
-    for (size_t i = 0; i < gs.aglob.size(); ++i)
+    // (the arrays the runs fill, sized before any runs)
+    sgs.amatGlob.resize(gs.aglob.size(), glm::mat4(1.0f));
+    sgs.afVisible.resize(gs.aglob.size(), 1);
+#if SLY2_FASTPATHS
+    sgs.fVisibleCleared = false;   // (the placement after this sets the groups' flags)
+#endif
+    sgs.aamatBone.resize(gs.aglob.size());
+    // orig: 0x13C000 -> 0x1A5EE8: a carried booty's scale affects drawing only. Bone matrices already transform
+    // vertices to world space (bone.cpp 0x1684D0), replacing the group matrix in the shader, so both need the delta.
+    PLACEDELTA delta;
+    sgs.sDrawScale = 1.0f;
+    const bool fCharScale = FDebugCharScaleDelta(palo, &delta.dmat, &sgs.sDrawScale);   // (the debug menu's scale: debugphys.h)
+    delta.f = fCharScale || FBootyDrawDelta(palo, &delta.dmat) || FFalloffScaleDelta3(palo, &delta.dmat) ||
+              (g_pfnPlaceDelta3 && g_pfnPlaceDelta3(palo, &delta.dmat));
+    return delta;
+}
+
+// groups [iglobFirst, iglobLim) of the entry: shown, placed, their bones (and the booty's delta on both)
+void PlaceGlobsetRange(ALO* palo, SCENEGLOBSET& sgs, const PLACEDELTA& delta, size_t iglobFirst, size_t iglobLim)
+{
+    const GLOBSET& gs = *sgs.pglobset;
+    const glm::mat4 matAlo = palo->axf.empty() ? glm::mat4(1.0f) : palo->axf[0]->matWorld;
+    static const char* s_szShow = std::getenv("SLY2_FORCESHOW");   // debugging: these oids' groups all shown
+    const bool fForceShow = s_szShow && std::strstr(s_szShow, (std::string(",") + std::to_string(palo->oid) + ",").c_str());
+    for (size_t i = iglobFirst; i < iglobLim; ++i)
     {
+#if SLY2_FASTPATHS
+        // (the Switch: the group four ahead fetched, the lines of it both loops read, and its owner record's matrix: the
+        // groups are large and only these parts of them are read)
+        if (i + 4 < iglobLim)
+        {
+            const GLOB& g = gs.aglob[i + 4];
+            __builtin_prefetch(&g);
+            __builtin_prefetch(&g.abone);
+            __builtin_prefetch(&g.iglobTemplate);
+            if (const XF* p = sgs.apxfOwner[i + 4]) __builtin_prefetch(&p->matWorld);
+        }
+#endif
         const GLOB& glob = gs.aglob[i];
-        sgs.afVisible[i] = FAloGlobShown(palo, glob.n0, !(glob.grfGroup & 0x800)) ? 1 : 0;  // (alo.h: the run time's flags)
-        static const char* s_szShow = std::getenv("SLY2_FORCESHOW");   // debugging: these oids' groups all shown
-        if (s_szShow && std::strstr(s_szShow, (std::string(",") + std::to_string(palo->oid) + ",").c_str())) sgs.afVisible[i] = 1;
+        sgs.afVisible[i] = fForceShow || FAloGlobShown(palo, glob.n0, !(glob.grfGroup & 0x800)) ? 1 : 0;  // (alo.h: the run time's flags)
         // the group's owner record, else the object's own placement
         const XF* pxf = sgs.apxfOwner[i];
         glm::mat4 m = pxf ? pxf->matWorld : matAlo;
         if (glob.fMatrix) m = MulMat4(m, glob.dmat);  // an instance's own matrix (simdmat.h: glm's product exactly)
-        sgs.amatGlob[i] = m;
+        sgs.amatGlob[i] = delta.f ? MulMat4(delta.dmat, m) : m;
     }
     // skinned groups: their bone matrices (animation code, bone.cpp; empty before InitWorldAnimation binds them)
     static const bool s_fNoSkin = std::getenv("SLY2_NOSKIN") != nullptr;   // debugging: bind pose
-    sgs.aamatBone.resize(gs.aglob.size());
-    for (size_t i = 0; i < gs.aglob.size() && !s_fNoSkin; ++i)
+    if (s_fNoSkin) return;
+    const auto* paabind = PaabindOfAlo(palo);   // (looked up once a run)
+    for (size_t i = iglobFirst; i < iglobLim; ++i)
     {
         const GLOB& glob = gs.aglob[i];
         const GLOB& geom = glob.iglobTemplate >= 0 && glob.abone.empty() ? gs.aglob[size_t(glob.iglobTemplate)] : glob;
-        if (geom.abone.empty() || !FGlobBoneMatrices(palo, static_cast<int>(&geom - gs.aglob.data()), &sgs.aamatBone[i]))
-            sgs.aamatBone[i].clear();
+        std::vector<glm::mat4>& amat = sgs.aamatBone[i];
+        if (geom.abone.empty() || !FGlobBoneMatricesOf(paabind, static_cast<int>(&geom - gs.aglob.data()), &amat))
+            amat.clear();
+        else if (delta.f)
+            for (glm::mat4& mat : amat) mat = MulMat4(delta.dmat, mat);
     }
-    // orig: 0x13C000 -> 0x1A5EE8: a carried booty's scale affects drawing only. Bone matrices already transform
-    // vertices to world space (bone.cpp 0x1684D0), replacing the group matrix in the shader, so both need the delta.
-    glm::mat4 dmat;
-    if (FBootyDrawDelta(palo, &dmat))
+}
+
+// the entry's own part (with its first run): its bounds, its alphas
+void PlaceGlobsetEntry(ALO* palo, SCENEGLOBSET& sgs, const PLACEDELTA& delta)
+{
+    const GLOBSET& gs = *sgs.pglobset;
+    sgs.oid = palo->oid;
+    // orig: 0x1686AC: the whole sphere uses ALO +0x60 (the object record).
+    // Actors move this record independently of record zero; group placement below is separate.
+    const glm::mat4 matBounds = palo->apxfRef[2] ? palo->apxfRef[2]->matWorld : glm::mat4(1.0f);
+    sgs.fBounds = true;
+    sgs.posBounds = glm::vec3(matBounds * glm::vec4(gs.posCenter, 1.0f));
+    sgs.sBoundsRadius = gs.sRadius;
+    sgs.sMRD = palo->sRadius;
+    if (delta.f)
     {
+        const glm::mat4& dmat = delta.dmat;
         sgs.posBounds = glm::vec3(dmat * glm::vec4(sgs.posBounds, 1.0f));
         sgs.sBoundsRadius *= std::sqrt(std::max({glm::dot(glm::vec3(dmat[0]), glm::vec3(dmat[0])),
                                                 glm::dot(glm::vec3(dmat[1]), glm::vec3(dmat[1])),
                                                 glm::dot(glm::vec3(dmat[2]), glm::vec3(dmat[2]))}));
-        for (glm::mat4& mat : sgs.amatGlob) mat = MulMat4(dmat, mat);
-        if (!s_fNoSkin)
-            for (auto& amat : sgs.aamatBone)
-                for (glm::mat4& mat : amat) mat = MulMat4(dmat, mat);
     }
     // the draw alphas (0x1F3C10: gFade, gFade; 0x1425B0: gFade x +0x10D4, gFade x +0x10D8)
     sgs.gAlpha = sgs.gAlpha2 = palo->gFade;
@@ -111,9 +239,15 @@ void PlaceGlobset(ALO* palo, SCENEGLOBSET& sgs)
     static const bool s_fDbg = std::getenv("SLY2_ALPHADBG") != nullptr;   // debugging: the faded objects
     if (s_fDbg && (sgs.gAlpha != 1.0f || sgs.gAlpha2 != 1.0f))
         std::printf("alpha oid %d cid %d: %.3f %.3f\n", palo->oid, int(palo->Cid()), sgs.gAlpha, sgs.gAlpha2);
+    sgs.fTransform = true;
+}
+
+void PlaceGlobsetFinish(ALO* palo, SCENEGLOBSET& sgs)
+{
+    const GLOBSET& gs = *sgs.pglobset;
+    const glm::mat4 matAlo = palo->axf.empty() ? glm::mat4(1.0f) : palo->axf[0]->matWorld;
     PlaceTrailScene(palo, sgs);
     PlaceRopeMeshScene(palo, sgs);
-    sgs.fTransform = true;
     // debug: SLY2N_SCENELIST=t: every object placed in the scene in the frame at clock t: its bounds' screen point
     if (static const char* s_szList = std::getenv("SLY2N_SCENELIST"); s_szList)
         if (const float t = float(std::atof(s_szList)); g_clock.t >= t && g_clock.t < t + 0.0166f)
@@ -157,7 +291,34 @@ void PlaceGlobset(ALO* palo, SCENEGLOBSET& sgs)
         std::printf("\n");
     }
 }
+
+void PlaceGlobset(ALO* palo, SCENEGLOBSET& sgs)
+{
+    const PLACEDELTA delta = PlaceGlobsetPrepare(palo, sgs);
+    PlaceGlobsetRange(palo, sgs, delta, 0, sgs.pglobset->aglob.size());
+    PlaceGlobsetEntry(palo, sgs, delta);
+    PlaceGlobsetFinish(palo, sgs);
 }
+
+// a run of an entry's groups for the helpers: at most CGLOB_PLACE groups, the entry's own part with its first
+struct PLACEITEM
+{
+    uint32_t ientry, iglobFirst, iglobLim;
+};
+constexpr uint32_t CGLOB_PLACE = 64;
+
+// FAloDrawn's answers of UpdateSceneFromSw's tests, per entry (1 drawn, 0 not, -1 not asked), for the frame's
+// ApplyDrawPass right after (game.cpp: nothing between them changes what the test reads), so each entry is asked once
+// a frame instead of twice. Valid for the same world, entries and camera mask until ApplyDrawPass takes them.
+struct DRAWNCACHE
+{
+    const SW* psw = nullptr;
+    const std::vector<ALO*>* papalo = nullptr;
+    uint32_t grfCm = 0;
+    bool fValid = false;
+    std::vector<int8_t> an;
+} s_drawn;
+}  // namespace
 
 void PlaceSceneEntry(ALO* palo, SCENEGLOBSET& sgs) { PlaceGlobset(palo, sgs); }
 
@@ -167,35 +328,142 @@ void UpdateSceneFromSw(SCENE& scene, const std::vector<ALO*>& apalo, const SW* p
     // posed, the records restored after the placement; drawdist.h)
     struct POSES { bool f; ~POSES() { if (f) EndDrawDistancePoses(); } } poses{pswDrawn != nullptr};
     if (pswDrawn) BeginDrawDistancePoses(pswDrawn, apalo);
-    for (size_t i = 0; i < scene.aglobset.size() && i < apalo.size(); ++i)
+    const size_t c = std::min(scene.aglobset.size(), apalo.size());
+    // which entries are placed and their preparation, in order (the vehicles' wheels posed before any placement reads
+    // them); then their runs of groups and own parts on the pass helpers; then their ends, in order
+    static std::vector<uint8_t> s_afPlace;
+    static std::vector<PLACEDELTA> s_adelta;
+    static std::vector<PLACEITEM> s_aitem;
+    s_afPlace.assign(c, 0);
+    s_adelta.resize(c);
+    s_aitem.clear();
+    s_drawn.psw = pswDrawn;
+    s_drawn.papalo = &apalo;
+    s_drawn.grfCm = g_actview.grfCm;
+    s_drawn.fValid = pswDrawn != nullptr;
+    s_drawn.an.assign(c, -1);
+#if SLY2_FASTPATHS
+    // (the Switch: the entries' draw tests (FAloDrawn) done first, on the pass helpers, at the draw distance option's 1x:
+    // there the test only reads the objects and the world (NDrawDistanceRoot's tree cache serves the other distances),
+    // and nothing the loop below does before an entry's test (the vehicles' wheels, the placements' preparation) changes
+    // what it reads; the loop takes each answer where it asked for it)
+    static std::vector<uint8_t> s_afDrawnAhead;
+    const bool fDrawnAhead = pswDrawn && g_display.drawDistance == 1.0f;
+    if (fDrawnAhead)
     {
+        s_afDrawnAhead.resize(c);
+        PassHelpers().ForBlocks(c, 64, [&](size_t iFirst, size_t iLim) {
+            for (size_t i = iFirst; i < iLim; ++i)
+                s_afDrawnAhead[i] = scene.aglobset[i].fTransform && FAloDrawn(pswDrawn, apalo[i]) ? 1 : 0;
+        });
+    }
+#endif
+    for (size_t i = 0; i < c; ++i)
+    {
+#if SLY2_FASTPATHS
+        // (the Switch: the parts of the object four entries ahead that the tests read, and its glob set, prefetched:
+        // the objects are scattered over the heap)
+        if (i + 4 < c)
+        {
+            const ALO* p = apalo[i + 4];
+            __builtin_prefetch(&p->pcls);
+            __builtin_prefetch(&p->iupd);
+            __builtin_prefetch(&p->gFade);
+            __builtin_prefetch(scene.aglobset[i + 4].pglobset.get());
+        }
+#endif
         SCENEGLOBSET& sgs = scene.aglobset[i];
         // (with the world: what it will not draw this frame keeps its last placement, hidden: ApplyDrawPass's test
         // done first; the original places only what it draws)
         static const char* s_szForce = std::getenv("SLY2_FORCEDRAW");
         const bool fForce = s_szForce && std::strstr(s_szForce, (std::string(",") + std::to_string(apalo[i]->oid) + ",").c_str());
         const int nPc = NPcCharDrawOverride(apalo[i]);   // (PC addition, debug menu only: pccharacter.h)
-        if (nPc == 0 || (nPc < 0 && pswDrawn && sgs.fTransform && !fForce && !FAloDrawn(pswDrawn, apalo[i])))
+#if SLY2_FASTPATHS
+        const bool fNotDrawn = nPc < 0 && pswDrawn && sgs.fTransform && !fForce &&
+                               !(s_drawn.an[i] = (fDrawnAhead ? s_afDrawnAhead[i] != 0 : FAloDrawn(pswDrawn, apalo[i])) ? 1 : 0);
+#else
+        const bool fNotDrawn = nPc < 0 && pswDrawn && sgs.fTransform && !fForce && !(s_drawn.an[i] = FAloDrawn(pswDrawn, apalo[i]) ? 1 : 0);
+#endif
+        if (nPc == 0 || fNotDrawn)
         {
+#if SLY2_FASTPATHS
+            if (!sgs.fVisibleCleared)
+            {
+                std::fill(sgs.afVisible.begin(), sgs.afVisible.end(), 0);
+                sgs.fVisibleCleared = true;
+            }
+#else
             std::fill(sgs.afVisible.begin(), sgs.afVisible.end(), 0);
+#endif
             continue;
         }
         DrawVehiclePose(apalo[i]); // orig0x1D41F8, wheel transforms before base placement
-        PlaceGlobset(apalo[i], sgs);
+        s_adelta[i] = PlaceGlobsetPrepare(apalo[i], sgs);
+        s_afPlace[i] = 1;
+        const uint32_t cglob = uint32_t(sgs.pglobset->aglob.size());
+        uint32_t iglob = 0;
+        do
+        {
+            s_aitem.push_back({uint32_t(i), iglob, std::min(cglob, iglob + CGLOB_PLACE)});
+            iglob += CGLOB_PLACE;
+        } while (iglob < cglob);
     }
+    // (blocks of 4 runs: an entry's part, a few hundred groups' placements and bones, per hand-out)
+    PassHelpers().ForBlocks(s_aitem.size(), 4, [&](size_t iFirst, size_t iLim) {
+        for (size_t k = iFirst; k < iLim; ++k)
+        {
+            const PLACEITEM& item = s_aitem[k];
+            SCENEGLOBSET& sgs = scene.aglobset[item.ientry];
+            PlaceGlobsetRange(apalo[item.ientry], sgs, s_adelta[item.ientry], item.iglobFirst, item.iglobLim);
+            if (item.iglobFirst == 0) PlaceGlobsetEntry(apalo[item.ientry], sgs, s_adelta[item.ientry]);
+        }
+    });
+    for (size_t i = 0; i < c; ++i)
+        if (s_afPlace[i]) PlaceGlobsetFinish(apalo[i], scene.aglobset[i]);
 }
+
+void InvalidateSceneDrawnTests() { s_drawn.fValid = false; }
 
 void ApplyDrawPass(const SW* psw, SCENE& scene, const std::vector<ALO*>& apalo)
 {
     static const char* s_szForce = std::getenv("SLY2_FORCEDRAW");   // debugging: these oids drawn regardless
+    // (the tests' answers when they are this frame's for this world, entries and camera mask)
+    const bool fCache = s_drawn.fValid && s_drawn.psw == psw && s_drawn.papalo == &apalo && s_drawn.grfCm == g_actview.grfCm;
+    s_drawn.fValid = false;
+    // (debug: SLY3_DRAWNEAR=R,T: once, at clock T, the drawn objects within R of the camera's object)
+    static const char* s_szNear = std::getenv("SLY3_DRAWNEAR");
+    static bool s_fNearDone = false;
+    LO* const ploNear = s_szNear && !s_fNearDone ? split3::PloPlayer(const_cast<SW*>(psw), 0) : nullptr;
+    const bool fNear = ploNear && FCidDerivedFrom(ploNear->Cid(), S3CID(0x30)) && g_clock.t >= std::strtof(std::strchr(s_szNear, ',') ? std::strchr(s_szNear, ',') + 1 : "0", nullptr);
+    if (fNear) { s_fNearDone = true; std::printf("drawnear: player %d\n", ploNear->oid); }
     for (size_t i = 0; i < scene.aglobset.size() && i < apalo.size(); ++i)
     {
         if (s_szForce && std::strstr(s_szForce, (std::string(",") + std::to_string(apalo[i]->oid) + ",").c_str())) continue;
         const int nPc = NPcCharDrawOverride(apalo[i]);   // (PC addition, debug menu only: pccharacter.h)
         if (nPc == 1) continue;
-        if (nPc == 0 || !FAloDrawn(psw, apalo[i]))
+        const int8_t nCached = fCache && i < s_drawn.an.size() ? s_drawn.an[i] : int8_t(-1);
+        const bool fDrawn = !(nPc == 0 || !(nCached >= 0 ? nCached != 0 : FAloDrawn(psw, apalo[i])));
+        if (fNear && fDrawn && !apalo[i]->axf.empty())
         {
+            const ALO* pa = apalo[i];
+            const glm::vec3 pos = PosLoWorld(pa);
+            const ALO* pc = static_cast<const ALO*>(ploNear);
+            const glm::vec3 posc = PosLoWorld(pc);
+            if (glm::length(pos - posc) < std::strtof(s_szNear, nullptr))
+                std::printf("drawnear %d cid 0x%X parent %d mask 0x%X fade %.2f at %.0f %.0f %.0f (cur %d)\n", pa->oid, int(pa->Cid()),
+                            pa->paloParent ? pa->paloParent->oid : -1, pa->bMask, pa->gFade, pos.x, pos.y, pos.z, pc->oid);
+        }
+        if (!fDrawn)
+        {
+#if SLY2_FASTPATHS
+            if (SCENEGLOBSET& sgs = scene.aglobset[i]; !sgs.fVisibleCleared)
+            {
+                std::fill(sgs.afVisible.begin(), sgs.afVisible.end(), 0);
+                sgs.fVisibleCleared = true;
+            }
+#else
             std::fill(scene.aglobset[i].afVisible.begin(), scene.aglobset[i].afVisible.end(), 0);
+#endif
             static const bool s_fDbg = std::getenv("SLY2_DRAWDBG") != nullptr;   // debugging: the objects not drawn
             if (s_fDbg)
             {
@@ -272,3 +540,5 @@ int CAddNewAlosToScene(SW* psw, SCENE& scene, std::vector<ALO*>* papalo)
             std::printf("scene: added %d (cid 0x%X)%s\n", (*papalo)[i]->oid, int((*papalo)[i]->Cid()), (*papalo)[i]->fInWorld ? "" : " (out of the world)");
     return cAdd;
 }
+
+void NoteGuardFlinch3(const LO* plo) { if (plo) s_mptFlinch3[plo] = g_clock.t; }

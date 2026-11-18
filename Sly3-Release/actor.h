@@ -65,6 +65,7 @@ struct JUMP
     ASEG* apasegFall[5]{};         // +0x134..
     ASEG* pasegLand148 = nullptr, *pasegLand14C = nullptr, *pasegLand158 = nullptr, *pasegLand15C = nullptr;
     ASEG* pasegLand154 = nullptr;  // +0x154 (state 17: the hang)
+    ASEG* pasegRide = nullptr;     // (Sly 3 +0x10C: the Guru's leap onto a ride link, native state c_jsRideLink)
     const SOE* psoeEdge = nullptr; // +0xC8 the ledge's entry (state 17)
     glm::vec3 posEdgeLocal{0.0f};  // +0xD0 the grabbed point in its record's frame
     glm::vec3 normalEdge{0.0f};    // +0xE0 the edge's normal (out of the wall)
@@ -84,6 +85,8 @@ struct JUMP
     float svGlide1C0 = 0.0f;       // +0x1C0 the glide's forward speed (state 20, 0x197F98)
     float svGlide1C4 = 0.0f;       // +0x1C4 its vertical speed
     float tEnd21 = 0.0f;           // (+0x1F0's +0x1C: the jump back's end, state 0x15)
+    int n28Sly3 = 0;               // (Sly 3's jump +0x28, orig3 0x1B7268: 0 at a jump from the ground, +1 at the double jump
+                                   // (kind 6), kept by the kinds from +0x190; the camera's 0x1BD758 reads it)
     struct CTRL* pctrl21 = nullptr;  // state 21's controller (0x12DE58 kind 8: the record driven to the safe ground)
 };
 
@@ -104,6 +107,7 @@ struct DAMAGE
     float dtFlash = 2.0f;          // +0x9C its length
     float gFlash = 0.0f;           // (the object's +0xD0: the flash's strength; TODO(render))
     struct ASEGA* pasegaHeal = nullptr;  // +0x10C the healing clip's ASEGA (the clip: the actor's part +0xEF8)
+    bool fDeathSent = false;       // (Sly 3: the actor's +0xE68: its death broadcast 0xC once, orig3 0x1535E0)
 };
 
 // The safe places (orig ACTOR +0x9E0, 0x19F3E8 init): the last 32 floors or interaction descriptions. The world
@@ -180,6 +184,7 @@ struct ACTOR : STEP
         glm::vec3 pos{0.0f};      // +0xFD0 +0x10 the follower's target point
         float s = 0.0f, t = 0.0f; // +0x20 distance last checked, +0x24 next check
         int fActive = 0;          // +0x28 recovery suspends job input/update
+        int fVeto = 0;            // +0x2C the recovery's veto (cleared before the broadcast 0x5A, tested after it)
     } watch;
     int n4C8 = -1;                 // +0x4C8 (sub-object 0x4C0's kind; -1 none, as the reference's RAM)
     int nSub4CC = -1;              // +0x4CC (sub-object 0x4C0's)
@@ -244,6 +249,7 @@ struct ACTOR : STEP
     float tLookNext = 0.0f;        // +0x114C
     int f12F0 = 1;                 // +0x12F0
     int n1300 = 100;               // +0x1300
+    int nPower3 = 100;             // (Sly 3: the power is the object's +0x174 (max +0x178), 0x1F4430 / 0x1F4438)
     float g1304 = -60.0f;          // +0x1304
     int n1318 = -1;                // +0x1318
     ASEG* pasegAbility = nullptr;  // +0x130C pending cane animation
@@ -277,9 +283,9 @@ struct SLY : ACTOR
     glm::vec4 aq[3]{};             // +0x1890 / +0x18A0 / +0x18B0
     LO* ploOther = nullptr;        // +0x18C4 (the object of states 3 / 22)
     REACH reach;                   // +0x17D0 the cane's reach (reach.h; +0x1854 its target, +0x1858 its distance)
-    int state = -1;                // +0x18C8 (0..24)
+    int jts = -1;                  // +0x18C8 (Sly 3 JT +0x19E0: sly.h jts::, Sly 3 numbers 0..24)
     float tState = 0.0f;           // +0x18CC
-    int substate = -1;             // +0x18D0
+    int jtbs = -1;                 // +0x18D0 (Sly 3 +0x19E8)
     float tSubstate = 0.0f;        // +0x18D4
     int mode = -1;                 // +0x18D8 (0x18E540)
     float tMode = 0.0f;            // +0x18DC
@@ -297,6 +303,7 @@ struct SLY : ACTOR
     int f1D30 = 0;                 // +0x1D30
     SMA* psma1D28 = nullptr;       // +0x1D28 the paraglider's SM (+0x1D24 oid 1526 on +0x1D20 oid 1525: 0x188608's end;
                                    // goal 0x5F7 open, 0x5F8 closed)
+    SMA* psma1F2C = nullptr;       // (Sly 3) orig3 +0x1F2C: the SM of +0x1F28 on Sly himself (0x1AA2B0's end, state -1, 1)
     ROOTBLEND rb1E10;              // +0x1E10 state 21's move on a climbing surface (pbl +0x1F10; its SM +0x1F14)
     LO* ploSurface = nullptr;      // +0x1F18 the climbing surface of state 21 (climbsurf.h)
     int itriSurface = 0;           // +0x1F1C its triangle,
@@ -337,6 +344,7 @@ struct SLY : ACTOR
         std::shared_ptr<CTRLSOURCE> ahandleOwned[7]; // lifetime follows the native actor, including removed handles
         uint32_t grfHandles = 0;    // current 0x18C120 mask
         SLYFOOTPROBE afoot[2];      // +0x1520 / +0x1620
+        float uLean3 = 0.0f, duLean3 = 0.0f;  // (Sly 3 Rocket Boots: +0x1EEC / +0x1EF0, the smoothed lean; s3-decomp)
     } slide;
     CSndRef snd2048;               // +0x2048 Shadow Power's loop; appended to preserve native field offsets
     struct POCKET
@@ -346,6 +354,7 @@ struct SLY : ACTOR
         LO* retained = nullptr;
     } pockets[4]{{26}, {37}, {38}, {41}};  // orig: 0x188488, +0x1FB0..+0x1FD4
     LO* plo18C0 = nullptr;        // +0x18C0: selected strike/rush target (0x18F688)
+    struct CTRL* actrlCarried[2]{}; // (Sly 3 +0x1F00 / +0x1F04) state 20's holds on Murray: position, rotation (0x130078)
 };
 
 // The SO's pose and velocities, as the original reads them from its transform record (+0x60: world matrix +0x40,
@@ -368,9 +377,19 @@ struct ACTORCMCTX
 };
 
 ACTOR* PactorFromLo(LO* plo);     // null for objects outside the actor class 0x34
+// Bentley's states: Sly 3's numbers (orig3 0x13E510; s3-decomp). The native code is Sly 2's (0x135248), renumbered:
+// Sly 2's 6 / 7 / 8 / 9 / 10 / 11 / 12 / 14 are 8 / 9 / 10 / 11 / 12 / 13 / 14 / 15; its climb (13) has no Sly 3 state (20).
+enum BS3 : int
+{
+    BS3_Idle = 0, BS3_Walk = 1, BS3_Jump = 2, BS3_Interact = 3, BS3_Damage = 4, BS3_Push = 5, BS3_Push6 = 6, BS3_Push7 = 7,
+    BS3_Hold = 8, BS3_Run = 9, BS3_Carried = 10, BS3_ScriptSm = 11, BS3_ScriptAnim = 12, BS3_ScriptMove = 13, BS3_Throw = 14,
+    BS3_Adrenaline = 15, BS3_Fish = 16, BS3_17 = 17, BS3_Idle18 = 18, BS3_Climb = 20,
+};
 SLY* PslyFromLo(LO* plo);         // null outside 0x35
 void InitActorBase(ACTOR* pa);    // 0x2039C0's +0x240 (and Sly's 0x1885B8)
 SLY* PslyFromLo(LO* plo);         // null outside 0x35
+struct CPDEFI;
+void GetInteractCpdefi(ACTOR& a, const ACTORPOSE& pose, CPDEFI* pc);   // orig 0x0018A4E8 (actor.cpp)
 ACTORPOSE PoseFromLo(LO* plo);    // native (the transform record; velocities by difference: TODO(physics))
 
 // orig 0x1F58F0 (the SO's base: pose record)
@@ -390,6 +409,7 @@ void GetLoCpdefi(LO* plo, CPDEFI* pcpdefi);
 // orig 0x2052E0 (slot 38 of the 0x203948 family: placed at q's matrix, its +0x240 back; +0x1060 above it;
 // velocities zeroed (TODO(physics): slots 35 / 36), +0x208 cleared)
 void TeleportActor(LO* plo, LO* plodest);
+void TeleportAloMat(LO* plo, const glm::mat4& m, LO* plodest);  // slot 38's placement to a world matrix (plodest: its velocities, may be null)
 void TeleportLo(LO* plo, LO* ploTo);     // orig 0x1A6B88 (vt slot 38; ALOs: TeleportActor), transition.cpp
 
 // The actors of a new world (forgets the old ones).

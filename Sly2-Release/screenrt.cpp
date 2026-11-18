@@ -3,7 +3,9 @@
 // round4_paris_high_more.cpp (0x212880), the string table 0x2A8B90 (0x21AA60).
 
 #include "screenrt.h"
+#include "envonce.h"
 #include "worldglobals.h"
+#include "langstore.h"
 #include "region.h"
 #include "dance.h"
 #include "actor.h"
@@ -23,12 +25,15 @@
 #include "disc.h"
 #include "frontend.h"
 #include "hud.h"
+#include "display.h"
+#include "vr.h"
 #include "menu.h"
 #include "shop.h"
 #include "ref.h"
 #include "savedata.h"
 #include "sm.h"
 #include "splayer.h"
+#include "cutscene.h"
 #include "sw.h"
 #include "worldaccess.h"
 #include "vecmat.h"
@@ -77,7 +82,7 @@ SCREENRT* Psrt(LO* plo)
     SPRITESET* pss = dynamic_cast<SPRITESET*>(plo);
     if (!pss || !pss->pso) return nullptr;
     auto& p = s_mpsrt[plo];
-    if (p && p->serialSw != SW::s_serialNext && std::getenv("SLY2N_SCREENLIFE"))
+    if (p && p->serialSw != SW::s_serialNext && SLY2N_ENV("SLY2N_SCREENLIFE"))
         std::fprintf(stderr, "screen lifetime: oid %d cached world %u current world %u\n",
                      plo->oid, p->serialSw, SW::s_serialNext);
     if (!p)
@@ -160,13 +165,13 @@ void SetState(SCREENRT* p, int s)
 {
     const int old = p->state;
     if (old == s) return;
-    if (static const bool s_f = std::getenv("SLY2N_SCREENPRINT") != nullptr; s_f)
+    if (static const bool s_f = SLY2N_ENV("SLY2N_SCREENPRINT") != nullptr; s_f)
         std::printf("screen %d: state %d -> %d pause cached %d field %u\n", p->pss->oid, old, s, p->fPause ? 1 : 0, p->pss->U32Field(0, 0xB0, 0));
     if (p->fPause)
     {
         if (old < 2 && s >= 2)
         {
-            if (std::getenv("SLY2N_TASKDEBUG"))
+            if (SLY2N_ENV("SLY2N_TASKDEBUG"))
                 for (const auto& [plo, up] : s_mpsrt)
                     if (up.get() == p) std::printf("screen %d: shown, the game paused (t %.3f)\n", plo->oid, g_clock.t);
             if (++s_cpause == 1) SetClockFactor(&g_clock, 7, 0.0f);
@@ -225,7 +230,7 @@ void Update(SCREENRT* p)
             }
         }
     }
-    if (static const bool s_f = std::getenv("SLY2N_SCREENPRINT") != nullptr; s_f && p->state >= 2 && p->fPause)
+    if (static const bool s_f = SLY2N_ENV("SLY2N_SCREENPRINT") != nullptr; s_f && p->state >= 2 && p->fPause)
         std::printf("screen update: state %d -> %d timers %d busy %d id7C %d ids %d %d %d dtMax %.2f tState %.2f t3C %.2f\n", p->state, s, p->timers,
                     FBusy(p, p->id7C) ? 1 : 0, p->id7C, p->id70, p->id74, p->id78, p->dtMax, p->tState, g_clock.t3C);
     SetState(p, s);
@@ -241,7 +246,7 @@ void Update(SCREENRT* p)
             const glm::vec3 screen = ConvertCmWorldToScreen(&g_cm, PosLoWorld(p->follow));
             p->player.mRoot[4] = screen.x * 320.0f + 320.0f;
             p->player.mRoot[5] = screen.y * -246.40000915527344f + 246.40000915527344f;
-            if (std::getenv("SLY2N_SCREENFOLLOW"))
+            if (SLY2N_ENV("SLY2N_SCREENFOLLOW"))
                 std::printf("screen follow: frame %lld screen %d target %d at %.9g %.9g\n",
                             static_cast<long long>(g_cframeScreen), p->pss->oid, p->follow->oid,
                             p->player.mRoot[4], p->player.mRoot[5]);
@@ -261,7 +266,7 @@ static void ShowScreenObjBase(LO* plo, int k)
 {
     SCREENRT* p = Psrt(plo);
     if (!p) return;
-    if (std::getenv("SLY2_SHOWDBG"))
+    if (SLY2N_ENV("SLY2_SHOWDBG"))
     {
         std::printf("show screen %d (k %d): args", plo->oid, k);
         for (int a : p->aarg) std::printf(" %d", a);
@@ -274,7 +279,7 @@ static void ShowScreenObjBase(LO* plo, int k)
         }
         std::printf("\n");
     }
-    if (const char* sz = std::getenv("SLY2_SOPARTS"); sz && std::strtol(sz, nullptr, 0) == plo->oid && p->pss && p->pss->pso)   // (debug: its parts)
+    if (const char* sz = SLY2N_ENV("SLY2_SOPARTS"); sz && std::strtol(sz, nullptr, 0) == plo->oid && p->pss && p->pss->pso)   // (debug: its parts)
     {
         const SCREENOBJ* pso = p->pss->pso.get();
         for (size_t g = 0; g < pso->agroup.size(); ++g)
@@ -282,7 +287,7 @@ static void ShowScreenObjBase(LO* plo, int k)
             std::printf("screen 0x%X group %zu (%d frames):", plo->oid, g, pso->agroup[g].cframe);
             for (const SPART& part : pso->agroup[g].apart) std::printf(" 0x%X(%zu keys)", part.id, part.akey.size());
             std::printf("\n");
-            if (std::getenv("SLY2_SOKEYS"))   // (and every key: its items' slot, piece, interpolation, colours)
+            if (SLY2N_ENV("SLY2_SOKEYS"))   // (and every key: its items' slot, piece, interpolation, colours)
                 for (const SPART& part : pso->agroup[g].apart)
                     for (const SKEY& key : part.akey)
                     {
@@ -619,7 +624,7 @@ void UpdateTaskCounter(SCREENRT* p)
 void UpdateScreenObjs(SW* psw)
 {
     // (debug: SLY2N_SCREENLOOPSCAN: once per world, every screen object's looping key sounds: splayer.cpp)
-    if (static const bool s_fScan = std::getenv("SLY2N_SCREENLOOPSCAN") != nullptr; s_fScan && psw)
+    if (static const bool s_fScan = SLY2N_ENV("SLY2N_SCREENLOOPSCAN") != nullptr; s_fScan && psw)
         if (static uint32_t s_serialScanned = 0; s_serialScanned != psw->serial)
         {
             s_serialScanned = psw->serial;
@@ -657,14 +662,69 @@ namespace
 std::vector<FONTBRX> s_afont;   // (the HUD's fonts: the text and the button icons; found at a world's first draw)
 uint32_t s_serialFonts = 0;
 }
-const FONTBRX* PfontHud() { return s_afont.empty() ? nullptr : &s_afont[0]; }
+const FONTBRX* PfontHud()
+{
+    if (s_afont.empty()) return nullptr;
+    // (PC, langstore.h) Japanese text on a USA / European disc: the languages folder's Japanese font in the place of
+    // the world's text font (the button icons stay the world's)
+    if (const SELEM* pset = PsetLanguageStoreFont())
+    {
+        static FONTBRX s_fontStore;
+        s_fontStore = s_afont[0];
+        s_fontStore.pset = pset;
+        return &s_fontStore;
+    }
+    return &s_afont[0];
+}
 const FONTBRX* PfontHudIcons() { return s_afont.size() > 1 && s_afont[1].pso == s_afont[0].pso ? &s_afont[1] : nullptr; }
 
 // (QoL) SLY2N_WIPEMASKFIX=0: the wipe's mask widened as before
 static bool NoWipeMaskFix()
 {
-    static const bool s_f = [] { const char* sz = std::getenv("SLY2N_WIPEMASKFIX"); return sz && sz[0] == '0'; }();
+    static const bool s_f = [] { const char* sz = SLY2N_ENV("SLY2N_WIPEMASKFIX"); return sz && sz[0] == '0'; }();
     return s_f;
+}
+
+namespace { bool s_fBinocFrameDrawn = false; }
+bool FBinocFrameDrawn() { return s_fBinocFrameDrawn; }
+
+// (HUD Placement, display.h hudPlacement) a corner / edge widget moved out to its side of the HUD box: by the side of
+// the canvas its drawing is on (its box's centre left or right of the middle); one reaching across the middle (a
+// dialog, a menu, a title card) stays
+// (HUD Placement) the side a screen object moves to: -1 left, 1 right, 0 it stays. Corner / edge widgets only: a
+// drawing wholly on one side of the canvas's middle reaching into its outer quarter (the gauge 0x36B, the counters
+// 0x36D..0x36F, the save book 0x5D4, a job's own counters and meters). Centred ones stay (they reach across the middle:
+// the prompt ticker 0x371, dialogs, title cards, the job screens), and so do the pictures kept on the 4:3 canvas
+// (the binocucom's frames and everything drawn with them: its heads' windows 0x368..0x36A; the menus, the wipe).
+int DirHudPlacement(const LO* plo, glm::vec2 lo, glm::vec2 hi)
+{
+    switch (plo->oid)
+    {
+    case 0x30A:                         // the wipe
+    case 0x35F: case 0x360: case 0x361: // the binocucom frames
+    case 0x368: case 0x369: case 0x36A: // the binocucom heads' windows
+    case 0x370: case 0x4E0: case 0x5D2: // the menus (the pause menu, job help, the episode menu's)
+    case 0x373:                         // the subtitle box (its bars)
+    case 0x375: case 0x376: case 0x377: case 0x378:   // the gadget grid, the shop
+    case 0x52C: case 0x52D:             // the card's dialogs
+        return 0;
+    default: break;
+    }
+    if (s_fBinocFrameDrawn || g_hud.fWideEdgesObj || g_hud.fClipCanvasObj || FFourThreeMenuObj(plo)) return 0;
+    if (hi.x <= 320.0f && lo.x < 160.0f) return -1;
+    if (lo.x >= 320.0f && hi.x > 480.0f) return 1;
+    return 0;
+}
+
+void PlaceHudObj(const LO* plo, const CHud::MARK& mark, float dx)
+{
+    static const bool s_fDbg = SLY2N_ENV("SLY2N_HUDPLACEDBG") != nullptr;
+    if (dx <= 0.0f && !s_fDbg) return;
+    glm::vec2 lo, hi;
+    if (!g_hud.FBoundsSince(mark, lo, hi)) return;
+    const int side = DirHudPlacement(plo, lo, hi);
+    if (s_fDbg) std::printf("hudplace: 0x%X x %.0f..%.0f y %.0f..%.0f side %d\n", plo->oid, double(lo.x), double(hi.x), double(lo.y), double(hi.y), side);
+    g_hud.ShiftSince(mark, float(side) * dx);
 }
 
 void DrawScreenObjs(SW* psw)
@@ -677,7 +737,7 @@ void DrawScreenObjs(SW* psw)
     {
         s_afont = FindFonts(aso);
         s_serialFonts = psw->serial;
-        if (std::getenv("SLY2N_FONTLIST"))
+        if (SLY2N_ENV("SLY2N_FONTLIST"))
             for (const FONTBRX& f : s_afont)
             {
                 std::printf("font obj 0x%X elem %d:", f.pso->oid, f.ifont);
@@ -690,8 +750,8 @@ void DrawScreenObjs(SW* psw)
                 std::printf("\n");
             }
     }
-    const FONTBRX* pfont = s_afont.empty() ? nullptr : &s_afont[0];
-    const FONTBRX* picons = s_afont.size() > 1 && s_afont[1].pso == s_afont[0].pso ? &s_afont[1] : nullptr;
+    const FONTBRX* pfont = PfontHud();
+    const FONTBRX* picons = PfontHudIcons();
     s_pswText = psw;
     std::string (*pfnOld)(int) = g_pfnScriptString;
     g_pfnScriptString = StrScreenScript;
@@ -711,22 +771,34 @@ void DrawScreenObjs(SW* psw)
     // of one object have distinct depths (splayer.cpp); objects of one priority tie slot for slot, so the later queued
     // object's slot is drawn first and the first one's ends on top (the HUD's depth test is GEQUAL: last drawn wins).)
     std::reverse(adraw.begin(), adraw.end());
+    s_fBinocFrameDrawn = std::any_of(adraw.begin(), adraw.end(), [](const auto& e) { return e.first->oid >= 0x35F && e.first->oid <= 0x361; });
     std::stable_sort(adraw.begin(), adraw.end(), [](const auto& a, const auto& b) { return a.second->prio < b.second->prio; });
+    const float dxPlace = DxHudPlacement();   // (HUD Placement: the corner / edge widgets out to the box's sides)
     for (auto [plo, p] : adraw)
     {
         s_psrtDrawing = p;
-        static const bool s_fDbg = std::getenv("SLY2_HUDDBG") != nullptr;
+        static const bool s_fDbg = SLY2N_ENV("SLY2_HUDDBG") != nullptr;
         if (s_fDbg) std::printf("screen 0x%X: state %d part 0x%X a4 %d a8 %d ac %d b0 %d\n", plo->oid, p->state, p->id7C, int(plo->U32Field(0, 0xA4, 0x7777)),
                                 int(plo->U32Field(0, 0xA8, 0x7777)), int(plo->U32Field(0, 0xAC, 0x7777)), int(plo->U32Field(0, 0xB0, 0x7777)));
         g_zScreenBase = float(std::max(0, p->prio)) * 262144.0f;   // (+0xA4 << 18)
         g_hud.fWideEdgesObj = plo->oid >= 0x35F && plo->oid <= 0x361;   // (the binocucom frames: Sly's, Bentley's, Murray's)
+        glm::vec2 uiBinoc;
+        g_hud.fVrBandsObj = g_hud.fWideEdgesObj && vr::FBinocCanvas(&uiBinoc);   // (VR: bands above / below, hud.h)
         const bool fFourThree = FFourThreeMenuObj(plo);   // (qolview.h: the gadget grid, Job Help)
         g_hud.fClipCanvasObj = FClipEpisodeMenuToCanvas(plo) || fFourThree;   // (frontend.h: the episode menu on a wide picture)
         g_hud.fWideRectsOnlyObj = plo->oid == 0x30A && !NoWipeMaskFix();   // (the wipe's Sly mask)
+        // (VR, vr.h: in the Immersive view the subtitle box's letterbox bars (the scripted pauses: the safe house's door,
+        // Ep1's arrival) would sit in front of the eyes as two black slabs; the Flat Screen view and flat play keep them)
+        g_hud.fNoBarsObj = plo->oid == 0x373 && vr::FImmersiveView() && !vr::FTitleMoment();   // (the title keeps its bars)
+        const CHud::MARK mark = g_hud.Mark();
         p->player.Draw(pfont, picons, psw);
+        PlaceHudObj(plo, mark, dxPlace);
+        g_hud.EndWideEdgesObj();
         if (fFourThree) g_hud.Pillarbox(glm::vec4(0, 0, 0, 128), (g_zScreenBase + 262000.0f) / 16777216.0f);   // (over the world, under higher priorities)
         g_hud.fWideRectsOnlyObj = false;
+        g_hud.fNoBarsObj = false;
         g_hud.fWideEdgesObj = false;
+        g_hud.fVrBandsObj = false;
         g_hud.fClipCanvasObj = false;
     }
     s_psrtDrawing = nullptr;
@@ -735,11 +807,12 @@ void DrawScreenObjs(SW* psw)
         for (auto [plo, p] : adraw) prioMax = std::max(prioMax, p->prio);
         g_zScreenBase = float(prioMax + 1) * 262144.0f;
     }
+    cut::DrawCutPresent(pfont, picons);   // (SafeHouse addition: a mod cutscene's caption box / title card, cutscene.h)
     DrawGadgetIcons(pfont, picons);   // (the gadget widget's draw, 0x1DAC58)
     DrawMarkerLabels(pfont, picons);  // (the job markers' names, 0x1CD780: marker.cpp)
     DrawDancePrompts(pfont, picons);  // (the dance director's buttons, 0x152C58: dance.cpp)
-    if (pfont && std::getenv("SLY2N_ICONSTRIP"))
-        g_hud.DrawText(*pfont, picons, std::getenv("SLY2N_ICONSTRIP"), -300.0f, -40.0f, 40.0f, 1.0f, 1.0f, 0, glm::vec4(102.0f), glm::vec4(1.0f), glm::vec4(0.0f));
+    if (pfont && SLY2N_ENV("SLY2N_ICONSTRIP"))
+        g_hud.DrawText(*pfont, picons, SLY2N_ENV("SLY2N_ICONSTRIP"), -300.0f, -40.0f, 40.0f, 1.0f, 1.0f, 0, glm::vec4(102.0f), glm::vec4(1.0f), glm::vec4(0.0f));
     g_zScreenBase = 0.0f;
     g_pfnScriptString = pfnOld;
 }
@@ -793,7 +866,7 @@ void ResetScreenObjs(SW* psw)
         }
         else ++it;
     }
-    if (std::getenv("SLY2N_SCREENLIFE"))
+    if (SLY2N_ENV("SLY2N_SCREENLIFE"))
         std::fprintf(stderr, "screen lifetime: reset world %u removed %zu remaining %zu pauses %d\n",
                      psw ? psw->serial : 0, cBefore - s_mpsrt.size(), s_mpsrt.size(), s_cpause);
 }

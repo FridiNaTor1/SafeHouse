@@ -34,6 +34,7 @@ struct ProgramTemplate {
   const char* file;
   std::string vertex_signature;
   std::string fragment_signature;
+  const char* defines = "";  // (put before the file: one port for a GLSL program's variants)
 };
 
 const std::vector<ProgramTemplate>& Catalog() {
@@ -62,6 +63,16 @@ const std::vector<ProgramTemplate>& Catalog() {
        Signature({}, {"texAlpha", "gain", "m8", "fReset"}, {})},
       {"shadowvol", "shadowvol.metal", Signature({"aPos"}, {"matWorldToClip"}, {}),
        Signature({}, {"rgba", "fDate", "texDate"}, {})},
+      // (Sly2-Release render.cpp FMarkDate: shadowcombine.vert + shadowdate.frag)
+      {"shadowdate", "shadowdate.metal", Signature({}, {}, {}), Signature({}, {"texDate"}, {})},
+      // (Sly2-Release fsr.cpp: vrfull.vert + fsreasu.frag / fsrrcas.frag, the upscaling's two passes; the array form
+      // of EASU is VR's)
+      {"fsreasu", "fsreasu.metal", Signature({}, {}, {}),
+       Signature({}, {"tex", "con0", "srcMin", "srcMax", "posOut"}, {})},
+      {"fsreasu_array", "fsreasu.metal", Signature({}, {}, {}),
+       Signature({}, {"tex", "layer", "con0", "srcMin", "srcMax", "posOut"}, {}), "#define CANE_ARRAY 1\n"},
+      {"fsrrcas", "fsrrcas.metal", Signature({}, {}, {}),
+       Signature({}, {"tex", "sharpness", "srcMin", "srcMax", "posOut", "fFlipY"}, {})},
   };
   return kCatalog;
 }
@@ -211,7 +222,7 @@ bool ShaderLibrary::Link(const GlslInterface& vertex_stage, const GlslInterface&
     if (block.binding >= 0) out->storage_bindings.push_back(block.binding);
   }
   const std::string source =
-      Prefix() + GenerateUniformStruct(out->layout) + CaneMetalShader(entry->file);
+      Prefix() + entry->defines + GenerateUniformStruct(out->layout) + CaneMetalShader(entry->file);
   id<MTLLibrary> library = nil;
   const auto cached = libraries_.find(source);
   if (cached != libraries_.end()) {

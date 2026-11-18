@@ -8,6 +8,15 @@ struct ACTOR;
 struct JUMP;
 struct LO;
 
+// Sly 3's jump state 17 (orig3 0x1B77F8 / 0x1B9020 / 0x1B9C48 / 0x1BD520): the leap onto a ride link (class 0x7A, a
+// guard's option 494) chosen by 0x1BBCA8's list 0x479BA4 for an actor whose target flags (vt slot 106, +0x1110) have
+// 0x1000 (the Guru's 0x3080). Natively the jump keeps Sly 2's state numbers (17 is the ledge hang), so it is 24.
+constexpr int c_jsRideLink = 24;
+// Sly 3's jump kind 0x11 (orig3 0x1B7268 / 0x1BB4E8): the cross jump with an outfit worn: the jump state 0, a launch to
+// 150 above (Sly 3's 16 / 17), no double jump (+0x28 = +0x190). The native kinds keep Sly 2's numbers (17 its Hover
+// Pack), so it is 19 natively (AUDIT5 PLAYER5-08)
+constexpr int c_jkOutfit3 = 19;
+
 #include <glm/glm.hpp>
 
 // orig: 0x00195950

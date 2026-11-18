@@ -27,7 +27,8 @@ struct PECOMP
 {
     int cid = 0;                 // 0xBF / 0xC0
     int32_t oid = 0;             // +4
-    int n = 0;                   // +8: the command list's repeat count (0: once, < 0: forever)
+    int n = 1;                   // +8: the command list's repeat count (0 / 1: once, < 0: forever); 1 from 0x1FCCE8,
+                                 // option 557 sets it (the item header's S16 is read and dropped by the loader)
     std::vector<OPT> aopt;       // its options (EOPIDs 553..606)
     std::shared_ptr<LOXEMIT::EMITMESH> pmesh;  // the emission mesh (position kind 3: 0x1FCF10)
 };
@@ -39,10 +40,36 @@ struct LOPE : LOX
 
 // The world's effects each frame (the world update's 0x202D80); the camera the emission tests (0x203170) use.
 void UpdatePes(SW* psw);
-void SetPeCamera(const glm::vec3& pos, const glm::mat3& matRows, const glm::mat4& matWorldToClip);   // (the drawn camera: rows view, left, up)
+// orig3: 0x25BBD0's 0x203078 per instance (the in-place reset): every instance dropped
+void ResetPesInPlace3();
+void SetPeCamera(const glm::vec3& pos, const glm::mat3& matRows, const glm::mat4& matWorldToClip);
+// (PC split screen, orig3 0x18E728: a PE is tested against every view's camera) the other views' camera positions;
+// c 0: none
+void SetPeCamerasExtra(const glm::vec3* aposCam, int c);   // (the drawn camera: rows view, left, up)
 // orig3: 0x1FE840 + the start: a one-shot (kind 0) effect played once at ploFrame (null: at the effect object). For the
 // scripts / damage code (e.g. the attract's lightning xps_m_lightning1 / 2, the explode_* effects).
-void TriggerPe(LO* ppe, const LO* ploFrame = nullptr);
+void TriggerPe(LO* ppe, const LO* ploFrame = nullptr, bool fOwnRandom = false);
+// (PC) the random draws of the effects code: GRandInRange, or the breakable effects' own stream while one runs
+float GRandPe(float lo, float hi);
+void SetPeOwnRandom(bool f);   // (the interaction sparkles, jt.cpp: their draws on the same own stream)
+// orig3: 0x1FE840(ppe, ppe, 0, 1) + the stream's slot 2: c particles given (world positions / velocities, birth / end
+// times) into a kind-0 effect's stream, its size curve (the velocity record's +0x20) set to pclqScale when given (the
+// interaction sparkles 0x1B6B10)
+struct PEVELPARAMS { float speedLo = 0, speedHi = 0, advLo = 0, advHi = 0, ageLo = 0, ageHi = 0, life = 1; };
+bool FPeVelParams(const LO* ppe, PEVELPARAMS* pp);
+void EmitPeParticles(LO* ppe, int c, const glm::vec3* apos, const glm::vec3* avel, const float* at0, const float* at1, const float* pclqScale);
+// orig3: 0x178278's ripple (the water's wake): the PE moved to pos (SetLoxPos 0x2312A0, slot 34), its kind-0 instance
+// (0x1FE840(ppe, ppe, 0, 0)), the stream of its component oidComp (0x202C90: 0x78C) given the size range {g, g} (shared
+// record +0x14 / +0x18) and the size curve {g, 0.6 g, 0} (velocity record +0x20), one particle emitted (0x1FF590(1)).
+// False: no such component.
+bool FEmitPeComponent(LO* ppe, int oidComp, const glm::vec3& pos, float gScale);
+// orig3: 0x25D940 (the scripts' 0x41, the ASEG event 17, a breakable's item 7): the effect oidEffect found near
+// ploContext: a PE started, else an explosion (from oidSource, else itself; scaled when g != 1)
+void StartEffectByOid3(int oidEffect, int oidSource, float g, LO* ploContext, bool fOwnRandom = false);
+// orig3: 0x203030 + the instance's vt slot 2: the instances of ppe that TriggerPe started on ploFrame dropped at once
+void StopTriggeredPe(const LO* ppe, const LO* ploFrame);
+// A PE whose kind (+0xD8, option 539) is 0: a one-shot, out of the world from its start (0x1FE5E0)
+bool FPeOneShot(const LO* plo);
 // Statistics / debugging (SLY3_PEDBG=1 prints the instances).
 struct PESTATS
 {

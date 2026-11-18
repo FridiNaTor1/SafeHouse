@@ -6,6 +6,8 @@
 #include "asega.h"
 
 struct SMA;
+// (PC) true: this SMA's random choices come from their own stream (pickup.cpp: the pickups' SMAs)
+extern bool (*g_pfnSmaOwnRandom)(const SMA* psma);
 
 // The state-change message (0x1F13A8: {the SMA, the old state's oid, the new one's}).
 struct SMAMSG10
@@ -87,3 +89,8 @@ void ReplaceSmaHandleMask(SM* psm, ALO* palo, OID oid, int grfapl, uint32_t grfM
 void ClearSmaHandle(SMA** ppsma);
 // orig: 0x001F0D88 ChooseSmaTransition
 void ChooseSmaTransition(SMA* psma, bool fReverse);
+
+// orig3: 0x23A850: the time the SMA needs to reach the state oidGoal (smrun.cpp); an ASEG's length at its speed with
+// the suck polynomial (0x22A670's kind 0x16)
+float TSmaToGoal3(SMA* psma, OID oidGoal);
+float DtAsegSuck3(const ASEG* paseg);

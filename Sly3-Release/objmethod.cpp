@@ -95,8 +95,21 @@ void RegisterObjectMethod(uint32_t pfnThunk, PFNOBJMETHOD pfn)
     if (!fAny)
         if (const int64_t va3 = sly3::gen::LookupRt(sly3::gen::afn, pfnThunk); va3 > 0)
         {
-            MpMethod().try_emplace(uint32_t(va3), pfn);
-            fAny = true;
+            // (the function map's guess must not take a Sly 3 thunk that the thunk map pairs with another Sly 2 thunk:
+            // Sly 2's SCPT builder 0x10A438 (scpt.cpp, unused under Sly 3's scripts) took 0x1086B8, the CMDLIST's op 14
+            // builder (EOPID 743 = Sly 2's 611 / 0x106538), by registering first: every guard list lost its op 14, e.g.
+            // Carmelita's 2126 (the clip 8919 she holds at the end of her run in v_ext's chase scene))
+            bool fPaired = false;
+            for (const THUNKROW& r : s_athunkrow)
+                if (r.va3 == uint32_t(va3)) fPaired = true;
+            if (!fPaired)
+            {
+                MpMethod().try_emplace(uint32_t(va3), pfn);
+                fAny = true;
+            }
+            else if (FRegPrint())
+                std::fprintf(stderr, "sly3: method thunk 0x%X (Sly 2): its function-map twin 0x%X belongs to another thunk pair: not registered\n",
+                             pfnThunk, uint32_t(va3));
         }
     ++Regstats().cmethod;
     if (!fAny)
@@ -259,13 +272,16 @@ CRef RefFromOptionValue(const OPTVAL& v)
         else ref.SetTag(TAGK_Nil);
         return ref;
     }
+    // (s3-gadgets) by the tags' names: the raw numbers here were Sly 2's (0x15 S32, 0x16 F32, 0x17 Bool, 0x1A / 0x1C a
+    // vector, 0x1D a range), which are other tags in Sly 3 (game/gen/tagmap.inc), so every float / vector argument of a
+    // load-time option method arrived as the integer 0 (e.g. the players' throw parameters, EOPID 797: NaN aim blends)
     switch (v.tagk)
     {
-    case 0x15: ref.SetS32(v.n); break;
-    case 0x16: ref.SetF32(v.ag[0]); break;
-    case 0x17: ref.SetBool(v.n); break;
-    case 0x1A: case 0x1C: ref.SetVector(glm::vec3(v.ag[0], v.ag[1], v.ag[2])); break;
-    case 0x1D: ref.SetLm({v.ag[0], v.ag[1]}); break;
+    case TAGK_S32: ref.SetS32(v.n); break;
+    case TAGK_F32: ref.SetF32(v.ag[0]); break;
+    case TAGK_Bool: ref.SetBool(v.n); break;
+    case TAGK_Vector: case TAGK_Clq: ref.SetVector(glm::vec3(v.ag[0], v.ag[1], v.ag[2])); break;
+    case TAGK_Lm: ref.SetLm({v.ag[0], v.ag[1]}); break;
     default:
         // (a loader option without a CRef tag: by its kind (OTYP): 1 a float, 2 / 9 / 11 a vector (the physics port))
         if (v.tagk == -1 && v.k == 1) ref.SetF32(v.ag[0]);

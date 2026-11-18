@@ -1,3 +1,4 @@
+#include "actioninput.h"
 // The authored photo targets (cid 0x2E) and the binocucom's photo helper.
 #include "photo.h"
 #include "game/sly3.h"
@@ -25,6 +26,8 @@
 #include "sw.h"
 #include "task.h"
 #include "worldaccess.h"
+#include "game/scptgame3.h"
+#include "game/task3.h"
 #include <algorithm>
 #include <array>
 #include <cfloat>
@@ -52,7 +55,7 @@ struct PHOTOTARGET {
 struct PHOTOPROMPT {
     int state = -1;                                      // +0
     ACTOR* owner = nullptr;                              // +A8's owner
-    glm::vec3 screen{320.0f, 246.40000915527344f, 0.0f};  // +10
+    glm::vec3 screen{320.0f, 240.0f, 0.0f};             // +10 (orig3 0x24BC70: (320, 240))
     glm::vec3 eye{0.0f};                                 // +20
     std::vector<PHOTOTARGET> targets;                     // +30/+34, at most16
     std::vector<PHOTOTARGET*> listed;                     // +74/+78, at most5
@@ -74,7 +77,10 @@ LO* ObjectField(LO* p, uint32_t off) {
     const int id = static_cast<int>(p->U32Field(0, off, uint32_t(-1)));
     return id == -1 ? nullptr : PloFindSwNearest(p, id);
 }
-// orig: 0x203568 / 0x2035A8 (target init/load defaults and authored option fields).
+// orig3: 0x24D4B8 / 0x24D4F8 (Sly 2's 0x203568 / 0x2035A8: the target init / load defaults and its authored fields).
+// The fields are read at Sly 2's offsets: the option loader stores them there (Sly 3's RECONTARGET has them 0x10 lower:
+// +0xD0 radius .. +0xDC task .. +0x100 message)
+constexpr uint32_t IB_CUSTOM = 0x10C;
 PHOTOTARGET Target(LO* plo) {
     PHOTOTARGET t; t.plo = plo;
     t.radius = FloatField(plo, 0xE0, 75.0f);
@@ -87,12 +93,21 @@ PHOTOTARGET Target(LO* plo) {
     t.dialog = int(plo->U32Field(0, 0xFC, uint32_t(-1)));
     t.linked = ObjectField(plo, 0x100);
     t.linkedRadius = FloatField(plo, 0x104, 5000.0f);
-    t.custom = int(plo->U32Field(0, 0x10C, 0));
+    t.custom = int(plo->U32Field(0, IB_CUSTOM, 0));
     t.message = int(plo->U32Field(0, 0x110, uint32_t(-1)));
     return t;
 }
-// orig: 0x203758 / 0x203790.
+// orig: 0x203758 / 0x203790. (orig3: 0x24D6B0, the same C in the Sly 3 decomp)
+// (Sly 3: a target's task is task3's (TASK3, its +0x44 state); the Sly 2 TASK shell of the object stays at -1, so no
+// target was ever eligible. -2: no task.)
+const TASK3* Ptask3(const LO* plo) { return plo && FScripts3Active() ? PtaskFind3(plo->oid) : nullptr; }
+int NTaskState(const LO* plo) {
+    if (const TASK3* p3 = Ptask3(plo)) return p3->nState;
+    if (const TASK* task = dynamic_cast<const TASK*>(plo)) return task->nState;
+    return -2;
+}
 bool Done(const PHOTOTARGET& t) {
+    if (const TASK3* p3 = Ptask3(t.task)) return p3->nState == -1 ? FTaskDone3(p3) : p3->nState >= 2;
     if (const TASK* task = dynamic_cast<const TASK*>(t.task)) {
         if (task->nState == -1 && task->prD8.F()) {
             const CRef complete = RefGetProgressKey(task->prD8.akey);
@@ -104,8 +119,8 @@ bool Done(const PHOTOTARGET& t) {
 }
 bool Eligible(const PHOTOTARGET& t) {
     if (!t.plo->fInWorld || (t.linked && t.linked->fInWorld)) return false;
-    const TASK* task = dynamic_cast<const TASK*>(t.task);
-    return !task || task->nState == 1;
+    const int n = NTaskState(t.task);
+    return n == -2 || n == 1;
 }
 // orig: 0x201E88 / 0x201F00 (the linked models hidden while viewing, restored afterward).
 void Linked(PHOTOPROMPT& p, bool on) {
@@ -118,16 +133,16 @@ void Linked(PHOTOPROMPT& p, bool on) {
 void List(PHOTOPROMPT& p) {
     p.listed.clear();
     for (auto& t : p.targets) {
-        const TASK* task = dynamic_cast<const TASK*>(t.task);
-        if (t.listTitle != -1 && (!task || task->nState == 1 || task->nState == 2) && p.listed.size() < 5)
+        const int n = NTaskState(t.task);
+        if (t.listTitle != -1 && (n == -2 || n == 1 || n == 2) && p.listed.size() < 5)
             p.listed.push_back(&t);
     }
 }
 // orig: 0x2021F8 (five authored root matches, D_002C3588).
 void ListMarks(PHOTOPROMPT& p) {
     for (size_t i = 0; i < p.listed.size(); ++i) {
-        const int m = int(g_disc.U32Elf(S3VA(0x2C3588) + uint32_t(i * 4)));
-        SelectScreenObjPartAt(p.primary, Done(*p.listed[i]) ? 0x33A : 0x33B, m);
+        const int m = int(g_disc.U32Elf(0x349370 + uint32_t(i * 4)));   // orig3 0x24C118: D_00349370, parts 0x3C1 / 0x3C2
+        SelectScreenObjPartAt(p.primary, Done(*p.listed[i]) ? 0x3C1 : 0x3C2, m);
     }
 }
 // orig: 0x201F90 / 0x2022D8.
@@ -200,8 +215,7 @@ void Pick(PHOTOPROMPT& p) {
     else p.eye = PosActorFocus(*p.owner, pose, ctx);
     p.eye.z += 20.0f;
     PHOTOTARGET* best = nullptr;
-    float minimum;
-    const uint32_t minimumBits = g_disc.U32Elf(S3VA(0x2A8550)); std::memcpy(&minimum, &minimumBits, 4);
+    float minimum = FLT_MAX;   // (orig3 0x24C478: 3.4028235e38)
     static const bool s_fWhy = std::getenv("SLY2N_PHOTOWHY") != nullptr;  // (debug: why each target is not picked)
     for (auto& t : p.targets) {
         if (!Eligible(t)) { if (s_fWhy) std::printf("photowhy %d: not eligible (in %d, linked %d in %d radius %.0f, cam distance %.0f)\n", t.plo->oid, t.plo->fInWorld, t.linked ? t.linked->oid : -1, t.linked ? t.linked->fInWorld : -1, t.linkedRadius, glm::length(glm::vec2(PosLoWorld(t.plo) - g_cm.pos))); continue; }
@@ -211,7 +225,7 @@ void Pick(PHOTOPROMPT& p) {
         if (!FInsideCmMrd(&g_cm, pos, t.plo->sRadius, &alpha)) { if (s_fWhy) std::printf("photowhy %d: beyond the draw distance (radius %.1f)\n", t.plo->oid, t.plo->sRadius); continue; }
         const glm::vec3 d = pos - g_cm.pos;
         const float distance = std::sqrt(std::fabs(d.x * d.x + d.y * d.y));
-        if (s_fWhy) std::printf("photowhy %d: distance %.1f (minimum %.1f)\n", t.plo->oid, distance, minimum);
+        if (s_fWhy) std::printf("photowhy %d: distance %.1f (minimum %.1f) at %.0f %.0f %.0f, camera %.0f %.0f %.0f\n", t.plo->oid, distance, minimum, pos.x, pos.y, pos.z, g_cm.pos.x, g_cm.pos.y, g_cm.pos.z);
         if (distance < minimum) {
             Visibility(p, t);
             if (s_fWhy) std::printf("photowhy %d: visibility %d\n", t.plo->oid, t.visibility);
@@ -221,8 +235,8 @@ void Pick(PHOTOPROMPT& p) {
     if (best != p.best) { p.best = best; SetPhotoPromptState(&p, 2); }
 }
 void Refresh(PHOTOPROMPT& p) {
-    SelectScreenObjPart(p.primary, 0x35D);
-    if (!p.listed.empty()) SelectScreenObjPart(p.primary, 0x35E);
+    SelectScreenObjPart(p.primary, 0x3DC);
+    if (!p.listed.empty()) SelectScreenObjPart(p.primary, 0x3DD);
     ListMarks(p);
 }
 void Trace(const PHOTOPROMPT& p, int old) {
@@ -250,9 +264,16 @@ void* PostLoadPhotoPrompt(ACTOR* pa) {
     if (!pa || !FCidDerivedFrom(pa->palo->Cid(), S3CID(0x35))) return nullptr;
     if (s_serial != g_psw->serial) { s_prompts.clear(); s_serial = g_psw->serial; }
     auto p = std::make_unique<PHOTOPROMPT>(); p->owner = pa;
-    p->primary = PloFindSwAny(0x362); p->secondary = PloFindSwAny(0x365); p->overlay = PloFindSwAny(0x602);
+    p->primary = PloFindSwAny(0x40F); p->secondary = PloFindSwAny(0x412); p->overlay = PloFindSwAny(0x6D3);   // orig3 0x24BCC0
     for (const auto& o : g_psw->aploAll)
         if (FCidDerivedFrom(o->Cid(), S3CID(0x2E)) && p->targets.size() < 16) p->targets.push_back(Target(o.get()));
+    if (std::getenv("SLY2N_PHOTOPRINT"))
+        for (const auto& t : p->targets) {
+            const LOX* x = static_cast<const LOX*>(t.plo);
+            std::printf("photo target %d: load 0x%X mask 0x%X in %d removed %d xf ref %d (%s) parent %d at %.0f %.0f %.0f task %d title %d dialog %d linked %d radius %.0f size %.0f\n", t.plo->oid, t.plo->grfLoad, unsigned(t.plo->bMask), int(t.plo->fInWorld), int(t.plo->fRemoved), x->ixfRef,
+                        x->pxf ? "found" : "none", t.plo->paloParent ? t.plo->paloParent->oid : -1, PosLoWorld(t.plo).x, PosLoWorld(t.plo).y,
+                        PosLoWorld(t.plo).z, t.task ? t.task->oid : -1, t.title, t.dialog, t.linked ? t.linked->oid : -1, t.radius, t.size);
+        }
     Linked(*p, false);
     PHOTOPROMPT* out = p.get(); s_prompts[pa] = std::move(p); return out;
 }
@@ -290,30 +311,29 @@ void SetPhotoPromptState(void* pv, int next) {
     if (wasPaused != paused) { if (paused) PauseGame(0); else ResumeGame(0); }
     switch (old) {
     case 1: DistanceModels(p); List(p); Refresh(p); break;
-    case 4: ResetScreenObjPart(p.secondary, 0x359); break;
-    case 5: case 6: ResetScreenObjPart(p.secondary, 0x35A); break;
+    case 4: ResetScreenObjPart(p.secondary, 0x3D8); break;
+    case 5: case 6: ResetScreenObjPart(p.secondary, 0x3D9); break;
     case 7:
-        ResetScreenObjPart(p.primary, 0x356); ResetScreenObjPart(p.secondary, 0x356); ResetScreenObjPart(p.secondary, 0x357); break;
+        ResetScreenObjPart(p.primary, 0x3D5); ResetScreenObjPart(p.secondary, 0x3D5); ResetScreenObjPart(p.secondary, 0x3D6); break;
     case 8:
         SetGrfUpdOfLo(p.owner->palo, p.savedFlags);
         SetClockFactor(&g_clock, 0, 1.0f); SetSoundMgrFlags(1, true);
-        ResetScreenObjPart(p.primary, 0x358); break;
+        ResetScreenObjPart(p.primary, 0x3D7); break;
     case 9:
         g_cmpolicies.cprecon.ResetZoom();
-        SetScreenObjListed(p.primary, false); ShowScreenObj(p.primary, 0x310);
+        SetScreenObjListed(p.primary, false); ShowScreenObj(p.primary, 0x377);
         if (p.overlay && p.best) {
             if (p.best->dialog != -1) PsndStartDialog(p.best->dialog);
-            StartAnimatedOverlay(p.overlay, 0x608, p.best->dialog);  // orig0x147C20
+            StartAnimatedOverlay(p.overlay, 0x6D9, p.best->dialog);  // orig0x147C20
         }
         if (p.best) {
             if (p.best->task) RequestLoTaskState(p.best->task, 2, p.best->plo);  // orig0x2036E8
             else p.best->done = 1;
         }
-        BroadcastTaskEvent(g_psw, 10, nullptr);
         p.best = nullptr;
         if (Active(p)) {
-            SelectScreenObjPart(p.primary, 0x35D);
-            if (!p.listed.empty()) SelectScreenObjPart(p.primary, 0x35E);
+            SelectScreenObjPart(p.primary, 0x3DC);
+            if (!p.listed.empty()) SelectScreenObjPart(p.primary, 0x3DD);
         }
         ListMarks(p);
         break;
@@ -325,31 +345,31 @@ void SetPhotoPromptState(void* pv, int next) {
         p.best = nullptr; p.selected = p.message = -1;
         for (auto& t : p.targets) t.visibility = 0;
         ShowScreenObj(p.primary, -1); Linked(p, false); Volume(p);
-        BroadcastTaskEvent(g_psw, 9, nullptr); break;
-    case 1: ResetScreenObjPart(p.primary, 0x35D); ShowScreenObj(p.secondary, 0x339); break;
-    case 2: ShowScreenObj(p.secondary, 0x339); break;
+        Broadcast3(4, nullptr); break;   // (orig3 0x1854C8 code 4; Sly 2's 9 has no Sly 3 twin in the broadcast map)
+    case 1: ResetScreenObjPart(p.primary, 0x3DC); ShowScreenObj(p.secondary, 0x3C0); break;
+    case 2: ShowScreenObj(p.secondary, 0x3C0); break;
     case 3: case 4:
         SetScreenObjFollow(p.secondary, p.best ? p.best->plo : nullptr);  // orig202768: secondary +0xF4
-        ShowScreenObj(p.secondary, 0x337); SelectScreenObjPart(p.secondary, 0x359); SetScreenObjFraction(p.secondary, 0x359, 0.0f); break;
+        ShowScreenObj(p.secondary, 0x3BE); SelectScreenObjPart(p.secondary, 0x3D8); SetScreenObjFraction(p.secondary, 0x3D8, 0.0f); break;
     case 5: case 6:
-        SelectScreenObjPart(p.secondary, 0x35A); SetScreenObjFraction(p.secondary, 0x35A, 0.0f); break;
+        SelectScreenObjPart(p.secondary, 0x3D9); SetScreenObjFraction(p.secondary, 0x3D9, 0.0f); break;
     case 7:
         PsndStartSound(0x52);
         p.selected = p.best ? p.best->title : -1;
-        SelectScreenObjPart(p.primary, 0x356); SelectScreenObjPart(p.secondary, 0x356); SelectScreenObjPart(p.secondary, 0x357); break;
+        SelectScreenObjPart(p.primary, 0x3D5); SelectScreenObjPart(p.secondary, 0x3D5); SelectScreenObjPart(p.secondary, 0x3D6); break;
     case 8:
-        ResetScreenObjPart(p.primary, 0x35B); SelectScreenObjPart(p.primary, 0x358);
+        ResetScreenObjPart(p.primary, 0x3DA); SelectScreenObjPart(p.primary, 0x3D7);
         p.savedFlags = GrfUpdOfLo(p.owner->palo); SetGrfUpdOfLo(p.owner->palo, p.savedFlags | 0x102);
         SetSoundMgrFlags(1, false); SetClockFactor(&g_clock, 0, 0.0f); break;
     case 9:
-        ShowScreenObj(p.secondary, 0x339); ShowScreenObj(p.primary, 0x35C); SetScreenObjListed(p.primary, true); break;
+        ShowScreenObj(p.secondary, 0x3C0); ShowScreenObj(p.primary, 0x3DB); SetScreenObjListed(p.primary, true); Broadcast3(5, nullptr); break;
     case 10:
         p.best = nullptr; p.selected = p.message = -1;
         HideScreenObj(p.secondary); HideScreenObj(p.primary); Linked(p, true);
-        BroadcastTaskEvent(g_psw, 11, nullptr); break;
+        Broadcast3(6, nullptr); break;
     case -1:
         if (old != 10) {
-            BroadcastTaskEvent(g_psw, 11, nullptr);
+            Broadcast3(6, nullptr);
             for (LO* o : {p.primary, p.secondary}) if (NScreenObjState(o)) { SetScreenObjState(o, 1); SetScreenObjTimers(o, 1); }
         }
         break;
@@ -365,9 +385,9 @@ void UpdatePhotoPrompt(void* pv) {
     if (!p.primary || !p.secondary) return;
     // the original keeps pointers to the targets: +0x10C (option 1040, "not yet") is read live, e.g. Ep4's spycam
     // station 88574's methods 1746 / 1747 clear / set it on its code target 77142 around the guard's code entry
-    for (PHOTOTARGET& t : p.targets) t.custom = int(t.plo->U32Field(0, 0x10C, 0));
+    for (PHOTOTARGET& t : p.targets) t.custom = int(t.plo->U32Field(0, IB_CUSTOM, 0));
     if (p.closePending) { p.closePending = false; CloseBinoc(p.owner); }
-    if (p.tHint + 5.0f < g_clock.t) ResetScreenObjPart(p.primary, 0x35B);
+    if (p.tHint + 5.0f < g_clock.t) ResetScreenObjPart(p.primary, 0x3DA);
     if (p.state >= 2 && p.state < 8) {
         Pick(p); DistanceModels(p);
         if (!Active(p)) SetPhotoPromptState(&p, 1);
@@ -376,8 +396,8 @@ void UpdatePhotoPrompt(void* pv) {
         const glm::vec3 pos = PosLoWorld(p.best->plo);
         const glm::vec3 first0 = ConvertCmWorldToScreen(&g_cm, pos);
         const glm::vec3 second0 = ConvertCmWorldToScreen(&g_cm, pos + g_cm.mat[1] * p.best->size);
-        const glm::vec2 first(first0.x * 320.0f + 320.0f, first0.y * -246.40000915527344f + 246.40000915527344f);
-        const glm::vec2 second(second0.x * 320.0f + 320.0f, second0.y * -246.40000915527344f + 246.40000915527344f);
+        const glm::vec2 first(first0.x * 320.0f + 320.0f, first0.y * -240.0f + 240.0f);   // (orig3 0x24CCB0: 240)
+        const glm::vec2 second(second0.x * 320.0f + 320.0f, second0.y * -240.0f + 240.0f);
         float center = glm::length(first - glm::vec2(p.screen));
         center = center - 128.0f; center = center * 0.0078125f; center = 1.0f - center;
         p.centering = std::clamp(center, 0.0f, 1.0f);
@@ -393,14 +413,14 @@ void UpdatePhotoPrompt(void* pv) {
             const glm::vec3 pos = PosLoWorld(t.plo);
             const glm::vec3 s0 = ConvertCmWorldToScreen(&g_cm, pos);
             const glm::vec3 s1 = ConvertCmWorldToScreen(&g_cm, pos + g_cm.mat[1] * t.size);
-            const glm::vec2 a(s0.x * 320.0f + 320.0f, s0.y * -246.4f + 246.4f), b(s1.x * 320.0f + 320.0f, s1.y * -246.4f + 246.4f);
+            const glm::vec2 a(s0.x * 320.0f + 320.0f, s0.y * -240.0f + 240.0f), b(s1.x * 320.0f + 320.0f, s1.y * -240.0f + 240.0f);
             std::printf("photoaim frame %d state %d target %d at %.0f %.0f %.0f screen %.1f %.1f (z %.2f) reticle %.1f %.1f size %.3f best %d done %d\n",
                         g_iframeHarness, p.state, t.plo->oid, pos.x, pos.y, pos.z, a.x, a.y, s0.z, float(p.screen.x), float(p.screen.y),
                         glm::length(a - b) / 120.0f, p.best ? p.best->plo->oid : -1, int(Done(t)));
         }
     auto nearFull = [&] { return p.best && 1.0f - p.best->tolerance <= p.size; };
     switch (p.state) {
-    case 0: if (FScreenObjBusy(p.primary, 0x314)) SetPhotoPromptState(&p, 1); break;
+    case 0: if (FScreenObjBusy(p.primary, 0x37B)) SetPhotoPromptState(&p, 1); break;
     case 1: DistanceModels(p); if (Active(p)) SetPhotoPromptState(&p, 2); break;
     case 2: if (p.best && p.best->visibility != 2) SetPhotoPromptState(&p, 4); break;
     case 3:
@@ -416,48 +436,49 @@ void UpdatePhotoPrompt(void* pv) {
         if (!p.best) SetPhotoPromptState(&p, 2);
         else if (p.centering < 1.0f) SetPhotoPromptState(&p, 4);
         else if (nearFull()) SetPhotoPromptState(&p, 7);
-        else SetScreenObjFraction(p.secondary, 0x35A, p.size);
+        else SetScreenObjFraction(p.secondary, 0x3D9, p.size);
         break;
     case 7:
         if (!p.best) SetPhotoPromptState(&p, 2);
         else if (p.centering < 1.0f || p.size < 1.0f - p.best->tolerance) SetPhotoPromptState(&p, p.rising ? 5 : 6);
         break;
     case 8:
-        if (!FScreenObjBusy(p.primary, 0x358)) {
+        if (!FScreenObjBusy(p.primary, 0x3D7)) {
             bool hint = false;
             if (p.best && p.best->visibility == 1 && 1.0f <= p.centering && nearFull()) {
                 if (!p.best->custom) SetPhotoPromptState(&p, 9);
                 else { p.message = p.best->message; hint = true; SetPhotoPromptState(&p, 7); }
             } else {
                 int off, state;
-                if (p.best && p.best->visibility != 1) { off = 0x110; state = 3; }
-                else if (1.0f <= p.centering && p.rising) { off = 0x114; state = 5; }
-                else if (1.0f <= p.centering && !p.rising) { off = 0x118; state = 6; }
-                else if (p.best) { off = 0x11C; state = 4; }
-                else { off = 0x120; state = 2; }
+                // (orig3 0x24CCB0: the primary's lines at +0x120..+0x130, Sly 2's +0x110..)
+                if (p.best && p.best->visibility != 1) { off = 0x120; state = 3; }
+                else if (1.0f <= p.centering && p.rising) { off = 0x124; state = 5; }
+                else if (1.0f <= p.centering && !p.rising) { off = 0x128; state = 6; }
+                else if (p.best) { off = 0x12C; state = 4; }
+                else { off = 0x130; state = 2; }
                 p.message = int(p.primary->U32Field(0, uint32_t(off), uint32_t(-1)));
                 hint = true; SetPhotoPromptState(&p, state);
             }
-            if (hint) { SelectScreenObjPart(p.primary, 0x35B); p.tHint = g_clock.t; }
+            if (hint) { SelectScreenObjPart(p.primary, 0x3DA); p.tHint = g_clock.t; }
         }
         break;
     case 9:
-        if (!FScreenObjBusy(p.primary, 0x35C)) {
+        if (!FScreenObjBusy(p.primary, 0x3DB)) {
             SetPhotoPromptState(&p, 2);
             bool ready = true;
             for (const auto& t : p.targets) {
-                const TASK* task = dynamic_cast<const TASK*>(t.task);
-                if (!Done(t) && (!task || task->nState == 1)) { ready = false; break; }
+                const int n = NTaskState(t.task);
+                if (!Done(t) && (n == -2 || n == 1)) { ready = false; break; }
             }
             if (ready) p.closePending = true;
         }
         break;
-    case 10: if (!FScreenObjBusy(p.primary, 0x314)) SetPhotoPromptState(&p, -1); break;
+    case 10: if (!FScreenObjBusy(p.primary, 0x37B)) SetPhotoPromptState(&p, -1); break;
     default: break;
     }
     if (p.owner->nF20 == 1 || p.state < 2 || p.state > 7) return;
     const uint32_t buttons = p.state == 7 ? 0xFA : 0xA;
     if (FActiveCplcy(&g_cmpolicies.cpdefault)) return;  // orig0x14FD50
-    if (PODATA* pd = PpodataFromLo(p.owner->palo); pd && pd->ppadctl && GrfPadctlTakePressed(pd->ppadctl, buttons, 0.0f))
+    if (PODATA* pd = PpodataFromLo(p.owner->palo); pd && sly2actions::Take(pd->ppadctl, sly2actions::Action::Photo, buttons, 0.0f))
         SetPhotoPromptState(&p, 8);
 }

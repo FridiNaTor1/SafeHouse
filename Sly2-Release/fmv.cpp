@@ -1,7 +1,11 @@
 // Movies (see fmv.h). The PSS demux is Sly1-Release's "File Extractor/main.cpp" DemuxPss / DecodePssAudioToWav
 // made incremental (packets read from the disc as the movie plays); the decoder setup is Sly1-Release fmv.cpp's.
 
+#if defined(__ANDROID__) || defined(CANE_IOS)
+#include "mobile_app.h"
+#endif
 #include "fmv.h"
+#include "langstore.h"
 #include "region.h"
 
 #include "audio.h"
@@ -10,6 +14,7 @@
 #include "wavfile.h"
 
 #include "../platform/platform.h"
+#include "../platform/safe_paths.h"
 
 extern "C"
 {
@@ -192,7 +197,7 @@ public:
         }
         m_pfnWav = PfnReadFile(path);
         std::error_code ec;
-        const uint64_t cb = std::filesystem::file_size(cane::path(path), ec);
+        const uint64_t cb = std::filesystem::file_size(cane::paths::ioPath(cane::path(path)), ec);
         std::string error;
         if (ec || !FParseWav(m_pfnWav, cb, m_wi, &error))
         {
@@ -343,6 +348,48 @@ bool FDemuxMovie(const std::vector<uint8_t>& abFile, std::vector<uint8_t>& abVid
     return FDemuxPss(reader, abVideo, mpaudio);
 }
 
+std::vector<uint8_t> AbPssKeepTracks(const std::vector<uint8_t>& ab, const std::function<bool(int track)>& fKeep)
+{
+    // (the packets as CPssReader walks them; a pack's header is kept with the first packet kept after it)
+    std::vector<uint8_t> abOut;
+    abOut.reserve(ab.size());
+    auto copy = [&](std::size_t ib, std::size_t cb) {
+        abOut.insert(abOut.end(), ab.begin() + std::ptrdiff_t(ib), ab.begin() + std::ptrdiff_t(ib + cb));
+    };
+    std::size_t ib = 0, ibHeader = 0, cbHeader = 0;  // the pack header not copied yet (cbHeader 0: none)
+    while (ib + 6 <= ab.size())
+    {
+        const uint32_t code = Be32(ab.data() + ib);
+        if (code == 0x000001B9) break;  // program end
+        if (code == 0x000001BA)
+        {
+            if (ib + 14 > ab.size()) break;
+            ibHeader = ib;
+            cbHeader = 14 + (ab[ib + 13] & 7u);
+            ib += cbHeader;
+            continue;
+        }
+        if ((code >> 8) != 1 || (code & 0xFF) < 0xBC)
+        {
+            ++ib;  // zero fill
+            continue;
+        }
+        const std::size_t cbPacket = std::min<std::size_t>(6 + Be16(ab.data() + ib + 4), ab.size() - ib);
+        // (a sound packet's track: its payload's fourth byte, as FPlayMovie picks it)
+        const std::size_t ibData = cbPacket >= 9 ? ib + 9 + ab[ib + 8] : ib + cbPacket;
+        if (code != 0x000001BD || ibData + 4 > ib + cbPacket || fKeep(ab[ibData + 3]))
+        {
+            if (cbHeader) copy(ibHeader, cbHeader);
+            cbHeader = 0;
+            copy(ib, cbPacket);
+        }
+        ib += cbPacket;
+    }
+    ib = std::min(ib, ab.size());
+    copy(ib, ab.size() - ib);
+    return abOut;
+}
+
 std::vector<MOVIEINFO> MovieList()
 {
     std::vector<MOVIEINFO> a;
@@ -377,6 +424,13 @@ bool FFindMovie(const std::string& arg, MOVIEINFO* pinfo)
 // fmv.cpp PlayCutscene (the FFmpeg decoder, the frame pacing)
 bool FPlayMovie(const FK& fk, PFNMOVIEPRESENT pfnPresent, void* pv, MOVIESTATS* pstats, double tMax)
 {
+#if defined(__ANDROID__) || defined(CANE_IOS)
+    // the on-screen pad shows only the skip / advance keys while a movie plays (pcinput.cpp)
+    extern bool g_fMovieTouchContext;
+    g_fMovieTouchContext = true;
+    cane::mobile::setTouchContext(cane::mobile::TouchContext::Cinematic);
+    struct MovieContextEnd { ~MovieContextEnd() { g_fMovieTouchContext = false; } } movieContextEnd;
+#endif
     MOVIESTATS stats;
     av_log_set_level(AV_LOG_ERROR);
     const AVCodec* codec = avcodec_find_decoder(AV_CODEC_ID_MPEG2VIDEO);
@@ -397,12 +451,22 @@ bool FPlayMovie(const FK& fk, PFNMOVIEPRESENT pfnPresent, void* pv, MOVIESTATS* 
     CPssReader reader(fk);
     CMovieAudio audio;
     // (PC) an M2V's sound: the WAV of track 0 (one sound track: the USA disc), else the language's (track + 1)
-    if (reader.FElementary())
+    // (PC: a language the disc lacks: its sound from the languages folder, langstore.h, over a PSS's own too)
+    const std::string pathStore = PathLanguageStoreMovieAudio(fk.isector);
+    if (!pathStore.empty())
+    {
+        const bool fOpen = audio.FOpenWav(pathStore);
+        std::printf("movie %u: the sound of %s from the languages folder%s\n", fk.id, SzLanguage(LangVoice()), fOpen ? "" : " could not be read");
+    }
+    else if (reader.FElementary())
     {
         std::string path = g_disc.PathPart(fk.isector, "audio0");
-        if (path.empty()) path = g_disc.PathPart(fk.isector, "audio" + std::to_string(g_nLang + 1));
+        if (path.empty()) path = g_disc.PathPart(fk.isector, "audio" + std::to_string(LangWorldVoice() + 1));
         if (!path.empty()) audio.FOpenWav(path);
+        if (LangVoice() != g_nLang) std::printf("movie %u: the disc's sound (%s voices)\n", fk.id, SzLanguage(LangWorldVoice()));
     }
+    else if (LangVoice() != g_nLang)
+        std::printf("movie %u: the disc's sound track %d (%s voices)\n", fk.id, CLanguagesDisc() > 1 ? LangWorldVoice() + 1 : 0, SzLanguage(LangWorldVoice()));
     CPcmStream pcm;
     std::deque<PICTURE> apicture;
     bool fEof = false, fQuit = false, fAudioStarted = false;
@@ -489,7 +553,7 @@ bool FPlayMovie(const FK& fk, PFNMOVIEPRESENT pfnPresent, void* pv, MOVIESTATS* 
             if (id == 0xE0) feedVideo(pb, cb);
             // orig 0x1B3EC0: the sound streams with the id 0 (one sound track: the USA disc) or the language's + 1 (the
             // European discs: one track per language, 1..11; region.h)
-            else if (cb >= 4 && (pb[3] == 0 || pb[3] == g_nLang + 1)) audio.AddPacket(pb, cb);
+            else if (cb >= 4 && pathStore.empty() && (pb[3] == 0 || pb[3] == LangWorldVoice() + 1)) audio.AddPacket(pb, cb);
             if (apicture.size() > 8) break;  // (sound far behind the pictures: show some first)
         }
     };
@@ -705,7 +769,7 @@ int PlayMovieCommand(const std::string& arg, const std::string& dirOut, double t
     if (!dirOut.empty()) std::filesystem::create_directories(dirOut);
     if (SDL_InitSubSystem(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER) == 0)
     {
-        s.pwindow = SDL_CreateWindow("Sly 2 movie", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 960, 720,
+        s.pwindow = SDL_CreateWindow("Sly 2: Band of Thieves", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 960, 720,
                                      SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
         if (s.pwindow) s.prenderer = SDL_CreateRenderer(s.pwindow, -1, SDL_RENDERER_PRESENTVSYNC);
         for (int i = 0; i < SDL_NumJoysticks(); ++i)

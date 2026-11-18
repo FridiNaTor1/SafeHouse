@@ -7,6 +7,7 @@
 #include "murraycarry.h"
 #include "trail.h"
 #include "activate.h"
+#include "pe.h"
 #include "display.h"
 #include "nav.h"
 #include <execinfo.h>
@@ -29,6 +30,7 @@
 void PrintRef(const CRef& ref, std::string* ps);  // bif.cpp (debug)
 #include "physworld.h"
 #include "objmethod.h"
+#include "splitscreen3.h"
 #include "brx.h"
 #include "cmworld.h"
 #include "cls.h"
@@ -51,6 +53,7 @@ ACTVIEW g_actview;
 void OnRemoveGuard(LO* plo);  // guard.cpp (orig 0x2064D8)
 void OnRemoveSpawner(LO* plo);  // spawner.cpp (orig 0x1746B8, after the base notification)
 
+void OnGrappleLeaveWorld3(LO* plo);  // (game/grapplecam3.cpp: the Grapple-Cam's slots 12 / 24, 0x285848 / 0x285890)
 void OnRemoveHackSo(LO* plo);  // (hack.cpp: the hack objects' 0x17F110, the ship's 0x17F740, the enemies' 0x180598)
 void OnRemoveTrigger(LO* plo);  // trigger.cpp (orig 0x149880, after the base 0x1A5848)
 
@@ -78,9 +81,17 @@ void LinkChild(LO* plo)
 
 // vt slot 11 (0x1A5800, ALO 0x1F2C30): in the world, and so are its added children (TODO: the ALO's +0x40 |= 0x14,
 // the BASIC notification slot 4, the ALO's 0x22FAA0 / 0x1F2B20 / 0x1F37C8 parts)
+uint64_t g_nLoAdd = 0;
 void OnAdd(LO* plo)
 {
     plo->fInWorld = true;
+    plo->nAdd = ++g_nLoAdd;
+    if (static const char* s_sz = std::getenv("SLY2N_ADDPRINT"); s_sz && std::atoi(s_sz) == plo->oid && g_clock.t > 0.0f)
+    {
+        void* apv[24];
+        std::fprintf(stderr, "into world %d t %.3f parent %d:\n", plo->oid, g_clock.t, plo->paloParent ? plo->paloParent->oid : -1);
+        backtrace_symbols_fd(apv, backtrace(apv, 24), 2);
+    }
     OnLoAddPhys(plo);  // the ALO's 0x1F2C30 physics part (physworld.cpp)
     // the camera objects (cid 0x2C, 0x12E6A0): their view at priority 10 when +0x124 (cmworld.cpp)
     if (plo->pcls && plo->pcls->PfnOrig(11) == 0x12E6A0) EnableCmObject(plo, true);
@@ -96,6 +107,12 @@ void OnAdd(LO* plo)
 // vt slot 12 (0x1A5848, ALO 0x1F2D48): out of the world (the ALO's fade reset), and so are its added children
 void OnRemove(LO* plo)
 {
+    if (static const char* s_sz = std::getenv("SLY2N_REMOVEPRINT"); s_sz && std::atoi(s_sz) == plo->oid && g_clock.t > 0.0f)
+    {
+        void* apv[24];
+        std::fprintf(stderr, "out of world %d t %.3f:\n", plo->oid, g_clock.t);
+        backtrace_symbols_fd(apv, backtrace(apv, 24), 2);
+    }
     plo->fInWorld = false;
     if (plo->grf & (1ull << 59)) RemoveSafeGroundReferences(plo, nullptr);  // 0x1A5848 -> 0x1A00D0
     OnLoRemovePhys(plo);  // the ALO's 0x1F2D48 physics part (physworld.cpp)
@@ -113,13 +130,15 @@ void OnRemove(LO* plo)
     if (plo->pcls && plo->pcls->PfnOrig(12) == 0x1BC198) RemoveNavPoly(plo);
     if (plo->pcls && plo->pcls->PfnOrig(12) == 0x2064D8) OnRemoveGuard(plo);  // guard.cpp
     if (plo->pcls && (plo->pcls->PfnOrig(12) == 0x17F110 || plo->pcls->PfnOrig(12) == 0x17F740 ||
-                      plo->pcls->PfnOrig(12) == 0x180598))
+                      plo->pcls->PfnOrig(12) == 0x180598 ||
+                      FCidDerivedFrom(plo->Cid(), S3CID(0x47))))  // (Sly 3: the hack objects' vt slot 32, hack.cpp)
     {
         OnRemoveHackSo(plo);
     }
     // 0x1A5848's end: the notification slot 4 (0x133508) with message 1 (the object's own slot 5, then its listeners)
     if (FLoHasListeners(plo)) NotifyLoListeners(plo, 1, plo);
     if (plo->pcls && plo->pcls->PfnOrig(12) == 0x1746B8) OnRemoveSpawner(plo);
+    if (plo->pcls && FIsLoDerivedFrom(plo, 0x56)) OnGrappleLeaveWorld3(plo);
     if (plo->pcls && plo->pcls->PfnOrig(12) == 0x149880) OnRemoveTrigger(plo);
     if (plo->pcls && plo->pcls->PfnOrig(12) == 0x156D58) OnRemoveNoiseListener(plo);
     // 0x1B1E38 calls its ALO base first, then releases the flight clip/controller.
@@ -130,6 +149,13 @@ void OnRemove(LO* plo)
 void DequeueLoRoot(SW* psw, LO* plo)
 {
     if (!plo->fQueued) return;
+    if (static const char* s_sz = std::getenv("SLY3_DEQPRINT"); s_sz && plo->oid == std::atoi(s_sz))   // (debug: who dequeues it)
+    {
+        void* a[16];
+        const int c = backtrace(a, 16);
+        std::fprintf(stderr, "dequeue root %d cid 0x%X inworld %d:\n", plo->oid, unsigned(plo->Cid()), int(plo->fInWorld));
+        backtrace_symbols_fd(a, c, 2);
+    }
     if (psw->ploStop == plo)
     {
         auto it = std::next(plo->itQueued);
@@ -165,7 +191,7 @@ glm::vec3 PosPlayer(const glm::vec3& posDefault)
 void CheckLoRoot(SW* psw, LO* plo)
 {
     const glm::vec3 posA = g_actview.posCm;
-    const uint32_t grf = g_actview.grfCm;
+    const uint32_t grf = g_actview.Grf();
     const glm::vec3 posB = PosPlayer(posA);
     bool fIn = false;
     switch (plo->st)
@@ -178,6 +204,8 @@ void CheckLoRoot(SW* psw, LO* plo)
         {
             const glm::vec3 d = PosLoWorld(plo) - (plo->st == 0 ? posA : posB);
             fIn = glm::dot(d, d) < plo->sRadius * plo->sRadius;
+            // (the split screen: within the radius of any view, orig3 0x15B420)
+            if (!fIn && plo->st == 0 && g_actview.cExtra) fIn = g_actview.Dist(PosLoWorld(plo), posA) < plo->sRadius;
         }
         break;
     default: break;
@@ -191,6 +219,8 @@ void CheckLoRoot(SW* psw, LO* plo)
 // own InitLo from the Sly 3 asm)
 int StInit(CID cid3)
 {
+    // (s3-player) the path racer 0x98 (no Sly 2 twin): its init 0x183D80 calls 0x1C9118(this, 1): always active (game/racer3.cpp)
+    if (cid3 == 0x98) return 1;
     const int cid = sly3::Cid2FromCid3(cid3);
     if (cid < 0) return FCidDerivedFrom(cid3, S3CID(0x30)) ? 0 : 2;
     switch (cid)
@@ -211,6 +241,19 @@ int StInit(CID cid3)
 // ... and their +0x40 flags (0x40: never in the update table; 2: updated; TODO: the other bits)
 uint32_t GrfUpdInit(CID cid3)
 {
+    // (s3-player) the Guru 0x37 (no Sly 2 twin): an SO, so the SO init 0x1C3D70's update bit (his update 0x22C308 never ran)
+    if (cid3 == sly3::CID_GURU) return 0x21 | 2;
+    if (cid3 == sly3::CID_PENELOPE) return 0x21 | 2;   // (Penelope 0x39 likewise: her update 0x1EFFD8)
+    // (s3-player) the RC car 0x55 (no Sly 2 twin): an SO (its init 0x203C18 calls the SO init 0x1F3B50)
+    if (cid3 == 0x55) return 0x21 | 2;
+    // (s3-plane) the planes 0x52 (no Sly 2 twin): an SO (their init 0x141058 calls the SO init 0x1F3B50; game/biplane3.cpp)
+    if (cid3 == 0x52) return 0x21 | 2;
+    // (s3-plane) the rowboat 0x53 (no Sly 2 twin): an SO (its init 0x20ED28 calls the SO init 0x1F3B50; game/rowboat3.cpp)
+    if (cid3 == 0x53) return 0x21 | 2;
+    // (s3-plane) the ships 0x58 (no Sly 2 twin): an SO (their init 0x2139D0 calls the SO init 0x1F3B50; game/ship3.cpp)
+    if (cid3 == 0x58) return 0x21 | 2;
+    // (s3-player) the path racer 0x98 (no Sly 2 twin): its init 0x183D80 sets the update flags 0xA (game/racer3.cpp)
+    if (cid3 == 0x98) return 0x21 | 0xA;
     const int cid = sly3::Cid2FromCid3(cid3);
     switch (cid)
     {
@@ -293,7 +336,9 @@ void RegisterLoTree(SW* psw, LO* plo)
     if (plo->pcls && plo->pcls->PfnOrig(23) == 0x1CA8E0 && psw->mpproxy.count(plo) && plo->U32Field(0, 0xE4) == 0)
         PostDeferredCall(plo, 0x1CA8C0, [](void* object, int) { PloAttachProxy(g_psw, static_cast<LO*>(object), 2); });
     if (plo->pcls && plo->pcls->PfnOrig(23) == 0x12ED20) OnAmbientRegistered(plo);  // (sound.h)
-    if (plo->pcls && plo->pcls->PfnOrig(23) == 0x13CFD8) OnBootyStandRegistered(plo);  // (booty.h: cid 0x25)
+    // (Sly 3: the stand's registration 0x14EAB0 (USE's 0x1A1ED0, then the attach 0x14E9F0 posted, D_00320360) is not in
+    // BOOTYSTAND's vtable slot 23 (0x1C85E8, LO's) but in the class's other table before it: by the class)
+    if (plo->pcls && (plo->pcls->PfnOrig(23) == 0x13CFD8 || plo->Cid() == S3CID(0x25))) OnBootyStandRegistered(plo);  // (booty.h)
     if (FAlo(plo))
         for (LO* pc : std::vector<LO*>(static_cast<ALO*>(plo)->aploChild))
             if (!pc->fRemoved) RegisterLoTree(psw, pc);
@@ -310,6 +355,7 @@ void UnregisterLoTree(SW* psw, LO* plo)
             if (!pc->fRemoved) UnregisterLoTree(psw, pc);
     if (plo->pcls && plo->pcls->PfnOrig(22) == 0x2079A0) OnGuardUnregistered(plo);
     if (plo->pcls && plo->pcls->PfnOrig(22) == 0x2213D8) OnZoneUnregistered(plo);  // (cmworld.h)
+    if (plo->pcls && FIsLoDerivedFrom(plo, 0x56)) OnGrappleLeaveWorld3(plo);
 }
 
 void QueueLoRoot(SW* psw, LO* plo)
@@ -442,10 +488,13 @@ void UpdateSwActivation(SW* psw)
         for (LO* plo : psw->lsplo20)
             std::printf("actroot %d cid 0x%X st %d r %.0f mask 0x%X active %d dist %.0f\n", plo->oid, int(plo->Cid()), plo->st, plo->sRadius, plo->bMask,
                         int(plo->fNodeActive), glm::distance(PosLoWorld(plo), plo->st == 0 ? g_actview.posCm : PosPlayer(g_actview.posCm)));
-    const uint32_t n = g_actview.grfCm;
+    const uint32_t n = g_actview.Grf();
     const glm::vec3 pos = g_actview.posCm;
     const glm::vec3 posB = PosPlayer(pos);
-    const float gA = glm::distance(pos, psw->posCmLast);
+    // (the split screen: the nearest of the views' cameras, orig3 0x15B068; every queued root checked each frame:
+    // the other views move independently of the first one's stop test)
+    const bool fViews = g_actview.cExtra > 0;
+    const float gA = fViews ? 1e30f : glm::distance(pos, psw->posCmLast);
     const float gB = glm::distance(posB, psw->posPoLast);
     if (S_STOP < gA || S_STOP < gB || n != psw->grfCmLast)
     {
@@ -481,7 +530,7 @@ void UpdateSwActivation(SW* psw)
             }
             else
             {
-                const float d = glm::distance(PosLoWorld(plo), plo->st == 0 ? pos : posB) - plo->sRadius;
+                const float d = (plo->st == 0 ? g_actview.Dist(PosLoWorld(plo), pos) : glm::distance(PosLoWorld(plo), posB)) - plo->sRadius;
                 fIn = d < 0.0f;
                 if (S_STOP < std::fabs(d) - (plo->st == 0 ? gA : gB)) moveToEnd(plo);
             }
@@ -515,7 +564,7 @@ int NDrawDistanceRoot(const ALO* palo)
     if (rScale == 1.0f || s_fOff) return 0;
     const LO* proot = palo;
     while (proot->paloParent) proot = proot->paloParent;
-    if ((proot->st != 0 && proot->st != 3) || !(proot->sRadius < 1e9f) || !(g_actview.grfCm & proot->bMask)) return 0;
+    if ((proot->st != 0 && proot->st != 3) || !(proot->sRadius < 1e9f) || !(g_actview.Grf() & proot->bMask)) return 0;
     if (rScale < 1.0f ? !proot->fNodeActive : (proot->fNodeActive || !palo->fInWorld || !proot->fInWorld)) return 0;
     // (above 1x, drawdist-2: not the trees with a character (PO 0x33 and below: guards, NPCs, the gang), which would
     // stand frozen; they appear at the original's radius, faded in as the original (render.cpp's whole fade). Nor the
@@ -523,7 +572,7 @@ int NDrawDistanceRoot(const ALO* palo)
     if (rScale > 1.0f && (FDrawDistanceActorTree(proot) || (proot->Cid() == S3CID(0x5F) && FDrawDistanceGhostedInstance(proot))))
         return 0;
     const glm::vec3 pos = proot->st == 0 ? g_actview.posCm : PosPlayer(g_actview.posCm);
-    const float d = glm::distance(PosLoWorld(const_cast<LO*>(proot)), pos);
+    const float d = proot->st == 0 ? g_actview.Dist(PosLoWorld(const_cast<LO*>(proot)), pos) : glm::distance(PosLoWorld(const_cast<LO*>(proot)), pos);
     const float r = proot->sRadius * rScale;
     if (rScale < 1.0f) return d - r < 0.0f ? 0 : -1;
     return d - r < 0.0f ? 1 : 0;
@@ -561,10 +610,10 @@ bool FDrawDistanceVisualTree(const LO* plo)
     const LO* proot = plo;
     while (proot->paloParent) proot = proot->paloParent;
     if (proot->fNodeActive || !proot->fInWorld || proot->fRemoved) return false;
-    if ((proot->st != 0 && proot->st != 3) || !(proot->sRadius < 1e9f) || !(g_actview.grfCm & proot->bMask)) return false;
+    if ((proot->st != 0 && proot->st != 3) || !(proot->sRadius < 1e9f) || !(g_actview.Grf() & proot->bMask)) return false;
     if (FDrawDistanceActorTree(proot)) return false;
     const glm::vec3 pos = proot->st == 0 ? g_actview.posCm : PosPlayer(g_actview.posCm);
-    return glm::distance(PosLoWorld(const_cast<LO*>(proot)), pos) < proot->sRadius * rScale;
+    return (proot->st == 0 ? g_actview.Dist(PosLoWorld(const_cast<LO*>(proot)), pos) : glm::distance(PosLoWorld(const_cast<LO*>(proot)), pos)) < proot->sRadius * rScale;
 }
 
 bool FAloDrawn(const SW* psw, const ALO* palo)
@@ -577,6 +626,12 @@ bool FAloDrawn(const SW* psw, const ALO* palo)
     const uint32_t pfnDraw = palo->pcls ? palo->pcls->PfnOrig(19) : 0;
     if (pfnDraw == 0 || pfnDraw == 0x1A5ED8) return false;
     if (!(palo->bMask & g_actview.grfCm)) return false;
+    // orig3: class 0x7D (vt 0x3559C8; the maps call it CLIMBSURF, Sly 2's 0x09, but its slots are Sly 3's own): the
+    // two-player pointer arrows (e.g. 1912 in v_ext, parented to Carmelita). Its post-load 0x1696F0 hides it
+    // (0x1697D0(p, 0): +0x130 = 0, the shown flag of its draw record +0x4C->+0x90 cleared, its distance -FLT_MAX); its
+    // update 0x169868 works only while both players (+0x130 / +0x134) are set. Natively it was drawn always (the turf
+    // war's single-player Carmelita had both arrows on her): drawn only in a two-player game.
+    if (palo->Cid() == 0x7D && !split3::FActive()) return false;
     // orig: 0x001425B0 (the actors' draw, also under Sly's 0x18A238): an actor using its binocucom (+0xF04 1, on)
     // is not drawn, but in the binocucom view 2 (U19: Sly / Bentley / Murray hidden while looking through it)
     if (pfnDraw == 0x1425B0 || pfnDraw == 0x18A238)
@@ -654,13 +709,14 @@ void DetachProxy(SW* psw, LO* pproxy, int irow)
         // then the splice event 0xF to the proxy with the object and to the object with the proxy (the release, the
         // pair of the attach's 14 events); natively never sent, so scripts' release handlers did not run on pooled
         // objects (audit 2026-11 L2)
+        // (Sly 3 renumbered it: 18, orig3 0x1FC768: the object's slot 32, then vt slot 3 (18, one argument: the proxy))
         {
             CRef refObj;
             refObj.SetBasic(plo);
-            HandleLoSpliceEvent(pproxy, 15, false, 1, &refObj);
+            HandleLoSpliceEvent(pproxy, SPLICEEV3_RELEASE, false, 1, &refObj);
             CRef refProxy;
             refProxy.SetBasic(pproxy);
-            HandleLoSpliceEvent(plo, 15, false, 1, &refProxy);
+            HandleLoSpliceEvent(plo, SPLICEEV3_RELEASE, false, 1, &refProxy);
         }
         RemoveLo(psw, plo);  // vt slot 9 (TODO: the physics pose 0x1CA930)
         SetLoMatrix(plo, matInv);
@@ -770,6 +826,18 @@ void DetachAloBase27(LO* plo, LO* pproxy)
             if (PFN27 pfn = reinterpret_cast<PFN27>(PvNativeVt(pc, 27))) pfn(pc, pproxy);
 }
 NATIVEFN(0x1CB5D0, DetachAloBase27);
+// orig3: 0x1F3C80 (SO's own vt slot 32, Sly 2's slot 27, inherited by the Sly 3-only SO classes, e.g. 0x4C / 0x52):
+// the ALO base's (0x1FCB20: DetachAloBase27 natively), then 0x1F4DD8(p, 0, -1, 0): the last hitter record +0x184 /
+// +0x188 / +0x18C cleared (audit 4 CORE-16)
+void DetachSoBase32(LO* plo, LO* pproxy)
+{
+    DetachAloBase27(plo, pproxy);
+    if (!plo) return;
+    plo->SetField(0, 0x184, 0);
+    plo->SetField(0, 0x188, 0xFFFFFFFFu);
+    plo->SetField(0, 0x18C, 0);
+}
+NATIVEFN3(0x1F3C80, DetachSoBase32);
 namespace
 {
 
@@ -813,9 +881,17 @@ int AttachProxy(SW* psw, LO* pproxy, int nMin)
     we.amatRow[irow] = pproxyx->mat;
     // the binds: options for the instance's objects (the attach's grf mask 0x2031: 1 methods (the scripts' thunk +0x10,
     // brx.cpp), 0x10 fields, 0x20 setters, as the load's 0x80 / 0x100)
+    if (static const bool s_f = std::getenv("SLY3_BINDPRINT") != nullptr; s_f)
+        std::fprintf(stderr, "attach proxy %d row %d: %zu binds\n", pproxy->oid, irow, ps.abind.size());
     for (PROXYBIND& bind : ps.abind)
     {
-        LO* ploFound = bind.kind == 6 ? we.aplo[static_cast<std::size_t>(irow) * we.cloLoaded]
+        if (static const bool s_f = std::getenv("SLY3_BINDPRINT") != nullptr; s_f)
+            std::fprintf(stderr, "  bind kind %d bytes %zu frame %d\n", bind.kind, bind.ab.size(), bind.pframe != nullptr);
+        // orig3: 0x1FBB08: Sly 3 renumbered the bind kinds: 7 skipped, 8 the instance's root (Sly 2's 6), else an oid in
+        // the instance (0x17DEC0). E.g. Carmelita's chase proxy 139105 binds her root (kind 8) with her mode (sidebag
+        // option 1824 = 14059), which her event 17 handler reads to set her chase kinds (clip 8938: her run)
+        if (bind.kind == 7) continue;
+        LO* ploFound = bind.kind == 8 ? we.aplo[static_cast<std::size_t>(irow) * we.cloLoaded]
                                       : PloFindInInstance(we, irow, bind.kind);
         if (!ploFound) continue;
         bind.ploBound = ploFound;  // orig: 0x001CAEC8, bind +0x14
@@ -827,6 +903,17 @@ int AttachProxy(SW* psw, LO* pproxy, int nMin)
             const int grf = (g & 1) | ((g & 0x10) ? 0x80 : 0) | ((g & 0x20) ? 0x100 : 0) | (g & 0x2000);
             OPT opt;
             LoadOptionFromBrx(opt, ploFound, n, grf, &bis);
+            if (static const bool s_f = std::getenv("SLY3_BINDPRINT") != nullptr; s_f)
+            {
+                std::fprintf(stderr, "bind proxy %d -> %d (cid 0x%X): eopid %d grf 0x%X:", pproxy->oid, ploFound->oid, ploFound->Cid(), n, grf);
+                for (const OPTVAL& w : opt.aval)
+                {
+                    std::fprintf(stderr, " [n %d g %g", w.n, w.ag[0]);
+                    for (const OPTVAL& x : w.alist) std::fprintf(stderr, " %d", x.n);
+                    std::fprintf(stderr, "]");
+                }
+                std::fprintf(stderr, "\n");
+            }
             if (GUARD* pg = PguardFromLo(ploFound)) SyncGuardOption(pg, ploFound, sly3::Eopid2FromEopid3(n));  // (guardstart.cpp; Sly 2 EOPIDs)
             ploFound->aopt.push_back(std::move(opt));
         }
@@ -877,13 +964,18 @@ int AttachProxy(SW* psw, LO* pproxy, int nMin)
         // orig: 0x001CAEC8's end: vt slot 3 (14, immediate, one argument) to the proxy with the instance's object, then
         // to the object with the proxy (the scripts keep each other: e.g. Paris' newspapers 138378 remember their
         // dispenser's proxy as 1309 and call its 1311 when broken; a guard's script start, as 0x206170 / 0x206820)
+        // (Sly 3 renumbered it: 17. orig3 0x1FBB08's end: per object 0x1FC3A0 -> slot 28 / 29 = 0x1FC868 (the object's
+        // slot 31, then vt slot 3 (17, one argument: the proxy)), then the proxy's vt slot 3 (17, the object). Sly 3's
+        // scripts handle 17 / 18 with (object, proxy): 41 / 33 handlers in v_ext; e.g. Carmelita's (block 28) sets her
+        // chase kinds (8938 for states 14 / 16: her run) there when the chase acquires her proxy 139105; with 14 they
+        // never ran)
         {
-            CRef refObj;
-            refObj.SetBasic(plo);
-            HandleLoSpliceEvent(pproxy, 14, false, 1, &refObj);
             CRef refProxy;
             refProxy.SetBasic(pproxy);
-            HandleLoSpliceEvent(plo, 14, false, 1, &refProxy);
+            HandleLoSpliceEvent(plo, SPLICEEV3_ATTACH, false, 1, &refProxy);
+            CRef refObj;
+            refObj.SetBasic(plo);
+            HandleLoSpliceEvent(pproxy, SPLICEEV3_ATTACH, false, 1, &refObj);
         }
         if (std::getenv("SLY2N_ACTDEBUG") && FAlo(plo))
         {
@@ -910,7 +1002,7 @@ LO* PloRowFirst(SW* psw, LO* pproxy, int irow)
 SW* PswOf(LO*) { return g_psw; }
 // The splice wrappers use 0x129A10 even for a null result: null-obj? requires the BASIC tag.
 CRef RefLoOrNull(LO* plo) { CRef r; r.SetBasic(plo); return r; }
-// orig 0x001CB410: an instance row by its object (one object per instance)
+// orig 0x001CB410: an instance row by its object (one object per instance) (orig3: 0x1FBFF0, the same C in the Sly 3 decomp)
 int IrowOfObject(SW* psw, LO* pproxy, const LO* plo)
 {
     auto it = psw->mpproxy.find(pproxy);
@@ -921,22 +1013,28 @@ int IrowOfObject(SW* psw, LO* pproxy, const LO* plo)
         if (we.aplo[static_cast<std::size_t>(i)] == plo) return i;
     return -1;
 }
+}  // namespace
+// orig: 0x001CB2C0 (orig3 0x1FBEA0 HasFreeInstance): a row of the proxy's instances is free (score >= 2)
+bool FProxyHasFreeInstance(SW* psw, LO* pproxy)
+{
+    if (!psw || !pproxy) return false;
+    auto it = psw->mpproxy.find(pproxy);
+    if (it == psw->mpproxy.end() || it->second.iwe < 0) return false;
+    WE& we = psw->awe[it->second.iwe];
+    EnsureRows(we);
+    for (int i = we.cUsed; i < static_cast<int>(we.aploRowOwner.size()); ++i)
+        if (NScoreRow(we, i) >= 2) return true;
+    return false;
+}
+namespace
+{
 struct INITPROXYMETHODS
 {
     INITPROXYMETHODS()
     {
         RegisterObjectMethod(0x10E248, [](LO* plo, const std::vector<CRef>&) {  // 1174: 0x1CB2C0 (one is free)
-            SW* psw = PswOf(plo);
             CRef r;
-            auto it = psw->mpproxy.find(plo);
-            bool f = false;
-            if (it != psw->mpproxy.end() && it->second.iwe >= 0)
-            {
-                WE& we = psw->awe[it->second.iwe];
-                EnsureRows(we);
-                for (int i = we.cUsed; i < static_cast<int>(we.aploRowOwner.size()) && !f; ++i) f = NScoreRow(we, i) >= 2;
-            }
-            r.SetBool(f);
+            r.SetBool(FProxyHasFreeInstance(PswOf(plo), plo));
             return r;
         });
         RegisterObjectMethod(0x10E2B8, [](LO* plo, const std::vector<CRef>&) {  // 1175: 0x1CB250(p, 0)
@@ -946,7 +1044,43 @@ struct INITPROXYMETHODS
                 std::printf("proxy 1175: t %.3f proxy %d -> %d (cid 0x%X) %p\n", g_clock.t, plo->oid, po ? po->oid : -1, po ? po->Cid() : 0, (void*)po);
             return RefLoOrNull(po);
         });
-        RegisterObjectMethod(0x10E328, [](LO* plo, const std::vector<CRef>&) {  // 1177: 0x1CB328
+        // orig3: 0x10D2B8 (Sly 3 EOPID 1282, the proxy's option 825: 0x1FBE30(p, 0), Sly 2's 0x1CB250; the thunk map
+        // leaves it out), e.g. v_canal's boat gun takes its bullets from proxy 150052 (block 139806's s1670)
+        RegisterObjectMethod3(0x10D2B8, [](LO* plo, const std::vector<CRef>&) {
+            SW* psw = PswOf(plo);
+            return RefLoOrNull(PloRowFirst(psw, plo, AttachProxy(psw, plo, 2)));
+        });
+        // orig3: 0x10D328 (Sly 3's proxy option 1207: 0x1FBF08): the selected instance (0x1FBEC0: the row attached last)
+        // if any, else one attached (0x1FBE30(p, 1)): Sly 2's 1177 (0x1CB328), not its 1175 as the thunk map paired it.
+        // The turf war's waves (block 139035 s6036) take each wave's guard from proxies 139222 / 139234 this way.
+        RegisterObjectMethod3(0x10D328, [](LO* plo, const std::vector<CRef>&) {
+            SW* psw = PswOf(plo);
+            auto it = psw->mpproxy.find(plo);
+            LO* po = nullptr;
+            if (it != psw->mpproxy.end() && !it->second.airow.empty()) po = PloRowFirst(psw, plo, it->second.airow.front());
+            else po = PloRowFirst(psw, plo, AttachProxy(psw, plo, 1));
+            if (std::getenv("SLY2N_HITDEBUG"))
+                std::printf("proxy 1207: t %.3f proxy %d -> %d (cid 0x%X) %p\n", g_clock.t, plo->oid, po ? po->oid : -1, po ? po->Cid() : 0, (void*)po);
+            return RefLoOrNull(po);
+        });
+        // orig3: 0x10D4A8 (Sly 3's proxy option 1211: 0x1FC0E0): the instance given back (its row detached, 0x1FB710); the
+        // thunk map has no Sly 2 twin, so the turf war's waves never released their guards (s6037) and the next wave's
+        // proxy had no instance left
+        RegisterObjectMethod3(0x10D4A8, [](LO* plo, const std::vector<CRef>& a) {
+            LO* po = PloArg(a, 0);
+            if (std::getenv("SLY2N_HITDEBUG"))
+                std::printf("proxy 1211: t %.3f proxy %d gives back %d (row %d)\n", g_clock.t, plo->oid, po ? po->oid : -1,
+                            IrowOfObject(PswOf(plo), plo, po));
+            ReleaseProxyObject(PswOf(plo), plo, po);
+            return CRef(TAGK_Void);
+        });
+        // orig3: 0x1073A0 (Sly 3 EOPID 540, a PE's option 226): 0x1FE728(pe, 1), the effects code's TriggerPe; e.g. the
+        // boat gun's muzzle flash 35408 and the sinking's splash (block 139806)
+        RegisterObjectMethod3(0x1073A0, [](LO* plo, const std::vector<CRef>&) {
+            TriggerPe(plo, nullptr);
+            return CRef(TAGK_Void);
+        });
+        RegisterObjectMethod(0x10E328,[](LO* plo, const std::vector<CRef>&) {  // 1177: 0x1CB328
             SW* psw = PswOf(plo);
             auto it = psw->mpproxy.find(plo);
             if (it != psw->mpproxy.end() && !it->second.airow.empty())
@@ -976,8 +1110,9 @@ struct INITPROXYMETHODS
         RegisterObjectGetter(1176, [](LO* plo) {  // 0x1CB2E0: the latest attached instance's object
             SW* psw = PswOf(plo);
             auto it = psw->mpproxy.find(plo);
-            if (it == psw->mpproxy.end() || it->second.airow.empty()) return RefLoOrNull(nullptr);
-            return RefLoOrNull(PloRowFirst(psw, plo, it->second.airow.front()));
+            LO* po = it == psw->mpproxy.end() || it->second.airow.empty() ? nullptr : PloRowFirst(psw, plo, it->second.airow.front());
+            if (std::getenv("SLY2N_HITDEBUG")) std::printf("proxy %d current: %d %p (t %.3f)\n", plo->oid, po ? po->oid : -1, (void*)po, g_clock.t);
+            return RefLoOrNull(po);
         });
         // EOPID 1181 (getter 0x1CB360): every attached instance's object, latest first, at most 0x20, as a list;
         // scripts of 5 job starts read it (natively unbound: nil; audit 2026-11 P11)
@@ -1150,6 +1285,34 @@ void PrintActivationDebug(SW* psw)
                     }
             }
     }
+    if (const char* psz = std::getenv("SLY3_XFPRINT"))  // (debug: "oid,oid,...:N": their records every N calls)
+    {
+        static int s_c = 0;
+        const char* pszN = std::strchr(psz, ':');
+        const int n = pszN ? std::max(1, std::atoi(pszN + 1)) : 60;
+        if (s_c++ % n == 0)
+            for (const char* q = psz; q && *q && q != pszN; q = std::strchr(q, ',') ? std::strchr(q, ',') + 1 : nullptr)
+            {
+                const int oid = std::atoi(q);
+                for (const auto& plo : psw->aploAll)
+                    if (plo->oid == oid && FAlo(plo.get()))
+                    {
+                        const ALO* palo = static_cast<const ALO*>(plo.get());
+                        std::fprintf(stderr, "lo t %.3f %d parent %d st %d active %d queued %d iupd %d inworld %d removed %d radius %g mask 0x%X\n", g_clock.t, oid,
+                                     palo->paloParent ? palo->paloParent->oid : -1, palo->st, int(palo->fNodeActive), int(palo->fQueued), palo->iupd,
+                                     int(palo->fInWorld), int(palo->fRemoved), palo->sRadius, palo->bMask);
+                        for (std::size_t k = 0; k < palo->axf.size() && k < 4; ++k)
+                        {
+                            const XF* x = palo->axf[k].get();
+                            std::fprintf(stderr, "xf t %.3f %d xf%zu kind %d mode %d local ang %.1f %.0f %.0f %.0f world ang %.1f %.0f %.0f %.0f ref %d\n", g_clock.t, oid, k, x->kind, x->mode,
+                                         glm::degrees(std::atan2(x->mat[0][1], x->mat[0][0])), x->mat[3].x, x->mat[3].y, x->mat[3].z,
+                                         glm::degrees(std::atan2(x->matWorld[0][1], x->matWorld[0][0])), x->matWorld[3].x, x->matWorld[3].y, x->matWorld[3].z,
+                                         x->pxfRef && x->pxfRef->palo ? x->pxfRef->palo->oid : -1);
+                        }
+                        break;
+                    }
+            }
+    }
     if (const char* psz = std::getenv("SLY2N_NEARPRINT"))  // (debug: "x y z r@frame": every object near a point once)
     {
         static int s_c = 0;
@@ -1165,16 +1328,25 @@ void PrintActivationDebug(SW* psw)
                                  PloRoot(plo.get())->fNodeActive);
             }
     }
+    // (debug: SLY2N_MODULEOF="block:module": once, the objects whose frame is that module's)
+    if (extern void* g_pvModuleOf; g_pvModuleOf && std::getenv("SLY2N_MODULEOF"))
+        if (static bool s_fDone = false; !s_fDone)
+        {
+            s_fDone = true;
+            for (const auto& plo : psw->aploAll)
+                if (plo->pframe.get() == g_pvModuleOf)
+                    std::printf("moduleof: %d (alias %d) cid 0x%X parent %d\n", plo->oid, plo->oidInstance, plo->Cid(), plo->paloParent ? plo->paloParent->oid : -1);
+        }
     if (const char* psz = std::getenv("SLY2N_LOOID"))  // (debug: an object's activation every 120 frames)
     {
         static int s_c = 0;
         if (s_c++ % 120 == 0)
             for (const auto& plo : psw->aploAll)
-                if (plo->oid == std::atoi(psz))
+                if (plo->oid == std::atoi(psz) || plo->oidInstance == std::atoi(psz) || (std::strchr(psz, '-') && plo->oid >= std::atoi(psz) && plo->oid <= std::atoi(std::strchr(psz, '-') + 1)))  // (or a range LO-HI)
                 {
                     const glm::vec3 p = PosLoWorld(plo.get());
-                    std::fprintf(stderr, "looid %d cid 0x%X: st %d r %.0f mask 0x%X root %d active %d inworld %d removed %d iupd %d queued %d at %.0f %.0f %.0f cm %.0f %.0f %.0f grfCm 0x%X\n",
-                                 plo->oid, plo->Cid(), plo->st, plo->sRadius, plo->bMask, PloRoot(plo.get())->oid, PloRoot(plo.get())->fNodeActive,
+                    std::fprintf(stderr, "looid %d %p (alias %d) cid 0x%X par %d: st %d r %.0f mask 0x%X root %d active %d inworld %d removed %d iupd %d queued %d at %.0f %.0f %.0f cm %.0f %.0f %.0f grfCm 0x%X\n",
+                                 plo->oid, (void*)plo.get(), plo->oidInstance, plo->Cid(), plo->paloParent ? plo->paloParent->oid : -1, plo->st, plo->sRadius, plo->bMask, PloRoot(plo.get())->oid, PloRoot(plo.get())->fNodeActive,
                                  plo->fInWorld, plo->fRemoved, plo->iupd, plo->fQueued, p.x, p.y, p.z, g_actview.posCm.x, g_actview.posCm.y,
                                  g_actview.posCm.z, g_actview.grfCm);
                 }
@@ -1192,7 +1364,14 @@ LO* PloAcquireProxyObject(SW* psw, LO* pproxy, bool allowActive)
     if (it == psw->mpproxy.end() || it->second.iwe < 0 ||
         it->second.iwe >= static_cast<int>(psw->awe.size())) return nullptr;
     if (psw->awe[it->second.iwe].cloLoaded != 1) return nullptr;
-    return PloAttachProxy(psw, pproxy, allowActive ? 1 : 2);
+    LO* plo = PloAttachProxy(psw, pproxy, allowActive ? 1 : 2);
+    if (static const bool s_f = std::getenv("SLY3_ACQPRINT") != nullptr; s_f)  // (debug: the proxies' instances acquired)
+    {
+        const WE& we = psw->awe[it->second.iwe];
+        std::fprintf(stderr, "acquire proxy %d (%d) -> %d %p (rows %zu, instances %d, objects %zu, first %d)\n", pproxy->oid, int(allowActive),
+                     plo ? plo->oid : -1, (void*)plo, we.aploRowOwner.size(), we.cinst, we.aplo.size(), we.cUsed);
+    }
+    return plo;
 }
 
 LO* PloProxyFreeRow(SW* psw, LO* pproxy, int nMin) { return PloProxyFreeRowImpl(psw, pproxy, nMin); }
@@ -1207,10 +1386,45 @@ void LockProxyRowOf(SW* psw, LO* pproxy, LO* plo, bool fLock)
     we.afRowLocked[i] = fLock ? 1 : 0;
 }
 void UnlockProxyRowOf(SW* psw, LO* pproxy, LO* plo) { LockProxyRowOf(psw, pproxy, plo, false); }
+// orig3 0x1FC7D0 (a PROXY's slot 30 at the in-place world reset 0x1FC6A0, transition.cpp / game/worldreset3.cpp): its
+// attached rows that are not held (the node's +8) detached (0x1FB710), the pooled objects given back; then its slot 32
+void DetachProxyRowsInPlace3(SW* psw, LO* pproxy)
+{
+    if (!psw || !pproxy) return;
+    auto it = psw->mpproxy.find(pproxy);
+    if (it == psw->mpproxy.end() || it->second.iwe < 0 || it->second.iwe >= static_cast<int>(psw->awe.size())) return;
+    WE& we = psw->awe[it->second.iwe];
+    EnsureRows(we);
+    for (int irow : std::vector<int>(it->second.airow))
+        if (irow >= 0 && irow < static_cast<int>(we.afRowLocked.size()) && !we.afRowLocked[irow]) DetachProxy(psw, pproxy, irow);
+}
 // (Sly 3's script command 0x70, 0x1FC0E0) the proxy's instance plo given back: its row detached (0x1CAA60)
 void ReleaseProxyObject(SW* psw, LO* pproxy, LO* plo)
 {
     if (!psw || !pproxy || !plo) return;
     const int irow = IrowOfObject(psw, pproxy, plo);
     if (irow >= 0) DetachProxy(psw, pproxy, irow);
+}
+
+namespace
+{
+struct INITCMOBJMETHODS3
+{
+    INITCMOBJMETHODS3()
+    {
+        // (Sly 3) a camera object is pushed / revoked by its methods, not by its entry into the world (Sly 2's vt
+        // slots 11 / 12 0x12E6A0 / 0x12E6E8, activate.cpp): EOPID 1159 (optid 226, thunk 0x10C258 -> 0x130BC0: a
+        // look-at policy at order 13 for it, the camera its argument) / 1160 (optid 249, 0x10C2E0 -> 0x130C20). v_ext's
+        // arrival flyover (SCPT 2065, ASEG 139061's event 2 on CMOBJ 158096) uses them; natively no Sly 3 camera
+        // object was ever pushed and the flyover's shots stayed on Sly at the safe house.
+        RegisterObjectMethod3(0x10C258, [](LO* plo, const std::vector<CRef>&) {
+            EnableCmObject(plo, true);
+            return CRef(TAGK_Void);
+        });
+        RegisterObjectMethod3(0x10C2E0, [](LO* plo, const std::vector<CRef>&) {
+            EnableCmObject(plo, false);
+            return CRef(TAGK_Void);
+        });
+    }
+} s_initcmobjmethods3;
 }

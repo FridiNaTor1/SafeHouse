@@ -6,6 +6,7 @@
 #include "alo.h"
 #include "display.h"
 #include "gl.h"
+#include "gl_backend.h"
 #include "ai.h"
 #include "anim.h"
 #include "animfind.h"
@@ -24,6 +25,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 
 void BindLoPartsTable(ALO*, int, uint32_t);  // orig0x1A64E8, loaders.cpp
 glm::mat4 InverseAffineMatrix4(const glm::mat4&);  // orig0x11C318, xfmath.cpp
@@ -93,7 +95,8 @@ void UpdateOverlay(LO* plo) {
     default: break;
     }
 }
-// orig: 0x147338 (the overlay's own ASEGA message9).
+// orig: 0x147338 (the overlay's own ASEGA message9). orig3 0x159F60: Sly 3's event ids 0x6CC..0x6D2 (Sly 2's
+// 0x5FB..0x601 never came: close / skip / accept stayed at their defaults); Sly 3's message kind 10 is native kind 9.
 bool Message(LO* plo, int kind, void* arg) {
     if (!g_psw || s_serial != g_psw->serial) return false;
     auto it = s_overlays.find(plo);
@@ -103,13 +106,13 @@ bool Message(LO* plo, int kind, void* arg) {
     const ASEGMSG9& msg = *static_cast<const ASEGMSG9*>(arg);
     if (msg.pasega != p.pasega) return true;
     switch (msg.n) {
-    case 0x5FB: p.canClose = 1; break;
-    case 0x5FC: p.canClose = 0; break;
-    case 0x5FD: p.canSkip = 1; break;
-    case 0x5FE: p.canSkip = 0; break;
-    case 0x5FF: p.accepts = 0; break;
-    case 0x600: p.accepts = 1; break;
-    case 0x601: if (p.dialog != -1) State(p, 3); break;
+    case 0x6CC: p.canClose = 1; break;
+    case 0x6CD: p.canClose = 0; break;
+    case 0x6CE: p.canSkip = 1; break;
+    case 0x6CF: p.canSkip = 0; break;
+    case 0x6D0: p.accepts = 0; break;
+    case 0x6D1: p.accepts = 1; break;
+    case 0x6D2: if (p.dialog != -1) State(p, 3); break;
     }
     return true;
 }
@@ -168,6 +171,41 @@ void DrawAnimatedOverlayFrame() {
         g_gl.CaptureOverlayFrame();  // orig0x1475C0, before the state change and black clear
         State(*p, 2);
     }
+    // (draw packets, platform/draw_packet.h: the Vulkan renderer; the GL-style state afterwards as the GL calls below
+    // leave it: the depth compare and the stencil's function / operations / write mask, which they do not set, kept)
+    const cane::draw::Packets* pk = cane::gl::ActiveBackend() ? cane::gl::ActiveBackend()->packets : nullptr;
+    if (pk && !(pk->beginPass && pk->clear && pk->applyState && pk->drawArraysMode && pk->bindTexture && pk->setConstant)) pk = nullptr;
+    static uint32_t s_idPk = 0;
+    static GLuint s_progPk = 0;
+    static GLint s_locCanvasPk = -1;
+    if (pk && g_gl.texOverlay && s_progPk != glOverlayShader.ID) {
+        using namespace cane::draw;
+        cane::draw::State st;
+        st.program = glOverlayShader.ID;
+        st.blend = 0, st.cull = 0, st.depthTest = 0, st.stencilTest = 0, st.colorMask = 0xF, st.depthWrite = 1;
+        st.keep = kKeepDepthCompare | kKeepStencil;
+        if (const GLint loc = glOverlayShader.Loc("tex"); loc >= 0) st.aconst[st.cconst++] = {loc, 0};
+        s_locCanvasPk = glOverlayShader.Loc("uCanvas");
+        s_idPk = pk->createState(st);
+        s_progPk = glOverlayShader.ID;
+    }
+    const bool fPk = pk && g_gl.texOverlay && s_idPk;
+    if (fPk) {
+        using namespace cane::draw;
+        Pass ps;
+        ps.framebuffer = g_gl.FboScene();
+        ps.viewport[2] = g_gl.renderWidth, ps.viewport[3] = g_gl.renderHeight;
+        pk->beginPass(ps);
+        // orig0x147890: packet2DF4B0, opaque black with TEST always.
+        Clear c;
+        c.clear = kClearColor | kClearDepth;
+        c.color[3] = 1.0f;
+        c.depth = 0.0f;
+        c.colorMask = 0xF, c.depthWrite = 1, c.scissor = 0;
+        c.stencilMaskKept = 1;
+        pk->clear(c);
+        pk->applyState(s_idPk);
+    } else {
     glBindFramebuffer(GL_FRAMEBUFFER, g_gl.FboScene());
     glViewport(0, 0, g_gl.renderWidth, g_gl.renderHeight);
     glDisable(GL_SCISSOR_TEST);
@@ -182,6 +220,7 @@ void DrawAnimatedOverlayFrame() {
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     glDisable(GL_DEPTH_TEST);
     if (!g_gl.texOverlay) return;
+    }
 
     ALO* palo = static_cast<ALO*>(p->plo);
     UpdateXfWorlds(palo);
@@ -189,9 +228,12 @@ void DrawAnimatedOverlayFrame() {
     // orig0x22FF40: owner+60 is the ALO's third reference, not its root record.
     const glm::mat4 invOwner = palo->apxfRef[2] ? InverseAffineMatrix4(palo->apxfRef[2]->matWorld) : glm::mat4(1.0f);
     bool bound[2]{};
+    // (Sly 3: the parts table 0x344070 binds the two halves 0x6CA / 0x6CB at +0x138 / +0x13C (orig3 0x15A600 reads
+    // p +0x138 + 4 i); Sly 2's were +0x158 / +0x15C: with those the halves were never found and the photo review's
+    // overlay (0x6D3, the ASEG 0x6D9) drew only its black clear for the whole dialog, ~150 frames)
     for (const auto& part : palo->apartxf)
         for (int i = 0; i < 2; ++i)
-            if (part.first == uint32_t(0x158 + i * 4) && part.second) {
+            if (part.first == uint32_t(0x138 + i * 4) && part.second) {
                 amat[i] = invOwner * part.second->matWorld;
                 bound[i] = true;
             }
@@ -204,15 +246,30 @@ void DrawAnimatedOverlayFrame() {
         glm::vec4(1.0f, 0.0f, 0.0f, 0.0f), glm::vec4(0.0f, -1.0f, 0.0f, 0.0f),
         glm::vec4(0.0f, 0.0f, 1.0f, -0.5f), glm::vec4(0.0f, 0.0f, 0.0f, 1.0f));
     if (!s_vao) {
+        s_vbo = GlNewBuffer(GL_ARRAY_BUFFER, 0, nullptr, GL_STREAM_DRAW);
+        if (const cane::draw::Packets* pkv = PpacketsVao())
+        {
+            using namespace cane::draw;
+            const VertexAttrib aattr[] = {{0, 2, kAttribFloat, 0, 0, s_vbo, uint32_t(offsetof(OVERLAYVTX, pos)), sizeof(OVERLAYVTX), 0},
+                                          {1, 3, kAttribFloat, 0, 0, s_vbo, uint32_t(offsetof(OVERLAYVTX, stq)), sizeof(OVERLAYVTX), 0}};
+            s_vao = pkv->createVertexArray(aattr, 2, 0);
+        }
+        else
+        {
         glGenVertexArrays(1, &s_vao);
-        glGenBuffers(1, &s_vbo);
         glBindVertexArray(s_vao);
         glBindBuffer(GL_ARRAY_BUFFER, s_vbo);
         glEnableVertexAttribArray(0);
         glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, sizeof(OVERLAYVTX), reinterpret_cast<void*>(offsetof(OVERLAYVTX, pos)));
         glEnableVertexAttribArray(1);
         glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(OVERLAYVTX), reinterpret_cast<void*>(offsetof(OVERLAYVTX, stq)));
+        }
     }
+    if (fPk) {
+        const float canvas[4] = {g_display.uiScale.x, g_display.uiScale.y, g_display.uiOffset.x, g_display.uiOffset.y};
+        if (s_locCanvasPk >= 0) pk->setConstant(glOverlayShader.ID, s_locCanvasPk, canvas, sizeof canvas);
+        pk->bindTexture(0, g_gl.texOverlay, 0, 0);
+    } else {
     glOverlayShader.Use();
     glUniform1i(glOverlayShader.Loc("tex"), 0);
     glUniform4f(glOverlayShader.Loc("uCanvas"), g_display.uiScale.x, g_display.uiScale.y, g_display.uiOffset.x, g_display.uiOffset.y);
@@ -220,7 +277,9 @@ void DrawAnimatedOverlayFrame() {
     glBindSampler(0, 0);
     glBindTexture(GL_TEXTURE_2D, g_gl.texOverlay);
     glBindVertexArray(s_vao);
-    glBindBuffer(GL_ARRAY_BUFFER, s_vbo);
+    }
+    const cane::draw::Packets* const pkb = fPk ? PpacketsBuf() : nullptr;   // (native buffers: by name, no binding)
+    if (!pkb) glBindBuffer(GL_ARRAY_BUFFER, s_vbo);
     static int remainingPrints = [] {
         const char* e = std::getenv("SLY2N_OVERLAYPRINT");
         return e ? std::clamp(std::atoi(e), 0, 240) : 0;
@@ -257,10 +316,18 @@ void DrawAnimatedOverlayFrame() {
                                    vtx[i].pos.x, vtx[i].pos.y, vtx[i].stq.x, vtx[i].stq.y, vtx[i].stq.z);
         }
         if (!valid) continue;
+        if (fPk) {
+            if (void* pv = pk->mapStream ? pk->mapStream(s_vbo, sizeof(vtx)) : nullptr) std::memcpy(pv, vtx, sizeof(vtx));
+            else if (pkb) pkb->bufferData(s_vbo, sizeof(vtx), vtx, cane::draw::kBufferStream);
+            else glBufferData(GL_ARRAY_BUFFER, sizeof(vtx), vtx, GL_STREAM_DRAW);
+            pk->drawArraysMode(s_idPk, s_vao, cane::draw::kTriangleStrip, 0, 4, 0.0f, nullptr, 0);
+            continue;
+        }
         glBufferData(GL_ARRAY_BUFFER, sizeof(vtx), vtx, GL_STREAM_DRAW);
         glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
     }
-    glBindVertexArray(0);
+    if (fPk) pk->drawArraysMode(s_idPk, 0, cane::draw::kTriangles, 0, 0, 0.0f, nullptr, 0);   // (vertex array 0, as the GL calls leave it)
+    else glBindVertexArray(0);
 }
 
 // orig: 0x1477D8's logical transition on frames with no GL draw. Run at the END
@@ -278,7 +345,7 @@ void ResetAnimatedOverlays() {
 }
 
 void ResetAnimatedOverlayGraphics() {
-    if (s_vbo) glDeleteBuffers(1, &s_vbo);
-    if (s_vao) glDeleteVertexArrays(1, &s_vao);
+    GlDeleteBuffer(s_vbo);
+    GlDeleteVertexArray(s_vao);
     s_vbo = s_vao = 0;
 }

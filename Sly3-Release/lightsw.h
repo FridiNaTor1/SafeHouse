@@ -16,6 +16,8 @@ struct LIGHTPARAMS
     float strength = 0;             // +0x150 (153)
     float angle = 240;              // +0x154 (154, degrees)
     int n158 = 1;                   // +0x158 (156): casts the shadow direction (0x1A4478)
+    float gShadow = -1.0f;          // (Sly 3) +0x148: the shadow weight (0 none; < 0 the selection's score as is, else
+                                    // score x weight / max(+0xE8, +0x140): orig3 0x1C6418)
     int fNoContext = 0;             // +0x15C (157): not a light-context candidate (0x1A3D00)
     int fNoBake = 0;                // +0x160 (158): not baked (Glob_UploadMatrices 0x167FC0), not the world's light
     float sNear = 200, sFar = 2000; // +0x164 / +0x168 (155): point falloff

@@ -9,14 +9,58 @@ invariant gl_Position;
 precise gl_Position;
 #endif
 
+// (render.cpp FDrawStateOn: the Vulkan renderer's pulled programs with bindless handles take each pass draw's colour
+// source, fog black and CANE_BLEND1 mode from its draw entry, the handle's third word; 0 there: the uniforms)
+#if defined(CANE_BLEND1) && defined(BINDLESS)
+#define CANE_DRAWSTATE 1
+#endif
+
 // (with glob.geom, the near-plane clip: the outputs go to it under these names, and it passes them on as v*)
 #ifdef GEOM
 #define vColor gsColor
 #define vUv gsUv
 #define vFog gsFog
 #define vTexh gsTexh
+#define vLayer gsLayer
+#define vDrawState gsDrawState
 #endif
 
+#ifdef CANE_PULL
+// (OpenGL ES without EXT_base_instance, gl.cpp g_fDrawUniform: render.cpp draws a run of sub-draws as one draw of a
+// per-frame index list; each index holds the run's sub-draw (bits 22..31, from caneDrawBase) and the vertex (bits
+// 0..21, from caneVertexBase), and the vertex is read here from the arena's buffers (render.cpp GPUVTX / GPUCOL))
+layout (std430, binding = 6) readonly buffer PULLVTX { uint apullv[]; };   // GPUVTX: 12 words a vertex
+layout (std430, binding = 7) readonly buffer PULLCOL { uint apullc[]; };   // GPUCOL: 2 words a vertex
+layout (std430, binding = 10) readonly buffer PULLDRAWMAP { uint adrawmap[]; };   // the pass's segments' draw indices
+uniform uint caneDrawBase;
+uniform uint caneVertexBase;
+vec3 aPos;
+vec2 aUv;
+vec4 aRgbaA;
+vec4 aRgbaB;
+vec3 aNormal;
+uvec4 aBone;
+uint aDraw;
+vec4 aWeight;
+uint caneVertexId;
+uvec4 CaneBytes(uint w) { return uvec4(w & 255u, (w >> 8) & 255u, (w >> 16) & 255u, w >> 24); }
+void CanePull()
+{
+    uint id = uint(gl_VertexID);
+    caneVertexId = caneVertexBase + (id & 0x3FFFFFu);
+    aDraw = (caneDrawBase & 0x80000000u) != 0u ? (caneDrawBase & 0x7FFFFFFFu) : adrawmap[caneDrawBase + (id >> 22)];
+    uint o = caneVertexId * 12u;
+    aPos = vec3(uintBitsToFloat(apullv[o]), uintBitsToFloat(apullv[o + 1u]), uintBitsToFloat(apullv[o + 2u]));
+    aUv = vec2(uintBitsToFloat(apullv[o + 3u]), uintBitsToFloat(apullv[o + 4u]));
+    aNormal = vec3(uintBitsToFloat(apullv[o + 7u]), uintBitsToFloat(apullv[o + 8u]), uintBitsToFloat(apullv[o + 9u]));
+    aBone = CaneBytes(apullv[o + 10u]);
+    aWeight = unpackUnorm4x8(apullv[o + 11u]);
+    uint c = caneVertexId * 2u;
+    aRgbaA = vec4(CaneBytes(apullc[c]));
+    aRgbaB = vec4(CaneBytes(apullc[c + 1u]));
+}
+#define CANE_VERTEX_ID caneVertexId
+#else
 layout (location = 0) in vec3 aPos;
 layout (location = 1) in vec2 aUv;
 layout (location = 2) in vec4 aRgbaA;   // unnormalized bytes
@@ -25,6 +69,8 @@ layout (location = 4) in vec3 aNormal;
 layout (location = 5) in uvec4 aBone;   // skinning: the group's bone indices
 layout (location = 6) in uint aDraw;    // the draw index (instanced, from the command's baseInstance)
 layout (location = 7) in vec4 aWeight;  // and their weights (raw / 255, P_G 726)
+#define CANE_VERTEX_ID uint(gl_VertexID)
+#endif
 
 // Per-frame draw data (render.cpp RECGPU / DRAWGPU).
 struct REC
@@ -33,7 +79,7 @@ struct REC
     vec4 fog;       // CM_BuildFogRecip 0x14E270: near (cm+0x240), far/near, max fog (cm+0x248 x uFog), enabled
     uvec4 bone;     // skinned groups: the first bone matrix, their count (0: not skinned); z: the vertices' base
     vec4 spec0;     // P_G 638 view-angle alpha: g0, g1, g2 (x 1/127, 1/16129), kind (0 view direction, 1 from a point, 2 per vertex)
-    vec4 spec1;     // its clamp lo, hi, on
+    vec4 spec1;     // its clamp lo, hi, on, lit (1: colour A's RGB, the normals' brightness; 0: the unlit alpha mode)
     vec4 specPos;   // kind 1's point (the group's space)
     uvec4 warp;     // space warps (wr.h): the state vectors' first + 1 (0: none), vertex count, first matrix, count | flags
 };
@@ -48,8 +94,23 @@ layout (std430, binding = 4) readonly buffer WARPMATS { mat4 amatWarp[]; };
 layout (std430, binding = 1) readonly buffer DRAWS { vec4 adraw[]; };   // SAA du, dv (P_G 421 adds it to every ST), object alpha (qw8.x), record
 #ifdef BINDLESS
 // (perf-3, ARB_bindless_texture) each pass draw's texture + sampler handle (render.cpp: 0 = the bound tex)
+#ifdef CANE_DRAWSTATE
+layout (std430, binding = 5) readonly buffer TEXHANDLES { uvec4 atexh[]; };   // handle, state word (render.cpp DrawStateWord)
+flat out uint vDrawState;
+#elif defined(VULKAN) && defined(CANE_PULL)
+// (the Vulkan pulled path's program without CANE_BLEND1, gl.cpp glGlobShaderVol: the handle buffer laid out as for
+// the others there, render.cpp FDrawStateLayout)
+layout (std430, binding = 5) readonly buffer TEXHANDLES { uvec4 atexh[]; };
+#define CANE_TEXH4 1
+#else
 layout (std430, binding = 5) readonly buffer TEXHANDLES { uvec2 atexh[]; };
+#endif
 flat out uvec2 vTexh;
+#endif
+#ifdef TEXARRAY
+// (perf-5, no bindless: render.cpp g_fGlobArrays) each pass draw's layer + 1 in the bound array texture (0: the bound tex)
+layout (std430, binding = 5) readonly buffer TEXLAYERS { uvec2 alayer[]; };
+flat out uint vLayer;
 #endif
 
 uniform mat4 matWorldToClip;
@@ -64,60 +125,95 @@ noperspective out float vFog;
 
 void main()
 {
+#ifdef CANE_PULL
+    CanePull();
+#endif
     vec4 d = adraw[aDraw];
-#ifdef BINDLESS
+#ifdef CANE_DRAWSTATE
+    uvec4 texhds = atexh[aDraw];
+    vTexh = texhds.xy;
+    vDrawState = texhds.z;
+    int icolorDraw = (texhds.z & 0x80000000u) != 0u ? int(texhds.z & 3u) : icolor;
+#define icolor icolorDraw
+#else
+#ifdef CANE_TEXH4
+    vTexh = atexh[aDraw].xy;
+#elif defined(BINDLESS)
     vTexh = atexh[aDraw];
 #endif
-    REC rec = arec[floatBitsToUint(d.w)];
-    vec4 fogParams = rec.fog;
+#endif
+#ifdef TEXARRAY
+    vLayer = alayer[aDraw].x;
+#endif
+    // (the record's fields read where they are used, not the whole record per vertex: a skinned vertex never reads the
+    // model matrix, and only the view-angle groups read the spec fields)
+    uint irec = floatBitsToUint(d.w);   // (no const: GLSL ES wants constant initializers there)
+    vec4 fogParams = arec[irec].fog;
+    uvec4 recBone = arec[irec].bone;
+    uvec4 recWarp = arec[irec].warp;
     vec4 posWorld;
-    if (rec.bone.y != 0u)
+    if (recBone.y != 0u)
     {
         vec4 p = vec4(aPos, 1.0);
-        posWorld = aWeight.x * (abone[rec.bone.x + min(aBone.x, rec.bone.y - 1u)] * p)
-                 + aWeight.y * (abone[rec.bone.x + min(aBone.y, rec.bone.y - 1u)] * p)
-                 + aWeight.z * (abone[rec.bone.x + min(aBone.z, rec.bone.y - 1u)] * p)
-                 + aWeight.w * (abone[rec.bone.x + min(aBone.w, rec.bone.y - 1u)] * p);
+        posWorld = aWeight.x * (abone[recBone.x + min(aBone.x, recBone.y - 1u)] * p)
+                 + aWeight.y * (abone[recBone.x + min(aBone.y, recBone.y - 1u)] * p)
+                 + aWeight.z * (abone[recBone.x + min(aBone.z, recBone.y - 1u)] * p)
+                 + aWeight.w * (abone[recBone.x + min(aBone.w, recBone.y - 1u)] * p);
         posWorld.w = 1.0;
     }
     else
-        posWorld = rec.model * vec4(aPos, 1.0);
+        posWorld = arec[irec].model * vec4(aPos, 1.0);
     vec2 duv = vec2(0.0);
-    if (rec.warp.x != 0u)
+    if (recWarp.x != 0u)
     {
-        uint ivtx = uint(gl_VertexID) - rec.bone.z;
-        uint cmat = rec.warp.w & 0xFFu;
+        uint ivtx = CANE_VERTEX_ID - recBone.z;
+        uint cmat = recWarp.w & 0xFFu;
         vec3 dpos = vec3(0.0);
         for (uint imat = 0u; imat < cmat; ++imat)
         {
-            vec4 st = awarp[rec.warp.x - 1u + imat * rec.warp.y + ivtx];
-            dpos += (amatWarp[rec.warp.z + imat] * st).xyz;
-            duv += (amatWarp[rec.warp.z + 4u + imat] * st).xy;
+            vec4 st = awarp[recWarp.x - 1u + imat * recWarp.y + ivtx];
+            dpos += (amatWarp[recWarp.z + imat] * st).xyz;
+            duv += (amatWarp[recWarp.z + 4u + imat] * st).xy;
         }
-        if ((rec.warp.w & 0x100u) != 0u) posWorld.xyz += dpos;
-        if ((rec.warp.w & 0x200u) == 0u) duv = vec2(0.0);
+        if ((recWarp.w & 0x100u) != 0u) posWorld.xyz += dpos;
+        if ((recWarp.w & 0x200u) == 0u) duv = vec2(0.0);
     }
     gl_Position = matWorldToClip * posWorld;
     vec4 c = icolor == 0 ? aRgbaA : (icolor == 1 ? aRgbaB : rgbaConst);
     float aA = aRgbaA.a;
-    if (rec.spec1.z != 0.0 && (icolor == 0 || icolor == 3))
+    if ((icolor == 0 || icolor == 1 || icolor == 3) && arec[irec].spec1.z != 0.0)
     {
         // P_G 638: the direction to the camera in the group's space (1909's matrix; 0: -view direction, 1: from the
         // point, 2: from the vertex), . the S8 normal (n x 127, truncated as 0x16A000 packs it), a quadratic gain
         // clamped, colour A's alpha x gain rounded (FTOI0 of a x g + 0.5)
-        mat3 mInv = inverse(mat3(rec.model));
+        mat4 model = arec[irec].model;
+        vec4 spec0 = arec[irec].spec0, spec1 = arec[irec].spec1;
+        mat3 mInv = inverse(mat3(model));
         vec3 v;
-        if (rec.spec0.w == 0.0) v = mInv * -dirCamera;
+        if (spec0.w == 0.0) v = mInv * -dirCamera;
         else
         {
-            vec3 cam = mInv * (posCamera - rec.model[3].xyz);
-            v = rec.spec0.w == 1.0 ? cam - rec.specPos.xyz : cam - aPos;
+            vec3 cam = mInv * (posCamera - model[3].xyz);
+            v = spec0.w == 1.0 ? cam - arec[irec].specPos.xyz : cam - aPos;
         }
         v = normalize(v);
         float x = dot(v, trunc(aNormal * 127.0));
-        float g = clamp(rec.spec0.x + rec.spec0.y * x + rec.spec0.z * x * x, rec.spec1.x, rec.spec1.y);
-        aA = floor(aA * g + 0.5);
-        if (icolor == 0) c.a = aA;
+        float g = clamp(spec0.x + spec0.y * x + spec0.z * x * x, spec1.x, spec1.y);
+        if (spec1.w != 0.0)
+        {
+            // (orig3 mesh_modulate_material, lit (flag set): the normal stream's w (the vertex's brightness, Decompose's
+            // baseIntensity) times the gain, half-unit rounded, before mesh_shade_cubic multiplies colour A's RGB by
+            // it: the baked colour A's RGB times the gain; alpha and colour B unchanged)
+            if (icolor == 0) c.rgb = floor(c.rgb * g + 0.5);
+        }
+        else
+        {
+            aA = floor(aA * g + 0.5);
+            if (icolor == 0) c.a = aA;
+            // (orig3 mesh_modulate_material, unlit: the vertex record's colour A alpha (qword 1 w) and colour B's RGB
+            // (qword 2 xyz) both times the gain, half-unit rounded: the second pass's colour dims with the view angle too)
+            if (icolor == 1) c.rgb = floor(c.rgb * g + 0.5);
+        }
     }
     if (icolor == 3) c.a *= aA / 128.0;   // a constant colour faded by the vertex alpha
     c.a *= d.z;

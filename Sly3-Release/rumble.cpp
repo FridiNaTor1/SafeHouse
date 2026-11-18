@@ -1,5 +1,10 @@
 // The pad's vibration: rumble.h.
+#include <algorithm>
+#if defined(__ANDROID__) || defined(CANE_IOS)
+#include "mobile_app.h"
+#endif
 #include "rumble.h"
+#include "vr.h"
 
 #include "clock.h"
 #include "joy.h"
@@ -60,6 +65,15 @@ namespace
 #endif
 void SendMotors(uint8_t bSmall, uint8_t bBig)
 {
+    // (VR, vr.h: the headset's controllers are the pad (pcinput: no joystick chosen): both hands vibrate, the big motor as
+    // the strength, the small one (on / off) as a light one; Controller Vibration Off: none)
+    if (vr::FActive() && s_fWindow && s_jid < 0)
+    {
+        if (!g_fControllerVibration) bSmall = bBig = 0;
+        const float g = std::max(float(bBig) / 255.0f, bSmall ? 0.3f : 0.0f);
+        vr::Rumble(g, g);
+        return;
+    }
 #if defined(__SWITCH__)
     // the DualShock's motors on the Joy-Cons / Pro Controller: the big one (0..255) as the low band's amplitude, the
     // small one (on / off) as the high band at full
@@ -68,6 +82,15 @@ void SendMotors(uint8_t bSmall, uint8_t bBig)
     CaneSwitchRumble(float(bBig) / 255.0f, bSmall ? 1.0f : 0.0f);
 #elif defined(CANE_SDL_RUMBLE)
     if (!s_fWindow || s_jid < 0) return;   // (headless, the keyboard and mouse: nothing to drive)
+#if defined(__ANDROID__) || defined(CANE_IOS)
+    if (s_jid == GLFW_JOYSTICK_LAST)
+    {
+        // the on-screen pad: the device's own vibrator, the big motor as its strength (the small one: a light buzz)
+        if (!g_fControllerVibration) bSmall = bBig = 0;
+        cane::mobile::vibrate(std::max<int>(bBig, bSmall ? 96 : 0));
+        return;
+    }
+#endif
     if (!s_sdl.ready()) return;   // (started by SetRumblePad at the first windowed frame)
     if (!g_fControllerVibration) bSmall = bBig = 0;
     s_sdl.set(glfwGetJoystickGUID(s_jid), cane::rumble::MotorsFromDualShock(bSmall, bBig), glfwGetTime());
@@ -148,7 +171,7 @@ void UpdateRumble(RUMBLE* prumble)
     }
 }
 
-// orig 0x001D5310
+// orig 0x001D5310 (orig3: 0x210BD8, the same C in the Sly 3 decomp)
 void TriggerRumbleRumk(RUMBLE* prumble, int rumk, float dt)
 {
     // (the original indexes the table unchecked; a bad kind from data is dropped here)
@@ -247,6 +270,14 @@ void TriggerJoyRumbleRumk(int rumk, float dt, const char* psz)
 }
 
 void StopJoyRumble() { SetRumbleRums(&g_rumble, RUMS_Stop); }
+
+// orig3 0x210D78 (the pad's motors set directly while a Sly 3 object holds the rumble in its state 5, e.g. the safe
+// dial's near / level hint): only when vibration is on and no pattern runs
+void SetJoyMotorsDirect3(bool fSmall, uint8_t bBig)
+{
+    if (!FVibrationEnabled() || g_rumble.rums == RUMS_Rumble) return;
+    SetActDirect(&g_rumble, fSmall ? 1 : 0, bBig);
+}
 
 void SetRumblePad(int jid, bool fWindow)
 {

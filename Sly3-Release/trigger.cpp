@@ -29,6 +29,7 @@
 #include "sw.h"
 #include "task.h"
 #include "trigger.h"
+#include "game/trigger3.h"
 #include "update.h"
 
 #include <algorithm>
@@ -459,7 +460,7 @@ struct INITTRIGGERS
 } s_inittriggers;
 }  // namespace
 
-void ResetTriggers() { s_mptrig.clear(); }
+void ResetTriggers() { s_mptrig.clear(); sly3::ResetTriggers3(); }
 
 // orig 0x00149880 (the volume trigger's removal, after the base 0x1A5848): a trigger with something inside (state 1 / 2)
 // leaves it (0x149718 -> 0x148A78 state 0: its event 6, the owner's 0x1B, the leave list); a tracking one (+0x2C8)

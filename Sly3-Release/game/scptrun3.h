@@ -58,6 +58,8 @@ struct SCPTHOST3
 
     // objects: PloFindSwNearest(sw, kind, oid, ploContext) 0x17E1B8 (PloFind 0x226770 = kind 4 from the run's context)
     virtual void* PloFind(int kind, int oid, void* ploContext) { (void)kind; (void)oid; (void)ploContext; return nullptr; }
+    // (PC) an object out of the world: the in-world object of its oid nearest the actor instead, if there is one (op 0x22)
+    virtual void* PloInWorldCopy(void* plo, void* ploNear) { (void)ploNear; return plo; }
     // FIsLoDerivedFrom(plo, cid) 0x13B500 (the handlers' class checks: 0x31 job, 0x32 / 0x33 / 0x34 actors, 0x87 SCPT)
     virtual bool FDerivedFrom(void* plo, int cid) { (void)plo; (void)cid; return plo != nullptr; }
     // another script object (0x0F / 0x10 alarms, 0x11 stop, 0x17 start)
@@ -97,8 +99,16 @@ struct SCPTHOST3
     virtual void CutCm() {}  // 0x23
     // the run's camera keys (0x45): the move from a key toward the next ones (StartRunCamera 0x22BB78, the next keys
     // found by 0x22A500); EndRunCamera 0x22BEE8 (a key with the flags 0x60)
-    virtual void StartRunCamera(RUN3& run, const SCPTCMD3& key, const SCPTCMD3* pkeyNext, const SCPTCMD3* pkeyNext2)
-    { (void)run; (void)key; (void)pkeyNext; (void)pkeyNext2; }
+    // (dtKey / dtNext: the keys' move durations +0x28 as 0x22A500 sets them at the key: +0x50, or when it is 0 the sum
+    // of the commands that follow up to the next key (0x22A670); -1: the file's +0x50)
+    virtual void StartRunCamera(RUN3& run, const SCPTCMD3& key, const SCPTCMD3* pkeyNext, const SCPTCMD3* pkeyNext2,
+                                float dtKey = -1.0f, float dtNext = -1.0f)
+    { (void)run; (void)key; (void)pkeyNext; (void)pkeyNext2; (void)dtKey; (void)dtNext; }
+    // 0x22A670's terms: a dialog line's length (0x246E40: the sound manager's line +0x50), an ASEG's (0x16: its tMax /
+    // (its speed x the suck polynomial, clamped)), an SM's time to a goal (0x19: 0x23A850 on the object's SM)
+    virtual float DtDialogLine(int id) { (void)id; return 0.0f; }
+    virtual float DtAsegScpt(void* ploAseg) { (void)ploAseg; return 0.0f; }
+    virtual float DtSmGoal(void* plo, int oidSm, int oidGoal) { (void)plo; (void)oidSm; (void)oidGoal; return 0.0f; }
     virtual void EndRunCamera(RUN3& run) { (void)run; }
 
     // tasks (0x1E: ApplyCheckpointTasks(0x36C700, 1, {oid, state}, ctx) 0x185908)
@@ -113,6 +123,8 @@ struct SCPTHOST3
     // ---- the actor commands (the Sly 3 script port; each names the game function the handler calls, the actor fields it reads)
     // The world transform of an object (its vt slot at +0x120/+0x124: rows mat[0..2], translation +0x30).
     virtual bool GetLoXf(void* plo, float mat[9], float pos[3]) { (void)plo; for (int i = 0; i < 9; ++i) mat[i] = i % 4 == 0; pos[0] = pos[1] = pos[2] = 0; return plo != nullptr; }
+    // the object's vt slot 36 matrix (an ALO: its +0x50 record, 0x23CFB8), the placement target of GetRunAim (0x22AEC8)
+    virtual bool GetLoAimXf(void* plo, float mat[9], float pos[3]) { return GetLoXf(plo, mat, pos); }
     // an actor's aim offset (+0x260, added for cid 0x32 actors) and heading (+0x1BC)
     virtual void ActorAimOffset(void* ploActor, float d[3]) { (void)ploActor; d[0] = d[1] = d[2] = 0; }
     virtual float ActorHeading(void* ploActor) { (void)ploActor; return 0; }
@@ -136,6 +148,7 @@ struct SCPTHOST3
     // while it waits); FAsegaRetracted 0x138AC8; RetractAsega 0x137B00; the handle's release (vt slot 2)
     virtual void* ApplyAseg(void* ploAseg, void* plo, int grf) { (void)ploAseg; (void)plo; (void)grf; return nullptr; }
     virtual bool FAsegaRetracted(void* pasega) { (void)pasega; return true; }
+    virtual void AddRefAsega(void* pasega) { (void)pasega; }   // (vt slot 1: the run's reference while it waits)
     virtual void RetractAsega(void* pasega) { (void)pasega; }
     virtual void ReleaseAsega(void* pasega) { (void)pasega; }
     // 0x22: the binocucom shut at once (0x1BDBB0(actor +0xF60, -1), when StoredFlagIsClear 0x1569A8(actor)); an object
@@ -153,7 +166,11 @@ struct SCPTHOST3
     // SetActorWatchTarget 0x1572A0(actor +0x10A0, pos)
     virtual void ResetActorInteract(void* ploActor) { (void)ploActor; }
     virtual void* PcrvActorInteract(void* ploActor) { (void)ploActor; return nullptr; }
-    virtual void SetActorWatchTarget(void* ploActor, const float pos[3]) { (void)ploActor; (void)pos; }
+    virtual void SetActorWatchTarget(void* ploActor, const float pos[3], float gSpeed, bool fR1) { (void)ploActor; (void)pos; (void)gSpeed; (void)fR1; }
+    // the actor's progress watch (actor +0x10A0): 0x1573A0 its next check reset (0x30's start), 0x1572A0 its target (0x30's
+    // done test, 0x229438 case 48)
+    virtual void ResetActorWatch(void* ploActor) { (void)ploActor; }
+    virtual void WatchActorTarget(void* ploActor, const float pos[3]) { (void)ploActor; (void)pos; }
     // 0x36 (the actor moves to an object or a point): the object's nav helper 0x1A2A40(plo) and its goal (helper vt
     // slot +0x10/+0x14 (helper, actor, pos)); FActorMovingTo (actor +0x1014 != -1 and +0x101C == plo); the move
     // 0x1C0538(actor, goal {+0 plo, +4 helper, +0x10 pos}); then b4 == 1: actor +0x348 = 0; cid 0x34: +0x19F0 = b8.
@@ -181,6 +198,8 @@ struct SCPTHOST3
     virtual void ActivateLo(int cid, void* plo, void* ploActor) { (void)cid; (void)plo; (void)ploActor; }
     // 0x13: 0x1F4B00(GAME, n, job) on a job (cid 0x31)
     virtual void JobCommand(void* ploJob, int n) { (void)ploJob; (void)n; }
+    // 0x51's done test (orig3 0x229438 case 81): the object is a player's character (0x1F4AD0(SW, 0 / 1))
+    virtual bool FPlayerCharacter(void* plo) { (void)plo; return false; }
     // 0x1A / 0x1B: a screen object (cid 0x9E) shown (vt slot +0x1A8, n) / hidden (+0x1B0); FScreenObjDone 0x260738
     virtual void ShowScreenObj(void* plo, int n) { (void)plo; (void)n; }
     virtual void HideScreenObj(void* plo) { (void)plo; }
@@ -207,6 +226,18 @@ struct SCPTHOST3
     virtual void* PlayAsegaSound(int h, int n1, int n2, int n3, float g0, float g1, float g2, void* ploContext, SCPT3* ps)
     { (void)h; (void)n1; (void)n2; (void)n3; (void)g0; (void)g1; (void)g2; (void)ploContext; (void)ps; return nullptr; }
     virtual void StopSound(void* psnd) { (void)psnd; }
+    // 0x75 (orig3 0x1C7A00: vt slot 10 SetParent(parent, null, grf)): plo's parent set (null: none)
+    virtual void SetLoParent3(void* plo, void* ploParent, int grf) { (void)plo; (void)ploParent; (void)grf; }
+    // 0x6C: the choice menu (orig3 D_0036BB80; null: the command does nothing); its lines shown, its state (1 showing;
+    // else *pid the chosen line, -1 none), hidden (0x1636B0)
+    virtual bool FChoiceMenu() { return false; }
+    virtual void ShowChoices(int idTitle, const std::vector<int>& aid, const std::vector<int>& agrfBtn) { (void)idTitle; (void)aid; (void)agrfBtn; }
+    virtual int ChoiceState(int* pid) { *pid = -1; return 0; }
+    virtual void HideChoices() {}
+    // 0x3A / 0x3B (orig3 0x23FE38 / 0x23FEC0): an ALO's mesh groups with tag k shown / hidden; 0x3C / 0x3D (0x240000 /
+    // 0x240080): its collision entries with tag k on / off
+    virtual void ShowAloGlobs3(void* palo, int k, bool fShow) { (void)palo; (void)k; (void)fShow; }
+    virtual void SetAloSoes3(void* palo, int k, bool fOn) { (void)palo; (void)k; (void)fOn; }
     // 0x4E: the prompt buttons (*(0x4BC228) = mask & 0xF0), FButtonPressed 0x1A7A80(pad, mask, 0) on the job's pad (cid
     // 0x31 +0x134) or the default pad 0x36E740 (null)
     virtual void SetButtonPrompt(int grf) { (void)grf; }
@@ -222,8 +253,8 @@ struct SCPTHOST3
     // two bytes, +0x60 the float, +0x58 the run's +0x104), 0x34 the step-to job 0xF4 (+0x30 the run's +0x104, +0x34 the
     // float, +0x38 the byte, +0x3C the float, 0x157970 the aim point). Done when the job is gone or its FDone
     // (0x1577C0 / 0x157950) says so: then ClearJobs.
-    virtual void ActorPathStep(void* ploActor, void* pcrv, int b1, int b2, float g3) { (void)ploActor; (void)pcrv; (void)b1; (void)b2; (void)g3; }
-    virtual void ActorStepTo(void* ploActor, const float pos[3], float g1, int b2, float g3) { (void)ploActor; (void)pos; (void)g1; (void)b2; (void)g3; }
+    virtual void ActorPathStep(void* ploActor, void* pcrv, int b1, int b2, float g3, int f104) { (void)ploActor; (void)pcrv; (void)b1; (void)b2; (void)g3; (void)f104; }
+    virtual void ActorStepTo(void* ploActor, const float pos[3], float g1, int b2, float g3, int f104) { (void)ploActor; (void)pos; (void)g1; (void)b2; (void)g3; (void)f104; }
     virtual bool FActorJobDone(void* ploActor, int kind) { (void)ploActor; (void)kind; return true; }
     // 0x19: RunDockRsmgs 0x25D478: the one object oid (a proxy: its instance; an ALO) and its SM (oidSm, -1 any):
     // its goal set (fSnap: snapped); returns the SMA (the run keeps it for the done test), null when none
@@ -233,6 +264,31 @@ struct SCPTHOST3
     virtual bool FSmGoalReached(void* psma, int oidGoal) { (void)psma; (void)oidGoal; return true; }
     // 0x63: 0x1985A8(guard, plo) (the guard's second command kind: the AI code)
     virtual void GuardCommand63(void* ploGuard, void* plo) { (void)ploGuard; (void)plo; }
+    virtual void Caught(void* plo) { (void)plo; }
+    // the actor's own commands (0x2A..0x2E, 0x35, 0x37: the game's hook; scptgame3.h pfnActorCmd)
+    virtual void ActorCmd(int id, void* ploActor, void* ploA, void* ploB, int n, int n2, const float pos[3])
+    { (void)id; (void)ploActor; (void)ploA; (void)ploB; (void)n; (void)n2; (void)pos; }
+    virtual bool FActorCmdDone(int id, void* ploActor) { (void)id; (void)ploActor; return true; }
+    virtual void* PloContextObject(RUN3& run) { (void)run; return nullptr; }
+    // 0x3E (orig3: 0x17E208(0x505, cid): every object of the class (and its descendants) in the world: vt slot 9 RemoveLo)
+    virtual void RemoveByClass(int cid) { (void)cid; }
+    // 0x1C: the HUD notice widget (D_0046FD00) with a screen object; busy while it shows
+    virtual void ShowNotice(int n, void* plo) { (void)n; (void)plo; }
+    virtual bool FNoticeBusy() { return false; }
+    // 0x76 (orig3): an ALO's linear / angular constraint (0x23EBF8 / 0x23EC98 = Sly 2's SetAloCnstrLin / Ang 0x1F5720 /
+    // 0x1F57C0; -1 unchanged), its velocities zeroed (flag 0x10: 0x23D938 / 0x23D9D0)
+    virtual void SetAloCnstr3(void* palo, int nLin, int nAng, bool fStop) { (void)palo; (void)nLin; (void)nAng; (void)fStop; }
+    // 0x76's fields: an object's stored field (LO::SetField at the Sly 3 offset, as the field options store them)
+    virtual void SetLoField3(void* plo, int ib, int n) { (void)plo; (void)ib; (void)n; }
+    // 0x6B (orig3 0x241100 -> 0x240CB0 / 0x240A28): a contact message (a scripted hit) from plo to its receiver: the
+    // filter bytes, the id (its value 0x172268), the state
+    virtual void SendContact3(void* ploReceiver, void* ploSender, int grfFilter, int nAmount, int fKill) { (void)ploReceiver; (void)ploSender; (void)grfFilter; (void)nAmount; (void)fKill; }
+    // 0x40 (orig3 0x1A9058): player n's pad rumbles with pattern k for g seconds (a ready DualShock 2 only)
+    virtual void Rumble(int n, int k, float g) { (void)n; (void)k; (void)g; }
+    virtual int ActorState36(void* ploActor) { (void)ploActor; return -1; }   // -1: unknown (the waits end)
+    // 0x5D / 0x5E (orig3 0x22A7F8 cases 93 / 94: the drive's +0x18 | 0x10 held from 0x5D until 0x5E): triangle held on the
+    // driven actor (Bentley's hold: his gadget)
+    virtual void SetActorHold5D(void* ploActor, bool fHold) { (void)ploActor; (void)fHold; }
     // 0x42: SetEyesClosedOf 0x25DA70(sw, oid, n, g, ctx) (the eyes of the context's object)
     virtual void SetEyesClosed(int oid, int n, float g, void* ploContext) { (void)oid; (void)n; (void)g; (void)ploContext; }
     // 0x55 / 0x56 (HoldRunEffects 0x22B4A8 / ReleaseRunEffects 0x22B580; Sly 2 0x1E51A0): an actor's effects held
@@ -249,6 +305,33 @@ struct SCPTHOST3
     virtual void* PloProxyInstance(void* pproxy) { (void)pproxy; return nullptr; }
     virtual void UnlockProxyRow(void* pproxy, void* plo) { (void)pproxy; (void)plo; }
     virtual void ReleaseProxyInstance(void* pproxy, void* plo) { (void)pproxy; (void)plo; }
+    // Murray (Sly 3 cid 0x35) and Bentley (0x36) commands (orig3 0x226D00 cases 92, 100..103; Sly 2's SCPT 0x4F, 0x57..0x5A):
+    // 0x5C: 0x1E2848(Murray, PsmaFindAloSm(obj, -1), oidGoal, k, fSnap) (his state 6, the hold); its done test: out of
+    // state 6, or (oidGoal != -1) his SM at oidGoal (0x239E70 on +0x1140)
+    virtual void MurrayHold(void* ploMurray, void* ploObj, int oidGoal, int k, int fSnap) { (void)ploMurray; (void)ploObj; (void)oidGoal; (void)k; (void)fSnap; }
+    virtual bool FMurrayHoldDone(void* ploMurray, int oidGoal) { (void)ploMurray; (void)oidGoal; return true; }
+    // 0x64: 0x1E2358 (the toss controller's +0x10 = the world's Bentley D_0036B250, Murray's state 16: the Bentley toss)
+    virtual void MurrayToss(void* ploMurray) { (void)ploMurray; }
+    // 0x65: Bentley's jump 0x1B7268(+0x320, 3 from his jump state 0x12, else 1) toward Murray's hands
+    virtual void BentleyJumpToMurray(void* ploBentley) { (void)ploBentley; }
+    // Murray's toss controller (+0x18E0): its state (+0x18E4; -2: not Murray), aimed at an object (0x273030), its +0
+    // (the owner), arrived (+0x120 == +0xF0 within 0.1 on each axis), vt slot 99 (0) on the actor; an actor's jump
+    // state (+0x33C)
+    virtual int MurrayThrowState(void* ploMurray) { (void)ploMurray; return -2; }
+    virtual void MurrayAim(void* ploMurray, void* plo) { (void)ploMurray; (void)plo; }
+    virtual void* MurrayThrowOwner(void* ploMurray) { (void)ploMurray; return nullptr; }
+    virtual bool FMurrayAimArrived(void* ploMurray) { (void)ploMurray; return true; }
+    virtual void ActorJumpKind0(void* ploActor) { (void)ploActor; }
+    virtual int ActorJumpState(void* ploActor) { (void)ploActor; return -1; }
+    // 0x24 (0x22B090): a zone (cid 0x0E) forced on for the camera (0x273E48 / 0x273ED0 with (0, 0, 1)); added to the
+    // world (vt slot 8) when it was not in it, removed again (slot 9) at the release
+    virtual bool FLoInWorld(void* plo) { (void)plo; return true; }
+    virtual void SetZoneForcedRun(void* ploZone, bool fOn) { (void)ploZone; (void)fOn; }
+    virtual void AddRemoveLo(void* plo, bool fAdd) { (void)plo; (void)fAdd; }
+    // 0x25 (0x22B150): the player actor's (cid 0x33) camera target pinned at pos plus his height (0x153EA0(actor, 1)),
+    // released (0x153EA0(actor, 0): the offset to it kept, z cleared)
+    virtual void PinActorCmTarget(void* ploActor, const float pos[3]) { (void)ploActor; (void)pos; }
+    virtual void ReleaseActorCmTarget(void* ploActor) { (void)ploActor; }
     // the done test about to run (the test hosts use it to know which command an actor query is about)
     virtual void Testing(RUN3& run, int icmd) { (void)run; (void)icmd; }
 
@@ -282,11 +365,17 @@ struct RUN3
     void* ploPending = nullptr;  // +0x4C   run by FinishRunPending 0x226700 each step until it passes) and its actor
     void* pasega = nullptr;      // +0x54 the ASEG handle 0x16 waits on
     SCPT3* pscptWait = nullptr;  // +0x58 the script 0x17 started with the wait flag (stopped by RetireRun)
+    bool f17Last = false;        // (native, without 0x17's wait: that 0x17 was the last command the run executed)
+    bool f17WaitNow = false;     // (native: the run came back to that 0x17 at its end to wait for the script)
+    int icmd17 = -1;             // (native: that 0x17)
     void* ploAnim = nullptr;     // +0x5C the actor whose script animation the run waits on (0x16 / 0x30)
     void* ploAddRemove = nullptr;// +0x68 (0x38 / 0x39)
     void* ploScreen = nullptr;   // +0x6C the screen object 0x1A shows (hidden by RetireRun)
     float uCrv80 = 0;            // +0x80 (0x30: the actor's interact curve parameter)
     float uCrv84 = 0;            // +0x84 (0x26: the path parameter to reach)
+    bool fChoice = false;        // +0x16C the choice menu this run shows (0x6C)
+    std::vector<std::pair<int, int>> achosen; // +0x15C the lines chosen {id, command} (0x6C skips them next time)
+    int idSnd = -1;              // (the id 0x43 played: +0x114's sound id +0x60, compared by 0x44)
     void* ploJobActor = nullptr; // (0x33 / 0x34: the actor whose job the done test watches)
     void* psma = nullptr;        // +0x60 (0x19: the SMA whose goal the run waits for)
     int f104 = 0;                // +0x104 (0x31 sets it: the jobs of 0x33 / 0x34 take it, job +0x58 / +0x30)
@@ -300,6 +389,10 @@ struct RUN3
     bool fPaused = false;        // +0x3C / +0x40 / +0x44 (0x1F: 0x22B290)
     int kindPause = 0;
     int iplayerPause = -1;
+    void* ploZone = nullptr;     // +0x74 the zone the run selected (0x24, 0x22B090; released by RetireRun)
+    bool fZoneAdded = false;     // +0x78 (that zone was not in the world: added by the run, removed at the release)
+    void* ploPin = nullptr;      // +0x7C the target the run's player is pinned to (0x25, 0x22B150)
+    void* plo94 = nullptr;       // +0x94 (0x67: Murray's throw controller's +0 kept for the done test)
     bool fRetired = false;
 };
 
@@ -326,9 +419,12 @@ SCPTHOST3& ScptHost3();
 // a script's alarm set / cleared from outside (the splice callbacks a script's 0x15 registers: m_ext 4262's alarm
 // 15086 is set by its world code, 0x0E waits for it); orig3 0x2261A0 / 0x2261F0
 void SetScptAlarm3(SCPT3* ps, int n, bool fSet);
+// (PC, hackgame3: the Hackathon's 3 / 4 players) an alarm being set from outside is held back when this answers true
+extern bool (*g_pfnScptAlarmHold3)(SCPT3* ps, int n);
 bool FScptAlarm3(const SCPT3* ps, int n);
 
 void StartScpt3(SCPT3* ps, void* ploStarter);  // orig3: 0x225EE8
+bool FRunFaceHeading3(RUN3* p, float* pang);    // orig3: 0x22A7F8 case 47 (the pending 0x2F's object heading)
 void StopScpt3(SCPT3* ps);                     // orig3: 0x226050
 void UpdateScpt3(SCPT3* ps, float dt);         // orig3: 0x225130 (dt: the frame's time, real or game)
 bool FScptRunning3(const SCPT3* ps);

@@ -40,6 +40,8 @@
 #include "ai.h"
 #include "actor.h"
 #include "hudwidget.h"
+#include "cheat.h"
+#include "gadget.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -164,11 +166,14 @@ void SetVaultOpened(bool f)
 {
     const std::vector<int16_t> akey = AkeyWorld("fVault");
     if (akey.empty()) return;
-    const bool fFirst = f && !FVaultOpened();
+    // the autosave (0x1ABD98(g_save, 0)) at the first opening comes BEFORE the flag is set, as the original's order:
+    // the slot written then holds neither the open vault nor its reward (granted after this, leaving state 3), so
+    // quitting before the next save gives back a closed vault to open again. (Setting the flag first saved an open
+    // vault without its power-up: the reward could no longer be had.)
+    if (f && !FVaultOpened()) HudAutoSave(false);
     CRef r;
     r.SetBool(f);
     FSetProgressKey(akey, r);
-    if (fFirst) HudAutoSave(false);  // 0x1ABD98(g_save, 0): the autosave
 }
 
 // orig: 0x00142140 (the actor's pose sub-object +0x4C0: kind 5 with the object, null: back out of it)
@@ -300,13 +305,7 @@ void SetVaultState(LO* plo, VAULT& v, int n)
         if (--g_gamepause.c80 == 0) HideSubtitleBox();  // 0x20F160: at 0 0x1A30D0
         break;
     case 3:
-        if (v.idReward != -1)
-        {
-            // 0x1DAF38: the power-up is his (TODO: its broadcast 0x3B as the shop's)
-            CRef r;
-            r.SetBool(true);
-            FSetProgress({"powerUps", "mppukfAcquired", std::to_string(v.idReward)}, r);
-        }
+        if (v.idReward != -1) SetItemAcquired(g_psw, v.idReward, true);  // 0x1DAF38: the power-up is his (event 0x3B)
         if (v.idDialogOpen != 0 && v.idDialogOpen != -1) v.fDialog = PsndStartDialog(v.idDialogOpen, 1) != nullptr;
         break;
     case 0:
@@ -385,6 +384,13 @@ void InitVault(SW* psw, LO* plo)
         std::printf(", asegs");
         for (LO* p : v.aploAseg) std::printf(" %d/0x%X", p ? p->oid : -1, p ? p->Cid() : 0);
         std::printf(", dial pose %d\n", v.ploPoseDial ? v.ploPoseDial->oid : -1);
+    }
+    // (PC) a save written by the builds that autosaved after setting fVault (above) can hold the vault open without its
+    // reward: the power-up given here, so it is not lost for good (the original cannot save that state)
+    if (FVaultOpened() && v.idReward != -1 && !FPowerupOwned(v.idReward))
+    {
+        std::printf("vault %d: open without its reward %d (an older build's autosave): given\n", plo->oid, v.idReward);
+        SetItemAcquired(nullptr, v.idReward, true);
     }
     SetVaultState(plo, v, FVaultOpened() ? 5 : 0);
 }

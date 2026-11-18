@@ -18,6 +18,15 @@ struct WREC;
 
 struct SW;
 
+// (Sly 3, native request flag) the request is one Sly 3 makes without its flag 2: when it names the loaded world
+// (and no movie batch ran since the last load) the world is reset in place, orig3 0x25C2A8 -> 0x25BDD0
+// (game/worldreset3.cpp; SLY3_INPLACERESET=0: reloaded as before)
+constexpr int TRANSF_INPLACE3 = 0x1000;
+bool FWorldResetInPlace3();
+void ResetSwInPlace3(struct SW* psw);
+void RecordResetPoses3(struct SW* psw);
+void DebugDeathAt3(int frame);
+
 struct TRANSREQ
 {
     int flags = 0;          // 2: the same world; 8: a task start; 0x40 ...
@@ -57,8 +66,8 @@ extern int g_cTransitionLoads;
 // object oidWipe (-1: none)
 void RequestTransition(SW* psw, const uint8_t* pchk, OID oidPoint, OID oidKey, int flags, OID oidWipe);
 // the reference's warp routes: world record iwrec at point oidPoint (default 393 = 0x189), or task oidTask
-void RequestWorldWarp(SW* psw, int iwrec, OID oidPoint = 0x189, OID oidWipe = 0x30A);
-void RequestTaskStart(SW* psw, int iwrec, OID oidTask);
+void RequestWorldWarp(SW* psw, int iwrec, OID oidPoint = 0x189, OID oidWipe = 0x30A, int grfExtra = 0);   // (grfExtra: e.g. 0x40, the pending save)
+void RequestTaskStart(SW* psw, int iwrec, OID oidTask, OID oidWipe = -1, int grfExtra = 0);   // (grfExtra: TRANSF_INPLACE3)
 // the world records (the boot world's, loaded on first use)
 void EnsureWorldRecords();
 // orig 0x3E1C40.. (the loaded world's records), 0x210AE0 (the current world's episode), 0x210B98 (an episode's

@@ -19,11 +19,14 @@
 #include <sys/stat.h>
 #include <vector>
 
+#if !defined(__SWITCH2__)
 extern "C" {
 // The launcher's and the installers' handheld configuration (CPU 1020 MHz, GPU 384 MHz, memory 1331 MHz), one of the
 // system's own profiles; docked keeps the system's default. A game switches to kGameHandheldConfiguration (RunGame).
+// (Not on the Switch 2: libounce ends the program when the system refuses one of these Switch profiles.)
 u32 __nx_applet_PerformanceConfiguration[2] = {0x00020004, 0};
 }
+#endif
 
 namespace CaneSwitch
 {
@@ -35,8 +38,16 @@ int g_boostDepth = 0;
 bool g_boostActive = false;
 bool g_nextLoadSet = false;
 bool g_started = false;
-u64 g_allowedCores = 0x7;
 bool g_gameConfiguration = false;
+// The cores the threads may use, within the process's: 0-2 on the Switch, 0-5 on the Switch 2.
+#if defined(__SWITCH2__)
+constexpr u64 kUsableCores = 0x3F;
+#else
+constexpr u64 kUsableCores = 0x7;
+#endif
+u64 g_allowedCores = 0x7;
+// Every core but the game thread's (core 0)
+u64 WorkerCores() { return g_allowedCores & ~u64(1); }
 
 // A game's handheld configuration (CPU 1020 MHz, GPU 460.8 MHz, memory 1331 MHz), the system profile retail games use
 // for their handheld boost. It is set for the Normal (handheld) mode only, so docking and undocking need nothing.
@@ -45,8 +56,12 @@ constexpr u32 kLauncherHandheldConfiguration = 0x00020004;   // (__nx_applet_Per
 void SetGameConfiguration(bool game)
 {
     if (game == g_gameConfiguration) return;
+#if defined(__SWITCH2__)
+    g_gameConfiguration = game;
+#else
     const u32 configuration = game ? kGameHandheldConfiguration : kLauncherHandheldConfiguration;
     if (R_SUCCEEDED(apmSetPerformanceConfiguration(ApmPerformanceMode_Normal, configuration))) g_gameConfiguration = game;
+#endif
 }
 
 bool IsDirectory(const std::string& p)
@@ -92,7 +107,8 @@ void SetLanguageFromSystem()
     setenv("LANG", iso, 1);
 }
 
-// Every pthread (std::thread, FFmpeg's, std::async) starts in ThreadEntry, on cores 1-2, leaving core 0 to the game.
+// Every pthread (std::thread, FFmpeg's, std::async) starts in ThreadEntry, on the worker cores in turn, leaving core 0
+// to the game.
 struct Trampoline
 {
     void* (*func)(void*);
@@ -103,13 +119,13 @@ void* ThreadEntry(void* p)
 {
     const Trampoline t = *static_cast<Trampoline*>(p);
     delete static_cast<Trampoline*>(p);
-    const u64 mask = g_allowedCores & 0x6;
+    const u64 mask = WorkerCores();
     if (mask)
     {
-        const unsigned n = g_threadCount.fetch_add(1);
-        int ideal = (n & 1) ? 2 : 1;
-        if (!(mask & (1u << ideal))) ideal = (mask & 2) ? 1 : 2;
-        svcSetThreadCoreMask(CUR_THREAD_HANDLE, ideal, mask);
+        const unsigned n = g_threadCount.fetch_add(1) % unsigned(__builtin_popcountll(mask));
+        u64 rest = mask;
+        for (unsigned i = 0; i < n; ++i) rest &= rest - 1;   // (the n-th worker core)
+        svcSetThreadCoreMask(CUR_THREAD_HANDLE, __builtin_ctzll(rest), mask);
     }
     return t.func(t.arg);
 }
@@ -131,8 +147,10 @@ void PinGameThread()
 }
 void PinSoundThread()
 {
-    const u64 mask = g_allowedCores & 0x6;
-    if (mask) svcSetThreadCoreMask(CUR_THREAD_HANDLE, (mask & 4) ? 2 : 1, mask);
+    const u64 mask = WorkerCores();
+    if (!mask) return;
+    const int mixer = MixerCore();
+    svcSetThreadCoreMask(CUR_THREAD_HANDLE, mixer >= 0 && ((mask >> mixer) & 1) ? mixer : __builtin_ctzll(mask), mask);
 }
 void LowerThreadPriority() { svcSetThreadPriority(CUR_THREAD_HANDLE, 0x3B); }
 int MixerCore() { return (g_allowedCores & 4) ? 2 : (g_allowedCores & 2) ? 1 : -2; }
@@ -147,6 +165,7 @@ void EndLoadingBoost()
 {
     if (g_boostDepth > 0 && --g_boostDepth == 0 && g_boostActive)
     {
+        // (on the Switch 2 too: CancelCpuBoostMode leaves the boost on)
         appletSetCpuBoostMode(ApmCpuBoostMode_Normal);
         g_boostActive = false;
     }
@@ -207,7 +226,8 @@ bool Startup(int& argc, char**& argv, const Game& game)
     if (first)
     {
         u64 cores = 0;
-        if (R_SUCCEEDED(svcGetInfo(&cores, InfoType_CoreMask, CUR_PROCESS_HANDLE, 0)) && (cores & 7)) g_allowedCores = cores & 7;
+        if (R_SUCCEEDED(svcGetInfo(&cores, InfoType_CoreMask, CUR_PROCESS_HANDLE, 0)) && (cores & kUsableCores))
+            g_allowedCores = cores & kUsableCores;
         PinGameThread();
         SetLanguageFromSystem();
     }
@@ -219,8 +239,13 @@ bool Startup(int& argc, char**& argv, const Game& game)
         const AppletType type = appletGetAppletType();
         if (type != AppletType_Application && type != AppletType_SystemApplication)
         {
+#if defined(__SWITCH2__)
+            ErrorScreen("SafeHouse needs the full memory of a game: start kaiHEN's Homebrew Menu by holding R while\n"
+                        "launching a game.");
+#else
             ErrorScreen("SafeHouse needs the full memory of a game: start the Homebrew Menu by holding R while launching a game\n"
                         "(title takeover), not from the Album.");
+#endif
             return false;
         }
         saltynx_start();

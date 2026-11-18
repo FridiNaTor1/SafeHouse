@@ -1,5 +1,6 @@
 #include "actioninput.h"
 // Vehicle steering, weapon aiming and state transitions. Matched 0x1D19A8..0x1D4C88.
+#include "vr.h"
 #include "vehicle.h"
 #include "activate.h"
 #include "clock.h"
@@ -208,9 +209,21 @@ void UpdateVehicleAi(VEHICLE& v) {
 void UpdateVehiclePlayer(VEHICLE& v) {
     PODATA* po=PpodataFromLo(v.owner); PADCTL* pad=po?po->ppadctl:nullptr;
     if (!pad) return;
+    if (vr::FRcTableActive()) {
+        // (VR, the RC table: the camera does not follow the car, so the stick drives it relative to itself: up (or
+        // Cross) drives forward where the car faces, as far as the stick is pushed; left / right turn it, harder the
+        // further they go (the steering turns the car while it moves, as the original's))
+        const float x=pad->x, y=pad->y;
+        const float throttle=(pad->grfbtn&0x40) ? 1.0f : (y>0.2f ? std::min(1.0f,(y-0.2f)/0.6f) : 0.0f);
+        v.goalHeading=cmm::RadNormalize(v.heading-x*0.9f);
+        v.wheelAngle=cmm::RadNormalize(v.heading-x*0.6f);
+        v.drive=throttle>0 ? v.maxSpeed*std::max(0.35f,throttle) : 0.0f;
+    }
+    else {
     v.goalHeading=pad->radJoy;
     if (pad->grfbtn&0x40) { v.drive=v.maxSpeed; v.wheelAngle=v.heading; }
     else { v.wheelAngle=pad->radJoy; v.drive=0; }
+    }
     for (const auto& a:v.attachments) if (FVehicleAttachmentReady(*a)) {
         const auto action = sly2actions::VehicleWeaponAction(a->heldButtons | a->pressedButtons);
         if (a->heldButtons && sly2actions::Held(pad, action, a->heldButtons)) SetSmaGoal(a->binding,0x67);
@@ -265,6 +278,23 @@ void UpdateVehicleControl(VEHICLE& v) {
                 if (!a.active) { a.angle=0; a.speed=a.speedLimits.gMin; }
             }
             if (a.meshBinding) SetCtrlPos(a.meshBinding,{0,-a.angle,0,0});
+        }
+    }
+    // (VR, the RC table: the player's gun aims where the head looks on the arena (vr::FRcAimPoint): its turn about the
+    // car's up axis and its lob (the same flight time / gravity rule as the aim at a target above))
+    if (glm::vec3 aim; v.mode==2 && vr::FRcAimPoint(&aim)) {
+        for(const auto& p:v.attachments) {
+            VEHICLEATTACH& a=*p; if (!a.mesh) continue;
+            const glm::vec3 origin=a.anchor?PosLoWorld(a.anchor):glm::vec3(a.mesh->matWorld[3]);
+            const float distance=Distance2D(aim,origin);
+            const float time=cmm::GLimitLm(&a.flightLimits,Poly(a.flightTime,distance));
+            const glm::vec3 shot=(aim-origin)*(1.0f/time)+glm::vec3(0,0,a.gravity*(-0.5f*time));
+            const float pitch=std::atan2(shot.z,std::sqrt(shot.x*shot.x+shot.y*shot.y));
+            const float yaw=cmm::RadNormalize(std::atan2(aim.y-origin.y,aim.x-origin.x)-v.heading);
+            a.angle=cmm::GLimitLm(&a.angleLimits,pitch);
+            a.speed=cmm::GLimitLm(&a.speedLimits,std::sqrt((shot.x*shot.x+shot.y*shot.y)+shot.z*shot.z));
+            a.active=FVehicleAttachmentReady(a);
+            if (a.meshBinding) SetCtrlPos(a.meshBinding,{0,-a.angle,yaw,0});
         }
     }
     if (v.sound) {

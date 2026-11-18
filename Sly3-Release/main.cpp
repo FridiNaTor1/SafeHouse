@@ -1,13 +1,23 @@
 // Sly2-Release: Sly 2: Band of Thieves as a native PC port (see PLAN.md).
 // Development commands for now; the game loop comes with milestone M2/M3.
 
+#include "activate.h"
+#include "glob.h"
+#include "editor.h"
+#include "renderer.h"
+#include "renderer_choice_test.h"
+#include "audio.h"
+#include "../platform/audio_devices.h"
 #include "rumble.h"
+#include "actioninput.h"
 #include "bis.h"
 #include "display.h"
 #include "brx.h"
 #include "cls.h"
 #include "disc.h"
 #include "convert.h"
+#include "langstore.h"
+#include "worldparts.h"
 #include "texmod.h"
 #include "region.h"
 #include "readtrace.h"
@@ -26,9 +36,11 @@
 
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <nlohmann/json.hpp>
 #include <functional>
 #include <memory>
 #include <map>
@@ -262,6 +274,85 @@ void DumpXfs(const SW* psw, FILE* pf)
 
 void DumpObjects(const SW* psw, FILE* pf)
 {
+    // (debug, surveys: SLY3_DUMP_FLAT=1: the globs that are flat (one extent under 8 % of the largest), person-sized, with
+    // their mean colour and bones: a painted / shadow card)
+    if (std::getenv("SLY3_DUMP_FLAT"))
+        for (const auto& uplo : psw->aploAll)
+        {
+            const LO* plo = uplo.get();
+            const ALO* pa = dynamic_cast<const ALO*>(plo);
+            if (!pa || !pa->pglobset) continue;
+            const auto& ag = pa->pglobset->aglob;
+            for (size_t i = 0; i < ag.size(); ++i)
+            {
+                const GLOB& g = ag[i];
+                if (g.avtx.size() < 3) continue;
+                glm::vec3 lo(1e30f), hi(-1e30f), c(0.0f);
+                float a = 0.0f;
+                for (const VTXGLOB& v : g.avtx)
+                {
+                    lo = glm::min(lo, v.pos), hi = glm::max(hi, v.pos);
+                    c += glm::vec3(float(v.rgbaA & 0xFF), float((v.rgbaA >> 8) & 0xFF), float((v.rgbaA >> 16) & 0xFF));
+                    a += float(v.rgbaA >> 24);
+                }
+                c /= float(g.avtx.size()), a /= float(g.avtx.size());
+                const glm::vec3 e = hi - lo;
+                const float emax = std::max({e.x, e.y, e.z}), emin = std::min({e.x, e.y, e.z});
+                if (emax < 60.0f || emax > 1500.0f || emin > 0.08f * emax) continue;
+                std::fprintf(pf, "flat oid %d cid 0x%02X parent %d glob %zu nv %zu bones %d ext %.0f %.0f %.0f rgb %.0f %.0f %.0f a %.0f hidden %d rp %d centre %.0f %.0f %.0f\n", plo->oid, plo->Cid(),
+                             plo->paloParent ? plo->paloParent->oid : -1, i, g.avtx.size(), int(g.cbone), e.x, e.y, e.z, c.r, c.g, c.b, a, int(g.fHidden), int(g.rp3), 0.5f * (lo.x + hi.x), 0.5f * (lo.y + hi.y), 0.5f * (lo.z + hi.z));
+            }
+        }
+    // (debug, surveys: SLY3_DUMP_GLOBS=1: every glob of every object: its mesh kind, Sly 3 rp (6 / 7: the shadow
+    // screen effects), vertex / effect counts, hidden, the object's place and the glob's centre)
+    if (std::getenv("SLY3_DUMP_GLOBS"))
+        for (const auto& uplo : psw->aploAll)
+        {
+            const ALO* pa = dynamic_cast<const ALO*>(uplo.get());
+            if (!pa || !pa->pglobset) continue;
+            const glm::vec3 p = PosLoWorld(const_cast<ALO*>(pa));
+            const auto& ag = pa->pglobset->aglob;
+            for (size_t i = 0; i < ag.size(); ++i)
+            {
+                const GLOB& g = ag[i];
+                const glm::vec3 c = g.fDraw ? g.posCenter : g.posSphere;
+                std::fprintf(pf, "glob oid %d cid 0x%02X parent %d group %d glob %zu meshk %d rp3 %d nv %zu nfx %zu hidden %d grf 0x%x pos %.0f %.0f %.0f centre %.0f %.0f %.0f r %.0f\n",
+                             pa->oid, pa->Cid(), pa->paloParent ? pa->paloParent->oid : -1, pa->igrp, i, int(g.meshk), int(g.rp3), g.avtx.size(),
+                             g.asubfx.size(), int(g.fHidden), g.grfGroup, p.x, p.y, p.z, c.x, c.y, c.z, g.fDraw ? g.sRadius : g.sRadiusSphere);
+                if (!g.avtx.empty())
+                {
+                    int aMinA = 255, aMaxA = 0, aMinB = 255, aMaxB = 0;
+                    for (const VTXGLOB& v : g.avtx)
+                        aMinA = std::min(aMinA, int(v.rgbaA >> 24)), aMaxA = std::max(aMaxA, int(v.rgbaA >> 24)),
+                        aMinB = std::min(aMinB, int(v.rgbaB >> 24)), aMaxB = std::max(aMaxB, int(v.rgbaB >> 24));
+                    glm::vec3 lo(1e30f), hi(-1e30f);
+                    for (const VTXGLOB& v : g.avtx) lo = glm::min(lo, v.pos), hi = glm::max(hi, v.pos);
+                    std::fprintf(pf, "  alpha A %d..%d B %d..%d unbaked %d box %.0f %.0f %.0f .. %.0f %.0f %.0f\n", aMinA, aMaxA, aMinB, aMaxB, int(FGlobLit(g)),
+                                 lo.x, lo.y, lo.z, hi.x, hi.y, hi.z);
+                }
+                // (its shaders: id / kind / flags, texture frames: bmp id dx x dy, conditions)
+                auto printShd = [&](const SHD* pshd) {
+                    if (!pshd) return;
+                    std::fprintf(pf, "  shd %d k %d grf 0x%x saa %d", pshd->id, pshd->shdk, pshd->grfshd, pshd->psaa ? pshd->psaa->cid : -1);
+                    for (const TEX& t : pshd->atex)
+                        for (const BMP* pb : t.apbmp)
+                            if (pb) std::fprintf(pf, " bmp %d %dx%d cond %d", pb->id, pb->dx, pb->dy, int(pb->ccond));
+                    std::fputc('\n', pf);
+                };
+                for (const SUBGLOB& s : g.asubglob) printShd(s.pshd);
+                for (const SUBFX& s : g.asubfx)
+                {
+                    printShd(s.pshd);
+                    glm::vec3 lo(1e30f), hi(-1e30f);
+                    for (const glm::vec3& v : s.apos) lo = glm::min(lo, v), hi = glm::max(hi, v);
+                    if (!s.apos.empty())
+                        std::fprintf(pf, "  fx npos %zu nipos %zu bones %d box %.0f %.0f %.0f .. %.0f %.0f %.0f\n", s.apos.size(), s.aipos.size(), int(g.cbone),
+                                     lo.x, lo.y, lo.z, hi.x, hi.y, hi.z);
+                    if (std::getenv("SLY3_DUMP_GLOBS")[0] == '2')
+                        for (const glm::vec3& v : s.apos) std::fprintf(pf, "   v %.1f %.1f %.1f\n", v.x, v.y, v.z);
+                }
+            }
+        }
     std::fprintf(pf, "# cid class oid parent-oid group name\n");
     for (int cid = 0; cid < CID_Max; ++cid)
         for (const LO* plo : psw->mpcidaplo[cid])
@@ -270,6 +361,11 @@ void DumpObjects(const SW* psw, FILE* pf)
             const std::string name = "-";
             std::fprintf(pf, "0x%02X %s %d %d %d %s", cid, g_acls[cid].name, plo->oid,
                          plo->paloParent ? plo->paloParent->oid : -1, plo->igrp, name.c_str());
+            if (std::getenv("SLY3_DUMP_POS") && FCidDerivedFrom(cid, sly3::CID_ALO))   // (debug: the object's place, its globs' count)
+            {
+                const glm::vec3 p = PosLoWorld(const_cast<LO*>(plo));
+                std::fprintf(pf, " pos %.0f %.0f %.0f globs %zu", p.x, p.y, p.z, static_cast<const ALO*>(plo)->pglobset ? static_cast<const ALO*>(plo)->pglobset->aglob.size() : size_t(0));
+            }
             if (std::getenv("SLY2_DUMP_EXTRA"))
             {
                 const LO* proot = plo;
@@ -298,8 +394,9 @@ void DumpObjects(const SW* psw, FILE* pf)
 int PhysCheckMain(const std::vector<std::string>& args);  // physcheck.cpp
 
 #include "pcguard.h"
+#include "vr.h"
 
-#if defined(__linux__) || defined(__APPLE__)
+#if (defined(__linux__) && !defined(__ANDROID__)) || defined(__APPLE__)
 #include <csignal>
 #include <execinfo.h>
 #include <unistd.h>
@@ -319,6 +416,73 @@ void OnCrashSignal(int sig)
 }
 #endif
 
+#include "gl.h"
+#include "../platform/gl_context.h"
+// --gl-selftest [--out PNG]: the game's renderer as it starts for play (the window, the context: Metal on Apple,
+// OpenGL / Vulkan elsewhere, every program built), a few presented frames of a known colour, the scene target read
+// back (and written to PNG). No game data. The iOS CI starts it from the launcher as Play does (ios_app.mm,
+// platform/ios/glfw_sdl_ios.cpp --ios-smoke), so the game's window and renderer are checked where no disc is.
+static int GlSelfTestCommand(const std::string& out)
+{
+    std::string error;
+#if defined(CANE_IOS) || defined(__ANDROID__)
+    constexpr bool fVisible = true;   // (a phone's window is the screen)
+#else
+    constexpr bool fVisible = false;
+#endif
+    if (!g_gl.FInit(1280, 720, fVisible, "Sly3-Release", error))
+    {
+        std::fprintf(stderr, "gl-selftest: FAILED: %s\n", error.c_str());
+        g_gl.Terminate();
+        return 1;
+    }
+    std::printf("gl-selftest: %s / %s, scene %dx%d\n", reinterpret_cast<const char*>(glGetString(GL_RENDERER)),
+                reinterpret_cast<const char*>(glGetString(GL_VERSION)), g_gl.renderWidth, g_gl.renderHeight);
+    // (an error the start left behind fails the test as one in the frames does; reported apart so the log says which)
+    const GLenum errInit = glGetError();
+    if (errInit != GL_NO_ERROR) std::printf("gl-selftest: GL error 0x%x after the renderer's start\n", unsigned(errInit));
+    // (a program that did not build: the game would fall back to a variant, which is not what Play is meant to run)
+    const int cShaderErrors = g_cShaderErrors;
+    if (cShaderErrors) std::printf("gl-selftest: %d program(s) failed to build (shader compile / link error above)\n", cShaderErrors);
+    for (int frame = 0; frame < 30; ++frame)
+    {
+        glBindFramebuffer(GL_FRAMEBUFFER, g_gl.FboScene());
+        glDisable(GL_SCISSOR_TEST);
+        glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+        glClearColor(0.25f, 0.5f, 0.75f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+        g_gl.Present();
+        cane::gl::SwapBuffers(g_gl.window);
+        glfwPollEvents();
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, g_gl.FboScene());
+    glClearColor(0.25f, 0.5f, 0.75f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glFinish();
+    // (the scene target's centre must be the colour cleared)
+    unsigned char rgba[4] = {};
+    glBindFramebuffer(GL_FRAMEBUFFER, g_gl.FboScene());
+    if (g_gl.FboScene() == g_gl.fbo)
+        glReadPixels(g_gl.renderWidth / 2, g_gl.renderHeight / 2, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+    const bool fWritten = out.empty() || g_gl.FWriteScreenshot(out);
+    const bool fColor = g_gl.FboScene() != g_gl.fbo || (std::abs(rgba[0] - 64) <= 2 && std::abs(rgba[1] - 128) <= 2 && std::abs(rgba[2] - 191) <= 2);
+    const GLenum err = glGetError();
+    std::printf("gl-selftest: centre %d %d %d (cleared 64 128 191), GL error 0x%x%s%s\n", rgba[0], rgba[1], rgba[2], unsigned(err),
+                out.empty() ? "" : fWritten ? ", wrote " : ", FAILED to write ", out.c_str());
+    g_gl.Terminate();
+    const bool fOk = fWritten && fColor && err == GL_NO_ERROR && errInit == GL_NO_ERROR && cShaderErrors == 0;
+    std::printf("gl-selftest: %s\n", fOk ? "passed" : "FAILED");
+    return fOk ? 0 : 1;
+}
+
+// The tool commands leave through std::_Exit (no static destructors after the worlds they loaded). iOS runs them in
+// the app's own process (platform/ios/ios_app.h), where that would end the app: there they return from main.
+#if defined(CANE_IOS)
+#define SLY3_LEAVE_TOOL(rc) return (rc)
+#else
+#define SLY3_LEAVE_TOOL(rc) std::_Exit(rc)
+#endif
+
 #ifdef __SWITCH__
 // (the Switch: SafeHouse.nro runs this one as the PC launcher would, cane_game_sly3 at the end of this file)
 #include "../platform/switch/runtime.h"
@@ -327,10 +491,11 @@ void OnCrashSignal(int sig)
 
 int main(int argc, char** argv)
 {
-#if defined(__linux__) || defined(__APPLE__)
+#if (defined(__linux__) && !defined(__ANDROID__)) || defined(__APPLE__)
     std::signal(SIGSEGV, OnCrashSignal);
     std::signal(SIGABRT, OnCrashSignal);
 #endif
+    SetRendererRelaunch(argc, argv);   // (renderer.h: a Vulkan error in the first seconds restarts on OpenGL)
     // the mods' audio tools (audiomod.cpp: --make-music, --make-vpk, --make-vag, --export-wav): no game data needed
     {
         int AudioToolMain(int, char**);
@@ -345,8 +510,12 @@ int main(int argc, char** argv)
     bool fVerbose = false;
     int idSong = -1, istem = 1;
     double tSeconds = -1.0;  // (unset: 30 s for the sound commands, the whole movie)
-    std::string modsDir, texturePack;
-    bool fModsGiven = false;
+    std::string modsDir, texturePack, languagesDir;
+    bool fModsGiven = false, fLanguagesGiven = false;
+    std::vector<std::string> adirModPackage;   // --mod-package DIR (repeatable): loaded last (platform/mod_package.h)
+    EDITOROPTS eo;   // --editor W (editor.h: the map editor's 3D view, desktop builds; shared with Sly 2)
+    bool fNoModPackages = false;               // --no-mod-packages: not the mods folder's Packages/
+    LANGIMPORT limport;
     const char* command = nullptr;
     const char* arg = nullptr;
     int filter = -2;
@@ -357,17 +526,31 @@ int main(int argc, char** argv)
     VIEWOPTS vo;
     std::string cmRanges = "2DDED0+6A0,2DFBC0+2240,FB1580+1100,FB37E0+80,140C9F0+600,1486000+3400";
     bool fCmFree = false;
-    struct { bool fAspect = false; DISPASPECT aspect = DISPASPECT_Fit; int internalHeight = -1, frameRate = -1, vsync = -1, window = -1, wideBackgrounds = -1, hqLogo = -1, longShadows = -1; float drawDistance = -1; } dispo;
+    struct { bool fAspect = false; DISPASPECT aspect = DISPASPECT_Fit; int internalHeight = -1, frameRate = -1, vsync = -1, window = -1, wideBackgrounds = -1, hqLogo = -1, longShadows = -1, fastShadows = -1, hudPlacement = -1, msaa = -1, upscale = -1, upscalePreset = -1, upscaleSharpness = -1; float drawDistance = -1; } dispo;
     std::vector<std::string> rest, physArgs;
+    RENDERER rendererArg = RENDERER::Auto;
+    bool fRendererArg = false;
+    // (vr.h) SLY2N_VR=1 as --vr. (Android: unlike Sly 2, Sly 3 does not ask for a headset by itself: its VR mode is not
+    // ready, and the app shows it as a flat window also on a Meta Quest (FlatGameActivity.java, a 2D panel), where no
+    // OpenXR session can show it.)
+    // (SLY2N_VR=0: no VR, also on Android: the flat game on a headset, device tests)
+    if (const char* sz = std::getenv("SLY2N_VR"); sz) vr::Request(std::atoi(sz) != 0);
     for (int i = 1; i < argc; ++i)
     {
         if (!std::strcmp(argv[i], "--disc") && i + 1 < argc) disc = argv[++i];
         else if (!std::strcmp(argv[i], "--mods") && i + 1 < argc) { modsDir = argv[++i]; fModsGiven = true; }
+        else if (!std::strcmp(argv[i], "--mod-package") && i + 1 < argc) adirModPackage.emplace_back(argv[++i]);
+        else if (!std::strcmp(argv[i], "--no-mod-packages")) fNoModPackages = true;
         else if (!std::strcmp(argv[i], "--texture-pack") && i + 1 < argc) texturePack = argv[++i];
+        // (texmod.h: the texture cache's folder, else the user's cache folder; its commands)
+        else if (!std::strcmp(argv[i], "--cache-dir") && i + 1 < argc) cane::cacheOverride = cane::absolutePath(cane::path(argv[++i]));
+        else if (!std::strcmp(argv[i], "--clear-texture-cache")) command = "clear-texture-cache";
+        else if (!std::strcmp(argv[i], "--build-texture-cache")) command = "build-texture-cache";
+        else if (!std::strcmp(argv[i], "--texcache-selftest") && i + 1 < argc) { command = "texcache-selftest"; arg = argv[++i]; }
         // the launcher's runtime contract: --data-dir <installations/sly2> --user-dir <profile>/sly2
         else if (!std::strcmp(argv[i], "--data-dir") && i + 1 < argc) cane::dataOverride = cane::absolutePath(cane::path(argv[++i]));
         else if (!std::strcmp(argv[i], "--user-dir") && i + 1 < argc) cane::userOverride = cane::absolutePath(cane::path(argv[++i]));
-        // display options for this run (over system_settings.dat; display.h)
+        // display options for this run (over Settings.ini; display.h)
         else if (!std::strcmp(argv[i], "--aspect") && i + 1 < argc)
         {
             if (!FParseAspect(argv[++i], dispo.aspect)) { std::fprintf(stderr, "bad --aspect (fit, 4:3, 16:9, 16:10, ps2-4:3, ps2-16:9)\n"); return 2; }
@@ -380,15 +563,43 @@ int main(int argc, char** argv)
         else if (!std::strcmp(argv[i], "--wide-backgrounds") && i + 1 < argc) dispo.wideBackgrounds = std::atoi(argv[++i]);   // (the launcher's option)
         else if (!std::strcmp(argv[i], "--hq-logo") && i + 1 < argc) dispo.hqLogo = std::atoi(argv[++i]);   // (QoL: the launcher's logo in the front end)
         else if (!std::strcmp(argv[i], "--long-shadows") && i + 1 < argc) dispo.longShadows = std::atoi(argv[++i]);   // (QoL: display.h fLongShadows)
+        else if (!std::strcmp(argv[i], "--fast-shadows") && i + 1 < argc) dispo.fastShadows = std::atoi(argv[++i]);   // (low-end: display.h fFastShadows)
+        // (display.h fUpscale: off or fsr1; the preset 0..3 or its name; the sharpness 0..100)
+        else if (!std::strcmp(argv[i], "--upscale") && i + 1 < argc) dispo.upscale = !std::strcmp(argv[++i], "fsr1") || !std::strcmp(argv[i], "1") ? 1 : 0;
+        else if (!std::strcmp(argv[i], "--upscale-preset") && i + 1 < argc)
+        {
+            const char* psz = argv[++i];
+            static const char* const s_aszPreset[] = {"ultra", "quality", "balanced", "performance"};
+            for (int j = 0; j < 4; ++j)
+                if (!std::strcmp(psz, s_aszPreset[j]) || (psz[0] == char('0' + j) && !psz[1])) dispo.upscalePreset = j;
+        }
+        else if (!std::strcmp(argv[i], "--upscale-sharpness") && i + 1 < argc) dispo.upscaleSharpness = std::clamp(std::atoi(argv[++i]), 0, 100);
+        else if (!std::strcmp(argv[i], "--hud-placement") && i + 1 < argc)   // (display.h hudPlacement: 4:3 | 16:9 | 16:10 | match, or 0..3)
+        {
+            const std::string v = argv[++i];
+            dispo.hudPlacement = v == "16:9" ? 1 : v == "16:10" ? 2 : v == "match" || v == "Match Screen" ? 3 : v == "4:3" ? 0 : std::clamp(std::atoi(v.c_str()), 0, 3);
+        }
         else if (!std::strcmp(argv[i], "--window-mode") && i + 1 < argc) dispo.window = std::atoi(argv[++i]);
+        else if (!std::strcmp(argv[i], "--renderer") && i + 1 < argc)   // (renderer.h: auto, vulkan, opengl)
+        {
+            if (!FParseRenderer(argv[++i], &rendererArg)) { std::fprintf(stderr, "bad --renderer (auto, vulkan, opengl)\n"); return 2; }
+            fRendererArg = true;
+        }
         else if (!std::strcmp(argv[i], "--out") && i + 1 < argc) out = argv[++i];
         else if (!std::strcmp(argv[i], "--list-keys") || !std::strcmp(argv[i], "--list-files")) command = "list-keys";
         else if (!std::strcmp(argv[i], "--vt-dump") && i + 1 < argc) { command = "vt-dump"; arg = argv[++i]; }  // (vtaudit.cpp)
+        else if (!std::strcmp(argv[i], "--option-fields") && i + 1 < argc) { command = "option-fields"; arg = argv[++i]; }  // (brx.cpp)
         else if (!std::strcmp(argv[i], "--maps") && i + 1 < argc) dirMaps = argv[++i];
         else if (!std::strcmp(argv[i], "-v")) fVerbose = true;
         else if (!std::strcmp(argv[i], "--blends") || !std::strcmp(argv[i], "--ai") || !std::strcmp(argv[i], "--ai-carry")) {}  // (anim-ref)
         else if (!std::strcmp(argv[i], "--splice-selftest")) command = "splice-selftest";
+        else if (!std::strcmp(argv[i], "--action-input-selftest")) command = "action-input-selftest";
+        else if (!std::strcmp(argv[i], "--settings-selftest")) command = "settings-selftest";
+        else if (!std::strcmp(argv[i], "--renderer-selftest")) command = "renderer-selftest";
+        else if (!std::strcmp(argv[i], "--gl-selftest")) command = "gl-selftest";
         else if (!std::strcmp(argv[i], "--rumble-selftest")) command = "rumble-selftest";
+        else if (!std::strcmp(argv[i], "--audio-selftest")) { command = "audio-selftest"; if (i + 1 < argc && argv[i + 1][0] != '-') arg = argv[++i]; }
+        else if (!std::strcmp(argv[i], "--list-audio-devices")) command = "list-audio-devices";
         else if (!std::strcmp(argv[i], "--parse-splice") && i + 1 < argc) { command = "parse-splice"; arg = argv[++i]; }
         else if (!std::strcmp(argv[i], "--eval-splice") && i + 1 < argc) { command = "eval-splice"; arg = argv[++i]; }
         else if (!std::strcmp(argv[i], "--dump-world") && i + 1 < argc) { command = "dump-world"; arg = argv[++i]; }
@@ -408,6 +619,7 @@ int main(int argc, char** argv)
         }
         else if (!std::strcmp(argv[i], "--frames") && i + 1 < argc) { go.cframe = std::atoi(argv[++i]); fGame = true; }
         else if (!std::strcmp(argv[i], "--headless")) { go.fHeadless = true; fGame = true; }
+        else if (!std::strcmp(argv[i], "--vr")) vr::Request(true);   // (vr.h: a headset through OpenXR, if there is one)
         else if (!std::strcmp(argv[i], "--fixed-dt")) go.fFixedDt = true;
         else if (!std::strcmp(argv[i], "--save") && i + 1 < argc) go.save = argv[++i];
         else if (!std::strcmp(argv[i], "--print-progress") && i + 1 < argc) { go.aprintProgress.push_back(argv[++i]); fGame = true; }
@@ -445,8 +657,21 @@ int main(int argc, char** argv)
         else if (!std::strcmp(argv[i], "--camera") && i + 1 < argc) vo.camera = argv[++i];
         else if (!std::strcmp(argv[i], "--camera-ram") && i + 1 < argc) vo.cameraRam = argv[++i];
         else if (!std::strcmp(argv[i], "--loadmaps") && i + 1 < argc) vo.loadmaps = argv[++i];
+        // (splitscreen3.h, tests) --mp: the two-player games' test entry (with --world 3:1811 Cops and Robbers' start, or a
+        // later task of it: its job's split screen); --split N: the split screen with N players forced in any world
+        else if (!std::strcmp(argv[i], "--mp") || (!std::strcmp(argv[i], "--split") && i + 1 < argc))
+        {
+            const bool fMp = !std::strcmp(argv[i], "--mp");
+            const char* pchzKey = fMp ? "SLY3_SPLITSTART" : "SLY3_SPLIT";
+            const char* pchzValue = fMp ? "1" : argv[++i];
+#ifdef _WIN32
+            _putenv_s(pchzKey, pchzValue);
+#else
+            setenv(pchzKey, pchzValue, 1);
+#endif
+        }
         else if (!std::strcmp(argv[i], "--size") && i + 1 < argc) std::sscanf(argv[++i], "%dx%d", &vo.width, &vo.height);
-        else if (!std::strcmp(argv[i], "--msaa") && i + 1 < argc) vo.msaa = std::atoi(argv[++i]);
+        else if (!std::strcmp(argv[i], "--msaa") && i + 1 < argc) dispo.msaa = vo.msaa = std::atoi(argv[++i]);   // (the game: over Settings.ini)
         else if (!std::strcmp(argv[i], "--no-cel")) vo.fNoCel = true;
         else if (!std::strcmp(argv[i], "--from-map")) vo.fFromMap = true;
         else if (!std::strcmp(argv[i], "--no-fog")) vo.fNoFog = true;
@@ -472,12 +697,38 @@ int main(int argc, char** argv)
         else if (!std::strcmp(argv[i], "--list-movies")) command = "list-movies";
         else if (!std::strcmp(argv[i], "--convert") && i + 1 < argc) { command = "convert"; arg = argv[++i]; }
         else if (!std::strcmp(argv[i], "--convert-list")) command = "convert-list";
+        else if (!std::strcmp(argv[i], "--whole-worlds")) g_fConvertWholeWorlds = true;
+        else if (!std::strcmp(argv[i], "--world-unpack") && i + 2 < argc) { command = "world-unpack"; arg = argv[++i]; arg2 = argv[++i]; }
+        else if (!std::strcmp(argv[i], "--world-pack") && i + 2 < argc) { command = "world-pack"; arg = argv[++i]; arg2 = argv[++i]; }
+        else if (!std::strcmp(argv[i], "--world-check")) command = "world-check";
+        else if (!std::strcmp(argv[i], "--editor") && i + 1 < argc) {
+            command = "editor";
+            const std::string w = argv[++i];
+            if (!w.empty() && w.find_first_not_of("0123456789") == std::string::npos) eo.record = std::atoi(w.c_str());
+            else eo.world = w;   // (a world by its name: the editor looks it up)
+        }
+        else if (!std::strcmp(argv[i], "--editor-project") && i + 1 < argc) eo.project = argv[++i];
+        else if (!std::strcmp(argv[i], "--editor-do") && i + 1 < argc) eo.script = argv[++i];
+        else if (!std::strcmp(argv[i], "--editor-hidden")) eo.fHidden = true;
+        else if (!std::strcmp(argv[i], "--editor-language") && i + 1 < argc) eo.language = argv[++i];
+        else if (!std::strcmp(argv[i], "--editor-size") && i + 1 < argc) std::sscanf(argv[++i], "%dx%d", &eo.width, &eo.height);
+        else if (!std::strcmp(argv[i], "--editor-record") && i + 1 < argc) { command = "editor-record"; arg = argv[++i]; }   // (editrec_check.cpp)
+        else if (!std::strcmp(argv[i], "--convert-worlds") && i + 1 < argc) { command = "convert-worlds"; arg = argv[++i]; }
+        else if (!std::strcmp(argv[i], "--world-reduced") && i + 1 < argc) { command = "world-reduced"; arg = argv[++i]; }
         else if (!std::strcmp(argv[i], "--ps2-formats")) g_fConvertPs2 = true;
         else if (!std::strcmp(argv[i], "--flac")) g_nConvertFlac = 1;
         else if (!std::strcmp(argv[i], "--no-flac")) g_nConvertFlac = 0;
         else if (!std::strcmp(argv[i], "--export-textures")) { g_fConvertTextures = true; fExportTextures = true; }
         else if (!std::strcmp(argv[i], "--no-export-textures")) g_fConvertTextures = false;
         else if (!std::strcmp(argv[i], "--dump-text") && i + 1 < argc) { command = "dump-text"; arg = argv[++i]; }
+        // (languages, langstore.h) the shared languages folder; importing a disc's / an installation's languages into it
+        else if (!std::strcmp(argv[i], "--languages-dir") && i + 1 < argc) { languagesDir = argv[++i]; fLanguagesGiven = true; }
+        else if (!std::strcmp(argv[i], "--import-languages") && i + 1 < argc) { command = "import-languages"; limport.dirOut = argv[++i]; }
+        else if (!std::strcmp(argv[i], "--move-languages")) limport.fMove = true;
+        else if (!std::strcmp(argv[i], "--replace-languages")) limport.fReplace = true;
+        else if (!std::strcmp(argv[i], "--only-language") && i + 1 < argc) limport.alangOnly.emplace_back(argv[++i]);
+        else if (!std::strcmp(argv[i], "--list-languages")) command = "list-languages";
+        else if (!std::strcmp(argv[i], "--import-ps3-languages") && i + 2 < argc) { command = "import-ps3-languages"; arg = argv[++i]; arg2 = argv[++i]; }
         else if (!std::strcmp(argv[i], "--dump-textures") && i + 2 < argc) { command = "dump-textures"; arg = argv[++i]; arg2 = argv[++i]; }
         else if (!std::strcmp(argv[i], "--ps3-hd-textures") && i + 2 < argc) { command = "ps3-hd-textures"; arg = argv[++i]; arg2 = argv[++i]; }
         else if (!std::strcmp(argv[i], "--phys-check"))  // physcheck.cpp: FUNC PREFIX [COUNT] (the rest of the line)
@@ -495,7 +746,28 @@ int main(int argc, char** argv)
     cane::configureRuntime(rest);
     if (command && !std::strcmp(command, "test-load")) return TestLoad(arg, arg2, fVerbose);
     if (command && !std::strcmp(command, "splice-selftest")) return SpliceSelfTestCommand();
+    // (worldparts.h: a world's parts packed into one file: no game data needed)
+    if (command && !std::strcmp(command, "world-pack")) return WorldPackCommand(arg, arg2);
+    if (command && !std::strcmp(command, "action-input-selftest")) return sly2actions::SelfTest();
+    if (command && !std::strcmp(command, "settings-selftest")) { int SettingsSelfTest(); return SettingsSelfTest(); }   // (settings_test.cpp)
+    // (platform/renderer_choice.h: Auto / Vulkan / OpenGL, the fallback's start marker; no GPU needed)
+    if (command && !std::strcmp(command, "renderer-selftest"))
+        return cane::renderer::selfTest([](const char* sz) { RENDERER r; return FParseRenderer(sz, &r) ? int(r) : -1; });
     if (command && !std::strcmp(command, "rumble-selftest")) return RumbleSelfTestCommand();
+    if (command && !std::strcmp(command, "gl-selftest"))   // (no disc; --renderer as for play)
+    {
+        if (fRendererArg) g_rendererWanted = rendererArg;
+        return GlSelfTestCommand(out);
+    }
+    // (audio.h, notes/AUDIO_2026-11-10.md) the devices by name, their fallback / recovery, the USB headset's microphone
+    if (command && !std::strcmp(command, "audio-selftest")) { int AudioSelfTest(const char*); return AudioSelfTest(arg ? arg : ""); }
+    if (command && !std::strcmp(command, "list-audio-devices"))
+    {
+        const cane::audio::DeviceList list = ListAudioDevices();
+        for (const std::string& n : list.outputs) std::printf("output: %s\n", n.c_str());
+        for (const std::string& n : list.inputs) std::printf("input: %s\n", n.c_str());
+        return list.available ? 0 : 1;
+    }
     std::string error;
     // the mods folder: --mods DIR, SLY2_MODS, else <user dir>/Mods; empty: none
     if (!fModsGiven)
@@ -504,13 +776,86 @@ int main(int argc, char** argv)
         else modsDir = cane::utf8(cane::userDirectory() / "Mods");
     }
     g_disc.SetModsDirectory(modsDir);
+    // the mod packages: <mods>/Packages/* (platform/mod_package.h, as Sly 2's) and --mod-package DIR / SLY3_MOD_PACKAGE
+    if (const char* sz = std::getenv("SLY3_MOD_PACKAGE"); sz && *sz) adirModPackage.emplace_back(sz);
+    g_disc.SetModPackages(!fNoModPackages, adirModPackage);
     SetTexturePackDirectory(texturePack);
+    if (command && !std::strcmp(command, "texcache-selftest")) return TextureCacheSelfTest(arg);
+    if (command && !std::strcmp(command, "clear-texture-cache")) return ClearTextureCacheCommand();
+    if (command && !std::strcmp(command, "build-texture-cache")) return BuildTextureCacheCommand();
+    // the shared languages folder (langstore.h): --languages-dir DIR, SLY2_LANGUAGES, else sly2-languages beside a
+    // converted installation (the launcher's installations/sly2, installations/sly2-europe, ...); none for a disc image
+    if (!fLanguagesGiven)
+    {
+        if (const char* sz = std::getenv("SLY2_LANGUAGES")) languagesDir = sz;
+        // (Sly 3: a disc-image installation, installations/sly3/disc.iso: sly3-languages beside it, the launcher's
+        // languagesDir, where the PS3 import writes French / Spanish)
+        else if (std::error_code ec3; std::filesystem::is_regular_file(cane::path(DiscPath(disc)), ec3) &&
+                                       cane::path(DiscPath(disc)).filename() == "disc.iso")
+            languagesDir = cane::utf8(std::filesystem::absolute(cane::path(DiscPath(disc))).parent_path().parent_path() / "sly3-languages");
+        else if (std::error_code ec; std::filesystem::is_directory(cane::path(DiscPath(disc)), ec))
+        {
+            // (the folder the installation's languages went to, installation.json "languages_dir"; else beside it)
+            const auto dir = std::filesystem::absolute(cane::path(DiscPath(disc)));
+            languagesDir = cane::utf8(dir.parent_path() / "sly2-languages");
+            try
+            {
+                std::ifstream in(dir / "installation.json");
+                const nlohmann::json j = in ? nlohmann::json::parse(in) : nlohmann::json();
+                if (j.is_object() && j.contains("languages_dir") && j.at("languages_dir").is_string())
+                    languagesDir = j.at("languages_dir").get<std::string>();
+            }
+            catch (...) {}
+        }
+    }
+    g_disc.SetLanguagesDirectory(languagesDir);
+    // (--convert-worlds reads the disc's own worlds, not earlier parts or mods)
+    if (command && !std::strcmp(command, "convert-worlds")) g_disc.DisableWorldParts();
     if (!g_disc.FOpen(DiscPath(disc), error)) { std::fprintf(stderr, "%s\n", error.c_str()); return 1; }
+    InitLanguageStore();   // (langstore.h: the other regions' languages, imports, mods)
     InitLanguage();   // (region.h: the disc's languages, the PC's language)
+    if (command && !std::strcmp(command, "list-languages")) return ListLanguagesCommand();
+    if (command && !std::strcmp(command, "import-ps3-languages"))
+    {
+        int ImportPs3LanguagesCommand(const std::string&, const std::string&, bool);   // ps3lang.cpp
+        const int rc = ImportPs3LanguagesCommand(arg, arg2, limport.fReplace);
+        std::fflush(stdout);
+        SLY3_LEAVE_TOOL(rc);
+    }
+    if (command && !std::strcmp(command, "import-languages"))
+    {
+        // (with --data-dir / --disc on the source; --move-languages: the installation's own files move into the folder)
+        if (limport.fMove) limport.dirInstall = cane::utf8(std::filesystem::absolute(cane::path(DiscPath(disc))));
+        const int rc = ImportLanguagesCommand(limport);
+        std::fflush(stdout);
+        std::fflush(stderr);
+        SLY3_LEAVE_TOOL(rc);
+    }
     if (std::getenv("SLY2_PS3WORLD")) g_fPs3World = true;  // (exploration: a PS3 world through --load-world)
 
     if (command && !std::strcmp(command, "list-keys")) return ListKeys();
-    if (command && !std::strcmp(command, "convert")) return ConvertCommand(arg);
+    if (command && !std::strcmp(command, "convert"))
+    {
+        // (the installer's converter: every file is written and closed by now; leave without running the static
+        // destructors of the 44 worlds the texture export loaded, a Windows player's install failed there after
+        // "converted ..." with std::bad_alloc)
+        int rc = ConvertCommand(arg);
+        // (languages, langstore.h) with --languages-dir: the installation's languages go into the shared folder (the
+        // dialog lines, the movies' sound, the text), so every region's installation shares them; the converted
+        // folder's manifest points there
+        if (rc == 0 && fLanguagesGiven && !languagesDir.empty() && !g_fConvertPs2)
+        {
+            if (!g_disc.FOpen(arg, error)) { std::fprintf(stderr, "%s\n", error.c_str()); SLY3_LEAVE_TOOL(1); }
+            limport.dirOut = languagesDir;
+            limport.dirInstall = cane::utf8(std::filesystem::absolute(cane::path(arg)));
+            limport.fMove = true;
+            limport.szProgress = "languages";
+            rc = ImportLanguagesCommand(limport);
+        }
+        std::fflush(stdout);
+        std::fflush(stderr);
+        SLY3_LEAVE_TOOL(rc);
+    }
     // --export-textures without --convert: into the installation (or --out DIR); texmod.h
     if (!command && fExportTextures)
     {
@@ -528,6 +873,13 @@ int main(int argc, char** argv)
         return ExportTexturesCommand(dir);
     }
     if (command && !std::strcmp(command, "convert-list")) return ConvertListCommand();
+    if (command && !std::strcmp(command, "world-unpack")) return WorldUnpackCommand(arg, arg2, filter == -2 ? -1 : filter);
+    if (command && !std::strcmp(command, "world-check")) return WorldCheckCommand(DiscPath(disc));
+    int EditRecordCommand(const std::string&);  // editrec_check.cpp (the map editor's recorder on Sly 3)
+    if (command && !std::strcmp(command, "editor-record")) return EditRecordCommand(arg);
+    if (command && !std::strcmp(command, "editor")) return EditorMain(eo);
+    if (command && !std::strcmp(command, "convert-worlds")) return ConvertWorldsCommand(arg);
+    if (command && !std::strcmp(command, "world-reduced")) return WorldReducedCommand(arg);
     int DumpTextCommand(const std::string&);  // textmod.cpp
     if (command && !std::strcmp(command, "dump-text")) return DumpTextCommand(arg);
     int DumpTexturesCommand(const std::string&, const std::string&);  // texmod.cpp
@@ -536,6 +888,7 @@ int main(int argc, char** argv)
     if (command && !std::strcmp(command, "ps3-hd-textures")) return Ps3HdTexturesCommand(arg, arg2);
     int VtDumpCommand(const char*);  // vtaudit.cpp
     if (command && !std::strcmp(command, "vt-dump")) return VtDumpCommand(arg);
+    if (command && !std::strcmp(command, "option-fields")) return OptionFieldsCommand(arg);
     if (command && !std::strcmp(command, "phys-check")) return PhysCheckMain(physArgs);
     if (command && !std::strcmp(command, "actor-check")) { InitClasses(); return ActorCheck(arg, cmRanges, g_ramPath); }
     if (command && !std::strcmp(command, "crv-check"))
@@ -557,7 +910,15 @@ int main(int argc, char** argv)
         if (dispo.wideBackgrounds >= 0) g_display.fWideBackgrounds = dispo.wideBackgrounds != 0;
         if (dispo.hqLogo >= 0) g_display.fHqLogo = dispo.hqLogo != 0;
         if (dispo.longShadows >= 0) g_display.fLongShadows = dispo.longShadows != 0;
+        if (const char* psz = std::getenv("SLY2N_FASTSHADOWS")) g_display.fFastShadows = std::atoi(psz) != 0;
+        if (dispo.fastShadows >= 0) g_display.fFastShadows = dispo.fastShadows != 0;
+        if (dispo.upscale >= 0) g_display.fUpscale = dispo.upscale != 0;
+        if (dispo.upscalePreset >= 0) g_display.upscalePreset = dispo.upscalePreset;
+        if (dispo.upscaleSharpness >= 0) g_display.upscaleSharpness = dispo.upscaleSharpness;
+        if (dispo.hudPlacement >= 0) g_display.hudPlacement = dispo.hudPlacement;
         if (dispo.window >= 0 && dispo.window <= 2) g_display.window = DISPWINDOW(dispo.window);
+        if (fRendererArg) g_rendererWanted = rendererArg;
+        if (dispo.msaa >= 0) g_display.msaaSamples = dispo.msaa > 1 ? dispo.msaa : 0;
     };
     applyDisplayOverrides();
     if (command && !std::strcmp(command, "view-world")) return ViewWorld(vo);
@@ -660,17 +1021,19 @@ int main(int argc, char** argv)
             go.world = "boot";
             g_fDevCard = false;
         }
-        // the game (default: the Paris hub): the PC options from <user-dir>/Saves/system_settings.dat
+        // the game (default: the Paris hub): the PC options from <user-dir>/Settings.ini
         if (!go.fHeadless)
         {
             std::string message;
             FLoadDisplaySettings(cane::userDirectory(), &message);
             std::printf("settings: %s\n", message.c_str());
+            ApplyLanguageSetting(g_saveopts.language);   // (region.h: Settings.ini's Language)
             // the debug keys and the debug menu: the launcher's Settings > Advanced > Debug mode (<user-dir>/Debug
             // Mode.ini, which the launcher copies there at each start; not headless, where SLY2N_PCOPT=debugkeys=1)
             void ApplyPcDebugMode();   // pcinput.h
             ApplyPcDebugMode();
         }
+        StartTextureMods();   // (texmod.h: the replacement textures' folders listed beside the start)
         applyDisplayOverrides();
         {
             void ApplyPcInputEnv();   // pcinput.h (tests: SLY2N_PCOPT)
@@ -689,7 +1052,7 @@ int main(int argc, char** argv)
     std::fprintf(stderr,
                  "usage: Sly2-Release [--disc disc.iso | --data-dir dir] --list-keys | --dump-world VA|SECTOR:CB [--out file]\n"
                  "       | --load-world W|boot|frontend [--filter N] [--load-trace map.txt] [--dump-objects [file]]\n"
-                 "       | --parse-splice W | --eval-splice W [--maps dir] [-v] | --splice-selftest | --rumble-selftest\n"
+                 "       | --parse-splice W | --eval-splice W [--maps dir] [-v] | --splice-selftest | --rumble-selftest | --action-input-selftest | --settings-selftest | --renderer-selftest\n"
                  "       | --list-sounds W | --play-music W [--song ID] [--stem 0|1|2] | --play-sfx W [--song SOUNDID] | --play-dialog W [--song ID]\n"
                  "       | --list-movies | --play-movie ID [--out frames-dir] [--seconds T]   (W: boot, frontend, a world record 2..43, SECTOR:CB)\n"
                  "       | --convert DIR [--no-export-textures] | --export-textures [--out DIR] | --dump-textures DIR W\n");
@@ -706,12 +1069,12 @@ namespace
 const CaneSwitch::InstallJob s_install = {
     int(cane::GameId::Sly3),
     "Select a Sly 3: Honor Among Thieves ISO or CHD (USA).",
-    [](const std::string& iso, const std::string& out, const CaneSwitch::InstallProgress& progress) {
+    [](const std::string& iso, const std::string& out, const std::vector<std::string>&, const CaneSwitch::InstallProgress& progress) {
         return CaneSwitch::InstallDiscImage(cane::GameId::Sly3, iso, out, progress);
     },
     nullptr, nullptr,
     false,
-    true,   // (a CHD read as it is: the image is copied once)
+    true,   // (a CHD or a split .iso read as it is: the image is copied once)
 };
 bool FInstalled(const std::string& data) { return CaneSwitch::DiscImageInstalled(cane::GameId::Sly3, data); }
 }

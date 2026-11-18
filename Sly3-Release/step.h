@@ -31,6 +31,7 @@ struct STEP
     glm::vec3 vecVel{0.0f};         // +0x190 the velocity the feet push toward (the heading's frame)
     int nMotion = 0;                // +0x1A4 slot 17's motion: 0 braked toward +0x1F4..+0x1FC, 1 toward +0x1E0, -1 none
     float radHeading = 0.0f;        // +0x1A8
+    int fHeadingLock3 = 0;          // (Sly 3 STEP +0x1B4: SetStepHeading 0x24E878 keeps the heading while set; the combos' clip events 0x40 / 0x41)
     glm::mat3 matHeading{1.0f};     // +0x1B0 (rows +0x1B0 / +0x1C0 / +0x1D0: glm columns)
     glm::vec4 posTarget{0.0f};      // +0x1E0 (mode 1)
     float gScale = 1.0f;            // +0x1F0 (0x204D48)

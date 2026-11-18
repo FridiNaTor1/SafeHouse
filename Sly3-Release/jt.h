@@ -107,6 +107,9 @@ struct JTTRACK
     int idShown = -1;              // SW +0x4740 the prompt shown
 };
 extern JTTRACK g_jttrack;
+// (PC, split screen's teams: set while another player's Sly updates with his own track swapped in: his targets are
+// tracked, no HUD prompt)
+extern bool g_fJtOtherPlayer3;
 // orig: 0x00195608 (the world's splice method 0x10C2E8: the aura of SW +0x4744 (the world's proxy 0x624) on the tracked
 // target plo, replacing its own)
 void ShowJtAura(SW* psw, LO* plo);

@@ -24,6 +24,8 @@ void CarryGuardHeld(LO* plo);
 void ThrowGuardHeld(LO* plo);
 // orig: 0x00207530 (guardphys.cpp: vt slot 86): a hit that knocks it out at once (deeper than +0x338, of the kinds that hurt)
 bool FGuardHitMatters(GUARD* pg, const CTMSG* pctm);
+// (native) the Sly 3 hit handler's knockout, marked in the contact it hands to the reaction job (guardphys.cpp)
+constexpr uint32_t CTMSG_KO3 = 0x40000000u;
 
 // 0xA0 (0xC0): a hit (a move playing the hit's entry, facing where it came from)
 struct JOBHIT : JOBMOVE
@@ -37,6 +39,6 @@ struct JOBHIT : JOBMOVE
 };
 struct JOBHIT1 : JOBHIT { void Init() override; void Enter() override; };  // 0xA1 (nAnim 5)
 struct JOBHIT2 : JOBHIT { void Init() override; void Enter() override; void Exit() override; };  // 0xA2 (6)
-struct JOBHIT3 : JOBHIT { void Init() override; void Enter() override; };  // 0xA3 knocked out (7)
+struct JOBHIT3 : JOBHIT { void Init() override; void Enter() override; void Exit() override; };  // 0xA3 knocked out (7) (Sly 3 0xD0)
 
 std::unique_ptr<AIJOB> PjobNewHit(CID cid);

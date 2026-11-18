@@ -252,8 +252,11 @@ bool FLoadGameSave(const std::string& path, std::string& error)
     return true;
 }
 
+bool g_fSavesReadOnly = false;
+
 bool FWriteGameSave(const std::string& path, std::string& error)
 {
+    if (g_fSavesReadOnly) { error = "not written (this run's saves are read only: --map-state)"; return false; }
     std::error_code ec;
     std::filesystem::create_directories(std::filesystem::path(path).parent_path(), ec);
     std::ofstream out(path, std::ios::binary);
@@ -338,6 +341,7 @@ void CopyGameSaveForSlot(GAMESAVE& gs)
 
 bool FWriteGameSaveBlock(const std::string& path, const GAMESAVE& gs, std::string& error)
 {
+    if (g_fSavesReadOnly) { error = "not written (this run's saves are read only: --map-state)"; return false; }
     std::error_code ec;
     std::filesystem::create_directories(std::filesystem::path(path).parent_path(), ec);
     std::ofstream out(path, std::ios::binary);

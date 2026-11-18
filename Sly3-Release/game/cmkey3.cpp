@@ -5,12 +5,16 @@
 #include "scpt3.h"
 
 #include "../lo.h"
+#include "../brx.h"
+#include "../jt.h"
+#include "sly3.h"
 
 #include <glm/gtc/matrix_transform.hpp>
 
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <cstdlib>
 
 namespace
 {
@@ -26,6 +30,15 @@ int32_t N(const SCPTCMD3& c, std::size_t i) { return i < c.an.size() ? c.an[i] :
 // an object's world matrix (its LOX matrices up its parents; TODO(sly3): the ALO's animated / attached transforms)
 glm::mat4 MatWorld(const LO* plo)
 {
+    // (s3-player: an ALO's frame is its scene matrix (orig3 0x1C9428's: the object record, Sly 2's vt slot 31 = MatJtLo:
+    // the placement with the turned rotation record). Only the LOX chain was read, so a key in an actor's frame
+    // (v_interpol's caught scene, SCPT 2101: Carmelita 28 after she faces Sly) had the identity.)
+    if (plo && FIsLoDerivedFrom(plo, sly3::CID_ALO)) return MatJtLo(const_cast<LO*>(plo));
+    // (s3-prologue: a LOX's frame is its reference record's world matrix times its own (orig3 vt slot 36 0x231440, as
+    // MatJtLo / PosLoWorld): the chain of LOX matrices alone left out a moving ALO parent. m_ext's SCPT 4297 (task 4289,
+    // the lab complete scene) keys its camera in LOX 15294 on the elevator 15240: natively the shot stood near the world's
+    // origin (-654, 229, -377) instead of in the shaft)
+    if (plo && FIsLoDerivedFrom(plo, sly3::CID_LOX)) return MatJtLo(const_cast<LO*>(plo));
     glm::mat4 m(1.0f);
     for (const LO* p = plo; p; p = p->paloParent)
         if (const LOX* plox = dynamic_cast<const LOX*>(p)) m = plox->mat * m;

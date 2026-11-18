@@ -12,14 +12,14 @@ namespace
 constexpr float EPS_1E4 = F32(0x38D1B717);
 }
 
-// orig: 0x0011CF60 RadNormalize
+// orig: 0x0011CF60 RadNormalize (orig3: 0x11E3B8, the same C in the Sly 3 decomp)
 float RadNormalize(float rad)
 {
     if (rad < -PI || PI < rad) rad = GModPositive(rad + PI, F32(0x40C90FDB)) - PI;
     return rad;
 }
 
-// orig: 0x0011CFE0 GLimitAbs
+// orig: 0x0011CFE0 GLimitAbs (orig3: 0x11E560, the same code in Sly 3)
 float GLimitAbs(float g, float gLimit)
 {
     if (gLimit < g) return gLimit;
@@ -27,7 +27,7 @@ float GLimitAbs(float g, float gLimit)
     return g;
 }
 
-// orig: 0x0011D948 GLimitLm
+// orig: 0x0011D948 GLimitLm (orig3: 0x11EE68, the same code in Sly 3)
 float GLimitLm(const LM* plm, float g)
 {
     if (g < plm->gMin) return plm->gMin;
@@ -35,7 +35,7 @@ float GLimitLm(const LM* plm, float g)
     return g;
 }
 
-// orig: 0x0011D978 RadLimitLm
+// orig: 0x0011D978 RadLimitLm (orig3: 0x11EE98, the same C in the Sly 3 decomp)
 float RadLimitLm(const LM* plm, float rad)
 {
     const float radMid = (plm->gMax + plm->gMin) * 0.5f;
@@ -43,7 +43,7 @@ float RadLimitLm(const LM* plm, float rad)
     return RadNormalize(radMid + GLimitAbs(RadNormalize(rad - radMid), radHalf));
 }
 
-// orig: 0x0011D898 GModPositive
+// orig: 0x0011D898 GModPositive (orig3: 0x11EDB8, the same C in the Sly 3 decomp)
 float GModPositive(float gDividend, float gDivisor)
 {
     float g = std::fmod(gDividend, gDivisor);
@@ -51,7 +51,7 @@ float GModPositive(float gDividend, float gDivisor)
     return g;
 }
 
-// orig: 0x0011D508 CSolveQuadratic
+// orig: 0x0011D508 CSolveQuadratic (orig3: 0x11EA28, the same C in the Sly 3 decomp)
 int CSolveQuadratic(float a, float b, float c, float* ax)
 {
     const float d = b * b - a * (c * 4.0f);
@@ -102,7 +102,7 @@ void CalculateSinCos(float rad, float* pgSin, float* pgCos)
     *pgSin = s;
 }
 
-// orig: 0x0011D018 GSmooth
+// orig: 0x0011D018 GSmooth (orig3: 0x11E598, the same C in the Sly 3 decomp)
 float GSmooth(float gCur, float gTarget, float dt, const SMP* psmp, float* pdgNext)
 {
     const float svFast = psmp->svFast;
@@ -190,7 +190,7 @@ float GSmoothA(float gCur, float dgCur, float gTarget, float dt, const SMPA* psm
     return g;
 }
 
-// orig: 0x0011D2D0 RadSmooth
+// orig: 0x0011D2D0 RadSmooth (orig3: 0x11E840, the same C in the Sly 3 decomp)
 float RadSmooth(float radCur, float radTarget, float dt, const SMP* psmp, float* pdradNext)
 {
     const float rad = GSmooth(0.0f, RadNormalize(radTarget - radCur), dt, psmp, pdradNext);
@@ -204,7 +204,7 @@ float RadSmoothA(float radCur, float dradCur, float radTarget, float dt, const S
     return RadNormalize(radCur + rad);
 }
 
-// orig: 0x0011F088 PosSmooth
+// orig: 0x0011F088 PosSmooth (orig3: 0x120C80, the same code in Sly 3)
 glm::vec3 PosSmooth(const glm::vec3& pos, const glm::vec3& posTarget, float dt, const SMP* psmp, glm::vec3* pv)
 {
     const glm::vec3 d = posTarget - pos;
@@ -228,7 +228,7 @@ glm::vec3 SetVectorCylind(float rad, float sXY, float sZ)
     return glm::vec3(c * sXY, s * sXY, sZ);
 }
 
-// orig: 0x0011E208 SetVectorSphere
+// orig: 0x0011E208 SetVectorSphere (orig3: 0x11FDD8, the same code in Sly 3)
 glm::vec3 SetVectorSphere(float radPan, float radTilt, float s)
 {
     float sp, cp, st, ct;
@@ -237,7 +237,7 @@ glm::vec3 SetVectorSphere(float radPan, float radTilt, float s)
     return glm::vec3((ct * cp) * s, (ct * sp) * s, st * s);
 }
 
-// orig: 0x0011EFB0 ConvertVectorToSphere
+// orig: 0x0011EFB0 ConvertVectorToSphere (orig3: 0x120BA8, the same code in Sly 3)
 void ConvertVectorToSphere(const glm::vec3& v, float* pradPan, float* pradTilt, float* ps)
 {
     if (pradPan) *pradPan = RadNormalize(std::atan2(v.y, v.x));
@@ -245,7 +245,7 @@ void ConvertVectorToSphere(const glm::vec3& v, float* pradPan, float* pradTilt, 
     if (ps) *ps = glm::length(v);
 }
 
-// orig: 0x0011EF08 ConvertVectorToCylind
+// orig: 0x0011EF08 ConvertVectorToCylind (orig3: 0x120B00, the same C in the Sly 3 decomp)
 void ConvertVectorToCylind(const glm::vec3& v, float* prad, float* pr, float* pz)
 {
     if (prad) *prad = RadNormalize(std::atan2(v.y, v.x));
@@ -253,7 +253,7 @@ void ConvertVectorToCylind(const glm::vec3& v, float* prad, float* pr, float* pz
     if (pz) *pz = v.z;
 }
 
-// orig: 0x0011E9F8 LimitVectorLength
+// orig: 0x0011E9F8 LimitVectorLength (orig3: 0x1205F0, the same code in Sly 3)
 glm::vec3 LimitVectorLength(const glm::vec3& v, float gMax)
 {
     const float l = glm::length(v);
@@ -261,7 +261,7 @@ glm::vec3 LimitVectorLength(const glm::vec3& v, float gMax)
     return v;
 }
 
-// orig: 0x0011BC00 (row i = sum over k of A[k][i] B[k])
+// orig: 0x0011BC00 (row i = sum over k of A[k][i] B[k]) (orig3: 0x11CFC0, the same code in Sly 3)
 glm::mat3 MulMat3TransposeA(const glm::mat3& a, const glm::mat3& b)
 {
     glm::mat3 m;
@@ -283,7 +283,7 @@ glm::mat3 BuildRotateMatrixAxis(float rad, const glm::vec3& a)
     return m;
 }
 
-// orig: 0x0011B570 BuildRotateMatrixVector
+// orig: 0x0011B570 BuildRotateMatrixVector (orig3: 0x11C930, the same C in the Sly 3 decomp)
 glm::mat3 BuildRotateMatrixVector(const glm::vec3& v)
 {
     const float g = glm::length(v);
@@ -291,7 +291,7 @@ glm::mat3 BuildRotateMatrixVector(const glm::vec3& v)
     return BuildRotateMatrixAxis(g, v * (1.0f / g));
 }
 
-// orig: 0x0011B628 BuildEulerMatrix
+// orig: 0x0011B628 BuildEulerMatrix (orig3: 0x11C9E8, the same C in the Sly 3 decomp)
 glm::mat3 BuildEulerMatrix(const glm::vec3& e)
 {
     float sx, cx, sy, cy, sz, cz;
@@ -306,7 +306,7 @@ glm::mat3 BuildEulerMatrix(const glm::vec3& e)
     return m;
 }
 
-// orig: 0x0011B720 BuildPanTiltMatrix (R(z, pan) then R(y, -tilt): rows = tilt rows x pan)
+// orig: 0x0011B720 BuildPanTiltMatrix (R(z, pan) then R(y, -tilt): rows = tilt rows x pan) (orig3: 0x11CAE0, the same code in Sly 3)
 glm::mat3 BuildPanTiltMatrix(float radPan, float radTilt)
 {
     const glm::mat3 a = BuildRotateMatrixAxis(radPan, glm::vec3(0, 0, 1));
@@ -314,7 +314,7 @@ glm::mat3 BuildPanTiltMatrix(float radPan, float radTilt)
     return MulMat3(b, a);
 }
 
-// orig: 0x0011BC88 DecomposeRotateMatrixPanTilt
+// orig: 0x0011BC88 DecomposeRotateMatrixPanTilt (orig3: 0x11D048, the same C in the Sly 3 decomp)
 void DecomposeRotateMatrixPanTilt(const glm::mat3& m, float* pradPan, float* pradTilt)
 {
     *pradPan = std::atan2(m[0].y, m[0].x);
@@ -418,7 +418,7 @@ void SmoothMatrix(const glm::mat3& matPrev, const glm::mat3& matTarget, const SM
     if (pw) *pw = axis * dradNext;
 }
 
-// orig: 0x001A37D0 FitRecipFunction
+// orig: 0x001A37D0 FitRecipFunction (orig3: 0x1C56D0, the same code in Sly 3)
 void FitRecipFunction(float x0, float y0, float x1, float y1, float* pdu, float* pru)
 {
     const float gEps = F32(0x38D1B717);
@@ -435,7 +435,7 @@ void FitRecipFunction(float x0, float y0, float x1, float y1, float* pdu, float*
     *pdu = y0 - r / x0;
 }
 
-// orig: 0x0011C168 MulMatrix4 (each row of B transformed by A: the original's B * A)
+// orig: 0x0011C168 MulMatrix4 (each row of B transformed by A: the original's B * A) (orig3: 0x11D558, the same code in Sly 3)
 MATRIX4 MulMatrix4(const MATRIX4& a, const MATRIX4& b)
 {
     MATRIX4 m;
@@ -462,7 +462,7 @@ MATRIX4 InverseAffineMatrix4(const MATRIX4& m)
     return o;
 }
 
-// orig: 0x0011C2F0 FInvertMatrix4 (0x11C500's Gauss-Jordan; natively glm's inverse, singular below 1e-4)
+// orig: 0x0011C2F0 FInvertMatrix4 (0x11C500's Gauss-Jordan; natively glm's inverse, singular below 1e-4) (orig3: 0x11D740, the same code in Sly 3)
 bool FInvertMatrix4(const MATRIX4& m, MATRIX4* pmatOut)
 {
     glm::mat4 g;

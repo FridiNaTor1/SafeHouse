@@ -388,7 +388,7 @@ int ViewWorld(const VIEWOPTS& vo)
     const bool fShot = !vo.screenshot.empty();
     g_gl.msaa = vo.msaa;
     g_display.msaaSamples = vo.msaa;
-    if (!g_gl.FInit(vo.width, vo.height, !fShot, "Sly2-Release", error)) { std::fprintf(stderr, "%s\n", error.c_str()); return 1; }
+    if (!g_gl.FInit(vo.width, vo.height, !fShot, "Sly 3: Honor Among Thieves", error)) { std::fprintf(stderr, "%s\n", error.c_str()); return 1; }
     BuildSceneGpu(scene);
 
     // --screens: native playback of screen objects

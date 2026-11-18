@@ -101,6 +101,11 @@ struct ZONECM
     LO* ploLook = nullptr;          // +0x190 (an object the camera leads toward)
     float alead[3]{};               // +0x1A0 (its lead's quadratic of the distance)
     cmm::LM lmLead{0.0f, 0.0f};          // +0x1B0
+    // (Sly 3) the return record (orig3 ZONE +0x130, 0x30 bytes, copied from the default 0x34A040 when a zone's
+    // option 228..233 writes it (0x2746B0); the options set the pan's two returns, the tilt's keep the defaults):
+    // {on, dt, u} x {pan 1, pan 2, tilt 1, tilt 2}
+    struct RET3 { int f = 0; float dt = 2.0f; float u = 1.0f; };
+    RET3 aret3[4]{{0, 2.0f, 1.0f}, {0, 2.0f, 1.0f}, {1, 0.0f, 1.0f}, {0, 2.0f, 1.0f}};
 };
 
 // The focus object's fields the follow camera reads (a JT-derived player; the original's offsets).
@@ -116,6 +121,43 @@ struct CMFOCUS
 };
 
 struct CMATTACH;
+
+// (Sly 3) the focus's raw camera record (orig3: 0x80 bytes on 0x1F3ED8's stack, filled by the focus's vt slot 85: the SO's
+// 0x1F3D48, the PO's 0x250690, the actor's 0x153D40, Sly's 0x1ABA80 with the jump's 0x1BD758 ...)
+struct CPDEFIRAW3
+{
+    glm::vec3 pos{0.0f};            // +0x00 (the object's position; z: the floor + its focus height on the ground)
+    glm::vec3 v{0.0f};              // +0x10 (the record's velocity at its position)
+    glm::vec3 dposFocus{0.0f};      // +0x20 (the focus offset's target)
+    float dTilt = 0, dDist = 0;     // +0x30 / +0x34 (added to the samples' tilt / distance)
+    cmm::LM lmZ{-275.0f, 150.0f};   // +0x38 (the z target's range about the object: 0x325060)
+    cmm::LM lmZ2{-300.0f, 200.0f};  // +0x40 (the focus z's range about the object: 0x325068)
+    cmm::SMP smpZ{4000.0f, 0.0f, 4.0f};  // +0x48 (0x325070)
+    float sAhead = 0;               // +0x54 (the look-ahead's length)
+    float radHome = 0;              // +0x58 (behind the facing)
+    float tMoveLast = 0;            // +0x5C
+    int cfk = 0;                    // +0x60
+    float kSpring = 5.0f, kDamp = -3.5f;  // +0x64 / +0x68 (the look-ahead's / offset's spring)
+    uint32_t grf = 0;               // +0x6C (1 moving: no lead, 2 keep the record, 4 keep z, 0x10 z from the record, 8 no turn)
+    int n70 = 1;                    // +0x70
+    // (what 0x1F3ED8 reads of the object itself: vt slot 0x120's position z, slot 0x138's angular velocity)
+    float zObj = 0;
+    float wAng = 0;
+};
+
+// (Sly 3) the camera definition 0x1F3ED8 hands the follow policy (0x60 bytes at 0x274AC0's sp)
+struct CPDEFI3
+{
+    glm::vec3 pos{0.0f};            // +0x00 (the record + its offset + the look-ahead)
+    glm::vec3 v{0.0f};              // +0x10 (the lead: the focus's velocity)
+    glm::vec3 dposAhead{0.0f};      // +0x20
+    glm::vec3 dposFocus{0.0f};      // +0x30
+    float dTilt = 0, dDist = 0;     // +0x40 / +0x44
+    uint32_t grf = 0;               // +0x48
+    float radHome = 0;              // +0x4C
+    float tMoveLast = 0;            // +0x50
+    int cfk = 0;                    // +0x54
+};
 
 // What the follow camera needs from other modules besides g_cmworld (curves, transforms, the focus).
 struct CMFOLLOWWORLD
@@ -144,6 +186,8 @@ struct CMFOLLOWWORLD
     // 0x1619A0(0x2DEB30, 6, 0) (the game's "the camera was turned" event) and the turn sound (0x1FBB90(3))
     void (*pfnCameraTurned)() = nullptr;
     void (*pfnTurnSound)() = nullptr;
+    // (Sly 3) the focus's vt slot 85 (its raw camera record: cmfocus3.cpp); null: the SO's defaults at its position
+    void (*pfnCpdefiRaw3)(LO* pso, CPDEFIRAW3* praw) = nullptr;
 };
 extern CMFOLLOWWORLD g_cmfollowworld;
 
@@ -171,6 +215,15 @@ struct CPFOLLOW : CPLCY
     float tVisible = 0;             // +0x80 (0x2236E8: the focus last seen)
     float dradPanOffset = 0, dradTiltOffset = 0;  // +0x84 / +0x88 (the activation's offset, decaying)
     float ddradPanOffset = 0, ddradTiltOffset = 0;  // +0x8C / +0x90
+    // (Sly 3, orig3 0x274AC0's record) the focus record (+0x30..+0x9C, 0x1F3ED8) and the new fields
+    glm::vec3 posRec3{0.0f};        // +0x30 (the focus's smoothed position)
+    glm::vec3 dposSmooth3{0.0f};    // +0x40 (an offset decaying to 0)
+    glm::vec3 dposAhead3{0.0f}, vAhead3{0.0f};  // +0x50 / +0x60 (the look-ahead and its spring's speed)
+    glm::vec3 dposFocus3{0.0f}, vFocus3{0.0f};  // +0x70 / +0x80 (the focus offset)
+    float tRec3 = 0;                // +0x9C (the record's last time)
+    float tActivate3 = 0;           // +0xE4 (the activation: the tilt return's start)
+    float tClear3 = 0;              // +0x114 (the eye last not blocked)
+    int fReactivate3 = 0;           // +0xEC
 
     uint32_t VtOrig() const override { return 0x2DB858; }
     void Init() override;                                 // 0x2219C8

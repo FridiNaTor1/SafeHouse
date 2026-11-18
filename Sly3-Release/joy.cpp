@@ -1,8 +1,11 @@
 #include "joy.h"
+#include "splitscreen3.h"
 #include "game/sly3.h"
+#include "cheat.h"
 #include "rumble.h"
 
 #include "pcinput.h"
+#include "actioninput.h"
 #include "skipcut.h"
 #include "debugmenu.h"
 
@@ -114,6 +117,7 @@ void UpdateJoy(JOY* pjoy, GLFWwindow* pwindow, int frame, const std::vector<JOYP
 {
     g_frameJoy = frame;
     g_grfJoyWindow = 0;
+    split3::UpdateSeats(pwindow, frame);   // (PC, splitscreen3.h: the seats' devices; nothing in single player)
     uint16_t grf = 0;
     float xl = 0, yl = 0, xr = 0, yr = 0;
     uint8_t abAxis[4] = {0x80, 0x80, 0x80, 0x80};  // LX LY RX RY
@@ -141,6 +145,36 @@ void UpdateJoy(JOY* pjoy, GLFWwindow* pwindow, int frame, const std::vector<JOYP
             for (int i = 0; i < 4; ++i) abAxis[i] = abR[i];
         }
     }
+    {
+        // (tests, splitscreen3.h g_pfnPadPilot3: a mode's pad bot plays player 1's pad, e.g. the Galleon Duel's)
+        uint16_t grfP = 0;
+        float aP[4] = {};
+        if (split3::g_pfnPadPilot3 && split3::g_pfnPadPilot3(0, frame, aP, &grfP))
+        {
+            fScripted = true;
+            grf |= grfP;
+            auto byteOf = [](float g, bool fInvert) {
+                const float u = fInvert ? (1.0f - g) * 0.5f : (g + 1.0f) * 0.5f;
+                return static_cast<uint8_t>(std::lround(std::fmin(std::fmax(u, 0.0f), 1.0f) * 255.0f));
+            };
+            abAxis[0] = byteOf(aP[0], false), abAxis[1] = byteOf(aP[1], true), abAxis[2] = byteOf(aP[2], false), abAxis[3] = byteOf(aP[3], true);
+        }
+    }
+    // (tests, s3-hack: SLY3_HACKGAMEPILOT for player 1 too, when seat 0 is scripted: its stick from the pilot)
+    if (split3::g_pfnScriptedSeatPilot && split3::Seat0Device() == -3)
+    {
+        float a[4] = {};
+        uint16_t grfP = 0;
+        split3::g_pfnScriptedSeatPilot(0, frame, a, &grfP);
+        if (a[0] != 0.0f || a[1] != 0.0f)
+        {
+            auto byteOf = [](float g, bool fInvert) { return static_cast<uint8_t>(std::lround(std::fmin(std::fmax(((fInvert ? -g : g) + 1.0f) * 0.5f, 0.0f), 1.0f) * 255.0f)); };
+            fScripted = true;
+            abAxis[0] = byteOf(a[0], false);
+            abAxis[1] = byteOf(a[1], true);
+        }
+        grf |= grfP;
+    }
     pjoy->fConnected = false;
     if (pwindow)
     {
@@ -148,10 +182,13 @@ void UpdateJoy(JOY* pjoy, GLFWwindow* pwindow, int frame, const std::vector<JOYP
         uint16_t grfPc = 0;
         bool fPad = false;
         ReadPcInput(pwindow, &grfPc, &xl, &yl, &xr, &yr, &fPad);
+        // (splitscreen3.h) under the binding screen the game gets nothing (the presses claim the devices)
+        if (split3::FBinding()) grfPc = 0, xl = yl = xr = yr = 0.0f;
         grf |= grfPc;
         g_grfJoyWindow = grfPc;
         pjoy->fConnected = fPad;
     }
+    sly2actions::ScriptedFrame(fScripted);
     grf &= uint16_t(~GrfSkipCutMask());   // (skipcut.h: the Circle that skipped a cutscene, until released)
     // (debugmenu.h, Debug keys on only: the debug menu's keys, and the whole pad while it is open, are not the game's)
     if (const uint16_t grfGame = GrfDebugMenuFilter(grf, &xl, &yl, &xr, &yr, abAxis); grfGame != grf)
@@ -265,7 +302,7 @@ void GetJoyXYDeflection(const JOYPS2* pjoy, uint8_t bx, uint8_t by, float* px, f
 }  // namespace
 
 // orig: 0x00187998 FReadJoy (the read part; the pad's state machine 0x1871C0 is always ready natively, the cheat
-// codes 0x14BF48 and the idle broadcast 0x1619A0 are TODO(world))
+// codes 0x14BF48 (cheat.h) and the idle broadcast 0x1619A0)
 void ReadJoyPs2(JOYPS2* pjoy, const uint8_t* abRaw)
 {
     std::memcpy(pjoy->ab, abRaw, sizeof pjoy->ab);
@@ -300,6 +337,7 @@ void ReadJoyPs2(JOYPS2* pjoy, const uint8_t* abRaw)
     pjoy->dy = (pjoy->y - y) / dt;
     pjoy->dx2 = (pjoy->x2 - x2) / dt;
     pjoy->dy2 = (pjoy->y2 - y2) / dt;
+    if (pjoy == &g_joyps2) MatchCheatCodes(grfbtnOld, pjoy->grfbtn);   // 0x14BF48 (the cheat codes, cheat.h)
     pjoy->tRead = g_clock.t3C;
     if (pjoy->grfbtn != 0 || !(pjoy->uDeflect == 0.0f) || !(pjoy->uDeflect2 == 0.0f))
     {

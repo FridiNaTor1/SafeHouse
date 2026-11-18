@@ -2,8 +2,8 @@
 
 // PC input QoL (Phase 3, ported from ThiefRush-Dev's Sly1-Release Input.cpp / mouseinput.cpp): the keyboard and
 // gamepad bindings, the keyboard camera keys, the mouse (camera, aim, bindings, menus) and the last used device
-// (for the dynamic button prompts, promptglyph.h). The options live in <user-dir>/Saves/system_settings.dat
-// (platform/system_settings.h v12; the launcher's Settings page edits the same fields).
+// (for the dynamic button prompts, promptglyph.h). The options live in <user-dir>/Settings.ini
+// (platform/sly2_settings.h; the launcher's Settings page edits the same file).
 //
 // Defaults keep the original's controls: Cross / Circle / ... on the pad's positional buttons, the triggers as
 // L2 / R2. Nothing here runs in headless or scripted runs (no window): those keep reading only the press lists.
@@ -26,6 +26,7 @@ struct PCINPUTOPT
     std::array<int, PCA_Max> keyboard{};       // GLFW keys (or settings::kMouseBindingBase.. mouse bindings)
     std::array<int, PCA_Max> gamepad{};        // GLFW gamepad buttons, 1000 LT, 1001 RT
     std::array<int, 4> cameraKeys{};           // Left Right Up Down (the right stick)
+    std::array<int, 2> tankKeys{};             // (settings v19) the tank's left / right track (FTankSticks)
     bool fDisableUnfocusedPad = false;
     // the mouse
     bool fMouseCamera = true;
@@ -39,6 +40,7 @@ struct PCINPUTOPT
     bool fMouseInvertBinocX = false, fMouseInvertBinocY = false;
     bool fMouseInvertTurretX = false, fMouseInvertTurretY = false;
     bool fPadInvertCameraX = false, fPadInvertCameraY = false;
+    bool fAutoCameraRotation = true;           // passive follow-camera steering; scripted cameras still apply
     bool fMouseRaw = true;
     bool fMouseWheelZoom = true;
     bool fMouseMenus = true;
@@ -54,6 +56,10 @@ struct PCINPUTOPT
     bool fDebugKeys = false;
 };
 extern PCINPUTOPT g_pcinput;
+// (PC) a script read a pad's left and right stick Y (spliceglue.cpp: the Ep5 RC tank drives each track by one stick):
+// with the keyboard, the tank keys then drive the tracks (ReadPcInput)
+void NoteScriptStickRead(int optid);
+bool FTankSticks();
 
 PCINPUTOPT PcInputDefaults();
 void PcInputFromSettings(const cane::settings::SystemSettings& s);
@@ -101,6 +107,9 @@ bool FPcMenuMode();
 // gadget grid, Job Help): the OS cursor is shown there, unless a controller was used last and the mouse has not
 // moved since. Everywhere else with the cursor free (cutscenes, talks, loads, movies) it is hidden.
 bool FMouseMenuUp();
+// The on-screen pad (Android / iOS) is the pad in use (promptglyph.cpp keeps the words START / SELECT, skipcut.cpp
+// leaves the hold to the pad's own view).
+bool FTouchPadActive();
 // The cursor in canvas units (640 x 448, y down: the 4:3 frame, wherever it sits in a wider picture) while it is
 // free and shown in such a menu with "Mouse in Menus" on; false otherwise (always false headless).
 bool FMenuCursor(float* pxCanvas, float* pyCanvas);

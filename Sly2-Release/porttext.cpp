@@ -1,7 +1,9 @@
 // See porttext.h.
 
 #include "porttext.h"
+#include "langstore.h"
 #include "region.h"
+#include "textmod.h"
 
 #include "pcinput.h"
 #include "../platform/sly2_action_bindings.h"
@@ -9,309 +11,531 @@
 
 #include <GLFW/glfw3.h>
 
+#include <cctype>
 #include <cstdint>
+#include <cstdlib>
 #include <cstdio>
 #include <cstring>
 #include <iterator>
+#include <mutex>
+#include <set>
 #include <string>
 
 namespace
 {
 // The columns are the game's language order (region.h LANGUAGE): English, French, Italian, German, Spanish, Dutch,
-// Portuguese, Danish, Finnish, Norwegian, Swedish, Japanese. English is the port's original text (the USA disc).
+// Portuguese, Danish, Finnish, Norwegian, Swedish, Japanese, Korean. English is the port's original text (the USA disc).
 // G: the game's own words (its text in that language: the menus' On / Off 0x48 / 0x49 / 0x51 / 0x52, the Binocucom
 // 0x2AC, the "Operation:" job names, a job 0x6B / 0x138); P: ours. The French text says "tu" and puts a space before
-// a colon, as the game's does; the Japanese text uses the game's ASCII ':' and "(O)ボタン:" button style.
-constexpr int CLANG = 12;
+// a colon, as the game's does; the Japanese text uses the game's ASCII ':' and "(O)ボタン:" button style; the Korean
+// text the Korean disc's words (켜짐 / 꺼짐, 바이노큐컴, 포탑, 장비 for a gadget, 임무 for a job, "작전명:"), its " : " after a
+// button and its "..." on menu entries, and only syllables the Korean font can compose (its jamo lack the finals ㅋ ㄽ
+// ㄾ ㄿ) and the ASCII it has (no # * = @ [ ] { } |): tools/porttextcheck.py --kr-font.
+constexpr int CLANG = 13;
 struct ROW
 {
     PTX ptx;
+    const char* name;   // the row's name in a language's Text.json "port" (PTX_<name>: "HoldToSkip")
     const char* asz[CLANG];
 };
+#define P(name) PTX_##name, #name
 
 // clang-format off
 constexpr ROW s_arow[] = {
     // G: the game's separators
-    {PTX_Sep, {": ", " : ", ": ", ": ", ": ", ": ", ": ", ": ", ": ", ": ", ": ", ":"}},
-    {PTX_GlyphSep, {": ", " : ", ": ", ": ", ": ", ": ", ": ", ": ", ": ", ": ", ": ", "ボタン:"}},
-    {PTX_ListFirst, {" ", " ", " ", " ", " ", " ", " ", " ", " ", " ", " ", ""}},
-    {PTX_ListSep, {", ", ", ", ", ", ", ", ", ", ", ", ", ", ", ", ", ", ", ", ", ", "、"}},
-    {PTX_ListEnd, {".", ".", ".", ".", ".", ".", ".", ".", ".", ".", ".", "。"}},
+    {P(Sep), {": ", " : ", ": ", ": ", ": ", ": ", ": ", ": ", ": ", ": ", ": ", ":", ": "}},
+    {P(GlyphSep), {": ", " : ", ": ", ": ", ": ", ": ", ": ", ": ", ": ", ": ", ": ", "ボタン:", " : "}},
+    {P(ListFirst), {" ", " ", " ", " ", " ", " ", " ", " ", " ", " ", " ", "", " "}},
+    {P(ListSep), {", ", ", ", ", ", ", ", ", ", ", ", ", ", ", ", ", ", ", ", ", ", "、", ", "}},
+    {P(ListEnd), {".", ".", ".", ".", ".", ".", ".", ".", ".", ".", ".", "。", "."}},
     // G: the menus' On / Off (gender-neutral forms: Spanish and Portuguese use the Binocucom option's Sí / No;
     // P: the Finnish Päällä / Pois, the game's "Käytössä / Pois käytöstä" too long for the wheel)
-    {PTX_On, {"On", "Oui", "Sì", "Ein", "Sí", "aan", "Sim", "Til", "Päällä", "På", "På", "オン"}},
-    {PTX_Off, {"Off", "Non", "No", "Aus", "No", "uit", "Não", "Fra", "Pois", "Av", "Av", "オフ"}},
+    {P(On), {"On", "Oui", "Sì", "Ein", "Sí", "aan", "Sim", "Til", "Päällä", "På", "På", "オン", "켜짐"}},
+    {P(Off), {"Off", "Non", "No", "Aus", "No", "uit", "Não", "Fra", "Pois", "Av", "Av", "オフ", "꺼짐"}},
 
     // P: the display options
-    {PTX_AspectRatio, {"Aspect Ratio", "Format d'image", "Formato", "Seitenverhältnis", "Proporción",
-        "Beeldverhouding", "Proporção do ecrã", "Billedformat", "Kuvasuhde", "Bildeformat", "Bildformat", "アスペクト比"}},
-    {PTX_FitToScreen, {"Fit to Screen", "Adapter à l'écran", "Adatta allo schermo", "Bildschirmfüllend",
+    {P(AspectRatio), {"Aspect Ratio", "Format d'image", "Formato", "Seitenverhältnis", "Proporción",
+        "Beeldverhouding", "Proporção do ecrã", "Billedformat", "Kuvasuhde", "Bildeformat", "Bildformat", "アスペクト比", "화면 비율"}},
+    {P(FitToScreen), {"Fit to Screen", "Adapter à l'écran", "Adatta allo schermo", "Bildschirmfüllend",
         "Ajustar a la pantalla", "Schermvullend", "Ajustar ao ecrã", "Tilpas til skærmen", "Sovita näyttöön",
-        "Tilpass skjermen", "Anpassa till skärmen", "画面に合わせる"}},
-    {PTX_Resolution, {"Resolution", "Résolution", "Risoluzione", "Auflösung", "Resolución", "Resolutie", "Resolução",
-        "Opløsning", "Resoluutio", "Oppløsning", "Upplösning", "解像度"}},
-    {PTX_Native, {"Native", "Native", "Nativa", "Nativ", "Nativa", "Native", "Nativa", "Original", "Natiivi",
-        "Original", "Original", "ネイティブ"}},
-    {PTX_FrameRate, {"Frame Rate", "Fréquence d'images", "Frequenza fotogrammi", "Bildrate", "Velocidad de fotogramas",
+        "Tilpass skjermen", "Anpassa till skärmen", "画面に合わせる", "화면에 맞춤"}},
+    {P(Resolution), {"Resolution", "Résolution", "Risoluzione", "Auflösung", "Resolución", "Resolutie", "Resolução",
+        "Opløsning", "Resoluutio", "Oppløsning", "Upplösning", "解像度", "해상도"}},
+    {P(Native), {"Native", "Native", "Nativa", "Nativ", "Nativa", "Native", "Nativa", "Original", "Natiivi",
+        "Original", "Original", "ネイティブ", "네이티브"}},
+    {P(FrameRate), {"Frame Rate", "Fréquence d'images", "Frequenza fotogrammi", "Bildrate", "Velocidad de fotogramas",
         "Framerate", "Taxa de fotogramas", "Billedhastighed", "Kuvataajuus", "Bildefrekvens", "Bildfrekvens",
-        "フレームレート"}},
-    {PTX_WindowMode, {"Window Mode", "Mode d'affichage", "Modalità finestra", "Fenstermodus", "Modo de ventana",
+        "フレームレート", "프레임 속도"}},
+    {P(WindowMode), {"Window Mode", "Mode d'affichage", "Modalità finestra", "Fenstermodus", "Modo de ventana",
         "Venstermodus", "Modo de janela", "Vinduestilstand", "Ikkunatila", "Vindusmodus", "Fönsterläge",
-        "ウィンドウモード"}},
-    {PTX_Windowed, {"Windowed", "Fenêtré", "In finestra", "Fenster", "Ventana", "Venster", "Janela", "Vindue",
-        "Ikkuna", "Vindu", "Fönster", "ウィンドウ"}},
-    {PTX_Borderless, {"Borderless", "Sans bordure", "Senza bordi", "Randlos", "Sin bordes", "Randloos", "Sem margens",
-        "Uden kant", "Reunaton", "Rammeløs", "Kantlöst", "ボーダーレス"}},
-    {PTX_Fullscreen, {"Fullscreen", "Plein écran", "Schermo intero", "Vollbild", "Pantalla completa",
-        "Volledig scherm", "Ecrã inteiro", "Fuld skærm", "Koko näyttö", "Fullskjerm", "Helskärm", "フルスクリーン"}},
-    {PTX_VSync, {"VSync", "VSync", "VSync", "VSync", "VSync", "VSync", "VSync", "VSync", "VSync", "VSync", "VSync",
-        "VSync"}},
-    {PTX_DrawDistance, {"Draw Distance", "Distance d'affichage", "Distanza visiva", "Sichtweite",
+        "ウィンドウモード", "창 모드"}},
+    {P(Windowed), {"Windowed", "Fenêtré", "In finestra", "Fenster", "Ventana", "Venster", "Janela", "Vindue",
+        "Ikkuna", "Vindu", "Fönster", "ウィンドウ", "창"}},
+    {P(Borderless), {"Borderless", "Sans bordure", "Senza bordi", "Randlos", "Sin bordes", "Randloos", "Sem margens",
+        "Uden kant", "Reunaton", "Rammeløs", "Kantlöst", "ボーダーレス", "테두리 없음"}},
+    {P(Fullscreen), {"Fullscreen", "Plein écran", "Schermo intero", "Vollbild", "Pantalla completa",
+        "Volledig scherm", "Ecrã inteiro", "Fuld skærm", "Koko näyttö", "Fullskjerm", "Helskärm", "フルスクリーン", "전체 화면"}},
+    {P(VSync), {"VSync", "VSync", "VSync", "VSync", "VSync", "VSync", "VSync", "VSync", "VSync", "VSync", "VSync",
+        "VSync", "수직 동기화"}},
+    {P(DrawDistance), {"Draw Distance", "Distance d'affichage", "Distanza visiva", "Sichtweite",
         "Distancia de dibujado", "Zichtafstand", "Distância de visualização", "Tegneafstand", "Piirtoetäisyys",
-        "Tegneavstand", "Ritavstånd", "ドローディスタンス"}},
+        "Tegneavstand", "Ritavstånd", "ドローディスタンス", "가시 거리"}},
 
     // P: the pause menu's entry, the options' pages (the game's "Quit Game" verbs: Quitter, Esci, beenden, Salir, ...)
-    {PTX_ExitToDesktop, {"Exit to Desktop", "Quitter vers le bureau", "Esci al desktop", "Zurück zum Desktop",
+    {P(ExitToDesktop), {"Exit to Desktop", "Quitter vers le bureau", "Esci al desktop", "Zurück zum Desktop",
         "Salir al escritorio", "Afsluiten naar bureaublad", "Sair para o ambiente de trabalho",
         "Afslut til skrivebordet", "Poistu työpöydälle", "Avslutt til skrivebordet", "Avsluta till skrivbordet",
-        "デスクトップに戻る"}},
-    {PTX_DisplayOptions, {"Display Options...", "Options d'affichage...", "Opzioni video...", "Anzeigeoptionen...",
+        "デスクトップに戻る", "바탕 화면으로 나가기"}},
+    {P(DisplayOptions), {"Display Options...", "Options d'affichage...", "Opzioni video...", "Anzeigeoptionen...",
         "Opciones de pantalla...", "Weergaveopties...", "Opções de visualização...", "Skærmindstillinger...",
-        "Näyttöasetukset...", "Skjerminnstillinger...", "Bildskärmsalternativ...", "画面設定"}},
-    {PTX_ControlsAndPrompts, {"Controls and Prompts...", "Commandes et icônes...", "Controlli e icone...",
+        "Näyttöasetukset...", "Skjerminnstillinger...", "Bildskärmsalternativ...", "画面設定", "화면 설정..."}},
+    {P(ControlsAndPrompts), {"Controls and Prompts...", "Commandes et icônes...", "Controlli e icone...",
         "Steuerung und Symbole...", "Controles e iconos...", "Besturing en symbolen...", "Controlos e ícones...",
         "Styring og ikoner...", "Ohjaimet ja kuvakkeet...", "Kontroller og ikoner...", "Kontroller och ikoner...",
-        "操作とボタン表示"}},
+        "操作とボタン表示", "조작과 버튼 표시..."}},
 
     // P: the controls options (G: the Binocucom's name in each language, text 0x2AC)
-    {PTX_ButtonIcons, {"Button Icons", "Icônes", "Icone", "Symbole", "Iconos", "Symbolen", "Ícones", "Knapikoner",
+    {P(ButtonIcons), {"Button Icons", "Icônes", "Icone", "Symbole", "Iconos", "Symbolen", "Ícones", "Knapikoner",
         "Kuvakkeet", "Ikoner", "Knappikoner",
-        "ボタンアイコン"}},
-    {PTX_Auto, {"Auto", "Auto", "Automatico", "Automatisch", "Automático", "Automatisch", "Automático", "Automatisk",
-        "Automaattinen", "Automatisk", "Automatiskt", "自動"}},
-    {PTX_OriginalPsIcons, {"Original PlayStation Icons", "Icônes PlayStation d'origine", "Icone PlayStation originali",
+        "ボタンアイコン", "버튼 아이콘"}},
+    {P(Auto), {"Auto", "Auto", "Automatico", "Automatisch", "Automático", "Automatisch", "Automático", "Automatisk",
+        "Automaattinen", "Automatisk", "Automatiskt", "自動", "자동"}},
+    {P(OriginalPsIcons), {"Original PlayStation Icons", "Icônes PlayStation d'origine", "Icone PlayStation originali",
         "Original-PlayStation-Symbole", "Iconos originales de PlayStation", "Originele PlayStation-symbolen",
         "Ícones originais da PlayStation", "Originale PlayStation-ikoner", "Alkuperäiset PS-kuvakkeet",
-        "Originale PlayStation-ikoner", "Ursprungliga PlayStation-ikoner", "PlayStationのオリジナルアイコン"}},
-    {PTX_InstantSkip, {"Instant Skip Cutscenes", "Saut direct des cinématiques", "Salto immediato dei filmati",
+        "Originale PlayStation-ikoner", "Ursprungliga PlayStation-ikoner", "PlayStationのオリジナルアイコン", "원래 PlayStation 아이콘"}},
+    {P(InstantSkip), {"Instant Skip Cutscenes", "Saut direct des cinématiques", "Salto immediato dei filmati",
         "Szenen sofort überspringen", "Saltar escenas al instante", "Filmpjes direct overslaan",
         "Saltar cenas de imediato", "Spring sekvenser over straks", "Ohita välianimaatiot heti",
-        "Hopp over sekvenser straks", "Hoppa över sekvenser direkt", "ムービーをすぐスキップ"}},
-    {PTX_MouseCamera, {"Mouse Camera", "Caméra à la souris", "Telecamera col mouse", "Kamera mit Maus",
+        "Hopp over sekvenser straks", "Hoppa över sekvenser direkt", "ムービーをすぐスキップ", "동영상 바로 건너뛰기"}},
+    {P(MouseCamera), {"Mouse Camera", "Caméra à la souris", "Telecamera col mouse", "Kamera mit Maus",
         "Cámara con ratón", "Camera met muis", "Câmara com o rato", "Kamera med mus", "Kamera hiirellä",
-        "Kamera med mus", "Kamera med mus", "マウスでカメラ操作"}},
-    {PTX_MouseSensitivity, {"Mouse Sensitivity", "Sensibilité de la souris", "Sensibilità del mouse",
+        "Kamera med mus", "Kamera med mus", "マウスでカメラ操作", "마우스 카메라"}},
+    {P(MouseSensitivity), {"Mouse Sensitivity", "Sensibilité de la souris", "Sensibilità del mouse",
         "Mausempfindlichkeit", "Sensibilidad del ratón", "Muisgevoeligheid", "Sensibilidade do rato",
-        "Musens følsomhed", "Hiiren herkkyys", "Musefølsomhet", "Muskänslighet", "マウス感度"}},
-    {PTX_MouseAimSensitivity, {"Mouse Aim Sensitivity", "Sensibilité de visée (souris)", "Sensibilità mira (mouse)",
+        "Musens følsomhed", "Hiiren herkkyys", "Musefølsomhet", "Muskänslighet", "マウス感度", "마우스 감도"}},
+    {P(MouseAimSensitivity), {"Mouse Aim Sensitivity", "Sensibilité de visée (souris)", "Sensibilità mira (mouse)",
         "Zielempfindlichkeit (Maus)", "Sensibilidad de mira (ratón)", "Muisgevoeligheid bij richten",
         "Sensibilidade de mira (rato)", "Musens følsomhed ved sigte", "Hiiren herkkyys tähdätessä",
-        "Musefølsomhet ved sikting", "Muskänslighet vid sikte", "ねらう時のマウス感度"}},
-    {PTX_MouseWheelZoom, {"Mouse Wheel Zoom", "Zoom à la molette", "Zoom con la rotellina",
+        "Musefølsomhet ved sikting", "Muskänslighet vid sikte", "ねらう時のマウス感度", "마우스 조준 감도"}},
+    {P(MouseWheelZoom), {"Mouse Wheel Zoom", "Zoom à la molette", "Zoom con la rotellina",
         "Zoom mit Mausrad", "Zoom con la rueda", "Zoomen met scrollwiel",
         "Zoom com a roda do rato", "Zoom med rullehjul", "Zoomaus hiiren rullalla",
-        "Zoom med musehjul", "Zooma med mushjulet", "ホイールでズーム"}},
-    {PTX_MouseInMenus, {"Mouse in Menus", "Souris dans les menus", "Mouse nei menu", "Maus in Menüs",
+        "Zoom med musehjul", "Zooma med mushjulet", "ホイールでズーム", "마우스 휠 줌"}},
+    {P(MouseInMenus), {"Mouse in Menus", "Souris dans les menus", "Mouse nei menu", "Maus in Menüs",
         "Ratón en los menús", "Muis in menu's", "Rato nos menus", "Mus i menuer", "Hiiri valikoissa", "Mus i menyer",
-        "Mus i menyer", "メニューでマウスを使う"}},
-    {PTX_MouseAimInHacking, {"Mouse Aim in Hacking", "Visée à la souris (piratage)", "Mira col mouse (hacking)",
+        "Mus i menyer", "メニューでマウスを使う", "메뉴에서 마우스 사용"}},
+    {P(MouseAimInHacking), {"Mouse Aim in Hacking", "Visée à la souris (piratage)", "Mira col mouse (hacking)",
         "Mauszielen beim Hacken", "Apuntar con ratón (hackeo)", "Richten met muis bij hacken",
         "Mira com o rato (pirataria)", "Sigt med mus ved hacking", "Hiiritähtäys hakkeroinnissa",
-        "Sikt med mus ved hacking", "Sikta med mus vid hackning", "ハッキング中のマウス操作"}},
-    {PTX_KeyboardMapping, {"Keyboard Mapping...", "Configuration du clavier...", "Configurazione tastiera...",
+        "Sikt med mus ved hacking", "Sikta med mus vid hackning", "ハッキング中のマウス操作", "해킹에서 마우스 조준"}},
+    {P(KeyboardMapping), {"Keyboard Mapping...", "Configuration du clavier...", "Configurazione tastiera...",
         "Tastaturbelegung...", "Asignación de teclas...", "Toetsenbordindeling...", "Configuração do teclado...",
         "Tastaturtildeling...", "Näppäimistön määritys...", "Tastaturoppsett...", "Tangentbordsinställning...",
-        "キーボード設定"}},
-    {PTX_ResetKeyboardMapping, {"Reset Keyboard Mapping", "Réinitialiser le clavier", "Ripristina la tastiera",
+        "キーボード設定", "키보드 설정..."}},
+    {P(ResetKeyboardMapping), {"Reset Keyboard Mapping", "Réinitialiser le clavier", "Ripristina la tastiera",
         "Tastaturbelegung zurücksetzen", "Restablecer teclas", "Toetsenbordindeling herstellen", "Repor o teclado",
         "Nulstil tastaturtildeling", "Palauta näppäimistön oletukset", "Tilbakestill tastaturoppsett",
-        "Återställ tangentbordet", "キーボード設定を元に戻す"}},
+        "Återställ tangentbordet", "キーボード設定を元に戻す", "키보드 설정 초기화"}},
 
     // P: the keyboard mapping's rows (the PS2 buttons: the Japanese with the game's icons, as its own text names them)
-    {PTX_MoveForward, {"Move Forward", "Avancer", "Avanti", "Vorwärts", "Avanzar", "Vooruit", "Avançar", "Fremad",
-        "Eteenpäin", "Fremover", "Framåt", "前へ移動"}},
-    {PTX_MoveBack, {"Move Back", "Reculer", "Indietro", "Rückwärts", "Retroceder", "Achteruit", "Recuar", "Bagud",
-        "Taaksepäin", "Bakover", "Bakåt", "後ろへ移動"}},
-    {PTX_MoveLeft, {"Move Left", "Aller à gauche", "Sinistra", "Links", "Izquierda", "Links", "Esquerda", "Venstre",
-        "Vasemmalle", "Venstre", "Vänster", "左へ移動"}},
-    {PTX_MoveRight, {"Move Right", "Aller à droite", "Destra", "Rechts", "Derecha", "Rechts", "Direita", "Højre",
-        "Oikealle", "Høyre", "Höger", "右へ移動"}},
-    {PTX_Square, {"Square", "Carré", "Quadrato", "Quadrat", "Cuadrado", "Vierkant", "Quadrado", "Firkant", "Neliö",
-        "Firkant", "Fyrkant", "&2S&.ボタン"}},
-    {PTX_Circle, {"Circle", "Rond", "Cerchio", "Kreis", "Círculo", "Rondje", "Círculo", "Cirkel", "Ympyrä", "Sirkel",
-        "Cirkel", "&2O&.ボタン"}},
-    {PTX_Cross, {"Cross", "Croix", "Croce", "Kreuz", "Cruz", "Kruisje", "Cruz", "Kryds", "Risti", "Kryss", "Kryss",
-        "&2X&.ボタン"}},
-    {PTX_Triangle, {"Triangle", "Triangle", "Triangolo", "Dreieck", "Triángulo", "Driehoek", "Triângulo", "Trekant",
-        "Kolmio", "Trekant", "Triangel", "&2T&.ボタン"}},
-    {PTX_Start, {"Start", "Start", "Start", "Start", "Start", "Start", "Start", "Start", "Start", "Start", "Start",
-        "STARTボタン"}},
-    {PTX_Select, {"Select", "Select", "Select", "Select", "Select", "Select", "Select", "Select", "Select", "Select",
-        "Select", "SELECTボタン"}},
-    {PTX_CameraLeft, {"Camera Left", "Caméra gauche", "Visuale sinistra", "Kamera links", "Cámara izquierda",
+    {P(MoveForward), {"Move Forward", "Avancer", "Avanti", "Vorwärts", "Avanzar", "Vooruit", "Avançar", "Fremad",
+        "Eteenpäin", "Fremover", "Framåt", "前へ移動", "앞으로 이동"}},
+    {P(MoveBack), {"Move Back", "Reculer", "Indietro", "Rückwärts", "Retroceder", "Achteruit", "Recuar", "Bagud",
+        "Taaksepäin", "Bakover", "Bakåt", "後ろへ移動", "뒤로 이동"}},
+    {P(MoveLeft), {"Move Left", "Aller à gauche", "Sinistra", "Links", "Izquierda", "Links", "Esquerda", "Venstre",
+        "Vasemmalle", "Venstre", "Vänster", "左へ移動", "왼쪽으로 이동"}},
+    {P(MoveRight), {"Move Right", "Aller à droite", "Destra", "Rechts", "Derecha", "Rechts", "Direita", "Højre",
+        "Oikealle", "Høyre", "Höger", "右へ移動", "오른쪽으로 이동"}},
+    {P(Square), {"Square", "Carré", "Quadrato", "Quadrat", "Cuadrado", "Vierkant", "Quadrado", "Firkant", "Neliö",
+        "Firkant", "Fyrkant", "&2S&.ボタン", "&2S&. 버튼"}},
+    {P(Circle), {"Circle", "Rond", "Cerchio", "Kreis", "Círculo", "Rondje", "Círculo", "Cirkel", "Ympyrä", "Sirkel",
+        "Cirkel", "&2O&.ボタン", "&2O&. 버튼"}},
+    {P(Cross), {"Cross", "Croix", "Croce", "Kreuz", "Cruz", "Kruisje", "Cruz", "Kryds", "Risti", "Kryss", "Kryss",
+        "&2X&.ボタン", "&2X&. 버튼"}},
+    {P(Triangle), {"Triangle", "Triangle", "Triangolo", "Dreieck", "Triángulo", "Driehoek", "Triângulo", "Trekant",
+        "Kolmio", "Trekant", "Triangel", "&2T&.ボタン", "&2T&. 버튼"}},
+    {P(Start), {"Start", "Start", "Start", "Start", "Start", "Start", "Start", "Start", "Start", "Start", "Start",
+        "STARTボタン", "START 버튼"}},
+    {P(Select), {"Select", "Select", "Select", "Select", "Select", "Select", "Select", "Select", "Select", "Select",
+        "Select", "SELECTボタン", "SELECT 버튼"}},
+    {P(CameraLeft), {"Camera Left", "Caméra gauche", "Visuale sinistra", "Kamera links", "Cámara izquierda",
         "Camera links", "Câmara esquerda", "Kamera venstre", "Kamera vasemmalle", "Kamera venstre",
-        "Kamera vänster", "カメラ左"}},
-    {PTX_CameraRight, {"Camera Right", "Caméra droite", "Visuale destra", "Kamera rechts", "Cámara derecha",
+        "Kamera vänster", "カメラ左", "카메라 왼쪽"}},
+    {P(CameraRight), {"Camera Right", "Caméra droite", "Visuale destra", "Kamera rechts", "Cámara derecha",
         "Camera rechts", "Câmara direita", "Kamera højre", "Kamera oikealle", "Kamera høyre", "Kamera höger",
-        "カメラ右"}},
-    {PTX_CameraUp, {"Camera Up", "Caméra haut", "Visuale su", "Kamera hoch", "Cámara arriba",
-        "Camera omhoog", "Câmara cima", "Kamera op", "Kamera ylös", "Kamera opp", "Kamera upp", "カメラ上"}},
-    {PTX_CameraDown, {"Camera Down", "Caméra bas", "Visuale giù", "Kamera runter", "Cámara abajo",
-        "Camera omlaag", "Câmara baixo", "Kamera ned", "Kamera alas", "Kamera ned", "Kamera ner", "カメラ下"}},
-    {PTX_TankLeftTrack, {"Tank: Left Track", "Char : chenille gauche", "Carro: cingolo sinistro", "Panzer: linke Kette",
+        "カメラ右", "카메라 오른쪽"}},
+    {P(CameraUp), {"Camera Up", "Caméra haut", "Visuale su", "Kamera hoch", "Cámara arriba",
+        "Camera omhoog", "Câmara cima", "Kamera op", "Kamera ylös", "Kamera opp", "Kamera upp", "カメラ上", "카메라 위"}},
+    {P(CameraDown), {"Camera Down", "Caméra bas", "Visuale giù", "Kamera runter", "Cámara abajo",
+        "Camera omlaag", "Câmara baixo", "Kamera ned", "Kamera alas", "Kamera ned", "Kamera ner", "カメラ下", "카메라 아래"}},
+    {P(TankLeftTrack), {"Tank: Left Track", "Char : chenille gauche", "Carro: cingolo sinistro", "Panzer: linke Kette",
         "Tanque: oruga izquierda", "Tank: linkerrups", "Tanque: lagarta esquerda", "Tank: venstre bælte",
-        "Panssari: vasen tela", "Stridsvogn: venstre belte", "Stridsvagn: vänster band", "戦車：左キャタピラ"}},
-    {PTX_TankRightTrack, {"Tank: Right Track", "Char : chenille droite", "Carro: cingolo destro", "Panzer: rechte Kette",
+        "Panssari: vasen tela", "Stridsvogn: venstre belte", "Stridsvagn: vänster band", "戦車:左キャタピラ", "탱크: 왼쪽 궤도"}},
+    {P(TankRightTrack), {"Tank: Right Track", "Char : chenille droite", "Carro: cingolo destro", "Panzer: rechte Kette",
         "Tanque: oruga derecha", "Tank: rechterrups", "Tanque: lagarta direita", "Tank: højre bælte",
-        "Panssari: oikea tela", "Stridsvogn: høyre belte", "Stridsvagn: höger band", "戦車：右キャタピラ"}},
-    {PTX_PressAKey, {"press a key (Esc cancels)", "appuie sur une touche (Échap : annuler)",
+        "Panssari: oikea tela", "Stridsvogn: høyre belte", "Stridsvagn: höger band", "戦車:右キャタピラ", "탱크: 오른쪽 궤도"}},
+    {P(PressAKey), {"press a key (Esc cancels)", "appuie sur une touche (Échap : annuler)",
         "premi un tasto (Esc annulla)", "Taste drücken (Esc bricht ab)", "pulsa una tecla (Esc cancela)",
         "druk op een toets (Esc annuleert)", "prime uma tecla (Esc cancela)", "tryk på en tast (Esc annullerer)",
         "paina näppäintä (Esc peruuttaa)", "trykk på en tast (Esc avbryter)", "tryck på en tangent (Esc avbryter)",
-        "キーを押してください(Escでキャンセル)"}},
+        "キーを押してください(Escでキャンセル)", "키를 누르세요 (Esc: 취소)"}},
 
     // P: key and mouse names (the other keys keep their keycaps' names: Enter, Tab, Esc, ...)
-    {PTX_KeyUnbound, {"Unbound", "Non assignée", "Non assegnato", "Nicht belegt", "Sin asignar", "Niet toegewezen",
-        "Não atribuída", "Ikke tildelt", "Ei määritetty", "Ikke tildelt", "Ej tilldelad", "未設定"}},
-    {PTX_KeySpace, {"Space", "Espace", "Spazio", "Leertaste", "Espacio", "Spatiebalk", "Espaço", "Mellemrum",
-        "Välilyönti", "Mellomrom", "Mellanslag", "スペース"}},
-    {PTX_KeyUp, {"Up Arrow", "Flèche haut", "Freccia su", "Pfeil hoch", "Flecha arriba", "Pijl omhoog",
-        "Seta cima", "Pil op", "Nuoli ylös", "Pil opp", "Pil upp", "上キー"}},
-    {PTX_KeyDown, {"Down Arrow", "Flèche bas", "Freccia giù", "Pfeil runter", "Flecha abajo", "Pijl omlaag",
-        "Seta baixo", "Pil ned", "Nuoli alas", "Pil ned", "Pil ner", "下キー"}},
-    {PTX_KeyLeft, {"Left Arrow", "Flèche gauche", "Freccia sinistra", "Pfeil links", "Flecha izquierda", "Pijl links",
-        "Seta esquerda", "Pil venstre", "Vasen nuoli", "Pil venstre", "Pil vänster", "左キー"}},
-    {PTX_KeyRight, {"Right Arrow", "Flèche droite", "Freccia destra", "Pfeil rechts", "Flecha derecha", "Pijl rechts",
-        "Seta direita", "Pil højre", "Oikea nuoli", "Pil høyre", "Pil höger", "右キー"}},
+    {P(KeyUnbound), {"Unbound", "Non assignée", "Non assegnato", "Nicht belegt", "Sin asignar", "Niet toegewezen",
+        "Não atribuída", "Ikke tildelt", "Ei määritetty", "Ikke tildelt", "Ej tilldelad", "未設定", "지정 안 됨"}},
+    {P(KeySpace), {"Space", "Espace", "Spazio", "Leertaste", "Espacio", "Spatiebalk", "Espaço", "Mellemrum",
+        "Välilyönti", "Mellomrom", "Mellanslag", "スペース", "스페이스"}},
+    {P(KeyUp), {"Up Arrow", "Flèche haut", "Freccia su", "Pfeil hoch", "Flecha arriba", "Pijl omhoog",
+        "Seta cima", "Pil op", "Nuoli ylös", "Pil opp", "Pil upp", "上キー", "위쪽 화살표"}},
+    {P(KeyDown), {"Down Arrow", "Flèche bas", "Freccia giù", "Pfeil runter", "Flecha abajo", "Pijl omlaag",
+        "Seta baixo", "Pil ned", "Nuoli alas", "Pil ned", "Pil ner", "下キー", "아래쪽 화살표"}},
+    {P(KeyLeft), {"Left Arrow", "Flèche gauche", "Freccia sinistra", "Pfeil links", "Flecha izquierda", "Pijl links",
+        "Seta esquerda", "Pil venstre", "Vasen nuoli", "Pil venstre", "Pil vänster", "左キー", "왼쪽 화살표"}},
+    {P(KeyRight), {"Right Arrow", "Flèche droite", "Freccia destra", "Pfeil rechts", "Flecha derecha", "Pijl rechts",
+        "Seta direita", "Pil højre", "Oikea nuoli", "Pil høyre", "Pil höger", "右キー", "오른쪽 화살표"}},
     // (%s: Shift / Ctrl / Alt)
-    {PTX_KeyLeftMod, {"Left %s", "%s gauche", "%s sinistro", "%s links", "%s izquierdo", "Linker %s", "%s esquerdo",
-        "Venstre %s", "Vasen %s", "Venstre %s", "Vänster %s", "左%s"}},
-    {PTX_KeyRightMod, {"Right %s", "%s droite", "%s destro", "%s rechts", "%s derecho", "Rechter %s", "%s direito",
-        "Højre %s", "Oikea %s", "Høyre %s", "Höger %s", "右%s"}},
-    {PTX_MouseLeft, {"Left Mouse", "Clic gauche", "Tasto sinistro", "Linke Maustaste", "Botón izquierdo",
+    {P(KeyLeftMod), {"Left %s", "%s gauche", "%s sinistro", "%s links", "%s izquierdo", "Linker %s", "%s esquerdo",
+        "Venstre %s", "Vasen %s", "Venstre %s", "Vänster %s", "左%s", "왼쪽 %s"}},
+    {P(KeyRightMod), {"Right %s", "%s droite", "%s destro", "%s rechts", "%s derecho", "Rechter %s", "%s direito",
+        "Højre %s", "Oikea %s", "Høyre %s", "Höger %s", "右%s", "오른쪽 %s"}},
+    {P(MouseLeft), {"Left Mouse", "Clic gauche", "Tasto sinistro", "Linke Maustaste", "Botón izquierdo",
         "Linkermuisknop", "Botão esquerdo", "Venstre museknap", "Hiiren vasen", "Venstre museknapp",
-        "Vänster musknapp", "マウス左"}},
-    {PTX_MouseRight, {"Right Mouse", "Clic droit", "Tasto destro", "Rechte Maustaste", "Botón derecho",
+        "Vänster musknapp", "マウス左", "마우스 왼쪽"}},
+    {P(MouseRight), {"Right Mouse", "Clic droit", "Tasto destro", "Rechte Maustaste", "Botón derecho",
         "Rechtermuisknop", "Botão direito", "Højre museknap", "Hiiren oikea", "Høyre museknapp", "Höger musknapp",
-        "マウス右"}},
-    {PTX_MouseMiddle, {"Middle Mouse", "Clic central", "Tasto centrale", "Mittlere Maustaste", "Botón central",
+        "マウス右", "마우스 오른쪽"}},
+    {P(MouseMiddle), {"Middle Mouse", "Clic central", "Tasto centrale", "Mittlere Maustaste", "Botón central",
         "Middelste muisknop", "Botão do meio", "Midterste knap", "Hiiren keski", "Midtre museknapp",
-        "Mittenmusknapp", "マウス中"}},
-    {PTX_MouseN, {"Mouse %d", "Souris %d", "Mouse %d", "Maustaste %d", "Ratón %d", "Muisknop %d", "Rato %d",
-        "Museknap %d", "Hiiri %d", "Museknapp %d", "Musknapp %d", "マウス%d"}},
-    {PTX_WheelUp, {"Wheel Up", "Molette haut", "Rotellina su", "Mausrad hoch", "Rueda arriba", "Scrollwiel omhoog",
-        "Roda para cima", "Rullehjul op", "Rulla ylös", "Musehjul opp", "Mushjul upp", "ホイール上"}},
-    {PTX_WheelDown, {"Wheel Down", "Molette bas", "Rotellina giù", "Mausrad runter", "Rueda abajo",
+        "Mittenmusknapp", "マウス中", "마우스 가운데"}},
+    {P(MouseN), {"Mouse %d", "Souris %d", "Mouse %d", "Maustaste %d", "Ratón %d", "Muisknop %d", "Rato %d",
+        "Museknap %d", "Hiiri %d", "Museknapp %d", "Musknapp %d", "マウス%d", "마우스 %d"}},
+    {P(WheelUp), {"Wheel Up", "Molette haut", "Rotellina su", "Mausrad hoch", "Rueda arriba", "Scrollwiel omhoog",
+        "Roda para cima", "Rullehjul op", "Rulla ylös", "Musehjul opp", "Mushjul upp", "ホイール上", "휠 위"}},
+    {P(WheelDown), {"Wheel Down", "Molette bas", "Rotellina giù", "Mausrad runter", "Rueda abajo",
         "Scrollwiel omlaag", "Roda para baixo", "Rullehjul ned", "Rulla alas", "Musehjul ned", "Mushjul ner",
-        "ホイール下"}},
-    {PTX_Mouse, {"Mouse", "Souris", "Mouse", "Maus", "Ratón", "Muis", "Rato", "Mus", "Hiiri", "Mus", "Mus", "マウス"}},
+        "ホイール下", "휠 아래"}},
+    {P(Mouse), {"Mouse", "Souris", "Mouse", "Maus", "Ratón", "Muis", "Rato", "Mus", "Hiiri", "Mus", "Mus", "マウス", "마우스"}},
 
     // P: the cutscene skip hint (Circle, as in every region: gameplay keeps the USA buttons)
-    {PTX_HoldToSkip, {"Hold &2O&. to skip", "Maintiens &2O&. pour passer", "Tieni premuto &2O&. per saltare",
+    {P(HoldToSkip), {"Hold &2O&. to skip", "Maintiens &2O&. pour passer", "Tieni premuto &2O&. per saltare",
         "&2O&. halten zum Überspringen", "Mantén &2O&. para saltar", "Houd &2O&. ingedrukt om over te slaan",
         "Mantém &2O&. para saltar", "Hold &2O&. nede for at springe over", "Ohita pitämällä &2O&. pohjassa",
-        "Hold &2O&. inne for å hoppe over", "Håll &2O&. för att hoppa över", "&2O&.ボタン長押しでスキップ"}},
-    {PTX_HoldToSkipNoIcons, {"Hold Circle to skip", "Maintiens Rond pour passer", "Tieni premuto Cerchio per saltare",
+        "Hold &2O&. inne for å hoppe over", "Håll &2O&. för att hoppa över", "&2O&.ボタン長押しでスキップ", "&2O&. 버튼을 길게 눌러 건너뛰기"}},
+    {P(HoldToSkipNoIcons), {"Hold Circle to skip", "Maintiens Rond pour passer", "Tieni premuto Cerchio per saltare",
         "Kreis halten zum Überspringen", "Mantén Círculo para saltar", "Houd Rondje ingedrukt om over te slaan",
         "Mantém Círculo para saltar", "Hold Cirkel nede for at springe over", "Ohita pitämällä Ympyrää pohjassa",
-        "Hold Sirkel inne for å hoppe over", "Håll Cirkel för att hoppa över", "丸ボタン長押しでスキップ"}},
+        "Hold Sirkel inne for å hoppe over", "Håll Cirkel för att hoppa över", "丸ボタン長押しでスキップ", "동그라미 버튼을 길게 눌러 건너뛰기"}},
 
     // P: Replay Jobs (G: the word for a job: Abandon Job 0x6B, Jobs 0x138; the "Operation:" style of the game's
     // operation jobs, Operation: Wet Tiger 0x1BE; the Japanese names an operation "作戦" as its job names do not)
-    {PTX_ReplayJobs, {"Replay Jobs", "Rejouer des missions", "Rigioca incarichi", "Aufträge wiederholen",
+    {P(ReplayJobs), {"Replay Jobs", "Rejouer des missions", "Rigioca incarichi", "Aufträge wiederholen",
         "Repetir misiones", "Taken opnieuw spelen", "Repetir tarefas", "Spil job igen", "Pelaa keikkoja uudelleen",
-        "Spill oppdrag på nytt", "Spela om uppdrag", "ミッションをリプレイ"}},
-    {PTX_ReplayJob, {"Replay Job", "Rejouer la mission", "Rigioca l'incarico", "Auftrag wiederholen",
+        "Spill oppdrag på nytt", "Spela om uppdrag", "ミッションをリプレイ", "임무 다시 하기"}},
+    {P(ReplayJob), {"Replay Job", "Rejouer la mission", "Rigioca l'incarico", "Auftrag wiederholen",
         "Repetir misión", "Taak opnieuw spelen", "Repetir a tarefa", "Spil jobbet igen", "Pelaa keikka uudelleen",
-        "Spill oppdraget på nytt", "Spela om uppdraget", "リプレイする"}},
-    {PTX_OpHippoDrop, {"Operation: Hippo Drop", "Opération : Hippo-largage", "Operazione Ippo-lancio",
+        "Spill oppdraget på nytt", "Spela om uppdraget", "リプレイする", "다시 하기"}},
+    {P(OpHippoDrop), {"Operation: Hippo Drop", "Opération : Hippo-largage", "Operazione Ippo-lancio",
         "Operation: Nilpferd-Abwurf", "Operación: Hipopótamo en picado", "Operatie Nijlpaarddropping",
         "Operação: Hipopótamo em Queda", "Operation: Flodhestedrop", "Operaatio: Virtahepopudotus",
-        "Operasjon Flodhestslipp", "Operation Flodhästsläpp", "ヒッポ・ドロップ作戦"}},
-    {PTX_ReplayOperation, {"Replay the whole operation in sequence:", "Rejoue toute l'opération dans l'ordre :",
+        "Operasjon Flodhestslipp", "Operation Flodhästsläpp", "ヒッポ・ドロップ作戦", "작전명: 하마 투하"}},
+    {P(ReplayOperation), {"Replay the whole operation in sequence:", "Rejoue toute l'opération dans l'ordre :",
         "Rigioca l'intera operazione in sequenza:", "Spiele die ganze Operation der Reihe nach:",
         "Juega de nuevo toda la operación en orden:", "Speel de hele operatie opnieuw, in volgorde:",
         "Repete a operação inteira por ordem:", "Spil hele operationen igen i rækkefølge:",
         "Pelaa koko operaatio uudelleen järjestyksessä:", "Spill hele operasjonen på nytt i rekkefølge:",
-        "Spela om hela operationen i ordning:", "作戦をはじめから順番にリプレイ:"}},
+        "Spela om hela operationen i ordning:", "作戦をはじめから順番にリプレイ:", "작전 전체를 순서대로 다시 하기:"}},
 
     // P: the save / load pages' page indicator (Q4: more slots, paged with L1 / R1; menu.cpp StrSlotPage)
-    {PTX_SlotPage, {"Page %d / %d", "Page %d / %d", "Pagina %d / %d", "Seite %d / %d", "Página %d / %d",
+    {P(SlotPage), {"Page %d / %d", "Page %d / %d", "Pagina %d / %d", "Seite %d / %d", "Página %d / %d",
         "Pagina %d / %d", "Página %d / %d", "Side %d / %d", "Sivu %d / %d", "Side %d / %d", "Sida %d / %d",
-        "ページ%d/%d"}},
+        "ページ%d/%d", "페이지 %d / %d"}},
 
     // the display options' frame-rate limit: none (R19; the launcher's "Uncapped")
-    {PTX_Uncapped, {"Uncapped", "Illimitée", "Illimitata", "Unbegrenzt", "Sin límite", "Onbeperkt", "Ilimitada",
-        "Ubegrænset", "Rajoittamaton", "Ubegrenset", "Obegränsad", "無制限"}},
+    {P(Uncapped), {"Uncapped", "Illimitée", "Illimitata", "Unbegrenzt", "Sin límite", "Onbeperkt", "Ilimitada",
+        "Ubegrænset", "Rajoittamaton", "Ubegrenset", "Obegränsad", "無制限", "제한 없음"}},
 
     // P: the display options' Long Shadows
-    {PTX_LongShadows, {"Long Shadows", "Ombres longues", "Ombre lunghe", "Lange Schatten", "Sombras largas",
+    {P(LongShadows), {"Long Shadows", "Ombres longues", "Ombre lunghe", "Lange Schatten", "Sombras largas",
         "Lange schaduwen", "Sombras longas", "Lange skygger", "Pitkät varjot", "Lange skygger", "Långa skuggor",
-        "長い影"}},
+        "長い影", "긴 그림자"}},
+    // P: the display options' Fast Shadows (the launcher's "Fast shadows"; Japanese 高速な影: the launcher's 軽 is not a
+    // glyph of the game's font)
+    {P(FastShadows), {"Fast Shadows", "Ombres rapides", "Ombre veloci", "Schnelle Schatten", "Sombras rápidas",
+        "Snelle schaduwen", "Sombras rápidas", "Hurtige skygger", "Nopeat varjot", "Raske skygger", "Snabba skuggor",
+        "高速な影", "빠른 그림자"}},
     // P: Invert Controls... (G: the views' names: the camera of 0x2AC "Move Camera", the Binocucom 0x2AC, the turret of
     // 0x53 "Invert Turret Controls"; the Japanese 反転 of the mouse rows above, ゴーグル / 砲台 of 0x54 / 0x56 there)
-    {PTX_InvertControlsPage, {"Invert Controls...", "Commandes inversées...", "Inversione controlli...",
+    {P(InvertControlsPage), {"Invert Controls...", "Commandes inversées...", "Inversione controlli...",
         "Steuerung umkehren...", "Control invertido...", "Besturing omkeren...", "Inverter controlos...",
-        "Spejl styring...", "Käänteinen ohjaus...", "Vend kontroller...", "Kasta om kontroller...", "操作の反転"}},
-    {PTX_PadInvertCameraX, {"Invert Camera X", "Inverser l'axe X de la caméra", "Inverti asse X della visuale",
+        "Spejl styring...", "Käänteinen ohjaus...", "Vend kontroller...", "Kasta om kontroller...", "操作の反転", "조작 반전..."}},
+    {P(PadInvertCameraX), {"Invert Camera X", "Inverser l'axe X de la caméra", "Inverti asse X della visuale",
         "Kamera-X-Achse umkehren", "Invertir eje X de la cámara", "X-as camera omkeren", "Inverter eixo X da Câmara",
         "Spejl kameraets X-akse", "Käänteinen kameran X-akseli", "Vend kameraets X-akse", "Invertera kamerans X-axel",
-        "カメラ左右反転"}},
-    {PTX_PadInvertCameraY, {"Invert Camera Y", "Inverser l'axe Y de la caméra", "Inverti asse Y della visuale",
+        "カメラ左右反転", "카메라 좌우 반전"}},
+    {P(PadInvertCameraY), {"Invert Camera Y", "Inverser l'axe Y de la caméra", "Inverti asse Y della visuale",
         "Kamera-Y-Achse umkehren", "Invertir eje Y de la cámara", "Y-as camera omkeren", "Inverter eixo Y da Câmara",
         "Spejl kameraets Y-akse", "Käänteinen kameran Y-akseli", "Vend kameraets Y-akse", "Invertera kamerans Y-axel",
-        "カメラ上下反転"}},
-    {PTX_MouseInvertCameraX, {"Invert Mouse X (Camera)", "Inverser X souris (caméra)", "Inverti X mouse (visuale)",
+        "カメラ上下反転", "카메라 상하 반전"}},
+    {P(MouseInvertCameraX), {"Invert Mouse X (Camera)", "Inverser X souris (caméra)", "Inverti X mouse (visuale)",
         "Maus-X umkehren (Kamera)", "Invertir X ratón (cámara)", "X-as muis omkeren (camera)",
         "Inverter X do rato (Câmara)", "Spejl musens X (kamera)", "Käänteinen hiiren X (kamera)",
-        "Vend musens X (kamera)", "Invertera musens X (kamera)", "マウス左右反転(カメラ)"}},
-    {PTX_MouseInvertCameraY, {"Invert Mouse Y (Camera)", "Inverser Y souris (caméra)", "Inverti Y mouse (visuale)",
+        "Vend musens X (kamera)", "Invertera musens X (kamera)", "マウス左右反転(カメラ)", "마우스 좌우 반전 (카메라)"}},
+    {P(MouseInvertCameraY), {"Invert Mouse Y (Camera)", "Inverser Y souris (caméra)", "Inverti Y mouse (visuale)",
         "Maus-Y umkehren (Kamera)", "Invertir Y ratón (cámara)", "Y-as muis omkeren (camera)",
         "Inverter Y do rato (Câmara)", "Spejl musens Y (kamera)", "Käänteinen hiiren Y (kamera)",
-        "Vend musens Y (kamera)", "Invertera musens Y (kamera)", "マウス上下反転(カメラ)"}},
-    {PTX_MouseInvertBinocX, {"Invert Mouse X (Binocucom)", "Inverser X souris (Binocom)", "Inverti X mouse (Binocom)",
+        "Vend musens Y (kamera)", "Invertera musens Y (kamera)", "マウス上下反転(カメラ)", "마우스 상하 반전 (카메라)"}},
+    {P(MouseInvertBinocX), {"Invert Mouse X (Binocucom)", "Inverser X souris (Binocom)", "Inverti X mouse (Binocom)",
         "Maus-X umkehren (S.-Kom.)", "Invertir X ratón (bino-com)", "X-as muis omkeren (Contactkijker)",
         "Inverter X do rato (Binocucom)", "Spejl musens X (binocucom)", "Käänteinen hiiren X (radiokiikari)",
-        "Vend musens X (kikkertwalkie)", "Invertera musens X (binokucom)", "マウス左右反転(ゴーグル)"}},
-    {PTX_MouseInvertBinocY, {"Invert Mouse Y (Binocucom)", "Inverser Y souris (Binocom)", "Inverti Y mouse (Binocom)",
+        "Vend musens X (kikkertwalkie)", "Invertera musens X (binokucom)", "マウス左右反転(ゴーグル)", "마우스 좌우 반전 (바이노큐컴)"}},
+    {P(MouseInvertBinocY), {"Invert Mouse Y (Binocucom)", "Inverser Y souris (Binocom)", "Inverti Y mouse (Binocom)",
         "Maus-Y umkehren (S.-Kom.)", "Invertir Y ratón (bino-com)", "Y-as muis omkeren (Contactkijker)",
         "Inverter Y do rato (Binocucom)", "Spejl musens Y (binocucom)", "Käänteinen hiiren Y (radiokiikari)",
-        "Vend musens Y (kikkertwalkie)", "Invertera musens Y (binokucom)", "マウス上下反転(ゴーグル)"}},
-    {PTX_MouseInvertTurretX, {"Invert Mouse X (Turret)", "Inverser X souris (tourelles)", "Inverti X mouse (torrette)",
+        "Vend musens Y (kikkertwalkie)", "Invertera musens Y (binokucom)", "マウス上下反転(ゴーグル)", "마우스 상하 반전 (바이노큐컴)"}},
+    {P(MouseInvertTurretX), {"Invert Mouse X (Turret)", "Inverser X souris (tourelles)", "Inverti X mouse (torrette)",
         "Maus-X umkehren (Geschütz)", "Invertir X ratón (torretas)", "X-as muis omkeren (geschut)",
         "Inverter X do rato (Torre)", "Spejl musens X (skydetårn)", "Käänteinen hiiren X (tykki)",
-        "Vend musens X (tårn)", "Invertera musens X (stridstorn)", "マウス左右反転(砲台)"}},
-    {PTX_MouseInvertTurretY, {"Invert Mouse Y (Turret)", "Inverser Y souris (tourelles)", "Inverti Y mouse (torrette)",
+        "Vend musens X (tårn)", "Invertera musens X (stridstorn)", "マウス左右反転(砲台)", "마우스 좌우 반전 (포탑)"}},
+    {P(MouseInvertTurretY), {"Invert Mouse Y (Turret)", "Inverser Y souris (tourelles)", "Inverti Y mouse (torrette)",
         "Maus-Y umkehren (Geschütz)", "Invertir Y ratón (torretas)", "Y-as muis omkeren (geschut)",
         "Inverter Y do rato (Torre)", "Spejl musens Y (skydetårn)", "Käänteinen hiiren Y (tykki)",
-        "Vend musens Y (tårn)", "Invertera musens Y (stridstorn)", "マウス上下反転(砲台)"}},
-    {PTX_AutoCameraRotation, {"Automatic Camera Rotation", "Rotation auto caméra", "Rotazione auto telecamera",
+        "Vend musens Y (tårn)", "Invertera musens Y (stridstorn)", "マウス上下反転(砲台)", "마우스 상하 반전 (포탑)"}},
+    {P(AutoCameraRotation), {"Automatic Camera Rotation", "Rotation auto caméra", "Rotazione auto telecamera",
         "Automatische Kameradrehung", "Giro automático de cámara", "Automatische camerarotatie",
         "Rotação automática da câmara", "Automatisk kamerarotation", "Kameran automaattikääntö",
-        "Automatisk kamerarotasjon", "Automatisk kamerarotation", "カメラ自動回転"}},
-    {PTX_AdvancedBindings, {"Advanced Input Mapping", "Attribution avancée des commandes", "Assegnazione avanzata comandi",
+        "Automatisk kamerarotasjon", "Automatisk kamerarotation", "カメラ自動回転", "카메라 자동 회전"}},
+    {P(AdvancedBindings), {"Advanced Input Mapping", "Attribution avancée des commandes", "Assegnazione avanzata comandi",
         "Erweiterte Tastenbelegung", "Asignación avanzada de controles", "Geavanceerde knoptoewijzing",
         "Mapeamento avançado de controlos", "Avanceret knaptildeling", "Laajennettu näppäinkartoitus",
-        "Avansert knappetilordning", "Avancerad knapptilldelning", "くわしい操作のわりあて"}},
-    {PTX_ActionBindings, {"Action Bindings...", "Attribuer les commandes...", "Assegna comandi...",
+        "Avansert knappetilordning", "Avancerad knapptilldelning", "くわしい操作のわりあて", "고급 입력 설정"}},
+    {P(ActionBindings), {"Action Bindings...", "Attribuer les commandes...", "Assegna comandi...",
         "Aktionen belegen...", "Asignar acciones...", "Acties toewijzen...", "Atribuir ações...",
-        "Tildel handlinger...", "Määritä toiminnot...", "Tilordne handlinger...", "Tilldela åtgärder...", "操作をわりあてる"}},
-    {PTX_ActionKeyboard, {"Keyboard and Mouse...", "Clavier et souris...", "Tastiera e mouse...",
+        "Tildel handlinger...", "Määritä toiminnot...", "Tilordne handlinger...", "Tilldela åtgärder...", "操作をわりあてる", "동작 지정..."}},
+    {P(ActionKeyboard), {"Keyboard and Mouse...", "Clavier et souris...", "Tastiera e mouse...",
         "Tastatur und Maus...", "Teclado y ratón...", "Toetsenbord en muis...", "Teclado e rato...",
-        "Tastatur og mus...", "Näppäimistö ja hiiri...", "Tastatur og mus...", "Tangentbord och mus...", "キーボードとマウス"}},
-    {PTX_ActionController, {"Controller...", "Manette...", "Controller...", "Controller...", "Mando...", "Controller...",
-        "Comando...", "Controller...", "Peliohjain...", "Kontroller...", "Handkontroll...", "コントローラ"}},
-    {PTX_ResetAdvancedBindings, {"Reset Advanced Input Mapping", "Réinitialiser les commandes", "Ripristina comandi avanzati",
+        "Tastatur og mus...", "Näppäimistö ja hiiri...", "Tastatur og mus...", "Tangentbord och mus...", "キーボードとマウス", "키보드와 마우스..."}},
+    {P(ActionController), {"Controller...", "Manette...", "Controller...", "Controller...", "Mando...", "Controller...",
+        "Comando...", "Controller...", "Peliohjain...", "Kontroller...", "Handkontroll...", "コントローラ", "컨트롤러..."}},
+    {P(ResetAdvancedBindings), {"Reset Advanced Input Mapping", "Réinitialiser les commandes", "Ripristina comandi avanzati",
         "Belegung zurücksetzen", "Restablecer controles avanzados", "Standaardbesturing herstellen",
         "Repor controlos avançados", "Nulstil avanceret styring", "Palauta toimintojen oletukset",
-        "Tilbakestill avanserte kontroller", "Återställ avancerade kontroller", "わりあてをもどす"}},
-    {PTX_CaptureAction, {"Press input (Esc: cancel, Del: clear)", "Appuie (Échap : annuler, Suppr : effacer)",
+        "Tilbakestill avanserte kontroller", "Återställ avancerade kontroller", "わりあてをもどす", "고급 입력 설정 초기화"}},
+    {P(CaptureAction), {"Press input (Esc: cancel, Del: clear)", "Appuie (Échap : annuler, Suppr : effacer)",
         "Premi un comando (Esc: annulla, Canc: cancella)", "Eingabe (Esc: Abbruch, Entf: löschen)",
         "Pulsa (Esc: cancelar, Supr: borrar)", "Druk (Esc: annuleren, Del: wissen)",
         "Prime (Esc: cancelar, Del: limpar)", "Tryk (Esc: annuller, Del: ryd)", "Paina (Esc: peruuta, Del: poista)",
-        "Trykk (Esc: avbryt, Del: fjern)", "Tryck (Esc: avbryt, Del: rensa)", "ボタンをおす (Esc:やめる、Del:けす)"}},
+        "Trykk (Esc: avbryt, Del: fjern)", "Tryck (Esc: avbryt, Del: rensa)", "ボタンをおす (Esc:やめる、Del:けす)", "입력하세요 (Esc: 취소, Del: 지우기)"}},
+    // P: the Remap page (remappage.h; 2026-11-10)
+    {P(RemapPage), {"Remap Controls...", "Réattribuer les commandes...", "Riassegna i comandi...", "Steuerung belegen...",
+        "Reasignar controles...", "Besturing toewijzen...", "Reatribuir controlos...", "Tildel styring...",
+        "Määritä ohjaimet...", "Tilordne kontroller...", "Tilldela kontroller...", "操作のわりあて", "조작 변경..."}},
+    {P(RemapTitle), {"Remap Controls", "Réattribuer les commandes", "Riassegna i comandi", "Steuerung belegen",
+        "Reasignar controles", "Besturing toewijzen", "Reatribuir controlos", "Tildel styring", "Määritä ohjaimet",
+        "Tilordne kontroller", "Tilldela kontroller", "操作のわりあて", "조작 변경"}},
+    {P(RemapAction), {"Action", "Action", "Azione", "Aktion", "Acción", "Actie", "Ação", "Handling", "Toiminto",
+        "Handling", "Åtgärd", "アクション", "동작"}},
+    {P(RemapKeyboard), {"Keyboard / Mouse", "Clavier / souris", "Tastiera / mouse", "Tastatur / Maus", "Teclado / ratón",
+        "Toetsenbord / muis", "Teclado / rato", "Tastatur / mus", "Näppäimistö / hiiri", "Tastatur / mus",
+        "Tangentbord / mus", "キーボード/マウス", "키보드 / 마우스"}},
+    {P(RemapController), {"Controller", "Manette", "Controller", "Controller", "Mando", "Controller", "Comando",
+        "Controller", "Peliohjain", "Kontroller", "Handkontroll", "コントローラ", "컨트롤러"}},
+    {P(RemapReset), {"Reset to Defaults", "Valeurs par défaut", "Ripristina predefiniti", "Standard wiederherstellen",
+        "Restablecer valores", "Standaard herstellen", "Repor predefinições", "Nulstil til standard", "Palauta oletukset",
+        "Tilbakestill til standard", "Återställ standard", "しょきせっていにもどす", "기본값으로 되돌리기"}},
+    {P(RemapBack), {"Back", "Retour", "Indietro", "Zurück", "Atrás", "Terug", "Voltar", "Tilbage", "Takaisin", "Tilbake",
+        "Tillbaka", "もどる", "뒤로"}},
+    {P(RemapChange), {"Change", "Changer", "Cambia", "Ändern", "Cambiar", "Wijzigen", "Mudar", "Skift", "Vaihda", "Endre",
+        "Ändra", "かえる", "변경"}},
+    {P(RemapClear), {"Clear", "Effacer", "Cancella", "Löschen", "Borrar", "Wissen", "Limpar", "Ryd", "Poista", "Fjern",
+        "Rensa", "けす", "지우기"}},
+    {P(RemapPressKey), {"Press a key or mouse button (Esc: cancel, Del: clear)",
+        "Appuie sur une touche ou un bouton de souris (Échap : annuler, Suppr : effacer)",
+        "Premi un tasto o un pulsante del mouse (Esc: annulla, Canc: cancella)",
+        "Taste oder Maustaste drücken (Esc: Abbruch, Entf: löschen)",
+        "Pulsa una tecla o un botón del ratón (Esc: cancelar, Supr: borrar)",
+        "Druk op een toets of muisknop (Esc: annuleren, Del: wissen)",
+        "Prime uma tecla ou um botão do rato (Esc: cancelar, Del: limpar)",
+        "Tryk på en tast eller museknap (Esc: annuller, Del: ryd)",
+        "Paina näppäintä tai hiiren painiketta (Esc: peruuta, Del: poista)",
+        "Trykk en tast eller museknapp (Esc: avbryt, Del: fjern)",
+        "Tryck på en tangent eller musknapp (Esc: avbryt, Del: rensa)", "キーかマウスボタンをおす (Esc:やめる、Del:けす)", "키나 마우스 버튼을 누르세요 (Esc: 취소, Del: 지우기)"}},
+    {P(RemapPressButton), {"Press a controller button (Esc or wait: cancel, Del: clear)",
+        "Appuie sur un bouton de la manette (Échap ou attendre : annuler, Suppr : effacer)",
+        "Premi un pulsante del controller (Esc o attendi: annulla, Canc: cancella)",
+        "Controllertaste drücken (Esc oder warten: Abbruch, Entf: löschen)",
+        "Pulsa un botón del mando (Esc o espera: cancelar, Supr: borrar)",
+        "Druk op een controllerknop (Esc of wachten: annuleren, Del: wissen)",
+        "Prime um botão do comando (Esc ou esperar: cancelar, Del: limpar)",
+        "Tryk på en knap på controlleren (Esc eller vent: annuller, Del: ryd)",
+        "Paina ohjaimen painiketta (Esc tai odota: peruuta, Del: poista)",
+        "Trykk en knapp på kontrolleren (Esc eller vent: avbryt, Del: fjern)",
+        "Tryck på en knapp på handkontrollen (Esc eller vänta: avbryt, Del: rensa)",
+        "コントローラのボタンをおす (Escかまつ:やめる、Del:けす)", "컨트롤러 버튼을 누르세요 (Esc 또는 기다리기: 취소, Del: 지우기)"}},
+    {P(RemapFixed), {"fixed", "fixe", "fisso", "fest", "fijo", "vast", "fixo", "fast", "kiinteä", "fast", "fast", "こてい", "고정"}},
+    // P: VR Settings (vr.h)
+    {P(VrSettings), {"VR Settings", "Réglages VR", "Impostazioni VR", "VR-Einstellungen", "Ajustes de RV",
+        "VR-instellingen", "Definições de RV", "VR-indstillinger", "VR-asetukset", "VR-innstillinger", "VR-inställningar", "VR設定", "VR 설정"}},
+    {P(VrMode), {"VR Mode", "Mode VR", "Modalità VR", "VR-Modus", "Modo RV", "VR-modus", "Modo RV", "VR-tilstand",
+        "VR-tila", "VR-modus", "VR-läge", "VRモード", "VR 모드"}},
+    {P(VrImmersive), {"Immersive", "Immersif", "Immersiva", "Immersiv", "Inmersivo", "Immersief", "Imersivo", "Immersiv",
+        "Immersiivinen", "Immersiv", "Immersiv", "イマーシブ", "몰입형"}},
+    {P(VrFlatScreen), {"Flat Screen", "Écran plat", "Schermo piatto", "Flacher Bildschirm", "Pantalla plana",
+        "Plat scherm", "Ecrã plano", "Flad skærm", "Litteä näyttö", "Flat skjerm", "Platt skärm", "フラット画面", "평면 화면"}},
+    {P(VrFirstPerson), {"First Person (Experimental)", "Première personne (expérimental)",
+        "Prima persona (sperimentale)", "Ego-Perspektive (experimentell)", "Primera persona (experimental)",
+        "Eerste persoon (experimenteel)", "Primeira pessoa (experimental)", "Førsteperson (eksperimentel)",
+        "Ensimmäinen persoona (kokeellinen)", "Førsteperson (eksperimentell)", "Förstaperson (experimentell)", "一人称視点(実験的)", "1인칭 시점 (실험적)"}},
+    {P(VrVignette), {"Comfort Vignette", "Vignette de confort", "Vignettatura comfort", "Komfort-Vignette",
+        "Viñeta de confort", "Comfortvignet", "Vinheta de conforto", "Komfortvignet", "Mukavuusvinjetti",
+        "Komfortvignett", "Komfortvinjett", "ビネット", "멀미 방지 비네트"}},
+    {P(VrLow), {"Low", "Faible", "Bassa", "Schwach", "Baja", "Laag", "Baixa", "Lav", "Matala", "Lav", "Låg", "よわい", "낮음"}},
+    {P(VrMedium), {"Medium", "Moyenne", "Media", "Mittel", "Media", "Middel", "Média", "Middel", "Keskitaso", "Middels",
+        "Medel", "ふつう", "보통"}},
+    {P(VrHigh), {"High", "Forte", "Alta", "Stark", "Alta", "Hoog", "Alta", "Høj", "Korkea", "Høy", "Hög", "つよい", "높음"}},
+    {P(VrScreenSize), {"Screen Size", "Taille de l'écran", "Dimensione schermo", "Bildschirmgröße", "Tamaño de pantalla",
+        "Schermgrootte", "Tamanho do ecrã", "Skærmstørrelse", "Näytön koko", "Skjermstørrelse", "Skärmstorlek", "画面サイズ", "화면 크기"}},
+    {P(VrSmall), {"Small", "Petit", "Piccolo", "Klein", "Pequeña", "Klein", "Pequeno", "Lille", "Pieni", "Liten", "Liten",
+        "ちいさい", "작게"}},
+    {P(VrLarge), {"Large", "Grand", "Grande", "Groß", "Grande", "Groot", "Grande", "Stor", "Suuri", "Stor", "Stor", "おおきい", "크게"}},
+    {P(VrRefreshRate), {"Refresh Rate", "Fréquence d'affichage", "Frequenza di aggiornamento", "Bildwiederholrate",
+        "Frecuencia de actualización", "Verversingssnelheid", "Taxa de atualização", "Opdateringshastighed",
+        "Virkistystaajuus", "Oppdateringsfrekvens", "Uppdateringsfrekvens", "リフレッシュレート", "주사율"}},
+    {P(VrEyeResolution), {"Eye Resolution", "Résolution par oeil", "Risoluzione per occhio", "Auflösung pro Auge",
+        "Resolución por ojo", "Resolutie per oog", "Resolução por olho", "Opløsning pr. øje", "Tarkkuus silmää kohden",
+        "Oppløsning per øye", "Upplösning per öga", "かいぞうど", "한쪽 눈 해상도"}},
+    {P(VrFoveation), {"Foveation", "Rendu fovéal", "Foveazione", "Foveated Rendering", "Foveación", "Foveated rendering",
+        "Foveação", "Foveering", "Foveaatio", "Foveering", "Foveering", "しゅうへんかいぞうど", "포비에이션"}},
+    {P(VrMultiview), {"Multiview", "Multivue", "Multivista", "Multiview", "Multivista", "Multiview", "Multivisão", "Multiview",
+        "Moninäkymä", "Multiview", "Multivy", "マルチビュー", "멀티뷰"}},
+    {P(VrUpscaling), {"Upscaling", "Mise à l'échelle", "Upscaling", "Hochskalierung", "Escalado", "Opschalen", "Upscaling",
+        "Opskalering", "Skaalaus", "Oppskalering", "Uppskalning", "アップスケール", "업스케일링"}},
+    {P(VrSharpen), {"Sharpen", "Netteté", "Nitidezza", "Schärfen", "Nitidez", "Verscherpen", "Nitidez", "Skarphed",
+        "Terävöinti", "Skarphet", "Skärpa", "シャープ", "선명하게"}},
+    {P(VrSuperResolution), {"Super Resolution", "Super résolution", "Super risoluzione", "Super-Auflösung", "Superresolución",
+        "Superresolutie", "Super-resolução", "Superopløsning", "Superresoluutio", "Superoppløsning", "Superupplösning", "スーパーレゾリューション", "슈퍼 해상도"}},
+    {P(VrDynamic), {"Dynamic", "Dynamique", "Dinamica", "Dynamisch", "Dinámica", "Dynamisch", "Dinâmica", "Dynamisk",
+        "Dynaaminen", "Dynamisk", "Dynamisk", "じどう", "자동"}},
+    {P(VrWorldScale), {"World Scale", "Échelle du monde", "Scala del mondo", "Weltgröße", "Escala del mundo",
+        "Wereldschaal", "Escala do mundo", "Verdensskala", "Maailman mittakaava", "Verdensskala", "Världsskala",
+        "ワールドスケール", "월드 크기"}},
+    {P(VrRecenter), {"Recenter View", "Recentrer la vue", "Ricentra la visuale", "Ansicht zentrieren", "Recentrar la vista",
+        "Beeld centreren", "Recentrar a vista", "Centrer visningen", "Keskitä näkymä", "Sentrer visningen",
+        "Centrera vyn", "ビューをもどす", "시점 재설정"}},
+    {P(VrCutscenes), {"Cutscenes", "Cinématiques", "Filmati", "Zwischensequenzen", "Escenas", "Tussenfilmpjes",
+        "Cenas", "Mellemsekvenser", "Välivideot", "Mellomsekvenser", "Mellansekvenser", "ムービー", "동영상"}},
+    {P(VrRcTable), {"RC Car Table View (Beta)", "Voiture RC vue de la table (bêta)", "Auto RC dal tavolo (beta)",
+        "RC-Auto vom Tisch (Beta)", "Coche RC desde la mesa (beta)", "RC-auto vanaf de tafel (bèta)",
+        "Carro RC da mesa (beta)", "RC-bil fra bordet (beta)", "RC-auto pöydältä (beta)", "RC-bil fra bordet (beta)",
+        "RC-bil från bordet (beta)", "RCカー テーブルビュー", "RC 카 테이블 보기 (베타)"}},
+    {P(QuitToLauncher), {"Quit to Launcher", "Retour au lanceur", "Torna al launcher", "Zurück zum Launcher",
+        "Volver al lanzador", "Terug naar de launcher", "Voltar ao launcher", "Tilbage til launcheren",
+        "Palaa käynnistimeen", "Tilbake til startprogrammet", "Tillbaka till startprogrammet", "ランチャーに戻る", "런처로 나가기"}},
+    // P: (audio) the options' Audio Devices page (menu.cpp AentAudio)
+    {P(AudioDevicesPage), {"Audio Devices...", "Périphériques audio...", "Dispositivi audio...", "Audiogeräte...",
+        "Dispositivos de audio...", "Audioapparaten...", "Dispositivos de áudio...", "Lydenheder...", "Äänilaitteet...",
+        "Lydenheter...", "Ljudenheter...", "オーディオデバイス", "오디오 장치..."}},
+    {P(OutputDevice), {"Output", "Sortie", "Uscita", "Ausgabe", "Salida", "Uitvoer", "Saída", "Udgang", "Ulostulo",
+        "Utgang", "Utgång", "スピーカー", "출력"}},
+    {P(InputDevice), {"Microphone", "Microphone", "Microfono", "Mikrofon", "Micrófono", "Microfoon", "Microfone",
+        "Mikrofon", "Mikrofoni", "Mikrofon", "Mikrofon", "マイク", "마이크"}},
+    {P(HeadsetOutputDevice), {"Headset Output", "Sortie du casque", "Uscita cuffie", "Headset-Ausgabe",
+        "Salida de auriculares", "Headsetuitvoer", "Saída dos auscultadores", "Headsetudgang", "Kuulokkeiden ulostulo",
+        "Hodesettutgang", "Headsetutgång", "ヘッドセット", "헤드셋 출력"}},
+    {P(SystemDefault), {"System Default", "Par défaut", "Predefinito", "Systemstandard", "Predeterminado",
+        "Systeemstandaard", "Predefinição", "Systemstandard", "Järjestelmän oletus", "Systemstandard", "Systemstandard",
+        "オート", "시스템 기본값"}},
+    {P(SameAsOutput), {"Same as Output", "Comme la sortie", "Come l'uscita", "Wie Ausgabe", "Igual que la salida",
+        "Zelfde als uitvoer", "Igual à saída", "Samme som udgang", "Sama kuin ulostulo", "Samme som utgang",
+        "Samma som utgång", "スピーカーとおなじ", "출력과 같음"}},
+    {P(NotConnected), {"%s (not connected)", "%s (non connecté)", "%s (non collegato)", "%s (nicht verbunden)",
+        "%s (no conectado)", "%s (niet verbonden)", "%s (não ligado)", "%s (ikke tilsluttet)", "%s (ei yhdistetty)",
+        "%s (ikke tilkoblet)", "%s (inte ansluten)", "%s (なし)", "%s (연결 안 됨)"}},
+    // P: the language menu: a language of the languages folder that plays its voices over this disc's text
+    {P(LanguageVoicesOnly), {"%s (voices only)", "%s (voix seulement)", "%s (solo voci)", "%s (nur Stimmen)",
+        "%s (solo voces)", "%s (alleen stemmen)", "%s (apenas vozes)", "%s (kun stemmer)", "%s (vain äänet)",
+        "%s (bare stemmer)", "%s (endast röster)", "%s (音声のみ)", "%s (음성만)"}},
+    // P: the options' Language... page (the text and the voices apart; G: the Japanese 使用する言語 of the title's menu)
+    {P(LanguagePage), {"Language...", "Langue...", "Lingua...", "Sprache...", "Idioma...", "Taal...", "Idioma...",
+        "Sprog...", "Kieli...", "Språk...", "Språk...", "使用する言語", "언어..."}},
+    {P(TextLanguage), {"Text Language", "Langue du texte", "Lingua del testo", "Textsprache", "Idioma del texto",
+        "Teksttaal", "Idioma do texto", "Tekstsprog", "Tekstin kieli", "Tekstspråk", "Textspråk", "テキストの言語", "텍스트 언어"}},
+    {P(VoiceLanguage), {"Voice Language", "Langue des voix", "Lingua delle voci", "Sprache der Stimmen",
+        "Idioma de las voces", "Taal van de stemmen", "Idioma das vozes", "Stemmernes sprog", "Puheen kieli",
+        "Stemmenes språk", "Rösternas språk", "音声の言語", "음성 언어"}},
+    {P(SameAsText), {"Same as Text", "Comme le texte", "Come il testo", "Wie der Text", "Igual que el texto",
+        "Zelfde als tekst", "Igual ao texto", "Samme som tekst", "Sama kuin teksti", "Samme som tekst", "Samma som text",
+        "テキストとおなじ", "텍스트와 같음"}},
+    {P(FromNextArea), {"%s (next area)", "%s (zone suivante)", "%s (prossima zona)", "%s (nächstes Gebiet)",
+        "%s (próxima zona)", "%s (volgend gebied)", "%s (próxima zona)", "%s (næste område)", "%s (seuraava alue)",
+        "%s (neste område)", "%s (nästa område)", "%s (次のエリア)", "%s (다음 지역부터)"}},
+    // P: the display options' Upscaling (fsr.h; the Japanese in kana, the font's)
+    {P(Upscaling), {"Upscaling", "Mise à l'échelle", "Upscaling", "Hochskalierung", "Reescalado", "Opschaling",
+        "Aumento de resolução", "Opskalering", "Skaalaus", "Oppskalering", "Uppskalning", "アップスケール", "업스케일링"}},
+    {P(UpscaleMethod), {"Method", "Méthode", "Metodo", "Methode", "Método", "Methode", "Método", "Metode", "Menetelmä",
+        "Metode", "Metod", "ほうしき", "방식"}},
+    {P(UpscalePreset), {"Preset", "Préréglage", "Preimpostazione", "Voreinstellung", "Ajuste", "Voorinstelling",
+        "Predefinição", "Niveau", "Esiasetus", "Nivå", "Nivå", "プリセット", "프리셋"}},
+    {P(UpscaleSharpness), {"Sharpness", "Netteté", "Nitidezza", "Schärfe", "Nitidez", "Scherpte", "Nitidez", "Skarphed",
+        "Terävyys", "Skarphet", "Skärpa", "シャープネス", "선명도"}},
+    {P(UltraQuality), {"Ultra Quality", "Ultra qualité", "Qualità ultra", "Ultra-Qualität", "Calidad ultra",
+        "Ultrakwaliteit", "Qualidade ultra", "Ultrakvalitet", "Ultralaatu", "Ultrakvalitet", "Ultrakvalitet",
+        "ウルトラクオリティ", "울트라 품질"}},
+    {P(Quality), {"Quality", "Qualité", "Qualità", "Qualität", "Calidad", "Kwaliteit", "Qualidade", "Kvalitet", "Laatu",
+        "Kvalitet", "Kvalitet", "クオリティ", "품질"}},
+    {P(Balanced), {"Balanced", "Équilibré", "Bilanciato", "Ausgewogen", "Equilibrado", "Gebalanceerd", "Equilibrado",
+        "Balanceret", "Tasapainoinen", "Balansert", "Balanserad", "バランス", "균형"}},
+    {P(Performance), {"Performance", "Performance", "Prestazioni", "Leistung", "Rendimiento", "Prestaties", "Desempenho",
+        "Ydelse", "Suorituskyky", "Ytelse", "Prestanda", "パフォーマンス", "성능"}},
+    // P: the cel outlines' width (display.h outlineThickness; the Japanese in kana, the font's)
+    {P(OutlineThickness), {"Outline Thickness", "Épaisseur des contours", "Spessore dei contorni", "Konturstärke",
+        "Grosor del contorno", "Dikte van de omlijning", "Espessura do contorno", "Konturtykkelse", "Ääriviivojen paksuus",
+        "Konturtykkelse", "Konturtjocklek", "りんかくせんのふとさ", "외곽선 두께"}},
+    {P(VrSnapTurn), {"Snap Turn", "Rotation par crans", "Rotazione a scatti", "Drehen in Schritten", "Giro por pasos",
+        "Draaien in stappen", "Rotação por passos", "Drej i trin", "Käänny askelin", "Snu i trinn", "Vrid i steg",
+        "スナップターン", "스냅 회전"}},
+    {P(VrMenuLeft), {"Menu (Left)", "Menu (gauche)", "Menu (sinistro)", "Menü (links)", "Menú (izquierdo)", "Menu (links)",
+        "Menu (esquerdo)", "Menu (venstre)", "Valikko (vasen)", "Meny (venstre)", "Meny (vänster)", "メニュー(ひだり)",
+        "메뉴 (왼쪽)"}},
+    {P(VrMenuRight), {"Menu (Right)", "Menu (droite)", "Menu (destro)", "Menü (rechts)", "Menú (derecho)", "Menu (rechts)",
+        "Menu (direito)", "Menu (højre)", "Valikko (oikea)", "Meny (høyre)", "Meny (höger)", "メニュー(みぎ)",
+        "메뉴 (오른쪽)"}},
+    // P: the display options' Monitor (settings v22; a monitor's own name is shown as the system gives it)
+    {P(Monitor), {"Monitor", "Écran", "Monitor", "Monitor", "Monitor", "Monitor", "Monitor", "Skærm", "Näyttö", "Skjerm",
+        "Skärm", "モニター", "모니터"}},
+    {P(Primary), {"Primary", "Principal", "Principale", "Primär", "Principal", "Primair", "Principal", "Primær",
+        "Ensisijainen", "Primær", "Primär", "メイン", "기본"}},
+    // P: the Language... page left with a new language waiting (menu.cpp): the question and its two answers (the Japanese in
+    // kana, the font's)
+    {P(LangReloadQuestion), {"Restart from the last checkpoint now to use the new language? Otherwise it changes when the next area loads.",
+        "Recommencer au dernier point de contrôle maintenant pour utiliser la nouvelle langue ? Sinon, elle changera au chargement de la prochaine zone.",
+        "Ricominciare ora dall'ultimo checkpoint per usare la nuova lingua? Altrimenti cambierà al caricamento della prossima zona.",
+        "Jetzt vom letzten Kontrollpunkt neu starten, um die neue Sprache zu verwenden? Sonst wechselt sie, wenn das nächste Gebiet lädt.",
+        "¿Reiniciar ahora desde el último punto de control para usar el nuevo idioma? Si no, cambiará al cargar la próxima zona.",
+        "Nu opnieuw beginnen vanaf het laatste checkpoint om de nieuwe taal te gebruiken? Anders verandert die wanneer het volgende gebied laadt.",
+        "Recomeçar agora a partir do último ponto de controlo para usar o novo idioma? Caso contrário, muda quando a próxima zona carregar.",
+        "Start forfra fra det sidste checkpoint nu for at bruge det nye sprog? Ellers skifter det, når det næste område indlæses.",
+        "Aloitetaanko nyt viimeisestä tarkistuspisteestä uudella kielellä? Muuten kieli vaihtuu, kun seuraava alue latautuu.",
+        "Start på nytt fra siste sjekkpunkt nå for å bruke det nye språket? Ellers endres det når neste område lastes inn.",
+        "Börja om från den senaste kontrollpunkten nu för att använda det nya språket? Annars byts det när nästa område laddas.",
+        "あたらしいげんごにするため、さいごのチェックポイントからやりなおしますか?やりなおさないと、つぎのエリアからかわります。",
+        "새 언어를 쓰려면 지금 마지막 체크포인트에서 다시 시작할까요? 아니면 다음 지역을 불러올 때 바뀝니다."}},
+    {P(LangReloadNow), {"Restart Now", "Recommencer", "Ricomincia", "Neu starten", "Reiniciar", "Opnieuw beginnen",
+        "Recomeçar", "Start forfra", "Aloita alusta", "Start på nytt", "Börja om", "やりなおす", "지금 다시 시작"}},
+    {P(LangReloadLater), {"Next Area", "Zone suivante", "Prossima zona", "Nächstes Gebiet", "Próxima zona",
+        "Volgend gebied", "Próxima zona", "Næste område", "Seuraava alue", "Neste område", "Nästa område", "つぎのエリア",
+        "다음 지역부터"}},
+    // P: the display options' HUD Placement (display.h hudPlacement) and its Match Screen (the picture's own shape; the
+    // Japanese / Korean as Fit to Screen's)
+    {P(HudPlacement), {"HUD Placement", "Position du HUD", "Posizione HUD", "HUD-Position", "Posición del HUD",
+        "HUD-positie", "Posição do HUD", "HUD-placering", "HUD:n sijoittelu", "HUD-plassering", "HUD-placering",
+        "HUDのいち", "HUD 위치"}},
+    {P(MatchScreen), {"Match Screen", "Selon l'écran", "Come lo schermo", "Wie Bildschirm", "Igual que la pantalla",
+        "Zoals scherm", "Igual ao ecrã", "Som skærmen", "Näytön mukaan", "Som skjermen", "Som skärmen", "画面に合わせる",
+        "화면에 맞춤"}},
 };
 // clang-format on
+#undef P
 static_assert(std::size(s_arow) == PTX_Max, "one row per PTX");
 
 constexpr bool FRowsInOrder()
@@ -324,19 +548,84 @@ static_assert(FRowsInOrder(), "the rows in PTX order");
 
 int IlangTable()
 {
-    return g_nLang >= 0 && g_nLang < CLANG ? g_nLang : LANG_English;
+    // (the text's language: a store language's own, or the disc's that it falls back to; region.h LangText; a custom
+    // language: the column of the language it is based on, langstore.h LangPortBase)
+    const int lang = LangText();
+    const int ilang = lang >= 0 && lang < CLANG ? lang : LangPortBase(lang);
+    // (the Japanese / Korean column needs that script's font: the Japanese / Korean disc's, or the languages folder's
+    // on the other discs; Latin columns drawn with it are folded: StrToGameText)
+    if (ilang == LANG_Japanese && !(FWideChars() && ScriptOfTextShown() == SCRIPT_Japanese)) return LANG_English;
+    if (ilang == LANG_Korean && !(FWideChars() && ScriptOfTextShown() == SCRIPT_Korean)) return LANG_English;
+    return ilang;
 }
 
-const char* SzRow(PTX ptx) { return s_arow[ptx].asz[IlangTable()]; }
+// A string's printf conversions in order ("%s%d"; "%%" is none): a "port" string must have the built-in English one's
+std::string StrFormats(const char* sz)
+{
+    std::string out;
+    for (const char* pch = sz; *pch; ++pch)
+    {
+        if (*pch != '%') continue;
+        if (pch[1] == '%') { ++pch; continue; }
+        ++pch;
+        while (*pch && std::strchr("-+ #0123456789.*hlzjtL", *pch)) ++pch;
+        if (!*pch) { out += '!'; break; }
+        out += '%';
+        out += *pch;
+    }
+    return out;
+}
+
+// The text's language's own port string (its Text.json "port", langstore.h) by row name, UTF-8; nullptr: none. A string
+// whose printf conversions differ from the English's is not used (it would read past its arguments); said once.
+const char* SzPortOverride(const char* name, const char* szEnglish)
+{
+    const auto* pmp = PmpPortTextShown();
+    if (!pmp) return nullptr;
+    const auto it = pmp->find(name);
+    if (it == pmp->end()) return nullptr;
+    if (StrFormats(it->second.c_str()) != StrFormats(szEnglish))
+    {
+        static std::mutex s_mtxWarned;
+        static std::set<std::string> s_asetWarned;
+        std::lock_guard<std::mutex> lock(s_mtxWarned);
+        if (s_asetWarned.insert(name).second)
+            std::fprintf(stderr, "porttext: the language's \"%s\" is not used: its %%-codes (%s) are not the English one's (%s)\n", name,
+                         StrFormats(it->second.c_str()).c_str(), StrFormats(szEnglish).c_str());
+        return nullptr;
+    }
+    return it->second.c_str();
+}
+
+const char* SzRow(PTX ptx)
+{
+    if (const char* sz = SzPortOverride(s_arow[ptx].name, s_arow[ptx].asz[LANG_English])) return sz;
+    return s_arow[ptx].asz[IlangTable()];
+}
+
+// An action group's row name: "ActionGroup.ClimbingAndLedges" (the group's English words joined, each capitalised)
+std::string StrActionGroupKey(std::string_view group)
+{
+    std::string key = "ActionGroup.";
+    bool fUpper = true;
+    for (char ch : group)
+    {
+        if (!std::isalnum(static_cast<unsigned char>(ch))) { fUpper = true; continue; }
+        key += fUpper ? char(std::toupper(static_cast<unsigned char>(ch))) : ch;
+        fUpper = false;
+    }
+    return key;
+}
 
 #include "porttext_actions.inc"
 
-// the language writes decimals with a comma
+// the language writes decimals with a comma (a language's "port" DecimalMark: "." or ",")
 bool FDecimalComma()
 {
+    if (const char* sz = SzPortOverride("DecimalMark", ".")) return sz[0] == ',';
     switch (IlangTable())
     {
-    case LANG_English: case LANG_Japanese: return false;
+    case LANG_English: case LANG_Japanese: case LANG_Korean: return false;
     default: return true;
     }
 }
@@ -344,23 +633,23 @@ bool FDecimalComma()
 
 std::string StrToGameText(const std::string& utf8)
 {
-    // the Japanese disc's text keeps characters >= 0x80 as UTF-8 already (region.h)
-    if (FWideText()) return utf8;
-    // the other discs' text is Latin-1 (their fonts' glyphs 0x20..0xFF)
-    std::string out;
-    out.reserve(utf8.size());
-    for (size_t i = 0; i < utf8.size();)
+    // 16-bit text keeps characters >= 0x80 as UTF-8 already (region.h FWideChars)
+    if (FWideChars())
     {
-        const uint8_t b = uint8_t(utf8[i]);
-        uint32_t ch = b;
-        size_t cb = 1;
-        if (b >= 0xC0 && b < 0xE0 && i + 1 < utf8.size()) { ch = ((b & 0x1Fu) << 6) | (uint8_t(utf8[i + 1]) & 0x3Fu); cb = 2; }
-        else if (b >= 0xE0 && b < 0xF0 && i + 2 < utf8.size()) { ch = 0x100; cb = 3; }
-        else if (b >= 0xF0) { ch = 0x100; cb = 4; }
-        out += ch < 0x100 ? char(ch) : '?';
-        i += cb;
+        const int ilang = IlangTable();
+        return ilang == LANG_Japanese || ilang == LANG_Korean || FStoreTextWide() ? utf8 : StrFoldLatinForWideFont(utf8);   // (langstore.h)
     }
-    return out;
+    // the other discs' text is Latin-1 (their fonts' glyphs 0x20..0xFF, typographic marks Windows-1252's, others '?': textmod.h)
+    return GameTextOfUtf8(utf8);
+}
+
+bool FQuitToLauncher()
+{
+    static const bool s_f = [] {
+        const char* sz = std::getenv("SAFEHOUSE_LAUNCHER");
+        return sz && std::string(sz) == "collection";
+    }();
+    return s_f;
 }
 
 std::string StrPort(PTX ptx)
@@ -373,12 +662,15 @@ std::string StrPortActionName(cane::sly2input::Action action)
 {
     const size_t index = size_t(action);
     if (index >= cane::sly2input::kActionCount) return {};
+    const std::string key = std::string("Action.") + cane::sly2input::kActions[index].id;
+    if (const char* sz = SzPortOverride(key.c_str(), cane::sly2input::kActions[index].label)) return StrToGameText(sz);
     const int lang = IlangTable();
     return StrToGameText(lang == LANG_English ? cane::sly2input::kActions[index].label : s_actionNames[index].text[lang - 1]);
 }
 
 std::string StrPortActionGroup(std::string_view group)
 {
+    if (const char* sz = SzPortOverride(StrActionGroupKey(group).c_str(), std::string(group).c_str())) return StrToGameText(sz);
     const int lang = IlangTable();
     if (lang != LANG_English)
         for (const auto& row : s_actionGroups)
@@ -403,9 +695,23 @@ std::string StrPortDecimal(float g, int cdigits)
 
 bool FPortEnglish() { return IlangTable() == LANG_English; }
 
+std::vector<std::pair<std::string, std::string>> PortTextColumn(int lang)
+{
+    const int ilang = lang >= 0 && lang < CLANG ? lang : LANG_English;
+    std::vector<std::pair<std::string, std::string>> out;
+    for (const ROW& row : s_arow) out.emplace_back(row.name, row.asz[ilang]);
+    out.emplace_back("DecimalMark", ilang == LANG_English || ilang == LANG_Japanese || ilang == LANG_Korean ? "." : ",");
+    const auto& actions = cane::sly2input::kActions;
+    for (std::size_t i = 0; i < actions.size(); ++i)
+        out.emplace_back(std::string("Action.") + actions[i].id, ilang == LANG_English ? actions[i].label : s_actionNames[i].text[ilang - 1]);
+    for (const auto& row : s_actionGroups)
+        out.emplace_back(StrActionGroupKey(row.group), ilang == LANG_English ? std::string(row.group) : std::string(row.text[ilang - 1]));
+    return out;
+}
+
 std::string StrPortKeyName(int key)
 {
-    if (FPortEnglish()) return PchzKeyName(key);
+    if (FPortEnglish() && !PmpPortTextShown()) return PchzKeyName(key);
     char ach[96];
     auto fmt = [&](PTX ptx, const char* szArg) {
         std::snprintf(ach, sizeof(ach), SzRow(ptx), szArg);
@@ -699,19 +1005,76 @@ constexpr PCROWJP s_apcrowJp[] = {
     {0x2E, "このゲームのデータを読み込めません"},
     {0x31, "\nこのゲームのセーブデータを\nセーブフォルダに置いてください。\n"},
 };
+// the Korean disc's messages (its own ids: the USA's one or two on, with a second "no memory card" 0x12 and "card full"
+// 0x1A that ask to continue), in its words (저장, 진행사항, 에러) with the save data in place of the memory card
+constexpr PCROWJP s_apcrowKr[] = {
+    {0x11, "저장 폴더를 찾을 수 없습니다\n\n슬라이 쿠퍼 2는 100KB의 빈 공간을 필요로 합니다\n\n저장 폴더를 확인하지 않으면 게임을 저장할 수 없습니다\n"},
+    {0x12, "저장 폴더를 찾을 수 없습니다\n\n슬라이 쿠퍼 2는 100KB의 빈 공간을 필요로 합니다\n\n저장 폴더를 확인하지 않으면 게임을 저장할 수 없습니다\n계속 하시겠습니까?"},
+    {0x13, "슬라이 쿠퍼 2 저장 데이터를 읽을 수 없습니다\n\n초기화하지 않으면 진행사항을 저장할 수 없습니다\n\n초기화하시겠습니까?"},
+    {0x14, "\n슬라이 쿠퍼 2 저장 데이터를 초기화하고 있습니다\n\n게임을 끄지 마세요\n"},
+    {0x15, "슬라이 쿠퍼 2 저장 데이터를 초기화하던 중 에러가 발생했습니다\n\n진행사항을 저장할 수 없습니다\n"},
+    {0x16, "슬라이 쿠퍼 2 저장 데이터가 없습니다\n\n슬라이 쿠퍼 2는 100 KB의 디스크 여유 공간을 필요로 합니다\n\n슬라이 쿠퍼 2 저장 데이터를 만들어야만 앞으로의 진행사항을 저장하실 수 있습니다\n\n슬라이 쿠퍼 2 저장 데이터를 생성할까요?"},
+    {0x17, "\n슬라이 쿠퍼 2 저장 데이터를 생성하고 있습니다\n\n게임을 끄지 마세요\n"},
+    {0x18, "슬라이 쿠퍼 2 저장 데이터를 생성하던 중 에러가 발생했습니다\n\n진행사항이 저장되지 않았습니다\n"},
+    {0x19, "슬라이 쿠퍼 2 저장 데이터를 위한 디스크 여유 공간이 부족합니다\n\n슬라이 쿠퍼 2는 100 KB의 여유 공간을 필요로 합니다\n\n디스크 공간을 확보하지 않으면 게임을 저장할 수 없습니다\n"},
+    {0x1A, "슬라이 쿠퍼 2 저장 데이터를 위한 디스크 여유 공간이 부족합니다\n\n슬라이 쿠퍼 2는 100 KB의 여유 공간을 필요로 합니다\n\n디스크 공간을 확보하지 않으면 게임을 저장할 수 없습니다\n계속 하시겠습니까?"},
+    {0x1C, "\n저장중...\n\n게임을 끄지 마세요\n"},
+    {0x1F, "슬라이 쿠퍼 2 저장 데이터를 쓰던 중 에러가 발생했습니다\n\n데이터에 에러가 있을 수 있습니다\n\n게임 진행 사항이 저장되지 않았습니다\n"},
+    {0x23, "\n삭제중...\n\n게임을 끄지 마세요\n"},
+    {0x24, "다음 아이콘이 나타나면,\n진행사항이 저장되는 중입니다\n\n&2a&.\n\n이 아이콘이 나타난 동안에는\n게임을 끄지 마세요\n"},
+    {0x25, "자동 저장에 실패했습니다\n\n자동 저장 기능이 꺼져있습니다\n데이터에 에러가 있을 수 있습니다\n\n게임 저장 옵션을 이용하여 게임을 수동으로 저장한 다음 자동 저장 기능을 재설정 하세요\n"},
+    {0x26, "슬라이 쿠퍼 2 저장 데이터를 더 이상 사용할 수 없습니다\n\n자동저장 기능이 중단되었습니다\n\n게임 저장 옵션을 사용하여 수동으로 저장하고 자동저장 기능을 재설정 하세요\n"},
+    {0x2C, "슬라이 쿠퍼 2 저장 데이터의 일부에 에러가 있습니다\n\n에러가 있는 데이터를 삭제했습니다\n"},
+    {0x2D, "게임 데이터를 읽을 수 없습니다.\n\n슬라이 쿠퍼 2 설치를 확인하세요."},
+    {0x30, "\n슬라이 쿠퍼 2 저장 데이터가 저장 폴더에 있는지 확인하세요\n"},
+    {0x51, "USB 헤드셋: 켜짐"},
+    {0x52, "USB 헤드셋: 꺼짐"},
+};
 // clang-format on
 }  // namespace
 
+const char* SzEpisodeMenuWording(int idDisc)
+{
+    // (lang 2026-11-10) the pause menu's "Exit to Episode Menu" (USA 0x42): the Dutch, Portuguese, Danish, Finnish,
+    // Norwegian and Swedish texts say "DVD menu" (their translators' word for the PS2 disc's menu); every other
+    // language, and the USA / Japanese discs, name the episode menu. Each in its language's own word for an episode
+    // (Dutch "Deel", Finnish "Jakso", Swedish "Episod": the episode menu's "Episode 1" and "Start episode" lines).
+    if (IdTextUsa(idDisc) != 0x42) return nullptr;
+    switch (IlangTable())
+    {
+    case LANG_Dutch: return "Ga naar deelmenu";
+    case LANG_Portuguese: return "Ir para o menu de episódios";
+    case LANG_Danish: return "Afslut til episodemenu";
+    case LANG_Finnish: return "Poistu jaksovalikkoon";
+    case LANG_Norwegian: return "Gå ut til episodemenyen";
+    case LANG_Swedish: return "Avsluta till episodmeny";
+    default: return nullptr;
+    }
+}
+
 const char* SzPcWording(int idDisc)
 {
-    if (FWideText())
+    if (FWideChars() && IlangTable() == LANG_Japanese)
     {
+        // (the other discs: the Japanese disc's id of the same message, region.h)
+        const int idJp = g_disc.Region() == DISCREGION::Japan ? idDisc : IdTextJapanOfUsa(IdTextUsa(idDisc));
         for (const PCROWJP& r : s_apcrowJp)
-            if (r.id == idDisc) return r.sz;
+            if (r.id == idJp) return r.sz;
+        return nullptr;
+    }
+    if (FWideChars() && IlangTable() == LANG_Korean)
+    {
+        // (the other discs: the Korean disc's id of the same message, region.h)
+        const int idKr = g_disc.Region() == DISCREGION::Korea ? idDisc : IdTextKoreaOfUsa(IdTextUsa(idDisc));
+        for (const PCROWJP& r : s_apcrowKr)
+            if (r.id == idKr) return r.sz;
         return nullptr;
     }
     const int ilang = IlangTable();
     if (ilang >= 11) return nullptr;
+    // (a custom language's own messages stay; an English variant's take the English PC wording)
+    if (const int lt = LangText(); lt >= LANG_Max)
+        if (const char* key = SzLangStoreKey(lt); !key || std::strncmp(key, "English", 7) != 0) return nullptr;
     const int idUsa = IdTextUsa(idDisc);
     for (const PCROW& r : s_apcrow)
         if (r.idUsa == idUsa) return r.asz[ilang];

@@ -262,7 +262,7 @@ int JOBCHASE::IBest()
     return iBest;
 }
 
-// orig: 0x0014AD70: one entry toward the best one; run or hop by the entry's kind
+// orig: 0x0014AD70: one entry toward the best one; run or hop by the entry's kind (orig3: 0x15EF88, the same C in the Sly 3 decomp)
 void JOBCHASE::Step()
 {
     if (!pgraph) return;

@@ -9,6 +9,8 @@
 #include "porttext.h"
 
 #include "promptglyph.h"
+#include "hudwidget.h"
+#include "menu.h"
 #include "controlspage.h"
 #include "transition.h"
 
@@ -102,6 +104,8 @@ std::string StrLocalized(const SW* psw, int id)
         {
             // (native: the PS2's memory card messages said for a PC, porttext.h; not a text mod's string, not with
             // the "Original PlayStation Icons" option)
+            const bool fModded = std::find(psw->aidTextModded.begin(), psw->aidTextModded.end(), id) != psw->aidTextModded.end();
+            if (const char* sz = SzEpisodeMenuWording(id); sz && !fModded) return StrToGameText(sz);
             if (FPcWording())
                 if (const char* sz = SzPcWording(id);
                     sz && std::find(psw->aidTextModded.begin(), psw->aidTextModded.end(), id) == psw->aidTextModded.end())
@@ -135,6 +139,19 @@ void PrintScreenLoopers(const SCREENOBJ* pso)
 void CScreenPlayer::Init(const SCREENOBJ* p)
 {
     pso = p;
+    if (static const int s_oidDump = std::getenv("SLY3_SODUMP") ? std::atoi(std::getenv("SLY3_SODUMP")) : -2; pso && pso->oid == s_oidDump)
+        for (size_t g = 0; g < pso->agroup.size(); ++g)
+            for (const SPART& part : pso->agroup[g].apart)
+            {
+                std::printf("sodump %d g %zu part id %d dt %.3f keys %zu\n", pso->oid, g, part.id, part.dt, part.akey.size());
+                for (const SKEY& key : part.akey)
+                {
+                    std::printf("  key t %.3f:", key.t);
+                    for (const SITEM& it : key.aitem) std::printf(" [slot %u elem %u lerp %u col %d]", it.aw[1], it.aw[0], it.b30, it.s6);
+                    for (const auto& c : key.acolor) std::printf(" c(%08X %08X)", c[0], c[1]);
+                    std::printf("\n");
+                }
+            }
     agroup.assign(pso->agroup.size(), SGROUPRT{});
     for (size_t g = 0; g < pso->agroup.size(); ++g)
     {
@@ -340,7 +357,7 @@ void CScreenPlayer::CrossKey(int igroup, int ientry, int ikey, const std::array<
                     const void* powner = g_pfnRtgtOwnerOfId(pnew->idTexture);
                     if (powner && IrtgtAcquire(powner) >= 0) y.prtgtOwner = powner;
                     if (static const bool s_f = std::getenv("SLY2N_RTGTBIND") != nullptr; s_f)   // (debug)
-                        std::printf("rtgt bind id 0x%X owner %p taken %d player %d\n", pnew->idTexture, powner, y.prtgtOwner != nullptr, g_transition.ploPlayer ? g_transition.ploPlayer->oid : -1);
+                        std::printf("rtgt bind id 0x%X owner %p (oid %d cid 0x%X parent %d) taken %d player %d\n", pnew->idTexture, powner, powner ? static_cast<const LO*>(powner)->oid : -1, powner ? static_cast<const LO*>(powner)->Cid() : -1, powner && static_cast<const LO*>(powner)->paloParent ? static_cast<const LO*>(powner)->paloParent->oid : -1, y.prtgtOwner != nullptr, g_transition.ploPlayer ? g_transition.ploPlayer->oid : -1);
                 }
                 if (pnew && pnew->kind == SELEMK_Ref && pnew->ref < agroup.size())
                 {
@@ -826,6 +843,7 @@ void CScreenPlayer::Draw(const FONTBRX* pfont, const FONTBRX* pfontIcons, const 
     }
     auto drawPiece = [&](const SSLOT& y, const HUDSTATE& st) {
         const SELEM& el = *y.pelem;
+        if (g_pfnHudPiece3 && pso && g_pfnHudPiece3(pso->oid, int(&el - pso->aelem.data()), el, st)) return;   // (hud.h: s3-plane's duel3)
         switch (el.kind)
         {
         case SELEMK_Sprite: g_hud.DrawSprite(el, st); break;
@@ -847,6 +865,8 @@ void CScreenPlayer::Draw(const FONTBRX* pfont, const FONTBRX* pfontIcons, const 
                 // the subtitle (0x216BC8's 0x2EF): the line's whole text wrapped (0x215F40), typed by the line's time
                 // (0x227820), then only its last lines that fit the box (height +0x28 / size +0x20) kept
                 if (!FDialogSubtitleText(&text)) break;
+                // (lang: the words L3 / R3 / START / SELECT as the device's icons in the subtitles too, promptglyph.h)
+                if (pfontIcons) text = StrPromptButtonWords(text, IdTextUsa(g_dialogsub.id));
                 text = StrDialogSubtitleTyped(StrWrapped(*pfont, pfontIcons, text, el.ag3[0] / 51.2f, el.ag3[1]));
                 int cline = 1;
                 for (char ch : text) cline += ch == '\n';
@@ -861,9 +881,32 @@ void CScreenPlayer::Draw(const FONTBRX* pfont, const FONTBRX* pfontIcons, const 
             {
                 text = el.ab3[1] == 1 && g_pfnScriptString ? g_pfnScriptString(el.n3) : StrLocalized(psw, el.n3);
                 // (QoL N39: the words START / SELECT as the device's icons, promptglyph.h)
-                if (pfontIcons) text = StrPromptButtonWords(text);
+                if (pfontIcons) {
+                    const int subtitle = el.ab3[1] == 1 && el.n3 == 0x2EF ? IdTextUsa(g_dialogsub.id) : -1;
+                    text = StrPromptButtonWords(text, subtitle);
+                }
             }
-            if (std::getenv("SLY2N_TEXTPRINT"))
+            const bool scriptText = el.ab3[1] == 1;
+            int promptId = el.n3;
+            if (scriptText) {
+                if (el.n3 == 0x2F1) promptId = IdDisplayedHudPrompt();
+                else if (el.n3 == 0x2EF) promptId = g_dialogsub.id;
+                else promptId = -1;
+            }
+            const PROMPTTEXTGLYPHS promptContext(IdTextUsa(promptId));
+            std::optional<PROMPTKEYGLYPH> menuBinding;
+            int binding;
+            bool controller;
+            if (pfontIcons && scriptText && FMenuActionPrompt(el.n3, binding, controller)) {
+                using cane::input::Family;
+                Family family = controller ? PromptFamily() : Family::Keyboard;
+                if (controller && family == Family::Keyboard) family = Family::PlayStation;
+                if (PromptGlyphForBinding(binding, family).kind != PROMPTGLYPH::Original) {
+                    text += "  &2T&.";
+                    menuBinding.emplace('T', binding, binding, family);
+                }
+            }
+            if (static const bool s_fTextPrint = std::getenv("SLY2N_TEXTPRINT") != nullptr; s_fTextPrint)
                 std::fprintf(stderr, "textelem kind %d id 0x%X: '%s'\n", int(el.ab3[1]), unsigned(el.n3), text.c_str());
             if (text.empty()) break;
             // (the subtitle 0x2EF in its speaker's colour: font_brx's 0x4435F4)
@@ -911,6 +954,37 @@ void CScreenPlayer::Draw(const FONTBRX* pfont, const FONTBRX* pfontIcons, const 
                         if (g <= t) EndHudPromptTicker();
                     }
                     x -= u / period * dxText;
+                }
+            }
+            // (PC: the pause / options wheel's entries 815..824 (orig3 0x25F440): the PC rows' long values, e.g. "Resolution:
+            // Native (1280 x 720)", wrapped to a second line over the next entry: a row wider than its box is narrowed to
+            // fit on one line (at most to 60 %), past that cut with "..."; the original's entries all fit unchanged)
+            float sxText = sx;
+            if (scriptText && el.n3 >= 815 && el.n3 <= 824 && wBox > 0.0f && text.find('\n') == std::string::npos)
+            {
+                const float k88 = el.ag3[0] / 51.2f;
+                const float w = DxTextUi(*pfont, pfontIcons, text, k88);
+                if (w > wBox)
+                {
+                    constexpr float gMin = 0.6f;
+                    if (w * gMin > wBox)
+                    {
+                        // (cut at a whole UTF-8 letter, not inside an '&' escape)
+                        const std::string dots = "...";
+                        while (!text.empty() && DxTextUi(*pfont, pfontIcons, text + dots, k88) * gMin > wBox)
+                        {
+                            size_t cut = text.size() - 1;
+                            while (cut > 0 && (static_cast<unsigned char>(text[cut]) & 0xC0) == 0x80) --cut;
+                            text.resize(cut);
+                            if (text.size() >= 2 && text[text.size() - 2] == '&') text.resize(text.size() - 2);
+                            else if (!text.empty() && text.back() == '&') text.pop_back();
+                        }
+                        text += dots;
+                    }
+                    const float g = std::max(gMin, wBox / DxTextUi(*pfont, pfontIcons, text, k88));
+                    sxText = sx * g;
+                    wBox /= g;   // (the same box: DrawTextBox aligns in wBox x its sx)
+                    fWrap = false;
                 }
             }
             // orig: 0x00215BA8 / 0x002162D8: text uses the owning screen's canvas origin,
@@ -961,7 +1035,7 @@ void CScreenPlayer::Draw(const FONTBRX* pfont, const FONTBRX* pfontIcons, const 
                 td.ptext = &text;
                 if (g_pfnTextDrawHook(td)) break;
             }
-            g_hud.DrawTextBox(*pfont, pfontIcons, text, xText, yText, el.ag3[0], sx, sy, wBox, el.ag3[2], el.ab3[0],
+            g_hud.DrawTextBox(*pfont, pfontIcons, text, xText, yText, el.ag3[0], sxText, sy, wBox, el.ag3[2], el.ab3[0],
                               0, off, sc, offIcon, st.depth, fWrap);
             break;
         }

@@ -24,6 +24,8 @@ struct POCKET
     int fMore = 0;       // +0x490
     int nMode = -1;      // +0x3FC (-1 / 0 / 1 / 2)
     float tMode = 0.0f;  // +0x400
+    int fPlanted = 0;    // (Sly 3 +0x4A4) a planted object readied in the pocket (orig3 0x13EE68): one taken, not counted
+    int fTakeCancel = 0; // (Sly 3 +0x4A8) set by the take's task event 0x11 (orig3 0x141350) to refuse the take
 };
 
 POCKET& PocketOf(LO* plo);           // (created empty)
@@ -34,16 +36,17 @@ SMA** PpsmaPocket(LO* ppocket);         // orig 0x001C2D20 (the pocket object's 
 void AddPocketPrize(LO* plo, int oid);   // orig 0x001F17B0
 void AddPocketCoins(LO* plo, int c);     // orig 0x001F1768
 void SetPocketMode(LO* plo, int n);      // orig 0x001F17F8
-void UpdatePocketMode(LO* plo);          // orig 0x001F1900
+void UpdatePocketMode(LO* plo);          // orig3 0x001F18D0
+bool FPocketPickable(LO* plo);           // orig3 0x001F1A08
 void FillPocket(LO* plo);                // orig 0x001F1A40
 void NextPocketPrize(LO* plo);           // orig 0x001F1CF8
-LO* PloTakePocket(LO* plo);              // orig 0x001F1E20
+LO* PloTakePocket(LO* plo, const glm::vec3& posTarget, bool fCoinDelay);  // orig3 0x001F1E18
 
 // The pocket object's reward (+0x150 the launch point record, +0x154 the proxy, +0x158 the instance)
 void ClearReward(LO* ppocket);                                      // orig 0x001C2DB8
 struct XF* PxfRewardPoint(LO* ppocket);                            // the pocket object's +0x150 (null: none readied)
 int NReadyReward(LO* ppocket, LO* plo, int id, int oidPoint);       // orig 0x001C2DC8
-LO* PloLaunchReward(LO* ppocket, int c);                            // orig 0x001C2EF0
+LO* PloLaunchReward(LO* ppocket, int c, const glm::vec3& posTarget, bool fCoinDelay);  // orig3 0x001F2C00
 
 struct SCENE;
 struct EXTRADRAW;

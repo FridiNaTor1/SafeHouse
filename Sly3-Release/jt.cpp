@@ -1,6 +1,8 @@
 // jt.cpp: the players' interaction objects (jt.h): the lists by kind, the description parts, the pipe's frame.
 #include "jt.h"
 #include "game/sly3.h"
+#include "pe.h"
+#include "splitscreen3.h"
 #include "region.h"
 
 #include "alo.h"
@@ -222,7 +224,7 @@ JTDESC JtDescOf(LO* plo, JTL jtl)
     return d;
 }
 
-// orig: 0x001A6318 (vt slot 31: an SO's object record's world matrix; a LOX's matrix in its reference record's frame)
+// orig: 0x001A6318 (vt slot 31: an SO's object record's world matrix; a LOX's matrix in its reference record's frame) (orig3: 0x1FC8D0, the same code in Sly 3)
 glm::mat4 MatJtLo(LO* plo)
 {
     if (!plo) return glm::mat4(1.0f);
@@ -258,7 +260,7 @@ glm::vec3 VecJtConvert(LO* a, LO* b, const glm::vec3& v)
 
 const CRV* PcrvJtPipe(LO* ppipe) { return ppipe && FIsLoDerivedFrom(ppipe, S3CID(0x0A)) ? PcrvFromLo(ppipe) : nullptr; }
 
-// orig: 0x001E6728
+// orig: 0x001E6728 (orig3: 0x22E0B8, the same C in the Sly 3 decomp)
 float SClampCrv(const CRV* pcrv, float s)
 {
     if (pcrv->fClosed) return SWrapCrv(pcrv, s);
@@ -432,10 +434,11 @@ glm::vec3 PosHookTarget(LO* plo)
 glm::vec3 PosActorProbe0(ACTOR* pa);  // jump.cpp (+0x218: the custom entry's probe point)
 
 JTTRACK g_jttrack;
+bool g_fJtOtherPlayer3 = false;
 void ResetJtTrack() { g_jttrack = JTTRACK{}; }
 LO* PloNewJtAura(LO* pproxy, const JTENT& e);
 
-// orig: 0x00195608
+// orig: 0x00195608 (orig3: 0x1B6E58, the same C in the Sly 3 decomp)
 void ShowJtAura(SW* psw, LO* plo)
 {
     if (!plo || !psw) return;
@@ -515,7 +518,7 @@ float GJtInit(LO* plo, JTL jtl, ACTOR* pa)
     {
         // orig: 0x001834D0
         const glm::vec3 d = PosActorProbe0(pa) - PosJtLo(plo);
-        const uint32_t u = plo->U32Field(0, 0x11C, 0);
+        const uint32_t u = plo->U32Field(0, 0x10C, 0);
         float radius;
         std::memcpy(&radius, &u, sizeof(radius));
         return std::atan2(d.y, d.x) * radius;
@@ -560,7 +563,7 @@ glm::vec3 PosJt(LO* plo, JTL jtl, ACTOR* pa, float g)
     case JTL_Wall:
     {
         // orig: 0x00183540 (the parameter is arc length around the wall)
-        const uint32_t u = plo->U32Field(0, 0x11C, 0);
+        const uint32_t u = plo->U32Field(0, 0x10C, 0);
         float radius;
         std::memcpy(&radius, &u, sizeof(radius));
         return PosJtLo(plo) + cmm::SetVectorCylind(g / radius, radius + pa->g103C, 0.0f) - base;
@@ -568,7 +571,7 @@ glm::vec3 PosJt(LO* plo, JTL jtl, ACTOR* pa, float g)
     case JTL_Swing:
     {
         // orig: 0x00183818 (kind 0 has the actor's outward offset)
-        const float offset = plo->U32Field(0, 0x11C, 0) == 0 ? pa->g103C : 0.0f;
+        const float offset = plo->U32Field(0, 0x10C, 0) == 0 ? pa->g103C : 0.0f;
         return (PosJtLo(plo) - base) + glm::vec3(MatJtLo(plo)[0]) * offset;
     }
     case JTL_Use: return PosJtLo(plo);            // 0x184208
@@ -582,7 +585,7 @@ float DistJtAdjust(LO* plo, JTL jtl, float d)
 {
     if (jtl != JTL_Use) return d;
     float r = 200.0f;
-    const uint32_t u = plo->U32Field(0, 0x120, 0);
+    const uint32_t u = plo->U32Field(0, 0x110, 0);
     if (u) std::memcpy(&r, &u, 4);
     return d - (r - (250.0f - 150.0f));
 }
@@ -782,7 +785,7 @@ glm::vec3 PosJtDesc(LO* plo, JTL jtl, ACTOR* pa, float g, float* prad)
         }
         else if (jtl == JTL_Wall)
         {
-            const uint32_t u = plo->U32Field(0, 0x11C, 0);
+            const uint32_t u = plo->U32Field(0, 0x10C, 0);
             float radius;
             std::memcpy(&radius, &u, sizeof(radius));
             *prad = g / radius + (pa->n1040 == 1 ? 3.1415927f : 0.0f);  // 0x183540
@@ -857,11 +860,11 @@ void RandomJtPoint(LO* plo, JTL jtl, float g, glm::vec3* ppos, glm::vec3* pdir)
             const float s = SRandCrvNear(pcrv, g, 150.0f);  // D_002C0D10
             const glm::mat3 m = MatPipeFrame(plo, true, s);
             EvalCrvS(pcrv, s, &pos, nullptr);  // 0x1E6F10
-            const float n = GRandInRange(-1.0f, 1.0f);
+            const float n = GRandPe(-1.0f, 1.0f);
             const float mag = std::fabs(n);
             const glm::vec3 v = VecCylind(n * mag * 1.8f, -1.0f, 0.0f);  // D_002C0D08
             dir = m[0] * v.x + m[1] * v.y + m[2] * v.z;
-            *ppos = pos + dir * (mag * GRandInRange(0.0f, 25.0f));  // D_002C0D0C
+            *ppos = pos + dir * (mag * GRandPe(0.0f, 25.0f));  // D_002C0D0C
             *pdir = dir;
             if (std::getenv("SLY2N_SPARKLEPRINT"))
                 std::printf("sparkle pipe %d s %.0f curve %.0f %.0f %.0f x row %.2f %.2f %.2f dir %.2f %.2f %.2f\n", plo->oid, s, pos.x, pos.y, pos.z,
@@ -872,16 +875,17 @@ void RandomJtPoint(LO* plo, JTL jtl, float g, glm::vec3* ppos, glm::vec3* pdir)
     case JTL_Rail:
         if (pcrv)
         {
-            // orig: 0x001CBBA8 (around the wire: its side, its side x dir, out to 25)
-            const float s = SRandCrvNear(pcrv, g, 150.0f);  // D_002C1EC4
+            // orig: 0x001CBBA8 (around the wire: its side, its side x dir, out to 25); orig3 0x203908 spreads them 250
+            // along the wire either way (Sly 2: 150): the reference's sparkles reach up the prologue's rope 15174
+            const float s = SRandCrvNear(pcrv, g, 250.0f);
             EvalCrvS(pcrv, s, &pos, &dir);
             const glm::vec3 x = VecSideOf(dir);
             const glm::vec3 y = glm::cross(x, dir);
-            const float n = GRandInRange(-1.0f, 1.0f);
+            const float n = GRandPe(-1.0f, 1.0f);
             const float mag = std::fabs(n);
             const glm::vec3 v = VecCylind(n * mag * 1.8f, 1.0f, 0.0f);  // D_002C1EC8
             const glm::vec3 d = y * v.x + x * v.y + dir * v.z;
-            *ppos = pos + d * (mag * GRandInRange(0.0f, 25.0f));  // D_002C1ECC
+            *ppos = pos + d * (mag * GRandPe(0.0f, 25.0f));  // D_002C1ECC
             *pdir = d;
             return;
         }
@@ -892,7 +896,7 @@ void RandomJtPoint(LO* plo, JTL jtl, float g, glm::vec3* ppos, glm::vec3* pdir)
             // orig: 0x00183218 (out from the edge to 50, rising)
             const float s = SRandCrvNear(pcrv, g, 150.0f);  // D_002BE8B8
             EvalCrvS(pcrv, s, &pos, &dir);
-            *ppos = pos + VecSideOf(dir) * GRandInRange(0.0f, 50.0f);  // D_002BE8BC
+            *ppos = pos + VecSideOf(dir) * GRandPe(0.0f, 50.0f);  // D_002BE8BC
             *pdir = glm::vec3(0.0f, 0.0f, 1.0f);
             return;
         }
@@ -900,8 +904,8 @@ void RandomJtPoint(LO* plo, JTL jtl, float g, glm::vec3* ppos, glm::vec3* pdir)
     case JTL_Hook:
     {
         // orig: 0x001845A0 (a 75-unit disk around the transformed authored anchor)
-        const float pan = GRandInRange(-F32(0x40490FDB), F32(0x40490FDB));
-        const float r = GRandInRange(0.0f, 75.0f);  // D_002BE90C
+        const float pan = GRandPe(-F32(0x40490FDB), F32(0x40490FDB));
+        const float r = GRandPe(0.0f, 75.0f);  // D_002BE90C
         *ppos = PosHookAnchor(plo) + VecCylind(pan, r, 0.0f);
         *pdir = glm::vec3(0.0f, 0.0f, 1.0f);
         if (std::getenv("SLY2N_HOOKPOINT"))
@@ -911,62 +915,62 @@ void RandomJtPoint(LO* plo, JTL jtl, float g, glm::vec3* ppos, glm::vec3* pdir)
     default: break;
     }
     // orig: 0x00182D78 (the others: a sphere of 35 around the object's centre, the tilt r |r| pi / 2)
-    const float pan = GRandInRange(-F32(0x40490FDB), F32(0x40490FDB));
-    const float t = GRandInRange(-1.0f, 1.0f);
+    const float pan = GRandPe(-F32(0x40490FDB), F32(0x40490FDB));
+    const float t = GRandPe(-1.0f, 1.0f);
     const float tilt = std::fabs(t) * t * 1.5707964f;
-    const float r = GRandInRange(0.0f, 35.0f);  // D_002BE8B0
+    const float r = GRandPe(0.0f, 35.0f);  // D_002BE8B0
     const glm::vec3 c = FIsLoDerivedFrom(plo, S3CID(0x30)) ? PosAloCenter(static_cast<ALO*>(plo)) : PosJtLo(plo);  // 0x1A62E8
     *ppos = c + VecSphere(pan, tilt, r);
     *pdir = glm::vec3(0.0f, 0.0f, 1.0f);
 }
 
-// orig: 0x00195368 (the player's emitter part +0x12F8 (oid 385) sprays at the candidates: per candidate with a
-// priority, its rate (EMITTER +0xFC) x dt particles (the fraction by a draw), at most 10 in all, each at the
-// description's random point (method 5), its speed EMITB +0x50..+0x54 along the direction, born +0xA0..+0xA4 ago,
-// living +0x8C, advanced by +0x98..+0x9C when they differ; into the particle system (0x15B428))
+// orig3: 0x001B6B10 (Sly 3's sparkles: the actor's particle effect +0x13F0 (Sly's PE 420, a kind-0 effect) given 15 a
+// second per candidate whose kind is not -1 (the fraction by a draw), each at the description's random point (method
+// 5), its speed the effect's velocity record +0x40 along the direction, born +0x58 ago, living +0x78, advanced by +0x50
+// when its two ends differ; the record's size curve +0x20 set first to {0, 80, -80} ({0, 200, -200} while SW +0x4FA4 is
+// set: the two-player mode, option 1003). Sly 2 (0x195368) threw them from an emitter part +0x12F8 at its rate, at most 10.)
 void SprayJtSparkles(ACTOR* pa, int n, const JTENT* aent)
 {
-    LO* pemit = nullptr;
+    LO* ppe = nullptr;
     for (const auto& [ib, plo] : pa->palo->apart)
-        if (ib == 0x12F8) pemit = plo;
-    if (!pemit || n <= 0) return;
-    glm::vec3 apos[10], avel[10];
-    float at0[10], at1[10];
-    int c = 0;
-    for (int k = 0; k < n && c < 10; ++k)
+        if (ib == (FN3_TAG | 0x13F0u)) ppe = plo;
+    PEVELPARAMS vp;
+    if (!ppe || n <= 0 || !FPeVelParams(ppe, &vp)) return;
+    static const float s_aclqSmall[3] = {0.0f, 80.0f, -80.0f}, s_aclqBig[3] = {0.0f, 200.0f, -200.0f};   // D_00322EB0 / D_00322EC0
+    const bool fBig = g_psw && split3::FTwoCameras(g_psw);   // (SW +0x4FA4)
+    SetPeOwnRandom(true);   // (PC: the sparkles' draws on the effects' own stream, pe.cpp GRandPe)
+    struct RESET { ~RESET() { SetPeOwnRandom(false); } } reset;
+    for (int k = 0; k < n; ++k)
     {
         const JTENT& e = aent[k];
         if (e.prio == -1 || !e.plo) continue;
-        float g = GEmitterLo(pemit, false, 0xFC) * g_clock.dt;
-        const float r = GRandInRange(0.0f, 1.0f);
-        int cNew = static_cast<int>(g);
-        g -= static_cast<float>(cNew);
-        if (r < g) ++cNew;
-        for (; cNew > 0 && c < 10; --cNew)
+        const float g = g_clock.dt * 15.0f;
+        int c = static_cast<int>(g);
+        if (GRandPe(0.0f, 1.0f) < g - static_cast<float>(c)) ++c;
+        if (c == 0) continue;
+        std::vector<glm::vec3> apos(static_cast<size_t>(c)), avel(static_cast<size_t>(c));
+        std::vector<float> at0(static_cast<size_t>(c)), at1(static_cast<size_t>(c));
+        for (int j = 0; j < c; ++j)
         {
             glm::vec3 pos(0.0f), dir(0.0f);
-            RandomJtPoint(e.plo, e.jtl, e.g, &pos, &dir);
-            const glm::vec3 vel = dir * GRandInRange(GEmitterLo(pemit, true, 0x50), GEmitterLo(pemit, true, 0x54));
-            const float t0 = g_clock.t - GRandInRange(GEmitterLo(pemit, true, 0xA0), GEmitterLo(pemit, true, 0xA4));
-            at0[c] = t0;
-            at1[c] = t0 + GEmitterLo(pemit, true, 0x8C);
-            const float g98 = GEmitterLo(pemit, true, 0x98), g9C = GEmitterLo(pemit, true, 0x9C);
-            if (g98 != g9C) pos += vel * GRandInRange(g98, g9C);
-            apos[c] = pos;
-            avel[c] = vel;
-            ++c;
+            RandomJtPoint(e.plo, e.jtl, e.g, &pos, &dir);   // (vt slot 5; natively in the world: the matrix of slot 6 is 1)
+            const glm::vec3 vel = dir * GRandPe(vp.speedLo, vp.speedHi);
+            at0[size_t(j)] = g_clock.t - GRandPe(vp.ageLo, vp.ageHi);
+            at1[size_t(j)] = at0[size_t(j)] + vp.life;
+            if (vp.advLo != vp.advHi) pos += vel * GRandPe(vp.advLo, vp.advHi);
+            apos[size_t(j)] = pos;
+            avel[size_t(j)] = vel;
         }
+        EmitPeParticles(ppe, c, apos.data(), avel.data(), at0.data(), at1.data(), fBig ? s_aclqBig : s_aclqSmall);
+        if (std::getenv("SLY2N_SPARKLEPRINT"))
+            std::printf("sparkles t %.3f: %d at %.0f %.0f %.0f on %d (pe %d of %d)\n", g_clock.t, c, apos[0].x, apos[0].y, apos[0].z, e.plo->oid, ppe->oid, pa->palo->oid);
     }
-    if (c > 0) EmitLoParticlesAt(pemit, c, apos, avel, at0, at1);
-    if (std::getenv("SLY2N_SPARKLEPRINT") && c > 0)
-        std::printf("sparkles t %.3f: %d at %.0f %.0f %.0f (emitter %d %p of %d)\n", g_clock.t, c, apos[0].x, apos[0].y, apos[0].z, pemit->oid, (void*)pemit,
-                    pa->palo->oid);
 }
 
 // orig: 0x00194A40
 void UpdateJtCandidates(ACTOR* pa, uint32_t grf)
 {
-    if (!pa || pa->palo != PloPoCurrent(g_psw)) return;  // 0x1C40C0
+    if (!pa || (pa->palo != PloPoCurrent(g_psw) && !g_fJtOtherPlayer3)) return;  // 0x1C40C0
     JTENT aent[4];
     const glm::vec3 pos = PosAloCenter(pa->palo);
     auto scan = [&](JTL jtl) {
@@ -994,6 +998,7 @@ void UpdateJtCandidates(ACTOR* pa, uint32_t grf)
     // the prompt of the nearest within 250 (D_002BF660), left alone while another's prompt shows (0x1DA5B0); an
     // abandon icon on it (the 0x624 proxy's instance, 0x195608: a job's exit) found after 1 s (D_002BF70C) gives
     // 0x125 ("Warning! Using this passageway will abandon ...")
+    if (g_fJtOtherPlayer3) return;   // (another player's: the HUD prompt is the current player's)
     const int idOld = IdHudPrompt();
     if (idOld != -1 && idOld != g_jttrack.idShown) return;
     int id = -1;
@@ -1003,7 +1008,7 @@ void UpdateJtCandidates(ACTOR* pa, uint32_t grf)
         if (!(250.0f < 0.0f + std::sqrt((d.x * d.x + d.y * d.y) + d.z * d.z)))
         {
             LO* pproxy = g_jttrack.ae[0].ploAura ? PproxyOfInstance(g_jttrack.ae[0].ploAura) : nullptr;  // 0x1CB658
-            if (pproxy && pproxy->oid == 0x624 && 1.0f < g_jttrack.ae[0].t) id = IdText(0x125);
+            if (pproxy && pproxy->oid == 0x6F8 && 1.0f < g_jttrack.ae[0].t) id = IdText(0x1E6);   // (orig3 0x1B61A0: proxy 0x6F8, string 0x1E6; Sly 2's 0x624 / 0x125)
             else id = JtDescOf(g_jttrack.ae[0].plo, g_jttrack.ae[0].jtl).id;
         }
     }
@@ -1031,10 +1036,10 @@ int KindJtCircle(ACTOR* pa, LO** pplo)
         if (250.0f < e.dist) break;
         LO* plo = e.plo;
         int k = -1;
-        if (FIsLoDerivedFrom(plo, S3CID(0x13)) || FIsLoDerivedFrom(plo, S3CID(0x0B))) k = dynamic_cast<SLY*>(pa) && pa->palo == PloPoCurrent(g_psw) ? 6 : 5;
+        if (FIsLoDerivedFrom(plo, S3CID(0x13)) || FIsLoDerivedFrom(plo, S3CID(0x0B))) k = dynamic_cast<SLY*>(pa) && (pa->palo == PloPoCurrent(g_psw) || g_fJtOtherPlayer3) ? 6 : 5;
         else if (FIsLoDerivedFrom(plo, S3CID(0x1B))) k = 8;
         else if (FIsLoDerivedFrom(plo, S3CID(0x0C)) || FIsLoDerivedFrom(plo, S3CID(0x22))) k = 0;
-        else if (FIsLoDerivedFrom(plo, S3CID(0x26))) k = static_cast<int>(plo->U32Field(0, 0x11C, 0));
+        else if (FIsLoDerivedFrom(plo, S3CID(0x26))) k = static_cast<int>(plo->U32Field(0, 0x10C, 0));
         else if (FIsLoDerivedFrom(plo, S3CID(0x23))) k = 7;
         if (k != -1)
         {

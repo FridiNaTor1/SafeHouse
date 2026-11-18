@@ -147,6 +147,7 @@ struct SW
     // orig3 0x14FA38: the two entry tables before the group count ({key, value, list}; 0x196228 gets the value)
     struct PREFIX3 { int32_t key = 0; int value = 0; std::vector<int32_t> alist; };
     std::vector<PREFIX3> aprefixA, aprefixB;
+    int nScreenMode3 = 0;   // orig3 0x36DBE0 +0: the chosen value (2: the two-player split screen; splitscreen3.h)
     // orig3 0x1500F0: the option sets' keys and blocks; the block chosen (its id: the static camera's +0x10)
     struct OPTSETKEY3 { std::vector<uint16_t> aprogress; uint32_t key = 0, value = 0; };
     std::vector<OPTSETKEY3> aoptsetA, aoptsetB;
@@ -182,6 +183,8 @@ void ReleaseSwRuntimeTables();
 void LoadSwFromBrx(SW* psw, CBinaryInputStream* pbis);
 
 LO* PloFindSwObjectByOid(SW* psw, OID oid);
+// a task's player by oid (option 1402): an immediate proxy's oid gives its instance (the 2P biplane duel's planes)
+LO* PloFindSwPlayerByOid3(SW* psw, OID oid);
 
 // (native, perf-2) the world's objects whose oid or oidInstance is oid, in aploAll order: the name finds' scans of every
 // object, each filtering on the name, go through these instead (the same objects in the same order). Valid until the
@@ -197,3 +200,6 @@ bool FLoadWorldBytes(SW* psw, const FK& fk, std::vector<uint8_t> ab, const std::
 void ResetWorldLoadTables();   // (FLoadWorldFile's resets of the old world's side tables)
 // "boot", "frontend" or a world record index (the records come from the boot world): its file and filter.
 bool FResolveWorld(const std::string& w, FK& fk, int& filter, std::string& error);
+// orig3 0x14FA38's screen-mode choice from the world's entry tables (keys: the current job, the checkpoint task): 2 the
+// two-player split screen, else 0 (splitscreen3.h).
+int NScreenModeFromPrefix3(const SW* psw, int32_t keyJob, int32_t keyTask);

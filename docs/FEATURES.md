@@ -13,12 +13,16 @@ can be turned off where it changes how the game looks or plays.
 - **Install from your disc image:** pick or drag in an `.iso`. The launcher identifies the game and the region, checks
   the free space and that the image is complete, then installs and verifies it. An image of another game is refused
   with an explanation.
-- **Several regions:** Sly 1 from the USA, Europe, Japan and Korea; Sly 2 from the USA, Europe (v1.00 and v2.01) and
-  Japan. With more than one region installed you choose which one **Play** starts; saves are shared.
+- **Several regions:** Sly 1 from the USA, Europe, Japan and Korea; Sly 2 from the USA, Europe (v1.00 and v2.01),
+  Japan and Korea. With more than one region installed you choose which one **Play** starts; saves are shared.
 - **Languages:** the European discs' languages are offered in the game's own options.
 - **Add to Steam:** adds a shortcut that starts the game directly, with library artwork, to every Steam account on the
   computer (exit Steam first, or restart it afterwards). **Add desktop shortcut** does the same on the desktop.
 - **Settings for each game:** display, graphics, audio, controls and more, edited while the game is closed.
+- **Collection Style Launcher:** if you own *The Sly Collection* (PS3), import its own game-select menu from your
+  disc (Settings > Launcher: the disc image, a `.zip` of it, or the extracted disc) and start the games from it: its
+  scene, logos, sounds and music, with the games you installed. Quitting a game brings you back to it. Nothing of
+  that menu comes with SafeHouse, so the style is only there once you imported it.
 - **Automatic updates:** the launcher checks for new versions and updates itself.
 - **Your files stay put:** installed games, saves and settings live in your profile folder and survive updates and
   re-installs ([where](FAQ.md#where-are-my-files)).
@@ -34,6 +38,9 @@ can be turned off where it changes how the game looks or plays.
   floor in full instead of ending in a straight cut, which shows most at wide aspect ratios.
   **Settings > Graphics > Long shadows**; off gives the original's shadows exactly.
 - **Low-end GPUs:** weak integrated graphics start at a lower internal resolution on first launch.
+- **Vulkan (Sly 2, Sly 3):** on Windows and Linux (Steam Deck included) the games render with Vulkan, and switch to
+  OpenGL by themselves when the graphics driver cannot run Vulkan. **Settings > Graphics > Renderer** offers Auto,
+  Vulkan and OpenGL. macOS renders through Metal, the Switch through deko3d.
 
 ## Controls
 
@@ -66,10 +73,10 @@ can be turned off where it changes how the game looks or plays.
 
 The guide: [MODDING.md](MODDING.md).
 
-## The debug menu and PC Extras
+## The debug menu and Extras
 
 With **Settings > Advanced > Debug mode** on, Sly 2 has a debug menu (F10, or R1 + Select): warps to every world,
-character switching, noclip, teleports, job tools, game speed, a free camera and a frame-rate display. Its **PC Extras**
+character switching, noclip, teleports, job tools, game speed, a free camera and a frame-rate display. Its **Extras**
 let you play as **Carmelita** (with her own moves), as the game's **guards and bosses**, or fly **Bentley's RC chopper**
 in any world. Sly 1 has its own debug window (F3).
 

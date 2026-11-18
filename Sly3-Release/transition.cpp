@@ -1,4 +1,8 @@
 #include "transition.h"
+#include "outfit3.h"
+#include "challenge3.h"
+#include "splitscreen3.h"
+#include "hackgame3.h"
 #include "game/sly3.h"
 #include "pcloader.h"
 #include "rumble.h"
@@ -27,6 +31,7 @@ int NRandInRange(int nLow, int nHigh);  // (util.h: 0x11D3F8)
 #include "cmworld.h"
 
 #include "activate.h"
+#include "player3.h"
 #include "cmworld.h"
 
 #include "brx.h"
@@ -42,6 +47,7 @@ int NRandInRange(int nLow, int nHigh);  // (util.h: 0x11D3F8)
 #include "game/scpt3.h"
 #include "game/scptrun3.h"
 #include "game/scptgame3.h"
+#include "game/trigger3.h"
 #include "objmethod.h"
 #include "cm.h"
 #include "clock.h"
@@ -59,6 +65,7 @@ int NRandInRange(int nLow, int nHigh);  // (util.h: 0x11D3F8)
 #include <string>
 #include <set>
 #include <cstdlib>
+#include <execinfo.h>
 #include <algorithm>
 #include <cstring>
 
@@ -246,8 +253,14 @@ void ApplyCheckpoint(SW* psw, LO* plo)
     if (pchk)
         for (const auto& [oidA, oidB] : pchk->apair)
         {
-            LO* p = PloFindSwObjectByOid(psw, oidA);
+            // (a pair's object may be an immediate proxy's oid: its instance, as the reference's find. The 2P duel's
+            // checkpoint 94610 pairs the proxies 94392 / 94393 with the spawn points 94376 / 94382: the reference's
+            // planes start there, (-+21900, 0, 3950) head on (build/ref du3 at vblank 1730); natively they were skipped
+            // and both planes stood at the checkpoint, overlapping (a ram at once))
+            LO* p = PloFindSwPlayerByOid3(psw, oidA);
             LO* q = p ? PloFindSwObjectByOid(psw, oidB) : nullptr;
+            if (std::getenv("SLY2N_CHKPRINT"))
+                std::printf("checkpoint %d pair %d -> %d (found %d / %d)\n", plo->oid, oidA, oidB, p ? p->oid : -1, q ? q->oid : -1);
             if (p && q) TeleportLo(p, q);
         }
     // orig 0x20FF70 / 0x20FFF0: the state machines' trigger states (run to)
@@ -318,6 +331,9 @@ struct INITCHKMETHODS
 } s_initchkmethods;
 }
 
+// (Sly 3's SCPT 0x12 on a checkpoint: orig3 0x280010, game/scptgame3.cpp)
+void ApplyCheckpointLo(SW* psw, LO* plo) { ApplyCheckpoint(psw, plo); }
+
 // orig 0x00228170
 void TriggerWarp(LO* pwarp)
 {
@@ -340,6 +356,12 @@ void RequestTransition(SW* psw, const uint8_t* pchk, OID oidPoint, OID oidKey, i
     if (t.fHaveCur && FSameChk(req.abChk, t.abChkCur)) req.flags |= 2;
     static const bool s_fLog = std::getenv("SLY2N_TRANSLOG") != nullptr;
     if (s_fLog) std::printf("transition: requested (point %d, key %d, flags 0x%X, wipe %d)\n", oidPoint, oidKey, req.flags, oidWipe);
+    if (std::getenv("SLY3_TRANSBT"))   // (debug: who asked)
+    {
+        void* a[12];
+        std::fflush(stdout);
+        backtrace_symbols_fd(a, backtrace(a, 12), 1);
+    }
     // (the flow log: one line per world change, tools/progression3.py's milestones; notes/PLAN.md the world flow code)
     std::printf("flow: transition to world %d requested (point %d, key %d, flags 0x%X, wipe %d, frame %d)\n",
                 IworldOfChk(req.abChk), oidPoint, oidKey, req.flags, oidWipe, g_iframeMain);
@@ -403,20 +425,26 @@ void EnsureWorldRecords()
     }
 }
 
-void RequestWorldWarp(SW* psw, int iwrec, OID oidPoint, OID oidWipe)
+void RequestWorldWarp(SW* psw, int iwrec, OID oidPoint, OID oidWipe, int grfExtra)
 {
     EnsureWorldRecords();
     // orig 0x210990: the world's record
     if (iwrec < 0 || iwrec >= static_cast<int>(s_awrec.size())) return;
-    RequestTransition(psw, s_awrec[iwrec].abRecord, oidPoint, -1, 0, oidWipe);
+    RequestTransition(psw, s_awrec[iwrec].abRecord, oidPoint, -1, grfExtra, oidWipe);
 }
 
+// (s3-player) the world start keeps the characters the splice's start events added (spliceglue.cpp FLoAddedBySplice3:
+// orig3 0x25B9C0 runs before them; Ep2's bar brawl 2756: Sly and Murray fight beside Bentley). SLY3_SPLICEADDKEEP=0:
+// removed as before
+bool FLoAddedBySplice3(const LO* plo);
+static const bool s_fKeepSplice = [] { const char* sz = std::getenv("SLY3_SPLICEADDKEEP"); return !sz || sz[0] != '0'; }();
+
 // orig 0x001651D8 (a task: started now when present, else queued and its world loaded)
-void RequestTaskStart(SW* psw, int iwrec, OID oidTask)
+void RequestTaskStart(SW* psw, int iwrec, OID oidTask, OID oidWipe, int grfExtra)
 {
     EnsureWorldRecords();
     const uint8_t* pchk = iwrec >= 0 && iwrec < static_cast<int>(s_awrec.size()) ? s_awrec[iwrec].abRecord : nullptr;
-    RequestTaskStartByOid(psw, pchk, oidTask);
+    RequestTaskStartByOid(psw, pchk, oidTask, oidWipe, grfExtra);
 }
 
 // (debug harness, autoplay.cpp: a task of another world started by that world's load, the queued branch of 0x1651D8
@@ -445,14 +473,22 @@ void PrintRef(const CRef& ref, std::string* ps)
     case TAGK_Symid: std::snprintf(ach, sizeof(ach), "s%u", ref.m_symid); break;
     case TAGK_Bifk: std::snprintf(ach, sizeof(ach), "<bif%d>", static_cast<int>(ref.m_bifk)); break;
     case TAGK_Pair:
+    {
+        // (a depth / length bound: a frame's bindings can hold cyclic lists, which recursed until the stack ran out)
+        static int s_depth = 0;
+        if (s_depth > 40 || ps->size() > 20000) { *ps += "..."; return; }
+        ++s_depth;
         *ps += "(";
-        for (const CPair* p = ref.m_ppair.get(); p; p = p->m_ppairNext.get())
+        int c = 0;
+        for (const CPair* p = ref.m_ppair.get(); p && c < 400; p = p->m_ppairNext.get(), ++c)
         {
             PrintRef(p->m_ref, ps);
             if (p->m_ppairNext) *ps += " ";
         }
         *ps += ")";
+        --s_depth;
         return;
+    }
     default: std::snprintf(ach, sizeof(ach), "<t%d>", static_cast<int>(ref.m_tagk)); break;
     }
     *ps += ach;
@@ -495,17 +531,36 @@ std::unique_ptr<SW> PswUpdateTransition(std::unique_ptr<SW> psw)
     // requests still pass Sly 2's bits; Sly 3's 0x25C2A8 masks 0xD5 of its own bits, notes/FLOW.md)
     // (orig3 0x25C2A8: none either when the request goes to world 0, the episode chooser dvd_menu)
     const float dtTimerResume = IworldOfChk(req.abChk) == 0 ? 0.0f : DtHudTimerResume(req.flags);
+    // orig3 0x25C2A8: a request for the loaded world without Sly 3's flag 2 (native: TRANSF_INPLACE3), a file, and no
+    // movie batch since the last load (D_00389AC0) is not loaded: 0x25BDD0 resets the world in place, then the same
+    // start tail as after a load (game/worldreset3.cpp; SLY3_INPLACERESET=0: the reload as before)
+    extern bool g_fMovieSinceLoad3;   // (frontend.cpp)
+    const bool fInPlace = FScripts3Active() && FWorldResetInPlace3() && (req.flags & TRANSF_INPLACE3) && psw && t.fHaveCur &&
+                          FSameChk(req.abChk, t.abChkCur) && FkFromRecord(req.abChk).cb && !g_fMovieSinceLoad3;
+    req.flags &= ~TRANSF_INPLACE3;
+    const bool fSameWorld = t.fHaveCur && FSameChk(req.abChk, t.abChkCur);  // (0x20EA24..0x20EA70: s2 = !same)
+    int iwrec = -1;
+    if (fInPlace)
+    {
+        iwrec = t.iwrecCur;
+        t.req = req;
+        std::printf("flow: world %d %s reset in place (frame %d, point %d, flags 0x%X)\n", iwrec, g_disc.SzWorldElf(iwrec).c_str(),
+                    g_iframeMain, req.oidPoint, req.flags);
+        ResetSwInPlace3(psw.get());
+    }
+    else
+    {
+    g_fMovieSinceLoad3 = false;
     UnloadWorld(psw, true);
     PumpPcKeptWorlds(nullptr);   // (PC addition, debug menu only: a kept world still being read loaded now, no world running: pcloader.h)
     ResetClock(&g_clock);
     LockJoy(8);                 // 0x187078(8): the pad locked while the world loads (0x1D9648 unlocks it)
     g_gamepause = GAMEPAUSE{};  // (the SW's pause counts +0x3D78.. cleared with it)
     g_actview.grfCm = 0;  // (no activation by distance until the first frame's camera)
+    g_actview.cExtra = 0;
     const FK fk = FkFromRecord(req.abChk);
-    int iwrec = -1;
     for (int i = 0; i < static_cast<int>(s_awrec.size()); ++i)
         if (FSameChk(s_awrec[i].abRecord, req.abChk)) iwrec = i;
-    const bool fSameWorld = t.fHaveCur && FSameChk(req.abChk, t.abChkCur);  // (0x20EA24..0x20EA70: s2 = !same)
     BuildReplayJobTables(iwrec);   // (QoL Replay Jobs, replay.h: before the front end, once; no world is current here)
     psw = std::make_unique<SW>();
     ResetPhysWorld();  // (the old world's attachments go with it, also when the new world has no file: world 18)
@@ -515,6 +570,9 @@ std::unique_ptr<SW> PswUpdateTransition(std::unique_ptr<SW> psw)
     t.iwrecCur = iwrec;
     t.req = req;
     std::size_t cbRead = 0, cbFile = 0;
+    // orig3 0x25C2A8: 0x25AFD8 -> 0x184A08, the game record reset for the title (flags 1) / the pending save, before the
+    // file is read (0x14F440: the option sets' progress fallback 0x1500F0 and the tasks read the record; frontend.h)
+    OnGameRecordBeforeLoad3(req.flags);
     if (fk.cb && !FLoadWorldFile(psw.get(), fk, "", &cbRead, &cbFile))
         std::fprintf(stderr, "transition: world record %d did not load\n", iwrec);
     OnReplayWorldLoaded(iwrec, req.flags);   // (QoL Replay Jobs: the front end / the title end a replay)
@@ -524,6 +582,12 @@ std::unique_ptr<SW> PswUpdateTransition(std::unique_ptr<SW> psw)
     std::printf("flow: world %d %s loaded (frame %d, load %d, point %d, flags 0x%X, %zu objects)\n", iwrec,
                 g_disc.SzWorldElf(iwrec).c_str(), g_iframeMain, g_cTransitionLoads, req.oidPoint, req.flags, psw->aploAll.size());
     if (std::getenv("SLY2N_TRANSLOG")) std::printf("transition: world record %d loaded (%zu objects, flags 0x%X, frame %d, load %d)\n", iwrec, psw->aploAll.size(), req.flags, g_iframeMain, g_cTransitionLoads);
+    // (s3-player) The reference (--warp 3:1819, the heist's last task, with GAME +0x10 poked to Murray 26 in play:
+    // build/refoext/run2.sh of the s3-player worktree): when the job's exit has loaded the episode chooser (world 0) the
+    // game's player characters are both -1, so the next episode's world comes up with the list's first, Sly. Which
+    // function clears them was not found in the decomp (TODO(sly3)); natively: at the chooser's load.
+    // SLY3_CHOOSERKEEPPLAYER=1 keeps them.
+    if (iwrec == 0 && FScripts3Active() && !std::getenv("SLY3_CHOOSERKEEPPLAYER")) g_gametasks3.aoidPlayer[0] = g_gametasks3.aoidPlayer[1] = -1;
     CmOnWorldLoad(psw.get());  // the camera: InitCm 0x14D6D8, the world's camera options, the player's (cmworld.h)
     // orig 0x20E3C0's end: the record's language (0x2E1E54, region.h), world record (0x210A88),
     // episode (0x210AE0) and best episode (0x210B28 < the episode: 0x1D8B20 "episodeBest")
@@ -534,11 +598,13 @@ std::unique_ptr<SW> PswUpdateTransition(std::unique_ptr<SW> psw)
         const int iep = IepisodeCur();
         setN({"episodeCurrent"}, iep);
         const CRef rBest = RefGetProgress({"episodeBest"});
-        if ((rBest.m_tagk == TAGK_S32 ? rBest.m_n : 0) < iep) setN({"episodeBest"}, iep);
+        // (orig3 0x25B6B8: not in the two-player games, D_0036DBE0 == 2: the world's screen mode 2)
+        if (psw->nScreenMode3 != 2 && (rBest.m_tagk == TAGK_S32 ? rBest.m_n : 0) < iep) setN({"episodeBest"}, iep);
     }
     // orig 0x20E3C0's broadcast 3 (the game record: reset for the title, the pending save; frontend.h)
     BroadcastTaskEvent(psw.get(), 3, nullptr);
     // orig 0x20E740 (with the broadcast 4: a queued task changes the request's point)
+    sly3::ResetScriptPlaced3();
     OnPcWorldLoaded(psw.get());    // (PC addition, debug menu only: the guests' copies made before the start, pcloader.h)
     StartSw(psw.get(), true, [](SW* psw) {
         // orig: 0x001400B8 starts with 0x00203A38, then initializes the
@@ -546,8 +612,11 @@ std::unique_ptr<SW> PswUpdateTransition(std::unique_ptr<SW> psw)
         PostLoadSwPhys(psw);
         InitWorldActors(psw);
         InitWorldGang(psw);
+        ShowActorGlasses3(psw);   // (orig3 0x152488: the 3-D glasses hidden out of the anaglyph mode)
     });
     OnPcWorldStarted(psw.get());   // (PC addition, debug menu only: pcloader.h)
+    RecordResetPoses3(psw.get());  // (orig3 ALO slot 17 0x23C580: the reset poses of EOPID 86, for an in-place reset)
+    }
     // (Sly 3, the pending task start (the request's flag 8 natively; Sly 3's 0x4 with GAME +0x14A0): 0x184AA0 runs
     // StartTask 0x18A0D0 (its predecessors restored, the task made available, then current). Interim until game/task3
     // ports 0x18A0D0: the task forced available (mode 3) and activated, as the reference's --warp W:TASK shows it
@@ -709,9 +778,37 @@ std::unique_ptr<SW> PswUpdateTransition(std::unique_ptr<SW> psw)
                                  p->pframe && p->pframe->PrefFindBinding(0, 1) ? 1 : 0);
                 }
         }
-    // (no checkpoint: the players stay at their instances' matrices, as the reference's 0x1CA370 slot 37 leaves them)
-    if (!pchk)
-        for (const auto& [plo, mat] : psw->mpmatPlayerInstance) SetLoMatrix(plo, mat);
+    // (the players at their instances' matrices, as the reference's 0x1CA370 slot 37 leaves them; with a checkpoint too:
+    // it then places the current player (and its pairs) only. s3-player round 19: Ep4 recon's c_intro (job restart into
+    // world 24, checkpoint 70148) has Murray / Bentley / the Guru / Penelope at their proxies' places in the reference
+    // (vblank 2300: (-2392, -54487, 890) .. = the instances' matrices); natively they stayed at the origin, all five
+    // overlapping, and Murray's first update gave NaN records (his walk-in, SCPT 2087 [34], never ended: 3383 forced))
+    // (s3-player round 21, the user's report: no intro scene at the boot) not over a script's placement at the world start:
+    // m_ext's attract SCPT 4262 puts Sly on the rope (0x22 at 15071) inside StartSw, and this put him back at his
+    // instance's place, so he fell, never reached trigger 15072 (alarm 15086) and the scene waited at [41] forever
+    // (not after an in-place reset: the players stay where they were until the checkpoint places them, 0x25B9C0)
+    if (!fInPlace)
+    for (const auto& [plo, mat] : psw->mpmatPlayerInstance)
+        if (!sly3::FScriptPlaced3(plo)) SetLoMatrix(plo, mat);
+    // (s3-player round 21: the players' base record at the identity, as the reference's: their body load replaces their
+    // records, so a root player's first record (xf0, +0x48's parent) is the identity and its place is in the position /
+    // rotation records (the slots 29 / 30). Natively xf0 kept the world file's / the instance's placement (Sly on
+    // v_interpol's dock turned 104.1 in xf0), and the step heading (0x24E878) wrote the rotation record's local angle as if
+    // its parent were unturned: a script's placement through the slots turned him wrong. Now the same world matrix with
+    // xf0 at the identity (TeleportAloMat through the slots); SLY3_ROOTBASE=0: the old way)
+    static const bool s_fRootBase = [] { const char* sz = std::getenv("SLY3_ROOTBASE"); return !sz || sz[0] != '0'; }();
+    if (s_fRootBase && !fInPlace)
+        for (const auto& pl : psw->aploAll)
+        {
+            LO* plo = pl.get();
+            if (!plo || plo->paloParent || !FIsLoDerivedFrom(plo, S3CID(0x34)) || !PactorFromLo(plo)) continue;
+            ALO* palo = static_cast<ALO*>(plo);
+            if (palo->axf.empty()) continue;
+            const glm::mat4 w = sly3::MatLoWorld3(plo);
+            palo->axf[0]->mat = glm::mat4(1.0f);
+            UpdateAloXfWorlds(palo);
+            sly3::TeleportRootActor3(plo, w);
+        }
     if (pchk)
     {
         ApplyCheckpoint(psw.get(), pchk);
@@ -722,11 +819,35 @@ std::unique_ptr<SW> PswUpdateTransition(std::unique_ptr<SW> psw)
     // value "oidPoCurrent" (0x2A8A88), else Sly, Bentley, Murray (0x2E1E40 / 0x2DD5BC / 0x2F7900): added (vt slot 8),
     // enabled (slot 79), placed at the checkpoint (slot 38) unless one of its pairs places it; the other players
     // disabled before (0x1C4080 == 0) removed (slot 9)
-    if (!PloPoCurrent(psw.get()) && CpoRegistered() > 0)
+    if (!PloPoCurrent(psw.get()) && (CpoRegistered() > 0 || fInPlace))
     {
         LO* pselected = nullptr;
+        // (s3-player, orig3 0x25B9C0: player 0's character is GAME +0x10 (0x185700), which a task's start sets from the
+        // task's option 1402 (0x18A0D0 -> 0x1856E0), before the list's first. The reference's --warp 3:2466 (the
+        // heist's end) lands with Bentley 25 added at the task's checkpoint and Sly / Murray removed; natively Sly was
+        // taken, Bentley stayed removed and the scene's walks of him (SCPT 2467) never ran.)
+        if (FScripts3Active())
+        {
+            // (the game's value lasts, as the original's GAME +0x10: the later loads come up with the last started
+            // task's character (the heist: Bentley, also into o_ext). SLY3_TASKPLAYERKEEP=0: only at a task's start.)
+            static const bool s_fKeep = [] { const char* sz = std::getenv("SLY3_TASKPLAYERKEEP"); return !sz || sz[0] != '0'; }();
+            OID oidPlayer = g_gametasks3.fPlayerNew || s_fKeep ? g_gametasks3.aoidPlayer[0] : -1;
+            g_gametasks3.fPlayerNew = false;
+            if ((req.flags & 8) && g_taskmgr.oidQueued != -1)
+                if (const TASK3* p3 = PtaskFind3(g_taskmgr.oidQueued)) oidPlayer = p3->aoidPlayer[0];
+            if (oidPlayer != -1 && !std::getenv("SLY3_NOTASKPLAYER")) pselected = PloFindSwPlayerByOid3(psw.get(), oidPlayer);   // (a proxy: its instance)
+            // (any SO: the reference's --warp 30:3721 (the heist's alarm boxes, option 1402 = the RC car 38546, class
+            // 0x55) adds the car at the world start (AddLo from 0x25BAA0) and it is player 0's character)
+            if (std::getenv("SLY2N_TASKDEBUG"))
+                std::fprintf(stderr, "world start: task players %d %d (new %d) -> %d (cid 0x%X)\n", g_gametasks3.aoidPlayer[0], g_gametasks3.aoidPlayer[1],
+                             int(g_gametasks3.fPlayerNew), pselected ? pselected->oid : -1, pselected ? pselected->Cid() : 0);
+            if (pselected && !FCidDerivedFrom(pselected->Cid(), sly3::CID_SO)) pselected = nullptr;
+        }
+        // (Sly 2's "oidPoCurrent" progress value: Sly 3 has only the game's value, kept current by 0x1F4B38 (po.cpp); with
+        // none (a task started without option 1402) it takes the list 0x344050's first: Sly. SLY3_POCURRENT=1: the old way.)
         const CRef ref = RefGetProgress({"oidPoCurrent"});
-        if (ref.m_tagk == TAGK_S32 && ref.m_n != -1) pselected = PloFindSwObjectByOid(psw.get(), ref.m_n);
+        if (!pselected && ref.m_tagk == TAGK_S32 && ref.m_n != -1 && (!FScripts3Active() || std::getenv("SLY3_POCURRENT")))
+            pselected = PloFindSwObjectByOid(psw.get(), ref.m_n);
         for (CID cid : {S3CID(0x35), S3CID(0x37), S3CID(0x36)})   // (Sly, Bentley, Murray: Sly 3's 0x34 / 0x36 / 0x35)
             if (!pselected && !psw->mpcidaplo[cid].empty()) pselected = psw->mpcidaplo[cid][0];
         if (pselected)
@@ -736,11 +857,69 @@ std::unique_ptr<SW> PswUpdateTransition(std::unique_ptr<SW> psw)
             const CHKPNT* pc = dynamic_cast<const CHKPNT*>(pchk);
             bool fPaired = false;
             if (pc)
-                for (const auto& [oidA, oidB] : pc->apair) fPaired = fPaired || oidA == pselected->oid;
+                for (const auto& [oidA, oidB] : pc->apair) fPaired = fPaired || oidA == pselected->oid || oidA == pselected->oidInstance;
             if (pchk && !fPaired) TeleportLo(pselected, pchk);
+            // (s3-player, orig3 0x25B9C0's i = 1: the second player's character (GAME +0x14, a task's option 1402's second
+            // value: one task has Carmelita 28) is added and placed at the checkpoint too and stays in the world; the
+            // second pad that would drive it does not exist natively)
+            LO* psecond = nullptr;
+            if (FScripts3Active() && g_gametasks3.aoidPlayer[1] != -1 && !std::getenv("SLY3_NOTASKPLAYER"))
+            {
+                psecond = PloFindSwPlayerByOid3(psw.get(), g_gametasks3.aoidPlayer[1]);
+                if (psecond && (psecond == pselected || !FCidDerivedFrom(psecond->Cid(), S3CID(0x32)))) psecond = nullptr;
+                if (psecond)
+                {
+                    AddLo(psw.get(), psecond);
+                    bool fPaired2 = false;
+                    if (pc)
+                        for (const auto& [oidA, oidB] : pc->apair) fPaired2 = fPaired2 || oidA == psecond->oid || oidA == psecond->oidInstance;
+                    if (pchk && !fPaired2) TeleportLo(psecond, pchk);
+                }
+            }
+            // (but a character the started task's script added before this (SCPT 0x38 at its frame 0, as the branch below
+            // keeps: Ep2's bridge_complete SCPT 2622 [3] adds the Guru 29 and [85] walks him; removed here, the walk never
+            // ended and 2621 was forced). SLY3_KEEPSCRIPTCHARS=0: removed as before)
+            static const bool s_fKeepScript = [] { const char* sz = std::getenv("SLY3_KEEPSCRIPTCHARS"); return !sz || sz[0] != '0'; }();
             for (CID cid = S3CID(0x34); cid >= 0 && cid < g_acls[S3CID(0x34)].cidLast; ++cid)
                 for (LO* p : std::vector<LO*>(psw->mpcidaplo[cid]))
-                    if (p != pselected && NPoEnabled(p) == 0) RemoveLo(psw.get(), p);
+                    if (p != pselected && p != psecond && NPoEnabled(p) == 0 && !(s_fKeepScript && p->fInWorld && FLoAddedByScript3(p)) &&
+                        !(s_fKeepSplice && p->fInWorld && FLoAddedBySplice3(p)))
+                        RemoveLo(psw.get(), p);
+        }
+    }
+    // (s3-hack round 6, orig3 0x25B9C0's last loop runs at every world start: the listed characters (Sly, Bentley, Murray,
+    // the Guru, ...) other than the players are removed. When a player that is no character is current before the start
+    // (a hack's ship, made current by its own load / enable), the block above was skipped and the characters stayed in the
+    // world under the hack board: e.g. Ep3 windmill hack 4 (--world 15:3196) kept the Guru 29 and his effect 34880 (the
+    // orange dots seen through the board) and Sly / Bentley / Murray; the reference removes all four at the task start
+    // (RemoveLo from 0x25BB84 at vb 1765). SLY3_KEEPCHARS=1: the old way)
+    else if (LO* pcur = PloPoCurrent(psw.get()); pcur && !std::getenv("SLY3_KEEPCHARS"))
+    {
+        const CID cidFirst = S3CID(0x34), cidLim = cidFirst >= 0 ? g_acls[cidFirst].cidLast : -1;
+        const bool fChar = pcur->Cid() >= cidFirst && pcur->Cid() < cidLim;
+        if (!fChar && FScripts3Active())
+        {
+            for (CID cid = cidFirst; cid >= 0 && cid < cidLim; ++cid)
+                for (LO* p : std::vector<LO*>(psw->mpcidaplo[cid]))
+                    if (p != pcur && p->fInWorld && NPoEnabled(p) == 0) RemoveLo(psw.get(), p);
+        }
+        // (s3-plane) a character already current (e.g. a task's character kept from its start): the other characters go
+        // as 0x25B9C0's loop removes them at every world start, but those a script added since the world started (SCPT
+        // 0x38) and the task's second player. E.g. h_ext at m3_heist's rowboat (3281):
+        // Bentley stayed in the world at the origin, the planes' bullets knocked him into the water and his drowning
+        // reloaded the checkpoint (the reference's RAM: only Murray and the boat in the world). SLY3_KEEPCHARS=1: the old way
+        else if (fChar)
+        {
+            LO* psecond = g_gametasks3.aoidPlayer[1] != -1 ? PloFindSwPlayerByOid3(psw.get(), g_gametasks3.aoidPlayer[1]) : nullptr;
+            for (CID cid = cidFirst; cid >= 0 && cid < cidLim; ++cid)
+                for (LO* p : std::vector<LO*>(psw->mpcidaplo[cid]))
+                {
+                    if (p != pcur && p != psecond && p->fInWorld && NPoEnabled(p) == 0 && !FLoAddedByScript3(p) && !(s_fKeepSplice && FLoAddedBySplice3(p)))
+                    {
+                        if (std::getenv("SLY2N_TASKDEBUG")) std::fprintf(stderr, "world start: character %d removed (current %d)\n", p->oid, pcur->oid);
+                        RemoveLo(psw.get(), p);
+                    }
+                }
         }
     }
     // (native job starts: a job started at its world's load (0x1651D8's queued branch, used natively by the
@@ -760,6 +939,9 @@ std::unique_ptr<SW> PswUpdateTransition(std::unique_ptr<SW> psw)
         if (!psly->fInWorld) AddLo(psw.get(), psly);
         EnablePo(psw.get(), psly, 1);
     }
+    // (s3-player, orig3 0x152720: each player's post-load wears the game's player entry's outfit again: a disguise
+    // kept across the reload; outfit3.h)
+    if (FScripts3Active()) RestoreOutfits3(psw.get());
     t.ploPlayer = PloPoCurrent(psw.get());
     if (std::getenv("SLY2N_WRECLIST"))  // (debug: the world records: index, episode, main, progress key)
         for (size_t i = 0; i < s_awrec.size(); ++i)
@@ -773,6 +955,24 @@ std::unique_ptr<SW> PswUpdateTransition(std::unique_ptr<SW> psw)
                      t.ploPlayer ? (int)t.ploPlayer->Cid() : 0, CpoRegistered());
     // the camera: updated now and cut (0x14D478 / 0x14D8C0), then the broadcast 5 (the tasks from the save)
     CmOnWorldStart();
+    split3::OnWorldLoaded(psw.get());   // (PC, splitscreen3.h: the two-player games' split screen; nothing in single player)
+    // the challenge manager (challenge3.h): 0x283970 at the world's reset (its HUD 1054, the node), 0x283A50 first in the
+    // tasks' start 0x184B60 (the values reset after a start / replay, the HUD shown)
+    ChallengeWorldLoaded3(psw.get());
+    ChallengeWorldStart3(psw.get());
+    hackgame3::OnWorldStart(psw.get());   // (hackgame3.h: the two-player hacking game's ships to their players' pads)
+    // (orig3 0x184B60 after the players' placement 0x25B9C0 and the cameras' cut: game/task3.h. The activation's scripts
+    // place their actors on the ground (0x22's drop, 0x198D78): natively the collision objects are on the active list
+    // only once activated by the camera's distance (UpdateSwActivation, each frame from the first): the pass runs here
+    // from the cut camera first, else every drop of the start found no ground (ep1_turf: Sly left in the air))
+    if (FActivateTasksPending3())
+    {
+        sly3::InstallPlayerHooks3();
+        g_actview.posCm = g_cm.pos;
+        g_actview.grfCm = static_cast<uint32_t>(g_cm.nCur);
+        UpdateSwActivation(psw.get());
+    }
+    ActivateTasksAtStart3();
     BroadcastTaskEvent(psw.get(), 5, nullptr);
     t.oidTaskQueued = -1;
     // orig3 0x288FB0 (Sly 2 0x22B420): the wipe object found again in the new world; one that covered the load

@@ -23,6 +23,7 @@ void SetDamageState(ACTOR* pa, int n);
 void UpdateDamage(ACTOR* pa);
 // orig: 0x001A15D0 (the reaction's end: the deferred action, else the states 8..12's slot 93, else the jump's kind 11)
 void EndDamageReaction(ACTOR* pa);
+void ActorDeathSlot103(ACTOR* pa, bool fEvent = false);   // orig3 0x1C3FE0 (vt slot 103)
 // orig: 0x001A12F0 (the state machine's transitions in Sly's state 4: the reaction's clip done ends it)
 void UpdateDamageTransitions(ACTOR* pa);
 // orig: 0x001A23C0 (0 free, 1 reacting, 2 reacting with the counter out; else 1 while flashing)
@@ -45,6 +46,9 @@ void RemoveSafeGroundReferences(LO* plo, SOE* psoe);
 glm::vec3 PosSafeGround(ACTOR* pa, const SAFEGROUND::ENTRY& e, float dt = 0.0f);
 // orig: 0x0019FC30 (Sly's: the floor of the states that stand)
 void UpdateSafeGround(ACTOR* pa, int state);
+// orig3: 0x1C0B70 with the flags 5: the cheapest floor place of the actor's safe ground, the actor himself in the crowd's
+// cost (not on top of him), taken off the list (Carmelita's power-up 0x34, aicarm3.cpp); false: none
+bool FTakeSafePlaceAway3(ACTOR* pa, glm::vec3* ppos);
 // orig: 0x0019F590 (back to the best safe ground: at once, or by the jump's kind 0xA)
 void RecoverActor(ACTOR* pa);
 // the same with the entry q given (SCPT 0x2A: an object or a point)

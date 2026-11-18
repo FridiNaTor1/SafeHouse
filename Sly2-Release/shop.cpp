@@ -557,7 +557,11 @@ void SetGadgetMenu(int s)
 {
     GADGETMENU& p = s_gm;
     if (s == p.ichar) return;
-    if (p.ichar == -1) SetClockFactor(&g_clock, 0, 0.0f);
+    if (p.ichar == -1)
+    {
+        SetClockFactor(&g_clock, 0, 0.0f);
+        PauseGame(0);  // 0x001DB520: lock gameplay input while the gadget menu is open.
+    }
     SelectGadget(-1);
     p.ichar = s;
     switch (s)
@@ -567,6 +571,7 @@ void SetGadgetMenu(int s)
         for (GADGETENT& e : p.aent) e.cur = -1;
         p.aent.clear();
         SetClockFactor(&g_clock, 0, 1.0f);
+        ResumeGame(0);  // 0x001DB520 -> 0x0020F030
         SetGmMsg(-1, -1);
         p.plo = nullptr;
         p.oid = -1;
@@ -626,7 +631,13 @@ void UpdateGadgetMenu(SW* psw, LO* ploPlayer)
     if (!p.plo || p.ichar == -1) return;
     // If a mapped slot shares a navigation button, equip the selected gadget.
     const bool fAssign = sly2actions::profile.enabled && GrfbtnPressed(0x7);
-    if (!fAssign && p.msg != 0 && GrfbtnTakePressed(BtnMenuBack())) { SetGadgetMenu(-1); return; }
+    if (!fAssign && p.msg != 0 && GrfbtnTakePressed(BtnMenuBack()))
+    {
+        // 0x001DAA90 consumes Back through 0x00187D80 -> 0x00187DE0.
+        SetJoyPs2BtnHandled(&g_joyps2, BtnMenuBack());
+        SetGadgetMenu(-1);
+        return;
+    }
     if (!ploPlayer || !FCidDerivedFrom(ploPlayer->Cid(), 0x34)) { SetGadgetMenu(-1); return; }
     UpdateGadgetFlags();
     // orig 0x001DA858 with the d-pad as the stick

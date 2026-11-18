@@ -1,5 +1,6 @@
 // jt.cpp: the players' interaction objects (jt.h): the lists by kind, the description parts, the pipe's frame.
 #include "jt.h"
+#include "envonce.h"
 #include "region.h"
 
 #include "alo.h"
@@ -162,7 +163,7 @@ uint32_t UseMaskInit(LO* plo, uint32_t ib)
         }
     }
     if (!mask) mask = 7u;
-    if (std::getenv("SLY2N_JTPRINT")) std::printf("jt use %d: players 0x%X\n", plo->oid, mask);
+    if (SLY2N_ENV("SLY2N_JTPRINT")) std::printf("jt use %d: players 0x%X\n", plo->oid, mask);
     plo->SetField(0, ib + 0x1C, mask);
     return mask;
 }
@@ -388,7 +389,7 @@ glm::vec3 PosHookTarget(LO* plo)
     const glm::vec3 linkedPos = linked ? PosJtLo(linked) : PosJtLo(plo);
     glm::vec3 point = g_fHookLinkedPosition ? linkedPos : PosHookAnchor(plo);
     point.z = linkedPos.z + 50.0f;
-    if (static const bool s_fPrint = std::getenv("SLY2N_HOOKPOINT") != nullptr; s_fPrint)
+    if (static const bool s_fPrint = SLY2N_ENV("SLY2N_HOOKPOINT") != nullptr; s_fPrint)
     {
         const glm::vec3 center = PosJtLo(plo);
         const glm::vec3 anchor = PosHookAnchor(plo);
@@ -428,7 +429,7 @@ void ShowJtAura(SW* psw, LO* plo)
         s_serial = psw->serial;
         s_pproxy = PloFindSwObjectByOid(psw, 0x624);
     }
-    if (std::getenv("SLY2N_AURAPRINT"))
+    if (SLY2N_ENV("SLY2N_AURAPRINT"))
     {
         std::printf("jt aura %d: proxy %d, %d tracked:", plo->oid, s_pproxy ? s_pproxy->oid : -1, g_jttrack.c);
         for (int i = 0; i < g_jttrack.c; ++i) std::printf(" %d", g_jttrack.ae[i].plo ? g_jttrack.ae[i].plo->oid : -1);
@@ -575,7 +576,7 @@ void RateJt(ACTOR* pa, const glm::vec3& pos, LO* plo, JTL jtl, JTENT* aent, int 
     if (plo->paloParent)
     {
         const glm::vec3 d = PosJtLo(plo) - pos;
-        if (jtl == JTL_Use && std::getenv("SLY2N_JTPRINT") && !std::strcmp(std::getenv("SLY2N_JTPRINT"), "4"))
+        if (jtl == JTL_Use && SLY2N_ENV("SLY2N_JTPRINT") && !std::strcmp(SLY2N_ENV("SLY2N_JTPRINT"), "4"))
             std::printf("jt use %d: radius %.1f distance %.1f (at %.0f %.0f %.0f, actor %.0f %.0f %.0f)\n", plo->oid, plo->sRadius, glm::length(d),
                         PosJtLo(plo).x, PosJtLo(plo).y, PosJtLo(plo).z, pos.x, pos.y, pos.z);
         if (plo->sRadius * plo->sRadius < (d.x * d.x + d.y * d.y) + d.z * d.z) return;
@@ -584,7 +585,7 @@ void RateJt(ACTOR* pa, const glm::vec3& pos, LO* plo, JTL jtl, JTENT* aent, int 
     // TODO(actors): the carried +0x4D4 and its group (+0x4D8), Sly's +0x18C4 / +0x1F18, 0x2E1E4C's exclusions
     if (SLY* p = dynamic_cast<SLY*>(pa); p && plo == p->ploOther) return;
     const JTDESC desc = JtDescOf(plo, jtl);
-    if (jtl == JTL_Use && std::getenv("SLY2N_JTPRINT") && std::atoi(std::getenv("SLY2N_JTPRINT")) >= 3)
+    if (jtl == JTL_Use && SLY2N_ENV("SLY2N_JTPRINT") && std::atoi(SLY2N_ENV("SLY2N_JTPRINT")) >= 3)
         std::printf("jt rate use %d: mask 0x%X allowed 0x%X\n", plo->oid, desc.mask, static_cast<uint32_t>(pa->n1000));
     if (!(static_cast<uint32_t>(pa->n1000) & desc.mask)) return;
     JTENT e;
@@ -595,7 +596,7 @@ void RateJt(ACTOR* pa, const glm::vec3& pos, LO* plo, JTL jtl, JTENT* aent, int 
     const glm::vec3 d = pos - e.pos;
     e.prio = desc.prio;
     e.dist = DistJtAdjust(plo, jtl, 0.0f + std::sqrt((d.x * d.x + d.y * d.y) + d.z * d.z));
-    if (std::getenv("SLY2N_JTPRINT") && jtl == JTL_Pipe) std::printf("jt rate pipe %d: g %.1f dist %.1f\n", plo->oid, e.g, e.dist);
+    if (SLY2N_ENV("SLY2N_JTPRINT") && jtl == JTL_Pipe) std::printf("jt rate pipe %d: g %.1f dist %.1f\n", plo->oid, e.g, e.dist);
     if (1000.0f < e.dist) return;
     int i = c;
     if (desc.kind)
@@ -649,7 +650,7 @@ LO* PloNewJtAura(LO* pproxy, const JTENT& e)
         SetAloVelocityTo(palo, glm::vec3(0.0f));   // vt slots 35 / 36 (D_002A2DD0)
         SetAloAngVelocityTo(palo, glm::vec3(0.0f));
     }
-    if (std::getenv("SLY2N_AURAPRINT"))
+    if (SLY2N_ENV("SLY2N_AURAPRINT"))
         std::printf("aura: %d (proxy %d) on %d at %.0f %.0f %.0f t %.3f\n", plo->oid, pproxy->oid, e.plo ? e.plo->oid : -1, e.pos.x, e.pos.y,
                     e.pos.z, g_clock.t);
     return plo;
@@ -733,7 +734,7 @@ void TrackJt(ACTOR* pa, int n, JTENT* aent)
             if (!aent[k].ploAura) break;  // (the original leaves the rest untracked when no instance is free)
         }
         tr.ae[tr.c++] = aent[k];
-        if (std::getenv("SLY2N_AURAPRINT")) std::printf("jt track %d prio %d t %.3f\n", aent[k].plo ? aent[k].plo->oid : -1, aent[k].prio, g_clock.t);
+        if (SLY2N_ENV("SLY2N_AURAPRINT")) std::printf("jt track %d prio %d t %.3f\n", aent[k].plo ? aent[k].plo->oid : -1, aent[k].prio, g_clock.t);
         BroadcastTaskEvent(g_psw, 0x3D, aent[k].plo);  // 0x1619A0
     }
     std::stable_sort(tr.ae, tr.ae + tr.c, byDist);
@@ -845,7 +846,7 @@ void RandomJtPoint(LO* plo, JTL jtl, float g, glm::vec3* ppos, glm::vec3* pdir)
             dir = m[0] * v.x + m[1] * v.y + m[2] * v.z;
             *ppos = pos + dir * (mag * GRandInRange(0.0f, 25.0f));  // D_002C0D0C
             *pdir = dir;
-            if (std::getenv("SLY2N_SPARKLEPRINT"))
+            if (SLY2N_ENV("SLY2N_SPARKLEPRINT"))
                 std::printf("sparkle pipe %d s %.0f curve %.0f %.0f %.0f x row %.2f %.2f %.2f dir %.2f %.2f %.2f\n", plo->oid, s, pos.x, pos.y, pos.z,
                             m[0].x, m[0].y, m[0].z, dir.x, dir.y, dir.z);
             return;
@@ -886,7 +887,7 @@ void RandomJtPoint(LO* plo, JTL jtl, float g, glm::vec3* ppos, glm::vec3* pdir)
         const float r = GRandInRange(0.0f, 75.0f);  // D_002BE90C
         *ppos = PosHookAnchor(plo) + VecCylind(pan, r, 0.0f);
         *pdir = glm::vec3(0.0f, 0.0f, 1.0f);
-        if (std::getenv("SLY2N_HOOKPOINT"))
+        if (SLY2N_ENV("SLY2N_HOOKPOINT"))
             std::printf("HOOK_SPARK {\"oid\":%u,\"pos\":[%.9g,%.9g,%.9g]}\n", plo->oid, ppos->x, ppos->y, ppos->z);
         return;
     }
@@ -940,7 +941,7 @@ void SprayJtSparkles(ACTOR* pa, int n, const JTENT* aent)
         }
     }
     if (c > 0) EmitLoParticlesAt(pemit, c, apos, avel, at0, at1);
-    if (std::getenv("SLY2N_SPARKLEPRINT") && c > 0)
+    if (SLY2N_ENV("SLY2N_SPARKLEPRINT") && c > 0)
         std::printf("sparkles t %.3f: %d at %.0f %.0f %.0f (emitter %d %p of %d)\n", g_clock.t, c, apos[0].x, apos[0].y, apos[0].z, pemit->oid, (void*)pemit,
                     pa->palo->oid);
 }
@@ -996,7 +997,7 @@ void UpdateJtCandidates(ACTOR* pa, uint32_t grf)
         else HudPrompt(id, -1.0f);
         g_jttrack.idShown = id;
     }
-    if (std::getenv("SLY2N_JTPRINT") && (fChanged || std::getenv("SLY2N_JTPRINT")[0] == '2'))
+    if (SLY2N_ENV("SLY2N_JTPRINT") && (fChanged || SLY2N_ENV("SLY2N_JTPRINT")[0] == '2'))
     {
         std::printf("jt t %.3f: %d tracked:", g_clock.t, g_jttrack.c);
         for (int i = 0; i < g_jttrack.c; ++i) std::printf(" %d (list %d, %.1f)", g_jttrack.ae[i].plo->oid, g_jttrack.ae[i].jtl, g_jttrack.ae[i].dist);

@@ -27,7 +27,7 @@ FNMAP(0x100E28, 0x100EA0, 80)  // ParisCoverage_100E28 changed
 FNMAP(0x100EB0, 0x100F18, 96)  // func_00100EB0 similar
 FNMAP(0x100F38, 0x100FA0, 50)  // func_00100F38 changed
 FNMAP(0x100FE0, 0x101028, 98)  // func_00100FE0 similar
-FNMAP(0x101088, 0x1010D0, 98)  // func_00101088 similar
+FNMAP(0x101088, 0x1010D0, 98)  // func_00101088 similar decomp
 FNMAP(0x101108, 0x101290, 96)  // ParisProgress_101108 similar
 FNMAP(0x101190, 0x101318, 96)  // func_00101190 similar
 FNMAP(0x101218, 0x1013A0, 98)  // ParisSplice_101218 similar
@@ -41,9 +41,9 @@ FNMAP(0x101608, 0x101790, 97)  // ParisSplice_101608 similar
 FNMAP(0x1016C0, 0x101A18, 98)  // func_001016C0 similar
 FNMAP(0x101768, 0x101AC0, 85)  // func_00101768 similar
 FNMAP(0x101848, 0x101BB0, 98)  // func_00101848 similar
-FNMAP(0x101910, 0x101C78, 100)  // RefCreateSplicedObject identical
+FNMAP(0x101910, 0x101C78, 100)  // RefCreateSplicedObject identical decomp
 FNMAP(0x1019D0, 0x101D38, 98)  // func_001019D0 similar
-FNMAP(0x101A88, 0x101DF0, 99)  // func_00101A88 similar
+FNMAP(0x101A88, 0x101DF0, 99)  // func_00101A88 similar decomp
 FNMAP(0x101B60, 0x101EC8, 98)  // func_00101B60 similar
 FNMAP(0x101BE0, 0x101F48, 96)  // func_00101BE0 similar
 FNMAP(0x101C68, 0x10CA10, 91)  // ParisSplice_101C68 similar
@@ -55,13 +55,13 @@ FNMAP(0x101F08, 0x102278, 96)  // RefSoundMethod similar
 FNMAP(0x101F90, 0x102300, 98)  // RefSoundMethod similar
 FNMAP(0x102038, 0x1032F0, 100)  // RefRetainSound identical
 FNMAP(0x1020D8, 0x102500, 95)  // FreshHelpers_WorldSplice similar
-FNMAP(0x102150, 0x102578, 98)  // SatelliteLow_102150 similar
-FNMAP(0x1021D0, 0x1025F8, 98)  // func_001021D0 similar
+FNMAP(0x102150, 0x102578, 98)  // SatelliteLow_102150 similar decomp
+FNMAP(0x1021D0, 0x1025F8, 98)  // func_001021D0 similar decomp
 FNMAP(0x102250, 0x102678, 95)  // func_00102250 similar
 FNMAP(0x1022C8, 0x1026F0, 95)  // func_001022C8 similar
 FNMAP(0x102340, 0x102768, 95)  // func_00102340 similar
 FNMAP(0x1023B8, 0x1027E0, 95)  // func_001023B8 similar
-FNMAP(0x102430, 0x102858, 98)  // func_00102430 similar
+FNMAP(0x102430, 0x102858, 98)  // func_00102430 similar decomp
 FNMAP(0x1024B0, 0x1028D8, 96)  // func_001024B0 similar
 FNMAP(0x102538, 0x102960, 98)  // func_00102538 similar
 FNMAP(0x1025A8, 0x1029D0, 96)  // func_001025A8 similar
@@ -108,8 +108,8 @@ FNMAP(0x104350, 0x105210, 98)  // func_00104350 similar
 FNMAP(0x104408, 0x104E10, 98)  // func_00104408 similar
 FNMAP(0x1044B0, 0x104D68, 98)  // func_001044B0 similar
 FNMAP(0x104558, 0x1076C8, 97)  // func_00104558 similar
-FNMAP(0x104718, 0x1054C0, 100)  // MurrayMisc_104718 identical
-FNMAP(0x1047A0, 0x105548, 100)  // func_001047A0 identical
+FNMAP(0x104718, 0x1054C0, 100)  // MurrayMisc_104718 identical decomp
+FNMAP(0x1047A0, 0x105548, 100)  // func_001047A0 identical decomp
 FNMAP(0x104840, 0x1055E8, 100)  // func_00104840 identical
 FNMAP(0x1048F0, 0x105698, 100)  // four_scalar_object_splice identical
 FNMAP(0x1049B0, 0x105758, 98)  // func_001049B0 similar
@@ -131,7 +131,7 @@ FNMAP(0x105278, 0x1077A8, 95)  // func_00105278 similar
 FNMAP(0x1052F0, 0x103E30, 98)  // func_001052F0 similar
 FNMAP(0x1055B0, 0x1073A0, 91)  // func_001055B0 similar
 FNMAP(0x105628, 0x107490, 95)  // func_00105628 similar
-FNMAP(0x1056A0, 0x106AB0, 99)  // func_001056A0 similar
+FNMAP(0x1056A0, 0x106AB0, 99)  // func_001056A0 similar decomp
 FNMAP(0x1057E0, 0x107290, 96)  // func_001057E0 similar
 FNMAP(0x105868, 0x107318, 92)  // func_00105868 similar
 FNMAP(0x1058F0, 0x1078B0, 92)  // ParisProgress_1058F0 similar
@@ -226,7 +226,7 @@ FNMAP(0x10BDC8, 0x10A048, 98)  // func_0010BDC8 similar
 FNMAP(0x10BE70, 0x10A7E8, 95)  // func_0010BE70 similar
 FNMAP(0x10BEE8, 0x10A860, 96)  // func_0010BEE8 similar
 FNMAP(0x10BF70, 0x10D5D8, 100)  // func_0010BF70 identical
-FNMAP(0x10BFF8, 0x10AB00, 100)  // integer_vector_integer_object_splice identical
+FNMAP(0x10BFF8, 0x10AB00, 100)  // integer_vector_integer_object_splice identical decomp
 FNMAP(0x10C0A8, 0x10A8E8, 95)  // func_0010C0A8 similar
 FNMAP(0x10C120, 0x10ABB0, 98)  // func_0010C120 similar
 FNMAP(0x10C1D8, 0x10AC68, 50)  // func_0010C1D8 changed
@@ -285,7 +285,7 @@ FNMAP(0x10E0C0, 0x10D0C0, 95)  // ParisSplice_10E0C0 similar
 FNMAP(0x10E138, 0x10D138, 96)  // ParisSplice_10E138 similar
 FNMAP(0x10E1C0, 0x10D1C0, 96)  // ReconCold_10E1C0 similar
 FNMAP(0x10E248, 0x10D248, 98)  // BossLow_10E248 similar
-FNMAP(0x10E2B8, 0x10D2B8, 100)  // ParisSplice_10E2B8 identical
+FNMAP(0x10E2B8, 0x10D2B8, 100)  // ParisSplice_10E2B8 identical decomp
 FNMAP(0x10E328, 0x10D328, 98)  // func_0010E328 similar
 FNMAP(0x10E398, 0x10D398, 96)  // ParisCoverage_10E398 similar
 FNMAP(0x10E420, 0x10D420, 96)  // ParisCoverage_10E420 similar
@@ -344,9 +344,12 @@ FNMAP(0x110A28, 0x111EA8, 92)  // func_00110A28 similar
 FNMAP(0x110AB0, 0x111F30, 84)  // func_00110AB0 similar
 FNMAP(0x110AD8, 0x111F58, 61)  // func_00110AD8 changed
 FNMAP(0x110B10, 0x111F80, 61)  // func_00110B10 changed
+FNMAP(0x110CD0, 0x112110, 80)  // ParisLinear_110CD0 changed decomp
+FNMAP(0x1112A8, 0x112138, 80)  // func_001112A8 changed decomp
 FNMAP(0x1116D8, 0x111FA8, 84)  // func_001116D8 similar
 FNMAP(0x111700, 0x111FD0, 84)  // func_00111700 similar
 FNMAP(0x111780, 0x111FF8, 84)  // func_00111780 similar
+FNMAP(0x111EF0, 0x112AC0, 80)  // func_00111EF0 changed decomp
 FNMAP(0x112BE8, 0x112020, 95)  // func_00112BE8 similar
 FNMAP(0x112C10, 0x112188, 54)  // ParisLinear_112C10 changed
 FNMAP(0x112C50, 0x1121B0, 50)  // ParisLinear_112C50 changed
@@ -553,7 +556,7 @@ FNMAP(0x114AC0, 0x115CF8, 100)  // GlobalCtor_1147D8 identical
 FNMAP(0x114AE0, 0x115D18, 61)  // StaticInit_114AE0 changed
 FNMAP(0x1168F8, 0x117B20, 100)  // GlobalCtor_114AE0 identical
 FNMAP(0x116918, 0x117B40, 98)  // PvAllocClear__FP4HEAPii similar
-FNMAP(0x116970, 0x117BF0, 98)  // PvAllocCopy__FP4HEAPiPvi similar
+FNMAP(0x116970, 0x117BF0, 98)  // PvAllocCopy__FP4HEAPiPvi similar decomp
 FNMAP(0x1169D8, 0x117C60, 88)  // PchzAllocCopy__FP4HEAPPci similar
 FNMAP(0x116A30, 0x117CB8, 100)  // PvAllocRequest1D0 identical
 FNMAP(0x116A58, 0x117D08, 100)  // heap_reallocate_by_default_kind register-renamed
@@ -569,67 +572,67 @@ FNMAP(0x116CE0, 0x118118, 93)  // func_00116CE0 similar
 FNMAP(0x116D00, 0x118138, 93)  // func_00116D00 similar
 FNMAP(0x116D20, 0x118158, 49)  // ReleaseStackInto_116D28 changed
 FNMAP(0x116D28, 0x118160, 79)  // Free__9CDynArray similar
-FNMAP(0x116D70, 0x1181A8, 75)  // Reserve__9CDynArrayi similar
+FNMAP(0x116D70, 0x1181A8, 80)  // Reserve__9CDynArrayi similar decomp
 FNMAP(0x116E30, 0x118260, 98)  // append_dynamic_array similar
 FNMAP(0x116EA8, 0x1182D8, 96)  // FinalReleaseIntoCommonInit similar
 FNMAP(0x116ED8, 0x118308, 80)  // func_00116ED8 similar
 FNMAP(0x117010, 0x118440, 100)  // func_00117010 identical
-FNMAP(0x117030, 0x118468, 100)  // EvalHermite identical
+FNMAP(0x117030, 0x118468, 100)  // EvalHermite identical decomp
 FNMAP(0x117120, 0x118560, 99)  // Hermite similar
-FNMAP(0x117308, 0x118740, 99)  // MatHermiteRotation similar
+FNMAP(0x117308, 0x118740, 99)  // MatHermiteRotation similar decomp
 FNMAP(0x117640, 0x118A78, 49)  // ReleaseStackInto_117650 changed
 FNMAP(0x117650, 0x118A90, 80)  // ReleaseStackInto_117650 similar
 FNMAP(0x117788, 0x118BC8, 100)  // func_00117788 identical
 FNMAP(0x1177A8, 0x118BE8, 97)  // __18CBinaryInputStream similar
-FNMAP(0x1177F0, 0x118C30, 93)  // Close__18CBinaryInputStream similar
-FNMAP(0x117810, 0x118C50, 100)  // Refill__18CBinaryInputStream register-renamed
-FNMAP(0x117898, 0x118CD8, 80)  // CbRead__18CBinaryInputStreamiPv similar
+FNMAP(0x1177F0, 0x118C30, 93)  // Close__18CBinaryInputStream similar decomp
+FNMAP(0x117810, 0x118C50, 100)  // Refill__18CBinaryInputStream register-renamed decomp
+FNMAP(0x117898, 0x118CD8, 80)  // CbRead__18CBinaryInputStreamiPv similar decomp
 FNMAP(0x117968, 0x118DA0, 93)  // Read__18CBinaryInputStreamiPv similar
-FNMAP(0x117988, 0x118DC0, 96)  // Align__18CBinaryInputStreami similar
+FNMAP(0x117988, 0x118DC0, 96)  // Align__18CBinaryInputStreami similar decomp
 FNMAP(0x1179B8, 0x118DF0, 93)  // Skip__18CBinaryInputStreami similar
 FNMAP(0x1179D8, 0x118E10, 100)  // SetDecompress__18CBinaryInputStreamiPUc identical
-FNMAP(0x1179F0, 0x118E28, 93)  // Decompress__18CBinaryInputStream similar
+FNMAP(0x1179F0, 0x118E28, 93)  // Decompress__18CBinaryInputStream similar decomp
 FNMAP(0x117BC8, 0x118FF0, 49)  // ReleaseStackInto_117BD0 changed
-FNMAP(0x117BD0, 0x118FF8, 80)  // U8Read__18CBinaryInputStream similar
-FNMAP(0x117C20, 0x119048, 100)  // U16Read__18CBinaryInputStream register-renamed
-FNMAP(0x117C80, 0x1190A8, 98)  // U32Read__18CBinaryInputStream similar
+FNMAP(0x117BD0, 0x118FF8, 80)  // U8Read__18CBinaryInputStream similar decomp
+FNMAP(0x117C20, 0x119048, 100)  // U16Read__18CBinaryInputStream register-renamed decomp
+FNMAP(0x117C80, 0x1190A8, 98)  // U32Read__18CBinaryInputStream similar decomp
 FNMAP(0x117CF8, 0x119120, 49)  // ReleaseStackInto_117D00 changed
-FNMAP(0x117D00, 0x119128, 80)  // S8Read__18CBinaryInputStream similar
-FNMAP(0x117D50, 0x119178, 98)  // S16Read__18CBinaryInputStream similar
-FNMAP(0x117DB8, 0x1191E0, 98)  // S32Read__18CBinaryInputStream similar
+FNMAP(0x117D00, 0x119128, 80)  // S8Read__18CBinaryInputStream similar decomp
+FNMAP(0x117D50, 0x119178, 98)  // S16Read__18CBinaryInputStream similar decomp
+FNMAP(0x117DB8, 0x1191E0, 98)  // S32Read__18CBinaryInputStream similar decomp
 FNMAP(0x117E30, 0x119258, 49)  // ReleaseStackInto_117E38 changed
-FNMAP(0x117E38, 0x119260, 100)  // F32Read__18CBinaryInputStream register-renamed
+FNMAP(0x117E38, 0x119260, 100)  // F32Read__18CBinaryInputStream register-renamed decomp
 FNMAP(0x117EB0, 0x1192D8, 100)  // ReadVector__18CBinaryInputStreamP6VECTOR identical
 FNMAP(0x117ED0, 0x1192F8, 100)  // ReadMatrix__18CBinaryInputStreamP7MATRIX3 identical
-FNMAP(0x117F18, 0x119340, 98)  // ReadMatrix4__18CBinaryInputStreamP7MATRIX4 similar
+FNMAP(0x117F18, 0x119340, 98)  // ReadMatrix4__18CBinaryInputStreamP7MATRIX4 similar decomp
 FNMAP(0x117F70, 0x119398, 100)  // ReadVector4__18CBinaryInputStreamP7VECTOR4 identical
 FNMAP(0x117F90, 0x1193B8, 100)  // ReadCb12__18CBinaryInputStreamPv identical
 FNMAP(0x117FB0, 0x1193D8, 100)  // ReadCb8__18CBinaryInputStreamPv identical
 FNMAP(0x117FD0, 0x1193F8, 91)  // CBinaryInputStream_ReadGeom similar
 FNMAP(0x118220, 0x119640, 81)  // CBinaryInputStream_ReadBspTree similar
 FNMAP(0x118378, 0x119788, 49)  // ReleaseStackInto_118380 changed
-FNMAP(0x118380, 0x119790, 99)  // CBinaryInputStream_ReadSz similar
+FNMAP(0x118380, 0x119790, 99)  // CBinaryInputStream_ReadSz similar decomp
 FNMAP(0x118420, 0x119830, 96)  // ReadDebugString similar
 FNMAP(0x118458, 0x119948, 100)  // CBinaryInputStream_ReadCb64 identical
-FNMAP(0x118480, 0x119A00, 96)  // ParisLinear_118480 similar
+FNMAP(0x118480, 0x119A00, 96)  // ParisLinear_118480 similar decomp
 FNMAP(0x1184B8, 0x119A38, 100)  // ParisBlocks_1184B8 identical
 FNMAP(0x1184E8, 0x119A68, 100)  // ParisLinear_1184E8 identical
-FNMAP(0x118500, 0x119A80, 100)  // ParisLinear_118500 identical
+FNMAP(0x118500, 0x119A80, 100)  // ParisLinear_118500 identical decomp
 FNMAP(0x118510, 0x119A90, 80)  // func_00118510 similar
 FNMAP(0x118648, 0x119BC8, 100)  // func_00118648 identical
 FNMAP(0x118668, 0x2B8E08, 80)  // ClipSegmentBsp similar
 FNMAP(0x118D08, 0x2B9968, 84)  // OldLowerClassifyBsp similar
 FNMAP(0x118FB0, 0x2B9CC0, 83)  // IbspFindPoint similar
-FNMAP(0x1191E8, 0x119D00, 92)  // CloneBspTree similar
-FNMAP(0x119308, 0x119E20, 98)  // PlaneFromPoints similar
+FNMAP(0x1191E8, 0x119D00, 92)  // CloneBspTree similar decomp
+FNMAP(0x119308, 0x119E20, 98)  // PlaneFromPoints similar decomp
 FNMAP(0x119390, 0x119EA8, 100)  // PlaneFromNormalPos identical
 FNMAP(0x1193C0, 0x119ED8, 49)  // store_vector_with_w similar
 FNMAP(0x1193D0, 0x119EE8, 49)  // PublishFloatInto_1193D8 changed
-FNMAP(0x1193D8, 0x119EF0, 96)  // SceneTransformPlane similar
+FNMAP(0x1193D8, 0x119EF0, 96)  // SceneTransformPlane similar decomp
 FNMAP(0x119488, 0x119FA0, 80)  // func_00119488 similar
 FNMAP(0x1195C0, 0x11A0D8, 100)  // func_001195C0 identical
-FNMAP(0x1195E0, 0x11A278, 48)  // CroutDecomp__FiPfT1 changed
-FNMAP(0x1198F8, 0x11A608, 47)  // CroutSolve__FiPfN21 changed
+FNMAP(0x1195E0, 0x11A278, 80)  // CroutDecomp__FiPfT1 changed decomp
+FNMAP(0x1198F8, 0x11A608, 80)  // CroutSolve__FiPfN21 changed decomp
 FNMAP(0x119A68, 0x11A778, 80)  // func_00119A68 similar
 FNMAP(0x119BA0, 0x11A8B0, 100)  // func_00119BA0 identical
 FNMAP(0x119BC8, 0x11A8D0, 49)  // first_word_callback changed
@@ -645,29 +648,29 @@ FNMAP(0x11A030, 0x11AD40, 100)  // func_0011A030 identical
 FNMAP(0x11A050, 0x11AD60, 100)  // InitSl identical
 FNMAP(0x11A058, 0x11AD68, 100)  // ClearSlHead identical
 FNMAP(0x11A060, 0x11AD70, 49)  // ClearSl similar
-FNMAP(0x11A070, 0x11AD80, 100)  // AppendSlEntry identical
-FNMAP(0x11A098, 0x11ADA8, 100)  // PrependSlEntry identical
-FNMAP(0x11A0C0, 0x11ADD0, 100)  // InsertSlEntryAfter identical
-FNMAP(0x11A118, 0x11AE28, 92)  // RemoveSlEntry similar
+FNMAP(0x11A070, 0x11AD80, 100)  // AppendSlEntry identical decomp
+FNMAP(0x11A098, 0x11ADA8, 100)  // PrependSlEntry identical decomp
+FNMAP(0x11A0C0, 0x11ADD0, 100)  // InsertSlEntryAfter identical decomp
+FNMAP(0x11A118, 0x11AE28, 92)  // RemoveSlEntry similar decomp
 FNMAP(0x11A1B8, 0x11AEC8, 96)  // FFindSlEntry similar
 FNMAP(0x11A1E8, 0x11AEF8, 49)  // FIsSlEmpty similar
 FNMAP(0x11A1F8, 0x11AF38, 100)  // InitDl identical
 FNMAP(0x11A200, 0x11AF40, 49)  // ClearDl similar
 FNMAP(0x11A210, 0x11AF50, 49)  // ClearDle similar
-FNMAP(0x11A220, 0x11AF60, 100)  // AppendDlEntry identical
-FNMAP(0x11A250, 0x11AF90, 100)  // PrependDlEntry identical
-FNMAP(0x11A280, 0x11AFC0, 100)  // InsertDlEntryBefore identical
-FNMAP(0x11A2E8, 0x11B028, 100)  // RemoveDlEntry identical
+FNMAP(0x11A220, 0x11AF60, 100)  // AppendDlEntry identical decomp
+FNMAP(0x11A250, 0x11AF90, 100)  // PrependDlEntry identical decomp
+FNMAP(0x11A280, 0x11AFC0, 100)  // InsertDlEntryBefore identical decomp
+FNMAP(0x11A2E8, 0x11B028, 100)  // RemoveDlEntry identical decomp
 FNMAP(0x11A380, 0x11B0C0, 96)  // FFindDlEntry similar
 FNMAP(0x11A3B0, 0x11B0F0, 49)  // FIsDlEmpty similar
 FNMAP(0x11A3C0, 0x11AF08, 100)  // CPvDl__FP2DL identical
 FNMAP(0x11A3F8, 0x11B138, 80)  // func_0011A3F8 similar
 FNMAP(0x11A530, 0x11B270, 100)  // func_0011A530 identical
-FNMAP(0x11A550, 0x11B290, 100)  // InitDzgRows identical
-FNMAP(0x11A6B8, 0x11B3F8, 61)  // ClearDzgSolution__FP3DZG changed
+FNMAP(0x11A550, 0x11B290, 100)  // InitDzgRows identical decomp
+FNMAP(0x11A6B8, 0x11B3F8, 80)  // ClearDzgSolution__FP3DZG changed decomp
 FNMAP(0x11A770, 0x11B4B0, 80)  // EnforceDzgDz__FP3DZGP2DZ similar
 FNMAP(0x11ABF8, 0x11B968, 80)  // EnforceDzgConstraints similar
-FNMAP(0x11AD30, 0x11BA98, 57)  // SolveDzgConstraints changed
+FNMAP(0x11AD30, 0x11BA98, 80)  // SolveDzgConstraints changed decomp
 FNMAP(0x11AE88, 0x11BBF0, 80)  // func_0011AE88 similar
 FNMAP(0x11AFC0, 0x11BD28, 100)  // func_0011AFC0 identical
 FNMAP(0x11AFE0, 0x11BF50, 79)  // folded_string_hash similar
@@ -680,35 +683,35 @@ FNMAP(0x11B318, 0x11C6D0, 100)  // FInvertMatrix3 identical
 FNMAP(0x11B340, 0x11C6F8, 95)  // InverseMatrix3 similar
 FNMAP(0x11B3D0, 0x11C798, 95)  // NormalizeRotateMatrix3__FP7MATRIX3 similar
 FNMAP(0x11B470, 0x11C838, 49)  // ReleaseStackInto_11B480 similar
-FNMAP(0x11B480, 0x11C840, 98)  // BuildRotateMatrixSinCos similar
-FNMAP(0x11B500, 0x11C8C0, 98)  // MatRotateAxis similar
-FNMAP(0x11B570, 0x11C930, 99)  // BuildRotateMatrixVector similar
-FNMAP(0x11B628, 0x11C9E8, 99)  // BuildEulerMatrix similar
-FNMAP(0x11B720, 0x11CAE0, 100)  // BuildPanTiltMatrix identical
+FNMAP(0x11B480, 0x11C840, 98)  // BuildRotateMatrixSinCos similar decomp
+FNMAP(0x11B500, 0x11C8C0, 98)  // MatRotateAxis similar decomp
+FNMAP(0x11B570, 0x11C930, 99)  // BuildRotateMatrixVector similar decomp
+FNMAP(0x11B628, 0x11C9E8, 99)  // BuildEulerMatrix similar decomp
+FNMAP(0x11B720, 0x11CAE0, 100)  // BuildPanTiltMatrix identical decomp
 FNMAP(0x11B7E0, 0x11CBA0, 100)  // BuildLookAtMatrixZ identical
 FNMAP(0x11B828, 0x11CBE8, 49)  // ReleaseStackInto_11B830 changed
-FNMAP(0x11B830, 0x11CBF0, 100)  // BuildLookAtMatrix identical
-FNMAP(0x11B938, 0x11CCF8, 99)  // LevelMatrix3 similar
+FNMAP(0x11B830, 0x11CBF0, 100)  // BuildLookAtMatrix identical decomp
+FNMAP(0x11B938, 0x11CCF8, 99)  // LevelMatrix3 similar decomp
 FNMAP(0x11BA00, 0x11CDC0, 49)  // ReleaseStackInto_11BA08 changed
 FNMAP(0x11BA08, 0x11CDC8, 98)  // RotateVectors similar
-FNMAP(0x11BC00, 0x11CFC0, 100)  // MulMat3TransposeA identical
-FNMAP(0x11BC88, 0x11D048, 98)  // DecomposeRotateMatrixPanTilt__FP7MATRIX3PfT1 similar
-FNMAP(0x11BCF8, 0x11D0B8, 92)  // DecomposeRotateMatrixRad__FP7MATRIX3PfP6VECTOR similar
-FNMAP(0x11BFB8, 0x11D388, 100)  // RotationMatrixAxisVector identical
+FNMAP(0x11BC00, 0x11CFC0, 100)  // MulMat3TransposeA identical decomp
+FNMAP(0x11BC88, 0x11D048, 98)  // DecomposeRotateMatrixPanTilt__FP7MATRIX3PfT1 similar decomp
+FNMAP(0x11BCF8, 0x11D0B8, 92)  // DecomposeRotateMatrixRad__FP7MATRIX3PfP6VECTOR similar decomp
+FNMAP(0x11BFB8, 0x11D388, 100)  // RotationMatrixAxisVector identical decomp
 FNMAP(0x11BFF0, 0x11D3C0, 99)  // DecomposeEulerMatrix similar
 FNMAP(0x11C128, 0x11D518, 97)  // __ml__FRC7MATRIX4G8VU_FLOAT similar
-FNMAP(0x11C168, 0x11D558, 100)  // MulMatrix4 identical
+FNMAP(0x11C168, 0x11D558, 100)  // MulMatrix4 identical decomp
 FNMAP(0x11C1A8, 0x11D598, 96)  // __ml__FRC7MATRIX4G10VU_VECTOR4 similar
 FNMAP(0x11C1D8, 0x11D628, 100)  // transpose_matrix4 identical
-FNMAP(0x11C210, 0x11D660, 100)  // MatrixFromScaledRows identical
-FNMAP(0x11C288, 0x11D6D8, 100)  // BuildScaledMatrix4 identical
+FNMAP(0x11C210, 0x11D660, 100)  // MatrixFromScaledRows identical decomp
+FNMAP(0x11C288, 0x11D6D8, 100)  // BuildScaledMatrix4 identical decomp
 FNMAP(0x11C2F0, 0x11D740, 100)  // FInvertMatrix4 identical
-FNMAP(0x11C318, 0x11D768, 96)  // InverseAffineMatrix4 similar
-FNMAP(0x11C3D0, 0x11D830, 98)  // compose_inverse_matrix similar
-FNMAP(0x11C448, 0x11D8A8, 99)  // BuildSimpleProjectionMatrix__FffffffP7MATRIX4 similar
+FNMAP(0x11C318, 0x11D768, 96)  // InverseAffineMatrix4 similar decomp
+FNMAP(0x11C3D0, 0x11D830, 98)  // compose_inverse_matrix similar decomp
+FNMAP(0x11C448, 0x11D8A8, 99)  // BuildSimpleProjectionMatrix__FffffffP7MATRIX4 similar decomp
 FNMAP(0x11C500, 0x11D968, 73)  // FInvertMatrix__FiPfT1 changed
 FNMAP(0x11C8E8, 0x11DD48, 46)  // transpose_matrix changed
-FNMAP(0x11C950, 0x11DDA8, 99)  // SmoothMatrix similar
+FNMAP(0x11C950, 0x11DDA8, 99)  // SmoothMatrix similar decomp
 FNMAP(0x11CAB0, 0x11DF08, 96)  // GMaxRowLengthMatrix3 similar
 FNMAP(0x11CB50, 0x11DFA8, 80)  // func_0011CB50 similar
 FNMAP(0x11CC88, 0x11E0E0, 100)  // func_0011CC88 identical
@@ -720,59 +723,59 @@ FNMAP(0x11CDC8, 0x11E220, 49)  // MoveResultIntoSlotheapBlock changed
 FNMAP(0x11CDD8, 0x11E230, 100)  // EnsureSlotheapBlock identical
 FNMAP(0x11CE08, 0x11E260, 80)  // func_0011CE08 similar
 FNMAP(0x11CF40, 0x11E398, 100)  // func_0011CF40 identical
-FNMAP(0x11CF60, 0x11E3B8, 98)  // RadNormalize similar
-FNMAP(0x11CFE0, 0x11E560, 100)  // GLimitAbs__Fff identical
-FNMAP(0x11D018, 0x11E598, 91)  // GSmooth similar
-FNMAP(0x11D1C0, 0x11E730, 99)  // GSmoothA__FffffP4SMPAPf similar
-FNMAP(0x11D2D0, 0x11E840, 98)  // RadSmooth__FfffP3SMPPf similar
+FNMAP(0x11CF60, 0x11E3B8, 98)  // RadNormalize similar decomp
+FNMAP(0x11CFE0, 0x11E560, 100)  // GLimitAbs__Fff identical decomp
+FNMAP(0x11D018, 0x11E598, 91)  // GSmooth similar decomp
+FNMAP(0x11D1C0, 0x11E730, 99)  // GSmoothA__FffffP4SMPAPf similar decomp
+FNMAP(0x11D2D0, 0x11E840, 98)  // RadSmooth__FfffP3SMPPf similar decomp
 FNMAP(0x11D3C0, 0x11E8B8, 96)  // NRandom similar
-FNMAP(0x11D3F8, 0x11E8F0, 97)  // NRandInRange similar
-FNMAP(0x11D448, 0x11E940, 100)  // GRandInRange register-renamed
-FNMAP(0x11D4D0, 0x11E9F0, 100)  // FFloatsNear__Ffff identical
-FNMAP(0x11D508, 0x11EA28, 99)  // CSolveQuadratic similar
+FNMAP(0x11D3F8, 0x11E8F0, 97)  // NRandInRange similar decomp
+FNMAP(0x11D448, 0x11E940, 100)  // GRandInRange register-renamed decomp
+FNMAP(0x11D4D0, 0x11E9F0, 100)  // FFloatsNear__Ffff identical decomp
+FNMAP(0x11D508, 0x11EA28, 99)  // CSolveQuadratic similar decomp
 FNMAP(0x11D5B0, 0x11EAD0, 100)  // PrescaleClq__FP3CLQffT0 register-renamed
 FNMAP(0x11D608, 0x11EB28, 99)  // CalculateSinCos similar
-FNMAP(0x11D740, 0x11EC60, 100)  // GTrunc__Fd identical
-FNMAP(0x11D7F0, 0x11ED10, 100)  // truncate_float identical
-FNMAP(0x11D898, 0x11EDB8, 97)  // GModPositive similar
+FNMAP(0x11D740, 0x11EC60, 100)  // GTrunc__Fd identical decomp
+FNMAP(0x11D7F0, 0x11ED10, 100)  // truncate_float identical decomp
+FNMAP(0x11D898, 0x11EDB8, 97)  // GModPositive similar decomp
 FNMAP(0x11D8D8, 0x11EDF8, 96)  // FitClq__FffffP3CLQ similar
 FNMAP(0x11D910, 0x11EE30, 100)  // FCheckLm__FP2LMf identical
 FNMAP(0x11D940, 0x11EE60, 49)  // ReleaseStackInto_11D948 changed
-FNMAP(0x11D948, 0x11EE68, 100)  // GLimitLm__FP2LMf identical
-FNMAP(0x11D978, 0x11EE98, 98)  // GClampLm similar
+FNMAP(0x11D948, 0x11EE68, 100)  // GLimitLm__FP2LMf identical decomp
+FNMAP(0x11D978, 0x11EE98, 98)  // GClampLm similar decomp
 FNMAP(0x11D9D8, 0x2BC640, 49)  // ReconCompletedLow_11D9D8 changed
 FNMAP(0x11D9E0, 0x11EF00, 79)  // MinimizeRange__FPFPvf_fPvffffPfT6 similar
-FNMAP(0x11DCD8, 0x11F230, 100)  // unpack_rgb identical
-FNMAP(0x11DD30, 0x11F288, 100)  // pack_rgba identical
-FNMAP(0x11DD90, 0x11F4E0, 95)  // RgbFromHsv similar
+FNMAP(0x11DCD8, 0x11F230, 100)  // unpack_rgb identical decomp
+FNMAP(0x11DD30, 0x11F288, 100)  // pack_rgba identical decomp
+FNMAP(0x11DD90, 0x11F4E0, 95)  // RgbFromHsv similar decomp
 FNMAP(0x11DFA0, 0x11F6E8, 100)  // ConvertUserHsvToUserRgb__FP6VECTORT0 identical
 FNMAP(0x11E040, 0x11FC10, 80)  // func_0011E040 similar
 FNMAP(0x11E178, 0x11FD48, 100)  // func_0011E178 identical
 FNMAP(0x11E198, 0x11FD68, 49)  // ReleaseStackInto_11E1A0 changed
 FNMAP(0x11E1A0, 0x11FD70, 98)  // VecCylind similar
-FNMAP(0x11E208, 0x11FDD8, 100)  // SetVectorSphere identical
-FNMAP(0x11E290, 0x11FE60, 100)  // GSplitVector identical
+FNMAP(0x11E208, 0x11FDD8, 100)  // SetVectorSphere identical decomp
+FNMAP(0x11E290, 0x11FE60, 100)  // GSplitVector identical decomp
 FNMAP(0x11E2D8, 0x11FEA8, 100)  // BuildOrthonormalVectors register-renamed
-FNMAP(0x11E390, 0x11FF60, 99)  // VecPerpendicular similar
-FNMAP(0x11E4B0, 0x120080, 100)  // RadBetweenVectors similar
-FNMAP(0x11E630, 0x120200, 99)  // ClosestLineParams similar
-FNMAP(0x11E7C8, 0x120398, 98)  // DistSegments similar
-FNMAP(0x11E958, 0x120528, 99)  // PanTiltFromVector similar
-FNMAP(0x11E9F8, 0x1205F0, 100)  // LimitVectorLength identical
-FNMAP(0x11EA60, 0x120658, 97)  // FClosestPointsLines similar
+FNMAP(0x11E390, 0x11FF60, 99)  // VecPerpendicular similar decomp
+FNMAP(0x11E4B0, 0x120080, 100)  // RadBetweenVectors similar decomp
+FNMAP(0x11E630, 0x120200, 99)  // ClosestLineParams similar decomp
+FNMAP(0x11E7C8, 0x120398, 98)  // DistSegments similar decomp
+FNMAP(0x11E958, 0x120528, 99)  // PanTiltFromVector similar decomp
+FNMAP(0x11E9F8, 0x1205F0, 100)  // LimitVectorLength identical decomp
+FNMAP(0x11EA60, 0x120658, 97)  // FClosestPointsLines similar decomp
 FNMAP(0x11EBA0, 0x120798, 49)  // ReleaseStackInto_11EBB0 similar
-FNMAP(0x11EBB0, 0x1207A8, 100)  // ReleaseStackInto_11EBB0 register-renamed
+FNMAP(0x11EBB0, 0x1207A8, 100)  // ReleaseStackInto_11EBB0 register-renamed decomp
 FNMAP(0x11ED38, 0x120930, 49)  // ReleaseStackInto_11ED40 changed
-FNMAP(0x11ED40, 0x120938, 99)  // ParamSegPoint similar
-FNMAP(0x11EE08, 0x120A00, 98)  // PosNearestSegment similar
+FNMAP(0x11ED40, 0x120938, 99)  // ParamSegPoint similar decomp
+FNMAP(0x11EE08, 0x120A00, 98)  // PosNearestSegment similar decomp
 FNMAP(0x11EF00, 0x120AF8, 49)  // ReleaseStackInto_11EF08 changed
-FNMAP(0x11EF08, 0x120B00, 99)  // ConvertVectorToCylind similar
-FNMAP(0x11EFB0, 0x120BA8, 100)  // ConvertVectorToSphere identical
-FNMAP(0x11F088, 0x120C80, 100)  // PosSmooth register-renamed
-FNMAP(0x11F198, 0x120D98, 100)  // SceneVectorCosine identical
+FNMAP(0x11EF08, 0x120B00, 99)  // ConvertVectorToCylind similar decomp
+FNMAP(0x11EFB0, 0x120BA8, 100)  // ConvertVectorToSphere identical decomp
+FNMAP(0x11F088, 0x120C80, 100)  // PosSmooth register-renamed decomp
+FNMAP(0x11F198, 0x120D98, 100)  // SceneVectorCosine identical decomp
 FNMAP(0x11F278, 0x120E78, 49)  // ReleaseStackInto_11F288 similar
-FNMAP(0x11F288, 0x120E80, 100)  // ReleaseStackInto_11F288 identical
-FNMAP(0x11F2B8, 0x120EB0, 100)  // VecMaxArray identical
+FNMAP(0x11F288, 0x120E80, 100)  // ReleaseStackInto_11F288 identical decomp
+FNMAP(0x11F2B8, 0x120EB0, 100)  // VecMaxArray identical decomp
 FNMAP(0x11F2E8, 0x120F58, 80)  // func_0011F2E8 similar
 FNMAP(0x11F420, 0x121090, 100)  // func_0011F420 identical
 FNMAP(0x11F440, 0x1210B0, 82)  // RefOpAdd similar
@@ -783,13 +786,13 @@ FNMAP(0x1202D0, 0x121F40, 87)  // RefOpPrint similar
 FNMAP(0x120300, 0x121F70, 87)  // RefOpPrintFrame similar
 FNMAP(0x120330, 0x121FA0, 84)  // RefOpPrintSidebag similar
 FNMAP(0x120370, 0x121FE0, 80)  // RefOpIntEqual changed
-FNMAP(0x120398, 0x122008, 79)  // CompareNumericRefs similar
+FNMAP(0x120398, 0x122008, 86)  // CompareNumericRefs similar decomp
 FNMAP(0x120488, 0x1220F8, 100)  // RefOpL identical
 FNMAP(0x1204B8, 0x122128, 100)  // RefOpL identical
 FNMAP(0x1204E8, 0x122158, 100)  // RefOpL identical
 FNMAP(0x120518, 0x122188, 100)  // RefOpL identical
-FNMAP(0x120548, 0x1221B8, 80)  // RefOpEqv similar
-FNMAP(0x1205B8, 0x122220, 87)  // ParisBlocks_1205B8 similar
+FNMAP(0x120548, 0x1221B8, 80)  // RefOpEqv similar decomp
+FNMAP(0x1205B8, 0x122220, 87)  // ParisBlocks_1205B8 similar decomp
 FNMAP(0x1207F0, 0x122458, 100)  // RefOpEqual identical
 FNMAP(0x120820, 0x122488, 50)  // RefIsBoolean changed
 FNMAP(0x120840, 0x1224A8, 50)  // RefIsNumber changed
@@ -819,7 +822,7 @@ FNMAP(0x120D28, 0x122958, 80)  // RefOpLength changed
 FNMAP(0x120D78, 0x1229A8, 80)  // RefOpNth similar
 FNMAP(0x120E10, 0x122A38, 50)  // RefOpIsMember changed
 FNMAP(0x120F80, 0x122BA0, 96)  // RefOpList similar
-FNMAP(0x120FB0, 0x122BD0, 80)  // RefOpShuffle changed
+FNMAP(0x120FB0, 0x122BD0, 80)  // RefOpShuffle changed decomp
 FNMAP(0x1212F8, 0x122EB0, 50)  // RefOpAppend changed
 FNMAP(0x121578, 0x1230A0, 70)  // MakeCallForm changed
 FNMAP(0x121710, 0x1231F0, 56)  // RefOpMap changed
@@ -827,13 +830,13 @@ FNMAP(0x121938, 0x1233A8, 50)  // RefOpFilter changed
 FNMAP(0x121C20, 0x1235C8, 80)  // RefOpForEach changed
 FNMAP(0x121D20, 0x123AE8, 80)  // RefOpEval changed
 FNMAP(0x121DD8, 0x123B78, 84)  // RefOpVector similar
-FNMAP(0x121F00, 0x123C98, 80)  // RefOpMatrix similar
+FNMAP(0x121F00, 0x123C98, 80)  // RefOpMatrix similar decomp
 FNMAP(0x1220B8, 0x123E48, 87)  // RefOpClq similar
 FNMAP(0x122168, 0x123EF0, 87)  // RefOpClq similar
 FNMAP(0x122218, 0x123F98, 87)  // RefOpClq similar
 FNMAP(0x1222C8, 0x124040, 84)  // RefOpGetElement similar
 FNMAP(0x1223C0, 0x124140, 91)  // RefOpRandom similar
-FNMAP(0x1224A8, 0x124248, 82)  // RefApplyScalar similar
+FNMAP(0x1224A8, 0x124248, 82)  // RefApplyScalar similar decomp
 FNMAP(0x122530, 0x1242D0, 100)  // func_00122530 identical
 FNMAP(0x122560, 0x124300, 100)  // func_00122560 identical
 FNMAP(0x122590, 0x124330, 100)  // func_00122590 identical
@@ -843,28 +846,28 @@ FNMAP(0x122620, 0x1243C0, 100)  // func_00122620 identical
 FNMAP(0x122650, 0x1243F0, 100)  // func_00122650 identical
 FNMAP(0x122680, 0x124420, 100)  // func_00122680 identical
 FNMAP(0x1226B0, 0x124450, 80)  // boxed_atan2 similar
-FNMAP(0x122730, 0x1244C8, 87)  // boxed_dot similar
+FNMAP(0x122730, 0x1244C8, 87)  // boxed_dot similar decomp
 FNMAP(0x122770, 0x124508, 98)  // func_00122770 similar
-FNMAP(0x1227D0, 0x124568, 88)  // boxed_length similar
+FNMAP(0x1227D0, 0x124568, 88)  // boxed_length similar decomp
 FNMAP(0x122810, 0x1245A8, 95)  // RefOpVectorDistance similar
 FNMAP(0x1228F0, 0x124688, 94)  // RefOpVectorDistance similar
-FNMAP(0x1229B8, 0x124750, 86)  // RefOpVectorNormalize similar
-FNMAP(0x122B08, 0x124880, 100)  // func_00122B08 identical
-FNMAP(0x122B70, 0x1248E8, 98)  // func_00122B70 similar
+FNMAP(0x1229B8, 0x124750, 86)  // RefOpVectorNormalize similar decomp
+FNMAP(0x122B08, 0x124880, 100)  // func_00122B08 identical decomp
+FNMAP(0x122B70, 0x1248E8, 98)  // func_00122B70 similar decomp
 FNMAP(0x122BE0, 0x124958, 94)  // RefOpVectorBallisticVelocity similar
 FNMAP(0x122CE0, 0x124A58, 80)  // RefOpVectorRadianNormal changed
-FNMAP(0x122DE0, 0x124B30, 98)  // RefOpMatrixTranspose similar
+FNMAP(0x122DE0, 0x124B30, 98)  // RefOpMatrixTranspose similar decomp
 FNMAP(0x122E40, 0x124B90, 94)  // RefOpMatrixInvert similar
 FNMAP(0x122EA0, 0x124BF0, 96)  // RefOpMatrixCalculateDmat similar
-FNMAP(0x122F00, 0x124C50, 91)  // RefOpMatrixInterpolateRotate similar
-FNMAP(0x123038, 0x124D80, 100)  // RefOpMatrixDecomposeToTranslate identical
-FNMAP(0x123080, 0x124DC8, 97)  // RefOpMatrixDecomposeToRotate similar
+FNMAP(0x122F00, 0x124C50, 91)  // RefOpMatrixInterpolateRotate similar decomp
+FNMAP(0x123038, 0x124D80, 100)  // RefOpMatrixDecomposeToTranslate identical decomp
+FNMAP(0x123080, 0x124DC8, 97)  // RefOpMatrixDecomposeToRotate similar decomp
 FNMAP(0x1230C8, 0x124E10, 97)  // RefOpMatrixDecomposeToEuler similar
 FNMAP(0x123118, 0x124E60, 80)  // RefOpMatrixDecomposeToRadianNormal changed
 FNMAP(0x123208, 0x124F28, 93)  // RefOpMatrixLookAt similar
 FNMAP(0x1232D0, 0x124FF0, 96)  // RefOpMatrixTiltUpright similar
-FNMAP(0x123380, 0x1250A0, 93)  // RefOpClqEvaluate similar
-FNMAP(0x1233F0, 0x125110, 95)  // RefOpClqEvaluateLm similar
+FNMAP(0x123380, 0x1250A0, 93)  // RefOpClqEvaluate similar decomp
+FNMAP(0x1233F0, 0x125110, 95)  // RefOpClqEvaluateLm similar decomp
 FNMAP(0x123498, 0x1251B8, 98)  // RefOpClqFit similar
 FNMAP(0x1235A8, 0x1252C8, 89)  // RefOpLmLimit similar
 FNMAP(0x123608, 0x125328, 92)  // RefOpLmLimit similar
@@ -872,7 +875,7 @@ FNMAP(0x123668, 0x1255C0, 80)  // RefOpFloor changed
 FNMAP(0x123688, 0x1255E0, 80)  // RefTruncateAfterOne similar
 FNMAP(0x1236B0, 0x125608, 80)  // BossLow_1236B0 similar
 FNMAP(0x1236D8, 0x125630, 80)  // RefTruncate1236D8 changed
-FNMAP(0x1236F8, 0x125650, 87)  // RefOpFloor similar
+FNMAP(0x1236F8, 0x125650, 87)  // RefOpFloor similar decomp
 FNMAP(0x123788, 0x1256E0, 50)  // RefOpMaximum changed
 FNMAP(0x1238B0, 0x1257E8, 51)  // RefOpMaximum changed
 FNMAP(0x1239D8, 0x1258F8, 80)  // RefOpModulo similar
@@ -892,27 +895,27 @@ FNMAP(0x123FE8, 0x125FD0, 87)  // ParisLinear_123FE8 similar
 FNMAP(0x124018, 0x126000, 87)  // SpliceSetOption similar
 FNMAP(0x124048, 0x126030, 87)  // SpliceGetOption similar
 FNMAP(0x124078, 0x126060, 94)  // RefListOfObjects similar
-FNMAP(0x124150, 0x126138, 82)  // SpliceFindObject similar
+FNMAP(0x124150, 0x126138, 82)  // SpliceFindObject similar decomp
 FNMAP(0x1241E8, 0x1261D0, 85)  // func_001241E8 similar
 FNMAP(0x1242B8, 0x1262A0, 58)  // RefOpFindObjectsOfNames changed
-FNMAP(0x1244E8, 0x126470, 87)  // SpliceFindObject4 similar
+FNMAP(0x1244E8, 0x126470, 87)  // SpliceFindObject4 similar decomp
 FNMAP(0x124578, 0x126500, 91)  // func_00124578 similar
 FNMAP(0x124640, 0x1265C8, 95)  // ParisLinear_124640 similar
 FNMAP(0x124690, 0x126618, 95)  // SpliceWorld similar
 FNMAP(0x1246E0, 0x126668, 95)  // SatelliteLow_1246E0 similar
 FNMAP(0x124730, 0x126760, 98)  // RefOpFindObjects similar
-FNMAP(0x1247D8, 0x126808, 97)  // boxed_box_query similar
-FNMAP(0x1248B0, 0x1268E0, 94)  // boxed_sphere_query similar
+FNMAP(0x1247D8, 0x126808, 97)  // boxed_box_query similar decomp
+FNMAP(0x1248B0, 0x1268E0, 94)  // boxed_sphere_query similar decomp
 FNMAP(0x1249A8, 0x1269D8, 50)  // func_001249A8 changed
 FNMAP(0x124F00, 0x126E08, 92)  // func_00124F00 similar
 FNMAP(0x124F80, 0x126E88, 92)  // func_00124F80 similar
 FNMAP(0x125000, 0x126F08, 98)  // SpliceVector1A6F00 similar
-FNMAP(0x125060, 0x126F68, 81)  // boxed_relative_position similar
-FNMAP(0x1250D8, 0x126FD8, 86)  // boxed_relative_matrix similar
+FNMAP(0x125060, 0x126F68, 81)  // boxed_relative_position similar decomp
+FNMAP(0x1250D8, 0x126FD8, 86)  // boxed_relative_matrix similar decomp
 FNMAP(0x125168, 0x127060, 80)  // boxed_camera_near_point changed
-FNMAP(0x1251E8, 0x1270F8, 98)  // RefPositionedObject similar
+FNMAP(0x1251E8, 0x1270F8, 98)  // RefPositionedObject similar decomp
 FNMAP(0x125248, 0x127158, 80)  // OldActorTimedRequest changed
-FNMAP(0x1252D0, 0x127220, 80)  // AkeyFromList similar
+FNMAP(0x1252D0, 0x127220, 80)  // AkeyFromList similar decomp
 FNMAP(0x125398, 0x1272E8, 80)  // ParisCoverage_125398 similar
 FNMAP(0x125450, 0x127398, 97)  // boxed_set_progress_field similar
 FNMAP(0x125510, 0x127458, 80)  // ParisBlocks_125510 changed
@@ -920,8 +923,8 @@ FNMAP(0x1255C0, 0x1274E0, 87)  // ParisLinear_1255C0 similar
 FNMAP(0x1255F0, 0x127510, 80)  // BossLow_1255F0 changed
 FNMAP(0x125640, 0x127560, 80)  // boxed_argument_flags changed
 FNMAP(0x125690, 0x1275B0, 95)  // ParisLinear_125690 similar
-FNMAP(0x1256E0, 0x127600, 93)  // boxed_purchase_status similar
-FNMAP(0x125738, 0x127658, 94)  // boxed_set_purchase similar
+FNMAP(0x1256E0, 0x127600, 93)  // boxed_purchase_status similar decomp
+FNMAP(0x125738, 0x127658, 94)  // boxed_set_purchase similar decomp
 FNMAP(0x125798, 0x127730, 80)  // func_00125798 similar
 FNMAP(0x1258D0, 0x127868, 100)  // func_001258D0 identical
 FNMAP(0x1258F0, 0x127888, 90)  // func_001258F0 similar
@@ -959,7 +962,7 @@ FNMAP(0x126188, 0x128120, 80)  // func_00126188 similar
 FNMAP(0x1262C0, 0x128258, 100)  // func_001262C0 identical
 FNMAP(0x1262E0, 0x127FC8, 80)  // func_001262E0 similar
 FNMAP(0x126418, 0x128100, 100)  // func_00126418 identical
-FNMAP(0x126438, 0x1283D0, 88)  // RefEvalSymbol similar
+FNMAP(0x126438, 0x1283D0, 88)  // RefEvalSymbol similar decomp
 FNMAP(0x126490, 0x128428, 91)  // RefEvalSet similar
 FNMAP(0x126540, 0x1284D8, 91)  // RefEvalDefine similar
 FNMAP(0x1265F0, 0x128588, 50)  // RefEvalAssert changed
@@ -968,25 +971,25 @@ FNMAP(0x126758, 0x1286A0, 91)  // RefEvalIf similar
 FNMAP(0x126840, 0x128788, 50)  // RefEvalOr changed
 FNMAP(0x126928, 0x128860, 63)  // RefEvalAnd changed
 FNMAP(0x126A18, 0x128948, 52)  // RefEvalCond changed
-FNMAP(0x126BA0, 0x128AD0, 57)  // RefEvalCase changed
-FNMAP(0x126DB8, 0x128CE8, 65)  // RefEvalLet changed
+FNMAP(0x126BA0, 0x128AD0, 80)  // RefEvalCase changed decomp
+FNMAP(0x126DB8, 0x128CE8, 80)  // RefEvalLet changed decomp
 FNMAP(0x126F78, 0x128EA0, 80)  // RefEvalWhile similar
 FNMAP(0x127068, 0x128F90, 84)  // RefEvalLambda similar
-FNMAP(0x127190, 0x1290B0, 74)  // EvalBody changed
+FNMAP(0x127190, 0x1290B0, 80)  // EvalBody changed decomp
 FNMAP(0x127228, 0x129148, 74)  // RefEvalBegin changed
-FNMAP(0x1272E0, 0x129208, 58)  // RefEvalApply changed
+FNMAP(0x1272E0, 0x129208, 80)  // RefEvalApply changed decomp
 FNMAP(0x127838, 0x1296F0, 67)  // RefEval changed
 FNMAP(0x1279C0, 0x129870, 80)  // func_001279C0 similar
 FNMAP(0x127AF8, 0x1299A8, 100)  // func_00127AF8 identical
 FNMAP(0x127C00, 0x1299C8, 81)  // CFrame::RefAddBinding similar
-FNMAP(0x127CF0, 0x129A90, 92)  // CFrame::RefSetBinding similar
+FNMAP(0x127CF0, 0x129A90, 92)  // CFrame::RefSetBinding similar decomp
 FNMAP(0x127D78, 0x129B18, 100)  // CFrame::FFindBinding identical
 FNMAP(0x127DB8, 0x129B58, 50)  // PrefFindBinding__6CFrameUii changed
 FNMAP(0x127E90, 0x129BE0, 64)  // CFrame::CloneTo changed
 FNMAP(0x127FE0, 0x129CB8, 80)  // func_00127FE0 similar
 FNMAP(0x128118, 0x129DF0, 100)  // _GLOBAL_$I$g_gc identical
 FNMAP(0x128138, 0x129E10, 49)  // SPTR_ctor similar
-FNMAP(0x128148, 0x129E20, 94)  // SaveSpliceHeapHeads similar
+FNMAP(0x128148, 0x129E20, 94)  // SaveSpliceHeapHeads similar decomp
 FNMAP(0x1281B0, 0x129E88, 49)  // GC_Propagate changed
 FNMAP(0x1285D8, 0x12A2C8, 79)  // GC_MarkRef similar
 FNMAP(0x1286E0, 0x12A3D0, 54)  // CGc::Collect changed
@@ -997,7 +1000,7 @@ FNMAP(0x128C98, 0x12AA30, 100)  // func_00128C98 identical
 FNMAP(0x128CB8, 0x12AA50, 66)  // CPair::CloneTo changed
 FNMAP(0x128E18, 0x12AB70, 80)  // func_00128E18 similar
 FNMAP(0x128F50, 0x12ACA8, 100)  // func_00128F50 identical
-FNMAP(0x128F70, 0x12ACC8, 100)  // CProc::CloneTo register-renamed
+FNMAP(0x128F70, 0x12ACC8, 100)  // CProc::CloneTo register-renamed decomp
 FNMAP(0x129050, 0x12ADA8, 80)  // func_00129050 similar
 FNMAP(0x129188, 0x12AEE0, 100)  // func_00129188 identical
 FNMAP(0x1291A8, 0x12AF00, 86)  // __4CRefRC4CRef similar
@@ -1010,28 +1013,27 @@ FNMAP(0x129408, 0x12B160, 90)  // func_00129408 similar
 FNMAP(0x129480, 0x12B1D8, 49)  // CRef_ctor_node changed
 FNMAP(0x1294A0, 0x12B1F8, 49)  // CRef_ctor_o similar
 FNMAP(0x1294C0, 0x12B218, 79)  // RefRetainSound similar
-FNMAP(0x129518, 0x12B2F0, 94)  // CRef::SetS32 similar
+FNMAP(0x129518, 0x12B2F0, 94)  // CRef::SetS32 similar decomp
 FNMAP(0x129558, 0x12B2B0, 88)  // CRef::SetF32 similar
-FNMAP(0x129598, 0x12B370, 94)  // CRef::SetBool similar
+FNMAP(0x129598, 0x12B370, 94)  // CRef::SetBool similar decomp
 FNMAP(0x1295D8, 0x12B330, 88)  // CRef::SetSymid similar
 FNMAP(0x129618, 0x12B270, 88)  // CRef::SetBifk similar
 FNMAP(0x129658, 0x12B3B0, 90)  // __as__4CRefRC4CRef similar
-FNMAP(0x1296A8, 0x12B400, 87)  // ReconCompletedLow_1296A8 similar
+FNMAP(0x1296A8, 0x12B560, 91)  // ReconCompletedLow_1296A8 similar decomp
 FNMAP(0x129718, 0x12B470, 88)  // CRef::SetVector similar
-FNMAP(0x129780, 0x12B4D8, 90)  // CRef::SetMatrix similar
-FNMAP(0x129808, 0x12B560, 87)  // CRef::SetClq similar
+FNMAP(0x129780, 0x12B4D8, 90)  // CRef::SetMatrix similar decomp
 FNMAP(0x129878, 0x12B5D0, 88)  // CRef::SetLm similar
 FNMAP(0x1298F0, 0x12B648, 89)  // CRef::SetSmp similar
 FNMAP(0x129970, 0x12B718, 87)  // CRef::SetPair similar
-FNMAP(0x1299C0, 0x12B7C8, 92)  // CRef::SetProc similar
-FNMAP(0x129A10, 0x12B768, 89)  // CRef::SetBasic similar
+FNMAP(0x1299C0, 0x12B7C8, 92)  // CRef::SetProc similar decomp
+FNMAP(0x129A10, 0x12B768, 89)  // CRef::SetBasic similar decomp
 FNMAP(0x129AC0, 0x12B818, 57)  // __eq__4CRefRC4CRef changed
-FNMAP(0x129BC8, 0x12B928, 75)  // CRef::CloneTo changed
+FNMAP(0x129BC8, 0x12B928, 80)  // CRef::CloneTo changed decomp
 FNMAP(0x129D50, 0x12BA90, 49)  // ReleaseStackInto_129D58 changed
-FNMAP(0x129D58, 0x12BA98, 85)  // CRef::RefCoerceS32 similar
+FNMAP(0x129D58, 0x12BA98, 85)  // CRef::RefCoerceS32 similar decomp
 FNMAP(0x129DA8, 0x12BAE8, 85)  // CRef::RefCoerceF32 similar
-FNMAP(0x129DF8, 0x12BB38, 79)  // CRef_Incref similar
-FNMAP(0x129EC8, 0x12BC20, 50)  // Decref__4CRef changed
+FNMAP(0x129DF8, 0x12BB38, 80)  // CRef_Incref similar decomp
+FNMAP(0x129EC8, 0x12BC20, 80)  // Decref__4CRef changed decomp
 FNMAP(0x12A0B0, 0x12BDD8, 88)  // InitTag__4CRef similar
 FNMAP(0x12A1A0, 0x12BED0, 94)  // func_0012A1A0 similar
 FNMAP(0x12A3B8, 0x12C0E8, 100)  // func_0012A3B8 identical
@@ -1040,20 +1042,20 @@ FNMAP(0x12A828, 0x12C4F8, 80)  // func_0012A828 similar
 FNMAP(0x12A960, 0x12C630, 100)  // func_0012A960 identical
 FNMAP(0x12A980, 0x12C650, 84)  // CSidebag::RefAddBinding similar
 FNMAP(0x12AA70, 0x12C718, 80)  // RefSetBinding__8CSidebagiP4CRef similar
-FNMAP(0x12AB28, 0x12C7D0, 100)  // FFindBinding__8CSidebagiP4CRef identical
-FNMAP(0x12AB78, 0x12C820, 64)  // CSidebag::CloneTo changed
+FNMAP(0x12AB28, 0x12C7D0, 100)  // FFindBinding__8CSidebagiP4CRef identical decomp
+FNMAP(0x12AB78, 0x12C820, 80)  // CSidebag::CloneTo changed decomp
 FNMAP(0x12ACC0, 0x12C8E8, 80)  // func_0012ACC0 similar
 FNMAP(0x12ADF8, 0x12CA20, 100)  // func_0012ADF8 identical
 FNMAP(0x12AE18, 0x12CA40, 100)  // SetSpliceFlag2DD5B8 identical
-FNMAP(0x12AE28, 0x12CA50, 81)  // ResetSpliceHeaps similar
+FNMAP(0x12AE28, 0x12CA50, 81)  // ResetSpliceHeaps similar decomp
 FNMAP(0x12AEB0, 0x12CAD8, 94)  // func_0012AEB0 similar
 FNMAP(0x12B0C8, 0x12CCF0, 100)  // func_0012B0C8 identical
-FNMAP(0x12B0E8, 0x12CD10, 80)  // CloneBindings similar
+FNMAP(0x12B0E8, 0x12CD10, 80)  // CloneBindings similar decomp
 FNMAP(0x12B258, 0x12CE38, 80)  // func_0012B258 similar
 FNMAP(0x12B390, 0x12CF70, 100)  // func_0012B390 identical
 FNMAP(0x12B4F8, 0x12D218, 95)  // TRKPC::Load similar
 FNMAP(0x12B520, 0x12D240, 94)  // TRKPC::Setup similar
-FNMAP(0x12B590, 0x12D2B0, 97)  // TRKPC::Eval similar
+FNMAP(0x12B590, 0x12D2B0, 97)  // TRKPC::Eval similar decomp
 FNMAP(0x12B738, 0x12D438, 55)  // TRKPK::Setup changed
 FNMAP(0x12BBD0, 0x12DA00, 55)  // TRKPK::Setup changed
 FNMAP(0x12C140, 0x12E1D0, 73)  // TRKPA::Setup changed
@@ -1064,44 +1066,44 @@ FNMAP(0x12CE50, 0x12F240, 88)  // Alloc12CE50 similar
 FNMAP(0x12CE70, 0x12F260, 84)  // Free12CE50 similar
 FNMAP(0x12CE98, 0x12F288, 97)  // CTRL::Start similar
 FNMAP(0x12CED8, 0x12F2C8, 100)  // Empty12CED8 identical
-FNMAP(0x12CEE0, 0x12F2D0, 100)  // CTRL::FFirst identical
+FNMAP(0x12CEE0, 0x12F2D0, 100)  // CTRL::FFirst identical decomp
 FNMAP(0x12CF20, 0x12F310, 100)  // Empty12CF20 identical
 FNMAP(0x12CF28, 0x12F318, 100)  // func_0012CF28 identical
-FNMAP(0x12CF30, 0x12F320, 98)  // CTRL::Query similar
+FNMAP(0x12CF30, 0x12F320, 98)  // CTRL::Query similar decomp
 FNMAP(0x12CF88, 0x12F378, 98)  // Ctrl_Copy similar
-FNMAP(0x12CFE0, 0x12F3D0, 97)  // EnsureCtrlAdded similar
-FNMAP(0x12D020, 0x12F410, 100)  // EnsureCtrlRemoved identical
-FNMAP(0x12D058, 0x12F448, 100)  // FXfHasCtrl identical
+FNMAP(0x12CFE0, 0x12F3D0, 97)  // EnsureCtrlAdded similar decomp
+FNMAP(0x12D020, 0x12F410, 100)  // EnsureCtrlRemoved identical decomp
+FNMAP(0x12D058, 0x12F448, 100)  // FXfHasCtrl identical decomp
 FNMAP(0x12D088, 0x12F478, 97)  // CTRLPOS::Fetch similar
 FNMAP(0x12D0D8, 0x12F4C8, 100)  // CTRLPOS::Query identical
 FNMAP(0x12D108, 0x12F4F8, 99)  // SetCtrlPos similar
 FNMAP(0x12D210, 0x12F6B0, 49)  // CTRLLOOKAT::End similar
-FNMAP(0x12D220, 0x12F6B8, 63)  // CTRLLOOKAT::Fetch changed
-FNMAP(0x12D508, 0x12F938, 80)  // CTRLLOOKMOTION::Fetch similar
+FNMAP(0x12D220, 0x12F6B8, 80)  // CTRLLOOKAT::Fetch changed decomp
+FNMAP(0x12D508, 0x12F938, 80)  // CTRLLOOKMOTION::Fetch similar decomp
 FNMAP(0x12D858, 0x12FCB8, 96)  // CTRLSOURCE::Start similar
-FNMAP(0x12D890, 0x12FCF0, 97)  // CTRLSOURCE::End similar
-FNMAP(0x12D8D8, 0x12FD38, 92)  // CTRLSOURCE::Refresh similar
+FNMAP(0x12D890, 0x12FCF0, 97)  // CTRLSOURCE::End similar decomp
+FNMAP(0x12D8D8, 0x12FD38, 92)  // CTRLSOURCE::Refresh similar decomp
 FNMAP(0x12D958, 0x12FDB8, 98)  // CTRLSOURCE::Fetch similar
 FNMAP(0x12D9D0, 0x12FE30, 98)  // CTRLSOURCE::Query similar
-FNMAP(0x12DA30, 0x12FE90, 100)  // SetCtrlSourceOffset register-renamed
+FNMAP(0x12DA30, 0x12FE90, 100)  // SetCtrlSourceOffset register-renamed decomp
 FNMAP(0x12DB50, 0x12FFB0, 98)  // NewCtrlFill similar
 FNMAP(0x12DBB0, 0x130010, 98)  // PctrlNewSource similar
 FNMAP(0x12DC18, 0x130078, 100)  // PctrlNewPos identical
-FNMAP(0x12DCA0, 0x130190, 98)  // create_direction_controller similar
-FNMAP(0x12DD28, 0x130218, 90)  // NewCtrl7 similar
-FNMAP(0x12DDB0, 0x1302A0, 99)  // MurrayMisc_12DDB0 similar
-FNMAP(0x12DE58, 0x130348, 96)  // PctrlNewTarget similar
+FNMAP(0x12DCA0, 0x130190, 98)  // create_direction_controller similar decomp
+FNMAP(0x12DD28, 0x130218, 90)  // NewCtrl7 similar decomp
+FNMAP(0x12DDB0, 0x1302A0, 99)  // MurrayMisc_12DDB0 similar decomp
+FNMAP(0x12DE58, 0x130348, 96)  // PctrlNewTarget similar decomp
 FNMAP(0x12DEF0, 0x1303E0, 87)  // OldActorComposeBoundPose similar
 FNMAP(0x12DFE0, 0x1304B8, 100)  // func_0012DFE0 register-renamed
 FNMAP(0x12E010, 0x1304E8, 100)  // CTRLTARGET::Fetch register-renamed
 FNMAP(0x12E060, 0x130538, 99)  // SceneSamplePosePair similar
-FNMAP(0x12E0F0, 0x1305C8, 100)  // CTRLTARGET::SetGoal identical
+FNMAP(0x12E0F0, 0x1305C8, 100)  // CTRLTARGET::SetGoal identical decomp
 FNMAP(0x12E120, 0x1305F8, 99)  // normalize_animation_direction similar
 FNMAP(0x12E1F0, 0x14BE38, 88)  // CtrlAlloc similar
 FNMAP(0x12E210, 0x1306C8, 84)  // CtrlFree similar
 FNMAP(0x12E238, 0x1306F0, 66)  // NewCtrl changed
 FNMAP(0x12E3F0, 0x130968, 100)  // NewCtrlInit register-renamed
-FNMAP(0x12E460, 0x1309D8, 100)  // DeleteCtrl identical
+FNMAP(0x12E460, 0x1309D8, 100)  // DeleteCtrl identical decomp
 FNMAP(0x12E4A8, 0x130A20, 80)  // func_0012E4A8 similar
 FNMAP(0x12E5E0, 0x130B58, 100)  // func_0012E5E0 identical
 FNMAP(0x12E600, 0x130B78, 86)  // Obj12E600_Init similar
@@ -1116,9 +1118,9 @@ FNMAP(0x12E9F0, 0x130EC8, 80)  // func_0012E9F0 similar
 FNMAP(0x12EB28, 0x131000, 100)  // func_0012EB28 identical
 FNMAP(0x12EB48, 0x131020, 100)  // Obj12EB48 identical
 FNMAP(0x12EB78, 0x131050, 82)  // LoadLox12EB78FromBrx similar
-FNMAP(0x12EC50, 0x131128, 80)  // AddAmbientFalloffs changed
+FNMAP(0x12EC50, 0x131128, 80)  // AddAmbientFalloffs changed decomp
 FNMAP(0x12ED20, 0x1311F0, 80)  // AddAmbientFalloffs changed
-FNMAP(0x12EDE8, 0x1312C8, 83)  // OnAmbientUnregistered similar
+FNMAP(0x12EDE8, 0x1312C8, 83)  // OnAmbientUnregistered similar decomp
 FNMAP(0x12EEE0, 0x131358, 72)  // Obj12EEE0_Add changed
 FNMAP(0x12EF40, 0x1313B8, 79)  // Obj12EF40_Add similar
 FNMAP(0x12EF98, 0x135D30, 80)  // func_0012EF98 similar
@@ -1128,22 +1130,22 @@ FNMAP(0x12F228, 0x11A258, 100)  // func_0012F228 identical
 FNMAP(0x12F248, 0x135E88, 62)  // InitAseg changed
 FNMAP(0x12F2A8, 0x135FB0, 48)  // LoadAsegFromBrx changed
 FNMAP(0x12F590, 0x1364A0, 68)  // LoadAsegEvents changed
-FNMAP(0x12F8C0, 0x1367F0, 100)  // ApplyAsegParams identical
+FNMAP(0x12F8C0, 0x1367F0, 100)  // ApplyAsegParams identical decomp
 FNMAP(0x12F8F0, 0x136820, 81)  // PostAsegLoad similar
 FNMAP(0x12F938, 0x136880, 44)  // PeventLaunch changed
 FNMAP(0x12F990, 0x1368E0, 100)  // GEventAseg11 identical
-FNMAP(0x12F9B8, 0x136908, 62)  // ApplyAseg changed
-FNMAP(0x12FDE8, 0x136DB8, 94)  // SetAsegApplyParams similar
+FNMAP(0x12F9B8, 0x136908, 80)  // ApplyAseg changed decomp
+FNMAP(0x12FDE8, 0x136DB8, 94)  // SetAsegApplyParams similar decomp
 FNMAP(0x12FE58, 0x136E28, 94)  // GetAsegChannelTarget similar
 FNMAP(0x12FF10, 0x136EE0, 49)  // PchnFindAseg changed
-FNMAP(0x130010, 0x136FC8, 94)  // GetAsegLinkTarget similar
-FNMAP(0x1300B8, 0x137070, 73)  // CalculateAsegMatrices changed
-FNMAP(0x130488, 0x137428, 100)  // PasegaApplyAseg identical
+FNMAP(0x130010, 0x136FC8, 94)  // GetAsegLinkTarget similar decomp
+FNMAP(0x1300B8, 0x137070, 80)  // CalculateAsegMatrices changed decomp
+FNMAP(0x130488, 0x137428, 100)  // PasegaApplyAseg identical decomp
 FNMAP(0x1304E0, 0x1374B0, 97)  // EnsureAseg__FP4ASEGP3ALO4SEEKffiPP5ASEGA similar
-FNMAP(0x130598, 0x137568, 100)  // PasegaEnsureAseg__FP4ASEGP3ALO4SEEKffi identical
-FNMAP(0x1305B8, 0x137588, 99)  // ApplyAsegCur__FP4ASEGP3ALOffiPP5ASEGA similar
+FNMAP(0x130598, 0x137568, 100)  // PasegaEnsureAseg__FP4ASEGP3ALO4SEEKffi identical decomp
+FNMAP(0x1305B8, 0x137588, 99)  // ApplyAsegCur__FP4ASEGP3ALOffiPP5ASEGA similar decomp
 FNMAP(0x130658, 0x137628, 68)  // RetractAsegaPp changed
-FNMAP(0x1306A8, 0x137688, 97)  // ParisRetry_1306A8 similar
+FNMAP(0x1306A8, 0x137688, 97)  // ParisRetry_1306A8 similar decomp
 FNMAP(0x1306F0, 0x1376D0, 86)  // set_segment_playback_speed similar
 FNMAP(0x130750, 0x137738, 80)  // func_00130750 similar
 FNMAP(0x130888, 0x137870, 100)  // func_00130888 identical
@@ -1152,39 +1154,39 @@ FNMAP(0x1308B8, 0x1378A0, 94)  // ReleaseAsega similar
 FNMAP(0x130918, 0x137900, 85)  // UpdateAsega similar
 FNMAP(0x130B18, 0x137B00, 81)  // RetractAsega similar
 FNMAP(0x130D30, 0x137D08, 74)  // SetAsegaTime changed
-FNMAP(0x130EB0, 0x137EA0, 64)  // UpdateAsegaIeaCur__FP5ASEGA changed
-FNMAP(0x130F88, 0x137F60, 65)  // FireAsegaEvents changed
+FNMAP(0x130EB0, 0x137EA0, 80)  // UpdateAsegaIeaCur__FP5ASEGA changed decomp
+FNMAP(0x130F88, 0x137F60, 80)  // FireAsegaEvents changed decomp
 FNMAP(0x131100, 0x1380E0, 80)  // FireAsegaStartEvents similar
-FNMAP(0x131270, 0x138258, 49)  // PloAsega similar
-FNMAP(0x131290, 0x138270, 55)  // FireAsegaEvent changed
-FNMAP(0x131738, 0x138898, 99)  // NotifyAsega similar
-FNMAP(0x1317D8, 0x138938, 98)  // FWrapAsegaTime similar
+FNMAP(0x131270, 0x138258, 80)  // PloAsega similar decomp
+FNMAP(0x131290, 0x138270, 80)  // FireAsegaEvent changed decomp
+FNMAP(0x131738, 0x138898, 99)  // NotifyAsega similar decomp
+FNMAP(0x1317D8, 0x138938, 98)  // FWrapAsegaTime similar decomp
 FNMAP(0x131968, 0x138AC8, 90)  // FAsegaRetracted similar
-FNMAP(0x131990, 0x138AF0, 69)  // SetAsegaEventSound changed
+FNMAP(0x131990, 0x138AF0, 69)  // SetAsegaPause changed
 FNMAP(0x131A00, 0x138B68, 93)  // SetAsegaSpeed__FP5ASEGAf similar
-FNMAP(0x131A20, 0x138B88, 93)  // SetAsegaAsegSpeed similar
+FNMAP(0x131A20, 0x138B88, 93)  // SetAsegaAsegSpeed similar decomp
 FNMAP(0x131A40, 0x138BA8, 97)  // SetAsegaPriority__FP5ASEGAi similar
-FNMAP(0x131A90, 0x138BF8, 64)  // SetAsegaSeekTime changed
-FNMAP(0x131B10, 0x138C70, 86)  // DemoteAsegaOnXf similar
-FNMAP(0x131B60, 0x138CC8, 55)  // DemoteAsegaOnAlo changed
+FNMAP(0x131A90, 0x138BF8, 80)  // SetAsegaSeekTime changed decomp
+FNMAP(0x131B10, 0x138C70, 86)  // DemoteAsegaOnXf similar decomp
+FNMAP(0x131B60, 0x138CC8, 80)  // DemoteAsegaOnAlo changed decomp
 FNMAP(0x131C40, 0x138DA0, 80)  // CTRLASEG::Start similar
 FNMAP(0x131C90, 0x138DF0, 86)  // CTRLASEG::End similar
-FNMAP(0x131CD8, 0x138E38, 100)  // CTRLASEG::Fetch register-renamed
-FNMAP(0x131D68, 0x138EC8, 99)  // CTRLASEG::Query similar
+FNMAP(0x131CD8, 0x138E38, 100)  // CTRLASEG::Fetch register-renamed decomp
+FNMAP(0x131D68, 0x138EC8, 99)  // CTRLASEG::Query similar decomp
 FNMAP(0x131E18, 0x1390D0, 80)  // func_00131E18 similar
 FNMAP(0x131F50, 0x139208, 100)  // func_00131F50 identical
 FNMAP(0x131F70, 0x138F78, 80)  // func_00131F70 similar
 FNMAP(0x1320A8, 0x1390B0, 100)  // func_001320A8 identical
 FNMAP(0x1320C8, 0x139228, 71)  // InitBarrier changed
-FNMAP(0x132100, 0x139260, 84)  // PostBarrierLoad similar
-FNMAP(0x132140, 0x1392A0, 64)  // OverlapKindBarrier changed
-FNMAP(0x132238, 0x139388, 98)  // OnBarrierXpNew similar
+FNMAP(0x132100, 0x139260, 84)  // PostBarrierLoad similar decomp
+FNMAP(0x132140, 0x1392A0, 80)  // OverlapKindBarrier changed decomp
+FNMAP(0x132238, 0x139388, 98)  // OnBarrierXpNew similar decomp
 FNMAP(0x132298, 0x1393E8, 79)  // TellBarrierContacts similar
 FNMAP(0x1323C8, 0x139510, 70)  // AddBarrierObject__FP7BARRIER3OID changed
 FNMAP(0x1323F0, 0x1395C0, 70)  // AddBarrierClass__FP7BARRIER3CID changed
 FNMAP(0x132418, 0x1395E8, 80)  // func_00132418 similar
 FNMAP(0x132550, 0x139720, 100)  // func_00132550 identical
-FNMAP(0x132570, 0x13AF60, 97)  // __18CBinaryAsyncStreamPv similar
+FNMAP(0x132570, 0x13AF60, 97)  // __18CBinaryAsyncStreamPv similar decomp
 FNMAP(0x1325B8, 0x13AFA8, 97)  // _$_18CBinaryAsyncStream similar
 FNMAP(0x132600, 0x13AFF0, 100)  // CBinaryAsyncStream_FOpenFile identical
 FNMAP(0x132638, 0x13B028, 49)  // ReleaseStackInto_132640 changed
@@ -1192,8 +1194,8 @@ FNMAP(0x132640, 0x13B030, 97)  // FOpenSector__18CBinaryAsyncStreamUiUi similar
 FNMAP(0x132688, 0x13B078, 100)  // Close__18CBinaryAsyncStream identical
 FNMAP(0x132710, 0x13B100, 99)  // StartSpooling__18CBinaryAsyncStream similar
 FNMAP(0x1327D0, 0x13B1C0, 49)  // FSpooling__18CBinaryAsyncStream similar
-FNMAP(0x1327E0, 0x13B1D0, 100)  // FSpoolingComplete__18CBinaryAsyncStream identical
-FNMAP(0x1328A8, 0x13B298, 98)  // FinishSpooling__18CBinaryAsyncStream similar
+FNMAP(0x1327E0, 0x13B1D0, 100)  // FSpoolingComplete__18CBinaryAsyncStream identical decomp
+FNMAP(0x1328A8, 0x13B298, 98)  // FinishSpooling__18CBinaryAsyncStream similar decomp
 FNMAP(0x132930, 0x13B320, 98)  // Spool__18CBinaryAsyncStream similar
 FNMAP(0x132998, 0x13B388, 100)  // Skip__18CBinaryAsyncStreami identical
 FNMAP(0x1329A8, 0x13B398, 80)  // func_001329A8 similar
@@ -1208,8 +1210,8 @@ FNMAP(0x132C78, 0x13B640, 90)  // EnsureLoSidebagFloat similar
 FNMAP(0x132CC8, 0x13B690, 100)  // func_00132CC8 identical
 FNMAP(0x132D28, 0x13B6F0, 100)  // func_00132D28 identical
 FNMAP(0x132D88, 0x13B750, 91)  // EnsureLoSidebagOid similar
-FNMAP(0x132DE0, 0x13B7A8, 100)  // func_00132DE0 identical
-FNMAP(0x132E40, 0x13B808, 100)  // func_00132E40 identical
+FNMAP(0x132DE0, 0x13B7A8, 100)  // func_00132DE0 identical decomp
+FNMAP(0x132E40, 0x13B808, 100)  // func_00132E40 identical decomp
 FNMAP(0x132EA0, 0x13B868, 96)  // GetBasicCid similar
 FNMAP(0x132ED0, 0x13B898, 100)  // func_00132ED0 identical
 FNMAP(0x132ED8, 0x13B8A0, 69)  // AIJOB::Script changed
@@ -1217,25 +1219,25 @@ FNMAP(0x133000, 0x13B9A0, 100)  // AIJOB::Script identical
 FNMAP(0x133040, 0x13B9E0, 88)  // PtimerNewBasic similar
 FNMAP(0x133130, 0x13BAC8, 50)  // ParisBlocks_133130 changed
 FNMAP(0x1331F8, 0x13BB58, 84)  // AIJOB::Script similar
-FNMAP(0x133340, 0x13BC80, 97)  // ParisCoverage_133340 similar
-FNMAP(0x133380, 0x13BCC0, 97)  // notify_actor_refresh similar
+FNMAP(0x133340, 0x13BC80, 97)  // ParisCoverage_133340 similar decomp
+FNMAP(0x133380, 0x13BCC0, 97)  // notify_actor_refresh similar decomp
 FNMAP(0x1333C0, 0x13BD00, 92)  // PlayClip similar
-FNMAP(0x133448, 0x13BD88, 80)  // ReleaseListEntry similar
-FNMAP(0x1334A8, 0x13BDE0, 62)  // ClearBasicListeners changed
-FNMAP(0x133508, 0x13BE38, 100)  // NotifyBasicListeners register-renamed
+FNMAP(0x133448, 0x13BD88, 80)  // ReleaseListEntry similar decomp
+FNMAP(0x1334A8, 0x13BDE0, 80)  // ClearBasicListeners changed decomp
+FNMAP(0x133508, 0x13BE38, 100)  // NotifyBasicListeners register-renamed decomp
 FNMAP(0x133590, 0x13BEC0, 100)  // NopBasic2 identical
 FNMAP(0x133598, 0x13BEF8, 80)  // func_00133598 similar
 FNMAP(0x1336D0, 0x13C030, 100)  // func_001336D0 identical
-FNMAP(0x1336F0, 0x13C050, 67)  // PoxaAddSw changed
-FNMAP(0x1337D0, 0x13C138, 73)  // RemoveSwOxa changed
-FNMAP(0x133A38, 0x13C388, 92)  // UpdateSwPox similar
+FNMAP(0x1336F0, 0x13C050, 80)  // PoxaAddSw changed decomp
+FNMAP(0x1337D0, 0x13C138, 80)  // RemoveSwOxa changed decomp
+FNMAP(0x133A38, 0x13C388, 92)  // UpdateSwPox similar decomp
 FNMAP(0x133C68, 0x13C5B8, 92)  // PoxAddSw similar
 FNMAP(0x133CB8, 0x13C608, 95)  // PoxRemoveSw similar
-FNMAP(0x133D08, 0x13C658, 94)  // FOverlapOxa similar
-FNMAP(0x133E30, 0x13C780, 79)  // FlushSwOxaDirty1 similar
-FNMAP(0x133E80, 0x13C7D0, 53)  // UpdateSwAaox changed
+FNMAP(0x133D08, 0x13C658, 94)  // FOverlapOxa similar decomp
+FNMAP(0x133E30, 0x13C780, 80)  // FlushSwOxaDirty1 similar decomp
+FNMAP(0x133E80, 0x13C7D0, 80)  // UpdateSwAaox changed decomp
 FNMAP(0x134310, 0x13CD00, 49)  // NMaxBbmark changed
-FNMAP(0x134320, 0x13CD10, 87)  // RecalcSwOxfFilterForObject similar
+FNMAP(0x134320, 0x13CD10, 87)  // RecalcSwOxfFilterForObject similar decomp
 FNMAP(0x134398, 0x13CD88, 80)  // func_00134398 similar
 FNMAP(0x1344D0, 0x13CEC0, 100)  // func_001344D0 identical
 FNMAP(0x1344F0, 0x13CFB0, 80)  // func_001344F0 similar
@@ -1249,7 +1251,7 @@ FNMAP(0x134DA8, 0x13DE58, 50)  // UpdateBentleyHoldMotion changed
 FNMAP(0x135248, 0x13E510, 50)  // SetBentleyState changed
 FNMAP(0x1357C0, 0x13EB68, 61)  // OldActorFireResolvedDart changed
 FNMAP(0x1358A8, 0x13EC70, 49)  // GetBentleyCpdefi changed
-FNMAP(0x135940, 0x13ED10, 55)  // UpdateBentleyMotion changed
+FNMAP(0x135940, 0x13ED10, 80)  // UpdateBentleyMotion changed decomp
 FNMAP(0x135C20, 0x13F040, 57)  // SetBentleyJumpState changed
 FNMAP(0x135D08, 0x13F128, 80)  // BentleyJumpKind similar
 FNMAP(0x135D80, 0x13F1C8, 54)  // UpdateActorStepMesh changed
@@ -1267,7 +1269,7 @@ FNMAP(0x136C50, 0x1405D8, 49)  // Player136C50 changed
 FNMAP(0x136CB0, 0x140618, 86)  // Player136CB0 similar
 FNMAP(0x136CC0, 0x140628, 50)  // GrfBentleyXp changed
 FNMAP(0x1371B8, 0x1407A8, 49)  // InitSlyDodge changed
-FNMAP(0x1371C8, 0x1408B0, 72)  // UpdateSlyDodgeTransitions changed
+FNMAP(0x1371C8, 0x1408B0, 80)  // UpdateSlyDodgeTransitions changed decomp
 FNMAP(0x137218, 0x1F5CC8, 49)  // UpdateSlyDodgeInput similar
 FNMAP(0x137248, 0x140958, 64)  // UpdateSlyDodgeMotion changed
 FNMAP(0x1374E0, 0x140BE8, 33)  // StateSetAimTargetDefault changed
@@ -1277,12 +1279,12 @@ FNMAP(0x137780, 0x147CB0, 80)  // func_00137780 similar
 FNMAP(0x1378B8, 0x147DE8, 100)  // func_001378B8 identical
 FNMAP(0x137FB8, 0x148468, 69)  // FillBlAmrsg__FiiPviiP3OID changed
 FNMAP(0x1380F0, 0x148588, 62)  // CalculateBlendAmrsg__FiiPviiP4MRSGPf changed
-FNMAP(0x138370, 0x148810, 78)  // ImrsgLookUp__FffiP4MRSGPf similar
-FNMAP(0x1383F0, 0x148890, 50)  // SetBlendDominant changed
+FNMAP(0x138370, 0x148810, 80)  // ImrsgLookUp__FffiP4MRSGPf similar decomp
+FNMAP(0x1383F0, 0x148890, 80)  // SetBlendDominant changed decomp
 FNMAP(0x1384C0, 0x148938, 50)  // RecalcBlend changed
-FNMAP(0x138660, 0x148AE8, 88)  // TRKPBL::Setup similar
-FNMAP(0x138970, 0x148DF8, 85)  // TRKPBL::Eval similar
-FNMAP(0x138BA0, 0x149058, 80)  // TRKGBL::Eval similar
+FNMAP(0x138660, 0x148AE8, 88)  // TRKPBL::Setup similar decomp
+FNMAP(0x138970, 0x148DF8, 85)  // TRKPBL::Eval similar decomp
+FNMAP(0x138BA0, 0x149058, 80)  // TRKGBL::Eval similar decomp
 FNMAP(0x138DB0, 0x149258, 80)  // func_00138DB0 similar
 FNMAP(0x138EE8, 0x149390, 100)  // func_00138EE8 identical
 FNMAP(0x138F08, 0x149458, 100)  // BuildBlendGifs identical
@@ -1293,11 +1295,11 @@ FNMAP(0x1390D8, 0x149638, 61)  // func_001390D8 changed
 FNMAP(0x1391C8, 0x149718, 87)  // func_001391C8 similar
 FNMAP(0x139250, 0x1497A0, 74)  // func_00139250 changed
 FNMAP(0x139370, 0x1498C0, 80)  // func_00139370 similar
-FNMAP(0x1394C8, 0x149A08, 74)  // SetPsysFromEmitb changed
+FNMAP(0x1394C8, 0x149A08, 80)  // SetPsysFromEmitb changed decomp
 FNMAP(0x1398E0, 0x149DE8, 93)  // func_001398E0 similar
 FNMAP(0x139900, 0x149E08, 80)  // func_00139900 similar
-FNMAP(0x139950, 0x149E58, 82)  // func_00139950 similar
-FNMAP(0x139AB8, 0x149FC0, 80)  // func_00139AB8 similar
+FNMAP(0x139950, 0x149E58, 82)  // func_00139950 similar decomp
+FNMAP(0x139AB8, 0x149FC0, 80)  // func_00139AB8 similar decomp
 FNMAP(0x139DC0, 0x14A2B0, 74)  // UpdatePsys changed
 FNMAP(0x13A1E8, 0x14A6D0, 50)  // func_0013A1E8 changed
 FNMAP(0x13A688, 0x14AC48, 82)  // func_0013A688 similar
@@ -1307,20 +1309,20 @@ FNMAP(0x13A890, 0x14AE58, 80)  // func_0013A890 similar
 FNMAP(0x13A9C8, 0x14AF90, 100)  // func_0013A9C8 identical
 FNMAP(0x13A9E8, 0x14BFB0, 57)  // func_0013A9E8 changed
 FNMAP(0x13AA70, 0x14C040, 100)  // reset_attached_actor identical
-FNMAP(0x13AAA0, 0x14C070, 89)  // func_0013AAA0 similar
+FNMAP(0x13AAA0, 0x14C070, 89)  // func_0013AAA0 similar decomp
 FNMAP(0x13AAE8, 0x14C0B8, 57)  // func_0013AAE8 changed
 FNMAP(0x13AB58, 0x14C158, 90)  // UpdateProjectile similar
-FNMAP(0x13AC18, 0x14C218, 50)  // SweepProjectile changed
-FNMAP(0x13ADE8, 0x14C408, 80)  // MarkProjectileSweep changed
+FNMAP(0x13AC18, 0x14C218, 80)  // SweepProjectile changed decomp
+FNMAP(0x13ADE8, 0x14C408, 80)  // MarkProjectileSweep changed decomp
 FNMAP(0x13AEB0, 0x14C4D8, 80)  // ProjectileContacts changed
 FNMAP(0x13B1C8, 0x14C778, 53)  // FStickyProjectileParent changed
-FNMAP(0x13B250, 0x14C7F0, 95)  // AttachStickyProjectile similar
+FNMAP(0x13B250, 0x14C7F0, 95)  // AttachStickyProjectile similar decomp
 FNMAP(0x13B2F0, 0x14C890, 80)  // FAcceptContactProjectile changed
 FNMAP(0x13B428, 0x14C9B8, 54)  // RecordHit changed
 FNMAP(0x13B5C8, 0x14CB98, 49)  // ExpireIn changed
-FNMAP(0x13B5E8, 0x14CBB8, 68)  // AploVictims changed
+FNMAP(0x13B5E8, 0x14CBB8, 80)  // AploVictims changed decomp
 FNMAP(0x13B7A0, 0x14CD60, 100)  // DiscoRoom_13B7A0 identical
-FNMAP(0x13B7B8, 0x14CD78, 95)  // BossLow_13B7B8 similar
+FNMAP(0x13B7B8, 0x14CD78, 95)  // BossLow_13B7B8 similar decomp
 FNMAP(0x13B860, 0x14CE20, 50)  // EndProjectile changed
 FNMAP(0x13BB80, 0x14D108, 87)  // ResetProjectileInstance similar
 FNMAP(0x13BBF8, 0x14D188, 94)  // OverlapKindProjectile similar
@@ -1334,7 +1336,7 @@ FNMAP(0x13BF30, 0x14D4C8, 49)  // DetachBooty27 changed
 FNMAP(0x13C000, 0x14D708, 80)  // FBootyDrawDelta changed
 FNMAP(0x13C1B8, 0x14D8D0, 80)  // OnBootyMessage changed
 FNMAP(0x13C278, 0x14D9A8, 89)  // OverlapKindBooty similar
-FNMAP(0x13C2D8, 0x14DA08, 94)  // OnBootyXpNew similar
+FNMAP(0x13C2D8, 0x14DA08, 94)  // OnBootyXpNew similar decomp
 FNMAP(0x13C368, 0x14DA98, 60)  // FAcceptBootyContact changed
 FNMAP(0x13C3B8, 0x14DAE0, 85)  // AppendParisAlarmRecord similar
 FNMAP(0x13C440, 0x14DB68, 49)  // ClearParisAlarmRecord changed
@@ -1347,13 +1349,13 @@ FNMAP(0x13CEB8, 0x14E7A0, 75)  // ParisLinear_13CEB8 similar
 FNMAP(0x13CEF8, 0x14E9B0, 90)  // PostLoadBootyStand similar
 FNMAP(0x13CF38, 0x14E9F0, 64)  // AttachStandBooty changed
 FNMAP(0x13CFD8, 0x14EAB0, 97)  // OnBootyStandRegistered similar
-FNMAP(0x13D020, 0x14EB40, 67)  // FUseBootyStand changed
+FNMAP(0x13D020, 0x14EB40, 80)  // FUseBootyStand changed decomp
 FNMAP(0x13D400, 0x14EDF8, 80)  // func_0013D400 similar
 FNMAP(0x13D538, 0x14EF30, 100)  // func_0013D538 identical
-FNMAP(0x13D558, 0x14EF50, 95)  // CByteQueue_Init similar
-FNMAP(0x13D580, 0x14EF78, 100)  // Reset__10CByteQueue identical
-FNMAP(0x13D5A0, 0x14EF98, 97)  // CbFill__10CByteQueueiP11CQueueInput similar
-FNMAP(0x13D6A8, 0x14F0A0, 95)  // CbDrain__10CByteQueueiP12CQueueOutput similar
+FNMAP(0x13D558, 0x14EF50, 95)  // CByteQueue_Init similar decomp
+FNMAP(0x13D580, 0x14EF78, 100)  // Reset__10CByteQueue identical decomp
+FNMAP(0x13D5A0, 0x14EF98, 97)  // CbFill__10CByteQueueiP11CQueueInput similar decomp
+FNMAP(0x13D6A8, 0x14F0A0, 95)  // CbDrain__10CByteQueueiP12CQueueOutput similar decomp
 FNMAP(0x13D7D0, 0x14F1C8, 62)  // CbFill__10CByteQueueiPUc changed
 FNMAP(0x13D818, 0x14F240, 100)  // FreeDrain__10CByteQueuei identical
 FNMAP(0x13D850, 0x14F278, 100)  // CQueueInputMemory_CbRead identical
@@ -1365,25 +1367,25 @@ FNMAP(0x13DF80, 0x14FD20, 61)  // LoadTextFromBrx changed
 FNMAP(0x13E0E0, 0x14FF58, 49)  // LoadNodesFromBrx changed
 FNMAP(0x13E210, 0x150478, 80)  // func_0013E210 similar
 FNMAP(0x13E348, 0x1505B0, 100)  // func_0013E348 identical
-FNMAP(0x13E368, 0x150630, 67)  // PvFromId changed
+FNMAP(0x13E368, 0x150630, 80)  // PvFromId changed decomp
 FNMAP(0x13E3C8, 0x150690, 94)  // PloNew similar
-FNMAP(0x13E510, 0x1507E0, 94)  // PloCloneLo similar
+FNMAP(0x13E510, 0x1507E0, 94)  // PloCloneLo similar decomp
 FNMAP(0x13E590, 0x150860, 100)  // LoadObjectOption identical
-FNMAP(0x13E5E0, 0x1508B0, 94)  // LoadObjectOptionPmf similar
-FNMAP(0x13E690, 0x150960, 89)  // RefReadOption similar
+FNMAP(0x13E5E0, 0x1508B0, 94)  // LoadObjectOptionPmf similar decomp
+FNMAP(0x13E690, 0x150960, 89)  // RefReadOption similar decomp
 FNMAP(0x13E818, 0x150AE8, 74)  // LoadOptionFromBrx changed
-FNMAP(0x13F810, 0x1519C8, 50)  // LoadOptionsFromBrx changed
+FNMAP(0x13F810, 0x1519C8, 80)  // LoadOptionsFromBrx changed decomp
 FNMAP(0x13F888, 0x151A38, 49)  // InitPtrArray changed
 FNMAP(0x13F8A8, 0x151A78, 90)  // AppendPtrArray similar
 FNMAP(0x13F990, 0x151B60, 73)  // SetLoFlags48 changed
-FNMAP(0x13FA30, 0x151C00, 70)  // SinkLoadedObjects changed
+FNMAP(0x13FA30, 0x151C00, 80)  // SinkLoadedObjects changed decomp
 FNMAP(0x13FAD0, 0x151C98, 91)  // FFilterMatches similar
 FNMAP(0x13FB40, 0x151D80, 52)  // LoadSwObjsFromBrx changed
 FNMAP(0x13FE18, 0x1520C0, 80)  // func_0013FE18 similar
 FNMAP(0x13FF50, 0x1521F8, 100)  // func_0013FF50 identical
 FNMAP(0x1400B8, 0x152488, 60)  // IsoeActorPart changed
 FNMAP(0x140338, 0x152A48, 47)  // ShowWorldStats changed
-FNMAP(0x140678, 0x152D50, 82)  // SetActorTargets similar
+FNMAP(0x140678, 0x152D50, 82)  // SetActorTargets similar decomp
 FNMAP(0x1406E8, 0x152DC0, 32)  // SetActorControl changed
 FNMAP(0x140750, 0x152E88, 72)  // UpdateActorNoise changed
 FNMAP(0x1409E8, 0x153158, 64)  // NActorPerceived changed
@@ -1395,6 +1397,7 @@ FNMAP(0x140DB0, 0x153508, 80)  // FillActorDzResponse changed
 FNMAP(0x140EB0, 0x155CE0, 80)  // ParisRetry_140EB0 changed
 FNMAP(0x140F50, 0x1536F8, 80)  // FActorAcceptContact similar
 FNMAP(0x140F70, 0x153718, 80)  // NActorDamageStatus similar
+FNMAP(0x140F90, 0x153738, 80)  // RemoveActorAlarms changed decomp
 FNMAP(0x141928, 0x153F28, 80)  // ActorReset similar
 FNMAP(0x141968, 0x153F68, 49)  // LaunchActorTo changed
 FNMAP(0x141A50, 0x1540E8, 48)  // ActorUpdateAbilities changed
@@ -1402,7 +1405,7 @@ FNMAP(0x141C08, 0x154350, 67)  // SetAbilityState changed
 FNMAP(0x141E28, 0x1546B0, 100)  // func_00141E28 identical
 FNMAP(0x141E30, 0x1546B8, 50)  // ActorSendMsg1A changed
 FNMAP(0x141E70, 0x154750, 100)  // ActorNop141E70 identical
-FNMAP(0x141E78, 0x154758, 49)  // ActorFindAbility changed
+FNMAP(0x141E78, 0x154758, 80)  // ActorFindAbility changed decomp
 FNMAP(0x141EA8, 0x154798, 31)  // SatelliteLow_141EA8 changed
 FNMAP(0x141EF0, 0x1547F0, 49)  // ReleaseStackInto_141EF8 changed
 FNMAP(0x141EF8, 0x1547F8, 50)  // ActorLoadAbilities changed
@@ -1411,6 +1414,7 @@ FNMAP(0x142140, 0x154B48, 83)  // SetActorInteractObject similar
 FNMAP(0x1421A0, 0x154BA8, 88)  // StateSetActorEffect similar
 FNMAP(0x1421F8, 0x154C00, 84)  // StateRequestActionFive similar
 FNMAP(0x142278, 0x154C80, 80)  // SceneSetActorCarryTarget similar
+FNMAP(0x142310, 0x154D10, 80)  // ActorSetParams changed decomp
 FNMAP(0x142340, 0x154D40, 83)  // SetActorInteractObject similar
 FNMAP(0x1423A0, 0x154DA0, 80)  // FActorPoseDone similar
 FNMAP(0x1424C0, 0x154ED0, 75)  // StateActorPendingIsEmpty similar
@@ -1424,10 +1428,10 @@ FNMAP(0x1427C8, 0x155270, 73)  // SetActorLookTarget changed
 FNMAP(0x142830, 0x1552D8, 87)  // StateBeginActorMode similar
 FNMAP(0x142860, 0x155308, 49)  // ActorClear1100 changed
 FNMAP(0x142868, 0x155310, 49)  // ActorSetLookFlag changed
-FNMAP(0x142880, 0x155328, 68)  // ActorSetLookFlag changed
+FNMAP(0x142880, 0x155328, 80)  // ActorSetLookFlag changed decomp
 FNMAP(0x1428D8, 0x155380, 83)  // LookScore similar
 FNMAP(0x142AF8, 0x1555C0, 73)  // UpdateActorLook changed
-FNMAP(0x143090, 0x155AB8, 49)  // func_00143090 changed
+FNMAP(0x143090, 0x155AB8, 80)  // func_00143090 changed decomp
 FNMAP(0x1430C8, 0x155B88, 49)  // GrfActorLookMask changed
 FNMAP(0x1431D0, 0x155D00, 70)  // StopNearestLaunchTracking changed
 FNMAP(0x143220, 0x155D60, 79)  // GetSlyLaunchTarget similar
@@ -1438,10 +1442,10 @@ FNMAP(0x143C78, 0x156388, 74)  // GrfActorStance changed
 FNMAP(0x143CF8, 0x156438, 82)  // ActorRemove similar
 FNMAP(0x143D20, 0x2502F0, 80)  // FActorBelowFloorSoon similar
 FNMAP(0x143DE8, 0x156468, 71)  // func_00143DE8 changed
-FNMAP(0x143EE0, 0x156578, 86)  // PlayActorScriptAnim similar
+FNMAP(0x143EE0, 0x156578, 86)  // PlayActorScriptAnim similar decomp
 FNMAP(0x143FF8, 0x156690, 88)  // EndActorScriptAnim similar
 FNMAP(0x144038, 0x1566D0, 79)  // FActorInScriptAnim similar
-FNMAP(0x144068, 0x156700, 49)  // ActorHasCarrier changed
+FNMAP(0x144068, 0x156700, 80)  // ActorHasCarrier changed decomp
 FNMAP(0x144090, 0x156728, 90)  // FActorTakesCharm similar
 FNMAP(0x1440D0, 0x156768, 49)  // StartPlayerCounters changed
 FNMAP(0x144268, 0x1567E8, 86)  // HealActor similar
@@ -1463,7 +1467,7 @@ FNMAP(0x1449D0, 0x1573B0, 80)  // func_001449D0 similar
 FNMAP(0x144B08, 0x1574E8, 100)  // func_00144B08 identical
 FNMAP(0x144B28, 0x157508, 92)  // JOBACTORFOLLOW::Init similar
 FNMAP(0x144B58, 0x1D9080, 82)  // JOBACTORFOLLOW::Enter similar
-FNMAP(0x144E20, 0x157880, 97)  // JOBACTORWALK::Init similar
+FNMAP(0x144E20, 0x157880, 97)  // JOBACTORWALK::Init similar decomp
 FNMAP(0x144E68, 0x1578C8, 49)  // JOBACTORWALK::Enter similar
 FNMAP(0x144EE8, 0x271928, 78)  // JOBACTORWALK::FAtGoal similar
 FNMAP(0x145010, 0x157AA0, 49)  // JOBCOMPANION::Init similar
@@ -1490,7 +1494,7 @@ FNMAP(0x146650, 0x1591E8, 80)  // JOBBENTLEYATTACK::SetState similar
 FNMAP(0x1466C0, 0x159278, 96)  // JOBCOMPANIONATTACK::Init similar
 FNMAP(0x1466F0, 0x1592A8, 79)  // JOBCOMPANIONATTACK::Enter similar
 FNMAP(0x146758, 0x159310, 49)  // JOBCOMPANIONATTACK::Exit similar
-FNMAP(0x1467A0, 0x159358, 80)  // JOBSLYATTACK::Update similar
+FNMAP(0x1467A0, 0x159358, 80)  // JOBSLYATTACK::Update similar decomp
 FNMAP(0x146B18, 0x159708, 31)  // JOBSLYATTACK::Drive changed
 FNMAP(0x146E18, 0x1599E0, 71)  // JOBSLYATTACK::SetState changed
 FNMAP(0x146EE0, 0x19BE58, 49)  // JOBMURRAYRAGE::Exit similar
@@ -1499,11 +1503,11 @@ FNMAP(0x1471C0, 0x159DF0, 80)  // ParisBlocks_1471C0 similar
 FNMAP(0x147220, 0x159E50, 93)  // PostLoadAnimatedOverlay similar
 FNMAP(0x147278, 0x159EA0, 90)  // UpdateOverlay similar
 FNMAP(0x147338, 0x159F60, 82)  // Message similar
-FNMAP(0x147410, 0x15A038, 67)  // State changed
+FNMAP(0x147410, 0x15A038, 80)  // State changed decomp
 FNMAP(0x1475C0, 0x15A1E8, 48)  // GL::CaptureOverlayFrame changed
 FNMAP(0x1477B0, 0x15A5D8, 79)  // FAnimatedOverlayDrawNormal similar
 FNMAP(0x1477D8, 0x15A600, 50)  // FAnimatedOverlayDrawNormal changed
-FNMAP(0x147C20, 0x15AB18, 80)  // StartAnimatedOverlay similar
+FNMAP(0x147C20, 0x15AB18, 80)  // StartAnimatedOverlay similar decomp
 FNMAP(0x147CC8, 0x15ABC0, 80)  // func_00147CC8 similar
 FNMAP(0x147E20, 0x15ADA0, 80)  // DequeueLoRoot similar
 FNMAP(0x147E88, 0x15B580, 49)  // Activator_Requeue changed
@@ -1535,19 +1539,19 @@ FNMAP(0x149778, 0x254268, 49)  // func_00149778 similar
 FNMAP(0x149A30, 0x15BDD8, 100)  // func_00149A30 identical
 FNMAP(0x149A50, 0x15DC68, 92)  // PostDeferredPointerCall similar
 FNMAP(0x149AB8, 0x15DCD0, 60)  // DeferredPadTouched changed
-FNMAP(0x149B58, 0x15DD68, 62)  // CancelDeferredCalls changed
-FNMAP(0x149C80, 0x15DE78, 70)  // RunDeferredSpliceEvents changed
+FNMAP(0x149B58, 0x15DD68, 80)  // CancelDeferredCalls changed decomp
+FNMAP(0x149C80, 0x15DE78, 80)  // RunDeferredSpliceEvents changed decomp
 FNMAP(0x14A008, 0x15E1D0, 90)  // LoadLo1731B8FromBrx similar
 FNMAP(0x14A0A8, 0x15E270, 50)  // PostLoadChasegraph changed
 FNMAP(0x14A178, 0x15E348, 71)  // func_0014A178 changed
-FNMAP(0x14A1B0, 0x15E380, 79)  // JOBCHASE::Init similar
+FNMAP(0x14A1B0, 0x15E380, 87)  // JOBCHASE::Init similar decomp
 FNMAP(0x14A200, 0x15E3D0, 79)  // JOBCHASE::Enter similar
 FNMAP(0x14A248, 0x15E418, 84)  // JOBCHASE::Exit similar
 FNMAP(0x14A2A0, 0x15E470, 81)  // JOBCHASE::Update similar
 FNMAP(0x14A478, 0x15E628, 60)  // JOBCHASE::FAirborne changed
 FNMAP(0x14A4D0, 0x15E690, 55)  // JOBCHASE::Aim changed
 FNMAP(0x14AA30, 0x15EC20, 80)  // JOBCHASE::IBest similar
-FNMAP(0x14AD70, 0x15EF88, 92)  // JOBCHASE::Step similar
+FNMAP(0x14AD70, 0x15EF88, 92)  // JOBCHASE::Step similar decomp
 FNMAP(0x14AE18, 0x15F030, 79)  // JOBCHASE::PloEntry similar
 FNMAP(0x14AE38, 0x15F050, 64)  // JOBCHASE::SetState changed
 FNMAP(0x14B1A0, 0x15F528, 46)  // func_0014B1A0 changed
@@ -1559,22 +1563,22 @@ FNMAP(0x14B640, 0x15DC48, 100)  // func_0014B640 identical
 FNMAP(0x14B660, 0x162A58, 100)  // StartupCatalog identical
 FNMAP(0x14B6A0, 0x15E078, 80)  // func_0014B6A0 similar
 FNMAP(0x14B7D8, 0x15E1B0, 100)  // func_0014B7D8 identical
-FNMAP(0x14B7F8, 0x162C48, 73)  // CpchzTokenizePath__FPc changed
+FNMAP(0x14B7F8, 0x162C48, 80)  // CpchzTokenizePath__FPc changed decomp
 FNMAP(0x14B9B8, 0x162E00, 49)  // AdvanceResultIntoCdQuery changed
-FNMAP(0x14B9C0, 0x162E08, 97)  // FCdDvd similar
+FNMAP(0x14B9C0, 0x162E08, 97)  // FCdDvd similar decomp
 FNMAP(0x14BA00, 0x162E48, 96)  // SetCdMmode__Fv similar
 FNMAP(0x14BA30, 0x162E78, 100)  // StartupCd__Fv identical
 FNMAP(0x14BA38, 0x162E80, 80)  // UpdateCd__Fv similar
-FNMAP(0x14BBB0, 0x162FF0, 80)  // CdPath__FPcT0i similar
-FNMAP(0x14BC78, 0x1630B0, 64)  // ReadCdSectors changed
+FNMAP(0x14BBB0, 0x162FF0, 80)  // CdPath__FPcT0i similar decomp
+FNMAP(0x14BC78, 0x1630B0, 80)  // ReadCdSectors changed decomp
 FNMAP(0x14BD30, 0x163150, 100)  // FCdCompleted__Fi identical
 FNMAP(0x14BD50, 0x163170, 80)  // func_0014BD50 similar
 FNMAP(0x14BE88, 0x1632A8, 100)  // func_0014BE88 identical
 FNMAP(0x14BEA8, 0x163ED8, 80)  // RegisterDesc similar
 FNMAP(0x14BF10, 0x163F20, 49)  // PublishHeapResultIntoUnmarkAll changed
 FNMAP(0x14BF18, 0x163F28, 100)  // UnmarkAll__10CSplotheap identical
-FNMAP(0x14BF48, 0x163F58, 62)  // func_0014BF48 changed
-FNMAP(0x14BFF8, 0x164028, 96)  // func_0014BFF8 similar
+FNMAP(0x14BF48, 0x163F58, 62)  // MatchCheatCodes changed
+FNMAP(0x14BFF8, 0x164028, 96)  // UpdateCheatCodes similar
 FNMAP(0x14C190, 0x164170, 45)  // queue_scene_owner changed
 FNMAP(0x14C1F0, 0x1641A0, 49)  // func_0014C1F0 similar
 FNMAP(0x14C258, 0x1641B0, 46)  // RemoveMegaJump changed
@@ -1585,38 +1589,39 @@ FNMAP(0x14C548, 0x164760, 80)  // func_0014C548 similar
 FNMAP(0x14C680, 0x164898, 100)  // func_0014C680 identical
 FNMAP(0x14C6A0, 0x1649F0, 49)  // ClipSegmentSoe changed
 FNMAP(0x14C6D8, 0x164A98, 86)  // ClipSegmentSoe similar
-FNMAP(0x14C748, 0x164B08, 64)  // ClipSegmentSphere changed
-FNMAP(0x14C9F8, 0x164D98, 82)  // CMergeAlsg similar
+FNMAP(0x14C748, 0x164B08, 80)  // ClipSegmentSphere changed decomp
+FNMAP(0x14C9F8, 0x164D98, 82)  // CMergeAlsg similar decomp
 FNMAP(0x14CC50, 0x164FF8, 49)  // ReleaseStackInto_14CC58 changed
 FNMAP(0x14CC58, 0x165000, 61)  // PsoHitTestLineObjects__FiP6VECTORT1iPP2SOP3LSG changed
-FNMAP(0x14CDB0, 0x165130, 81)  // CClipSegmentEntries similar
+FNMAP(0x14CDB0, 0x165130, 81)  // CClipSegmentEntries similar decomp
 FNMAP(0x14CE88, 0x165200, 80)  // func_0014CE88 similar
 FNMAP(0x14CFC0, 0x165338, 100)  // func_0014CFC0 identical
-FNMAP(0x14CFE0, 0x165358, 68)  // StartupClock changed
-FNMAP(0x14D068, 0x1653E0, 97)  // ResetClock similar
-FNMAP(0x14D0B8, 0x165430, 96)  // UpdateClock similar
+FNMAP(0x14CFE0, 0x165358, 80)  // StartupClock changed decomp
+FNMAP(0x14D068, 0x1653E0, 97)  // ResetClock similar decomp
+FNMAP(0x14D0B8, 0x165430, 96)  // UpdateClock similar decomp
 FNMAP(0x14D1D0, 0x165548, 95)  // SetClockFactor similar
-FNMAP(0x14D1F8, 0x165570, 61)  // UpdateClockRate changed
-FNMAP(0x14D240, 0x1655B0, 100)  // TickNow identical
+FNMAP(0x14D1F8, 0x165570, 80)  // UpdateClockRate changed decomp
+FNMAP(0x14D240, 0x1655B0, 100)  // TickNow identical decomp
 FNMAP(0x14D280, 0x1655F0, 80)  // func_0014D280 similar
 FNMAP(0x14D3B8, 0x165728, 100)  // func_0014D3B8 identical
 FNMAP(0x14D470, 0x166540, 49)  // StartupCm__Fv changed
 FNMAP(0x14D8C0, 0x166548, 67)  // CutCm changed
-FNMAP(0x14D8D8, 0x166560, 49)  // SetCmCut changed
-FNMAP(0x14D8F8, 0x166580, 59)  // CombineEyeLookAtProj changed
-FNMAP(0x14DA08, 0x166690, 98)  // BuildFrustrum similar
+FNMAP(0x14D8D8, 0x166560, 80)  // SetCmCut changed decomp
+FNMAP(0x14D8F8, 0x166580, 80)  // CombineEyeLookAtProj changed decomp
+FNMAP(0x14DA08, 0x166690, 98)  // BuildFrustrum similar decomp
 FNMAP(0x14DC58, 0x166A40, 50)  // UpdateCmMat4 changed
 FNMAP(0x14E000, 0x166C70, 61)  // NCmpCmObject changed
-FNMAP(0x14E078, 0x166CE8, 80)  // SortCmObjects similar
+FNMAP(0x14E078, 0x166CE8, 80)  // SortCmObjects similar decomp
 FNMAP(0x14E148, 0x166DC8, 49)  // SetCmCurObject changed
-FNMAP(0x14E270, 0x1692E8, 91)  // BuildCmFogRecip similar
+FNMAP(0x14E1A8, 0x166E48, 80)  // SetCmLookAt changed decomp
+FNMAP(0x14E270, 0x1692E8, 91)  // BuildCmFogRecip similar decomp
 FNMAP(0x14EA08, 0x166F08, 49)  // FFindCmClearInterval changed
-FNMAP(0x14EB70, 0x1670A8, 55)  // FindCmClosestClearPos changed
+FNMAP(0x14EB70, 0x1670A8, 80)  // FindCmClosestClearPos changed decomp
 FNMAP(0x14EDA0, 0x1672A0, 62)  // SquishCmEye changed
 FNMAP(0x14F030, 0x167578, 49)  // func_0014F030 changed
-FNMAP(0x14F040, 0x167588, 90)  // GCmAvoidWeight similar
+FNMAP(0x14F040, 0x167588, 90)  // GCmAvoidWeight similar decomp
 FNMAP(0x14F110, 0x167660, 50)  // PosCmAvoid changed
-FNMAP(0x14F268, 0x167838, 63)  // ConvertCmScreenToWorld changed
+FNMAP(0x14F268, 0x167838, 80)  // ConvertCmScreenToWorld changed decomp
 FNMAP(0x14F308, 0x1678C8, 44)  // ConvertCmWorldToScreen changed
 FNMAP(0x14F3C0, 0x167958, 49)  // ReleaseStackInto_14F3C8 changed
 FNMAP(0x14F5A0, 0x167960, 49)  // SetCmFov changed
@@ -1645,23 +1650,23 @@ FNMAP(0x14FDA0, 0x169E88, 49)  // func_0014FDA0 changed
 FNMAP(0x14FDC0, 0x169F40, 93)  // func_0014FDC0 similar
 FNMAP(0x14FDE0, 0x16A6F0, 49)  // Cplcy14FDE0_ctor changed
 FNMAP(0x14FE28, 0x1C0370, 49)  // CPRECON::ResetZoom similar
-FNMAP(0x14FE58, 0x169FF0, 80)  // CPRECON::PosFocus similar
-FNMAP(0x14FEC8, 0x16A078, 93)  // CPRECON::PosEye similar
+FNMAP(0x14FE58, 0x169FF0, 80)  // CPRECON::PosFocus similar decomp
+FNMAP(0x14FEC8, 0x16A078, 93)  // CPRECON::PosEye similar decomp
 FNMAP(0x14FF38, 0x16A0E8, 50)  // StartZoomSounds changed
 FNMAP(0x150160, 0x16A218, 50)  // UpdateZoomSound changed
 FNMAP(0x150610, 0x16A628, 56)  // StopZoomSounds changed
 FNMAP(0x150728, 0x169F60, 49)  // Cplcy150728_ctor changed
-FNMAP(0x1507F8, 0x16A7E8, 79)  // CPFREE::PosEye similar
+FNMAP(0x1507F8, 0x16A7E8, 83)  // CPFREE::PosEye similar decomp
 FNMAP(0x150938, 0x16A930, 56)  // StartZoomSounds changed
 FNMAP(0x150A28, 0x16AA20, 67)  // UpdateZoomSound changed
 FNMAP(0x150E20, 0x16ADC0, 71)  // CPFREE::SetFocusObject changed
 FNMAP(0x150E60, 0x16AE00, 71)  // CPFREE::SetFocusObject changed
 FNMAP(0x150EA0, 0x16AE40, 74)  // CPFREE::SetTargets changed
 FNMAP(0x150EE8, 0x16AE88, 49)  // SetStoredScalar changed
-FNMAP(0x150EF0, 0x16AE90, 69)  // CPFREE::Snap changed
+FNMAP(0x150EF0, 0x16AE90, 80)  // CPFREE::Snap changed decomp
 FNMAP(0x150F58, 0x16AEF8, 97)  // func_00150F58 similar
 FNMAP(0x151018, 0x16AFB8, 97)  // func_00151018 similar
-FNMAP(0x1510D8, 0x16B078, 91)  // interpolation_scalar_near similar
+FNMAP(0x1510D8, 0x16B078, 91)  // interpolation_scalar_near similar decomp
 FNMAP(0x151130, 0x16B0D0, 64)  // StopZoomSounds changed
 FNMAP(0x151208, 0x16B180, 43)  // Cplcy151208_ctor changed
 FNMAP(0x151240, 0x16B1E0, 62)  // CPACTUATED::Activate changed
@@ -1673,16 +1678,16 @@ FNMAP(0x1518C8, 0x16B630, 49)  // Cplcy1518C8_ctor changed
 FNMAP(0x151900, 0x16BF10, 49)  // CPATTACH::Activate changed
 FNMAP(0x151950, 0x16BFA8, 81)  // CPATTACH::Update similar
 FNMAP(0x151BF0, 0x16C608, 49)  // CPPAIR::Activate changed
-FNMAP(0x151C38, 0x16C280, 80)  // CPPAIR::Update similar
+FNMAP(0x151C38, 0x16C280, 80)  // CPPAIR::Update similar decomp
 FNMAP(0x151F70, 0x16C7F8, 80)  // func_00151F70 similar
 FNMAP(0x1520A8, 0x16ECD8, 100)  // func_001520A8 identical
 FNMAP(0x1524A0, 0x16EE30, 49)  // PlayDancerAseg changed
-FNMAP(0x1526D8, 0x209EB0, 77)  // Dance similar
+FNMAP(0x1526D8, 0x209EB0, 80)  // Dance similar decomp
 FNMAP(0x1527C8, 0x16EE50, 74)  // UiRegisterCameraOwner changed
 FNMAP(0x1535A0, 0x20ABA0, 90)  // GBeatScore similar
 FNMAP(0x153638, 0x20AC38, 100)  // IdentityScalar identical
-FNMAP(0x153640, 0x20AC40, 80)  // AddDanceScore similar
-FNMAP(0x153760, 0x20AD58, 57)  // GScoreMean changed
+FNMAP(0x153640, 0x20AC40, 80)  // AddDanceScore similar decomp
+FNMAP(0x153760, 0x20AD58, 80)  // GScoreMean changed decomp
 FNMAP(0x153800, 0x20ADE0, 25)  // ResetControllerThreeFields changed
 FNMAP(0x153850, 0x16FAE8, 80)  // func_00153850 similar
 FNMAP(0x153988, 0x16FC20, 100)  // func_00153988 identical
@@ -1703,13 +1708,13 @@ FNMAP(0x154180, 0x170528, 60)  // PdetentryFind changed
 FNMAP(0x1541D8, 0x170580, 56)  // FSightShapeBlocked changed
 FNMAP(0x154528, 0x170968, 90)  // FontAssetContactIsKind49 similar
 FNMAP(0x154568, 0x1709A8, 49)  // ParisBlocks_154568 changed
-FNMAP(0x1545F0, 0x170A50, 74)  // FSightBlocked changed
+FNMAP(0x1545F0, 0x170A50, 80)  // FSightBlocked changed decomp
 FNMAP(0x154908, 0x1718D8, 80)  // func_00154908 similar
 FNMAP(0x154A40, 0x171A10, 100)  // func_00154A40 identical
 FNMAP(0x154A60, 0x171A30, 100)  // SuckHistory_Clear identical
 FNMAP(0x154D88, 0x171D98, 97)  // AddLevelValue similar
 FNMAP(0x154DC8, 0x171DD8, 50)  // SetSuck changed
-FNMAP(0x154E10, 0x171E50, 94)  // DropPickups similar
+FNMAP(0x154E10, 0x171E50, 94)  // DropPickups similar decomp
 FNMAP(0x155228, 0x172268, 49)  // NScaleDamage changed
 FNMAP(0x155298, 0x172328, 80)  // func_00155298 similar
 FNMAP(0x1553D0, 0x172460, 100)  // func_001553D0 identical
@@ -1731,37 +1736,37 @@ FNMAP(0x156728, 0x173950, 93)  // ExpireNoises similar
 FNMAP(0x156780, 0x1739A8, 93)  // RemoveNoise similar
 FNMAP(0x156870, 0x173A98, 90)  // FPooledObjGone similar
 FNMAP(0x156898, 0x173AC0, 49)  // SRadiusNoise changed
-FNMAP(0x156918, 0x173B70, 98)  // FNoiseReaches similar
+FNMAP(0x156918, 0x173B70, 98)  // FNoiseReachesScaled similar decomp
 FNMAP(0x1569B8, 0x173C10, 58)  // NewFixedObjs changed
 FNMAP(0x156B98, 0x173E00, 86)  // DispatchObjectHandle similar
-FNMAP(0x156BE0, 0x173E48, 100)  // SetHeldNoise register-renamed
+FNMAP(0x156BE0, 0x173E48, 100)  // SetHeldNoise register-renamed decomp
 FNMAP(0x156C80, 0x173EE8, 89)  // ParisProgress_156C80 similar
 FNMAP(0x156CC8, 0x173F30, 91)  // FontAssetDispose similar
 FNMAP(0x156D20, 0x173F88, 89)  // FontAssetRegister similar
 FNMAP(0x156D58, 0x173FC0, 94)  // OnRemoveNoiseListener similar
 FNMAP(0x156D98, 0x174000, 80)  // FontAssetDestroyPreservingIdentity similar
 FNMAP(0x156DE0, 0x174048, 73)  // UpdateNoiseListener changed
-FNMAP(0x156EB8, 0x174120, 80)  // UpdateNoiseListener changed
+FNMAP(0x156EB8, 0x174120, 80)  // UpdateNoiseListener changed decomp
 FNMAP(0x1570A8, 0x1742B0, 80)  // func_001570A8 similar
 FNMAP(0x1571E0, 0x1743E8, 100)  // func_001571E0 identical
 FNMAP(0x157200, 0x174408, 85)  // StartupDma__Fv similar
 FNMAP(0x157278, 0x174480, 97)  // __4DMAS similar
 FNMAP(0x1572B8, 0x1744C0, 91)  // Clear__4DMAS similar
 FNMAP(0x1572D0, 0x1744D8, 100)  // Reset__4DMAS identical
-FNMAP(0x1572E0, 0x1744E8, 100)  // AllocSw__4DMASi identical
+FNMAP(0x1572E0, 0x1744E8, 100)  // AllocSw__4DMASi identical decomp
 FNMAP(0x157330, 0x174538, 100)  // AllocStatic__4DMASiP2QW identical
-FNMAP(0x157348, 0x174550, 100)  // Detach__4DMASPiPP2QW identical
+FNMAP(0x157348, 0x174550, 100)  // Detach__4DMASPiPP2QW identical decomp
 FNMAP(0x1573C0, 0x1745C8, 96)  // DetachCopySw__4DMASPiPP2QWT2 similar
 FNMAP(0x1573F8, 0x174600, 100)  // DetachCopySw__4DMASPiPP2QWT2i identical
 FNMAP(0x1574A0, 0x1746A8, 100)  // Flush__4DMAS identical
 FNMAP(0x1574A8, 0x1746B0, 49)  // UiDmaCountFallthrough similar
-FNMAP(0x1574B8, 0x1746C0, 97)  // AddDmaCnt__4DMAS similar
-FNMAP(0x157500, 0x174708, 100)  // AddDmaRefs__4DMASiP2QW register-renamed
-FNMAP(0x157598, 0x1747A0, 100)  // AddDmaCall__4DMASP2QW register-renamed
+FNMAP(0x1574B8, 0x1746C0, 97)  // AddDmaCnt__4DMAS similar decomp
+FNMAP(0x157500, 0x174708, 100)  // AddDmaRefs__4DMASiP2QW register-renamed decomp
+FNMAP(0x157598, 0x1747A0, 100)  // AddDmaCall__4DMASP2QW register-renamed decomp
 FNMAP(0x157620, 0x174828, 97)  // AddDmaRet__4DMAS similar
 FNMAP(0x157660, 0x174868, 97)  // AddDmaBulk__4DMASiP2QW similar
 FNMAP(0x1576B0, 0x1748B8, 97)  // AddDmaEnd__4DMAS similar
-FNMAP(0x1576F0, 0x1748F8, 100)  // EndDmaCnt__4DMAS register-renamed
+FNMAP(0x1576F0, 0x1748F8, 100)  // EndDmaCnt__4DMAS register-renamed decomp
 FNMAP(0x157798, 0x1749A0, 100)  // EndPrim__4DMASi identical
 FNMAP(0x1577A0, 0x1749A8, 80)  // func_001577A0 similar
 FNMAP(0x1578D8, 0x174AE0, 100)  // func_001578D8 identical
@@ -1769,52 +1774,54 @@ FNMAP(0x1578F8, 0x174B00, 80)  // func_001578F8 similar
 FNMAP(0x157A30, 0x174C38, 100)  // func_00157A30 identical
 FNMAP(0x157A50, 0x174C58, 100)  // NCmpPrplReverseZ__FPP3RPLT0 identical
 FNMAP(0x157A98, 0x174CA0, 100)  // NCmpPrplZ identical
+FNMAP(0x157AE0, 0x174CE8, 80)  // SortRpl changed decomp
+FNMAP(0x157FA0, 0x175268, 80)  // DrawRpl changed decomp
 FNMAP(0x158480, 0x175678, 80)  // func_00158480 similar
 FNMAP(0x1585B8, 0x1757B0, 100)  // func_001585B8 identical
 FNMAP(0x1585D8, 0x1757D0, 95)  // InitDzg similar
 FNMAP(0x158668, 0x1758A0, 74)  // AppendDzgDz__FP3DZGP2DZ changed
-FNMAP(0x158728, 0x175968, 68)  // CalculateDzResponses changed
-FNMAP(0x158958, 0x175BA8, 96)  // PentryFromDz similar
-FNMAP(0x158988, 0x175BD8, 86)  // SolveDzg__FP3DZGiiPP2XPPiPPP2SO similar
-FNMAP(0x158B20, 0x175D70, 73)  // SolveDzgContacts changed
+FNMAP(0x158728, 0x175968, 80)  // CalculateDzResponses changed decomp
+FNMAP(0x158958, 0x175BA8, 96)  // PentryFromDz similar decomp
+FNMAP(0x158988, 0x175BD8, 86)  // SolveDzg__FP3DZGiiPP2XPPiPPP2SO similar decomp
+FNMAP(0x158B20, 0x175D70, 80)  // SolveDzgContacts changed decomp
 FNMAP(0x158E20, 0x176070, 84)  // ApplyDzg similar
 FNMAP(0x158FC0, 0x176210, 80)  // func_00158FC0 similar
 FNMAP(0x1590F8, 0x176348, 100)  // func_001590F8 identical
-FNMAP(0x159118, 0x177488, 100)  // InitEmitb register-renamed
+FNMAP(0x159118, 0x177488, 100)  // InitEmitb register-renamed decomp
 FNMAP(0x1591B0, 0x177520, 70)  // InitEmitterImage changed
-FNMAP(0x159240, 0x1775B8, 86)  // LoadEmitmeshFromBrx__FP8EMITMESHP18CBinaryInputStream similar
+FNMAP(0x159240, 0x1775B8, 86)  // LoadEmitmeshFromBrx__FP8EMITMESHP18CBinaryInputStream similar decomp
 FNMAP(0x1594D8, 0x149898, 49)  // FontAssetSetWorldMode similar
-FNMAP(0x159500, 0x177860, 50)  // PostEmitterLoad__FP7EMITTER changed
+FNMAP(0x159500, 0x177860, 80)  // PostEmitterLoad__FP7EMITTER changed decomp
 FNMAP(0x159968, 0x177B38, 94)  // FontAssetApplyReferencedState similar
 FNMAP(0x1599A8, 0x177B78, 81)  // HandleEmitterMessage__FP7EMITTER5MSGIDPv similar
 FNMAP(0x159A08, 0x177BD8, 49)  // PemitterEnsureEmitter__FP7EMITTER4ENSK changed
-FNMAP(0x159A20, 0x177BF0, 80)  // ModifyEmitterParticles__FP7EMITTER similar
-FNMAP(0x159C80, 0x177E78, 50)  // UpdateEmitter__FP7EMITTERf changed
+FNMAP(0x159A20, 0x177BF0, 80)  // ModifyEmitterParticles__FP7EMITTER similar decomp
+FNMAP(0x159C80, 0x177E78, 80)  // UpdateEmitter__FP7EMITTERf changed decomp
 FNMAP(0x15A138, 0x178138, 49)  // PauseEmitter__FP7EMITTERf changed
 FNMAP(0x15A150, 0x178150, 75)  // PauseEmitterIndefinite__FP7EMITTER similar
 FNMAP(0x15A160, 0x178160, 75)  // UnpauseEmitter__FP7EMITTER similar
 FNMAP(0x15A170, 0x178170, 49)  // FPausedEmitter__FP7EMITTER changed
 FNMAP(0x15A1C0, 0x1781B8, 50)  // OnEmitterValuesChanged__FP7EMITTER changed
 FNMAP(0x15A240, 0x178200, 69)  // SetEmitterParticleCount__FP7EMITTERi changed
-FNMAP(0x15A2C0, 0x178278, 51)  // WakeSoWater__FP2SOP5WATERfP6VECTORT3ff changed
-FNMAP(0x15A808, 0x1785E8, 74)  // ChooseEmitPosition changed
-FNMAP(0x15AD48, 0x178B20, 80)  // EmitParticleInFrame similar
+FNMAP(0x15A2C0, 0x178278, 80)  // WakeSoWater__FP2SOP5WATERfP6VECTORT3ff changed decomp
+FNMAP(0x15A808, 0x1785E8, 80)  // ChooseEmitPosition changed decomp
+FNMAP(0x15AD48, 0x178B20, 80)  // EmitParticleInFrame similar decomp
 FNMAP(0x15AE38, 0x178C08, 98)  // CalculateEmitvx__FiP2LMiP6EMITVX similar
 FNMAP(0x15AF08, 0x178CD8, 100)  // ChooseEmitVelocity__FP6EMITVXffP2LMP6VECTORiT4 similar
-FNMAP(0x15B0C8, 0x178E98, 97)  // EmitParticleTimes similar
+FNMAP(0x15B0C8, 0x178E98, 97)  // EmitParticleTimes similar decomp
 FNMAP(0x15B1B0, 0x178F80, 54)  // EmitParticleObjects changed
 FNMAP(0x15B428, 0x179228, 80)  // InsertPsysParticles similar
 FNMAP(0x15B7E8, 0x1795F8, 98)  // ChooseEmitParticles similar
 FNMAP(0x15B9F0, 0x179800, 80)  // OldLowerSampleEmitterTransforms similar
-FNMAP(0x15BD20, 0x179B20, 100)  // EmitParticles register-renamed
-FNMAP(0x15BF40, 0x179C28, 99)  // SetParticleExtra similar
+FNMAP(0x15BD20, 0x179B20, 100)  // EmitParticles register-renamed decomp
+FNMAP(0x15BF40, 0x179C28, 99)  // SetParticleExtra similar decomp
 FNMAP(0x15BFD8, 0x179CC0, 72)  // UpdatePsys changed
-FNMAP(0x15C150, 0x179E10, 89)  // CallSlot51Zero similar
+FNMAP(0x15C150, 0x179E10, 89)  // CallSlot51Zero similar decomp
 FNMAP(0x15C198, 0x179E58, 79)  // FontAssetDispatchEmitter similar
 FNMAP(0x15C1E0, 0x179EA0, 100)  // func_0015C1E0 identical
-FNMAP(0x15C1E8, 0x179EA8, 88)  // LoadGrouperFromBrx similar
+FNMAP(0x15C1E8, 0x179EA8, 88)  // LoadGrouperFromBrx similar decomp
 FNMAP(0x15C310, 0x179FD0, 49)  // GetEmitterObjects changed
-FNMAP(0x15C320, 0x179FE0, 80)  // CloneEmitterObjects similar
+FNMAP(0x15C320, 0x179FE0, 80)  // CloneEmitterObjects similar decomp
 FNMAP(0x15C3C0, 0x17A080, 80)  // ParisBlocks_15C3C0 changed
 FNMAP(0x15C5C8, 0x17A280, 81)  // HandleEmitterMessage2 similar
 FNMAP(0x15C628, 0x17A2E0, 79)  // CallSlot52 similar
@@ -1844,7 +1851,7 @@ FNMAP(0x15E938, 0x17E1B8, 93)  // PloFindSwNearest similar
 FNMAP(0x15E958, 0x17E1D8, 100)  // PloFindSwObjectList identical
 FNMAP(0x15E988, 0x13BEC8, 49)  // FIsCidDerivedFrom changed
 FNMAP(0x15E9C8, 0x17E208, 64)  // CFindObjectsByClass changed
-FNMAP(0x15ED78, 0x17E5D8, 100)  // PloFindSwObjectByClass identical
+FNMAP(0x15ED78, 0x17E5D8, 100)  // PloFindSwObjectByClass identical decomp
 FNMAP(0x15EDA8, 0x17E608, 80)  // func_0015EDA8 similar
 FNMAP(0x15EEE0, 0x17E740, 100)  // func_0015EEE0 identical
 FNMAP(0x15EF00, 0x1E84B8, 49)  // StartupFont similar
@@ -1853,31 +1860,31 @@ FNMAP(0x15F058, 0x180968, 46)  // UiScaleFallthrough changed
 FNMAP(0x15F078, 0x180980, 73)  // PushScaling__5CFontff changed
 FNMAP(0x15F0C0, 0x1809E0, 49)  // PopScaling__5CFont changed
 FNMAP(0x15F0F0, 0x180A30, 96)  // DxFromCh__8CFontBrxc similar
-FNMAP(0x15F148, 0x180A88, 99)  // FontAssetUploadTexture similar
+FNMAP(0x15F148, 0x180A88, 99)  // FontAssetUploadTexture similar decomp
 FNMAP(0x15F220, 0x180B60, 70)  // FontAssetBeginText changed
-FNMAP(0x15F3E8, 0x180D80, 100)  // SwitchTex0__8CFontBrxP4GIFS identical
+FNMAP(0x15F3E8, 0x180D80, 100)  // SwitchTex0__8CFontBrxP4GIFS identical decomp
 FNMAP(0x15F480, 0x180E18, 64)  // DxDrawCh__8CFontBrxcffUiP4GIFS changed
-FNMAP(0x15F710, 0x181118, 100)  // InitFont similar
+FNMAP(0x15F710, 0x181118, 100)  // InitFont similar decomp
 FNMAP(0x15F888, 0x181290, 93)  // RegisterFont similar
 FNMAP(0x15F8A8, 0x1812B0, 75)  // FontAssetGlyph similar
 FNMAP(0x15F970, 0x1813B0, 14)  // Reset__9CRichText changed
 FNMAP(0x15F9A8, 0x1813E8, 40)  // SetBaseColor__9CRichTextP4RGBA changed
 FNMAP(0x15FD58, 0x181908, 49)  // UiLineWrapFallthrough similar
-FNMAP(0x15FEF8, 0x181A90, 91)  // FontAssetWrappedHeight similar
+FNMAP(0x15FEF8, 0x181A90, 91)  // FontAssetWrappedHeight similar decomp
 FNMAP(0x15FF40, 0x181AD8, 52)  // DxMaxLine__9CRichText changed
-FNMAP(0x15FFD0, 0x181B60, 68)  // Draw__9CRichTextP8CTextBoxT1P4GIFS changed
+FNMAP(0x15FFD0, 0x181B60, 80)  // Draw__9CRichTextP8CTextBoxT1P4GIFS changed decomp
 FNMAP(0x160260, 0x17F828, 80)  // func_00160260 similar
 FNMAP(0x160398, 0x17F960, 100)  // func_00160398 identical
 FNMAP(0x1603B8, 0x182808, 69)  // LoadAloLinksFromBrx changed
-FNMAP(0x1604E8, 0x182928, 99)  // UpdateXfLink similar
+FNMAP(0x1604E8, 0x182928, 99)  // UpdateXfLink similar decomp
 FNMAP(0x160648, 0x17FFD0, 80)  // func_00160648 similar
 FNMAP(0x160780, 0x180108, 100)  // func_00160780 identical
-FNMAP(0x1607A0, 0x182BE0, 91)  // StartupFrame similar
+FNMAP(0x1607A0, 0x182BE0, 91)  // StartupFrame similar decomp
 FNMAP(0x160828, 0x182C68, 86)  // OpenFrame__Fv similar
-FNMAP(0x160918, 0x182D60, 100)  // AddDmaRefsRange identical
-FNMAP(0x160940, 0x182D88, 99)  // FinalizeFrameVifs__FP4VIFSPiPP2QW similar
+FNMAP(0x160918, 0x182D60, 100)  // AddDmaRefsRange identical decomp
+FNMAP(0x160940, 0x182D88, 99)  // FinalizeFrameVifs__FP4VIFSPiPP2QW similar decomp
 FNMAP(0x160A20, 0x182E68, 100)  // FinalizeFrameGifs__FP4GIFSPiPP2QW identical
-FNMAP(0x160A98, 0x182EE0, 95)  // CloseFrame similar
+FNMAP(0x160A98, 0x182EE0, 95)  // CloseFrame similar decomp
 FNMAP(0x160CE0, 0x1834F8, 80)  // ResetFrame similar
 FNMAP(0x160E68, 0x183668, 50)  // func_00160E68 changed
 FNMAP(0x160F98, 0x1837E0, 49)  // BlitDisplayBuffer changed
@@ -1887,26 +1894,26 @@ FNMAP(0x1613A8, 0x184918, 92)  // StartupGame similar
 FNMAP(0x1613F8, 0x184968, 64)  // ResetGameRecord changed
 FNMAP(0x161458, 0x169BF8, 49)  // ResetSuckHistory similar
 FNMAP(0x161478, 0x185088, 69)  // UpdateGameTimers changed
-FNMAP(0x161798, 0x1852E0, 97)  // CCoins similar
+FNMAP(0x161798, 0x1852E0, 97)  // CCoins similar decomp
 FNMAP(0x1617E0, 0x185328, 62)  // CCoins changed
 FNMAP(0x161868, 0x1853D8, 69)  // ShowCounter changed
 FNMAP(0x1618F8, 0x185420, 71)  // StartHudTimer changed
-FNMAP(0x161958, 0x185480, 69)  // StopHudTimer changed
-FNMAP(0x161F10, 0x1858D0, 96)  // FAppendPair similar
-FNMAP(0x161F48, 0x185908, 74)  // ApplyCheckpointTasks changed
-FNMAP(0x161FC8, 0x185980, 100)  // GrfState identical
-FNMAP(0x161FF0, 0x1859A8, 98)  // GrfState similar
-FNMAP(0x162050, 0x185A08, 94)  // GrfStatesFromScript similar
+FNMAP(0x161958, 0x185480, 80)  // StopHudTimer changed decomp
+FNMAP(0x161F10, 0x1858D0, 96)  // FAppendPair similar decomp
+FNMAP(0x161F48, 0x185908, 80)  // ApplyCheckpointTasks changed decomp
+FNMAP(0x161FC8, 0x185980, 100)  // GrfState identical decomp
+FNMAP(0x161FF0, 0x1859A8, 98)  // GrfState similar decomp
+FNMAP(0x162050, 0x185A08, 94)  // GrfStatesFromScript similar decomp
 FNMAP(0x1620B0, 0x185A70, 65)  // ApplyTaskObjects changed
-FNMAP(0x162250, 0x185C30, 94)  // ApplyTaskSms similar
-FNMAP(0x1623D0, 0x185DB0, 50)  // ApplyTaskSms changed
+FNMAP(0x162250, 0x185C30, 94)  // ApplyTaskSms similar decomp
+FNMAP(0x1623D0, 0x185DB0, 80)  // ApplyTaskSms changed decomp
 FNMAP(0x162448, 0x185E40, 50)  // Mission_Init changed
 FNMAP(0x1624A8, 0x185EB8, 59)  // LoadMissionFromBrx changed
 FNMAP(0x162600, 0x21AA38, 92)  // FUN_001e53f8 similar
 FNMAP(0x162630, 0x1860D8, 67)  // func_00162630 changed
 FNMAP(0x162780, 0x186108, 65)  // StartJob changed
 FNMAP(0x1628B0, 0x1861F8, 100)  // func_001628B0 identical
-FNMAP(0x1628B8, 0x186248, 97)  // JobSwitch similar
+FNMAP(0x1628B8, 0x186248, 97)  // JobSwitch similar decomp
 FNMAP(0x162908, 0x186298, 96)  // DeactivateJob similar
 FNMAP(0x162940, 0x1862D0, 52)  // ResetJob changed
 FNMAP(0x162A60, 0x186610, 61)  // DeactivateJob changed
@@ -1919,12 +1926,13 @@ FNMAP(0x162EA0, 0x187118, 50)  // RestartJob changed
 FNMAP(0x162FD0, 0x1874E8, 75)  // JobCompleteClose changed
 FNMAP(0x1633E8, 0x187CB8, 91)  // FIsMissionCurrent similar
 FNMAP(0x163400, 0x187CD0, 87)  // FTaskSubActive similar
+FNMAP(0x163430, 0x187D00, 80)  // NJobOpen changed decomp
 FNMAP(0x163460, 0x187D30, 69)  // Task_SaveVars changed
 FNMAP(0x1635A0, 0x187E90, 54)  // Task_Init changed
-FNMAP(0x1635F8, 0x187F08, 67)  // LoadTaskFromBrx changed
+FNMAP(0x1635F8, 0x187F08, 80)  // LoadTaskFromBrx changed decomp
 FNMAP(0x1638A0, 0x188198, 60)  // AppendParisTaskRecord changed
 FNMAP(0x1638F8, 0x1881F0, 66)  // StartTask changed
-FNMAP(0x163B48, 0x188460, 88)  // UpdateTask similar
+FNMAP(0x163B48, 0x188460, 88)  // UpdateTask similar decomp
 FNMAP(0x163C28, 0x188540, 50)  // ActivateTaskNow changed
 FNMAP(0x163CE0, 0x188620, 96)  // DeactivateTask similar
 FNMAP(0x163D18, 0x188658, 49)  // ActivateTaskNow changed
@@ -1934,11 +1942,12 @@ FNMAP(0x164018, 0x188A20, 91)  // FIsTaskCurrent similar
 FNMAP(0x164030, 0x188A38, 80)  // FTaskDoneJh similar
 FNMAP(0x164098, 0x188AA0, 71)  // CompletionTaskStateMessage changed
 FNMAP(0x164100, 0x188B08, 50)  // VisitTask changed
-FNMAP(0x164270, 0x188CB0, 74)  // RestoreTask changed
+FNMAP(0x164270, 0x188CB0, 80)  // RestoreTask changed decomp
 FNMAP(0x1643B0, 0x188DE0, 59)  // Task_SaveState changed
+FNMAP(0x1645D0, 0x189008, 80)  // FTaskPrereqs changed decomp
 FNMAP(0x164640, 0x189300, 62)  // RequestTaskState changed
 FNMAP(0x164858, 0x189500, 59)  // ForceTaskState changed
-FNMAP(0x1649D0, 0x189640, 72)  // ChooseJob changed
+FNMAP(0x1649D0, 0x189640, 80)  // ChooseJob changed decomp
 FNMAP(0x164CE8, 0x1899F0, 50)  // CollectTasks changed
 FNMAP(0x164DF0, 0x189B08, 32)  // ChangeTaskState changed
 FNMAP(0x165118, 0x189DA0, 96)  // SceneNotifyInteger similar
@@ -1948,7 +1957,7 @@ FNMAP(0x1657D0, 0x18A3E8, 62)  // SetTaskState changed
 FNMAP(0x165A60, 0x18A670, 50)  // Task_SetStateTree changed
 FNMAP(0x165B40, 0x18A778, 55)  // Task_StateFromParent changed
 FNMAP(0x165C28, 0x18A890, 76)  // NCmpTasks similar
-FNMAP(0x165C98, 0x18A900, 90)  // VisitTask similar
+FNMAP(0x165C98, 0x18A900, 90)  // VisitTask similar decomp
 FNMAP(0x165DC0, 0x18AAB8, 49)  // SetJobCur changed
 FNMAP(0x165DE8, 0x18AAE0, 49)  // SetJobCur changed
 FNMAP(0x165E38, 0x18AB08, 48)  // StartGameFromSave changed
@@ -1956,65 +1965,65 @@ FNMAP(0x166008, 0x18AC60, 79)  // FreshHelpers_RestoreSaveImage similar
 FNMAP(0x1660F8, 0x18AD90, 88)  // SceneResetGlobalArray similar
 FNMAP(0x166118, 0x18AE50, 80)  // func_00166118 similar
 FNMAP(0x166250, 0x18AF90, 100)  // func_00166250 identical
-FNMAP(0x166270, 0x18AFB0, 90)  // CopyTransformGeom similar
-FNMAP(0x166428, 0x18B168, 100)  // TransformPositions identical
+FNMAP(0x166270, 0x18AFB0, 90)  // CopyTransformGeom similar decomp
+FNMAP(0x166428, 0x18B168, 100)  // TransformPositions identical decomp
 FNMAP(0x1664A0, 0x18B1E0, 72)  // TransformGeom changed
 FNMAP(0x1665F0, 0x18B330, 91)  // CollectGeometryPointEdges similar
 FNMAP(0x1667C8, 0x18B500, 80)  // func_001667C8 similar
 FNMAP(0x166900, 0x18B638, 100)  // func_00166900 identical
 FNMAP(0x166920, 0x18C750, 89)  // __4GIFS similar
-FNMAP(0x166968, 0x18C798, 98)  // AddPrimEnd__4GIFS similar
-FNMAP(0x1669E0, 0x18C810, 98)  // EndPrim__4GIFSi similar
+FNMAP(0x166968, 0x18C798, 98)  // AddPrimEnd__4GIFS similar decomp
+FNMAP(0x1669E0, 0x18C810, 98)  // EndPrim__4GIFSi similar decomp
 FNMAP(0x166A50, 0x18C878, 100)  // CheckReg__4GIFSii identical
-FNMAP(0x166A60, 0x18C888, 100)  // AddGifTag__4GIFSiiiUlUi register-renamed
-FNMAP(0x166B10, 0x18C938, 97)  // AddPrimBulk__4GIFSiiiUlPP2QW similar
+FNMAP(0x166A60, 0x18C888, 100)  // AddGifTag__4GIFSiiiUlUi register-renamed decomp
+FNMAP(0x166B10, 0x18C938, 97)  // AddPrimBulk__4GIFSiiiUlPP2QW similar decomp
 FNMAP(0x166BD8, 0x18CA08, 93)  // AddPrimPack__4GIFSiiUl similar
-FNMAP(0x166C70, 0x18CAA0, 80)  // PackRGBA__4GIFSUi similar
-FNMAP(0x166CE0, 0x18CB10, 100)  // PackUV__4GIFSii identical
-FNMAP(0x166D38, 0x18CB68, 100)  // PackSTQ__4GIFSfff identical
-FNMAP(0x166DA0, 0x18CBD0, 100)  // PackXYZ__4GIFSiii identical
-FNMAP(0x166E08, 0x18CC38, 100)  // PackXYZF__4GIFSiiii identical
+FNMAP(0x166C70, 0x18CAA0, 80)  // PackRGBA__4GIFSUi similar decomp
+FNMAP(0x166CE0, 0x18CB10, 100)  // PackUV__4GIFSii identical decomp
+FNMAP(0x166D38, 0x18CB68, 100)  // PackSTQ__4GIFSfff identical decomp
+FNMAP(0x166DA0, 0x18CBD0, 100)  // PackXYZ__4GIFSiii identical decomp
+FNMAP(0x166E08, 0x18CC38, 100)  // PackXYZF__4GIFSiiii identical decomp
 FNMAP(0x166E88, 0x18CCB8, 49)  // ReleaseStackInto_166E90 changed
-FNMAP(0x166E90, 0x18CCC0, 100)  // PackAD__4GIFSll identical
+FNMAP(0x166E90, 0x18CCC0, 100)  // PackAD__4GIFSll identical decomp
 FNMAP(0x166EE8, 0x18CD18, 49)  // ReleaseStackInto_166EF0 changed
-FNMAP(0x166EF0, 0x18CD20, 100)  // AddPrimList__4GIFSiUl register-renamed
-FNMAP(0x166F70, 0x18CDA0, 98)  // ListRGBAQ__4GIFSUif similar
+FNMAP(0x166EF0, 0x18CD20, 100)  // AddPrimList__4GIFSiUl register-renamed decomp
+FNMAP(0x166F70, 0x18CDA0, 98)  // ListRGBAQ__4GIFSUif similar decomp
 FNMAP(0x166FE0, 0x18CE10, 49)  // ReleaseStackInto_166FE8 changed
 FNMAP(0x166FE8, 0x18CE18, 85)  // ListUV__4GIFSii similar
 FNMAP(0x167048, 0x18CE78, 86)  // ListXYZ__4GIFSiii similar
 FNMAP(0x1670B8, 0x18CEE8, 80)  // ListXYZF__4GIFSiiii similar
 FNMAP(0x167148, 0x18CF70, 49)  // ReleaseStackInto_167150 changed
-FNMAP(0x167150, 0x18CF78, 98)  // AddImage__4GIFSi similar
+FNMAP(0x167150, 0x18CF78, 98)  // AddImage__4GIFSi similar decomp
 FNMAP(0x1671B8, 0x18CFE0, 80)  // func_001671B8 similar
 FNMAP(0x1672F0, 0x18D118, 100)  // _GLOBAL_$I$g_dro identical
 FNMAP(0x167310, 0x18D138, 100)  // __4CRef identical
-FNMAP(0x167320, 0x18D148, 50)  // LoadGlobsetFromBrx changed
-FNMAP(0x167870, 0x18D738, 67)  // LoadGlobSpheresFromBrx changed
-FNMAP(0x167B68, 0x18DA48, 72)  // BindAloBones changed
-FNMAP(0x167DA0, 0x18DC58, 67)  // Glob_PullPoint changed
-FNMAP(0x167E58, 0x18DD60, 99)  // Glob_ReadBackLightColors similar
+FNMAP(0x167320, 0x18D148, 80)  // LoadGlobsetFromBrx changed decomp
+FNMAP(0x167870, 0x18D738, 80)  // LoadGlobSpheresFromBrx changed decomp
+FNMAP(0x167B68, 0x18DA48, 80)  // BindAloBones changed decomp
+FNMAP(0x167DA0, 0x18DC58, 80)  // Glob_PullPoint changed decomp
+FNMAP(0x167E58, 0x18DD60, 99)  // Glob_ReadBackLightColors similar decomp
 FNMAP(0x167F78, 0x18DE80, 91)  // Glob_LightBakeInterrupt similar
-FNMAP(0x167FC0, 0x18DEC8, 83)  // Glob_UploadMatrices similar
-FNMAP(0x1681F8, 0x18E0B8, 72)  // Glob_AddLightPackets changed
-FNMAP(0x1684D0, 0x18E3A8, 79)  // FGlobBoneMatrices similar
+FNMAP(0x167FC0, 0x18DEC8, 83)  // Glob_UploadMatrices similar decomp
+FNMAP(0x1681F8, 0x18E0B8, 80)  // Glob_AddLightPackets changed decomp
+FNMAP(0x1684D0, 0x18E3A8, 83)  // FGlobBoneMatricesOf similar decomp
 FNMAP(0x169988, 0x18F650, 78)  // NCmpRenderItems similar
 FNMAP(0x1699E8, 0x18F6B8, 53)  // LoadGlobSubmeshesFromBrx changed
 FNMAP(0x169AC8, 0x18F7B0, 73)  // LoadGlobSubmeshFromBrx changed
 FNMAP(0x169EB8, 0x18FBB0, 80)  // RelocateChain similar
-FNMAP(0x16A000, 0x18FF98, 58)  // LoadGlobMesh0FromBrx changed
+FNMAP(0x16A000, 0x18FF98, 80)  // LoadGlobMesh0FromBrx changed decomp
 FNMAP(0x16C8E0, 0x1929B0, 50)  // LoadIdxTabFromBrx changed
-FNMAP(0x16CAA0, 0x192BB0, 61)  // LoadGlobMesh2FromBrx changed
-FNMAP(0x16CF78, 0x192FD8, 55)  // LoadGlobMesh3FromBrx changed
+FNMAP(0x16CAA0, 0x192BB0, 80)  // LoadGlobMesh2FromBrx changed decomp
+FNMAP(0x16CF78, 0x192FD8, 80)  // LoadGlobMesh3FromBrx changed decomp
 FNMAP(0x16D698, 0x193638, 92)  // AppendChainSize similar
-FNMAP(0x16D6C8, 0x193668, 80)  // AddScreenPass similar
-FNMAP(0x16DA48, 0x193A70, 65)  // AddScreenEffect changed
-FNMAP(0x16DD58, 0x193DF8, 66)  // AddScreenCombine changed
-FNMAP(0x16E1A8, 0x194280, 88)  // UploadVu1Program16E1A8 similar
+FNMAP(0x16D6C8, 0x193668, 80)  // AddScreenPass similar decomp
+FNMAP(0x16DA48, 0x193A70, 80)  // AddScreenEffect changed decomp
+FNMAP(0x16DD58, 0x193DF8, 80)  // AddScreenCombine changed decomp
+FNMAP(0x16E1A8, 0x194280, 88)  // UploadVu1Program16E1A8 similar decomp
 FNMAP(0x16E228, 0x194408, 93)  // StartVu1Program16E228 similar
-FNMAP(0x16E318, 0x194480, 100)  // AddVifDirectFlushed identical
+FNMAP(0x16E318, 0x194480, 100)  // AddVifDirectFlushed identical decomp
 FNMAP(0x16E3C8, 0x1944E8, 100)  // UploadVu1Program16E3C8 register-renamed
 FNMAP(0x16E400, 0x194520, 100)  // StartVu1Program16E400 register-renamed
-FNMAP(0x16E438, 0x194558, 69)  // LoadGlobMesh1FromBrx changed
+FNMAP(0x16E438, 0x194558, 80)  // LoadGlobMesh1FromBrx changed decomp
 FNMAP(0x16EA20, 0x194AB8, 91)  // UploadVu1Program16EA20 similar
 FNMAP(0x16EA48, 0x194AE8, 96)  // AddVifFlushaCnt similar
 FNMAP(0x16EA80, 0x194B20, 57)  // Glob_Relocate changed
@@ -2024,23 +2033,23 @@ FNMAP(0x16F128, 0x1A36E8, 100)  // GlobalCtor_167310 identical
 FNMAP(0x16F178, 0x195278, 80)  // func_0016F178 similar
 FNMAP(0x16F2B0, 0x1953B0, 100)  // func_0016F2B0 identical
 FNMAP(0x16F2D0, 0x1953D0, 45)  // BlendDisplayOnBufferMismatch__Fv changed
-FNMAP(0x16F560, 0x195688, 80)  // SyncVBlank__Fv similar
+FNMAP(0x16F560, 0x195688, 80)  // SyncVBlank__Fv similar decomp
 FNMAP(0x16F868, 0x195710, 95)  // ResetGs__Fv similar
-FNMAP(0x16F8B8, 0x195760, 94)  // SendDmaSyncGsFinish__FP10sceDmaChanP2QW similar
+FNMAP(0x16F8B8, 0x195760, 94)  // SendDmaSyncGsFinish__FP10sceDmaChanP2QW similar decomp
 FNMAP(0x16F960, 0x195808, 50)  // BuildClearGifs__FP2QWG4RGBAi changed
-FNMAP(0x16FAF8, 0x195A98, 100)  // BuildFbaGifs identical
+FNMAP(0x16FAF8, 0x195A98, 100)  // BuildFbaGifs identical decomp
 FNMAP(0x16FB78, 0x195B18, 67)  // GL::RememberOverlaySourceFrame changed
-FNMAP(0x16FCA8, 0x195C50, 57)  // GL::RememberOverlaySourceFrame changed
+FNMAP(0x16FCA8, 0x195C50, 80)  // GL::RememberOverlaySourceFrame changed decomp
 FNMAP(0x170048, 0x196050, 59)  // func_00170048 changed
 FNMAP(0x1700D0, 0x1960F8, 51)  // func_001700D0 changed
 FNMAP(0x170348, 0x196A10, 82)  // ClearFrameBuffers__Fv similar
-FNMAP(0x1703C0, 0x196A70, 100)  // NLog2__FUi identical
+FNMAP(0x1703C0, 0x196A70, 100)  // NLog2__FUi identical decomp
 FNMAP(0x1703F8, 0x196AA8, 100)  // InitZpr__FP3ZPR3ZPKP2LO identical
-FNMAP(0x170448, 0x196B18, 98)  // func_00170448 similar
-FNMAP(0x1704B8, 0x196B88, 100)  // func_001704B8 identical
-FNMAP(0x170548, 0x196C18, 84)  // func_00170548 similar
-FNMAP(0x170650, 0x196D28, 99)  // BuildImageGifs__FiiiiiiP4GIFS similar
-FNMAP(0x170730, 0x196E08, 98)  // func_00170730 similar
+FNMAP(0x170448, 0x196B18, 98)  // func_00170448 similar decomp
+FNMAP(0x1704B8, 0x196B88, 100)  // func_001704B8 identical decomp
+FNMAP(0x170548, 0x196C18, 84)  // func_00170548 similar decomp
+FNMAP(0x170650, 0x196D28, 99)  // BuildImageGifs__FiiiiiiP4GIFS similar decomp
+FNMAP(0x170730, 0x196E08, 98)  // func_00170730 similar decomp
 FNMAP(0x170828, 0x196F00, 95)  // func_00170828 similar
 FNMAP(0x170850, 0x196FC0, 80)  // func_00170850 similar
 FNMAP(0x170988, 0x1970F8, 100)  // func_00170988 identical
@@ -2060,8 +2069,8 @@ FNMAP(0x170D10, 0x1974C8, 100)  // func_00170D10 identical
 FNMAP(0x170D30, 0x1974E8, 100)  // StartParisStateTransition identical
 FNMAP(0x170D50, 0x197508, 100)  // FinishParisStateTransition identical
 FNMAP(0x170D70, 0x197338, 92)  // func_00170D70 similar
-FNMAP(0x170DA0, 0x197568, 100)  // func_00170DA0 identical
-FNMAP(0x170DD0, 0x197598, 100)  // func_00170DD0 identical
+FNMAP(0x170DA0, 0x197568, 100)  // func_00170DA0 identical decomp
+FNMAP(0x170DD0, 0x197598, 100)  // func_00170DD0 identical decomp
 FNMAP(0x170E00, 0x197628, 92)  // PcmdAppend similar
 FNMAP(0x170E68, 0x197690, 100)  // ParisCoverage_170E68 identical
 FNMAP(0x1710F8, 0x1976B8, 72)  // GetCmdAim changed
@@ -2072,10 +2081,10 @@ FNMAP(0x171398, 0x197968, 92)  // JOBSCRIPT::Exit similar
 FNMAP(0x1713E8, 0x1979B8, 64)  // JOBSCRIPT::Update changed
 FNMAP(0x171468, 0x197A60, 80)  // JOBSCRIPT::FRunning similar
 FNMAP(0x1715B8, 0x197B98, 44)  // JOBSCRIPT::PloNear changed
-FNMAP(0x1715F0, 0x197C08, 49)  // JOBSCRIPT::Execute changed
+FNMAP(0x1715F0, 0x197C08, 80)  // JOBSCRIPT::Execute changed decomp
 FNMAP(0x171AF8, 0x198250, 80)  // ParisCoverage_171AF8 similar
-FNMAP(0x171C18, 0x1982C8, 95)  // JOBSCRIPT::Save similar
-FNMAP(0x171C98, 0x198348, 98)  // JOBSCRIPT::SeekMarker similar
+FNMAP(0x171C18, 0x1982C8, 95)  // JOBSCRIPT::Save similar decomp
+FNMAP(0x171C98, 0x198348, 98)  // JOBSCRIPT::SeekMarker similar decomp
 FNMAP(0x171CF8, 0x198540, 49)  // TellGuardCommands changed
 FNMAP(0x171D58, 0x1985A8, 37)  // TellGuardCommands changed
 FNMAP(0x171DA8, 0x1985F0, 49)  // FGuardRunsCommands changed
@@ -2084,7 +2093,7 @@ FNMAP(0x171F38, 0x198778, 100)  // func_00171F38 identical
 FNMAP(0x171F58, 0x1A64A8, 94)  // JOBINVESTIGATE::Init similar
 FNMAP(0x171FA0, 0x1A64F0, 100)  // JOBINVESTIGATE::Enter identical
 FNMAP(0x171FD0, 0x1A6520, 94)  // JOBINVESTIGATE::Exit similar
-FNMAP(0x172018, 0x1A6568, 83)  // JOBINVESTIGATE::Update similar
+FNMAP(0x172018, 0x1A6568, 83)  // JOBINVESTIGATE::Update similar decomp
 FNMAP(0x172320, 0x1A6850, 72)  // JOBINVESTIGATE::SetInvestigateState changed
 FNMAP(0x172560, 0x1A6A80, 84)  // JOBINVESTIGATE::SetDeadlines similar
 FNMAP(0x1725E0, 0x1A6B00, 100)  // JOBINVESTIGATE::SetNoise register-renamed
@@ -2092,8 +2101,8 @@ FNMAP(0x172658, 0x1A6B78, 70)  // JOBINVESTIGATE::FNear changed
 FNMAP(0x172760, 0x1A6CA8, 49)  // JOBINVESTIGATE::PosNoise changed
 FNMAP(0x172798, 0x1A6CE0, 96)  // AddSearchPlace similar
 FNMAP(0x172888, 0x1A6DD0, 100)  // ParisRetry_172888 identical
-FNMAP(0x1728B0, 0x1A6DF8, 56)  // JOBINVESTIGATE::FindSearchPlaces changed
-FNMAP(0x172F10, 0x1A7500, 86)  // JOBINVESTIGATE::NextSearchPlace similar
+FNMAP(0x1728B0, 0x1A6DF8, 80)  // JOBINVESTIGATE::FindSearchPlaces changed decomp
+FNMAP(0x172F10, 0x1A7500, 86)  // JOBINVESTIGATE::NextSearchPlace similar decomp
 FNMAP(0x173000, 0x1A75E8, 80)  // func_00173000 similar
 FNMAP(0x173138, 0x1A7720, 100)  // func_00173138 identical
 FNMAP(0x173158, 0x198798, 64)  // ParisLinear_173158 changed
@@ -2104,29 +2113,29 @@ FNMAP(0x173358, 0x1989B0, 71)  // AppendActorRecordTwo changed
 FNMAP(0x173398, 0x1989F0, 75)  // ParisBlocks_173398 similar
 FNMAP(0x1733C8, 0x198A20, 75)  // ParisBlocks_1733C8 similar
 FNMAP(0x1733F8, 0x198A50, 40)  // StartSpawner changed
-FNMAP(0x173588, 0x198CF0, 100)  // FInScreen identical
+FNMAP(0x173588, 0x198CF0, 100)  // FInScreen identical decomp
 FNMAP(0x173610, 0x198D78, 92)  // FDropOnGround similar
 FNMAP(0x173768, 0x198ED8, 50)  // ClassifyActorPosition changed
 FNMAP(0x173928, 0x199118, 62)  // ReleaseSlot changed
 FNMAP(0x173A18, 0x199270, 49)  // PosCenter changed
-FNMAP(0x173A68, 0x1992D8, 71)  // UpdateSpawner changed
+FNMAP(0x173A68, 0x1992D8, 80)  // UpdateSpawner changed decomp
 FNMAP(0x173D18, 0x1995B8, 52)  // CheckSlots changed
 FNMAP(0x173E78, 0x199728, 67)  // PslotChoose changed
-FNMAP(0x173F18, 0x1997D8, 50)  // PsrcChoose changed
-FNMAP(0x174490, 0x199D48, 69)  // PloSpawn changed
+FNMAP(0x173F18, 0x1997D8, 80)  // PsrcChoose changed decomp
+FNMAP(0x174490, 0x199D48, 80)  // PloSpawn changed decomp
 FNMAP(0x1746B8, 0x199F80, 49)  // OnRemoveSpawner changed
 FNMAP(0x174740, 0x131410, 80)  // func_00174740 similar
 FNMAP(0x174878, 0x131548, 100)  // func_00174878 identical
-FNMAP(0x174898, 0x257CF0, 85)  // ParisProgress_174898 similar
-FNMAP(0x174920, 0x131568, 100)  // JOBMOVE::Init identical
+FNMAP(0x174898, 0x257CF0, 85)  // ParisProgress_174898 similar decomp
+FNMAP(0x174920, 0x131568, 100)  // JOBMOVE::Init identical decomp
 FNMAP(0x174950, 0x131598, 91)  // JOBMOVE::Enter similar
 FNMAP(0x1749C0, 0x131610, 70)  // JOBMOVE::SetMoveState changed
-FNMAP(0x174B28, 0x131770, 97)  // JOBMOVE::Exit similar
+FNMAP(0x174B28, 0x131770, 97)  // JOBMOVE::Exit similar decomp
 FNMAP(0x174B68, 0x1317B0, 49)  // JOBMOVE::Update changed
-FNMAP(0x174BD0, 0x131850, 50)  // JOBMOVE::Message changed
+FNMAP(0x174BD0, 0x131850, 80)  // JOBMOVE::Message changed decomp
 FNMAP(0x174FC8, 0x131B80, 96)  // JOBSTAND::Init similar
 FNMAP(0x174FF8, 0x131BB0, 90)  // JOBSTAND::Enter similar
-FNMAP(0x175090, 0x131C48, 90)  // JOBSTAND::Exit similar
+FNMAP(0x175090, 0x131C48, 90)  // JOBSTAND::Exit similar decomp
 FNMAP(0x1750E0, 0x131C98, 80)  // JOBSTAND::Message similar
 FNMAP(0x1753D8, 0x1353F0, 93)  // JOBACT::Init similar
 FNMAP(0x175410, 0x19A000, 49)  // JOBACT::Enter similar
@@ -2136,29 +2145,33 @@ FNMAP(0x175600, 0x1A4E50, 68)  // JOBACT::Update changed
 FNMAP(0x1756C0, 0x1A4F08, 81)  // JOBACT::Message similar
 FNMAP(0x175790, 0x26DF38, 49)  // JOBPURSUE::Enter similar
 FNMAP(0x175820, 0x1A3B28, 80)  // BossLow_175820 similar
+FNMAP(0x1758A0, 0x1A3BA8, 80)  // PactionSelect changed decomp
+FNMAP(0x175D00, 0x1A3FE0, 80)  // JOBPURSUE::FCanShoot changed decomp
 FNMAP(0x176060, 0x19A1E8, 49)  // JOBPURSUE::FLost changed
 FNMAP(0x1766D8, 0x19A208, 96)  // JOBREACT::Init similar
-FNMAP(0x176708, 0x19A238, 49)  // JOBREACT::Enter changed
+FNMAP(0x176708, 0x19A238, 80)  // JOBREACT::Enter changed decomp
+FNMAP(0x176750, 0x19A2D0, 80)  // JOBREACT::React changed decomp
 FNMAP(0x177618, 0x19A948, 50)  // JOBREACT::Update changed
-FNMAP(0x177D20, 0x19AED0, 79)  // func_00177D20 similar
+FNMAP(0x177D20, 0x19AED0, 80)  // func_00177D20 similar decomp
 FNMAP(0x177D48, 0x19AEF8, 49)  // func_00177D48 changed
 FNMAP(0x177DC0, 0x19B208, 49)  // FSameMsg changed
+FNMAP(0x177F78, 0x1D8140, 80)  // JOBFOLLOW::Steer177F78 changed decomp
 FNMAP(0x178D00, 0x1D8AC0, 73)  // JOBFOLLOW::FArrived changed
-FNMAP(0x178EE0, 0x1D8BF0, 79)  // JOBFOLLOW::Update similar
+FNMAP(0x178EE0, 0x1D8BF0, 80)  // JOBFOLLOW::Update similar decomp
 FNMAP(0x179598, 0x16C9C0, 49)  // JOBHIT::Exit changed
-FNMAP(0x179820, 0x16D138, 94)  // JOBHIT2::Init similar
+FNMAP(0x179820, 0x16D138, 94)  // JOBHIT2::Init similar decomp
 FNMAP(0x179A20, 0x16D2E8, 89)  // JOBHIT3::Init similar
 FNMAP(0x179A58, 0x1EF838, 94)  // JOBWAIT::Init similar
 FNMAP(0x179AA0, 0x1EF880, 80)  // JOBWAIT::Enter similar
 FNMAP(0x179B60, 0x163928, 90)  // JOBWAIT::Exit similar
-FNMAP(0x179BA0, 0x1EF950, 80)  // JOBWAIT::Update changed
+FNMAP(0x179BA0, 0x1EF950, 80)  // JOBWAIT::Update changed decomp
 FNMAP(0x179D30, 0x1EFAB8, 79)  // JOBWAIT::SetWaitState similar
-FNMAP(0x179E80, 0x1EFC10, 90)  // func_00179E80 similar
-FNMAP(0x179EF8, 0x1EFC88, 90)  // func_00179EF8 similar
+FNMAP(0x179E80, 0x1EFC10, 90)  // func_00179E80 similar decomp
+FNMAP(0x179EF8, 0x1EFC88, 90)  // func_00179EF8 similar decomp
 FNMAP(0x17A4B0, 0x16D350, 89)  // JOBSLEEP::Init similar
 FNMAP(0x17A4E8, 0x16D388, 73)  // JOBSLEEP::Enter changed
 FNMAP(0x17A558, 0x16D418, 88)  // JOBSLEEP::Exit similar
-FNMAP(0x17A5B0, 0x16D480, 90)  // JOBSLEEP::SetSleepState similar
+FNMAP(0x17A5B0, 0x16D480, 90)  // JOBSLEEP::SetSleepState similar decomp
 FNMAP(0x17A670, 0x16D540, 57)  // JOBSLEEP::Update changed
 FNMAP(0x17A6F8, 0x16D638, 93)  // JOBB0::Init similar
 FNMAP(0x17A730, 0x16D670, 86)  // JOBB0::Enter similar
@@ -2167,49 +2180,51 @@ FNMAP(0x17A7F8, 0x16D760, 79)  // JOBB0::Update similar
 FNMAP(0x17A8C8, 0x16D840, 79)  // JOBB0::SetState similar
 FNMAP(0x17A9D0, 0x16D950, 89)  // JOBB1::Init similar
 FNMAP(0x17AA08, 0x16D988, 85)  // JOBB1::Enter similar
-FNMAP(0x17AA78, 0x16D9F0, 74)  // JOBB1::GetTarget changed
-FNMAP(0x17ABC8, 0x16DB68, 82)  // JOBB1::UpdateTarget similar
+FNMAP(0x17AA78, 0x16D9F0, 80)  // JOBB1::GetTarget changed decomp
+FNMAP(0x17ABC8, 0x16DB68, 82)  // JOBB1::UpdateTarget similar decomp
 FNMAP(0x17AC90, 0x16DC28, 80)  // JOBB1::Update similar
 FNMAP(0x17AF30, 0x16DEE8, 56)  // JOBB1::Message changed
 FNMAP(0x17B178, 0x21BBC0, 100)  // JOBB1::Exit identical
-FNMAP(0x17B1A8, 0x16E118, 72)  // JOBB1::SetState changed
+FNMAP(0x17B1A8, 0x16E118, 80)  // JOBB1::SetState changed decomp
 FNMAP(0x17B578, 0x16E588, 100)  // JOBB1::State identical
 FNMAP(0x17B590, 0x1A5650, 96)  // JOBSHOOT::Init similar
 FNMAP(0x17B5C0, 0x1A5680, 100)  // JOBSHOOT::Enter identical
 FNMAP(0x17B5F0, 0x1A56B0, 100)  // JOBSHOOT::Exit identical
 FNMAP(0x17B620, 0x1A56E0, 94)  // JOBSHOOT::Update similar
-FNMAP(0x17B690, 0x1A5750, 90)  // JOBSHOOT::Message similar
+FNMAP(0x17B690, 0x1A5750, 90)  // JOBSHOOT::Message similar decomp
 FNMAP(0x17B750, 0x1A5810, 79)  // JOBSHOOT::SetShootState similar
 FNMAP(0x17B808, 0x16E5A0, 93)  // JOBB2::Init similar
 FNMAP(0x17B840, 0x1A5900, 100)  // JOBB2::Enter identical
 FNMAP(0x17B870, 0x1A4FF8, 90)  // JOBB2::Exit similar
 FNMAP(0x17B8B0, 0x1A5038, 49)  // JOBB2::SetB2State similar
-FNMAP(0x17B9C0, 0x1A5138, 62)  // JOBB2::Choose changed
+FNMAP(0x17B9C0, 0x1A5138, 80)  // JOBB2::Choose changed decomp
 FNMAP(0x17BD78, 0x1A5510, 80)  // JOBB2::Update similar
+FNMAP(0x17BFF8, 0x182068, 80)  // PosSurroundPlace changed decomp
 FNMAP(0x17C638, 0x180128, 93)  // JOBSTATION::Init similar
 FNMAP(0x17C928, 0x180460, 80)  // JOBSTATION::SetState similar
 FNMAP(0x17CAC8, 0x1DA438, 91)  // JOBRAIL::Init similar
 FNMAP(0x17CD00, 0x1DA630, 49)  // JOBRAIL::SetRailState similar
-FNMAP(0x17CDB8, 0x1DA6F0, 90)  // JOBRAIL::SetDirection similar
+FNMAP(0x17CDB8, 0x1DA6F0, 90)  // JOBRAIL::SetDirection similar decomp
 FNMAP(0x17CE30, 0x1DA768, 93)  // JOBRAIL::FDone similar
 FNMAP(0x17CE68, 0x1638C0, 93)  // JOBLADDER::Init similar
 FNMAP(0x17CEA0, 0x1D8110, 100)  // JOBLADDER::Enter identical
 FNMAP(0x17D058, 0x1DA2C8, 49)  // JOBLADDER::SetLadderState similar
-FNMAP(0x17D110, 0x1DA388, 90)  // JOBLADDER::SetDirection similar
+FNMAP(0x17D110, 0x1DA388, 90)  // JOBLADDER::SetDirection similar decomp
 FNMAP(0x17D188, 0x1DA400, 93)  // JOBLADDER::FDone similar
-FNMAP(0x17D360, 0x1D76E8, 49)  // JOBGOTO::Init similar
+FNMAP(0x17D360, 0x1D76E8, 82)  // JOBGOTO::Init similar decomp
 FNMAP(0x17D3B0, 0x1D7738, 98)  // JOBGOTO::Enter similar
 FNMAP(0x17D408, 0x1D7790, 95)  // JOBGOTO::Exit similar
-FNMAP(0x17D450, 0x1D77E0, 49)  // JOBGOTO::SetState changed
+FNMAP(0x17D450, 0x1D77E0, 80)  // JOBGOTO::SetState changed decomp
 FNMAP(0x17D608, 0x1DA038, 82)  // FSnapPosToSurfaceAbove similar
 FNMAP(0x17D6C8, 0x1D79C0, 50)  // JOBGOTO::Update changed
-FNMAP(0x17D8A8, 0x1D7B80, 84)  // JOBGOTO::Target17D8A8 similar
-FNMAP(0x17DA28, 0x1D7D10, 70)  // JOBGOTO::Search changed
-FNMAP(0x17DCB8, 0x1D7F90, 100)  // JOBGOTO::NArrived identical
-FNMAP(0x17DD38, 0x1D7FD0, 93)  // JOBGOTO::SetGoal similar
-FNMAP(0x17DD70, 0x1344A0, 100)  // JOBBD::Init identical
+FNMAP(0x17D8A8, 0x1D7B80, 84)  // JOBGOTO::Target17D8A8 similar decomp
+FNMAP(0x17DA28, 0x1D7D10, 80)  // JOBGOTO::Search changed decomp
+FNMAP(0x17DCB8, 0x1D7F90, 100)  // JOBGOTO::NArrived identical decomp
+FNMAP(0x17DD38, 0x1D7FD0, 93)  // JOBGOTO::SetGoal similar decomp
+FNMAP(0x17DD70, 0x1344A0, 100)  // JOBBD::Init identical decomp
 FNMAP(0x17DDA8, 0x16E0D0, 49)  // JOBBD::Enter similar
 FNMAP(0x17DDE8, 0x17F9E8, 79)  // JOBBD::Exit similar
+FNMAP(0x17E0E0, 0x17FCF0, 80)  // JOBBD::ChooseAway changed decomp
 FNMAP(0x17E3A0, 0x1D9778, 93)  // JOBLINK::Init similar
 FNMAP(0x17E410, 0x134548, 91)  // JOBLINK::Exit similar
 FNMAP(0x17E580, 0x1D9940, 91)  // JOBLINK::NextRecord similar
@@ -2218,7 +2233,7 @@ FNMAP(0x17E628, 0x1D99E8, 49)  // SatelliteLow_17E628 changed
 FNMAP(0x17E6B0, 0x1D9A88, 49)  // JOBLINK::SetState changed
 FNMAP(0x17EB48, 0x1D9340, 90)  // JOBPATHSTEP::Init similar
 FNMAP(0x17ECB0, 0x157648, 97)  // JOBPATHSTEP::Update similar
-FNMAP(0x17ECF0, 0x157688, 48)  // JOBPATHSTEP::Step changed
+FNMAP(0x17ECF0, 0x1D9500, 80)  // JOBPATHSTEP::Step changed decomp
 FNMAP(0x17EE78, 0x1577C0, 97)  // JOBPATHSTEP::FDone similar
 FNMAP(0x17EEB8, 0x157800, 94)  // JOBPATHSTEP::FAtEnd similar
 FNMAP(0x17EF38, 0x19B2C8, 80)  // func_0017EF38 similar
@@ -2228,17 +2243,17 @@ FNMAP(0x17F110, 0x1F3C80, 49)  // OnRemoveHackSo similar
 FNMAP(0x17F138, 0x212738, 49)  // PostLoadHackSoBase similar
 FNMAP(0x17F170, 0x19B668, 49)  // ResetHackSoSlot26 changed
 FNMAP(0x17F1A0, 0x19B6B0, 96)  // OnHackXpNew similar
-FNMAP(0x17F1D0, 0x19B6E0, 69)  // FHackSoHit changed
+FNMAP(0x17F1D0, 0x19B6E0, 80)  // FHackSoHit changed decomp
 FNMAP(0x17F3E0, 0x19B940, 90)  // CompletionClearAnimationSlots17F3E0 similar
 FNMAP(0x17F408, 0x19B968, 64)  // BindHackSegs changed
-FNMAP(0x17F4C0, 0x19BA10, 94)  // PlayHackSeg similar
-FNMAP(0x17F550, 0x19BAA0, 88)  // FShipSegmentDone similar
+FNMAP(0x17F4C0, 0x19BA10, 94)  // PlayHackSeg similar decomp
+FNMAP(0x17F550, 0x19BAA0, 88)  // FShipSegmentDone similar decomp
 FNMAP(0x17F5B0, 0x19BB00, 49)  // PostKillHackSo changed
 FNMAP(0x17F5F8, 0x19BB78, 50)  // KillHackSo changed
 FNMAP(0x17F6B0, 0x19BC38, 50)  // ResetHackSoBase changed
 FNMAP(0x17F6F8, 0x19BDA0, 59)  // func_0017F6F8 changed
 FNMAP(0x17F740, 0x19BED8, 100)  // func_0017F740 identical
-FNMAP(0x17F770, 0x19BF70, 58)  // BindShipGuns changed
+FNMAP(0x17F770, 0x19BF70, 80)  // BindShipGuns changed decomp
 FNMAP(0x17F850, 0x19C048, 73)  // PostLoadHackShip changed
 FNMAP(0x17F8C8, 0x19BF08, 49)  // SetHackShipFocus changed
 FNMAP(0x17F930, 0x19C0B0, 53)  // UpdateShip changed
@@ -2249,12 +2264,12 @@ FNMAP(0x17FD08, 0x19C570, 53)  // SetShipState changed
 FNMAP(0x1800A0, 0x19C998, 77)  // UseStepguardDeathAnimation__FP9STEPGUARDi3OID similar
 FNMAP(0x1800D8, 0x19C9D0, 67)  // CompletionSetGuardRecord1800D8 changed
 FNMAP(0x180188, 0x19C9F8, 87)  // func_00180188 similar
-FNMAP(0x1801B8, 0x19CA58, 66)  // UpdatePiece changed
+FNMAP(0x1801B8, 0x19CA58, 80)  // UpdatePiece changed decomp
 FNMAP(0x1803E0, 0x19CCB0, 85)  // OnPieceXpNew similar
 FNMAP(0x180478, 0x19CD48, 75)  // CompletionSetActorFocus changed
-FNMAP(0x180500, 0x19CDD0, 75)  // CompletionConstructActorMotion changed
+FNMAP(0x180500, 0x19CDD0, 80)  // CompletionConstructActorMotion changed decomp
 FNMAP(0x180598, 0x19CF10, 100)  // func_00180598 identical
-FNMAP(0x1805C8, 0x19CE68, 80)  // PostLoadHackEnemy similar
+FNMAP(0x1805C8, 0x19CE68, 80)  // PostLoadHackEnemy similar decomp
 FNMAP(0x180668, 0x19CF60, 61)  // UpdateEnemy changed
 FNMAP(0x180EE8, 0x19D898, 80)  // MoveEnemy similar
 FNMAP(0x180FF0, 0x19D9B0, 65)  // OnEnemyXpNew changed
@@ -2269,27 +2284,27 @@ FNMAP(0x1813F0, 0x19DDF8, 49)  // CompletionScaleGuardGain1813F0 changed
 FNMAP(0x181408, 0x19DE10, 89)  // func_00181408 similar
 FNMAP(0x181440, 0x19DE48, 89)  // PostLoadDock similar
 FNMAP(0x181478, 0x19DE80, 50)  // UpdateDock changed
-FNMAP(0x181598, 0x19DFE0, 87)  // ResetDock similar
+FNMAP(0x181598, 0x19DFE0, 87)  // ResetDock similar decomp
 FNMAP(0x1815E8, 0x19E060, 80)  // SetDockState similar
-FNMAP(0x1816C0, 0x19E138, 78)  // CompletionSetGuardTriple1816C0 similar
+FNMAP(0x1816C0, 0x19E138, 80)  // CompletionSetGuardTriple1816C0 similar decomp
 FNMAP(0x1816E8, 0x19E160, 88)  // func_001816E8 similar
-FNMAP(0x181728, 0x19E1A0, 86)  // func_00181728 similar
-FNMAP(0x181780, 0x19E1F8, 90)  // func_00181780 similar
-FNMAP(0x1817E8, 0x19E260, 86)  // CompletionConstructActorList similar
-FNMAP(0x181840, 0x19E2B8, 56)  // PostLoadHackSwarm changed
-FNMAP(0x1819E0, 0x19E438, 72)  // ResetSwarm changed
-FNMAP(0x181A90, 0x19E4F8, 68)  // ResetSwarmEnt changed
-FNMAP(0x181B60, 0x19E5B8, 99)  // LayoutSwarmEnt similar
+FNMAP(0x181728, 0x19E1A0, 86)  // func_00181728 similar decomp
+FNMAP(0x181780, 0x19E1F8, 90)  // func_00181780 similar decomp
+FNMAP(0x1817E8, 0x19E260, 86)  // CompletionConstructActorList similar decomp
+FNMAP(0x181840, 0x19E2B8, 80)  // PostLoadHackSwarm changed decomp
+FNMAP(0x1819E0, 0x19E438, 80)  // ResetSwarm changed decomp
+FNMAP(0x181A90, 0x19E4F8, 80)  // ResetSwarmEnt changed decomp
+FNMAP(0x181B60, 0x19E5B8, 99)  // LayoutSwarmEnt similar decomp
 FNMAP(0x181CB0, 0x19E708, 80)  // TargetSwarmEnt similar
 FNMAP(0x181E10, 0x19E868, 62)  // func_00181E10 changed
-FNMAP(0x181EB0, 0x19E8F0, 80)  // SetSwarmQState similar
+FNMAP(0x181EB0, 0x19E8F0, 80)  // SetSwarmQState similar decomp
 FNMAP(0x181F58, 0x19E9B8, 100)  // MoveReceiverInto_181F60 identical
-FNMAP(0x181F60, 0x19E9C0, 58)  // UpdateSwarm changed
-FNMAP(0x1821C0, 0x19EC70, 65)  // CollectHackSwarmDraws changed
-FNMAP(0x1823C8, 0x19EE70, 63)  // AddSwarmXps changed
+FNMAP(0x181F60, 0x19E9C0, 80)  // UpdateSwarm changed decomp
+FNMAP(0x1821C0, 0x19EC70, 80)  // CollectHackSwarmDraws changed decomp
+FNMAP(0x1823C8, 0x19EE70, 80)  // AddSwarmXps changed decomp
 FNMAP(0x182700, 0x19F1B8, 81)  // OnSwarmXpNew similar
 FNMAP(0x182778, 0x19F230, 100)  // func_00182778 identical
-FNMAP(0x182780, 0x19F238, 68)  // UpdateSwarmBounds changed
+FNMAP(0x182780, 0x19F238, 80)  // UpdateSwarmBounds changed decomp
 FNMAP(0x182810, 0x19F2D0, 77)  // PqNearestSwarm similar
 FNMAP(0x1828A8, 0x19F370, 80)  // FAcceptSwarmContact similar
 FNMAP(0x1829D8, 0x19F4B0, 50)  // KillSwarm changed
@@ -2330,15 +2345,15 @@ FNMAP(0x183F50, 0x1A1E58, 62)  // func_00183F50 changed
 FNMAP(0x183FB8, 0x1A1FC0, 49)  // func_00183FB8 similar
 FNMAP(0x184028, 0x1A1FF0, 50)  // CompletionMergeNpcFlags184028 changed
 FNMAP(0x184040, 0x1A2008, 49)  // func_00184040 changed
-FNMAP(0x1840B8, 0x1A2080, 88)  // AddUseRsmg similar
+FNMAP(0x1840B8, 0x1A2080, 88)  // AddUseRsmg similar decomp
 FNMAP(0x1840F8, 0x1A20C0, 86)  // AddUseTask similar
 FNMAP(0x184130, 0x1A20F8, 80)  // UseObjectBase similar
 FNMAP(0x1841F0, 0x1A2198, 49)  // Murray_PickupMaskEligible changed
 FNMAP(0x184238, 0x1A21B0, 49)  // ParisCoverage_184238 similar
-FNMAP(0x184268, 0x1A21E0, 79)  // func_00184268 similar
+FNMAP(0x184268, 0x1A21E0, 80)  // func_00184268 similar decomp
 FNMAP(0x1842B0, 0x1A2228, 80)  // PostLoadCarryUse similar
 FNMAP(0x184330, 0x1A22A8, 92)  // Murray_PickupSelectedCallback similar
-FNMAP(0x184380, 0x1A22F8, 80)  // Murray_ExcludeAimNode similar
+FNMAP(0x184380, 0x1A22F8, 80)  // Murray_ExcludeAimNode similar decomp
 FNMAP(0x1843C0, 0x15C730, 96)  // InitParisActorResponse similar
 FNMAP(0x1843F0, 0x1A23F8, 69)  // InitParisActorDistance changed
 FNMAP(0x1844A0, 0x1A25B0, 49)  // AttachParisActor similar
@@ -2346,14 +2361,14 @@ FNMAP(0x184510, 0x1A25E0, 61)  // PosHookTarget changed
 FNMAP(0x1845A0, 0x1A2698, 89)  // ChooseParisActorAim similar
 FNMAP(0x184750, 0x1A2B30, 80)  // func_00184750 similar
 FNMAP(0x184888, 0x1A2C68, 100)  // func_00184888 identical
-FNMAP(0x1848A8, 0x1A2C88, 100)  // func_001848A8 identical
-FNMAP(0x184950, 0x1A2D30, 100)  // func_00184950 identical
+FNMAP(0x1848A8, 0x1A2C88, 100)  // func_001848A8 identical decomp
+FNMAP(0x184950, 0x1A2D30, 100)  // func_00184950 identical decomp
 FNMAP(0x1849A0, 0x1A2D80, 72)  // func_001849A0 changed
-FNMAP(0x184C60, 0x1A3018, 97)  // func_00184C60 similar
-FNMAP(0x184CA0, 0x1A3058, 97)  // func_00184CA0 similar
+FNMAP(0x184C60, 0x1A3018, 97)  // func_00184C60 similar decomp
+FNMAP(0x184CA0, 0x1A3058, 97)  // func_00184CA0 similar decomp
 FNMAP(0x184CF0, 0x1A30A8, 98)  // func_00184CF0 similar
 FNMAP(0x184D60, 0x1A3118, 100)  // func_00184D60 identical
-FNMAP(0x184D98, 0x1A3150, 100)  // FOpenSector__18CBinaryInputStreamUiUi identical
+FNMAP(0x184D98, 0x1A3150, 100)  // FOpenSector__18CBinaryInputStreamUiUi identical decomp
 FNMAP(0x184DF8, 0x1A31B0, 80)  // func_00184DF8 similar
 FNMAP(0x184F30, 0x1A32E8, 100)  // func_00184F30 identical
 FNMAP(0x184F50, 0x1A34D8, 49)  // func_00184F50 changed
@@ -2375,7 +2390,8 @@ FNMAP(0x187030, 0x1A7740, 58)  // StartupJoy changed
 FNMAP(0x1870A0, 0x1A7AE0, 49)  // UnlockJoy changed
 FNMAP(0x187150, 0x1A7C68, 62)  // InitJoy changed
 FNMAP(0x1871C0, 0x1A7D80, 70)  // UpdateJoy__FP3JOY changed
-FNMAP(0x187768, 0x1A8930, 78)  // GetJoyXYDeflection__FP3JOYUcUcPfN23PUcT6PiP2LM similar
+FNMAP(0x187768, 0x1A8930, 80)  // GetJoyXYDeflection__FP3JOYUcUcPfN23PUcT6PiP2LM similar decomp
+FNMAP(0x187998, 0x1A8B88, 80)  // ReadJoyPs2 changed decomp
 FNMAP(0x187D80, 0x1A9568, 49)  // GrfbtnTakePressedJoy changed
 FNMAP(0x187DD0, 0x1A98B8, 49)  // GrfbtnPressedJoy changed
 FNMAP(0x187E28, 0x1A9058, 61)  // TriggerJoyRumbleRumk changed
@@ -2393,24 +2409,24 @@ FNMAP(0x189458, 0x287B10, 49)  // func_00189458 similar
 FNMAP(0x189488, 0x1AAC30, 58)  // func_00189488 changed
 FNMAP(0x1894F8, 0x1AACA0, 79)  // func_001894F8 similar
 FNMAP(0x189618, 0x1AACD8, 75)  // func_00189618 changed
-FNMAP(0x189C40, 0x1AB308, 80)  // RebuildSlyFootProbe similar
-FNMAP(0x189EC8, 0x1AB560, 96)  // MatchSlyFootProbe similar
+FNMAP(0x189C40, 0x1AB308, 80)  // RebuildSlyFootProbe similar decomp
+FNMAP(0x189EC8, 0x1AB560, 96)  // MatchSlyFootProbe similar decomp
 FNMAP(0x18A278, 0x1AB958, 50)  // UpdateSlyPhys changed
-FNMAP(0x18A2E0, 0x1ABA10, 84)  // UpdateSlyBounds similar
+FNMAP(0x18A2E0, 0x1ABA10, 84)  // UpdateSlyBounds similar decomp
 FNMAP(0x18A4E8, 0x1ABBF0, 74)  // GetInteractCpdefi changed
 FNMAP(0x18A8C8, 0x1AC098, 31)  // FSlyHangFollowJump changed
-FNMAP(0x18B2C0, 0x1ACCA8, 68)  // UpdateActorBinoc changed
+FNMAP(0x18B2C0, 0x1ACCA8, 80)  // UpdateActorBinoc changed decomp
 FNMAP(0x18B348, 0x1ACD28, 70)  // LoadPickpocket changed
 FNMAP(0x18B460, 0x1ACE40, 80)  // UpdatePickpocketPose similar
 FNMAP(0x18B7E8, 0x1AD1D0, 30)  // UpdateSlySlideInput changed
-FNMAP(0x18BCE0, 0x1AD7F0, 50)  // UpdateSlyHook changed
+FNMAP(0x18BCE0, 0x1AD7F0, 80)  // UpdateSlyHook changed decomp
 FNMAP(0x18C060, 0x1ADBE0, 80)  // UpdateActorStepMesh changed
 FNMAP(0x18C120, 0x1ADCA0, 83)  // SetSlyHandles similar
 FNMAP(0x18D500, 0x1B0620, 50)  // func_0018D500 changed
 FNMAP(0x18D548, 0x1AF120, 49)  // ResetActorSelection changed
 FNMAP(0x18D568, 0x1AF150, 50)  // func_0018D568 changed
 FNMAP(0x18D620, 0x1AF200, 80)  // FreshMenu_HeroMenuCategory similar
-FNMAP(0x18D698, 0x1AF2A8, 100)  // SetAbilityCarried identical
+FNMAP(0x18D698, 0x1AF2A8, 100)  // SetAbilityCarried identical decomp
 FNMAP(0x18D760, 0x1AF308, 50)  // func_0018D760 changed
 FNMAP(0x18DA48, 0x1AF6C0, 50)  // SatelliteMid_ApplyHeroResponse changed
 FNMAP(0x18DD78, 0x1AF990, 55)  // func_0018DD78 changed
@@ -2429,14 +2445,14 @@ FNMAP(0x18F908, 0x1B0C70, 97)  // BindSlySwingBlend similar
 FNMAP(0x18F958, 0x1B0CC0, 50)  // CameraActorSolveAttachmentResponse changed
 FNMAP(0x18FC60, 0x1B0FF0, 64)  // CalculateSlyHangAccel changed
 FNMAP(0x1903B8, 0x1B1798, 83)  // UpdateSlyHangMotion similar
-FNMAP(0x1904E0, 0x1B18E0, 80)  // func_001904E0 similar
+FNMAP(0x1904E0, 0x1B18E0, 80)  // func_001904E0 similar decomp
 FNMAP(0x190520, 0x1B1920, 74)  // UpdateSlyHangInput changed
 FNMAP(0x190BE0, 0x1B2038, 50)  // RadHangFrame changed
 FNMAP(0x190C58, 0x1B2070, 73)  // PosSlyHangPoint changed
 FNMAP(0x190E18, 0x1B2430, 80)  // UpdateSlyHangPlace similar
 FNMAP(0x190F38, 0x1B2560, 80)  // func_00190F38 similar
 FNMAP(0x191070, 0x1B2698, 100)  // func_00191070 identical
-FNMAP(0x191090, 0x1B26B8, 98)  // InitInteract similar
+FNMAP(0x191090, 0x1B26B8, 98)  // InitInteract similar decomp
 FNMAP(0x1910F8, 0x1B2720, 87)  // PostLoadInteract similar
 FNMAP(0x1911A8, 0x1B27D8, 50)  // FInteractCovered changed
 FNMAP(0x191A10, 0x1B30E8, 80)  // UpdateInteract similar
@@ -2449,15 +2465,15 @@ FNMAP(0x193C98, 0x1B55A0, 93)  // SatelliteMid_UpdateActionProjection similar
 FNMAP(0x1940B0, 0x1B5830, 49)  // SetJtHfdk__FP2JT4HFDK changed
 FNMAP(0x194170, 0x1B5910, 88)  // AccelAloPos similar
 FNMAP(0x1942F0, 0x1B5A90, 59)  // UpdateSafeInteract changed
-FNMAP(0x1944C8, 0x1B5C78, 99)  // IsoeInteractMesh similar
+FNMAP(0x1944C8, 0x1B5C78, 99)  // IsoeInteractMesh similar decomp
 FNMAP(0x194558, 0x1B5D08, 73)  // FInteractCanDo changed
 FNMAP(0x194640, 0x1B5DD8, 79)  // CompletionJointSpecialHold194640 similar
 FNMAP(0x194688, 0x1B5E18, 68)  // RateJt changed
 FNMAP(0x194A40, 0x1B61A0, 50)  // UpdateJtCandidates changed
 FNMAP(0x194F48, 0x1B6798, 100)  // CompareActorFloatKey identical
 FNMAP(0x194F70, 0x1B67C0, 56)  // TrackJt changed
-FNMAP(0x195608, 0x1B6E58, 74)  // ShowJtAura changed
-FNMAP(0x1956D0, 0x1B6F10, 81)  // PloNewJtAura similar
+FNMAP(0x195608, 0x1B6E58, 80)  // ShowJtAura changed decomp
+FNMAP(0x1956D0, 0x1B6F10, 81)  // PloNewJtAura similar decomp
 FNMAP(0x1957C0, 0x1B7000, 82)  // func_001957C0 similar
 FNMAP(0x1957F8, 0x1B7038, 80)  // func_001957F8 similar
 FNMAP(0x195930, 0x1B7170, 100)  // func_00195930 identical
@@ -2470,7 +2486,7 @@ FNMAP(0x1974C8, 0x23E130, 49)  // SatelliteMid_FirstActiveEntry similar
 FNMAP(0x197500, 0x1B9020, 50)  // UpdateJumpTransitions changed
 FNMAP(0x197F98, 0x1B9C48, 58)  // UpdateJumpInput changed
 FNMAP(0x1991A0, 0x1BAC20, 74)  // AddJumpLedgeContacts changed
-FNMAP(0x199408, 0x176368, 79)  // FCheckJtSingleEdge__FP2JTP2SOP4EDGEP6VECTOR similar
+FNMAP(0x199408, 0x176368, 84)  // FCheckJtSingleEdge__FP2JTP2SOP4EDGEP6VECTOR similar decomp
 FNMAP(0x19A098, 0x1BADF8, 80)  // FActorStuckOnContacts similar
 FNMAP(0x19A400, 0x1BB188, 80)  // FJumpTimeToHeight similar
 FNMAP(0x19A4A0, 0x1BB228, 92)  // FitJumpToPoint similar
@@ -2485,6 +2501,7 @@ FNMAP(0x19C300, 0x1BCFF8, 49)  // GFitJump changed
 FNMAP(0x19C688, 0x1BD520, 60)  // ArriveJumpTarget changed
 FNMAP(0x19C828, 0x1ED320, 49)  // func_0019C828 similar
 FNMAP(0x19C870, 0x1BD718, 49)  // IsoeJumpMesh changed
+FNMAP(0x19C8D0, 0x1BD830, 80)  // FActorStuckOnContacts changed decomp
 FNMAP(0x19C9B8, 0x13CEE0, 92)  // FinalInitResponseStrength similar
 FNMAP(0x19CAA0, 0x1BD8D8, 80)  // func_0019CAA0 similar
 FNMAP(0x19CBD8, 0x1BDA10, 100)  // func_0019CBD8 identical
@@ -2493,43 +2510,43 @@ FNMAP(0x19CC30, 0x1BDA68, 49)  // PostLoadBinoc similar
 FNMAP(0x19CC50, 0x1BDA88, 49)  // OpenBinoc changed
 FNMAP(0x19CCE8, 0x1BDB50, 65)  // CloseBinoc changed
 FNMAP(0x19D4D0, 0x1BE4F8, 91)  // InitBinoc similar
-FNMAP(0x19D660, 0x1BE5A8, 49)  // SetBinocWindowState changed
+FNMAP(0x19D660, 0x1BE5A8, 80)  // SetBinocWindowState changed decomp
 FNMAP(0x19D948, 0x1BE918, 57)  // SetBinocWindowArgs changed
 FNMAP(0x19DA78, 0x1BEA30, 60)  // UpdateBinocWindow changed
-FNMAP(0x19DCA0, 0x1BECB8, 100)  // func_0019DCA0 identical
+FNMAP(0x19DCA0, 0x1BECB8, 100)  // func_0019DCA0 identical decomp
 FNMAP(0x19DCB8, 0x1BECD0, 80)  // func_0019DCB8 similar
 FNMAP(0x19DDF0, 0x1BEE08, 100)  // func_0019DDF0 identical
 FNMAP(0x19DE10, 0x1BEE28, 94)  // InitClimb similar
-FNMAP(0x19DE58, 0x1BEE70, 83)  // BindSlopeBlend similar
+FNMAP(0x19DE58, 0x1BEE70, 83)  // BindSlopeBlend similar decomp
 FNMAP(0x19DF70, 0x1BEF88, 67)  // UpdateClimbMotion changed
-FNMAP(0x19E110, 0x1BF128, 97)  // LmClimb similar
+FNMAP(0x19E110, 0x1BF128, 97)  // LmClimb similar decomp
 FNMAP(0x19E1E0, 0x1BF1F8, 80)  // UpdateClimbTransitions similar
-FNMAP(0x19E950, 0x1BF990, 92)  // AddClimbContacts similar
-FNMAP(0x19E9C8, 0x1BFA08, 49)  // AdjustClimbXp similar
+FNMAP(0x19E950, 0x1BF990, 92)  // AddClimbContacts similar decomp
+FNMAP(0x19E9C8, 0x1BFA08, 86)  // AdjustClimbXp similar decomp
 FNMAP(0x19E9D8, 0x1D4DE8, 94)  // SatelliteMid_ClimbPoint similar
-FNMAP(0x19EA00, 0x1BFA18, 78)  // SatelliteMid_ClimbDirection similar
+FNMAP(0x19EA00, 0x1BFA18, 80)  // SatelliteMid_ClimbDirection similar decomp
 FNMAP(0x19EA60, 0x1BFA80, 81)  // UpdateSafePipe similar
-FNMAP(0x19EAA0, 0x1BFAC0, 49)  // CompletionSetMessageVectors19EAA0 similar
+FNMAP(0x19EAA0, 0x1BFAC0, 86)  // CompletionSetMessageVectors19EAA0 similar decomp
 FNMAP(0x19EAB0, 0x1BFAD0, 80)  // SetClimbState similar
 FNMAP(0x19EF50, 0x1BFFD8, 80)  // func_0019EF50 similar
 FNMAP(0x19F088, 0x1C0110, 100)  // func_0019F088 identical
-FNMAP(0x19F0A8, 0x1C0130, 60)  // NotifyPlayersPowerups changed
-FNMAP(0x19F220, 0x1C01A8, 96)  // Resumed_19F220 similar
+FNMAP(0x19F0A8, 0x1C0130, 80)  // NotifyPlayersPowerups changed decomp
+FNMAP(0x19F220, 0x1C01A8, 96)  // Resumed_19F220 similar decomp
 FNMAP(0x19F290, 0x1C0218, 80)  // func_0019F290 similar
 FNMAP(0x19F3C8, 0x1C0350, 100)  // func_0019F3C8 identical
 FNMAP(0x19F3F8, 0x1C03A0, 94)  // PosSafeEntry similar
-FNMAP(0x19F540, 0x1C04E8, 97)  // RecoverTo similar
-FNMAP(0x19F7D0, 0x1C07E8, 72)  // GCostSafeEntry changed
-FNMAP(0x19FD30, 0x1C0DA8, 80)  // RecordSafeTarget similar
+FNMAP(0x19F540, 0x1C04E8, 97)  // RecoverTo similar decomp
+FNMAP(0x19F7D0, 0x1C07E8, 80)  // GCostSafeEntry changed decomp
+FNMAP(0x19FD30, 0x1C0DA8, 80)  // RecordSafeTarget similar decomp
 FNMAP(0x19FEB0, 0x1C0F18, 72)  // RecordSafeGround changed
-FNMAP(0x1A0048, 0x1C10A0, 100)  // RemoveSafeGroundReferences register-renamed
+FNMAP(0x1A0048, 0x1C10A0, 100)  // RemoveSafeGroundReferences register-renamed decomp
 FNMAP(0x1A00D0, 0x1C1128, 50)  // RemoveSafeGroundReferences changed
 FNMAP(0x1A01A8, 0x1C1EC0, 80)  // func_001A01A8 similar
 FNMAP(0x1A02E0, 0x1C1FF8, 100)  // func_001A02E0 identical
 FNMAP(0x1A0300, 0x1C1410, 70)  // BindRootBlend changed
 FNMAP(0x1A0450, 0x1C1550, 80)  // SteerRootBlend similar
 FNMAP(0x1A0B40, 0x1C21F0, 49)  // SetSlyPartGravity changed
-FNMAP(0x1A1148, 0x1C2870, 92)  // UpdateDamageMotion similar
+FNMAP(0x1A1148, 0x1C2870, 92)  // UpdateDamageMotion similar decomp
 FNMAP(0x1A1358, 0x1C2CC0, 49)  // UpdateDamage changed
 FNMAP(0x1A15B0, 0x1C2E58, 75)  // ParisLinear_1A15B0 similar
 FNMAP(0x1A15D0, 0x1C2E78, 49)  // EndDamageReaction changed
@@ -2539,12 +2556,12 @@ FNMAP(0x1A19A0, 0x1C3470, 50)  // FAcceptDamage changed
 FNMAP(0x1A1F68, 0x1C3AE8, 55)  // NextGetUp changed
 FNMAP(0x1A1FA8, 0x1C3B30, 32)  // NextStunned changed
 FNMAP(0x1A2028, 0x1C3BE0, 80)  // NextSpecial similar
-FNMAP(0x1A2100, 0x1C3D18, 96)  // AdjustDamageXp similar
+FNMAP(0x1A2100, 0x1C3D18, 96)  // AdjustDamageXp similar decomp
 FNMAP(0x1A21A0, 0x1C3DB8, 47)  // FSlyImmune changed
-FNMAP(0x1A2230, 0x1C3EC8, 46)  // FDamageImmune changed
-FNMAP(0x1A2358, 0x117F10, 49)  // QueryActorTaskOwner similar
+FNMAP(0x1A2230, 0x1C3EC8, 80)  // FDamageImmune changed decomp
+FNMAP(0x1A2358, 0x1C3FB0, 80)  // QueryActorTaskOwner similar decomp
 FNMAP(0x1A2388, 0x1C3FE0, 96)  // OlderHigh2_ResetRetryMotion similar
-FNMAP(0x1A23F8, 0x1C4088, 47)  // IsoeDamageMesh changed
+FNMAP(0x1A23F8, 0x1C4088, 80)  // IsoeDamageMesh changed decomp
 FNMAP(0x1A2460, 0x1C40E0, 50)  // UpdateActorWater changed
 FNMAP(0x1A2788, 0x1C4408, 87)  // FWaterSurfaceUnder similar
 FNMAP(0x1A28B0, 0x1C4540, 80)  // ApplyWaterToActor changed
@@ -2583,15 +2600,15 @@ FNMAP(0x1A3630, 0x1C5530, 80)  // func_001A3630 similar
 FNMAP(0x1A3650, 0x1C5550, 83)  // func_001A3650 similar
 FNMAP(0x1A3680, 0x1C5580, 84)  // func_001A3680 similar
 FNMAP(0x1A36D8, 0x1C55D8, 84)  // func_001A36D8 similar
-FNMAP(0x1A3730, 0x1C5630, 100)  // FitLinearFunction__FffffPfT4 register-renamed
-FNMAP(0x1A37D0, 0x1C56D0, 100)  // FitRecipFunction__FffffPfT4 register-renamed
-FNMAP(0x1A38A8, 0x1C57A8, 99)  // ConvertAngleStrength__FffffPfT4 similar
+FNMAP(0x1A3730, 0x1C5630, 100)  // FitLinearFunction__FffffPfT4 register-renamed decomp
+FNMAP(0x1A37D0, 0x1C56D0, 100)  // FitRecipFunction__FffffPfT4 register-renamed decomp
+FNMAP(0x1A38A8, 0x1C57A8, 99)  // ConvertAngleStrength__FffffPfT4 similar decomp
 FNMAP(0x1A3968, 0x1C5868, 50)  // ComputeLight changed
 FNMAP(0x1A3B38, 0x1C5A40, 30)  // func_001A3B38 changed
-FNMAP(0x1A3B80, 0x1C5A98, 92)  // func_001A3B80 similar
-FNMAP(0x1A3D00, 0x1C5C18, 50)  // func_001A3D00 changed
-FNMAP(0x1A3E88, 0x1C5DA8, 68)  // func_001A3E88 changed
-FNMAP(0x1A3EE8, 0x1C5E08, 56)  // func_001A3EE8 changed
+FNMAP(0x1A3B80, 0x1C5A98, 92)  // func_001A3B80 similar decomp
+FNMAP(0x1A3D00, 0x1C5C18, 80)  // func_001A3D00 changed decomp
+FNMAP(0x1A3E88, 0x1C5DA8, 80)  // func_001A3E88 changed decomp
+FNMAP(0x1A3EE8, 0x1C5E08, 80)  // func_001A3EE8 changed decomp
 FNMAP(0x1A3F78, 0x1C5E98, 50)  // SelectStrongest changed
 FNMAP(0x1A4258, 0x1C61C8, 49)  // func_001A4258 changed
 FNMAP(0x1A4478, 0x1C6418, 50)  // ShadowOfLightContext changed
@@ -2600,9 +2617,9 @@ FNMAP(0x1A4CB0, 0x1C6D50, 80)  // func_001A4CB0 similar
 FNMAP(0x1A4DE8, 0x1C6E88, 100)  // func_001A4DE8 identical
 FNMAP(0x1A4E08, 0x1C6EA8, 74)  // func_001A4E08 changed
 FNMAP(0x1A4E68, 0x1C6F18, 49)  // ReleaseStackInto_1A4E70 changed
-FNMAP(0x1A4E70, 0x1C6F20, 100)  // func_001A4E70 identical
+FNMAP(0x1A4E70, 0x1C6F20, 100)  // func_001A4E70 identical decomp
 FNMAP(0x1A4E80, 0x1C6F30, 81)  // func_001A4E80 similar
-FNMAP(0x1A4FB0, 0x1C7068, 100)  // func_001A4FB0 identical
+FNMAP(0x1A4FB0, 0x1C7068, 100)  // func_001A4FB0 identical decomp
 FNMAP(0x1A5020, 0x1C70D8, 97)  // func_001A5020 similar
 FNMAP(0x1A5070, 0x1C7128, 49)  // ReleaseStackInto_1A5078 changed
 FNMAP(0x1A5078, 0x1C7130, 98)  // func_001A5078 similar
@@ -2616,22 +2633,22 @@ FNMAP(0x1A53E0, 0x1C74B0, 74)  // func_001A53E0 changed
 FNMAP(0x1A5448, 0x1C7500, 75)  // func_001A5448 similar
 FNMAP(0x1A5478, 0x1C7530, 84)  // func_001A5478 similar
 FNMAP(0x1A5630, 0x1C76F0, 80)  // func_001A5630 changed
-FNMAP(0x1A57A8, 0x1C7848, 98)  // func_001A57A8 similar
+FNMAP(0x1A57A8, 0x1C7848, 98)  // func_001A57A8 similar decomp
 FNMAP(0x1A5800, 0x1C78A0, 50)  // func_001A5800 changed
 FNMAP(0x1A5848, 0x1C7938, 80)  // OnRemoveNoiseListener similar
-FNMAP(0x1A58D0, 0x1C7A00, 100)  // ReparentBooty register-renamed
+FNMAP(0x1A58D0, 0x1C7A00, 100)  // ReparentBooty register-renamed decomp
 FNMAP(0x1A5900, 0x1C7A30, 83)  // func_001A5900 similar
 FNMAP(0x1A5B80, 0x1C7CC8, 81)  // func_001A5B80 similar
 FNMAP(0x1A5BE8, 0x1C7D58, 100)  // func_001A5BE8 identical
 FNMAP(0x1A5BF0, 0x1C7D60, 89)  // ObjectSelfOrOwner similar
 FNMAP(0x1A5C28, 0x1C7D98, 93)  // LoadLoFromBrx similar
 FNMAP(0x1A5C48, 0x1C7DC8, 80)  // PostLoadGuardManager similar
-FNMAP(0x1A5D08, 0x1C7E88, 100)  // func_001A5D08 register-renamed
+FNMAP(0x1A5D08, 0x1C7E88, 100)  // func_001A5D08 register-renamed decomp
 FNMAP(0x1A5D30, 0x1C7EB0, 100)  // func_001A5D30 identical
 FNMAP(0x1A5D58, 0x1C7ED8, 49)  // func_001A5D58 similar
 FNMAP(0x1A5D98, 0x1C7F18, 69)  // func_001A5D98 changed
 FNMAP(0x1A5E28, 0x1C8168, 80)  // UpdateLo changed
-FNMAP(0x1A5E80, 0x1C81B8, 57)  // ParisCoverage_1A5E80 changed
+FNMAP(0x1A5E80, 0x1C81B8, 80)  // ParisCoverage_1A5E80 changed decomp
 FNMAP(0x1A5ED8, 0x1C7DB8, 100)  // func_001A5ED8 identical
 FNMAP(0x1A5EE0, 0x1C7DC0, 100)  // ObjectEmptyVirtual identical
 FNMAP(0x1A5EE8, 0x1C8248, 61)  // AppendAloExtraDraws changed
@@ -2653,18 +2670,18 @@ FNMAP(0x1A62E8, 0x2BE5F8, 80)  // PosOfLo similar
 FNMAP(0x1A6318, 0x1FC8D0, 100)  // MatJtLo register-renamed
 FNMAP(0x1A6340, 0x1C87C0, 88)  // CompletionGetEulerDegrees similar
 FNMAP(0x1A63B0, 0x1C8838, 95)  // CompletionSetEulerDegrees similar
-FNMAP(0x1A6450, 0x1C88D8, 88)  // func_001A6450 similar
+FNMAP(0x1A6450, 0x1C88D8, 88)  // func_001A6450 similar decomp
 FNMAP(0x1A64E8, 0x1C8970, 74)  // BindLoParts changed
 FNMAP(0x1A66C8, 0x1C8B58, 80)  // OrLoUpdateFlagsLo similar
 FNMAP(0x1A66F8, 0x1C8B88, 56)  // CompletionClearTaggedFlags changed
 FNMAP(0x1A6730, 0x1C8BF0, 80)  // CloneBootyData changed
 FNMAP(0x1A6AD0, 0x1C8EF8, 79)  // func_001A6AD0 similar
-FNMAP(0x1A6AF8, 0x1C8F20, 100)  // FLoInParentChain identical
-FNMAP(0x1A6B30, 0x1C8F58, 100)  // CompletionIdentityTransform identical
+FNMAP(0x1A6AF8, 0x1C8F20, 100)  // FLoInParentChain identical decomp
+FNMAP(0x1A6B30, 0x1C8F58, 100)  // CompletionIdentityTransform identical decomp
 FNMAP(0x1A6B88, 0x23C7F0, 49)  // TeleportLo similar
 FNMAP(0x1A6C48, 0x1C90B0, 49)  // func_001A6C48 changed
 FNMAP(0x1A6C90, 0x1C9100, 79)  // CompletionSignedMode52 similar
-FNMAP(0x1A6CA8, 0x1C9118, 49)  // func_001A6CA8 similar
+FNMAP(0x1A6CA8, 0x1C9118, 82)  // func_001A6CA8 similar decomp
 FNMAP(0x1A6D28, 0x1C9198, 49)  // func_001A6D28 changed
 FNMAP(0x1A6DC0, 0x1C9288, 50)  // func_001A6DC0 changed
 FNMAP(0x1A6DC8, 0x1C9290, 57)  // func_001A6DC8 changed
@@ -2677,51 +2694,51 @@ FNMAP(0x1A6EF8, 0x1C9420, 100)  // func_001A6EF8 identical
 FNMAP(0x1A6F00, 0x1C9428, 90)  // ConvertPos similar
 FNMAP(0x1A6FC0, 0x1C94E8, 80)  // ConvertVec similar
 FNMAP(0x1A7050, 0x1C9598, 88)  // MatrixBetweenObjectFrames similar
-FNMAP(0x1A71B0, 0x1C9708, 94)  // MurrayMisc_1A71B0 similar
-FNMAP(0x1A72D0, 0x1C9828, 100)  // func_001A72D0 identical
+FNMAP(0x1A71B0, 0x1C9708, 94)  // MurrayMisc_1A71B0 similar decomp
+FNMAP(0x1A72D0, 0x1C9828, 100)  // func_001A72D0 identical decomp
 FNMAP(0x1A7348, 0x1C98A0, 100)  // func_001A7348 identical
 FNMAP(0x1A73B0, 0x1C9908, 49)  // ReleaseStackInto_1A73C0 similar
 FNMAP(0x1A73C0, 0x1C9A98, 80)  // ReleaseStackInto_1A73C0 similar
 FNMAP(0x1A74F8, 0x1C9BD0, 100)  // func_001A74F8 identical
-FNMAP(0x1A7518, 0x1CB1D8, 73)  // func_001A7518 changed
-FNMAP(0x1A7630, 0x1CB2D8, 86)  // StartupSif similar
+FNMAP(0x1A7518, 0x1CB1D8, 80)  // func_001A7518 changed decomp
+FNMAP(0x1A7630, 0x1CB2D8, 86)  // StartupSif similar decomp
 FNMAP(0x1A7890, 0x1CB540, 98)  // StartupVU0__Fv similar
 FNMAP(0x1A7900, 0x1CB5B0, 98)  // StartupVU1__Fv similar
 FNMAP(0x1A7970, 0x1CB620, 51)  // Startup changed
 FNMAP(0x1A7AC0, 0x1CB758, 80)  // func_001A7AC0 similar
 FNMAP(0x1A7BF8, 0x1CB890, 100)  // func_001A7BF8 identical
-FNMAP(0x1A7C18, 0x1CB8B0, 81)  // PxpAddSw similar
+FNMAP(0x1A7C18, 0x1CB8B0, 81)  // PxpAddSw similar decomp
 FNMAP(0x1A7E10, 0x1CBAA0, 92)  // FreeSwXpList__FP2SWP2XP similar
 FNMAP(0x1A7E60, 0x1CBAF0, 70)  // UpdateXpPositions changed
 FNMAP(0x1A7FC0, 0x1CBC30, 69)  // UpdateXpWorldPositions changed
 FNMAP(0x1A80D8, 0x1CBD18, 45)  // ClsgClipSoAllEdges__FP2SOT0P3BSPiP3LSG changed
-FNMAP(0x1A81F8, 0x1CBE38, 49)  // ClsgClipNearEdges changed
-FNMAP(0x1A8410, 0x1CC068, 70)  // CategorizeAlsg__FiP3LSGPiT2PP3LSGT4 changed
-FNMAP(0x1A86B8, 0x1CC2F0, 70)  // CPathAlsg changed
-FNMAP(0x1A87F0, 0x1CC440, 66)  // MarkEmbeddedVertices changed
-FNMAP(0x1A8B50, 0x1CC790, 50)  // MarkBspBsp changed
+FNMAP(0x1A81F8, 0x1CBE38, 80)  // ClsgClipNearEdges changed decomp
+FNMAP(0x1A8410, 0x1CC068, 80)  // CategorizeAlsg__FiP3LSGPiT2PP3LSGT4 changed decomp
+FNMAP(0x1A86B8, 0x1CC2F0, 80)  // CPathAlsg changed decomp
+FNMAP(0x1A87F0, 0x1CC440, 80)  // MarkEmbeddedVertices changed decomp
+FNMAP(0x1A8B50, 0x1CC790, 80)  // MarkBspBsp changed decomp
 FNMAP(0x1A9108, 0x1CCDD8, 80)  // SphereInsideContacts similar
 FNMAP(0x1A93C8, 0x1CD098, 49)  // SphereBspContacts changed
-FNMAP(0x1A9B28, 0x1CD858, 89)  // MarkSphereBsp similar
-FNMAP(0x1A9C40, 0x1CD970, 100)  // MarkSphereSphere identical
+FNMAP(0x1A9B28, 0x1CD858, 89)  // MarkSphereBsp similar decomp
+FNMAP(0x1A9C40, 0x1CD970, 100)  // MarkSphereSphere identical decomp
 FNMAP(0x1A9D38, 0x1CDA68, 64)  // MarkSweptVertices changed
 FNMAP(0x1A9FE0, 0x1CDD30, 79)  // PrependXpList similar
-FNMAP(0x1AA020, 0x1CDD78, 87)  // PxpCloneList similar
+FNMAP(0x1AA020, 0x1CDD78, 87)  // PxpCloneList similar decomp
 FNMAP(0x1AA0B0, 0x1CDE08, 80)  // MarkOwnContacts similar
 FNMAP(0x1AA1D8, 0x1CDF20, 50)  // PxpMarkOxaContacts changed
 FNMAP(0x1AA820, 0x1CE758, 80)  // func_001AA820 similar
 FNMAP(0x1AA958, 0x1CE890, 100)  // func_001AA958 identical
 FNMAP(0x1AA978, 0x1CE8B0, 94)  // func_001AA978 similar
 FNMAP(0x1AA9B8, 0x1CE8F0, 100)  // FreshHelpers_ExportCardEntry register-renamed
-FNMAP(0x1AAB48, 0x1CEA80, 100)  // FUN_0018b910__Fi identical
-FNMAP(0x1AAB68, 0x1CEAA0, 79)  // FUN_0018b930__Fi similar
-FNMAP(0x1AABC0, 0x1CEAF0, 100)  // FUN_0018b988 register-renamed
-FNMAP(0x1AAED8, 0x1CEE08, 100)  // func_001AAED8 identical
-FNMAP(0x1AAF18, 0x1CEE48, 98)  // func_001AAF18 similar
-FNMAP(0x1AAF90, 0x1CEEC0, 96)  // func_001AAF90 similar
-FNMAP(0x1AB040, 0x1CEF70, 100)  // func_001AB040 identical
+FNMAP(0x1AAB48, 0x1CEA80, 100)  // FUN_0018b910__Fi identical decomp
+FNMAP(0x1AAB68, 0x1CEAA0, 88)  // FUN_0018b930__Fi similar decomp
+FNMAP(0x1AABC0, 0x1CEAF0, 100)  // FUN_0018b988 register-renamed decomp
+FNMAP(0x1AAED8, 0x1CEE08, 100)  // func_001AAED8 identical decomp
+FNMAP(0x1AAF18, 0x1CEE48, 98)  // func_001AAF18 similar decomp
+FNMAP(0x1AAF90, 0x1CEEC0, 96)  // func_001AAF90 similar decomp
+FNMAP(0x1AB040, 0x1CEF70, 100)  // func_001AB040 identical decomp
 FNMAP(0x1AB088, 0x1CEFB8, 100)  // FMemcardThreadValid__FP7MEMCARD identical
-FNMAP(0x1AB098, 0x1CEFC8, 99)  // FUN_0018bc90 similar
+FNMAP(0x1AB098, 0x1CEFC8, 99)  // FUN_0018bc90 similar decomp
 FNMAP(0x1AB128, 0x1CF058, 95)  // InitSave__FP4SAVEii similar
 FNMAP(0x1AB1A0, 0x1CF0D0, 50)  // func_001AB1A0 changed
 FNMAP(0x1AB398, 0x1CF3B8, 79)  // CompareSaves__FP4SAVET0 similar
@@ -2732,7 +2749,7 @@ FNMAP(0x1AB748, 0x1CF798, 49)  // ReleaseStackInto_1AB750 changed
 FNMAP(0x1AB7D0, 0x1CF7B8, 72)  // OldCreateAuthoredCardDirectory changed
 FNMAP(0x1AB868, 0x1CF890, 72)  // OldCreateCardSaves changed
 FNMAP(0x1ABA10, 0x1CFA40, 66)  // FUN_0018c420 changed
-FNMAP(0x1ABB10, 0x1CFB40, 100)  // ParisCard_1ABB10 identical
+FNMAP(0x1ABB10, 0x1CFB40, 100)  // ParisCard_1ABB10 identical decomp
 FNMAP(0x1ABB60, 0x1CFB90, 91)  // OldWriteSelectedCardSave similar
 FNMAP(0x1ABBE0, 0x1CFC10, 87)  // ParisCardNext_1ABBE0 similar
 FNMAP(0x1ABC68, 0x1CFC98, 91)  // ResolveSelectedCardStatus similar
@@ -2742,10 +2759,10 @@ FNMAP(0x1ABD98, 0x1CFE08, 56)  // func_001ABD98 changed
 FNMAP(0x1ABE78, 0x1CFEF8, 69)  // FreshHelpers_ReadCardDirectory changed
 FNMAP(0x1ABFC0, 0x1D0058, 100)  // FreshHelpers_ReadOneCardEntry identical
 FNMAP(0x1ABFF8, 0x1D0090, 49)  // ReleaseStackInto_1AC008 similar
-FNMAP(0x1AC008, 0x1D00A0, 80)  // OldWriteCardIconSystem similar
+FNMAP(0x1AC008, 0x1D00A0, 80)  // OldWriteCardIconSystem similar decomp
 FNMAP(0x1AC420, 0x1D0410, 73)  // ParisCard_1AC420 changed
 FNMAP(0x1AC468, 0x1D0478, 68)  // OldWriteSaveSlot changed
-FNMAP(0x1AC4C8, 0x1D0588, 84)  // FreshHelpers_ReadSaveSlot similar
+FNMAP(0x1AC4C8, 0x1D0588, 84)  // FreshHelpers_ReadSaveSlot similar decomp
 FNMAP(0x1AC570, 0x1D0630, 84)  // ParisCard_1AC570 similar
 FNMAP(0x1AC598, 0x1D0658, 89)  // func_001AC598 similar
 FNMAP(0x1AC6A0, 0x1D0760, 92)  // func_001AC6A0 similar
@@ -2754,15 +2771,15 @@ FNMAP(0x1AC7A0, 0x1D0860, 90)  // ParisCard_1AC7A0 similar
 FNMAP(0x1AC808, 0x1D08C8, 88)  // ParisCard_1AC808 similar
 FNMAP(0x1AC850, 0x1D0918, 93)  // ReleaseStackInto_1AC850 similar
 FNMAP(0x1AC8A8, 0x1D0970, 93)  // ParisCard_1AC8A8 similar
-FNMAP(0x1AC900, 0x1D09C8, 100)  // ParisCard_1AC900 identical
-FNMAP(0x1AC9A0, 0x1D0A68, 100)  // FreshHelpers_ReadCardFile identical
+FNMAP(0x1AC900, 0x1D09C8, 100)  // ParisCard_1AC900 identical decomp
+FNMAP(0x1AC9A0, 0x1D0A68, 100)  // FreshHelpers_ReadCardFile identical decomp
 FNMAP(0x1ACA40, 0x1D0B08, 93)  // DeleteSelectedCardEntry similar
 FNMAP(0x1ACA98, 0x1D0B60, 82)  // func_001ACA98 similar
 FNMAP(0x1ACB38, 0x1D0BB0, 93)  // func_001ACB38 similar
 FNMAP(0x1ACB58, 0x1D0C08, 49)  // ShowCardMessage changed
 FNMAP(0x1ACBB8, 0x221B40, 75)  // func_001ACBB8 similar
 FNMAP(0x1ACC18, 0x1D0D10, 62)  // CompletionSetStateCC18 changed
-FNMAP(0x1ACC38, 0x1D0D30, 67)  // func_001ACC38 changed
+FNMAP(0x1ACC38, 0x1D0D30, 80)  // func_001ACC38 changed decomp
 FNMAP(0x1ACC80, 0x1D0D78, 70)  // NCardPrompt changed
 FNMAP(0x1ACCC8, 0x1D0DC8, 60)  // func_001ACCC8 changed
 FNMAP(0x1ACFE0, 0x1D1190, 63)  // CardNo changed
@@ -2772,12 +2789,12 @@ FNMAP(0x1AD320, 0x1D1568, 80)  // CommitSelectedSaveEntry similar
 FNMAP(0x1AD3E0, 0x1D1648, 70)  // SaveToTarget changed
 FNMAP(0x1AD480, 0x1D1708, 50)  // ParisCard_1AD480 changed
 FNMAP(0x1AD538, 0x1D17F0, 63)  // FreshHelpers_SelectSaveSlot changed
-FNMAP(0x1AD740, 0x1D19D0, 88)  // UpdateSlotEntry similar
+FNMAP(0x1AD740, 0x1D19D0, 88)  // UpdateSlotEntry similar decomp
 FNMAP(0x1AD7E0, 0x1D1A70, 94)  // func_001AD7E0 similar
 FNMAP(0x1AD820, 0x1D1AB0, 80)  // func_001AD820 changed
 FNMAP(0x1AD928, 0x1D1B98, 93)  // FreshMenu_FormatMenuTitle similar
 FNMAP(0x1AD980, 0x1D1BF0, 58)  // OldFormatCurrentProgress changed
-FNMAP(0x1ADA20, 0x1D1CC8, 90)  // FreshMenu_FormatSavePrompt similar
+FNMAP(0x1ADA20, 0x1D1CC8, 90)  // FreshMenu_FormatSavePrompt similar decomp
 FNMAP(0x1ADBB8, 0x1D1E60, 65)  // FreshMenu_AppendSaveFooter changed
 FNMAP(0x1ADC40, 0x1D1EF8, 69)  // OldCardDescribeSlot changed
 FNMAP(0x1ADDF0, 0x1D2080, 86)  // func_001ADDF0 similar
@@ -2804,9 +2821,9 @@ FNMAP(0x1AE478, 0x1D2770, 100)  // func_001AE478 identical
 FNMAP(0x1AE4A0, 0x1D2798, 97)  // func_001AE4A0 similar
 FNMAP(0x1AE4E8, 0x1D27E0, 100)  // malloc identical
 FNMAP(0x1AE4F0, 0x1D27E8, 100)  // free identical
-FNMAP(0x1AE4F8, 0x1D27F0, 100)  // func_001AE4F8 identical
+FNMAP(0x1AE4F8, 0x1D27F0, 100)  // func_001AE4F8 identical decomp
 FNMAP(0x1AE520, 0x1D2818, 100)  // __builtin_delete identical
-FNMAP(0x1AE528, 0x1D2820, 100)  // CopyAqw__FPvT0i identical
+FNMAP(0x1AE528, 0x1D2820, 100)  // CopyAqw__FPvT0i identical decomp
 FNMAP(0x1AE5A0, 0x1D2898, 100)  // CopyAb__FPvT0Ui register-renamed
 FNMAP(0x1AE678, 0x1D2970, 80)  // func_001AE678 similar
 FNMAP(0x1AE7B0, 0x1D2AA8, 100)  // func_001AE7B0 identical
@@ -2818,55 +2835,55 @@ FNMAP(0x1AE9A8, 0x1D2D48, 79)  // FreshHelpers_PauseCallback similar
 FNMAP(0x1AE9E8, 0x1D2D90, 72)  // ShowMenuWidget changed
 FNMAP(0x1AEA40, 0x1D2DF8, 69)  // ShowMenuWidget changed
 FNMAP(0x1AEAA8, 0x1D2ED0, 50)  // SetMenuState changed
-FNMAP(0x1AEEE0, 0x1D3288, 60)  // func_001AEEE0 changed
+FNMAP(0x1AEEE0, 0x1D3288, 80)  // func_001AEEE0 changed decomp
 FNMAP(0x1AF388, 0x1D3810, 100)  // func_001AF388 identical
-FNMAP(0x1AF390, 0x1D3818, 91)  // ReplacePage similar
-FNMAP(0x1AF490, 0x1D3918, 80)  // BackReplaced similar
-FNMAP(0x1AF4D8, 0x1D3960, 86)  // PushPage similar
-FNMAP(0x1AF608, 0x1D3A90, 82)  // BackReplaced similar
+FNMAP(0x1AF390, 0x1D3818, 91)  // ReplacePage similar decomp
+FNMAP(0x1AF490, 0x1D3918, 80)  // BackReplaced similar decomp
+FNMAP(0x1AF4D8, 0x1D3960, 86)  // PushPage similar decomp
+FNMAP(0x1AF608, 0x1D3A90, 82)  // BackReplaced similar decomp
 FNMAP(0x1AF660, 0x1D3AE8, 81)  // CloseMenu similar
 FNMAP(0x1AF6A0, 0x1D3B28, 87)  // BackReplaced similar
 FNMAP(0x1AF6D0, 0x1D3B58, 59)  // UpdateSlider changed
 FNMAP(0x1AF9C8, 0x1D3DF0, 50)  // InitOptionText changed
 FNMAP(0x1AFB88, 0x1D3FC0, 50)  // ApplyOption changed
 FNMAP(0x1AFF88, 0x26A1C8, 49)  // ClearMenuAndOpenModeNine similar
-FNMAP(0x1AFFC0, 0x1D4510, 80)  // CycleOption similar
+FNMAP(0x1AFFC0, 0x1D4510, 80)  // CycleOption similar decomp
 FNMAP(0x1B0078, 0x1D45B0, 69)  // KindDataAccess changed
 FNMAP(0x1B0108, 0x1D4658, 80)  // KindDataAccess similar
 FNMAP(0x1B0160, 0x1D46B0, 84)  // func_001B0160 similar
 FNMAP(0x1B01E8, 0x1D4738, 84)  // func_001B01E8 similar
 FNMAP(0x1B0270, 0x1D47E8, 88)  // CloseGlobalMenu similar
-FNMAP(0x1B04E0, 0x1D4C48, 50)  // AentOptions changed
+FNMAP(0x1B04E0, 0x1D4C48, 80)  // AentOptions changed decomp
 FNMAP(0x1B0668, 0x1D4F80, 88)  // func_001B0668 similar
-FNMAP(0x1B0688, 0x1D4FA0, 100)  // OldPushItemMenu identical
-FNMAP(0x1B06D8, 0x1D4FF0, 100)  // OlderHigh2_PublishEventAndMarkComplete identical
+FNMAP(0x1B0688, 0x1D4FA0, 100)  // OldPushItemMenu identical decomp
+FNMAP(0x1B06D8, 0x1D4FF0, 100)  // OlderHigh2_PublishEventAndMarkComplete identical decomp
 FNMAP(0x1B0720, 0x1D5038, 88)  // func_001B0720 similar
 FNMAP(0x1B0878, 0x1D5398, 85)  // func_001B0878 similar
 FNMAP(0x1B09A8, 0x1D5598, 62)  // OlderHigh2_BeginIntroScriptAndMarkComplete changed
 FNMAP(0x1B0A20, 0x1D5820, 80)  // func_001B0A20 similar
 FNMAP(0x1B0B58, 0x1D5958, 100)  // func_001B0B58 identical
 FNMAP(0x1B0B78, 0x1D5978, 58)  // Bird changed
-FNMAP(0x1B0C68, 0x1D5A78, 94)  // func_001B0C68 similar
+FNMAP(0x1B0C68, 0x1D5A78, 94)  // func_001B0C68 similar decomp
 FNMAP(0x1B0CA8, 0x1D5AB8, 81)  // func_001B0CA8 similar
 FNMAP(0x1B0D08, 0x1D5B18, 80)  // StartBird changed
 FNMAP(0x1B0D60, 0x1D5B68, 96)  // ResetBirdSlot26 similar
-FNMAP(0x1B0D90, 0x1D5B98, 80)  // PlaceBird similar
-FNMAP(0x1B0E28, 0x1D5C30, 91)  // UpdateBird similar
-FNMAP(0x1B1030, 0x1D5E08, 82)  // UpdateBirdPhys similar
+FNMAP(0x1B0D90, 0x1D5B98, 80)  // PlaceBird similar decomp
+FNMAP(0x1B0E28, 0x1D5C30, 91)  // UpdateBird similar decomp
+FNMAP(0x1B1030, 0x1D5E08, 82)  // UpdateBirdPhys similar decomp
 FNMAP(0x1B10B0, 0x1D5E88, 75)  // TurnBird similar
 FNMAP(0x1B10D0, 0x1D5EA8, 89)  // func_001B10D0 similar
 FNMAP(0x1B1140, 0x1D5F18, 93)  // func_001B1140 similar
-FNMAP(0x1B1160, 0x1D5F38, 82)  // MoveBirdAlongPath similar
+FNMAP(0x1B1160, 0x1D5F38, 82)  // MoveBirdAlongPath similar decomp
 FNMAP(0x1B1328, 0x1D6110, 68)  // SetBirdState changed
 FNMAP(0x1B17B8, 0x1D65A8, 55)  // SetStepSpinRatio__FP4STEPf changed
 FNMAP(0x1B1818, 0x1D6608, 85)  // SetBirdHeading similar
 FNMAP(0x1B1868, 0x1D6658, 63)  // FBirdFacing changed
 FNMAP(0x1B1900, 0x1D66D0, 72)  // StBirdSees changed
-FNMAP(0x1B1A38, 0x1D6820, 93)  // FStepLength similar
+FNMAP(0x1B1A38, 0x1D6820, 93)  // FStepLength similar decomp
 FNMAP(0x1B1B10, 0x1D68F8, 100)  // func_001B1B10 identical
-FNMAP(0x1B1B18, 0x1D6900, 97)  // SetStepSeg similar
+FNMAP(0x1B1B18, 0x1D6900, 97)  // SetStepSeg similar decomp
 FNMAP(0x1B1B98, 0x1D6980, 100)  // func_001B1B98 register-renamed
-FNMAP(0x1B1BF0, 0x1D69D8, 52)  // BindStepSegs changed
+FNMAP(0x1B1BF0, 0x1D69D8, 80)  // BindStepSegs changed decomp
 FNMAP(0x1B1C60, 0x1D6A60, 80)  // func_001B1C60 similar
 FNMAP(0x1B1D98, 0x1D6B98, 100)  // func_001B1D98 identical
 FNMAP(0x1B1DB8, 0x1D6BB8, 80)  // func_001B1DB8 similar
@@ -2874,11 +2891,11 @@ FNMAP(0x1B1E00, 0x1D6C00, 87)  // func_001B1E00 similar
 FNMAP(0x1B1E38, 0x1D6C40, 80)  // OnRemoveMissile similar
 FNMAP(0x1B1E88, 0x1D6C98, 50)  // SetMissileTarget changed
 FNMAP(0x1B1F10, 0x1D6D70, 87)  // func_001B1F10 similar
-FNMAP(0x1B1F40, 0x1D6DA0, 80)  // OverlapKindMissile changed
+FNMAP(0x1B1F40, 0x1D6DA0, 80)  // OverlapKindMissile changed decomp
 FNMAP(0x1B2020, 0x1D6ED8, 70)  // CompletionAppend238 changed
 FNMAP(0x1B2048, 0x1D6F00, 70)  // CompletionAppend24C changed
 FNMAP(0x1B2070, 0x1D6F28, 80)  // func_001B2070 similar
-FNMAP(0x1B20B8, 0x1D6F70, 91)  // UpdateAccmissAccel similar
+FNMAP(0x1B20B8, 0x1D6F70, 91)  // UpdateAccmissAccel similar decomp
 FNMAP(0x1B21F0, 0x1D70A8, 89)  // func_001B21F0 similar
 FNMAP(0x1B2228, 0x1D70E0, 58)  // SetHomingMissileTarget changed
 FNMAP(0x1B2398, 0x1D7250, 90)  // PredictProjectileAim similar
@@ -2888,22 +2905,22 @@ FNMAP(0x1B2800, 0x1D76C8, 100)  // func_001B2800 identical
 FNMAP(0x1B2820, 0x1DAA00, 100)  // func_001B2820 identical
 FNMAP(0x1B2828, 0x1DAA08, 43)  // func_001B2828 changed
 FNMAP(0x1B2940, 0x1DAB48, 94)  // func_001B2940 similar
-FNMAP(0x1B29D0, 0x1DABD8, 100)  // func_001B29D0 identical
-FNMAP(0x1B2A80, 0x1DAC88, 93)  // Reset__15CQueueOutputIop similar
-FNMAP(0x1B2AA0, 0x1DACA8, 80)  // func_001B2AA0 similar
+FNMAP(0x1B29D0, 0x1DABD8, 100)  // func_001B29D0 identical decomp
+FNMAP(0x1B2A80, 0x1DAC88, 93)  // Reset__15CQueueOutputIop similar decomp
+FNMAP(0x1B2AA0, 0x1DACA8, 80)  // func_001B2AA0 similar decomp
 FNMAP(0x1B2BE0, 0x1DADD8, 75)  // func_001B2BE0 changed
-FNMAP(0x1B2DB8, 0x1DAF98, 99)  // func_001B2DB8 similar
+FNMAP(0x1B2DB8, 0x1DAF98, 99)  // func_001B2DB8 similar decomp
 FNMAP(0x1B2EB8, 0x1DB098, 99)  // func_001B2EB8 similar
 FNMAP(0x1B2FD0, 0x1DB1B0, 100)  // func_001B2FD0 identical
 FNMAP(0x1B2FD8, 0x1DB1B8, 79)  // func_001B2FD8 similar
 FNMAP(0x1B3038, 0x1DB218, 100)  // func_001B3038 identical
-FNMAP(0x1B3040, 0x1DB220, 94)  // func_001B3040 similar
-FNMAP(0x1B3130, 0x1DB308, 98)  // func_001B3130 similar
-FNMAP(0x1B3190, 0x1DB368, 97)  // func_001B3190 similar
-FNMAP(0x1B31E0, 0x1DB3B8, 100)  // func_001B31E0 identical
-FNMAP(0x1B32B8, 0x1DB490, 99)  // func_001B32B8 similar
-FNMAP(0x1B3388, 0x1DB560, 100)  // func_001B3388 identical
-FNMAP(0x1B33C8, 0x1DB5A0, 95)  // func_001B33C8 similar
+FNMAP(0x1B3040, 0x1DB220, 94)  // func_001B3040 similar decomp
+FNMAP(0x1B3130, 0x1DB308, 98)  // func_001B3130 similar decomp
+FNMAP(0x1B3190, 0x1DB368, 97)  // func_001B3190 similar decomp
+FNMAP(0x1B31E0, 0x1DB3B8, 100)  // func_001B31E0 identical decomp
+FNMAP(0x1B32B8, 0x1DB490, 99)  // func_001B32B8 similar decomp
+FNMAP(0x1B3388, 0x1DB560, 100)  // func_001B3388 identical decomp
+FNMAP(0x1B33C8, 0x1DB5A0, 95)  // func_001B33C8 similar decomp
 FNMAP(0x1B33F0, 0x1DB5C8, 74)  // func_001B33F0 changed
 FNMAP(0x1B34D0, 0x1DB698, 100)  // func_001B34D0 identical
 FNMAP(0x1B3508, 0x1DB6D0, 100)  // func_001B3508 identical
@@ -2915,7 +2932,7 @@ FNMAP(0x1B3BD0, 0x1DBE80, 80)  // func_001B3BD0 similar
 FNMAP(0x1B3EC0, 0x1DC158, 98)  // func_001B3EC0 similar
 FNMAP(0x1B4058, 0x1DC2E8, 80)  // func_001B4058 similar
 FNMAP(0x1B4140, 0x1DC3B8, 85)  // func_001B4140 similar
-FNMAP(0x1B41D0, 0x1DC430, 98)  // func_001B41D0 similar
+FNMAP(0x1B41D0, 0x1DC430, 98)  // func_001B41D0 similar decomp
 FNMAP(0x1B42C0, 0x1DC520, 49)  // func_001B42C0 similar
 FNMAP(0x1B42D0, 0x1DC530, 72)  // func_001B42D0 changed
 FNMAP(0x1B4418, 0x1DC6A0, 100)  // func_001B4418 identical
@@ -2938,15 +2955,15 @@ FNMAP(0x1B67F8, 0x22D3E8, 51)  // UpdateMurrayMotion changed
 FNMAP(0x1B6BA8, 0x1DF418, 56)  // UpdateMurrayFlop changed
 FNMAP(0x1B6CC0, 0x1DF518, 80)  // UpdateMurrayFlopMotion similar
 FNMAP(0x1B6DA8, 0x1DF600, 50)  // SetMurrayFlopPhase changed
-FNMAP(0x1B7000, 0x1DF7E8, 72)  // OlderHigh2_SelectPickupDescriptor changed
-FNMAP(0x1B7050, 0x1DF838, 72)  // func_001B7050 changed
-FNMAP(0x1B70A0, 0x1DF888, 64)  // FMurrayGrab changed
-FNMAP(0x1B72B0, 0x1DFAD8, 60)  // Pose changed
+FNMAP(0x1B7000, 0x1DF7E8, 80)  // OlderHigh2_SelectPickupDescriptor changed decomp
+FNMAP(0x1B7050, 0x1DF838, 80)  // func_001B7050 changed decomp
+FNMAP(0x1B70A0, 0x1DF888, 80)  // FMurrayGrab changed decomp
+FNMAP(0x1B72B0, 0x1DFAD8, 80)  // Pose changed decomp
 FNMAP(0x1B7700, 0x1DFEE0, 89)  // PickupVelocities similar
 FNMAP(0x1B7970, 0x1E0160, 33)  // ReleaseMurrayThrow changed
 FNMAP(0x1B7A78, 0x1E0380, 49)  // StartMurrayThrow changed
 FNMAP(0x1B7AE8, 0x1E0420, 80)  // PutDownMurrayCarry similar
-FNMAP(0x1B7BA8, 0x1E04E8, 82)  // CancelMurrayCarry similar
+FNMAP(0x1B7BA8, 0x1E04E8, 82)  // CancelMurrayCarry similar decomp
 FNMAP(0x1B7D20, 0x1E0660, 69)  // Detach changed
 FNMAP(0x1B7E40, 0x1E0770, 67)  // SetMurrayJumpState changed
 FNMAP(0x1B7F90, 0x22CFA8, 80)  // MurrayJumpKind changed
@@ -2959,20 +2976,20 @@ FNMAP(0x1B8450, 0x22D130, 80)  // MurrayCarryOverlapKind changed
 FNMAP(0x1B8508, 0x1E0E58, 67)  // StartMurrayPunch changed
 FNMAP(0x1B85D0, 0x1E0F38, 50)  // StartMurrayPunch changed
 FNMAP(0x1B86B0, 0x1E1018, 50)  // SetMurrayPunch changed
-FNMAP(0x1B8938, 0x1E1320, 80)  // EndMurrayPunch similar
-FNMAP(0x1B8988, 0x1E1370, 52)  // UpdateMurrayPunchTransitions changed
-FNMAP(0x1B8B70, 0x1E1530, 80)  // UpdateMurrayPunch similar
+FNMAP(0x1B8938, 0x1E1320, 80)  // EndMurrayPunch similar decomp
+FNMAP(0x1B8988, 0x1E1370, 80)  // UpdateMurrayPunchTransitions changed decomp
+FNMAP(0x1B8B70, 0x1E1530, 80)  // UpdateMurrayPunch similar decomp
 FNMAP(0x1B8D30, 0x1E16E8, 31)  // SetMurrayBerserk changed
 FNMAP(0x1B8EC0, 0x1E1810, 56)  // UpdateMurrayBerserkTransitions changed
 FNMAP(0x1B90B8, 0x1E19F0, 80)  // UpdateMurrayBerserk similar
-FNMAP(0x1B9130, 0x1E1A68, 62)  // OnMurrayXpNew changed
+FNMAP(0x1B9130, 0x1E1A68, 80)  // OnMurrayXpNew changed decomp
 FNMAP(0x1B93E8, 0x1E1EB8, 68)  // SetMurrayCarry changed
 FNMAP(0x1B9880, 0x1E2358, 49)  // func_001B9880 changed
-FNMAP(0x1B98A0, 0x1E23F0, 49)  // FMurrayCanDo changed
+FNMAP(0x1B98A0, 0x1E23F0, 56)  // FMurrayCanDo changed
 FNMAP(0x1B9A08, 0x154608, 44)  // StartMurrayAbility changed
 FNMAP(0x1B9B60, 0x1E2768, 86)  // func_001B9B60 similar
-FNMAP(0x1B9B70, 0x1E27B8, 92)  // func_001B9B70 similar
-FNMAP(0x1B9C00, 0x1E2848, 90)  // StartMurrayHold similar
+FNMAP(0x1B9B70, 0x1E27B8, 92)  // func_001B9B70 similar decomp
+FNMAP(0x1B9C00, 0x1E2848, 90)  // StartMurrayHold similar decomp
 FNMAP(0x1B9D00, 0x1E28E8, 49)  // func_001B9D00 similar
 FNMAP(0x1B9D28, 0x1E2910, 67)  // func_001B9D28 changed
 FNMAP(0x1B9DB8, 0x1E29B0, 73)  // func_001B9DB8 changed
@@ -2980,19 +2997,19 @@ FNMAP(0x1BA0B8, 0x284568, 79)  // ResetGuard3CSlot26 similar
 FNMAP(0x1BA9F8, 0x1E4B10, 80)  // func_001BA9F8 similar
 FNMAP(0x1BAB30, 0x1E4C48, 100)  // func_001BAB30 identical
 FNMAP(0x1BAB50, 0x1E4C68, 92)  // InitBreakableBytes similar
-FNMAP(0x1BABA0, 0x1E4CB8, 64)  // func_001BABA0 changed
+FNMAP(0x1BABA0, 0x1E4CB8, 80)  // func_001BABA0 changed decomp
 FNMAP(0x1BAD80, 0x1E4E78, 89)  // func_001BAD80 similar
 FNMAP(0x1BADB8, 0x1E4EB0, 89)  // func_001BADB8 similar
 FNMAP(0x1BADF0, 0x1E4FC8, 52)  // FAcceptBreakableContact changed
 FNMAP(0x1BAED8, 0x1E5070, 88)  // PostHit similar
-FNMAP(0x1BAF18, 0x1E50B0, 80)  // GotoEvent similar
+FNMAP(0x1BAF18, 0x1E50B0, 80)  // GotoEvent similar decomp
 FNMAP(0x1BB250, 0x1E53D8, 55)  // UpdateBreakableContacts changed
 FNMAP(0x1BB400, 0x1E5508, 56)  // RunHit changed
-FNMAP(0x1BB648, 0x1E57A0, 61)  // RunItems changed
+FNMAP(0x1BB648, 0x1E57A0, 80)  // RunItems changed decomp
 FNMAP(0x1BB918, 0x1E5AB0, 42)  // func_001BB918 changed
-FNMAP(0x1BB950, 0x1E5B00, 80)  // func_001BB950 similar
-FNMAP(0x1BB9B8, 0x1E5B68, 92)  // BossHigh_InitializeTransientList similar
-FNMAP(0x1BBA18, 0x1E5BC8, 94)  // func_001BBA18 similar
+FNMAP(0x1BB950, 0x1E5B00, 80)  // func_001BB950 similar decomp
+FNMAP(0x1BB9B8, 0x1E5B68, 92)  // BossHigh_InitializeTransientList similar decomp
+FNMAP(0x1BBA18, 0x1E5BC8, 94)  // func_001BBA18 similar decomp
 FNMAP(0x1BBA60, 0x1E5C10, 96)  // func_001BBA60 similar
 FNMAP(0x1BBA90, 0x1E5C40, 96)  // func_001BBA90 similar
 FNMAP(0x1BBAC0, 0x1E5C70, 96)  // func_001BBAC0 similar
@@ -3002,44 +3019,44 @@ FNMAP(0x1BBB50, 0x1E5D00, 96)  // func_001BBB50 similar
 FNMAP(0x1BBB80, 0x1E5D30, 96)  // func_001BBB80 similar
 FNMAP(0x1BBBB0, 0x1E5D60, 98)  // func_001BBBB0 similar
 FNMAP(0x1BBC08, 0x1E5DB8, 98)  // func_001BBC08 similar
-FNMAP(0x1BBC60, 0x1E5E10, 100)  // func_001BBC60 identical
+FNMAP(0x1BBC60, 0x1E5E10, 100)  // func_001BBC60 identical decomp
 FNMAP(0x1BBC98, 0x1E5E48, 98)  // func_001BBC98 similar
 FNMAP(0x1BBCF0, 0x1E5EA0, 98)  // func_001BBCF0 similar
-FNMAP(0x1BBD48, 0x1E5EF8, 100)  // Paris_Function_001BBD48 identical
-FNMAP(0x1BBDB0, 0x1E5F60, 98)  // PitemNew similar
-FNMAP(0x1BBE18, 0x1E5FC8, 79)  // FValidEvent similar
+FNMAP(0x1BBD48, 0x1E5EF8, 100)  // Paris_Function_001BBD48 identical decomp
+FNMAP(0x1BBDB0, 0x1E5F60, 98)  // PitemNew similar decomp
+FNMAP(0x1BBE18, 0x1E5FC8, 83)  // FValidEvent similar decomp
 FNMAP(0x1BBE48, 0x1E5FF8, 100)  // FValidEvent identical
 FNMAP(0x1BBE68, 0x1E6018, 84)  // FValidEvent similar
 FNMAP(0x1BBEA8, 0x1E6058, 90)  // ResetBreakable similar
 FNMAP(0x1BBEF8, 0x1E60A8, 80)  // func_001BBEF8 similar
 FNMAP(0x1BC030, 0x1E61E0, 100)  // func_001BC030 identical
 FNMAP(0x1BC050, 0x1E6200, 80)  // func_001BC050 similar
-FNMAP(0x1BC088, 0x1E6238, 89)  // func_001BC088 similar
-FNMAP(0x1BC0D0, 0x1E6280, 72)  // func_001BC0D0 changed
+FNMAP(0x1BC088, 0x1E6238, 89)  // func_001BC088 similar decomp
+FNMAP(0x1BC0D0, 0x1E6280, 80)  // func_001BC0D0 changed decomp
 FNMAP(0x1BC160, 0x1E6310, 89)  // func_001BC160 similar
-FNMAP(0x1BC198, 0x1E6348, 94)  // RemoveNavPoly similar
+FNMAP(0x1BC198, 0x1E6348, 94)  // RemoveNavPoly similar decomp
 FNMAP(0x1BC208, 0x1E63B8, 79)  // func_001BC208 similar
 FNMAP(0x1BC278, 0x1E6428, 79)  // func_001BC278 similar
-FNMAP(0x1BC2F8, 0x1E64A8, 82)  // func_001BC2F8 similar
-FNMAP(0x1BC530, 0x1E66D8, 90)  // IpolyWrap similar
-FNMAP(0x1BC570, 0x1E6718, 88)  // ReverseLoxPath similar
+FNMAP(0x1BC2F8, 0x1E64A8, 82)  // func_001BC2F8 similar decomp
+FNMAP(0x1BC530, 0x1E66D8, 90)  // IpolyWrap similar decomp
+FNMAP(0x1BC570, 0x1E6718, 88)  // ReverseLoxPath similar decomp
 FNMAP(0x1BC688, 0x1E6830, 80)  // ChitPoly similar
 FNMAP(0x1BC9F0, 0x1E6BF0, 71)  // FPolyContains changed
-FNMAP(0x1BCAC0, 0x1E6CB8, 80)  // NPolyClearSide similar
-FNMAP(0x1BCCE0, 0x1E6ED0, 90)  // NPolyWay similar
+FNMAP(0x1BCAC0, 0x1E6CB8, 80)  // NPolyClearSide similar decomp
+FNMAP(0x1BCCE0, 0x1E6ED0, 90)  // NPolyWay similar decomp
 FNMAP(0x1BCF18, 0x1E7100, 75)  // FPolyPointOnRegion changed
 FNMAP(0x1BD040, 0x1E7228, 80)  // func_001BD040 similar
 FNMAP(0x1BD1E0, 0x1E73D8, 86)  // RemovePolyFromRegion similar
-FNMAP(0x1BD218, 0x1E7410, 69)  // DissolveMerged changed
+FNMAP(0x1BD218, 0x1E7410, 80)  // DissolveMerged changed decomp
 FNMAP(0x1BD310, 0x1E7500, 87)  // PpolyOnSegment similar
-FNMAP(0x1BD400, 0x1E75F0, 67)  // Paris_UpdateSurfacePlanes changed
-FNMAP(0x1BD560, 0x1E7750, 68)  // NPathLeavesPoly changed
+FNMAP(0x1BD400, 0x1E75F0, 80)  // Paris_UpdateSurfacePlanes changed decomp
+FNMAP(0x1BD560, 0x1E7750, 80)  // NPathLeavesPoly changed decomp
 FNMAP(0x1BD8A8, 0x1E7908, 80)  // FPolysOverlap similar
 FNMAP(0x1BDA00, 0x1E7A60, 50)  // PpathNewMerged changed
 FNMAP(0x1BDBF0, 0x1E7CA0, 65)  // Paris_BuildHull changed
-FNMAP(0x1BDE18, 0x1E7EF0, 92)  // AddPolyMember similar
+FNMAP(0x1BDE18, 0x1E7EF0, 92)  // AddPolyMember similar decomp
 FNMAP(0x1BDE80, 0x1E7F58, 66)  // MergePolys changed
-FNMAP(0x1BE1E8, 0x1E8288, 74)  // UpdateNavPolys changed
+FNMAP(0x1BE1E8, 0x1E8288, 80)  // UpdateNavPolys changed decomp
 FNMAP(0x1BE240, 0x1E82E0, 80)  // func_001BE240 similar
 FNMAP(0x1BE378, 0x1E8418, 100)  // func_001BE378 identical
 FNMAP(0x1BEA88, 0x1E84E0, 49)  // LoadLox12EB78FromBrx similar
@@ -3047,43 +3064,43 @@ FNMAP(0x1BECF8, 0x1E8A18, 93)  // func_001BECF8 similar
 FNMAP(0x1BEED8, 0x1E8A38, 81)  // PvRtgtOwnerOfId similar
 FNMAP(0x1BEFB8, 0x1E91D8, 80)  // func_001BEFB8 similar
 FNMAP(0x1BF0F0, 0x1E9310, 100)  // func_001BF0F0 identical
-FNMAP(0x1BF110, 0x1EB4C8, 79)  // ItriNav similar
-FNMAP(0x1BF1F8, 0x1EB5B0, 64)  // ItriNavFrom changed
+FNMAP(0x1BF110, 0x1EB4C8, 80)  // ItriNav similar decomp
+FNMAP(0x1BF1F8, 0x1EB5B0, 80)  // ItriNavFrom changed decomp
 FNMAP(0x1BF398, 0x1EB750, 49)  // func_001BF398 changed
-FNMAP(0x1BF3D8, 0x1EB7A0, 81)  // CsegNav similar
+FNMAP(0x1BF3D8, 0x1EB7A0, 81)  // CsegNav similar decomp
 FNMAP(0x1BF900, 0x1EBCD0, 98)  // FNavBlocked similar
 FNMAP(0x1BF970, 0x1EBD40, 100)  // IcgvFromPcgv__FP2CGP3CGV register-renamed
-FNMAP(0x1BF980, 0x1EBD50, 81)  // AstarNav similar
-FNMAP(0x1BFC18, 0x1EBFE8, 89)  // SmoothNav similar
-FNMAP(0x1BFDB0, 0x1EC188, 100)  // PosNearestTri similar
-FNMAP(0x1BFF28, 0x1EC300, 80)  // CposNavPath similar
-FNMAP(0x1C02D0, 0x1EC688, 85)  // FNavPathCrv similar
-FNMAP(0x1C0320, 0x1ECBB8, 100)  // FNavPoint identical
+FNMAP(0x1BF980, 0x1EBD50, 81)  // AstarNav similar decomp
+FNMAP(0x1BFC18, 0x1EBFE8, 89)  // SmoothNav similar decomp
+FNMAP(0x1BFDB0, 0x1EC188, 100)  // PosNearestTri similar decomp
+FNMAP(0x1BFF28, 0x1EC300, 80)  // CposNavPath similar decomp
+FNMAP(0x1C02D0, 0x1EC688, 85)  // FNavPathCrv similar decomp
+FNMAP(0x1C0320, 0x1ECBB8, 100)  // FNavPoint identical decomp
 FNMAP(0x1C0378, 0x1ECC10, 80)  // func_001C0378 similar
 FNMAP(0x1C03C0, 0x1ECC58, 69)  // LoadMeshZoneFromBrx changed
-FNMAP(0x1C0648, 0x1ECEC0, 59)  // InitSwNav changed
+FNMAP(0x1C0648, 0x1ECEC0, 80)  // InitSwNav changed decomp
 FNMAP(0x1C0880, 0x1ED0E0, 79)  // func_001C0880 similar
 FNMAP(0x1C0920, 0x1ED170, 88)  // func_001C0920 similar
 FNMAP(0x1C0940, 0x1ED190, 80)  // Paris_Function_001C0940 similar
 FNMAP(0x1C0960, 0x1ED1B0, 80)  // Paris_GraphSegmentHits similar
 FNMAP(0x1C0980, 0x1ED1D0, 80)  // Paris_GraphSegmentClear similar
 FNMAP(0x1C09A0, 0x1ED1F0, 92)  // func_001C09A0 similar
-FNMAP(0x1C0A40, 0x1ED350, 82)  // AtFreeNav similar
+FNMAP(0x1C0A40, 0x1ED350, 82)  // AtFreeNav similar decomp
 FNMAP(0x1C0B50, 0x1ED460, 70)  // FKeepOnNav changed
 FNMAP(0x1C0D70, 0x1ED678, 73)  // PregionAt changed
-FNMAP(0x1C0EC0, 0x1ED7B0, 96)  // LoadCmeshFromBrx similar
-FNMAP(0x1C0F30, 0x1ED820, 98)  // LoadCmeshFromBrx similar
-FNMAP(0x1C10C8, 0x1ED9B8, 80)  // InitSwNav similar
+FNMAP(0x1C0EC0, 0x1ED7B0, 96)  // LoadCmeshFromBrx similar decomp
+FNMAP(0x1C0F30, 0x1ED820, 98)  // LoadCmeshFromBrx similar decomp
+FNMAP(0x1C10C8, 0x1ED9B8, 80)  // InitSwNav similar decomp
 FNMAP(0x1C1138, 0x1EDA28, 66)  // func_001C1138 changed
-FNMAP(0x1C1260, 0x1EDB48, 81)  // func_001C1260 similar
+FNMAP(0x1C1260, 0x1EDB48, 81)  // func_001C1260 similar decomp
 FNMAP(0x1C1440, 0x1EDD18, 90)  // func_001C1440 similar
 FNMAP(0x1C14A8, 0x1EDD80, 79)  // func_001C14A8 similar
-FNMAP(0x1C15F8, 0x1EDED8, 99)  // func_001C15F8 similar
-FNMAP(0x1C1700, 0x1EDFE0, 80)  // CpolyNear similar
-FNMAP(0x1C18B8, 0x1EE170, 100)  // Paris_RemovePathKeyPair register-renamed
-FNMAP(0x1C1968, 0x1EE220, 52)  // Paris_RemovePathKey changed
-FNMAP(0x1C1A38, 0x1EE2E8, 80)  // func_001C1A38 similar
-FNMAP(0x1C1BA0, 0x1EE448, 61)  // AddPolyToRegion changed
+FNMAP(0x1C15F8, 0x1EDED8, 99)  // func_001C15F8 similar decomp
+FNMAP(0x1C1700, 0x1EDFE0, 80)  // CpolyNear similar decomp
+FNMAP(0x1C18B8, 0x1EE170, 100)  // Paris_RemovePathKeyPair register-renamed decomp
+FNMAP(0x1C1968, 0x1EE220, 80)  // Paris_RemovePathKey changed decomp
+FNMAP(0x1C1A38, 0x1EE2E8, 80)  // func_001C1A38 similar decomp
+FNMAP(0x1C1BA0, 0x1EE448, 80)  // AddPolyToRegion changed decomp
 FNMAP(0x1C1D20, 0x1EE5C8, 60)  // func_001C1D20 changed
 FNMAP(0x1C1EC0, 0x1EE788, 74)  // PosGoal changed
 FNMAP(0x1C1F28, 0x1EE7F8, 80)  // PosRecord similar
@@ -3091,14 +3108,15 @@ FNMAP(0x1C1FA0, 0x1EE878, 72)  // FNearRecord changed
 FNMAP(0x1C2048, 0x1EE900, 83)  // Paris_ResetPathClassification similar
 FNMAP(0x1C2078, 0x1EE968, 100)  // Paris_ActivatePathSequence identical
 FNMAP(0x1C20B0, 0x1EE930, 100)  // DiscoLow_1C20B0 identical
-FNMAP(0x1C20E8, 0x1EE9A0, 83)  // AddNavLinkRecord similar
-FNMAP(0x1C2148, 0x1EEA00, 70)  // Paris_SetPathRecordPosition changed
-FNMAP(0x1C2170, 0x1EEA28, 54)  // ResolveNavLink changed
-FNMAP(0x1C21D8, 0x1EEA90, 80)  // CNavLinkPath similar
+FNMAP(0x1C20E8, 0x1EE9A0, 83)  // AddNavLinkRecord similar decomp
+FNMAP(0x1C2148, 0x1EEA00, 80)  // Paris_SetPathRecordPosition changed decomp
+FNMAP(0x1C2170, 0x1EEA28, 80)  // ResolveNavLink changed decomp
+FNMAP(0x1C21D8, 0x1EEA90, 80)  // CNavLinkPath similar decomp
 FNMAP(0x1C27C8, 0x1F39F8, 80)  // func_001C27C8 similar
 FNMAP(0x1C2900, 0x1F3B30, 100)  // func_001C2900 identical
 FNMAP(0x1C2920, 0x1FEDA0, 80)  // func_001C2920 similar
 FNMAP(0x1C2A58, 0x1FEED8, 100)  // func_001C2A58 identical
+FNMAP(0x1C2A78, 0x1F1430, 80)  // SetPhase changed decomp
 FNMAP(0x1C2BA8, 0x1F15C0, 93)  // ClearPhase similar
 FNMAP(0x1C2BC8, 0x1EF6E0, 80)  // func_001C2BC8 similar
 FNMAP(0x1C2D00, 0x1EF818, 100)  // func_001C2D00 identical
@@ -3110,7 +3128,7 @@ FNMAP(0x1C3390, 0x1EFF70, 47)  // Paris_ResetPathActor changed
 FNMAP(0x1C33E8, 0x1EFF30, 49)  // Paris_Function_001C33E8 similar
 FNMAP(0x1C3420, 0x1F0E38, 49)  // Paris_Function_001C3420 changed
 FNMAP(0x1C3458, 0x1F31B0, 64)  // Paris_UpdatePathActor changed
-FNMAP(0x1C3500, 0x1F32E8, 89)  // MatPipeFrame similar
+FNMAP(0x1C3500, 0x1F32E8, 89)  // MatPipeFrame similar decomp
 FNMAP(0x1C3958, 0x1F3720, 88)  // Paris_FindObjectPathDistance similar
 FNMAP(0x1C3A08, 0x1F37D8, 88)  // Paris_PathOffsetPosition similar
 FNMAP(0x1C3A88, 0x1F3860, 91)  // Paris_PathRandomOffset similar
@@ -3119,7 +3137,7 @@ FNMAP(0x1C3C08, 0x1F39E8, 49)  // CompletionSetInvertedFlag changed
 FNMAP(0x1C3D70, 0x1F3B50, 49)  // func_001C3D70 changed
 FNMAP(0x1C3DC8, 0x1F3BC8, 96)  // LoadSoFromBrx similar
 FNMAP(0x1C3DF8, 0x1F3C48, 49)  // func_001C3DF8 similar
-FNMAP(0x1C3E20, 0x1F4278, 87)  // func_001C3E20 similar
+FNMAP(0x1C3E20, 0x1F4278, 87)  // func_001C3E20 similar decomp
 FNMAP(0x1C3E90, 0x1F42E8, 50)  // func_001C3E90 changed
 FNMAP(0x1C3ED0, 0x1F43C0, 100)  // func_001C3ED0 identical
 FNMAP(0x1C40C0, 0x1F43F8, 49)  // func_001C40C0 changed
@@ -3144,21 +3162,21 @@ FNMAP(0x1C5B20, 0x1F7030, 49)  // FPickupTouched changed
 FNMAP(0x1C5DF0, 0x1F7700, 49)  // func_001C5DF0 changed
 FNMAP(0x1C5E48, 0x1F7388, 80)  // UpdatePickupBase changed
 FNMAP(0x1C6308, 0x1F7770, 49)  // UpdatePickupGlint changed
-FNMAP(0x1C6508, 0x1F79A0, 80)  // func_001C6508 similar
+FNMAP(0x1C6508, 0x1F79A0, 80)  // func_001C6508 similar decomp
 FNMAP(0x1C6588, 0x1F7A20, 80)  // UpdateCoin similar
 FNMAP(0x1C65F8, 0x1F7A90, 50)  // SetCoinState changed
 FNMAP(0x1C67A0, 0x1F7C70, 100)  // AddCoin identical
-FNMAP(0x1C67D8, 0x1F7CA8, 80)  // func_001C67D8 similar
+FNMAP(0x1C67D8, 0x1F7CA8, 80)  // func_001C67D8 similar decomp
 FNMAP(0x1C6880, 0x1F7D50, 80)  // Recon_UpdatePickupTimer similar
 FNMAP(0x1C68F0, 0x1F7DC0, 50)  // SetOtherPickupState changed
 FNMAP(0x1C6AB0, 0x1F7FA8, 100)  // Recon_NoOp1C6AB0 identical
-FNMAP(0x1C6AB8, 0x1F7FB0, 80)  // Paris_Function_001C6AB8 changed
+FNMAP(0x1C6AB8, 0x1F7FB0, 80)  // Paris_Function_001C6AB8 changed decomp
 FNMAP(0x1C6B28, 0x1F8020, 50)  // SetPrizeState changed
 FNMAP(0x1C6BD0, 0x1F8138, 67)  // ParisClimb_Function_001C6BD0 changed
 FNMAP(0x1C6CE8, 0x1F8280, 47)  // CpickupInstances changed
 FNMAP(0x1C6DE8, 0x1F83D8, 80)  // FFindPickupFloor similar
 FNMAP(0x1C6FD8, 0x1F85F8, 62)  // SpawnPickups changed
-FNMAP(0x1C7648, 0x1F8CD0, 80)  // func_001C7648 similar
+FNMAP(0x1C7648, 0x1F8CD0, 80)  // func_001C7648 similar decomp
 FNMAP(0x1C76D0, 0x1F8D58, 90)  // func_001C76D0 similar
 FNMAP(0x1C7778, 0x1F8E00, 80)  // func_001C7778 similar
 FNMAP(0x1C7988, 0x1F8FA8, 82)  // func_001C7988 similar
@@ -3180,10 +3198,10 @@ FNMAP(0x1C8DD8, 0x1F9610, 60)  // func_001C8DD8 changed
 FNMAP(0x1C9058, 0x1F9820, 67)  // func_001C9058 changed
 FNMAP(0x1C9090, 0x1F9860, 100)  // func_001C9090 identical
 FNMAP(0x1C9098, 0x1F9868, 93)  // func_001C9098 similar
-FNMAP(0x1C90D0, 0x1F98A0, 99)  // OldStartLoadingDisplay similar
+FNMAP(0x1C90D0, 0x1F98A0, 99)  // OldStartLoadingDisplay similar decomp
 FNMAP(0x1C9190, 0x1F9960, 30)  // func_001C9190 changed
 FNMAP(0x1C93E0, 0x1F9FB0, 54)  // func_001C93E0 changed
-FNMAP(0x1C9688, 0x1FA280, 67)  // func_001C9688 changed
+FNMAP(0x1C9688, 0x1FA280, 80)  // func_001C9688 changed decomp
 FNMAP(0x1C9920, 0x1FA588, 100)  // func_001C9920 identical
 FNMAP(0x1C9940, 0x1FA5A8, 100)  // func_001C9940 identical
 FNMAP(0x1C9950, 0x1FA5B8, 100)  // func_001C9950 identical
@@ -3194,9 +3212,9 @@ FNMAP(0x1C9B08, 0x1FA778, 80)  // LoadProxyFromBrx similar
 FNMAP(0x1CA118, 0x1FAD68, 80)  // func_001CA118 changed
 FNMAP(0x1CA308, 0x1FAF38, 80)  // func_001CA308 similar
 FNMAP(0x1CA370, 0x1FAFB0, 83)  // func_001CA370 similar
-FNMAP(0x1CA500, 0x1FB150, 68)  // func_001CA500 changed
+FNMAP(0x1CA500, 0x1FB150, 80)  // func_001CA500 changed decomp
 FNMAP(0x1CA788, 0x1FB3D8, 100)  // func_001CA788 identical
-FNMAP(0x1CA7B8, 0x1FB408, 68)  // Paris_UpdateAttachedEffect changed
+FNMAP(0x1CA7B8, 0x1FB408, 80)  // Paris_UpdateAttachedEffect changed decomp
 FNMAP(0x1CA8C0, 0x1FB508, 93)  // Paris_SetLinkedObjectValue similar
 FNMAP(0x1CA8E0, 0x1FB528, 90)  // func_001CA8E0 similar
 FNMAP(0x1CA930, 0x1FB5D8, 90)  // func_001CA930 similar
@@ -3210,7 +3228,7 @@ FNMAP(0x1CB2C0, 0x1FBEA0, 100)  // HasFreeInstance identical
 FNMAP(0x1CB2E0, 0x1FBEC0, 89)  // CompletionCurrentNodeIndex similar
 FNMAP(0x1CB328, 0x1FBF08, 100)  // func_001CB328 identical
 FNMAP(0x1CB360, 0x1FBF40, 94)  // func_001CB360 similar
-FNMAP(0x1CB410, 0x1FBFF0, 86)  // IrowOfObject similar
+FNMAP(0x1CB410, 0x1FBFF0, 86)  // IrowOfObject similar decomp
 FNMAP(0x1CB488, 0x1FC060, 96)  // LockProxyRowOf similar
 FNMAP(0x1CB4B8, 0x1FC090, 95)  // LockProxyRowOf similar
 FNMAP(0x1CB4E0, 0x1FDD20, 49)  // func_001CB4E0 changed
@@ -3234,26 +3252,26 @@ FNMAP(0x1CBE90, 0x2081C8, 100)  // func_001CBE90 identical
 FNMAP(0x1CC000, 0x1FCB90, 80)  // func_001CC000 similar
 FNMAP(0x1CC138, 0x1FCCC8, 100)  // func_001CC138 identical
 FNMAP(0x1CC158, 0x2081E8, 100)  // func_001CC158 identical
-FNMAP(0x1CC168, 0x2081F8, 100)  // GReachDist identical
-FNMAP(0x1CC1F8, 0x208288, 100)  // func_001CC1F8 identical
+FNMAP(0x1CC168, 0x2081F8, 100)  // GReachDist identical decomp
+FNMAP(0x1CC1F8, 0x208288, 100)  // func_001CC1F8 identical decomp
 FNMAP(0x1CC288, 0x208318, 96)  // Satellite_CurveDistance similar
 FNMAP(0x1CC2B8, 0x208348, 96)  // func_001CC2B8 similar
 FNMAP(0x1CC2E8, 0x208378, 80)  // UpdateReach similar
 FNMAP(0x1CC5E8, 0x2086B0, 56)  // BindReach changed
 FNMAP(0x1CC9A8, 0x208A08, 92)  // func_001CC9A8 similar
 FNMAP(0x1CCA20, 0x15BE10, 93)  // CurveConstraintCallback similar
-FNMAP(0x1CCA40, 0x208AA0, 80)  // PloReachGrip similar
+FNMAP(0x1CCA40, 0x208AA0, 80)  // PloReachGrip similar decomp
 FNMAP(0x1CCAC0, 0x208B20, 80)  // SetReachState similar
 FNMAP(0x1CCC88, 0x208D50, 80)  // StartReachGrab similar
-FNMAP(0x1CD098, 0x2091B0, 85)  // AttachReachObject similar
-FNMAP(0x1CD2C0, 0x209428, 100)  // ReleaseReachObject identical
+FNMAP(0x1CD098, 0x2091B0, 85)  // AttachReachObject similar decomp
+FNMAP(0x1CD2C0, 0x209428, 100)  // ReleaseReachObject identical decomp
 FNMAP(0x1CD308, 0x209490, 80)  // PlaceReachObject similar
 FNMAP(0x1CD498, 0x209640, 80)  // func_001CD498 similar
 FNMAP(0x1CD5D0, 0x209778, 100)  // func_001CD5D0 identical
 FNMAP(0x1CD5F0, 0x209798, 49)  // func_001CD5F0 changed
 FNMAP(0x1CD780, 0x2099A8, 50)  // DrawMarkerLabels changed
 FNMAP(0x1CD998, 0x209B60, 85)  // func_001CD998 similar
-FNMAP(0x1CD9E0, 0x209BA0, 88)  // func_001CD9E0 similar
+FNMAP(0x1CD9E0, 0x209BA0, 88)  // func_001CD9E0 similar decomp
 FNMAP(0x1CDA80, 0x209C40, 80)  // func_001CDA80 changed
 FNMAP(0x1CDB78, 0x209D58, 80)  // func_001CDB78 similar
 FNMAP(0x1CDCB0, 0x209E90, 100)  // func_001CDCB0 identical
@@ -3262,8 +3280,8 @@ FNMAP(0x1CDDC8, 0x20B0C0, 80)  // func_001CDDC8 similar
 FNMAP(0x1CDE80, 0x20B160, 74)  // OnRipgRemove__FP4RIPG changed
 FNMAP(0x1CDF88, 0x20B280, 62)  // UpdateRipgBox changed
 FNMAP(0x1CE170, 0x20B410, 64)  // ShimRestoreAttachment changed
-FNMAP(0x1CE1C8, 0x20B468, 80)  // FUN_0019e420 similar
-FNMAP(0x1CE2E8, 0x20B578, 62)  // CollideRipg changed
+FNMAP(0x1CE1C8, 0x20B468, 80)  // FUN_0019e420 similar decomp
+FNMAP(0x1CE2E8, 0x20B578, 80)  // CollideRipg changed decomp
 FNMAP(0x1CE608, 0x20B8A8, 49)  // RenderRipgSelf__FP4RIPGP2CMP2RO changed
 FNMAP(0x1CE6C0, 0x20B960, 75)  // ShimStateNotOne similar
 FNMAP(0x1CE920, 0x20BC20, 93)  // func_001CE920 similar
@@ -3272,15 +3290,15 @@ FNMAP(0x1CE9B8, 0x20BDA8, 100)  // func_001CE9B8 identical
 FNMAP(0x1CE9C0, 0x20BDB0, 49)  // AddRipRef__FP3RIP changed
 FNMAP(0x1CEA88, 0x2BA690, 49)  // TouchRip__FP3RIPi similar
 FNMAP(0x1CEAA8, 0x20BE68, 100)  // ForceRipFade__FP3RIPf identical
-FNMAP(0x1CEFC8, 0x20BED0, 100)  // func_001CEFC8 identical
-FNMAP(0x1CF010, 0x20BF18, 100)  // func_001CF010 identical
-FNMAP(0x1CF058, 0x20BF60, 100)  // func_001CF058 identical
+FNMAP(0x1CEFC8, 0x20BED0, 100)  // func_001CEFC8 identical decomp
+FNMAP(0x1CF010, 0x20BF18, 100)  // func_001CF010 identical decomp
+FNMAP(0x1CF058, 0x20BF60, 100)  // func_001CF058 identical decomp
 FNMAP(0x1CF0A0, 0x20BFA8, 97)  // MoveRip similar
 FNMAP(0x1CF578, 0x20C6C8, 83)  // func_001CF578 similar
 FNMAP(0x1CF5D0, 0x20C718, 57)  // func_001CF5D0 changed
 FNMAP(0x1CF6B0, 0x20C8E8, 57)  // PripDecal changed
 FNMAP(0x1CF968, 0x20CB98, 50)  // OlderHigh3_SetRipAttachment changed
-FNMAP(0x1CFCD8, 0x20D348, 100)  // InitMatch__FP5MATCHP6VECTORfP2SO register-renamed
+FNMAP(0x1CFCD8, 0x20D348, 100)  // InitMatch__FP5MATCHP6VECTORfP2SO register-renamed decomp
 FNMAP(0x1CFD30, 0x20D3A0, 72)  // func_001CFD30 changed
 FNMAP(0x1CFE88, 0x20D510, 86)  // func_001CFE88 similar
 FNMAP(0x1D0038, 0x20D6B8, 53)  // func_001D0038 changed
@@ -3290,7 +3308,7 @@ FNMAP(0x1D05A0, 0x20DBA0, 49)  // MoveRipHud changed
 FNMAP(0x1D0630, 0x20DC48, 50)  // FreshCoins_RenderRip9 changed
 FNMAP(0x1D0800, 0x20DE48, 84)  // FreshCoins_ExpireRip9 similar
 FNMAP(0x1D08D8, 0x20DEF8, 100)  // Round4_InitRandomParticleBasis register-renamed
-FNMAP(0x1D09A0, 0x20DFC0, 93)  // MoveRipFlutter similar
+FNMAP(0x1D09A0, 0x20DFC0, 93)  // MoveRipFlutter similar decomp
 FNMAP(0x1D0BF8, 0x20E210, 61)  // Round4_EmitContactParticle changed
 FNMAP(0x1D0CA8, 0x20E2A8, 100)  // OlderHigh_UpdateRipOwnerFlags register-renamed
 FNMAP(0x1D0CE8, 0x20E2E8, 80)  // OlderHigh_PublishRipOwnerPredicate similar
@@ -3301,6 +3319,7 @@ FNMAP(0x1D1910, 0x210008, 96)  // ResetVehiclePlacement similar
 FNMAP(0x1D1940, 0x1DD8C0, 49)  // func_001D1940 similar
 FNMAP(0x1D2420, 0x2100B8, 46)  // ResetVehiclePathHeight changed
 FNMAP(0x1D2DD0, 0x205840, 94)  // BestContact similar
+FNMAP(0x1D2E18, 0x27ADC8, 80)  // VehicleForces changed decomp
 FNMAP(0x1D3F30, 0x210068, 48)  // VehicleRemoveContacts changed
 FNMAP(0x1D4B48, 0x27C830, 49)  // ObjectAppendRequest96 changed
 FNMAP(0x1D4EC8, 0x210038, 49)  // func_001D4EC8 changed
@@ -3319,46 +3338,46 @@ FNMAP(0x1D55B8, 0x210DE0, 53)  // FVibrationEnabled changed
 FNMAP(0x1D5650, 0x210FB8, 80)  // func_001D5650 similar
 FNMAP(0x1D5788, 0x2110F0, 100)  // func_001D5788 identical
 FNMAP(0x1D57A8, 0x211110, 49)  // func_001D57A8 similar
-FNMAP(0x1D57B8, 0x211120, 100)  // func_001D57B8 identical
-FNMAP(0x1D57E0, 0x211148, 100)  // func_001D57E0 register-renamed
+FNMAP(0x1D57B8, 0x211120, 100)  // func_001D57B8 identical decomp
+FNMAP(0x1D57E0, 0x211148, 100)  // func_001D57E0 register-renamed decomp
 FNMAP(0x1D5808, 0x211170, 35)  // func_001D5808 changed
 FNMAP(0x1D6310, 0x211F18, 49)  // func_001D6310 changed
 FNMAP(0x1D6378, 0x211F90, 80)  // func_001D6378 similar
-FNMAP(0x1D6480, 0x212098, 98)  // func_001D6480 similar
+FNMAP(0x1D6480, 0x212098, 98)  // func_001D6480 similar decomp
 FNMAP(0x1D6508, 0x212120, 59)  // func_001D6508 changed
 FNMAP(0x1D66F0, 0x212328, 80)  // func_001D66F0 similar
 FNMAP(0x1D6828, 0x212460, 100)  // func_001D6828 identical
-FNMAP(0x1D6848, 0x212480, 99)  // VecBallisticVelocity similar
+FNMAP(0x1D6848, 0x212480, 99)  // VecBallisticVelocity similar decomp
 FNMAP(0x1D69F0, 0x212628, 99)  // ReleaseMurrayThrow similar
-FNMAP(0x1D6A90, 0x2126C8, 64)  // func_001D6A90 changed
-FNMAP(0x1D6B00, 0x212770, 81)  // Launch similar
+FNMAP(0x1D6A90, 0x2126C8, 80)  // func_001D6A90 changed decomp
+FNMAP(0x1D6B00, 0x212770, 81)  // Launch similar decomp
 FNMAP(0x1D7238, 0x2131F0, 96)  // Paris_Function_001D7238 similar
 FNMAP(0x1D7268, 0x156AD0, 49)  // Paris_Function_001D7268 changed
 FNMAP(0x1D72A8, 0x213250, 50)  // UpdateSafeHouse changed
 FNMAP(0x1D7418, 0x213390, 62)  // OlderHigh2_SetActivityModeFromArgument changed
 FNMAP(0x1D7480, 0x213418, 65)  // SetSafeHouseState changed
 FNMAP(0x1D7748, 0x2136A0, 49)  // AddStepguardEffect__FP9STEPGUARD3OID3ZPK similar
-FNMAP(0x1D7780, 0x2136D8, 87)  // OlderHigh_RebuildSelectionResources similar
-FNMAP(0x1D77D0, 0x213728, 70)  // OldParisSelectAllowedState changed
+FNMAP(0x1D7780, 0x2136D8, 87)  // OlderHigh_RebuildSelectionResources similar decomp
+FNMAP(0x1D77D0, 0x213728, 80)  // OldParisSelectAllowedState changed decomp
 FNMAP(0x1D78D8, 0x213098, 80)  // func_001D78D8 similar
 FNMAP(0x1D7A10, 0x2131D0, 100)  // func_001D7A10 identical
 FNMAP(0x1D7A30, 0x21BD48, 80)  // func_001D7A30 similar
 FNMAP(0x1D7B68, 0x21BE80, 100)  // func_001D7B68 identical
-FNMAP(0x1D7B88, 0x21BFF8, 86)  // LoadProgressFromBrx similar
+FNMAP(0x1D7B88, 0x21BFF8, 86)  // LoadProgressFromBrx similar decomp
 FNMAP(0x1D7C80, 0x21C0F0, 73)  // ValidateGameSave changed
 FNMAP(0x1D7D30, 0x21C198, 75)  // ObjectValidateRecordBytes similar
 FNMAP(0x1D7DA0, 0x21C208, 94)  // FFindEntryKey similar
-FNMAP(0x1D7E80, 0x21C2E0, 100)  // func_001D7E80 register-renamed
-FNMAP(0x1D7ED8, 0x21C338, 94)  // RefGetProgress similar
-FNMAP(0x1D80C8, 0x21C528, 99)  // FSetProgress similar
-FNMAP(0x1D84B0, 0x21C718, 88)  // CopyGameSaveForSlot similar
-FNMAP(0x1D8600, 0x21CA00, 100)  // func_001D8600 identical
-FNMAP(0x1D8640, 0x21CA40, 79)  // func_001D8640 similar
-FNMAP(0x1D8690, 0x21CA90, 100)  // func_001D8690 register-renamed
-FNMAP(0x1D8720, 0x21CB20, 100)  // SymFromName identical
-FNMAP(0x1D87C0, 0x21CBC0, 80)  // func_001D87C0 similar
-FNMAP(0x1D88D0, 0x21CCD0, 100)  // func_001D88D0 register-renamed
-FNMAP(0x1D89A8, 0x21CDA8, 100)  // FreshProgress_BuildShortIdList identical
+FNMAP(0x1D7E80, 0x21C2E0, 100)  // func_001D7E80 register-renamed decomp
+FNMAP(0x1D7ED8, 0x21C338, 94)  // RefGetProgress similar decomp
+FNMAP(0x1D80C8, 0x21C528, 99)  // FSetProgress similar decomp
+FNMAP(0x1D84B0, 0x21C718, 88)  // CopyGameSaveForSlot similar decomp
+FNMAP(0x1D8600, 0x21CA00, 100)  // func_001D8600 identical decomp
+FNMAP(0x1D8640, 0x21CA40, 80)  // func_001D8640 similar decomp
+FNMAP(0x1D8690, 0x21CA90, 100)  // func_001D8690 register-renamed decomp
+FNMAP(0x1D8720, 0x21CB20, 100)  // SymFromName identical decomp
+FNMAP(0x1D87C0, 0x21CBC0, 80)  // func_001D87C0 similar decomp
+FNMAP(0x1D88D0, 0x21CCD0, 100)  // func_001D88D0 register-renamed decomp
+FNMAP(0x1D89A8, 0x21CDA8, 100)  // FreshProgress_BuildShortIdList identical decomp
 FNMAP(0x1D8A38, 0x21CE38, 97)  // func_001D8A38 similar
 FNMAP(0x1D8B20, 0x21CF20, 98)  // SetProgressPoCurrent similar
 FNMAP(0x1D8FF8, 0x21D360, 64)  // ApplyGameSettings changed
@@ -3377,32 +3396,33 @@ FNMAP(0x1D9910, 0x21E4F0, 49)  // func_001D9910 changed
 FNMAP(0x1D9B30, 0x21BC28, 49)  // func_001D9B30 similar
 FNMAP(0x1DA2E0, 0x21E678, 84)  // func_001DA2E0 similar
 FNMAP(0x1DA320, 0x21E6B8, 83)  // func_001DA320 similar
-FNMAP(0x1DA350, 0x21E710, 80)  // UpdatePrompt similar
-FNMAP(0x1DA4B8, 0x21E870, 99)  // Paris_Function_001DA4B8 similar
-FNMAP(0x1DA578, 0x21E930, 100)  // Paris_Function_001DA578 identical
-FNMAP(0x1DA5B0, 0x21E968, 100)  // IdHudPrompt identical
+FNMAP(0x1DA350, 0x21E710, 80)  // UpdatePrompt similar decomp
+FNMAP(0x1DA4B8, 0x21E870, 99)  // Paris_Function_001DA4B8 similar decomp
+FNMAP(0x1DA578, 0x21E930, 100)  // Paris_Function_001DA578 identical decomp
+FNMAP(0x1DA5B0, 0x21E968, 100)  // IdDisplayedHudPrompt identical decomp
 FNMAP(0x1DA5C8, 0x21E980, 62)  // SetPromptState changed
 FNMAP(0x1DA728, 0x21EB00, 69)  // func_001DA728 changed
 FNMAP(0x1DA770, 0x21EB48, 80)  // func_001DA770 similar
 FNMAP(0x1DA7B0, 0x21EB88, 88)  // func_001DA7B0 similar
 FNMAP(0x1DA7D0, 0x21EBA8, 86)  // func_001DA7D0 similar
-FNMAP(0x1DA808, 0x21EBE0, 92)  // func_001DA808 similar
-FNMAP(0x1DA858, 0x21EC30, 91)  // UpdateShopStick similar
-FNMAP(0x1DA950, 0x21ED28, 84)  // SetShopMsg similar
+FNMAP(0x1DA808, 0x21EBE0, 92)  // func_001DA808 similar decomp
+FNMAP(0x1DA858, 0x21EC30, 91)  // UpdateShopStick similar decomp
+FNMAP(0x1DA950, 0x21ED28, 84)  // SetShopMsg similar decomp
 FNMAP(0x1DA9E8, 0x21EDC0, 100)  // ClearMessage identical
 FNMAP(0x1DAA08, 0x21EDE0, 97)  // func_001DAA08 similar
 FNMAP(0x1DAA48, 0x21FDD8, 96)  // func_001DAA48 similar
 FNMAP(0x1DAA78, 0x21EE50, 49)  // func_001DAA78 changed
 FNMAP(0x1DAA90, 0x21EEF8, 59)  // UpdateGadgetMenu changed
 FNMAP(0x1DAC58, 0x21F118, 35)  // DrawGadgetIcons changed
-FNMAP(0x1DAE20, 0x21F310, 49)  // Resumed_1DAE20 changed
+FNMAP(0x1DAE20, 0x21F310, 80)  // Resumed_1DAE20 changed decomp
 FNMAP(0x1DB010, 0x21F5F8, 67)  // UpdateGadgetFlags changed
 FNMAP(0x1DB0C8, 0x21F6A0, 65)  // StepGadget changed
-FNMAP(0x1DB390, 0x21F948, 65)  // SelectGadget changed
+FNMAP(0x1DB390, 0x21F948, 80)  // SelectGadget changed decomp
 FNMAP(0x1DB490, 0x21FA38, 82)  // OpenGadgetMenu similar
 FNMAP(0x1DB520, 0x21FAE0, 60)  // SetGadgetMenu changed
 FNMAP(0x1DB7A8, 0x21FD90, 86)  // func_001DB7A8 similar
-FNMAP(0x1DBBA0, 0x220080, 49)  // ObjectAdjustedCount similar
+FNMAP(0x1DB820, 0x21FE08, 80)  // func_001DB820 changed decomp
+FNMAP(0x1DBBA0, 0x220080, 83)  // ObjectAdjustedCount similar decomp
 FNMAP(0x1DBBE0, 0x2200B8, 58)  // SelectShopRow changed
 FNMAP(0x1DBEF0, 0x2202A0, 53)  // UpdateShopLook changed
 FNMAP(0x1DC260, 0x220590, 52)  // func_001DC260 changed
@@ -3417,8 +3437,10 @@ FNMAP(0x1DCAB0, 0x220C68, 49)  // func_001DCAB0 changed
 FNMAP(0x1DCC58, 0x220DE0, 86)  // func_001DCC58 similar
 FNMAP(0x1DCCA0, 0x15CF88, 49)  // func_001DCCA0 changed
 FNMAP(0x1DCCD8, 0x220E28, 96)  // func_001DCCD8 similar
-FNMAP(0x1DCE90, 0x2210C0, 86)  // func_001DCE90 similar
-FNMAP(0x1DCED8, 0x221108, 64)  // BuildJobHelp changed
+FNMAP(0x1DCD08, 0x220E58, 80)  // func_001DCD08 changed decomp
+FNMAP(0x1DCE90, 0x2210C0, 86)  // func_001DCE90 similar decomp
+FNMAP(0x1DCED8, 0x221108, 80)  // BuildJobHelp changed decomp
+FNMAP(0x1DD1F8, 0x221400, 80)  // UpdateJobHelpLook changed decomp
 FNMAP(0x1DD558, 0x221810, 58)  // func_001DD558 changed
 FNMAP(0x1DD648, 0x221928, 86)  // func_001DD648 similar
 FNMAP(0x1DD728, 0x221970, 73)  // func_001DD728 changed
@@ -3432,7 +3454,7 @@ FNMAP(0x1DDB08, 0x221EC0, 52)  // StartNewGameFromTitle changed
 FNMAP(0x1DDBD0, 0x222120, 62)  // ObjectSetTimestampedStateDBD0 changed
 FNMAP(0x1DDBF0, 0x222140, 30)  // func_001DDBF0 changed
 FNMAP(0x1DDD40, 0x222410, 68)  // FreshProgress_MapIndex changed
-FNMAP(0x1DDDB8, 0x222488, 98)  // func_001DDDB8 similar
+FNMAP(0x1DDDB8, 0x222488, 98)  // func_001DDDB8 similar decomp
 FNMAP(0x1DDE10, 0x2224E0, 50)  // func_001DDE10 changed
 FNMAP(0x1DDE58, 0x222588, 50)  // func_001DDE58 changed
 FNMAP(0x1DDEA0, 0x222630, 80)  // func_001DDEA0 similar
@@ -3443,22 +3465,22 @@ FNMAP(0x1DE008, 0x223308, 63)  // func_001DE008 changed
 FNMAP(0x1DE260, 0x223550, 100)  // func_001DE260 identical
 FNMAP(0x1DE280, 0x223570, 100)  // func_001DE280 identical
 FNMAP(0x1DE2A0, 0x2236E8, 71)  // func_001DE2A0 changed
-FNMAP(0x1DE2D8, 0x223720, 50)  // LaserOverlapKind changed
+FNMAP(0x1DE2D8, 0x223720, 80)  // LaserOverlapKind changed decomp
 FNMAP(0x1DE3B0, 0x223888, 70)  // Recon_001DE3B0 changed
 FNMAP(0x1DE3D8, 0x2237F8, 100)  // ObjectAppendWord identical
 FNMAP(0x1DE400, 0x2238B0, 80)  // func_001DE400 changed
 FNMAP(0x1DE478, 0x223918, 85)  // LoadLaserFromBrx similar
 FNMAP(0x1DE518, 0x2239B8, 80)  // CloneLaser similar
-FNMAP(0x1DE568, 0x223A08, 100)  // PostLoadLaser identical
-FNMAP(0x1DE5A8, 0x223A78, 100)  // AddLaserAttachment identical
-FNMAP(0x1DE5D8, 0x223AA8, 52)  // BindEnd changed
-FNMAP(0x1DEDB0, 0x224158, 74)  // func_001DEDB0 changed
+FNMAP(0x1DE568, 0x223A08, 100)  // PostLoadLaser identical decomp
+FNMAP(0x1DE5A8, 0x223A78, 100)  // AddLaserAttachment identical decomp
+FNMAP(0x1DE5D8, 0x223AA8, 80)  // BindEnd changed decomp
+FNMAP(0x1DEDB0, 0x224158, 80)  // func_001DEDB0 changed decomp
 FNMAP(0x1DEEA8, 0x224248, 84)  // RemoveLaserContacts similar
 FNMAP(0x1DEF98, 0x224338, 73)  // Endpoints changed
 FNMAP(0x1DF0A0, 0x224440, 59)  // AddLaserContacts changed
 FNMAP(0x1DF260, 0x224600, 32)  // ApplyLaserContacts changed
 FNMAP(0x1DF3A0, 0x224700, 96)  // UpdateLaser similar
-FNMAP(0x1DF3D0, 0x224730, 58)  // UpdateLaser changed
+FNMAP(0x1DF3D0, 0x224730, 80)  // UpdateLaser changed decomp
 FNMAP(0x1DF5B0, 0x224B18, 50)  // LaserBeams changed
 FNMAP(0x1DF908, 0x224ED0, 49)  // func_001DF908 changed
 FNMAP(0x1DF980, 0x224F30, 80)  // func_001DF980 similar
@@ -3489,8 +3511,8 @@ FNMAP(0x1E1B58, 0x226490, 100)  // func_001E1B58 identical
 FNMAP(0x1E1B68, 0x2264A0, 94)  // func_001E1B68 similar
 FNMAP(0x1E1BC8, 0x226500, 75)  // RUN::OnSmaState changed
 FNMAP(0x1E1C40, 0x2265E0, 70)  // RunRun changed
-FNMAP(0x1E1D48, 0x226700, 80)  // FinishRunPending similar
-FNMAP(0x1E1DB8, 0x226770, 88)  // PloFind similar
+FNMAP(0x1E1D48, 0x226700, 80)  // FinishRunPending similar decomp
+FNMAP(0x1E1DB8, 0x226770, 88)  // PloFind similar decomp
 FNMAP(0x1E4530, 0x22A670, 50)  // GCmdDuration changed
 FNMAP(0x1E46A0, 0x22A7F8, 58)  // DriveScptActor changed
 FNMAP(0x1E4D40, 0x22AEC8, 50)  // GetRunAim changed
@@ -3499,10 +3521,10 @@ FNMAP(0x1E4F20, 0x22B090, 49)  // func_001E4F20 changed
 FNMAP(0x1E50E0, 0x22B290, 49)  // func_001E50E0 changed
 FNMAP(0x1E51A0, 0x22B4A8, 50)  // HoldRunEffects changed
 FNMAP(0x1E5280, 0x22B580, 52)  // ReleaseRunEffects changed
-FNMAP(0x1E5370, 0x22B678, 80)  // func_001E5370 similar
+FNMAP(0x1E5370, 0x22B678, 80)  // func_001E5370 similar decomp
 FNMAP(0x1E53D8, 0x22B6E0, 86)  // func_001E53D8 similar
-FNMAP(0x1E5410, 0x22B718, 80)  // RUN::ReleaseSmaWatch similar
-FNMAP(0x1E5468, 0x22B770, 74)  // func_001E5468 changed
+FNMAP(0x1E5410, 0x22B718, 80)  // RUN::ReleaseSmaWatch similar decomp
+FNMAP(0x1E5468, 0x22B770, 80)  // func_001E5468 changed decomp
 FNMAP(0x1E54B0, 0x22B7F0, 80)  // func_001E54B0 similar
 FNMAP(0x1E54E8, 0x22B828, 50)  // func_001E54E8 changed
 FNMAP(0x1E5570, 0x22B890, 64)  // func_001E5570 changed
@@ -3515,97 +3537,98 @@ FNMAP(0x1E5C28, 0x22D5B0, 80)  // func_001E5C28 similar
 FNMAP(0x1E5D60, 0x22D6E8, 100)  // func_001E5D60 identical
 FNMAP(0x1E5D80, 0x22D708, 82)  // func_001E5D80 similar
 FNMAP(0x1E5DB8, 0x22D740, 84)  // func_001E5DB8 similar
-FNMAP(0x1E5DF8, 0x22D780, 80)  // LoadPathFromBrx similar
-FNMAP(0x1E5FC8, 0x22D950, 68)  // CacheSegCrv changed
-FNMAP(0x1E6180, 0x22DB08, 80)  // RecalcCrv similar
+FNMAP(0x1E5DF8, 0x22D780, 80)  // LoadPathFromBrx similar decomp
+FNMAP(0x1E5FC8, 0x22D950, 80)  // CacheSegCrv changed decomp
+FNMAP(0x1E6180, 0x22DB08, 80)  // RecalcCrv similar decomp
 FNMAP(0x1E6330, 0x22DCB8, 49)  // RefreshCrv changed
-FNMAP(0x1E6340, 0x22DCC8, 92)  // UpdatePath17 similar
-FNMAP(0x1E63C0, 0x22DD48, 93)  // SFromCrvG similar
+FNMAP(0x1E6340, 0x22DCC8, 92)  // UpdatePath17 similar decomp
+FNMAP(0x1E63C0, 0x22DD48, 93)  // SFromCrvG similar decomp
 FNMAP(0x1E64C8, 0x22DE50, 72)  // GFromCrvS changed
 FNMAP(0x1E6610, 0x22DFA0, 49)  // Paris_PathFirstTime changed
 FNMAP(0x1E6620, 0x22DFB0, 49)  // func_001E6620 changed
 FNMAP(0x1E6630, 0x22DFC0, 67)  // Paris_Function_001E6630 changed
 FNMAP(0x1E6648, 0x22DFD8, 67)  // func_001E6648 changed
-FNMAP(0x1E6660, 0x22DFF0, 88)  // GWrapCrv similar
+FNMAP(0x1E6660, 0x22DFF0, 88)  // GWrapCrv similar decomp
 FNMAP(0x1E66C8, 0x22E058, 86)  // SWrapCrv similar
 FNMAP(0x1E6720, 0x22E0B0, 49)  // ReleaseStackInto_1E6728 changed
-FNMAP(0x1E6728, 0x22E0B8, 96)  // SClampCrv similar
+FNMAP(0x1E6728, 0x22E0B8, 96)  // SClampCrv similar decomp
 FNMAP(0x1E67B8, 0x22E148, 89)  // EvalCrv similar
 FNMAP(0x1E69A0, 0x22E520, 96)  // func_001E69A0 similar
-FNMAP(0x1E6A30, 0x22E5B0, 83)  // func_001E6A30 similar
+FNMAP(0x1E6A30, 0x22E5B0, 83)  // func_001E6A30 similar decomp
 FNMAP(0x1E6DB8, 0x22E938, 82)  // func_001E6DB8 similar
 FNMAP(0x1E6ED8, 0x22EA50, 93)  // NearestCrv similar
 FNMAP(0x1E6F10, 0x22E4D0, 100)  // EvalCrvS identical
-FNMAP(0x1E6F60, 0x22EA88, 90)  // NearestCrvAll similar
+FNMAP(0x1E6F60, 0x22EA88, 90)  // NearestCrvAll similar decomp
 FNMAP(0x1E7380, 0x22EEA0, 100)  // NearestCrvS identical
-FNMAP(0x1E7410, 0x22EF30, 94)  // OldParisMinimizeParameter similar
+FNMAP(0x1E7410, 0x22EF30, 94)  // OldParisMinimizeParameter similar decomp
 FNMAP(0x1E7538, 0x22F058, 67)  // ISegCrvG changed
 FNMAP(0x1E7668, 0x22F198, 80)  // ISegCrvS similar
 FNMAP(0x1E77B0, 0x22F350, 49)  // func_001E77B0 changed
-FNMAP(0x1E77E8, 0x22F3F8, 93)  // ReleaseStackInto_1E77E8 similar
-FNMAP(0x1E7840, 0x22F450, 81)  // PropeEnsure similar
+FNMAP(0x1E77E8, 0x22F3F8, 93)  // ReleaseStackInto_1E77E8 similar decomp
+FNMAP(0x1E7840, 0x22F450, 81)  // PropeEnsure similar decomp
 FNMAP(0x1E7930, 0x22F540, 100)  // Paris_Function_001E7930 identical
 FNMAP(0x1E7968, 0x22F578, 100)  // Paris_Function_001E7968 identical
-FNMAP(0x1E79A0, 0x22F5B0, 90)  // func_001E79A0 similar
+FNMAP(0x1E79A0, 0x22F5B0, 90)  // func_001E79A0 similar decomp
 FNMAP(0x1E79F0, 0x22F600, 96)  // func_001E79F0 similar
 FNMAP(0x1E7A28, 0x22F668, 68)  // func_001E7A28 changed
 FNMAP(0x1E7BB8, 0x22F798, 50)  // FinalCurveWorldBounds changed
 FNMAP(0x1E7D90, 0x22F998, 72)  // func_001E7D90 changed
 FNMAP(0x1E7FF0, 0x22FC08, 79)  // ObjectAttachmentId similar
 FNMAP(0x1E8008, 0x22FC20, 93)  // SRandCrvNear similar
-FNMAP(0x1E81C0, 0x22FDE0, 89)  // InitRope similar
-FNMAP(0x1E8378, 0x22FF98, 71)  // StepRopeSpring changed
+FNMAP(0x1E81C0, 0x22FDE0, 89)  // InitRope similar decomp
+FNMAP(0x1E8378, 0x22FF98, 80)  // StepRopeSpring changed decomp
 FNMAP(0x1E9090, 0x230C70, 73)  // StepRopeTrail changed
-FNMAP(0x1E93F0, 0x231078, 96)  // SetRopeEnd similar
-FNMAP(0x1E94B0, 0x231138, 62)  // func_001E94B0 changed
-FNMAP(0x1E95B0, 0x231240, 86)  // SetRopeLength similar
+FNMAP(0x1E93F0, 0x231078, 96)  // SetRopeEnd similar decomp
+FNMAP(0x1E94B0, 0x231138, 80)  // func_001E94B0 changed decomp
+FNMAP(0x1E95B0, 0x231240, 86)  // SetRopeLength similar decomp
 FNMAP(0x1E9828, 0x2314A8, 80)  // CopyRopeDistances similar
 FNMAP(0x1E9858, 0x2314D8, 60)  // PostLoadRopeMesh changed
 FNMAP(0x1E9AC0, 0x2317A0, 72)  // PlaceRopeMeshScene changed
-FNMAP(0x1E9C30, 0x231948, 88)  // func_001E9C30 similar
-FNMAP(0x1E9C88, 0x2319A0, 68)  // Pathrec changed
-FNMAP(0x1E9F50, 0x231C50, 96)  // PpolyAtPoint similar
-FNMAP(0x1EA000, 0x231D00, 66)  // UpdatePathrec changed
-FNMAP(0x1EA3B0, 0x2320A0, 98)  // FInPathSpan similar
+FNMAP(0x1E9C30, 0x231948, 88)  // func_001E9C30 similar decomp
+FNMAP(0x1E9C88, 0x2319A0, 80)  // Pathrec changed decomp
+FNMAP(0x1E9F50, 0x231C50, 96)  // PpolyAtPoint similar decomp
+FNMAP(0x1EA000, 0x231D00, 80)  // UpdatePathrec changed decomp
+FNMAP(0x1EA3B0, 0x2320A0, 98)  // FInPathSpan similar decomp
 FNMAP(0x1EA410, 0x232100, 80)  // func_001EA410 similar
 FNMAP(0x1EA548, 0x232238, 100)  // func_001EA548 identical
 FNMAP(0x1EA568, 0x233AE0, 50)  // RelocateBulkRecords changed
 FNMAP(0x1EA688, 0x233C90, 49)  // CclutPass similar
-FNMAP(0x1EA6C8, 0x233CD0, 100)  // TexselFromShd register-renamed
-FNMAP(0x1EA750, 0x233D58, 93)  // func_001EA750 similar
+FNMAP(0x1EA6C8, 0x233CD0, 100)  // TexselFromShd register-renamed decomp
+FNMAP(0x1EA750, 0x233D58, 93)  // func_001EA750 similar decomp
 FNMAP(0x1EA8A8, 0x233EA8, 50)  // LoadClutFromBrx changed
 FNMAP(0x1EA9F0, 0x2340B8, 64)  // func_001EA9F0 changed
 FNMAP(0x1EAD98, 0x234430, 67)  // func_001EAD98 changed
 FNMAP(0x1EAE40, 0x234518, 49)  // LoadClutsFromBrx changed
 FNMAP(0x1EAF50, 0x234648, 57)  // LoadBmpFromBrx changed
-FNMAP(0x1EB050, 0x234780, 100)  // func_001EB050 identical
+FNMAP(0x1EB050, 0x234780, 100)  // func_001EB050 identical decomp
 FNMAP(0x1EB098, 0x2347C8, 49)  // LoadBmpsFromBrx changed
 FNMAP(0x1EB1A8, 0x234900, 50)  // LoadTexFromBrx changed
 FNMAP(0x1EB2F0, 0x234A58, 49)  // LoadShdFromBrx changed
 FNMAP(0x1EB678, 0x234DA8, 49)  // func_001EB678 changed
 FNMAP(0x1EB748, 0x234EA0, 61)  // LoadShadersFromBrx changed
-FNMAP(0x1EB960, 0x235128, 88)  // BuildShdPasses similar
-FNMAP(0x1EC688, 0x235CC0, 97)  // func_001EC688 similar
-FNMAP(0x1EC6D0, 0x235D08, 100)  // func_001EC6D0 register-renamed
-FNMAP(0x1EC718, 0x235D50, 100)  // func_001EC718 identical
+FNMAP(0x1EB960, 0x235128, 88)  // BuildShdPasses similar decomp
+FNMAP(0x1EC688, 0x235CC0, 97)  // func_001EC688 similar decomp
+FNMAP(0x1EC6D0, 0x235D08, 100)  // func_001EC6D0 register-renamed decomp
+FNMAP(0x1EC718, 0x235D50, 100)  // func_001EC718 identical decomp
 FNMAP(0x1EC740, 0x235D78, 78)  // func_001EC740 similar
-FNMAP(0x1EC7A0, 0x235DE0, 97)  // EndShaderGroup similar
+FNMAP(0x1EC7A0, 0x235DE0, 97)  // EndShaderGroup similar decomp
 FNMAP(0x1EC7E8, 0x235E28, 93)  // func_001EC7E8 similar
 FNMAP(0x1EC820, 0x235E60, 49)  // PshdFindShader changed
-FNMAP(0x1EC880, 0x235EC8, 49)  // func_001EC880 changed
+FNMAP(0x1EC880, 0x235EC8, 80)  // func_001EC880 changed decomp
 FNMAP(0x1EC8D0, 0x235F40, 100)  // PshdOfId identical
 FNMAP(0x1EC8F8, 0x235F68, 100)  // PshdFromIndex identical
+FNMAP(0x1EC918, 0x235F80, 80)  // ParisIntro_Function_001EC918 changed decomp
 FNMAP(0x1EC968, 0x235FF8, 80)  // func_001EC968 similar
 FNMAP(0x1EC9D0, 0x236068, 79)  // func_001EC9D0 similar
-FNMAP(0x1ECAB0, 0x236150, 85)  // BuildClutGifs__FP4CLUTiP4GIFS similar
-FNMAP(0x1ECB18, 0x2361C0, 94)  // BuildBmpTex0__FP3BMPi similar
-FNMAP(0x1ECBF0, 0x236298, 100)  // func_001ECBF0 identical
-FNMAP(0x1ECC28, 0x2362D0, 70)  // func_001ECC28 changed
-FNMAP(0x1ECE58, 0x2364F0, 72)  // func_001ECE58 changed
+FNMAP(0x1ECAB0, 0x236150, 85)  // BuildClutGifs__FP4CLUTiP4GIFS similar decomp
+FNMAP(0x1ECB18, 0x2361C0, 94)  // BuildBmpTex0__FP3BMPi similar decomp
+FNMAP(0x1ECBF0, 0x236298, 100)  // func_001ECBF0 identical decomp
+FNMAP(0x1ECC28, 0x2362D0, 80)  // func_001ECC28 changed decomp
+FNMAP(0x1ECE58, 0x2364F0, 80)  // func_001ECE58 changed decomp
 FNMAP(0x1ED1A0, 0x236828, 49)  // ReleaseStackInto_1ED1A8 changed
 FNMAP(0x1ED1A8, 0x236830, 91)  // AdjustRgba16 similar
 FNMAP(0x1ED278, 0x236908, 80)  // AdjustRgba similar
-FNMAP(0x1ED3A8, 0x236AE0, 99)  // func_001ED3A8 similar
+FNMAP(0x1ED3A8, 0x236AE0, 99)  // func_001ED3A8 similar decomp
 FNMAP(0x1ED448, 0x236B80, 95)  // func_001ED448 similar
 FNMAP(0x1ED470, 0x236BA8, 79)  // func_001ED470 similar
 FNMAP(0x1ED4E0, 0x236C18, 77)  // func_001ED4E0 similar
@@ -3613,51 +3636,51 @@ FNMAP(0x1ED560, 0x236C80, 79)  // func_001ED560 similar
 FNMAP(0x1ED5D0, 0x236CF0, 77)  // func_001ED5D0 similar
 FNMAP(0x1ED650, 0x236D58, 80)  // func_001ED650 similar
 FNMAP(0x1ED788, 0x236E90, 100)  // func_001ED788 identical
-FNMAP(0x1ED7A8, 0x236EB0, 80)  // PsaaLoadFromBrx similar
+FNMAP(0x1ED7A8, 0x236EB0, 80)  // PsaaLoadFromBrx similar decomp
 FNMAP(0x1ED850, 0x236F58, 80)  // func_001ED850 similar
 FNMAP(0x1ED8E0, 0x236FE0, 86)  // func_001ED8E0 similar
-FNMAP(0x1ED960, 0x237060, 95)  // func_001ED960 similar
+FNMAP(0x1ED960, 0x237060, 95)  // func_001ED960 similar decomp
 FNMAP(0x1EDA20, 0x237120, 96)  // FUpdatableSaa__FP3SAA similar
 FNMAP(0x1EDA50, 0x237150, 100)  // AnimationNoAction identical
 FNMAP(0x1EDA58, 0x237158, 100)  // UCompleteSaa__FP3SAA identical
 FNMAP(0x1EDA68, 0x237220, 80)  // SetIframe similar
 FNMAP(0x1EDAD8, 0x237298, 87)  // SetDuDv similar
 FNMAP(0x1EDB80, 0x237348, 91)  // func_001EDB80 similar
-FNMAP(0x1EDB98, 0x237360, 99)  // func_001EDB98 similar
+FNMAP(0x1EDB98, 0x237360, 99)  // func_001EDB98 similar decomp
 FNMAP(0x1EDC40, 0x237408, 98)  // UpdateLoop__FP4LOOPf similar
 FNMAP(0x1EDD30, 0x2374F8, 100)  // UCompleteLoop__FP4LOOP identical
-FNMAP(0x1EDD60, 0x237528, 100)  // Paris_InitPingpong register-renamed
-FNMAP(0x1EDE10, 0x2375D8, 98)  // UpdatePingpong__FP8PINGPONGf similar
-FNMAP(0x1EDF28, 0x2376F0, 89)  // UCompletePingpong__FP8PINGPONG similar
-FNMAP(0x1EDFA0, 0x237760, 100)  // InitShuffle__FP7SHUFFLEP4SAAF identical
+FNMAP(0x1EDD60, 0x237528, 100)  // Paris_InitPingpong register-renamed decomp
+FNMAP(0x1EDE10, 0x2375D8, 98)  // UpdatePingpong__FP8PINGPONGf similar decomp
+FNMAP(0x1EDF28, 0x2376F0, 89)  // UCompletePingpong__FP8PINGPONG similar decomp
+FNMAP(0x1EDFA0, 0x237760, 100)  // InitShuffle__FP7SHUFFLEP4SAAF identical decomp
 FNMAP(0x1EDFE0, 0x2377A0, 97)  // UpdateShuffle__FP7SHUFFLEf similar
 FNMAP(0x1EE090, 0x237850, 98)  // func_001EE090 similar
-FNMAP(0x1EE100, 0x2378C0, 100)  // SetEyesEyess__FP4EYES5EYESS identical
+FNMAP(0x1EE100, 0x2378C0, 100)  // SetEyesEyess__FP4EYES5EYESS identical decomp
 FNMAP(0x1EE228, 0x2379E8, 96)  // func_001EE228 similar
-FNMAP(0x1EE3B0, 0x237B70, 98)  // SetScrollerMasterSpeeds similar
-FNMAP(0x1EE420, 0x237BE0, 98)  // func_001EE420 similar
+FNMAP(0x1EE3B0, 0x237B70, 98)  // SetScrollerMasterSpeeds similar decomp
+FNMAP(0x1EE420, 0x237BE0, 98)  // func_001EE420 similar decomp
 FNMAP(0x1EE480, 0x237C40, 100)  // InitScroller__FP8SCROLLERP4SAAF register-renamed
 FNMAP(0x1EE4E0, 0x237CA0, 80)  // func_001EE4E0 changed
 FNMAP(0x1EE5B8, 0x237D48, 80)  // UCompleteScroller__FP8SCROLLER changed
-FNMAP(0x1EE678, 0x237DD8, 49)  // SetScrollerMasterSpeeds__FP8SCROLLERff similar
+FNMAP(0x1EE678, 0x237DD8, 86)  // SetScrollerMasterSpeeds__FP8SCROLLERff similar decomp
 FNMAP(0x1EE688, 0x237DE8, 100)  // func_001EE688 register-renamed
 FNMAP(0x1EE6D8, 0x237E38, 97)  // UpdateCircler__FP7CIRCLERf similar
-FNMAP(0x1EE768, 0x237EC8, 97)  // UCompleteCircler__FP7CIRCLER similar
+FNMAP(0x1EE768, 0x237EC8, 97)  // UCompleteCircler__FP7CIRCLER similar decomp
 FNMAP(0x1EE820, 0x2380B8, 80)  // func_001EE820 similar
 FNMAP(0x1EE958, 0x2381F0, 100)  // func_001EE958 identical
 FNMAP(0x1EE978, 0x238210, 49)  // ReleaseStackIntoIconCharacter changed
 FNMAP(0x1EE988, 0x238220, 100)  // FreshSave_EncodeIconCharacter register-renamed
-FNMAP(0x1EEA70, 0x238308, 100)  // FreshSave_EncodeIconTitle identical
+FNMAP(0x1EEA70, 0x238308, 100)  // FreshSave_EncodeIconTitle identical decomp
 FNMAP(0x1EEB08, 0x2383A0, 80)  // func_001EEB08 similar
 FNMAP(0x1EEC40, 0x2384D8, 100)  // func_001EEC40 identical
 FNMAP(0x1EEC60, 0x2384F8, 100)  // func_001EEC60 identical
 FNMAP(0x1EEC68, 0x238500, 100)  // func_001EEC68 identical
-FNMAP(0x1EEC70, 0x238508, 50)  // func_001EEC70 changed
+FNMAP(0x1EEC70, 0x238508, 80)  // func_001EEC70 changed decomp
 FNMAP(0x1EECD0, 0x238568, 97)  // ClearJobs similar
 FNMAP(0x1EED10, 0x2385A8, 69)  // UpdateJobs changed
 FNMAP(0x1EED78, 0x238610, 71)  // OfferJobMessage changed
 FNMAP(0x1EEE00, 0x238690, 80)  // PjobPush similar
-FNMAP(0x1EEEE0, 0x2387A8, 70)  // PjobFind changed
+FNMAP(0x1EEEE0, 0x2387A8, 80)  // PjobFind changed decomp
 FNMAP(0x1EEF68, 0x2389A8, 100)  // func_001EEF68 identical
 FNMAP(0x1EEF70, 0x2389A0, 100)  // func_001EEF70 identical
 FNMAP(0x1EEF78, 0x238980, 93)  // func_001EEF78 similar
@@ -3676,7 +3699,7 @@ FNMAP(0x1EFA70, 0x238FA8, 100)  // func_001EFA70 identical
 FNMAP(0x1EFA90, 0x238FC8, 80)  // func_001EFA90 similar
 FNMAP(0x1EFAC0, 0x238FF8, 64)  // LoadSmFromBrx changed
 FNMAP(0x1F00C8, 0x239708, 82)  // PostSmLoad__FP2SM similar
-FNMAP(0x1F0128, 0x239778, 94)  // func_001F0128 similar
+FNMAP(0x1F0128, 0x239778, 94)  // func_001F0128 similar decomp
 FNMAP(0x1F0198, 0x2397E8, 100)  // func_001F0198 identical
 FNMAP(0x1F01B8, 0x239808, 93)  // PsmaApplySm similar
 FNMAP(0x1F0380, 0x2399C8, 95)  // func_001F0380 similar
@@ -3684,51 +3707,51 @@ FNMAP(0x1F03A8, 0x2399F0, 100)  // func_001F03A8 identical
 FNMAP(0x1F0400, 0x239A78, 49)  // IsmsFindSmOptional__FP2SM3OID changed
 FNMAP(0x1F0438, 0x239AB8, 93)  // func_001F0438 similar
 FNMAP(0x1F0458, 0x239AD8, 49)  // PsmgFind changed
-FNMAP(0x1F0498, 0x239B20, 96)  // CsmtDistance similar
+FNMAP(0x1F0498, 0x239B20, 96)  // CsmtDistance similar decomp
 FNMAP(0x1F04F8, 0x239B80, 79)  // OidFromSmIsms similar
 FNMAP(0x1F0528, 0x239BB0, 100)  // func_001F0528 identical
 FNMAP(0x1F0538, 0x239BC0, 94)  // func_001F0538 similar
-FNMAP(0x1F0598, 0x239C20, 94)  // RetractSma similar
+FNMAP(0x1F0598, 0x239C20, 94)  // RetractSma similar decomp
 FNMAP(0x1F0638, 0x239CC0, 90)  // FSmaRetracted similar
-FNMAP(0x1F0660, 0x239CE8, 99)  // SetSmaGoal similar
-FNMAP(0x1F0730, 0x239DB8, 99)  // SeekSma similar
+FNMAP(0x1F0660, 0x239CE8, 99)  // SetSmaGoal similar decomp
+FNMAP(0x1F0730, 0x239DB8, 99)  // SeekSma similar decomp
 FNMAP(0x1F07C8, 0x239E50, 100)  // OidSmaGoal identical
 FNMAP(0x1F07E8, 0x239E70, 100)  // OidSmaGoal identical
 FNMAP(0x1F0808, 0x239E90, 79)  // OidSmaGoal similar
-FNMAP(0x1F0850, 0x239ED8, 98)  // SetSmaSpeed similar
+FNMAP(0x1F0850, 0x239ED8, 98)  // SetSmaSpeed similar decomp
 FNMAP(0x1F08D0, 0x239F58, 80)  // FinishSmaTransition similar
-FNMAP(0x1F0948, 0x239FE0, 99)  // SnapSmaGoal similar
-FNMAP(0x1F09D8, 0x23A070, 99)  // SetSmaState similar
-FNMAP(0x1F0AD0, 0x23A168, 80)  // PsmtChoose similar
-FNMAP(0x1F0B80, 0x23A210, 65)  // PsmtPath changed
+FNMAP(0x1F0948, 0x239FE0, 99)  // SnapSmaGoal similar decomp
+FNMAP(0x1F09D8, 0x23A070, 99)  // SetSmaState similar decomp
+FNMAP(0x1F0AD0, 0x23A168, 80)  // PsmtChoose similar decomp
+FNMAP(0x1F0B80, 0x23A210, 80)  // PsmtPath changed decomp
 FNMAP(0x1F0CF0, 0x23A380, 73)  // PsmtLeaving changed
 FNMAP(0x1F0D88, 0x23A428, 75)  // ChooseSmaTransition changed
-FNMAP(0x1F0FA0, 0x23A640, 100)  // EndSmaTransition identical
-FNMAP(0x1F0FD8, 0x23A678, 99)  // func_001F0FD8 similar
+FNMAP(0x1F0FA0, 0x23A640, 100)  // EndSmaTransition identical decomp
+FNMAP(0x1F0FD8, 0x23A678, 99)  // func_001F0FD8 similar decomp
 FNMAP(0x1F1078, 0x23A718, 97)  // SMA::OnAsegaMsg similar
 FNMAP(0x1F10F0, 0x23A790, 89)  // AdvanceSma similar
-FNMAP(0x1F11A8, 0x23A850, 80)  // ClueRetirement_1F11A8 similar
+FNMAP(0x1F11A8, 0x23A850, 80)  // ClueRetirement_1F11A8 similar decomp
 FNMAP(0x1F1350, 0x23A9F0, 100)  // SetSmaMask register-renamed
-FNMAP(0x1F13A8, 0x23AA48, 98)  // NotifySmaState similar
-FNMAP(0x1F1448, 0x23AAE8, 99)  // ReplaceSmaHandle similar
-FNMAP(0x1F14F8, 0x23AB98, 99)  // ReplaceSmaHandleMask similar
+FNMAP(0x1F13A8, 0x23AA48, 98)  // NotifySmaState similar decomp
+FNMAP(0x1F1448, 0x23AAE8, 99)  // ReplaceSmaHandle similar decomp
+FNMAP(0x1F14F8, 0x23AB98, 99)  // ReplaceSmaHandleMask similar decomp
 FNMAP(0x1F15B8, 0x23AC58, 100)  // ClearSmaHandle register-renamed
 FNMAP(0x1F1608, 0x23ACA8, 49)  // ReleaseStackInto_1F1610 changed
 FNMAP(0x1F1610, 0x23ACB0, 80)  // ReleaseStackInto_1F1610 similar
 FNMAP(0x1F1748, 0x23ADE8, 100)  // func_001F1748 identical
 FNMAP(0x1F1768, 0x1F1738, 72)  // AddPocketCoins changed
 FNMAP(0x1F17B0, 0x1F1780, 78)  // AddPocketPrize similar
-FNMAP(0x1F17F8, 0x1F17C8, 80)  // SetPocketMode similar
-FNMAP(0x1F1CF8, 0x1F1CF8, 50)  // NextPocketPrize changed
+FNMAP(0x1F17F8, 0x1F17C8, 80)  // SetPocketMode similar decomp
+FNMAP(0x1F1CF8, 0x1F1CF8, 80)  // NextPocketPrize changed decomp
 FNMAP(0x1F1EB8, 0x1F1EF8, 89)  // Paris_Function_001F1EB8 similar
 FNMAP(0x1F1F38, 0x15F650, 49)  // func_001F1F38 changed
 FNMAP(0x1F20E8, 0x1F2390, 100)  // func_001F20E8 identical
 FNMAP(0x1F2108, 0x23AE08, 50)  // func_001F2108 changed
 FNMAP(0x1F21B8, 0x23AEB8, 50)  // SetAloParent changed
-FNMAP(0x1F2468, 0x23B310, 80)  // func_001F2468 similar
+FNMAP(0x1F2468, 0x23B310, 80)  // func_001F2468 similar decomp
 FNMAP(0x1F2500, 0x23B3A8, 68)  // func_001F2500 changed
 FNMAP(0x1F2688, 0x23B530, 75)  // ObjectSetAttachedProperty similar
-FNMAP(0x1F26A8, 0x23B550, 84)  // func_001F26A8 similar
+FNMAP(0x1F26A8, 0x23B550, 84)  // func_001F26A8 similar decomp
 FNMAP(0x1F2758, 0x23B610, 75)  // ObjectIgnoresLocked similar
 FNMAP(0x1F2768, 0x23B620, 80)  // SetSoIgnoreLocked__FP2SOi similar
 FNMAP(0x1F2798, 0x23B650, 67)  // PaloPhysRoot changed
@@ -3748,38 +3771,38 @@ FNMAP(0x1F3118, 0x23BFE8, 80)  // func_001F3118 changed
 FNMAP(0x1F31E0, 0x23C0B8, 57)  // LoadAloFromBrx changed
 FNMAP(0x1F3590, 0x23C468, 79)  // RestAloSost similar
 FNMAP(0x1F35C8, 0x23C4A0, 87)  // SetAloMass similar
-FNMAP(0x1F35F8, 0x23C4D0, 92)  // ScaleAloMomint similar
+FNMAP(0x1F35F8, 0x23C4D0, 92)  // ScaleAloMomint similar decomp
 FNMAP(0x1F36A8, 0x1AA5F0, 49)  // func_001F36A8 similar
 FNMAP(0x1F36E0, 0x23C660, 80)  // UpdateAlo similar
-FNMAP(0x1F37C8, 0x23C750, 92)  // SetAloRegion similar
+FNMAP(0x1F37C8, 0x23C750, 92)  // SetAloRegion similar decomp
 FNMAP(0x1F3900, 0x23C878, 49)  // CopyAloSoeMatrices changed
 FNMAP(0x1F3980, 0x23C970, 56)  // UpdateAloPhys changed
 FNMAP(0x1F3B28, 0x23CB08, 80)  // func_001F3B28 similar
-FNMAP(0x1F3C10, 0x23CBE0, 89)  // func_001F3C10 similar
+FNMAP(0x1F3C10, 0x23CBE0, 89)  // func_001F3C10 similar decomp
 FNMAP(0x1F3C70, 0x23CC40, 50)  // func_001F3C70 changed
 FNMAP(0x1F3CC8, 0x23CCB0, 80)  // func_001F3CC8 changed
 FNMAP(0x1F3E00, 0x23CE08, 80)  // OnGuardUnregistered changed
 FNMAP(0x1F3EA8, 0x23CEC0, 80)  // OnGuardRegistered changed
 FNMAP(0x1F3FA0, 0x23CFB8, 57)  // func_001F3FA0 changed
-FNMAP(0x1F3FB0, 0x23CFC8, 96)  // func_001F3FB0 similar
+FNMAP(0x1F3FB0, 0x23CFC8, 96)  // func_001F3FB0 similar decomp
 FNMAP(0x1F4010, 0x23D028, 49)  // SetAloMatrix similar
 FNMAP(0x1F40A0, 0x23D0E8, 80)  // SetAloPos similar
 FNMAP(0x1F42E0, 0x23D338, 59)  // SetAloRotation changed
-FNMAP(0x1F4440, 0x23D480, 80)  // VelAloPos changed
-FNMAP(0x1F4488, 0x23D4C8, 94)  // SetAloVelocityToLoad similar
-FNMAP(0x1F4558, 0x23D598, 90)  // AngVelAlo similar
-FNMAP(0x1F46D8, 0x23D718, 96)  // SetAloAngVelocityToLoad similar
+FNMAP(0x1F4440, 0x23D480, 80)  // VelAloPos changed decomp
+FNMAP(0x1F4488, 0x23D4C8, 94)  // SetAloVelocityToLoad similar decomp
+FNMAP(0x1F4558, 0x23D598, 90)  // AngVelAlo similar decomp
+FNMAP(0x1F46D8, 0x23D718, 96)  // SetAloAngVelocityToLoad similar decomp
 FNMAP(0x1F4870, 0x23D888, 50)  // func_001F4870 changed
 FNMAP(0x1F4898, 0x23D9D0, 84)  // SetAloVelocity similar
 FNMAP(0x1F4930, 0x23D938, 84)  // SetAloAngVelocity similar
 FNMAP(0x1F4B58, 0x23DCA0, 87)  // MarkOxaDirty1 similar
-FNMAP(0x1F4BA8, 0x23DCF0, 87)  // UnmarkOxaDirty1 similar
+FNMAP(0x1F4BA8, 0x23DCF0, 87)  // UnmarkOxaDirty1 similar decomp
 FNMAP(0x1F4BF8, 0x23DD40, 89)  // MarkAloDirty similar
 FNMAP(0x1F4C58, 0x23DDA0, 65)  // func_001F4C58 changed
 FNMAP(0x1F4CA0, 0x23DDF0, 80)  // func_001F4CA0 changed
 FNMAP(0x1F4D50, 0x23DEA0, 91)  // UnmarkAloDirty similar
-FNMAP(0x1F4DA8, 0x23DEF8, 97)  // VehicleRemoveContacts similar
-FNMAP(0x1F4E28, 0x23DF78, 56)  // DetachAloContacts changed
+FNMAP(0x1F4DA8, 0x23DEF8, 97)  // VehicleRemoveContacts similar decomp
+FNMAP(0x1F4E28, 0x23DF78, 80)  // DetachAloContacts changed decomp
 FNMAP(0x1F4F10, 0x23E068, 80)  // func_001F4F10 changed
 FNMAP(0x1F4FA8, 0x23E108, 100)  // AddGuardRailContacts identical
 FNMAP(0x1F4FB0, 0x23E128, 100)  // func_001F4FB0 identical
@@ -3787,18 +3810,18 @@ FNMAP(0x1F4FC8, 0x23E178, 80)  // OverlapKindAlo similar
 FNMAP(0x1F5040, 0x23E1F0, 89)  // FAloStill similar
 FNMAP(0x1F5078, 0x23E228, 80)  // WakeAlo similar
 FNMAP(0x1F50E0, 0x23E290, 34)  // UpdateAloBounds changed
-FNMAP(0x1F5480, 0x23E940, 90)  // VehicleBounds similar
-FNMAP(0x1F5510, 0x23E9D0, 100)  // SetCnstrAxis register-renamed
+FNMAP(0x1F5480, 0x23E940, 90)  // VehicleBounds similar decomp
+FNMAP(0x1F5510, 0x23E9D0, 100)  // SetCnstrAxis register-renamed decomp
 FNMAP(0x1F55C8, 0x23EA88, 71)  // ReRootAlo changed
 FNMAP(0x1F56F8, 0x23EBD0, 84)  // PoxaNewAlo similar
 FNMAP(0x1F5720, 0x23EBF8, 88)  // SetAloCnstrLin similar
 FNMAP(0x1F57C0, 0x23EC98, 88)  // SetAloCnstrAng similar
 FNMAP(0x1F5860, 0x23ED38, 50)  // ParisClimb_Function_001F5860 changed
-FNMAP(0x1F5880, 0x23ED58, 80)  // SetAloGravity similar
+FNMAP(0x1F5880, 0x23ED58, 80)  // SetAloGravity similar decomp
 FNMAP(0x1F5988, 0x23EDC8, 100)  // SetAloOverlapNothing identical
 FNMAP(0x1F5990, 0x23EDD0, 100)  // func_001F5990 identical
 FNMAP(0x1F5998, 0x23EDE0, 100)  // func_001F5998 identical
-FNMAP(0x1F5C30, 0x23EFA0, 99)  // AccelAloTowardRotation similar
+FNMAP(0x1F5C30, 0x23EFA0, 99)  // AccelAloTowardRotation similar decomp
 FNMAP(0x1F5E10, 0x23F180, 90)  // AccelAloTowardPosition similar
 FNMAP(0x1F5FF8, 0x23F370, 49)  // func_001F5FF8 changed
 FNMAP(0x1F6030, 0x23F3B8, 49)  // RefSoeHandle changed
@@ -3806,22 +3829,22 @@ FNMAP(0x1F6068, 0x23F400, 54)  // func_001F6068 changed
 FNMAP(0x1F66F0, 0x23FA58, 80)  // func_001F66F0 changed
 FNMAP(0x1F6788, 0x23FAE8, 45)  // func_001F6788 changed
 FNMAP(0x1F67E0, 0x23FB68, 45)  // PsmaFindAloSm changed
-FNMAP(0x1F6838, 0x23FC68, 90)  // FAloOutOfSweep similar
+FNMAP(0x1F6838, 0x23FC68, 90)  // FAloOutOfSweep similar decomp
 FNMAP(0x1F6860, 0x23FC90, 91)  // SetAloContactsOff similar
 FNMAP(0x1F68A8, 0x23FCD8, 39)  // SetAloSensors changed
 FNMAP(0x1F6918, 0x23FD38, 80)  // func_001F6918 changed
 FNMAP(0x1F6960, 0x23FD98, 50)  // ObjectFlag26 changed
 FNMAP(0x1F6978, 0x23FE38, 46)  // ShowAloGlobs changed
 FNMAP(0x1F69F8, 0x23FEC0, 49)  // ShowAloGlobs changed
-FNMAP(0x1F6A68, 0x23FFA0, 49)  // ReconCold_1F6A68 changed
+FNMAP(0x1F6A68, 0x23FFA0, 80)  // ReconCold_1F6A68 changed decomp
 FNMAP(0x1F6AC8, 0x240000, 54)  // SetAloSoesByTag changed
 FNMAP(0x1F6B48, 0x240080, 54)  // SetAloSoesByTag changed
-FNMAP(0x1F6C08, 0x240100, 58)  // EnsureSoeMesh changed
+FNMAP(0x1F6C08, 0x240100, 80)  // EnsureSoeMesh changed decomp
 FNMAP(0x1F6EF8, 0x2403F0, 49)  // IntegrateSoeMesh changed
 FNMAP(0x1F70C0, 0x2405F8, 55)  // RebuildSoe changed
 FNMAP(0x1F72F8, 0x240850, 49)  // FAloContainsPoint changed
 FNMAP(0x1F7588, 0x240DA0, 57)  // FAcceptContactAlo changed
-FNMAP(0x1F78A0, 0x240DD8, 100)  // IbitLow identical
+FNMAP(0x1F78A0, 0x240DD8, 100)  // IbitLow identical decomp
 FNMAP(0x1F78D8, 0x240E10, 49)  // PaloXpFilter similar
 FNMAP(0x1F7A68, 0x241150, 49)  // SetAloEntryMode changed
 FNMAP(0x1F7B40, 0x241230, 49)  // ObjectMode24 changed
@@ -3831,8 +3854,8 @@ FNMAP(0x1F7B78, 0x241258, 50)  // ObjectSetNegativeByte149 changed
 FNMAP(0x1F7B88, 0x241260, 50)  // ObjectNegativeByte149 changed
 FNMAP(0x1F7B98, 0x241268, 80)  // PloEnsureChild391 similar
 FNMAP(0x1F7BF0, 0x2412C0, 50)  // func_001F7BF0 changed
-FNMAP(0x1F7BF8, 0x2412C8, 98)  // FadeAloOut similar
-FNMAP(0x1F7C68, 0x241338, 95)  // FadeAloIn similar
+FNMAP(0x1F7BF8, 0x2412C8, 98)  // FadeAloOut similar decomp
+FNMAP(0x1F7C68, 0x241338, 95)  // FadeAloIn similar decomp
 FNMAP(0x1F7D10, 0x2413E0, 86)  // SetFade similar
 FNMAP(0x1F7D90, 0x241460, 90)  // SetFade similar
 FNMAP(0x1F7E08, 0x2414D8, 72)  // CsoeCollect changed
@@ -3841,14 +3864,14 @@ FNMAP(0x1F7F20, 0x2415F0, 35)  // ObjectSetFlag29 changed
 FNMAP(0x1F7F48, 0x241628, 58)  // SetAloPhysRootFlag changed
 FNMAP(0x1F7FA0, 0x2417F8, 87)  // Paris_SetObjectGeometryWeights similar
 FNMAP(0x1F8038, 0x241890, 87)  // BossHigh_UpdateAnimationGroup similar
-FNMAP(0x1F80D0, 0x241928, 81)  // SetAloEyesClosed similar
+FNMAP(0x1F80D0, 0x241928, 81)  // SetAloEyesClosed similar decomp
 FNMAP(0x1F8198, 0x2419F0, 63)  // ObjectFindEntry changed
-FNMAP(0x1F81E0, 0x241A38, 49)  // Recon_001F81E0 changed
+FNMAP(0x1F81E0, 0x241A38, 80)  // Recon_001F81E0 changed decomp
 FNMAP(0x1F8238, 0x241A98, 49)  // ObjectClearB4 changed
-FNMAP(0x1F8240, 0x241AA0, 100)  // func_001F8240 identical
-FNMAP(0x1F8278, 0x241AD8, 100)  // PtargetrecOf identical
-FNMAP(0x1F82B8, 0x241B18, 100)  // func_001F82B8 identical
-FNMAP(0x1F8300, 0x241B60, 89)  // PregentEnsure similar
+FNMAP(0x1F8240, 0x241AA0, 100)  // func_001F8240 identical decomp
+FNMAP(0x1F8278, 0x241AD8, 100)  // PtargetrecOf identical decomp
+FNMAP(0x1F82B8, 0x241B18, 100)  // func_001F82B8 identical decomp
+FNMAP(0x1F8300, 0x241B60, 89)  // PregentEnsure similar decomp
 FNMAP(0x1F83B0, 0x241C10, 96)  // func_001F83B0 similar
 FNMAP(0x1F83E0, 0x241C40, 87)  // ObjectProperty8 similar
 FNMAP(0x1F8410, 0x241C70, 96)  // func_001F8410 similar
@@ -3858,88 +3881,88 @@ FNMAP(0x1F84A0, 0x241D00, 87)  // ObjectProperty4 similar
 FNMAP(0x1F84D0, 0x241DA0, 50)  // SetSoIceable__FP2SOi changed
 FNMAP(0x1F8500, 0x241DC0, 50)  // ObjectIsIceable changed
 FNMAP(0x1F85E0, 0x241EA8, 49)  // RefSoeHandle changed
-FNMAP(0x1F8668, 0x241F00, 80)  // SetAloIced similar
+FNMAP(0x1F8668, 0x241F00, 80)  // SetAloIced similar decomp
 FNMAP(0x1F87A0, 0x242390, 100)  // ObjectMillisecondsAC register-renamed
 FNMAP(0x1F87C8, 0x2423B8, 97)  // func_001F87C8 similar
 FNMAP(0x1F8808, 0x2423F8, 100)  // ObjectMillisecondsAE register-renamed
 FNMAP(0x1F8830, 0x242420, 97)  // func_001F8830 similar
 FNMAP(0x1F8870, 0x242460, 100)  // ObjectMillisecondsAC8870 register-renamed
 FNMAP(0x1F8898, 0x242488, 97)  // func_001F8898 similar
-FNMAP(0x1F88D8, 0x2424C8, 100)  // func_001F88D8 identical
-FNMAP(0x1F8910, 0x242500, 91)  // PctrlFindXfh similar
-FNMAP(0x1F89E0, 0x2425D0, 99)  // SetXfhPos similar
-FNMAP(0x1F8A78, 0x242668, 100)  // RefXfhMovePos identical
-FNMAP(0x1F8AD8, 0x2426C8, 100)  // RefXfhMoveRot identical
-FNMAP(0x1F8B58, 0x242748, 100)  // RefXfhLook identical
-FNMAP(0x1F8BF0, 0x2427E0, 95)  // ObjectSetKind16Shape similar
+FNMAP(0x1F88D8, 0x2424C8, 100)  // func_001F88D8 identical decomp
+FNMAP(0x1F8910, 0x242500, 91)  // PctrlFindXfh similar decomp
+FNMAP(0x1F89E0, 0x2425D0, 99)  // SetXfhPos similar decomp
+FNMAP(0x1F8A78, 0x242668, 100)  // RefXfhMovePos identical decomp
+FNMAP(0x1F8AD8, 0x2426C8, 100)  // RefXfhMoveRot identical decomp
+FNMAP(0x1F8B58, 0x242748, 100)  // RefXfhLook identical decomp
+FNMAP(0x1F8BF0, 0x2427E0, 95)  // ObjectSetKind16Shape similar decomp
 FNMAP(0x1F8C40, 0x242830, 80)  // func_001F8C40 similar
 FNMAP(0x1F8DB8, 0x2429A8, 100)  // func_001F8DB8 identical
 FNMAP(0x1F8E90, 0x242AA8, 58)  // GatherGroup changed
 FNMAP(0x1F8F80, 0x242B90, 56)  // SolvePassSw changed
 FNMAP(0x1F90D0, 0x242CF8, 49)  // CollectGroupXps changed
 FNMAP(0x1F9240, 0x242E50, 74)  // SolveGroupPass changed
-FNMAP(0x1F9410, 0x243020, 70)  // SolveGroup changed
+FNMAP(0x1F9410, 0x243020, 80)  // SolveGroup changed decomp
 FNMAP(0x1F9B20, 0x243738, 92)  // ApplyAloGravity similar
-FNMAP(0x1F9C48, 0x243860, 90)  // StepAloBackHalfFrame similar
-FNMAP(0x1F9E70, 0x243A80, 92)  // ApplyAloVelocityChangesMoving similar
-FNMAP(0x1FA328, 0x243F38, 86)  // ApplyAloVelocityChanges similar
-FNMAP(0x1FA528, 0x244138, 89)  // ApplyAloDisplacement similar
+FNMAP(0x1F9C48, 0x243860, 90)  // StepAloBackHalfFrame similar decomp
+FNMAP(0x1F9E70, 0x243A80, 92)  // ApplyAloVelocityChangesMoving similar decomp
+FNMAP(0x1FA328, 0x243F38, 86)  // ApplyAloVelocityChanges similar decomp
+FNMAP(0x1FA528, 0x244138, 89)  // ApplyAloDisplacement similar decomp
 FNMAP(0x1FA810, 0x244418, 79)  // ProjectCnstr similar
-FNMAP(0x1FA970, 0x244558, 100)  // ProjectCnstrLocal identical
-FNMAP(0x1FAA00, 0x2445E8, 89)  // DvAloImpulse similar
-FNMAP(0x1FAA48, 0x244630, 73)  // DwAloImpulseAt changed
-FNMAP(0x1FAA98, 0x244690, 93)  // DwAloTorque similar
+FNMAP(0x1FA970, 0x244558, 100)  // ProjectCnstrLocal identical decomp
+FNMAP(0x1FAA00, 0x2445E8, 89)  // DvAloImpulse similar decomp
+FNMAP(0x1FAA48, 0x244630, 80)  // DwAloImpulseAt changed decomp
+FNMAP(0x1FAA98, 0x244690, 93)  // DwAloTorque similar decomp
 FNMAP(0x1FAB48, 0x244740, 49)  // VelAloPoint similar
 FNMAP(0x1FAB78, 0x244770, 96)  // ForceAt similar
 FNMAP(0x1FAC30, 0x244828, 92)  // AccelAloPos similar
 FNMAP(0x1FAC98, 0x244890, 92)  // AccelRotation similar
 FNMAP(0x1FAD00, 0x2448F8, 98)  // FillAloDzResponse similar
-FNMAP(0x1FADD0, 0x2449C8, 91)  // VelAloDzResponse similar
+FNMAP(0x1FADD0, 0x2449C8, 91)  // VelAloDzResponse similar decomp
 FNMAP(0x1FAE18, 0x244A10, 80)  // func_001FAE18 similar
 FNMAP(0x1FAF50, 0x244B48, 100)  // func_001FAF50 identical
-FNMAP(0x1FAF70, 0x244B68, 96)  // func_001FAF70 similar
+FNMAP(0x1FAF70, 0x244B68, 96)  // func_001FAF70 similar decomp
 FNMAP(0x1FAFD0, 0x244BC8, 49)  // func_001FAFD0 changed
-FNMAP(0x1FB018, 0x244C28, 86)  // CSnd::Pause similar
-FNMAP(0x1FB060, 0x244C70, 82)  // CSnd::Resume similar
+FNMAP(0x1FB018, 0x244C28, 86)  // CSnd::Pause similar decomp
+FNMAP(0x1FB060, 0x244C70, 82)  // CSnd::Resume similar decomp
 FNMAP(0x1FB098, 0x244CA8, 84)  // CSnd::Stop similar
-FNMAP(0x1FB0C0, 0x244CD0, 95)  // CSnd::Start similar
-FNMAP(0x1FB1F8, 0x244E08, 94)  // CSnd::SetVolume similar
+FNMAP(0x1FB0C0, 0x244CD0, 95)  // CSnd::Start similar decomp
+FNMAP(0x1FB1F8, 0x244E08, 94)  // CSnd::SetVolume similar decomp
 FNMAP(0x1FB268, 0x244E78, 91)  // CSnd::SetPan similar
-FNMAP(0x1FB2C0, 0x244ED0, 100)  // CSnd::SetPitch identical
-FNMAP(0x1FB2F8, 0x244F08, 99)  // CSnd::SetSource similar
-FNMAP(0x1FB3F0, 0x245000, 100)  // CSnd::SetPosition identical
-FNMAP(0x1FB4F0, 0x245100, 96)  // CSnd::SetFalloff similar
+FNMAP(0x1FB2C0, 0x244ED0, 100)  // CSnd::SetPitch identical decomp
+FNMAP(0x1FB2F8, 0x244F08, 99)  // StartPlainSound similar
+FNMAP(0x1FB3F0, 0x245000, 100)  // CSnd::SetPosition identical decomp
+FNMAP(0x1FB4F0, 0x245100, 96)  // CSnd::SetFalloff similar decomp
 FNMAP(0x1FB520, 0x245130, 49)  // func_001FB520 changed
 FNMAP(0x1FB528, 0x245138, 66)  // CSnd::Update3D changed
-FNMAP(0x1FB658, 0x245320, 90)  // CSnd::SetDirty similar
+FNMAP(0x1FB658, 0x245320, 90)  // CSnd::SetDirty similar decomp
 FNMAP(0x1FB6A8, 0x245370, 98)  // func_001FB6A8 similar
-FNMAP(0x1FB710, 0x2453D8, 98)  // CSnd::RemoveActive similar
+FNMAP(0x1FB710, 0x2453D8, 98)  // CSnd::RemoveActive similar decomp
 FNMAP(0x1FB778, 0x245440, 44)  // FListener changed
 FNMAP(0x1FB8E0, 0x245748, 82)  // CSnd::UpdateFrame similar
-FNMAP(0x1FBAF8, 0x245960, 79)  // func_001FBAF8 similar
-FNMAP(0x1FBB30, 0x245998, 100)  // func_001FBB30 register-renamed
-FNMAP(0x1FBB90, 0x2459F8, 96)  // PsndNewPlain similar
+FNMAP(0x1FBAF8, 0x245960, 86)  // func_001FBAF8 similar decomp
+FNMAP(0x1FBB30, 0x245998, 100)  // func_001FBB30 register-renamed decomp
+FNMAP(0x1FBB90, 0x2459F8, 96)  // StartPlainSound similar
 FNMAP(0x1FBBC8, 0x245A30, 98)  // func_001FBBC8 similar
 FNMAP(0x1FBC20, 0x245A88, 89)  // func_001FBC20 similar
 FNMAP(0x1FBC58, 0x245AC0, 56)  // CSndPlain::StartIop changed
-FNMAP(0x1FBE80, 0x245D40, 85)  // CSndPlain::StopIop similar
+FNMAP(0x1FBE80, 0x245D40, 85)  // CSndPlain::StopIop similar decomp
 FNMAP(0x1FBEE0, 0x157950, 49)  // ReconCompleted_NotifyModel2323A8 similar
 FNMAP(0x1FBF00, 0x245DA0, 49)  // ResumeSceneSoundEntry similar
 FNMAP(0x1FBF20, 0x245DE0, 74)  // CSndPlain::SendChanges changed
-FNMAP(0x1FBFB0, 0x245E78, 92)  // CSndPlain::Requests similar
+FNMAP(0x1FBFB0, 0x245E78, 92)  // CSndPlain::Requests similar decomp
 FNMAP(0x1FC018, 0x245EE0, 100)  // CSndPlain::OnAudible register-renamed
 FNMAP(0x1FC090, 0x245F58, 49)  // func_001FC090 changed
 FNMAP(0x1FC0A0, 0x245F68, 36)  // CSnd::Release changed
 FNMAP(0x1FC0F0, 0x245FA0, 88)  // func_001FC0F0 similar
 FNMAP(0x1FC110, 0x245FC0, 84)  // func_001FC110 similar
-FNMAP(0x1FC138, 0x245FE8, 98)  // PsndNewVoice similar
+FNMAP(0x1FC138, 0x245FE8, 98)  // PsndNewVoice similar decomp
 FNMAP(0x1FC190, 0x246040, 72)  // func_001FC190 changed
-FNMAP(0x1FC270, 0x246120, 87)  // CSndVoice::Start similar
-FNMAP(0x1FC2E0, 0x246190, 98)  // CSndVoice::SetVoiceVolume similar
-FNMAP(0x1FC380, 0x246230, 98)  // CSndVoice::SetVoicePan similar
+FNMAP(0x1FC270, 0x246120, 87)  // CSndVoice::Start similar decomp
+FNMAP(0x1FC2E0, 0x246190, 98)  // CSndVoice::SetVoiceVolume similar decomp
+FNMAP(0x1FC380, 0x246230, 98)  // CSndVoice::SetVoicePan similar decomp
 FNMAP(0x1FC408, 0x2462B8, 94)  // CSndVoice::AddVoiceFalloff similar
 FNMAP(0x1FC4F8, 0x2463A0, 100)  // func_001FC4F8 identical
-FNMAP(0x1FC510, 0x2463B8, 92)  // CSndVoice::StartIop similar
+FNMAP(0x1FC510, 0x2463B8, 92)  // CSndVoice::StartIop similar decomp
 FNMAP(0x1FC698, 0x246538, 93)  // func_001FC698 similar
 FNMAP(0x1FC6D0, 0x246570, 93)  // func_001FC6D0 similar
 FNMAP(0x1FC708, 0x2465A8, 93)  // func_001FC708 similar
@@ -3947,7 +3970,7 @@ FNMAP(0x1FC740, 0x2465E0, 65)  // CSndVoice::SendChanges changed
 FNMAP(0x1FC878, 0x246708, 88)  // CSndVoice::Requests similar
 FNMAP(0x1FC9A8, 0x246838, 100)  // func_001FC9A8 identical
 FNMAP(0x1FC9B0, 0x246840, 80)  // CSndVoice::Update3D similar
-FNMAP(0x1FCBA8, 0x246A40, 90)  // func_001FCBA8 similar
+FNMAP(0x1FCBA8, 0x246A40, 90)  // func_001FCBA8 similar decomp
 FNMAP(0x1FCC30, 0x246AC8, 96)  // func_001FCC30 similar
 FNMAP(0x1FCC90, 0x246B28, 49)  // func_001FCC90 changed
 FNMAP(0x1FCCA0, 0x246B38, 36)  // CSnd::Release changed
@@ -3958,42 +3981,42 @@ FNMAP(0x1FCEA0, 0x246D08, 55)  // StartupGameSound changed
 FNMAP(0x1FCF70, 0x246DE0, 91)  // ObjectSetCallbackState similar
 FNMAP(0x1FCF88, 0x246DF8, 91)  // func_001FCF88 similar
 FNMAP(0x1FCFA0, 0x246E10, 100)  // func_001FCFA0 identical
-FNMAP(0x1FCFD0, 0x246E40, 100)  // func_001FCFD0 identical
+FNMAP(0x1FCFD0, 0x246E40, 100)  // func_001FCFD0 identical decomp
 FNMAP(0x1FCFF8, 0x246E68, 100)  // func_001FCFF8 identical
-FNMAP(0x1FD028, 0x246E98, 100)  // IsoundFromSfxid identical
+FNMAP(0x1FD028, 0x246E98, 100)  // IsoundFromSfxid identical decomp
 FNMAP(0x1FD070, 0x246EE0, 100)  // func_001FD070 register-renamed
-FNMAP(0x1FD080, 0x246EF0, 97)  // ItrackFromStream similar
+FNMAP(0x1FD080, 0x246EF0, 97)  // ItrackFromStream similar decomp
 FNMAP(0x1FD0C0, 0x246F30, 90)  // func_001FD0C0 similar
 FNMAP(0x1FD0E8, 0x246F58, 85)  // LoadMusicFromBrx similar
-FNMAP(0x1FD5E8, 0x247470, 92)  // LoadSoundBank similar
+FNMAP(0x1FD5E8, 0x247470, 92)  // LoadSoundBank similar decomp
 FNMAP(0x1FD700, 0x247650, 65)  // ResetSoundMgr changed
 FNMAP(0x1FD830, 0x247728, 67)  // UpdateSoundMgr changed
-FNMAP(0x1FDA48, 0x2479C8, 82)  // func_001FDA48 similar
-FNMAP(0x1FDBA8, 0x247B38, 98)  // func_001FDBA8 similar
+FNMAP(0x1FDA48, 0x2479C8, 82)  // UpdateMicNoise similar
+FNMAP(0x1FDBA8, 0x247B38, 98)  // func_001FDBA8 similar decomp
 FNMAP(0x1FDC08, 0x247B98, 65)  // UpdateStemWeights changed
 FNMAP(0x1FDEC0, 0x247EC0, 100)  // func_001FDEC0 identical
-FNMAP(0x1FDEC8, 0x247EC8, 70)  // UpdateDialogEvents changed
-FNMAP(0x1FE0E8, 0x2480C8, 90)  // FireDialogEvent similar
-FNMAP(0x1FE150, 0x248130, 93)  // PsndPushMusic similar
+FNMAP(0x1FDEC8, 0x247EC8, 80)  // UpdateDialogEvents changed decomp
+FNMAP(0x1FE0E8, 0x2480C8, 90)  // FireDialogEvent similar decomp
+FNMAP(0x1FE150, 0x248130, 93)  // PsndPushMusic similar decomp
 FNMAP(0x1FE310, 0x2482F0, 87)  // PopMusic similar
-FNMAP(0x1FE3F8, 0x2483D8, 94)  // TMusicTop similar
+FNMAP(0x1FE3F8, 0x2483D8, 94)  // TMusicTop similar decomp
 FNMAP(0x1FE478, 0x248458, 79)  // RefTakeMusic similar
-FNMAP(0x1FE5B8, 0x248598, 95)  // SetSoundMgrFlags similar
+FNMAP(0x1FE5B8, 0x248598, 95)  // SetSoundMgrFlags similar decomp
 FNMAP(0x1FE5E0, 0x2485C0, 100)  // func_001FE5E0 identical
 FNMAP(0x1FE5F0, 0x2485D8, 68)  // PsndStartDialog changed
-FNMAP(0x1FE738, 0x248740, 55)  // StopDialog changed
+FNMAP(0x1FE738, 0x248740, 80)  // StopDialog changed decomp
 FNMAP(0x1FE848, 0x248858, 90)  // FDialogPlaying similar
-FNMAP(0x1FE888, 0x248898, 84)  // TDialog similar
+FNMAP(0x1FE888, 0x248898, 84)  // TDialog similar decomp
 FNMAP(0x1FE990, 0x2489A0, 49)  // IvoiceFromTarget changed
-FNMAP(0x1FE9C8, 0x2489E0, 100)  // SetSoundPlaybackMode identical
+FNMAP(0x1FE9C8, 0x2489E0, 100)  // SetSoundPlaybackMode identical decomp
 FNMAP(0x1FE9F8, 0x248A10, 88)  // SetSoundMasterVolume similar
 FNMAP(0x1FEA60, 0x248A78, 50)  // SetSoundChannelVolume changed
 FNMAP(0x1FEDF0, 0x248DF8, 73)  // ResetSoundVolumes changed
-FNMAP(0x1FEE90, 0x248EC0, 100)  // ObjectAddCounter5C identical
-FNMAP(0x1FEEA0, 0x248ED0, 100)  // ObjectRemoveCounter5C identical
-FNMAP(0x1FEEB0, 0x248EE0, 100)  // ObjectAddCounter60 identical
-FNMAP(0x1FEEC0, 0x248EF0, 100)  // ObjectRemoveCounter60 identical
-FNMAP(0x1FEED0, 0x248F00, 90)  // StepSoundMood similar
+FNMAP(0x1FEE90, 0x248EC0, 100)  // ObjectAddCounter5C identical decomp
+FNMAP(0x1FEEA0, 0x248ED0, 100)  // ObjectRemoveCounter5C identical decomp
+FNMAP(0x1FEEB0, 0x248EE0, 100)  // ObjectAddCounter60 identical decomp
+FNMAP(0x1FEEC0, 0x248EF0, 100)  // ObjectRemoveCounter60 identical decomp
+FNMAP(0x1FEED0, 0x248F00, 90)  // StepSoundMood similar decomp
 FNMAP(0x1FF108, 0x249128, 59)  // func_001FF108 changed
 FNMAP(0x1FF188, 0x2491A0, 57)  // func_001FF188 changed
 FNMAP(0x1FF378, 0x2492F8, 100)  // func_001FF378 identical
@@ -4009,51 +4032,51 @@ FNMAP(0x1FF7E8, 0x249980, 94)  // StartupSwSplice similar
 FNMAP(0x1FF828, 0x2499C0, 49)  // ShutdownSwSplice changed
 FNMAP(0x1FF830, 0x2499C8, 95)  // func_001FF830 similar
 FNMAP(0x1FF858, 0x2499F0, 50)  // LoadSwSpliceFromBrx changed
-FNMAP(0x1FFA40, 0x249B78, 70)  // func_001FFA40 changed
+FNMAP(0x1FFA40, 0x249B78, 80)  // func_001FFA40 changed decomp
 FNMAP(0x1FFBA0, 0x249BA0, 80)  // func_001FFBA0 similar
 FNMAP(0x1FFCD8, 0x249CD8, 100)  // func_001FFCD8 identical
-FNMAP(0x1FFCF8, 0x249CF8, 91)  // EopidFromOptid similar
-FNMAP(0x1FFD98, 0x249D98, 90)  // RefSoundObjectOption similar
-FNMAP(0x200598, 0x24A588, 97)  // func_00200598 similar
+FNMAP(0x1FFCF8, 0x249CF8, 91)  // EopidFromOptid similar decomp
+FNMAP(0x1FFD98, 0x249D98, 90)  // RefSoundObjectOption similar decomp
+FNMAP(0x200598, 0x24A588, 97)  // func_00200598 similar decomp
 FNMAP(0x200BA0, 0x24AB90, 94)  // RefSoundObjectOption similar
 FNMAP(0x200C28, 0x24AC18, 95)  // RefSetOption__FP5BASICiP4CRef similar
 FNMAP(0x200CA8, 0x24AC98, 98)  // RefAddOption__FP5BASICiP4CRef similar
 FNMAP(0x200D10, 0x24AD00, 100)  // RefEnsureOption__FP5BASICiP4CRef identical
 FNMAP(0x200DA0, 0x24AD90, 64)  // func_00200DA0 changed
 FNMAP(0x200F58, 0x24AEF8, 64)  // Paris_Function_00200F58 changed
-FNMAP(0x201110, 0x24B068, 92)  // func_00201110 similar
+FNMAP(0x201110, 0x24B068, 92)  // func_00201110 similar decomp
 FNMAP(0x201360, 0x24B2B8, 100)  // RefSetArgsFromSplice__FiP4CRefP4OTYPe identical
-FNMAP(0x2013D8, 0x24B330, 67)  // func_002013D8 changed
+FNMAP(0x2013D8, 0x24B330, 80)  // func_002013D8 changed decomp
 FNMAP(0x2014C8, 0x24B420, 80)  // func_002014C8 similar
 FNMAP(0x201600, 0x24B558, 100)  // func_00201600 identical
 FNMAP(0x201620, 0x24B578, 80)  // LoadSprBuf__Fie similar
-FNMAP(0x2017A0, 0x24B708, 71)  // SaveSprBuf__FPve changed
-FNMAP(0x201998, 0x24B8E8, 100)  // func_00201998 identical
+FNMAP(0x2017A0, 0x24B708, 80)  // SaveSprBuf__FPve changed decomp
+FNMAP(0x201998, 0x24B8E8, 100)  // func_00201998 identical decomp
 FNMAP(0x2019F0, 0x24B940, 80)  // func_002019F0 similar
 FNMAP(0x201D58, 0x24BC50, 100)  // func_00201D58 identical
 FNMAP(0x201D78, 0x24BC70, 95)  // PostLoadPhotoPrompt similar
 FNMAP(0x201DC8, 0x24BCC0, 71)  // PostLoadPhotoPrompt changed
 FNMAP(0x201E88, 0x24BD80, 60)  // Linked changed
 FNMAP(0x201F00, 0x24BDF8, 49)  // Linked changed
-FNMAP(0x201F90, 0x24BE88, 56)  // Volume changed
+FNMAP(0x201F90, 0x24BE88, 80)  // Volume changed decomp
 FNMAP(0x202030, 0x24BF20, 49)  // List changed
 FNMAP(0x2020C8, 0x24BFB0, 51)  // DistanceModels changed
-FNMAP(0x2021F8, 0x24C118, 61)  // ListMarks changed
+FNMAP(0x2021F8, 0x24C118, 80)  // ListMarks changed decomp
 FNMAP(0x2022A0, 0x24C1B0, 49)  // func_002022A0 changed
 FNMAP(0x2022D8, 0x24C1E8, 49)  // Volume changed
 FNMAP(0x202350, 0x24C260, 49)  // Visibility changed
 FNMAP(0x202378, 0x24C288, 80)  // Visibility similar
 FNMAP(0x202540, 0x24C478, 50)  // Pick changed
-FNMAP(0x2026F8, 0x24C668, 93)  // StrPhotoScript similar
-FNMAP(0x202730, 0x24C6A0, 93)  // StrPhotoScript similar
-FNMAP(0x202768, 0x24C6D8, 73)  // SetPhotoPromptState changed
-FNMAP(0x202D38, 0x24CCB0, 75)  // UpdatePhotoPrompt changed
-FNMAP(0x203568, 0x24D4B8, 71)  // Target changed
-FNMAP(0x2035A8, 0x24D4F8, 68)  // LoadLox12EB78FromBrx changed
+FNMAP(0x2026F8, 0x24C668, 93)  // StrPhotoScript similar decomp
+FNMAP(0x202730, 0x24C6A0, 93)  // StrPhotoScript similar decomp
+FNMAP(0x202768, 0x24C6D8, 80)  // SetPhotoPromptState changed decomp
+FNMAP(0x202D38, 0x24CCB0, 80)  // UpdatePhotoPrompt changed decomp
+FNMAP(0x203568, 0x24D4B8, 80)  // Target changed decomp
+FNMAP(0x2035A8, 0x24D4F8, 80)  // LoadLox12EB78FromBrx changed decomp
 FNMAP(0x203638, 0x24D588, 93)  // BossHigh_PostLoadControllerParameters similar
 FNMAP(0x203670, 0x24D5C0, 80)  // OlderHigh3_HandlePlayerReferenceMessage similar
 FNMAP(0x2036E8, 0x24D640, 76)  // OlderHigh2_SetPhotoTargetMessage similar
-FNMAP(0x203758, 0x24D6B0, 82)  // Done similar
+FNMAP(0x203758, 0x24D6B0, 82)  // Done similar decomp
 FNMAP(0x203790, 0x24D6E8, 49)  // Done changed
 FNMAP(0x2037F0, 0x24D750, 80)  // func_002037F0 similar
 FNMAP(0x203928, 0x24D888, 100)  // func_00203928 identical
@@ -4070,7 +4093,7 @@ FNMAP(0x204108, 0x24E2B8, 80)  // UpdateStepPhysMotion changed
 FNMAP(0x2041C0, 0x24E370, 86)  // SetStepPos similar
 FNMAP(0x2041F8, 0x1569D8, 52)  // SetStepRotation changed
 FNMAP(0x204248, 0x24E3F8, 100)  // StepSlot63 identical
-FNMAP(0x204250, 0x24E400, 94)  // OnStepXpNew similar
+FNMAP(0x204250, 0x24E400, 94)  // OnStepXpNew similar decomp
 FNMAP(0x2044B0, 0x24E660, 80)  // OnStepXpUpdate changed
 FNMAP(0x204660, 0x24E878, 49)  // SetGuardHeading changed
 FNMAP(0x2046B0, 0x24E8E8, 80)  // SetStepPhysHeadingToward similar
@@ -4081,9 +4104,9 @@ FNMAP(0x204AC8, 0x24EE30, 50)  // AddStepFloorXps changed
 FNMAP(0x204C60, 0x24F068, 89)  // SetStepOverlap similar
 FNMAP(0x204CA8, 0x24F0B0, 30)  // ParisClimb_Function_00204CA8 changed
 FNMAP(0x204D48, 0x24F188, 49)  // SetStepPhysScale changed
-FNMAP(0x204DA8, 0x24F1E8, 84)  // SetStepPhysSize similar
-FNMAP(0x204E38, 0x24F278, 100)  // VelActorAnimRoot register-renamed
-FNMAP(0x204ED8, 0x24F318, 100)  // func_00204ED8 register-renamed
+FNMAP(0x204DA8, 0x24F1E8, 84)  // SetStepPhysSize similar decomp
+FNMAP(0x204E38, 0x24F278, 100)  // VelActorAnimRoot register-renamed decomp
+FNMAP(0x204ED8, 0x24F318, 100)  // func_00204ED8 register-renamed decomp
 FNMAP(0x204F78, 0x24F3B8, 71)  // PairActorWith changed
 FNMAP(0x205008, 0x24F470, 63)  // AddActorLineXps changed
 FNMAP(0x2052E0, 0x24F6F8, 31)  // TeleportActor changed
@@ -4091,7 +4114,7 @@ FNMAP(0x205458, 0x1F4AD0, 49)  // PjobFind changed
 FNMAP(0x205478, 0x24F7C8, 54)  // func_00205478 changed
 FNMAP(0x205588, 0x24F8C0, 50)  // Round4_ReleaseStateCounters changed
 FNMAP(0x205670, 0x24F9A0, 70)  // HitStepSupport changed
-FNMAP(0x2057E8, 0x24FB00, 49)  // HitStepSupport changed
+FNMAP(0x2057E8, 0x24FB00, 80)  // HitStepSupport changed decomp
 FNMAP(0x205D10, 0x2502E8, 100)  // func_00205D10 identical
 FNMAP(0x205D18, 0x2506C8, 80)  // func_00205D18 similar
 FNMAP(0x205E50, 0x250800, 100)  // func_00205E50 identical
@@ -4101,26 +4124,27 @@ FNMAP(0x206100, 0x250B78, 67)  // func_00206100 changed
 FNMAP(0x206170, 0x1FC768, 77)  // func_00206170 similar
 FNMAP(0x2061D8, 0x250BD8, 70)  // PostLoadGuard changed
 FNMAP(0x206378, 0x250D58, 49)  // func_00206378 changed
-FNMAP(0x206380, 0x250D60, 84)  // OverlapKindGuard similar
+FNMAP(0x206380, 0x250D60, 84)  // OverlapKindGuard similar decomp
 FNMAP(0x206518, 0x250E38, 50)  // ResetGuard changed
 FNMAP(0x206748, 0x251000, 50)  // DetachGuardSlot27 changed
 FNMAP(0x2068D8, 0x28A838, 49)  // FUN_00148910__FPfT0 similar
 FNMAP(0x206EB0, 0x2513D0, 49)  // FGuardModeAllowed changed
 FNMAP(0x207030, 0x2514D8, 48)  // SetGuardMode changed
-FNMAP(0x207288, 0x2517C0, 72)  // UpdateGuardTimedMode changed
+FNMAP(0x207288, 0x2517C0, 80)  // UpdateGuardTimedMode changed decomp
 FNMAP(0x207350, 0x251880, 50)  // UpdateGuard changed
 FNMAP(0x207598, 0x252408, 79)  // FGuardBusy similar
 FNMAP(0x2075D0, 0x252440, 70)  // HandleGuardMessage changed
 FNMAP(0x207690, 0x252508, 50)  // func_00207690 changed
 FNMAP(0x2079A0, 0x2529F8, 49)  // OnGuardUnregistered changed
 FNMAP(0x2079E0, 0x252A78, 74)  // OnGuardRegistered changed
+FNMAP(0x207AA0, 0x252C48, 80)  // func_00207AA0 changed decomp
 FNMAP(0x207B10, 0x252D80, 62)  // func_00207B10 changed
 FNMAP(0x207B70, 0x253468, 65)  // SetGuardKinde changed
 FNMAP(0x207BC8, 0x2534C0, 80)  // SetGuardKinde similar
 FNMAP(0x207C48, 0x253540, 67)  // SetGuardKind3 changed
 FNMAP(0x207CF8, 0x2535F0, 73)  // SetGuardKind3 changed
-FNMAP(0x207EB8, 0x253690, 100)  // SetArrayKindes identical
-FNMAP(0x207F50, 0x253728, 92)  // func_00207F50 similar
+FNMAP(0x207EB8, 0x253690, 100)  // SetArrayKindes identical decomp
+FNMAP(0x207F50, 0x253728, 92)  // func_00207F50 similar decomp
 FNMAP(0x207FF8, 0x2537D0, 80)  // Paris_Function_00207FF8 similar
 FNMAP(0x208018, 0x2537F0, 80)  // func_00208018 similar
 FNMAP(0x208038, 0x253810, 80)  // Paris_Function_00208038 similar
@@ -4131,7 +4155,7 @@ FNMAP(0x2080A0, 0x253878, 100)  // func_002080A0 identical
 FNMAP(0x2080F0, 0x2538C8, 81)  // func_002080F0 similar
 FNMAP(0x208178, 0x253950, 100)  // func_00208178 identical
 FNMAP(0x2081C8, 0x2539A0, 81)  // func_002081C8 similar
-FNMAP(0x208208, 0x2539E0, 97)  // func_00208208 similar
+FNMAP(0x208208, 0x2539E0, 97)  // func_00208208 similar decomp
 FNMAP(0x208250, 0x253A28, 80)  // func_00208250 similar
 FNMAP(0x208538, 0x2541F0, 49)  // CompletionSetState390 changed
 FNMAP(0x208540, 0x2541F8, 82)  // SetGuardPursued similar
@@ -4161,25 +4185,25 @@ FNMAP(0x209E88, 0x255908, 74)  // CarryGuardHeld changed
 FNMAP(0x209EE0, 0x255960, 67)  // ReleaseGuardHeld changed
 FNMAP(0x209FB8, 0x255A40, 74)  // ThrowGuardHeld changed
 FNMAP(0x20A010, 0x255A98, 49)  // func_0020A010 similar
-FNMAP(0x20A058, 0x255B28, 87)  // func_0020A058 similar
+FNMAP(0x20A058, 0x255B28, 87)  // func_0020A058 similar decomp
 FNMAP(0x20A100, 0x255BD0, 73)  // func_0020A100 changed
 FNMAP(0x20A168, 0x255C38, 79)  // NCompareNoises similar
 FNMAP(0x20A408, 0x256090, 74)  // PloGuardInterest changed
-FNMAP(0x20A540, 0x2561C0, 63)  // SetGuardPatrol changed
-FNMAP(0x20A5F8, 0x256278, 98)  // func_0020A5F8 similar
-FNMAP(0x20A658, 0x2562D8, 49)  // Paris_Function_0020A658 changed
-FNMAP(0x20A730, 0x256410, 100)  // AddTargetrecGuard identical
+FNMAP(0x20A540, 0x2561C0, 80)  // SetGuardPatrol changed decomp
+FNMAP(0x20A5F8, 0x256278, 98)  // func_0020A5F8 similar decomp
+FNMAP(0x20A658, 0x2562D8, 80)  // Paris_Function_0020A658 changed decomp
+FNMAP(0x20A730, 0x256410, 100)  // AddTargetrecGuard identical decomp
 FNMAP(0x20A790, 0x256470, 88)  // RemoveTargetrecGuard similar
 FNMAP(0x20A7E0, 0x2564C8, 92)  // FTargetrecExpired similar
 FNMAP(0x20A818, 0x256500, 49)  // FTargetrecAllows changed
 FNMAP(0x20A9A8, 0x2566F0, 47)  // SetTargetrecTimer changed
 FNMAP(0x20AA40, 0x256720, 77)  // FnAddGuardAction similar
 FNMAP(0x20AA78, 0x256758, 96)  // FnAddGuardAction similar
-FNMAP(0x20AAA8, 0x256788, 50)  // func_0020AAA8 changed
+FNMAP(0x20AAA8, 0x256788, 80)  // func_0020AAA8 changed decomp
 FNMAP(0x20AB68, 0x256828, 80)  // SetGuardResponse similar
 FNMAP(0x20AC28, 0x2568E8, 74)  // SetGuardActionAim changed
 FNMAP(0x20ACC0, 0x256980, 56)  // UpdateGuardActionAim changed
-FNMAP(0x20AD38, 0x2569F0, 73)  // func_0020AD38 changed
+FNMAP(0x20AD38, 0x2569F0, 80)  // func_0020AD38 changed decomp
 FNMAP(0x20ADE8, 0x256AA0, 96)  // Paris_Function_0020ADE8 similar
 FNMAP(0x20AE18, 0x256AD0, 52)  // PostLoadGuardAction changed
 FNMAP(0x20AF08, 0x256BB0, 49)  // func_0020AF08 similar
@@ -4192,15 +4216,15 @@ FNMAP(0x20B210, 0x256DF0, 59)  // DetachGuardMove changed
 FNMAP(0x20B3D0, 0x161B78, 46)  // NGuardStatus77 changed
 FNMAP(0x20B438, 0x2571F0, 81)  // LockGuardActivation similar
 FNMAP(0x20B478, 0x257230, 80)  // LockGuardActivation similar
-FNMAP(0x20B4A8, 0x257260, 91)  // func_0020B4A8 similar
-FNMAP(0x20B500, 0x2572B8, 84)  // PostLoadGuardManager similar
+FNMAP(0x20B4A8, 0x257260, 91)  // func_0020B4A8 similar decomp
+FNMAP(0x20B500, 0x2572B8, 84)  // PostLoadGuardManager similar decomp
 FNMAP(0x20B590, 0x257348, 50)  // UpdateGuardManager changed
 FNMAP(0x20B820, 0x258910, 100)  // func_0020B820 identical
-FNMAP(0x20B840, 0x258930, 100)  // InitGait identical
+FNMAP(0x20B840, 0x258930, 100)  // InitGait identical decomp
 FNMAP(0x20B868, 0x258A10, 74)  // BindGait changed
-FNMAP(0x20BAD8, 0x258C70, 76)  // VecGaitVelocity similar
+FNMAP(0x20BAD8, 0x258C70, 80)  // VecGaitVelocity similar decomp
 FNMAP(0x20BB48, 0x258CE0, 49)  // func_0020BB48 changed
-FNMAP(0x20BB58, 0x258CF0, 97)  // SetGaitMix similar
+FNMAP(0x20BB58, 0x258CF0, 97)  // SetGaitMix similar decomp
 FNMAP(0x20BC08, 0x258DA0, 69)  // UpdateGaitFeet changed
 FNMAP(0x20BD68, 0x258F28, 49)  // ResetGaitFeet similar
 FNMAP(0x20C010, 0x259590, 88)  // Pk2Resolve similar
@@ -4210,7 +4234,7 @@ FNMAP(0x20C7D8, 0x2592A0, 49)  // InvalidateShadowVifs__FP6SHADOW changed
 FNMAP(0x20C7E0, 0x259330, 63)  // ResolveK3 changed
 FNMAP(0x20C948, 0x2594E0, 80)  // StartK3 similar
 FNMAP(0x20CA20, 0x2595B0, 84)  // Paris_Function_0020CA20 similar
-FNMAP(0x20CA48, 0x2595D8, 97)  // StopK3 similar
+FNMAP(0x20CA48, 0x2595D8, 97)  // StopK3 similar decomp
 FNMAP(0x20CA98, 0x259628, 49)  // FK3Done similar
 FNMAP(0x20CB28, 0x259678, 49)  // SelectK3 changed
 FNMAP(0x20CCD0, 0x25A048, 80)  // func_0020CCD0 similar
@@ -4219,7 +4243,7 @@ FNMAP(0x20CE40, 0x189118, 49)  // func_0020CE40 similar
 FNMAP(0x20CE70, 0x259A40, 68)  // UpdateWatchA changed
 FNMAP(0x20CFC0, 0x259B78, 83)  // func_0020CFC0 similar
 FNMAP(0x20D178, 0x259D60, 49)  // ResetMessageState changed
-FNMAP(0x20D1C8, 0x259D80, 96)  // func_0020D1C8 similar
+FNMAP(0x20D1C8, 0x259D80, 96)  // func_0020D1C8 similar decomp
 FNMAP(0x20D1F8, 0x259DB0, 80)  // UpdateWatchB similar
 FNMAP(0x20D3C0, 0x259F88, 37)  // SetWatchB changed
 FNMAP(0x20D460, 0x25A030, 100)  // ParisClimb_Function_0020D460 identical
@@ -4229,28 +4253,29 @@ FNMAP(0x20D5B0, 0x25A608, 100)  // func_0020D5B0 identical
 FNMAP(0x20D618, 0x25A288, 97)  // _$_5OSTRM similar
 FNMAP(0x20D660, 0x25A2D0, 80)  // CbWrite__5OSTRMPvi similar
 FNMAP(0x20D798, 0x25A400, 56)  // Flush__5OSTRM changed
+FNMAP(0x20D9D0, 0x25A628, 80)  // func_0020D9D0 changed decomp
 FNMAP(0x20DF80, 0x25AD70, 90)  // RestoreChkmgrFromCheckpoint__FP6CHKMGR similar
 FNMAP(0x20E040, 0x25AE28, 49)  // FTransitionBusy changed
 FNMAP(0x20E068, 0x25AE60, 49)  // UnloadWorld changed
 FNMAP(0x20E180, 0x25AFD8, 50)  // func_0020E180 changed
-FNMAP(0x20E2B0, 0x25B0A8, 88)  // func_0020E2B0 similar
+FNMAP(0x20E2B0, 0x25B0A8, 88)  // func_0020E2B0 similar decomp
 FNMAP(0x20E338, 0x25B130, 68)  // func_0020E338 changed
 FNMAP(0x20E3C0, 0x25B1B8, 50)  // func_0020E3C0 changed
 FNMAP(0x20E740, 0x25B860, 60)  // StartSw changed
 FNMAP(0x20E890, 0x25C2A8, 50)  // PswUpdateTransition changed
 FNMAP(0x20EFC0, 0x1A93C8, 60)  // PauseGame changed
 FNMAP(0x20F030, 0x1A9420, 49)  // ResumeGame changed
-FNMAP(0x20F5D0, 0x25C930, 100)  // LoadBulkHeaderFromBrx identical
-FNMAP(0x20F640, 0x25C9A0, 97)  // LoadBulkFromBrx similar
+FNMAP(0x20F5D0, 0x25C930, 100)  // LoadBulkHeaderFromBrx identical decomp
+FNMAP(0x20F640, 0x25C9A0, 97)  // LoadBulkFromBrx similar decomp
 FNMAP(0x20F710, 0x25CA70, 52)  // func_0020F710 changed
 FNMAP(0x20F948, 0x25CDD0, 84)  // NOverlapKind similar
 FNMAP(0x20FA10, 0x25CE90, 49)  // func_0020FA10 similar
 FNMAP(0x20FA50, 0x24FC50, 49)  // func_0020FA50 similar
-FNMAP(0x20FAA0, 0x25CF18, 88)  // AsolidCm similar
-FNMAP(0x20FC60, 0x25D0D8, 88)  // Paris_Function_0020FC60 similar
+FNMAP(0x20FAA0, 0x25CF18, 88)  // AsolidCm similar decomp
+FNMAP(0x20FC60, 0x25D0D8, 88)  // Paris_Function_0020FC60 similar decomp
 FNMAP(0x20FDC8, 0x25D240, 73)  // func_0020FDC8 changed
 FNMAP(0x20FEC0, 0x25D350, 79)  // FAddRsmg__FP4RSMGiPii3OIDN24 similar
-FNMAP(0x20FF70, 0x25D3F8, 100)  // RunDockRsmgs identical
+FNMAP(0x20FF70, 0x25D3F8, 100)  // RunDockRsmgs identical decomp
 FNMAP(0x20FFF0, 0x25D478, 91)  // RunDockRsmgs similar
 FNMAP(0x210100, 0x25D5C8, 62)  // func_00210100 changed
 FNMAP(0x210120, 0x25D5A8, 62)  // func_00210120 changed
@@ -4261,9 +4286,9 @@ FNMAP(0x210338, 0x25D740, 97)  // AddRemoveByOid similar
 FNMAP(0x210408, 0x25D810, 97)  // PloFindRunEvent similar
 FNMAP(0x2104A0, 0x25D8A8, 97)  // PloFindRunEvent similar
 FNMAP(0x210538, 0x25D940, 64)  // PloFindRunEvent changed
-FNMAP(0x210678, 0x25DA70, 95)  // SetEyesClosedOf similar
+FNMAP(0x210678, 0x25DA70, 95)  // SetEyesClosedOf similar decomp
 FNMAP(0x210740, 0x25DB38, 80)  // GSoundPitchOffset similar
-FNMAP(0x2108E8, 0x25DCA8, 100)  // StopAsegaSound identical
+FNMAP(0x2108E8, 0x25DCA8, 100)  // StopAsegaSound identical decomp
 FNMAP(0x210940, 0x25DD00, 82)  // func_00210940 similar
 FNMAP(0x210990, 0x25E070, 49)  // Paris_Function_00210990 similar
 FNMAP(0x2109D0, 0x25E098, 68)  // OlderHigh3_FindWorldRecordIndex changed
@@ -4296,14 +4321,14 @@ FNMAP(0x211C58, 0x260220, 72)  // func_00211C58 changed
 FNMAP(0x211E40, 0x258F38, 50)  // Paris_Function_00211E40 changed
 FNMAP(0x211E70, 0x260270, 70)  // CompletionAppend110 changed
 FNMAP(0x211E98, 0x260298, 60)  // Paris_Function_00211E98 changed
-FNMAP(0x211EC0, 0x2602C0, 51)  // Paris_Function_00211EC0 changed
+FNMAP(0x211EC0, 0x2602C0, 80)  // Paris_Function_00211EC0 changed decomp
 FNMAP(0x211F90, 0x260398, 63)  // UpdateTaskCounter changed
-FNMAP(0x2121C8, 0x260738, 75)  // FScreenObjDone similar
-FNMAP(0x2121E8, 0x260758, 50)  // FSpriteAnimPlaying changed
+FNMAP(0x2121C8, 0x260738, 80)  // FScreenObjDone similar decomp
+FNMAP(0x2121E8, 0x260758, 80)  // FSpriteAnimPlaying changed decomp
 FNMAP(0x212298, 0x260810, 69)  // LoadScreenObjFromBrx changed
 FNMAP(0x2123C8, 0x260930, 47)  // OriginOfScreen changed
 FNMAP(0x2124F0, 0x260A60, 80)  // OldDialogueLoadResources similar
-FNMAP(0x212780, 0x260CC8, 61)  // OlderHigh_ResetClimbRecord changed
+FNMAP(0x212780, 0x260CC8, 80)  // OlderHigh_ResetClimbRecord changed decomp
 FNMAP(0x2127C8, 0x260D10, 48)  // FreshHelpers_DialogueResourcesIdle changed
 FNMAP(0x212828, 0x260D78, 82)  // func_00212828 similar
 FNMAP(0x212880, 0x260DD0, 64)  // Paris_Function_00212880 changed
@@ -4311,22 +4336,22 @@ FNMAP(0x2128E8, 0x260F18, 50)  // func_002128E8 changed
 FNMAP(0x2129E8, 0x260FE8, 91)  // func_002129E8 similar
 FNMAP(0x212A30, 0x261030, 75)  // RefreshScreenObj similar
 FNMAP(0x212A50, 0x261050, 62)  // SetTimerTimers__FP5TIMER6TIMERS changed
-FNMAP(0x212A70, 0x261070, 50)  // SetState changed
+FNMAP(0x212A70, 0x261070, 80)  // SetState changed decomp
 FNMAP(0x212C50, 0x261250, 69)  // Update changed
 FNMAP(0x212E40, 0x261580, 49)  // func_00212E40 changed
 FNMAP(0x212F80, 0x2616B8, 50)  // SetScreenObjTime changed
 FNMAP(0x2132D0, 0x261BD0, 49)  // FVisible changed
-FNMAP(0x213300, 0x261C08, 64)  // func_00213300 changed
+FNMAP(0x213300, 0x261C08, 80)  // func_00213300 changed decomp
 FNMAP(0x213830, 0x262188, 80)  // StartPart similar
 FNMAP(0x213898, 0x2621F0, 79)  // Stop similar
-FNMAP(0x213928, 0x262280, 50)  // func_00213928 changed
-FNMAP(0x213A08, 0x262370, 66)  // ActivateAnimationByIdentity changed
-FNMAP(0x213B00, 0x262450, 50)  // func_00213B00 changed
-FNMAP(0x213BD8, 0x262540, 62)  // OlderHigh3_UpdateNamedNestedFrame changed
+FNMAP(0x213928, 0x262280, 80)  // func_00213928 changed decomp
+FNMAP(0x213A08, 0x262370, 80)  // ActivateAnimationByIdentity changed decomp
+FNMAP(0x213B00, 0x262450, 80)  // func_00213B00 changed decomp
+FNMAP(0x213BD8, 0x262540, 80)  // OlderHigh3_UpdateNamedNestedFrame changed decomp
 FNMAP(0x213C68, 0x262848, 76)  // func_00213C68 similar
 FNMAP(0x213CD8, 0x2628B8, 69)  // SetAnimationMatrixByIdentity changed
-FNMAP(0x213DB0, 0x262B60, 100)  // SelectScreenObjPartHandle identical
-FNMAP(0x213E20, 0x262BD0, 80)  // func_00213E20 similar
+FNMAP(0x213DB0, 0x262B60, 100)  // SelectScreenObjPartHandle identical decomp
+FNMAP(0x213E20, 0x262BD0, 80)  // func_00213E20 similar decomp
 FNMAP(0x213F70, 0x262D28, 52)  // func_00213F70 changed
 FNMAP(0x214100, 0x262E98, 58)  // CScreenPlayer::FRestartAt changed
 FNMAP(0x2142B0, 0x263028, 62)  // FRootHasPart changed
@@ -4338,30 +4363,30 @@ FNMAP(0x2156B8, 0x2643F8, 97)  // func_002156B8 similar
 FNMAP(0x215730, 0x264478, 83)  // func_00215730 similar
 FNMAP(0x2158C0, 0x2646F8, 62)  // func_002158C0 changed
 FNMAP(0x215960, 0x2647A0, 81)  // func_00215960 similar
-FNMAP(0x2159E0, 0x264818, 87)  // func_002159E0 similar
+FNMAP(0x2159E0, 0x264818, 87)  // func_002159E0 similar decomp
 FNMAP(0x215A50, 0x265D68, 63)  // PglyffFromCh__8CFontBrxc changed
-FNMAP(0x215CA8, 0x264B18, 100)  // func_00215CA8 identical
-FNMAP(0x215D00, 0x264B70, 100)  // func_00215D00 identical
+FNMAP(0x215CA8, 0x264B18, 100)  // func_00215CA8 identical decomp
+FNMAP(0x215D00, 0x264B70, 100)  // func_00215D00 identical decomp
 FNMAP(0x215D40, 0x264BB0, 50)  // func_00215D40 changed
-FNMAP(0x215E30, 0x264CB0, 90)  // func_00215E30 similar
+FNMAP(0x215E30, 0x264CB0, 90)  // func_00215E30 similar decomp
 FNMAP(0x215ED8, 0x264EB0, 82)  // DxTextUi similar
 FNMAP(0x2160D8, 0x264F10, 91)  // func_002160D8 similar
 FNMAP(0x2162D8, 0x265308, 49)  // CHud::DrawText changed
 FNMAP(0x2163B0, 0x265480, 50)  // OldSatelliteSubmitText changed
-FNMAP(0x2166B0, 0x2655C0, 99)  // CHud::DrawText similar
+FNMAP(0x2166B0, 0x2655C0, 99)  // CHud::DrawText similar decomp
 FNMAP(0x216B40, 0x265DE0, 50)  // func_00216B40 changed
 FNMAP(0x216B80, 0x264E78, 49)  // func_00216B80 changed
-FNMAP(0x217058, 0x266240, 77)  // func_00217058 similar
-FNMAP(0x217298, 0x266478, 75)  // func_00217298 changed
+FNMAP(0x217058, 0x266240, 80)  // func_00217058 similar decomp
+FNMAP(0x217298, 0x266478, 80)  // func_00217298 changed decomp
 FNMAP(0x2174C8, 0x2666A0, 49)  // StateOfSlot changed
 FNMAP(0x2177E0, 0x266A00, 43)  // CHud::DrawQuad changed
 FNMAP(0x217B98, 0x266F18, 49)  // ClearDescriptorInto_217BA0 changed
-FNMAP(0x217BA0, 0x266F20, 54)  // func_00217BA0 changed
-FNMAP(0x217C20, 0x266FA0, 100)  // func_00217C20 register-renamed
+FNMAP(0x217BA0, 0x266F20, 80)  // func_00217BA0 changed decomp
+FNMAP(0x217C20, 0x266FA0, 100)  // func_00217C20 register-renamed decomp
 FNMAP(0x217CA8, 0x267028, 80)  // CScreenPlayer::IpartFirstForNested similar
 FNMAP(0x217D98, 0x267110, 98)  // func_00217D98 similar
-FNMAP(0x217EF8, 0x267270, 65)  // func_00217EF8 changed
-FNMAP(0x217F38, 0x2672B8, 54)  // func_00217F38 changed
+FNMAP(0x217EF8, 0x267270, 80)  // func_00217EF8 changed decomp
+FNMAP(0x217F38, 0x2672B8, 80)  // func_00217F38 changed decomp
 FNMAP(0x217FB8, 0x267860, 49)  // func_00217FB8 similar
 FNMAP(0x217FE0, 0x267370, 87)  // func_00217FE0 similar
 FNMAP(0x218038, 0x2673D0, 100)  // CScreenPlayer::SetPartTime identical
@@ -4375,80 +4400,80 @@ FNMAP(0x218710, 0x267938, 90)  // func_00218710 similar
 FNMAP(0x218738, 0x267960, 49)  // func_00218738 similar
 FNMAP(0x218748, 0x267970, 100)  // func_00218748 register-renamed
 FNMAP(0x218790, 0x2679B8, 49)  // CombineColors changed
-FNMAP(0x2188B0, 0x267AE8, 70)  // func_002188B0 changed
+FNMAP(0x2188B0, 0x267AE8, 80)  // func_002188B0 changed decomp
 FNMAP(0x219348, 0x2685B0, 57)  // func_00219348 changed
 FNMAP(0x219400, 0x2686A0, 60)  // CScreenPlayer::CrossKey changed
-FNMAP(0x219FE0, 0x269418, 65)  // LerpRgba changed
+FNMAP(0x219FE0, 0x269418, 80)  // LerpRgba changed decomp
 FNMAP(0x21A998, 0x269F88, 50)  // func_0021A998 changed
 FNMAP(0x21AA60, 0x26A310, 59)  // func_0021AA60 changed
 FNMAP(0x21BB68, 0x26D450, 49)  // func_0021BB68 similar
 FNMAP(0x21BB88, 0x26E0D0, 83)  // func_0021BB88 similar
 FNMAP(0x21BBD0, 0x26E118, 93)  // OnAddTrail similar
-FNMAP(0x21BC08, 0x26E150, 79)  // Reset similar
+FNMAP(0x21BC08, 0x26E150, 80)  // Reset similar decomp
 FNMAP(0x21BD18, 0x26E268, 80)  // PostLoadTrail changed
-FNMAP(0x21C0D8, 0x26E6F8, 80)  // Update similar
+FNMAP(0x21C0D8, 0x26E6F8, 80)  // Update similar decomp
 FNMAP(0x21C1C8, 0x26E7E8, 57)  // UpdatePhysics changed
-FNMAP(0x21C340, 0x26E9B0, 80)  // UpdateTrailGeometry similar
+FNMAP(0x21C340, 0x26E9B0, 80)  // UpdateTrailGeometry similar decomp
 FNMAP(0x21C5F8, 0x26EC80, 52)  // SetCenters changed
 FNMAP(0x21C6C8, 0x26ED40, 80)  // func_0021C6C8 similar
 FNMAP(0x21C800, 0x26EE78, 100)  // func_0021C800 identical
-FNMAP(0x21C820, 0x26EE98, 100)  // func_0021C820 identical
+FNMAP(0x21C820, 0x26EE98, 100)  // func_0021C820 identical decomp
 FNMAP(0x21C858, 0x26EED0, 80)  // func_0021C858 similar
 FNMAP(0x21C888, 0x26EF10, 80)  // LoadAloChainsFromBrx similar
-FNMAP(0x21CB18, 0x26F190, 65)  // UpdateXfChain changed
+FNMAP(0x21CB18, 0x26F190, 80)  // UpdateXfChain changed decomp
 FNMAP(0x21D258, 0x26BE08, 100)  // func_0021D258 identical
 FNMAP(0x21D498, 0x26F9C0, 80)  // func_0021D498 similar
 FNMAP(0x21D4E0, 0x26F818, 80)  // func_0021D4E0 similar
 FNMAP(0x21D618, 0x26F950, 100)  // func_0021D618 identical
 FNMAP(0x21D638, 0x26FBD0, 79)  // CchParsePchzInt__FPcPi similar
-FNMAP(0x21D6B0, 0x26FC50, 99)  // CchParsePchzTft__FPcP3TFTPPc similar
-FNMAP(0x21D9F0, 0x26FF90, 92)  // WriteTftPchz__FP3TFTP5OSTRMPc similar
-FNMAP(0x21DB38, 0x2700D0, 100)  // FNegTftUl__FP3TFTP2UL identical
-FNMAP(0x21DC18, 0x2701B0, 98)  // UnRadixFromChConversion__Fc similar
-FNMAP(0x21DC70, 0x270208, 72)  // CchAchFromUl__FPciUlUi changed
-FNMAP(0x21DD40, 0x2702E8, 72)  // WriteTftUl__FP3TFTP5OSTRMUl changed
-FNMAP(0x21E048, 0x2705C8, 100)  // ExpFirstFromG__Fd identical
-FNMAP(0x21E0D8, 0x270658, 96)  // func_0021E0D8 similar
-FNMAP(0x21E1B0, 0x270738, 89)  // CchAchFromDouble__FPciP3TFTd similar
-FNMAP(0x21E4B8, 0x270A18, 89)  // WriteTftDouble__FP3TFTP5OSTRMd similar
+FNMAP(0x21D6B0, 0x26FC50, 99)  // CchParsePchzTft__FPcP3TFTPPc similar decomp
+FNMAP(0x21D9F0, 0x26FF90, 92)  // WriteTftPchz__FP3TFTP5OSTRMPc similar decomp
+FNMAP(0x21DB38, 0x2700D0, 100)  // FNegTftUl__FP3TFTP2UL identical decomp
+FNMAP(0x21DC18, 0x2701B0, 98)  // UnRadixFromChConversion__Fc similar decomp
+FNMAP(0x21DC70, 0x270208, 80)  // CchAchFromUl__FPciUlUi changed decomp
+FNMAP(0x21DD40, 0x2702E8, 80)  // WriteTftUl__FP3TFTP5OSTRMUl changed decomp
+FNMAP(0x21E048, 0x2705C8, 100)  // ExpFirstFromG__Fd identical decomp
+FNMAP(0x21E0D8, 0x270658, 96)  // func_0021E0D8 similar decomp
+FNMAP(0x21E1B0, 0x270738, 89)  // CchAchFromDouble__FPciP3TFTd similar decomp
+FNMAP(0x21E4B8, 0x270A18, 89)  // WriteTftDouble__FP3TFTP5OSTRMd similar decomp
 FNMAP(0x21E718, 0x270C70, 86)  // WriteTft__FP3TFTP5OSTRMPPcPci similar
 FNMAP(0x21EAC8, 0x271008, 71)  // CchOstrmPrintf__FP5OSTRMPcT1 changed
 FNMAP(0x21EBB8, 0x271328, 98)  // vprintf similar
-FNMAP(0x21EC18, 0x271388, 100)  // printf identical
+FNMAP(0x21EC18, 0x271388, 100)  // printf identical decomp
 FNMAP(0x21EC60, 0x2713D0, 98)  // vsprintf similar
 FNMAP(0x21ECD8, 0x271448, 97)  // sprintf similar
-FNMAP(0x21ED28, 0x2715F8, 100)  // strlen identical
+FNMAP(0x21ED28, 0x2715F8, 100)  // strlen identical decomp
 FNMAP(0x21ED58, 0x271628, 100)  // strcpy identical
-FNMAP(0x21EDA0, 0x271670, 100)  // strcpy1 identical
+FNMAP(0x21EDA0, 0x271670, 100)  // strcpy1 identical decomp
 FNMAP(0x21EDF8, 0x2716C8, 49)  // func_0021EDF8 similar
 FNMAP(0x21EE28, 0x2718D0, 49)  // ReleaseStackInto_21EE30 changed
-FNMAP(0x21EE30, 0x271978, 79)  // UpperizePchz__FPc similar
+FNMAP(0x21EE30, 0x271978, 80)  // UpperizePchz__FPc similar decomp
 FNMAP(0x21EE78, 0x2719C8, 80)  // func_0021EE78 similar
 FNMAP(0x21EFB0, 0x271B00, 100)  // func_0021EFB0 identical
 FNMAP(0x21EFD0, 0x271B20, 97)  // SemaCreate__Fii similar
 FNMAP(0x21F028, 0x271B80, 100)  // InitCritSect__FP8CRITSECT identical
-FNMAP(0x21F060, 0x271BB8, 89)  // EnterCritSect__FP8CRITSECT similar
+FNMAP(0x21F060, 0x271BB8, 89)  // EnterCritSect__FP8CRITSECT similar decomp
 FNMAP(0x21F0C0, 0x271C10, 100)  // LeaveCritSect identical
 FNMAP(0x21F0F8, 0x2716F8, 100)  // ReleaseStackInto_21F100 identical
 FNMAP(0x21F100, 0x271C58, 100)  // ReleaseStackInto_21F100 identical
 FNMAP(0x21F188, 0x26DF78, 80)  // func_0021F188 similar
 FNMAP(0x21F2C0, 0x26E0B0, 100)  // func_0021F2C0 identical
 FNMAP(0x21F2E0, 0x271E38, 79)  // InitJtThrow similar
-FNMAP(0x21F388, 0x271EE8, 99)  // PostLoadJtThrow similar
+FNMAP(0x21F388, 0x271EE8, 99)  // PostLoadJtThrow similar decomp
 FNMAP(0x21F418, 0x271F78, 60)  // UpdateJtThrow changed
 FNMAP(0x21FB18, 0x2725D0, 93)  // ArcEntry similar
-FNMAP(0x21FB70, 0x272628, 70)  // UpdateJtThrowArc changed
+FNMAP(0x21FB70, 0x272628, 80)  // UpdateJtThrowArc changed decomp
 FNMAP(0x220388, 0x272E68, 47)  // GetJtThrowCpdefi changed
 FNMAP(0x220498, 0x272FB0, 61)  // OverlapKindJtThrow changed
 FNMAP(0x220508, 0x273030, 63)  // SetJtThrowTarget changed
 FNMAP(0x2205A8, 0x2730D8, 49)  // ReleaseJtThrow changed
 FNMAP(0x220BE8, 0x2738C0, 80)  // func_00220BE8 similar
 FNMAP(0x220D20, 0x2739F8, 100)  // func_00220D20 identical
-FNMAP(0x220D40, 0x273A18, 96)  // InitCmeTilt similar
+FNMAP(0x220D40, 0x273A18, 96)  // InitCmeTilt similar decomp
 FNMAP(0x220DD8, 0x273AB0, 73)  // PosCmeFocus changed
 FNMAP(0x220ED0, 0x273BB0, 50)  // func_00220ED0 changed
 FNMAP(0x220F88, 0x290400, 49)  // func_00220F88 changed
-FNMAP(0x220FD0, 0x273CF8, 81)  // LoadZoneFromBrx similar
+FNMAP(0x220FD0, 0x273CF8, 81)  // LoadZoneFromBrx similar decomp
 FNMAP(0x221120, 0x274010, 75)  // func_00221120 similar
 FNMAP(0x2213D8, 0x278D00, 100)  // OnZoneUnregistered identical
 FNMAP(0x221408, 0x274270, 49)  // ConvertZonePos changed
@@ -4470,10 +4495,10 @@ FNMAP(0x223FE0, 0x276E80, 89)  // func_00223FE0 similar
 FNMAP(0x224068, 0x276EC8, 58)  // OnCarryRemove changed
 FNMAP(0x2240B0, 0x277030, 58)  // UpdateCarry changed
 FNMAP(0x224190, 0x277128, 49)  // FAcceptCarryContact changed
-FNMAP(0x2241D8, 0x277188, 86)  // OnCarryMessage similar
+FNMAP(0x2241D8, 0x277188, 86)  // OnCarryMessage similar decomp
 FNMAP(0x224258, 0x277208, 40)  // LandCarry changed
-FNMAP(0x2242E0, 0x2772E8, 91)  // OverlapKindCarry similar
-FNMAP(0x224350, 0x277358, 100)  // OnCarryXpNew identical
+FNMAP(0x2242E0, 0x2772E8, 91)  // OverlapKindCarry similar decomp
+FNMAP(0x224350, 0x277358, 100)  // OnCarryXpNew identical decomp
 FNMAP(0x224380, 0x277388, 60)  // UpdateCarryContacts changed
 FNMAP(0x224508, 0x277510, 53)  // DiscoHigh_00224508 changed
 FNMAP(0x224590, 0x134AB8, 78)  // BentleyClosure_224590 similar
@@ -4487,73 +4512,73 @@ FNMAP(0x224E70, 0x277EB0, 62)  // OlderHigh2_StartBallisticLaunch changed
 FNMAP(0x224EC8, 0x277F20, 53)  // SetCarryStateBase changed
 FNMAP(0x2252E0, 0x2782C0, 93)  // func_002252E0 similar
 FNMAP(0x225300, 0x2782E0, 49)  // UpdateExtractor changed
-FNMAP(0x2255C8, 0x2785E8, 70)  // ApplyExtractorHook changed
+FNMAP(0x2255C8, 0x2785E8, 80)  // ApplyExtractorHook changed decomp
 FNMAP(0x225660, 0x2786A0, 62)  // SetExtractorState changed
 FNMAP(0x225880, 0x2788F0, 80)  // func_00225880 similar
 FNMAP(0x2259B8, 0x278A28, 100)  // func_002259B8 identical
-FNMAP(0x2259D8, 0x27CBE0, 68)  // Paris_Function_002259D8 changed
+FNMAP(0x2259D8, 0x27CBE0, 80)  // Paris_Function_002259D8 changed decomp
 FNMAP(0x225A68, 0x1403F8, 49)  // DetachTrackedTarget similar
-FNMAP(0x225AA8, 0x27CCB0, 84)  // PostLoadTurret similar
+FNMAP(0x225AA8, 0x27CCB0, 84)  // PostLoadTurret similar decomp
 FNMAP(0x225AE8, 0x27CCF0, 49)  // SetTurretFocus changed
 FNMAP(0x225B60, 0x27CD38, 97)  // UpdateTurret similar
 FNMAP(0x225BA0, 0x27CD78, 55)  // UpdateTurretAim changed
 FNMAP(0x225E98, 0x27D0E0, 66)  // UpdateTurretZoom changed
 FNMAP(0x226250, 0x27D4E0, 88)  // UpdateTurretFire similar
 FNMAP(0x226310, 0x27D5A8, 85)  // OverlapKindTurret similar
-FNMAP(0x226370, 0x27D608, 80)  // SetTurretRotate similar
+FNMAP(0x226370, 0x27D608, 80)  // SetTurretRotate similar decomp
 FNMAP(0x2263F8, 0x27D690, 80)  // func_002263F8 similar
 FNMAP(0x226530, 0x27D7C8, 100)  // func_00226530 identical
 FNMAP(0x226550, 0x27D7E8, 50)  // MurrayTeleportPreUpdate changed
-FNMAP(0x2267C0, 0x27DA70, 66)  // func_002267C0 changed
+FNMAP(0x2267C0, 0x27DA70, 80)  // func_002267C0 changed decomp
 FNMAP(0x226960, 0x27DEE0, 80)  // func_00226960 similar
 FNMAP(0x226A98, 0x27E018, 100)  // func_00226A98 identical
 FNMAP(0x226AB8, 0x279C80, 80)  // func_00226AB8 similar
 FNMAP(0x226BF0, 0x279DB8, 100)  // func_00226BF0 identical
 FNMAP(0x226C10, 0x27E190, 85)  // __4VIFS similar
-FNMAP(0x226C58, 0x27E1D8, 75)  // Align__4VIFSi similar
-FNMAP(0x226CA8, 0x27E228, 49)  // AddVifBaseOffset__4VIFSii similar
-FNMAP(0x226CE0, 0x27E260, 100)  // AddVifMscal__4VIFSPv identical
+FNMAP(0x226C58, 0x27E1D8, 80)  // Align__4VIFSi similar decomp
+FNMAP(0x226CA8, 0x27E228, 82)  // AddVifBaseOffset__4VIFSii similar decomp
+FNMAP(0x226CE0, 0x27E260, 100)  // AddVifMscal__4VIFSPv identical decomp
 FNMAP(0x226D10, 0x27E290, 100)  // AddVifFlush__4VIFS identical
 FNMAP(0x226D28, 0x27E2A8, 100)  // AddVifFlusha__4VIFS identical
 FNMAP(0x226D40, 0x27E2C0, 95)  // AddVifStcycl__4VIFSii similar
-FNMAP(0x226D68, 0x27E2E8, 100)  // AddVifStrow__4VIFSP2QW register-renamed
-FNMAP(0x226DD0, 0x27E350, 93)  // AddVifStmask__4VIFSUi similar
-FNMAP(0x226E10, 0x27E3A8, 100)  // CbUnpackSetup__4VIFS3UPKii identical
-FNMAP(0x226E88, 0x27E420, 99)  // UnpackHelper__4VIFS3UPKiiPiPPUi similar
+FNMAP(0x226D68, 0x27E2E8, 100)  // AddVifStrow__4VIFSP2QW register-renamed decomp
+FNMAP(0x226DD0, 0x27E350, 93)  // AddVifStmask__4VIFSUi similar decomp
+FNMAP(0x226E10, 0x27E3A8, 100)  // CbUnpackSetup__4VIFS3UPKii identical decomp
+FNMAP(0x226E88, 0x27E420, 99)  // UnpackHelper__4VIFS3UPKiiPiPPUi similar decomp
 FNMAP(0x226F28, 0x27E4C0, 99)  // AddVifUnpack__4VIFS3UPKiPvi similar
 FNMAP(0x226FD0, 0x27E568, 100)  // AddVifUnpack__4VIFS3UPKiP18CBinaryInputStreami identical
-FNMAP(0x227010, 0x27E5A8, 99)  // AddVifUnpackRefs__4VIFS3UPKiPviPPPv similar
+FNMAP(0x227010, 0x27E5A8, 99)  // AddVifUnpackRefs__4VIFS3UPKiPviPPPv similar decomp
 FNMAP(0x2270C8, 0x27E660, 89)  // AddVifDirect__4VIFSiP2QWi similar
 FNMAP(0x227148, 0x27E6E0, 89)  // AddVifDirectRefs__4VIFSiP2QWi similar
-FNMAP(0x2271C8, 0x27E760, 100)  // AddVifGifs__4VIFSP4GIFS identical
+FNMAP(0x2271C8, 0x27E760, 100)  // AddVifGifs__4VIFSP4GIFS identical decomp
 FNMAP(0x2271F8, 0x27E790, 80)  // func_002271F8 similar
 FNMAP(0x227330, 0x27E8C8, 100)  // func_00227330 identical
 FNMAP(0x227350, 0x27E8E8, 87)  // func_00227350 similar
-FNMAP(0x227380, 0x27E918, 89)  // LoadVolumeFromBrx similar
-FNMAP(0x2273F0, 0x27E988, 95)  // func_002273F0 similar
+FNMAP(0x227380, 0x27E918, 89)  // LoadVolumeFromBrx similar decomp
+FNMAP(0x2273F0, 0x27E988, 95)  // func_002273F0 similar decomp
 FNMAP(0x227440, 0x27E9D8, 62)  // func_00227440 changed
 FNMAP(0x227460, 0x27E9F8, 80)  // func_00227460 similar
 FNMAP(0x227598, 0x27EB30, 100)  // func_00227598 identical
 FNMAP(0x2275B8, 0x27EB50, 69)  // RgbaDialogSpeaker changed
 FNMAP(0x227728, 0x27ECB0, 90)  // SetDialogSubtitle similar
-FNMAP(0x227788, 0x27ED18, 100)  // ResetDialogSubtitle identical
+FNMAP(0x227788, 0x27ED18, 100)  // ResetDialogSubtitle identical decomp
 FNMAP(0x2277D0, 0x27ED60, 84)  // FDialogSubtitleText similar
-FNMAP(0x227820, 0x27EDA8, 98)  // StrDialogSubtitleTyped similar
+FNMAP(0x227820, 0x27EDA8, 98)  // StrDialogSubtitleTyped similar decomp
 FNMAP(0x227940, 0x27EEC8, 80)  // func_00227940 changed
 FNMAP(0x227A60, 0x27EFF8, 80)  // func_00227A60 similar
 FNMAP(0x227B98, 0x27F138, 100)  // func_00227B98 identical
 FNMAP(0x227BB8, 0x27F158, 67)  // LoadShapeFromBrx changed
 FNMAP(0x227C90, 0x27F298, 67)  // PshapeTree changed
-FNMAP(0x227D20, 0x27F390, 95)  // QueryOwnedGeometry similar
+FNMAP(0x227D20, 0x27F390, 95)  // QueryOwnedGeometry similar decomp
 FNMAP(0x227E20, 0x27F490, 89)  // func_00227E20 similar
 FNMAP(0x227E58, 0x27F4C8, 89)  // func_00227E58 similar
 FNMAP(0x227E90, 0x27F500, 80)  // func_00227E90 similar
 FNMAP(0x227FC8, 0x27F638, 100)  // func_00227FC8 identical
-FNMAP(0x2280D0, 0x27F990, 91)  // func_002280D0 similar
+FNMAP(0x2280D0, 0x27F990, 91)  // func_002280D0 similar decomp
 FNMAP(0x228140, 0x27FA00, 96)  // LoadLoxName228140FromBrx similar
 FNMAP(0x228170, 0x27FA70, 78)  // TriggerWarp similar
-FNMAP(0x2281E8, 0x27FAC8, 81)  // func_002281E8 similar
-FNMAP(0x2282B0, 0x27FB30, 72)  // LoadShapeKeysFromBrx changed
+FNMAP(0x2281E8, 0x27FAC8, 81)  // func_002281E8 similar decomp
+FNMAP(0x2282B0, 0x27FB30, 80)  // LoadShapeKeysFromBrx changed decomp
 FNMAP(0x228358, 0x27FC08, 54)  // SetExitState changed
 FNMAP(0x2283D0, 0x27FCC8, 55)  // TriggerExit changed
 FNMAP(0x2284E0, 0x27FD90, 86)  // func_002284E0 similar
@@ -4570,7 +4595,7 @@ FNMAP(0x2289D0, 0x2802B8, 80)  // QueueDefaultOwnedMessage similar
 FNMAP(0x2289F0, 0x2802D8, 80)  // func_002289F0 similar
 FNMAP(0x228B28, 0x280410, 100)  // func_00228B28 identical
 FNMAP(0x228B48, 0x280430, 72)  // func_00228B48 changed
-FNMAP(0x228BB0, 0x2804A0, 91)  // PostLoadWater similar
+FNMAP(0x228BB0, 0x2804A0, 91)  // PostLoadWater similar decomp
 FNMAP(0x228BF8, 0x23FDA8, 80)  // func_00228BF8 similar
 FNMAP(0x228C18, 0x280598, 49)  // VelWaterAt changed
 FNMAP(0x228D20, 0x280740, 50)  // SettleWaterNodes changed
@@ -4582,10 +4607,10 @@ FNMAP(0x229680, 0x281138, 93)  // func_00229680 similar
 FNMAP(0x2296A0, 0x281158, 80)  // AllocateActorSlot similar
 FNMAP(0x2296C0, 0x281178, 92)  // func_002296C0 similar
 FNMAP(0x229710, 0x2811C8, 80)  // LinkObjNode similar
-FNMAP(0x229738, 0x2811F0, 88)  // LinkObjNode similar
-FNMAP(0x229798, 0x281250, 79)  // ApplyAloWater similar
+FNMAP(0x229738, 0x2811F0, 88)  // LinkObjNode similar decomp
+FNMAP(0x229798, 0x281250, 84)  // ApplyAloWater similar decomp
 FNMAP(0x2297F0, 0x2812A8, 100)  // func_002297F0 identical
-FNMAP(0x2297F8, 0x2812B0, 80)  // ApplyWaterToAlo changed
+FNMAP(0x2297F8, 0x2812B0, 80)  // ApplyWaterToAlo changed decomp
 FNMAP(0x229D60, 0x281850, 49)  // FWaterEntry changed
 FNMAP(0x229D78, 0x281868, 93)  // ActorPointInGeometry similar
 FNMAP(0x229D98, 0x27CA88, 80)  // func_00229D98 similar
@@ -4599,7 +4624,7 @@ FNMAP(0x22AEE8, 0x27E038, 80)  // func_0022AEE8 similar
 FNMAP(0x22B020, 0x27E170, 100)  // func_0022B020 identical
 FNMAP(0x22B050, 0x287740, 49)  // ReleaseStackInto_22B050 changed
 FNMAP(0x22B090, 0x288C58, 82)  // SetWipeState similar
-FNMAP(0x22B198, 0x288D60, 87)  // UpdateWipe similar
+FNMAP(0x22B198, 0x288D60, 87)  // UpdateWipe similar decomp
 FNMAP(0x22B220, 0x288DE8, 69)  // FSameChk changed
 FNMAP(0x22B420, 0x288FB0, 87)  // func_0022B420 similar
 FNMAP(0x22B490, 0x289070, 65)  // FSameChk changed
@@ -4610,50 +4635,50 @@ FNMAP(0x22B7A0, 0x289770, 81)  // func_0022B7A0 similar
 FNMAP(0x22C4D8, 0x28A600, 93)  // PwreGetWrCircle__FP2WR4ENSK similar
 FNMAP(0x22C4F8, 0x28A620, 93)  // PwreGetWrBend__FP2WR4ENSK similar
 FNMAP(0x22C518, 0x28A640, 88)  // SetWrWavelength__FP2WRf similar
-FNMAP(0x22C570, 0x28A698, 91)  // SetWrWavelength similar
+FNMAP(0x22C570, 0x28A698, 91)  // SetWrWavelength similar decomp
 FNMAP(0x22C6C0, 0x28B030, 80)  // func_0022C6C0 similar
 FNMAP(0x22C7F8, 0x28B168, 100)  // func_0022C7F8 identical
-FNMAP(0x22C818, 0x28B188, 95)  // ResetXfParams similar
+FNMAP(0x22C818, 0x28B188, 95)  // ResetXfParams similar decomp
 FNMAP(0x22C840, 0x28B1B0, 79)  // InvalidateXfParams similar
-FNMAP(0x22C8C0, 0x28B230, 99)  // MatXfWithValue similar
-FNMAP(0x22CA18, 0x28B388, 92)  // VecXfValue similar
-FNMAP(0x22CAD0, 0x28B440, 100)  // VecRotateTiltPan identical
+FNMAP(0x22C8C0, 0x28B230, 99)  // MatXfWithValue similar decomp
+FNMAP(0x22CA18, 0x28B388, 92)  // VecXfValue similar decomp
+FNMAP(0x22CAD0, 0x28B440, 100)  // VecRotateTiltPan identical decomp
 FNMAP(0x22CB90, 0x28B500, 98)  // func_0022CB90 similar
-FNMAP(0x22CC00, 0x28B570, 99)  // DmatOfValue similar
+FNMAP(0x22CC00, 0x28B570, 99)  // DmatOfValue similar decomp
 FNMAP(0x22CCD0, 0x28B640, 99)  // DmatSkew similar
 FNMAP(0x22CDC0, 0x28B730, 93)  // DmatXf similar
 FNMAP(0x22D148, 0x28BAD0, 99)  // DmatXfChain similar
-FNMAP(0x22D348, 0x28BCD0, 88)  // VelXfPoint similar
+FNMAP(0x22D348, 0x28BCD0, 88)  // VelXfPoint similar decomp
 FNMAP(0x22D670, 0x28C210, 100)  // PushXfBase identical
 FNMAP(0x22D698, 0x28C238, 91)  // PushXfBase similar
-FNMAP(0x22D6B0, 0x28C250, 76)  // PxfFromRef similar
+FNMAP(0x22D6B0, 0x28C250, 80)  // PxfFromRef similar decomp
 FNMAP(0x22D750, 0x28C2E8, 100)  // PxfFindLox identical
 FNMAP(0x22D778, 0x28C310, 100)  // PxfFindAlo identical
-FNMAP(0x22D7A0, 0x28C338, 80)  // LoadAloXfsFromBrx similar
-FNMAP(0x22DD00, 0x28C8F0, 90)  // RefreshXf similar
-FNMAP(0x22DE88, 0x28CA78, 87)  // UpdateAloXfs similar
+FNMAP(0x22D7A0, 0x28C338, 80)  // LoadAloXfsFromBrx similar decomp
+FNMAP(0x22DD00, 0x28C8F0, 90)  // RefreshXf similar decomp
+FNMAP(0x22DE88, 0x28CA78, 87)  // UpdateAloXfs similar decomp
 FNMAP(0x22FA20, 0x28E6A8, 49)  // PostUpdateAloXfs changed
-FNMAP(0x22FAA0, 0x28E768, 97)  // UpdateAloXfWorlds similar
+FNMAP(0x22FAA0, 0x28E768, 97)  // UpdateAloXfWorlds similar decomp
 FNMAP(0x22FBD8, 0x28E8A0, 100)  // UpdateLoXfWorldsNothing identical
-FNMAP(0x22FBE0, 0x28E8A8, 80)  // UpdateAloXfWorldsHierarchy similar
-FNMAP(0x22FC48, 0x28E910, 98)  // PosToParent similar
-FNMAP(0x22FCC8, 0x28E990, 98)  // DirToLocal similar
-FNMAP(0x22FD38, 0x28EA00, 100)  // MatConvertXfs similar
-FNMAP(0x22FF40, 0x28EC08, 99)  // InverseAffineMatrix4 similar
-FNMAP(0x230018, 0x28ECE0, 100)  // AddXfCtrl register-renamed
-FNMAP(0x230100, 0x28EDC8, 99)  // RemoveXfCtrl similar
-FNMAP(0x2301D0, 0x28EE98, 86)  // SortXfCtrls similar
+FNMAP(0x22FBE0, 0x28E8A8, 80)  // UpdateAloXfWorldsHierarchy similar decomp
+FNMAP(0x22FC48, 0x28E910, 98)  // PosToParent similar decomp
+FNMAP(0x22FCC8, 0x28E990, 98)  // DirToLocal similar decomp
+FNMAP(0x22FD38, 0x28EA00, 100)  // MatConvertXfs similar decomp
+FNMAP(0x22FF40, 0x28EC08, 99)  // InverseAffineMatrix4 similar decomp
+FNMAP(0x230018, 0x28ECE0, 100)  // AddXfCtrl register-renamed decomp
+FNMAP(0x230100, 0x28EDC8, 99)  // RemoveXfCtrl similar decomp
+FNMAP(0x2301D0, 0x28EE98, 86)  // SortXfCtrls similar decomp
 FNMAP(0x230310, 0x28EFD8, 93)  // FXfmMoving similar
 FNMAP(0x230348, 0x28F010, 49)  // FXfmStatic similar
-FNMAP(0x230380, 0x28F048, 100)  // FXfmVelocity identical
+FNMAP(0x230380, 0x28F048, 100)  // FXfmVelocity identical decomp
 FNMAP(0x2303A0, 0x28F068, 94)  // SetXfModes similar
 FNMAP(0x230598, 0x28F260, 70)  // HoldXfMode changed
 FNMAP(0x230630, 0x28F2E0, 68)  // ReleaseXfMode changed
-FNMAP(0x230710, 0x28F3A8, 100)  // PredictXf register-renamed
-FNMAP(0x2309E8, 0x28F680, 99)  // PredictProjectileAim similar
-FNMAP(0x230A98, 0x28F730, 82)  // PredictXfChain similar
-FNMAP(0x230CD0, 0x28F958, 100)  // func_00230CD0 identical
-FNMAP(0x230CF0, 0x28F978, 80)  // SnapAsegaXfs similar
+FNMAP(0x230710, 0x28F3A8, 100)  // PredictXf register-renamed decomp
+FNMAP(0x2309E8, 0x28F680, 99)  // PredictProjectileAim similar decomp
+FNMAP(0x230A98, 0x28F730, 82)  // PredictXfChain similar decomp
+FNMAP(0x230CD0, 0x28F958, 100)  // func_00230CD0 identical decomp
+FNMAP(0x230CF0, 0x28F978, 80)  // SnapAsegaXfs similar decomp
 FNMAP(0x230FA8, 0x28FC18, 80)  // func_00230FA8 similar
 FNMAP(0x2310E0, 0x28FD50, 100)  // func_002310E0 identical
 FNMAP(0x231100, 0x28FD70, 80)  // func_00231100 similar
@@ -4665,8 +4690,8 @@ FNMAP(0x231300, 0x28FF70, 86)  // SetLoxRotation similar
 FNMAP(0x231368, 0x28FFD8, 62)  // func_00231368 changed
 FNMAP(0x2313F0, 0x290078, 49)  // TouchLox changed
 FNMAP(0x231440, 0x2900D0, 90)  // func_00231440 similar
-FNMAP(0x231468, 0x2900F8, 92)  // func_00231468 similar
-FNMAP(0x2314D0, 0x290160, 97)  // func_002314D0 similar
+FNMAP(0x231468, 0x2900F8, 92)  // VelLox similar
+FNMAP(0x2314D0, 0x290160, 97)  // VelLox similar decomp
 FNMAP(0x231550, 0x2901E0, 65)  // func_00231550 changed
 FNMAP(0x231598, 0x290228, 84)  // func_00231598 similar
 FNMAP(0x2315F0, 0x290280, 80)  // SetLoxParent similar
@@ -4674,7 +4699,7 @@ FNMAP(0x231768, 0x290438, 87)  // LoadLoxBaseFromBrx similar
 FNMAP(0x2317E0, 0x2904B0, 87)  // LoadLoxChildrenFromBrx similar
 FNMAP(0x231890, 0x288A48, 80)  // func_00231890 similar
 FNMAP(0x2319C8, 0x288B80, 100)  // func_002319C8 identical
-FNMAP(0x2319E8, 0x2906B8, 80)  // func_002319E8 changed
+FNMAP(0x2319E8, 0x2906B8, 80)  // func_002319E8 changed decomp
 FNMAP(0x231C48, 0x2908F0, 71)  // snd_FlushSoundCommands changed
 FNMAP(0x231E78, 0x290B18, 91)  // func_00231E78 similar
 FNMAP(0x231E90, 0x290B30, 57)  // func_00231E90 changed
@@ -4682,28 +4707,28 @@ FNMAP(0x231F38, 0x290C00, 98)  // func_00231F38 similar
 FNMAP(0x231FA0, 0x290C68, 40)  // func_00231FA0 changed
 FNMAP(0x231FB0, 0x290C70, 80)  // func_00231FB0 changed
 FNMAP(0x232168, 0x290E00, 49)  // func_00232168 changed
-FNMAP(0x232188, 0x290E38, 96)  // func_00232188 similar
-FNMAP(0x2321B8, 0x290E68, 100)  // func_002321B8 identical
-FNMAP(0x2321E8, 0x290E98, 96)  // func_002321E8 similar
+FNMAP(0x232188, 0x290E38, 96)  // func_00232188 similar decomp
+FNMAP(0x2321B8, 0x290E68, 100)  // func_002321B8 identical decomp
+FNMAP(0x2321E8, 0x290E98, 96)  // func_002321E8 similar decomp
 FNMAP(0x232220, 0x290ED0, 100)  // func_00232220 identical
 FNMAP(0x232248, 0x290EF8, 49)  // func_00232248 changed
 FNMAP(0x232250, 0x290F00, 100)  // func_00232250 identical
 FNMAP(0x232280, 0x290F30, 93)  // func_00232280 similar
 FNMAP(0x2322A0, 0x290F50, 96)  // func_002322A0 similar
 FNMAP(0x2322D0, 0x290F80, 93)  // func_002322D0 similar
-FNMAP(0x2322F0, 0x290FA0, 96)  // func_002322F0 similar
-FNMAP(0x232320, 0x290FD0, 96)  // func_00232320 similar
+FNMAP(0x2322F0, 0x290FA0, 96)  // func_002322F0 similar decomp
+FNMAP(0x232320, 0x290FD0, 96)  // func_00232320 similar decomp
 FNMAP(0x232350, 0x291000, 100)  // func_00232350 identical
 FNMAP(0x232380, 0x291030, 95)  // func_00232380 similar
-FNMAP(0x2323A8, 0x291058, 100)  // func_002323A8 identical
-FNMAP(0x2323D8, 0x291088, 100)  // func_002323D8 identical
-FNMAP(0x232408, 0x2910B8, 96)  // func_00232408 similar
-FNMAP(0x232438, 0x2910E8, 100)  // func_00232438 identical
-FNMAP(0x232468, 0x291118, 100)  // func_00232468 identical
+FNMAP(0x2323A8, 0x291058, 100)  // func_002323A8 identical decomp
+FNMAP(0x2323D8, 0x291088, 100)  // func_002323D8 identical decomp
+FNMAP(0x232408, 0x2910B8, 96)  // func_00232408 similar decomp
+FNMAP(0x232438, 0x2910E8, 100)  // func_00232438 identical decomp
+FNMAP(0x232468, 0x291118, 100)  // func_00232468 identical decomp
 FNMAP(0x232498, 0x291148, 100)  // func_00232498 identical
 FNMAP(0x2324C8, 0x291178, 96)  // junk_0x0011d3e8 similar
-FNMAP(0x232500, 0x2911B0, 100)  // func_00232500 identical
-FNMAP(0x232520, 0x2911D0, 100)  // func_00232520 identical
+FNMAP(0x232500, 0x2911B0, 100)  // func_00232500 identical decomp
+FNMAP(0x232520, 0x2911D0, 100)  // func_00232520 identical decomp
 FNMAP(0x232568, 0x291218, 97)  // func_00232568 similar
 FNMAP(0x2325A8, 0x291258, 96)  // func_002325A8 similar
 FNMAP(0x2325E0, 0x291290, 62)  // func_002325E0 changed
@@ -4711,23 +4736,23 @@ FNMAP(0x232838, 0x2914C0, 80)  // func_00232838 similar
 FNMAP(0x232BB8, 0x291838, 100)  // func_00232BB8 register-renamed
 FNMAP(0x232BF8, 0x291878, 65)  // snd_SendCurrentBatch__Fv changed
 FNMAP(0x232D40, 0x2919A8, 97)  // func_00232D40 similar
-FNMAP(0x232D80, 0x2919E8, 100)  // func_00232D80 identical
+FNMAP(0x232D80, 0x2919E8, 100)  // func_00232D80 identical decomp
 FNMAP(0x232DA8, 0x291A10, 83)  // func_00232DA8 similar
 FNMAP(0x232E68, 0x291AC8, 98)  // func_00232E68 similar
-FNMAP(0x232EE8, 0x291B48, 97)  // func_00232EE8 similar
+FNMAP(0x232EE8, 0x291B48, 97)  // func_00232EE8 similar decomp
 FNMAP(0x232F28, 0x291B88, 95)  // func_00232F28 similar
 FNMAP(0x232F50, 0x291BB0, 49)  // func_00232F50 similar
 FNMAP(0x232F60, 0x291BC0, 95)  // func_00232F60 similar
-FNMAP(0x232F88, 0x291BE8, 100)  // func_00232F88 identical
+FNMAP(0x232F88, 0x291BE8, 100)  // func_00232F88 identical decomp
 FNMAP(0x232FC0, 0x291C20, 95)  // func_00232FC0 similar
-FNMAP(0x232FE8, 0x291C48, 96)  // func_00232FE8 similar
+FNMAP(0x232FE8, 0x291C48, 96)  // func_00232FE8 similar decomp
 FNMAP(0x233018, 0x291C78, 95)  // func_00233018 similar
 FNMAP(0x233040, 0x291CA0, 49)  // func_00233040 changed
-FNMAP(0x233048, 0x291CA8, 100)  // func_00233048 identical
-FNMAP(0x233088, 0x291CE8, 100)  // func_00233088 identical
+FNMAP(0x233048, 0x291CA8, 100)  // func_00233048 identical decomp
+FNMAP(0x233088, 0x291CE8, 100)  // func_00233088 identical decomp
 FNMAP(0x2330D0, 0x291D30, 100)  // func_002330D0 identical
 FNMAP(0x233120, 0x291D80, 49)  // func_00233120 similar
-FNMAP(0x233130, 0x291D90, 100)  // func_00233130 identical
+FNMAP(0x233130, 0x291D90, 100)  // func_00233130 identical decomp
 FNMAP(0x233178, 0x291DF8, 100)  // memcmp identical
 FNMAP(0x23320C, 0x291E8C, 100)  // memcpy identical
 FNMAP(0x2332B8, 0x291F38, 100)  // memmove identical
@@ -4735,10 +4760,10 @@ FNMAP(0x2333B4, 0x292034, 99)  // memset similar
 FNMAP(0x233470, 0x2920F0, 100)  // func_00233470 identical
 FNMAP(0x233638, 0x2922B8, 100)  // func_00233638 identical
 FNMAP(0x233800, 0x292480, 100)  // atoi identical
-FNMAP(0x233828, 0x2924A8, 96)  // func_00233828 similar
+FNMAP(0x233828, 0x2924A8, 96)  // func_00233828 similar decomp
 FNMAP(0x2338C0, 0x292540, 100)  // qsort similar
-FNMAP(0x2342A0, 0x292F20, 100)  // rand identical
-FNMAP(0x2342D0, 0x292F50, 98)  // func_002342D0 similar
+FNMAP(0x2342A0, 0x292F20, 100)  // rand identical decomp
+FNMAP(0x2342D0, 0x292F50, 98)  // func_002342D0 similar decomp
 FNMAP(0x234350, 0x292FD0, 80)  // func_00234350 similar
 FNMAP(0x234580, 0x293200, 96)  // func_00234580 similar
 FNMAP(0x2345B8, 0x293238, 94)  // func_002345B8 similar
@@ -4884,381 +4909,381 @@ FNMAP(0x234EA0, 0x293B20, 100)  // _sceSDC identical
 FNMAP(0x234F48, 0x293BC8, 95)  // func_00234F48 similar
 FNMAP(0x234FD0, 0x293C50, 100)  // _sceIDC identical
 FNMAP(0x235078, 0x293CF8, 95)  // func_00235078 similar
-FNMAP(0x235100, 0x293D80, 100)  // func_00235100 identical
+FNMAP(0x235100, 0x293D80, 100)  // func_00235100 identical decomp
 FNMAP(0x235110, 0x293D90, 100)  // func_00235110 identical
 FNMAP(0x235178, 0x293DF8, 100)  // func_00235178 identical
 FNMAP(0x2351E0, 0x293E60, 100)  // func_002351E0 identical
 FNMAP(0x2352B0, 0x293EC8, 81)  // topThread similar
-FNMAP(0x235388, 0x294008, 80)  // InitThread changed
-FNMAP(0x235518, 0x294198, 100)  // DelayThread identical
-FNMAP(0x2355E0, 0x294260, 95)  // StartThread_2355E0 similar
-FNMAP(0x235780, 0x294400, 100)  // kputchar identical
-FNMAP(0x2357B8, 0x294438, 98)  // deci2Putchar similar
-FNMAP(0x235868, 0x2944E8, 96)  // serialPutchar similar
-FNMAP(0x2358A0, 0x294520, 100)  // ftoi identical
-FNMAP(0x235930, 0x2945B0, 100)  // printfloat identical
-FNMAP(0x235B08, 0x294788, 98)  // _sceSnprintf similar
-FNMAP(0x2368C8, 0x295548, 97)  // _sceSnprintf_pf similar
-FNMAP(0x236918, 0x295598, 100)  // sceSnprintf identical
+FNMAP(0x235388, 0x294008, 80)  // InitThread changed decomp
+FNMAP(0x235518, 0x294198, 100)  // DelayThread identical decomp
+FNMAP(0x2355E0, 0x294260, 95)  // StartThread_2355E0 similar decomp
+FNMAP(0x235780, 0x294400, 100)  // kputchar identical decomp
+FNMAP(0x2357B8, 0x294438, 98)  // deci2Putchar similar decomp
+FNMAP(0x235868, 0x2944E8, 96)  // serialPutchar similar decomp
+FNMAP(0x2358A0, 0x294520, 100)  // ftoi identical decomp
+FNMAP(0x235930, 0x2945B0, 100)  // printfloat identical decomp
+FNMAP(0x235B08, 0x294788, 98)  // _sceSnprintf similar decomp
+FNMAP(0x2368C8, 0x295548, 97)  // _sceSnprintf_pf similar decomp
+FNMAP(0x236918, 0x295598, 100)  // sceSnprintf identical decomp
 FNMAP(0x236960, 0x2955E0, 100)  // func_00236960 identical
 FNMAP(0x2369E0, 0x295660, 100)  // func_002369E0 identical
-FNMAP(0x236A60, 0x2956E0, 99)  // sceSifInitRpc similar
-FNMAP(0x236C00, 0x295880, 95)  // func_00236C00 similar
-FNMAP(0x236C28, 0x2958A8, 100)  // func_00236C28 identical
-FNMAP(0x236CD0, 0x295950, 93)  // func_00236CD0 similar
-FNMAP(0x236CF0, 0x295970, 100)  // _sceRpcGetFPacket identical
-FNMAP(0x236E70, 0x2959A0, 49)  // _request_rdata changed
-FNMAP(0x236FD8, 0x295BC8, 49)  // _request_bind changed
-FNMAP(0x2370A8, 0x295D28, 82)  // sceSifBindRpc similar
-FNMAP(0x237288, 0x295F08, 98)  // sceSifCallRpc similar
+FNMAP(0x236A60, 0x2956E0, 99)  // sceSifInitRpc similar decomp
+FNMAP(0x236C00, 0x295880, 95)  // func_00236C00 similar decomp
+FNMAP(0x236C28, 0x2958A8, 100)  // func_00236C28 identical decomp
+FNMAP(0x236CD0, 0x295950, 93)  // func_00236CD0 similar decomp
+FNMAP(0x236CF0, 0x295970, 100)  // _sceRpcGetFPacket identical decomp
+FNMAP(0x236D20, 0x2959A0, 80)  // _sceRpcGetFPacket2 changed decomp
+FNMAP(0x236F48, 0x295BC8, 80)  // _search_svdata changed decomp
+FNMAP(0x2370A8, 0x295D28, 82)  // sceSifBindRpc similar decomp
+FNMAP(0x237288, 0x295F08, 98)  // sceSifCallRpc similar decomp
 FNMAP(0x237488, 0x296108, 49)  // sceSifCheckStatRpc similar
-FNMAP(0x2374E0, 0x296160, 97)  // _sceFsIobSemaMK similar
-FNMAP(0x237558, 0x2961D8, 100)  // new_iob identical
+FNMAP(0x2374E0, 0x296160, 97)  // _sceFsIobSemaMK similar decomp
+FNMAP(0x237558, 0x2961D8, 100)  // new_iob identical decomp
 FNMAP(0x2375E0, 0x296260, 99)  // sceFsSifCallRpc similar
 FNMAP(0x237740, 0x296350, 94)  // _sceFs_Rcv_Intr similar
-FNMAP(0x237AF8, 0x296778, 98)  // _sceFsSemInit similar
+FNMAP(0x237AF8, 0x296778, 98)  // _sceFsSemInit similar decomp
 FNMAP(0x237B50, 0x2967D0, 87)  // _sceFsWaitS similar
 FNMAP(0x237B90, 0x296800, 79)  // _sceFs_Poff_Intr similar
-FNMAP(0x237BD8, 0x296858, 100)  // sceFsInit identical
+FNMAP(0x237BD8, 0x296858, 100)  // sceFsInit identical decomp
 FNMAP(0x237DE0, 0x296A60, 99)  // func_00237DE0 similar
 FNMAP(0x237E70, 0x296AF0, 96)  // sceFsReset similar
-FNMAP(0x237EA8, 0x296B28, 100)  // sceOpen identical
-FNMAP(0x238138, 0x296DB8, 98)  // sceClose similar
-FNMAP(0x2382B8, 0x296F38, 99)  // sceRead similar
-FNMAP(0x238528, 0x2971A8, 99)  // sceWrite similar
-FNMAP(0x2387E8, 0x297468, 96)  // sceIoctl similar
-FNMAP(0x238BD0, 0x297850, 100)  // sceSifInitIopHeap identical
-FNMAP(0x238C58, 0x2978D8, 100)  // sceSifAllocIopHeap identical
-FNMAP(0x238CC8, 0x297948, 100)  // func_00238CC8 identical
+FNMAP(0x237EA8, 0x296B28, 100)  // sceOpen identical decomp
+FNMAP(0x238138, 0x296DB8, 98)  // sceClose similar decomp
+FNMAP(0x2382B8, 0x296F38, 99)  // sceRead similar decomp
+FNMAP(0x238528, 0x2971A8, 99)  // sceWrite similar decomp
+FNMAP(0x2387E8, 0x297468, 96)  // sceIoctl similar decomp
+FNMAP(0x238BD0, 0x297850, 100)  // sceSifInitIopHeap identical decomp
+FNMAP(0x238C58, 0x2978D8, 100)  // sceSifAllocIopHeap identical decomp
+FNMAP(0x238CC8, 0x297948, 100)  // func_00238CC8 identical decomp
 FNMAP(0x238D40, 0x2979C0, 74)  // func_00238D40 changed
-FNMAP(0x238D70, 0x2979F0, 100)  // _lf_bind identical
+FNMAP(0x238D70, 0x2979F0, 100)  // _lf_bind identical decomp
 FNMAP(0x238E70, 0x297AF0, 99)  // func_00238E70 similar
 FNMAP(0x238F00, 0x297B80, 100)  // sceSifLoadFileReset identical
-FNMAP(0x238F38, 0x297BB8, 98)  // _sceSifLoadModuleBuffer similar
+FNMAP(0x238F38, 0x297BB8, 98)  // _sceSifLoadModuleBuffer similar decomp
 FNMAP(0x239160, 0x297DC0, 49)  // func_00239160 changed
-FNMAP(0x239198, 0x297E18, 99)  // sceSifResetIop similar
-FNMAP(0x2392F0, 0x297F70, 100)  // sceSifSyncIop identical
-FNMAP(0x239340, 0x297FC0, 98)  // sceSifRebootIop similar
-FNMAP(0x239450, 0x2980D0, 100)  // DIntr identical
-FNMAP(0x2394A0, 0x298120, 100)  // func_002394A0 identical
-FNMAP(0x2394B8, 0x298138, 92)  // supplement_crt0 similar
+FNMAP(0x239198, 0x297E18, 99)  // sceSifResetIop similar decomp
+FNMAP(0x2392F0, 0x297F70, 100)  // sceSifSyncIop identical decomp
+FNMAP(0x239340, 0x297FC0, 98)  // sceSifRebootIop similar decomp
+FNMAP(0x239450, 0x2980D0, 100)  // DIntr identical decomp
+FNMAP(0x2394A0, 0x298120, 100)  // func_002394A0 identical decomp
+FNMAP(0x2394B8, 0x298138, 92)  // supplement_crt0 similar decomp
 FNMAP(0x239520, 0x2981A0, 100)  // kCopy_239520 identical
-FNMAP(0x239558, 0x2981D8, 100)  // kFindAddress identical
+FNMAP(0x239558, 0x2981D8, 100)  // kFindAddress identical decomp
 FNMAP(0x239598, 0x298218, 49)  // func_00239598 similar
-FNMAP(0x2395B0, 0x298230, 99)  // InitSystemCallTableAddress similar
+FNMAP(0x2395B0, 0x298230, 99)  // InitSystemCallTableAddress similar decomp
 FNMAP(0x2396B0, 0x298330, 100)  // func_002396B0 identical
-FNMAP(0x2396C0, 0x298340, 98)  // _InitSys similar
+FNMAP(0x2396C0, 0x298340, 98)  // _InitSys similar decomp
 FNMAP(0x239718, 0x298398, 100)  // func_00239718 identical
 FNMAP(0x239728, 0x2983A8, 100)  // func_00239728 identical
 FNMAP(0x239738, 0x2983B8, 100)  // kCopy_239738 identical
 FNMAP(0x239770, 0x2983F0, 100)  // func_00239770 identical
-FNMAP(0x239780, 0x298400, 100)  // PatchIsNeeded identical
-FNMAP(0x2397E8, 0x298468, 99)  // InitExecPS2 similar
+FNMAP(0x239780, 0x298400, 100)  // PatchIsNeeded identical decomp
+FNMAP(0x2397E8, 0x298468, 99)  // InitExecPS2 similar decomp
 FNMAP(0x239898, 0x298518, 100)  // kCopy_239898 identical
 FNMAP(0x2398C8, 0x298548, 100)  // func_002398C8 identical
-FNMAP(0x2398D0, 0x298550, 91)  // func_002398D0 similar
+FNMAP(0x2398D0, 0x298550, 91)  // func_002398D0 similar decomp
 FNMAP(0x239900, 0x298580, 100)  // func_00239900 identical
 FNMAP(0x239910, 0x298590, 100)  // func_00239910 identical
 FNMAP(0x239920, 0x2985A0, 100)  // kCopy_239920 identical
 FNMAP(0x239958, 0x2985D8, 100)  // func_00239958 identical
-FNMAP(0x239968, 0x2985E8, 80)  // InitAlarm similar
-FNMAP(0x239AB0, 0x298730, 100)  // func_00239AB0 identical
-FNMAP(0x239AC0, 0x298740, 100)  // func_00239AC0 identical
-FNMAP(0x239AD0, 0x298750, 100)  // func_00239AD0 identical
-FNMAP(0x239AE0, 0x298760, 98)  // InitTimer similar
+FNMAP(0x239968, 0x2985E8, 80)  // InitAlarm similar decomp
+FNMAP(0x239AB0, 0x298730, 100)  // func_00239AB0 identical decomp
+FNMAP(0x239AC0, 0x298740, 100)  // func_00239AC0 identical decomp
+FNMAP(0x239AD0, 0x298750, 100)  // func_00239AD0 identical decomp
+FNMAP(0x239AE0, 0x298760, 98)  // InitTimer similar decomp
 FNMAP(0x239C40, 0x2988C0, 97)  // StartTimerSystemTime similar
-FNMAP(0x239CD8, 0x298958, 100)  // SetNextComp identical
-FNMAP(0x239E68, 0x298AE8, 98)  // InsertAlarm similar
+FNMAP(0x239CD8, 0x298958, 100)  // SetNextComp identical decomp
+FNMAP(0x239E68, 0x298AE8, 98)  // InsertAlarm similar decomp
 FNMAP(0x239F28, 0x298B70, 94)  // cbTimerHandler similar
-FNMAP(0x23A1D0, 0x298E50, 93)  // iGetTimerSystemTime similar
-FNMAP(0x23A228, 0x298EA8, 100)  // iAllocTimerCounter identical
+FNMAP(0x23A1D0, 0x298E50, 93)  // iGetTimerSystemTime similar decomp
+FNMAP(0x23A228, 0x298EA8, 100)  // iAllocTimerCounter identical decomp
 FNMAP(0x23A298, 0x298F18, 90)  // AllocTimerCounter similar
-FNMAP(0x23A2F0, 0x298F70, 99)  // iStartTimerCounter similar
+FNMAP(0x23A2F0, 0x298F70, 99)  // iStartTimerCounter similar decomp
 FNMAP(0x23A3A0, 0x299020, 74)  // func_0023A3A0 changed
-FNMAP(0x23A420, 0x2990A0, 99)  // iSetTimerHandler similar
+FNMAP(0x23A420, 0x2990A0, 99)  // iSetTimerHandler similar decomp
 FNMAP(0x23A518, 0x299198, 98)  // SetTimerHandler similar
-FNMAP(0x23A598, 0x299218, 93)  // func_0023A598 similar
-FNMAP(0x23A668, 0x299298, 69)  // func_0023A668 changed
-FNMAP(0x23A6C8, 0x299348, 67)  // SetTimerAlarm changed
-FNMAP(0x23A920, 0x2995A0, 100)  // sceSifExecNotifyHandler identical
+FNMAP(0x23A598, 0x299218, 93)  // func_0023A598 similar decomp
+FNMAP(0x23A618, 0x299298, 80)  // func_0023A618 changed decomp
+FNMAP(0x23A6C8, 0x299348, 80)  // SetTimerAlarm changed decomp
+FNMAP(0x23A920, 0x2995A0, 100)  // sceSifExecNotifyHandler identical decomp
 FNMAP(0x23A9D8, 0x299648, 91)  // func_0023A9D8 similar
-FNMAP(0x23AAC8, 0x299748, 49)  // func_0023AAC8 similar
-FNMAP(0x23AAF0, 0x299770, 96)  // sceSifInitCmd similar
+FNMAP(0x23AAC8, 0x175098, 100)  // func_0023AAC8 identical decomp
+FNMAP(0x23AAF0, 0x299770, 96)  // sceSifInitCmd similar decomp
 FNMAP(0x23AD70, 0x2999F0, 89)  // sceSifExitCmd similar
-FNMAP(0x23ADA8, 0x299A28, 100)  // sceSifAddCmdHandler identical
-FNMAP(0x23AE20, 0x299AA0, 97)  // sceSifRemoveCmdHandler similar
-FNMAP(0x23AE70, 0x299AF0, 99)  // _sceSifSendCmd similar
-FNMAP(0x23AFA8, 0x299C28, 97)  // sceSifSendCmd similar
+FNMAP(0x23ADA8, 0x299A28, 100)  // sceSifAddCmdHandler identical decomp
+FNMAP(0x23AE20, 0x299AA0, 97)  // sceSifRemoveCmdHandler similar decomp
+FNMAP(0x23AE70, 0x299AF0, 99)  // _sceSifSendCmd similar decomp
+FNMAP(0x23AFA8, 0x299C28, 97)  // sceSifSendCmd similar decomp
 FNMAP(0x23B028, 0x299C68, 91)  // _sceSifCmdIntrHdlr similar
-FNMAP(0x23B170, 0x299DF0, 97)  // sceSifWriteBackDCache similar
+FNMAP(0x23B170, 0x299DF0, 97)  // sceSifWriteBackDCache similar decomp
 FNMAP(0x23B228, 0x299EA8, 100)  // func_0023B228 identical
 FNMAP(0x23B238, 0x299EB8, 100)  // kCopy_23B238 identical
 FNMAP(0x23B270, 0x299EF0, 100)  // func_0023B270 identical
 FNMAP(0x23B280, 0x299F00, 100)  // func_0023B280 identical
-FNMAP(0x23B290, 0x299F10, 99)  // InitTLBFunctions similar
+FNMAP(0x23B290, 0x299F10, 99)  // InitTLBFunctions similar decomp
 FNMAP(0x23B358, 0x299FD8, 100)  // func_0023B358 identical
 FNMAP(0x23B368, 0x299FE8, 100)  // InitTLB identical
-FNMAP(0x23B3A8, 0x29A028, 97)  // InitTLB32MB similar
+FNMAP(0x23B3A8, 0x29A028, 97)  // InitTLB32MB similar decomp
 FNMAP(0x23B5C0, 0x29A280, 70)  // func_0023B5C0 changed
 FNMAP(0x23B7D8, 0x29A458, 100)  // __main__Fv identical
-FNMAP(0x23B7F8, 0x29A478, 100)  // __divdi3 similar
-FNMAP(0x23BEE8, 0x29AB68, 99)  // __fixunsdfdi similar
+FNMAP(0x23B7F8, 0x29A478, 100)  // __divdi3 similar decomp
+FNMAP(0x23BEE8, 0x29AB68, 99)  // __fixunsdfdi similar decomp
 FNMAP(0x23BFD8, 0x29AC58, 49)  // func_0023BFD8 changed
-FNMAP(0x23BFE0, 0x29AC60, 100)  // __floatdidf identical
-FNMAP(0x23C078, 0x29ACF8, 100)  // __floatdisf identical
-FNMAP(0x23C158, 0x29ADD8, 100)  // __moddi3 identical
-FNMAP(0x23C7C0, 0x29B440, 100)  // __muldi3 identical
+FNMAP(0x23BFE0, 0x29AC60, 100)  // __floatdidf identical decomp
+FNMAP(0x23C078, 0x29ACF8, 100)  // __floatdisf identical decomp
+FNMAP(0x23C158, 0x29ADD8, 100)  // __moddi3 identical decomp
+FNMAP(0x23C7C0, 0x29B440, 100)  // __muldi3 identical decomp
 FNMAP(0x23C820, 0x29B4A0, 100)  // __pure_virtual identical
 FNMAP(0x23C828, 0x29B4A8, 100)  // __udivdi3 identical
-FNMAP(0x23CDF8, 0x29BA78, 100)  // __umoddi3 identical
+FNMAP(0x23CDF8, 0x29BA78, 100)  // __umoddi3 identical decomp
 FNMAP(0x23D338, 0x29BFB8, 99)  // __pack_d similar
-FNMAP(0x23D468, 0x29C0E8, 99)  // __unpack_d similar
-FNMAP(0x23D508, 0x29C188, 100)  // _fpadd_parts identical
+FNMAP(0x23D468, 0x29C0E8, 99)  // __unpack_d similar decomp
+FNMAP(0x23D508, 0x29C188, 100)  // _fpadd_parts identical decomp
 FNMAP(0x23D748, 0x29C3C8, 100)  // dpadd identical
-FNMAP(0x23D7A0, 0x29C420, 98)  // dpsub similar
+FNMAP(0x23D7A0, 0x29C420, 98)  // dpsub similar decomp
 FNMAP(0x23D808, 0x29C488, 100)  // dpmul identical
-FNMAP(0x23DAB0, 0x29C730, 100)  // dpdiv identical
-FNMAP(0x23DC18, 0x29C898, 99)  // __fpcmp_parts_d similar
-FNMAP(0x23DD30, 0x29C9B0, 97)  // dpcmp similar
-FNMAP(0x23DD80, 0x29CA00, 100)  // litodp identical
-FNMAP(0x23DE38, 0x29CAB8, 99)  // dptoli similar
-FNMAP(0x23DED0, 0x29CB50, 100)  // dptoul identical
-FNMAP(0x23DF70, 0x29CBF0, 96)  // __make_dp similar
-FNMAP(0x23DFA0, 0x29CC20, 98)  // dptofp similar
-FNMAP(0x23DFF8, 0x29CC78, 100)  // __pack_f identical
-FNMAP(0x23E108, 0x29CD88, 79)  // __unpack_f similar
-FNMAP(0x23E1C8, 0x29CE48, 100)  // fptoui identical
-FNMAP(0x23E260, 0x29CEE0, 96)  // __make_fp similar
-FNMAP(0x23E290, 0x29CF10, 100)  // fptodp identical
-FNMAP(0x23E2D0, 0x29CF50, 100)  // func_0023E2D0 identical
+FNMAP(0x23DAB0, 0x29C730, 100)  // dpdiv identical decomp
+FNMAP(0x23DC18, 0x29C898, 99)  // __fpcmp_parts_d similar decomp
+FNMAP(0x23DD30, 0x29C9B0, 97)  // dpcmp similar decomp
+FNMAP(0x23DD80, 0x29CA00, 100)  // litodp identical decomp
+FNMAP(0x23DE38, 0x29CAB8, 99)  // dptoli similar decomp
+FNMAP(0x23DED0, 0x29CB50, 100)  // dptoul identical decomp
+FNMAP(0x23DF70, 0x29CBF0, 96)  // __make_dp similar decomp
+FNMAP(0x23DFA0, 0x29CC20, 98)  // dptofp similar decomp
+FNMAP(0x23DFF8, 0x29CC78, 100)  // __pack_f identical decomp
+FNMAP(0x23E108, 0x29CD88, 86)  // __unpack_f similar decomp
+FNMAP(0x23E1C8, 0x29CE48, 100)  // fptoui identical decomp
+FNMAP(0x23E260, 0x29CEE0, 96)  // __make_fp similar decomp
+FNMAP(0x23E290, 0x29CF10, 100)  // fptodp identical decomp
+FNMAP(0x23E2D0, 0x29CF50, 100)  // func_0023E2D0 identical decomp
 FNMAP(0x23E2E0, 0x29CF60, 95)  // __terminate similar
 FNMAP(0x23E308, 0x29CF88, 96)  // __throw_type_match similar
 FNMAP(0x23E338, 0x29CFB8, 100)  // func_0023E338 identical
-FNMAP(0x23E340, 0x29CFC0, 98)  // new_eh_context similar
+FNMAP(0x23E340, 0x29CFC0, 98)  // new_eh_context similar decomp
 FNMAP(0x23E398, 0x29D018, 95)  // func_0023E398 similar
 FNMAP(0x23E3C0, 0x29D040, 100)  // __get_eh_info identical
 FNMAP(0x23E3E8, 0x29D068, 100)  // eh_context_initialize identical
-FNMAP(0x23E410, 0x29D090, 100)  // eh_context_static identical
+FNMAP(0x23E410, 0x29D090, 100)  // eh_context_static identical decomp
 FNMAP(0x23E478, 0x29D0F8, 100)  // __get_dynamic_handler_chain identical
-FNMAP(0x23E4A0, 0x29D120, 68)  // __sjthrow changed
+FNMAP(0x23E4A0, 0x29D120, 80)  // __sjthrow changed decomp
 FNMAP(0x23E778, 0x29D3F8, 100)  // func_0023E778 identical
 FNMAP(0x23E780, 0x29D400, 100)  // func_0023E780 identical
-FNMAP(0x23E788, 0x29D408, 100)  // old_find_exception_handler identical
-FNMAP(0x23E860, 0x29D4E0, 99)  // find_exception_handler similar
-FNMAP(0x23E9A8, 0x29D628, 100)  // get_reg_addr identical
-FNMAP(0x23EA30, 0x29D6B0, 98)  // copy_reg similar
-FNMAP(0x23EAB0, 0x29D730, 99)  // next_stack_level similar
+FNMAP(0x23E788, 0x29D408, 100)  // old_find_exception_handler identical decomp
+FNMAP(0x23E860, 0x29D4E0, 99)  // find_exception_handler similar decomp
+FNMAP(0x23E9A8, 0x29D628, 100)  // get_reg_addr identical decomp
+FNMAP(0x23EA30, 0x29D6B0, 98)  // copy_reg similar decomp
+FNMAP(0x23EAB0, 0x29D730, 99)  // next_stack_level similar decomp
 FNMAP(0x23EB40, 0x29D7C0, 100)  // func_0023EB40 identical
-FNMAP(0x23EB48, 0x29D7C8, 100)  // throw_helper identical
-FNMAP(0x23EE78, 0x29DAF8, 100)  // __throw similar
-FNMAP(0x23F058, 0x29DCD8, 100)  // __rethrow similar
-FNMAP(0x23F240, 0x29DEC0, 97)  // decode_uleb128 similar
-FNMAP(0x23F288, 0x29DF08, 100)  // decode_sleb128 identical
-FNMAP(0x23F2D8, 0x29DF58, 99)  // fde_merge similar
-FNMAP(0x23F3D8, 0x29E058, 100)  // end_fde_sort similar
+FNMAP(0x23EB48, 0x29D7C8, 100)  // throw_helper identical decomp
+FNMAP(0x23EE78, 0x29DAF8, 100)  // __throw similar decomp
+FNMAP(0x23F058, 0x29DCD8, 100)  // __rethrow similar decomp
+FNMAP(0x23F240, 0x29DEC0, 97)  // decode_uleb128 similar decomp
+FNMAP(0x23F288, 0x29DF08, 100)  // decode_sleb128 identical decomp
+FNMAP(0x23F2D8, 0x29DF58, 99)  // fde_merge similar decomp
+FNMAP(0x23F3D8, 0x29E058, 100)  // end_fde_sort similar decomp
 FNMAP(0x23F640, 0x29E2C0, 100)  // count_fdes identical
-FNMAP(0x23F688, 0x29E308, 100)  // add_fdes identical
-FNMAP(0x23F710, 0x29E390, 99)  // frame_init similar
-FNMAP(0x23F850, 0x29E4D0, 99)  // find_fde similar
-FNMAP(0x23F938, 0x29E5B8, 99)  // extract_cie_info similar
-FNMAP(0x23FA40, 0x29E6C0, 100)  // execute_cfa_insn identical
-FNMAP(0x23FDD8, 0x29EA58, 100)  // __register_frame_info_table identical
-FNMAP(0x23FE00, 0x29EA80, 100)  // __deregister_frame_info identical
-FNMAP(0x23FE78, 0x29EAF8, 100)  // __frame_state_for identical
-FNMAP(0x240050, 0x29ECD0, 100)  // fde_split similar
+FNMAP(0x23F688, 0x29E308, 100)  // add_fdes identical decomp
+FNMAP(0x23F710, 0x29E390, 99)  // frame_init similar decomp
+FNMAP(0x23F850, 0x29E4D0, 99)  // find_fde similar decomp
+FNMAP(0x23F938, 0x29E5B8, 99)  // extract_cie_info similar decomp
+FNMAP(0x23FA40, 0x29E6C0, 100)  // execute_cfa_insn identical decomp
+FNMAP(0x23FDD8, 0x29EA58, 100)  // __register_frame_info_table identical decomp
+FNMAP(0x23FE00, 0x29EA80, 100)  // __deregister_frame_info identical decomp
+FNMAP(0x23FE78, 0x29EAF8, 100)  // __frame_state_for identical decomp
+FNMAP(0x240050, 0x29ECD0, 100)  // fde_split similar decomp
 FNMAP(0x2401C8, 0x29EE48, 49)  // func_002401C8 similar
-FNMAP(0x2401D8, 0x29EE58, 99)  // func_002401D8 similar
-FNMAP(0x240328, 0x29EFA8, 100)  // func_00240328 identical
+FNMAP(0x2401D8, 0x29EE58, 99)  // func_002401D8 similar decomp
+FNMAP(0x240328, 0x29EFA8, 100)  // func_00240328 identical decomp
 FNMAP(0x240338, 0x29F158, 70)  // sceGsResetPath changed
-FNMAP(0x240460, 0x29EFB8, 100)  // sceGsResetGraph identical
+FNMAP(0x240460, 0x29EFB8, 100)  // sceGsResetGraph identical decomp
 FNMAP(0x2405F0, 0x29F148, 49)  // func_002405F0 similar
-FNMAP(0x240AA0, 0x29F900, 97)  // func_00240AA0 similar
+FNMAP(0x240AA0, 0x29F900, 97)  // func_00240AA0 similar decomp
 FNMAP(0x240B68, 0x29F940, 93)  // func_00240B68 similar
 FNMAP(0x240B88, 0x29F1C0, 100)  // checkModelVersion identical
 FNMAP(0x240C28, 0x29F260, 100)  // func_00240C28 identical
-FNMAP(0x240C38, 0x29F270, 99)  // sceGsSetDefDispEnv similar
+FNMAP(0x240C38, 0x29F270, 99)  // sceGsSetDefDispEnv similar decomp
 FNMAP(0x241368, 0x29F960, 100)  // WaitDma identical
 FNMAP(0x2413D8, 0x29F9D0, 49)  // func_002413D8 changed
-FNMAP(0x2413E0, 0x29F9D8, 100)  // CheckAddress identical
+FNMAP(0x2413E0, 0x29F9D8, 100)  // CheckAddress identical decomp
 FNMAP(0x241408, 0x29FA00, 100)  // memclr identical
 FNMAP(0x241440, 0x29FA38, 100)  // sceDmaGetChan identical
-FNMAP(0x241468, 0x29FA60, 99)  // sceDmaReset similar
-FNMAP(0x241548, 0x29FB40, 99)  // sceDmaPutEnv similar
+FNMAP(0x241468, 0x29FA60, 99)  // sceDmaReset similar decomp
+FNMAP(0x241548, 0x29FB40, 99)  // sceDmaPutEnv similar decomp
 FNMAP(0x241720, 0x29FD18, 49)  // func_00241720 changed
-FNMAP(0x241728, 0x29FD20, 100)  // sceDmaSend identical
+FNMAP(0x241728, 0x29FD20, 100)  // sceDmaSend identical decomp
 FNMAP(0x241790, 0x29FD88, 49)  // func_00241790 similar
-FNMAP(0x2417A0, 0x29FD98, 100)  // sceDmaRecv identical
+FNMAP(0x2417A0, 0x29FD98, 100)  // sceDmaRecv identical decomp
 FNMAP(0x2417E8, 0x29FDE0, 49)  // func_002417E8 changed
 FNMAP(0x2417F0, 0x29FDE8, 100)  // sceDmaSync identical
 FNMAP(0x241828, 0x29FE20, 49)  // func_00241828 changed
-FNMAP(0x241830, 0x29FE28, 100)  // sceDmaPause identical
+FNMAP(0x241830, 0x29FE28, 100)  // sceDmaPause identical decomp
 FNMAP(0x2418D0, 0x29FEC0, 98)  // func_002418D0 similar
 FNMAP(0x241978, 0x29FF68, 98)  // _sceCd_cd_read_intr similar
-FNMAP(0x241A30, 0x2A0028, 99)  // cmd_sem_init similar
-FNMAP(0x241B18, 0x2A0110, 92)  // cdvd_exit similar
-FNMAP(0x241BB8, 0x2A01B0, 98)  // _sceCd_Poff_Intr similar
-FNMAP(0x241C10, 0x2A0208, 100)  // PowerOffCB identical
+FNMAP(0x241A30, 0x2A0028, 99)  // cmd_sem_init similar decomp
+FNMAP(0x241B18, 0x2A0110, 92)  // cdvd_exit similar decomp
+FNMAP(0x241BB8, 0x2A01B0, 98)  // _sceCd_Poff_Intr similar decomp
+FNMAP(0x241C10, 0x2A0208, 100)  // PowerOffCB identical decomp
 FNMAP(0x241C88, 0x2A0280, 49)  // func_00241C88 similar
-FNMAP(0x241C98, 0x2A0290, 98)  // _sceCd_ncmd_prechk similar
-FNMAP(0x241DF0, 0x2A03E8, 92)  // sceCdNcmdDiskReady similar
-FNMAP(0x241E88, 0x2A0480, 95)  // sceCdSync similar
-FNMAP(0x241F28, 0x2A0520, 91)  // sceCdSyncS similar
-FNMAP(0x241F98, 0x2A0590, 98)  // _sceCd_scmd_prechk similar
-FNMAP(0x2420F0, 0x2A06E8, 100)  // sceCdInit similar
-FNMAP(0x2423D8, 0x2A09D0, 98)  // sceCdDiskReady similar
-FNMAP(0x2425F0, 0x2A0BE8, 98)  // sceCdDiskReady_2425F0 similar
-FNMAP(0x242810, 0x2A0E08, 100)  // sceCdGetReadPos identical
-FNMAP(0x242840, 0x2A0E38, 98)  // sceCdRead similar
-FNMAP(0x242A20, 0x2A1018, 92)  // sceCdGetError similar
-FNMAP(0x242AB8, 0x2A10B0, 95)  // sceCdGetDiskType_242AB8 similar
-FNMAP(0x242AE0, 0x2A10D8, 92)  // sceCdGetDiskType similar
-FNMAP(0x242B78, 0x2A1170, 98)  // sceCdBreak similar
-FNMAP(0x242C30, 0x2A1228, 96)  // sceCdMmode similar
+FNMAP(0x241C98, 0x2A0290, 98)  // _sceCd_ncmd_prechk similar decomp
+FNMAP(0x241DF0, 0x2A03E8, 92)  // sceCdNcmdDiskReady similar decomp
+FNMAP(0x241E88, 0x2A0480, 95)  // sceCdSync similar decomp
+FNMAP(0x241F28, 0x2A0520, 91)  // sceCdSyncS similar decomp
+FNMAP(0x241F98, 0x2A0590, 98)  // _sceCd_scmd_prechk similar decomp
+FNMAP(0x2420F0, 0x2A06E8, 100)  // sceCdInit similar decomp
+FNMAP(0x2423D8, 0x2A09D0, 98)  // sceCdDiskReady similar decomp
+FNMAP(0x2425F0, 0x2A0BE8, 98)  // sceCdDiskReady_2425F0 similar decomp
+FNMAP(0x242810, 0x2A0E08, 100)  // sceCdGetReadPos identical decomp
+FNMAP(0x242840, 0x2A0E38, 98)  // sceCdRead similar decomp
+FNMAP(0x242A20, 0x2A1018, 92)  // sceCdGetError similar decomp
+FNMAP(0x242AB8, 0x2A10B0, 95)  // sceCdGetDiskType_242AB8 similar decomp
+FNMAP(0x242AE0, 0x2A10D8, 92)  // sceCdGetDiskType similar decomp
+FNMAP(0x242B78, 0x2A1170, 98)  // sceCdBreak similar decomp
+FNMAP(0x242C30, 0x2A1228, 96)  // sceCdMmode similar decomp
 FNMAP(0x242D00, 0x2A12F8, 49)  // func_00242D00 changed
-FNMAP(0x242D08, 0x2A1300, 99)  // scePadInit similar
-FNMAP(0x242E48, 0x2A1440, 100)  // _pad_intr_hdr identical
-FNMAP(0x242E90, 0x2A1488, 100)  // scePadInit2 identical
-FNMAP(0x242F70, 0x2A1568, 98)  // _send_to_iop similar
-FNMAP(0x243088, 0x2A1680, 99)  // scePadPortOpen similar
-FNMAP(0x243270, 0x2A1868, 100)  // scePadGetDmaStr identical
-FNMAP(0x2432D0, 0x2A18C8, 99)  // scePadRead similar
-FNMAP(0x243388, 0x2A1980, 100)  // scePadGetState_243388 identical
+FNMAP(0x242D08, 0x2A1300, 99)  // scePadInit similar decomp
+FNMAP(0x242E48, 0x2A1440, 100)  // _pad_intr_hdr identical decomp
+FNMAP(0x242E90, 0x2A1488, 100)  // scePadInit2 identical decomp
+FNMAP(0x242F70, 0x2A1568, 98)  // _send_to_iop similar decomp
+FNMAP(0x243088, 0x2A1680, 99)  // scePadPortOpen similar decomp
+FNMAP(0x243270, 0x2A1868, 100)  // scePadGetDmaStr identical decomp
+FNMAP(0x2432D0, 0x2A18C8, 99)  // scePadRead similar decomp
+FNMAP(0x243388, 0x2A1980, 100)  // scePadGetState_243388 identical decomp
 FNMAP(0x243450, 0x2A1A48, 49)  // func_00243450 changed
-FNMAP(0x243458, 0x2A1A50, 99)  // scePadSetReqState similar
-FNMAP(0x243500, 0x2A1AF8, 100)  // scePadGetState identical
+FNMAP(0x243458, 0x2A1A50, 99)  // scePadSetReqState similar decomp
+FNMAP(0x243500, 0x2A1AF8, 100)  // scePadGetState identical decomp
 FNMAP(0x243550, 0x2A1B48, 49)  // func_00243550 changed
-FNMAP(0x243558, 0x2A1B50, 100)  // scePadInfoAct identical
+FNMAP(0x243558, 0x2A1B50, 100)  // scePadInfoAct identical decomp
 FNMAP(0x243678, 0x2A1C70, 49)  // func_00243678 changed
-FNMAP(0x243680, 0x2A1C78, 100)  // scePadInfoMode identical
-FNMAP(0x2437B8, 0x2A1DB0, 99)  // scePadSetMainMode similar
-FNMAP(0x243870, 0x2A1E68, 100)  // scePadSetActDirect identical
-FNMAP(0x243930, 0x2A1F28, 100)  // scePadSetActAlign identical
-FNMAP(0x243A08, 0x2A2000, 99)  // scePadGetButtonMask similar
-FNMAP(0x243AC0, 0x2A20B8, 100)  // scePadSetButtonInfo identical
-FNMAP(0x243B70, 0x2A2168, 98)  // scePadInfoPressMode similar
-FNMAP(0x243BD0, 0x2A21C8, 98)  // scePadEnterPressMode similar
+FNMAP(0x243680, 0x2A1C78, 100)  // scePadInfoMode identical decomp
+FNMAP(0x2437B8, 0x2A1DB0, 99)  // scePadSetMainMode similar decomp
+FNMAP(0x243870, 0x2A1E68, 100)  // scePadSetActDirect identical decomp
+FNMAP(0x243930, 0x2A1F28, 100)  // scePadSetActAlign identical decomp
+FNMAP(0x243A08, 0x2A2000, 99)  // scePadGetButtonMask similar decomp
+FNMAP(0x243AC0, 0x2A20B8, 100)  // scePadSetButtonInfo identical decomp
+FNMAP(0x243B70, 0x2A2168, 98)  // scePadInfoPressMode similar decomp
+FNMAP(0x243BD0, 0x2A21C8, 98)  // scePadEnterPressMode similar decomp
 FNMAP(0x243C28, 0x2A2220, 91)  // func_00243C28 similar
-FNMAP(0x243C40, 0x2A2238, 98)  // scePadGetModVersion similar
+FNMAP(0x243C40, 0x2A2238, 98)  // scePadGetModVersion similar decomp
 FNMAP(0x243CA8, 0x2A22A0, 49)  // func_00243CA8 changed
-FNMAP(0x243CB0, 0x2A22A8, 97)  // sceMcInit similar
+FNMAP(0x243CB0, 0x2A22A8, 97)  // sceMcInit similar decomp
 FNMAP(0x243ED8, 0x2A24D0, 67)  // func_00243ED8 changed
-FNMAP(0x243EF0, 0x2A24E8, 100)  // sceMcOpen identical
-FNMAP(0x244018, 0x2A2610, 96)  // sceMcMkdir similar
-FNMAP(0x244050, 0x2A2648, 99)  // sceMcClose similar
-FNMAP(0x244110, 0x2A2708, 100)  // mceIntrReadFixAlign identical
-FNMAP(0x2441C0, 0x2A27B8, 96)  // sceMcRead similar
-FNMAP(0x2442D8, 0x2A28D0, 99)  // sceMcWrite similar
-FNMAP(0x244450, 0x2A2A48, 97)  // sceMcSync similar
-FNMAP(0x244518, 0x2A2B10, 100)  // mceGetInfoApdx identical
-FNMAP(0x244570, 0x2A2B68, 100)  // sceMcGetInfo similar
-FNMAP(0x2446F0, 0x2A2CE8, 97)  // sceMcGetDir similar
+FNMAP(0x243EF0, 0x2A24E8, 100)  // sceMcOpen identical decomp
+FNMAP(0x244018, 0x2A2610, 96)  // sceMcMkdir similar decomp
+FNMAP(0x244050, 0x2A2648, 99)  // sceMcClose similar decomp
+FNMAP(0x244110, 0x2A2708, 100)  // mceIntrReadFixAlign identical decomp
+FNMAP(0x2441C0, 0x2A27B8, 96)  // sceMcRead similar decomp
+FNMAP(0x2442D8, 0x2A28D0, 99)  // sceMcWrite similar decomp
+FNMAP(0x244450, 0x2A2A48, 97)  // sceMcSync similar decomp
+FNMAP(0x244518, 0x2A2B10, 100)  // mceGetInfoApdx identical decomp
+FNMAP(0x244570, 0x2A2B68, 100)  // sceMcGetInfo similar decomp
+FNMAP(0x2446F0, 0x2A2CE8, 97)  // sceMcGetDir similar decomp
 FNMAP(0x244840, 0x2A2E38, 49)  // func_00244840 changed
-FNMAP(0x244848, 0x2A2E40, 99)  // sceMcFormat similar
-FNMAP(0x244918, 0x2A2F10, 99)  // sceMcDelete similar
+FNMAP(0x244848, 0x2A2E40, 99)  // sceMcFormat similar decomp
+FNMAP(0x244918, 0x2A2F10, 99)  // sceMcDelete similar decomp
 FNMAP(0x244A38, 0x2A3030, 93)  // func_00244A38 similar
-FNMAP(0x244A58, 0x2A3050, 96)  // sceMcGetEntSpace similar
-FNMAP(0x244B68, 0x2A3160, 100)  // atanf identical
-FNMAP(0x244E10, 0x2A3408, 100)  // cosf identical
-FNMAP(0x244EF8, 0x2A34F0, 100)  // func_00244EF8 identical
+FNMAP(0x244A58, 0x2A3050, 96)  // sceMcGetEntSpace similar decomp
+FNMAP(0x244B68, 0x2A3160, 100)  // atanf identical decomp
+FNMAP(0x244E10, 0x2A3408, 100)  // cosf identical decomp
+FNMAP(0x244EF8, 0x2A34F0, 100)  // func_00244EF8 identical decomp
 FNMAP(0x244F18, 0x2A3510, 99)  // floorf similar
-FNMAP(0x245000, 0x2A35F8, 100)  // sinf identical
-FNMAP(0x2450F0, 0x2A36E8, 100)  // tanf identical
-FNMAP(0x245178, 0x2A3770, 99)  // log10 similar
-FNMAP(0x2452C0, 0x2A38B8, 99)  // pow similar
+FNMAP(0x245000, 0x2A35F8, 100)  // sinf identical decomp
+FNMAP(0x2450F0, 0x2A36E8, 100)  // tanf identical decomp
+FNMAP(0x245178, 0x2A3770, 99)  // log10 similar decomp
+FNMAP(0x2452C0, 0x2A38B8, 99)  // pow similar decomp
 FNMAP(0x2456F0, 0x2A3CE8, 99)  // acosf similar
 FNMAP(0x2457F0, 0x2A3DE8, 99)  // asinf similar
-FNMAP(0x2458F0, 0x2A3EE8, 100)  // atan2f identical
-FNMAP(0x245A18, 0x2A4188, 99)  // fmodf similar
-FNMAP(0x245B58, 0x2A42C8, 99)  // powf similar
-FNMAP(0x246060, 0x2A47D0, 99)  // sqrtf similar
-FNMAP(0x246178, 0x2A48E8, 100)  // __ieee754_log10 identical
-FNMAP(0x246300, 0x2A4A70, 100)  // __ieee754_pow identical
-FNMAP(0x247028, 0x2A5798, 100)  // __ieee754_sqrt similar
-FNMAP(0x247330, 0x2A5AA0, 100)  // __ieee754_acosf identical
-FNMAP(0x247760, 0x2A5ED0, 100)  // __ieee754_asinf similar
+FNMAP(0x2458F0, 0x2A3EE8, 100)  // atan2f identical decomp
+FNMAP(0x245A18, 0x2A4188, 99)  // fmodf similar decomp
+FNMAP(0x245B58, 0x2A42C8, 99)  // powf similar decomp
+FNMAP(0x246060, 0x2A47D0, 99)  // sqrtf similar decomp
+FNMAP(0x246178, 0x2A48E8, 100)  // __ieee754_log10 identical decomp
+FNMAP(0x246300, 0x2A4A70, 100)  // __ieee754_pow identical decomp
+FNMAP(0x247028, 0x2A5798, 100)  // __ieee754_sqrt similar decomp
+FNMAP(0x247330, 0x2A5AA0, 100)  // __ieee754_acosf identical decomp
+FNMAP(0x247760, 0x2A5ED0, 100)  // __ieee754_asinf similar decomp
 FNMAP(0x247B00, 0x2A6270, 100)  // __ieee754_atan2f identical
-FNMAP(0x247DE8, 0x2A6810, 100)  // __ieee754_fmodf identical
-FNMAP(0x248038, 0x2A6A60, 100)  // __ieee754_powf similar
-FNMAP(0x2488C8, 0x2A72F0, 100)  // __ieee754_rem_pio2f identical
-FNMAP(0x248CA8, 0x2A76D0, 100)  // __ieee754_sqrtf identical
+FNMAP(0x247DE8, 0x2A6810, 100)  // __ieee754_fmodf identical decomp
+FNMAP(0x248038, 0x2A6A60, 100)  // __ieee754_powf similar decomp
+FNMAP(0x2488C8, 0x2A72F0, 100)  // __ieee754_rem_pio2f identical decomp
+FNMAP(0x248CA8, 0x2A76D0, 100)  // __ieee754_sqrtf identical decomp
 FNMAP(0x248DE0, 0x2A7808, 100)  // __kernel_cosf identical
-FNMAP(0x248F38, 0x2A7960, 100)  // __kernel_rem_pio2f similar
+FNMAP(0x248F38, 0x2A7960, 100)  // __kernel_rem_pio2f similar decomp
 FNMAP(0x249888, 0x2A82B0, 99)  // __kernel_sinf similar
-FNMAP(0x249990, 0x2A83B8, 100)  // __kernel_tanf similar
+FNMAP(0x249990, 0x2A83B8, 100)  // __kernel_tanf similar decomp
 FNMAP(0x249C28, 0x2A8650, 96)  // fabs similar
-FNMAP(0x249C60, 0x2A8688, 100)  // func_00249C60 identical
-FNMAP(0x249C80, 0x2A86A8, 100)  // func_00249C80 identical
-FNMAP(0x249CB8, 0x2A86E0, 95)  // matherr similar
-FNMAP(0x249CE0, 0x2A8708, 100)  // rint similar
-FNMAP(0x249EE0, 0x2A8908, 100)  // func_00249EE0 similar
-FNMAP(0x24A098, 0x2A8AC0, 95)  // func_0024A098 similar
-FNMAP(0x24A0C0, 0x2A8AE8, 95)  // func_0024A0C0 similar
+FNMAP(0x249C60, 0x2A8688, 100)  // func_00249C60 identical decomp
+FNMAP(0x249C80, 0x2A86A8, 100)  // func_00249C80 identical decomp
+FNMAP(0x249CB8, 0x2A86E0, 95)  // matherr similar decomp
+FNMAP(0x249CE0, 0x2A8708, 100)  // rint similar decomp
+FNMAP(0x249EE0, 0x2A8908, 100)  // func_00249EE0 similar decomp
+FNMAP(0x24A098, 0x2A8AC0, 95)  // func_0024A098 similar decomp
+FNMAP(0x24A0C0, 0x2A8AE8, 95)  // func_0024A0C0 similar decomp
 FNMAP(0x24A0E8, 0x2A8B10, 100)  // func_0024A0E8 identical
-FNMAP(0x24A248, 0x2A8C70, 100)  // __ieee754_log similar
+FNMAP(0x24A248, 0x2A8C70, 100)  // __ieee754_log similar decomp
 FNMAP(0x24A738, 0x2A9160, 97)  // func_0024A738 similar
-FNMAP(0x24A780, 0x2A91A8, 100)  // func_0024A780 identical
+FNMAP(0x24A780, 0x2A91A8, 100)  // func_0024A780 identical decomp
 FNMAP(0x24A7B0, 0x2A91D8, 96)  // GetRomName similar
 FNMAP(0x24A820, 0x2A9248, 100)  // IsT10K identical
-FNMAP(0x24A860, 0x2A9288, 100)  // sceScfGetLanguage identical
+FNMAP(0x24A860, 0x2A9288, 100)  // sceScfGetLanguage identical decomp
 FNMAP(0x24A8C0, 0x2A92E8, 97)  // func_0024A8C0 similar
-FNMAP(0x24A908, 0x2A9330, 99)  // _clearOnce similar
-FNMAP(0x24A9D8, 0x2A9400, 100)  // sceMpegCreate identical
-FNMAP(0x24AC10, 0x2A9638, 100)  // _clearEach identical
-FNMAP(0x24ACD8, 0x2A9700, 98)  // _getpic similar
-FNMAP(0x24AE90, 0x2A98B8, 100)  // _updateRefImage similar
-FNMAP(0x24B148, 0x2A9B70, 100)  // _decodeOrSkipFrame identical
-FNMAP(0x24B2B8, 0x2A9CE0, 100)  // _decodeOrSkipField similar
-FNMAP(0x24B480, 0x2A9EA8, 100)  // sceMpegInit identical
+FNMAP(0x24A908, 0x2A9330, 99)  // _clearOnce similar decomp
+FNMAP(0x24A9D8, 0x2A9400, 100)  // sceMpegCreate identical decomp
+FNMAP(0x24AC10, 0x2A9638, 100)  // _clearEach identical decomp
+FNMAP(0x24ACD8, 0x2A9700, 98)  // _getpic similar decomp
+FNMAP(0x24AE90, 0x2A98B8, 100)  // _updateRefImage similar decomp
+FNMAP(0x24B148, 0x2A9B70, 100)  // _decodeOrSkipFrame identical decomp
+FNMAP(0x24B2B8, 0x2A9CE0, 100)  // _decodeOrSkipField similar decomp
+FNMAP(0x24B480, 0x2A9EA8, 100)  // sceMpegInit identical decomp
 FNMAP(0x24B530, 0x2A9F58, 49)  // func_0024B530 changed
 FNMAP(0x24B540, 0x2A9F68, 95)  // sceMpegGetPicture similar
-FNMAP(0x24B590, 0x2A9FB8, 98)  // sceMpegReset similar
+FNMAP(0x24B590, 0x2A9FB8, 98)  // sceMpegReset similar decomp
 FNMAP(0x24B610, 0x2AA038, 49)  // func_0024B610 changed
 FNMAP(0x24B628, 0x2AA050, 49)  // sceMpegAddCallback similar
-FNMAP(0x24B670, 0x2AA098, 100)  // _sceMpegDispatchMpegCallback identical
-FNMAP(0x24B6E8, 0x2AA110, 98)  // _sceMpegDispatchMpegCbNodata similar
-FNMAP(0x24B760, 0x2AA188, 97)  // _decodeOrSkip similar
+FNMAP(0x24B670, 0x2AA098, 100)  // _sceMpegDispatchMpegCallback identical decomp
+FNMAP(0x24B6E8, 0x2AA110, 98)  // _sceMpegDispatchMpegCbNodata similar decomp
+FNMAP(0x24B760, 0x2AA188, 97)  // _decodeOrSkip similar decomp
 FNMAP(0x24B7A8, 0x2AA1D0, 79)  // sceMpegClearRefBuff similar
-FNMAP(0x24B828, 0x2AA250, 99)  // _decPicture similar
+FNMAP(0x24B828, 0x2AA250, 99)  // _decPicture similar decomp
 FNMAP(0x24B8F8, 0x2AA320, 91)  // func_0024B8F8 similar
 FNMAP(0x24B910, 0x2AA338, 49)  // func_0024B910 similar
 FNMAP(0x24B920, 0x2AA348, 49)  // func_0024B920 similar
 FNMAP(0x24B930, 0x2AA358, 49)  // func_0024B930 changed
-FNMAP(0x24B9F0, 0x2AA418, 100)  // _cpr8 identical
-FNMAP(0x24BC80, 0x2AA6A8, 100)  // _dispRefImage identical
-FNMAP(0x24BF40, 0x2AA968, 100)  // _dispRefImageField identical
-FNMAP(0x24C360, 0x2AAD88, 100)  // _sceMpegFlush identical
-FNMAP(0x24C420, 0x2AAE48, 100)  // _sceMpegOutputFrame identical
-FNMAP(0x24C4B0, 0x2AAED8, 100)  // _doCSC2 identical
-FNMAP(0x24C670, 0x2AB098, 82)  // _sceMpegCscStoreRefImage similar
-FNMAP(0x24CD70, 0x2AB798, 100)  // _system_header identical
-FNMAP(0x24CF40, 0x2AB968, 100)  // _pack_header identical
-FNMAP(0x24D5E8, 0x2AC010, 100)  // _PES_packet identical
-FNMAP(0x24F390, 0x2ADDB8, 100)  // sceMpegDemuxPssRing identical
-FNMAP(0x24F770, 0x2AE198, 100)  // func_0024F770 identical
-FNMAP(0x24F790, 0x2AE1B8, 100)  // sceMpegAddStrCallback identical
-FNMAP(0x24F8C0, 0x2AE2E8, 100)  // func_0024F8C0 identical
-FNMAP(0x24F8D0, 0x2AE2F8, 100)  // _sceMpegStopIpuDma identical
-FNMAP(0x24F970, 0x2AE398, 100)  // _sceMpegErrorBdec identical
+FNMAP(0x24B9F0, 0x2AA418, 100)  // _cpr8 identical decomp
+FNMAP(0x24BC80, 0x2AA6A8, 100)  // _dispRefImage identical decomp
+FNMAP(0x24BF40, 0x2AA968, 100)  // _dispRefImageField identical decomp
+FNMAP(0x24C360, 0x2AAD88, 100)  // _sceMpegFlush identical decomp
+FNMAP(0x24C420, 0x2AAE48, 100)  // _sceMpegOutputFrame identical decomp
+FNMAP(0x24C4B0, 0x2AAED8, 100)  // _doCSC2 identical decomp
+FNMAP(0x24C670, 0x2AB098, 82)  // _sceMpegCscStoreRefImage similar decomp
+FNMAP(0x24CD70, 0x2AB798, 100)  // _system_header identical decomp
+FNMAP(0x24CF40, 0x2AB968, 100)  // _pack_header identical decomp
+FNMAP(0x24D5E8, 0x2AC010, 100)  // _PES_packet identical decomp
+FNMAP(0x24F390, 0x2ADDB8, 100)  // sceMpegDemuxPssRing identical decomp
+FNMAP(0x24F770, 0x2AE198, 100)  // func_0024F770 identical decomp
+FNMAP(0x24F790, 0x2AE1B8, 100)  // sceMpegAddStrCallback identical decomp
+FNMAP(0x24F8C0, 0x2AE2E8, 100)  // func_0024F8C0 identical decomp
+FNMAP(0x24F8D0, 0x2AE2F8, 100)  // _sceMpegStopIpuDma identical decomp
+FNMAP(0x24F970, 0x2AE398, 100)  // _sceMpegErrorBdec identical decomp
 FNMAP(0x24FA38, 0x2AE460, 98)  // _sceMpegError similar
-FNMAP(0x24FA90, 0x2AE4B8, 97)  // _sceMpegError1 similar
-FNMAP(0x24FAD0, 0x2AE500, 100)  // _dualPrimeVector similar
-FNMAP(0x24FC58, 0x2AE688, 99)  // _getAllRefs similar
-FNMAP(0x250360, 0x2AED90, 100)  // _motionComp0 identical
-FNMAP(0x2505B0, 0x2AEFE0, 100)  // _getRef0 identical
-FNMAP(0x250A38, 0x2AF468, 100)  // _doMC similar
-FNMAP(0x250C58, 0x2AF688, 100)  // _sceMpegPictureData0 identical
-FNMAP(0x250E98, 0x2AF8C8, 100)  // _slice0 similar
-FNMAP(0x2511C8, 0x2AFBF8, 100)  // _motionVector identical
-FNMAP(0x2515F0, 0x2B0020, 100)  // _motionVectors similar
-FNMAP(0x251790, 0x2B01C0, 100)  // _decMB0 identical
-FNMAP(0x251CE8, 0x2B0718, 68)  // _sceMpegMbAddressIncrement changed
-FNMAP(0x251FC8, 0x2B09F8, 100)  // _sceMpegWaitIpuIdle64 identical
-FNMAP(0x252148, 0x2B0B78, 100)  // _sceMpegNextBit identical
-FNMAP(0x252230, 0x2B0C60, 64)  // _sceMpegPeepBit changed
+FNMAP(0x24FA90, 0x2AE4B8, 97)  // _sceMpegError1 similar decomp
+FNMAP(0x24FAD0, 0x2AE500, 100)  // _dualPrimeVector similar decomp
+FNMAP(0x24FC58, 0x2AE688, 99)  // _getAllRefs similar decomp
+FNMAP(0x250360, 0x2AED90, 100)  // _motionComp0 identical decomp
+FNMAP(0x2505B0, 0x2AEFE0, 100)  // _getRef0 identical decomp
+FNMAP(0x250A38, 0x2AF468, 100)  // _doMC similar decomp
+FNMAP(0x250C58, 0x2AF688, 100)  // _sceMpegPictureData0 identical decomp
+FNMAP(0x250E98, 0x2AF8C8, 100)  // _slice0 similar decomp
+FNMAP(0x2511C8, 0x2AFBF8, 100)  // _motionVector identical decomp
+FNMAP(0x2515F0, 0x2B0020, 100)  // _motionVectors similar decomp
+FNMAP(0x251790, 0x2B01C0, 100)  // _decMB0 identical decomp
+FNMAP(0x251CE8, 0x2B0718, 80)  // _sceMpegMbAddressIncrement changed decomp
+FNMAP(0x251FC8, 0x2B09F8, 100)  // _sceMpegWaitIpuIdle64 identical decomp
+FNMAP(0x252148, 0x2B0B78, 100)  // _sceMpegNextBit identical decomp
+FNMAP(0x252230, 0x2B0C60, 80)  // _sceMpegPeepBit changed decomp
 FNMAP(0x252358, 0x2B0D88, 100)  // _waitIpuIdle identical
 FNMAP(0x252390, 0x2B0DC0, 100)  // func_00252390 identical
-FNMAP(0x252458, 0x2B0DC8, 46)  // _copyAddRefImage changed
-FNMAP(0x252608, 0x2B1038, 100)  // dmaRefImage similar
+FNMAP(0x252398, 0x2B0DC8, 80)  // _skipMB0 changed decomp
+FNMAP(0x252608, 0x2B1038, 100)  // dmaRefImage similar decomp
 FNMAP(0x252788, 0x2B11B8, 100)  // _rix_000 identical
 FNMAP(0x252800, 0x2B1230, 100)  // _ri0_000 identical
 FNMAP(0x252898, 0x2B12C8, 100)  // _rix_001 identical
@@ -5275,28 +5300,28 @@ FNMAP(0x253098, 0x2B1AC8, 100)  // _rix_110 identical
 FNMAP(0x253170, 0x2B1BA0, 100)  // _ri0_110 identical
 FNMAP(0x253240, 0x2B1C70, 100)  // _rix_111 identical
 FNMAP(0x253360, 0x2B1D90, 100)  // _ri0_111 identical
-FNMAP(0x253478, 0x2B1EA8, 100)  // receiveDataFromIPU identical
-FNMAP(0x253518, 0x2B1F48, 100)  // _sceMpegSliceA0 identical
-FNMAP(0x2536B8, 0x2B20E8, 100)  // _initSeq similar
-FNMAP(0x2539D0, 0x2B2400, 100)  // _sequenceHeader similar
-FNMAP(0x253C80, 0x2B26B0, 100)  // _groupOfPicturesHeader identical
-FNMAP(0x253E68, 0x2B2750, 50)  // _sequenceExtension changed
+FNMAP(0x253478, 0x2B1EA8, 100)  // receiveDataFromIPU identical decomp
+FNMAP(0x253518, 0x2B1F48, 100)  // _sceMpegSliceA0 identical decomp
+FNMAP(0x2536B8, 0x2B20E8, 100)  // _initSeq similar decomp
+FNMAP(0x2539D0, 0x2B2400, 100)  // _sequenceHeader similar decomp
+FNMAP(0x253C80, 0x2B26B0, 100)  // _groupOfPicturesHeader identical decomp
+FNMAP(0x253D20, 0x2B2750, 80)  // _pictureHeader changed decomp
 FNMAP(0x2542B8, 0x2B2CE8, 100)  // _extensionAndUserData similar
 FNMAP(0x254488, 0x2B2EB8, 100)  // _waitIpuIdle_254488 identical
 FNMAP(0x2544C0, 0x2B2EF0, 100)  // func_002544C0 identical
-FNMAP(0x2544C8, 0x2B2EF8, 99)  // _sceMpegNextHeader similar
+FNMAP(0x2544C8, 0x2B2EF8, 99)  // _sceMpegNextHeader similar decomp
 FNMAP(0x254620, 0x2B3050, 100)  // func_00254620 identical
-FNMAP(0x254628, 0x2B3058, 100)  // flushByteBoundary identical
-FNMAP(0x254678, 0x2B30A8, 99)  // _sequenceDisplayExtension similar
+FNMAP(0x254628, 0x2B3058, 100)  // flushByteBoundary identical decomp
+FNMAP(0x254678, 0x2B30A8, 99)  // _sequenceDisplayExtension similar decomp
 FNMAP(0x254708, 0x2B3138, 99)  // _copyrightExtension similar
-FNMAP(0x2547A0, 0x2B31D0, 99)  // _pictureDisplayExtension similar
-FNMAP(0x254898, 0x2B32C8, 98)  // setD3_CHCR similar
+FNMAP(0x2547A0, 0x2B31D0, 99)  // _pictureDisplayExtension similar decomp
+FNMAP(0x254898, 0x2B32C8, 98)  // setD3_CHCR similar decomp
 FNMAP(0x254910, 0x2B3340, 98)  // setD4_CHCR similar
-FNMAP(0x254988, 0x2B33B8, 99)  // sceIpuStopDMA similar
-FNMAP(0x254A70, 0x2B34A0, 100)  // sceIpuRestartDMA identical
+FNMAP(0x254988, 0x2B33B8, 99)  // sceIpuStopDMA similar decomp
+FNMAP(0x254A70, 0x2B34A0, 100)  // sceIpuRestartDMA identical decomp
 FNMAP(0x254BC0, 0x2B35F0, 100)  // sceIpuSync identical
 FNMAP(0x254C28, 0x2B3658, 98)  // setD4_CHCR_254C28 similar
-FNMAP(0x254CA0, 0x2B36D0, 100)  // sceIpuInit identical
+FNMAP(0x254CA0, 0x2B36D0, 100)  // sceIpuInit identical decomp
 FNMAP(0x254ED8, 0x2B3908, 91)  // func_00254ED8 similar
 FNMAP(0x254EF0, 0x2B3920, 86)  // func_00254EF0 similar
 FNMAP(0x2550A0, 0x2B3B18, 49)  // func_002550A0 changed
@@ -5313,7 +5338,7 @@ FNMAP(0x2560C8, 0x2B4DD8, 64)  // func_002560C8 changed
 FNMAP(0x256120, 0x2B4E48, 75)  // func_00256120 similar
 FNMAP(0x256270, 0x2B4FE8, 49)  // func_00256270 changed
 FNMAP(0x2562A8, 0x2B8750, 49)  // func_002562A8 similar
-FNMAP(0x2562B8, 0x2B56E0, 95)  // func_002562B8 similar
+FNMAP(0x2562B8, 0x2B56E0, 95)  // func_002562B8 similar decomp
 FNMAP(0x2562E0, 0x2B5708, 49)  // func_002562E0 similar
 FNMAP(0x2562F0, 0x2B5718, 84)  // func_002562F0 similar
 FNMAP(0x256318, 0x2B5740, 49)  // func_00256318 changed
@@ -5325,19 +5350,19 @@ FNMAP(0x2564A8, 0x2B9FF0, 49)  // func_002564A8 similar
 FNMAP(0x2564B8, 0x2BA000, 100)  // func_002564B8 identical
 FNMAP(0x2564C0, 0x2BA008, 100)  // func_002564C0 identical
 FNMAP(0x2564C8, 0x2BA010, 49)  // func_002564C8 changed
-FNMAP(0x2564E0, 0x2BA028, 97)  // func_002564E0 similar
+FNMAP(0x2564E0, 0x2BA028, 97)  // func_002564E0 similar decomp
 FNMAP(0x256528, 0x2BA070, 97)  // func_00256528 similar
 FNMAP(0x256578, 0x2BA0C0, 100)  // func_00256578 identical
 FNMAP(0x256588, 0x2BA0D0, 98)  // func_00256588 similar
 FNMAP(0x2565E0, 0x2BA128, 95)  // func_002565E0 similar
 FNMAP(0x256658, 0x2BA1A0, 98)  // func_00256658 similar
 FNMAP(0x2566B0, 0x2BA1F8, 95)  // func_002566B0 similar
-FNMAP(0x2566D8, 0x2BA220, 98)  // func_002566D8 similar
-FNMAP(0x2567D0, 0x2BA318, 82)  // func_002567D0 similar
+FNMAP(0x2566D8, 0x2BA220, 98)  // func_002566D8 similar decomp
+FNMAP(0x2567D0, 0x2BA318, 82)  // func_002567D0 similar decomp
 FNMAP(0x2568A0, 0x2BA3E8, 93)  // func_002568A0 similar
-FNMAP(0x2568C0, 0x2BA408, 82)  // func_002568C0 similar
-FNMAP(0x2569F8, 0x2BA540, 100)  // func_002569F8 register-renamed
-FNMAP(0x256AF0, 0x2BA638, 100)  // func_00256AF0 register-renamed
+FNMAP(0x2568C0, 0x2BA408, 82)  // func_002568C0 similar decomp
+FNMAP(0x2569F8, 0x2BA540, 100)  // func_002569F8 register-renamed decomp
+FNMAP(0x256AF0, 0x2BA638, 100)  // func_00256AF0 register-renamed decomp
 FNMAP(0x256B48, 0x2BA6B8, 50)  // PpairNew changed
 FNMAP(0x256C38, 0x2BA760, 49)  // func_00256C38 changed
 FNMAP(0x256C58, 0x2BA780, 32)  // func_00256C58 changed
@@ -5385,8 +5410,8 @@ FNMAP(0x258200, 0x2BC050, 100)  // NProgress identical
 FNMAP(0x258248, 0x2BC568, 100)  // func_00258248 register-renamed
 FNMAP(0x258290, 0x2BC760, 47)  // func_00258290 changed
 FNMAP(0x258348, 0x2BC7F0, 49)  // func_00258348 changed
-FNMAP(0x258438, 0x2BC878, 49)  // func_00258438 similar
-FNMAP(0x258448, 0x2BC888, 49)  // func_00258448 similar
+FNMAP(0x258438, 0x2BC878, 86)  // func_00258438 similar decomp
+FNMAP(0x258448, 0x2BC888, 86)  // func_00258448 similar decomp
 FNMAP(0x258458, 0x2BC898, 100)  // func_00258458 identical
 FNMAP(0x258470, 0x2BC8B0, 100)  // func_00258470 identical
 FNMAP(0x258478, 0x2BC8B8, 100)  // func_00258478 identical
@@ -5469,6 +5494,6 @@ FNMAP(0x259C10, 0x2BF2E8, 49)  // func_00259C10 changed
 FNMAP(0x259C18, 0x2BF5B0, 50)  // func_00259C18 changed
 FNMAP(0x259CF8, 0x2BF658, 93)  // func_00259CF8 similar
 FNMAP(0x259D18, 0x2BF678, 93)  // func_00259D18 similar
-FNMAP(0x259D98, 0x2BC420, 100)  // func_00259D98 identical
-FNMAP(0x259DA8, 0x2BC430, 100)  // func_00259DA8 identical
-FNMAP(0x259DC0, 0x2BC448, 100)  // func_00259DC0 identical
+FNMAP(0x259D98, 0x2BC420, 100)  // func_00259D98 identical decomp
+FNMAP(0x259DA8, 0x2BC430, 100)  // func_00259DA8 identical decomp
+FNMAP(0x259DC0, 0x2BC448, 100)  // func_00259DC0 identical decomp

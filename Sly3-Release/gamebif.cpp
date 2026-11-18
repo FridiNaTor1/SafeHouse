@@ -15,6 +15,12 @@
 #include "transition.h"
 #include "update.h"
 #include "jt.h"
+#include "so.h"
+#include "game/suck3.h"
+#include "pickup.h"
+
+
+#include <algorithm>
 
 #include <glm/glm.hpp>
 
@@ -92,11 +98,53 @@ std::vector<int16_t> AkeyFromList(const CRef& ref)
     return akey;
 }
 
+CRef RefHitTestObjects3(CRef* argv, bool fFirst)
+{
+    if (argv[0].m_tagk == TAGK_None) return argv[0];
+    std::vector<LO*> aplo;
+    for (const CPair* p = argv[0].m_ppair.get(); p; p = p->m_ppairNext.get()) aplo.push_back(PloOf(p->m_ref));
+    std::vector<HITOBJ3> ahit;
+    if (argv[1].m_tagk == TAGK_Vector && argv[2].m_tagk == TAGK_Vector)
+        HitTestObjects3(aplo, argv[1].GetVector(), argv[2].GetVector(), &ahit);
+    auto refObj = [](LO* plo) { CRef r; r.SetBasic(plo); return r; };
+    auto refVec = [](const glm::vec3& v) { CRef r; r.SetVector(v); return r; };
+    if (static const bool s_f = std::getenv("SLY3_HITTESTPRINT") != nullptr; s_f)   // (debug)
+        for (const HITOBJ3& h : ahit)
+            std::printf("hit-test-objects: %d of %zu listed, %d %p (cid 0x%X, in world %d) at %.0f %.0f %.0f\n", int(ahit.size()), aplo.size(), h.plo->oid, (void*)h.plo, h.plo->Cid(), int(h.plo->fInWorld), h.pos.x, h.pos.y, h.pos.z);
+    std::vector<CRef> aref;
+    if (fFirst)
+    {
+        const HITOBJ3* pbest = nullptr;
+        for (const HITOBJ3& h : ahit)
+            if (!pbest || h.t < pbest->t) pbest = &h;
+        if (!pbest) { CRef r; r.SetTag(TAGK_None); return r; }
+        return RefList({refObj(pbest->plo), refVec(pbest->pos)});
+    }
+    for (const HITOBJ3& h : ahit) aref.push_back(RefList({refObj(h.plo), refVec(h.pos), refVec(glm::vec3(h.plane))}));
+    return RefList(aref);
+}
+
 struct INITGAMEBIFS
 {
     INITGAMEBIFS()
     {
+        // Sly 3's 148 add-coins (orig3 0x1276B8): the save's coins (0x1852E0) plus the argument through 0x185328 (clamped
+        // to 0..999999, the coin counter shown: 0x1853D8); returns void (tag 0x22) (audit 4 CORE-09)
+        SetBifGameHook(static_cast<BIFK>(148), [](int argc, CRef* argv, CFrame*) {
+            const int d = argc > 0 ? (argv[0].m_tagk == TAGK_F32 ? int(argv[0].m_g) : argv[0].m_n) : 0;
+            const CRef rc = RefGetProgress({"loot", "ccoin"});
+            const int c = rc.m_tagk == TAGK_S32 ? rc.m_n : rc.m_tagk == TAGK_F32 ? int(rc.m_g) : 0;
+            CRef r;
+            r.SetS32(std::clamp(int(unsigned(c) + unsigned(d)), 0, 0xF423F));
+            FSetProgress({"loot", "ccoin"}, r);
+            ShowCoinCounter();
+            return CRef(TAGK_Void);
+        });
         // 97 the world's index (0x210A88), 98 its kind (0x210A98), 99 its episode (0x210AE0), 104 0 (0x210B68)
+        // (audit 4 CORE-20: Sly 2's 98 / 99 have no Sly 3 built-in (Bifk3FromSly2: BIFK_Nil, the hooks are dropped), and
+        // Sly 2's 104 / 105 / 106 / 133 land on Sly 3's 108 / 111 / 112 / 141, which bif.cpp's table has as native BIFN
+        // entries (RefOpZero3, RefOpScheduleCallback3, RefOpCancelCallback3, RefOpSymbolValue3): a BIFN wins over a hook,
+        // so those four hooks below are never called; kept as the Sly 2 reference of the same behaviour)
         SetBifGameHook(Bifk3FromSly2(97), [](int, CRef*, CFrame*) { return RefS32(g_transition.iwrecCur); });
         SetBifGameHook(Bifk3FromSly2(98), [](int, CRef*, CFrame*) { const WREC* p = PwrecCur(); return RefS32(p ? p->kind : -1); });
         SetBifGameHook(Bifk3FromSly2(99), [](int, CRef*, CFrame*) { return RefS32(IepisodeCur()); });
@@ -154,9 +202,13 @@ struct INITGAMEBIFS
             return r;
         });
         // 131 / 132: a progress value by a path of symbols (0x125398 / 0x125450)
-        // Sly 2 130 (0x125248): the pad's rumble (kind, seconds: 0x187E28), void
-        SetBifGameHook(Bifk3FromSly2(130), [](int, CRef* argv, CFrame*) {
-            TriggerJoyRumbleRumk(argv[0].m_n, argv[1].GAsFloat(), "bif 130");
+        // Sly 2 130 (0x125248): the pad's rumble (kind, seconds: 0x187E28), void. Sly 3's 138 (0x127158) takes an
+        // optional third argument, the player (the rest list's first: 0x36E740 + n x 0x11C0, 0x1A9058); -1 none. The PC
+        // drives player 0's pad (player 1's in the split screen has no rumble of its own here)
+        SetBifGameHook(Bifk3FromSly2(130), [](int argc, CRef* argv, CFrame*) {
+            int channel = 0;
+            if (argc > 2 && argv[2].m_tagk == TAGK_Pair && argv[2].m_ppair) channel = argv[2].m_ppair->m_ref.m_n;
+            if (channel == 0) TriggerJoyRumbleRumk(argv[0].m_n, argv[1].GAsFloat(), "bif 130");
             return RefVoid();
         });
         SetBifGameHook(Bifk3FromSly2(131), [](int, CRef* argv, CFrame*) { return RefGetProgressKey(AkeyFromList(argv[0])); });
@@ -197,8 +249,12 @@ struct INITGAMEBIFS
                 for (const CPair* p = argv[0].m_ppair.get(); p; p = p->m_ppairNext.get()) n |= p->m_ref.m_n;
             return RefS32(n);
         });
-        // 103 a float of 0x2DE578 (0x154C90; TODO(M4): that system)
-        SetBifGameHook(Bifk3FromSly2(103), [](int, CRef*, CFrame*) { return RefF32(0.0f); });
+        // 103 (Sly 3's 107, 0x171C98): the dynamic difficulty, game/suck3.cpp
+        SetBifGameHook(Bifk3FromSly2(103), [](int, CRef*, CFrame*) {
+            const float g = GSuck3();
+            if (std::getenv("SLY3_SUCKPRINT")) std::printf("suck3: read %.2f\n", g);
+            return RefF32(g);
+        });
         // 137 (0x125690): the HUD prompt widget 0x3DA0C0 (spliceglue.cpp's PbasicGlobal)
         SetBifGameHook(Bifk3FromSly2(137), [](int, CRef*, CFrame*) {
             CRef r;
@@ -235,6 +291,78 @@ struct INITGAMEBIFS
             }
             return RefVoid();
         });
+        // Sly 3's 129 find-objects-in-bounding-box (pos, pos) (orig3 0x126808 -> 0x25CF18 / 0x25D240): the world's
+        // attachments whose box (+0x00 / +0x10, SW +0x44AC's list, refreshed first: 0x13C780 / 0x13C7D0) meets the box
+        // of the two corners (min / max of each), at most 0x100, their entries' objects once each, as a list
+        SetBifGameHook(static_cast<BIFK>(129), [](int, CRef* argv, CFrame*) {
+            std::vector<CRef> aref;
+            if (argv[0].m_tagk != TAGK_Vector || argv[1].m_tagk != TAGK_Vector) return RefList(aref);
+            const glm::vec3 a = argv[0].GetVector(), b = argv[1].GetVector();
+            const glm::vec3 mn = glm::min(a, b), mx = glm::max(a, b);
+            std::vector<ALO*> apalo;
+            int c = 0;
+            FlushSwOxaDirty1();
+            UpdateSwAaox();
+            for (OXA* poxa : g_physw.apoxa)
+            {
+                if (!poxa || !poxa->pso || !poxa->pso->fInWorld) continue;
+                if (poxa->posMin.x > mx.x || poxa->posMax.x < mn.x || poxa->posMin.y > mx.y || poxa->posMax.y < mn.y ||
+                    poxa->posMin.z > mx.z || poxa->posMax.z < mn.z)
+                    continue;
+                for (SOE* psoe : poxa->apsoe)
+                {
+                    if (!psoe || !psoe->palo || c >= 0x100) continue;
+                    c++;
+                    if (std::find(apalo.begin(), apalo.end(), psoe->palo) == apalo.end()) apalo.push_back(psoe->palo);
+                }
+            }
+            for (ALO* palo : apalo)
+            {
+                CRef ref;
+                ref.SetBasic(palo);
+                aref.push_back(ref);
+            }
+            return RefList(aref);
+        });
+        // Sly 3's 130 find-objects-in-bounding-sphere (pos, radius) (orig3 0x1268E0): the world's attachments whose
+        // sphere meets it (0x25D0D8: SW +0x44AC, not each entry), their entries' objects once each (0x25D240), as a
+        // list; e.g. h_dogfight's respawn (3146's 2430) skips a source with a plane within 750
+        SetBifGameHook(static_cast<BIFK>(130), [](int, CRef* argv, CFrame*) {
+            std::vector<CRef> aref;
+            if (argv[0].m_tagk != TAGK_Vector) return RefList(aref);
+            const glm::vec3 pos = argv[0].GetVector();
+            const float r = GOf(argv[1]);
+            std::vector<ALO*> apalo;
+            int c = 0;
+            FlushSwOxaDirty1();   // (0x13C780 / 0x13C7D0 first: the moved attachments' spheres, e.g. a plane just respawned)
+            UpdateSwAaox();
+            for (OXA* poxa : g_physw.apoxa)
+            {
+                if (!poxa || !poxa->pso || !poxa->pso->fInWorld) continue;
+                const glm::vec3 d = pos - poxa->posCenter;
+                const float s = r + poxa->sRadius;
+                if (glm::dot(d, d) > s * s) continue;
+                for (SOE* psoe : poxa->apsoe)
+                {
+                    if (!psoe || !psoe->palo || c >= 0x100) continue;
+                    c++;
+                    if (std::find(apalo.begin(), apalo.end(), psoe->palo) == apalo.end()) apalo.push_back(psoe->palo);
+                }
+            }
+            for (ALO* palo : apalo)
+            {
+                CRef ref;
+                ref.SetBasic(palo);
+                aref.push_back(ref);
+            }
+            return RefList(aref);
+        });
+        // Sly 3's 131 hit-test-objects (objects, pos, pos) / 132 hit-test-objects-first (orig3 0x126E08 / 0x126E88 ->
+        // 0x1269D8 with 0x83 / 0x84; so.h HitTestObjects3): 131 a list of (object point normal) for each collision entry of
+        // the listed objects the segment crosses, 132 (object point) of the nearest; nil (the list itself when it is nil)
+        // for none. E.g. the two-player hack's laser (the ship's s1: every enemy of its list on the beam gets 130 each frame)
+        SetBifGameHook(static_cast<BIFK>(131), [](int, CRef* argv, CFrame*) { return RefHitTestObjects3(argv, false); });
+        SetBifGameHook(static_cast<BIFK>(132), [](int, CRef* argv, CFrame*) { return RefHitTestObjects3(argv, true); });
     }
 } s_initgamebifs;
 }

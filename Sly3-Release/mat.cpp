@@ -86,7 +86,7 @@ bool FInvertMatrix(int c, const float* aagSrc, float* aagDst, int cStride)
     return true;
 }
 
-// orig: 0x0011B318 FInvertMatrix3 (FInvertMatrix on the rows, stride 4)
+// orig: 0x0011B318 FInvertMatrix3 (FInvertMatrix on the rows, stride 4) (orig3: 0x11C6D0, the same code in Sly 3)
 bool FInvertMatrix3(const glm::mat3& matSrc, glm::mat3* pmatDst)
 {
     float a[9], b[9];
@@ -114,7 +114,7 @@ glm::mat3 InverseMatrix3(const glm::mat3& m)
 }
 
 
-// orig: 0x0011B480 (the rotation of an angle given by its sine and cosine about a unit axis)
+// orig: 0x0011B480 (the rotation of an angle given by its sine and cosine about a unit axis) (orig3: 0x11C840, the same C in the Sly 3 decomp)
 glm::mat3 BuildRotateMatrixSinCos(float s, float c, const glm::vec3& n)
 {
     const float t = 1.0f - c;
@@ -138,7 +138,7 @@ glm::mat3 BuildRotateMatrixSinCos(float s, float c, const glm::vec3& n)
 
 
 
-// orig: 0x0011B720 (pan about z, then tilt about y: rows of the tilt combined by the pan's)
+// orig: 0x0011B720 (pan about z, then tilt about y: rows of the tilt combined by the pan's) (orig3: 0x11CAE0, the same code in Sly 3)
 glm::mat3 BuildPanTiltMatrix(float radPan, float radTilt)
 {
     const glm::mat3 mPan = BuildRotateMatrixAxis(radPan, g_normalZ);
@@ -146,7 +146,7 @@ glm::mat3 BuildPanTiltMatrix(float radPan, float radTilt)
     return mPan * mTilt;
 }
 
-// orig: 0x0011B7E0
+// orig: 0x0011B7E0 (orig3: 0x11CBA0, the same code in Sly 3)
 glm::mat3 BuildLookAtMatrixZ(const glm::vec3& vec) { return BuildLookAtMatrix(vec, g_normalZ); }
 
 // orig: 0x0011B830 (x along vecX (the x axis when too short), y = vecY x x normalized (a perpendicular when
@@ -166,7 +166,7 @@ glm::mat3 BuildLookAtMatrix(const glm::vec3& vecX, const glm::vec3& vecY)
     return m;
 }
 
-// orig: 0x0011B938 (the rotation taking the frame's z row to z; the frame rotated by it into *pmatDst)
+// orig: 0x0011B938 (the rotation taking the frame's z row to z; the frame rotated by it into *pmatDst) (orig3: 0x11CCF8, the same C in the Sly 3 decomp)
 glm::mat3 LevelMatrix3(const glm::mat3& matSrc, glm::mat3* pmatDst)
 {
     const glm::mat3 rot = BuildRotateVectorsMatrix(matSrc[2], g_normalZ);
@@ -199,7 +199,7 @@ glm::mat3 BuildRotateVectorsMatrix(const glm::vec3& a, const glm::vec3& b)
 }
 
 
-// orig: 0x0011BC88 DecomposeRotateMatrixPanTilt__FP7MATRIX3PfT1
+// orig: 0x0011BC88 DecomposeRotateMatrixPanTilt__FP7MATRIX3PfT1 (orig3: 0x11D048, the same C in the Sly 3 decomp)
 void DecomposeRotateMatrixPanTilt(const glm::mat3& m, float* pradPan, float* pradTilt)
 {
     *pradPan = std::atan2(m[0][1], m[0][0]);
@@ -209,7 +209,7 @@ void DecomposeRotateMatrixPanTilt(const glm::mat3& m, float* pradPan, float* pra
 
 
 
-// orig: 0x0011C168 (VU0 micro program 0xC: each row of B combined by A's rows)
+// orig: 0x0011C168 (VU0 micro program 0xC: each row of B combined by A's rows) (orig3: 0x11D558, the same code in Sly 3)
 glm::mat4 MulMatrix4(const glm::mat4& a, const glm::mat4& b) { return a * b; }
 
 
@@ -224,7 +224,7 @@ float GMaxRowLengthMatrix3(const glm::mat3& m)
     return std::sqrt(g);
 }
 
-// orig: 0x0011E390 (vec crossed with the axis-aligned vector made from its smallest component, normalized)
+// orig: 0x0011E390 (vec crossed with the axis-aligned vector made from its smallest component, normalized) (orig3: 0x11FF60, the same C in the Sly 3 decomp)
 glm::vec3 PerpendicularVector(const glm::vec3& v)
 {
     const float ax = std::fabs(v.x), ay = std::fabs(v.y), az = std::fabs(v.z);

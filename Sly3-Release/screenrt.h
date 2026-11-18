@@ -53,6 +53,11 @@ void ResetScreenObjPartAt(LO* plo, int k, int match);
 void SetScreenObjPartMatrix(LO* plo, int k, const std::array<float, 6>& m);
 // orig: SCREENOBJ +0xF4, projected by 0x218220 before advancing the root's slots.
 void SetScreenObjFollow(LO* plo, LO* target);
+// orig3: SCREENOBJ +0xEC (0x262848): the root scaled and moved to (u, v) in canvas units (the 2P gauges, 0x21E588)
+void SetScreenObjRootXY(LO* plo, bool fOn, float scale, float u, float v);
+// orig3: 0x262770 (a camera's rectangle +0x150, 640 x 480 units: the root scaled by its size / 640 x 480, moved to its
+// corner, through 0x262848): e.g. Carmelita's aim HUD in her player's view
+void SetScreenObjRootRect3(LO* plo, int x0, int y0, int x1, int y1);
 void SelectScreenObjPartHandle(LO* plo, int k, int* pidHandle);
 // the show / idle / hide parts (+0x74 / +0x70 / +0x78), the state (0x212A70) and the timer (0x212A50) set directly
 void SetScreenObjParts(LO* plo, int idShow, int idIdle, int idHide);
@@ -66,6 +71,11 @@ int CBigScreenObjsShown(const SW* psw);
 bool FScreenObjDone(LO* plo);
 // +0x58: 0 not loaded, 1 stopped, 2 idle part, 3 show part, 4 hide part
 int NScreenObjState(LO* plo);
+// +0xA4 (orig3 +0x94): its draw priority (the higher on top); PC: raised for Carmelita's aim in the 2P frame
+int NScreenObjPrio(LO* plo);
+void SetScreenObjPrio(LO* plo, int prio);
+// (PC, s3-plane's duel3.h) true: the object is left out of this HUD pass (the free-for-all: another view's gauge)
+extern bool (*g_pfnScreenObjSkip3)(LO* plo);
 // +0xB0: the game pauses while it is shown (0x212A70: the clock's factor 7)
 void SetScreenObjPauses(LO* plo, bool f);
 
@@ -95,3 +105,6 @@ float DtHudTimerResume(int grfReq);
 
 // orig0x214300: membership in the separately drawn screen-object list.
 void SetScreenObjListed(LO* plo, bool listed);
+
+// (Sly 3) a task counter's (class 0x9F) string i of 864..866 (done / count / left) as its update last wrote them
+bool FCounterText3(const LO* plo, int i, std::string* pstr);

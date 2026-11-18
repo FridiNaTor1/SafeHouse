@@ -92,7 +92,7 @@ float GReachDist(REACH* p, const std::vector<glm::vec3>* apos, const glm::vec3& 
 LO* PloReachGrip(ACTOR* pa, LO* plo)
 {
     int c = 0;
-    for (int cid = 0x14; cid < CID_Max && FCidDerivedFrom(cid, S3CID(0x14)); ++cid)
+    for (int cid = S3CID(0x14); cid < CID_Max && FCidDerivedFrom(cid, S3CID(0x14)); ++cid)  // (Sly 3: from 0x12)
         for (LO* q : g_psw->mpcidaplo[cid])
         {
             const LO* a = q;
@@ -124,7 +124,7 @@ void ClearReachGrabCtrls(REACH* p)
 }
 }  // namespace
 
-// orig: 0x001CCC88: fly the object to the reach's end at event 0x1C7,
+// orig: 0x001CCC88 (orig3 0x208D50): fly the object to the reach's end at event 0x1F5 (Sly 2's 0x1C7),
 // slowing the actor's animation when the ballistic flight needs more time.
 void StartReachGrab(REACH* p, LO* plo)
 {
@@ -132,7 +132,7 @@ void StartReachGrab(REACH* p, LO* plo)
     ClearReachGrabCtrls(p);
     ALO* palo = static_cast<ALO*>(plo);
     ASEGA* a = p->pa->pasega;
-    const float tEvent = GEventAseg11(a->paseg, 0x1C7);
+    const float tEvent = GEventAseg11(a->paseg, 0x1F5);
     const float dtAnim = (tEvent - a->t) / a->svt;
     XF* pxfEnd = nullptr;
     glm::mat4 local, pose(1.0f);
@@ -207,7 +207,7 @@ void AttachReachObject(REACH* p, LO* plo)
                     p->ploEnd->oid, p->pa->palo->oid, static_cast<void*>(pxfEnd), mat[3].x, mat[3].y, mat[3].z);
 }
 
-// orig: 0x001CD2C0
+// orig: 0x001CD2C0 (orig3: 0x209428, the same code in Sly 3)
 void ReleaseReachObject(REACH* p)
 {
     if (!p->ploHeld) return;

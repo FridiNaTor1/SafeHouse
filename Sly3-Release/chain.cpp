@@ -39,6 +39,14 @@ struct CTRLCHAIN : CTRL
         // them (0x22DD00 only fetches from this controller, which does nothing): dropped)
         ResetXfParams(pxf);
     }
+    CTRL* PctrlCopy() const override { return new CTRLCHAIN(*this); }
+    void RemapCopy(const ALO* paloSrc, ALO* paloDst) override  // (the copy's segment of the same chain and index)
+    {
+        for (size_t i = 0; i < paloSrc->achain.size() && i < paloDst->achain.size(); ++i)
+            for (size_t j = 0; j < paloSrc->achain[i].ae.size() && j < paloDst->achain[i].ae.size(); ++j)
+                if (&paloSrc->achain[i].ae[j] == pe) { pe = &paloDst->achain[i].ae[j]; return; }
+        pe = nullptr;
+    }
 };
 }  // namespace
 

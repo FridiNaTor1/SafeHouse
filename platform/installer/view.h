@@ -1,7 +1,8 @@
 #pragma once
 // The first-boot installer's screens (ProjectCane's platform/installer/view.h): the SD card's folders and disc images,
-// the extraction's progress, keep-or-delete the disc image, and what stopped it. Platform-neutral Dear ImGui at a
-// 1280x720 layout, driven by platform/switch/installer.cpp; every game's installer shares it with its own hint line.
+// the disc's languages to install, the extraction's progress, keep-or-delete the disc image, and what stopped it.
+// Platform-neutral Dear ImGui at a 1280x720 layout, driven by platform/switch/installer.cpp; every game's installer
+// shares it with its own hint line.
 #include <imgui/imgui.h>
 #include <algorithm>
 #include <cstddef>
@@ -10,8 +11,8 @@
 
 namespace CaneSetup
 {
-enum class Screen { Browse, Extract, Complete, Error };
-enum class Action { None, Select, Back, Exit, KeepIso, DeleteIso };
+enum class Screen { Browse, Languages, Extract, Complete, Error };
+enum class Action { None, Select, Back, Exit, KeepIso, DeleteIso, Toggle, Install };
 struct Entry
 {
     std::string name;
@@ -29,8 +30,13 @@ struct View
     float progress = 0;
     bool deleteIso = false;
     bool gameReady = false;
+    std::vector<std::string> languages;  // (Languages) the disc's, in two columns, and those ticked
+    std::vector<bool> chosen;
+    size_t language = 0;
+    std::string languageNote;            // the space they take
 };
 inline constexpr size_t ListRows = 6;
+inline size_t LanguageRows(const View& view) { return (view.languages.size() + 1) / 2; }
 inline void RevealSelection(View& view)
 {
     if (view.entries.empty())
@@ -135,6 +141,40 @@ inline Action Draw(View& view, ImTextureID background)
             }
             ImGui::PopID();
         }
+    }
+    else if (view.screen == Screen::Languages)
+    {
+        Heading("Choose the languages");
+        ImGui::TextColored(muted, "%s", FitText("The voices and movie sound to install. The game offers only these.", 610).c_str());
+        const size_t rows = LanguageRows(view);
+        for (size_t i = 0; i < view.languages.size(); ++i)
+        {
+            ImGui::PushID(int(i));
+            ImGui::SetCursorPos(ImVec2(28 + float(i / rows) * 312, 104 + float(i % rows) * 42));
+            const ImVec2 point = ImGui::GetCursorScreenPos();
+            if (ImGui::Selectable("##Language", i == view.language, 0, ImVec2(300, 36)))
+            { view.language = i; action = Action::Toggle; }
+            auto* draw = ImGui::GetWindowDrawList();
+            const ImVec2 box(point.x + 10, point.y + 8);
+            if (i < view.chosen.size() && view.chosen[i])
+            {
+                draw->AddRectFilled(box, ImVec2(box.x + 20, box.y + 20), IM_COL32(64, 173, 255, 255), 4);
+                draw->AddLine(ImVec2(box.x + 4, box.y + 10), ImVec2(box.x + 9, box.y + 15), IM_COL32(255, 255, 255, 255), 3);
+                draw->AddLine(ImVec2(box.x + 9, box.y + 15), ImVec2(box.x + 17, box.y + 5), IM_COL32(255, 255, 255, 255), 3);
+            }
+            else draw->AddRect(box, ImVec2(box.x + 20, box.y + 20), IM_COL32(157, 184, 210, 255), 4, 0, 2);
+            draw->AddText(ImVec2(point.x + 44, point.y + (36 - ImGui::GetFontSize()) * 0.5f),
+                ImGui::GetColorU32(ImGuiCol_Text), FitText(view.languages[i], 246).c_str());
+            ImGui::PopID();
+        }
+        ImGui::SetCursorPosY(362);
+        ImGui::TextColored(muted, "%s", FitText(view.languageNote, 610).c_str());
+        ImGui::SetCursorPosY(398);
+        if (ImGui::Button("B  Back", ImVec2(200, 54))) action = Action::Back;
+        ImGui::SameLine();
+        ImGui::BeginDisabled(std::find(view.chosen.begin(), view.chosen.end(), true) == view.chosen.end());
+        if (ImGui::Button("X  Install", ImVec2(-1, 54))) action = Action::Install;
+        ImGui::EndDisabled();
     }
     else if (view.screen == Screen::Extract)
     {

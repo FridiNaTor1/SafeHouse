@@ -48,7 +48,7 @@ struct ASEGA : BASIC
     float svt = 0.0f;                 // +0x40: the effective speed
     float svtLocal = 1.0f;            // +0x44: the speed asked for
     float svtAseg = 1.0f;             // +0x48: the ASEG's speed (its +0x78)
-    float svtSuck = 1.0f;             // +0x4C: from the suck history (0x154C90) by the ASEG's polynomial
+    float svtSuck = 1.0f;             // +0x4C: from the dynamic difficulty (orig3 0x171C98) by the ASEG's polynomial
     int iea = 0;                      // +0x50: the next timed event
     int ieaEnd = 0;                   // +0x54: the end list's next event (fired at the retraction)
     int fSound = 0;                   // +0x58

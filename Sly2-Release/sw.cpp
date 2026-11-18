@@ -3,6 +3,9 @@
 // The world loader (orig 0x13DA18) and the global blocks of a world file.
 
 #include "sw.h"
+#include "editrec.h"
+#include "modworld.h"
+#include "worldparts.h"
 
 #include <algorithm>
 #include "textmod.h"
@@ -32,6 +35,7 @@
 #include "shd.h"
 #include "sound.h"
 #include "region.h"
+#include "langstore.h"
 #include "gc.h"
 #include "serialize.h"
 #include "splicemap.h"
@@ -186,6 +190,8 @@ void LoadProgressFromBrx(SW* psw, CBinaryInputStream* pbis)
     // orig 0x1D7C80: the save data at 0x3D4A60 checked against this layout
     SetProgressLayout(psw->progress);
     ValidateGameSave();
+    void SyncOptionsToRecord();   // (menu.h; PC: the record's option flags mirror Settings.ini)
+    SyncOptionsToRecord();
 }
 
 // orig 0x0020F318: the world records (the game's levels: file key, episode, kind)
@@ -215,8 +221,11 @@ void LoadTextFromBrx(SW* psw, CBinaryInputStream* pbis)
     LOADFN(0x13DF80);
     const int clang = pbis->U8Read();
     int ilang = 0;
+    int alang[256];
+    // (PC: a language the disc lacks reads the world's text of the one it falls back to, region.h LangWorld)
+    const int langWorld = LangWorld();
     for (int j = 0; j < clang; ++j)
-        if (pbis->U8Read() == g_nLang) ilang = j;
+        if ((alang[j] = pbis->U8Read()) == langWorld) ilang = j;
     const int c = pbis->S16Read();
     for (int i = 0; i < c; ++i)
     {
@@ -224,7 +233,13 @@ void LoadTextFromBrx(SW* psw, CBinaryInputStream* pbis)
         std::string str;
         for (int j = 0; j < clang; ++j)
         {
-            if (FWideText()) { if (j == ilang) str = pbis->ReadWideStringSw(); else pbis->SkipWideStringSw(); }
+            if (g_plangcapture)   // (--import-languages: every language's string)
+            {
+                std::string s = FWideText() ? pbis->ReadWideStringSw() : pbis->ReadStringSw();
+                g_plangcapture->Text(alang[j], id, s);
+                if (j == ilang) str = std::move(s);
+            }
+            else if (FWideText()) { if (j == ilang) str = pbis->ReadWideStringSw(); else pbis->SkipWideStringSw(); }
             else if (j == ilang) str = pbis->ReadStringSw();
             else pbis->SkipStringSw();
         }
@@ -242,7 +257,10 @@ void LoadTextFromBrx(SW* psw, CBinaryInputStream* pbis)
         }
     {
         // (native: the mods folder's strings, textmod.h; the ids they change keep them over the PC wording, porttext.h)
+        LatchLanguageStoreText();   // (langstore.h: Japanese text on the other discs, its font; region.h FWideChars)
+        ApplyLanguageStoreText(psw->atext, false);   // (a language the disc lacks: its strings, langstore.h; not a mod)
         const std::vector<std::pair<int, std::string>> atextDisc = psw->atext;
+        ApplyLanguageStoreText(psw->atext, true);    // (Mods/Languages/<the disc's language>/Text.json)
         ApplyTextMods(psw->atext);
         psw->aidTextModded.clear();
         for (size_t i = 0; i < psw->atext.size() && i < atextDisc.size(); ++i)
@@ -297,11 +315,13 @@ void LoadCmeshFromBrx(SW* psw, CBinaryInputStream* pbis)
 // orig 0x0013DA18 LoadSwFromBrx
 void LoadSwFromBrx(SW* psw, CBinaryInputStream* pbis)
 {
+    ApplyPendingLanguages();   // (PC: the pause menu's Language page, region.h: the world's text and lines in it)
     LOADFN(0x13DA18);
     g_psw = psw;
     g_nFilterCur = psw->filter;
     InstallSpliceHooks(psw);
     // TODO(M3): 0x12AE18
+    MarkWorldPart(WPK_Groups, -1, pbis->m_ib);   // (PC: the converter's world parts, worldparts.h)
     const int cwe = pbis->S16Read();
     psw->awe.assign(cwe > 0 ? cwe : 0, WE{});
     for (WE& we : psw->awe)
@@ -315,22 +335,34 @@ void LoadSwFromBrx(SW* psw, CBinaryInputStream* pbis)
     }
     if (!FLaterWorldBlockOrder())
     {
+        MarkWorldPart(WPK_Sound, -1, pbis->m_ib);
         LoadMusicFromBrx(pbis);  // 0x1FD0E8 (sound.cpp)
+        MarkWorldPart(WPK_Progress, -1, pbis->m_ib);
         LoadProgressFromBrx(psw, pbis);
+        MarkWorldPart(WPK_Records, -1, pbis->m_ib);
         LoadWorldRecordsFromBrx(psw, pbis);
     }
     else
     {
         // the European / Japanese builds (region.h): the progress and the world records first, then (0x20E3C0, 0x1AB630:
         // the progress paths and the card's slots read, so a save's language is known) the sound block
+        MarkWorldPart(WPK_Progress, -1, pbis->m_ib);
         LoadProgressFromBrx(psw, pbis);
+        MarkWorldPart(WPK_Records, -1, pbis->m_ib);
         LoadWorldRecordsFromBrx(psw, pbis);
+        MarkWorldPart(WPK_Sound, -1, pbis->m_ib);
         LoadMusicFromBrx(pbis);
     }
+    MarkWorldPart(WPK_Text, -1, pbis->m_ib);
     LoadTextFromBrx(psw, pbis);
+    MarkWorldPart(WPK_Nodes, -1, pbis->m_ib);
     LoadNodesFromBrx(psw, pbis);
+    MarkWorldPart(WPK_Options, -1, pbis->m_ib);
+    if (g_peditrec) g_peditrec->iWorldOptList = 0;   // (PC: the map editor, editrec.h aworldopt)
     LoadOptionsFromBrx(psw->aoptSw, nullptr, pbis);
+    if (g_peditrec) g_peditrec->iWorldOptList = 1;
     LoadOptionsFromBrx(psw->aoptCm, nullptr, pbis);
+    if (g_peditrec) g_peditrec->iWorldOptList = -1;
     pbis->Align(16);
     // TODO(M3): 0x1FF7E8, 0x20E3C0, 0x20F1C8, the background colour (0x16F960), the load heaps
     ResetShaders();  // orig 0x1ED3A8 (the renderer's tables)
@@ -339,15 +371,20 @@ void LoadSwFromBrx(SW* psw, CBinaryInputStream* pbis)
         WE& we = psw->awe[i];
         psw->iwe = we.x5C ? -1 : i;
         psw->iweChannel = i;
+        MarkWorldPart(WPK_Bulk, i, pbis->m_ib);
         LoadBulkHeaderFromBrx(psw, pbis, true);  // the renderer's (shd.cpp)
+        MarkWorldPart(WPK_Scripts, i, pbis->m_ib);
         {
             LOADFN(0x13DA18);
             psw->fScriptDebug = pbis->S32Read();
         }
         g_fLoadDebugInfo = psw->fScriptDebug;
         LoadSwSpliceFromBrx(psw, we.x10, pbis);  // the splice runtime (splicemap.cpp): parse + module init
+        MarkWorldPart(WPK_Graphics, i, pbis->m_ib);
         LoadShadersFromBrx(psw, pbis);  // the renderer's (shd.cpp), incl. the bulk block 0x20F640
+        MarkWorldPart(WPK_Collision, i, pbis->m_ib);
         LoadCmeshFromBrx(psw, pbis);
+        MarkWorldPart(WPK_Objects, i, pbis->m_ib);
         std::vector<LO*> aplo;
         LOSINK sink;
         sink.papo = &aplo;
@@ -369,6 +406,7 @@ void LoadSwFromBrx(SW* psw, CBinaryInputStream* pbis)
         else
             for (LO* plo : we.aplo) RemoveLo(psw, plo);  // vt slot 9 of each (proxies and scripts add them back)
     }
+    MarkWorldPart(WPK_Tail, -1, pbis->m_ib);   // (the file's tail: not read)
     psw->iwe = -2;
     psw->iweChannel = -1;
     // TODO(M3): 0x1ED448, 0x1FD5E8
@@ -498,13 +536,14 @@ bool FResolveWorld(const std::string& w, FK& fk, int& filter, std::string& error
         error = "the boot world (the world records) did not load";
         return false;
     }
+    AppendModWorldRecords(pswBoot->awrec);   // (mod packages' new worlds: 44, 45, ...; modworld.h)
     if (iwrec < 0 || iwrec >= static_cast<int>(pswBoot->awrec.size()))
     {
         error = "no world record " + w;
         return false;
     }
     fk = pswBoot->awrec[iwrec].fk;
-    filter = iwrec;
+    filter = IwrecFilterOf(iwrec);
     if (fk.cb == 0 || fk.id == 0)
     {
         error = "world " + w + ": the record has no file: nothing to load";

@@ -21,6 +21,10 @@ struct SCPTCMD3
     int ichild = 0;          // +0 bits 9..19 (0: none; an index into the list)
     int isib = 0;            // +0 bits 20..30
     std::vector<int32_t> an; // the arguments as read (S8 / S16 / U16 / S32 widened, F32 / vectors as their bits)
+    // 0x52 only: the line list's cycle (the record's blob +0x14 count, +0x18 cursor, +0x1C the lines; the loader
+    // 0x225220 sets the cursor to the count, so the first play shuffles; 0x22B398 turns it before every line)
+    mutable std::vector<int32_t> aidCycle;
+    mutable int icycle = -1;
 };
 
 // orig3: 0x225220 (S16 count, then per command: S8 id, S32, S8 flag, U16 child, U16 sibling, the id's arguments)

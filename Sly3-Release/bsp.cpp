@@ -270,7 +270,7 @@ int ClipBspPlane(const BSPREF& ref, int inode, int inodeMax, const glm::vec3& po
     return (0.0f < d) ? 1 : 0;
 }
 
-// orig: 0x00119308 func_00119308 (the plane of the triangle: (b - a) x (c - a) normalized, d = normal . a)
+// orig: 0x00119308 func_00119308 (the plane of the triangle: (b - a) x (c - a) normalized, d = normal . a) (orig3: 0x119E20, the same C in the Sly 3 decomp)
 glm::vec4 PlaneFromPoints(const glm::vec3& a, const glm::vec3& b, const glm::vec3& c)
 {
     const glm::vec3 x = glm::cross(b - a, c - a);
@@ -280,7 +280,7 @@ glm::vec4 PlaneFromPoints(const glm::vec3& a, const glm::vec3& b, const glm::vec
     return glm::vec4(n, d);
 }
 
-// orig: 0x00119390 func_00119390 (the plane through pos with the normal)
+// orig: 0x00119390 func_00119390 (the plane through pos with the normal) (orig3: 0x119EA8, the same code in Sly 3)
 glm::vec4 PlaneFromNormalPos(const glm::vec3& n, const glm::vec3& p)
 {
     return glm::vec4(n, (n.x * p.x + n.y * p.y) + n.z * p.z);

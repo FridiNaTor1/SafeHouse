@@ -2,6 +2,7 @@
 // sm_p3.cpp, m_1F0FA0_p3.cpp (oracle-verified) and the decomp's func_001F0850/08D0/0948/09D8/1350/13A8.
 
 #include "smrun.h"
+#include "envonce.h"
 #include "worldglobals.h"
 #include "animfind.h"
 #include "clock.h"
@@ -60,11 +61,11 @@ SM::SMT* PsmtChoose(const std::vector<SM::SMT*>& a)
     for (SM::SMT* p : a) sum = sum + p->gProbability;
     const float sumAll = sum;
     sum = GRandInRange(0.0f, sum);
-    if (std::getenv("SLY2N_SMRANDPRINT"))  // (debug: each weighted choice)
+    if (SLY2N_ENV("SLY2N_SMRANDPRINT"))  // (debug: each weighted choice)
         std::printf("sm choose t %.3f: %zu candidates, %.4f of %.4f\n", g_clock.t, a.size(), sum, sumAll);
     // (debug, test harness: SLY2N_SMFORCE="t=i,t=i..": the first multi-candidate choice within 0.01 s of each t takes
     // candidate i instead, e.g. a reference's random branch, to compare the rest of a run)
-    if (static const char* s_szForce = std::getenv("SLY2N_SMFORCE"); s_szForce && a.size() > 1)
+    if (static const char* s_szForce = SLY2N_ENV("SLY2N_SMFORCE"); s_szForce && a.size() > 1)
     {
         static std::vector<std::pair<float, int>> s_aforce;
         static bool s_fInit = false;
@@ -282,7 +283,7 @@ void PostSmLoad(SM* psm)
 SMA* PsmaApplySm(SM* psm, ALO* palo, OID oid, int grfapl, uint32_t grfMask)
 {
     InitSm(psm);
-    if (const char* e = std::getenv("SLY2N_SMDUMP"); e && std::atoi(e) == psm->oid)   // debugging: the SM applied
+    if (const char* e = SLY2N_ENV("SLY2N_SMDUMP"); e && std::atoi(e) == psm->oid)   // debugging: the SM applied
     {
         std::printf("sm %d applied to %d state %d grfapl %d mask 0x%X\n", psm->oid, palo ? palo->oid : -1, oid, grfapl, grfMask);
         for (const SM::SMS& s : psm->asms) std::printf("  state %d next %d\n", s.oid, s.inext);
@@ -358,7 +359,7 @@ void SetSmaGoal(SMA* psma, OID oid)
 {
     if (FSmaRetracted(psma)) return;
     const int isms = oid != -1 ? IsmsFindSm(psma->psm, oid) : -1;
-    if (std::getenv("SLY2N_SMADEBUG"))
+    if (SLY2N_ENV("SLY2N_SMADEBUG"))
         std::printf("sma %d goal %d (isms %d, was %d, cur %d, playing %d) t %.3f object %d instance %d\n", psma->psm ? psma->psm->oid : -1, oid, isms,
                     psma->ismsGoal, psma->ismsCur, psma->pasega ? 1 : 0, g_clock.t, psma->palo ? psma->palo->oid : -1,
                     psma->palo ? psma->palo->oidInstance : -1);
@@ -408,11 +409,11 @@ void SnapSmaGoal(SMA* psma, OID oid)
 {
     if (FSmaRetracted(psma)) return;
     psma->ismsGoal = IsmsFindSm(psma->psm, oid);
-    static const bool s_fDebug = std::getenv("SLY2N_SNAPDEBUG") != nullptr;
+    static const bool s_fDebug = SLY2N_ENV("SLY2N_SNAPDEBUG") != nullptr;
     if (s_fDebug)
         std::fprintf(stderr, "snap sm %d obj %d: cur %d goal %d (oid %d) playing %d\n", psma->psm ? psma->psm->oid : -1,
                      psma->palo ? psma->palo->oid : -1, psma->ismsCur, psma->ismsGoal, oid, psma->pasega != nullptr);
-    if (s_fDebug && std::getenv("SLY2N_SNAPDEBUG")[0] == '2')
+    if (s_fDebug && SLY2N_ENV("SLY2N_SNAPDEBUG")[0] == '2')
         for (const SM::SMT& t : psma->psm->asmt)
         {
             std::fprintf(stderr, "  smt %d -> %d grf %x aseg %d\n", t.isFrom, t.isTo, t.grf, t.paseg ? t.paseg->oid : -1);
@@ -493,7 +494,7 @@ void ChooseSmaTransition(SMA* psma, bool fReverse)
             s3 = false;
         }
         psma->psmt = psmt;
-        if (static const bool s_fDbg = std::getenv("SLY2N_SMADEBUG") != nullptr; s_fDbg)  // (debug: the transition chosen)
+        if (static const bool s_fDbg = SLY2N_ENV("SLY2N_SMADEBUG") != nullptr; s_fDbg)  // (debug: the transition chosen)
             std::printf("sma %d choose cur %d goal %d -> %d..%d aseg %d t %.3f object %d instance %d\n", psm->oid, psma->ismsCur,
                         psma->ismsGoal, psmt ? psmt->isFrom : -1, psmt ? psmt->isTo : -1, psmt && psmt->paseg ? psmt->paseg->oid : -1,
                         g_clock.t, psma->palo ? psma->palo->oid : -1, psma->palo ? psma->palo->oidInstance : -1);

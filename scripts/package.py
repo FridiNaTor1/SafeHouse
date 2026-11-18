@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Create an offline release bundle from a completed native or cross build."""
-import argparse, hashlib, json, os, pathlib, platform, shutil, subprocess, tarfile, urllib.request, zipfile
+import argparse, hashlib, json, os, pathlib, platform, shutil, subprocess, sys, tarfile, urllib.request, zipfile
 p=argparse.ArgumentParser()
 p.add_argument('--build',required=True,type=pathlib.Path)
 p.add_argument('--output',default='dist',type=pathlib.Path)
 p.add_argument('--windows',action='store_true')
 p.add_argument('--windows-package',choices=['both','portable','setup'],default='both')
+p.add_argument('--windows-stage',choices=['full','only','reuse'],default='full',help='Windows: full (default) installs the build into the package folder and packs it; only stops after the package folder (its programs are signed elsewhere, then packed with reuse); reuse packs the existing package folder without installing again')
 p.add_argument('--makensis',type=pathlib.Path)
 p.add_argument('--appimagetool',type=pathlib.Path)
 p.add_argument('--appimage-runtime',type=pathlib.Path)
@@ -13,7 +14,8 @@ p.add_argument('--arch',choices=['x86_64','aarch64','arm64'],help='Linux: x86_64
 a=p.parse_args()
 source=pathlib.Path(__file__).resolve().parent.parent
 output=a.output.resolve();output.mkdir(parents=True,exist_ok=True)
-# Product name SafeHouse since 2026-11-03 (ProjectCane before); the user data folders keep their old names.
+# Product name SafeHouse since 2026-11-03 (ProjectCane before); the user data folders were renamed on 2026-11-10
+# (the launcher moves the old ones, platform/user_folders.h).
 if a.windows:
  arch={'aarch64':'arm64'}.get(a.arch,a.arch or 'x86_64')
 else:
@@ -21,8 +23,14 @@ else:
  if arch not in ['x86_64','aarch64']:raise RuntimeError('Unsupported Linux architecture: '+arch)
 name='SafeHouse-Launcher-Windows-'+arch if a.windows else 'SafeHouse-Launcher-Linux-'+arch
 stage=output/name
-if stage.exists():shutil.rmtree(stage)
-subprocess.run(['cmake','--install',str(a.build.resolve()),'--config','Release','--prefix',str(stage)],check=True)
+# --windows-stage reuse (CI's SignPath signing, docs/PACKAGING.md): the package folder is already there, its programs
+# signed; only the zip and the setup are made from it.
+reuse=a.windows and a.windows_stage=='reuse'
+if reuse:
+ if not (stage/'SafeHouse.exe').is_file():raise RuntimeError('--windows-stage reuse: no package folder at '+str(stage))
+else:
+ if stage.exists():shutil.rmtree(stage)
+ subprocess.run(['cmake','--install',str(a.build.resolve()),'--config','Release','--prefix',str(stage)],check=True)
 def strip_sdk():
  # The release contains executable artifacts and notices rather than SDKs
  # (SDL2 and FAudio install their headers, import libraries and CMake files).
@@ -32,7 +40,7 @@ def strip_sdk():
  for tool in ['sdl2-config']:
   (stage/'bin'/tool).unlink(missing_ok=True)
  if (stage/'lib').is_dir() and not any((stage/'lib').iterdir()):(stage/'lib').rmdir()
-if a.windows:
+if a.windows and not reuse:
  strip_sdk()
  # LLVM/MinGW may use shared C++ support libraries. Bundle imports found in
  # the toolchain; native MSVC builds use their statically linked CRT instead.
@@ -44,6 +52,11 @@ if a.windows:
     if dll.exists():shutil.copy2(dll,stage/'bin'/dll.name)
  # SafeHouse.exe (launcher/start.c, installed at the top by CMake) opens bin\safehouse.exe.
  if not (stage/'SafeHouse.exe').is_file():raise RuntimeError('SafeHouse.exe is missing from the install: build the safehouse-start target')
+ # Authenticode for every program in the package when a certificate is configured (scripts/windows/sign.py; else
+ # nothing happens): signed before the zip and the setup take them.
+ from windows.sign import configured,sign
+ if configured():sign(sorted(str(f) for f in stage.rglob('*.exe')))
+if a.windows and a.windows_stage!='only':
  if a.windows_package in ['both','portable']:
   portable_name=name+'-Portable'
   temporary=output/(portable_name+'.zip.building')
@@ -55,7 +68,7 @@ if a.windows:
  if a.windows_package in ['both','setup']:
   from windows.package_setup import build_setup
   print(build_setup(source,stage,a.build.resolve(),output,a.makensis,arch))
-else:
+elif not a.windows:
  # Debian/Ubuntu copyright files cover the shared libraries collected by
  # CMake, including transitive codec dependencies. Keep exact package/source
  # versions with those notices so distributors can reproduce the bundle.

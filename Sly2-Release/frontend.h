@@ -80,6 +80,8 @@ uint32_t BtnEpisodeScreenBack();
 void StartNewGameFromTitle(SW* psw);
 // the world was started for the title (the boot world with request flags 1)
 bool FTitleWorld();
+// the title world before its title was first shown (the boot's intro scene: VR shows it on the Flat Screen)
+bool FBeforeTitle();
 // orig 0x001DD820: the title shown (SCPT command 0x44)
 void ShowTitle();
 // orig 0x00161A58 (3): the game record at a world's start (request flags 1: reset, 0x40: the pending save)

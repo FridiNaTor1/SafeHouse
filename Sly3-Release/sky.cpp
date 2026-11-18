@@ -43,6 +43,23 @@ struct INITSKY
 // object's matrix moved to the camera's position (0x2BA818 SetTranslation), keeping the object's own height unless
 // +0x130 (Sly 2's UpdateSky moved the object every frame instead). Natively: the scene entries of the SKY objects are
 // moved by the drawn camera's offset after their placement (so --camera-ram's camera and the free camera also get it).
+// (PC, the split screen: each view's camera after the first) the skies already placed at one camera moved by d (the
+// next camera less the last one; z only for the skies that follow it): PlaceSkiesAtCamera adds the camera's offset from
+// the sky's own place, so calling it again per view added the views' offsets up (views 3 / 4 of four lost their sky)
+void MoveSkies(SCENE& scene, const std::vector<ALO*>& apalo, const glm::vec3& d)
+{
+    for (size_t i = 0; i < scene.aglobset.size() && i < apalo.size(); ++i)
+    {
+        const ALO* palo = apalo[i];
+        if (palo->Cid() != S3CID(0x61) || palo->axf.empty()) continue;
+        glm::vec3 e = d;
+        if (!palo->U32Field(0, 0x130, 0)) e.z = 0.0f;
+        SCENEGLOBSET& sgs = scene.aglobset[i];
+        for (glm::mat4& m : sgs.amatGlob) m[3] += glm::vec4(e, 0.0f);
+        sgs.posBounds += e;
+    }
+}
+
 void PlaceSkiesAtCamera(SCENE& scene, const std::vector<ALO*>& apalo, const glm::vec3& posCam)
 {
     for (size_t i = 0; i < scene.aglobset.size() && i < apalo.size(); ++i)

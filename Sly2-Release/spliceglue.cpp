@@ -3,6 +3,7 @@
 #include <sanitizer/asan_interface.h>
 #endif
 #include "proc.h"
+#include "envonce.h"
 #include "pcinput.h"
 #include "actor.h"
 #include "cls.h"
@@ -151,7 +152,7 @@ BASIC* PbasicFindObjectImpl(int kind, SYMID symid, BASIC* pbasicRel, BASIC* pbas
 BASIC* PbasicFindObject(int kind, SYMID symid, BASIC* pbasicRel, BASIC* pbasicScope)
 {
     BASIC* p = PbasicFindObjectImpl(kind, symid, pbasicRel, pbasicScope);
-    if (static const char* s_sz = std::getenv("SLY2N_FINDPRINT"); s_sz && static_cast<int>(symid) == std::atoi(s_sz))
+    if (static const char* s_sz = SLY2N_ENV("SLY2N_FINDPRINT"); s_sz && static_cast<int>(symid) == std::atoi(s_sz))
     {
         LO* plo = PloFromBasic(p);
         LO* ploRel = PloFromBasic(pbasicRel ? pbasicRel : pbasicScope);
@@ -368,7 +369,7 @@ CRef RefMethodAdd(BASIC* pbasic, int, CRef*)
     if (LO* plo = PloFromBasic(pbasic))
     {
         AddLo(s_psw, plo);
-        if (std::getenv("SLY2N_METHODPRINT"))
+        if (SLY2N_ENV("SLY2N_METHODPRINT"))
             std::printf("add: %d %p parent %d %p: inworld %d removed %d\n", plo->oid, (void*)plo, plo->paloParent ? plo->paloParent->oid : -1,
                         (void*)plo->paloParent, plo->fInWorld, plo->fRemoved);
     }
@@ -384,7 +385,7 @@ CRef RefMethodSlot38(BASIC* pbasic, int cref, CRef* aref)
 {
     LO* plo = PloFromBasic(pbasic);
     LO* plodest = cref > 0 && aref ? PloFromBasic(aref[0].m_pbasic) : nullptr;
-    if (std::getenv("SLY2N_METHODPRINT"))
+    if (SLY2N_ENV("SLY2N_METHODPRINT"))
     {
         const glm::vec3 pos = plodest ? PosLoWorld(plodest) : glm::vec3(0.0f);
         std::printf("slot 38: %d -> %d (%.2f %.2f %.2f)\n", plo ? plo->oid : -1, plodest ? plodest->oid : -1, pos.x, pos.y, pos.z);
@@ -399,7 +400,7 @@ CRef RefMethodStub(BASIC*, int, CRef*) { return CRef(TAGK_Void); }  // TODO(M4):
 // bind, as authored scripts reach it: "unbound method|getter|setter eopid E option O cid 0xC pfn 0xF")
 void NoteUnbound(const char* szKind, int eopid, int optid, const LO* plo, uint32_t pfn)
 {
-    static const bool s_f = std::getenv("SLY2N_UNBOUND") != nullptr;
+    static const bool s_f = SLY2N_ENV("SLY2N_UNBOUND") != nullptr;
     if (!s_f) return;
     static std::set<std::pair<std::string, int>> s_seen;
     if (!s_seen.insert({szKind, eopid}).second) return;
@@ -453,7 +454,7 @@ CRef RefSoeOption(int bifk, SOEBASIC* handle, int optid, const CRef* pref)
     if (bifk == 110 && pref && (optid == 122 || optid == 123))
     {
         const int32_t value = pref->RefCoerceS32().m_n;
-        if (optid == 122 && std::getenv("SLY2N_SOEKINDPRINT"))  // (debug: who sets an entry's contact kind)
+        if (optid == 122 && SLY2N_ENV("SLY2N_SOEKINDPRINT"))  // (debug: who sets an entry's contact kind)
             std::printf("soe kind: %d tag %d 0x%X -> 0x%X t %.3f\n", handle->palo->oid, entry.tag, entry.id, static_cast<uint32_t>(value), g_clock.t);
         if (optid == 122) entry.id = static_cast<uint32_t>(value);
         else entry.state = static_cast<int16_t>(value);
@@ -630,7 +631,7 @@ CRef RefCameraOption(int bifk, int optid, const CRef* value)
     else handled = false;
     if (handled)
     {
-        if (std::getenv("SLY2N_CAMERABRIDGE"))
+        if (SLY2N_ENV("SLY2N_CAMERABRIDGE"))
             std::printf("CAMERA_OPTION bif=%d option=%d tag=%d t=%.9g pos=%.9g,%.9g,%.9g mrd=%.9g\n", bifk, optid, int(result.m_tagk), g_clock.t, g_cm.pos.x, g_cm.pos.y, g_cm.pos.z, g_cm.rMRD);
         return result;
     }
@@ -817,7 +818,7 @@ CRef RefOptionImpl(int bifk, BASIC* pbasic, int optid, const CRef* pref);
 // (debug: SLY2N_OPTWATCH=id[,id..]: those options' reads / calls and their results)
 CRef RefOption(int bifk, BASIC* pbasic, int optid, const CRef* pref)
 {
-    static const char* s_sz = std::getenv("SLY2N_OPTWATCH");
+    static const char* s_sz = SLY2N_ENV("SLY2N_OPTWATCH");
     CRef r = RefOptionImpl(bifk, pbasic, optid, pref);
     if (s_sz)
     {
@@ -936,12 +937,12 @@ CRef RefOptionImpl(int bifk, BASIC* pbasic, int optid, const CRef* pref)
         // methods (0x10C720 / 0x10C7A0): the buttons of the mask pressed this frame and taken (0x1C4700) / down
         // (0x1C4728: +0x30 & mask)
         CRef r;
-        if (std::getenv("SLY2N_OPTPRINT")) std::printf("padctl option %d (bif %d) of %d: control %d\n", optid, bifk, ppc->plo ? ppc->plo->oid : -1, ppc->nControl);
+        if (SLY2N_ENV("SLY2N_OPTPRINT")) std::printf("padctl option %d (bif %d) of %d: control %d\n", optid, bifk, ppc->plo ? ppc->plo->oid : -1, ppc->nControl);
         if (bifk != 111) return r;
         const float* ag[] = {&ppc->x, &ppc->y, &ppc->radJoy, &ppc->uJoy, &ppc->x2, &ppc->y2, &ppc->radJoy2, &ppc->uJoy2};
         if (optid >= 900 && optid <= 907) r.SetF32(*ag[optid - 900]);
         if (optid == 901 || optid == 905) NoteScriptStickRead(optid);   // (pcinput.h: the tank's keys)
-        if (optid >= 900 && optid <= 907 && std::getenv("SLY2N_OPTPRINT")) std::printf("  -> %g\n", *ag[optid - 900]);
+        if (optid >= 900 && optid <= 907 && SLY2N_ENV("SLY2N_OPTPRINT")) std::printf("  -> %g\n", *ag[optid - 900]);
         else if (optid == 908 || optid == 909)
         {
             auto pm = std::make_shared<CMethod>();
@@ -954,7 +955,7 @@ CRef RefOptionImpl(int bifk, BASIC* pbasic, int optid, const CRef* pref)
             } : [](BASIC* pb, int c, CRef* a) {
                 CRef rr;
                 rr.SetBool(c > 0 && (static_cast<PADCTL*>(pb)->grfbtn & uint32_t(a[0].RefCoerceS32().m_n)) != 0);
-                if (std::getenv("SLY2N_OPTIONPRINT"))
+                if (SLY2N_ENV("SLY2N_OPTIONPRINT"))
                     std::fprintf(stderr, "padctl 909: c %d mask 0x%X down 0x%X\n", c, c > 0 ? a[0].RefCoerceS32().m_n : 0, static_cast<PADCTL*>(pb)->grfbtn);
                 return rr;
             };
@@ -1035,12 +1036,12 @@ CRef RefOptionImpl(int bifk, BASIC* pbasic, int optid, const CRef* pref)
             pm->m_crefReq = 0;
             r.SetMethod(pm);
         }
-        else if (std::getenv("SLY2N_OPTIONPRINT")) std::fprintf(stderr, "option bif %d id %d of an ASEGA: not ported\n", bifk, optid);
+        else if (SLY2N_ENV("SLY2N_OPTIONPRINT")) std::fprintf(stderr, "option bif %d id %d of an ASEGA: not ported\n", bifk, optid);
         return r;
     }
     LO* plo = PloFromBasic(pbasic);
     CRef refNil;
-    static const bool s_fPrint = std::getenv("SLY2N_OPTIONPRINT") != nullptr;
+    static const bool s_fPrint = SLY2N_ENV("SLY2N_OPTIONPRINT") != nullptr;
     if (s_fPrint) std::fprintf(stderr, "option bif %d id %d object %d value tag %d n %d\n", bifk, optid, plo ? plo->oid : -1, pref ? int(pref->m_tagk) : -1, pref ? pref->m_n : 0);
     if (!plo) return refNil;
     // the object's sidebag (orig +0x4, 0x132B78 makes it): addo (0x200CA8) and ensureo (0x200D10) always bind
@@ -1084,14 +1085,14 @@ CRef RefOptionImpl(int bifk, BASIC* pbasic, int optid, const CRef* pref)
         return refNil;
     }
     const int eopid = EopidFromOptid(plo->Cid(), optid);
-    if (std::getenv("SLY2N_OPTPRINT")) std::printf("option %d (bif %d) of %d (cid 0x%X): eopid %d\n", optid, bifk, plo->oid, plo->Cid(), eopid);
+    if (SLY2N_ENV("SLY2N_OPTPRINT")) std::printf("option %d (bif %d) of %d (cid 0x%X): eopid %d\n", optid, bifk, plo->oid, plo->Cid(), eopid);
     if (eopid < 0) return refNil;
     const uint32_t vaEopid = 0x2AC880 + static_cast<uint32_t>(eopid) * 0x28;
     const uint32_t grf = g_disc.U32Elf(vaEopid + 4);
     if (bifk == 111 && (grf & 1))
     {
         const uint32_t pfn = g_disc.U32Elf(vaEopid + 0x10);
-        if (std::getenv("SLY2N_METHODPRINT")) std::printf("method %d of %d (cid 0x%X): pfn 0x%X\n", optid, plo->oid, plo->Cid(), pfn);
+        if (SLY2N_ENV("SLY2N_METHODPRINT")) std::printf("method %d of %d (cid 0x%X): pfn 0x%X\n", optid, plo->oid, plo->Cid(), pfn);
         CRef refMethod;
         if (FMakeObjectMethod(pfn, pbasic, static_cast<int>(g_disc.U32Elf(vaEopid + 0x18)), &refMethod)) return refMethod;
         auto pmethod = std::make_shared<CMethod>();
@@ -1110,7 +1111,7 @@ CRef RefOptionImpl(int bifk, BASIC* pbasic, int optid, const CRef* pref)
         if (PFNOBJGETTER pfnGet = PfnObjectGetter(eopid))
         {
             CRef r = pfnGet(plo);
-            if (const char* sz = std::getenv("SLY2N_OPTPRINT"); sz && sz[0] == '2')  // (debug: the getter's value)
+            if (const char* sz = SLY2N_ENV("SLY2N_OPTPRINT"); sz && sz[0] == '2')  // (debug: the getter's value)
             {
                 std::string str;
                 PrintRef(r, &str);
@@ -1152,7 +1153,7 @@ CRef RefOptionImpl(int bifk, BASIC* pbasic, int optid, const CRef* pref)
             // elsewhere (as N21's clip length, EOPID 114): its value is the field's stored word, or nothing)
             NoteUnbound("field", eopid, optid, plo, g_disc.U32Elf(vaEopid + 0x18));
         if (g_disc.U32Elf(vaEopid + 8) == 0xFFFF0000u) NoteUnbound("getter", eopid, optid, plo, g_disc.U32Elf(vaEopid + 0xC));
-        if (std::getenv("SLY2N_OPTPRINT"))
+        if (SLY2N_ENV("SLY2N_OPTPRINT"))
         {
             std::string str;
             PrintRef(ref, &str);
@@ -1199,7 +1200,7 @@ CRef RefOptionImpl(int bifk, BASIC* pbasic, int optid, const CRef* pref)
         if (eopid == 255)
             if (GUARD* pg = PguardFromLo(plo)) pg->n33C = v.n;
     }
-    if (bifk == 110 && std::getenv("SLY2N_OPTPRINT"))
+    if (bifk == 110 && SLY2N_ENV("SLY2N_OPTPRINT"))
     {
         std::string str;
         PrintRef(*pref, &str);
@@ -1253,7 +1254,7 @@ namespace
 CRef RefEnsureSidebag(LO* plo, const std::vector<CRef>& aref, int tagk)
 {
     if (!plo || aref.size() < 2) return CRef(TAGK_Void);
-    if (static const char* s_sz = std::getenv("SLY2N_BAGPRINT"); s_sz && plo->oid == std::atoi(s_sz))
+    if (static const char* s_sz = SLY2N_ENV("SLY2N_BAGPRINT"); s_sz && plo->oid == std::atoi(s_sz))
         std::printf("sidebag %d: option %d = %d (tag %d)\n", plo->oid, NArg(aref, 0), NArg(aref, 1), tagk);
     CRef v = aref[1];
     if (tagk == TAGK_Bool) v.SetBool(NArg(aref, 1) != 0);
@@ -1320,7 +1321,7 @@ struct INITENSURE
                 if (ps->palo == plo && !FSmaRetracted(ps) && (oid == -1 || (ps->psm && ps->psm->oid == oid)))
                 {
                     r.SetBasic(ps);
-                    if (std::getenv("SLY2N_SMAFIND"))
+                    if (SLY2N_ENV("SLY2N_SMAFIND"))
                         std::printf("option 183 of %d (sm %d): found, current %d goal %d t %.3f\n", plo->oid, oid, OidSmaCur(ps), OidSmaGoal(ps), g_clock.t);
                     break;
                 }
@@ -1336,7 +1337,7 @@ struct INITENSURE
             // train-side scenery 48945.. (s0 of block 47475))
             LO* palo = PloArg(a, 0);
             if (!plo || !FIsLoDerivedFrom(plo, 0x6D) || (palo && !FIsLoDerivedFrom(palo, 0x30))) return r;
-            if (static const char* s_sz = std::getenv("SLY2N_APPLYOBJ"); s_sz && palo && palo->oid == std::atoi(s_sz))
+            if (static const char* s_sz = SLY2N_ENV("SLY2N_APPLYOBJ"); s_sz && palo && palo->oid == std::atoi(s_sz))
             {
                 std::fprintf(stderr, "aseg method 214: aseg %d obj %d args %zu:", plo->oid, palo->oid, a.size());
                 for (const CRef& x : a)
@@ -1388,7 +1389,7 @@ struct INITENSURE
         // EOPID 19 (id 32): the field +0x10, the object's parent (a null object at a root)
         RegisterObjectGetter(19, [](LO* plo) {
             CRef r;
-            if (std::getenv("SLY2N_PARENTDBG"))
+            if (SLY2N_ENV("SLY2N_PARENTDBG"))
                 std::printf("parentdbg: %d (cid 0x%X %p) parent %p %d\n", plo->oid, plo->Cid(), (void*)plo, (void*)plo->paloParent, plo->paloParent ? plo->paloParent->oid : -1);
             r.SetBasic(plo->paloParent);
             return r;

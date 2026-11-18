@@ -2,6 +2,7 @@
 #define CANE_GL_H
 #pragma once
 #include "glshaders.h"
+#include <string>
 #include "rocel.h"
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
@@ -263,10 +264,11 @@ void BindDrawIndexAttribute();
 bool ApplyMsaaSettings();
 bool ApplyInternalResolutionSettings();
 bool ApplyWindowModeSettings(WindowMode mode);
-bool ApplyMonitorSettings(int monitorIndex);
-int VideoMonitorCount();
-const char* VideoMonitorName(int monitorIndex);
-int VideoMonitorIndexByName(const char* name);
+// (settings v22 monitor, platform/monitor_select.h) the monitor Fullscreen / Borderless fill and Windowed opens on: ""
+// Primary, else an identifier; a monitor that is not connected uses the primary one.
+bool ApplyMonitorSettings(const std::string& monitorId);
+// (every frame) a monitor plugged in or unplugged since the window mode was applied: applied again
+void UpdateMonitorConnections();
 void ApplyOutputGammaSettings(float gamma);
 void ApplyAutoIconifySettings(bool enabled);
 bool ApplyAspectRatioSettings(AspectMode mode);
@@ -309,8 +311,9 @@ extern int g_msaaSamples;
 extern bool g_fMsaa;
 extern bool g_fVsync;
 extern int g_internalResolutionHeight;
+extern bool g_fInternalResolutionCapped;   // (the Switch 2 at 120 fps: rendered below the setting)
 extern int g_resolutionScalePercent;
-extern int g_monitorIndex;
+extern std::string g_monitorId;
 extern int g_textureFiltering;
 extern float g_outputGamma;
 extern float g_guiScale;

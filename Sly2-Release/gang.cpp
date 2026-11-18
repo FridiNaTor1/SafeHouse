@@ -4,6 +4,7 @@
 // 0x1B4728, 0x1B50B0, 0x1B6078, checked against the disassembly) and the reference's m_134648_p3.cpp /
 // m_1B4438_p3.cpp.
 #include "gang.h"
+#include "envonce.h"
 #include "actioninput.h"
 #include "climb.h"
 #include "routetele.h"
@@ -353,12 +354,12 @@ void SetBentleySubMode(BENTLEY* p, int n)
             SetStepPhysHeadingToward(p->palo, v);  // 0x2046B0
             TurnActorNow(p);                       // 0x204CA8
         }
-        if (std::getenv("SLY2N_GANGDEBUG"))
+        if (SLY2N_ENV("SLY2N_GANGDEBUG"))
             std::printf("bentley: swing target %d (parent %d) v (%.1f %.1f %.1f) g1C %.3f heading %.3f\n", ploTarget ? ploTarget->oid : -1,
                         ploTarget && ploTarget->paloParent ? ploTarget->paloParent->oid : -1, v.x, v.y, v.z, s.g1C, p->radHeading);
     }
     s.state = n;
-    if (std::getenv("SLY2N_GANGDEBUG")) std::printf("bentley: swing mode %d t %.3f side %d\n", n, g_clock.t, s.n8);
+    if (SLY2N_ENV("SLY2N_GANGDEBUG")) std::printf("bentley: swing mode %d t %.3f side %d\n", n, g_clock.t, s.n8);
     float dt = 0.0f;
     ASEGBL* pbl = nullptr;
     if (n >= 0 && n <= 2)
@@ -478,7 +479,7 @@ void FireBentleyDart(BENTLEY* p, uint32_t grf)
     // (debug: SLY2N_DARTAT=oid aims at that object's centre instead of the screen's)
     // ("OID#K": the K-th in-world copy, led around the world's z axis by the turn seen since the previous shot at it,
     // for the turning Ep8 bulbs; SLY2N_DARTAT can also be changed by a route's "env" step)
-    if (const char* s_sz = std::getenv("SLY2N_DARTAT"); s_sz && *s_sz)
+    if (const char* s_sz = SLY2N_ENV("SLY2N_DARTAT"); s_sz && *s_sz)
     {
         // ("A#K,B#K,...": one entry per shot, the last one kept)
         static int s_cShot = 0;
@@ -551,7 +552,7 @@ void FireBentleyDart(BENTLEY* p, uint32_t grf)
                 l.t = g_clock.t;
                 const float r = glm::length(glm::vec2(posAim)), tFly = glm::length(posAim - a) / 6000.0f;
                 const float th2 = th + l.w * tFly;
-                const float dz = posAim.z > 0.0f && std::getenv("SLY2N_DARTDZ") ? float(std::atof(std::getenv("SLY2N_DARTDZ"))) : 0.0f;
+                const float dz = posAim.z > 0.0f && SLY2N_ENV("SLY2N_DARTDZ") ? float(std::atof(SLY2N_ENV("SLY2N_DARTDZ"))) : 0.0f;
                 posAim = glm::vec3(r * std::cos(th2), r * std::sin(th2), posAim.z + dz);
                 std::printf("dartat %d#%d at %.0f %.0f %.0f (w %.3f)\n", oid, std::atoi(pk + 1), posAim.x, posAim.y, posAim.z, l.w);
             }
@@ -572,7 +573,7 @@ void FireBentleyDart(BENTLEY* p, uint32_t grf)
     ExpireProjectileIn(static_cast<ALO*>(po), 4.0f);              // 0x13B5C8
     SetBentleyState2(p, 1);                                       // 0x1362F8
     p->t1700 = g_clock.t;
-    if (std::getenv("SLY2N_GANGDEBUG"))
+    if (SLY2N_ENV("SLY2N_GANGDEBUG"))
         std::printf("bentley: dart %d (cid 0x%X, kind %d, proxy %d) fired at (%.0f %.0f %.0f) from (%.0f %.0f %.0f) t %.3f\n", po->oid, po->Cid(), nDart, pproxy->oid, posAim.x, posAim.y, posAim.z, a.x, a.y, a.z, g_clock.t);
 }
 namespace
@@ -723,7 +724,7 @@ void PcCarmGangMotion(T* p, bool fAim, bool fMoving)
 void UpdateBentleyTransitions(BENTLEY* p)
 {
     int s = p->state;
-    if (static const char* s_sz = std::getenv("SLY2N_BENTLEYSTATE"); s_sz && g_iframeHarness >= std::atoi(s_sz))
+    if (static const char* s_sz = SLY2N_ENV("SLY2N_BENTLEYSTATE"); s_sz && g_iframeHarness >= std::atoi(s_sz))
         if (PADCTL* pc = PpadctlOf(p))
             std::printf("bentley state: frame %d t %.3f state %d hold %d u %.3f rad %.3f vel %.2f %.2f held 0x%X forced 0x%X\n", g_iframeHarness, g_clock.t,
                         p->state, p->n16B0, pc->uJoy, pc->radJoy, VelAloPos(p->palo).x, VelAloPos(p->palo).y, pc->grfbtn,
@@ -738,11 +739,11 @@ void UpdateBentleyTransitions(BENTLEY* p)
         }
         if (fTimed && 0.1f < g_clock.t - p->tFloor)
         {
-            if (std::getenv("SLY2N_GANGDEBUG")) std::printf("bentley: off the floor: t %.4f tFloor %.4f\n", g_clock.t, p->tFloor);
+            if (SLY2N_ENV("SLY2N_GANGDEBUG")) std::printf("bentley: off the floor: t %.4f tFloor %.4f\n", g_clock.t, p->tFloor);
             SetJumpKind(&p->jump, 0, 0, 0);
         }
         auto tryInteract = [&]() {
-            if (std::getenv("SLY2N_GANGDEBUG") && FBtnWithin(p, BTN_TRIANGLE, F32(0x3E19999A)))
+            if (SLY2N_ENV("SLY2N_GANGDEBUG") && FBtnWithin(p, BTN_TRIANGLE, F32(0x3E19999A)))
                 std::printf("bentley: triangle t %.3f state %d ability %d can %d\n", g_clock.t, p->state, p->n1870,
                             int(FBentleyCanDo(p, p->n1870)));
             if (FBtnWithin(p, BTN_TRIANGLE, F32(0x3E19999A)) && FBentleyCanDo(p, p->n1870))
@@ -801,7 +802,7 @@ void UpdateBentleyTransitions(BENTLEY* p)
         case 12: UpdateJtThrow(p); break;  // 0x21F418 (+0x11B0)
         case 8:
             // orig: 0x001367D8 (the carried controller: thrown (1) and on a floor again (+0x208): standing, the player)
-            if (const char* sz = std::getenv("SLY2N_THROWPRINT"); sz && *sz == '2')
+            if (const char* sz = SLY2N_ENV("SLY2N_THROWPRINT"); sz && *sz == '2')
                 std::printf("bentley carried state %d floor %p t %.4f\n", p->n1800, static_cast<void*>(p->pxpFloor), g_clock.t);
             if (p->n1800 == 1 && p->pxpFloor)
             {
@@ -915,7 +916,7 @@ void SetBentleyCarried(BENTLEY* p, int k)
     }
     p->n1800 = k;
     p->t1804 = g_clock.t;
-    if (std::getenv("SLY2N_THROWPRINT")) std::printf("bentley carried %d t %.4f\n", k, g_clock.t);
+    if (SLY2N_ENV("SLY2N_THROWPRINT")) std::printf("bentley carried %d t %.4f\n", k, g_clock.t);
     ASEG* paseg = k >= 0 ? PPart<ASEG>(palo, 0x1808 + 4 * k) : nullptr;
     switch (k)
     {
@@ -952,7 +953,7 @@ void SetBentleyCarried(BENTLEY* p, int k)
         SetAloAngVelocityTo(palo, glm::vec3(0.0f));  // vt slot 36
         if (pxfPos) p->actrl1810[0] = PctrlNewPos(palo, pxfPos, 1, 7, 2, glm::vec4(glm::vec3(m[3]), 1.0f));  // 0x12DC18
         if (pxfRot) p->actrl1810[1] = PctrlNewPos(palo, pxfRot, 1, 7, 2, VecXfValue(pxfRot, m));      // 0x11BFF0
-        if (std::getenv("SLY2N_THROWPRINT"))
+        if (SLY2N_ENV("SLY2N_THROWPRINT"))
             std::printf("bentley carried: peer %d cid 0x%X record %p at %.1f %.1f %.1f\n", peer ? peer->oid : -1,
                         peer ? peer->Cid() : 0, static_cast<void*>(pxfOn), m[3].x, m[3].y, m[3].z);
         break;
@@ -1011,7 +1012,7 @@ void SetBentleyState(BENTLEY* p, int n)
     const int old = p->state;
     p->state = n;
     p->tState = g_clock.t;
-    if (std::getenv("SLY2N_GADGETPRINT")) std::printf("bentley: state %d -> %d t %.3f throw %d\n", old, n, g_clock.t, p->jtthrow.state);
+    if (SLY2N_ENV("SLY2N_GADGETPRINT")) std::printf("bentley: state %d -> %d t %.3f throw %d\n", old, n, g_clock.t, p->jtthrow.state);
     ASEG* paseg = nullptr;
     SM* psm = nullptr;
     int grfapl = 1;
@@ -1186,7 +1187,7 @@ void UpdateBentley(LO* plo)
     if (!p) return;
     // Debug observer at the original UpdateBentley entry, for same-input pose/dialog comparisons.
     // SLY2N_BENTLEYPRINT=from-to selects game time; SLY2N_BENTLEYPOSE includes the local record matrices.
-    const char* szBentleyPrint = std::getenv("SLY2N_BENTLEYPRINT");
+    const char* szBentleyPrint = SLY2N_ENV("SLY2N_BENTLEYPRINT");
     float tPrintFrom = -1.0f, tPrintTo = 1.0e30f;
     if (szBentleyPrint) std::sscanf(szBentleyPrint, "%f-%f", &tPrintFrom, &tPrintTo);
     if (szBentleyPrint && tPrintFrom <= g_clock.t && g_clock.t <= tPrintTo)
@@ -1199,13 +1200,13 @@ void UpdateBentley(LO* plo)
                      voice && voice->m_pstream ? voice->m_pstream->id : -1, voice ? voice->m_tPlay : 0.0, g_sound.tDialog,
                      voice ? SpiopTrackSeconds(voice->m_h) : 0.0, voice ? voice->m_h : 0u,
                      voice ? static_cast<unsigned>(voice->m_cbusy) : 0u, voice ? voice->m_cpause : 0);
-        if (std::getenv("SLY2N_BENTLEYFLOOR"))
+        if (SLY2N_ENV("SLY2N_BENTLEYFLOOR"))
         {
             const XP* pxp = StepPhysOf(p->palo).pxpFloor;
             std::fprintf(stderr, "bentley-floor: frame %d %d %d\n", g_iframeHarness,
                          pxp && pxp->axpd[0].palo ? pxp->axpd[0].palo->oid : -1, pxp && pxp->axpd[1].palo ? pxp->axpd[1].palo->oid : -1);
         }
-        if (std::getenv("SLY2N_BENTLEYPOSE"))
+        if (SLY2N_ENV("SLY2N_BENTLEYPOSE"))
             for (size_t i = 0; i < p->palo->axf.size(); ++i)
             {
                 const XF& xf = *p->palo->axf[i];
@@ -1216,7 +1217,7 @@ void UpdateBentley(LO* plo)
             }
     }
     // Read-only gameplay observation for repeated bomb acquisition/release.
-    if (std::getenv("SLY2N_BOMBPRINT") && g_psw)
+    if (SLY2N_ENV("SLY2N_BOMBPRINT") && g_psw)
     {
         std::fprintf(stderr, "BOMB_FRAME {\"frame\":%d,\"time\":%.9g,\"state\":%d,\"hold\":%d,\"health\":%d,\"bpos\":[%.1f,%.1f,%.1f],\"pools\":[",
                      g_iframeHarness, g_clock.t, p->state, p->n16B0, p->dmg.pcount ? *p->dmg.pcount : -1,
@@ -1249,7 +1250,7 @@ void UpdateBentley(LO* plo)
     }
     // (debug: SLY2N_CHARMAT=N: at Bentley's N-th update his health 10, power 30 and three charms (0x5D) thrown around
     // him: the health pickup's test)
-    static const char* s_szCharm = std::getenv("SLY2N_CHARMAT");
+    static const char* s_szCharm = SLY2N_ENV("SLY2N_CHARMAT");
     if (s_szCharm && g_psw)
     {
         static int s_c = 0;
@@ -1262,7 +1263,7 @@ void UpdateBentley(LO* plo)
     }
     // (debug, the actors code: SLY2N_BTELEGUARD="OID@N[,D]" puts Bentley D (default 600) in front of the first guard
     // OID in the world at his N-th update, facing it: a dart's target)
-    static const char* s_szGuard = std::getenv("SLY2N_BTELEGUARD");
+    static const char* s_szGuard = SLY2N_ENV("SLY2N_BTELEGUARD");
     if (s_szGuard && g_psw)
     {
         static int s_c = 0;
@@ -1292,7 +1293,7 @@ void UpdateBentley(LO* plo)
     }
     // (debug: SLY2N_BTELEPORT="X Y Z@N[,H|,k]" puts Bentley there at his N-th update, heading H (",k": kept); several separated by ';',
     // "X Y Z@tT[,H]" at his first update at game time >= T)
-    if (static const char* s_szBTele = std::getenv("SLY2N_BTELEPORT"); s_szBTele)
+    if (static const char* s_szBTele = SLY2N_ENV("SLY2N_BTELEPORT"); s_szBTele)
     {
         static int s_cB = 0;
         static std::vector<bool> s_afDone;
@@ -1325,7 +1326,7 @@ void UpdateBentley(LO* plo)
     }
     ApplyRouteTeleportActor(p);
     // (debug: SLY2N_BTELEPORTT="X Y Z@T[,H];...": the same once the game clock passes each T)
-    if (static const char* s_szBTeleT = std::getenv("SLY2N_BTELEPORTT"); s_szBTeleT)
+    if (static const char* s_szBTeleT = SLY2N_ENV("SLY2N_BTELEPORTT"); s_szBTeleT)
     {
         struct BTELE { float x, y, z, t, h; bool fDone; };
         static std::vector<BTELE> s_a;
@@ -1358,7 +1359,7 @@ void UpdateBentley(LO* plo)
     UpdateActor(p);  // 0x1403D0
     if (!plo->fInWorld) return;
     // (debug: SLY2N_JTPRINTB=N: the interaction lists at Bentley's N-th update)
-    if (static const char* s_szJtB = std::getenv("SLY2N_JTPRINTB"); s_szJtB)
+    if (static const char* s_szJtB = SLY2N_ENV("SLY2N_JTPRINTB"); s_szJtB)
     {
         static int s_cJtB = 0;
         if (++s_cJtB == std::atoi(s_szJtB)) PrintJtLists(g_psw);
@@ -1502,12 +1503,12 @@ void OnBentleyMessage(LO* plo, int msgk, void* pv)
     const ASEGMSG9* pm = static_cast<const ASEGMSG9*>(pv);
     if (pm->pasega == p->pasega)
     {
-        if (std::getenv("SLY2N_GANGDEBUG") && pm->n == 0x216)
+        if (SLY2N_ENV("SLY2N_GANGDEBUG") && pm->n == 0x216)
             std::printf("bentley: summon event t %.3f ability %p id %d proxy %d\n", g_clock.t, (void*)p->pabil16B4,
                         p->pabil16B4 ? p->pabil16B4->id : -1, p->pabil16B4 && p->pabil16B4->plo4 ? p->pabil16B4->plo4->oid : -1);
         if (pm->n != 0x216 || !p->pabil16B4 || !p->pabil16B4->plo4) return;
         LO* po = PloAcquireProxyObject(g_psw, p->pabil16B4->plo4, false);  // 0x1CB250
-        if (std::getenv("SLY2N_GANGDEBUG")) std::printf("bentley: summoned %d\n", po ? po->oid : -1);
+        if (SLY2N_ENV("SLY2N_GANGDEBUG")) std::printf("bentley: summoned %d\n", po ? po->oid : -1);
         p->ploCarried = po;
         if (!po) return;
         LockProxyRowOf(g_psw, p->pabil16B4->plo4, po);  // 0x1CB488
@@ -1666,7 +1667,7 @@ bool FMurrayGrab(MURRAY* p)
     const float sxy = std::sqrt(d.x * d.x + d.y * d.y);
     if (sxy < 300.0f && 100.0f <= d.z && d.z <= 500.0f && pg->ploFEC && FBtnTake(p, BTN_CIRCLE, F32(0x3E19999A)))
     {
-        if (std::getenv("SLY2N_MURRAYPRINT"))
+        if (SLY2N_ENV("SLY2N_MURRAYPRINT"))
         {
             LO* po = PloInteractOidField(pg->ploFEC, 0x180);
             std::fprintf(stderr, "murray-grab: guard %d carry %d (cid 0x%X) owner %d\n", ploGuard->oid, pg->ploFEC->oid,
@@ -1715,7 +1716,7 @@ void SetMurrayPunch(MURRAY* p, int k)
     }
     ClearSmaHandle(&p->psma);  // 0x1F15B8
     ApplyAsegCur(paseg, p->palo, 0.0f, 1.0f, 1, &p->pasega);  // 0x1305B8
-    if (std::getenv("SLY2N_GANGDEBUG") && paseg)
+    if (SLY2N_ENV("SLY2N_GANGDEBUG") && paseg)
         for (int l = 0; l < 3; ++l)
             for (const ASEGEV& ev : PasegdOf(paseg)->aaev[l])
                 std::printf("punch %d clip %d list %d event t %.3f kind %d an %d %d\n", k, paseg->oid, l, ev.t, ev.kind, ev.an[0], ev.an[1]);
@@ -1819,7 +1820,7 @@ void UpdateMurrayPunch(MURRAY* p)
         }
     }
     if (p->plo10DC && p->n10E4 == 4) FaceActorToward(p, p->plo10DC);  // orig 0x1B8B70 -> 0x2046F0
-    if (std::getenv("SLY2N_PUNCHPRINT"))
+    if (SLY2N_ENV("SLY2N_PUNCHPRINT"))
         std::printf("punch: t %.3f head %.3f vel %.2f %.2f %.2f k %d blend %d dir %.2f %.2f joy %.3f %.3f\n", g_clock.t, p->radHeading,
                     p->vecVel.x, p->vecVel.y, p->vecVel.z, p->n1810, p->f1818, p->rb16F0.avel[0].x, p->rb16F0.avel[0].y, RadJoy(p), UJoy(p));
 }
@@ -1904,7 +1905,7 @@ void UpdateMurrayHold(MURRAY* p)
     if (0 < g_gamepause.c78) return;             // 0x20F0B0
     if (!p->psma) return;
     int oid = OidSmaCur(p->psma);                // 0x1F07E8
-    if (static int s_c = 0; std::getenv("SLY2N_GANGDEBUG") && s_c++ % 30 == 0)
+    if (static int s_c = 0; SLY2N_ENV("SLY2N_GANGDEBUG") && s_c++ % 30 == 0)
         std::printf("murray hold t %.3f: sm cur %d goal %d t1524 %.2f n152C %d k %d\n", g_clock.t, oid, OidSmaGoal(p->psma), p->t1524, p->n152C, p->n1534);
     if (oid != OidSmaGoal(p->psma)) return;      // 0x1F07C8
     if (oid >= 0x1D0 || oid < 0x1CB) return;
@@ -1981,7 +1982,7 @@ void SetMurrayFlopPhase(MURRAY* p, int n)
     }
     default: break;
     }
-    if (std::getenv("SLY2N_MURRAYPRINT"))
+    if (SLY2N_ENV("SLY2N_MURRAYPRINT"))
         std::fprintf(stderr, "murray-flop: frame %d t %.6f phase %d\n", g_iframeHarness, g_clock.t, n);
 }
 
@@ -2134,7 +2135,7 @@ void StartMurrayHold(MURRAY* p, SMA* psmaObj, int oid, int k, int fSnap)
     }
     if (fSnap) SnapSmaGoal(p->psma, oid);
     else SetSmaGoal(p->psma, oid);
-    if (std::getenv("SLY2N_GANGDEBUG"))
+    if (SLY2N_ENV("SLY2N_GANGDEBUG"))
         std::printf("murray: hold kind %d to %d: his sma %p (sm %d cur %d goal %d), the object's %p (sm %d cur %d goal %d)\n", k, oid,
                     static_cast<void*>(p->psma), p->psma && p->psma->psm ? p->psma->psm->oid : -1, p->psma ? OidSmaCur(p->psma) : -1,
                     p->psma ? OidSmaGoal(p->psma) : -1, static_cast<void*>(psmaObj),
@@ -2394,7 +2395,7 @@ std::vector<bool> s_afMurrayTeleDone;
 // fPre: the frame start (only the ",k" events); else Murray's update (the others)
 void MurrayTeleportDebug(MURRAY* p, bool fPre)
 {
-    static const char* s_szTele = std::getenv("SLY2N_MTELEPORT");
+    static const char* s_szTele = SLY2N_ENV("SLY2N_MTELEPORT");
     if (!s_szTele) return;
     const int cUpdate = fPre ? s_cMurrayUpdate : s_cMurrayUpdate++;
     int iev = 0;
@@ -2439,7 +2440,7 @@ void MurrayTeleportDebug(MURRAY* p, bool fPre)
 // (debug) the ",k" Murray teleports at the frame start, as the reference's (before_transition, ahead of every update)
 void MurrayTeleportPreUpdateImpl(SW* psw)
 {
-    if (!std::getenv("SLY2N_MTELEPORT") || !psw) return;
+    if (!SLY2N_ENV("SLY2N_MTELEPORT") || !psw) return;
     for (const auto& up : psw->aploAll)
         if (MURRAY* p = up->fInWorld ? PmurrayFromLo(up.get()) : nullptr)
         {
@@ -2492,6 +2493,10 @@ void UpdateMurray(LO* plo)
     case 4: case 5: break; // original 0x2A71E0: no additional state4/5 update body
     case 17: UpdateGangScriptAnim(p, false); break;
     case 18: UpdateGangScriptAnim(p, true); break;
+    // 16 (the jump kind 4: a splice's or a scene's own hold, its state machine +0x102C started by SetMurrayState): the
+    // original's update has nothing for it (0x1B50B0's switch: no case 16; 0x1B4AA0's transitions none either). He
+    // leaves it through his jump state (vt slot 88) or a script's command.
+    case 16: break;
     default: WarnOnce("Murray's update of state " + std::to_string(p->state)); break;
     }
     // 0x1B82A0
@@ -2512,7 +2517,7 @@ void UpdateMurray(LO* plo)
         SetCtrlPos(p->pscale1ACC, glm::vec4(scale, scale, scale, 0));
     }
     // Debug observer: optional game-time range ("205-220"); poses also include all local record matrices.
-    const char* szMurrayPrint = std::getenv("SLY2N_MURRAYPRINT");
+    const char* szMurrayPrint = SLY2N_ENV("SLY2N_MURRAYPRINT");
     float tPrintFrom = -1.0f, tPrintTo = 1.0e30f;
     if (szMurrayPrint) std::sscanf(szMurrayPrint, "%f-%f", &tPrintFrom, &tPrintTo);
     if (szMurrayPrint && tPrintFrom <= g_clock.t && g_clock.t <= tPrintTo)
@@ -2524,7 +2529,7 @@ void UpdateMurray(LO* plo)
                      g_iframeHarness, g_clock.t, p->state, p->n13D8, pos.x, pos.y, pos.z, vel.x, vel.y, vel.z,
                      p->pasega && p->pasega->paseg ? p->pasega->paseg->oid : -1, p->pasega ? p->pasega->t : 0.0f,
                      local.x, local.y, local.z);
-        if (std::getenv("SLY2N_MURRAYPOSE") && (p->state == 3 || std::getenv("SLY2N_MURRAYPOSE_ALL")))
+        if (SLY2N_ENV("SLY2N_MURRAYPOSE") && (p->state == 3 || SLY2N_ENV("SLY2N_MURRAYPOSE_ALL")))
             for (size_t i = 0; i < p->palo->axf.size(); ++i)
             {
                 const XF& xf = *p->palo->axf[i];
@@ -2532,7 +2537,7 @@ void UpdateMurray(LO* plo)
                 for (int c = 0; c < 4; ++c)
                     for (int r = 0; r < 3; ++r) std::fprintf(stderr, " %.9g", xf.mat[c][r]);
                 std::fprintf(stderr, "\n");
-                if (std::getenv("SLY2N_MURRAYPOSE_ALL"))
+                if (SLY2N_ENV("SLY2N_MURRAYPOSE_ALL"))
                 {
                     const CTRL* ctrl = xf.pctrlFirst;
                     const auto* ca = dynamic_cast<const CTRLASEG*>(ctrl);
@@ -2633,7 +2638,7 @@ void OnMurrayMessage(LO* plo, int msgk, void* pv)
     const ASEGMSG9* pm = static_cast<const ASEGMSG9*>(pv);
     // Berserker Charge's bounce: its kind-2 player's take-off (the ASEGA's listener 0x20C290: the event 0x22)
     if (p->pk2play1890 && pm->pasega && pm->pasega == p->pk2play1890->pasega && pm->n == 0x22) SetK2State(p->pk2play1890, 1);
-    if (std::getenv("SLY2N_MURRAYPRINT"))
+    if (SLY2N_ENV("SLY2N_MURRAYPRINT"))
         std::fprintf(stderr, "murray-event: frame %d t %.4f state %d event 0x%X mine %d\n", g_iframeHarness, g_clock.t, p->state, pm->n,
                      pm->pasega == p->pasega || pm->pasega == p->pasega190C);
     if (pm->pasega != p->pasega && pm->pasega != p->pasega190C) return;
@@ -2723,7 +2728,7 @@ void InitWorldGang(SW* psw)
         {
             ALO* palo = static_cast<ALO*>(plo);
             StepPhysOf(palo);  // (made with 0x203948's defaults when the physics' post-load did not)
-            if (std::getenv("SLY2N_GANGDEBUG"))
+            if (SLY2N_ENV("SLY2N_GANGDEBUG"))
                 for (size_t i = 0; i < palo->axf.size() && i < 5; ++i)
                     std::printf("gang: %d record %zu kind %d local %.2f %.2f %.2f world %.2f %.2f %.2f; vecBase z %.3f\n", plo->oid, i,
                                 palo->axf[i]->kind, palo->axf[i]->mat[3].x, palo->axf[i]->mat[3].y, palo->axf[i]->mat[3].z,
@@ -2812,7 +2817,7 @@ struct INITGANG
         RegisterObjectMethod(0x10D468, [](LO* plo, const std::vector<CRef>&) {
             if (MURRAY* p = PmurrayFromLo(plo))
             {
-                if (std::getenv("SLY2N_MURRAYPOSE_ALL"))
+                if (SLY2N_ENV("SLY2N_MURRAYPOSE_ALL"))
                 {
                     std::fprintf(stderr, "murray-inherited: frame %d state %d anim %d time %.9g\n", g_iframeHarness, p->state,
                                  p->pasega && p->pasega->paseg ? p->pasega->paseg->oid : -1, p->pasega ? p->pasega->t : 0.0f);
@@ -2962,7 +2967,7 @@ bool StartBentleyAbility(ACTOR* pa, int k)
     case 8:
         p->n9BC = k;
         p->pasegAbility = PPart<ASEG>(p->palo, 0x1874);  // +0x130C = +0x1874
-        if (std::getenv("SLY2N_GADGETPRINT"))
+        if (SLY2N_ENV("SLY2N_GADGETPRINT"))
             std::printf("gadget: Size Destabilizer clip %d\n", p->pasegAbility ? p->pasegAbility->oid : -1);
         StartInteract(p, 11, nullptr, JTL_Max);  // 0x1928F8 (+0x4C0, 0xB)
         return true;

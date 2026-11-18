@@ -9,6 +9,10 @@
 #include "prompt_glyphs.h"
 #include "runtime_error.h"
 #include "mouseinput.h"
+#include "../platform/monitor_select_glfw.h"
+#if defined(__SWITCH2__)
+#include "clock.h"   // (g_targetFrameRate)
+#endif
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -38,14 +42,11 @@ int s_windowedHeight = 800;
 bool s_lastFramebufferResizeSucceeded = true;
 double s_autoIconifySuppressedUntil = 0.0;
 
-GLFWmonitor* MonitorByIndex(int index)
-{
-	int count = 0;
-	GLFWmonitor** monitors = glfwGetMonitors(&count);
-	if (monitors == nullptr || count == 0)
-		return glfwGetPrimaryMonitor();
-	return monitors[(std::clamp)(index, 0, count - 1)];
-}
+// The window mode as applied (platform/monitor_select_glfw.h): the monitor and the identifier it was applied on.
+GLFWmonitor* s_monitorApplied = nullptr;
+std::string s_monitorIdApplied;
+bool s_fWindowApplied = false;
+unsigned s_monitorConnections = 0;
 
 void GlfwErrorCallback(int error, const char* description)
 {
@@ -133,6 +134,8 @@ void GL::InitGL()
 	glfwWindowHint(GLFW_DEPTH_BITS, 0);
 	glfwWindowHint(GLFW_STENCIL_BITS, 0);
 	glfwWindowHint(GLFW_AUTO_ICONIFY, g_fAutoIconify ? GLFW_TRUE : GLFW_FALSE);
+	// (test aid: SLY1_HIDDENWINDOW=1, a run whose window is never shown, as Sly 2's SLY2N_HIDDENWINDOW)
+	if (std::getenv("SLY1_HIDDENWINDOW") != nullptr) glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
 
 	width  = 1280;
 	height = 720;
@@ -1200,11 +1203,16 @@ bool ApplyWindowModeSettings(WindowMode mode)
 	if (g_gl.window == nullptr)
 		return false;
 
-	GLFWmonitor* monitor = MonitorByIndex(g_monitorIndex);
+	// The chosen monitor (settings v22 monitor, platform/monitor_select.h): the primary one for Primary or when the
+	// chosen one is not connected.
+	cane::monitor::watchConnections();
+	GLFWmonitor* monitor = cane::monitor::chosen(g_monitorId);
 	if (monitor == nullptr)
 		return false;
+	const bool wayland = cane::monitor::cannotPlaceWindows();
+	const bool idChanged = s_fWindowApplied && g_monitorId != s_monitorIdApplied;
 
-	if (g_windowMode == WindowMode_Windowed)
+	if (g_windowMode == WindowMode_Windowed && glfwGetWindowMonitor(g_gl.window) == nullptr)
 	{
 		glfwGetWindowPos(g_gl.window, &s_windowedX, &s_windowedY);
 		glfwGetWindowSize(g_gl.window, &s_windowedWidth, &s_windowedHeight);
@@ -1220,8 +1228,14 @@ bool ApplyWindowModeSettings(WindowMode mode)
 		glfwSetWindowAttrib(g_gl.window, GLFW_DECORATED, GLFW_TRUE);
 		glfwSetWindowMonitor(g_gl.window, nullptr, s_windowedX, s_windowedY,
 			(std::max)(s_windowedWidth, 320), (std::max)(s_windowedHeight, 240), GLFW_DONT_CARE);
+		// Onto the chosen monitor when that choice changed, or the first time with one chosen and the window on
+		// another (not on Wayland: the compositor places windows there).
+		const bool move = idChanged || (s_fWindowApplied && monitor != s_monitorApplied) || (!s_fWindowApplied && !g_monitorId.empty());
+		if (move && !wayland && cane::monitor::holding(g_gl.window) != monitor &&
+			cane::monitor::centreWindowOn(g_gl.window, monitor, &s_windowedX, &s_windowedY))
+			glfwGetWindowSize(g_gl.window, &s_windowedWidth, &s_windowedHeight);
 	}
-	else if (mode == WindowMode_Borderless)
+	else if (mode == WindowMode_Borderless && !wayland)
 	{
 		int x = 0;
 		int y = 0;
@@ -1240,80 +1254,49 @@ bool ApplyWindowModeSettings(WindowMode mode)
 	}
 	else
 	{
+		// Fullscreen, and Borderless on Wayland: a fullscreen surface on the chosen output (a window cannot be placed
+		// there, and Wayland never changes an output's mode).
 		const GLFWvidmode* videoMode = glfwGetVideoMode(monitor);
 		if (videoMode == nullptr)
 			return false;
 		glfwSetWindowAttrib(g_gl.window, GLFW_DECORATED, GLFW_TRUE);
 		glfwSetWindowMonitor(g_gl.window, monitor, 0, 0,
-			videoMode->width, videoMode->height, videoMode->refreshRate);
+			videoMode->width, videoMode->height, mode == WindowMode_Fullscreen ? videoMode->refreshRate : GLFW_DONT_CARE);
 	}
 	if (glfwGetError(nullptr) != GLFW_NO_ERROR)
 		return false;
 
 	g_windowMode = mode;
+	s_monitorApplied = monitor;
+	s_monitorIdApplied = g_monitorId;
+	s_fWindowApplied = true;
+	s_monitorConnections = cane::monitor::changeCounter();
 	ApplySwapInterval();
 	return true;
 }
 
-int VideoMonitorCount()
+bool ApplyMonitorSettings(const std::string& monitorId)
 {
-	int count = 0;
-	glfwGetMonitors(&count);
-	return (std::max)(count, 1);
-}
-
-const char* VideoMonitorName(int monitorIndex)
-{
-	GLFWmonitor* monitor = MonitorByIndex(monitorIndex);
-	const char* name = monitor != nullptr ? glfwGetMonitorName(monitor) : nullptr;
-	return name != nullptr ? name : "Primary Monitor";
-}
-
-int VideoMonitorIndexByName(const char* name)
-{
-	if (name == nullptr || *name == '\0')
-		return -1;
-	int count = 0;
-	GLFWmonitor** monitors = glfwGetMonitors(&count);
-	for (int i = 0; monitors != nullptr && i < count; ++i)
-	{
-		const char* candidate = glfwGetMonitorName(monitors[i]);
-		if (candidate != nullptr && std::strcmp(candidate, name) == 0)
-			return i;
-	}
-	return -1;
-}
-
-bool ApplyMonitorSettings(int monitorIndex)
-{
-	const int previousMonitor = g_monitorIndex;
-	g_monitorIndex = (std::clamp)(monitorIndex, 0, VideoMonitorCount() - 1);
+	const std::string previous = g_monitorId;
+	g_monitorId = monitorId;
 	if (!ApplyWindowModeSettings(g_windowMode))
 	{
-		g_monitorIndex = previousMonitor;
+		g_monitorId = previous;
 		return false;
 	}
-	if (g_windowMode == WindowMode_Windowed && g_gl.window != nullptr)
-	{
-		GLFWmonitor* monitor = MonitorByIndex(g_monitorIndex);
-		if (monitor == nullptr)
-			return false;
-		int x = 0, y = 0, width = 0, height = 0;
-		int windowWidth = 0, windowHeight = 0;
-		glfwGetMonitorWorkarea(monitor, &x, &y, &width, &height);
-		glfwGetWindowSize(g_gl.window, &windowWidth, &windowHeight);
-		s_windowedX = x + (width - windowWidth) / 2;
-		s_windowedY = y + (height - windowHeight) / 2;
-		s_autoIconifySuppressedUntil = glfwGetTime() + 0.5;
-		glfwGetError(nullptr);
-		glfwSetWindowPos(g_gl.window, s_windowedX, s_windowedY);
-		if (glfwGetError(nullptr) != GLFW_NO_ERROR)
-		{
-			g_monitorIndex = previousMonitor;
-			return false;
-		}
-	}
 	return true;
+}
+
+void UpdateMonitorConnections()
+{
+	// A monitor plugged in or unplugged: the window mode again (the chosen monitor, else the primary one; GLFW takes a
+	// fullscreen window off a monitor that went away)
+	if (g_gl.window == nullptr || !s_fWindowApplied || s_monitorConnections == cane::monitor::changeCounter())
+		return;
+	std::printf("display: monitors changed (%s)\n", g_monitorId.empty() ? "Primary" : g_monitorId.c_str());
+	if (!ApplyWindowModeSettings(g_windowMode))
+		ApplyWindowModeSettings(WindowMode_Windowed);
+	s_monitorConnections = cane::monitor::changeCounter();
 }
 
 void ApplyOutputGammaSettings(float gamma)
@@ -1397,9 +1380,18 @@ void FrameBufferSizeCallBack(GLFWwindow* window, int width, int height)
 	int sceneW = presentW;
 	int sceneH = presentH;
 
+	g_fInternalResolutionCapped = false;
 	if (g_internalResolutionHeight > 0)
 	{
 		sceneH = g_internalResolutionHeight;
+#if defined(__SWITCH2__)
+		// (at 120 fps, at most the picture's height; the setting applies again at 60)
+		if (g_targetFrameRate > 60 && sceneH > presentH)
+		{
+			sceneH = presentH;
+			g_fInternalResolutionCapped = true;
+		}
+#endif
 		// The original PS2 raster is explicitly 640x448. Other internal
 		// resolutions preserve the selected presentation aspect ratio.
 		if (sceneH == 448)
@@ -1503,8 +1495,9 @@ GLuint g_sceneFbo = 0;
 int g_msaaSamples = 4;
 bool g_fMsaa = false;
 int g_internalResolutionHeight = 0;
+bool g_fInternalResolutionCapped = false;
 int g_resolutionScalePercent = 100;
-int g_monitorIndex = 0;
+std::string g_monitorId;
 int g_textureFiltering = 1;
 float g_outputGamma = 1.0f;
 float g_guiScale = 1.0f;

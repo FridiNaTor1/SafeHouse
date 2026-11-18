@@ -83,7 +83,29 @@ std::unordered_map<const LO*, PROJ>& MpProj()
 PROJ& Proj(const LO* plo) { return MpProj()[plo]; }
 
 // a loaded field of the class (the options 486..511 at their offsets: as loaded, or set by a script)
-uint32_t UField(const LO* plo, uint32_t ib, uint32_t uDefault) { return plo->U32Field(0, ib, uDefault); }
+// (Sly 3: the projectiles' option fields are Sly 2's less 0x20 (PROJECTILE 0x59: 0x15C -> 0x13C, ...), 0x1E0..0x1F4
+// less 0x1C, the missiles' 0x260.. less 0x20 (maps/eopids.tsv, EOPIDs 427..455); this code names Sly 2's offsets. Read
+// at Sly 2's, an RC car shot's +0x164 ("no victims") was another option's 1 and its radii 0: nothing it hit was hurt.)
+uint32_t Ib3Projectile(const LO* plo, uint32_t ib)
+{
+    if (!FCidDerivedFrom(plo->Cid(), S3CID(0x4F))) return ib;
+    switch (ib)
+    {
+    case 0x150: case 0x158: case 0x15C: case 0x160: case 0x164: case 0x168: return ib - 0x20;
+    case 0x170: return 0x14C;      // the impact's orientation kind
+    case 0x16C: return 0xFFFF;     // (Sly 3's EOPID 432 has no field: the default)
+    case 0x1E0: case 0x1E4: case 0x1EC: case 0x1F0: case 0x1F4: return ib - 0x1C;
+    case 0x260: case 0x264: case 0x26C: case 0x270: case 0x274: return ib - 0x20;
+    default: return ib;
+    }
+}
+// (a translated offset is the original's: read where the option is stored, brx.h OptionFieldKey; natively the load
+// stored the Sly 2 twin's offset and only a script's set reached these reads)
+uint32_t UField(const LO* plo, uint32_t ib, uint32_t uDefault)
+{
+    const uint32_t ib3 = Ib3Projectile(plo, ib);
+    return ib3 != ib ? plo->U32Field3(0, ib3, uDefault) : plo->U32Field(0, ib, uDefault);
+}
 float GField(const LO* plo, uint32_t ib, float gDefault)
 {
     uint32_t u;
@@ -166,9 +188,11 @@ std::vector<LO*> AploVictims(ALO* palo, const glm::vec3& pos)
     const float r = std::max(r15C, r160);
     std::vector<LO*> apo;
     OXA* poxaSelf = Poxa(palo);
-    for (OXA* poxa : g_physw.apoxaActive)
+    // (Sly 3's 0x14CBB8 asks the world's partition (0x25D0D8) for every entry in the radius, the still ones too (the
+    // Ep4 heist's alarm boxes: breakables nothing updates); the active list alone missed them)
+    for (OXA* poxa : g_physw.apoxa)
     {
-        if (poxa == poxaSelf) continue;
+        if (poxa == poxaSelf || !poxa->pso || !poxa->pso->fInWorld) continue;
         const glm::vec3 d = poxa->posCenter - pos;
         const float s = poxa->sRadius + r;
         if (glm::dot(d, d) > s * s) continue;
@@ -209,6 +233,9 @@ void EndProjectile(ALO* palo)
     }
     RecordHit(palo, PosAloCenter(palo), AXIS_Z);
     PROJ& p = Proj(palo);
+    if (std::getenv("SLY2N_HITDEBUG"))
+        std::printf("projend %d: hit at %.0f %.0f %.0f +0x164 %u radii %.0f %.0f victims %zu\n", palo->oid, p.posHit.x, p.posHit.y, p.posHit.z, UField(palo, 0x164, 0),
+                    GField(palo, 0x15C, 200.0f), GField(palo, 0x160, 200.0f), AploVictims(palo, p.posHit).size());
     if (!UField(palo, 0x164, 0))
         for (LO* po : AploVictims(palo, p.posHit))
         {
@@ -216,12 +243,13 @@ void EndProjectile(ALO* palo)
             ctm.ploSender = palo;
             ctm.ploReceiver = po;
             ctm.grfFilter = p.grfFilterSet ? p.grfFilterSet : UField(palo, 0x1EC, 0x100);  // (0x13A9E8 defaults: 0x100, -10)
-            ctm.nState = static_cast<int>(UField(palo, 0x1F0, static_cast<uint32_t>(-10)));
+            // (orig3 0x14CE20 sends +0x1D4 as it is, positive; the receivers here take Sly 2's negative amounts)
+            ctm.nState = -std::abs(static_cast<int>(UField(palo, 0x1F0, static_cast<uint32_t>(-10))));
             ctm.pos = p.posHit;
             ctm.vec = Normal(PosAi(po) - p.posHit, AXIS_Z) * 500.0f;  // (D_002BC9E0)
             if (std::getenv("SLY2N_HITDEBUG"))
-                std::printf("projectile %d hits %d (cid 0x%X): filter 0x%X state %d\n", palo->oid, po->oid, po->Cid(), ctm.grfFilter,
-                            ctm.nState);
+                std::printf("projectile %d hits %d (cid 0x%X): filter 0x%X state %d launcher %d\n", palo->oid, po->oid, po->Cid(), ctm.grfFilter,
+                            ctm.nState, Proj(palo).plaunch ? Proj(palo).plaunch->oid : -1);
             PaloAcceptContact(&ctm);  // 0x1F7598
         }
     if (STEP* pstep = PstepFromLo(palo)) SetStepPos(pstep, p.posHit - glm::vec3(pstep->vecBase));
@@ -284,7 +312,7 @@ void SweepProjectile(ALO* palo)
     }
 }
 
-// orig: 0x0013ADE8 (slot 60; its base 0x1F5990 is empty, and the other tree arguments are unused here)
+// orig: 0x0013ADE8 (slot 60; its base 0x1F5990 is empty, and the other tree arguments are unused here) (orig3: 0x14C408, the same C in the Sly 3 decomp)
 void MarkProjectileSweep(ALO* palo, SOE* entry, int, const BSPREF&, int, XP** contacts)
 {
     if (!UField(palo, 0x1F4, 0) || !entry || !entry->palo || palo->asoe.empty()) return;
@@ -315,10 +343,12 @@ void UpdateProjectile(LO* plo)
 }
 
 // orig: 0x0013B1C8 (excluded attachment classes and their descendants, through the candidate's ancestor chain)
+// orig3: 0x0014C778 (table D_00320278, Sly 3 cids: PO 0x32, CARRY 0x71, PROJECTILE 0x59, BOOTY 0x74, TURRET 0x44;
+// the Sly 2 port passed Sly 2's D_002BC9D0 {0x33, 0x64, 0x4F, 0x67} raw: PLAYER / HIDE / 0x4F / COIN in Sly 3)
 bool FStickyProjectileParent(ALO* parent)
 {
     for (LO* p = parent; p; p = p->paloParent)
-        for (CID cid : {0x33, 0x64, 0x4F, 0x67})  // D_002BC9D0
+        for (CID cid : {0x32, 0x71, 0x59, 0x74, 0x44})  // D_00320278
             if (FCidDerivedFrom(p->Cid(), cid)) return false;
     return true;
 }
@@ -336,9 +366,9 @@ void AttachStickyProjectile(void* object, void* argument)
     SetAloCnstrLin(palo, 1);
     SetAloCnstrAng(palo, 1);
     if (std::getenv("SLY2N_PROJECTILEAUDIT"))
-        std::printf("PROJECTILE_ATTACH t=%.6f projectile=%d clone=%d target=%d parent=%d event=27\n",
+        std::printf("PROJECTILE_ATTACH t=%.6f projectile=%d clone=%d target=%d parent=%d event=0x1E\n",
                     g_clock.t, palo->oid, palo->iclone, parent->oid, palo->paloParent ? palo->paloParent->oid : -1);
-    HandleLoSpliceEvent(palo, 27, false, 0, nullptr);
+    HandleLoSpliceEvent(palo, 0x1E, false, 0, nullptr);   // (orig3 0x14C7F0: Sly 3's 0x1E; Sly 2's 27)
 }
 
 // orig: 0x0013AEB0 (nearest eligible contact; kind1 posts attachment, kinds0/2 record impact and expire)
@@ -432,10 +462,24 @@ struct INITPROJECTILE
     {
         RegisterLoUpdate(0x13AB58, UpdateProjectile);
         RegisterObjectGetter(394, [](LO* plo) { CRef r; r.SetBasic(ProjectileOwner(plo)); return r; });
+        // Sly 2's EOPID 397 = Sly 3's 442 (option 552): the launcher that threw it (+0x200, Sly 3 +0x1E8: 0x14D1F0 from the
+        // launch 0x212770). E.g. the turf war's wave guards' s12 (job 2139's s6087): a hit from a projectile (class 0x59)
+        // whose launcher belongs to the jet-pack cop (s6046) counts 0; unset, every one of 36093's bursts took 5 off the
+        // wave guards' health (2163: ~90 such hits a fight natively; the reference's wave guards keep 200)
+        RegisterObjectGetter(397, [](LO* plo) { CRef r; r.SetBasic(PloProjectileLauncher(plo)); return r; });
         RegisterObjectSetter(394, [](LO* plo, const CRef& r) {
             PROJ& p = Proj(plo);
             p.owner = dynamic_cast<LO*>(r.m_pbasic);
             p.ownerAssigned = true;
+        });
+        // Sly 3's EOPID 439 (option 549, the hit's amount): its setter 0x14D228 stores +0x1D4 (Sly 2's +0x1F0 here, the
+        // default 10 from 0x14BFB0), its getter reads the field. It was dropped: every projectile hit for 10 (e.g. the turf
+        // war's wave guards' and Carmelita's shots, whose ammo sets its own amount)
+        RegisterObjectSetter3(439, [](LO* plo, const CRef& r) { plo->SetField3(0, 0x1D4, static_cast<uint32_t>(r.m_tagk == TAGK_F32 ? static_cast<int>(r.m_g) : r.m_n)); });
+        RegisterObjectGetter3(439, [](LO* plo) {
+            CRef r;
+            r.SetS32(std::abs(static_cast<int>(UField(plo, 0x1F0, static_cast<uint32_t>(-10)))));
+            return r;
         });
         // EOPIDs 400/401 expose the same target/point fields that slot 78 writes (original +0x210/+0x220).
         RegisterObjectGetter(400, [](LO* plo) { CRef r; r.SetBasic(Proj(plo).target); return r; });
@@ -592,12 +636,20 @@ NATIVEFN(0x1B2228, SetHomingMissileTarget);
 NATIVEFN(0x1B2468, UpdateHomingMissileAccel);
 
 // orig: 0x0013BC60: the launcher that threw it (+0x200; its overlaps retested when it changes, 0x134320)
+// (orig 0x13B860 / orig3 0x14CE20: the end now, e.g. the Grapple-Cam's blow-up, game/grapplecam3.cpp)
+void EndProjectileNow(ALO* palo) { EndProjectile(palo); }
+
 void SetProjectileLauncher(ALO* palo, LO* plaunch)
 {
     PROJ& p = Proj(palo);
     if (p.plaunch == plaunch) return;
     p.plaunch = plaunch;
     RecalcSwOxfFilterForObject(palo);
+}
+LO* PloProjectileLauncher(LO* plo)
+{
+    if (!plo || !FCidDerivedFrom(plo->Cid(), S3CID(0x4F))) return nullptr;
+    return Proj(static_cast<ALO*>(plo)).plaunch;
 }
 
 glm::vec3 ProjectCnstr(const CNSTRS& c, const XF* pxfOwner, const glm::vec3& v);  // solve.cpp (0x1FA810)

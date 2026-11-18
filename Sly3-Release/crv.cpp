@@ -95,7 +95,7 @@ int ISegCrvS(const CRV* p, float s, float* pds, float* pdsSeg)
     return i;
 }
 
-// orig 0x001E5FC8 (the 11 lengths along cubic segment i at tenths of its span)
+// orig 0x001E5FC8 (the 11 lengths along cubic segment i at tenths of its span) (orig3: 0x22D950, the same C in the Sly 3 decomp)
 void CacheSegCrv(const CRV* p, int i)
 {
     if (i == p->isegCached) return;
@@ -265,7 +265,7 @@ float GFromCrvS(const CRV* p, float s)
     return (1.0f - u) * p->ag[i] + u * p->ag[i + 1];
 }
 
-// orig: 0x001E6660
+// orig: 0x001E6660 (orig3: 0x22DFF0, the same C in the Sly 3 decomp)
 float GWrapCrv(const CRV* p, float g)
 {
     if (!p->fClosed) return g;
@@ -306,7 +306,7 @@ void EvalCrv(const CRV* p, float g, glm::vec3* ppos, glm::vec3* pdir)
     if (pdir) *pdir = glm::normalize(Dir(p->mat, vel));
 }
 
-// orig: 0x001E6F10
+// orig: 0x001E6F10 (orig3: 0x22E4D0, the same code in Sly 3)
 void EvalCrvS(const CRV* p, float s, glm::vec3* ppos, glm::vec3* pdir) { EvalCrv(p, GFromCrvS(p, s), ppos, pdir); }
 
 // orig: 0x001E6ED8 (0x1E6A30 / 0x1E6DB8 with the filter (0x1FA970 kind 1: along the axis dropped))

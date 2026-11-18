@@ -1,12 +1,16 @@
 // See hud.h.
 
+#include "fastpaths.h"
 #include "hud.h"
+#include "screen3.h"
+#include "pcloader.h"
 #include "texmod.h"
 #include "region.h"
 
 #include "display.h"
 #include "promptglyph.h"
 #include "gl.h"
+#include "gl_backend.h"
 #include "render.h"
 #include "shd.h"
 #include "qolview.h"
@@ -14,6 +18,7 @@
 #include <stb/stb_image_write.h>
 
 #include <algorithm>
+#include <cfloat>
 #include <cmath>
 #include <cstdio>
 #include "clock.h"
@@ -38,7 +43,12 @@ constexpr float UI_KY = 7.0f / 15.0f;           // orig3 0x2666A0: 448 / 480 / 2
 glm::vec2 ScreenFromGs(float tx, float ty)
 {
     // GS pixel = (t - 2^19) mod 4096 (the 12.4 register keeps 16 bits), then the frame offset.
-    const float gx = std::fmod(tx - GS_BIAS, 4096.0f), gy = std::fmod(ty - GS_BIAS, 4096.0f);
+    // (not std::fmod: newlib's fmodf is a slow bit-by-bit loop and glibc's an x87 fprem loop. v - 4096 trunc(v / 4096) is
+    // the same value: the scalings by a power of two are exact, and so is the difference of two floats of the same sign
+    // within a factor of two of each other (Sterbenz); only an exact zero's sign may differ, which the offsets below do
+    // not see)
+    auto mod4096 = [](float v) { return v - 4096.0f * std::trunc(v * (1.0f / 4096.0f)); };
+    const float gx = mod4096(tx - GS_BIAS), gy = mod4096(ty - GS_BIAS);
     return glm::vec2((gx - FRAME_OFX) * 1.25f, (gy - FRAME_OFY) * 2.0f);
 }
 
@@ -98,9 +108,123 @@ void CHud::SetMode(int mode)
     m_mode = mode;
 }
 
+
+// (band2p, hud.h) the two-player HUD band in one player's view
+bool CHud::FBoxQuad2p(const std::vector<VTX>& av, glm::vec4* prect) const
+{
+    if (av.size() != 4) return false;
+    glm::vec2 lo = av[0].pos, hi = av[0].pos;
+    for (const VTX& v : av) { lo = glm::min(lo, v.pos); hi = glm::max(hi, v.pos); }
+    if (hi.x - lo.x < 300.0f || hi.y - lo.y < 150.0f || hi.y - lo.y > 240.0f) return false;
+    for (const VTX& v : av)   // (axis-aligned: every corner on the bounding box's corners)
+        if ((std::abs(v.pos.x - lo.x) > 0.6f && std::abs(v.pos.x - hi.x) > 0.6f) || (std::abs(v.pos.y - lo.y) > 0.6f && std::abs(v.pos.y - hi.y) > 0.6f))
+            return false;
+    *prect = glm::vec4(lo, hi);
+    return true;
+}
+
+void CHud::Stretch2p(std::vector<VTX>& av, const glm::vec4& rect) const
+{
+    const glm::vec2 c(0.5f * (rect.x + rect.z), 0.5f * (rect.y + rect.w));
+    for (VTX& v : av)
+    {
+        v.pos.x += v.pos.x < c.x ? -band2p.ex : band2p.ex;
+        v.pos.y += v.pos.y < c.y ? -band2p.ey : band2p.ey;
+    }
+}
+
+CHud::ADJ2P CHud::Adj2p(glm::vec2 lo, glm::vec2 hi)
+{
+    ADJ2P a;
+    constexpr float yMid = 224.0f, eps = 2.0f;
+    if (lo.y < yMid - eps && hi.y > yMid + eps && hi.y - lo.y > 300.0f) return a;   // (a backdrop over both bands: as it is)
+    const int band = 0.5f * (lo.y + hi.y) < yMid ? 0 : 1;
+    if (band != band2p.band) { a.fSkip = true; return a; }
+    const BOX2P& b = abox2p[band];
+    if (oidObj != -1 && oidObj != b.oid)
+    {
+        // the object's extent in this band (the last drawn frame's, when known)
+        OBJBOX2P& o = m_mpobj2p[oidObj * 8 + band2p.iview];
+        if (o.frame[band] != iframe2p)
+        {
+            o.prev[band] = o.a[band], o.framePrev[band] = o.frame[band];
+            o.a[band] = glm::vec4(lo, hi), o.frame[band] = iframe2p;
+        }
+        else o.a[band] = glm::vec4(glm::min(glm::vec2(o.a[band]), lo), glm::max(glm::vec2(o.a[band].z, o.a[band].w), hi));
+        if (o.framePrev[band] == iframe2p - 1) lo = glm::vec2(o.prev[band]), hi = glm::vec2(o.prev[band].z, o.prev[band].w);
+    }
+    const bool fBox = b.frame >= iframe2p - 1;
+    const glm::vec4 r = fBox ? b.hole : glm::vec4(0.0f);
+    const glm::vec2 c = 0.5f * (lo + hi);
+    // the side of the band the box leaves free (the portrait panel's): the box on the left half -> the panel on the right
+    float side = fBox ? (0.5f * (r.x + r.z) < 320.0f ? 1.0f : -1.0f) : (band == 0 ? 1.0f : -1.0f);
+    // (no box: a piece well on the other side of the band goes to that side's edge; the centred ones keep the band's side)
+    if (!fBox && std::fabs(c.x - 320.0f) > 160.0f) side = c.x < 320.0f ? -1.0f : 1.0f;
+    if (fBox && oidObj != b.oid && c.x >= r.x && c.x <= r.z && c.y >= r.y && c.y <= r.w)
+    {
+        // a piece inside the box (a gauge): with its nearest corner
+        a.d.x = c.x < 0.5f * (r.x + r.z) ? -band2p.ex : band2p.ex;
+        a.d.y = c.y < 0.5f * (r.y + r.w) ? -band2p.ey : band2p.ey;
+        return a;
+    }
+    a.d.x = side * band2p.ex;
+    return a;
+}
+
 void CHud::DrawSprite(const SELEM& elem, const HUDSTATE& st)
 {
     if (elem.kind != SELEMK_Sprite) return;
+    // (band2p) the element's place: its polygons but the backdrops over both bands and the view boxes
+    ADJ2P adj2p;
+    bool fPerPoly2p = false;
+    // (fBoard2pObj: the two-player board split between the centre pass (its banner) and the band passes (the scores))
+    const bool fBoardSplit2p = fBoard2pObj && (band2p.f || fCenter2p);
+    if (fBoardSplit2p)
+    {
+        // (by the whole element: a score's glyph has pieces inside the strip)
+        glm::vec2 l(1e9f), h(-1e9f);
+        for (const SPOLY& poly : elem.apoly)
+            for (const auto& xy : poly.axy)
+            {
+                const float x = xy[0] / 16.0f, y = xy[1] / 16.0f;
+                const glm::vec2 p = ScreenFromGs(st.m[0] * x + st.m[4] * y + st.m[8], st.m[1] * x + st.m[5] * y + st.m[9]);
+                l = glm::min(l, p), h = glm::max(h, p);
+            }
+        if (l.x <= h.x && FBanner2p(l, h) == band2p.f) return;   // (the band pass: not the banner; the centre pass: only it)
+    }
+    if (band2p.f)
+    {
+        if (m_iGroup2p == 2) adj2p = m_adjGroup2p;
+        else
+        {
+            glm::vec2 lo(1e9f), hi(-1e9f);
+            std::vector<VTX> av;
+            for (const SPOLY& poly : elem.apoly)
+            {
+                av.clear();
+                for (const auto& xy : poly.axy)
+                {
+                    const float x = xy[0] / 16.0f, y = xy[1] / 16.0f;
+                    av.push_back({ScreenFromGs(st.m[0] * x + st.m[4] * y + st.m[8], st.m[1] * x + st.m[5] * y + st.m[9]), glm::vec4(0.0f), 0.0f});
+                }
+                if (av.empty()) continue;
+                glm::vec2 l = av[0].pos, h = av[0].pos;
+                for (const VTX& v : av) { l = glm::min(l, v.pos); h = glm::max(h, v.pos); }
+                glm::vec4 rect;
+                if (FBoxQuad2p(av, &rect) || (l.y < 222.0f && h.y > 226.0f && h.y - l.y > 300.0f)) continue;
+                lo = glm::min(lo, l);
+                hi = glm::max(hi, h);
+            }
+            if (lo.x <= hi.x)
+            {
+                // (the rest over both bands: each polygon by itself)
+                if (lo.y < 222.0f && hi.y > 226.0f && m_iGroup2p == 0) fPerPoly2p = true;
+                else adj2p = Adj2p(lo, hi);
+            }
+            if (m_iGroup2p == 1) { m_adjGroup2p = adj2p; m_iGroup2p = 2; }
+        }
+        if (adj2p.fSkip) return;
+    }
     ++csprite;
     if (m_abatch.empty() || m_abatch.back().mode != m_mode || m_fBreakBatch)
         { m_abatch.push_back({m_mode, m_atri.size(), 0, m_aline.size(), 0}); m_fBreakBatch = false; }
@@ -111,7 +235,10 @@ void CHud::DrawSprite(const SELEM& elem, const HUDSTATE& st)
         glm::vec4 c = glm::clamp(Rgba(poly.rgba) * st.scale + st.offset, glm::vec4(0.0f), glm::vec4(255.0f));
         c = glm::floor(c);
         const float z = (float(poly.control) * 100.0f + st.depth) / 16777216.0f;
-        std::vector<VTX> av;
+        // (one array for every polygon, kept, not one allocated per polygon; the HUD is drawn on the game thread only)
+        static std::vector<VTX> s_av;
+        std::vector<VTX>& av = s_av;
+        av.clear();
         for (size_t i = 0; i < poly.axy.size(); ++i)
         {
             const float x = poly.axy[i][0] / 16.0f, y = poly.axy[i][1] / 16.0f;
@@ -130,6 +257,29 @@ void CHud::DrawSprite(const SELEM& elem, const HUDSTATE& st)
             else if (d.x < -2560.0f) av[i].pos.x += 5120.0f;
             if (d.y > 4096.0f) av[i].pos.y -= 8192.0f;
             else if (d.y < -4096.0f) av[i].pos.y += 8192.0f;
+        }
+        if (band2p.f && !av.empty())
+        {
+            glm::vec4 rect;
+            glm::vec2 l = av[0].pos, h = av[0].pos;
+            for (const VTX& v : av) { l = glm::min(l, v.pos); h = glm::max(h, v.pos); }
+            if (FBoxQuad2p(av, &rect))
+            {
+                // the view box: its hole (the smallest one of the band) recorded, then widened to the view's edges
+                const int band = 0.5f * (rect.y + rect.w) < 224.0f ? 0 : 1;
+                if (band != band2p.band) continue;
+                BOX2P& b = abox2p[band];
+                const float area = (rect.z - rect.x) * (rect.w - rect.y);
+                if (b.frame != iframe2p || area < b.area) b.hole = rect, b.area = area, b.oid = oidObj;
+                b.frame = iframe2p;
+                Stretch2p(av, rect);
+            }
+            else if (!(l.y < 222.0f && h.y > 226.0f && h.y - l.y > 300.0f))
+            {
+                const ADJ2P a = fPerPoly2p ? Adj2p(l, h) : adj2p;
+                if (a.fSkip) continue;
+                for (VTX& v : av) v.pos += a.d;
+            }
         }
         // (display.h fWideBackgrounds) a polygon spanning the whole canvas's width or height is a full-screen
         // background (the pause backdrop, the cut scenes' bars, the binocucom's surround): its edge vertices go to
@@ -191,6 +341,12 @@ void CHud::DrawSprite(const SELEM& elem, const HUDSTATE& st)
         {
             std::printf("centre poly prim %d ctl %d vb %d cv %zu rgba %08X:", poly.primitive, poly.control, poly.fVertexBytes, av.size(), poly.rgba);
             for (size_t i = 0; i < av.size(); ++i) std::printf(" (%.1f %.1f b%02X)", av[i].pos.x, av[i].pos.y, poly.ab[i]);
+            std::printf("\n");
+        }
+        if (static const int s_oidPolys = std::getenv("SLY3_HUDPOLYS") ? std::atoi(std::getenv("SLY3_HUDPOLYS")) : -2; (s_oidPolys == oidObj || s_oidPolys == -1) && !av.empty())
+        {
+            std::printf("hudpoly %d [band %d f %d centre %d] e%u prim %d ctl %d rgba %08X c %.0f %.0f %.0f %.0f off %.0f %.0f %.0f sc %.2f %.2f %.2f mode %d nv %zu:", oidObj, band2p.f ? band2p.band : -1, int(band2p.f), int(fCenter2p), elem.idx, poly.primitive, poly.control, poly.rgba, c.r, c.g, c.b, c.a, st.offset.r, st.offset.g, st.offset.b, st.scale.r, st.scale.g, st.scale.b, m_mode, av.size());
+            for (const VTX& v : av) std::printf(" (%.1f %.1f)", v.pos.x, v.pos.y);
             std::printf("\n");
         }
         const size_t n = std::min<size_t>(av.size(), size_t(std::max(cvtxLeft, 0)));
@@ -362,12 +518,27 @@ void CHud::ExtendEdgeLine(VTX v)
 // orig: 0x002177E0 (kind 7: the piece's texture (0x2155C0: TEX0 of the shader draw record with the element's
 // id, 0x1EC880; TEX1 0x60, CLAMP 5) and the element's GIF sprite through P_K21 0x650: STQ (0,1) (1,1) (0,0) (1,0)
 // at the rect's corners, RGBA 0x80808080, ALPHA 0x44)
+int (*g_pfnQuadShaderAlias)(int idTexture) = nullptr;
+bool (*g_pfnQuadXf)(int idTexture, float a[6]) = nullptr;
+bool (*g_pfnHudPiece3)(int oidObj, int ielem, const SELEM& el, const HUDSTATE& st) = nullptr;
 void CHud::DrawQuad(const SELEM& elem, const HUDSTATE& st)
 {
     if (elem.kind != SELEMK_Quad) return;
     const SHD* pshd = nullptr;
-    for (const auto& p : g_shds.ashd)
-        if (p->id == elem.idTexture && true /* (Sly 3: any shader of the id; Sly 2 only flag 0x40) */) { pshd = p.get(); break; }
+    // (Sly 3: any shader of the id; Sly 2 only flag 0x40. The last one loaded: a streamed group's shaders (0x16F2B0, e.g.
+    // the episode chooser's list pictures 0x649..0x64E of dvd_menu) come after the world's placeholder of the same id)
+    for (auto it = g_shds.ashd.rbegin(); it != g_shds.ashd.rend(); ++it)
+        if ((*it)->id == elem.idTexture) { pshd = it->get(); break; }
+    // (Sly 3, dvd_menu: the list pages' picture slots 0x649..0x64E have no shader of their own; the chosen row's streamed
+    // picture stands in: epmenu3.cpp IdQuadShaderAlias3)
+    if (!pshd && [] { static const bool f = std::getenv("SLY2_QUADDBG") != nullptr; return f; }())
+        std::printf("quad 0x%X: no shader (alias %d)\n", elem.idTexture, g_pfnQuadShaderAlias ? g_pfnQuadShaderAlias(elem.idTexture) : -1);
+    if (!pshd && g_pfnQuadShaderAlias)
+        if (const int idAlias = g_pfnQuadShaderAlias(elem.idTexture); idAlias != -1)
+            for (auto it = g_shds.ashd.rbegin(); it != g_shds.ashd.rend(); ++it)
+                if ((*it)->id == idAlias) { pshd = it->get(); break; }
+    // (PC, copsmap3.h: a screen object copied from a kept world draws its pictures with that world's shaders)
+    if (!pshd) pshd = PshdPcKeptOfCopy(PloScreenDrawing3(), elem.idTexture);
     if (!pshd) return;
     if ([] { static const bool f = std::getenv("SLY2_QUADDBG") != nullptr; return f; }())
     {
@@ -404,6 +575,20 @@ void CHud::DrawQuad(const SELEM& elem, const HUDSTATE& st)
         return ScreenFromGs(st.m[0] * x + st.m[4] * y + st.m[8], st.m[1] * x + st.m[5] * y + st.m[9]);
     };
     glm::vec2 p00 = pt(elem.x0, elem.y0), p10 = pt(elem.x1, elem.y0), p01 = pt(elem.x0, elem.y1), p11 = pt(elem.x1, elem.y1);
+    // (Sly 3: the episode chooser's gallery picture zoomed / panned, in 640 x 480 canvas units: y x 480 / 448 here)
+    if (float axf[6]; g_pfnQuadXf && g_pfnQuadXf(elem.idTexture, axf))
+        for (glm::vec2* pp : {&p00, &p10, &p01, &p11})
+        {
+            const float x = pp->x, y = pp->y * (480.0f / 448.0f);
+            *pp = glm::vec2(axf[0] * x + axf[2] * y + axf[4], (axf[1] * x + axf[3] * y + axf[5]) * (448.0f / 480.0f));
+        }
+    if (band2p.f)
+    {
+        ADJ2P a = m_iGroup2p == 2 ? m_adjGroup2p : Adj2p(glm::min(glm::min(p00, p10), glm::min(p01, p11)), glm::max(glm::max(p00, p10), glm::max(p01, p11)));
+        if (m_iGroup2p == 1) { m_adjGroup2p = a; m_iGroup2p = 2; }
+        if (a.fSkip) return;
+        p00 += a.d, p10 += a.d, p01 += a.d, p11 += a.d;
+    }
     // (QoL, qolview.h) the front end's logo: the launcher's high-quality one over the old one's body
     {
         // (the quad's displayed aspect: a canvas unit is 1 wide by 640 / 448 x 3 / 4 tall)
@@ -433,6 +618,13 @@ void CHud::DrawTexQuad(unsigned tex, float x0, float y0, float x1, float y1, flo
                        glm::vec4 rgba, float z, bool fOnce)
 {
     if (!tex) return;
+    if (band2p.f)
+    {
+        ADJ2P a = m_iGroup2p == 2 ? m_adjGroup2p : Adj2p(glm::vec2(std::min(x0, x1), std::min(y0, y1)), glm::vec2(std::max(x0, x1), std::max(y0, y1)));
+        if (m_iGroup2p == 1) { m_adjGroup2p = a; m_iGroup2p = 2; }
+        if (a.fSkip) return;
+        x0 += a.d.x, x1 += a.d.x, y0 += a.d.y, y1 += a.d.y;
+    }
     QUAD q;
     q.tex = tex;
     // (the shader: texel x 255 x colour / 128, alpha / 128: a straight-alpha texel of 1 at colour 0x80 and alpha 0x40)
@@ -624,9 +816,12 @@ namespace
 {
 void PictureExtent(float& x0, float& x1, float& y0, float& y1)
 {
-    const glm::vec2 s = g_display.uiScale;
-    x0 = 320.0f - 320.0f / s.x; x1 = 320.0f + 320.0f / s.x;
-    y0 = 224.0f - 224.0f / s.y; y1 = 224.0f + 224.0f / s.y;
+    // (with the canvas offset too: the split screen's two-player band passes move the canvas (splitscreen3.h FHudCanvasView);
+    // without it a fade in a band pass covered the band's other half, the lower half of player 1's view and the upper of
+    // player 2's (the Galleon Duel's sink fades))
+    const glm::vec2 s = g_display.uiScale, o = g_display.uiOffset;
+    x0 = 320.0f * (1.0f + (-1.0f - o.x) / s.x); x1 = 320.0f * (1.0f + (1.0f - o.x) / s.x);
+    y0 = 224.0f * (1.0f - (1.0f - o.y) / s.y); y1 = 224.0f * (1.0f - (-1.0f - o.y) / s.y);
 }
 }
 
@@ -636,6 +831,27 @@ void CHud::Pillarbox(glm::vec4 rgba, float z)
     PictureExtent(x0, x1, y0, y1);
     if (x0 < 0.0f) FillScreenRect(x0, y0, 0.0f, y1, rgba, z);
     if (x1 > 640.0f) FillScreenRect(640.0f, y0, x1, y1, rgba, z);
+}
+
+bool CHud::FBoundsSince(const MARK& mark, glm::vec2& lo, glm::vec2& hi) const
+{
+    lo = glm::vec2(FLT_MAX);
+    hi = glm::vec2(-FLT_MAX);
+    auto add = [&](const VTX& v) { lo = glm::min(lo, v.pos); hi = glm::max(hi, v.pos); };
+    for (size_t i = mark.ctri; i < m_atri.size(); ++i) add(m_atri[i]);
+    for (size_t i = mark.cline; i < m_aline.size(); ++i) add(m_aline[i]);
+    for (size_t i = mark.cquad; i < m_aquad.size(); ++i)
+        for (const VTX& v : m_aquad[i].av) add(v);
+    return lo.x <= hi.x;
+}
+
+void CHud::ShiftSince(const MARK& mark, float dx)
+{
+    if (dx == 0.0f) return;
+    for (size_t i = mark.ctri; i < m_atri.size(); ++i) m_atri[i].pos.x += dx;
+    for (size_t i = mark.cline; i < m_aline.size(); ++i) m_aline[i].pos.x += dx;
+    for (size_t i = mark.cquad; i < m_aquad.size(); ++i)
+        for (VTX& v : m_aquad[i].av) v.pos.x += dx;
 }
 
 void CHud::Fade(glm::vec4 rgba)
@@ -772,9 +988,12 @@ void CHud::DrawTextBox(const FONTBRX& fontBase, const FONTBRX* pfontOther, const
                        glm::vec4 scale, glm::vec4 offsetOther, float depth, bool fWrap)
 {
     const float k88 = size / 51.2f;     // 0x3CA00000
+    // (band2p: a text box moves as one piece: its first glyph decides)
+    struct GROUP2P { int& r; GROUP2P(int& n) : r(n) { r = 1; } ~GROUP2P() { r = 0; } } group2p(m_iGroup2p);
     if (pfontOther && std::getenv("SLY2N_ICONTEXT") && textIn.find('&') != std::string::npos)
         std::fprintf(stderr, "icontext frame %d t %.3f ", g_iframeHarness, g_clock.t), std::fprintf(stderr, "'%s' off %.0f %.0f %.0f other %.0f %.0f %.0f\n", textIn.c_str(), offset.r, offset.g, offset.b, offsetOther.r, offsetOther.g, offsetOther.b);
-    const std::string text = fWrap ? StrWrapped(fontBase, pfontOther, textIn, k88, wBox) : textIn;
+    std::string text = pfontOther ? StrPromptFallbackText(textIn) : textIn;
+    if (fWrap) text = StrWrapped(fontBase, pfontOther, text, k88, wBox);
     HUDSTATE st;
     st.scale = scale;
     st.depth = depth;
@@ -881,8 +1100,19 @@ void CHud::Flush(int width, int height)
     CloseBatch();
     if (!s_vao)
     {
+        s_vbo = GlNewBuffer(GL_ARRAY_BUFFER, 0, nullptr, GL_STREAM_DRAW);
+        if (const cane::draw::Packets* pkv = PpacketsVao())
+        {
+            using namespace cane::draw;
+            const VertexAttrib aattr[] = {{0, 2, kAttribFloat, 0, 0, s_vbo, uint32_t(offsetof(VTX, pos)), sizeof(VTX), 0},
+                                          {1, 4, kAttribFloat, 0, 0, s_vbo, uint32_t(offsetof(VTX, rgba)), sizeof(VTX), 0},
+                                          {2, 1, kAttribFloat, 0, 0, s_vbo, uint32_t(offsetof(VTX, z)), sizeof(VTX), 0},
+                                          {3, 2, kAttribFloat, 0, 0, s_vbo, uint32_t(offsetof(VTX, uv)), sizeof(VTX), 0}};
+            s_vao = pkv->createVertexArray(aattr, 4, 0);
+        }
+        else
+        {
         glGenVertexArrays(1, &s_vao);
-        glGenBuffers(1, &s_vbo);
         glBindVertexArray(s_vao);
         glBindBuffer(GL_ARRAY_BUFFER, s_vbo);
         glEnableVertexAttribArray(0);
@@ -894,7 +1124,9 @@ void CHud::Flush(int width, int height)
         glEnableVertexAttribArray(3);
         glVertexAttribPointer(3, 2, GL_FLOAT, GL_FALSE, sizeof(VTX), reinterpret_cast<void*>(offsetof(VTX, uv)));
         glBindVertexArray(0);
+        }
     }
+    if (FlushPackets(width, height)) return;
     glBindFramebuffer(GL_FRAMEBUFFER, g_gl.FboScene());
     glViewport(0, 0, width, height);
     glClearDepth(0.0);
@@ -911,17 +1143,34 @@ void CHud::Flush(int width, int height)
     glEnable(GL_BLEND);
     glBlendEquation(GL_FUNC_ADD);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_FALSE);
+    if (g_fHudAlphaLayer) glBlendFuncSeparate(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GLboolean(g_fHudAlphaLayer));
     glHudShader.Use();
     glUniform4f(glHudShader.Loc("uCanvas"), g_display.uiScale.x, g_display.uiScale.y, g_display.uiOffset.x, g_display.uiOffset.y);
     glBindVertexArray(s_vao);
     glBindBuffer(GL_ARRAY_BUFFER, s_vbo);
     // one buffer: the triangles, the lines, the quads
+#if SLY2_FASTPATHS
+    // (the Switch: each part written into the buffer where it goes, not gathered into one array first and copied again)
+    std::vector<size_t> aivtxQuad;
+    size_t cvtx = m_atri.size() + m_aline.size();
+    for (const QUAD& q : m_aquad) { aivtxQuad.push_back(cvtx); cvtx += q.av.size(); }
+    glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(cvtx * sizeof(VTX)), nullptr, GL_STREAM_DRAW);
+    size_t ivtx = 0;
+    auto put = [&](const VTX* pv, size_t c) {
+        if (c) glBufferSubData(GL_ARRAY_BUFFER, GLintptr(ivtx * sizeof(VTX)), GLsizeiptr(c * sizeof(VTX)), pv);
+        ivtx += c;
+    };
+    put(m_atri.data(), m_atri.size());
+    put(m_aline.data(), m_aline.size());
+    for (const QUAD& q : m_aquad) put(q.av.data(), q.av.size());
+#else
     std::vector<VTX> av = m_atri;
     av.insert(av.end(), m_aline.begin(), m_aline.end());
     std::vector<size_t> aivtxQuad;
     for (const QUAD& q : m_aquad) { aivtxQuad.push_back(av.size()); av.insert(av.end(), q.av.begin(), q.av.end()); }
     glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(av.size() * sizeof(VTX)), av.data(), GL_STREAM_DRAW);
+#endif
     glLineWidth(std::max(1.0f, float(height) / 448.0f));
     glClearStencil(0);
     glStencilMask(0xFF);
@@ -931,7 +1180,7 @@ void CHud::Flush(int width, int height)
     auto setMode = [&](int mode) {
         // the 2D modes of 0x217298 (MSCAL pairs into P_K21's GS-state blocks), as the HUD uses them around a
         // masked piece: 1 writes the mask, 3 draws inside it, 2 clears it, 4 (and 0) draw normally.
-        glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_FALSE);
+        glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GLboolean(g_fHudAlphaLayer));
         glDisable(GL_STENCIL_TEST);
         glEnable(GL_DEPTH_TEST);
         glDepthMask(GL_TRUE);
@@ -989,6 +1238,163 @@ void CHud::Flush(int width, int height)
     glBindVertexArray(0);
     glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
     glDisable(GL_BLEND);
+}
+
+// (draw packets, platform/draw_packet.h: the Vulkan renderer; the GL-style state afterwards as Flush's GL calls below
+// leave it. Each mode / quad kind one State: the stencil of modes 0 / 4 left as the GL calls leave it (kKeepStencil),
+// the uniforms fTextured / fAlphaNonZero / tex as each State's constants, uCanvas as setConstant.)
+bool CHud::FlushPackets(int width, int height)
+{
+    using namespace cane::draw;
+    const Packets* pk = cane::gl::ActiveBackend() ? cane::gl::ActiveBackend()->packets : nullptr;
+    if (!pk || !pk->drawArraysMode || !pk->textureParams || !pk->beginPass || !pk->clear || !pk->applyState || !pk->bindTexture ||
+        !pk->setConstant)
+        return false;
+    static const bool s_fKeepZ = std::getenv("SLY2N_HUDKEEPZ") != nullptr;
+    if (s_fKeepZ) return false;
+    static const bool s_fNoTest = std::getenv("SLY2_RTGTNOTEST") != nullptr;
+    // states: [alpha layer][mode 0..3][kind: 0 batch, 1 quad, 2 quad alpha-tested, 3 quad replaced, 4 replaced alpha-tested],
+    // [2] the base state the GL calls set first, the end state
+    static uint32_t s_aid[2][4][5], s_aidBase[2], s_aidEnd[2];
+    static GLuint s_prog = 0;
+    static GLint s_locCanvas = -1;
+    const GLuint prog = glHudShader.ID;
+    if (s_prog != prog)
+    {
+        const GLint locTextured = glHudShader.Loc("fTextured"), locTex = glHudShader.Loc("tex"), locNz = glHudShader.Loc("fAlphaNonZero");
+        s_locCanvas = glHudShader.Loc("uCanvas");
+        auto make = [&](bool fAlpha, int mode, int kind) {
+            State st;
+            st.program = prog;
+            const bool fReplace = kind >= 3;
+            st.blend = fReplace ? 0 : 1;
+            st.srcColor = st.srcAlpha = kFactorSrcAlpha;
+            st.dstColor = st.dstAlpha = kFactorOneMinusSrcAlpha;
+            if (fAlpha) st.srcAlpha = kFactorOne;
+            st.cull = 0;
+            st.depthWrite = 1;
+            st.depthCompare = std::getenv("SLY3_HUDGEQUAL") ? kGreaterEqual : kGreater;   // (as the GL calls: Sly 3 keeps the first of equal depths)
+            const bool fMask = mode == 1 || mode == 2;
+            st.colorMask = fMask ? 0 : uint8_t(fAlpha ? 0xF : 0x7);
+            st.depthTest = fMask ? 0 : 1;
+            st.stencilTest = mode != 0;
+            if (fMask)
+                st.stencilCompare = kAlways, st.stencilRef = mode == 1 ? 1 : 0, st.stencilPass = kStencilReplace;
+            else if (mode == 3)
+                st.stencilCompare = kEqual, st.stencilRef = 1;
+            else st.keep = kKeepStencil;
+            const bool fTextured = kind >= 1 && kind <= 4;
+            const bool fNz = (kind == 2 || kind == 4);
+            if (locTextured >= 0) st.aconst[st.cconst++] = {locTextured, fTextured ? 1u : 0u};
+            if (locNz >= 0) st.aconst[st.cconst++] = {locNz, fNz ? 1u : 0u};
+            if (locTex >= 0) st.aconst[st.cconst++] = {locTex, 0};
+            return st;
+        };
+        for (int a = 0; a < 2; ++a)
+        {
+            for (int m = 0; m < 4; ++m)
+                for (int k = 0; k < 5; ++k) s_aid[a][m][k] = pk->createState(make(a != 0, m, k));
+            s_aidBase[a] = pk->createState(make(a != 0, 0, 0));
+            State st = make(a != 0, 0, 0);
+            // (the end: blend off, all colours written, the stencil test off; the HUD's uniforms 0)
+            st.blend = 0;
+            st.colorMask = 0xF;
+            st.cconst = 0;
+            if (locTextured >= 0) st.aconst[st.cconst++] = {locTextured, 0};
+            if (locNz >= 0) st.aconst[st.cconst++] = {locNz, 0};
+            s_aidEnd[a] = pk->createState(st);
+        }
+        s_prog = prog;
+    }
+    const int a = g_fHudAlphaLayer ? 1 : 0;
+    bool fOk = s_aidBase[a] && s_aidEnd[a];
+    for (int m = 0; m < 4 && fOk; ++m)
+        for (int k = 0; k < 5 && fOk; ++k) fOk = s_aid[a][m][k] != 0;
+    if (!fOk) return false;
+    Pass ps;
+    ps.framebuffer = g_gl.FboScene();
+    ps.viewport[2] = width, ps.viewport[3] = height;
+    pk->beginPass(ps);
+    {
+        Clear c;   // (glClearDepth(0) + glClear(GL_DEPTH_BUFFER_BIT) under the masks and scissor as they are)
+        c.clear = kClearDepth;
+        c.depth = 0.0f;
+        c.stencilMaskKept = 1;
+        pk->clear(c);
+    }
+    pk->applyState(s_aidBase[a]);
+    const float canvas[4] = {g_display.uiScale.x, g_display.uiScale.y, g_display.uiOffset.x, g_display.uiOffset.y};
+    if (s_locCanvas >= 0) pk->setConstant(prog, s_locCanvas, canvas, sizeof canvas);
+    // one buffer: the triangles, the lines, the quads (written in place when the backend can)
+    const cane::draw::Packets* const pkb = PpacketsBuf();   // (native buffers: by name, no binding)
+    if (!pkb) glBindBuffer(GL_ARRAY_BUFFER, s_vbo);
+    std::vector<size_t> aivtxQuad;
+    aivtxQuad.reserve(m_aquad.size());
+    size_t cvtx = m_atri.size() + m_aline.size();
+    for (const QUAD& q : m_aquad) { aivtxQuad.push_back(cvtx); cvtx += q.av.size(); }
+    VTX* pvtx = pk->mapStream && cvtx ? static_cast<VTX*>(pk->mapStream(s_vbo, cvtx * sizeof(VTX))) : nullptr;
+    if (pvtx)
+    {
+        auto put = [&](const VTX* pv, size_t c) {
+            if (c) std::memcpy(static_cast<void*>(pvtx), pv, c * sizeof(VTX));
+            pvtx += c;
+        };
+        put(m_atri.data(), m_atri.size());
+        put(m_aline.data(), m_aline.size());
+        for (const QUAD& q : m_aquad) put(q.av.data(), q.av.size());
+    }
+    else
+    {
+        if (pkb) pkb->bufferData(s_vbo, cvtx * sizeof(VTX), nullptr, cane::draw::kBufferStream);
+        else glBufferData(GL_ARRAY_BUFFER, GLsizeiptr(cvtx * sizeof(VTX)), nullptr, GL_STREAM_DRAW);
+        size_t ivtx = 0;
+        auto put = [&](const VTX* pv, size_t c) {
+            if (c && pkb) pkb->bufferSubData(s_vbo, ivtx * sizeof(VTX), c * sizeof(VTX), pv);
+            else if (c) glBufferSubData(GL_ARRAY_BUFFER, GLintptr(ivtx * sizeof(VTX)), GLsizeiptr(c * sizeof(VTX)), pv);
+            ivtx += c;
+        };
+        put(m_atri.data(), m_atri.size());
+        put(m_aline.data(), m_aline.size());
+        for (const QUAD& q : m_aquad) put(q.av.data(), q.av.size());
+    }
+    const float lineWidth = std::max(1.0f, float(height) / 448.0f);
+    {
+        Clear c;   // (glClearStencil(0), glStencilMask(0xFF), glClear(GL_STENCIL_BUFFER_BIT))
+        c.clear = kClearStencil;
+        c.stencil = 0;
+        c.stencilWriteMask = c.stencilWriteMaskAfter = 0xFF;
+        pk->clear(c);
+    }
+    auto modeOf = [](int mode) { return mode == 1 || mode == 2 || mode == 3 ? mode : 0; };
+    size_t iquad = 0;
+    auto drawQuadsBefore = [&](size_t ibatch) {
+        for (; iquad < m_aquad.size() && m_aquad[iquad].ibatch <= ibatch; ++iquad)
+        {
+            const QUAD& q = m_aquad[iquad];
+            pk->bindTexture(0, q.tex, 0, 0);
+            // TEX1 0x60: linear, no mips (the prompt atlases, the HQ logo and texture mods keep their mipmaps)
+            pk->textureParams(q.tex, kWrapClampToEdge, kWrapClampToEdge, q.fMip || FTextureIsMod(q.tex) ? kFilterLinearMipLinear : kFilterLinear,
+                              kFilterLinear);
+            const bool fNz = (q.fReplace || q.fAlphaTest) && !s_fNoTest;
+            const int kind = (q.fReplace ? 3 : 1) + (fNz ? 1 : 0);
+            pk->drawArraysMode(s_aid[a][modeOf(q.mode)][kind], s_vao, kTriangles, uint32_t(aivtxQuad[iquad]), uint32_t(q.av.size()), lineWidth,
+                               nullptr, 0);
+        }
+    };
+    for (size_t ib = 0; ib < m_abatch.size(); ++ib)
+    {
+        const BATCH& b = m_abatch[ib];
+        drawQuadsBefore(ib);
+        const uint32_t id = s_aid[a][modeOf(b.mode)][0];
+        // (applied even without a draw: the GL calls set the mode's state either way)
+        if (!b.ctri && !b.cline) pk->applyState(id);
+        if (b.ctri) pk->drawArraysMode(id, s_vao, kTriangles, uint32_t(b.itri), uint32_t(b.ctri), lineWidth, nullptr, 0);
+        if (b.cline) pk->drawArraysMode(id, s_vao, kLines, uint32_t(m_atri.size() + b.iline), uint32_t(b.cline), lineWidth, nullptr, 0);
+    }
+    drawQuadsBefore(m_abatch.size());
+    // (no primitives: the end state, the line width and vertex array 0 as the GL calls leave them)
+    pk->drawArraysMode(s_aidEnd[a], 0, kTriangles, 0, 0, lineWidth, nullptr, 0);
+    return true;
 }
 
 namespace
