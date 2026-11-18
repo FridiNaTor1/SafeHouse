@@ -3995,7 +3995,8 @@ void RenderPass(const SCENE& scene, const PASSVIEW& pv, const RENDEROPTS& opts)
     if (s_szVolDbg && pv.irtgt < 0 && !pv.fForeground)
     {
         static int s_cframe = 0;
-        if (++s_cframe == 1)
+        static const int s_cframeAt = std::getenv("SLY2_VOLDBGAT") ? std::atoi(std::getenv("SLY2_VOLDBGAT")) : 1;   // (the pass to list: 1 the first)
+        if (++s_cframe == s_cframeAt)
             for (const SCENEGLOBSET& sgs : scene.aglobset)
                 for (size_t i = 0; i < sgs.pglobset->aglob.size(); ++i)
                 {
@@ -4049,7 +4050,8 @@ void RenderPass(const SCENE& scene, const PASSVIEW& pv, const RENDEROPTS& opts)
         static int s_cframe = 0;
         glm::vec3 pt(0.0f);
         std::sscanf(s_szPtDbg, "%f %f %f", &pt.x, &pt.y, &pt.z);
-        if (++s_cframe == 1)
+        static const int s_cframeAt = std::getenv("SLY2_VOLDBGAT") ? std::atoi(std::getenv("SLY2_VOLDBGAT")) : 1;   // (the pass to list: 1 the first)
+        if (++s_cframe == s_cframeAt)
             for (const SCENEGLOBSET& sgs : scene.aglobset)
                 for (size_t i = 0; i < sgs.pglobset->aglob.size() && i < sgs.amatGlob.size(); ++i)
                 {

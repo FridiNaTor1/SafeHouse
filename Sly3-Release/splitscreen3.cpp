@@ -1155,8 +1155,39 @@ bool FBannerArea(int dx, int dy, VIEWRECT* prect, glm::vec2* pscale, glm::vec2* 
 
 const CM& CmView(int iview)
 {
+    if (const CM* pcm = galleon3::PcmSpectator(iview)) return *pcm;   // (galleon3.h: a sunk player's view watches the battle)
     if (iview > 0 && iview < kMaxSeats && s.aview[size_t(iview)]) return s.aview[size_t(iview)]->cm;
     return g_cm;
+}
+
+namespace
+{
+bool s_fDividersDrawn = false;
+// the views' dividing lines (canvas units of the full picture's transform)
+void AddDividers(int width, int height)
+{
+    const float xLeft = ((-1.0f - g_display.uiOffset.x) / g_display.uiScale.x + 1.0f) * 320.0f;
+    const float xRight = ((1.0f - g_display.uiOffset.x) / g_display.uiScale.x + 1.0f) * 320.0f;
+    const float yTop = ((g_display.uiOffset.y - 1.0f) / g_display.uiScale.y + 1.0f) * 224.0f;   // (canvas y down)
+    const float yBottom = ((g_display.uiOffset.y + 1.0f) / g_display.uiScale.y + 1.0f) * 224.0f;
+    auto xCanvas = [&](int x) { return xLeft + (xRight - xLeft) * float(x) / float(std::max(width, 1)); };
+    auto yCanvas = [&](int y) { return yTop + (yBottom - yTop) * (1.0f - float(y) / float(std::max(height, 1))); };
+    const VIEWRECT r1 = RectView(1, width, height);
+    if (r1.x > 0) Rect(xCanvas(r1.x) - 1.0f, yTop, xCanvas(r1.x) + 1.0f, yBottom, Rgb(0, 0, 0, 128), 10.0f);
+    if (s.cview >= 3 || r1.x == 0) Rect(xLeft, yCanvas(height / 2) - 1.0f, xRight, yCanvas(height / 2) + 1.0f, Rgb(0, 0, 0, 128), 10.0f);
+    if (s.cview >= 3) Rect(xCanvas(width / 2) - 1.0f, yTop, xCanvas(width / 2) + 1.0f, yBottom, Rgb(0, 0, 0, 128), 10.0f);
+}
+}  // namespace
+
+void DrawDividers(int width, int height)
+{
+    if (!s.fActive || s.cview < 2 || s.fSelect || s.fShared || IseatBinding() >= 0) return;
+    for (int oid : {1066, 1067})   // (the result stamp / Job Failed: no lines, as DrawOverlay)
+        if (LO* p = s.psw ? PloScreen3(s.psw, oid) : nullptr; p && NScreenObjState(p) >= 2) return;
+    g_hud.Begin();
+    AddDividers(width, height);
+    g_hud.Flush(width, height);
+    s_fDividersDrawn = true;
 }
 
 void DrawOverlay(int width, int height)
@@ -1194,14 +1225,9 @@ void DrawOverlay(int width, int height)
         if (fBox) Text(*pfont, picons, ach, xCanvas(r.x + rs.x) + 14.0f, yCanvas(r.y + rs.y) - 30.0f, 18.0f, off, 0);
         else Text(*pfont, picons, ach, xCanvas(r.x) + 14.0f, yCanvas(r.y + r.dy) + 8.0f, 18.0f, s_aoff[i], 0);
     }
-    // the dividing lines
-    if (s.cview >= 2 && !s.fSelect && !fWhole && !s.fShared)
-    {
-        const VIEWRECT r1 = RectView(1, width, height);
-        if (r1.x > 0) Rect(xCanvas(r1.x) - 1.0f, yTop, xCanvas(r1.x) + 1.0f, yBottom, Rgb(0, 0, 0, 128), 10.0f);
-        if (s.cview >= 3 || r1.x == 0) Rect(xLeft, yCanvas(height / 2) - 1.0f, xRight, yCanvas(height / 2) + 1.0f, Rgb(0, 0, 0, 128), 10.0f);
-        if (s.cview >= 3) Rect(xCanvas(width / 2) - 1.0f, yTop, xCanvas(width / 2) + 1.0f, yBottom, Rgb(0, 0, 0, 128), 10.0f);
-    }
+    // the dividing lines (unless DrawDividers drew them under the two-player board's banner this frame)
+    if (!s_fDividersDrawn && s.cview >= 2 && !s.fSelect && !fWhole && !s.fShared) AddDividers(width, height);
+    s_fDividersDrawn = false;
     if (iseat >= 0)
     {
         // the binding screen: a dark page, the players' rows, the options

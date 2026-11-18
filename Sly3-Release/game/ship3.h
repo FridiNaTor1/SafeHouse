@@ -47,5 +47,7 @@ void NoteShipUse3(LO* puse, LO* puser);
 // (galleon3.cpp) the face part a ship's gauge shows (selected when it is shown; -1: its option 2023's), the gauge object
 void SetShipGaugeFace3(LO* ship, int idPart);
 LO* PloShipGauge3(LO* ship);
+// (galleon3.cpp: the free-for-all) a sunk ship's gauge kept up (its bars empty) while it is out of the round
+void SetShipGaugeKept3(LO* ship, bool f);
 void SetShipGauge3(LO* ship, LO* pgauge);
 bool FUseDeckCannon3(LO* pchar);

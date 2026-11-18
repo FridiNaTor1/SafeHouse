@@ -1452,12 +1452,14 @@ struct SHIPGAUGE3
 std::unordered_map<const LO*, SHIPGAUGE3> s_mpgaugeShip;
 bool Battle2P();
 std::unordered_map<const LO*, int> s_mpidFaceShip3;   // (SetShipGaugeFace3)
+std::vector<const LO*> s_aploGaugeKept3;   // (SetShipGaugeKept3)
 void UpdateShipGauge(SHIP3& s)
 {
     LO* pg = s.child;
     if (!pg) return;
     SHIPGAUGE3& g = s_mpgaugeShip[pg];
-    const bool fShown = s.mode >= 2 && s.mode <= 5;
+    const bool fKept = std::find(s_aploGaugeKept3.begin(), s_aploGaugeKept3.end(), s.palo) != s_aploGaugeKept3.end();
+    const bool fShown = (s.mode >= 2 && s.mode <= 5) || fKept;
     for (int i = 0; i < 2; ++i) g.tgt[i] = s.hpMax[size_t(i)] > 0 ? float(s.hp[size_t(i)]) / float(s.hpMax[size_t(i)]) : 0.0f;
     if (!fShown)
     {
@@ -1469,11 +1471,13 @@ void UpdateShipGauge(SHIP3& s)
     if (g_psw && split3::FActive() && Battle2P())
         for (int i = 0; i < split3::CView(); ++i)
             if (split3::PloPlayer(g_psw, i) == s.palo || (s.owner && split3::PloPlayer(g_psw, i) == s.owner)) iseat = i;
+    if (fKept && iseat < 0) iseat = g.iseat;   // (a sunk ship's kept gauge: its seat is no longer the ship's)
     if (iseat != g.iseat)
     {
         g.iseat = iseat;
-        // D_00325E.. (PC, galleon3.h: players 3 / 4 in the other corners of their views' bands: player 3 (band 0) left, 4 right)
-        static const float s_aofs[4][2] = {{470.0f, 136.0f}, {-6.0f, 373.0f}, {-6.0f, 136.0f}, {470.0f, 373.0f}};
+        // D_00325E.. (PC, galleon3.h: players 3 / 4 in their bands' corners as players 1 / 2, mirrored: every gauge at the
+        // edge of its view toward the screen's middle (player 3 (band 0, the left column) at the right, 4 at the left))
+        static const float s_aofs[4][2] = {{470.0f, 136.0f}, {-6.0f, 373.0f}, {470.0f, 136.0f}, {-6.0f, 373.0f}};
         if (iseat >= 0) SetScreenObjRootXY(pg, true, 1.0f, s_aofs[iseat][0], s_aofs[iseat][1]);
         else SetScreenObjRootXY(pg, false, 1.0f, 0.0f, 0.0f);
     }
@@ -2238,7 +2242,18 @@ bool FShipBroadside3(LO* plo, glm::vec3* ppos, float* pheading, glm::vec3* pvel,
     for (LO* p : g_psw->mpcidaplo[CID_SHIP])
         if (SHIP3* q = PshipFind(p); q && q->phase == 1 && q->owner == plo && q->mode == 4) ps = q;
     if (!ps) return false;
-    SHIP3* pt = PshipNearest(*ps);
+    // (the nearest ship still afloat: PshipNearest also gave a sunk one (mode 7), which the free-for-all's rounds keep in
+    // the world: the bots of three / four players steered at wrecks)
+    SHIP3* pt = nullptr;
+    {
+        float best = 3.4e38f;
+        for (SHIP3* po : AshipWorld())
+        {
+            if (po == ps || po->mode < 2 || po->mode > 5 || !po->palo->fInWorld) continue;
+            const glm::vec3 d = PosOf(ps->palo) - PosOf(po->palo);
+            if (const float dd = glm::dot(d, d); dd < best) best = dd, pt = po;
+        }
+    }
     if (!pt) return false;
     // (the enemy nearly sunk (mode 5): its boarding point, a use (class 0x21) of the ship in the world)
     if (pt->mode == 5)
@@ -2280,10 +2295,23 @@ bool FShipBroadside3(LO* plo, glm::vec3* ppos, float* pheading, glm::vec3* pvel,
                                                 pt->palo->iclone, pt->mode, LenXY(local), bearing, want, err, *pgrf, ps->rudder, Heading(ps->palo));
     }
     // (the guns reach only a few degrees around the beam (+0x3F0 / +0x3F4): the use only with the enemy abeam, in range)
-    if (want == 0.0f || std::fabs(err) > ps->yawB + 0.05f) return true;
-    for (int i = 0; i < ps->ccannon[size_t(side)]; ++i)
+    int sideFire = want == 0.0f || std::fabs(err) > ps->yawB + 0.05f ? -1 : side;
+    // (three / four ships: another afloat ship abeam in range on either side is fired at too, while the steering keeps on
+    // the nearest)
+    if (sideFire < 0)
+        for (SHIP3* po : AshipWorld())
+        {
+            if (po == ps || po == pt || po->mode < 2 || po->mode > 5 || !po->palo->fInWorld) continue;
+            const glm::vec3 l = ToLocal(ps->palo, PosOf(po->palo));
+            if (LenXY(l) > ps->range) continue;
+            const int sd = l.y > 0.0f ? 0 : 1;
+            if (std::fabs(RadNormalize(Atan2Of(l) - (sd == 0 ? kHalfPi : -kHalfPi))) <= ps->yawB) { sideFire = sd; break; }
+        }
+    if (sideFire < 0) return true;
+    const int sideWant = sideFire;
+    for (int i = 0; i < ps->ccannon[size_t(sideWant)]; ++i)
     {
-        CANNON3& c = ps->acannon[size_t(side)][size_t(i)];
+        CANNON3& c = ps->acannon[size_t(sideWant)][size_t(i)];
         if (c.state != 1 || !c.cannon) continue;
         ALO* pcannon = dynamic_cast<ALO*>(c.cannon);
         LO* puse = nullptr;
@@ -2298,7 +2326,7 @@ bool FShipBroadside3(LO* plo, glm::vec3* ppos, float* pheading, glm::vec3* pvel,
         glm::vec3 d = posCannon - posUse;
         d.z = 0.0f;
         *ppos = posUse;
-        *pheading = glm::length(d) > 1.0f ? Atan2Of(d) : Heading(ps->palo) + (side == 0 ? kHalfPi : -kHalfPi);
+        *pheading = glm::length(d) > 1.0f ? Atan2Of(d) : Heading(ps->palo) + (sideWant == 0 ? kHalfPi : -kHalfPi);
         *pvel = VelAloPos(ps->palo);
         *pfUse = true;
         return true;
@@ -2982,6 +3010,13 @@ void SetShipGaugeFace3(LO* ship, int idPart)
 {
     if (idPart < 0) s_mpidFaceShip3.erase(ship);
     else s_mpidFaceShip3[ship] = idPart;
+}
+// (galleon3.cpp: a sunk player's gauge stays up, its bars run out, until its ship's next round)
+void SetShipGaugeKept3(LO* ship, bool f)
+{
+    auto it = std::find(s_aploGaugeKept3.begin(), s_aploGaugeKept3.end(), ship);
+    if (f && it == s_aploGaugeKept3.end()) s_aploGaugeKept3.push_back(ship);
+    else if (!f && it != s_aploGaugeKept3.end()) s_aploGaugeKept3.erase(it);
 }
 LO* PloShipGauge3(LO* ship)
 {

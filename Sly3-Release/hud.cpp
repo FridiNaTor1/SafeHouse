@@ -158,8 +158,7 @@ CHud::ADJ2P CHud::Adj2p(glm::vec2 lo, glm::vec2 hi)
     const glm::vec2 c = 0.5f * (lo + hi);
     // the side of the band the box leaves free (the portrait panel's): the box on the left half -> the panel on the right
     float side = fBox ? (0.5f * (r.x + r.z) < 320.0f ? 1.0f : -1.0f) : (band == 0 ? 1.0f : -1.0f);
-    // (no box: a piece well on the other side of the band goes to that side's edge (the Galleon Duel's four players: player 4's
-    // gauge at the right of band 1, player 3's at the left of band 0); the centred ones keep the band's side)
+    // (no box: a piece well on the other side of the band goes to that side's edge; the centred ones keep the band's side)
     if (!fBox && std::fabs(c.x - 320.0f) > 160.0f) side = c.x < 320.0f ? -1.0f : 1.0f;
     if (fBox && oidObj != b.oid && c.x >= r.x && c.x <= r.z && c.y >= r.y && c.y <= r.w)
     {
@@ -346,7 +345,7 @@ void CHud::DrawSprite(const SELEM& elem, const HUDSTATE& st)
         }
         if (static const int s_oidPolys = std::getenv("SLY3_HUDPOLYS") ? std::atoi(std::getenv("SLY3_HUDPOLYS")) : -2; (s_oidPolys == oidObj || s_oidPolys == -1) && !av.empty())
         {
-            std::printf("hudpoly %d e%u prim %d ctl %d rgba %08X c %.0f %.0f %.0f %.0f off %.0f %.0f %.0f sc %.2f %.2f %.2f mode %d nv %zu:", oidObj, elem.idx, poly.primitive, poly.control, poly.rgba, c.r, c.g, c.b, c.a, st.offset.r, st.offset.g, st.offset.b, st.scale.r, st.scale.g, st.scale.b, m_mode, av.size());
+            std::printf("hudpoly %d [band %d f %d centre %d] e%u prim %d ctl %d rgba %08X c %.0f %.0f %.0f %.0f off %.0f %.0f %.0f sc %.2f %.2f %.2f mode %d nv %zu:", oidObj, band2p.f ? band2p.band : -1, int(band2p.f), int(fCenter2p), elem.idx, poly.primitive, poly.control, poly.rgba, c.r, c.g, c.b, c.a, st.offset.r, st.offset.g, st.offset.b, st.scale.r, st.scale.g, st.scale.b, m_mode, av.size());
             for (const VTX& v : av) std::printf(" (%.1f %.1f)", v.pos.x, v.pos.y);
             std::printf("\n");
         }
@@ -817,9 +816,12 @@ namespace
 {
 void PictureExtent(float& x0, float& x1, float& y0, float& y1)
 {
-    const glm::vec2 s = g_display.uiScale;
-    x0 = 320.0f - 320.0f / s.x; x1 = 320.0f + 320.0f / s.x;
-    y0 = 224.0f - 224.0f / s.y; y1 = 224.0f + 224.0f / s.y;
+    // (with the canvas offset too: the split screen's two-player band passes move the canvas (splitscreen3.h FHudCanvasView);
+    // without it a fade in a band pass covered the band's other half, the lower half of player 1's view and the upper of
+    // player 2's (the Galleon Duel's sink fades))
+    const glm::vec2 s = g_display.uiScale, o = g_display.uiOffset;
+    x0 = 320.0f * (1.0f + (-1.0f - o.x) / s.x); x1 = 320.0f * (1.0f + (1.0f - o.x) / s.x);
+    y0 = 224.0f * (1.0f - (1.0f - o.y) / s.y); y1 = 224.0f * (1.0f - (-1.0f - o.y) / s.y);
 }
 }
 

@@ -1034,6 +1034,8 @@ int RunGame(const GAMEOPTS& go)
         }
         auto stepSim = [&](int frame) {
         g_iframeMain = frame;  // (debug prints: SLY2N_TRANSLOG)
+        if (static const char* s_szOptDump = std::getenv("SLY3_OPTVALDUMP"); s_szOptDump && std::atoi(s_szOptDump) == frame && std::strchr(s_szOptDump, ':'))
+            DumpOptionValues3(std::strchr(s_szOptDump, ':') + 1);   // (debug, brx.h)
         // (debug: SLY3_NANTRAP=F: floating-point invalid operations trap from frame F on (run under gdb for the culprit))
 #if defined(__GLIBC__)   // (feenableexcept is a glibc extension)
         if (static const int s_fNan = std::getenv("SLY3_NANTRAP") ? std::atoi(std::getenv("SLY3_NANTRAP")) : -1; s_fNan >= 0 && frame == s_fNan)
@@ -1431,7 +1433,16 @@ int RunGame(const GAMEOPTS& go)
                             pa->svt, pa->grfapl);
         if (static const char* s_sz = std::getenv("SLY2N_ASEGADUMP"); s_sz && frame == std::atoi(s_sz))
             for (const SMA* ps : g_apsma)
-                std::printf("smadump sm %d alo %d\n", ps->psm ? ps->psm->oid : -1, ps->palo ? ps->palo->oid : -1);
+            {
+                std::printf("smadump sm %d alo %d cur %d next %d goal %d asega %d mask 0x%X\n", ps->psm ? ps->psm->oid : -1, ps->palo ? ps->palo->oid : -1,
+                            ps->ismsCur, ps->ismsNext, ps->ismsGoal, ps->pasega ? 1 : 0, ps->grfMask);
+                if (ps->psm && std::getenv("SLY2N_SMDUMP") && std::atoi(std::getenv("SLY2N_SMDUMP")) == ps->psm->oid)
+                {
+                    for (size_t i = 0; i < ps->psm->asms.size(); ++i) std::printf("  sms %zu oid %d next %d\n", i, ps->psm->asms[i].oid, ps->psm->asms[i].inext);
+                    for (const SM::SMT& t : ps->psm->asmt)
+                        std::printf("  smt aseg %d %d -> %d grf 0x%X p %g value 0x%X\n", t.paseg ? t.paseg->oid : -1, t.isFrom, t.isTo, t.grf, t.gProbability, t.value);
+                }
+            }
         // (debug: SLY2N_BIGGLOBS="radius@frame": the globs of a radius above that, by object)
         if (static const char* s_szEm = std::getenv("SLY3_DUMPEMITTERS"); s_szEm && frame == std::atoi(s_szEm))   // (debug: the emitters at that frame)
             DumpEmitters();
@@ -2236,6 +2247,28 @@ int RunGame(const GAMEOPTS& go)
             glfwGetFramebufferSize(w, &fbw, &fbh);
             if (fbw > 0 && fbh > 0 && (fbw != g_display.outputWidth || fbh != g_display.outputHeight)) LayoutDisplay(fbw, fbh);
         }
+        // (debug, surveys: SLY3_SHOWOID="oid,x,y,z": that object (its first copy) put in the world there, each frame)
+        if (static const char* s_szShow = std::getenv("SLY3_SHOWOID"); s_szShow && psw)
+        {
+            int oid = 0;
+            float x = 0, y = 0, z = 0;
+            if (std::sscanf(s_szShow, "%d,%f,%f,%f", &oid, &x, &y, &z) == 4)
+                if (const auto& a = AploOfOid(psw.get(), oid); !a.empty())
+                    if (ALO* pa = dynamic_cast<ALO*>(a[0]))
+                    {
+                        if (!pa->fInWorld) AddLo(psw.get(), pa);
+                        SetAloPos(pa, glm::vec3(x, y, z));
+                    }
+        }
+        // (debug, surveys: SLY3_POSOF=oid,oid..: those objects' places, in world, fade, every 100 frames)
+        if (static const char* s_szPosOf = std::getenv("SLY3_POSOF"); s_szPosOf && psw && frame % 100 == 0)
+            for (const char* q = s_szPosOf; q && *q; q = std::strchr(q, ',') ? std::strchr(q, ',') + 1 : nullptr)
+                for (LO* plo : AploOfOid(psw.get(), std::atoi(q)))
+                {
+                    const glm::vec3 p = PosLoWorld(plo);
+                    std::printf("posof %d clone %d cid 0x%X at %.0f %.0f %.0f in world %d removed %d fade %.2f (frame %d)\n", plo->oid, plo->iclone, unsigned(plo->Cid()), p.x, p.y, p.z,
+                                int(plo->fInWorld), int(plo->fRemoved), dynamic_cast<ALO*>(plo) ? static_cast<ALO*>(plo)->gFade : -1.0f, frame);
+                }
         // (debugmenu.h) the free camera's pad controls (and SLY2N_FREECAMAT's test switch)
         if (fFreeCam && cam.fMat) cam.fMat = false;
         FUpdateDebugFreeCamPad(cam, frame);
@@ -2409,6 +2442,25 @@ int RunGame(const GAMEOPTS& go)
             {
                 cam = accum.fActive ? camStep : CameraFromCm(g_cm);
                 ApplyCmFog(g_cm, &opts);
+                // (debug, surveys of a world's objects: SLY3_CAMAT="x,y,z,tx,ty,tz" the picture's camera there, looking at t)
+                // (several cameras "c;c;..": one after the other, each SLY3_CAMATEVERY frames (default 30), a camera tour)
+                if (static const char* s_szCamAt = std::getenv("SLY3_CAMAT"); s_szCamAt)
+                {
+                    float a[6] = {};
+                    static const int s_cCamEvery = std::getenv("SLY3_CAMATEVERY") ? std::max(1, std::atoi(std::getenv("SLY3_CAMATEVERY"))) : 30;
+                    const char* pchCam = s_szCamAt;
+                    int cCam = 1;
+                    for (const char* q = s_szCamAt; *q; ++q) cCam += *q == ';';
+                    for (int iCam = (frame / s_cCamEvery) % cCam; iCam > 0 && pchCam; --iCam) pchCam = std::strchr(pchCam, ';') ? std::strchr(pchCam, ';') + 1 : nullptr;
+                    if (pchCam && std::sscanf(pchCam, "%f,%f,%f,%f,%f,%f", &a[0], &a[1], &a[2], &a[3], &a[4], &a[5]) == 6)
+                    {
+                        const glm::vec3 d = glm::vec3(a[3], a[4], a[5]) - glm::vec3(a[0], a[1], a[2]);
+                        cam.pos = glm::vec3(a[0], a[1], a[2]);
+                        cam.fMat = false;
+                        cam.yaw = glm::degrees(std::atan2(d.y, d.x));
+                        cam.pitch = glm::degrees(std::atan2(d.z, std::sqrt(d.x * d.x + d.y * d.y)));
+                    }
+                }
             }
             else cam.fMat = false;
             if (!go.cameraRam.empty())
@@ -2536,7 +2588,7 @@ int RunGame(const GAMEOPTS& go)
                         if (fBox) EnsureSplitViewFb(f, r.dx, r.dy, 0);
                         else rs = split3::VIEWRECT{0, 0, r.dx, r.dy};
                         EnsureSplitViewFb(fs, rs.dx, rs.dy, msaa);
-                        CAMERA camView = iv == 0 ? cam : CameraFromCm(split3::CmView(iv));
+                        CAMERA camView = iv == 0 && !galleon3::PcmSpectator(0) ? cam : CameraFromCm(split3::CmView(iv));   // (galleon3.h: a sunk player's view)
                         if (iv != 0) camView.grfChannels = cam.grfChannels;
                         const GLuint afbo[3] = {g_gl.fbo, g_gl.fbc, g_gl.rbo};
                         g_gl.fbo = fs.fbo, g_gl.fbc = fs.fbc, g_gl.rbo = fs.rbo, g_gl.fboMsaa = fs.fboMsaa;
@@ -2549,6 +2601,7 @@ int RunGame(const GAMEOPTS& go)
                             posSkyCam = camView.pos;
                         }
                         g_iviewScene3 = iv;   // (hudwidget.h: the view's sky fades)
+                        galleon3::BeginViewScene(scene, apalo, iv, camView.pos);   // (galleon3.h: player 4's paper wall out of a view it blocks)
                         RenderScene(scene, camView, opts);
                         g_iviewScene3 = -1;
                         if (fBox)
@@ -2600,6 +2653,7 @@ int RunGame(const GAMEOPTS& go)
                                 glBlitFramebuffer(0, 0, r.dx, r.dy, 0, 0, r.dx, r.dy, GL_COLOR_BUFFER_BIT, GL_NEAREST);
                             }
                         }
+                        galleon3::EndViewScene();
                         g_gl.fbo = afbo[0], g_gl.fbc = afbo[1], g_gl.rbo = afbo[2], g_gl.fboMsaa = 0;
                         g_gl.renderWidth = dxAll, g_gl.renderHeight = dyAll;
                         g_display = dispAll;
@@ -2611,6 +2665,7 @@ int RunGame(const GAMEOPTS& go)
                     if (fHudViews && split3::FRectScene(0, split3::RectView(0, dxAll, dyAll).dx, split3::RectView(0, dxAll, dyAll).dy, nullptr))
                     {
                         // (the two-player HUD's banners between the bands: over the whole picture, hud.h fCenter2p)
+                        split3::DrawDividers(g_gl.renderWidth, g_gl.renderHeight);   // (under the banners)
                         g_hud.fCenter2p = true;
                         split3::VIEWRECT rBanner;
                         glm::vec2 scaleBanner, offBanner;

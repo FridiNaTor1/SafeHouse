@@ -7,10 +7,15 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
+#include <glm/vec3.hpp>
 #include <glm/vec4.hpp>
 
 struct SW;
 struct LO;
+struct CM;
+struct ALO;
+struct SCENE;
 
 namespace galleon3
 {
@@ -29,6 +34,12 @@ void OnWorldLoaded(SW* psw);
 // gang's ship 44092) and the Guru / the Panda King (their groups, 29 / 30, which the duel's block leaves out)
 void AdjustGroupInstances(SW* psw);
 int CViewsWanted();
+// splitscreen3.cpp CmView / game.cpp: a sunk player's view watches the battle from above the sea (its camera), null: its own
+const CM* PcmSpectator(int iview);
+// game.cpp, around a split view's scene: player 4's paper wall left out of a view it would block (the view's camera behind
+// it, its player behind it from the camera), back after the view
+void BeginViewScene(SCENE& scene, const std::vector<ALO*>& apalo, int iview, const glm::vec3& posCam);
+void EndViewScene();
 void OnPlayersChosen(SW* psw);
 // splitscreen3.cpp: players 2.. (null: split3's own choice), each frame, the overlay, a player's tag colour
 LO* PloPlayerWanted(SW* psw, int i);

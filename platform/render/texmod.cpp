@@ -724,6 +724,9 @@ int DumpLoadedWorldTextures(const std::string& dir, std::set<std::string>& setNa
                 if (!FDecodeTexture(sel.pbmp, sel.pclut, rgba, err)) continue;
                 const int dx = sel.pbmp->dx, dy = sel.pbmp->dy;
                 std::string name = SzTextureModName(rgba, dx, dy);
+                // (debug: SLY2N_TEXDUMP_IDS=1 prints which shader / frame / pass / bitmap each name comes from)
+                if (std::getenv("SLY2N_TEXDUMP_IDS"))
+                    std::printf("texid shd %d frame %d pass %d bmp %d -> %s\n", pshd->id, iframe, ipass, sel.pbmp->id, name.c_str());
                 if (!setName.insert(name).second) continue;  // (the same texels under another CLUT / bitmap, or world)
                 auto write = [dx, dy, rgba = std::move(rgba), path = cane::path(dir) / name] {
                     std::vector<uint8_t> ab(rgba.size());

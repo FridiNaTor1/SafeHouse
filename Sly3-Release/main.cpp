@@ -1,6 +1,8 @@
 // Sly2-Release: Sly 2: Band of Thieves as a native PC port (see PLAN.md).
 // Development commands for now; the game loop comes with milestone M2/M3.
 
+#include "activate.h"
+#include "glob.h"
 #include "editor.h"
 #include "renderer.h"
 #include "renderer_choice_test.h"
@@ -272,6 +274,85 @@ void DumpXfs(const SW* psw, FILE* pf)
 
 void DumpObjects(const SW* psw, FILE* pf)
 {
+    // (debug, surveys: SLY3_DUMP_FLAT=1: the globs that are flat (one extent under 8 % of the largest), person-sized, with
+    // their mean colour and bones: a painted / shadow card)
+    if (std::getenv("SLY3_DUMP_FLAT"))
+        for (const auto& uplo : psw->aploAll)
+        {
+            const LO* plo = uplo.get();
+            const ALO* pa = dynamic_cast<const ALO*>(plo);
+            if (!pa || !pa->pglobset) continue;
+            const auto& ag = pa->pglobset->aglob;
+            for (size_t i = 0; i < ag.size(); ++i)
+            {
+                const GLOB& g = ag[i];
+                if (g.avtx.size() < 3) continue;
+                glm::vec3 lo(1e30f), hi(-1e30f), c(0.0f);
+                float a = 0.0f;
+                for (const VTXGLOB& v : g.avtx)
+                {
+                    lo = glm::min(lo, v.pos), hi = glm::max(hi, v.pos);
+                    c += glm::vec3(float(v.rgbaA & 0xFF), float((v.rgbaA >> 8) & 0xFF), float((v.rgbaA >> 16) & 0xFF));
+                    a += float(v.rgbaA >> 24);
+                }
+                c /= float(g.avtx.size()), a /= float(g.avtx.size());
+                const glm::vec3 e = hi - lo;
+                const float emax = std::max({e.x, e.y, e.z}), emin = std::min({e.x, e.y, e.z});
+                if (emax < 60.0f || emax > 1500.0f || emin > 0.08f * emax) continue;
+                std::fprintf(pf, "flat oid %d cid 0x%02X parent %d glob %zu nv %zu bones %d ext %.0f %.0f %.0f rgb %.0f %.0f %.0f a %.0f hidden %d rp %d centre %.0f %.0f %.0f\n", plo->oid, plo->Cid(),
+                             plo->paloParent ? plo->paloParent->oid : -1, i, g.avtx.size(), int(g.cbone), e.x, e.y, e.z, c.r, c.g, c.b, a, int(g.fHidden), int(g.rp3), 0.5f * (lo.x + hi.x), 0.5f * (lo.y + hi.y), 0.5f * (lo.z + hi.z));
+            }
+        }
+    // (debug, surveys: SLY3_DUMP_GLOBS=1: every glob of every object: its mesh kind, Sly 3 rp (6 / 7: the shadow
+    // screen effects), vertex / effect counts, hidden, the object's place and the glob's centre)
+    if (std::getenv("SLY3_DUMP_GLOBS"))
+        for (const auto& uplo : psw->aploAll)
+        {
+            const ALO* pa = dynamic_cast<const ALO*>(uplo.get());
+            if (!pa || !pa->pglobset) continue;
+            const glm::vec3 p = PosLoWorld(const_cast<ALO*>(pa));
+            const auto& ag = pa->pglobset->aglob;
+            for (size_t i = 0; i < ag.size(); ++i)
+            {
+                const GLOB& g = ag[i];
+                const glm::vec3 c = g.fDraw ? g.posCenter : g.posSphere;
+                std::fprintf(pf, "glob oid %d cid 0x%02X parent %d group %d glob %zu meshk %d rp3 %d nv %zu nfx %zu hidden %d grf 0x%x pos %.0f %.0f %.0f centre %.0f %.0f %.0f r %.0f\n",
+                             pa->oid, pa->Cid(), pa->paloParent ? pa->paloParent->oid : -1, pa->igrp, i, int(g.meshk), int(g.rp3), g.avtx.size(),
+                             g.asubfx.size(), int(g.fHidden), g.grfGroup, p.x, p.y, p.z, c.x, c.y, c.z, g.fDraw ? g.sRadius : g.sRadiusSphere);
+                if (!g.avtx.empty())
+                {
+                    int aMinA = 255, aMaxA = 0, aMinB = 255, aMaxB = 0;
+                    for (const VTXGLOB& v : g.avtx)
+                        aMinA = std::min(aMinA, int(v.rgbaA >> 24)), aMaxA = std::max(aMaxA, int(v.rgbaA >> 24)),
+                        aMinB = std::min(aMinB, int(v.rgbaB >> 24)), aMaxB = std::max(aMaxB, int(v.rgbaB >> 24));
+                    glm::vec3 lo(1e30f), hi(-1e30f);
+                    for (const VTXGLOB& v : g.avtx) lo = glm::min(lo, v.pos), hi = glm::max(hi, v.pos);
+                    std::fprintf(pf, "  alpha A %d..%d B %d..%d unbaked %d box %.0f %.0f %.0f .. %.0f %.0f %.0f\n", aMinA, aMaxA, aMinB, aMaxB, int(FGlobLit(g)),
+                                 lo.x, lo.y, lo.z, hi.x, hi.y, hi.z);
+                }
+                // (its shaders: id / kind / flags, texture frames: bmp id dx x dy, conditions)
+                auto printShd = [&](const SHD* pshd) {
+                    if (!pshd) return;
+                    std::fprintf(pf, "  shd %d k %d grf 0x%x saa %d", pshd->id, pshd->shdk, pshd->grfshd, pshd->psaa ? pshd->psaa->cid : -1);
+                    for (const TEX& t : pshd->atex)
+                        for (const BMP* pb : t.apbmp)
+                            if (pb) std::fprintf(pf, " bmp %d %dx%d cond %d", pb->id, pb->dx, pb->dy, int(pb->ccond));
+                    std::fputc('\n', pf);
+                };
+                for (const SUBGLOB& s : g.asubglob) printShd(s.pshd);
+                for (const SUBFX& s : g.asubfx)
+                {
+                    printShd(s.pshd);
+                    glm::vec3 lo(1e30f), hi(-1e30f);
+                    for (const glm::vec3& v : s.apos) lo = glm::min(lo, v), hi = glm::max(hi, v);
+                    if (!s.apos.empty())
+                        std::fprintf(pf, "  fx npos %zu nipos %zu bones %d box %.0f %.0f %.0f .. %.0f %.0f %.0f\n", s.apos.size(), s.aipos.size(), int(g.cbone),
+                                     lo.x, lo.y, lo.z, hi.x, hi.y, hi.z);
+                    if (std::getenv("SLY3_DUMP_GLOBS")[0] == '2')
+                        for (const glm::vec3& v : s.apos) std::fprintf(pf, "   v %.1f %.1f %.1f\n", v.x, v.y, v.z);
+                }
+            }
+        }
     std::fprintf(pf, "# cid class oid parent-oid group name\n");
     for (int cid = 0; cid < CID_Max; ++cid)
         for (const LO* plo : psw->mpcidaplo[cid])
@@ -280,6 +361,11 @@ void DumpObjects(const SW* psw, FILE* pf)
             const std::string name = "-";
             std::fprintf(pf, "0x%02X %s %d %d %d %s", cid, g_acls[cid].name, plo->oid,
                          plo->paloParent ? plo->paloParent->oid : -1, plo->igrp, name.c_str());
+            if (std::getenv("SLY3_DUMP_POS") && FCidDerivedFrom(cid, sly3::CID_ALO))   // (debug: the object's place, its globs' count)
+            {
+                const glm::vec3 p = PosLoWorld(const_cast<LO*>(plo));
+                std::fprintf(pf, " pos %.0f %.0f %.0f globs %zu", p.x, p.y, p.z, static_cast<const ALO*>(plo)->pglobset ? static_cast<const ALO*>(plo)->pglobset->aglob.size() : size_t(0));
+            }
             if (std::getenv("SLY2_DUMP_EXTRA"))
             {
                 const LO* proot = plo;

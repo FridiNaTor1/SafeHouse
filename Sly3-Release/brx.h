@@ -62,6 +62,8 @@ OPTFIELDKEY SetterFieldKey(int cid, int eopid3);
 // SLY3_FIELDAUDIT=DIR: the native reads / writes of LO::afield (class, getter, offset, caller) written to
 // DIR/reads.PID.tsv at exit; tools/optfields3.py joins them with the table.
 int OptionFieldsCommand(const char* path);
+// (debug) SLY3_OPTVALDUMP=FRAME:PATH (game.cpp): every object's stored field options at the original's offsets (a TSV)
+void DumpOptionValues3(const char* path);
 // orig 0x132B10 FIsBasicDerivedFrom
 void SetLoMatrix(LO* plo, const glm::mat4& m);  // vt slot 37 (loaders.cpp)
 void SetLoChannel(LO* plo, XF* pxf);            // vt slot 10's channel part (loaders.cpp)

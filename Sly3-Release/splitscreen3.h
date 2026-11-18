@@ -138,5 +138,8 @@ int CHackCards();
 bool FHackCardModel(int i, int dx, int dy, VIEWRECT* prect, int* pichar);
 
 // The binding screen and each view's player label / lost-pad notice (over everything, the full picture).
+// The views' dividing lines before the two-player HUD's centre pass (game.cpp), so the board's banner between the views
+// is drawn over them (the line crossed the banner's text); DrawOverlay then leaves them out
+void DrawDividers(int width, int height);
 void DrawOverlay(int width, int height);
 }  // namespace split3

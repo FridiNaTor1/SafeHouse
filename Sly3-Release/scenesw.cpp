@@ -36,6 +36,8 @@
 #include <string>
 #include <unordered_set>
 
+bool (*g_pfnPlaceDelta3)(const ALO* palo, glm::mat4* pdmat) = nullptr;
+
 namespace
 {
 // An entry's placement in parts: PlaceGlobsetPrepare and PlaceGlobsetFinish on the game thread (what writes shared
@@ -151,7 +153,8 @@ PLACEDELTA PlaceGlobsetPrepare(ALO* palo, SCENEGLOBSET& sgs)
     PLACEDELTA delta;
     sgs.sDrawScale = 1.0f;
     const bool fCharScale = FDebugCharScaleDelta(palo, &delta.dmat, &sgs.sDrawScale);   // (the debug menu's scale: debugphys.h)
-    delta.f = fCharScale || FBootyDrawDelta(palo, &delta.dmat) || FFalloffScaleDelta3(palo, &delta.dmat);
+    delta.f = fCharScale || FBootyDrawDelta(palo, &delta.dmat) || FFalloffScaleDelta3(palo, &delta.dmat) ||
+              (g_pfnPlaceDelta3 && g_pfnPlaceDelta3(palo, &delta.dmat));
     return delta;
 }
 

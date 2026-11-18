@@ -20,6 +20,7 @@
 #include "hudwidget.h"
 #include "porttext.h"
 #include "so.h"
+#include "scenesw.h"
 #include "spliceobj.h"
 #include "ref.h"
 #include "frame.h"
@@ -35,6 +36,7 @@
 #include "sm.h"
 #include "pcloader.h"
 #include "game/sly3.h"
+#include "scene.h"
 
 #include <algorithm>
 #include <array>
@@ -53,7 +55,12 @@ constexpr int kWorld = 32;     // p_at_sea
 constexpr int kJob = 4209;     // m5_battle_multi (row 2027, task 1816)
 constexpr int kShip = 44092;   // the gang's ship (its group 40 p_boat_hero; the duel's two are its instances 51380 / 51381)
 static const int kIwrecWall = std::getenv("SLY3_GALLEONWALLW") ? std::atoi(std::getenv("SLY3_GALLEONWALLW")) : 29;
-static const int kOidPaperWall = std::getenv("SLY3_GALLEONWALLOID") ? std::atoi(std::getenv("SLY3_GALLEONWALLOID")) : 73253;   // (Episode 4's palace hall c_hall_b, its paper screen c_partition)
+// (Episode 4's palace hall c_hall_b: the curtained paper screen 69964 behind which the Panda King's daughter Jing King
+// stands (Get a Job / Grapple-Cam Break-in's room: General Tsao's hall), her silhouette on it the kind-8 shadow volumes
+// of 69942 (seven pieces, shader 75659, darkening the lit paper by the frame's alpha as on the PS2). SLY3_GALLEONWALLOID=
+// 73253: the folding screen c_partition as before (no silhouette); SLY3_GALLEONSHADOWOID=0: the screen without her)
+static const int kOidPaperWall = std::getenv("SLY3_GALLEONWALLOID") ? std::atoi(std::getenv("SLY3_GALLEONWALLOID")) : 69964;
+static const int kOidJingShadow = std::getenv("SLY3_GALLEONSHADOWOID") ? std::atoi(std::getenv("SLY3_GALLEONSHADOWOID")) : 69942;
 constexpr int kOidHelm = 44234, kOidDeckSpot = 44236;   // (the ship's helm spot: the battle script's helmsman's place)
 constexpr int kOidGuru = 29, kOidPandaKing = 30, kOidDimitri = 27899, kOidMurray = 26, kOidPenelope = 31;
 
@@ -133,6 +140,9 @@ constexpr int kTarget = 3;          // (the original duel's: three wins)
 constexpr float kRoundEnd = 3.0f;   // (the last ship afloat, then the next round: the original's restore comes 2.5 s after a sink)
 constexpr float kHitWindow = 15.0f; // (a sink within this of a ship's last hit counts for the shooter)
 constexpr float kMsg = 3.0f, kWinHold = 6.0f;
+// a sunk player's view (UpdateSpectators): its own camera for the sinking, then the battle watched from above the sea
+static const float kSpecBack = std::getenv("SLY3_GALLEONSPECBACK") ? float(std::atof(std::getenv("SLY3_GALLEONSPECBACK"))) : 1.2f;
+constexpr float kSpecDelay = 2.5f, kSpecDist = 6500.0f, kSpecHeight = 2400.0f, kSeaZ = 0.0f;
 struct PLAYER4
 {
     LO* pchar = nullptr;
@@ -141,6 +151,14 @@ struct PLAYER4
     int sinks = 0;      // (ships it sank)
     bool fOut = false;  // (sunk this round)
     float tOverboard = -1.0f;
+    float tOut = -1.0f;
+    int iKiller = -1;   // (the player whose ship sank it)
+    // (out of the round: its view watches the battle, UpdateSpectators)
+    bool fSpec = false;
+    int iWatch = -1;
+    float tSpecEnd = -1.0f;
+    glm::vec3 posSpec{0.0f}, posLook{0.0f};
+    CM cmSpec;
 };
 struct ROUND4
 {
@@ -159,8 +177,14 @@ struct ROUND4
     int iMsg = -1;
     float tMsg = -100.0f;
     int leader = -1;
-    LO* pwall = nullptr;   // (player 4's paper wall: a copy from c_tilt_hall)
-    glm::mat3 matWall0{1.0f};
+    LO* pwall = nullptr;   // (player 4's booth's front screen: a copy from c_hall_b; awall[0])
+    struct WALL { LO* plo = nullptr; glm::mat4 mat{1.0f}; glm::vec3 pos{0.0f}, n{1.0f, 0.0f, 0.0f}; };
+    WALL awall[4];         // (the booth around his wheel: front (toward the main deck, her silhouette), back, the sides)
+    int cwall = 0;
+    LO* pshadow = nullptr;    // (Jing King's silhouette on the front screen: a copy of c_hall_b's 69942)
+    glm::vec3 posWallKept{0.0f};    // (the screen's place in c_hall_b)
+    glm::vec3 dposShadow{0.0f};     // (her place there from the screen's)
+    bool fWallPlaced = false;
 } r;
 bool s_fKeptWanted = false;
 
@@ -288,6 +312,23 @@ void StartRound()
         PLAYER4& p = r.ap[size_t(i)];
         p.fOut = false;
         p.tOverboard = -1.0f;
+        p.tOut = -1.0f;
+        // (a next round: every view shows its player's restored ship from above the sea until the character is back on
+        // its deck, then its own camera cuts to it: the views' cameras eased across the sea from the last round's places
+        // (the ships are placed anew), the sunk players' from under the water)
+        if (r.round > 0 && i < split3::CView())
+        {
+            if (!p.fSpec)
+            {
+                p.cmSpec = split3::CmView(i);
+                p.posSpec = p.cmSpec.pos;
+                p.posLook = p.posSpec + p.cmSpec.mat[0] * 2000.0f;
+            }
+            p.fSpec = true;
+            p.iWatch = -2;   // (its own ship: a cut to it)
+            p.tSpecEnd = g_clock.t + kSpecBack;
+        }
+        if (p.pship) SetShipGaugeKept3(p.pship, false);
         if (!p.pship) continue;
         SetSeatObject(i, nullptr);
         CallOpt(p.pship, 948);
@@ -411,14 +452,112 @@ void SetUp()
     StartRound();
 }
 
+// (debug, the shots of player 4's helm: SLY3_GALLEONLOOK="view,player,angle,dist,height": that view watches that player's
+// helm from the ship's frame (angle in degrees from the ship's x axis))
+bool FDebugLook(int iv, PLAYER4& p)
+{
+    static const char* s_sz = std::getenv("SLY3_GALLEONLOOK");
+    if (!s_sz) return false;
+    int v = 0, ip = 3;
+    float ang = 0.0f, dist = 1500.0f, h = 600.0f;
+    std::sscanf(s_sz, "%d,%d,%f,%f,%f", &v, &ip, &ang, &dist, &h);
+    if (v != iv || ip < 0 || ip >= r.cplayer || !r.ap[size_t(ip)].pship) return false;
+    LO* pship = r.ap[size_t(ip)].pship;
+    LO* phelm = PloInTreeOf(pship, kOidHelm);
+    const glm::mat4 m = sly3::MatLoWorld3(pship);
+    const glm::vec3 ax = glm::normalize(glm::vec3(m[0])), ay = glm::normalize(glm::vec3(m[1]));
+    const glm::vec3 c = phelm ? PosLoWorld(phelm) : PosLoWorld(pship);
+    const float a = glm::radians(ang);
+    if (!p.fSpec) p.cmSpec = split3::CmView(iv);
+    p.fSpec = true;
+    p.posSpec = c + (ax * std::cos(a) + ay * std::sin(a)) * dist + glm::vec3(0.0f, 0.0f, h);
+    p.posLook = c + glm::vec3(0.0f, 0.0f, 150.0f);
+    SetCmLookAt(&p.cmSpec, p.posSpec, p.posLook, 0.0f, 0.0f);
+    return true;
+}
+
+// ---- a sunk player's view. Its own camera follows its character, who goes down with the ship: under the sea the view was
+// black but the sky (Sly floating in the dark, the gauge gone with the ship) until the round's end. After the sinking
+// (kSpecDelay, at once when the camera goes under the water) the view watches the battle from above the sea instead: the
+// ship that sank it (else the nearest afloat), the camera eased to a point above the water at a distance from it; at the
+// next round it stays until the character is back on its ship (kSpecBack), then the own camera cuts back to it.
+void UpdateSpectators()
+{
+    const float t = g_clock.t, dt = std::max(g_clock.dt, 0.0f);
+    for (int i = 0; i < r.cplayer && i < split3::CView(); ++i)
+    {
+        PLAYER4& p = r.ap[size_t(i)];
+        if (FDebugLook(i, p)) continue;
+        if (!p.fOut)
+        {
+            if (!p.fSpec) continue;
+            const bool fBack = p.pchar && p.pship && PosLoWorld(p.pchar).z > kSeaZ + 300.0f;
+            if (t >= p.tSpecEnd && (fBack || t >= p.tSpecEnd + 3.0f))
+            {
+                p.fSpec = false;
+                CutCm(const_cast<CM*>(&split3::CmView(i)));
+                std::printf("galleon3: player %d's view back on its character (z %.0f, t %.2f)\n", i + 1, p.pchar ? PosLoWorld(p.pchar).z : 0.0f, t);
+                continue;
+            }
+        }
+        if (!p.fSpec)
+        {
+            const CM& cmOwn = split3::CmView(i);   // (not watching yet: the view's own camera)
+            if (t - p.tOut < kSpecDelay && cmOwn.pos.z > kSeaZ + 40.0f) continue;
+            p.cmSpec = cmOwn;
+            p.posSpec = glm::vec3(cmOwn.pos.x, cmOwn.pos.y, std::max(cmOwn.pos.z, kSeaZ + 600.0f));
+            p.posLook = p.posSpec + glm::vec3(cmOwn.mat[0].x, cmOwn.mat[0].y, 0.0f) * 2000.0f;
+            p.iWatch = p.iKiller;
+            std::printf("galleon3: player %d's view watches the battle (t %.2f)\n", i + 1, t);
+        }
+        // the watched ship: still afloat, else the nearest afloat (a cut to it: easing across the sea showed the water from
+        // close by on the way)
+        const int iWatchOld = p.iWatch;
+        bool fCut = !p.fSpec;
+        if (!p.fOut) p.iWatch = i;   // (the round's restore: its own ship)
+        else if (p.iWatch < 0 || r.ap[size_t(p.iWatch)].fOut || !r.ap[size_t(p.iWatch)].pship)
+        {
+            p.iWatch = -1;
+            float dBest = 1e30f;
+            for (int j = 0; j < r.cplayer; ++j)
+                if (const PLAYER4& o = r.ap[size_t(j)]; j != i && !o.fOut && o.pship)
+                    if (const float d = glm::length(PosLoWorld(o.pship) - p.posSpec); d < dBest) dBest = d, p.iWatch = j;
+        }
+        fCut = fCut || p.iWatch != iWatchOld;
+        p.fSpec = true;
+        glm::vec3 posWant = p.posSpec, posLookWant = p.posLook;
+        if (p.iWatch >= 0)
+        {
+            const glm::vec3 tgt = PosLoWorld(r.ap[size_t(p.iWatch)].pship);
+            glm::vec2 d(p.posSpec.x - tgt.x, p.posSpec.y - tgt.y);
+            d = glm::length(d) > 1.0f ? glm::normalize(d) : glm::vec2(1.0f, 0.0f);
+            posWant = glm::vec3(tgt.x + d.x * kSpecDist, tgt.y + d.y * kSpecDist, kSeaZ + kSpecHeight);
+            posLookWant = glm::vec3(tgt.x, tgt.y, kSeaZ + 700.0f);
+        }
+        const float k = fCut ? 1.0f : 1.0f - std::exp(-dt * 1.4f);
+        p.posSpec += (posWant - p.posSpec) * k;
+        p.posSpec.z = std::max(p.posSpec.z, kSeaZ + 300.0f);
+        p.posLook += (posLookWant - p.posLook) * k;
+        SetCmLookAt(&p.cmSpec, p.posSpec, p.posLook, 0.0f, 0.0f);
+    }
+}
+
 void Out(int i)
 {
     PLAYER4& p = r.ap[size_t(i)];
-    if (p.fOut || r.winner >= 0 || r.tRoundEnd >= 0.0f) { p.fOut = true; return; }
+    if (p.fOut || r.winner >= 0 || r.tRoundEnd >= 0.0f)
+    {
+        if (!p.fOut) { p.tOut = g_clock.t; if (p.pship) SetShipGaugeKept3(p.pship, true); }
+        p.fOut = true;
+        return;
+    }
     p.fOut = true;
+    p.tOut = g_clock.t;
+    if (p.pship) SetShipGaugeKept3(p.pship, true);
     float t = -100.0f;
     LO* pby = p.pship ? PloShipHitBy3(p.pship, &t) : nullptr;
     const int ik = pby && g_clock.t - t <= kHitWindow ? IplayerOfShip(pby) : -1;
+    p.iKiller = ik != i ? ik : -1;
     if (ik >= 0 && ik != i)
     {
         r.ap[size_t(ik)].sinks++;
@@ -640,51 +779,104 @@ bool FHudPiece(int oid, int ielem, const SELEM& el, const HUDSTATE& st)
     return true;
 }
 
-// ---- player 4's helm: the Panda King's daughter steers behind a paper screen of Episode 4's palace (c_hall_b's folding
-// screen c_partition 73253, a copy from that world kept, pcloader.h; SLY3_GALLEONWALLW=30 / SLY3_GALLEONWALLOID=70749:
-// c_tilt_hall's paper wall instead), so she is hidden. (Her shadow on the paper is not drawn: the game has no model of
-// her, notes/PLANE3_2026-11-12.md "Round 7")
+// ---- player 4's helm: the Panda King's daughter Jing King steers hidden in a booth of Episode 4's palace screens around
+// his wheel: four copies of c_hall_b's curtained screen 69964 (the room of Tsao in "Get a Job"), scaled to a little more
+// than the Panda King's height, lit faces outward, and her silhouette on the front one (toward the main deck): the shadow
+// hulls 69942 at their place relative to that screen there. Copies from that world kept (pcloader.h); notes/PLANE3
+// "Round 9". SLY3_GALLEONWALLOID=73253: c_partition instead (the old single screen); SLY3_GALLEONSHADOWOID=0: no silhouette.
+// (no copy has a rotation record (SetAloRotation does not turn them; her pieces hang off records of their own, which the
+// SM's ASEGs animate): each is moved to its place as it stands in c_hall_b and drawn turned and scaled about that place:
+// scenesw.h g_pfnPlaceDelta3)
+static const float kWallScale = std::getenv("SLY3_GALLEONWALLSCALE") ? float(std::atof(std::getenv("SLY3_GALLEONWALLSCALE"))) : 0.62f;
+bool FPlaceDelta(const ALO* palo, glm::mat4* pdmat)
+{
+    if (!r.fActive || !palo || !r.fWallPlaced) return false;
+    if (palo == r.pshadow) { *pdmat = r.awall[0].mat; return true; }
+    for (int i = 0; i < r.cwall; ++i)
+        if (palo == r.awall[i].plo) { *pdmat = r.awall[i].mat; return true; }
+    return false;
+}
 void PlaceWall()
 {
     if (r.pwall || r.cplayer < 4 || !r.ap[3].pship || PckwsKeptWorld(kIwrecWall) != PCKWS_Ready) return;
     LO* ptmpl = PloKeptFind(kIwrecWall, kOidPaperWall, 0);
     if (!ptmpl) { r.pwall = r.ap[3].pship; std::printf("galleon3: no paper wall in the kept world\n"); return; }
-    ALO* pship = dynamic_cast<ALO*>(r.ap[3].pship);
-    r.pwall = PloPcCloneIntoWorld(r.psw, ptmpl, true);   // (top level: placed at the helm each frame)
-    r.matWall0 = glm::mat3(sly3::MatLoWorld3(ptmpl));   // (its own upright rotation in its world)
-    (void)pship;
-    std::printf("galleon3: paper wall %p (a copy of %d, cid 0x%X)\n", (void*)r.pwall, ptmpl->oid, r.pwall ? unsigned(r.pwall->Cid()) : 0u);
+    r.posWallKept = glm::vec3(sly3::MatLoWorld3(ptmpl)[3]);
+    r.cwall = kOidPaperWall == 69964 ? 4 : 1;
+    for (int i = 0; i < r.cwall; ++i) r.awall[i].plo = PloPcCloneIntoWorld(r.psw, ptmpl, true);   // (top level: placed each frame)
+    r.pwall = r.awall[0].plo;
+    std::printf("galleon3: paper wall %p (a copy of %d, cid 0x%X; %d screens)\n", (void*)r.pwall, ptmpl->oid, r.pwall ? unsigned(r.pwall->Cid()) : 0u, r.cwall);
+    if (LO* psh = kOidJingShadow > 0 ? PloKeptFind(kIwrecWall, kOidJingShadow, 0) : nullptr)
+    {
+        r.pshadow = PloPcCloneIntoWorld(r.psw, psh, true);   // (top level too, beside the front screen as there)
+        r.dposShadow = glm::vec3(sly3::MatLoWorld3(psh)[3]) - r.posWallKept;
+        std::printf("galleon3: her silhouette %p (a copy of %d)\n", (void*)r.pshadow, psh->oid);
+    }
 }
 void UpdateWall()
 {
-    ALO* pw = dynamic_cast<ALO*>(r.pwall);
     ALO* pship = r.cplayer >= 4 ? dynamic_cast<ALO*>(r.ap[3].pship) : nullptr;
     LO* phelm = pship ? PloInTreeOf(pship, kOidHelm) : nullptr;
-    if (!pw || pw == pship || !phelm) return;
-    // behind the helm (the ship's -x: toward the stern), across the deck, upright
+    if (!r.pwall || r.pwall == pship || !phelm) return;
     const glm::mat4 m = sly3::MatLoWorld3(pship);
     const glm::vec3 ax = glm::normalize(glm::vec3(m[0])), ay = glm::normalize(glm::vec3(m[1]));
-    static const float s_dx = std::getenv("SLY3_GALLEONWALLDX") ? float(std::atof(std::getenv("SLY3_GALLEONWALLDX"))) : 200.0f;
+    // (the booth's middle: the helmsman's place moved toward the wheel; its half side: the scaled screen's half width (c_hall_b's
+    // screen is 511 wide, 572 tall: x 0.62 about 317 x 355, the Panda King ~280 tall); one screen alone (c_partition): 170
+    // toward the main deck from the helm as before)
+    static const float s_dx = std::getenv("SLY3_GALLEONWALLDX") ? float(std::atof(std::getenv("SLY3_GALLEONWALLDX"))) : r.cwall > 1 ? -60.0f : -170.0f;
+    const float h = r.cwall > 1 ? 255.0f * kWallScale : 0.0f;
+    const float scale = r.cwall > 1 ? kWallScale : 1.0f;
+    // (the turn about z from its place there: c_hall_b's curtained screen shows its lit face (the hall's side, her
+    // silhouette's) toward +y there: a quarter turn from the ship's heading puts it toward the ship's -x, the main deck)
     static const float s_rot = std::getenv("SLY3_GALLEONWALLROT") ? float(std::atof(std::getenv("SLY3_GALLEONWALLROT"))) : 1.5707964f;
-    glm::vec3 pos = PosLoWorld(phelm) + ax * s_dx;
-    static const char* s_szWallTest = std::getenv("SLY3_GALLEONWALLTEST");
-    if (s_szWallTest && r.ap[3].pchar)   // (debug: in front of player 4's camera)
+    glm::vec3 c = PosLoWorld(phelm) + ax * s_dx;
+    c.z = PosLoWorld(phelm).z;
+    const float rad0 = std::atan2(ax.y, ax.x) + s_rot;
+    // front (toward -x), back (+x), the sides (+y / -y): each faces outward
+    const glm::vec3 an[4] = {-ax, ax, ay, -ay};
+    const float arad[4] = {rad0, rad0 + 3.14159265f, rad0 - 1.5707964f, rad0 + 1.5707964f};
+    for (int i = 0; i < r.cwall; ++i)
     {
-        const CM& cm = split3::CmView(3);
-        pos = PosLoWorld(r.ap[3].pchar) + glm::vec3(cm.mat[0].x, cm.mat[0].y, 0.0f) * float(std::atof(s_szWallTest));
+        ALO* pw = dynamic_cast<ALO*>(r.awall[i].plo);
+        if (!pw) continue;
+        const glm::vec3 pos = c + an[i] * h;
+        SetAloPos(pw, pos);
+        if (i == 0)
+            if (ALO* psh = dynamic_cast<ALO*>(r.pshadow)) SetAloPos(psh, pos + r.dposShadow);
+        glm::mat4 rot(1.0f), tTo(1.0f), tFrom(1.0f);
+        rot[0] = glm::vec4(std::cos(arad[i]) * scale, std::sin(arad[i]) * scale, 0.0f, 0.0f);
+        rot[1] = glm::vec4(-std::sin(arad[i]) * scale, std::cos(arad[i]) * scale, 0.0f, 0.0f);
+        rot[2] = glm::vec4(0.0f, 0.0f, scale, 0.0f);
+        tTo[3] = glm::vec4(pos, 1.0f);
+        tFrom[3] = glm::vec4(-pos, 1.0f);
+        r.awall[i].mat = tTo * rot * tFrom;
+        r.awall[i].pos = pos;
+        r.awall[i].n = an[i];
     }
-    SetAloPos(pw, glm::vec3(pos.x, pos.y, PosLoWorld(phelm).z - 0.0f));
-    const float rad = std::atan2(ax.y, ax.x) + s_rot;
-    const glm::mat3 yaw(glm::vec3(std::cos(rad), std::sin(rad), 0.0f), glm::vec3(-std::sin(rad), std::cos(rad), 0.0f), glm::vec3(0.0f, 0.0f, 1.0f));
-    SetAloRotation(pw, yaw * r.matWall0);
-    (void)ay;
-    if (static int s_c = 0; s_szWallTest && ++s_c % 120 == 1)
-    {
-        std::printf("galleon3: wall at %.0f %.0f %.0f in world %d removed %d children %zu fade %.2f\n", PosLoWorld(pw).x, PosLoWorld(pw).y, PosLoWorld(pw).z, int(pw->fInWorld),
-                    int(pw->fRemoved), pw->aploChild.size(), pw->gFade);
-        for (LO* ch : pw->aploChild)
-            if (ch) std::printf("galleon3:   child %d cid 0x%X in world %d at %.0f %.0f %.0f\n", ch->oid, unsigned(ch->Cid()), int(ch->fInWorld), PosLoWorld(ch).x, PosLoWorld(ch).y, PosLoWorld(ch).z);
-    }
+    r.fWallPlaced = true;
+}
+
+// a booth screen left out of a view it blocks: the view's own player hidden by it from its camera (the segment from the
+// camera to the character crossing the screen's plane within its size), or the camera at the paper itself (player 4's
+// camera behind him came behind the paper near the helm: the view all orange through it)
+struct HIDDENWALL { SCENEGLOBSET* psgs; std::vector<uint8_t> af; };
+std::vector<HIDDENWALL> s_ahidden;
+bool FWallBlocksView(int iv, int iwall, const glm::vec3& posCam, float sRadius)
+{
+    ALO* pship = r.cplayer >= 4 ? dynamic_cast<ALO*>(r.ap[3].pship) : nullptr;
+    if (!r.fWallPlaced || !pship || iv < 0 || iv >= r.cplayer || r.ap[size_t(iv)].fSpec || !r.ap[size_t(iv)].pchar) return false;
+    const glm::vec3 n = r.awall[iwall].n;
+    const glm::vec3 wc = r.awall[iwall].pos;
+    const glm::vec3 posChar = PosLoWorld(r.ap[size_t(iv)].pchar) + glm::vec3(0.0f, 0.0f, 120.0f);
+    const float d0 = glm::dot(posCam - wc, n), d1 = glm::dot(posChar - wc, n);
+    auto fInside = [&](const glm::vec3& q) {
+        const glm::vec3 v = q - wc;
+        const glm::vec3 vPlane = v - n * glm::dot(v, n);
+        return glm::length(glm::vec2(vPlane.x, vPlane.y)) < sRadius && v.z > -100.0f && v.z < 2.0f * sRadius;
+    };
+    if (std::fabs(d0) < 80.0f && fInside(posCam)) return true;
+    if ((d0 < 0.0f) == (d1 < 0.0f) || std::fabs(d0 - d1) < 1e-3f) return false;
+    return fInside(posCam + (posChar - posCam) * (d0 / (d0 - d1)));
 }
 
 struct INITGALLEON3
@@ -733,10 +925,45 @@ void OnWorldLoaded(SW* psw)
     r.cplayer = CChosenRaw();
     if (r.cplayer >= 4) { RequestPcKeptWorld(kIwrecWall); s_fKeptWanted = true; }   // (the paper wall, pcloader.h)
     g_pfnHudPiece3 = FHudPiece;   // (only a round answers: these test r.fActive)
+    g_pfnPlaceDelta3 = FPlaceDelta;
     g_pfnScreenObjSkip3 = FScreenObjSkip;
     std::printf("galleon3: free-for-all, %d players\n", r.cplayer);
 }
 int CViewsWanted() { return r.fActive ? r.cplayer : 0; }
+void BeginViewScene(SCENE& scene, const std::vector<ALO*>& apalo, int iview, const glm::vec3& posCam)
+{
+    s_ahidden.clear();
+    if (!r.fActive || !r.fSetUp || !r.pwall || !r.fWallPlaced) return;
+    // (her silhouette only for the views in front of the front screen: her hulls reach from just before its paper to far
+    // behind it, through the booth: a camera behind it (player 4's) would be inside them)
+    const float sRadius = (r.cwall > 1 ? kWallScale : 1.0f) * 300.0f;
+    bool afBlocks[4] = {};
+    int cBlocks = 0;
+    for (int i = 0; i < r.cwall; ++i) cBlocks += afBlocks[i] = FWallBlocksView(iview, i, posCam, sRadius);
+    const bool fBehind = glm::dot(posCam - r.awall[0].pos, r.awall[0].n) < 80.0f * (r.cwall > 1 ? kWallScale : 1.0f);
+    if (!cBlocks && !fBehind) return;
+    for (size_t k = 0; k < scene.aglobset.size() && k < apalo.size(); ++k)
+    {
+        const LO* plo = apalo[k];
+        bool fHide = plo && plo == r.pshadow && (fBehind || afBlocks[0]);
+        for (int i = 0; i < r.cwall && !fHide; ++i) fHide = afBlocks[i] && plo == r.awall[i].plo;
+        if (!fHide) continue;
+        SCENEGLOBSET& sgs = scene.aglobset[k];
+        s_ahidden.push_back({&sgs, sgs.afVisible});
+        std::fill(sgs.afVisible.begin(), sgs.afVisible.end(), uint8_t(0));
+    }
+    if (static int s_c = 0; FPrint() && cBlocks && s_c++ % 120 == 0) std::printf("galleon3: %d booth screen(s) left out of view %d\n", cBlocks, iview + 1);
+}
+void EndViewScene()
+{
+    for (HIDDENWALL& h : s_ahidden) h.psgs->afVisible = std::move(h.af);
+    s_ahidden.clear();
+}
+const CM* PcmSpectator(int iview)
+{
+    if (!r.fActive || !r.fSetUp || iview < 0 || iview >= r.cplayer || !r.ap[size_t(iview)].fSpec) return nullptr;
+    return &r.ap[size_t(iview)].cmSpec;
+}
 void OnPlayersChosen(SW* psw)
 {
     if (std::getenv("SLY3_GALLEONDUMP") && FDuelRunning()) DumpWorld(psw);
@@ -756,12 +983,33 @@ LO* PloOwnerOfSeat(SW* psw, int i)
     if (plo && FShip3(plo)) return dynamic_cast<LO*>(RefOpt(plo, 1755).m_pbasic);
     return plo;
 }
+// a seat's character moved at once (a round's restore puts it back on its ship's deck): its view's camera cut to it there
+// (eased, the camera went through the hull: player 2's view inside it for about a second after the original's restore)
+void CutViewsOnJumps(SW* psw)
+{
+    static std::array<glm::vec3, 4> s_apos{};
+    static std::array<const LO*, 4> s_aplo{};
+    for (int i = 0; i < split3::CView() && i < 4; ++i)
+    {
+        LO* pchar = PloOwnerOfSeat(psw, i);
+        if (!pchar) { s_aplo[size_t(i)] = nullptr; continue; }
+        const glm::vec3 pos = PosLoWorld(pchar);
+        if (s_aplo[size_t(i)] == pchar && glm::length(pos - s_apos[size_t(i)]) > 600.0f && !PcmSpectator(i))
+        {
+            CutCm(const_cast<CM*>(&split3::CmView(i)));
+            if (FPrint()) std::printf("galleon3: player %d's character moved %.0f at once: its view's camera cut (t %.2f)\n", i + 1, glm::length(pos - s_apos[size_t(i)]), g_clock.t);
+        }
+        s_aplo[size_t(i)] = pchar;
+        s_apos[size_t(i)] = pos;
+    }
+}
 void Update(SW* psw)
 {
     // (both options) the players other than Sly use their own ships' deck cannons by Circle (ship3.h FUseDeckCannon3)
     if (FDuelRunning() && psw && split3::FActive())
         for (int i = 1; i < split3::CView(); ++i)
             if (LO* pchar = PloOwnerOfSeat(psw, i)) FUseDeckCannon3(pchar);
+    if (FDuelRunning() && psw && split3::FActive()) CutViewsOnJumps(psw);
     if (!r.fActive || r.fEnded || !psw || psw != r.psw) return;
     const float t = g_clock.t;
     // (the splice's own start (s1621, then the first round's battle of its two ships): players 3 / 4 join, every ship's round)
@@ -800,6 +1048,7 @@ void Update(SW* psw)
         else p.tOverboard = -1.0f;
     }
     if (r.tRoundEnd >= 0.0f && t >= r.tRoundEnd) EndRound();
+    UpdateSpectators();
     PlaceWall();
     UpdateWall();
     if (static bool s_fDone = std::getenv("SLY3_GALLEONINTDBG") == nullptr; !s_fDone && t > 5.0f)
@@ -863,6 +1112,14 @@ void Update(SW* psw)
 bool FOnBroadcast(int code, LO* plo)
 {
     if (!r.fActive || !r.fSetUp || r.fEnded || (code != 0xC && code != 10)) return false;
+    // (a helmsman's death (Murray / Penelope / Dimitri drowning with a sunk ship): the splice counted it as its player's ship
+    // lost: with both of its ships down it scored the board and restored its two ships in the middle of a free-for-all
+    // round (both views faded out, the board's scores in the views, the other ships' players then overboard))
+    if (plo && (plo->oid == kOidMurray || plo->oid == kOidPenelope || plo->oid == kOidDimitri))
+    {
+        if (FPrint()) std::printf("galleon3: broadcast 0x%X of helmsman %d kept from the splice (t %.2f)\n", code, plo->oid, g_clock.t);
+        return true;
+    }
     const int i = IplayerOfShip(plo);
     if (i < 0) return false;
     // (not the duel splice's: its scoring knows two ships; its sinking camera (10) neither)

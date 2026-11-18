@@ -401,7 +401,7 @@ void SetFieldRaw(LO* plo, uint32_t pfnGetter, uint32_t ib, uint32_t u)
     const uint64_t key = (uint64_t(pfnGetter) << 32) | ib;
     if (static const int s_ib = std::getenv("SLY2N_FIELDPRINT") ? int(std::strtol(std::getenv("SLY2N_FIELDPRINT"), nullptr, 0)) : -1; s_ib == int(ib))
         std::printf("field %d +0x%X = %u (getter 0x%X)\n", plo->oid, ib, u, pfnGetter);  // (debug: a field's stores)
-    if (static const int s_oid = std::getenv("SLY2N_FIELDOID") ? std::atoi(std::getenv("SLY2N_FIELDOID")) : -1; s_oid == plo->oid)
+    if (static const int s_oid = std::getenv("SLY2N_FIELDOID") ? std::atoi(std::getenv("SLY2N_FIELDOID")) : -2; s_oid == plo->oid)   // (-2: off; -1 is an unnamed object)
         std::printf("field %d +0x%X = 0x%X (getter 0x%X)\n", plo->oid, ib, u, pfnGetter);  // (debug: an object's stores)
     for (auto& [k, uOld] : plo->afield)
         if (k == key) { uOld = u; return; }
@@ -1184,6 +1184,35 @@ static std::string StrFieldIb(const OPTFIELDKEY& k)
 // EopidFromOptid table) and every field option (grf 0x80 / 0x10, no 0x401): the key the loader stores the value at and
 // the key the splice's seto! stores it at, beside the Sly 3 record's own offsets (+0x18 ibFile / +0x10 ibSet) and the
 // Sly 2 twin's. Writes the table; prints the mismatches (both stores exist and differ; one store missing).
+// (debug, brx.h) SLY3_OPTVALDUMP=FRAME:PATH: every object's stored field options at the original's offsets
+void DumpOptionValues3(const char* path)
+{
+    std::FILE* pf = std::fopen(path, "w");
+    if (!pf || !g_psw) { if (pf) std::fclose(pf); return; }
+    std::fprintf(pf, "oid\tcid\teopid\tib3\tvalue\n");
+    for (const std::unique_ptr<LO>& up : g_psw->aploAll)
+    {
+        const LO* plo = up.get();
+        if (!plo || plo->afield.empty()) continue;
+        const int cid = plo->Cid();
+        for (int eopid : AeopidFieldsOfClass(cid))
+        {
+            const OPTFIELDKEY k3 = Sly3FieldKey(eopid);
+            if (!k3.fValid || k3.pfnGet) continue;   // (sub-objects: not at the object's own offsets)
+            const int c = CwordField(static_cast<int>(g_disc.U32Elf(VA_AEOPID + uint32_t(eopid) * CB_EOPID)));
+            for (int i = 0; i < c; ++i)
+            {
+                uint32_t pfn, ib;
+                FieldWordFromSly3(cid, 0, k3.ib + 4u * uint32_t(i), &pfn, &ib);
+                const uint64_t key = (uint64_t(pfn) << 32) | ib;
+                for (const auto& [k, u] : plo->afield)
+                    if (k == key) { std::fprintf(pf, "%d\t0x%X\t%d\t0x%X\t0x%08X\n", plo->oid, cid, eopid, k3.ib + 4u * uint32_t(i), u); break; }
+            }
+        }
+    }
+    std::fclose(pf);
+}
+
 int OptionFieldsCommand(const char* path)
 {
     std::FILE* pf = std::fopen(path, "w");
