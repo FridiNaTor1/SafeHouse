@@ -762,7 +762,9 @@ folder); the list shows the project's, the library's and the installed packages'
   and adds each limb's target as a joint; the root bone's custom property `safehouse_ik` lists each limb's joints
   (target, upper, lower, end), to rebuild them with IK constraints. Not part of a clip and so not exported: a head
   turning toward the player, and what the characters' own code does at run time (feet on uneven ground, Sly's cane
-  reach, a guard's arm aimed by its AI, held objects).
+  reach, a guard's arm aimed by its AI, held objects). The clips that move come first, so the first animation (the
+  one a glTF importer plays) moves; still poses come after them, named `aseg_<number>_pose`. Step by step: "Exporting
+  a character for Blender" below.
 - **Characters:** a character exported here keeps its joints' names (`MURRAY#9.31`: object 9, record 31; a limb's
   joints add their part and side, `_thigh_L`, `_shin_L`, `_foot_L`, `_upperarm_R`...) and each part's name ends in
   `@<show id>,<draw order>,<hidden>`. In Blender the bones point at their child and a limb's knee / elbow bends about
@@ -783,6 +785,28 @@ A project lives in Sly 2's save folder, `Editor/Sly 2/<project>/`, and is alread
 into `Mods/Packages/`, **Export .zip** makes a file to share.
 
 Deleting objects that scripts or other objects name can break jobs; test with a fresh save.
+
+#### Exporting a character for Blender
+
+1. In the map editor, click the character (Sly, Carmelita, a guard ...). In the Inspector's **Model and materials**,
+   set the kind next to **Export GLB...** to **character**. Leave the animations on **Animations as in the game**
+   (arms and legs move as they do in the game) with **60 keys/s** and **Fewer keys** on, then press **Export GLB...**.
+   Pick **Clip channels only (no IK)** only to rebuild the arm and leg IK yourself: there the arms and legs stay still
+   while the hands and feet move.
+2. In Blender (4.2 or later): **File > Import > glTF 2.0 (.glb/.gltf)** with the default options. The first clip is
+   already on the armature: press **Space** in the 3D view to play it.
+3. **Switching clips:** select the armature, open a **Dope Sheet** and switch it to **Action Editor**, then pick a clip
+   (`aseg_<number>`) in the action menu at its top. On Blender 4.4 and later, if the **Slot** beside it stays empty,
+   choose the slot named after the armature (`OBArmature`). Every clip is also a muted track in the **NLA** editor.
+   The clips that move come first; the ones ending in `_pose` are single still poses (a hand or face pose the game
+   blends in), so they show no motion.
+4. **Frame range:** a clip starts at frame 0 and lasts its own length at the scene's frame rate (Blender's default:
+   24 fps, frames 1 to 250). To loop just the clip: in the Action Editor press **A** (all keys), then **View > Set
+   Preview Range to Selected** (Ctrl+Alt+P). To see every one of the 60 keys a second, set the scene's **Frame Rate**
+   to 60 *before* importing.
+
+Two exports of the same character in one scene: the second one's clips get a `.001` suffix; pick the clips that
+belong to that armature.
 
 ### Mod packages
 

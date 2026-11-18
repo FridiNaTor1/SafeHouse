@@ -2361,6 +2361,8 @@ void CEditor::ExportAnimations(LO* plo, md::Scene& sc, const EXPORTRIG& rig)
     const float tolErr = 0.0005f * unit;   // (0.5 mm)
     double errMax = 0.0;
     std::size_t ckey = 0;
+    const std::size_t ianim0 = sc.anims.size();
+    std::vector<bool> afStill;   // (per exported clip: a still pose, its skin moving under 1 cm or for under 0.1 s)
     for (std::size_t ia = 0; ia < apasegAnim.size(); ++ia)
     {
         ASEG* paseg = apasegAnim[ia];
@@ -2423,6 +2425,16 @@ void CEditor::ExportAnimations(LO* plo, md::Scene& sc, const EXPORTRIG& rig)
             an.ch.push_back(std::move(S));
         }
         if (!fMoves) continue;
+        // (how far its skin moves from its first key: a clip that barely moves is a pose)
+        float dMotion = 0.0f;
+        for (std::size_t k = 1; k < at.size(); ++k)
+            for (std::size_t j = 0; j < cj; ++j)
+            {
+                float e = glm::length(glm::vec3(aamat[k][j][3] - aamat[0][j][3]));
+                for (int c = 0; c < 3; ++c) e = std::max(e, glm::length(glm::vec3(aamat[k][j][c] - aamat[0][j][c])) * areach[j]);
+                dMotion = std::max(dMotion, e);
+            }
+        afStill.push_back(dMotion < 0.01f * unit || PasegdOf(paseg)->tMax < 0.1f);
         // fewer keys: each channel reduced, then keys put back (for the joint and the ones above it) wherever a joint's
         // transform from its parents' keys, as a viewer interpolates them, moves its skin by more than tolErr
         std::vector<std::vector<bool>> amask(an.ch.size());
@@ -2471,11 +2483,33 @@ void CEditor::ExportAnimations(LO* plo, md::Scene& sc, const EXPORTRIG& rig)
         for (const md::Channel& ch : an.ch) ckey += ch.t.size();
         sc.anims.push_back(std::move(an));
     }
+    // the order: the clips that move first (in the character's order), the still poses after them, named "_pose": a
+    // glTF importer makes the file's first animation the one that plays (Blender: the armature's active action, the
+    // others muted NLA tracks), so it must be one that moves; the names unique (a clip listed twice under the
+    // character: "_2")
+    {
+        std::vector<md::Animation> aanMove, aanStill;
+        for (std::size_t i = ianim0; i < sc.anims.size(); ++i)
+        {
+            const bool fStill = afStill[i - ianim0];
+            if (fStill) sc.anims[i].name += "_pose";
+            (fStill ? aanStill : aanMove).push_back(std::move(sc.anims[i]));
+        }
+        sc.anims.resize(ianim0);
+        for (auto* pv : {&aanMove, &aanStill})
+            for (md::Animation& an : *pv) sc.anims.push_back(std::move(an));
+        std::map<std::string, int> mpname;
+        for (md::Animation& an : sc.anims)
+            if (const int n = ++mpname[an.name]; n > 1) an.name += "_" + std::to_string(n);
+    }
+    int cstill = 0;
+    for (bool f : afStill) cstill += f;
     int cdeform = 0;
     for (int a : ajointDeform) cdeform += a >= 0;
     char sz[64];
     std::snprintf(sz, sizeof(sz), "%.2f mm", errMax * 1000.0 / unit);
     m_exportAnimInfo = std::to_string(sc.anims.size()) + " of " + std::to_string(apaseg.size()) + " clips " + (rig.fSolve ? "as in the game" : "(clip channels only)") +
+                       (cstill ? " (" + std::to_string(cstill) + " still poses, listed last)" : std::string()) +
                        ", " + std::to_string(ckey) + " keys, largest error " + sz + (cdeform ? ", " + std::to_string(cdeform) + " joints with deform bones" : "");
     if (std::getenv("SLY2N_EDITOR_EXPORTDBG"))
     {

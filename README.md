@@ -64,9 +64,8 @@ On the Steam Deck, install in Desktop Mode, then use **Add to Steam** on the gam
 ## PC features
 
 <p align="center">
-  <img src="docs/images/ultrawide-reveal-binocucom.webp" alt="The intro's binocucom shot widening from 4:3 to 32:9" width="900"><br>
-  <img src="docs/images/ultrawide-reveal-paris.webp" alt="Paris rooftops widening from 4:3 to 32:9" width="900"><br>
-  <sub>Super ultrawide: the full 32:9 picture, with the HUD kept at its original 4:3 proportions.</sub>
+  <img src="docs/images/ultrawide-hud-placement.webp" alt="Paris at 32:9 with the HUD placed at 4:3, 16:9, 16:10 and Match Screen" width="900"><br>
+  <sub>Super ultrawide at 32:9, with the HUD at 4:3 (default), 16:9, 16:10 or out to the edges.</sub>
 </p>
 
 - **Full keyboard and mouse support:** remappable keys and buttons, mouse camera and aim, and separate invert
@@ -78,8 +77,8 @@ On the Steam Deck, install in Desktop Mode, then use **Add to Steam** on the gam
 - **VR (Sly 2)** on PC headsets and the Meta Quest.
 - **High refresh rates:** 30, 60, 90, 120, 144, 240 FPS, uncapped or your monitor's refresh rate; the game speed
   stays the same.
-- **Super ultrawide (up to 32:9):** the HUD stays at its original 4:3 proportions, with improvements to the
-  binocucom, effects and cutscene bars at wider aspect ratios.
+- **Super ultrawide (up to 32:9):** the HUD can sit at 4:3 (default), 16:9, 16:10 or match your screen, with
+  improvements to the binocucom, effects and cutscene bars at wider aspect ratios.
 - **A debug menu with PC extras:** play as Carmelita, guards and bosses, fly Bentley's RC chopper anywhere, noclip,
   a free camera and warps.
 - **Replay Jobs:** jump back into your favourite jobs.
@@ -118,8 +117,8 @@ The full list is in **[docs/FEATURES.md](docs/FEATURES.md)**, the debug menu in
 ## Level editor (Sly 2)
 
 <p align="center">
-  <img src="docs/images/editor-cutscene.webp" alt="The cutscene editor playing a Paris scene on its timeline" width="800"><br>
-  <sub>The cutscene editor playing a scene from Paris</sub>
+  <img src="docs/images/editor-cutscene.webp" alt="The cutscene editor playing the end of Rajan's boss fight on its timeline" width="800"><br>
+  <sub>The cutscene editor playing the end of Rajan's boss fight (Episode 3)</sub>
 </p>
 
 The launcher comes with a level editor for Sly 2 (Windows and Linux): fly through any level, move and add objects,
